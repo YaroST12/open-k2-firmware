@@ -1232,16 +1232,18 @@ test("fc levels mirror the on-device trigger page (include/k2/ui/ui_trigger.hpp)
 });
 
 test("core ids: pages and the extended fast-charge names", () => {
-  assert.deepEqual(P.PAGES, ["home", "detail", "chargertest", "lines", "tools", "settings"]);
+  // 7 rotation pages since the Graphs page (ui_types.hpp Page); tests/test_page_names.py checks the firmware enum itself
+  assert.deepEqual(P.PAGES, ["home", "detail", "chargertest", "lines", "tools", "settings", "graphs"]);
   assert.equal(P.decodeState(u8(4, 0, 0, 0, 0, 0, 0, 0, ...new Array(16).fill(0))).page_name, "tools");
   assert.equal(P.decodeState(u8(5, 0, 0, 0, 0, 0, 0, 0, ...new Array(16).fill(0))).page_name, "settings");
-  assert.equal(P.decodeState(u8(6, 0, 0, 0, 0, 0, 0, 0, ...new Array(16).fill(0))).page_name, "tools/trigger");
-  assert.equal(P.decodeState(u8(7, 0, 0, 0, 0, 0, 0, 0, ...new Array(16).fill(0))).page_name, "tools/emarker");
-  assert.equal(P.pageName(12), "settings/usblink");
-  assert.equal(P.pageName(13), "settings/autorotate");
-  assert.equal(P.pageName(14), "tools/cards");
-  assert.equal(P.pageName(16), "tools/connection");
-  assert.equal(P.pageName(17), "tools/diag");
+  assert.equal(P.decodeState(u8(6, 0, 0, 0, 0, 0, 0, 0, ...new Array(16).fill(0))).page_name, "graphs");
+  assert.equal(P.decodeState(u8(7, 0, 0, 0, 0, 0, 0, 0, ...new Array(16).fill(0))).page_name, "tools/trigger");
+  assert.equal(P.decodeState(u8(8, 0, 0, 0, 0, 0, 0, 0, ...new Array(16).fill(0))).page_name, "tools/emarker");
+  assert.equal(P.pageName(13), "settings/usblink");
+  assert.equal(P.pageName(14), "settings/autorotate");
+  assert.equal(P.pageName(15), "tools/cards");
+  assert.equal(P.pageName(17), "tools/connection");
+  assert.equal(P.pageName(18), "tools/diag");
   assert.equal(P.pageName(99), "99");
   assert.equal(P.decodeState(u8(0, 0, 0, 0, 0, 0, 0, 0, ...new Array(16).fill(0), ...new Array(14).fill(0).map((_, i) => i === 12 ? 22 : 0))).fc, "USB DATA");
 });
@@ -1877,4 +1879,185 @@ test("dashboard: open() refuses a bootloader before opening it (no app frame rea
   const guard = body.search(/P\.hidRole\(dev\) === "bootloader"/);
   assert.ok(guard > 0, "open(dev) checks P.hidRole");
   assert.ok(guard < body.indexOf("dev.open()"), "the check comes before dev.open()");
+});
+
+// ---- charger test from the host: units, cable, START / CANCEL (0x0B ops 4 and 5, k2/web-ct) ------------------------------
+// Any command, scripted by a handler (cmd, payload, n) -> payload bytes or an Error.
+function ctRig(handler) {
+  const sent = [];
+  const remote = new P.K2Remote({ call: async (cmd, payload = []) => {
+    sent.push([cmd, [...payload]]);
+    const p = handler(cmd, [...payload], sent.length);
+    if (p instanceof Error) throw p;
+    return { payload: u8(...p) };
+  } });
+  return { remote, sent };
+}
+const withRunId = (id, reason = 0) => { const m = new Uint8Array(TEST_HEADER2); new DataView(m.buffer).setUint32(1, id, true); m[10] = reason; return [...m]; };
+const viewAt = (stage, confirming, message = "") => {
+  const v = new Uint8Array(30); v[0] = P.TEST_STAGES.indexOf(stage); v[3] = 1 | (confirming ? 2 : 0);
+  return [...v, ...[...message].map((c) => c.charCodeAt(0))];
+};
+
+test("charger-test start: confirm bit, preset bit, reply decode, busy and older firmware", async () => {
+  let { remote, sent } = ctRig(() => [0, 0, 0, 0]);
+  assert.deepEqual(await remote.chargerTestStart({ confirm: true }), { accepted: true, busy: false, refusal: null, refusal_mv: 0 });
+  await remote.chargerTestStart({ confirm: true, allTests: false });
+  await remote.chargerTestStart({});
+  assert.deepEqual(sent, [[0x0B, [4, 3]], [0x0B, [4, 1]], [0x0B, [4, 2]]]);
+  ({ remote } = ctRig(() => [1, 8, 0x34, 0x12]));
+  assert.deepEqual(await remote.chargerTestStart({ confirm: true }),
+    { accepted: false, busy: false, refusal: "load attached", refusal_mv: 0x1234 });
+  ({ remote } = ctRig(() => new P.RemoteError(P.STATUS.BUSY, 0x0B)));
+  const busy = await remote.chargerTestStart({ confirm: true });
+  assert.equal(busy.accepted, false); assert.equal(busy.busy, true); assert.match(busy.refusal, /already holds/);
+  for (const status of [P.STATUS.BAD_ARG, P.STATUS.BAD_LENGTH]) {
+    ({ remote } = ctRig(() => new P.RemoteError(status, 0x0B)));
+    await assert.rejects(() => remote.chargerTestStart({ confirm: true }), (e) => e instanceof P.FrameError && /older than/.test(e.message));
+  }
+  ({ remote } = ctRig(() => new P.RemoteError(P.STATUS.NEED_CONFIRM, 0x0B)));
+  await assert.rejects(() => remote.chargerTestStart({}), (e) => e instanceof P.RemoteError && e.status === P.STATUS.NEED_CONFIRM);
+  for (const bad of [[2, 0, 0, 0], [0, P.TEST_REASONS.length, 0, 0], [0, 0, 0]]) {
+    ({ remote } = ctRig(() => bad));
+    await assert.rejects(() => remote.chargerTestStart({ confirm: true }), P.FrameError);
+  }
+});
+
+test("charger-test cancel names what the device's BACK stopped", async () => {
+  for (const [i, name] of P.CT_STOPPED.entries()) {
+    const { remote, sent } = ctRig(() => [i]);
+    assert.deepEqual(await remote.chargerTestCancel(), { stopped: name });
+    assert.deepEqual(sent, [[0x0B, [5]]]);
+  }
+  const { remote } = ctRig(() => [P.CT_STOPPED.length]);
+  await assert.rejects(() => remote.chargerTestCancel(), P.FrameError);
+});
+
+test("charger units and cable: wire frames and the cable reply", async () => {
+  let { remote, sent } = ctRig((cmd, p) => [p[0]]);
+  assert.deepEqual(await remote.chargerUnits(["qc2", "pd", "pd-low"]), { units: ["qc2", "pd", "pd-low"], count: 3 });
+  assert.deepEqual(await remote.chargerUnits([]), { units: ["default"], count: 0 });
+  assert.deepEqual(sent, [[0x0C, [3, 1, 0, 12]], [0x0C, [0]]]);
+  await assert.rejects(() => remote.chargerUnits(["qc9"]), RangeError);
+  await assert.rejects(() => remote.chargerUnits(["qc2", "qc2"]), RangeError);
+  const reply = new Uint8Array(30); reply[0] = 1; reply[1] = 4; reply[3] = 2; reply[4] = 0x12; reply.set([..."Anker 240W"].map((c) => c.charCodeAt(0)), 6);
+  ({ remote, sent } = ctRig(() => [...reply]));
+  assert.deepEqual(await remote.chargerCable({ kind: "builtin", seq: 4 }),
+    { choice: "builtin", choice_seq: 4, run: "saved", run_seq: 0x12, run_name: "Anker 240W" });
+  await remote.chargerCable({ kind: "saved", seq: 0x1234 });
+  await remote.chargerCable();
+  assert.deepEqual(sent, [[0x0D, [1, 4, 0]], [0x0D, [2, 0x34, 0x12]], [0x0D, []]]);
+  await assert.rejects(() => remote.chargerCable({ kind: "clone", seq: 1 }), RangeError);
+  assert.throws(() => P.decodeChargerCable(u8(...reply.slice(0, 29))), P.FrameError);
+});
+
+test("ctStartStep: started, guard refusal, refusal after the confirmation or the wait", () => {
+  const st = (id) => ({ run_id: id });
+  assert.deepEqual(P.ctStartStep(7, st(8), null, false), { moved: false, outcome: "started" });
+  assert.deepEqual(P.ctStartStep(7, null, null, true), { moved: true, outcome: null });   // the K2 did not answer: keep looking
+  assert.deepEqual(P.ctStartStep(7, st(7), { stage: "refuse" }, false), { moved: false, outcome: "guard" });
+  assert.deepEqual(P.ctStartStep(7, st(7), { stage: "review", confirming: true }, false), { moved: true, outcome: null });
+  assert.deepEqual(P.ctStartStep(7, st(7), { stage: "waiting" }, false), { moved: true, outcome: null });
+  assert.deepEqual(P.ctStartStep(7, st(7), { stage: "review", confirming: false }, true), { moved: true, outcome: "refused" });
+  assert.deepEqual(P.ctStartStep(7, st(7), { stage: "review", confirming: false }, false), { moved: false, outcome: null });
+  assert.deepEqual(P.ctStartStep(7, st(7), { stage: "running" }, true), { moved: true, outcome: null });
+});
+
+test("chargerTestRun: units and cable first, START, then follow the K2 until the run id goes up", async () => {
+  const views = [viewAt("review", true), viewAt("waiting", false)];
+  let polls = 0;
+  const { remote, sent } = ctRig((cmd, p) => {
+    if (cmd === 0x0C) return [p[0]];
+    if (cmd === 0x0D) return new Array(30).fill(0);
+    if (p[0] === 4) return [0, 0, 0, 0];
+    if (p[0] === 3) return views.shift();
+    return withRunId(polls++ < 3 ? 7 : 8);   // before, then 2 polls unchanged, then the new run
+  });
+  const steps = [];
+  const r = await remote.chargerTestRun({ units: ["pd"], cable: { kind: "off" }, confirm: true, sleep: async () => {}, onStep: (s) => steps.push(s) });
+  assert.deepEqual(r, { started: true, run_id: 8, previous_run_id: 7 });
+  assert.deepEqual(sent.slice(0, 4), [[0x0C, [1, 0]], [0x0D, [0, 0, 0]], [0x0B, [2]], [0x0B, [4, 3]]]);
+  assert.equal(steps.length, 3);
+  assert.equal(steps[2].view, null);   // the run id moved: no view read
+  assert.ok(!sent.some(([c, p]) => c === 0x0B && p[0] === 5), "no CANCEL for a started run");
+});
+
+test("chargerTestRun: refusals come back as values, never as a thrown error", async () => {
+  const sleep = async () => {};
+  // at once (the preflight)
+  let { remote } = ctRig((cmd, p) => p[0] === 4 ? [1, 7, 0, 0] : withRunId(7));
+  assert.deepEqual(await remote.chargerTestRun({ confirm: true, sleep }),
+    { started: false, stage: "preflight", refusal: "no source", refusal_mv: 0, run_id: 7 });
+  // busy
+  ({ remote } = ctRig((cmd, p) => p[0] === 4 ? new P.RemoteError(P.STATUS.BUSY, 0x0B) : withRunId(7)));
+  assert.equal((await remote.chargerTestRun({ confirm: true, sleep })).stage, "busy");
+  // the Ra guard's Refuse stage: closed with CANCEL, as BACK would
+  let sent;
+  ({ remote, sent } = ctRig((cmd, p) => p[0] === 4 ? [0, 0, 0, 0] : p[0] === 3 ? viewAt("refuse", false) : p[0] === 5 ? [4] : withRunId(7)));
+  const g = await remote.chargerTestRun({ confirm: true, sleep });
+  assert.equal(g.stage, "guard"); assert.equal(g.refusal, P.CT_GUARD_REFUSAL);
+  assert.deepEqual(sent.at(-1), [0x0B, [5]]);
+  // after the wait: back on Review, run id unchanged; the metadata reason and the footer say why
+  const views = [viewAt("waiting", false), viewAt("review", false, "No charger")];
+  ({ remote } = ctRig((cmd, p) => p[0] === 4 ? [0, 0, 0, 0] : p[0] === 3 ? views.shift() : withRunId(7, 7)));
+  assert.deepEqual(await remote.chargerTestRun({ confirm: true, sleep }),
+    { started: false, stage: "final", refusal: "no source", message: "No charger", run_id: 7 });
+  // the K2 not answering a poll is not a refusal
+  let n = 0;
+  ({ remote } = ctRig((cmd, p) => p[0] === 4 ? [0, 0, 0, 0] : ++n === 2 ? new P.RemoteTimeout() : p[0] === 3 ? viewAt("review", true) : withRunId(n > 4 ? 9 : 7)));
+  assert.equal((await remote.chargerTestRun({ confirm: true, sleep })).started, true);
+  // nothing happens: a bounded wait, then a timeout value
+  ({ remote } = ctRig((cmd, p) => p[0] === 4 ? [0, 0, 0, 0] : p[0] === 3 ? viewAt("review", true) : withRunId(7)));
+  assert.equal((await remote.chargerTestRun({ confirm: true, sleep })).stage, "timeout");
+});
+
+test("http: charger-test START carries confirm=1; status, view and CANCEL do not", async () => {
+  const { calls, link } = httpRig((url) => { const f = frameOf(url); return jsonRes({ rsp: toHex(rsp(f[2], f[3], 0, [0])) }); });
+  await link.call(P.CMD.CHARGER_TEST, [4, 3]);
+  await link.call(P.CMD.CHARGER_TEST, [3]);
+  await link.call(P.CMD.CHARGER_TEST, [5]);
+  await link.call(P.CMD.CHARGER_TEST, [2]);
+  await link.call(P.CMD.CHARGER_TEST);
+  assert.deepEqual(calls.map((c) => /&confirm=1$/.test(c.url)), [true, false, false, false, false]);
+});
+
+test("chargerTestRow reads one row of the table a status read describes", async () => {
+  const meta = P.decodeChargerTest(TEST_HEADER2);
+  const { remote, sent } = chargerRig([testPage(TEST_HEADER2, 1, [TEST_ROWS[1]]), testPage(TEST_HEADER2, 0, [TEST_ROWS[0]])]);
+  const row = await remote.chargerTestRow(meta, 1);
+  assert.equal(row.algorithm, "pps"); assert.equal(row.index, 1);
+  assert.deepEqual(sent, [[0x0B, [2, 1, 4, 3, 2, 1, 8, 7, 6, 5]]]);
+  await assert.rejects(() => remote.chargerTestRow(meta, 1), P.FrameError);   // the K2 answered another row
+  await assert.rejects(() => remote.chargerTestRow({ schema: 1 }, 0), RangeError);
+});
+
+// ---- the dashboard's pages (hash routes in the one file) and the Charger test page (k2/web-ct) ------------------------------
+test("dashboard: every card belongs to a page, and every page has a tab", () => {
+  const html = readFileSync(path.join(here, "../tools/web/k2.html"), "utf8");
+  const routes = JSON.parse(html.match(/var ROUTES = (\[[^\]]*\]);/)[1]);
+  assert.deepEqual(routes, ["live", "test", "cables", "triggers", "device"]);
+  const tabs = [...html.match(/<nav id="tabs"[\s\S]*?<\/nav>/)[0].matchAll(/href="#(\w+)"/g)].map((m) => m[1]);
+  assert.deepEqual(tabs, routes);
+  const cards = [...html.matchAll(/<section class="card[^"]*" id="([\w-]+)"([^>]*)>/g)];
+  assert.equal(cards.length, 16);
+  for (const [, id, attrs] of cards) {
+    const page = (attrs.match(/data-page="([^"]+)"/) || [])[1];
+    assert.ok(page && page.split(" ").every((p) => routes.includes(p)), id + " has no page");
+  }
+  for (const r of routes) assert.match(html, new RegExp('main\\[data-route="' + r + '"\\] > \\[data-page~="' + r + '"\\]'), "CSS shows " + r);
+});
+
+test("dashboard: the Charger test page starts only from its confirmation, through the K2's own START", () => {
+  const html = readFileSync(path.join(here, "../tools/web/k2.html"), "utf8");
+  const app = html.slice(html.lastIndexOf("<script>"));
+  const open = app.slice(app.indexOf('$("ctr-start").onclick'), app.indexOf('$("ctr-back").onclick'));
+  assert.ok(open.includes('ctPhase("confirm")'), "Start... opens the confirmation");
+  assert.ok(!/chargerTest(Run|Start)/.test(open), "Start... sends nothing");
+  assert.match(app, /\$\("ctr-go"\)\.onclick = function \(\) \{ ctStart\(\); \}/);
+  const start = app.slice(app.indexOf("async function ctStart()"), app.indexOf("async function ctCancel()"));
+  assert.match(start, /k2\.chargerTestRun\(\{[^}]*confirm: true/);
+  assert.equal((app.match(/chargerTestRun\(/g) || []).length, 1, "one START path");
+  assert.match(html, /every level it offers/);
+  const cancel = app.slice(app.indexOf("async function ctCancel()"), app.indexOf("async function ctSoft("));
+  assert.match(cancel, /k2\.chargerTestCancel\(\)/);
 });

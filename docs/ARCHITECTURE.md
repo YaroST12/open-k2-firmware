@@ -395,7 +395,7 @@ Spleen tables (`tools/font_overrides.py` holds its hand-drawn fill-ins).
  Done / Stopped / Unsafe
    |-- report_card::build(steps, evidence, ...) -> report_card::hw::put()  ->  card ring record
    |-- report_card::delta(previous card, new card)  -> "what changed" lines on the Results view
-   '-- remote: CHARGER_TEST 0x0B (read-only RAM view)  ->  k2_remote.py charger-test status|results|view
+   '-- remote: CHARGER_TEST 0x0B (RAM view; START / CANCEL)  ->  k2_remote.py charger-test status|results|view|start|cancel
        USB drive: CARDS.JSON (generated from the card ring on read)
 ```
 
@@ -1104,7 +1104,7 @@ stored result/state/index/reason changes do. Reads neither poll the runner nor t
 checks final metadata, rejecting changes rather than exporting mixed evidence. It has a bound
 of 50 calls for all 95 rows, no automatic retry loop and no fallback to active commands.
 `--json` prints the same evidence object; `--out` writes host JSON only after successful retrieval.
-The JS command table is synchronized, but no dashboard control is added.
+The JS command table is synchronized; the dashboard's Charger test page reads the same forms (and starts runs, below).
 
 **The screens as data (`req [3]`, the view).** A one-byte request `03` (read-only like the rest) answers with what the
 charger-test screens show, so a host does not need a screenshot: `stage u8, cursor u8, rows u8, flags u16, confirm_left_ms u16,
@@ -1120,6 +1120,25 @@ BadArg (BadLength for a longer request), which the host reports as "no charger-t
 retry, paused}, run_elapsed_s, card_no, delta_n, delta_runs, preview{runnable, skipped, refusal, refusal_mv},
 sweep_points{pps, avs}, guard{topology, run_guard}, resume{pending, auto, gate_ready, held, behind_cable, rd}, self_supplied,
 armed_is_pick, cable_armed, rmdo, message`).
+
+**START and CANCEL (`req [4, flags]`, `req [5]`).** The only two ops of 0x0B that change anything, and both are the device's own
+keys: START is the OK pair on Review (the preview refusal, the 5 s confirm window, then the second press), CANCEL is BACK.
+`flags` bit 0 is the confirm bit (`kCtStartConfirm`, required: NeedConfirm without it, like every command that raises VBUS; over
+HTTP the bridge also wants `confirm=1`), bit 1 picks the "All tests" preset (`kCtStartAllTests`; clear = the draft selection
+stays), other bits BadArg. `Ui::charger_test_start()` opens the Charger test page (leaving it cancels a run) and calls
+`ChargerTestSession::remote_start()`, which goes to Review and opens the confirmation with the device's `open_confirmation()`;
+`poll()` then confirms it through `confirmed_start()` once the Ra guard's window is full, so the guard, the cable identity, the
+Waiting stage and the preflight all run exactly as for two key presses. Reply (4 bytes): `result` (0 accepted, 1 refused),
+`reason` (`charger_test::Reason`, the preview's), `refusal_mv` u16. Busy while a run, a wait, a resume prompt or a remote
+confirmation holds the test. Accepted means the window is open: the run then starts (the run id goes up), or the K2 refuses later
+on its own screens (the guard's Refuse stage, or Review again after the wait with the reason in the metadata and the footer's
+words). A key press or a changed offer drops a remote confirmation as it drops the device's (`[TEST] remote START dropped`).
+CANCEL answers what it stopped (`kCtStop*` = `ChargerTestSession::Stopped`: nothing, run, wait, confirmation, refusal screen,
+resume prompt) in BACK's order. START never arms the remote lease. Units and cable identity stay on CHARGER_UNITS 0x0C /
+CHARGER_CABLE 0x0D, sent before START. Hosts: `k2_remote.py charger-test start [--units] [--cable] [--keep-selection]`
+(follows the stages until the run id moves or a refusal, closing a Refuse stage with CANCEL) and `charger-test cancel`;
+`K2Remote.chargerTestRun()` / `chargerTestCancel()` in `tools/web/k2proto.js` for the dashboard;
+`tests/test_ct_remote_ids.py` keeps the ids, flags, unit tables and stop names equal in all three.
 
 **What the host can read (shell parity).** One row per command that replaces a screenshot:
 

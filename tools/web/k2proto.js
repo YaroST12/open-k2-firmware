@@ -11,7 +11,7 @@ var K2Proto = (function () {
   var DFU_MAGIC = [0x44, 0x46, 0x55, 0x21];   // "DFU!", u32 0x21554644 little endian (kDfuMagic)
   var FACTORY_WIPE_MAGIC = [0x57, 0x49, 0x50, 0x45];   // "WIPE", u32 0x45504957 little endian (kFactoryWipeMagic)
   var CMD = { PING: 1, BUTTON: 2, GET_STATE: 3, GET_PDOS: 4, GET_EMARKER: 5, ACTION: 6, SET_PAGE: 7,
-              REBOOT: 8, LOG: 9, SCREENSHOT: 10, CHARGER_TEST: 0x0B, CHARGER_SWEEP: 0x0F, DEBUG_PDOS: 0x20, ADC_RAW: 0x21, RIPPLE: 0x22, DEBUG_PD_MSG: 0x23,
+              REBOOT: 8, LOG: 9, SCREENSHOT: 10, CHARGER_TEST: 0x0B, CHARGER_UNITS: 0x0C, CHARGER_CABLE: 0x0D, CHARGER_SWEEP: 0x0F, DEBUG_PDOS: 0x20, ADC_RAW: 0x21, RIPPLE: 0x22, DEBUG_PD_MSG: 0x23,
               GET_IDENTITY: 0x24, DEBUG_LINK: 0x25, DEBUG_CC_PROBE: 0x2A, DFU_ENTER: 0x30, DEBUG_FAULT: 0x31, FC: 0x32, FACTORY_WIPE: 0x33, BOOT_INFO: 0x35, CABLE_R: 0x50, LAB: 0x51, UFCS: 0x52, QRTEST: 0x53, CHARGER_AVS_SWEEP: 0x54, PD_STRESS: 0x55, LOOP_PROBE: 0x57, BATTERY: 0x58, CHARGER_SVOOC_CAP: 0x59, EM_LIB: 0x61, CARDS: 0x62, TWIN: 0x63, BLACK_BOX: 0x70, TRANS_CAP: 0x71, DIAGNOSE: 0x72,
               IDENTIFY_DEVICE: 0x40, PD_REQUEST: 0x41, PD_RESET: 0x42, PD_TRIGGER_STATUS: 0x43, PD_RELEASE: 0x44, PD_MATCH: 0x45, PD_ATTACH: 0x48, PD_HANDBACK: 0x49, APPLE_READ: 0x4A, STOP: 0x4B, LEASE: 0x4C,
               SCREEN_DATA: 0x8A, RIPPLE_DATA: 0x8B };
@@ -81,7 +81,24 @@ var K2Proto = (function () {
   var TEST_ALGORITHM_GROUPS = [0, 0, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 0, 0, 0, 0, 1, 2];
   var TEST_STAGES = ["algorithms", "group", "cable", "identity", "review", "running", "results", "steps", "detail",
                      "resume", "changes", "ask", "refuse", "waiting", "custom"];
-  var TEST_STATES = ["idle", "baseline", "requesting", "holding", "releasing", "done", "stopped", "unsafe", "detach charger", "attach charger"];
+  var TEST_STATES = ["idle", "baseline", "requesting", "holding", "releasing", "done", "stopped", "unsafe", "detach charger", "attach charger",
+                     "svooc ceiling"];
+  // charger_test::Unit in enum order (the wire value is the index), the device's labels, and kDefaultUnits: the order a run takes
+  // when no unit list is set (include/k2/chargertest/charger_test.hpp, src/chargertest/charger_test.cpp).
+  var TEST_UNITS = ["pd", "qc2", "qc3", "qc3+", "afc", "fcp", "scp", "vooc", "svooc", "svooc65", "ufcs", "vivo", "pd-low"];
+  var TEST_UNIT_LABELS = ["PD", "QC2", "QC3", "QC3+", "AFC", "FCP", "SCP", "VOOC", "SVOOC", "SVOOC65", "UFCS", "VIVO", "PD low"];
+  var TEST_DEFAULT_UNITS = ["fcp", "scp", "afc", "vooc", "svooc", "svooc65", "vivo", "pd", "qc2", "qc3", "qc3+", "ufcs", "pd-low"];
+  // 0x0B req [4, flags] START / [5] CANCEL (remote_proto.hpp kChargerTestStartReq ...): START is the device's own START after its
+  // confirmation; the confirm bit is required (NEED_CONFIRM otherwise), ALL_TESTS picks the "All tests" preset (clear = keep the
+  // draft selection). CANCEL is the device's BACK; CT_STOPPED names what it stopped (ChargerTestSession::Stopped).
+  var CT_START_REQ = 4, CT_CANCEL_REQ = 5, CT_START_CONFIRM = 1, CT_START_ALL_TESTS = 2;
+  var CT_STOPPED = ["nothing", "run", "wait", "confirmation", "refusal", "resume"];
+  var CT_CABLE_KINDS = ["off", "builtin", "saved"];   // ctcable::Kind
+  // The built-in cables the START dialog lists (k2_remote.py DIALOG_BUILTINS / BUILTIN_LABELS).
+  var CT_BUILTINS = [{ id: 1, label: "EPR 50V 5A" }, { id: 2, label: "CUKTECH 6A" }, { id: 4, label: "OnePlus 100W" }];
+  // raguard::kRefusalText (include/k2/pd/ra_guard.hpp): the Refuse stage after START with a spoofed cable through a cable.
+  var CT_GUARD_REFUSAL = "spoof needs the charger plugged into the K2 directly (top plug); through a cable the cable itself answers";
+  var CT_START_FOLLOW_MS = 45000, CT_START_POLL_MS = 500;
   var TEST_RESULTS = ["pending", "running", "pass", "fail", "skip"];
   var TEST_REASONS = ["none", "disabled", "not advertised", "over voltage cap", "not implemented", "confirm no load",
                       "no power monitor", "no source", "load attached", "tool busy", "fake offers", "request failed",
@@ -1339,6 +1356,133 @@ var K2Proto = (function () {
     return out;
   };
 
+
+  // One schema-2 row of the table that meta (a status read) describes: [2, index, run_id, revision]. A table that moved since
+  // meta answers Busy (RemoteError); read the status again. For live views that follow a run row by row; "results" reads them all.
+  K2Remote.prototype.chargerTestRow = async function (meta, index) {
+    if (meta.schema !== 2) throw new RangeError("row reads need the schema-2 table");
+    var req = new Uint8Array(10), v = dv(req);
+    req[0] = 2; req[1] = index; v.setUint32(2, meta.run_id, true); v.setUint32(6, meta.revision, true);
+    var page = decodeChargerTest((await this.link.call(CMD.CHARGER_TEST, req)).payload);
+    if (page.run_id !== meta.run_id || page.revision !== meta.revision || page.start !== index || page.count !== 1)
+      throw new FrameError("charger-test row " + index + " moved; read the status again");
+    return page.steps[0];
+  };
+
+  // ---- charger test: units, cable identity, START / CANCEL (k2_remote.py charger-units / charger-cable / charger-test start) ----
+  // The unit list of the NEXT run (CMD 0x0C [n, unit...]; reset by every START; [] = the default order). Busy while a run is active.
+  K2Remote.prototype.chargerUnits = async function (names) {
+    names = names || [];
+    var ids = [];
+    names.forEach(function (n) {
+      var i = TEST_UNITS.indexOf(n);
+      if (i < 0) throw new RangeError("unknown test unit '" + n + "' (one of " + TEST_UNITS.join(", ") + ")");
+      if (ids.indexOf(i) >= 0) throw new RangeError("test unit '" + n + "' listed twice");
+      ids.push(i);
+    });
+    var p = (await this.link.call(CMD.CHARGER_UNITS, [ids.length].concat(ids))).payload;
+    return { units: ids.length ? names.slice() : ["default"], count: p.length ? p[0] : ids.length };
+  };
+
+  // CMD 0x0D reply: choice kind, seq(2), the current / last run's kind, seq(2), its name (24 bytes, NUL padded).
+  function decodeChargerCable(p) {
+    if (p.length !== 30 || p[0] >= CT_CABLE_KINDS.length || p[3] >= CT_CABLE_KINDS.length) throw new FrameError("invalid charger-cable reply");
+    var v = dv(p);
+    return { choice: CT_CABLE_KINDS[p[0]], choice_seq: v.getUint16(1, true),
+             run: CT_CABLE_KINDS[p[3]], run_seq: v.getUint16(4, true), run_name: cstr(p.subarray(6, 30)) };
+  }
+  // choice: undefined / null = read; { kind: "off" | "builtin" | "saved", seq } = set (builtin seq 1, 2, 4; saved = a library id).
+  K2Remote.prototype.chargerCable = async function (choice) {
+    var payload = [];
+    if (choice) {
+      var k = CT_CABLE_KINDS.indexOf(choice.kind), s = choice.seq || 0;
+      if (k < 0) throw new RangeError("cable kind is off, builtin or saved");
+      if (s < 0 || s > 0xFFFF) throw new RangeError("cable id is 0..65535");
+      payload = [k, s & 255, s >> 8];
+    }
+    return decodeChargerCable((await this.link.call(CMD.CHARGER_CABLE, payload)).payload);
+  };
+
+  // 0x0B [4, flags] reply: result (0 accepted, 1 refused), reason (TEST_REASONS), the VBUS behind the refusal (LE16 mV).
+  function decodeChargerTestStart(p) {
+    if (p.length !== 4 || p[0] > 1 || p[1] >= TEST_REASONS.length) throw new FrameError("invalid charger-test start reply");
+    var refused = p[0] === 1;
+    return { accepted: !refused, busy: false, refusal: refused ? TEST_REASONS[p[1]] : null, refusal_mv: dv(p).getUint16(2, true) };
+  }
+  // o.confirm: the user confirmed (the firmware answers NEED_CONFIRM without it). o.allTests (default true): the "All tests" preset,
+  // false keeps the device's draft selection. Accepted = the K2's confirm window is open and confirms itself once its Ra guard window
+  // is full; the run then starts, waits for the charger, or is refused by the K2's own later checks (follow it with chargerTestRun).
+  K2Remote.prototype.chargerTestStart = async function (o) {
+    o = o || {};
+    var flags = (o.confirm ? CT_START_CONFIRM : 0) | (o.allTests === false ? 0 : CT_START_ALL_TESTS);
+    try { return decodeChargerTestStart((await this.link.call(CMD.CHARGER_TEST, [CT_START_REQ, flags])).payload); }
+    catch (e) {
+      if (!(e instanceof RemoteError)) throw e;
+      if (e.status === STATUS.BUSY)
+        return { accepted: false, busy: true, refusal: "a run, a wait, a resume prompt or a confirmation already holds the test", refusal_mv: 0 };
+      if (e.status === STATUS.BAD_LENGTH || e.status === STATUS.BAD_ARG)
+        throw new FrameError("this firmware has no remote charger-test START (older than the web-ct build)");
+      throw e;
+    }
+  };
+  // 0x0B [5]: the device's own stop (BACK). Returns what it stopped (CT_STOPPED).
+  K2Remote.prototype.chargerTestCancel = async function () {
+    var p = (await this.link.call(CMD.CHARGER_TEST, [CT_CANCEL_REQ])).payload;
+    if (p.length !== 1 || p[0] >= CT_STOPPED.length) throw new FrameError("invalid charger-test cancel reply");
+    return { stopped: CT_STOPPED[p[0]] };
+  };
+
+  // One look at the K2 while an accepted START settles (status and view may be null: a read the K2 did not answer).
+  // outcome null = keep looking; "started" = the run id went up; "guard" = the Ra guard's Refuse stage (send CANCEL, as BACK
+  // would); "refused" = back on Review after the confirmation or the wait, run id unchanged (status.reason and the footer say why).
+  function ctStartStep(beforeRunId, status, view, moved) {
+    if (status && status.run_id !== beforeRunId) return { moved: moved, outcome: "started" };
+    if (!view) return { moved: moved, outcome: null };
+    if (view.stage === "refuse") return { moved: moved, outcome: "guard" };
+    if (view.stage === "waiting" || (view.stage === "review" && view.confirming)) return { moved: true, outcome: null };
+    if (view.stage === "review" && moved) return { moved: moved, outcome: "refused" };
+    return { moved: moved, outcome: null };
+  }
+
+  // Units and cable first (when given), then START, then follow the K2's own stages until a run starts or the K2 refuses.
+  // Never throws for a refusal: { started: true, run_id, previous_run_id } or { started: false, stage, refusal, ... }.
+  // o: { units: [names] | [] (default order) | undefined (leave), cable: { kind, seq } | undefined, allTests, confirm,
+  //      sleep(ms), onStep({ view, status, waited_ms }) }.
+  K2Remote.prototype.chargerTestRun = async function (o) {
+    o = o || {};
+    var self = this, sleep = o.sleep || function (ms) { return new Promise(function (r) { setTimeout(r, ms); }); };
+    async function soft(fn) {
+      try { return await fn(); }
+      catch (e) { if (e instanceof RemoteTimeout) return null; throw e; }
+    }
+    if (o.units !== undefined) await this.chargerUnits(o.units);
+    if (o.cable) await this.chargerCable(o.cable);
+    var before = (await this.chargerTest("status")).run_id;
+    var r = await this.chargerTestStart({ confirm: o.confirm, allTests: o.allTests });
+    if (!r.accepted)
+      return { started: false, stage: r.busy ? "busy" : "preflight", refusal: r.refusal, refusal_mv: r.refusal_mv, run_id: before };
+    var waited = 0, moved = false;
+    while (waited < CT_START_FOLLOW_MS) {
+      await sleep(CT_START_POLL_MS);
+      waited += CT_START_POLL_MS;
+      var st = await soft(function () { return self.chargerTest("status"); });
+      var view = st && st.run_id !== before ? null : await soft(function () { return self.chargerTest("view"); });
+      if (o.onStep) o.onStep({ view: view, status: st, waited_ms: waited });
+      var s = ctStartStep(before, st, view, moved);
+      moved = s.moved;
+      if (s.outcome === "started") return { started: true, run_id: st.run_id, previous_run_id: before };
+      if (s.outcome === "guard") {
+        await this.chargerTestCancel();
+        return { started: false, stage: "guard", refusal: CT_GUARD_REFUSAL, run_id: before };
+      }
+      if (s.outcome === "refused") {
+        var last = await soft(function () { return self.chargerTest("status"); });
+        return { started: false, stage: "final", refusal: (last && last.reason) || "unknown", message: view.message, run_id: before };
+      }
+    }
+    return { started: false, stage: "timeout", refusal: "no run started in " + CT_START_FOLLOW_MS / 1000 + " s", run_id: before };
+  };
+
   // ---- HTTP transport: the K2's own web server over USB networking ---------------------------------
   // Same Link, different wire: each request frame is POSTed as hex to /api/frame and the 64-byte answer
   // (JSON {"rsp": hex}) is fed back to the link. The server wants an X-K2 header on every POST (a form on
@@ -1351,6 +1495,7 @@ var K2Proto = (function () {
     var cmd = f[2];
     if (cmd === CMD.PD_REQUEST || cmd === CMD.PD_RESET || cmd === CMD.PD_RELEASE || cmd === CMD.PD_ATTACH) return true;
     if (cmd === CMD.ACTION) return f[4] > 0 && ACTION_VBUS_IDS.indexOf(f[5]) >= 0;
+    if (cmd === CMD.CHARGER_TEST) return f[4] > 0 && f[5] === CT_START_REQ;   // START (http_api.hpp: 403 without confirm=1)
     return cmd === CMD.FC && f[4] > 0 && FC_VBUS_OPS.indexOf(f[5]) >= 0;
   }
 
@@ -1544,6 +1689,11 @@ var K2Proto = (function () {
     isBootloaderFrame: isBootloaderFrame, classify: classify, logText: logText,
     directionOf: directionOf, decodePing: decodePing, decodeState: decodeState, decodeSession: decodeSession, decodeDiag: decodeDiag, decodeKeys: decodeKeys, decodePdo: decodePdo,
     decodeChargerTest: decodeChargerTest, decodeChargerTestView: decodeChargerTestView, TEST_ALGORITHMS: TEST_ALGORITHMS, TEST_REASONS: TEST_REASONS, TEST_STAGES: TEST_STAGES,
+    TEST_STATES: TEST_STATES, TEST_UNITS: TEST_UNITS, TEST_UNIT_LABELS: TEST_UNIT_LABELS, TEST_DEFAULT_UNITS: TEST_DEFAULT_UNITS,
+    CT_START_REQ: CT_START_REQ, CT_CANCEL_REQ: CT_CANCEL_REQ, CT_START_CONFIRM: CT_START_CONFIRM, CT_START_ALL_TESTS: CT_START_ALL_TESTS,
+    CT_STOPPED: CT_STOPPED, CT_CABLE_KINDS: CT_CABLE_KINDS, CT_BUILTINS: CT_BUILTINS, CT_GUARD_REFUSAL: CT_GUARD_REFUSAL,
+    CT_START_FOLLOW_MS: CT_START_FOLLOW_MS, CT_START_POLL_MS: CT_START_POLL_MS,
+    decodeChargerCable: decodeChargerCable, decodeChargerTestStart: decodeChargerTestStart, ctStartStep: ctStartStep,
     decodeEmarker: decodeEmarker, decodeEmarkerDetail: decodeEmarkerDetail, decodeAdcRaw: decodeAdcRaw,
     decodeRippleInfo: decodeRippleInfo, decodeIdentity: decodeIdentity, decodePdTrigger: decodePdTrigger, decodeMatch: decodeMatch, decodeStop: decodeStop, decodeLease: decodeLease, decodeIdentifyProgress: decodeIdentifyProgress, PD_ERRS: PD_ERRS,
     decodeFc: decodeFc, decodeCableR: decodeCableR, parseLogStats: parseLogStats,

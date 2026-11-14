@@ -99,6 +99,43 @@ details > *:not(summary) { margin-top: 8px; }
        overflow: auto; font: 12px/1.45 ui-monospace, "SF Mono", Menlo, Consolas, monospace; white-space: pre-wrap; word-break: break-all; }
 #log .web { color: #7aa7ff; }
 #log .fault { color: #ff7b72; }
+
+/* pages: hash routes inside this one file (#live, #test, #cables, #triggers, #device); one page shows at a time */
+#tabs { display: flex; gap: 2px; flex-basis: 100%; overflow-x: auto; margin: 0 -4px -10px; scrollbar-width: thin; }
+#tabs a { padding: 6px 12px 8px; color: var(--muted); text-decoration: none; font-weight: 600; white-space: nowrap;
+          border-bottom: 2px solid transparent; }
+#tabs a:hover { color: var(--ink); }
+#tabs a[aria-current="page"] { color: var(--ink); border-bottom-color: var(--accent); }
+#tabs a.live::after { content: " \25CF"; color: var(--accent); }
+main > [data-page] { display: none; }
+main[data-route="live"] > [data-page~="live"], main[data-route="test"] > [data-page~="test"],
+main[data-route="cables"] > [data-page~="cables"], main[data-route="triggers"] > [data-page~="triggers"],
+main[data-route="device"] > [data-page~="device"] { display: flex; }
+#route-note { grid-column: span 12; margin: 0; }
+@media (max-width: 720px) { header { padding: 8px 10px; } main { padding: 10px 8px 24px; gap: 10px; } .card { padding: 10px; } }
+
+/* charger test page */
+.units { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 6px; }
+.units label { display: flex; gap: 6px; align-items: center; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px;
+               cursor: pointer; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+.confirm { border: 1px solid var(--warn); background: var(--warn-bg); border-radius: 8px; padding: 10px 12px; display: flex;
+           flex-direction: column; gap: 8px; }
+.confirm h3 { margin: 0; font-size: 15px; }
+.confirm p { margin: 0; }
+progress { width: 100%; height: 10px; accent-color: var(--accent); }
+.vgrid { display: flex; flex-direction: column; gap: 6px; }
+.vrow { display: grid; grid-template-columns: 76px minmax(0, 1fr) auto; gap: 8px; align-items: center; }
+.vrow .lab { font-weight: 600; font-size: 12px; }
+.vrow .cnt { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.vcells { display: flex; flex-wrap: wrap; gap: 3px; }
+.vc { width: 16px; height: 16px; border-radius: 3px; background: var(--soft); border: 1px solid var(--line); cursor: pointer; }
+.vc.pass { background: var(--ok); border-color: var(--ok); }
+.vc.fail { background: var(--bad); border-color: var(--bad); }
+.vc.skip { background: var(--warn-bg); border-color: var(--warn); }
+.vc.running, .vc.cur { outline: 2px solid var(--accent); outline-offset: 1px; }
+@media (max-width: 520px) { .vrow { grid-template-columns: 64px minmax(0, 1fr); } .vrow .cnt { grid-column: 2; } }
+#ctr-summary { display: flex; flex-direction: column; gap: 6px; }
+#ctr-summary h3 { margin: 0; font-size: 15px; }
 </style>
 </head>
 <body>
@@ -114,11 +151,14 @@ details > *:not(summary) { margin-top: 8px; }
   <label for="poll" class="note">Poll</label>
   <select id="poll"><option value="250">250 ms</option><option value="500" selected>500 ms</option><option value="1000">1 s</option><option value="2000">2 s</option></select>
   <button id="theme" aria-label="Toggle light and dark theme">Dark</button>
+  <nav id="tabs" aria-label="Pages">
+    <a href="#live">Live</a><a href="#test" id="tab-test">Charger test</a><a href="#cables">Cables</a><a href="#triggers">Triggers</a><a href="#device">Device</a>
+  </nav>
 </header>
 <div id="banner" role="alert"></div>
-<main>
+<main id="main" data-route="live">
 
-  <section class="card s12" id="c-power" aria-label="Power">
+  <section class="card s12" id="c-power" data-page="live" aria-label="Power">
     <h2>Power <span class="sub mono" id="p-meta"></span></h2>
     <div class="tiles">
       <div class="tile" id="t-v"><div class="lab">Voltage</div><div><span class="val" id="r-v">-</span><span class="unit">V</span></div></div>
@@ -140,7 +180,7 @@ details > *:not(summary) { margin-top: 8px; }
     <canvas id="chart" class="plot" role="img" aria-label="Voltage, current and power over time"></canvas>
   </section>
 
-  <section class="card" id="c-pd" aria-label="USB-PD">
+  <section class="card" id="c-pd" data-page="live" aria-label="USB-PD">
     <h2>USB-PD <span class="sub" id="pd-link"></span></h2>
     <dl class="kv">
       <dt>Spec revision</dt><dd class="mono" id="pd-rev">-</dd>
@@ -165,7 +205,7 @@ details > *:not(summary) { margin-top: 8px; }
     </details>
   </section>
 
-  <section class="card" id="c-cable" aria-label="Cable e-marker">
+  <section class="card" id="c-cable" data-page="cables" aria-label="Cable e-marker">
     <h2>Cable / e-marker <span class="sub" id="em-age"></span></h2>
     <div id="emarker" class="empty">Not connected.</div>
     <div class="row">
@@ -175,7 +215,7 @@ details > *:not(summary) { margin-top: 8px; }
     <div class="msg" id="m-em"></div>
   </section>
 
-  <section class="card" id="c-cards" aria-label="Charger report cards">
+  <section class="card" id="c-cards" data-page="device" aria-label="Charger report cards">
     <h2>Report cards <span class="sub" id="rc-count"></span></h2>
     <div id="cards" class="empty">Not connected.</div>
     <div class="row">
@@ -185,7 +225,7 @@ details > *:not(summary) { margin-top: 8px; }
     <div class="msg" id="m-rc"></div>
   </section>
 
-  <section class="card" id="c-saved" aria-label="Saved cables">
+  <section class="card" id="c-saved" data-page="cables" aria-label="Saved cables">
     <h2>Saved cables <span class="sub" id="sv-spoof"></span></h2>
     <div id="saved" class="empty">Not connected.</div>
     <div class="row">
@@ -196,7 +236,7 @@ details > *:not(summary) { margin-top: 8px; }
     <div class="msg" id="m-sv"></div>
   </section>
 
-  <section class="card" id="c-lines" aria-label="Lines and analog">
+  <section class="card" id="c-lines" data-page="live" aria-label="Lines and analog">
     <h2>Lines / analog <span class="sub" id="ln-fc-wrap">fast charge <span class="pill mono" id="ln-fc">-</span></span></h2>
     <div class="tiles">
       <div class="tile"><div class="lab">D+</div><div><span class="val sm" id="ln-dp">-</span><span class="unit">V</span></div></div>
@@ -216,7 +256,7 @@ details > *:not(summary) { margin-top: 8px; }
     </details>
   </section>
 
-  <section class="card" id="c-ripple" aria-label="Ripple">
+  <section class="card" id="c-ripple" data-page="live" aria-label="Ripple">
     <h2>Ripple <span class="sub mono" id="rp-meta">PA1, AC coupled</span></h2>
     <div class="row">
       <label for="rp-code">Sample time</label>
@@ -228,7 +268,7 @@ details > *:not(summary) { margin-top: 8px; }
     <dl class="kv" id="rp-stats"></dl>
   </section>
 
-  <section class="card" id="c-device" aria-label="Device">
+  <section class="card" id="c-device" data-page="device" aria-label="Device">
     <h2>Device <span class="sub mono" id="dv-chip"></span></h2>
     <dl class="kv">
       <dt>Firmware</dt><dd class="mono" id="dv-fw">-</dd>
@@ -252,7 +292,7 @@ details > *:not(summary) { margin-top: 8px; }
     <div class="msg" id="m-dv"></div>
   </section>
 
-  <section class="card" id="c-ident" aria-label="Source identity" hidden>
+  <section class="card" id="c-ident" data-page="device" aria-label="Source identity" hidden>
     <h2>Identity <span class="sub" id="id-age"></span></h2>
     <div id="ident" class="empty">No answer yet.</div>
     <div class="row">
@@ -263,7 +303,7 @@ details > *:not(summary) { margin-top: 8px; }
     <div class="msg" id="m-id"></div>
   </section>
 
-  <section class="card" id="c-pdtrig" aria-label="PD trigger" hidden>
+  <section class="card" id="c-pdtrig" data-page="triggers" aria-label="PD trigger" hidden>
     <h2>PD trigger (active) <span class="sub"><span class="pill mono" id="pt-state">-</span></span></h2>
     <div class="note">Requests a contract from the source. Boot is passive; the K2 refuses this while a live sink (laptop) is attached. Anything above 5 V asks for confirmation. Use a known charger and nothing valuable on the output.</div>
     <dl class="kv" id="pt-kv"></dl>
@@ -283,7 +323,7 @@ details > *:not(summary) { margin-top: 8px; }
     <div class="msg" id="m-pt"></div>
   </section>
 
-  <section class="card" id="c-cabler" aria-label="Cable resistance" hidden>
+  <section class="card" id="c-cabler" data-page="cables" aria-label="Cable resistance" hidden>
     <h2>Cable resistance <span class="sub"><span class="pill mono" id="cr-grade">-</span></span></h2>
     <dl class="kv" id="cr-kv"></dl>
     <div class="note" id="cr-note">Passive: uses your own load. Draw 1 A or more above an idle reading (under 0.2 A). The figure includes the K2's own path up to its VBUS tap.</div>
@@ -295,7 +335,7 @@ details > *:not(summary) { margin-top: 8px; }
     <div class="msg" id="m-cr"></div>
   </section>
 
-  <section class="card" id="c-bb" aria-label="PD black box" hidden>
+  <section class="card" id="c-bb" data-page="device" aria-label="PD black box" hidden>
     <h2>PD black box <span class="sub"><span class="pill mono" id="bb-count">-</span></span></h2>
     <div class="note">Captures frozen on a contract change, hard reset, VBUS dip or detach: the seconds before and 0.5 s after. Wheel zooms, drag pans, double-click resets.</div>
     <div id="bb-list" class="empty">No captures.</div>
@@ -309,7 +349,7 @@ details > *:not(summary) { margin-top: 8px; }
     <div class="msg" id="m-bb"></div>
   </section>
 
-  <section class="card" id="c-fc" aria-label="Fast-charge trigger" hidden>
+  <section class="card" id="c-fc" data-page="triggers" aria-label="Fast-charge trigger" hidden>
     <h2>Fast-charge trigger <span class="sub"><span class="pill mono" id="fc-state">-</span></span></h2>
     <dl class="kv" id="fc-kv"></dl>
     <div id="fc-scan"></div>
@@ -334,10 +374,55 @@ details > *:not(summary) { margin-top: 8px; }
     <div class="msg" id="m-fc"></div>
   </section>
 
-  <section class="card s12" id="c-chargertest" aria-label="Charger Test results" hidden>
+  <p id="route-note" class="empty" hidden></p>
+
+  <section class="card s12" id="c-ctrun" data-page="test" aria-label="Run a charger test" hidden>
+    <h2>Run a charger test <span class="sub"><span class="pill mono" id="ctr-k2">-</span></span></h2>
+    <div id="ctr-setup" class="vgrid">
+      <div class="row"><strong>Units</strong><span class="note">in the K2's run order; all of them = the K2's default order</span>
+        <span class="spacer"></span><button id="ctr-all" type="button">All</button><button id="ctr-none" type="button">None</button></div>
+      <div id="ctr-units" class="units" role="group" aria-label="Test units"></div>
+      <div class="row">
+        <label for="ctr-tests">Tests</label>
+        <select id="ctr-tests"><option value="all" selected>All tests (the K2's preset)</option><option value="keep">The selection set on the K2</option></select>
+      </div>
+      <div class="row">
+        <label for="ctr-cable">Cable identity</label>
+        <select id="ctr-cable"></select>
+        <button id="ctr-cables" class="needs-link" disabled title="Read the K2's saved cables again">Reload cables</button>
+      </div>
+      <div class="row" id="ctr-busy" hidden><span class="note" id="ctr-busy-text"></span>
+        <button id="ctr-stopk2" class="needs-link danger" disabled>Cancel it</button></div>
+      <div class="row"><button id="ctr-start" class="needs-link primary" disabled>Start...</button></div>
+    </div>
+    <div id="ctr-confirm" class="confirm" role="alertdialog" aria-labelledby="ctr-confirm-h" aria-describedby="ctr-confirm-p" hidden>
+      <h3 id="ctr-confirm-h">Start the charger test?</h3>
+      <p id="ctr-confirm-p">The K2 becomes an active sink and asks the charger for <b>every level it offers</b> in the chosen units:
+        each PD voltage, the PPS / AVS steps, EPR levels up to the K2's monitor ceiling, and the QC and vendor fast-charge modes.
+        The K2's output follows every level. Disconnect any phone, laptop or other load from the output first.</p>
+      <p class="note">The K2 runs its own START checks before anything changes (charger present, no load, the cable guard for a
+        spoofed identity) and can still refuse; the reason shows here. Cancel stops the run like BACK on the K2.</p>
+      <dl class="kv" id="ctr-plan"></dl>
+      <div class="row"><button id="ctr-go" class="needs-link danger" disabled>Start the test</button>
+        <button id="ctr-back" type="button">Back</button></div>
+    </div>
+    <div id="ctr-live" class="vgrid" hidden>
+      <div class="row"><span id="ctr-headline" class="mono" aria-live="polite"></span><span class="spacer"></span>
+        <button id="ctr-cancel" class="needs-link danger" disabled>Cancel</button></div>
+      <progress id="ctr-progress" max="1" value="0" aria-label="Steps done"></progress>
+      <dl class="kv" id="ctr-now"></dl>
+      <div id="ctr-summary" hidden></div>
+      <div id="ctr-grid" class="vgrid" aria-label="Verdict per step, by unit"></div>
+      <div class="note mono" id="ctr-pick"></div>
+      <div class="row" id="ctr-again-row" hidden><button id="ctr-again" type="button">New test</button></div>
+    </div>
+    <div class="msg" id="m-ctr" role="status"></div>
+  </section>
+
+  <section class="card s12" id="c-chargertest" data-page="test" aria-label="Charger Test results" hidden>
     <h2>Charger Test <span class="sub"><span class="pill mono" id="ct-state">-</span></span></h2>
-    <p class="note">Read-only report. PASS means negotiation / measured voltage hold, not rated current,
-      power or PD revision conformance. Configure and deliberately start on the K2; this card cannot arm or run.</p>
+    <p class="note">PASS means negotiation / measured voltage hold, not rated current, power or PD revision conformance.
+      Start a run above or with the K2's own wizard; this card reads the results.</p>
     <dl class="kv" id="ct-kv"></dl>
     <details>
       <summary>Source evidence and safety at run start</summary>
@@ -354,7 +439,7 @@ details > *:not(summary) { margin-top: 8px; }
     <div class="msg" id="m-ct"></div>
   </section>
 
-  <section class="card s12" id="c-log" aria-label="Log console">
+  <section class="card s12" id="c-log" data-page="device" aria-label="Log console">
     <h2>Log console <span class="sub row">
       <label class="switch"><input type="checkbox" id="log-follow" checked> follow</label>
       <button id="log-clear">Clear</button></span></h2>
@@ -376,7 +461,7 @@ var K2Proto = (function () {
   var DFU_MAGIC = [0x44, 0x46, 0x55, 0x21];   // "DFU!", u32 0x21554644 little endian (kDfuMagic)
   var FACTORY_WIPE_MAGIC = [0x57, 0x49, 0x50, 0x45];   // "WIPE", u32 0x45504957 little endian (kFactoryWipeMagic)
   var CMD = { PING: 1, BUTTON: 2, GET_STATE: 3, GET_PDOS: 4, GET_EMARKER: 5, ACTION: 6, SET_PAGE: 7,
-              REBOOT: 8, LOG: 9, SCREENSHOT: 10, CHARGER_TEST: 0x0B, CHARGER_SWEEP: 0x0F, DEBUG_PDOS: 0x20, ADC_RAW: 0x21, RIPPLE: 0x22, DEBUG_PD_MSG: 0x23,
+              REBOOT: 8, LOG: 9, SCREENSHOT: 10, CHARGER_TEST: 0x0B, CHARGER_UNITS: 0x0C, CHARGER_CABLE: 0x0D, CHARGER_SWEEP: 0x0F, DEBUG_PDOS: 0x20, ADC_RAW: 0x21, RIPPLE: 0x22, DEBUG_PD_MSG: 0x23,
               GET_IDENTITY: 0x24, DEBUG_LINK: 0x25, DEBUG_CC_PROBE: 0x2A, DFU_ENTER: 0x30, DEBUG_FAULT: 0x31, FC: 0x32, FACTORY_WIPE: 0x33, BOOT_INFO: 0x35, CABLE_R: 0x50, LAB: 0x51, UFCS: 0x52, QRTEST: 0x53, CHARGER_AVS_SWEEP: 0x54, PD_STRESS: 0x55, LOOP_PROBE: 0x57, BATTERY: 0x58, CHARGER_SVOOC_CAP: 0x59, EM_LIB: 0x61, CARDS: 0x62, TWIN: 0x63, BLACK_BOX: 0x70, TRANS_CAP: 0x71, DIAGNOSE: 0x72,
               IDENTIFY_DEVICE: 0x40, PD_REQUEST: 0x41, PD_RESET: 0x42, PD_TRIGGER_STATUS: 0x43, PD_RELEASE: 0x44, PD_MATCH: 0x45, PD_ATTACH: 0x48, PD_HANDBACK: 0x49, APPLE_READ: 0x4A, STOP: 0x4B, LEASE: 0x4C,
               SCREEN_DATA: 0x8A, RIPPLE_DATA: 0x8B };
@@ -446,7 +531,24 @@ var K2Proto = (function () {
   var TEST_ALGORITHM_GROUPS = [0, 0, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 0, 0, 0, 0, 1, 2];
   var TEST_STAGES = ["algorithms", "group", "cable", "identity", "review", "running", "results", "steps", "detail",
                      "resume", "changes", "ask", "refuse", "waiting", "custom"];
-  var TEST_STATES = ["idle", "baseline", "requesting", "holding", "releasing", "done", "stopped", "unsafe", "detach charger", "attach charger"];
+  var TEST_STATES = ["idle", "baseline", "requesting", "holding", "releasing", "done", "stopped", "unsafe", "detach charger", "attach charger",
+                     "svooc ceiling"];
+  // charger_test::Unit in enum order (the wire value is the index), the device's labels, and kDefaultUnits: the order a run takes
+  // when no unit list is set (include/k2/chargertest/charger_test.hpp, src/chargertest/charger_test.cpp).
+  var TEST_UNITS = ["pd", "qc2", "qc3", "qc3+", "afc", "fcp", "scp", "vooc", "svooc", "svooc65", "ufcs", "vivo", "pd-low"];
+  var TEST_UNIT_LABELS = ["PD", "QC2", "QC3", "QC3+", "AFC", "FCP", "SCP", "VOOC", "SVOOC", "SVOOC65", "UFCS", "VIVO", "PD low"];
+  var TEST_DEFAULT_UNITS = ["fcp", "scp", "afc", "vooc", "svooc", "svooc65", "vivo", "pd", "qc2", "qc3", "qc3+", "ufcs", "pd-low"];
+  // 0x0B req [4, flags] START / [5] CANCEL (remote_proto.hpp kChargerTestStartReq ...): START is the device's own START after its
+  // confirmation; the confirm bit is required (NEED_CONFIRM otherwise), ALL_TESTS picks the "All tests" preset (clear = keep the
+  // draft selection). CANCEL is the device's BACK; CT_STOPPED names what it stopped (ChargerTestSession::Stopped).
+  var CT_START_REQ = 4, CT_CANCEL_REQ = 5, CT_START_CONFIRM = 1, CT_START_ALL_TESTS = 2;
+  var CT_STOPPED = ["nothing", "run", "wait", "confirmation", "refusal", "resume"];
+  var CT_CABLE_KINDS = ["off", "builtin", "saved"];   // ctcable::Kind
+  // The built-in cables the START dialog lists (k2_remote.py DIALOG_BUILTINS / BUILTIN_LABELS).
+  var CT_BUILTINS = [{ id: 1, label: "EPR 50V 5A" }, { id: 2, label: "CUKTECH 6A" }, { id: 4, label: "OnePlus 100W" }];
+  // raguard::kRefusalText (include/k2/pd/ra_guard.hpp): the Refuse stage after START with a spoofed cable through a cable.
+  var CT_GUARD_REFUSAL = "spoof needs the charger plugged into the K2 directly (top plug); through a cable the cable itself answers";
+  var CT_START_FOLLOW_MS = 45000, CT_START_POLL_MS = 500;
   var TEST_RESULTS = ["pending", "running", "pass", "fail", "skip"];
   var TEST_REASONS = ["none", "disabled", "not advertised", "over voltage cap", "not implemented", "confirm no load",
                       "no power monitor", "no source", "load attached", "tool busy", "fake offers", "request failed",
@@ -1704,6 +1806,133 @@ var K2Proto = (function () {
     return out;
   };
 
+
+  // One schema-2 row of the table that meta (a status read) describes: [2, index, run_id, revision]. A table that moved since
+  // meta answers Busy (RemoteError); read the status again. For live views that follow a run row by row; "results" reads them all.
+  K2Remote.prototype.chargerTestRow = async function (meta, index) {
+    if (meta.schema !== 2) throw new RangeError("row reads need the schema-2 table");
+    var req = new Uint8Array(10), v = dv(req);
+    req[0] = 2; req[1] = index; v.setUint32(2, meta.run_id, true); v.setUint32(6, meta.revision, true);
+    var page = decodeChargerTest((await this.link.call(CMD.CHARGER_TEST, req)).payload);
+    if (page.run_id !== meta.run_id || page.revision !== meta.revision || page.start !== index || page.count !== 1)
+      throw new FrameError("charger-test row " + index + " moved; read the status again");
+    return page.steps[0];
+  };
+
+  // ---- charger test: units, cable identity, START / CANCEL (k2_remote.py charger-units / charger-cable / charger-test start) ----
+  // The unit list of the NEXT run (CMD 0x0C [n, unit...]; reset by every START; [] = the default order). Busy while a run is active.
+  K2Remote.prototype.chargerUnits = async function (names) {
+    names = names || [];
+    var ids = [];
+    names.forEach(function (n) {
+      var i = TEST_UNITS.indexOf(n);
+      if (i < 0) throw new RangeError("unknown test unit '" + n + "' (one of " + TEST_UNITS.join(", ") + ")");
+      if (ids.indexOf(i) >= 0) throw new RangeError("test unit '" + n + "' listed twice");
+      ids.push(i);
+    });
+    var p = (await this.link.call(CMD.CHARGER_UNITS, [ids.length].concat(ids))).payload;
+    return { units: ids.length ? names.slice() : ["default"], count: p.length ? p[0] : ids.length };
+  };
+
+  // CMD 0x0D reply: choice kind, seq(2), the current / last run's kind, seq(2), its name (24 bytes, NUL padded).
+  function decodeChargerCable(p) {
+    if (p.length !== 30 || p[0] >= CT_CABLE_KINDS.length || p[3] >= CT_CABLE_KINDS.length) throw new FrameError("invalid charger-cable reply");
+    var v = dv(p);
+    return { choice: CT_CABLE_KINDS[p[0]], choice_seq: v.getUint16(1, true),
+             run: CT_CABLE_KINDS[p[3]], run_seq: v.getUint16(4, true), run_name: cstr(p.subarray(6, 30)) };
+  }
+  // choice: undefined / null = read; { kind: "off" | "builtin" | "saved", seq } = set (builtin seq 1, 2, 4; saved = a library id).
+  K2Remote.prototype.chargerCable = async function (choice) {
+    var payload = [];
+    if (choice) {
+      var k = CT_CABLE_KINDS.indexOf(choice.kind), s = choice.seq || 0;
+      if (k < 0) throw new RangeError("cable kind is off, builtin or saved");
+      if (s < 0 || s > 0xFFFF) throw new RangeError("cable id is 0..65535");
+      payload = [k, s & 255, s >> 8];
+    }
+    return decodeChargerCable((await this.link.call(CMD.CHARGER_CABLE, payload)).payload);
+  };
+
+  // 0x0B [4, flags] reply: result (0 accepted, 1 refused), reason (TEST_REASONS), the VBUS behind the refusal (LE16 mV).
+  function decodeChargerTestStart(p) {
+    if (p.length !== 4 || p[0] > 1 || p[1] >= TEST_REASONS.length) throw new FrameError("invalid charger-test start reply");
+    var refused = p[0] === 1;
+    return { accepted: !refused, busy: false, refusal: refused ? TEST_REASONS[p[1]] : null, refusal_mv: dv(p).getUint16(2, true) };
+  }
+  // o.confirm: the user confirmed (the firmware answers NEED_CONFIRM without it). o.allTests (default true): the "All tests" preset,
+  // false keeps the device's draft selection. Accepted = the K2's confirm window is open and confirms itself once its Ra guard window
+  // is full; the run then starts, waits for the charger, or is refused by the K2's own later checks (follow it with chargerTestRun).
+  K2Remote.prototype.chargerTestStart = async function (o) {
+    o = o || {};
+    var flags = (o.confirm ? CT_START_CONFIRM : 0) | (o.allTests === false ? 0 : CT_START_ALL_TESTS);
+    try { return decodeChargerTestStart((await this.link.call(CMD.CHARGER_TEST, [CT_START_REQ, flags])).payload); }
+    catch (e) {
+      if (!(e instanceof RemoteError)) throw e;
+      if (e.status === STATUS.BUSY)
+        return { accepted: false, busy: true, refusal: "a run, a wait, a resume prompt or a confirmation already holds the test", refusal_mv: 0 };
+      if (e.status === STATUS.BAD_LENGTH || e.status === STATUS.BAD_ARG)
+        throw new FrameError("this firmware has no remote charger-test START (older than the web-ct build)");
+      throw e;
+    }
+  };
+  // 0x0B [5]: the device's own stop (BACK). Returns what it stopped (CT_STOPPED).
+  K2Remote.prototype.chargerTestCancel = async function () {
+    var p = (await this.link.call(CMD.CHARGER_TEST, [CT_CANCEL_REQ])).payload;
+    if (p.length !== 1 || p[0] >= CT_STOPPED.length) throw new FrameError("invalid charger-test cancel reply");
+    return { stopped: CT_STOPPED[p[0]] };
+  };
+
+  // One look at the K2 while an accepted START settles (status and view may be null: a read the K2 did not answer).
+  // outcome null = keep looking; "started" = the run id went up; "guard" = the Ra guard's Refuse stage (send CANCEL, as BACK
+  // would); "refused" = back on Review after the confirmation or the wait, run id unchanged (status.reason and the footer say why).
+  function ctStartStep(beforeRunId, status, view, moved) {
+    if (status && status.run_id !== beforeRunId) return { moved: moved, outcome: "started" };
+    if (!view) return { moved: moved, outcome: null };
+    if (view.stage === "refuse") return { moved: moved, outcome: "guard" };
+    if (view.stage === "waiting" || (view.stage === "review" && view.confirming)) return { moved: true, outcome: null };
+    if (view.stage === "review" && moved) return { moved: moved, outcome: "refused" };
+    return { moved: moved, outcome: null };
+  }
+
+  // Units and cable first (when given), then START, then follow the K2's own stages until a run starts or the K2 refuses.
+  // Never throws for a refusal: { started: true, run_id, previous_run_id } or { started: false, stage, refusal, ... }.
+  // o: { units: [names] | [] (default order) | undefined (leave), cable: { kind, seq } | undefined, allTests, confirm,
+  //      sleep(ms), onStep({ view, status, waited_ms }) }.
+  K2Remote.prototype.chargerTestRun = async function (o) {
+    o = o || {};
+    var self = this, sleep = o.sleep || function (ms) { return new Promise(function (r) { setTimeout(r, ms); }); };
+    async function soft(fn) {
+      try { return await fn(); }
+      catch (e) { if (e instanceof RemoteTimeout) return null; throw e; }
+    }
+    if (o.units !== undefined) await this.chargerUnits(o.units);
+    if (o.cable) await this.chargerCable(o.cable);
+    var before = (await this.chargerTest("status")).run_id;
+    var r = await this.chargerTestStart({ confirm: o.confirm, allTests: o.allTests });
+    if (!r.accepted)
+      return { started: false, stage: r.busy ? "busy" : "preflight", refusal: r.refusal, refusal_mv: r.refusal_mv, run_id: before };
+    var waited = 0, moved = false;
+    while (waited < CT_START_FOLLOW_MS) {
+      await sleep(CT_START_POLL_MS);
+      waited += CT_START_POLL_MS;
+      var st = await soft(function () { return self.chargerTest("status"); });
+      var view = st && st.run_id !== before ? null : await soft(function () { return self.chargerTest("view"); });
+      if (o.onStep) o.onStep({ view: view, status: st, waited_ms: waited });
+      var s = ctStartStep(before, st, view, moved);
+      moved = s.moved;
+      if (s.outcome === "started") return { started: true, run_id: st.run_id, previous_run_id: before };
+      if (s.outcome === "guard") {
+        await this.chargerTestCancel();
+        return { started: false, stage: "guard", refusal: CT_GUARD_REFUSAL, run_id: before };
+      }
+      if (s.outcome === "refused") {
+        var last = await soft(function () { return self.chargerTest("status"); });
+        return { started: false, stage: "final", refusal: (last && last.reason) || "unknown", message: view.message, run_id: before };
+      }
+    }
+    return { started: false, stage: "timeout", refusal: "no run started in " + CT_START_FOLLOW_MS / 1000 + " s", run_id: before };
+  };
+
   // ---- HTTP transport: the K2's own web server over USB networking ---------------------------------
   // Same Link, different wire: each request frame is POSTed as hex to /api/frame and the 64-byte answer
   // (JSON {"rsp": hex}) is fed back to the link. The server wants an X-K2 header on every POST (a form on
@@ -1716,6 +1945,7 @@ var K2Proto = (function () {
     var cmd = f[2];
     if (cmd === CMD.PD_REQUEST || cmd === CMD.PD_RESET || cmd === CMD.PD_RELEASE || cmd === CMD.PD_ATTACH) return true;
     if (cmd === CMD.ACTION) return f[4] > 0 && ACTION_VBUS_IDS.indexOf(f[5]) >= 0;
+    if (cmd === CMD.CHARGER_TEST) return f[4] > 0 && f[5] === CT_START_REQ;   // START (http_api.hpp: 403 without confirm=1)
     return cmd === CMD.FC && f[4] > 0 && FC_VBUS_OPS.indexOf(f[5]) >= 0;
   }
 
@@ -1909,6 +2139,11 @@ var K2Proto = (function () {
     isBootloaderFrame: isBootloaderFrame, classify: classify, logText: logText,
     directionOf: directionOf, decodePing: decodePing, decodeState: decodeState, decodeSession: decodeSession, decodeDiag: decodeDiag, decodeKeys: decodeKeys, decodePdo: decodePdo,
     decodeChargerTest: decodeChargerTest, decodeChargerTestView: decodeChargerTestView, TEST_ALGORITHMS: TEST_ALGORITHMS, TEST_REASONS: TEST_REASONS, TEST_STAGES: TEST_STAGES,
+    TEST_STATES: TEST_STATES, TEST_UNITS: TEST_UNITS, TEST_UNIT_LABELS: TEST_UNIT_LABELS, TEST_DEFAULT_UNITS: TEST_DEFAULT_UNITS,
+    CT_START_REQ: CT_START_REQ, CT_CANCEL_REQ: CT_CANCEL_REQ, CT_START_CONFIRM: CT_START_CONFIRM, CT_START_ALL_TESTS: CT_START_ALL_TESTS,
+    CT_STOPPED: CT_STOPPED, CT_CABLE_KINDS: CT_CABLE_KINDS, CT_BUILTINS: CT_BUILTINS, CT_GUARD_REFUSAL: CT_GUARD_REFUSAL,
+    CT_START_FOLLOW_MS: CT_START_FOLLOW_MS, CT_START_POLL_MS: CT_START_POLL_MS,
+    decodeChargerCable: decodeChargerCable, decodeChargerTestStart: decodeChargerTestStart, ctStartStep: ctStartStep,
     decodeEmarker: decodeEmarker, decodeEmarkerDetail: decodeEmarkerDetail, decodeAdcRaw: decodeAdcRaw,
     decodeRippleInfo: decodeRippleInfo, decodeIdentity: decodeIdentity, decodePdTrigger: decodePdTrigger, decodeMatch: decodeMatch, decodeStop: decodeStop, decodeLease: decodeLease, decodeIdentifyProgress: decodeIdentifyProgress, PD_ERRS: PD_ERRS,
     decodeFc: decodeFc, decodeCableR: decodeCableR, parseLogStats: parseLogStats,
@@ -1971,6 +2206,31 @@ if (typeof module !== "undefined" && module.exports) module.exports = K2Proto;
   try { saved = localStorage.getItem("k2-theme"); } catch (e) { /* ignore */ }
   applyTheme(saved || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
   $("theme").onclick = function () { applyTheme(document.documentElement.getAttribute("data-theme") === "dark" ? "light" : "dark"); };
+
+  // ---- pages: hash routes inside this one file, so it works the same from GitHub Pages, a local server and the K2's own copy.
+  // Every card keeps polling as before; a page only decides what shows. Unknown or empty hashes open Live.
+  var ROUTES = ["live", "test", "cables", "triggers", "device"];
+  S.route = "live";
+  function onRoute(card) { return (" " + card.getAttribute("data-page") + " ").indexOf(" " + S.route + " ") >= 0; }
+  function routeNote() {
+    var any = Array.prototype.some.call($("main").querySelectorAll("section[data-page]"), function (c) { return onRoute(c) && !c.hidden; });
+    var n = $("route-note");
+    n.hidden = any;
+    n.textContent = any ? "" : S.k2 ? "This firmware has none of this page's commands." : "Connect a K2 to use this page.";
+  }
+  function route() {
+    var r = (location.hash || "").replace(/^#\/?/, "");
+    if (ROUTES.indexOf(r) < 0) r = "live";
+    S.route = r;
+    $("main").setAttribute("data-route", r);
+    Array.prototype.forEach.call(document.querySelectorAll("#tabs a"), function (a) {
+      if (a.getAttribute("href") === "#" + r) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
+    });
+    routeNote();
+    if (r === "test") ctEnter();
+    drawChart(); drawRipple(); if (BBV.meta) drawBb();   // canvases measure themselves only while shown
+  }
+  window.addEventListener("hashchange", route);
 
   // ---- status, banner, log console ---------------------------------------------------------------------
   function setStatus(text, cls) { var s = $("status"); s.textContent = text; s.className = "pill " + (cls || ""); }
@@ -2704,7 +2964,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = K2Proto;
     }
     kv($("ct-evidence"), evidence);
     var box = $("ct-results"); box.textContent = "";
-    if (!r.run_id) { box.className = "empty"; box.textContent = "No run yet. Use the on-device Algorithms → Cable/Spoof → Review wizard."; return; }
+    if (!r.run_id) { box.className = "empty"; box.textContent = "No run yet. Start one above, or with the K2's own wizard."; return; }
     if (r.steps.length !== r.total) {
       box.className = "empty"; box.textContent = "Results changed. Refresh to read one consistent snapshot."; return;
     }
@@ -2751,6 +3011,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = K2Proto;
   }
   function refreshChargerTest() {
     S.due.ct = Date.now();
+    if (ctLive()) return Promise.resolve();   // the Charger test page reads the status itself, once a second
     return guarded("charger test", function () { return readChargerTest(false); }, true);
   }
   $("ct-refresh").onclick = function () { guarded("charger test", function () { return readChargerTest(true); }); };
@@ -2762,6 +3023,294 @@ if (typeof module !== "undefined" && module.exports) module.exports = K2Proto;
       document.body.appendChild(a); a.click(); a.remove(); setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
     });
   };
+
+  // ---- Charger test page: start a run from here (0x0B START / CANCEL = the K2's own START and BACK), follow it, show the end ----
+  // START goes through the K2's own path (preflight, cable guard, the charger wait); nothing here arms anything by itself.
+  // While the page is open or a run is going: status + view once a second, rows only when the table's revision moves, at most
+  // CT_ROWS_PER_TICK of them per tick; the whole table once at the end. A poll the K2 does not answer (it is busy with a
+  // handshake) is skipped, not an error.
+  var CT_LIVE_MS = 1000, CT_ROWS_PER_TICK = 8;
+  var CT_ACTIVE = ["baseline", "requesting", "holding", "releasing", "detach charger", "attach charger", "svooc ceiling"];
+  var CT = { phase: "setup", meta: null, view: null, noView: false, rows: [], rowsKey: "", busy: false, quiet: 0,
+             runId: 0, startedAt: 0, cancelled: false, savedLoaded: false, plan: null };
+  function unitLabel(u) { return P.TEST_UNIT_LABELS[P.TEST_UNITS.indexOf(u)] || u; }
+  function ctUnitBoxes() { return Array.prototype.slice.call($("ctr-units").querySelectorAll("input")); }
+  P.TEST_DEFAULT_UNITS.forEach(function (u) {
+    var lab = el("label"), cb = el("input");
+    cb.type = "checkbox"; cb.checked = true; cb.value = u;
+    lab.appendChild(cb); lab.appendChild(document.createTextNode(unitLabel(u)));
+    $("ctr-units").appendChild(lab);
+  });
+  $("ctr-all").onclick = function () { ctUnitBoxes().forEach(function (b) { b.checked = true; }); };
+  $("ctr-none").onclick = function () { ctUnitBoxes().forEach(function (b) { b.checked = false; }); };
+  function ctCableOptions(saved) {
+    var s = $("ctr-cable"), keep = s.value;
+    s.textContent = "";
+    function add(value, text) { var o = el("option", text); o.value = value; s.appendChild(o); }
+    add("off", "Off (no spoof)");
+    P.CT_BUILTINS.forEach(function (b) { add("builtin:" + b.id, "Built-in: " + b.label); });
+    (saved || []).forEach(function (c) { add("saved:" + c.seq, "Saved: " + (c.name || "#" + c.seq)); });
+    s.value = Array.prototype.some.call(s.options, function (o) { return o.value === keep; }) ? keep : "off";
+  }
+  ctCableOptions([]);
+  function ctLoadCables() {
+    return guarded("saved cables", async function () { var list = await S.k2.emList(); CT.savedLoaded = true; ctCableOptions(list); }, true);
+  }
+  $("ctr-cables").onclick = ctLoadCables;
+  function ctEnter() {
+    S.due.ctlive = 0;
+    if (S.k2 && !CT.savedLoaded && !$("c-ctrun").hidden) ctLoadCables();
+  }
+  function ctLive() { return !!S.k2 && !$("c-ctrun").hidden && (S.route === "test" || CT.phase === "running"); }
+
+  function ctPhase(p) {
+    CT.phase = p;
+    $("ctr-setup").hidden = p !== "setup";
+    $("ctr-confirm").hidden = p !== "confirm";
+    $("ctr-live").hidden = p === "setup" || p === "confirm";
+    $("ctr-again-row").hidden = $("ctr-summary").hidden = p !== "done";
+    $("ctr-cancel").hidden = p === "done";
+    $("tab-test").classList.toggle("live", p === "starting" || p === "running");
+    if (p !== "running") put("ctr-pick", "");
+  }
+  function ctChoice() {
+    var units = ctUnitBoxes().filter(function (b) { return b.checked; }).map(function (b) { return b.value; });
+    var c = $("ctr-cable").value.split(":");
+    return { units: units, all: units.length === P.TEST_DEFAULT_UNITS.length, allTests: $("ctr-tests").value === "all",
+             cable: { kind: c[0], seq: c[1] ? Number(c[1]) : 0 }, cableText: $("ctr-cable").selectedOptions[0].textContent };
+  }
+  $("ctr-start").onclick = function () {
+    var ch = ctChoice(), st = S.st;
+    if (!ch.units.length) { msg("m-ctr", "Pick at least one unit.", "warn"); return; }
+    CT.plan = ch; msg("m-ctr", "");
+    kv($("ctr-plan"), [
+      ["Units", ch.all ? "all, in the K2's default order" : ch.units.map(unitLabel).join(", "), false],
+      ["Tests", ch.allTests ? "All tests (the K2's preset)" : "the selection set on the K2", false],
+      ["Cable identity", ch.cableText, false],
+      ["Input now", st ? volts(st.vbus_mv, 2) + " V" + (st.num_pdos ? ", " + st.num_pdos + " PDOs offered" : "") : "unknown"]]);
+    ctPhase("confirm");
+    $("ctr-go").focus();
+  };
+  $("ctr-back").onclick = function () { ctPhase("setup"); };
+  $("ctr-go").onclick = function () { ctStart(); };
+  $("ctr-cancel").onclick = function () { ctCancel(); };
+  $("ctr-stopk2").onclick = function () { ctCancel(); };
+  $("ctr-again").onclick = function () { CT.rows = []; CT.rowsKey = ""; $("ctr-grid").textContent = ""; msg("m-ctr", ""); ctPhase("setup"); };
+
+  function ctRefusalText(r) {
+    if (r.stage === "busy") return "The K2 did not start: " + r.refusal + ". Cancel it first.";
+    if (r.stage === "guard") return "The K2 did not start: " + r.refusal + ". Pick cable identity Off, or plug the charger into the K2's top plug.";
+    if (r.stage === "timeout") return "The K2 did not start a run: " + r.refusal + ". Look at the K2's screen.";
+    var t = "The K2 refused to start: " + r.refusal;
+    if (r.refusal_mv) t += " (input " + volts(r.refusal_mv, 2) + " V)";
+    if (r.message) t += ". The K2 says: “" + r.message + "”";
+    return t + ".";
+  }
+  function ctStartingView(v) {
+    var t = v.stage === "waiting" ? "waiting for the charger (" + Math.round(v.wait.elapsed_ms / 1000) + " of " + Math.round(v.wait.total_ms / 1000) + " s)"
+      : v.stage === "review" && v.confirming ? "the K2 confirms START (cable guard window)"
+      : v.stage === "refuse" ? "the K2 refused (cable guard)" : "K2 screen: " + v.stage;
+    put("ctr-headline", "Starting: " + t);
+    put("ctr-k2", "K2: " + v.stage);
+  }
+  async function ctStart() {
+    var ch = CT.plan, k2 = S.k2, gen = S.gen;
+    if (!k2 || !ch) return;
+    CT.cancelled = false; CT.rows = []; CT.rowsKey = ""; CT.runId = 0;
+    ctPhase("starting");
+    $("ctr-progress").value = 0; kv($("ctr-now"), []); $("ctr-grid").textContent = "";
+    put("ctr-headline", "Starting: the K2 runs its own START checks"); msg("m-ctr", "");
+    try {
+      var r = await k2.chargerTestRun({ units: ch.all ? [] : ch.units, cable: ch.cable, allTests: ch.allTests, confirm: true,
+        onStep: function (s) { if (S.gen === gen && s.view) ctStartingView(s.view); } });
+      if (S.gen !== gen) return;
+      if (r.started) {
+        CT.runId = r.run_id; CT.startedAt = Date.now(); CT.quiet = 0;
+        logAppend("[web] charger test: run #" + r.run_id + " started", true);
+        put("ctr-headline", "Run #" + r.run_id + " started");
+        ctPhase("running"); S.due.ctlive = 0;
+        return;
+      }
+      ctPhase("setup");
+      logAppend("[web] charger test START " + (CT.cancelled ? "cancelled" : "refused (" + r.stage + "): " + r.refusal), true);
+      if (CT.cancelled) msg("m-ctr", "Cancelled before the run started.", "warn");
+      else msg("m-ctr", ctRefusalText(r), "bad");
+    } catch (e) {
+      if (S.gen !== gen) return;
+      ctPhase("setup");
+      msg("m-ctr", "START failed: " + (e instanceof P.RemoteTimeout ? "the K2 did not answer" :
+        e instanceof P.RemoteError && e.status === P.STATUS.BUSY ? "the K2 is busy with a run (units and cable cannot change now)" : e.message || e), "bad");
+      reportError("charger test start", e);
+    }
+  }
+  async function ctCancel() {
+    var k2 = S.k2;
+    if (!k2) return;
+    CT.cancelled = true;
+    try {
+      var r = await k2.chargerTestCancel();
+      var words = { nothing: "Nothing was running.", run: "Run cancelled.", wait: "The charger wait was cancelled.",
+                    confirmation: "The pending START was cancelled.", refusal: "The refusal screen was closed.",
+                    resume: "The interrupted run was abandoned." };
+      msg("m-ctr", words[r.stopped] || r.stopped, r.stopped === "nothing" ? "" : "warn");
+      logAppend("[web] charger test cancel: " + r.stopped, true);
+      S.due.ctlive = 0;
+    } catch (e) {
+      msg("m-ctr", "Cancel failed: " + (e instanceof P.RemoteTimeout ? "the K2 did not answer" : e.message || e) + ". Press BACK on the K2.", "bad");
+      reportError("charger test cancel", e);
+    }
+  }
+  async function ctSoft(fn) {
+    try { return await fn(); }
+    catch (e) {
+      if (e instanceof P.RemoteTimeout) return null;
+      if (e instanceof P.FrameError && /no charger-test view/.test(e.message)) { CT.noView = true; return null; }
+      throw e;
+    }
+  }
+  async function ctTick() {
+    S.due.ctlive = Date.now();
+    if (!S.k2 || CT.busy || CT.phase === "starting") return;
+    var k2 = S.k2, gen = S.gen;
+    CT.busy = true;
+    try {
+      var st = await ctSoft(function () { return k2.chargerTest("status"); });
+      if (S.gen !== gen || !st) return;
+      var v = CT.noView ? null : await ctSoft(function () { return k2.chargerTest("view"); });
+      if (S.gen !== gen) return;
+      CT.meta = st; if (v) CT.view = v;
+      put("ctr-k2", v ? "K2: " + v.stage : st.state);
+      var active = CT_ACTIVE.indexOf(st.state) >= 0 || !!(v && v.stage === "running");
+      if (active && CT.phase !== "running") {   // started on the K2 itself, or this page reloaded mid-run: follow it
+        if (CT.phase !== "done") msg("m-ctr", "Following the run on the K2.");
+        CT.runId = st.run_id; CT.rows = []; CT.rowsKey = ""; CT.startedAt = Date.now() - (v ? v.run_elapsed_s * 1000 : 0);
+        ctPhase("running");
+      }
+      if (CT.phase !== "running") { renderChargerTest(st); ctBusyNote(v); return; }
+      if (st.run_id !== CT.runId) { CT.runId = st.run_id; CT.rows = []; CT.rowsKey = ""; }
+      await ctRows(k2, st, gen);
+      if (S.gen !== gen) return;
+      // the results card follows the run too once every row of this revision is read
+      renderChargerTest(CT.rowsKey === st.run_id + "/" + st.revision ? Object.assign({}, st, { steps: CT.rows.slice() }) : st);
+      ctRenderLive(st, v, active);
+      CT.quiet = active ? 0 : CT.quiet + 1;
+      if (CT.quiet >= 2) await ctFinish(k2, gen);
+    } finally { CT.busy = false; }
+  }
+  function ctBusyNote(v) {
+    var t = !v ? "" : v.stage === "waiting" ? "The K2 is waiting for a charger (a START is pending)."
+      : v.confirming ? "A START is being confirmed on the K2."
+      : v.resume.pending ? "The K2 holds an interrupted run (resume prompt)."
+      : v.stage === "refuse" ? "The K2 shows a refusal" + (v.message ? ": " + v.message : ".") : "";
+    $("ctr-busy").hidden = !t; put("ctr-busy-text", t);
+  }
+  // Rows not read yet, plus the ones that can still change (pending / running up to the current step).
+  async function ctRows(k2, st, gen) {
+    if (st.schema !== 2 || !st.total) return;
+    if (CT.rows.length !== st.total) { CT.rows = new Array(st.total); CT.rowsKey = ""; }   // a replanned table: read it again
+    var key = st.run_id + "/" + st.revision;
+    if (key === CT.rowsKey) return;
+    var want = [];
+    for (var i = 0; i < st.total; i++) {
+      var r = CT.rows[i];
+      if (!r || (i <= st.current && (r.result === "pending" || r.result === "running"))) want.push(i);
+    }
+    var done = want.length <= CT_ROWS_PER_TICK;
+    for (var n = 0; n < want.length && n < CT_ROWS_PER_TICK; n++) {
+      try { CT.rows[want[n]] = await k2.chargerTestRow(st, want[n]); }
+      catch (e) {
+        if (S.gen !== gen) return;
+        if (e instanceof P.RemoteTimeout || e instanceof P.FrameError || (e instanceof P.RemoteError && e.status === P.STATUS.BUSY)) { done = false; break; }
+        throw e;
+      }
+      if (S.gen !== gen) return;
+    }
+    if (done) CT.rowsKey = key;
+  }
+  function fmtSecs(s) { return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); }
+  function stepText(s) {
+    return s.group.toUpperCase() + " " + s.protocol + (s.target_mv ? " " + volts(s.target_mv, 2) + " V" : "") +
+      (s.measured_mv ? " (measured " + volts(s.measured_mv, 2) + " V)" : "") + ": " + s.result.toUpperCase() +
+      (s.result === "fail" || s.result === "skip" ? " - " + (s.explanation || s.reason) : "");
+  }
+  function ctRenderLive(st, v, active) {
+    var cur = CT.rows[st.current];
+    var head = "Run #" + st.run_id + " · step " + Math.min(st.current + 1, st.total) + " of " + st.total + " · " + st.state;
+    if (v && v.run_elapsed_s) head += " · " + fmtSecs(v.run_elapsed_s);
+    put("ctr-headline", head);
+    $("ctr-progress").max = st.total || 1; $("ctr-progress").value = Math.min(st.current, st.total);
+    kv($("ctr-now"), [
+      ["Unit", active && cur ? cur.group.toUpperCase() : "-"],
+      ["Step", active && cur ? cur.protocol + (cur.target_mv ? " " + volts(cur.target_mv, 2) + " V" : "") : "-"],
+      ["K2", st.state + (st.reason !== "none" ? " / " + st.reason : "")]]);
+    ctGrid(active ? st.current : -1);
+  }
+  // The device's verdict grid: one line per unit, one cell per step; tap or hover a cell for its words.
+  function ctGrid(current) {
+    var box = $("ctr-grid"), order = [], groups = {}, missing = 0;
+    box.textContent = "";
+    for (var i = 0; i < CT.rows.length; i++) {
+      var s = CT.rows[i];
+      if (!s) { missing++; continue; }
+      if (!groups[s.group]) { groups[s.group] = []; order.push(s.group); }
+      groups[s.group].push(s);
+    }
+    order.forEach(function (g) {
+      var row = el("div", undefined, "vrow"), cells = el("div", undefined, "vcells"), cnt = { pass: 0, fail: 0, skip: 0 };
+      row.appendChild(el("span", g.toUpperCase(), "lab mono"));
+      groups[g].forEach(function (s) {
+        var c = el("span", undefined, "vc " + s.result + (s.index === current ? " cur" : "")), t = stepText(s);
+        c.title = t; c.setAttribute("role", "img"); c.setAttribute("aria-label", t);
+        c.onclick = function () { put("ctr-pick", t); };
+        if (s.result in cnt) cnt[s.result]++;
+        cells.appendChild(c);
+      });
+      row.appendChild(cells);
+      row.appendChild(el("span", cnt.pass + " pass · " + cnt.fail + " fail · " + cnt.skip + " skip", "cnt"));
+      box.appendChild(row);
+    });
+    if (missing) box.appendChild(el("div", missing + " step" + (missing > 1 ? "s" : "") + " not read yet", "note"));
+  }
+  async function ctFinish(k2, gen) {
+    CT.quiet = 0;
+    var r = null;
+    for (var a = 0; a < 3 && !r; a++) {
+      try { r = await k2.chargerTest("results"); }
+      catch (e) {
+        if (!(e instanceof P.FrameError || e instanceof P.RemoteTimeout || (e instanceof P.RemoteError && e.status === P.STATUS.BUSY))) throw e;
+        await sleep(500);
+      }
+      if (S.gen !== gen) return;
+    }
+    ctPhase("done");
+    var box = $("ctr-summary"); box.textContent = "";
+    if (!r) { box.appendChild(el("p", "The run ended; its results did not read cleanly. Use Refresh results below.", "note")); return; }
+    CT.rows = r.steps.slice(); renderChargerTest(r); ctGrid(-1);
+    var c = { pass: 0, fail: 0, skip: 0 };
+    r.steps.forEach(function (s) { if (s.result in c) c[s.result]++; });
+    var secs = CT.view && CT.view.run_elapsed_s ? CT.view.run_elapsed_s : Math.round((Date.now() - CT.startedAt) / 1000);
+    var how = r.state === "done" ? "complete" : r.state === "stopped" ? "stopped" + (r.reason !== "none" ? " (" + r.reason + ")" : "") : r.state;
+    box.appendChild(el("h3", "Run #" + r.run_id + " " + how));
+    box.appendChild(el("div", c.pass + " pass · " + c.fail + " fail · " + c.skip + " skip of " + r.steps.length +
+      " steps · " + fmtSecs(secs), "mono"));
+    var fails = r.steps.filter(function (s) { return s.result === "fail"; });
+    if (fails.length) {
+      var ul = el("ul");
+      fails.forEach(function (s) { ul.appendChild(el("li", stepText(s), "mono")); });
+      box.appendChild(el("div", "Failed steps:", "note")); box.appendChild(ul);
+    }
+    box.appendChild(el("div", "Every row, with the evidence and a JSON download: Charger Test results below.", "note"));
+    put("ctr-headline", "Run #" + r.run_id + " " + how);
+    $("ctr-progress").max = r.total || 1; $("ctr-progress").value = r.state === "done" ? r.total : r.current;
+    kv($("ctr-now"), []);
+    logAppend("[web] charger test: run #" + r.run_id + " " + how + ", " + c.pass + " pass / " + c.fail + " fail / " + c.skip + " skip", true);
+  }
+  function ctReset() {
+    CT.meta = CT.view = CT.plan = null; CT.noView = false; CT.rows = []; CT.rowsKey = ""; CT.busy = false; CT.quiet = 0;
+    CT.runId = 0; CT.savedLoaded = false;
+    ctCableOptions([]); $("ctr-grid").textContent = ""; $("ctr-summary").textContent = ""; $("ctr-busy").hidden = true;
+    put("ctr-k2", "-"); msg("m-ctr", ""); ctPhase("setup");
+  }
 
   // ---- optional sections: PROBES lists every command that may be missing. A section stays hidden until its probe
   // succeeds; "unknown command" keeps it hidden. PD trigger has no command on any branch yet: add its probe here.
@@ -2779,7 +3328,9 @@ if (typeof module !== "undefined" && module.exports) module.exports = K2Proto;
       try { yes = await pr.run(); } catch (e) { if (e instanceof P.BootloaderDetected) return; logAppend("[web] probe " + pr.key + ": " + (e.message || e), true); }
       if (S.gen !== gen) return;
       pr.on = yes; $(pr.card).hidden = !yes; S.due[pr.key] = Date.now();
+      if (pr.card === "c-chargertest") { $("c-ctrun").hidden = !yes; if (yes && S.route === "test") ctEnter(); }
     }
+    routeNote();
   }
 
   // ---- errors and connection --------------------------------------------------------------------------------------------------------
@@ -2807,8 +3358,9 @@ if (typeof module !== "undefined" && module.exports) module.exports = K2Proto;
     $("adc-raw").className = "empty"; $("adc-raw").textContent = "Not read yet.";
     $("pd-force").hidden = true; ["m-pd", "m-em", "m-power", "m-rp", "m-fc", "m-dv", "m-id", "m-cr", "m-bb", "m-ct"].forEach(function (id) { msg(id, ""); });
     $("rp-stats").textContent = "";
-    ["c-ident", "c-pdtrig", "c-fc", "c-cabler", "c-bb", "c-chargertest"].forEach(function (id) { $(id).hidden = true; });
+    ["c-ident", "c-pdtrig", "c-fc", "c-cabler", "c-bb", "c-chargertest", "c-ctrun"].forEach(function (id) { $(id).hidden = true; });
     PROBES.forEach(function (p) { p.on = false; });
+    ctReset(); routeNote();
     showStats(); drawChart(); drawRipple();
   }
   function stopSession() {
@@ -2830,6 +3382,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = K2Proto;
       [isDue("lease", EVERY.lease), refreshLease]
     ];
     PROBES.forEach(function (p) { if (p.on) steps.push([isDue(p.key, p.every), p.refresh]); });
+    steps.push([ctLive() && isDue("ctlive", CT_LIVE_MS), function () { return guarded("charger test", ctTick, true); }]);
     for (var i = 0; i < steps.length && S.gen === gen; i++) if (steps[i][0]) await steps[i][1]();
   }
   async function pollLoop(gen) {
@@ -2983,6 +3536,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = K2Proto;
   } else {
     banner("Neither WebHID nor WebUSB is available. Use Chrome or Edge (desktop or Android), and open this page from http://localhost or https (a secure context).");
   }
+  route();
   showStats(); drawChart(); drawRipple();
 })();
 </script>

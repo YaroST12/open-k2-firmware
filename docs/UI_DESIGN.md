@@ -698,8 +698,10 @@ One page for "what is plugged in": Tools -> Who's attached (menu page 16). Pure 
   pop-ups, Tools). Regenerate with `K2_DUMP` on `host-build/test_ui_capture`.
 
 `charger-test status` / `charger-test results` read the existing RAM run without changing the
-page, selection, confirmation or cleanup. Export is evidence retrieval only, not a remote START
-button; entering the page and reading/capturing it remain passive.
+page, selection, confirmation or cleanup; entering the page and reading/capturing it remain passive.
+`charger-test start` (and the dashboard's Charger test page) is the device's own START pair on Review,
+pressed remotely: the page opens, the confirmation shows its 5 s window and confirms itself once the
+Ra guard window is full; `charger-test cancel` is BACK.
 
 ## 6 Interaction and copy rules
 1. **Stop before retreat.** A short BACK on an idle rotation page goes to Home. An active charger test
