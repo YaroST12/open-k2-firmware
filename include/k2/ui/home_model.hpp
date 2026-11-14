@@ -9,6 +9,7 @@
 // card cells x141..223,
 // a 2 px rule at y194 and the info block below it.
 #pragma once
+#include <array>
 #include <cstdint>
 #include <span>
 #include <string_view>
@@ -169,7 +170,27 @@ struct DiagText {
     StrBuf<17> value;
     DiagTone tone = DiagTone::Dim;
 };
-bool format_diag(Mode m, const pd::diag::Report &r, DiagText &out);
+// `hide`: findings to skip (bit i = r.f[i]), from DiagDwell::update.
+bool format_diag(Mode m, const pd::diag::Report &r, DiagText &out, std::uint16_t hide = 0);
+// The event dwell of row 1: an event finding (pd::diag::screen::is_event: a reset, a refused request, a VBUS dip) names
+// the row for kDiagEventDwellMs from when Home first sees it, then the row falls back to the next finding or the state
+// word; a condition (power short, 5 V only) stays. The same event recurring (its count or level moves) shows again for
+// one dwell; a new session starts every clock afresh. Kept across page switches (UiContext::keep).
+inline constexpr uint32_t kDiagEventDwellMs = 10000;
+class DiagDwell {
+public:
+    // The hide mask for format_diag: the Fail/Warn event findings whose dwell has run out.
+    std::uint16_t update(const pd::diag::Report &r, uint32_t now_ms);
+
+private:
+    struct Seen {
+        uint32_t sig = 0;     // code, severity, time and the first two fields: a moved count is a new occurrence
+        uint32_t since = 0;   // when Home first saw it
+    };
+    std::array<Seen, pd::diag::kMaxFindings> seen_{};
+    uint32_t start_us_ = 0;
+    uint8_t n_ = 0;
+};
 // The power meter has not answered YET: the first seconds of a boot, while the chip is still being found (a key-mode boot lives on a
 // VBUS that is still ramping when the first probe runs, and the main loop is busy with the charger link for seconds). The page says
 // "starting" in a neutral colour; only a meter still missing after the grace is an error. Uptime in ms (the Ui clock starts at boot).

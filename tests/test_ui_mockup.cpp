@@ -346,6 +346,19 @@ int main() {
         pd::diag::screen::word(g_stub.diag_report, w, sev);
         printf("%-18s Diag %s (sev %d)\n", h.name, w, int(sev));
     }
+    // Row 1 one event dwell later (home::kDiagEventDwellMs): an event word (the ramp's over-draw, the stress run's soft
+    // resets) falls back to the next finding or the state word; case 1's power short is a condition and stays.
+    for (const auto& h : kHome) {
+        if (!h.r || h.r == &kInline) continue;
+        g_stub.diag_report = pd::diag::Report{};
+        ui.tick(t); t += 200;
+        g_stub.diag_report = *h.r;
+        g_stub.diag_state = h.state;
+        for (uint32_t e = 0; e <= home::kDiagEventDwellMs; e += 200) { ui.tick(t); t += 200; }
+        for (int i = 0; i < 400 && ui.painting(); i++) { ui.tick(t); t += 20; }
+        char name[40];
+        std::snprintf(name, sizeof name, "%s_after", h.name);
+        render(ui, t, name);    }
     // The Connection page's Source tab with an open case-1 session: the verdict is its bar line.
     g_stub.diag_report = kCase1;
     g_stub.diag_state = 1;

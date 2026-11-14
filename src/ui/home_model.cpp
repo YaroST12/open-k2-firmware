@@ -181,18 +181,58 @@ void format_lines(bool data_lines, int32_t a_mv, int32_t b_mv, LinesText &out) {
     out.value.put_char('V');
 }
 
-bool format_diag(Mode m, const pd::diag::Report &r, DiagText &out) {
+bool format_diag(Mode m, const pd::diag::Report &r, DiagText &out, std::uint16_t hide) {
     out.value.clear();
     out.tone = DiagTone::Dim;
     if ((m != Mode::Live && m != Mode::Stale) || r.no_pd) return false;
     char w[pd::diag::screen::kLabelChars + 8];
     pd::diag::Sev sev = pd::diag::Sev::Ok;
-    pd::diag::screen::word(r, w, sev);
+    pd::diag::screen::word(r, w, sev, hide);
     out.value.put(w);
     out.tone = m == Mode::Stale ? DiagTone::Stale
              : sev == pd::diag::Sev::Fail ? DiagTone::Error
              : sev == pd::diag::Sev::Warn ? DiagTone::Caution : DiagTone::Dim;
     return true;
+}
+
+namespace {
+// What makes one occurrence of an event: its code, severity, first time and the field that moves when it happens again
+// (a count, a peak, a level). A field that grows with the session's length (InputCuts' window count, OverSustained's
+// running mean) is left out, or the word would never fall back.
+uint32_t event_sig(const pd::diag::Finding &f) {
+    using pd::diag::Code;
+    uint32_t moved = static_cast<uint32_t>(f.a), more = static_cast<uint32_t>(f.b);
+    if (f.code == Code::InputCuts) more = 0;                                                // b: windows so far
+    if (f.code == Code::OverDraw) more = static_cast<uint32_t>(f.c) >> 8 & 0xFFu;           // the burst count
+    if (f.code == Code::OverSustained) { moved = static_cast<uint32_t>(f.d); more = 0; }   // the over blocks' time
+    uint32_t h = 2166136261u;
+    for (uint32_t v : {static_cast<uint32_t>(f.code) | static_cast<uint32_t>(f.sev) << 8, f.t_ms, moved, more})
+        h = (h ^ v) * 16777619u;
+    return h;
+}
+}  // namespace
+
+std::uint16_t DiagDwell::update(const pd::diag::Report &r, uint32_t now_ms) {
+    if (r.empty || r.start_us != start_us_) {   // a new session: every event is new
+        n_ = 0;
+        start_us_ = r.start_us;
+    }
+    std::array<Seen, pd::diag::kMaxFindings> next{};
+    uint8_t nn = 0;
+    std::uint16_t hide = 0;
+    for (unsigned i = 0; i < r.n && i < next.size(); i++) {
+        const pd::diag::Finding &f = r.f[i];
+        if (f.sev > pd::diag::Sev::Warn || !pd::diag::screen::is_event(f.code)) continue;
+        const uint32_t sig = event_sig(f);
+        uint32_t since = now_ms;
+        for (unsigned k = 0; k < n_; k++)
+            if (seen_[k].sig == sig) { since = seen_[k].since; break; }
+        next[nn++] = Seen{sig, since};
+        if (now_ms - since >= kDiagEventDwellMs) hide = static_cast<std::uint16_t>(hide | 1u << i);
+    }
+    seen_ = next;   // only what the report still holds: a vanished event is forgotten
+    n_ = nn;
+    return hide;
 }
 
 bool max_text(Mode m, uint32_t milli, char unit, StrBuf<12> &out) {

@@ -747,15 +747,16 @@ void HomePage::paint_info(const Frame &f) {
     const bool live = m == hm::Mode::Live, stale = m == hm::Mode::Stale;
 
     // Row 1: the Black Box diagnosis of the PD session while live or stale (hm::format_diag: its worst finding, or the
-    // state, in the finding's tone); otherwise, and for a session without PD (a legacy charger: the lines tell more), the
-    // measured lines (CC1/CC2 at rest, D+/D- live).
+    // state, in the finding's tone; an event finding only for one dwell, hm::DiagDwell); otherwise, and for a session
+    // without PD (a legacy charger: the lines tell more), the measured lines (CC1/CC2 at rest, D+/D- live).
     hm::LinesText lt;
     hm::DiagText dt;
     std::string_view row1_tag = hm::kDiagTag, row1_val;
     const uint16_t row1_tag_col = (m == hm::Mode::Idle || m == hm::Mode::NoMeter) ? kFaint : kDim;
     uint16_t row1_val_col = kDim;
     const int32_t dp = ctx_.analog ? ctx_.analog->dp_mv : -1, dm = ctx_.analog ? ctx_.analog->dm_mv : -1;
-    if (hm::format_diag(m, pd::diag::live::report(), dt)) {
+    const pd::diag::Report &rep = pd::diag::live::report();
+    if (hm::format_diag(m, rep, dt, ctx_.keep.diag_dwell.update(rep, f.now))) {
         row1_val = dt.value.view();
         row1_val_col = dt.tone == hm::DiagTone::Stale ? kStale : dt.tone == hm::DiagTone::Error ? kError
                      : dt.tone == hm::DiagTone::Caution ? kCaution : kDim;

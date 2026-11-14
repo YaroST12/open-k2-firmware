@@ -918,6 +918,38 @@ static void test_rework_guards_energy_lines_and_badges() {
     }
 }
 
+// Row 2's diagnosis word through the real page: an event (a hard reset) names the row in red for one dwell
+// (home::kDiagEventDwellMs, counted from when Home first shows it), then the row falls back to the state word, dim; a
+// condition (power short) stays amber however long it holds.
+static void test_diag_event_word_falls_back() {
+    Ui &ui = home_ui();
+    live_pd(false, 20010, 1520);
+    pd::diag::Report r;
+    r.empty = false; r.live = true; r.power = pd::diag::kPowerOk; r.start_us = 777; r.n = 1;
+    r.f[0].sev = pd::diag::Sev::Fail; r.f[0].code = pd::diag::Code::HardReset; r.f[0].t_ms = 1200; r.f[0].a = 1;
+    g_stub.diag_report = r;
+    g_stub.diag_state = 1;
+    run(ui, 10);
+    const uint32_t shown = g_t;
+    dump("2c", "diag_event");
+    CHECK_TRUE(ink_logical(ui, 0, 222, 224, 16, kError) > 1000);       // "Hard reset" on the red band
+    while (g_t - shown < hm::kDiagEventDwellMs - 1500) run(ui, 1);
+    CHECK_TRUE(ink_logical(ui, 0, 222, 224, 16, kError) > 1000);       // still inside its dwell
+    while (g_t - shown < hm::kDiagEventDwellMs + 1500) run(ui, 1);
+    dump("2c", "diag_event_after");
+    CHECK_EQ(ink_logical(ui, 0, 222, 224, 16, kError), 0);             // the band is gone ...
+    CHECK_TRUE(ink_logical(ui, 52, 223, 120, 16, kDim) > 8);            // ... "Healthy", dim
+    r.start_us = 778;
+    r.f[0].sev = pd::diag::Sev::Warn; r.f[0].code = pd::diag::Code::PowerShort; r.f[0].t_ms = 0;
+    g_stub.diag_report = r;
+    run(ui, 10);
+    const uint32_t cond = g_t;
+    while (g_t - cond < 3 * hm::kDiagEventDwellMs) run(ui, 10);
+    CHECK_TRUE(ink_logical(ui, 0, 222, 224, 16, kCaution) > 1000);     // a condition never times out
+    g_stub.diag_report = {};
+    g_stub.diag_state = 0;
+}
+
 int main() {
     test_contract_text();
     test_cable_and_cc_text();
@@ -945,5 +977,6 @@ int main() {
     test_cards_on_the_page();
     test_drop_and_sag_cards();
     test_rework_guards_energy_lines_and_badges();
+    test_diag_event_word_falls_back();
     return test_report("test_ui_home");
 }

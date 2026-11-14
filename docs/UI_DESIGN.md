@@ -324,6 +324,14 @@ The 1 px row rule sits on y 136, not 135: the landscape mapping squeezes 240 log
   over LINES over PEAK. The first 2 s of a session, and the first 2 s after Home comes back on screen, only learn the
   averages. A card without data (DROP before an idle reference or a sag) is not forced. On release the dot goes and the
   card stays until the next dwell.
+- **Diagnosis word** (`home::format_diag`, `home::DiagDwell`, 2026-11-14). `Diag <word>` names the worst Fail or Warn
+  finding of the PD session. An event finding (`pd::diag::screen::is_event`: a reset, a re-attach, a refused or
+  unanswered request, a late answer, a VBUS dip, rise or loss, over-draw, input cut-outs, link errors, a refused mode or
+  EPR entry) names the row for one dwell, `kDiagEventDwellMs` = 10 s from when Home first shows it; then the row falls
+  back to the next finding or the state word (`Healthy`, `K2 is the sink`, ...). The same event recurring (its count
+  or level moves) shows again for one dwell; a new session starts afresh. A condition (power short, mismatch flag,
+  pinned at the limit, 5 V only, offer unanswered, cable caps 3 A) stays while it holds. The Diag page lists every
+  finding, always. Renders: `runs/bugbatch/item1/`.
 - **Labels.** Home BACK = `Back` / `Hero`; OK = `Zoom` / `Reset`.
 - **Reboot.** OK + BACK held together for 3 s reboots from any page; the HoldCard shows from 1 s with `Release to
   cancel`. Releasing either key cancels. While the chord is held, both keys' own short and long actions are

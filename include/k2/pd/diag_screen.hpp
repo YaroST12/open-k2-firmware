@@ -34,7 +34,13 @@ bool row(const Report& r, unsigned idx, Row& out);
 void verdict(const Report& r, std::span<char> out);
 // Home row 1: the top finding's label when it is a Fail or a Warn, else the state ("Healthy", "Contract unseen", ...);
 // "No PD session" for an empty report. <= kLabelChars. `sev` gets the colour's severity (Ok = dim, no alarm).
-void word(const Report& r, std::span<char> out, Sev& sev);
+// `hide` skips findings by index (bit i = r.f[i]): the first Fail or Warn not hidden names the row, else the state.
+void word(const Report& r, std::span<char> out, Sev& sev, std::uint16_t hide = 0);
+// An event finding reports something that happened (a reset, a refused request, a VBUS dip, a garbled frame); a condition
+// describes the session as it stands (power short, pinned at the limit, a 5 V contract, a 3 A cable). Home row 1 shows an
+// event's word for one dwell after it first appears (home::DiagDwell); a condition's word stays while it holds. The Diag
+// page lists both, always.
+bool is_event(Code c);
 // True when word() is the top finding's label (a Fail or a Warn leads a session that saw PD), so a page that shows the word
 // as a stamp must not list that finding again.
 bool names_top_finding(const Report& r);

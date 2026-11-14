@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
 // Home v7 pure model: alarms, limit bar, sweep maths, number formats, protocol row, exception badge.
+#include <cstdio>
+#include <initializer_list>
 #include <string>
 #include "test_util.h"
+#include "k2/pd/diag_screen.hpp"
 #include "k2/ui/home_model.hpp"
 #include "diag_fixture.h"
 
@@ -322,6 +325,130 @@ static void test_steady_snapshot() {
     CHECK_EQ(steady_snapshot(-5000, -5050, pd, pd), 1);  // reverse flow reads as a magnitude
 }
 
+
+// ---- Home row 1: an event word falls back after one dwell, a condition word stays ----------------------------------------
+namespace dd {
+using pd::diag::Code;
+using pd::diag::Sev;
+static pd::diag::Finding fnd(Sev s, Code c, std::uint32_t t, std::int32_t a = 1) {
+    pd::diag::Finding f;
+    f.sev = s; f.code = c; f.t_ms = t; f.a = a;
+    return f;
+}
+static pd::diag::Report rep(std::initializer_list<pd::diag::Finding> fs, std::uint32_t start_us = 1000) {
+    pd::diag::Report r;
+    r.empty = false; r.live = true; r.power = pd::diag::kPowerOk; r.start_us = start_us;
+    for (const auto &f : fs) r.f[r.n++] = f;
+    return r;
+}
+// The word the row would show without finding `i`: the invariant an expired event must meet.
+static std::string word_without(const pd::diag::Report &r, unsigned i) {
+    pd::diag::Report c = r;
+    for (unsigned k = i; k + 1 < c.n; k++) c.f[k] = c.f[k + 1];
+    c.n--;
+    DiagText d;
+    format_diag(Mode::Live, c, d);
+    return d.value.c_str();
+}
+}  // namespace dd
+
+static void test_diag_event_classes() {
+    using pd::diag::Code;
+    namespace sc = pd::diag::screen;
+    // something that happened: falls back after a dwell
+    for (Code c : {Code::OverDraw, Code::OverSustained, Code::InputCuts, Code::HardReset, Code::Reattach, Code::SoftReset,
+                   Code::Rejected, Code::WaitLoop, Code::NoAccept, Code::NoPsRdy, Code::LateAccept, Code::LatePsRdy,
+                   Code::ManyRequests, Code::VbusLost, Code::VbusLow, Code::VbusHigh, Code::NoGoodCrc, Code::Retries,
+                   Code::TxFail, Code::RxBad, Code::ModeNak, Code::EnterUsbRefused, Code::EprFailed})
+        CHECK_EQ(sc::is_event(c), true);
+    // the session as it stands: stays while it holds
+    for (Code c : {Code::PowerShort, Code::MismatchFlag, Code::Pinned, Code::FiveVoltOnly, Code::CapsUnanswered, Code::CableCap,
+                   Code::NoMismatchFlag, Code::Draw, Code::DrawReduced, Code::ContractUnseen, Code::NoContract,
+                   Code::ActiveSink, Code::SwapRefused, Code::VdmLoop, Code::CableSilent})
+        CHECK_EQ(sc::is_event(c), false);
+    int events = 0;
+    for (int c = 0; c <= static_cast<int>(Code::CableSilent); c++) events += sc::is_event(static_cast<Code>(c));
+    CHECK_EQ(events, 23);
+}
+
+static void test_diag_word_hide() {
+    using namespace dd;
+    namespace sc = pd::diag::screen;
+    const pd::diag::Report r = rep({fnd(Sev::Fail, Code::HardReset, 500), fnd(Sev::Warn, Code::PowerShort, 0),
+                                    fnd(Sev::Info, Code::Draw, 0)});
+    char w[24];
+    Sev sev;
+    sc::word(r, w, sev);
+    CHECK_STR(w, "Hard reset");
+    CHECK_EQ(static_cast<int>(sev), static_cast<int>(Sev::Fail));
+    sc::word(r, w, sev, 1u);          // the hard reset hidden: the next Fail/Warn finding
+    CHECK_STR(w, "Power short");
+    CHECK_EQ(static_cast<int>(sev), static_cast<int>(Sev::Warn));
+    sc::word(r, w, sev, 3u);          // both hidden: an Info finding never takes the word, the state does
+    CHECK_STR(w, "Healthy");
+    CHECK_EQ(static_cast<int>(sev), static_cast<int>(Sev::Ok));
+}
+
+static void test_diag_dwell() {
+    using namespace dd;
+    DiagText d;
+    DiagDwell dw;
+    const pd::diag::Report r = rep({fnd(Sev::Fail, Code::HardReset, 500), fnd(Sev::Warn, Code::PowerShort, 0)});
+    const std::uint32_t t0 = 5000;
+    CHECK_EQ(dw.update(r, t0), 0u);
+    format_diag(Mode::Live, r, d, dw.update(r, t0 + 100));
+    CHECK_STR(d.value.c_str(), "Hard reset");
+    CHECK_EQ(static_cast<int>(d.tone), static_cast<int>(DiagTone::Error));
+    CHECK_EQ(dw.update(r, t0 + kDiagEventDwellMs - 1), 0u);       // one dwell: still the event
+    const std::uint16_t gone = dw.update(r, t0 + kDiagEventDwellMs);
+    CHECK_EQ(gone, 1u);
+    format_diag(Mode::Live, r, d, gone);
+    CHECK_STR(d.value.c_str(), word_without(r, 0).c_str());          // exactly the row without the event
+    CHECK_STR(d.value.c_str(), "Power short");
+    CHECK_EQ(static_cast<int>(d.tone), static_cast<int>(DiagTone::Caution));
+    CHECK_EQ(dw.update(r, t0 + 600000), 1u);                         // a condition never times out
+    // A second hard reset (the count moves): the word comes back for one more dwell.
+    pd::diag::Report r2 = r;
+    r2.f[0].a = 2;
+    const std::uint32_t t1 = t0 + 700000;
+    CHECK_EQ(dw.update(r2, t1), 0u);
+    CHECK_EQ(dw.update(r2, t1 + kDiagEventDwellMs - 1), 0u);
+    CHECK_EQ(dw.update(r2, t1 + kDiagEventDwellMs), 1u);
+    // An event alone falls back to the session's state word, dim.
+    DiagDwell solo;
+    const pd::diag::Report s = rep({fnd(Sev::Warn, Code::SoftReset, 200)}, 2000);
+    solo.update(s, 100);
+    format_diag(Mode::Live, s, d, solo.update(s, 100 + kDiagEventDwellMs));
+    CHECK_STR(d.value.c_str(), "Healthy");
+    CHECK_EQ(static_cast<int>(d.tone), static_cast<int>(DiagTone::Dim));
+    // The same finding in a new session (another start) is a new event.
+    const pd::diag::Report s2 = rep({fnd(Sev::Warn, Code::SoftReset, 200)}, 3000);
+    CHECK_EQ(solo.update(s2, 100 + kDiagEventDwellMs + 1), 0u);
+    // Two events: each keeps its own clock; the second shows once the first has gone.
+    DiagDwell two;
+    const pd::diag::Report e2 = rep({fnd(Sev::Fail, Code::HardReset, 500), fnd(Sev::Warn, Code::Rejected, 900)});
+    two.update(e2, 0);
+    format_diag(Mode::Live, e2, d, two.update(e2, kDiagEventDwellMs));
+    CHECK_STR(d.value.c_str(), "Healthy");   // both were first seen together, so both have had their dwell
+    DiagDwell late;
+    late.update(rep({fnd(Sev::Fail, Code::HardReset, 500)}), 0);
+    const std::uint16_t m = late.update(e2, kDiagEventDwellMs);     // the reject appeared later: it still shows
+    CHECK_EQ(m, 1u);
+    format_diag(Mode::Live, e2, d, m);
+    CHECK_STR(d.value.c_str(), "Request rejected");
+    // A recorded session (the stress fixture: soft resets) settles on a word that names no event once the dwell has passed.
+    const pd::diag::Report st = diag_fixture::report("tests/fixtures/bbdiag/stress_soft_resets.raw");
+    DiagDwell sd;
+    sd.update(st, 0);
+    const std::uint16_t sm = sd.update(st, kDiagEventDwellMs);
+    format_diag(Mode::Live, st, d, sm);
+    for (unsigned i = 0; i < st.n; i++) {
+        if (st.f[i].sev > Sev::Warn) break;
+        CHECK_EQ(((sm >> i) & 1u) != 0, pd::diag::screen::is_event(st.f[i].code));
+    }
+    std::printf("stress fixture: %s after the dwell (mask 0x%x)\n", d.value.c_str(), unsigned(sm));
+}
+
 int main() {
     test_alarm_thresholds();
     test_limit_bar();
@@ -338,5 +465,8 @@ int main() {
     test_max_text_never_comes_from_live_vbus();
     test_alarm_text();
     test_diag_row();
+    test_diag_event_classes();
+    test_diag_word_hide();
+    test_diag_dwell();
     return test_report("test_home_model");
 }

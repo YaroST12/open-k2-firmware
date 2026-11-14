@@ -291,16 +291,33 @@ Sev worst(const Report& r) {
 
 bool names_top_finding(const Report& r) { return !r.empty && !r.no_pd && r.n && r.f[0].sev <= Sev::Warn; }
 
-void word(const Report& r, std::span<char> out, Sev& sev) {
+bool is_event(Code c) {
+    switch (c) {   // no default: a new code must be classed here (-Wswitch)
+    case Code::OverDraw: case Code::OverSustained: case Code::InputCuts: case Code::HardReset: case Code::SoftReset:
+    case Code::Reattach: case Code::Rejected: case Code::WaitLoop: case Code::ManyRequests: case Code::NoAccept:
+    case Code::LateAccept: case Code::NoPsRdy: case Code::LatePsRdy: case Code::VbusLow: case Code::VbusHigh:
+    case Code::VbusLost: case Code::NoGoodCrc: case Code::Retries: case Code::TxFail: case Code::RxBad: case Code::ModeNak:
+    case Code::EnterUsbRefused: case Code::EprFailed:
+        return true;
+    case Code::PowerShort: case Code::MismatchFlag: case Code::NoMismatchFlag: case Code::Pinned: case Code::Draw:
+    case Code::DrawReduced: case Code::FiveVoltOnly: case Code::ContractUnseen: case Code::NoContract: case Code::ActiveSink:
+    case Code::CapsUnanswered: case Code::SwapRefused: case Code::CableCap: case Code::VdmLoop: case Code::CableSilent:
+        return false;
+    }
+    return false;
+}
+
+void word(const Report& r, std::span<char> out, Sev& sev, std::uint16_t hide) {
     Out o{out};
     if (!out.empty()) out[0] = 0;
     sev = Sev::Ok;
     if (r.empty) { o.s("No PD session"); return; }
     if (r.no_pd) { o.s("No PD seen"); return; }
-    if (names_top_finding(r)) {   // findings are ranked: the first is the worst
-        sev = r.f[0].sev;
+    for (unsigned i = 0; i < r.n && r.f[i].sev <= Sev::Warn; i++) {   // findings are ranked: the first shown is the worst
+        if (i < 16 && (hide >> i & 1u)) continue;
+        sev = r.f[i].sev;
         Row w;
-        row(r, 0, w);
+        row(r, i, w);
         o.s(w.label.data());
         return;
     }
