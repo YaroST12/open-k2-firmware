@@ -152,6 +152,12 @@ public:
     void pdstress_stop();                                            // never refused: ends a run or drops a pending resume
     size_t pdstress_read(uint16_t off, std::span<uint8_t> out);
     // ---- end PD Stress ----
+    // ---- PD Spec Check (Cmd::PdSpec): thin glue over Ui::pd_spec() (k2/ui/pd_spec_session.hpp) ----
+    remote::PdSpecInfo pdspec_info();
+    remote::Status pdspec_start(const remote::PdSpecStart &s);   // Busy when another tool owns the ports; other refusals show in info().start
+    void pdspec_stop();                                          // never refused
+    size_t pdspec_read(uint16_t off, std::span<uint8_t> out);
+    // ---- end PD Spec Check ----
     // Cmd::LoopProbe: the last loop probe result file (k2/loopprobe/loop_probe_hw.hpp); read only, the probe starts on the K2.
     uint16_t loopprobe_len();
     size_t loopprobe_read(uint16_t off, std::span<uint8_t> out);

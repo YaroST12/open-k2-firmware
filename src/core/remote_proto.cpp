@@ -398,6 +398,16 @@ size_t encode_pdstress(std::span<uint8_t> out, const PdStressInfo &i) {
 }
 // ---- end PD Stress ----
 
+// ---- PD Spec Check ----
+size_t encode_pdspec(std::span<uint8_t> out, const PdSpecInfo &i) {
+    Writer w(out);
+    w.u8(i.state); w.u8(i.stop); w.u8(i.start); w.u8(i.family); w.u8(i.item); w.u8(i.items); w.u8(i.families);
+    w.u8(i.fails); w.u8(i.passes); w.u8(i.skips); w.u8(i.flags);
+    w.u16(i.score); w.u16(i.elapsed_s); w.u16(i.blob_len);
+    return w.size();
+}
+// ---- end PD Spec Check ----
+
 size_t encode_ufcs_field(std::span<uint8_t> out, uint8_t field, uint32_t value) {
     if (field >= ufcs::kFieldCount) return 0;
     const ufcs::FieldDef &d = ufcs::kFields[field];

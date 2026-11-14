@@ -340,7 +340,7 @@
 //                                      ports refuse it now (a charger test running).
 //                                    op 2 stop: rsp showing(1) = 1 when a test screen was on the stack and is popped now.
 //                                    Wrong length BadLength, unknown op BadArg.
-// ---- PD Stress (k2/pdstress, docs/PD_STRESS.md) ---------------------------------------------------------------------------------
+// ---- PD Stress (k2/pdstress, docs/PD_SPEC_CHECK.md) ---------------------------------------------------------------------------------
 //   0x55 PD_STRESS   req op(1) [args]  rsp per op
 //                                    The PD renegotiation stress tool. Only advertised PDOs and APDO ranges, never more current than
 //                                    advertised, no load, requests capped at the monitor ceiling. Status block (19 bytes): state(1: 0 idle,
@@ -357,6 +357,26 @@
 //                                    op 2 read, args off(2): rsp off(2) total(2) n(1) data(n), n <= kPdStressChunk (48). The result blob
 //                                      (layout in k2/pdstress/result.hpp: header, per-event points, then the raw per-sequence record).
 //                                      BadArg for off > total.
+//                                    op 3 stop: the run ends at the next poll with the source released to 5 V; rsp the status block.
+//                                      Never refused for a busy port: it is the way out of a run.
+// ---- PD Spec Check (k2/pdspec, docs/PD_SPEC_CHECK.md) ----------------------------------------------------------------------------
+//   0x5A PD_SPEC     req op(1) [args]  rsp per op
+//                                    The no-load PD conformance check of the attached source: transitions between every pair of
+//                                    advertised levels, PPS steps, the keep-alive timers, a Hard Reset and a detach. Only advertised
+//                                    levels, never more current than advertised, nothing above the monitor ceiling; every check
+//                                    ends with the source back at 5 V. Status block (17 bytes): state(1: 0 idle, 1 running,
+//                                    2 finished) stop(1: pdspec::Stop) start(1: the StartResult of the last start op, 0 = started)
+//                                    family(1: pdspec::Family running) item(1) items(1) families(1: the mask in force) fails(1)
+//                                    passes(1) skips(1) flags(1: bit0 the 5 V restore was not confirmed) score(2: penalty points,
+//                                    0 = ideal) elapsed_s(2) blob_len(2).
+//                                    op 0 status: rsp the status block.
+//                                    op 1 start, args families(1: a bit per pdspec::Family, 0 = all) flags(1: bit0 confirm,
+//                                      required). rsp the status block. NeedConfirm without the flag, BadArg for an unknown family
+//                                      bit or flag bit, Busy when another tool owns the ports; any other refusal (no source list,
+//                                      inline, self-powered K2, ...) is Ok with the StartResult in `start`.
+//                                    op 2 read, args off(2): rsp off(2) total(2) n(1) data(n), n <= kPdSpecChunk (48). The result
+//                                      blob (layout in k2/pdspec/result.hpp: header, per-check aggregates, timers, transitions, PPS
+//                                      points). BadArg for off > total.
 //                                    op 3 stop: the run ends at the next poll with the source released to 5 V; rsp the status block.
 //                                      Never refused for a busy port: it is the way out of a run.
 // ---- Loop probe (k2/loopprobe, docs/LOOP_PROBE.md) -------------------------------------------------------------------------------
@@ -594,6 +614,7 @@ enum class Cmd : uint8_t {
                          // an Options flag, not journaled). rsp [mode, end, why, asks, word(2)]: the latest run's stage result
                          // (svooc_ceiling::End, the refusal or abort behind it, asks made, the highest 0x86 word kept going, 100 mA
                          // per count: what the K2 asked for, never a drawn current). Set: Busy while a run is active, BadArg > 2.
+    PdSpec = 0x5A,          // PD Spec Check: status / start / result (chunked) / stop, see the layout above
 };
 
 inline constexpr Cmd kCmdIds[] = {
@@ -606,6 +627,7 @@ inline constexpr Cmd kCmdIds[] = {
     Cmd::CableR, Cmd::Lab, Cmd::Ufcs, Cmd::QRTest, Cmd::Store, Cmd::EmLib, Cmd::Cards, Cmd::Twin, Cmd::BlackBox, Cmd::TransCap, Cmd::ChargerTest,
     Cmd::ChargerUnits, Cmd::ChargerCable, Cmd::ChargerHunt, Cmd::ChargerSweep, Cmd::ChargerAvsSweep, Cmd::BootInfo, Cmd::Memory,
     Cmd::PdStress, Cmd::EmarkerProbe, Cmd::LoopProbe, Cmd::Diagnose, Cmd::TraceHid, Cmd::Battery, Cmd::ChargerSvoocCap,
+    Cmd::PdSpec,
 };
 
 constexpr bool cmd_ids_unique() {
@@ -807,6 +829,14 @@ constexpr size_t kPdStressChunk = 48, kPdStressStatusBytes = 19, kPdStressStartA
 constexpr uint8_t kPdStressFlagMask = kPdFlagConfirm;   // the start flags this protocol knows
 static_assert(5 + kPdStressChunk <= kMaxRspPayload);
 // ---- end PD Stress ----
+// ---- PD Spec Check ----
+// PD_SPEC op codes (first payload byte of Cmd::PdSpec); the read reply header is off(2) total(2) n(1).
+constexpr uint8_t kPdSpecStatus = 0, kPdSpecStart = 1, kPdSpecRead = 2, kPdSpecStop = 3;
+constexpr size_t kPdSpecChunk = 48, kPdSpecStatusBytes = 17, kPdSpecStartArgs = 3;   // start payload: op families flags
+constexpr uint8_t kPdSpecFlagMask = kPdFlagConfirm;   // the start flags this protocol knows
+constexpr uint8_t kPdSpecFamilyMask = 0x3F;           // pdspec::kAllFamilies (six families; checked where the engine is seen)
+static_assert(5 + kPdSpecChunk <= kMaxRspPayload);
+// ---- end PD Spec Check ----
 // LOOP_PROBE read reply: off(2) total(2) n(1) data(n).
 constexpr size_t kLoopProbeChunk = 48;
 static_assert(5 + kLoopProbeChunk <= kMaxRspPayload);
@@ -1112,6 +1142,24 @@ struct PdStressStart {
     uint8_t flags = 0;
 };
 // ---- end PD Stress ----
+// ---- PD Spec Check ----
+struct PdSpecInfo {
+    uint8_t state = 0;                  // 0 idle (no result), 1 running, 2 finished
+    uint8_t stop = 0;                   // pdspec::Stop (0 while running)
+    uint8_t start = 0;                  // pdspec::StartResult of the last start op (0 = started)
+    uint8_t family = 0, item = 0, items = 0;   // the family running and the position in it
+    uint8_t families = 0;               // the family mask in force
+    uint8_t fails = 0, passes = 0, skips = 0;  // checks by verdict
+    uint8_t flags = 0;                  // bit0: the end-of-run 5 V restore was not confirmed
+    uint16_t score = 0;                 // penalty points, 0 = ideal
+    uint16_t elapsed_s = 0;
+    uint16_t blob_len = 0;              // bytes the read op serves
+};
+struct PdSpecStart {
+    uint8_t families = 0;               // a bit per pdspec::Family, 0 = all
+    uint8_t flags = 0;
+};
+// ---- end PD Spec Check ----
 struct LabResult {
     uint8_t status = 0;                 // remote::Status the backend reports (0 = Ok)
     uint8_t reason = 0, duty = 0;
@@ -1329,6 +1377,7 @@ size_t encode_ufcs(std::span<uint8_t> out, const UfcsInfo &i);   // status block
 // One tuner field: field(1) value(4) lo(4) hi(4) default(4); lo / hi / default come from ufcs::kFields.
 size_t encode_ufcs_field(std::span<uint8_t> out, uint8_t field, uint32_t value);
 size_t encode_pdstress(std::span<uint8_t> out, const PdStressInfo &i);   // the 19-byte status block (PD Stress)
+size_t encode_pdspec(std::span<uint8_t> out, const PdSpecInfo &i);       // the 17-byte status block (PD Spec Check)
 size_t encode_ripple(std::span<uint8_t> out, uint8_t code, const RippleInfo &r);
 
 // Cmd::ChargerCable: the backend's status and the identity state after the (optional) set.
@@ -1463,6 +1512,10 @@ concept Backend = requires(B &b, uint8_t u8, uint16_t u16, bool on) {
     { b.pdstress_start(PdStressStart{}) } -> std::same_as<Status>;        // Busy when another tool owns the ports; other refusals are in info().start
     { b.pdstress_stop() } -> std::same_as<void>;                          // never refused
     { b.pdstress_read(uint16_t{}, std::span<uint8_t>{}) } -> std::same_as<size_t>;   // result blob bytes from off, returns how many
+    { b.pdspec_info() } -> std::same_as<PdSpecInfo>;                      // PD Spec Check status block
+    { b.pdspec_start(PdSpecStart{}) } -> std::same_as<Status>;            // Busy when another tool owns the ports; other refusals are in info().start
+    { b.pdspec_stop() } -> std::same_as<void>;                            // never refused
+    { b.pdspec_read(uint16_t{}, std::span<uint8_t>{}) } -> std::same_as<size_t>;     // result blob bytes from off, returns how many
     { b.qrtest_show(u8, u8, u8) } -> std::same_as<Status>;   // version, px, quiet: open the full-screen test QR page
     { b.qrtest_stop() } -> std::same_as<bool>;               // pop the test page when it is showing
     { b.blackbox(u8, std::uint32_t{}, std::span<uint8_t>{}) } -> std::same_as<size_t>;   // op, arg, out; returns the payload size
@@ -2151,6 +2204,47 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
         return reply(Status::UnknownCmd);
 #endif
     // ---- end PD Stress ----
+    // ---- PD Spec Check (K2_PDSPEC=0: not built in, the command is unknown) ----
+#if K2_PDSPEC
+    case Cmd::PdSpec: {
+        if (p.empty()) return reply(Status::BadLength);
+        switch (p[0]) {
+        case kPdSpecStatus:
+            if (p.size() != 1) return reply(Status::BadLength);
+            return reply_n(encode_pdspec(buf, backend.pdspec_info()));
+        case kPdSpecStop:
+            if (p.size() != 1) return reply(Status::BadLength);
+            backend.pdspec_stop();
+            return reply_n(encode_pdspec(buf, backend.pdspec_info()));
+        case kPdSpecStart: {
+            if (p.size() != kPdSpecStartArgs) return reply(Status::BadLength);
+            const PdSpecStart s{p[1], p[2]};
+            if ((s.families & ~kPdSpecFamilyMask) || (s.flags & ~kPdSpecFlagMask)) return reply(Status::BadArg);
+            if (!(s.flags & kPdFlagConfirm)) return reply(Status::NeedConfirm);
+            const Status st = backend.pdspec_start(s);
+            if (st != Status::Ok) return reply(st);
+            return reply_n(encode_pdspec(buf, backend.pdspec_info()));
+        }
+        case kPdSpecRead: {
+            if (p.size() != 3) return reply(Status::BadLength);
+            const uint16_t off = detail::rd16(&p[1]);
+            const uint16_t total = backend.pdspec_info().blob_len;
+            if (off > total) return reply(Status::BadArg);
+            const size_t want = std::min<size_t>(kPdSpecChunk, total - off);
+            const size_t n = std::min(want, backend.pdspec_read(off, std::span<uint8_t>(buf.data() + 5, want)));
+            buf[0] = uint8_t(off); buf[1] = uint8_t(off >> 8);
+            buf[2] = uint8_t(total); buf[3] = uint8_t(total >> 8); buf[4] = uint8_t(n);
+            return reply_n(5 + n);
+        }
+        default:
+            return reply(Status::BadArg);
+        }
+    }
+#else
+    case Cmd::PdSpec:
+        return reply(Status::UnknownCmd);
+#endif
+    // ---- end PD Spec Check ----
     case Cmd::QRTest: {
         if (p.empty()) return reply(Status::BadLength);
         switch (p[0]) {

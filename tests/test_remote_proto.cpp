@@ -1706,6 +1706,67 @@ static void test_pd_stress() {
     check_header(r, 0x55, 16, Status::BadLength, 0);
 }
 
+// PD_SPEC (0x5A): the PD Spec Check's status block, start (families + confirm), the result blob in 48-byte chunks, stop.
+static void test_pd_spec() {
+    Fake f; Frame r;
+    f.pc_info = {1, 0, 0, 2, 5, 9, 0x3F, 3, 40, 6, 1, 0x0102, 0x0304, 0};
+    f.pc_blob.resize(70);
+    for (size_t i = 0; i < f.pc_blob.size(); i++) f.pc_blob[i] = uint8_t(i + 1);
+    // status: state stop start family item items families fails passes skips flags score(2) elapsed_s(2) blob_len(2)
+    CHECK_EQ(run(f, request(0x5A, 1, {0}), r), 1);
+    check_header(r, 0x5A, 1, Status::Ok, 17);
+    check_bytes(r, kRspHeader, {1, 0, 0, 2, 5, 9, 0x3F, 3, 40, 6, 1, 0x02, 0x01, 0x04, 0x03, 70, 0});
+    CHECK_EQ(run(f, request(0x5A, 2, {0, 0}), r), 1);
+    check_header(r, 0x5A, 2, Status::BadLength, 0);
+    // start without the confirm flag is refused before the backend sees it
+    CHECK_EQ(run(f, request(0x5A, 3, {1, 0x30, 0}), r), 1);
+    check_header(r, 0x5A, 3, Status::NeedConfirm, 0);
+    CHECK_EQ(f.pc_starts.size(), size_t(0));
+    // with it: the family mask reaches the backend
+    CHECK_EQ(run(f, request(0x5A, 4, {1, 0x30, kPdFlagConfirm}), r), 1);
+    check_header(r, 0x5A, 4, Status::Ok, 17);
+    CHECK_EQ(f.pc_starts.size(), size_t(1));
+    CHECK_EQ(f.pc_starts[0].families, 0x30); CHECK_EQ(f.pc_starts[0].flags, kPdFlagConfirm);
+    // a busy port is Busy; any other refusal is Ok with the code in `start`
+    f.pc_start_status = Status::Busy;
+    CHECK_EQ(run(f, request(0x5A, 5, {1, 0, kPdFlagConfirm}), r), 1);
+    check_header(r, 0x5A, 5, Status::Busy, 0);
+    f.pc_start_status = Status::Ok;
+    f.pc_info.start = 3;
+    CHECK_EQ(run(f, request(0x5A, 6, {1, 0, kPdFlagConfirm}), r), 1);
+    check_header(r, 0x5A, 6, Status::Ok, 17);
+    CHECK_EQ(r[kRspHeader + 2], 3);
+    // a family bit past the last family, an unknown flag, a wrong length
+    CHECK_EQ(run(f, request(0x5A, 7, {1, 0x40, kPdFlagConfirm}), r), 1);
+    check_header(r, 0x5A, 7, Status::BadArg, 0);
+    CHECK_EQ(run(f, request(0x5A, 8, {1, 0, 0x80 | kPdFlagConfirm}), r), 1);
+    check_header(r, 0x5A, 8, Status::BadArg, 0);
+    CHECK_EQ(run(f, request(0x5A, 9, {1, 0}), r), 1);
+    check_header(r, 0x5A, 9, Status::BadLength, 0);
+    CHECK_EQ(f.pc_starts.size(), size_t(3));
+    // stop reaches the backend even while the ports are busy
+    f.ports_busy_value = true;
+    CHECK_EQ(run(f, request(0x5A, 10, {3}), r), 1);
+    check_header(r, 0x5A, 10, Status::Ok, 17);
+    CHECK_EQ(f.pc_stops, 1);
+    f.ports_busy_value = false;
+    // read: chunk 0 = 48 bytes, the tail 22, the end empty, past it BadArg
+    CHECK_EQ(run(f, request(0x5A, 11, {2, 0, 0}), r), 1);
+    check_header(r, 0x5A, 11, Status::Ok, 5 + 48);
+    check_bytes(r, kRspHeader, {0, 0, 70, 0, 48, 1, 2});
+    CHECK_EQ(run(f, request(0x5A, 12, {2, 48, 0}), r), 1);
+    check_header(r, 0x5A, 12, Status::Ok, 5 + 22);
+    check_bytes(r, kRspHeader, {48, 0, 70, 0, 22, 49, 50});
+    CHECK_EQ(run(f, request(0x5A, 13, {2, 70, 0}), r), 1);
+    check_header(r, 0x5A, 13, Status::Ok, 5);
+    CHECK_EQ(run(f, request(0x5A, 14, {2, 71, 0}), r), 1);
+    check_header(r, 0x5A, 14, Status::BadArg, 0);
+    CHECK_EQ(run(f, request(0x5A, 15, {9}), r), 1);
+    check_header(r, 0x5A, 15, Status::BadArg, 0);
+    CHECK_EQ(run(f, request(0x5A, 16, {}), r), 1);
+    check_header(r, 0x5A, 16, Status::BadLength, 0);
+}
+
 // LOOP_PROBE (0x57): the last loop probe result as its flash file holds it, read in 48-byte chunks; nothing stored = total 0.
 static void test_loop_probe() {
     Fake f; Frame r;
@@ -3220,6 +3281,7 @@ int main() {
     test_boot_info();
     test_ufcs();
     test_pd_stress();
+    test_pd_spec();
     test_loop_probe();
     test_qrtest();
     test_debug_fault();

@@ -311,6 +311,21 @@ struct Fake {
         for (; n < out.size() && off + n < ps_blob.size(); n++) out[n] = ps_blob[off + n];
         return n;
     }
+    // PD Spec Check (Cmd::PdSpec): a canned status block and result blob; the start options and stops are recorded
+    PdSpecInfo pc_info{};
+    std::vector<uint8_t> pc_blob;
+    std::vector<PdSpecStart> pc_starts;
+    Status pc_start_status = Status::Ok;
+    int pc_stops = 0;
+    PdSpecInfo pdspec_info() { calls++; PdSpecInfo i = pc_info; i.blob_len = uint16_t(pc_blob.size()); return i; }
+    Status pdspec_start(const PdSpecStart &s) { calls++; pc_starts.push_back(s); return pc_start_status; }
+    void pdspec_stop() { calls++; pc_stops++; }
+    size_t pdspec_read(uint16_t off, std::span<uint8_t> out) {
+        calls++;
+        size_t n = 0;
+        for (; n < out.size() && off + n < pc_blob.size(); n++) out[n] = pc_blob[off + n];
+        return n;
+    }
     // Loop probe (Cmd::LoopProbe): the stored result file, empty = none.
     std::vector<uint8_t> lp_file;
     uint16_t loopprobe_len() { calls++; return uint16_t(lp_file.size()); }

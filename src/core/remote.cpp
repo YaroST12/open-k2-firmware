@@ -1314,6 +1314,37 @@ size_t Remote::pdstress_read(uint16_t, std::span<uint8_t>) { return 0; }
 #endif
 // ---- end PD Stress ----
 
+// ---- PD Spec Check ----
+#if K2_PDSPEC
+static_assert(remote::kPdSpecFamilyMask == pdspec::kAllFamilies, "the wire's family mask is the engine's");
+remote::PdSpecInfo Remote::pdspec_info() {
+    const PdSpecSession::Status s = ui_.pd_spec().status(systick::millis());
+    remote::PdSpecInfo i;
+    i.state = static_cast<uint8_t>(s.state);   // Idle 0, Running 1, Finished 2: the wire values
+    i.stop = s.stop; i.start = s.start;
+    i.family = s.family; i.item = s.item; i.items = s.items; i.families = s.families;
+    i.fails = s.fails; i.passes = s.passes; i.skips = s.skips; i.flags = s.flags;
+    i.score = s.score; i.elapsed_s = s.elapsed_s; i.blob_len = s.blob_len;
+    return i;
+}
+
+remote::Status Remote::pdspec_start(const remote::PdSpecStart &s) {
+    const pdspec::StartResult r = ui_.pd_spec().start(s.families, systick::millis());
+    return r == pdspec::StartResult::Busy ? remote::Status::Busy : remote::Status::Ok;
+}
+
+void Remote::pdspec_stop() { ui_.pd_spec().cancel(); }
+
+size_t Remote::pdspec_read(uint16_t off, std::span<uint8_t> out) { return ui_.pd_spec().result_read(off, out); }
+#else
+// K2_PDSPEC=0: the dispatcher answers the command UnknownCmd and never calls these; they only satisfy the backend concept.
+remote::PdSpecInfo Remote::pdspec_info() { return {}; }
+remote::Status Remote::pdspec_start(const remote::PdSpecStart &) { return remote::Status::UnknownCmd; }
+void Remote::pdspec_stop() {}
+size_t Remote::pdspec_read(uint16_t, std::span<uint8_t>) { return 0; }
+#endif
+// ---- end PD Spec Check ----
+
 uint16_t Remote::loopprobe_len() { return loopprobe::hw::file_len(); }
 
 size_t Remote::loopprobe_read(uint16_t off, std::span<uint8_t> out) { return loopprobe::hw::file_read(off, out); }
