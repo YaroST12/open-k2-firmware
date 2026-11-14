@@ -154,6 +154,34 @@ static void test_an_avs_sweep_row_is_one_range_chip() {
     CHECK_EQ(sweep_chips(l, 3).compare(0, 5, "9-20V"), 0);
     CHECK_EQ(l.tokens[r->first].mv, 0);
 }
+// Default run (2026-11-14): every PPS APDO now gets its sweep row. Three 3.3 V APDOs at once, with the widest current words
+// a real APDO gives (4.75 A), build without a single cut and each sweep chip says its slot's range row word for word.
+static void test_default_sweep_rows_fit_without_a_cut() {
+    std::vector<ct::Step> s;
+    s.push_back(step(A::Pd3Fixed, 5000, V::Pass, 1, 167874860u));
+    const uint32_t apdo[] = {0xC0000000u | (110u << 17) | (33u << 8) | 100u,    // 3.3-11 V 5 A
+                             0xC0000000u | (160u << 17) | (33u << 8) | 95u,     // 3.3-16 V 4.75 A
+                             0xC0000000u | (210u << 17) | (33u << 8) | 95u};    // 3.3-21 V 4.75 A
+    for (unsigned k = 0; k < 3; ++k) {
+        const uint8_t pos = uint8_t(5 + k);
+        s.push_back(step(A::Pps, 3300, V::Pass, pos, apdo[k]));
+        s.push_back(step(A::Pps, 21000, V::Pass, pos, apdo[k]));
+        s.push_back(sweep_step(A::Pps, pos, apdo[k], V::Pass));
+    }
+    rl::Layout l; rl::build(l, s);
+    CHECK_EQ(l.cuts, 0);
+    for (unsigned k = 0; k < 3; ++k) {
+        const uint8_t pos = uint8_t(5 + k);
+        const rl::Row* r = sweep_row_of(l, pos);
+        CHECK_EQ(r != nullptr, true);
+        if (!r) continue;
+        CHECK_EQ(r->count, 1);
+        const std::string chip = sweep_chips(l, pos);
+        CHECK_EQ(chip.compare(0, 4, "3.3-"), 0);
+        CHECK_EQ(chip.find("..."), std::string::npos);
+        std::printf("[sweep-chip] pos %u: %s\n", unsigned(pos), chip.c_str());
+    }
+}
 // The chip's colour is the sweep's own result: pending until it ran, grey when skipped, red when the source was lost, and
 // green / amber / red by the worst error of the recorded points (<= 100 mV, <= 300 mV, above).
 static void test_a_sweep_chip_takes_its_tone_from_the_sweep() {
@@ -1106,5 +1134,6 @@ int main() {
     test_summary_ignores_failed_skipped_and_pending_steps();
     test_summary_names_a_handshake_without_a_voltage();
     test_summary_class_b_folds_into_the_qc_family();
+    test_default_sweep_rows_fit_without_a_cut();
     return test_report("test_result_layout");
 }

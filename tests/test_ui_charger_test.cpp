@@ -47,6 +47,9 @@ static void fixture() {
     g_stub.caps.raw_header = 0x1181;
 }
 static void press(Ui& ui, Button b, uint32_t now = 1200) { ui.on_button(b, ButtonEvent::Short, now); }
+// The algorithm part of the draft selection: charger_test_selection() also carries the deep-sweep flags (bit 31 PPS, on by
+// default since 2026-11-14; bit 30 AVS), which are Options flags, not algorithms.
+static uint32_t algos(const Ui& ui) { return ui.charger_test_selection() & ~((1u << 31) | (1u << 30)); }
 static void move(Ui& ui, unsigned n, uint32_t now = 1200) { for (unsigned i = 0; i < n; ++i) press(ui, Button::Plus, now); }
 static void top(Ui& ui, uint32_t now = 1200) { for (unsigned i = 0; i < ct::kMaxSteps; ++i) press(ui, Button::Minus, now); }
 static void settle(Ui& ui, uint32_t now = 1200) {
@@ -92,9 +95,9 @@ static void custom_done_review(Ui& ui, uint32_t now = 1200) {
 static void only_vivo_review(Ui& ui, uint32_t now = 1200) {
     custom(ui, now);
     for (int fam : {kFamHuawei, kFamSamsung, kFamOppo, kFamPd, kFamQc}) { top(ui, now); move(ui, fam, now); press(ui, Button::Ok, now); }
-    CHECK_EQ(ui.charger_test_selection(), 0u);
+    CHECK_EQ(algos(ui), 0u);
     open_group(ui, kFamOppo, now); move(ui, 4, now); press(ui, Button::Ok, now);   // OPPO group: Next, VOOC, SVOOC, SVOOC65, VIVO
-    CHECK_EQ(ui.charger_test_selection(), ct::bit(A::Vivo));
+    CHECK_EQ(algos(ui), ct::bit(A::Vivo));
     press(ui, Button::Back, now);
     custom_done_review(ui, now);
 }
@@ -189,7 +192,7 @@ static void read_results(Ui& ui) {
 static void test_confirmation_and_capture() {
     fixture(); Ui ui; open(ui);
     CHECK_EQ(ui.list_state().count, 5); CHECK_EQ(ui.list_state().visible, 7);   // four presets, Custom... (no run to view yet)
-    CHECK_EQ(ui.charger_test_selection(), ct::kDefaultAlgorithms);
+    CHECK_EQ(algos(ui), ct::kDefaultAlgorithms);
     CHECK_EQ(ui.charger_test_set_units(kPdOnly), true);   // the OEM units come first in the default order: keep the timeline short
     review(ui);
     start_press(ui, 1300);
@@ -238,19 +241,19 @@ static void test_group_selection_and_empty_refusal() {
     CHECK_EQ(ui.charger_test_stage(), 1); CHECK_EQ(ui.list_state().count, 2);
     press(ui, Button::Ok);           // the first entry, PD fixed, off
     CHECK_EQ(ui.charger_test_selection() & ct::bit(A::Pd2Fixed), 0);
-    press(ui, Button::Ok); CHECK_EQ(ui.charger_test_selection(), ct::kDefaultAlgorithms);
+    press(ui, Button::Ok); CHECK_EQ(algos(ui), ct::kDefaultAlgorithms);
     move(ui, 1); CHECK_EQ(ui.list_state().offset, 0);
     press(ui, Button::Ok);           // PPS off
     CHECK_EQ(ui.charger_test_selection() & ct::kPpsAlgorithms, 0);
-    press(ui, Button::Ok); CHECK_EQ(ui.charger_test_selection(), ct::kDefaultAlgorithms);
+    press(ui, Button::Ok); CHECK_EQ(algos(ui), ct::kDefaultAlgorithms);
     long_ok(ui);                     // long OK on an entry page toggles the whole group
     CHECK_EQ(ui.charger_test_selection() & (ct::kPdFixedAlgorithms | ct::kPpsAlgorithms), 0);
-    long_ok(ui); CHECK_EQ(ui.charger_test_selection(), ct::kDefaultAlgorithms);
+    long_ok(ui); CHECK_EQ(algos(ui), ct::kDefaultAlgorithms);
     press(ui, Button::Back); CHECK_EQ(ui.charger_test_stage(), kCustomStage); CHECK_EQ(ui.charger_test_cursor(), kFamPd);
     // Short OK on a family toggles all of it: clear every family that can be toggled (Xiaomi rides the PD unit).
     top(ui);
     for (const int f : {kFamHuawei, kFamSamsung, kFamOppo, kFamPd, kFamQc}) { top(ui); move(ui, f); press(ui, Button::Ok); }
-    CHECK_EQ(ui.charger_test_selection(), 0);
+    CHECK_EQ(algos(ui), 0);
     top(ui); move(ui, kFamDone); press(ui, Button::Ok);   // Done: the Cable step
     CHECK_EQ(ui.charger_test_stage(), 2);
     press(ui, Button::Ok); CHECK_EQ(ui.charger_test_stage(), 4);
@@ -260,7 +263,7 @@ static void test_group_selection_and_empty_refusal() {
     press(ui, Button::Back); press(ui, Button::Back);   // Review -> Cable -> Tests
     CHECK_EQ(ui.charger_test_stage(), 0);
     top(ui); move(ui, kAllRow); press(ui, Button::Ok);   // the "All tests" preset brings the defaults back
-    CHECK_EQ(ui.charger_test_selection(), ct::kDefaultAlgorithms);
+    CHECK_EQ(algos(ui), ct::kDefaultAlgorithms);
 }
 // Long OK on a Custom family opens its entries; on an entries page it toggles the whole group: all selected -> none,
 // otherwise -> all of it.
@@ -269,10 +272,10 @@ static void test_long_ok_toggles_a_group() {
     const auto long_ok = [&] { ui.on_button(Button::Ok, ButtonEvent::Long, 1200); };
     const uint32_t qc = ct::bit(A::Qc2) | ct::bit(A::Qc3) | ct::bit(A::Qc3Plus);
     top(ui); move(ui, kLegacyRow); long_ok();                 // a Tests-step preset row: long OK does nothing at all
-    CHECK_EQ(ui.charger_test_selection(), ct::kDefaultAlgorithms); CHECK_EQ(ui.charger_test_stage(), 0);
+    CHECK_EQ(algos(ui), ct::kDefaultAlgorithms); CHECK_EQ(ui.charger_test_stage(), 0);
     custom(ui);
     top(ui); move(ui, kFamQc); long_ok();                     // on a family row long OK opens its entries
-    CHECK_EQ(ui.charger_test_stage(), 1); CHECK_EQ(ui.charger_test_selection(), ct::kDefaultAlgorithms);
+    CHECK_EQ(ui.charger_test_stage(), 1); CHECK_EQ(algos(ui), ct::kDefaultAlgorithms);
     long_ok();                                                // inside the entries: all on -> all off
     CHECK_EQ(ui.charger_test_selection() & qc, 0); CHECK_EQ(ui.charger_test_stage(), 1);
     press(ui, Button::Ok);                                    // the first entry, QC2, back on
@@ -376,12 +379,12 @@ static void test_selection_and_focus_rendering() {
     check_row_text(kAllRow, "All tests", kText, kBg, kPdRow, 150); check_radio(kAllRow, true, kPdRow);
     check_row_text(kPdRow, "PD only", kText, kFocusT, kPdRow, 150); check_radio(kPdRow, false, kPdRow, kFocusT);
     press(ui, Button::Ok, 1230); ui.tick(1230); settle(ui, 1230);   // a preset pick selects and advances: there is no Next row
-    CHECK_EQ(ui.charger_test_selection(), kPdMask); CHECK_EQ(ui.charger_test_stage(), 2);
+    CHECK_EQ(algos(ui), kPdMask); CHECK_EQ(ui.charger_test_stage(), 2);
     press(ui, Button::Back, 1235); ui.tick(1240); settle(ui, 1240);   // back on the preset row, now with its radio on
     CHECK_EQ(ui.charger_test_stage(), 0); CHECK_EQ(ui.charger_test_cursor(), kPdRow);
     check_radio(kPdRow, true, kPdRow, kFocusT); check_radio(kAllRow, false, kPdRow);
     press(ui, Button::Minus, 1245); press(ui, Button::Ok, 1245);   // back to the defaults (and on to the cable)
-    CHECK_EQ(ui.charger_test_selection(), ct::kDefaultAlgorithms);
+    CHECK_EQ(algos(ui), ct::kDefaultAlgorithms);
     press(ui, Button::Back, 1246); ui.tick(1250); settle(ui, 1250);
     check_radio(kAllRow, true, kAllRow, kFocusT);
     custom(ui, 1255); ui.tick(1255); settle(ui, 1255);   // the families: Box3 markers, the focused one open with its note
@@ -575,7 +578,7 @@ static void test_skip_results_and_deselection() {
     press(ui, Button::Ok); CHECK_EQ(ui.charger_test_stage(), 8);
     press(ui, Button::Ok); press(ui, Button::Back); press(ui, Button::Back);
     CHECK_EQ(ui.charger_test_stage(), 0);
-    CHECK_EQ(ui.charger_test_selection(), ct::bit(A::Vivo));
+    CHECK_EQ(algos(ui), ct::bit(A::Vivo));
     CHECK_EQ(g_stub.requests + g_stub.releases, 0);
     CHECK_EQ(g_stub.rescans + g_stub.scans + g_stub.lib_saves + g_stub.spoof_arms, 0);
 }
@@ -669,32 +672,32 @@ static void test_tests_step_presets() {
     {
         Ui v; open(v); v.tick(1200);
         top(v); move(v, kVendorRow); press(v, Button::Ok);
-        CHECK_EQ(v.charger_test_selection(), kVendorMask); CHECK_EQ(v.charger_test_stage(), 2);   // the pick goes on to the cable
+        CHECK_EQ(algos(v), kVendorMask); CHECK_EQ(v.charger_test_stage(), 2);   // the pick goes on to the cable
         press(v, Button::Back); v.tick(1300); settle(v, 1300);
         CHECK_EQ(v.charger_test_stage(), 0); CHECK_EQ(v.charger_test_cursor(), kVendorRow);   // BACK: the cursor sits on the pick
         check_row_text(kVendorRow, "Vendor modes", kText, kFocusT, kVendorRow, 150);
         check_radio(kVendorRow, true, kVendorRow, kFocusT); check_radio(kLegacyRow, false, kVendorRow);
     }
-    CHECK_EQ(ui.charger_test_selection(), ct::kDefaultAlgorithms);
+    CHECK_EQ(algos(ui), ct::kDefaultAlgorithms);
     move(ui, kPdRow); press(ui, Button::Ok);
-    CHECK_EQ(ui.charger_test_selection(), kPdMask); CHECK_EQ(ui.charger_test_stage(), 2);
+    CHECK_EQ(algos(ui), kPdMask); CHECK_EQ(ui.charger_test_stage(), 2);
     press(ui, Button::Back); CHECK_EQ(ui.charger_test_stage(), 0); CHECK_EQ(ui.charger_test_cursor(), kPdRow);
     move(ui, 1); press(ui, Button::Ok);
-    CHECK_EQ(ui.charger_test_selection(), kLegacyMask);
+    CHECK_EQ(algos(ui), kLegacyMask);
     press(ui, Button::Back); CHECK_EQ(ui.charger_test_cursor(), kLegacyRow);
     ui.tick(1300); settle(ui, 1300);
     check_radio(kLegacyRow, true, kLegacyRow, kFocusT); check_radio(kPdRow, false, kLegacyRow);
     top(ui); move(ui, kAllRow); press(ui, Button::Ok);
-    CHECK_EQ(ui.charger_test_selection(), ct::kDefaultAlgorithms);
+    CHECK_EQ(algos(ui), ct::kDefaultAlgorithms);
     // The same preset again changes nothing (no toggle: a preset is a choice, not a switch).
     press(ui, Button::Back); press(ui, Button::Ok);
-    CHECK_EQ(ui.charger_test_selection(), ct::kDefaultAlgorithms); CHECK_EQ(ui.charger_test_stage(), 2);
+    CHECK_EQ(algos(ui), ct::kDefaultAlgorithms); CHECK_EQ(ui.charger_test_stage(), 2);
     press(ui, Button::Back);
     // A hand-made mix is no preset: the radio moves to "Custom...".
     custom(ui, 1400); open_group(ui, kFamPd, 1400); press(ui, Button::Ok, 1400);   // PD fixed off
     press(ui, Button::Back); press(ui, Button::Back);
     CHECK_EQ(ui.charger_test_stage(), 0); CHECK_EQ(ui.charger_test_cursor(), kCustomRow);
-    CHECK_EQ(ui.charger_test_selection() != ct::kDefaultAlgorithms, true);
+    CHECK_EQ(algos(ui) != ct::kDefaultAlgorithms, true);
     ui.tick(1500); settle(ui, 1500);
     check_radio(kCustomRow, true, kCustomRow, kFocusT); check_radio(kAllRow, false, kCustomRow);
     no_operations();
@@ -1142,6 +1145,16 @@ static void test_avs_sweep_row_follows_the_only_sweep_kind() {
     check_row_text(2, "AVS sweep", kText, kFocusT, 2, 150);        // red today: row 2 reads "PPS"
     press(ui, Button::Ok, 1320); ui.tick(1320);                    // toggle the sweep row
     CHECK_EQ(ui.charger_test_selection() & (1u << 30), 1u << 30);   // red today: row 2 toggles the PPS bit, not the AVS flag
+}
+// User decision 2026-11-14: the PPS deep sweep is part of the default run (each PPS APDO: its min / max / step rows, then
+// the sweep); the AVS sweep stays opt-in. A fresh session's draft carries bit 31 (PPS sweep) and not bit 30 (AVS sweep),
+// and the remote knob still turns the PPS sweep off for the next run.
+static void test_pps_sweep_is_on_by_default() {
+    fixture(); Ui ui; open(ui);
+    CHECK_EQ(ui.charger_test_selection() & (1u << 31), 1u << 31);
+    CHECK_EQ(ui.charger_test_selection() & (1u << 30), 0u);
+    ui.charger_test_set_sweep(false);
+    CHECK_EQ(ui.charger_test_selection() & (1u << 31), 0u);
 }
 static void test_results_counters_are_words() {
     for (unsigned kind = 0; kind < 3; ++kind) {
@@ -2289,7 +2302,7 @@ static void interrupted_run(bool unattended) {
         r = {};
         r.found = r.unfinished = true;
         r.run_id = ui.charger_test_results().run_id();
-        r.options.selected = ui.charger_test_selection(); r.options.units = g_stub.journal_meta.units;
+        r.options.selected = algos(ui); r.options.units = g_stub.journal_meta.units;
         r.evidence = ui.charger_test_results().evidence();
         const auto steps = ui.charger_test_results().steps();
         for (std::size_t i = 0; i < steps.size(); ++i) {
@@ -2305,6 +2318,16 @@ static void interrupted_run(bool unattended) {
     g_stub.journal_metas = g_stub.journal_finishes = g_stub.journal_resumes = 0;
     g_stub.requests = g_stub.releases = 0;
     g_stub.pm.vbus_mv = 5000;
+}
+// A run journaled without the PPS sweep bit (older firmware, or charger-sweep off) resumes without it: the replayed options
+// replace the session's default (sweep on), so the resumed plan matches the journaled rows.
+static void test_an_old_journal_resumes_without_the_default_sweep() {
+    interrupted_run(true);
+    CHECK_EQ(g_stub.journal.meta.pps_sweep, true);   // this run itself started with the default sweep on
+    g_stub.journal.meta.pps_sweep = false; g_stub.journal.options.pps_sweep = false;   // what an older journal replays to
+    Ui ui; ui.init(0); ui.set_rotation(0, 0); ui.tick(1000);
+    CHECK_EQ(ui.charger_test_stage(), kResumeStage);
+    CHECK_EQ(ui.charger_test_selection() & (1u << 31), 0u);
 }
 // The identity of a charger-powered run (spoof + Ra on CC1, Rd pinned on CC2 by PLUS) is re-armed by the resume.
 static void test_resume_rearms_the_cable_identity() {
@@ -4218,7 +4241,7 @@ static void test_remote_start_is_the_devices_start() {
         CHECK_EQ(r.result == RemoteStart::Result::Accepted, true);
         CHECK_EQ(ui.page() == Page::ChargerTest, true);
         CHECK_EQ(ui.charger_test_stage(), 4);
-        CHECK_EQ(ui.charger_test_selection(), ct::kDefaultAlgorithms);   // the "All tests" preset
+        CHECK_EQ(algos(ui), ct::kDefaultAlgorithms);   // the "All tests" preset
         CHECK_EQ(ui.charger_test_view().confirming, true);
         nothing_armed_stub(); no_operations();
         uint32_t t = 1200;
@@ -4388,6 +4411,8 @@ int main() {
     test_state_change_log_keeps_the_full_state_name_in_the_format();
     test_avs_sweep_is_a_selection_bit();
     test_avs_sweep_row_follows_the_only_sweep_kind();
+    test_pps_sweep_is_on_by_default();
+    test_an_old_journal_resumes_without_the_default_sweep();
     test_self_powered_review_note(); test_self_powered_run_is_on_the_card();
     test_pps_wire_headroom_note();
     test_first_menu_and_pd_bundles();

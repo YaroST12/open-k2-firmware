@@ -73,7 +73,13 @@ void start_sweep(Ui& ui, uint32_t& t, bool avs, uint8_t rot, int ceiling_mv) {
     for (int fam : {kFamHuawei, kFamSamsung, kFamOppo, kFamQc}) { top(ui, 1200); move(ui, unsigned(fam), 1200); press(ui, Button::Ok, 1200); }
     top(ui, 1200); move(ui, kFamPd, 1200); ui.on_button(Button::Ok, ButtonEvent::Long, 1200);   // the PD family's entries
     CHECK_EQ(ui.charger_test_stage(), 1);
-    top(ui, 1200); move(ui, avs ? 3 : 2, 1200); press(ui, Button::Ok, 1200);   // the deep sweep's own line
+    // The PPS sweep is on by default (2026-11-14): a PPS scene keeps it; an AVS scene turns it off on its line (row 2) and
+    // the AVS sweep on (row 3), so the AVS row is the only sweep of the run.
+    if (avs) {
+        top(ui, 1200); move(ui, 2, 1200); press(ui, Button::Ok, 1200);   // the PPS sweep's line: off
+        top(ui, 1200); move(ui, 3, 1200); press(ui, Button::Ok, 1200);   // the AVS sweep's line: on
+    }
+    CHECK_EQ(ui.charger_test_selection() >> 30, avs ? 1u : 2u);   // bit 31 PPS sweep, bit 30 AVS sweep
     press(ui, Button::Back, 1200);
     top(ui, 1200); move(ui, kFamDone, 1200); press(ui, Button::Ok, 1200);   // Done: the cable step
     press(ui, Button::Ok, 1200);                                                // keep the cable: Review

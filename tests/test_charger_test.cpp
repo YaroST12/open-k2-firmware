@@ -3975,7 +3975,7 @@ static void test_ps_rdy_timing_is_noted_per_walk_level() {
     CHECK_EQ(r.evidence().ps_rdy_max, 40);
     CHECK_EQ(count_reason_all(r, ct::Reason::StepResolution), 0u);
 }
-// ROADMAP "PPS deep sweep": opt-in (Options::pps_sweep), one row per APDO marked kDetailSweep, every 100 mV a Request
+// ROADMAP "PPS deep sweep": Options::pps_sweep (on in the session's default run), one row per APDO marked kDetailSweep, every 100 mV a Request
 // through the gate at <= 1 A; a steady out-of-band point is RECORDED, not a stop - the FH22 shape (tracks -150 mV to
 // 19.75 V at the 19.9 V request, then folds back to 19.42 V from 20.0 V) is recorded to the top and the summary names
 // the peak and the fold-back.
@@ -4107,12 +4107,51 @@ static void test_sweep_live_is_idle_without_a_sweep_row() {
     CHECK_EQ(r.start(f.caps, kPd, f.in, true), ct::Reason::None);
     for (unsigned i = 0; i < 300; ++i) { f.tick(r, 100); CHECK_EQ(r.sweep_live().active, false); }
 }
-// The sweep is opt-in: without Options::pps_sweep the plan holds no sweep row at all.
+// The planner sweeps only when asked: without Options::pps_sweep (the charger-test session sets it for its default run, a
+// journal of an older run or charger-sweep off leaves it out) the plan holds no sweep row at all.
 static void test_pps_deep_sweep_is_opt_in() {
     Fake f; ct::Runner r(f);
     CHECK_EQ(r.start(f.caps, kPd, f.in, true), ct::Reason::None);
     for (const auto& s : r.steps()) CHECK_EQ(ct::is_sweep(s), false);
     CHECK_EQ(r.sweep_view().rows.size(), 0u);
+}
+// User decision 2026-11-14: the PPS deep sweep is part of the default run. With the default selection and order plus the
+// sweep (what the charger-test session starts with), each PPS APDO's own checks come first (its range rows with the min and
+// max, the 6 A hunts, the full-current row, the 20 mV step walk), then its one sweep row. A 3.3 V APDO (the common case) keeps
+// its low min rows and its sweep in PdLow, the last unit of the default order, APDO by APDO. A seven-PDO list (five fixed
+// levels, two 3.3 V APDOs) keeps every row: nothing is dropped at kMaxSteps.
+static void test_default_run_sweeps_each_pps_apdo_after_its_checks() {
+    Fake f;
+    f.caps.pdos[5] = pd::decode_pdo(0xc0000000 | (110u << 17) | (33u << 8) | 100);   // pos 6: PPS 3.3-11 V 5 A
+    f.caps.pdos[6] = pd::decode_pdo(0xc0000000 | (210u << 17) | (33u << 8) | 60);    // pos 7: PPS 3.3-21 V 3 A
+    ct::Runner r(f);
+    ct::Options o; o.pps_sweep = true;   // kDefaultAlgorithms, the default unit order, the PPS sweep (the session default)
+    CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+    const auto steps = r.steps();
+    CHECK_EQ(steps.size() < ct::kMaxSteps, true);   // headroom: no row of this plan was dropped
+    int sweep_at[2] = {-1, -1}, first_low[2] = {-1, -1};
+    for (unsigned k = 0; k < 2; ++k) {
+        const uint8_t pos = uint8_t(6 + k);
+        int last_check = -1, n_sweep = 0;
+        for (size_t i = 0; i < steps.size(); ++i) {
+            const auto& s = steps[i];
+            if (s.algorithm != A::Pps || s.pos != pos) continue;
+            if (ct::is_sweep(s)) { sweep_at[k] = int(i); ++n_sweep; continue; }
+            last_check = int(i);
+            if (ct::unit_of(s) == ct::Unit::PdLow && first_low[k] < 0) first_low[k] = int(i);
+        }
+        CHECK_EQ(n_sweep, 1);                        // one sweep row per APDO, the points are not rows
+        CHECK_EQ(sweep_at[k] > last_check, true);    // after every other row of its APDO
+        CHECK_EQ(first_low[k] >= 0, true);           // the APDO's 3.3 V min rows run in PdLow ...
+        if (sweep_at[k] >= 0) CHECK_EQ(int(ct::unit_of(steps[size_t(sweep_at[k])])), int(ct::Unit::PdLow));   // ... its sweep too
+    }
+    CHECK_EQ(sweep_at[0] < first_low[1], true);      // APDO by APDO: pos 6 is swept before pos 7's low rows
+    // PdLow is the tail of the default order: once its first row is reached, every later row is PdLow too
+    bool low = false, tail_ok = true;
+    for (const auto& s : steps) { low |= ct::unit_of(s) == ct::Unit::PdLow; tail_ok &= !low || ct::unit_of(s) == ct::Unit::PdLow; }
+    CHECK_EQ(tail_ok, true);
+    std::printf("[default-sweep] %zu rows of %zu (kMaxSteps), sweep rows at %d and %d\n", steps.size(), ct::kMaxSteps,
+                sweep_at[0], sweep_at[1]);
 }
 // PD Stress borrows the deep sweep's point buffer: refused while a run is on, empties the view when granted, hands out the whole buffer.
 static void test_claim_sweep_record_lends_the_point_buffer() {
@@ -7062,5 +7101,6 @@ int main() {
     test_ps_rdy_out_of_band_is_noted_and_never_judged(); test_ps_rdy_timing_is_noted_per_walk_level();
     test_pps_step_walk_fails_a_flat_source_as_steps_ignored(); test_pps_step_walk_fails_a_source_that_rounds_to_100mv_on_the_jump();
     test_an_inline_refusal_names_what_latched_it();
+    test_default_run_sweeps_each_pps_apdo_after_its_checks();
     return test_report("test_charger_test");
 }

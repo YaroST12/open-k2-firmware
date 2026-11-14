@@ -37,7 +37,7 @@ CMD_CHARGER_TEST = 0x0B  # read-only RAM suite metadata / paged results
 CMD_CHARGER_UNITS = 0x0C  # [n, unit...] the test units of the next run, in order (n = 0: default order)
 CMD_CHARGER_CABLE = 0x0D  # [kind, seq(2)] the cable identity of the next START (no payload reads it back)
 CMD_CHARGER_HUNT = 0x0E   # [slot] read-only: the evidence of one refused 6 A hunt row
-CMD_CHARGER_SWEEP = 0x0F  # [on(1)] the PPS deep sweep of the next charger run (opt-in, never in a preset)
+CMD_CHARGER_SWEEP = 0x0F  # [on(1)] the PPS deep sweep of the next charger run (on by default since 2026-11-14; 0 = leave it out)
 CMD_CHARGER_AVS_SWEEP = 0x54  # [on(1)] the AVS deep sweep of the next charger run (opt-in, never in a preset)
 CMD_CHARGER_SVOOC_CAP = 0x59  # [mode(1)] SuperVOOC ceiling stage of the next charger run; no payload reads mode + result
 CMD_GET_IDENTITY = 0x24  # source identity: VID/PID/bcd, SVIDs, vendor, Apple model
@@ -1491,7 +1491,7 @@ HUNT_SLOT_BYTES = 29
 
 
 def charger_sweep(link, on):
-    """Turn the PPS deep sweep of the next charger-test run on or off (opt-in; never in a preset)."""
+    """Turn the PPS deep sweep of the next charger-test run on or off (on by default since 2026-11-14: off is the opt-out)."""
     p = link.call(CMD_CHARGER_SWEEP, bytes([1 if on else 0])).payload
     _need(p, 1, "charger sweep")
     return bool(p[0])
@@ -4854,9 +4854,10 @@ def build_parser():
     cc = sub.add_parser("charger-cable", help="cable identity the charger-test START dialog opens on (no argument: read it back)")
     cc.add_argument("cable", nargs="?", help="off | builtin | builtin:<id 1, 2, 4 | epr-50v | cuktech-6a | oneplus> | "
                     "saved:<library id>; Ra mode + spoof for the run unless off")
-    for name, what in (("charger-sweep", "PPS"), ("charger-avs-sweep", "AVS")):
+    for name, what, how in (("charger-sweep", "PPS", "on by default, off leaves it out"),
+                            ("charger-avs-sweep", "AVS", "opt-in, never in a preset")):
         cs = sub.add_parser(name, help=f"turn the {what} deep sweep of the NEXT charger run on or off "
-                            "(opt-in: every 100 mV across each APDO, 1 A; never in a preset)")
+                            f"(every 100 mV across each APDO, 1 A; {how})")
         cs.add_argument("state", choices=["on", "off"])
     sv = sub.add_parser("charger-svooc-cap", help="SuperVOOC ceiling stage of the NEXT charger run (no argument: read the mode and "
                         "the latest result). on = needs the guards to pass; usb-a = USB-A charger, top port empty (waiver). "

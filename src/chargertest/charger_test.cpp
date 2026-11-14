@@ -776,7 +776,8 @@ void plan_unit(Unit unit, const pd::SourceCaps& caps, Options o, Input in, AddRe
                     w.detail = kDetailStepWalk;   // the runner's marker while the row is in flight
                     emit(w);
                 }
-                // Deep sweep (ROADMAP "PPS deep sweep", opt-in via Options::pps_sweep): ONE row per APDO, emitted last
+                // Deep sweep (ROADMAP "PPS deep sweep", Options::pps_sweep; the charger-test session sets it by default since
+                // 2026-11-14, so the default run sweeps every PPS APDO right after its own checks): ONE row per APDO, emitted last
                 // of the APDO's rows (a plan that would overflow kMaxSteps drops it first). The points (every 100 mV
                 // across the APDO, capped at `cap`, 1 A never above the offer or the cable) live in the runner's sweep
                 // record, not here, so the row count stays one per APDO. The row's mv is the first setpoint, so a sweep

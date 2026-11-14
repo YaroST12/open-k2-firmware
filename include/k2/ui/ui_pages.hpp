@@ -468,7 +468,10 @@ private:
     void arm_abort();
     ctcable::Choice resume_cable_{};     // the journaled identity of that run, re-armed by reapply_cable()
     uint32_t resume_judged_ = 0;         // when the guard last judged (and logged) for the resume
-    charger_test::Options options_;
+    // The default run includes the PPS deep sweep (user decision 2026-11-14): the session starts with it on, the Tests list
+    // line and the remote knob (charger-sweep off, Cmd 0x0F) turn it off for the next run. The struct default stays off so a
+    // journal without the sweep bit (older runs, no meta record) resumes without sweep rows.
+    charger_test::Options options_{.pps_sweep = true};
     charger_test::Summary summary_;
     uint32_t run_t0_ = 0;                  // when the run entered Running (the m:ss on screen)
     StrBuf<32> message_;

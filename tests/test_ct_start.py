@@ -325,6 +325,28 @@ class SvoocCapOption(unittest.TestCase):
                 ct_start.main(["--svooc-cap", bad])
 
 
+class SweepOption(unittest.TestCase):
+    """The PPS deep sweep is part of the default run (2026-11-14): ct_start sends the state on every start (the device
+    keeps the last choice until reboot), on unless --no-sweep. --sweep stays accepted for older scripts."""
+
+    def test_the_pps_sweep_is_on_by_default(self):
+        self.assertTrue(ct_start.pps_sweep(ct_start.parse_args([])))
+
+    def test_no_sweep_turns_it_off(self):
+        self.assertFalse(ct_start.pps_sweep(ct_start.parse_args(["--no-sweep"])))
+
+    def test_the_old_sweep_flag_is_still_accepted(self):
+        self.assertTrue(ct_start.pps_sweep(ct_start.parse_args(["--sweep"])))
+
+    def test_sweep_and_no_sweep_together_are_refused(self):
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            ct_start.parse_args(["--sweep", "--no-sweep"])
+
+    def test_the_default_wait_leaves_room_for_the_sweeps(self):
+        # two 3.3 V APDOs sweep about 78 + 178 points at about 0.7 s each on top of the run
+        self.assertGreaterEqual(ct_start.parse_args([]).wait, 900)
+
+
 class CableOption(unittest.TestCase):
     def test_bad_cable_is_refused_before_any_device_access(self):
         self.assertEqual(ct_start.main(["--cable", "bogus"]), 4)
@@ -352,6 +374,7 @@ class LockReleaseAfterStart(unittest.TestCase):
 
     def test_lock_is_released_once_start_is_confirmed(self):
         events = []          # ("A"|"R"|"start"|"poll"|"call", lock depth after the event)
+        sweeps = []          # the PPS deep sweep states sent (kr.charger_sweep)
         depth = 0
 
         def acquire(wait_s=None, report=None):
@@ -416,10 +439,12 @@ class LockReleaseAfterStart(unittest.TestCase):
                           lambda *a, **k: events.append(("start", depth)) or ct_start.STARTED), \
              patch.object(ct_start.kr, "cmd_charger_test", fake_ct), \
              patch.object(ct_start.kr, "charger_cable", lambda link, choice=None: {"run": "off"}), \
+             patch.object(ct_start.kr, "charger_sweep", lambda link, on: sweeps.append(on) or on), \
              patch.object(ct_start.charger_summary, "summarize", lambda r: "SUMMARY"), \
              contextlib.redirect_stderr(io.StringIO()):
             rc = ct_start.main(["--wait", "5"])
         self.assertEqual(rc, 0)
+        self.assertEqual(sweeps, [True])                    # the PPS sweep state is sent on every start (default on)
         self.assertEqual(depth, 0)                          # every acquire was released
         kinds = [e for e, _ in events]
         start, first_poll = kinds.index("start"), kinds.index("poll")

@@ -580,8 +580,9 @@ enum class Cmd : uint8_t {
                          // Busy while a run is active, BadArg for an unknown unit or a duplicate. Reset to default by every START.
     ChargerCable = 0x0D, // [kind, seq(2)] the cable identity of the next START (k2/chargertest/ct_cable.hpp); no payload reads it back.
     ChargerHunt = 0x0E,  // [slot] read-only: the evidence of one refused 6 A hunt row (charger_test::HuntEvidence), see kHuntSlotBytes.
-    ChargerSweep = 0x0F, // [on(1)] the PPS deep sweep of the next charger run (opt-in, never in a preset; an Options flag, not an
-                         // algorithm bit - bit 31 of the draft selection in CHARGER_TEST schema 2). No payload reads it back.
+    ChargerSweep = 0x0F, // [on(1)] the PPS deep sweep of the next charger run (on by default since 2026-11-14, 0 leaves it
+                         // out; an Options flag, not an algorithm bit - bit 31 of the draft selection in CHARGER_TEST schema 2).
+                         // No payload reads it back.
                          // Busy while a run is active.
     ChargerAvsSweep = 0x54, // [on(1)] the AVS deep sweep of the next charger run (opt-in, never in a preset; an Options flag
                          // next to the PPS sweep's, journaled in the meta record). rsp [on(1)]. Busy while a run is active.
@@ -1375,7 +1376,7 @@ concept Backend = requires(B &b, uint8_t u8, uint16_t u16, bool on) {
     { b.charger_test_start(u8) } -> std::same_as<ChargerTestStartReply>;   // 0x0B req [4, flags]: the device's own START (confirmed)
     { b.charger_test_cancel() } -> std::same_as<uint8_t>;                  // 0x0B req [5]: the device's own stop; kCtStop*
     { b.charger_units(std::span<const uint8_t>{}) } -> std::same_as<Status>;   // unit order of the next run (empty = default)
-    { b.charger_sweep(true) } -> std::same_as<Status>;   // the PPS deep sweep of the next run (opt-in)
+    { b.charger_sweep(true) } -> std::same_as<Status>;   // the PPS deep sweep of the next run (on by default; off = opt-out)
     { b.charger_avs_sweep(true) } -> std::same_as<Status>;   // the AVS deep sweep of the next run (opt-in)
     { b.charger_cable(static_cast<const ctcable::Choice *>(nullptr)) } -> std::same_as<ChargerCableReply>;   // null = read only
     { b.charger_svooc_cap(static_cast<const uint8_t *>(nullptr)) } -> std::same_as<ChargerSvoocCapReply>;   // the SVOOC ceiling stage; null = read only

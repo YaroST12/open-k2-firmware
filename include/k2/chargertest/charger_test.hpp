@@ -190,10 +190,11 @@ struct HandoverInfo { HandoverOutcome outcome = HandoverOutcome::NotTried; uint3
 struct Options {
     uint32_t selected = kDefaultAlgorithms;
     UnitList units{};   // explicit unit list (remote command / ct_start.py --units); empty = the default order
-    // The PPS deep sweep (ROADMAP "PPS deep sweep"): opt-in, never in a preset (the presets carry `selected` only), so
-    // this flag rides next to it (journal meta byte, remote draft flags) instead of an algorithm bit.
+    // The PPS deep sweep (ROADMAP "PPS deep sweep"): not an algorithm bit (the presets carry `selected` only), so this flag
+    // rides next to it (journal meta byte, remote draft flags). The charger-test session turns it on for its default run
+    // (2026-11-14); the struct default stays off, so a journal without the bit (an older run) resumes without sweep rows.
     bool pps_sweep = false;
-    // The AVS deep sweep (ROADMAP "AVS deep sweep"): same opt-in shape, its own flag next to the PPS one.
+    // The AVS deep sweep (ROADMAP "AVS deep sweep"): its own flag next to the PPS one, opt-in (off in the default run).
     bool avs_sweep = false;
     // The SVOOC ceiling stage (svooc_ceiling.hpp): opt-in like the sweeps, never in a preset. On = after a detected VOOC family
     // the guarded trigger asks the adapter 1.5 / 4 / 6.3 / 10.9 A (a protocol word, no load) and the highest ask it went on

@@ -202,12 +202,17 @@ def start_run(link, before, press=press_ok, run_id=None, stage=None, back=press_
     return FAILED
 
 
-def main(argv=None):
+def parse_args(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--wait", type=float, default=300)
+    # The default run sweeps every PPS APDO (about 0.7 s per 100 mV point: ~55 s for 3.3-11 V, ~125 s for 3.3-21 V)
+    ap.add_argument("--wait", type=float, default=900)
     ap.add_argument("--path")
-    ap.add_argument("--sweep", action="store_true",
-                    help="also run the PPS deep sweep (opt-in: every 100 mV across each PPS APDO, 1 A; never in a preset)")
+    sweep = ap.add_mutually_exclusive_group()
+    sweep.add_argument("--sweep", action="store_true",
+                       help="run the PPS deep sweep (the default since 2026-11-14: every 100 mV across each PPS APDO, 1 A, "
+                            "after the APDO's own checks); kept for older scripts")
+    sweep.add_argument("--no-sweep", action="store_true",
+                       help="leave the PPS deep sweep out of this run (the device keeps the choice until it is set again)")
     ap.add_argument("--avs-sweep", action="store_true",
                     help="also run the AVS deep sweep (opt-in: every 100 mV across each AVS APDO, 1 A; never in a preset)")
     ap.add_argument("--svooc-cap", choices=["on", "usb-a"],
@@ -219,7 +224,16 @@ def main(argv=None):
     ap.add_argument("--cable", default="off",
                     help="cable identity of the run: off (default), builtin, builtin:<1|2|4|epr-50v|cuktech-6a|oneplus> "
                          "or saved:<library id>")
-    a = ap.parse_args(argv)
+    return ap.parse_args(argv)
+
+
+def pps_sweep(a):
+    """The PPS deep sweep state ct_start sends for this run: on unless --no-sweep."""
+    return not a.no_sweep
+
+
+def main(argv=None):
+    a = parse_args(argv)
     try:
         units = kr.parse_units(a.units)
     except kr.FrameError as e:
@@ -249,9 +263,10 @@ def main(argv=None):
             print("\n".join(w.log))
             print("could not reach Review START", file=sys.stderr)
             return 1
-        if a.sweep:
-            kr.charger_sweep(link, True)
-            print("deep sweep: on (every 100 mV per PPS APDO, 1 A)", file=sys.stderr)
+        # Sent on every start: the device keeps the last choice (a --no-sweep run, the Tests list line) until reboot.
+        kr.charger_sweep(link, pps_sweep(a))
+        print("PPS deep sweep: " + ("on (every 100 mV per PPS APDO, 1 A)" if pps_sweep(a) else "off (--no-sweep)"),
+              file=sys.stderr)
         if a.avs_sweep:
             kr.charger_avs_sweep(link, True)
             print("AVS deep sweep: on (every 100 mV per AVS APDO, 1 A)", file=sys.stderr)
