@@ -160,9 +160,10 @@ details > *:not(summary) { margin-top: 8px; }
 #log .fault { color: #ff7b72; }
 
 /* pages: hash routes inside this one file (#live, #test, #cables, #triggers, #device); one page shows at a time */
-#tabs { display: flex; gap: 2px; flex-basis: 100%; overflow-x: auto; margin: 0 -4px -10px; scrollbar-width: thin; }
+#tabs { display: flex; flex-wrap: wrap; gap: 0 2px; flex-basis: 100%; margin: 0 -4px -10px; }
 #tabs a { padding: 6px 12px 8px; color: var(--muted); text-decoration: none; font-weight: 600; white-space: nowrap;
           border-bottom: 2px solid transparent; }
+@media (max-width: 520px) { header { padding: 8px 10px; } #tabs { margin: 0 -2px -8px; } #tabs a { padding: 6px 7px 8px; font-size: 13px; } }
 #tabs a:hover { color: var(--ink); }
 #tabs a[aria-current="page"] { color: var(--ink); border-bottom-color: var(--accent); }
 #tabs a.live::after { content: " \25CF"; color: var(--accent); }
@@ -183,16 +184,9 @@ main[data-route="device"] > [data-page~="device"] { display: flex; }
 .confirm p { margin: 0; }
 progress { width: 100%; height: 10px; accent-color: var(--accent); }
 .vgrid { display: flex; flex-direction: column; gap: 6px; }
-.vrow { display: grid; grid-template-columns: 76px minmax(0, 1fr) auto; gap: 8px; align-items: center; }
-.vrow .lab { font-weight: 600; font-size: 12px; }
-.vrow .cnt { font-size: 12px; color: var(--muted); white-space: nowrap; }
-.vcells { display: flex; flex-wrap: wrap; gap: 3px; }
-.vc { width: 16px; height: 16px; border-radius: 3px; background: var(--soft); border: 1px solid var(--line); cursor: pointer; }
-.vc.pass { background: var(--ok); border-color: var(--ok); }
-.vc.fail { background: var(--bad); border-color: var(--bad); }
-.vc.skip { background: var(--warn-bg); border-color: var(--warn); }
-.vc.running, .vc.cur { outline: 2px solid var(--accent); outline-offset: 1px; }
-@media (max-width: 520px) { .vrow { grid-template-columns: 64px minmax(0, 1fr); } .vrow .cnt { grid-column: 2; } }
+/* the charger-test grid is the K2 kit's ResultGrid (k2kit.css); the page only sizes it and makes a cell tappable */
+#ctr-grid .k-vc { cursor: pointer; }
+#ctr-gridbox { display: flex; flex-direction: column; gap: 8px; --k-rg-max: 720px; }
 #ctr-summary { display: flex; flex-direction: column; gap: 6px; }
 #ctr-summary h3 { margin: 0; font-size: 15px; }
 </style>
@@ -471,9 +465,12 @@ progress { width: 100%; height: 10px; accent-color: var(--accent); }
       <progress id="ctr-progress" max="1" value="0" aria-label="Steps done"></progress>
       <dl class="kv" id="ctr-now"></dl>
       <div id="ctr-summary" hidden></div>
-      <div id="ctr-grid" class="vgrid" aria-label="Verdict per step, by unit"></div>
-      <div class="note mono" id="ctr-pick"></div>
       <div class="row" id="ctr-again-row" hidden><button id="ctr-again" type="button">New test</button></div>
+    </div>
+    <div id="ctr-gridbox" hidden>
+      <div class="row"><span id="ctr-gridhead" class="mono" aria-live="polite"></span></div>
+      <div id="ctr-grid" aria-label="Verdict per step, by unit"></div>
+      <div class="note mono" id="ctr-pick"></div>
     </div>
     <div class="msg" id="m-ctr" role="status"></div>
   </section>
@@ -3489,29 +3486,26 @@ if (typeof module !== "undefined" && module.exports) module.exports = CtGrid;
       box.className = "empty"; box.textContent = "Results changed. Refresh to read one consistent snapshot."; return;
     }
     box.className = "";
-    var groups = {};
-    r.steps.forEach(function (s) { (groups[s.group] || (groups[s.group] = [])).push(s); });
-    Object.keys(groups).forEach(function (group) {
-      var rows = groups[group], detail = el("details"), summary = el("summary"), counts = { pass: 0, fail: 0, skip: 0 };
-      rows.forEach(function (s) { if (s.result in counts) counts[s.result]++; });
-      summary.textContent = group.toUpperCase() + " · " + counts.pass + " PASS / " + counts.fail + " FAIL / " + counts.skip + " SKIP";
-      detail.appendChild(summary);
-      var scroll = el("div", undefined, "test-scroll"), table = el("table"), head = el("tr");
-      ["Algorithm / scope", "Target", "Request setting", "Measured", "Result / reason"].forEach(function (s) { head.appendChild(el("th", s)); });
-      table.appendChild(head);
-      rows.forEach(function (s) {
-        var tr = el("tr"), result = el("td");
-        tr.appendChild(el("td", s.protocol, "mono"));
-        tr.appendChild(el("td", s.target_mv ? volts(s.target_mv, 2) + " V" : "—", "mono"));
-        tr.appendChild(el("td", s.request_ma ? num(s.request_ma / 1000) + " A limit" : "—", "mono"));
-        tr.appendChild(el("td", s.measured_mv ? volts(s.measured_mv, 3) + " V" : "—", "mono"));
-        result.appendChild(el("span", s.result.toUpperCase(), "pill " + (s.result === "pass" ? "ok" : s.result === "fail" ? "bad" : "warn")));
-        var reason = s.explanation || s.reason;
-        if (s.detail) reason += " / " + s.detail_reason;
-        result.appendChild(el("div", reason, "note")); tr.appendChild(result); table.appendChild(tr);
-      });
-      scroll.appendChild(table); detail.appendChild(scroll); box.appendChild(detail);
+    // The grid above (Run a charger test) is the one place with the verdicts; this is the evidence behind them, every step in one table.
+    var detail = el("details"), summary = el("summary");
+    summary.textContent = "Every step with its evidence (" + r.steps.length + ")";
+    detail.appendChild(summary);
+    var scroll = el("div", undefined, "test-scroll"), table = el("table"), head = el("tr");
+    ["Unit", "Algorithm / scope", "Target", "Request setting", "Measured", "Result / reason"].forEach(function (s) { head.appendChild(el("th", s)); });
+    table.appendChild(head);
+    r.steps.forEach(function (s) {
+      var tr = el("tr"), result = el("td");
+      tr.appendChild(el("td", s.group.toUpperCase(), "mono"));
+      tr.appendChild(el("td", s.protocol, "mono"));
+      tr.appendChild(el("td", s.target_mv ? volts(s.target_mv, 2) + " V" : "—", "mono"));
+      tr.appendChild(el("td", s.request_ma ? num(s.request_ma / 1000) + " A limit" : "—", "mono"));
+      tr.appendChild(el("td", s.measured_mv ? volts(s.measured_mv, 3) + " V" : "—", "mono"));
+      result.appendChild(el("span", s.result.toUpperCase(), "pill " + (s.result === "pass" ? "ok" : s.result === "fail" ? "bad" : "warn")));
+      var reason = s.explanation || s.reason;
+      if (s.detail) reason += " / " + s.detail_reason;
+      result.appendChild(el("div", reason, "note")); tr.appendChild(result); table.appendChild(tr);
     });
+    scroll.appendChild(table); detail.appendChild(scroll); box.appendChild(detail);
   }
   async function readChargerTest(full) {
     if (!S.k2 || ctBusy) return null;
@@ -3546,13 +3540,14 @@ if (typeof module !== "undefined" && module.exports) module.exports = CtGrid;
 
   // ---- Charger test page: start a run from here (0x0B START / CANCEL = the K2's own START and BACK), follow it, show the end ----
   // START goes through the K2's own path (preflight, cable guard, the charger wait); nothing here arms anything by itself.
-  // While the page is open or a run is going: status + view once a second, rows only when the table's revision moves, at most
-  // CT_ROWS_PER_TICK of them per tick; the whole table once at the end. A poll the K2 does not answer (it is busy with a
+  // While the page is open or a run is going: status + view once a second. The verdict grid needs every row of the plan: they are
+  // all read once per run (paced, CT_ROW_BUDGET_MS per tick with quick re-ticks until done), then only the rows that can still
+  // change when the revision moves; the whole table once at the end. A poll the K2 does not answer (it is busy with a
   // handshake) is skipped, not an error.
-  var CT_LIVE_MS = 1000, CT_ROWS_PER_TICK = 8;
+  var CT_LIVE_MS = 1000, CT_ROW_BUDGET_MS = 450;
   var CT_ACTIVE = ["baseline", "requesting", "holding", "releasing", "detach charger", "attach charger", "svooc ceiling"];
-  var CT = { phase: "setup", meta: null, view: null, noView: false, rows: [], rowsKey: "", busy: false, quiet: 0,
-             runId: 0, startedAt: 0, cancelled: false, savedLoaded: false, plan: null };
+  var CT = { phase: "setup", meta: null, view: null, noView: false, rows: [], rowsFor: "", fetchKey: "", queue: [], sig: "",
+             cancelling: false, busy: false, quiet: 0, runId: 0, startedAt: 0, cancelled: false, savedLoaded: false, plan: null };
   function unitLabel(u) { return P.TEST_UNIT_LABELS[P.TEST_UNITS.indexOf(u)] || u; }
   function ctUnitBoxes() { return Array.prototype.slice.call($("ctr-units").querySelectorAll("input")); }
   P.TEST_DEFAULT_UNITS.forEach(function (u) {
@@ -3590,6 +3585,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = CtGrid;
     $("ctr-live").hidden = p === "setup" || p === "confirm";
     $("ctr-again-row").hidden = $("ctr-summary").hidden = p !== "done";
     $("ctr-cancel").hidden = p === "done";
+    if (p === "confirm" || p === "starting") $("ctr-gridbox").hidden = true;
     $("tab-test").classList.toggle("live", p === "starting" || p === "running");
     if (p !== "running") put("ctr-pick", "");
   }
@@ -3615,7 +3611,8 @@ if (typeof module !== "undefined" && module.exports) module.exports = CtGrid;
   $("ctr-go").onclick = function () { ctStart(); };
   $("ctr-cancel").onclick = function () { ctCancel(); };
   $("ctr-stopk2").onclick = function () { ctCancel(); };
-  $("ctr-again").onclick = function () { CT.rows = []; CT.rowsKey = ""; $("ctr-grid").textContent = ""; msg("m-ctr", ""); ctPhase("setup"); };
+  $("ctr-again").onclick = function () { msg("m-ctr", ""); ctPhase("setup"); };   // the last run's grid stays under the setup form
+  $("ctr-grid").onclick = function (ev) { var c = ev.target.closest ? ev.target.closest(".k-vc") : null; put("ctr-pick", c ? c.getAttribute("title") || "" : ""); };
 
   function ctRefusalText(r) {
     if (r.stage === "busy") return "The K2 did not start: " + r.refusal + ". Cancel it first.";
@@ -3636,9 +3633,9 @@ if (typeof module !== "undefined" && module.exports) module.exports = CtGrid;
   async function ctStart() {
     var ch = CT.plan, k2 = S.k2, gen = S.gen;
     if (!k2 || !ch) return;
-    CT.cancelled = false; CT.rows = []; CT.rowsKey = ""; CT.runId = 0;
+    CT.cancelled = false; CT.runId = 0; ctGridClear();
     ctPhase("starting");
-    $("ctr-progress").value = 0; kv($("ctr-now"), []); $("ctr-grid").textContent = "";
+    $("ctr-progress").value = 0; kv($("ctr-now"), []);
     put("ctr-headline", "Starting: the K2 runs its own START checks"); msg("m-ctr", "");
     try {
       var r = await k2.chargerTestRun({ units: ch.all ? [] : ch.units, cable: ch.cable, allTests: ch.allTests, confirm: true,
@@ -3666,7 +3663,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = CtGrid;
   async function ctCancel() {
     var k2 = S.k2;
     if (!k2) return;
-    CT.cancelled = true;
+    CT.cancelled = true; CT.cancelling = true;   // the row reader stops after the request in flight: Cancel goes first
     try {
       var r = await k2.chargerTestCancel();
       var words = { nothing: "Nothing was running.", run: "Run cancelled.", wait: "The charger wait was cancelled.",
@@ -3678,7 +3675,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = CtGrid;
     } catch (e) {
       msg("m-ctr", "Cancel failed: " + (e instanceof P.RemoteTimeout ? "the K2 did not answer" : e.message || e) + ". Press BACK on the K2.", "bad");
       reportError("charger test cancel", e);
-    }
+    } finally { CT.cancelling = false; }
   }
   async function ctSoft(fn) {
     try { return await fn(); }
@@ -3703,15 +3700,16 @@ if (typeof module !== "undefined" && module.exports) module.exports = CtGrid;
       var active = CT_ACTIVE.indexOf(st.state) >= 0 || !!(v && v.stage === "running");
       if (active && CT.phase !== "running") {   // started on the K2 itself, or this page reloaded mid-run: follow it
         if (CT.phase !== "done") msg("m-ctr", "Following the run on the K2.");
-        CT.runId = st.run_id; CT.rows = []; CT.rowsKey = ""; CT.startedAt = Date.now() - (v ? v.run_elapsed_s * 1000 : 0);
+        CT.runId = st.run_id; CT.startedAt = Date.now() - (v ? v.run_elapsed_s * 1000 : 0);
         ctPhase("running");
       }
-      if (CT.phase !== "running") { renderChargerTest(st); ctBusyNote(v); return; }
-      if (st.run_id !== CT.runId) { CT.runId = st.run_id; CT.rows = []; CT.rowsKey = ""; }
-      await ctRows(k2, st, gen);
+      var showGrid = CT.phase === "running" || CT.phase === "setup" || CT.phase === "done";   // not while a START is being confirmed
+      if (showGrid) await ctRead(k2, st, gen);   // setup and done too: a finished run on the K2 fills the grid on page load
       if (S.gen !== gen) return;
-      // the results card follows the run too once every row of this revision is read
-      renderChargerTest(CT.rowsKey === st.run_id + "/" + st.revision ? Object.assign({}, st, { steps: CT.rows.slice() }) : st);
+      // the results card follows too once every row of this revision is read
+      renderChargerTest(showGrid && CT.fetchKey === ctKey(st) && !CT.queue.length ? Object.assign({}, st, { steps: CT.rows.slice() }) : st);
+      if (CT.phase !== "running") { ctBusyNote(v); ctDrawGrid(st, false); return; }
+      if (st.run_id !== CT.runId) CT.runId = st.run_id;
       ctRenderLive(st, v, active);
       CT.quiet = active ? 0 : CT.quiet + 1;
       if (CT.quiet >= 2) await ctFinish(k2, gen);
@@ -3724,28 +3722,41 @@ if (typeof module !== "undefined" && module.exports) module.exports = CtGrid;
       : v.stage === "refuse" ? "The K2 shows a refusal" + (v.message ? ": " + v.message : ".") : "";
     $("ctr-busy").hidden = !t; put("ctr-busy-text", t);
   }
-  // Rows not read yet, plus the ones that can still change (pending / running up to the current step).
-  async function ctRows(k2, st, gen) {
-    if (st.schema !== 2 || !st.total) return;
-    if (CT.rows.length !== st.total) { CT.rows = new Array(st.total); CT.rowsKey = ""; }   // a replanned table: read it again
-    var key = st.run_id + "/" + st.revision;
-    if (key === CT.rowsKey) return;
-    var want = [];
-    for (var i = 0; i < st.total; i++) {
-      var r = CT.rows[i];
-      if (!r || (i <= st.current && (r.result === "pending" || r.result === "running"))) want.push(i);
+  function ctKey(st) { return st.run_id + "/" + st.total + "/" + st.revision; }
+  // The rows of the table. A new run (or a replanned table) is read whole, paced: the rows at or before the current step first,
+  // then the rest; a moved revision queues only the rows that can still change (missing, or pending / running up to the
+  // current step). The loop gives up the tick after CT_ROW_BUDGET_MS (at least one row) and asks for a quick re-tick while
+  // rows are queued; a Cancel in flight goes first.
+  async function ctRead(k2, st, gen) {
+    if (st.schema !== 2 || !st.total || !st.run_id) { if (CT.rowsFor) ctGridClear(); return; }
+    var plan = st.run_id + "/" + st.total, i, r;
+    if (plan !== CT.rowsFor) { CT.rows = new Array(st.total); CT.rowsFor = plan; CT.fetchKey = ""; CT.queue = []; CT.sig = ""; }
+    if (ctKey(st) !== CT.fetchKey) {
+      var first = [], rest = [];
+      for (i = 0; i < st.total; i++) {
+        r = CT.rows[i];
+        if (!r) (i <= st.current ? first : rest).push(i);
+        else if (i <= st.current && (r.result === "pending" || r.result === "running")) first.push(i);
+      }
+      CT.queue = first.concat(rest); CT.fetchKey = ctKey(st);
     }
-    var done = want.length <= CT_ROWS_PER_TICK;
-    for (var n = 0; n < want.length && n < CT_ROWS_PER_TICK; n++) {
-      try { CT.rows[want[n]] = await k2.chargerTestRow(st, want[n]); }
+    var rows = CT.rows, t0 = Date.now(), n = 0;
+    while (CT.queue.length && !CT.cancelling && (n++ === 0 || Date.now() - t0 < CT_ROW_BUDGET_MS)) {
+      i = CT.queue[0];
+      try { r = await k2.chargerTestRow(st, i); }
       catch (e) {
-        if (S.gen !== gen) return;
-        if (e instanceof P.RemoteTimeout || e instanceof P.FrameError || (e instanceof P.RemoteError && e.status === P.STATUS.BUSY)) { done = false; break; }
+        if (S.gen !== gen || rows !== CT.rows) return;
+        if (e instanceof P.RemoteTimeout || e instanceof P.FrameError || (e instanceof P.RemoteError && e.status === P.STATUS.BUSY)) break;
         throw e;
       }
-      if (S.gen !== gen) return;
+      if (S.gen !== gen || rows !== CT.rows) return;
+      rows[i] = r; CT.queue.shift();
     }
-    if (done) CT.rowsKey = key;
+    if (CT.queue.length) S.due.ctlive = Date.now() - (CT_LIVE_MS - 250);   // quick re-tick
+  }
+  function ctGridClear() {
+    CT.rows = []; CT.rowsFor = ""; CT.fetchKey = ""; CT.queue = []; CT.sig = "";
+    $("ctr-grid").textContent = ""; $("ctr-gridbox").hidden = true; put("ctr-gridhead", ""); put("ctr-pick", "");
   }
   function fmtSecs(s) { return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); }
   function stepText(s) {
@@ -3763,33 +3774,25 @@ if (typeof module !== "undefined" && module.exports) module.exports = CtGrid;
       ["Unit", active && cur ? cur.group.toUpperCase() : "-"],
       ["Step", active && cur ? cur.protocol + (cur.target_mv ? " " + volts(cur.target_mv, 2) + " V" : "") : "-"],
       ["K2", st.state + (st.reason !== "none" ? " / " + st.reason : "")]]);
-    ctGrid(active ? st.current : -1);
+    ctDrawGrid(st, active);
   }
-  // The device's verdict grid: one line per unit, one cell per step; tap or hover a cell for its words.
-  function ctGrid(current) {
-    var box = $("ctr-grid"), order = [], groups = {}, missing = 0;
-    box.textContent = "";
-    for (var i = 0; i < CT.rows.length; i++) {
-      var s = CT.rows[i];
-      if (!s) { missing++; continue; }
-      if (!groups[s.group]) { groups[s.group] = []; order.push(s.group); }
-      groups[s.group].push(s);
-    }
-    order.forEach(function (g) {
-      var row = el("div", undefined, "vrow"), cells = el("div", undefined, "vcells"), cnt = { pass: 0, fail: 0, skip: 0 };
-      row.appendChild(el("span", g.toUpperCase(), "lab mono"));
-      groups[g].forEach(function (s) {
-        var c = el("span", undefined, "vc " + s.result + (s.index === current ? " cur" : "")), t = stepText(s);
-        c.title = t; c.setAttribute("role", "img"); c.setAttribute("aria-label", t);
-        c.onclick = function () { put("ctr-pick", t); };
-        if (s.result in cnt) cnt[s.result]++;
-        cells.appendChild(c);
-      });
-      row.appendChild(cells);
-      row.appendChild(el("span", cnt.pass + " pass · " + cnt.fail + " fail · " + cnt.skip + " skip", "cnt"));
-      box.appendChild(row);
-    });
-    if (missing) box.appendChild(el("div", missing + " step" + (missing > 1 ? "s" : "") + " not read yet", "note"));
+  // The device's ResultGrid (CtGrid.layout decides the rows and cells, K2Kit draws them). Nothing is laid out from a partial
+  // table: until every row of the plan is read the head says how far the reading is. Tap or hover a cell for its words.
+  function ctDrawGrid(st, active) {
+    var total = CT.rows.length, have = 0, i;
+    for (i = 0; i < total; i++) if (CT.rows[i]) have++;
+    var mine = !!total && CT.rowsFor === st.run_id + "/" + st.total;
+    $("ctr-gridbox").hidden = !mine || CT.phase === "confirm" || CT.phase === "starting";
+    if (!mine) return;
+    var shown = have === total;
+    var head = !shown ? "Reading the test plan: " + have + " of " + total + " steps" : CT.phase === "setup" ? "Last run #" + st.run_id + " · " + st.state : "";
+    put("ctr-gridhead", head); $("ctr-gridhead").parentNode.hidden = !head;
+    if (!shown) return;
+    var sig = [ctKey(st), st.current, st.state, active ? 1 : 0, CT.rows.map(function (r) { return r.result; }).join(",")].join("|");
+    if (sig === CT.sig) return;
+    CT.sig = sig;
+    $("ctr-grid").innerHTML = K2Kit.resultGridHtml(CtGrid.layout(CT.rows, { fold: false, absentCell: true, live: active, current: st.current,
+      stopped: st.state === "stopped", monitorMv: st.evidence ? st.evidence.monitor_mv : 0 }));
   }
   async function ctFinish(k2, gen) {
     CT.quiet = 0;
@@ -3805,7 +3808,8 @@ if (typeof module !== "undefined" && module.exports) module.exports = CtGrid;
     ctPhase("done");
     var box = $("ctr-summary"); box.textContent = "";
     if (!r) { box.appendChild(el("p", "The run ended; its results did not read cleanly. Use Refresh results below.", "note")); return; }
-    CT.rows = r.steps.slice(); renderChargerTest(r); ctGrid(-1);
+    CT.rows = r.steps.slice(); CT.rowsFor = r.run_id + "/" + r.total; CT.fetchKey = ctKey(r); CT.queue = []; CT.sig = "";
+    renderChargerTest(r); ctDrawGrid(r, false);
     var c = { pass: 0, fail: 0, skip: 0 };
     r.steps.forEach(function (s) { if (s.result in c) c[s.result]++; });
     var secs = CT.view && CT.view.run_elapsed_s ? CT.view.run_elapsed_s : Math.round((Date.now() - CT.startedAt) / 1000);
@@ -3826,9 +3830,9 @@ if (typeof module !== "undefined" && module.exports) module.exports = CtGrid;
     logAppend("[web] charger test: run #" + r.run_id + " " + how + ", " + c.pass + " pass / " + c.fail + " fail / " + c.skip + " skip", true);
   }
   function ctReset() {
-    CT.meta = CT.view = CT.plan = null; CT.noView = false; CT.rows = []; CT.rowsKey = ""; CT.busy = false; CT.quiet = 0;
-    CT.runId = 0; CT.savedLoaded = false;
-    ctCableOptions([]); $("ctr-grid").textContent = ""; $("ctr-summary").textContent = ""; $("ctr-busy").hidden = true;
+    CT.meta = CT.view = CT.plan = null; CT.noView = false; CT.busy = false; CT.quiet = 0;
+    CT.runId = 0; CT.savedLoaded = false; ctGridClear();
+    ctCableOptions([]); $("ctr-summary").textContent = ""; $("ctr-busy").hidden = true;
     put("ctr-k2", "-"); msg("m-ctr", ""); ctPhase("setup");
   }
 
