@@ -582,7 +582,7 @@ K2_HOT void kv_static_row(const Surface &s, const KvLayout &l, const char *label
     gfx_fill(s, 0, y, s.w, 1, kBg);   // Fieldbook receipt: white space, no hairline (the row stays owned)
     const int16_t ty = static_cast<int16_t>(y + row_text_y(l.pitch, f.height));
     gfx_text(s, f, l.label_x, ty, label, kInk2, kBg);
-    draw_leader(s, static_cast<int16_t>(l.label_x + text_width(f, label) + 5), static_cast<int16_t>(l.value_x - 4),
+    draw_leader(s, static_cast<int16_t>(l.label_x + text_width(f, label) + 5), static_cast<int16_t>(l.value_x - kLeaderGap),
                 static_cast<int16_t>(ty + f.ascent - 2));
     if (trailing_line) gfx_fill(s, 0, kv_row_y(l, i + 1), s.w, 1, kBg);
 }

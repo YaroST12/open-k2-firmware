@@ -224,7 +224,10 @@ void kv_static_row(const Surface &s, const KvLayout &l, const char *label, int i
 // Same as kv_ground for a single row `i`.
 void kv_ground_row(const Surface &s, const KvLayout &l, const char *label, int i, const uint8_t *chars, uint32_t marks);
 // A receipt's dot leader: 2 x 2 px ink3 dots every kLeaderPitch px between x0 and x1 (the dot's top row is y).
-constexpr int16_t kLeaderPitch = 6, kLeaderDot = 2;
+// A KvTable row's leader ends kLeaderGap px before the value box: one font-16 character of ground, so a value that fills
+// its box (right-aligned, the Memory page's "212 KB (106 blk)") never reads as part of the leader (at 4 px it did: the gap
+// equalled the space between two dots).
+constexpr int16_t kLeaderPitch = 6, kLeaderDot = 2, kLeaderGap = 8;
 void draw_leader(const Surface &s, int16_t x0, int16_t x1, int16_t y);
 
 // Fieldbook chip: a square kChipH px block in `fill` with a font 12 word in `ink`, 4 px padding (at least `min_w` wide, the word

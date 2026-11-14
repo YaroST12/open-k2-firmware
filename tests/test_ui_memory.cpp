@@ -26,6 +26,23 @@ static int count_px(std::uint16_t c, int x0 = 0, int y0 = 0, int x1 = LCD_WIDTH,
     return n;
 }
 
+// Ground between a row's dot leader and its value, rotation 0: from the last column of the rightmost 2x2 kInk3 dot left of
+// x 160 to the first non-ground pixel after it (the value's first ink). 999 = no leader on the row.
+static int leader_gap(int y0, int y1) {
+    const auto px = [](int x, int y) { return g_panel[y * LCD_WIDTH + x]; };
+    int dot_end = -1;
+    for (int y = y0; y + 1 < y1; y++)
+        for (int x = 0; x + 1 < 160; x++)
+            if (px(x, y) == kInk3 && px(x + 1, y) == kInk3 && px(x, y + 1) == kInk3 && px(x + 1, y + 1) == kInk3 && x + 1 > dot_end)
+                dot_end = x + 1;
+    if (dot_end < 0) return 999;
+    int ink = 999;
+    for (int y = y0; y < y1; y++)
+        for (int x = dot_end + 1; x < 224; x++)
+            if (px(x, y) != kBg) { if (x < ink) ink = x; break; }
+    return ink - dot_end - 1;
+}
+
 static memstat::Snapshot snap(std::uint32_t psp_low, bool ok = true) {
     memstat::Snapshot m;
     m.ram_total = 98304; m.ram_static = 64000; m.psp_size = 10944; m.msp_size = 1344;
@@ -98,6 +115,17 @@ static void test_rotation(int rot) {
             const int amber = count_px(kCaution, 90, y0, 218, y1), red = count_px(kError, 90, y0, 218, y1);
             CHECK_EQ(amber > 20, c.tone == 1);
             CHECK_EQ(red > 20, c.tone == 2);
+        }
+        if (rot == 0 && c.what[0] == 'o') {
+            // The leader stops at least one font-16 character (8 px) short of its value on every row, the widest value
+            // included: FS free "212 KB (106 blk)" fills the whole 16-character box (it read as part of the leader at 4 px).
+            int worst = 999;
+            for (int i = 0; i < memstat::kRows; i++) {
+                const int g = leader_gap(24 + 22 * i, 24 + 22 * (i + 1));
+                if (g < worst) worst = g;
+            }
+            CHECK_EQ(worst >= 8 && worst < 999, true);
+            if (worst < 8) std::printf("narrowest leader gap %d px\n", worst);
         }
         if (c.tone != 0 || c.what[0] == 'o') dump(c.what, rot);
         // a steady snapshot repaints nothing
