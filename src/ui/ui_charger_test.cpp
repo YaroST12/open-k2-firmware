@@ -336,7 +336,7 @@ void ChargerTestSession::record(const ct::Step& s) {
     // A deep-sweep row closes with its summary as numbers: the points, the peak and a fold-back (the summary text
     // would ride a %s, which the binlog cuts at 12 bytes - the numbers are the log, the prose is the strip footer).
     if (ct::is_sweep(s))
-        if (const auto* rw = runner_.sweep_view().find(uint8_t(s.algorithm), s.pos))
+        if (const auto* rw = runner_.sweep_view().find(uint8_t(s.algorithm), s.pos, ct::sweep_low(s)))
             K2LOG("[SWEEP] PDO%u %u..%umV %u pts %s %s peak=%umV at=%umV fold=%umV from=%umV\n",
                   unsigned(s.pos), unsigned(rw->lo_mv), unsigned(rw->hi_mv), unsigned(rw->n),
                   ct::name(s.verdict), ct::name(s.reason),
@@ -1776,7 +1776,7 @@ void ChargerTestPage::announce(const char* words) {
         if (row.algorithm == A::Count && !row.probe) { f.put("see steps"); return FooterTone::Info; }
         if (row.sweep) {   // the deep sweep's strip row: the footer names the peak (the full summary is the [SWEEP] log line)
             f.put(row.label).put(": ");
-            if (const auto* rw = s_.runner_.sweep_view().find(uint8_t(row.algorithm), row.pos); rw && rw->sum.points) {
+            if (const auto rw = s_.runner_.sweep_view().apdo(uint8_t(row.algorithm), row.pos); rw && rw->sum.points) {   // both 5 V parts
                 char v[12] = {};
                 f.put("peak ");
                 f.put(std::string_view(v, ctsweep::format_mv(rw->sum.peak_mv, v))).put("V@");

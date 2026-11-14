@@ -150,7 +150,7 @@ size_t encode_charger_test(std::span<uint8_t> out, const ChargerTestSnapshot& s,
         const bool sweep_row = charger_test::is_sweep(step);
         uint8_t detail = step.detail;
         if (sweep_row) {
-            if (const auto* rw = s.sweep.find(static_cast<uint8_t>(step.algorithm), step.pos))
+            if (const auto* rw = s.sweep.find(static_cast<uint8_t>(step.algorithm), step.pos, charger_test::sweep_low(step)))
                 detail = static_cast<uint8_t>(std::min<unsigned>(rw->n, 255));
             else
                 detail = 0;

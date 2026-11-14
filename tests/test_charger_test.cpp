@@ -4005,8 +4005,8 @@ static void test_pps_deep_sweep_records_every_point_and_the_fold_back() {
     const auto v = r.sweep_view();
     CHECK_EQ(v.rows.size(), 2u);
     CHECK_EQ(v.points.size(), 222u);
-    const auto* rw6 = v.find(uint8_t(A::Pps), 6);
-    const auto* rw7 = v.find(uint8_t(A::Pps), 7);
+    const auto* rw6 = v.find(uint8_t(A::Pps), 6, false);
+    const auto* rw7 = v.find(uint8_t(A::Pps), 7, false);
     CHECK_EQ(rw6 && rw7, true);
     CHECK_EQ(rw6->n, 61u); CHECK_EQ(rw7->n, 161u);
     // every sweep point went through request_pd: the pos-7 requests step 5000..21000 by 100 mV
@@ -4045,7 +4045,7 @@ static void test_pps_deep_sweep_stops_at_the_first_lost_source() {
     f.tick(r, 900000);
     CHECK_EQ(r.state(), ct::State::Done);
     const auto v = r.sweep_view();
-    const auto* rw7 = v.find(uint8_t(A::Pps), 7);
+    const auto* rw7 = v.find(uint8_t(A::Pps), 7, false);
     CHECK_EQ(rw7 != nullptr, true);
     if (rw7) {
         CHECK_EQ(rw7->n, 70u);                       // 5.0 .. 11.9 V recorded; the 12.0 V point lost the source
@@ -4059,7 +4059,7 @@ static void test_pps_deep_sweep_stops_at_the_first_lost_source() {
             CHECK_EQ(s.detail, ct::kDetailSweep);   // the marker survives the failure
         }
     // the pos-6 sweep ran to its top before that
-    const auto* rw6 = v.find(uint8_t(A::Pps), 6);
+    const auto* rw6 = v.find(uint8_t(A::Pps), 6, false);
     CHECK_EQ(rw6 && rw6->n == 61u, true);
     // no pos-7 request above the lost point went out after the sweep row ended
     unsigned after = 0;
@@ -4115,11 +4115,11 @@ static void test_pps_deep_sweep_is_opt_in() {
     for (const auto& s : r.steps()) CHECK_EQ(ct::is_sweep(s), false);
     CHECK_EQ(r.sweep_view().rows.size(), 0u);
 }
-// User decision 2026-11-14: the PPS deep sweep is part of the default run. With the default selection and order plus the
-// sweep (what the charger-test session starts with), each PPS APDO's own checks come first (its range rows with the min and
-// max, the 6 A hunts, the full-current row, the 20 mV step walk), then its one sweep row. A 3.3 V APDO (the common case) keeps
-// its low min rows and its sweep in PdLow, the last unit of the default order, APDO by APDO. A seven-PDO list (five fixed
-// levels, two 3.3 V APDOs) keeps every row: nothing is dropped at kMaxSteps.
+// User decision 2026-11-14: the PPS deep sweep is part of the default run, split at 5 V. With the default selection and order
+// plus the sweep (what the charger-test session starts with), each PPS APDO's own checks come first (its range rows with the
+// min and the max, the 6 A hunts, the full-current row, the 20 mV step walk), then the sweep's part from 5 V up, in Pd, before
+// the next APDO's rows. The part below 5 V is a PdLow row after the APDO's low min rows, APDO by APDO. A seven-PDO list (five
+// fixed levels, two 3.3 V APDOs) keeps every row: nothing is dropped at kMaxSteps.
 static void test_default_run_sweeps_each_pps_apdo_after_its_checks() {
     Fake f;
     f.caps.pdos[5] = pd::decode_pdo(0xc0000000 | (110u << 17) | (33u << 8) | 100);   // pos 6: PPS 3.3-11 V 5 A
@@ -4129,34 +4129,38 @@ static void test_default_run_sweeps_each_pps_apdo_after_its_checks() {
     CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
     const auto steps = r.steps();
     CHECK_EQ(steps.size() < ct::kMaxSteps, true);   // headroom: no row of this plan was dropped
-    int sweep_at[2] = {-1, -1}, first_low[2] = {-1, -1};
+    int high_at[2] = {-1, -1}, low_at[2] = {-1, -1}, first_pd[2] = {-1, -1};
     for (unsigned k = 0; k < 2; ++k) {
         const uint8_t pos = uint8_t(6 + k);
-        int last_check = -1, n_sweep = 0;
+        int last_pd = -1, last_low = -1, n_high = 0, n_low = 0;
         for (size_t i = 0; i < steps.size(); ++i) {
             const auto& s = steps[i];
             if (s.algorithm != A::Pps || s.pos != pos) continue;
-            if (ct::is_sweep(s)) { sweep_at[k] = int(i); ++n_sweep; continue; }
-            last_check = int(i);
-            if (ct::unit_of(s) == ct::Unit::PdLow && first_low[k] < 0) first_low[k] = int(i);
+            const bool low = ct::unit_of(s) == ct::Unit::PdLow;
+            if (ct::is_sweep(s)) { (low ? low_at[k] : high_at[k]) = int(i); ++(low ? n_low : n_high); continue; }
+            if (low) last_low = int(i);
+            else { last_pd = int(i); if (first_pd[k] < 0) first_pd[k] = int(i); }
         }
-        CHECK_EQ(n_sweep, 1);                        // one sweep row per APDO, the points are not rows
-        CHECK_EQ(sweep_at[k] > last_check, true);    // after every other row of its APDO
-        CHECK_EQ(first_low[k] >= 0, true);           // the APDO's 3.3 V min rows run in PdLow ...
-        if (sweep_at[k] >= 0) CHECK_EQ(int(ct::unit_of(steps[size_t(sweep_at[k])])), int(ct::Unit::PdLow));   // ... its sweep too
+        CHECK_EQ(n_high, 1); CHECK_EQ(n_low, 1);       // two sweep rows per APDO, the points are not rows
+        CHECK_EQ(high_at[k], last_pd + 1);            // the part from 5 V up: right after the APDO's own Pd rows
+        CHECK_EQ(low_at[k] > last_low, true);         // the part below 5 V: after the APDO's low rows, in PdLow
+        CHECK_EQ(last_low >= 0, true);
+        if (high_at[k] >= 0) CHECK_EQ(unsigned(steps[size_t(high_at[k])].mv), 5000u);
+        if (low_at[k] >= 0) CHECK_EQ(unsigned(steps[size_t(low_at[k])].mv), 3300u);
     }
-    CHECK_EQ(sweep_at[0] < first_low[1], true);      // APDO by APDO: pos 6 is swept before pos 7's low rows
+    CHECK_EQ(high_at[0] < first_pd[1], true);        // APDO by APDO: pos 6 is swept before pos 7's checks begin
+    CHECK_EQ(low_at[0] < low_at[1], true);
     // PdLow is the tail of the default order: once its first row is reached, every later row is PdLow too
     bool low = false, tail_ok = true;
     for (const auto& s : steps) { low |= ct::unit_of(s) == ct::Unit::PdLow; tail_ok &= !low || ct::unit_of(s) == ct::Unit::PdLow; }
     CHECK_EQ(tail_ok, true);
-    std::printf("[default-sweep] %zu rows of %zu (kMaxSteps), sweep rows at %d and %d\n", steps.size(), ct::kMaxSteps,
-                sweep_at[0], sweep_at[1]);
+    std::printf("[default-sweep] %zu rows of %zu (kMaxSteps), sweep rows at %d/%d (from 5 V) and %d/%d (below)\n", steps.size(),
+                ct::kMaxSteps, high_at[0], high_at[1], low_at[0], low_at[1]);
 }
-// Hardware baseline 2026-11-14 (Anker IQ4, PPS 3.3-11 V 5 A, `charger-sweep on`, `charger-test start --units pd`): no sweep
-// row. The sweep row of a 3.3 V APDO starts at 3.3 V, so it is a PdLow row, and a unit list without pd-low leaves it out with
-// the APDO's other low rows. The same list with pd-low (or the default order) has it.
-static void test_units_pd_alone_leaves_a_low_starting_sweep_out() {
+// User decision 2026-11-14 (after the IQ4 baseline: `--units pd` planned no sweep for the 3.3-11 V APDO): the PPS sweep is
+// split at 5 V. The >= 5 V part is a Pd row right after the APDO's own checks, so it runs with any list that has pd, on a
+// self-powered K2 and before any low step can cut the source. The < 5 V part stays a PdLow row (external power only).
+static void test_pps_sweep_splits_at_5v_by_unit() {
     for (const bool with_low : {false, true}) {
         Fake f;
         f.caps.num_pdos = 6; f.caps.pdos[6] = {};   // the IQ4's list: five fixed levels, one APDO
@@ -4166,13 +4170,30 @@ static void test_units_pd_alone_leaves_a_low_starting_sweep_out() {
         o.units.add(ct::Unit::Pd);
         if (with_low) o.units.add(ct::Unit::PdLow);
         CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
-        unsigned sweeps = 0, low_rows = 0;
-        for (const auto& s : r.steps()) {
-            sweeps += ct::is_sweep(s);
-            low_rows += ct::unit_of(s) == ct::Unit::PdLow;
+        int high = -1, low = -1, last_pd_check = -1;
+        const auto st = r.steps();
+        for (size_t i = 0; i < st.size(); ++i) {
+            if (st[i].algorithm != A::Pps || st[i].pos != 6) continue;
+            if (!ct::is_sweep(st[i])) { if (ct::unit_of(st[i]) == ct::Unit::Pd) last_pd_check = int(i); continue; }
+            (ct::unit_of(st[i]) == ct::Unit::PdLow ? low : high) = int(i);
         }
-        CHECK_EQ(sweeps, with_low ? 1u : 0u);
-        CHECK_EQ(low_rows > 0, with_low);
+        CHECK_EQ(high >= 0, true);
+        CHECK_EQ(high, last_pd_check + 1);   // right after the APDO's own >= 5 V rows
+        if (high >= 0) CHECK_EQ(unsigned(st[size_t(high)].mv), 5000u);
+        CHECK_EQ(low >= 0, with_low);
+        if (low >= 0) CHECK_EQ(unsigned(st[size_t(low)].mv), 3300u);
+        f.tick(r, 900000);
+        CHECK_EQ(r.state(), ct::State::Done);
+        unsigned hi_n = 0, lo_n = 0, n_rows = 0;
+        for (const auto& w : r.sweep_view().rows) {
+            if (w.pos != 6) continue;
+            ++n_rows;
+            if (w.lo_mv == 5000) { CHECK_EQ(unsigned(w.hi_mv), 11000u); hi_n = w.n; }
+            if (w.lo_mv == 3300) { CHECK_EQ(unsigned(w.hi_mv), 4900u); lo_n = w.n; }
+        }
+        CHECK_EQ(n_rows, with_low ? 2u : 1u);
+        CHECK_EQ(hi_n, 61u);                      // 5.0..11.0 V
+        CHECK_EQ(lo_n, with_low ? 17u : 0u);      // 3.3..4.9 V: the whole APDO is 78 points either way
     }
 }
 // PD Stress borrows the deep sweep's point buffer: refused while a run is on, empties the view when granted, hands out the whole buffer.
@@ -4220,7 +4241,7 @@ static void test_avs_deep_sweep_plans_and_runs_per_spr_avs_apdo() {
     f.tick(r, 900000);
     CHECK_EQ(r.state(), ct::State::Done);
     const auto v = r.sweep_view();
-    const auto* rw = v.find(uint8_t(A::SprAvs), 7);
+    const auto* rw = v.find(uint8_t(A::SprAvs), 7, false);
     CHECK_EQ(rw != nullptr, true);
     if (rw) {
         CHECK_EQ(rw->n, 111u); CHECK_EQ(rw->lo_mv, 9000u); CHECK_EQ(rw->hi_mv, 20000u);   // 9.0..20.0 V every 100 mV
@@ -4276,7 +4297,7 @@ static void test_avs_deep_sweep_epr_capped_at_the_monitor_ceiling() {
             sweep_step = &s;
         }
     CHECK_EQ(sweep_rows, 1u);
-    const auto* rw = r.sweep_view().find(uint8_t(A::EprAvs), 10);
+    const auto* rw = r.sweep_view().find(uint8_t(A::EprAvs), 10, false);
     CHECK_EQ(rw != nullptr, true);
     if (rw) {
         CHECK_EQ(rw->n, 211u);                                  // 15.0..36.0 V every 100 mV, capped at the ceiling
@@ -4446,7 +4467,7 @@ static void test_pps_deep_sweep_records_the_mean_of_a_noisy_point() {
     f.tick(r, 900000);
     CHECK_EQ(r.state(), ct::State::Done);
     const auto v = r.sweep_view();
-    const auto* rw7 = v.find(uint8_t(A::Pps), 7);
+    const auto* rw7 = v.find(uint8_t(A::Pps), 7, false);
     CHECK_EQ(rw7 != nullptr, true);
     if (!rw7) return;
     CHECK_EQ(rw7->sum.points, 161u);
@@ -4702,11 +4723,11 @@ static void test_no_request_into_an_invalid_list_after_a_recovered_cut() {
     for (const auto& s : r.steps()) no_caps += s.detail == 128 + unsigned(pd::Err::NoCaps);
     CHECK_EQ(no_caps, 0u);
 }
-// A default-run sweep on a latch-off-low-pps source (the C135 shape). The APDO's 3.3 V check row runs before its sweep row, both
-// in PdLow, and the sweep's first point is 3.3 V again. A source that cuts and recovers cuts again there: the sweep row fails
-// "VBUS cut, source recovered" with no point, so the APDO's whole curve is lost, the part above 5 V included. A source that stays
-// off skips the sweep row with the run's shut-off reason. Either way the run ends Done and the other APDO's sweep is kept.
-// (Characterization of the 2026-11-14 default; starting the sweep above a cut low edge is an open decision.)
+// A default-run sweep on a latch-off-low-pps source (the C135 shape), split at 5 V (user decision 2026-11-14). The part from 5 V
+// up runs in Pd, before any low step, so its 61 points are recorded whatever the source does at 3.3 V. The part below 5 V runs
+// in PdLow after the APDO's own 3.3 V row, which cuts the source: a source that recovers cuts again on the sweep's 3.3 V first
+// point (the row fails "VBUS cut, source recovered" with no point), one that stays off leaves the row skipped "source shut off".
+// Either way the run ends Done, and the card's one summary for the APDO is the part that ran.
 static void test_default_sweep_on_a_low_latch_source() {
     for (const bool recovers : {true, false}) {
         Fake f; low_pps_caps(f); f.latch_mv = 3300; f.latch_delay_ms = 300;
@@ -4722,11 +4743,14 @@ static void test_default_sweep_on_a_low_latch_source() {
         }
         CHECK_EQ(r.state(), ct::State::Done);
         const ct::Reason cut = recovers ? ct::Reason::CutRecovered : ct::Reason::ShutOff;
-        unsigned checks = 0, sweeps = 0;
+        unsigned checks = 0, high = 0, low = 0;
         for (const auto& s : r.steps()) {
             if (s.algorithm != A::Pps || s.pos != 6) continue;
-            if (ct::is_sweep(s)) {
-                ++sweeps;
+            if (ct::is_sweep(s) && !ct::sweep_low(s)) {
+                ++high;
+                CHECK_EQ(int(s.verdict), int(ct::Verdict::Pass));
+            } else if (ct::is_sweep(s)) {
+                ++low;
                 CHECK_EQ(int(s.verdict), int(recovers ? ct::Verdict::Fail : ct::Verdict::Skip));
                 CHECK_EQ(int(s.reason), int(cut));
             } else if (s.mv == 3300) {
@@ -4735,12 +4759,36 @@ static void test_default_sweep_on_a_low_latch_source() {
                 CHECK_EQ(int(s.reason), int(cut));
             }
         }
-        CHECK_EQ(checks, 1u); CHECK_EQ(sweeps, 1u);
-        unsigned pos6_points = 0, pos7_points = 0;
-        for (const auto& w : r.sweep_view().rows) (w.pos == 6 ? pos6_points : pos7_points) += w.n;
-        CHECK_EQ(pos6_points, 0u);     // nothing of the 3.3-11 V curve, not even the part above 5 V
-        CHECK_EQ(pos7_points, 161u);   // the 5-21 V APDO's sweep (Pd unit, before the cut) is whole
+        CHECK_EQ(checks, 1u); CHECK_EQ(high, 1u); CHECK_EQ(low, 1u);
+        const auto v = r.sweep_view();
+        const auto* hi = v.find(uint8_t(A::Pps), 6, false);
+        CHECK_EQ(hi && hi->n == 61u, true);                        // 5.0..11.0 V, recorded before the cut
+        const auto* lo = v.find(uint8_t(A::Pps), 6, true);
+        CHECK_EQ(!lo || lo->n == 0u, true);                        // nothing below 5 V
+        const auto apdo = v.apdo(uint8_t(A::Pps), 6);
+        CHECK_EQ(apdo && apdo->sum.points == 61u, true);           // the APDO's one summary: the part that ran
+        const auto* other = v.find(uint8_t(A::Pps), 7, false);
+        CHECK_EQ(other && other->n == 161u, true);                 // the 5-21 V APDO's sweep is whole
     }
+}
+// A self-powered K2 skips PdLow ("needs external power"): the sweep's part from 5 V up still runs, the part below is skipped
+// with the unit.
+static void test_self_powered_run_sweeps_from_5v() {
+    Fake f; low_pps_caps(f); f.caps.num_pdos = 6; f.caps.pdos[6] = {};
+    f.in.self_powered = true;
+    ct::Options o = kPd; o.pps_sweep = true;
+    ct::Runner r(f); CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+    f.tick(r, 900000);
+    CHECK_EQ(r.state(), ct::State::Done);
+    unsigned high = 0, low = 0;
+    for (const auto& s : r.steps()) {
+        if (!ct::is_sweep(s)) continue;
+        if (ct::sweep_low(s)) { ++low; CHECK_EQ(int(s.verdict), int(ct::Verdict::Skip)); CHECK_EQ(int(s.reason), int(ct::Reason::NeedsExternalPower)); }
+        else { ++high; CHECK_EQ(int(s.verdict), int(ct::Verdict::Pass)); }
+    }
+    CHECK_EQ(high, 1u); CHECK_EQ(low, 1u);
+    const auto* hi = r.sweep_view().find(uint8_t(A::Pps), 6, false);
+    CHECK_EQ(hi && hi->n == 61u, true);
 }
 static void test_every_reason_has_a_name() {
     for (unsigned v = 1; v <= unsigned(ct::Reason::StepResolution); ++v) {   // 0 = None, shown as nothing
@@ -7164,7 +7212,8 @@ int main() {
     test_pps_step_walk_fails_a_flat_source_as_steps_ignored(); test_pps_step_walk_fails_a_source_that_rounds_to_100mv_on_the_jump();
     test_an_inline_refusal_names_what_latched_it();
     test_default_run_sweeps_each_pps_apdo_after_its_checks();
-    test_units_pd_alone_leaves_a_low_starting_sweep_out();
+    test_pps_sweep_splits_at_5v_by_unit();
     test_default_sweep_on_a_low_latch_source();
+    test_self_powered_run_sweeps_from_5v();
     return test_report("test_charger_test");
 }

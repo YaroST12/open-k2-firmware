@@ -15,6 +15,7 @@
 #pragma once
 #include <algorithm>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include "k2/pd/pd.hpp"
 
@@ -27,7 +28,7 @@ inline constexpr unsigned kSweepMa = 1000;    // 1 A per point, clamped by point
 // All APDOs of one plan together: the record is one int16 error per point, kMaxPoints * 2 B, no heap. A plan that
 // would exceed it sweeps fewer APDOs (plan_total counts the same budget), so the Tests-list count and the plan agree.
 inline constexpr unsigned kMaxPoints = 640;
-inline constexpr unsigned kMaxRows = 8;       // one result row per APDO; the card keeps at most 4 ranges
+inline constexpr unsigned kMaxRows = 12;      // one result row per APDO part (a PPS sweep is two, split at 5 V); the card keeps at most 4 ranges
 
 // The point range of one advertised APDO range [apdo_min_mv, apdo_max_mv], capped at cap_mv, on kStepMv boundaries.
 // lo > hi (empty) when nothing fits. lo/hi are setpoints in mV.
@@ -38,6 +39,14 @@ constexpr PointRange point_range(unsigned apdo_min_mv, unsigned apdo_max_mv, uns
     return {lo, hi};
 }
 constexpr unsigned point_count(PointRange r) { return r.empty() ? 0u : (r.hi - r.lo) / kStepMv + 1u; }
+// The sweep of one APDO is split at kSplitMv (user decision 2026-11-14): the part at and above it is a PD row right after the
+// APDO's own checks (it runs self-powered too); the part below it is a low programmable row of the PdLow unit (external power,
+// last of the run: the low edge is where latch-off sources cut). Either part may be empty.
+inline constexpr unsigned kSplitMv = 5000;
+constexpr PointRange part_range(PointRange r, bool low) {
+    if (low) return {r.lo, std::min(r.hi, kSplitMv - kStepMv)};
+    return {std::max(r.lo, kSplitMv), r.hi};
+}
 // The setpoint of point i of a row that starts at r.lo.
 constexpr unsigned point_mv(PointRange r, unsigned i) { return r.lo + i * kStepMv; }
 // The current a point asks: 1 A, never above the APDO's current at that level nor the cable's limit.
@@ -70,6 +79,8 @@ struct Summary {
     bool out_of_band = false;    // some recorded point sat outside the row's band (steady, still recorded)
 };
 Summary summarize(std::span<const int16_t> err, unsigned lo_mv);
+// Two segments in setpoint order, each from its own first setpoint: the low part of a split sweep, then the part from 5 V up.
+Summary summarize(std::span<const int16_t> a, unsigned a_lo_mv, std::span<const int16_t> b, unsigned b_lo_mv);
 
 // A recorded point sat outside the PPS band: VBUS below the setpoint by more than max(100 mV, 5 %). The band is
 // one-sided (above the setpoint is the ceiling's business, not the point's); the summary and the live line share it.
@@ -106,10 +117,15 @@ struct RowView {
 struct View {
     std::span<const RowView> rows{};
     std::span<const int16_t> points{};
-    const RowView* find(uint8_t alg, uint8_t pos) const {
-        for (const auto& r : rows) if (r.alg == alg && r.pos == pos) return &r;
+    // One part of an APDO's sweep (low = the part below kSplitMv).
+    const RowView* find(uint8_t alg, uint8_t pos, bool low) const {
+        for (const auto& r : rows) if (r.alg == alg && r.pos == pos && (r.lo_mv < kSplitMv) == low) return &r;
         return nullptr;
     }
+    // The APDO's whole sweep, both parts in one row: lo..hi over both, n = both parts' points, the summary over both in
+    // setpoint order (what the card keeps per range and the results strip shows per APDO). `first` is the high part's (the
+    // parts are recorded apart, so the points are not one slice). nullopt when no part has closed.
+    std::optional<RowView> apdo(uint8_t alg, uint8_t pos) const;
 };
 // "peak 19.75 V at 19.9 V, folds back to 19.42 V from 20.0 V" / "peak 21.0 V at 21.0 V" (no fold-back) /
 // "no points" - mV printed at 10 mV resolution with one or two decimals (19.9, 20.0, 19.75). At most 63 chars.

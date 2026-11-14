@@ -1222,10 +1222,12 @@ K2_HOT bool check_sweep_sum(Out& o) {
         const unsigned set = kLo + i * ctsweep::kStepMv;
         err[i] = static_cast<std::int16_t>(set >= 20000 ? 19420 - int(set) : -150 + int(i % 7) * 3);
     }
-    const ctsweep::Summary s = opaque(&ctsweep::summarize)(std::span<const std::int16_t>(err.data(), keep(kN)), kLo);
+    using SummarizeOne = ctsweep::Summary (*)(std::span<const std::int16_t>, unsigned);   // the one-row overload (a part's close)
+    const SummarizeOne summarize = &ctsweep::summarize;
+    const ctsweep::Summary s = opaque(summarize)(std::span<const std::int16_t>(err.data(), keep(kN)), kLo);
     char line[64];
     const std::size_t n = opaque(&ctsweep::format_summary)(s, std::span<char>(line, sizeof line));
-    touch(o, &ctsweep::summarize);
+    touch(o, summarize);
     touch(o, &ctsweep::format_summary);
     std::uint32_t h = fnv_step(kFnvBasis, s.points);
     h = fnv_step(h, static_cast<std::uint16_t>(s.min_err));

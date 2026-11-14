@@ -157,7 +157,7 @@ void check_scene(bool avs, int ceiling_mv, unsigned points, bool expect_out_of_b
     const auto& st = r.steps()[r.index()];
     // 1. the badge names the range being swept
     const std::string badge = step_label::label(st, r.index() ? &r.steps()[r.index() - 1] : nullptr).c_str();
-    CHECK_STR(badge.c_str(), avs ? "AVS 9-20V" : "PPS 3.3-21V");
+    CHECK_STR(badge.c_str(), avs ? "AVS 9-20V" : "PPS 5-21V");   // the sweep's part from 5 V up runs first (split 2026-11-14)
     CHECK_EQ(text_diff(kSmall, 6, kNameY, badge, kText), 0u);
     // 2. the range: two dotted 2 px lines at the swept range's ends, in the strip's top row; the setpoint marker (6 px, kFocus) and
     // the 2 px needle sit where the geometry says

@@ -253,7 +253,68 @@ static void test_live_derives_the_last_point() {
     CHECK_EQ(l.last_measured_mv(), 5150);
 }
 
+// User decision 2026-11-14: the sweep of one APDO is split at 5 V (the part from 5 V up runs in the PD unit, the part below
+// in PdLow). The two parts cover the APDO's points exactly once.
+static void test_part_range_splits_at_5v() {
+    const auto pr = sw::point_range(3300, 11000, 36000);
+    const auto lo = sw::part_range(pr, true), hi = sw::part_range(pr, false);
+    CHECK_EQ(lo.lo, 3300u); CHECK_EQ(lo.hi, 4900u);
+    CHECK_EQ(hi.lo, 5000u); CHECK_EQ(hi.hi, 11000u);
+    CHECK_EQ(sw::point_count(lo) + sw::point_count(hi), sw::point_count(pr));   // 17 + 61 = 78
+    const auto all_high = sw::point_range(5000, 21000, 36000);
+    CHECK_EQ(sw::point_count(sw::part_range(all_high, true)), 0u);
+    CHECK_EQ(sw::point_count(sw::part_range(all_high, false)), 161u);
+    const auto all_low = sw::point_range(3300, 4500, 36000);
+    CHECK_EQ(sw::point_count(sw::part_range(all_low, true)), 13u);
+    CHECK_EQ(sw::point_count(sw::part_range(all_low, false)), 0u);
+}
+
+// The card and the results strip keep one sweep per APDO: View::apdo merges the two parts. The oracle is the summary of the
+// whole, unsplit track (the parts are recorded apart: the high part first, the low part at the end of the run).
+static void test_apdo_view_merges_both_parts_like_one_track() {
+    std::vector<int16_t> whole;   // 3.3..21 V: a low part 60 mV short, out of band at its first point, then the FH22 shape
+    const unsigned tail[] = {19664, 19503, 19423, 19422, 19421, 19421, 19420, 19419, 19420, 19420, 19421};
+    unsigned ti = 0;
+    for (unsigned set = 3300; set <= 21000; set += 100) {
+        const int measured = set < 5000 ? int(set) - (set == 3300 ? 400 : 60) : set <= 19900 ? int(set) - 150 : int(tail[ti++]);
+        whole.push_back(int16_t(measured - int(set)));
+    }
+    CHECK_EQ(whole.size(), 178u);
+    const auto want = sw::summarize(whole, 3300);
+    std::vector<int16_t> rec(whole.begin() + 17, whole.end());   // the high part (161 points) runs first ...
+    rec.insert(rec.end(), whole.begin(), whole.begin() + 17);    // ... the low part (17 points) at the end of the run
+    sw::RowView rows[2];
+    rows[0].pos = 7; rows[0].alg = 4; rows[0].lo_mv = 5000; rows[0].hi_mv = 21000; rows[0].first = 0; rows[0].n = 161;
+    rows[0].sum = sw::summarize({rec.data(), 161}, 5000);
+    rows[1].pos = 7; rows[1].alg = 4; rows[1].lo_mv = 3300; rows[1].hi_mv = 4900; rows[1].first = 161; rows[1].n = 17;
+    rows[1].sum = sw::summarize({rec.data() + 161, 17}, 3300);
+    const sw::View v{{rows, 2}, {rec.data(), rec.size()}};
+    CHECK_EQ(v.find(4, 7, false) == &rows[0], true);
+    CHECK_EQ(v.find(4, 7, true) == &rows[1], true);
+    const auto m = v.apdo(4, 7);
+    CHECK_EQ(m.has_value(), true);
+    if (m) {
+        CHECK_EQ(unsigned(m->lo_mv), 3300u); CHECK_EQ(unsigned(m->hi_mv), 21000u); CHECK_EQ(unsigned(m->n), 178u);
+        const auto& g = m->sum;
+        CHECK_EQ(g.points, want.points);
+        CHECK_EQ(g.min_err, want.min_err); CHECK_EQ(g.max_err, want.max_err);
+        CHECK_EQ(g.worst_err, want.worst_err); CHECK_EQ(g.worst_mv, want.worst_mv);
+        CHECK_EQ(g.peak_mv, want.peak_mv); CHECK_EQ(g.peak_at_mv, want.peak_at_mv);
+        CHECK_EQ(g.fold_mv, want.fold_mv); CHECK_EQ(g.fold_from_mv, want.fold_from_mv);
+        CHECK_EQ(g.out_of_band, want.out_of_band);
+        CHECK_EQ(g.peak_mv, 19750u); CHECK_EQ(g.fold_from_mv, 20000u);   // the FH22 numbers survive the merge
+    }
+    // One part alone is the APDO's sweep as it stands; another APDO has none.
+    const sw::View high_only{{rows, 1}, {rec.data(), 161}};
+    const auto h = high_only.apdo(4, 7);
+    CHECK_EQ(h.has_value(), true);
+    if (h) { CHECK_EQ(unsigned(h->lo_mv), 5000u); CHECK_EQ(unsigned(h->n), 161u); CHECK_EQ(h->sum.peak_mv, 19750u); }
+    CHECK_EQ(v.apdo(4, 6).has_value(), false);
+}
+
 int main() {
+    test_part_range_splits_at_5v();
+    test_apdo_view_merges_both_parts_like_one_track();
     test_out_of_band_is_one_sided_100mv_or_5_percent();
     test_format_point_reads_req_got_and_the_error();
     test_live_derives_the_last_point();

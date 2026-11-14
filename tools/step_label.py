@@ -12,7 +12,8 @@ APDO: top voltage at the APDO's whole current, clamped to the cable, so 5 A at m
 
 PLAN_ROW_MA = 1000   # a plan row requests at most this, except the full-current PPS row (include/k2/chargertest/charger_test.hpp kPlanRowMa)
 HUNT_MA = 5000       # above it the row is a hunt (Mi) probe: the cable ceiling, the most a plan row can ask
-SWEEP_DETAIL = 161   # Step.detail of a deep-sweep row (kDetailSweep): one row per APDO, the points live in the sweep record
+SWEEP_DETAIL = 161   # Step.detail of a deep-sweep row (kDetailSweep): one row per APDO part, the points live in the sweep record
+SWEEP_SPLIT_MV = 5000   # ctsweep::kSplitMv: a PPS sweep's part below it is the PdLow row, the part from it up the Pd row
 _PD_FAMILY = ("pd2-fixed", "pd3x-fixed", "pps")
 _REVISIONS = {"pd3.0-revision": "PD3.0 rev", "pd3.1-revision": "PD3.1 rev", "pd3.2-revision": "PD3.2 rev"}
 # Legacy and vendor modes: the group word. The wire says "vooc-5v-handshake" for the VOOC family; the 5 V is the row's target.
@@ -106,9 +107,17 @@ def params(s, prev=None, amps=True):
 
 def label(s, prev=None):
     """protocol + ' ' + params ('PPS 20V 5A'), the bare protocol when there are no params. A deep-sweep row names the
-    APDO's whole range, not its first point: 'PPS 3.3-21V', 'AVS 9-20V'."""
+    range it sweeps, not its first point: 'PPS 5-21V', 'AVS 9-20V'. A PPS sweep is split at 5 V (SWEEP_SPLIT_MV): the row
+    below it (target under 5 V) reads 'PPS 3.3-4.9V'."""
     if is_sweep(s):
         span = pdo_range(s.get("raw_pdo", 0)).split(" ")[0]   # '3.3-21V' (the current stays out of the badge)
+        lo, _, hi = span[:-1].partition("-") if span else ("", "", "")
+        if lo and hi:
+            lo_mv, hi_mv = round(float(lo) * 1000), round(float(hi) * 1000)
+            low = 0 < s.get("target_mv", 0) < SWEEP_SPLIT_MV
+            p_lo, p_hi = (lo_mv, min(hi_mv, SWEEP_SPLIT_MV - 100)) if low else (max(lo_mv, SWEEP_SPLIT_MV), hi_mv)
+            if p_lo <= p_hi:
+                span = f"{milli(p_lo)}-{milli(p_hi)}V"
         return protocol(s) + (" " + span if span else "")
     p = params(s, prev)
     return protocol(s) + (" " + p if p else "")

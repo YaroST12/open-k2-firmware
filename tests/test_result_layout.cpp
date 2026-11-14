@@ -154,8 +154,9 @@ static void test_an_avs_sweep_row_is_one_range_chip() {
     CHECK_EQ(sweep_chips(l, 3).compare(0, 5, "9-20V"), 0);
     CHECK_EQ(l.tokens[r->first].mv, 0);
 }
-// Default run (2026-11-14): every PPS APDO now gets its sweep row. Three 3.3 V APDOs at once, with the widest current words
-// a real APDO gives (4.75 A), build without a single cut and each sweep chip says its slot's range row word for word.
+// Default run (2026-11-14): every PPS APDO now gets its sweep, split at 5 V into two steps (the part from 5 V up after the APDO's
+// checks, the part below at the end of the plan, PdLow). Three 3.3 V APDOs at once, with the widest current words a real APDO
+// gives (4.75 A), build without a single cut: ONE strip row per APDO owns both steps and its chip names the whole range.
 static void test_default_sweep_rows_fit_without_a_cut() {
     std::vector<ct::Step> s;
     s.push_back(step(A::Pd3Fixed, 5000, V::Pass, 1, 167874860u));
@@ -167,6 +168,11 @@ static void test_default_sweep_rows_fit_without_a_cut() {
         s.push_back(step(A::Pps, 3300, V::Pass, pos, apdo[k]));
         s.push_back(step(A::Pps, 21000, V::Pass, pos, apdo[k]));
         s.push_back(sweep_step(A::Pps, pos, apdo[k], V::Pass));
+        s.back().mv = 5000;   // the part from 5 V up
+    }
+    for (unsigned k = 0; k < 3; ++k) {   // the parts below 5 V: the PdLow tail of the plan
+        s.push_back(sweep_step(A::Pps, uint8_t(5 + k), apdo[k], V::Pending));
+        s.back().mv = 3300;
     }
     rl::Layout l; rl::build(l, s);
     CHECK_EQ(l.cuts, 0);
@@ -175,7 +181,8 @@ static void test_default_sweep_rows_fit_without_a_cut() {
         const rl::Row* r = sweep_row_of(l, pos);
         CHECK_EQ(r != nullptr, true);
         if (!r) continue;
-        CHECK_EQ(r->count, 1);
+        CHECK_EQ(r->count, 1);                              // one chip for both parts
+        CHECK_EQ(int(l.tokens[r->first].tone), int(rl::Tone::Pending));   // the low part is still to run
         const std::string chip = sweep_chips(l, pos);
         CHECK_EQ(chip.compare(0, 4, "3.3-"), 0);
         CHECK_EQ(chip.find("..."), std::string::npos);
@@ -189,6 +196,7 @@ static void test_a_sweep_chip_takes_its_tone_from_the_sweep() {
         auto s = baseus();
         s.push_back(sweep_step(A::Pps, 7, 3248763456u, v));
         ctsweep::RowView rw; rw.pos = 7; rw.alg = uint8_t(A::Pps); rw.lo_mv = 5000; rw.hi_mv = 21000; rw.n = uint16_t(pts.size());
+        rw.sum = ctsweep::summarize(pts, 5000);   // the runner closes every row with its summary
         ctsweep::View view; view.rows = std::span<const ctsweep::RowView>(&rw, 1); view.points = pts;
         rl::Layout l; rl::build(l, s, {}, view);
         const rl::Row* r = sweep_row_of(l, 7);

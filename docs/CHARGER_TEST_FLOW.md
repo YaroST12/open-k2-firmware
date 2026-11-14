@@ -276,26 +276,27 @@ then PdLow); the unit and wire IDs did not change, only the order.
 4. **Risky units last**: PPS/AVS rows below 5 V (`latch-off-low-pps` / cut-and-recover), after their own detach and Pd
    attach (the `PdLow` unit; it never runs before `Pd`).
 
-**PPS deep sweep in the default run** (user decision 2026-11-14). The session starts with `Options::pps_sweep` on, so
-every PPS APDO gets one sweep row (every 100 mV across the APDO, 1 A, ROADMAP "PPS deep sweep") right after its own
-checks: the range rows with the min and the max, the 6 A hunts, the full-current row and the 20 mV step walk. The sweep
-row starts at the APDO's first point, so a 3.3 V APDO (the usual case) sweeps in `PdLow`, after its low min rows,
-APDO by APDO; an APDO that starts at 5 V sweeps at the end of its rows in `Pd`. The cost is about 0.7 s per point
-(about 55 s for 3.3-11 V, 125 s for 3.3-21 V). Opt-out: the Tests list line "PPS sweep", `k2_remote charger-sweep off`
-(Cmd 0x0F with 0) or `ct_start.py --no-sweep`; the choice holds until the next change or a reboot. The AVS sweep stays
-opt-in (`charger-avs-sweep on`, `ct_start.py --avs-sweep`); both share the 640-point record in plan order (SPR AVS, PPS, EPR
-AVS): a typical list (SPR AVS 9-20 V 111 points, PPS 3.3-11 V and 3.3-21 V 256, EPR AVS 15-36 V 211) needs 578, so the
-default-on PPS sweep takes nothing from an AVS sweep that is turned on; a list past 640 points sweeps fewer APDOs. A journal of a run without the sweep bit
-(older firmware) resumes without sweep rows.
+**PPS deep sweep in the default run** (user decisions 2026-11-14). The session starts with `Options::pps_sweep` on, so
+every PPS APDO is swept every 100 mV at 1 A (ROADMAP "PPS deep sweep"). The sweep is split at 5 V (`ctsweep::kSplitMv`) into
+two rows:
+- **From 5 V up**, a Pd row right after the APDO's own checks (the range rows with the min and the max, the 6 A hunts, the
+  full-current row, the 20 mV step walk), before the next APDO's rows. It runs with any unit list that has `pd`, on a
+  self-powered K2, and before any step below 5 V can cut the source.
+- **Below 5 V**, a low programmable row of `PdLow` (external power only, last of the run), after the APDO's low min rows.
+  A unit list without `pd-low` or a self-powered run leaves it out. On a `latch-off-low-pps` source (C135) the APDO's own
+  3.3 V row cuts first, and the sweep's 3.3 V first point cuts again: the row fails "VBUS cut, source recovered" (or skips
+  "source shut off") with no point. The part from 5 V up is already recorded by then.
 
-Limits of the PdLow placement (hardware baseline 2026-11-14 on the IQ4, host tests
-`test_units_pd_alone_leaves_a_low_starting_sweep_out` and `test_default_sweep_on_a_low_latch_source`):
-- A unit list without `pd-low` (`--units pd`) leaves out the sweep of a 3.3 V APDO, together with its low min rows. Use
-  `--units pd,pd-low` or no list.
-- A self-powered run skips the whole PdLow unit ("needs external power"), so no 3.3 V APDO is swept.
-- On a `latch-off-low-pps` source the sweep's first point (3.3 V) cuts the source again, after the APDO's own 3.3 V row.
-  The sweep row fails "VBUS cut, source recovered" (or skips "source shut off") with no point recorded, the part above
-  5 V included.
+The results strip, the card and its summary keep ONE sweep per APDO: `ctsweep::View::apdo` summarizes both parts' points in
+setpoint order. The step labels name each part ("PPS 5-21V", "PPS 3.3-4.9V"). The cost is about 0.7 s per point (about 55 s
+for 3.3-11 V, 125 s for 3.3-21 V, both parts). Opt-out: the Tests list line "PPS sweep", `k2_remote charger-sweep off`
+(Cmd 0x0F with 0) or `ct_start.py --no-sweep`; the choice holds until the next change or a reboot. The AVS sweep stays
+opt-in (`charger-avs-sweep on`, `ct_start.py --avs-sweep`). It is not split, because AVS APDOs start at 9 V or 15 V. Both
+sweeps share the 640-point record in plan order (SPR AVS, PPS, EPR AVS): a typical list (SPR AVS 9-20 V 111 points, PPS
+3.3-11 V and 3.3-21 V 256, EPR AVS 15-36 V 211) needs 578, so the default-on PPS sweep takes nothing from an AVS sweep that
+is turned on; a list past 640 points sweeps fewer parts, the parts from 5 V up first. A journal of a run without the sweep
+bit (older firmware) resumes without sweep rows. Host tests: `test_default_run_sweeps_each_pps_apdo_after_its_checks`,
+`test_pps_sweep_splits_at_5v_by_unit`, `test_default_sweep_on_a_low_latch_source`, `test_self_powered_run_sweeps_from_5v`.
 
 Sessions: Legacy (1), Pd (2), Legacy (3), PdLow (4); a session boundary is only a mode change, so a custom order that
 puts PD first, or drops a family, plans fewer or more attaches. The plan still needs the source caps before the PD

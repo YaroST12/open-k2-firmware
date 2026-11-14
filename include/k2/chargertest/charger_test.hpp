@@ -225,10 +225,15 @@ constexpr bool is_step_walk(const Step& s) {
     return s.group == Group::Pd && s.algorithm == Algorithm::Pps && s.detail == kDetailStepWalk &&
            (s.verdict == Verdict::Pending || s.verdict == Verdict::Running);
 }
-// True when `s` is a deep-sweep row (one per APDO; the points live in the Runner's sweep record, not as rows).
+// True when `s` is a deep-sweep row (one per APDO part, ctsweep::part_range; the points live in the Runner's sweep record, not as rows).
 constexpr bool is_sweep(const Step& s) {
     return s.group == Group::Pd && (kPpsAlgorithms & bit(s.algorithm)) && s.detail == kDetailSweep;
 }
+// Which part of its APDO a sweep row covers: below ctsweep::kSplitMv (the PdLow row) or from it up. The row's mv is its first
+// setpoint until it closes and the setpoint of its peak after; both stay on the row's side of the split.
+constexpr bool sweep_low(const Step& s) { return s.mv && s.mv < ctsweep::kSplitMv; }
+// The setpoints a sweep row walks: its part of the APDO's point range, capped at cap_mv (monitor ceiling, cable limit).
+ctsweep::PointRange sweep_range(const Step& s, unsigned cap_mv);
 // The UFCS mode a step samples, kept in `Step::pdo` (no UFCS row has a PDO): the planner writes it once the charger's
 // Output_Capabilities are read, and the Results chip (the mode's top current), the Detail page (the whole mode) and the journal
 // read it. Four fields in 32 bits, saturating: voltages in 100 mV (9 bits, up to 51.1 V), currents in 50 mA (7 bits, up to 6.35 A).
@@ -653,7 +658,7 @@ public:
     // The refusal evidence of this run's hunt rows (a few rows at most), in the order they were refused.
     std::span<const HuntEvidence> hunt_evidence() const { return {hunt_.data(), n_hunt_}; }
     const HuntEvidence* hunt_evidence_for(size_t step) const;
-    // The deep sweep (ROADMAP "PPS deep sweep"): the finished rows (one per APDO) and the whole point record
+    // The deep sweep (ROADMAP "PPS deep sweep"): the finished rows (one per APDO part: a PPS sweep is split at 5 V) and the whole point record
     // (one int16 error per point). The results strip, the card and the remote read it through this view.
     ctsweep::View sweep_view() const { return {{sweep_rows_.data(), n_sweep_rows_}, {sweep_err_.data(), sweep_used_}}; }
     // PD Stress borrows the point buffer for its own record (no second 1.3 KB of .bss). Refused while a test runs; the last test's sweep
@@ -788,7 +793,7 @@ private:
     uint32_t walk_grant_ms_ = 0;   // first walk_step call at the current granted level (0 = none yet)
     void walk_step(Input, const Step& eff);   // one granted level of the walk: record it, ask for the next or judge the walk
     // The deep-sweep row in flight (is_sweep). The record: one int16 error (measured - setpoint) per point, no heap;
-    // sweep_rows_ holds one RowView per APDO, filled when the row closes (sweep_close in finish()).
+    // sweep_rows_ holds one RowView per APDO part (ctsweep::part_range), filled when the row closes (sweep_close in finish()).
     std::array<int16_t, ctsweep::kMaxPoints> sweep_err_{};
     std::array<ctsweep::RowView, ctsweep::kMaxRows> sweep_rows_{};
     uint8_t n_sweep_rows_ = 0;

@@ -45,10 +45,13 @@ class StepLabelTest(unittest.TestCase):
 
 
     def test_a_sweep_row_names_the_range_it_sweeps(self):
-        # The deep-sweep row (detail 161) reads its APDO's whole range, like the firmware: 'PPS 3.3-21V', 'AVS 9-20V'.
-        pps = {"protocol": "pps", "pos": 2, "target_mv": 3300, "request_ma": 1000, "detail": 161,
+        # The deep-sweep row (detail 161) reads the range it sweeps, like the firmware: 'PPS 5-21V', 'AVS 9-20V'. A PPS sweep
+        # is split at 5 V (2026-11-14): the part from 5 V up and the part below it (target_mv < 5000) each name their own range.
+        pps = {"protocol": "pps", "pos": 2, "target_mv": 5000, "request_ma": 1000, "detail": 161,
                "raw_pdo": 0xC0000000 | (210 << 17) | (33 << 8) | 100}
-        assert step_label.label(pps) == "PPS 3.3-21V"
+        assert step_label.label(pps) == "PPS 5-21V"
+        assert step_label.label(dict(pps, target_mv=19900)) == "PPS 5-21V"     # closed: target is the peak's setpoint
+        assert step_label.label(dict(pps, target_mv=3300)) == "PPS 3.3-4.9V"
         avs = {"protocol": "spr-avs", "pos": 3, "target_mv": 9000, "request_ma": 1000, "detail": 161, "raw_pdo": 0xE004B145}
         assert step_label.label(avs) == "AVS 9-20V"
         epr = {"protocol": "epr-avs", "pos": 8, "target_mv": 15000, "request_ma": 1000, "detail": 161, "raw_pdo": 0xD230968C}

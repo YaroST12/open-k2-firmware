@@ -840,9 +840,10 @@ inline void migrate_to_current(Card& c) { if (c.format < kFormat) c.format = kFo
             for (unsigned k = 0; k < kSpreadLevels; ++k)
                 c.spread[i][k] = k < n_lvl[i] ? int8_t(std::clamp(lvl[i][k].second, -127, 127)) : kSpreadNone;
     }
-    // V10: the deep-sweep summary of each range, from the runner's sweep record (matched by algorithm + PDO slot)
+    // V10: the deep-sweep summary of each range, from the runner's sweep record (matched by algorithm + PDO slot; a PPS sweep
+    // split at 5 V is one summary over both parts)
     for (unsigned i = 0; i < c.n_ranges && i < kMaxRanges; ++i) {
-        const auto* rw = sweep.find(c.range[i].alg, c.range[i].pos);
+        const auto rw = sweep.apdo(c.range[i].alg, c.range[i].pos);
         if (!rw) continue;
         const auto& sm = rw->sum;
         auto& w = c.sweep[i];

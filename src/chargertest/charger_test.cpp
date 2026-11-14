@@ -118,6 +118,10 @@ Unit unit_of(const Step& s) {
     return s.group >= Group::Count ? Unit::Count : s.group != Group::Pd ? static_cast<Unit>(s.group) :
         low_programmable(s) ? Unit::PdLow : Unit::Pd;
 }
+ctsweep::PointRange sweep_range(const Step& s, unsigned cap_mv) {
+    const auto p = pd::decode_pdo(s.pdo);
+    return ctsweep::part_range(ctsweep::point_range(p.min_mv, p.max_mv, cap_mv), sweep_low(s));
+}
 Verdict unit_outcome(std::span<const Step> steps, Unit u) {
     bool pass = false, fail = false;
     for (const auto& s : steps) {
@@ -776,19 +780,21 @@ void plan_unit(Unit unit, const pd::SourceCaps& caps, Options o, Input in, AddRe
                     w.detail = kDetailStepWalk;   // the runner's marker while the row is in flight
                     emit(w);
                 }
-                // Deep sweep (ROADMAP "PPS deep sweep", Options::pps_sweep; the charger-test session sets it by default since
-                // 2026-11-14, so the default run sweeps every PPS APDO right after its own checks): ONE row per APDO, emitted last
-                // of the APDO's rows (a plan that would overflow kMaxSteps drops it first). The points (every 100 mV
-                // across the APDO, capped at `cap`, 1 A never above the offer or the cable) live in the runner's sweep
-                // record, not here, so the row count stays one per APDO. The row's mv is the first setpoint, so a sweep
-                // that starts below 5 V is a PdLow row like any other low programmable row.
+                // Deep sweep (ROADMAP "PPS deep sweep", Options::pps_sweep, on in the session by default since 2026-11-14):
+                // emitted last of the APDO's rows (a plan that would overflow kMaxSteps drops it first), split at
+                // ctsweep::kSplitMv (user decision 2026-11-14). The part from 5 V up is a Pd row right after the APDO's own
+                // checks, so any unit list with pd and a self-powered K2 sweep it; the part below 5 V is a low programmable
+                // row (its mv is its first setpoint), so it runs in PdLow with the APDO's other low rows. The points (every
+                // 100 mV, capped at `cap`, 1 A never above the offer or the cable) live in the runner's sweep record.
                 if (p.type == pd::PdoType::Pps && o.pps_sweep && sweep_budget) {
                     const auto pr = ctsweep::point_range(p.min_mv, p.max_mv, cap);
-                    const unsigned n = ctsweep::point_count(pr);
-                    if (!n) { s.detail = kDetailSweep; skip(limit_reason(p.max_mv, in, algorithm)); }
-                    else {
-                        Step w = s; w.mv = static_cast<uint16_t>(pr.lo);
-                        w.ma = static_cast<uint16_t>(ctsweep::point_ma(p, pr.lo, cable_ma(in)));
+                    if (!ctsweep::point_count(pr)) { s.detail = kDetailSweep; skip(limit_reason(p.max_mv, in, algorithm)); }
+                    else for (const bool low : {false, true}) {
+                        const auto part = ctsweep::part_range(pr, low);
+                        const unsigned n = ctsweep::point_count(part);
+                        if (!n || !sweep_budget) continue;
+                        Step w = s; w.mv = static_cast<uint16_t>(part.lo);
+                        w.ma = static_cast<uint16_t>(ctsweep::point_ma(p, part.lo, cable_ma(in)));
                         w.continuous = false;
                         w.verdict = w.ma ? Verdict::Pending : Verdict::Skip;
                         w.reason = w.ma ? Reason::None : Reason::NoOffer;
@@ -874,9 +880,8 @@ Summary Runner::preview(const pd::SourceCaps& caps, Options o, Input in) {
             ++out.runnable; out.max_mv = std::max(out.max_mv, s.mv);
             out.estimate_ms += kHoldMs + 1000;
             if (is_sweep(s)) {   // a sweep row is long by design: ~0.7 s per 100 mV point
-                const auto p = pd::decode_pdo(s.pdo);
                 const unsigned cap = std::min<unsigned>(in.cap_mv, cable_limit_mv(in, s.algorithm));
-                out.estimate_ms += ctsweep::point_count(ctsweep::point_range(p.min_mv, p.max_mv, cap)) * 700;
+                out.estimate_ms += ctsweep::point_count(sweep_range(s, cap)) * 700;
             }
             const unsigned u = static_cast<unsigned>(unit_of(s));
             if (!(seen & (1u << u))) { seen |= 1u << u; out.estimate_ms += 4000; }   // one detach + attach per unit
@@ -1514,7 +1519,7 @@ void Runner::finish(Input in, Verdict v, Reason r, uint8_t detail) {
     // A deep-sweep row reports the sweep, not the last sample: target = the setpoint of the peak, measured = the
     // peak itself (the row's range label still comes from the APDO; points and fold-back stay in the summary).
     if (sweep_row)
-        if (const auto* rw = sweep_view().find(uint8_t(s.algorithm), s.pos); rw && rw->sum.points) {
+        if (const auto* rw = sweep_view().find(uint8_t(s.algorithm), s.pos, sweep_low(s)); rw && rw->sum.points) {
             s.mv = rw->sum.peak_at_mv;
             s.measured_mv = rw->sum.peak_mv;
         }
@@ -1629,9 +1634,8 @@ void Runner::walk_step(Input in, const Step& eff) {
 // did (monitor ceiling and cable voltage limit), and the row's slice of the point record is reset. A resumed row
 // re-sweeps from its first point: a power loss mid-sweep ends cleanly that way (the journal re-runs the row).
 void Runner::sweep_begin(const Step& s, Input in) {
-    const auto p = pd::decode_pdo(s.pdo);
     const unsigned cap = std::min<unsigned>(in.cap_mv, cable_limit_mv(in, s.algorithm));
-    const auto pr = ctsweep::point_range(p.min_mv, p.max_mv, cap);
+    const auto pr = sweep_range(s, cap);
     sweep_lo_ = uint16_t(pr.lo);
     sweep_hi_ = uint16_t(pr.hi);
     sweep_mv_ = uint16_t(pr.lo);
@@ -1676,7 +1680,9 @@ void Runner::sweep_close(const Step& s) {
     const auto sum = ctsweep::summarize({sweep_err_.data() + std::min<unsigned>(sweep_first_, ctsweep::kMaxPoints), n}, sweep_lo_);
     sweep_used_ = std::max(sweep_used_, uint16_t(std::min<unsigned>(sweep_first_ + n, ctsweep::kMaxPoints)));
     for (auto& r : std::span(sweep_rows_.data(), n_sweep_rows_))
-        if (r.alg == uint8_t(s.algorithm) && r.pos == s.pos) { r.n = uint16_t(n); r.lo_mv = sweep_lo_; r.hi_mv = sweep_hi_; r.sum = sum; return; }
+        if (r.alg == uint8_t(s.algorithm) && r.pos == s.pos && (r.lo_mv < ctsweep::kSplitMv) == (sweep_lo_ < ctsweep::kSplitMv)) {
+            r.n = uint16_t(n); r.lo_mv = sweep_lo_; r.hi_mv = sweep_hi_; r.sum = sum; return;   // a re-run of the same part
+        }
     if (n_sweep_rows_ < sweep_rows_.size()) {
         auto& r = sweep_rows_[n_sweep_rows_++];
         r.pos = s.pos; r.alg = uint8_t(s.algorithm); r.lo_mv = sweep_lo_; r.hi_mv = sweep_hi_;

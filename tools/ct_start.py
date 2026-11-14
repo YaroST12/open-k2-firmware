@@ -220,8 +220,8 @@ def parse_args(argv=None):
                          "ceiling from the protocol, never loads the charger). usb-a = USB-A charger, top port empty")
     ap.add_argument("--units", default="",
                     help="run only these test units, in this order, e.g. qc2,qc3 or pd,qc2 (names: " + ", ".join(kr.TEST_UNITS) +
-                         "); default = the full order: vendor modes, PD, QC/UFCS, pd-low. The PPS sweep of a 3.3 V APDO "
-                         "runs in pd-low: a list without pd-low (e.g. pd) has no sweep for it")
+                         "); default = the full order: vendor modes, PD, QC/UFCS, pd-low. The PPS sweep is split at 5 V: "
+                         "the part from 5 V up runs in pd, the part below 5 V in pd-low (a list without pd-low skips it)")
     ap.add_argument("--cable", default="off",
                     help="cable identity of the run: off (default), builtin, builtin:<1|2|4|epr-50v|cuktech-6a|oneplus> "
                          "or saved:<library id>")
