@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <memory>
 #include <string>
+#include <string_view>
 
 #include "k2/ui/ui.hpp"
 #include "k2/ui/ui_pdstress_page.hpp"
@@ -435,9 +436,13 @@ void test_the_tools_row_opens_the_page() {
     fixture();
     std::unique_ptr<Ui> h; Ui &ui = boot(h);
     ui.context().keep.place_sel[static_cast<int>(bench::Place::Charger)] = 0;
-    ui.open_place(bench::Place::Charger, g_now);   // Stress test is the Charger place's last action
+    ui.open_place(bench::Place::Charger, g_now);   // the Charger place's "Stress test" row (Spec check may follow it)
     run(ui, 120);
-    presses(ui, Button::Plus, bench::actions(bench::Place::Charger).n - 1);
+    const bench::Acts acts = bench::actions(bench::Place::Charger);
+    int row = 0;
+    while (row < acts.n && std::string_view(acts.a[row].name) != "Stress test") ++row;
+    CHECK_EQ(row < acts.n, true);
+    presses(ui, Button::Plus, row);
     press(ui, Button::Ok);
     run(ui, 120);
     CHECK_EQ(int(ui.menu()), int(Menu::PdStress));

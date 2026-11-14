@@ -19,6 +19,43 @@
 using namespace k2;
 namespace sc = pdspec;
 
+// Lays a finished result with chosen values into the session's engine (Engine befriends it for exactly this): the Results and Detail
+// screens are drawn with every skip reason and the extreme values a real run can leave.
+namespace k2::pdspec {
+struct EngineProbe {
+    // variant 0: every check skipped, the reasons cycling through all of them; 1: all pass at their limit; 2: all fail with nothing
+    // seen and the counters saturated; 3: one failure each with negative, huge and one-sided values, the 5 V restore unconfirmed.
+    static void lay(const Engine &ce, int variant) {
+        Engine &e = const_cast<Engine &>(ce);
+        for (std::size_t k = 0; k < kChecks; ++k) {
+            const CheckDef &d = kDefs[k];
+            Agg a{};
+            const bool us = d.unit == Unit::Us, ms = d.unit == Unit::Ms, mv = d.unit == Unit::Mv;
+            a.lo = us ? 25000 : ms ? 12000 : mv ? 34200 : 0;
+            a.hi = us ? 760000 : ms ? 15000 : mv ? 37800 : 0;
+            switch (variant) {
+            case 0: a.skip = static_cast<Skip>(1 + k % 12); break;
+            case 1:
+                a.n = 56; a.a = 7; a.b = 8;
+                a.worst = d.kind == Kind::Min ? a.lo : a.hi;
+                break;
+            case 2:
+                a.n = 0xFFFF; a.fails = 0xFFFF; a.a = 13; a.b = 13;   // the highest PDO position a list can have
+                a.worst = kNever;
+                break;
+            default:
+                a.n = 1; a.fails = 1; a.a = 12; a.b = 1;
+                a.worst = mv ? -1200 : us ? 2000000 : ms ? 99999 : 65535;
+                if (d.kind == Kind::Range) a.lo = -kOpenLimit;
+                break;
+            }
+            e.agg_[k] = a;
+        }
+        e.release_unconfirmed_ = variant == 3;
+    }
+};
+}  // namespace k2::pdspec
+
 namespace {
 
 // A 5 / 9 / 15 / 20 V, 3 A charger (no PPS) on a monitor-equipped K2 whose stub converter follows every Request. The transition
@@ -208,11 +245,59 @@ void test_run_stop_results() {
     CHECK_STR(std::string(row.text).c_str(), "Last result");
 }
 
+// Results and Detail in all four rotations with every skip reason and the extreme values: no text may be cut (the truncation
+// recorder fails the test through test_report), and a skipped cell spells its reason.
+void test_results_extremes() {
+    fixture();
+    std::unique_ptr<Ui> h; Ui &ui = boot(h);
+    PdSpecPage &p = open(ui);
+    to_review(ui, 1u << int(sc::Family::Transitions));
+    press(ui, Button::Ok);
+    press(ui, Button::Ok);
+    run(ui, 500);
+    press(ui, Button::Back);
+    for (int i = 0; i < 100 && ui.pd_spec().running(); i++) run(ui, 200);
+    run(ui, 200);
+    CHECK_EQ(int(p.stage()), int(PdSpecPage::Stage::Results));
+    const sc::Engine *e = ui.pd_spec().engine();
+    CHECK_EQ(e != nullptr, true);
+    if (!e) return;
+    for (int variant = 0; variant < 4; ++variant) {
+        sc::EngineProbe::lay(*e, variant);
+        if (variant == 0) {
+            for (int k = 0; k < int(sc::kChecks); ++k) {
+                kit::ResultRowSpec r;
+                p.result_row(k, r);
+                CHECK_EQ(int(r.cells[0].verdict), int(kit::Verdict::Skip));
+                CHECK_STR(std::string(r.cells[0].label).c_str(), sc::skip_name(static_cast<sc::Skip>(1 + k % 12)));
+            }
+        }
+        for (uint8_t rot = 0; rot < 4; ++rot) {
+            ui.set_rotation(rot, g_now);
+            run(ui, 200);
+            for (int k = 0; k < int(sc::kChecks); ++k) {
+                press(ui, Button::Ok);
+                run(ui, 60);
+                CHECK_EQ(int(p.stage()), int(PdSpecPage::Stage::Detail));
+                press(ui, Button::Back);
+                run(ui, 60);
+                press(ui, Button::Plus);
+                run(ui, 60);
+            }
+            for (int k = 0; k < int(sc::kChecks); ++k) press(ui, Button::Minus);
+            run(ui, 100);
+        }
+        if (variant == 3) CHECK_STR(foot(ui).c_str(), "Not back at 5V: unplug");
+    }
+    ui.set_rotation(0, g_now);
+}
+
 }  // namespace
 
 int main() {
     test_setup();
     test_review_refusals();
     test_run_stop_results();
+    test_results_extremes();
     return test_report("test_ui_pdspec_page");
 }

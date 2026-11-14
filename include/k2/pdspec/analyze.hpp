@@ -100,8 +100,8 @@ TransitionOut analyze_transition(const Rec& r, const TransitionIn& in) {
     const std::uint32_t acc = in.e.accept_us;
     const bool up = in.to_mv >= in.from_mv;
     // The old level as measured just before the Accept (the nominal one when the window starts later).
-    std::int64_t pre_sum = 0;
-    std::int32_t pre_n = 0;
+    std::uint32_t pre_sum = 0;   // 32 bits: the ring holds transcap::kSamples (1920) samples of at most 65535 mV
+    std::uint32_t pre_n = 0;
     for (std::size_t i = 0; i < n; ++i) {
         const transcap::Sample s = r.sample(i);
         if (!detail::after(s.t_us, acc - kPreUs)) continue;
@@ -145,8 +145,8 @@ TransitionOut analyze_transition(const Rec& r, const TransitionIn& in) {
     // The final level: the mean of the tail, only when the whole tail is in the band (a level still moving has no final value).
     if (first_after < n && o.band.seen) {
         const std::uint32_t t_end = r.sample(n - 1).t_us;
-        std::int64_t sum = 0;
-        std::int32_t cnt = 0;
+        std::uint32_t sum = 0;   // as pre_sum: 1920 x 65535 mV fits
+        std::uint32_t cnt = 0;
         bool ok = true;
         for (std::size_t i = first_after; i < n; ++i) {
             const transcap::Sample s = r.sample(i);
@@ -168,8 +168,8 @@ StepOut analyze_step(const Rec& r, std::uint32_t accept_us) {
     if (n == 0) return o;
     const std::uint32_t t_end = r.sample(n - 1).t_us;
     if (!detail::after(t_end, accept_us + kTailUs)) return o;   // no tail after the Accept to judge a level by
-    std::int64_t sum = 0;
-    std::int32_t cnt = 0;
+    std::uint32_t sum = 0;   // 1920 samples x 65535 mV fits in 32 bits
+    std::uint32_t cnt = 0;
     for (std::size_t i = 0; i < n; ++i) {
         const transcap::Sample s = r.sample(i);
         if (detail::after(s.t_us, t_end - kTailUs) && detail::after(s.t_us, accept_us)) { sum += s.vbus_mv; ++cnt; }

@@ -210,6 +210,9 @@ public:
     std::uint8_t families() const { return mask_; }
 
 private:
+    // Host tests only (tests/test_ui_pdspec_page.cpp): lays a finished result with chosen values in place, so the Results and
+    // Detail screens can be drawn with every skip reason and the extreme values. Never defined in the firmware.
+    friend struct EngineProbe;
     enum class Ph : std::uint8_t {
         FamStart, Goto, Settle, Measure, Frozen, LiveBand, KaWait, ResetWatch, DetachGap, Recover, Restore, Finishing, Done
     };
@@ -253,6 +256,7 @@ private:
 
     Env* env_;
     bool running_ = false, finishing_ = false, cancel_ = false, release_unconfirmed_ = false;
+    bool hr_epr_ = false;   // the K2's Hard Reset went out in EPR mode
     Stop stop_ = Stop::None;
     std::uint32_t t0_ = 0, end_ms_ = 0;
     Levels L_{};
@@ -509,6 +513,7 @@ inline void Engine::after(const Snapshot& s, std::uint32_t now) {
             return;
         case After::HardReset:
             tm_.hr_from_mv = static_cast<std::uint16_t>(s.vbus_mv < 0 ? 0 : s.vbus_mv);
+            hr_epr_ = s.epr_mode;   // a reset that leaves EPR mode has the longer tSrcRecover
             caps0_ = s.caps_rx;
             track_.start(now);
             if (!env_->hard_reset()) { skip_family(fam_, Skip::Refused); restore(now); return; }
@@ -807,8 +812,9 @@ inline void Engine::reset_watch(const Snapshot& s, std::uint32_t now) {
     meas(Check::HrSafe0V, {t.off_seen ? std::int32_t(t.off_ms) : el, g, 0, std::int32_t(pd::spec::kPsHardResetMaxMs + pd::spec::kSafe0VMs), 0, 0});
     if (t.off_seen) {
         tm_.hr_off_ms = static_cast<std::uint16_t>(t.off_ms);
-        meas(Check::HrRecover, {t.up_seen ? std::int32_t(t.dark_ms) : el, g, std::int32_t(pd::spec::kSrcRecoverMinMs),
-                                std::int32_t(pd::spec::kSrcRecoverMaxMs), 0, 0});
+        meas(Check::HrRecover, {t.up_seen ? std::int32_t(t.dark_ms) : el, g,
+                                std::int32_t(hr_epr_ ? pd::spec::kSrcRecoverEprMinMs : pd::spec::kSrcRecoverMinMs),
+                                std::int32_t(hr_epr_ ? pd::spec::kSrcRecoverEprMaxMs : pd::spec::kSrcRecoverMaxMs), 0, 0});
     }
     if (t.up_seen) {
         tm_.hr_dark_ms = static_cast<std::uint16_t>(t.dark_ms);
@@ -880,11 +886,13 @@ inline void Engine::finish(Stop why, std::uint32_t now) {
     if (silenced_) { env_->keepalive_silence(Silence::Off); silenced_ = false; }
     if (rd_off_) { env_->rd_off(false); rd_off_ = false; }
     env_->capture_stop();
-    // Checks with no measurement and no reason yet: the family in flight was stopped, the later ones were not reached, an earlier one
-    // that ran without a single value for it (no down-step got its band, say) had no data.
+    // Checks with no measurement and no reason yet: a family left out of the run was not selected, the family in flight was stopped,
+    // the later ones were not reached, an earlier one that ran without a single value for it (no down-step got its band, say) had no
+    // data.
     for (std::size_t f = 0; f < kFamilies; ++f) {
         const auto cur = static_cast<std::size_t>(fam_);
-        skip_family(Family(f), f < cur ? Skip::NoData : f == cur ? Skip::Stopped : Skip::NotReached);
+        const bool picked = (mask_ >> f & 1) != 0;
+        skip_family(Family(f), !picked ? Skip::NotSelected : f < cur ? Skip::NoData : f == cur ? Skip::Stopped : Skip::NotReached);
     }
     meas(Check::SourceReset, {std::int32_t(src_resets_), 0, 0, 0, 0, 0});
     env_->release();

@@ -64,7 +64,7 @@ edges: the Request's TX start, the Accept's or the PS_RDY's RX edge, or the VBUS
 | `pps_keepalive` | the last PPS Request to the source's Hard Reset | tPPSTimeout, 12 to 15 s; no Hard Reset by 20 s fails ("not seen") |
 | `epr_keepalive` | the last EPR_KeepAlive to the source's Hard Reset | tSourceEPRKeepAlive, 750 to 1000 ms; no Hard Reset by 3 s fails |
 | `hr_safe0v` | the K2's Hard Reset to VBUS under vSafe0V (0.8 V) | tPSHardReset + tSafe0V: 685 ms (derived) |
-| `hr_recover` | VBUS off time | tSrcRecover, 660 to 1000 ms |
+| `hr_recover` | VBUS off time | tSrcRecover, 660 to 1000 ms (1085 to 1425 ms when the reset leaves EPR mode) |
 | `hr_turn_on` | VBUS back to vSafe5V (4.75 V) | tSrcTurnOn, 275 ms |
 | `hr_caps` | vSafe5V to the first Source_Capabilities | tFirstSourceCap, 250 ms |
 | `detach_safe0v` | Rd away to VBUS under vSafe0V | tVBUSOFF (650 ms) + tPDDebounce max (20 ms), both inferred |

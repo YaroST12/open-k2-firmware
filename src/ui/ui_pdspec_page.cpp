@@ -125,7 +125,7 @@ void draw_cell(Field &f, uint32_t &sig, std::string_view text, uint16_t color, i
 template <std::size_t N>
 void put_int(StrBuf<N> &s, int32_t v) {
     if (v < 0) s.put_char('-');
-    s.put_u32(static_cast<uint32_t>(v < 0 ? -static_cast<int64_t>(v) : v));
+    s.put_u32(v < 0 ? 0u - static_cast<uint32_t>(v) : static_cast<uint32_t>(v));   // INT32_MIN included
 }
 
 // One measured value in its unit: us as ms with one decimal, ms whole, mV as volts with two decimals, a count bare.
