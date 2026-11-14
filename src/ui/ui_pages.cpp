@@ -2157,7 +2157,8 @@ void SettingsPage::draw_static() {
     }
 }
 
-// The K2's identity: the version in font 16, then "up 1h05m  HID on" in font 12 (minutes, so it repaints once a minute),
+// The K2's identity: the version in font 16, then "up 1h05m  USB HID+WebUSB" in font 12 (minutes, so it repaints once a
+// minute; the mode is usbcfg::describe of this boot's setting),
 // and the dashed line the place pages close their identity with. y22..65, each pixel once.
 void SettingsPage::paint_identity() {
     const uint32_t up_min = ctx_.now / 60000u;

@@ -80,6 +80,20 @@ Everything is C++23; there are no C files left in `src/` (TinyUSB and lwIP under
 
 Open defects, newest first. A row leaves this list when its fix is merged and seen on hardware.
 
+- **`K2_PDSTRESS=1` does not pass the gate: `ChargerTestSession::poll` needs 1056 B of stack** (2026-11-14, found on
+  k2/bugbatch; pre-existing: the base tree gives the same warning). The PD Stress build pulls more inlined code into
+  `poll`, over `FRAME_MAX` (1024 B), so `-Wstack-usage` fails `make gate K2_PDSTRESS=1`; the default build is not
+  affected. Fix with the tool's return: split the frame (a `noinline` helper for the stress branch), then the PD Stress
+  row above can be validated.
+
+- **The Bench K2 row says "HID on / WebUSB on / HID off"** (2026-11-14, found on k2/bugbatch). `ui_tools.cpp` builds
+  the note from two flags, so HID + WebUSB reads "HID on" while the Settings identity line and the USB Link page now
+  name the whole mode (`usbcfg::describe`: "HID+WebUSB"). Fix: the same `describe(current)` text, checked for width.
+
+- **`test_ui_mockup` renders before the budgeted paint has settled** (2026-11-14, host tool). Its `render()` ticks twice
+  and dumps, so pages that paint over several passes come out partial (`home_diag_*`, the USB link page with leftover
+  rows). The new `*_after` renders settle on `Ui::painting()`; the others still need the same loop.
+
 - **VOOC wake burst blocks the main loop 24 ms** (2026-11-12, k2/svooc-trigger; known, left as is by decision). The
   guarded SuperVOOC trigger (`src/fastcharge/svooc_trig.cpp` `wake()`) plays the 80 x 300 us D+ burst through
   `dpdm::play`, unmasked but blocking, the same as the engine's `vooc_wake()` (`src/fastcharge/fc_engine.cpp`). For
@@ -96,19 +110,12 @@ Open defects, newest first. A row leaves this list when its fix is merged and se
   the sink's soft-reset wait (`sr_wait_`, 400 ms to the new caps) as in flight in that demand, with a host test that
   the TX goes out and Rd stays. The unit hold's Soft_Reset (`fusb302.cpp` unit hold) keeps its own Rd and is not
   affected.
-
-- **Diag "K2 send failed" on every charger after a re-read** (2026-11-12, Anker IQ4 on 1.0.0-668; pre-existing): the
-  FUSB302 raised neither TXSENT nor RETRYFAIL for Get_Source_Cap_Extended although the source's GoodCRC with our
-  MessageID sat in the RX FIFO (all 12 traced sends, 7 chargers), so the trace logged a TX timeout and the Diag row a
-  send failure. Fixed on k2/integ-fable, host-tested (`test_tx_takes_the_goodcrc_in_the_rx_fifo_as_sent`,
-  `test_tx_holds_another_frame_from_the_rx_fifo_for_service`, `test_goodcrc_from_the_rx_fifo_is_no_tx_fail`):
-  `transmit()` reads that GoodCRC as the acknowledgement (CHARGER_QUIRKS `goodcrc-without-txsent`). Validate
-  (hardware): `pd-reread` on the IQ4 with a log,trace recording shows `GoodCRC in the RX FIFO` (or TXSENT) for
-  Get_Source_Cap_Extended, the caps-ext step answered or refused, and no "K2 send failed" on the Diag row.
-  **Hardware 2026-11-12, 1.0.0-670-de1f8994, Anker IQ4:** `TX_RESULT GoodCRC in the RX FIFO (no TXSENT) after 2 ms`,
-  the IQ4's Not_Supported 7.2 ms after the send (was 124 ms, read behind the 40-poll wait); every other TX still TXSENT
-  after 1 ms; `diagnose`: "PD link healthy", no TxFail. Leaves this list with the merge to main.
-  Evidence `runs/integ-0312/txack/` (integ worktree).
+  **Fixed on k2/bugbatch (bcc533f9), host-tested, not seen on hardware:** `Sink::soft_reset_pending()` (`sr_wait_`, or
+  the Get_Source_Cap fallback still waiting for its answer) counts as in flight in the demand, so the TX keeps its
+  permission and Rd stays (`test_stress_soft_reset_goes_out_and_keeps_rd_when_the_source_answers`,
+  `test_stress_soft_reset_to_a_silent_source_asks_for_the_caps_with_rd_kept`). Validate (hardware, a `K2_PDSTRESS=1`
+  build, which first needs the frame fix below): the softreset sequence on the Xiaomi 20K bank keeps VBUS, and the Black
+  Box shows the Soft_Reset TX and the new caps.
 
 - **The D+/D- passive idle put QC chargers into HVDCP and let VBUS jump to 12 V** (2026-11-11, CUKTECH 10 GaN 120W
   USB-A; fixed in 872baa31, host-tested; `tests/test_dpdm.cpp`, `tests/test_fastcharge_classify.cpp`
@@ -121,7 +128,11 @@ Open defects, newest first. A row leaves this list when its fix is merged and se
   **Hardware 2026-11-11, 1.0.0-564-eb320818, CUKTECH USB-A:** `dm 0`, 200 ms, `dm hiz` kept VBUS at 5.12 V (old idle:
   11.75 V); the K2-started QC run (self-powered) passed QC2 5/9/12 V, QC3 5→12→5 V, QC3B 5/12 V, UFCS 5/8/11/5 V
   (15 pass, 0 fail), VBUS back at 5.12 V after it. The released pair reads the port's own 2.70/2.68 V divider
-  (`APPLE 2.4A`). Still open: the boot `[FC] idle` line, the pair alone and on DCP / QC-only chargers, the IQ4 rerun.
+  (`APPLE 2.4A`).
+  **Hardware 2026-11-14, 1.0.2-3-8fbf3624, OnePlus SVOOC charger** (`runs/dpdm-svooc/RESULT.md`): `[FC] idle dp=hiz
+  dm=hiz mismatch=0x0` logged (every 10 s); `dm 0`, 200 ms, `dm hiz` kept VBUS at 5.02 V; VBUS 5.024-5.025 V for
+  3 min (18 polls); the released pair reads D+ 34 mV, D- 32 mV on this charger. Still open: the QC-charger rerun only
+  (IQ4 or CUKTECH: a QC2/QC3 run, then VBUS back at 5 V).
   Evidence `runs/2026-11-11-idle-dpdm-hw/` (integ worktree).
 
 - **`[LINK]` verdict undercounts the caps during a long repaint** (2026-11-11, found by the host world replay on
