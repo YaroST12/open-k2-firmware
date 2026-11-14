@@ -671,6 +671,13 @@
   "674": "[RMT] charger-test cancel -> %d\n",
   "675": "[TEST] remote START confirmed\n",
   "676": "[TEST] remote START dropped: the confirmation closed\n",
-  "677": "[TEST] remote START: confirm window open, selected=%u units=%u\n"
+  "677": "[TEST] remote START: confirm window open, selected=%u units=%u\n",
+  "678": "[PDSPEC] item %s %u/%u\n",
+  "679": "[PDSPEC] note %s\n",
+  "680": "[PDSPEC] check %s skip %s\n",
+  "681": "[PDSPEC] check %s %s n=%u fails=%u worst=%d lo=%d hi=%d at=%u>%u\n",
+  "682": "[PDSPEC] finish %s score=%u elapsed_ms=%u restore=%s\n",
+  "683": "[PDSPEC] start refused: %s\n",
+  "684": "[PDSPEC] start families=0x%x fixed=%u pps=%u cap_mv=%u\n"
  }
 }
