@@ -21,6 +21,21 @@ namespace k2::pd {
 inline constexpr std::uint32_t kProbeRespMs = 250, kProbeTotalMs = 900;
 inline constexpr std::uint8_t kExtGetManufacturerInfo = 0x06, kCtlGetSourceCapExt = 17;
 
+// Get_Manufacturer_Info for the port (target 0, ref 0) as the K2 sends it: chunked, like every extended message it sends
+// (the K2 never claims unchunked extended message support, so the unchunked form is not allowed). Extended header 0x8002
+// (chunked, chunk 0, data size 2), then the 2-byte data block: 4 bytes, one data object, already on the 4-byte boundary.
+// The probe and the re-read share it.
+inline TxMsg get_manufacturer_info_msg(std::uint8_t rev) {
+    TxMsg m;
+    m.header = make_header(kExtGetManufacturerInfo, 1, rev, true);
+    m.len = 4;
+    m.data[0] = 2;
+    m.data[1] = 0x80;
+    m.data[2] = 0;   // Manufacturer Info Target: the port
+    m.data[3] = 0;   // Manufacturer Info Ref
+    return m;
+}
+
 enum class ProbeStep : std::uint8_t { Identity, MfrInfo, CapsExt, Done };
 enum class ProbeState : std::uint8_t { Idle, Running, Done, Aborted };
 

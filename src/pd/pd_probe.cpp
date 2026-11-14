@@ -38,11 +38,7 @@ void Probe::build() {
             for (int i = 0; i < 4; i++) m.data[i] = std::uint8_t(h >> (8 * i));
             break;
         }
-        case ProbeStep::MfrInfo:   // unchunked extended message: ext header (2 data bytes), then target 0 (port), ref 0
-            m.header = make_header(kExtGetManufacturerInfo, 1, rev_, true);
-            m.len = 4;
-            m.data[0] = 2;
-            break;
+        case ProbeStep::MfrInfo: m = get_manufacturer_info_msg(rev_); break;
         case ProbeStep::CapsExt: m.header = make_header(kCtlGetSourceCapExt, 0, rev_); break;
         case ProbeStep::Done: return;
     }

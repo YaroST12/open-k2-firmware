@@ -287,10 +287,12 @@ void test_lab_order_is_unchanged_and_mfr_info_comes_last() {
     CHECK_EQ(g.next(), true); g.vdm(2, 1);
     CHECK_EQ(g.next(), true); CHECK_EQ(g.sent[3].header, 0x0087); g.source_cap(6, false);
     CHECK_EQ(g.next(), true);
-    CHECK_EQ(g.sent[4].header, std::uint16_t(0x8000 | (1u << 12) | (2u << 6) | kExtGetManufacturerInfo));   // unchunked extended, one DO
+    CHECK_EQ(g.sent[4].header, std::uint16_t(0x8000 | (1u << 12) | (2u << 6) | kExtGetManufacturerInfo));   // extended, one DO
     CHECK_EQ(g.sent[4].len, 4);
-    CHECK_EQ(g.sent[4].data[0], 2);
-    CHECK_EQ(g.sent[4].data[1], 0);
+    CHECK_EQ(g.sent[4].data[0], 2);      // ext header 0x8002: chunked, chunk 0, data size 2
+    CHECK_EQ(g.sent[4].data[1], 0x80);
+    CHECK_EQ(g.sent[4].data[2], 0);      // target: the port
+    CHECK_EQ(g.sent[4].data[3], 0);
     mfr_info_answer(g);
     CHECK_EQ(g.r.status().state == RereadState::Done, true);
     CHECK_EQ(g.r.status().ok_mask, kRereadDefault | kRereadMfrInfo);

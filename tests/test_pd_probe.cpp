@@ -74,8 +74,8 @@ void test_messages_in_order() {
     CHECK_EQ(r.sent[1].header & 0x1F, kExtGetManufacturerInfo);
     CHECK_EQ((r.sent[1].header >> 15) & 1, 1);  // extended
     CHECK_EQ((r.sent[1].header >> 12) & 7, 1);  // one data object
-    CHECK_EQ(r.sent[1].data[0], 2);             // ext header: unchunked, 2 data bytes
-    CHECK_EQ(r.sent[1].data[1], 0);
+    CHECK_EQ(r.sent[1].data[0], 2);             // ext header 0x8002: chunked, chunk 0, 2 data bytes (no padding: 2 + 2 = 4)
+    CHECK_EQ(r.sent[1].data[1], 0x80);          // chunked, as every extended message the K2 sends (no unchunked support)
     CHECK_EQ(r.sent[1].data[2], 0);             // target: the port
     CHECK_EQ(r.sent[1].data[3], 0);
     r.ext(kExtManufacturerInfo, kMidb, sizeof kMidb);
