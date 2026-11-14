@@ -3,6 +3,7 @@
 """ct_start preflight, no device."""
 import contextlib
 import io
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -403,7 +404,8 @@ class LockReleaseAfterStart(unittest.TestCase):
                 return {"state": "done", "run_id": 6}
             return {"state": "done", "run_id": 6, "steps": []}
 
-        with patch.object(ct_start.k2_lock, "acquire", acquire), \
+        with patch.dict(os.environ, {"K2_TRANSPORT": "hid"}), \
+             patch.object(ct_start.k2_lock, "acquire", acquire), \
              patch.object(ct_start.k2_lock, "release", release), \
              patch.object(ct_start.kr, "RemoteLink", FakeLink), \
              patch.object(ct_start.kr, "LinuxHidTransport", FakeTransport), \

@@ -1654,3 +1654,209 @@ test("report cards: a device error is reported by name", async () => {
   const { link } = rig((f) => [rsp(0x62, f[3], 0, [2])]);
   await assert.rejects(() => new P.K2Remote(link).cardsList(), /cards list: not found/);
 });
+
+// ---- WebUSB transport (the vendor interface; the replacement for WebHID on Android and desktop) ---------
+
+function usbConfig({ vendor = true, hid = true, vendorClass = 0xFF, vendorType = "bulk" } = {}) {
+  const interfaces = [];
+  if (hid) interfaces.push({ interfaceNumber: 0, alternates: [{ alternateSetting: 0, interfaceClass: 3,
+    endpoints: [{ endpointNumber: 1, direction: "in", type: "interrupt", packetSize: 64 }] }] });
+  if (vendor) interfaces.push({ interfaceNumber: 2, alternates: [
+    { alternateSetting: 1, interfaceClass: 0xFF, endpoints: [] },
+    { alternateSetting: 0, interfaceClass: vendorClass, endpoints: [
+      { endpointNumber: 3, direction: "out", type: vendorType, packetSize: 64 },
+      { endpointNumber: 3, direction: "in", type: vendorType, packetSize: 64 }] }] });
+  return { configurationValue: 1, interfaces };
+}
+
+// A WebUSB device whose IN endpoint is fed by the test (push) and whose OUT writes are recorded.
+function fakeUsb(cfgOpts = {}) {
+  const cfg = usbConfig(cfgOpts);
+  const inq = [], waiters = [];
+  const d = {
+    vendorId: 0x0716, productId: 0x5060, opened: false, configuration: null, configurations: [cfg],
+    log: [], out: [], readLens: [], onOut: null, outStatus: "ok",
+    async open() { d.opened = true; d.log.push("open"); },
+    async close() { d.opened = false; d.log.push("close"); d.fail(new Error("closed")); },
+    async selectConfiguration(v) { d.configuration = cfg; d.log.push("select" + v); },
+    async claimInterface(n) { d.log.push("claim" + n); },
+    async releaseInterface(n) { d.log.push("release" + n); },
+    async clearHalt(dir, ep) { d.log.push("halt:" + dir + ep); },
+    async transferOut(ep, data) {
+      const b = Uint8Array.from(data);
+      d.out.push({ ep, b });
+      if (d.outStatus !== "ok") return { status: d.outStatus, bytesWritten: 0 };
+      if (d.onOut) setImmediate(() => d.onOut(b));
+      return { status: "ok", bytesWritten: b.length };
+    },
+    transferIn(ep, len) {
+      d.readLens.push([ep, len]);
+      return new Promise((res, rej) => {
+        const item = inq.shift();
+        if (item) return item.err ? rej(item.err) : res(item.r);
+        waiters.push({ res, rej });
+      });
+    },
+    push(bytes, status = "ok") {
+      const r = { status, data: bytes === null ? undefined : new DataView(Uint8Array.from(bytes).buffer) };
+      const w = waiters.shift();
+      if (w) w.res(r); else inq.push({ r });
+    },
+    fail(err) { const w = waiters.splice(0); w.forEach((x) => x.rej(err)); inq.push({ err }); },
+  };
+  return d;
+}
+const tick = () => new Promise((r) => setImmediate(r));
+
+test("webusb: the vendor interface is found by class 0xFF with a bulk pair, alternate 0 only", () => {
+  const f = P.usbVendorInterface(fakeUsb());
+  assert.deepEqual(f, { configuration: 1, iface: 2, alt: 0, epIn: 3, epOut: 3, packetSize: 64 });
+});
+
+test("webusb: no vendor interface (HID only, interrupt endpoints, wrong class) gives null", () => {
+  assert.equal(P.usbVendorInterface(fakeUsb({ vendor: false })), null);
+  assert.equal(P.usbVendorInterface(fakeUsb({ vendorType: "interrupt" })), null);
+  assert.equal(P.usbVendorInterface(fakeUsb({ vendorClass: 3 })), null);
+});
+
+test("webusb: open selects the configuration and claims the vendor interface", async () => {
+  const d = fakeUsb();
+  await P.webusbTransport(d).open();
+  assert.deepEqual(d.log, ["open", "select1", "claim2"]);
+});
+
+test("webusb: open on a device without the interface fails with a clear error", async () => {
+  await assert.rejects(P.webusbTransport(fakeUsb({ vendor: false })).open(), /vendor interface/);
+});
+
+test("webusb: a Link request is one raw 64-byte bulk OUT and the bulk IN answer completes it", async () => {
+  const d = fakeUsb();
+  const t = P.webusbTransport(d);
+  await t.open();
+  d.onOut = (f) => d.push(rsp(f[2], f[3], 0, [9]));
+  const link = new P.Link(t, { timeoutMs: 0 });
+  const r = await link.call(P.CMD.PING);
+  assert.deepEqual([...r.payload], [9]);
+  assert.equal(d.out.length, 1);
+  assert.equal(d.out[0].ep, 3);
+  assert.deepEqual([...d.out[0].b.slice(0, 5)], [0xA5, 0x4B, 0x01, 0x01, 0x00]);
+  assert.equal(d.out[0].b.length, 64);
+  assert.deepEqual(d.readLens[0], [3, 64]);
+  await t.close();
+});
+
+test("webusb: zero-length packets are skipped, log frames reach onLog", async () => {
+  const d = fakeUsb();
+  const t = P.webusbTransport(d);
+  await t.open();
+  d.onOut = (f) => { d.push([]); d.push(rsp(f[2], f[3], 0)); };
+  const link = new P.Link(t, { timeoutMs: 0 });
+  const logs = [];
+  link.onLog = (s) => logs.push(s);
+  d.push(LOG);
+  await link.call(P.CMD.PING);
+  assert.equal(logs.length, 1);
+  await t.close();
+});
+
+test("webusb: short chunks are reassembled and a double frame is split", async () => {
+  const d = fakeUsb();
+  const t = P.webusbTransport(d);
+  await t.open();
+  const seen = [];
+  t.attach({ feed: (f) => seen.push(Uint8Array.from(f)) });
+  const a = rsp(3, 1, 0, [1]), b = rsp(3, 2, 0, [2]);
+  d.push(a.slice(0, 20)); d.push(a.slice(20)); d.push(new Uint8Array([...b, ...rsp(3, 3, 0, [3])]));
+  for (let i = 0; i < 5; i++) await tick();
+  assert.equal(seen.length, 3);
+  assert.deepEqual([...seen[0]], [...a]);
+  assert.equal(seen[2][3], 3);
+  await t.close();
+});
+
+test("webusb: a stalled IN endpoint is cleared and reading continues", async () => {
+  const d = fakeUsb();
+  const t = P.webusbTransport(d);
+  await t.open();
+  const seen = [];
+  t.attach({ feed: (f) => seen.push(f), abort: () => {} });
+  d.push(null, "stall");
+  d.push(rsp(3, 1, 0));
+  for (let i = 0; i < 5; i++) await tick();
+  assert.ok(d.log.includes("halt:in3"));
+  assert.equal(seen.length, 1);
+  await t.close();
+});
+
+test("webusb: an unplugged device (transferIn rejects) aborts the pending request and reports", async () => {
+  const d = fakeUsb();
+  const t = P.webusbTransport(d);
+  await t.open();
+  let reported = null;
+  t.onClose = (e) => { reported = e; };
+  const link = new P.Link(t, { timeoutMs: 0 });
+  const p = link.call(P.CMD.PING);
+  await tick();
+  d.fail(new Error("NetworkError: device unplugged"));
+  await assert.rejects(p, /unplugged/);
+  assert.match(reported.message, /unplugged/);
+});
+
+test("webusb: a failed bulk OUT throws and the call rejects", async () => {
+  const d = fakeUsb();
+  const t = P.webusbTransport(d);
+  await t.open();
+  d.outStatus = "stall";
+  const link = new P.Link(t, { timeoutMs: 0 });
+  await assert.rejects(link.call(P.CMD.PING), /USB write failed/);
+  assert.ok(d.log.includes("halt:out3"));
+  await t.close();
+});
+
+test("webusb: close releases the interface and stops the read loop without reporting", async () => {
+  const d = fakeUsb();
+  const t = P.webusbTransport(d);
+  await t.open();
+  let reported = false;
+  t.onClose = () => { reported = true; };
+  t.attach({ feed() {}, abort() {} });
+  await tick();
+  await t.close();
+  await tick();
+  assert.deepEqual(d.log.slice(-2), ["release2", "close"]);
+  assert.equal(reported, false);
+});
+
+test("webusb: the screenshot stream (many frames back to back) arrives in order", async () => {
+  const d = fakeUsb();
+  const t = P.webusbTransport(d);
+  await t.open();
+  const seen = [];
+  t.attach({ feed: (f) => seen.push(f[3]), abort() {} });
+  for (let i = 1; i <= 40; i++) d.push(rsp(0x0A, i, 0));
+  for (let i = 0; i < 60; i++) await tick();
+  assert.deepEqual(seen, Array.from({ length: 40 }, (_, i) => i + 1));
+  await t.close();
+});
+
+test("webhid: hidTransport sends report 0 and feeds input reports to the link", async () => {
+  const sent = [];
+  const dev = { opened: true, sendReport: async (id, f) => { sent.push([id, f]); }, oninputreport: null, close: async () => {} };
+  const t = P.hidTransport(dev);
+  const got = [];
+  t.attach({ feed: (f) => got.push([...f]) });
+  await t.send(P.packRequest(P.CMD.PING, 1));
+  const r = rsp(1, 1, 0);
+  dev.oninputreport({ data: new DataView(r.buffer, r.byteOffset, r.byteLength) });
+  assert.equal(sent[0][0], 0);
+  assert.deepEqual(got[0], [...r]);
+});
+
+test("webusb: the dashboard picks WebUSB when WebHID is missing and keeps WebHID otherwise", () => {
+  const html = readFileSync(path.join(here, "../tools/web/k2.html"), "utf8");
+  assert.match(html, /navigator\.usb\.requestDevice/);
+  assert.match(html, /webusbTransport/);
+  assert.match(html, /hidTransport/);
+  assert.match(html, /"hid" in navigator/);
+  assert.match(html, /connect-usb/);
+});

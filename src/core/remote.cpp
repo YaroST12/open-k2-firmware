@@ -79,7 +79,11 @@ std::string_view sv(const char *s) { return s ? std::string_view(s) : std::strin
 
 Remote::Remote(Ui &ui) : ui_(ui) { g_instance = this; }
 
-void Remote::enqueue(const uint8_t *data, uint16_t len) {
+uint8_t Remote::free_slots() const {
+    return static_cast<uint8_t>((tail_ + kQueueDepth - head_ - 1) % kQueueDepth);
+}
+
+void Remote::enqueue(const uint8_t *data, uint16_t len, usb::Route route) {
     const unsigned next = (head_ + 1) % kQueueDepth;
     if (next == tail_) {
         dropped_++;
@@ -87,6 +91,7 @@ void Remote::enqueue(const uint8_t *data, uint16_t len) {
     }
     Slot &s = queue_[head_];
     s.len = len > remote::kFrameSize ? remote::kFrameSize : len;
+    s.route = route;
     for (uint16_t i = 0; i < s.len; i++) s.data[i] = data[i];
     head_ = next;
 }
@@ -99,6 +104,7 @@ RemoteEvent Remote::poll() {
     }
     while (tail_ != head_) {
         const Slot &s = queue_[tail_];
+        usb::set_reply_route(s.route);
         std::array<uint8_t, remote::kFrameSize> out{};
         const bool answer = remote::handle_request(std::span<const uint8_t>(s.data, s.len), *this, out);
         if (answer) {
@@ -1638,9 +1644,11 @@ void Remote::set_log(bool on) {
 
 }  // namespace k2
 
-void k2::usb::on_remote_report(const uint8_t *buffer, uint16_t length) {
-    if (k2::g_instance) k2::g_instance->enqueue(buffer, length);
+void k2::usb::on_remote_report(const uint8_t *buffer, uint16_t length, Route route) {
+    if (k2::g_instance) k2::g_instance->enqueue(buffer, length, route);
 }
+
+uint8_t k2::usb::remote_free() { return k2::g_instance ? k2::g_instance->free_slots() : 0; }
 
 // The one handle_request<Remote>: http_server.cpp (built without LTO for the .mode_net overlay)
 // declares it extern instead of carrying its own 4 KB copy.

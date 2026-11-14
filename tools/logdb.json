@@ -656,6 +656,7 @@
   "659": "[CT] svooc_cap end=%u word=%u asks=%u why=%u\n",
   "660": "[TEST] SVOOC ceiling %s\n",
   "661": "[TEST] svooc ceiling stage mode=%u\n",
-  "662": "[UI] menu %u refused: %s (depth %u, arena %u/%u B)\n"
+  "662": "[UI] menu %u refused: %s (depth %u, arena %u/%u B)\n",
+  "663": "[USBCFG] webusb not built (K2_WEBUSB=0): stored %s runs as %s\n"
  }
 }

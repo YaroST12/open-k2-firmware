@@ -9,6 +9,13 @@
  *             runs as HID. Build with `make K2_NET=1` (or `make docker-build K2_NET=1`) to get it back.
  * The default here is off, like the Makefile's; the host tests pass -DK2_NET=1 explicitly.
  *
+ * K2_WEBUSB  1 = the WebUSB transport is built in: a vendor-class interface (bulk IN + OUT, TinyUSB's vendor class) that carries
+ *             the same 64-byte remote frames as the HID channel, the BOS descriptor with the WebUSB platform capability and
+ *             the Microsoft OS 2.0 set (so a browser and Windows bind it without a driver). It is meant to replace the HID
+ *             remote channel and the K2_NET web path; the stored USB link setting picks it (Settings > USB Link, WebUSB).
+ *         0 = none of that exists (the default): the setting's WebUSB request is dropped and the row is not shown.
+ *             Build with `make K2_WEBUSB=1`; the host tests pass -DK2_WEBUSB=1 explicitly.
+ *
  * K2_PDSTRESS  1 = Tools > PD Stress, its remote command (0x55) and the `pdstress` shell commands are built in.
  *              0 = none of it (the default since 2026-11-12: the tool found no charger fault, only its own Soft_Reset bug, see
  *                  ROADMAP). The Tools list ends at Loop probe, the remote and the shell answer "unsupported". The host tests
@@ -28,6 +35,10 @@
 
 #ifndef K2_NET
 #define K2_NET 0
+#endif
+
+#ifndef K2_WEBUSB
+#define K2_WEBUSB 0
 #endif
 
 #ifndef K2_PDSTRESS

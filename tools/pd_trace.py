@@ -716,7 +716,7 @@ def run_transition(link, a):
 
 def open_link(path, timeout):
     import k2_remote
-    return k2_remote.RemoteLink(k2_remote.LinuxHidTransport(path), timeout)
+    return k2_remote.RemoteLink(k2_remote.open_transport(path), timeout)
 
 
 class Sink:

@@ -1789,7 +1789,8 @@ static void test_usb_link_toggles() {
     ui.on_button(Button::Minus, ButtonEvent::Short, 21550);       // back to Drive: turning it on drops Net
     ui.on_button(Button::Ok, ButtonEvent::Short, 21560);
     CHECK_EQ(g_stub.usb_stored.net, 0); CHECK_EQ(g_stub.usb_stored.drive, 1);
-    ui.on_button(Button::Plus, ButtonEvent::Short, 21570);        // Network again, then wrap to HID
+    ui.on_button(Button::Plus, ButtonEvent::Short, 21570);        // Network again, then WebUSB, then wrap to HID
+    ui.on_button(Button::Plus, ButtonEvent::Short, 21575);
     ui.on_button(Button::Plus, ButtonEvent::Short, 21580);
     ui.on_button(Button::Ok, ButtonEvent::Short, 21590);          // HID off: nothing else stays on but Drive
     CHECK_EQ(g_stub.usb_stored.hid, 0); CHECK_EQ(g_stub.usb_stored.net, 0);
@@ -1801,6 +1802,30 @@ static void test_usb_link_toggles() {
     ui.on_button(Button::Ok, ButtonEvent::Short, 21600);
     CHECK_EQ(g_stub.usb_stored.drive, 0);
     ui.pop_menu(21700);
+    k2::usbcfg::current = {true, true};
+    g_stub = StubState();
+}
+
+// The WebUSB row (K2_WEBUSB builds, the host build has it): fourth row, flips the webusb flag, turns HID off beside the Drive.
+static void test_usb_link_webusb_row() {
+    Ui &ui = fresh_ui();
+    g_stub = StubState();
+    g_stub.usb_stored = {false, false};
+    k2::usbcfg::current = {false, false};
+    CHECK_EQ(k2::usbcfg::rows(), 4);
+    ui.goto_page(static_cast<uint8_t>(Page::Tools), 23000);
+    ui.push_menu(Menu::UsbLink, 23100);
+    ui.on_button(Button::Minus, ButtonEvent::Short, 23200);       // wraps from HID to the last row: WebUSB
+    ui.on_button(Button::Ok, ButtonEvent::Short, 23300);
+    CHECK_EQ(g_stub.usb_stored.webusb, 1); CHECK_EQ(g_stub.usb_stored.hid, 0); CHECK_EQ(g_stub.usb_stored.drive, 0);
+    ui.on_button(Button::Plus, ButtonEvent::Short, 23400);        // wrap to HID: the fallback joins
+    ui.on_button(Button::Ok, ButtonEvent::Short, 23500);
+    CHECK_EQ(g_stub.usb_stored.webusb, 1); CHECK_EQ(g_stub.usb_stored.hid, 1);
+    ui.on_button(Button::Plus, ButtonEvent::Short, 23600);        // Drive on: HID drops out, WebUSB stays
+    ui.on_button(Button::Ok, ButtonEvent::Short, 23700);
+    CHECK_EQ(g_stub.usb_stored.webusb, 1); CHECK_EQ(g_stub.usb_stored.hid, 0); CHECK_EQ(g_stub.usb_stored.drive, 1);
+    ui.tick(23800); ui.tick(23900);
+    ui.pop_menu(24000);
     k2::usbcfg::current = {true, true};
     g_stub = StubState();
 }
@@ -1868,6 +1893,7 @@ int main() {
     test_over_load_above_5v_needs_confirm();
     test_usb_link_footer_icon_tone();
     test_usb_link_toggles();
+    test_usb_link_webusb_row();
     test_home_flow_arrow();
     test_home_animation();
     test_home_stale();

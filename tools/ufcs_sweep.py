@@ -227,7 +227,7 @@ def main(argv=None):
     outdir = Path(a.out) if a.out else ROOT / "runs" / "ufcs-sweep" / datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     try:
         with k2_lock.hold():
-            link = kr.RemoteLink(kr.LinuxHidTransport(a.path), 1.0)
+            link = kr.RemoteLink(kr.open_transport(a.path), 1.0)
             st = kr.ufcs_status(link)
             if st["state"] == "running":
                 raise SweepAbort("a probe is already running")

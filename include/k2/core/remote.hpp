@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <span>
 #include "k2/drivers/adc.hpp"
+#include "k2/drivers/usb.hpp"
 #include "k2/core/remote_proto.hpp"
 #include "k2/ui/ui.hpp"
 #include "k2/drivers/virtual_button.hpp"
@@ -41,8 +42,11 @@ public:
     // with the physical pin before the debouncer, so injected presses take the same path.
     bool button_down(Button b, uint32_t now_ms);
 
-    // Queue one report from the USB stack (called through usb::on_remote_report()).
-    void enqueue(const uint8_t *data, uint16_t len);
+    // Queue one report from the USB stack (called through usb::on_remote_report()). The route (HID or the WebUSB vendor
+    // pipe) is remembered with the request: poll() makes it the reply route before the command runs, so the response and
+    // whatever stream the command starts go back the way the request came.
+    void enqueue(const uint8_t *data, uint16_t len, usb::Route route = usb::Route::Hid);
+    uint8_t free_slots() const;
 
     // Backend interface for remote::handle_request (public so the dispatcher template can call it).
     remote::PingInfo ping();
@@ -169,7 +173,7 @@ private:
     uint16_t spoof_seq_ = 0;   // library number armed through the remote, for the status reply
     uint8_t ufcs_start_ = 0;   // ufcs::ProbeStart of the last probe op, for the UFCS status block
     static constexpr unsigned kQueueDepth = 4;
-    struct Slot { uint8_t data[remote::kFrameSize]; uint16_t len; };
+    struct Slot { uint8_t data[remote::kFrameSize]; uint16_t len; usb::Route route; };
 
     Ui &ui_;
     Slot queue_[kQueueDepth] = {};

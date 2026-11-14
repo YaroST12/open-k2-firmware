@@ -85,6 +85,7 @@ struct Facts {
     uint8_t captures = 0;               // Black Box captures held
     const char *version = "";           // kFwVersion
     bool hid = false;                   // the HID function enumerates
+    bool webusb = false;                // the WebUSB vendor function enumerates (K2_WEBUSB builds)
     bool batt = false;                  // the battery recorder has a run since boot (running or done)
     StrBuf<kStatusChars + 1> batt_status;   // its line (battery::view::bench_status); empty = "No run"
 };

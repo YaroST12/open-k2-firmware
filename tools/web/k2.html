@@ -104,6 +104,7 @@ details > *:not(summary) { margin-top: 8px; }
 <header>
   <h1>Open-K2</h1>
   <button id="connect" class="primary">Connect</button>
+  <button id="connect-usb" hidden title="Use the WebUSB vendor interface instead of WebHID (firmware built with WebUSB; the only way on Android).">Connect via WebUSB</button>
   <span id="status" class="pill">not connected</span>
   <span id="fw" class="pill mono" hidden></span>
   <span id="lease" class="pill mono warn" hidden title="The K2 stops (back to 5 V) when this page goes quiet for the lease length or the USB link drops. While this page is open and polling it keeps the lease alive."></span>
@@ -374,7 +375,7 @@ var K2Proto = (function () {
   var FACTORY_WIPE_MAGIC = [0x57, 0x49, 0x50, 0x45];   // "WIPE", u32 0x45504957 little endian (kFactoryWipeMagic)
   var CMD = { PING: 1, BUTTON: 2, GET_STATE: 3, GET_PDOS: 4, GET_EMARKER: 5, ACTION: 6, SET_PAGE: 7,
               REBOOT: 8, LOG: 9, SCREENSHOT: 10, CHARGER_TEST: 0x0B, CHARGER_SWEEP: 0x0F, DEBUG_PDOS: 0x20, ADC_RAW: 0x21, RIPPLE: 0x22, DEBUG_PD_MSG: 0x23,
-              GET_IDENTITY: 0x24, DEBUG_LINK: 0x25, DEBUG_CC_PROBE: 0x2A, DFU_ENTER: 0x30, DEBUG_FAULT: 0x31, FC: 0x32, FACTORY_WIPE: 0x33, BOOT_INFO: 0x35, CABLE_R: 0x50, LAB: 0x51, UFCS: 0x52, QRTEST: 0x53, CHARGER_AVS_SWEEP: 0x54, PD_STRESS: 0x55, LOOP_PROBE: 0x57, CHARGER_SVOOC_CAP: 0x59, EM_LIB: 0x61, CARDS: 0x62, TWIN: 0x63, BLACK_BOX: 0x70, TRANS_CAP: 0x71, DIAGNOSE: 0x72,
+              GET_IDENTITY: 0x24, DEBUG_LINK: 0x25, DEBUG_CC_PROBE: 0x2A, DFU_ENTER: 0x30, DEBUG_FAULT: 0x31, FC: 0x32, FACTORY_WIPE: 0x33, BOOT_INFO: 0x35, CABLE_R: 0x50, LAB: 0x51, UFCS: 0x52, QRTEST: 0x53, CHARGER_AVS_SWEEP: 0x54, PD_STRESS: 0x55, LOOP_PROBE: 0x57, BATTERY: 0x58, CHARGER_SVOOC_CAP: 0x59, EM_LIB: 0x61, CARDS: 0x62, TWIN: 0x63, BLACK_BOX: 0x70, TRANS_CAP: 0x71, DIAGNOSE: 0x72,
               IDENTIFY_DEVICE: 0x40, PD_REQUEST: 0x41, PD_RESET: 0x42, PD_TRIGGER_STATUS: 0x43, PD_RELEASE: 0x44, PD_MATCH: 0x45, PD_ATTACH: 0x48, PD_HANDBACK: 0x49, APPLE_READ: 0x4A, STOP: 0x4B, LEASE: 0x4C,
               SCREEN_DATA: 0x8A, RIPPLE_DATA: 0x8B };
   var STATUS = { OK: 0, UNKNOWN_CMD: 1, BAD_LENGTH: 2, BAD_ARG: 3, BUSY: 4, NEED_CONFIRM: 5 };
@@ -1770,7 +1771,123 @@ var K2Proto = (function () {
     return t;
   }
 
+  // ---- WebHID transport: one report per frame, report ID 0 ------------------------------------------
+  // dev is a WebHID HIDDevice (already opened). attach() hooks the input reports to the link.
+  function hidTransport(dev) {
+    return {
+      device: dev, kind: "hid",
+      send: function (f) { return dev.sendReport(0, f); },
+      attach: function (link) {
+        dev.oninputreport = function (ev) { link.feed(new Uint8Array(ev.data.buffer, ev.data.byteOffset, ev.data.byteLength)); };
+      },
+      close: function () { dev.oninputreport = null; return dev.close(); }
+    };
+  }
+
+  // ---- WebUSB transport: the vendor interface (class 0xFF) with one bulk IN and one bulk OUT endpoint -----
+  // Firmware K2_WEBUSB builds carry the same 64-byte frames as the HID reports, minus the report ID, on that
+  // pair: one frame per bulk OUT transfer, answers and streams on bulk IN (a zero-length packet follows a
+  // transfer that is a multiple of 64 bytes, so empty reads are skipped and the byte stream is cut into
+  // frames here, like the firmware does on its side). Works in Chrome on Android and the desktop; the
+  // page must be served from https or localhost, and Windows binds WinUSB from the device's own descriptors.
+
+  // {configuration, iface, alt, epIn, epOut, packetSize} of the vendor interface, or null.
+  function usbVendorInterface(device) {
+    var cfg = device.configuration || (device.configurations && device.configurations[0]);
+    if (!cfg) return null;
+    for (var i = 0; i < cfg.interfaces.length; i++) {
+      var itf = cfg.interfaces[i];
+      for (var a = 0; a < itf.alternates.length; a++) {
+        var alt = itf.alternates[a];
+        if (alt.alternateSetting !== 0 || alt.interfaceClass !== 0xFF) continue;
+        var epIn = null, epOut = null, size = 0;
+        for (var e = 0; e < alt.endpoints.length; e++) {
+          var ep = alt.endpoints[e];
+          if (ep.type !== "bulk") continue;
+          if (ep.direction === "in" && epIn === null) { epIn = ep.endpointNumber; size = ep.packetSize; }
+          else if (ep.direction === "out" && epOut === null) epOut = ep.endpointNumber;
+        }
+        if (epIn !== null && epOut !== null) {
+          return { configuration: cfg.configurationValue, iface: itf.interfaceNumber, alt: 0, epIn: epIn, epOut: epOut, packetSize: size || FRAME_SIZE };
+        }
+      }
+    }
+    return null;
+  }
+
+  // device is a WebUSB USBDevice. open() claims the interface; attach() (called by Link) starts the read
+  // loop. onClose(err) fires once when the loop ends on its own (unplug), not after close().
+  function webusbTransport(device) {
+    var t = { device: device, kind: "usb", info: null, link: null, closed: false, onClose: null };
+    var rx = new Uint8Array(0);
+
+    t.open = async function () {
+      var info = usbVendorInterface(device);
+      if (!info) throw new Error("this device has no vendor interface (the firmware is built without WebUSB, or runs HID only)");
+      if (!device.opened) await device.open();
+      if (!device.configuration || device.configuration.configurationValue !== info.configuration) await device.selectConfiguration(info.configuration);
+      await device.claimInterface(info.iface);
+      t.info = info;
+      return t;
+    };
+
+    t.send = async function (frame) {
+      if (!t.info || t.closed) throw new Error("USB link is closed");
+      var r = await device.transferOut(t.info.epOut, frame);
+      if (r.status !== "ok" || r.bytesWritten !== frame.length) {
+        if (r.status === "stall") { try { await device.clearHalt("out", t.info.epOut); } catch (e) { /* the next write reports it */ } }
+        throw new Error("USB write failed (" + r.status + ")");
+      }
+    };
+
+    function frames(chunk) {
+      var cat = new Uint8Array(rx.length + chunk.length);
+      cat.set(rx); cat.set(chunk, rx.length);
+      var off = 0;
+      while (cat.length - off >= FRAME_SIZE) {
+        if (t.link) t.link.feed(cat.slice(off, off + FRAME_SIZE));
+        off += FRAME_SIZE;
+      }
+      rx = cat.slice(off);
+    }
+
+    async function pump() {
+      while (!t.closed) {
+        var r;
+        try { r = await device.transferIn(t.info.epIn, FRAME_SIZE); }
+        catch (e) {
+          if (!t.closed) {
+            t.closed = true;
+            if (t.link && t.link.abort) t.link.abort(e);
+            if (t.onClose) t.onClose(e);
+          }
+          return;
+        }
+        if (t.closed) return;
+        if (r.status === "stall") {
+          try { await device.clearHalt("in", t.info.epIn); } catch (e) { /* the next read reports it */ }
+          continue;
+        }
+        if (r.status !== "ok" || !r.data || r.data.byteLength === 0) continue;      // babble or a ZLP
+        frames(new Uint8Array(r.data.buffer, r.data.byteOffset, r.data.byteLength));
+      }
+    }
+
+    t.attach = function (link) {
+      t.link = link;
+      if (t.info && !t.pumping) { t.pumping = true; pump(); }
+    };
+
+    t.close = async function () {
+      t.closed = true;
+      if (t.info) { try { await device.releaseInterface(t.info.iface); } catch (e) { /* unplugged */ } }
+      try { await device.close(); } catch (e) { /* unplugged */ }
+    };
+    return t;
+  }
+
   return {
+    hidTransport: hidTransport, webusbTransport: webusbTransport, usbVendorInterface: usbVendorInterface,
     FRAME_SIZE: FRAME_SIZE, CMD: CMD, DFU_MAGIC: DFU_MAGIC, FACTORY_WIPE_MAGIC: FACTORY_WIPE_MAGIC, STATUS: STATUS, BUTTONS: BUTTONS, ACTIONS: ACTIONS, PAGES: PAGES, MENUS: MENUS, pageName: pageName,
     SHORT_PRESS_MS: SHORT_PRESS_MS, LONG_PRESS_MS: LONG_PRESS_MS,
     FrameError: FrameError, RemoteError: RemoteError, RemoteTimeout: RemoteTimeout, BootloaderDetected: BootloaderDetected,
@@ -2726,11 +2843,42 @@ if (typeof module !== "undefined" && module.exports) module.exports = K2Proto;
     try { if (!dev.opened) await dev.open(); }
     catch (e) { setStatus("open failed", "bad"); banner("Cannot open the device: " + e.message + ". On Linux the hidraw node needs permission (udev rule with MODE=\"0666\" for VID 0716), and close other programs using it (k2_remote.py, k2_flasher.py)."); return; }
     var gen = ++S.gen;
-    S.dev = dev;
-    var link = new P.Link({ send: function (f) { return dev.sendReport(0, f); } }, { timeoutMs: 1500 });
-    attachLink(link, gen);
-    dev.oninputreport = function (ev) { link.feed(new Uint8Array(ev.data.buffer, ev.data.byteOffset, ev.data.byteLength)); };
+    var t = P.hidTransport(dev);
+    S.dev = t;
+    attachLink(new P.Link(t, { timeoutMs: 1500 }), gen);   // the Link hooks the transport's input reports itself
     await handshake(gen);
+  }
+
+  // WebUSB: the K2's vendor interface (bulk IN/OUT), same frames. The only way on Android; replaces HID on a
+  // firmware whose USB link mode has no HID function.
+  async function openUsb(dev) {
+    stopSession(); resetView();
+    banner("");
+    var t = P.webusbTransport(dev);
+    try { await t.open(); }
+    catch (e) {
+      try { await t.close(); } catch (e2) { /* never opened */ }
+      setStatus("open failed", "bad");
+      banner("Cannot open the device over WebUSB: " + e.message + ". On Linux the USB node needs permission (udev rule: SUBSYSTEM==\"usb\", ATTR{idVendor}==\"0716\", ATTR{idProduct}==\"5060\", TAG+=\"uaccess\"); close other programs using it (k2_remote.py, k2_flasher.py); on Android use a USB-C OTG adapter or cable.");
+      return;
+    }
+    var gen = ++S.gen;
+    S.dev = t;
+    t.onClose = function () { if (S.gen === gen) { stopSession(); setStatus("unplugged", "bad"); logAppend("[web] USB link closed", true); } };
+    attachLink(new P.Link(t, { timeoutMs: 1500 }), gen);
+    await handshake(gen);
+  }
+
+  function isK2Usb(d) { return d.vendorId === VID && d.productId === PID && !!P.usbVendorInterface(d); }
+
+  async function connectUsb() {
+    if (S.dev) { stopSession(); setStatus("not connected", ""); return; }
+    if (!("usb" in navigator)) { banner("WebUSB is not available. Use Chrome or Edge (desktop or Android), and open this page from http://localhost or https (a secure context)."); return; }
+    try {
+      var d = await navigator.usb.requestDevice({ filters: [{ vendorId: VID, productId: PID }] });
+      if (!P.usbVendorInterface(d)) { banner("This K2 has no WebUSB interface. Use a firmware built with WebUSB, or Connect (WebHID)."); return; }
+      await openUsb(d);
+    } catch (e) { if (e.name !== "NotFoundError") banner("Connect failed: " + e.message); }
   }
 
   function attachLink(link, gen) {
@@ -2775,15 +2923,15 @@ if (typeof module !== "undefined" && module.exports) module.exports = K2Proto;
   $("connect").onclick = async function () {
     if (S.dev) { stopSession(); setStatus("not connected", ""); return; }
     if (S.net) { await openNet(); return; }
-    if (!("hid" in navigator)) {
-      banner("WebHID is not available. Use Chrome, Edge or another Chromium browser, and open this page from http://localhost or https (a secure context).");
-      return;
-    }
+    if (!("hid" in navigator)) { await connectUsb(); return; }      // Android Chrome: no WebHID, WebUSB instead
     try {
       var devs = await navigator.hid.requestDevice({ filters: [{ vendorId: VID, productId: PID }] });
       if (devs.length) await open(devs[0]);
+      else if ("usb" in navigator) banner("No HID interface found. A WebUSB-only firmware needs \"Connect via WebUSB\".");
     } catch (e) { banner("Connect failed: " + e.message); }
   };
+  $("connect-usb").onclick = connectUsb;
+  if ("usb" in navigator && "hid" in navigator) $("connect-usb").hidden = false;
 
   // Opened from the K2's own web server (http://192.168.7.1/): talk HTTP, WebHID stays available elsewhere.
   S.net = false;
@@ -2793,17 +2941,31 @@ if (typeof module !== "undefined" && module.exports) module.exports = K2Proto;
     }).catch(function () {});
   }
 
+  // A device paired before (WebHID or WebUSB) reconnects by itself; WebHID is tried first, then WebUSB.
+  function autoUsb() {
+    if (!("usb" in navigator)) return;
+    navigator.usb.addEventListener("disconnect", function (ev) {
+      if (S.dev && ev.device === S.dev.device) { stopSession(); setStatus("unplugged", "bad"); logAppend("[web] device disconnected", true); }
+    });
+    navigator.usb.addEventListener("connect", function (ev) { if (!S.dev && isK2Usb(ev.device)) openUsb(ev.device); });
+    navigator.usb.getDevices().then(function (devs) {
+      var d = devs.filter(isK2Usb)[0];
+      if (d && !S.dev) openUsb(d);
+    });
+  }
   if ("hid" in navigator) {
     navigator.hid.addEventListener("disconnect", function (ev) {
-      if (S.dev && ev.device === S.dev) { stopSession(); setStatus("unplugged", "bad"); logAppend("[web] device disconnected", true); }
+      if (S.dev && ev.device === S.dev.device) { stopSession(); setStatus("unplugged", "bad"); logAppend("[web] device disconnected", true); }
     });
     navigator.hid.addEventListener("connect", function (ev) { if (!S.dev && ev.device.vendorId === VID && ev.device.productId === PID) open(ev.device); });
     navigator.hid.getDevices().then(function (devs) {
       var d = devs.filter(function (x) { return x.vendorId === VID && x.productId === PID; })[0];
-      if (d) open(d);
+      if (d) open(d); else autoUsb();
     });
+  } else if ("usb" in navigator) {
+    autoUsb();
   } else {
-    banner("WebHID is not available. Use Chrome, Edge or another Chromium browser, and open this page from http://localhost or https (a secure context).");
+    banner("Neither WebHID nor WebUSB is available. Use Chrome or Edge (desktop or Android), and open this page from http://localhost or https (a secure context).");
   }
   showStats(); drawChart(); drawRipple();
 })();

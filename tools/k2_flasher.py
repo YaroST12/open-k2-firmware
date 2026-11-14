@@ -32,6 +32,7 @@ import zipfile
 
 import k2_lock
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import k2_usb  # noqa: E402  the vendor (WebUSB) pipe of the app (pyusb); the bootloader stays HID
 import logdb  # noqa: E402  K2LOG msg#id lines -> text (tools/logdb.py)
 import fw_version  # noqa: E402  the version string and its major.minor nibbles (tools/fw_version.py)
 
@@ -909,6 +910,15 @@ def app_running_message(devs, command, auto_dfu):
             "(use `flash --auto-dfu`, or `python3 tools/k2_remote.py dfu --confirm`)")
 
 
+def enumerate_all():
+    """Every K2 USB function by its strings: the HID ones (app and bootloader) plus the app's vendor (WebUSB)
+    interface when pyusb sees one. Descriptor reads only, no traffic."""
+    devs = list(LinuxHidTransport.enumerate_k2())
+    if k2_usb.preference() != "hid":
+        devs += k2_usb.find_vendor_devices()
+    return devs
+
+
 class RealDfuEnv:
     """ensure_dfu environment on real hardware. The USB strings classify the device; only an app
     (or an unclassifiable device) is pinged. Any transport error counts as an answer, never as a
@@ -917,13 +927,14 @@ class RealDfuEnv:
     def __init__(self, path=None, ping_timeout_s=0.6, reset="sys",
                  enumerate_fn=None, ping_fn=None, request_fn=None):
         self.path, self.ping_timeout_s, self.reset = path, ping_timeout_s, reset
-        self.enumerate_fn = enumerate_fn or LinuxHidTransport.enumerate_k2
+        self.enumerate_fn = enumerate_fn or enumerate_all
         self.ping_fn = ping_fn or self._ping
         self.request_fn = request_fn or self._request
 
     def _call(self, cmd, payload=b"", timeout_s=None):
         import k2_remote  # lazy: k2_remote imports this module
-        transport = LinuxHidTransport(self.path)
+        # the app is reached over the vendor (WebUSB) pipe when it has one, else HID; the bootloader is HID only
+        transport = k2_remote.open_transport(self.path)
         try:
             link = k2_remote.RemoteLink(transport, self.ping_timeout_s)
             if timeout_s:
@@ -1237,7 +1248,7 @@ def run(args, log):
 
     if args.command in ("probe", "backup", "flash") and not (args.command == "flash" and args.auto_dfu):
         try:
-            msg = app_running_message(LinuxHidTransport.enumerate_k2(), args.command, False)
+            msg = app_running_message(enumerate_all(), args.command, False)
         except Exception:
             msg = None
         if msg:

@@ -127,12 +127,22 @@ bool log_enabled();
 void set_hid_quiet(bool on);
 bool hid_quiet();
 
-// Queue one 64-byte non-log report (a remote-control response) on the HID IN endpoint, in
-// order with the log lines. Never gated by log_enable().
+// Which pipe carries remote-protocol frames: the HID report endpoints, or the WebUSB vendor bulk pair (K2_WEBUSB builds,
+// k2/drivers/usb_webusb.hpp). Requests come in on one of them and the answers, the streams that follow (screenshot strips,
+// trace pushes) and the unsolicited frames all go back the same way: the route is sticky and set per request by the remote
+// module (set_reply_route). Log text is HID-only: it is never sent on the vendor pipe, and not queued at all when the
+// current route is Vendor or the build has no HID function (WebUSB modes without HID).
+enum class Route : std::uint8_t { Hid, Vendor };
+void set_reply_route(Route r);
+Route reply_route();
+
+// Queue one 64-byte non-log report (a remote-control response) on the current route: on HID in order with the log
+// lines, on the vendor pipe straight into its transmit FIFO (a frame that does not fit is dropped, like a full HID queue
+// overwrites). Never gated by log_enable().
 void send_report(const std::uint8_t* report);
 
-// Free slots in the IN queue. send_report() overwrites the oldest entry when it is full, so a
-// burst sender (screenshot) waits for room with poll() first.
+// Free frame slots on the current route. HID: send_report() overwrites the oldest entry when the queue is full; vendor:
+// it drops the new frame. Either way a burst sender (screenshot) waits for room with poll() first.
 std::uint8_t tx_free();
 
 // CDC-ACM bulk IN as a fast byte pipe for the screenshot stream (HID moves one 64-byte report per 1.5-2 ms, bulk moves
@@ -146,9 +156,14 @@ void cdc_flush();
 void set_cdc_hold(bool on);
 bool cdc_hold();
 
-// Implemented by src/core/remote.cpp: receives each 64-byte HID OUT report (EP1 OUT / SET_REPORT).
-// Must only queue the data; it runs from tud_task() inside poll(), never from the ISR.
-void on_remote_report(const std::uint8_t* buffer, std::uint16_t length);
+// Implemented by src/core/remote.cpp: receives each 64-byte request frame, from the HID OUT report (EP1 OUT / SET_REPORT)
+// or, assembled from the bulk OUT byte stream, from the vendor pipe. Must only queue the data; it runs from tud_task()
+// inside poll(), never from the ISR.
+void on_remote_report(const std::uint8_t* buffer, std::uint16_t length, Route route = Route::Hid);
+
+// Implemented by src/core/remote.cpp: free request slots (the vendor pipe reads its FIFO only as fast as the queue
+// drains, so a busy device pushes back on the host instead of dropping requests).
+std::uint8_t remote_free();
 
 // Send queued lines while the HID IN endpoint is ready (also done by poll() and log()).
 void flush();

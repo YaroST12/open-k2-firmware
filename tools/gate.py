@@ -23,6 +23,7 @@
             (`gate.py --perf-baseline`) re-takes the baseline (5 runs); see tools/perf_gate.py, docs/MATH_SELFTEST.md
   6b net    the K2_NET=1 variant (off by default) in build-net/: -Werror build, layout invariants, stack budget, map;
             only with K2_WEB=1 (env or `make K2_WEB=1 gate`), which also puts the web tests back into step 5
+  6c webusb the K2_WEBUSB=1 variant (off by default) in build-webusb/: the same checks; also only with K2_WEB=1
 
   7 static  (opt-in, --static) tools/static_check.sh all: clang-tidy, ARM g++ -fanalyzer and cppcheck, counts printed
             (report only, never a failure)
@@ -432,6 +433,19 @@ def step_net_variant():
     print(f"  K2_NET=1 variant ({NET_BUILD}/open_k2.elf): " + parse_size_line(docker_tool("arm-none-eabi-size", f"{NET_BUILD}/open_k2.elf")))
 
 
+WEBUSB_BUILD = "build-webusb"  # the K2_WEBUSB=1 variant's own build directory
+
+
+def step_webusb_variant():
+    """The K2_WEBUSB=1 build (vendor interface, BOS/WebUSB descriptors) is off by default, so build it in its own
+    directory and hold it to the same -Werror, layout, stack and map checks. Size is reported, not compared."""
+    step_build(WEBUSB_BUILD, "K2_WEBUSB=1")
+    step_invariants(WEBUSB_BUILD)
+    step_stack(WEBUSB_BUILD)
+    step_map(WEBUSB_BUILD)
+    print(f"  K2_WEBUSB=1 variant ({WEBUSB_BUILD}/open_k2.elf): " + parse_size_line(docker_tool("arm-none-eabi-size", f"{WEBUSB_BUILD}/open_k2.elf")))
+
+
 def parse_size_line(text):
     s = parse_size(text)
     return f"text={s['text']} data={s['data']} bss={s['bss']}"
@@ -460,7 +474,8 @@ STEPS = [("build (-Werror, docker as host uid)", step_build), ("bootloader invar
          ("tests (C++, Python" + (", node)" if WEB else "; web off)"), step_tests),
          ("sanitizers: host tests under ASan/UBSan, g++ and clang (docker)", step_sanitize), ("size report", step_size),
          ("perf (device selftest vs tools/perf_baseline.json; skipped without a matching device)", step_perf)] + (
-         [("K2_NET=1 variant (-Werror, layout, stack, map)", step_net_variant)] if WEB else [])
+         [("K2_NET=1 variant (-Werror, layout, stack, map)", step_net_variant),
+          ("K2_WEBUSB=1 variant (-Werror, layout, stack, map)", step_webusb_variant)] if WEB else [])
 
 
 def main():

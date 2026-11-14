@@ -32,7 +32,7 @@ extern "C" {
 #define CFG_TUD_MSC               1
 #define CFG_TUD_HID               1
 #define CFG_TUD_MIDI              0
-#define CFG_TUD_VENDOR            0
+#define CFG_TUD_VENDOR            K2_WEBUSB   /* the WebUSB remote channel (k2/core/build_config.h) */
 #define CFG_TUD_ECM_RNDIS         0 /* NCM only: TinyUSB forbids enabling both network classes */
 #define CFG_TUD_NCM               K2_NET
 
@@ -41,6 +41,13 @@ extern "C" {
 #define CFG_TUD_CDC_EP_BUFSIZE    64
 #define CFG_TUD_CDC_RX_BUFSIZE    64
 #define CFG_TUD_CDC_TX_BUFSIZE    256
+
+/* WebUSB vendor interface (K2_WEBUSB=1): 64-byte bulk endpoints (k2/drivers/usb_pma.hpp), FIFO mode. The receive FIFO holds
+ * two remote frames, the transmit FIFO eight (the streamers pace themselves on usb::tx_free()). ~0.8 KB of RAM. */
+#define CFG_TUD_VENDOR_RX_EPSIZE  64
+#define CFG_TUD_VENDOR_TX_EPSIZE  64
+#define CFG_TUD_VENDOR_RX_BUFSIZE 128
+#define CFG_TUD_VENDOR_TX_BUFSIZE 512
 
 /* One 64-byte report in each direction, as the original logger did. */
 #define CFG_TUD_HID_EP_BUFSIZE    64

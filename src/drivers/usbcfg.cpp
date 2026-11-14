@@ -33,11 +33,24 @@ static void note_net_dropped(fs::Fs& f) {
 }
 #endif
 
+#if !K2_WEBUSB
+// Same for WebUSB (K2_WEBUSB=0): the stored record keeps the flag for a K2_WEBUSB=1 build.
+static void note_webusb_dropped(fs::Fs& f) {
+    std::array<std::uint8_t, 8> r{};
+    std::size_t n = 0;
+    if (f.read_file(kPath, r, n) != fs::Err::Ok || n != r.size() || !requests_webusb(r)) return;
+    K2LOG("[USBCFG] webusb not built (K2_WEBUSB=0): stored %s runs as %s\n", describe(decode(r, kNetBuilt, true)), describe(decode(r, kNetBuilt, false)));
+}
+#endif
+
 void init() {
     fs::Fs& f = fs::instance();
     import_legacy(f);
 #if !K2_NET
     note_net_dropped(f);
+#endif
+#if !K2_WEBUSB
+    note_webusb_dropped(f);
 #endif
     current = with_shell(load(f));
 }

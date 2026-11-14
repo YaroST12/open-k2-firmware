@@ -18,6 +18,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import k2_flasher  # noqa: E402
 import k2_lock  # noqa: E402
+import k2_usb  # noqa: E402
 import charger_summary  # noqa: E402
 import step_label  # noqa: E402
 import report_card  # noqa: E402
@@ -368,6 +369,15 @@ def parse_response(raw):
     if n > FRAME_SIZE - RSP_HEADER:
         raise FrameError(f"payload length {n} exceeds frame")
     return Response(raw[2], raw[3], raw[4], bytes(raw[RSP_HEADER:RSP_HEADER + n]))
+
+
+def open_transport(path=None, wait_sec=0.0):
+    """The K2's remote channel: the vendor (WebUSB) bulk pipe when the device exposes it, HID otherwise.
+    K2_TRANSPORT=hid|usb forces one (A/B comparison); a hidraw `path` always means HID, a `usb:<bus>:<addr>`
+    path always the vendor pipe. Both take the device lock and give it back in close()."""
+    if k2_usb.vendor_wanted(path):
+        return k2_usb.UsbVendorTransport(path, wait_sec)
+    return LinuxHidTransport(path, wait_sec)
 
 
 class RemoteLink:
@@ -5081,7 +5091,7 @@ def main(argv=None):
 
 def _main(a):
     try:
-        transport = LinuxHidTransport(a.path)
+        transport = open_transport(a.path)
     except Exception as e:
         print(f"cannot open K2: {e}", file=sys.stderr)
         return 2

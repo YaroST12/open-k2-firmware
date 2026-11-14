@@ -19,6 +19,7 @@ inline constexpr unsigned kEp0 = 2 * 64;       // control IN + OUT buffers
 
 inline constexpr std::uint8_t kHidEpSize = 64;     // EP1 IN + OUT interrupt
 inline constexpr std::uint8_t kMscEpSize = 64;     // EP2 IN + OUT bulk (drive)
+inline constexpr std::uint8_t kVendorEpSize = 64;  // EP3 IN + OUT bulk (WebUSB vendor interface, shares EP3 with the Net data; never both)
 inline constexpr std::uint8_t kNetNotifSize = 16;  // NCM speed-change / connect notification (8 + 8)
 inline constexpr std::uint8_t kNetEpSize = 64;     // EP3 IN + OUT bulk (NCM data)
 inline constexpr std::uint8_t kShellNotifSize = 8;  // CDC-ACM notification EP4 IN (never used, must exist)
@@ -29,12 +30,13 @@ constexpr unsigned buffer(unsigned size) { return size > 62 ? (size + 31) / 32 *
 
 constexpr unsigned kHid = 2 * buffer(kHidEpSize);
 constexpr unsigned kMsc = 2 * buffer(kMscEpSize);
+constexpr unsigned kVendor = 2 * buffer(kVendorEpSize);
 constexpr unsigned kNet = buffer(kNetNotifSize) + 2 * buffer(kNetEpSize);
 constexpr unsigned kShell = buffer(kShellNotifSize) + 2 * buffer(kShellEpSize);
 
 constexpr unsigned budget(usbcfg::Setting s) {
     if (!usbcfg::any(s)) return 0;
-    return kBtable + kEp0 + (s.hid ? kHid : 0) + (s.drive ? kMsc : 0) + (s.net ? kNet : 0) + (s.shell && usbcfg::shell_wanted(s) ? kShell : 0);
+    return kBtable + kEp0 + (s.hid ? kHid : 0) + (s.drive ? kMsc : 0) + (s.net ? kNet : 0) + (s.webusb ? kVendor : 0) + (s.shell && usbcfg::shell_wanted(s) ? kShell : 0);
 }
 
 static_assert(budget({true, false}) == 320, "HID only");
@@ -44,6 +46,13 @@ static_assert(budget({true, true}) == 448 && budget({true, true}) <= kTotal, "HI
 static_assert(budget({true, false, true}) == 464 && budget({true, false, true}) <= kTotal, "HID + Net");
 static_assert(budget({true, false, false, true}) == 360, "HID + Shell");
 static_assert(budget({true, true, false, true}) == 488 && budget({true, true, false, true}) <= kTotal, "HID + Drive + Shell");
+// WebUSB takes HID's place as the remote channel (one 64 B bulk pair, same size as the HID pair), with or without HID.
+static_assert(budget({false, false, false, false, true}) == 320, "WebUSB only");
+static_assert(budget({false, false, false, true, true}) == 360, "WebUSB + Shell");
+static_assert(budget({false, true, false, false, true}) == 448, "WebUSB + Drive");
+static_assert(budget({false, true, false, true, true}) == 488 && budget({false, true, false, true, true}) <= kTotal, "WebUSB + Drive + Shell");
+static_assert(budget({true, false, false, true, true}) == 488, "HID + WebUSB + Shell (the fallback beside WebUSB)");
+static_assert(budget({true, true, false, false, true}) > kTotal, "HID + WebUSB + Drive is rejected by normalize()");
 // Drive and Net together would not fit: usbcfg::normalize() never lets that mode through.
 static_assert(kBtable + kEp0 + kHid + kMsc + kNet > kTotal, "Net + Drive is rejected by normalize()");
 
