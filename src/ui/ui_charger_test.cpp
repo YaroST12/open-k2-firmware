@@ -1476,6 +1476,10 @@ ChargerTestSession::View ChargerTestSession::view() {
     v.delta_n = static_cast<uint8_t>(delta_n_ > 255 ? 255 : delta_n_);
     v.delta_runs = delta_runs_;
     v.preview = summary_;
+    if (!(stage_ <= Stage::Review || stage_ == Stage::Custom)) {   // past Review the summary is the one START took: no refusal now
+        v.preview.refusal = ct::Reason::None;
+        v.preview.refusal_mv = 0;
+    }
     v.pps_points = sweep_points();
     v.avs_points = avs_sweep_points();
     v.armed_is_pick = ctx_.cables.armed() && ctx_.cables.armed_choice() == ctx_.cables.selected();

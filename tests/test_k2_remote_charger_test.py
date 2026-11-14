@@ -780,6 +780,13 @@ class ChargerTestViewTest(unittest.TestCase):
         self.assertIn("Press again to start", kr._render("charger-test", r))
         self.assertIn("review", kr._render("charger-test", r))
 
+    def test_a_view_without_a_refusal_says_none(self):
+        # past Review the firmware sends refusal 0 (none): the text must not read "START refused: none"
+        b = bytearray(VIEW); b[20] = 0; b[21] = b[22] = 0
+        self.assertNotIn("START refused", kr._render("charger-test", kr.decode_charger_test_view(bytes(b))))
+        b[20] = kr.TEST_REASONS.index("confirm no load")
+        self.assertIn("START refused: confirm no load", kr._render("charger-test", kr.decode_charger_test_view(bytes(b))))
+
     def test_old_firmware_says_so(self):
         # firmware without the view form answers BadArg: the host reports it instead of a bare status
         for status in (kr.STATUS_BAD_ARG, kr.STATUS_BAD_LENGTH):

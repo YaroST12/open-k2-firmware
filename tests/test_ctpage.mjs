@@ -77,7 +77,8 @@ test("progress re-reads only the rows that can still change", { skip }, async ()
 
 test("a finished run: one summary, the grid stays, the results card keeps the evidence table", { skip }, async () => {
   await page.eval("__fake.end('done')");
-  await page.until(`${$("ctr-summary")}.textContent.indexOf("complete") >= 0`, 12000, "the done summary");
+  await page.until(`${$("ctr-headline")}.textContent.indexOf("complete") >= 0 && ${$("ctr-summary")}.textContent.indexOf("pass") >= 0`,
+                   12000, "the done headline and summary");
   const d = await page.eval(`(function () {
     var cells = ${$("ctr-grid")}.querySelectorAll(".k-vc");
     return { dots: ${$("ctr-grid")}.querySelectorAll(".k-dot").length, pass: ${$("ctr-grid")}.querySelectorAll(".k-pass").length,
@@ -90,6 +91,7 @@ test("a finished run: one summary, the grid stays, the results card keeps the ev
   assert.ok(d.shown);
   assert.match(d.details, /Every step with its evidence \(21\)/);
   assert.match(d.summary, /pass/);
+  assert.doesNotMatch(d.summary, /Run #|complete/, "the summary does not repeat the headline");
 });
 
 test("Cancel stops the run through the K2 and the page lands on a stopped result", { skip }, async () => {
@@ -101,7 +103,8 @@ test("Cancel stops the run through the K2 and the page lands on a stopped result
   await page.eval("__fake.advance(3)");
   await page.eval(`${$("ctr-cancel")}.click()`);
   await page.until("__fake.cancels === 1", 4000, "cancel reached the K2");
-  await page.until(`${$("ctr-summary")}.textContent.indexOf("stopped") >= 0`, 12000, "the stopped summary");
+  await page.until(`${$("ctr-headline")}.textContent.indexOf("stopped") >= 0 && ${$("ctr-summary")}.textContent.indexOf("pass") >= 0`,
+                   12000, "the stopped headline and summary");
   const s = await page.eval(`(function () {
     return { dots: ${$("ctr-grid")}.querySelectorAll(".k-dot").length, stopped: ${$("ctr-grid")}.querySelectorAll(".k-stopped, .k-none").length,
              pass: ${$("ctr-grid")}.querySelectorAll(".k-pass").length };

@@ -4495,8 +4495,9 @@ def _render(name, r):
                          (", retry" if w["retry"] else "") + (", Rd off" if w["paused"] else ""))
         if r["run_elapsed_s"]:
             lines.append(f"  running {r['run_elapsed_s']} s")
-        lines.append(f"  preview: {pv['runnable']} run, {pv['skipped']} skip; START refused: {pv['refusal']}" +
-                     (f" at {pv['refusal_mv']} mV" if pv["refusal_mv"] else ""))
+        lines.append(f"  preview: {pv['runnable']} run, {pv['skipped']} skip" +
+                     (f"; START refused: {pv['refusal']}" + (f" at {pv['refusal_mv']} mV" if pv["refusal_mv"] else "")
+                      if pv["refusal"] != "none" else ""))
         lines.append(f"  guard {r['guard']['topology']}; self-supplied {'yes' if r['self_supplied'] else 'no'}; "
                      f"sweeps pps {r['sweep_points']['pps']} avs {r['sweep_points']['avs']}")
         return "\n".join(lines)

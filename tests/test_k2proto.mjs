@@ -228,6 +228,21 @@ test("charger-test stage table matches the firmware enum and k2_remote.py", () =
   assert.deepEqual(P.TEST_STAGES, firmware);
   assert.deepEqual(remote, firmware);
 });
+// The run state words: the firmware's name(State) (src/chargertest/charger_test.cpp) is the device's meaning; State::Attach
+// is the K2 re-attaching on its own ("Initializing..."), not a request to the user. The card table is those names, the
+// status table their lower-case form, in k2_remote.py and here alike.
+test("charger-test state words match the firmware names and k2_remote.py", () => {
+  const cpp = readFileSync(path.join(here, "../src/chargertest/charger_test.cpp"), "utf8")
+    .match(/names\[\] = \{("Setup"[^}]*)\}/);
+  assert.ok(cpp, "name(State) not found in src/chargertest/charger_test.cpp");
+  const firmware = Array.from(cpp[1].matchAll(/"([^"]+)"/g), (m) => m[1]);
+  const py = readFileSync(path.join(here, "../tools/k2_remote.py"), "utf8").match(/^TEST_STATES = \[([^\]]*)\]/m);
+  assert.ok(py, "TEST_STATES not found in tools/k2_remote.py");
+  const remote = Array.from(py[1].matchAll(/"([^"]+)"/g), (m) => m[1]);
+  assert.deepEqual(P.TEST_STATES, remote);
+  assert.equal(P.TEST_STATES[9], firmware[9].toLowerCase());
+  assert.deepEqual(P.CARD_STATES, firmware.slice(0, P.CARD_STATES.length));
+});
 test("charger-test every firmware stage decodes", () => {
   P.TEST_STAGES.forEach((name, stage) => {
     const meta = new Uint8Array(TEST_HEADER2);

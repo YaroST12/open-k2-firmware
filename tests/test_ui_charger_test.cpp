@@ -4183,6 +4183,8 @@ static void test_view_carries_the_wait_and_the_run() {
         CHECK_EQ(v.wait_elapsed_ms >= 900 && v.wait_elapsed_ms <= 1100, true);
         CHECK_EQ(v.wait_retry, false); CHECK_EQ(v.wait_paused, false); CHECK_EQ(v.confirming, false);
         CHECK_EQ(v.message_len > 0, true);
+        // START was taken: the Review preview's "no source" (VBUS was 0 at Review) is no refusal any more
+        CHECK_EQ(v.preview.refusal, ct::Reason::None); CHECK_EQ(v.preview.refusal_mv, 0);
     }
     { // Running: the m:ss clock in whole seconds, the footer's unit line; Results: the saved card's number
         fixture(); g_stub.fc_answers = false; Ui ui; open(ui); only_vivo_review(ui);
@@ -4192,6 +4194,7 @@ static void test_view_carries_the_wait_and_the_run() {
         auto v = ui.charger_test_view();
         CHECK_EQ(v.stage, kRunningStage); CHECK_EQ(v.run_elapsed_s >= 1 && v.run_elapsed_s <= 3, true);
         CHECK_EQ(v.rows > 0, true); CHECK_EQ(v.message_len > 0, true);
+        CHECK_EQ(v.preview.refusal, ct::Reason::None);   // no START refusal while a run is going
         for (; t <= 600000 && ui.charger_test_busy(); t += 100) ui.tick(t);
         ui.tick(t); ui.tick(t + 200);
         v = ui.charger_test_view();

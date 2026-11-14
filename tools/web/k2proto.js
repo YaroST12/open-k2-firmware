@@ -81,7 +81,7 @@ var K2Proto = (function () {
   var TEST_ALGORITHM_GROUPS = [0, 0, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 0, 0, 0, 0, 1, 2];
   var TEST_STAGES = ["algorithms", "group", "cable", "identity", "review", "running", "results", "steps", "detail",
                      "resume", "changes", "ask", "refuse", "waiting", "custom"];
-  var TEST_STATES = ["idle", "baseline", "requesting", "holding", "releasing", "done", "stopped", "unsafe", "detach charger", "attach charger",
+  var TEST_STATES = ["idle", "baseline", "requesting", "holding", "releasing", "done", "stopped", "unsafe", "detach charger", "initializing...",
                      "svooc ceiling"];
   // charger_test::Unit in enum order (the wire value is the index), the device's labels, and kDefaultUnits: the order a run takes
   // when no unit list is set (include/k2/chargertest/charger_test.hpp, src/chargertest/charger_test.cpp).
@@ -904,7 +904,7 @@ var K2Proto = (function () {
   // Charger report cards (command 0x62), read-only here; rename and delete live in k2_remote.py cards. A card's
   // payload grew with the formats (162 bytes in v4, 214 in v9, 250 in v10) and is read as 48 byte chunks
   // (include/k2/chargertest/report_card.hpp; tools/report_card.py and docs/site/r/card.js decode all of it).
-  var CARD_STATES = ["Setup", "Verify 5V", "Negotiating", "Hold", "Return to 5V", "Complete", "Stopped", "UNSAFE: unplug source", "Detach charger", "Attach charger"];
+  var CARD_STATES = ["Setup", "Verify 5V", "Negotiating", "Hold", "Return to 5V", "Complete", "Stopped", "UNSAFE: unplug source", "Detach charger", "Initializing..."];
   var CARD_ERRS = ["ok", "invalid", "not found", "flash error", "full", "a charger test is running"];
   var CARD_CHUNKS = 6;   // v10: 250 bytes / 48 = 5.2 -> 6 chunks (the summary below only reads the header, older firmwares send fewer)
   function cardsOk(p, what) {
@@ -1729,7 +1729,7 @@ var K2Proto = (function () {
     isBootloaderFrame: isBootloaderFrame, classify: classify, logText: logText,
     directionOf: directionOf, decodePing: decodePing, decodeState: decodeState, decodeSession: decodeSession, decodeDiag: decodeDiag, decodeKeys: decodeKeys, decodePdo: decodePdo,
     decodeChargerTest: decodeChargerTest, decodeChargerTestView: decodeChargerTestView, TEST_ALGORITHMS: TEST_ALGORITHMS, TEST_REASONS: TEST_REASONS, TEST_STAGES: TEST_STAGES,
-    TEST_STATES: TEST_STATES, TEST_UNITS: TEST_UNITS, TEST_UNIT_LABELS: TEST_UNIT_LABELS, TEST_DEFAULT_UNITS: TEST_DEFAULT_UNITS,
+    TEST_STATES: TEST_STATES, CARD_STATES: CARD_STATES, TEST_UNITS: TEST_UNITS, TEST_UNIT_LABELS: TEST_UNIT_LABELS, TEST_DEFAULT_UNITS: TEST_DEFAULT_UNITS,
     CT_START_REQ: CT_START_REQ, CT_CANCEL_REQ: CT_CANCEL_REQ, CT_START_CONFIRM: CT_START_CONFIRM, CT_START_ALL_TESTS: CT_START_ALL_TESTS,
     CT_STOPPED: CT_STOPPED, CT_CABLE_KINDS: CT_CABLE_KINDS, CT_BUILTINS: CT_BUILTINS, CT_GUARD_REFUSAL: CT_GUARD_REFUSAL,
     CT_START_FOLLOW_MS: CT_START_FOLLOW_MS, CT_START_POLL_MS: CT_START_POLL_MS,
