@@ -179,3 +179,89 @@ the record with `k2_remote` afterwards. Flash the committed build first.
 6. **QR**: scan the share view with a phone, decode with `tools/k2_qr.py`, compare with `k2_remote.py loop-probe`.
 7. **Reboot in CC**: only if the coordinator decides to provoke it (a charger that drops VBUS on the Rd change): after the
    comeback the CC row reads `rebooted` and the log carries `[LPRB] boot: closed the run interrupted in CC`.
+
+## Host report (prototype, `K2_HOST_REPORT=1` builds only)
+
+The same loop, with a USB-C host port (a phone, a PC) in place of the charger: the K2 asks the host's PD port what it is
+and records how the host enumerates the K2's HID device. Off in the default build (flash); `make K2_HOST_REPORT=1`.
+
+```
+ host USB-C port ──cable A──> [K2 PD-bus input]  meter  [K2 PD-bus output] ──loop cable──> [K2 left HID port]
+```
+
+The HID port has a fixed Rd and no PD controller (only D+/D- reach the MCU, `pins.hpp`), so the host sees one sink,
+becomes source + DFP, powers the K2 and enumerates its HID device. The K2's FUSB302 on the measured CC line is the only PD
+speaker: the general rule "an inline K2 never transmits" stays, and this session is its one exception, on proof that the
+far sink is the K2's own HID port (the start refusal below).
+
+Code:
+- pure, host-tested: `include/k2/loopprobe/host_report.hpp` / `src/loopprobe/host_report.cpp` (sequencer, refusal,
+  record, journal, the page's rows), `tests/test_host_report.cpp`; `include/k2/loopprobe/usb_fp.hpp` /
+  `src/loopprobe/usb_fp.cpp` (enumeration recorder and host classifier), `tests/test_usb_fp.cpp`
+- the K2 binding: `src/loopprobe/host_report_hw.cpp`; the driver hooks: `fusb302::LoopHost` / `loop_host_*`,
+  `usb::set_tap` (a SETUP peek from the packet memory in the USB interrupt)
+- the reader: `tools/host_report_rec.py`, `k2_remote.py loop-probe --host` (command 0x57, selector 1),
+  `tests/test_host_report_rec.py` (shares `tests/fixtures/host_report.hex` with the C++ test)
+
+### Flow
+
+1. HID on (Tools > USB link), the loop as above, the host powering the K2. Tools > Loop probe, MINUS: the Host view
+   (rows Host, PD, Ident, DR swap, USB). PLUS twice arms it: the start refusal runs now (USB link on, a host enumerated
+   the HID device or sends SOFs, VBUS 4.0-5.5 V, |IBUS| at most 400 mA, no other sink's Request, no Rd of the K2's own,
+   no PD tool busy, no contract), and the journal `/lp/host.rec` is saved as Armed.
+2. Replug the host end of the loop. A host that went unanswered stops sending caps after its retry count, and a sink
+   cannot restart PD without a Hard Reset, so the session starts on the next boot instead: the K2 reboots on the host's
+   VBUS, reads the journal, records the enumeration from the first request, waits up to 6 s for the transient refusals
+   (no host yet, no CC attach, no VBUS) and takes the line.
+3. The line, while the session owns it: sole sink (the HID port's Rd is not a sink behind the K2; another sink's Request
+   still ends the run), no Rd of the K2's own (5.1k beside the HID port's 5.1k reads as 2.55k), Auto-CRC on, PDO 1 at
+   5 V asked on every acked caps message, never a Hard Reset from the K2 (sink never_hard_reset; the Env has no Hard
+   Reset; the loop guard's 5 V lock stays in force).
+4. After the contract settles (200 ms), one question at a time on an idle line: Discover Identity as UFP (PD 3.x),
+   Get_Source_Cap_Extended, Get_Revision, Get_Manufacturer_Info (chunked), Get_Status; then, only when no identity came
+   as UFP, DR_Swap (journal saved first, after the host's enumeration has gone quiet), Discover Identity / SVIDs / Modes as
+   DFP, and DR_Swap back. Answers, Not_Supported, Reject, NAK, BUSY / Wait (retried with backoff, 3 tries), timeouts
+   (60 ms) and missing GoodCRC are all recorded. Missing GoodCRC 3 times = one Soft_Reset (at most 2 per run), then the
+   question again on the new contract.
+5. A host Hard Reset puts the roles back (UFP); the question in flight is never asked again. A reboot inside the run
+   resumes it from the journal (the question that was due is marked interrupted); after 3 boots the run is closed.
+6. After the run the line stays owned until the host goes away: dropping Auto-CRC under a live contract makes a host
+   Hard Reset, which cuts VBUS and the K2 with it.
+
+The record keeps the host's Rp (BC_LVL), VBUS and the idle D+/D- at the start (passive: the BC1.2 hint only; active
+primary detection would disturb the live enumeration), all PDOs as advertised (PPS / EPR never requested; the EPR list
+is not asked), and up to 24 enumeration events (SETUP fields, bus reset, suspend, resume; SOF as a flag).
+
+### OS guess (UNVERIFIED)
+
+`usbfp::classify` maps the trace to Windows / macOS / Linux / Android / iOS / ChromeOS / charge-only / unknown. Every
+rule is a guess from commonly described enumeration habits, pinned by synthetic traces only; re-derive them from real
+captures before trusting a label: MS OS string (0xEE) or 64-byte first device read + second reset + qualifier = Windows;
+8-byte first read or short string reads first = Apple (configured: macOS, else iOS); 64-byte first read, no qualifier,
+255-byte string reads = Linux, plus strings re-read after configuration = Android, plus a suspend = ChromeOS; no
+requests and no SOF = charge-only.
+
+### Reading it
+
+- K2: Loop probe, MINUS. `python3 tools/k2_remote.py loop-probe --host` (`--json` for every field and the trace).
+- Log: `[LPHR] boot: start|resume|closed`, `[LPHR] start boot=.. resume=.. cc=.. rp=.. vbus=..`, `[LPHR] line owned ...`,
+  `[LPHR] host Hard Reset`, `[LPHR] saved state=.. end=..`, `[LPHR] done end=.. os=.. id=.. svids=.. hr=.. sr=..`,
+  `[LPHR] not started: <refusal>`.
+
+### Hardware test plan (for the coordinator; nothing here is hardware-proven)
+
+Hosts: OP15 and a Pixel (phones as USB hosts through a C-to-C cable into the K2's PD-bus input), 10 runs each, against
+the current Identify-alone path on the same phone. The device rules forbid driving CC with a phone attached unless the
+coordinator decides otherwise: this plan needs that decision first.
+
+1. Build `K2_HOST_REPORT=1`, commit, flash. HID on. Loop cable from the PD-bus output into the HID port.
+2. Per run: arm (Loop probe, MINUS, PLUS twice), replug the phone end, wait for `[LPHR] done`, read
+   `k2_remote.py loop-probe --host --json` into `runs/`, `k2_remote ping` uptime against the wall clock.
+3. Pass per run: no VBUS drop the K2 caused (uptime continuous after the session start; `hard_resets` 0 or the host's
+   own), contract at 5 V only, every question answered or refused with a reason, the DR_Swap back answered when a swap
+   was made, the phone still charging-or-host afterwards.
+4. Compare with Identify-alone on the same phone: identity VDOs equal, extra facts (revision, manufacturer info, status,
+   source caps extended, SVIDs / modes as DFP) listed, failures (Hard Reset, reboot) counted for both paths.
+5. Proof wanted from the hardware: the SETUP peek reads real requests (packet-memory layout), SOF and suspend flags,
+   GoodCRC with the DFP data role after a swap, the boot timing (caps still coming when the session takes the line),
+   and the journal resume after a pulled cable.
