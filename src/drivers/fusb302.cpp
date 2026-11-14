@@ -2158,7 +2158,10 @@ K2_HOT void active_tick() {
         // Get_Source_Cap or the prepare. Passive again only after release / detach (plus the linger).
         const pd::SinkStatus& ss0 = sink().status();
         const bool ready = ss0.state == pd::SinkState::Ready;
-        const bool in_flight = ss0.state != pd::SinkState::Idle && ss0.state != pd::SinkState::Failed && !ready;
+        // Our Soft_Reset leaves the sink Idle and not held at once; the wait for the caps it asks for is in flight too (PD Stress:
+        // without it the queued Soft_Reset was refused in the same tick and Rd went 300 ms later).
+        const bool in_flight = (ss0.state != pd::SinkState::Idle && ss0.state != pd::SinkState::Failed && !ready) ||
+                               sink().soft_reset_pending();
         pd::CrcDemand d{.sink_active = false,
                         .sink_held = ss0.held,
                         .ident = ident_running() || g_ident_wait || probe_running() || reread_running(),

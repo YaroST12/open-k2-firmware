@@ -1096,6 +1096,8 @@ K2_HOT void Sink::tick(std::uint32_t now) {
         m.header = make_header(kCtlGetSourceCap, 0, rev_);
         queue(m);
         get_cap_sent_ = true;
+        refresh_pending_ = true;   // the same answer window as a Refresh: soft_reset_pending() ends with it
+        refresh_deadline_ = now + kGetCapAnswerMs;
         return;
     }
     if (refresh_pending_ && due(refresh_deadline_)) {   // a silent source: the answer window of our Refresh is over

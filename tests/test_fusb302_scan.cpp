@@ -4295,6 +4295,8 @@ void test_inline_interrogation_asks_once_per_question_without_auto_crc();
 void test_inline_interrogation_spoof_answers_only_inside_the_charger_query_window();
 void test_inline_interrogation_never_answers_a_device_vconn_swap();
 void test_inline_interrogation_spoof_answers_the_devices_cable_query();
+void test_stress_soft_reset_goes_out_and_keeps_rd_when_the_source_answers();
+void test_stress_soft_reset_to_a_silent_source_asks_for_the_caps_with_rd_kept();
 // ---- Settings > Wake sleeping port (pattern slow-rp-wake, idle path): opt-in, default off ----
 // A sleeping source's port reads ~3.3 V open on one line (CC2 here), nothing on the other, VBUS dark. With the setting off the
 // idle K2 stays exactly what the invariants say (I1/H2: no Rd at idle, a waiting charger stays passive); only with it on does it
@@ -5420,6 +5422,8 @@ int main() {
     test_inline_interrogation_spoof_answers_only_inside_the_charger_query_window();   // the same, with the spoof armed
     test_inline_interrogation_never_answers_a_device_vconn_swap();
     test_inline_interrogation_spoof_answers_the_devices_cable_query();
+    test_stress_soft_reset_goes_out_and_keeps_rd_when_the_source_answers();   // each ends with a detach
+    test_stress_soft_reset_to_a_silent_source_asks_for_the_caps_with_rd_kept();
     return test_report("test_fusb302_scan");
 }
 
@@ -5672,4 +5676,95 @@ void test_inline_interrogation_spoof_answers_the_devices_cable_query() {
     fusb302::set_sop_prime_hook(nullptr);
     for (int i = 0; i < 400 && fusb302::interrogate_running(); i++) { g_ms += 20; fusb302::poll(); fusb302::service(); }
     end_inline_case();
+}
+
+// ---- PD Stress Soft_Reset on a live contract (ROADMAP "PD Stress softreset unplugs the charger", Xiaomi 20K bank, 2026-11-12) ----
+// The tool's Soft_Reset drops the hold and leaves the sink Idle at once. Nothing else held the line (a passive attach, a held
+// trigger contract, no run, no re-read), so the demand fell in the same tick: transmit() refused the queued Soft_Reset ("TX
+// refused (passive): type 13") and the Rd gate took Rd off 300 ms later; the source saw a detach and cut VBUS.
+bool sent_ctl(unsigned type) {
+    for (unsigned h : tx_headers())
+        if ((h & 0x1F) == type && ((h >> 12) & 7) == 0) return true;
+    return false;
+}
+// A passive attach, then a held trigger contract at 5 V answered by the source (Accept, PS_RDY).
+void stress_held_contract() {
+    passive_attach();
+    g_auto_txsent = true;
+    send_caps_5v_9v(0);
+    service_ms(5);
+    g_txfifo.clear();
+    CHECK_EQ(int(fusb302::sink_request({.pos = 1}, true)), int(pd::Err::Ok));
+    bool refed = false;
+    for (int i = 0; i < 300 && !request_on_the_wire(); i++) {
+        g_ms += 1;
+        fusb302::poll();
+        fusb302::service();
+        if (!refed && usb_has("CC closed")) { refed = true; send_caps_5v_9v(1); }   // the source re-announces to the new sink
+    }
+    CHECK_EQ(request_on_the_wire(), true);
+    push_frame(0xE0, ctl_msg(3, 2), {});
+    push_frame(0xE0, ctl_msg(6, 3), {});
+    service_ms(30);
+    CHECK_EQ(int(fusb302::sink_status().state), int(pd::SinkState::Ready));
+    CHECK_EQ(fusb302::sink_status().held, true);
+    CHECK_EQ(sw0_rd() != 0, true);
+}
+void stress_end() {
+    g_auto_txsent = false;
+    end_start_test();
+}
+
+void test_stress_soft_reset_goes_out_and_keeps_rd_when_the_source_answers() {
+    stress_held_contract();
+    g_log.clear();
+    g_txfifo.clear();
+    CHECK_EQ(fusb302::sink_soft_reset(), true);
+    service_ms(5);
+    CHECK_EQ(usb_has("TX refused"), false);
+    CHECK_EQ(sent_ctl(13), true);                     // the Soft_Reset is on the wire
+    push_frame(0xE0, ctl_msg(3, 0), {});              // Accept, MessageID 0 after the reset
+    service_ms(60);
+    CHECK_EQ(sw0_rd() != 0, true);
+    g_txfifo.clear();
+    send_caps_5v_9v(1);                               // the source re-announces: the acked-caps path requests PDO 1
+    service_ms(10);
+    CHECK_EQ(request_on_the_wire(), true);
+    push_frame(0xE0, ctl_msg(3, 2), {});
+    push_frame(0xE0, ctl_msg(6, 3), {});
+    service_ms(30);
+    CHECK_EQ(int(fusb302::sink_status().state), int(pd::SinkState::Ready));
+    CHECK_EQ(int(fusb302::sink_status().pos), 1);
+    settle_ms(1000);                                  // past the 300 ms Rd gate linger
+    CHECK_EQ(sw0_rd() != 0, true);
+    CHECK_EQ(usb_has("Rd off"), false);
+    CHECK_EQ(usb_has("TX refused"), false);
+    stress_end();
+}
+
+// The source Accepts but never re-announces: 400 ms after the Soft_Reset the sink asks with Get_Source_Cap, which must go out
+// too, Rd still on; the caps that answer it get the PDO 1 Request.
+void test_stress_soft_reset_to_a_silent_source_asks_for_the_caps_with_rd_kept() {
+    stress_held_contract();
+    g_log.clear();
+    CHECK_EQ(fusb302::sink_soft_reset(), true);
+    service_ms(5);
+    CHECK_EQ(sent_ctl(13), true);
+    push_frame(0xE0, ctl_msg(3, 0), {});
+    for (int i = 0; i < 600 && !sent_ctl(7); i++) { g_ms += 1; fusb302::poll(); fusb302::service(); }
+    CHECK_EQ(sent_ctl(7), true);                      // Get_Source_Cap
+    CHECK_EQ(usb_has("TX refused"), false);
+    CHECK_EQ(sw0_rd() != 0, true);
+    g_txfifo.clear();
+    send_caps_5v_9v(1);
+    service_ms(10);
+    CHECK_EQ(request_on_the_wire(), true);
+    push_frame(0xE0, ctl_msg(3, 2), {});
+    push_frame(0xE0, ctl_msg(6, 3), {});
+    service_ms(30);
+    CHECK_EQ(int(fusb302::sink_status().state), int(pd::SinkState::Ready));
+    settle_ms(1000);
+    CHECK_EQ(sw0_rd() != 0, true);
+    CHECK_EQ(usb_has("Rd off"), false);
+    stress_end();
 }

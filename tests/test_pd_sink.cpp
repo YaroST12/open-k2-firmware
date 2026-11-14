@@ -1585,6 +1585,29 @@ int main() {
         r.run(2000);
         CHECK_EQ(r.sent.size(), n0 + 1);
     }
+    {   // soft_reset_pending() (the driver keeps Rd and TX up on it): from the Soft_Reset to the caps, through the silent 400 ms
+        // and the Get_Source_Cap's answer window, and never longer: a source that answers nothing ends it
+        Rig r;
+        r.sink.trigger({2, 0, 0}, r.now); r.pump(); r.accept_and_ready();
+        CHECK_EQ(r.sink.soft_reset_pending(), false);
+        r.sink.soft_reset(r.now);
+        CHECK_EQ(r.sink.soft_reset_pending(), true);   // before the Soft_Reset is even taken for the wire
+        r.pump();
+        r.run(300);
+        CHECK_EQ(r.sink.soft_reset_pending(), true);
+        r.run(150);
+        CHECK_EQ(r.last_type(), unsigned(kCtlGetSourceCap));
+        CHECK_EQ(r.sink.soft_reset_pending(), true);   // the Get_Source_Cap's answer window
+        r.run(kGetCapAnswerMs + 50);
+        CHECK_EQ(r.sink.soft_reset_pending(), false);
+        Rig a;                                         // the caps end it at once
+        a.sink.trigger({2, 0, 0}, a.now); a.pump(); a.accept_and_ready();
+        a.sink.soft_reset(a.now); a.pump();
+        a.ctl(kCtlAccept);
+        a.run(100);
+        a.data(kDataSourceCap, 0x0001912C);
+        CHECK_EQ(a.sink.soft_reset_pending(), false);
+    }
     {   // no GoodCRC for the Soft_Reset is never escalated: the sink stays Idle and still asks for the caps
         Rig r;
         r.sink.trigger({2, 0, 0}, r.now); r.pump(); r.accept_and_ready();

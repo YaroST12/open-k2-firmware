@@ -400,6 +400,10 @@ public:
     bool xiaomi_chain_active(std::uint32_t now) const;
 
     bool take_tx(TxMsg& out);  // next message to send, if any
+    // Our Soft_Reset is out and the caps it asks for have not come: the wait for the re-announce (400 ms), then the one
+    // Get_Source_Cap that follows a silent source, inside its kGetCapAnswerMs window. The sink is Idle and not held all that
+    // time, so the driver counts this as a negotiation in flight: the line (Rd, Auto-CRC, TX) stays up for the answer.
+    bool soft_reset_pending() const { return sr_wait_ || (get_cap_sent_ && refresh_pending_); }
     const SinkStatus& status() const { return st_; }
     const Plan& plan() const { return plan_; }  // the request in flight / the contract (effective mV, mA, RDO)
     const XiaomiTrace& xiaomi_trace() const { return xm_; }
