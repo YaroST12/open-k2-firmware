@@ -156,6 +156,9 @@ inline constexpr std::int32_t kMonoAllowMv = 8;          // a 20 mV step may rea
 inline constexpr std::int32_t kRestoreMaxMv = 5500;      // a 5 V restore is confirmed at or under this
 inline constexpr std::int32_t kReattachMs = 5000;        // Rd back -> a 5 V contract (inferred)
 inline constexpr std::uint32_t kSuspectAcceptUs = 300;   // an edge-stamp Accept faster than this is not credible
+// The age a live VBUS reading can have (the INA226's normal mode refreshes every ~4.5 ms): added to the bracket of every value timed
+// from live polling (the capture's own samples carry their real spacing instead).
+inline constexpr std::uint32_t kVbusPeriodMs = 5;
 
 class Engine {
 public:
@@ -645,7 +648,7 @@ inline void Engine::live_band(const Snapshot& s, std::uint32_t now) {
         if (live_n_++ == 0) { live_t_ = now; live_unseen_ = first; }
         if (live_n_ >= kLiveBandPolls) {
             const std::uint32_t ms = live_t_ - acc;
-            meas(tc, {std::int32_t(ms * 1000), std::int32_t((live_unseen_ ? ms : poll_gap_) * 1000), 0, lim, cur_.from, cur_.to});
+            meas(tc, {std::int32_t(ms * 1000), std::int32_t((live_unseen_ ? ms : poll_gap_ + kVbusPeriodMs) * 1000), 0, lim, cur_.from, cur_.to});
             meas(Check::Accuracy, {s.vbus_mv, 0, band_lo(to_mv), band_hi(to_mv), cur_.from, cur_.to});
             cur_.band_ms = static_cast<std::uint16_t>(ms > 0xFFFE ? 0xFFFE : ms);
             cur_.final_mv = static_cast<std::uint16_t>(s.vbus_mv);
@@ -761,7 +764,7 @@ inline void Engine::ka_wait(const Snapshot& s, std::uint32_t now) {
     if (s.attached && origin && static_cast<std::int32_t>(origin - ka_t0_) > 0) { ka_t0_ = origin; ka_extra_ = 0; }
     // Without a stamp the last keep-alive went out up to one period before the silence: the value is the upper end, gap the bracket.
     const std::int32_t extra = std::int32_t(ka_extra_);
-    const std::int32_t gap = std::int32_t(poll_gap_) + extra;
+    const std::int32_t gap = std::int32_t(poll_gap_ + kVbusPeriodMs) + extra;
     if (s.source_hard_resets != hr0_ || (!s.attached && s.vbus_mv < pd::spec::kVSafe0VMaxMv)) {
         hr0_ = s.source_hard_resets;
         const std::int32_t ms = std::int32_t(now - ka_t0_) + extra;
@@ -789,7 +792,7 @@ inline void Engine::reset_watch(const Snapshot& s, std::uint32_t now) {
     const ResetTimes& t = track_.times();
     const bool done = t.caps_seen || now - phase_t_ > kResetWatchMs;
     if (!done) return;
-    const std::int32_t g = std::int32_t(t.gap_ms);
+    const std::int32_t g = std::int32_t(t.gap_ms + kVbusPeriodMs);
     const std::int32_t el = std::int32_t(now - phase_t_);
     meas(Check::HrSafe0V, {t.off_seen ? std::int32_t(t.off_ms) : el, g, 0, std::int32_t(pd::spec::kPsHardResetMaxMs + pd::spec::kSafe0VMs), 0, 0});
     if (t.off_seen) {
@@ -818,7 +821,7 @@ inline void Engine::detach_gap(const Snapshot& s, std::uint32_t now) {
     if (t.off_seen && off_at_ == 0) off_at_ = now ? now : 1;
     const bool done = (t.off_seen && now - off_at_ >= kDetachHoldMs) || now - phase_t_ >= kDetachMaxMs;
     if (!done) return;
-    meas(Check::DetachSafe0V, {t.off_seen ? std::int32_t(t.off_ms) : std::int32_t(now - phase_t_), std::int32_t(t.gap_ms), 0,
+    meas(Check::DetachSafe0V, {t.off_seen ? std::int32_t(t.off_ms) : std::int32_t(now - phase_t_), std::int32_t(t.gap_ms + kVbusPeriodMs), 0,
                                std::int32_t(pd::spec::kVbusOffMs + pd::spec::kPdDebounceMaxMs), 0, 0});
     if (t.off_seen) tm_.det_off_ms = static_cast<std::uint16_t>(t.off_ms);
     env_->rd_off(false);
