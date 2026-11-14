@@ -1,11 +1,90 @@
 {
-  "status": "unseeded",
-  "version": null,
-  "hot": null,
-  "checks": {},
+  "status": "seeded",
+  "version": "1.0.1-124-c9a5b49b",
+  "hot": 1,
+  "runs": 5,
+  "taken": "2026-11-14",
   "tolerance_default": {
     "pct": 2.0,
     "min_cycles": 50
   },
-  "note": "No numbers yet: the perf step reports SKIPPED (unseeded). Flash the default build, then run `make perf-baseline`."
+  "note": "per-check minimum cycles of the default build; entries with `tol` override the default tolerance (twice the spread seen over the runs). Refresh: make perf-baseline (needs the K2 on this build).",
+  "checks": {
+    "scale_div": {
+      "cyc": 59528,
+      "zw": 1
+    },
+    "adc_calc": {
+      "cyc": 41415,
+      "zw": 1
+    },
+    "power_calc": {
+      "cyc": 30129,
+      "zw": 1
+    },
+    "math_opt": {
+      "cyc": 13353,
+      "zw": 1
+    },
+    "readout_fmt": {
+      "cyc": 17454,
+      "zw": 1
+    },
+    "fpu_sqrt": {
+      "cyc": 3229,
+      "zw": 1
+    },
+    "one_euro": {
+      "cyc": 14828,
+      "zw": 1
+    },
+    "blend565": {
+      "cyc": 15116,
+      "zw": 1
+    },
+    "text_aa": {
+      "cyc": 847201,
+      "zw": 1
+    },
+    "text_big": {
+      "cyc": 805136,
+      "zw": 1
+    },
+    "gfx_fill": {
+      "cyc": 379343,
+      "zw": 1
+    },
+    "mem_ops": {
+      "cyc": 340477,
+      "zw": 1
+    },
+    "fmt_line": {
+      "cyc": 113734,
+      "zw": 1
+    },
+    "pd_codec": {
+      "cyc": 53464,
+      "zw": 1
+    },
+    "pd_sink": {
+      "cyc": 30880,
+      "zw": 1
+    },
+    "pdtrace_ring": {
+      "cyc": 81933,
+      "zw": 1
+    },
+    "tu_fifo": {
+      "cyc": 20910,
+      "zw": 1
+    },
+    "ws_fast": {
+      "cyc": 41053,
+      "zw": 1
+    },
+    "ws_slow": {
+      "cyc": 136084,
+      "zw": 0
+    }
+  }
 }
