@@ -293,6 +293,24 @@ public:
     bool boot_restore(bool cancel = false);
     void cancel();
     bool busy() const { return runner_.busy(); }
+    // The remote START (Cmd::ChargerTest [4, flags]): the device's own START, the second OK on Review included. It goes to
+    // Review (the "All tests" preset first when asked), opens the confirm window through the first press's path (its preview
+    // refusals come back at once), and poll() confirms it through the second press's path once the Ra guard's window is full
+    // and the window still describes this proposal: the guard, the identity, the Rd, the wait and the final preflight are the
+    // device's. Anything that drops a device confirmation (a key, a changed proposal, the window's end) drops this one too.
+    struct RemoteStart {
+        enum class Result : uint8_t { Accepted, Refused, Busy };
+        Result result = Result::Accepted;
+        charger_test::Reason reason = charger_test::Reason::None;   // Refused: why (the preflight's reason, as the footer words it)
+        uint16_t refusal_mv = 0;                                    // ... and the VBUS it read
+    };
+    // A run, the wait, a resume or a remote START already holds the session: a START now is Busy and changes nothing.
+    bool start_held() const { return runner_.busy() || stage_ == Stage::Waiting || resume_pending_ || remote_confirm_; }
+    RemoteStart remote_start(bool all_tests);
+    // The device's own stop (BACK on the page, the remote CANCEL), in BACK's order: what it did. The values are the remote's
+    // kCtStop* bytes.
+    enum class Stopped : uint8_t { Nothing, Run, Wait, Confirmation, Refusal, Resume };
+    Stopped stop();
     // PD Stress borrows the deep-sweep point buffer for its record (Runner::claim_sweep_record): empty while a test runs.
     std::span<int16_t> claim_record() { return runner_.claim_sweep_record(); }
     const charger_test::Runner& results() const { return runner_; }
@@ -511,6 +529,7 @@ private:
     // back and the charger's new contract is awaited (the Runner stays held in its Baseline until then or until the K2 died).
     bool confirm_reattach_ = false;
     bool reattach_plan_ = false;
+    bool remote_confirm_ = false;   // a remote START's confirm window: poll() confirms it once the Ra guard's window is full
     bool entering_ = false;       // enter() is switching the stage: nothing of this page is on screen yet
 };
 

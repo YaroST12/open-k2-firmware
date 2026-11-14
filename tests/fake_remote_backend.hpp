@@ -26,6 +26,10 @@ struct Fake {
     ChargerTestSnapshot charger_test_results() { calls++; return test_results; }
     ChargerTestView view{};
     ChargerTestView charger_test_view() { calls++; return view; }
+    int ct_starts = 0; uint8_t ct_start_flags = 0; ChargerTestStartReply ct_start_reply{};   // charger_test_start(): what it got, its answer
+    ChargerTestStartReply charger_test_start(uint8_t flags) { calls++; ct_starts++; ct_start_flags = flags; return ct_start_reply; }
+    int ct_cancels = 0; uint8_t ct_cancel_what = 0;   // charger_test_cancel(): calls, and what it says it stopped
+    uint8_t charger_test_cancel() { calls++; ct_cancels++; return ct_cancel_what; }
     std::vector<uint8_t> units_set; Status units_status = Status::Ok;   // what charger_units() was given, and its answer
     Status charger_units(std::span<const uint8_t> u) { calls++; units_set.assign(u.begin(), u.end()); return units_status; }
     bool sweep_set = false; int sweep_sets = 0; Status sweep_status = Status::Ok;

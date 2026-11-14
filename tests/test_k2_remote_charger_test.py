@@ -178,7 +178,8 @@ class ChargerTest(unittest.TestCase):
             self.assertEqual(step["detail_reason"], kr.PD_ERRS[6])
 
     def test_no_mutating_cli_operations(self):
-        for command in ("start", "stop", "cancel", "clear", "reset"):
+        # start / cancel are the device's own START and stop (ChargerTestStartTest); nothing else changes the suite
+        for command in ("stop", "clear", "reset"):
             with patch("sys.stderr"), self.assertRaises(SystemExit):
                 self.args(command)
         for args in (("status", "--out", "file.json"), ("results", "--confirm"), ("results", "--allow-inline")):
@@ -789,6 +790,106 @@ class ChargerTestViewTest(unittest.TestCase):
         link = Link([kr.RemoteError(kr.STATUS_BUSY, 0x0B)])
         with self.assertRaises(kr.RemoteError):
             kr.cmd_charger_test(link, self.args("view"))
+
+
+def meta2(run_id):
+    """A schema-2 metadata reply (HEADER2) for another run id."""
+    return HEADER2[:1] + struct.pack("<I", run_id) + HEADER2[5:]
+
+
+def view(stage, confirming=False, message=b""):
+    b = bytearray(VIEW[:30])
+    b[0] = kr.TEST_STAGES.index(stage)
+    struct.pack_into("<H", b, 3, 0x0001 | (0x0002 if confirming else 0))
+    return bytes(b) + message
+
+
+class ScriptLink:
+    """Answers each command from its own queue; records every request."""
+    def __init__(self, **queues):
+        self.queues = {k: list(v) for k, v in queues.items()}
+        self.sent = []
+
+    def call(self, cmd, payload=b""):
+        self.sent.append((cmd, bytes(payload)))
+        key = {0x0C: "units", 0x0D: "cable"}.get(cmd)
+        if key is None:
+            key = {b"\x02": "status", b"\x03": "view"}.get(bytes(payload), "op")
+        p = self.queues[key].pop(0)
+        if isinstance(p, Exception):
+            raise p
+        return kr.Response(cmd, len(self.sent), 0, p)
+
+
+class ChargerTestStartTest(unittest.TestCase):
+    """charger-test start / cancel: 0x0B req [4, flags] / [5] (remote_proto.hpp), the vectors of test_remote_proto.cpp."""
+    def args(self, *args):
+        return kr.build_parser().parse_args(["charger-test", *args])
+
+    def run_start(self, link, *args):
+        return kr.cmd_charger_test(link, self.args("start", *args), sleep=lambda s: None)
+
+    def test_wire_vectors(self):
+        link = ScriptLink(op=[bytes([0, 0, 0, 0]), bytes([1, 8, 0x16, 0x21]), bytes([2])])
+        self.assertEqual(kr.charger_test_start(link), {"accepted": True, "refusal": None, "refusal_mv": 0})
+        self.assertEqual(kr.charger_test_start(link, all_tests=False),
+                         {"accepted": False, "refusal": "load attached", "refusal_mv": 8470})
+        self.assertEqual(kr.charger_test_cancel(link), {"stopped": "wait"})
+        self.assertEqual([p for _, p in link.sent], [bytes([4, 3]), bytes([4, 1]), bytes([5])])
+        for bad in (bytes([0, 0, 0]), bytes([2, 0, 0, 0]), bytes([1, 200, 0, 0])):
+            with self.assertRaises(kr.FrameError):
+                kr.charger_test_start(ScriptLink(op=[bad]))
+        with self.assertRaises(kr.FrameError):
+            kr.charger_test_cancel(ScriptLink(op=[bytes([9])]))
+
+    def test_start_follows_the_device_until_the_run_id_goes_up(self):
+        link = ScriptLink(units=[bytes([1])], cable=[bytes(30)], op=[bytes(4)],
+                          status=[meta2(7), meta2(7), meta2(8)], view=[view("review", confirming=True)])
+        r = self.run_start(link, "--units", "pd", "--cable", "off")
+        self.assertEqual(r, {"started": True, "run_id": 8, "previous_run_id": 7})
+        cmds = [(c, p) for c, p in link.sent if p not in (b"\x02", b"\x03")]
+        self.assertEqual(cmds, [(0x0C, bytes([1, 0])), (0x0D, bytes([0, 0, 0])), (0x0B, bytes([4, 3]))])
+
+    def test_keep_selection_leaves_the_draft(self):
+        link = ScriptLink(op=[bytes(4)], status=[meta2(7), meta2(8)])
+        self.run_start(link, "--keep-selection")
+        self.assertIn((0x0B, bytes([4, 1])), link.sent)
+
+    def test_immediate_refusal_says_why(self):
+        link = ScriptLink(op=[bytes([1, 8, 0x16, 0x21])], status=[meta2(7)])
+        with self.assertRaises(kr.FcRefused) as cm:
+            self.run_start(link)
+        self.assertIn("load attached", str(cm.exception)); self.assertIn("8470 mV", str(cm.exception))
+
+    def test_guard_refusal_is_cancelled_and_named(self):
+        link = ScriptLink(cable=[bytes(30)], op=[bytes(4), bytes([4])], status=[meta2(7), meta2(7)], view=[view("refuse")])
+        with self.assertRaises(kr.FcRefused) as cm:
+            self.run_start(link, "--cable", "builtin")
+        self.assertIn("directly", str(cm.exception))
+        self.assertEqual(link.sent[-1], (0x0B, bytes([5])))   # the Refuse stage is closed: the K2 is back on Review
+
+    def test_final_preflight_refusal_reads_the_reason_and_the_footer(self):
+        refused = bytearray(meta2(7)); refused[10] = 3   # reason: over voltage cap
+        link = ScriptLink(op=[bytes(4)], status=[meta2(7), meta2(7), meta2(7), bytes(refused)],
+                          view=[view("waiting"), view("review", message=b"No charger: VBUS 0.2V")])
+        with self.assertRaises(kr.FcRefused) as cm:
+            self.run_start(link)
+        self.assertIn("No charger: VBUS 0.2V", str(cm.exception))
+        self.assertIn("over voltage cap", str(cm.exception))
+
+    def test_busy_and_old_firmware(self):
+        link = ScriptLink(op=[kr.RemoteError(kr.STATUS_BUSY, 0x0B)], status=[meta2(7)])
+        with self.assertRaises(kr.RemoteError):
+            self.run_start(link)
+        for status in (kr.STATUS_BAD_LENGTH, kr.STATUS_BAD_ARG):
+            with self.assertRaises(kr.FrameError) as cm:
+                kr.charger_test_start(ScriptLink(op=[kr.RemoteError(status, 0x0B)]))
+            self.assertIn("older", str(cm.exception))
+
+    def test_cancel_command(self):
+        link = ScriptLink(op=[bytes([1])])
+        self.assertEqual(kr.cmd_charger_test(link, self.args("cancel")), {"stopped": "run"})
+        self.assertEqual(link.sent, [(0x0B, bytes([5]))])
 
 
 if __name__ == "__main__":

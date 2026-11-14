@@ -341,6 +341,10 @@ public:
     void stop_fc(uint32_t now_ms);
     bool boot_restore_charger_test(bool cancel = false) { return charger_test_.boot_restore(cancel); }
     void cancel_charger_test() { charger_test_.cancel(); }
+    // Cmd::ChargerTest START / CANCEL (the remote): the device's own START - the page opens on Review and the session confirms it
+    // through the second press's path (ChargerTestSession::remote_start) - and the device's own stop (BACK).
+    ChargerTestSession::RemoteStart charger_test_start(bool all_tests, uint32_t now_ms);
+    ChargerTestSession::Stopped charger_test_stop(uint32_t now_ms);
     // Scroll state of the current page's list (count 0 / visible 1 on pages without one).
     ListState list_state();
     // Read-only view of the Connection page (tab, pop-up rows, facts) for the host tests.

@@ -903,6 +903,13 @@ void ChargerTestSession::poll(uint32_t now) {
     // The confirm window ran out without the second START press: nothing was touched (no Rd, no identity), so only the window goes.
     if (confirming_ && static_cast<int32_t>(now - confirm_until_) >= 0) invalidate_confirmation();
     if (guard_stage(stage_) && static_cast<int32_t>(now - guard_t_) >= static_cast<int32_t>(raguard::kSampleMs)) guard_sample(now);
+    // A remote START is confirmed like the second OK, once the Ra guard holds a full window of passive readings (~0.8 s, as long
+    // as a person takes at the least) and the window still describes the proposal it opened on.
+    if (remote_confirm_ && guard_.count() >= raguard::PeakWindow::kSamples) {
+        remote_confirm_ = false;
+        if (stage_ == Stage::Review && confirm_live()) { K2LOG("[TEST] remote START confirmed\n"); confirmed_start(); }
+        else invalidate_confirmation();
+    }
     if (runner_.attaching()) fusb302::attach_scan();   // Rd is back on: notice the charger's Rp (START's blocking loop does the same)
     const auto before = runner_.state();
     // The journal's own plan write (still arming) goes before the Runner: it is held in Baseline until the header is on flash.
@@ -973,7 +980,35 @@ void ChargerTestSession::poll(uint32_t now) {
 }
 void ChargerTestSession::invalidate_confirmation() {
     if (confirming_ && view_) view_->on_confirmation_dropped();   // the footer and the START cell show the confirmation
-    confirming_ = false; confirm_until_ = 0; confirm_proposal_ = {};
+    if (remote_confirm_) K2LOG("[TEST] remote START dropped: the confirmation closed\n");
+    confirming_ = false; confirm_until_ = 0; confirm_proposal_ = {}; remote_confirm_ = false;
+}
+// The remote START: Review (the "All tests" preset first when asked), then the first press's path. A refusal there is the
+// device's own (start_failed: the log line, the reason recorded on the runner, the footer words) and comes back at once.
+ChargerTestSession::RemoteStart ChargerTestSession::remote_start(bool all_tests) {
+    RemoteStart r;
+    if (start_held()) { r.result = RemoteStart::Result::Busy; return r; }
+    if (all_tests) options_.selected = kPresetMasks[0];
+    if (stage_ != Stage::Review) set_stage(Stage::Review, kStartRow);
+    else { invalidate_confirmation(); selection_ = kStartRow; }
+    open_confirmation();
+    if (!confirming_) {
+        r.result = RemoteStart::Result::Refused;
+        r.reason = runner_.reason(); r.refusal_mv = runner_.refusal_mv();
+        return r;
+    }
+    remote_confirm_ = true;   // poll() confirms it once the Ra guard's window is full
+    K2LOG("[TEST] remote START: confirm window open, selected=%u units=%u\n", unsigned(options_.selected), unsigned(options_.units.n));
+    return r;
+}
+// BACK's order: a resume offer, a live run, the confirm window, the wait, the Refuse warning.
+ChargerTestSession::Stopped ChargerTestSession::stop() {
+    if (stage_ == Stage::Resume) { abandon_run(); return Stopped::Resume; }
+    if (runner_.busy()) { cancel(); return Stopped::Run; }
+    if (confirming_) { invalidate_confirmation(); return Stopped::Confirmation; }   // nothing was touched
+    if (stage_ == Stage::Waiting) { wait_abort(); return Stopped::Wait; }           // Rd back, nothing started
+    if (stage_ == Stage::Refuse) { set_stage(Stage::Review, kStartRow); return Stopped::Refusal; }   // nothing was touched
+    return Stopped::Nothing;
 }
 void ChargerTestSession::cancel() {
     if (stage_ == Stage::Waiting) { wait_abort(); return; }   // release_run() and the stage are its business
@@ -2761,12 +2796,10 @@ bool ChargerTestPage::on_event(Event e) {
         return true;
     }
     if (e.button == Button::Back) {
-        if (s_.stage_ == Stage::Resume) { abandon_run(); update(ctx_.now); return true; }
-        if (s_.runner_.busy()) { cancel(); update(ctx_.now); return true; }
-        if (s_.confirming_) { invalidate_confirmation(); update(ctx_.now); return true; }   // Back out of the confirm window: nothing was touched
+        // The stop first (a resume offer, a run, the confirm window, the wait, the Refuse warning: the remote CANCEL is the same
+        // call); with nothing to stop BACK walks the wizard back.
+        if (s_.stop() != ChargerTestSession::Stopped::Nothing) { update(ctx_.now); return true; }
         switch (s_.stage_) {
-        case Stage::Refuse: set_stage(Stage::Review, kStartRow); break;   // Back returns to Review: nothing was touched
-        case Stage::Waiting: wait_abort(); break;                          // Cancel: Rd back, nothing started
         case Stage::Algorithms: return back_event(e);
         case Stage::Group: set_stage(Stage::Custom, s_.family_); break;
         case Stage::Custom: set_stage(Stage::Algorithms, kCustomRow); break;

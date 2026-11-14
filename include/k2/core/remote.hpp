@@ -52,6 +52,8 @@ public:
     remote::PingInfo ping();
     remote::ChargerTestSnapshot charger_test_results() const;
     remote::ChargerTestView charger_test_view();   // the wizard / Waiting / Running screens as data (0x0B req [3])
+    remote::ChargerTestStartReply charger_test_start(uint8_t flags);   // 0x0B req [4, flags]: the device's own START (confirmed)
+    uint8_t charger_test_cancel();                                     // 0x0B req [5]: the device's own stop; remote::kCtStop*
     remote::Status charger_units(std::span<const uint8_t> units);   // unit order of the next charger run (empty = default)
     remote::Status charger_sweep(bool on);   // the PPS deep sweep of the next charger run (opt-in)
     remote::Status charger_avs_sweep(bool on);   // the AVS deep sweep of the next charger run (opt-in)

@@ -1243,6 +1243,26 @@ bool Ui::land_rescanned(uint32_t now_ms) {
     return true;
 }
 
+ChargerTestSession::RemoteStart Ui::charger_test_start(bool all_tests, uint32_t now_ms) {
+    if (charger_test_.start_held()) return {ChargerTestSession::RemoteStart::Result::Busy};   // nothing moves, the page stays
+    BudgetScope scope(*this);
+    ContentViewport viewport(layout_.content);
+    ctx_.now = now_ms;
+    if (page_ != Page::ChargerTest || depth_) set_page(Page::ChargerTest, now_ms);   // the run lives on its page (leaving stops it)
+    const auto r = charger_test_.remote_start(all_tests);
+    current().update(now_ms);
+    return r;
+}
+
+ChargerTestSession::Stopped Ui::charger_test_stop(uint32_t now_ms) {
+    BudgetScope scope(*this);
+    ContentViewport viewport(layout_.content);
+    ctx_.now = now_ms;
+    const auto s = charger_test_.stop();
+    if (s != ChargerTestSession::Stopped::Nothing) current().update(now_ms);
+    return s;
+}
+
 bool Ui::goto_page(uint8_t page, uint32_t now_ms) {
     BudgetScope scope(*this);
     if (page < static_cast<uint8_t>(Page::Count)) {

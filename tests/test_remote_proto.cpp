@@ -2548,7 +2548,8 @@ static void test_charger_test_wire() {
         CHECK_EQ(r[19], i); CHECK_EQ(r[20], 1);
         CHECK_EQ(r[48], static_cast<uint8_t>(steps[i].algorithm));
     }
-    for (auto p : {std::initializer_list<uint8_t>{0}, {1}, {4}, {3, 0, 4, 3, 2, 1, 8, 7, 6, 5},
+    // (one-byte 4 and 5 are START / CANCEL now: test_charger_test_start_cancel_wire)
+    for (auto p : {std::initializer_list<uint8_t>{0}, {1}, {6}, {3, 0, 4, 3, 2, 1, 8, 7, 6, 5},
                    {2, 4, 4, 3, 2, 1, 8, 7, 6, 5}}) {
         CHECK_EQ(run(f, request(0x0B, 18, p), r), 1);
         check_header(r, 0x0B, 18, Status::BadArg, 0);
@@ -2665,6 +2666,47 @@ static void test_sweep_row_that_never_ran_carries_zero_points() {
     check_header(r, 0x0B, 31, Status::Ok, 31);          // header 15 + one 16-byte row
     CHECK_EQ(r[23], 0x20);                               // still marked a sweep row
     CHECK_EQ(r[32], 0);                                  // red today: 161 leaks; must be 0 recorded points
+}
+
+// Cmd::ChargerTest START [4, flags] and CANCEL [5] (k2_remote charger-test start / cancel, the web Charger test page): START is
+// the device's own START after its confirmation, so it needs the confirm bit like every command that raises the output; the
+// reply says whether the START was accepted (the guard, the identity, the Rd and the wait follow on the device) or refused at
+// once, with the preflight's reason and the VBUS it read. CANCEL is the device's own stop and says what it stopped.
+static void test_charger_test_start_cancel_wire() {
+    Fake f; Frame r;
+    const int calls = f.calls;
+    // no flags byte, or a flags byte without the confirm bit: NeedConfirm; an unknown flag bit is BadArg; nothing reaches the backend
+    CHECK_EQ(run(f, request(0x0B, 1, {4}), r), 1); check_header(r, 0x0B, 1, Status::NeedConfirm, 0);
+    CHECK_EQ(run(f, request(0x0B, 2, {4, 0}), r), 1); check_header(r, 0x0B, 2, Status::NeedConfirm, 0);
+    CHECK_EQ(run(f, request(0x0B, 3, {4, 2}), r), 1); check_header(r, 0x0B, 3, Status::NeedConfirm, 0);
+    CHECK_EQ(run(f, request(0x0B, 4, {4, 5}), r), 1); check_header(r, 0x0B, 4, Status::BadArg, 0);
+    CHECK_EQ(run(f, request(0x0B, 5, {4, 1, 0}), r), 1); check_header(r, 0x0B, 5, Status::BadLength, 0);
+    CHECK_EQ(f.calls, calls); CHECK_EQ(f.ct_starts, 0);
+    // accepted: [result 0, reason 0, refusal_mv 0]; the flags reach the backend as sent (bit 1 = the "All tests" preset)
+    CHECK_EQ(run(f, request(0x0B, 6, {4, kCtStartConfirm}), r), 1);
+    check_header(r, 0x0B, 6, Status::Ok, 4); check_bytes(r, kRspHeader, {0, 0, 0, 0});
+    CHECK_EQ(f.ct_starts, 1); CHECK_EQ(f.ct_start_flags, kCtStartConfirm);
+    CHECK_EQ(run(f, request(0x0B, 7, {4, kCtStartConfirm | kCtStartAllTests}), r), 1);
+    CHECK_EQ(f.ct_start_flags, 3);
+    // refused at once (the preflight): result 1, the charger_test::Reason and the VBUS behind it
+    f.ct_start_reply = {Status::Ok, kCtStartRefused, 5, 0x1234};
+    CHECK_EQ(run(f, request(0x0B, 8, {4, 1}), r), 1);
+    check_header(r, 0x0B, 8, Status::Ok, 4); check_bytes(r, kRspHeader, {1, 5, 0x34, 0x12});
+    // a run, a wait or a resume holds the session: Busy, no payload
+    f.ct_start_reply = {Status::Busy, 0, 0, 0};
+    CHECK_EQ(run(f, request(0x0B, 9, {4, 1}), r), 1); check_header(r, 0x0B, 9, Status::Busy, 0);
+    // CANCEL: [what it stopped]; with an argument it is malformed
+    f.ct_cancel_what = 2;
+    CHECK_EQ(run(f, request(0x0B, 10, {5}), r), 1);
+    check_header(r, 0x0B, 10, Status::Ok, 1); check_bytes(r, kRspHeader, {2});
+    CHECK_EQ(f.ct_cancels, 1);
+    CHECK_EQ(run(f, request(0x0B, 11, {5, 0}), r), 1); check_header(r, 0x0B, 11, Status::BadLength, 0);
+    CHECK_EQ(f.ct_cancels, 1);
+    // the read forms keep their answers
+    CHECK_EQ(run(f, request(0x0B, 12, {6}), r), 1); check_header(r, 0x0B, 12, Status::BadArg, 0);
+    CHECK_EQ(run(f, request(0x0B, 13, {}), r), 1); check_header(r, 0x0B, 13, Status::Ok, 15);
+    // START never arms the dead-man lease: the run is the device's own, bounded, and goes on without a host
+    CHECK_EQ(f.lease_arms, 0);
 }
 
 static void test_charger_units() {
@@ -3093,6 +3135,7 @@ int main() {
     test_charger_hunt();
     test_charger_cable();
     test_charger_units();
+    test_charger_test_start_cancel_wire();
     test_charger_avs_sweep();
     test_charger_svooc_cap();
     test_charger_test_wire(); test_charger_test_view_wire(); test_sweep_row_wire_carries_points(); test_sweep_row_that_never_ran_carries_zero_points();

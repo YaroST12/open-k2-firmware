@@ -665,6 +665,12 @@
   "668": "[LPHR] boot: %s (boots=%u)\n",
   "669": "[LPHR] done end=%s os=%s id=%u svids=%u hr=%u sr=%u\n",
   "670": "[LPHR] not started: %s\n",
-  "671": "[LPHR] armed: replug the host end of the loop\n"
+  "671": "[LPHR] armed: replug the host end of the loop\n",
+  "672": "[RMT] charger-test start: busy\n",
+  "673": "[RMT] charger-test start all=%d -> %s\n",
+  "674": "[RMT] charger-test cancel -> %d\n",
+  "675": "[TEST] remote START confirmed\n",
+  "676": "[TEST] remote START dropped: the confirmation closed\n",
+  "677": "[TEST] remote START: confirm window open, selected=%u units=%u\n"
  }
 }

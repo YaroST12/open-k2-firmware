@@ -107,6 +107,24 @@
 //                                    run_guard(1) rmdo(1: major << 4 | minor), then the footer's words (0..27 chars, the
 //                                    text the footer paints). Read-only, from RAM; rows and message are 0 / empty while the
 //                                    page is not on screen. Timers saturate at 65535.
+//                                    START, req 4 flags(1): the device's own START after its confirmation (the same code path
+//                                    as the second OK on Review: preview / preflight, the Ra guard, the identity, the Rd and
+//                                    the Waiting stage; nothing is bypassed). It opens the charger-test page on Review with the
+//                                    confirm window, confirms it once the Ra guard's window is full (~0.8 s) and the run goes
+//                                    on by itself; the screen shows it as if started there. flags bit0 kCtStartConfirm (the
+//                                    START raises the output: NeedConfirm without it, and without the flags byte), bit1
+//                                    kCtStartAllTests (the "All tests" preset first, as tools/ct_start.py picks; clear = the
+//                                    draft selection in force), other bits BadArg. The unit list (0x0C) and the cable
+//                                    identity (0x0D) are the existing commands, sent before START. rsp result(1) reason(1)
+//                                    refusal_mv(2): result kCtStartAccepted = the confirm window is open and confirms by
+//                                    itself; kCtStartRefused = refused at once, reason = charger_test::Reason, refusal_mv =
+//                                    the VBUS it read (a later refusal - the Ra guard's Refuse stage, the final preflight
+//                                    after the wait - shows in the view: stage refuse, or review with the run id unchanged and
+//                                    the metadata reason). Busy (no payload) while a run, a wait, a resume or an earlier
+//                                    remote START holds the session. Never arms the lease: the run is the device's own.
+//                                    CANCEL, req 5 (one byte): the device's own stop (BACK) - a run stops, the wait is
+//                                    cancelled (Rd released), the confirm window (and a pending remote START) closes, the
+//                                    Refuse stage returns to Review, a pending resume is abandoned. rsp what(1): kCtStop*.
 //   0x0D CHARGER_CABLE req - (read) or kind(1) seq(2) (set).  rsp kind(1) seq(2) run_kind(1) run_seq(2) name(24)
 //                                    The cable identity of the "Cable identity" dialog (k2/chargertest/ct_cable.hpp): kind 0 = Off,
 //                                    1 = built-in cable (seq = its id 1, 2 or 4: EPR 50V 5A, CUKTECH 6A,
@@ -892,6 +910,19 @@ struct ChargerTestView {
     uint8_t message_len = 0;
 };
 size_t encode_charger_test_view(std::span<uint8_t> out, const ChargerTestView&);
+// `0x0B req [4, flags]` START and `[5]` CANCEL (see the command table above).
+constexpr uint8_t kChargerTestStartReq = 4, kChargerTestCancelReq = 5;
+constexpr uint8_t kCtStartConfirm = 1u << 0,    // required: the START raises the output
+                  kCtStartAllTests = 1u << 1;   // the "All tests" preset before the START (ct_start.py's pick)
+constexpr uint8_t kCtStartAccepted = 0, kCtStartRefused = 1;
+constexpr size_t kChargerTestStartLen = 4;
+struct ChargerTestStartReply {
+    Status status = Status::Ok;   // Busy: the session is held (run, wait, resume, a remote START pending), no payload
+    uint8_t result = kCtStartAccepted, reason = 0;   // reason: charger_test::Reason of an immediate refusal
+    uint16_t refusal_mv = 0;
+};
+// What CANCEL stopped (ChargerTestSession::Stopped, value for value).
+constexpr uint8_t kCtStopNothing = 0, kCtStopRun = 1, kCtStopWait = 2, kCtStopConfirm = 3, kCtStopRefusal = 4, kCtStopResume = 5;
 struct StateInfo {
     uint8_t page = 0, active_cc = 0, spec_rev = 0, num_pdos = 0, pd_valid = 0;
     uint8_t chip = 0, pm_online = 0, log_on = 0;
@@ -1322,6 +1353,8 @@ concept Backend = requires(B &b, uint8_t u8, uint16_t u16, bool on) {
     { b.ping() } -> std::same_as<PingInfo>;
     { b.charger_test_results() } -> std::same_as<ChargerTestSnapshot>;
     { b.charger_test_view() } -> std::same_as<ChargerTestView>;   // 0x0B req [3]: the wizard / run chrome (a read, never moves anything)
+    { b.charger_test_start(u8) } -> std::same_as<ChargerTestStartReply>;   // 0x0B req [4, flags]: the device's own START (confirmed)
+    { b.charger_test_cancel() } -> std::same_as<uint8_t>;                  // 0x0B req [5]: the device's own stop; kCtStop*
     { b.charger_units(std::span<const uint8_t>{}) } -> std::same_as<Status>;   // unit order of the next run (empty = default)
     { b.charger_sweep(true) } -> std::same_as<Status>;   // the PPS deep sweep of the next run (opt-in)
     { b.charger_avs_sweep(true) } -> std::same_as<Status>;   // the AVS deep sweep of the next run (opt-in)
@@ -1451,6 +1484,16 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
         if (!p.empty()) return reply(Status::BadLength);
         return reply_n(encode_ping(buf, backend.ping()));
     case Cmd::ChargerTest: {
+        if (!p.empty() && p[0] == kChargerTestStartReq && p.size() <= 2) {
+            if (p.size() < 2 || !(p[1] & kCtStartConfirm)) return reply(Status::NeedConfirm);
+            if (p[1] & ~(kCtStartConfirm | kCtStartAllTests)) return reply(Status::BadArg);
+            const auto s = backend.charger_test_start(p[1]);
+            if (s.status != Status::Ok) return reply(s.status);
+            buf[0] = s.result; buf[1] = s.reason;
+            buf[2] = static_cast<uint8_t>(s.refusal_mv); buf[3] = static_cast<uint8_t>(s.refusal_mv >> 8);
+            return reply_n(kChargerTestStartLen);
+        }
+        if (p.size() == 1 && p[0] == kChargerTestCancelReq) { buf[0] = backend.charger_test_cancel(); return reply_n(1); }
         if (!p.empty() && p.size() != 1 && p.size() != 9 && p.size() != 10) return reply(Status::BadLength);
         if (p.size() == 1 && p[0] == kChargerTestViewReq) return reply_n(encode_charger_test_view(buf, backend.charger_test_view()));
         const bool modern = p.size() == 1 || p.size() == 10;

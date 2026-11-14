@@ -4200,6 +4200,97 @@ static void test_view_carries_the_wait_and_the_run() {
     }
 }
 
+// ---- remote START / CANCEL (Cmd::ChargerTest [4, flags] / [5]): the device's own START after its confirmation, and its own stop ----
+using RemoteStart = ChargerTestSession::RemoteStart;
+using Stopped = ChargerTestSession::Stopped;
+static void boot_home(Ui& ui) { ui.init(0); ui.set_rotation(0, 0); ui.tick(1000); settle(ui, 1000); }
+static void ticks(Ui& ui, uint32_t from, uint32_t to) { for (uint32_t t = from; t <= to; t += 20) ui.tick(t); }   // the main loop's UI tick
+static void test_remote_start_is_the_devices_start() {
+    { // from another page: the charger-test page opens on Review with the confirm window; nothing is touched until the Ra
+      // guard's window is full, then the second-press path confirms it and the run starts by itself, shown on the screen
+        fixture(); Ui ui; boot_home(ui);
+        CHECK_EQ(ui.page() == Page::ChargerTest, false);
+        CHECK_EQ(ui.charger_test_set_units(kPdOnly), true);
+        const auto r = ui.charger_test_start(true, 1200);
+        CHECK_EQ(r.result == RemoteStart::Result::Accepted, true);
+        CHECK_EQ(ui.page() == Page::ChargerTest, true);
+        CHECK_EQ(ui.charger_test_stage(), 4);
+        CHECK_EQ(ui.charger_test_selection(), ct::kDefaultAlgorithms);   // the "All tests" preset
+        CHECK_EQ(ui.charger_test_view().confirming, true);
+        nothing_armed_stub(); no_operations();
+        uint32_t t = 1200;
+        for (; t < 1800; t += 20) ui.tick(t);   // inside the guard's window (a sample every 100 ms, 8 of them): only the confirmation
+        CHECK_EQ(ui.charger_test_busy(), false); CHECK_EQ(ui.charger_test_stage(), 4); nothing_armed_stub();
+        for (; t <= 2100 && !ui.charger_test_busy(); t += 20) ui.tick(t);
+        CHECK_EQ(ui.charger_test_busy(), true); CHECK_EQ(ui.charger_test_stage(), kRunningStage);
+        // a second START while the run holds the session: Busy, the run goes on
+        CHECK_EQ(ui.charger_test_start(true, 2200).result == RemoteStart::Result::Busy, true);
+        CHECK_EQ(ui.charger_test_busy(), true);
+        uint32_t now = 2300;
+        for (; now <= 20000 && g_stub.requests < 1; now += 100) ui.tick(now);
+        CHECK_EQ(g_stub.requests, 1);
+        // CANCEL is BACK: the run stops (released to 5 V) and ends on Results
+        CHECK_EQ(ui.charger_test_stop(now) == Stopped::Run, true);
+        CHECK_EQ(g_stub.releases, 1);
+        for (const uint32_t end = now + 20000; now <= end && ui.charger_test_busy(); now += 100) ui.tick(now);
+        CHECK_EQ(ui.charger_test_busy(), false); CHECK_EQ(g_stub.requests, 1);
+        CHECK_EQ(ui.charger_test_stop(now) == Stopped::Nothing, true);
+    }
+    { // without the preset flag the draft selection in force is the run's
+        fixture(); Ui ui; open(ui); top(ui); move(ui, kPdRow); press(ui, Button::Ok); settle(ui);
+        const uint32_t draft = ui.charger_test_selection();
+        CHECK_EQ(draft != ct::kDefaultAlgorithms, true);
+        CHECK_EQ(ui.charger_test_start(false, 1300).result == RemoteStart::Result::Accepted, true);
+        CHECK_EQ(ui.charger_test_selection(), draft);
+    }
+    { // refused at once by the preflight: the reason comes back, the footer says it, no window opens, nothing is armed
+        fixture(); Ui ui; open(ui); g_stub.sink.held = true;
+        const auto r = ui.charger_test_start(true, 1200);
+        CHECK_EQ(r.result == RemoteStart::Result::Refused, true);
+        CHECK_EQ(r.reason == ct::Reason::Busy, true);
+        CHECK_EQ(ui.charger_test_view().confirming, false);
+        ui.tick(1300); settle(ui, 1300);
+        CHECK_EQ(footer_says("PD hold: release it", kCaution), true);
+        ui.tick(2500);
+        CHECK_EQ(ui.charger_test_busy(), false); nothing_armed_stub();
+    }
+    { // the Ra guard reads a cable on the plug: the Refuse stage, as on the device; CANCEL returns to Review, nothing armed
+        rd_fixture(); set_cc(3300, 0); Ui ui; open(ui);
+        ticks(ui, 1100, 3000);   // a dark charger: the link detaches and its list goes (a changed offer drops a confirmation)
+        CHECK_EQ(ui.charger_test_set_cable(kBuiltin), true);
+        CHECK_EQ(ui.charger_test_start(false, 3000).result == RemoteStart::Result::Accepted, true);
+        ticks(ui, 3000, 3900);
+        CHECK_EQ(ui.charger_test_stage(), kRefuseStage); nothing_armed();
+        CHECK_EQ(ui.charger_test_stop(4000) == Stopped::Refusal, true);
+        CHECK_EQ(ui.charger_test_stage(), 4); nothing_armed();
+    }
+    { // a charger alone (no VBUS): the Rd and the wait as on the device; CANCEL in the wait gives the Rd back, nothing started
+        fixture(); g_stub.pm.vbus_mv = 0; Ui ui; open(ui);
+        ticks(ui, 1100, 3000);
+        CHECK_EQ(ui.charger_test_start(true, 3000).result == RemoteStart::Result::Accepted, true);
+        CHECK_EQ(g_stub.rd_run, false);
+        ticks(ui, 3000, 3900);
+        CHECK_EQ(ui.charger_test_stage(), kWaitStage); CHECK_EQ(g_stub.rd_run, true);
+        CHECK_EQ(ui.charger_test_start(true, 3950).result == RemoteStart::Result::Busy, true);
+        CHECK_EQ(ui.charger_test_stop(4000) == Stopped::Wait, true);
+        CHECK_EQ(ui.charger_test_stage(), 4); CHECK_EQ(g_stub.rd_run, false); CHECK_EQ(ui.charger_test_busy(), false);
+    }
+    { // CANCEL inside the guard's window: the confirmation closes and the START never goes on
+        fixture(); Ui ui; open(ui);
+        CHECK_EQ(ui.charger_test_start(true, 1200).result == RemoteStart::Result::Accepted, true);
+        CHECK_EQ(ui.charger_test_stop(1300) == Stopped::Confirmation, true);
+        ticks(ui, 1300, 3000);
+        CHECK_EQ(ui.charger_test_busy(), false); nothing_armed_stub(); no_operations();
+    }
+    { // a key pressed on the device inside the window drops the confirmation, as it drops the device's own
+        fixture(); Ui ui; open(ui);
+        CHECK_EQ(ui.charger_test_start(true, 1200).result == RemoteStart::Result::Accepted, true);
+        press(ui, Button::Plus, 1300);
+        ticks(ui, 1300, 3000);
+        CHECK_EQ(ui.charger_test_busy(), false); CHECK_EQ(ui.charger_test_stage(), 4); nothing_armed_stub();
+    }
+}
+
 int main() {
     test_view_says_what_the_wizard_shows();
     test_view_carries_the_wait_and_the_run();
@@ -4310,5 +4401,6 @@ int main() {
     test_skip_results_and_deselection(); test_navigation_and_stop_controls();
     test_start_waits_for_the_caps();
     test_decisions_use_the_unaveraged_vbus();
+    test_remote_start_is_the_devices_start();
     return test_report("test_ui_charger_test");
 }

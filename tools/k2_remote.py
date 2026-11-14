@@ -1548,7 +1548,91 @@ RESULTS_ATTEMPTS = 4     # whole exports tried before the results are declared u
 RESULTS_RETRY_S = 0.3    # pause between exports, so a row boundary can pass
 
 
+CT_START_REQ, CT_CANCEL_REQ = 4, 5          # 0x0B req [4, flags] START / [5] CANCEL (remote_proto.hpp)
+CT_START_CONFIRM, CT_START_ALL_TESTS = 1, 2  # kCtStartConfirm (required) / kCtStartAllTests (the "All tests" preset)
+CT_STOPPED = ["nothing", "run", "wait", "confirmation", "refusal", "resume"]   # kCtStop* = ChargerTestSession::Stopped
+CT_START_FOLLOW_S = 45.0   # the K2's own START wait is <= ~21 s (VBUS 5-10 s, caps 2 s, one Rd re-present) plus the ~0.8 s guard window
+CT_START_POLL_S = 0.5
+# The same text as raguard::kRefusalText in include/k2/pd/ra_guard.hpp (tools/ct_start.py REFUSAL_TEXT).
+CT_GUARD_REFUSAL = ("spoof needs the charger plugged into the K2 directly (top plug); "
+                    "through a cable the cable itself answers")
+
+
+def charger_test_start(link, all_tests=True):
+    """0x0B req [4, flags]: the device's own START after its confirmation (preflight, Ra guard, identity, Rd and the wait
+    are the K2's). accepted = the confirm window is open and confirms itself; otherwise the refusal and the VBUS behind it."""
+    flags = CT_START_CONFIRM | (CT_START_ALL_TESTS if all_tests else 0)
+    try:
+        p = link.call(CMD_CHARGER_TEST, bytes([CT_START_REQ, flags])).payload
+    except RemoteError as e:
+        if e.status not in (STATUS_BAD_LENGTH, STATUS_BAD_ARG):
+            raise
+        raise FrameError("this firmware has no remote charger-test START (older than the web-ct build); "
+                         "use tools/ct_start.py") from None
+    if len(p) != 4 or p[0] > 1 or p[1] >= len(TEST_REASONS):
+        raise FrameError("invalid charger-test start reply")
+    refused = p[0] == 1
+    return {"accepted": not refused, "refusal": TEST_REASONS[p[1]] if refused else None,
+            "refusal_mv": int.from_bytes(p[2:4], "little")}
+
+
+def charger_test_cancel(link):
+    """0x0B req [5]: the device's own stop (BACK): what it stopped."""
+    p = link.call(CMD_CHARGER_TEST, bytes([CT_CANCEL_REQ])).payload
+    if len(p) != 1 or p[0] >= len(CT_STOPPED):
+        raise FrameError("invalid charger-test cancel reply")
+    return {"stopped": CT_STOPPED[p[0]]}
+
+
+def _ct_poll(fn):
+    """One status / view read; None when the K2 is busy bit-banging a handshake and does not answer."""
+    try:
+        return fn()
+    except RemoteTimeout:
+        return None
+
+
+def cmd_charger_test_start(link, a, sleep=time.sleep):
+    """Units and cable first (the existing commands), then START, then follow the K2's own stages until the run id goes up
+    (started) or the K2 refuses: at once (the preflight), the Ra guard's Refuse stage (closed with CANCEL, as BACK would), or the
+    final preflight after the wait (Review again, the run id unchanged: the metadata reason and the footer words say why)."""
+    if a.units is not None:
+        charger_units(link, parse_units(a.units))
+    if a.cable is not None:
+        charger_cable(link, parse_cable(a.cable))
+    status = lambda: _charger_test_export(link, argparse.Namespace(test_cmd="status"))
+    view = lambda: decode_charger_test_view(link.call(CMD_CHARGER_TEST, bytes([3])).payload)
+    before = status()["run_id"]
+    r = charger_test_start(link, all_tests=not a.keep_selection)
+    if not r["accepted"]:
+        raise FcRefused(f"START refused: {r['refusal']}" + (f" ({r['refusal_mv']} mV)" if r["refusal_mv"] else ""))
+    waited, moved = 0.0, False
+    while waited < CT_START_FOLLOW_S:
+        sleep(CT_START_POLL_S)
+        waited += CT_START_POLL_S
+        st = _ct_poll(status)
+        if st is not None and st["run_id"] != before:
+            return {"started": True, "run_id": st["run_id"], "previous_run_id": before}
+        v = _ct_poll(view)
+        if v is None:
+            continue
+        if v["stage"] == "refuse":
+            charger_test_cancel(link)
+            raise FcRefused(f"{CT_GUARD_REFUSAL} (use --cable off, or put the charger on the top plug)")
+        if v["stage"] == "waiting" or (v["stage"] == "review" and v["confirming"]):
+            moved = True
+        elif v["stage"] == "review" and moved:
+            reason = (_ct_poll(status) or {}).get("reason", "unknown")
+            raise FcRefused(f"START did not start a run (run id still {before}): {reason}" +
+                            (f"; the K2 says: {v['message']}" if v["message"] else ""))
+    raise FrameError(f"START did not start a run in {CT_START_FOLLOW_S:g} s (run id still {before})")
+
+
 def cmd_charger_test(link, a, sleep=time.sleep):
+    if a.test_cmd == "start":
+        return cmd_charger_test_start(link, a, sleep=sleep)
+    if a.test_cmd == "cancel":
+        return charger_test_cancel(link)
     if a.test_cmd == "view":   # the screens as data; firmware without the form answers BadArg / BadLength
         try:
             return decode_charger_test_view(link.call(CMD_CHARGER_TEST, bytes([3])).payload)
@@ -4686,7 +4770,7 @@ def build_parser():
     g.add_argument("--long", action="store_true", help=f"hold {LONG_PRESS_MS} ms")
     g.add_argument("--ms", type=int, help="hold time in ms (30..10000); to reset the K2 use `reboot`")
     sub.add_parser("state", help="page, power readings, PD summary")
-    st = sub.add_parser("charger-test", help="read existing RAM suite results (never starts or stops tests)")
+    st = sub.add_parser("charger-test", help="RAM suite results, the screens as data, and the device's own START / stop")
     sts = st.add_subparsers(dest="test_cmd", required=True)
     sts.add_parser("status", help="read run/state metadata only")
     strc = sts.add_parser("results", help="retrieve a consistent bounded result table")
@@ -4694,6 +4778,15 @@ def build_parser():
     sts.add_parser("view", help="what the charger-test screens show: stage, cursor, confirmation, wait / run clocks, preview, footer words")
     sms = sts.add_parser("summary", help="compact per-protocol summary of the RAM results")
     sms.add_argument("--out", help="also write the complete evidence JSON to this host file")
+    sst = sts.add_parser("start", help="START a run the way the device does (preflight, Ra guard, identity, Rd, wait; nothing is "
+                         "bypassed): the K2 negotiates every level the charger offers. Returns once the run started or was refused")
+    sst.add_argument("--units", help="comma list of the units to run, in order (" + ", ".join(TEST_UNITS) +
+                     "); sent with charger-units first; default: the device's default order")
+    sst.add_argument("--cable", help="cable identity (charger-cable): off | builtin | builtin:<id|name> | saved:<id>; "
+                     "default: the identity the device holds")
+    sst.add_argument("--keep-selection", action="store_true",
+                     help="keep the device's draft algorithm selection (default: the 'All tests' preset, as ct_start.py)")
+    sts.add_parser("cancel", help="the device's own stop (BACK): stops a run, cancels the wait or the confirmation")
     cu = sub.add_parser("charger-units", help="set the test units (and their order) of the NEXT charger run; reset by every START")
     cu.add_argument("units", help="comma list, e.g. qc2,qc3,pd (names: " + ", ".join(TEST_UNITS) + "); 'default' = the default order")
     cc = sub.add_parser("charger-cable", help="cable identity the charger-test START dialog opens on (no argument: read it back)")

@@ -207,6 +207,32 @@ remote::ChargerTestView Remote::charger_test_view() {
     return o;
 }
 
+remote::ChargerTestStartReply Remote::charger_test_start(uint8_t flags) {
+    using R = ChargerTestSession::RemoteStart::Result;
+    const auto s = ui_.charger_test_start((flags & remote::kCtStartAllTests) != 0, systick::millis());
+    remote::ChargerTestStartReply r;
+    if (s.result == R::Busy) { K2LOG("[RMT] charger-test start: busy\n"); r.status = remote::Status::Busy; return r; }
+    r.result = s.result == R::Refused ? remote::kCtStartRefused : remote::kCtStartAccepted;
+    r.reason = static_cast<uint8_t>(s.reason); r.refusal_mv = s.refusal_mv;
+    K2LOG("[RMT] charger-test start all=%d -> %s\n", int((flags & remote::kCtStartAllTests) != 0),
+          s.result == R::Refused ? "refused" : "confirming");
+    return r;
+}
+
+static_assert(static_cast<uint8_t>(ChargerTestSession::Stopped::Nothing) == remote::kCtStopNothing &&
+              static_cast<uint8_t>(ChargerTestSession::Stopped::Run) == remote::kCtStopRun &&
+              static_cast<uint8_t>(ChargerTestSession::Stopped::Wait) == remote::kCtStopWait &&
+              static_cast<uint8_t>(ChargerTestSession::Stopped::Confirmation) == remote::kCtStopConfirm &&
+              static_cast<uint8_t>(ChargerTestSession::Stopped::Refusal) == remote::kCtStopRefusal &&
+              static_cast<uint8_t>(ChargerTestSession::Stopped::Resume) == remote::kCtStopResume,
+              "CANCEL's reply byte is the session's Stopped value");
+
+uint8_t Remote::charger_test_cancel() {
+    const auto s = static_cast<uint8_t>(ui_.charger_test_stop(systick::millis()));
+    K2LOG("[RMT] charger-test cancel -> %d\n", int(s));
+    return s;
+}
+
 remote::Status Remote::charger_units(std::span<const uint8_t> units) {
     if (ui_.charger_test_busy()) return remote::Status::Busy;
     K2LOG("[TEST] units set n=%u\n", unsigned(units.size()));
