@@ -95,7 +95,9 @@ int main() {
     ui.goto_page(uint8_t(Page::Home), t); t += 100;
     ui.open_place(bench::Place::Log, t); render(ui, t, "place_log");
     ui.goto_page(uint8_t(Page::Home), t); t += 100;
-    ui.open_place(bench::Place::K2, t); render(ui, t, "place_k2");
+    ui.open_place(bench::Place::K2, t);
+    for (int i = 0; i < 400 && ui.painting(); i++) ui.tick(t += 20);   // the identity and the list paint in budgeted steps
+    render(ui, t, "place_k2");
     // The Battery place: idle, a round trip charging (the running dot), then done; the Bench with the run on its row.
     stub_battery_reset();
     ui.goto_page(uint8_t(Page::Home), t); t += 100;

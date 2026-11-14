@@ -32,6 +32,7 @@
 #include "k2/ui/ui_widgets.hpp"
 
 #include "k2/drivers/adc.hpp"
+#include "k2/drivers/usbcfg.hpp"
 #include "k2/chargertest/charger_journal.hpp"
 #include "k2/pd/transcap.hpp"
 #include "k2/fastcharge/ai_recog.hpp"
@@ -1205,6 +1206,7 @@ private:
     int &sel_ = ctx_.keep.settings_sel;   // remembered across page switches
     Elem foot_, id_;
     uint8_t static_step_ = 0;
+    mutable usbcfg::LinkNote usb_note_;   // the USB Link row's note, filled by row_fn and drawn at once
 };
 
 class AutorotatePage final : public PageBase {

@@ -242,7 +242,33 @@ void test_webusb_toggle() {
 }
 }  // namespace
 
+// The Settings row's note and the USB Link page read one truth: this boot's mode against the stored next-boot mode (the page
+// says "Active this boot" / "USB link off" / "Replug to apply"). The row used to say "HID and drive" whatever ran, beside a
+// page showing Drive OFF.
+void test_link_note() {
+    using S = usbcfg::Setting;
+    const S hid_web{true, false, false, false, true};
+    const S running = usbcfg::with_shell(hid_web);   // this boot's setting carries the derived shell flag
+    CHECK_EQ(usbcfg::same_mode(running, hid_web), true);
+    CHECK_STR(usbcfg::link_note(running, hid_web).c_str(), "HID+WebUSB active");
+    CHECK_STR(usbcfg::link_note(S{}, S{}).c_str(), "USB link off");
+    CHECK_EQ(usbcfg::same_mode(running, S{true, true}), false);
+    CHECK_STR(usbcfg::link_note(running, S{true, true}).c_str(), "HID+Drive after a replug");
+    CHECK_STR(usbcfg::link_note(running, S{}).c_str(), "USB off after a replug");
+    CHECK_STR(usbcfg::link_note(S{}, S{false, true}).c_str(), "Drive after a replug");
+    int longest = 0;   // every pair of modes fits the focused row's note line (31 characters of font 12)
+    for (unsigned a = 0; a < 16; a++)
+        for (unsigned b = 0; b < 16; b++) {
+            const S x = usbcfg::normalize({(a & 1) != 0, (a & 2) != 0, (a & 4) != 0, false, (a & 8) != 0}, true, true);
+            const S y = usbcfg::normalize({(b & 1) != 0, (b & 2) != 0, (b & 4) != 0, false, (b & 8) != 0}, true, true);
+            const int n = int(usbcfg::link_note(x, y).view().size());
+            if (n > longest) longest = n;
+        }
+    CHECK_EQ(longest <= 31, true);
+}
+
 int main() {
+    test_link_note();
     test_webusb_mode();
     test_webusb_toggle();
     test_net_not_built();

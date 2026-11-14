@@ -82,8 +82,9 @@ on the place page.
   row is `Black Box` (chevron, note `N captures kept`), the only row OK opens.
 - Status words that start a phrase are sentence case (`None on either port`, `Not read`, `No session, 3 captures`);
   units and values keep their case (`mV`, `5.27V`).
-- **K2**: the version in font 16 at (8, 25), `up 1h05m  USB HID on` in font 12 at y46, a dashed line at y63, the settings
-  list from y66, then `System state` (the Diag page) and `Boot info` (this boot's K2B1 record shared as QR codes).
+- **K2**: the version in font 16 at (8, 25), `up 1h05m  USB HID+WebUSB` (this boot's mode, `usbcfg::describe`) in font 12
+  at y46, a dashed line at y63, the settings list from y66 (the USB Link row's note is `usbcfg::link_note`: `HID+WebUSB
+  active`, `USB link off` or `HID+Drive after a replug`, the truth the USB Link page's footer states), then `System state` (the Diag page) and `Boot info` (this boot's K2B1 record shared as QR codes).
 - A RowList that starts below an identity block or a stamp ends above y220; the page fills that gap once
   (`kit::fill_list_gap`).
 

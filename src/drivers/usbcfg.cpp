@@ -43,6 +43,10 @@ static void note_webusb_dropped(fs::Fs& f) {
 }
 #endif
 
+// What flash holds, kept in RAM: init() reads it, set() updates it when flash took the write. The Settings row reads
+// stored() on every repaint, so it must not cost a file read.
+static Setting g_stored{};
+
 void init() {
     fs::Fs& f = fs::instance();
     import_legacy(f);
@@ -52,13 +56,15 @@ void init() {
 #if !K2_WEBUSB
     note_webusb_dropped(f);
 #endif
-    current = with_shell(load(f));
+    g_stored = load(f);
+    current = with_shell(g_stored);
 }
 
-Setting stored() { return load(fs::instance()); }
+Setting stored() { return g_stored; }
 
 bool set(Setting s) {
     const bool ok = save(fs::instance(), s);
+    if (ok) g_stored = s;
     K2LOG("[USBCFG] next boot: %s (%s)\n", describe(s), ok ? "saved" : "FLASH ERROR");
     return ok;
 }

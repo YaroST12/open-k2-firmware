@@ -10,6 +10,7 @@
 #pragma once
 #include <array>
 #include <cstdint>
+#include <string_view>
 
 #include "k2/core/build_config.h"
 #include "k2/core/fs.hpp"
@@ -128,6 +129,35 @@ constexpr const char* describe(Setting s) {
     return s.hid ? (s.drive ? "HID+Drive" : "HID") : (s.drive ? "Drive" : "off");
 }
 
+// The same USB mode, the derived shell flag aside (this boot's setting carries it, the stored one never does).
+constexpr bool same_mode(Setting a, Setting b) {
+    return a.hid == b.hid && a.drive == b.drive && a.net == b.net && a.webusb == b.webusb;
+}
+
+// One line of text, at most 31 characters (the focused row's note in font 12).
+struct LinkNote {
+    char s[32] = {};
+    std::uint8_t n = 0;
+    constexpr void put(const char* t) { while (*t && n < sizeof s - 1) s[n++] = *t++; }
+    constexpr std::string_view view() const { return {s, n}; }
+    constexpr const char* c_str() const { return s; }
+};
+// The USB link in one line, from this boot's mode and the stored next-boot mode: what the USB Link page's footer says
+// ("Active this boot", "USB link off", "Replug to apply"), with the mode named. The Settings row shows it.
+constexpr LinkNote link_note(Setting now, Setting next) {
+    LinkNote t;
+    if (!same_mode(now, next)) {
+        t.put(any(next) ? describe(next) : "USB off");
+        t.put(" after a replug");
+    } else if (any(now)) {
+        t.put(describe(now));
+        t.put(" active");
+    } else {
+        t.put("USB link off");
+    }
+    return t;
+}
+
 inline Setting load(fs::Fs& f) {
     std::array<std::uint8_t, 8> r{};
     std::size_t n = 0;
@@ -142,7 +172,7 @@ inline bool save(fs::Fs& f, Setting s) {
 
 // Firmware side (src/drivers/usbcfg.cpp, not linked into the host tests).
 void init();                    // load the stored setting into `current`; call before usb::init()
-Setting stored();               // what flash holds now (the setting for the next boot)
+Setting stored();               // what flash holds now (the setting for the next boot), cached: no file read
 bool set(Setting s);            // write the next-boot setting; true when flash took it
 
 }  // namespace k2::usbcfg

@@ -2161,9 +2161,9 @@ void SettingsPage::draw_static() {
 // and the dashed line the place pages close their identity with. y22..65, each pixel once.
 void SettingsPage::paint_identity() {
     const uint32_t up_min = ctx_.now / 60000u;
-    const bool hid = usbcfg::current.hid;
-    const bool webusb = usbcfg::current.webusb;
-    id_.paint_budgeted(mix_u32(mix_u32(mix_init(), up_min), hid + 2u * webusb), ctx_.budget,
+    const usbcfg::Setting usb = usbcfg::current;
+    const uint32_t usb_mode = usb.hid + 2u * usb.drive + 4u * usb.net + 8u * usb.webusb;
+    id_.paint_budgeted(mix_u32(mix_u32(mix_init(), up_min), usb_mode), ctx_.budget,
                         static_cast<int>(ctx_.content.w) * (kListY - kit::kBelowBar), [&] {
         const Surface &c = ctx_.content;
         StrBuf<32> line;
@@ -2173,7 +2173,7 @@ void SettingsPage::paint_identity() {
             if (up_min % 60 < 10) line.put_char('0');
         }
         line.put_u32(up_min % 60).put_char('m');
-        line.put(hid ? "  USB HID on" : webusb ? "  USB WebUSB on" : "  USB HID off");
+        line.put("  USB ").put(usbcfg::describe(usb));   // this boot's mode, the words the USB Link note uses
         const kit::TextRun runs[2] = {{8, kIdHeadY, &kSmall, std::string_view(kFwVersion), kText},
                                       {8, kIdLineY, &kLabelFont, line.view(), kDim}};
         kit::paint_texts(c, {0, kit::kBelowBar, c.w, static_cast<int16_t>(kIdDashY - kit::kBelowBar)}, runs, 2, kBg);
@@ -2217,11 +2217,9 @@ void SettingsPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
     switch (static_cast<SettingRow>(i)) {
     case SettingRow::UsbLink:
         out.chevron = true;
-#if K2_NET
-        out.note = "HID, drive and network";
-#else
-        out.note = "HID and drive";   // this build has no Network row (kUlRows below)
-#endif
+        // The truth the USB Link page shows: this boot's mode against the stored one (its "Replug to apply" footer).
+        self->usb_note_ = usbcfg::link_note(usbcfg::current, usbcfg::stored());
+        out.note = self->usb_note_.view();
         break;
     case SettingRow::Autorotate:
         out.tail = self->ctx_.ui->rotation_locked() ? "Locked" : "Auto";
@@ -2466,8 +2464,7 @@ void UsbLinkPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
 
 void UsbLinkPage::update(uint32_t) {
     title_badge(false);
-    const bool differs = pending_.hid != usbcfg::current.hid || pending_.drive != usbcfg::current.drive ||
-                         pending_.net != usbcfg::current.net || pending_.webusb != usbcfg::current.webusb;
+    const bool differs = !usbcfg::same_mode(pending_, usbcfg::current);
     ctx_.rows.select(sel_);
     ctx_.rows.draw(ctx_.now, ctx_.budget);
     if (differs) {
