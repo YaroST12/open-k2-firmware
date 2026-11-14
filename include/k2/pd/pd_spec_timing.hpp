@@ -54,6 +54,41 @@ constexpr std::uint32_t band_mv(std::uint32_t target_mv) { return target_mv * kV
 inline constexpr std::uint32_t kHardResetRecoveryMs = 1960;
 inline constexpr std::uint32_t kHardResetRecoveryMaxMs = 2200;
 
+// ---- PD Spec Check (k2/pdspec, docs/PD_SPEC_CHECK.md) ----------------------------------------------------------------------------
+// The figures below come from the 2026-11-11 renegotiation research (the PD R3.2 tables, named by symbol). The reference point of each
+// one is stated, because the check measures from the K2's own edges: the Request's TX start, the Accept's and the PS_RDY's RX edge.
+//
+// PS_RDY after the Accept (from the Accept's GoodCRC): tSrcTransReq is the SOURCE's limit (kSrcTransReqSprMs / kSrcTransReqEprMs above);
+// tPSTransition is the SINK's give-up timer and is wider. The check judges PS_RDY against tSrcTransReq.
+// VBUS inside vSrcNew after the Accept: the transition may start no earlier than tSrcTransition (kSrcTransitionMinMs) and must be
+// settled tSrcSettle after it started, so tSrcTransition max + tSrcSettle after the Accept (derived).
+inline constexpr std::uint32_t kInBandSprMs = kSrcTransitionMaxMs + kSrcSettleSprMs;   // 310 ms (derived)
+inline constexpr std::uint32_t kInBandEprMs = kSrcTransitionMaxMs + kSrcSettleEprMs;   // 735 ms (derived)
+// PPS output: vPpsNew is the requested voltage +-5 % (same permille as vSrcNew). The step settles within tPpsSrcTransSmall /
+// tPpsSrcTransLarge (kPpsSmallStepMs / kPpsLargeStepMs), taken from the Accept (inferred: the table names the set-point time only).
+inline constexpr std::uint32_t kPpsNewPermille = 50;
+// Hard Reset, source side: tPSHardReset after the signalling the source starts to remove VBUS, VBUS reaches vSafe0V within tSafe0V,
+// stays off for tSrcRecover, is back at vSafe5V within tSrcTurnOn, and the first Source_Capabilities follow within tFirstSourceCap.
+inline constexpr std::uint32_t kPsHardResetMaxMs = 35;        // tPSHardReset 25-35 ms
+inline constexpr std::uint32_t kSafe0VMs = 650;               // tSafe0V
+inline constexpr std::int32_t kVSafe0VMaxMv = 800;            // vSafe0V upper bound
+inline constexpr std::int32_t kVSafe5VMinMv = 4750;           // vSafe5V lower bound
+inline constexpr std::uint32_t kSrcRecoverMinMs = 660;        // tSrcRecover, SPR
+inline constexpr std::uint32_t kSrcRecoverMaxMs = 1000;
+inline constexpr std::uint32_t kSrcTurnOnMs = 275;            // tSrcTurnOn
+inline constexpr std::uint32_t kFirstSourceCapMs = 250;       // tFirstSourceCap
+// A sink detach (Rd removed): the source removes VBUS, which must reach vSafe0V within tVBUSOFF (Type-C, 650 ms, the same figure as
+// tSafe0V; inferred) after the source's own CC debounce (tPDDebounce 10-20 ms, inferred). The check allows both.
+inline constexpr std::uint32_t kVbusOffMs = 650;
+inline constexpr std::uint32_t kPdDebounceMaxMs = 20;
+// Keep-alives: in a PPS contract the sink re-requests within tPPSRequest (10 s); the source's timer is tPPSTimeout (12-15 s) and it
+// answers the silence with a Hard Reset (that last part is unverified in the research: a source that never resets is reported).
+// In EPR mode the sink sends EPR_KeepAlive every tSinkEPRKeepAlive (250-500 ms); the source's timer is tSourceEPRKeepAlive (750-1000 ms).
+inline constexpr std::uint32_t kPpsTimeoutMinMs = 12000;
+inline constexpr std::uint32_t kPpsTimeoutMaxMs = 15000;
+inline constexpr std::uint32_t kSourceEprKeepAliveMinMs = 750;
+inline constexpr std::uint32_t kSourceEprKeepAliveMaxMs = 1000;
+
 static_assert(kAcceptMs > kSenderResponseMaxMs, "the K2's own Accept timeout must be looser than the spec's tSenderResponse");
 static_assert(kPsRdyMs >= kPsTransitionMaxMs, "the K2's own PS_RDY timeout must be looser than tPSTransition");
 static_assert(kSenderResponseMinMs <= kSenderResponseMaxMs, "tSenderResponse range");
