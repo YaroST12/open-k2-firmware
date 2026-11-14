@@ -2595,6 +2595,12 @@ if (typeof module !== "undefined" && module.exports) module.exports = K2Proto;
 //   errorText(e, what)                             a failure in plain words for the footer (never a status code)
 //   messageTableHtml / specResultHtml              the recent PD messages; the PD Spec Check blob as KvTable + ResultGrid
 //   fcOffers / fcNeedsConfirm / fcDetected         what fast charge the page offers: QC at or below 12 V, never a VOOC family trigger
+//   fcSelection / fcStepLevel                      the picked protocol and level, and one step through an offer's levels
+//   ROUTES / routeFor / pageTitle                  the dashboard's pages; the old #triggers address opens PD
+//   actCell / stepperHtml                          a page action as an ActionCell, and the stepper buttons (data-step)
+//   SPEC_FAMILY_NOTES / specFamilyMask / specProgress   the PD Spec Check family boxes, the mask they send, the progress line
+//   savedRows / cardRows / unmatchedView           the saved-cable and charger-card RowLists, the held-back e-marker replies
+//   fmtV / fmtA / fmtW                             voltage, current and power text
 //
 // verdict is one of pending running pass fail none skip stopped partial (the device's Verdict enum). Colour never
 // carries it alone: pass and fail differ in fill and ink, skip strikes the volts, running adds a dot, none and
@@ -2794,6 +2800,17 @@ var K2Kit = (function () {
     return what + ": " + (e && e.message ? e.message : String(e));
   }
 
+  // ---- pages ----------------------------------------------------------------------------------------------------------------
+  var ROUTES = ["live", "test", "pd", "fc", "spec", "cables", "device"];
+  var ROUTE_ALIAS = { triggers: "pd" };
+  var TITLES = { live: "Live", test: "Charger test", pd: "PD", fc: "Fast charge", spec: "PD Spec Check", cables: "Cables", device: "Device" };
+  function routeFor(hash) {
+    var h = String(hash || "").replace(/^#/, "");
+    if (ROUTE_ALIAS[h]) h = ROUTE_ALIAS[h];
+    return ROUTES.indexOf(h) >= 0 ? h : "live";
+  }
+  function pageTitle(route) { return TITLES[route] || route; }
+
   // ---- fast charge --------------------------------------------------------------------------------------------------------
   var FC_MAX_QC_MV = 12000;
   var FC_NO_TRIGGER = ["vooc", "svooc", "svooc65"];   // detect and status only, never a trigger button
@@ -2811,6 +2828,22 @@ var K2Kit = (function () {
       out.push({ proto: proto, mv: mv, def: d < 0 ? 0 : d });
     });
     return out;
+  }
+  // The offer the page has selected: {proto, mv, offer}. picked = {proto, mv} from the page (or null); a protocol that is not
+  // offered falls back to the first offer, a level the protocol does not list to its default.
+  function fcSelection(offers, picked) {
+    if (!offers || !offers.length) return null;
+    var offer = offers[0];
+    if (picked) offers.forEach(function (o) { if (o.proto === picked.proto) offer = o; });
+    var mv = picked && offer.mv.indexOf(picked.mv) >= 0 ? picked.mv : offer.mv[offer.def];
+    return { proto: offer.proto, mv: mv, offer: offer };
+  }
+  // One step through an offer's levels (dir +1 / -1); an unlisted level steps to the nearest listed one in that direction.
+  function fcStepLevel(offer, mv, dir) {
+    var l = offer.mv, i;
+    if (dir > 0) { for (i = 0; i < l.length; i++) if (l[i] > mv) return l[i]; return l[l.length - 1]; }
+    for (i = l.length - 1; i >= 0; i--) if (l[i] < mv) return l[i];
+    return l[0];
   }
   // The D+/D- readout (the firmware's detected fast-charge name) as a label; the VOOC family is read, never triggered.
   function fcDetected(name) {
@@ -2969,6 +3002,7 @@ var K2Kit = (function () {
     ARM_MS: ARM_MS, armPress: armPress, armExpire: armExpire, armLeftMs: armLeftMs, armCancel: armCancel, footerState: footerState,
     CEILING_MV: CEILING_MV, snapMv: snapMv, stepMv: stepMv, clampMa: clampMa, needsConfirm: needsConfirm, pdoRows: pdoRows, pdRequestFor: pdRequestFor,
     FC_MAX_QC_MV: FC_MAX_QC_MV, fcOffers: fcOffers, fcNeedsConfirm: fcNeedsConfirm, fcDetected: fcDetected,
+    fcSelection: fcSelection, fcStepLevel: fcStepLevel, ROUTES: ROUTES, routeFor: routeFor, pageTitle: pageTitle,
     fmtV: fmtV, fmtA: fmtA, fmtW: fmtW
   };
 })();

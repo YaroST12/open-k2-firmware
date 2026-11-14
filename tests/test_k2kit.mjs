@@ -482,6 +482,44 @@ test("unmatchedView: what the firmware held back, with the counts, or an empty n
   assert.match(some.footer, /2 of 5/);
 });
 
+// ---- pages and the fast-charge selection ----------------------------------------------------------------------------------
+test("routes: the page list, the #triggers alias and the titles", () => {
+  assert.deepEqual(K.ROUTES, ["live", "test", "pd", "fc", "spec", "cables", "device"]);
+  assert.equal(K.routeFor("#pd"), "pd");
+  assert.equal(K.routeFor("cables"), "cables");
+  assert.equal(K.routeFor("#triggers"), "pd", "the old Triggers address opens PD");
+  assert.equal(K.routeFor("#nope"), "live");
+  assert.equal(K.routeFor(""), "live");
+  assert.equal(K.routeFor(undefined), "live");
+  for (const r of K.ROUTES) assert.ok(K.pageTitle(r).length > 0, r);
+  assert.equal(K.pageTitle("fc"), "Fast charge");
+  assert.equal(K.pageTitle("spec"), "PD Spec Check");
+});
+
+test("fcSelection: the picked protocol and level, or the first offer at its default", () => {
+  const offers = K.fcOffers(
+    { qc2: { mv: [5000, 9000, 12000, 20000], def: 1 }, scp: { mv: [4500, 5000], def: 1 }, afc: { mv: [5000, 9000, 12000], def: 1 } },
+    ["qc2", "scp", "afc"]);
+  assert.deepEqual(K.fcSelection(offers, null), { proto: "qc2", mv: 9000, offer: offers[0] });
+  assert.deepEqual(K.fcSelection(offers, { proto: "afc", mv: 12000 }).mv, 12000);
+  assert.equal(K.fcSelection(offers, { proto: "afc", mv: 12000 }).proto, "afc");
+  // a level the protocol does not offer snaps to its default
+  assert.equal(K.fcSelection(offers, { proto: "scp", mv: 9000 }).mv, 5000);
+  // an unknown protocol falls back to the first offer
+  assert.equal(K.fcSelection(offers, { proto: "zzz", mv: 5000 }).proto, "qc2");
+  assert.equal(K.fcSelection([], null), null);
+});
+
+test("fcStepLevel: walks the offered levels and stops at both ends", () => {
+  const offer = { proto: "qc2", mv: [5000, 9000, 12000], def: 1 };
+  assert.equal(K.fcStepLevel(offer, 9000, 1), 12000);
+  assert.equal(K.fcStepLevel(offer, 9000, -1), 5000);
+  assert.equal(K.fcStepLevel(offer, 12000, 1), 12000);
+  assert.equal(K.fcStepLevel(offer, 5000, -1), 5000);
+  assert.equal(K.fcStepLevel(offer, 7777, 1), 9000, "an unlisted level steps to the next one above");
+  assert.equal(K.fcStepLevel(offer, 7777, -1), 5000);
+});
+
 // ---- the embed in k2.html stays in sync ------------------------------------------------------------------------------------
 test("k2.html embeds the current k2kit.js and k2kit.css", () => {
   const html = readFileSync(path.join(root, "tools/web/k2.html"), "utf8");
