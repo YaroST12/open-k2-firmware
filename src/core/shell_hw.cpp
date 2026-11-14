@@ -29,6 +29,7 @@
 #include "k2/pd/pd_sink.hpp"
 #include "k2/fastcharge/vooc.hpp"
 #include "k2/core/lab.hpp"
+#include "k2/core/main_loop.hpp"
 #include "k2/core/math_selftest.hpp"
 #include "k2/core/shell.hpp"
 #include "k2/drivers/systick.hpp"
@@ -58,26 +59,31 @@ bool g_log_on = false;         // `log on`
 bool g_fc_started = false;     // a trigger this shell started and has not reset
 bool g_raw_dp = false, g_raw_dm = false;   // a raw level is driven
 std::uint32_t g_silent_until = 0;          // `pd silent` deadline (ms), 0 = not silent
+bool g_putting = false;        // put() is part-way through a text: the log tap keeps out of it
 
 bool session_up() { return tud_mounted() && !tud_suspended() && tud_cdc_connected(); }
 
-// Whole text to the host, waiting briefly for FIFO room (the help text is longer than the FIFO).
+// Whole text to the host, waiting briefly for FIFO room (the help text is longer than the FIFO). The wait keeps the 1 ms PD
+// service going through the main loop's idle hook, as a long LCD draw does: a slow or stalled host must not starve PD.
 void put(std::string_view s) {
     if (!g_session || usb::cdc_hold()) return;
     const std::uint32_t t0 = systick::millis();
+    g_putting = true;
     while (!s.empty()) {
         const std::uint32_t n = tud_cdc_write(s.data(), static_cast<std::uint32_t>(s.size()));
         s.remove_prefix(n);
         if (s.empty()) break;
         tud_cdc_write_flush();
         tud_task();
-        if (systick::millis() - t0 > kWriteTimeoutMs) return;
+        mainloop::idle_hook();
+        if (systick::millis() - t0 > kWriteTimeoutMs) break;
     }
+    g_putting = false;
 }
 
 // usb::log tap: one chip log line to the terminal; dropped when the FIFO has no room.
 void tap(std::string_view line) {
-    if (!g_log_on || !g_session || usb::cdc_hold()) return;   // a screenshot owns the pipe
+    if (!g_log_on || !g_session || usb::cdc_hold() || g_putting) return;   // a screenshot owns the pipe; or a put() is mid-text
     while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) line.remove_suffix(1);
     if (tud_cdc_write_available() < line.size() + 2) return;
     tud_cdc_write(line.data(), static_cast<std::uint32_t>(line.size()));
@@ -941,7 +947,10 @@ struct Hw final : shell::Backend {
     const char* twin(const shell::TwinCmd& c) override { return twin_command(c); }
     const char* diag() override { return diag_print(); }
     const char* selftest() override {
-        return selftest::run_math([](std::string_view s, void*) { put(s); }, nullptr) ? nullptr : "math selftest failed";
+        // One line per check: each check runs with IRQs masked (the longest about 3.5 ms), PD gets its service in between
+        // instead of once after the whole run (about 13 ms of checks plus the output).
+        return selftest::run_math([](std::string_view s, void*) { put(s); mainloop::idle_hook(); }, nullptr) ? nullptr
+                                                                                                           : "math selftest failed";
     }
     // The guarded SuperVOOC trigger (HID remote only) drives D-: the parser keeps every D+/D- and sniffer command out.
     const char* lines_locked() override { return fctrig::svooc_running() ? "busy (SuperVOOC trigger running)" : nullptr; }
