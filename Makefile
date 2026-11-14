@@ -574,7 +574,7 @@ test-py: test-run $(HOST_DIR)/bbdiag
 	# (count work, not time), so a rig that stops replying would otherwise hang `make gate` forever. 10 min is
 	# far beyond any load-induced slowness of these tests, so the guard itself cannot flake.
 	@if [ "$(K2_WEB)" != 1 ]; then echo "web tests off (K2_WEB=1 runs them)"; \
-	elif command -v node >/dev/null 2>&1; then node --test --test-timeout=600000 tests/test_k2proto.mjs tests/test_k2boot.mjs tests/test_flasher_page.mjs tests/test_cardpage.mjs tests/test_recordspage.mjs tests/test_dataframes.mjs; \
+	elif command -v node >/dev/null 2>&1; then node --test --test-timeout=600000 tests/test_k2proto.mjs tests/test_k2boot.mjs tests/test_flasher_page.mjs tests/test_cardpage.mjs tests/test_recordspage.mjs tests/test_dataframes.mjs tests/test_ctgrid.mjs; \
 	else echo "node not found: skipping node tests"; fi
 test: test-py
 

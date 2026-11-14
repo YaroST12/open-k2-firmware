@@ -1,0 +1,57 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later
+   Copyright (C) 2026 Yaraslau Furman */
+/* K2Kit: the K2's own UI language (docs/UI_SYSTEM.md, "K2 industrial") for the dashboard.
+   One place for the device tokens (--k-*, named after include/k2/ui/ui_style.hpp), light and dark, and the styles of
+   the kit's components (tools/web/k2kit.js). A page sizes a component (--k-rg-max); it never restyles one.
+   Embedded into k2.html by tools/web/sync_proto.py. */
+:root {
+  /* tokens, light: the device's dark panel mapped onto the dashboard's light theme (kOk, kError, kCaution ... same roles) */
+  --k-bg: #f4f5f7; --k-surface: #ffffff;
+  --k-ok: #12805c; --k-ok-t: #dff3ea;
+  --k-error: #ef6b60; --k-error-t: #fdecea; --k-ink-on-error: #000000;
+  --k-caution: #b54708; --k-caution-t: #fff0d9;
+  --k-focus: #0b7fb0; --k-focus-t: #dff1f8;
+  --k-dim: #667085; --k-faint: #8e97a5; --k-rule: #c9ced6;
+  --k-volt: #946200; --k-amp: #0b7fb0; --k-watt: #c2410c;
+  --k-font: ui-monospace, "Atkinson Hyperlegible Mono", "SF Mono", Menlo, Consolas, monospace;
+}
+html[data-theme="dark"] {
+  /* tokens, dark: the device's own values, tuned a little for an LCD-less screen */
+  --k-bg: #0e1116; --k-surface: #171b22;
+  --k-ok: #4cc38a; --k-ok-t: #12301f;
+  --k-error: #ff6b60; --k-error-t: #3a1815; --k-ink-on-error: #000000;
+  --k-caution: #f5a524; --k-caution-t: #33250c;
+  --k-focus: #35d0ff; --k-focus-t: #0e3140;
+  --k-dim: #8b95a3; --k-faint: #5b6574; --k-rule: #2b323d;
+  --k-volt: #f5c04a; --k-amp: #35d0ff; --k-watt: #ff8a6b;
+}
+
+/* VerdictCell: pass tint + ink, fail solid + black ink, none/stopped no fill + dim ink, skip dim + strike on the volts,
+   pending faint, running = pending + a steady focus dot (a shape tells it, not colour alone), partial amber + bar. */
+.k-vc { position: relative; display: flex; align-items: center; justify-content: center; min-height: 26px; padding: 0 3px;
+        font: 13px/1 var(--k-font); font-variant-numeric: tabular-nums; white-space: nowrap; min-width: 0; color: var(--k-dim); }
+.k-vl { overflow: visible; }
+.k-pass { background: var(--k-ok-t); color: var(--k-ok); }
+.k-fail { background: var(--k-error); color: var(--k-ink-on-error); font-weight: 700; }
+.k-none, .k-stopped { background: none; color: var(--k-dim); }
+.k-skip { background: none; color: var(--k-dim); }
+.k-skip .k-vl { text-decoration: line-through; text-decoration-thickness: 1px; }
+.k-pending, .k-running { background: none; color: var(--k-faint); }
+.k-partial { background: var(--k-caution-t); color: var(--k-caution); box-shadow: inset 0 -2px 0 var(--k-caution); }
+.k-partial .k-vl::before { content: "~"; }
+.k-dot { position: absolute; top: 2px; right: 2px; width: 5px; height: 5px; background: var(--k-focus); }
+
+/* ResultGrid: a label column, then up to five cells per line with 1 px gaps; a bracket row under cells that carry a current;
+   a 2 px rule where the section changes (no header text). */
+.k-rg { max-width: var(--k-rg-max, 640px); font-family: var(--k-font); }
+.k-rg-row { display: grid; grid-template-columns: var(--k-rg-label, 76px) minmax(0, 1fr); border-top: 1px solid var(--k-rule); }
+.k-rg-row:first-child { border-top: 0; }
+.k-rg-row.k-sec { border-top: 2px solid var(--k-rule); }
+.k-rg-label { padding: 6px 8px 0 0; text-align: right; font-size: 12px; line-height: 14px; color: var(--k-dim); white-space: nowrap;
+              border-right: 1px solid var(--k-rule); }
+.k-rg-cells { display: grid; grid-template-columns: repeat(var(--k-n, 5), minmax(0, 1fr)); gap: 1px;
+              width: 100%; max-width: calc(var(--k-n, 5) * var(--k-cell-max, 92px)); }
+.k-rg-cells > .k-vc { grid-row: 1; }
+.k-br { grid-row: 2; position: relative; padding: 6px 0 2px; text-align: center; font-size: 12px; line-height: 12px; color: var(--k-dim);
+        white-space: nowrap; }
+.k-br::before { content: ""; position: absolute; left: 4px; right: 4px; top: 1px; height: 4px; border: 1px solid var(--k-dim); border-top: 0; }
