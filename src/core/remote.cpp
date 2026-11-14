@@ -61,6 +61,7 @@
 #include "k2/pd/diag_live.hpp"
 #include "k2/pd/diag_wire.hpp"
 #include "k2/core/trace_hid_hw.hpp"
+#include "k2/core/scratch.hpp"
 
 namespace k2 {
 
@@ -76,6 +77,10 @@ static_assert(std::tuple_size_v<decltype(pd::Emarker::raw_vdos)> == remote::kMax
 
 constexpr uint32_t kStreamTimeoutMs = 500;
 constexpr unsigned kStreamMinFree = 3;
+
+// The ripple samples, in the scratch arena while a capture is held (Remote::ripple() .. the end of stream_ripple()).
+using RippleBuf = std::array<uint16_t, adc::kRippleSamples>;
+RippleBuf &ripple_buf() { return scratch::as<RippleBuf>(); }
 
 std::string_view sv(const char *s) { return s ? std::string_view(s) : std::string_view(); }
 
@@ -122,6 +127,7 @@ RemoteEvent Remote::poll() {
         if (ripple_pending_) {
             ripple_pending_ = false;
             stream_ripple(seq);
+            scratch::release();                  // taken by ripple(): the samples are gone with the stream
         }
         tail_ = (tail_ + 1) % kQueueDepth;
         if (shot_pending_) {
@@ -1050,14 +1056,20 @@ remote::AdcRawSnapshot Remote::adc_raw() {
     return snap;
 }
 
+// The capture takes the scratch arena and keeps it: poll() streams the samples right after this command's response and
+// releases it then (ripple_pending_). Nothing holds the arena inside a remote poll, so held() is only a guard.
 remote::Status Remote::ripple(uint8_t sample_code) {
-    const uint32_t period = adc::capture_ripple(ripple_, sample_code);
+    if (scratch::held()) return remote::Status::Busy;
+    scratch::acquire("ripple");
+    RippleBuf &buf = ripple_buf();
+    const uint32_t period = adc::capture_ripple(buf, sample_code);
     if (period == 0) {
+        scratch::release();
         K2LOG("[RMT] ripple capture timed out\n");
         return remote::Status::Busy;
     }
-    const adc::Stats st = adc::summarize(ripple_);
-    ripple_info_ = {period, static_cast<uint16_t>(ripple_.size()), st.min, st.max, st.mean};
+    const adc::Stats st = adc::summarize(buf);
+    ripple_info_ = {period, static_cast<uint16_t>(buf.size()), st.min, st.max, st.mean};
     ripple_pending_ = true;
     K2LOG("[RMT] ripple code=%d period=%dns min=%d max=%d\n", static_cast<int>(sample_code),
                  static_cast<int>(period), static_cast<int>(st.min), static_cast<int>(st.max));
@@ -1602,7 +1614,8 @@ remote::FcInfo Remote::fc_info() {
 // Streams the captured samples as 0x8B frames behind the response; waits for IN queue room like
 // the screenshot streamer so no frame overwrites an unsent one.
 void Remote::stream_ripple(uint8_t seq) {
-    for (size_t off = 0; off < ripple_.size(); off += remote::kRippleChunk) {
+    const RippleBuf &samples = ripple_buf();
+    for (size_t off = 0; off < samples.size(); off += remote::kRippleChunk) {
         const uint32_t t0 = systick::millis();
         while (usb::tx_free() < kStreamMinFree) {
             usb::poll();
@@ -1612,9 +1625,9 @@ void Remote::stream_ripple(uint8_t seq) {
             }
         }
         std::array<uint8_t, remote::kFrameSize> frame;
-        const size_t n = std::min(remote::kRippleChunk, ripple_.size() - off);
+        const size_t n = std::min(remote::kRippleChunk, samples.size() - off);
         remote::build_ripple_frame(frame, seq, static_cast<uint16_t>(off),
-                                   std::span<const uint16_t>(ripple_.data() + off, n));
+                                   std::span<const uint16_t>(samples.data() + off, n));
         usb::send_report(frame.data());
     }
 }

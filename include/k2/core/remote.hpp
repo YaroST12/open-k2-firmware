@@ -191,8 +191,9 @@ private:
     bool shot_want_cdc_ = false, shot_want_packed_ = false;
     uint8_t shot_transport_ = remote::kShotViaHid;
     uint8_t shot_strip_rows_ = 4;
+    // A capture holds the scratch arena (k2/core/scratch.hpp) from ripple() to the end of its stream in poll(): the 1 KB of
+    // samples are live only inside the one poll() call that runs the command.
     bool ripple_pending_ = false;
-    std::array<uint16_t, adc::kRippleSamples> ripple_{};
     remote::RippleInfo ripple_info_{};
     void stream_ripple(uint8_t seq);
     uint8_t shot_seq_ = 0;
