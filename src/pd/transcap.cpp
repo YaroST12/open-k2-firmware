@@ -17,8 +17,6 @@ namespace k2::transcap {
 
 namespace {
 
-using Rec = Recorder<kSamples, kMarkers>;
-
 // The ring is an overlay member: zero until claimed, and zeroed again by release (see mode_ram.hpp).
 K2_MODE_RAM_TRANS Rec g_rec;
 
@@ -140,6 +138,10 @@ bool trigger(Reason r) {
     return g_held && g_rec.trigger(systick::micros(), r);
 }
 
+bool trigger(Reason r, std::uint32_t post_us) {
+    return g_held && g_rec.trigger(systick::micros(), r, post_us);
+}
+
 bool triggered() {
     return g_held && g_rec.triggered();
 }
@@ -221,6 +223,8 @@ Status status() {
 }
 
 bool active() { return g_held; }
+
+const Rec* frozen() { return g_held && g_rec.state() == State::Frozen ? &g_rec : nullptr; }
 
 std::size_t read_live(std::uint32_t off, std::span<std::uint8_t> out) {
     if (!g_held || g_rec.state() != State::Frozen) return 0;

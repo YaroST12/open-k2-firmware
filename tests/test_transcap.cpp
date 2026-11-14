@@ -57,6 +57,21 @@ static void test_trigger_post_window_then_freeze() {
 
 // triggered(): true from the trigger on (post window and frozen), false before and after arm/stop. A caller that
 // finds the capture already frozen by an earlier event (a detach) still wants to keep it for the failed step.
+// A caller-chosen post window (the PD Spec Check: 1.5 s after a fixed step, 0.3 s after a PPS step); arm() goes back to kPostUs.
+static void test_trigger_with_its_own_post_window() {
+    Rec r;
+    r.arm();
+    r.push(smp(0));
+    CHECK_EQ(r.trigger(1000, Reason::Manual, 1'500'000), true);
+    CHECK_EQ(r.push(smp(1000 + kPostUs)), false);            // the default window would have frozen here
+    CHECK_EQ(r.push(smp(1000 + 1'499'999)), false);
+    CHECK_EQ(r.push(smp(1000 + 1'500'000)), true);
+    r.arm();
+    r.push(smp(0));
+    r.trigger(1000, Reason::Manual);
+    CHECK_EQ(r.push(smp(1000 + kPostUs)), true);             // the next trigger without a window: the default again
+}
+
 static void test_triggered_covers_post_and_frozen() {
     Rec r;
     CHECK_EQ(r.triggered(), false);
@@ -440,6 +455,7 @@ int main() {
     test_ring_keeps_newest_in_order();
     test_not_armed_records_nothing();
     test_trigger_post_window_then_freeze();
+    test_trigger_with_its_own_post_window();
     test_triggered_covers_post_and_frozen();
     test_trigger_survives_clock_wrap();
     test_auto_trigger_rules();

@@ -48,6 +48,8 @@ void disarm();
 void disarm_if_armed();
 // Starts the post window of an armed capture; the reason sticks. False when not armed.
 bool trigger(Reason r);
+// The same with a post window of post_us instead of kPostUs (the PD Spec Check: the whole of a slow transition in one window).
+bool trigger(Reason r, std::uint32_t post_us);
 // True once the capture has a trigger (post window or frozen), whoever pulled it.
 bool triggered();
 // Marker from the caller (charger test: the step and the requested voltage). Ignored unless recording.
@@ -61,6 +63,10 @@ void poll();
 
 Status status();
 bool active();   // armed, in the post window or frozen (the overlay is held)
+
+using Rec = Recorder<kSamples, kMarkers>;
+// The frozen capture itself, for an analysis in place (k2/pdspec/analyze.hpp reads a Recorder directly); nullptr unless frozen.
+const Rec* frozen();
 
 // The live capture's persisted stream (transcap_calc.hpp encode()) from byte `off`; 0 once past the end or when
 // there is no frozen capture. Frozen only: an armed ring is still changing.

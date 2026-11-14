@@ -122,6 +122,7 @@ public:
         ns_ = nm_ = 0;
         reason_ = Reason::None;
         trig_us_ = 0;
+        post_us_ = kPostUs;
         state_ = State::Armed;
     }
     void stop() { state_ = State::Off; ns_ = nm_ = 0; reason_ = Reason::None; }
@@ -132,6 +133,7 @@ public:
         mrk_.fill({});
         ns_ = nm_ = 0;
         trig_us_ = 0;
+        post_us_ = kPostUs;
         state_ = State::Off;
         reason_ = Reason::None;
     }
@@ -142,7 +144,7 @@ public:
         if (state_ != State::Armed && state_ != State::Post) return false;
         smp_[ns_ % NS] = s;
         ++ns_;
-        if (state_ == State::Post && std::int32_t(s.t_us - trig_us_) >= std::int32_t(kPostUs)) {
+        if (state_ == State::Post && std::int32_t(s.t_us - trig_us_) >= std::int32_t(post_us_)) {
             state_ = State::Frozen;
             return true;
         }
@@ -158,10 +160,12 @@ public:
             if (r != Reason::None) trigger(t_us, r);
         }
     }
-    // Starts the post window (only from Armed); the reason sticks.
-    bool trigger(std::uint32_t t_us, Reason r) {
+    // Starts the post window (only from Armed); the reason sticks. post_us: the window's length (the ring holds about 1.5 s at the
+    // fastest sampling, so a window that long leaves little before the trigger).
+    bool trigger(std::uint32_t t_us, Reason r, std::uint32_t post_us = kPostUs) {
         if (state_ != State::Armed) return false;
         trig_us_ = t_us;
+        post_us_ = post_us;
         reason_ = r;
         state_ = State::Post;
         mrk_[nm_ % NM] = {t_us, std::uint8_t(Mark::Trigger), 0, std::uint16_t(r)};
@@ -177,6 +181,7 @@ private:
     std::array<Marker, NM> mrk_{};
     std::size_t ns_ = 0, nm_ = 0;
     std::uint32_t trig_us_ = 0;
+    std::uint32_t post_us_ = kPostUs;
     State state_ = State::Off;
     Reason reason_ = Reason::None;
 };
