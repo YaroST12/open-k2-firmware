@@ -1,6 +1,6 @@
 {
   "status": "seeded",
-  "version": "1.0.1-124-c9a5b49b",
+  "version": "1.0.1-126-9ca0dd51",
   "hot": 1,
   "runs": 5,
   "taken": "2026-11-14",
@@ -43,11 +43,11 @@
       "zw": 1
     },
     "text_aa": {
-      "cyc": 847201,
+      "cyc": 847200,
       "zw": 1
     },
     "text_big": {
-      "cyc": 805136,
+      "cyc": 805137,
       "zw": 1
     },
     "gfx_fill": {
@@ -59,7 +59,7 @@
       "zw": 1
     },
     "fmt_line": {
-      "cyc": 113734,
+      "cyc": 94427,
       "zw": 1
     },
     "pd_codec": {
