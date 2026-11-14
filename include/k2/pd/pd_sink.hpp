@@ -153,6 +153,10 @@ inline constexpr std::uint32_t kWaitRetryMs = 100;    // after Wait (spec tSinkR
 inline constexpr std::uint8_t kMaxWaitRetries = 3;
 inline constexpr std::uint32_t kPpsKeepAliveMs = 5000;  // spec: re-request at least every 10 s
 inline constexpr std::uint32_t kEprKeepAliveMs = 400;   // spec tSinkEPRKeepAlive 250..500 ms
+// PD Spec Check: one keep-alive kind held back so the source's own timeout can be timed (Sink::silence_keepalive). It lapses by itself
+// after this long (longer than the check waits for the PPS timeout, tPPSTimeout max 15 s + 5 s), so a lost owner cannot leave it on.
+enum class KaSilence : std::uint8_t { Off, Pps, Epr };
+inline constexpr std::uint32_t kKaSilenceMaxMs = 25000;
 inline constexpr std::uint32_t kEprEnterMs = 800;       // EPR_Mode Enter -> Succeeded (spec tEnterEPR 500 ms)
 inline constexpr std::uint32_t kEprCapsMs = 1500;       // Succeeded -> all EPR caps chunks
 inline constexpr std::uint32_t kSettleMs = 1500;        // after PS_RDY before the VBUS check applies
@@ -250,6 +254,9 @@ struct SinkStatus {
     std::uint32_t hard_resets = 0;       // Hard Resets the K2 SENT (do_hard_reset on the wire): the K2-must-not-send checks and the UI read this
     std::uint32_t source_hard_resets = 0;  // Hard Resets the SOURCE sent (on_hard_reset_rx); the charger test counts both as "the link was reset"
     std::uint8_t epr_fail = 0;  // Data field of the last EPR_Mode Enter_Failed (epr_fail_name); 0 after a new Enter
+    // When the sink last restarted its EPR keep-alive schedule (an EPR_KeepAlive queued, or a PS_RDY / EPR list read in EPR mode):
+    // the origin the source's tSourceEPRKeepAlive is timed from (the PD Spec Check). 0 = none since boot.
+    std::uint32_t epr_ka_at = 0;
     bool xiaomi_svid = false;    // the source listed SVID 0x2717 this session (the auth chain is expected, ~0.7 s after the contract)
     bool xiaomi_authed = false;  // the SVID 0x2717 auth chain completed this session
     bool oppo_svid = false;      // the source listed SVID 0x22D9 (OPPO) in its Discover SVIDs ACK this session: a note only, no VDM is sent
@@ -341,6 +348,14 @@ public:
     // coming back to the contract is not judged against stale samples. Not cleared by detach(): the owner clears it.
     void set_vbus_external(bool on, std::uint32_t now);
     bool vbus_external() const { return vbus_external_; }
+    // PD Spec Check: hold back one keep-alive kind (the PPS / AVS re-request, or the EPR_KeepAlive); Off ends it. The other kind goes
+    // on (an EPR contract at PPS keeps its EPR_KeepAlive). Bounded: it lapses at kKaSilenceMaxMs, and a Hard Reset either way, a
+    // detach, a Soft_Reset or a new trigger() end it.
+    void silence_keepalive(KaSilence k, std::uint32_t now) {
+        ka_silence_ = k;
+        ka_silence_until_ = now + kKaSilenceMaxMs;
+    }
+    KaSilence keepalive_silence() const { return ka_silence_; }
 
     void on_message(Sop sop, std::uint16_t header, std::span<const std::uint8_t> payload, std::uint32_t now);
     void on_tx_result(bool ok, std::uint32_t now);  // GoodCRC seen (true) or retries exhausted (false)
@@ -491,6 +506,8 @@ private:
     bool fresh_ = false;         // a new target: the settle timer restarts at PS_RDY
     bool epr_caps_seen_ = false;
     std::uint32_t next_epr_ka_ = 0, get_cap_at_ = 0, retx_at_ = 0;
+    KaSilence ka_silence_ = KaSilence::Off;   // silence_keepalive()
+    std::uint32_t ka_silence_until_ = 0;
     bool retx_pending_ = false;
     TxMsg last_tx_;
     TxMsg tx_;

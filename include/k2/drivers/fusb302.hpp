@@ -294,6 +294,8 @@ bool pd_seen_attach();
 // Back to 5 V (Request PDO 1; hard reset if the source refuses). The 5 V contract stays up for kSinkIdleLingerMs,
 // then the sink drops Rd (a held trigger never times out: only this call or a detach ends it).
 void sink_release();
+// PD Spec Check: hold one keep-alive kind back (pd::Sink::silence_keepalive: bounded, ended by any reset, detach or new trigger).
+void sink_keepalive_silence(pd::KaSilence k);
 // User-requested hard reset; false = refused (no CC, or inline). `lab_inline` = the remote's lab-only
 // `pd reset --inline --confirm` (gated by pd::lab_reset_verdict): its one Hard Reset goes out even inline.
 bool sink_hard_reset(bool lab_inline = false);

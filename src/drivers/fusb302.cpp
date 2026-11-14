@@ -3006,6 +3006,7 @@ void sink_release() {
     g_prep.abort();
     sink().release(systick::millis());
 }
+void sink_keepalive_silence(pd::KaSilence k) { sink().silence_keepalive(k, systick::millis()); }
 bool sink_hard_reset(bool lab_inline) {
     if ((inline_now() && !lab_inline) || g_active_cc == 0) {
         K2LOG("[PD] Hard Reset refused (no CC / inline)\n");

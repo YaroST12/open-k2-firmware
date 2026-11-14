@@ -304,6 +304,7 @@ K2_HOT void Sink::do_hard_reset(SinkResult r, SinkState to, bool forced) {
     st_.epr_mode = false;
     contract_ = false;
     st_.pos = 0;
+    ka_silence_ = KaSilence::Off;
     // Reset Xiaomi auth state
     xiaomi_authed_ = false;
     st_.xiaomi_authed = false;
@@ -337,6 +338,7 @@ K2_HOT void Sink::on_hard_reset_rx(std::uint32_t) {
     st_.epr_mode = false;
     contract_ = false;
     st_.pos = 0;
+    ka_silence_ = KaSilence::Off;
     // Reset Xiaomi auth state
     xiaomi_authed_ = false;
     st_.xiaomi_authed = false;
@@ -371,6 +373,7 @@ void Sink::detach() {
     st_.epr_mode = false;
     contract_ = false;
     st_.pos = 0;
+    ka_silence_ = KaSilence::Off;
     // Reset Xiaomi auth state
     xiaomi_authed_ = false;
     st_.xiaomi_authed = false;
@@ -401,6 +404,7 @@ K2_HOT void Sink::soft_reset(std::uint32_t now) {
     st_.epr_mode = false;
     contract_ = false;
     st_.pos = 0;
+    ka_silence_ = KaSilence::Off;
     // The contract is gone: the Xiaomi opener and the SVID discovery belong to the next one
     xiaomi_opener_pending_ = false;
     xiaomi_opener_sent_ = false;
@@ -557,6 +561,7 @@ Err Sink::trigger(Choice c, std::uint32_t now) {
     want_ = c;
     st_.held = true;
     st_.auto_hold = false;   // somebody asked: no longer the driver's own answer (answer_5v sets it after this)
+    ka_silence_ = KaSilence::Off;   // a new wish: nobody is timing the old contract's keep-alive any more
     st_.result = SinkResult::None;
     wait_retries_ = 0;
     verify_ = false;            // a new wish ends the check of the last release
@@ -602,12 +607,14 @@ K2_HOT void Sink::proceed_after_epr_caps(std::uint32_t now) {
         st_.held = false;
         st_.state = SinkState::Ready;
         next_epr_ka_ = now + kEprKeepAliveMs;
+        st_.epr_ka_at = now;
         return;
     }
     const Plan p = plan_for(want_, true);
     if (p.err != Err::Ok) {
         fail(p.err == Err::OverCap ? SinkResult::OverCap : SinkResult::BadChoice, SinkState::Ready);
         next_epr_ka_ = now + kEprKeepAliveMs;
+        st_.epr_ka_at = now;
         return;
     }
     plan_ = p;
@@ -728,7 +735,7 @@ K2_HOT void Sink::after_ps_rdy(std::uint32_t now) {
         descent_ms_ = descent_window_ms(drop_mv, plan_.type == PdoType::Pps || plan_.type == PdoType::Avs);
     }
     next_keepalive_ = now + kPpsKeepAliveMs;
-    if (st_.epr_mode) next_epr_ka_ = now + kEprKeepAliveMs;
+    if (st_.epr_mode) { next_epr_ka_ = now + kEprKeepAliveMs; st_.epr_ka_at = now; }
     settle_release(now);   // a release that waited behind this Request goes out now (not for the abort's own PS_RDY)
 }
 
@@ -1149,12 +1156,14 @@ K2_HOT void Sink::tick(std::uint32_t now) {
         case SinkState::Ready:
             if (tx_pending_ || vbus_external_) break;   // an external VBUS owner: no verify, no keep-alive, nothing of our own
             if (verify_) { verify_vbus(now); break; }
+            if (ka_silence_ != KaSilence::Off && due(ka_silence_until_)) ka_silence_ = KaSilence::Off;   // the bound
             if (st_.held && contract_ && (plan_.type == PdoType::Pps || plan_.type == PdoType::Avs) &&
-                due(next_keepalive_)) {
+                due(next_keepalive_) && ka_silence_ != KaSilence::Pps) {
                 st_.state = SinkState::Requesting;  // the same Request again, answered with Accept + PS_RDY
                 send_request(now, true);
-            } else if (st_.epr_mode && due(next_epr_ka_)) {
+            } else if (st_.epr_mode && due(next_epr_ka_) && ka_silence_ != KaSilence::Epr) {
                 next_epr_ka_ = now + kEprKeepAliveMs;
+                st_.epr_ka_at = now;
                 queue_epr_control(kEprKeepAlive);
             }
             break;

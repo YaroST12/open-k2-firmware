@@ -1981,5 +1981,66 @@ int main() {
         CHECK_EQ(r.sent.size(), before + 1);
         CHECK_EQ(int(r.sink.status().state), int(SinkState::Ready));
     }
+
+    // ---- PD Spec Check: one keep-alive kind held back (the source's timeout is the measurement), bounded, ended by a reset ----
+    {   // PPS: no re-request while silenced; the silence lapses by itself at kKaSilenceMaxMs and the re-request comes back.
+        Rig r;
+        r.sink.trigger({6, 9100, 2000}, r.now); r.pump(); r.accept_and_ready();
+        r.sink.silence_keepalive(KaSilence::Pps, r.now);
+        CHECK_COND(r.sink.keepalive_silence() == KaSilence::Pps);
+        const std::size_t n0 = r.sent.size();
+        r.run(20000);
+        CHECK_EQ(r.sent.size(), n0);
+        r.run(kKaSilenceMaxMs - 20000 + 100);
+        CHECK_COND(r.sent.size() > n0);
+        CHECK_COND(r.sink.keepalive_silence() == KaSilence::Off);
+    }
+    {   // EPR contract: a PPS-kind silence keeps the EPR_KeepAlive going; an EPR-kind one stops it, and the stamp stays on the last one.
+        Rig r;
+        r.caps = make_caps(true);
+        auto keepalives = [&r] {
+            int n = 0;
+            for (const TxMsg& m : r.sent)
+                if ((m.header & 0x1F) == kExtControl && ((m.header >> 15) & 1) && m.data[2] == kEprKeepAlive) ++n;
+            return n;
+        };
+        r.sink.trigger({8, 0, 0}, r.now); r.pump();          // 28 V: enter EPR first
+        r.data(kDataEprMode, std::uint32_t(kEprAck) << 24);
+        r.data(kDataEprMode, std::uint32_t(kEprSucceeded) << 24);
+        r.epr_caps_done();
+        r.accept_and_ready();
+        CHECK_EQ(int(r.sink.status().state), int(SinkState::Ready));
+        CHECK_COND(r.sink.status().epr_mode);
+        CHECK_EQ(r.sink.status().epr_ka_at, r.now);         // the PS_RDY restarts the keep-alive schedule
+        r.sink.silence_keepalive(KaSilence::Pps, r.now);
+        const int k0 = keepalives();
+        r.run(1000);
+        CHECK_COND(keepalives() >= k0 + 2);
+        const std::uint32_t last = r.sink.status().epr_ka_at;
+        CHECK_COND(last > r.now - 500);
+        r.sink.silence_keepalive(KaSilence::Epr, r.now);
+        const int k1 = keepalives();
+        r.run(2000);
+        CHECK_EQ(keepalives(), k1);
+        CHECK_EQ(r.sink.status().epr_ka_at, last);
+        r.sink.silence_keepalive(KaSilence::Off, r.now);
+        r.run(500);
+        CHECK_COND(keepalives() > k1);
+    }
+    {   // A Hard Reset from the source, a detach or a new trigger ends the silence.
+        Rig r;
+        r.sink.trigger({6, 9100, 2000}, r.now); r.pump(); r.accept_and_ready();
+        r.sink.silence_keepalive(KaSilence::Pps, r.now);
+        r.sink.on_hard_reset_rx(r.now);
+        CHECK_COND(r.sink.keepalive_silence() == KaSilence::Off);
+        r.sink.silence_keepalive(KaSilence::Pps, r.now);
+        r.sink.detach();
+        CHECK_COND(r.sink.keepalive_silence() == KaSilence::Off);
+        Rig t;
+        t.sink.trigger({6, 9100, 2000}, t.now); t.pump(); t.accept_and_ready();
+        t.sink.silence_keepalive(KaSilence::Pps, t.now);
+        t.sink.trigger({6, 9200, 2000}, t.now);
+        CHECK_COND(t.sink.keepalive_silence() == KaSilence::Off);
+    }
     return test_report("test_pd_sink");
 }
