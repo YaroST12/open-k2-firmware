@@ -25,8 +25,9 @@ inline constexpr std::uint8_t kPdwn1 = 1u << 0, kPdwn2 = 1u << 1, kMeasCc1 = 1u 
 inline constexpr std::uint8_t kVconnCc1 = 1u << 4, kVconnCc2 = 1u << 5;   // the chip's VCONN supply onto CC1 / CC2
 inline constexpr std::uint8_t kSw0PullDowns = kPdwn1 | kPdwn2;
 // SWITCHES1: BMC transmit routing, automatic GoodCRC and the spec revision (01 = PD 2.0) the
-// chip puts in its own GoodCRC headers. Power role (bit 7) and data role (bit 4) stay 0: sink, UFP.
-inline constexpr std::uint8_t kTxCc1 = 1u << 0, kTxCc2 = 1u << 1, kAutoCrc = 1u << 2, kSpecRev1 = 1u << 5;
+// chip puts in its own GoodCRC headers. Power role (bit 7) and data role (bit 4) stay 0: sink, UFP. The one exception is
+// the loop probe's Host report after an accepted DR_Swap (kSw1DataRole: DFP in the GoodCRC header).
+inline constexpr std::uint8_t kTxCc1 = 1u << 0, kTxCc2 = 1u << 1, kAutoCrc = 1u << 2, kSpecRev1 = 1u << 5, kSw1DataRole = 1u << 4;
 inline constexpr std::uint8_t kTxStart = 1u << 0, kTxFlush = 1u << 6;      // CONTROL0
 inline constexpr std::uint8_t kEnSop = 3u << 0, kRxFlush = 1u << 2;        // CONTROL1: ENSOP1 | ENSOP2
 inline constexpr std::uint8_t kEnSopDebug = 3u << 5;                       // CONTROL1: ENSOP1DB | ENSOP2DB

@@ -34,6 +34,10 @@ K2_WHOS_ATTACHED ?= 0
 # K2_SCREENSHOT=1 builds the RLE565/strip screenshot capture path and Settings > Screenshot row back in
 # (include/k2/core/build_config.h). Off by default; host tests enable it via HOST_CXXFLAGS.
 K2_SCREENSHOT ?= 0
+# K2_HOST_REPORT=1 builds the loop probe's Host report prototype (the PD interrogation of a USB-C host port through the HID
+# loop, docs/LOOP_PROBE.md): its K2 binding, the FUSB302 loop-host line, the USB enumeration tap and the Loop probe page's
+# Host view. Off by default (flash). Its pure logic is host-tested either way (TEST_CXX_LIB).
+K2_HOST_REPORT ?= 0
 
 # K2_WEB=1 puts the web parts back into `make test` and `make gate`: the node tests of the web pages (tools/web, webhid-flasher),
 # the host tests of the network function (test_net_dhcp, test_usb_desc_net), the Python checks that read the web page's JS, and
@@ -100,6 +104,10 @@ endif
 SCREENSHOT_CXX_SRCS = $(SRC_DIR)/ui/capture.cpp $(SRC_DIR)/ui/rle565.cpp   # K2_SCREENSHOT=1 only
 ifneq ($(K2_SCREENSHOT),1)
 CXX_SRCS := $(filter-out $(SCREENSHOT_CXX_SRCS),$(CXX_SRCS))
+endif
+HOST_REPORT_CXX_SRCS = $(SRC_DIR)/loopprobe/host_report.cpp $(SRC_DIR)/loopprobe/usb_fp.cpp $(SRC_DIR)/loopprobe/host_report_hw.cpp   # K2_HOST_REPORT=1 only
+ifneq ($(K2_HOST_REPORT),1)
+CXX_SRCS := $(filter-out $(HOST_REPORT_CXX_SRCS),$(CXX_SRCS))
 endif
 OBJS    = $(patsubst $(SRC_DIR)/%.c, $(BUILD_DIR)/%.o, $(SRCS)) \
           $(patsubst $(SRC_DIR)/%.cpp, $(BUILD_DIR)/%.o, $(CXX_SRCS))
@@ -169,6 +177,7 @@ CFLAGS += -Os -g3 -Wall -Wextra -ffunction-sections -fdata-sections -fno-math-er
 CFLAGS += -fmerge-all-constants
 CFLAGS += -I$(INC_DIR)
 CFLAGS += -DK2_NET=$(K2_NET) -DK2_WEBUSB=$(K2_WEBUSB) -DK2_PDSTRESS=$(K2_PDSTRESS) -DK2_WHOS_ATTACHED=$(K2_WHOS_ATTACHED) -DK2_SCREENSHOT=$(K2_SCREENSHOT)
+CFLAGS += -DK2_HOST_REPORT=$(K2_HOST_REPORT)
 CFLAGS += -DK2_HOT_BLOCK=$(K2_HOT_BLOCK)
 CFLAGS += -MMD -MP
 
@@ -423,6 +432,7 @@ TEST_CXX_LIB  += $(SRC_DIR)/ui/qr.cpp $(SRC_DIR)/ui/qrview.cpp $(SRC_DIR)/core/b
 TEST_CXX_LIB  += $(SRC_DIR)/ui/ui_twin.cpp $(SRC_DIR)/ui/ui_bench.cpp
 TEST_CXX_LIB  += $(SRC_DIR)/ui/ui_pdstress.cpp
 TEST_CXX_LIB  += $(SRC_DIR)/loopprobe/loop_probe.cpp
+TEST_CXX_LIB  += $(SRC_DIR)/loopprobe/host_report.cpp $(SRC_DIR)/loopprobe/usb_fp.cpp
 TEST_CXX_LIB  += $(SRC_DIR)/ui/ui_loop_probe.cpp
 TEST_CXX_LIB  += $(SRC_DIR)/ui/ui_pdstress_page.cpp
 TEST_CXX_LIB  += $(SRC_DIR)/pd/diag.cpp $(SRC_DIR)/pd/diag_screen.cpp $(SRC_DIR)/ui/ui_diagnosis.cpp
@@ -637,7 +647,7 @@ nav-headers:
 	@$(COMPDB)
 
 docker-build: | $(NAV_DIR)/dirs.txt
-	$(DOCKER_RUN) $(DOCKER_IMG) make K2_GIT=$(K2_GIT) K2_FW_VERSION=$(K2_FW_VERSION) K2_WERROR=$(K2_WERROR) K2_64BIT=$(K2_64BIT) K2_NET=$(K2_NET) K2_WEBUSB=$(K2_WEBUSB) K2_PDSTRESS=$(K2_PDSTRESS) K2_WHOS_ATTACHED=$(K2_WHOS_ATTACHED) K2_SCREENSHOT=$(K2_SCREENSHOT) K2_HOT_BLOCK=$(K2_HOT_BLOCK) BUILD_DIR=$(BUILD_DIR) K2_HOST_ROOT=$(CURDIR)
+	$(DOCKER_RUN) $(DOCKER_IMG) make K2_GIT=$(K2_GIT) K2_FW_VERSION=$(K2_FW_VERSION) K2_WERROR=$(K2_WERROR) K2_64BIT=$(K2_64BIT) K2_NET=$(K2_NET) K2_WEBUSB=$(K2_WEBUSB) K2_PDSTRESS=$(K2_PDSTRESS) K2_WHOS_ATTACHED=$(K2_WHOS_ATTACHED) K2_SCREENSHOT=$(K2_SCREENSHOT) K2_HOST_REPORT=$(K2_HOST_REPORT) K2_HOT_BLOCK=$(K2_HOT_BLOCK) BUILD_DIR=$(BUILD_DIR) K2_HOST_ROOT=$(CURDIR)
 
 docker-flash:
 	docker run --rm --privileged -v $(CURDIR):/workspace -v /dev:/dev $(DOCKER_IMG) make flash

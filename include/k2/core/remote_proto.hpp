@@ -330,11 +330,14 @@
 //                                    op 3 stop: the run ends at the next poll with the source released to 5 V; rsp the status block.
 //                                      Never refused for a busy port: it is the way out of a run.
 // ---- Loop probe (k2/loopprobe, docs/LOOP_PROBE.md) -------------------------------------------------------------------------------
-//   0x57 LOOP_PROBE  req off(2)        rsp off(2) total(2) n(1) data(n), n <= kLoopProbeChunk (48)
+//   0x57 LOOP_PROBE  req off(2) [sel(1)] rsp off(2) total(2) n(1) data(n), n <= kLoopProbeChunk (48)
 //                                    Read-only: the HID-cable loop probe's last result as its flash file holds it (/lp/last.rec: "LPR",
 //                                    version, length u16, CRC-16 u16, then the 399-byte record of k2/loopprobe/loop_probe.hpp).
 //                                    total 0 = no result stored. BadArg for off > total. The probe itself starts on the K2 only
 //                                    (Tools, Loop probe): its HID port is in the loop, so there is no host to start it.
+//                                    sel (optional, 0 = the above): 1 = the Host report file (/lp/host.rec: "LPH", version, length
+//                                    u16, CRC-16 u16, then the record of k2/loopprobe/host_report.hpp; total 0 when none is stored or
+//                                    the build has K2_HOST_REPORT=0). Any other sel: BadArg.
 // ---- Battery efficiency recorder (k2/battery, docs/BATTERY_RECORDER.md) ---------------------------------------------------------
 //   0x58 BATTERY     req op(1) [args]  rsp per op (pure handler: k2/battery/battery_wire.hpp)
 //                                    Status block (40 bytes): state(1: 0 idle, 1 measuring, 2 between the round trip's phases,
@@ -1401,6 +1404,8 @@ concept Backend = requires(B &b, uint8_t u8, uint16_t u16, bool on) {
     { b.pdstress_info() } -> std::same_as<PdStressInfo>;                  // PD Stress status block
     { b.loopprobe_len() } -> std::same_as<uint16_t>;                      // bytes of the stored loop probe file, 0 = none
     { b.loopprobe_read(uint16_t{}, std::span<uint8_t>{}) } -> std::same_as<size_t>;   // file bytes from off, returns how many
+    { b.hostreport_len() } -> std::same_as<uint16_t>;                     // bytes of the stored Host report file, 0 = none
+    { b.hostreport_read(uint16_t{}, std::span<uint8_t>{}) } -> std::same_as<size_t>;
     { b.pdstress_start(PdStressStart{}) } -> std::same_as<Status>;        // Busy when another tool owns the ports; other refusals are in info().start
     { b.pdstress_stop() } -> std::same_as<void>;                          // never refused
     { b.pdstress_read(uint16_t{}, std::span<uint8_t>{}) } -> std::same_as<size_t>;   // result blob bytes from off, returns how many
@@ -2019,12 +2024,15 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
         return reply_n(encode_ufcs(buf, backend.ufcs_info()));
     }
     case Cmd::LoopProbe: {
-        if (p.size() != 2) return reply(Status::BadLength);
+        if (p.size() != 2 && p.size() != 3) return reply(Status::BadLength);
         const uint16_t off = detail::rd16(&p[0]);
-        const uint16_t total = backend.loopprobe_len();
+        const uint8_t sel = p.size() == 3 ? p[2] : 0;   // 0 the loop probe's file, 1 the Host report's
+        if (sel > 1) return reply(Status::BadArg);
+        const uint16_t total = sel ? backend.hostreport_len() : backend.loopprobe_len();
         if (off > total) return reply(Status::BadArg);
         const size_t want = std::min<size_t>(kLoopProbeChunk, total - off);
-        const size_t n = want ? std::min(want, backend.loopprobe_read(off, std::span<uint8_t>(buf.data() + 5, want))) : 0;
+        const std::span<uint8_t> dst(buf.data() + 5, want);
+        const size_t n = want ? std::min(want, sel ? backend.hostreport_read(off, dst) : backend.loopprobe_read(off, dst)) : 0;
         buf[0] = uint8_t(off); buf[1] = uint8_t(off >> 8);
         buf[2] = uint8_t(total); buf[3] = uint8_t(total >> 8); buf[4] = uint8_t(n);
         return reply_n(5 + n);

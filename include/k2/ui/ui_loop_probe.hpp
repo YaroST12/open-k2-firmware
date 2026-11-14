@@ -76,6 +76,14 @@ private:
     uint32_t info_sig_ = 0;
     kit::ActionCell action_;
     kit::ProgressBar bar_;
+#if K2_HOST_REPORT
+    // The Host report prototype (k2/loopprobe/host_report_hw.hpp): MINUS shows its five rows in the table, PLUS arms it (twice)
+    // or cancels an armed / running one.
+    void compose_host();
+    bool host_key(Button b);
+    bool host_view_ = false;
+    uint32_t host_confirm_until_ = 0;
+#endif
     Elem foot_;                                  // footer element cache (draw_footer_cached)
 };
 

@@ -3409,12 +3409,13 @@ def cmd_pd_stress(link, a):
 
 
 # ---- Loop probe (docs/LOOP_PROBE.md): CMD_LOOP_PROBE 0x57 ----
-def loop_probe_read_file(link):
-    """The stored result file /lp/last.rec, read in LOOP_CHUNK pieces; b"" when the K2 holds no result."""
+def loop_probe_read_file(link, sel=0):
+    """The stored result file /lp/last.rec (sel 0) or the Host report's /lp/host.rec (sel 1), read in LOOP_CHUNK pieces;
+    b"" when the K2 holds none (a K2_HOST_REPORT=0 build answers total 0 for sel 1)."""
     out = bytearray()
     total = None
     while total is None or len(out) < total:
-        p = link.call(CMD_LOOP_PROBE, len(out).to_bytes(2, "little")).payload
+        p = link.call(CMD_LOOP_PROBE, len(out).to_bytes(2, "little") + (bytes([sel]) if sel else b"")).payload
         _need(p, 5, "loop-probe")
         total = p[2] | p[3] << 8
         n = p[4]
@@ -3510,6 +3511,15 @@ def render_battery(r):
 
 
 def cmd_loop_probe(link, a):
+    if getattr(a, "host", False):
+        import host_report_rec
+        f = loop_probe_read_file(link, 1)
+        if not f:
+            return {"host_report": None}
+        try:
+            return {"host_report": host_report_rec.decode_file(f)}
+        except host_report_rec.BadRecord as e:
+            raise SystemExit(f"loop-probe --host: {e}")
     import loop_probe_rec
     f = loop_probe_read_file(link)
     if not f:
@@ -3520,7 +3530,35 @@ def cmd_loop_probe(link, a):
         raise SystemExit(f"loop-probe: {e}")
 
 
+def render_host_report(h):
+    if h is None:
+        return "no Host report stored (arm it on the K2: Tools > Loop probe, PLUS; needs a K2_HOST_REPORT=1 build)"
+    pd = h["pd"]
+    lines = [f"host report v{h['version']}, fw {h['fw']}: {h['state']}, end {h['end']}, boots {h['boots']}"
+             + (f", refused: {h['refusal']}" if h["refusal"] != "none" else ""),
+             f"  start: cc{h['cc']} Rp {h['rp']}, VBUS {h['vbus_mv']} mV, D+ {h['dp_mv']} mV, D- {h['dm_mv']} mV",
+             f"  PD rev raw {pd['rev_raw']}, caps x{pd['caps_seen']}, contract after {pd['contract_ms']} ms: "
+             + " ".join(pd["pdos"]),
+             f"  hard resets {pd['hard_resets']}, soft resets {pd['soft_resets']}, no-GoodCRC {pd['tx_fails']}"
+             + (", ended as DFP" if pd["dfp_at_end"] else "")]
+    for name, q in pd["queries"].items():
+        lines.append(f"  {name:<13}{q['answer']}" + (f" ({q['skip']})" if q["skip"] else "")
+                     + (f", {q['attempts']} tries, t {q['t_ms']} ms" if q["attempts"] else ""))
+    if pd["identity"]:
+        lines.append("  identity " + " ".join(pd["identity"]))
+    if pd["svids"]:
+        lines.append("  svids " + " ".join(pd["svids"]))
+    u = h["usb"]
+    lines.append(f"  USB: {u['events_total']} events" + (" (trace full)" if u["overflow"] else "")
+                 + (", SOF" if u["sof"] else "") + (", configured" if u["configured"] else "")
+                 + f"; OS guess {h['os_guess']} (unverified rules)")
+    lines.append("raw values and the request trace: --json")
+    return "\n".join(lines)
+
+
 def render_loop_probe(r):
+    if "host_report" in r:
+        return render_host_report(r["host_report"])
     lp = r["loop_probe"]
     if lp is None:
         return "no loop probe result stored (run it on the K2: Tools > Loop probe)"
@@ -5034,8 +5072,9 @@ def build_parser():
     spss.add_parser("result", help="the raw result: per-sequence counters and distributions, per-event points, the score")
     spss.add_parser("stop", help="stop the run (never refused)")
     # ---- end PD Stress parser ----
-    sub.add_parser("loop-probe", help="the last HID-cable loop probe result stored on the K2 (read only; the probe "
-                   "starts on the K2, Tools > Loop probe); raw values with --json")
+    slp = sub.add_parser("loop-probe", help="the last HID-cable loop probe result stored on the K2 (read only; the probe "
+                         "starts on the K2, Tools > Loop probe); raw values with --json")
+    slp.add_argument("--host", action="store_true", help="the Host report instead (/lp/host.rec, K2_HOST_REPORT=1 builds)")
     sbat = sub.add_parser("battery", help="battery efficiency recorder (Bench > Battery): status, start, end, next, finish, "
                           "config, list, read; raw values with --json (docs/BATTERY_RECORDER.md)")
     sbats = sbat.add_subparsers(dest="battery_cmd", required=True)

@@ -413,6 +413,35 @@ void log_stats() {
     stats.poll_gap_max = 0;
 }
 
+#if K2_HOST_REPORT
+namespace {
+Tap g_bus_tap = nullptr;
+}  // namespace
+void set_tap(Tap t) { g_bus_tap = t; }
+
+// The enumeration tap, before TinyUSB clears anything: the bus events in ISTR, and a SETUP on EP0 read straight from the
+// packet memory (EP0's receive address in BTABLE). Only the first pending transfer is looked at (EP0 SETUPs come alone).
+K2_HOT void tap_isr() {
+    const Tap t = g_bus_tap;
+    if (t == nullptr) return;
+    const std::uint16_t istr = reg::usb_istr();
+    if (istr & reg::kUsbIstrReset) t(BusEvent::Reset, nullptr);
+    if (istr & reg::kUsbIstrSusp) t(BusEvent::Suspend, nullptr);
+    if (istr & reg::kUsbIstrWkup) t(BusEvent::Resume, nullptr);
+    if (!(istr & reg::kUsbIstrCtr) || (istr & reg::kUsbIstrEpId) != 0 || !(istr & reg::kUsbIstrDir)) return;
+    const std::uint16_t ep0 = reg::usb_ep0r();
+    if (!(ep0 & reg::kUsbEpCtrRx) || !(ep0 & reg::kUsbEpSetup)) return;
+    const std::uint32_t rx = reg::usb_pma16((reg::usb_btable() & 0xFFF8u) + 4) & 0x3FEu;   // ADDR0_RX
+    std::uint8_t p[8];
+    for (std::uint32_t i = 0; i < 4; i++) {
+        const std::uint16_t w = reg::usb_pma16(rx + 2 * i);
+        p[2 * i] = std::uint8_t(w);
+        p[2 * i + 1] = std::uint8_t(w >> 8);
+    }
+    t(BusEvent::Setup, p);
+}
+#endif
+
 }  // namespace k2::usb
 
 // ---- Interrupts and TinyUSB callbacks (C linkage: named by the vector table / TinyUSB) ----
@@ -427,6 +456,9 @@ K2_HOT std::uint32_t tusb_time_millis_api(void) { return k2::systick::millis(); 
 K2_HOT void USB_LP_CAN1_RX0_IRQHandler(void) {
     k2::usb::stats.isrs++;
     if (k2::reg::usb_istr() & k2::reg::kUsbIstrReset) k2::usb::stats.resets++;
+#if K2_HOST_REPORT
+    k2::usb::tap_isr();
+#endif
     tud_int_handler(0);
 }
 

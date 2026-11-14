@@ -657,6 +657,14 @@
   "660": "[TEST] SVOOC ceiling %s\n",
   "661": "[TEST] svooc ceiling stage mode=%u\n",
   "662": "[UI] menu %u refused: %s (depth %u, arena %u/%u B)\n",
-  "663": "[USBCFG] webusb not built (K2_WEBUSB=0): stored %s runs as %s\n"
+  "663": "[USBCFG] webusb not built (K2_WEBUSB=0): stored %s runs as %s\n",
+  "664": "[LPHR] line %s (inline=%d cc=%u)\n",
+  "665": "[LPHR] host Hard Reset (role back to UFP)\n",
+  "666": "[LPHR] saved state=%u end=%s ok=%d ms=%u\n",
+  "667": "[LPHR] start boot=%u resume=%d cc=%u rp=%u vbus=%d\n",
+  "668": "[LPHR] boot: %s (boots=%u)\n",
+  "669": "[LPHR] done end=%s os=%s id=%u svids=%u hr=%u sr=%u\n",
+  "670": "[LPHR] not started: %s\n",
+  "671": "[LPHR] armed: replug the host end of the loop\n"
  }
 }

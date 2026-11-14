@@ -57,6 +57,9 @@
 #include "k2/net/http_server.hpp"
 #include "k2/net/net.hpp"
 #endif
+#if K2_HOST_REPORT
+#include "k2/loopprobe/host_report_hw.hpp"
+#endif
 
 extern "C" std::uint32_t k2_stack_free_bytes();
 extern "C" std::uint32_t k2_msp_free_bytes();
@@ -189,6 +192,9 @@ constexpr uint32_t kEraseQuietMs = 1000;
     k2::adc::poll();
     mark(Stage::LoopGuard);
     k2::loopguard::poll(now);              // the HID-cable loop 5 V lock: before the UI tick, so its tools see the lock this pass
+#if K2_HOST_REPORT
+    k2::loopprobe::host::hw::poll(now);    // the loop probe's Host report: the boot journal, the session (prototype)
+#endif
     mark(Stage::Accel);
     const bool sensor_was_online = c.accelerometer.online();
     if (c.accelerometer.poll(now)) {
