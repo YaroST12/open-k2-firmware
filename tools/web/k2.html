@@ -580,7 +580,7 @@ var K2Proto = (function () {
   var FACTORY_WIPE_MAGIC = [0x57, 0x49, 0x50, 0x45];   // "WIPE", u32 0x45504957 little endian (kFactoryWipeMagic)
   var CMD = { PING: 1, BUTTON: 2, GET_STATE: 3, GET_PDOS: 4, GET_EMARKER: 5, ACTION: 6, SET_PAGE: 7,
               REBOOT: 8, LOG: 9, SCREENSHOT: 10, CHARGER_TEST: 0x0B, CHARGER_UNITS: 0x0C, CHARGER_CABLE: 0x0D, CHARGER_SWEEP: 0x0F, DEBUG_PDOS: 0x20, ADC_RAW: 0x21, RIPPLE: 0x22, DEBUG_PD_MSG: 0x23,
-              GET_IDENTITY: 0x24, DEBUG_LINK: 0x25, DEBUG_CC_PROBE: 0x2A, DFU_ENTER: 0x30, DEBUG_FAULT: 0x31, FC: 0x32, FACTORY_WIPE: 0x33, BOOT_INFO: 0x35, MEMORY: 0x36, CABLE_R: 0x50, LAB: 0x51, UFCS: 0x52, QRTEST: 0x53, CHARGER_AVS_SWEEP: 0x54, PD_STRESS: 0x55, LOOP_PROBE: 0x57, BATTERY: 0x58, CHARGER_SVOOC_CAP: 0x59, EM_LIB: 0x61, CARDS: 0x62, TWIN: 0x63, BLACK_BOX: 0x70, TRANS_CAP: 0x71, DIAGNOSE: 0x72,
+              GET_IDENTITY: 0x24, DEBUG_LINK: 0x25, DEBUG_CC_PROBE: 0x2A, DFU_ENTER: 0x30, DEBUG_FAULT: 0x31, FC: 0x32, FACTORY_WIPE: 0x33, BOOT_INFO: 0x35, MEMORY: 0x36, CABLE_R: 0x50, LAB: 0x51, UFCS: 0x52, QRTEST: 0x53, CHARGER_AVS_SWEEP: 0x54, PD_STRESS: 0x55, LOOP_PROBE: 0x57, PD_SPEC: 0x5A, BATTERY: 0x58, CHARGER_SVOOC_CAP: 0x59, EM_LIB: 0x61, CARDS: 0x62, TWIN: 0x63, BLACK_BOX: 0x70, TRANS_CAP: 0x71, DIAGNOSE: 0x72,
               IDENTIFY_DEVICE: 0x40, PD_REQUEST: 0x41, PD_RESET: 0x42, PD_TRIGGER_STATUS: 0x43, PD_RELEASE: 0x44, PD_MATCH: 0x45, PD_ATTACH: 0x48, PD_HANDBACK: 0x49, APPLE_READ: 0x4A, STOP: 0x4B, LEASE: 0x4C,
               SCREEN_DATA: 0x8A, RIPPLE_DATA: 0x8B };
   var STATUS = { OK: 0, UNKNOWN_CMD: 1, BAD_LENGTH: 2, BAD_ARG: 3, BUSY: 4, NEED_CONFIRM: 5 };
@@ -1930,6 +1930,205 @@ var K2Proto = (function () {
   };
   K2Remote.prototype.blackboxClearCaptures = async function () { await this.link.call(CMD.BLACK_BOX, [BB.CLEAR]); };
 
+  // The live ring, op 0 (what pd_trace.py live reads): [0] from the oldest kept record, or [0, cursor u32 LE] after it. The reply is
+  // flags(1: bit0 the cursor was overwritten, bit1 frozen, bit2 the cursor lay beyond head, the K2 rebooted) next(4) head(4) records.
+  // -> { overwritten, frozen, rebooted, next, head, events }; pass `next` back as the cursor for the next read.
+  K2Remote.prototype.blackboxRead = async function (cursor) {
+    var b = [0];
+    if (cursor !== undefined && cursor !== null) { var c = cursor >>> 0; b.push(c & 255, (c >>> 8) & 255, (c >>> 16) & 255, c >>> 24); }
+    var p = (await this.link.call(CMD.BLACK_BOX, b)).payload;
+    if (p.length < 9) throw new FrameError("black box read too short");
+    return { overwritten: !!(p[0] & 1), frozen: !!(p[0] & 2), rebooted: !!(p[0] & 4), next: rd32(p, 1), head: rd32(p, 5),
+             events: parseBbRecords(p.slice(9)) };
+  };
+  // The PD messages of a record list as rows for a table: the last `max`, GoodCRC left out unless o.goodCrc.
+  function bbMessageRows(events, o) {
+    o = o || {};
+    var rows = events.filter(function (e) { return e.kind === "msg" && (o.goodCrc || e.name !== "GoodCRC"); })
+      .map(function (e) { return { t_us: e.t_us, dir: e.dir, name: e.name, objects: e.objects, sop: e.sop, msg_id: e.msg_id, header: e.header }; });
+    return o.max ? rows.slice(-o.max) : rows;
+  }
+
+  // ---- report cards: rename and delete (command 0x62 ops 2 and 3; the read side is above) ------------------
+  var CARD_NAME_RE = /^[A-Za-z0-9 _.\-]{1,20}$/;
+  K2Remote.prototype.cardsRename = async function (no, name) {
+    if (!CARD_NAME_RE.test(name)) throw new RangeError("name is 1..20 characters of A-Z a-z 0-9 space - _ .");
+    var b = [2, no & 255, (no >> 8) & 255];
+    for (var i = 0; i < name.length; i++) b.push(name.charCodeAt(i));
+    cardsOk((await this.link.call(CMD.CARDS, b)).payload, "cards rename");
+    return true;
+  };
+  K2Remote.prototype.cardsDelete = async function (no) {
+    cardsOk((await this.link.call(CMD.CARDS, [3, no & 255, (no >> 8) & 255, 1])).payload, "cards delete");
+    return true;
+  };
+
+  // ---- lab hand-back (command 0x49): the whole Fix sequence, one Hard Reset; the verdict is the reply payload ----
+  var HANDBACK_VERDICTS = ["allowed", "charger test running", "confirm needed", "not inline", "no contract owned",
+                           "far sink Request seen this attach", "already handed back this attach"];
+  function handbackText(v) { return v < HANDBACK_VERDICTS.length ? HANDBACK_VERDICTS[v] : "verdict " + v; }
+  K2Remote.prototype.pdHandback = async function (confirm) {
+    var p = (await this.link.call(CMD.PD_HANDBACK, confirm ? [1] : [])).payload;
+    need(p, 1, "hand-back");
+    return { verdict: p[0], text: handbackText(p[0]), allowed: p[0] === 0 };
+  };
+
+  // ---- lab Apple charger readout (command 0x4A, off by default in the firmware): op 1 arms and re-requests the CURRENT contract,
+  // op 0 + part reads the header (part 0) or one NUL-terminated field (1..6) ------------------------------------
+  var APPLE_WHYS = ["running", "done", "nak", "timeout", "range", "cap", "nomode"];
+  var APPLE_REFUSALS = ["none", "inline", "no contract", "not partner", "busy"];
+  var APPLE_FIELDS = ["maker", "product", "fw", "hw", "field90", "serial"];
+  function decodeAppleHead(p) {
+    need(p, 5, "apple read");
+    return { armed: !!p[0], why: p[1] < APPLE_WHYS.length ? APPLE_WHYS[p[1]] : String(p[1]), reads: p[2], ok: p[3], nfields: p[4] };
+  }
+  K2Remote.prototype.appleRead = async function (arm, o) {
+    o = o || {};
+    var self = this, head, t0 = Date.now();
+    async function call(b) {
+      try { return (await self.link.call(CMD.APPLE_READ, b)).payload; }
+      catch (e) {
+        if (e instanceof RemoteError && e.payload.length) {
+          var r = e.payload[0];
+          e.message = "apple read refused: " + (r < APPLE_REFUSALS.length ? APPLE_REFUSALS[r] : r);
+        }
+        throw e;
+      }
+    }
+    if (arm) {
+      head = decodeAppleHead(await call([1]));
+      while (head.armed && head.why === "running" && Date.now() - t0 < (o.waitMs || 8000)) {
+        await new Promise(function (res) { setTimeout(res, o.pollMs === undefined ? 200 : o.pollMs); });
+        head = decodeAppleHead(await call([0, 0]));
+      }
+    } else head = decodeAppleHead(await call([0, 0]));
+    var out = { armed: head.armed, why: head.why, reads: head.reads, ok: head.ok };
+    if (!head.armed && !head.reads) return out;
+    for (var part = 1; part <= Math.min(head.nfields, 6); part++) {
+      var f = await call([0, part]);
+      need(f, 2, "apple read");
+      if (f[0] !== part) throw new FrameError("apple read field part " + f[0] + " is not the asked " + part);
+      out[APPLE_FIELDS[part - 1]] = cstr(f.subarray(1));
+    }
+    return out;
+  };
+
+  // ---- PD Spec Check (command 0x5A, docs/PD_SPEC_CHECK.md): status / start / stop / the result blob ----------------------
+  // Names in the order of include/k2/pdspec/engine.hpp and result.hpp (tests/test_k2tools.mjs reads both headers and compares).
+  var PDSPEC_STATES = ["idle", "running", "finished"];
+  var PDSPEC_STARTS = ["ok", "ports busy", "no PD source", "link inline", "K2 powered by the charger", "no power monitor", "already running"];
+  var PDSPEC_STOPS = ["running", "done", "cancelled", "VBUS over the limit", "load on the output", "source did not come back", "step stuck",
+                      "no PD contract", "link inline", "run time cap"];
+  var PDSPEC_FAMILIES = ["Transitions", "PPS steps", "PPS timeout", "EPR timeout", "Hard Reset", "Detach"];
+  var PDSPEC_SKIPS = ["-", "not offered", "one fixed level", "no PPS", "no EPR", "no EPR cable proof", "capture busy", "level refused",
+                      "run stopped", "not reached", "K2 on the charger", "no data", "not selected"];
+  var PDSPEC_VERDICTS = ["pending", "pass", "fail", "skip", "unverified"];
+  var PDSPEC_FAMILY_MASK = 0x3F;
+  // key, label, kind, unit, weight, inferred: kDefs of result.hpp
+  var PDSPEC_CHECKS = [
+    ["accept_time", "Accept", "max", "us", 1], ["ps_rdy_time", "PS_RDY time", "max", "us", 2], ["src_start", "VBUS start", "min", "us", 1],
+    ["ps_rdy_early", "PS_RDY early", "max", "mv", 3], ["ps_rdy_low", "PS_RDY low", "min", "mv", 3], ["rise_time", "Rise time", "max", "us", 2],
+    ["fall_time", "Fall time", "max", "us", 2], ["overshoot", "Overshoot", "range", "mv", 3], ["accuracy", "Accuracy", "range", "mv", 3],
+    ["pps_monotonic", "PPS monotonic", "min", "mv", 3], ["pps_accuracy", "PPS accuracy", "range", "mv", 2],
+    ["pps_settle", "PPS settle", "max", "us", 1, true], ["pps_keepalive", "PPS timeout", "range", "ms", 5],
+    ["epr_keepalive", "EPR timeout", "range", "ms", 5], ["hr_safe0v", "HR to 0 V", "max", "ms", 5], ["hr_recover", "HR off time", "range", "ms", 3],
+    ["hr_turn_on", "HR turn-on", "max", "ms", 3], ["hr_caps", "HR caps", "max", "ms", 2], ["detach_safe0v", "Detach to 0 V", "max", "ms", 5, true],
+    ["reattach", "Re-attach", "max", "ms", 10, true], ["source_reset", "Source reset", "max", "count", 20]
+  ].map(function (r) { return { key: r[0], label: r[1], kind: r[2], unit: r[3], weight: r[4], inferred: !!r[5] }; });
+  var PDSPEC_NEVER = 99999999, PDSPEC_OPEN = 1000000;
+  var PDSPEC_TR_FLAGS = [[1, "epr"], [2, "live band"], [4, "refused"], [8, "no capture"], [16, "suspect stamp"]];
+  function pdSpecName(t, i) { return i < t.length ? t[i] : "#" + i; }
+  function decodePdSpecStatus(p) {
+    need(p, 17, "pd spec status");
+    var fams = PDSPEC_FAMILIES.filter(function (f, i) { return p[6] >> i & 1; });
+    return { state: pdSpecName(PDSPEC_STATES, p[0]), stop: pdSpecName(PDSPEC_STOPS, p[1]), start: pdSpecName(PDSPEC_STARTS, p[2]),
+             family: pdSpecName(PDSPEC_FAMILIES, p[3]), item: p[4], items: p[5], families: p[6], families_text: fams.join(", ") || "none",
+             fails: p[7], passes: p[8], skips: p[9], release_unconfirmed: !!(p[10] & 1),
+             score: u16(p, 11), elapsed_s: u16(p, 13), blob_len: u16(p, 15) };
+  }
+  function i32(b, i) { return rd32(b, i) | 0; }
+  function s16(b, i) { return (b[i] | b[i + 1] << 8) << 16 >> 16; }
+  // The blob (tools/pdspec_blob.py is the reference): magic "PSC1", a 16 byte header, one 20 byte aggregate per check, 32 bytes of
+  // timers, 20 bytes per transition, 14 per PPS point.
+  function decodePdSpecBlob(b) {
+    var n = PDSPEC_CHECKS.length;
+    if (b.length < 16 || b[0] !== 0x50 || b[1] !== 0x53 || b[2] !== 0x43 || b[3] !== 0x31) throw new FrameError("not a PD Spec Check blob (magic PSC1)");
+    var nTr = b[6], nPps = b[7], total = 16 + n * 20 + 32 + nTr * 20 + nPps * 14;
+    if (b.length < total) throw new FrameError("PD Spec Check blob is " + b.length + " bytes, its header needs " + total);
+    var checks = PDSPEC_CHECKS.map(function (d, k) {
+      var o = 16 + k * 20, fails = u16(b, o + 6), cnt = u16(b, o + 4);
+      return { key: d.key, label: d.label, kind: d.kind, unit: d.unit, weight: d.weight,
+               verdict: pdSpecName(PDSPEC_VERDICTS, b[o]), skip: b[o + 1] ? pdSpecName(PDSPEC_SKIPS, b[o + 1]) : null,
+               n: cnt, fails: fails, penalty: d.inferred ? 0 : d.weight * fails, worst: cnt ? i32(b, o + 8) : null,
+               lo: i32(b, o + 12), hi: i32(b, o + 16), a: b[o + 2], b: b[o + 3] };
+    });
+    var o = 16 + n * 20, w = [];
+    for (var i = 0; i < 8; i++) w.push(rd32(b, o + 4 * i));
+    var t16 = function (v) { return v === 0xFFFF ? null : v; }, t32 = function (v) { return v === 0xFFFFFFFF ? null : v; };
+    var timers = { pps_ka_ms: t32(w[0]), epr_ka_ms: t32(w[1]), hr_from_mv: w[2] & 0xFFFF, hr_off_ms: t16(w[2] >>> 16), hr_dark_ms: t16(w[3] & 0xFFFF),
+                   hr_on_ms: t16(w[3] >>> 16), hr_caps_ms: t16(w[4] & 0xFFFF), det_from_mv: w[4] >>> 16, det_off_ms: t16(w[5] & 0xFFFF),
+                   det_back_ms: t16(w[5] >>> 16), poll_gap_ms: w[6] };
+    o += 32;
+    var transitions = [];
+    for (i = 0; i < nTr; i++, o += 20) {
+      var acc = u16(b, o + 4), fl = b[o + 2];
+      transitions.push({ from: b[o], to: b[o + 1], flags: PDSPEC_TR_FLAGS.filter(function (f) { return fl & f[0]; }).map(function (f) { return f[1]; }),
+                         accept_ms: acc === 0xFFFF ? null : acc / 10, psrdy_ms: t16(u16(b, o + 6)), start_ms: t16(u16(b, o + 8)), band_ms: t16(u16(b, o + 10)),
+                         psrdy_mv: u16(b, o + 12) || null, peak_mv: u16(b, o + 14) || null, final_mv: u16(b, o + 16) || null, gap_ms: u16(b, o + 18) });
+    }
+    var pps = [];
+    for (i = 0; i < nPps; i++, o += 14) {
+      pps.push({ pos: b[o], steps: b[o + 1], mono_fails: b[o + 2], acc_fails: b[o + 3], set_mv: u16(b, o + 4), worst_err_mv: s16(b, o + 6),
+                 min_delta_mv: s16(b, o + 8), max_delta_mv: s16(b, o + 10), max_settle_ms: u16(b, o + 12) / 10 });
+    }
+    var tally = { pass: 0, fail: 0, skip: 0, unverified: 0 };
+    checks.forEach(function (c) { if (c.verdict in tally) tally[c.verdict]++; });
+    return { state: pdSpecName(PDSPEC_STATES, b[4]), stop_code: b[5], stop: pdSpecName(PDSPEC_STOPS, b[5]), score: u16(b, 8), elapsed_s: u16(b, 10),
+             release_unconfirmed: !!(b[12] & 1), tally: tally, checks: checks, timers: timers, transitions: transitions, pps: pps };
+  }
+  // A check's value in the K2's own words: us as ms with one decimal, ms, mV as V, a count.
+  function pdSpecValue(unit, v) {
+    if (v === null || v === undefined) return "-";
+    if (v >= PDSPEC_NEVER) return "not seen";
+    if (unit === "us") return (v / 1000).toFixed(1) + " ms";
+    if (unit === "ms") return v + " ms";
+    if (unit === "mv") return (v / 1000).toFixed(3) + " V";
+    return String(v);
+  }
+  function pdSpecLimit(c) {
+    if (c.kind === "max" || (c.kind === "range" && c.lo <= -PDSPEC_OPEN)) return "<= " + pdSpecValue(c.unit, c.hi);
+    if (c.kind === "min" || (c.kind === "range" && c.hi >= PDSPEC_OPEN)) return ">= " + pdSpecValue(c.unit, c.lo);
+    return pdSpecValue(c.unit, c.lo) + " .. " + pdSpecValue(c.unit, c.hi);
+  }
+  // Where the worst value came from: a PDO pair (transition checks), an APDO point (PPS steps), a PDO or the source (timers).
+  function pdSpecAt(c, k) {
+    var keys = PDSPEC_CHECKS.map(function (d) { return d.key; });
+    if (k < keys.indexOf("pps_monotonic")) return "PDO " + c.a + " to " + c.b;
+    if (k < keys.indexOf("pps_keepalive")) return "APDO " + c.a + ", point " + c.b;
+    return c.a ? "PDO " + c.a : "the source";
+  }
+  K2Remote.prototype.pdSpecStatus = async function () { return decodePdSpecStatus((await this.link.call(CMD.PD_SPEC, [0])).payload); };
+  // Steps the charger through its levels, Hard Resets it and detaches it (no load, inside the PD rules): it needs `confirm`.
+  K2Remote.prototype.pdSpecStart = async function (families, confirm) {
+    if (!confirm) throw new RangeError("a PD Spec Check steps the charger through its levels, Hard Resets it and detaches it: confirm needed");
+    families = families || 0;
+    if (families & ~PDSPEC_FAMILY_MASK) throw new RangeError("families: a bit per family, 0x3F at most");
+    return decodePdSpecStatus((await this.link.call(CMD.PD_SPEC, [1, families, 1])).payload);
+  };
+  K2Remote.prototype.pdSpecStop = async function () { return decodePdSpecStatus((await this.link.call(CMD.PD_SPEC, [3])).payload); };
+  K2Remote.prototype.pdSpecRead = async function () {
+    var out = [], total = null;
+    for (var guard = 0; guard < 64 && (total === null || out.length < total); guard++) {
+      var off = out.length, p = (await this.link.call(CMD.PD_SPEC, [2, off & 255, off >> 8])).payload;
+      need(p, 5, "pd spec read");
+      total = u16(p, 2);
+      need(p, 5 + p[4], "pd spec read");
+      if (p[4] === 0) break;
+      for (var i = 0; i < p[4]; i++) out.push(p[5 + i]);
+    }
+    return decodePdSpecBlob(Uint8Array.from(out));
+  };
+
   K2Remote.prototype.chargerTest = async function (mode) {
     if (mode === undefined) mode = "status";
     if (mode !== "status" && mode !== "results" && mode !== "view") throw new RangeError("charger-test supports status / results / view only");
@@ -2109,6 +2308,8 @@ var K2Proto = (function () {
   function frameNeedsConfirm(f) {
     var cmd = f[2];
     if (cmd === CMD.PD_REQUEST || cmd === CMD.PD_RESET || cmd === CMD.PD_RELEASE || cmd === CMD.PD_ATTACH) return true;
+    if (cmd === CMD.PD_SPEC) return f[4] > 0 && f[5] === 1;                    // start (op 1)
+    if (cmd === CMD.PD_HANDBACK) return f[4] > 0 && (f[5] & 1) === 1;          // flags bit0 = confirm
     if (cmd === CMD.ACTION) return f[4] > 0 && ACTION_VBUS_IDS.indexOf(f[5]) >= 0;
     if (cmd === CMD.CHARGER_TEST) return f[4] > 0 && f[5] === CT_START_REQ;   // START (http_api.hpp: 403 without confirm=1)
     return cmd === CMD.FC && f[4] > 0 && FC_VBUS_OPS.indexOf(f[5]) >= 0;
@@ -2317,7 +2518,10 @@ var K2Proto = (function () {
     FC_SAFE_MV: FC_SAFE_MV, rle565Decode: rle565Decode, decodeScreenInfo: decodeScreenInfo,
     rgb565ToRgba: rgb565ToRgba, httpTransport: httpTransport, decodeBmp565: decodeBmp565, Link: Link, K2Remote: K2Remote,
     decodeBbCaps: decodeBbCaps, decodeBbCapRead: decodeBbCapRead, parseBbRecords: parseBbRecords, pdMessageName: pdMessageName,
-    formatBbDelta: formatBbDelta, bbJson: bbJson, bbIdentity: bbIdentity, bbLink: bbLink
+    formatBbDelta: formatBbDelta, bbJson: bbJson, bbIdentity: bbIdentity, bbLink: bbLink, bbMessageRows: bbMessageRows,
+    HANDBACK_VERDICTS: HANDBACK_VERDICTS, handbackText: handbackText, APPLE_REFUSALS: APPLE_REFUSALS, CARD_NAME_RE: CARD_NAME_RE,
+    decodePdSpecStatus: decodePdSpecStatus, decodePdSpecBlob: decodePdSpecBlob, pdSpecValue: pdSpecValue, pdSpecLimit: pdSpecLimit, pdSpecAt: pdSpecAt,
+    PDSPEC_CHECKS: PDSPEC_CHECKS, PDSPEC_STOPS: PDSPEC_STOPS, PDSPEC_STARTS: PDSPEC_STARTS, PDSPEC_FAMILIES: PDSPEC_FAMILIES, PDSPEC_STATES: PDSPEC_STATES
   };
 })();
 if (typeof module !== "undefined" && module.exports) module.exports = K2Proto;
