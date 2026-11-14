@@ -19,6 +19,7 @@ struct WalkDest {
 
 constexpr WalkDest kWalkDests[] = {
     {"Home", 0, true}, {"Detail", 1, true}, {"Charger", 2, true}, {"Lines", 3, true}, {"Tools", 4, true}, {"Settings", 5, true},
+    {"Graphs", static_cast<uint8_t>(Page::Graphs), true},
     {"Connection", kPdPage, false}, {"Diag", kDiagPage, true},
     {"Trigger", kMenuPageBase + static_cast<uint8_t>(Menu::Trigger), false},
     {"PdTrigger", kMenuPageBase + static_cast<uint8_t>(Menu::PdTrigger), false},
@@ -32,6 +33,8 @@ constexpr unsigned kWalkN = sizeof kWalkDests / sizeof kWalkDests[0];
 
 // A destination reached from a menu goes through its base page first (Ui::goto_page pops, then pushes): two switches, so the
 // one-paint bound applies to page destinations from anywhere and to menu destinations from a rotation page only.
-constexpr bool walk_one_switch(unsigned from, unsigned to) { return kWalkDests[to].index < 6 || kWalkDests[from].index < 6; }
+constexpr bool walk_one_switch(unsigned from, unsigned to) {
+    return kWalkDests[to].index < kMenuPageBase || kWalkDests[from].index < kMenuPageBase;
+}
 
 }  // namespace k2

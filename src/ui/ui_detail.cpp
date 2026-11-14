@@ -209,7 +209,7 @@ void DetailPage::update(uint32_t now_ms) {
     // Numbers is a live instrument: it never shows Flow's frozen LAST snapshot (ctx_.last), so an unplugged source reads
     // 0.00 V and the lines keep moving. Only Flow holds the last state.
     PaintBudget *const bg = ctx_.budget;
-    title_pager(1);
+    title_pager(2);
     if (bg && bg->more) return;
     const bool online = ctx_.pm_online;
     const power::Metrics &pm = ctx_.pm;

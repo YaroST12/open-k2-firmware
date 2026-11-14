@@ -176,7 +176,7 @@ void model_row_text(power::Chip chip, StrBuf<24> &s) {
 // ---------------------------------------------------------------------------------------
 
 // Short bar names (8 cells at most) of the rotation pages, in Page order (a Bench place names itself: bar_icon_ + title_).
-static constexpr const char *kBarNames[] = {"Home", "Numbers", "Charger", "Lines", "Bench", "Settings"};
+static constexpr const char *kBarNames[] = {"Home", "Numbers", "Charger", "Lines", "Bench", "Settings", "Graphs"};
 static_assert(sizeof kBarNames / sizeof *kBarNames == static_cast<size_t>(Page::Count), "one bar name per rotation page");
 
 void PageBase::title_bar() {
@@ -203,7 +203,7 @@ void PageBase::title_pager(int current) {
     if (ctx_.budget && !ctx_.budget->admit(cost, true)) return;
     bar_valid_ = true;
     bar_sig_ = sig;
-    draw_top_pager(ctx_.content, 3, current);
+    draw_top_pager(ctx_.content, kMeterFaces, current);
 }
 
 // Right end of the top chrome bar: the compact fmt3(V) x fmt3(A) readout, swapped for the stale-grey
@@ -935,7 +935,7 @@ bool LinesPage::paint_verdict(const std::optional<adc::Reading> &r, uint32_t now
 
 void LinesPage::update(uint32_t now_ms) {
     PaintBudget *const bg = ctx_.budget;
-    title_pager(2);
+    title_pager(3);
     if (bg && bg->more) return;
     const std::optional<adc::Reading> &r = ctx_.analog;
     const int32_t mv[4] = {r ? r->dp_mv : 0, r ? r->dm_mv : 0, r ? r->cc1_mv : 0, r ? r->cc2_mv : 0};

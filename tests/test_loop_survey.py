@@ -32,7 +32,7 @@ class Allowlist(unittest.TestCase):
 
 class Pure(unittest.TestCase):
     def test_page_index_matches_the_firmware(self):
-        self.assertEqual([s.page_index(p) for p in ("home", "detail", "settings", "connection", "diag")], [0, 1, 5, 16, 17])
+        self.assertEqual([s.page_index(p) for p in ("home", "detail", "settings", "connection", "diag")], [0, 1, 5, 17, 18])
 
     def test_reboot_detection(self):
         self.assertFalse(s.rebooted(100000, 190000, 90.0))

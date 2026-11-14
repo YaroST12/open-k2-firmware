@@ -1,10 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
-// History behind the three Home strips (V, A, W), pure and host-tested (tests/test_trend.cpp).
+// History behind Home's strips and the Graphs page (V, A, W), pure and host-tested (tests/test_trend.cpp).
 //
-// Three tiers share one push(): 100 ms samples for the 10 s window, 1 s samples for the 60 s window
-// and 10 s averages for the 10 min window. Values are stored in 10 mV / 10 mA / 10 mW units (uint16,
-// so 655 V / 655 A / 655 W). Each strip is auto-ranged to its own min/max by range().
+// Three tiers share one push(), one per window (10 s, 60 s, 10 min). Each holds kPoints = 110 columns, one per Graphs
+// column (2 px each across 220 px), taken every 91 ms, 545 ms and 5455 ms (the window / 110, home::step_ms): the fast and
+// middle tiers keep the sample of that moment, the slow tier the average of its bucket. Values are stored in
+// 10 mV / 10 mA / 10 mW units (uint16, so 655 V / 655 A / 655 W). Home resamples a window onto its own strip widths with
+// columns(); each strip is auto-ranged to its own min/max by range().
+//
+// Beside the data every tier keeps, per column, the contract's maximum power in whole watts (the Graphs page's dotted
+// limit line: it steps on a renegotiation and follows a PPS level), and every 10th column one point of the session's
+// energy (the Wh graph: ten windows in the same 110 points). Energy is stored as 16 bits that wrap, in a unit per tier
+// (1, 10, 100 mWh), and read back as differences from the oldest point shown: no session length overflows it, and a
+// window never holds more than 6.5 kWh of difference.
 #pragma once
 #include <cstdint>
 #include <memory>
@@ -19,6 +27,10 @@ constexpr Window next(Window w) { return w == Window::S10 ? Window::S60 : w == W
 constexpr Window prev(Window w) { return w == Window::S10 ? Window::M10 : w == Window::S60 ? Window::S10 : Window::S60; }
 static_assert(prev(next(Window::S10)) == Window::S10 && prev(next(Window::M10)) == Window::M10);
 constexpr const char *label(Window w) { return w == Window::S10 ? "10s" : w == Window::S60 ? "60s" : "10m"; }
+// Milliseconds between two columns of a tier: the window over 110 columns.
+constexpr uint32_t period_ms(Window w) { return w == Window::S10 ? 91u : w == Window::S60 ? 545u : 5455u; }
+// The window in seconds (10, 60, 600).
+constexpr uint32_t window_s(Window w) { return w == Window::S10 ? 10u : w == Window::S60 ? 60u : 600u; }
 
 struct Range {
     uint16_t dmin = 0, dmax = 0;   // data min / max (the labels)
@@ -59,62 +71,120 @@ constexpr int level(uint16_t v, const Range &r, int h) {
 
 class Trend {
 public:
-    static constexpr int kFast = 100, kMid = 60, kSlow = 60;
-    void clear() { std::construct_at(this); }   // in place: `*this = Trend{}` builds a ~1.4 KB temporary on the stack
-    // Time-ordered; v10 / a10 / w10 in 10 mV / 10 mA / 10 mW.
-    void push(uint32_t now_ms, uint32_t v10, uint32_t a10, uint32_t w10) {
+    static constexpr int kPoints = 110;          // columns per tier
+    static constexpr int kEnergyEvery = 10;      // a Wh point every 10th column of a tier
+    static constexpr int kFast = kPoints, kMid = kPoints, kSlow = kPoints;
+    void clear() { std::construct_at(this); }   // in place: `*this = Trend{}` builds a ~3 KB temporary on the stack
+    // Time-ordered; v10 / a10 / w10 in 10 mV / 10 mA / 10 mW, limit_w the contract's maximum in whole watts (0 = none),
+    // mwh the session's energy so far (EnergyMeter::mwh()).
+    void push(uint32_t now_ms, uint32_t v10, uint32_t a10, uint32_t w10, uint32_t limit_w = 0, uint32_t mwh = 0) {
         const uint16_t s[3] = {clamp(v10), clamp(a10), clamp(w10)};
-        if (!started_) { started_ = true; mid_ms_ = now_ms; slow_ms_ = now_ms; fast_ms_ = now_ms - kFastMs; }
-        if (now_ms - fast_ms_ >= kFastMs) { fast_ms_ = now_ms; put(fast_, kFast, nf_, hf_, s); }
-        if (now_ms - mid_ms_ >= kMidMs) { mid_ms_ += kMidMs * ((now_ms - mid_ms_) / kMidMs); put(mid_, kMid, nm_, hm_, s); }
+        const uint8_t lim = static_cast<uint8_t>(limit_w > 255 ? 255 : limit_w);
+        if (!started_) {
+            started_ = true;
+            t_[0].due_ms = now_ms - period_ms(Window::S10);   // the fast tier takes the first sample at once
+            t_[1].due_ms = now_ms;
+            t_[2].due_ms = now_ms;
+        }
         for (int q = 0; q < 3; q++) acc_[q] += s[q];
         acc_n_++;
-        if (now_ms - slow_ms_ >= kSlowMs) {
-            slow_ms_ += kSlowMs * ((now_ms - slow_ms_) / kSlowMs);
-            uint16_t avg[3];
-            for (int q = 0; q < 3; q++) avg[q] = static_cast<uint16_t>(acc_[q] / acc_n_);
-            put(slow_, kSlow, ns_, hs_, avg);
-            acc_[0] = acc_[1] = acc_[2] = 0;
-            acc_n_ = 0;
+        for (int w = 0; w < 3; w++) {
+            Tier &t = t_[w];
+            const uint32_t p = period_ms(static_cast<Window>(w));
+            if (now_ms - t.due_ms < p) continue;
+            t.due_ms += p * ((now_ms - t.due_ms) / p);   // a gap (the trace froze while stale) is skipped, not filled
+            if (w == 2) {
+                uint16_t avg[3];
+                for (int q = 0; q < 3; q++) avg[q] = static_cast<uint16_t>(acc_[q] / acc_n_);
+                put(t, avg, lim, mwh / energy_unit_mwh(Window::M10));
+                acc_[0] = acc_[1] = acc_[2] = 0;
+                acc_n_ = 0;
+            } else {
+                put(t, s, lim, mwh / energy_unit_mwh(static_cast<Window>(w)));
+            }
         }
     }
     // `cols` columns, oldest first, newest at the right; kNone where the window holds no sample.
     // Returns the number of columns that hold data.
     int columns(Window w, Qty q, uint16_t *out, int cols) const {
-        const uint16_t (*ring)[3] = w == Window::S10 ? fast_ : w == Window::S60 ? mid_ : slow_;
-        const int size = w == Window::S10 ? kFast : w == Window::S60 ? kMid : kSlow;
-        const int n = w == Window::S10 ? nf_ : w == Window::S60 ? nm_ : ns_;
-        const int head = w == Window::S10 ? hf_ : w == Window::S60 ? hm_ : hs_;
+        const Tier &t = t_[static_cast<int>(w)];
         int have = 0;
         for (int c = 0; c < cols; c++) {
-            const int back = (cols - 1 - c) * size / cols;   // 0 = newest sample
-            if (back >= n) { out[c] = kNone; continue; }
-            out[c] = ring[(head - 1 - back + 2 * size) % size][static_cast<int>(q)];
+            const int back = (cols - 1 - c) * kPoints / cols;   // 0 = newest sample
+            if (back >= t.n) { out[c] = kNone; continue; }
+            out[c] = t.s[at(t.head, back)][static_cast<int>(q)];
             have++;
         }
         return have;
     }
+    // The contract maximum (W) of the same columns; 0 where columns() has no sample. Returns the columns with a sample.
+    int limits(Window w, uint8_t *out, int cols) const {
+        const Tier &t = t_[static_cast<int>(w)];
+        int have = 0;
+        for (int c = 0; c < cols; c++) {
+            const int back = (cols - 1 - c) * kPoints / cols;
+            if (back >= t.n) { out[c] = 0; continue; }
+            out[c] = t.lim[at(t.head, back)];
+            have++;
+        }
+        return have;
+    }
+    // The tier's Wh points, oldest first, newest at the right, each the energy since the oldest point shown, in
+    // energy_unit_mwh(w); kNone where there is no point yet. Returns the number of points.
+    int energy(Window w, uint16_t *out, int cols) const {
+        const Tier &t = t_[static_cast<int>(w)];
+        const int first = cols - 1 < t.en - 1 ? cols - 1 : t.en - 1;   // `back` of the oldest point shown
+        const uint16_t ref = t.en ? t.e[at(t.ehead, first)] : 0;
+        int have = 0;
+        for (int c = 0; c < cols; c++) {
+            const int back = cols - 1 - c;
+            if (back >= t.en || back >= kPoints) { out[c] = kNone; continue; }
+            const uint16_t d = static_cast<uint16_t>(t.e[at(t.ehead, back)] - ref);
+            out[c] = d == kNone ? static_cast<uint16_t>(kNone - 1) : d;
+            have++;
+        }
+        return have;
+    }
+    static constexpr uint32_t energy_unit_mwh(Window w) { return w == Window::S10 ? 1u : w == Window::S60 ? 10u : 100u; }
+    // Columns the tier has taken since clear(): the Graphs page scrolls when it moves.
+    uint32_t seq(Window w) const { return t_[static_cast<int>(w)].seq; }
 
     // Newest sample of the window's ring; the faster rings stand in while it is still empty (the
-    // 10 min tier gets its first sample after 10 s). kNone when nothing was pushed at all.
+    // 10 min tier gets its first sample after 5.5 s). kNone when nothing was pushed at all.
     uint16_t latest(Window w, Qty q) const {
         const int i = static_cast<int>(q);
-        if (w == Window::M10 && ns_ > 0) return slow_[(hs_ + kSlow - 1) % kSlow][i];
-        if (w != Window::S10 && nm_ > 0) return mid_[(hm_ + kMid - 1) % kMid][i];
-        return nf_ > 0 ? fast_[(hf_ + kFast - 1) % kFast][i] : kNone;
+        const Tier &f = t_[0], &m = t_[1], &s = t_[2];
+        if (w == Window::M10 && s.n > 0) return s.s[at(s.head, 0)][i];
+        if (w != Window::S10 && m.n > 0) return m.s[at(m.head, 0)][i];
+        return f.n > 0 ? f.s[at(f.head, 0)][i] : kNone;
     }
 
 private:
-    static constexpr uint32_t kFastMs = 100, kMidMs = 1000, kSlowMs = 10000;
+    struct Tier {
+        uint16_t s[kPoints][3] = {};   // V, A, W per column
+        uint8_t lim[kPoints] = {};     // contract maximum, W
+        uint16_t e[kPoints] = {};      // energy points (wrapping, energy_unit_mwh)
+        uint8_t n = 0, head = 0;       // columns held, next column slot
+        uint8_t en = 0, ehead = 0;     // energy points held, next point slot
+        uint32_t due_ms = 0;           // the time the last column was due
+        uint32_t seq = 0;              // columns taken
+    };
     static constexpr uint16_t clamp(uint32_t v) { return v > 0xFFFE ? 0xFFFE : static_cast<uint16_t>(v); }
-    static void put(uint16_t (*ring)[3], int size, int &n, int &head, const uint16_t *s) {
-        for (int q = 0; q < 3; q++) ring[head][q] = s[q];
-        head = (head + 1) % size;
-        if (n < size) n++;
+    static constexpr int at(int head, int back) { return (head - 1 - back + 2 * kPoints) % kPoints; }
+    static void put(Tier &t, const uint16_t *s, uint8_t lim, uint32_t energy) {
+        for (int q = 0; q < 3; q++) t.s[t.head][q] = s[q];
+        t.lim[t.head] = lim;
+        t.head = static_cast<uint8_t>((t.head + 1) % kPoints);
+        if (t.n < kPoints) t.n++;
+        if (t.seq % kEnergyEvery == 0) {
+            t.e[t.ehead] = static_cast<uint16_t>(energy);
+            t.ehead = static_cast<uint8_t>((t.ehead + 1) % kPoints);
+            if (t.en < kPoints) t.en++;
+        }
+        t.seq++;
     }
-    uint16_t fast_[kFast][3] = {}, mid_[kMid][3] = {}, slow_[kSlow][3] = {};
-    int nf_ = 0, nm_ = 0, ns_ = 0, hf_ = 0, hm_ = 0, hs_ = 0;
-    uint32_t fast_ms_ = 0, mid_ms_ = 0, slow_ms_ = 0, acc_[3] = {}, acc_n_ = 0;
+    Tier t_[3];
+    uint32_t acc_[3] = {}, acc_n_ = 0;
     bool started_ = false;
 };
 

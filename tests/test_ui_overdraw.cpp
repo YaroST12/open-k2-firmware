@@ -49,7 +49,7 @@ void fixture() {
 // remains on the screenshot path (Ui::render_for_capture), which costs no wire time.
 // The walk is tests/ui_walk.h (shared with test_ui_capture); the budgets sit in the same order.
 constexpr unsigned kN = kWalkN;
-constexpr unsigned kFullMax[kN] = {0, 0, 57100, 0, 0, 0, 52800, 0, 57400, 57000, 19900, 43800, 47700, 0, 57700};
+constexpr unsigned kFullMax[kN] = {0, 0, 57100, 0, 0, 0, 0, 52800, 0, 57400, 57000, 19900, 43800, 47700, 0, 57700};   // Graphs (7th) is opaque
 constexpr const WalkDest *kDests = kWalkDests;
 // The worst page switch, as a multiple of the screen (ratchet, see full_max). A menu reached from a menu is two switches
 // (goto_page pops to the base page, then pushes), which is what the worst cell is.

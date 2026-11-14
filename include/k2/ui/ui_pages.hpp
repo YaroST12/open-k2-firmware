@@ -118,12 +118,15 @@ struct UiContext {
             std::uint8_t sel = 0;                         // the Setup list's cursor
         } pdstress;
         std::array<uint8_t, bench::kPlaces> place_sel{};  // each place's last action: repeating a job is OK, OK, OK
-        uint8_t face = 0;                                 // Meter: the face last shown (0 Flow, 1 Numbers, 2 Lines)
+        uint8_t face = 0;                                 // Meter: the face last shown (0 Flow, 1 Graphs, 2 Numbers, 3 Lines)
     } keep;
     // The pending QR scan-test request (remote Cmd::QrTest op 1, k2/ui/ui_qrtest.hpp): the (version, px, quiet) of
     // the next show, consumed by QrTestPage::enter(). The page itself lives in the page arena.
     struct QrTestReq { std::uint8_t version = 0, px = 0, quiet = 0; } qrtest;
     uint8_t rotation = 0;        // physical LCD rotation, supplied by Ui
+    // The contract's power ceiling in whole watts while live (graphs::limit_mw: under PPS the requested level), refreshed every
+    // 100 ms with the sag level; the trend records it per column for the Graphs page's dotted limit. 0 = none known.
+    uint32_t limit_w = 0;
     bool pm_online = false;
     // True while the Ui paints a whole page onto a screen it knows is kBg everywhere (after the full clear or the erase pass:
     // Ui::paint_incoming, render_for_capture). A page's first paint may then skip a body wipe, since the pixels are already
@@ -195,6 +198,9 @@ void model_row_text(power::Chip chip, StrBuf<24> &out);                        /
 // "No source" (mode 1), empty (mode 0), nullptr when live or stale. Mode: 0 no meter, 1 idle, 2 live, 3 stale.
 const char *home_idle_note(uint8_t mode);
 
+// The Meter's faces, PLUS / MINUS walk them: Flow (Home), Graphs, Numbers (Detail), Lines (Ui's kFaces, the pager's order).
+inline constexpr int kMeterFaces = 4;
+
 class PageIf {
 public:
     virtual void draw_static() = 0;                 // clear-screen layout: title, headers, fields
@@ -227,10 +233,10 @@ protected:
     // Right end of the top chrome bar: the compact V x A readout, the LAST pill when stale,
     // empty on Home (its hero carries the values).
     void title_badge(bool last);
-    // The Meter faces (Numbers, Lines) carry a pager there instead: Flow, Numbers, Lines, `current` solid.
+    // The Meter faces (Numbers, Lines) carry a pager there instead: Flow, Graphs, Numbers, Lines, `current` solid.
     void title_pager(int current);
     bool meter_face() const { return id_ == Page::Detail || id_ == Page::Lines; }
-    bool any_face() const { return id_ == Page::Home || meter_face(); }   // Flow too
+    bool any_face() const { return id_ == Page::Home || id_ == Page::Graphs || meter_face(); }   // Flow and Graphs too
     // The navigation a page leaves to the base (CONCEPT 7), short presses only. On a Meter face: Up / Dn flip the face, OK opens
     // the Bench, BACK goes to Flow (nothing on Flow). Elsewhere BACK goes one level up: the charger test to the Charger place,
     // Settings to the K2 place. A submenu takes none of it (the Ui pops it on BACK).

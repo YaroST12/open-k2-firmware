@@ -162,8 +162,8 @@ ACTIONS_NEED_CONFIRM = ("fc-scan",)
 SOPS = {"sop": 0, "sop1": 1, "sop2": 2}
 # Rotation pages (settable with `page`), then Tools/Settings submenus: the state reports a
 # showing submenu as 6 + its index. Connection and Diag can also be opened remotely.
-PAGES = ["home", "detail", "chargertest", "lines", "tools", "settings", "trigger", "emarker", "pdtrigger", "cabler", "blackbox", "spoof", "usblink", "autorotate", "cards", "share", "connection", "diag", "qrtest", "twin", "loopprobe", "pdstress", "diagnosis", "battery"]
-ROTATION_PAGES = 6
+PAGES = ["home", "detail", "chargertest", "lines", "tools", "settings", "graphs", "trigger", "emarker", "pdtrigger", "cabler", "blackbox", "spoof", "usblink", "autorotate", "cards", "share", "connection", "diag", "qrtest", "twin", "loopprobe", "pdstress", "diagnosis", "battery"]
+ROTATION_PAGES = 7
 # Names the old numbering used, still accepted by `page`: they open Connection on the matching tab. The firmware
 # reads kConnTabAlias + tab (include/k2/ui/ui_types.hpp) as "open Connection on that tab"; the state itself reports a
 # showing Connection as its menu index (16), whatever the tab.
@@ -177,7 +177,7 @@ OPENABLE_MENUS = ("connection", "diag")
 
 
 def page_name(i):
-    """GET_STATE.page: 0..5 rotation pages, 6 + Menu while a submenu is open."""
+    """GET_STATE.page: 0..6 rotation pages, 7 + Menu while a submenu is open."""
     if i < ROTATION_PAGES:
         return PAGES[i]
     if i < len(PAGES):
