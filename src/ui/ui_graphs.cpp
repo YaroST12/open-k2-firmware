@@ -79,7 +79,8 @@ void GraphsPage::sample_shown(Shown &s, uint32_t now_ms) {
     s.milli[0] = w_mw_;
     s.milli[1] = v_mv_;
     s.milli[2] = a_ma_;
-    s.milli[3] = static_cast<int32_t>(ctx_.meter.mwh() > 0x7FFFFFFFu ? 0x7FFFFFFFu : ctx_.meter.mwh());
+    const auto mwh = ctx_.meter.mwh();
+    s.milli[3] = mwh > 0 ? static_cast<int32_t>(mwh) : 0;
     if (live || stale) {
         const hm::ProtoInfo p = live ? hm::live_proto(ctx_, pm) : ctx_.last.proto;
         // The ceilings Home's badges show: the contract's power, the source's top voltage (a PPS / AVS range's top), the
