@@ -22,13 +22,18 @@
 
 namespace k2::memstat {
 
-// Stack low-water thresholds (free bytes at the deepest excursion): amber under kCautionBelow, red under kErrorBelow.
-inline constexpr std::uint32_t kCautionBelow = 7000, kErrorBelow = 6000;
+// Warnings only for what the user can act on (user decision 2026-11-14): the file storage, where cards, journals and saved
+// cables can be deleted. The stack figures are plain numbers. Thresholds are the free share of the littlefs volume: amber
+// under kFsCautionPct, red under kFsErrorPct (exclusive). Mirrored in tools/k2_remote.py and tools/web/k2proto.js.
+inline constexpr std::uint32_t kFsCautionPct = 20, kFsErrorPct = 10;
 
 enum class Level : std::uint8_t { Ok, Caution, Error };
 
-constexpr Level level_for_low(std::uint32_t free_bytes) {
-    return free_bytes < kErrorBelow ? Level::Error : free_bytes < kCautionBelow ? Level::Caution : Level::Ok;
+constexpr Level level_for_fs(std::uint32_t free_blocks, std::uint32_t blocks) {
+    if (blocks == 0) return Level::Ok;
+    if (free_blocks > blocks) free_blocks = blocks;   // the volume is a few hundred blocks: 32-bit products cannot overflow
+    const std::uint32_t f = free_blocks * 100;
+    return f < blocks * kFsErrorPct ? Level::Error : f < blocks * kFsCautionPct ? Level::Caution : Level::Ok;
 }
 
 struct Snapshot {
@@ -59,10 +64,13 @@ inline constexpr std::size_t kLabelMax = 10, kValueMax = 16, kFooterMax = 27;
 const char* row_label(Row r);
 // Writes the value with its units; returns the length (never more than min(out.size(), kValueMax)). "--" while unknown.
 std::size_t row_text(Row r, const Snapshot& s, std::span<char> out);
-// Only the stack low-water row carries a level (exception colour only); every other row is Ok.
+// Only the FS free row carries a level (exception colour only), from storage_level(); every other row is Ok.
 Level row_level(Row r, const Snapshot& s);
+// The storage level: Ok until the volume has been walked (fs_valid) and the poll has run.
+Level storage_level(const Snapshot& s);
 
-// The footer: a fact and its tone level, e.g. "Stack never below 7500 B", "Stack tight: 6500 B", "Stack critical: 5900 B".
+// The footer: a fact and its tone level: "Stack never below 7500 B" (Ok), "Storage low: delete cards" (Caution),
+// "Storage full: delete cards" (Error).
 std::size_t footer_text(const Snapshot& s, std::span<char> out);
 Level footer_level(const Snapshot& s);
 

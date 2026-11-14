@@ -529,11 +529,17 @@ var K2Proto = (function () {
   }
 
   // MEMORY: 11 u32 (MEMORY_FIELDS), u16 fs block bytes, u8 flags (bit0 fs measured, bit1 the firmware has polled).
-  // Same thresholds as k2::memstat: the stack low-water row is caution below 7000 B and error below 6000 B.
+  // Same thresholds as k2::memstat (kFsCautionPct / kFsErrorPct): only the file storage warns, caution when the free share of the
+  // littlefs volume is under 20 %, error under 10 %; the stack figures are plain numbers (user decision 2026-11-14).
   var MEMORY_FIELDS = ["ram_total", "ram_static", "psp_size", "psp_now", "psp_low", "msp_size", "msp_low",
                        "fs_blocks", "fs_used", "image_bytes", "flash_bytes"];
-  var MEM_CAUTION_B = 7000, MEM_ERROR_B = 6000;
-  function memoryLevel(m) { return !m.ok ? "unknown" : m.psp_low < MEM_ERROR_B ? "error" : m.psp_low < MEM_CAUTION_B ? "caution" : "ok"; }
+  var MEM_FS_CAUTION_PCT = 20, MEM_FS_ERROR_PCT = 10;
+  function memoryLevel(m) {
+    if (!m.ok) return "unknown";
+    if (m.fs_free === null || !m.fs_blocks) return "ok";
+    var f = m.fs_free * 100;
+    return f < m.fs_blocks * MEM_FS_ERROR_PCT ? "error" : f < m.fs_blocks * MEM_FS_CAUTION_PCT ? "caution" : "ok";
+  }
   function decodeMemory(p) {
     need(p, 47, "memory");
     var v = dv(p), m = {};
@@ -553,17 +559,18 @@ var K2Proto = (function () {
     var blk = function (n) { return Math.floor(n * m.fs_block_bytes / 1024) + " KB (" + n + " blk)"; };
     var rows = [
       { label: "Stack now", value: m.ok ? m.psp_now + " B" : "--" },
-      { label: "Stack low", value: m.ok ? m.psp_low + " B" : "--", level: m.ok ? memoryLevel(m) : "ok" },
+      { label: "Stack low", value: m.ok ? m.psp_low + " B" : "--" },
       { label: "IRQ low", value: m.ok ? m.msp_low + " B" : "--" },
       { label: "RAM static", value: m.ok ? kb1(m.ram_static) + " of " + kb1(m.ram_total) + " KB" : "--" },
       { label: "FS used", value: m.ok && m.fs_valid ? blk(m.fs_used) : "--" },
-      { label: "FS free", value: m.ok && m.fs_valid ? blk(m.fs_free) : "--" },
+      { label: "FS free", value: m.ok && m.fs_valid ? blk(m.fs_free) : "--", level: m.ok ? m.level : "ok",
+        word: m.level === "error" ? "FULL" : "LOW" },
       { label: "Image", value: m.ok ? kb1(m.image_bytes) + " KB" : "--" },
       { label: "Image free", value: m.ok ? kb1(m.image_free) + " KB" : "--" },
       { label: "Heap", value: "none" }
     ];
-    var foot = !m.ok ? "Reading memory" :
-      (m.level === "error" ? "Stack critical: " : m.level === "caution" ? "Stack tight: " : "Stack never below ") + m.psp_low + " B";
+    var foot = !m.ok ? "Reading memory" : m.level === "error" ? "Storage full: delete cards" :
+      m.level === "caution" ? "Storage low: delete cards" : "Stack never below " + m.psp_low + " B";
     return { rows: rows, footer: foot, tone: m.ok && m.level !== "unknown" && m.level !== "ok" ? m.level : "info" };
   }
 
@@ -1735,7 +1742,7 @@ var K2Proto = (function () {
     CT_START_FOLLOW_MS: CT_START_FOLLOW_MS, CT_START_POLL_MS: CT_START_POLL_MS,
     decodeChargerCable: decodeChargerCable, decodeChargerTestStart: decodeChargerTestStart, ctStartStep: ctStartStep,
     decodeEmarker: decodeEmarker, decodeEmarkerDetail: decodeEmarkerDetail, decodeAdcRaw: decodeAdcRaw,
-    decodeRippleInfo: decodeRippleInfo, decodeIdentity: decodeIdentity, decodePdTrigger: decodePdTrigger, decodeMatch: decodeMatch, decodeMemory: decodeMemory, memoryView: memoryView, MEM_CAUTION_B: MEM_CAUTION_B, MEM_ERROR_B: MEM_ERROR_B, decodeStop: decodeStop, decodeLease: decodeLease, decodeIdentifyProgress: decodeIdentifyProgress, PD_ERRS: PD_ERRS,
+    decodeRippleInfo: decodeRippleInfo, decodeIdentity: decodeIdentity, decodePdTrigger: decodePdTrigger, decodeMatch: decodeMatch, decodeMemory: decodeMemory, memoryView: memoryView, MEM_FS_CAUTION_PCT: MEM_FS_CAUTION_PCT, MEM_FS_ERROR_PCT: MEM_FS_ERROR_PCT, decodeStop: decodeStop, decodeLease: decodeLease, decodeIdentifyProgress: decodeIdentifyProgress, PD_ERRS: PD_ERRS,
     decodeFc: decodeFc, decodeCableR: decodeCableR, parseLogStats: parseLogStats,
     formatAgo: formatAgo, formatUptime: formatUptime, isUnknownCmd: isUnknownCmd, FC_PROTOS: FC_PROTOS, FC_LEVELS: FC_LEVELS, FC_NAMES: FC_NAMES,
     ADC_CHANNELS: ADC_CHANNELS, ADC_SCAN: ADC_SCAN, RIPPLE_SAMPLES: RIPPLE_SAMPLES, RIPPLE_FULL_SCALE: RIPPLE_FULL_SCALE,

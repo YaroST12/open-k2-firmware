@@ -2103,14 +2103,18 @@ test("memory: decode the 47-byte payload", () => {
   assert.equal(m.image_free, 0xB1234 - 0xA5000);
 });
 
-test("memory: levels switch at 7000 and 6000 B, unknown until the firmware has polled", () => {
-  assert.equal(P.decodeMemory(memWith(7000)).level, "ok");
-  assert.equal(P.decodeMemory(memWith(6999)).level, "caution");
-  assert.equal(P.decodeMemory(memWith(6000)).level, "caution");
-  assert.equal(P.decodeMemory(memWith(5999)).level, "error");
+test("memory: only the file storage warns, under 20 % and 10 % free; unknown until the firmware has polled", () => {
+  // 146 blocks: 30 free is 20.5 % (fine), 29 is 19.9 % (caution), 15 is 10.3 % (caution), 14 is 9.6 % (error)
+  const free = (n, low = 7400) => P.decodeMemory(memWith(low, 3, { 32: 146 - n })).level;
+  assert.equal(free(30), "ok");
+  assert.equal(free(29), "caution");
+  assert.equal(free(15), "caution");
+  assert.equal(free(14), "error");
   assert.equal(P.decodeMemory(memWith(100, 0)).level, "unknown");
-  assert.equal(P.MEM_CAUTION_B, 7000);
-  assert.equal(P.MEM_ERROR_B, 6000);
+  assert.equal(P.decodeMemory(memWith(7400, 2)).level, "ok", "the volume not walked yet");
+  assert.equal(free(106, 10), "ok", "the stack is a plain number however low (user decision 2026-11-14)");
+  assert.equal(P.MEM_FS_CAUTION_PCT, 20);
+  assert.equal(P.MEM_FS_ERROR_PCT, 10);
 });
 
 test("memory: the view has the device's rows, units and footer", () => {
@@ -2125,20 +2129,26 @@ test("memory: the view has the device's rows, units and footer", () => {
   assert.equal(val["FS free"], "212 KB (106 blk)");
   assert.equal(val["Heap"], "none");
   assert.match(val["Image"], /^\d+\.\d KB$/);
-  assert.equal(v.rows[1].level, "ok");
+  assert.equal(v.rows[5].level, "ok");
   assert.equal(v.footer, "Stack never below 7400 B");
   assert.equal(v.tone, "info");
-  const c = P.memoryView(P.decodeMemory(memWith(6500)));
-  assert.equal(c.rows[1].level, "caution");
+  const c = P.memoryView(P.decodeMemory(memWith(7400, 3, { 32: 146 - 20 })));
+  assert.equal(c.rows[5].level, "caution");
+  assert.equal(c.rows[5].word, "LOW");
   assert.equal(c.tone, "caution");
-  assert.match(c.footer, /^Stack tight: 6500 B$/);
-  const e = P.memoryView(P.decodeMemory(memWith(5312)));
-  assert.equal(e.rows[1].level, "error");
+  assert.equal(c.footer, "Storage low: delete cards");
+  const e = P.memoryView(P.decodeMemory(memWith(7400, 3, { 32: 146 - 5 })));
+  assert.equal(e.rows[5].level, "error");
+  assert.equal(e.rows[5].word, "FULL");
   assert.equal(e.tone, "error");
-  assert.match(e.footer, /^Stack critical: 5312 B$/);
+  assert.equal(e.footer, "Storage full: delete cards");
+  const s = P.memoryView(P.decodeMemory(memWith(5312, 3, { 32: 40 })));
+  assert.equal(s.rows[1].level, undefined, "the stack row never carries a level");
+  assert.equal(s.tone, "info");
+  assert.equal(s.footer, "Stack never below 5312 B");
   const u = P.memoryView(P.decodeMemory(memWith(5312, 0)));
   assert.equal(u.rows[1].value, "--");
-  assert.equal(u.rows[1].level, "ok", "an unmeasured value is never coloured");
+  assert.equal(u.rows[5].level, "ok", "an unmeasured value is never coloured");
   assert.equal(u.tone, "info");
   const nofs = P.memoryView(P.decodeMemory(memWith(7400, 2)));
   assert.equal(nofs.rows[4].value, "--", "littlefs not walked yet");

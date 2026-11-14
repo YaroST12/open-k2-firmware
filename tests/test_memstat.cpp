@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
 // Host tests for the memory readout's pure part (include/k2/core/memstat.hpp, src/core/memstat.cpp): the stack low-water
-// levels, the row texts with their units and widths, and the footer.
+// levels of the file storage (the one figure the user can act on), the row texts with their units and widths, and the footer.
 #include <cstring>
 #include <string>
 
@@ -29,13 +29,20 @@ static std::string text(Row r, const Snapshot& s) {
     return std::string(buf, n);
 }
 
+// Storage: caution under kFsCautionPct (20 %) of the volume free, error under kFsErrorPct (10 %); the edges are exclusive.
 static void test_levels() {
-    CHECK_EQ(static_cast<int>(level_for_low(7000)), static_cast<int>(Level::Ok));      // the thresholds are exclusive: 7000 is fine
-    CHECK_EQ(static_cast<int>(level_for_low(20000)), static_cast<int>(Level::Ok));
-    CHECK_EQ(static_cast<int>(level_for_low(6999)), static_cast<int>(Level::Caution));
-    CHECK_EQ(static_cast<int>(level_for_low(6000)), static_cast<int>(Level::Caution));
-    CHECK_EQ(static_cast<int>(level_for_low(5999)), static_cast<int>(Level::Error));
-    CHECK_EQ(static_cast<int>(level_for_low(0)), static_cast<int>(Level::Error));
+    CHECK_EQ(kFsCautionPct, 20u);
+    CHECK_EQ(kFsErrorPct, 10u);
+    CHECK_EQ(static_cast<int>(level_for_fs(20, 100)), static_cast<int>(Level::Ok));
+    CHECK_EQ(static_cast<int>(level_for_fs(19, 100)), static_cast<int>(Level::Caution));
+    CHECK_EQ(static_cast<int>(level_for_fs(10, 100)), static_cast<int>(Level::Caution));
+    CHECK_EQ(static_cast<int>(level_for_fs(9, 100)), static_cast<int>(Level::Error));
+    CHECK_EQ(static_cast<int>(level_for_fs(0, 100)), static_cast<int>(Level::Error));
+    CHECK_EQ(static_cast<int>(level_for_fs(30, 146)), static_cast<int>(Level::Ok));        // the K2's 146-block volume
+    CHECK_EQ(static_cast<int>(level_for_fs(29, 146)), static_cast<int>(Level::Caution));   // 19.9 %
+    CHECK_EQ(static_cast<int>(level_for_fs(15, 146)), static_cast<int>(Level::Caution));
+    CHECK_EQ(static_cast<int>(level_for_fs(14, 146)), static_cast<int>(Level::Error));     // 9.6 %
+    CHECK_EQ(static_cast<int>(level_for_fs(0, 0)), static_cast<int>(Level::Ok));           // no volume: nothing to warn about
 }
 
 static void test_rows() {
@@ -70,27 +77,35 @@ static void test_unknown() {
 }
 
 static void test_row_level_and_footer() {
-    Snapshot s = sample();
+    Snapshot s = sample();   // 145 blocks
     char buf[48];
-    s.psp_low = 7000;
-    CHECK_EQ(static_cast<int>(row_level(Row::StackLow, s)), static_cast<int>(Level::Ok));
+    // The stack rows are plain numbers: no level and no warning footer, however low (user decision 2026-11-14).
+    s.psp_low = 10; s.msp_low = 10; s.psp_now = 10;
+    for (Row r : {Row::StackNow, Row::StackLow, Row::IrqLow})
+        CHECK_EQ(static_cast<int>(row_level(r, s)), static_cast<int>(Level::Ok));
     CHECK_EQ(static_cast<int>(footer_level(s)), static_cast<int>(Level::Ok));
     std::size_t n = footer_text(s, std::span<char>(buf, sizeof buf));
-    CHECK(std::string(buf, n) == "Stack never below 7000 B");
-    s.psp_low = 6500;
-    CHECK_EQ(static_cast<int>(row_level(Row::StackLow, s)), static_cast<int>(Level::Caution));
+    CHECK(std::string(buf, n) == "Stack never below 10 B");
+    s.psp_low = 7500;
+    s.fs_used = 116;         // 29 free: 20.0 %, still fine
+    CHECK_EQ(static_cast<int>(row_level(Row::FsFree, s)), static_cast<int>(Level::Ok));
+    CHECK_EQ(static_cast<int>(footer_level(s)), static_cast<int>(Level::Ok));
+    s.fs_used = 117;         // 28 free: 19.3 %
+    CHECK_EQ(static_cast<int>(row_level(Row::FsFree, s)), static_cast<int>(Level::Caution));
     CHECK_EQ(static_cast<int>(footer_level(s)), static_cast<int>(Level::Caution));
     n = footer_text(s, std::span<char>(buf, sizeof buf));
-    CHECK(std::string(buf, n) == "Stack tight: 6500 B");
-    s.psp_low = 5999;
-    CHECK_EQ(static_cast<int>(row_level(Row::StackLow, s)), static_cast<int>(Level::Error));
+    CHECK(std::string(buf, n) == "Storage low: delete cards");
+    s.fs_used = 131;         // 14 free: 9.7 %
+    CHECK_EQ(static_cast<int>(row_level(Row::FsFree, s)), static_cast<int>(Level::Error));
     CHECK_EQ(static_cast<int>(footer_level(s)), static_cast<int>(Level::Error));
     n = footer_text(s, std::span<char>(buf, sizeof buf));
-    CHECK(std::string(buf, n) == "Stack critical: 5999 B");
-    // no other row carries a level, whatever its value
-    s.msp_low = 10; s.psp_now = 10;
-    CHECK_EQ(static_cast<int>(row_level(Row::IrqLow, s)), static_cast<int>(Level::Ok));
-    CHECK_EQ(static_cast<int>(row_level(Row::StackNow, s)), static_cast<int>(Level::Ok));
+    CHECK(std::string(buf, n) == "Storage full: delete cards");
+    // only the free-space row carries it; a volume not walked yet is no alarm
+    for (Row r : {Row::StackNow, Row::StackLow, Row::IrqLow, Row::FsUsed, Row::Image, Row::ImageFree})
+        CHECK_EQ(static_cast<int>(row_level(r, s)), static_cast<int>(Level::Ok));
+    s.fs_valid = false;
+    CHECK_EQ(static_cast<int>(row_level(Row::FsFree, s)), static_cast<int>(Level::Ok));
+    CHECK_EQ(static_cast<int>(footer_level(s)), static_cast<int>(Level::Ok));
 }
 
 // The widest values any field can take still fit the 16-char value box and the 27-char footer.
@@ -108,7 +123,9 @@ static void test_worst_case_widths() {
     }
     s.psp_low = 4294967295u;
     CHECK(footer_text(s, std::span<char>(buf, sizeof buf)) <= kFooterMax);
-    s.psp_low = 5999;
+    s.fs_used = s.fs_blocks;   // the storage footers
+    CHECK(footer_text(s, std::span<char>(buf, sizeof buf)) <= kFooterMax);
+    s.fs_used = s.fs_blocks - s.fs_blocks / 6;
     CHECK(footer_text(s, std::span<char>(buf, sizeof buf)) <= kFooterMax);
     // a destination smaller than the text is cut, never overrun
     char tiny[4];

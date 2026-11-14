@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
 // The dashboard's Memory card on the Device tab in a real browser against a fake K2 (tests/support/fakek2.js): the card
-// shows the K2 Memory rows with units, the stack low-water row turns caution under 7000 B and error under 6000 B (colour
-// plus a word), the footer takes the same tone, it refreshes on its own while the Device tab is open and stays quiet on
+// shows the K2 Memory rows with units, the FS free row turns caution under 20 % of the volume free and error under 10 %
+// (colour plus a word), the footer takes the same tone, the stack rows stay plain numbers however low, it refreshes on its own while the Device tab is open and stays quiet on
 // another tab. Needs Chrome (K2_CHROME, ~/.local/bin/google-chrome, or one on PATH); skips without.
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
@@ -48,23 +48,28 @@ test("the card shows the K2 rows with units, and the heap line", { skip }, async
   assert.ok(!/k-(caution|error)/.test(r.rows["Stack low"].cls), "7400 B is normal: no exception colour");
 });
 
-test("the low-water row goes caution under 7000 B and error under 6000 B, with a word", { skip }, async () => {
-  let n = await page.eval("__fake.memCalls");
-  await page.eval("__fake.mem.psp_low = 6500");
-  await page.until(`${$("mem")}.querySelector(".k-kv-row.k-caution")`, 9000, "caution row");
+test("the FS free row goes caution under 20 % free and error under 10 %, with a word; the stack never does", { skip }, async () => {
+  await page.eval("__fake.mem.psp_low = 5312");          // the old stack error level: now a plain number
+  await page.until(`/5312 B/.test(${$("mem")}.textContent)`, 9000, "the low stack read");
   let r = await rows();
-  assert.match(r.rows["Stack low"].v, /^6500 B\s+TIGHT$/);
+  assert.equal(r.rows["Stack low"].v, "5312 B");
+  assert.ok(!/k-(caution|error)/.test(r.rows["Stack low"].cls), "the stack row has no exception colour");
+  assert.match(r.footCls, /k-foot-info/);
+  await page.eval("__fake.mem.fs_used = 146 - 20");     // 20 of 146 blocks free: 13.7 %
+  await page.until(`${$("mem")}.querySelector(".k-kv-row.k-caution")`, 9000, "caution row");
+  r = await rows();
+  assert.match(r.rows["FS free"].v, /^40 KB \(20 blk\)\s+LOW$/);
   assert.match(r.footCls, /k-foot-caution/);
-  assert.match(r.foot, /^Stack tight: 6500 B$/);
-  await page.eval("__fake.mem.psp_low = 5312");
+  assert.equal(r.foot, "Storage low: delete cards");
+  await page.eval("__fake.mem.fs_used = 146 - 5");      // 3.4 %
   await page.until(`${$("mem")}.querySelector(".k-kv-row.k-error")`, 9000, "error row");
   r = await rows();
-  assert.match(r.rows["Stack low"].v, /^5312 B\s+LOW$/);
+  assert.match(r.rows["FS free"].v, /^10 KB \(5 blk\)\s+FULL$/);
   assert.match(r.footCls, /k-foot-error/);
-  assert.match(r.foot, /^Stack critical: 5312 B$/);
+  assert.equal(r.foot, "Storage full: delete cards");
   const only = await page.eval(`${$("mem")}.querySelectorAll(".k-caution, .k-error").length`);
-  assert.equal(only, 1, "only the stack row takes an exception colour");
-  await page.eval("__fake.mem.psp_low = 7400");
+  assert.equal(only, 1, "only the FS free row takes an exception colour");
+  await page.eval("__fake.mem.fs_used = 40; __fake.mem.psp_low = 7400");
   await page.until(`!${$("mem")}.querySelector(".k-kv-row.k-error")`, 9000, "back to normal");
 });
 

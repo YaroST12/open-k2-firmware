@@ -31,9 +31,10 @@ PAYLOAD = bytes([
     0x02, 0x01, 0x00, 0x00, 0x00, 0x50, 0x0A, 0x00, 0x34, 0x12, 0x0B, 0x00, 0x00, 0x08, 0x03])
 
 
-def payload_with(low, flags=3):
+def payload_with(low, flags=3, used=0x102):
     p = bytearray(PAYLOAD)
     p[16:20] = low.to_bytes(4, "little")
+    p[32:36] = used.to_bytes(4, "little")   # fs_used, of 146 blocks
     p[46] = flags
     return bytes(p)
 
@@ -51,11 +52,16 @@ class Memory(unittest.TestCase):
         self.assertEqual(r["image_free"], 0xB1234 - 0xA5000)
 
     def test_levels(self):
-        self.assertEqual(kr.decode_memory(payload_with(7000))["level"], "ok")
-        self.assertEqual(kr.decode_memory(payload_with(6999))["level"], "caution")
-        self.assertEqual(kr.decode_memory(payload_with(6000))["level"], "caution")
-        self.assertEqual(kr.decode_memory(payload_with(5999))["level"], "error")
+        # the file storage only (k2::memstat kFsCautionPct / kFsErrorPct): free under 20 % / 10 % of the 146 blocks
+        self.assertEqual((kr.MEM_FS_CAUTION_PCT, kr.MEM_FS_ERROR_PCT), (20, 10))
+        self.assertEqual(kr.decode_memory(payload_with(7400, used=146 - 30))["level"], "ok")
+        self.assertEqual(kr.decode_memory(payload_with(7400, used=146 - 29))["level"], "caution")
+        self.assertEqual(kr.decode_memory(payload_with(7400, used=146 - 15))["level"], "caution")
+        self.assertEqual(kr.decode_memory(payload_with(7400, used=146 - 14))["level"], "error")
         self.assertEqual(kr.decode_memory(payload_with(100, flags=0))["level"], "unknown")
+        self.assertEqual(kr.decode_memory(payload_with(7400, flags=2))["level"], "ok")   # the volume not walked yet
+        # the stack is a plain number however low (user decision 2026-11-14)
+        self.assertEqual(kr.decode_memory(payload_with(10, used=40))["level"], "ok")
 
     def test_fs_not_measured(self):
         r = kr.decode_memory(payload_with(7500, flags=2))
@@ -68,7 +74,7 @@ class Memory(unittest.TestCase):
             kr.decode_memory(PAYLOAD[:-1])
 
     def test_command_and_render(self):
-        link = kr.RemoteLink(FakeTransport([rsp(0x36, 1, 0, payload_with(7400))]))
+        link = kr.RemoteLink(FakeTransport([rsp(0x36, 1, 0, payload_with(7400, used=40))]))
         a = kr.build_parser().parse_args(["memory"])
         r = kr.COMMANDS[a.command](link, a)
         self.assertEqual(link.transport.sent[0][:5], bytes([0xA5, 0x4B, 0x36, 1, 0]))
@@ -78,9 +84,13 @@ class Memory(unittest.TestCase):
         self.assertIn("firmware image", text)
         self.assertNotIn("ERROR", text)
 
-    def test_render_marks_an_error_level(self):
-        text = kr.render("memory", kr.decode_memory(PAYLOAD))
-        self.assertIn("(ERROR)", text)
+    def test_render_marks_the_storage_level_never_the_stack(self):
+        text = kr.render("memory", kr.decode_memory(PAYLOAD))   # stack low 5312 B, the volume full
+        self.assertIn("(ERROR)", next(l for l in text.splitlines() if l.startswith("files free")))
+        self.assertNotIn("(", next(l for l in text.splitlines() if l.startswith("stack low")))
+        text = kr.render("memory", kr.decode_memory(payload_with(7400, used=146 - 20)))
+        self.assertIn("(CAUTION)", text)
+        self.assertIn("storage low: delete cards", text)
 
 
 if __name__ == "__main__":

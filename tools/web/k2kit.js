@@ -58,14 +58,14 @@ var K2Kit = (function () {
     return out + "</div>";
   }
   // The KvTable: one hairline-ruled row per pair, the key dim, the value in the mono face. level is an exception colour only
-  // (caution, error); the value also carries the level word so colour is never the only cue. The footer is the device's
-  // tone band (info, ok, caution, error).
+  // (caution, error); the value also carries the level word (the row's word, else LOW / TIGHT) so colour is never the only cue.
+  // The footer is the device's tone band (info, ok, caution, error).
   function kvTableHtml(rows, opts) {
     var out = '<div class="k-kv' + (opts && opts.cls ? " " + esc(opts.cls) : "") + '">';
     rows.forEach(function (r) {
       var lv = r.level === "caution" || r.level === "error" ? r.level : "";
       out += '<div class="k-kv-row' + (lv ? " k-" + lv : "") + '"><span class="k-kv-k">' + esc(r.label) + '</span>' +
-        '<span class="k-kv-v">' + esc(r.value) + (lv ? ' <b class="k-kv-w">' + (lv === "error" ? "LOW" : "TIGHT") + "</b>" : "") + "</span></div>";
+        '<span class="k-kv-v">' + esc(r.value) + (lv ? ' <b class="k-kv-w">' + esc(r.word || (lv === "error" ? "LOW" : "TIGHT")) + "</b>" : "") + "</span></div>";
     });
     out += "</div>";
     if (opts && opts.footer) {

@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
-// The Memory page (Settings > Memory) through the real Ui: the stack low-water row keeps the normal ink at and above 7000 B, goes
-// caution (amber ink, amber footer) under 7000 B and error (red ink, red footer) under 6000 B, an unmeasured snapshot colours
-// nothing, the tone shows in all four rotations, and a steady snapshot costs no pixels. With K2_DUMP set the cases are also
+// The Memory page (Settings > Memory) through the real Ui: the FS free row keeps the normal ink at and above 20 % of the volume
+// free, goes caution (amber ink, amber footer) under 20 % and error (red ink, red footer) under 10 %; the stack rows are plain
+// numbers however low (user decision 2026-11-14); an unmeasured snapshot colours nothing, the tone shows in all four
+// rotations, and a steady snapshot costs no pixels. With K2_DUMP set the cases are also
 // written as k2_mock_memory_<case>_r<rotation>.panel (tools/panel2png.py), the host render of the page.
 #include <cstdint>
 #include <cstdio>
@@ -43,12 +44,12 @@ static int leader_gap(int y0, int y1) {
     return ink - dot_end - 1;
 }
 
-static memstat::Snapshot snap(std::uint32_t psp_low, bool ok = true) {
+static memstat::Snapshot snap(std::uint32_t fs_free, std::uint32_t psp_low = 7400, bool ok = true) {
     memstat::Snapshot m;
     m.ram_total = 98304; m.ram_static = 64000; m.psp_size = 10944; m.msp_size = 1344;
     m.psp_now = psp_low + 1600 > m.psp_size ? m.psp_size : psp_low + 1600;
     m.psp_low = psp_low; m.msp_low = 800;
-    m.fs_blocks = 146; m.fs_block_bytes = 2048; m.fs_used = 40; m.fs_valid = ok;
+    m.fs_blocks = 146; m.fs_block_bytes = 2048; m.fs_used = 146 - fs_free; m.fs_valid = ok;
     m.image_bytes = 700000; m.flash_bytes = 944128; m.ok = ok;
     return m;
 }
@@ -86,12 +87,14 @@ static void test_rotation(int rot) {
     ui.context().keep.settings_sel = 0;
     ui.goto_page(static_cast<std::uint8_t>(Page::Tools), t);
     CHECK(ui.push_menu(Menu::Memory, t));
-    const struct { const char *what; std::uint32_t low; bool ok; int tone; } cases[] = {
-        {"ok", 7400, true, 0}, {"edge7000", 7000, true, 0}, {"caution", 6999, true, 1}, {"edge6000", 6000, true, 1},
-        {"error", 5999, true, 2}, {"worst", 5312, true, 2}, {"unmeasured", 0, false, 0},
+    // 146 blocks: 30 free is 20.5 % (fine), 29 is 19.9 % (caution), 15 is 10.3 % (caution), 14 is 9.6 % (error).
+    const struct { const char *what; std::uint32_t free; std::uint32_t low; bool ok; int tone; } cases[] = {
+        {"ok", 106, 7400, true, 0},    {"edge30", 30, 7400, true, 0}, {"caution", 29, 7400, true, 1}, {"edge15", 15, 7400, true, 1},
+        {"error", 14, 7400, true, 2},  {"worst", 0, 7400, true, 2},   {"stack5312", 106, 5312, true, 0},
+        {"unmeasured", 106, 0, false, 0},
     };
     for (const auto &c : cases) {
-        stub_memstat_set(snap(c.low, c.ok));
+        stub_memstat_set(snap(c.free, c.low, c.ok));
         settle(ui, t);
         // Classic footer tones: caution is the amber tint (kCautionT) with an amber bar, error is solid kError with black ink.
         const int amber_fill = count_px(kCautionT), red_fill = count_px(kError);
@@ -110,8 +113,9 @@ static void test_rotation(int rot) {
             CHECK_EQ(count_px(kCaution), 0);
         }
         if (rot == 0) {
-            // the Stack low row (the second): its value box is x 90..218, one 22 px row under the first
-            const int y0 = 24 + 22, y1 = y0 + 22;
+            // the FS free row (the sixth): its value box is x 90..218; the Stack low row (the second) never takes a tone
+            const int y0 = 24 + 22 * 5, y1 = y0 + 22;
+            CHECK_EQ(count_px(kCaution, 90, 24 + 22, 218, 24 + 44) + count_px(kError, 90, 24 + 22, 218, 24 + 44), 0);
             const int amber = count_px(kCaution, 90, y0, 218, y1), red = count_px(kError, 90, y0, 218, y1);
             CHECK_EQ(amber > 20, c.tone == 1);
             CHECK_EQ(red > 20, c.tone == 2);

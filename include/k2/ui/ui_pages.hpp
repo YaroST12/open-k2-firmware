@@ -979,8 +979,9 @@ private:
 };
 
 // Memory (opened from Settings): the memstat rows (k2/core/memstat.hpp) as a KvTable: application stack now and at its low-water
-// mark, the interrupt stack, static RAM, the littlefs volume, the firmware image and the heap (none). The low-water row takes the
-// exception colour under 7000 B (caution) and 6000 B (error); the footer states the same fact. Reads the cached snapshot only.
+// mark, the interrupt stack, static RAM, the littlefs volume, the firmware image and the heap (none). Only the FS free row takes the
+// exception colour, under 20 % of the volume free (caution) and 10 % (error); the footer states the same fact and the remedy.
+// The stack rows are plain numbers. Reads the cached snapshot only.
 class MemoryPage final : public PageBase {
 public:
     explicit MemoryPage(UiContext &c) : PageBase(c, Page::Count, "Memory", Icon::Chip) {}

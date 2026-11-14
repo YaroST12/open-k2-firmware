@@ -74,7 +74,7 @@ WIPE_TIMEOUT_S = 30.0     # the sector erases block the firmware for several sec
 CMD_FLASH_DUMP = 0x34     # read-only window into the native device storage
 FLASH_DUMP_BASE, FLASH_DUMP_END, FLASH_DUMP_CHUNK = 0x080E0000, 0x08100000, 48
 CMD_MEMORY = 0x36         # stacks, RAM budget, littlefs and flash image figures (cached by the firmware, ~1 Hz)
-MEM_CAUTION_B, MEM_ERROR_B = 7000, 6000   # stack low-water thresholds, k2::memstat (caution below 7000 B, error below 6000 B)
+MEM_FS_CAUTION_PCT, MEM_FS_ERROR_PCT = 20, 10   # file storage free share, k2::memstat kFsCautionPct / kFsErrorPct (the only warning)
 CMD_BOOT_INFO = 0x35      # how this boot decided its mode: the K2B1 text line and the first-seconds power samples (RAM only)
 BOOT_INFO_TEXT, BOOT_INFO_SAMPLES = 0, 1
 WIPE_ERRS = ["ok", "erase failed", "verify failed"]   # k2::factory_wipe::Err
@@ -914,8 +914,11 @@ def decode_memory(p):
     r["heap"] = "none"   # the firmware has no heap: static memory only
     r["fs_free"] = max(r["fs_blocks"] - r["fs_used"], 0) if r["fs_valid"] else None
     r["image_free"] = max(r["flash_bytes"] - r["image_bytes"], 0)
-    low = r["psp_low"]
-    r["level"] = "unknown" if not r["ok"] else "error" if low < MEM_ERROR_B else "caution" if low < MEM_CAUTION_B else "ok"
+    # The level is the file storage's (the user can delete cards, journals, saved cables); the stack is a plain number.
+    free, blocks = r["fs_free"], r["fs_blocks"]
+    r["level"] = ("unknown" if not r["ok"] else "ok" if free is None or not blocks
+                  else "error" if free * 100 < blocks * MEM_FS_ERROR_PCT
+                  else "caution" if free * 100 < blocks * MEM_FS_CAUTION_PCT else "ok")
     return r
 
 
@@ -929,14 +932,16 @@ def render_memory(r):
     kb = lambda b: f"{b / 1024:.1f} KB"
     bk = r["fs_block_bytes"]
     lines = [f"stack now      {r['psp_now']} B free of {r['psp_size']} B",
-             f"stack low      {r['psp_low']} B free at the deepest point since boot ({r['level'].upper()})"
-             if r["level"] != "ok" else f"stack low      {r['psp_low']} B free at the deepest point since boot",
+             f"stack low      {r['psp_low']} B free at the deepest point since boot",
              f"irq stack low  {r['msp_low']} B free of {r['msp_size']} B",
              f"static RAM     {kb(r['ram_static'])} of {kb(r['ram_total'])}",
              "heap           none (static memory only)"]
     if r["fs_valid"]:
         lines.append(f"files used     {r['fs_used']} of {r['fs_blocks']} blocks ({kb(r['fs_used'] * bk)} of {kb(r['fs_blocks'] * bk)})")
-        lines.append(f"files free     {r['fs_free']} blocks ({kb(r['fs_free'] * bk)})")
+        mark = f" ({r['level'].upper()})" if r["level"] in ("caution", "error") else ""
+        lines.append(f"files free     {r['fs_free']} blocks ({kb(r['fs_free'] * bk)}){mark}")
+        if mark:
+            lines.append("               storage " + ("full" if r["level"] == "error" else "low") + ": delete cards")
     else:
         lines.append(f"files          {r['fs_blocks']} blocks, usage not measured yet")
     lines.append(f"firmware image {kb(r['image_bytes'])} of {kb(r['flash_bytes'])} ({kb(r['image_free'])} free)")

@@ -71,22 +71,23 @@ std::size_t row_text(Row r, const Snapshot& s, std::span<char> out) {
     return o.n;
 }
 
-Level row_level(Row r, const Snapshot& s) {
-    if (r != Row::StackLow || !s.ok) return Level::Ok;
-    return level_for_low(s.psp_low);
+Level storage_level(const Snapshot& s) {
+    return s.ok && s.fs_valid ? level_for_fs(fs_free_blocks(s), s.fs_blocks) : Level::Ok;
 }
 
-Level footer_level(const Snapshot& s) { return s.ok ? level_for_low(s.psp_low) : Level::Ok; }
+Level row_level(Row r, const Snapshot& s) { return r == Row::FsFree ? storage_level(s) : Level::Ok; }
+
+Level footer_level(const Snapshot& s) { return storage_level(s); }
 
 std::size_t footer_text(const Snapshot& s, std::span<char> out) {
     Out o{out.first(std::min(out.size(), kFooterMax))};
     if (!s.ok) return o.put("Reading memory").n;
-    switch (level_for_low(s.psp_low)) {
-    case Level::Ok:      o.put("Stack never below "); break;
-    case Level::Caution: o.put("Stack tight: "); break;
-    case Level::Error:   o.put("Stack critical: "); break;
+    switch (storage_level(s)) {
+    case Level::Ok:      break;
+    case Level::Caution: return o.put("Storage low: delete cards").n;
+    case Level::Error:   return o.put("Storage full: delete cards").n;
     }
-    return o.u32(s.psp_low).put(" B").n;
+    return o.put("Stack never below ").u32(s.psp_low).put(" B").n;
 }
 
 }  // namespace k2::memstat
