@@ -105,7 +105,8 @@ void draw_for_a_while(Ui &ui, const char *screen, int rot, const char *scenario)
 
 void walk_pages(Ui &ui, int rot, const Scenario &sc) {
     constexpr uint8_t pages = static_cast<uint8_t>(Page::Count);
-    static const char *const kPageNames[] = {"home", "detail", "charger-test", "lines", "tools", "settings"};
+    static const char *const kPageNames[] = {"home", "detail", "charger-test", "lines", "tools", "settings", "graphs"};
+    static_assert(std::size(kPageNames) == pages, "a page without a name here is walked out of bounds");
     for (uint8_t p = 0; p < pages; ++p) {
         enter(kPageNames[p], rot, sc.name);
         CHECK_EQ(ui.goto_page(p, g_t), true);
