@@ -1751,6 +1751,29 @@ static void test_loop_probe() {
     check_bytes(r, kRspHeader, {0, 0, 0, 0, 0});
 }
 
+// MEMORY (0x36): the memstat snapshot on the wire, 47 bytes little endian; a payload is BadLength.
+static void test_memory() {
+    Fake f; Frame r;
+    CHECK_EQ(run(f, request(0x36, 1, {}), r), 1);
+    check_header(r, 0x36, 1, Status::Ok, 47);
+    check_bytes(r, kRspHeader, {
+        0x00, 0x80, 0x01, 0x00,       // ram_total 98304
+        0x00, 0x10, 0x01, 0x00,       // ram_static 0x11000
+        0xC0, 0x2A, 0x00, 0x00,       // psp_size 10944
+        0x10, 0x2A, 0x00, 0x00,       // psp_now 0x2A10
+        0xC0, 0x14, 0x00, 0x00,       // psp_low 5312
+        0x40, 0x05, 0x00, 0x00,       // msp_size 1344
+        0x01, 0x02, 0x00, 0x00,       // msp_low 0x0201
+        0x92, 0x00, 0x00, 0x00,       // fs_blocks 146
+        0x02, 0x01, 0x00, 0x00,       // fs_used 0x0102
+        0x00, 0x50, 0x0A, 0x00,       // image_bytes 0xA5000
+        0x34, 0x12, 0x0B, 0x00,       // flash_bytes 0xB1234
+        0x00, 0x08,                   // fs_block_bytes 2048
+        0x03});                       // flags: fs_valid + ok
+    CHECK_EQ(run(f, request(0x36, 2, {0}), r), 1);
+    check_header(r, 0x36, 2, Status::BadLength, 0);
+}
+
 static void test_boot_info() {
     Fake f; Frame r;
     f.boot_line.assign(100, 'x');
@@ -3193,6 +3216,7 @@ int main() {
     test_dfu_enter();
     test_factory_wipe();
     test_flash_dump();
+    test_memory();
     test_boot_info();
     test_ufcs();
     test_pd_stress();

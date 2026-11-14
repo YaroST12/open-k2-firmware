@@ -218,6 +218,14 @@ struct Fake {
     void cable_r_reset() { calls++; cable_resets++; }
     int cable_kelvin = -1;   // last mode selected: 0 passive, 1 kelvin
     void cable_r_mode(bool kelvin) { calls++; cable_kelvin = kelvin ? 1 : 0; }
+    MemorySnapshot memory() {
+        calls++;
+        MemorySnapshot s;
+        s.ram_total = 98304; s.ram_static = 0x11000; s.psp_size = 10944; s.psp_now = 0x2A10; s.psp_low = 5312;
+        s.msp_size = 1344; s.msp_low = 0x0201; s.fs_blocks = 146; s.fs_used = 0x0102; s.image_bytes = 0xA5000;
+        s.flash_bytes = 0xB0000 + 0x1234; s.fs_block_bytes = 2048; s.fs_valid = true; s.ok = true;
+        return s;
+    }
     UsbLinkSnapshot usb_link() {
         UsbLinkSnapshot s; s.family = 5; s.tbt = 2; s.conf = 3; s.source = 4; s.flags = 1; s.mbps = 40000;
         const char t[] = "USB4 40G TBT4 (neg)"; for (unsigned i = 0; i + 1 < sizeof t; i++) s.text[i] = t[i];

@@ -77,7 +77,7 @@ inline constexpr std::size_t kLongestMenuChain =
               arena_bytes<TriggerPage, EmarkerPage, ConnectionPage>(), arena_bytes<CardsPage, SharePage>(),
               arena_bytes<DiagnosisPage, BlackBoxPage, SharePage>(), arena_bytes<BlackBoxPage, SharePage>(),
               arena_bytes<LoopProbePage, SharePage>(), arena_bytes<BatteryPage, SharePage>(), arena_bytes<QrTestPage>(),
-              arena_bytes<DiagPage, SharePage>(), arena_bytes<UsbLinkPage>(), arena_bytes<AutorotatePage>()});
+              arena_bytes<DiagPage, SharePage>(), arena_bytes<UsbLinkPage>(), arena_bytes<AutorotatePage>(), arena_bytes<MemoryPage>()});
 inline constexpr std::size_t kLongestChain = kLargestBase + kLongestMenuChain;   // the deepest rotation page + the deepest menus
 inline constexpr std::size_t kPageArenaBytes = kLongestChain;
 // The named worst cases (each rotation page that has one, the review's reachable chains) hold by construction; spelled out so
@@ -91,6 +91,7 @@ static_assert(kPageArenaBytes >= arena_bytes<ToolsPage, ConnectionPage, EmarkerP
 static_assert(kPageArenaBytes >= arena_bytes<ChargerTestPage, BlackBoxPage>(), "black box opens over charger test");
 static_assert(kPageArenaBytes >= arena_bytes<ToolsPage, QrTestPage>(), "the qrtest page fits over Tools");
 static_assert(kPageArenaBytes >= arena_bytes<SettingsPage, DiagPage, SharePage>(), "settings > diag > share fits");
+static_assert(kPageArenaBytes >= arena_bytes<SettingsPage, MemoryPage>(), "settings > memory fits");
 static_assert(kMaxMenuDepth == 3, "the chain lists above are at most three menus deep");
 
 class Ui {

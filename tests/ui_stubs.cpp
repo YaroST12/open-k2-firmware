@@ -37,6 +37,7 @@
 #include "k2/core/trace_hid_hw.hpp"
 #include "k2/loopprobe/loop_probe_hw.hpp"
 #include "k2/battery/battery_hw.hpp"
+#include "k2/core/memstat.hpp"
 
 StubState g_stub;
 
@@ -1099,6 +1100,21 @@ void poll(std::uint32_t now_ms, bool may_write) {
 Service& service() { return g_batt->service; }
 bool monitor_online() { return k2::power::read_raw().has_value(); }
 }  // namespace k2::battery::hw
+// The memory readout cache (k2/core/memstat.hpp): the device poll is a no-op here, tests set the snapshot the pages read.
+namespace {
+k2::memstat::Snapshot g_memstat = [] {
+    k2::memstat::Snapshot s;
+    s.ram_total = 98304; s.ram_static = 70000; s.psp_size = 10944; s.psp_now = 9000; s.psp_low = 7400;
+    s.msp_size = 1344; s.msp_low = 1000; s.fs_blocks = 146; s.fs_used = 12; s.fs_block_bytes = 2048;
+    s.image_bytes = 650000; s.flash_bytes = 718848; s.fs_valid = true; s.ok = true;
+    return s;
+}();
+}  // namespace
+void stub_memstat_set(const k2::memstat::Snapshot& s) { g_memstat = s; }
+namespace k2::memstat {
+void poll(std::uint32_t, bool) {}
+Snapshot snapshot() { return g_memstat; }
+}  // namespace k2::memstat
 namespace k2::report_card::hw {
 std::size_t list(std::span<Card> out) { return g_cf->store.list(out); }
 std::size_t numbers(std::span<std::uint16_t> out) { return g_cf->store.numbers(out); }

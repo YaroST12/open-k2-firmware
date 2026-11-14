@@ -2039,7 +2039,7 @@ test("dashboard: every card belongs to a page, and every page has a tab", () => 
   const tabs = [...html.match(/<nav id="tabs"[\s\S]*?<\/nav>/)[0].matchAll(/href="#(\w+)"/g)].map((m) => m[1]);
   assert.deepEqual(tabs, routes);
   const cards = [...html.matchAll(/<section class="card[^"]*" id="([\w-]+)"([^>]*)>/g)];
-  assert.equal(cards.length, 16);
+  assert.equal(cards.length, 17);
   for (const [, id, attrs] of cards) {
     const page = (attrs.match(/data-page="([^"]+)"/) || [])[1];
     assert.ok(page && page.split(" ").every((p) => routes.includes(p)), id + " has no page");
@@ -2061,3 +2061,87 @@ test("dashboard: the Charger test page starts only from its confirmation, throug
   const cancel = app.slice(app.indexOf("async function ctCancel()"), app.indexOf("async function ctSoft("));
   assert.match(cancel, /k2\.chargerTestCancel\(\)/);
 });
+
+// ---- memory (CMD_MEMORY 0x36) ---------------------------------------------------------------
+
+// The same 47-byte vector as tests/test_remote_proto.cpp test_memory and tests/test_k2_remote_memory.py.
+const MEMORY = [
+  0x00, 0x80, 0x01, 0x00, 0x00, 0x10, 0x01, 0x00, 0xC0, 0x2A, 0x00, 0x00, 0x10, 0x2A, 0x00, 0x00,
+  0xC0, 0x14, 0x00, 0x00, 0x40, 0x05, 0x00, 0x00, 0x01, 0x02, 0x00, 0x00, 0x92, 0x00, 0x00, 0x00,
+  0x02, 0x01, 0x00, 0x00, 0x00, 0x50, 0x0A, 0x00, 0x34, 0x12, 0x0B, 0x00, 0x00, 0x08, 0x03];
+const memWith = (low, flags = 3, over = {}) => {
+  const p = Uint8Array.from(MEMORY), d = new DataView(p.buffer);
+  d.setUint32(16, low, true);
+  p[46] = flags;
+  for (const [off, v] of Object.entries(over)) d.setUint32(Number(off), v, true);
+  return p;
+};
+
+test("memory: decode the 47-byte payload", () => {
+  const m = P.decodeMemory(Uint8Array.from(MEMORY));
+  assert.deepEqual([m.ram_total, m.ram_static, m.psp_size, m.psp_now, m.psp_low], [98304, 0x11000, 10944, 0x2A10, 5312]);
+  assert.deepEqual([m.msp_size, m.msp_low, m.fs_blocks, m.fs_used], [1344, 0x201, 146, 0x102]);
+  assert.deepEqual([m.image_bytes, m.flash_bytes, m.fs_block_bytes], [0xA5000, 0xB1234, 2048]);
+  assert.ok(m.fs_valid && m.ok);
+  assert.equal(m.heap, "none");
+  assert.equal(m.fs_free, 0, "more used than blocks clamps to zero, never negative");
+  assert.equal(m.image_free, 0xB1234 - 0xA5000);
+});
+
+test("memory: levels switch at 7000 and 6000 B, unknown until the firmware has polled", () => {
+  assert.equal(P.decodeMemory(memWith(7000)).level, "ok");
+  assert.equal(P.decodeMemory(memWith(6999)).level, "caution");
+  assert.equal(P.decodeMemory(memWith(6000)).level, "caution");
+  assert.equal(P.decodeMemory(memWith(5999)).level, "error");
+  assert.equal(P.decodeMemory(memWith(100, 0)).level, "unknown");
+  assert.equal(P.MEM_CAUTION_B, 7000);
+  assert.equal(P.MEM_ERROR_B, 6000);
+});
+
+test("memory: the view has the device's rows, units and footer", () => {
+  const v = P.memoryView(P.decodeMemory(memWith(7400, 3, { 32: 40 })));   // fs_used = 40 blocks
+  assert.deepEqual(v.rows.map((r) => r.label),
+    ["Stack now", "Stack low", "IRQ low", "RAM static", "FS used", "FS free", "Image", "Image free", "Heap"]);
+  const val = Object.fromEntries(v.rows.map((r) => [r.label, r.value]));
+  assert.equal(val["Stack low"], "7400 B");
+  assert.equal(val["Stack now"], "10768 B");
+  assert.equal(val["RAM static"], "68.0 of 96.0 KB");
+  assert.equal(val["FS used"], "80 KB (40 blk)");
+  assert.equal(val["FS free"], "212 KB (106 blk)");
+  assert.equal(val["Heap"], "none");
+  assert.match(val["Image"], /^\d+\.\d KB$/);
+  assert.equal(v.rows[1].level, "ok");
+  assert.equal(v.footer, "Stack never below 7400 B");
+  assert.equal(v.tone, "info");
+  const c = P.memoryView(P.decodeMemory(memWith(6500)));
+  assert.equal(c.rows[1].level, "caution");
+  assert.equal(c.tone, "caution");
+  assert.match(c.footer, /^Stack tight: 6500 B$/);
+  const e = P.memoryView(P.decodeMemory(memWith(5312)));
+  assert.equal(e.rows[1].level, "error");
+  assert.equal(e.tone, "error");
+  assert.match(e.footer, /^Stack critical: 5312 B$/);
+  const u = P.memoryView(P.decodeMemory(memWith(5312, 0)));
+  assert.equal(u.rows[1].value, "--");
+  assert.equal(u.rows[1].level, "ok", "an unmeasured value is never coloured");
+  assert.equal(u.tone, "info");
+  const nofs = P.memoryView(P.decodeMemory(memWith(7400, 2)));
+  assert.equal(nofs.rows[4].value, "--", "littlefs not walked yet");
+});
+
+test("memory: a short payload is a FrameError, and the call sends command 0x36", async () => {
+  assert.throws(() => P.decodeMemory(Uint8Array.from(MEMORY).slice(0, 46)), P.FrameError);
+  const sent = [];
+  const remote = new P.K2Remote({ call: async (cmd, payload = []) => { sent.push([cmd, [...payload]]); return { payload: memWith(7400) }; } });
+  const m = await remote.memory();
+  assert.deepEqual(sent, [[0x36, []]]);
+  assert.equal(m.psp_low, 7400);
+});
+
+test("memory: the Memory page has a name and the dashboard card is wired", () => {
+  assert.equal(P.pageName(7 + 18), "settings/memory");
+  const html = readFileSync(path.join(here, "../tools/web/k2.html"), "utf8");
+  assert.match(html, /id="c-memory"[^>]*data-page="device"/);
+  assert.match(html, /K2Kit\.kvTableHtml/);
+});
+

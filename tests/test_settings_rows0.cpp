@@ -14,15 +14,17 @@ using namespace k2;
 #error "test_settings_rows0 is the K2_SCREENSHOT=0 object"
 #endif
 
-static_assert(SettingsPage::kRows == 7, "USB Link, Autorotate, Rotate buttons, Smoothing, Wake, System state, Boot info");
+static_assert(SettingsPage::kRows == 8, "USB Link, Autorotate, Rotate buttons, Smoothing, Wake, System state, Memory, Boot info");
 static_assert(SettingsPage::kSystemRow == 5);
-static_assert(SettingsPage::kBootRow == 6);
+static_assert(SettingsPage::kMemoryRow == 6);
+static_assert(SettingsPage::kBootRow == 7);
 static_assert(SettingsPage::kBootRow == SettingsPage::kRows - 1);
-static_assert(SettingsPage::kSystemRow == SettingsPage::kRows - 2);
+static_assert(SettingsPage::kMemoryRow == SettingsPage::kRows - 2);
+static_assert(SettingsPage::kSystemRow == SettingsPage::kRows - 3);
 
 int main() {
     // Runtime copies of the compile-time facts, so the run shows what was checked.
     constexpr int rows = SettingsPage::kRows;
-    CHECK_EQ(rows, 7);
+    CHECK_EQ(rows, 8);
     return test_report("test_settings_rows0");
 }

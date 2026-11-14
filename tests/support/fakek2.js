@@ -57,6 +57,19 @@
   F.reset = function () { F.run = null; };
   F.show = function () { return F.run ? shown(F.run) : []; };
 
+  // Memory card: a settable snapshot (F.mem merges over the defaults) so a test can put the stack low-water mark where it likes.
+  F.mem = { ram_total: 98304, ram_static: 70656, psp_size: 10944, psp_now: 10768, psp_low: 7400, msp_size: 1344, msp_low: 900,
+            fs_blocks: 146, fs_used: 40, image_bytes: 676864, flash_bytes: 1000000, fs_block_bytes: 2048, fs_valid: true, ok: true };
+  F.memCalls = 0;
+  R.memory = async function () {
+    F.memCalls++;
+    var m = JSON.parse(JSON.stringify(F.mem)), p = new Uint8Array(47), d = new DataView(p.buffer);
+    ["ram_total", "ram_static", "psp_size", "psp_now", "psp_low", "msp_size", "msp_low", "fs_blocks", "fs_used", "image_bytes", "flash_bytes"]
+      .forEach(function (k, i) { d.setUint32(4 * i, m[k], true); });
+    d.setUint16(44, m.fs_block_bytes, true);
+    p[46] = (m.fs_valid ? 1 : 0) | (m.ok ? 2 : 0);
+    return P.decodeMemory(p);
+  };
   R.state = async function () { return P.decodeState(new Uint8Array(24)); };   // an idle K2: the page's poll loop needs it to run its tasks
   R.ping = async function () { return { version: "1.0.2-fake", git: "fake", proto: 1, uptime_ms: 123456 }; };
   R.chargerTest = async function (kind) {

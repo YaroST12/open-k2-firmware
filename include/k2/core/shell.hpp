@@ -74,6 +74,8 @@ struct Backend {
     virtual const char* twin(const TwinCmd&) { return "twin not available"; }
     // Black Box diagnosis (k2/pd/diag_live.hpp, read-only): prints the verdict, the findings and the healthy lines itself.
     virtual const char* diag() { return "diag not available"; }
+    // Memory readout (k2/core/memstat.hpp, read-only, cached figures): prints one "label value" line per row itself.
+    virtual const char* memory() { return "memory not available"; }
     // Math/FPU/architecture selftest and cycle benchmark (k2/core/math_selftest.hpp).
     virtual const char* selftest() { return "selftest not available"; }
     // D+/D- are locked (the guarded SuperVOOC trigger, k2/fastcharge/svooc_trig.hpp, drives D-): the reason, else nullptr.

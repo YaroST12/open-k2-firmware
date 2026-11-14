@@ -123,6 +123,8 @@ public:
     // Blocks in use. The first call after a change walks the whole tree (every metadata block, tens of ms on a full volume);
     // later calls answer from memory until a write, append, remove, rename, mkdir, format or remount through this object.
     std::uint32_t used_blocks();
+    // True while used_blocks() answers from memory (no walk): a caller that must never walk asks this first.
+    bool used_known() const { return mounted_ && used_known_; }
 
     lfs_t& raw() { return lfs_; }
 

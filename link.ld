@@ -23,6 +23,10 @@ MEMORY
 
 _estack = ORIGIN(RAM) + LENGTH(RAM);
 
+/* The application flash region, for the memory readout (src/drivers/memstat.cpp): where it starts and where it ends. */
+_flash_start = ORIGIN(FLASH);
+_flash_end = ORIGIN(FLASH) + LENGTH(FLASH);
+
 SECTIONS
 {
   .isr_vector ORIGIN(FLASH) :

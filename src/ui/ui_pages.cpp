@@ -749,6 +749,75 @@ void DiagPage::invalidate() {
 }
 
 // ---------------------------------------------------------------------------------------
+// Memory: stacks, static RAM, littlefs and the firmware image, from the cached memstat snapshot
+// ---------------------------------------------------------------------------------------
+
+namespace {
+// Nine rows at a 22 px pitch (as Diag), S12 keys at x6, S16 values right-aligned to x218 in one 16-char box (the widest value).
+constexpr kit::KvLayout kMemLayout{kit::kBodyY, 22, 6, &kLabelFont, nullptr, 218 - memstat::kValueMax * 8, memstat::kValueMax, Align::Right};
+constexpr std::array<uint8_t, memstat::kRows> kMemValueChars = [] {
+    std::array<uint8_t, memstat::kRows> a{};
+    for (auto &v : a) v = memstat::kValueMax;
+    return a;
+}();
+}  // namespace
+
+void MemoryPage::draw_static() {
+    const Surface &c = ctx_.content;
+    PaintBudget *const bg = ctx_.budget;
+    if (static_step_ == 0) {
+        if (bg && !bg->admit(140 * kBarH, true)) return;
+        title_bar();
+        kit::kv_cells(c, kMemLayout, val_, kRows, kMemValueChars.data());
+        foot_.invalidate();
+        for (Field &f : val_) f.invalidate();
+        static_step_ = 1;
+    }
+    while (static_step_ <= kRows) {
+        const int i = static_step_ - 1;
+        const int row_h = kMemLayout.pitch + (i + 1 == kRows ? 1 : 0);
+        const int cost = ctx_.blank ? 900 : static_cast<int>(c.w) * row_h;
+        if (bg && !bg->admit(cost, true)) return;
+        const char *label = memstat::row_label(static_cast<memstat::Row>(i));
+        if (!ctx_.blank) kit::kv_ground_row(c, kMemLayout, label, i, kMemValueChars.data(), 0);
+        kit::kv_static_row(c, kMemLayout, label, i, i + 1 == kRows);
+        static_step_++;
+    }
+}
+
+void MemoryPage::update(uint32_t) {
+    PaintBudget *const bg = ctx_.budget;
+    title_badge(false);
+    if (bg && bg->more) return;
+    const memstat::Snapshot s = memstat::snapshot();   // the cached figures; the main loop refreshes them
+    for (int i = 0; i < kRows; i++) {
+        if (bg && !val_[i].valid() && !bg->admit(val_[i].box_px(), true)) return;
+        char t[memstat::kValueMax + 1];
+        const auto row = static_cast<memstat::Row>(i);
+        const std::size_t n = memstat::row_text(row, s, std::span<char>(t, memstat::kValueMax));
+        const memstat::Level lv = memstat::row_level(row, s);
+        val_[i].set_colors(lv == memstat::Level::Error ? kError : lv == memstat::Level::Caution ? kCaution : kText, kBg);
+        val_[i].draw(std::string_view(t, n));
+    }
+    if (bg && bg->more) return;
+    char f[memstat::kFooterMax + 1];
+    const std::size_t n = memstat::footer_text(s, std::span<char>(f, memstat::kFooterMax));
+    const memstat::Level lv = memstat::footer_level(s);
+    draw_footer_budgeted(ctx_.content, lv == memstat::Level::Error ? FooterTone::Error : lv == memstat::Level::Caution ? FooterTone::Caution : FooterTone::Info,
+                         std::string_view(f, n), foot_, bg);
+}
+
+bool MemoryPage::on_event(Event e) { return back_event(e); }
+
+PanelLabels MemoryPage::labels() const { return base_labels(); }
+
+void MemoryPage::invalidate() {
+    static_step_ = 0;
+    foot_.invalidate();
+    for (Field &f : val_) f.invalidate();
+}
+
+// ---------------------------------------------------------------------------------------
 // Lines: the analog front end
 // ---------------------------------------------------------------------------------------
 
@@ -2044,6 +2113,7 @@ enum class SettingRow : uint8_t {
     Smoothing,
     IdleWake,
     SystemState,
+    Memory,
     BootInfo,
     Count
 };
@@ -2051,6 +2121,7 @@ constexpr int kSettingsRows = static_cast<int>(SettingRow::Count);
 // Checked in both builds (K2_SCREENSHOT 0 and 1): the page's public constants must follow the enum.
 static_assert(kSettingsRows == SettingsPage::kRows);
 static_assert(static_cast<int>(SettingRow::SystemState) == SettingsPage::kSystemRow);
+static_assert(static_cast<int>(SettingRow::Memory) == SettingsPage::kMemoryRow);
 static_assert(static_cast<int>(SettingRow::BootInfo) == SettingsPage::kBootRow);
 }
 
@@ -2130,13 +2201,13 @@ void SettingsPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
 #if K2_SCREENSHOT
         "Screenshot",
 #endif
-        "Smoothing", "Wake sleeping port", "System state", "Boot info"};
+        "Smoothing", "Wake sleeping port", "System state", "Memory", "Boot info"};
     static constexpr Icon kIcons[kSettingsRows] = {
         Icon::Usb, Icon::Rotate, Icon::Keys,
 #if K2_SCREENSHOT
         Icon::Camera,
 #endif
-        Icon::Wave, Icon::Plug, Icon::Chip, Icon::Report};
+        Icon::Wave, Icon::Plug, Icon::Chip, Icon::Chip, Icon::Report};
     static constexpr const char *kPresets[smoothing::kPresetCount] = {"Off", "Low", "Medium", "High"};
     static constexpr const char *kPresetNotes[smoothing::kPresetCount] = {"Raw readings", "Light calming", "Balanced", "Steady, slower"};
     const auto *self = static_cast<const SettingsPage *>(ctx);
@@ -2189,6 +2260,10 @@ void SettingsPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
         out.chevron = true;
         out.note = "meter, USB, FUSB302, MCU";
         break;
+    case SettingRow::Memory:
+        out.chevron = true;
+        out.note = "stacks, RAM, flash, files";
+        break;
     default:   // SettingRow::BootInfo
         out.chevron = true;
         out.note = "this boot's record as a QR code";
@@ -2208,6 +2283,7 @@ void SettingsPage::update(uint32_t) {
     const auto row = static_cast<SettingRow>(sel_);
     draw_footer_budgeted(ctx_.content, FooterTone::Info,
                          row == SettingRow::SystemState      ? "Checks of every subsystem"
+                         : row == SettingRow::Memory         ? "Stack headroom, RAM, flash"
                          : row == SettingRow::BootInfo       ? "Shared as QR codes"
                          : row >= SettingRow::RotateButtons  ? "Remembered across boots"
                                                              : "Opens a settings page",
@@ -2254,6 +2330,9 @@ bool SettingsPage::on_event(Event e) {
 #endif
         case SettingRow::SystemState:
             ctx_.ui->push_menu(Menu::Diag, ctx_.now);
+            break;
+        case SettingRow::Memory:
+            ctx_.ui->push_menu(Menu::Memory, ctx_.now);
             break;
         case SettingRow::BootInfo:
             share_boot_info();

@@ -438,7 +438,7 @@ TEST_CXX_LIB  += $(SRC_DIR)/ui/ui_pdstress_page.cpp
 TEST_CXX_LIB  += $(SRC_DIR)/pd/diag.cpp $(SRC_DIR)/pd/diag_screen.cpp $(SRC_DIR)/ui/ui_diagnosis.cpp
 TEST_CXX_LIB  += $(SRC_DIR)/battery/battery.cpp $(SRC_DIR)/battery/battery_store.cpp $(SRC_DIR)/battery/battery_wire.cpp
 TEST_CXX_LIB  += $(SRC_DIR)/ui/battery_view.cpp $(SRC_DIR)/ui/ui_battery.cpp
-TEST_CXX_LIB  += $(SRC_DIR)/core/math_selftest.cpp
+TEST_CXX_LIB  += $(SRC_DIR)/core/math_selftest.cpp $(SRC_DIR)/core/memstat.cpp
 TEST_CXX_LIB  += $(SRC_DIR)/pd/pd_interrogate.cpp
 TEST_CXX_LIB  += $(SRC_DIR)/ui/graphs_model.cpp $(SRC_DIR)/ui/ui_graphs.cpp
 TEST_CXX_BINS  = $(patsubst tests/%.cpp, $(HOST_DIR)/%, $(TEST_CXX_SRCS))
@@ -574,7 +574,7 @@ test-py: test-run $(HOST_DIR)/bbdiag
 	# (count work, not time), so a rig that stops replying would otherwise hang `make gate` forever. 10 min is
 	# far beyond any load-induced slowness of these tests, so the guard itself cannot flake.
 	@if [ "$(K2_WEB)" != 1 ]; then echo "web tests off (K2_WEB=1 runs them)"; \
-	elif command -v node >/dev/null 2>&1; then node --test --test-timeout=600000 tests/test_k2proto.mjs tests/test_k2boot.mjs tests/test_flasher_page.mjs tests/test_cardpage.mjs tests/test_recordspage.mjs tests/test_dataframes.mjs tests/test_ctgrid.mjs tests/test_ctpage.mjs; \
+	elif command -v node >/dev/null 2>&1; then node --test --test-timeout=600000 tests/test_k2proto.mjs tests/test_k2boot.mjs tests/test_flasher_page.mjs tests/test_cardpage.mjs tests/test_recordspage.mjs tests/test_dataframes.mjs tests/test_ctgrid.mjs tests/test_ctpage.mjs tests/test_mempage.mjs; \
 	else echo "node not found: skipping node tests"; fi
 test: test-py
 

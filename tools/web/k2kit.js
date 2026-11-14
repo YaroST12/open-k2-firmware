@@ -9,6 +9,8 @@
 //   verdictCellHtml({verdict, label, current?, title?})          one VerdictCell
 //   resultGridHtml([{label, section?, cells: [cell...]}], opts?)  the ResultGrid: label column, cells, brackets
 //   bracketRuns(cells)                                            the bracket spans under a row's cells
+//   kvTableHtml([{label, value, level?}], {footer, tone})         the KvTable (hairline rows, dim key, mono value) and
+//                                                                 its tone-filled footer band; level caution|error colours the value
 //
 // verdict is one of pending running pass fail none skip stopped partial (the device's Verdict enum). Colour never
 // carries it alone: pass and fail differ in fill and ink, skip strikes the volts, running adds a dot, none and
@@ -55,6 +57,23 @@ var K2Kit = (function () {
     });
     return out + "</div>";
   }
-  return { VERDICTS: VERDICTS, esc: esc, verdictCellHtml: verdictCellHtml, bracketRuns: bracketRuns, resultGridHtml: resultGridHtml };
+  // The KvTable: one hairline-ruled row per pair, the key dim, the value in the mono face. level is an exception colour only
+  // (caution, error); the value also carries the level word so colour is never the only cue. The footer is the device's
+  // tone band (info, ok, caution, error).
+  function kvTableHtml(rows, opts) {
+    var out = '<div class="k-kv' + (opts && opts.cls ? " " + esc(opts.cls) : "") + '">';
+    rows.forEach(function (r) {
+      var lv = r.level === "caution" || r.level === "error" ? r.level : "";
+      out += '<div class="k-kv-row' + (lv ? " k-" + lv : "") + '"><span class="k-kv-k">' + esc(r.label) + '</span>' +
+        '<span class="k-kv-v">' + esc(r.value) + (lv ? ' <b class="k-kv-w">' + (lv === "error" ? "LOW" : "TIGHT") + "</b>" : "") + "</span></div>";
+    });
+    out += "</div>";
+    if (opts && opts.footer) {
+      var tone = ["ok", "caution", "error"].indexOf(opts.tone) >= 0 ? opts.tone : "info";
+      out += '<div class="k-foot k-foot-' + tone + '">' + esc(opts.footer) + "</div>";
+    }
+    return out;
+  }
+  return { kvTableHtml: kvTableHtml, VERDICTS: VERDICTS, esc: esc, verdictCellHtml: verdictCellHtml, bracketRuns: bracketRuns, resultGridHtml: resultGridHtml };
 })();
 if (typeof module !== "undefined" && module.exports) module.exports = K2Kit;

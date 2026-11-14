@@ -91,6 +91,7 @@ PageIf *Ui::build_menu(Menu m) {
         return p;
     }
     case Menu::Battery: return pages_.push<BatteryPage>(ctx_);
+    case Menu::Memory: return pages_.push<MemoryPage>(ctx_);
     default: return pages_.push<PdTriggerPage>(ctx_);
     }
 }
@@ -109,6 +110,7 @@ ListState Ui::list_state() {
         case Menu::Twin: return top_as<TwinPage>().list_state();
         case Menu::Diagnosis: return top_as<DiagnosisPage>().list_state();
         case Menu::Battery: return top_as<BatteryPage>().list_state();
+        case Menu::Memory: return top_as<MemoryPage>().list_state();
         default: return ListState{};
         }
     }
@@ -273,7 +275,7 @@ bool Ui::page_opaque(Page p, bool entering) const {
 
 bool Ui::menu_opaque(Menu m) {
     switch (m) {
-    case Menu::UsbLink: case Menu::Diag: return true;
+    case Menu::UsbLink: case Menu::Diag: case Menu::Memory: return true;
     default: return false;   // the rest wipe their body on a live screen (no gain over the erase), or paint by mode, or hold data
     }
 }

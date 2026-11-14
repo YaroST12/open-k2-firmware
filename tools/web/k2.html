@@ -64,6 +64,21 @@ html[data-theme="dark"] {
 .k-br { grid-row: 2; position: relative; padding: 6px 0 2px; text-align: center; font-size: 12px; line-height: 12px; color: var(--k-dim);
         white-space: nowrap; }
 .k-br::before { content: ""; position: absolute; left: 4px; right: 4px; top: 1px; height: 4px; border: 1px solid var(--k-dim); border-top: 0; }
+
+/* KvTable: hairline rows, dim key, mono value; a value only changes colour for an exception (caution, error), and then carries a word.
+   The footer is the tone-filled band (info, ok, caution, error), the same four tones as the device's footer. */
+.k-kv { max-width: var(--k-kv-max, 420px); font-family: var(--k-font); font-size: 13px; border-bottom: 1px solid var(--k-rule); }
+.k-kv-row { display: flex; justify-content: space-between; gap: 12px; padding: 5px 0; border-top: 1px solid var(--k-rule); }
+.k-kv-k { color: var(--k-dim); white-space: nowrap; }
+.k-kv-v { font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+.k-kv-row.k-caution .k-kv-v { color: var(--k-caution); }
+.k-kv-row.k-error .k-kv-v { color: var(--k-error); }
+.k-kv-w { font-size: 11px; letter-spacing: .04em; }
+.k-foot { max-width: var(--k-kv-max, 420px); margin-top: 6px; padding: 4px 8px; font: 13px/18px var(--k-font); }
+.k-foot-info { background: var(--k-surface); color: var(--k-dim); box-shadow: inset 0 0 0 1px var(--k-rule); }
+.k-foot-ok { background: var(--k-ok-t); color: var(--k-ok); }
+.k-foot-caution { background: var(--k-caution-t); color: var(--k-caution); }
+.k-foot-error { background: var(--k-error-t); color: var(--k-error); }
 </style>
 <style>
 :root {
@@ -345,6 +360,12 @@ progress { width: 100%; height: 10px; accent-color: var(--accent); }
     <div class="msg" id="m-dv"></div>
   </section>
 
+  <section class="card" id="c-memory" data-page="device" aria-label="Memory" hidden>
+    <h2>Memory <span class="sub mono" id="mem-age"></span></h2>
+    <div id="mem" class="empty">No answer yet.</div>
+    <div class="note">Stack figures are free bytes. Stack low is the deepest point since boot; it turns amber under 7000 B and red under 6000 B. Refreshes every few seconds while this page is open.</div>
+  </section>
+
   <section class="card" id="c-ident" data-page="device" aria-label="Source identity" hidden>
     <h2>Identity <span class="sub" id="id-age"></span></h2>
     <div id="ident" class="empty">No answer yet.</div>
@@ -518,7 +539,7 @@ var K2Proto = (function () {
   var FACTORY_WIPE_MAGIC = [0x57, 0x49, 0x50, 0x45];   // "WIPE", u32 0x45504957 little endian (kFactoryWipeMagic)
   var CMD = { PING: 1, BUTTON: 2, GET_STATE: 3, GET_PDOS: 4, GET_EMARKER: 5, ACTION: 6, SET_PAGE: 7,
               REBOOT: 8, LOG: 9, SCREENSHOT: 10, CHARGER_TEST: 0x0B, CHARGER_UNITS: 0x0C, CHARGER_CABLE: 0x0D, CHARGER_SWEEP: 0x0F, DEBUG_PDOS: 0x20, ADC_RAW: 0x21, RIPPLE: 0x22, DEBUG_PD_MSG: 0x23,
-              GET_IDENTITY: 0x24, DEBUG_LINK: 0x25, DEBUG_CC_PROBE: 0x2A, DFU_ENTER: 0x30, DEBUG_FAULT: 0x31, FC: 0x32, FACTORY_WIPE: 0x33, BOOT_INFO: 0x35, CABLE_R: 0x50, LAB: 0x51, UFCS: 0x52, QRTEST: 0x53, CHARGER_AVS_SWEEP: 0x54, PD_STRESS: 0x55, LOOP_PROBE: 0x57, BATTERY: 0x58, CHARGER_SVOOC_CAP: 0x59, EM_LIB: 0x61, CARDS: 0x62, TWIN: 0x63, BLACK_BOX: 0x70, TRANS_CAP: 0x71, DIAGNOSE: 0x72,
+              GET_IDENTITY: 0x24, DEBUG_LINK: 0x25, DEBUG_CC_PROBE: 0x2A, DFU_ENTER: 0x30, DEBUG_FAULT: 0x31, FC: 0x32, FACTORY_WIPE: 0x33, BOOT_INFO: 0x35, MEMORY: 0x36, CABLE_R: 0x50, LAB: 0x51, UFCS: 0x52, QRTEST: 0x53, CHARGER_AVS_SWEEP: 0x54, PD_STRESS: 0x55, LOOP_PROBE: 0x57, BATTERY: 0x58, CHARGER_SVOOC_CAP: 0x59, EM_LIB: 0x61, CARDS: 0x62, TWIN: 0x63, BLACK_BOX: 0x70, TRANS_CAP: 0x71, DIAGNOSE: 0x72,
               IDENTIFY_DEVICE: 0x40, PD_REQUEST: 0x41, PD_RESET: 0x42, PD_TRIGGER_STATUS: 0x43, PD_RELEASE: 0x44, PD_MATCH: 0x45, PD_ATTACH: 0x48, PD_HANDBACK: 0x49, APPLE_READ: 0x4A, STOP: 0x4B, LEASE: 0x4C,
               SCREEN_DATA: 0x8A, RIPPLE_DATA: 0x8B };
   var STATUS = { OK: 0, UNKNOWN_CMD: 1, BAD_LENGTH: 2, BAD_ARG: 3, BUSY: 4, NEED_CONFIRM: 5 };
@@ -548,8 +569,8 @@ var K2Proto = (function () {
   var ID_STEPS = ["identity", "svids", "modes", "sink-cap", "status", "revision", "done"];
   // Rotation pages 0..6; while a submenu is open GET_STATE.page is 7 + index into MENUS (include/k2/ui/ui_types.hpp).
   var PAGES = ["home", "detail", "chargertest", "lines", "tools", "settings", "graphs"];
-  var MENUS = ["trigger", "emarker", "pdtrigger", "cabler", "blackbox", "spoof", "usblink", "autorotate", "cards", "share", "connection", "diag", "qrtest", "twin", "loopprobe", "pdstress", "diagnosis", "battery"];
-  var SETTINGS_MENUS = ["usblink", "autorotate"];
+  var MENUS = ["trigger", "emarker", "pdtrigger", "cabler", "blackbox", "spoof", "usblink", "autorotate", "cards", "share", "connection", "diag", "qrtest", "twin", "loopprobe", "pdstress", "diagnosis", "battery", "memory"];
+  var SETTINGS_MENUS = ["usblink", "autorotate", "memory"];
   function pageName(i) {
     if (i < PAGES.length) return PAGES[i];
     var k = i - PAGES.length;
@@ -1032,6 +1053,45 @@ var K2Proto = (function () {
     return { state: name(SINK_STATES, p[0]), result: name(SINK_RESULTS, p[1]), held: !!p[2], epr: !!p[3], pos: p[4],
              mv: v.getUint16(5, true), ma: v.getUint16(7, true), hard_resets: v.getUint32(9, true),
              auto_hold: p.length > 20 ? !!p[20] : false };   // byte 20: the hold is the K2's own PDO 1 answer
+  }
+
+  // MEMORY: 11 u32 (MEMORY_FIELDS), u16 fs block bytes, u8 flags (bit0 fs measured, bit1 the firmware has polled).
+  // Same thresholds as k2::memstat: the stack low-water row is caution below 7000 B and error below 6000 B.
+  var MEMORY_FIELDS = ["ram_total", "ram_static", "psp_size", "psp_now", "psp_low", "msp_size", "msp_low",
+                       "fs_blocks", "fs_used", "image_bytes", "flash_bytes"];
+  var MEM_CAUTION_B = 7000, MEM_ERROR_B = 6000;
+  function memoryLevel(m) { return !m.ok ? "unknown" : m.psp_low < MEM_ERROR_B ? "error" : m.psp_low < MEM_CAUTION_B ? "caution" : "ok"; }
+  function decodeMemory(p) {
+    need(p, 47, "memory");
+    var v = dv(p), m = {};
+    MEMORY_FIELDS.forEach(function (k, i) { m[k] = v.getUint32(4 * i, true); });
+    m.fs_block_bytes = v.getUint16(44, true);
+    m.fs_valid = !!(p[46] & 1);
+    m.ok = !!(p[46] & 2);
+    m.heap = "none";
+    m.fs_free = m.fs_valid ? Math.max(m.fs_blocks - m.fs_used, 0) : null;
+    m.image_free = Math.max(m.flash_bytes - m.image_bytes, 0);
+    m.level = memoryLevel(m);
+    return m;
+  }
+  // The rows the K2's Memory page shows, with the same labels, units and levels (k2/core/memstat.hpp row_text / row_level).
+  function kb1(b) { var t = Math.floor((b * 10 + 512) / 1024); return Math.floor(t / 10) + "." + (t % 10); }
+  function memoryView(m) {
+    var blk = function (n) { return Math.floor(n * m.fs_block_bytes / 1024) + " KB (" + n + " blk)"; };
+    var rows = [
+      { label: "Stack now", value: m.ok ? m.psp_now + " B" : "--" },
+      { label: "Stack low", value: m.ok ? m.psp_low + " B" : "--", level: m.ok ? memoryLevel(m) : "ok" },
+      { label: "IRQ low", value: m.ok ? m.msp_low + " B" : "--" },
+      { label: "RAM static", value: m.ok ? kb1(m.ram_static) + " of " + kb1(m.ram_total) + " KB" : "--" },
+      { label: "FS used", value: m.ok && m.fs_valid ? blk(m.fs_used) : "--" },
+      { label: "FS free", value: m.ok && m.fs_valid ? blk(m.fs_free) : "--" },
+      { label: "Image", value: m.ok ? kb1(m.image_bytes) + " KB" : "--" },
+      { label: "Image free", value: m.ok ? kb1(m.image_free) + " KB" : "--" },
+      { label: "Heap", value: "none" }
+    ];
+    var foot = !m.ok ? "Reading memory" :
+      (m.level === "error" ? "Stack critical: " : m.level === "caution" ? "Stack tight: " : "Stack never below ") + m.psp_low + " B";
+    return { rows: rows, footer: foot, tone: m.ok && m.level !== "unknown" && m.level !== "ok" ? m.level : "info" };
   }
 
   // PD_MATCH: [caps_seen, request_seen, sink_ok, flags, verdict, rows, want_pos, want_mv u16, want_ma u16,
@@ -1537,6 +1597,7 @@ var K2Proto = (function () {
     if (confirm) payload.push(1);
     return decodePdTrigger((await this.link.call(CMD.PD_ATTACH, payload)).payload);
   };
+  K2Remote.prototype.memory = async function () { return decodeMemory((await this.link.call(CMD.MEMORY)).payload); };
   K2Remote.prototype.match = async function () { return decodeMatch((await this.link.call(CMD.PD_MATCH)).payload); };
   K2Remote.prototype.pdStatus = async function () { return decodePdTrigger((await this.link.call(CMD.PD_TRIGGER_STATUS)).payload); };
   // op 0 = status, 1 = start, 2 = start with confirmation (a live sink is attached).
@@ -2201,7 +2262,7 @@ var K2Proto = (function () {
     CT_START_FOLLOW_MS: CT_START_FOLLOW_MS, CT_START_POLL_MS: CT_START_POLL_MS,
     decodeChargerCable: decodeChargerCable, decodeChargerTestStart: decodeChargerTestStart, ctStartStep: ctStartStep,
     decodeEmarker: decodeEmarker, decodeEmarkerDetail: decodeEmarkerDetail, decodeAdcRaw: decodeAdcRaw,
-    decodeRippleInfo: decodeRippleInfo, decodeIdentity: decodeIdentity, decodePdTrigger: decodePdTrigger, decodeMatch: decodeMatch, decodeStop: decodeStop, decodeLease: decodeLease, decodeIdentifyProgress: decodeIdentifyProgress, PD_ERRS: PD_ERRS,
+    decodeRippleInfo: decodeRippleInfo, decodeIdentity: decodeIdentity, decodePdTrigger: decodePdTrigger, decodeMatch: decodeMatch, decodeMemory: decodeMemory, memoryView: memoryView, MEM_CAUTION_B: MEM_CAUTION_B, MEM_ERROR_B: MEM_ERROR_B, decodeStop: decodeStop, decodeLease: decodeLease, decodeIdentifyProgress: decodeIdentifyProgress, PD_ERRS: PD_ERRS,
     decodeFc: decodeFc, decodeCableR: decodeCableR, parseLogStats: parseLogStats,
     formatAgo: formatAgo, formatUptime: formatUptime, isUnknownCmd: isUnknownCmd, FC_PROTOS: FC_PROTOS, FC_LEVELS: FC_LEVELS, FC_NAMES: FC_NAMES,
     ADC_CHANNELS: ADC_CHANNELS, ADC_SCAN: ADC_SCAN, RIPPLE_SAMPLES: RIPPLE_SAMPLES, RIPPLE_FULL_SCALE: RIPPLE_FULL_SCALE,
@@ -2225,6 +2286,8 @@ if (typeof module !== "undefined" && module.exports) module.exports = K2Proto;
 //   verdictCellHtml({verdict, label, current?, title?})          one VerdictCell
 //   resultGridHtml([{label, section?, cells: [cell...]}], opts?)  the ResultGrid: label column, cells, brackets
 //   bracketRuns(cells)                                            the bracket spans under a row's cells
+//   kvTableHtml([{label, value, level?}], {footer, tone})         the KvTable (hairline rows, dim key, mono value) and
+//                                                                 its tone-filled footer band; level caution|error colours the value
 //
 // verdict is one of pending running pass fail none skip stopped partial (the device's Verdict enum). Colour never
 // carries it alone: pass and fail differ in fill and ink, skip strikes the volts, running adds a dot, none and
@@ -2271,7 +2334,24 @@ var K2Kit = (function () {
     });
     return out + "</div>";
   }
-  return { VERDICTS: VERDICTS, esc: esc, verdictCellHtml: verdictCellHtml, bracketRuns: bracketRuns, resultGridHtml: resultGridHtml };
+  // The KvTable: one hairline-ruled row per pair, the key dim, the value in the mono face. level is an exception colour only
+  // (caution, error); the value also carries the level word so colour is never the only cue. The footer is the device's
+  // tone band (info, ok, caution, error).
+  function kvTableHtml(rows, opts) {
+    var out = '<div class="k-kv' + (opts && opts.cls ? " " + esc(opts.cls) : "") + '">';
+    rows.forEach(function (r) {
+      var lv = r.level === "caution" || r.level === "error" ? r.level : "";
+      out += '<div class="k-kv-row' + (lv ? " k-" + lv : "") + '"><span class="k-kv-k">' + esc(r.label) + '</span>' +
+        '<span class="k-kv-v">' + esc(r.value) + (lv ? ' <b class="k-kv-w">' + (lv === "error" ? "LOW" : "TIGHT") + "</b>" : "") + "</span></div>";
+    });
+    out += "</div>";
+    if (opts && opts.footer) {
+      var tone = ["ok", "caution", "error"].indexOf(opts.tone) >= 0 ? opts.tone : "info";
+      out += '<div class="k-foot k-foot-' + tone + '">' + esc(opts.footer) + "</div>";
+    }
+    return out;
+  }
+  return { kvTableHtml: kvTableHtml, VERDICTS: VERDICTS, esc: esc, verdictCellHtml: verdictCellHtml, bracketRuns: bracketRuns, resultGridHtml: resultGridHtml };
 })();
 if (typeof module !== "undefined" && module.exports) module.exports = K2Kit;
 </script>
@@ -2685,7 +2765,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = CtGrid;
             stats: { usb: null, rst: null, fault: null }, rippleBusy: false, ripple: null };
   var MAX_MIN = 60;                                  // history kept, minutes
   // Slower data is refreshed at these intervals (ms) from the poll loop; state itself runs at the poll select.
-  var EVERY = { pdos: 5000, emarker: 10000, adc: 3000, ping: 5000, lease: 1000, ident: 5000, fc: 3000, trig: 4000, cabler: 1000, bb: 5000, ct: 4000 };
+  var EVERY = { pdos: 5000, emarker: 10000, adc: 3000, ping: 5000, lease: 1000, ident: 5000, fc: 3000, trig: 4000, cabler: 1000, bb: 5000, ct: 4000, mem: 3000 };
   var RIPPLE_CYCLES = ["1.5", "7.5", "13.5", "28.5", "41.5", "55.5", "71.5", "239.5"];
 
   function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
@@ -2739,6 +2819,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = CtGrid;
     var r = (location.hash || "").replace(/^#\/?/, "");
     if (ROUTES.indexOf(r) < 0) r = "live";
     S.route = r;
+    if (r === "device" && S.due) S.due.mem = 0;   // the Memory card is stale: read it now
     $("main").setAttribute("data-route", r);
     Array.prototype.forEach.call(document.querySelectorAll("#tabs a"), function (a) {
       if (a.getAttribute("href") === "#" + r) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
@@ -3140,6 +3221,18 @@ if (typeof module !== "undefined" && module.exports) module.exports = CtGrid;
     kv(dl, [["Vendor", d.vendor || "-", false], ["Model", d.model || "-", false], ["VID:PID", hex(d.vid, 4) + ":" + hex(d.pid, 4)],
             ["bcdDevice", hex(d.bcd, 4)], ["SVIDs", chips(d.svids.map(function (s) { return hex(s, 4); }))], ["Flags", chips(fl), false]]);
     box.appendChild(dl);
+  }
+  // The memory card: the firmware's cached figures (about 1 Hz), asked only while the Device page is open.
+  function renderMemory(m) {
+    var v = P.memoryView(m);
+    $("mem").className = "";
+    $("mem").innerHTML = K2Kit.kvTableHtml(v.rows, { footer: v.footer, tone: v.tone });
+    put("mem-age", new Date().toLocaleTimeString());
+  }
+  function refreshMemory() {
+    if (S.route !== "device" && S.memShown) return Promise.resolve();   // nothing to repaint on another page; the probe paints once
+    S.due.mem = Date.now(); S.memShown = true;
+    return guarded("memory", async function () { renderMemory(await S.k2.memory()); }, true);
   }
   function refreshIdent() { S.due.ident = Date.now(); return guarded("identity", async function () { renderIdentity(await S.k2.identity()); }, true); }
   $("id-refresh").onclick = refreshIdent;
@@ -3839,6 +3932,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = CtGrid;
   // ---- optional sections: PROBES lists every command that may be missing. A section stays hidden until its probe
   // succeeds; "unknown command" keeps it hidden. PD trigger has no command on any branch yet: add its probe here.
   var PROBES = [
+    { card: "c-memory", run: function () { return S.k2.probe(async function () { renderMemory(await S.k2.memory()); S.memShown = true; }); }, refresh: refreshMemory, every: EVERY.mem, key: "mem" },
     { card: "c-ident", run: function () { return S.k2.probe(async function () { renderIdentity(await S.k2.identity()); }); }, refresh: refreshIdent, every: EVERY.ident, key: "ident" },
     { card: "c-pdtrig", run: function () { return S.k2.probe(async function () { renderTrigger(await S.k2.pdStatus()); }); }, refresh: refreshTrig, every: EVERY.trig, key: "trig" },
     { card: "c-fc", run: function () { return S.k2.probe(async function () { renderFc(await S.k2.fc("status")); }); }, refresh: refreshFc, every: EVERY.fc, key: "fc" },
@@ -3874,7 +3968,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = CtGrid;
   }
   function resetView() {
     S.samples = []; S.st = null; S.ping = null; S.vdd = null; S.pdoKey = ""; S.pdoDirty = true; S.emDirty = true; S.lastCableAge = null;
-    S.lastEnergy = null; S.emScanAt = 0; S.due = {}; leaseSeenArmed = false; $("lease").hidden = true; S.stats = { usb: null, rst: null, fault: null }; S.ripple = null;
+    S.lastEnergy = null; S.emScanAt = 0; S.due = {}; S.memShown = false; $("mem").className = "empty"; $("mem").textContent = "No answer yet."; leaseSeenArmed = false; $("lease").hidden = true; S.stats = { usb: null, rst: null, fault: null }; S.ripple = null;
     S.chargerTest = null; $("ct-results").textContent = "No run read yet.";
     $("ct-kv").textContent = $("ct-evidence").textContent = "";
     $("pdos").className = "empty"; $("pdos").textContent = "Not connected."; $("emarker").className = "empty"; $("emarker").textContent = "Not connected.";
@@ -3882,7 +3976,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = CtGrid;
     $("adc-raw").className = "empty"; $("adc-raw").textContent = "Not read yet.";
     $("pd-force").hidden = true; ["m-pd", "m-em", "m-power", "m-rp", "m-fc", "m-dv", "m-id", "m-cr", "m-bb", "m-ct"].forEach(function (id) { msg(id, ""); });
     $("rp-stats").textContent = "";
-    ["c-ident", "c-pdtrig", "c-fc", "c-cabler", "c-bb", "c-chargertest", "c-ctrun"].forEach(function (id) { $(id).hidden = true; });
+    ["c-memory", "c-ident", "c-pdtrig", "c-fc", "c-cabler", "c-bb", "c-chargertest", "c-ctrun"].forEach(function (id) { $(id).hidden = true; });
     PROBES.forEach(function (p) { p.on = false; });
     ctReset(); routeNote();
     showStats(); drawChart(); drawRipple();

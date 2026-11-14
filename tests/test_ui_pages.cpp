@@ -1586,6 +1586,13 @@ static void test_k2_place() {
     CHECK_EQ(ui.menu() == Menu::Diag, 1);
     press(ui, Button::Back, ButtonEvent::Short, kT0 + 40);
     CHECK_EQ(ui.menu_depth(), 0u);
+    press(ui, Button::Plus, ButtonEvent::Short, kT0 + 42);   // Memory: its own page, BACK returns
+    CHECK_EQ(ui.context().keep.settings_sel, SettingsPage::kMemoryRow);
+    CHECK_STR(label(ui, Button::Ok), "Open");
+    press(ui, Button::Ok, ButtonEvent::Short, kT0 + 44);
+    CHECK_EQ(ui.menu() == Menu::Memory, 1);
+    press(ui, Button::Back, ButtonEvent::Short, kT0 + 46);
+    CHECK_EQ(ui.menu_depth(), 0u);
     press(ui, Button::Plus, ButtonEvent::Short, kT0 + 50);   // Boot info
     CHECK_EQ(ui.context().keep.settings_sel, SettingsPage::kBootRow);
     press(ui, Button::Ok, ButtonEvent::Short, kT0 + 60);

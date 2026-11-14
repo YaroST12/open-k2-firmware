@@ -31,6 +31,7 @@
 #include "k2/core/lab.hpp"
 #include "k2/core/main_loop.hpp"
 #include "k2/core/math_selftest.hpp"
+#include "k2/core/memstat.hpp"
 #include "k2/core/shell.hpp"
 #include "k2/drivers/systick.hpp"
 #include "k2/core/dbg_stream_hw.hpp"
@@ -946,6 +947,16 @@ struct Hw final : shell::Backend {
     void write(std::string_view s) override { put(s); }
     const char* twin(const shell::TwinCmd& c) override { return twin_command(c); }
     const char* diag() override { return diag_print(); }
+    const char* memory() override {
+        const memstat::Snapshot s = memstat::snapshot();   // the cached figures: nothing is scanned here
+        for (int i = 0; i < memstat::kRows; i++) {
+            const auto row = static_cast<memstat::Row>(i);
+            char v[memstat::kValueMax + 1];
+            const std::size_t n = memstat::row_text(row, s, std::span<char>(v, memstat::kValueMax));
+            put(memstat::row_label(row)); put(" "); put(std::string_view(v, n)); put("\r\n");
+        }
+        return nullptr;
+    }
     const char* selftest() override {
         // One line per check: each check runs with IRQs masked (the longest about 3.5 ms), PD gets its service in between
         // instead of once after the whole run (about 13 ms of checks plus the output).

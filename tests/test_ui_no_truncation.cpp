@@ -114,7 +114,7 @@ void walk_pages(Ui &ui, int rot, const Scenario &sc) {
     }
     static const char *const kMenuNames[] = {"trigger", "emarker", "pd-trigger", "cable-r", "black-box", "spoof", "usb-link",
                                              "autorotate", "cards", "share", "connection", "diag", "qrtest", "twin", "loop-probe",
-                                             "pd-stress", "diagnosis", "battery"};
+                                             "pd-stress", "diagnosis", "battery", "memory"};
     static_assert(std::size(kMenuNames) == static_cast<std::size_t>(Menu::Count), "a menu without a name here is walked under another's label");
     for (uint8_t m = 0; m < static_cast<uint8_t>(Menu::Count); ++m) {
         enter(kMenuNames[m], rot, sc.name);
@@ -195,6 +195,28 @@ void walk_pages(Ui &ui, int rot, const Scenario &sc) {
     g_stub.pm.current_ma = amps_before;
     g_stub.sink = sink_before;
     g_stub.caps.active_cc = cc_before;
+    // Memory: the healthy, caution, error, large-number and not-yet-measured readings.
+    ui.goto_page(static_cast<uint8_t>(Page::Tools), g_t);
+    if (ui.push_menu(Menu::Memory, g_t)) {
+        memstat::Snapshot m;
+        m.ram_total = 98304; m.ram_static = 64000; m.psp_size = 10944; m.msp_size = 1344;
+        m.fs_blocks = 146; m.fs_block_bytes = 2048; m.image_bytes = 700000; m.flash_bytes = 944128; m.ok = true;
+        const struct { const char *what; uint32_t psp_now, psp_low, msp_low, fs_used; bool fs_valid, ok; } cases[] = {
+            {"mem-ok", 9000, 7400, 1200, 12, true, true},
+            {"mem-caution", 6800, 6500, 800, 100, true, true},
+            {"mem-error", 5400, 5312, 20, 146, true, true},
+            {"mem-big", 10944, 10944, 1344, 0, true, true},
+            {"mem-unmeasured", 0, 0, 0, 0, false, false},
+        };
+        for (const auto &c : cases) {
+            m.psp_now = c.psp_now; m.psp_low = c.psp_low; m.msp_low = c.msp_low; m.fs_used = c.fs_used;
+            m.fs_valid = c.fs_valid; m.ok = c.ok;
+            stub_memstat_set(m);
+            draw_for_a_while(ui, c.what, rot, sc.name);
+        }
+        stub_memstat_set(memstat::Snapshot{});
+        ui.on_button(Button::Back, ButtonEvent::Short, g_t);
+    }
     // Battery: every row focused (note open) idle, then a round trip through its states (charging, the armed hand end, between
     // the phases, discharging, done), the saved runs and a stored run.
     enter("battery", rot, sc.name);

@@ -73,6 +73,8 @@ FACTORY_WIPE_MAGIC = b"WIPE"   # confirm payload (u32 0x45504957 little endian)
 WIPE_TIMEOUT_S = 30.0     # the sector erases block the firmware for several seconds before it replies
 CMD_FLASH_DUMP = 0x34     # read-only window into the native device storage
 FLASH_DUMP_BASE, FLASH_DUMP_END, FLASH_DUMP_CHUNK = 0x080E0000, 0x08100000, 48
+CMD_MEMORY = 0x36         # stacks, RAM budget, littlefs and flash image figures (cached by the firmware, ~1 Hz)
+MEM_CAUTION_B, MEM_ERROR_B = 7000, 6000   # stack low-water thresholds, k2::memstat (caution below 7000 B, error below 6000 B)
 CMD_BOOT_INFO = 0x35      # how this boot decided its mode: the K2B1 text line and the first-seconds power samples (RAM only)
 BOOT_INFO_TEXT, BOOT_INFO_SAMPLES = 0, 1
 WIPE_ERRS = ["ok", "erase failed", "verify failed"]   # k2::factory_wipe::Err
@@ -164,7 +166,7 @@ ACTIONS_NEED_CONFIRM = ("fc-scan",)
 SOPS = {"sop": 0, "sop1": 1, "sop2": 2}
 # Rotation pages (settable with `page`), then Tools/Settings submenus: the state reports a
 # showing submenu as 6 + its index. Connection and Diag can also be opened remotely.
-PAGES = ["home", "detail", "chargertest", "lines", "tools", "settings", "graphs", "trigger", "emarker", "pdtrigger", "cabler", "blackbox", "spoof", "usblink", "autorotate", "cards", "share", "connection", "diag", "qrtest", "twin", "loopprobe", "pdstress", "diagnosis", "battery"]
+PAGES = ["home", "detail", "chargertest", "lines", "tools", "settings", "graphs", "trigger", "emarker", "pdtrigger", "cabler", "blackbox", "spoof", "usblink", "autorotate", "cards", "share", "connection", "diag", "qrtest", "twin", "loopprobe", "pdstress", "diagnosis", "battery", "memory"]
 ROTATION_PAGES = 7
 # Names the old numbering used, still accepted by `page`: they open Connection on the matching tab. The firmware
 # reads kConnTabAlias + tab (include/k2/ui/ui_types.hpp) as "open Connection on that tab"; the state itself reports a
@@ -183,7 +185,7 @@ def page_name(i):
     if i < ROTATION_PAGES:
         return PAGES[i]
     if i < len(PAGES):
-        return ("settings/" if PAGES[i] in ("usblink", "autorotate") else "tools/") + PAGES[i]
+        return ("settings/" if PAGES[i] in ("usblink", "autorotate", "memory") else "tools/") + PAGES[i]
     if CONN_ALIAS_BASE <= i < CONN_ALIAS_BASE + len(CONN_TABS):
         return "tools/connection/" + CONN_TABS[i - CONN_ALIAS_BASE]
     return str(i)
@@ -895,6 +897,50 @@ def decode_usb_link(p):
 
 def cmd_usblink(link, a):
     return decode_usb_link(link.call(CMD_USB_LINK).payload)
+
+
+MEMORY_PAYLOAD = 11 * 4 + 2 + 1
+MEMORY_FIELDS = ("ram_total", "ram_static", "psp_size", "psp_now", "psp_low", "msp_size", "msp_low",
+                 "fs_blocks", "fs_used", "image_bytes", "flash_bytes")
+
+
+def decode_memory(p):
+    """CMD_MEMORY: 11 u32 (MEMORY_FIELDS), u16 fs block bytes, u8 flags (bit0 fs measured, bit1 the firmware has polled)."""
+    _need(p, MEMORY_PAYLOAD, "memory")
+    r = {k: int.from_bytes(p[4 * i:4 * i + 4], "little") for i, k in enumerate(MEMORY_FIELDS)}
+    r["fs_block_bytes"] = int.from_bytes(p[44:46], "little")
+    r["fs_valid"] = bool(p[46] & 1)
+    r["ok"] = bool(p[46] & 2)
+    r["heap"] = "none"   # the firmware has no heap: static memory only
+    r["fs_free"] = max(r["fs_blocks"] - r["fs_used"], 0) if r["fs_valid"] else None
+    r["image_free"] = max(r["flash_bytes"] - r["image_bytes"], 0)
+    low = r["psp_low"]
+    r["level"] = "unknown" if not r["ok"] else "error" if low < MEM_ERROR_B else "caution" if low < MEM_CAUTION_B else "ok"
+    return r
+
+
+def cmd_memory(link, a):
+    return decode_memory(link.call(CMD_MEMORY).payload)
+
+
+def render_memory(r):
+    if not r["ok"]:
+        return "memory: the firmware has not measured yet"
+    kb = lambda b: f"{b / 1024:.1f} KB"
+    bk = r["fs_block_bytes"]
+    lines = [f"stack now      {r['psp_now']} B free of {r['psp_size']} B",
+             f"stack low      {r['psp_low']} B free at the deepest point since boot ({r['level'].upper()})"
+             if r["level"] != "ok" else f"stack low      {r['psp_low']} B free at the deepest point since boot",
+             f"irq stack low  {r['msp_low']} B free of {r['msp_size']} B",
+             f"static RAM     {kb(r['ram_static'])} of {kb(r['ram_total'])}",
+             "heap           none (static memory only)"]
+    if r["fs_valid"]:
+        lines.append(f"files used     {r['fs_used']} of {r['fs_blocks']} blocks ({kb(r['fs_used'] * bk)} of {kb(r['fs_blocks'] * bk)})")
+        lines.append(f"files free     {r['fs_free']} blocks ({kb(r['fs_free'] * bk)})")
+    else:
+        lines.append(f"files          {r['fs_blocks']} blocks, usage not measured yet")
+    lines.append(f"firmware image {kb(r['image_bytes'])} of {kb(r['flash_bytes'])} ({kb(r['image_free'])} free)")
+    return "\n".join(lines)
 
 
 def cmd_match(link, a):
@@ -4656,6 +4702,8 @@ def _render(name, r):
         return text + ("\nWARNING: every byte is 0xFF; the native data area is blank" if r["blank"] else "")
     if name == "bootinfo":
         return render_bootinfo(r)
+    if name == "memory":
+        return render_memory(r)
     if name == "factory-wipe":
         return (f"factory wipe done: {r['sectors']} sectors erased and verified blank "
                 f"({r['verified']} verified; the volume plus any pages carrying our own old signature, "
@@ -4739,7 +4787,7 @@ def _render(name, r):
 
 
 COMMANDS = {"ping": cmd_ping, "press": cmd_press, "state": cmd_state, "pdos": cmd_pdos,
-            "emarker": cmd_emarker, "identity": cmd_identity, "match": cmd_match, "usblink": cmd_usblink,
+            "emarker": cmd_emarker, "identity": cmd_identity, "match": cmd_match, "usblink": cmd_usblink, "memory": cmd_memory,
             "sink": cmd_sink, "action": cmd_action, "page": cmd_page,
             "reboot": cmd_reboot, "dfu": cmd_dfu, "factory-wipe": cmd_factory_wipe, "flash-dump": cmd_flash_dump, "bootinfo": cmd_bootinfo, "fault": cmd_fault, "log": cmd_log, "watch": cmd_watch,
             "screenshot": cmd_screenshot, "debug": cmd_debug,
@@ -4885,6 +4933,7 @@ def build_parser():
     sd.add_argument("--confirm", action="store_true")
     sub.add_parser("identity", help="source identity: VID/PID, SVIDs, Apple model")
     sub.add_parser("usblink", help="USB / Thunderbolt link seen in sniffed PD traffic (passive, see k2/pd/usb_link.hpp)")
+    sub.add_parser("memory", help="stack headroom (now / low-water), interrupt stack, static RAM, files and flash image use; read-only, cached 1 Hz figures (--json for tools)")
     sub.add_parser("match", help="wants vs offers: the request against the charger caps (passive)")
     sub.add_parser("sink", help="Connection page Sink tab, field for field (read-only; Identify status only, never starts a run)")
     sa = sub.add_parser("action", help="run a page action (fc-scan raises VBUS above 5 V and needs --confirm)")

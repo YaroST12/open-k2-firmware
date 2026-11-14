@@ -50,6 +50,7 @@ struct Fake : shell::Backend {
         return fail;
     }
     const char* diag() override { calls += "diag;"; return fail; }
+    const char* memory() override { calls += "mem;"; return fail; }
     const char* locked = nullptr;   // the D+/D- lock reason (the guarded SuperVOOC trigger runs)
     const char* lines_locked() override { return locked; }
 };
@@ -276,6 +277,16 @@ int main() {
         CHECK_STR((g.calls).c_str(), "state;fcreset;");
         CHECK_EQ(said(g, "unknown"), false);
     }
+    // mem: read-only, no arguments; the backend prints the rows itself
+    f.fail = nullptr;
+    CHECK_STR((run(f, "mem")).c_str(), "mem;");
+    CHECK_STR((run(f, "mem 1")).c_str(), "");
+    CHECK_EQ(said(f, "usage: mem"), true);
+    f.fail = "mem broke";
+    run(f, "mem");
+    CHECK_EQ(said(f, "mem broke"), true);
+    f.fail = nullptr;
+
     // diag: read-only, no arguments; the backend prints the lines itself and only a failure adds an err line
     CHECK_STR((run(f, "diag")).c_str(), "diag;");
     CHECK_EQ(said(f, "err"), false);

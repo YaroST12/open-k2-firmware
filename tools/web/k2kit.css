@@ -55,3 +55,18 @@ html[data-theme="dark"] {
 .k-br { grid-row: 2; position: relative; padding: 6px 0 2px; text-align: center; font-size: 12px; line-height: 12px; color: var(--k-dim);
         white-space: nowrap; }
 .k-br::before { content: ""; position: absolute; left: 4px; right: 4px; top: 1px; height: 4px; border: 1px solid var(--k-dim); border-top: 0; }
+
+/* KvTable: hairline rows, dim key, mono value; a value only changes colour for an exception (caution, error), and then carries a word.
+   The footer is the tone-filled band (info, ok, caution, error), the same four tones as the device's footer. */
+.k-kv { max-width: var(--k-kv-max, 420px); font-family: var(--k-font); font-size: 13px; border-bottom: 1px solid var(--k-rule); }
+.k-kv-row { display: flex; justify-content: space-between; gap: 12px; padding: 5px 0; border-top: 1px solid var(--k-rule); }
+.k-kv-k { color: var(--k-dim); white-space: nowrap; }
+.k-kv-v { font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+.k-kv-row.k-caution .k-kv-v { color: var(--k-caution); }
+.k-kv-row.k-error .k-kv-v { color: var(--k-error); }
+.k-kv-w { font-size: 11px; letter-spacing: .04em; }
+.k-foot { max-width: var(--k-kv-max, 420px); margin-top: 6px; padding: 4px 8px; font: 13px/18px var(--k-font); }
+.k-foot-info { background: var(--k-surface); color: var(--k-dim); box-shadow: inset 0 0 0 1px var(--k-rule); }
+.k-foot-ok { background: var(--k-ok-t); color: var(--k-ok); }
+.k-foot-caution { background: var(--k-caution-t); color: var(--k-caution); }
+.k-foot-error { background: var(--k-error-t); color: var(--k-error); }

@@ -181,6 +181,18 @@
 //                                    96 KB of SRAM, 2 = recursion into the stack guard (stack
 //                                    overflow). The K2 logs the fault and resets. Exactly 5
 //                                    bytes (BadLength), wrong magic or kind > 2 BadArg.
+//   0x36 MEMORY      req -            rsp ram_total(4) ram_static(4) psp_size(4) psp_now(4) psp_low(4) msp_size(4) msp_low(4)
+//                                    fs_blocks(4) fs_used(4) image_bytes(4) flash_bytes(4) fs_block_bytes(2) flags(1), 47 bytes, all LE
+//                                    The memory readout (k2/core/memstat.hpp), read-only, valid in every mode. RAM: the application
+//                                    (PSP) stack psp_size with psp_now (free bytes under the stack pointer at the last poll) and psp_low
+//                                    (free bytes at its deepest excursion since boot, from the painted-stack scan); the interrupt (MSP)
+//                                    stack msp_size / msp_low the same way; ram_static = .data + .noinit + overlay + .bss of ram_total.
+//                                    No heap exists. Storage: the littlefs volume fs_blocks of fs_block_bytes with fs_used in use
+//                                    (flags bit0; the figure is a cached tree walk, refreshed when the link is quiet), and the firmware
+//                                    image_bytes (flash start to the end of the loaded image) of the flash_bytes application region.
+//                                    flags bit0 = fs_used valid, bit1 = the poll has run once (else every field is 0). Every figure comes
+//                                    from the cache refreshed by the main loop (stacks at most 1 Hz): the command scans and walks nothing.
+//                                    Exactly 0 bytes of payload (BadLength otherwise).
 //   0x46 USB_LINK    req -            rsp family(1) tbt(1) conf(1) source(1) flags(1) mbps(4) text(rest)
 //                                    USB / Thunderbolt link classified from sniffed PD (k2/pd/usb_link.hpp); see UsbLinkSnapshot.
 //   0x47 PD_REREAD   req op(1) [mask]  rsp state(1) step(1) mask(1) ok(1) skipped(1) pdos_before(1) pdos_last(1) caps_rx(1) flags(1)
@@ -481,6 +493,7 @@
 #include "k2/core/bootinfo.hpp"
 #include "k2/core/build_config.h"
 #include "k2/core/lease.hpp"
+#include "k2/core/memstat.hpp"
 #include "k2/core/stop.hpp"
 #include "k2/pd/cc_probe.hpp"
 #include "k2/pd/ra_probe.hpp"
@@ -532,6 +545,7 @@ enum class Cmd : uint8_t {
     FactoryWipe = 0x33, // erase the file system and our own legacy pages, then DFU; needs kFactoryWipeMagic, see above
     FlashDump = 0x34,   // read-only window into 0x080E0000..0x08100000, see above
     BootInfo = 0x35,    // how this boot decided its mode: K2B1 text and first-seconds samples, see above
+    Memory = 0x36,      // memory readout: stacks, static RAM, littlefs volume, firmware image -> memstat::Snapshot (see encode_memory)
     // Active PD (wave 2C). Every one of them is refused inline; a request above 5 V needs the
     // confirm flag (Status::NeedConfirm without it). Ids 0x31/0x32 belong to DebugFault/Fc.
     IdentifyDevice = 0x40,  // [op] 0 status, 1 start, 2 start (same as 1; the inline refusal has no confirm) -> IdentifySnapshot
@@ -589,7 +603,7 @@ inline constexpr Cmd kCmdIds[] = {
     Cmd::GetIdentity, Cmd::IdentifyDevice, Cmd::PdRequest, Cmd::PdReset, Cmd::PdTriggerStatus, Cmd::PdRelease, Cmd::PdMatch, Cmd::UsbLink, Cmd::PdReread,
     Cmd::PdAttach, Cmd::PdHandback, Cmd::AppleRead, Cmd::Stop, Cmd::Lease,
     Cmd::CableR, Cmd::Lab, Cmd::Ufcs, Cmd::QRTest, Cmd::Store, Cmd::EmLib, Cmd::Cards, Cmd::Twin, Cmd::BlackBox, Cmd::TransCap, Cmd::ChargerTest,
-    Cmd::ChargerUnits, Cmd::ChargerCable, Cmd::ChargerHunt, Cmd::ChargerSweep, Cmd::ChargerAvsSweep, Cmd::BootInfo,
+    Cmd::ChargerUnits, Cmd::ChargerCable, Cmd::ChargerHunt, Cmd::ChargerSweep, Cmd::ChargerAvsSweep, Cmd::BootInfo, Cmd::Memory,
     Cmd::PdStress, Cmd::EmarkerProbe, Cmd::LoopProbe, Cmd::Diagnose, Cmd::TraceHid, Cmd::Battery, Cmd::ChargerSvoocCap,
 };
 
@@ -1202,6 +1216,10 @@ struct UsbLinkSnapshot {
     std::array<char, 28> text{};
     uint8_t text_len = 0;
 };
+// MEMORY payload: the memstat::Snapshot on the wire (see the 0x36 block above).
+using MemorySnapshot = memstat::Snapshot;
+constexpr size_t kMemoryPayload = 11 * 4 + 2 + 1;
+static_assert(kMemoryPayload <= kMaxRspPayload);
 struct MatchSnapshot {
     uint8_t caps_seen = 0, request_seen = 0, sink_ok = 0, flags = 0, verdict = 0, rows = 0, want_pos = 0;
     uint16_t want_mv = 0, want_ma = 0, need_ma = 0, have_ma = 0, src_max_mv = 0, src_max_w = 0;
@@ -1277,6 +1295,7 @@ size_t encode_identity(std::span<uint8_t> out, const IdentitySnapshot &s);
 size_t encode_pd_trigger(std::span<uint8_t> out, const PdTriggerSnapshot &s);
 size_t encode_match(std::span<uint8_t> out, const MatchSnapshot &s);
 size_t encode_usb_link(std::span<uint8_t> out, const UsbLinkSnapshot &s);
+size_t encode_memory(std::span<uint8_t> out, const MemorySnapshot &s);
 size_t encode_identify_progress(std::span<uint8_t> out, const IdentifyProgress &p);
 size_t encode_reread(std::span<uint8_t> out, const RereadInfo &i);
 size_t encode_apple_read(std::span<uint8_t> out, const AppleReadInfo &i, uint8_t part);   // part 0 header, 1..6 one field each
@@ -1412,6 +1431,7 @@ concept Backend = requires(B &b, uint8_t u8, uint16_t u16, bool on) {
     { b.pd_trigger() } -> std::same_as<PdTriggerSnapshot>;
     { b.match_info() } -> std::same_as<MatchSnapshot>;
     { b.usb_link() } -> std::same_as<UsbLinkSnapshot>;
+    { b.memory() } -> std::same_as<MemorySnapshot>;   // the cached memstat figures, no scan
     { b.fc_cmd(u8, u8, u16, u8) } -> std::same_as<Status>;   // op, proto, mV, flags (kFcConfirm | kFcAllowInline)
     { b.fc_info() } -> std::same_as<FcInfo>;
     { b.vooc_monitor(u8) } -> std::same_as<VoocSnapshot>;   // vooc-monitor: 0 off, 1 on, 2 keep; then the summary
@@ -1878,6 +1898,9 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
     case Cmd::PdTriggerStatus:
         if (!p.empty()) return reply(Status::BadLength);
         return reply_n(encode_pd_trigger(buf, backend.pd_trigger()));
+    case Cmd::Memory:
+        if (!p.empty()) return reply(Status::BadLength);
+        return reply_n(encode_memory(buf, backend.memory()));
     case Cmd::UsbLink:
         if (!p.empty()) return reply(Status::BadLength);
         return reply_n(encode_usb_link(buf, backend.usb_link()));

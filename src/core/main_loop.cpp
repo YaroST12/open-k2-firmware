@@ -19,6 +19,7 @@
 #include "k2/core/log.hpp"
 #include "k2/core/loop_guard.hpp"
 #include "k2/core/loop_stats.hpp"
+#include "k2/core/memstat.hpp"
 #include "k2/core/paint_meter.hpp"
 #include "k2/core/rd_comeback.hpp"
 #include "k2/core/remote.hpp"
@@ -232,6 +233,7 @@ constexpr uint32_t kEraseQuietMs = 1000;
         mark(Stage::ReportCard);
         k2::report_card::hw::poll(may_erase);
         k2::battery::hw::poll(now, may_erase);   // battery recorder: every sample; its record only at a phase boundary
+        k2::memstat::poll(now, may_erase);       // memory readout cache: stacks at most 1 Hz, the littlefs walk only when quiet
     }
     mark(Stage::BootScreen);
     if (c.bootscreen.active()) boot_screen_step(now);   // waits for the key's 3 s, then owns the panel

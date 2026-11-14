@@ -832,6 +832,8 @@ remote::UsbLinkSnapshot Remote::usb_link() {
     return s;
 }
 
+remote::MemorySnapshot Remote::memory() { return memstat::snapshot(); }
+
 remote::Status Remote::set_page(uint8_t page) {
     if (!ui_.goto_page(page, systick::millis())) return remote::Status::BadArg;
     K2LOG("[RMT] page=%d\n", static_cast<int>(page));

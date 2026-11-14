@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <optional>
 #include <span>
+#include "k2/core/memstat.hpp"
 #include "k2/ui/gfx.hpp"
 #include "k2/ui/home_cards.hpp"
 #include "k2/ui/home_cell.hpp"
@@ -976,6 +977,25 @@ private:
     Elem foot_;
 };
 
+// Memory (opened from Settings): the memstat rows (k2/core/memstat.hpp) as a KvTable: application stack now and at its low-water
+// mark, the interrupt stack, static RAM, the littlefs volume, the firmware image and the heap (none). The low-water row takes the
+// exception colour under 7000 B (caution) and 6000 B (error); the footer states the same fact. Reads the cached snapshot only.
+class MemoryPage final : public PageBase {
+public:
+    explicit MemoryPage(UiContext &c) : PageBase(c, Page::Count, "Memory", Icon::Chip) {}
+    void draw_static() override;
+    void update(uint32_t now_ms) override;
+    bool on_event(Event e) override;
+    PanelLabels labels() const override;
+    void invalidate() override;
+    ListState list_state() const { return ListState{}; }
+    static constexpr int kRows = memstat::kRows;
+private:
+    Field val_[kRows];
+    uint8_t static_step_ = 0;
+    Elem foot_;
+};
+
 // Lines v2: D+ / D- / CC1 / CC2 tags with 0..3.3 V bars (ticks at 0.4 V and 2.0 V), a verdict card with the
 // decoded result in pills, the Rp advertisement and the MCU temperature, and a footer sentence.
 class LinesPage final : public PageBase {
@@ -1175,8 +1195,8 @@ public:
     // The row count follows the build: the Screenshot row exists only with K2_SCREENSHOT=1 (the default is 0). ui_pages.cpp
     // static_asserts these against its SettingRow enum, and test_settings_rows0 pins the K2_SCREENSHOT=0 values.
     static constexpr int kScreenshotRows = K2_SCREENSHOT ? 1 : 0;
-    static constexpr int kRows = 7 + kScreenshotRows;
-    static constexpr int kSystemRow = 5 + kScreenshotRows, kBootRow = 6 + kScreenshotRows;
+    static constexpr int kRows = 8 + kScreenshotRows;
+    static constexpr int kSystemRow = 5 + kScreenshotRows, kMemoryRow = 6 + kScreenshotRows, kBootRow = 7 + kScreenshotRows;
     static constexpr int16_t kIdHeadY = 25, kIdLineY = 46, kIdDashY = 63, kListY = 66;   // identity y22..65, the list under it
 private:
     static void row_fn(void *ctx, int index, bool focused, kit::RowSpec &out);   // reads the live settings: no value cache

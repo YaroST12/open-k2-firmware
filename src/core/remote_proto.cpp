@@ -603,6 +603,18 @@ size_t encode_usb_link(std::span<uint8_t> out, const UsbLinkSnapshot &s) {
     return w.size();
 }
 
+size_t encode_memory(std::span<uint8_t> out, const MemorySnapshot &s) {
+    Writer w(out);
+    w.u32(s.ram_total); w.u32(s.ram_static);
+    w.u32(s.psp_size); w.u32(s.psp_now); w.u32(s.psp_low);
+    w.u32(s.msp_size); w.u32(s.msp_low);
+    w.u32(s.fs_blocks); w.u32(s.fs_used);
+    w.u32(s.image_bytes); w.u32(s.flash_bytes);
+    w.u16(s.fs_block_bytes);
+    w.u8(static_cast<uint8_t>((s.fs_valid ? 1 : 0) | (s.ok ? 2 : 0)));
+    return w.size();
+}
+
 size_t encode_identify_progress(std::span<uint8_t> out, const IdentifyProgress &p) {
     Writer w(out);
     const size_t n = std::min<size_t>(p.num_sink_pdos, p.sink_pdos.size());
