@@ -377,7 +377,12 @@ def open_transport(path=None, wait_sec=0.0):
     path always the vendor pipe. Both take the device lock and give it back in close()."""
     if k2_usb.vendor_wanted(path):
         return k2_usb.UsbVendorTransport(path, wait_sec)
-    return LinuxHidTransport(path, wait_sec)
+    t = LinuxHidTransport(path, wait_sec)
+    # the bootloader shares the VID:PID; one app frame leaves it deaf to the flasher until a USB reset
+    if k2_flasher.classify_enumeration([getattr(t, "info", None) or {}]) == "bootloader":
+        t.close()
+        raise BootloaderDetected("the K2 enumerates as the bootloader (DFU): no app frames are sent to it")
+    return t
 
 
 class RemoteLink:
@@ -5131,6 +5136,10 @@ def main(argv=None):
 def _main(a):
     try:
         transport = open_transport(a.path)
+    except BootloaderDetected:
+        print("The K2 enumerates as the bootloader: it is in DFU mode, not running the application. "
+              "Flash with tools/k2_flasher.py or replug it without a button held.", file=sys.stderr)
+        return 3
     except Exception as e:
         print(f"cannot open K2: {e}", file=sys.stderr)
         return 2

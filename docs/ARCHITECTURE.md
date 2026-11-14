@@ -1047,6 +1047,18 @@ the app. `k2::dfu::enter()` clears the K200 word (0x08004010 and
   0x080E3000.
 - Flasher states: `--auto-dfu` tells "app answering" (ping answered) from "hung" (the device enumerates
   as the app but ping times out): hung means replug in DFU, with a hint to check the log for `[FAULT]`.
+- Deaf bootloader (reverse-engineered on hardware, 2026-11-14): the bootloader re-arms its OUT endpoint only
+  after it answered a frame it understands. One frame it does not understand (an app `PING`) leaves every
+  later write timing out ("HID write failed: Connection timed out") until a USB bus reset (2/2 on a bootloader
+  that answered the flasher a moment before). It shares the app's VID:PID, so anything that opens "every K2" can
+  do it: the dashboard (`tools/web/k2.html`) did, by auto-opening the bootloader on the WebHID connect event
+  and pinging it ~0.6 s after it enumerated. Rules: host code tells the bootloader by its USB strings
+  (product `WITRN.K2`, serial `20230727`) and sends it no app frames (`k2_remote.open_transport` raises
+  `BootloaderDetected` before writing, `k2proto.hidRole` keeps the dashboard off it); `k2_flasher` resets the
+  USB port (`USBDEVFS_RESET`, what `usbreset 0716:5060` does) before each retry of its first bootloader
+  handshake, which brings a deaf bootloader back (the hidraw node survives the reset, so a browser tab sees no
+  new device and does not write again). The WebHID flasher cannot reset the port: it tells the user to close
+  the other page and replug.
 - Recovery: hold MINUS while plugging in USB, then flash. Flashing rewrites the page, which restores
   the marker. If the bit-clear does not force DFU the app boots again; next candidate is the commit
   marker 0x08004400 (change `kDfuMarkerAddr`).

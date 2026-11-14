@@ -151,6 +151,7 @@ class LinuxHidTransport:
             selected = devices[0]
 
         self.path = selected["path"]
+        self.info = selected        # the enumeration dict (USB strings): tells the bootloader from the app
         self.device = None
 
         if hasattr(self.hid, "device"):
@@ -985,15 +986,64 @@ class RealDfuEnv:
         return time.monotonic()
 
 
-def open_with_retry(open_fn, handshake_fn, delays=(0.5, 1.0, 2.0), sleep=time.sleep, report=print):
+USBDEVFS_RESET = 0x5514   # _IO('U', 20): port reset of a usbfs device node, the ioctl usbreset(1) sends
+
+
+def usb_node_of_hidraw(hidraw_path, sys_root="/sys"):
+    """The usbfs node (/dev/bus/usb/BBB/DDD) of the USB device behind a hidraw node, read from sysfs: the
+    nearest parent of the HID device with busnum and devnum. No USB traffic."""
+    name = os.path.basename(os.fsdecode(hidraw_path))
+    link = os.path.join(sys_root, "class", "hidraw", name, "device")
+    if not os.path.exists(link):
+        raise FileNotFoundError(f"{link} does not exist")
+    d = os.path.realpath(link)
+    top = os.path.realpath(sys_root)
+    while d.startswith(top + os.sep):
+        bus, dev = os.path.join(d, "busnum"), os.path.join(d, "devnum")
+        if os.path.isfile(bus) and os.path.isfile(dev):
+            with open(bus) as fb, open(dev) as fd:
+                return f"/dev/bus/usb/{int(fb.read()):03d}/{int(fd.read()):03d}"
+        d = os.path.dirname(d)
+    raise FileNotFoundError(f"no USB device above {link}")
+
+
+def usb_reset_bootloader():
+    """USB port reset of the K2 bootloader (found by its USB strings); returns the usbfs node.
+
+    Why: the bootloader re-arms its OUT endpoint only after it answered a frame, so one frame it does not
+    understand (an app-protocol PING, e.g. from a browser tab with the dashboard open: it opens every
+    0716:5060 HID device the moment it enumerates) leaves it refusing every later write ("HID write failed:
+    Connection timed out") until a bus reset. The reset keeps the hidraw node (usbhid survives it), so the
+    tab gets no new connect event and does not write again."""
+    import fcntl
+    devs = [d for d in LinuxHidTransport.enumerate_k2() if classify_enumeration([d]) == "bootloader"]
+    if not devs:
+        raise RuntimeError("no bootloader HID device to reset")
+    node = usb_node_of_hidraw(devs[0]["path"])
+    fd = os.open(node, os.O_WRONLY)
+    try:
+        fcntl.ioctl(fd, USBDEVFS_RESET, 0)
+    finally:
+        os.close(fd)
+    return node
+
+
+def open_with_retry(open_fn, handshake_fn, delays=(0.5, 1.0, 2.0), sleep=time.sleep, report=print, recover=None):
     """Open the bootloader and run its first handshake, retrying with a growing settle delay.
 
     A bootloader that came out of a soft reset may need longer than a power-on one before it
     answers. Every failed handle is closed before the next attempt (fresh enumeration each time).
+    `recover` (optional, returns a name for the report) runs before every retry: the flasher passes
+    usb_reset_bootloader, which brings back a bootloader that a stray frame left deaf.
     Returns the open transport; raises DfuEntryError listing every error.
     """
     errors = []
     for n, delay in enumerate(delays, 1):
+        if n > 1 and recover is not None:
+            try:
+                report(f"  USB reset of {recover()} (a frame the bootloader did not understand leaves it deaf)")
+            except Exception as exc:
+                report(f"  USB reset failed: {type(exc).__name__}: {exc}")
         sleep(delay)
         transport = None
         try:
@@ -1262,9 +1312,10 @@ def run(args, log):
             how = ensure_dfu(RealDfuEnv(args.path, reset=args.dfu_reset))
             print("K2 is already in DFU mode." if how == "already-dfu"
                   else "K2 entered the bootloader (marker cleared by the app).")
-            # first handshake with retries: a soft-reset bootloader can be slow to answer
+            # first handshake with retries: a soft-reset bootloader can be slow to answer, and one that
+            # another program wrote a stray frame to stays deaf until a USB reset (done before each retry)
             transport = open_with_retry(lambda: LinuxHidTransport(args.path, wait_sec=5.0),
-                                        lambda t: Protocol(t).command(3))
+                                        lambda t: Protocol(t).command(3), recover=usb_reset_bootloader)
         except DfuEntryError as e:
             print(f"Auto-DFU failed: {e}", file=sys.stderr)
             sys.exit(1)

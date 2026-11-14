@@ -396,6 +396,116 @@ class RemoteDfuCommand(unittest.TestCase):
         self.assertIn("bootloader", kr.render("dfu", {"dfu": True}))
 
 
+class WedgedBootloader(unittest.TestCase):
+    """2026-11-14: one frame the bootloader does not understand (the dashboard's app PING, written by a browser
+    tab that auto-opens every 0716:5060 HID device as soon as it enumerates) leaves the bootloader's OUT endpoint
+    refusing data until a USB bus reset: every later write times out. The flasher resets the port before a retry."""
+
+    def test_a_reset_before_the_retry_brings_the_bootloader_back(self):
+        state = {"wedged": True, "resets": 0}
+
+        def handshake(t):
+            if state["wedged"]:
+                raise kf.ProtocolError("HID write failed: Connection timed out")
+
+        def recover():
+            state["resets"] += 1
+            state["wedged"] = False
+            return "/dev/bus/usb/007/052"
+        lines = []
+        t = kf.open_with_retry(FakeTransport, handshake, (0, 0, 0), lambda s: None, report=lines.append,
+                               recover=recover)
+        self.assertIsInstance(t, FakeTransport)
+        self.assertEqual(state["resets"], 1)
+        self.assertEqual(len(lines), 3)
+        self.assertIn("attempt 1", lines[0])
+        self.assertIn("USB reset of /dev/bus/usb/007/052", lines[1])
+        self.assertIn("attempt 2", lines[2])
+        self.assertIn("ok", lines[2])
+
+    def test_no_reset_when_the_first_attempt_answers(self):
+        resets = []
+        kf.open_with_retry(FakeTransport, lambda t: None, (0, 0, 0), lambda s: None, report=lambda m: None,
+                           recover=lambda: resets.append(1))
+        self.assertEqual(resets, [])
+
+    def test_a_failed_reset_is_reported_and_the_retries_go_on(self):
+        def recover():
+            raise OSError(13, "Permission denied")
+        lines = []
+        with self.assertRaises(kf.DfuEntryError) as cm:
+            kf.open_with_retry(FakeTransport, lambda t: (_ for _ in ()).throw(kf.ProtocolError("timed out")),
+                               (0, 0, 0), lambda s: None, report=lines.append, recover=recover)
+        self.assertEqual(sum("attempt" in m for m in lines), 3)
+        self.assertEqual(sum("USB reset failed" in m and "Permission denied" in m for m in lines), 2)
+        self.assertIn("3 attempts", str(cm.exception))
+
+
+class UsbNodeOfHidraw(unittest.TestCase):
+    """The usbfs node behind a hidraw node comes from sysfs: the nearest parent with busnum/devnum."""
+
+    def test_walks_up_from_the_hid_device_to_the_usb_device(self):
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            usb = Path(d, "devices/pci0000:00/usb7/7-1/7-1.1.1.2.4")
+            hid = usb / "7-1.1.1.2.4:1.0" / "0003:0716:5060.00E0"
+            hid.mkdir(parents=True)
+            (usb / "busnum").write_text("7\n")
+            (usb / "devnum").write_text("52\n")
+            (hid.parent / "bInterfaceNumber").write_text("00\n")
+            cls = Path(d, "class/hidraw/hidraw8")
+            cls.mkdir(parents=True)
+            os.symlink(os.path.relpath(hid, cls), cls / "device")
+            self.assertEqual(kf.usb_node_of_hidraw(b"/dev/hidraw8", sys_root=d), "/dev/bus/usb/007/052")
+            self.assertEqual(kf.usb_node_of_hidraw("/dev/hidraw8", sys_root=d), "/dev/bus/usb/007/052")
+            with self.assertRaises(FileNotFoundError):
+                kf.usb_node_of_hidraw("/dev/hidraw9", sys_root=d)
+
+
+class RemoteNeverPingsTheBootloader(unittest.TestCase):
+    """k2_remote's channel refuses a device that enumerates as the bootloader before any write: an app frame
+    would leave the bootloader deaf to the flasher until a USB reset (2026-11-14)."""
+
+    class FakeHid:
+        def __init__(self, info):
+            self.info, self.written, self.closed = info, [], False
+
+        def write(self, frame):
+            self.written.append(frame)
+            return len(frame)
+
+        def close(self):
+            self.closed = True
+
+    def open_with(self, info):
+        made = []
+        saved = kr.LinuxHidTransport, kr.k2_usb.vendor_wanted
+
+        def factory(path=None, wait_sec=0.0):
+            made.append(self.FakeHid(info))
+            return made[-1]
+        kr.LinuxHidTransport, kr.k2_usb.vendor_wanted = factory, (lambda path=None: False)
+        try:
+            return kr.open_transport(None), made
+        except kr.BootloaderDetected as e:
+            return e, made
+        finally:
+            kr.LinuxHidTransport, kr.k2_usb.vendor_wanted = saved
+
+    def test_bootloader_is_refused_unwritten_and_closed(self):
+        got, made = self.open_with(BOOT)
+        self.assertIsInstance(got, kr.BootloaderDetected)
+        self.assertIn("bootloader", str(got))
+        self.assertEqual(made[0].written, [])
+        self.assertTrue(made[0].closed)
+
+    def test_app_is_returned_open(self):
+        got, made = self.open_with(APP)
+        self.assertIs(got, made[0])
+        self.assertFalse(made[0].closed)
+
+
 class FlasherCli(unittest.TestCase):
     def test_flash_accepts_auto_dfu(self):
         p = kf.build_parser()
