@@ -288,6 +288,15 @@ AVS): a typical list (SPR AVS 9-20 V 111 points, PPS 3.3-11 V and 3.3-21 V 256, 
 default-on PPS sweep takes nothing from an AVS sweep that is turned on; a list past 640 points sweeps fewer APDOs. A journal of a run without the sweep bit
 (older firmware) resumes without sweep rows.
 
+Limits of the PdLow placement (hardware baseline 2026-11-14 on the IQ4, host tests
+`test_units_pd_alone_leaves_a_low_starting_sweep_out` and `test_default_sweep_on_a_low_latch_source`):
+- A unit list without `pd-low` (`--units pd`) leaves out the sweep of a 3.3 V APDO, together with its low min rows. Use
+  `--units pd,pd-low` or no list.
+- A self-powered run skips the whole PdLow unit ("needs external power"), so no 3.3 V APDO is swept.
+- On a `latch-off-low-pps` source the sweep's first point (3.3 V) cuts the source again, after the APDO's own 3.3 V row.
+  The sweep row fails "VBUS cut, source recovered" (or skips "source shut off") with no point recorded, the part above
+  5 V included.
+
 Sessions: Legacy (1), Pd (2), Legacy (3), PdLow (4); a session boundary is only a mode change, so a custom order that
 puts PD first, or drops a family, plans fewer or more attaches. The plan still needs the source caps before the PD
 unit: they are taken from caps heard (unacknowledged) during the first Legacy attach, or from the first Pd attach.

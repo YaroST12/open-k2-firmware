@@ -4153,6 +4153,28 @@ static void test_default_run_sweeps_each_pps_apdo_after_its_checks() {
     std::printf("[default-sweep] %zu rows of %zu (kMaxSteps), sweep rows at %d and %d\n", steps.size(), ct::kMaxSteps,
                 sweep_at[0], sweep_at[1]);
 }
+// Hardware baseline 2026-11-14 (Anker IQ4, PPS 3.3-11 V 5 A, `charger-sweep on`, `charger-test start --units pd`): no sweep
+// row. The sweep row of a 3.3 V APDO starts at 3.3 V, so it is a PdLow row, and a unit list without pd-low leaves it out with
+// the APDO's other low rows. The same list with pd-low (or the default order) has it.
+static void test_units_pd_alone_leaves_a_low_starting_sweep_out() {
+    for (const bool with_low : {false, true}) {
+        Fake f;
+        f.caps.num_pdos = 6; f.caps.pdos[6] = {};   // the IQ4's list: five fixed levels, one APDO
+        f.caps.pdos[5] = pd::decode_pdo(0xc0000000 | (110u << 17) | (33u << 8) | 100);   // pos 6: PPS 3.3-11 V 5 A
+        ct::Runner r(f);
+        ct::Options o; o.pps_sweep = true;
+        o.units.add(ct::Unit::Pd);
+        if (with_low) o.units.add(ct::Unit::PdLow);
+        CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+        unsigned sweeps = 0, low_rows = 0;
+        for (const auto& s : r.steps()) {
+            sweeps += ct::is_sweep(s);
+            low_rows += ct::unit_of(s) == ct::Unit::PdLow;
+        }
+        CHECK_EQ(sweeps, with_low ? 1u : 0u);
+        CHECK_EQ(low_rows > 0, with_low);
+    }
+}
 // PD Stress borrows the deep sweep's point buffer: refused while a run is on, empties the view when granted, hands out the whole buffer.
 static void test_claim_sweep_record_lends_the_point_buffer() {
     Fake f;
@@ -4679,6 +4701,46 @@ static void test_no_request_into_an_invalid_list_after_a_recovered_cut() {
     unsigned no_caps = 0;
     for (const auto& s : r.steps()) no_caps += s.detail == 128 + unsigned(pd::Err::NoCaps);
     CHECK_EQ(no_caps, 0u);
+}
+// A default-run sweep on a latch-off-low-pps source (the C135 shape). The APDO's 3.3 V check row runs before its sweep row, both
+// in PdLow, and the sweep's first point is 3.3 V again. A source that cuts and recovers cuts again there: the sweep row fails
+// "VBUS cut, source recovered" with no point, so the APDO's whole curve is lost, the part above 5 V included. A source that stays
+// off skips the sweep row with the run's shut-off reason. Either way the run ends Done and the other APDO's sweep is kept.
+// (Characterization of the 2026-11-14 default; starting the sweep above a cut low edge is an open decision.)
+static void test_default_sweep_on_a_low_latch_source() {
+    for (const bool recovers : {true, false}) {
+        Fake f; low_pps_caps(f); f.latch_mv = 3300; f.latch_delay_ms = 300;
+        if (recovers) { f.recover_after_ms = 3300; f.caps_after_ms = 700; }
+        ct::Options o = kPd; o.pps_sweep = true;
+        ct::Runner r(f); CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+        // The Fake's recovery is one-shot (it disarms the latch); the real source cuts again on the next 3.3 V request, the sweep's
+        // first point: re-arm it once the first cut has come back.
+        bool rearmed = !recovers;
+        for (unsigned n = 0; n < 4000; ++n) {
+            f.tick(r, 100);
+            if (!rearmed && f.in.pd.source_hard_resets > 0 && !f.latched) { f.latch_mv = 3300; f.recover_after_ms = 3300; rearmed = true; }
+        }
+        CHECK_EQ(r.state(), ct::State::Done);
+        const ct::Reason cut = recovers ? ct::Reason::CutRecovered : ct::Reason::ShutOff;
+        unsigned checks = 0, sweeps = 0;
+        for (const auto& s : r.steps()) {
+            if (s.algorithm != A::Pps || s.pos != 6) continue;
+            if (ct::is_sweep(s)) {
+                ++sweeps;
+                CHECK_EQ(int(s.verdict), int(recovers ? ct::Verdict::Fail : ct::Verdict::Skip));
+                CHECK_EQ(int(s.reason), int(cut));
+            } else if (s.mv == 3300) {
+                ++checks;
+                CHECK_EQ(int(s.verdict), int(ct::Verdict::Fail));
+                CHECK_EQ(int(s.reason), int(cut));
+            }
+        }
+        CHECK_EQ(checks, 1u); CHECK_EQ(sweeps, 1u);
+        unsigned pos6_points = 0, pos7_points = 0;
+        for (const auto& w : r.sweep_view().rows) (w.pos == 6 ? pos6_points : pos7_points) += w.n;
+        CHECK_EQ(pos6_points, 0u);     // nothing of the 3.3-11 V curve, not even the part above 5 V
+        CHECK_EQ(pos7_points, 161u);   // the 5-21 V APDO's sweep (Pd unit, before the cut) is whole
+    }
 }
 static void test_every_reason_has_a_name() {
     for (unsigned v = 1; v <= unsigned(ct::Reason::StepResolution); ++v) {   // 0 = None, shown as nothing
@@ -7102,5 +7164,7 @@ int main() {
     test_pps_step_walk_fails_a_flat_source_as_steps_ignored(); test_pps_step_walk_fails_a_source_that_rounds_to_100mv_on_the_jump();
     test_an_inline_refusal_names_what_latched_it();
     test_default_run_sweeps_each_pps_apdo_after_its_checks();
+    test_units_pd_alone_leaves_a_low_starting_sweep_out();
+    test_default_sweep_on_a_low_latch_source();
     return test_report("test_charger_test");
 }
