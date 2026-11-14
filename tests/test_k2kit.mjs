@@ -402,6 +402,86 @@ test("specResultHtml: a run that stopped early or could not confirm its release 
   assert.match(run, /running/i);
 });
 
+// ---- action cells from the shared arm state --------------------------------------------------------------------------------
+test("actCell: idle, armed with the draining bar, disabled and busy", () => {
+  const a = { id: "pd-request", label: "REQUEST", reason: "" };
+  assert.doesNotMatch(K.actCell(a, null, 0), /k-armed/);
+  const arm = { id: "pd-request", at: 1000 };
+  const armed = K.actCell(a, arm, 3500);
+  assert.match(armed, /k-armed/);
+  assert.match(armed, /CONFIRM/);
+  assert.match(armed, /style="width:50%"/, "2.5 s of 5 s left");
+  assert.doesNotMatch(K.actCell(a, arm, 7000), /k-armed/, "the window has run out");
+  assert.doesNotMatch(K.actCell({ id: "other", label: "OTHER" }, arm, 3500), /k-armed/, "one arm at a time");
+  assert.match(K.actCell(a, null, 0, "disabled"), /disabled/);
+  assert.match(K.actCell(a, null, 0, "busy"), /k-busy/);
+  assert.match(K.actCell(Object.assign({ armedLabel: "SEND NOW" }, a), arm, 1000), /SEND NOW/);
+});
+
+test("stepperHtml: one group per value with square buttons, a disabled end stops the press", () => {
+  const html = K.stepperHtml([
+    { name: "Voltage", value: "9.00 V", dec: [{ dir: "mv--", text: "-1" }, { dir: "mv-", text: "-0.1" }], inc: [{ dir: "mv+", text: "+0.1" }, { dir: "mv++", text: "+1", off: true }] },
+    { name: "Current", value: "3.00 A", dec: [{ dir: "ma-", text: "-0.25" }], inc: [{ dir: "ma+", text: "+0.25" }] }
+  ]);
+  assert.match(html, /9\.00 V/);
+  assert.match(html, /data-step="mv--"/);
+  assert.match(html, /data-step="ma\+"/);
+  assert.match(html, /data-step="mv\+\+"[^>]*disabled/);
+  assert.doesNotMatch(html, /data-step="mv-"[^>]*disabled/);
+  assert.match(html, /aria-label="Voltage"/);
+});
+
+// ---- PD Spec Check start: the family picker and the progress line ----------------------------------------------------------
+test("specFamilyMask: one bit per family in the engine's order; none picked is refused by returning 0", () => {
+  assert.equal(K.specFamilyMask([true, true, true, true, true, true]), 0x3f);
+  assert.equal(K.specFamilyMask([true, false, false, false, true, false]), 0x11);
+  assert.equal(K.specFamilyMask([false, false, false, false, false, false]), 0);
+  assert.equal(K.SPEC_FAMILY_NOTES.length, P.PDSPEC_FAMILIES.length, "one note per family");
+});
+
+test("specProgress: the running line names the family, the item, the elapsed time and the fail count", () => {
+  const st = { state: "running", stop: "running", family: "PPS steps", item: 2, items: 5, fails: 1, passes: 3, skips: 0, elapsed_s: 75, start: "ok", release_unconfirmed: false };
+  const p = K.specProgress(st);
+  assert.match(p.text, /PPS steps/);
+  assert.match(p.text, /2 of 5/);
+  assert.match(p.text, /1:15/);
+  assert.equal(p.tone, "info");
+  const refused = K.specProgress({ state: "idle", start: "no PD source" });
+  assert.equal(refused.tone, "error");
+  assert.match(refused.text, /no PD source/);
+  assert.equal(K.specProgress({ state: "idle", start: "ok" }).tone, "info");
+  assert.equal(K.specProgress({ state: "finished", stop: "done", start: "ok", fails: 0, release_unconfirmed: false }).tone, "ok");
+  assert.equal(K.specProgress({ state: "finished", stop: "done", start: "ok", fails: 2, release_unconfirmed: false }).tone, "error");
+  assert.equal(K.specProgress({ state: "finished", stop: "cancelled", start: "ok", fails: 0, release_unconfirmed: false }).tone, "caution");
+});
+
+// ---- cables page lists as RowLists -----------------------------------------------------------------------------------------
+test("savedRows and cardRows: the id is the number the firmware renames or deletes by", () => {
+  const rows = K.savedRows([{ seq: 7, name: "Anker 240W", vid: 0x2b1d, pid: 0x1234 }, { seq: 9, name: "", vid: 1, pid: 2 }]);
+  assert.deepEqual(rows.map((r) => r.id), ["7", "9"]);
+  assert.equal(rows[0].label, "Anker 240W");
+  assert.match(rows[0].value, /2B1D:1234/i);
+  assert.equal(rows[1].label, "(unnamed)");
+  const cards = K.cardRows([{ no: 3, name: "IQ4", vid: 0x291a, pid: 0x4003, pdos: 6, runs: 2, pass: 40, fail: 1, skip: 3, state: "ok" }]);
+  assert.equal(cards[0].id, "3");
+  assert.match(cards[0].label, /#3/);
+  assert.match(cards[0].label, /IQ4/);
+  assert.match(cards[0].value, /40/);
+  assert.match(cards[0].note, /6 PDOs/);
+  assert.deepEqual(K.savedRows([]), []);
+});
+
+test("unmatchedView: what the firmware held back, with the counts, or an empty note", () => {
+  const empty = K.unmatchedView({ total: 0, held: 0, entries: [] });
+  assert.equal(empty.rows.length, 1);
+  assert.match(empty.footer, /nothing/i);
+  const some = K.unmatchedView({ total: 5, held: 2, entries: [{ sop: "SOP'", header: 0x4a1, words: [0xff008001] }, { sop: "SOP''", header: 0x4a2, words: [] }] });
+  assert.equal(some.rows.length, 2);
+  assert.match(some.rows[0].value, /FF008001/);
+  assert.match(some.rows[0].label, /SOP'/);
+  assert.match(some.footer, /2 of 5/);
+});
+
 // ---- the embed in k2.html stays in sync ------------------------------------------------------------------------------------
 test("k2.html embeds the current k2kit.js and k2kit.css", () => {
   const html = readFileSync(path.join(root, "tools/web/k2.html"), "utf8");

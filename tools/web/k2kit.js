@@ -330,7 +330,67 @@ var K2Kit = (function () {
     return kvTableHtml(head, { footer: parts.join(" "), tone: tone }) + resultGridHtml(lines);
   }
 
+  // ---- the shared arm state as ActionCells, steppers, the spec picker and the cable lists ------------------------------------------
+  // a: {id, label, armedLabel?, reason?}; arm is the one shared {id, at} or null; off is "busy", any other truthy value (disabled) or falsy.
+  function actCell(a, arm, now, off) {
+    var left = arm && arm.id === a.id ? armLeftMs(arm, now) : 0;
+    var st = off ? (off === "busy" ? "busy" : "disabled") : left > 0 ? "armed" : "idle";
+    return actionCellHtml({ id: a.id, label: a.label, armedLabel: a.armedLabel, reason: a.reason, state: st, leftMs: left });
+  }
+  // groups: [{name, value, dec: [{dir, text, off?}], inc: [...]}]; a button carries data-step with its direction.
+  function stepperHtml(groups) {
+    var btn = function (b) { return '<button type="button" class="k-btn" data-step="' + esc(b.dir) + '"' + (b.off ? " disabled" : "") + ">" + esc(b.text) + "</button>"; };
+    return '<div class="k-steppers">' + groups.map(function (g) {
+      return '<div class="k-step" role="group" aria-label="' + esc(g.name) + '"><span class="k-step-n">' + esc(g.name) + "</span>" +
+        g.dec.map(btn).join("") + '<span class="k-step-v">' + esc(g.value) + "</span>" + g.inc.map(btn).join("") + "</div>";
+    }).join("") + "</div>";
+  }
+  // One note per family, in the engine's order (Transitions, PPS steps, PPS timeout, EPR timeout, Hard Reset, Detach).
+  var SPEC_FAMILY_NOTES = ["Steps through the fixed levels", "Walks a programmable range", "Waits out the PPS keep-alive", "Waits out the EPR keep-alive",
+                           "Hard Resets the source", "Detaches the source"];
+  function specFamilyMask(checked) {
+    var m = 0;
+    checked.forEach(function (on, i) { if (on) m |= 1 << i; });
+    return m;
+  }
+  function clock(s) { return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); }
+  // The status block (k2proto decodePdSpecStatus) as one footer line and its tone.
+  function specProgress(st) {
+    if (st.start && st.start !== "ok") return { tone: "error", text: "The run did not start: " + st.start + "." };
+    if (st.state === "running") {
+      return { tone: "info", text: "Running: " + st.family + ", " + st.item + " of " + st.items + ", " + clock(st.elapsed_s) + ", " + st.fails + " failed." };
+    }
+    if (st.state === "finished") {
+      if (st.stop !== "done") return { tone: "caution", text: "Stopped early: " + st.stop + "." };
+      if (st.release_unconfirmed) return { tone: "caution", text: "Finished, but the 5 V release was not confirmed." };
+      return st.fails > 0 ? { tone: "error", text: "Finished: " + st.fails + " check" + (st.fails > 1 ? "s" : "") + " failed." } : { tone: "ok", text: "Finished: all checks passed." };
+    }
+    return { tone: "info", text: "No run yet. Pick the families and start." };
+  }
+  function savedRows(list) {
+    return list.map(function (c) {
+      return { id: String(c.seq), label: c.name || "(unnamed)", value: hexw(c.vid, 4) + ":" + hexw(c.pid, 4) };
+    });
+  }
+  function cardRows(list) {
+    return list.map(function (c) {
+      return { id: String(c.no), label: "#" + c.no + " " + (c.name || "(unnamed)"), value: c.pass + " pass " + c.fail + " fail " + c.skip + " skip",
+               note: hexw(c.vid, 4) + ":" + hexw(c.pid, 4) + ", " + c.pdos + " PDOs, " + c.runs + " runs, " + c.state };
+    });
+  }
+  function hexw(n, w) { return (n >>> 0).toString(16).toUpperCase().padStart(w, "0"); }
+  // What the firmware could not match during a learn: SOP' / SOP'' header and data words, newest the page can read.
+  function unmatchedView(t) {
+    if (!t.entries || !t.entries.length) return { rows: [{ label: "Held", value: "none" }], footer: "Nothing held back." };
+    return {
+      rows: t.entries.map(function (e) { return { label: e.sop + " " + hexw(e.header, 4), value: (e.words || []).map(hex8).join(" ") || "-" }; }),
+      footer: "Showing " + t.entries.length + " of " + t.total + " unmatched message" + (t.total === 1 ? "" : "s") + "."
+    };
+  }
+
   return {
+    actCell: actCell, stepperHtml: stepperHtml, SPEC_FAMILY_NOTES: SPEC_FAMILY_NOTES, specFamilyMask: specFamilyMask, specProgress: specProgress,
+    savedRows: savedRows, cardRows: cardRows, unmatchedView: unmatchedView,
     pdStep: pdStep, pdSelection: pdSelection, contractView: contractView, errorText: errorText, messageTableHtml: messageTableHtml,
     specResultHtml: specResultHtml,
     kvTableHtml: kvTableHtml, VERDICTS: VERDICTS, esc: esc, verdictCellHtml: verdictCellHtml, bracketRuns: bracketRuns, resultGridHtml: resultGridHtml,

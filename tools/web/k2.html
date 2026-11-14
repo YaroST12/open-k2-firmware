@@ -120,6 +120,48 @@ html[data-theme="dark"] {
 /* AlertBand and the page footer: the same tone-filled band, full width. */
 .k-alert { max-width: none; margin-top: 8px; }
 .k-panel { background: var(--k-surface); border: 1px solid var(--k-rule); padding: 10px 12px; font-family: var(--k-font); }
+
+/* The recent PD messages: time from the first row, direction, name (a cable-plug message says so), the data objects in hex. */
+.k-msg { font-family: var(--k-font); font-size: 12px; max-height: 260px; overflow: auto; border-bottom: 1px solid var(--k-rule); }
+.k-msg-row { display: grid; grid-template-columns: 72px 24px minmax(0, 1fr) minmax(0, 1.6fr); gap: 8px; padding: 3px 0; border-top: 1px solid var(--k-rule);
+             font-variant-numeric: tabular-nums; }
+.k-msg-row:first-child { border-top: 0; }
+.k-msg-t { color: var(--k-dim); }
+.k-msg-tx { color: var(--k-amp); } .k-msg-rx { color: var(--k-dim); }
+.k-msg-d { font-weight: 700; }
+.k-msg-c { color: var(--k-caution); font-style: normal; margin-left: 6px; }
+.k-msg-o { color: var(--k-dim); overflow-wrap: anywhere; }
+.k-msg-empty { padding: 8px 0; font: 13px var(--k-font); color: var(--k-dim); }
+
+/* Set-point steppers: a name, minus buttons, the value, plus buttons. Square buttons, no fill until pressed. */
+.k-steppers { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; font-family: var(--k-font); }
+.k-step { display: flex; align-items: center; gap: 4px; }
+.k-step-n { width: 72px; color: var(--k-dim); font-size: 12px; }
+.k-step-v { min-width: 84px; text-align: center; font: 700 15px var(--k-font); font-variant-numeric: tabular-nums; }
+.k-btn { min-width: 44px; min-height: 30px; padding: 0 8px; border: 0; border-radius: 0; background: var(--k-surface); color: inherit; cursor: pointer;
+         font: 13px var(--k-font); box-shadow: inset 0 0 0 1px var(--k-dim); }
+.k-btn:hover:not(:disabled) { box-shadow: inset 0 0 0 2px var(--k-focus); }
+.k-btn:focus-visible { outline: 2px solid var(--k-focus); outline-offset: 2px; }
+.k-btn:disabled { color: var(--k-faint); box-shadow: inset 0 0 0 1px var(--k-rule); cursor: not-allowed; }
+.k-btn.k-on { background: var(--k-focus-t); box-shadow: inset 0 0 0 2px var(--k-focus); }
+
+/* Page furniture: the panel heading, a note line, an action row, a family checkbox, a text input. */
+.k-h { margin: 0 0 8px; font: 700 13px var(--k-font); letter-spacing: .08em; text-transform: uppercase; color: var(--k-dim); }
+.k-sub { margin: 10px 0 4px; font: 12px var(--k-font); letter-spacing: .06em; text-transform: uppercase; color: var(--k-faint); }
+.k-note { font: 12px/16px var(--k-font); color: var(--k-dim); }
+.k-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 10px 0 4px; }
+.k-chk { display: grid; grid-template-columns: 14px minmax(0, 1fr); gap: 8px; align-items: baseline; padding: 6px 8px; cursor: pointer; font: 14px var(--k-font);
+         border-top: 1px solid var(--k-rule); }
+.k-chk input { position: absolute; opacity: 0; width: 0; height: 0; }
+.k-chk i { width: 10px; height: 10px; box-shadow: inset 0 0 0 1px var(--k-dim); }
+.k-chk input:checked + i { background: var(--k-focus); box-shadow: inset 0 0 0 1px var(--k-focus); }
+.k-chk input:focus-visible + i { outline: 2px solid var(--k-focus); outline-offset: 2px; }
+.k-chk small { display: block; color: var(--k-dim); font-size: 12px; }
+.k-in { min-height: 30px; padding: 0 8px; border: 0; border-radius: 0; background: var(--k-surface); color: inherit; font: 13px var(--k-font);
+        box-shadow: inset 0 0 0 1px var(--k-dim); }
+.k-in:focus-visible { outline: 2px solid var(--k-focus); outline-offset: 2px; }
+.k-pagefoot { position: sticky; bottom: 0; z-index: 5; }
+.k-pagefoot .k-foot { max-width: none; margin: 0; padding: 8px 12px; }
 </style>
 <style>
 :root {
@@ -2859,7 +2901,67 @@ var K2Kit = (function () {
     return kvTableHtml(head, { footer: parts.join(" "), tone: tone }) + resultGridHtml(lines);
   }
 
+  // ---- the shared arm state as ActionCells, steppers, the spec picker and the cable lists ------------------------------------------
+  // a: {id, label, armedLabel?, reason?}; arm is the one shared {id, at} or null; off is "busy", any other truthy value (disabled) or falsy.
+  function actCell(a, arm, now, off) {
+    var left = arm && arm.id === a.id ? armLeftMs(arm, now) : 0;
+    var st = off ? (off === "busy" ? "busy" : "disabled") : left > 0 ? "armed" : "idle";
+    return actionCellHtml({ id: a.id, label: a.label, armedLabel: a.armedLabel, reason: a.reason, state: st, leftMs: left });
+  }
+  // groups: [{name, value, dec: [{dir, text, off?}], inc: [...]}]; a button carries data-step with its direction.
+  function stepperHtml(groups) {
+    var btn = function (b) { return '<button type="button" class="k-btn" data-step="' + esc(b.dir) + '"' + (b.off ? " disabled" : "") + ">" + esc(b.text) + "</button>"; };
+    return '<div class="k-steppers">' + groups.map(function (g) {
+      return '<div class="k-step" role="group" aria-label="' + esc(g.name) + '"><span class="k-step-n">' + esc(g.name) + "</span>" +
+        g.dec.map(btn).join("") + '<span class="k-step-v">' + esc(g.value) + "</span>" + g.inc.map(btn).join("") + "</div>";
+    }).join("") + "</div>";
+  }
+  // One note per family, in the engine's order (Transitions, PPS steps, PPS timeout, EPR timeout, Hard Reset, Detach).
+  var SPEC_FAMILY_NOTES = ["Steps through the fixed levels", "Walks a programmable range", "Waits out the PPS keep-alive", "Waits out the EPR keep-alive",
+                           "Hard Resets the source", "Detaches the source"];
+  function specFamilyMask(checked) {
+    var m = 0;
+    checked.forEach(function (on, i) { if (on) m |= 1 << i; });
+    return m;
+  }
+  function clock(s) { return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); }
+  // The status block (k2proto decodePdSpecStatus) as one footer line and its tone.
+  function specProgress(st) {
+    if (st.start && st.start !== "ok") return { tone: "error", text: "The run did not start: " + st.start + "." };
+    if (st.state === "running") {
+      return { tone: "info", text: "Running: " + st.family + ", " + st.item + " of " + st.items + ", " + clock(st.elapsed_s) + ", " + st.fails + " failed." };
+    }
+    if (st.state === "finished") {
+      if (st.stop !== "done") return { tone: "caution", text: "Stopped early: " + st.stop + "." };
+      if (st.release_unconfirmed) return { tone: "caution", text: "Finished, but the 5 V release was not confirmed." };
+      return st.fails > 0 ? { tone: "error", text: "Finished: " + st.fails + " check" + (st.fails > 1 ? "s" : "") + " failed." } : { tone: "ok", text: "Finished: all checks passed." };
+    }
+    return { tone: "info", text: "No run yet. Pick the families and start." };
+  }
+  function savedRows(list) {
+    return list.map(function (c) {
+      return { id: String(c.seq), label: c.name || "(unnamed)", value: hexw(c.vid, 4) + ":" + hexw(c.pid, 4) };
+    });
+  }
+  function cardRows(list) {
+    return list.map(function (c) {
+      return { id: String(c.no), label: "#" + c.no + " " + (c.name || "(unnamed)"), value: c.pass + " pass " + c.fail + " fail " + c.skip + " skip",
+               note: hexw(c.vid, 4) + ":" + hexw(c.pid, 4) + ", " + c.pdos + " PDOs, " + c.runs + " runs, " + c.state };
+    });
+  }
+  function hexw(n, w) { return (n >>> 0).toString(16).toUpperCase().padStart(w, "0"); }
+  // What the firmware could not match during a learn: SOP' / SOP'' header and data words, newest the page can read.
+  function unmatchedView(t) {
+    if (!t.entries || !t.entries.length) return { rows: [{ label: "Held", value: "none" }], footer: "Nothing held back." };
+    return {
+      rows: t.entries.map(function (e) { return { label: e.sop + " " + hexw(e.header, 4), value: (e.words || []).map(hex8).join(" ") || "-" }; }),
+      footer: "Showing " + t.entries.length + " of " + t.total + " unmatched message" + (t.total === 1 ? "" : "s") + "."
+    };
+  }
+
   return {
+    actCell: actCell, stepperHtml: stepperHtml, SPEC_FAMILY_NOTES: SPEC_FAMILY_NOTES, specFamilyMask: specFamilyMask, specProgress: specProgress,
+    savedRows: savedRows, cardRows: cardRows, unmatchedView: unmatchedView,
     pdStep: pdStep, pdSelection: pdSelection, contractView: contractView, errorText: errorText, messageTableHtml: messageTableHtml,
     specResultHtml: specResultHtml,
     kvTableHtml: kvTableHtml, VERDICTS: VERDICTS, esc: esc, verdictCellHtml: verdictCellHtml, bracketRuns: bracketRuns, resultGridHtml: resultGridHtml,
