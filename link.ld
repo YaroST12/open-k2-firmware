@@ -104,6 +104,25 @@ SECTIONS
     *(.text._ZN2k22pd18caps_content_hash* .text._ZNK2k22pd11Interrogate7running*)
     *(.text._ZN2k23lcd12clip_to_band* .text._ZN2k23lcd12_GLOBAL__N_110PaintTimer*)
     *(.text.tu_hwfifo_write .text.tu_hwfifo_write.* .text.tu_hwfifo_read .text.tu_hwfifo_read.*)
+    /* QR encoder (src/ui/qr.cpp over the vendored generator): the share page encodes a version 13..21 symbol in one
+     * blocking call, the largest compute block on a user path (selftest qr_encode). The generator is third-party C,
+     * so its entry point, its static helpers (as named by -ffunction-sections, with any .constprop/.isra suffix) and
+     * its two block tables are pinned by section name. Without the pin the helpers land in the window by link order
+     * and the entry point past it. */
+    *(.text.qrcodegen_* .text._ZN2k22qr13encode_placed*)
+    *(.text.appendBitsToBuffer .text.appendBitsToBuffer.* .text.addEccAndInterleave .text.addEccAndInterleave.*)
+    *(.text.getNumDataCodewords .text.getNumDataCodewords.* .text.getNumRawDataModules .text.getNumRawDataModules.*)
+    *(.text.calcReedSolomonGenerator .text.calcReedSolomonGenerator.* .text.calcReedSolomonRemainder .text.calcReedSolomonRemainder.*)
+    *(.text.finiteFieldMultiply .text.finiteFieldMultiply.* .text.initializeFunctionModules .text.initializeFunctionModules.*)
+    *(.text.drawWhiteFunctionModules .text.drawWhiteFunctionModules.* .text.drawFormatBits .text.drawFormatBits.*)
+    *(.text.getAlignmentPatternPositions .text.getAlignmentPatternPositions.* .text.fillRectangle .text.fillRectangle.*)
+    *(.text.drawCodewords .text.drawCodewords.* .text.applyMask .text.applyMask.*)
+    *(.text.getPenaltyScore .text.getPenaltyScore.* .text.addRunToHistory .text.addRunToHistory.*)
+    *(.text.hasFinderLikePattern .text.hasFinderLikePattern.* .text.getModule .text.getModule.*)
+    *(.text.setModule .text.setModule.* .text.setModuleBounded .text.setModuleBounded.*)
+    *(.text.getBit .text.getBit.* .text.calcSegmentBitLength .text.calcSegmentBitLength.*)
+    *(.text.getTotalBits .text.getTotalBits.* .text.numCharCountBits .text.numCharCountBits.*)
+    *(.rodata.ECC_CODEWORDS_PER_BLOCK .rodata.ECC_CODEWORDS_PER_BLOCK.* .rodata.NUM_ERROR_CORRECTION_BLOCKS .rodata.NUM_ERROR_CORRECTION_BLOCKS.*)
     *libc.a:libc_a-memcpy.o(.text .text.*)
     *libc.a:libc_a-memmove.o(.text .text.*)
     *libc.a:libc_a-memset.o(.text .text.*)
