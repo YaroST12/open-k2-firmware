@@ -6,6 +6,49 @@
 using namespace k2::pd;
 
 int main() {
+    // A Hard Reset takes VBUS to vSafe0V on purpose (tPSHardReset + tSafe0V + tSrcRecover, EPR max, + tSrcTurnOn): VBUS low inside
+    // that window is the reset, not a detach (Anker IQ4, hardware 2026-11-14: ~0.93 s under 3 V against the 1 s rule).
+    {
+        DetachTracker t;
+        CHECK_EQ(int(t.update(0, 5000, true)), 0);
+        t.hard_reset(100);
+        CHECK_EQ(int(t.update(130, 200, true)), 0);
+        CHECK_EQ(int(t.update(1900, 0, true)), 0);   // 1.8 s dark: still the reset
+        CHECK_EQ(int(t.update(2300, 5000, true)), 0);
+        CHECK_EQ(int(t.update(6000, 5000, true)), 0);
+    }
+    // A source that stays dark past the window is gone: one rule length after the window closes.
+    {
+        DetachTracker t;
+        CHECK_EQ(int(t.update(0, 5000, true)), 0);
+        t.hard_reset(100);
+        const std::uint32_t end = 100 + kHardResetVbusMaskMs + kDetachVbusMs;
+        for (std::uint32_t ms = 105; ms < end; ms += 5) CHECK_EQ(int(t.update(ms, 0, true)), 0);
+        CHECK_EQ(int(t.update(end, 0, true)), 1);
+        CHECK_EQ(int(t.reason()), int(DetachReason::Vbus));
+    }
+    // A low VBUS already being timed when the reset comes starts over: the reset owns that dark time.
+    {
+        DetachTracker t;
+        CHECK_EQ(int(t.update(0, 5000, true)), 0);
+        CHECK_EQ(int(t.update(10, 2000, true)), 0);
+        t.hard_reset(900);
+        CHECK_EQ(int(t.update(1100, 0, true)), 0);
+        CHECK_EQ(int(t.update(2500, 0, true)), 0);
+    }
+    // The CC rule still holds inside the window (a real unplug during the reset), and reset() forgets the window.
+    {
+        DetachTracker t;
+        CHECK_EQ(int(t.update(0, 5000, true)), 0);
+        t.hard_reset(100);
+        CHECK_EQ(int(t.update(200, 0, false)), 0);
+        CHECK_EQ(int(t.update(700, 0, false)), 1);
+        CHECK_EQ(int(t.reason()), int(DetachReason::Cc));
+        t.reset();
+        CHECK_EQ(int(t.update(800, 5000, true)), 0);
+        CHECK_EQ(int(t.update(810, 0, true)), 0);
+        CHECK_EQ(int(t.update(1810, 0, true)), 1);
+    }
     // VBUS below 3.0 V: detach only after a full second.
     {
         DetachTracker t;

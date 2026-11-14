@@ -464,6 +464,7 @@ K2_HOT bool transmit(const pd::TxMsg& m) {
         flush_fifos();
         g_msg_id = 0;
         g_new_source = true;
+        if (!g_inline) g_detach.hard_reset(systick::millis());   // our own link resets: its VBUS gap is no detach (pd_passive.hpp)
         K2LOG("[PD] t=%u Hard reset sent\n", unsigned(systick::millis()));
         return true;
     }
@@ -2823,6 +2824,7 @@ K2_HOT void service() {
             flush_fifos();
             g_msg_id = 0;
             g_new_source = true;
+            if (!inline_now()) g_detach.hard_reset(systick::millis());   // the source resets our link: its VBUS gap is no detach
             sink().on_hard_reset_rx(systick::millis());
 #if K2_HOST_REPORT
             if (g_lh) {   // the host's Hard Reset: both ends are back to their default roles (UFP)

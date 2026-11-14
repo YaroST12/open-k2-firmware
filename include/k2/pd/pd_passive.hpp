@@ -5,6 +5,8 @@
 #pragma once
 #include <cstdint>
 
+#include "k2/pd/pd_spec_timing.hpp"
+
 namespace k2::pd {
 
 inline constexpr std::int32_t kDetachVbusMv = 3000;    // VBUS below this ...
@@ -14,6 +16,11 @@ inline constexpr std::uint32_t kDetachCcMs = 500;      // no Rp on the active CC
 inline constexpr std::uint32_t kDetachSinkMs = 500;   // inline: no sink Rd on the active CC for this long
 inline constexpr std::int32_t kSinkBandCenterMv = 1500, kSinkBandMv = 700;  // inline sink-present band
 inline constexpr std::uint32_t kRdHoldMs = 1500;       // Rd off after a detach: the charger sees an open line
+// A Hard Reset (either side) takes VBUS to vSafe0V on purpose and brings it back: tPSHardReset + tSafe0V to get there, tSrcRecover
+// dark (the EPR maximum: a reset that leaves EPR mode) and tSrcTurnOn back up (derived, 2385 ms). VBUS low inside this window is
+// the reset, not a detach; the 1 s rule alone fired inside a compliant reset (Anker IQ4: ~0.93 s under 3 V, hardware 2026-11-14).
+inline constexpr std::uint32_t kHardResetVbusMaskMs =
+    spec::kPsHardResetMaxMs + spec::kSafe0VMs + spec::kSrcRecoverEprMaxMs + spec::kSrcTurnOnMs;
 
 // A real sink's Rd on the active line, measured with none of our own Rd on it: the voltage sits near
 // 1.5 V (Rp 80 uA into 5.1 k = 0.4 V .. 3 A Rp 330 uA = 1.7 V), open Rp rises to the rail. Unknown (-1)
@@ -54,14 +61,22 @@ private:
     std::uint32_t until_ = 0;
 };
 
-// Passive detach: VBUS below 3.0 V for 1 s, or the CC line gone for 500 ms.
+// Passive detach: VBUS below 3.0 V for 1 s, or the CC line gone for 500 ms. After hard_reset() the VBUS rule waits out
+// kHardResetVbusMaskMs (the CC rule does not: a real unplug during the reset still counts).
 class DetachTracker {
 public:
     void reset() { *this = DetachTracker{}; }
+    // A Hard Reset went out or came in on the K2's own link: VBUS is unknown for the detach rule until the window is over, and a
+    // low VBUS already being timed starts over (the reset owns that dark time).
+    void hard_reset(std::uint32_t now) { hr_ = true; hr_at_ = now; vbus_low_ = false; }
     // `vbus_mv` < 0 means unknown (ignored). Returns true once when the partner is gone; call
     // reset() when attached again.
     // `sink_ok` is false only while inline and no sink Rd is on the line.
     bool update(std::uint32_t now, std::int32_t vbus_mv, bool cc_present, bool sink_ok = true) {
+        if (hr_) {
+            if (now - hr_at_ < kHardResetVbusMaskMs) vbus_mv = -1;
+            else hr_ = false;
+        }
         if (vbus_mv >= kDetachVbusMv) vbus_seen_ = true;
         // Only a VBUS that was there and went away counts: a reading that never reached 3 V may belong
         // to the other port (or an unpowered probe) while the partner on this one is alive.
@@ -94,8 +109,8 @@ public:
     bool sink_was_seen() const { return sink_seen_; }
     void inline_begin() { sink_seen_ = false; sink_gone_ = false; }
 private:
-    bool vbus_low_ = false, cc_gone_ = false, vbus_seen_ = false, sink_gone_ = false, sink_seen_ = false;
-    std::uint32_t vbus_since_ = 0, cc_since_ = 0, sink_since_ = 0;
+    bool vbus_low_ = false, cc_gone_ = false, vbus_seen_ = false, sink_gone_ = false, sink_seen_ = false, hr_ = false;
+    std::uint32_t vbus_since_ = 0, cc_since_ = 0, sink_since_ = 0, hr_at_ = 0;
     DetachReason reason_ = DetachReason::None;
 };
 
