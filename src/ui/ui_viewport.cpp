@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
 #include "k2/ui/ui_viewport.hpp"
+#include "k2/core/hot.h"
 #include <algorithm>
 
 namespace k2 {
@@ -8,10 +9,10 @@ namespace {
 ContentViewport* active;
 uint16_t g_line[240];   // the retained output row, shared: only `active` writes it
 constexpr int kLogicalW = 224, kLogicalH = 240;
-int mapped(int coordinate, int extent, int logical) { return coordinate * extent / logical; }
+K2_HOT int mapped(int coordinate, int extent, int logical) { return coordinate * extent / logical; }
 }
 
-Rect ContentViewport::native_rect(Rect source, int cell_offset) {
+K2_HOT Rect ContentViewport::native_rect(Rect source, int cell_offset) {
     if (!active || lcd::get_sink() == active->previous_) {
         source.x = static_cast<int16_t>(source.x + cell_offset);
         return source;
@@ -24,10 +25,16 @@ Rect ContentViewport::native_rect(Rect source, int cell_offset) {
             static_cast<int16_t>(std::min<int>(source.h, d.y + d.h - y))};
 }
 
-bool ContentViewport::stretched() { return active && lcd::get_sink() != active->previous_; }
+K2_HOT bool ContentViewport::stretched() { return active && lcd::get_sink() != active->previous_; }
 
-bool ContentViewport::scaled() {
+K2_HOT bool ContentViewport::scaled() {
     return stretched() && (active->destination_.w != kLogicalW || active->destination_.h != kLogicalH);
+}
+
+K2_HOT bool ContentViewport::panel_band(uint16_t& first, uint16_t& last) {
+    if (!stretched()) return lcd::sink_band(first, last);
+    Pause unscaled;
+    return lcd::sink_band(first, last);
 }
 
 namespace {
@@ -50,7 +57,7 @@ int ContentViewport::source_y(int panel_y) {
     return owner(panel_y - active->destination_.y, active->destination_.h, kLogicalH);
 }
 
-Rect ContentViewport::mapped_rect(Rect source) {
+K2_HOT Rect ContentViewport::mapped_rect(Rect source) {
     if (!active || lcd::get_sink() == active->previous_) return source;
     const Rect &d = active->destination_;
     const int x = mapped(source.x, d.w, kLogicalW), y = mapped(source.y, d.h, kLogicalH);
@@ -80,19 +87,47 @@ ContentViewport::Pause::Pause() : saved_(lcd::get_sink()) {
 }
 ContentViewport::Pause::~Pause() { lcd::set_sink(saved_); }
 
-void ContentViewport::begin(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t) {
+K2_HOT bool ContentViewport::row_in_band() const {
+    if (!has_band_) return true;
+    const int y0 = destination_.y + mapped(y0_ + row_, destination_.h, kLogicalH);
+    const int y1 = destination_.y + mapped(y0_ + row_ + 1, destination_.h, kLogicalH);
+    return y1 > band_first_ && y0 <= band_last_;
+}
+
+K2_HOT void ContentViewport::begin(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t) {
     active->x0_ = x0;
     active->y0_ = y0;
     active->width_ = static_cast<uint16_t>(x1 - x0 + 1);
     active->column_ = active->row_ = 0;
+    active->has_band_ = active->previous_ && active->previous_->band;
+    if (active->has_band_) active->previous_->band(&active->band_first_, &active->band_last_);
 }
-void ContentViewport::pixels(const uint16_t* px, uint32_t count) {
+K2_HOT void ContentViewport::pixels(const uint16_t* px, uint32_t count) {
     for (uint32_t i = 0; i < count; ++i) active->push(px[i]);
 }
-void ContentViewport::fill(uint16_t color, uint32_t count) {
+K2_HOT void ContentViewport::fill(uint16_t color, uint32_t count) {
+    if (active->has_band_) {
+        while (count) {
+            if (active->column_ == 0 && count >= active->width_ && !active->row_in_band()) {
+                count -= active->width_;
+                ++active->row_;
+                continue;
+            }
+            active->push(color);
+            --count;
+        }
+        return;
+    }
     for (uint32_t i = 0; i < count; ++i) active->push(color);
 }
-void ContentViewport::push(uint16_t color) {
+K2_HOT void ContentViewport::push(uint16_t color) {
+    if (has_band_ && !row_in_band()) {
+        if (++column_ == width_) {
+            column_ = 0;
+            ++row_;
+        }
+        return;
+    }
     const int x = x0_ + column_;
     const int start = mapped(x, destination_.w, kLogicalW);
     const int end = mapped(x + 1, destination_.w, kLogicalW);
@@ -103,11 +138,17 @@ void ContentViewport::push(uint16_t color) {
         ++row_;
     }
 }
-void ContentViewport::flush() {
+K2_HOT void ContentViewport::flush() {
     const int x0 = mapped(x0_, destination_.w, kLogicalW);
     const int x1 = mapped(x0_ + width_, destination_.w, kLogicalW);
-    const int y0 = mapped(y0_ + row_, destination_.h, kLogicalH);
-    const int y1 = mapped(y0_ + row_ + 1, destination_.h, kLogicalH);
+    int y0 = mapped(y0_ + row_, destination_.h, kLogicalH);
+    int y1 = mapped(y0_ + row_ + 1, destination_.h, kLogicalH);
+    if (has_band_) {
+        const int b0 = static_cast<int>(band_first_) - destination_.y;
+        const int b1 = static_cast<int>(band_last_) + 1 - destination_.y;
+        if (b0 > y0) y0 = b0;
+        if (b1 < y1) y1 = b1;
+    }
     if (x1 <= x0 || y1 <= y0) return;
     const lcd::Sink* saved = lcd::get_sink();
     lcd::set_sink(previous_);

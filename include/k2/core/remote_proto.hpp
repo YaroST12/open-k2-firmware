@@ -1203,10 +1203,22 @@ using StopInfo = k2::stop::Report;
 using LeaseInfo = k2::lease::Info;
 
 // Screenshot request option byte (optional payload) and the transport byte the reply carries after the format: with
-// kShotOptCdc the host asks for the stream on the CDC bulk pipe (it must have the port open), the reply says which one the
-// device will use. Without the option, or when the port is not open, the stream is HID reports as before.
-constexpr uint8_t kShotOptCdc = 1;
-constexpr uint8_t kShotViaHid = 0, kShotViaCdc = 1;
+// kShotOptCdc the host asks for the stream on the CDC bulk pipe (it must have the port open), with kShotOptCdcPacked it
+// also accepts compact bulk chunk headers instead of 64-byte HID frames. Without the option, or when the port is not
+// open, the stream uses HID reports.
+constexpr uint8_t kShotOptCdc = 1, kShotOptCdcPacked = 2;
+constexpr uint8_t kShotViaHid = 0, kShotViaCdc = 1, kShotViaCdcBulk = 2;
+constexpr uint8_t kShotBulkMagic[3] = {0xA6, 0x4B, 0x8A};
+constexpr size_t kShotBulkHeader = 8;
+constexpr size_t kShotBulkChunk = 512;
+
+inline void build_bulk_header(std::span<uint8_t> out, uint8_t seq, uint8_t strip, uint8_t flags, uint16_t len) {
+    if (out.size() < kShotBulkHeader) return;
+    out[0] = kShotBulkMagic[0]; out[1] = kShotBulkMagic[1]; out[2] = kShotBulkMagic[2];
+    out[3] = seq; out[4] = strip; out[5] = flags;
+    out[6] = static_cast<uint8_t>(len & 0xFF);
+    out[7] = static_cast<uint8_t>(len >> 8);
+}
 
 struct ScreenInfo { uint16_t width = 240, height = 240; uint8_t strip_rows = 4; uint8_t num_strips = 60; uint8_t transport = kShotViaHid; };
 

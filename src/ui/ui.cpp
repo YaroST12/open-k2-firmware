@@ -1259,6 +1259,11 @@ bool Ui::goto_page(uint8_t page, uint32_t now_ms) {
     return false;
 }
 
+bool Ui::capture_needs_scratch() const {
+    const Menu m = menu();
+    return m == Menu::Share || m == Menu::QrTest || m == Menu::PdStress;
+}
+
 void Ui::render_for_capture(uint32_t now_ms) {
     PaintBudget *const saved_budget = ctx_.budget;
     ctx_.budget = nullptr;   // captures always render the complete frame atomically

@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
 #include "k2/ui/rle565.hpp"
+#include "k2/core/hot.h"
 
 namespace k2 {
 
-size_t Rle565Encoder::next(uint8_t *out, size_t cap) {
+K2_HOT size_t Rle565Encoder::next(uint8_t *out, size_t cap) {
     size_t w = 0;
     while (pos_ < n_) {
         // Run length at pos_ (equal pixels), capped.

@@ -63,7 +63,7 @@ bool session_up() { return tud_mounted() && !tud_suspended() && tud_cdc_connecte
 
 // Whole text to the host, waiting briefly for FIFO room (the help text is longer than the FIFO).
 void put(std::string_view s) {
-    if (!g_session) return;
+    if (!g_session || usb::cdc_hold()) return;
     const std::uint32_t t0 = systick::millis();
     while (!s.empty()) {
         const std::uint32_t n = tud_cdc_write(s.data(), static_cast<std::uint32_t>(s.size()));
@@ -1160,21 +1160,23 @@ K2_HOT void poll() {
     std::array<char, 32> buf;
     for (std::uint32_t n; (n = tud_cdc_read(buf.data(), buf.size())) > 0;)
         for (std::uint32_t i = 0; i < n; i++) g_shell.feed(buf[i]);
-    // Edge stream: whole frames while the FIFO has room, a few per call, never waiting.
-    if (dpsniff::streaming()) {
-        dpsniff::stream_service();
-        std::array<std::uint8_t, edges::kFrameMax> f;
-        for (int i = 0; i < 8 && tud_cdc_write_available() >= f.size(); i++) {
-            const std::size_t n = dpsniff::stream_frame(f);
-            if (n == 0) break;
-            tud_cdc_write(f.data(), static_cast<std::uint32_t>(n));
+    if (!usb::cdc_hold()) {
+        // Edge stream: whole frames while the FIFO has room, a few per call, never waiting.
+        if (dpsniff::streaming()) {
+            dpsniff::stream_service();
+            std::array<std::uint8_t, edges::kFrameMax> f;
+            for (int i = 0; i < 8 && tud_cdc_write_available() >= f.size(); i++) {
+                const std::size_t n = dpsniff::stream_frame(f);
+                if (n == 0) break;
+                tud_cdc_write(f.data(), static_cast<std::uint32_t>(n));
+            }
         }
+        // Debug stream (k2/core/dbg_stream.hpp): whole frames while the FIFO has room, a bounded number per pass, never waiting.
+        if (dbg_hw::running())
+            dbg_hw::service(tud_cdc_write_available(), [](std::span<const std::uint8_t> f) {
+                tud_cdc_write(f.data(), static_cast<std::uint32_t>(f.size()));
+            });
     }
-    // Debug stream (k2/core/dbg_stream.hpp): whole frames while the FIFO has room, a bounded number per pass, never waiting.
-    if (dbg_hw::running())
-        dbg_hw::service(tud_cdc_write_available(), [](std::span<const std::uint8_t> f) {
-            tud_cdc_write(f.data(), static_cast<std::uint32_t>(f.size()));
-        });
     tud_cdc_write_flush();
 }
 

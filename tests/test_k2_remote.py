@@ -631,7 +631,7 @@ class Screenshot(unittest.TestCase):
         cdc = kr.CdcStream.__new__(kr.CdcStream)
         with self.assertRaises(kr.RemoteTimeout):
             kr._receive_screenshot(Link(), types.SimpleNamespace(debug=False), print, cdc)
-        self.assertEqual(calls, [bytes([kr.SHOT_OPT_CDC]), b""])
+        self.assertEqual(calls, [bytes([kr.SHOT_OPT_CDC | kr.SHOT_OPT_CDC_PACKED]), b""])
 
     def test_cdc_stream_resyncs_on_text_and_false_magic(self):
         r, w = os.pipe()
@@ -644,6 +644,47 @@ class Screenshot(unittest.TestCase):
         self.assertIsNone(cdc.read_frame(0.05))
         os.close(r)
         os.close(w)
+
+    def test_cdc_bulk_resyncs_on_text_and_false_magic(self):
+        r, w = os.pipe()
+        cdc = kr.CdcStream.__new__(kr.CdcStream)
+        cdc.fd, cdc.buf = r, bytearray()
+
+        def chunk(seq, strip, flags, payload):
+            return kr.SHOT_BULK_MAGIC + bytes([seq, strip, flags]) + len(payload).to_bytes(2, "little") + payload
+
+        class Link:
+            tap = None
+
+            def call(self, cmd, payload=b""):
+                self.got = payload
+                # 1-row test geometry: 2 strips would exceed height, so use 240 strips? Wait: decode_screen_info enforces rows*strips==240
+                return kr.Response(cmd, 5, 0, bytes([240, 0, 240, 0, 120, 2, 1, kr.SHOT_VIA_CDC_BULK]))
+
+        # Strip 0 split into 2 chunks, strip 1 split into 2 chunks; each strip has 240*120 = 28800 px = 225 * 128-px runs.
+        half = bytes([127, 0x34, 0x12]) * 112
+        rest0 = bytes([127, 0x34, 0x12]) * 113
+        half1 = bytes([127, 0x00, 0x00]) * 112
+        rest1 = bytes([127, 0x00, 0x00]) * 113
+        false_bad_flags = kr.SHOT_BULK_MAGIC + bytes([5, 0, 0x04, 1, 0]) + b"\x00"
+        false_nonzero_abort = kr.SHOT_BULK_MAGIC + bytes([5, 0, kr.SHOT_FLAG_ABORT, 1, 0]) + b"\x00"
+        wrong_seq = chunk(4, 0, kr.SHOT_FLAG_LAST, b"\x00\x00\x00")
+        stream = (
+            b"log line\r\n" + false_bad_flags + false_nonzero_abort + wrong_seq
+            + chunk(5, 0, 0, half) + chunk(5, 0, kr.SHOT_FLAG_LAST, rest0)
+            + b"mid-text" + chunk(5, 1, 0, half1) + chunk(5, 1, kr.SHOT_FLAG_LAST, rest1)
+        )
+        os.write(w, stream)
+        os.close(w)
+        link = Link()
+        info, strips, total, _ = kr._receive_screenshot(link, types.SimpleNamespace(debug=False), print, cdc)
+        os.close(r)
+        self.assertEqual(link.got, bytes([kr.SHOT_OPT_CDC | kr.SHOT_OPT_CDC_PACKED]))
+        self.assertEqual(info["transport"], kr.SHOT_VIA_CDC_BULK)
+        self.assertEqual(len(strips[0]), 240 * 120)
+        self.assertTrue(all(px == 0x1234 for px in strips[0]))
+        self.assertTrue(all(px == 0x0000 for px in strips[1]))
+        self.assertEqual(total, len(half) + len(rest0) + len(half1) + len(rest1))
 
     def test_decode_runs_and_literals(self):
         data = bytes([0x02, 0x34, 0x12, 0x81, 0x01, 0x00, 0x02, 0x00])
@@ -1031,7 +1072,7 @@ class RealPages(unittest.TestCase):
             found += 1
             raw = rawf.read_bytes()
             frames = [raw[i:i + 64] for i in range(0, len(raw), 64)]
-            frames.insert(0, rsp(kr.CMD_SCREENSHOT, 7, 0, bytes([240, 0, 240, 0, 4, 60, 1])))
+            frames.insert(0, rsp(kr.CMD_SCREENSHOT, 7, 0, bytes([240, 0, 240, 0, 6, 40, 1])))
 
             class T:
                 def __init__(self): self.q = list(frames)

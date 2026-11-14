@@ -31,6 +31,8 @@ public:
     // compose a stretched rectangle pixel by pixel in panel space (home_cell paint()).
     static int source_x(int panel_x);
     static int source_y(int panel_y);
+    // Panel-space band of the underlying sink (unwraps an active ContentViewport if needed).
+    static bool panel_band(uint16_t& first, uint16_t& last);
 
     class Pause {
     public:
@@ -44,13 +46,16 @@ private:
     static void begin(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1);
     static void pixels(const uint16_t* pixels, uint32_t count);
     static void fill(uint16_t color, uint32_t count);
+    bool row_in_band() const;
     void push(uint16_t color);
     void flush();
 
     Rect destination_;
     const lcd::Sink* previous_ = nullptr;
     bool owns_ = false;
+    bool has_band_ = false;
     uint16_t x0_ = 0, y0_ = 0, width_ = 0, column_ = 0, row_ = 0;
+    uint16_t band_first_ = 0, band_last_ = 0;
     // The output row lives in one static buffer (ui_viewport.cpp): only the owning instance (`active`) ever fills it,
     // and the Ui methods that nest one viewport inside another used to carry 480 B of stack each.
 };

@@ -5,6 +5,7 @@
 #include "k2/core/remote.hpp"
 #include "k2/core/remote_keys.hpp"
 #include "k2/battery/battery_hw.hpp"
+#include "k2/ui/capture.hpp"
 #include "k2/ui/uiprefs.hpp"
 #include <algorithm>
 #include <array>
@@ -1604,9 +1605,13 @@ void Remote::stream_ripple(uint8_t seq) {
 bool Remote::screenshot_enabled() { return uiprefs::screenshot_enabled; }
 
 remote::Status Remote::screenshot() {
-    if (!screenshot_enabled()) return remote::Status::Busy;
+    if (!screenshot_enabled() || shot_pending_ || capture_busy()) return remote::Status::Busy;
     shot_pending_ = true;
-    shot_cdc_ = shot_want_cdc_ && usb::cdc_ready();
+    if (shot_want_cdc_ && usb::cdc_ready())
+        shot_transport_ = shot_want_packed_ ? remote::kShotViaCdcBulk : remote::kShotViaCdc;
+    else
+        shot_transport_ = remote::kShotViaHid;
+    shot_strip_rows_ = ui_.capture_needs_scratch() ? 1 : kScreenStripRows;
     return remote::Status::Ok;
 }
 #else
@@ -1617,7 +1622,9 @@ remote::Status Remote::screenshot() { return remote::Status::UnknownCmd; }
 
 remote::ScreenInfo Remote::screen_info() {
     remote::ScreenInfo i;
-    i.transport = shot_cdc_ ? remote::kShotViaCdc : remote::kShotViaHid;
+    i.strip_rows = shot_strip_rows_;
+    i.num_strips = static_cast<uint8_t>(240 / shot_strip_rows_);
+    i.transport = shot_transport_;
     return i;
 }
 

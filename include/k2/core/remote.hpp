@@ -80,9 +80,12 @@ public:
     void debug_fault(uint8_t kind);   // DEBUG_FAULT: poll() returns Fault after the response
     uint8_t fault_kind() const { return fault_kind_; }
     uint8_t dfu_reset_mode() const { return dfu_mode_; }   // 0 sys, 1 iwdg
-    remote::Status screenshot();                // Busy while Settings > Screenshot is off
-    void screenshot_opts(uint8_t flags) { shot_want_cdc_ = flags & remote::kShotOptCdc; }   // before screenshot()
-    bool screenshot_cdc() const { return shot_cdc_; }   // the stream goes over the CDC bulk pipe
+    remote::Status screenshot();                // Busy while Settings > Screenshot is off or a capture is active
+    void screenshot_opts(uint8_t flags) {
+        shot_want_cdc_ = (flags & remote::kShotOptCdc) != 0;
+        shot_want_packed_ = (flags & remote::kShotOptCdcPacked) != 0;
+    }
+    uint8_t screenshot_transport() const { return shot_transport_; }
     bool screenshot_enabled();
     remote::ScreenInfo screen_info();
     remote::Status debug_fake_pdos(uint8_t n);
@@ -179,7 +182,9 @@ private:
     bool fault_pending_ = false;
     uint8_t fault_kind_ = 0;
     bool shot_pending_ = false;
-    bool shot_want_cdc_ = false, shot_cdc_ = false;
+    bool shot_want_cdc_ = false, shot_want_packed_ = false;
+    uint8_t shot_transport_ = remote::kShotViaHid;
+    uint8_t shot_strip_rows_ = 4;
     bool ripple_pending_ = false;
     std::array<uint16_t, adc::kRippleSamples> ripple_{};
     remote::RippleInfo ripple_info_{};

@@ -34,6 +34,22 @@ constexpr int kMaxHoles = 6;
 
 // The comment in kit.hpp. Holes are clipped to `r` and may touch; the bands between their edges are filled left to right.
 K2_HOT void fill_except(const Surface &s, Box r, const Box *holes, int n, uint16_t color) {
+    if (r.w <= 0 || r.h <= 0) return;
+    if (!ContentViewport::stretched()) {
+        if (s.y + r.y >= 0) {
+            uint16_t by = static_cast<uint16_t>(s.y + r.y), bh = static_cast<uint16_t>(r.h);
+            if (!lcd::clip_to_band(by, bh)) return;
+            r.y = static_cast<int16_t>(by - s.y);
+            r.h = static_cast<int16_t>(bh);
+        }
+    } else {
+        uint16_t b0 = 0, b1 = 0;
+        if (ContentViewport::panel_band(b0, b1)) {
+            const Rect p = ContentViewport::mapped_rect(
+                {static_cast<int16_t>(s.x + r.x), static_cast<int16_t>(s.y + r.y), r.w, r.h});
+            if (p.h <= 0 || p.y > b1 || p.y + p.h <= b0) return;
+        }
+    }
     // A scaled page: a glyph keeps its native size, so it covers only the native w x h from its hole's mapped corner, not the
     // whole stretched hole. Each hole shrinks to the part whose mapping stays inside that native box (whatever paints the hole
     // covers at least that much); the rest of the hole gets the ground and the painter goes over it.
@@ -89,7 +105,12 @@ K2_HOT void fill_except(const Surface &s, Box r, const Box *holes, int n, uint16
 
 // The comment in kit.hpp. The label sits in the slot's text zone, centred; the ground is painted around the label, the cap
 // and the triangle, which cover their own pixels.
-void draw_key_slot(const Surface &s, bool column, TextDir dir, unsigned slot, const SlotLabel &lab, bool is_ok, bool down) {
+K2_HOT void draw_key_slot(const Surface &s, bool column, TextDir dir, unsigned slot, const SlotLabel &lab, bool is_ok, bool down) {
+    if (s.w <= 0 || s.h <= 0) return;
+    {
+        uint16_t by = static_cast<uint16_t>(s.y), bh = static_cast<uint16_t>(s.h);
+        if (!lcd::clip_to_band(by, bh)) return;
+    }
     char text[24];
     const int along = column ? s.h : s.w;       // slot length along the panel
     const LabelZone zone = label_zone(along, slot);

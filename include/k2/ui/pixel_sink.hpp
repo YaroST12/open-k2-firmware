@@ -13,29 +13,30 @@
 #pragma once
 #include <cstdint>
 #include <cstring>
+#include "k2/core/hot.h"
 
 namespace k2 {
 
 class PixelSink {
 public:
     // buf holds `rows` rows of `width` pixels covering screen rows y0 .. y0+rows-1.
-    void attach(uint16_t *buf, int width, int y0, int rows) {
+    K2_HOT void attach(uint16_t *buf, int width, int y0, int rows) {
         buf_ = buf; width_ = width; y0_ = y0; rows_ = rows;
         window(0, 0, static_cast<uint16_t>(width - 1), 0);
     }
 
     // The screen rows the strip keeps (for lcd::Sink::band).
-    int first_row() const { return y0_; }
-    int last_row() const { return y0_ + rows_ - 1; }
+    K2_HOT int first_row() const { return y0_; }
+    K2_HOT int last_row() const { return y0_ + rows_ - 1; }
 
-    void window(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1) {
+    K2_HOT void window(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1) {
         wx0_ = x0; wy0_ = y0; wx1_ = x1; wy1_ = y1;
         cx_ = x0; cy_ = y0;
         outside_ = x1 >= x0 && y1 >= y0 &&
                    (static_cast<int>(y1) < y0_ || static_cast<int>(y0) >= y0_ + rows_);
     }
 
-    void push(const uint16_t *px, uint32_t count) {
+    K2_HOT void push(const uint16_t *px, uint32_t count) {
         if (outside_) { skip(count); return; }
         while (count) {
             const uint32_t run = chunk(count);
@@ -49,7 +50,7 @@ public:
         }
     }
 
-    void fill(uint16_t color, uint32_t count) {
+    K2_HOT void fill(uint16_t color, uint32_t count) {
         if (outside_) { skip(count); return; }
         while (count) {
             const uint32_t run = chunk(count);
@@ -64,17 +65,17 @@ public:
     }
 
 private:
-    uint32_t chunk(uint32_t count) const {   // pixels left in the current window row
+    K2_HOT uint32_t chunk(uint32_t count) const {   // pixels left in the current window row
         const uint32_t left = static_cast<uint32_t>(wx1_) - cx_ + 1;
         return count < left ? count : left;
     }
-    bool writable() const { return buf_ && cy_ >= static_cast<uint32_t>(y0_) && cy_ < static_cast<uint32_t>(y0_ + rows_); }
-    uint32_t visible(uint32_t run) const {   // pixels of this window-row chunk inside the buffer width
+    K2_HOT bool writable() const { return buf_ && cy_ >= static_cast<uint32_t>(y0_) && cy_ < static_cast<uint32_t>(y0_ + rows_); }
+    K2_HOT uint32_t visible(uint32_t run) const {   // pixels of this window-row chunk inside the buffer width
         const uint32_t w = static_cast<uint32_t>(width_);
         return cx_ >= w ? 0 : (run < w - cx_ ? run : w - cx_);
     }
-    uint16_t *row_ptr() const { return buf_ + (cy_ - static_cast<uint32_t>(y0_)) * static_cast<uint32_t>(width_); }
-    void advance(uint32_t run) {
+    K2_HOT uint16_t *row_ptr() const { return buf_ + (cy_ - static_cast<uint32_t>(y0_)) * static_cast<uint32_t>(width_); }
+    K2_HOT void advance(uint32_t run) {
         cx_ += run;
         if (cx_ > wx1_) {
             cx_ = wx0_;
@@ -82,7 +83,7 @@ private:
         }
     }
     // The write pointer after `count` pixels that land nowhere: position in the window modulo its area.
-    void skip(uint32_t count) {
+    K2_HOT void skip(uint32_t count) {
         const uint32_t w = wx1_ - wx0_ + 1, h = wy1_ - wy0_ + 1;   // a panel window: w * h fits 32 bits
         const uint32_t to = ((cy_ - wy0_) * w + (cx_ - wx0_) + count) % (w * h);
         cx_ = wx0_ + to % w;

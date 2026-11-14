@@ -1890,8 +1890,14 @@ static void test_screenshot() {
     f.shot_status = Status::Ok;
     CHECK_EQ(run(f, request(0x0A, 7, {1}), r), 1);        // the optional CDC-transport byte
     check_header(r, 0x0A, 7, Status::Ok, 8);
-    CHECK_EQ(run(f, request(0x0A, 8, {1, 0}), r), 1);
-    check_header(r, 0x0A, 8, Status::BadLength, 0);
+    CHECK_EQ(run(f, request(0x0A, 8, {kShotOptCdc | kShotOptCdcPacked}), r), 1);
+    check_header(r, 0x0A, 8, Status::Ok, 8);
+    CHECK_EQ(run(f, request(0x0A, 9, {1, 0}), r), 1);
+    check_header(r, 0x0A, 9, Status::BadLength, 0);
+    uint8_t bh[kShotBulkHeader] = {};
+    build_bulk_header(bh, 4, 19, kShotFlagLast, 0x0134);
+    const uint8_t want_bh[8] = {0xA6, 0x4B, 0x8A, 4, 19, kShotFlagLast, 0x34, 0x01};
+    CHECK_EQ(memcmp(bh, want_bh, 8), 0);
 }
 
 static void test_debug_pd_msg() {

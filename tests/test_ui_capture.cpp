@@ -42,22 +42,24 @@ static void setup_stubs() {
 struct Shot { std::vector<uint16_t> px; int strips_done = 0; size_t rle = 0; bool ok = false; };
 
 // Decodes the stream frames queued by capture_screen().
-static Shot decode_reports(uint8_t seq) {
+static Shot decode_reports(uint8_t seq, int strip_rows = kScreenStripRows) {
     Shot s; s.px.assign(240 * 240, 0xDEAD);
-    std::vector<uint8_t> buf[60];
+    const int num_strips = 240 / strip_rows;
+    const size_t per_strip = static_cast<size_t>(240) * static_cast<size_t>(strip_rows);
+    std::vector<uint8_t> buf[240];
     for (auto &r : g_stub.reports) {
         if (r[0] != 0xA6 || r[1] != 0x4B || r[2] != remote::kCmdScreenData || r[3] != seq) continue;
         const int len = r[5], strip = r[6], flags = r[7];
-        if (flags & remote::kShotFlagAbort) return s;
+        if (flags & remote::kShotFlagAbort || strip >= num_strips) return s;
         buf[strip].insert(buf[strip].end(), r.begin() + 8, r.begin() + 6 + len);
         s.rle += len - 2;
         if (flags & remote::kShotFlagLast) {
             size_t n = 0;
-            if (!rle565_decode(buf[strip].data(), buf[strip].size(), &s.px[strip * 960], 960, n) || n != 960) return s;
+            if (!rle565_decode(buf[strip].data(), buf[strip].size(), &s.px[strip * per_strip], per_strip, n) || n != per_strip) return s;
             s.strips_done++;
         }
     }
-    s.ok = s.strips_done == 60;
+    s.ok = s.strips_done == num_strips;
     return s;
 }
 
@@ -279,7 +281,7 @@ static void test_screen(Ui &ui, const char *name, uint32_t now_ms) {
         char pp[96]; snprintf(pp, sizeof pp, "%s/k2_%s.panel", d, name);
         if (FILE *f = fopen(pp, "wb")) { fwrite(direct.data(), 2, direct.size(), f); fclose(f); }
     }
-    Shot s = decode_reports(7);
+    Shot s = decode_reports(7, ui.capture_needs_scratch() ? 1 : kScreenStripRows);
     CHECK_EQ(s.ok, 1);
     int diff = 0, first = -1;
     for (int i = 0; i < 240 * 240; i++)
@@ -1689,6 +1691,15 @@ int main() {
     test_emarker_menu_scenes();
     test_cards_scenes();
     test_cards_fh22_scenes();
+    // Scratch-leasing page falls back cleanly to 1-row stack strips without conflicting with its own paint Lease.
+    {
+        ui.goto_page(static_cast<uint8_t>(Page::Tools), 8500);
+        ui.push_menu(Menu::Share, 8510);
+        CHECK_EQ(ui.capture_needs_scratch(), true);
+        test_screen(ui, "share_fallback", 8600);
+        ui.on_button(Button::Back, ButtonEvent::Short, 8700);
+        CHECK_EQ(ui.capture_needs_scratch(), false);
+    }
     // Every string any page or submenu draws must only use glyphs of the font it is drawn with.
     for (int m = 0; m < static_cast<int>(Menu::Count); m++) {
         ui.goto_page(static_cast<uint8_t>(Page::Tools), 9000);

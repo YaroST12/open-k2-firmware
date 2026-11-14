@@ -59,9 +59,12 @@ K2_HOT void gfx_text(const Surface &s, const Font &f, int16_t x, int16_t y, std:
     rows = native.h;
     if (px <= 0 || rows <= 0) return;
     ContentViewport::Pause unscaled_glyphs;
-    {   // a strip capture keeps 4 rows and re-renders the whole screen per strip: text wholly outside them costs nothing
+    int cr0 = 0, cr1 = rows;
+    {   // a strip capture keeps only a few rows and re-renders the screen per strip: skip rows outside it
         uint16_t band_y = static_cast<uint16_t>(native.y), band_h = static_cast<uint16_t>(rows);
         if (!lcd::clip_to_band(band_y, band_h)) return;
+        cr0 = static_cast<int>(band_y) - native.y;
+        cr1 = cr0 + static_cast<int>(band_h);
     }
 
     uint16_t lut[16];
@@ -71,9 +74,9 @@ K2_HOT void gfx_text(const Surface &s, const Font &f, int16_t x, int16_t y, std:
     constexpr int kChunk = 80;
     uint16_t line[kChunk];
 
-    lcd::stream_begin(static_cast<uint16_t>(native.x), static_cast<uint16_t>(native.y),
-                     static_cast<uint16_t>(native.x + px - 1), static_cast<uint16_t>(native.y + rows - 1));
-    for (int r = 0; r < rows; r++) {
+    lcd::stream_begin(static_cast<uint16_t>(native.x), static_cast<uint16_t>(native.y + cr0),
+                     static_cast<uint16_t>(native.x + px - 1), static_cast<uint16_t>(native.y + cr1 - 1));
+    for (int r = cr0; r < cr1; r++) {
         for (int x0 = 0; x0 < px; x0 += kChunk) {
             const int n = render_row_span(f, text, r, lut, line, x0, kChunk < px - x0 ? kChunk : px - x0);
             if (n <= 0) break;
@@ -91,17 +94,20 @@ K2_HOT void gfx_text_rot(const Surface &s, const Font &f, int16_t x, int16_t y, 
         K2_TRUNC_NOTE(trunc::Kind::Clip, text, s.h - y);   // nothing is drawn at all
         return;
     }
-    {   // as in gfx_text: wholly outside the capture strip, nothing to render
+    int sy0 = 0, sy1 = tw;
+    {   // as in gfx_text: skip rotated rows outside the capture strip
         uint16_t band_y = static_cast<uint16_t>(s.y + y), band_h = static_cast<uint16_t>(tw);
         if (!lcd::clip_to_band(band_y, band_h)) return;
+        sy0 = static_cast<int>(band_y) - (s.y + y);
+        sy1 = sy0 + static_cast<int>(band_h);
     }
     uint16_t lut[16];
     make_blend_lut(fg, bg, lut);
     uint16_t col[kMaxLineH];
 
-    lcd::stream_begin(static_cast<uint16_t>(s.x + x), static_cast<uint16_t>(s.y + y),
-                     static_cast<uint16_t>(s.x + x + f.height - 1), static_cast<uint16_t>(s.y + y + tw - 1));
-    for (int sy = 0; sy < tw; sy++) {
+    lcd::stream_begin(static_cast<uint16_t>(s.x + x), static_cast<uint16_t>(s.y + y + sy0),
+                     static_cast<uint16_t>(s.x + x + f.height - 1), static_cast<uint16_t>(s.y + y + sy1 - 1));
+    for (int sy = sy0; sy < sy1; sy++) {
         render_rotated_row(f, text, dir, sy, lut, col);
         lcd::stream_pixels({col, static_cast<std::size_t>(f.height)});
     }

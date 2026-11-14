@@ -2373,7 +2373,11 @@ def rle565_decode(data, expected):
 
 
 SHOT_OPT_CDC = 1                # request option: stream over the CDC bulk pipe (firmware kShotOptCdc)
-SHOT_VIA_HID, SHOT_VIA_CDC = 0, 1
+SHOT_OPT_CDC_PACKED = 2         # also ask for compact CDC bulk chunks (firmware kShotOptCdcPacked)
+SHOT_VIA_HID, SHOT_VIA_CDC, SHOT_VIA_CDC_BULK = 0, 1, 2
+SHOT_BULK_MAGIC = b"\xa6\x4b\x8a"
+SHOT_BULK_HEADER = 8
+SHOT_BULK_MAX = 600
 CDC_STALL_S = 1.0               # no byte from the CDC pipe for this long: give up and use HID
 
 
@@ -2483,6 +2487,36 @@ class CdcStream:
             if left <= 0 or (not self._fill(left) and time.monotonic() >= deadline):
                 return None
 
+    def read_bulk_chunk(self, expected_seq, num_strips, timeout_s):
+        """Next compact CDC bulk chunk (strip, flags, data, raw), or None on timeout."""
+        deadline = time.monotonic() + timeout_s
+        while True:
+            i = self.buf.find(SHOT_BULK_MAGIC)
+            if i < 0:
+                del self.buf[:max(0, len(self.buf) - (len(SHOT_BULK_MAGIC) - 1))]
+            else:
+                del self.buf[:i]
+                if len(self.buf) >= SHOT_BULK_HEADER:
+                    seq, strip, flags, length = struct.unpack_from("<BBBH", self.buf, 3)
+                    valid = (
+                        (flags & ~(SHOT_FLAG_LAST | SHOT_FLAG_ABORT)) == 0
+                        and length <= SHOT_BULK_MAX
+                        and (length == 0 if (flags & SHOT_FLAG_ABORT) else strip < num_strips)
+                    )
+                    if not valid:
+                        del self.buf[:1]
+                        continue
+                    total_len = SHOT_BULK_HEADER + length
+                    if len(self.buf) >= total_len:
+                        raw = bytes(self.buf[:total_len])
+                        del self.buf[:total_len]
+                        if seq != expected_seq:
+                            continue
+                        return strip, flags, raw[SHOT_BULK_HEADER:], raw
+            left = deadline - time.monotonic()
+            if left <= 0 or (not self._fill(left) and time.monotonic() >= deadline):
+                return None
+
 
 def find_cdc_port():
     """The K2 shell's tty on Linux: the /dev/serial/by-id entry of the Open-K2 Logger, else None."""
@@ -2532,24 +2566,37 @@ def _next_stream_frame(link, seq, cdc):
             return rsp
 
 
+def _next_stream_chunk(link, seq, info, cdc):
+    if info["transport"] == SHOT_VIA_CDC_BULK:
+        chunk = cdc.read_bulk_chunk(seq, info["num_strips"], CDC_STALL_S)
+        if chunk is None:
+            raise RemoteTimeout("screenshot CDC stream stalled")
+        idx, flags, data, raw = chunk
+        if link.tap:
+            link.tap(raw)
+        return idx, flags, data
+    f = _next_stream_frame(link, seq, cdc)
+    if len(f.payload) < 2:
+        raise FrameError("short stream frame")
+    return f.payload[0], f.payload[1], f.payload[2:]
+
+
 def _receive_screenshot(link, a, out, cdc):
     try:
-        rsp = link.call(CMD_SCREENSHOT, bytes([SHOT_OPT_CDC]) if cdc is not None else b"")
+        opts = (SHOT_OPT_CDC | SHOT_OPT_CDC_PACKED) if cdc is not None else 0
+        rsp = link.call(CMD_SCREENSHOT, bytes([opts]) if opts else b"")
     except RemoteError as e:
         if cdc is None or e.status != STATUS_BAD_LENGTH:
             raise
         cdc = None                                   # a firmware from before the option: plain request, HID stream
         rsp = link.call(CMD_SCREENSHOT)
     info = decode_screen_info(rsp.payload)
-    if info["transport"] != SHOT_VIA_CDC:
+    if info["transport"] not in (SHOT_VIA_CDC, SHOT_VIA_CDC_BULK):
         cdc = None                                   # the device did not take the offer
     per_strip = info["width"] * info["strip_rows"]
     strips, buf, total, stats = {}, {}, 0, []
     while len(strips) < info["num_strips"]:
-        f = _next_stream_frame(link, rsp.seq, cdc)
-        if len(f.payload) < 2:
-            raise FrameError("short stream frame")
-        idx, flags, data = f.payload[0], f.payload[1], f.payload[2:]
+        idx, flags, data = _next_stream_chunk(link, rsp.seq, info, cdc)
         if flags & SHOT_FLAG_ABORT:
             raise RemoteError(STATUS_BUSY, CMD_SCREENSHOT)
         if idx >= info["num_strips"]:

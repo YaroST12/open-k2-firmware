@@ -219,6 +219,8 @@ public:
     // sample() takes the page's live counters once; call it before a capture so every strip draws
     // the same numbers (tick() and page changes sample by themselves).
     void sample() { current().sample(); }
+    // True when painting the active page leases scratch::arena(), so capture must keep its strip on stack.
+    bool capture_needs_scratch() const;
     void render_for_capture(uint32_t now_ms);
     void resync(uint32_t now_ms);
     // Paints the current page now from its own change signatures, without invalidating them: a page

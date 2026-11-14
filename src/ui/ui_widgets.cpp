@@ -23,6 +23,27 @@ K2_HOT bool fits(const Surface &s, int x, int y, int w, int h) {
     return x >= 0 && y >= 0 && w > 0 && h > 0 && x + w <= s.w && y + h <= s.h;
 }
 
+K2_HOT bool clip_box_to_band(const Surface &s, int x, int y, int w, int h, int &r0, int &r1) {
+    r0 = 0;
+    r1 = h;
+    if (!ContentViewport::stretched()) {
+        if (s.y + y < 0) return true;
+        uint16_t by = static_cast<uint16_t>(s.y + y), bh = static_cast<uint16_t>(h);
+        if (!lcd::clip_to_band(by, bh)) return false;
+        r0 = static_cast<int>(by) - (s.y + y);
+        r1 = r0 + static_cast<int>(bh);
+        return true;
+    }
+    uint16_t b0 = 0, b1 = 0;
+    if (ContentViewport::panel_band(b0, b1)) {
+        const Rect p = ContentViewport::mapped_rect(
+            {static_cast<int16_t>(s.x + x), static_cast<int16_t>(s.y + y),
+             static_cast<int16_t>(w), static_cast<int16_t>(h)});
+        if (p.h <= 0 || p.y > b1 || p.y + p.h <= b0) return false;
+    }
+    return true;
+}
+
 struct BandRow {
     uint16_t pixels[kScreenW];
     int origin, width, y;
@@ -87,14 +108,17 @@ K2_HOT void draw_band(const Surface &s, int x, int y, int h, Paint paint, int ma
     const int c0 = std::max(clip.c0, 0), c1 = std::min<int>(clip.c1, band.w);
     const int r0 = std::max(clip.r0, 0), r1 = std::min<int>(clip.r1, band.h);
     if (c0 >= c1 || r0 >= r1) return;
+    int cr0 = r0, cr1 = r1;
     {   // a band wholly outside the capture strip has nothing to compose
         uint16_t by = static_cast<uint16_t>(band.y + r0), bh = static_cast<uint16_t>(r1 - r0);
         if (!lcd::clip_to_band(by, bh)) return;
+        cr0 = static_cast<int>(by) - band.y;
+        cr1 = cr0 + static_cast<int>(bh);
     }
     BandRow row{{}, x, band.w, y};
-    lcd::stream_begin(static_cast<uint16_t>(band.x + c0), static_cast<uint16_t>(band.y + r0),
-                      static_cast<uint16_t>(band.x + c1 - 1), static_cast<uint16_t>(band.y + r1 - 1));
-    for (int r = r0; r < r1; r++) {
+    lcd::stream_begin(static_cast<uint16_t>(band.x + c0), static_cast<uint16_t>(band.y + cr0),
+                      static_cast<uint16_t>(band.x + c1 - 1), static_cast<uint16_t>(band.y + cr1 - 1));
+    for (int r = cr0; r < cr1; r++) {
         row.y = y + r;
         row.fill(x, band.w, kBar);
         paint(row);
@@ -105,6 +129,11 @@ K2_HOT void draw_band(const Surface &s, int x, int y, int h, Paint paint, int ma
 
 // Fill row `i` of a rounded rectangle, merging runs of rows that share an inset into one fill.
 K2_HOT void span(const Surface &s, int x, int y, int w, int h, int r, uint16_t color, int i0, int i1) {
+    if (i0 >= i1 || w <= 0) return;
+    int off0 = 0, off1 = i1 - i0;
+    if (!clip_box_to_band(s, x, y + i0, w, i1 - i0, off0, off1)) return;
+    i1 = i0 + off1;
+    i0 = i0 + off0;
     int i = i0;
     while (i < i1) {
         const int in = round_row_inset(r, h, i);
@@ -174,11 +203,13 @@ void draw_bar_label(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h
 
 K2_HOT void draw_icon(const Surface &s, int16_t x, int16_t y, Icon icon, uint16_t fg, uint16_t bg) {
     if (!fits(s, x, y, kIconSize, kIconSize)) return;
+    int r0 = 0, r1 = kIconSize;
+    if (!clip_box_to_band(s, x, y, kIconSize, kIconSize, r0, r1)) return;
     const uint16_t *rows = kIconBits[static_cast<int>(icon)];
     uint16_t line[kIconSize];
-    lcd::stream_begin(static_cast<uint16_t>(s.x + x), static_cast<uint16_t>(s.y + y),
-                      static_cast<uint16_t>(s.x + x + kIconSize - 1), static_cast<uint16_t>(s.y + y + kIconSize - 1));
-    for (int r = 0; r < kIconSize; r++) {
+    lcd::stream_begin(static_cast<uint16_t>(s.x + x), static_cast<uint16_t>(s.y + y + r0),
+                      static_cast<uint16_t>(s.x + x + kIconSize - 1), static_cast<uint16_t>(s.y + y + r1 - 1));
+    for (int r = r0; r < r1; r++) {
         for (int c = 0; c < kIconSize; c++) line[c] = (rows[r] >> (kIconSize - 1 - c)) & 1 ? fg : bg;
         lcd::stream_pixels({line, static_cast<std::size_t>(kIconSize)});
     }
@@ -211,14 +242,16 @@ constexpr const char *kPlugArt[14] = {
     "......##......", "......##......"};
 }  // namespace
 
-void draw_icon14(const Surface &s, int16_t x, int16_t y, Icon14 icon, uint16_t fg, uint16_t bg) {
+K2_HOT void draw_icon14(const Surface &s, int16_t x, int16_t y, Icon14 icon, uint16_t fg, uint16_t bg) {
     if (!fits(s, x, y, 14, 14)) return;
+    int r0 = 0, r1 = 14;
+    if (!clip_box_to_band(s, x, y, 14, 14, r0, r1)) return;
     static constexpr std::array<uint16_t, 14> kBits[2] = {art(kChargerArt), art(kPlugArt)};
     const auto &rows = kBits[static_cast<int>(icon)];
     uint16_t line[14];
-    lcd::stream_begin(static_cast<uint16_t>(s.x + x), static_cast<uint16_t>(s.y + y),
-                      static_cast<uint16_t>(s.x + x + 13), static_cast<uint16_t>(s.y + y + 13));
-    for (int r = 0; r < 14; r++) {
+    lcd::stream_begin(static_cast<uint16_t>(s.x + x), static_cast<uint16_t>(s.y + y + r0),
+                      static_cast<uint16_t>(s.x + x + 13), static_cast<uint16_t>(s.y + y + r1 - 1));
+    for (int r = r0; r < r1; r++) {
         for (int c = 0; c < 14; c++) line[c] = (rows[r] >> (13 - c)) & 1 ? fg : bg;
         lcd::stream_pixels({line, 14});
     }
@@ -386,10 +419,12 @@ K2_HOT void draw_range_trace(const Surface &s, int16_t x, int16_t y, int cols, i
                       uint16_t bg) {
     const int w = cols * xs;
     if (cols <= 0 || xs <= 0 || h < 4 || !fits(s, x, y, w, h) || w > kMaxW) return;
+    int r0 = 0, r1 = h;
+    if (!clip_box_to_band(s, x, y, w, h, r0, r1)) return;
     uint16_t line[kMaxW];
-    lcd::stream_begin(static_cast<uint16_t>(s.x + x), static_cast<uint16_t>(s.y + y),
-                      static_cast<uint16_t>(s.x + x + w - 1), static_cast<uint16_t>(s.y + y + h - 1));
-    for (int r = 0; r < h; r++) {
+    lcd::stream_begin(static_cast<uint16_t>(s.x + x), static_cast<uint16_t>(s.y + y + r0),
+                      static_cast<uint16_t>(s.x + x + w - 1), static_cast<uint16_t>(s.y + y + r1 - 1));
+    for (int r = r0; r < r1; r++) {
         const bool grid = r == h / 4 || r == h / 2 || r == (h * 3) / 4;
         for (int c = 0; c < cols; c++) {
             const bool in_band = r >= range_row(hi[c], h) && r <= range_row(lo[c], h);
@@ -520,7 +555,7 @@ K2_HOT void draw_top_readout(const Surface &s, StatusReadout mode, std::string_v
     shown = now;
 }
 
-void draw_top_pager(const Surface &s, int count, int current) {
+K2_HOT void draw_top_pager(const Surface &s, int count, int current) {
     draw_band(s, kReadoutX, 0, kBarH - 1, [&](BandRow &row) {
         const int r = row.y - kPagerY;
         if (r < 0 || r >= kPagerBox) return;

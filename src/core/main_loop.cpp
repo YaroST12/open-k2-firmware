@@ -338,7 +338,7 @@ void begin(Context& ctx) {
 #if K2_SCREENSHOT
         mark(Stage::Capture);
         if (c.bootscreen.active()) end_boot_screen(k2::systick::millis());   // a capture repaints the UI's fields over the code
-        k2::capture_screen(c.ui, c.remote.screenshot_seq(), k2::systick::millis(), c.remote.screenshot_cdc());
+        k2::capture_screen(c.ui, c.remote.screenshot_seq(), k2::systick::millis(), c.remote.screenshot_transport());
 #endif
         break;
     case k2::RemoteEvent::Dfu:        c.dfu(); break;
