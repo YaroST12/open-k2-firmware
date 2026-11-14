@@ -142,9 +142,11 @@ start, and it saves `host_wall_s` and the uptime at the start and the end with e
 
 A run needs a PD contract on a host-powered K2: `k2_remote pd attach` (5 V) or `k2_remote pd-reread` just before the start. The
 hold either one makes does not count as "ports busy"; a run started on a re-read's attach takes it over (its release timer is
-cancelled). At the end the run releases the Rd it ran on (as PD Stress does since its Rd fix), so the CC lines go back to the boot
-mode: on a passive boot the charger then sees no sink and leaves VBUS at 0 V, and a second run needs `pd attach` again (hardware
-check pending).
+cancelled). From the start the run presents its own Rd (`fusb302::rd_for_run(true)`, as a charger-test START does): a run
+that ran on the contract alone lost its Rd 300 ms after a Hard Reset ended that contract, and the source never came back (Anker
+IQ4, hardware 2026-11-14: `pd attach` on a 5 V contract still lingering from the previous run). At the end the run releases that
+Rd (as PD Stress does since its Rd fix), so the CC lines go back to the boot mode: on a passive boot the charger then sees no sink
+and leaves VBUS at 0 V, and a second run needs `pd attach` again (hardware 2026-11-14: "start refused: no PD source" without it).
 
 ## Use
 

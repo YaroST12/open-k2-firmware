@@ -177,6 +177,12 @@ sc::StartResult PdSpecSession::start_run(std::uint8_t families, std::uint32_t no
         // The run owns the link from here: a pd-reread attach it starts on is the run's, and the re-read's release must not fire
         // inside a step.
         fusb302::reread_take_over();
+        // The run presents its own Rd for its whole length, as a charger-test START does; on_finish() gives it back. A run
+        // started on a contract (a lingering 5 V one, `pd attach` on a list already there) had Rd only through the sink's
+        // demand, which a Hard Reset ends with the contract: the Rd went 300 ms later and the source, back from its reset,
+        // saw no sink (Anker IQ4, hardware 2026-11-14). With it the source's caps are acked and PDO 1 requested (the START
+        // path), the sink's resume asks for the contract back.
+        fusb302::rd_for_run(true);
     }
     update_footer();
     return r;

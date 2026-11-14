@@ -191,6 +191,9 @@ void test_run_stop_results() {
     CHECK_EQ(ui.ports_busy(), true);
     CHECK_EQ(int(ui.busy_why()), int(BusyWhy::PdSpec));
     CHECK_EQ(g_stub.reread_take_overs > 0, true);
+    // The run presents its own Rd: started on a contract (no Rd of a run start), a Hard Reset's lost contract took the Rd along
+    // and the source never came back (Anker IQ4, hardware 2026-11-14).
+    CHECK_EQ(g_stub.rd_run, true);
     CHECK_EQ(g_stub.last_confirmed, true);            // every Request goes through the sink's guards, confirmed
     // A step or two later BACK stops: the source goes back to 5 V and the run ends on Results.
     run(ui, 3000);
@@ -203,6 +206,7 @@ void test_run_stop_results() {
     CHECK_EQ(g_stub.pm.vbus_mv, 5000);
     CHECK_EQ(g_stub.ka_silence == pd::KaSilence::Off, true);   // nothing is left silenced
     CHECK_EQ(g_stub.run_owner, false);
+    CHECK_EQ(g_stub.rd_run, false);   // and gives it back
     const sc::Engine *e = ui.pd_spec().engine();
     CHECK_EQ(e != nullptr, true);
     CHECK_EQ(int(e->stop()), int(sc::Stop::Cancelled));
