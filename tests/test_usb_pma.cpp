@@ -40,6 +40,15 @@ int main() {
     // The debug shell (CDC-ACM: 8 B notification + 2 x 16 B bulk = 40 B) rides on HID and HID+Drive.
     check_mode({true, false, false, true}, 360, "HID+Shell");
     check_mode({true, true, false, true}, 488, "HID+Drive+Shell");
+    // WebUSB replaces HID as the remote channel: one vendor interface, bulk IN + OUT of 64 B (2 x 64 = 128 B).
+    check_mode({false, false, false, false, true}, 320, "WebUSB");
+    check_mode({false, false, false, true, true}, 360, "WebUSB+Shell");
+    check_mode({false, true, false, false, true}, 448, "WebUSB+Drive");
+    check_mode({false, true, false, true, true}, 488, "WebUSB+Drive+Shell");
+    check_mode({true, false, false, true, true}, 488, "HID+WebUSB+Shell");
+    // HID + WebUSB + Drive would need 576 B: normalize() drops HID, so it never reaches a descriptor.
+    CHECK_EQ(k2::usbpma::budget({true, true, false, false, true}) > 512, 1);
+    CHECK_EQ(k2::usbcfg::normalize({true, true, false, false, true}).hid, 0);
     // Net with Drive is not a mode: normalize() collapses it, so it never reaches a descriptor.
     CHECK_EQ(k2::usbcfg::any(k2::usbcfg::normalize({true, true, true})), 0);
     k2::usbcfg::current = {true, true};

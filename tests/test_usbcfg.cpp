@@ -144,14 +144,107 @@ void test_net_not_built() {
     CHECK_EQ(t.hid, 1); CHECK_EQ(t.drive, 0); CHECK_EQ(t.net, 0);
     CHECK_EQ(usbcfg::toggle(usbcfg::Setting{}, Row::Net, false).hid, 0);       // not even HID comes on
     CHECK_EQ(usbcfg::toggle(s, Row::Drive, false).drive, 1);
-    CHECK_EQ(usbcfg::rows(false), 2);
-    CHECK_EQ(usbcfg::rows(true), 3);
+    CHECK_EQ(usbcfg::rows(false, false), 2);
+    CHECK_EQ(usbcfg::rows(true, false), 3);
     // Without Net the shell rides on HID in every HID mode.
     CHECK_EQ(usbcfg::shell_wanted(usbcfg::normalize({true, false, true}, false)), 1);
+}
+
+// WebUSB (a vendor bulk interface carrying the remote protocol) replaces the HID remote channel and the Net web path.
+// Flag bit 3 in the record; the shell rides on it like on HID; it never shares the 512 B packet memory with HID and
+// the Drive together; without K2_WEBUSB the request is dropped and the row does not exist.
+void test_webusb_mode() {
+    using usbcfg::Row;
+    const auto r = usbcfg::encode({false, false, false, false, true});
+    CHECK_EQ(r[4], 8); CHECK_EQ(r[5], 0xF7);
+    const usbcfg::Setting s = usbcfg::decode(r);
+    CHECK_EQ(s.webusb, 1); CHECK_EQ(s.hid, 0); CHECK_EQ(s.drive, 0); CHECK_EQ(s.net, 0);
+    CHECK_EQ(usbcfg::any(s), 1);
+    CHECK_EQ(usbcfg::valid_record(r), 1);
+    // Records with bits above bit 3 are still garbage.
+    auto bad = r; bad[4] = 0x18; bad[5] = static_cast<std::uint8_t>(~0x18);
+    CHECK_EQ(usbcfg::valid_record(bad), 0);
+    // WebUSB+Drive and HID+WebUSB are modes; HID+WebUSB+Drive does not fit (576 B) and WebUSB wins.
+    const usbcfg::Setting wd = usbcfg::normalize({false, true, false, false, true});
+    CHECK_EQ(wd.webusb, 1); CHECK_EQ(wd.drive, 1); CHECK_EQ(wd.hid, 0);
+    const usbcfg::Setting hw = usbcfg::normalize({true, false, false, false, true});
+    CHECK_EQ(hw.webusb, 1); CHECK_EQ(hw.hid, 1);
+    const usbcfg::Setting all = usbcfg::normalize({true, true, false, false, true});
+    CHECK_EQ(all.webusb, 1); CHECK_EQ(all.drive, 1); CHECK_EQ(all.hid, 0);
+    // WebUSB replaces the Net web path: asking for both keeps WebUSB and drops Net.
+    const usbcfg::Setting wn = usbcfg::normalize({false, false, true, false, true});
+    CHECK_EQ(wn.webusb, 1); CHECK_EQ(wn.net, 0);
+    // The shell rides on WebUSB and on HID, never on Net.
+    CHECK_EQ(usbcfg::shell_wanted({false, false, false, false, true}), 1);
+    CHECK_EQ(usbcfg::shell_wanted({false, true, false, false, true}), 1);
+    CHECK_EQ(usbcfg::shell_wanted({false, true}), 0);
+    CHECK_EQ(usbcfg::with_shell({false, true, false, false, true}).shell, 1);
+    // Text.
+    CHECK_STR(usbcfg::describe({false, false, false, false, true}), "WebUSB");
+    CHECK_STR(usbcfg::describe({false, true, false, false, true}), "WebUSB+Drive");
+    CHECK_STR(usbcfg::describe({true, false, false, false, true}), "HID+WebUSB");
+    // Not built: the request is dropped, the rest of the record stays.
+    const usbcfg::Setting nb = usbcfg::normalize({true, true, false, false, true}, usbcfg::kNetBuilt, false);
+    CHECK_EQ(nb.webusb, 0); CHECK_EQ(nb.hid, 1); CHECK_EQ(nb.drive, 1);
+    CHECK_EQ(usbcfg::any(usbcfg::decode(r, usbcfg::kNetBuilt, false)), 0);
+    CHECK_EQ(usbcfg::requests_webusb(r), 1);
+    CHECK_EQ(usbcfg::requests_webusb(usbcfg::encode({true, true})), 0);
+    // Rows: HID, Drive, [Net], [WebUSB].
+    CHECK_EQ(usbcfg::rows(false, false), 2);
+    CHECK_EQ(usbcfg::rows(true, false), 3);
+    CHECK_EQ(usbcfg::rows(false, true), 3);
+    CHECK_EQ(usbcfg::rows(true, true), 4);
+    CHECK_EQ(usbcfg::row_at(0, true, true) == Row::Hid, 1);
+    CHECK_EQ(usbcfg::row_at(1, true, true) == Row::Drive, 1);
+    CHECK_EQ(usbcfg::row_at(2, true, true) == Row::Net, 1);
+    CHECK_EQ(usbcfg::row_at(3, true, true) == Row::Webusb, 1);
+    CHECK_EQ(usbcfg::row_at(2, false, true) == Row::Webusb, 1);
+    CHECK_EQ(usbcfg::row_at(2, true, false) == Row::Net, 1);
+    // Flash round trip.
+    Vol v_f; fs::Fs& f = v_f.f;
+    usbcfg::save(f, {false, true, false, false, true});
+    const usbcfg::Setting l = usbcfg::load(f);
+    CHECK_EQ(l.webusb, 1); CHECK_EQ(l.drive, 1); CHECK_EQ(l.hid, 0);
+}
+
+void test_webusb_toggle() {
+    using usbcfg::Row;
+    usbcfg::Setting s{};
+    s = usbcfg::toggle(s, Row::Webusb);                 // from off: WebUSB alone, no HID
+    CHECK_EQ(s.webusb, 1); CHECK_EQ(s.hid, 0);
+    s = usbcfg::toggle(s, Row::Drive);                  // WebUSB + Drive
+    CHECK_EQ(s.webusb, 1); CHECK_EQ(s.drive, 1); CHECK_EQ(s.hid, 0);
+    s = usbcfg::toggle(s, Row::Hid);                    // HID on beside Drive: the fallback replaces WebUSB
+    CHECK_EQ(s.hid, 1); CHECK_EQ(s.drive, 1); CHECK_EQ(s.webusb, 0);
+    s = usbcfg::toggle(s, Row::Webusb);                 // WebUSB on beside HID+Drive: HID goes
+    CHECK_EQ(s.webusb, 1); CHECK_EQ(s.drive, 1); CHECK_EQ(s.hid, 0);
+    s = usbcfg::toggle(s, Row::Drive);                  // Drive off: HID can join
+    s = usbcfg::toggle(s, Row::Hid);
+    CHECK_EQ(s.webusb, 1); CHECK_EQ(s.hid, 1); CHECK_EQ(s.drive, 0);
+    s = usbcfg::toggle(s, Row::Drive);                  // Drive on with HID+WebUSB: HID goes
+    CHECK_EQ(s.webusb, 1); CHECK_EQ(s.hid, 0); CHECK_EQ(s.drive, 1);
+    s = usbcfg::toggle(s, Row::Net);                    // Net replaces WebUSB and drops the Drive
+    CHECK_EQ(s.net, 1); CHECK_EQ(s.hid, 1); CHECK_EQ(s.drive, 0); CHECK_EQ(s.webusb, 0);
+    s = usbcfg::toggle(s, Row::Webusb);                 // WebUSB on turns Net off
+    CHECK_EQ(s.webusb, 1); CHECK_EQ(s.net, 0);
+    // Not built: the row does nothing.
+    CHECK_EQ(usbcfg::any(usbcfg::toggle(usbcfg::Setting{}, Row::Webusb, usbcfg::kNetBuilt, false)), 0);
+    // Every reachable state is already normalized.
+    for (int i = 0; i < 16; i++) {
+        usbcfg::Setting t{(i & 1) != 0, (i & 2) != 0, (i & 4) != 0, false, (i & 8) != 0};
+        t = usbcfg::normalize(t);
+        for (Row r : {Row::Hid, Row::Drive, Row::Net, Row::Webusb}) {
+            const usbcfg::Setting u = usbcfg::toggle(t, r);
+            const usbcfg::Setting v = usbcfg::normalize(u);
+            CHECK_EQ(u.hid == v.hid && u.drive == v.drive && u.net == v.net && u.webusb == v.webusb, 1);
+        }
+    }
 }
 }  // namespace
 
 int main() {
+    test_webusb_mode();
+    test_webusb_toggle();
     test_net_not_built();
     test_blank_flash_is_off();
     test_save_and_reload();

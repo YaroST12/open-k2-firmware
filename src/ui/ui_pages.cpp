@@ -2327,11 +2327,35 @@ PanelLabels AutorotatePage::labels() const { return setting_labels(base_labels()
 // ---------------------------------------------------------------------------------------
 
 namespace {
-constexpr int kUlRows = usbcfg::rows();   // 2 when the build has no network function (K2_NET=0): no Network row
-const char *ul_name(int i) { return i == 0 ? "HID" : i == 1 ? "Drive" : "Network"; }
-const char *ul_hint(int i) { return i == 0 ? "logs and remote" : i == 1 ? "read-only files" : "web 192.168.7.1"; }
-constexpr usbcfg::Row ul_row(int i) { return i == 0 ? usbcfg::Row::Hid : i == 1 ? usbcfg::Row::Drive : usbcfg::Row::Net; }
-bool ul_on(const usbcfg::Setting &s, int i) { return i == 0 ? s.hid : i == 1 ? s.drive : s.net; }
+constexpr int kUlRows = usbcfg::rows();   // 2 without the network function (K2_NET=0) and the WebUSB transport (K2_WEBUSB=0)
+constexpr usbcfg::Row ul_row(int i) { return usbcfg::row_at(i); }
+const char *ul_name(int i) {
+    switch (ul_row(i)) {
+        case usbcfg::Row::Hid: return "HID";
+        case usbcfg::Row::Drive: return "Drive";
+        case usbcfg::Row::Net: return "Network";
+        case usbcfg::Row::Webusb: return "WebUSB";
+    }
+    return "";
+}
+const char *ul_hint(int i) {
+    switch (ul_row(i)) {
+        case usbcfg::Row::Hid: return "logs and remote";
+        case usbcfg::Row::Drive: return "read-only files";
+        case usbcfg::Row::Net: return "web 192.168.7.1";
+        case usbcfg::Row::Webusb: return "web + remote";
+    }
+    return "";
+}
+bool ul_on(const usbcfg::Setting &s, int i) {
+    switch (ul_row(i)) {
+        case usbcfg::Row::Hid: return s.hid;
+        case usbcfg::Row::Drive: return s.drive;
+        case usbcfg::Row::Net: return s.net;
+        case usbcfg::Row::Webusb: return s.webusb;
+    }
+    return false;
+}
 }  // namespace
 
 void UsbLinkPage::enter() {
@@ -2352,7 +2376,7 @@ void UsbLinkPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
     const auto *self = static_cast<const UsbLinkPage *>(ctx);
     const bool on = ul_on(self->pending_, i);
     out.marker = kit::Marker::Icon;
-    out.icon = i == 0 ? Icon::Plug : i == 1 ? Icon::Chip : Icon::Pc;
+    out.icon = i == 0 ? Icon::Plug : i == 1 ? Icon::Chip : Icon::Pc;   // Network and WebUSB both reach a host: the PC
     out.marker_color = on ? kOk : 0;
     out.text = ul_name(i);
     out.tail = on ? "ON" : "OFF";
@@ -2363,7 +2387,7 @@ void UsbLinkPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
 void UsbLinkPage::update(uint32_t) {
     title_badge(false);
     const bool differs = pending_.hid != usbcfg::current.hid || pending_.drive != usbcfg::current.drive ||
-                         pending_.net != usbcfg::current.net;
+                         pending_.net != usbcfg::current.net || pending_.webusb != usbcfg::current.webusb;
     ctx_.rows.select(sel_);
     ctx_.rows.draw(ctx_.now, ctx_.budget);
     if (differs) {
