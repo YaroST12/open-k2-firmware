@@ -15,6 +15,12 @@
             g++ and once with clang (extras: float casts, local bounds, sign change); any report from our code or any
             failed test fails; incremental in build/san-gcc and build/san-clang
   6 size    report against tools/size_baseline.txt; over +5 % text is a WARNING, not a failure
+  6a perf   the on-device `selftest` (3 runs, per-check minimum cycles) against tools/perf_baseline.json, on the build
+            that is ON the K2 now (the gate runs before a flash and never flashes): fails on a FAIL line, a zw 1 -> 0,
+            or a check slower than baseline + tolerance; SKIPPED (never failed, repeated after "GATE PASSED") when no
+            K2 answers, the K2 runs another build than the one just built, or the baseline is unseeded.
+            `make perf-check` (`gate.py --perf-only`) runs just this step after a flash; `make perf-baseline`
+            (`gate.py --perf-baseline`) re-takes the baseline (5 runs); see tools/perf_gate.py, docs/MATH_SELFTEST.md
   6b net    the K2_NET=1 variant (off by default) in build-net/: -Werror build, layout invariants, stack budget, map;
             only with K2_WEB=1 (env or `make K2_WEB=1 gate`), which also puts the web tests back into step 5
 
@@ -29,6 +35,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import perf_gate  # noqa: E402
 from stack_depth import EXC_FRAME, MAIN_ROOT, Graph, analyze, ci_files, load_text  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -314,7 +321,15 @@ def step_map(build="build"):
         raise GateError("heap or C++ runtime linked into the firmware:\n  " + "\n  ".join(errs))
 
 
+SKIPPED = []          # (step, reason) of every step that did not really run, repeated after "GATE PASSED"
+NO_HOT_BLOCK = os.environ.get("K2_HOT_BLOCK") == "0"    # Makefile K2_HOT_BLOCK=0: the A/B image without the placement
+
+
 def step_hot():
+    if NO_HOT_BLOCK:
+        SKIPPED.append(("hot block", "K2_HOT_BLOCK=0: this image has no hot block"))
+        print("  SKIPPED (K2_HOT_BLOCK=0: this image has no hot block)")
+        return
     info, errs = check_hot(docker_tool("arm-none-eabi-nm", ELF))
     print("\n".join(info))
     if errs:
@@ -422,18 +437,42 @@ def parse_size_line(text):
     return f"text={s['text']} data={s['data']} bss={s['bss']}"
 
 
+def step_perf():
+    """The on-device selftest against tools/perf_baseline.json (tools/perf_gate.py): never flashes, checks the build
+    that is on the K2 now, SKIPPED (never failed) when there is no device, no baseline numbers, or another build."""
+    if NO_HOT_BLOCK:       # the baseline is the placed (default) build's
+        reason = "K2_HOT_BLOCK=0: the baseline is the default build's"
+        print(f"  SKIPPED ({reason})")
+    else:
+        try:
+            reason = perf_gate.perf_check(perf_gate.image_version())
+        except perf_gate.PerfError as e:
+            raise GateError(str(e))
+    if reason:
+        SKIPPED.append(("perf (device selftest)", reason))
+
+
 WEB = os.environ.get("K2_WEB") == "1"   # the web parts (Makefile K2_WEB): off by default
 
 STEPS = [("build (-Werror, docker as host uid)", step_build), ("bootloader invariants", step_invariants),
          ("stack budget", step_stack), ("map: no malloc / operator new / __cxa_ / 64-bit divmod", step_map),
          ("hot block inside the zero-wait flash window", step_hot), ("remote command ids", step_ids), ("64-bit integer guard", step_64bit),
          ("tests (C++, Python" + (", node)" if WEB else "; web off)"), step_tests),
-         ("sanitizers: host tests under ASan/UBSan, g++ and clang (docker)", step_sanitize), ("size report", step_size)] + (
+         ("sanitizers: host tests under ASan/UBSan, g++ and clang (docker)", step_sanitize), ("size report", step_size),
+         ("perf (device selftest vs tools/perf_baseline.json; skipped without a matching device)", step_perf)] + (
          [("K2_NET=1 variant (-Werror, layout, stack, map)", step_net_variant)] if WEB else [])
 
 
 def main():
-    steps = STEPS + ([("static analysers (report only: tidy, -fanalyzer, cppcheck)", step_static)] if "--static" in sys.argv else [])
+    if "--perf-baseline" in sys.argv:       # make perf-baseline
+        try:
+            perf_gate.perf_baseline(perf_gate.image_version())
+        except perf_gate.PerfError as e:
+            print(f"PERF BASELINE FAILED: {e}", file=sys.stderr)
+            return 1
+        return 0
+    steps = [s for s in STEPS if s[1] is step_perf] if "--perf-only" in sys.argv else STEPS   # make perf-check
+    steps = steps + ([("static analysers (report only: tidy, -fanalyzer, cppcheck)", step_static)] if "--static" in sys.argv else [])
     for i, (name, fn) in enumerate(steps, 1):
         print(f"== gate {i}/{len(steps)}: {name}", flush=True)
         try:
@@ -441,7 +480,9 @@ def main():
         except GateError as e:
             print(f"\nGATE FAILED at step {i} ({name}):\n{e}", file=sys.stderr)
             return 1
-    print("\nGATE PASSED")
+    print("\nGATE PASSED" if "--perf-only" not in sys.argv else "\nPERF CHECK DONE")
+    for name, reason in SKIPPED:
+        print(f"*** SKIPPED: {name}: {reason}")
     return 0
 
 

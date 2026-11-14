@@ -30,7 +30,7 @@ selftest
 ### Example Output Format
 
 ```text
-math selftest (arch=m4f opt=Os math_errno=off):
+math selftest (arch=m4f opt=Os math_errno=off hot=1 fw=1.0.1-105-aaaa1111):
   [PASS] scale_div    sum=0xXXXXXXXX  cyc=... zw=1
   [PASS] adc_calc     sum=0xXXXXXXXX  cyc=... zw=1
   [PASS] power_calc   sum=0xXXXXXXXX  cyc=... zw=1
@@ -53,7 +53,7 @@ math selftest (arch=m4f opt=Os math_errno=off):
 PASS 19/19 checks, total_cyc=...
 ```
 
-The `zw` values above are what the placement is expected to give, not measurements. The header prints `arch` (`m4f` / `host`), TU optimization macro (`Os` / `O2+` / `O0`), and `math_errno` (`off` when compiled with `-fno-math-errno`, `on` otherwise).
+The `zw` values above are what the placement is expected to give, not measurements. The header prints `arch` (`m4f` / `host`), TU optimization macro (`Os` / `O2+` / `O0`), `math_errno` (`off` when compiled with `-fno-math-errno`, `on` otherwise), `hot` (`1` when the hot block is linked in, `0` for a `K2_HOT_BLOCK=0` image) and `fw` (the firmware version of the running image; the shell has no version command, so the perf gate and the bench tools identify the build from this field). A check the build cannot run prints `  [SKIP] name` (for example `math_opt` on a tree older than `math_opt.hpp`) and the summary reads `PASS 18/18 checks (1 skipped), total_cyc=...`.
 
 ## Kernel Coverage
 
@@ -89,3 +89,28 @@ The `zw` values above are what the placement is expected to give, not measuremen
 1. Flash the baseline build and run `selftest`: record `math_errno`, per-kernel `cyc`, `zw`, `total_cyc`.
 2. Flash the build under test and run `selftest`: confirm `PASS n/n checks` (the goldens must match without edits), then compare per-kernel `cyc` and `total_cyc`. A check that appears only on one side is new coverage, not a regression.
 3. Only `src/core/math_selftest.cpp` itself compiles with the global flags (`-Os`); speed-tiered translation units (`adc_calc.o`, `power_calc.o`, `fastcharge_classify.o` at `-O3`; `battery.o`, `dpsniff.o` at `-O2`; `power_monitor.o` stays at `-Os`: its -Ofast was removed because the One Euro filter is one shared out-of-line copy built at `-Os`) run inside the corresponding calls.
+
+### Three-way bench (pre / no placement / all)
+
+The same `src/core/math_selftest.cpp` compiles on three trees, so one suite compares them:
+
+| Image | Build | What it isolates |
+|---|---|---|
+| A `pre` | branch `k2/bench-pre` (the pre-optimisation baseline plus this suite; `math_opt` reports `SKIP`) | the unoptimised code |
+| B `noplace` | `make docker-build K2_HOT_BLOCK=0 BUILD_DIR=build/noplace K2_FW_VERSION=<version>-noplace` | the optimised code without the zero-wait placement |
+| C `all` | `make docker-build` | optimised code and placement |
+
+`K2_HOT_BLOCK=0` makes `K2_HOT` / `K2_HOT_DATA` expand to nothing and drops the hot block (the `K2_HOT_BLOCK_BEGIN` .. `K2_HOT_BLOCK_END` region of `link.ld`, filtered into `$(BUILD_DIR)/link_nohot.ld`) from the link; the gate skips its `hot` step for such a build and says so. The default is `1`. Give B its own `BUILD_DIR` and a distinct version label so it never overwrites or masquerades as C.
+
+### Perf gate
+
+`make gate` ends with a `perf` step that guards against swings in the per-check cycle counts of the default build. It never flashes. It runs only when a K2 answers on `/dev/ttyACM0` (override with `K2_PORT`) and its `fw=` equals the version of the image the gate just built; otherwise the step prints `SKIPPED (reason)` and the gate summary repeats it under `*** SKIPPED`. Skip reasons: `unseeded` (no baseline yet), `no device`, `version mismatch`, `device busy` (another tool holds `/tmp/k2-device.lock`).
+
+- **Baseline**: `tools/perf_baseline.json`, per check the minimum `cyc` over the baseline runs, its `zw`, and an optional `tol` (twice the run-to-run spread when that exceeds the default). Default tolerance: the larger of 2 % and 50 cycles.
+- **Measure**: 3 runs under the device lock, per-check minimum, compared with the baseline.
+- **Fails on**: any `[FAIL]` row or a run that does not reach its summary line; a check that is `SKIP` or missing against the baseline; `zw` 1 -> 0; a check slower than baseline + tolerance.
+- **Notices (no failure)**: a check faster than baseline - tolerance (refresh the baseline), a check not in the baseline yet.
+- **Refresh**: flash the default build, then `make perf-baseline` (5 runs, minimum; refuses unless the device runs the built image and every run passes). Commit the file in its own commit, with the reason.
+- **Check without a full gate**: gate, flash, then `make perf-check` (`python3 tools/gate.py --perf-only`).
+- The baseline is seeded from the device, not from the host: host `cyc` is 0. An `unseeded` file keeps the step at `SKIPPED (unseeded)`.
+- Tests: `tests/test_gate.py` (parser, comparison, skip paths, baseline refresh, with synthesised `selftest` text and a fake serial runner and lock).

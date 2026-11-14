@@ -25,7 +25,13 @@
 #define K2_HOT_STR2_(x) #x
 #define K2_HOT_STR_(x) K2_HOT_STR2_(x)
 
-#if defined(__arm__) && defined(__GNUC__)
+/* K2_HOT_BLOCK (Makefile, default 1): 0 builds without the placement, both markers expand to nothing and the linker
+ * script has no hot block, for A/B performance comparison. Code may read it (the selftest's placement check does). */
+#ifndef K2_HOT_BLOCK
+#define K2_HOT_BLOCK 1
+#endif
+
+#if defined(__arm__) && defined(__GNUC__) && K2_HOT_BLOCK
 #define K2_HOT __attribute__((section(".text.hot." __FILE_NAME__ ":" K2_HOT_STR_(__LINE__))))
 #define K2_HOT_DATA __attribute__((section(".rodata.hot." __FILE_NAME__ ":" K2_HOT_STR_(__LINE__))))
 #else

@@ -37,6 +37,18 @@ K2_SCREENSHOT ?= 0
 K2_WEB ?= 0
 export K2_WEB
 
+# K2_HOT_BLOCK=0 builds without the zero-wait flash placement (include/k2/core/hot.h): K2_HOT expands to nothing and
+# the linker script loses the hot block and its name pins (link.ld between K2_HOT_BLOCK_BEGIN and _END; the Makefile
+# links a filtered copy, $(BUILD_DIR)/link_nohot.ld). Meant for A/B performance comparison (docs/MATH_SELFTEST.md); the
+# gate's "hot block" step is skipped for it. Default 1. Give such a build its own BUILD_DIR and K2_FW_VERSION suffix.
+K2_HOT_BLOCK ?= 1
+export K2_HOT_BLOCK
+ifeq ($(K2_HOT_BLOCK),0)
+LINK_LD = $(BUILD_DIR)/link_nohot.ld
+else
+LINK_LD = link.ld
+endif
+
 # K2_WERROR=1 (set by `make gate`): our own sources build with -Werror; third_party never does.
 K2_WERROR ?= 0
 ifeq ($(K2_WERROR),1)
@@ -147,6 +159,7 @@ CFLAGS += -Os -g3 -Wall -Wextra -ffunction-sections -fdata-sections -fno-math-er
 CFLAGS += -fmerge-all-constants
 CFLAGS += -I$(INC_DIR)
 CFLAGS += -DK2_NET=$(K2_NET) -DK2_PDSTRESS=$(K2_PDSTRESS) -DK2_WHOS_ATTACHED=$(K2_WHOS_ATTACHED) -DK2_SCREENSHOT=$(K2_SCREENSHOT)
+CFLAGS += -DK2_HOT_BLOCK=$(K2_HOT_BLOCK)
 CFLAGS += -MMD -MP
 
 # TinyUSB: include path + MCU selection; third-party code is built without -Wextra noise.
@@ -162,7 +175,7 @@ LDFLAGS = $(ARCH_FLAGS)
 ifeq ($(K2_NET),1)
 LDFLAGS += -Wl,--wrap=udp_sendto
 endif
-LDFLAGS += -Tlink.ld -Wl,--gc-sections -nostartfiles
+LDFLAGS += -T$(LINK_LD) -Wl,--gc-sections -nostartfiles
 LDFLAGS += -Wl,--wrap=sqrtf -Wl,--wrap=__aeabi_ldivmod -Wl,--wrap=__aeabi_uldivmod
 LDFLAGS += -Wl,-Map=$(BUILD_DIR)/$(TARGET).map
 
@@ -334,7 +347,10 @@ $(BUILD_DIR)/lwip/%.o: $(LWIP_DIR)/%.c $(CFG_STAMP) | $(BUILD_DIR)
 
 -include $(OBJS:.o=.d)
 
-$(BUILD_DIR)/$(TARGET).elf: $(OBJS) link.ld $(CFG_STAMP) | check-64bit
+$(BUILD_DIR)/link_nohot.ld: link.ld | $(BUILD_DIR)
+	@sed '/K2_HOT_BLOCK_BEGIN/,/K2_HOT_BLOCK_END/d' $< > $@
+
+$(BUILD_DIR)/$(TARGET).elf: $(OBJS) $(LINK_LD) link.ld $(CFG_STAMP) | check-64bit
 	@echo "  LD    $@"
 	@mkdir -p $(CG_DIR) && rm -f $(CG_DIR)/*.ci
 	@$(CXX) $(OBJS) $(LDFLAGS) -o $@
@@ -607,7 +623,7 @@ nav-headers:
 	@$(COMPDB)
 
 docker-build: | $(NAV_DIR)/dirs.txt
-	$(DOCKER_RUN) $(DOCKER_IMG) make K2_GIT=$(K2_GIT) K2_FW_VERSION=$(K2_FW_VERSION) K2_WERROR=$(K2_WERROR) K2_64BIT=$(K2_64BIT) K2_NET=$(K2_NET) K2_PDSTRESS=$(K2_PDSTRESS) K2_WHOS_ATTACHED=$(K2_WHOS_ATTACHED) K2_SCREENSHOT=$(K2_SCREENSHOT) BUILD_DIR=$(BUILD_DIR) K2_HOST_ROOT=$(CURDIR)
+	$(DOCKER_RUN) $(DOCKER_IMG) make K2_GIT=$(K2_GIT) K2_FW_VERSION=$(K2_FW_VERSION) K2_WERROR=$(K2_WERROR) K2_64BIT=$(K2_64BIT) K2_NET=$(K2_NET) K2_PDSTRESS=$(K2_PDSTRESS) K2_WHOS_ATTACHED=$(K2_WHOS_ATTACHED) K2_SCREENSHOT=$(K2_SCREENSHOT) K2_HOT_BLOCK=$(K2_HOT_BLOCK) BUILD_DIR=$(BUILD_DIR) K2_HOST_ROOT=$(CURDIR)
 
 docker-flash:
 	docker run --rm --privileged -v $(CURDIR):/workspace -v /dev:/dev $(DOCKER_IMG) make flash
@@ -615,6 +631,16 @@ docker-flash:
 # Pre-commit gate: -Werror build, invariants, map check, command ids, tests, size report.
 gate:
 	@$(PYTHON) tools/gate.py
+
+# Intended flow: make gate -> flash -> make perf-check. The perf step of the gate only looks at the build that is on the
+# K2 already, so after a flash this runs just that step (on-device selftest vs tools/perf_baseline.json, 3 runs).
+# perf-baseline re-takes the baseline (5 runs, minimum) from a K2 that runs the image in $(BUILD_DIR). Both take the device lock.
+.PHONY: perf-check perf-baseline
+perf-check:
+	@$(PYTHON) tools/gate.py --perf-only
+
+perf-baseline:
+	@$(PYTHON) tools/gate.py --perf-baseline
 
 # Gate, then flash and exercise the device (hands-free, read-only plus page navigation).
 smoke: gate

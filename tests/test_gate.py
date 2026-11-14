@@ -342,5 +342,289 @@ class HotBlock(unittest.TestCase):
         self.assertEqual(len(g.check_hot("08003800 R g_pfnVectors\n")[1]), 1)
 
 
+import contextlib
+import json
+import tempfile
+
+import perf_gate as pg
+
+# `selftest` output as the shell prints it (CRLF, the shell's own `err:` echo line first, a FAIL's want= row), numbers
+# from the hot-text device runs; the header carries the build (fw=) since the perf step needs it.
+ROWS = [("scale_div", 59172, 1), ("adc_calc", 41540, 1), ("power_calc", 17403, 1), ("readout_fmt", 17579, 1),
+        ("fpu_sqrt", 3354, 1), ("one_euro", 15826, 1), ("blend565", 18420, 1), ("ws_fast", 20100, 1), ("ws_slow", 61020, 0)]
+
+
+def selftest_text(fw="1.0.1-105-aaaa1111", rows=ROWS, hot=1, fail=(), skip=(), summary=True, scale=None):
+    out = ["err: unknown command (help)", f"math selftest (arch=m4f opt=Os math_errno=off hot={hot} fw={fw}):"]
+    total = 0
+    for name, cyc, zw in rows:
+        cyc = int(cyc * scale.get(name, 1.0)) if scale else cyc
+        if name in skip:
+            out.append(f"  [SKIP] {name:12}")
+            continue
+        total += cyc
+        out.append(f"  [{'FAIL' if name in fail else 'PASS'}] {name:12} sum=0x7EF9EC51  cyc={cyc} zw={zw}")
+        if name in fail:
+            out.append("         want=0x00000001")
+    n = len(rows) - len(skip)
+    if summary:
+        out.append(f"{'FAIL' if fail else 'PASS'} {n - len(fail)}/{n} checks"
+                   + (f" ({len(skip)} skipped)" if skip else "") + f", total_cyc={total}")
+    return "\r\n".join(out) + "\r\n"
+
+
+def seeded_baseline(version="1.0.1-105-aaaa1111", extra=None):
+    runs = [pg.parse_selftest(selftest_text(fw=version)) for _ in range(3)]
+    b = pg.make_baseline(runs, version)
+    b["checks"].update(extra or {})
+    return b
+
+
+@contextlib.contextmanager
+def no_lock():
+    yield
+
+
+@contextlib.contextmanager
+def busy_lock():
+    raise pg.DeviceBusy("held by pid 4242: k2_remote.py")
+    yield
+
+
+class PerfParse(unittest.TestCase):
+    def test_header_rows_and_summary(self):
+        r = pg.parse_selftest(selftest_text())
+        self.assertEqual((r["fw"], r["hot"], r["arch"]), ("1.0.1-105-aaaa1111", 1, "m4f"))
+        self.assertEqual(r["order"][0], "scale_div")
+        self.assertEqual(r["checks"]["ws_slow"], {"status": "PASS", "sum": "7EF9EC51", "cyc": 61020, "zw": 0})
+        self.assertEqual(r["summary"]["passed"], 9)
+        self.assertEqual(r["summary"]["total"], 9)
+
+    def test_fail_skip_and_missing_summary(self):
+        r = pg.parse_selftest(selftest_text(fail=("adc_calc",), skip=("one_euro",), summary=False))
+        self.assertEqual(r["checks"]["adc_calc"]["status"], "FAIL")
+        self.assertEqual(r["checks"]["one_euro"], {"status": "SKIP", "sum": None, "cyc": None, "zw": None})
+        self.assertIsNone(r["summary"])
+        r = pg.parse_selftest(selftest_text(skip=("one_euro",)))
+        self.assertEqual(r["summary"]["skipped"], 1)
+
+    def test_old_header_has_no_version(self):
+        r = pg.parse_selftest("math selftest (arch=m4f opt=Os math_errno=off):\r\n  [PASS] scale_div   sum=0x1  cyc=5 zw=1\r\n")
+        self.assertIsNone(r["fw"])
+
+    def test_merge_takes_minimum_and_worst_zw(self):
+        a = pg.parse_selftest(selftest_text(scale={"adc_calc": 1.0}))
+        b = pg.parse_selftest(selftest_text(scale={"adc_calc": 1.1}))
+        c = pg.parse_selftest(selftest_text(rows=[("adc_calc", 41000, 0)]))
+        m = pg.merge_runs([a, b, c])["adc_calc"]
+        self.assertEqual((m["cyc"], m["cyc_max"], m["zw"]), (41000, 45694, 0))
+
+
+class PerfCompare(unittest.TestCase):
+    def runs(self, **kw):
+        return [pg.parse_selftest(selftest_text(**kw)) for _ in range(3)]
+
+    def test_pass_when_identical(self):
+        errs, notes, info = pg.compare(seeded_baseline(), self.runs())
+        self.assertEqual((errs, notes), ([], []))
+        self.assertEqual(len(info), len(ROWS))
+
+    def test_pass_within_tolerance(self):
+        # 2 % of 59172 is 1184 cycles; 3354 cycles gets the 50-cycle floor, so +40 is inside it
+        errs, notes, _ = pg.compare(seeded_baseline(), self.runs(scale={"scale_div": 1.01, "fpu_sqrt": 1.0119}))
+        self.assertEqual((errs, notes), ([], []))
+
+    def test_regression_fails(self):
+        errs, _, info = pg.compare(seeded_baseline(), self.runs(scale={"adc_calc": 1.10}))
+        self.assertEqual(len(errs), 1)
+        self.assertIn("adc_calc: slower than the baseline", errs[0])
+        self.assertTrue(any("SLOWER" in l and "adc_calc" in l for l in info))
+
+    def test_small_check_regression_uses_the_cycle_floor(self):
+        errs, _, _ = pg.compare(seeded_baseline(), self.runs(scale={"fpu_sqrt": 1.05}))   # +167 > 67, tol is 67
+        self.assertEqual(len(errs), 1)
+        self.assertIn("fpu_sqrt", errs[0])
+
+    def test_improvement_is_a_notice_not_a_failure(self):
+        errs, notes, _ = pg.compare(seeded_baseline(), self.runs(scale={"blend565": 0.8}))
+        self.assertEqual(errs, [])
+        self.assertEqual(len(notes), 1)
+        self.assertIn("make perf-baseline", notes[0])
+
+    def test_zw_drop_fails(self):
+        rows = [(n, c, 0 if n == "power_calc" else z) for n, c, z in ROWS]
+        errs, _, _ = pg.compare(seeded_baseline(), self.runs(rows=rows))
+        self.assertEqual(len(errs), 1)
+        self.assertIn("power_calc: zw 1 -> 0", errs[0])
+
+    def test_zw_zero_in_the_baseline_may_stay_zero(self):
+        errs, _, _ = pg.compare(seeded_baseline(), self.runs())     # ws_slow is 0 on purpose
+        self.assertEqual(errs, [])
+
+    def test_fail_line_fails(self):
+        errs, _, _ = pg.compare(seeded_baseline(), self.runs(fail=("one_euro",)))
+        self.assertTrue(any("one_euro: FAIL" in e for e in errs))
+        self.assertTrue(any("selftest reports FAIL" in e for e in errs))
+
+    def test_unfinished_run_fails(self):
+        errs, _, _ = pg.compare(seeded_baseline(), self.runs(summary=False))
+        self.assertEqual(len([e for e in errs if "did not finish" in e]), 3)
+
+    def test_skipped_or_missing_check_fails(self):
+        errs, _, _ = pg.compare(seeded_baseline(), self.runs(skip=("adc_calc",)))
+        self.assertTrue(any("adc_calc: SKIP" in e for e in errs))
+        errs, _, _ = pg.compare(seeded_baseline(extra={"gone": {"cyc": 100, "zw": 1}}), self.runs())
+        self.assertTrue(any("gone: missing" in e for e in errs))
+
+    def test_new_check_is_a_notice(self):
+        base = seeded_baseline()
+        del base["checks"]["blend565"]
+        errs, notes, _ = pg.compare(base, self.runs())
+        self.assertEqual(errs, [])
+        self.assertTrue(any("blend565: not in the baseline" in n for n in notes))
+
+
+class PerfBaselineFile(unittest.TestCase):
+    def test_tolerance_follows_the_spread(self):
+        runs = [pg.parse_selftest(selftest_text(scale={"adc_calc": s})) for s in (1.0, 1.1, 1.0, 1.0, 1.0)]
+        b = pg.make_baseline(runs, "v")
+        self.assertEqual(b["checks"]["adc_calc"]["cyc"], 41540)
+        self.assertEqual(b["checks"]["adc_calc"]["tol"], 2 * 4154)     # twice the spread, above the 2 % floor
+        self.assertNotIn("tol", b["checks"]["scale_div"])               # no spread: the default rule applies
+        self.assertEqual((b["status"], b["version"], b["hot"], b["runs"]), ("seeded", "v", 1, 5))
+
+    def test_per_check_tol_wins(self):
+        self.assertEqual(pg.tolerance({"cyc": 100000, "tol": 7}), 7)
+        self.assertEqual(pg.tolerance({"cyc": 100000}), 2000)
+        self.assertEqual(pg.tolerance({"cyc": 1000}), 50)
+
+    def test_the_committed_file_parses_and_is_consistent(self):
+        b = pg.load_baseline()
+        self.assertIn(b["status"], ("seeded", "unseeded"))
+        if b["status"] == "seeded":
+            self.assertTrue(b["checks"] and b["version"])
+            for name, e in b["checks"].items():
+                self.assertGreater(e["cyc"], 0, name)
+
+    def test_image_version_from_the_fwid_record(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "img.bin"
+            p.write_bytes(bytes(3076) + b"K2FW" + b"1.0.1-105-aaaa1111".ljust(44, b"\0") + b"code")
+            self.assertEqual(pg.image_version(p), "1.0.1-105-aaaa1111")
+            p.write_bytes(bytes(3076) + b"XXXX" + bytes(44))
+            self.assertIsNone(pg.image_version(p))
+            self.assertIsNone(pg.image_version(Path(d) / "missing.bin"))
+
+
+class PerfStep(unittest.TestCase):
+    """perf_check end to end with a fake serial runner and lock: what the gate prints and returns."""
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.path = Path(self.tmp.name) / "perf_baseline.json"
+        self.log = []
+
+    def seed(self, b):
+        self.path.write_text(json.dumps(b))
+
+    def check(self, built, runner, lock=no_lock):
+        return pg.perf_check(built, self.path, say=self.log.append, runner=runner, lock=lock)
+
+    def test_pass(self):
+        self.seed(seeded_baseline())
+        calls = []
+        def runner():
+            calls.append(1)
+            return selftest_text()
+        self.assertIsNone(self.check("1.0.1-105-aaaa1111", runner))
+        self.assertEqual(len(calls), pg.GATE_RUNS)          # the probe is run 1
+
+    def test_regression_raises(self):
+        self.seed(seeded_baseline())
+        with self.assertRaises(pg.PerfError) as cm:
+            self.check("1.0.1-105-aaaa1111", lambda: selftest_text(scale={"adc_calc": 1.2}))
+        self.assertIn("adc_calc", str(cm.exception))
+
+    def test_zw_drop_raises(self):
+        self.seed(seeded_baseline())
+        rows = [(n, c, 0) for n, c, z in ROWS]
+        with self.assertRaises(pg.PerfError) as cm:
+            self.check("1.0.1-105-aaaa1111", lambda: selftest_text(rows=rows))
+        self.assertIn("zw 1 -> 0", str(cm.exception))
+
+    def test_fail_line_raises(self):
+        self.seed(seeded_baseline())
+        with self.assertRaises(pg.PerfError) as cm:
+            self.check("1.0.1-105-aaaa1111", lambda: selftest_text(fail=("fpu_sqrt",)))
+        self.assertIn("fpu_sqrt: FAIL", str(cm.exception))
+
+    def test_skip_on_version_mismatch(self):
+        self.seed(seeded_baseline())
+        calls = []
+        def runner():
+            calls.append(1)
+            return selftest_text(fw="1.0.1-104-bbbb2222", scale={"adc_calc": 3.0})   # slow, but another build
+        reason = self.check("1.0.1-105-aaaa1111", runner)
+        self.assertIn("1.0.1-104-bbbb2222", reason)
+        self.assertIn("1.0.1-105-aaaa1111", reason)
+        self.assertEqual(len(calls), 1)                      # one probe, no measuring
+        self.assertTrue(any("SKIPPED" in l for l in self.log))
+
+    def test_skip_on_no_device(self):
+        self.seed(seeded_baseline())
+        def runner():
+            raise pg.PerfError("cannot open /dev/ttyACM0: no such file")
+        reason = self.check("1.0.1-105-aaaa1111", runner)
+        self.assertTrue(reason.startswith("no device"))
+        self.assertIsNone(pg.probe_device(port="/nonexistent/ttyACM9")[0])
+
+    def test_skip_when_the_shell_has_no_selftest_header(self):
+        self.seed(seeded_baseline())
+        self.assertIn("no device", self.check("v", lambda: "err: unknown command (help)\r\n"))
+
+    def test_skip_when_unseeded_and_the_device_is_left_alone(self):
+        self.seed(pg.UNSEEDED)
+        def runner():
+            raise AssertionError("touched the device")
+        reason = self.check("v", runner, lock=busy_lock)
+        self.assertIn("unseeded", reason)
+        self.assertTrue(any("SKIPPED (unseeded" in l for l in self.log))
+
+    def test_missing_baseline_file_counts_as_unseeded(self):
+        self.assertIn("unseeded", self.check("v", lambda: ""))
+
+    def test_skip_when_another_tool_holds_the_device(self):
+        self.seed(seeded_baseline())
+        reason = self.check("v", lambda: selftest_text(), lock=busy_lock)
+        self.assertIn("device busy", reason)
+
+    def test_baseline_refresh_writes_the_file(self):
+        self.seed(pg.UNSEEDED)
+        b = pg.perf_baseline("1.0.1-105-aaaa1111", self.path, say=self.log.append, runner=selftest_text, lock=no_lock)
+        self.assertEqual(json.loads(self.path.read_text())["version"], "1.0.1-105-aaaa1111")
+        self.assertEqual(b["runs"], pg.BASELINE_RUNS)
+        self.assertIsNone(self.check("1.0.1-105-aaaa1111", selftest_text))     # and it then passes
+
+    def test_baseline_refresh_refuses_another_build_and_failing_runs(self):
+        with self.assertRaises(pg.PerfError):
+            pg.perf_baseline("1.0.1-106-cccc3333", self.path, say=print, runner=selftest_text, lock=no_lock)
+        with self.assertRaises(pg.PerfError):
+            pg.perf_baseline(None, self.path, say=print, runner=lambda: selftest_text(fail=("adc_calc",)), lock=no_lock)
+        self.assertFalse(self.path.exists())
+
+
+class GateSkips(unittest.TestCase):
+    def test_hot_step_is_skipped_for_the_no_placement_image(self):
+        before = len(g.SKIPPED)
+        old = g.NO_HOT_BLOCK
+        g.NO_HOT_BLOCK = True
+        try:
+            g.step_hot()                       # must not touch the ELF / docker
+        finally:
+            g.NO_HOT_BLOCK = old
+        self.assertEqual(len(g.SKIPPED), before + 1)
+        g.SKIPPED.pop()
+
+
 if __name__ == "__main__":
     unittest.main()

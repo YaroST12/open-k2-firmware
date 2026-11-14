@@ -61,6 +61,7 @@ SECTIONS
      * come first, then the libc string helpers the hot paths call. `__hot_end` must stay <= 0x08040000;
      * tools/gate.py (step "hot") reports the size and the headroom and the ASSERT below stops the link. */
     __hot_start = .;
+    /* K2_HOT_BLOCK_BEGIN: the Makefile drops everything up to the matching END marker for K2_HOT_BLOCK=0 builds */
     *(.text.hot .text.hot.*)
     /* TinyUSB is third-party C that cannot carry K2_HOT: pin its USB interrupt and transfer path by the
      * per-function section name (-ffunction-sections; clones keep the name plus a .constprop/.isra suffix). */
@@ -104,6 +105,7 @@ SECTIONS
     *libc.a:libc_a-memset.o(.text .text.*)
     *libc.a:libc_a-strlen.o(.text .text.*)
     *(.rodata.hot .rodata.hot.*)
+    /* K2_HOT_BLOCK_END */
     . = ALIGN(4);
     __hot_end = .;
 

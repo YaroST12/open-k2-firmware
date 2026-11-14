@@ -39,9 +39,20 @@ struct TestBackend final : k2::shell::Backend {
     }
 };
 
+// math_opt is built only where k2/core/math_opt.hpp exists (the bench-pre image predates it and reports [SKIP]).
+#if __has_include("k2/core/math_opt.hpp")
+#define K2_TEST_MATH_OPT 1
+#else
+#define K2_TEST_MATH_OPT 0
+#endif
+
 // The checks every build has, in report order (the on-device build adds tu_fifo after pdtrace_ring).
 constexpr const char* kNames[] = {
-    "scale_div", "adc_calc", "power_calc", "math_opt", "readout_fmt", "fpu_sqrt", "one_euro", "blend565",
+    "scale_div", "adc_calc", "power_calc",
+#if K2_TEST_MATH_OPT
+    "math_opt",
+#endif
+    "readout_fmt", "fpu_sqrt", "one_euro", "blend565",
     "text_aa", "text_big", "gfx_fill", "mem_ops", "fmt_line", "pd_codec", "pd_sink", "pdtrace_ring", "ws_fast", "ws_slow",
 };
 
@@ -99,7 +110,10 @@ int main() {
         const char* sum;
     };
     static constexpr Gold kGold[] = {
-        {"scale_div", "7EF9EC51"}, {"adc_calc", "EE89B01D"},  {"power_calc", "B2F07723"}, {"math_opt", "74B742B7"},
+        {"scale_div", "7EF9EC51"}, {"adc_calc", "EE89B01D"},  {"power_calc", "B2F07723"},
+#if K2_TEST_MATH_OPT
+        {"math_opt", "74B742B7"},
+#endif
         {"readout_fmt", "2E7FF5D7"}, {"blend565", "2B0E04E3"}, {"text_aa", "447FE66E"},    {"text_big", "3C2A04BF"},
         {"gfx_fill", "041E7430"},    {"mem_ops", "8B0882C5"},  {"fmt_line", "0F171019"},   {"pd_codec", "DBF8DC4D"},
         {"pd_sink", "5FEDCFA6"},     {"pdtrace_ring", "D2BDBEB5"}, {"ws_fast", "7B1CE946"}, {"ws_slow", "7B1CE946"},
@@ -110,6 +124,15 @@ int main() {
         CHECK_COND(q >= 8203u - 3u && q <= 8203u + 3u);
     }
     CHECK_COND(report.find("want=") == std::string::npos);
+    // The header carries the placement switch and the firmware version (tools/gate.py perf step reads fw=).
+    CHECK_COND(report.find(" hot=") != std::string::npos);
+    CHECK_COND(report.find(" fw=host):") != std::string::npos);
+#if K2_TEST_MATH_OPT
+    CHECK_COND(report.find("[SKIP]") == std::string::npos);
+#else
+    CHECK_COND(report.find("[SKIP] math_opt") != std::string::npos);   // reported, counted in neither passed nor total
+    CHECK_COND(report.find("(1 skipped)") != std::string::npos);
+#endif
 
     // The placement canary runs the same loop twice, from two places in flash: identical results.
     const std::string fast = sum_of(line_of(report, "ws_fast")), slow = sum_of(line_of(report, "ws_slow"));

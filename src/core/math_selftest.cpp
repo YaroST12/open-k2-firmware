@@ -16,13 +16,14 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <new>
 #include <span>
 #include <string_view>
 
 #include "k2/core/fmt.hpp"
 #include "k2/core/hot.h"
-#include "k2/core/math_opt.hpp"
 #include "k2/core/scratch.hpp"
+#include "k2/core/version.hpp"
 #include "k2/drivers/adc_calc.hpp"
 #include "k2/drivers/lcd.hpp"
 #include "k2/drivers/power_calc.hpp"
@@ -38,6 +39,15 @@
 #include "k2/ui/readout_fmt.hpp"
 #include "k2/ui/smoothing.hpp"
 #include "k2/ui/text.hpp"
+
+// k2/core/math_opt.hpp (the 32-bit divide helpers) does not exist before the optimisation commit: the math_opt check is
+// compiled out and reported as [SKIP] there, so one source runs on every bench image.
+#if __has_include("k2/core/math_opt.hpp")
+#include "k2/core/math_opt.hpp"
+#define K2_SELFTEST_MATH_OPT 1
+#else
+#define K2_SELFTEST_MATH_OPT 0
+#endif
 
 #if defined(__arm__) && !defined(__unix__)
 #include "tusb.h"
@@ -254,6 +264,7 @@ K2_HOT bool check_power(Out& o) {
     return ok;
 }
 
+#if K2_SELFTEST_MATH_OPT
 // math_opt: the 64-bit divide helpers the loops above stay clear of.
 K2_HOT bool check_math_opt(Out& o) {
     struct Div {
@@ -297,6 +308,7 @@ K2_HOT bool check_math_opt(Out& o) {
     o.crc = acc;
     return ok;
 }
+#endif
 
 K2_HOT bool check_readout_fmt(Out& o) {
     bool ok = true;
@@ -321,19 +333,32 @@ K2_HOT bool check_readout_fmt(Out& o) {
 // ---------------------------------------------------------------------------------------------------------------------
 // float checks (tolerance, no golden: the target FPU and the host may round differently)
 
+// The FPU's own vsqrt.f32 on the target. std::sqrt would link libm's errno-setting sqrtf wrapper on a build without
+// -fno-math-errno (the pre-optimisation tree), which drags in stdio and malloc; the instruction is what this check is
+// about anyway.
+inline float fsqrt(float x) {
+#if defined(__arm__)
+    float r;
+    asm("vsqrt.f32 %0, %1" : "=t"(r) : "t"(x));
+    return r;
+#else
+    return std::sqrt(x);
+#endif
+}
+
 K2_HOT bool check_fpu_sqrt(Out& o) {
     auto close = [](float a, float b) { return std::fabs(a - b) <= 1e-4f; };
     bool ok = true;
-    ok = ok && close(std::sqrt(keep(3.0f) * 3.0f + keep(4.0f) * 4.0f), 5.0f);
-    ok = ok && close(std::sqrt(keep(5.0f) * 5.0f + keep(12.0f) * 12.0f), 13.0f);
-    ok = ok && close(std::sqrt(keep(8.0f) * 8.0f + keep(15.0f) * 15.0f), 17.0f);
-    ok = ok && close(std::sqrt(keep(0.6f) * 0.6f + keep(0.8f) * 0.8f), 1.0f);
+    ok = ok && close(fsqrt(keep(3.0f) * 3.0f + keep(4.0f) * 4.0f), 5.0f);
+    ok = ok && close(fsqrt(keep(5.0f) * 5.0f + keep(12.0f) * 12.0f), 13.0f);
+    ok = ok && close(fsqrt(keep(8.0f) * 8.0f + keep(15.0f) * 15.0f), 17.0f);
+    ok = ok && close(fsqrt(keep(0.6f) * 0.6f + keep(0.8f) * 0.8f), 1.0f);
 
     float sum = 0.0f;
     for (std::uint32_t i = 0; i < 64u; ++i) {
         const float dx = keep(0.25f + static_cast<float>(i & 7u) * 1.5f);
         const float dy = keep(0.50f + static_cast<float>(i >> 3) * 1.25f);
-        sum += std::sqrt(dx * dx + dy * dy);
+        sum += fsqrt(dx * dx + dy * dy);
     }
     const std::uint32_t qsum = static_cast<std::uint32_t>(sum * 16.0f + 0.5f);
     ok = ok && std::fabs(sum - 512.71765f) < 0.01f;
@@ -409,8 +434,25 @@ struct SinkGuard {
 
 constexpr std::uint16_t kSentinel = 0xA5A5u;
 struct Px {
-    std::uint16_t v[1440];
+    std::uint16_t v[1440];   // font_24 "5.00V" is 60 x 24
 };
+
+// Where a check's big buffer lives: in the leased scratch arena. An arena smaller than the buffer (2816 B before it was
+// grown to 3432 B) cannot hold it; the buffer then lives in one static shared by the checks (they run one at a time), so a
+// build with the grown arena has no such static. Init = true value-initialises the object (scratch::make).
+inline constexpr std::size_t kSpareBytes = 2880;
+template <class T, bool Init = false>
+T& big_buffer() {
+    if constexpr (sizeof(T) <= scratch::kSize) {
+        if constexpr (Init) return scratch::make<T>();
+        else return scratch::as<T>();
+    } else {
+        static_assert(sizeof(T) <= kSpareBytes && alignof(T) <= 8);
+        alignas(8) static std::uint8_t spare[kSpareBytes];
+        if constexpr (Init) return *::new (static_cast<void*>(spare)) T();
+        else return *std::launder(reinterpret_cast<T*>(spare));
+    }
+}
 
 // One text run drawn at (0,0) of an exactly sized surface, fg white on bg black: every pixel must be one of the 16 blend levels
 // (nothing left of the sentinel, so every cell was written), both ends of the ramp must occur, and no glyph may be missing.
@@ -452,7 +494,7 @@ K2_HOT bool run_text(std::uint32_t& acc, const Font& f, std::string_view text, u
 K2_HOT bool check_text_aa(Out& o) {
     if (scratch::held()) return false;
     const scratch::Lease lease("selftest");
-    Px& buf = scratch::as<Px>();
+    Px& buf = big_buffer<Px>();
     std::uint32_t acc = kFnvBasis;
     bool ok = true;
     // 10 code points: ASCII, the degree sign and the ohm sign (the two-byte UTF-8 path and the compressed font decode).
@@ -469,7 +511,7 @@ K2_HOT bool check_text_aa(Out& o) {
 K2_HOT bool check_text_big(Out& o) {
     if (scratch::held()) return false;
     const scratch::Lease lease("selftest");
-    Px& buf = scratch::as<Px>();
+    Px& buf = big_buffer<Px>();
     std::uint32_t acc = kFnvBasis;
     bool ok = true;
     ok = ok && run_text(acc, font_24, "5.00V", 5, false, TextDir::Ccw, buf);
@@ -483,7 +525,7 @@ K2_HOT bool check_text_big(Out& o) {
 K2_HOT bool check_gfx_fill(Out& o) {
     if (scratch::held()) return false;
     const scratch::Lease lease("selftest");
-    Px& buf = scratch::as<Px>();
+    Px& buf = big_buffer<Px>();
     constexpr int kW = 100, kH = 12;
     const Surface s{0, 0, kW, kH};
     bool ok = true;
@@ -550,9 +592,12 @@ K2_HOT bool check_gfx_fill(Out& o) {
 K2_HOT bool check_mem_ops(Out& o) {
     if (scratch::held()) return false;
     const scratch::Lease lease("selftest");
-    static_assert(scratch::kSize >= 3432);
+    // Two halves of the arena. The checks below touch at most 1035 B of each, so a smaller arena (2816 B before the
+    // arena was grown) only shrinks the halves; the sums do not depend on the offsets.
+    constexpr std::size_t kHalf = scratch::kSize / 2 < 1716 ? scratch::kSize / 2 : 1716;
+    static_assert(kHalf >= 1100);
     std::uint8_t* const a = scratch::arena();
-    std::uint8_t* const b = a + 1716;
+    std::uint8_t* const b = a + kHalf;
     volatile std::uint8_t* const va = a;
     volatile std::uint8_t* const vb = b;
     auto pat = [](unsigned k) { return static_cast<std::uint8_t>(k * 37u + 11u); };
@@ -979,7 +1024,7 @@ K2_HOT bool check_pdtrace_ring(Out& o) {
         pdtrace::Ring<1024> ring;
         pdtrace::Collapse<1024> col;
     };
-    Trace& t = scratch::make<Trace>();
+    Trace& t = big_buffer<Trace, true>();
     bool ok = true;
     std::uint32_t acc = kFnvBasis;
     using Span = std::span<const std::uint8_t>;
@@ -1119,7 +1164,9 @@ K2_HOT [[gnu::noinline]] std::uint32_t ws_fast_fn(std::uint32_t n) { return ws_b
 
 bool placed_ok(bool fast, std::uintptr_t addr) {
 #if defined(__arm__)
-    return fast ? addr < kZeroWaitEnd : addr >= kZeroWaitEnd;
+    // Without the hot block (K2_HOT_BLOCK=0) nothing pins ws_fast: its address is reported through zw, not asserted.
+    if (fast) return !K2_HOT_BLOCK || addr < kZeroWaitEnd;
+    return addr >= kZeroWaitEnd;
 #else
     (void)fast;
     (void)addr;
@@ -1155,7 +1202,11 @@ K2_HOT bool run_math(WriteFn write, void* ctx, Summary* out) {
         {"scale_div", check_scale_div, 0x7EF9EC51u, false},
         {"adc_calc", check_adc, 0xEE89B01Du, false},
         {"power_calc", check_power, 0xB2F07723u, false},
+#if K2_SELFTEST_MATH_OPT
         {"math_opt", check_math_opt, 0x74B742B7u, false},
+#else
+        {"math_opt", nullptr, 0u, false},   // no math_opt.hpp on this branch: reported as [SKIP]
+#endif
         {"readout_fmt", check_readout_fmt, 0x2E7FF5D7u, false},
         {"fpu_sqrt", check_fpu_sqrt, 0u, true},    // float: tolerance
         {"one_euro", check_one_euro, 0u, true},    // float: tolerance
@@ -1189,8 +1240,10 @@ K2_HOT bool run_math(WriteFn write, void* ctx, Summary* out) {
 #endif
 #if defined(__arm__)
     constexpr const char* kArch = "m4f";
+    const char* const kFw = kFwVersion;
 #else
     constexpr const char* kArch = "host";
+    constexpr const char* kFw = "host";
 #endif
 
     char line[96];
@@ -1198,11 +1251,24 @@ K2_HOT bool run_math(WriteFn write, void* ctx, Summary* out) {
         if (write && n) write(std::string_view(line, n), ctx);
     };
 
-    emit(fmt::format(line, "math selftest (arch=%s opt=%s math_errno=%s):\r\n", kArch, kOpt, kErrno));
+    // fw= is how tools/gate.py (perf step) and the bench scripts know which image produced the numbers; hot= says whether
+    // the zero-wait placement (K2_HOT_BLOCK) was built in.
+    emit(fmt::format(line, "math selftest (arch=%s opt=%s math_errno=%s hot=%d fw=%s):\r\n", kArch, kOpt, kErrno,
+                     int(K2_HOT_BLOCK), kFw));
 
     std::uint8_t passed = 0;
+    std::uint8_t skipped = 0;
     std::uint32_t total_cycles = 0;
     for (const Case& c : kCases) {
+        if (!c.fn) {   // a check whose production code does not exist on this branch
+            char skip_pad[13];
+            const std::size_t sl = std::strlen(c.name);
+            for (std::size_t i = 0; i < 12u; ++i) skip_pad[i] = i < sl ? c.name[i] : ' ';
+            skip_pad[12] = '\0';
+            emit(fmt::format(line, "  [SKIP] %s\r\n", skip_pad));
+            ++skipped;
+            continue;
+        }
         Out res;
         res.top = reinterpret_cast<std::uintptr_t>(c.fn);
 #if defined(__arm__)
@@ -1227,9 +1293,14 @@ K2_HOT bool run_math(WriteFn write, void* ctx, Summary* out) {
         if (ran && !c.tol && res.crc != c.gold) emit(fmt::format(line, "         want=0x%08X\r\n", c.gold));
     }
 
-    constexpr std::uint8_t kTotal = static_cast<std::uint8_t>(sizeof(kCases) / sizeof(kCases[0]));
-    emit(fmt::format(line, "%s %u/%u checks, total_cyc=%u\r\n",
-                     passed == kTotal ? "PASS" : "FAIL", unsigned(passed), unsigned(kTotal), total_cycles));
+    const std::uint8_t kTotal = static_cast<std::uint8_t>(sizeof(kCases) / sizeof(kCases[0]) - skipped);   // skips count in neither
+    if (skipped) {
+        emit(fmt::format(line, "%s %u/%u checks (%u skipped), total_cyc=%u\r\n", passed == kTotal ? "PASS" : "FAIL",
+                         unsigned(passed), unsigned(kTotal), unsigned(skipped), total_cycles));
+    } else {
+        emit(fmt::format(line, "%s %u/%u checks, total_cyc=%u\r\n",
+                         passed == kTotal ? "PASS" : "FAIL", unsigned(passed), unsigned(kTotal), total_cycles));
+    }
 
     if (out) *out = {passed, kTotal, total_cycles};
     return passed == kTotal;

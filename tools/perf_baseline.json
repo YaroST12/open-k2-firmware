@@ -1,0 +1,11 @@
+{
+  "status": "unseeded",
+  "version": null,
+  "hot": null,
+  "checks": {},
+  "tolerance_default": {
+    "pct": 2.0,
+    "min_cycles": 50
+  },
+  "note": "No numbers yet: the perf step reports SKIPPED (unseeded). Flash the default build, then run `make perf-baseline`."
+}
