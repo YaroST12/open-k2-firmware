@@ -13,7 +13,7 @@
   --k-focus: #0b7fb0; --k-focus-t: #dff1f8;
   --k-dim: #667085; --k-faint: #8e97a5; --k-rule: #c9ced6;
   --k-volt: #946200; --k-amp: #0b7fb0; --k-watt: #c2410c;
-  --k-font: ui-monospace, "Atkinson Hyperlegible Mono", "SF Mono", Menlo, Consolas, monospace;
+  --k-font: "Atkinson Hyperlegible Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
 html[data-theme="dark"] {
   /* tokens, dark: the device's own values, tuned a little for an LCD-less screen */
@@ -70,3 +70,41 @@ html[data-theme="dark"] {
 .k-foot-ok { background: var(--k-ok-t); color: var(--k-ok); }
 .k-foot-caution { background: var(--k-caution-t); color: var(--k-caution); }
 .k-foot-error { background: var(--k-error-t); color: var(--k-error); }
+
+/* TopBar: the page title left, the live volts, amps and watts right in the unit colours (volt amber, amp cyan, watt orange). */
+.k-top { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 6px 10px; background: var(--k-surface);
+         box-shadow: inset 0 -2px 0 var(--k-rule); font-family: var(--k-font); }
+.k-top-t { font-size: 14px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.k-top-r { font-size: 14px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.k-u-v { color: var(--k-volt); } .k-u-a { color: var(--k-amp); } .k-u-w { color: var(--k-watt); }
+
+/* RowList: square markers (a filled square is the selection, a ring-less square the rest), a hairline between rows, the focused row
+   shows its note line under it. A disabled row is dim and struck from the tab order. No rounded corners anywhere in the kit. */
+.k-rl { max-width: var(--k-rl-max, 520px); font-family: var(--k-font); font-size: 14px; border-bottom: 1px solid var(--k-rule); }
+.k-rl-row { display: grid; grid-template-columns: 14px 2.2em minmax(0, 1fr); align-items: center; gap: 8px; padding: 7px 8px; cursor: pointer;
+            border-top: 1px solid var(--k-rule); }
+.k-rl-row:first-child { border-top: 0; }
+.k-rl-row:focus-visible, .k-rl-row.k-focus { outline: 0; background: var(--k-focus-t); box-shadow: inset 3px 0 0 var(--k-focus); }
+.k-rl-row.k-dis { cursor: not-allowed; color: var(--k-faint); }
+.k-rl-l { color: var(--k-dim); }
+.k-rl-v { text-align: right; font-variant-numeric: tabular-nums; }
+.k-mk { width: 10px; height: 10px; box-shadow: inset 0 0 0 1px var(--k-dim); background: none; }
+.k-sel .k-mk { background: var(--k-focus); box-shadow: inset 0 0 0 1px var(--k-focus); }
+.k-rl-note { padding: 3px 8px 6px 38px; font-size: 12px; line-height: 16px; color: var(--k-dim); background: var(--k-focus-t); }
+
+/* ActionCell: a square button. Armed = amber, the label turns to CONFIRM and a bar drains over the 5 s window. The page sets
+   the bar's width from the clock (the kit has no moving parts), so reduced motion needs no special case. */
+.k-act { position: relative; display: inline-flex; align-items: center; justify-content: center; min-width: 120px; min-height: 34px; padding: 0 14px;
+         border: 0; border-radius: 0; background: var(--k-surface); color: inherit; font: 700 13px/1 var(--k-font); letter-spacing: .06em;
+         box-shadow: inset 0 0 0 1px var(--k-dim); cursor: pointer; overflow: hidden; }
+.k-act:hover:not(:disabled) { box-shadow: inset 0 0 0 2px var(--k-focus); }
+.k-act:focus-visible { outline: 2px solid var(--k-focus); outline-offset: 2px; }
+.k-act:disabled { color: var(--k-faint); box-shadow: inset 0 0 0 1px var(--k-rule); cursor: not-allowed; }
+.k-act.k-armed { background: var(--k-caution-t); color: var(--k-caution); box-shadow: inset 0 0 0 2px var(--k-caution); }
+.k-act.k-busy { color: var(--k-dim); }
+.k-act-t { position: relative; }
+.k-drain { position: absolute; left: 0; bottom: 0; height: 4px; width: 100%; background: var(--k-caution); }
+
+/* AlertBand and the page footer: the same tone-filled band, full width. */
+.k-alert { max-width: none; margin-top: 8px; }
+.k-panel { background: var(--k-surface); border: 1px solid var(--k-rule); padding: 10px 12px; font-family: var(--k-font); }
