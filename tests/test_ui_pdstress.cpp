@@ -409,6 +409,54 @@ static void test_a_run_stopped_by_the_reboot_budget_gives_the_rd_back() {
     CHECK_EQ(g_stub.rd_run, false);
 }
 
+// ---- Rd for the whole run -----------------------------------------------------------------------------------------------------------
+
+// A run started on a contract that is still up (a lingering 5 V one, `pd attach` on a list already there) had Rd only through the
+// sink's demand: a source Hard Reset ends that contract, the demand lapses, the Rd goes 300 ms later and the source, back from its
+// reset, sees no sink (the PD Spec Check run on the Anker IQ4, hardware 2026-11-14, 7ace8e17). The run presents its own Rd from the
+// start, whatever was on the line, and gives it back at the end.
+static void test_a_run_started_on_a_contract_presents_its_own_rd() {
+    fixture();
+    std::unique_ptr<Ui> h; Ui& ui = *boot(h);
+    CHECK_EQ(g_stub.rd_run, false);   // a contract, no Rd of a run start
+    CHECK_EQ(int(ui.pd_stress().start(ladder_once(), g_now)), int(ps::StartResult::Ok));
+    CHECK_EQ(g_stub.rd_run, true);
+    run(ui, 3000);
+    CHECK_EQ(ui.pd_stress().running(), true);
+    CHECK_EQ(g_stub.rd_run, true);    // kept while the run goes on
+    run(ui, 120000);
+    CHECK_EQ(int(ui.pd_stress().engine()->stop()), int(ps::Stop::Done));
+    CHECK_EQ(g_stub.rd_run, false);   // and given back
+}
+
+// A refused start presents nothing.
+static void test_a_refused_run_presents_no_rd() {
+    fixture();
+    std::unique_ptr<Ui> h; Ui& ui = *boot(h);
+    ui.context().inline_mode = true;
+    CHECK_EQ(int(ui.pd_stress().start(ladder_once(), g_now)), int(ps::StartResult::Inline));
+    CHECK_EQ(g_stub.rd_run, false);
+}
+
+// A run resumed after a reboot is a run like a started one: its own Rd from the resume on (the wait before it uses the boot's Rd).
+static void test_a_resumed_run_presents_its_own_rd() {
+    std::unique_ptr<Ui> h; interrupted_run(h);
+    g_stub.sink = {}; set_vbus(0);
+    g_stub.rd_run = false;
+    boot(h);
+    Ui& ui = *h;
+    set_vbus(5000);
+    g_stub.caps.num_pdos = 4;
+    g_stub.sink.state = pd::SinkState::Ready; g_stub.sink.result = pd::SinkResult::Ok; g_stub.sink.pos = 1; g_stub.sink.mv = 5000;
+    g_stub.sink.ps_rdy_inferred = true;
+    run(ui, 1500);
+    CHECK_EQ(ui.pd_stress().running(), true);
+    CHECK_EQ(g_stub.rd_run, true);
+    run(ui, 120000);
+    CHECK_EQ(int(ui.pd_stress().engine()->stop()), int(ps::Stop::Done));
+    CHECK_EQ(g_stub.rd_run, false);
+}
+
 // The status block the remote op and the shell serve: idle, a refused start's code, running, finished with the score.
 static void test_the_status_block_follows_the_run() {
     fixture();
@@ -494,5 +542,8 @@ int main() {
     test_a_cancelled_run_gives_the_rd_back();
     test_a_run_that_gave_up_gives_the_rd_back();
     test_a_run_stopped_by_the_reboot_budget_gives_the_rd_back();
+    test_a_run_started_on_a_contract_presents_its_own_rd();
+    test_a_refused_run_presents_no_rd();
+    test_a_resumed_run_presents_its_own_rd();
     return test_report("ui_pdstress");
 }

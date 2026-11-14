@@ -341,7 +341,8 @@ sequence boundary on a quiet link and, after the reboot, resumes by itself once 
 - a journal only resumes on the same PDO list (a CRC of the source capabilities), never when the run is finished, and not with BACK held at boot;
 - the distributions and the counters since the last boundary save are lost with the reboot; the counters otherwise carry on;
 - a host-powered K2 never journals (a charger cut does not reboot it);
-- the K2 presents no Rd of its own: a resume needs the Rd the boot already has, otherwise the 60 s wait ends and the journal is dropped.
+- the wait for a resume presents no Rd of its own: it needs the Rd the boot already has, otherwise the 60 s wait ends and the journal is
+  dropped; once resumed, the run presents its own Rd like a started one (below).
 
 `tools/pd_stress.py run` tolerates the K2's USB going away and coming back while it waits.
 
@@ -363,8 +364,10 @@ ops 0 status, 1 start, 2 read result (48-byte chunks), 3 stop. Start needs the c
 
 A run started on the attach of a lab `pd-reread` (the usual way to get a contract on a brick before the run) takes that attach over
 (`fusb302::reread_take_over()` in `start_run`): the re-read's 30 s release timer is cancelled and the Rd and contract belong to the run.
-The release never fires while a run owns the line, so a run cannot be cut by it (hardware 2026-11-11 saw it at a Soft_Reset step). After
-the run the attach stays up until `pd-reread --abort` (refused with busy while the run lasts) or a detach.
+The release never fires while a run owns the line, so a run cannot be cut by it (hardware 2026-11-11 saw it at a Soft_Reset step). From the
+start (and from a resume) the run presents its own Rd (`fusb302::rd_for_run(true)`, as PD Spec Check and a charger-test START do): a run
+started on a contract that was still up had Rd only through the sink's demand, which a source Hard Reset ends with the contract, so the
+Rd went 300 ms later and the source never came back. At the end (`on_finish`) the run gives that Rd back.
 
 ### Result
 

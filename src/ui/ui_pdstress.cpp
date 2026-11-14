@@ -154,7 +154,14 @@ ps::StartResult PdStressSession::start_run(const ps::Options& o, std::uint32_t n
     }
     // The run owns the link from here: a pd-reread attach it starts on (Rd, PDO 1 contract) is the run's, and the re-read's
     // 30 s release must not fire inside a Soft_Reset step (hardware 2026-11-11). A refused start takes nothing over.
-    if (r == ps::StartResult::Ok) fusb302::reread_take_over();
+    if (r == ps::StartResult::Ok) {
+        fusb302::reread_take_over();
+        // The run presents its own Rd for its whole length, as a charger-test START and PD Spec Check (7ace8e17) do; on_finish()
+        // gives it back. A run started on a contract (a lingering 5 V one, `pd attach` on a list already there) had Rd only through
+        // the sink's demand, which a source Hard Reset ends with the contract: the Rd went 300 ms later and the source, back from
+        // its reset, saw no sink (Anker IQ4, hardware 2026-11-14).
+        fusb302::rd_for_run(true);
+    }
     update_footer();
     return r;
 }
@@ -219,6 +226,8 @@ void PdStressSession::restore_step(std::uint32_t now_ms) {
         journal_on_ = false;
         ps::journal::Journal j(ps::journal_hw::store());
         j.clear();
+    } else {
+        fusb302::rd_for_run(true);   // a resumed run is a run: its own Rd from here (the wait above used the boot's), as in start_run
     }
     update_footer();
 }
