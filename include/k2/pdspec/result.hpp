@@ -4,8 +4,9 @@
 // records and the byte blob the remote reads (pure, host-tested in tests/test_pdspec_result.cpp and through the engine tests).
 //
 // A check is judged per measurement and aggregated: n measured, fails, the worst value with the limit it was judged against and the
-// item it came from. Verdict: Skip when nothing was measured (with the reason), Fail when any measurement failed, else Pass.
-// Score = sum of weight x fails over the checks: a penalty, 0 = ideal. The weights are provisional (docs/PD_SPEC_CHECK.md "Score").
+// item it came from. Verdict: Skip when nothing was measured (with the reason), Fail when any measurement failed, else Pass; a check
+// whose limit is inferred (no figure in the specification) is Unverified once measured: reported, never judged, no penalty.
+// Score = sum of weight x fails over the judged checks: a penalty, 0 = ideal. The weights are provisional (docs/PD_SPEC_CHECK.md "Score").
 #pragma once
 
 #include <array>
@@ -54,6 +55,7 @@ struct CheckDef {
     Kind kind;
     Unit unit;
     std::uint8_t weight;    // penalty points per failed measurement (provisional)
+    bool inferred = false;  // the limit is a K2 figure, not the specification's: the check is reported as Unverified, no penalty
 };
 
 inline constexpr std::array<CheckDef, kChecks> kDefs{{
@@ -75,8 +77,8 @@ inline constexpr std::array<CheckDef, kChecks> kDefs{{
     {"hr_recover", "HR off time", Kind::Range, Unit::Ms, 3},
     {"hr_turn_on", "HR turn-on", Kind::Max, Unit::Ms, 3},
     {"hr_caps", "HR caps", Kind::Max, Unit::Ms, 2},
-    {"detach_safe0v", "Detach to 0 V", Kind::Max, Unit::Ms, 5},
-    {"reattach", "Re-attach", Kind::Max, Unit::Ms, 10},
+    {"detach_safe0v", "Detach to 0 V", Kind::Max, Unit::Ms, 5, true},   // tVBUSOFF + tPDDebounce, both inferred
+    {"reattach", "Re-attach", Kind::Max, Unit::Ms, 10, true},           // 5 s, a K2 figure
     {"source_reset", "Source reset", Kind::Max, Unit::Count, 20},
 }};
 
@@ -105,13 +107,14 @@ constexpr const char* skip_name(Skip s) {
     return "?";
 }
 
-enum class Verdict : std::uint8_t { Pending, Pass, Fail, Skip };
+enum class Verdict : std::uint8_t { Pending, Pass, Fail, Skip, Unverified };
 constexpr const char* verdict_name(Verdict v) {
     switch (v) {
         case Verdict::Pending: return "pending";
         case Verdict::Pass: return "pass";
         case Verdict::Fail: return "fail";
         case Verdict::Skip: return "skip";
+        case Verdict::Unverified: return "unverified";
     }
     return "?";
 }
@@ -157,8 +160,14 @@ struct Agg {
         if (k != Kind::Max) { const std::int32_t d = m.lo - m.value + (1 << 23); if (d > c) c = d; }
         return c < 0 ? 0 : c >= (1 << 24) ? (1 << 24) - 1 : c;
     }
-    Verdict verdict() const { return n == 0 ? Verdict::Skip : fails ? Verdict::Fail : Verdict::Pass; }
+    Verdict verdict() const { return n == 0 ? Verdict::Skip : fails ? Verdict::Fail : Verdict::Pass; }   // judged as if sourced
 };
+
+// The verdict the result shows: an inferred limit never passes or fails a charger (the count over it stays in fails).
+constexpr Verdict verdict(Check c, const Agg& a) {
+    const Verdict v = a.verdict();
+    return def(c).inferred && v != Verdict::Skip ? Verdict::Unverified : v;
+}
 
 // ---- per-item records (the report's detail) ------------------------------------------------------------------------------------
 
@@ -251,7 +260,7 @@ private:
             const std::size_t k = o / kAggBytes, i = o % kAggBytes;
             const Agg& a = agg_[k];
             switch (i) {
-                case 0: return std::uint8_t(a.verdict());
+                case 0: return std::uint8_t(verdict(Check(k), a));
                 case 1: return std::uint8_t(a.skip);
                 case 2: return a.a;
                 case 3: return a.b;
@@ -293,10 +302,11 @@ private:
     std::span<const PpsRec> pp_;
 };
 
-// Score: weight x fails, summed (saturates at 0xFFFF).
+// Score: weight x fails over the judged checks (an inferred limit adds nothing), summed (saturates at 0xFFFF).
 inline std::uint16_t score(std::span<const Agg> agg) {
     std::uint32_t s = 0;
-    for (std::size_t k = 0; k < agg.size() && k < kChecks; ++k) s += std::uint32_t(kDefs[k].weight) * agg[k].fails;
+    for (std::size_t k = 0; k < agg.size() && k < kChecks; ++k)
+        if (!kDefs[k].inferred) s += std::uint32_t(kDefs[k].weight) * agg[k].fails;
     return std::uint16_t(s > 0xFFFF ? 0xFFFF : s);
 }
 

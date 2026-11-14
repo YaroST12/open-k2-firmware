@@ -288,6 +288,30 @@ void test_results_extremes() {
             run(ui, 100);
         }
         if (variant == 3) CHECK_STR(foot(ui).c_str(), "Not back at 5V: unplug");
+        if (variant == 3) {
+            // An inferred limit (the detach checks): the measured value without a pass/fail look, "Unverified", no penalty points.
+            for (const sc::Check c : {sc::Check::DetachSafe0V, sc::Check::Reattach}) {
+                kit::ResultRowSpec r;
+                p.result_row(int(c), r);
+                CHECK_EQ(int(r.cells[0].verdict), int(kit::Verdict::None));
+                CHECK_EQ(std::string(r.cells[0].label).empty(), false);
+            }
+            for (int k = 0; k < int(sc::Check::Reattach); ++k) press(ui, Button::Plus);
+            run(ui, 60);
+            press(ui, Button::Ok);
+            run(ui, 60);
+            StrBuf<20> v;
+            uint16_t col = 0;
+            p.detail_value(0, v, col);
+            CHECK_STR(std::string(v.view()).c_str(), "Unverified");
+            v.clear();
+            p.detail_value(6, v, col);
+            CHECK_STR(std::string(v.view()).c_str(), "0");
+            press(ui, Button::Back);
+            run(ui, 60);
+            for (int k = 0; k < int(sc::Check::Reattach); ++k) press(ui, Button::Minus);
+            run(ui, 60);
+        }
     }
     ui.set_rotation(0, g_now);
 }

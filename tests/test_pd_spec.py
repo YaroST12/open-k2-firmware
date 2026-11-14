@@ -44,6 +44,8 @@ int main() {
     agg[std::size_t(Check::HrRecover)].add(Kind::Range, Meas{500, 0, 660, 1000, 0, 0});
     agg[std::size_t(Check::PpsKeepAlive)].skip = Skip::NoPps;
     // an up-step's overshoot: a Range with the low side open
+    agg[std::size_t(Check::Reattach)].skip = Skip::None;   // an inferred limit: over it, but unverified (no penalty)
+    agg[std::size_t(Check::Reattach)].add(Kind::Max, Meas{6200, 0, 0, 5000, 0, 0});
     agg[std::size_t(Check::Overshoot)].skip = Skip::None;
     agg[std::size_t(Check::Overshoot)].add(Kind::Range, Meas{21300, 0, -kOpenLimit, 21500, 2, 3});
     BlobHead h;
@@ -75,7 +77,7 @@ NAMES_CPP = r"""
 #include "k2/pdspec/engine.hpp"
 using namespace k2::pdspec;
 int main() {
-    for (std::size_t i = 0; i < kChecks; i++) std::printf("check %s|%s|%u\n", kDefs[i].key, kDefs[i].label, unsigned(kDefs[i].weight));
+    for (std::size_t i = 0; i < kChecks; i++) std::printf("check %s|%s|%u|%d\n", kDefs[i].key, kDefs[i].label, unsigned(kDefs[i].weight), int(kDefs[i].inferred));
     for (int i = 0; i <= int(Skip::NotSelected); i++) std::printf("skip %s\n", skip_name(Skip(i)));
     for (int i = 0; i <= int(Stop::Timeout); i++) std::printf("stop %s\n", stop_name(Stop(i)));
     for (int i = 0; i <= int(StartResult::Running); i++) std::printf("start %s\n", start_name(StartResult(i)));
@@ -104,7 +106,8 @@ class Tables(unittest.TestCase):
         self.assertEqual(t["checks"][-1]["weight"], 20)
         self.assertEqual(t["skips"][0], "-")
         self.assertEqual(t["skips"][-1], "not selected")
-        self.assertEqual(t["verdicts"], ["pending", "pass", "fail", "skip"])
+        self.assertEqual(t["verdicts"], ["pending", "pass", "fail", "skip", "unverified"])
+        self.assertEqual([c["key"] for c in t["checks"] if c["inferred"]], ["detach_safe0v", "reattach"])
 
     @unittest.skipUnless(HAVE_GXX, "needs a host g++")
     def test_tables_match_the_compiled_firmware(self):
@@ -114,7 +117,7 @@ class Tables(unittest.TestCase):
             k, v = l.split(" ", 1)
             by.setdefault(k, []).append(v)
         t = pb.load_tables()
-        self.assertEqual(by["check"], [f"{c['key']}|{c['label']}|{c['weight']}" for c in t["checks"]])
+        self.assertEqual(by["check"], [f"{c['key']}|{c['label']}|{c['weight']}|{int(c['inferred'])}" for c in t["checks"]])
         self.assertEqual(by["skip"], t["skips"])
         self.assertEqual(by["stop"], t["stops"])
         self.assertEqual(by["start"], t["starts"])
@@ -141,7 +144,7 @@ class Decode(unittest.TestCase):
         # PS_RDY early 3 x 1 fail + HR off time 3 x 1 fail
         self.assertEqual(r["score"], 6)
         self.assertEqual(r["score"], sum(c["penalty"] for c in r["checks"]))
-        self.assertEqual(r["tally"], {"pass": 2, "fail": 2, "skip": 17})
+        self.assertEqual(r["tally"], {"pass": 2, "fail": 2, "skip": 16, "unverified": 1})
 
     def test_checks(self):
         a = self.check("accept_time")
@@ -154,6 +157,8 @@ class Decode(unittest.TestCase):
         p = self.check("pps_keepalive")
         self.assertEqual((p["verdict"], p["skip"], p["worst"]), ("skip", "no PPS", None))
         self.assertEqual(self.check("detach_safe0v")["skip"], "not selected")
+        u = self.check("reattach")
+        self.assertEqual((u["verdict"], u["n"], u["fails"], u["worst"], u["hi"], u["penalty"]), ("unverified", 1, 1, 6200, 5000, 0))
 
     def test_timers_and_records(self):
         t = self.r["timers"]
@@ -179,7 +184,9 @@ class Decode(unittest.TestCase):
         self.assertIn("at PDO 3 to 2", text)
         self.assertIn("accept_time    pass", text)
         self.assertIn("worst 12.5 ms", text)
-        self.assertIn("pps_keepalive  skip   no PPS", text)
+        self.assertIn("pps_keepalive  skip       no PPS", text)
+        self.assertIn("reattach       unverified worst 6200 ms", text)
+        self.assertIn("unverified 1", text)
         self.assertIn("APDO 5 at 5000 mV", text)
         self.assertIn("limit <= 21.500 V", text)     # the overshoot's open low side is not printed
         self.assertIn("limit 660 ms .. 1000 ms", text)

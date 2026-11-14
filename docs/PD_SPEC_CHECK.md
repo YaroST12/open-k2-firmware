@@ -45,7 +45,9 @@ out reads "not selected"; every family ends back at a 5 V contract.
 ### Limits
 
 Every limit is a named figure of the USB PD R3.2 (or Type-C) specification, or a sum of named figures ("derived"), or a K2 figure where
-the specification names none ("inferred"). The numbers live in `pd_spec_timing.hpp`; the reference point is always one of the K2's own
+the specification names none ("inferred"). A check whose whole limit is inferred (`detach_safe0v`, `reattach`; `inferred` in
+`kDefs`) is measured and reported but never judged: its verdict reads **unverified**, with the value and the count over the inferred
+limit, and it adds nothing to the score. The numbers live in `pd_spec_timing.hpp`; the reference point is always one of the K2's own
 edges: the Request's TX start, the Accept's or the PS_RDY's RX edge, or the VBUS sample.
 
 | Check | Measured | Limit |
@@ -67,19 +69,20 @@ edges: the Request's TX start, the Accept's or the PS_RDY's RX edge, or the VBUS
 | `hr_recover` | VBUS off time | tSrcRecover, 660 to 1000 ms (1085 to 1425 ms when the reset leaves EPR mode) |
 | `hr_turn_on` | VBUS back to vSafe5V (4.75 V) | tSrcTurnOn, 275 ms |
 | `hr_caps` | vSafe5V to the first Source_Capabilities | tFirstSourceCap, 250 ms |
-| `detach_safe0v` | Rd away to VBUS under vSafe0V | tVBUSOFF (650 ms) + tPDDebounce max (20 ms), both inferred |
-| `reattach` | Rd back to a 5 V contract | 5 s (a K2 figure, inferred) |
+| `detach_safe0v` | Rd away to VBUS under vSafe0V | tVBUSOFF (650 ms) + tPDDebounce max (20 ms), both inferred: unverified |
+| `reattach` | Rd back to a 5 V contract | 5 s (a K2 figure, inferred): unverified |
 | `source_reset` | Hard Resets from the source that were not due | 0 |
 
 A check is judged per measurement and aggregated: count, fails, and the worst value with the limit it was judged against and where it
 came from (the PDO pair, the APDO point). Verdict: skip when nothing was measured (with the reason: not offered, one fixed level, no
 PPS, no EPR, no EPR cable proof, capture busy, level refused, run stopped, not reached, K2 on the charger, no data, not selected),
 fail when any
-measurement failed, else pass.
+measurement failed, else pass; a measured check with an inferred limit is unverified (neither pass nor fail).
 
 ### Score
 
-Penalty points: `score = sum over the checks of weight x fails`, **0 = ideal**. The weights are **provisional** (`kDefs` in
+Penalty points: `score = sum over the judged checks of weight x fails`, **0 = ideal**; an unverified check adds nothing (its weight
+applies once its limit has a source). The weights are **provisional** (`kDefs` in
 `result.hpp`), to be settled after runs on several chargers; the result keeps every count, so a run can be rescored later.
 
 | Weight | Checks |
@@ -87,8 +90,8 @@ Penalty points: `score = sum over the checks of weight x fails`, **0 = ideal**. 
 | 1 | `accept_time` `src_start` `pps_settle` |
 | 2 | `ps_rdy_time` `rise_time` `fall_time` `pps_accuracy` `hr_caps` |
 | 3 | `ps_rdy_early` `ps_rdy_low` `overshoot` `accuracy` `pps_monotonic` `hr_recover` `hr_turn_on` |
-| 5 | `pps_keepalive` `epr_keepalive` `hr_safe0v` `detach_safe0v` |
-| 10 | `reattach` |
+| 5 | `pps_keepalive` `epr_keepalive` `hr_safe0v` `detach_safe0v` (unverified for now: 0) |
+| 10 | `reattach` (unverified for now: 0) |
 | 20 | `source_reset` |
 
 ## Measurement
@@ -146,7 +149,7 @@ On the K2: Tools > PD Spec Check (or the Charger place's "Spec check" row).
    footer ("No PD source", "K2 runs on this charger", ...).
 3. **Running**: family and item, elapsed time, a progress bar, the live VBUS and the fail and score counts. BACK stops; the footer
    says "Stopped" once the charger is back at 5 V.
-4. **Results**: the score, the pass / fail / skip tallies and one ResultGrid row per check (worst value or the skip reason in the
+4. **Results**: the score, the pass / fail / skip tallies (an unverified check is in none of them) and one ResultGrid row per check (worst value or the skip reason in the
    cell). OK opens a check's **Detail**: verdict, worst value, limit, count, fails, where (PDO pair or APDO point) and penalty.
 
 While a run goes on, any other page shows a one-line footer ("PD Spec: Transitions 12/56"), and the session block names the owner
@@ -172,7 +175,8 @@ Command 0x5A (`Cmd::PdSpec`, `include/k2/core/remote_proto.hpp`): op 0 status, 1
 is the confirm, required: NeedConfirm without it; a mask beyond 0x3F or an unknown flag is BadArg; Busy when another tool owns the
 ports, other refusals in the status block's `start` byte), 2 read (offset u16; reply offset, total, n, data, 48-byte chunks), 3 stop
 (never refused). The 17-byte status block: state (0 idle, 1 running, 2 finished), stop, start, family, item, items, families, fails,
-passes, skips, flags (bit 0: return to 5 V not confirmed), score u16, elapsed s u16, blob length u16.
+passes, skips (unverified checks are counted in none of the three; the blob has them), flags (bit 0: return to 5 V not confirmed),
+score u16, elapsed s u16, blob length u16.
 
 The result blob (`result.hpp`, magic `PSC1`): a 16-byte header (state, stop, transition and PPS record counts, score, elapsed,
 flags), 21 x 20-byte check aggregates (verdict, skip reason, where, count, fails, worst, low and high limit), 32 bytes of timer

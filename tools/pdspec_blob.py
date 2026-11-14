@@ -54,14 +54,15 @@ def _case_strings(text, func, enum):
 
 
 def load_tables():
-    """The checks (key, label, kind, unit, weight) in wire order, the skip reasons, stop texts, start refusals and family names."""
+    """The checks (key, label, kind, unit, weight, inferred) in wire order, the skip reasons, stop texts, start refusals and family names."""
     if "t" in _cache:
         return _cache["t"]
     res, eng = _read("result.hpp"), _read("engine.hpp")
     check_names = _enum_names(res, "Check")
     rows = re.search(r"kDefs\s*\{\{(.*?)\n\}\};", res, re.S).group(1)
-    defs = [{"key": k, "label": l, "kind": kd.lower(), "unit": u.lower(), "weight": int(w)}
-            for k, l, kd, u, w in re.findall(r"\{\"(\w+)\",\s*\"([^\"]*)\",\s*Kind::(\w+),\s*Unit::(\w+),\s*(\d+)\}", rows)]
+    defs = [{"key": k, "label": l, "kind": kd.lower(), "unit": u.lower(), "weight": int(w), "inferred": inf == "true"}
+            for k, l, kd, u, w, inf in
+            re.findall(r"\{\"(\w+)\",\s*\"([^\"]*)\",\s*Kind::(\w+),\s*Unit::(\w+),\s*(\d+)(?:,\s*(true|false))?\}", rows)]
     if len(defs) != len(check_names):
         raise ValueError(f"result.hpp: {len(defs)} kDefs rows for {len(check_names)} checks")
     for d, n in zip(defs, check_names):
@@ -120,7 +121,7 @@ def decode_blob(b):
         verdict, skip, a, bb, n, fails, worst, lo, hi = struct.unpack_from("<BBBBHHiii", b, o)
         checks.append({"key": d["key"], "label": d["label"], "kind": d["kind"], "unit": d["unit"], "weight": d["weight"],
                        "verdict": _name(t["verdicts"], verdict), "skip": _name(t["skips"], skip) if skip else None,
-                       "n": n, "fails": fails, "penalty": d["weight"] * fails,
+                       "n": n, "fails": fails, "penalty": 0 if d["inferred"] else d["weight"] * fails,   # inferred: unverified
                        "worst": None if not n else worst, "lo": lo, "hi": hi, "a": a, "b": bb})
     o = HEADER + n_checks * AGG
     w = struct.unpack_from("<8I", b, o)
@@ -142,7 +143,7 @@ def decode_blob(b):
         pos, steps, mono, acc, set_mv, err, dmin, dmax, settle = struct.unpack_from("<BBBBHhhhH", b, o + i * PPS)
         pps.append({"pos": pos, "steps": steps, "mono_fails": mono, "acc_fails": acc, "set_mv": set_mv, "worst_err_mv": err,
                     "min_delta_mv": dmin, "max_delta_mv": dmax, "max_settle_ms": settle / 10.0})
-    tally = {v: sum(1 for c in checks if c["verdict"] == v) for v in ("pass", "fail", "skip")}
+    tally = {v: sum(1 for c in checks if c["verdict"] == v) for v in ("pass", "fail", "skip", "unverified")}
     return {"state": _name(STATES, state), "stop_code": stop, "stop": _name(t["stops"], stop), "score": score,
             "elapsed_s": elapsed_s, "release_unconfirmed": bool(flags & 1), "tally": tally, "checks": checks,
             "timers": timers, "transitions": trans, "pps": pps}
@@ -187,15 +188,15 @@ def render_text(r):
     tl = r["tally"]
     lines = [f"PD Spec Check {r['state']}: {r['stop']}; {r['elapsed_s']} s",
              f"score {r['score']} (penalty, 0 = ideal; weights provisional, see docs/PD_SPEC_CHECK.md)  "
-             f"pass {tl['pass']}  fail {tl['fail']}  skip {tl['skip']}"]
+             f"pass {tl['pass']}  fail {tl['fail']}  skip {tl['skip']}  unverified {tl['unverified']}"]
     if r["release_unconfirmed"]:
         lines.append("WARNING: the end-of-run return to 5 V was not confirmed: unplug the charger")
     lines.append("checks:")
     for k, c in enumerate(r["checks"]):
         if c["verdict"] == "skip":
-            lines.append(f"  {c['key']:<14} skip   {c['skip'] or '-'}")
+            lines.append(f"  {c['key']:<14} skip       {c['skip'] or '-'}")
             continue
-        lines.append(f"  {c['key']:<14} {c['verdict']:<6} worst {fmt_value(c['unit'], c['worst']):<11} limit {fmt_limit(c):<22} "
+        lines.append(f"  {c['key']:<14} {c['verdict']:<10} worst {fmt_value(c['unit'], c['worst']):<11} limit {fmt_limit(c):<22} "
                      f"n {c['n']:<3} fails {c['fails']:<3} at {fmt_at(k, c)}" + (f"  penalty {c['penalty']}" if c["penalty"] else ""))
     tm = r["timers"]
     ms = lambda v: "-" if v is None else f"{v} ms"

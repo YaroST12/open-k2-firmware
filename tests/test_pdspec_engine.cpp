@@ -350,7 +350,7 @@ void check_safe_end(const Sim& m, const Engine& e) {
                     stop_name(e.stop()), unsigned(m.t));
 }
 
-Verdict verdict(const Engine& e, Check c) { return e.agg(c).verdict(); }
+Verdict verdict(const Engine& e, Check c) { return verdict(c, e.agg(c)); }
 
 void clean_source_scores_zero() {
     Sim m;
@@ -390,8 +390,9 @@ void clean_source_scores_zero() {
     CHECK_COND(e.timers().pps_ka_ms >= 12900 && e.timers().pps_ka_ms <= 13100);
     CHECK_COND(verdict(e, Check::EprKeepAlive) == Verdict::Skip);
     CHECK_COND(e.agg(Check::EprKeepAlive).skip == Skip::NoEpr);
-    for (const Check c : {Check::HrSafe0V, Check::HrRecover, Check::HrTurnOn, Check::HrCaps, Check::DetachSafe0V, Check::Reattach})
-        CHECK_COND(verdict(e, c) == Verdict::Pass);
+    for (const Check c : {Check::HrSafe0V, Check::HrRecover, Check::HrTurnOn, Check::HrCaps}) CHECK_COND(verdict(e, c) == Verdict::Pass);
+    // The detach limits are inferred: measured and reported, never judged.
+    for (const Check c : {Check::DetachSafe0V, Check::Reattach}) CHECK_COND(verdict(e, c) == Verdict::Unverified);
     // 20 V at 100 mV/ms after 25 ms: under 800 mV at 217 ms; 700 ms dark; 5 V at +43 ms, the capabilities 150 ms after the rise.
     CHECK_COND(e.timers().hr_off_ms >= 215 && e.timers().hr_off_ms <= 219);
     CHECK_COND(e.timers().hr_dark_ms >= 700 && e.timers().hr_dark_ms <= 720);
@@ -480,7 +481,7 @@ void source_back_at_its_old_level() {
     check_safe_end(m, e);
     CHECK_COND(e.stop() == Stop::Done);
     CHECK_EQ(int(e.score()), 0);
-    CHECK_COND(verdict(e, Check::Reattach) == Verdict::Pass);
+    CHECK_COND(verdict(e, Check::Reattach) == Verdict::Unverified);
 }
 
 void capture_busy_falls_back_to_stamps_and_polling() {
@@ -713,7 +714,7 @@ void family_selection() {
     CHECK_COND(e.agg(Check::AcceptTime).skip == Skip::NotSelected);
     CHECK_COND(e.agg(Check::PpsKeepAlive).skip == Skip::NotSelected);
     CHECK_COND(verdict(e, Check::HrSafe0V) == Verdict::Pass);
-    CHECK_COND(verdict(e, Check::DetachSafe0V) == Verdict::Pass);
+    CHECK_COND(verdict(e, Check::DetachSafe0V) == Verdict::Unverified);
     CHECK_EQ(m.max_req_mv, 20000);   // the top fixed level the reset is made from
 }
 
@@ -783,6 +784,26 @@ void cancel_anywhere_ends_safe() {
     }
 }
 
+// A source that drains slowly after the detach and comes back late: both are over the K2's inferred limits (tVBUSOFF + tPDDebounce,
+// the 5 s re-attach), so the numbers and the counts are reported, the verdict reads "unverified" and the score stays 0.
+void slow_detach_is_unverified_not_failed() {
+    Sim m;
+    typical(m);
+    m.bleed = 20;          // 20 V at 20 mV/ms: about 960 ms to vSafe0V
+    m.reattach_ms = 6000;
+    Engine e(m);
+    CHECK_COND(e.start(0) == StartResult::Ok);
+    drive(m, e);
+    check_safe_end(m, e);
+    CHECK_COND(e.stop() == Stop::Done);
+    CHECK_COND(e.timers().det_off_ms >= 900);
+    CHECK_COND(e.agg(Check::DetachSafe0V).fails == 1);
+    CHECK_COND(e.agg(Check::Reattach).fails == 1);
+    CHECK_COND(verdict(e, Check::DetachSafe0V) == Verdict::Unverified);
+    CHECK_COND(verdict(e, Check::Reattach) == Verdict::Unverified);
+    CHECK_EQ(int(e.score()), 0);
+}
+
 }  // namespace
 
 int main() {
@@ -805,5 +826,6 @@ int main() {
     family_selection();
     start_refusals();
     cancel_anywhere_ends_safe();
+    slow_detach_is_unverified_not_failed();
     return test_report("test_pdspec_engine");
 }

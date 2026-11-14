@@ -300,9 +300,13 @@ void PdSpecPage::result_row(int i, kit::ResultRowSpec &out) {
     const sc::Agg *a = agg(i);
     if (!a) { c = {kit::Verdict::None, "", {}}; return; }
     cell_text_.clear();
-    switch (a->verdict()) {
+    switch (sc::verdict(static_cast<sc::Check>(i), *a)) {
     case sc::Verdict::Skip: c = {kit::Verdict::Skip, sc::skip_name(a->skip), {}}; return;
     case sc::Verdict::Pending: c = {kit::Verdict::Pending, "", {}}; return;
+    case sc::Verdict::Unverified:   // an inferred limit: the number, text only (no pass/fail look)
+        put_value(cell_text_, sc::kDefs[static_cast<std::size_t>(i)].unit, a->worst);
+        c = {kit::Verdict::None, cell_text_.view(), {}};
+        return;
     case sc::Verdict::Pass:
     case sc::Verdict::Fail: {
         const sc::CheckDef &d = sc::kDefs[static_cast<std::size_t>(i)];
@@ -321,8 +325,10 @@ void PdSpecPage::detail_value(int row, StrBuf<20> &s, uint16_t &color) const {
     if (!a) return;
     const sc::CheckDef &d = sc::kDefs[static_cast<std::size_t>(k)];
     const bool measured = a->n > 0;
+    const bool judged = !d.inferred;   // an inferred limit: reported, never judged
     switch (row) {
     case 0:
+        if (measured && !judged) { s.put("Unverified"); return; }
         s.put(measured ? (a->fails ? "Fail" : "Pass") : "Skip");
         color = measured ? (a->fails ? kError : kOk) : kDim;
         return;
@@ -335,7 +341,7 @@ void PdSpecPage::detail_value(int row, StrBuf<20> &s, uint16_t &color) const {
         else { s.put("not judged"); color = kDim; }
         return;
     case 3: s.put_u32(a->n); return;
-    case 4: s.put_u32(a->fails); color = a->fails ? kCaution : kText; return;
+    case 4: s.put_u32(a->fails); color = a->fails && judged ? kCaution : kText; return;
     case 5:
         if (!measured) { s.put("none"); color = kDim; return; }
         if (k < static_cast<int>(sc::Check::PpsMonotonic)) s.put("PDO ").put_u32(a->a).put(" to ").put_u32(a->b);
@@ -343,7 +349,10 @@ void PdSpecPage::detail_value(int row, StrBuf<20> &s, uint16_t &color) const {
         else if (a->a) s.put("PDO ").put_u32(a->a);
         else { s.put("the source"); color = kDim; }
         return;
-    case 6: s.put_u32(static_cast<uint32_t>(d.weight) * a->fails); color = a->fails ? kCaution : kText; return;
+    case 6: {
+        const uint32_t pts = judged ? static_cast<uint32_t>(d.weight) * a->fails : 0;
+        s.put_u32(pts); color = pts ? kCaution : kText; return;
+    }
     default: return;
     }
 }
@@ -571,9 +580,9 @@ void PdSpecPage::paint_results() {
         gfx_fill(c, 0, kBandRuleY, c.w, 2, kRule);
         unsigned nums[3] = {0, 0, 0};
         if (e)
-            for (const sc::Agg &a : e->agg()) {
-                const sc::Verdict v = a.verdict();
-                nums[v == sc::Verdict::Pass ? 0 : v == sc::Verdict::Fail ? 1 : 2]++;
+            for (std::size_t k = 0; k < sc::kChecks; ++k) {   // an unverified check is in none of the three
+                const sc::Verdict v = sc::verdict(static_cast<sc::Check>(k), e->agg()[k]);
+                if (v != sc::Verdict::Unverified) nums[v == sc::Verdict::Pass ? 0 : v == sc::Verdict::Fail ? 1 : 2]++;
             }
         constexpr kit::Verdict kLook[3] = {kit::Verdict::Pass, kit::Verdict::Fail, kit::Verdict::Skip};
         for (int i = 0; i < 3; i++) {

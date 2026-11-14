@@ -53,6 +53,40 @@ void score_is_weight_times_fails() {
     CHECK_EQ(int(score(agg)), 11);
 }
 
+// A check whose limit is inferred (no figure in the specification behind it) is reported, never judged: the measured value and the
+// count over the inferred limit stay in the result, the verdict reads "unverified" and it adds nothing to the score.
+void inferred_limits_are_unverified() {
+    CHECK_COND(def(Check::DetachSafe0V).inferred);
+    CHECK_COND(def(Check::Reattach).inferred);
+    CHECK_COND(!def(Check::PsRdyTime).inferred);
+    CHECK_COND(!def(Check::HrRecover).inferred);
+    CHECK_COND(std::string_view(verdict_name(Verdict::Unverified)) == "unverified");
+    Agg slow;
+    slow.add(Kind::Max, {900, 1, 0, 670});
+    CHECK_COND(verdict(Check::DetachSafe0V, slow) == Verdict::Unverified);
+    CHECK_EQ(int(slow.fails), 1);   // the count over the inferred limit is kept
+    CHECK_COND(verdict(Check::HrSafe0V, slow) == Verdict::Fail);
+    Agg quick;
+    quick.add(Kind::Max, {300, 1, 0, 5000});
+    CHECK_COND(verdict(Check::Reattach, quick) == Verdict::Unverified);
+    CHECK_COND(verdict(Check::Reattach, Agg{}) == Verdict::Skip);   // nothing measured is still a skip
+    std::array<Agg, kChecks> agg{};
+    agg[std::size_t(Check::DetachSafe0V)].fails = 2;   // weight 5
+    agg[std::size_t(Check::Reattach)].fails = 1;       // weight 10
+    CHECK_EQ(int(score(agg)), 0);
+    agg[std::size_t(Check::HrSafe0V)].fails = 1;       // weight 5, sourced
+    CHECK_EQ(int(score(agg)), 5);
+    // The blob carries the verdict the report shows.
+    std::array<Agg, kChecks> b_agg{};
+    b_agg[std::size_t(Check::Reattach)] = slow;
+    BlobHead h;
+    Timers t;
+    const BlobReader r(h, b_agg, t, {}, {});
+    std::array<std::uint8_t, 1> v{};
+    CHECK_EQ(int(r.read(kBlobHeader + std::size_t(Check::Reattach) * kAggBytes, v)), 1);
+    CHECK_EQ(int(v[0]), int(Verdict::Unverified));
+}
+
 void defs_are_complete() {
     for (const auto& d : kDefs) {
         CHECK_COND(d.key != nullptr && d.label != nullptr);
@@ -105,6 +139,7 @@ int main() {
     bracket_counts_in_the_measurements_favour();
     aggregate_keeps_the_worst();
     score_is_weight_times_fails();
+    inferred_limits_are_unverified();
     defs_are_complete();
     blob_layout();
     return test_report("test_pdspec_result");

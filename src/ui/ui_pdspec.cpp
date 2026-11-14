@@ -124,7 +124,7 @@ void PdSpecSession::on_finish(sc::Stop why) {
     const sc::Engine& e = *engine_;
     for (std::size_t k = 0; k < sc::kChecks; ++k) {
         const sc::Agg& a = e.agg()[k];
-        const sc::Verdict v = a.verdict();
+        const sc::Verdict v = sc::verdict(static_cast<sc::Check>(k), a);
         if (v == sc::Verdict::Skip)
             K2LOG("[PDSPEC] check %s skip %s\n", sc::kDefs[k].key, sc::skip_name(a.skip));
         else
@@ -215,12 +215,13 @@ PdSpecSession::Status PdSpecSession::status(std::uint32_t now_ms) const {
     s.item = e.item();
     s.items = e.items();
     s.families = e.families();
-    for (const sc::Agg& a : e.agg()) {
-        switch (a.verdict()) {
+    for (std::size_t k = 0; k < sc::kChecks; ++k) {
+        switch (sc::verdict(static_cast<sc::Check>(k), e.agg()[k])) {
             case sc::Verdict::Pass: ++s.passes; break;
             case sc::Verdict::Fail: ++s.fails; break;
             case sc::Verdict::Skip: ++s.skips; break;
-            case sc::Verdict::Pending: break;
+            case sc::Verdict::Pending:
+            case sc::Verdict::Unverified: break;   // in none of the three: the remote reads the blob for those
         }
     }
     s.flags = e.release_unconfirmed() ? 1 : 0;
