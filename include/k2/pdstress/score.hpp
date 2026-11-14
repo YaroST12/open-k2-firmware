@@ -31,7 +31,7 @@ enum class Event : std::uint8_t {
 };
 inline constexpr std::size_t kEventCount = static_cast<std::size_t>(Event::Count);
 
-// Penalty points per event. PROVISIONAL, see docs/PD_STRESS.md: starting values (operator decision 2026-11-11), to be settled after
+// Penalty points per event. PROVISIONAL, see docs/PD_SPEC_CHECK.md: starting values (operator decision 2026-11-11), to be settled after
 // validation runs on several chargers. This is the only table; tools/pd_stress.py reads it for its default weights, and
 // `pd_stress.py rescore` re-scores saved results under other weights without a rebuild.
 inline constexpr std::array<std::uint16_t, kEventCount> kWeights = {

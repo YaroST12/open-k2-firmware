@@ -1141,6 +1141,19 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
   Get_Sink_Cap, which now ends the run ("Charger restarts when asked"); only an answer that matches its question
   counts; the TX wait is timed on micros() (was ~11.8 ms blocked); `[IQ]` log words are no longer cut at 12 characters.
 - The HID-cable loop probe (Tools > Loop probe): built and host-tested only; the test plan is in `LOOP_PROBE.md`.
+- **PD Spec Check** (`K2_PDSPEC=1` builds only, k2/pd-spec-check; engine, remote protocol and host tools host-tested, the
+  page and its Ui binding compile-checked only until the next full test run; `docs/PD_SPEC_CHECK.md`). No-load
+  conformance pass: fixed-level pairs up and down, PPS 20 mV steps, PPS and EPR keep-alive timeouts, Hard Reset and detach
+  recovery, 21 checks judged against named spec limits, pass / fail / skip and a penalty score (0 = ideal); Tools > PD Spec
+  Check (Setup, Review, Running, Results, Detail), remote 0x5A, `k2_remote pd-spec`, `tools/pd_spec.py`. Validate
+  (hardware, output empty, K2 powered from the PC, a PD charger with PPS on the bottom port, active sink via
+  `k2_remote pd attach` before each run): (1) `pd_spec.py run --charger NAME --confirm` twice; `k2_remote ping` uptime covers each run
+  (no reboot); every family ends at 5 V (`[PDSPEC] item` lines, VBUS back at 5 V after each); the second run's verdicts
+  agree with the first's; (2) a run with only Transitions, BACK on the K2 mid-run -> footer `Stopped`, VBUS at 5 V,
+  remaining checks `run stopped` / `not reached`; (3) a K2 powered by the charger is refused (`K2 runs on this
+  charger`); (4) no PPS / no EPR -> those families skip with `no PPS` / `no EPR`; (5) heartbeat `stack_free` not lower
+  than before; (6) screenshots of Results and Detail in all four rotations show no clipped text; (7) the saved blobs
+  become host fixtures under `tests/fixtures/pdspec/`.
 - **PD Stress page** (Tools > PD Stress, k2/pdstress-ui, built and host-tested only; `docs/UI_DESIGN.md` 4.5). Setup
   1/2 (P1..P12 checklist, Cycles, Pace, saved results), Review 2/2 (KvTable + two-press START), Running (48 px VBUS,
   counts, BACK stops), Results (score, clean / issues / skip, one row per sequence, Detail), Save result / Discard into
@@ -1250,6 +1263,7 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
 | Attach/detach, inline-load detection and guard | done | verified | `pd_link`, `link`, `link_guard` | |
 | PD trigger (Request, PPS/AVS voltage, voltage-cap safety) | done | verified (lone charger) | `pd_sink` | HV |
 | PPS step-down of a running contract | done | partial: small steps verified, a direct 21 V to 13 V step aborts at the +10 % guard | `pd_sink` | HV |
+| PD Spec Check: no-load conformance of the attached charger, 21 checks against named spec limits, score 0 = ideal (`docs/PD_SPEC_CHECK.md`) | done, opt-in (`K2_PDSPEC=1`) | not verified (engine, protocol and tools host-tested; see Not verified) | `k2::pdspec`, `PdSpecSession`, `PdSpecPage` | HV |
 | Identify (identity, SVIDs, modes, sink caps) | done (an action of the Connection page) | verified (Pixel) | `pd_identify` | |
 | Connection page: Source, Cable and Sink tabs, Actions pop-up (Refresh, Share, Read cable, Save cable, Spoof as, Saved cables, Identify) | done | hardware pass of the page still open | `ui_connection_page`, `pdtabs`, `usblink` | |
 | Pixel replug after Identify | open | not verified | `pd_link`, `pd_identify` | |

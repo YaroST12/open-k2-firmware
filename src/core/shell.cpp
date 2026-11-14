@@ -32,7 +32,7 @@ constexpr std::string_view kHelp =
     "twin list|predict [n]|status|cancel|learn identify|sniff [dry] [name]|rename n name   device twins (docs/DEVICE_TWIN.md)\r\n"
     "twin run [n|all] confirm | twin delete n confirm   the live proof negotiates with the charger as the twin\r\n"
 #if K2_PDSTRESS
-    "pdstress start [--mask m --cycles pct --pace 0..2 --max-s s --max-trans n] confirm | status | result [off] | stop   PD Stress, docs/PD_STRESS.md\r\n"
+    "pdstress start [--mask m --cycles pct --pace 0..2 --max-s s --max-trans n] confirm | status | result [off] | stop   PD Stress, docs/PD_SPEC_CHECK.md\r\n"
 #endif
     "above 5 V needs a trailing confirm; closing the port returns to 5 V\r\n";
 

@@ -102,7 +102,7 @@ Parsed but answered `err: not implemented in this firmware`: `pd softreset|raw`,
 
 Renegotiation stress with a score is its own tool, not a lab sequence: `pdstress start ... confirm | status | result | stop` on the shell,
 `k2_remote.py pd-stress ...` and `tools/pd_stress.py run|rescore|report` on the host. It stays inside the PD protocol (legal probes only) and
-never adds load. See [`PD_STRESS.md`](PD_STRESS.md).
+never adds load. See [`PD_SPEC_CHECK.md`](PD_SPEC_CHECK.md), appendix PD Stress.
 
 ## Scripts (tools/proto_lab.py)
 

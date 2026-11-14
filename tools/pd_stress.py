@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 Yaraslau Furman
 """PD Stress host script: start a run on the attached charger, wait for it, save the raw result and a short report, and re-score saved
-results under other weights (docs/PD_STRESS.md).
+results under other weights (docs/PD_SPEC_CHECK.md).
 
     python3 tools/pd_stress.py run --charger novoo-rg100 --confirm [--mask 0x7ff --cycles 100 --pace 0 --max-s 900 --max-trans 1200]
     python3 tools/pd_stress.py status | stop
@@ -84,7 +84,7 @@ def rescore_table(saved, weights):
 
 def format_rescore(rows, table, weights):
     default = pb.default_weights()
-    lines = ["score per 100 transitions, 0 = ideal (weights provisional, see docs/PD_STRESS.md)"]
+    lines = ["score per 100 transitions, 0 = ideal (weights provisional, see docs/PD_SPEC_CHECK.md)"]
     changed = [f"{e} {default[e]}->{w}" for e, w in weights.items() if w != default[e]]
     lines.append("weights: " + (", ".join(changed) if changed else "the firmware's"))
     lines.append(f"{'charger':<24}{'trans':>7}{'firmware':>10}{'rescored':>10}{'delta':>9}")

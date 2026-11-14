@@ -163,7 +163,7 @@ def render_text(r):
     lines = [f"PD Stress {state}: {r['stop']}; {r['transitions']} transitions in {r['elapsed_ms'] / 1000:.1f} s, "
              f"{r['reboots']} K2 reboot(s)",
              f"options: mask 0x{o['mask']:x} cycles {o['cycles_pct']} % pace {o['pace']} cap {o['max_s']} s / {o['max_transitions']} transitions",
-             f"score {r['score']:.2f} (0 = ideal, penalty per 100 transitions; weights provisional, see docs/PD_STRESS.md)"]
+             f"score {r['score']:.2f} (0 = ideal, penalty per 100 transitions; weights provisional, see docs/PD_SPEC_CHECK.md)"]
     if r["stamp_suspect"]:
         lines.append(f"suspect timestamps: {r['stamp_suspect']} Accept latencies under 300 us (stamp not trusted)")
     lines.append("sequences:")

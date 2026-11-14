@@ -467,7 +467,11 @@ Shell: `twin list | predict | run n confirm | status | cancel | learn | rename |
 
 ### PD Stress
 
-A separate tool, run from the computer only (no Tools page): it renegotiates the attached charger hard, inside the PD protocol and with nothing on the output, and scores the result (0 = ideal). While it runs, a one-line footer on whatever page is up shows the sequence. Start it with `python3 tools/pd_stress.py run --charger NAME --confirm`. Sequences, safety rules, the score table and how to retune it: [`PD_STRESS.md`](PD_STRESS.md).
+A separate tool, run from the computer only (no Tools page): it renegotiates the attached charger hard, inside the PD protocol and with nothing on the output, and scores the result (0 = ideal). While it runs, a one-line footer on whatever page is up shows the sequence. Start it with `python3 tools/pd_stress.py run --charger NAME --confirm`. Sequences, safety rules, the score table and how to retune it: [`PD_SPEC_CHECK.md`](PD_SPEC_CHECK.md), appendix PD Stress.
+
+### PD Spec Check
+
+Only in builds made with `K2_PDSPEC=1` (Tools > PD Spec Check, or "Spec check" in the Charger place). A no-load conformance pass over the attached PD charger: it steps through every pair of fixed levels up and down, steps PPS by 20 mV, lets the PPS and EPR keep-alives lapse, sends a Hard Reset and takes its Rd away, and judges each measurement against the USB PD limit it names. Setup picks the families, Review shows what will run and asks for a two-press START, Running shows the family, VBUS and the counts (BACK stops and returns the charger to 5 V), Results lists every check as pass, fail or skip with its worst value, and OK opens a check's detail. The score is a penalty: 0 = ideal. Nothing may be on the output, and the K2 must not be powered by the charger under test (refused). From the computer: `python3 tools/pd_spec.py run --charger NAME --confirm`, or `k2_remote.py pd-spec start --confirm | status | result | stop`. Checks, limits, weights and the safety rules: [`PD_SPEC_CHECK.md`](PD_SPEC_CHECK.md).
 
 ### Diag
 
