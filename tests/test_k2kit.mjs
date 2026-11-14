@@ -254,6 +254,154 @@ test("fcDetected: the D+/D- readout, VOOC family is detect only", () => {
   assert.equal(K.fcDetected(undefined).label, "reading");
 });
 
+// ---- the set point stepper and the selection ---------------------------------------------------------------------------------
+const PPS_ROW = K.pdoRows([{ type: "pps", min_mv: 3300, max_mv: 11000, max_ma: 3000, max_mw: 33000 }])[0];
+const FIX_ROW = K.pdoRows([{ type: "fixed", min_mv: 9000, max_mv: 9000, max_ma: 3000, max_mw: 27000 }])[0];
+
+test("pdStep: a programmable row steps mV by 100 (1000 coarse) and mA by 250, a fixed row only mA", () => {
+  assert.deepEqual(K.pdStep(PPS_ROW, { mv: 5000, ma: 3000 }, "mv+"), { mv: 5100, ma: 3000 });
+  assert.deepEqual(K.pdStep(PPS_ROW, { mv: 5000, ma: 3000 }, "mv-"), { mv: 4900, ma: 3000 });
+  assert.deepEqual(K.pdStep(PPS_ROW, { mv: 5000, ma: 3000 }, "mv++"), { mv: 6000, ma: 3000 });
+  assert.deepEqual(K.pdStep(PPS_ROW, { mv: 3300, ma: 3000 }, "mv--"), { mv: 3300, ma: 3000 });
+  assert.deepEqual(K.pdStep(PPS_ROW, { mv: 5000, ma: 3000 }, "ma-"), { mv: 5000, ma: 2750 });
+  assert.deepEqual(K.pdStep(PPS_ROW, { mv: 5000, ma: 3000 }, "ma+"), { mv: 5000, ma: 3000 }, "never above the PDO's own limit");
+  assert.deepEqual(K.pdStep(PPS_ROW, { mv: 5000, ma: 100 }, "ma-"), { mv: 5000, ma: 50 }, "never below 50 mA");
+  assert.deepEqual(K.pdStep(FIX_ROW, { mv: 0, ma: 3000 }, "mv+"), { mv: 0, ma: 3000 });
+  assert.deepEqual(K.pdStep(FIX_ROW, { mv: 0, ma: 3000 }, "ma-"), { mv: 0, ma: 2750 });
+  assert.deepEqual(K.pdStep(PPS_ROW, { mv: 5000, ma: 3000 }, "nope"), { mv: 5000, ma: 3000 });
+});
+
+test("pdSelection: the row the contract holds, else the first selectable row, else nothing", () => {
+  const rows = K.pdoRows([
+    { type: "fixed", min_mv: 5000, max_mv: 5000, max_ma: 3000, max_mw: 15000 },
+    { type: "fixed", min_mv: 9000, max_mv: 9000, max_ma: 3000, max_mw: 27000 },
+    { type: "fixed", min_mv: 48000, max_mv: 48000, max_ma: 5000, max_mw: 240000 }
+  ]);
+  assert.equal(K.pdSelection(rows, { held: true, pos: 2 }, null), "2");
+  assert.equal(K.pdSelection(rows, { held: false, pos: 2 }, null), "1");
+  assert.equal(K.pdSelection(rows, { held: true, pos: 3 }, null), "1", "a disabled row is never selected");
+  assert.equal(K.pdSelection(rows, { held: false, pos: 0 }, "2"), "2", "the user's pick wins while it is still selectable");
+  assert.equal(K.pdSelection(rows, { held: false, pos: 0 }, "3"), "1");
+  assert.equal(K.pdSelection([], { held: false, pos: 0 }, null), null);
+  assert.equal(K.pdSelection(rows, null, null), "1");
+});
+
+// ---- errors in plain words ---------------------------------------------------------------------------------------------------
+test("errorText: every failure the page can meet reads as a sentence, never a status code", () => {
+  const re = (st) => new P.RemoteError(st, 0x20, new Uint8Array(0));
+  assert.match(K.errorText(new P.RemoteTimeout("x"), "PD request"), /did not answer/i);
+  assert.match(K.errorText(new P.BootloaderDetected(), "PD request"), /DFU|bootloader/i);
+  assert.match(K.errorText(re(P.STATUS.UNKNOWN_CMD), "PD request"), /does not have|no such/i);
+  assert.match(K.errorText(re(P.STATUS.BUSY), "PD request"), /busy/i);
+  assert.match(K.errorText(re(P.STATUS.BAD_ARG), "PD request"), /refused/i);
+  assert.match(K.errorText(re(P.STATUS.BAD_LENGTH), "PD request"), /does not understand/i);
+  assert.match(K.errorText(re(P.STATUS.NEED_CONFIRM), "PD request"), /confirm/i);
+  assert.equal(K.errorText(new RangeError("name is 1..24 characters"), "rename"), "name is 1..24 characters");
+  assert.match(K.errorText(new Error("boom"), "rename"), /rename.*boom/i);
+  for (const e of [new P.RemoteTimeout("x"), re(P.STATUS.BAD_ARG), re(P.STATUS.BUSY), new Error("boom")])
+    assert.doesNotMatch(K.errorText(e, "x"), /status|0x|undefined/i);
+});
+
+// ---- the PD contract view ----------------------------------------------------------------------------------------------------
+test("contractView: the contract the K2 holds as KvTable rows with a tone footer", () => {
+  const held = K.contractView({ state: "ready", result: "ok", held: true, epr: false, pos: 3, mv: 9000, ma: 2000, hard_resets: 0 });
+  assert.deepEqual(held.rows.map((r) => r.label), ["State", "PDO", "Requested", "Power", "Hard resets"]);
+  assert.equal(held.rows[1].value, "3");
+  assert.equal(held.rows[2].value, "9.00 V 2.00 A");
+  assert.equal(held.rows[3].value, "18.0 W");
+  assert.equal(held.tone, "ok");
+  assert.match(held.footer, /9\.00 V/);
+  const epr = K.contractView({ state: "ready", result: "ok", held: true, epr: true, pos: 9, mv: 28000, ma: 5000, hard_resets: 0 });
+  assert.match(epr.rows[2].value, /EPR/);
+  const idle = K.contractView({ state: "idle", result: "none", held: false, epr: false, pos: 0, mv: 0, ma: 0, hard_resets: 0 });
+  assert.equal(idle.rows[1].value, "-");
+  assert.equal(idle.rows[2].value, "-");
+  assert.equal(idle.tone, "info");
+  const bad = K.contractView({ state: "failed", result: "rejected", held: false, epr: false, pos: 2, mv: 9000, ma: 3000, hard_resets: 2 });
+  assert.equal(bad.tone, "error");
+  assert.match(bad.footer, /rejected/);
+  assert.equal(bad.rows.at(-1).level, "caution", "a hard reset seen is an exception");
+  assert.equal(bad.rows.at(-1).word, "SEEN");
+  assert.equal(K.contractView(null).tone, "info");
+});
+
+// ---- recent PD messages ------------------------------------------------------------------------------------------------------
+test("messageTableHtml: time from the first row, direction, name and the data objects", () => {
+  const html = K.messageTableHtml([
+    { t_us: 1000000, dir: "rx", name: "Source_Capabilities", objects: [0x0801912C, 0x0002D12C], sop: true, msg_id: 0, header: 0x11A1 },
+    { t_us: 1012500, dir: "tx", name: "Request", objects: [0x1004B12C], sop: true, msg_id: 1, header: 0x1082 }
+  ]);
+  assert.match(html, /class="k-msg"/);
+  assert.match(html, />\+0\.000 s</);
+  assert.match(html, />\+0\.013 s</);
+  assert.match(html, />RX</);
+  assert.match(html, />TX</);
+  assert.match(html, /Source_Capabilities/);
+  assert.match(html, /0801912C 0002D12C/);
+  assert.match(html, /1004B12C/);
+  assert.equal(K.messageTableHtml([]), '<div class="k-msg-empty">No PD messages yet.</div>');
+});
+
+test("messageTableHtml: escapes names, marks the SOP' / SOP'' traffic that is not the source's", () => {
+  const html = K.messageTableHtml([{ t_us: 0, dir: "rx", name: "<b>x</b>", objects: [], sop: false, msg_id: 0, header: 0 }]);
+  assert.doesNotMatch(html, /<b>x/);
+  assert.match(html, /&lt;b&gt;x/);
+  assert.match(html, /cable/i, "a non-SOP message is labelled as cable traffic");
+});
+
+// ---- the PD Spec Check result ------------------------------------------------------------------------------------------------
+function specBlob(over) {
+  const checks = P.PDSPEC_CHECKS.map((d) => ({ key: d.key, label: d.label, kind: d.kind, unit: d.unit, weight: d.weight,
+    verdict: "pass", skip: null, n: 4, fails: 0, penalty: 0, worst: 12000, lo: -1000000, hi: 25000, a: 1, b: 2 }));
+  return Object.assign({ state: "finished", stop: "done", score: 0, elapsed_s: 95, release_unconfirmed: false,
+    tally: { pass: checks.length, fail: 0, skip: 0, unverified: 0 }, checks, timers: {}, transitions: [], pps: [] }, over || {});
+}
+
+test("specResultHtml: the head is a KvTable, one grid line per check, a rule where the family changes", () => {
+  const html = K.specResultHtml(specBlob(), P);
+  assert.match(html, /class="k-kv/);
+  assert.match(html, /Penalty/);
+  assert.match(html, /class="k-rg/);
+  assert.equal((html.match(/k-rg-row/g) || []).length, P.PDSPEC_CHECKS.length);
+  assert.ok((html.match(/k-sec/g) || []).length >= 4, "family rules");
+  assert.match(html, /PS_RDY time/);
+  assert.match(html, /&lt;= 25\.0 ms/, "limit in the K2's words (escaped)");
+});
+
+test("specResultHtml: a fail is a fail cell with the worst value, a skip carries its reason", () => {
+  const b = specBlob();
+  b.checks[1] = Object.assign({}, b.checks[1], { verdict: "fail", fails: 2, penalty: 4, worst: 31000 });
+  b.checks[3] = Object.assign({}, b.checks[3], { verdict: "skip", skip: "no PPS", n: 0, worst: null });
+  b.score = 4; b.tally = { pass: 19, fail: 1, skip: 1, unverified: 0 };
+  const html = K.specResultHtml(b, P);
+  assert.match(html, /k-fail[^>]*aria-label="31\.0 ms fail"/);
+  assert.match(html, /k-skip/);
+  assert.match(html, /no PPS/);
+  assert.match(html, /k-foot-error/, "any fail makes the footer an error band");
+});
+
+test("specResultHtml: inferred checks are shown unverified and never as a pass or fail", () => {
+  const b = specBlob();
+  const k = b.checks.findIndex((c) => c.key === "pps_settle");
+  b.checks[k] = Object.assign({}, b.checks[k], { verdict: "unverified", fails: 3, penalty: 0 });
+  const html = K.specResultHtml(b, P);
+  const row = html.split('<div class="k-rg-row').find((r) => /PPS settle/.test(r));
+  assert.ok(row, "pps_settle row");
+  assert.doesNotMatch(row, /k-fail|k-pass/);
+  assert.match(row, /unverified/i);
+});
+
+test("specResultHtml: a run that stopped early or could not confirm its release says so in the footer", () => {
+  const stopped = K.specResultHtml(specBlob({ stop: "load on the output" }), P);
+  assert.match(stopped, /load on the output/);
+  assert.match(stopped, /k-foot-(caution|error)/);
+  const rel = K.specResultHtml(specBlob({ release_unconfirmed: true }), P);
+  assert.match(rel, /release/i);
+  assert.match(rel, /k-foot-caution/);
+  const run = K.specResultHtml(specBlob({ state: "running", stop: "running" }), P);
+  assert.match(run, /running/i);
+});
+
 // ---- the embed in k2.html stays in sync ------------------------------------------------------------------------------------
 test("k2.html embeds the current k2kit.js and k2kit.css", () => {
   const html = readFileSync(path.join(root, "tools/web/k2.html"), "utf8");

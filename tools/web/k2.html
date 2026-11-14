@@ -2549,6 +2549,9 @@ if (typeof module !== "undefined" && module.exports) module.exports = K2Proto;
 //   armPress / armExpire / armLeftMs / armCancel   the device's arm-then-confirm: the first press arms (5 s window), the second fires
 //   footerState({connected, error, armed, leftMs, info})  what the footer band says: not connected, error, armed, info, in that order
 //   snapMv / stepMv / clampMa / pdoRows            the PD set point maths and the PDO list model, capped at the K2's 36 V monitor
+//   pdStep / pdSelection / contractView            the stepper buttons, the selected row, the contract KvTable rows
+//   errorText(e, what)                             a failure in plain words for the footer (never a status code)
+//   messageTableHtml / specResultHtml              the recent PD messages; the PD Spec Check blob as KvTable + ResultGrid
 //   fcOffers / fcNeedsConfirm / fcDetected         what fast charge the page offers: QC at or below 12 V, never a VOOC family trigger
 //
 // verdict is one of pending running pass fail none skip stopped partial (the device's Verdict enum). Colour never
@@ -2686,6 +2689,69 @@ var K2Kit = (function () {
     return { pos: Number(row.id), mv: m, ma: clampMa(ma, row.max_ma), confirm: needsConfirm(row.adjustable ? m : row.max_mv) };
   }
 
+  // One set point button of the stepper. dir: mv+ mv- (100 mV), mv++ mv-- (1 V), ma+ ma- (250 mA). Fixed PDOs only move mA;
+  // nothing leaves the PDO's own range, 50 mA is the floor. cur is {mv, ma}; a new object comes back.
+  var MA_STEP = 250, MA_FLOOR = 50;
+  function pdStep(row, cur, dir) {
+    var mv = cur.mv, ma = cur.ma;
+    if (/^mv/.test(dir)) {
+      if (!row.adjustable) return { mv: mv, ma: ma };
+      var big = dir.length === 4, up = dir.charAt(2) === "+";
+      mv = snapMv(row.type, mv + (up ? 1 : -1) * (big ? 1000 : 100), row.min_mv, row.max_mv);
+    } else if (dir === "ma+" || dir === "ma-") {
+      ma = Math.min(row.max_ma, Math.max(MA_FLOOR, Math.round((ma + (dir === "ma+" ? MA_STEP : -MA_STEP)) / MA_FLOOR) * MA_FLOOR));
+    }
+    return { mv: mv, ma: ma };
+  }
+  // Which PDO row is selected: the user's pick while it can still be requested, else the row the contract holds, else the
+  // first row that can be requested, else none.
+  function pdSelection(rows, contract, picked) {
+    var ok = function (id) { return rows.some(function (r) { return r.id === id && !r.disabled; }); };
+    if (picked !== null && picked !== undefined && ok(picked)) return picked;
+    if (contract && contract.held && ok(String(contract.pos))) return String(contract.pos);
+    for (var i = 0; i < rows.length; i++) if (!rows[i].disabled) return rows[i].id;
+    return null;
+  }
+
+  // The KvTable rows and tone footer for the contract the K2 holds (PD_TRIGGER_STATUS decoded).
+  function contractView(s) {
+    if (!s) return { rows: [{ label: "State", value: "-" }], tone: "info", footer: "No PD status yet." };
+    var held = !!s.held, req = held || s.mv > 0 ? fmtV(s.mv) + " V " + fmtA(s.ma) + " A" + (s.epr ? " EPR" : "") : "-";
+    var rows = [
+      { label: "State", value: s.state },
+      { label: "PDO", value: s.pos ? String(s.pos) : "-" },
+      { label: "Requested", value: held && s.mv ? req : "-" },
+      { label: "Power", value: held && s.mv ? fmtW(s.mv, s.ma) + " W" : "-" },
+      { label: "Hard resets", value: String(s.hard_resets) }
+    ];
+    if (s.hard_resets > 0) { rows[4].level = "caution"; rows[4].word = "SEEN"; }
+    var tone = "info", footer = "No contract held.";
+    if (held) { tone = "ok"; footer = "Holding " + req + "."; }
+    else if (s.state === "failed" || ["rejected", "wait-exhausted", "timeout", "tx-failed", "hard-reset", "epr-failed", "over-cap", "bad-choice"].indexOf(s.result) >= 0) {
+      tone = "error"; footer = "Last request " + s.result + ".";
+    }
+    return { rows: rows, tone: tone, footer: footer };
+  }
+
+  // A failure the page met, in plain words for the footer band. what names the thing that was being done.
+  function errorText(e, what) {
+    var n = e && e.name;
+    if (n === "RemoteTimeout") return "The K2 did not answer (" + what + "). Check the cable and try again.";
+    if (n === "BootloaderDetected") return "The K2 is in its bootloader (DFU). Flash the firmware or replug it.";
+    if (n === "RangeError") return e.message;
+    if (n === "RemoteError") {
+      var reason = /\(([^)]+)\)\s*$/.exec(e.message || "");
+      switch (e.status) {
+        case 1: return "This firmware does not have that command (" + what + "). Update the K2.";
+        case 2: return "The K2 does not understand this request (" + what + "). The firmware and the page differ in version.";
+        case 3: return "The K2 refused the " + what + (reason ? ": " + reason[1] : "") + ".";
+        case 4: return "The K2 is busy (" + what + "). Wait for the running job to finish.";
+        case 5: return "The K2 wants a confirm for the " + what + ". Press again to confirm.";
+      }
+    }
+    return what + ": " + (e && e.message ? e.message : String(e));
+  }
+
   // ---- fast charge --------------------------------------------------------------------------------------------------------
   var FC_MAX_QC_MV = 12000;
   var FC_NO_TRIGGER = ["vooc", "svooc", "svooc65"];   // detect and status only, never a trigger button
@@ -2726,7 +2792,8 @@ var K2Kit = (function () {
     });
     return out + "</div>";
   }
-  // ActionCell: state idle | armed | busy | disabled. Armed drains over leftMs (CSS animation), the page re-renders on expiry.
+  // ActionCell: state idle | armed | busy | disabled. The armed bar is a width the page sets from leftMs on each tick (no CSS
+  // animation); the page re-renders on expiry.
   function actionCellHtml(a) {
     var st = a.state || "idle", armed = st === "armed", off = st === "busy" || st === "disabled";
     return '<button type="button" class="k-act' + (armed ? " k-armed" : "") + (st === "busy" ? " k-busy" : "") + '" data-act="' + esc(a.id) + '"' +
@@ -2746,7 +2813,55 @@ var K2Kit = (function () {
       '<span class="k-u-a">' + (typeof t.ma === "number" ? fmtA(t.ma) : "-") + " A</span>" +
       (have ? ' <span class="k-u-w">' + fmtW(t.mv, t.ma) + " W</span>" : "") + "</span></div>";
   }
+  // The recent PD messages (k2proto bbMessageRows): time from the first row, direction, name, the data objects in hex. A message
+  // that is not on the source's own SOP (cable plug traffic) says so.
+  function hex8(o) { return (o >>> 0).toString(16).toUpperCase().padStart(8, "0"); }
+  function messageTableHtml(rows) {
+    if (!rows || !rows.length) return '<div class="k-msg-empty">No PD messages yet.</div>';
+    var t0 = rows[0].t_us, out = '<div class="k-msg">';
+    rows.forEach(function (r) {
+      out += '<div class="k-msg-row"><span class="k-msg-t">+' + (Math.round((r.t_us - t0) / 1000) / 1000).toFixed(3) + ' s</span>' +
+        '<span class="k-msg-d k-msg-' + (r.dir === "tx" ? "tx" : "rx") + '">' + (r.dir === "tx" ? "TX" : "RX") + "</span>" +
+        '<span class="k-msg-n">' + esc(r.name) + (r.sop === false ? ' <i class="k-msg-c">cable plug</i>' : "") + "</span>" +
+        '<span class="k-msg-o">' + (r.objects || []).map(hex8).join(" ") + "</span></div>";
+    });
+    return out + "</div>";
+  }
+
+  // ---- PD Spec Check result ------------------------------------------------------------------------------------------------
+  // The blob (k2proto decodePdSpecBlob) as a KvTable head, a ResultGrid with one line per check, and one tone footer. p is the
+  // k2proto namespace (value / limit formatting in the K2's own words). Inferred checks carry no penalty and show as unverified.
+  var SPEC_SECTIONS = { accept_time: "Transitions", pps_monotonic: "PPS steps", pps_keepalive: "Timeouts", hr_safe0v: "Hard Reset",
+                        detach_safe0v: "Detach", source_reset: "Source" };
+  var SPEC_CELL = { pass: "pass", fail: "fail", skip: "skip", pending: "pending", unverified: "none" };
+  function specResultHtml(b, p) {
+    var lines = b.checks.map(function (c) {
+      var v = SPEC_CELL[c.verdict] || "pending", unver = c.verdict === "unverified";
+      var label = c.verdict === "skip" ? (c.skip || "skip") : c.verdict === "pending" || c.worst === null ? "-" : p.pdSpecValue(c.unit, c.worst);
+      var cell = { verdict: v, label: label, title: unver ? "Inferred check: not counted in the penalty" : "" };
+      if (v !== "skip" && v !== "pending") cell.current = p.pdSpecLimit(c);
+      return { label: c.label + (unver ? " (unverified)" : ""), section: !!SPEC_SECTIONS[c.key], cells: [cell] };
+    });
+    var t = b.tally, running = b.state === "running";
+    var head = [
+      { label: "State", value: running ? "running" : b.state },
+      { label: "Penalty", value: String(b.score), level: b.score > 0 ? "caution" : undefined, word: "PENALTY" },
+      { label: "Checks", value: t.pass + " pass, " + t.fail + " fail, " + t.skip + " skip" + (t.unverified ? ", " + t.unverified + " unverified" : "") },
+      { label: "Time", value: b.elapsed_s + " s" }
+    ];
+    var parts = [], tone = "ok";
+    var raise = function (x) { if (x === "error" || (x === "caution" && tone !== "error") || (x === "info" && tone === "ok")) tone = x; };
+    if (running) { parts.push("Check running."); raise("info"); }
+    if (t.fail > 0) { parts.push(t.fail + " check" + (t.fail > 1 ? "s" : "") + " failed."); raise("error"); }
+    if (!running && b.stop !== "done" && b.stop !== "running") { parts.push("Stopped early: " + b.stop + "."); raise("caution"); }
+    if (b.release_unconfirmed) { parts.push("The 5 V release was not confirmed."); raise("caution"); }
+    if (!parts.length) parts.push("All checks passed.");
+    return kvTableHtml(head, { footer: parts.join(" "), tone: tone }) + resultGridHtml(lines);
+  }
+
   return {
+    pdStep: pdStep, pdSelection: pdSelection, contractView: contractView, errorText: errorText, messageTableHtml: messageTableHtml,
+    specResultHtml: specResultHtml,
     kvTableHtml: kvTableHtml, VERDICTS: VERDICTS, esc: esc, verdictCellHtml: verdictCellHtml, bracketRuns: bracketRuns, resultGridHtml: resultGridHtml,
     rowListHtml: rowListHtml, actionCellHtml: actionCellHtml, alertBandHtml: alertBandHtml, topBarHtml: topBarHtml,
     ARM_MS: ARM_MS, armPress: armPress, armExpire: armExpire, armLeftMs: armLeftMs, armCancel: armCancel, footerState: footerState,
