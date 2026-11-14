@@ -32,7 +32,7 @@ inc=(-Iinclude -isystem third_party/tinyusb/src -DCFG_TUSB_MCU=OPT_MCU_AT32F403A
 
 run_tidy() {
     python3 "$root/tools/gen_compdb.py" >/dev/null
-    (cd "$root" && run-clang-tidy -p build -j "$(nproc)" -quiet 'src/') >"$out/tidy.log" 2>&1
+    (cd "$root" && run-clang-tidy -p build -j "${K2_J:-4}" -quiet 'src/') >"$out/tidy.log" 2>&1
 }
 
 run_gcc() {
@@ -42,14 +42,14 @@ run_gcc() {
     flags+=" -Wall -Wextra -Wshadow -Wconversion -Wnull-dereference -Wduplicated-cond -Wlogical-op"
     flags+=" -Wcast-align -fanalyzer ${inc[*]}"
     docker run --rm -v "$root":/workspace -w /workspace "$img" sh -c \
-        "find src -name '*.cpp' | sort | xargs -P $(nproc) -I{} sh -c 'arm-none-eabi-g++ $flags -c {} -o /dev/null 2>&1'" \
+        "find src -name '*.cpp' | sort | xargs -P ${K2_J:-4} -I{} sh -c 'arm-none-eabi-g++ $flags -c {} -o /dev/null 2>&1'" \
         >"$out/gcc.log" 2>&1
 }
 
 run_cppcheck() {
     docker run --rm -v "$root":/workspace -w /workspace "$img" sh -c \
         "(apt-get update -qq && apt-get install -y -qq cppcheck) >/dev/null 2>&1;
-         cppcheck --enable=all --std=c++20 --language=c++ -j $(nproc) --inline-suppr \
+         cppcheck --enable=all --std=c++20 --language=c++ -j ${K2_J:-4} --inline-suppr \
            --suppressions-list=tools/cppcheck.supp --template='{file}:{line}: {severity}: {message} [{id}]' \
            -Iinclude -D__GNUC__ -DCFG_TUSB_MCU=OPT_MCU_AT32F403A_407 src include/k2 2>&1" \
         >"$out/cppcheck.log" 2>&1
@@ -64,7 +64,7 @@ sanitize_pass() {
     [ "$(cat "$dir/.stamp" 2>/dev/null)" = "$stamp" ] || rm -rf "$dir"
     mkdir -p "$dir" && printf '%s' "$stamp" >"$dir/.stamp"
     docker run --rm --user "$(id -u):$(id -g)" -e UBSAN_OPTIONS=print_stacktrace=1 -v "$root":/workspace -w /workspace "$img" \
-        make -k -j"$(nproc)" test-run HOST_DIR="build/san-$1" HOST_CXX="$2 $flags" HOST_CC="$3 $flags" \
+        make -k -j"${K2_J:-4}" test-run HOST_DIR="build/san-$1" HOST_CXX="$2 $flags" HOST_CC="$3 $flags" \
         >"$out/sanitize-$1.log" 2>&1
     local rc=$?
     # The closing line the gate reads: an incremental run re-runs only the changed tests, so the log alone cannot say that

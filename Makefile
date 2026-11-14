@@ -59,9 +59,11 @@ endif
 # Values: block (default, fails the build), warn (prints diagnostics, exits 0), off (skips the check).
 K2_64BIT ?= block
 
-# Parallel builds by default for every entry point (make, docker-build, gate): the job count
-# lives here, not at each call site. A command-line -j (e.g. `make -j1`) still wins over this.
-K2_J ?= $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
+# Parallel builds by default for every entry point (make, docker-build, gate, static_check.sh): the job
+# count lives here, not at each call site. 4 by default so one build never takes the whole machine
+# (several worktrees build at once); `make K2_J=$(nproc)` for a lone build. A command-line -j still wins.
+K2_J ?= 4
+export K2_J
 MAKEFLAGS += -j$(K2_J)
 
 # Build identification shown by the remote PING command. Computed on the host and passed into
@@ -604,7 +606,7 @@ docker-image:
 	docker build -t $(DOCKER_IMG) .
 
 # Runs as the host uid so build/ stays owned by the caller (a root-owned build/ breaks later host runs).
-DOCKER_RUN = docker run --rm --user $(shell id -u):$(shell id -g) -v $(CURDIR):/workspace -w /workspace
+DOCKER_RUN = docker run --rm --cpus=$(K2_J) --user $(shell id -u):$(shell id -g) -v $(CURDIR):/workspace -w /workspace
 
 # Code navigation: the ARM compiler's system include directories, copied out of the build image into
 # $(NAV_DIR)/root (dirs.txt lists them, as paths inside the image) so clangd on the host finds <cstdint> and the

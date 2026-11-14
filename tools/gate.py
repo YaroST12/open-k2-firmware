@@ -349,7 +349,7 @@ def step_64bit():
 
 
 def step_tests():
-    r = run(["make", f"-j{os.cpu_count() or 4}", "-Otarget", "test"])
+    r = run(["make", f"-j{os.environ.get('K2_J', '4')}", "-Otarget", "test"])
     if r.returncode:
         raise GateError("make test failed:\n" + "\n".join((r.stdout + r.stderr).splitlines()[-25:]))
 
