@@ -16,31 +16,8 @@ const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const CtGrid = require(path.join(root, "tools/web/ctgrid.js"));
 const K2Kit = require(path.join(root, "tools/web/k2kit.js"));
 
-// ---- a wire row builder (k2proto decodeChargerTest: protocol, algorithm, result, reason are strings) -------------------
-const PROTOCOL = { epr: "epr-fixed", vooc: "vooc-5v-handshake", svooc: "svooc-5v-handshake", svooc65: "svooc65-5v-handshake" };
-const PD = ["pd2-fixed", "pd3x-fixed", "epr", "spr-avs", "pps", "epr-avs", "pd3.0-revision", "pd3.1-revision", "pd3.2-revision"];
-function S(alg, mv, result, o = {}) {
-  return { algorithm: alg, protocol: PROTOCOL[alg] || alg, target_mv: mv, request_ma: o.ma ?? (PD.includes(alg) ? 1000 : 0),
-           raw_pdo: o.pdo || 0, pos: o.pos || 0, result, reason: o.reason || "none", detail: o.detail || 0,
-           continuous: !!o.cont, avs: !!o.avs, sweep: !!o.sweep, measured_mv: o.measured || 0 };
-}
-const REQ = "request failed", NOOFFER = "not advertised", PDACTIVE = "PD active: use QC port";
-function baseus() {
-  const s = [];
-  const fixed = [167874860, 184620, 246060, 307500, 409935], mv = [5000, 9000, 12000, 15000, 20000];
-  for (let i = 0; i < 5; i++) s.push(S("pd3x-fixed", mv[i], "pass", { pos: i + 1, pdo: fixed[i] }));
-  s.push(S("epr", 0, "skip", { reason: NOOFFER }));
-  s.push(S("spr-avs", 0, "skip", { reason: NOOFFER }));
-  for (const t of [5000, 8000, 11000]) s.push(S("pps", t, "pass", { pos: 6, pdo: 3235656292 }));
-  s.push(S("pps", 8000, "fail", { pos: 6, pdo: 3235656292 }));
-  s.push(S("pps", 5000, "skip", { pos: 6, pdo: 3235656292, reason: REQ }));
-  for (const t of [5000, 13000, 21000]) s.push(S("pps", t, "pass", { pos: 7, pdo: 3248763456 }));
-  s.push(S("epr-avs", 0, "skip", { reason: NOOFFER }));
-  for (const a of ["qc2", "qc3"]) s.push(S(a, 5000, "skip", { reason: PDACTIVE }));
-  s.push(S("fcp", 5000, "fail")); s.push(S("fcp", 9000, "skip", { reason: REQ }));
-  s.push(S("ufcs", 5000, "fail"));
-  return s;
-}
+// ---- the wire rows (k2proto decodeChargerTest: protocol, algorithm, result, reason are strings) ------------------------
+import { S, baseus, REQ, NOOFFER, PDACTIVE } from "./support/ctfixture.mjs";
 // One grid line as text: "label: 5V/3A:pass 9V/3A:pass", a rule above the line is "--".
 function fmt(rows) {
   return rows.map((r) => (r.section ? "-- " : "") + (r.label || "") + ": " +
