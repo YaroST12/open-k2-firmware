@@ -7,6 +7,7 @@
 
 #include <initializer_list>
 
+#include "k2/core/critical.hpp"
 #include "k2/loopprobe/usb_fp.hpp"
 
 using namespace k2::loopprobe::usbfp;
@@ -81,6 +82,47 @@ void test_recorder() {
     CHECK_EQ(r.trace().n, 0);
 }
 
+// The main loop's side of the recorder (flag, copy_to, clear) runs with the USB interrupt masked: an interrupt that comes
+// meanwhile runs when the mask lifts (k2::host::on_unmask stands in for PRIMASK clearing), so it never lands in the middle of
+// a copy, a clear or a flag update. Without the mask the fake interrupt below never runs and every check fails.
+Recorder* g_rec = nullptr;
+bool g_pending = false;
+int g_isr_runs = 0;
+void fake_usb_isr() {
+    if (!g_pending) return;
+    g_pending = false;
+    g_isr_runs++;
+    g_rec->suspend(9000 + std::uint32_t(g_isr_runs));
+}
+
+void test_main_loop_side_masks_the_interrupt() {
+    Recorder r;
+    g_rec = &r;
+    k2::host::on_unmask = fake_usb_isr;
+    r.bus_reset(8000);
+    g_pending = true;   // a flag update: the interrupt's event follows it, the flag survives
+    r.flag(kFlagSof);
+    CHECK_EQ(g_isr_runs, 1);
+    CHECK_EQ(r.trace().n, 2);
+    CHECK_COND(r.trace().flags & kFlagSof);
+    Trace snap;
+    g_pending = true;   // a copy: the event that comes during it is not in this copy, it is in the next
+    r.copy_to(snap);
+    CHECK_EQ(g_isr_runs, 2);
+    CHECK_EQ(snap.n, 2);
+    CHECK_EQ(r.trace().n, 3);
+    r.copy_to(snap);
+    CHECK_EQ(snap.n, 3);
+    CHECK_EQ(snap.ev[2].kind, std::uint8_t(Ev::Suspend));
+    g_pending = true;   // a clear: the event that comes during it opens the new trace
+    r.clear();
+    CHECK_EQ(g_isr_runs, 3);
+    CHECK_EQ(r.trace().n, 1);
+    CHECK_EQ(r.trace().total, 1);
+    CHECK_EQ(k2::host::irq_masked, 0);
+    k2::host::on_unmask = nullptr;
+}
+
 void test_features() {
     const Features w = features(windows().r.trace());
     CHECK_EQ(w.first_dev_len, 64);
@@ -141,6 +183,7 @@ void test_classify() {
 
 int main() {
     test_recorder();
+    test_main_loop_side_masks_the_interrupt();
     test_features();
     test_classify();
     return test_report("test_usb_fp");

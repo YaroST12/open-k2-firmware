@@ -15,6 +15,8 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "k2/core/critical.hpp"
+
 namespace k2::loopprobe::usbfp {
 
 inline constexpr std::size_t kEvents = 24;
@@ -42,14 +44,30 @@ struct Trace {
 };
 
 // Fills a Trace from the USB interrupt. Times are relative to the first bus reset (or the first event).
+// Two contexts: setup / bus_reset / suspend / resume are the interrupt's side; clear, flag and copy_to are the main loop's
+// and mask the interrupt (k2::Critical, about 300 B copied at most), so an event never lands inside a clear, a copy or the
+// flag update (a read-modify-write of the byte the interrupt also sets). flags(), total() and last_ms() are single loads.
+// trace() is a live reference for one context only (host tests, the interrupt's side).
 class Recorder {
 public:
-    void clear() { *this = Recorder{}; }
+    void clear() {
+        const Critical c;
+        *this = Recorder{};
+    }
     void setup(const std::uint8_t (&pkt)[8], std::uint32_t now_ms);
     void bus_reset(std::uint32_t now_ms) { add(Ev::Reset, now_ms); }
     void suspend(std::uint32_t now_ms) { add(Ev::Suspend, now_ms); }
     void resume(std::uint32_t now_ms) { add(Ev::Resume, now_ms); }
-    void flag(std::uint8_t f) { trace_.flags = std::uint8_t(trace_.flags | f); }
+    void flag(std::uint8_t f) {
+        const Critical c;
+        trace_.flags = std::uint8_t(trace_.flags | f);
+    }
+    void copy_to(Trace& out) const {
+        const Critical c;
+        out = trace_;
+    }
+    std::uint8_t flags() const { return trace_.flags; }
+    std::uint16_t total() const { return trace_.total; }
     const Trace& trace() const { return trace_; }
     std::uint32_t last_ms() const { return last_; }   // time of the newest event (absolute ms), 0 = none
 

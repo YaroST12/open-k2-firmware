@@ -82,8 +82,8 @@ void tap(usb::BusEvent e, const std::uint8_t* setup8) {
     }
 }
 
-bool save() {
-    g_rep.usb = g_usb.trace();
+// Writes g_rep as it is; save() first takes the enumeration trace so far.
+bool write_rep() {
     const scratch::Lease lease("hostrep.save");
     FileBuf& buf = scratch::as<FileBuf>();
     const std::size_t n = encode_file(g_rep, buf);
@@ -95,6 +95,11 @@ bool save() {
     K2LOG("[LPHR] saved state=%u end=%s ok=%d ms=%u\n", unsigned(g_rep.state), end_name(End(g_rep.end)),
           e == fs::Err::Ok ? 1 : 0, unsigned(systick::millis() - t0));
     return e == fs::Err::Ok;
+}
+
+bool save() {
+    g_usb.copy_to(g_rep.usb);   // masked: the USB interrupt keeps adding to the trace
+    return write_rep();
 }
 
 void load() {
@@ -114,7 +119,7 @@ LoopFacts facts() {
         g_frame = l.frame;
         g_frame_known = true;
     }
-    f.hid_host = l.configured || (g_usb.trace().flags & usbfp::kFlagSof);
+    f.hid_host = l.configured || (g_usb.flags() & usbfp::kFlagSof);
     if (const auto v = power::vbus_fast_mv()) f.vbus_mv = *v;
     if (const auto m = power::sample_now()) f.ibus_ma = m->current_ma;
     f.active_cc = fusb302::active_cc();
@@ -129,9 +134,10 @@ void close(End why, Refuse r) {
     g_rep.state = std::uint8_t(JState::Done);
     g_rep.end = std::uint8_t(why);
     g_rep.refuse = std::uint8_t(r);
-    g_rep.os = std::uint8_t(usbfp::classify(g_usb.trace()));
+    g_usb.copy_to(g_rep.usb);   // the label and the stored trace are the same snapshot
+    g_rep.os = std::uint8_t(usbfp::classify(g_rep.usb));
     g_st = St::Idle;
-    save();
+    write_rep();
 }
 
 void begin(std::uint32_t now) {
@@ -204,7 +210,7 @@ void poll(std::uint32_t now) {
     else {
         facts();   // the SOF flag
         g_seq.on_contract(fusb302::sink_status().state == pd::SinkState::Ready, now);
-        const bool settled = now - g_usb.last_ms() >= kUsbQuietMs || g_usb.trace().total == 0;
+        const bool settled = now - g_usb.last_ms() >= kUsbQuietMs || g_usb.total() == 0;
         g_seq.tick(now, fusb302::loop_host_idle(), settled);
         if (g_seq.take_checkpoint()) {   // before the DR_Swap: the swap goes out on the next tick
             g_rep.pd = g_seq.facts();
