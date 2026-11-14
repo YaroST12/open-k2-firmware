@@ -699,6 +699,24 @@ void stops() {
     }
 }
 
+void family_selection() {
+    // Only the Hard Reset and the detach: no Request above 5 V is ever made, the rest reads "not selected".
+    Sim m;
+    typical(m);
+    Engine e(m);
+    const auto bit = [](Family f) { return std::uint8_t(1u << std::uint8_t(f)); };
+    CHECK_COND(e.start(0, bit(Family::HardReset) | bit(Family::Detach)) == StartResult::Ok);
+    drive(m, e);
+    check_safe_end(m, e);
+    CHECK_COND(e.stop() == Stop::Done);
+    CHECK_EQ(int(e.trans().size()), 0);
+    CHECK_COND(e.agg(Check::AcceptTime).skip == Skip::NotSelected);
+    CHECK_COND(e.agg(Check::PpsKeepAlive).skip == Skip::NotSelected);
+    CHECK_COND(verdict(e, Check::HrSafe0V) == Verdict::Pass);
+    CHECK_COND(verdict(e, Check::DetachSafe0V) == Verdict::Pass);
+    CHECK_EQ(m.max_req_mv, 20000);   // the top fixed level the reset is made from
+}
+
 void start_refusals() {
     Sim a;
     typical(a);
@@ -784,6 +802,7 @@ int main() {
     pps_keepalive_never_times_out();
     source_reset_mid_walk_is_counted();
     stops();
+    family_selection();
     start_refusals();
     cancel_anywhere_ends_safe();
     return test_report("test_pdspec_engine");

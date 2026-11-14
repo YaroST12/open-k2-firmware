@@ -83,10 +83,11 @@ constexpr const char* start_name(StartResult r) {
 }
 
 // Which keep-alive the sink holds back: one kind at a time, so an EPR contract keeps its EPR_KeepAlive while the PPS timeout is timed.
-enum class Silence : std::uint8_t { Off, Pps, Epr };
+using Silence = pd::KaSilence;
 
 enum class Family : std::uint8_t { Transitions, Pps, PpsKeepAlive, EprKeepAlive, HardReset, Detach, Count };
 inline constexpr std::size_t kFamilies = static_cast<std::size_t>(Family::Count);
+inline constexpr std::uint8_t kAllFamilies = (1u << kFamilies) - 1;
 constexpr const char* family_name(Family f) {
     switch (f) {
         case Family::Transitions: return "Transitions";
@@ -165,7 +166,8 @@ public:
     // One engine per run: the session emplaces a fresh one for every start (no reset path that could leave a field behind).
     explicit Engine(Env& env) : env_(&env) {}
 
-    StartResult start(std::uint32_t now_ms) {
+    // families: a bit per Family (1 << Family), 0 = all of them. The ones left out read "not selected".
+    StartResult start(std::uint32_t now_ms, std::uint8_t families = 0) {
         if (running_) return StartResult::Running;
         const Snapshot s = env_->snapshot();
         if (s.inline_link) return StartResult::Inline;
@@ -184,6 +186,7 @@ public:
         }
         fam_ = Family::Transitions;
         ph_ = Ph::FamStart;
+        mask_ = families ? families : kAllFamilies;
         return StartResult::Ok;
     }
     void cancel() { if (running_ && !finishing_) cancel_ = true; }
@@ -204,6 +207,7 @@ public:
     std::span<const PpsRec> pps() const { return {pp_.data(), n_pp_}; }
     std::uint16_t score() const { return pdspec::score(agg_); }
     const Levels& levels() const { return L_; }
+    std::uint8_t families() const { return mask_; }
 
 private:
     enum class Ph : std::uint8_t {
@@ -254,6 +258,7 @@ private:
     Levels L_{};
     Walk walk_{};
     Family fam_ = Family::Transitions;
+    std::uint8_t mask_ = kAllFamilies;
     Ph ph_ = Ph::FamStart;
     After after_ = After::Family;
     std::uint8_t item_ = 0, items_ = 0;
@@ -421,6 +426,11 @@ inline void Engine::lost(const Snapshot& s, std::uint32_t now) {
 inline void Engine::restore(std::uint32_t now) { go(1, 0, After::Family, now); }
 
 inline void Engine::begin_family(std::uint32_t now) {
+    if (fam_ != Family::Count && !(mask_ >> static_cast<std::uint8_t>(fam_) & 1)) {
+        skip_family(fam_, Skip::NotSelected);
+        next_family();
+        return;
+    }
     switch (fam_) {
         case Family::Transitions:
             if (L_.n_fixed < 2) { skip_family(fam_, Skip::OneLevel); next_family(); return; }

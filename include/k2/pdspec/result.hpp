@@ -82,7 +82,7 @@ constexpr const CheckDef& def(Check c) { return kDefs[static_cast<std::size_t>(c
 
 // Why a check measured nothing.
 enum class Skip : std::uint8_t {
-    None, NotOffered, OneLevel, NoPps, NoEpr, NoEprProof, NoCapture, Refused, Stopped, NotReached, SelfPowered, NoData
+    None, NotOffered, OneLevel, NoPps, NoEpr, NoEprProof, NoCapture, Refused, Stopped, NotReached, SelfPowered, NoData, NotSelected
 };
 constexpr const char* skip_name(Skip s) {
     switch (s) {
@@ -98,6 +98,7 @@ constexpr const char* skip_name(Skip s) {
         case Skip::NotReached: return "not reached";
         case Skip::SelfPowered: return "K2 on the charger";
         case Skip::NoData: return "no data";
+        case Skip::NotSelected: return "not selected";
     }
     return "?";
 }
