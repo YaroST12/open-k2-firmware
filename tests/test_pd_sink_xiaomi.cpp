@@ -886,6 +886,38 @@ static void test_trace_clears_on_detach_and_hard_reset() {
     }
 }
 
+// A Request right behind a fresh contract (a tool stepping the level within ~220 ms of the PS_RDY): the paced Discover SVIDs
+// REQ must not go out between that Request's Accept and its PS_RDY. A source in its power transition answers any message with
+// a Hard Reset (Anker IQ4, hardware 2026-11-14: PD Spec Check after the PPS-timeout Hard Reset, the REQ landed 150 ms after
+// the 20 V Accept, Hard Reset 1 ms later). It waits for the new PS_RDY and is paced from there.
+static void test_discover_svids_waits_out_a_transition() {
+    Rig r;
+    r.sink.set_proactive_discover(true);
+    CHECK_EQ(r.sink.trigger({1, 5000, 1000}, r.now), Err::Ok);
+    r.pump();
+    r.ctl(kCtlAccept);
+    r.ctl(kCtlPsRdy);   // the contract: the REQ is armed for +220 ms
+    r.run(60);
+    CHECK_EQ(r.sink.trigger({2, 9000, 1000}, r.now), Err::Ok);   // the next level, 60 ms later
+    r.pump();
+    r.ctl(kCtlAccept);
+    r.sent.clear();
+    r.run(400);   // the source is still in its transition (no PS_RDY yet): past the REQ's original time
+    bool vdm = false;
+    for (const auto& m : r.sent) vdm = vdm || (m.header & 0x1F) == kMsgVendorDefined;
+    CHECK_EQ(vdm, false);
+    r.sent.clear();
+    r.ctl(kCtlPsRdy);   // the transition is over
+    r.run(150);
+    vdm = false;
+    for (const auto& m : r.sent) vdm = vdm || (m.header & 0x1F) == kMsgVendorDefined;
+    CHECK_EQ(vdm, false);   // paced again from this PS_RDY, not sent the moment the sink is Ready
+    r.run(200);
+    vdm = false;
+    for (const auto& m : r.sent) vdm = vdm || ((m.header & 0x1F) == kMsgVendorDefined && r.last_vdm_header() == 0xFF008002u);
+    CHECK_EQ(vdm, true);
+}
+
 int main() {
     test_source_svids_ack_listing_22d9_is_recorded_and_never_answered();
     test_source_svids_req_alone_is_not_xiaomi();
@@ -919,5 +951,6 @@ int main() {
     test_xiaomi_cmd_08();
     test_xiaomi_cmd_0A();
     test_full_xiaomi_auth_sequence();
+    test_discover_svids_waits_out_a_transition();
     return test_report("test_pd_sink_xiaomi");
 }

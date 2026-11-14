@@ -729,6 +729,8 @@ K2_HOT void Sink::after_ps_rdy(std::uint32_t now) {
         discover_svids_sent_ = true;   // armed and thus once per session
         discover_svids_pending_ = true;
         discover_svids_at_ = now + kProactiveDiscoverMs;
+    } else if (discover_svids_pending_) {
+        discover_svids_at_ = now + kProactiveDiscoverMs;   // a Request went in between: paced from this PS_RDY again
     }
     if (fresh_) {
         ready_at_ = now; fresh_ = false; tracking_ = false;
@@ -1077,8 +1079,10 @@ K2_HOT void Sink::tick(std::uint32_t now) {
         send_xiaomi_vdm_reply(0, std::span<const std::uint32_t>(vdos), now);
         return;
     }
-    // The paced proactive Discover-SVIDs REQ (on SOP, like every sink TX)
-    if (discover_svids_pending_ && !tx_pending_ && std::int32_t(now - discover_svids_at_) >= 0) {
+    // The paced proactive Discover-SVIDs REQ (on SOP, like every sink TX). Only in Ready: between a Request's Accept and its
+    // PS_RDY the source is in its power transition and answers any message with a Hard Reset (Anker IQ4, hardware 2026-11-14).
+    if (discover_svids_pending_ && !tx_pending_ && st_.state == SinkState::Ready && contract_ &&
+        std::int32_t(now - discover_svids_at_) >= 0) {
         discover_svids_pending_ = false;
         TxMsg m;
         m.header = make_header(kMsgVendorDefined, 1, rev_);
