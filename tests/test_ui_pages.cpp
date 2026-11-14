@@ -83,7 +83,9 @@ static void test_global_paging() {
     uint32_t t = 20000;
     CHECK_EQ(ui.page() == Page::Home, 1);
     CHECK_EQ(static_cast<int>(ui.on_button(Button::Plus, ButtonEvent::Short, t)), static_cast<int>(UiAction::None));
-    CHECK_EQ(ui.page() == Page::Detail, 1);                           // Flow -> Numbers -> Lines -> Flow
+    CHECK_EQ(ui.page() == Page::Graphs, 1);                           // Flow -> Graphs -> Numbers -> Lines -> Flow
+    ui.on_button(Button::Plus, ButtonEvent::Short, t);
+    CHECK_EQ(ui.page() == Page::Detail, 1);
     ui.on_button(Button::Plus, ButtonEvent::Short, t);
     CHECK_EQ(ui.page() == Page::Lines, 1);
     ui.on_button(Button::Plus, ButtonEvent::Short, t);

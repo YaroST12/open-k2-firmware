@@ -554,7 +554,7 @@ void test_button_capture_during_repaint(const world::Scenario& sc) {
         const bool stayed_inside_fill = after_fill_ms >= t0 + 54.0 && p_during_fill == 0;
         k2::mainloop::pass();
         const unsigned p1 = ui->page_index();
-        const bool moved_to_1 = stayed_inside_fill && p1 == 1;
+        const bool moved_to_1 = stayed_inside_fill && p1 == static_cast<unsigned>(k2::Page::Graphs);   // Flow -> Graphs
         // Second 30 ms press completely inside systick::delay_ms(60) (wait_hook path).
         const double t1 = world::fw_ms();
         world::schedule_plus_pulse(t1 + 3.0, t1 + 33.0);
@@ -564,7 +564,7 @@ void test_button_capture_during_repaint(const world::Scenario& sc) {
         const bool stayed_inside_wait = p_during_wait == p1;
         k2::mainloop::pass();
         const unsigned p2 = ui->page_index();
-        const bool moved_to_2 = stayed_inside_wait && p2 == 3;
+        const bool moved_to_2 = stayed_inside_wait && p2 == static_cast<unsigned>(k2::Page::Detail);   // Graphs -> Numbers
         if (!(moved_to_1 && moved_to_2)) {
             std::fprintf(stderr, "E3 debug: t0=%.1f dfill=%.1f pfill=%u p1=%u dt1=%.1f dwait=%.1f pwait=%u p2=%u\n",
                          t0, after_fill_ms - t0, p_during_fill, p1, t1 - after_fill_ms, after_wait_ms - t1, p_during_wait, p2);

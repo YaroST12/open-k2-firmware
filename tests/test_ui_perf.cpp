@@ -141,7 +141,7 @@ static void test_scroll_budgets() {
         std::snprintf(e.name.data(), e.name.size(), "Cable %u", n);
         g_stub.lib.push_back(e);
     }
-    ui.goto_page(6, 5400);
+    ui.goto_page(kMenuPageBase + static_cast<uint8_t>(Menu::Trigger), 5400);
     CHECK_EQ(ui.push_menu(Menu::Emarker, 5500), true);
     ui.run_action(Action::EmarkerScan, 5600);
     ui.tick(5700);
@@ -693,6 +693,7 @@ static void test_tick_cost() {
         {kDiagPage, 0, 2000, "Diag"}, {3, 0, 1850, "Lines"},
         {4, 0, 3400, "Bench"},   // the Meter row's live readings and the watts a device gets, on top of the bar readout
         {5, 0, 1850, "Settings"},
+        {static_cast<uint8_t>(Page::Graphs), 1850, 1650, "Graphs"},   // the elapsed and Wh digits, and the scrolling graphs
     };
     std::printf("page tick = %u ms; px per tick with live values moving (wire ms at DIV8/DIV4/DIV2):\n",
                 unsigned(kPageTickMs));
@@ -730,7 +731,9 @@ static void test_tick_cost() {
 // Home with no source (the walk-by idle state) and Home on a flat trace: once painted, a steady tick
 // must stay cheap (< 6000 px per 100 ms tick; the idle page has nothing to animate and no label to redraw).
 static void test_home_idle_tick() {
-    struct { const char *name; bool source; } cases[] = {{"idle", false}, {"flat", true}};
+    struct { const char *name; bool source; uint8_t page; } cases[] = {
+        {"idle", false, 0}, {"flat", true, 0},
+        {"idle", false, static_cast<uint8_t>(Page::Graphs)}, {"flat", true, static_cast<uint8_t>(Page::Graphs)}};
     for (auto &c : cases) {
         fixture();
         if (!c.source) {
@@ -741,7 +744,7 @@ static void test_home_idle_tick() {
         ui.init(1000);
         ui.set_rotation(0, 1000);
         uint32_t now = 1000;
-        ui.goto_page(0, now);
+        ui.goto_page(c.page, now);
         for (int i = 0; i < 140; i++) { now += kPageTickMs; ui.tick(now); }   // settle: paint, fill the 10 s trace
         unsigned worst = 0, sum = 0;
         const int n = 20;
@@ -752,11 +755,12 @@ static void test_home_idle_tick() {
             sum += g_lcd_pixels;
             worst = g_lcd_pixels > worst ? g_lcd_pixels : worst;
         }
-        std::printf("home %-4s steady tick: mean %u px, worst %u px (budget 6000 per %u ms)\n", c.name, sum / n, worst,
+        const char *pname = c.page ? "graphs" : "home";
+        std::printf("%s %-4s steady tick: mean %u px, worst %u px (budget 6000 per %u ms)\n", pname, c.name, sum / n, worst,
                     unsigned(kPageTickMs));
         CHECK_EQ(worst < 6000u, true);
         const unsigned diff = force_full_redraw(ui, now);   // the idle / flat frame equals a forced repaint
-        std::printf("home %-4s: incremental vs forced redraw diff=%u\n", c.name, diff);
+        std::printf("%s %-4s: incremental vs forced redraw diff=%u\n", pname, c.name, diff);
         CHECK_EQ(diff, 0u);
     }
 }

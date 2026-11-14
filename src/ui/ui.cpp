@@ -56,6 +56,7 @@ PageIf *Ui::build_base(Page p) {
     case Page::Lines: return pages_.push<LinesPage>(ctx_);
     case Page::Tools: return pages_.push<ToolsPage>(ctx_);
     case Page::Settings: return pages_.push<SettingsPage>(ctx_);
+    case Page::Graphs: return pages_.push<GraphsPage>(ctx_);
     default: return pages_.push<HomePage>(ctx_);
     }
 }
@@ -264,7 +265,7 @@ void Ui::draw_rotation_notice(uint32_t now_ms) {
 // tests/test_ui_capture.cpp proves each entry: it compares the switch against a clean paint, in all four rotations.
 bool Ui::page_opaque(Page p, bool entering) const {
     switch (p) {
-    case Page::Home: case Page::Detail: case Page::Lines: case Page::Tools: case Page::Settings: return true;
+    case Page::Home: case Page::Detail: case Page::Lines: case Page::Tools: case Page::Settings: case Page::Graphs: return true;
     case Page::ChargerTest: return charger_test_.paints_opaque(entering);   // the stage decides what its paint covers
     default: return false;
     }
@@ -278,8 +279,9 @@ bool Ui::menu_opaque(Menu m) {
 }
 
 namespace {
-constexpr Page kFaces[] = {Page::Home, Page::Detail, Page::Lines};   // the Meter's faces: Flow, Numbers, Lines (the pager's order)
+constexpr Page kFaces[] = {Page::Home, Page::Graphs, Page::Detail, Page::Lines};   // Flow, Graphs, Numbers, Lines (the pager's order)
 constexpr int kFaceCount = static_cast<int>(sizeof kFaces / sizeof kFaces[0]);
+static_assert(kFaceCount == kMeterFaces, "the pager shows every face");
 int face_of(Page p) {
     for (int i = 0; i < kFaceCount; i++) if (kFaces[i] == p) return i;
     return -1;
@@ -635,7 +637,7 @@ void Ui::paint_incoming(uint32_t now_ms, uint32_t t0, bool blank) {
     // No page paints the rows between its top bar's hairline and the body (kBarH..kBodyY; the wizard rule also leaves a gap
     // pixel between its segments) nor the two rows between a list's bottom and the footer: an opaque page lays that ground
     // first (5 rows, 1,120 px), the page's own paint goes over it. Home has neither bar nor footer.
-    chrome_gaps_pending_ = !blank && !(depth_ == 0 && page_ == Page::Home);
+    chrome_gaps_pending_ = !blank && !(depth_ == 0 && (page_ == Page::Home || page_ == Page::Graphs));
     static_pending_ = true;
     panel_pending_ = true;
     panel_mask_ = 0x0Fu;
@@ -1369,7 +1371,7 @@ K2_HOT UiAction Ui::tick(uint32_t now_ms) {
             // |current| without negating INT32_MIN (UB); the trace saturates at INT32_MAX.
             ctx_.amps.push(now_ms, static_cast<int32_t>(std::min<uint32_t>(power::magnitude(ctx_.pm.current_ma), INT32_MAX)));
             ctx_.trend.push(now_ms, static_cast<uint32_t>(ctx_.pm.vbus_mv) / 10, power::magnitude(ctx_.pm.current_ma) / 10,
-                            power::magnitude(ctx_.pm.power_mw) / 10);
+                            power::magnitude(ctx_.pm.power_mw) / 10, ctx_.limit_w, ctx_.meter.mwh());
             // Home's PEAK and SAG cards: every raw sample counts (a short spike the display filter rounds away is a peak).
             ctx_.extremes.sample(raw.vbus_mv, raw.current_ma, raw.power_mw, ctx_.sag_level_mv);
         }   // the trace freezes when stale
@@ -1400,10 +1402,13 @@ K2_HOT UiAction Ui::tick(uint32_t now_ms) {
             sag_level_ms_ = now_ms;
             const fctrig::Status fst = fctrig::status();
             const bool qc3 = fst.state == fctrig::State::Active && (fst.proto == fctrig::Proto::Qc3 || fst.proto == fctrig::Proto::Qc3Plus);
-            const uint32_t level = home::sag_level_mv(proto_now(), qc3 && fst.target_mv > 0 ? static_cast<uint32_t>(fst.target_mv) : 0u);
+            const home::ProtoInfo proto = proto_now();
+            const uint32_t level = home::sag_level_mv(proto, qc3 && fst.target_mv > 0 ? static_cast<uint32_t>(fst.target_mv) : 0u);
             ctx_.sag_level_mv = sag_settle_.update(now_ms, level);
+            ctx_.limit_w = (graphs::limit_mw(proto) + 500u) / 1000u;   // the Graphs page's dotted limit, per trend column
         } else if (!live) {
             ctx_.sag_level_mv = 0;
+            ctx_.limit_w = 0;
         }
     }
     // Kelvin mode: the far-end sense wires of the fixture arrive on CC1, CC2 and D-.

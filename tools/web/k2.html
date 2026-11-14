@@ -402,8 +402,8 @@ var K2Proto = (function () {
                       158: "not unlocked (vendor not accepted)", 159: "not unlocked (source reset)" };
   var ID_STATES = ["idle", "running", "done", "aborted"];
   var ID_STEPS = ["identity", "svids", "modes", "sink-cap", "status", "revision", "done"];
-  // Rotation pages 0..5; while a submenu is open GET_STATE.page is 6 + index into MENUS (include/k2/ui/ui_types.hpp).
-  var PAGES = ["home", "detail", "chargertest", "lines", "tools", "settings"];
+  // Rotation pages 0..6; while a submenu is open GET_STATE.page is 7 + index into MENUS (include/k2/ui/ui_types.hpp).
+  var PAGES = ["home", "detail", "chargertest", "lines", "tools", "settings", "graphs"];
   var MENUS = ["trigger", "emarker", "pdtrigger", "cabler", "blackbox", "spoof", "usblink", "autorotate", "cards", "share", "connection", "diag", "qrtest", "twin", "loopprobe", "pdstress", "diagnosis", "battery"];
   var SETTINGS_MENUS = ["usblink", "autorotate"];
   function pageName(i) {

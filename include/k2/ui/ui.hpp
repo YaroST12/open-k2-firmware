@@ -27,6 +27,7 @@
 #include "k2/ui/ui_connection.hpp"
 #include "k2/ui/ui_share.hpp"
 #include "k2/ui/ui_pages.hpp"
+#include "k2/ui/ui_graphs.hpp"
 #if K2_PDSTRESS
 #include "k2/ui/pd_stress_session.hpp"
 #endif
@@ -58,7 +59,7 @@ inline constexpr std::size_t kMaxMenuDepth = kPageArenaDepth - 1;
 // Every rotation page (Page enum; build_page in ui.cpp).
 inline constexpr std::size_t kLargestBase =
     std::max({arena_bytes<HomePage>(), arena_bytes<DetailPage>(), arena_bytes<ChargerTestPage>(), arena_bytes<LinesPage>(),
-              arena_bytes<ToolsPage>(), arena_bytes<SettingsPage>()});
+              arena_bytes<ToolsPage>(), arena_bytes<SettingsPage>(), arena_bytes<GraphsPage>()});
 // Every menu chain the UI can open (top of the list = nearest the rotation page), each at most kMaxMenuDepth deep. Place pages
 // (Connection) under each tool of their place (Charger: Request voltage, Fast charge, Report cards > Share, Stress test;
 // Cable: Spoof, Resistance, Loop probe > Share; Device: Twins) and Connection's own Share rows, Black box > Share, Diagnosis >
