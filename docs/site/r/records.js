@@ -99,6 +99,19 @@ var K2Records = (function () {
       pin: {initial: hexOf(pinParts[0], "boot"), now: hexOf(pinParts[1], "boot"), boot: hexOf(pinParts[2], "boot"),
         inherited: pinParts[3] === "1"},
       mark: f.mk === "-" ? null : hexOf(f.mk, "boot"), move: null, readbacks: [], notes: [], notes_not_shown: 0};
+    // The Rd intent marker as the boot read it, the SRAM probe and the backup-register session (absent before 1.0.0-521).
+    if (f.ri !== undefined) {
+      var ri = f.ri;
+      out.rd_marker = ri === "-" ? {read: false} : ri === "0" ? {read: true, record: null} :
+        {read: true, record: ({s: "session", a: "reattach", r: "rescan"})[ri.charAt(0)] || ri.charAt(0),
+          pin: intOf(ri.charAt(1), "boot"), canary: ri.charAt(2) === "y", host: ri.charAt(3) === "y"};
+    }
+    if (f.sr !== undefined) out.sram_probe_words = intOf(f.sr, "boot");
+    if (f.bp !== undefined) {
+      var bp = f.bp.split(":");
+      if (bp.length !== 2) throw fail("bad-record", "The boot report's session field does not read.");
+      out.session = {boots: intOf(bp[0], "boot"), previous: bp[1] === "1"};
+    }
     if (f.mv !== "-") {
       var m = f.mv.split(":");
       var ft = (m[1] || "").split(">");

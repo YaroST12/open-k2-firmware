@@ -31,6 +31,19 @@ test("every non-card golden decodes to what the Python decoders give", () => {
   }
 });
 
+test("the boot report's Rd marker, session and SRAM probe fields read as the Python twin gives them", () => {
+  // tools/k2_remote.py parse_bootinfo_text on the same lines (the golden boot rows only carry ri=- sr=0 bp=0:0).
+  const base = "K2B1 fw=1.0 g=fcb3128-dirty p=1 t=12345 vb=5012 c1=3290 c2=0 pl=1 m=plus k=8 pa=D rf=24000000 w=0 pin=2,1,1,0 " +
+    "mk=- ra=0:- ri=RI sr=32 bp=3:1 mv=- sw=- n=-";
+  const read = (ri) => plain(K2Records.decode("boot", Buffer.from(base.replace("RI", ri), "ascii")));
+  const a = read("s1yn");
+  assert.deepEqual(a.rd_marker, { read: true, record: "session", pin: 1, canary: true, host: false });
+  assert.deepEqual(a.session, { boots: 3, previous: true });
+  assert.equal(a.sram_probe_words, 32);
+  assert.deepEqual(read("0").rd_marker, { read: true, record: null });
+  assert.deepEqual(read("-").rd_marker, { read: false });
+});
+
 test("every kind has a golden", () => {
   assert.deepEqual([...new Set(others.map((n) => K2Records.read(golden[n].link).kind))].sort(),
     ["boot", "emarker", "identity", "pdcaps", "text"]);

@@ -77,9 +77,11 @@ test("blanks around a pasted part are ignored, the spaces inside it are kept", (
   assert.equal(code(() => K2Records.read(BOOT_SCAN.replace(/ /g, ""))), "bad-frame");   // a space is a digit, not padding
 });
 
+// The page reads the kinds of KIND only. The log (6), the loop probe (7) and the battery run (8) are K2 data frames for
+// tools/k2_qr.py (docs/QR_SHARE.md, docs/BATTERY_RECORDER.md): the firmware gives them no link kind and the page refuses them.
 test("every single-part golden frame gives the firmware's record and the page's own kind", () => {
   for (const [name, fx] of Object.entries(fix)) {
-    if (fx.parts.length !== 1 || (fx.type & 0x7F) === 6) continue;
+    if (fx.parts.length !== 1 || !((fx.type & 0x7F) in KIND)) continue;
     const plainName = name.replace(/_lz$/, "").replace(/_v2$/, "");
     const l = K2Card.splitLink(fx.parts[0]);
     assert.equal(l.kind, KIND[fx.type & 0x7F], name);
@@ -91,6 +93,12 @@ test("every single-part golden frame gives the firmware's record and the page's 
     assert.equal(r.kind, l.kind, name);
     assert.ok(r.view.header.title, name);
   }
+});
+
+test("a battery run's frame is refused by name: the page has no view for it (tools/k2_qr.py decodes it)", () => {
+  assert.equal(fix.battery.parts.length, 1);
+  assert.equal(code(() => K2Records.read(fix.battery.parts[0])), "bad-frame");
+  assert.throws(() => K2Card.splitLink(fix.battery.parts[0]), /record type this page does not know \(BATT1\)/);
 });
 
 test("a schema 2 card frame shows the card of the schema 1 frame, and a packed one too", () => {
