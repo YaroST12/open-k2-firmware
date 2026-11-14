@@ -593,13 +593,14 @@ web-sync:
 # layout .github/workflows/pages.yml publishes; nothing is tracked twice.
 webhid:
 	@mkdir -p $(BUILD_DIR)/webhid
-	@cp webhid-flasher/index.html webhid-flasher/k2boot.js tools/web/k2proto.js $(BUILD_DIR)/webhid/
+	@cp webhid-flasher/index.html webhid-flasher/k2boot.js tools/web/k2proto.js tools/web/k2.html $(BUILD_DIR)/webhid/
 	@echo "Open http://localhost:$(WEB_PORT)/ in Chrome or Edge (Ctrl-C stops the server)"
 	@(sleep 1; xdg-open http://localhost:$(WEB_PORT)/ >/dev/null 2>&1 || true) &
 	@python3 -m http.server --bind 127.0.0.1 -d $(BUILD_DIR)/webhid $(WEB_PORT)
 
 # The whole GitHub Pages site: .github/workflows/pages.yml builds the firmware, then runs this very target with
-# SITE_DIR=_site, so the workflow and a local run cannot drift. Layout: the flasher at the root, docs/site/ copied over it
+# SITE_DIR=_site, so the workflow and a local run cannot drift. Layout: the flasher at the root, the dashboard
+# (tools/web/k2.html, the WebUSB landing page the K2 announces) as k2.html beside it, docs/site/ copied over it
 # (the results viewer at /r/), and, when $(BUILD_DIR)/open_k2.k2 exists, fw/open_k2.k2 + fw/latest.json (tools/stage_fw.py;
 # the flasher's "Latest build" row reads them). Without a build the site is staged without fw/ and the row stays hidden.
 # Open http://localhost:$(WEB_PORT)/r/#<link> to try a K2 results link.
@@ -609,6 +610,7 @@ site:
 	@rm -rf $(SITE_DIR)
 	@mkdir -p $(SITE_DIR)
 	@cp webhid-flasher/index.html webhid-flasher/k2boot.js tools/web/k2proto.js $(SITE_DIR)/
+	@cp tools/web/k2.html $(SITE_DIR)/k2.html
 	@cp -r docs/site/. $(SITE_DIR)/
 	@$(PYTHON) tools/stage_fw.py --build $(BUILD_DIR) --out $(SITE_DIR) --optional
 	@echo "Staged in $(SITE_DIR) (serve it: python3 -m http.server -d $(SITE_DIR) $(WEB_PORT))"

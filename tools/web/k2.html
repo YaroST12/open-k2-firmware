@@ -43,6 +43,7 @@ button:focus-visible, select:focus-visible, input:focus-visible, summary:focus-v
 .pill.warn { color: var(--warn); border-color: var(--warn); }
 .spacer { flex: 1; }
 .note { color: var(--muted); font-size: 12px; }
+a.note { color: var(--accent); }
 #banner { display: none; margin: 12px 16px 0; padding: 10px 14px; border-radius: 8px; border: 1px solid var(--warn);
           background: var(--warn-bg); color: var(--warn); }
 #banner.show { display: block; }
@@ -103,6 +104,7 @@ details > *:not(summary) { margin-top: 8px; }
 <body>
 <header>
   <h1>Open-K2</h1>
+  <a id="to-flasher" class="note" href="./" title="Firmware flasher">Flasher</a>
   <button id="connect" class="primary">Connect</button>
   <button id="connect-usb" hidden title="Use the WebUSB vendor interface instead of WebHID (firmware built with WebUSB; the only way on Android).">Connect via WebUSB</button>
   <span id="status" class="pill">not connected</span>
