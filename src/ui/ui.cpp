@@ -43,6 +43,9 @@ Ui::Ui() : charger_test_(ctx_)
 #if K2_PDSTRESS
            , pdstress_(ctx_, charger_test_)
 #endif
+#if K2_PDSPEC
+           , pdspec_(ctx_)
+#endif
 {
     ctx_.ui = this;
     pages_.push<HomePage>(ctx_);   // the arena is never empty: page_ starts on Home
@@ -84,6 +87,9 @@ PageIf *Ui::build_menu(Menu m) {
     case Menu::LoopProbe: return pages_.push<LoopProbePage>(ctx_);
 #if K2_PDSTRESS
     case Menu::PdStress: return pages_.push<PdStressPage>(ctx_);
+#endif
+#if K2_PDSPEC
+    case Menu::PdSpec: return pages_.push<PdSpecPage>(ctx_);
 #endif
     case Menu::Diagnosis: {
         DiagnosisPage *p = pages_.push<DiagnosisPage>(ctx_);
@@ -319,7 +325,7 @@ twin_hw::LiveCtx Ui::twin_ctx(uint32_t now_ms) const {
     c.cap_mv = ctx_.cap_mv;
     c.busy = charger_test_busy() || fc_release_.busy() || loop_probe_busy();
     c.inline_link = link_.inline_mode() || ctx_.inline_mode;
-    c.owners_busy = pdstress_active() || fctrig::svooc_running() || fctrig::scan_running();
+    c.owners_busy = pdstress_active() || pdspec_active() || fctrig::svooc_running() || fctrig::scan_running();
     return c;
 }
 
@@ -333,6 +339,9 @@ void Ui::cancel_runs() {
     cancel_twin();
 #if K2_PDSTRESS
     pdstress_.cancel();
+#endif
+#if K2_PDSPEC
+    pdspec_.cancel();
 #endif
     if (LoopProbePage *probe = find<LoopProbePage>(Menu::LoopProbe)) probe->cancel(ctx_.now);
 }
@@ -355,6 +364,7 @@ BusyWhy Ui::busy_why() const {
     if (charger_test_busy()) return BusyWhy::TestRunning;
     if (twin_live_busy()) return BusyWhy::TwinRun;
     if (pdstress_active()) return BusyWhy::PdStress;   // PD Stress: running or resuming
+    if (pdspec_active()) return BusyWhy::PdSpec;
     if (loop_probe_busy()) return BusyWhy::LoopProbe;
     if (fc_release_.busy()) return BusyWhy::FcRelease;
     if (fctrig::scan_running() || fs.state == fc::State::Negotiating || fs.state == fc::State::Active ||
@@ -387,6 +397,7 @@ const char *Ui::busy_reason() const {
     case BusyWhy::PdStress: return "PD Stress: stop it";   // unreachable: pdstress_active() is false
 #endif
     case BusyWhy::LoopProbe: return "Loop probe: stop it";
+    case BusyWhy::PdSpec: return "PD Spec: stop it";
     case BusyWhy::None: break;
     }
     return nullptr;
@@ -463,6 +474,7 @@ const char *Ui::foreign_busy() const {
     const auto fs = fctrig::status();
     if (loopguard::locked()) return loopguard::kLockText;   // a run starts nothing above 5 V, a restore waits (k2/core/loop_guard.hpp)
     if (charger_test_busy()) return "Test running: stop it";
+    if (pdspec_active()) return "PD Spec: stop it";   // PD Stress asks this; the PD Spec Check never does while its own run goes on
     if (loop_probe_busy()) return "Loop probe: stop it";
     if (fc_release_.busy()) return "5V release: wait";
     if (fctrig::scan_running() || fs.state == fc::State::Negotiating || fs.state == fc::State::Active ||
@@ -663,7 +675,7 @@ void Ui::refuse_menu(Menu m, const char *why, uint32_t now_ms) {
 
 bool Ui::push_menu(Menu m, uint32_t now_ms) {
     // The PD Stress page opens over its own run (a run the remote started shows there, and its BACK stops it); it only reads the session.
-    if (ports_busy() && !(m == Menu::PdStress && pdstress_active())) {
+    if (ports_busy() && !(m == Menu::PdStress && pdstress_active()) && !(m == Menu::PdSpec && pdspec_active())) {
         K2LOG("[TEST] menu refused: test/release in progress\n");
         return false;
     }
@@ -1513,8 +1525,14 @@ K2_HOT UiAction Ui::tick(uint32_t now_ms) {
 #else
     const bool stress_note = loopguard::locked();
 #endif
-    if (pdstress_note_ && !stress_note) { current().invalidate(); paint_pending_ = true; }   // the note goes: the page repaints its own footer
-    pdstress_note_ = stress_note;
+#if K2_PDSPEC
+    pdspec_.poll(now_ms);   // after the charger test's poll, like PD Stress (it sets the run-owner flag while it runs)
+    const bool spec_note = pdspec_.footer() != nullptr;
+#else
+    const bool spec_note = false;
+#endif
+    if (pdstress_note_ && !(stress_note || spec_note)) { current().invalidate(); paint_pending_ = true; }   // the note goes: the page repaints its own footer
+    pdstress_note_ = stress_note || spec_note;
     // The battery recorder's running dot (draw_release_notice): when the run stops, the page repaints whole once, so whatever
     // the dot covered (a bar, a hero) comes back.
     const bool batt_run = battery::hw::service().rec().active();
@@ -1565,6 +1583,11 @@ void Ui::draw_release_notice() {
 #if K2_PDSTRESS
     else if (const char *line = pdstress_.footer(); line && menu() != Menu::Trigger && menu() != Menu::PdStress) {
         draw_footer(ctx_.content, FooterTone::Info, line);   // the run's one line, on whatever page is up (its own page has its footer)
+    }
+#endif
+#if K2_PDSPEC
+    else if (const char *line = pdspec_.footer(); line && menu() != Menu::Trigger && menu() != Menu::PdSpec) {
+        draw_footer(ctx_.content, FooterTone::Info, line);
     }
 #endif
     // A battery run in progress: the 5 x 5 accent dot (the charger test's running dot) in the content's top-right corner, on

@@ -6,6 +6,7 @@
 #include "test_util.h"
 #include "k2/ui/ui_connection.hpp"
 #include "k2/ui/ui_tools.hpp"
+#include "k2/ui/text/tools.hpp"
 
 using namespace k2;
 
@@ -57,7 +58,7 @@ static void test_fc() {
 // Charger ID, Cable read, Device ID, Black Box, PD diagnosis, Report cards and Diag never block: Connection's own actions carry the inline confirm.
 static void test_always_ready_tools() {
     for (int t = 4; t < kToolCount; t++) {
-        if (t == 3 || t == kToolLoopProbe || t == kToolPdStress) continue;   // the ones that need the power monitor (and PD Stress a charger)
+        if (t == 3 || t == kToolLoopProbe || t == kToolPdStress || t == kToolPdSpec) continue;   // the ones that need the power monitor (and PD Stress / Spec a charger)
         for (int mask = 0; mask < 32; mask++) {
             const Readiness r = tool_readiness(t, st(mask & 1, mask & 2, mask & 4, mask & 8, mask & 16 ? 5000 : 0), mask & 8);
             CHECK_EQ(int(r.level), int(ToolLevel::Ready));
@@ -99,6 +100,20 @@ static void test_pd_stress_tool() {
     CHECK_STR(r.tag, "no PD");
 }
 
+// PD Spec Check has PD Stress's three needs, its own slot, its own menu and a Charger place row.
+static void test_pd_spec_tool() {
+    CHECK_EQ(kToolPdSpec, 14);
+    CHECK_EQ(tool_built(kToolPdSpec), true);   // the host tests build both opt-in tools
+    CHECK_STR(tool_hint(kToolPdSpec), "PD charger, no load");
+    CHECK_STR(text::tools::kNames[kToolPdSpec], "PD Spec Check");   // the menu it opens: test_ui_cards
+    CHECK_STR(tool_readiness(kToolPdSpec, st(true, false, true), true).tag, "ready");
+    CHECK_STR(tool_readiness(kToolPdSpec, st(true, true, true), true).tag, "load");
+    CHECK_STR(tool_readiness(kToolPdSpec, st(true, false, true), false).tag, "no PM");
+    CHECK_STR(tool_readiness(kToolPdSpec, st(false, false, false), true).tag, "no PD");
+    CHECK_EQ(tool_built(kToolSlots), false);
+    CHECK_EQ(tool_built(-1), false);
+}
+
 static void test_spoof_tool() {
     SetupState st;
     CHECK_EQ(int(tool_readiness(kToolSpoof, st, true).level), int(ToolLevel::Ready));
@@ -126,6 +141,7 @@ static void test_hurt_table() {
         ToolHurt::Nothing,   // 11 Device twins: the live proof refuses a live sink itself
         ToolHurt::Nothing,   // 12 Loop probe: its far end is the K2's own HID port; it refuses above 5.5 V itself
         ToolHurt::Load,      // 13 PD Stress: asks the charger for every level, a load would take each one
+        ToolHurt::Load,      // 14 PD Spec Check: the same, every advertised level and PPS point
     };
     for (int t = 0; t < kToolCount; t++) {
         CHECK_EQ(int(tool_hurt_by(t)), int(kExpect[t]));
@@ -179,10 +195,9 @@ static std::string place_rows(conn::Tab t, const conn::ActFacts &a) {
 
 static void test_place_actions() {
     conn::ActFacts a;
-    CHECK_EQ(place_rows(conn::Tab::Source, a) ==
-                 (K2_PDSTRESS ? "Read again:Test charger,Request voltage,Fast charge,Report cards,Stress test,Read again"
-                              : "Read again:Test charger,Request voltage,Fast charge,Report cards,Read again"), true);
-    CHECK_EQ(place_rows(conn::Tab::Cable, a) == "Read e-marker:Read e-marker,Save cable,Saved cables,Spoof as...,Resistance,Loop probe",
+    CHECK_EQ(place_rows(conn::Tab::Source, a) == std::string("Read again:Test charger,Request voltage,Fast charge,Report cards,") +
+                                                      (K2_PDSTRESS ? "Stress test," : "") + (K2_PDSPEC ? "Spec check," : "") + "Read again",
+             true);    CHECK_EQ(place_rows(conn::Tab::Cable, a) == "Read e-marker:Read e-marker,Save cable,Saved cables,Spoof as...,Resistance,Loop probe",
              true);
     CHECK_EQ(place_rows(conn::Tab::Sink, a) == "Ask device:Ask device,Twins,Read again", true);
     std::array<conn::Item, conn::kMaxItems> it{};
@@ -263,5 +278,6 @@ int main() {
     test_spoof_tool();
     test_loop_probe_tool();
     test_pd_stress_tool();
+    test_pd_spec_tool();
     return test_report("test_ui_tools");
 }

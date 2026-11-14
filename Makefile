@@ -29,6 +29,9 @@ K2_WEBUSB ?= 0
 # `pdstress` shell commands). Off by default since 2026-11-12: it found no charger fault. The host tests always build it
 # (HOST_CXXFLAGS) so its logic keeps compiling. See include/k2/core/build_config.h.
 K2_PDSTRESS ?= 0
+# K2_PDSPEC=1 builds Tools > PD Spec Check in (the no-load PD conformance check: its session, page and the remote command 0x5A,
+# docs/PD_SPEC_CHECK.md). Off by default while flash is short; the host tests always build it (HOST_CXXFLAGS).
+K2_PDSPEC ?= 0
 # K2_WHOS_ATTACHED=1 brings the tabbed Who's attached page back behind the three ID tools (include/k2/core/build_config.h).
 K2_WHOS_ATTACHED ?= 0
 # K2_SCREENSHOT=1 builds the RLE565/strip screenshot capture path and Settings > Screenshot row back in
@@ -100,6 +103,10 @@ endif
 PDSTRESS_CXX_SRCS = $(wildcard $(SRC_DIR)/pdstress/*.cpp) $(SRC_DIR)/ui/ui_pdstress.cpp $(SRC_DIR)/ui/ui_pdstress_page.cpp   # K2_PDSTRESS=1 only
 ifneq ($(K2_PDSTRESS),1)
 CXX_SRCS := $(filter-out $(PDSTRESS_CXX_SRCS),$(CXX_SRCS))
+endif
+PDSPEC_CXX_SRCS = $(SRC_DIR)/ui/ui_pdspec.cpp $(SRC_DIR)/ui/ui_pdspec_page.cpp   # K2_PDSPEC=1 only
+ifneq ($(K2_PDSPEC),1)
+CXX_SRCS := $(filter-out $(PDSPEC_CXX_SRCS),$(CXX_SRCS))
 endif
 SCREENSHOT_CXX_SRCS = $(SRC_DIR)/ui/capture.cpp $(SRC_DIR)/ui/rle565.cpp   # K2_SCREENSHOT=1 only
 ifneq ($(K2_SCREENSHOT),1)
@@ -176,7 +183,7 @@ CFLAGS += -Os -g3 -Wall -Wextra -ffunction-sections -fdata-sections -fno-math-er
 # Measured -800 B text under LTO.
 CFLAGS += -fmerge-all-constants
 CFLAGS += -I$(INC_DIR)
-CFLAGS += -DK2_NET=$(K2_NET) -DK2_WEBUSB=$(K2_WEBUSB) -DK2_PDSTRESS=$(K2_PDSTRESS) -DK2_WHOS_ATTACHED=$(K2_WHOS_ATTACHED) -DK2_SCREENSHOT=$(K2_SCREENSHOT)
+CFLAGS += -DK2_NET=$(K2_NET) -DK2_WEBUSB=$(K2_WEBUSB) -DK2_PDSTRESS=$(K2_PDSTRESS) -DK2_PDSPEC=$(K2_PDSPEC) -DK2_WHOS_ATTACHED=$(K2_WHOS_ATTACHED) -DK2_SCREENSHOT=$(K2_SCREENSHOT)
 CFLAGS += -DK2_HOST_REPORT=$(K2_HOST_REPORT)
 CFLAGS += -DK2_HOT_BLOCK=$(K2_HOT_BLOCK)
 CFLAGS += -MMD -MP
@@ -417,7 +424,7 @@ HOST_K2_WEBUSB = 1
 # Screenshot capture is built in for the host tests (K2_SCREENSHOT=1); test_settings_rows0 is the one object built with
 # the firmware default, K2_SCREENSHOT=0.
 HOST_K2_SCREENSHOT = 1
-HOST_CXXFLAGS  = -std=c++23 -Wall -Wextra -O0 -g -I$(INC_DIR) -Itests -I$(LFS_DIR) -I$(QR_DIR) -DK2_NET=$(HOST_K2_NET) -DK2_WEBUSB=$(HOST_K2_WEBUSB) -DK2_PDSTRESS=1 -DK2_WHOS_ATTACHED=1 -DK2_SCREENSHOT=$(HOST_K2_SCREENSHOT) -DK2_TRUNC_LOG=1
+HOST_CXXFLAGS  = -std=c++23 -Wall -Wextra -O0 -g -I$(INC_DIR) -Itests -I$(LFS_DIR) -I$(QR_DIR) -DK2_NET=$(HOST_K2_NET) -DK2_WEBUSB=$(HOST_K2_WEBUSB) -DK2_PDSTRESS=1 -DK2_PDSPEC=1 -DK2_WHOS_ATTACHED=1 -DK2_SCREENSHOT=$(HOST_K2_SCREENSHOT) -DK2_TRUNC_LOG=1
 TEST_CXX_LIB   = $(SRC_DIR)/ui/ui.cpp $(SRC_DIR)/ui/ui_pages.cpp $(SRC_DIR)/ui/ui_detail.cpp $(SRC_DIR)/ui/capture.cpp tests/ui_stubs.cpp $(SRC_DIR)/ui/gfx.cpp $(SRC_DIR)/ui/rle565.cpp tests/fake_lcd.cpp $(SRC_DIR)/core/remote_proto.cpp $(SRC_DIR)/core/fmt.cpp $(SRC_DIR)/pd/pd.cpp $(SRC_DIR)/pd/pd_engine.cpp $(SRC_DIR)/pd/pd_ext.cpp $(SRC_DIR)/pd/pd_vdm.cpp $(SRC_DIR)/pd/usb_link.cpp $(SRC_DIR)/pd/pd_link.cpp $(SRC_DIR)/drivers/power_calc.cpp $(SRC_DIR)/drivers/adc_calc.cpp $(SRC_DIR)/fastcharge/fastcharge_classify.cpp $(SRC_DIR)/ui/ui_calc.cpp $(SRC_DIR)/drivers/buttons.cpp $(SRC_DIR)/ui/ui_layout.cpp $(SRC_DIR)/ui/ui_labels.cpp $(SRC_DIR)/ui/list_view.cpp $(SRC_DIR)/pd/pd_source.cpp $(SRC_DIR)/pd/pd_sink.cpp $(SRC_DIR)/pd/pd_identify.cpp $(SRC_DIR)/pd/pd_probe.cpp $(SRC_DIR)/ui/ui_pdtrig.cpp $(SRC_DIR)/ui/ui_wizard.cpp $(SRC_DIR)/fastcharge/fc_engine.cpp $(SRC_DIR)/fastcharge/fc_scan.cpp $(SRC_DIR)/ui/text.cpp $(SRC_DIR)/pd/emrec.cpp $(SRC_DIR)/pd/emk_quirk.cpp $(SRC_DIR)/pd/emk_respond.cpp $(SRC_DIR)/pd/emk_learn.cpp $(SRC_DIR)/pd/emname.cpp $(SRC_DIR)/pd/emjson.cpp $(SRC_DIR)/drivers/vfat.cpp $(SRC_DIR)/drivers/drive.cpp $(SRC_DIR)/ui/ui_widgets.cpp $(SRC_DIR)/ui/ui_icons.cpp $(SRC_DIR)/ui/ui_match.cpp $(SRC_DIR)/ui/ui_lines.cpp $(SRC_DIR)/ui/ui_tools.cpp $(SRC_DIR)/ui/ui_emarker.cpp $(SRC_DIR)/ui/ui_cabler.cpp $(SRC_DIR)/ui/ui_connection_page.cpp $(SRC_DIR)/ui/ui_blackbox.cpp $(SRC_DIR)/ui/ui_spoof.cpp $(SRC_DIR)/ui/ui_cards.cpp $(SRC_DIR)/pd/pdtrace.cpp $(SRC_DIR)/pd/pdtrace_view.cpp $(SRC_DIR)/pd/pdtrace_link.cpp $(wildcard $(SRC_DIR)/ui/fonts/*.cpp)
 TEST_CXX_SRCS  = $(wildcard tests/test_*.cpp)
 TEST_CXX_LIB  += tests/trunc_log.cpp $(SRC_DIR)/ui/orientation.cpp $(SRC_DIR)/core/shell.cpp $(SRC_DIR)/core/lab.cpp
@@ -435,6 +442,7 @@ TEST_CXX_LIB  += $(SRC_DIR)/loopprobe/loop_probe.cpp
 TEST_CXX_LIB  += $(SRC_DIR)/loopprobe/host_report.cpp $(SRC_DIR)/loopprobe/usb_fp.cpp
 TEST_CXX_LIB  += $(SRC_DIR)/ui/ui_loop_probe.cpp
 TEST_CXX_LIB  += $(SRC_DIR)/ui/ui_pdstress_page.cpp
+TEST_CXX_LIB  += $(SRC_DIR)/ui/ui_pdspec.cpp $(SRC_DIR)/ui/ui_pdspec_page.cpp
 TEST_CXX_LIB  += $(SRC_DIR)/pd/diag.cpp $(SRC_DIR)/pd/diag_screen.cpp $(SRC_DIR)/ui/ui_diagnosis.cpp
 TEST_CXX_LIB  += $(SRC_DIR)/battery/battery.cpp $(SRC_DIR)/battery/battery_store.cpp $(SRC_DIR)/battery/battery_wire.cpp
 TEST_CXX_LIB  += $(SRC_DIR)/ui/battery_view.cpp $(SRC_DIR)/ui/ui_battery.cpp
@@ -649,7 +657,7 @@ nav-headers:
 	@$(COMPDB)
 
 docker-build: | $(NAV_DIR)/dirs.txt
-	$(DOCKER_RUN) $(DOCKER_IMG) make K2_GIT=$(K2_GIT) K2_FW_VERSION=$(K2_FW_VERSION) K2_WERROR=$(K2_WERROR) K2_64BIT=$(K2_64BIT) K2_NET=$(K2_NET) K2_WEBUSB=$(K2_WEBUSB) K2_PDSTRESS=$(K2_PDSTRESS) K2_WHOS_ATTACHED=$(K2_WHOS_ATTACHED) K2_SCREENSHOT=$(K2_SCREENSHOT) K2_HOST_REPORT=$(K2_HOST_REPORT) K2_HOT_BLOCK=$(K2_HOT_BLOCK) BUILD_DIR=$(BUILD_DIR) K2_HOST_ROOT=$(CURDIR)
+	$(DOCKER_RUN) $(DOCKER_IMG) make K2_GIT=$(K2_GIT) K2_FW_VERSION=$(K2_FW_VERSION) K2_WERROR=$(K2_WERROR) K2_64BIT=$(K2_64BIT) K2_NET=$(K2_NET) K2_WEBUSB=$(K2_WEBUSB) K2_PDSTRESS=$(K2_PDSTRESS) K2_PDSPEC=$(K2_PDSPEC) K2_WHOS_ATTACHED=$(K2_WHOS_ATTACHED) K2_SCREENSHOT=$(K2_SCREENSHOT) K2_HOST_REPORT=$(K2_HOST_REPORT) K2_HOT_BLOCK=$(K2_HOT_BLOCK) BUILD_DIR=$(BUILD_DIR) K2_HOST_ROOT=$(CURDIR)
 
 docker-flash:
 	docker run --rm --privileged -v $(CURDIR):/workspace -v /dev:/dev $(DOCKER_IMG) make flash

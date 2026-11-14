@@ -44,6 +44,8 @@ enum class Check : std::uint8_t {
 inline constexpr std::size_t kChecks = static_cast<std::size_t>(Check::Count);
 
 enum class Kind : std::uint8_t { Max, Min, Range };
+// A Range limit with one open side (an overshoot is bounded only on the side the step moves to) carries this as the open bound.
+inline constexpr std::int32_t kOpenLimit = 1000000;
 enum class Unit : std::uint8_t { Us, Ms, Mv, Count };
 
 struct CheckDef {

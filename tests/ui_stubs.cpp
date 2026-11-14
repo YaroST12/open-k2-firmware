@@ -210,6 +210,7 @@ bool sink_hard_reset(bool lab_inline) {
     return true;
 }
 bool sink_soft_reset() { g_stub.ps_soft_resets++; return g_stub.ps_soft_reset_ok; }
+void sink_keepalive_silence(pd::KaSilence k) { g_stub.ka_silence = k; }
 void sink_set_cap(std::uint32_t mv) { g_stub.sink_cap = mv; }
 void sink_vbus(std::int32_t mv) { g_stub.sink_vbus = mv; }
 const pd::SinkStatus& sink_status() { return g_stub.sink; }
@@ -652,7 +653,10 @@ bool trigger(Reason r) {
     g_stub.tc_triggers++; g_stub.tc_reason = r; g_stub.tc_state = State::Post;
     return true;
 }
+bool trigger(Reason r, std::uint32_t) { return trigger(r); }   // the PD Spec Check's own post window: the stub has no clock
 bool triggered() { return g_stub.tc_state == State::Post || g_stub.tc_state == State::Frozen; }
+bool active() { return g_stub.tc_state != State::Off; }
+const Rec* frozen() { return nullptr; }   // no ring on the host: the PD Spec Check falls back to the sink's stamps
 void keep(std::uint32_t run_id, std::uint16_t step) { g_stub.tc_keeps++; g_stub.tc_keep_run = run_id; g_stub.tc_keep_step = step; }
 Status status() { Status s; s.state = g_stub.tc_state; return s; }
 bool find_stored(std::uint32_t run_id, std::uint16_t step, Meta& m) {

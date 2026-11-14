@@ -10,12 +10,13 @@
 
 namespace k2::text::tools {
 
-inline constexpr int kSlots = 14;   // kToolSlots (ui_tools.hpp); PD Stress is the last slot
+inline constexpr int kSlots = 15;   // kToolSlots (ui_tools.hpp); PD Stress and PD Spec Check are the last two slots
 
 // Row names. A row is the 12 px icon, the name at x28, and the tail (at most 6 characters, 48 px) at the right: 130 px.
 inline constexpr const char *kNames[kSlots] = {"FC trigger", "PD trigger",   "Spoof",        "Cable R", "Charger ID",
                                                "Cable read", "Device ID",    "Black Box",    "PD diagnosis", "Report cards",
-                                               "Diag",       "Device twins", "Loop probe",   "PD Stress"};
+                                               "Diag",       "Device twins", "Loop probe",   "PD Stress",
+                                               "PD Spec Check"};
 static_assert(all_fit(kNames, kSmallAdvPx, 130), "a Tools name is wider than its row");
 
 // The focused row's note: what the tool needs, port-neutral (never says which port).
@@ -23,7 +24,8 @@ inline constexpr const char *kHints[kSlots] = {
     "charger on top or bottom", "PD charger, either port", "act as a saved cable", "charger + cable + load",
     "what the charger offers",  "e-marker of a cable",     "what a device asks for", "passive PD recorder",
     "passive PD verdict",       "saved charger results",
-    "USB, PD and system state", "will it charge my device", "cable into own HID port", "PD charger, no load"};
+    "USB, PD and system state", "will it charge my device", "cable into own HID port", "PD charger, no load",
+    "PD charger, no load"};
 static_assert(all_fit(kHints, kLabelAdv, kit::kNoteMaxPx), "a Tools note is wider than its line");
 
 // Tails of a row that cannot do its full job now (lower case, kDim: only the footer carries the tone).
@@ -39,7 +41,7 @@ inline constexpr const char *kNoPm = "Power meter not found";
 inline constexpr const char *kAllReady = "All tools ready";
 inline constexpr const char *kSomeReady = " of ";    // "8 of 11 tools ready"
 inline constexpr const char *kSomeReadyTail = " tools ready";
-inline constexpr const char *kFooters[] = {kLoadAttached, kLiveSink, kNoPd, kNoPm, kAllReady, "14 of 14 tools ready"};
+inline constexpr const char *kFooters[] = {kLoadAttached, kLiveSink, kNoPd, kNoPm, kAllReady, "15 of 15 tools ready"};
 static_assert(all_fit(kFooters, kSmallAdvPx, 27 * kSmallAdvPx), "a Tools footer is over 27 characters");
 
 }  // namespace k2::text::tools

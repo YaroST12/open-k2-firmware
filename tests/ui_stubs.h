@@ -262,6 +262,7 @@ struct StubState {
     // PD Stress: Soft_Reset asks and the journal file (journal_hw::store()) the stand-in keeps in RAM.
     int ps_soft_resets = 0;
     bool ps_soft_reset_ok = true;
+    k2::pd::KaSilence ka_silence = k2::pd::KaSilence::Off;   // the last fusb302::sink_keepalive_silence (PD Spec Check)
     std::vector<uint8_t> ps_file;
     bool ps_file_present = false, ps_write_fails = false;
     int ps_writes = 0, ps_removes = 0;

@@ -12,8 +12,8 @@ enum class Page : uint8_t { Home, Detail, ChargerTest, Lines, Tools, Settings, G
 // reports a showing submenu as page index kMenuPageBase + Menu. Connection (Source / Cable / Sink) and Diag
 // are Tools entries; Emarker is the saved-cables list opened from Connection's Cable tab; Twin is the Device twins list;
 // LoopProbe is the HID-cable loop probe (Tools); PdStress the renegotiation stress tool (Tools); Diagnosis is the Black Box
-// diagnosis of the PD session; Battery the efficiency recorder (Bench > Battery).
-enum class Menu : uint8_t { Trigger, Emarker, PdTrigger, CableR, BlackBox, Spoof, UsbLink, Autorotate, Cards, Share, Connection, Diag, QrTest, Twin, LoopProbe, PdStress, Diagnosis, Battery, Memory, Count };
+// diagnosis of the PD session; Battery the efficiency recorder (Bench > Battery); PdSpec the PD Spec Check (Tools, K2_PDSPEC=1).
+enum class Menu : uint8_t { Trigger, Emarker, PdTrigger, CableR, BlackBox, Spoof, UsbLink, Autorotate, Cards, Share, Connection, Diag, QrTest, Twin, LoopProbe, PdStress, Diagnosis, Battery, Memory, PdSpec, Count };
 inline constexpr uint8_t kMenuPageBase = static_cast<uint8_t>(Page::Count);
 // Remote-only page indices that open Connection on a tab (kConnTabAlias + Source / Cable / Sink): the old "pd",
 // "emarker" and "identify" page names land here. Ui::page_index() never reports them (Connection reports itself).
@@ -26,7 +26,7 @@ enum class Action : uint8_t { PdRescan = 1, EmarkerScan = 2, EnergyReset = 3,
 
 // What keeps an identity or a START out (Ui::busy_why); busy_reason() is its footer text. The values ride the remote's
 // session block (GET_STATE part 1) as they are.
-enum class BusyWhy : uint8_t { None, TestRunning, FcRelease, QcTrigger, PdHold, Epr, PdRequest, EmScan, Identify, TwinRun, PdStress, LoopProbe };   // new values are appended: the numbers are on the wire
+enum class BusyWhy : uint8_t { None, TestRunning, FcRelease, QcTrigger, PdHold, Epr, PdRequest, EmScan, Identify, TwinRun, PdStress, LoopProbe, PdSpec };   // new values are appended: the numbers are on the wire
 
 // Ui::Session::flags (and the wire byte): one bit per transient chrome state the screens show.
 inline constexpr uint8_t kSessionHoldCard = 1 << 0;       // OK + Back held: the "Reboot in N" card

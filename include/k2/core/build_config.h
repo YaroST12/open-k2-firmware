@@ -19,7 +19,12 @@
  * K2_PDSTRESS  1 = Tools > PD Stress, its remote command (0x55) and the `pdstress` shell commands are built in.
  *              0 = none of it (the default since 2026-11-12: the tool found no charger fault, only its own Soft_Reset bug, see
  *                  ROADMAP). The Tools list ends at Loop probe, the remote and the shell answer "unsupported". The host tests
- *                  pass -DK2_PDSTRESS=1 so the logic keeps compiling; `make K2_PDSTRESS=1` builds the tool back. */
+ *                  pass -DK2_PDSTRESS=1 so the logic keeps compiling; `make K2_PDSTRESS=1` builds the tool back.
+ *
+ * K2_PDSPEC  1 = Tools > PD Spec Check (the no-load PD conformance check, docs/PD_SPEC_CHECK.md), its remote command (0x5A)
+ *               and its page are built in.
+ *            0 = none of it (the default while flash is short): the remote answers UnknownCmd, the Tools row is not shown.
+ *                The host tests pass -DK2_PDSPEC=1; `make K2_PDSPEC=1` builds the tool in. */
 /* K2_WHOS_ATTACHED  1 = Tools > Charger ID / Cable read / Device ID open the old tabbed "Who's attached" page on that tab
  *                     (tab strip, Tab+/Tab-, the action pop-up).
  *                   0 = each opens its own single tool: one tab, no strip, OK runs the tool's action, the other actions are
@@ -43,6 +48,10 @@
 
 #ifndef K2_PDSTRESS
 #define K2_PDSTRESS 0
+#endif
+
+#ifndef K2_PDSPEC
+#define K2_PDSPEC 0
 #endif
 
 #ifndef K2_WHOS_ATTACHED

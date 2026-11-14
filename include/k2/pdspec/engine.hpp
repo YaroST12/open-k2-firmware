@@ -144,8 +144,8 @@ inline constexpr std::uint32_t kDetachHoldMs = 200;      // Rd stays away this l
 inline constexpr std::uint32_t kDetachMaxMs = 3000;      // ... and never longer than this
 inline constexpr std::uint32_t kRecoverMs = 10000;       // after a reset: a 5 V contract again by then, or NoRecovery
 inline constexpr std::uint32_t kRecoverAskMs = 3000;      // a source back without a contract of ours: ask for 5 V after this
-inline constexpr std::uint32_t kReleaseMs = 12000;
-inline constexpr std::uint32_t kDarkFinalMs = 3000;      // a stop on a dark line ends once it has stayed dark this long       // the 5 V restore must be confirmed by then
+inline constexpr std::uint32_t kReleaseMs = 12000;       // the 5 V restore must be confirmed by then
+inline constexpr std::uint32_t kDarkFinalMs = 3000;      // a stop on a dark line ends once it has stayed dark this long
 inline constexpr std::uint32_t kStartMs = 10000;         // a contract must exist by then
 inline constexpr std::uint32_t kMaxRunMs = 1200000;      // 20 min
 inline constexpr std::uint32_t kPostFixedUs = 1500000;   // capture window after a fixed step's Request
@@ -620,8 +620,8 @@ inline void Engine::judge_transition(const TransitionOut& o, const Edges& e, std
     }
     if (e.accept && captured_) {
         cur_.peak_mv = static_cast<std::uint16_t>(o.peak_mv < 0 ? 0 : o.peak_mv);
-        if (up) meas(Check::Overshoot, {o.peak_mv, 0, -1000000, band_hi(to_mv) + std::int32_t(pd::spec::kVSrcValidExtraMv), a, b});
-        else meas(Check::Overshoot, {o.peak_mv, 0, band_lo(to_mv) - std::int32_t(pd::spec::kVSrcValidExtraMv), 1000000, a, b});
+        if (up) meas(Check::Overshoot, {o.peak_mv, 0, -kOpenLimit, band_hi(to_mv) + std::int32_t(pd::spec::kVSrcValidExtraMv), a, b});
+        else meas(Check::Overshoot, {o.peak_mv, 0, band_lo(to_mv) - std::int32_t(pd::spec::kVSrcValidExtraMv), kOpenLimit, a, b});
     }
     const Check tc = up ? Check::RiseTime : Check::FallTime;
     const std::int32_t lim = std::int32_t((epr ? pd::spec::kInBandEprMs : pd::spec::kInBandSprMs) * 1000);

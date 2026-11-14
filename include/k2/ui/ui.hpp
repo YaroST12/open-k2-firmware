@@ -22,6 +22,9 @@
 #if K2_PDSTRESS
 #include "k2/ui/ui_pdstress_page.hpp"
 #endif
+#if K2_PDSPEC
+#include "k2/ui/ui_pdspec_page.hpp"
+#endif
 #include "k2/ui/ui_diagnosis.hpp"
 #include "k2/ui/ui_battery.hpp"
 #include "k2/ui/ui_connection.hpp"
@@ -30,6 +33,9 @@
 #include "k2/ui/ui_graphs.hpp"
 #if K2_PDSTRESS
 #include "k2/ui/pd_stress_session.hpp"
+#endif
+#if K2_PDSPEC
+#include "k2/ui/pd_spec_session.hpp"
 #endif
 #include "k2/ui/ui_types.hpp"
 #include "k2/ui/page_arena.hpp"
@@ -73,6 +79,9 @@ inline constexpr std::size_t kLongestMenuChain =
               arena_bytes<ConnectionPage, SharePage>(),
 #if K2_PDSTRESS
               arena_bytes<ConnectionPage, PdStressPage>(),
+#endif
+#if K2_PDSPEC
+              arena_bytes<ConnectionPage, PdSpecPage>(),
 #endif
               arena_bytes<TriggerPage, EmarkerPage, ConnectionPage>(), arena_bytes<CardsPage, SharePage>(),
               arena_bytes<DiagnosisPage, BlackBoxPage, SharePage>(), arena_bytes<BlackBoxPage, SharePage>(),
@@ -199,6 +208,9 @@ public:
 #if K2_PDSTRESS
     PdStressPage *pd_stress_page() const { return find<PdStressPage>(Menu::PdStress); }
 #endif
+#if K2_PDSPEC
+    PdSpecPage *pd_spec_page() const { return find<PdSpecPage>(Menu::PdSpec); }
+#endif
     // The open PD diagnosis page (host tests); it exists only while Menu::Diagnosis is on the stack.
     const DiagnosisPage &diagnosis_page() const { return *find<DiagnosisPage>(Menu::Diagnosis); }
     // The Battery place while Menu::Battery is on the stack, else nullptr (host tests).
@@ -311,7 +323,9 @@ public:
     };
     [[gnu::noinline]] Session session();
     // A Device twin live proof (twin_hw::live_running) and a PD Stress run own the ports like a charger test does.
-    bool ports_busy() const { return charger_test_busy() || fc_release_.busy() || twin_live_busy() || pdstress_active() || loop_probe_busy(); }
+    bool ports_busy() const {
+        return charger_test_busy() || fc_release_.busy() || twin_live_busy() || pdstress_active() || pdspec_active() || loop_probe_busy();
+    }
     bool twin_live_busy() const;
     // A loop probe run (Tools -> Loop probe) drives D+/D-, the backlight and the K2's own Rd: the ports are its until it ends.
     bool loop_probe_busy() const;
@@ -329,11 +343,19 @@ public:
 #else
     bool pdstress_active() const { return false; }   // K2_PDSTRESS=0: the tool is not built in
 #endif
+    // ---- PD Spec Check (the resident session; the remote starts and reads it through these) ----
+#if K2_PDSPEC
+    PdSpecSession &pd_spec() { return pdspec_; }
+    const PdSpecSession &pd_spec() const { return pdspec_; }
+    bool pdspec_active() const { return pdspec_.active(); }
+#else
+    bool pdspec_active() const { return false; }     // K2_PDSPEC=0: the tool is not built in
+#endif
     // Why PD Stress may not start now: another tool owns the ports. The holds, the contract and the sink state a run
     // causes itself are not counted (busy_reason() would refuse the run for its own doing).
     const char *foreign_busy() const;
     // The runs that own the ports until they end, which the dead-man lease therefore leaves alone: a charger test or a PD Stress run.
-    bool run_busy() const { return charger_test_busy() || pdstress_active(); }
+    bool run_busy() const { return charger_test_busy() || pdstress_active() || pdspec_active(); }
     // The remote `stop` (the lease expiry and the shell `stop` land there too): ends a charger test, a twin proof and a PD Stress run.
     // The run releases the source to 5 V itself on the next poll; a PD Stress run waiting to resume after a reboot is dropped.
     void cancel_runs();
@@ -432,6 +454,9 @@ private:
     ChargerTestSession charger_test_;
 #if K2_PDSTRESS
     PdStressSession pdstress_;      // after the charger test: it borrows that session's sweep buffer for its record
+#endif
+#if K2_PDSPEC
+    PdSpecSession pdspec_;          // owns its engine (the result stays readable after the run)
 #endif
     trig::Release fc_release_;
     ShareRecord share_rec_;         // the record the Share view shows: filled by the opener before the page exists

@@ -282,7 +282,7 @@ static void test_page() {
 }
 
 static void test_tools_hub_lists_cards() {
-    CHECK_EQ(kToolCount, 14);   // Device twins, the Loop probe, then PD Stress (tests/test_ui_tools.cpp, test_ui_pdstress_page.cpp)
+    CHECK_EQ(kToolCount, 15);   // Device twins, the Loop probe, PD Stress, then PD Spec Check (tests/test_ui_tools.cpp)
     CHECK_STR(ToolsPage::tool_name(11), "Device twins");
     CHECK_EQ(ToolsPage::tool_menu(11) == Menu::Twin, 1);
     CHECK_EQ(int(tool_readiness(11, SetupState{}, false).level), int(ToolLevel::Ready));
@@ -293,6 +293,8 @@ static void test_tools_hub_lists_cards() {
     CHECK_EQ(ToolsPage::tool_menu(9) == Menu::Cards, 1);
     CHECK_EQ(ToolsPage::tool_menu(2) == Menu::Spoof, 1);
     CHECK_EQ(ToolsPage::tool_menu(10) == Menu::Diag, 1);
+    CHECK_EQ(ToolsPage::tool_menu(kToolPdSpec) == Menu::PdSpec, 1);
+    CHECK_STR(ToolsPage::tool_name(kToolPdSpec), "PD Spec Check");
     CHECK_EQ(int(tool_readiness(8, SetupState{}, false).level), int(ToolLevel::Ready));
     CHECK_EQ(int(tool_readiness(9, SetupState{}, false).level), int(ToolLevel::Ready));
     CHECK_EQ(std::strlen(tool_hint(9)) <= 24 && std::strlen(tool_hint(9)) > 0, 1);

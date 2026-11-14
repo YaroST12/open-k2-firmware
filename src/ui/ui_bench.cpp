@@ -49,7 +49,7 @@ uint32_t mix(uint32_t h, uint32_t v) { return (h ^ v) * 16777619u; }
 
 const char *ToolsPage::tool_name(int i) {
     static_assert(text::tools::kSlots == kToolSlots);
-    return text::tools::kNames[i < 0 || i >= kTools ? 0 : i];   // the hub's copy: include/k2/ui/text/tools.hpp
+    return text::tools::kNames[tool_built(i) ? i : 0];   // the hub's copy: include/k2/ui/text/tools.hpp
 }
 
 int ToolsPage::selected() const {
