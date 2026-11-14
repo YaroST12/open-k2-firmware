@@ -43,11 +43,14 @@ extern "C" {
 #define CFG_TUD_CDC_TX_BUFSIZE    256
 
 /* WebUSB vendor interface (K2_WEBUSB=1): 64-byte bulk endpoints (k2/drivers/usb_pma.hpp), FIFO mode. The receive FIFO holds
- * two remote frames, the transmit FIFO eight (the streamers pace themselves on usb::tx_free()). ~0.8 KB of RAM. */
+ * one remote frame: usb.cpp moves it into the frame assembler on every poll and the endpoint NAKs meanwhile, and the remote
+ * request queue behind the assembler is the real buffer. The transmit FIFO holds six frames, what its streamers need: they pace
+ * on usb::tx_free(), the ripple and capture streams want 3 free, the Black Box push keeps 3 free for responses and sends the
+ * rest (3 per pass). ~0.5 KB of RAM. */
 #define CFG_TUD_VENDOR_RX_EPSIZE  64
 #define CFG_TUD_VENDOR_TX_EPSIZE  64
-#define CFG_TUD_VENDOR_RX_BUFSIZE 128
-#define CFG_TUD_VENDOR_TX_BUFSIZE 512
+#define CFG_TUD_VENDOR_RX_BUFSIZE 64
+#define CFG_TUD_VENDOR_TX_BUFSIZE 384
 
 /* One 64-byte report in each direction, as the original logger did. */
 #define CFG_TUD_HID_EP_BUFSIZE    64
