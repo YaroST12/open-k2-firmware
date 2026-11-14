@@ -79,6 +79,13 @@ bool host_active();
 // The HID port's data lines as this side sees them (read-only; the loop probe, k2/loopprobe/loop_probe_hw.hpp). `core`:
 // the USB core runs (the link is on); rx_dp / rx_dm and frame (the counter of the last SOF, 11 bits) come from the core
 // and are false / 0 without it. pin_dp / pin_dm are the PA12 / PA11 input levels, valid either way.
+// The enumeration tap (the loop probe's Host report, built with K2_HOST_REPORT=1): called from the USB interrupt before the
+// stack sees it, with each SETUP packet on EP0 (8 bytes) and each bus reset, suspend and wake-up (setup8 = nullptr). It must
+// only copy. nullptr removes it.
+enum class BusEvent : std::uint8_t { Setup, Reset, Suspend, Resume };
+using Tap = void (*)(BusEvent e, const std::uint8_t* setup8);
+void set_tap(Tap t);
+
 struct Lines {
     bool core = false, configured = false;
     bool rx_dp = false, rx_dm = false;

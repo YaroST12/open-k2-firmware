@@ -148,6 +148,8 @@ public:
     // Cmd::LoopProbe: the last loop probe result file (k2/loopprobe/loop_probe_hw.hpp); read only, the probe starts on the K2.
     uint16_t loopprobe_len();
     size_t loopprobe_read(uint16_t off, std::span<uint8_t> out);
+    uint16_t hostreport_len();
+    size_t hostreport_read(uint16_t off, std::span<uint8_t> out);
     // Cmd::QrTest: the QR scan-test rig (k2/ui/ui_qrtest.hpp). Op 1 opens the full-screen test QR page
     // (Busy when the arena or the ports refuse it now); op 2 pops it when it is showing.
     remote::Status qrtest_show(uint8_t version, uint8_t px, uint8_t quiet);

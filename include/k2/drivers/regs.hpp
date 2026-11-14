@@ -210,6 +210,15 @@ inline Spi& spi3() { return at<Spi>(0x40003C00); }
 
 inline R16& usb_istr() { return at<R16>(0x40005C00 + 0x44); }
 constexpr uint16_t kUsbIstrReset = 1u << 10;
+// The rest of ISTR and EP0R, read by the enumeration tap only (K2_HOST_REPORT): correct transfer, its endpoint and
+// direction, suspend / wake-up; EP0R's received-setup and correct-RX bits. BTABLE and the packet memory (two bytes per
+// 32-bit word, the 1x16 scheme) hold the EP0 receive buffer's address.
+constexpr uint16_t kUsbIstrCtr = 1u << 15, kUsbIstrSusp = 1u << 11, kUsbIstrWkup = 1u << 12, kUsbIstrDir = 1u << 4,
+                   kUsbIstrEpId = 0xF;
+inline R16& usb_ep0r() { return at<R16>(0x40005C00); }
+constexpr uint16_t kUsbEpCtrRx = 1u << 15, kUsbEpSetup = 1u << 11;
+inline R16& usb_btable() { return at<R16>(0x40005C00 + 0x50); }
+inline R16& usb_pma16(uint32_t byte_off) { return at<R16>(0x40006000 + (byte_off >> 1) * 4); }
 // Frame number register: the frame counter of the last SOF and the PHY's D+ / D- receiver levels (read-only).
 inline R16& usb_fnr() { return at<R16>(0x40005C00 + 0x48); }
 constexpr uint16_t kUsbFnrFrame = 0x7FF, kUsbFnrRxdm = 1u << 14, kUsbFnrRxdp = 1u << 15;

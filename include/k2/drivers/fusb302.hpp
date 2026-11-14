@@ -7,6 +7,7 @@
 #include <span>
 
 #include "k2/core/bootmode.hpp"
+#include "k2/core/build_config.h"
 #include "k2/loopprobe/loop_cc.hpp"
 #include "k2/pd/cc_probe.hpp"
 #include "k2/pd/ra_probe.hpp"
@@ -172,6 +173,30 @@ ccprobe::Refusal cc_probe(const ccprobe::Args &a, VbusFn vbus_mv, ccprobe::Resul
 // and reads it back (kCcRestored). Blocks for about plan.size() x (hold_us + 1 ms).
 loopprobe::CcRefusal loop_cc_hold(std::span<const std::uint8_t> plan, std::uint16_t hold_us, VbusFn vbus_mv,
                                   loopprobe::CcResult &out);
+
+// The loop probe's Host report (k2/loopprobe/host_report.hpp; the binding is built with K2_HOST_REPORT=1 only). The one
+// exception to "an inline K2 never transmits": the far sink is the K2's own HID port (fixed Rd, no PD controller), so the K2
+// is the only PD speaker on the line. While a listener is set the driver treats the link as sole-sink (the HID port's Rd
+// does not count as a sink behind the K2; a Request from another sink still does), presents no Rd of its own (5.1k beside
+// the HID port's 5.1k would read as one 2.55k pull-down), keeps Auto-CRC on, asks PDO 1 at 5 V on every caps message the
+// chip acked, and never sends a Hard Reset (sink never_hard_reset). The data role follows loop_host_set_dfp(): the
+// GoodCRC (SWITCHES1) and the SOP header bit of every message the K2 sends.
+class LoopHost {
+public:
+    virtual void on_message(std::uint16_t header, std::span<const std::uint8_t> payload, std::uint32_t now) = 0;   // SOP only
+    virtual void on_hard_reset(std::uint32_t now) = 0;   // received from the host; the role is UFP again
+    virtual void on_detach(std::uint32_t now) = 0;       // the line went away (the session is over)
+protected:
+    ~LoopHost() = default;
+};
+#if K2_HOST_REPORT
+void loop_host_begin(LoopHost* l);   // nullptr ends it: UFP again, the usual inline rules from the next tick
+bool loop_host_send(const pd::TxMsg& m);   // one SOP message (MessageID stamped); true = GoodCRC came back
+void loop_host_set_dfp(bool dfp);
+bool loop_host_soft_reset();         // the sink's Soft_Reset on a Ready contract; false = refused (no session, not Ready)
+bool loop_host_idle();               // at the last tick: nothing sent, the sink quiet, the line idle
+std::uint8_t loop_host_rp();         // the active line's BC_LVL now (0..3), 0 with no line
+#endif
 // `k2_remote emarker probe`: sense the pull-down a silent cable chip hangs on its supply pin. A cable alone in the port (nothing
 // inline, no contract, no Rd of ours on any line, VBUS dark): sample both CC lines at the snapshot (idle), then with the K2's
 // VCONN switch on CC1 only and on CC2 only (the other line just measured), 2 / 10 / 100 ms into each phase, and put everything

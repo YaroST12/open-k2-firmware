@@ -53,6 +53,10 @@
 #include "k2/twin/wire.hpp"
 #include "k2/ui/ui_qrtest.hpp"
 #include "k2/loopprobe/loop_probe_hw.hpp"
+#include "k2/core/build_config.h"
+#if K2_HOST_REPORT
+#include "k2/loopprobe/host_report_hw.hpp"
+#endif
 #include "k2/core/version.hpp"
 #include "k2/pd/diag_live.hpp"
 #include "k2/pd/diag_wire.hpp"
@@ -1267,6 +1271,14 @@ size_t Remote::pdstress_read(uint16_t, std::span<uint8_t>) { return 0; }
 uint16_t Remote::loopprobe_len() { return loopprobe::hw::file_len(); }
 
 size_t Remote::loopprobe_read(uint16_t off, std::span<uint8_t> out) { return loopprobe::hw::file_read(off, out); }
+
+#if K2_HOST_REPORT
+uint16_t Remote::hostreport_len() { return loopprobe::host::hw::file_len(); }
+size_t Remote::hostreport_read(uint16_t off, std::span<uint8_t> out) { return loopprobe::host::hw::file_read(off, out); }
+#else
+uint16_t Remote::hostreport_len() { return 0; }
+size_t Remote::hostreport_read(uint16_t, std::span<uint8_t>) { return 0; }
+#endif
 
 remote::Status Remote::qrtest_show(uint8_t version, uint8_t px, uint8_t quiet) {
     if (!qrtest::show(ui_, version, px, quiet, systick::millis())) {

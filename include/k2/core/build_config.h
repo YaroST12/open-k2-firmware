@@ -42,4 +42,11 @@
 #define K2_SCREENSHOT 0
 #endif
 
+/* K2_HOST_REPORT  1 = the loop probe's Host report prototype (docs/LOOP_PROBE.md): src/loopprobe/host_report_hw.cpp, the
+ *                     FUSB302 loop-host line, the USB enumeration tap and the Loop probe page's Host view.
+ *                 0 = none of it (the default). The pure half (host_report.cpp, usb_fp.cpp) is host-tested either way. */
+#ifndef K2_HOST_REPORT
+#define K2_HOST_REPORT 0
+#endif
+
 #endif /* K2_BUILD_CONFIG_H_ */

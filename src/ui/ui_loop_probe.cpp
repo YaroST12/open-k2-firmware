@@ -7,6 +7,9 @@
 #include "k2/core/log.hpp"
 #include "k2/core/version.hpp"
 #include "k2/loopprobe/loop_probe_hw.hpp"
+#if K2_HOST_REPORT
+#include "k2/loopprobe/host_report_hw.hpp"
+#endif
 #include "k2/ui/kit.hpp"
 #include "k2/ui/qrshare.hpp"
 #include "k2/ui/trunc.hpp"
@@ -26,6 +29,13 @@ constexpr kit::KvLayout kTable{kit::kBodyY, kit::kRowH, 6, nullptr, nullptr, Loo
 // The keys are the steps in run order (lp::Step); the value column says what each step did.
 constexpr const char *kKeys[lp::kSteps] = {"Baseline", "Drop", "D+/D-", "E-marker", "CC"};
 static_assert(all_fit(kKeys, kSmallAdvPx, LoopProbePage::kValueX - 6 - 4), "a loop probe step name runs into the value column");
+#if K2_HOST_REPORT
+namespace lph = loopprobe::host;
+constexpr const char *kHostKeys[lph::kRows] = {"Host", "PD", "Ident", "DR swap", "USB"};   // lph::row_key()
+static_assert(lph::kRows == lp::kSteps, "the Host view reuses the step table's rows");
+static_assert(lph::kRowChars == LoopProbePage::kValueChars, "a Host view value fills the value column");
+static_assert(all_fit(kHostKeys, kSmallAdvPx, LoopProbePage::kValueX - 6 - 4), "a Host view key runs into the value column");
+#endif
 
 // lp::Why, short, after "skip " / "stop " in the value column.
 constexpr const char *kWhyShort[] = {"", "no meter", "VBUS>5.5V", "aux>5.8V", "no 5V", "host on HID", "refused", "none seen",
@@ -160,6 +170,9 @@ std::string_view LoopProbePage::step_text(int i) const {
 
 // One value per step from the run of this visit, else the stored result, else the dim placeholder.
 void LoopProbePage::compose_steps() {
+#if K2_HOST_REPORT
+    if (host_view_) return compose_host();
+#endif
     const bool live = runner_.running();
     for (std::size_t i = 0; i < lp::kSteps; i++) {
         lp::Record::StepRec st{};
@@ -246,9 +259,13 @@ void LoopProbePage::compose_footer(uint32_t now_ms) {
 
 void LoopProbePage::paint_table() {
     const Surface &c = ctx_.content;
+    const char *const *keys = kKeys;
+#if K2_HOST_REPORT
+    if (host_view_) keys = kHostKeys;
+#endif
     if (!laid_) {
-        if (!ctx_.blank) kit::kv_ground(c, kTable, kKeys, static_cast<int>(lp::kSteps));
-        kit::kv_static(c, kTable, kKeys, static_cast<int>(lp::kSteps));
+        if (!ctx_.blank) kit::kv_ground(c, kTable, keys, static_cast<int>(lp::kSteps));
+        kit::kv_static(c, kTable, keys, static_cast<int>(lp::kSteps));
         kit::kv_cells(c, kTable, cell_.data(), static_cast<int>(lp::kSteps));
         gfx_fill(c, 0, kRuleY, c.w, 2, kRule);   // the section rule under the table (over its closing hairline)
         drawn_col_.fill(0);
@@ -298,6 +315,9 @@ void LoopProbePage::update(uint32_t now_ms) {
     title_badge(false);
     if (confirm_until_ != 0 && static_cast<int32_t>(now_ms - confirm_until_) >= 0) confirm_until_ = 0;   // the window ran out
     if (runner_.running()) confirm_until_ = 0;
+#if K2_HOST_REPORT
+    if (host_confirm_until_ != 0 && static_cast<int32_t>(now_ms - host_confirm_until_) >= 0) host_confirm_until_ = 0;
+#endif
     const Mode mode = runner_.running() ? Mode::Running : Mode::Idle;
     const bool relay = !laid_ || mode != painted_;
     compose_steps();
@@ -328,6 +348,9 @@ bool LoopProbePage::on_event(Event e) {
         return true;
     }
     if (e.press != Press::Short) return false;
+#if K2_HOST_REPORT
+    if (host_key(e.button)) return true;
+#endif
     switch (e.button) {
     case Button::Back:
         if (!runner_.running()) return false;   // idle: the Ui pops the page
@@ -367,7 +390,59 @@ PanelLabels LoopProbePage::labels() const {
     const char *ok = live ? "" : confirm_until_ != 0 ? "Confirm" : "Start";
     const char *share = !live && (ran_ || have_stored_) ? "Share" : "";
     l.b[static_cast<int>(Button::Ok)] = {ok, share, "", false};
+#if K2_HOST_REPORT
+    if (!live) l.b[static_cast<int>(Button::Minus)] = {host_view_ ? "Steps" : "Host", "", "", false};
+    if (!live && host_view_) {
+        l.b[static_cast<int>(Button::Plus)] = {lph::hw::active() ? "Cancel" : host_confirm_until_ != 0 ? "Confirm" : "Arm", "", "", false};
+        l.b[static_cast<int>(Button::Ok)] = {"", "", "", false};
+    }
+#endif
     return l;
 }
+
+#if K2_HOST_REPORT
+// The Host view: the record's five rows (lph::row_text), the Host row in the focus colour while a session is armed or running.
+void LoopProbePage::compose_host() {
+    const lph::Report &r = lph::hw::report();
+    std::array<char, lph::kRowChars + 1> b{};
+    for (std::size_t i = 0; i < lph::kRows; i++) {
+        lph::row_text(r, i, b);
+        val_[i].clear();
+        val_[i].put(b.data());
+        col_[i] = i == 0 && lph::hw::active() ? kFocus : kText;
+    }
+}
+
+// MINUS flips the table between the steps and the Host view; in the Host view PLUS arms (second press inside the confirm
+// window) or cancels, and OK does nothing (the steps' START is not on screen). True = the key was taken.
+bool LoopProbePage::host_key(Button b) {
+    if (runner_.running()) return false;
+    const uint32_t now = ctx_.now;
+    if (b == Button::Minus) {
+        host_view_ = !host_view_;
+        host_confirm_until_ = 0;
+        confirm_until_ = 0;
+        laid_ = false;
+    } else if (b == Button::Plus && host_view_) {
+        if (lph::hw::active()) {
+            lph::hw::cancel();
+            say("Host report cancelled", kDim);
+        } else if (host_confirm_until_ != 0 && static_cast<int32_t>(now - host_confirm_until_) < 0) {
+            host_confirm_until_ = 0;
+            const lph::Refuse r = lph::hw::arm();
+            if (r == lph::Refuse::None) say("Armed: replug the host", kOk);
+            else say(lph::refuse_name(r), kCaution);
+        } else {
+            host_confirm_until_ = now + Ui::kConfirmWindowMs;
+            if (host_confirm_until_ == 0) host_confirm_until_ = 1;
+            say("PLUS again to arm", kDim);
+        }
+    } else if (!(b == Button::Ok && host_view_)) {
+        return false;
+    }
+    update(now);
+    return true;
+}
+#endif
 
 }  // namespace k2

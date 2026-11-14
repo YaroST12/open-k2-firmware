@@ -156,6 +156,14 @@ pd::AutoCrcGate g_rd_gate;  // Rd on the active line only while a sink operation
 pd::ContractLinger g_contract_linger;   // a contract nobody holds times out after kSinkIdleLingerMs
 bool g_legacy_only = false;  // charger test: no PD sink policy, no rescan
 bool g_crc_on = false;      // what SWITCHES1 holds
+#if K2_HOST_REPORT
+LoopHost* g_lh = nullptr;   // the Host report owns the line (loop_host_begin): sole sink despite the HID port's Rd
+bool g_lh_dfp = false;      // ... and the K2 is DFP after an accepted DR_Swap
+bool g_lh_idle = false;     // active_tick(): nothing sent, the sink quiet, the line idle
+#else
+constexpr LoopHost* g_lh = nullptr;
+constexpr bool g_lh_dfp = false;
+#endif
 bool g_tx_allowed = false;  // passive by default: transmit() / send_sop_prime_frame() refuse every frame while no
                             // active feature demands the wire (updated from the pd::CrcDemand in active_tick())
 bool g_hr_tool_armed = false;  // the explicit sink_hard_reset() tool: one Hard Reset may go out even from idle
@@ -461,7 +469,8 @@ K2_HOT bool transmit(const pd::TxMsg& m) {
     }
     if (m.inline_tx) return transmit_inline(m);
     if (m.restart_id) g_msg_id = 0;
-    const std::uint16_t header = pd::with_msg_id(m.header, g_msg_id);
+    std::uint16_t header = pd::with_msg_id(m.header, g_msg_id);
+    if (g_lh_dfp && m.sop == pd::Sop::Sop) header = std::uint16_t(header | 0x20);   // Host report: the K2 is DFP
     TxFrame buf;
     const unsigned n = tx_frame(header, m, buf);
     clear_irqs();
@@ -585,7 +594,7 @@ std::uint8_t ctl1() { return phy::control1(g_crc_on, g_sop_prime_hook != nullptr
 
 // SWITCHES1 for the active line, Auto-CRC on or off (`g_crc_on`).
 void write_sw1() {
-    wr(kSwitches1, phy::sw1(g_active_cc, g_crc_on));
+    wr(kSwitches1, std::uint8_t(phy::sw1(g_active_cc, g_crc_on) | (g_lh_dfp ? phy::kSw1DataRole : 0)));
     wr(kControl1, ctl1());   // SOP' receive follows Auto-CRC (except while the spoof is armed)
 }
 K2_HOT void flush_rx() { wr(kControl1, ctl1()); g_rx_held.valid = false; }
@@ -636,7 +645,7 @@ void update_crc(bool crc_busy, bool rd_busy) {
 // that read the standby signature open (pd::IdleWake, pattern slow-rp-wake idle path: a sleeping source is asked
 // without any pin); never a second line next to it.
 std::uint8_t idle_rd() {
-    if (downstream_now()) return 0;   // a sink behind the K2 has its own Rd on the line: ours would be a second sink
+    if (g_lh || downstream_now()) return 0;   // Host report: the HID port's Rd is the only one the host may see   // a sink behind the K2 has its own Rd on the line: ours would be a second sink
     const std::uint8_t run = g_rd_start ? pd::key_rd_lines(emkra::run_rd_lines(g_ra, g_inline, 0), g_pin_rd, 0) : std::uint8_t(0);
     const std::uint8_t own = std::uint8_t(g_pin_rd | run) & (kPdwn1 | kPdwn2);
     if (own != 0) return own;
@@ -664,7 +673,8 @@ void rebase_far_sink() {        // a new attach or a detach: no other sink's Req
 
 // A sink sits behind the K2: the Link latched it (held through a VBUS gap, see pd::kInlineHoldMs) or another sink's Request is on
 // the wire in this attach. The latch is the slow proof (UI-tick fed, blind during the boot's slow init), the Request the fast one.
-bool downstream_now() { return g_inline || far_sink_seen(); }
+// The Host report's loop: the latched inline is the K2's own HID port, no sink behind the K2; another sink's Request still is.
+bool downstream_now() { return (g_inline && !g_lh) || far_sink_seen(); }
 
 // The K2 answers its partner (SOP replies, Sink_Capabilities, swaps) only when it is the one sink on the link.
 bool sole_sink() { return !downstream_now(); }
@@ -676,6 +686,7 @@ void apply_rd() {
     const bool down = downstream_now();
     std::uint8_t lines = pd::rd_lines(g_pin_rd, g_rd_op, down, g_active_cc);
     if (g_rd_start) lines |= pd::key_rd_lines(emkra::run_rd_lines(g_ra, down, g_active_cc), g_pin_rd, g_active_cc);
+    if (g_lh) lines = 0;   // Host report: never a second Rd beside the HID port's
     // VCONN (experiment): the chip's supply goes onto the line opposite the active one, never onto a line we pull down.
     std::uint8_t vconn = 0;
     if (g_vconn_applied) {
@@ -1106,7 +1117,7 @@ K2_HOT void handle_frame(pd::Sop sop, std::uint16_t header, std::span<const std:
         // (set before this frame is handed to the sink: a far sink's Request precedes its first VDM).
         sink().set_gives_sink_cap(!g_legacy_only && sole_sink() && g_active_cc != 0);
         sink().set_answers_sop(sole_sink());
-        sink().set_never_hard_reset(g_pin_rd != 0);   // see sync_hard_reset_policy()
+        sink().set_never_hard_reset(g_pin_rd != 0 || g_lh);   // see sync_hard_reset_policy()
         const unsigned swaps_before = sink().swaps_rx(pd::SwapKind::Dr) + sink().swaps_rx(pd::SwapKind::Pr) + sink().swaps_rx(pd::SwapKind::Fr);
         sink().on_message(sop, header, payload, now);
         if (swaps_before != unsigned(sink().swaps_rx(pd::SwapKind::Dr)) + sink().swaps_rx(pd::SwapKind::Pr) + sink().swaps_rx(pd::SwapKind::Fr)) {
@@ -1157,7 +1168,7 @@ K2_HOT void handle_frame(pd::Sop sop, std::uint16_t header, std::span<const std:
         if (sop == pd::Sop::Sop && !ext && num_do > 0 && msg_type == pd::kDataSourceCap) {
             // A self-powered K2 (pinned Rd) asks for 5 V at a modest current and never lets a failed attempt leave the source
             // without a Request: Failed counts as idle there, so the next re-announce is asked again (nothing sends a Hard Reset).
-            const bool hold = !g_rd_start && pd::self_hold_wanted(g_pin_rd, downstream_now(), g_legacy_only);
+            const bool hold = (!g_rd_start && pd::self_hold_wanted(g_pin_rd, downstream_now(), g_legacy_only)) || g_lh;
             const pd::SinkState st = sink().status().state;
             const bool sink_idle = st == pd::SinkState::Idle || (hold && st == pd::SinkState::Failed);
             // After an alone-Identify handed the line back, a late caps message must not re-hold a contract (and the Rd).
@@ -1173,6 +1184,7 @@ K2_HOT void handle_frame(pd::Sop sop, std::uint16_t header, std::span<const std:
         ident().on_message(sop, header, payload, now);
         probe().on_message(sop, header, payload, now);
         reread().on_message(sop, header, payload, now);
+        if (g_lh && wire && sop == pd::Sop::Sop) g_lh->on_message(header, payload, now);
     }
     // Inline, the spoof answers only inside the run's window and only a frame the chip acknowledged (Auto-CRC on): the first
     // query arrives unacknowledged (the window opens on it), and an answer to a message the charger counts as lost would confuse it.
@@ -2065,7 +2077,7 @@ K2_HOT void vconn_sync(std::uint32_t now) {
 
 // A pinned Rd means the source feeds the K2: a Hard Reset of our own would cut VBUS and kill it, so the sink engine only fails
 // (it never transmits one). The explicit sink_hard_reset() tool is not covered.
-void sync_hard_reset_policy() { sink().set_never_hard_reset(g_pin_rd != 0); }
+void sync_hard_reset_policy() { sink().set_never_hard_reset(g_pin_rd != 0 || g_lh); }
 
 // A sink behind the K2 became known (the inline latch, or another sink's Request on the line): whatever the K2 had started as the
 // device stops here. The sink engine drops its contract (no Request, no Soft Reset, no re-request) and the pin's Rd comes off.
@@ -2153,7 +2165,7 @@ K2_HOT void active_tick() {
                         .run_start = g_rd_start && !inline_now() && !g_legacy_only,   // legacy-only: no GoodCRC for the source's caps
                         // the armed spoof needs our GoodCRC on SOP', no Rd; inline only while the run's window is open
                         .spoof = g_sop_prime_hook != nullptr && (!inline_now() || iq().sopp_window(now)),
-                        .self_hold = pd::self_hold_wanted(g_pin_rd, downstream_now(), g_legacy_only)};   // pinned Rd: the brick feeds us, keep its PD alive
+                        .self_hold = pd::self_hold_wanted(g_pin_rd, downstream_now(), g_legacy_only) || g_lh};   // Host report: the host feeds us   // pinned Rd: the brick feeds us, keep its PD alive
         // A Ready contract nobody holds counts only for kSinkIdleLingerMs after the last thing that used it.
         const bool engaged = in_flight || pd::rd_demand(d);
         const bool counts = g_contract_linger.update(now, engaged);
@@ -2196,6 +2208,9 @@ K2_HOT void active_tick() {
     trace_sink();
     const pd::SinkState ss = sink().status().state;
     const bool sink_quiet = ss == pd::SinkState::Idle || ss == pd::SinkState::Ready || ss == pd::SinkState::Failed;
+#if K2_HOST_REPORT
+    g_lh_idle = g_lh && !sent && sink_quiet && line_idle(now);
+#endif
     if (ident_running() && (!sink_quiet || !line_idle(now))) {   // [ID] probe: why Identify is not transmitting
         static std::uint32_t last_log;
         if (now - last_log >= 1000) {
@@ -2324,6 +2339,13 @@ static void detach_reset(std::uint8_t status0) {
     g_caps_acked = false;
     g_session.detach();
     g_engine.sink = {};
+#if K2_HOST_REPORT
+    if (LoopHost* const l = g_lh) {   // the session dies with the attach
+        g_lh = nullptr;
+        g_lh_dfp = false;
+        l->on_detach(systick::millis());
+    }
+#endif
     configure_passive();
     flush_fifos();
     // No Rd hold: plain boot has no Rd to hold off, and a pinned boot mode needs its Rd back at once (a cheap
@@ -2797,6 +2819,13 @@ K2_HOT void service() {
             g_msg_id = 0;
             g_new_source = true;
             sink().on_hard_reset_rx(systick::millis());
+#if K2_HOST_REPORT
+            if (g_lh) {   // the host's Hard Reset: both ends are back to their default roles (UFP)
+                g_lh_dfp = false;
+                write_sw1();
+                g_lh->on_hard_reset(systick::millis());
+            }
+#endif
             ident().abort(pd::IdWhy::HardReset);
             probe().abort();
             reread().on_link_reset();   // an attach still waiting for its contract goes on: the sink re-requests after a hard reset
@@ -3465,6 +3494,37 @@ bool send_sop_prime_frame(std::span<const std::uint8_t> tokens) {
     if (inline_now()) iq().on_sopp_reply(systick::millis());   // the run's window shortens: the charger's next frame is its ACK
     return true;
 }
+
+#if K2_HOST_REPORT
+// ---- the Host report's line (fusb302.hpp, LoopHost) ----
+void loop_host_begin(LoopHost* l) {
+    if (l == g_lh) return;
+    g_lh = l;
+    g_lh_dfp = false;
+    g_lh_idle = false;
+    if (g_active_cc != 0) write_sw1();
+    apply_rd();
+    K2LOG("[LPHR] line %s (inline=%d cc=%u)\n", l ? "owned: sole sink, no Rd, no Hard Reset" : "released", g_inline ? 1 : 0,
+          unsigned(g_active_cc));
+}
+bool loop_host_send(const pd::TxMsg& m) {
+    if (!g_lh || m.hard_reset || m.sop != pd::Sop::Sop || g_active_cc == 0) return false;
+    return transmit(m);
+}
+void loop_host_set_dfp(bool dfp) {
+    if (!g_lh || dfp == g_lh_dfp) return;
+    g_lh_dfp = dfp;
+    write_sw1();
+}
+bool loop_host_soft_reset() {
+    if (!g_lh || g_active_cc == 0 || sink().status().state != pd::SinkState::Ready) return false;
+    sink().soft_reset(systick::millis());
+    trace_sink();
+    return true;
+}
+bool loop_host_idle() { return g_lh_idle; }
+std::uint8_t loop_host_rp() { return g_active_cc != 0 ? g_bc_max : std::uint8_t(0); }
+#endif
 
 }  // namespace k2::fusb302
 

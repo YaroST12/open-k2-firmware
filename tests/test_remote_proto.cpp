@@ -1728,6 +1728,27 @@ static void test_loop_probe() {
     check_header(r, 0x57, 6, Status::BadLength, 0);
     CHECK_EQ(run(f, request(0x57, 7, {}), r), 1);
     check_header(r, 0x57, 7, Status::BadLength, 0);
+    // Selector byte after the offset: 0 = the loop probe file (as without it), 1 = the Host report file (/lp/host.rec).
+    f.hr_file.assign(60, 0xAB);
+    f.hr_file[48] = 0x11;
+    CHECK_EQ(run(f, request(0x57, 8, {0, 0, 1}), r), 1);
+    check_header(r, 0x57, 8, Status::Ok, 5 + 48);
+    check_bytes(r, kRspHeader, {0, 0, 60, 0, 48, 0xAB});
+    CHECK_EQ(run(f, request(0x57, 9, {48, 0, 1}), r), 1);
+    check_header(r, 0x57, 9, Status::Ok, 5 + 12);
+    check_bytes(r, kRspHeader, {48, 0, 60, 0, 12, 0x11});
+    CHECK_EQ(run(f, request(0x57, 10, {0, 0, 0}), r), 1);      // selector 0 = the loop probe file
+    check_header(r, 0x57, 10, Status::Ok, 5 + 48);
+    check_bytes(r, kRspHeader, {0, 0, 0x97, 0x01, 48, 0, 7});
+    CHECK_EQ(run(f, request(0x57, 11, {61, 0, 1}), r), 1);     // past the Host report file
+    check_header(r, 0x57, 11, Status::BadArg, 0);
+    CHECK_EQ(run(f, request(0x57, 12, {0, 0, 2}), r), 1);      // no such file
+    check_header(r, 0x57, 12, Status::BadArg, 0);
+    CHECK_EQ(run(f, request(0x57, 13, {0, 0, 1, 0}), r), 1);
+    check_header(r, 0x57, 13, Status::BadLength, 0);
+    f.hr_file.clear();
+    CHECK_EQ(run(f, request(0x57, 14, {0, 0, 1}), r), 1);      // none stored (or K2_HOST_REPORT=0): total 0
+    check_bytes(r, kRspHeader, {0, 0, 0, 0, 0});
 }
 
 static void test_boot_info() {
