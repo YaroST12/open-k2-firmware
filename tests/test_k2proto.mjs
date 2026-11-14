@@ -1860,3 +1860,21 @@ test("webusb: the dashboard picks WebUSB when WebHID is missing and keeps WebHID
   assert.match(html, /"hid" in navigator/);
   assert.match(html, /connect-usb/);
 });
+
+// 2026-11-14: the dashboard auto-opened the bootloader (same VID:PID) the moment it enumerated and sent an app PING;
+// the bootloader re-arms its OUT endpoint only after answering a frame it understands, so it stayed deaf to the
+// flasher until a USB bus reset. The bootloader is told apart by its product string and gets no app frames.
+test("hidRole: the bootloader's product string is not the app", () => {
+  assert.equal(P.hidRole({ productName: "WITRN.K2" }), "bootloader");
+  assert.equal(P.hidRole({ productName: "Open-K2 Logger" }), "app");
+  assert.equal(P.hidRole({ productName: "" }), "unknown");
+  assert.equal(P.hidRole({}), "unknown");
+});
+
+test("dashboard: open() refuses a bootloader before opening it (no app frame reaches the bootloader)", () => {
+  const html = readFileSync(path.join(here, "../tools/web/k2.html"), "utf8");
+  const body = html.slice(html.indexOf("async function open(dev)"));
+  const guard = body.search(/P\.hidRole\(dev\) === "bootloader"/);
+  assert.ok(guard > 0, "open(dev) checks P.hidRole");
+  assert.ok(guard < body.indexOf("dev.open()"), "the check comes before dev.open()");
+});

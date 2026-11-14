@@ -1408,6 +1408,18 @@ var K2Proto = (function () {
     return t;
   }
 
+  // ---- which K2 USB function a WebHID device is ----------------------------------------------------------
+  // The bootloader enumerates with the app's VID:PID but its own product string. It re-arms its OUT endpoint
+  // only after answering a frame it understands, so one app frame (a PING) leaves it refusing every later write
+  // until a USB bus reset, and the flasher then times out. Never send app frames to a "bootloader".
+  var BOOT_PRODUCT = "WITRN.K2", APP_PRODUCT = "Open-K2";
+  function hidRole(dev) {
+    var p = (dev && dev.productName) || "";
+    if (p.indexOf(BOOT_PRODUCT) >= 0) return "bootloader";
+    if (p.indexOf(APP_PRODUCT) === 0) return "app";
+    return "unknown";
+  }
+
   // ---- WebHID transport: one report per frame, report ID 0 ------------------------------------------
   // dev is a WebHID HIDDevice (already opened). attach() hooks the input reports to the link.
   function hidTransport(dev) {
@@ -1524,7 +1536,7 @@ var K2Proto = (function () {
   }
 
   return {
-    hidTransport: hidTransport, webusbTransport: webusbTransport, usbVendorInterface: usbVendorInterface,
+    hidTransport: hidTransport, hidRole: hidRole, webusbTransport: webusbTransport, usbVendorInterface: usbVendorInterface,
     FRAME_SIZE: FRAME_SIZE, CMD: CMD, DFU_MAGIC: DFU_MAGIC, FACTORY_WIPE_MAGIC: FACTORY_WIPE_MAGIC, STATUS: STATUS, BUTTONS: BUTTONS, ACTIONS: ACTIONS, PAGES: PAGES, MENUS: MENUS, pageName: pageName,
     SHORT_PRESS_MS: SHORT_PRESS_MS, LONG_PRESS_MS: LONG_PRESS_MS,
     FrameError: FrameError, RemoteError: RemoteError, RemoteTimeout: RemoteTimeout, BootloaderDetected: BootloaderDetected,
