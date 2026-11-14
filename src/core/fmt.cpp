@@ -13,11 +13,11 @@ namespace {
 
 // Bounded output cursor: silently drops what does not fit, keeps one byte for the NUL.
 struct Out {
-    std::span<char> buf;
-    std::size_t len = 0;
+    char* cur;
+    char* end;  // one before the last byte of the buffer: that byte is the NUL
 
-    K2_HOT void put(char c) { if (len + 1 < buf.size()) buf[len++] = c; }
-    void pad(char c, int n) { while (n-- > 0) put(c); }
+    [[gnu::always_inline]] void put(char c) { if (cur < end) *cur++ = c; }
+    [[gnu::always_inline]] void pad(char c, int n) { while (n-- > 0) put(c); }
 };
 
 // Integer conversion with optional sign, zero or space padding to `width`.
@@ -41,7 +41,7 @@ K2_HOT void put_number(Out& out, std::uint32_t mag, bool negative, unsigned base
 
 K2_HOT std::size_t vformat(std::span<char> buf, const char* fmt, std::va_list ap) {
     if (buf.empty()) return 0;
-    Out out{buf};
+    Out out{buf.data(), buf.data() + buf.size() - 1};
     for (const char* p = fmt; *p; p++) {
         if (*p != '%' || !p[1]) {  // plain text, or a lone '%' at the end of the string
             out.put(*p);
@@ -71,8 +71,8 @@ K2_HOT std::size_t vformat(std::span<char> buf, const char* fmt, std::va_list ap
         default: out.put(*p); break;  // "%%" and unknown conversions
         }
     }
-    buf[out.len] = '\0';
-    return out.len;
+    *out.cur = '\0';
+    return static_cast<std::size_t>(out.cur - buf.data());
 }
 
 K2_HOT std::size_t format(std::span<char> out, const char* fmt, ...) {
