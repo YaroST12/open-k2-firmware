@@ -37,7 +37,7 @@ K2_SCREENSHOT ?= 0
 
 # K2_WEB=1 puts the web parts back into `make test` and `make gate`: the node tests of the web pages (tools/web, webhid-flasher),
 # the host tests of the network function (test_net_dhcp, test_usb_desc_net), the Python checks that read the web page's JS, and
-# the gate's K2_NET=1 firmware variant. Off by default (2026-11-11: those parts are mostly unused; they get fixed in one go).
+# the gate's K2_NET=1 and K2_WEBUSB=1 firmware variants. Off by default (2026-11-11: those parts are mostly unused; they get fixed in one go).
 K2_WEB ?= 0
 export K2_WEB
 
@@ -381,7 +381,7 @@ $(CFG_STAMP): | $(BUILD_DIR)
 
 clean:
 	@rm -rf $(HOST_DIR)
-	@rm -rf $(BUILD_DIR) build-net
+	@rm -rf $(BUILD_DIR) build-net build-webusb
 	@echo "Cleaned build artifacts."
 
 # Host unit tests (pure logic only): each tests/test_*.c is one program, built with the host

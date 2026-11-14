@@ -1214,6 +1214,7 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
 | Hands-free DFU flasher (`--auto-dfu`), `.k2` packer | done | verified | MINUS at plug-in is the fallback |
 | Remote protocol and `tools/k2_remote.py` | done | verified | |
 | WebHID dashboard (`tools/web`) | done | not verified in Chrome | |
+| WebUSB transport (vendor interface, `K2_WEBUSB=1`) | prototype, off by default | built only, needs hardware | replaces the HID remote channel; firmware, `k2_usb.py` (pyusb), `k2proto.js` + dashboard; modes WebUSB / +Shell / +Drive / +Drive+Shell (no HID) and the HID+WebUSB fallback. Validate: desktop Chrome on Linux (udev rule), Android Chrome via OTG, Windows WinUSB binding, ZLP-tolerant reads, DFU_ENTER over the vendor pipe |
 | `make smoke` hardware test | done | verified | writes `build/smoke/<hash>/` |
 
 ## Charger test
