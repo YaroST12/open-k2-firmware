@@ -48,6 +48,14 @@ void test_url() {
     CHECK_EQ(u.size() <= 255, 1);
     // The URL has no scheme in it: the scheme byte carries it.
     CHECK_EQ(kLandingUrl.find("://"), std::string_view::npos);
+    // The published dashboard (GitHub Pages site root + k2.html), spelled out independently of the constant: the descriptor
+    // is 3 + 43 = 46 bytes and carries exactly these characters after the scheme byte.
+    static const char kPage[] = "yarost12.github.io/open-k2-firmware/k2.html";
+    CHECK_EQ(sizeof(kPage) - 1, 43u);
+    CHECK_EQ(u.size(), 46u); CHECK_EQ(u[0], 46);
+    CHECK_EQ(std::memcmp(&u[3], kPage, 43), 0);
+    CHECK_EQ(u[3], 'y'); CHECK_EQ(u[45], 'l');
+    CHECK_EQ(kLandingUrl == std::string_view(kPage), 1);
 }
 
 // Walks the OS 2.0 set: every descriptor's wLength is in range and the subsets nest exactly.
@@ -85,6 +93,10 @@ void test_msos(std::uint8_t itf) {
     CHECK_EQ(s[s.size() - 1], 0); CHECK_EQ(s[s.size() - 2], 0); CHECK_EQ(s[s.size() - 3], 0); CHECK_EQ(s[s.size() - 4], 0);
     // The GUID is braced and 36 characters inside.
     CHECK_EQ(kInterfaceGuid.size(), 38u); CHECK_EQ(kInterfaceGuid[0], '{'); CHECK_EQ(kInterfaceGuid[37], '}');
+    // A random (version 4) GUID, not the old placeholder: the version nibble is 4, the variant nibble 8..b.
+    CHECK_EQ(kInterfaceGuid == std::string_view("{81bdae64-520b-4114-aba4-de8eedd252bf}"), 1);
+    CHECK_EQ(kInterfaceGuid[15], '4'); CHECK_EQ(std::string_view("89ab").find(kInterfaceGuid[20]) != std::string_view::npos, 1);
+    CHECK_EQ(kInterfaceGuid.find("5b0d3d6e"), std::string_view::npos);
 }
 
 void test_control_reply() {

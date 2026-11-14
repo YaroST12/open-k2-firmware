@@ -26,12 +26,14 @@ inline constexpr std::uint16_t kIndexGetUrl = 2;
 inline constexpr std::uint16_t kIndexMsos = 7;
 inline constexpr std::uint8_t kLandingIndex = 1;   // iLandingPage: GET_URL's wValue
 
-// PLACEHOLDER: the page a browser suggests when the K2 is plugged in (Chrome shows a notification on Android and
-// desktop). Scheme https is implied. Replace with the real address of the hosted dashboard before shipping.
-inline constexpr std::string_view kLandingUrl = "open-k2.example/";
+// The page a browser suggests when the K2 is plugged in (Chrome shows a notification on Android and desktop): the
+// dashboard (tools/web/k2.html) on the project's GitHub Pages site, published by `make site` as k2.html at the site root.
+// The URL descriptor's scheme byte is 1 (https), so the string carries no scheme.
+inline constexpr std::string_view kLandingUrl = "yarost12.github.io/open-k2-firmware/k2.html";
 
-// DeviceInterfaceGUIDs of the vendor function (registry property of the OS 2.0 set); only has to be unique to this device.
-inline constexpr std::string_view kInterfaceGuid = "{5b0d3d6e-4c1c-4f86-9b3a-0e6a2f9d7c11}";
+// DeviceInterfaceGUIDs of the vendor function (registry property of the OS 2.0 set); a random (version 4) GUID generated
+// once for this project, it only has to be unique to this device class.
+inline constexpr std::string_view kInterfaceGuid = "{81bdae64-520b-4114-aba4-de8eedd252bf}";
 
 inline constexpr std::uint8_t kBosHeaderLen = 5;
 inline constexpr std::uint8_t kWebusbCapLen = 24;
