@@ -6,6 +6,7 @@
 #include <array>
 
 #include "k2/core/log.hpp"
+#include "k2/core/scratch.hpp"
 #include "k2/core/version.hpp"
 #include "k2/drivers/adc.hpp"
 #include "k2/drivers/fs_flash.hpp"
@@ -30,7 +31,8 @@ LineEnv g_env;
 Seq g_seq(g_env);
 usbfp::Recorder g_usb;
 Report g_rep;
-std::array<std::uint8_t, kFileBytes> g_buf;
+// The file image is live only inside save() / load(): it comes from the scratch arena (k2/core/scratch.hpp), not a static.
+using FileBuf = std::array<std::uint8_t, kFileBytes>;
 
 enum class St : std::uint8_t { Boot, Idle, Waiting, Running };
 St g_st = St::Boot;
@@ -82,21 +84,25 @@ void tap(usb::BusEvent e, const std::uint8_t* setup8) {
 
 bool save() {
     g_rep.usb = g_usb.trace();
-    const std::size_t n = encode_file(g_rep, g_buf);
+    const scratch::Lease lease("hostrep.save");
+    FileBuf& buf = scratch::as<FileBuf>();
+    const std::size_t n = encode_file(g_rep, buf);
     if (n == 0) return false;
     auto& f = fs::instance();
     const std::uint32_t t0 = systick::millis();
     f.mkdir(kDir);
-    const fs::Err e = f.write_file(kFile, {g_buf.data(), n});
+    const fs::Err e = f.write_file(kFile, {buf.data(), n});
     K2LOG("[LPHR] saved state=%u end=%s ok=%d ms=%u\n", unsigned(g_rep.state), end_name(End(g_rep.end)),
           e == fs::Err::Ok ? 1 : 0, unsigned(systick::millis() - t0));
     return e == fs::Err::Ok;
 }
 
 void load() {
+    const scratch::Lease lease("hostrep.load");
+    FileBuf& buf = scratch::as<FileBuf>();
     std::size_t n = 0;
-    if (fs::instance().read_file(kFile, g_buf, n) != fs::Err::Ok) return;
-    if (!decode_file({g_buf.data(), n}, g_rep)) g_rep = {};
+    if (fs::instance().read_file(kFile, buf, n) != fs::Err::Ok) return;
+    if (!decode_file({buf.data(), n}, g_rep)) g_rep = {};
 }
 
 LoopFacts facts() {
