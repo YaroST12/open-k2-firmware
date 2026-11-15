@@ -27,14 +27,14 @@ Step-by-step hardware test procedures for every protocol and feature, with a res
 
 The K2 has a 240x240 screen and four buttons: **BACK**, **MINUS**, **OK** and **PLUS**. A narrow strip along one edge of the screen always shows what each button does on the page you are on, so read the strip instead of learning keys. In the lists, MINUS and PLUS read **Up** and **Dn**. A grey or missing label means that button does nothing there.
 
-The pictures below are host renders: the real UI code drawn into a 240x240 buffer by the host tests, with stand-in readings (a 100 W PD charger on the port). They are not photos or device screenshots, so the numbers are examples. The regeneration recipe is at the end of this section. The full reference for every page is [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md).
+The pictures below are host renders: the real UI code drawn into a 240x240 buffer by the host tests, with stand-in readings (a 100 W PD charger on the port, a live session and a healthy diagnosis; the charger-test and PD Spec pages use an EPR-capable charger instead). They are not photos or device screenshots, so the numbers are examples. The regeneration recipe is at the end of this section. The full reference for every page is [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md).
 
 ### Home
 
 <img src="docs/img/ui/home.png" width="240" alt="Home: the Flow face">
 
 - Flow is the page the K2 boots into. The big number is power (W); volts and amps sit below it, each with a trend.
-- The two cells on the right (peak, drop, cable, energy) turn by themselves. The bottom block names the PD state and how long the session has run.
+- The two cells on the right (peak, drop, cable, energy) turn by themselves. The bottom block names the PD diagnosis (here "Healthy") and the contract, and how long the session has run.
 - **OK** opens the Bench. **Long OK** resets the energy counter and the peaks. **Long BACK** changes the big number (W, V, A). **Long PLUS / MINUS** change the trend window (10 s, 60 s, 10 min).
 
 ### The other faces: Graphs, Numbers, Lines
@@ -188,7 +188,7 @@ K2_DUMP=runs/shots ./host-build/test_ui_mockup
 python3 tools/panel2png.py runs/shots runs/png --scale 2
 ```
 
-The pictures here come from the same drivers, taken at rotation 3 (the strip at the bottom). The stock drivers dump some frames before a page has finished painting, so the frames here were taken after ticking the UI until it stopped painting, and the PNG files were then reduced to 128 colours.
+The pictures here come from the same drivers, taken at rotation 3 (the strip at the bottom). The stock drivers dump some frames before a page has finished painting, so the frames here were taken after ticking the UI until it stopped painting, and the PNG files were then reduced to 128 colours. For the Home, Bench, Numbers and Lines frames the stub also carried a live PD session's other readings (a healthy Black Box report, CC1 1.65 V with D+/D- at 0 V, the PD verdict), so no row says "no session" or "--" beside a live contract.
 
 ## Hardware
 
