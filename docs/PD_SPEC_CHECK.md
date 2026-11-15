@@ -164,6 +164,27 @@ capture window (300 / 700 ms), so a 3.3-11 V PPS window takes 60 moves at 20 mV 
 slams; `--pps-full` takes 770 moves at 20 mV on that window and may not fit beside the other families. `pd_spec.py run` saves the
 time each family took (`family_s` in result.json, the last line of report.txt).
 
+**Hardware, Anker IQ4 (2026-11-15, build 1.0.2-45-09983f46, `runs/pps-settle/iq4-run1` and `iq4-run2`).** Fixed 5/9/12/15/20 V and
+PPS 3.3-11 V at 3 A, no AVS, no EPR. Both runs finished in 129 s: Transitions 32 s, PPS/AVS 80 s (248 moves), PPS timeout 14 s,
+Hard Reset 2 s, Detach 1 s. Each: 25 pass, 1 fail, 7 skip (EPR, AVS), 1 unverified; score 40 and 46.
+
+| Check | Run 1 | Run 2 |
+|---|---|---|
+| `pps_ps_rdy` | fail: 20 of 248, worst 32.8 ms (500 mV up) | fail: 23 of 248, worst 31.0 ms (500 mV up) |
+| PS_RDY per pass, 20 / 100 / 500 mV / slams | 25.5 / 30.9 / 32.7 / 91.9 ms | 22.0 / 29.7 / 31.0 / 102.3 ms |
+| `pps_band` (VBUS inside vPpsNew) | 4.9 ms | 5.8 ms |
+| `pps_settle` (20 mV, unverified) | 8.1 ms | 8.7 ms |
+| `pps_monotonic`, `pps_overshoot`, `pps_transient` | pass (dmin 17 mV, no excursion) | pass (one 2 ms stretch) |
+| `pps_status` / `pps_status_time` | 8 clean / 9.7 ms (6 timed) | 8 clean / 9.3 ms (7 timed) |
+| `pps_keepalive` (source Hard Reset after the silence) | 13.3 s | 13.3 s |
+
+The IQ4's level is in band within 2-9 ms of the Accept, but its PS_RDY comes 22-33 ms after it on small steps, over
+tPpsSrcTransSmall (25 ms) on 100 and 500 mV steps in both runs: a real finding. The single 20 mV fail (25.5 ms, run 1) is inside the
+K2's own offset (timed from the Accept's RX edge, under 1 ms before the GoodCRC that starts the source's timer, plus the PS_RDY frame
+itself), so on its own it would not prove a violation. A Get_PPS_Status answer is timed only when both edge stamps are real; 1-2 of
+the 8 per run were not, and are judged on content only. The reports in these two directories print an APDO move under `accept_time`
+as "PDO 134 to 33" (fixed in the decoder after the runs; `pd_spec.py report <dir>/result.json` prints "APDO 6 ... to 3.3 V").
+
 ## Safety
 
 Enforced by the engine and the session, not by the operator:
