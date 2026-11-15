@@ -253,9 +253,83 @@ Patterns so far (names used below):
 - **UFCS hardware pass** (591e88e, 2026-11-07, `runs/baseus-fh22/run9-ufcs-session.log`): 5 V pass (4.999 V), **9 V pass (8.975 V)**, back to 5 V pass (5.005 V), 12 V "unsupported" (not offered). First UFCS pass on any source.
 - **UFCS 11 V pass** (2016132, 2026-11-07, `runs/baseus-fh22/run11-ufcs-11v.log`): 11 V 10.970 V, the top of its 5.5-11 V
   4 A mode (44 W); 12 V "unsupported" (not offered), as expected.
-- `ufcs-exit-cuts-vbus` (new pattern): after Exit_UFCS_Mode / our bus reset the charger drops VBUS (to 0.36 V) before it comes back at 5 V. A fresh UFCS session per row ran its handshake into the dark source ("source lost"). Handling: the UFCS rows share one session (each level is a new Request), so the exit happens once, at the unit's end. Inferred cause (spec audit, docs/UFCS_SPEC_REFERENCE.md 5.3): the engine drove both lines to 0 V microseconds after the Exit_UFCS_Mode frame, before the source had left UFCS mode, and the data line low for 2 ms or more is a UFCS hardware reset, which cuts VBUS for over a second. Since the audit fix the Exit waits for the source's ACK (200 ms at most, `[UFCS] exit acked|unanswered after N ms vbus=N`) before the bus reset; host-tested only, not yet run on the FH22.
+- `ufcs-exit-cuts-vbus` (new pattern): after Exit_UFCS_Mode / our bus reset the charger drops VBUS (to 0.36 V) before it comes back at 5 V. A fresh UFCS session per row ran its handshake into the dark source ("source lost"). Handling: the UFCS rows share one session (each level is a new Request), so the exit happens once, at the unit's end. Inferred cause (spec audit, docs/UFCS_SPEC_REFERENCE.md 5.3): the engine drove both lines to 0 V microseconds after the Exit_UFCS_Mode frame, before the source had left UFCS mode, and the data line low for 2 ms or more is a UFCS hardware reset, which cuts VBUS for over a second. Since the audit fix the Exit waits for the source's ACK (200 ms at most, `[UFCS] exit acked|unanswered after N ms vbus=N`) before the bus reset; host-tested at the time; **verified on the FH22 2026-11-15** (`exit acked after 9 ms vbus=5006`, `after 11 ms vbus=5015`, VBUS holds 5.0 V until the K2's own detach, see the 2026-11-15 entry below).
 - Handshake note: the standard has the sink keep D- low during tDet4, while the K2 releases D- there; the charger accepts it (handshake and Ping/ACK work). The Accept is the last frame in the log; Power_Ready, the 9 V band and the keep-alive were seen working on 591e88e (5/9/5 V pass).
 - Mi 11 V / 20 V 6 A hunt rows rejected in 11-52 ms (not a Xiaomi OEM source; expected).
+
+#### FH22 full hardware pass, 2026-11-15 (public a8eda966 = 1.0.2-72, PD Spec image fdef1abd = 1.0.2-62, K2 plugged straight into the brick, no cable, HID/CDC-powered, `runs/fh22-final/`)
+The brick goes back to the shop, so this is the complete record. All raw files are under `runs/fh22-final/` (local, gitignored, not committed): `s1/` raw identity (PDO words, e-marker, Black Box dump `bb_dump.txt` / `bb.raw`), `s2/run1`, `s2/run2` (full charger test twice, CDC stream in `stream/`), `s2/run3-avs` (`--avs-sweep`), `s2/*_points.csv` (sweep points rebuilt from the trace TX Request lines plus power samples; the results JSON keeps only one S row per sweep), `s3/ufcs1`, `s3/ufcs2` (`--units ufcs` twice with stream), `s4/pdspec1`, `s4/pdspec2`, `s4/pdspec3full` (PD Spec Check: `report.txt`, `result.json`, `stream.log`). No fixture was added to `tests/fixtures/`: no test loads a charger-test stream, a PD Spec `result.json` (it keeps per-pass aggregates only) or a Black Box dump of this kind without a new test, and the existing `tests/fixtures/bbdiag/fh22_request_5a.raw` already covers the 5 A first list.
+- **Identity and lists (default image, `s1/`).** First Source_Capabilities after the attach: 6 PDOs (fixed 5/9/12/15 V 3 A, 20 V 5 A, PPS 5-21 V 5 A). The K2's Request for PDO 1 left 1.7 ms after the list; Accept 8.7 ms and PS_RDY 54.8 ms after the Request. The charger then asks Get_Sink_Cap and Get_Sink_Cap_Extended (our replies 2.5 ms and 1.6 ms after) and 13.3 ms after our Sink_Capabilities_Extended (Sink Modes 0x23) sends a 7-PDO list that adds the SPR AVS APDO (`0xE004B1F4`: 9-15 V 3 A, 15-20 V 5 A). The charger repeats the whole pair about every 378 ms (Get_Sink_Cap at +83 ms, then the Get_Sink_Cap_Extended, then a fresh list), identical words each time. PDO words: `0x0A01912C` (5 V 3 A, unconstrained-power bit set), `0x0002D12C`, `0x0003C12C`, `0x0004B12C`, `0x000641F4` (20 V 5 A), PPS `0xC9A43264` (5-21 V 5 A, 105 W), AVS `0xE004B1F4`. No Source_Capabilities_Extended exchange was needed for the run. E-marker read: none (no cable). Discover Identity from the source: none seen; the sniffed identity is not exposed. Pattern `5a-without-emarker` again (5 A offered with no cable and no SOP' exchange). The charger sent one Vendor_Defined of its own (+7.6 ms after our Sink_Capabilities_Extended, repeated every list).
+- **Full charger test, default plan, twice** (`s2/run1`, `s2/run2`): **34 pass / 7 fail / 21 skip both times**, 7 PDOs, "cable not read; source offers 5 A". The 7 fails are the five legacy first rows (FCP 5 V unsupported at 5.01-5.02 V, SCP 5 V unsupported, AFC 9 V unsupported, VOOC 5 V "needs load (3 tries)", VIVO 5 V no response) and the two PPS 21 V rows (`13->21 V` capped at 19.42 V, `21 V 3 A` capped at 19.41 V / 19.42 V). Everything else passes: PD 5/9/12/15 V 3 A and 20 V 5 A (5.01-19.41 V measured), all five AVS rows (14.5 V, 14.5->20 V, 20->14.5 V, 14.5->11.7 V, 11.7->9 V), PPS 13 V, 21->13 V, 13->9 V, 9->5 V, 13 V and 19.9 V, QC2 5/9/12 V, QC3 5/9/12/9/5 V, QC3 Class B 5 V and 12 V (20 V skipped, Class A only), UFCS 5/3.4/4.4/5.5/8.2/11/5 V. QC3+ "no QC3+ (5 V baseline pass)". SVOOC rows skipped ("request failed", never triggered). Not advertised: EPR fixed, EPR AVS. Earlier FH22 runs: 2026-11-07 22/16/21 (older plan, UFCS and AVS rows then new), 2026-11-10 PD-only 15/2/2; the fail set is the same kind (legacy-unsupported plus the PPS 21 V fold), nothing new. The two runs differ only in the last digit of a few measured values.
+- **`--units ufcs` twice** (`s3/ufcs1`, `s3/ufcs2`, build a8eda966, 7 pass each): `[UFCS] cap 1: 3400-5500mV 1000-3000mA`, `cap 2: 5500-11000mV 1000-4000mA` (no mode above 11 V; the current plan has no 12 V UFCS row, so there is no 12 V refusal and no `[UFCS] refused` line in either run). Measured 5.000 / 3.423 / 4.403 / 5.495 / 8.183 / 10.978 / 5.006 V (run 1) and 5.005 / 3.415 / 4.403 / 5.495 / 8.180 / 10.968 / 5.015 V (run 2). No Refuse of any kind, so the busy-retry path (a8eda966) was not exercised. **`[UFCS] exit acked after 9 ms vbus=5006` and `after 11 ms vbus=5015`**: after the ack VBUS stays at 5.004-5.015 V until the K2's own Rd-off detach 510 / 520 ms later (the only power samples in that window: 5004, 5008 mV and 5004..5015 mV), the VBUS dip of `ufcs-exit-cuts-vbus` is gone; the dark phase that follows (VBUS 0.96 -> 0.35 V within 150 ms) is the unit detach. UFCS rows hold a Ping/ACK every 100 ms.
+- **Reboots and stack.** No reboot on any image (uptime against wall clock checked at each ping: the PD Spec image read 246.1 s, 469.9 s and 1165.8 s at 246, 470 and 1166 s after its flash). Default image stack low point 5376 B free of 10048 B after the charger tests and UFCS runs (6336 B on the fresh boot after the last re-flash); PD Spec image 3672 B free of 7872 B after three runs; IRQ stack low 1152 B of 1344 B.
+- **PD Spec Check** (image fdef1abd, `s4/`; the caps note reads "PPS without AVS": all three sessions saw 5 fixed PDOs plus the PPS APDO and no AVS APDO, so every `avs_*` check is skipped. That is the K2's pd-attach session on this build, not a property of the charger, whose AVS APDO appears after the SKEDB exchange in the default image; not investigated further). Three runs, `pd attach` before each, run 3 with `--pps-full`:
+
+| check | run 1 (default families, 191 s) | run 2 (default, 207 s) | run 3 (`--pps-full` 20 mV whole window, 683 s) |
+|---|---|---|---|
+| score / pass / fail / skip / unverified | 160 / 21 / 5 / 7 / 1 | 162 / 20 / 6 / 7 / 1 | 279 / 19 / 7 / 7 / 1 |
+| accept_time worst (limit 17 ms) | 11.2 | 11.0 | 11.4 |
+| ps_rdy_time worst, fixed steps (limit 325 ms) | 258.7 (1 -> 5) | 258.2 | 260.0 |
+| src_start (>= 25 ms) | 35.2 | 35.2 | 34.3 |
+| rise / fall time (limit 310 ms) | 202.1 / 206.2 | fail "not seen" on the first 1 -> 2 move / 206.1 | same first-move miss / 208.1 |
+| ps_rdy_early / ps_rdy_low / overshoot / accuracy | pass (5.023 V / 8.964 V / 4.979 V / 5.010 V) | pass (n 19 of 20 for accuracy) | pass (n 19 of 20) |
+| pps_monotonic (>= -8 mV) | fail 2, worst -398 mV at 100 mV step up to 20.0 V | fail 2, -400 mV | fail 4, **-481 mV at the 20 mV step up to 20.0 V** |
+| pps_accuracy (5 %) | fail 35 of 446, worst 19.411 V | fail 35, 19.410 V | fail 70 of 1986, 19.417 V |
+| pps_overshoot (peak below the new level's lower bound) | fail 14, worst 19.404 V | fail 14, 19.394 V | fail 27, 19.410 V |
+| pps_band (25 ms) | fail 15, never in band | fail 15 | fail 15 |
+| pps_ps_rdy (27 ms) | pass, worst 26.9 ms | pass, 27.0 ms | **fail 1**, 27.2 ms (a 500 mV step) |
+| pps_transient (150 ms) | pass | pass | pass (5.1 ms) |
+| pps_status (Get_PPS_Status) / time | fail 4 of 8 ("voltage") / pass 7.8 ms | same / 7.5 ms | same / 8.3 ms |
+| pps_keepalive (12-15 s) | pass 13.387 s | pass | pass 13.384 s |
+| Hard Reset from ~19.41 V (K2-sent): off / dark / on / caps | 282 / 749 / 25 / 144 ms, pass | 275-282 / 769 / 0 / 163 ms, pass | 275 / 769 / 0 / 156 ms, pass |
+| detach from 19.41 V: off / back / re-attach / caps | 260 / 389 / 180 / 159 ms, pass | pass | 244 / 380 / 180 / 138 ms, pass |
+| source Hard Reset during the run | none (source_reset 0) | none | none |
+
+  Per programmable pass (all three runs, PPS APDO 5-21 V 5 A): PS_RDY from the Accept 20.7-24.4 ms at 20 mV steps, 23.8-24.1 ms at 100 mV, 26.8-27.2 ms at 500 mV, 232-233 ms on the 5 <-> 21 V slams (against tPpsSrcTransLarge); the worst accuracy error is the 21 V point (-1575..-1590 mV); every pass reports `pps_status` "voltage" fault bits on the Get_PPS_Status asked at the top. The 20 mV whole-window pass adds 1540 moves and only 35 more accuracy fails (55 against 20), all of them in the fold region. Not a charger finding: the first 1 -> 2 transition of runs 2 and 3 lost its final-level sample ("live band", poll gap 17-19 ms, K2 HID busy right after `pd attach`; run 1 had it), which is the only `rise_time` / `accuracy` n-of-20 gap. `pps_settle` is unverified by design (weight 0; 24 / 26 / 434 fails counted).
+  The PD Spec result keeps per-pass aggregates (worst error, minimum delta, fail counters), not each 20 mV point, so the >= 18 V points of the whole-window run are known only through those aggregates; the per-point table below comes from the charger-test PPS / AVS deep sweeps.
+
+##### Above 20 V (FH22, 2026-11-15)
+The converter cannot deliver more than about 19.9 V: it tracks every request up to 19.9 V at 60-95 mV below it, and from a request of exactly 20.0 V (the fixed-20 V setpoint, which the 20 mV PD Spec run puts between 19.98 and 20.00 V: step of -481 mV into 20.00 V) up to the advertised 21.0 V it holds 19.40-19.43 V. It never says no: Accept every time (7.6-10.9 ms), PS_RDY normally (about 28-33 ms after the Request, one 9.9 ms at 20.4 V where the output did not move), no Reject, no Hard Reset, no VBUS drop, a 21 V contract live at 19.4 V with the output flat (the Get_PPS_Status at the top reports the voltage fault, 4 of 8 queries). This is `pps-folds-to-fixed-20v` plus `output-capped-below-advertised`, measured at 100 mV steps for the first time across the whole top end and on three images.
+- (a) AVS deep sweep (`ct_start.py --avs-sweep`, `s2/run3-avs`, 9.0-20.0 V at 100 mV, 1 A, 540 ms per point): all 111 points Accept (7.5-11 ms) and PS_RDY (25.8-33 ms, 9.6 ms once at 10.9 V), no Reject, no reset. Output at the end of each point: 18.0 V -> 17.930 V ... 19.9 V -> 19.810 V (offset -60..-90 mV, mean -75 mV, 19.810 V is the highest value the charger delivered), **20.0 V (the APDO top) -> 19.423 V** (min/max over the point 19.423 / 19.616 V: still settling down from 19.9 V). AVS 20.0 V in the main plan: pass at 19.42 V.
+- (b) PPS 5-21 V deep sweep (default run 1, `s2/pps_sweep_run1_points.csv`; run 3 in `pps_sweep_run3_points.csv` agrees within 30 mV): 18.0-19.9 V offset -74..-95 mV (mean -82 mV; run 3: -62..-87 mV), peak 19.815 V (run 3: 19.825 V) at the 19.9 V request; **from 20.0 V on every point lands at 19.400-19.419 V (run 3: 19.406-19.434 V)**, the error against the request growing linearly from -0.60 V to -1.59 V at 21.0 V.
+- (c) Fixed 20 V (PD 20 V 5 A row): 19.413-19.419 V in every run, 19.41 V in the row text, no sag (VBUS band 19.40-19.43 V, no excursion), no Hard Reset; inside the PD +-5 % window, passes. Step response: 13 -> 21 V reaches 19.31 V in 93 ms and 19.42 V in 173 ms (PS_RDY at 145 ms), the PD Spec 5 -> 20 V step peaks at 19.434 V and settles 19.418 V (PS_RDY 258 ms from the Accept, rise 202 ms).
+- (d) PD Spec 20 mV whole-window run (`s4/pdspec3full`): the fold shows in the aggregates only (see above): `pps_monotonic` 4 fails (worst -481 mV at the 20 mV step to 20.0 V, the 100 mV pass -402 mV), `pps_accuracy` 70 fails of 1986 (55 of them in the 20 mV pass; the +-5 % lower bound passes the 19.41 V fold up to a 20.43 V request, so the failing points are about 20.45-21.0 V, up and down), `pps_overshoot` 27, `pps_band` 15 (never inside the new level's band), PS_RDY within 27 ms except one 27.2 ms at a 500 mV step, **no source Hard Reset** (source_reset 0, K2 Hard Reset from 19.414 V recovers: off 275 ms, dark 769 ms, caps 156 ms).
+
+| request (V) | PPS run 1 VBUS at point end (mV) | error (mV) | Accept / PS_RDY after the Request (ms) | PPS run 3 (mV) | AVS run 3 (mV) |
+|---|---|---|---|---|---|
+| 18.0 | 17921 | -79 | 10.7 / 29.8 | 17934 | 17930 |
+| 18.1 | 18016 | -84 | 10 / 29.3 | 18033 | 18020 |
+| 18.2 | 18121 | -79 | 9 / 29.8 | 18128 | 18124 |
+| 18.3 | 18226 | -74 | 8.7 / 27.9 | 18220 | 18223 |
+| 18.4 | 18318 | -82 | 9.2 / 28.5 | 18324 | 18340 |
+| 18.5 | 18426 | -74 | 9.2 / 29.1 | 18429 | 18423 |
+| 18.6 | 18521 | -79 | 8.1 / 27.9 | 18536 | 18528 |
+| 18.7 | 18623 | -77 | 8.9 / 28.9 | 18625 | 18623 |
+| 18.8 | 18724 | -76 | 10 / 27.7 | 18728 | 18721 |
+| 18.9 | 18819 | -81 | 9 / 28.9 | 18823 | 18829 |
+| 19.0 | 18915 | -85 | 8.1 / 28 | 18928 | 18924 |
+| 19.1 | 19019 | -81 | 8.8 / 28.7 | 19038 | 19023 |
+| 19.2 | 19118 | -82 | 8 / 27.8 | 19124 | 19126 |
+| 19.3 | 19213 | -87 | 9.1 / 28.9 | 19229 | 19223 |
+| 19.4 | 19314 | -86 | 8.3 / 28 | 19320 | 19326 |
+| 19.5 | 19410 | -90 | 8.9 / 28.8 | 19423 | 19431 |
+| 19.6 | 19514 | -86 | 8.9 / 27.4 | 19526 | 19530 |
+| 19.7 | 19613 | -87 | 8.9 / 28.7 | 19613 | 19616 |
+| 19.8 | 19705 | -95 | 9.7 / 28 | 19718 | 19726 |
+| 19.9 | 19815 | -85 | 9.9 / 28.6 | 19825 | 19810 |
+| 20.0 | 19400 | -600 | 8.3 / 32.9 | 19419 | 19423 |
+| 20.1 | 19406 | -694 | 9.7 / 29.3 | 19425 | - |
+| 20.2 | 19413 | -787 | 10.9 / 30.7 | 19413 | - |
+| 20.3 | 19413 | -887 | 9.4 / 29.3 | 19425 | - |
+| 20.4 | 19400 | -1000 | 8.8 / 9.9 | 19423 | - |
+| 20.5 | 19406 | -1094 | 9.4 / 29.4 | 19423 | - |
+| 20.6 | 19410 | -1190 | 8.9 / 29.6 | 19434 | - |
+| 20.7 | 19419 | -1281 | 10 / 29.3 | 19416 | - |
+| 20.8 | 19413 | -1387 | 9 / 27 | 19423 | - |
+| 20.9 | 19416 | -1484 | 9.9 / 29.1 | 19423 | - |
+| 21.0 | 19406 | -1594 | 8.7 / 29.4 | 19423 | - |
+
+Verdict, unchanged but now complete: not a ramp, not a protection trip. The output stage regulates to the request up to 19.9 V and falls to its fixed-20 V setpoint (19.41 V with no load) for any request of 20.0 V or more, while the list advertises PPS to 21 V and AVS to 20 V. A sink that wants 20 V from this charger gets 19.4 V (fixed 20 V and AVS 20 V pass the +-5 % rule); a PPS request above 20.43 V fails the accuracy rule. Charger-test handling stays `Reason::Capped` for the PPS 21 V rows.
 
 ### Xiaomi 20K power bank (full charger test, 2026-11-07, `runs/xiaomi20k/rec2`)
 - Source_Capabilities: 5 V 3 A, 9 V 3 A, 12 V 3 A, 15 V 3 A, 20 V 2 A, PPS 5-11 V 3 A (PDO 6), PPS 5-20 V 2 A (PDO 7). SVID 0x2717 is listed and the auth chain finishes; the post-chain list is identical (no 6 A).
