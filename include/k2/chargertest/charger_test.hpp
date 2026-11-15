@@ -67,8 +67,11 @@ enum class Reason : uint8_t {
                          // no "not tested": the UI shows it as noted, never as pass
     LightLevel,          // a Light run: a legacy level other than the 5 V handshake (nothing advertises it), or a protocol only told
                          // apart above 5 V (AFC, QC3+, QC Class B): not asked at this level, a Medium run asks it
-    PortCuts             // pattern usb-a-no-load-auto-off: the row met a cut of the port's output (VBUS under kCutMv for a moment, back within
+    PortCuts,            // pattern usb-a-no-load-auto-off: the row met a cut of the port's output (VBUS under kCutMv for a moment, back within
                          // kCutWindowMs) and its one retry met another: a skip, never a failure (the port cuts without load)
+    Folded               // user decision 2026-11-16: the deep sweep of the row's PDO found a voltage fold (pd::TrackScan: the settled level fell
+                         // by more than 50 mV while the request rose). A CAUTION on a Pass verdict - the sweep row, and the fixed rows of the
+                         // same APDO at or above the first folded setpoint that read below the peak - never a fail (Summary::fold_mv)
 };
 // Step.detail of a PPS step-walk row while it is Pending/Running (finish() overwrites it with the result); sits above every
 // engine code and the EPR skip codes so the card and the tools never mistake it for one.
@@ -562,6 +565,9 @@ struct Env {
     // stopped run behind that the next boot resumes. Not called for a suspended run (that one is only interrupted).
     virtual void closing(Reason) {}
     virtual void record(const Step&) = 0;
+    // A finished row's reason changed after its record (the caution of a fold the APDO's sweep found, Reason::Folded): the journal
+    // mirrors it, no event and no log line (the row's own record() ran when it finished).
+    virtual void amend(const Step&) {}
     // pattern budget-reannounce-mid-run: the source announced its list again mid-run (same wire revision, none of the excluded
     // cases) and the PD rows were re-planned per row instead of the unit ending as "offers changed": `follow` rows take the new
     // slot and PDO word, `withdrawn` rows have no offer any more (Reason::Withdrawn), `back` rows a PDO came back for. Called once
@@ -893,7 +899,8 @@ private:
     uint16_t sweep_mv_ = 0, sweep_lo_ = 0, sweep_hi_ = 0;   // the point whose Request is out / the row's point range
     void sweep_begin(const Step&, Input);   // request(): the point range from the row's PDO word, the row's record reset
     void sweep_point(Input, const Step&);   // one granted point: record it, ask the next or finish the row
-    void sweep_close(const Step&);          // finish(): summarize the row's points into sweep_rows_
+    void sweep_close(Step&);                // finish(): summarize the row's points into sweep_rows_ (and mark a fold, fold_caution)
+    void fold_caution(Step& sweep, const ctsweep::Summary&);   // a fold: the sweep row and the APDO's fixed rows above it read Reason::Folded
     bool xiaomi_seen_ = false, xiaomi_reset_ = false, x_svid_ = false, x_authed_ = false; uint32_t tail_at_ = 0, hr_count_ = 0;
     std::array<HuntEvidence, kHuntSlots> hunt_{};   // refused hunt rows; n_hunt_ in use (a full table overwrites the last slot)
     uint8_t n_hunt_ = 0;

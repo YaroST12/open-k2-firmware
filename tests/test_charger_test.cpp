@@ -4344,6 +4344,89 @@ static void test_pps_deep_sweep_records_every_point_and_the_fold_back() {
             CHECK_EQ(s.measured_mv, 19750u);  // peak_mv, not the last (folded-back) point
         }
 }
+// User decision 2026-11-16 (FH22, fw 1.0.2-128): a voltage fold the sweep finds is a CAUTION - not a pass, never a fail. The sweep
+// row of the APDO that folds, and its fixed rows whose level sits at or above the first folded setpoint and read below the peak,
+// keep their Pass verdict and read Reason::Folded. The fixed rows run BEFORE the sweep (the planner puts an APDO's sweep behind its
+// own checks), so they are marked when the sweep closes: at the end of the APDO's rows. A clean APDO and a source whose sweep shows
+// no fold keep every row as it was; a fixed row that failed or capped keeps its own finding.
+static void test_a_fold_the_sweep_finds_is_a_caution_on_the_apdos_rows() {
+    Fake f;   // both PPS APDOs reach 21 V; the output folds back 100 mV at the 20.5 V request, steady, inside every row's band
+    f.caps.pdos[5] = pd::decode_pdo(0xc0000000 | (210u << 17) | (50u << 8) | 100);   // pos 6: PPS 5-21 V 5 A (pos 7 is the 5-21 V one)
+    f.pd_fold_from_mv = 20500; f.pd_fold_to_mv = 20300;
+    ct::Runner r(f);
+    ct::Options o{.selected = ct::bit(A::Pps)}; o.pps_sweep = true;
+    CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+    f.tick(r, 900000);
+    CHECK_EQ(r.state(), ct::State::Done);
+    unsigned sweeps = 0, folded_fixed[8] = {}, passes = 0;
+    for (const auto& s : r.steps()) {
+        if (s.algorithm != A::Pps) continue;
+        if (s.reason == ct::Reason::Folded) {
+            CHECK_EQ(s.verdict, ct::Verdict::Pass);   // never a fail, never a skip
+            if (ct::is_sweep(s)) ++sweeps;
+            else { ++folded_fixed[s.pos & 7]; CHECK_EQ(s.mv >= 20500u, true); CHECK_EQ(s.measured_mv, 20300u); }
+        } else if (s.verdict == ct::Verdict::Pass) {
+            ++passes;
+            CHECK_EQ(s.mv < 20500u || ct::is_sweep(s), true);   // a pass above the fold would have been marked
+        }
+    }
+    CHECK_EQ(sweeps, 2u);                                  // PDO6 and PDO7: both APDOs fold the same way
+    CHECK_EQ(folded_fixed[6] >= 1u && folded_fixed[7] >= 1u, true);   // each APDO's fixed 21 V row
+    CHECK_EQ(passes >= 4u, true);                          // the rows below the fold are plain passes
+    // the same source tracking clean (no fold in the sweep) marks nothing: every row keeps its verdict
+    Fake g; ct::Runner q(g);
+    CHECK_EQ(q.start(g.caps, o, g.in, true), ct::Reason::None);
+    g.tick(q, 900000);
+    CHECK_EQ(count_reason_all(q, ct::Reason::Folded), 0u);
+    CHECK_STR(ct::name(ct::Reason::Folded), "output folds back");
+}
+// FH22 numbers (the PPS PDO folds at 20 V from a track 150 mV low to 19.9 V, to 19.42 V): the sweep row is a caution; the fixed
+// 21 V row, which reads outside its band, is still its own capped finding - the fold never turns a fail into a caution.
+static void test_a_fold_never_softens_a_capped_row() {
+    Fake f; f.pd_offset_mv = -150; f.pd_fold_from_mv = 20000; f.pd_fold_to_mv = 19420;
+    ct::Runner r(f);
+    ct::Options o{.selected = ct::bit(A::Pps)}; o.pps_sweep = true;
+    CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+    f.tick(r, 900000);
+    CHECK_EQ(r.state(), ct::State::Done);
+    unsigned sweep7 = 0, capped = 0;
+    for (const auto& s : r.steps()) {
+        if (s.algorithm != A::Pps) continue;
+        if (ct::is_sweep(s)) {
+            if (s.pos == 7) { CHECK_EQ(s.verdict, ct::Verdict::Pass); CHECK_EQ(s.reason, ct::Reason::Folded); ++sweep7; }
+            else CHECK_EQ(s.reason == ct::Reason::None, true);   // the 5-11 V APDO tracks clean
+        }
+        if (s.reason == ct::Reason::Capped) { CHECK_EQ(s.verdict, ct::Verdict::Fail); ++capped; }
+        if (s.reason == ct::Reason::Folded && !ct::is_sweep(s)) CHECK_EQ(s.verdict, ct::Verdict::Pass);
+    }
+    CHECK_EQ(sweep7, 1u);
+    CHECK_EQ(capped >= 1u, true);
+}
+// The AVS shape of the same finding (the FH22's SPR AVS APDO, 9-20 V): the fixed 20 V row reads 19.43 V, inside its band, on the
+// folded side of the fold the sweep finds at 20.0 V - it is marked, with the sweep row.
+static void test_an_avs_fold_marks_the_fixed_row_inside_the_band() {
+    Fake f;
+    f.caps.num_pdos = 7;
+    for (unsigned n = 0; n < 5; ++n) f.caps.pdos[n] = pd::decode_pdo(((5000 + 4000 * n) / 50 << 10) | 325);
+    f.caps.pdos[6] = pd::decode_pdo(0xE004B145);   // SPR AVS 9-20 V (pos 7)
+    f.pd_offset_mv = -150; f.pd_fold_from_mv = 20000; f.pd_fold_to_mv = 19428;
+    ct::Runner r(f);
+    ct::Options o{.selected = ct::bit(A::SprAvs)}; o.avs_sweep = true;
+    CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+    f.tick(r, 900000);
+    CHECK_EQ(r.state(), ct::State::Done);
+    unsigned sweep = 0, fixed = 0;
+    for (const auto& s : r.steps()) {
+        if (s.algorithm != A::SprAvs || s.pos != 7) continue;
+        if (s.reason == ct::Reason::Folded) {
+            CHECK_EQ(s.verdict, ct::Verdict::Pass);
+            if (ct::is_sweep(s)) ++sweep;
+            else { ++fixed; CHECK_EQ(s.mv, 20000u); CHECK_EQ(s.measured_mv, 19428u); }   // "spr-avs 20000 mV -> 19428 mV"
+        }
+    }
+    CHECK_EQ(sweep, 1u);
+    CHECK_EQ(fixed >= 1u, true);
+}
 // The sweep stops at the first LOST source (a Hard Reset mid-sweep): the row fails there, the points recorded so far
 // stay in the record, and the run goes on to its end.
 static void test_pps_deep_sweep_stops_at_the_first_lost_source() {
@@ -8078,7 +8161,7 @@ int main() {
     test_fixed_row_collapse_stays_lost(); test_pps_collapse_after_ps_rdy_stays_lost();
     test_low_edge_that_regulates_at_5v_is_a_floored_fail();
     test_pps_step_walk_passes_on_20mv_steps(); test_pps_step_walk_fails_when_steps_round_to_100mv(); test_pps_step_walk_fails_when_steps_are_ignored();
-    test_pps_deep_sweep_records_every_point_and_the_fold_back(); test_pps_deep_sweep_stops_at_the_first_lost_source(); test_pps_deep_sweep_is_opt_in();
+    test_a_fold_the_sweep_finds_is_a_caution_on_the_apdos_rows(); test_a_fold_never_softens_a_capped_row(); test_an_avs_fold_marks_the_fixed_row_inside_the_band(); test_pps_deep_sweep_records_every_point_and_the_fold_back(); test_pps_deep_sweep_stops_at_the_first_lost_source(); test_pps_deep_sweep_is_opt_in();
     test_sweep_live_follows_the_row_in_flight(); test_sweep_live_is_idle_without_a_sweep_row();
     test_claim_sweep_record_lends_the_point_buffer();
     test_avs_deep_sweep_plans_and_runs_per_spr_avs_apdo(); test_avs_deep_sweep_epr_capped_at_the_monitor_ceiling();

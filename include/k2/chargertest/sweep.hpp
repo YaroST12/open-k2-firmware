@@ -135,5 +135,11 @@ struct View {
 size_t format_summary(const Summary&, std::span<char> out);
 // One mV value in that shape: 19748 -> "19.75", 19900 -> "19.9", 20000 -> "20.0".
 size_t format_mv(unsigned mv, std::span<char> out);
+// The fold note of a caution (user decision 2026-11-16, the same words on the K2, the card, the summary line and the web): "folds to
+// 19.4V above 19.9V" - the level the output folds to, and the last setpoint that still tracked (the setpoint before the first the
+// rule names), both rounded to 0.1 V, the unit attached (K2 copy rules). Empty (0) when the summary has no fold. Lower-case, at most
+// kFoldTextMax - 1 = 31 chars: one row note, never truncated.
+inline constexpr size_t kFoldTextMax = 32;
+size_t format_fold(const Summary&, std::span<char> out);
 
 }  // namespace k2::ctsweep

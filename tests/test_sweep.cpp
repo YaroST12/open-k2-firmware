@@ -365,7 +365,53 @@ static void test_apdo_view_merges_both_parts_like_one_track() {
     CHECK_EQ(v.apdo(4, 6).has_value(), false);
 }
 
+// User decision 2026-11-16: a fold is a caution the results show, so its note is a pure sentence of the summary: the level it
+// folds to (rounded to 0.1 V) and the last setpoint that still tracked (the setpoint before the first one the rule names).
+static void test_format_fold_names_the_level_and_the_last_good_setpoint() {
+    char b[sw::kFoldTextMax];
+    auto text = [&](const sw::Summary& s) { return std::string(b, sw::format_fold(s, b)); };
+    unsigned lo = 0;
+    auto err = fixture_err("tests/fixtures/sweep/fh22_pps_5000_21000.csv", lo);   // (lo is set by the call: not an argument of the same call)
+    auto s = sw::summarize(err, lo);
+    CHECK_STR(text(s).c_str(), "folds to 19.4V above 19.9V");        // 19400 mV from the 20.0 V request
+    err = fixture_err("tests/fixtures/sweep/fh22_avs_9000_20000.csv", lo);
+    s = sw::summarize(err, lo);
+    CHECK_STR(text(s).c_str(), "folds to 19.4V above 19.9V");        // 19423 mV
+    sw::Summary rounds;
+    rounds.points = 111; rounds.fold_mv = 19664; rounds.fold_from_mv = 20000;
+    CHECK_STR(text(rounds).c_str(), "folds to 19.7V above 19.9V");    // nearest 0.1 V, not truncated
+    rounds.fold_mv = 19649;
+    CHECK_STR(text(rounds).c_str(), "folds to 19.6V above 19.9V");
+    rounds.fold_mv = 9050; rounds.fold_from_mv = 12100;
+    CHECK_STR(text(rounds).c_str(), "folds to 9.1V above 12V");      // a whole volt drops its ".0", as the card's put_volts does
+    rounds.fold_mv = 19960; rounds.fold_from_mv = 21000;
+    CHECK_STR(text(rounds).c_str(), "folds to 20V above 20.9V");
+    rounds.fold_mv = 36000; rounds.fold_from_mv = 36000;              // the widest levels still fit the cap
+    CHECK_EQ(sw::format_fold(rounds, b) < sw::kFoldTextMax, true);
+    // A clean track has no note.
+    CHECK_EQ(sw::format_fold(sw::Summary{}, b), 0u);
+    err = fixture_err("tests/fixtures/sweep/ugreen_avs_9000_20000.csv", lo);
+    s = sw::summarize(err, lo);
+    CHECK_EQ(sw::format_fold(s, b), 0u);
+}
+// A track BREAK (the offset grew without a fall) is not a fold: only a gap in the points makes one at 100 mV steps (the two
+// segments of a split sweep that do not join), and it names no fold level, so it never reads "folds to".
+static void test_a_break_is_not_a_fold() {
+    std::vector<int16_t> a{0, 0};          // 5000, 5100 tracking
+    std::vector<int16_t> b{-500, -500};    // 5600, 5700 read 5100 / 5200: 500 mV behind a 500 mV step, not lower than before
+    const auto s = sw::summarize(a, 5000, b, 5600);
+    CHECK_EQ(s.fold_mv, 0u); CHECK_EQ(s.fold_from_mv, 0u);
+    char buf[sw::kFoldTextMax];
+    CHECK_EQ(sw::format_fold(s, buf), 0u);
+    // the same gap with a real fall is a fold
+    std::vector<int16_t> c{-700, -700};    // 5600, 5700 read 4900 / 5000: below the 5100 before
+    const auto f = sw::summarize(a, 5000, c, 5600);
+    CHECK_EQ(f.fold_from_mv, 5600u); CHECK_EQ(f.fold_mv, 4900u);
+}
+
 int main() {
+    test_format_fold_names_the_level_and_the_last_good_setpoint();
+    test_a_break_is_not_a_fold();
     test_part_range_splits_at_5v();
     test_apdo_view_merges_both_parts_like_one_track();
     test_out_of_band_is_one_sided_100mv_or_5_percent();

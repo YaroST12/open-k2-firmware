@@ -80,7 +80,7 @@ inline constexpr unsigned kMaxRanges = 4;
 inline constexpr unsigned kSpreadLevels = 4;   // v9: the setpoint errors kept per APDO (the plan has at most 4 distinct levels)
 inline constexpr int8_t kSpreadNone = -128;     // an empty spread slot
 inline constexpr unsigned kNameMax = 20;
-inline constexpr unsigned kReasonCount = unsigned(ct::Reason::PortCuts) + 1;   // 51 values fit the card's 6-bit reason field
+inline constexpr unsigned kReasonCount = unsigned(ct::Reason::Folded) + 1;   // 52 values fit the card's 6-bit reason field
 static_assert(kReasonCount <= 64, "the card stores a reason in 6 bits");
 inline constexpr uint8_t kMagic = 0xA6, kTypeCard = 1, kTypeDelete = 2;
 inline constexpr uint8_t kFormat = 10;  // payload byte 33: v4 adds per-EPR-level verdicts, v5 the cable block (Card carries it), v6 the UFCS modes, v7 the repeat counter, v8 the source's mid-run re-balance count, v9 the per-level setpoint-error spread, v10 the deep-sweep summary per range
@@ -852,8 +852,8 @@ inline void migrate_to_current(Card& c) { if (c.format < kFormat) c.format = kFo
         w = {int8_t(std::clamp(int(sm.min_err), -127, 127)), int8_t(std::clamp(int(sm.max_err), -127, 127)),
              int8_t(std::clamp(int(sm.worst_err), -127, 127)),
              uint16_t(std::min<unsigned>(sm.worst_mv / 100u, 511u)), uint16_t(std::min<unsigned>(sm.peak_mv / 100u, 511u)),
-             uint16_t(std::min<unsigned>(sm.peak_at_mv / 100u, 511u)), uint16_t(std::min<unsigned>(sm.fold_mv / 100u, 511u)),
-             uint16_t(std::min<unsigned>(sm.fold_from_mv / 100u, 511u))};
+             uint16_t(std::min<unsigned>(sm.peak_at_mv / 100u, 511u)), uint16_t(std::min<unsigned>(detail::dv_round(sm.fold_mv), 511u)),   // nearest 0.1 V: the device's fold note reads the same
+             uint16_t(std::min<unsigned>(detail::dv_round(sm.fold_from_mv), 511u))};
     }
     for (unsigned g = 0; g < kGroups; ++g) {
         GroupResult& r = c.group[g];

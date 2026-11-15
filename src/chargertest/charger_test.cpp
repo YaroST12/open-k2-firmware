@@ -55,9 +55,10 @@ const char* name(Reason r) {
         "blocked by PD", "no QC3+ response", "rebooted 3x", "needs external power", "PD gave up before START",
         "Class A only (12 V max)", "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target",
         "withdrawn by source", "wrong voltage on 5V contract", "needs load", "floored above target", "step resolution",
-        "HID-cable loop: 5V lock", "advertised", "light run: not asked", "port cuts without load"
+        "HID-cable loop: 5V lock", "advertised", "light run: not asked", "port cuts without load",
+        "output folds back"
     };
-    static_assert(std::size(names) == unsigned(Reason::PortCuts) + 1);
+    static_assert(std::size(names) == unsigned(Reason::Folded) + 1);
     return names[static_cast<unsigned>(r)];
 }
 const char* refusal_words(Reason r) {
@@ -181,6 +182,7 @@ const char* explanation(const Step& s) {
     if (s.reason == Reason::EprRefused) return epr_detail_name(s.detail) ? epr_detail_name(s.detail) : "EPR: entry refused";
     if (s.reason == Reason::Capped) return "output capped";   // the Detail value column is 16 cells; name() is the long form
     if (s.reason == Reason::Floored) return "output floored";   // the reached floor is the row's measured_mv
+    if (s.reason == Reason::Folded) return "folds back";   // the fold note itself ("folds to 19.4V above 19.9V") is the row's note line
     if (s.reason == Reason::StepResolution) return s.detail ? "step resolution" : "steps ignored";
     if (s.reason == Reason::NoContract) return "EPR: no PD contract";
     if (s.reason == Reason::NotUnlocked) return epr_detail_name(s.detail) ? epr_detail_name(s.detail) : name(s.reason);
@@ -1834,7 +1836,7 @@ void Runner::sweep_point(Input in, const Step& eff) {
 }
 // The sweep row closed (finish()): summarize its points into the row table (keyed by algorithm + PDO slot), so the
 // results strip and the card read one summary per APDO. Points past the kMaxPoints budget were never recorded.
-void Runner::sweep_close(const Step& s) {
+void Runner::sweep_close(Step& s) {
     const unsigned n = std::min<unsigned>(sweep_n_, ctsweep::kMaxPoints - std::min<unsigned>(sweep_first_, ctsweep::kMaxPoints));
     const auto sum = ctsweep::summarize({sweep_err_.data() + std::min<unsigned>(sweep_first_, ctsweep::kMaxPoints), n}, sweep_lo_);
     sweep_used_ = std::max(sweep_used_, uint16_t(std::min<unsigned>(sweep_first_ + n, ctsweep::kMaxPoints)));
@@ -1846,6 +1848,23 @@ void Runner::sweep_close(const Step& s) {
         auto& r = sweep_rows_[n_sweep_rows_++];
         r.pos = s.pos; r.alg = uint8_t(s.algorithm); r.lo_mv = sweep_lo_; r.hi_mv = sweep_hi_;
         r.first = sweep_first_; r.n = uint16_t(n); r.sum = sum;
+    }
+    if (sum.fold_mv && s.verdict == Verdict::Pass && s.reason == Reason::None) fold_caution(s, sum);
+}
+// User decision 2026-11-16: a voltage fold is a CAUTION. The sweep row that found it reads Reason::Folded on its Pass; so do the
+// PASSED fixed/range rows of the same APDO (algorithm + slot) whose level is at or above the first folded setpoint and whose reading
+// sits below the peak - the fixed 20 V row of the FH22 reads 19.43 V, inside its band, on the folded side. The planner runs an APDO's
+// sweep after its own rows, so those rows are marked now, at the end of the APDO's rows (amend() lets the journal follow). A capped,
+// failed, skipped, hunt or step-walk row keeps its own finding: it is no pass.
+void Runner::fold_caution(Step& sweep, const ctsweep::Summary& sum) {
+    sweep.reason = Reason::Folded;
+    for (size_t n = 0; n < count_; ++n) {
+        auto& o = steps_[n];
+        if (&o == &sweep || is_sweep(o) || o.group != sweep.group || o.algorithm != sweep.algorithm || o.pos != sweep.pos) continue;
+        if (o.verdict != Verdict::Pass || o.reason != Reason::None || o.hunt || o.detail == kDetailStepWalk) continue;
+        if (o.mv < sum.fold_from_mv || o.measured_mv + pd::kTrackFoldMv >= sum.peak_mv) continue;
+        o.reason = Reason::Folded;
+        env_.amend(o);
     }
 }
 // The first pending row in execution order (the unit order, then the plan order inside a unit).

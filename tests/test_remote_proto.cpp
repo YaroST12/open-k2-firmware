@@ -2755,6 +2755,25 @@ static void test_sweep_row_wire_carries_points() {
     CHECK_EQ(r[32], 61);                                 // detail byte: the 61 recorded points, not 161
 }
 
+// A fold is a pass with the reason "output folds back" (the caution of the Results grid): schema 2 carries the reason, schema 1 has no
+// such word and reads the row as the plain pass it is.
+static void test_folded_pass_reason_over_both_schemas() {
+    namespace ct = k2::charger_test;
+    Fake f; Frame r;
+    std::array<ct::Step, 1> steps{};
+    steps[0] = {.group = ct::Group::Pd, .algorithm = ct::Algorithm::Pps, .pos = 6, .mv = 20000,
+                .verdict = ct::Verdict::Pass, .reason = ct::Reason::Folded, .detail = 0, .pdo = 0xC0DC3240};
+    f.test_results = {0x01020304, 0x05060708, 3, 0, 1, steps};
+    CHECK_EQ(run(f, request(0x0B, 40, {0, 4, 3, 2, 1, 8, 7, 6, 5}), r), 1);
+    check_header(r, 0x0B, 40, Status::Ok, 31);
+    CHECK_EQ(r[30], uint8_t(ct::Verdict::Pass));
+    CHECK_EQ(r[31], uint8_t(ct::Reason::None));          // schema 1: no word for it, the row is a pass
+    CHECK_EQ(run(f, request(0x0B, 41, {2, 0, 4, 3, 2, 1, 8, 7, 6, 5}), r), 1);
+    check_header(r, 0x0B, 41, Status::Ok, 58);           // the schema-2 header 42 + one 16-byte row
+    CHECK_EQ(r[57], uint8_t(ct::Verdict::Pass));
+    CHECK_EQ(r[58], uint8_t(ct::Reason::Folded));        // schema 2: the reason itself
+}
+
 // Review finding (red): a sweep row that never ran (skipped/withdrawn, no RowView) must not ship the in-RAM marker
 // 161 in its detail byte - the wire would read "161 points" for a zero-point sweep. Detail must be 0.
 static void test_sweep_row_that_never_ran_carries_zero_points() {
@@ -3265,7 +3284,7 @@ int main() {
     test_charger_avs_sweep();
     test_charger_level();
     test_charger_svooc_cap();
-    test_charger_test_wire(); test_charger_test_view_wire(); test_sweep_row_wire_carries_points(); test_sweep_row_that_never_ran_carries_zero_points();
+    test_charger_test_wire(); test_charger_test_view_wire(); test_sweep_row_wire_carries_points(); test_sweep_row_that_never_ran_carries_zero_points(); test_folded_pass_reason_over_both_schemas();
     test_identify_refusal_wire_mapping();
     test_pd_attach_wire();
     test_active_pd_commands();
