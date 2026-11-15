@@ -136,7 +136,9 @@ aborts with `Overvoltage` and releases the lines), and the card and Results show
   ident command it hears (0xA8 / 0xAC / 0xA6, `fc::Engine::vooc_ident()` -> `fctrig::Status::ident` -> `Input::fc_ident`).
   The Runner keeps it for a VOOC-family row that passes `detected`; Results shows it as a `VOOC id` row ("0xAC") beside
   the rows' "detected", the run summary as "VOOC family ident 0xAC". One ident proves the family, not the variant. Not
-  journaled, not on the card.
+  journaled, not on the card. Behind the Link's inline latch (any cause, the far-Rd latch of a USB-A to C cable included)
+  the engine refuses the family, so neither the ident nor the Deep stage is reachable there (`test_fc_engine`
+  `vooc_never_inline`).
 - **SuperVOOC ceiling stage (Deep only, `Options::svooc_cap`, `State::Ceiling`).** `with_level` turns it on for Deep
   (keeping a usb-a waiver) and off for Light and Medium, and the Runner also checks the level, so a run below Deep stops at
   the detection and its ident. After a VOOC-family pass a Deep run may run one more step at 5 V: the guarded SuperVOOC trigger (`svooc_trig`, Probe profile, 12 s cap) answers the adapter's
@@ -161,7 +163,8 @@ aborts with `Overvoltage` and releases the lines), and the card and Results show
   drops its output after the stage (VBUS under vSafe5V for `kDropMs`, 200 ms, in the release) the run brings it back
   with its unit boundary, Rd off and on (detach, then the next unit's attach), and goes on with the result kept. The stage is not journaled (a resumed
   run skips it) and does not change the card format; the text is in the Results row, in the `--json` readout
-  (`k2_remote.py charger-svooc-cap`, whose reply also carries the ident byte), in the `ct_start.py` summary, in the web
+  (`k2_remote.py charger-svooc-cap`, whose reply also carries the ident byte), in `charger-test results` / `summary`
+  (the export's `svooc` key, read when the plan holds a VOOC-family row) and so in the `ct_start.py` summary, in the web
   dashboard's run summary (`K2Remote.chargerSvoocCap`) and in the log. A plain VOOC charger yields "no adapter" because the family
   detection cannot tell VOOC from SuperVOOC. `quiet()` covers the stage: no flash writes while the wire is held.
   Shell: `k2_remote.py charger-svooc-cap [off|on|usb-a]`, `ct_start.py --level deep [--svooc-cap usb-a]` (a bare

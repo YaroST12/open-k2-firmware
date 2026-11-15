@@ -1667,6 +1667,21 @@ def attach_hunt_evidence(link, run_id, rows):
         return
 
 
+VOOC_FAMILY_GROUPS = ("vooc", "svooc", "svooc65")
+
+
+def attach_svooc_readout(link, result, rows):
+    """Put the VOOC-family readout (charger_svooc_cap: the ident the detection heard, the Deep ceiling stage's words) on an
+    export as result["svooc"], read only when the plan holds a VOOC-family row. Firmware without the command attaches nothing;
+    charger_summary prints it."""
+    if not any(s["group"] in VOOC_FAMILY_GROUPS for s in rows):
+        return
+    try:
+        result["svooc"] = charger_svooc_cap(link)
+    except (RemoteError, FrameError):
+        return
+
+
 class ResultsChanged(FrameError):
     """The firmware's RAM results moved under an export (a running suite rewrites rows and the revision)."""
 
@@ -1813,6 +1828,7 @@ def _charger_test_export(link, a):
     if end != meta:
         raise ResultsChanged("charger-test results changed during export; retry results")
     attach_hunt_evidence(link, meta["run_id"], rows)   # read after the export proved stable; the evidence is not part of that check
+    attach_svooc_readout(link, result, rows)
     result["steps"] = rows
     if a.test_cmd == "summary" and not getattr(a, "json", False):
         result["_summary"] = True

@@ -340,17 +340,6 @@ class SvoocCapOption(unittest.TestCase):
         self.assertIsNone(ct_start.svooc_mode(ct_start.parse_args([])))
         self.assertIsNone(ct_start.svooc_mode(ct_start.parse_args(["--level", "light"])))
 
-    def test_the_readout_is_attached_to_the_summary(self):
-        read = {"mode": "on", "end": "judged", "text": "<=11.1V, 10.9A claimed", "ident": 0xAC}
-        with patch.object(ct_start.kr, "charger_svooc_cap", lambda link, mode=None: read):
-            self.assertEqual(ct_start.svooc_readout(None), read)
-
-    def test_older_firmware_without_the_readout_is_none(self):
-        def refuse(link, mode=None):
-            raise ct_start.kr.RemoteError(3, ct_start.kr.CMD_CHARGER_SVOOC_CAP)
-        with patch.object(ct_start.kr, "charger_svooc_cap", refuse):
-            self.assertIsNone(ct_start.svooc_readout(None))
-
 
 class LevelOption(unittest.TestCase):
     """--level light|medium|deep is sent on every start (the device keeps the last choice): Medium by default, the run
@@ -532,7 +521,6 @@ class LockReleaseAfterStart(unittest.TestCase):
                           lambda *a, **k: events.append(("start", depth)) or ct_start.STARTED), \
              patch.object(ct_start.kr, "cmd_charger_test", fake_ct), \
              patch.object(ct_start.kr, "charger_cable", lambda link, choice=None: {"run": "off"}), \
-             patch.object(ct_start, "svooc_readout", lambda link: None), \
              patch.object(ct_start.kr, "charger_sweep", lambda link, on: sweeps.append(on) or on), \
              patch.object(ct_start.kr, "charger_level", lambda link, level: levels.append(level) or level), \
              patch.object(ct_start.charger_summary, "summarize", lambda r: "SUMMARY"), \

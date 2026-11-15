@@ -732,6 +732,23 @@ class ChargerHunt(unittest.TestCase):
             kr.attach_hunt_evidence(self.HuntLink([p]), 1, rows)
             self.assertNotIn("hunt", rows[0])
 
+    def test_a_vooc_family_export_carries_the_svooc_readout(self):
+        meta = bytearray(HEADER2); meta[11] = 1; meta[12] = 0
+        meta = bytes(meta)
+        vooc = kr.TEST_ALGORITHMS.index("svooc")
+        row = struct.pack("<BBBHHHBBBI", vooc, 0, 0, 5000, 0, 5000, 2, 0, 0, 0)
+        # [mode, end, why, asks, word(2), vmax_mv(2), stop_ms(2), ident]: a Medium run, no stage, ident 0xAC
+        sv = bytes([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xAC])
+        link = self.HuntLink([meta, page(meta, 0, [row]), meta, sv])
+        r = kr.cmd_charger_test(link, self.args("results"))
+        self.assertEqual(r["steps"][0]["group"], "svooc")
+        self.assertEqual([c for c, _ in link.sent], [0x0B, 0x0B, 0x0B, 0x59])
+        self.assertEqual((r["svooc"]["ident"], r["svooc"]["end"]), (0xAC, "not run"))
+        self.assertIn("VOOC family ident 0xAC", kr._render("charger-test", dict(r, _summary=True)))
+        # firmware without the command: the export stands without it
+        link = self.HuntLink([meta, page(meta, 0, [row]), meta, kr.RemoteError(kr.STATUS_UNKNOWN_CMD, 0x59)])
+        self.assertNotIn("svooc", kr.cmd_charger_test(link, self.args("results")))
+
     def test_results_export_and_summary_carry_the_cause(self):
         meta = bytearray(HEADER2); meta[11] = 1; meta[12] = 0
         meta = bytes(meta)

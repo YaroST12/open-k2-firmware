@@ -1163,6 +1163,15 @@ static void test_the_default_run_is_medium() {
     CHECK_EQ(ui.charger_test_set_level(uint8_t(ct::Level::Light)), true);
     CHECK_EQ(ui.charger_test_selection() >> 28, 0x1u);
     CHECK_EQ(ui.charger_test_set_level(3), false);                     // no such level
+    // The SVOOC ceiling stage follows the level (Deep only); a usb-a waiver survives Deep and is dropped below it.
+    CHECK_EQ(ui.charger_test_svooc_cap(), 0u);                         // Light: off
+    CHECK_EQ(ui.charger_test_set_level(uint8_t(ct::Level::Deep)), true);
+    CHECK_EQ(ui.charger_test_svooc_cap(), 1u);                         // Deep: on
+    CHECK_EQ(ui.charger_test_set_svooc_cap(2), true);
+    CHECK_EQ(ui.charger_test_set_level(uint8_t(ct::Level::Deep)), true);
+    CHECK_EQ(ui.charger_test_svooc_cap(), 2u);                         // Deep again: the usb-a waiver stays
+    CHECK_EQ(ui.charger_test_set_level(uint8_t(ct::Level::Medium)), true);
+    CHECK_EQ(ui.charger_test_svooc_cap(), 0u);                         // Medium: off
 }
 // Review (step 3/3): the Level row sits above START. START keeps the opening focus; MINUS reaches Level, whose OK cycles
 // Medium -> Deep -> Light -> Medium (next_level), the Tests row's step count follows the level, and the footer says what the

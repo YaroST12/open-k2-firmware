@@ -255,15 +255,6 @@ def svooc_mode(a):
     return (a.svooc_cap or "on") if run_level(a) == "deep" else None
 
 
-def svooc_readout(link):
-    """The run's VOOC-family readout (k2_remote.charger_svooc_cap: the ident and the ceiling stage's words), or None on
-    firmware without it."""
-    try:
-        return kr.charger_svooc_cap(link)
-    except (kr.RemoteError, kr.FrameError):
-        return None
-
-
 def send_level(link, level):
     """Send the run's level; None when the K2 took it, else the cause (Busy while a run is active, an unknown command on
     firmware without levels)."""
@@ -385,7 +376,6 @@ def main(argv=None):
         r["cable_identity"] = kr.charger_cable(link)
         # the level the run ran at: the firmware's own (selection.run_level), else the one sent above
         r["level"] = (r.get("selection") or {}).get("run_level") or level
-        r["svooc"] = svooc_readout(link)   # the VOOC family's ident and, on a deep run, the ceiling stage's words
     print(charger_summary.summarize(r))
     if st["state"] != "done":
         print(f"run ended in state {st['state']}", file=sys.stderr)

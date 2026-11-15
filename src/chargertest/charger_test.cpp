@@ -1546,8 +1546,9 @@ void Runner::finish(Input in, Verdict v, Reason r, uint8_t detail) {
     const bool sweep_row = is_sweep(s);   // read before detail is overwritten: the marker survives on sweep rows
     s.verdict = v; s.reason = r; s.detail = detail;
     if (sweep_row) { s.detail = kDetailSweep; sweep_close(s); }
-    s.tries = s.group >= Group::Vooc && s.group <= Group::SuperVooc65 ? in.fc_tries : 0;
-    if (s.tries && v == Verdict::Pass && detail == uint8_t(fc::Fail::Detected) && in.fc_ident) evidence_.vooc_ident = in.fc_ident;
+    const bool vooc_family = s.group >= Group::Vooc && s.group <= Group::SuperVooc65;
+    s.tries = vooc_family ? in.fc_tries : 0;
+    if (vooc_family && v == Verdict::Pass && detail == uint8_t(fc::Fail::Detected) && in.fc_ident) evidence_.vooc_ident = in.fc_ident;
     if (s.group == Group::Pd) {
         // Item G: the row's PS_RDY quirks go to the run's evidence and the log (no verdict reads them, the card does not show them yet).
         evidence_.ps_rdy_max = std::max<uint8_t>(evidence_.ps_rdy_max, uint8_t(std::min<unsigned>(row_ps_rdy_ms_ / 20u, 255u)));

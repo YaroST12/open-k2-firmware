@@ -1130,6 +1130,12 @@ static void vooc_never_inline() {
         c.inline_now = Reason::PdContract;
         CHECK(e.start(p, 5000, true, true) == Fail::Inline);
         CHECK(c.set_calls == 0 && c.wakes == 0);
+        // The Link's sticky latch reads DataDevice, whatever its cause: the far-Rd latch of a USB-A to C cable too. So the family
+        // detection (and with it the charger test's ident and Deep ceiling stage) never runs behind that latch; the trigger's
+        // usb-a waiver does not reach the engine (2026-11-15, an open decision).
+        c.inline_now = Reason::DataDevice;
+        CHECK(e.start(p, 5000, true, true) == Fail::Inline);
+        CHECK(c.set_calls == 0 && c.wakes == 0);
         c.inline_now = Reason::None;
         CHECK(e.start(p, 5000, false) == Fail::None);
         c.run(e, 50);

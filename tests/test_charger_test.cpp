@@ -2216,8 +2216,9 @@ static void test_ceiling_is_deep_only_and_the_ident_is_kept() {
         ct::Runner r(f);
         CHECK_EQ(r.start(f.caps, {.selected = ct::bit(A::SuperVooc), .svooc_cap = sc::Mode::On, .level = lv}, f.in, true), ct::Reason::None);
         run_until(f, r, [&] { return f.fc_requests >= 1; });
-        f.in.fc_state = fc::State::Failed; f.in.fc_fail = fc::Fail::Detected; f.in.fc_tries = 1; f.in.fc_ident = 0xAC;
-        f.in.vbus_mv = 5000;
+        // fc_tries 0 at Light: the ident does not hang on the wake count
+        f.in.fc_state = fc::State::Failed; f.in.fc_fail = fc::Fail::Detected; f.in.fc_tries = lv == ct::Level::Light ? 0 : 1;
+        f.in.fc_ident = 0xAC; f.in.vbus_mv = 5000;
         CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 120000), true);
         const bool deep = lv == ct::Level::Deep;
         CHECK_EQ(f.ceil_starts, deep ? 1 : 0);

@@ -22,6 +22,7 @@
 #include "k2/ui/text.hpp"
 #include "k2/chargertest/resume_text.hpp"
 #include "k2/chargertest/result_layout.hpp"
+#include "k2/chargertest/svooc_ceiling.hpp"
 #include "k2/pd/emrec.hpp"
 #include <string>
 #include <cstdio>
@@ -657,6 +658,46 @@ void test_card_screens() {
                         ui.on_button(Button::Back, ButtonEvent::Short, g_t);
                     }
         CHECK_EQ(labelled > 20, true);   // the sweep reaches Moto, QC4+, QC5 and Samsung labels
+    }
+    // The VOOC family's fact rows (ChargerTestPage::build_results): "VOOC id" with the ident at every level, and the Deep
+    // ceiling stage's words for every end and every abort cause at the widest numbers (10.9A claimed, <=11.1V, 12.5s), built
+    // through the real formatters and checked like the rows above: the label against the strip, each grid line against its width.
+    {
+        namespace rl = result_layout;
+        namespace sc = svooc_ceiling;
+        int built = 0;
+        for (unsigned end = 0; end < sc::kEndCount; ++end)
+            for (unsigned why = 0; why <= unsigned(svooc::Abort::ContractChanged); ++why) {
+                if (end != unsigned(sc::End::Aborted) && why) continue;
+                char cap[48] = {}, id[6] = {};
+                sc::format_cap({0x06D, sc::End(end), 11120, 12500, uint8_t(why)}, cap);
+                sc::format_ident(0xAC, id);
+                rl::OemNotes oem;
+                oem.headers = false;
+                oem.vooc_ident = id;
+                if (end) oem.svooc_cap = cap;   // End::None: a Light / Medium run, the ident alone
+                rl::Layout l;
+                rl::build(l, {}, oem);
+                ++built;
+                CHECK_EQ(int(l.cuts), 0);
+                for (size_t r = 0; r < l.row_count; ++r) CHECK_EQ(text_width(kLabelFont, l.rows[r].label) <= kit::kResultLabelW - 8, true);
+                std::array<rl::Line, rl::kMaxLines + 16> lines{};
+                const size_t n = rl::wrap(l, rl::kGridMetrics, lines);
+                CHECK_EQ(n <= rl::kMaxLines, true);
+                for (size_t i = 0; i < n; ++i) {
+                    int widest = 0;
+                    unsigned cells = 0;
+                    for (unsigned k = 0; k < lines[i].count; ++k) {
+                        const rl::Token &tk = l.tokens[lines[i].first + k];
+                        if (tk.glue) continue;
+                        ++cells;
+                        widest = std::max(widest, rl::cell_width(tk, rl::kGridMetrics));
+                        CHECK_EQ(text_width(kSmall, tk.text) + 2 * rl::kGridMetrics.pad <= rl::cell_width(tk, rl::kGridMetrics), true);
+                    }
+                    CHECK_EQ(int(cells) * widest + (int(cells) - 1) * rl::kGridMetrics.gap <= rl::kGridMetrics.avail, true);
+                }
+            }
+        CHECK_EQ(built, int(sc::kEndCount) + int(svooc::Abort::ContractChanged));
     }
     // The card's own words (every verdict row, every detail screen) are generated copy: none of it may be cut as "external
     // data". Only the saved name of a card is data, and the names above fit the list and the head whole.
