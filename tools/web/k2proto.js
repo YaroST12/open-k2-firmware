@@ -23,7 +23,9 @@ var K2Proto = (function () {
   var ACTIONS = { "pd-rescan": 1, "emarker": 2, "energy-reset": 3, "fc-scan": 4, "fc-reset": 5, "identify": 6 };
   // include/k2/pd/pd_sink.hpp and include/k2/pd/pd_identify.hpp enums, in order
   var PD_ERRS = ["ok", "no source caps", "bad PDO position", "over the voltage cap", "voltage outside the PDO range",
-                 "inline: a live sink is attached", "busy (identify running)"];
+                 "inline: a live sink is attached", "busy", "PDO advertises no current"];
+  var BUSY_WHYS = ["", "a charger test or tool owns the port", "legacy unit running (PD-silent)", "identify running", "probe running",
+                   "re-announcing the source caps first", "negotiation in flight (previous request not settled)"];
   var SINK_STATES = ["idle", "epr-entering", "epr-wait-caps", "requesting", "transition", "ready", "aborting", "failed"];
   var SINK_RESULTS = ["none", "ok", "rejected", "wait-exhausted", "timeout", "tx-failed", "hard-reset", "soft-reset",
                       "aborted", "over-cap", "epr-failed", "bad-choice"];
@@ -123,8 +125,10 @@ var K2Proto = (function () {
     this.name = "RemoteError"; this.status = status; this.cmd = cmd; this.payload = payload || new Uint8Array(0);
     this.message = "command " + cmd + " failed: " + (STATUS_NAMES[status] || status);
     if (cmd === CMD.CHARGER_TEST && status === STATUS.BUSY) this.message += " (RAM results changed; retry results)";
-    if ((cmd === 0x41 || cmd === 0x42 || cmd === 0x44 || cmd === 0x48) && this.payload.length && this.payload[0] > 0 && this.payload[0] < PD_ERRS.length)
-      this.message += " (" + PD_ERRS[this.payload[0]] + ")";
+    if ((cmd === 0x41 || cmd === 0x42 || cmd === 0x44 || cmd === 0x48) && this.payload.length && this.payload[0] > 0 && this.payload[0] < PD_ERRS.length) {
+      if (this.payload[0] !== 6) this.message += " (" + PD_ERRS[this.payload[0]] + ")";   // 6 = busy: the status name says it, the reason follows
+      else if (cmd === 0x41 && this.payload.length > 1 && this.payload[1] > 0 && this.payload[1] < BUSY_WHYS.length) this.message += " (" + BUSY_WHYS[this.payload[1]] + ")";
+    }
     this.stack = new Error(this.message).stack;
   }
   RemoteError.prototype = Object.create(Error.prototype);

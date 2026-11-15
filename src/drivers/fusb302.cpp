@@ -3095,6 +3095,19 @@ bool sink_soft_reset() {
 std::uint32_t caps_count() { return g_caps_count; }
 bool legacy_only_active() { return g_legacy_only; }
 
+pd::BusyWhy busy_why() {
+    if (g_legacy_only) return pd::BusyWhy::Legacy;
+    if (ident_running()) return pd::BusyWhy::Identify;
+    if (probe_running()) return pd::BusyWhy::Probe;
+    if (g_prep.active()) return pd::BusyWhy::Prepare;
+    switch (sink().status().state) {   // the gate of pd::Sink::trigger
+        case pd::SinkState::EprEntering: case pd::SinkState::EprWaitCaps: case pd::SinkState::Requesting:
+        case pd::SinkState::Transition: case pd::SinkState::Aborting:
+            return pd::BusyWhy::Negotiating;
+        default: return pd::BusyWhy::None;
+    }
+}
+
 bool get_source_caps(bool confirmed) {
     // Inline the Get_Source_Cap is refused even when confirmed: an inline K2 has no PD role of its own
     // and any message it sends is a second sink talking out of sequence (2026-11-10).

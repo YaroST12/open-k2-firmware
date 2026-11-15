@@ -688,6 +688,7 @@
   "691": "[PDSPEC] start families=0x%x fixed=%u pps=%u prog=%u full20=%u cap_mv=%u\n",
   "692": "[UFCS] refused %s cmd=%d id=%d: %s (%d)\n",
   "693": "[UFCS] exit %s after %u ms vbus=%d\n",
-  "694": "[UFCS] busy: Request again in %u ms\n"
+  "694": "[UFCS] busy: Request again in %u ms\n",
+  "695": "[RMT] pd request busy: %s\n"
  }
 }

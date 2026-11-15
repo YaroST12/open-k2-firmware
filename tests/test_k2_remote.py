@@ -449,6 +449,29 @@ class Decoders(unittest.TestCase):
         e = kr.RemoteError(kr.STATUS_BUSY, kr.CMD_EMARKER_PROBE, b"")
         self.assertIn("not passive", str(e))
 
+    def test_pd_request_busy_names_the_gate_once(self):
+        # 2026-11-15 UGREEN QA: "busy (busy (identify running))" for a request refused while the previous one was in flight.
+        for why, word in ((1, "charger test"), (2, "legacy"), (3, "identify"), (4, "probe"), (5, "re-announcing"),
+                          (6, "in flight")):
+            text = str(kr.RemoteError(kr.STATUS_BUSY, kr.CMD_PD_REQUEST, bytes([kr.PD_ERR_BUSY, why])))
+            self.assertIn(word, text)
+            self.assertEqual(text.count("busy"), 1, text)
+        # an older firmware (one byte) and the other PD commands: the status name only, never "busy (busy)"
+        for cmd in (kr.CMD_PD_REQUEST, kr.CMD_PD_RESET, kr.CMD_PD_RELEASE, kr.CMD_PD_ATTACH):
+            self.assertEqual(str(kr.RemoteError(kr.STATUS_BUSY, cmd, bytes([kr.PD_ERR_BUSY]))), f"command {cmd} failed: busy")
+        # a non-busy refusal still carries its pd::Err text
+        self.assertIn("live sink", str(kr.RemoteError(kr.STATUS_BAD_ARG, kr.CMD_PD_REQUEST, bytes([kr.PD_ERR_INLINE]))))
+
+    def test_busy_why_names_match_the_firmware(self):
+        import re
+        hdr = (ROOT / "include/k2/pd/pd_sink.hpp").read_text()
+        enum = re.search(r"enum class BusyWhy[^{]*\{([^}]*)\}", hdr).group(1).split(",")
+        src = (ROOT / "src/pd/pd_sink.cpp").read_text()
+        body = src[src.index("const char* busy_why_name"):]
+        body = body[:body.index('return "?";')]
+        self.assertEqual(re.findall(r'return "((?:[^"\\]|\\.)*)";', body), kr.BUSY_WHYS)
+        self.assertEqual(len(enum), len(kr.BUSY_WHYS))
+
     def test_direction_and_magnitude_readout(self):
         def st(ma, mw):
             return {"vbus_mv": 20000, "current_ma": ma, "power_mw": mw, "energy_mwh": 1,

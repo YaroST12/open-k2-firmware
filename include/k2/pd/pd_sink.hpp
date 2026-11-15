@@ -91,6 +91,11 @@ std::uint32_t rdo_avs(std::uint8_t pos, std::uint16_t mv, std::uint16_t ma, bool
 enum class Err : std::uint8_t { Ok, NoCaps, BadPos, OverCap, BadVoltage, Inline, Busy, BadChoice };
 const char* err_name(Err e);
 
+// Why a Busy refusal (Err::Busy) was given: it rides PD_REQUEST's reply as an optional second payload byte, so the
+// err enum stays as it is. Append only: k2_remote.py, k2proto.js and k2.html carry the names in this order.
+enum class BusyWhy : std::uint8_t { None, Test, Legacy, Identify, Probe, Prepare, Negotiating };
+const char* busy_why_name(BusyWhy w);
+
 struct Choice {
     std::uint8_t pos = 0;      // 1-based PDO position; 0 = only enter EPR mode and read the list
     std::uint16_t mv = 0;      // PPS / AVS target (0 = the PDO maximum below the cap)

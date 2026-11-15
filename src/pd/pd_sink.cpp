@@ -93,6 +93,19 @@ const char* err_name(Err e) {
     return "?";
 }
 
+const char* busy_why_name(BusyWhy w) {
+    switch (w) {
+        case BusyWhy::None: return "";
+        case BusyWhy::Test: return "a charger test or tool owns the port";
+        case BusyWhy::Legacy: return "legacy unit running (PD-silent)";
+        case BusyWhy::Identify: return "identify running";
+        case BusyWhy::Probe: return "probe running";
+        case BusyWhy::Prepare: return "re-announcing the source caps first";
+        case BusyWhy::Negotiating: return "negotiation in flight (previous request not settled)";
+    }
+    return "?";
+}
+
 const char* state_name(SinkState s) {
     switch (s) {
         case SinkState::Idle: return "idle";

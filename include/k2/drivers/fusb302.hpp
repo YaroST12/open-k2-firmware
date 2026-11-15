@@ -355,6 +355,8 @@ bool sink_soft_reset();
 std::uint32_t caps_count();
 // A charger-test legacy unit holds the line PD-silent (legacy_only(true)): a rescan changes nothing then.
 bool legacy_only_active();
+// Why sink_request() would answer Err::Busy right now (the same gates, in the same order); BusyWhy::None when it would not.
+pd::BusyWhy busy_why();
 
 // Identify the port partner (SOP Discover Identity / SVIDs / Modes, Get_Sink_Cap, Get_Status,
 // Get_Revision), only on an idle CC line. False when refused: no CC, or inline (even when

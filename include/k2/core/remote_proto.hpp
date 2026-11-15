@@ -571,7 +571,7 @@ enum class Cmd : uint8_t {
     // Active PD (wave 2C). Every one of them is refused inline; a request above 5 V needs the
     // confirm flag (Status::NeedConfirm without it). Ids 0x31/0x32 belong to DebugFault/Fc.
     IdentifyDevice = 0x40,  // [op] 0 status, 1 start, 2 start (same as 1; the inline refusal has no confirm) -> IdentifySnapshot
-    PdRequest = 0x41,       // [pos, flags (bit0 confirm, bit1 over-load lab-only), mv u16, ma u16] -> [pd::Err]
+    PdRequest = 0x41,       // [pos, flags (bit0 confirm, bit1 over-load lab-only), mv u16, ma u16] -> [pd::Err] or, for a Busy refusal, [pd::Err::Busy, pd::BusyWhy]
     PdReset = 0x42,         // optional [flags]: bit0 confirm, bit1 inline lab-only (kPdFlagResetInline, needs bit0; refused while a charger test runs) -> [pd::Err]
     PdTriggerStatus = 0x43, // -> PdTriggerSnapshot
     PdRelease = 0x44,       // back to 5 V (Request PDO 1)
@@ -1235,7 +1235,8 @@ struct IdentitySnapshot {
 };
 
 // Result of a trigger operation: the status the dispatcher answers with and the pd::Err value.
-struct PdOpResult { Status status = Status::Ok; uint8_t err = 0; };
+// `why` (pd::BusyWhy, 0 = none) is the optional second PD_REQUEST payload byte of a Busy refusal.
+struct PdOpResult { Status status = Status::Ok; uint8_t err = 0; uint8_t why = 0; };
 // Result of the phase-1 lab hand-back: the verdict (pd::HandbackVerdict) rides the reply payload, allowed or refused.
 struct HandbackResult { Status status = Status::Ok; uint8_t verdict = 0; };
 struct PdTriggerSnapshot {
@@ -1893,7 +1894,8 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
                                                    (p[1] & kPdFlagConfirm) != 0, (p[1] & kPdFlagOverLoad) != 0);
         if (res.status == Status::Ok && (p[0] != 1 || detail::rd16(&p[2]) > kFcSafeMv)) backend.lease_arm();   // above 5 V
         buf[0] = res.err;
-        return reply(res.status, std::span<const uint8_t>(buf.data(), 1));
+        buf[1] = res.why;   // pd::BusyWhy, sent only when set: older readers look at byte 0
+        return reply(res.status, std::span<const uint8_t>(buf.data(), res.why != 0 ? 2 : 1));
     }
     case Cmd::PdReset: {
         if (p.size() > 1) return reply(Status::BadLength);

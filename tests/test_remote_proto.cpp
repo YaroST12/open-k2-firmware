@@ -2321,6 +2321,14 @@ static void test_active_pd_commands() {
     run(f, request(0x41, 4, {9, 1, 0, 0, 0, 0}), r);
     check_header(r, 0x41, 4, Status::BadArg, 1);
     check_bytes(r, kRspHeader, {3});
+    f.rq_result = {Status::Busy, 6, 6};                  // a refusal that names its gate: the err byte, then pd::BusyWhy
+    run(f, request(0x41, 4, {9, 1, 0, 0, 0, 0}), r);
+    check_header(r, 0x41, 4, Status::Busy, 2);
+    check_bytes(r, kRspHeader, {6, 6});
+    f.rq_result = {Status::Busy, 6};                     // no reason known: the one-byte reply of before
+    run(f, request(0x41, 4, {9, 1, 0, 0, 0, 0}), r);
+    check_header(r, 0x41, 4, Status::Busy, 1);
+    f.rq_result = {};
     run(f, request(0x41, 5, {1, 0}), r);                 // short payload
     check_header(r, 0x41, 5, Status::BadLength, 0);
     // PD_RESET takes an optional flag byte (bit0 confirm, bit1 inline lab-only, kPdFlagResetInline); PD_RELEASE takes none

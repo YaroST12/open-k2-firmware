@@ -606,7 +606,13 @@ remote::PdOpResult Remote::pd_request(uint8_t pos, uint16_t mv, uint16_t ma, boo
                  static_cast<int>(ma), confirm ? 1 : 0, over_load ? 1 : 0);
     const Ui::TriggerOutcome o = ui_.trigger({pos, mv, ma}, systick::millis(), confirm, over_load);
     if (o.need_confirm) return {remote::Status::NeedConfirm, 0};
-    return pd_result(o.err);
+    remote::PdOpResult r = pd_result(o.err);
+    if (o.err == pd::Err::Busy) {   // name the gate: the status alone cannot tell a running test from a request still in flight
+        const pd::BusyWhy why = ui_.ports_busy() ? pd::BusyWhy::Test : fusb302::busy_why();
+        r.why = static_cast<uint8_t>(why);
+        K2LOG("[RMT] pd request busy: %s\n", pd::busy_why_name(why));
+    }
+    return r;
 }
 
 remote::PdOpResult Remote::pd_release() {

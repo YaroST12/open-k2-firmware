@@ -208,8 +208,12 @@ def page_name(i):
 
 # include/k2/pd/pd_sink.hpp / pd_identify.hpp enums, in order
 PD_ERRS = ["ok", "no source caps", "bad PDO position", "over the voltage cap", "voltage outside the PDO range",
-           "inline: a live sink is attached", "busy (identify running)"]
+           "inline: a live sink is attached", "busy", "PDO advertises no current"]
 PD_ERR_INLINE = PD_ERRS.index("inline: a live sink is attached")   # pd::Err::Inline, carried by refusals' payload byte 0
+PD_ERR_BUSY = PD_ERRS.index("busy")   # pd::Err::Busy: the status name already says it, so the text adds only the reason below
+# pd::BusyWhy in order (include/k2/pd/pd_sink.hpp): the optional second payload byte of a refused PD_REQUEST
+BUSY_WHYS = ["", "a charger test or tool owns the port", "legacy unit running (PD-silent)", "identify running", "probe running",
+             "re-announcing the source caps first", "negotiation in flight (previous request not settled)"]
 # pd::HandbackVerdict in order: the reply payload byte of CMD_PD_HANDBACK (allowed or the refusal reason)
 # pd::InlineCause in order (include/k2/pd/inline_cause.hpp, inline_cause_name): what latched the inline state
 INLINE_CAUSES = ["none", "load", "sink request", "vbus rise", "foreign vbus", "far rd"]
@@ -322,7 +326,10 @@ class RemoteError(RuntimeError):
         if cmd == CMD_EMARKER_PROBE and status == STATUS_BAD_ARG and payload and 0 < payload[0] < len(RA_PROBE_ARG_ERRORS):
             text += f" ({RA_PROBE_ARG_ERRORS[payload[0]]})"
         if cmd in (CMD_PD_REQUEST, CMD_PD_RESET, CMD_PD_RELEASE, CMD_PD_ATTACH) and payload and payload[0] < len(PD_ERRS) and payload[0]:
-            text += f" ({PD_ERRS[payload[0]]})"
+            if payload[0] != PD_ERR_BUSY:
+                text += f" ({PD_ERRS[payload[0]]})"
+            elif cmd == CMD_PD_REQUEST and len(payload) > 1 and 0 < payload[1] < len(BUSY_WHYS):
+                text += f" ({BUSY_WHYS[payload[1]]})"
         if cmd == CMD_EM_LIB and status == STATUS_BUSY:
             text += " (a charger test or an FC release owns the link: the library write waits for it)"
         if cmd == CMD_STORE and status == STATUS_BUSY:
