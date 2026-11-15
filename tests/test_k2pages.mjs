@@ -255,3 +255,30 @@ test("an armed action expires by itself after five seconds and the footer return
   await page.until(`/Armed/.test(${$("k-foot")}.textContent)`, 3000, "armed");
   await page.until(`/Ready/.test(${$("k-foot")}.textContent)`, 7000, "expired");
 });
+
+// A phone-width layout: the voltage stepper (-1 V -0.1 value +0.1 +1 V) must stay on one line per button and inside its card.
+test("PD at 360 px: every stepper button label is one line and no stepper row spills out of the card", { skip }, async () => {
+  const p2 = await launch({ width: 360, height: 900, mobile: true });
+  try {
+    await p2.goto(srv.url + "#/pd");
+    await p2.until('document.querySelectorAll("#pt-body .k-rl-row").length === 3', 10000, "the PDO list");
+    await p2.eval("document.querySelectorAll('#pt-body .k-rl-row')[2].click()");   // the PPS row: both steppers, four voltage buttons
+    await p2.until('document.querySelectorAll("#pt-body .k-btn[data-step]").length >= 6', 3000, "the stepper buttons");
+    const m = await p2.eval(`(function () {
+      var wrapped = [], spill = [];
+      Array.prototype.forEach.call(document.querySelectorAll("#pt-body .k-btn[data-step]"), function (b) {
+        var r = document.createRange(); r.selectNodeContents(b);
+        if (r.getClientRects().length !== 1) wrapped.push(b.textContent);
+      });
+      Array.prototype.forEach.call(document.querySelectorAll("#pt-body .k-step"), function (s) {
+        var box = s.getBoundingClientRect();
+        Array.prototype.forEach.call(s.children, function (c) { if (c.getBoundingClientRect().right > box.right + 0.5) spill.push(c.textContent); });
+        if (s.scrollWidth > s.clientWidth) spill.push("row " + s.getAttribute("aria-label"));
+      });
+      return { wrapped: wrapped, spill: spill, page: document.documentElement.scrollWidth, view: innerWidth };
+    })()`);
+    assert.deepEqual(m.wrapped, [], "a label broke onto two lines");
+    assert.deepEqual(m.spill, [], "a stepper child sticks out of its row");
+    assert.ok(m.page <= m.view, "the page scrolls sideways: " + m.page + " > " + m.view);
+  } finally { await p2.close(); }
+});
