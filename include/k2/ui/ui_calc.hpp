@@ -173,6 +173,7 @@ class StrBufBase {
 public:
     void clear();
     StrBufBase &put(std::string_view s);  // appends what fits into the first cap-1 characters, keeps the text NUL-terminated
+    StrBufBase &put(const char *s);       // the same for a NUL-terminated string (a literal: one pointer at the call site)
     StrBufBase &put_char(char c);
     StrBufBase &put_u32(uint32_t v, int width = 0);
     StrBufBase &put_u32_compact(uint32_t v);
@@ -209,6 +210,7 @@ public:
     StrBuf(const StrBuf &) = default;
     StrBuf &operator=(const StrBuf &) = default;
     [[gnu::always_inline]] StrBuf &put(std::string_view s) { StrBufBase::put(s); return *this; }
+    [[gnu::always_inline]] StrBuf &put(const char *s) { StrBufBase::put(s); return *this; }
     [[gnu::always_inline]] StrBuf &put_char(char c) { StrBufBase::put_char(c); return *this; }
     [[gnu::always_inline]] StrBuf &put_u32(uint32_t v, int width = 0) { StrBufBase::put_u32(v, width); return *this; }
     [[gnu::always_inline]] StrBuf &put_u32_compact(uint32_t v) { StrBufBase::put_u32_compact(v); return *this; }

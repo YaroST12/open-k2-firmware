@@ -181,6 +181,15 @@ StrBufBase &StrBufBase::put(std::string_view s) {
     b[n_] = '\0';
     return *this;
 }
+StrBufBase &StrBufBase::put(const char *s) {
+    char *b = data();
+    for (; *s; ++s) {
+        if (n_ + 1 >= cap_) break;
+        b[n_++] = *s;
+    }
+    b[n_] = '\0';
+    return *this;
+}
 StrBufBase &StrBufBase::put_char(char c) {
     if (n_ + 1 < cap_) {
         char *b = data();
