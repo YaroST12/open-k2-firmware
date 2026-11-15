@@ -108,7 +108,7 @@ static void test_scp_caps() {
     CHECK_EQ(v12.min_mv, 3300);
     CHECK_EQ(v12.max_mv, 12000);
     CHECK_EQ(v12.max_ma, 2500);
-    // The same USB-A port in the 2026-11-15 runs (every session, retried or not): 0x92/0x93 read 0xB7/0xCA, the rest as above.
+    // A CUKTECH USB-A port (2026-11 runs, every session, retried or not): 0x92/0x93 read 0xB7/0xCA, the rest as the dump above.
     const auto port2 = accp::scp_caps_decode({0x99, 0x99, 0xB7, 0xCA, 0x5E, 0x99, 0x14, 0x32});
     CHECK(port2.valid);
     CHECK_EQ(port2.min_mv, 5500);

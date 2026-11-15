@@ -5431,7 +5431,8 @@ static void test_a_retried_first_scp_row_replans_like_an_unretried_one() {
     const auto caps = scp_caps_of(5500, 10000, 300, 2500);
     Fake clean; clean.caps = {}; clean.serve_caps = &caps;
     ct::Runner rc(clean); run_unit(clean, rc, A::Scp);
-    Fake cut; cut.caps = {}; cut.serve_caps = &caps; cut.serve_caps_from = 2; cut.cut_on_requests = {1};   // the cut ends the first attempt before the limits are read
+    for (const int from : {2, 1}) {   // 2: the cut ends the first attempt before the limits are read; 1: after they were
+    Fake cut; cut.caps = {}; cut.serve_caps = &caps; cut.serve_caps_from = from; cut.cut_on_requests = {1};
     ct::Runner rr(cut); run_unit(cut, rr, A::Scp);
     CHECK_EQ(cut.cuts_seen, 1);
     CHECK_EQ(rr.evidence().cut_retries, 1);
@@ -5444,6 +5445,7 @@ static void test_a_retried_first_scp_row_replans_like_an_unretried_one() {
     CHECK_EQ(int(rows[1].v), int(ct::Verdict::Pass));
     for (size_t i = 2; i < rows.size(); ++i) { CHECK_EQ(int(rows[i].v), int(ct::Verdict::Skip)); CHECK_EQ(int(rows[i].r), int(ct::Reason::NoOffer)); }   // 4.5 V < 5.5 V, 4.5 A > 2.5 A: the reported limits, retried or not
     for (int ma : cut.fc_mas) CHECK_EQ(ma <= 2500, true);
+    }
 }
 static void test_a_retried_first_scp_row_keeps_the_rows_a_wide_list_offers() {
     const auto caps = scp_caps_of(3300, 20000, 1000, 6000);   // a 20 V 6 A adapter: every row is offered, so every row must run after the retry
@@ -5457,6 +5459,28 @@ static void test_a_retried_first_scp_row_keeps_the_rows_a_wide_list_offers() {
     const auto rows = rows_of(rr, A::Scp);
     CHECK_EQ(rows.size(), 5u);
     for (const auto& s : rows) CHECK_EQ(int(s.v), int(ct::Verdict::Pass));   // 5 V, 10 V, 20 V, 4.5 V 5 A, 5 V 4.5 A all ran
+}
+// What reaches the run through finish_row only once (the family's shared result, the ident, the ceiling stage) comes from the retry's
+// session, never from the held first attempt: a family whose first row was cut and retried ends exactly like one that was not.
+static void test_a_retried_first_vooc_family_row_ends_like_an_unretried_one() {
+    for (const bool cut_it : {false, true}) {
+        Fake f; f.caps = {}; f.ceil_judged_ms = 3000;
+        if (cut_it) f.cut_on_requests = {1};
+        ct::Runner r(f);
+        CHECK_EQ(r.start(f.caps, {.selected = ct::bit(A::Vooc) | ct::bit(A::SuperVooc) | ct::bit(A::SuperVooc65), .svooc_cap = sc::Mode::On, .level = ct::Level::Deep}, f.in, true), ct::Reason::None);
+        const int want = cut_it ? 2 : 1;   // the request whose session hears the ident
+        CHECK_EQ(run_until(f, r, [&] { return f.fc_requests >= want; }, 60000), true);
+        f.in.fc_state = fc::State::Failed; f.in.fc_fail = fc::Fail::Detected; f.in.fc_tries = 1; f.in.fc_ident = 0xAC; f.in.vbus_mv = 5000;
+        CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 180000), true);
+        CHECK_EQ(f.cuts_seen, cut_it ? 1 : 0);
+        CHECK_EQ(r.evidence().cut_retries, cut_it ? 1 : 0);
+        CHECK_EQ(int(r.evidence().vooc_ident), 0xAC);
+        CHECK_EQ(f.ceil_starts, 1);   // the ceiling stage follows the detected family once
+        CHECK_EQ(int(r.evidence().svooc_end), int(sc::End::Judged));
+        unsigned n = 0;
+        for (const auto& s : r.steps()) { ++n; CHECK_EQ(s.verdict, ct::Verdict::Pass); CHECK_EQ(int(s.detail), int(fc::Fail::Detected)); }   // the shared result reaches every family row
+        CHECK_EQ(n >= 3u, true);
+    }
 }
 static void test_a_retried_first_ufcs_row_replans_like_an_unretried_one() {
     const auto caps = ufcs_caps_of({ufcs_mode(1, 3400, 5500, 1000, 2000), ufcs_mode(2, 5500, 11000, 1000, 3000)});
@@ -7843,7 +7867,7 @@ int main() {
     test_avs_current_and_bad_offers(); test_pd_plan_follows_a_list_that_grows_during_the_attach(); test_reannounced_identical_caps_are_not_a_change();
     test_measured_dwell_and_plan_capacity();
     test_usb_a_sag_tail_session_is_not_source_lost(); test_usb_a_sag_tail_waits_for_vbus_to_climb(); test_usb_a_sag_tail_with_dead_or_low_vbus_is_still_lost(); test_session_change_in_baseline_without_a_sag_is_still_lost(); test_usb_a_midrow_session_opens_the_adopt_window(); test_usb_a_sag_dip_under_1v_inside_the_window_waits();
-    test_cut_in_the_row_then_a_clean_retry_passes(); test_a_retried_first_scp_row_replans_like_an_unretried_one(); test_a_retried_first_scp_row_keeps_the_rows_a_wide_list_offers(); test_a_retried_first_ufcs_row_replans_like_an_unretried_one(); test_a_second_cut_in_the_retry_is_a_skip_not_a_fail(); test_a_cut_that_reads_no_response_does_not_skip_the_family(); test_a_loss_that_does_not_come_back_in_the_window_is_a_fail();
+    test_cut_in_the_row_then_a_clean_retry_passes(); test_a_retried_first_scp_row_replans_like_an_unretried_one(); test_a_retried_first_scp_row_keeps_the_rows_a_wide_list_offers(); test_a_retried_first_ufcs_row_replans_like_an_unretried_one(); test_a_retried_first_vooc_family_row_ends_like_an_unretried_one(); test_a_second_cut_in_the_retry_is_a_skip_not_a_fail(); test_a_cut_that_reads_no_response_does_not_skip_the_family(); test_a_loss_that_does_not_come_back_in_the_window_is_a_fail();
     test_a_dip_shorter_than_the_minimum_is_no_cut(); test_a_protocol_failure_after_a_clean_comeback_is_a_fail(); test_the_7s_cut_sequence_over_the_5v_steps_of_the_cuktech_run(); test_a_fall_in_a_raised_row_is_no_cut_casualty();
     test_custom_unit_list_runs_in_order(); test_pd_unit_attaches_with_a_contract(); test_a_failed_unit_does_not_stop_the_run();
     test_default_unit_order_is_vendor_modes_then_pd_then_legacy(); test_default_order_runs_vendor_modes_before_pd_before_legacy(); test_pd_between_vendor_and_legacy_units(); test_pd_replan_in_the_middle_keeps_the_rows_in_order(); test_consecutive_legacy_units_share_one_attach(); test_legacy_session_that_sees_pd_traffic_is_renewed(); test_silent_ufcs_source_reports_no_response_not_pd_active(); test_legacy_waits_between_units();
