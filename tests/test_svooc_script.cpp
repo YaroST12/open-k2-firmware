@@ -437,9 +437,11 @@ void test_probe_ladder_and_ceiling() {
 }
 
 // Probe keeps the first escape's gap for every escape: the adapter ends a no-load session about 3.3 s after the wake, and at the
-// Phone's 34 polls only 00F and 028 went out before that (hardware 2026-11-15, OnePlus 120 W). Escapes on the 12th, 24th, 36th
-// 82 poll after the ramp end (0.52 s apart); the fourth ask (06D) is the third escape's, about 1.6 s after the ramp-end ask.
-void test_probe_escapes_every_12_polls() {
+// Phone's 34 polls only 00F and 028 went out before that (hardware 2026-11-15, OnePlus 120 W), and a 12-poll gap put 06D at
+// about 3.25 s after the wake, with no room for its kept polls. Escapes on the 12th, 18th, 24th 82 poll after the ramp end
+// (the first at the phone's 0.52 s, then 0.26 s apart); the fourth ask (06D) is the third escape's, about 1.0 s after the
+// ramp-end ask, and its kAcceptPolls polls fit before the stop.
+void test_probe_escapes_every_6_polls_after_the_first() {
     svooc::Responder r = handshaken(svooc::Profile::Probe);
     r.on_command(0x94);
     for (int i = 0; i < 5; ++i) r.on_command(0x84);
@@ -457,13 +459,18 @@ void test_probe_escapes_every_12_polls() {
     }
     CHECK_EQ(n, 3);
     CHECK_EQ(esc_poll[0], 12);                        // the phone's first escape, unchanged
-    CHECK_EQ(esc_poll[1], 24);                        // 12 polls later, not 34
-    CHECK_EQ(esc_poll[2], 36);
+    CHECK_EQ(esc_poll[1], 18);                        // 6 polls later, not 12 or 34
+    CHECK_EQ(esc_poll[2], 24);
+    for (int i = 0; i < svooc::kAcceptPolls; ++i, t += 43) r.on_command(0x82, t);  // the top ask's kept polls
     CHECK_EQ(int(r.asks().size()), 4);
     const std::uint32_t last_ms = r.asks()[3].t_ms - t0;
-    CHECK(last_ms >= 1500 && last_ms <= 1800);        // the top ask, about 1.6 s after the ramp end (34 polls would be 4.7 s)
+    CHECK(last_ms >= 900 && last_ms <= 1200);         // the top ask, about 1.0 s after the ramp end (34 polls would be 4.7 s)
+    CHECK(last_ms + svooc::kAcceptPolls * 43 + 43 <= 1500);  // ... and its kept polls end well inside the 3.3 s stop (ramp end is 1.5 s after the wake)
     CHECK_EQ(r.asks()[3].word, 0x06D);
-    CHECK_EQ(int(r.asks()[0].after), 12);             // each lower rung stood 12 82 polls (the escape poll included)
+    CHECK_EQ(int(r.asks()[0].after), 12);             // the first rung stood 12 82 polls (the escape poll included)
+    CHECK_EQ(int(r.asks()[1].after), 6);              // later rungs 6
+    CHECK_EQ(int(r.asks()[2].after), 6);
+    CHECK(int(r.asks()[3].after) >= svooc::kAcceptPolls);  // the top rung is accepted before the stop
 }
 
 void test_ceiling_decode() {
@@ -528,7 +535,7 @@ int main() {
     test_phone_82_sequence_and_escapes();
     test_phone_session_runs_long();
     test_probe_ladder_and_ceiling();
-    test_probe_escapes_every_12_polls();
+    test_probe_escapes_every_6_polls_after_the_first();
     test_ceiling_decode();
     test_profile_clamp();
     test_i86_parameter_and_clamp();
