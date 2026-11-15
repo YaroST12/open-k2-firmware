@@ -1488,12 +1488,16 @@ var K2Proto = (function () {
   var PDSPEC_STARTS = ["ok", "ports busy", "no PD source", "link inline", "K2 powered by the charger", "no power monitor", "already running"];
   var PDSPEC_STOPS = ["running", "done", "cancelled", "VBUS over the limit", "load on the output", "source did not come back", "step stuck",
                       "no PD contract", "link inline", "run time cap"];
-  var PDSPEC_FAMILIES = ["Transitions", "PPS steps", "PPS timeout", "EPR timeout", "Hard Reset", "Detach"];
+  var PDSPEC_FAMILIES = ["Transitions", "PPS/AVS", "PPS timeout", "EPR timeout", "Hard Reset", "Detach"];
   var PDSPEC_SKIPS = ["-", "not offered", "one fixed level", "no PPS", "no EPR", "no EPR cable proof", "capture busy", "level refused",
-                      "run stopped", "not reached", "K2 on the charger", "no data", "not selected"];
+                      "run stopped", "not reached", "K2 on the charger", "no data", "not selected", "no AVS"];
   var PDSPEC_VERDICTS = ["pending", "pass", "fail", "skip", "unverified"];
-  var PDSPEC_FAMILY_MASK = 0x3F;
-  // key, label, kind, unit, weight, inferred: kDefs of result.hpp
+  var PDSPEC_CAPS_NOTES = ["no PPS, no AVS", "PPS without AVS: allowed before PD R3.3", "PPS + AVS present", "AVS without PPS"];
+  // The step of programmable classes 0..2 per kind (plan.hpp pps[3] / avs[3]); class 3 is the slams.
+  var PDSPEC_STEPS = { pps: [20, 100, 500], avs: [100, 500, 1000] };
+  var PDSPEC_PS_BITS = [[1, "Not_Supported"], [2, "no answer"], [4, "voltage"], [8, "current"], [16, "OMF"], [32, "flags"]];   // pdspec::kPs*
+  var PDSPEC_FAMILY_MASK = 0x3F, PDSPEC_FLAG_FULL20 = 1 << 1;   // remote_proto.hpp kPdSpecFamilyMask, kPdSpecFlagFull20
+  // key, label, kind, unit, weight, inferred: kDefs of result.hpp (wire order; PSC1 blobs carry the first 21)
   var PDSPEC_CHECKS = [
     ["accept_time", "Accept", "max", "us", 1], ["ps_rdy_time", "PS_RDY time", "max", "us", 2], ["src_start", "VBUS start", "min", "us", 1],
     ["ps_rdy_early", "PS_RDY early", "max", "mv", 3], ["ps_rdy_low", "PS_RDY low", "min", "mv", 3], ["rise_time", "Rise time", "max", "us", 2],
@@ -1501,9 +1505,15 @@ var K2Proto = (function () {
     ["pps_monotonic", "PPS monotonic", "min", "mv", 3], ["pps_accuracy", "PPS accuracy", "range", "mv", 2],
     ["pps_settle", "PPS settle", "max", "us", 1, true], ["pps_keepalive", "PPS timeout", "range", "ms", 5],
     ["epr_keepalive", "EPR timeout", "range", "ms", 5], ["hr_safe0v", "HR to 0 V", "max", "ms", 5], ["hr_recover", "HR off time", "range", "ms", 3],
-    ["hr_turn_on", "HR turn-on", "max", "ms", 3], ["hr_caps", "HR caps", "max", "ms", 2], ["detach_safe0v", "Detach to 0 V", "max", "ms", 5, true],
-    ["reattach", "Re-attach", "max", "ms", 10, true], ["source_reset", "Source reset", "max", "count", 20]
+    ["hr_turn_on", "HR turn-on", "max", "ms", 3], ["hr_caps", "HR caps", "max", "ms", 2], ["detach_safe0v", "Detach to 0 V", "max", "ms", 5],
+    ["reattach", "Re-attach", "max", "ms", 10], ["source_reset", "Source reset", "max", "count", 20],
+    ["pps_band", "PPS in band", "max", "us", 2], ["pps_ps_rdy", "PPS PS_RDY", "max", "us", 2], ["pps_overshoot", "PPS overshoot", "range", "mv", 3],
+    ["pps_transient", "PPS transient", "max", "us", 2], ["pps_status", "PPS_Status", "max", "count", 3], ["pps_status_time", "PPS_Status t", "max", "us", 1],
+    ["avs_monotonic", "AVS monotonic", "min", "mv", 3], ["avs_accuracy", "AVS accuracy", "range", "mv", 2], ["avs_band", "AVS in band", "max", "us", 2],
+    ["avs_ps_rdy", "AVS PS_RDY", "max", "us", 2], ["avs_overshoot", "AVS overshoot", "range", "mv", 3], ["avs_transient", "AVS transient", "max", "us", 2],
+    ["reattach_caps", "Reattach caps", "max", "ms", 2]
   ].map(function (r) { return { key: r[0], label: r[1], kind: r[2], unit: r[3], weight: r[4], inferred: !!r[5] }; });
+  var PDSPEC_PSC1_CHECKS = 21, PDSPEC_PASS_AVS = 0x80;
   var PDSPEC_NEVER = 99999999, PDSPEC_OPEN = 1000000;
   var PDSPEC_TR_FLAGS = [[1, "epr"], [2, "live band"], [4, "refused"], [8, "no capture"], [16, "suspect stamp"]];
   function pdSpecName(t, i) { return i < t.length ? t[i] : "#" + i; }
@@ -1517,14 +1527,24 @@ var K2Proto = (function () {
   }
   function i32(b, i) { return rd32(b, i) | 0; }
   function s16(b, i) { return (b[i] | b[i + 1] << 8) << 16 >> 16; }
-  // The blob (tools/pdspec_blob.py is the reference): magic "PSC1", a 16 byte header, one 20 byte aggregate per check, 32 bytes of
-  // timers, 20 bytes per transition, 14 per PPS point.
+  // The PPS_Status fault bits as words ("clean" for none).
+  function pdSpecPsText(bits) {
+    return PDSPEC_PS_BITS.filter(function (f) { return bits & f[0]; }).map(function (f) { return f[1]; }).join(", ") || "clean";
+  }
+  function pdSpecStepText(kind, cls) { return cls >= 3 ? "slams" : PDSPEC_STEPS[kind][cls] + " mV"; }
+  // The blob (tools/pdspec_blob.py is the reference): magic "PSC1" or "PSC2", a 16 byte header, one 20 byte aggregate per check, 32 bytes
+  // of timers, 20 bytes per transition, then 14 per PPS point (PSC1: 21 checks) or 28 per programmable pass (PSC2: header byte 13 is the
+  // check count, 14 the caps note, 15 the options, bit 0 = the 20 mV class swept the whole window).
   function decodePdSpecBlob(b) {
-    var n = PDSPEC_CHECKS.length;
-    if (b.length < 16 || b[0] !== 0x50 || b[1] !== 0x53 || b[2] !== 0x43 || b[3] !== 0x31) throw new FrameError("not a PD Spec Check blob (magic PSC1)");
-    var nTr = b[6], nPps = b[7], total = 16 + n * 20 + 32 + nTr * 20 + nPps * 14;
+    if (b.length < 16 || b[0] !== 0x50 || b[1] !== 0x53 || b[2] !== 0x43 || (b[3] !== 0x31 && b[3] !== 0x32)) {
+      throw new FrameError("not a PD Spec Check blob (magic PSC1 / PSC2)");
+    }
+    var version = b[3] - 0x30, nTr = b[6], nRec = b[7];
+    var n = version === 1 ? PDSPEC_PSC1_CHECKS : b[13];
+    if (n > PDSPEC_CHECKS.length) throw new FrameError("PD Spec Check blob has " + n + " checks, this page knows " + PDSPEC_CHECKS.length);
+    var rec = version === 1 ? 14 : 28, total = 16 + n * 20 + 32 + nTr * 20 + nRec * rec;
     if (b.length < total) throw new FrameError("PD Spec Check blob is " + b.length + " bytes, its header needs " + total);
-    var checks = PDSPEC_CHECKS.map(function (d, k) {
+    var checks = PDSPEC_CHECKS.slice(0, n).map(function (d, k) {
       var o = 16 + k * 20, fails = u16(b, o + 6), cnt = u16(b, o + 4);
       return { key: d.key, label: d.label, kind: d.kind, unit: d.unit, weight: d.weight,
                verdict: pdSpecName(PDSPEC_VERDICTS, b[o]), skip: b[o + 1] ? pdSpecName(PDSPEC_SKIPS, b[o + 1]) : null,
@@ -1534,6 +1554,7 @@ var K2Proto = (function () {
     var o = 16 + n * 20, w = [];
     for (var i = 0; i < 8; i++) w.push(rd32(b, o + 4 * i));
     var t16 = function (v) { return v === 0xFFFF ? null : v; }, t32 = function (v) { return v === 0xFFFFFFFF ? null : v; };
+    var t01 = function (v) { return v === 0xFFFF ? null : v / 10; };
     var timers = { pps_ka_ms: t32(w[0]), epr_ka_ms: t32(w[1]), hr_from_mv: w[2] & 0xFFFF, hr_off_ms: t16(w[2] >>> 16), hr_dark_ms: t16(w[3] & 0xFFFF),
                    hr_on_ms: t16(w[3] >>> 16), hr_caps_ms: t16(w[4] & 0xFFFF), det_from_mv: w[4] >>> 16, det_off_ms: t16(w[5] & 0xFFFF),
                    det_back_ms: t16(w[5] >>> 16), poll_gap_ms: w[6] };
@@ -1545,15 +1566,25 @@ var K2Proto = (function () {
                          accept_ms: acc === 0xFFFF ? null : acc / 10, psrdy_ms: t16(u16(b, o + 6)), start_ms: t16(u16(b, o + 8)), band_ms: t16(u16(b, o + 10)),
                          psrdy_mv: u16(b, o + 12) || null, peak_mv: u16(b, o + 14) || null, final_mv: u16(b, o + 16) || null, gap_ms: u16(b, o + 18) });
     }
-    var pps = [];
-    for (i = 0; i < nPps; i++, o += 14) {
-      pps.push({ pos: b[o], steps: b[o + 1], mono_fails: b[o + 2], acc_fails: b[o + 3], set_mv: u16(b, o + 4), worst_err_mv: s16(b, o + 6),
-                 min_delta_mv: s16(b, o + 8), max_delta_mv: s16(b, o + 10), max_settle_ms: u16(b, o + 12) / 10 });
+    var pps = [], passes = [];
+    for (i = 0; i < nRec; i++, o += rec) {
+      if (version === 1) {
+        pps.push({ pos: b[o], steps: b[o + 1], mono_fails: b[o + 2], acc_fails: b[o + 3], set_mv: u16(b, o + 4), worst_err_mv: s16(b, o + 6),
+                   min_delta_mv: s16(b, o + 8), max_delta_mv: s16(b, o + 10), max_settle_ms: u16(b, o + 12) / 10 });
+        continue;
+      }
+      var kind = b[o + 1] & PDSPEC_PASS_AVS ? "avs" : "pps", cls = b[o + 1] & 0x7F, dmin = s16(b, o + 14), over = s16(b, o + 16), st = b[o + 26];
+      passes.push({ pos: b[o], kind: kind, "class": cls, step: pdSpecStepText(kind, cls), lo_mv: u16(b, o + 4), hi_mv: u16(b, o + 6),
+                    steps: u16(b, o + 2), band_ms: t01(u16(b, o + 8)), psrdy_ms: t01(u16(b, o + 10)), worst_err_mv: s16(b, o + 12),
+                    min_delta_mv: dmin === 0x7FFF ? null : dmin, over_mv: over === -0x7FFF ? null : over, out_ms: t01(u16(b, o + 18)),
+                    fails: { band: b[o + 20], ps_rdy: b[o + 21], monotonic: b[o + 22], accuracy: b[o + 23], overshoot: b[o + 24], transient: b[o + 25] },
+                    status: st, status_text: kind === "pps" ? pdSpecPsText(st) : null });
     }
     var tally = { pass: 0, fail: 0, skip: 0, unverified: 0 };
     checks.forEach(function (c) { if (c.verdict in tally) tally[c.verdict]++; });
-    return { state: pdSpecName(PDSPEC_STATES, b[4]), stop_code: b[5], stop: pdSpecName(PDSPEC_STOPS, b[5]), score: u16(b, 8), elapsed_s: u16(b, 10),
-             release_unconfirmed: !!(b[12] & 1), tally: tally, checks: checks, timers: timers, transitions: transitions, pps: pps };
+    return { version: version, state: pdSpecName(PDSPEC_STATES, b[4]), stop_code: b[5], stop: pdSpecName(PDSPEC_STOPS, b[5]), score: u16(b, 8),
+             elapsed_s: u16(b, 10), release_unconfirmed: !!(b[12] & 1), caps_note: version === 1 ? null : pdSpecName(PDSPEC_CAPS_NOTES, b[14]),
+             full20: version !== 1 && !!(b[15] & 1), tally: tally, checks: checks, timers: timers, transitions: transitions, pps: pps, passes: passes };
   }
   // A check's value in the K2's own words: us as ms with one decimal, ms, mV as V, a count.
   function pdSpecValue(unit, v) {
@@ -1569,20 +1600,34 @@ var K2Proto = (function () {
     if (c.kind === "min" || (c.kind === "range" && c.hi >= PDSPEC_OPEN)) return ">= " + pdSpecValue(c.unit, c.lo);
     return pdSpecValue(c.unit, c.lo) + " .. " + pdSpecValue(c.unit, c.hi);
   }
-  // Where the worst value came from: a PDO pair (transition checks), an APDO point (PPS steps), a PDO or the source (timers).
-  function pdSpecAt(c, k) {
+  // Where the worst value came from (tools/pdspec_blob.py fmt_at): a PDO pair (transition checks), an APDO move (PSC2: position, step
+  // class, direction and the level asked for; PSC1: an APDO point), a PDO or the source (timers). accept_time is shared by both kinds of
+  // move: a programmable one carries the level in 100 mV in b (33 and up), a fixed one a PDO index (under 16); passes name the APDO's kind.
+  function pdSpecAt(c, k, version, passes) {
+    version = version || 2;
     var keys = PDSPEC_CHECKS.map(function (d) { return d.key; });
-    if (k < keys.indexOf("pps_monotonic")) return "PDO " + c.a + " to " + c.b;
-    if (k < keys.indexOf("pps_keepalive")) return "APDO " + c.a + ", point " + c.b;
+    var walk = k < keys.indexOf("pps_monotonic"), sharedProg = version >= 2 && walk && c.b >= 16;
+    if (walk && !sharedProg) return "PDO " + c.a + " to " + c.b;
+    var prog = sharedProg || k < keys.indexOf("pps_keepalive") || (k >= keys.indexOf("pps_band") && k <= keys.indexOf("avs_transient"));
+    if (prog && version === 1) return "APDO " + c.a + ", point " + c.b;
+    if (prog) {
+      var kind = /^avs_/.test(c.key) ? "avs" : "pps";
+      if (sharedProg) {
+        kind = "pps";
+        (passes || []).forEach(function (p) { if (p.pos === (c.a & 15)) kind = p.kind; });
+      }
+      return "APDO " + (c.a & 15) + " " + pdSpecStepText(kind, (c.a >> 4) & 7) + " " + (c.a & 0x80 ? "down" : "up") + " to " + (c.b / 10).toFixed(1) + " V";
+    }
     return c.a ? "PDO " + c.a : "the source";
   }
   K2Remote.prototype.pdSpecStatus = async function () { return decodePdSpecStatus((await this.link.call(CMD.PD_SPEC, [0])).payload); };
-  // Steps the charger through its levels, Hard Resets it and detaches it (no load, inside the PD rules): it needs `confirm`.
-  K2Remote.prototype.pdSpecStart = async function (families, confirm) {
+  // Steps the charger through its levels, Hard Resets it and detaches it (no load, inside the PD rules): it needs `confirm`. full20 sweeps
+  // the PPS 20 mV class over the whole APDO window (else three 10-step windows).
+  K2Remote.prototype.pdSpecStart = async function (families, confirm, full20) {
     if (!confirm) throw new RangeError("a PD Spec Check steps the charger through its levels, Hard Resets it and detaches it: confirm needed");
     families = families || 0;
     if (families & ~PDSPEC_FAMILY_MASK) throw new RangeError("families: a bit per family, 0x3F at most");
-    return decodePdSpecStatus((await this.link.call(CMD.PD_SPEC, [1, families, 1])).payload);
+    return decodePdSpecStatus((await this.link.call(CMD.PD_SPEC, [1, families, 1 | (full20 ? PDSPEC_FLAG_FULL20 : 0)])).payload);
   };
   K2Remote.prototype.pdSpecStop = async function () { return decodePdSpecStatus((await this.link.call(CMD.PD_SPEC, [3])).payload); };
   K2Remote.prototype.pdSpecRead = async function () {
@@ -1990,7 +2035,7 @@ var K2Proto = (function () {
     formatBbDelta: formatBbDelta, bbJson: bbJson, bbIdentity: bbIdentity, bbLink: bbLink, bbMessageRows: bbMessageRows,
     HANDBACK_VERDICTS: HANDBACK_VERDICTS, handbackText: handbackText, APPLE_REFUSALS: APPLE_REFUSALS, CARD_NAME_RE: CARD_NAME_RE,
     decodePdSpecStatus: decodePdSpecStatus, decodePdSpecBlob: decodePdSpecBlob, pdSpecValue: pdSpecValue, pdSpecLimit: pdSpecLimit, pdSpecAt: pdSpecAt,
-    PDSPEC_CHECKS: PDSPEC_CHECKS, PDSPEC_STOPS: PDSPEC_STOPS, PDSPEC_STARTS: PDSPEC_STARTS, PDSPEC_FAMILIES: PDSPEC_FAMILIES, PDSPEC_STATES: PDSPEC_STATES
+    PDSPEC_CHECKS: PDSPEC_CHECKS, PDSPEC_SKIPS: PDSPEC_SKIPS, PDSPEC_CAPS_NOTES: PDSPEC_CAPS_NOTES, PDSPEC_STEPS: PDSPEC_STEPS, pdSpecPsText: pdSpecPsText, PDSPEC_STOPS: PDSPEC_STOPS, PDSPEC_STARTS: PDSPEC_STARTS, PDSPEC_FAMILIES: PDSPEC_FAMILIES, PDSPEC_STATES: PDSPEC_STATES
   };
 })();
 if (typeof module !== "undefined" && module.exports) module.exports = K2Proto;

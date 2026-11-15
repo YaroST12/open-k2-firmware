@@ -155,7 +155,7 @@ test("pdspec: the 17-byte status block", () => {
   const s = P.decodePdSpecStatus(p);
   assert.deepEqual([s.state, s.stop, s.start, s.family, s.item, s.items, s.families], ["running", "running", "ok", "PPS timeout", 4, 9, 0x3F]);
   assert.deepEqual([s.fails, s.passes, s.skips, s.release_unconfirmed, s.score, s.elapsed_s, s.blob_len], [3, 12, 1, true, 300, 90, 832]);
-  assert.equal(s.families_text, "Transitions, PPS steps, PPS timeout, EPR timeout, Hard Reset, Detach");
+  assert.equal(s.families_text, "Transitions, PPS/AVS, PPS timeout, EPR timeout, Hard Reset, Detach");
   assert.throws(() => P.decodePdSpecStatus(new Uint8Array(16)), /too short/);
 });
 
@@ -167,9 +167,10 @@ test("pdspec: start needs confirm, sends op families flags; stop and status are 
   await assert.rejects(() => remote.pdSpecStart(0x40, true), /families/);
   await remote.pdSpecStart(0x05, true);
   await remote.pdSpecStart(0, true);
+  await remote.pdSpecStart(0x02, true, true);      // PPS 20 mV over the whole window: flags bit 1 (kPdSpecFlagFull20)
   await remote.pdSpecStop();
   await remote.pdSpecStatus();
-  assert.deepEqual(sent.map(body), [[1, 5, 1], [1, 0, 1], [3], [0]]);
+  assert.deepEqual(sent.map(body), [[1, 5, 1], [1, 0, 1], [1, 2, 3], [3], [0]]);
 });
 
 test("pdspec: start reports a refusal that rides in the status block", async () => {
@@ -178,31 +179,49 @@ test("pdspec: start reports a refusal that rides in the status block", async () 
   assert.equal(s.start, "no PD source");
 });
 
-// A blob with one transition, one PPS point: the layout of tools/pdspec_blob.py.
-function makeBlob() {
-  const T = P.PDSPEC_CHECKS, n = T.length;
+// A blob with one transition and its records, the layout of tools/pdspec_blob.py: PSC1 (21 checks, 14-byte PPS points) or PSC2
+// (n_checks, caps note and options in the header, 28-byte programmable passes).
+const u16 = (v) => [v & 255, (v >> 8) & 255];
+function makeBlob(version = 2) {
+  const T = version === 1 ? P.PDSPEC_CHECKS.slice(0, 21) : P.PDSPEC_CHECKS, n = T.length;
   const out = [];
-  const u16 = (v) => [v & 255, (v >> 8) & 255];
   const i32 = (v) => le32(v | 0);
-  out.push(...Array.from("PSC1", (c) => c.charCodeAt(0)), 2, 1, 1, 1, ...u16(700), ...u16(95), 1, 0, 0, 0);
+  const nRec = version === 1 ? 1 : 3;
+  out.push(...Array.from("PSC" + version, (c) => c.charCodeAt(0)), 2, 1, 1, nRec, ...u16(700), ...u16(95), 1,
+    version === 1 ? 0 : n, version === 1 ? 0 : 1, version === 1 ? 0 : 1);
   T.forEach((d, k) => {
     const verdict = k === 0 ? 1 : k === 1 ? 2 : k === 11 ? 4 : 3;       // pass, fail, unverified, skip
     const skip = verdict === 3 ? 3 : 0;
-    out.push(verdict, skip, k === 1 ? 2 : 0, k === 1 ? 3 : 0, ...u16(verdict === 3 ? 0 : 4), ...u16(k === 1 ? 1 : 0),
+    // accept_time's worst came from a PPS move (APDO 6, 100 mV class, down to 10.6 V), ps_rdy_time's from a fixed pair
+    const a = k === 0 ? 0x96 : k === 1 ? 2 : 0, b = k === 0 ? 106 : k === 1 ? 3 : 0;
+    out.push(verdict, skip, a, b, ...u16(verdict === 3 ? 0 : 4), ...u16(k === 1 ? 1 : 0),
       ...i32(k === 0 ? 20000 : 31000), ...i32(0), ...i32(k === 0 ? 25000 : 30000));
   });
   out.push(...le32(2900), ...le32(5500), ...le32(5000 | (123 << 16)), ...le32(80 | (700 << 16)), ...le32(150 | (5000 << 16)),
     ...le32(40 | (900 << 16)), ...le32(4), ...le32(0));
   out.push(1, 3, 1, 0, ...u16(150), ...u16(80), ...u16(300), ...u16(0), ...u16(5000), ...u16(5600), ...u16(9000), ...u16(2));
-  out.push(2, 5, 0, 1, ...u16(9000), ...u16(0xFFFE), ...u16(0xFFEC), ...u16(40), ...u16(35));
+  if (version === 1) {
+    out.push(2, 5, 0, 1, ...u16(9000), ...u16(0xFFFE), ...u16(0xFFEC), ...u16(40), ...u16(35));
+  } else {
+    const s16 = (v) => u16(v & 0xFFFF);
+    // pos cls steps lo hi band psrdy err dmin over out | fails band rdy mono acc over out | status pad
+    out.push(6, 1, ...u16(154), ...u16(3300), ...u16(11000), ...u16(21), ...u16(309), ...s16(17), ...s16(98), ...s16(-140), ...u16(0),
+      0, 11, 0, 0, 0, 0, 0, 0);
+    out.push(6, 0, ...u16(60), ...u16(3300), ...u16(11000), ...u16(80), ...u16(255), ...s16(-17), ...s16(17), ...s16(-144), ...u16(0),
+      0, 1, 0, 0, 0, 0, 0x06, 0);
+    out.push(7, 0x83, ...u16(2), ...u16(9000), ...u16(20000), ...u16(0xFFFF), ...u16(1000), ...s16(-5), ...s16(0x7FFF), ...s16(-0x7FFF),
+      ...u16(20), 1, 0, 0, 0, 0, 1, 0, 0);
+  }
   return { blob: Uint8Array.from(out), n };
 }
 
-test("pdspec: the blob decodes to the header, checks, timers, transitions and PPS points", () => {
+test("pdspec: a PSC2 blob decodes to the header, checks, timers, transitions and programmable passes", () => {
   const { blob, n } = makeBlob();
   const r = P.decodePdSpecBlob(blob);
-  assert.deepEqual([r.state, r.stop, r.score, r.elapsed_s, r.release_unconfirmed], ["finished", "done", 700, 95, true]);
+  assert.deepEqual([r.version, r.state, r.stop, r.score, r.elapsed_s, r.release_unconfirmed], [2, "finished", "done", 700, 95, true]);
+  assert.deepEqual([r.caps_note, r.full20], ["PPS without AVS: allowed before PD R3.3", true]);
   assert.equal(r.checks.length, n);
+  assert.equal(n, 34);
   assert.deepEqual([r.checks[0].key, r.checks[0].verdict, r.checks[0].worst, r.checks[0].hi], ["accept_time", "pass", 20000, 25000]);
   assert.deepEqual([r.checks[1].verdict, r.checks[1].fails, r.checks[1].penalty], ["fail", 1, 2]);   // ps_rdy_time weight 2
   assert.deepEqual([r.checks[11].verdict, r.checks[11].penalty], ["unverified", 0]);                 // inferred: no penalty
@@ -212,12 +231,28 @@ test("pdspec: the blob decodes to the header, checks, timers, transitions and PP
   assert.deepEqual([r.timers.hr_from_mv, r.timers.hr_off_ms, r.timers.hr_dark_ms, r.timers.hr_on_ms], [5000, 123, 80, 700]);
   assert.equal(r.transitions[0].accept_ms, 15);
   assert.deepEqual([r.transitions[0].from, r.transitions[0].to, r.transitions[0].gap_ms, r.transitions[0].final_mv], [1, 3, 2, 9000]);
-  assert.equal(r.transitions[0].peak_mv, 5600);
+  assert.deepEqual(r.pps, []);
+  assert.equal(r.passes.length, 3);
+  const [p100, p20, slams] = r.passes;
+  assert.deepEqual([p100.pos, p100.kind, p100.class, p100.step, p100.lo_mv, p100.hi_mv, p100.steps], [6, "pps", 1, "100 mV", 3300, 11000, 154]);
+  assert.deepEqual([p100.band_ms, p100.psrdy_ms, p100.worst_err_mv, p100.min_delta_mv, p100.over_mv, p100.out_ms], [2.1, 30.9, 17, 98, -140, 0]);
+  assert.deepEqual(p100.fails, { band: 0, ps_rdy: 11, monotonic: 0, accuracy: 0, overshoot: 0, transient: 0 });
+  assert.equal(p100.status_text, "clean");
+  assert.deepEqual([p20.step, p20.status, p20.status_text], ["20 mV", 6, "no answer, voltage"]);
+  assert.deepEqual([slams.kind, slams.class, slams.step, slams.band_ms, slams.min_delta_mv, slams.over_mv, slams.status_text],
+    ["avs", 3, "slams", null, null, null, null]);
+  assert.deepEqual([slams.fails.band, slams.fails.transient], [1, 1]);
+});
+
+test("pdspec: a PSC1 blob (21 checks, PPS points) still decodes", () => {
+  const { blob } = makeBlob(1);
+  const r = P.decodePdSpecBlob(blob);
+  assert.deepEqual([r.version, r.caps_note, r.full20, r.checks.length, r.passes.length], [1, null, false, 21, 0]);
   assert.deepEqual([r.pps[0].pos, r.pps[0].set_mv, r.pps[0].worst_err_mv, r.pps[0].min_delta_mv, r.pps[0].max_settle_ms], [2, 9000, -2, -20, 3.5]);
 });
 
 test("pdspec: a blob with a wrong magic or a short body is refused", () => {
-  assert.throws(() => P.decodePdSpecBlob(Uint8Array.from(Array.from("XXXX00000000000000"), (c) => c.charCodeAt(0))), /PSC1/);
+  assert.throws(() => P.decodePdSpecBlob(Uint8Array.from(Array.from("XXXX00000000000000"), (c) => c.charCodeAt(0))), /PSC1 \/ PSC2/);
   const { blob } = makeBlob();
   assert.throws(() => P.decodePdSpecBlob(blob.slice(0, blob.length - 1)), /bytes/);
 });
@@ -245,6 +280,15 @@ test("pdspec: formatting of a check's value, limit and origin", () => {
   assert.equal(P.pdSpecValue("ms", null), "-");
   assert.equal(P.pdSpecLimit(r.checks[0]), "<= 25.0 ms");
   assert.equal(P.pdSpecAt(r.checks[1], 1), "PDO 2 to 3");
+  // accept_time is shared: a programmable move carries its level in b (33 and up), never a PDO index (tools/pdspec_blob.py fmt_at)
+  assert.equal(P.pdSpecAt(r.checks[0], 0, r.version, r.passes), "APDO 6 100 mV down to 10.6 V");
+  const k = (key) => P.PDSPEC_CHECKS.findIndex((d) => d.key === key);
+  assert.equal(P.pdSpecAt({ key: "pps_band", a: 0x25, b: 50 }, k("pps_band")), "APDO 5 500 mV up to 5.0 V");
+  assert.equal(P.pdSpecAt({ key: "avs_band", a: 0x17, b: 180 }, k("avs_band")), "APDO 7 500 mV up to 18.0 V");
+  assert.equal(P.pdSpecAt({ key: "accept_time", a: 0x97, b: 180 }, 0, 2, [{ pos: 7, kind: "avs" }]), "APDO 7 500 mV down to 18.0 V");
+  assert.equal(P.pdSpecAt({ key: "pps_settle", a: 2, b: 5 }, k("pps_settle"), 1), "APDO 2, point 5");
+  assert.equal(P.pdSpecAt({ key: "hr_safe0v", a: 0, b: 0 }, k("hr_safe0v")), "the source");
+  assert.equal(P.pdSpecAt({ key: "pps_keepalive", a: 6, b: 0 }, k("pps_keepalive")), "PDO 6");
 });
 
 test("pdspec: the check table is the firmware's own (result.hpp kDefs and engine.hpp names)", () => {
@@ -262,4 +306,14 @@ test("pdspec: the check table is the firmware's own (result.hpp kDefs and engine
   assert.deepEqual(P.PDSPEC_STOPS, cases("stop_name", "Stop"));
   assert.deepEqual(P.PDSPEC_STARTS, cases("start_name", "StartResult"));
   assert.deepEqual(P.PDSPEC_FAMILIES, cases("family_name", "Family"));
+  // the skip reasons and caps notes (result.hpp) and the step sizes per class (plan.hpp)
+  const rcases = (fn, en) => {
+    const body = new RegExp("const char\\* " + fn + "\\([^)]*\\)\\s*\\{([\\s\\S]*?)\\n\\}").exec(res)[1];
+    return [...body.matchAll(new RegExp("case " + en + "::\\w+:\\s*return\\s*\"([^\"]*)\";", "g"))].map((m) => m[1]);
+  };
+  assert.deepEqual(P.PDSPEC_SKIPS, ["-"].concat(rcases("skip_name", "Skip").slice(1)));
+  assert.deepEqual(P.PDSPEC_CAPS_NOTES, rcases("caps_note_name", "CapsNote"));
+  const plan = readFileSync(path.join(here, "../include/k2/pdspec/plan.hpp"), "utf8");
+  const steps = (kind) => new RegExp(kind + "\\[3\\]\\s*=\\s*\\{([^}]*)\\}").exec(plan)[1].split(",").map(Number);
+  assert.deepEqual(P.PDSPEC_STEPS, { pps: steps("pps"), avs: steps("avs") });
 });
