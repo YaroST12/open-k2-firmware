@@ -149,6 +149,12 @@ a stuck step, and the run stops there; the floor is therefore the APDO's, not a 
 the sink's own PPS re-Request (every 5 s, under the 10 s the specification allows) keeps the contract alive through the waits.
 A move whose VBUS is neither in the band nor still on a level at the end of its window (an unloaded fall slower than the window) waits
 in place until it settles, and its level is not used for accuracy or as the reference for the next monotonic check.
+The same holds for a point reached by a move that is not one of the pass's own steps: the start of a pass at the window's minimum and the
+setup moves between the 20 mV windows (a large jump) are only places to start from. The first in-window step's result is the first
+reference of the `*_monotonic` and `*_track` comparison, and that first step itself is not compared. Reason: a source may land a large
+jump up to vPpsValid off and hold the landing until the next request (UGREEN Nexode Air: 10.80 V requested after a jump, 10.895 V held,
+the next 20 mV request 10.82 V settles at 10.815 V), which is a landing, not a fold; comparing the first step with it failed both checks
+on a clean source. A fold between two in-window points (FH22, 19.98 V to 20.00 V) and the 100 / 500 / 1000 mV passes are still judged.
 
 Get_PPS_Status is asked twice per PPS pass, at the top (before the first move down) and at the end, never during the PPS timeout check.
 The sink queues it like any other message; the answer is timed from the Get_PPS_Status TX start to the PPS_Status RX edge.

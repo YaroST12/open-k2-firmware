@@ -57,6 +57,9 @@ struct Sim final : Env {
     int pps_offset_mv = 0;              // a PPS output this far off its set point
     int pps_fold_from_mv = 0;           // > 0: a request at or above this folds to pps_fold_to_mv (a fixed setpoint, like the FH22 at 20 V)
     int pps_fold_to_mv = 0;
+    int pps_jump_high_mv = 0;           // a programmable move of more than pps_jump_min_mv lands this far HIGH and holds there until the next request
+    int pps_jump_min_mv = 500;
+    int pps_small_offset_mv = 0;        // a smaller programmable move tracks this far off its request (the UGREEN lands 5-12 mV low)
     int pps_overshoot_mv = 0;           // a programmable step up overshoots its level by this much for pps_overshoot_ms
     int pps_overshoot_ms = 0;
     int pps_status_ms = 3;              // Get_PPS_Status -> PPS_Status
@@ -167,6 +170,7 @@ struct Sim final : Env {
             const bool p = c.pdos[want.pos - 1].type != pd::PdoType::Fixed;
             vt = level(want) + (p ? pps_offset_mv : 0);
             if (p && pps_fold_from_mv && level(want) >= pps_fold_from_mv) vt = pps_fold_to_mv;
+            if (p) vt += std::abs(level(want) - int(s.mv)) > pps_jump_min_mv ? pps_jump_high_mv : pps_small_offset_mv;
             ramp_at = t + std::uint32_t(p ? pps_start_ms : start_ms);
             rate = vt >= v ? rise : fall;
             if (p && pps_overshoot_mv && vt > v) over_v = vt + pps_overshoot_mv;
@@ -441,7 +445,9 @@ void clean_source_scores_zero() {
     // 500 mV (32) and the two slams; every move measured and judged.
     CHECK_EQ(int(e.passes().size()), 4);
     CHECK_EQ(int(e.agg(Check::PpsAccuracy).n), 248);
-    CHECK_EQ(int(e.agg(Check::PpsMonotonic).n), 248);
+    // The monotonic check skips the first point of every entry into a window that is not reached by a step of the pass (the pass's start
+    // and the four setup moves between the 20 mV windows: that point is the first reference, not a comparison): 248 - 5.
+    CHECK_EQ(int(e.agg(Check::PpsMonotonic).n), 243);
     CHECK_EQ(int(e.agg(Check::PpsPsRdy).n), 248);
     CHECK_EQ(int(e.agg(Check::PpsSettle).n), 60);
     CHECK_EQ(int(e.agg(Check::PpsBand).n), 188);
@@ -593,6 +599,51 @@ void pps_fold_is_a_finding() {
     CHECK_COND(verdict(ea, Check::AvsTrack) == Verdict::Fail);
     CHECK_COND(ea.agg(Check::AvsTrack).fails > 0);
     CHECK_COND(verdict(ea, Check::PpsTrack) != Verdict::Fail);
+}
+
+void pps_window_entry_is_not_a_reference() {
+    // The UGREEN Nexode Air (2026-11-15): a large jump (the entry of a 20 mV window, a jump between windows, a slam) lands 95 mV high,
+    // inside vPpsValid, and holds there; every following small step tracks within 10 mV of its request (10.82 V -> 10.815 V). The
+    // fall from the entry's landing to the first in-window step is the landing, not a fold, so neither the monotonic nor the track
+    // check may judge it: the first in-window result is the first reference.
+    Sim m;
+    typical(m);
+    m.pps_jump_high_mv = 95;
+    m.pps_small_offset_mv = -5;
+    Engine e(m);
+    CHECK_COND(e.start(0) == StartResult::Ok);
+    drive(m, e);
+    check_safe_end(m, e);
+    CHECK_COND(e.stop() == Stop::Done);
+    CHECK_COND(e.agg(Check::PpsTrack).n > 0);
+    CHECK_COND(e.agg(Check::PpsMonotonic).n > 0);
+    CHECK_EQ(int(e.agg(Check::PpsTrack).fails), 0);
+    CHECK_EQ(int(e.agg(Check::PpsMonotonic).fails), 0);
+    CHECK_COND(verdict(e, Check::PpsTrack) == Verdict::Pass);
+    CHECK_COND(verdict(e, Check::PpsMonotonic) == Verdict::Pass);
+    for (const PassRec& r : e.passes()) {
+        CHECK_EQ(int(r.track), 0);
+        CHECK_COND(r.min_delta_mv >= -8);
+    }
+}
+
+void pps_fold_inside_a_window_is_still_a_finding() {
+    // The FH22 shape at 20 mV: two points of one window (10.92 V and 10.94 V of the top window), the second folding back, is judged by
+    // both checks even with the large-jump landing of the same source (the window entry is skipped, the in-window points are not).
+    Sim m;
+    typical(m);
+    m.pps_jump_high_mv = 95;
+    m.pps_fold_from_mv = 10940;
+    m.pps_fold_to_mv = 10500;
+    Engine e(m);
+    CHECK_COND(e.start(0) == StartResult::Ok);
+    drive(m, e);
+    CHECK_COND(e.stop() == Stop::Done);
+    CHECK_EQ(int(e.passes()[0].cls), 0);
+    CHECK_EQ(int(e.passes()[0].track), 1);
+    CHECK_COND(e.passes()[0].mono_fails > 0);
+    CHECK_COND(verdict(e, Check::PpsTrack) == Verdict::Fail);
+    CHECK_COND(verdict(e, Check::PpsMonotonic) == Verdict::Fail);
 }
 
 void epr_and_pps_on_one_charger() {
@@ -1122,6 +1173,8 @@ int main() {
     unloaded_slow_fall_and_early_ps_rdy();
     pps_offset_and_slow_settle();
     pps_fold_is_a_finding();
+    pps_window_entry_is_not_a_reference();
+    pps_fold_inside_a_window_is_still_a_finding();
     epr_and_pps_on_one_charger();
     source_back_at_its_old_level();
     capture_busy_falls_back_to_stamps_and_polling();

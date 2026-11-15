@@ -339,7 +339,7 @@ private:
     std::int8_t dir_ = 0;               // the direction of the last measured move
     std::int32_t cur_mv_ = 0;           // the level last requested
     std::int32_t prev_mv_ = 0;          // the last settled level the next move's monotonic check compares with
-    bool prev_valid_ = false, skip_prev_ = false;
+    bool prev_valid_ = false;           // prev_mv_ was reached by a measured step of the pass (a setup move or a jump leaves it false)
     std::int32_t ema_mv_ = 0;
     bool st_sent_ = false;
     std::uint8_t st_seq0_ = 0;
@@ -568,16 +568,18 @@ inline void Engine::begin_family(std::uint32_t now) {
 inline void Engine::after(const Snapshot& s, std::uint32_t now) {
     switch (after_) {
         case After::Measure: measure_begin(now); return;
+        // A point reached by a move that is not of the pass's own step class (the window entry, a jump between windows, the landing of a
+        // slam) is NOT a reference for the monotonic / track comparison: a source may land such a jump up to vPpsValid off and hold the
+        // landing until the next request (UGREEN Nexode Air: 95 mV high), and the first in-window step then looks like a fall of it. The
+        // first in-window result (judge_prog) is the first reference; the entry point is only a place to start from.
         case After::PpsSteps:   // at the window's minimum: the first pass starts here
             cur_mv_ = tgt_mv_;
-            prev_mv_ = ema_mv_;
-            prev_valid_ = true;
+            prev_valid_ = false;
             pass_begin(now);
             return;
         case After::PpsNext:    // a setup move, or a measured one that ended outside its band, has settled
             cur_mv_ = tgt_mv_;
-            if (!skip_prev_) { prev_mv_ = ema_mv_; prev_valid_ = true; }
-            skip_prev_ = false;
+            prev_valid_ = false;
             prog_next(now);
             return;
         case After::PpsKa:
@@ -688,7 +690,7 @@ inline void Engine::measure_done(const Snapshot& s, std::uint32_t now) {
         judge_prog(o, e, s);
         // Not inside the new band by the end of the window (an unloaded fall can be slow): the next move starts once VBUS is there, and
         // its monotonic check has no level to compare with.
-        if (!o.band.seen && !o.settled) { prev_valid_ = false; skip_prev_ = true; go(tgt_pos_, tgt_mv_, After::PpsNext, now); return; }
+        if (!o.band.seen && !o.settled) { prev_valid_ = false; go(tgt_pos_, tgt_mv_, After::PpsNext, now); return; }
         prog_next(now);
         return;
     }
