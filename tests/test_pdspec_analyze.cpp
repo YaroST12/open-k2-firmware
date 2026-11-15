@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <vector>
 
+#include "k2/pd/prog_track.hpp"
 #include "k2/pd/transcap_calc.hpp"
 #include "k2/pdspec/analyze.hpp"
 #include "test_util.h"
@@ -174,6 +175,8 @@ void pps_step_recorded() {
     if (!f) return;
     Trace t;
     char line[128];
+    long pre_sum = 0;
+    int pre_n = 0;
     constexpr double kRequestMs = -198.457, kAcceptMs = -191.292, kWindowMs = 300.0;
     auto us = [](double ms) { return std::uint32_t(std::int64_t(kT0) + std::llround((ms - kRequestMs) * 1000.0)); };
     while (std::fgets(line, sizeof line, f)) {
@@ -181,6 +184,7 @@ void pps_step_recorded() {
         int mv = 0;
         if (std::sscanf(line, "%lf,%d,", &ms, &mv) != 2 || mv <= 0) continue;   // the header and the marker rows
         if (ms > kRequestMs + kWindowMs) break;
+        if (ms < kRequestMs) { pre_sum += mv; ++pre_n; }   // the level before the Request
         t.s.push_back({us(ms), std::uint16_t(mv), 0, 0});
     }
     std::fclose(f);
@@ -189,6 +193,11 @@ void pps_step_recorded() {
     CHECK_COND(o.final_mv >= 7020 && o.final_mv <= 7032);
     CHECK_COND(o.settled);
     CHECK_COND(o.settle.us >= 4800 && o.settle.us <= 10000);
+    // The same clean 20 mV step is no fold and no break, and a lone noisy sample taken for the settled level (7039) is none either.
+    CHECK_COND(pre_n > 0);
+    const int before = int(pre_sum / pre_n);
+    CHECK_EQ(int(pd::track_step(7000, before, 7020, o.final_mv)), int(pd::Track::None));
+    CHECK_EQ(int(pd::track_step(7000, before, 7020, 7039)), int(pd::Track::None));
 }
 
 // A slam up (PPS 3.3 -> 11 V): Accept at 10 ms, VBUS rises 100 mV/ms from 15 ms, overshoots to 11.7 V for 4 ms (92-95 ms), then sits
