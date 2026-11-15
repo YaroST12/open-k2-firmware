@@ -836,7 +836,7 @@ std::size_t file_read(std::uint16_t off, std::span<std::uint8_t> out) {
 namespace k2::fctrig {
 // Host stand-in for the trigger driver: idle, never running, records what the UI asked for.
 static Status g_status{fc::State::Idle, fc::Proto::Qc2, fc::Fail::None, 0, 0};
-Fail start(Proto proto, int mv, bool confirmed, bool allow_inline, int, int, bool vooc_inline_ok) {
+Fail start(Proto proto, int mv, bool confirmed, bool allow_inline, int, int) {
     if (g_stub.fc_start_hook) g_stub.fc_start_hook(int(proto));
     g_stub.fc_starts++;
     g_stub.fc_start_mv = mv; g_stub.fc_confirmed = confirmed;
@@ -847,7 +847,6 @@ Fail start(Proto proto, int mv, bool confirmed, bool allow_inline, int, int, boo
         g_stub.fc_state = int(g_stub.fc_answers ? State::Active : State::Negotiating);
     }
     if (allow_inline) g_stub.fc_inline_ok++;
-    if (vooc_inline_ok) g_stub.fc_vooc_ok++;
     return static_cast<Fail>(g_stub.fc_start_fail);
 }
 Fail set_target(int mv, bool confirmed, int) {

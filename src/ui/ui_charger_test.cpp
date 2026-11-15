@@ -248,13 +248,13 @@ pd::Err ChargerTestSession::request_pd(pd::Choice c) {
     }
     return fusb302::sink_request(c, true);
 }
-fc::Fail ChargerTestSession::request_fc(fc::Proto p, int mv, bool retarget, int ma, bool vooc_ok) {
+fc::Fail ChargerTestSession::request_fc(fc::Proto p, int mv, bool retarget, int ma) {
     const int ufcs_ma = p == fc::Proto::Ufcs ? ma : 0;   // a UFCS row's ma is its Request current (0 = the no-cable 2 A)
     if (!retarget) {
         fc_words_ = handshake_words(p);
         if (fc_words_ && view_) view_->announce(fc_words_);   // before the engine starts: nothing can be painted once it has
     }
-    return retarget ? fctrig::set_target(mv, true, ufcs_ma) : fctrig::start(p, mv, true, false, ma, ufcs_ma, vooc_ok);
+    return retarget ? fctrig::set_target(mv, true, ufcs_ma) : fctrig::start(p, mv, true, false, ma, ufcs_ma);
 }
 void ChargerTestSession::legacy_only(bool on) { fusb302::legacy_only(on); }
 void ChargerTestSession::pd_rescan() { fusb302::rescan(); }
@@ -913,9 +913,6 @@ void ChargerTestSession::poll(uint32_t now) {
     if (stage_ == Stage::Waiting) wait_step(now);
     // The confirm window ran out without the second START press: nothing was touched (no Rd, no identity), so only the window goes.
     if (confirming_ && static_cast<int32_t>(now - confirm_until_) >= 0) invalidate_confirmation();
-    // The Other-port waiver lives from its acceptance to the run's start (the Waiting stage in between carries it): on Review
-    // with no window open it has lapsed, whichever way the window went (BACK, a changed proposal, the 5 s).
-    if (stage_ == Stage::Review && !confirming_) options_.vooc_inline_ok = false;
     if (guard_stage(stage_) && static_cast<int32_t>(now - guard_t_) >= static_cast<int32_t>(raguard::kSampleMs)) guard_sample(now);
     // A remote START is confirmed like the second OK, once the Ra guard holds a full window of passive readings (~0.8 s, as long
     // as a person takes at the least) and the window still describes the proposal it opened on.
@@ -1003,7 +1000,6 @@ ChargerTestSession::RemoteStart ChargerTestSession::remote_start(bool all_tests)
     RemoteStart r;
     if (start_held()) { r.result = RemoteStart::Result::Busy; return r; }
     if (all_tests) options_.selected = kPresetMasks[0];
-    options_.vooc_inline_ok = false;   // the remote START never rides on the on-device Other-port acceptance
     if (stage_ != Stage::Review) set_stage(Stage::Review, kStartRow);
     else { invalidate_confirmation(); selection_ = kStartRow; }
     open_confirmation();
@@ -1022,7 +1018,7 @@ ChargerTestSession::Stopped ChargerTestSession::stop() {
     if (runner_.busy()) { cancel(); return Stopped::Run; }
     if (confirming_) { invalidate_confirmation(); return Stopped::Confirmation; }   // nothing was touched
     if (stage_ == Stage::Waiting) { wait_abort(); return Stopped::Wait; }           // Rd back, nothing started
-    if (stage_ == Stage::Refuse || stage_ == Stage::Other) { set_stage(Stage::Review, kStartRow); return Stopped::Refusal; }   // nothing was touched
+    if (stage_ == Stage::Refuse) { set_stage(Stage::Review, kStartRow); return Stopped::Refusal; }   // nothing was touched
     return Stopped::Nothing;
 }
 void ChargerTestSession::cancel() {
@@ -1046,7 +1042,6 @@ void ChargerTestSession::emit_end(uint32_t now) {
 void ChargerTestSession::release_run() {
     reattach_drop();   // a run that ends inside the planned re-attach gives the Rd back and the marker to the follower first
     rdcomeback::set_run_cable({});   // no run: the intent marker follows a session without an identity
-    options_.vooc_inline_ok = false;   // the Other-port waiver serves one run and is never kept
     fusb302::set_run_owner(false);   // the sleeping-port wake may act again
     fusb302::rd_for_run(false);
     drop_identity();
@@ -1201,31 +1196,6 @@ void ChargerTestSession::open_confirmation() {
                                 rdintent::cable_limited(fusb302::caps(), source_claim_w()));
     confirming_ = true; confirm_until_ = ctx_.now + Ui::kConfirmWindowMs; confirm_proposal_ = proposal(in);
 }
-// Review's first OK, before open_confirmation(): a VOOC-family run whose preview is refused only because the inline latch
-// has a topology cause (ct::vooc_override_offer: a far Rd or a VBUS reading; never a load, a request or a rise, never a PD
-// contract) opens the Other-port warning instead of the footer refusal. Anything else keeps the refusal as before.
-bool ChargerTestSession::offer_other_port() {
-    const auto in = input(ctx_.now);
-    const auto preview = ct::Runner::preview(fusb302::caps(), options_, in);
-    if (preview.refusal != ct::Reason::Inline || !ct::vooc_override_offer(options_, in)) return false;
-    set_stage(Stage::Other);
-    return true;
-}
-// OK on the Other stage. The first press arms the 5 s window (nothing changes); the second accepts: back to Review with the
-// waiver on for the run to come and START's own confirm window open (the user still confirms the start). The waiver is
-// options_.vooc_inline_ok: the Runner copies it at start, begin_run() / release_run() / the Review tick clear it, it is not
-// part of the journaled options, and a remote START never sets it.
-void ChargerTestSession::other_ok() {
-    if (confirm_live()) {
-        set_stage(Stage::Review, kStartRow);   // drops this window
-        options_.vooc_inline_ok = true;
-        open_confirmation();
-        if (!confirming_) options_.vooc_inline_ok = false;   // refused for another reason: the footer says which
-        return;
-    }
-    confirm_reattach_ = false;
-    confirming_ = true; confirm_until_ = ctx_.now + Ui::kConfirmWindowMs; confirm_proposal_ = proposal(input(ctx_.now));
-}
 // The second press: an identity needs the charger directly on the plug (include/k2/pd/ra_guard.hpp), so the guard judges
 // the lines first and a refusal opens the Refuse stage; then the identity is armed — whatever was armed is disarmed
 // first and the pick takes over (Off arms nothing) — and the start goes on with the Rd and the wait.
@@ -1299,7 +1269,6 @@ void ChargerTestSession::begin_run() {
     meta.cable_kind = static_cast<uint8_t>(run_cable_.kind); meta.cable_seq = run_cable_.seq;
     meta.guard = run_guard_;   // the Ra guard's reading when the identity was started (and whether the user went on anyway)
     options_.units = {};   // an explicit unit list serves one run; the next START uses the default order
-    options_.vooc_inline_ok = false;   // the Runner holds its own copy: the Other-port waiver is spent with this start
     invalidate_confirmation();
     if (r == ct::Reason::None || runner_.state() == ct::State::Unsafe) {
         fusb302::set_run_owner(true);   // from the START itself, not from the next tick
@@ -1344,7 +1313,6 @@ void ChargerTestSession::set_level(ct::Level l) {
 }
 void ChargerTestSession::enter() {
     ctx_.cables.sync();
-    options_.vooc_inline_ok = false;   // never carried over from an earlier visit
     entering_ = true;   // the screen still shows the previous page, which the redraw erases: no body wipe here
     set_stage(resume_pending_ ? Stage::Resume : Stage::Algorithms);
     entering_ = false;
@@ -1578,7 +1546,6 @@ int ChargerTestPage::row_count() const {
     case Stage::Identity: case Stage::Ask: return 0;   // retired, never entered
     case Stage::Refuse: return 2;   // Start anyway, Start, skip spoof
     case Stage::Waiting: return 1;
-    case Stage::Other: return 0;   // the warning has no rows: its one action is the ActionCell
     }
     return 0;
 }
@@ -1713,7 +1680,7 @@ void ChargerTestPage::bar() {
     case Stage::Custom: t.put("Custom"); step = 1; break;
     case Stage::Group: t.put("Entries"); step = 1; break;
     case Stage::Cable: case Stage::Identity: case Stage::Ask: t.put("Spoof cable"); step = 2; break;
-    case Stage::Review: case Stage::Other: t.put("Review"); step = 3; break;
+    case Stage::Review: t.put("Review"); step = 3; break;
     case Stage::Results: t.put("Results"); break;
     case Stage::Changes: t.put("Changes"); break;
     case Stage::Detail: t.put("Step detail"); break;
@@ -1807,7 +1774,6 @@ void ChargerTestPage::announce(const char* words) {
         return FooterTone::Info;
     }
     case Stage::Refuse: f.put("Direct plug is the sure way"); return FooterTone::Caution;
-    case Stage::Other: f.put(s_.confirming_ ? "Press again to allow" : "Other port must stay empty"); return FooterTone::Caution;
     case Stage::Waiting: {
         const int cc1 = ctx_.analog ? ctx_.analog->cc1_mv : -1, cc2 = ctx_.analog ? ctx_.analog->cc2_mv : -1;
         const fusb302::LineTrial lt = fusb302::line_trial();   // the direct-plug fallback's own fact: the line our Rd is on while it is live
@@ -2068,37 +2034,6 @@ void ChargerTestPage::paint_warning() {
         laid_ = true;
     }
     paint_list();
-}
-
-namespace {
-// The "Other port" warning (Stage::Other): two lines at x6, font 16, 26 and 25 cells.
-constexpr const char *kOtherLines[2] = {"Nothing in the other port:", "a phone could be damaged."};
-static_assert(all_fit(kOtherLines, kSmallAdvPx, 212), "an Other-port warning line is wider than the body");
-}  // namespace
-
-// The "Other port" warning: the caution band with its triangle and the word, two lines saying why, then the one action, the
-// ActionCell: idle ALLOW, armed CONFIRM with the draining 5 s bar (the window is the session's confirming_, as START's).
-void ChargerTestPage::paint_other() {
-    const Surface &c = ctx_.content;
-    PaintBudget *const pbg = ctx_.budget;
-    if (!laid_) {
-        if (pbg && !pbg->admit(static_cast<int>(c.w) * 44 + 1500, true)) return;
-        kit::draw_alert_band(c, 22, false, "OTHER PORT");
-        gfx_text(c, kSmall, 6, 64, kOtherLines[0], kText, kBg);
-        gfx_text(c, kSmall, 6, 84, kOtherLines[1], kText, kBg);
-        gfx_fill(c, 0, 154, c.w, 1, kRule);
-        action_.init(c, 156, 64);
-        laid_ = true;
-    }
-    if (s_.confirming_) {
-        const int32_t left = std::max<int32_t>(0, static_cast<int32_t>(s_.confirm_until_ - ctx_.now));
-        const int permille = std::clamp<int>(left * 1000 / static_cast<int32_t>(Ui::kConfirmWindowMs), 0, 1000);
-        StrBuf<24> sub;
-        sub.put("closes in ").put_u32(static_cast<uint32_t>((left + 999) / 1000)).put_char('s');
-        action_.draw_armed("CONFIRM", sub.view(), permille, pbg);
-    } else {
-        action_.draw_idle("ALLOW", "this run only", pbg, true);
-    }
 }
 
 // ====================================================================================================================
@@ -2848,7 +2783,6 @@ void ChargerTestPage::update(uint32_t now) {
     switch (s_.stage_) {
     case Stage::Review: paint_review(); break;
     case Stage::Refuse: paint_warning(); break;
-    case Stage::Other: paint_other(); break;
     case Stage::Waiting: paint_waiting(now); break;
     case Stage::Running: paint_running(now); break;
     case Stage::Results: paint_results(); break;
@@ -2997,14 +2931,9 @@ __attribute__((noinline)) void ChargerTestPage::ok_event() {
             s_.set_level(ct::next_level(s_.options_.level));
             break;
         }
-        if (confirm_live()) {
-            confirmed_start();   // the second press: guard, identity, then Rd and the wait last
-        } else {                 // the first press: the confirm window, nothing touched (or the Other-port warning)
-            s_.options_.vooc_inline_ok = false;   // a waiver is only ever one this very window was opened under
-            if (!s_.offer_other_port()) open_confirmation();
-        }
+        if (confirm_live()) confirmed_start();   // the second press: guard, identity, then Rd and the wait last
+        else open_confirmation();                // the first press: the confirm window, nothing touched
         break;
-    case Stage::Other: s_.other_ok(); break;
     case Stage::Waiting: break;   // BACK stops the wait (it reads Stop); OK is free
     case Stage::Identity: case Stage::Ask: break;   // retired, never entered
     case Stage::Refuse:
@@ -3065,7 +2994,6 @@ PanelLabels ChargerTestPage::labels() const {
         case Stage::Cable: ok = "Pick"; break;
         case Stage::Review: ok = s_.selection_ == kLevelRow ? "Change" : s_.confirming_ ? "Confirm" : "Start"; break;
         case Stage::Refuse: ok = "Start"; break;
-        case Stage::Other: ok = s_.confirming_ ? "Confirm" : "Allow"; break;
         case Stage::Waiting: ok = ""; break;   // BACK reads Stop
         case Stage::Results:
             ok = s_.selection_ >= static_cast<int>(line_n_) ? "Diff" : "Steps";

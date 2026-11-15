@@ -215,12 +215,6 @@ struct Options {
     // the guarded trigger asks the adapter 1.5 / 4 / 6.3 / 10.9 A (a protocol word, no load) and the highest ask it went on
     // under is the result; UsbA also waives the trigger's far-sink refusal (a legacy A port, the top port empty).
     svooc_ceiling::Mode svooc_cap = svooc_ceiling::Mode::Off;
-    // The operator's other-port override for the VOOC family (the Review step's warning, accepted with its arm + confirm): the run's
-    // inline refusal and in-run check skip a latch the topology alone explains (a far Rd, foreign VBUS: pd::topology_only), and
-    // the VOOC rows ask the engine with its `vooc_inline_ok`. Never a preset, never journaled, never kept after the run: a resumed
-    // or later run is refused again until the operator accepts again. A K2 PD contract, a Load / Request / Rise latch and the
-    // run's load abort still stand. Level-independent (with_level leaves it alone).
-    bool vooc_inline_ok = false;
     // How thorough the run is (with_level). Medium is 0 on every wire (journal, remote status word, card), so data written before
     // the level existed reads as Medium.
     Level level = Level::Medium;
@@ -333,15 +327,10 @@ struct Input {
     // D+/D- are free for the ceiling stage's trigger: no owner holds them and they sit at the passive idle (the trigger's own
     // start check, svooc_trig::lines_free()). False for 500 ms after a legacy session's release (the engine's 0 V discharge).
     bool lines_free = true;
-    // What latched inline_load (pd::Link::inline_cause()). The ceiling stage's USB-A waiver (Options::svooc_cap == UsbA) and the
-    // operator's VOOC override (Options::vooc_inline_ok) clear inline_load for the two causes the topology explains on its own
-    // (pd::topology_only: FarRd, Vbus); every other cause stays.
+    // What latched inline_load (pd::Link::inline_cause()). The ceiling stage's USB-A waiver (Options::svooc_cap == UsbA) clears
+    // inline_load for the two causes an A-to-C cable explains on its own (svooc::inline_waived: FarRd, Vbus), as the trigger does.
     pd::InlineCause inline_cause = pd::InlineCause::None;
 };
-// True when the Review step should offer the operator's VOOC override: the run holds a VOOC-family algorithm, the inline refusal
-// is there for a cause the topology alone explains (FarRd, Vbus), the K2 holds no PD contract, and no waiver (the override
-// itself, or the usb-a mode at Deep) already covers it.
-bool vooc_override_offer(const Options&, const Input&);
 // The runner waits for the source probe at most this long, so a charger that ignores it costs the run under 1 s.
 inline constexpr uint32_t kProbeMaxMs = 1000;
 inline constexpr uint32_t kCapsReturnMs = 8000;   // how long an invalid cap list (hard reset, re-announce) is tolerated
@@ -495,9 +484,7 @@ Verdict unit_outcome(std::span<const Step>, Unit);
 struct Env {
     virtual pd::Err request_pd(pd::Choice) = 0;
     // `ma`: the row's current (SCP: the limit to write; 0 = detect only). Other protocols ignore it.
-    // `vooc_ok`: the engine's VOOC-family inline override (Options::vooc_inline_ok, or the usb-a mode at Deep); false for every
-    // other row.
-    virtual fc::Fail request_fc(fc::Proto, int mv, bool retarget, int ma, bool vooc_ok) = 0;
+    virtual fc::Fail request_fc(fc::Proto, int mv, bool retarget, int ma) = 0;
     virtual void release(bool pd) = 0;
     // One unit's attach (docs/CHARGER_TEST_FLOW.md). detach(): Rd off, the 5 V default, the source sees a detach and drops its
     // output. attach(mode): Rd on again as a fresh attach, the sink PD-active (Pd: caps, an immediate PDO 1 request) or PD-silent

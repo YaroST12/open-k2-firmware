@@ -47,15 +47,6 @@ constexpr Reason inline_reason(const Probe& p) {
     return mag > kInlineCurrentMa + (p.self_supply_ma > 0 ? p.self_supply_ma : 0) ? Reason::DataDevice : Reason::None;
 }
 
-// The operator's override for the VOOC family (an explicit flag, never a default): inline_reason() with the sticky latch skipped
-// when its cause is one the topology explains on its own (pd::topology_only: FarRd, Vbus). Everything else still stands: a PD
-// contract (pd_active), a latch of any other cause or with none (Load, Request, Rise), and the live current check, so a load
-// that shows up during the run ends it exactly as before.
-constexpr Reason inline_reason_waived(Probe p) {
-    if (p.sticky_inline && pd::topology_only(p.inline_cause)) p.sticky_inline = false;
-    return inline_reason(p);
-}
-
 // A far sink draws through the K2 (the pd::Link latch, or more than kInlineCurrentMa above the K2's own supply), whether
 // or not a PD contract is decoded: the inline_reason() ladder with the contract step left out. The inline VOOC monitor
 // asks this, not inline_reason(): the phone on the USB-C port holds a 5 V PD contract and runs SuperVOOC on D+/D- at

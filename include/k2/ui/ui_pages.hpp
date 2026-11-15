@@ -286,11 +286,7 @@ public:
     // 1 Start, skip spoof (this run without the identity; the stored pick stays). BACK returns to Review.
     // Waiting = START's wait for the charger after the Rd went on (VBUS, then the caps): driven by poll(), never blocks;
     // BACK or OK cancels it.
-    // Other = the "Other port" WARNING (appended, stage 15: the last value the remote's 4-bit stage field holds, so the next stage needs a wider field): the first OK on Review would be refused for a topology-only inline
-    // latch (a far Rd or a VBUS reading, never a load, a request or a PD contract) with a VOOC-family unit selected. The page
-    // warns that nothing may sit in the other port, arms an ActionCell (CONFIRM, 5 s) and a second OK accepts: the waiver
-    // (options_.vooc_inline_ok) holds for that one run and is never saved. BACK drops the window, then returns to Review.
-    enum class Stage : uint8_t { Algorithms, Group, Cable, Identity, Review, Running, Results, Steps, Detail, Resume, Changes, Ask, Refuse, Waiting, Custom, Other };
+    enum class Stage : uint8_t { Algorithms, Group, Cable, Identity, Review, Running, Results, Steps, Detail, Resume, Changes, Ask, Refuse, Waiting, Custom };
     using Proposal = std::array<uint32_t, pd::kMaxPdos + 24>;
     explicit ChargerTestSession(UiContext& c) : ctx_(c), runner_(*this) {}
     void enter();                  // the page is (re)entered: the wizard starts at Algorithms, or at Resume for a journaled run
@@ -396,9 +392,7 @@ private:
     void ok_event();               // a short OK on the current stage (split from on_event: its frame sits under share_card on the stack's worst path)
     void open_confirmation();      // the first START press: the preview and the confirm window; nothing is touched
     void confirmed_start();        // the second START press: the Ra guard for an identity, then apply_cable() and press_start()
-    bool offer_other_port();       // Review's first OK: true = the preview was refused for a topology-only latch and the Other stage opened
-    void other_ok();               // OK on the Other stage: the first press arms the window, the second accepts (this run only)
-    [[gnu::noinline]] void press_start();           // after the identity is settled: Rd and the wait as the last stage, then launch()
+    [[gnu::noinline]] void press_start();            // after the identity is settled: Rd and the wait as the last stage, then launch()
     void launch();                 // the preflight on the final reading, then begin_run() (or start_failed)
     void start_failed(const char* why);              // passive again on Review, the reason on the footer
     void start_failed(charger_test::Reason, const char* busy, int vbus_mv);   // refused START: log line + recorded reason + footer words
@@ -416,7 +410,7 @@ private:
     Proposal proposal(charger_test::Input) const;
     charger_test::Input input(uint32_t) const;
     pd::Err request_pd(pd::Choice) override;
-    fc::Fail request_fc(fc::Proto, int, bool, int, bool) override;
+    fc::Fail request_fc(fc::Proto, int, bool, int) override;
     void release(bool) override;
     uint8_t ceiling_start(bool usb_a) override;   // svooc_trig::start with the Probe profile; 0 = running, else svooc::Refusal
     void ceiling_stop() override;
@@ -631,7 +625,6 @@ private:
     [[gnu::noinline]] void paint_list();            // RowList stages: bind once, then selection and rows
     [[gnu::noinline]] void paint_review();
     [[gnu::noinline]] void paint_warning();
-    [[gnu::noinline]] void paint_other();   // the "Other port" warning: alert band, two lines, the arm + confirm ActionCell
     [[gnu::noinline]] void paint_waiting(uint32_t now);
     [[gnu::noinline]] void paint_running(uint32_t now);
     [[gnu::noinline]] void paint_results();

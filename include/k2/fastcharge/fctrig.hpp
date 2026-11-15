@@ -23,9 +23,7 @@ using fc::State;
 
 // A PD contract or a load behind the K2 (k2::link) refuses with Fail::Inline; `allow_inline` is the
 // explicit override and never stands in for `confirmed` (needed above 5 V).
-// `vooc_inline_ok`: the operator's VOOC-family override (fc::Engine::start), the charger test's other-port acceptance.
-Fail start(Proto p, int target_mv, bool confirmed, bool allow_inline = false, int scp_ma = accp::kScpInitMa, int ufcs_ma = 0,
-           bool vooc_inline_ok = false);
+Fail start(Proto p, int target_mv, bool confirmed, bool allow_inline = false, int scp_ma = accp::kScpInitMa, int ufcs_ma = 0);
 Fail set_target(int target_mv, bool confirmed, int ufcs_ma = 0);
 void stop();       // BACK / leaving the page / remote reset: discharge to 5 V, then passive idle
 

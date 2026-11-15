@@ -66,7 +66,6 @@ struct Fake final : ct::Env {
     std::vector<ct::Step> records;
     std::vector<pd::Choice> choices;
     std::vector<int> fc_mas;   // the current each fc request carried
-    std::vector<bool> fc_vooc_ok;   // the operator's VOOC inline override each fc request carried
     // The engine's fc::Caps (fctrig::caps()): a SCP / UFCS request makes the charger's capabilities readable, as its session does.
     const fc::Caps* serve_caps = nullptr;
     std::vector<fc::Proto> protocols;
@@ -292,9 +291,8 @@ struct Fake final : ct::Env {
         }
         return pd::Err::Ok;
     }
-    fc::Fail request_fc(fc::Proto p, int mv, bool retarget, int ma, bool vooc_ok) override {
+    fc::Fail request_fc(fc::Proto p, int mv, bool retarget, int ma) override {
         if (!alive()) return fc::Fail::NoHandshake;
-        fc_vooc_ok.push_back(vooc_ok);
         ++fc_requests; retargets += retarget; retarget_log.push_back(retarget); protocols.push_back(p); fc_mas.push_back(ma); fc_mvs.push_back(mv);
         if (ra_dead_legacy && ra_on) { ++ra_dead_fc; return fc::Fail::NoHandshake; }
         if (serve_caps && (p == fc::Proto::Scp || p == fc::Proto::Ufcs)) in.fc_caps = serve_caps;
@@ -2390,95 +2388,6 @@ static void test_ceiling_usb_a_waiver_stays_narrow() {
         CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Unsafe || r.state() == ct::State::Done ||
                                               r.state() == ct::State::Stopped; }, 120000), true);
         CHECK_EQ(f.ceil_starts, 0);                     // no trigger with a load behind the K2
-        CHECK_EQ(r.reason() != ct::Reason::None, true);
-    }
-}
-// The operator's override (Options::vooc_inline_ok, the Review step's other-port acceptance): the VOOC family's detection and the
-// ceiling stage run behind a latch the topology alone explains (a far Rd, foreign VBUS) at every level. Nothing else is waived:
-// not a Load / Request / Rise latch, not a latch of unknown cause, not a K2 PD contract, not a run without a VOOC unit.
-static ct::Options vooc_run(ct::Level lv, bool ok, uint32_t sel = ct::bit(A::SuperVooc)) {
-    return {.selected = sel, .svooc_cap = lv == ct::Level::Deep ? sc::Mode::On : sc::Mode::Off, .vooc_inline_ok = ok, .level = lv};
-}
-static void test_vooc_override_cause_matrix() {
-    using pd::InlineCause;
-    for (const auto lv : {ct::Level::Light, ct::Level::Medium, ct::Level::Deep}) {
-        for (const auto cause : {InlineCause::FarRd, InlineCause::Vbus, InlineCause::Load, InlineCause::Request, InlineCause::Rise, InlineCause::None}) {
-            const bool topology = cause == InlineCause::FarRd || cause == InlineCause::Vbus;
-            for (const bool ok : {false, true}) {
-                Fake f; f.caps = {}; f.in.inline_load = true; f.in.inline_cause = cause;
-                ct::Runner r(f);
-                const bool waived = ok && topology;
-                CHECK_EQ(int(ct::Runner::preview(f.caps, vooc_run(lv, ok), f.in).refusal), int(waived ? ct::Reason::None : ct::Reason::Inline));
-                CHECK_EQ(int(r.start(f.caps, vooc_run(lv, ok), f.in, true)), int(waived ? ct::Reason::None : ct::Reason::Inline));
-                CHECK_EQ(ct::vooc_override_offer(vooc_run(lv, false), f.in), topology);   // the Review step offers it for these two only
-            }
-        }
-    }
-    for (const uint32_t sel : {ct::bit(A::Vooc), ct::bit(A::SuperVooc65)}) {   // any member of the family
-        Fake f; f.caps = {}; f.in.inline_load = true; f.in.inline_cause = InlineCause::FarRd;
-        CHECK_EQ(int(ct::Runner::preview(f.caps, vooc_run(ct::Level::Medium, true, sel), f.in).refusal), int(ct::Reason::None));
-    }
-    {   // a run with no VOOC unit gets no waiver, flag or not
-        Fake f; f.caps = {}; f.in.inline_load = true; f.in.inline_cause = InlineCause::FarRd;
-        ct::Runner r(f);
-        CHECK_EQ(int(r.start(f.caps, vooc_run(ct::Level::Medium, true, ct::bit(A::Qc2)), f.in, true)), int(ct::Reason::Inline));
-        CHECK_EQ(ct::vooc_override_offer(vooc_run(ct::Level::Medium, false, ct::bit(A::Qc2)), f.in), false);
-    }
-    {   // a K2 PD contract is never waived, at the preview and at START
-        Fake f; f.caps = {}; f.in.inline_load = true; f.in.inline_cause = InlineCause::FarRd; f.in.pd.state = pd::SinkState::Ready;
-        ct::Runner r(f);
-        CHECK_EQ(int(ct::Runner::preview(f.caps, vooc_run(ct::Level::Medium, true), f.in).refusal), int(ct::Reason::Inline));
-        CHECK_EQ(int(r.start(f.caps, vooc_run(ct::Level::Medium, true), f.in, true)), int(ct::Reason::Inline));
-        CHECK_EQ(ct::vooc_override_offer(vooc_run(ct::Level::Medium, false), f.in), false);
-    }
-    {   // nothing latched: nothing to offer, and the flag changes nothing
-        Fake f; f.caps = {};
-        CHECK_EQ(ct::vooc_override_offer(vooc_run(ct::Level::Medium, false), f.in), false);
-    }
-    {   // the usb-a mode already carries the same word: nothing left to ask
-        Fake f; f.caps = {}; f.in.inline_load = true; f.in.inline_cause = InlineCause::FarRd;
-        ct::Options o = vooc_run(ct::Level::Deep, false); o.svooc_cap = sc::Mode::UsbA;
-        CHECK_EQ(ct::vooc_override_offer(o, f.in), false);
-    }
-}
-// What the engine is asked: the VOOC rows carry the flag when the override (or the usb-a mode at Deep) holds, no other row does.
-static void test_vooc_override_reaches_the_engine() {
-    struct Case { ct::Options o; bool flag; };
-    ct::Options usb_a = vooc_run(ct::Level::Deep, false); usb_a.svooc_cap = sc::Mode::UsbA;
-    const Case cases[] = {{vooc_run(ct::Level::Medium, true), true}, {vooc_run(ct::Level::Light, true), true},
-                          {vooc_run(ct::Level::Deep, true), true}, {vooc_run(ct::Level::Medium, false), false},
-                          {vooc_run(ct::Level::Deep, false), false}, {usb_a, true}};
-    for (const auto& c : cases) {
-        Fake f; f.caps = {}; f.in.inline_load = true; f.in.inline_cause = pd::InlineCause::FarRd;
-        ct::Runner r(f);
-        const auto started = r.start(f.caps, c.o, f.in, true);
-        if (started != ct::Reason::None) { CHECK_EQ(c.flag, false); continue; }   // refused without any waiver: nothing is asked
-        run_until(f, r, [&] { return f.fc_requests >= 1; });
-        CHECK_EQ(f.fc_vooc_ok.empty(), false);
-        CHECK_EQ(f.fc_vooc_ok.empty() ? !c.flag : bool(f.fc_vooc_ok.front()), c.flag);
-    }
-    {   // a mixed run: only the VOOC rows carry it
-        Fake f; f.caps = {};
-        ct::Runner r(f);
-        CHECK_EQ(int(r.start(f.caps, vooc_run(ct::Level::Medium, true, ct::bit(A::Qc2) | ct::bit(A::SuperVooc)), f.in, true)), int(ct::Reason::None));
-        run_until(f, r, [&] { return r.state() == ct::State::Done; }, 120000);
-        for (size_t n = 0; n < f.protocols.size(); ++n) {
-            const auto p = f.protocols[n];
-            const bool family = p == fc::Proto::Vooc || p == fc::Proto::SuperVooc || p == fc::Proto::SuperVooc65;
-            CHECK_EQ(bool(f.fc_vooc_ok[n]), family);
-        }
-    }
-}
-// The run's own load check stays: with the override accepted, a latch that turns into a load (the link re-latches, cause Load)
-// or a Request ends the run, exactly as without it.
-static void test_vooc_override_keeps_the_run_guards() {
-    for (const auto cause : {pd::InlineCause::Load, pd::InlineCause::Request, pd::InlineCause::Rise}) {
-        Fake f; f.caps = {}; f.in.inline_load = true; f.in.inline_cause = pd::InlineCause::FarRd;
-        ct::Runner r(f);
-        CHECK_EQ(int(r.start(f.caps, vooc_run(ct::Level::Medium, true), f.in, true)), int(ct::Reason::None));
-        f.tick(r, 200);
-        f.in.inline_cause = cause;
-        CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Unsafe || r.state() == ct::State::Done || r.state() == ct::State::Stopped; }, 120000), true);
         CHECK_EQ(r.reason() != ct::Reason::None, true);
     }
 }
@@ -7741,7 +7650,7 @@ int main() {
     test_hunt_evidence_marks_a_silent_source_as_a_timeout(); test_hunt_evidence_without_a_trace_is_unexplained();
     test_hunt_evidence_only_for_refused_rows(); test_classify_hunt_precedence();
     test_plan_and_run(); test_an_auto_hold_counts_as_released(); test_quiet_is_exactly_the_row_in_flight(); test_paint_blocked_needs_flight_and_an_engine_window(); test_refusals(); test_hold_keeps_the_baseline_until_released(); test_safe5_baseline();test_cancel_and_failed_release(); test_release_waits_for_the_sink_verification_and_its_hard_reset();
-    test_faults(); test_loop_lock_refuses_and_aborts(); test_timeouts_and_skips(); test_one_second_holds(); test_qc2_settles_within_two_percent(); test_qc2_5v_accepts_vsafe5_reading(); test_legacy_5v_accepts_vsafe5_reading(); test_qc3_rows_use_an_asymmetric_band(); test_legacy_rows_use_a_five_percent_band(); test_legacy_5v_row_uses_the_vsafe5_window(); test_scp_4v5_row_judges_the_adapter_readback(); test_qc3plus_without_response_is_a_distinct_skip(); test_unsupported_protocol_skips_its_other_rows(); test_silent_source_fails_every_handshake_row(); test_answered_handshake_passes_the_5v_row(); test_svooc_row_follows_the_adapter_ramp(); test_svooc_detected_is_a_pass(); test_vooc_family_shares_one_session(); test_ceiling_off_runs_no_stage(); test_ceiling_is_deep_only_and_the_ident_is_kept(); test_ceiling_judged_ladder_is_the_result(); test_ceiling_refusal_is_recorded_and_the_run_goes_on(); test_ceiling_no_adapter_and_early_abort(); test_ceiling_cap_stops_a_session_that_is_never_judged(); test_ceiling_cancel_stops_the_trigger(); test_ceiling_needs_a_detected_svooc_family(); test_ceiling_waits_for_the_lines_after_the_family_release(); test_ceiling_lines_never_free_is_a_recorded_refusal(); test_ceiling_usb_a_waives_the_far_rd_latch(); test_ceiling_usb_a_waiver_stays_narrow(); test_vooc_override_cause_matrix(); test_vooc_override_reaches_the_engine(); test_vooc_override_keeps_the_run_guards(); test_ceiling_quiet_adapter_is_stopped_at(); test_ceiling_runner_guard_names_its_cause(); test_ceiling_vbus_lost_after_the_stage_is_recovered_by_an_rd_cycle(); test_ceiling_vbus_that_never_returns_ends_the_run(); test_ceiling_adapter_ramp_is_part_of_the_stage(); test_ceiling_vbus_stuck_high_after_the_stage_is_unsafe(); test_vivo_no_response_skips_the_other_vivo_rows(); test_pps_min_step_accepts_unloaded_floor(); test_pps_up_step_uses_the_tight_band();
+    test_faults(); test_loop_lock_refuses_and_aborts(); test_timeouts_and_skips(); test_one_second_holds(); test_qc2_settles_within_two_percent(); test_qc2_5v_accepts_vsafe5_reading(); test_legacy_5v_accepts_vsafe5_reading(); test_qc3_rows_use_an_asymmetric_band(); test_legacy_rows_use_a_five_percent_band(); test_legacy_5v_row_uses_the_vsafe5_window(); test_scp_4v5_row_judges_the_adapter_readback(); test_qc3plus_without_response_is_a_distinct_skip(); test_unsupported_protocol_skips_its_other_rows(); test_silent_source_fails_every_handshake_row(); test_answered_handshake_passes_the_5v_row(); test_svooc_row_follows_the_adapter_ramp(); test_svooc_detected_is_a_pass(); test_vooc_family_shares_one_session(); test_ceiling_off_runs_no_stage(); test_ceiling_is_deep_only_and_the_ident_is_kept(); test_ceiling_judged_ladder_is_the_result(); test_ceiling_refusal_is_recorded_and_the_run_goes_on(); test_ceiling_no_adapter_and_early_abort(); test_ceiling_cap_stops_a_session_that_is_never_judged(); test_ceiling_cancel_stops_the_trigger(); test_ceiling_needs_a_detected_svooc_family(); test_ceiling_waits_for_the_lines_after_the_family_release(); test_ceiling_lines_never_free_is_a_recorded_refusal(); test_ceiling_usb_a_waives_the_far_rd_latch(); test_ceiling_usb_a_waiver_stays_narrow(); test_ceiling_quiet_adapter_is_stopped_at(); test_ceiling_runner_guard_names_its_cause(); test_ceiling_vbus_lost_after_the_stage_is_recovered_by_an_rd_cycle(); test_ceiling_vbus_that_never_returns_ends_the_run(); test_ceiling_adapter_ramp_is_part_of_the_stage(); test_ceiling_vbus_stuck_high_after_the_stage_is_unsafe(); test_vivo_no_response_skips_the_other_vivo_rows(); test_pps_min_step_accepts_unloaded_floor(); test_pps_up_step_uses_the_tight_band();
     test_missing_samples_and_wrap();
     test_fixed_band_judges_a_burst_mode_ripple_on_its_mean(); test_fixed_band_still_fails_a_steady_low_or_high_level(); test_fixed_band_keeps_the_per_sample_overvoltage_guards();
     test_pps_renewal();

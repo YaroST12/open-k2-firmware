@@ -119,7 +119,7 @@ static void arm(Vol& v, const std::vector<ct::Step>& steps, std::uint32_t run = 
 // PPS APDOs, so the plan carries the two Mi 6 A hunt rows (11 V 6 A on the first APDO, 20 V 6 A on the 5-21 V one).
 struct PlanEnv final : ct::Env {
     pd::Err request_pd(pd::Choice) override { return pd::Err::NoCaps; }
-    fc::Fail request_fc(fc::Proto, int, bool, int, bool) override { return fc::Fail::None; }
+    fc::Fail request_fc(fc::Proto, int, bool, int) override { return fc::Fail::None; }
     void release(bool) override {}
     void record(const ct::Step&) override {}
 };

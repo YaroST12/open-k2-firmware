@@ -27,10 +27,6 @@ struct FakeCharger : k2::fc::Env {
     std::uint32_t qc2_delay_ms = 100;
     int qc3_max_mv = 12000;
     k2::link::Reason inline_now = k2::link::Reason::None;   // PD contract / load behind the K2
-    // A real Probe instead of the canned answer: inline_reason() / inline_reason_waived() are the pure link_guard ladders over it,
-    // so a test can say "latched by cause X" or "current above the limit" and see what the engine does with both flags.
-    bool use_probe = false;
-    k2::link::Probe probe{};
     bool hv_lock = false;          // the HID-cable loop 5 V lock (k2/core/loop_guard.hpp)
     bool vbus_known = true;
     bool afc_ok = true;            // AFC charger answers the ping
@@ -89,8 +85,7 @@ struct FakeCharger : k2::fc::Env {
         return vbus;
     }
     int ceiling_mv() override { return ceiling; }
-    k2::link::Reason inline_reason() override { return use_probe ? k2::link::inline_reason(probe) : inline_now; }
-    k2::link::Reason inline_reason_waived() override { return use_probe ? k2::link::inline_reason_waived(probe) : inline_now; }
+    k2::link::Reason inline_reason() override { return inline_now; }
     bool hv_locked() override { return hv_lock; }
     static int level(Drive d) {
         switch (d) {

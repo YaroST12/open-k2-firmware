@@ -485,8 +485,8 @@ class ChargerTest(unittest.TestCase):
     def test_schema2_shape_and_origin_races_leave_output_untouched(self):
         row = bytes([6]) + ROW0[1:]
         good = page(HEADER2, 0, [row])
-        for offset, value in ((0, 3), (11, 113), (39, 12), (18, 0x80), (22, 0x30),
-                              (40, 8), (42, 20), (43, 12), (44, 0x80), (51, 5), (52, len(kr.TEST_REASONS))):   # (22, 0x30) = draft bits 28..29 = level 3: no such level; the 4-bit stage field (byte 23 bits 2..5) has no invalid value left: stage 15 is "other"
+        for offset, value in ((0, 3), (11, 113), (23, 0x3C), (39, 12), (18, 0x80), (22, 0x30),
+                              (40, 8), (42, 20), (43, 12), (44, 0x80), (51, 5), (52, len(kr.TEST_REASONS))):   # (22, 0x30) = draft bits 28..29 = level 3: no such level
             bad = bytearray(good); bad[offset] = value
             with self.subTest(offset=offset), self.assertRaises(kr.FrameError):
                 kr.decode_charger_test(bad)
@@ -604,7 +604,7 @@ class ChargerCable(unittest.TestCase):
             kr.charger_cable(self.CableLink(self.reply(3, 0, 0, 0, "")))
 
     def test_stage_names_include_the_dialog(self):
-        self.assertEqual(kr.TEST_STAGES[10:], ["changes", "ask", "refuse", "waiting", "custom", "other"])
+        self.assertEqual(kr.TEST_STAGES[10:], ["changes", "ask", "refuse", "waiting", "custom"])
 
 
 class ChargerHunt(unittest.TestCase):

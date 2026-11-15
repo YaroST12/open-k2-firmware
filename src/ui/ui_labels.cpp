@@ -65,8 +65,6 @@ constexpr const char *kOkVerbs[] = {
     "Read", "Save", "Share",
     // Charger-flow setup pages (their wording is owned by the charger test)
     "Go", "Set", "Pick", "Resume", "Diff", "Steps", "All", "Off", "Cancel",
-    // The Other port warning: OK allows the run without the topology check, then Confirm
-    "Allow",
 };
 
 bool eq(const char *a, const char *b) {

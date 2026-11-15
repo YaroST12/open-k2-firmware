@@ -25,10 +25,6 @@ bool pd_likely_now();
 // Reason an active operation must not touch the lines now; Reason::None when the output is idle.
 Reason inline_now();
 
-// inline_now() for the operator's VOOC override (link_guard.hpp inline_reason_waived): a latch from the topology alone is skipped,
-// a PD contract, any other cause and a load still read as before.
-Reason inline_now_waived();
-
 // A far sink draws through the K2, with or without a decoded PD contract (link_guard.hpp far_sink_draws): the inline
 // VOOC monitor's gate.
 bool far_sink_now();

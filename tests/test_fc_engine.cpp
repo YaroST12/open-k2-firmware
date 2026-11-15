@@ -1131,9 +1131,8 @@ static void vooc_never_inline() {
         CHECK(e.start(p, 5000, true, true) == Fail::Inline);
         CHECK(c.set_calls == 0 && c.wakes == 0);
         // The Link's sticky latch reads DataDevice, whatever its cause: the far-Rd latch of a USB-A to C cable too. So the family
-        // detection (and with it the charger test's ident and Deep ceiling stage) never runs behind that latch, flag or no flag
-        // (the canned answer carries no cause); only start()'s explicit vooc_inline_ok reads the waived ladder, see
-        // vooc_operator_override below.
+        // detection (and with it the charger test's ident and Deep ceiling stage) never runs behind that latch; the trigger's
+        // usb-a waiver does not reach the engine (2026-11-15, an open decision).
         c.inline_now = Reason::DataDevice;
         CHECK(e.start(p, 5000, true, true) == Fail::Inline);
         CHECK(c.set_calls == 0 && c.wakes == 0);
@@ -1144,81 +1143,6 @@ static void vooc_never_inline() {
         c.run(e, 1);
         CHECK(e.state() == State::Failed && e.fail() == Fail::Inline && c.resets == 1);
     }
-}
-
-// The operator's override (start()'s vooc_inline_ok, never a default): a latch from the topology alone (a far Rd, foreign VBUS) no
-// longer refuses the VOOC family, for the start and for the in-run guard. Every other reason still does, flag or not.
-static void vooc_operator_override() {
-    using k2::pd::InlineCause;
-    const auto fresh = [](FakeCharger& c, InlineCause cause, int ma = 0, bool pd = false) {
-        c.use_probe = true;
-        c.probe = {};
-        c.probe.vbus_known = c.probe.current_known = true;
-        c.probe.vbus_mv = 5000;
-        c.probe.current_ma = ma;
-        c.probe.pd_active = pd;
-        c.probe.sticky_inline = cause != InlineCause::None;
-        c.probe.inline_cause = cause;
-    };
-    for (auto p : {Proto::Vooc, Proto::SuperVooc, Proto::SuperVooc65}) {
-        // The two topology causes: refused without the flag, taken with it (and it needs the confirmation).
-        for (auto cause : {InlineCause::FarRd, InlineCause::Vbus}) {
-            FakeCharger c;
-            Engine e(c);
-            fresh(c, cause);
-            CHECK(e.start(p, 5000, true) == Fail::Inline);
-            CHECK(e.start(p, 5000, true, true) == Fail::Inline);                         // allow_inline never reaches the family
-            CHECK(e.start(p, 5000, false, false, 0, 0, true) == Fail::NeedConfirm);      // the override is confirmed like allow_inline
-            CHECK(c.set_calls == 0 && c.wakes == 0);
-            CHECK(e.start(p, 5000, true, false, 0, 0, true) == Fail::None);
-            c.run(e, 50);
-            CHECK(e.state() == State::Negotiating);                                       // the latch stands, the session runs on
-            // In-run: a load through the shunt ends it at once, the waiver or not.
-            c.probe.current_ma = 300;
-            c.run(e, 1);
-            CHECK(e.state() == State::Failed && e.fail() == Fail::Inline && c.resets == 1);
-        }
-        // Not waived with the flag: a device's own traffic, a latch of unknown cause, a PD contract, a load with no latch at all.
-        for (auto cause : {InlineCause::Load, InlineCause::Request, InlineCause::Rise}) {
-            FakeCharger c;
-            Engine e(c);
-            fresh(c, cause);
-            CHECK(e.start(p, 5000, true, false, 0, 0, true) == Fail::Inline);
-            CHECK(c.set_calls == 0 && c.wakes == 0);
-        }
-        {
-            FakeCharger c;
-            Engine e(c);
-            fresh(c, InlineCause::FarRd, 0, true);                                        // a PD contract (pd_active)
-            CHECK(e.start(p, 5000, true, false, 0, 0, true) == Fail::Inline);
-            fresh(c, InlineCause::None, 400);                                             // a load, no latch
-            CHECK(e.start(p, 5000, true, false, 0, 0, true) == Fail::Inline);
-            fresh(c, InlineCause::None);                                                  // nothing: the flag changes nothing
-            CHECK(e.start(p, 5000, true, false, 0, 0, true) == Fail::None);
-        }
-        // In-run: a cause that turns into a request or a contract ends the session, the flag held all along.
-        for (int what = 0; what < 2; what++) {
-            FakeCharger c;
-            Engine e(c);
-            fresh(c, InlineCause::FarRd);
-            CHECK(e.start(p, 5000, true, false, 0, 0, true) == Fail::None);
-            c.run(e, 50);
-            CHECK(e.state() == State::Negotiating);
-            if (what == 0) c.probe.inline_cause = InlineCause::Request;   // pd_link: the far Rd latch became a foreign Request
-            else c.probe.pd_active = true;
-            c.run(e, 1);
-            CHECK(e.state() == State::Failed && e.fail() == Fail::Inline && c.resets == 1);
-        }
-    }
-    // The flag means nothing for another protocol: QC keeps the plain guard (and allow_inline its own meaning).
-    FakeCharger c;
-    Engine e(c);
-    fresh(c, InlineCause::FarRd);
-    CHECK(e.start(Proto::Qc2, 5000, true, false, 0, 0, true) == Fail::Inline);
-    // A later non-VOOC start does not inherit a VOOC session's flag: the next VOOC start without it refuses again.
-    CHECK(e.start(Proto::Vooc, 5000, true, false, 0, 0, true) == Fail::None);
-    e.stop();
-    CHECK(e.start(Proto::Vooc, 5000, true) == Fail::Inline);
 }
 
 // stop() mid-listen releases the lines and goes idle.
@@ -1588,7 +1512,6 @@ int main() {
     vooc_other_commands_are_never_answered();
     vooc_vbus_above_5v5_aborts();
     vooc_never_inline();
-    vooc_operator_override();
     vooc_stop_releases();
     vooc_silent_charger();
     vooc_wake_retries_until_the_adapter_clocks();

@@ -173,7 +173,6 @@ struct StubState {
     uint16_t svooc_asks[8] = {};
     uint8_t svooc_after = 0;          // polls the last ask stood for
     int fc_starts = 0, fc_inline_ok = 0;   // fctrig::start calls, and those carrying the override
-    int fc_vooc_ok = 0;                    // and those carrying the operator's VOOC inline override (the charger test's other-port acceptance)
     int fc_start_mv = 0;
     bool fc_confirmed = false;
     int fc_start_fail = 0;       // k2::fc::Fail returned by fctrig::start while non-zero

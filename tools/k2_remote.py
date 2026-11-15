@@ -263,7 +263,7 @@ TEST_ALGORITHMS = ["pd2-fixed", "pd3x-fixed", "epr", "spr-avs", "pps", "qc2", "q
                    "pd3.0-revision", "pd3.1-revision", "pd3.2-revision", "epr-avs", "qc2b", "qc3b"]
 TEST_ALGORITHM_GROUPS = [0, 0, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 0, 0, 0, 0, 1, 2]
 TEST_STAGES = ["algorithms", "group", "cable", "identity", "review", "running", "results", "steps", "detail", "resume",
-               "changes", "ask", "refuse", "waiting", "custom", "other"]   # "other" = the Other-port warning (on-device only), "algorithms" = the Tests step (presets), "custom" = its
+               "changes", "ask", "refuse", "waiting", "custom"]   # "algorithms" = the Tests step (presets), "custom" = its
                                              # per-family sub-list (still step 1/3, the "group" pages hang off it);
                                              # "identity"/"ask" are retired numbers (kept reserved on the wire);
                                              # "refuse" = the Ra guard said no (a cable is on the plug): start anyway, or skip the spoof for this run;
