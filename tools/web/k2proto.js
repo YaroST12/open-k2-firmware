@@ -107,7 +107,7 @@ var K2Proto = (function () {
                       "timeout", "voltage outside band", "hard reset", "source lost", "cancelled", "5V release failed",
                       "offers changed", "PD active: use QC port", "revision cannot be forced", "select at least one test",
                       "physical cable limit", "unsupported PDO layout",
-                      "charger stayed in PD", "rebooted during request", "rebooted during handover", "EPR entry refused", "no contract", "source shut off (needs replug)", "no PD after re-attach", "VBUS cut, source recovered", "blocked by PD", "no QC3+ response", "rebooted 3x", "needs external power", "PD gave up before START", "Class A only (12 V max)", "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target", "withdrawn by source", "wrong voltage on 5V contract", "needs load", "floored above target", "step resolution", "HID-cable loop: 5V lock", "advertised", "light run: not asked"];
+                      "charger stayed in PD", "rebooted during request", "rebooted during handover", "EPR entry refused", "no contract", "source shut off (needs replug)", "no PD after re-attach", "VBUS cut, source recovered", "blocked by PD", "no QC3+ response", "rebooted 3x", "needs external power", "PD gave up before START", "Class A only (12 V max)", "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target", "withdrawn by source", "wrong voltage on 5V contract", "needs load", "floored above target", "step resolution", "HID-cable loop: 5V lock", "advertised", "light run: not asked", "port cuts without load"];
   var TEST_ALL = (1 << TEST_ALGORITHMS.length) - 1;
   var TEST_LEVELS = ["medium", "light", "deep"];   // charger_test::Level order: Medium 0 (the default), Light 1, Deep 2
   var LATENCY = ["n/a", "<10 ns (~1 m)", "10-20 ns (~2 m)", "20-30 ns (~3 m)", "30-40 ns (~4 m)",
@@ -217,8 +217,7 @@ var K2Proto = (function () {
       var runLevel = (runMask >>> 28) & 3;      // run bits 28..29: the level the run in hand ran at
       runMask = (runMask & ~0x30000000) >>> 0;   // bits 30..31 stay: they are no field and fail below
       wire = p[23] & 3;
-      if ((runMask | draft) & ~TEST_ALL || level >= TEST_LEVELS.length || runLevel >= TEST_LEVELS.length || stage >= TEST_STAGES.length || (p[39] & 15) > 11 ||
-          (header === 42 && (p[40] & ~7)))
+      if ((runMask | draft) & ~TEST_ALL || level >= TEST_LEVELS.length || runLevel >= TEST_LEVELS.length || stage >= TEST_STAGES.length || (p[39] & 15) > 11)
         throw new FrameError("invalid charger-test selection or evidence");
       out.selection = { run_mask: runMask, configured_mask: draft, pps_sweep: ppsSweep, avs_sweep: avsSweep, level: TEST_LEVELS[level], run_level: TEST_LEVELS[runLevel],
                         run: TEST_ALGORITHMS.filter(function (_, i) { return runMask & (1 << i); }),
@@ -234,6 +233,7 @@ var K2Proto = (function () {
         physical_cable: { observed: !!(f & 32), max_mv: v.getUint16(28, true), max_ma: v.getUint16(30, true) },
         spoof_on: !!(f & 128), independent_revision_tested: false,
         ps_rdy: header === 42 ? { out_of_band: !!(p[40] & 1), inferred: !!(p[40] & 2), late: !!(p[40] & 4), worst_ms: p[41] * 20 } : null,
+        cut_retries: header === 42 ? p[40] >> 3 : 0,   // steps asked again after a legacy port dropped VBUS at 5 V (timing byte bits 3..7)
         pass_scope: "negotiation and measured voltage only; not rated-current/power or revision conformance"
       };
     }

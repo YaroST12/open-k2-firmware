@@ -65,8 +65,10 @@ enum class Reason : uint8_t {
     Advertised,          // a Light run (Level::Light): a level the source's own list offers (a PD PDO / APDO, an EPR level, a UFCS mode, an
                          // SCP limit read from the adapter), recorded as advertised and never requested. A skip that is no failure and
                          // no "not tested": the UI shows it as noted, never as pass
-    LightLevel           // a Light run: a legacy level other than the 5 V handshake (nothing advertises it), or a protocol only told
+    LightLevel,          // a Light run: a legacy level other than the 5 V handshake (nothing advertises it), or a protocol only told
                          // apart above 5 V (AFC, QC3+, QC Class B): not asked at this level, a Medium run asks it
+    PortCuts             // pattern usb-a-no-load-auto-off: the row met a cut of the port's output (VBUS under kCutMv for a moment, back within
+                         // kCutWindowMs) and its one retry met another: a skip, never a failure (the port cuts without load)
 };
 // Step.detail of a PPS step-walk row while it is Pending/Running (finish() overwrites it with the result); sits above every
 // engine code and the EPR skip codes so the card and the tools never mistake it for one.
@@ -184,6 +186,16 @@ inline constexpr uint32_t kDetachDarkMs = 10000, kDetachDarkHoldMs = 300, kDetac
 inline constexpr uint32_t kAttachContractMs = 3000;
 // A non-PD source that browned out gets this long (from the drop) to be back at vSafe5V before the run ends.
 inline constexpr uint32_t kRecoverMs = 10000;
+// pattern usb-a-no-load-auto-off (CUKTECH 120W USB-A port, A-to-C cable, no load, 2026-11-15): at 5 V the port cuts its output every 7.0 s,
+// VBUS ~2 V for ~1.0 s (1.96 V at the lowest), then it is back at 5.11 V; it never cut above 5 V. A row that fails while VBUS fell under
+// kCutMv for at least kCutMinMs and was back at vSafe5V within kCutWindowMs of the fall is the cut's casualty, not a verdict: it is asked
+// once more once VBUS is steady (cut_retry). Another cut in the retry reads Reason::PortCuts (a skip). kCutWindowMs is twice the cut seen
+// and far under the period, so a cut that long is told from an output that is gone; kCutMv sits under the sags other ports show (JT-P18
+// 3.6-4.9 V, a 4.5 V row) and over the cut's dip; kCutMinMs leaves out the instant dips of the fast VBUS reading (0.65 V, JT-P18);
+// kCutNoAboveMv: only a row that never went above 5 V can be a casualty (the port does not cut a raised output).
+inline constexpr int kCutMv = 3000, kCutNoAboveMv = 5500;
+inline constexpr uint32_t kCutMinMs = 200, kCutWindowMs = 2000;
+inline constexpr unsigned kCutOnsets = 8;   // the onsets kept to read the cut period from (the median gap between them)
 // pattern usb-a-cuts-on-low-dpdm: a USB-A port drops VBUS to ~2-2.5 V for ~4 s when D+/D- are held near 0 V for about a second or
 // more (SCP detect, VOOC listen, VIVO; brief lows such as FCP/AFC/QC handshakes do not trigger it). An A-to-C cable's Rp is fed from
 // VBUS, so CC vanishes with the output and comes back (a new attach session) a few tens of ms after VBUS is back at 5 V: after a
@@ -385,6 +397,10 @@ struct Evidence {
     // The VOOC family's ident command (0xA8 / 0xAC / 0xA6) when its detection row passed; 0 = none heard. One ident proves the
     // family, not the variant. Not journaled, not on the card.
     uint8_t vooc_ident = 0;
+    // pattern usb-a-no-load-auto-off: rows asked again after a cut of the port's output (cut_retry), and the period of the cuts seen
+    // (the median gap between the last kCutOnsets onsets, in 100 ms units; 0 = fewer than two cuts seen or over 25.5 s). Only cut_retries
+    // is exported (timing byte bits 3..7, saturating at 31: the 42-byte page header is full); the period is a [CT] cut period log line.
+    uint8_t cut_retries = 0, cut_period_ds = 0;
     pd::Revision reported{};
 };
 struct Summary {
@@ -755,6 +771,7 @@ private:
     void epr_info_rows(const pd::SourceCaps&, Input);   // lay the EPR rows out per level from the info list (when one was heard)
     void request(Input);
     void finish(Input, Verdict, Reason, uint8_t detail = 0);
+    void finish_row(Input, Verdict, Reason, uint8_t detail);   // finish() once the cut-retry check (cut_hold) let the verdict stand
     void release(Input, bool stop);
     void reissue_release();
     void next(Input);
@@ -888,6 +905,20 @@ private:
     bool recover_ = false, hot_ = false, stable_ = false, stopping_ = false, pd_owned_ = false, fc_owned_ = false;
     bool restart_dark_ = false, restart_wait_ = false;   // a silent Legacy release: the source's output went dark / came back
     uint32_t restart_ms_ = 0;                             // when it came back (restart_wait_)
+    // pattern usb-a-no-load-auto-off (kCutMv): the cut clocks of the legacy attach. cut_start_ms_ = the first sample under kCutMv of the
+    // last completed fall, cut_back_ms_ = the first vSafe5V sample after it, both 0 = none since the row's request, row_hi_ = the highest VBUS since the row's request.
+    // cut_onsets_ = the onsets of the cuts that came back inside kCutWindowMs (the period is read from them), cut_retry_idx_ = the row
+    // asked again after a cut (one retry per row).
+    // cut_dark_ / cut_dark_ms_ / cut_last_mv_ = a fall under kCutMv in progress, its first sample, the sample before it.
+    uint32_t cut_start_ms_ = 0, cut_back_ms_ = 0, cut_dark_ms_ = 0; int row_hi_ = 0, cut_last_mv_ = -1; bool cut_dark_ = false;
+    std::array<uint32_t, kCutOnsets> cut_onsets_{}; uint8_t n_cut_onsets_ = 0;
+    size_t cut_retry_idx_ = SIZE_MAX;
+    // A casualty whose cut is still in progress waits in Releasing (cut_wait_) for VBUS to come back: the row is Pending, the verdict it
+    // would have had is kept here (cut_v_ / cut_why_ / cut_detail_ / cut_mv_ = the VBUS of that moment), cut_final_ = this was its retry.
+    bool cut_wait_ = false, cut_final_ = false; Verdict cut_v_ = Verdict::Fail; Reason cut_why_ = Reason::None; uint8_t cut_detail_ = 0; int cut_mv_ = 0;
+    void track_cut(const Input&);
+    bool cut_hold(Input, Verdict, Reason, uint8_t detail);   // finish(): a casualty of a port cut is asked again (true) instead of failed
+    void cut_resolve(Input);                                 // Releasing: the held casualty's cut came back (retry or skip) or the window ran out (it fails)
     // Sink Hard Resets sent when the release started: a later one is the sink's own last resort for a release that did not
     // bring VBUS down (pattern budget-reannounce-mid-run), a recovery and not a lost source.
     uint32_t rel_hr_ = 0;

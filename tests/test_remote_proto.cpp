@@ -2655,6 +2655,15 @@ static void test_charger_test_wire() {
     std::array<uint8_t, 57> short2{};
     CHECK_EQ(encode_charger_test(short2, f.test_results, 0, true, 2), 42);
     CHECK_EQ(short2[14], 0); CHECK_EQ(encode_charger_test(short2, f.test_results, 0, true, 3), 0);
+    // timing byte bits 3..7: the run's port-cut retries (the header is full at 42 bytes, so they ride in the unused bits)
+    std::array<uint8_t, 58> cutbuf{};
+    f.test_results.evidence.cut_retries = 3;
+    CHECK_EQ(encode_charger_test(cutbuf, f.test_results, 0, false, 2), 42);
+    CHECK_EQ(cutbuf[40], 5 | (3 << 3)); CHECK_EQ(cutbuf[41], 35);
+    f.test_results.evidence.cut_retries = 200;   // saturates at 31, never spills into the timing flags
+    CHECK_EQ(encode_charger_test(cutbuf, f.test_results, 0, false, 2), 42);
+    CHECK_EQ(cutbuf[40], 5 | (31 << 3));
+    f.test_results.evidence.cut_retries = 0;
 
     const ct::Step revision{.algorithm = ct::Algorithm::Pd30Revision,
         .verdict = ct::Verdict::Skip, .reason = ct::Reason::RevisionUntestable};

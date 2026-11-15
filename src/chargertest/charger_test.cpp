@@ -55,9 +55,9 @@ const char* name(Reason r) {
         "blocked by PD", "no QC3+ response", "rebooted 3x", "needs external power", "PD gave up before START",
         "Class A only (12 V max)", "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target",
         "withdrawn by source", "wrong voltage on 5V contract", "needs load", "floored above target", "step resolution",
-        "HID-cable loop: 5V lock", "advertised", "light run: not asked"
+        "HID-cable loop: 5V lock", "advertised", "light run: not asked", "port cuts without load"
     };
-    static_assert(std::size(names) == unsigned(Reason::LightLevel) + 1);
+    static_assert(std::size(names) == unsigned(Reason::PortCuts) + 1);
     return names[static_cast<unsigned>(r)];
 }
 const char* refusal_words(Reason r) {
@@ -1320,6 +1320,7 @@ Reason Runner::start(const pd::SourceCaps& caps, Options o, Input in, bool confi
     pd_retry_ = cut_index_ = SIZE_MAX; retries_ = epr_tries_ = 0; settle_ms_ = settle_until_ = hunt_reject_until_ = 0; auth_open_ = false;
     xiaomi_seen_ = xiaomi_reset_ = x_svid_ = x_authed_ = false; tail_at_ = 0; hr_count_ = link_resets(in.pd);
     last_ms_ = phase_ms_ = in.now; stable_ = stopping_ = pd_owned_ = fc_owned_ = recover_ = hot_ = sag_cut_ = sag_open_ = false; busy_retry_at_ = 0;
+    cut_wait_ = cut_dark_ = false; cut_start_ms_ = cut_back_ms_ = 0; cut_retry_idx_ = SIZE_MAX; cut_last_mv_ = -1; n_cut_onsets_ = 0;
     list_tracking_ = false; flight_restart_ = false;   // the settle window is seeded by the first poll, not opened by START
     reason_ = Reason::None; refusal_mv_ = 0;
     probe_ = (has_unit(o.units, Unit::Pd) || has_unit(o.units, Unit::PdLow)) ? Probe::Pending : Probe::Off;   // ask the charger who it is once, at the end of the first Pd unit
@@ -1398,6 +1399,7 @@ pd::Choice Runner::pd_choice(const Step& s) const {
 }
 void Runner::request(Input in) {
     auto& s = steps_[index_];
+    cut_start_ms_ = cut_back_ms_ = 0; row_hi_ = 0;   // the cut clocks of a row start with its request (track_cut)
     const auto limit = limit_reason(s.mv, in, s.algorithm);
     // A PD row above 5 A that is no OEM hunt (a 6.25 A APDO's full-current row) needs a cable vouched for above 5 A.
     const bool over5 = s.group == Group::Pd && !s.hunt && s.ma > 5000 && over5_cable_ma(in) <= 5000;
@@ -1531,6 +1533,75 @@ void Runner::reissue_release() {
     if (fc_owned_) env_.release(false);
 }
 void Runner::finish(Input in, Verdict v, Reason r, uint8_t detail) {
+    if (cut_hold(in, v, r, detail)) return;
+    finish_row(in, v, r, detail);
+}
+// pattern usb-a-no-load-auto-off. Called at every poll of a Legacy attach: follows the falls of VBUS under kCutMv that start at the 5 V
+// level (the sample before is not above kCutNoAboveMv), closes one when VBUS is back at vSafe5V and keeps the onsets of the ones that
+// lasted kCutMinMs..kCutWindowMs (the cut period is read from them, see Evidence::cut_period_ds).
+void Runner::track_cut(const Input& in) {
+    const bool live = mode_ == Mode::Legacy && attached_ && in.vbus_mv >= 0 &&
+        (state_ == State::Baseline || state_ == State::Requesting || state_ == State::Holding || state_ == State::Releasing);
+    if (!live) { cut_dark_ = false; cut_last_mv_ = -1; return; }
+    const int v = in.vbus_mv;
+    if (state_ == State::Requesting || state_ == State::Holding) row_hi_ = std::max(row_hi_, v);
+    if (v < kCutMv) {
+        if (!cut_dark_ && cut_last_mv_ >= 0 && cut_last_mv_ <= kCutNoAboveMv) { cut_dark_ = true; cut_dark_ms_ = in.now ? in.now : 1; }
+    } else if (cut_dark_ && safe5(v)) {
+        cut_dark_ = false;
+        cut_start_ms_ = cut_dark_ms_; cut_back_ms_ = in.now ? in.now : 1;
+        const uint32_t dip = cut_back_ms_ - cut_start_ms_;
+        if (dip >= kCutMinMs && dip <= kCutWindowMs) {
+            if (n_cut_onsets_ == kCutOnsets) { std::copy(cut_onsets_.begin() + 1, cut_onsets_.end(), cut_onsets_.begin()); --n_cut_onsets_; }
+            cut_onsets_[n_cut_onsets_++] = cut_start_ms_;
+            // The period: the median gap between the onsets kept (the port does not cut a raised output, so a gap may be longer than
+            // the period and a cut hidden in a handshake leaves none; the middle gap is the period the port keeps at 5 V).
+            if (n_cut_onsets_ >= 2) {
+                std::array<uint32_t, kCutOnsets> gap{};
+                for (unsigned n = 1; n < n_cut_onsets_; ++n) gap[n - 1] = cut_onsets_[n] - cut_onsets_[n - 1];
+                std::sort(gap.begin(), gap.begin() + (n_cut_onsets_ - 1));
+                const uint32_t mid = gap[(n_cut_onsets_ - 2) / 2];
+                evidence_.cut_period_ds = mid / 100u <= 255u ? uint8_t((mid + 50u) / 100u) : uint8_t(0);
+                K2LOG("[CT] cut period=%ums n=%u\n", unsigned(mid), unsigned(n_cut_onsets_));
+            }
+        }
+    }
+    cut_last_mv_ = v;
+}
+// finish() for a legacy row that fails (Lost, Timeout, Request, Voltage) while it sat at 5 V and a fall of VBUS under kCutMv is in
+// progress or has come back since the row's request: the verdict is kept, the row goes back to Pending and waits in Releasing for
+// the output (cut_resolve decides). A Lost always waits: its fall may not have shown in VBUS yet.
+bool Runner::cut_hold(Input in, Verdict v, Reason r, uint8_t detail) {
+    if (v != Verdict::Fail || cut_wait_ || index_ >= count_ || mode_ != Mode::Legacy || pd_owned_ || steps_[index_].group == Group::Pd) return false;
+    if (r != Reason::Lost && r != Reason::Timeout && r != Reason::Request && r != Reason::Voltage) return false;
+    if (std::max(row_hi_, in.vbus_mv) > kCutNoAboveMv) return false;
+    if (r != Reason::Lost && !cut_dark_ && !cut_start_ms_) return false;
+    cut_wait_ = true; cut_final_ = cut_retry_idx_ == index_;
+    cut_v_ = v; cut_why_ = r; cut_detail_ = detail; cut_mv_ = in.vbus_mv;
+    steps_[index_].verdict = Verdict::Pending; steps_[index_].reason = Reason::None;
+    recover_ = true; sag_cut_ = true; session_ = in.session;
+    release(in, false);
+    return true;
+}
+// The held casualty's output is back and steady (Releasing), or the recovery window ran out. A fall of VBUS that lasted
+// kCutMinMs..kCutWindowMs is the port's cut: the row is asked again once (cut_retry_idx_), or, when that was its retry, it reads
+// "port cuts without load". Anything else keeps the verdict it would have had: VBUS not back in the window, or no fall at all.
+void Runner::cut_resolve(Input in) {
+    cut_wait_ = false;
+    if (index_ >= count_ || steps_[index_].verdict != Verdict::Pending) return;
+    const uint32_t dip = cut_start_ms_ && cut_back_ms_ ? cut_back_ms_ - cut_start_ms_ : 0;
+    const bool cut = dip >= kCutMinMs && dip <= kCutWindowMs;
+    if (cut && !cut_final_) {
+        cut_retry_idx_ = index_;
+        if (evidence_.cut_retries < 255) ++evidence_.cut_retries;
+        K2LOG("[CT] cut retry row=%u dip=%ums\n", unsigned(index_), unsigned(dip));
+        return;   // the row stays Pending: next() asks it again from a steady 5 V
+    }
+    in.vbus_mv = cut_mv_;
+    if (cut) K2LOG("[CT] cut retry row=%u cut again: skip\n", unsigned(index_));
+    finish_row(in, cut ? Verdict::Skip : cut_v_, cut ? Reason::PortCuts : cut_why_, cut ? uint8_t(0) : cut_detail_);
+}
+void Runner::finish_row(Input in, Verdict v, Reason r, uint8_t detail) {
     auto& s = steps_[index_];
     const bool sweep_row = is_sweep(s);   // read before detail is overwritten: the marker survives on sweep rows
     s.verdict = v; s.reason = r; s.detail = detail;
@@ -1608,7 +1679,7 @@ void Runner::finish(Input in, Verdict v, Reason r, uint8_t detail) {
         // A row lost to a source drop (Reason::Lost) is no verdict on the levels after it: the source is recovered and they get their
         // turn, each in a session of its own (a bank that resets on one level, test_source_drop_recovers_on_a_non_pd_source).
         if ((v == Verdict::Fail || v == Verdict::Skip) && r != Reason::Lost && r != Reason::Capped &&
-            r != Reason::NeedsLoad) {
+            r != Reason::NeedsLoad && r != Reason::PortCuts) {
             // Later retargets cannot prove anything after the initial handshake/contract failed (or the charger gave no response).
             // They are the levels of the same algorithm: the Class B rows that follow a QC2 / QC3 row in its session are rows of their
             // own algorithm and keep their verdict logic (a failed 12 V still leaves "Class A only" / the handshake failure to the
@@ -2156,7 +2227,7 @@ void Runner::cancel(Input in) {
         release(in, true);
         return;
     }
-    if (state_ == State::Releasing) { stopping_ = true; skip_pending(reason_); return; }
+    if (state_ == State::Releasing) { cut_wait_ = false; stopping_ = true; skip_pending(reason_); return; }
     if (state_ == State::Detach || state_ == State::Attach) { skip_pending(reason_); end_legacy(); state_ = State::Stopped; return; }
     if (index_ < count_ && steps_[index_].verdict == Verdict::Running) {
         auto& s = steps_[index_]; s.verdict = Verdict::Fail; s.reason = reason_;
@@ -2181,6 +2252,7 @@ void Runner::restore(const Options& o, const Evidence& e, uint32_t run_id, std::
     handover_ = {}; unit_ = Unit::Count; mode_ = Mode::Pd; epr_stage_ = 0; info_ = 0; info_rows_ = false; n_hunt_ = 0; hunt_seq_ = 0;
     attached_ = detached_ = ending_ = silent_ = legacy_active_ = dark_ = false; pd_skips_recorded_ = true;
     pd_owned_ = fc_owned_ = stopping_ = stable_ = recover_ = hot_ = false; probe_ = Probe::Off; pd_retry_ = cut_index_ = SIZE_MAX;
+    cut_wait_ = cut_dark_ = false; cut_start_ms_ = cut_back_ms_ = 0; cut_retry_idx_ = SIZE_MAX; cut_last_mv_ = -1; n_cut_onsets_ = 0;
     selfpwr_ = suspended_ = adopt_ = false;
     ceiling_pending_ = ceil_stopping_ = ceil_recover_ = ceil_cycled_ = false; ceiling_done_ = true;   // a resumed run never repeats the stage (it is not journaled)
     for (auto& s : std::span<Step>(steps_.data(), count_)) if (s.verdict == Verdict::Running) s.verdict = Verdict::Pending;
@@ -2305,6 +2377,7 @@ void Runner::poll_impl(Input in, const pd::SourceCaps& caps) {
         return;
     }
     const uint32_t gap = in.now - last_ms_; last_ms_ = in.now;
+    track_cut(in);
     // Restart rules (2026-11-09), rule 1: every new list opens a settle window - no Request until the list in hand has
     // been unchanged for kListSettleMs, and each list arriving inside the window restarts it. Attach/Detach settle the
     // list on their own (poll_attach waits for caps + contract), so the window is tracked only in the run states; the
@@ -2515,6 +2588,7 @@ void Runner::poll_impl(Input in, const pd::SourceCaps& caps) {
             if (!stable_ || gap > 250) { stable_ = true; stable_ms_ = in.now; }
             // Settle only when VBUS actually moved or a PD contract was held; the source being back ends a recovery.
             if (!wait_caps && in.now - stable_ms_ >= (recover_ ? std::max<uint32_t>(100u, settle_ms_) : (hot_ || pd_owned_) ? 500u : 0u)) {
+                if (cut_wait_) cut_resolve(in);   // a port cut's casualty: asked again (Pending) or the verdict it would have had
                 end_sag_recovery(in);
                 pd_owned_ = fc_owned_ = recover_ = false; cut_index_ = SIZE_MAX; settle_ms_ = 0;
                 if (stopping_) { end_legacy(); state_ = State::Stopped; }
@@ -2525,6 +2599,7 @@ void Runner::poll_impl(Input in, const pd::SourceCaps& caps) {
         // sink, so this one is not cut short at 8 s.
         if (state_ == State::Releasing && !in.pd.verifying && !(wait_caps && safe5(in.vbus_mv)) &&
             in.now - phase_ms_ >= (recover_ ? kRecoverMs : 8000)) {
+            if (cut_wait_) cut_resolve(in);   // the window ran out: the verdict the row would have had, before the run ends
             if (recover_ && in.vbus_mv >= 0 && in.vbus_mv < 1000 && cut_index_ < count_) {
                 // pattern latch-off-low-pps: the source shut its output off on the low edge and stays dead until a replug.
                 // That row carries the reason; the run is complete (everything before it ran), not "source lost".

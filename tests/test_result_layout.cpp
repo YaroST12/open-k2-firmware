@@ -272,6 +272,10 @@ static void test_light_run_chips_read_noted() {
     CHECK_STR(rl::verdict_word(step(A::Pps, 11000, V::Fail, 6, 3235656292u, ct::Reason::Capped)), "CAPPED");
     CHECK_STR(rl::verdict_word(step(A::Pps, 11000, V::Fail, 6, 3235656292u, ct::Reason::Timeout)), "FAIL");
     CHECK_EQ(rl::noted(s[1]) && rl::noted(s[4]) && !rl::noted(s[0]), true);
+    // a step the port's own 5 V cut spoiled twice is a plain skip: no verdict, but never "listed" and never a pass or fail
+    const auto cut = step(A::Qc2, 5000, V::Skip, 0, 0, ct::Reason::PortCuts);
+    CHECK_STR(rl::verdict_word(cut), "SKIP");
+    CHECK_EQ(rl::noted(cut), false);
 }
 static void test_a_capped_range_chip_is_amber_and_keeps_the_advertised_range() {
     auto s = fh22();

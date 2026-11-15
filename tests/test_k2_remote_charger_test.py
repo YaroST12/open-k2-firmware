@@ -205,7 +205,7 @@ class ChargerTest(unittest.TestCase):
             "advertised": {"pps": True, "epr_table": True, "spr_avs": True, "epr_capable": True, "partial_epr": True},
             "monitor_mv": 36000, "physical_cable": {"observed": True, "max_mv": 50000, "max_ma": 5000},
             "spoof_on": True, "independent_revision_tested": False,
-            "ps_rdy": {"out_of_band": True, "inferred": False, "late": True, "worst_ms": 700},
+            "ps_rdy": {"out_of_band": True, "inferred": False, "late": True, "worst_ms": 700}, "cut_retries": 0,
             "pass_scope": "negotiation and measured voltage only; not rated-current/power or revision conformance"})
         self.assertEqual([s["algorithm"] for s in r["steps"]], ["qc3", "pps", "afc"])
         self.assertEqual([s["group"] for s in r["steps"]], ["qc3", "pd", "afc"])
@@ -226,9 +226,15 @@ class ChargerTest(unittest.TestCase):
         e = kr.decode_charger_test(bytes(inferred))["evidence"]["ps_rdy"]
         self.assertEqual(e, {"out_of_band": False, "inferred": True, "late": False, "worst_ms": 5100})
         self.assertIn("PS_RDY quirks: inferred (worst 5100 ms)", kr.render("charger-test", kr.decode_charger_test(bytes(inferred))))
-        bad = bytearray(HEADER2); bad[40] = 8   # an unknown flag bit is a frame error
-        with self.assertRaises(kr.FrameError):
-            kr.decode_charger_test(bytes(bad))
+        # bits 3..7 of the same byte are the run's port-cut retries (steps asked again after a legacy port's own 5 V cut)
+        cut = bytearray(HEADER2); cut[40:42] = bytes([4 | (3 << 3), 35])
+        r = kr.decode_charger_test(bytes(cut))["evidence"]
+        self.assertEqual(r["cut_retries"], 3)
+        self.assertEqual(r["ps_rdy"], {"out_of_band": False, "inferred": False, "late": True, "worst_ms": 700})
+        cut[40] = 31 << 3   # saturated, no timing flag
+        r = kr.decode_charger_test(bytes(cut))["evidence"]
+        self.assertEqual((r["cut_retries"], r["ps_rdy"]["late"]), (31, False))
+        self.assertEqual(kr.decode_charger_test(bytes(quiet))["evidence"]["cut_retries"], 0)
 
     def test_schema2_old_40_byte_header_still_decodes(self):
         # firmware up to v1.0-400 sends a 40-byte schema-2 header: no ps_rdy timing bytes. ct_start.py died on it.
@@ -238,6 +244,7 @@ class ChargerTest(unittest.TestCase):
         self.assertEqual(r["evidence"]["pdo_count"], 7)
         self.assertEqual(r["evidence"]["monitor_mv"], 36000)
         self.assertIsNone(r["evidence"]["ps_rdy"])   # not reported by this firmware, which is not "no quirks"
+        self.assertEqual(r["evidence"]["cut_retries"], 0)
         paged = kr.decode_charger_test(page(old, 0, [ROW0]))
         self.assertNotIn("PS_RDY quirks", kr.render("charger-test", r))
         # the two shapes are told apart by length alone: 40/56 old, 42/58 new; the row decodes the same under both
@@ -384,13 +391,13 @@ class ChargerTest(unittest.TestCase):
     def test_reason_42_withdrawn_by_source_decodes(self):
         # Hardware-run item 8 (2026-11-09, runs/2026-11-09-splitter): the re-plan row's new Reason::Withdrawn (#42)
         # must decode, not raise FrameError("invalid charger-test row") - ct_start.py crashed at the summary with it.
-        self.assertEqual(len(kr.TEST_REASONS), 50)   # 43 reasons + WrongVoltage (#43) + NeedsLoad (#44) + Floored (#45) + StepResolution (#46) + Loop (#47) + Advertised (#48) + LightLevel (#49)
+        self.assertEqual(len(kr.TEST_REASONS), 51)   # 43 reasons + WrongVoltage (#43) + NeedsLoad (#44) + Floored (#45) + StepResolution (#46) + Loop (#47) + Advertised (#48) + LightLevel (#49) + PortCuts (#50)
         self.assertEqual(kr.TEST_REASONS[42], "withdrawn by source")
         row = struct.pack("<BBBHHHBBBI", 2, 4, 0, 20000, 0, 0, 4, 42, 0, 0)   # a pd3-fixed 20 V row, skip, why 42
         step = kr.decode_charger_test(page(HEADER2, 0, [row]))["steps"][0]
         self.assertEqual((step["result"], step["reason"]), ("skip", "withdrawn by source"))
         self.assertEqual(step["explanation"], "withdrawn by source")
-        bad = bytearray(row); bad[10] = 50   # the why byte, one past the last reason, still fails the row check
+        bad = bytearray(row); bad[10] = 51   # the why byte, one past the last reason, still fails the row check
         with self.assertRaises(kr.FrameError):
             kr.decode_charger_test(page(HEADER2, 0, [bytes(bad)]))
 
@@ -404,7 +411,7 @@ class ChargerTest(unittest.TestCase):
         self.assertEqual((step["result"], step["reason"]), ("fail", "wrong voltage on 5V contract"))
         self.assertEqual(step["explanation"], "wrong voltage on 5V contract")
         self.assertEqual(step["measured_mv"], 7600)
-        bad = bytearray(row); bad[10] = 50   # the why byte, one past the last reason, still fails the row check
+        bad = bytearray(row); bad[10] = 51   # the why byte, one past the last reason, still fails the row check
         with self.assertRaises(kr.FrameError):
             kr.decode_charger_test(page(HEADER2, 0, [bytes(bad)]))
 
@@ -417,7 +424,7 @@ class ChargerTest(unittest.TestCase):
         self.assertEqual((step["result"], step["reason"]), ("skip", "needs load"))
         self.assertEqual(step["explanation"], "needs load")
         self.assertEqual(step["measured_mv"], 1800)
-        bad = bytearray(row); bad[10] = 50   # one past the last reason
+        bad = bytearray(row); bad[10] = 51   # one past the last reason
         with self.assertRaises(kr.FrameError):
             kr.decode_charger_test(page(HEADER2, 0, [bytes(bad)]))
 
@@ -434,7 +441,7 @@ class ChargerTest(unittest.TestCase):
         step = kr.decode_charger_test(page(HEADER2, 0, [row]))["steps"][0]
         self.assertEqual((step["result"], step["reason"], step["detail"]), ("fail", "step resolution", 100))
         self.assertEqual(step["explanation"], "step resolution 100mV")
-        bad = bytearray(row); bad[10] = 50   # one past the last reason
+        bad = bytearray(row); bad[10] = 51   # one past the last reason
         with self.assertRaises(kr.FrameError):
             kr.decode_charger_test(page(HEADER2, 0, [bytes(bad)]))
 
@@ -449,6 +456,16 @@ class ChargerTest(unittest.TestCase):
         row = struct.pack("<BBBHHHBBBI", 5, 1, 0, 9000, 0, 0, 4, 49, 0, 0)   # a QC2 9 V row, skip, why 49
         step = kr.decode_charger_test(page(HEADER2, 0, [row]))["steps"][0]
         self.assertEqual((step["result"], step["reason"]), ("skip", "light run: not asked"))
+
+    def test_reason_50_port_cuts_decodes(self):
+        # a legacy port that cuts its own 5 V rail with no load (usb-a-no-load-auto-off): the step lost VBUS twice, a skip
+        self.assertEqual(kr.TEST_REASONS[50], "port cuts without load")
+        row = struct.pack("<BBBHHHBBBI", 5, 0, 0, 5000, 0, 1970, 4, 50, 0, 0)   # a QC2 5 V row, skip, why 50
+        step = kr.decode_charger_test(page(HEADER2, 0, [row]))["steps"][0]
+        self.assertEqual((step["result"], step["reason"]), ("skip", "port cuts without load"))
+        past = struct.pack("<BBBHHHBBBI", 5, 0, 0, 5000, 0, 0, 4, 51, 0, 0)    # one past the last reason
+        with self.assertRaises(kr.FrameError):
+            kr.decode_charger_test(page(HEADER2, 0, [past]))
 
     def test_schema2_epr_avs_is_a_programmable_test(self):
         meta = bytearray(HEADER2)
@@ -486,7 +503,7 @@ class ChargerTest(unittest.TestCase):
         row = bytes([6]) + ROW0[1:]
         good = page(HEADER2, 0, [row])
         for offset, value in ((0, 3), (11, 113), (23, 0x3C), (39, 12), (18, 0x80), (22, 0x30),
-                              (40, 8), (42, 20), (43, 12), (44, 0x80), (51, 5), (52, len(kr.TEST_REASONS))):   # (22, 0x30) = draft bits 28..29 = level 3: no such level
+                              (42, 20), (43, 12), (44, 0x80), (51, 5), (52, len(kr.TEST_REASONS))):   # (22, 0x30) = draft bits 28..29 = level 3: no such level
             bad = bytearray(good); bad[offset] = value
             with self.subTest(offset=offset), self.assertRaises(kr.FrameError):
                 kr.decode_charger_test(bad)

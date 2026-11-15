@@ -25,6 +25,7 @@ NO_QC3PLUS = "no QC3+ response"   # the skip reason of a QC3+ group the charger 
 # are not skips of a chosen test: the counts name them apart and the rows say "advertised" / "not asked".
 ADVERTISED, NOT_ASKED = "advertised", "light run: not asked"
 NOTED = (ADVERTISED, NOT_ASKED)
+PORT_CUTS = "port cuts without load"   # Reason::PortCuts: the step lost VBUS to the port's own cut twice, so it is no verdict
 
 
 def _v(mv):
@@ -66,7 +67,8 @@ def _step_text(s, prev, amps=True):
     if s["reason"] in NOTED:
         return f"{label} advertised" if s["reason"] == ADVERTISED else f"{label} not asked"
     # A 6 A row the source did not offer: the firmware's "not unlocked" skip says which link of the OEM chain was missing.
-    return f"{label} skipped: {_not_unlocked(s)}" if s["reason"] == "not unlocked" else f"{label} skipped"
+    return f"{label} skipped: {_not_unlocked(s)}" if s["reason"] == "not unlocked" else \
+        f"{label} skipped: {s['reason']}" if s["reason"] == PORT_CUTS else f"{label} skipped"
 
 
 def _not_unlocked(s):
@@ -162,6 +164,9 @@ def summarize(r):
         out.append(f"- {', '.join(dict.fromkeys(names))}: skipped, {why}")
     if not_adv:
         out.append(f"- Not advertised: {', '.join(dict.fromkeys(not_adv))}")
+    cuts = ev.get("cut_retries", 0)
+    if cuts:   # the source dropped VBUS for a moment at 5 V with no load; each such step was asked again once (Reason::PortCuts)
+        out.append(f"- Port cut at 5 V: {cuts} step{'s' if cuts != 1 else ''} asked again")
     return "\n".join(out)
 
 

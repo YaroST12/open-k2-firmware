@@ -697,6 +697,9 @@
   "700": "[CT] svooc_cap vbus=%dmV after the stage: Rd cycle\n",
   "701": "[SVOOC] release: %s t=%ums cmds=%u replies=%u missed=%u cut=%u accepted=%u vmax_held=%dmV imax=%dmA contract=%s>%s inline=%s esc=%s\n",
   "702": "[SVOOC] exit vbus=%dmV %s vmax=%dmV\n",
-  "703": "[CT] svooc_cap start\n"
+  "703": "[CT] svooc_cap start\n",
+  "704": "[CT] cut period=%ums n=%u\n",
+  "705": "[CT] cut retry row=%u dip=%ums\n",
+  "706": "[CT] cut retry row=%u cut again: skip\n"
  }
 }

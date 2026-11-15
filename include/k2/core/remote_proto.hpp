@@ -98,7 +98,8 @@
 //                                    physical_cable_mv(2) ma(2), RMDO version nibbles(1),
 //                                    source_session(4), raw_source_header(2), observed_pdos(1),
 //                                    ps_rdy_timing(1: TimingFlag bits seen on any PD row - bit0 PS_RDY with VBUS out of
-//                                    band, bit1 PS_RDY inferred, bit2 later than the spec maximum), ps_rdy_max(1: the worst
+//                                    band, bit1 PS_RDY inferred, bit2 later than the spec maximum, bits 3..7 the port-cut retries of the run: steps asked
+//                                    again after a legacy port dropped VBUS for a moment at 5 V, saturating at 31), ps_rdy_max(1: the worst
 //                                    Accept -> PS_RDY time in 20 ms units, 255 = 5.1 s or more, 0 = none measured).
 //                                    Header is 42 bytes; n<=1, row byte 0 is Algorithm, not Group.
 //                                    Evidence is retained at run start; draft selection/stage are live.

@@ -287,7 +287,7 @@ TEST_REASONS = ["none", "disabled", "not advertised", "over voltage cap", "not i
                 "rebooted during request", "rebooted during handover", "EPR entry refused", "no contract",
                 "source shut off (needs replug)", "no PD after re-attach", "VBUS cut, source recovered", "blocked by PD",
                 "no QC3+ response", "rebooted 3x", "needs external power", "PD gave up before START", "Class A only (12 V max)",
-                "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target", "withdrawn by source", "wrong voltage on 5V contract", "needs load", "floored above target", "step resolution", "HID-cable loop: 5V lock", "advertised", "light run: not asked"]
+                "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target", "withdrawn by source", "wrong voltage on 5V contract", "needs load", "floored above target", "step resolution", "HID-cable loop: 5V lock", "advertised", "light run: not asked", "port cuts without load"]
 TEST_MAX_STEPS = 112  # Runner's bounded storage: pd::kMaxPdos * 6 + 46
 # fastcharge::Protocol in enum order (include/k2/fastcharge/fastcharge_classify.hpp)
 FC_NAMES = ["...", "NO INPUT", "NO QUICK", "DCP 5V", "QC3.0", "QC2.0 5V", "QC2.0 9V", "QC2.0 12V",
@@ -1276,8 +1276,7 @@ def decode_charger_test(p):
         run_level = (run_mask & TEST_LEVEL_MASK) >> TEST_LEVEL_SHIFT   # run bits 28..29: the level the run in hand ran at
         run_mask &= ~TEST_LEVEL_MASK
         if (run_mask | draft_mask) & ~TEST_ALL or level >= len(TEST_LEVELS) or run_level >= len(TEST_LEVELS) \
-                or stage >= len(TEST_STAGES) or p[39] & 15 > 11 \
-                or (header == 42 and p[40] & ~7):
+                or stage >= len(TEST_STAGES) or p[39] & 15 > 11:
             raise FrameError("invalid charger-test selection or evidence")
         out["selection"] = {"run_mask": run_mask, "configured_mask": draft_mask, "pps_sweep": sweep,
                             "avs_sweep": avs_sweep, "level": TEST_LEVELS[level], "run_level": TEST_LEVELS[run_level],
@@ -1300,6 +1299,8 @@ def decode_charger_test(p):
             # PS_RDY timing quirks the engine tolerates and the verdicts ignore (TimingFlag bits; worst Accept -> PS_RDY in 20 ms units)
             "ps_rdy": {"out_of_band": bool(p[40] & 1), "inferred": bool(p[40] & 2), "late": bool(p[40] & 4),
                        "worst_ms": p[41] * 20} if header == 42 else None,   # None: this firmware does not report it
+            # steps asked again after a legacy port dropped VBUS for a moment at 5 V (timing byte bits 3..7, saturating at 31)
+            "cut_retries": p[40] >> 3 if header == 42 else 0,
             "pass_scope": "negotiation and measured voltage only; not rated-current/power or revision conformance"}
     rows = []
     for i in range(n):

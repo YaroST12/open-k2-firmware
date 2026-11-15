@@ -264,7 +264,7 @@ test("charger-test exact schema2 selection and retained evidence", () => {
     advertised: { pps: true, epr_table: true, spr_avs: true, epr_capable: true, partial_epr: true },
     monitor_mv: 36000, physical_cable: { observed: true, max_mv: 50000, max_ma: 5000 },
     spoof_on: true, independent_revision_tested: false,
-    ps_rdy: { out_of_band: true, inferred: false, late: true, worst_ms: 700 },
+    ps_rdy: { out_of_band: true, inferred: false, late: true, worst_ms: 700 }, cut_retries: 0,
     pass_scope: "negotiation and measured voltage only; not rated-current/power or revision conformance"
   });
   const empty = new Uint8Array(42); empty[0] = 2;
@@ -272,8 +272,14 @@ test("charger-test exact schema2 selection and retained evidence", () => {
   assert.deepEqual(e.evidence.ps_rdy, { out_of_band: false, inferred: false, late: false, worst_ms: 0 });
   const quirky = new Uint8Array(empty); quirky[40] = 2; quirky[41] = 255;
   assert.deepEqual(P.decodeChargerTest(quirky).evidence.ps_rdy, { out_of_band: false, inferred: true, late: false, worst_ms: 5100 });
-  const badFlag = new Uint8Array(empty); badFlag[40] = 8;
-  assert.throws(() => P.decodeChargerTest(badFlag), P.FrameError);
+  // bits 3..7 of the same byte: the run's port-cut retries
+  const cut = new Uint8Array(empty); cut[40] = 4 | (3 << 3); cut[41] = 35;
+  assert.deepEqual(P.decodeChargerTest(cut).evidence.ps_rdy, { out_of_band: false, inferred: false, late: true, worst_ms: 700 });
+  assert.equal(P.decodeChargerTest(cut).evidence.cut_retries, 3);
+  cut[40] = 31 << 3;
+  assert.equal(P.decodeChargerTest(cut).evidence.cut_retries, 31);
+  assert.equal(P.decodeChargerTest(cut).evidence.ps_rdy.late, false);
+  assert.equal(e.evidence.cut_retries, 0);
   assert.equal(e.evidence.origin, "no-run"); assert.equal(e.evidence.source_rmdo, null);
   assert.deepEqual(e.selection.run, []); assert.deepEqual(e.steps, []);
 });
@@ -286,6 +292,7 @@ test("charger-test old 40-byte schema2 header still decodes", () => {
   assert.equal(r.schema, 2); assert.equal(r.stage, "review");
   assert.equal(r.evidence.pdo_count, 7); assert.equal(r.evidence.monitor_mv, 36000);
   assert.equal(r.evidence.ps_rdy, null);
+  assert.equal(r.evidence.cut_retries, 0);
   const paged = P.decodeChargerTest(testPage(old, 0, [TEST_ROWS[0]]));
   const fresh = P.decodeChargerTest(testPage(TEST_HEADER2, 0, [TEST_ROWS[0]]));
   assert.equal(paged.count, 1);
@@ -445,7 +452,7 @@ test("charger-test sweep row: flags bit 5, the detail byte is the recorded point
 test("charger-test schema2 rejects malformed shapes, unknown masks and unselected rows", () => {
   const good = testPage(TEST_HEADER2, 0, [TEST_ROWS[0]]);
   for (const [at, value] of [[0, 3], [11, 107], [23, 0x42], [39, 12], [18, 0x80], [22, 0x30], [22, 0x08],
-                            [40, 8], [42, 20], [43, 12], [44, 0x80], [51, 5], [52, 50]]) {   // 50 = one past the last reason (49 = LightLevel); [22, 0x30] = draft bits 28..29 = 3, no level; [22, 0x08] = draft bit 27, below the level
+                            [42, 20], [43, 12], [44, 0x80], [51, 5], [52, 51]]) {   // 51 = one past the last reason (50 = PortCuts); [22, 0x30] = draft bits 28..29 = 3, no level; [22, 0x08] = draft bit 27, below the level
     const bad = new Uint8Array(good); bad[at] = value;
     assert.throws(() => P.decodeChargerTest(bad), P.FrameError, "offset " + at);
   }
