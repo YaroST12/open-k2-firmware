@@ -68,6 +68,7 @@ struct Fake final : ct::Env {
     std::vector<int> fc_mas;   // the current each fc request carried
     // The engine's fc::Caps (fctrig::caps()): a SCP / UFCS request makes the charger's capabilities readable, as its session does.
     const fc::Caps* serve_caps = nullptr;
+    int serve_caps_from = 1;   // the first fc request that reads the limits: the engine clears them at a session start, so a first attempt that a cut ends before the read leaves none
     std::vector<fc::Proto> protocols;
     fc::Proto no_response_proto = fc::Proto::Count;   // a protocol whose engine fails with NoResponse on the first raised request
     // A QC-only bank asked for a protocol it does not speak: the engine ends every request of it as Unsupported (it never got an
@@ -308,7 +309,7 @@ struct Fake final : ct::Env {
         if (cut_on) { in.fc_state = fc::State::Failed; in.fc_fail = fc::Fail::NoHandshake; return fc::Fail::None; }   // the output is dark: nobody answers
         if (no_handshake_after_cut && cuts_seen) { in.fc_state = fc::State::Failed; in.fc_fail = fc::Fail::NoHandshake; in.vbus_mv = 5000; return fc::Fail::None; }
         if (ra_dead_legacy && ra_on) { ++ra_dead_fc; return fc::Fail::NoHandshake; }
-        if (serve_caps && (p == fc::Proto::Scp || p == fc::Proto::Ufcs)) in.fc_caps = serve_caps;
+        if (serve_caps && fc_requests >= serve_caps_from && (p == fc::Proto::Scp || p == fc::Proto::Ufcs)) in.fc_caps = serve_caps;
         if (glitch_at == fc_requests) ++in.session;   // CC blip: new session, VBUS unchanged
         if (link_guard && handed && in.pd_quiet_ms < 2000) { ++guard_refusals; return fc::Fail::Inline; }
         fc_times.push_back(in.now);
@@ -5409,6 +5410,64 @@ static void test_cut_in_the_row_then_a_clean_retry_passes() {
     CHECK_EQ(r.evidence().cut_retries, 1);
     CHECK_EQ(f.fc_requests >= 4, true);   // 5 V (cut) + 5 V again + 9 V + 12 V
 }
+// Regression guard (CUKTECH USB-A, Medium run 2026-11-15): after a first SCP row was lost to a cut and passed on its retry, the 4.5 V
+// and 5 V 4.5 A rows read "not advertised". Not a loss of evidence: the retry's session reads the same limit block (3.3..10 V,
+// 2.5 A on that port), the rows follow it exactly as after an unretried pass, and the older run only looked different because its
+// first SCP row failed (nothing was ever replanned). A retried first row must plan the rest of the unit as an unretried one does.
+static std::vector<PlanRow> all_rows(const ct::Runner& r) {
+    std::vector<PlanRow> out;
+    for (const auto& s : r.steps()) out.push_back({s.mv, s.ma, s.verdict, s.reason});
+    return out;
+}
+static void expect_same_plan(const std::vector<PlanRow>& a, const std::vector<PlanRow>& b) {
+    CHECK_EQ(a.size(), b.size());
+    for (size_t i = 0; i < a.size() && i < b.size(); ++i) {
+        CHECK_EQ(a[i].mv, b[i].mv); CHECK_EQ(a[i].ma, b[i].ma);
+        CHECK_EQ(int(a[i].v), int(b[i].v)); CHECK_EQ(int(a[i].r), int(b[i].r));
+    }
+}
+static void test_a_retried_first_scp_row_replans_like_an_unretried_one() {
+    // the limit block of the CUKTECH USB-A port (regs 0x90..0x97 = 99 99 B7 CA 5E 99 14 32): 5.5..10 V, 0.3..2.5 A
+    const auto caps = scp_caps_of(5500, 10000, 300, 2500);
+    Fake clean; clean.caps = {}; clean.serve_caps = &caps;
+    ct::Runner rc(clean); run_unit(clean, rc, A::Scp);
+    Fake cut; cut.caps = {}; cut.serve_caps = &caps; cut.serve_caps_from = 2; cut.cut_on_requests = {1};   // the cut ends the first attempt before the limits are read
+    ct::Runner rr(cut); run_unit(cut, rr, A::Scp);
+    CHECK_EQ(cut.cuts_seen, 1);
+    CHECK_EQ(rr.evidence().cut_retries, 1);
+    CHECK_EQ(rr.evidence().scp_ma, 2500);
+    CHECK_EQ(rr.evidence().scp_ma, rc.evidence().scp_ma);
+    expect_same_plan(all_rows(rc), all_rows(rr));
+    const auto rows = rows_of(rr, A::Scp);
+    CHECK_EQ(rows.size(), 4u);   // the top level is the 10 V row itself
+    CHECK_EQ(int(rows[0].v), int(ct::Verdict::Pass));
+    CHECK_EQ(int(rows[1].v), int(ct::Verdict::Pass));
+    for (size_t i = 2; i < rows.size(); ++i) { CHECK_EQ(int(rows[i].v), int(ct::Verdict::Skip)); CHECK_EQ(int(rows[i].r), int(ct::Reason::NoOffer)); }   // 4.5 V < 5.5 V, 4.5 A > 2.5 A: the reported limits, retried or not
+    for (int ma : cut.fc_mas) CHECK_EQ(ma <= 2500, true);
+}
+static void test_a_retried_first_scp_row_keeps_the_rows_a_wide_list_offers() {
+    const auto caps = scp_caps_of(3300, 20000, 1000, 6000);   // a 20 V 6 A adapter: every row is offered, so every row must run after the retry
+    Fake clean; clean.caps = {}; clean.serve_caps = &caps;
+    ct::Runner rc(clean); run_unit(clean, rc, A::Scp);
+    Fake cut; cut.caps = {}; cut.serve_caps = &caps; cut.serve_caps_from = 2; cut.cut_on_requests = {1};
+    ct::Runner rr(cut); run_unit(cut, rr, A::Scp);
+    CHECK_EQ(cut.cuts_seen, 1);
+    CHECK_EQ(rr.evidence().cut_retries, 1);
+    expect_same_plan(all_rows(rc), all_rows(rr));
+    const auto rows = rows_of(rr, A::Scp);
+    CHECK_EQ(rows.size(), 5u);
+    for (const auto& s : rows) CHECK_EQ(int(s.v), int(ct::Verdict::Pass));   // 5 V, 10 V, 20 V, 4.5 V 5 A, 5 V 4.5 A all ran
+}
+static void test_a_retried_first_ufcs_row_replans_like_an_unretried_one() {
+    const auto caps = ufcs_caps_of({ufcs_mode(1, 3400, 5500, 1000, 2000), ufcs_mode(2, 5500, 11000, 1000, 3000)});
+    Fake clean; clean.caps = {}; clean.serve_caps = &caps;
+    ct::Runner rc(clean); run_unit(clean, rc, A::Ufcs);
+    Fake cut; cut.caps = {}; cut.serve_caps = &caps; cut.serve_caps_from = 2; cut.cut_on_requests = {1};
+    ct::Runner rr(cut); run_unit(cut, rr, A::Ufcs);
+    CHECK_EQ(cut.cuts_seen, 1);
+    CHECK_EQ(rr.evidence().cut_retries, 1);
+    expect_same_plan(all_rows(rc), all_rows(rr));
+}
 static void test_a_second_cut_in_the_retry_is_a_skip_not_a_fail() {
     Fake f; f.caps = {}; f.cut_on_requests = {1, 2}; f.cut_delay_ms = 0; ct::Runner r(f);   // the retry (request 2) meets a cut too
     CHECK_EQ(r.start(f.caps, kQc2, f.in, true), ct::Reason::None);
@@ -7784,7 +7843,7 @@ int main() {
     test_avs_current_and_bad_offers(); test_pd_plan_follows_a_list_that_grows_during_the_attach(); test_reannounced_identical_caps_are_not_a_change();
     test_measured_dwell_and_plan_capacity();
     test_usb_a_sag_tail_session_is_not_source_lost(); test_usb_a_sag_tail_waits_for_vbus_to_climb(); test_usb_a_sag_tail_with_dead_or_low_vbus_is_still_lost(); test_session_change_in_baseline_without_a_sag_is_still_lost(); test_usb_a_midrow_session_opens_the_adopt_window(); test_usb_a_sag_dip_under_1v_inside_the_window_waits();
-    test_cut_in_the_row_then_a_clean_retry_passes(); test_a_second_cut_in_the_retry_is_a_skip_not_a_fail(); test_a_cut_that_reads_no_response_does_not_skip_the_family(); test_a_loss_that_does_not_come_back_in_the_window_is_a_fail();
+    test_cut_in_the_row_then_a_clean_retry_passes(); test_a_retried_first_scp_row_replans_like_an_unretried_one(); test_a_retried_first_scp_row_keeps_the_rows_a_wide_list_offers(); test_a_retried_first_ufcs_row_replans_like_an_unretried_one(); test_a_second_cut_in_the_retry_is_a_skip_not_a_fail(); test_a_cut_that_reads_no_response_does_not_skip_the_family(); test_a_loss_that_does_not_come_back_in_the_window_is_a_fail();
     test_a_dip_shorter_than_the_minimum_is_no_cut(); test_a_protocol_failure_after_a_clean_comeback_is_a_fail(); test_the_7s_cut_sequence_over_the_5v_steps_of_the_cuktech_run(); test_a_fall_in_a_raised_row_is_no_cut_casualty();
     test_custom_unit_list_runs_in_order(); test_pd_unit_attaches_with_a_contract(); test_a_failed_unit_does_not_stop_the_run();
     test_default_unit_order_is_vendor_modes_then_pd_then_legacy(); test_default_order_runs_vendor_modes_before_pd_before_legacy(); test_pd_between_vendor_and_legacy_units(); test_pd_replan_in_the_middle_keeps_the_rows_in_order(); test_consecutive_legacy_units_share_one_attach(); test_legacy_session_that_sees_pd_traffic_is_renewed(); test_silent_ufcs_source_reports_no_response_not_pd_active(); test_legacy_waits_between_units();

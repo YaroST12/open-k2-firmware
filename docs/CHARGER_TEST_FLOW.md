@@ -223,7 +223,12 @@ session reads the adapter's voltage and current registers, the UFCS session rece
 kept by the engine after the session ends, `fctrig::caps()`). When that row passes, `Runner::replan_fc` plans the unit
 again with the reported limits, once per unit: it replaces the unit's block of rows in place (the cursor and the rows
 before and behind it keep their place), records the new Skip rows, and calls `Env::plan_changed()` only when the rows
-changed. A failed first row, a frozen plan, or a block that does not fit the plan's capacity leaves the fixed rows.
+changed. A failed first row, a frozen plan, or a block that does not fit the plan's capacity leaves the fixed rows. A first row
+that was lost to a port cut and passed on its retry (see "Port cuts") replans exactly as an unretried pass does: the retry's
+session reads the limits again and the same `replan_fc` runs. The CUKTECH USB-A port reports 5.5 to 10 V and 2.5 A (registers
+0x92..0x95 = B7 CA 5E 99, in every session, retried or not), so after a passing 5 V row its 4.5 V and 5 V 4.5 A rows are
+`no offer` skips with or without a retry; a run whose first SCP row failed never replans and runs the fixed rows (the
+2026-11-15 run on the earlier build only looked different for that reason).
 
 | Unit | Rows with no report (fixed) | Rows with the report |
 |---|---|---|
