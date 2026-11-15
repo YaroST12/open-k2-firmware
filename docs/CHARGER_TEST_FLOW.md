@@ -225,13 +225,13 @@ again with the reported limits, once per unit: it replaces the unit's block of r
 before and behind it keep their place), records the new Skip rows, and calls `Env::plan_changed()` only when the rows
 changed. A failed first row, a frozen plan, or a block that does not fit the plan's capacity leaves the fixed rows. A first row
 that was lost to a port cut and passed on its retry (see "Port cuts") replans exactly as an unretried pass does: the retry's
-session reads the limits again and the same `replan_fc` runs. A run whose first SCP row failed never replans and runs the
-fixed rows, so a row can run when the first row fails and read `no offer` when it passes (CHARGER_QUIRKS.md, CUKTECH USB-A port
-SCP limits).
+session reads the limits again and the same `replan_fc` runs. The SCP rows follow the reported maximum voltage and current only
+(2026-11-15): the reported minimum is no gate and the currents are asked at no more than the reported maximum, so a first row that
+passes never costs a row that a failed first row would have run (CHARGER_QUIRKS.md, CUKTECH USB-A port SCP limits).
 
 | Unit | Rows with no report (fixed) | Rows with the report |
 |---|---|---|
-| SCP | 5 V detect, 10 V at 2.25 A, 4.5 V at 5 A, 5 V at 4.5 A | 5 V detect, 10 V at min(2.25 A, reported max), the reported top level when it is above 5 V and not 10 V (within the monitor ceiling and the cable), 4.5 V at 5 A, 5 V at 4.5 A. A row whose voltage is outside the reported window, or whose current is above the reported maximum, is a Skip row (`no offer`): it is never requested |
+| SCP | 5 V detect, 10 V at 2.25 A, 4.5 V at 5 A, 5 V at 4.5 A | 5 V detect, 10 V at min(2.25 A, reported max), the reported top level when it is above 5 V and not 10 V (within the monitor ceiling and the cable), 4.5 V and 5 V at the adapter's reported maximum when that is below 5 A / 4.5 A (the row names the current it asks). A row whose voltage is above the reported maximum is a Skip row (`no offer`): it is never requested; the reported minimum is not checked |
 | UFCS | 5, 9, 11, 5, 12 V, then 20 V at 3 A | 5 V, then per advertised mode (lowest first) its bottom, middle and top level, each at 1 A (the mode's smallest current when that is higher, never above its maximum), a level shared by two modes once, then 5 V again judged in the mode that reaches 5 V. The top is clipped to the monitor ceiling and the cable; a mode that lies wholly above it is one named Skip row (`over cap` / `cable limit`) |
 
 Each row planned from the report names the mode it samples: `Step::pdo` (unused for UFCS otherwise) packs the mode's

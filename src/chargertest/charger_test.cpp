@@ -643,24 +643,26 @@ void plan_unit(Unit unit, const pd::SourceCaps& caps, Options o, Input in, AddRe
             // 0x90..0x97) writes no current; the 10 V row asks 2.25 A (22.5 W). The
             // direct-charge rows (4.5 V 5 A, 5 V 4.5 A) only set the limit: the suite draws no current (a load aborts the
             // row, see load_fault), so the cable's current rating gates nothing. Each row is its own session: a detect-only session ends after its reads.
-            // With the adapter's own limits (fc_caps.scp, read in the unit's first session) the rows stay inside them: a level or a
-            // current the adapter did not report is a NoOffer row, and the top level it reported joins the plan, within the monitor.
+            // With the adapter's own limits (fc_caps.scp, read in the unit's first session) the rows stay inside them: a level above
+            // the reported maximum is a NoOffer row, the currents are asked at no more than the reported maximum (the row names what
+            // it asks, and the engine writes the same), and the top level it reported joins the plan, within the monitor. The reported
+            // minimum is not a gate: the limits decode is inferred, and a CUKTECH USB-A port that reports 5.5 V as its minimum takes the
+            // 5 V target (docs/CHARGER_QUIRKS.md), so a floor read from it would skip rows the port runs.
             case Group::Scp: {
                 if (!in.fc_caps || !in.fc_caps->scp.valid) {
                     level(5000); level(10000, false, kScpLowMa); level(4500, false, 5000); level(5000, false, 4500);
                     break;
                 }
                 const auto& lim = in.fc_caps->scp;
-                auto inside = [&](unsigned mv, unsigned ma) {
-                    return int(mv) >= lim.min_mv && int(mv) <= lim.max_mv && int(ma) <= lim.max_ma;
-                };
-                const unsigned low_ma = std::min<unsigned>(kScpLowMa, static_cast<unsigned>(lim.max_ma));
+                auto inside = [&](unsigned mv) { return int(mv) <= lim.max_mv; };
+                const auto ask = [&](unsigned ma) { return std::min<unsigned>(ma, static_cast<unsigned>(lim.max_ma)); };
+                const unsigned low_ma = ask(kScpLowMa);
                 const unsigned top = std::min<unsigned>(static_cast<unsigned>(lim.max_mv), cap);
                 level(5000);
-                level(10000, false, low_ma, inside(10000, low_ma));
-                if (top > 5000 && top != 10000) level(top, false, low_ma, inside(top, low_ma));
-                level(4500, false, 5000, inside(4500, 5000));
-                level(5000, false, 4500, inside(5000, 4500));
+                level(10000, false, low_ma, inside(10000));
+                if (top > 5000 && top != 10000) level(top, false, low_ma, inside(top));
+                level(4500, false, ask(5000), inside(4500));
+                level(5000, false, ask(4500), inside(5000));
                 break;
             }
             default: level(5000); break;

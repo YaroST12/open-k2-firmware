@@ -521,13 +521,15 @@ Ports (operator, 2026-11-10): C1 and C2 are the 120 W ports (20 V 6 A with the X
     20.00 V, 3.00 A) got ACK, Accept, Power_Ready: a 60 W UFCS contract. No load, so the 3 A is a contract, not a draw.
 - USB-A port SCP limits (2026-11-15, `runs/cuktech-usba/medium3-stream`, the Medium run on the retry build; the same block in
   `medium2-stream` and in the 2026-11-11 `stream2`): the SCP session reads registers 0x90..0x97 = 99 99 B7 CA 5E 99 14 32,
-  decoded (inferred) 5.5 to 10 V and 0.3 to 2.5 A. A passing 5 V SCP row therefore replans the unit: 4.5 V (under the decoded
-  minimum) and 5 V 4.5 A (over the decoded maximum) become `no offer` skips, with or without a port-cut retry of the first row
-  (`stream2` shows the same two skips after an unretried pass). When the first SCP row fails instead, nothing is replanned and the
-  fixed rows run: the 5 V 4.5 A row then "passed" in `medium2-stream`, but its current was lowered to the reported 2.5 A by
-  `Engine::patch_scp_current` (registers 0xB2/0xB3 = 09 C4), so that pass proved no more than the 5 V row. Open: the port takes a
-  5 V target below its decoded minimum of 5.5 V, so the decoded minimum is not a floor this port enforces, and it never answers a
-  10 V target (timeout / unsupported), the top level it reports. Host-pinned (`tests/test_charger_test.cpp`, retried first row).
+  decoded (inferred) 5.5 to 10 V and 0.3 to 2.5 A. The first runner of the retry build replanned the unit on that block and
+  skipped 4.5 V (under the decoded minimum) and 5 V 4.5 A (over the decoded maximum) as `no offer`, with or without a port-cut retry
+  of the first row (`stream2` shows the same two skips after an unretried pass); when the first SCP row failed instead, nothing was
+  replanned and the fixed rows ran, and the 5 V 4.5 A row "passed" in `medium2-stream` with its current lowered to the reported 2.5 A
+  by `Engine::patch_scp_current` (registers 0xB2/0xB3 = 09 C4). The port takes a 5 V target below its decoded minimum of 5.5 V, so
+  the decoded minimum is no floor this port enforces, and the replan no longer reads it: the SCP rows follow only the reported maximum
+  voltage and current, and the 4.5 V and 5 V rows ask min(row current, reported max) and run (host-pinned,
+  `tests/test_charger_test.cpp`, retried first row). The port never answers a 10 V target (timeout / unsupported), the top level it
+  reports (open).
 - **Re-validation, C1 full run** (2026-11-07, 32a279f, top plug direct, Cable off, `runs/revalidate/cuktech-c1-full.log`):
   23 pass / 16 fail / 24 skip, no Hard Reset, no reboot. PD fixed 5-20 V 3 A and both PPS ranges pass (5.20-19.93 V, 3 A
   without a cable, as `no-sop-prime-for-dumb-plug`); **UFCS 5/9/11/5/12/20 V all pass in the full sequence**; VIVO "no

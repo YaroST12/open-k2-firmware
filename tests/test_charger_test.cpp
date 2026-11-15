@@ -3217,15 +3217,15 @@ static void test_scp_rows_follow_the_reported_capabilities() {
         for (int ma : f.fc_mas) CHECK_EQ(ma <= 6000, true);
         for (int mv : f.fc_mvs) CHECK_EQ(mv <= 20000, true);
     }
-    {   // 12 V 2.5 A port (a USB-A port, hardware dump): the 5 A direct-charge rows are not offered, so they are never asked
+    {   // 12 V 2.5 A port (a USB-A port, hardware dump): the 5 A direct-charge rows run at the port's 2.5 A, never above it
         Fake f; f.caps = {}; const auto caps = scp_caps_of(3300, 12000, 1000, 2500); f.serve_caps = &caps;
         ct::Runner r(f); run_unit(f, r, A::Scp);
         const auto rows = rows_of(r, A::Scp);
         CHECK_EQ(rows.size(), 5u);
         CHECK_EQ(rows[1].mv, 10000); CHECK_EQ(rows[1].v, ct::Verdict::Pass);
         CHECK_EQ(rows[2].mv, 12000); CHECK_EQ(rows[2].ma, 2250); CHECK_EQ(rows[2].v, ct::Verdict::Pass);
-        CHECK_EQ(rows[3].mv, 4500); CHECK_EQ(rows[3].v, ct::Verdict::Skip); CHECK_EQ(rows[3].r, ct::Reason::NoOffer);
-        CHECK_EQ(rows[4].mv, 5000); CHECK_EQ(rows[4].v, ct::Verdict::Skip); CHECK_EQ(rows[4].r, ct::Reason::NoOffer);
+        CHECK_EQ(rows[3].mv, 4500); CHECK_EQ(rows[3].ma, 2500); CHECK_EQ(rows[3].v, ct::Verdict::Pass);
+        CHECK_EQ(rows[4].mv, 5000); CHECK_EQ(rows[4].ma, 2500); CHECK_EQ(rows[4].v, ct::Verdict::Pass);
         for (int ma : f.fc_mas) CHECK_EQ(ma <= 2500, true);
     }
     {   // 5.5 V 5 A port: the 10 V row is not offered; the top level is 5.5 V
@@ -5443,7 +5443,9 @@ static void test_a_retried_first_scp_row_replans_like_an_unretried_one() {
     CHECK_EQ(rows.size(), 4u);   // the top level is the 10 V row itself
     CHECK_EQ(int(rows[0].v), int(ct::Verdict::Pass));
     CHECK_EQ(int(rows[1].v), int(ct::Verdict::Pass));
-    for (size_t i = 2; i < rows.size(); ++i) { CHECK_EQ(int(rows[i].v), int(ct::Verdict::Skip)); CHECK_EQ(int(rows[i].r), int(ct::Reason::NoOffer)); }   // 4.5 V < 5.5 V, 4.5 A > 2.5 A: the reported limits, retried or not
+    // the 4.5 V and 5 V 4.5 A rows run, asked at no more than the 2.5 A the port reports (the reported 5.5 V minimum is no gate: the port takes 5 V)
+    CHECK_EQ(rows[2].mv, 4500); CHECK_EQ(rows[2].ma, 2500); CHECK_EQ(int(rows[2].v), int(ct::Verdict::Pass));
+    CHECK_EQ(rows[3].mv, 5000); CHECK_EQ(rows[3].ma, 2500); CHECK_EQ(int(rows[3].v), int(ct::Verdict::Pass));
     for (int ma : cut.fc_mas) CHECK_EQ(ma <= 2500, true);
     }
 }
