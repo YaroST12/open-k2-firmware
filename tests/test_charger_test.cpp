@@ -297,6 +297,8 @@ struct Fake final : ct::Env {
         if (ra_dead_legacy && ra_on) { ++ra_dead_fc; return fc::Fail::NoHandshake; }
         if (serve_caps && (p == fc::Proto::Scp || p == fc::Proto::Ufcs)) in.fc_caps = serve_caps;
         if (glitch_at == fc_requests) ++in.session;   // CC blip: new session, VBUS unchanged
+        if (link_guard && handed && in.pd_quiet_ms < 2000) { ++guard_refusals; return fc::Fail::Inline; }
+        fc_times.push_back(in.now);
         if (no_response_proto == p && mv > 5000) {    // the engine gave up: the output never left 5 V
             in.fc_state = fc::State::Failed; in.fc_fail = fc::Fail::NoResponse; in.vbus_mv = 5000;
             return fc::Fail::None;
@@ -322,6 +324,7 @@ struct Fake final : ct::Env {
         ++releases; fc_releases += !pd;
         collapse_t0 = 0; in.ibus_ma = 0; out_on = false; ka_at = ka_end = 0;
         if (!pd) { fc_released = true; fc_released_at = in.now; }
+        if (!pd && restart_on_release && fc_releases == restart_on_release) restart_at = in.now + restart_delay_ms;
         if (!release_ok || latched) return;
         in.vbus_mv = 5000;
         if (pd && in.pd.epr_mode && spr_caps.valid) caps = spr_caps;
@@ -412,6 +415,17 @@ struct Fake final : ct::Env {
     int fc_blocked = 0;
     int vbus_after_handover = 5000;
     uint32_t chatter_until = 0;   // a charger that still sends caps until this time, then goes quiet
+    uint32_t chatter_from = 0;    // ... starting at this time (0 = from the attach)
+    // pattern output-reset-after-unanswered-scp (UGREEN X865, runs/ugreen-qa/r1a-stream, 2026-11-15): restart_on_release'th fc release
+    // (0 = never) is followed restart_delay_ms later by a cut of the source's own output (VBUS 0.1 V for restart_dark_ms, the attach
+    // session unchanged: the Rp stays), then VBUS is back at 5 V and restart_caps_ms after that the source announces its list to the
+    // PD-silent sink for restart_chatter_ms (r1a: ~300 ms after VBUS; the same charger's PD-silent attach announced for ~6.1 s).
+    int restart_on_release = 0; uint32_t restart_delay_ms = 30, restart_dark_ms = 1000, restart_caps_ms = 100, restart_chatter_ms = 0;
+    uint32_t restart_at = 0, restart_back_at = 0;
+    // The fc engine's link guard (link::inline_now): a legacy trigger is refused "PD or load active" while the driver still holds
+    // decoded caps, i.e. a PD frame arrived less than 2000 ms ago (the legacy-only driver drops stale caps after 2 s of quiet).
+    bool link_guard = false; int guard_refusals = 0;
+    std::vector<uint32_t> fc_times;   // `now` of every request_fc call the guard let through
     // CJ21-style give-up: after the Legacy attach it cycles 4 s caps, ~1 s hard reset (VBUS low, ~0.8 s of quiet after
     // VBUS is back before caps resume) until it disables PD at give_up_ms after the attach.
     uint32_t give_up_ms = 0, handed_at = 0;
@@ -537,7 +551,7 @@ struct Fake final : ct::Env {
                 else if (ph < 4200) { in.vbus_mv = 3500; in.pd_quiet_ms = ph - 4000; }
                 else { in.vbus_mv = 5100; in.pd_quiet_ms = ph - 4000; }
             } else if (handed) {
-                if (stays_pd || in.now < chatter_until) in.pd_quiet_ms = 0;
+                if (stays_pd || (in.now >= chatter_from && in.now < chatter_until)) in.pd_quiet_ms = 0;
                 else in.pd_quiet_ms = std::min<uint32_t>(in.pd_quiet_ms + 100, 1000000);
             }
             if (grow_at && in.now >= grow_at) { grow_at = 0; caps = grown; caps.valid = true; caps.active_cc = 1; }
@@ -555,6 +569,13 @@ struct Fake final : ct::Env {
                 rp_dropped = false; rp_done = true; if (saved.valid) { caps = saved; caps.valid = true; caps.active_cc = 1; }
                 in.vbus_mv = 5000; in.pd.state = pd::SinkState::Ready; in.pd.result = pd::SinkResult::Ok;
                 in.pd.mv = 5000; in.pd.pos = 1; in.pd.held = false; ++in.session;
+            }
+            if (restart_at && in.now >= restart_at) {   // the source's own output cut, then its announcement to the PD-silent sink
+                if (in.now < restart_at + restart_dark_ms) in.vbus_mv = 100;
+                else {
+                    restart_at = 0; restart_back_at = in.now; in.vbus_mv = 5000;
+                    chatter_from = in.now + restart_caps_ms; chatter_until = chatter_from + restart_chatter_ms;
+                }
             }
             if (low_now) in.vbus_mv = 4200;
             if (latch_at && in.now >= latch_at) { latch_at = 0; latched = true; latched_at = in.now; ++in.session; }
@@ -7236,6 +7257,60 @@ static void test_an_inline_refusal_names_what_latched_it() {
     CHECK_EQ(g_stub.log_text.find("[TEST] preflight refused: load attached (5100 mV)") != std::string::npos, true);
 }
 
+// pattern output-reset-after-unanswered-scp (UGREEN X865, runs/ugreen-qa/r1a-stream, 2026-11-15; user decision 2026-11-15: the row
+// waits): 27 ms after a Legacy row's reset to 5 V the source cut its output (0.1 V for ~1 s) and announced Source_Capabilities to the
+// PD-silent sink ~300 ms after VBUS was back. The next row went out ~100 ms after the return and the fc engine's link guard refused it
+// "PD or load active" (or, a tick later, the Runner skipped the unit as PD active). The row waits through the restart: VBUS back, then
+// kLegacyQuietMs of PD quiet counted from the later of the last frame and the return, at most kRestartSettleMs; then it runs normally.
+static void test_legacy_row_waits_through_a_source_restart() {
+    for (const uint32_t chatter : {0u, 6100u}) {   // r2: no announcement after the cut; r1a: an announcement as long as the attach's
+        Fake f; ct::Runner r(f);
+        f.link_guard = true; f.restart_on_release = 1; f.restart_chatter_ms = chatter;
+        const auto o = with_units(ct::bit(A::Scp), {ct::Unit::Scp});
+        CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+        CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 200000), true);
+        CHECK_EQ(f.restart_back_at != 0, true);
+        CHECK_EQ(f.guard_refusals, 0);
+        CHECK_EQ(count_unit_verdict(r, ct::Unit::Scp, ct::Verdict::Skip, ct::Reason::PdActive, false), 0u);
+        CHECK_EQ(count_unit_verdict(r, ct::Unit::Scp, ct::Verdict::Fail), 0u);
+        CHECK_EQ(f.fc_times.size() >= 2, true);
+        if (f.fc_times.size() < 2) continue;
+        // r2: no frame within kRestartCapsMs of the return; r1a: kLegacyQuietMs after the last frame (the Fake's last one is a tick
+        // before chatter_until)
+        const uint32_t ready = chatter ? f.restart_back_at + f.restart_caps_ms + chatter - 100 + ct::kLegacyQuietMs
+                                       : f.restart_back_at + ct::kRestartCapsMs;
+        CHECK_EQ(f.fc_times[1] >= ready, true);          // the row after the restart waited
+        CHECK_EQ(f.fc_times[1] < ready + 1000, true);    // and not much longer
+    }
+}
+// The same restart from a source that never stops announcing (a live PD source, not a restart burst): the wait is bounded by
+// kRestartSettleMs, then the unit is PD-active as before and nothing was sent to the guard meanwhile. A load still ends the run at once.
+static void test_legacy_restart_wait_is_bounded_and_a_load_still_refuses() {
+    {
+        Fake f; ct::Runner r(f);
+        f.link_guard = true; f.restart_on_release = 1; f.restart_chatter_ms = 10000000;
+        const auto o = with_units(ct::bit(A::Scp), {ct::Unit::Scp});
+        CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+        CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 400000), true);
+        CHECK_EQ(f.guard_refusals, 0);
+        CHECK_EQ(f.fc_times.size(), size_t(1));
+        CHECK_EQ(count_unit_verdict(r, ct::Unit::Scp, ct::Verdict::Skip, ct::Reason::PdActive, false) > 0, true);
+    }
+    {
+        Fake f; ct::Runner r(f);
+        f.link_guard = true; f.restart_on_release = 1; f.restart_chatter_ms = 6100;
+        const auto o = with_units(ct::bit(A::Scp), {ct::Unit::Scp});
+        CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+        CHECK_EQ(run_until(f, r, [&] { return f.restart_back_at != 0; }, 200000), true);
+        f.tick(r, 500);
+        f.in.inline_load = true;   // a sink plugged in while the row waits
+        f.tick(r, 300);
+        CHECK_EQ(r.reason(), ct::Reason::Inline);   // stopping: the rest is skipped, the run ends once the port is back to 5 V unloaded
+        f.in.inline_load = false;
+        CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Stopped; }, 20000), true);
+        CHECK_EQ(f.fc_times.size(), size_t(1));
+    }
+}
 int main() {
     test_an_above_5v_request_waits_for_the_journal_without_blocking();
     test_reannounce_before_the_first_row_replans(); test_reannounce_during_the_first_row_follows_the_new_slots();
@@ -7362,5 +7437,6 @@ int main() {
     test_pps_sweep_splits_at_5v_by_unit();
     test_default_sweep_on_a_low_latch_source();
     test_self_powered_run_sweeps_from_5v();
+    test_legacy_row_waits_through_a_source_restart(); test_legacy_restart_wait_is_bounded_and_a_load_still_refuses();
     return test_report("test_charger_test");
 }

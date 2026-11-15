@@ -153,6 +153,13 @@ struct UnitList {
 // with kLegacyRetryMs (a source that gets no Request retries Source_Capabilities and hard-resets, 5.07 s cycle on the Baseus
 // CJ21, before it disables PD); still no fallback = Reason::BlockedByPd and the unit's rows are skipped.
 inline constexpr uint32_t kLegacyQuietMs = 2500, kLegacySteadyMs = 500, kLegacyGiveUpMs = 20000, kLegacyRetryMs = 60000;
+// pattern output-reset-after-unanswered-scp: a source that cuts its own output between two rows of a PD-silent Legacy unit and
+// announces Source_Capabilities again when VBUS is back (UGREEN X865, runs/ugreen-qa/r1a-stream: first frame ~300 ms after the
+// return; its PD-silent attach announced for ~6.1 s). The next row waits after the return: kRestartCapsMs with no frame means the
+// source is not announcing; a frame means kLegacyQuietMs of quiet after the last one (the driver drops stale caps after 2 s, so the
+// fc engine's link guard passes). kRestartSettleMs from the return bounds the wait (~0.3 + 6.1 + 2.5 s = 8.9 s on the X865); a
+// source still talking then is PD live and the unit is skipped PdActive as before. A load or a PD contract still refuses at once.
+inline constexpr uint32_t kRestartCapsMs = 1000, kRestartSettleMs = 10000;
 // A session boundary (detach + fresh attach) happens only when the session mode changes:
 // consecutive Legacy units share one PD-silent attach and only clean up the D+/D- lines in between (the engine's release holds
 // them at 0 V, then Hi-Z). Waits before a unit's first handshake: kLegacyFirstWaitMs after the PD-silent attach (1000 ms),
@@ -843,6 +850,8 @@ private:
     // (the source cut its own output); cleared at every unit start. VBUS then dark past the window ends that unit, not the run.
     bool sag_cut_ = false, sag_open_ = false, gone_ = false, own_cut_ = false; uint32_t sag_ms_ = 0;
     bool recover_ = false, hot_ = false, stable_ = false, stopping_ = false, pd_owned_ = false, fc_owned_ = false;
+    bool restart_dark_ = false, restart_wait_ = false;   // a silent Legacy release: the source's output went dark / came back
+    uint32_t restart_ms_ = 0;                             // when it came back (restart_wait_)
     // Sink Hard Resets sent when the release started: a later one is the sink's own last resort for a release that did not
     // bring VBUS down (pattern budget-reannounce-mid-run), a recovery and not a lost source.
     uint32_t rel_hr_ = 0;

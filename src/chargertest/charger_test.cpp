@@ -2396,15 +2396,27 @@ void Runner::poll_impl(Input in, const pd::SourceCaps& caps) {
             if (!recover_) { recover_ = true; phase_ms_ = in.now; }
             session_ = in.session; stable_ = false;
         } else if (recover_) session_ = in.session;
+        // pattern output-reset-after-unanswered-scp: a PD-silent Legacy unit whose source cut its output and is back waits for the
+        // announcement that may follow (kRestartCapsMs, kLegacyQuietMs after a frame, kRestartSettleMs at most) before its next row.
+        if (!recover_ || pd_owned_ || mode_ != Mode::Legacy || !silent_ || !attached_) restart_dark_ = restart_wait_ = false;
+        else if (in.vbus_mv >= 0 && in.vbus_mv < 1000) { restart_dark_ = true; restart_wait_ = false; }
+        else if (restart_dark_ && safe5(in.vbus_mv)) { restart_dark_ = false; restart_wait_ = true; restart_ms_ = in.now; }
+        if (restart_wait_) {
+            const uint32_t back = in.now - restart_ms_;
+            const bool heard = in.pd_quiet_ms < back;   // a frame since VBUS came back
+            restart_wait_ = back < kRestartSettleMs && (heard ? in.pd_quiet_ms < kLegacyQuietMs : back < kRestartCapsMs);
+        }
         const Reason changed = dropped && pd_owned_ ? Reason::Lost : in.loop_lock ? Reason::Loop :
             in.inline_load ? Reason::Inline : in.fake ? Reason::Fake :
             in.vbus_mv < 0 || in.cap_mv < 5000 ? Reason::NoMonitor : Reason::None;
         if (changed != Reason::None) { stopping_ = true; reason_ = changed; skip_pending(changed); }
         // Offers that changed or PD that showed up end the unit's rows, not the run.
         else if (!stopping_) {
-            const Reason unit_stop = offers_changed ? Reason::CapsChanged : legacy_pending && pd_active ? Reason::PdActive : Reason::None;
+            const Reason unit_stop = offers_changed ? Reason::CapsChanged :
+                legacy_pending && pd_active && !restart_wait_ ? Reason::PdActive : Reason::None;
             if (unit_stop != Reason::None) skip_unit(unit_stop);
         }
+        if (restart_wait_ && !stopping_) { stable_ = false; return; }
         // The next row is a PD row and the source has not announced its list again (it just came back from a cut or a Hard Reset):
         // a request now is refused ("no source caps") and would fail the row. Wait; offers_changed ends it after kCapsReturnMs.
         bool wait_caps = false;
