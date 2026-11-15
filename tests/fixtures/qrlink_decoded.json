@@ -171,8 +171,9 @@
    },
    "record": {
     "checksum_ok": true,
+    "epr": false,
     "max_a": 5,
-    "max_v": 30,
+    "max_v": 20,
     "name": "[OnePlus mag]",
     "pid": "0x1196",
     "product_type": "passive cable",
@@ -197,6 +198,7 @@
    "name": "EPR 50V 5A",
    "record": {
     "checksum_ok": true,
+    "epr": true,
     "max_a": 5,
     "max_v": 50,
     "name": "[EPR 50V 5A]",
@@ -272,8 +274,9 @@
    },
    "record": {
     "checksum_ok": true,
+    "epr": false,
     "max_a": 5,
-    "max_v": 30,
+    "max_v": 20,
     "name": "[OnePlus mag]",
     "pid": "0x1196",
     "product_type": "passive cable",
@@ -348,8 +351,9 @@
    },
    "record": {
     "checksum_ok": true,
+    "epr": false,
     "max_a": 5,
-    "max_v": 30,
+    "max_v": 20,
     "name": "[OnePlus mag]",
     "pid": "0x1196",
     "product_type": "passive cable",
@@ -466,8 +470,9 @@
    },
    "record": {
     "checksum_ok": true,
+    "epr": false,
     "max_a": 5,
-    "max_v": 30,
+    "max_v": 20,
     "name": "[OnePlus mag]",
     "pid": "0x1196",
     "product_type": "passive cable",
@@ -584,8 +589,9 @@
    },
    "record": {
     "checksum_ok": true,
+    "epr": false,
     "max_a": 5,
-    "max_v": 30,
+    "max_v": 20,
     "name": "[OnePlus mag]",
     "pid": "0x1196",
     "product_type": "passive cable",
@@ -786,8 +792,9 @@
    },
    "record": {
     "checksum_ok": true,
+    "epr": false,
     "max_a": 5,
-    "max_v": 30,
+    "max_v": 20,
     "name": "[OnePlus mag]",
     "pid": "0x1196",
     "product_type": "passive cable",

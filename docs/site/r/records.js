@@ -148,8 +148,13 @@ var K2Records = (function () {
       checksum_ok: r[65] === ((sum + 0xA5) & 0xFF), vid: hex(idh & 0xFFFF, 4), pid: hex(product >>> 16, 4),
       product_type: PRODUCT_TYPE.hasOwnProperty(type) ? PRODUCT_TYPE[type] : "reserved"};
     if (type === 3 || type === 4) {
-      out.max_v = [20, 30, 40, 50][(cable >>> 9) & 3];
+      // As the firmware's parse_emarker: the VDM header's SVDM version picks the layout; the deprecated 30 V / 40 V codes and
+      // every SVDM 1.0 answer are 20 V; EPR needs bit 17 (passive VDO v1.0, active VDO1 v1.3 with VBUS through) with 5 A, 50 V.
+      var svdm2 = ((vdos[0] >>> 13) & 3) !== 0, ver = svdm2 ? (cable >>> 21) & 7 : 0;
+      var bit17 = svdm2 && ((cable >>> 17) & 1) === 1 && (type === 4 ? ver === 3 && ((cable >>> 4) & 1) === 1 : ver === 0);
+      out.max_v = svdm2 && ((cable >>> 9) & 3) === 3 ? 50 : 20;
       out.max_a = ((cable >>> 5) & 3) === 2 ? 5 : 3;
+      out.epr = bit17 && out.max_a === 5 && out.max_v === 50;
       out.speed = SPEED.hasOwnProperty(cable & 7) ? SPEED[cable & 7] : "code " + (cable & 7);
       out.termination = (cable >>> 11) & 3;
     }
@@ -262,7 +267,7 @@ var K2Records = (function () {
   var TERMINATION = ["passive, VCONN not needed", "passive, VCONN needed", "one end active", "both ends active"];
 
   function emarkerView(d) {
-    var r = d.record, cable = r.max_v !== undefined, epr = cable && !!((parseInt(r.vdos[4], 16) >>> 17) & 1);
+    var r = d.record, cable = r.max_v !== undefined, epr = cable && r.epr;
     var facts = [cap(r.product_type)];
     if (cable) facts.push(r.max_a + "A", r.max_v + "V", r.speed);
     var quirkRows = d.quirks ? d.quirks.rows.length : 0;
