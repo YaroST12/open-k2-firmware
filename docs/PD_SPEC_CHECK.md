@@ -4,7 +4,8 @@
 budget, `include/k2/core/build_config.h`). The host tests always build it.
 
 PD Spec Check runs a no-load conformance pass over the attached PD charger: it steps the charger through every pair of its fixed levels,
-up and down, steps its PPS output in 20 mV steps, lets the PPS and EPR keep-alives lapse, sends a Hard Reset and takes its Rd away, and
+up and down, sweeps its PPS and SPR AVS outputs (PPS 20 / 100 / 500 mV steps, AVS 100 / 500 / 1000 mV, then the slams from the
+window's minimum to its maximum and back) and asks Get_PPS_Status, lets the PPS and EPR keep-alives lapse, sends a Hard Reset and takes its Rd away, and
 judges what VBUS and the charger's messages did against the USB PD timing and voltage limits. Each check ends as pass, fail or skip (with
 the reason), and the run gets a penalty score, **0 = ideal**. It grew out of PD Stress (appendix below), which renegotiated hard and
 counted events; PD Spec Check is polite and judges every measurement against a named limit.
@@ -33,26 +34,32 @@ out reads "not selected"; every family ends back at a 5 V contract.
 | Family | What the K2 does | Checks |
 |---|---|---|
 | Transitions | one walk over every ordered pair of fixed levels, starting and ending at 5 V (an Euler circuit: 4 levels give 12 steps, 7 give 42, at most 8 levels and 56 steps); EPR fixed levels at or below the monitor ceiling join with the cable proof | `accept_time` `ps_rdy_time` `src_start` `ps_rdy_early` `ps_rdy_low` `rise_time` `fall_time` `overshoot` `accuracy` |
-| PPS steps | per SPR PPS APDO (at most 4) three set points (low, middle, high; never under 5 V), each stepped 5 x 20 mV up and 5 back down | `pps_monotonic` `pps_accuracy` `pps_settle` |
+| PPS/AVS | per SPR PPS and SPR AVS APDO (at most 4 windows) one pass per step size and one of slams, each from the window's minimum up to its maximum and back down (see "Programmable sweep" below); a PPS pass asks Get_PPS_Status at its top and at its end | `pps_monotonic` `pps_accuracy` `pps_settle` `pps_band` `pps_ps_rdy` `pps_overshoot` `pps_transient` `pps_status` `pps_status_time`; the `avs_*` set (no status) |
 | PPS timeout | a PPS contract with the sink's re-Request held back: when does the source Hard Reset | `pps_keepalive` |
 | EPR timeout | EPR mode with the sink's EPR_KeepAlive held back (needs EPR, a level at or below the ceiling and the cable proof) | `epr_keepalive` |
 | Hard Reset | the K2 sends a Hard Reset from the top fixed level and follows VBUS down, dark, back up and the first capabilities | `hr_safe0v` `hr_recover` `hr_turn_on` `hr_caps` |
-| Detach | the K2 takes its Rd away at the top fixed level, follows VBUS to 0 V, puts Rd back and waits for a 5 V contract | `detach_safe0v` `reattach` |
+| Detach | the K2 takes its Rd away at the top fixed level, follows VBUS to 0 V, puts Rd back and waits for a 5 V contract | `detach_safe0v` `reattach` `reattach_caps` |
 
 `source_reset` runs over the whole run: a Hard Reset sent by the source where none was due, that is outside a keep-alive wait
 (the K2's own Hard Reset is not counted). The family it hits ends there and the run goes on once the source is back at 5 V.
 
 ### Limits
 
-Every limit is a named figure of the USB PD R3.2 (or Type-C) specification, or a sum of named figures ("derived"), or a K2 figure where
-the specification names none ("inferred"). A check whose whole limit is inferred (`pps_settle`, `detach_safe0v`, `reattach`; `inferred` in
-`kDefs`) is measured and reported but never judged: its verdict reads **unverified**, with the value and the count over the inferred
-limit, and it adds nothing to the score. The numbers live in `pd_spec_timing.hpp`; the reference point is always one of the K2's own
-edges: the Request's TX start, the Accept's or the PS_RDY's RX edge, or the VBUS sample.
+Every limit is a named figure of the USB PD R3.2 / R3.3 or USB Type-C specification, or a sum of named figures ("derived"), or a K2
+figure where the specification names none ("inferred"). Only rows tagged verified in the two spec references are used:
+`docs/PD_PPS_AVS_SPEC_REFERENCE.md` (PPS and AVS) and `docs/PD_TYPEC_BC12_SPEC_REFERENCE.md` (Type-C attach and detach). A check
+whose whole limit is inferred (now only `pps_settle`; `inferred` in `kDefs`) is measured and reported but never judged: its verdict
+reads **unverified**, with the value and the count over the inferred limit, and it adds nothing to the score. The numbers live in
+`pd_spec_timing.hpp`; the reference point is always one of the K2's own edges: the Request's TX start, the Accept's or the PS_RDY's RX
+edge, or the VBUS sample.
+
+The PPS and AVS transition times start, in the specification, at the last bit of the GoodCRC that acknowledged the Accept. The K2 times
+them from the Accept's RX edge, which comes before that GoodCRC: its figure is longer than the specification's by under 1 ms, so a pass
+is sure and a fail can be over-reported by that much at most (conservative).
 
 | Check | Measured | Limit |
 |---|---|---|
-| `accept_time` | Request TX start to the Accept | tSenderResponse max (50 ms) + 2 ms for the three frames on the wire (inferred) |
+| `accept_time` | Request TX start to the Accept | tReceiverResponse (15 ms) + 2 ms on the wire, derived from the frame lengths at 300 kbit/s: Request 189 bits 0.63 ms, the K2's tTransmit under 0.2 ms, GoodCRC 149 bits 0.50 ms, the Accept 0.50 ms, 1.8 ms rounded up. Conservative (the Anker IQ4 reads 7.3-7.6 ms). The diagnostics' late-Accept flag and PD Stress keep tSenderResponse (50 ms + 2) |
 | `ps_rdy_time` | Accept to PS_RDY | tSrcTransReq: 325 ms SPR, 760 ms EPR |
 | `src_start` | Accept to VBUS starting to move | no earlier than tSrcTransition min (25 ms) |
 | `ps_rdy_early` | down-step: VBUS when PS_RDY arrives | at or under the new level's vSrcNew top (nominal + 5 %) |
@@ -60,22 +67,30 @@ edges: the Request's TX start, the Accept's or the PS_RDY's RX edge, or the VBUS
 | `rise_time`, `fall_time` | Accept to VBUS inside vSrcNew | tSrcTransition max + tSrcSettle: 310 ms SPR, 735 ms EPR (derived); a fall that outlasts the capture window is followed live |
 | `overshoot` | the peak (up) or the dip (down) after the Accept | inside vSrcNew widened by vSrcValid (0.5 V) |
 | `accuracy` | the settled fixed level | inside vSrcNew (+-5 %) |
-| `pps_monotonic` | each 20 mV PPS step | moves the requested way or not at all; 8 mV the wrong way is allowed (monitor noise, inferred) |
-| `pps_accuracy` | each PPS level | inside vPpsNew (requested +-5 %) |
-| `pps_settle` | Accept to the settled PPS level: the first sample from which the mean of the last four samples stays within 10 mV of the final level | tPpsSrcTransSmall (25 ms), taken from the Accept (inferred: the table names the set-point time only): unverified |
-| `pps_keepalive` | the last PPS Request to the source's Hard Reset | tPPSTimeout, 12 to 15 s; no Hard Reset by 20 s fails ("not seen") |
+| `pps_monotonic`, `avs_monotonic` | each measured move: the new settled level against the last one | same or higher on a move up, same or lower on a move down; 8 mV the wrong way is allowed (monitor noise, inferred) |
+| `pps_accuracy`, `avs_accuracy` | each settled level | inside vPpsNew (requested +-5 %) / vAvsNew (requested +-5 %) |
+| `pps_settle` | 20 mV steps: Accept to the settled level, the first sample from which the mean of the last four samples stays within 10 mV of the final level | tPpsSrcTransSmall (25 ms): unverified (a 20 mV step is under the meter's resolution, see Measurement) |
+| `pps_band`, `avs_band` | 100 / 500 mV PPS steps, all AVS steps, the slams: Accept to VBUS inside vPpsNew / vAvsNew | tPpsSrcTransSmall 25 ms for a step up to vPpsSmallStep (500 mV), tPpsSrcTransLarge 275 ms above; tAvsSrcTransSmall 50 ms up to vAvsSmallStep (1000 mV), tAvsSrcTransLarge 325 ms (SPR) above |
+| `pps_ps_rdy`, `avs_ps_rdy` | Accept to PS_RDY on every measured move | the same small / large limit as the band (the source sends PS_RDY once the output is in vPpsNew / vAvsNew) |
+| `pps_overshoot`, `avs_overshoot` | the peak (up) or the dip (down) after the Accept | inside vPpsNew widened by vPpsValid (100 mV) / vAvsNew widened by vAvsValid (500 mV), on the side the move goes to |
+| `pps_transient`, `avs_transient` | after VBUS first entered the band: the longest stretch it left it again | tPpsTransient 150 ms (load under 60 mA, which no load is) / tAvsTransient 5 ms |
+| `pps_status` | each Get_PPS_Status answer (PPS passes only, never during the PPS timeout check): fault bits | 0. Output Voltage within +-3 % of the requested level (rounded to 20 mV) or 0xFFFF; Output Current 0..3 (no load, 50 mA units) or 0xFF; Real Time Flags bit 0 = 0, OMF = 0, bits 7..4 = 0 (PTF may read 0 or 1). Not_Supported and no answer are faults (Get_PPS_Status is required of a PPS source) |
+| `pps_status_time` | Get_PPS_Status TX start to the PPS_Status | tReceiverResponse (15 ms) + 2 ms on the wire, as `accept_time` |
+| `pps_keepalive` | the last PPS Request's TX start (the Accept's time less the Request-to-Accept span; the specification starts at that Request's GoodCRC, under 1 ms later) to the source's Hard Reset | tPPSTimeout, 12 to 15 s; no Hard Reset by 20 s fails ("not seen") |
 | `epr_keepalive` | the last EPR_KeepAlive to the source's Hard Reset | tSourceEPRKeepAlive, 750 to 1000 ms; no Hard Reset by 3 s fails |
 | `hr_safe0v` | the K2's Hard Reset to VBUS under vSafe0V (0.8 V) | tPSHardReset + tSafe0V: 685 ms (derived) |
 | `hr_recover` | VBUS off time | tSrcRecover, 660 to 1000 ms (1085 to 1425 ms when the reset leaves EPR mode) |
 | `hr_turn_on` | VBUS back to vSafe5V (4.75 V) | tSrcTurnOn, 275 ms |
 | `hr_caps` | vSafe5V to the first Source_Capabilities | tFirstSourceCap, 250 ms |
-| `detach_safe0v` | Rd away to VBUS under vSafe0V | tVBUSOFF (650 ms) + tPDDebounce max (20 ms), both inferred: unverified |
-| `reattach` | Rd back to a 5 V contract | 5 s (a K2 figure, inferred): unverified |
+| `detach_safe0v` | Rd away to VBUS under vSafe0V | tSRCDisconnect (20 ms) + tVBUSOFF (650 ms) = 670 ms (Type-C, derived) |
+| `reattach` | Rd back to VBUS at vSafe5V | tCCDebounce max (200 ms) + tBulkDischarge (275 ms from a contract at or under 21 V, 700 ms above) + tVBUSON (275 ms) (Type-C, derived) |
+| `reattach_caps` | vSafe5V after the re-attach to the first Source_Capabilities | tFirstSourceCap, 250 ms |
 | `source_reset` | Hard Resets from the source that were not due | 0 |
 
 A check is judged per measurement and aggregated: count, fails, and the worst value with the limit it was judged against and where it
-came from (the PDO pair, the APDO point). Verdict: skip when nothing was measured (with the reason: not offered, one fixed level, no
-PPS, no EPR, no EPR cable proof, capture busy, level refused, run stopped, not reached, K2 on the charger, no data, not selected),
+came from (the PDO pair; for a programmable check the APDO, the step size, the direction and the level asked for, "APDO 5 500 mV down
+to 5.0 V"). Verdict: skip when nothing was measured (with the reason: not offered, one fixed level, no PPS, no EPR, no EPR cable proof,
+capture busy, level refused, run stopped, not reached, K2 on the charger, no data, not selected, no AVS),
 fail when any
 measurement failed, else pass; a measured check with an inferred limit is unverified (neither pass nor fail).
 
@@ -87,18 +102,18 @@ applies once its limit has a source). The weights are **provisional** (`kDefs` i
 
 | Weight | Checks |
 |---|---|
-| 1 | `accept_time` `src_start` `pps_settle` (unverified for now: 0) |
-| 2 | `ps_rdy_time` `rise_time` `fall_time` `pps_accuracy` `hr_caps` |
-| 3 | `ps_rdy_early` `ps_rdy_low` `overshoot` `accuracy` `pps_monotonic` `hr_recover` `hr_turn_on` |
-| 5 | `pps_keepalive` `epr_keepalive` `hr_safe0v` `detach_safe0v` (unverified for now: 0) |
-| 10 | `reattach` (unverified for now: 0) |
+| 1 | `accept_time` `src_start` `pps_status_time` `pps_settle` (unverified for now: 0) |
+| 2 | `ps_rdy_time` `rise_time` `fall_time` `pps_accuracy` `pps_band` `pps_ps_rdy` `pps_transient` `avs_accuracy` `avs_band` `avs_ps_rdy` `avs_transient` `hr_caps` `reattach_caps` |
+| 3 | `ps_rdy_early` `ps_rdy_low` `overshoot` `accuracy` `pps_monotonic` `pps_overshoot` `pps_status` `avs_monotonic` `avs_overshoot` `hr_recover` `hr_turn_on` |
+| 5 | `pps_keepalive` `epr_keepalive` `hr_safe0v` `detach_safe0v` |
+| 10 | `reattach` |
 | 20 | `source_reset` |
 
 ## Measurement
 
-Each fixed step and each PPS step arms the transition capture (`k2::transcap`, the 1 kHz VBUS ring with the PD edge markers) and
-triggers it at the Request with a post window (1.5 s for a fixed step, 300 ms for a PPS step); the analysis runs in place on the frozen
-ring. When the capture is held by someone else, the run goes on without it: the times come from the sink's edge stamps and live VBUS
+Each fixed step and each measured programmable move arms the transition capture (`k2::transcap`, the 1 kHz VBUS ring with the PD edge
+markers) and triggers it at the Request with a post window (1.5 s for a fixed step, 300 ms for a small programmable step, 700 ms for a
+large one: over vPpsSmallStep / vAvsSmallStep, the slams); the analysis runs in place on the frozen ring. When the capture is held by someone else, the run goes on without it: the times come from the sink's edge stamps and live VBUS
 polling, each widened by the monitor's sample age (5 ms) and the poll spacing, and the checks that need the waveform read "capture
 busy". A run overwrites the last transition capture (`pd_trace.py transition`).
 
@@ -107,6 +122,47 @@ scatter by about 3.5 mV (sd) around a steady level and single ones by up to 13 m
 "settled" at the last noise spike of its 300 ms window: the Anker IQ4 read 183-268 ms for a level that arrived 5 ms after the Accept
 (`tests/fixtures/pdspec/iq4_pps_7000_7020.csv`). The settle is therefore judged on the mean of the last four samples (about 2 ms of
 lag), and the check stays unverified while its limit is inferred.
+
+Two figures the specification gives are not measured. The PPS slew rate is not measurable: with no load and a monitor whose noise is a
+large part of a 20 mV step, the 1 kHz samples do not resolve a rate. And the band time of a small step is trivially 0 on most levels:
+a step smaller than 5 % of its target (100 mV at 5 V, 500 mV above 10 V) starts inside vPpsNew, so `pps_band` reads 0 ms for it and
+only the steps that start outside the band (the larger steps at low levels, the slams) measure a real entry time; `pps_ps_rdy` is
+measured on every move.
+
+### Programmable sweep
+
+The windows come from the source's SPR PPS and SPR AVS APDOs (`plan.hpp` `Prog`, at most 4; EPR AVS is not swept). Each window
+runs four passes, each from the window's minimum up to its maximum and back down to the minimum (`Sweep`):
+
+| Pass (class) | PPS | AVS |
+|---|---|---|
+| 0 | 20 mV: three 10-step windows (low, middle, high of the APDO; 10 up, 10 down each, setup moves between them unmeasured), or the whole window with `--pps-full` | 100 mV (the AVS resolution) |
+| 1 | 100 mV | 500 mV |
+| 2 | 500 mV (vPpsSmallStep) | 1000 mV (vAvsSmallStep) |
+| 3 | the slams: minimum to maximum and back (large steps) | the slams |
+
+A step that does not fit whole at the top is cut to the maximum (and likewise at the bottom), so every pass touches both ends. The
+floor is the APDO's own minimum (3.3 V on the Anker IQ4): the K2 is never powered by the charger in a run (refused at the start), so a
+level under 5 V cannot brown it out. A source that latches its output off at the low end of its own window shows as a level refused or
+a stuck step, and the run stops there; the floor is therefore the APDO's, not a K2 margin. Each measured move is a fresh Request, and
+the sink's own PPS re-Request (every 5 s, under the 10 s the specification allows) keeps the contract alive through the waits.
+A move whose VBUS is neither in the band nor still on a level at the end of its window (an unloaded fall slower than the window) waits
+in place until it settles, and its level is not used for accuracy or as the reference for the next monotonic check.
+
+Get_PPS_Status is asked twice per PPS pass, at the top (before the first move down) and at the end, never during the PPS timeout check.
+The sink queues it like any other message; the answer is timed from the Get_PPS_Status TX start to the PPS_Status RX edge.
+
+AVS is **host-tested only**: no charger on the bench offers SPR AVS (the Anker IQ4 has PPS only), so the `avs_*` checks read "no AVS"
+on hardware so far.
+
+**Caps note** (advisory, no verdict, no score): the run reads the capabilities and names the programmable mix, "PPS without AVS:
+allowed before PD R3.3", "PPS + AVS present", "AVS without PPS" or "no PPS, no AVS". It is printed with the result and carried in
+the blob.
+
+**Time budget.** The run caps itself at 20 minutes. The PPS/AVS family is the long one: a move costs its Request round trip plus its
+capture window (300 / 700 ms), so a 3.3-11 V PPS window takes 60 moves at 20 mV (three windows), 154 at 100 mV, 32 at 500 mV and 2
+slams; `--pps-full` takes 770 moves at 20 mV on that window and may not fit beside the other families. `pd_spec.py run` saves the
+time each family took (`family_s` in result.json, the last line of report.txt).
 
 ## Safety
 
@@ -158,50 +214,64 @@ On the K2: Tools > PD Spec Check (or the Charger place's "Spec check" row).
 3. **Running**: family and item, elapsed time, a progress bar, the live VBUS and the fail and score counts. BACK stops; the footer
    says "Stopped" once the charger is back at 5 V.
 4. **Results**: the score, the pass / fail / skip tallies (an unverified check is in none of them) and one ResultGrid row per check (worst value or the skip reason in the
-   cell). OK opens a check's **Detail**: verdict, worst value, limit, count, fails, where (PDO pair or APDO point) and penalty.
+   cell; rows grouped as transitions, PPS, AVS, timers, Hard Reset, detach, source reset). OK opens a check's **Detail**: verdict,
+   worst value, limit, count, fails, where (PDO pair, or "APDO p cC up/dn V.vV": the APDO, the step class, the direction and the
+   level) and penalty.
 
-While a run goes on, any other page shows a one-line footer ("PD Spec: Transitions 12/56"), and the session block names the owner
+While a run goes on, any other page shows a one-line footer ("PD Spec: Transitions 12/56", "PD Spec: PPS/AVS 3/16"), and the session block names the owner
 (`BusyWhy::PdSpec`, 12; `pd-spec` in `k2_remote` and the web page). The dead-man lease leaves a run alone (`Ui::run_busy`): a host
 that goes away leaves the run to finish within its 20 min cap.
 
 From the computer:
 
 ```
-python3 tools/pd_spec.py run --charger NAME --confirm [--families transitions,pps-steps,...] [--wait 1500]
+python3 tools/pd_spec.py run --charger NAME --confirm [--families transitions,pps-avs,...] [--pps-full] [--wait 1500]
 python3 tools/pd_spec.py status | stop | report runs/pd-spec-NAME-STAMP/result.json [--json]
-python3 tools/k2_remote.py pd-spec start --confirm [--families all|0x3f|transitions,detach]
+python3 tools/k2_remote.py pd-spec start --confirm [--families all|0x3f|transitions,detach] [--pps-full]
 python3 tools/k2_remote.py pd-spec status | result | stop        # --json for the raw values
 ```
 
 `run` saves `result.json` (the raw blob in hex and its decode), `report.txt` and `stream.log` (the `[PDSPEC]` log lines) under
-`runs/pd-spec-<charger>-<stamp>/`. The family names are `transitions`, `pps-steps`, `pps-timeout`, `epr-timeout`, `hard-reset`,
-`detach`.
+`runs/pd-spec-<charger>-<stamp>/`; result.json also carries `family_s`, the seconds each family took (from the 2 s polls). The
+family names are `transitions`, `pps-avs` (`pps-steps` still reads), `pps-timeout`, `epr-timeout`, `hard-reset`, `detach`. The
+report lists every check, then the transitions and one line per programmable pass: APDO, kind, step size (or slams), window, moves,
+the worst band and PS_RDY times, the worst level error, the worst monotonic delta, the worst overshoot, the worst out-of-band stretch,
+the fails per check and the PPS_Status faults.
+
+The firmware logs only the start and the end of a run as `[PDSPEC]` lines; the per-check, per-pass and caps-note lines were dropped
+to fit the PD Spec image in flash. Every value they carried is in the blob, so `report.txt` and `result.json` are the record.
 
 ### Remote protocol
 
 Command 0x5A (`Cmd::PdSpec`, `include/k2/core/remote_proto.hpp`): op 0 status, 1 start (args: families mask, flags; bit 0 of the flags
-is the confirm, required: NeedConfirm without it; a mask beyond 0x3F or an unknown flag is BadArg; Busy when another tool owns the
+is the confirm, required: NeedConfirm without it; bit 1 asks for the full 20 mV PPS sweep; a mask beyond 0x3F or an unknown flag is
+BadArg; Busy when another tool owns the
 ports, other refusals in the status block's `start` byte), 2 read (offset u16; reply offset, total, n, data, 48-byte chunks), 3 stop
 (never refused). The 17-byte status block: state (0 idle, 1 running, 2 finished), stop, start, family, item, items, families, fails,
 passes, skips (unverified checks are counted in none of the three; the blob has them), flags (bit 0: return to 5 V not confirmed),
 score u16, elapsed s u16, blob length u16.
 
-The result blob (`result.hpp`, magic `PSC1`): a 16-byte header (state, stop, transition and PPS record counts, score, elapsed,
-flags), 21 x 20-byte check aggregates (verdict, skip reason, where, count, fails, worst, low and high limit), 32 bytes of timer
-numbers (PPS and EPR timeout, the Hard Reset and detach times), then one 20-byte record per fixed transition (Accept, PS_RDY, start
-and band times, VBUS at PS_RDY, peak, final, sample gap, flags) and one 14-byte record per PPS set point. The K2 never holds the blob:
+The result blob (`result.hpp`, magic `PSC2`): a 16-byte header (state, stop, transition and pass record counts, score, elapsed,
+flags, then byte 13 the number of checks, byte 14 the caps note, byte 15 the options: bit 0 full 20 mV sweep), one 20-byte check
+aggregate per check (34 now; verdict, skip reason, where, count, fails, worst, low and high limit), 32 bytes of timer numbers (PPS and
+EPR timeout, the Hard Reset and detach times), then one 20-byte record per fixed transition (Accept, PS_RDY, start and band times,
+VBUS at PS_RDY, peak, final, sample gap, flags) and one 28-byte record per programmable pass (`PassRec`, at most 16: APDO, class with
+bit 7 for AVS, moves, window, worst band / PS_RDY / out-of-band times in 0.1 ms, worst level error, monotonic delta and overshoot in mV,
+six fail counters, the PPS_Status fault bits). `pdspec_blob.py` still reads `PSC1` blobs (21 checks, 14-byte PPS points). The K2 never holds the blob:
 `BlobReader` streams it from the engine's state.
 
 ## Phase 2 (design hooks only, nothing built)
 
-- **AVS steps**: the SPR and EPR AVS windows in 100 mV steps, judged against the AVS small / large step times already in
-  `pd_spec_timing.hpp`; a new family and checks appended to `Family`, `Check` and `kDefs`.
-- **Large PPS steps** (tPpsSrcTransLarge) and PPS current-limit reporting (needs a load: out of scope for a no-load tool, only the
-  advertised flags can be read).
-- **Source message content**: Source_Capabilities_Extended, Status and PPS_Status answered within tSenderResponse, with fields that
-  agree with the capabilities; Soft_Reset recovery timing; the first capabilities after a cold attach.
+- **EPR AVS**: the EPR AVS windows (tAvsSrcTransLarge EPR) need EPR mode and a bench charger that offers EPR AVS; SPR AVS is in,
+  host-tested.
+- **PPS current limit** (needs a load: out of scope for a no-load tool, only the advertised flags can be read).
+- **Source message content**: Source_Capabilities_Extended and Status answered within tReceiverResponse, with fields that agree with
+  the capabilities (PPS_Status is in).
+- **Soft_Reset**: Accept within tReceiverResponse, Source_Capabilities within 250 ms of the Accept's GoodCRC, VBUS unchanged. The sink
+  can send one without a Hard Reset fallback (`Sink::soft_reset`: after 400 ms of silence it asks for the caps once), but it keeps
+  no TX stamp of the Soft_Reset and no RX stamp of its Accept, which the timing needs; not built.
 - **Hooks in place**: the `Family` and `Check` enums, `kDefs` and `Skip` are append-only (the blob carries them by number; a layout
-  change bumps the magic to `PSC2`, which `pdspec_blob.py` refuses until taught); the `Env` seam takes new actions without touching
+  change bumps the magic, `PSC1` to `PSC2` with the sweep passes, and `pdspec_blob.py` keeps reading the older ones); the `Env` seam takes new actions without touching
   the firmware binding of the old ones; `pdspec_blob.py` reads every name and weight from the headers, so a new check appears in the
   report without a host change.
 - **Recorded fixtures**: the hardware runs save the raw blob; saved blobs go to `tests/fixtures/pdspec/` and the decoder tests read them.
