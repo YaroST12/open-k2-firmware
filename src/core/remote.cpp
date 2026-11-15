@@ -301,7 +301,10 @@ remote::StateInfo Remote::state() {
     s.pm_online = online;
     s.log_on = usb::log_enabled();
     if (online) {
-        s.vbus_mv = pm->vbus_mv;
+        // VBUS is the latest sample, not read()'s 128-sample (~2.5 s) mean: right after a request the mean still blends in the
+        // previous level (UGREEN QA 2026-11-15: a 5 V hold after 20 V bursts read 9.8-10.2 V, the 2.5 s mean of the 20 V / 5 V
+        // mix; the stream showed 5.1 V). Current and power stay the means: power_mw is the mean V x mean I, not fast V x I.
+        s.vbus_mv = power::vbus_fast_mv().value_or(pm->vbus_mv);
         s.current_ma = pm->current_ma;
         s.power_mw = pm->power_mw;
     }

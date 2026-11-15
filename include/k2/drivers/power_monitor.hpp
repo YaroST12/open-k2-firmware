@@ -36,7 +36,9 @@ std::int32_t max_vbus_mv();
 void poll();
 
 // Averaged readings (128-sample window, ~2.5 s), or nullopt while offline or before the first sample. For
-// everything that is not a screen: the remote and web state, logs, link detection, the charger test's current.
+// everything that is not a screen: logs, link detection, the charger test's current, and the remote and web state's current
+// and power. NOT a VBUS to read right after a level change: the window still holds the old level for ~2.5 s (the remote
+// state's vbus_mv is vbus_fast_mv() for that reason).
 std::optional<Metrics> read();
 
 // What the screen shows: VBUS and current smoothed by the One Euro filter of the chosen preset

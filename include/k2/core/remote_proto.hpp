@@ -28,7 +28,9 @@
 //   0x01 PING        req -            rsp proto(1) uptime_ms(4) git(24, NUL padded) version(rest)
 //   0x02 BUTTON      req btn(1) ms(2) rsp btn(1) ms(2)      btn: 0 Back 1 Minus 2 Ok 3 Plus
 //   0x03 GET_STATE   req -            rsp 40: page cc spec_rev num_pdos pd_valid chip pm_online
-//                                    log_on (8 x u8), vbus_mv(i32) current_ma(i32) power_mw(i32)
+//                                    log_on (8 x u8), vbus_mv(i32: the latest VBUS sample, no lag) current_ma(i32)
+//                                    power_mw(i32) (current and power are the ~2.5 s means: power = mean V x mean I,
+//                                    which differs from vbus_mv x current_ma for ~2.5 s after a level change)
 //                                    energy_mwh(i32), then the analog front end: dp_mv(2) dm_mv(2)
 //                                    cc1_mv(2) cc2_mv(2) aux_mv(2) temp_deci_c(i16) fc(1) flags(1)
 //                                    fc = fastcharge::Protocol verdict; flags bit0 ADC reading
