@@ -3072,6 +3072,14 @@ pd::Err refresh_source_caps() {
     if (ident_running() || probe_running() || reread_running() || g_prep.active()) return pd::Err::Busy;
     return sink().request_source_caps(systick::millis());
 }
+
+// Get_PPS_Status on a live PPS contract (the PD Spec Check): the same owners and states refuse as for the Refresh above.
+pd::Err request_pps_status() {
+    if (g_active_cc == 0 || inline_now() || g_legacy_only) return pd::Err::Busy;
+    if (ident_running() || probe_running() || reread_running() || g_prep.active()) return pd::Err::Busy;
+    return sink().request_pps_status(systick::millis());
+}
+const pd::PpsAnswer& pps_answer() { return sink().pps_answer(); }
 // A Soft_Reset on a live contract (PD Stress, the legal-but-risky probe). The sink does what the unit hold does without the wire work: the
 // contract is dropped, the MessageID counters restart, and the caps the source answers with get PDO 1 at 5 V from the acked-caps path. The
 // same refusals as the Refresh, plus: only from a settled contract, never on top of a transition in flight.

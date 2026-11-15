@@ -344,6 +344,10 @@ bool get_source_caps(bool confirmed = false);
 // (pd::Sink::request_source_caps). Ok = queued; Busy = refused (inline, PD-silent session, no CC attached, a trigger prepare or an
 // identify/probe/re-read running, or the gate says so). The answer shows as caps_count() moving.
 pd::Err refresh_source_caps();
+// Get_PPS_Status on a live PPS contract (the PD Spec Check's sweep; pd::Sink::request_pps_status). Ok = queued, Busy = refused as above.
+// The answer shows in pps_answer() (state, count, the raw PPSSDB fields and the edge stamps).
+pd::Err request_pps_status();
+const pd::PpsAnswer& pps_answer();
 // Soft_Reset on a live, settled contract (PD Stress only): the contract drops, the source re-announces, the sink Requests PDO 1 at 5 V.
 // false = refused (no CC, inline, PD-silent session, an owner talking on the line, or the sink not in Ready).
 bool sink_soft_reset();

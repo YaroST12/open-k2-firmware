@@ -30,7 +30,8 @@ inline constexpr std::uint32_t kVsafe5vMv = 5000;
 inline constexpr std::uint8_t kCtlGoodCrc = 1, kCtlAccept = 3, kCtlReject = 4, kCtlPsRdy = 6,
                               kCtlGetSourceCap = 7, kCtlGetSinkCap = 8, kCtlDrSwap = 9, kCtlPrSwap = 10, kCtlWait = 12,
                               kCtlSoftReset = 13, kCtlNotSupported = 16, kCtlGetStatus = 18, kCtlFrSwap = 19,
-                              kCtlGetSinkCapExt = 22, kCtlGetRevision = 24;
+                              kCtlGetPpsStatus = 20, kCtlGetSinkCapExt = 22, kCtlGetRevision = 24;
+inline constexpr std::uint8_t kExtPpsStatusMsg = 0x0C;   // PPS_Status (pd_ext.hpp kExtPpsStatus)
 // Role-swap requests a partner can send (control messages, no data objects; type 9 with objects is EPR_Request).
 enum class SwapKind : std::uint8_t { Dr, Pr, Fr };
 inline constexpr std::uint8_t kDataSourceCap = 1, kDataRequest = 2, kDataSinkCap = 4,
@@ -220,6 +221,21 @@ inline constexpr std::uint32_t kEprInfoMs = 1500;   // EPR_Get_Source_Cap -> the
 // request_source_caps(): how long the sink counts a Source_Capabilities as the answer to its Get_Source_Cap. A source answers within
 // tSenderResponse (27-50 ms in R3.2); the Connection page's Refresh gives up at 150 ms (k2/core/rescan_bridge.hpp), this is a little more.
 inline constexpr std::uint32_t kGetCapAnswerMs = 200;
+// request_pps_status(): the last Get_PPS_Status. Pending = waiting, Got = a PPS_Status came, NotSupported = the source refused it,
+// Timeout = nothing within kPpsStatusAnswerMs (tReceiverResponse is 15 ms; this only bounds the wait, the PD Spec Check times the answer
+// from the edge stamps).
+enum class PpsAsk : std::uint8_t { None, Pending, Got, NotSupported, Timeout };
+inline constexpr std::uint32_t kPpsStatusAnswerMs = 200;
+// The last Get_PPS_Status (Sink::pps_answer, kept out of SinkStatus: callers copy that one onto the stack): its state, a count of the
+// asks that ended (wraps), the raw PPSSDB fields of a Got answer (Output Voltage in 20 mV, 0xFFFF = not supported; Output Current in
+// 50 mA, 0xFF = not supported; Real Time Flags), the ask's TX_START and the answer's RX edge (us, bit 0 set when real; 0 = unknown).
+struct PpsAnswer {
+    PpsAsk ask = PpsAsk::None;
+    std::uint8_t seq = 0;
+    std::uint16_t mv_raw = 0xFFFF;
+    std::uint32_t ask_us = 0, rx_us = 0;
+    std::uint8_t ma_raw = 0xFF, flags = 0;
+};
 
 struct SinkStatus {
     SinkState state = SinkState::Idle;
@@ -314,6 +330,9 @@ public:
     // Busy = not Ready, in EPR mode (an unsolicited Source_Capabilities there is a hard reset), or a Request / message / release /
     // Xiaomi chain is outstanding, or the last ask is still inside kGetCapAnswerMs; NoCaps = nothing bound.
     Err request_source_caps(std::uint32_t now);
+    // A Get_PPS_Status (control message 20) in a PPS contract, under the same one-negotiation-at-a-time gates as request_source_caps.
+    // The answer lands in pps_answer(); a refusal or a silence never resets anything.
+    Err request_pps_status(std::uint32_t now);
     // Lab-only Apple charger readout (SVID 0x05AC), off by default: while unarmed the Discover SVIDs ACK stays exactly
     // [0x2717]. Arming adds 0x05AC to our SVIDs ACK and triggers a re-request of the current contract (request_source_caps),
     // never a different voltage; the source then runs its 0x05AC discovery. Refused like the other lab ops: inline,
@@ -420,6 +439,7 @@ public:
     // time, so the driver counts this as a negotiation in flight: the line (Rd, Auto-CRC, TX) stays up for the answer.
     bool soft_reset_pending() const { return sr_wait_ || (get_cap_sent_ && refresh_pending_); }
     const SinkStatus& status() const { return st_; }
+    const PpsAnswer& pps_answer() const { return pps_; }
     const Plan& plan() const { return plan_; }  // the request in flight / the contract (effective mV, mA, RDO)
     const XiaomiTrace& xiaomi_trace() const { return xm_; }
     std::uint8_t rev() const { return rev_; }  // wire revision to use in headers
@@ -465,8 +485,10 @@ private:
     const SourceCaps* caps_ = nullptr;
     const SourceCaps* info_ = nullptr;      // informational EPR list target (never the live caps)
     std::uint32_t info_deadline_ = 0;
+    std::uint32_t pps_deadline_ = 0;        // request_pps_status(): the answer window's end
     std::uint32_t cap_mv_ = kVsafe5vMv;
     SinkStatus st_;
+    PpsAnswer pps_;
     Choice want_;               // the held choice
     Plan plan_;                 // the request in flight / the contract
     std::uint8_t rev_ = 2;

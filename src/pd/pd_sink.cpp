@@ -523,6 +523,25 @@ K2_HOT Err Sink::request_source_caps(std::uint32_t now) {
     return Err::Ok;
 }
 
+Err Sink::request_pps_status(std::uint32_t now) {
+    if (!caps_) return Err::NoCaps;
+    if (st_.state != SinkState::Ready || !contract_ || tx_pending_ || retx_pending_ || release_pending_ || verify_ ||
+        deferred_ != Deferred::None || sr_wait_ || get_cap_sent_ || st_.epr_info == EprInfo::Pending || pps_.ask == PpsAsk::Pending ||
+        xiaomi_chain_active(now))
+        return Err::Busy;
+    if (txok_.hold(rev_, now)) return Err::Busy;
+    txok_.sent();
+    const std::uint8_t seq = pps_.seq;
+    pps_ = PpsAnswer{};   // before the queue: its TX_START stamp (on_tx_result) must survive
+    pps_.seq = seq;
+    pps_.ask = PpsAsk::Pending;
+    TxMsg m;
+    m.header = make_header(kCtlGetPpsStatus, 0, rev_);
+    queue(m);
+    pps_deadline_ = now + kPpsStatusAnswerMs;
+    return Err::Ok;
+}
+
 Err Sink::arm_apple_read(std::uint32_t now) {
     // The remote gates this with apple_read_refusal() first; the sink double-checks the hard ones:
     // never transmit inline / to a source that is not our partner, and never without a contract.
@@ -774,6 +793,17 @@ K2_HOT void Sink::on_message(Sop sop, std::uint16_t header, std::span<const std:
     }
 
     if (ext) {
+        if (type == kExtPpsStatusMsg) {   // the answer to our Get_PPS_Status: extended header (2) + PPSSDB (4), one chunk
+            if (pps_.ask == PpsAsk::Pending && payload.size() >= 6) {
+                pps_.mv_raw = std::uint16_t(payload[2] | payload[3] << 8);
+                pps_.ma_raw = payload[4];
+                pps_.flags = payload[5];
+                pps_.rx_us = edge_us;
+                pps_.ask = PpsAsk::Got;
+                ++pps_.seq;
+            }
+            return;
+        }
         if (type != kExtEprSourceCaps) return;
         if (st_.epr_info == EprInfo::Pending && !st_.epr_mode) {
             // The answer to our SPR-mode EPR_Get_Source_Cap: informational (USB PD R3.2 6.5.17.1), never answered with a
@@ -907,6 +937,12 @@ K2_HOT void Sink::on_message(Sop sop, std::uint16_t header, std::span<const std:
             }
             break;
         case kCtlNotSupported:
+            if (pps_.ask == PpsAsk::Pending) {
+                pps_.rx_us = edge_us;
+                pps_.ask = PpsAsk::NotSupported;
+                ++pps_.seq;
+                break;
+            }
             if (st_.epr_info == EprInfo::Pending && st_.state == SinkState::Ready) st_.epr_info = EprInfo::Refused;
             break;
         case kCtlReject:
@@ -989,6 +1025,7 @@ K2_HOT void Sink::on_tx_result(bool ok, std::uint32_t now) {
     if (ok) {
         tx_retries_ = 0;
         if (!ext && (type == kDataRequest || type == kDataEprRequest)) { st_.req_us = start_us; st_.accept_us = 0; st_.ps_rdy_us = 0; }
+        if (!ext && type == kCtlGetPpsStatus && last_tx_.len == 0) pps_.ask_us = start_us;
         return;
     }
     const bool critical = !ext && (type == kDataRequest || type == kDataEprRequest || type == kDataEprMode);
@@ -1116,6 +1153,7 @@ K2_HOT void Sink::tick(std::uint32_t now) {
         get_cap_sent_ = false;
     }
     if (st_.epr_info == EprInfo::Pending && due(info_deadline_)) st_.epr_info = EprInfo::Timeout;
+    if (pps_.ask == PpsAsk::Pending && due(pps_deadline_)) { pps_.ask = PpsAsk::Timeout; ++pps_.seq; }
     if (deferred_ != Deferred::None) {   // a Request / EPR entry held back by the Xiaomi chain guard
         const bool stale = deferred_ == Deferred::Request ? st_.state != SinkState::Requesting : st_.state != SinkState::EprEntering;
         if (stale) {

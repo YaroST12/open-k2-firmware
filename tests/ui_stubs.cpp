@@ -222,6 +222,11 @@ bool get_source_caps(bool confirmed) {
     g_stub.getcaps++; g_stub.last_confirmed = confirmed; return true;
 }
 pd::Err refresh_source_caps() { g_stub.refresh_asks++; return g_stub.refresh_err; }
+pd::Err request_pps_status() { return pd::Err::Busy; }
+const pd::PpsAnswer& pps_answer() {
+    static const pd::PpsAnswer a{};
+    return a;
+}
 std::uint32_t caps_count() { return g_stub.caps.rx_count; }
 bool legacy_only_active() { return g_stub.legacy_active; }
 bool identify_start(bool confirmed) {
