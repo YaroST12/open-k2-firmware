@@ -285,6 +285,9 @@ step_label::Text reach_footer(const Reach& r) {
         put_word(t, "caps "); put_level(t, r.hi_mv); put_word(t, "V of "); put_level(t, r.adv_mv); put_word(t, "V");
     } else if (r.tone == Tone::Pending) {
         put_word(t, "not finished");
+    } else if (r.tone == Tone::Noted) {
+        put_word(t, "advertised");   // a Light run's listing: never asked, so never a shortfall
+
     } else if (r.needs_load && r.adv_mv && (r.tone == Tone::Skip || r.tone == Tone::Partial)) {
         // pattern pps-off-at-no-load: the levels were skipped, not failed and not never-run; say why
         put_word(t, "needs load");

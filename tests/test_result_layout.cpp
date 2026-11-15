@@ -376,6 +376,18 @@ static void test_reach_footer_names_the_floor() {
     CHECK_STR(rl::reach_footer(manual).c_str(), "floor at 5V");
     CHECK_EQ(9 + rl::reach_footer(manual).len <= 27, true);
 }
+// A Light run lists a range without asking for it (Reason::Advertised): the footer says "advertised", never a shortfall
+// such as "none reached", and the range's tone is Noted (an Info footer, never amber).
+static void test_reach_footer_of_a_listed_range_says_advertised() {
+    const uint32_t pdo = 3248763456u;   // PPS 5-21V, slot 7
+    for (const A a : {A::Pps, A::SprAvs, A::EprAvs}) {
+        std::vector<ct::Step> all{step(a, 5000, V::Skip, 7, pdo, ct::Reason::Advertised), step(a, 21000, V::Skip, 7, pdo, ct::Reason::Advertised)};
+        const auto r = rl::reach(all, a);
+        CHECK_EQ(int(r.tone), int(rl::Tone::Noted));
+        CHECK_STR(text_of(r, true).c_str(), "advertised");
+        CHECK_EQ(9 + rl::reach_footer(r).len <= 27, true);
+    }
+}
 // A row with two ranges reports the one that is not clean (the first), so the footer never hides a cap behind a green sibling.
 static void test_row_reach_picks_the_range_that_is_not_clean() {
     auto s = baseus();                                    // PPS slot 6 has a fail, slot 7 is clean
@@ -1161,6 +1173,7 @@ int main() {
     test_reach_says_what_the_source_delivered();
     test_reach_footer_says_needs_load_not_not_run();
     test_reach_footer_names_the_floor();
+    test_reach_footer_of_a_listed_range_says_advertised();
     test_row_reach_picks_the_range_that_is_not_clean();
     test_reach_words_fit_the_footer_next_to_a_label();
     test_a_range_not_offered_reads_none();

@@ -156,7 +156,7 @@ struct Reach {
 };
 Reach reach(std::span<const charger_test::Step>, charger_test::Algorithm, int pos = -1);
 // The footer words after "<label>: " (at most 18 characters, so a 9-character label still fits 27): "caps 19.4V of 21V",
-// "reached 5-21V", "max 13V of 21V", "none reached", "not run", "needs load" (or "needs load >13V" after some levels passed:
+// "reached 5-21V", "max 13V of 21V", "none reached", "not run", "advertised" (a Light run's listing), "needs load" (or "needs load >13V" after some levels passed:
 // the highest that did), "floor at 5V" (a low edge the source cannot reach). Levels at 0.1 V.
 step_label::Text reach_footer(const Reach&);
 // The Detail page's "Reached" value (at most 16): "5-19.4V of 21V", "5-21V"; empty when nothing passed.

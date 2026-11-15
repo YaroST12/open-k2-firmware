@@ -1499,11 +1499,23 @@ static void test_step_label_gallery() {
         CHECK_EQ(ui.charger_test_stage(), 6);
         for (int i = 0; i < 60 && ui.painting(); ++i) ui.tick(t += 20);
         dump_panel("labels_rot3_results_light");
-        top(ui, t); press(ui, Button::Ok, t);   // the PD line's Steps, then its second row (9 V: Advertised)
+        // A grid row's footer counts the listing apart from the results; a listed range reads "advertised" in the Info
+        // tone, never a shortfall in amber.
+        ui.set_rotation(0, t); top(ui, t); settle(ui, t);   // the text checks read rotation 0's panel
+        CHECK_EQ(footer_shows("PD3.x: 1 pass, 3 listed", kOk), true);
+        bool avs = false;
+        for (int n = 0; n < 12 && !avs; ++n) {
+            avs = footer_shows("SPR AVS: advertised", kText);
+            if (!avs) { press(ui, Button::Plus); ui.tick(t += 100); settle(ui, t); }
+        }
+        CHECK_EQ(avs, true);
+        ui.set_rotation(3, t); top(ui, t); settle(ui, t); press(ui, Button::Ok, t);   // the PD line's Steps, then its second row (9 V: Advertised)
         if (ui.charger_test_stage() == 7) {
             for (int i = 0; i < 60 && ui.painting(); ++i) ui.tick(t += 20);
             dump_panel("labels_rot3_steps_light");
-            move(ui, 1, t); press(ui, Button::Ok, t);
+            ui.set_rotation(0, t); move(ui, 1, t); settle(ui, t);
+            check_row_note(1, "LISTED PDO #2");   // the focused note: the band word, no skip cause
+            ui.set_rotation(3, t); settle(ui, t); press(ui, Button::Ok, t);
             for (int i = 0; i < 60 && ui.painting(); ++i) ui.tick(t += 20);
             dump_panel("labels_rot3_detail_light");
         }
