@@ -685,6 +685,7 @@
   "688": "[PDSPEC] start families=0x%x fixed=%u pps=%u prog=%u avs=%u moves=%u full20=%u cap_mv=%u\n",
   "689": "[PDSPEC] check %u (%s) skip %s\n",
   "690": "[PDSPEC] check %u (%s) %s n=%u fails=%u worst=%d lo=%d hi=%d at=%u>%u\n",
-  "691": "[PDSPEC] start families=0x%x fixed=%u pps=%u prog=%u full20=%u cap_mv=%u\n"
+  "691": "[PDSPEC] start families=0x%x fixed=%u pps=%u prog=%u full20=%u cap_mv=%u\n",
+  "692": "[UFCS] refused %s cmd=%d id=%d: %s (%d)\n"
  }
 }

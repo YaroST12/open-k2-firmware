@@ -319,6 +319,30 @@ static void test_steps() {
     CHECK_EQ(p.mv, 3420);   // 3.41 V rounds down to 3.40 V on the 20 mV grid, below the 3.41 V minimum: next grid point
 }
 
+// 8.2.4.9 (table 24): the Refuse payload read back, and its reason in plain words for the log.
+static void test_refuse_decode_and_words() {
+    std::array<std::uint8_t, 16> buf{};
+    const std::size_t n = encode_refuse(buf, 3, 11, 1, kDataRequest, kRefuseRange);
+    Frame f;
+    std::size_t used = 0;
+    CHECK_EQ(decode({buf.data(), n}, f, used) == Parse::Ok, 1);
+    Refusal r;
+    CHECK_EQ(decode_refuse(f.payload, r), 1);
+    CHECK_EQ(r.id, 11);
+    CHECK_EQ(r.type, 1);
+    CHECK_EQ(r.cmd, kDataRequest);
+    CHECK_EQ(r.reason, kRefuseRange);
+    const std::array<std::uint8_t, 3> short_p{0, 0, 2};
+    CHECK_EQ(decode_refuse(short_p, r), 0);           // not 4 bytes: not a Refuse payload
+    CHECK_STR(refuse_name(kRefuseUnknown), "not recognised");
+    CHECK_STR(refuse_name(kRefuseUnsupported), "not supported");
+    CHECK_STR(refuse_name(kRefuseBusy), "busy");
+    CHECK_STR(refuse_name(kRefuseRange), "out of range");
+    CHECK_STR(refuse_name(kRefuseOther), "other");
+    CHECK_STR(refuse_name(0), "reserved");
+    CHECK_STR(refuse_name(6), "reserved");
+}
+
 static void test_session_watchdog_period() {
     CHECK_EQ(kKeepaliveMs < kWatchdogMs, 1);
     CHECK_EQ(kWatchdogMs, 1000);   // the source's default watchdog (7.x): any message from the sink clears it
@@ -336,5 +360,6 @@ int main() {
     test_caps_and_pick();
     test_steps();
     test_session_watchdog_period();
+    test_refuse_decode_and_words();
     return test_report("test_ufcs_frame");
 }

@@ -301,6 +301,29 @@ constexpr bool pick(std::span<const Cap> caps, int target_mv, int ceiling_mv, Pi
     return false;
 }
 
+// A Refuse payload (8.2.4.9, table 24; 4 big-endian bytes): refused message number [27:24], type [18:16],
+// command [15:8], reason [7:0]. False when the payload is not 4 bytes.
+struct Refusal {
+    std::uint8_t id = 0, type = 0, cmd = 0, reason = 0;
+};
+constexpr bool decode_refuse(std::span<const std::uint8_t> p, Refusal& out) {
+    if (p.size() != 4) return false;
+    out = {static_cast<std::uint8_t>(p[0] & 0xF), static_cast<std::uint8_t>(p[1] & 7), p[2], p[3]};
+    return true;
+}
+
+// The reason of a Refuse in plain words (table 24); "reserved" for a code the table does not define.
+constexpr const char* refuse_name(std::uint8_t reason) {
+    switch (reason) {
+    case kRefuseUnknown: return "not recognised";
+    case kRefuseUnsupported: return "not supported";
+    case kRefuseBusy: return "busy";
+    case kRefuseRange: return "out of range";
+    case kRefuseOther: return "other";
+    default: return "reserved";
+    }
+}
+
 // What a sink answers to a request of the source it cannot serve (Get_Sink_Info, Get_Device_Info,
 // Detect_Cable_Info, Verify_Request ...): a Refuse with this reason (8.2.4.9, "unsupported"), within
 // tReceiverResponse. 0 = no answer owed.

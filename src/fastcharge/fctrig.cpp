@@ -315,6 +315,9 @@ struct HwEnv final : fc::Env {
                 K2LOG("[UFCS] cap %d: %d-%dmV %d-%dmA\n", static_cast<int>(caps[i].pos), caps[i].min_mv, caps[i].max_mv,
                       caps[i].min_ma, caps[i].max_ma);
         }
+        if (ufcs::Refusal r; f.data && f.cmd == ufcs::kDataRefuse && ufcs::decode_refuse(f.payload, r))
+            K2LOG("[UFCS] refused %s cmd=%d id=%d: %s (%d)\n", r.type == 1 ? "data" : r.type == 0 ? "ctl" : "vendor", r.cmd, r.id,
+                  ufcs::refuse_name(r.reason), r.reason);
     }
     void log_ufcs_echo() override { K2LOG("[UFCS] echo: own frames only, D+/D- shorted (no UFCS)\n"); }
     void log_ufcs_retry(const char* what, int try_no, std::span<const std::uint8_t> pending) override {
