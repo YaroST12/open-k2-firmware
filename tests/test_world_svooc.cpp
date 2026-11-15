@@ -39,6 +39,7 @@
 #include "k2/core/remote.hpp"
 #include "k2/core/stage_meter.hpp"
 #include "k2/chargertest/session_store.hpp"
+#include "k2/chargertest/svooc_ceiling.hpp"
 #include "k2/drivers/accelerometer.hpp"
 #include "k2/drivers/adc.hpp"
 #include "k2/drivers/fs_flash.hpp"
@@ -117,6 +118,9 @@ struct Outcome {
     k2::stage::Worst worst{};
     std::vector<std::pair<double, double>> long_passes;   // (ms after the wake, ms)
     unsigned erases = 0;
+    // svooc_trig::Snapshot::quiet_ms, the charger test's "the adapter went quiet" input: the highest while the adapter still
+    // clocks, and the highest after it ended the session (the trigger itself listens on).
+    unsigned quiet_live_max = 0, quiet_end_max = 0;
 };
 
 Outcome run(const Case& c) {
@@ -144,6 +148,11 @@ Outcome run(const Case& c) {
         if (w >= 0 && now - w > kRunAfterWakeMs) break;
         if (now > kStartMs + 15000) break;   // never woke
         k2::mainloop::pass();
+        if (w >= 0) {
+            const unsigned q = k2::svooc_trig::snapshot().quiet_ms;
+            unsigned& slot = wsvooc::result().ended ? o.quiet_end_max : o.quiet_live_max;
+            slot = std::max(slot, q);
+        }
         world::spend_us(t.pass_us);
         const double d = world::fw_ms() - now;
         if (w >= 0 && d > 20) o.long_passes.push_back({now - w, d});
@@ -191,6 +200,7 @@ std::string serialize(const Outcome& o) {
       << ' ' << o.hold_max_us << ' ' << o.hold_max_at << ' ' << o.contention << ' ' << int(o.worst.id) << ' ' << o.worst.us << ' '
       << o.worst.at_ms << ' ' << o.worst.ticked_ms << ' ' << o.erases << ' ' << o.long_passes.size();
     for (const auto& p : o.long_passes) s << ' ' << p.first << ' ' << p.second;
+    s << ' ' << o.quiet_live_max << ' ' << o.quiet_end_max;
     s << '\n' << o.abort << '\n' << o.why << '\n' << o.stall_line;
     return s.str();
 }
@@ -208,6 +218,7 @@ Outcome deserialize(const std::string& text) {
         s >> a >> b;
         o.long_passes.push_back({a, b});
     }
+    s >> o.quiet_live_max >> o.quiet_end_max;
     std::string line;
     std::getline(s, line);
     std::getline(s, o.abort);
@@ -299,6 +310,13 @@ int main() {
         CHECK_EQ(out[i].contention, 0u);
     }
     CHECK_COND(out[0].hold_max_us < kHoldUs + 100);
+    // The ceiling stage's quiet rule (svooc_ceiling::kQuietMs) on the real glue: a session that goes on never looks quiet
+    // (the gaps between the adapter's frames, the ident-to-handshake one included, stay far under it), and an adapter that
+    // ended the session crosses it while the trigger still listens.
+    for (int i : {0, 1, 3}) CHECK_COND(out[i].quiet_live_max < k2::svooc_ceiling::kQuietMs / 2);
+    CHECK_COND(out[2].quiet_end_max >= k2::svooc_ceiling::kQuietMs);
+    std::printf("quiet_ms: natural max %u, after the adapter ended %u (kQuietMs %u)\n", out[0].quiet_live_max,
+                out[2].quiet_end_max, unsigned(k2::svooc_ceiling::kQuietMs));
     // The firmware before the timer, a 169 ms stall after the 72nd reply: D- still held at the next command, the adapter
     // ends the session after 72 pairs (the hardware's symptom).
     CHECK_COND(out[2].ended);
