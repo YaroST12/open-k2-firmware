@@ -271,14 +271,14 @@ current. Remote only, no UI entry:
   through an A-to-C cable into the K2's bottom (female) port, nothing on the other port. The K2 then sees a far sink (the
   adapter side looks like a load) and would refuse. The operator's flag waives ONLY that far-sink refusal, at the start and
   as the in-run abort "sink appeared", and only while no PD is active anywhere (link `pd_active` false and no contract,
-  `Contract::None`); with PD active the start is refused as "USB-A waiver but PD is active". The waiver also reaches
-  the inline latch, but only for the two topology causes (`pd::InlineCause`, `include/k2/pd/inline_cause.hpp`): `FarRd`
-  (a sink's Rd on CC with none of the K2's own while a source feeds the link: what a charger's Rp through an A-to-C cable
-  looks like) and `Vbus` (VBUS above 5.5 V for 1.5 s with no contract of the K2's own: the A port simply being on).
-  `Load`, `Request` and `Rise` (current over 50 mA, a foreign PD Request, a VBUS rise the K2 did not cause) and a latch
-  with no recorded cause still refuse the start and abort a run ("inline mode (cause: load)" ...). A latched topology
-  cause is upgraded to `Load` / `Request` by `pd::Link` when that traffic shows up later, so the in-run guard sees a real
-  sink arrive; `Rise` is left out of the upgrade because the trigger's own ramp raises VBUS. Every other guard stays:
+  `Contract::None`); with PD active the start is refused as "USB-A waiver but PD is active". Since 2026-11-15 the
+  inline latch no longer needs a waiver (user decision): `pd::Link` latches only on certain evidence (`Load`: current
+  over 50 mA, `Request`: a sink's Request or sink-only PD message; `pd::InlineCause`, `include/k2/pd/inline_cause.hpp`),
+  and `FarRd` / `Vbus` / `Rise` (a Rd on CC, VBUS above 5.5 V, a rise the K2 did not cause) are retired: nothing sets
+  them, the values stay for the wire and old records. So an A-to-C cable's Rp, or the A port simply being on, never
+  latches and never refuses a start or aborts a run; a latch with `Load` / `Request` still does ("inline mode (cause:
+  load)" ...). The charger test's SuperVOOC ceiling stage has no waiver of its own: its `usb-a` mode runs as `on`.
+  Every other guard stays:
   |I| <= 50 mA, VBUS 4.5-5.5 V at the start, the 12 V ceiling, off-script, host loss, the cap, the exit watch, and the
   PD-appears aborts. The passive VOOC monitor holding D+/D- in Sniff is not a line conflict (`svooc::lines_off_idle`);
   the trigger takes the lines over from it. The report (`usb_a_waiver`, summary flags bit 4, the summary's cause byte,

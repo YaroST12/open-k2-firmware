@@ -235,7 +235,7 @@ Steps of the wizard:
 
 2. **Spoof cable (2 of 3)**: the cable identity the K2 presents to the charger (it answers the charger's cable query). The list is the shared one: **Off (real cable)** (no identity), built-ins (for example EPR 50 V 5 A, CUKTECH 6A, OnePlus 100W) and your saved cables. OK picks one and goes to Review. The choice is remembered. It applies to the PD units only.
 
-3. **Review (3 of 3)**: a summary (Tests, Peak, Spoof, Power), the **Level** row and START. START has the focus.
+3. **Review (3 of 3)**: an amber warning (**OTHER PORT FREE**: a device on the other port can be damaged, unplug it first), a short summary (Tests, Spoof), the **Level** row and START. START has the focus; its own arm and CONFIRM are the acknowledgement, so make sure the other port is empty before the first press.
    - MINUS moves to the Level row; there OK cycles **Light**, **Medium**, **Deep** (see [Test levels](#test-levels)) and the Tests row's step count follows. PLUS goes back to START. The level of each new run starts at Settings > Test level.
    - The first OK on START opens a confirmation window: "No load! OK twice within 5 s".
    - The second OK starts the test. BACK, a changed setting, or 5 s with no OK closes the window.

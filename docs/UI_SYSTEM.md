@@ -413,19 +413,19 @@ Seen in: `b_ct_algorithms.png` (radio, count tail, note, chevron), `b_ct_cable.p
 | Value colour | `kText`; the unit colour for a measured value; `kCaution` for the abnormal row; `kDim` or `kFaint` for `--` |
 | Settable row | `kv_row_sel`: a row the cursor can stand on (the charger test's Level). Focused, it takes the RowList focus look (`kFocusFill` ground, the 3 px `kFocusBar` when the theme has one, else the on-focus inks); OK changes its value in place, the strip says `Change` and the footer explains the value |
 | Repaints | one row (224 x 25) when its key, value, colour or focus changes |
-| Seen in | `b_ct_review.png` (x72: Tests, Peak, Spoof, Power, then the settable Level row), `b_ct_detail.png` (x92: Target, Measured, Window, Reason, Header or Mode, Scope) |
+| Seen in | `b_ct_review.png` (x72: Tests, Spoof, then the settable Level row; the 2026-11-15 Review keeps three rows), `b_ct_detail.png` (x92: Target, Measured, Window, Reason, Header or Mode, Scope) |
 
 ### 5.6 ActionCell: `kit::ActionCell`
 
 | | |
 |---|---|
 | Purpose | The one thing OK does on a review page |
-| Geometry | full width, y156, 64 px (y156..219). A 1 px `kRule` at y154 closes the table above |
+| Geometry | full width, y156, 64 px (y156..219); the charger test's Review uses `init(c, 172, 48)` (y172..219) under its warning. A 1 px `kRule` at y154 closes the table above |
 | Idle | `kFocusT` fill, 2 px `kFocus` outline, verb in font 24 `kText` centred. Optional hint under it: 11 px `kCaution` triangle + font 12 `kCaution` text |
 | Idle, not focused | when the cursor stands on a settable KvTable row instead (`draw_idle(..., focused = false)`): `kBg` fill, 2 px `kRule` outline, verb and hint in `kInk2`, so the focus is never on two things at once |
 | Armed | `kCaution` fill, black word `CONFIRM` in font 24, black font-12 line `closes in 5s`, 4 px black bar along the bottom that drains to the left over 5 s (`Ui::kConfirmWindowMs`) |
 | Repaints | the whole cell on a state or text change; the bar repaints only the columns it leaves |
-| Seen in | `b_ct_review.png` (idle, hint `no load on the port`), `b_ct_confirm.png` (armed) |
+| Seen in | `b_ct_review.png` (idle, hint `other port must be empty`), `b_ct_confirm.png` (armed) |
 
 ### 5.7 AlertBand: `kit::draw_alert_band`
 
@@ -577,6 +577,15 @@ them should move them into the kit first.
   KvTable row (`kv_row_sel`, the charger test's Level): PLUS and MINUS move between it and the ActionCell, which keeps
   the focus by default; OK on the row changes the value in place.
 - A hazard that does not block rides in the cell as the hint line.
+- **Review warning (charger test, 2026-11-15, the user's decision).** Review step 3/3 always carries a stern warning: an
+  amber AlertBand `OTHER PORT FREE` (word box 184 px = 15 characters of font 24, so "OTHER PORT EMPTY?" does not fit),
+  two font-16 lines at y68 and y86 ("A device on the other port" / "can be damaged. Unplug it.", at most 27 characters),
+  three kv rows at a 22 px pitch from y104 (Tests, Spoof, Level), the ActionCell at y172, 48 px, hint `other port must be
+  empty`, and the Caution footer `Check the other port`. The Peak and Power rows were dropped and the cell shrank from 64
+  to 48 px to make room. START's arm + CONFIRM is the acknowledgement: no extra step. It replaces the conditional OTHER PORT
+  override of 5f1714a6 (reverted): the K2 no longer guesses about the other port (the inline latch keeps only certain
+  evidence, `docs/CHARGER_TEST_FLOW.md`), it tells the person every time. `test_ui_no_truncation` covers it in four
+  rotations; renders `mock_ct_review*`, `mock_ct_confirm*`.
 
 **Alert with choices.** `ra_guard_refuse.png`
 - AlertBand, two body lines saying why, then the choices as a RowList. The first choice is the default.
@@ -638,7 +647,7 @@ them should move them into the kit first.
 |---|---|
 | pick list | `Picked: All tests` |
 | group list | `4 of 6 families on` |
-| review | `Runs without a load` |
+| review | `Check the other port` (Caution) |
 | armed | `Press again to start` |
 | alert | `Direct plug is the sure way` |
 | running | `FCP: step 1 of 3` |
@@ -894,7 +903,7 @@ Scope: every interactive page takes the unified design; the read-only instrument
 | Progress rule | y20..21 | the lab drew it at y21..22 |
 | Row hairline | top line of the row | the lab drew it on the bottom line |
 | Strip | 16 px thick | the skill said 20 px |
-| Review keys | Tests, Peak, **Spoof**, Power, then the settable **Level** row (2026-11-15: Level took Header's place) | the skill said Cable |
+| Review keys | Tests, **Spoof**, then the settable **Level** row (2026-11-15: Level took Header's place; Peak and Power dropped for the other-port warning) | the skill said Cable |
 | Step 2 title | `2/3 Spoof cable` | the skill said Cable |
 | Cable warning | band `Cable connected`; choices `Start anyway`, `Start, skip spoof`; BACK cancels | the skill said `Cable on plug` and a `Cancel` row |
 | Step detail rows | Target, Measured, Window or Reached, Reason, Header or Mode, Scope | the skill listed a `Settled` row |

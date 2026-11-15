@@ -474,6 +474,12 @@ Ports (operator, 2026-11-10): C1 and C2 are the 120 W ports (20 V 6 A with the X
     up (the VBUS-fed Rp sweeps the sink band as it collapses), and clearing waits 2 s after any pause. Current drawn and
     sink Requests still latch through the cuts. `tools/ct_start.py` polls VBUS after its PD rescan instead of refusing
     on one sample taken inside a cut (76fbc6b5).
+  - `floating-cc2-reads-sink-band` (not a charger quirk, a K2 reading; 2026-11-15, `runs/cuktech-usba/cc-flip.txt`): behind
+    this port's A-to-C cable with the top port empty, the K2's CC2 reads about 1.76 V (1.761-1.762 V, steady) while CC1
+    carries the Rp at 3.305 V, so the far-Rd rule saw a sink and latched `far rd`; in a cut CC1 falls to 6 mV and CC2
+    follows the collapsing VBUS (2.06-2.46 V at 2.0-2.4 V VBUS, 3.307 V at 5.1 V), and the latch held through ~7 s
+    cycles. Handling: since the latch policy of 2026-11-15 a Rd level never latches (only a load or a sink Request),
+    so the charger test runs here without a waiver.
   - ~~`ufcs-cuts-a-port-power`~~ **WITHDRAWN 2026-11-07**: recorded under the doubled USART2 baud. Re-run on 32a279f
     (`runs/revalidate/cuktech-usba-qc.log`, HID-powered): UFCS 5/9/11/5 V pass on this port, one mode 5.00-11.00 V
     0.30-3.00 A (33 W), handshake answered after the D- release (`fin=9132 us`), no VBUS cut during the UFCS rows.

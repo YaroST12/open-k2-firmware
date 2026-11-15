@@ -216,7 +216,7 @@ The K2 is passive by default, so classification is evidence-based, per arm:
 - `pd::DetachTracker` (`include/k2/pd/pd_passive.hpp:87-121`): attached → detached on VBUS-low-1 s,
   CC-gone-500 ms, or inline sink-gone-500 ms; `RdHold` keeps Rd off 1.5 s.
 - `pd::Link` (`include/k2/pd/pd_link.hpp:65-96`, `src/pd/pd_link.cpp`): attached/waiting/stale + the
-  inline latch (> 50 mA, foreign Request, unexplained VBUS > 5.5 V; clears on detach or 2 s quiet).
+  inline latch (> 50 mA or a foreign Request only since 2026-11-15; a far Rd or an unexplained VBUS no longer latches; clears on detach or 2 s quiet).
 - `pd::Engine` (`src/pd/pd_engine.cpp:33-...`): stateless per-frame decoder accumulating caps /
   contract / vdm / ext / cable / usb; `reset_source()` on new caps, hard reset, detach.
 - `pd::Sink` (`include/k2/pd/pd_sink.hpp:110` + `src/pd/pd_sink.cpp`): Idle → EprEntering → EprWaitCaps →

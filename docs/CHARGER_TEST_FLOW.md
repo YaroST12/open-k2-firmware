@@ -136,11 +136,11 @@ aborts with `Overvoltage` and releases the lines), and the card and Results show
   ident command it hears (0xA8 / 0xAC / 0xA6, `fc::Engine::vooc_ident()` -> `fctrig::Status::ident` -> `Input::fc_ident`).
   The Runner keeps it for a VOOC-family row that passes `detected`; Results shows it as a `VOOC id` row ("0xAC") beside
   the rows' "detected", the run summary as "VOOC family ident 0xAC". One ident proves the family, not the variant. Not
-  journaled, not on the card. Behind the Link's inline latch (any cause, the far-Rd latch of a USB-A to C cable included)
+  journaled, not on the card. Behind the Link's inline latch (a drawn load or a sink's own Request: the only causes since 2026-11-15)
   the engine refuses the family, so neither the ident nor the Deep stage is reachable there (`test_fc_engine`
   `vooc_never_inline`).
 - **SuperVOOC ceiling stage (Deep only, `Options::svooc_cap`, `State::Ceiling`).** `with_level` turns it on for Deep
-  (keeping a usb-a waiver) and off for Light and Medium, and the Runner also checks the level, so a run below Deep stops at
+  (keeping the mode, usb-a included) and off for Light and Medium, and the Runner also checks the level, so a run below Deep stops at
   the detection and its ident. After a VOOC-family pass a Deep run may run one more step at 5 V: the guarded SuperVOOC trigger (`svooc_trig`, Probe profile, 12 s cap) answers the adapter's
   0x82 polls like a phone and walks a 4-rung 0x86 ladder (100 mA per count: 0x00F 1.5 A, 0x028 4.0 A, 0x03F 6.3 A,
   0x06D 10.9 A), the first escape on the 12th poll (0.52 s) and one every 6 polls (0.26 s) after it, so all four are asked within about 1.0 s of the ramp end
@@ -149,10 +149,10 @@ aborts with `Overvoltage` and releases the lines), and the card and Results show
   claimed power, VBUS x ask in whole watts; the watts need both numbers). It is the K2's own ask that the charger did not
   abort, read from the protocol;
   it is **not a drawn current** and the watts are not a drawn power, and the K2 never loads the charger (the trigger's 50 mA guard and 12 V abort stay).
-  Modes: `off` (Light, Medium), `on` (Deep; the trigger's start guards must pass), `usb-a` (waiver for a USB-A charger on the bottom
-  port with the top port empty; never with a phone on the other port). The usb-a waiver also reaches the run's own
-  inline checks, for the same two causes the trigger waives (`svooc::inline_waived`: FarRd, Vbus) and only in a run that
-  holds an SVOOC unit; a Load / Request / Rise latch still refuses. The stage starts only once D+/D- are free
+  Modes: `off` (Light, Medium), `on` (Deep; the trigger's start guards must pass), `usb-a` (accepted and run as `on`: the charger test
+  waives nothing since the latch policy of 2026-11-15, so the wire value, the CLI flag and the web mode stay for
+  compatibility and do nothing; the run's inline checks see only a load or a sink's Request, and the Review warning asks
+  for an empty other port). The stage starts only once D+/D- are free
   (`svooc_trig::lines_free()`): the family session's release holds them at 0 V for 500 ms first. An adapter that talked
   and then sent no edge for `kQuietMs` (500 ms) ended the session (every no-load session so far, ~3.3 s after the wake):
   the stage stops the trigger and reads `stopped` ("stopped at 3.3s, <=11.0V, 10.9A 120W claimed"), a normal outcome. A
@@ -160,7 +160,7 @@ aborts with `Overvoltage` and releases the lines), and the card and Results show
   An abort reads "aborted: <cause>, ..." ("aborted: sink, <=8.0V, none claimed": no ask, no watts); when the run's own guard (inline,
   monitor) stopped the trigger, the recorded cause is that guard's, not the trigger's "stopped". While the trigger runs
   (exit watch included) the Link counts the adapter's VBUS ramp as the K2's own (`own_contract`), so the PD-silent session's
-  missing contract does not latch inline with cause Rise (hardware 2026-11-15: that latch took the Rd off and the brick
+  missing contract is not read as a foreign rise (hardware 2026-11-15: the Rise latch, retired since, took the Rd off and the brick
   dropped VBUS). `V max` is one number, the trigger report's `vbus_max_mv` with the exit watch included. If the adapter
   drops its output after the stage (VBUS under vSafe5V for `kDropMs`, 200 ms, in the release) the run brings it back
   with its unit boundary, Rd off and on (detach, then the next unit's attach), and goes on with the result kept. The stage is not journaled (a resumed
@@ -170,7 +170,7 @@ aborts with `Overvoltage` and releases the lines), and the card and Results show
   dashboard's run summary (`K2Remote.chargerSvoocCap`) and in the log. A plain VOOC charger yields "no adapter" because the family
   detection cannot tell VOOC from SuperVOOC. `quiet()` covers the stage: no flash writes while the wire is held.
   Shell: `k2_remote.py charger-svooc-cap [off|on|usb-a]`, `ct_start.py --level deep [--svooc-cap usb-a]` (a bare
-  `--svooc-cap` means deep; a deep run always sends its mode, so an earlier usb-a waiver never carries over unasked).
+  `--svooc-cap` means deep; a deep run always sends its mode; usb-a is a no-op here).
   Host tests: `test_svooc_ceiling`, `test_charger_test` (ceiling stage cases), `test_result_layout`
   (`test_svooc_ceiling_note_row`), `test_remote_proto` (`test_charger_svooc_cap`), `tests/test_k2_remote.py`
   (`ChargerSvoocCapCli`).
@@ -399,10 +399,29 @@ the pick that was made.
    vendor-label facts of a PD source; `Row.label` holds 8 characters); a section whose rows all fold into the `No reply` /
    `Skipped` summary rows drops its header. The on-device grid is units only (no header rows).
 2. **Spoof cable** (stage 2). The shared cable-identity list (below); OK on a row picks it and goes to Review.
-3. **Review** (stage 4). One START row, then the summary rows `Tests`, `Peak` (the caps PDO with the highest wattage),
-   `Cap`, `Header`, `Spoof` (the short identity name plus its rating, plain `Off` when the pick is Off — a START with
-   Off disarms whatever is armed) and one free row for status lines such as a self-powered charger. The first OK on
+3. **Review** (stage 4). The other-port warning (below), the kv rows `Tests`, `Spoof` (the short identity name plus its
+   rating, plain `Off` when the pick is Off — a START with Off disarms whatever is armed) and the settable `Level`, then
+   the START ticket (the `Peak`, `Cap`, `Header` and status rows of earlier builds are gone; self-powered shows on the footer). The first OK on
    START opens the confirm window, the second starts.
+
+   **Other-port warning (2026-11-15, the user's decision).** Review always carries a stern warning that a device on the
+   other port can be damaged: an amber alert band `OTHER PORT FREE`, two font-16 lines ("A device on the other port" /
+   "can be damaged. Unplug it."), the START ticket's hint `other port must be empty` and a Caution footer `Check the
+   other port` (the refusal, nothing-to-run, Level, confirm-window, PPS 21 V and self-powered footers keep priority).
+   To fit, the page shows three kv rows (`Tests`, `Spoof`, `Level`; `Peak` and `Power` are gone, the PD page and the
+   card carry the best PDO and the self-powered footer stays) and the START ticket is 48 px high (was 64). START's own
+   arm + CONFIRM is the acknowledgement: one confirm per run. The web dashboard's START confirm shows the same text in
+   its own confirm step.
+
+   **Inline latch policy (2026-11-15, the user's decision).** The Link's inline latch keeps only 100 %-certain evidence
+   ("unblock steps blocked by the phantom 'other device' tests; I'd only keep them when we are 100 %, absolutely
+   sure"): drawn current (`Load`), a sink's Request or sink-only PD message (`Request`), a foreign PD contract. A
+   far-Rd CC level, an unexplained VBUS level or rise (`FarRd`, `Vbus`, `Rise`) no longer latches and no longer refuses
+   a run; the enum values stay for the wire, the journal and old records, and nothing sets them. The charger test has no
+   special handling of those causes and the usb-a waiver is redundant for it (see the SuperVOOC stage). Accepted
+   tradeoff: a K2 inserted into a live but silent link (no current, no sink message yet) is no longer protected; the
+   Review warning is the protection. Hardware reason: the K2 reads about 1.75 V on CC2 with nothing plugged in, so a
+   far Rd latched with an empty top port on the CUKTECH USB-A port (`docs/CHARGER_QUIRKS.md`).
 
 Back is always `Back` and retreats one level: Group -> Custom -> Tests, Cable -> Tests (cursor on the preset in force),
 Review -> Cable (cursor on the identity in force), Results -> Tests. Running (5), Results (6), Steps (7), Detail (8),

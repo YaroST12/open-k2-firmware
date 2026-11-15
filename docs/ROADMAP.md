@@ -184,6 +184,16 @@ Open defects, newest first. A row leaves this list when its fix is merged and se
   port: still inline (`latched by load`).
   **Hardware 2026-11-11, 1.0.0-594-cd569683:** inline false in 60 of 60 samples over ~8 cuts; `ct_start.py --units
   qc2,qc3` started from the PC and passed (10 pass, 0 fail; `runs/2026-11-11-integ594-hw/` in the integ worktree).
+  **Resolved by policy 2026-11-15 (k2/svooc-120w, host-tested, hardware check pending):** the refusal came back on this
+  port with the far-Rd latch. Finding: with the top port empty the K2 reads about 1.75 V on CC2 (its own level, the
+  FUSB302 measuring the unused line), and the port's ~7 s no-load cuts kept the latch from clearing
+  (`runs/cuktech-usba/cc-flip.txt` in the main checkout: `inline: True inline_cause: far rd` through every cut, VBUS
+  5.1 V <-> 2 V, cc2 1.76 V / 3.3 V). The user's decision: the latch keeps only 100 %-certain evidence (a load, a sink's
+  Request, a foreign contract); FarRd / Vbus / Rise no longer latch or refuse, and the charger test no longer refuses on
+  them. Accepted tradeoff (the user, 2026-11-15): a K2 inserted into a live but silent link (no current, no sink message
+  yet) is no longer protected; the Review step carries an always-on "other port" warning instead. Validate: this port, C-to-A
+  cable, nothing behind the K2: `ct_start.py --units qc2,qc3` starts with no "load attached"; a phone behind the K2
+  still latches (`load` / `sink request`).
   Open: the phone-behind negative check.
 
 - **Fast-charge detection says `USB DATA` under a 20 V contract** (2026-11-11, same captures): with the offers missed
@@ -1140,8 +1150,9 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
   latches `InlineCause::FarRd`, which `svooc_run` waives for usb_a but the preflight does not), so the stage never ran;
   the trigger report header still prints "0x86 answer 0x005 / 0x82 constant 0x051" for the Phone and Probe profiles.
   **2026-11-15 (k2/svooc-deep, host-tested):** the stage waits for D+/D- after the family release (it was refused "D+/D-
-  busy" 20 ms after the SVOOC pass, inside the engine's 500 ms 0 V hold; `runs/svooc-cap/run1.out`); usb-a mode waives
-  the far-Rd / foreign-VBUS inline latch for the run as the trigger does; a quiet adapter ends the stage as "stopped at
+  busy" 20 ms after the SVOOC pass, inside the engine's 500 ms 0 V hold; `runs/svooc-cap/run1.out`); usb-a mode waived
+  the far-Rd / foreign-VBUS inline latch for the run (obsolete: since the latch policy of 2026-11-15 those never latch and
+  usb-a is a no-op for the charger test); a quiet adapter ends the stage as "stopped at
   <t>, <A> claimed, <V> max". Open: the fast-charge engine still refuses the VOOC family on any inline reason, so the
   detection row on a USB-A cable can fail "Inline" before the stage is queued.
   **2026-11-15 phase 1b (host-tested):** the hardware run (OnePlus 120 W, C-to-C, `runs/svooc-cap/stream3`) never reached an
