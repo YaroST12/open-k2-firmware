@@ -291,8 +291,11 @@ K2_HOT void Sink::fail(SinkResult r, SinkState to) {
 }
 
 // The attempt a release waited behind failed (Reject, Wait exhausted): the release is still wanted, so it survives fail().
+// The refused level never becomes the contract's: plan_ is the last accepted contract again, so a re-announce is answered for
+// it (before, the next Source_Capabilities / EPR_Source_Capabilities asked for the level the source had just refused).
 K2_HOT void Sink::fail_keep_release(SinkResult r, SinkState to, std::uint32_t now) {
     const bool rp = release_pending_;
+    if (contract_) plan_ = contract_plan_;
     fail(r, to);
     release_pending_ = rp;
     settle_release(now);
@@ -748,6 +751,7 @@ K2_HOT void Sink::release(std::uint32_t now) {
 K2_HOT void Sink::after_ps_rdy(std::uint32_t now) {
     const std::int32_t drop_mv = contract_ ? std::int32_t(st_.mv) - std::int32_t(plan_.mv) : 0;   // the step down, for the descent window
     contract_ = true;
+    contract_plan_ = plan_;
     st_.pos = plan_.pos;
     st_.mv = plan_.mv;
     st_.ma = plan_.ma;

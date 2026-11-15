@@ -505,6 +505,7 @@ private:
     PpsAnswer pps_;
     Choice want_;               // the held choice
     Plan plan_;                 // the request in flight / the contract
+    Plan contract_plan_;        // the last accepted contract (PS_RDY): plan_ again when a new level is refused (fail_keep_release)
     std::uint8_t rev_ = 2;
     std::uint32_t deadline_ = 0, next_keepalive_ = 0, ready_at_ = 0, retry_at_ = 0, abort_at_ = 0;
     std::uint32_t descent_ms_ = kDescentMs;   // the hold guard's descent window for the contract set at ready_at_

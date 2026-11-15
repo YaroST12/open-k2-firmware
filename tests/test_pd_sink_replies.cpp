@@ -521,7 +521,35 @@ void test_an_epr_reannounce_without_a_hold_keeps_the_contract_level() {
     r.epr_caps(0, 1);
     CHECK_EQ(r.sent.size(), m + 1);
     if (r.sent.size() != m + 1) return;
-    CHECK_EQ(r.type_at(m), unsigned(kDataEprRequest));   // answered in the same pass (the level is plan_'s, as in SPR mode)
+    CHECK_EQ(r.type_at(m), unsigned(kDataEprRequest));   // answered in the same pass
+    CHECK_EQ(r.word_at(m, 0) >> 28, 8u);                  // for the 28 V contract, never the Rejected 21 V
+    CHECK_EQ(r.word_at(m, 1), 0x0008C1F4u);               // the EPR_Request's PDO copy: the 28 V one
+}
+
+// The level kept after a refused new level is the last ACCEPTED contract: a Reject (or Wait given up) ends the attempt, and the
+// next re-announce is answered for the contract, while plan() reports the contract again.
+void test_a_refused_level_leaves_the_contract_level_in_force() {
+    for (bool wait : {false, true}) {
+        Rig r;
+        r.contract();                                                        // 9 V at PDO 2
+        CHECK_EQ(int(r.sink.trigger({3, 0, 0}, r.now)), int(Err::Ok));       // 15 V, refused
+        r.pump();
+        if (!wait) {
+            r.ctl(kCtlReject);
+        } else {
+            for (unsigned i = 0; i <= kMaxWaitRetries; i++) { r.ctl(kCtlWait); r.run(kWaitRetryMs + 10); }
+        }
+        CHECK_EQ(int(r.sink.status().state), int(SinkState::Ready));
+        CHECK_EQ(int(r.sink.status().pos), 2);
+        CHECK_EQ(r.sink.plan().pos, 2u);
+        CHECK_EQ(r.sink.plan().mv, 9000u);
+        const std::size_t m = r.mark();
+        r.words(kDataSourceCap, {0x0001912Cu});   // the list re-announced (the engine reads the decoded caps)
+        CHECK_EQ(r.sent.size(), m + 1);
+        if (r.sent.size() != m + 1) continue;
+        CHECK_EQ(r.type_at(m), unsigned(kDataRequest));
+        CHECK_EQ(r.word_at(m, 0) >> 28, 2u);      // the 9 V contract, not the refused 15 V
+    }
 }
 
 }  // namespace
@@ -543,6 +571,7 @@ int main() {
     test_no_answers_when_not_the_sole_sink();
     test_an_epr_reannounce_is_answered_with_the_held_level();
     test_an_epr_reannounce_without_the_held_level_falls_back_to_pdo1();
+    test_a_refused_level_leaves_the_contract_level_in_force();
     test_lab_modes_keep_their_own_answers();
     test_an_epr_reannounce_without_a_hold_keeps_the_contract_level();
     return test_report("pd_sink_replies");
