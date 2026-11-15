@@ -96,6 +96,7 @@ void defs_are_complete() {
     for (const Check c : {Check::DetachSafe0V, Check::Reattach, Check::PpsBand, Check::PpsPsRdy, Check::PpsStatus, Check::AvsBand})
         CHECK_COND(!def(c).inferred);
     CHECK_COND(def(Check::PpsSettle).inferred);
+    CHECK_COND(avs_check(Check::AvsTrack) && !avs_check(Check::PpsTrack));
     for (std::size_t k = 0; k < kChecks; ++k) CHECK_COND(avs_check(Check(k)) == (std::string_view(kDefs[k].key).substr(0, 4) == "avs_"));
 }
 
@@ -110,7 +111,7 @@ void blob_layout() {
     std::array<TransRec, 2> tr{};
     tr[1].from = 4; tr[1].to = 1; tr[1].band_ms = 900;
     std::array<PassRec, 1> pp{};
-    pp[0].pos = 5; pp[0].cls = 2; pp[0].steps = 770; pp[0].lo_mv = 3300; pp[0].status = kPsOmf;
+    pp[0].pos = 5; pp[0].cls = 2; pp[0].steps = 770; pp[0].lo_mv = 3300; pp[0].status = kPsOmf; pp[0].track = 1;
     const BlobReader r(h, agg, t, tr, pp);
     CHECK_EQ(int(r.size()), int(blob_len(2, 1)));
     std::vector<std::uint8_t> b(r.size());
@@ -139,6 +140,7 @@ void blob_layout() {
     CHECK_EQ(int(b[p0 + 2] | b[p0 + 3] << 8), 770);
     CHECK_EQ(int(b[p0 + 4] | b[p0 + 5] << 8), 3300);
     CHECK_EQ(int(b[p0 + 26]), int(kPsOmf));
+    CHECK_EQ(int(b[p0 + 27]), 1);   // the fold / track break flag
     CHECK_EQ(int(b.size()), int(p0 + sizeof(PassRec)));
     // Chunked reads give the same bytes.
     std::array<std::uint8_t, 48> c{};

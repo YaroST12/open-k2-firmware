@@ -1065,7 +1065,7 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
   APDO, 1 A (AVS: the row below), Accept + PS_RDY + measured VBUS per point, results as a compact error-vs-setpoint
   strip on the results tab and the card (min / max / worst error and where, plus the peak delivered level and a
   fold-back: a steady out-of-band point is recorded, not a stop - "peak 19.75 V at 19.9 V, folds back to 19.42 V
-  from 20.0 V" on the FH22). Long by design (about 77 points for 3.3-11 V, about 180 for 3.3-21 V), so the Tests
+  from 20.0 V" on the FH22; the fold rule is the shared `k2/pd/prog_track.hpp`, also the PD Spec `pps_track` / `avs_track` checks). Long by design (about 77 points for 3.3-11 V, about 180 for 3.3-21 V), so the Tests
   list shows it as its own line with a point count. Stops at the first lost source (pattern handling as the other PPS
   rows). Validate: host tests for the point plan and the summary; hardware: one full sweep on a working PPS source,
   no reboot, journal intact. FH22 evidence: `docs/CHARGER_QUIRKS.md`,

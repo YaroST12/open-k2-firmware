@@ -63,7 +63,7 @@ int main() {
     std::array<PassRec, 2> pp{};
     pp[0].pos = 5; pp[0].cls = 2; pp[0].steps = 770; pp[0].lo_mv = 3300; pp[0].hi_mv = 11000; pp[0].band_100us = 37;
     pp[0].psrdy_100us = 1200; pp[0].worst_err_mv = -45; pp[0].min_delta_mv = -2; pp[0].over_mv = 25; pp[0].out_100us = 4;
-    pp[0].mono_fails = 1; pp[0].status = kPsOmf;
+    pp[0].mono_fails = 1; pp[0].status = kPsOmf; pp[0].track = 1;
     pp[1].pos = 6; pp[1].cls = 3 | kPassAvs; pp[1].steps = 2; pp[1].lo_mv = 9000; pp[1].hi_mv = 15000;
     const BlobReader r(h, agg, t, tr, pp);
     std::array<std::uint8_t, 48> b{};
@@ -108,11 +108,12 @@ def build_and_run(src, tag):
 class Tables(unittest.TestCase):
     def test_parsed_tables(self):
         t = pb.load_tables()
-        self.assertEqual(len(t["checks"]), 34)
+        self.assertEqual(len(t["checks"]), 36)
         self.assertEqual(t["checks"][0]["key"], "accept_time")
         self.assertEqual(t["checks"][pb.PSC1_CHECKS - 1]["key"], "source_reset")   # PSC1 blobs end here; the new checks are appended
         self.assertEqual(t["checks"][pb.PSC1_CHECKS - 1]["weight"], 20)
-        self.assertEqual(t["checks"][-1]["key"], "reattach_caps")
+        self.assertEqual(t["checks"][-2:][0]["key"], "pps_track")
+        self.assertEqual(t["checks"][-1]["key"], "avs_track")
         self.assertEqual(t["skips"][0], "-")
         self.assertEqual(t["skips"][-1], "no AVS")
         self.assertEqual(t["verdicts"], ["pending", "pass", "fail", "skip", "unverified"])
@@ -157,7 +158,7 @@ class Decode(unittest.TestCase):
         # PS_RDY early 3 x 1 fail + HR off time 3 x 1 fail
         self.assertEqual(r["score"], 6)
         self.assertEqual(r["score"], sum(c["penalty"] for c in r["checks"]))
-        self.assertEqual(r["tally"], {"pass": 3, "fail": 2, "skip": 28, "unverified": 1})
+        self.assertEqual(r["tally"], {"pass": 3, "fail": 2, "skip": 30, "unverified": 1})
         self.assertEqual((r["version"], r["caps_note"], r["full20"]), (2, "PPS without AVS: allowed before PD R3.3", True))
 
     def test_checks(self):
@@ -203,6 +204,7 @@ class Decode(unittest.TestCase):
                          (3.7, 120.0, -45, -2, 25, 0.4))
         self.assertEqual((p["fails"]["monotonic"], p["fails"]["band"], p["status"], p["status_text"]), (1, 0, 16, "OMF"))
         self.assertEqual((q["kind"], q["class"], q["step"], q["steps"], q["status_text"]), ("avs", 3, "slams", 2, None))
+        self.assertEqual((p["track"], q["track"]), (True, False))
 
     def test_report_text(self):
         text = pb.render_text(self.r)
@@ -227,7 +229,7 @@ class Decode(unittest.TestCase):
     def test_psc1_blob_still_decodes(self):
         # A blob from before the sweep passes: magic PSC1, 21 checks, the 14-byte PPS points, bytes 13..15 zero.
         b = self.blob
-        t_off = pb.HEADER + 34 * pb.AGG
+        t_off = pb.HEADER + 36 * pb.AGG
         head = bytearray(b[:pb.HEADER])
         head[0:4] = b"PSC1"
         head[7] = 1

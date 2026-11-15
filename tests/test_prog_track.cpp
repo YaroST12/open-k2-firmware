@@ -63,6 +63,20 @@ static void test_break_edges() {
     CHECK_EQ(int(pd::track_step(10000, 9950, 10100, 10201)), int(Track::None));   // 251 up: it caught up, not a finding
     CHECK_EQ(int(pd::track_step(3300, 2900, 3400, 3340)), int(Track::None));      // a low first point 400 mV short, then tracking
 }
+// The scored-check form (PD Spec): behind > limit(step) is exactly "a finding", over every step size and move.
+static void test_behind_and_limit_agree_with_track_step() {
+    CHECK_EQ(pd::track_limit(20), 70);
+    CHECK_EQ(pd::track_limit(100), 150);
+    CHECK_EQ(pd::track_limit(500), 150);
+    CHECK_EQ(pd::track_behind(19980, 19900, 20000, 19419), 501);   // the FH22 20 mV step: -481 mV
+    CHECK_EQ(pd::track_behind(7000, 7003, 7020, 7023), 0);          // tracking
+    CHECK_EQ(pd::track_behind(7000, 7003, 7100, 7500), -397);       // the output caught up
+    for (int step : {20, 40, 100, 500, 1000, 2000})
+        for (int delta = -2600; delta <= 2600; ++delta) {
+            const bool finding = pd::track_behind(10000, 9950, 10000 + step, 9950 + delta) > pd::track_limit(step);
+            CHECK_EQ(finding, pd::track_step(10000, 9950, 10000 + step, 9950 + delta) != Track::None);
+        }
+}
 // Only an upward request is judged.
 static void test_downward_is_skipped() {
     CHECK_EQ(int(pd::track_step(20000, 19400, 19900, 19815)), int(Track::None));
@@ -156,6 +170,7 @@ int main() {
     test_noise_is_not_a_fold();
     test_break_edges();
     test_downward_is_skipped();
+    test_behind_and_limit_agree_with_track_step();
     test_scan_keeps_the_first();
     test_fh22_pps_100mv_folds_at_20v();
     test_fh22_pps_20mv_fold();

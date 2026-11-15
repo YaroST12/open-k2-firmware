@@ -55,6 +55,8 @@ struct Sim final : Env {
     int accept_ms = 5, start_ms = 30, pps_start_ms = 5, psrdy_after_ms = 10;
     int early_psrdy_ms = -1;            // >= 0: PS_RDY this long after the Accept, wherever VBUS is
     int pps_offset_mv = 0;              // a PPS output this far off its set point
+    int pps_fold_from_mv = 0;           // > 0: a request at or above this folds to pps_fold_to_mv (a fixed setpoint, like the FH22 at 20 V)
+    int pps_fold_to_mv = 0;
     int pps_overshoot_mv = 0;           // a programmable step up overshoots its level by this much for pps_overshoot_ms
     int pps_overshoot_ms = 0;
     int pps_status_ms = 3;              // Get_PPS_Status -> PPS_Status
@@ -164,6 +166,7 @@ struct Sim final : Env {
             s.state = pd::SinkState::Transition;
             const bool p = c.pdos[want.pos - 1].type != pd::PdoType::Fixed;
             vt = level(want) + (p ? pps_offset_mv : 0);
+            if (p && pps_fold_from_mv && level(want) >= pps_fold_from_mv) vt = pps_fold_to_mv;
             ramp_at = t + std::uint32_t(p ? pps_start_ms : start_ms);
             rate = vt >= v ? rise : fall;
             if (p && pps_overshoot_mv && vt > v) over_v = vt + pps_overshoot_mv;
@@ -541,6 +544,55 @@ void pps_offset_and_slow_settle() {
     CHECK_COND(e.agg(Check::PpsSettle).fails > 0);                     // the count over it is kept
     CHECK_COND(verdict(e, Check::PpsMonotonic) == Verdict::Pass);
     CHECK_COND(verdict(e, Check::Accuracy) == Verdict::Pass);   // the fixed levels are not touched
+}
+
+void pps_fold_is_a_finding() {
+    // Every request from 9.0 V up lands on 8.59 V (a fixed setpoint): the first step of each upward pass that reaches it is a fold
+    // or a break, named once per pass; the same sweep without the fold is clean.
+    Sim m;
+    typical(m);
+    m.pps_fold_from_mv = 9000;
+    m.pps_fold_to_mv = 8590;
+    Engine e(m);
+    CHECK_COND(e.start(0) == StartResult::Ok);
+    drive(m, e);
+    check_safe_end(m, e);
+    CHECK_COND(e.stop() == Stop::Done);
+    CHECK_COND(verdict(e, Check::PpsTrack) == Verdict::Fail);
+    CHECK_COND(e.agg(Check::PpsTrack).n > 0);
+    CHECK_COND(e.agg(Check::PpsTrack).fails > 0);
+    int flagged = 0, flagged_up = 0;
+    for (const PassRec& r : e.passes()) {
+        flagged += r.track;
+        flagged_up += r.track && r.cls < 3;
+    }
+    CHECK_COND(flagged > 0);
+    CHECK_EQ(flagged, flagged_up);
+    CHECK_COND(e.agg(Check::PpsTrack).fails <= std::uint32_t(flagged));   // one per pass, never one per step of the plateau
+    CHECK_COND(e.score() > 0);
+    CHECK_COND(verdict(e, Check::AvsTrack) != Verdict::Fail);
+    // The clean source: judged on every upward step, never failing.
+    Sim c;
+    typical(c);
+    Engine ec(c);
+    CHECK_COND(ec.start(0) == StartResult::Ok);
+    drive(c, ec);
+    CHECK_COND(ec.stop() == Stop::Done);
+    CHECK_COND(ec.agg(Check::PpsTrack).n > 0);
+    CHECK_EQ(int(ec.agg(Check::PpsTrack).fails), 0);
+    CHECK_COND(verdict(ec, Check::PpsTrack) == Verdict::Pass);
+    // The AVS sweep: the same rule under its own check.
+    Sim a;
+    a.list({fixed(5000), fixed(9000), fixed(15000), fixed(20000), avs(9000, 20000)});
+    a.pps_fold_from_mv = 15000;
+    a.pps_fold_to_mv = 14500;
+    Engine ea(a);
+    CHECK_COND(ea.start(0, bit(Family::Pps)) == StartResult::Ok);
+    drive(a, ea);
+    CHECK_COND(ea.stop() == Stop::Done);
+    CHECK_COND(verdict(ea, Check::AvsTrack) == Verdict::Fail);
+    CHECK_COND(ea.agg(Check::AvsTrack).fails > 0);
+    CHECK_COND(verdict(ea, Check::PpsTrack) != Verdict::Fail);
 }
 
 void epr_and_pps_on_one_charger() {
@@ -1069,6 +1121,7 @@ int main() {
     clean_source_scores_zero();
     unloaded_slow_fall_and_early_ps_rdy();
     pps_offset_and_slow_settle();
+    pps_fold_is_a_finding();
     epr_and_pps_on_one_charger();
     source_back_at_its_old_level();
     capture_busy_falls_back_to_stamps_and_polling();

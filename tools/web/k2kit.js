@@ -339,8 +339,8 @@ var K2Kit = (function () {
   // checks carry no penalty and show as the outlined amber "unverified" cell.
   var SPEC_ORDER = ["accept_time", "ps_rdy_time", "src_start", "ps_rdy_early", "ps_rdy_low", "rise_time", "fall_time", "overshoot", "accuracy",
                     "pps_monotonic", "pps_accuracy", "pps_settle", "pps_band", "pps_ps_rdy", "pps_overshoot", "pps_transient", "pps_status",
-                    "pps_status_time", "avs_monotonic", "avs_accuracy", "avs_band", "avs_ps_rdy", "avs_overshoot", "avs_transient",
-                    "pps_keepalive", "epr_keepalive", "hr_safe0v", "hr_recover", "hr_turn_on", "hr_caps", "detach_safe0v", "reattach",
+                    "pps_status_time", "pps_track", "avs_monotonic", "avs_accuracy", "avs_band", "avs_ps_rdy", "avs_overshoot",
+                    "avs_transient", "avs_track", "pps_keepalive", "epr_keepalive", "hr_safe0v", "hr_recover", "hr_turn_on", "hr_caps", "detach_safe0v", "reattach",
                     "reattach_caps", "source_reset"];
   var SPEC_SECTIONS = { accept_time: "Transitions", pps_monotonic: "PPS", avs_monotonic: "AVS", pps_keepalive: "Timeouts", hr_safe0v: "Hard Reset",
                         detach_safe0v: "Detach", source_reset: "Source" };
@@ -357,10 +357,10 @@ var K2Kit = (function () {
                           title: failText("worst entry into the band of " + ps.steps + " moves", f.band) };
     var rdy = { verdict: f.ps_rdy || ps.psrdy_ms === null ? "fail" : "pass", label: msText(ps.psrdy_ms), current: "PS_RDY",
                 title: failText("worst Accept to PS_RDY of " + ps.steps + " moves", f.ps_rdy) };
-    var nLevel = f.monotonic + f.accuracy + f.overshoot + f.transient;
+    var nLevel = f.monotonic + f.accuracy + f.overshoot + f.transient + (ps.track ? 1 : 0);
     var lvl = { verdict: nLevel ? "fail" : "pass", label: (ps.worst_err_mv >= 0 ? "+" : "") + ps.worst_err_mv + " mV", current: "level",
                 title: "worst level error; fails: monotonic " + f.monotonic + ", accuracy " + f.accuracy + ", overshoot " + f.overshoot +
-                       ", transient " + f.transient };
+                       ", transient " + f.transient + (ps.track ? "; a fold or track break was named" : "") };
     var st = ps.kind === "pps" ? { verdict: ps.status ? "fail" : "pass", label: ps.status_text || "clean", current: "status" }
                                : { verdict: "none", label: "-", current: "status" };
     return { label: ps.kind.toUpperCase() + " " + ps.step, cells: [band, rdy, lvl, st] };

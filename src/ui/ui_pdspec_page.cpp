@@ -43,7 +43,7 @@ constexpr char kCheckShort[][9] = {
     "Accept",  "PS_RDY",  "VBUS go", "Rdy high", "Rdy low", "Rise",   "Fall",   "Oversh.",  "Level",   "PPS mono", "PPS lvl",
     "PPS set", "PPS t/o", "EPR t/o", "HR 0V",    "HR off",  "HR on",  "HR caps", "Detach",  "Re-att.", "Src rst",
     "PPS band", "PPS rdy", "PPS ovs", "PPS tr.", "PPS stat", "Stat t",  "AVS mono", "AVS lvl", "AVS band", "AVS rdy", "AVS ovs",
-    "AVS tr.",  "Re-caps",
+    "AVS tr.",  "Re-caps",  "PPS trk", "AVS trk",
 };
 static_assert(std::size(kCheckShort) == sc::kChecks, "one grid label per check");
 static_assert(all_fit(kCheckShort, kLabelAdv, kit::kResultLabelW - 8), "a check label is wider than the label strip");
@@ -52,8 +52,8 @@ using C = sc::Check;
 constexpr C kOrder[] = {
     C::AcceptTime,   C::PsRdyTime,    C::SrcStart,    C::PsRdyEarly, C::PsRdyLow,     C::RiseTime,      C::FallTime,
     C::Overshoot,    C::Accuracy,     C::PpsMonotonic, C::PpsAccuracy, C::PpsSettle,  C::PpsBand,       C::PpsPsRdy,
-    C::PpsOvershoot, C::PpsTransient, C::PpsStatus,   C::PpsStatusTime, C::AvsMonotonic, C::AvsAccuracy, C::AvsBand,
-    C::AvsPsRdy,     C::AvsOvershoot, C::AvsTransient, C::PpsKeepAlive, C::EprKeepAlive, C::HrSafe0V,     C::HrRecover,
+    C::PpsOvershoot, C::PpsTransient, C::PpsStatus,   C::PpsStatusTime, C::PpsTrack,   C::AvsMonotonic, C::AvsAccuracy, C::AvsBand,
+    C::AvsPsRdy,     C::AvsOvershoot, C::AvsTransient, C::AvsTrack,  C::PpsKeepAlive, C::EprKeepAlive, C::HrSafe0V,     C::HrRecover,
     C::HrTurnOn,     C::HrCaps,       C::DetachSafe0V, C::Reattach,   C::ReattachCaps, C::SourceReset,
 };
 static_assert(std::size(kOrder) == sc::kChecks, "every check has one grid row");
@@ -380,7 +380,8 @@ bool PdSpecPage::put_where(int k, uint8_t a, uint8_t b, StrBuf<20> &s) {
     if (fixed_walk && b < 16) {
         s.put("PDO ").put_u32(a).put(" to ").put_u32(b);
     } else if (fixed_walk || k < static_cast<int>(sc::Check::PpsKeepAlive) ||
-               (k >= static_cast<int>(sc::Check::PpsBand) && k <= static_cast<int>(sc::Check::AvsTransient))) {
+               (k >= static_cast<int>(sc::Check::PpsBand) && k <= static_cast<int>(sc::Check::AvsTransient)) ||
+               k >= static_cast<int>(sc::Check::PpsTrack)) {
         // A programmable move: APDO, step class, direction and the level asked for ("APDO 5 c2 dn 10.9V", result.hpp "where").
         s.put("APDO ").put_u32(a & 0x0Fu).put(" c").put_u32((a >> 4) & 7u).put(a & 0x80u ? " dn " : " up ");
         s.put_u32(b / 10u).put(".").put_u32(b % 10u).put("V");

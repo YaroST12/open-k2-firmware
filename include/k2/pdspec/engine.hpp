@@ -29,6 +29,7 @@
 #include <new>
 
 #include "k2/pd/pd_sink.hpp"
+#include "k2/pd/prog_track.hpp"
 #include "k2/pd/pd_spec_timing.hpp"
 #include "k2/pdspec/analyze.hpp"
 #include "k2/pdspec/plan.hpp"
@@ -291,7 +292,7 @@ private:
     void prog_next(std::uint32_t now);
     void pass_end(std::uint32_t now);
     bool large_step(std::int32_t step_mv) const;
-    std::array<Check, 5> prog_checks_meter() const;
+    std::array<Check, 6> prog_checks_meter() const;
     void status_begin(std::uint32_t now);
     void status_poll(const Snapshot& s, std::uint32_t now);
     static std::int32_t pps_status_faults(const Snapshot& s, std::int32_t target_mv);
@@ -380,7 +381,7 @@ inline constexpr std::int32_t kNever = 99999999;   // a value for an event that 
 constexpr bool owns(Family f, Check c) {
     switch (f) {
         case Family::Transitions: return c <= Check::Accuracy;
-        case Family::Pps: return (c >= Check::PpsMonotonic && c <= Check::PpsSettle) || (c >= Check::PpsBand && c <= Check::AvsTransient);
+        case Family::Pps: return (c >= Check::PpsMonotonic && c <= Check::PpsSettle) || (c >= Check::PpsBand && c <= Check::AvsTransient) || c == Check::PpsTrack || c == Check::AvsTrack;
         case Family::PpsKeepAlive: return c == Check::PpsKeepAlive;
         case Family::EprKeepAlive: return c == Check::EprKeepAlive;
         case Family::HardReset: return c >= Check::HrSafe0V && c <= Check::HrCaps;
@@ -852,9 +853,9 @@ inline void Engine::pass_end(std::uint32_t now) {
 }
 
 // The checks the meter feeds (a busy capture skips them).
-inline std::array<Check, 5> Engine::prog_checks_meter() const {
-    if (prog().kind == ProgKind::Avs) return {Check::AvsMonotonic, Check::AvsAccuracy, Check::AvsBand, Check::AvsOvershoot, Check::AvsTransient};
-    return {Check::PpsMonotonic, Check::PpsAccuracy, cls_ == 0 ? Check::PpsSettle : Check::PpsBand, Check::PpsOvershoot, Check::PpsTransient};
+inline std::array<Check, 6> Engine::prog_checks_meter() const {
+    if (prog().kind == ProgKind::Avs) return {Check::AvsMonotonic, Check::AvsAccuracy, Check::AvsBand, Check::AvsOvershoot, Check::AvsTransient, Check::AvsTrack};
+    return {Check::PpsMonotonic, Check::PpsAccuracy, cls_ == 0 ? Check::PpsSettle : Check::PpsBand, Check::PpsOvershoot, Check::PpsTransient, Check::PpsTrack};
 }
 
 inline void Engine::judge_prog(const StepOut& o, const Edges& e, const Snapshot& s) {
@@ -925,6 +926,13 @@ inline void Engine::judge_prog(const StepOut& o, const Edges& e, const Snapshot&
         meas(avs ? Check::AvsMonotonic : Check::PpsMonotonic, {delta, 0, -kMonoAllowMv, 0, a, b});
         if (delta < -kMonoAllowMv) bump_sat(r.mono_fails);
         if (delta < r.min_delta_mv) r.min_delta_mv = static_cast<std::int16_t>(delta);
+        // The finding of pd/prog_track.hpp on an upward step (the slams judge the two ends of a window, not a sweep): the first one of
+        // a pass only - after a fold every later step sits on the plateau. The value is how far the output fell behind the request.
+        if (up && cls_ < 3 && !r.track) {
+            const std::int32_t behind = pd::track_behind(from, prev_mv_, target, o.final_mv), limit = pd::track_limit(step);
+            meas(avs ? Check::AvsTrack : Check::PpsTrack, {behind, 0, 0, limit, a, b});
+            if (behind > limit) r.track = 1;
+        }
     }
     prev_mv_ = o.final_mv;
     prev_valid_ = true;

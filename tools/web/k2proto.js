@@ -1511,7 +1511,7 @@ var K2Proto = (function () {
     ["pps_transient", "PPS transient", "max", "us", 2], ["pps_status", "PPS_Status", "max", "count", 3], ["pps_status_time", "PPS_Status t", "max", "us", 1],
     ["avs_monotonic", "AVS monotonic", "min", "mv", 3], ["avs_accuracy", "AVS accuracy", "range", "mv", 2], ["avs_band", "AVS in band", "max", "us", 2],
     ["avs_ps_rdy", "AVS PS_RDY", "max", "us", 2], ["avs_overshoot", "AVS overshoot", "range", "mv", 3], ["avs_transient", "AVS transient", "max", "us", 2],
-    ["reattach_caps", "Reattach caps", "max", "ms", 2]
+    ["reattach_caps", "Reattach caps", "max", "ms", 2], ["pps_track", "PPS tracking", "max", "mv", 2], ["avs_track", "AVS tracking", "max", "mv", 2]
   ].map(function (r) { return { key: r[0], label: r[1], kind: r[2], unit: r[3], weight: r[4], inferred: !!r[5] }; });
   var PDSPEC_PSC1_CHECKS = 21, PDSPEC_PASS_AVS = 0x80;
   var PDSPEC_NEVER = 99999999, PDSPEC_OPEN = 1000000;
@@ -1578,7 +1578,7 @@ var K2Proto = (function () {
                     steps: u16(b, o + 2), band_ms: t01(u16(b, o + 8)), psrdy_ms: t01(u16(b, o + 10)), worst_err_mv: s16(b, o + 12),
                     min_delta_mv: dmin === 0x7FFF ? null : dmin, over_mv: over === -0x7FFF ? null : over, out_ms: t01(u16(b, o + 18)),
                     fails: { band: b[o + 20], ps_rdy: b[o + 21], monotonic: b[o + 22], accuracy: b[o + 23], overshoot: b[o + 24], transient: b[o + 25] },
-                    status: st, status_text: kind === "pps" ? pdSpecPsText(st) : null });
+                    status: st, status_text: kind === "pps" ? pdSpecPsText(st) : null, track: !!b[o + 27] });
     }
     var tally = { pass: 0, fail: 0, skip: 0, unverified: 0 };
     checks.forEach(function (c) { if (c.verdict in tally) tally[c.verdict]++; });
@@ -1608,7 +1608,7 @@ var K2Proto = (function () {
     var keys = PDSPEC_CHECKS.map(function (d) { return d.key; });
     var walk = k < keys.indexOf("pps_monotonic"), sharedProg = version >= 2 && walk && c.b >= 16;
     if (walk && !sharedProg) return "PDO " + c.a + " to " + c.b;
-    var prog = sharedProg || k < keys.indexOf("pps_keepalive") || (k >= keys.indexOf("pps_band") && k <= keys.indexOf("avs_transient"));
+    var prog = sharedProg || k < keys.indexOf("pps_keepalive") || (k >= keys.indexOf("pps_band") && k <= keys.indexOf("avs_transient")) || k >= keys.indexOf("pps_track");
     if (prog && version === 1) return "APDO " + c.a + ", point " + c.b;
     if (prog) {
       var kind = /^avs_/.test(c.key) ? "avs" : "pps";

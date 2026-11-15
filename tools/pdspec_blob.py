@@ -171,7 +171,7 @@ def decode_blob(b):
     t01 = lambda v: None if v == NOT_SEEN16 else v / 10.0
     for i in range(n_pps if version == 2 else 0):
         (pos, cls, steps, lo, hi, band, psrdy, err, dmin, over, out, f_band, f_psrdy, f_mono, f_acc, f_over, f_out, status,
-         _pad) = struct.unpack_from("<BBHHHHHhhhHBBBBBBBB", b, o + i * PASS)
+         track) = struct.unpack_from("<BBHHHHHhhhHBBBBBBBB", b, o + i * PASS)
         kind = "avs" if cls & PASS_AVS else "pps"
         c = cls & 0x7F
         passes.append({"pos": pos, "kind": kind, "class": c, "step": step_text(kind, c), "lo_mv": lo, "hi_mv": hi, "steps": steps,
@@ -179,7 +179,7 @@ def decode_blob(b):
                        "min_delta_mv": None if dmin == 0x7FFF else dmin, "over_mv": None if over == -0x7FFF else over,
                        "out_ms": t01(out), "fails": {"band": f_band, "ps_rdy": f_psrdy, "monotonic": f_mono, "accuracy": f_acc,
                                                      "overshoot": f_over, "transient": f_out},
-                       "status": status, "status_text": ps_text(status) if kind == "pps" else None})
+                       "status": status, "status_text": ps_text(status) if kind == "pps" else None, "track": bool(track)})
     tally = {v: sum(1 for c in checks if c["verdict"] == v) for v in ("pass", "fail", "skip", "unverified")}
     return {"version": version, "state": _name(STATES, state), "stop_code": stop, "stop": _name(t["stops"], stop), "score": score,
             "elapsed_s": elapsed_s, "release_unconfirmed": bool(flags & 1), "caps_note": caps_note, "full20": bool(opts & 1),
@@ -218,7 +218,8 @@ def fmt_at(k, c, version=2, passes=None):
     shared_prog = version >= 2 and k < keys.index("pps_monotonic") and c["b"] >= 16
     if k < keys.index("pps_monotonic") and not shared_prog:
         return f"PDO {c['a']} to {c['b']}"
-    prog = shared_prog or k < keys.index("pps_keepalive") or keys.index("pps_band") <= k <= keys.index("avs_transient")
+    prog = (shared_prog or k < keys.index("pps_keepalive") or keys.index("pps_band") <= k <= keys.index("avs_transient")
+            or k >= keys.index("pps_track"))
     if prog and version == 1:
         return f"APDO {c['a']}, point {c['b']}"
     if prog:

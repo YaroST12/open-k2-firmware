@@ -30,13 +30,20 @@ enum class Track : uint8_t { None = 0, Fold, Break };
 inline constexpr int kTrackFoldMv = 50;    // the settled level fell by more than this while the request rose
 inline constexpr int kTrackBreakMv = 150;  // the offset (request - settled) grew by more than this without a fold
 
+// How far the offset (request - settled) grew over one upward step: the request step minus what the output moved (negative:
+// the output caught up). A measurement for a scored check: it is a finding when it exceeds track_limit(step).
+constexpr int track_behind(int prev_req, int prev_settled, int req, int settled) {
+    return (req - prev_req) - (settled - prev_settled);
+}
+// The most the offset may grow over a request step of step_mv: a fold is a fall of kTrackFoldMv + the step (the settled level
+// fell by more than the margin), a break is kTrackBreakMv, whichever comes first (min(step + 50, 150)).
+constexpr int track_limit(int step_mv) { return step_mv + kTrackFoldMv < kTrackBreakMv ? step_mv + kTrackFoldMv : kTrackBreakMv; }
+
 // One step: the point before (prev_req, prev_settled) and the point now. Stateless.
 constexpr Track track_step(int prev_req, int prev_settled, int req, int settled) {
     if (req <= prev_req) return Track::None;
-    const int delta = settled - prev_settled;
-    if (delta < -kTrackFoldMv) return Track::Fold;
-    const int fell_behind = (req - prev_req) - delta;   // how far the offset grew (< 0: the output caught up, never a finding)
-    return fell_behind > kTrackBreakMv ? Track::Break : Track::None;
+    if (track_behind(prev_req, prev_settled, req, settled) <= track_limit(req - prev_req)) return Track::None;
+    return settled - prev_settled < -kTrackFoldMv ? Track::Fold : Track::Break;
 }
 
 // A sweep in progress: feed() the points in order, read the first finding. The first point only primes the scan.

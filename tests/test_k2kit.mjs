@@ -399,8 +399,8 @@ test("specResultHtml: the grid follows the device's order, the PPS/AVS checks ri
   assert.deepEqual(labels.slice(0, 12), ["Accept", "PS_RDY time", "VBUS start", "PS_RDY early", "PS_RDY low", "Rise time", "Fall time",
     "Overshoot", "Accuracy", "PPS monotonic", "PPS accuracy", "PPS settle"]);
   assert.deepEqual(labels.slice(12, 18), ["PPS in band", "PPS PS_RDY", "PPS overshoot", "PPS transient", "PPS_Status", "PPS_Status t"]);
-  assert.equal(labels[18], "AVS monotonic");
-  assert.deepEqual(labels.slice(24), ["PPS timeout", "EPR timeout", "HR to 0 V", "HR off time", "HR turn-on", "HR caps", "Detach to 0 V",
+  assert.deepEqual([labels[18], labels[19], labels[25]], ["PPS tracking", "AVS monotonic", "AVS tracking"]);
+  assert.deepEqual(labels.slice(26), ["PPS timeout", "EPR timeout", "HR to 0 V", "HR off time", "HR turn-on", "HR caps", "Detach to 0 V",
     "Re-attach", "Reattach caps", "Source reset"]);
 });
 

@@ -206,7 +206,7 @@ function makeBlob(version = 2) {
     const s16 = (v) => u16(v & 0xFFFF);
     // pos cls steps lo hi band psrdy err dmin over out | fails band rdy mono acc over out | status pad
     out.push(6, 1, ...u16(154), ...u16(3300), ...u16(11000), ...u16(21), ...u16(309), ...s16(17), ...s16(98), ...s16(-140), ...u16(0),
-      0, 11, 0, 0, 0, 0, 0, 0);
+      0, 11, 0, 0, 0, 0, 0, 1);
     out.push(6, 0, ...u16(60), ...u16(3300), ...u16(11000), ...u16(80), ...u16(255), ...s16(-17), ...s16(17), ...s16(-144), ...u16(0),
       0, 1, 0, 0, 0, 0, 0x06, 0);
     out.push(7, 0x83, ...u16(2), ...u16(9000), ...u16(20000), ...u16(0xFFFF), ...u16(1000), ...s16(-5), ...s16(0x7FFF), ...s16(-0x7FFF),
@@ -221,7 +221,7 @@ test("pdspec: a PSC2 blob decodes to the header, checks, timers, transitions and
   assert.deepEqual([r.version, r.state, r.stop, r.score, r.elapsed_s, r.release_unconfirmed], [2, "finished", "done", 700, 95, true]);
   assert.deepEqual([r.caps_note, r.full20], ["PPS without AVS: allowed before PD R3.3", true]);
   assert.equal(r.checks.length, n);
-  assert.equal(n, 34);
+  assert.equal(n, 36);
   assert.deepEqual([r.checks[0].key, r.checks[0].verdict, r.checks[0].worst, r.checks[0].hi], ["accept_time", "pass", 20000, 25000]);
   assert.deepEqual([r.checks[1].verdict, r.checks[1].fails, r.checks[1].penalty], ["fail", 1, 2]);   // ps_rdy_time weight 2
   assert.deepEqual([r.checks[11].verdict, r.checks[11].penalty], ["unverified", 0]);                 // inferred: no penalty
@@ -238,6 +238,7 @@ test("pdspec: a PSC2 blob decodes to the header, checks, timers, transitions and
   assert.deepEqual([p100.band_ms, p100.psrdy_ms, p100.worst_err_mv, p100.min_delta_mv, p100.over_mv, p100.out_ms], [2.1, 30.9, 17, 98, -140, 0]);
   assert.deepEqual(p100.fails, { band: 0, ps_rdy: 11, monotonic: 0, accuracy: 0, overshoot: 0, transient: 0 });
   assert.equal(p100.status_text, "clean");
+  assert.deepEqual([p100.track, p20.track, slams.track], [true, false, false]);
   assert.deepEqual([p20.step, p20.status, p20.status_text], ["20 mV", 6, "no answer, voltage"]);
   assert.deepEqual([slams.kind, slams.class, slams.step, slams.band_ms, slams.min_delta_mv, slams.over_mv, slams.status_text],
     ["avs", 3, "slams", null, null, null, null]);

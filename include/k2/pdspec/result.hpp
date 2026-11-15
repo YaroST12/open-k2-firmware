@@ -54,6 +54,8 @@ enum class Check : std::uint8_t {
     AvsOvershoot,
     AvsTransient,
     ReattachCaps,   // Rd back: the first Source_Capabilities within tFirstSourceCap of vSafe5V
+    PpsTrack,       // an upward step where VBUS falls behind the request (a fold, or a break): pd::track_behind <= track_limit
+    AvsTrack,       // ... and the AVS counterpart
     Count
 };
 inline constexpr std::size_t kChecks = static_cast<std::size_t>(Check::Count);
@@ -119,6 +121,8 @@ inline constexpr std::array<CheckDef, kChecks> kDefs{{
     {"avs_overshoot", "AVS overshoot", Kind::Range, Unit::Mv, 3},
     {"avs_transient", "AVS transient", Kind::Max, Unit::Us, 2},
     {"reattach_caps", "Reattach caps", Kind::Max, Unit::Ms, 2},
+    {"pps_track", "PPS tracking", Kind::Max, Unit::Mv, 2},   // value = how far the offset grew over the step, limit min(step + 50, 150) mV
+    {"avs_track", "AVS tracking", Kind::Max, Unit::Mv, 2},
 }};
 
 // PpsStatus fault bits (the check's value; 0 = a clean answer). No-load expectations of the PD CTS (SRC3.7#2).
@@ -142,7 +146,7 @@ constexpr const char* caps_note_name(CapsNote n) {
 }
 
 // The programmable checks that belong to the AVS APDO (the rest of the Pps family is PPS).
-constexpr bool avs_check(Check c) { return c >= Check::AvsMonotonic && c <= Check::AvsTransient; }
+constexpr bool avs_check(Check c) { return (c >= Check::AvsMonotonic && c <= Check::AvsTransient) || c == Check::AvsTrack; }
 
 constexpr const CheckDef& def(Check c) { return kDefs[static_cast<std::size_t>(c)]; }
 
@@ -232,7 +236,7 @@ struct Agg {
     }
     Verdict verdict() const { return n == 0 ? Verdict::Skip : fails ? Verdict::Fail : Verdict::Pass; }   // judged as if sourced
 };
-static_assert(sizeof(Agg) == 20, "34 of these live in RAM for the whole run");
+static_assert(sizeof(Agg) == 20, "36 of these live in RAM for the whole run");
 
 // The verdict the result shows: an inferred limit never passes or fails a charger (the count over it stays in fails).
 constexpr Verdict verdict(Check c, const Agg& a) {
@@ -276,7 +280,7 @@ struct PassRec {
     std::uint16_t out_100us = 0;         // the longest stretch outside the band after the first entry
     std::uint8_t band_fails = 0, psrdy_fails = 0, mono_fails = 0, acc_fails = 0, over_fails = 0, out_fails = 0;   // saturating
     std::uint8_t status = 0;             // the PpsStatus fault bits of the pass's Get_PPS_Status asks, or-ed (PPS only)
-    std::uint8_t pad = 0;
+    std::uint8_t track = 0;              // 1 = a fold / track break was named in this pass (pd/prog_track.hpp); only the first is judged
 };
 static_assert(sizeof(PassRec) == 28);
 inline constexpr std::size_t kPassBytes = sizeof(PassRec);   // the same on the wire
@@ -384,7 +388,7 @@ private:
         const std::uint16_t w[14] = {std::uint16_t(r.pos | r.cls << 8), r.steps, r.lo_mv, r.hi_mv, r.band_100us, r.psrdy_100us,
                                      std::uint16_t(r.worst_err_mv), std::uint16_t(r.min_delta_mv), std::uint16_t(r.over_mv), r.out_100us,
                                      std::uint16_t(r.band_fails | r.psrdy_fails << 8), std::uint16_t(r.mono_fails | r.acc_fails << 8),
-                                     std::uint16_t(r.over_fails | r.out_fails << 8), std::uint16_t(r.status | r.pad << 8)};
+                                     std::uint16_t(r.over_fails | r.out_fails << 8), std::uint16_t(r.status | r.track << 8)};
         return le(w[i / 2], i % 2);
     }
     const BlobHead& h_;

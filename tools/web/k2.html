@@ -2108,7 +2108,7 @@ var K2Proto = (function () {
     ["pps_transient", "PPS transient", "max", "us", 2], ["pps_status", "PPS_Status", "max", "count", 3], ["pps_status_time", "PPS_Status t", "max", "us", 1],
     ["avs_monotonic", "AVS monotonic", "min", "mv", 3], ["avs_accuracy", "AVS accuracy", "range", "mv", 2], ["avs_band", "AVS in band", "max", "us", 2],
     ["avs_ps_rdy", "AVS PS_RDY", "max", "us", 2], ["avs_overshoot", "AVS overshoot", "range", "mv", 3], ["avs_transient", "AVS transient", "max", "us", 2],
-    ["reattach_caps", "Reattach caps", "max", "ms", 2]
+    ["reattach_caps", "Reattach caps", "max", "ms", 2], ["pps_track", "PPS tracking", "max", "mv", 2], ["avs_track", "AVS tracking", "max", "mv", 2]
   ].map(function (r) { return { key: r[0], label: r[1], kind: r[2], unit: r[3], weight: r[4], inferred: !!r[5] }; });
   var PDSPEC_PSC1_CHECKS = 21, PDSPEC_PASS_AVS = 0x80;
   var PDSPEC_NEVER = 99999999, PDSPEC_OPEN = 1000000;
@@ -2175,7 +2175,7 @@ var K2Proto = (function () {
                     steps: u16(b, o + 2), band_ms: t01(u16(b, o + 8)), psrdy_ms: t01(u16(b, o + 10)), worst_err_mv: s16(b, o + 12),
                     min_delta_mv: dmin === 0x7FFF ? null : dmin, over_mv: over === -0x7FFF ? null : over, out_ms: t01(u16(b, o + 18)),
                     fails: { band: b[o + 20], ps_rdy: b[o + 21], monotonic: b[o + 22], accuracy: b[o + 23], overshoot: b[o + 24], transient: b[o + 25] },
-                    status: st, status_text: kind === "pps" ? pdSpecPsText(st) : null });
+                    status: st, status_text: kind === "pps" ? pdSpecPsText(st) : null, track: !!b[o + 27] });
     }
     var tally = { pass: 0, fail: 0, skip: 0, unverified: 0 };
     checks.forEach(function (c) { if (c.verdict in tally) tally[c.verdict]++; });
@@ -2205,7 +2205,7 @@ var K2Proto = (function () {
     var keys = PDSPEC_CHECKS.map(function (d) { return d.key; });
     var walk = k < keys.indexOf("pps_monotonic"), sharedProg = version >= 2 && walk && c.b >= 16;
     if (walk && !sharedProg) return "PDO " + c.a + " to " + c.b;
-    var prog = sharedProg || k < keys.indexOf("pps_keepalive") || (k >= keys.indexOf("pps_band") && k <= keys.indexOf("avs_transient"));
+    var prog = sharedProg || k < keys.indexOf("pps_keepalive") || (k >= keys.indexOf("pps_band") && k <= keys.indexOf("avs_transient")) || k >= keys.indexOf("pps_track");
     if (prog && version === 1) return "APDO " + c.a + ", point " + c.b;
     if (prog) {
       var kind = /^avs_/.test(c.key) ? "avs" : "pps";
@@ -2979,8 +2979,8 @@ var K2Kit = (function () {
   // checks carry no penalty and show as the outlined amber "unverified" cell.
   var SPEC_ORDER = ["accept_time", "ps_rdy_time", "src_start", "ps_rdy_early", "ps_rdy_low", "rise_time", "fall_time", "overshoot", "accuracy",
                     "pps_monotonic", "pps_accuracy", "pps_settle", "pps_band", "pps_ps_rdy", "pps_overshoot", "pps_transient", "pps_status",
-                    "pps_status_time", "avs_monotonic", "avs_accuracy", "avs_band", "avs_ps_rdy", "avs_overshoot", "avs_transient",
-                    "pps_keepalive", "epr_keepalive", "hr_safe0v", "hr_recover", "hr_turn_on", "hr_caps", "detach_safe0v", "reattach",
+                    "pps_status_time", "pps_track", "avs_monotonic", "avs_accuracy", "avs_band", "avs_ps_rdy", "avs_overshoot",
+                    "avs_transient", "avs_track", "pps_keepalive", "epr_keepalive", "hr_safe0v", "hr_recover", "hr_turn_on", "hr_caps", "detach_safe0v", "reattach",
                     "reattach_caps", "source_reset"];
   var SPEC_SECTIONS = { accept_time: "Transitions", pps_monotonic: "PPS", avs_monotonic: "AVS", pps_keepalive: "Timeouts", hr_safe0v: "Hard Reset",
                         detach_safe0v: "Detach", source_reset: "Source" };
@@ -2997,10 +2997,10 @@ var K2Kit = (function () {
                           title: failText("worst entry into the band of " + ps.steps + " moves", f.band) };
     var rdy = { verdict: f.ps_rdy || ps.psrdy_ms === null ? "fail" : "pass", label: msText(ps.psrdy_ms), current: "PS_RDY",
                 title: failText("worst Accept to PS_RDY of " + ps.steps + " moves", f.ps_rdy) };
-    var nLevel = f.monotonic + f.accuracy + f.overshoot + f.transient;
+    var nLevel = f.monotonic + f.accuracy + f.overshoot + f.transient + (ps.track ? 1 : 0);
     var lvl = { verdict: nLevel ? "fail" : "pass", label: (ps.worst_err_mv >= 0 ? "+" : "") + ps.worst_err_mv + " mV", current: "level",
                 title: "worst level error; fails: monotonic " + f.monotonic + ", accuracy " + f.accuracy + ", overshoot " + f.overshoot +
-                       ", transient " + f.transient };
+                       ", transient " + f.transient + (ps.track ? "; a fold or track break was named" : "") };
     var st = ps.kind === "pps" ? { verdict: ps.status ? "fail" : "pass", label: ps.status_text || "clean", current: "status" }
                                : { verdict: "none", label: "-", current: "status" };
     return { label: ps.kind.toUpperCase() + " " + ps.step, cells: [band, rdy, lvl, st] };
