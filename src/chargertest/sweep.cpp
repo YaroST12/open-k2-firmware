@@ -34,8 +34,8 @@ Summary summarize(std::span<const int16_t> a, unsigned a_lo_mv, std::span<const 
     auto err_at = [&](size_t i) { return int(i < a.size() ? a[i] : b[i - a.size()]); };
     auto set_at = [&](size_t i) { return i < a.size() ? a_lo_mv + unsigned(i) * kStepMv : b_lo_mv + unsigned(i - a.size()) * kStepMv; };
     int worst_abs = -1;
-    int prev_measured = -1;
-    size_t fold_at = 0;   // index of the first falling point
+    pd::TrackScan track;   // the shared fold / track-break rule (k2/pd/prog_track.hpp), fed in setpoint order
+    size_t fold_at = 0;    // index of the first point it names
     for (size_t i = 0; i < total; ++i) {
         const unsigned set = set_at(i);
         const int e = err_at(i);
@@ -44,13 +44,13 @@ Summary summarize(std::span<const int16_t> a, unsigned a_lo_mv, std::span<const 
         if (i == 0 || e > s.max_err) s.max_err = int16_t(e);
         if (std::abs(e) > worst_abs) { worst_abs = std::abs(e); s.worst_err = int16_t(e); s.worst_mv = uint16_t(set); }
         if (i == 0 || measured > s.peak_mv) { s.peak_mv = uint16_t(measured); s.peak_at_mv = uint16_t(set); }
-        if (i > 0 && prev_measured >= 0 && measured < prev_measured && !fold_at) fold_at = i;
-        prev_measured = measured;
+        track.feed(int(set), measured);
+        if (!fold_at && track.found()) fold_at = i;
         // A point outside the row's band (the PPS band is one-sided: within 5 % / 100 mV below, the ceiling above) was
         // steady and recorded; the summary says so, the strip colours it.
         if (out_of_band(set, measured)) s.out_of_band = true;
     }
-    if (fold_at) {
+    if (fold_at) {   // at 100 mV steps the rule can only name a fold (a break needs steps over 100 mV)
         s.fold_from_mv = uint16_t(set_at(fold_at));
         int low = 0;
         for (size_t i = fold_at; i < total; ++i) {

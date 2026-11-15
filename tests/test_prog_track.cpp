@@ -50,15 +50,18 @@ static void test_noise_is_not_a_fold() {
     CHECK_EQ(int(pd::track_step(7000, 7013, 7020, 6987)), int(Track::None));    // -26 mV between samples
     CHECK_EQ(int(pd::track_step(7000, 7013, 7020, 6987 - 20)), int(Track::None));   // a zero step as well: -46 mV
 }
-// The break: the offset (request - settled) jumps by more than 150 mV between neighbours without a fold. At the 20 and 100 mV
-// classes only an upward jump can do that (a fall that big is a fold), at 500 mV and up a flat step is one too.
+// The break: the offset (request - settled) grows by more than 150 mV between neighbours without a fold. At the 20 and 100 mV
+// classes a fall-behind that big is already a fold, so a break needs 500 mV and up (a flat step is one). An offset that
+// shrinks (the output catching up, a first point still settling) is never a finding.
 static void test_break_edges() {
     CHECK_EQ(int(pd::track_step(10000, 9950, 10500, 10450)), int(Track::None));   // 500 up, tracking
     CHECK_EQ(int(pd::track_step(10000, 9950, 10500, 10300)), int(Track::None));   // 350 up: the offset moved by exactly 150
     CHECK_EQ(int(pd::track_step(10000, 9950, 10500, 10299)), int(Track::Break));  // 349 up: 151
     CHECK_EQ(int(pd::track_step(10000, 9950, 10500, 9950)), int(Track::Break));   // flat for a 500 mV request
-    CHECK_EQ(int(pd::track_step(10000, 9950, 10100, 10200)), int(Track::None));   // 250 up for a 100 mV request: +150, the edge
-    CHECK_EQ(int(pd::track_step(10000, 9950, 10100, 10201)), int(Track::Break));  // 251 up: it skipped ahead
+    CHECK_EQ(int(pd::track_step(10000, 9950, 10100, 9951)), int(Track::None));    // 100 mV request, +1: offset grew by 99
+    CHECK_EQ(int(pd::track_step(10000, 9950, 10100, 9900)), int(Track::None));    // -50: the fold margin edge, offset grew by 150
+    CHECK_EQ(int(pd::track_step(10000, 9950, 10100, 10201)), int(Track::None));   // 251 up: it caught up, not a finding
+    CHECK_EQ(int(pd::track_step(3300, 2900, 3400, 3340)), int(Track::None));      // a low first point 400 mV short, then tracking
 }
 // Only an upward request is judged.
 static void test_downward_is_skipped() {

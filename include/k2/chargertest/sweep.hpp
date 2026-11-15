@@ -10,14 +10,16 @@
 //   single gate, judged on Accept + PS_RDY + measured VBUS. A steady out-of-band point is RECORDED, not a stop - the
 //   sweep stops only on a lost source (the other PPS rows' pattern handling: needs-load, capped, floored, withdrawn).
 //   Summary: min / max / worst error (measured - setpoint) and where, the peak delivered level and the setpoint it came
-//   at, and a fold-back (VBUS falling while the request rises) - the FH22 shape: tracks -150 mV to 19.75 V, then every
-//   request >= 20.0 V folds back to 19.42 V.
+//   at, and the first fold (pd::track_step: VBUS falling by more than 50 mV while the request rises; the rule's track break
+//   needs steps over 100 mV, so these 100 mV sweeps never show one) - the FH22 shape: tracks 60-150 mV low to 19.9 V, then
+//   every request >= 20.0 V folds back to 19.42 V. A per-point verdict stays as it was; the finding is an extra, like Capped.
 #pragma once
 #include <algorithm>
 #include <cstdint>
 #include <optional>
 #include <span>
 #include "k2/pd/pd.hpp"
+#include "k2/pd/prog_track.hpp"
 
 namespace k2::ctsweep {
 
@@ -74,8 +76,8 @@ struct Summary {
     uint16_t points = 0;      // points recorded
     uint16_t peak_mv = 0;     // the highest delivered VBUS (0 = none)
     uint16_t peak_at_mv = 0;  // the setpoint it was delivered at
-    uint16_t fold_mv = 0;     // 0 = VBUS never fell while the request rose; else the level it folded back to
-    uint16_t fold_from_mv = 0;   // the setpoint of the first falling point ("folds back ... from")
+    uint16_t fold_mv = 0;     // 0 = no fold (pd::track_step); else the lowest level from that point on
+    uint16_t fold_from_mv = 0;   // the setpoint of the first point the rule names ("folds back ... from")
     bool out_of_band = false;    // some recorded point sat outside the row's band (steady, still recorded)
 };
 Summary summarize(std::span<const int16_t> err, unsigned lo_mv);
@@ -127,8 +129,8 @@ struct View {
     // parts are recorded apart, so the points are not one slice). nullopt when no part has closed.
     std::optional<RowView> apdo(uint8_t alg, uint8_t pos) const;
 };
-// "peak 19.75 V at 19.9 V, folds back to 19.42 V from 20.0 V" / "peak 21.0 V at 21.0 V" (no fold-back) /
-// "no points" - mV printed at 10 mV resolution with one or two decimals (19.9, 20.0, 19.75). At most 63 chars.
+// "peak 19.75 V at 19.9 V, folds back to 19.42 V from 20.0 V" / "peak 21.0 V at 21.0 V" (no fold) / "no points" - mV printed at
+// 10 mV resolution with one or two decimals (19.9, 20.0, 19.75). At most 63 chars.
 // Returns the length written.
 size_t format_summary(const Summary&, std::span<char> out);
 // One mV value in that shape: 19748 -> "19.75", 19900 -> "19.9", 20000 -> "20.0".

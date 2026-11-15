@@ -5,6 +5,7 @@
 // (a steady out-of-band point is recorded, not a stop; the summary names the peak and the fold-back).
 #include "test_util.h"
 #include "k2/chargertest/sweep.hpp"
+#include <cstdio>
 #include <string>
 #include <vector>
 
@@ -121,6 +122,60 @@ static void test_fh22_fold_back_is_recorded_not_a_stop() {
     CHECK_STR(std::string(buf, n).c_str(), "peak 19.75 V at 19.9 V, folds back to 19.42 V from 20.0 V");
 }
 
+// The shared rule (k2/pd/prog_track.hpp) on the recorded FH22 sweeps (tests/fixtures/sweep): settled VBUS up to 95 mV low to 19.9 V,
+// then 20.0 V gives 19.40 V - a fold. The AVS run folds at its last point; a clean source (UGREEN AVS) names nothing.
+static std::vector<int16_t> fixture_err(const char* path, unsigned& lo_mv) {
+    std::vector<int16_t> err;
+    std::FILE* f = std::fopen(path, "r");
+    CHECK_COND(f != nullptr);
+    char line[96];
+    lo_mv = 0;
+    while (f && std::fgets(line, sizeof line, f)) {
+        int r = 0, s = 0;
+        if (std::sscanf(line, "%d,%d", &r, &s) != 2) continue;
+        if (err.empty()) lo_mv = unsigned(r);
+        err.push_back(int16_t(s - r));
+    }
+    if (f) std::fclose(f);
+    return err;
+}
+static void test_recorded_sweeps_fold_or_stay_clean() {
+    unsigned lo = 0;
+    auto err = fixture_err("tests/fixtures/sweep/fh22_pps_5000_21000.csv", lo);
+    CHECK_EQ(lo, 5000u); CHECK_EQ(err.size(), 161u);
+    auto s = sw::summarize(err, lo);
+    CHECK_EQ(s.fold_from_mv, 20000u); CHECK_EQ(s.fold_mv, 19400u);
+    CHECK_EQ(s.peak_mv, 19815u); CHECK_EQ(s.peak_at_mv, 19900u);
+    char buf[64];
+    CHECK_STR(std::string(buf, sw::format_summary(s, buf)).c_str(), "peak 19.82 V at 19.9 V, folds back to 19.4 V from 20.0 V");
+    // The same record split in two parts (the runner's two rows, joined at an arbitrary point) gives the same finding.
+    const auto s2 = sw::summarize({err.data(), 40}, lo, {err.data() + 40, err.size() - 40}, lo + 40 * sw::kStepMv);
+    CHECK_EQ(s2.fold_from_mv, 20000u); CHECK_EQ(s2.fold_mv, 19400u);
+    err = fixture_err("tests/fixtures/sweep/fh22_avs_9000_20000.csv", lo);
+    CHECK_EQ(lo, 9000u); CHECK_EQ(err.size(), 111u);
+    s = sw::summarize(err, lo);
+    CHECK_EQ(s.fold_from_mv, 20000u); CHECK_EQ(s.fold_mv, 19423u);
+    err = fixture_err("tests/fixtures/sweep/ugreen_avs_9000_20000.csv", lo);
+    s = sw::summarize(err, lo);
+    CHECK_EQ(s.fold_mv, 0u); CHECK_EQ(s.fold_from_mv, 0u);
+    CHECK_STR(std::string(buf, sw::format_summary(s, buf)).c_str(), "peak 20.07 V at 20.0 V");
+}
+// The margin: a dip of up to 50 mV is meter noise and the DNL, not a fold (it used to flag every falling point).
+static void test_a_small_dip_is_not_a_fold() {
+    std::vector<int16_t> err{0, 0, -40, 0, 0};   // measured 5000 5100 5160 5300 5400: a 40 mV dip below the trend, still rising
+    CHECK_EQ(sw::summarize(err, 5000).fold_mv, 0u);
+    std::vector<int16_t> flat{0, 0, -100, 0, 0}; // measured 5000 5100 5100 5300: equal, not falling
+    CHECK_EQ(sw::summarize(flat, 5000).fold_mv, 0u);
+    std::vector<int16_t> dip{0, 0, -151, 0, 0};  // 5000 5100 5049 5300: 51 mV below the step before
+    CHECK_EQ(sw::summarize(dip, 5000).fold_from_mv, 5200u);
+}
+// A jump ahead (VBUS above the request, the output catching up) names nothing: only a source that falls behind is a finding,
+// and at 100 mV steps that is always a fold.
+static void test_catching_up_is_not_a_finding() {
+    CHECK_EQ(sw::summarize(std::vector<int16_t>{-400, -60, -60, -60, -60}, 5000).fold_mv, 0u);   // a first point 400 mV short, then tracking
+    CHECK_EQ(sw::summarize(std::vector<int16_t>{0, 0, 300, 300, 300}, 5000).fold_mv, 0u);        // VBUS 300 mV above the request from 5.2 V
+}
+
 // ROADMAP "AVS deep sweep": the point plan per range kind. Kind::Avs sweeps the AVS APDOs: SPR AVS in slots 1..7
 // (9-20 V every 100 mV = 111 points), EPR AVS in slots 8+ when the EPR list is in hand, capped at the monitor ceiling.
 static void test_avs_plan_spr_only() {
@@ -180,9 +235,7 @@ static void test_fh22_avs_sweep_shape() {
     for (unsigned i = 0; i <= 110; ++i) {
         const unsigned set = 9000 + i * 100;
         int e;
-        if (i == 0) e = -2668;          // the 5 V contract's tail at the first point (6332 mV)
-        else if (i == 1) e = -805;      // 8295 mV
-        else if (set <= 19900) e = -int(94 + (i - 2) * 56.0 / 107.0);   // -94 mV at 9.2 V growing to -150 mV at 19.9 V
+        if (set <= 19900) e = -int(94 + (i > 2 ? i - 2 : 0) * 56.0 / 107.0);   // -94 mV at 9.2 V growing to -150 mV at 19.9 V
         else e = -336;                  // 20.0 V -> 19.66 V: folds onto the fixed-20 V level
         err.push_back(int16_t(e));
     }
@@ -191,8 +244,8 @@ static void test_fh22_avs_sweep_shape() {
     CHECK_EQ(s.points, 111u);                       // all 111 steps recorded - the fold-back is not a stop
     CHECK_EQ(s.peak_mv, 19750u); CHECK_EQ(s.peak_at_mv, 19900u);
     CHECK_EQ(s.fold_from_mv, 20000u); CHECK_EQ(s.fold_mv, 19664u);
-    CHECK_EQ(s.min_err, -2668); CHECK_EQ(s.worst_mv, 9000u);   // the ramp artifact is recorded too
-    CHECK_EQ(s.out_of_band, true);
+    CHECK_EQ(s.min_err, -336); CHECK_EQ(s.worst_mv, 20000u);   // the fold is the worst point
+    CHECK_EQ(s.out_of_band, false);                 // 19.66 V is still within the 5 % band of 20.0 V
     char buf[64];
     const size_t n = sw::format_summary(s, buf);
     CHECK_STR(std::string(buf, n).c_str(), "peak 19.75 V at 19.9 V, folds back to 19.66 V from 20.0 V");
@@ -326,6 +379,9 @@ int main() {
     test_avs_point_current_never_above_the_pdp_limit_or_1a();
     test_summary_of_a_clean_track_names_peak_and_errors();
     test_fh22_fold_back_is_recorded_not_a_stop();
+    test_recorded_sweeps_fold_or_stay_clean();
+    test_a_small_dip_is_not_a_fold();
+    test_catching_up_is_not_a_finding();
     test_fh22_avs_sweep_shape();
     test_summary_of_nothing_and_format_mv();
     return test_report("test_sweep");

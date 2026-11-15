@@ -13,11 +13,11 @@
 //           tail mean far less), two settled values differ by 26 mV at the very worst, and the programming DNL is -1 LSB
 //           (-20 mV: a 20 mV request may give 0 mV, so "equal or a little lower" is the spec, never a finding). 50 mV is above
 //           both together with room. Equal or a tiny fall is not a fold; a fall of exactly 50 mV is not one either.
-//   Break = no fold, but the offset (request - settled) moved by MORE than kTrackBreakMv between neighbouring steps: the
-//           output stopped following the request without falling (a plateau at a 500 mV step, a jump ahead). Offsets of real
-//           sources move by under ~100 mV between neighbours (FH22 tracks within 95 mV, the others within 70 mV), so 150 mV
-//           clears them. At steps of 100 mV or less a break can only be an upward jump (anything the other way is a fold); at
-//           500 mV and up a plateau is one.
+//   Break = no fold, but the offset (request - settled) GREW by more than kTrackBreakMv between neighbouring steps: the
+//           output fell behind the request without falling (a plateau at a 500 mV step). Offsets of real sources move by under
+//           ~100 mV between neighbours (FH22 tracks within 95 mV, the others within 70 mV), so 150 mV clears them. At steps of
+//           100 mV or less a fall-behind of that size is already a fold, so a break only shows at 500 mV and up. An offset that
+//           SHRINKS is the output catching up (a first point still settling, a low edge) - not a source that stopped following.
 //   Only the FIRST finding of a sweep is kept (after a fold every later point sits on the plateau). A request that did not
 //   rise (a downward step, a repeat) is not judged: the rules are for the upward sweep.
 #pragma once
@@ -28,15 +28,15 @@ namespace k2::pd {
 enum class Track : uint8_t { None = 0, Fold, Break };
 
 inline constexpr int kTrackFoldMv = 50;    // the settled level fell by more than this while the request rose
-inline constexpr int kTrackBreakMv = 150;  // the offset (request - settled) moved by more than this without a fold
+inline constexpr int kTrackBreakMv = 150;  // the offset (request - settled) grew by more than this without a fold
 
 // One step: the point before (prev_req, prev_settled) and the point now. Stateless.
 constexpr Track track_step(int prev_req, int prev_settled, int req, int settled) {
     if (req <= prev_req) return Track::None;
     const int delta = settled - prev_settled;
     if (delta < -kTrackFoldMv) return Track::Fold;
-    const int jump = (req - prev_req) - delta;   // how far the offset moved: > 0 the output fell behind, < 0 it jumped ahead
-    return jump > kTrackBreakMv || -jump > kTrackBreakMv ? Track::Break : Track::None;
+    const int fell_behind = (req - prev_req) - delta;   // how far the offset grew (< 0: the output caught up, never a finding)
+    return fell_behind > kTrackBreakMv ? Track::Break : Track::None;
 }
 
 // A sweep in progress: feed() the points in order, read the first finding. The first point only primes the scan.
