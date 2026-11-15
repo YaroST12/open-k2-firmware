@@ -133,13 +133,15 @@ CMD_PD_SPEC = 0x5A        # PD Spec Check: status / start / result (chunked) / s
 PSC_STATUS, PSC_START, PSC_READ, PSC_STOP = 0, 1, 2, 3
 PSC_CHUNK = 48
 PSC_FLAG_CONFIRM = 1 << 0
+PSC_FLAG_FULL20 = 1 << 1  # PPS 20 mV steps over the whole APDO window instead of three 10-step windows (pdspec::kOptFull20)
 PSC_FAMILY_MASK = 0x3F    # a bit per k2::pdspec::Family; 0 = all
 PSC_STATES = ["idle", "running", "finished"]
 # Same order as k2::pdspec::StartResult / Stop / Family (include/k2/pdspec/engine.hpp); tests/test_pd_spec.py checks the sync.
 PSC_STARTS = ["ok", "ports busy", "no PD source", "link inline", "K2 powered by the charger", "no power monitor", "already running"]
 PSC_STOPS = ["running", "done", "cancelled", "VBUS over the limit", "load on the output", "source did not come back", "step stuck",
              "no PD contract", "link inline", "run time cap"]
-PSC_FAMILIES = ["Transitions", "PPS steps", "PPS timeout", "EPR timeout", "Hard Reset", "Detach"]
+PSC_FAMILIES = ["Transitions", "PPS/AVS", "PPS timeout", "EPR timeout", "Hard Reset", "Detach"]
+PSC_FAMILY_ALIASES = {"pps-steps": "pps-avs", "pps": "pps-avs", "avs": "pps-avs"}   # older names of the programmable sweep
 # ---- end PD Spec Check constants ----
 # ---- Loop probe (docs/LOOP_PROBE.md): constants ----
 CMD_LOOP_PROBE = 0x57     # loop probe: the stored result file /lp/last.rec, chunked read only (k2/loopprobe/loop_probe_hw.hpp)
@@ -3591,10 +3593,12 @@ def parse_families(text):
         if v & ~PSC_FAMILY_MASK:
             raise SystemExit(f"--families: 0x{v:x} has bits beyond the six families (0x{PSC_FAMILY_MASK:x})")
         return v
-    keys = [f.lower().replace(" ", "-") for f in PSC_FAMILIES]
+    norm = lambda s: s.strip().lower().replace(" ", "-").replace("_", "-").replace("/", "-")
+    keys = [norm(f) for f in PSC_FAMILIES]
     mask = 0
     for part in text.split(","):
-        k = part.strip().lower().replace(" ", "-").replace("_", "-")
+        k = norm(part)
+        k = PSC_FAMILY_ALIASES.get(k, k)
         if k not in keys:
             raise SystemExit(f"--families: unknown family {part!r}; families: " + ", ".join(keys))
         mask |= 1 << keys.index(k)
@@ -3605,14 +3609,15 @@ def pdspec_status(link):
     return decode_pdspec_status(link.call(CMD_PD_SPEC, bytes([PSC_STATUS])).payload)
 
 
-def pdspec_start(link, families=0, confirm=False):
+def pdspec_start(link, families=0, confirm=False, full20=False):
     """Start a run over the families in the mask (0 = all). The charger is stepped through its levels, Hard Reset and detached
-    (inside the PD rules, no load), so it needs `confirm`."""
+    (inside the PD rules, no load), so it needs `confirm`. `full20`: the PPS 20 mV pass covers the whole APDO window."""
     if not confirm:
         raise SystemExit("pd-spec start steps the charger through its levels, Hard Resets it and detaches (no load): add --confirm")
     if families & ~PSC_FAMILY_MASK:
         raise SystemExit(f"pd-spec start: family mask 0x{families:x} out of range")
-    return decode_pdspec_status(link.call(CMD_PD_SPEC, bytes([PSC_START, families, PSC_FLAG_CONFIRM])).payload)
+    flags = PSC_FLAG_CONFIRM | (PSC_FLAG_FULL20 if full20 else 0)
+    return decode_pdspec_status(link.call(CMD_PD_SPEC, bytes([PSC_START, families, flags])).payload)
 
 
 def pdspec_stop(link):
@@ -3659,7 +3664,7 @@ def cmd_pd_spec(link, a):
     if c == "status":
         return {"pdspec": pdspec_status(link)}
     if c == "start":
-        return {"pdspec": pdspec_start(link, parse_families(a.families), a.confirm)}
+        return {"pdspec": pdspec_start(link, parse_families(a.families), a.confirm, a.pps_full)}
     if c == "stop":
         return {"pdspec": pdspec_stop(link)}
     if c == "result":
@@ -5355,16 +5360,18 @@ def build_parser():
     # ---- end PD Stress parser ----
     # ---- PD Spec Check (docs/PD_SPEC_CHECK.md): parser ----
     spc = sub.add_parser("pd-spec", help="PD Spec Check: no-load conformance run on the attached charger (level steps up and down, "
-                         "PPS 20 mV steps, keep-alive timeouts, Hard Reset and detach recovery); pass/fail/skip per check, score "
+                         "PPS/AVS sweeps and slams, keep-alive timeouts, Hard Reset and detach recovery); pass/fail/skip per check, score "
                          "0 = ideal. tools/pd_spec.py records a run with its report")
     spcs = spc.add_subparsers(dest="pdspec_cmd", required=True)
     spcst = spcs.add_parser("start", help="start a run (needs --confirm)")
     spcst.add_argument("--confirm", action="store_true", help="required: the charger is stepped, Hard Reset and detached; "
                        "nothing is on the output")
-    spcst.add_argument("--families", default="all", help="all (default), a mask (0x3f) or a comma list: transitions, pps-steps, "
+    spcst.add_argument("--families", default="all", help="all (default), a mask (0x3f) or a comma list: transitions, pps-avs, "
                        "pps-timeout, epr-timeout, hard-reset, detach")
+    spcst.add_argument("--pps-full", action="store_true", help="PPS 20 mV steps over the whole APDO window (default: three "
+                       "10-step windows; the full sweep takes far longer)")
     spcs.add_parser("status", help="state, family and item, pass/fail/skip so far, score")
-    spcs.add_parser("result", help="the result: every check with its worst value and limit, the timers, transitions, PPS points")
+    spcs.add_parser("result", help="the result: every check with its worst value and limit, the timers, transitions, PPS/AVS passes")
     spcs.add_parser("stop", help="stop the run; the charger goes back to 5 V (never refused)")
     # ---- end PD Spec Check parser ----
     slp = sub.add_parser("loop-probe", help="the last HID-cable loop probe result stored on the K2 (read only; the probe "

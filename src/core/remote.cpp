@@ -1329,7 +1329,8 @@ remote::PdSpecInfo Remote::pdspec_info() {
 }
 
 remote::Status Remote::pdspec_start(const remote::PdSpecStart &s) {
-    const pdspec::StartResult r = ui_.pd_spec().start(s.families, systick::millis());
+    const pdspec::StartResult r =
+        ui_.pd_spec().start(s.families, systick::millis(), (s.flags & remote::kPdSpecFlagFull20) ? pdspec::kOptFull20 : 0);
     return r == pdspec::StartResult::Busy ? remote::Status::Busy : remote::Status::Ok;
 }
 

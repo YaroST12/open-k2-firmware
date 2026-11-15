@@ -678,6 +678,13 @@
   "681": "[PDSPEC] check %s %s n=%u fails=%u worst=%d lo=%d hi=%d at=%u>%u\n",
   "682": "[PDSPEC] finish %s score=%u elapsed_ms=%u restore=%s\n",
   "683": "[PDSPEC] start refused: %s\n",
-  "684": "[PDSPEC] start families=0x%x fixed=%u pps=%u cap_mv=%u\n"
+  "684": "[PDSPEC] start families=0x%x fixed=%u pps=%u cap_mv=%u\n",
+  "685": "[PDSPEC] Get_PPS_Status\n",
+  "686": "[PDSPEC] pass pos=%u cls=%u steps=%u band=%u psrdy=%u err=%d dmin=%d over=%d out=%u fails=%u/%u/%u/%u/%u/%u status=0x%x\n",
+  "687": "[PDSPEC] caps note: %s\n",
+  "688": "[PDSPEC] start families=0x%x fixed=%u pps=%u prog=%u avs=%u moves=%u full20=%u cap_mv=%u\n",
+  "689": "[PDSPEC] check %u (%s) skip %s\n",
+  "690": "[PDSPEC] check %u (%s) %s n=%u fails=%u worst=%d lo=%d hi=%d at=%u>%u\n",
+  "691": "[PDSPEC] start families=0x%x fixed=%u pps=%u prog=%u full20=%u cap_mv=%u\n"
  }
 }

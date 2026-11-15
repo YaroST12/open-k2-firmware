@@ -14,12 +14,16 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 PD_DIR = ROOT / "include" / "k2" / "pdspec"
 
-MAGIC = b"PSC1"
+MAGICS = (b"PSC1", b"PSC2")   # PSC1: 21 checks and 14-byte PPS points; PSC2: n_checks in the header, 28-byte sweep passes
 HEADER = 16
 AGG = 20
 TIMERS = 32
 TRANS = 20
-PPS = 14
+PPS = 14                # PSC1 PPS point record
+PASS = 28               # PSC2 pass record (pdspec::PassRec)
+PSC1_CHECKS = 21
+PASS_AVS = 0x80         # pdspec::kPassAvs
+PS_BITS = [(1, "Not_Supported"), (2, "no answer"), (4, "voltage"), (8, "current"), (16, "OMF"), (32, "flags")]   # pdspec::kPs*
 NEVER = 99999999        # pdspec::kNever: an event that never came
 OPEN = 1000000          # pdspec::kOpenLimit: the open side of a one-sided Range limit
 NOT_SEEN16 = 0xFFFF
@@ -71,6 +75,9 @@ def load_tables():
     stop_txt = _case_strings(eng, "stop_name", "Stop")
     start_txt = _case_strings(eng, "start_name", "StartResult")
     fam_txt = _case_strings(eng, "family_name", "Family")
+    note_txt = _case_strings(res, "caps_note_name", "CapsNote")
+    plan = _read("plan.hpp")
+    steps = {k: [int(x) for x in re.search(k + r"\[3\]\s*=\s*\{([^}]*)\}", plan).group(1).split(",")] for k in ("pps", "avs")}
     t = {
         "checks": defs,
         "skips": [skip_txt[n] for n in _enum_names(res, "Skip")],
@@ -78,6 +85,8 @@ def load_tables():
         "stops": [stop_txt[n] for n in _enum_names(eng, "Stop")],
         "starts": [start_txt[n] for n in _enum_names(eng, "StartResult")],
         "families": [fam_txt[n] for n in _enum_names(eng, "Family")],
+        "caps_notes": [note_txt[n] for n in _enum_names(res, "CapsNote")],
+        "steps": steps,   # plan.hpp step_mv: the step of class 0..2 per kind (class 3 = the slams)
     }
     _cache["t"] = t
     return t
@@ -101,22 +110,38 @@ def _t32(v):
     return None if v == NOT_SEEN32 else v
 
 
+def ps_text(bits):
+    """The PPS_Status fault bits as words ("clean" for 0)."""
+    return ", ".join(n for bit, n in PS_BITS if bits & bit) or "clean"
+
+
+def step_text(kind, cls):
+    t = load_tables()
+    return "slams" if cls >= 3 else f"{t['steps'][kind][cls]} mV"
+
+
 def decode_blob(b):
     """The whole blob as a dict: header, per-check verdicts with the worst value and its limits, the timer numbers, the transitions
-    and the PPS points. Raises ValueError on a wrong magic or a blob shorter than its own header says."""
+    and the PPS points (PSC1) or sweep passes (PSC2). Raises ValueError on a wrong magic or a blob shorter than its own header says."""
     t = load_tables()
     b = bytes(b)
-    if len(b) < HEADER or b[:4] != MAGIC:
-        raise ValueError("not a PD Spec Check blob (magic PSC1)")
+    if len(b) < HEADER or b[:4] not in MAGICS:
+        raise ValueError("not a PD Spec Check blob (magic PSC1 / PSC2)")
+    version = int(b[3:4].decode())
     state, stop, n_trans, n_pps = b[4], b[5], b[6], b[7]
     score, elapsed_s = struct.unpack_from("<HH", b, 8)
     flags = b[12]
-    n_checks = len(t["checks"])
-    total = HEADER + n_checks * AGG + TIMERS + n_trans * TRANS + n_pps * PPS
+    n_checks = PSC1_CHECKS if version == 1 else b[13]
+    if n_checks > len(t["checks"]):
+        raise ValueError(f"blob has {n_checks} checks, this tool knows {len(t['checks'])}")
+    caps_note = None if version == 1 else _name(t["caps_notes"], b[14])
+    opts = 0 if version == 1 else b[15]
+    rec = PPS if version == 1 else PASS
+    total = HEADER + n_checks * AGG + TIMERS + n_trans * TRANS + n_pps * rec
     if len(b) < total:
         raise ValueError(f"PD Spec Check blob is {len(b)} bytes, its header needs {total}")
     checks = []
-    for k, d in enumerate(t["checks"]):
+    for k, d in enumerate(t["checks"][:n_checks]):
         o = HEADER + k * AGG
         verdict, skip, a, bb, n, fails, worst, lo, hi = struct.unpack_from("<BBBBHHiii", b, o)
         checks.append({"key": d["key"], "label": d["label"], "kind": d["kind"], "unit": d["unit"], "weight": d["weight"],
@@ -138,15 +163,27 @@ def decode_blob(b):
                       "band_ms": _t16(band), "psrdy_mv": psrdy_mv or None, "peak_mv": peak or None, "final_mv": final or None,
                       "gap_ms": gap})
     o += n_trans * TRANS
-    pps = []
-    for i in range(n_pps):
+    pps, passes = [], []
+    for i in range(n_pps if version == 1 else 0):
         pos, steps, mono, acc, set_mv, err, dmin, dmax, settle = struct.unpack_from("<BBBBHhhhH", b, o + i * PPS)
         pps.append({"pos": pos, "steps": steps, "mono_fails": mono, "acc_fails": acc, "set_mv": set_mv, "worst_err_mv": err,
                     "min_delta_mv": dmin, "max_delta_mv": dmax, "max_settle_ms": settle / 10.0})
+    t01 = lambda v: None if v == NOT_SEEN16 else v / 10.0
+    for i in range(n_pps if version == 2 else 0):
+        (pos, cls, steps, lo, hi, band, psrdy, err, dmin, over, out, f_band, f_psrdy, f_mono, f_acc, f_over, f_out, status,
+         _pad) = struct.unpack_from("<BBHHHHHhhhHBBBBBBBB", b, o + i * PASS)
+        kind = "avs" if cls & PASS_AVS else "pps"
+        c = cls & 0x7F
+        passes.append({"pos": pos, "kind": kind, "class": c, "step": step_text(kind, c), "lo_mv": lo, "hi_mv": hi, "steps": steps,
+                       "band_ms": t01(band), "psrdy_ms": t01(psrdy), "worst_err_mv": err,
+                       "min_delta_mv": None if dmin == 0x7FFF else dmin, "over_mv": None if over == -0x7FFF else over,
+                       "out_ms": t01(out), "fails": {"band": f_band, "ps_rdy": f_psrdy, "monotonic": f_mono, "accuracy": f_acc,
+                                                     "overshoot": f_over, "transient": f_out},
+                       "status": status, "status_text": ps_text(status) if kind == "pps" else None})
     tally = {v: sum(1 for c in checks if c["verdict"] == v) for v in ("pass", "fail", "skip", "unverified")}
-    return {"state": _name(STATES, state), "stop_code": stop, "stop": _name(t["stops"], stop), "score": score,
-            "elapsed_s": elapsed_s, "release_unconfirmed": bool(flags & 1), "tally": tally, "checks": checks,
-            "timers": timers, "transitions": trans, "pps": pps}
+    return {"version": version, "state": _name(STATES, state), "stop_code": stop, "stop": _name(t["stops"], stop), "score": score,
+            "elapsed_s": elapsed_s, "release_unconfirmed": bool(flags & 1), "caps_note": caps_note, "full20": bool(opts & 1),
+            "tally": tally, "checks": checks, "timers": timers, "transitions": trans, "pps": pps, "passes": passes}
 
 
 def fmt_value(unit, v):
@@ -173,13 +210,19 @@ def fmt_limit(c):
     return f"{fmt_value(u, lo)} .. {fmt_value(u, hi)}"
 
 
-def fmt_at(k, c):
-    """Where the worst value came from: a PDO pair (transition checks), an APDO point (PPS steps), a PDO or the source (timers)."""
+def fmt_at(k, c, version=2):
+    """Where the worst value came from: a PDO pair (transition checks), an APDO move (PSC2: position, step class, direction and the
+    level asked for; PSC1: an APDO point), a PDO or the source (timers)."""
     keys = [d["key"] for d in load_tables()["checks"]]
     if k < keys.index("pps_monotonic"):
         return f"PDO {c['a']} to {c['b']}"
-    if k < keys.index("pps_keepalive"):
+    prog = k < keys.index("pps_keepalive") or keys.index("pps_band") <= k <= keys.index("avs_transient")
+    if prog and version == 1:
         return f"APDO {c['a']}, point {c['b']}"
+    if prog:
+        a = c["a"]
+        kind = "avs" if c["key"].startswith("avs_") else "pps"
+        return f"APDO {a & 15} {step_text(kind, (a >> 4) & 7)} {'down' if a & 0x80 else 'up'} to {c['b'] / 10:.1f} V"
     return f"PDO {c['a']}" if c["a"] else "the source"
 
 
@@ -189,15 +232,19 @@ def render_text(r):
     lines = [f"PD Spec Check {r['state']}: {r['stop']}; {r['elapsed_s']} s",
              f"score {r['score']} (penalty, 0 = ideal; weights provisional, see docs/PD_SPEC_CHECK.md)  "
              f"pass {tl['pass']}  fail {tl['fail']}  skip {tl['skip']}  unverified {tl['unverified']}"]
+    if r.get("caps_note"):
+        lines.append(f"caps note (advisory, no verdict): {r['caps_note']}")
     if r["release_unconfirmed"]:
         lines.append("WARNING: the end-of-run return to 5 V was not confirmed: unplug the charger")
     lines.append("checks:")
     for k, c in enumerate(r["checks"]):
         if c["verdict"] == "skip":
-            lines.append(f"  {c['key']:<14} skip       {c['skip'] or '-'}")
+            lines.append(f"  {c['key']:<15} skip       {c['skip'] or '-'}")
             continue
-        lines.append(f"  {c['key']:<14} {c['verdict']:<10} worst {fmt_value(c['unit'], c['worst']):<11} limit {fmt_limit(c):<22} "
-                     f"n {c['n']:<3} fails {c['fails']:<3} at {fmt_at(k, c)}" + (f"  penalty {c['penalty']}" if c["penalty"] else ""))
+        worst = ps_text(c["worst"]) if c["key"] == "pps_status" else fmt_value(c["unit"], c["worst"])
+        lines.append(f"  {c['key']:<15} {c['verdict']:<10} worst {worst:<11} limit {fmt_limit(c):<22} "
+                     f"n {c['n']:<3} fails {c['fails']:<3} at {fmt_at(k, c, r.get('version', 2))}"
+                     + (f"  penalty {c['penalty']}" if c["penalty"] else ""))
     tm = r["timers"]
     ms = lambda v: "-" if v is None else f"{v} ms"
     lines.append(f"timers: PPS timeout {ms(tm['pps_ka_ms'])}, EPR timeout {ms(tm['epr_ka_ms'])}; Hard Reset from "
@@ -218,4 +265,16 @@ def render_text(r):
             lines.append(f"  APDO {p['pos']} at {p['set_mv']} mV: {p['steps']} steps, worst error {p['worst_err_mv']} mV, step "
                          f"{p['min_delta_mv']}..{p['max_delta_mv']} mV, settle <= {p['max_settle_ms']:.1f} ms, "
                          f"fails monotonic {p['mono_fails']} accuracy {p['acc_fails']}")
+    if r.get("passes"):
+        f1 = lambda v: "-" if v is None else f"{v:.1f}"
+        lines.append("programmable passes (ms from Accept; band = in vPpsNew/vAvsNew, settle on the final level for 20 mV; "
+                     + ("20 mV over the whole window" if r.get("full20") else "20 mV in three 10-step windows each way") + "):")
+        lines.append("  APDO kind step     window          moves band  ps_rdy err  dmin over out   fails band/rdy/mono/acc/ovs/out  status")
+        for p in r["passes"]:
+            fl = p["fails"]
+            lines.append(f"  {p['pos']:>4} {p['kind']:<4} {p['step']:<8} {p['lo_mv']:>5}..{p['hi_mv']:<5} mV {p['steps']:>5} "
+                         f"{f1(p['band_ms']):>5} {f1(p['psrdy_ms']):>6} {p['worst_err_mv']:>4} "
+                         f"{'-' if p['min_delta_mv'] is None else p['min_delta_mv']:>5} {'-' if p['over_mv'] is None else p['over_mv']:>4} "
+                         f"{f1(p['out_ms']):>5}   {fl['band']}/{fl['ps_rdy']}/{fl['monotonic']}/{fl['accuracy']}/{fl['overshoot']}/"
+                         f"{fl['transient']}" + (f"  {p['status_text']}" if p["status_text"] else ""))
     return "\n".join(lines)

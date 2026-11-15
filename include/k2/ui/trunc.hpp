@@ -36,6 +36,14 @@ constexpr bool all_fit(const char *const (&table)[N], unsigned adv, int max_px) 
     return true;
 }
 
+// The same for a packed table (char[N][M]: no pointer per entry, for the flash budget).
+template <std::size_t N, std::size_t M>
+constexpr bool all_fit(const char (&table)[N][M], unsigned adv, int max_px) {
+    for (const auto& s : table)
+        if (!fits_px(adv, s, max_px)) return false;
+    return true;
+}
+
 // Longest entry of such a table, in cells (for a failing static_assert to be easy to read in the build log).
 template <std::size_t N>
 constexpr int longest_cells(const char *const (&table)[N]) {

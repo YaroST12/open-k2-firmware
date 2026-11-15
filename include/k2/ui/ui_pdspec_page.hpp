@@ -49,7 +49,9 @@ public:
     bool armed() const { return confirm_until_ != 0; }
     int result_selected() const { return res_sel_; }
     void setup_row(int index, bool focused, kit::RowSpec &out);
-    void result_row(int index, kit::ResultRowSpec &out);
+    void result_row(int index, kit::ResultRowSpec &out);   // index: the grid row (row_of maps a check to its row)
+    static int row_of(pdspec::Check c);
+    static pdspec::Check check_of(int row);
     void detail_value(int row, StrBuf<20> &out, uint16_t &color) const;
 
 private:

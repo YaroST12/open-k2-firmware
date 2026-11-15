@@ -46,6 +46,9 @@ sc::Snapshot PdSpecSession::snapshot() {
     s.hard_resets = st.hard_resets; s.source_hard_resets = st.source_hard_resets;
     s.rejects_rx = st.rejects_rx; s.waits_rx = st.waits_rx;
     s.epr_ka_at = st.epr_ka_at;
+    const pd::PpsAnswer& pa = fusb302::pps_answer();
+    s.pps_ask = pa.ask; s.pps_seq = pa.seq; s.pps_ask_us = pa.ask_us; s.pps_rx_us = pa.rx_us;
+    s.pps_mv_raw = pa.mv_raw; s.pps_ma_raw = pa.ma_raw; s.pps_flags = pa.flags;
     s.caps_rx = fusb302::caps_count();
     // The monitor's latest sample (never the display filter or the 128-sample average): the test steps are judged on it.
     s.vbus_mv = ctx_.pm_online ? static_cast<std::int32_t>(ctx_.vbus_fast_mv) : -1;
@@ -78,6 +81,10 @@ void PdSpecSession::rd_off(bool off) {
 
 void PdSpecSession::keepalive_silence(sc::Silence s) { fusb302::sink_keepalive_silence(s); }
 
+pd::Err PdSpecSession::ask_pps_status() {
+    return fusb302::request_pps_status();   // no log line: the Black Box shows the message
+}
+
 // The capture: a fresh recording, triggered at once with the step's own post window, so it freezes on its own once the window is
 // over. Refused (no capture: the engine falls back to the sink's stamps and live polling) while anyone else holds the recorder.
 bool PdSpecSession::capture_start(std::uint32_t post_us) {
@@ -101,9 +108,9 @@ sc::TransitionOut PdSpecSession::capture_transition(const sc::TransitionIn& in) 
     return r ? sc::analyze_transition(*r, in) : sc::TransitionOut{};
 }
 
-sc::StepOut PdSpecSession::capture_step(std::uint32_t accept_us) {
+sc::StepOut PdSpecSession::capture_step(const sc::StepIn& in) {
     const transcap::Rec* r = captured_ ? transcap::frozen() : nullptr;
-    return r ? sc::analyze_step(*r, accept_us) : sc::StepOut{};
+    return r ? sc::analyze_step(*r, in) : sc::StepOut{};
 }
 
 void PdSpecSession::capture_stop() {
@@ -122,15 +129,8 @@ void PdSpecSession::on_note(const char* why) { K2LOG("[PDSPEC] note %s\n", why);
 
 void PdSpecSession::on_finish(sc::Stop why) {
     const sc::Engine& e = *engine_;
-    for (std::size_t k = 0; k < sc::kChecks; ++k) {
-        const sc::Agg& a = e.agg()[k];
-        const sc::Verdict v = sc::verdict(static_cast<sc::Check>(k), a);
-        if (v == sc::Verdict::Skip)
-            K2LOG("[PDSPEC] check %s skip %s\n", sc::kDefs[k].key, sc::skip_name(a.skip));
-        else
-            K2LOG("[PDSPEC] check %s %s n=%u fails=%u worst=%d lo=%d hi=%d at=%u>%u\n", sc::kDefs[k].key, sc::verdict_name(v), unsigned(a.n),
-                  unsigned(a.fails), int(a.worst), int(a.lo), int(a.hi), unsigned(a.a), unsigned(a.b));
-    }
+    // The checks, the programmable passes and the caps note are in the blob only (`k2_remote pd-spec result`, report.txt): no log line
+    // per check, for the flash budget of the K2_PDSPEC build.
     K2LOG("[PDSPEC] finish %s score=%u elapsed_ms=%u restore=%s\n", sc::stop_name(why), unsigned(e.score()),
           unsigned(e.elapsed_ms(0)), e.release_unconfirmed() ? "unconfirmed" : "5V");
     capture_stop();
@@ -143,13 +143,13 @@ void PdSpecSession::on_finish(sc::Stop why) {
 
 // ---- start, cancel, tick ---------------------------------------------------------------------------------------------------------------
 
-sc::StartResult PdSpecSession::start(std::uint8_t families, std::uint32_t now_ms) {
-    const sc::StartResult r = start_run(families, now_ms);
+sc::StartResult PdSpecSession::start(std::uint8_t families, std::uint32_t now_ms, std::uint8_t opts) {
+    const sc::StartResult r = start_run(families, now_ms, opts);
     last_start_ = static_cast<std::uint8_t>(r);
     return r;
 }
 
-sc::StartResult PdSpecSession::start_run(std::uint8_t families, std::uint32_t now_ms) {
+sc::StartResult PdSpecSession::start_run(std::uint8_t families, std::uint32_t now_ms, std::uint8_t opts) {
     if (running()) return sc::StartResult::Running;
     if (!ctx_.pm_online) return sc::StartResult::NoMonitor;
     // Refuse before the previous result is replaced: the engine's own checks come after the emplace.
@@ -166,14 +166,15 @@ sc::StartResult PdSpecSession::start_run(std::uint8_t families, std::uint32_t no
     cancel_asked_ = false;
     captured_ = false;
     rd_away_ = false;
-    const sc::StartResult r = engine_->start(now_ms, families);
+    const sc::StartResult r = engine_->start(now_ms, families, opts);
     if (r != sc::StartResult::Ok) {
         K2LOG("[PDSPEC] start refused: %s\n", sc::start_name(r));
         engine_.reset();
     } else {
         const sc::Levels& L = engine_->levels();
-        K2LOG("[PDSPEC] start families=0x%x fixed=%u pps=%u cap_mv=%u\n", unsigned(engine_->families()), unsigned(L.n_fixed),
-              unsigned(L.n_pps), unsigned(ctx_.cap_mv));
+        // (The move count is the host's to work out from the caps: sc::family_moves; not computed here, for the flash budget.)
+        K2LOG("[PDSPEC] start families=0x%x fixed=%u pps=%u prog=%u full20=%u cap_mv=%u\n", unsigned(engine_->families()),
+              unsigned(L.n_fixed), unsigned(L.n_pps), unsigned(L.n_prog), unsigned(opts & sc::kOptFull20), unsigned(ctx_.cap_mv));
         // The run owns the link from here: a pd-reread attach it starts on is the run's, and the re-read's release must not fire
         // inside a step.
         fusb302::reread_take_over();
@@ -207,7 +208,7 @@ void PdSpecSession::poll(std::uint32_t now_ms) {
 // ---- result --------------------------------------------------------------------------------------------------------------------------
 
 std::uint16_t PdSpecSession::blob_len() const {
-    return engine_ ? static_cast<std::uint16_t>(sc::blob_len(engine_->trans().size(), engine_->pps().size())) : 0;
+    return engine_ ? static_cast<std::uint16_t>(sc::blob_len(engine_->trans().size(), engine_->passes().size())) : 0;
 }
 
 PdSpecSession::Status PdSpecSession::status(std::uint32_t now_ms) const {
@@ -244,11 +245,13 @@ std::size_t PdSpecSession::result_read(std::size_t off, std::span<std::uint8_t> 
     h.state = static_cast<std::uint8_t>(e.running() ? State::Running : State::Finished);
     h.stop = static_cast<std::uint8_t>(e.stop());
     h.n_trans = static_cast<std::uint8_t>(e.trans().size());
-    h.n_pps = static_cast<std::uint8_t>(e.pps().size());
+    h.n_pass = static_cast<std::uint8_t>(e.passes().size());
+    h.caps_note = e.caps_note();
+    h.opts = e.opts();
     h.score = e.score();
     h.elapsed_s = static_cast<std::uint16_t>(std::min<std::uint32_t>(e.elapsed_ms(systick::millis()) / 1000, 0xFFFF));
     h.flags = e.release_unconfirmed() ? 1 : 0;
-    const sc::BlobReader r(h, e.agg(), e.timers(), e.trans(), e.pps());
+    const sc::BlobReader r(h, e.agg(), e.timers(), e.trans(), e.passes());
     return r.read(off, out);
 }
 

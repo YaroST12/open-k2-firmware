@@ -214,7 +214,7 @@ void test_run_stop_results() {
     CHECK_STR(foot(ui).c_str(), "Stopped");
     // The families left out read "not selected" in their cells.
     kit::ResultRowSpec r;
-    p.result_row(int(sc::Check::HrSafe0V), r);
+    p.result_row(PdSpecPage::row_of(sc::Check::HrSafe0V), r);
     CHECK_EQ(int(r.cells[0].verdict), int(kit::Verdict::Skip));
     CHECK_STR(std::string(r.cells[0].label).c_str(), "not selected");
     CHECK_EQ(r.section, true);
@@ -237,10 +237,10 @@ void test_run_stop_results() {
     CHECK_EQ(int(s.stop), int(sc::Stop::Cancelled));
     CHECK_EQ(int(s.families), 1);
     CHECK_EQ(s.passes + s.fails + s.skips, int(sc::kChecks));
-    CHECK_EQ(s.blob_len, int(sc::blob_len(e->trans().size(), e->pps().size())));
+    CHECK_EQ(s.blob_len, int(sc::blob_len(e->trans().size(), e->passes().size())));
     std::array<std::uint8_t, 4> magic{};
     CHECK_EQ(ui.pd_spec().result_read(0, magic), size_t(4));
-    CHECK_EQ(magic[0], 'P'); CHECK_EQ(magic[3], '1');
+    CHECK_EQ(magic[0], 'P'); CHECK_EQ(magic[3], '2');
     // Setup now offers the result again.
     press(ui, Button::Back);
     run(ui, 60);
@@ -273,7 +273,7 @@ void test_results_extremes() {
                 kit::ResultRowSpec r;
                 p.result_row(k, r);
                 CHECK_EQ(int(r.cells[0].verdict), int(kit::Verdict::Skip));
-                CHECK_STR(std::string(r.cells[0].label).c_str(), sc::skip_name(static_cast<sc::Skip>(1 + k % 12)));
+                CHECK_STR(std::string(r.cells[0].label).c_str(), sc::skip_name(static_cast<sc::Skip>(1 + int(PdSpecPage::check_of(k)) % 12)));
             }
         }
         for (uint8_t rot = 0; rot < 4; ++rot) {
@@ -293,14 +293,14 @@ void test_results_extremes() {
         }
         if (variant == 3) CHECK_STR(foot(ui).c_str(), "Not back at 5V: unplug");
         if (variant == 3) {
-            // An inferred limit (the detach checks): the measured value without a pass/fail look, "Unverified", no penalty points.
-            for (const sc::Check c : {sc::Check::DetachSafe0V, sc::Check::Reattach}) {
+            // An inferred limit (the 20 mV PPS settle): the measured value without a pass/fail look, "Unverified", no penalty points.
+            {
                 kit::ResultRowSpec r;
-                p.result_row(int(c), r);
+                p.result_row(PdSpecPage::row_of(sc::Check::PpsSettle), r);
                 CHECK_EQ(int(r.cells[0].verdict), int(kit::Verdict::None));
                 CHECK_EQ(std::string(r.cells[0].label).empty(), false);
             }
-            for (int k = 0; k < int(sc::Check::Reattach); ++k) press(ui, Button::Plus);
+            for (int k = 0; k < PdSpecPage::row_of(sc::Check::PpsSettle); ++k) press(ui, Button::Plus);
             run(ui, 60);
             press(ui, Button::Ok);
             run(ui, 60);
@@ -313,7 +313,7 @@ void test_results_extremes() {
             CHECK_STR(std::string(v.view()).c_str(), "0");
             press(ui, Button::Back);
             run(ui, 60);
-            for (int k = 0; k < int(sc::Check::Reattach); ++k) press(ui, Button::Minus);
+            for (int k = 0; k < PdSpecPage::row_of(sc::Check::PpsSettle); ++k) press(ui, Button::Minus);
             run(ui, 60);
         }
     }

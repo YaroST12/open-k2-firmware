@@ -9,7 +9,10 @@
 //   Transitions  every ordered pair of fixed levels (plan.hpp walk): Accept / PS_RDY timing, VBUS start, PS_RDY in band, rise and
 //                fall time, overshoot, settled accuracy. Down-steps carry the PS_RDY-early and fall-time checks (no load: the
 //                source's own discharge).
-//   Pps          per APDO three set points, 5 x 20 mV up and back: monotonic, accuracy, settle time.
+//   Pps          the programmable sweep (PPS APDOs, then the SPR AVS APDO; plan.hpp Sweep): per window steps of 20 / 100 / 500 mV
+//                (AVS 100 / 500 / 1000 mV) up to the maximum and back, then the two slams. Monotonic, accuracy, in band and
+//                PS_RDY within tPpsSrcTrans* / tAvsSrcTrans*, overshoot (vPpsValid / vAvsValid), transient; Get_PPS_Status at the
+//                top and the end of every PPS pass.
 //   PpsKeepAlive a PPS contract with the sink's keep-alive silenced: when does the source Hard Reset.
 //   EprKeepAlive the same in EPR mode (needs EPR and the cable proof).
 //   HardReset    the K2 Hard Resets the top fixed level: VBUS to vSafe0V, off time, turn-on, first capabilities.
@@ -23,6 +26,7 @@
 #include <array>
 #include <cstdint>
 #include <cstdlib>
+#include <new>
 
 #include "k2/pd/pd_sink.hpp"
 #include "k2/pd/pd_spec_timing.hpp"
@@ -31,6 +35,24 @@
 #include "k2/pdspec/result.hpp"
 
 namespace k2::pdspec {
+
+// The fixed transitions and the programmable passes share one record pool (RAM: the K2_PDSPEC build's stack budget). The Transitions
+// family runs first and fills it from the front; the passes follow its last record. Fixed levels and programmable windows both come
+// from SPR positions 1..7 (plan.hpp scan) plus at most one EPR node, so the largest mix is 7 SPR + 1 EPR fixed levels: 56 transitions
+// and no pass. Every APDO takes a fixed level's place, and 4 passes (112 B) fit where its 2n transitions (40n B) were.
+constexpr std::size_t pool_need(std::size_t spr_fixed, std::size_t prog, bool epr) {
+    const std::size_t n = spr_fixed + (epr ? 1 : 0);
+    return (n > 1 ? n * (n - 1) : 0) * sizeof(TransRec) + prog * kClasses * sizeof(PassRec);
+}
+inline constexpr std::size_t kPoolBytes = pool_need(kMaxNodes - 1, 0, true);
+constexpr bool pool_fits_every_list() {
+    for (std::size_t s = 1; s <= kMaxNodes - 1; ++s)
+        for (std::size_t p = 0; s + p <= kMaxNodes - 1 && p <= kMaxProg; ++p)
+            for (const bool e : {false, true})
+                if (pool_need(s, p, e) > kPoolBytes) return false;
+    return true;
+}
+static_assert(pool_fits_every_list(), "the record pool holds the transitions and passes of every SPR list");
 
 struct Snapshot {
     bool attached = false;        // a PD source with valid Source_Capabilities is on the line
@@ -47,6 +69,13 @@ struct Snapshot {
     std::uint16_t rejects_rx = 0, waits_rx = 0;               // Reject / Wait received, saturating counts
     std::uint32_t epr_ka_at = 0;                              // the sink's ms stamp of its last EPR_KeepAlive (0 = none yet)
     std::uint32_t caps_rx = 0;
+    // The sink's last Get_PPS_Status (pd::Sink::request_pps_status): its state, a sequence number bumped when an ask ends, the ask's
+    // TX_START and the answer's RX edge (us, bit 0 set when real), and the raw PPSSDB fields.
+    pd::PpsAsk pps_ask = pd::PpsAsk::None;
+    std::uint8_t pps_seq = 0;
+    std::uint32_t pps_ask_us = 0, pps_rx_us = 0;
+    std::uint16_t pps_mv_raw = 0xFFFF;
+    std::uint8_t pps_ma_raw = 0xFF, pps_flags = 0;
     std::int32_t vbus_mv = 0, ibus_ma = 0;
     std::uint32_t now_us = 0;
 };
@@ -91,7 +120,7 @@ inline constexpr std::uint8_t kAllFamilies = (1u << kFamilies) - 1;
 constexpr const char* family_name(Family f) {
     switch (f) {
         case Family::Transitions: return "Transitions";
-        case Family::Pps: return "PPS steps";
+        case Family::Pps: return "PPS/AVS";
         case Family::PpsKeepAlive: return "PPS timeout";
         case Family::EprKeepAlive: return "EPR timeout";
         case Family::HardReset: return "Hard Reset";
@@ -112,13 +141,14 @@ public:
     virtual bool hard_reset() = 0;                         // a K2 Hard Reset on the wire; false = refused
     virtual void rd_off(bool off) = 0;                     // the detach gap: Rd away (true) / back as a fresh attach (false)
     virtual void keepalive_silence(Silence s) = 0;         // the sink holds that keep-alive back (bounded by the sink itself)
+    virtual pd::Err ask_pps_status() = 0;                  // a Get_PPS_Status through the sink's guards; Ok = queued
     // The transition capture: arm and trigger now with a post window of post_us (false = no capture: busy or no monitor), frozen yet,
     // the PD edges from its markers, the analysis of the frozen window, and release.
     virtual bool capture_start(std::uint32_t post_us) = 0;
     virtual bool capture_frozen() = 0;
     virtual Edges capture_edges(std::uint32_t from_us) = 0;
     virtual TransitionOut capture_transition(const TransitionIn& in) = 0;
-    virtual StepOut capture_step(std::uint32_t accept_us) = 0;
+    virtual StepOut capture_step(const StepIn& in) = 0;
     virtual void capture_stop() = 0;
     // Reporting hooks (the firmware logs [PDSPEC] lines; the defaults do nothing).
     virtual void on_item(Family, std::uint8_t /*idx*/, std::uint8_t /*total*/) {}
@@ -149,13 +179,15 @@ inline constexpr std::uint32_t kDarkFinalMs = 3000;      // a stop on a dark lin
 inline constexpr std::uint32_t kStartMs = 10000;         // a contract must exist by then
 inline constexpr std::uint32_t kMaxRunMs = 1200000;      // 20 min
 inline constexpr std::uint32_t kPostFixedUs = 1500000;   // capture window after a fixed step's Request
-inline constexpr std::uint32_t kPostStepUs = 300000;     // ... after a PPS step's Request
+inline constexpr std::uint32_t kPostStepUs = 300000;     // ... after a small programmable step's Request
+// ... after a large one (a slam, an AVS step over 1 V): the 275 / 325 ms limit plus the 50 ms tail the level is read from, with room
+// to see how late a slow one is (an unloaded fall to the minimum).
+inline constexpr std::uint32_t kPostLargeUs = 700000;
 inline constexpr std::int32_t kLoadAbortMa = 100;
 inline constexpr std::uint8_t kLoadPolls = 5;
 inline constexpr std::uint8_t kOvPolls = 3;
 inline constexpr std::int32_t kMonoAllowMv = 8;          // a 20 mV step may read this much the wrong way (monitor noise)
 inline constexpr std::int32_t kRestoreMaxMv = 5500;      // a 5 V restore is confirmed at or under this
-inline constexpr std::int32_t kReattachMs = 5000;        // Rd back -> a 5 V contract (inferred)
 inline constexpr std::uint32_t kSuspectAcceptUs = 300;   // an edge-stamp Accept faster than this is not credible
 // The age a live VBUS reading can have (the INA226's normal mode refreshes every ~4.5 ms): added to the bracket of every value timed
 // from live polling (the capture's own samples carry their real spacing instead).
@@ -166,8 +198,9 @@ public:
     // One engine per run: the session emplaces a fresh one for every start (no reset path that could leave a field behind).
     explicit Engine(Env& env) : env_(&env) {}
 
-    // families: a bit per Family (1 << Family), 0 = all of them. The ones left out read "not selected".
-    StartResult start(std::uint32_t now_ms, std::uint8_t families = 0) {
+    // families: a bit per Family (1 << Family), 0 = all of them. The ones left out read "not selected". opts: kOptFull20 sweeps the
+    // whole window at 20 mV (else three 10-step windows).
+    StartResult start(std::uint32_t now_ms, std::uint8_t families = 0, std::uint8_t opts = 0) {
         if (running_) return StartResult::Running;
         const Snapshot s = env_->snapshot();
         if (s.inline_link) return StartResult::Inline;
@@ -177,13 +210,12 @@ public:
         t0_ = now_ms;
         L_ = scan(env_->caps(), env_->cap_mv(), env_->epr_proof());
         walk_ = make_walk(L_.n_fixed);
+        full20_ = (opts & kOptFull20) != 0;
+        note_ = pdspec::caps_note(env_->caps());
         hr0_ = s.source_hard_resets;
         caps0_ = s.caps_rx;
         for (std::uint8_t k = 0; k < L_.n_fixed; ++k) if (pdo(L_.fixed[k]).max_mv > top_mv_) top_mv_ = pdo(L_.fixed[k]).max_mv;
-        for (std::uint8_t k = 0; k < L_.n_pps; ++k) {
-            const std::int32_t m = pdo(L_.pps[k]).max_mv < std::int32_t(env_->cap_mv()) ? pdo(L_.pps[k]).max_mv : std::int32_t(env_->cap_mv());
-            if (m > top_mv_) top_mv_ = m;
-        }
+        for (std::uint8_t k = 0; k < L_.n_prog; ++k) if (L_.prog[k].hi > top_mv_) top_mv_ = L_.prog[k].hi;
         fam_ = Family::Transitions;
         ph_ = Ph::FamStart;
         mask_ = families ? families : kAllFamilies;
@@ -203,8 +235,12 @@ public:
     const std::array<Agg, kChecks>& agg() const { return agg_; }
     const Agg& agg(Check c) const { return agg_[static_cast<std::size_t>(c)]; }
     const Timers& timers() const { return tm_; }
-    std::span<const TransRec> trans() const { return {tr_.data(), n_tr_}; }
-    std::span<const PpsRec> pps() const { return {pp_.data(), n_pp_}; }
+    std::span<const TransRec> trans() const { return {std::launder(reinterpret_cast<const TransRec*>(pool_.data())), n_tr_}; }
+    std::span<const PassRec> passes() const {
+        return {std::launder(reinterpret_cast<const PassRec*>(pool_.data() + n_tr_ * sizeof(TransRec))), n_pass_};
+    }
+    CapsNote caps_note() const { return note_; }
+    std::uint8_t opts() const { return full20_ ? kOptFull20 : 0; }
     std::uint16_t score() const { return pdspec::score(agg_); }
     const Levels& levels() const { return L_; }
     std::uint8_t families() const { return mask_; }
@@ -214,9 +250,10 @@ private:
     // Detail screens can be drawn with every skip reason and the extreme values. Never defined in the firmware.
     friend struct EngineProbe;
     enum class Ph : std::uint8_t {
-        FamStart, Goto, Settle, Measure, Frozen, LiveBand, KaWait, ResetWatch, DetachGap, Recover, Restore, Finishing, Done
+        FamStart, Goto, Settle, Measure, Frozen, LiveBand, Status, KaWait, ResetWatch, DetachGap, Recover, Restore, Finishing, Done
     };
-    enum class After : std::uint8_t { Measure, PpsSteps, PpsKa, EprKa, HardReset, Detach, Family };
+    enum class After : std::uint8_t { Measure, PpsSteps, PpsNext, PpsKa, EprKa, HardReset, Detach, Family };
+    struct Lat { bool acc = false, rdy = false; std::uint32_t acc_us = 0, rdy_us = 0; };
 
     // ---- helpers ----
     static bool due(std::uint32_t now, std::uint32_t t) { return static_cast<std::int32_t>(now - t) >= 0; }
@@ -235,12 +272,12 @@ private:
     void measure_begin(std::uint32_t now);
     void measure_done(const Snapshot& s, std::uint32_t now);
     void judge_transition(const TransitionOut& o, const Edges& e, std::uint32_t now);
-    void judge_step(const StepOut& o, const Edges& e);
+    void judge_prog(const StepOut& o, const Edges& e, const Snapshot& s);
     void next_item(std::uint32_t now);
     void restore(std::uint32_t now);
     void finish(Stop why, std::uint32_t now);
     bool guards(const Snapshot& s, std::uint32_t now);
-    void latencies(const Edges& e, const Snapshot& s, bool epr, std::uint8_t a, std::uint8_t b);
+    Lat latencies(const Edges& e, const Snapshot& s, Check rdy_c, std::int32_t rdy_lim_us, std::uint8_t a, std::uint8_t b);
     void after(const Snapshot& s, std::uint32_t now);
     void refused(std::uint32_t now);
     void lost(const Snapshot& s, std::uint32_t now);
@@ -249,8 +286,17 @@ private:
     void reset_watch(const Snapshot& s, std::uint32_t now);
     void detach_gap(const Snapshot& s, std::uint32_t now);
     void recover(const Snapshot& s, std::uint32_t now);
-    void pps_step_begin(std::uint32_t now);
-    void pps_point_end(std::uint32_t now);
+    const Prog& prog() const;
+    void pass_begin(std::uint32_t now);
+    void prog_next(std::uint32_t now);
+    void pass_end(std::uint32_t now);
+    bool large_step(std::int32_t step_mv) const;
+    std::array<Check, 5> prog_checks_meter() const;
+    void status_begin(std::uint32_t now);
+    void status_poll(const Snapshot& s, std::uint32_t now);
+    static std::int32_t pps_status_faults(const Snapshot& s, std::int32_t target_mv);
+    std::uint32_t request_origin(const Snapshot& s) const;
+    void reattach_judge(std::uint32_t now);
     void track_gap(std::uint32_t now);
     std::uint8_t node(std::size_t i) const { return L_.fixed[walk_.node[i]]; }
 
@@ -284,11 +330,19 @@ private:
     TransRec cur_{};
     std::uint32_t live_t_ = 0, live_n_ = 0, last_poll_ = 0, poll_gap_ = 0;
     bool live_first_ = false, live_unseen_ = false;
-    // PPS.
-    std::uint8_t apdo_ = 0, point_ = 0, step_ = 0;
-    Points pts_{};
-    std::int32_t prev_mv_ = 0;
+    // The programmable sweep.
+    std::uint8_t w_ = 0, cls_ = 0;      // the window (L_.prog) and the step class of the pass in flight
+    Sweep sw_{};
+    Move pend_{};                       // a move held back while Get_PPS_Status is asked
+    bool have_pend_ = false, asked_top_ = false, asked_end_ = false, full20_ = false;
+    std::int8_t dir_ = 0;               // the direction of the last measured move
+    std::int32_t cur_mv_ = 0;           // the level last requested
+    std::int32_t prev_mv_ = 0;          // the last settled level the next move's monotonic check compares with
+    bool prev_valid_ = false, skip_prev_ = false;
     std::int32_t ema_mv_ = 0;
+    bool st_sent_ = false;
+    std::uint8_t st_seq0_ = 0;
+    CapsNote note_ = CapsNote::None;
     // Timers.
     ResetTrack track_{};
     std::uint32_t ka_t0_ = 0, ka_extra_ = 0, rd_back_ = 0, off_at_ = 0, dark_since_ = 0;
@@ -298,10 +352,23 @@ private:
     // Results.
     std::array<Agg, kChecks> agg_{};
     Timers tm_{};
-    std::array<TransRec, kMaxTrans> tr_{};
+    // The record pool (kPoolBytes): n_tr_ TransRec from the front, then n_pass_ PassRec. A record that does not fit is dropped (its
+    // measurements still count in agg_); the static_assert above says none is for a list the scan can produce.
+    alignas(4) std::array<std::uint8_t, kPoolBytes> pool_{};
     std::size_t n_tr_ = 0;
-    std::array<PpsRec, kMaxPps> pp_{};
-    std::size_t n_pp_ = 0;
+    std::size_t n_pass_ = 0;
+    void push_tr(const TransRec& r) {
+        if (n_pass_ == 0 && (n_tr_ + 1) * sizeof(TransRec) <= kPoolBytes) ::new (pool_.data() + n_tr_++ * sizeof(TransRec)) TransRec(r);
+    }
+    // The storage of the pass in flight (index n_pass_), or nullptr when the pool is full; pass_slot() is the record pass_begin made there.
+    std::uint8_t* pass_raw() {
+        const std::size_t off = n_tr_ * sizeof(TransRec) + n_pass_ * sizeof(PassRec);
+        return off + sizeof(PassRec) <= kPoolBytes ? pool_.data() + off : nullptr;
+    }
+    PassRec* pass_slot() {
+        std::uint8_t* m = pass_raw();
+        return m ? std::launder(reinterpret_cast<PassRec*>(m)) : nullptr;
+    }
 };
 
 
@@ -313,11 +380,11 @@ inline constexpr std::int32_t kNever = 99999999;   // a value for an event that 
 constexpr bool owns(Family f, Check c) {
     switch (f) {
         case Family::Transitions: return c <= Check::Accuracy;
-        case Family::Pps: return c >= Check::PpsMonotonic && c <= Check::PpsSettle;
+        case Family::Pps: return (c >= Check::PpsMonotonic && c <= Check::PpsSettle) || (c >= Check::PpsBand && c <= Check::AvsTransient);
         case Family::PpsKeepAlive: return c == Check::PpsKeepAlive;
         case Family::EprKeepAlive: return c == Check::EprKeepAlive;
         case Family::HardReset: return c >= Check::HrSafe0V && c <= Check::HrCaps;
-        case Family::Detach: return c == Check::DetachSafe0V || c == Check::Reattach;
+        case Family::Detach: return c == Check::DetachSafe0V || c == Check::Reattach || c == Check::ReattachCaps;
         case Family::Count: break;
     }
     return false;
@@ -399,7 +466,7 @@ inline void Engine::refused(std::uint32_t now) {
         for (std::uint8_t k = 0; k < L_.n_fixed; ++k) if (L_.fixed[k] == tgt_pos_) bad_ = static_cast<std::uint8_t>(bad_ | 1u << k);
         if (ph_ == Ph::Measure) {
             cur_.flags |= kTrRefused;
-            if (n_tr_ < tr_.size()) tr_[n_tr_++] = cur_;
+            push_tr(cur_);
             next_item(now);
         } else {
             measure_begin(now);
@@ -416,7 +483,14 @@ inline void Engine::lost(const Snapshot& s, std::uint32_t now) {
     // The K2 Hard Reset the source after an Accept with no PS_RDY in time (tPSTransition): that is the measurement.
     if ((ph_ == Ph::Measure || ph_ == Ph::Frozen) && s.hard_resets != hard0_ && s.accept_at != accept0_) {
         const bool epr = (cur_.flags & kTrEpr) != 0;
-        meas(Check::PsRdyTime, {kNever, 0, 0, std::int32_t((epr ? pd::spec::kSrcTransReqEprMs : pd::spec::kSrcTransReqSprMs) * 1000), tgt_pos_, 0});
+        if (fam_ == Family::Pps) {   // a programmable step: its own PS_RDY check and window
+            const bool avs = prog().kind == ProgKind::Avs, large = large_step(std::abs(tgt_mv_ - from_mv_));
+            const std::uint32_t ms = avs ? (large ? pd::spec::kAvsLargeStepMs : pd::spec::kAvsSmallStepMs)
+                                         : (large ? pd::spec::kPpsLargeStepMs : pd::spec::kPpsSmallStepMs);
+            meas(avs ? Check::AvsPsRdy : Check::PpsPsRdy, {kNever, 0, 0, std::int32_t(ms * 1000), tgt_pos_, static_cast<std::uint8_t>(tgt_mv_ / 100)});
+        } else {
+            meas(Check::PsRdyTime, {kNever, 0, 0, std::int32_t((epr ? pd::spec::kSrcTransReqEprMs : pd::spec::kSrcTransReqSprMs) * 1000), tgt_pos_, 0});
+        }
     }
     if (silenced_) { env_->keepalive_silence(Silence::Off); silenced_ = false; }
     env_->capture_stop();
@@ -443,22 +517,29 @@ inline void Engine::begin_family(std::uint32_t now) {
             measure_begin(now);
             return;
         case Family::Pps: {
-            items_ = 0;
-            for (std::uint8_t k = 0; k < L_.n_pps; ++k) items_ = static_cast<std::uint8_t>(items_ + pps_points(pdo(L_.pps[k]), env_->cap_mv()).n);
-            if (items_ == 0) { skip_family(fam_, Skip::NoPps); next_family(); return; }
-            apdo_ = point_ = 0;
-            pts_ = pps_points(pdo(L_.pps[0]), env_->cap_mv());
-            while (pts_.n == 0 && ++apdo_ < L_.n_pps) pts_ = pps_points(pdo(L_.pps[apdo_]), env_->cap_mv());
+            bool pps = false, avs = false;
+            for (std::uint8_t k = 0; k < L_.n_prog; ++k) (L_.prog[k].kind == ProgKind::Avs ? avs : pps) = true;
+            for (std::size_t k = 0; k < kChecks; ++k)
+                if (owns(fam_, Check(k))) {
+                    if (avs_check(Check(k)) && !avs) skip(Check(k), Skip::NoAvs);
+                    if (!avs_check(Check(k)) && !pps) skip(Check(k), Skip::NoPps);
+                }
+            if (L_.n_prog == 0) { next_family(); return; }
+            items_ = static_cast<std::uint8_t>(L_.n_prog * kClasses);
+            w_ = cls_ = 0;
             env_->on_item(fam_, 0, items_);
-            go(L_.pps[apdo_], pts_.mv[0], After::PpsSteps, now);
+            go(prog().pos, static_cast<std::uint16_t>(prog().lo), After::PpsSteps, now);
             return;
         }
         case Family::PpsKeepAlive: {
-            const Points p = L_.n_pps ? pps_points(pdo(L_.pps[0]), env_->cap_mv()) : Points{};
-            if (p.n == 0) { skip_family(fam_, Skip::NoPps); next_family(); return; }
+            // The first PPS window, at 5 V when it reaches it (else its nearest end): the level the source keeps longest.
+            const Prog* p = nullptr;
+            for (std::uint8_t k = 0; k < L_.n_prog && !p; ++k) if (L_.prog[k].kind == ProgKind::Pps) p = &L_.prog[k];
+            if (!p) { skip_family(fam_, Skip::NoPps); next_family(); return; }
+            const std::int32_t mv = kPpsKaMv < p->lo ? p->lo : kPpsKaMv > p->hi ? p->hi : kPpsKaMv;
             items_ = 1;
             env_->on_item(fam_, 0, 1);
-            go(L_.pps[0], p.mv[0], After::PpsKa, now);
+            go(p->pos, static_cast<std::uint16_t>(mv), After::PpsKa, now);
             return;
         }
         case Family::EprKeepAlive:
@@ -486,15 +567,22 @@ inline void Engine::begin_family(std::uint32_t now) {
 inline void Engine::after(const Snapshot& s, std::uint32_t now) {
     switch (after_) {
         case After::Measure: measure_begin(now); return;
-        case After::PpsSteps:
-            step_ = 0;
+        case After::PpsSteps:   // at the window's minimum: the first pass starts here
+            cur_mv_ = tgt_mv_;
             prev_mv_ = ema_mv_;
-            pps_step_begin(now);
+            prev_valid_ = true;
+            pass_begin(now);
+            return;
+        case After::PpsNext:    // a setup move, or a measured one that ended outside its band, has settled
+            cur_mv_ = tgt_mv_;
+            if (!skip_prev_) { prev_mv_ = ema_mv_; prev_valid_ = true; }
+            skip_prev_ = false;
+            prog_next(now);
             return;
         case After::PpsKa:
             env_->keepalive_silence(Silence::Pps);
             silenced_ = true;
-            ka_t0_ = s.accept_at;   // the source's timer runs from the last Request it accepted
+            ka_t0_ = request_origin(s);   // tPPSTimeout runs from the GoodCRC of the last Request
             ka_extra_ = 0;
             hr0_ = s.source_hard_resets;
             ph_ = Ph::KaWait;
@@ -564,8 +652,10 @@ inline void Engine::measure_begin(std::uint32_t now) {
     ph_ = Ph::Measure;
 }
 
-// Request -> Accept and Accept -> PS_RDY: the sink's edge stamps when they are real and credible, else the capture's markers.
-inline void Engine::latencies(const Edges& e, const Snapshot& s, bool epr, std::uint8_t a, std::uint8_t b) {
+// Request -> Accept and Accept -> PS_RDY: the sink's edge stamps when they are real and credible, else the capture's markers. The PS_RDY
+// goes to rdy (PsRdyTime for a fixed step, PpsPsRdy / AvsPsRdy for a programmable one) against rdy_lim_us; returned for the records.
+inline Engine::Lat Engine::latencies(const Edges& e, const Snapshot& s, Check rdy_c, std::int32_t rdy_lim_us, std::uint8_t a, std::uint8_t b) {
+    Lat l;
     std::uint32_t req = e.req_us, acc = e.accept_us, rdy = e.psrdy_us;
     bool have_acc = e.accept, have_rdy = e.psrdy;
     if ((s.req_us & 1) && (s.accept_us & 1) && s.accept_us - s.req_us >= kSuspectAcceptUs && s.accept_us - s.req_us < 1000000) {
@@ -575,34 +665,37 @@ inline void Engine::latencies(const Edges& e, const Snapshot& s, bool epr, std::
         cur_.flags |= kTrSuspectStamp;
     }
     if (have_acc) {
-        const std::uint32_t us = acc - req;
-        meas(Check::AcceptTime, {std::int32_t(us), 0, 0, std::int32_t(pd::spec::kAcceptLimitMs * 1000), a, b});
-        cur_.accept_100us = static_cast<std::uint16_t>(us / 100 > 0xFFFE ? 0xFFFE : us / 100);
+        l.acc = true;
+        l.acc_us = acc - req;
+        meas(Check::AcceptTime, {std::int32_t(l.acc_us), 0, 0, std::int32_t(pd::spec::kAcceptSpecLimitMs * 1000), a, b});
     }
-    const std::int32_t lim = std::int32_t((epr ? pd::spec::kSrcTransReqEprMs : pd::spec::kSrcTransReqSprMs) * 1000);
     if (have_acc && have_rdy) {
-        const std::uint32_t us = rdy - acc;
-        meas(Check::PsRdyTime, {std::int32_t(us), 0, 0, lim, a, b});
-        cur_.psrdy_ms = static_cast<std::uint16_t>(us / 1000 > 0xFFFE ? 0xFFFE : us / 1000);
+        l.rdy = true;
+        l.rdy_us = rdy - acc;
+        meas(rdy_c, {std::int32_t(l.rdy_us), 0, 0, rdy_lim_us, a, b});
     } else if (have_acc) {
-        meas(Check::PsRdyTime, {kNever, 0, 0, lim, a, b});   // the contract was taken without a PS_RDY
+        meas(rdy_c, {kNever, 0, 0, rdy_lim_us, a, b});   // the contract was taken without a PS_RDY
     }
+    return l;
 }
 
 inline void Engine::measure_done(const Snapshot& s, std::uint32_t now) {
     Edges e = captured_ ? env_->capture_edges(from_us_) : Edges{};
     if (fam_ == Family::Pps) {
-        const StepOut o = captured_ && e.accept ? env_->capture_step(e.accept_us) : StepOut{};
+        const StepOut o = captured_ && e.accept ? env_->capture_step({e.accept_us, from_mv_, tgt_mv_}) : StepOut{};
         env_->capture_stop();
-        judge_step(o, e);
-        (void)s;
-        ++step_;
-        if (step_ < 2 * kPpsSteps) pps_step_begin(now);
-        else pps_point_end(now);
+        judge_prog(o, e, s);
+        // Not inside the new band by the end of the window (an unloaded fall can be slow): the next move starts once VBUS is there, and
+        // its monotonic check has no level to compare with.
+        if (!o.band.seen && !o.settled) { prev_valid_ = false; skip_prev_ = true; go(tgt_pos_, tgt_mv_, After::PpsNext, now); return; }
+        prog_next(now);
         return;
     }
     const bool epr = (cur_.flags & kTrEpr) != 0;
-    latencies(e, s, epr, cur_.from, cur_.to);
+    const Lat l = latencies(e, s, Check::PsRdyTime, std::int32_t((epr ? pd::spec::kSrcTransReqEprMs : pd::spec::kSrcTransReqSprMs) * 1000),
+                            cur_.from, cur_.to);
+    if (l.acc) cur_.accept_100us = static_cast<std::uint16_t>(l.acc_us / 100 > 0xFFFE ? 0xFFFE : l.acc_us / 100);
+    if (l.rdy) cur_.psrdy_ms = static_cast<std::uint16_t>(l.rdy_us / 1000 > 0xFFFE ? 0xFFFE : l.rdy_us / 1000);
     TransitionOut o{};
     if (captured_ && e.accept) o = env_->capture_transition({e, from_mv_, pdo(cur_.to).max_mv});
     env_->capture_stop();
@@ -613,7 +706,7 @@ inline void Engine::judge_transition(const TransitionOut& o, const Edges& e, std
     const std::int32_t to_mv = pdo(cur_.to).max_mv;
     const bool up = to_mv > from_mv_, epr = (cur_.flags & kTrEpr) != 0;
     const std::uint8_t a = cur_.from, b = cur_.to;
-    cur_.gap_ms = static_cast<std::uint16_t>(o.max_gap_us / 1000);
+    cur_.gap_ms = static_cast<std::uint8_t>(o.max_gap_us / 1000 > 255 ? 255 : o.max_gap_us / 1000);
     if (o.start.seen) {
         meas(Check::SrcStart, {std::int32_t(o.start.us), std::int32_t(o.start.gap_us), std::int32_t(pd::spec::kSrcTransitionMinMs * 1000), 0, a, b});
         cur_.start_ms = static_cast<std::uint16_t>(o.start.us / 1000);
@@ -637,7 +730,7 @@ inline void Engine::judge_transition(const TransitionOut& o, const Edges& e, std
             meas(Check::Accuracy, {o.final_mv, 0, band_lo(to_mv), band_hi(to_mv), a, b});
             cur_.final_mv = static_cast<std::uint16_t>(o.final_mv);
         }
-        if (n_tr_ < tr_.size()) tr_[n_tr_++] = cur_;
+        push_tr(cur_);
         next_item(now);
         return;
     }
@@ -668,7 +761,7 @@ inline void Engine::live_band(const Snapshot& s, std::uint32_t now) {
             cur_.band_ms = static_cast<std::uint16_t>(ms > 0xFFFE ? 0xFFFE : ms);
             cur_.final_mv = static_cast<std::uint16_t>(s.vbus_mv);
             cur_.flags |= kTrLiveBand;
-            if (n_tr_ < tr_.size()) tr_[n_tr_++] = cur_;
+            push_tr(cur_);
             next_item(now);
         }
         return;
@@ -677,80 +770,213 @@ inline void Engine::live_band(const Snapshot& s, std::uint32_t now) {
     if (now - phase_t_ > kLiveBandMaxMs) {
         meas(tc, {kNever, 0, 0, lim, cur_.from, cur_.to});
         cur_.flags |= kTrLiveBand;
-        if (n_tr_ < tr_.size()) tr_[n_tr_++] = cur_;
+        push_tr(cur_);
         env_->on_note("level not reached");
         next_item(now);
     }
 }
 
-// ---- PPS steps ----
+// ---- programmable sweep (PPS and SPR AVS) ----
+// Per window (plan.hpp Prog) the classes 0..3 in order, each a Sweep from the window's minimum up and back to it. A measured move is
+// captured and judged (judge_prog); a setup move (between the 20 mV windows) is a plain go() + settle. A PPS pass asks Get_PPS_Status at
+// its top (before the first move down) and at its end.
 
-inline void Engine::pps_step_begin(std::uint32_t now) {
-    const std::uint8_t pos = L_.pps[apdo_];
-    const std::int32_t k = step_ < kPpsSteps ? step_ + 1 : 2 * kPpsSteps - step_ - 1;
-    if (step_ == 0) {
-        PpsRec r;
-        r.pos = pos;
-        r.set_mv = pts_.mv[point_];
-        r.min_delta_mv = 0x7FFF;
-        r.max_delta_mv = -0x7FFF;
-        if (n_pp_ < pp_.size()) pp_[n_pp_] = r;
+inline const Prog& Engine::prog() const { return L_.prog[w_]; }
+
+inline void Engine::pass_begin(std::uint32_t now) {
+    const Prog& p = prog();
+    sw_ = make_sweep(p, cls_, full20_);
+    have_pend_ = false;
+    dir_ = 0;
+    asked_top_ = false;
+    PassRec r;
+    r.pos = p.pos;
+    r.cls = static_cast<std::uint8_t>(cls_ | (p.kind == ProgKind::Avs ? kPassAvs : 0));
+    r.lo_mv = static_cast<std::uint16_t>(p.lo);
+    r.hi_mv = static_cast<std::uint16_t>(p.hi);
+    r.min_delta_mv = 0x7FFF;
+    r.over_mv = -0x7FFF;
+    if (std::uint8_t* m = pass_raw()) ::new (m) PassRec(r);
+    prog_next(now);
+}
+
+inline void Engine::prog_next(std::uint32_t now) {
+    const bool pps = prog().kind == ProgKind::Pps;
+    Move m;
+    if (have_pend_) {
+        m = pend_;
+        have_pend_ = false;
+    } else if (!sw_.next(m)) {
+        if (pps && !asked_end_) { asked_end_ = true; status_begin(now); return; }
+        asked_end_ = false;
+        pass_end(now);
+        return;
     }
+    if (!m.measured) { go(prog().pos, static_cast<std::uint16_t>(m.mv), After::PpsNext, now); return; }
+    const std::int8_t d = m.mv > cur_mv_ ? 1 : -1;
+    if (pps && dir_ == 1 && d == -1 && !asked_top_) {   // the top of the pass: ask before the first move down
+        asked_top_ = true;
+        pend_ = m;
+        have_pend_ = true;
+        status_begin(now);
+        return;
+    }
+    dir_ = d;
     const Snapshot s = env_->snapshot();
     from_us_ = s.now_us;
-    from_mv_ = pts_.mv[point_] + std::int32_t((step_ < kPpsSteps ? k - 1 : k + 1) * kPpsStepMv);
-    captured_ = env_->capture_start(kPostStepUs);
-    tgt_pos_ = pos;
-    tgt_mv_ = static_cast<std::uint16_t>(pts_.mv[point_] + k * kPpsStepMv);
+    from_mv_ = cur_mv_;
+    tgt_pos_ = prog().pos;
+    tgt_mv_ = static_cast<std::uint16_t>(m.mv);
+    cur_mv_ = m.mv;
+    const std::int32_t step = std::abs(tgt_mv_ - from_mv_);
+    captured_ = env_->capture_start(large_step(step) ? kPostLargeUs : kPostStepUs);
+    if (!captured_) for (const Check c : prog_checks_meter()) skip(c, Skip::NoCapture);
     allowed_mv_ = from_mv_ > tgt_mv_ ? from_mv_ : tgt_mv_;
     phase_t_ = now;
     sent_ = false;
     ph_ = Ph::Measure;
 }
 
-inline void Engine::judge_step(const StepOut& o, const Edges& e) {
-    const Snapshot s = env_->snapshot();
-    cur_ = {};
-    latencies(e, s, false, tgt_pos_, static_cast<std::uint8_t>(point_));
-    if (n_pp_ >= pp_.size()) return;
-    PpsRec& r = pp_[n_pp_];
-    const std::uint8_t a = tgt_pos_, b = point_;
-    if (!o.valid) {
-        if (!captured_) for (const Check c : {Check::PpsMonotonic, Check::PpsAccuracy, Check::PpsSettle}) skip(c, Skip::NoCapture);
-        return;
-    }
-    ++r.steps;
-    const std::int32_t target = tgt_mv_;
-    const std::int32_t tol = target * std::int32_t(pd::spec::kPpsNewPermille) / 1000;
-    const std::int32_t err = o.final_mv - target;
-    meas(Check::PpsAccuracy, {o.final_mv, 0, target - tol, target + tol, a, b});
-    if (!passes(Kind::Range, {o.final_mv, 0, target - tol, target + tol})) ++r.acc_fails;
-    if (std::abs(err) > std::abs(r.worst_err_mv)) r.worst_err_mv = static_cast<std::int16_t>(err);
-    const bool up = step_ < kPpsSteps;
-    const std::int32_t delta = up ? o.final_mv - prev_mv_ : prev_mv_ - o.final_mv;
-    meas(Check::PpsMonotonic, {delta, 0, -kMonoAllowMv, 0, a, b});
-    if (delta < -kMonoAllowMv) ++r.mono_fails;
-    if (delta < r.min_delta_mv) r.min_delta_mv = static_cast<std::int16_t>(delta);
-    if (delta > r.max_delta_mv) r.max_delta_mv = static_cast<std::int16_t>(delta);
-    prev_mv_ = o.final_mv;
-    const std::int32_t lim = std::int32_t(pd::spec::kPpsSmallStepMs * 1000);
-    const std::int32_t settle = o.settled ? std::int32_t(o.settle.us) : kNever;
-    meas(Check::PpsSettle, {settle, std::int32_t(o.settle.gap_us), 0, lim, a, b});
-    const std::uint32_t s100 = o.settled ? o.settle.us / 100 : 0xFFFF;
-    if (s100 > r.max_settle_100us) r.max_settle_100us = static_cast<std::uint16_t>(s100 > 0xFFFF ? 0xFFFF : s100);
+inline bool Engine::large_step(std::int32_t step_mv) const {
+    return prog().kind == ProgKind::Avs ? step_mv > std::int32_t(pd::spec::kAvsSmallStepMv) : step_mv > std::int32_t(pd::spec::kPpsSmallStepMv);
 }
 
-inline void Engine::pps_point_end(std::uint32_t now) {
-    if (n_pp_ < pp_.size()) ++n_pp_;
+inline void Engine::pass_end(std::uint32_t now) {
+    if (pass_raw()) ++n_pass_;
     ++item_;
-    if (item_ < items_) env_->on_item(fam_, item_, items_);   // the next point's number; none after the last
-    if (++point_ < pts_.n) { go(L_.pps[apdo_], pts_.mv[point_], After::PpsSteps, now); return; }
-    point_ = 0;
-    while (++apdo_ < L_.n_pps) {
-        pts_ = pps_points(pdo(L_.pps[apdo_]), env_->cap_mv());
-        if (pts_.n) { go(L_.pps[apdo_], pts_.mv[0], After::PpsSteps, now); return; }
-    }
+    if (item_ < items_) env_->on_item(fam_, item_, items_);   // the next pass's number; none after the last
+    if (++cls_ < kClasses) { pass_begin(now); return; }   // the pass ended at the window's minimum: the next class starts there
+    cls_ = 0;
+    if (++w_ < L_.n_prog) { go(prog().pos, static_cast<std::uint16_t>(prog().lo), After::PpsSteps, now); return; }
     restore(now);
+}
+
+// The checks the meter feeds (a busy capture skips them).
+inline std::array<Check, 5> Engine::prog_checks_meter() const {
+    if (prog().kind == ProgKind::Avs) return {Check::AvsMonotonic, Check::AvsAccuracy, Check::AvsBand, Check::AvsOvershoot, Check::AvsTransient};
+    return {Check::PpsMonotonic, Check::PpsAccuracy, cls_ == 0 ? Check::PpsSettle : Check::PpsBand, Check::PpsOvershoot, Check::PpsTransient};
+}
+
+inline void Engine::judge_prog(const StepOut& o, const Edges& e, const Snapshot& s) {
+    const bool avs = prog().kind == ProgKind::Avs;
+    const std::int32_t target = tgt_mv_, from = from_mv_;
+    const bool up = target > from;
+    const std::int32_t step = std::abs(target - from);
+    const bool large = large_step(step);
+    const std::int32_t lim_ms = std::int32_t(avs ? (large ? pd::spec::kAvsLargeStepMs : pd::spec::kAvsSmallStepMs)
+                                                 : (large ? pd::spec::kPpsLargeStepMs : pd::spec::kPpsSmallStepMs));
+    const auto a = static_cast<std::uint8_t>(tgt_pos_ | cls_ << 4 | (up ? 0 : 0x80));
+    const auto b = static_cast<std::uint8_t>(target / 100);
+    cur_ = {};
+    PassRec scratch;
+    PassRec* slot = pass_slot();
+    PassRec& r = slot ? *slot : scratch;
+    const Lat l = latencies(e, s, avs ? Check::AvsPsRdy : Check::PpsPsRdy, lim_ms * 1000, a, b);
+    if (l.acc) {
+        const std::uint32_t t = l.rdy ? l.rdy_us / 100 : 0xFFFF;
+        if (t > r.psrdy_100us) r.psrdy_100us = static_cast<std::uint16_t>(t > 0xFFFF ? 0xFFFF : t);
+        if (!l.rdy || l.rdy_us > std::uint32_t(lim_ms) * 1000) bump_sat(r.psrdy_fails);
+    }
+    if (!o.valid) return;
+    ++r.steps;
+    const auto sat = [](std::uint32_t us) { return static_cast<std::uint16_t>(us / 100 > 0xFFFE ? 0xFFFE : us / 100); };
+    // In the band (classes 1..3) / on the final level (the 20 mV class: unverified, the meter's floor).
+    if (!avs && cls_ == 0) {
+        const std::int32_t settle = o.settled ? std::int32_t(o.settle.us) : kNever;
+        meas(Check::PpsSettle, {settle, std::int32_t(o.settle.gap_us), 0, std::int32_t(pd::spec::kPpsSmallStepMs * 1000), a, b});
+        const std::uint16_t t = o.settled ? sat(o.settle.us) : 0xFFFF;
+        if (t > r.band_100us) r.band_100us = t;
+        if (!pdspec::passes(Kind::Max, {settle, std::int32_t(o.settle.gap_us), 0, std::int32_t(pd::spec::kPpsSmallStepMs * 1000)})) bump_sat(r.band_fails);
+    } else {
+        const Meas m{o.band.seen ? std::int32_t(o.band.us) : kNever, std::int32_t(o.band.gap_us), 0, lim_ms * 1000, a, b};
+        meas(avs ? Check::AvsBand : Check::PpsBand, m);
+        const std::uint16_t t = o.band.seen ? sat(o.band.us) : 0xFFFF;
+        if (t > r.band_100us) r.band_100us = t;
+        if (!pdspec::passes(Kind::Max, m)) bump_sat(r.band_fails);
+    }
+    // Overshoot / undershoot beyond vPpsNew + vPpsValid (vAvsNew + vAvsValid), on the side the step moves to.
+    const std::int32_t extra = avs ? pd::spec::kAvsValidExtraMv : pd::spec::kPpsValidExtraMv;
+    const std::int32_t over = up ? o.peak_mv - band_hi(target) : band_lo(target) - o.peak_mv;
+    if (up) meas(avs ? Check::AvsOvershoot : Check::PpsOvershoot, {o.peak_mv, 0, -kOpenLimit, band_hi(target) + extra, a, b});
+    else meas(avs ? Check::AvsOvershoot : Check::PpsOvershoot, {o.peak_mv, 0, band_lo(target) - extra, kOpenLimit, a, b});
+    if (over > r.over_mv) r.over_mv = static_cast<std::int16_t>(over > 0x7FFF ? 0x7FFF : over);
+    if (over > extra) bump_sat(r.over_fails);
+    // How long VBUS left the band again after entering it (tPpsTransient / tAvsTransient); one sample of bracket.
+    if (o.band.seen) {
+        const std::int32_t tr_ms = std::int32_t(avs ? pd::spec::kAvsTransientMs : pd::spec::kPpsTransientMs);
+        const Meas mt{std::int32_t(o.out_us), o.out_us ? std::int32_t(o.band.gap_us) : 0, 0, tr_ms * 1000, a, b};
+        meas(avs ? Check::AvsTransient : Check::PpsTransient, mt);
+        if (sat(o.out_us) > r.out_100us) r.out_100us = sat(o.out_us);
+        if (!pdspec::passes(Kind::Max, mt)) bump_sat(r.out_fails);
+    }
+    // The level is known when VBUS ended inside the band or sat still on its final level (an offset source); a level still moving at
+    // the window's end (an unloaded fall) has none to judge.
+    if (!o.band.seen && !o.settled) return;
+    // The settled level inside vPpsNew / vAvsNew, and the move the right way (or not at all).
+    const std::int32_t tol = target * std::int32_t(avs ? pd::spec::kAvsNewPermille : pd::spec::kPpsNewPermille) / 1000;
+    const std::int32_t err = o.final_mv - target;
+    meas(avs ? Check::AvsAccuracy : Check::PpsAccuracy, {o.final_mv, 0, target - tol, target + tol, a, b});
+    if (std::abs(err) > tol) bump_sat(r.acc_fails);
+    if (std::abs(err) > std::abs(r.worst_err_mv)) r.worst_err_mv = static_cast<std::int16_t>(err);
+    if (prev_valid_) {
+        const std::int32_t delta = up ? o.final_mv - prev_mv_ : prev_mv_ - o.final_mv;
+        meas(avs ? Check::AvsMonotonic : Check::PpsMonotonic, {delta, 0, -kMonoAllowMv, 0, a, b});
+        if (delta < -kMonoAllowMv) bump_sat(r.mono_fails);
+        if (delta < r.min_delta_mv) r.min_delta_mv = static_cast<std::int16_t>(delta);
+    }
+    prev_mv_ = o.final_mv;
+    prev_valid_ = true;
+}
+
+// Get_PPS_Status (PPS only, never in the keep-alive family): asked through the sink, the answer judged against the no-load
+// expectations (PD CTS SRC3.7#2) and timed against tReceiverResponse.
+inline void Engine::status_begin(std::uint32_t now) {
+    st_sent_ = false;
+    ph_ = Ph::Status;
+    phase_t_ = now;
+}
+
+inline void Engine::status_poll(const Snapshot& s, std::uint32_t now) {
+    if (!st_sent_) {
+        const pd::Err e = env_->ask_pps_status();
+        if (e == pd::Err::Ok) { st_sent_ = true; st_seq0_ = s.pps_seq; return; }
+        if (now - phase_t_ > kBusyMs) { env_->on_note("PPS status not asked"); prog_next(now); }   // our own guards held it: no verdict
+        return;
+    }
+    const bool done = s.pps_seq != st_seq0_ && s.pps_ask != pd::PpsAsk::Pending;
+    if (!done) {
+        if (now - phase_t_ > kStepMaxMs) finish(Stop::Stuck, now);
+        return;
+    }
+    const std::int32_t target = cur_mv_;
+    const auto a = static_cast<std::uint8_t>(tgt_pos_ | cls_ << 4 | (asked_end_ ? 0x80 : 0));
+    const auto b = static_cast<std::uint8_t>(target / 100);
+    const std::int32_t bits = pps_status_faults(s, target);
+    meas(Check::PpsStatus, {bits, 0, 0, 0, a, b});
+    if (PassRec* p = pass_slot()) p->status = static_cast<std::uint8_t>(p->status | bits);
+    if (s.pps_ask != pd::PpsAsk::Timeout && (s.pps_ask_us & 1) && (s.pps_rx_us & 1) && s.pps_rx_us - s.pps_ask_us < 1000000)
+        meas(Check::PpsStatusTime, {std::int32_t(s.pps_rx_us - s.pps_ask_us), 0, 0, std::int32_t(pd::spec::kPpsStatusLimitMs * 1000), a, b});
+    prog_next(now);
+}
+
+// The fault bits of the last answer (result.hpp kPs*). PPSSDB: Output Voltage u16 in 20 mV (0xFFFF = not supported), Output Current u8
+// in 50 mA (0xFF = not supported), Real Time Flags u8 (bit 0 reserved, bits 2..1 PTF, bit 3 OMF, bits 7..4 reserved).
+constexpr std::int32_t pps_status_faults(pd::PpsAsk ask, std::uint16_t raw_mv, std::uint8_t raw_ma, std::uint8_t flags, std::int32_t target_mv) {
+    if (ask == pd::PpsAsk::NotSupported) return kPsNotSupported;
+    if (ask != pd::PpsAsk::Got) return kPsNoAnswer;
+    std::int32_t bits = 0;
+    if (raw_mv != 0xFFFF) {
+        const std::int32_t tol = (target_mv * std::int32_t(pd::spec::kPpsStatusVoltPermille) / 1000 + 10) / 20 * 20;
+        const std::int32_t mv = std::int32_t(raw_mv) * 20;
+        if (mv < target_mv - tol || mv > target_mv + tol) bits |= kPsVoltage;
+    }
+    if (raw_ma > 3 && raw_ma != 0xFF) bits |= kPsCurrent;
+    if (flags & 0x08) bits |= kPsOmf;
+    if ((flags & 0xF1) || ((flags >> 1) & 3) > 1) bits |= kPsFlags;
+    return bits;
+}
+inline std::int32_t Engine::pps_status_faults(const Snapshot& s, std::int32_t target_mv) {
+    return pdspec::pps_status_faults(s.pps_ask, s.pps_mv_raw, s.pps_ma_raw, s.pps_flags, target_mv);
 }
 
 inline void Engine::next_item(std::uint32_t now) {
@@ -769,13 +995,21 @@ inline void Engine::track_gap(std::uint32_t now) {
     if (poll_gap_ > tm_.poll_gap_ms) tm_.poll_gap_ms = static_cast<std::uint16_t>(poll_gap_ > 0xFFFF ? 0xFFFF : poll_gap_);
 }
 
+// When the source's PPS timer started: the GoodCRC of the last Request it accepted. The sink stamps the Accept in ms; with real edge
+// stamps the Request went out (accept_us - req_us) before it (its GoodCRC follows the TX start by under 1 ms), else the Accept stamp.
+inline std::uint32_t Engine::request_origin(const Snapshot& s) const {
+    if (!s.accept_at) return 0;
+    if ((s.req_us & 1) && (s.accept_us & 1) && s.accept_us - s.req_us < 1000000) return s.accept_at - (s.accept_us - s.req_us) / 1000;
+    return s.accept_at;
+}
+
 inline void Engine::ka_wait(const Snapshot& s, std::uint32_t now) {
     const bool pps = fam_ == Family::PpsKeepAlive;
     const Check c = pps ? Check::PpsKeepAlive : Check::EprKeepAlive;
     const std::int32_t lo = std::int32_t(pps ? pd::spec::kPpsTimeoutMinMs : pd::spec::kSourceEprKeepAliveMinMs);
     const std::int32_t hi = std::int32_t(pps ? pd::spec::kPpsTimeoutMaxMs : pd::spec::kSourceEprKeepAliveMaxMs);
     // The origin follows the sink's own stamp should one more keep-alive have gone out as the silence began.
-    const std::uint32_t origin = pps ? s.accept_at : s.epr_ka_at;
+    const std::uint32_t origin = pps ? request_origin(s) : s.epr_ka_at;
     if (s.attached && origin && static_cast<std::int32_t>(origin - ka_t0_) > 0) { ka_t0_ = origin; ka_extra_ = 0; }
     // Without a stamp the last keep-alive went out up to one period before the silence: the value is the upper end, gap the bracket.
     const std::int32_t extra = std::int32_t(ka_extra_);
@@ -838,24 +1072,41 @@ inline void Engine::detach_gap(const Snapshot& s, std::uint32_t now) {
     const bool done = (t.off_seen && now - off_at_ >= kDetachHoldMs) || now - phase_t_ >= kDetachMaxMs;
     if (!done) return;
     meas(Check::DetachSafe0V, {t.off_seen ? std::int32_t(t.off_ms) : std::int32_t(now - phase_t_), std::int32_t(t.gap_ms + kVbusPeriodMs), 0,
-                               std::int32_t(pd::spec::kVbusOffMs + pd::spec::kPdDebounceMaxMs), 0, 0});
+                               std::int32_t(pd::spec::kVbusOffMs + pd::spec::kSrcDisconnectMaxMs), 0, 0});
     if (t.off_seen) tm_.det_off_ms = static_cast<std::uint16_t>(t.off_ms);
     env_->rd_off(false);
     rd_off_ = false;
     rd_back_ = now;
+    track_.start(now);   // the way back: VBUS up to vSafe5V, then the first capabilities
+    caps0_ = s.caps_rx;
     after_ = After::Family;
     ph_ = Ph::Recover;
     phase_t_ = now;
     asked_ = false;
 }
 
+// Rd back -> VBUS at vSafe5V within tCCDebounce + tBulkDischarge + tVBUSON, and the first Source_Capabilities within tFirstSourceCap of
+// it (Type-C R2.5 Tables 4-32 / 4-34, PD R3.3 Table 7.10). At poll resolution; what never came is kNever.
+inline void Engine::reattach_judge(std::uint32_t now) {
+    const ResetTimes& t = track_.times();
+    // VBUS never left after the detach (the source kept it up): there is no way back to time (detach_safe0v has the verdict).
+    if (!t.off_seen) { skip(Check::Reattach, Skip::NoData); skip(Check::ReattachCaps, Skip::NoData); return; }
+    const std::int32_t g = std::int32_t(t.gap_ms + kVbusPeriodMs);
+    const std::uint32_t bulk = tm_.det_from_mv > pd::spec::kBulkDischargeHvAboveMv ? pd::spec::kBulkDischargeHvMs : pd::spec::kBulkDischargeMs;
+    const std::int32_t lim = std::int32_t(pd::spec::kCcDebounceMaxMs + bulk + pd::spec::kVbusOnMs);
+    const std::int32_t up = t.on_seen ? std::int32_t(t.off_ms + t.dark_ms + t.turn_on_ms) : kNever;
+    meas(Check::Reattach, {up, t.on_seen ? g : 0, 0, lim, 0, 0});
+    if (t.on_seen) meas(Check::ReattachCaps, {t.caps_seen ? std::int32_t(t.caps_ms) : kNever, t.caps_seen ? g : 0, 0, std::int32_t(pd::spec::kFirstSourceCapMs), 0, 0});
+    (void)now;
+}
+
 inline void Engine::recover(const Snapshot& s, std::uint32_t now) {
     const bool back = s.attached && s.state == pd::SinkState::Ready && s.pos == 1 && s.vbus_mv >= pd::spec::kVSafe5VMinMv;
+    if (fam_ == Family::Detach && rd_back_) track_.feed(now, s.vbus_mv, s.caps_rx != caps0_);
     if (back) {
         if (fam_ == Family::Detach && rd_back_) {
-            const std::uint32_t ms = now - rd_back_;
-            meas(Check::Reattach, {std::int32_t(ms), 0, 0, kReattachMs, 0, 0});
-            tm_.det_back_ms = static_cast<std::uint16_t>(ms > 0xFFFE ? 0xFFFE : ms);
+            reattach_judge(now);
+            tm_.det_back_ms = static_cast<std::uint16_t>(now - rd_back_ > 0xFFFE ? 0xFFFE : now - rd_back_);
             rd_back_ = 0;
         }
         hr0_ = s.source_hard_resets;
@@ -872,7 +1123,7 @@ inline void Engine::recover(const Snapshot& s, std::uint32_t now) {
         asked_ = env_->request(c) == pd::Err::Ok;
     }
     if (now - phase_t_ > kRecoverMs) {
-        if (fam_ == Family::Detach && rd_back_) meas(Check::Reattach, {kNever, 0, 0, kReattachMs, 0, 0});
+        if (fam_ == Family::Detach && rd_back_) reattach_judge(now);
         finish(Stop::NoRecovery, now);
     }
 }
@@ -996,6 +1247,7 @@ inline void Engine::poll(std::uint32_t now) {
             if (env_->capture_frozen() || now - phase_t_ > kFrozenMaxMs) measure_done(s, now);
             return;
         case Ph::LiveBand: live_band(s, now); return;
+        case Ph::Status: status_poll(s, now); return;
         case Ph::KaWait: ka_wait(s, now); return;
         case Ph::ResetWatch: reset_watch(s, now); return;
         case Ph::DetachGap: detach_gap(s, now); return;

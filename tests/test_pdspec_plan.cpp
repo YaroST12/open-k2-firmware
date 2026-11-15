@@ -3,6 +3,7 @@
 // PD Spec Check plan (k2/pdspec/plan.hpp): the levels a list offers, the walk over every ordered pair of fixed levels, the PPS points.
 #include <array>
 #include <cstdint>
+#include <vector>
 
 #include "k2/pdspec/plan.hpp"
 #include "test_util.h"
@@ -27,6 +28,15 @@ pd::Pdo pps(std::uint16_t lo, std::uint16_t hi) {
     d.max_mv = hi;
     d.max_ma = 3000;
     d.raw = 0xC0000000u;
+    return d;
+}
+pd::Pdo avs(std::uint16_t hi) {   // SPR AVS: 9 V up to 15 or 20 V
+    pd::Pdo d;
+    d.type = pd::PdoType::Avs;
+    d.min_mv = 9000;
+    d.max_mv = hi;
+    d.max_ma = 3250;
+    d.raw = 0xD0000000u;
     return d;
 }
 pd::SourceCaps caps(std::initializer_list<pd::Pdo> l) {
@@ -70,6 +80,7 @@ void levels_of_a_typical_list() {
     CHECK_EQ(int(L.top_spr), 4);
     CHECK_EQ(int(L.n_pps), 2);
     CHECK_EQ(int(L.pps[0]), 5);
+    CHECK_EQ(int(L.n_prog), 2);
     CHECK_COND(!L.epr_offered);
     CHECK_EQ(int(L.epr), 0);
 }
@@ -101,22 +112,116 @@ void epr_needs_the_proof_and_the_ceiling() {
     CHECK_EQ(int(proof.top_spr), 4);
 }
 
-void pps_points_of_windows() {
-    const Points a = pps_points(pps(3300, 21000), 36000);
-    CHECK_EQ(int(a.n), 3);
-    CHECK_EQ(int(a.mv[0]), 5000);
-    CHECK_EQ(int(a.mv[2]), 20900);          // 21000 less 5 x 20 mV
-    CHECK_EQ(int(a.mv[1]), 12940);          // (5000 + 20900) / 2 = 12950, down to a multiple of 20
-    const Points b = pps_points(pps(3300, 5900), 36000);
-    CHECK_EQ(int(b.n), 3);
-    CHECK_EQ(int(b.mv[0]), 5000);
-    CHECK_EQ(int(b.mv[1]), 5400);           // (5000 + 5800) / 2
-    CHECK_EQ(int(b.mv[2]), 5800);           // 5900 less 5 x 20 mV
-    const Points c = pps_points(pps(3300, 5080), 36000);   // no room for five steps above 5 V
-    CHECK_EQ(int(c.n), 0);
-    const Points d = pps_points(pps(5010, 21000), 12000);  // odd minimum rounded up, the cap below the window's top
-    CHECK_EQ(int(d.mv[0]), 5020);
-    CHECK_EQ(int(d.mv[2]), 11900);
+// The programmable windows: the SPR PPS APDOs (list order), then the SPR AVS APDO; each one from its minimum (the floor when it is
+// higher) to its maximum (the ceiling when it is lower), on its own resolution.
+void windows_of_a_list() {
+    const auto c = caps({fixed(5000), fixed(9000), fixed(15000), fixed(20000), avs(20000), pps(3300, 21000), pps(3300, 11000)});
+    const Levels L = scan(c, 36000, false);
+    CHECK_EQ(int(L.n_prog), 3);
+    CHECK_EQ(int(L.prog[0].pos), 6);
+    CHECK_COND(L.prog[0].kind == ProgKind::Pps);
+    CHECK_EQ(int(L.prog[0].lo), 3300);
+    CHECK_EQ(int(L.prog[0].hi), 21000);
+    CHECK_EQ(int(L.prog[1].pos), 7);
+    CHECK_EQ(int(L.prog[1].hi), 11000);
+    CHECK_EQ(int(L.prog[2].pos), 5);
+    CHECK_COND(L.prog[2].kind == ProgKind::Avs);
+    CHECK_EQ(int(L.prog[2].lo), 9000);
+    CHECK_EQ(int(L.prog[2].hi), 20000);
+    CHECK_EQ(int(L.n_pps), 2);
+    CHECK_EQ(int(L.pps[0]), 6);
+    CHECK_EQ(int(L.n_avs), 1);
+    // A 12 V ceiling and a 5 V floor (a self-powered K2): both ends clamped, odd values rounded inwards to the resolution.
+    const auto d = caps({fixed(5000), pps(3310, 21000), avs(15000)});
+    const Levels M = scan(d, 12050, false, 5010);
+    CHECK_EQ(int(M.prog[0].lo), 5020);
+    CHECK_EQ(int(M.prog[0].hi), 12040);
+    CHECK_EQ(int(M.prog[1].lo), 9000);
+    CHECK_EQ(int(M.prog[1].hi), 12000);
+    // A window narrower than kMinSpanMv is not swept.
+    const Levels N = scan(caps({fixed(5000), pps(3300, 4000)}), 36000, false);
+    CHECK_EQ(int(N.n_prog), 0);
+    CHECK_EQ(int(N.n_pps), 0);
+}
+
+// The measured moves of one pass, in order.
+std::vector<Move> moves(Sweep s) {
+    std::vector<Move> v;
+    Move m;
+    while (s.next(m)) v.push_back(m);
+    return v;
+}
+Prog window(std::int32_t lo, std::int32_t hi, ProgKind k = ProgKind::Pps) { return {1, k, lo, hi}; }
+
+// SPT.6 E.2.k: per step size, up from Vmin while a whole step fits, then the rest up to Vmax; down the same way to Vmin.
+void full_sweep_up_then_down() {
+    const auto v = moves(make_sweep(window(3300, 11000), 1, false));   // 100 mV
+    CHECK_EQ(int(v.size()), 154);
+    CHECK_EQ(int(v[0].mv), 3400);
+    CHECK_EQ(int(v[76].mv), 11000);
+    CHECK_EQ(int(v[77].mv), 10900);
+    CHECK_EQ(int(v[153].mv), 3300);
+    for (const Move& m : v) CHECK_COND(m.measured);
+    CHECK_EQ(int(measured_moves(make_sweep(window(3300, 11000), 1, false))), 154);
+}
+
+void a_step_that_does_not_fit_ends_on_the_rest() {
+    const auto v = moves(make_sweep(window(3300, 11000), 2, false));   // 500 mV: 15 steps to 10.8 V, then 200 mV to 11 V
+    CHECK_EQ(int(v.size()), 32);
+    CHECK_EQ(int(v[14].mv), 10800);
+    CHECK_EQ(int(v[15].mv), 11000);
+    CHECK_EQ(int(v[16].mv), 10500);
+    CHECK_EQ(int(v[30].mv), 3500);
+    CHECK_EQ(int(v[31].mv), 3300);
+}
+
+void slams_are_two_moves() {
+    const auto v = moves(make_sweep(window(3300, 11000), 3, false));
+    CHECK_EQ(int(v.size()), 2);
+    CHECK_EQ(int(v[0].mv), 11000);
+    CHECK_EQ(int(v[1].mv), 3300);
+    CHECK_COND(v[0].measured && v[1].measured);
+}
+
+// 20 mV: three windows of kWindowSteps steps (low, middle, top) up and the same down; the moves between windows are not measured.
+void twenty_mv_windows() {
+    const auto v = moves(make_sweep(window(3300, 11000), 0, false));
+    CHECK_EQ(int(v.size()), 64);
+    int measured = 0;
+    for (const Move& m : v) measured += m.measured;
+    CHECK_EQ(measured, 60);
+    CHECK_EQ(int(v[0].mv), 3320);
+    CHECK_EQ(int(v[9].mv), 3500);
+    CHECK_COND(!v[10].measured);
+    CHECK_EQ(int(v[10].mv), 7040);         // (3300 + 11000) / 2 - 100, down to 20 mV
+    CHECK_EQ(int(v[11].mv), 7060);
+    CHECK_COND(!v[21].measured);
+    CHECK_EQ(int(v[21].mv), 10800);
+    CHECK_EQ(int(v[31].mv), 11000);
+    CHECK_EQ(int(v[32].mv), 10980);        // the top window goes down at once
+    CHECK_EQ(int(v[42].mv), 7240);         // up to the middle window's top, not measured
+    CHECK_COND(!v[42].measured);
+    CHECK_EQ(int(v[63].mv), 3300);
+    CHECK_EQ(int(measured_moves(make_sweep(window(3300, 11000), 0, false))), 60);
+    // The full 20 mV sweep (the option), and a window too narrow for three windows: the whole range.
+    CHECK_EQ(int(measured_moves(make_sweep(window(3300, 11000), 0, true))), 770);
+    CHECK_EQ(int(measured_moves(make_sweep(window(3300, 3800), 0, false))), 50);
+}
+
+// SPR AVS: 100 mV resolution, step sizes 100, 500 and 1000 mV (vAvsSmallStep), then the slams.
+void avs_steps() {
+    CHECK_EQ(step_mv(ProgKind::Avs, 0), 100);
+    CHECK_EQ(step_mv(ProgKind::Avs, 2), 1000);
+    CHECK_EQ(step_mv(ProgKind::Pps, 0), 20);
+    CHECK_EQ(int(measured_moves(make_sweep(window(9000, 20000, ProgKind::Avs), 0, false))), 220);   // no 20 mV windows for AVS
+    CHECK_EQ(int(measured_moves(make_sweep(window(9000, 20000, ProgKind::Avs), 2, false))), 22);
+}
+
+// The family's measured moves: the time budget of a run is about this many capture windows.
+void family_moves() {
+    const Levels L = scan(caps({fixed(5000), fixed(9000), fixed(12000), fixed(15000), fixed(20000), pps(3300, 11000)}), 36000, false);
+    CHECK_EQ(int(family_moves(L, false)), 60 + 154 + 32 + 2);
+    CHECK_EQ(int(family_moves(L, true)), 770 + 154 + 32 + 2);
 }
 
 }  // namespace
@@ -127,6 +232,12 @@ int main() {
     levels_of_a_typical_list();
     levels_unsorted_and_capped();
     epr_needs_the_proof_and_the_ceiling();
-    pps_points_of_windows();
+    windows_of_a_list();
+    full_sweep_up_then_down();
+    a_step_that_does_not_fit_ends_on_the_rest();
+    slams_are_two_moves();
+    twenty_mv_windows();
+    avs_steps();
+    family_moves();
     return test_report("test_pdspec_plan");
 }

@@ -3,12 +3,13 @@
 # Copyright (C) 2026 Yaraslau Furman
 """PD Spec Check host script: start a run on the attached charger, wait for it, save the result and a report (docs/PD_SPEC_CHECK.md).
 
-    python3 tools/pd_spec.py run --charger baseus-100w-bank --confirm [--families transitions,pps-steps] [--wait 1500]
+    python3 tools/pd_spec.py run --charger baseus-100w-bank --confirm [--families transitions,pps-avs] [--pps-full] [--wait 1500]
     python3 tools/pd_spec.py status | stop
     python3 tools/pd_spec.py report runs/pd-spec-baseus-100w-bank-20261114-180000/result.json
 
 `run` writes runs/pd-spec-<charger>-<stamp>/{result.json, report.txt, stream.log}. result.json carries the raw blob (hex) and its
-decode: every check with its verdict, worst value, limits and penalty, the timer numbers, every transition and PPS point. The charger is
+decode: every check with its verdict, worst value, limits and penalty, the timer numbers, every transition and PPS/AVS pass, and the
+time each family took (family_s, from the K2's run clock as the 2 s polls saw the family change). The charger is
 stepped through its levels, Hard Reset and detached (inside the PD rules, no load, EPR only up to the K2's monitor ceiling): `run` needs
 --confirm and never touches the output. Exit codes: 0 finished with stop "done", 2 K2 busy, 3 start refused, 4 timeout (the run is
 stopped), 5 the run ended with another stop reason (the report is still written), 6 the return to 5 V was not confirmed (unplug),
@@ -61,7 +62,8 @@ def cmd_report(a):
     except (OSError, ValueError, json.JSONDecodeError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
-    print(json.dumps(s["result"], indent=1) if a.json else pb.render_text(s["result"]))
+    print(json.dumps(s["result"], indent=1) if a.json else pb.render_text(s["result"]) + (
+        "\n" + family_text(s["family_s"]) if s.get("family_s") else ""))
     return 0
 
 
@@ -95,6 +97,20 @@ def spec_lines(frames):
     return [l for l in (logdb.decode_line(x) for x in text.splitlines()) if l.startswith("[PDSPEC]")]
 
 
+def family_times(seen, end_s):
+    """Seconds per family from the polls: seen = [(family, K2 elapsed_s at the first poll that showed it)] in order; a family runs
+    until the next one is first seen, the last one until end_s. Resolution: the 2 s poll."""
+    out = {}
+    for i, (fam, t) in enumerate(seen):
+        nxt = seen[i + 1][1] if i + 1 < len(seen) else end_s
+        out[fam] = out.get(fam, 0) + max(0, nxt - t)
+    return out
+
+
+def family_text(times):
+    return "time per family (2 s polls): " + ", ".join(f"{f} {s} s" for f, s in times.items()) if times else ""
+
+
 def run_dir(a, now):
     if a.out:
         return Path(a.out)
@@ -121,7 +137,7 @@ def cmd_run(a):
                 return 2
             link.tap = frames.append
             try:
-                st = kr.pdspec_start(link, families, True)
+                st = kr.pdspec_start(link, families, True, a.pps_full)
             except kr.RemoteError as e:
                 print(f"start refused: {e}", file=sys.stderr)
                 return 2 if "busy" in str(e).lower() else 3
@@ -134,6 +150,7 @@ def cmd_run(a):
         k2_lock.release()    # as tools/ct_start.py: the run goes on by itself, each poll below takes the lock for one exchange
         deadline = time.monotonic() + a.wait
         last, silent = None, 0
+        seen = [(st["family"], st["elapsed_s"])]
         while time.monotonic() < deadline:
             time.sleep(2)
             with k2_lock.hold():
@@ -157,6 +174,8 @@ def cmd_run(a):
                 print(f"K2 REBOOTED during the run (uptime {up_now / 1000:.1f} s, {time.monotonic() - t0:.0f} s after the start at "
                       f"uptime {up0 / 1000:.1f} s): the result is lost; stop and investigate", file=sys.stderr)
                 return 7
+            if st["state"] == "running" and st["family"] != seen[-1][0]:
+                seen.append((st["family"], st["elapsed_s"]))
             line = (st["state"], st["family"], st["item"])
             if line != last:
                 print(f"  {st['state']}, {st['family']} {st['item']}/{st['items']}, fails {st['fails']}, {st['elapsed_s']} s",
@@ -181,10 +200,11 @@ def cmd_run(a):
         return 7 if not blob else 5
     s["host_wall_s"] = round(time.monotonic() - t0, 1)
     s["k2_uptime_ms"] = {"start": up0, "end": up}       # one boot: end - start covers the run
+    s["family_s"] = family_times(seen, s["result"]["elapsed_s"])
     out = run_dir(a, now)
     out.mkdir(parents=True, exist_ok=True)
     (out / "result.json").write_text(json.dumps(s, indent=1) + "\n")
-    text = pb.render_text(s["result"])
+    text = pb.render_text(s["result"]) + "\n" + family_text(s["family_s"])
     (out / "report.txt").write_text(text + "\n")
     (out / "stream.log").write_text("\n".join(spec_lines(frames)) + "\n")
     print(text)
@@ -202,8 +222,10 @@ def build_parser():
     r.add_argument("--charger", default="unnamed", help="name of the charger under test (used in the directory name)")
     r.add_argument("--confirm", action="store_true", help="required: the charger is stepped, Hard Reset and detached; nothing is "
                    "on the output")
-    r.add_argument("--families", default="all", help="all (default), a mask (0x3f) or a comma list: transitions, pps-steps, "
+    r.add_argument("--families", default="all", help="all (default), a mask (0x3f) or a comma list: transitions, pps-avs, "
                    "pps-timeout, epr-timeout, hard-reset, detach")
+    r.add_argument("--pps-full", action="store_true", help="PPS 20 mV steps over the whole APDO window (default: three 10-step "
+                   "windows)")
     r.add_argument("--wait", type=float, default=1500, help="give up after this many seconds (default 1500; the K2 caps a run at "
                    "20 min)")
     r.add_argument("--out", help="output directory (default runs/pd-spec-<charger>-<stamp>)")

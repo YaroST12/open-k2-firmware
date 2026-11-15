@@ -1736,6 +1736,10 @@ static void test_pd_spec() {
     CHECK_EQ(run(f, request(0x5A, 6, {1, 0, kPdFlagConfirm}), r), 1);
     check_header(r, 0x5A, 6, Status::Ok, 17);
     CHECK_EQ(r[kRspHeader + 2], 3);
+    // the full 20 mV sweep option rides in the flags
+    CHECK_EQ(run(f, request(0x5A, 12, {1, 0x02, uint8_t(kPdFlagConfirm | kPdSpecFlagFull20)}), r), 1);
+    check_header(r, 0x5A, 12, Status::Ok, 17);
+    CHECK_EQ(f.pc_starts.back().flags, kPdFlagConfirm | kPdSpecFlagFull20);
     // a family bit past the last family, an unknown flag, a wrong length
     CHECK_EQ(run(f, request(0x5A, 7, {1, 0x40, kPdFlagConfirm}), r), 1);
     check_header(r, 0x5A, 7, Status::BadArg, 0);
@@ -1743,7 +1747,7 @@ static void test_pd_spec() {
     check_header(r, 0x5A, 8, Status::BadArg, 0);
     CHECK_EQ(run(f, request(0x5A, 9, {1, 0}), r), 1);
     check_header(r, 0x5A, 9, Status::BadLength, 0);
-    CHECK_EQ(f.pc_starts.size(), size_t(3));
+    CHECK_EQ(f.pc_starts.size(), size_t(4));
     // stop reaches the backend even while the ports are busy
     f.ports_busy_value = true;
     CHECK_EQ(run(f, request(0x5A, 10, {3}), r), 1);

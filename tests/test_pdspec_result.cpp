@@ -56,35 +56,30 @@ void score_is_weight_times_fails() {
 // A check whose limit is inferred (no figure in the specification behind it) is reported, never judged: the measured value and the
 // count over the inferred limit stay in the result, the verdict reads "unverified" and it adds nothing to the score.
 void inferred_limits_are_unverified() {
-    CHECK_COND(def(Check::DetachSafe0V).inferred);
-    CHECK_COND(def(Check::Reattach).inferred);
-    CHECK_COND(def(Check::PpsSettle).inferred);   // tPpsSrcTransSmall taken from the Accept: the table names the set-point time only
-    CHECK_COND(!def(Check::PsRdyTime).inferred);
-    CHECK_COND(!def(Check::HrRecover).inferred);
+    // Since the Type-C rows came in (docs/PD_TYPEC_BC12_SPEC_REFERENCE.md) the detach pair is judged; the 20 mV PPS settle (under the
+    // meter's resolution) is the one unverified check left.
+    CHECK_COND(def(Check::PpsSettle).inferred);
+    for (std::size_t k = 0; k < kChecks; ++k) CHECK_COND(def(Check(k)).inferred == (Check(k) == Check::PpsSettle));
     CHECK_COND(std::string_view(verdict_name(Verdict::Unverified)) == "unverified");
     Agg slow;
-    slow.add(Kind::Max, {900, 1, 0, 670});
-    CHECK_COND(verdict(Check::DetachSafe0V, slow) == Verdict::Unverified);
+    slow.add(Kind::Max, {40000, 1000, 0, 25000});
+    CHECK_COND(verdict(Check::PpsSettle, slow) == Verdict::Unverified);
     CHECK_EQ(int(slow.fails), 1);   // the count over the inferred limit is kept
-    CHECK_COND(verdict(Check::HrSafe0V, slow) == Verdict::Fail);
-    Agg quick;
-    quick.add(Kind::Max, {300, 1, 0, 5000});
-    CHECK_COND(verdict(Check::Reattach, quick) == Verdict::Unverified);
-    CHECK_COND(verdict(Check::Reattach, Agg{}) == Verdict::Skip);   // nothing measured is still a skip
+    CHECK_COND(verdict(Check::PpsBand, slow) == Verdict::Fail);
+    CHECK_COND(verdict(Check::PpsSettle, Agg{}) == Verdict::Skip);   // nothing measured is still a skip
     std::array<Agg, kChecks> agg{};
-    agg[std::size_t(Check::DetachSafe0V)].fails = 2;   // weight 5
-    agg[std::size_t(Check::Reattach)].fails = 1;       // weight 10
+    agg[std::size_t(Check::PpsSettle)].fails = 2;      // weight 1, unverified
     CHECK_EQ(int(score(agg)), 0);
     agg[std::size_t(Check::HrSafe0V)].fails = 1;       // weight 5, sourced
     CHECK_EQ(int(score(agg)), 5);
     // The blob carries the verdict the report shows.
     std::array<Agg, kChecks> b_agg{};
-    b_agg[std::size_t(Check::Reattach)] = slow;
+    b_agg[std::size_t(Check::PpsSettle)] = slow;
     BlobHead h;
     Timers t;
     const BlobReader r(h, b_agg, t, {}, {});
     std::array<std::uint8_t, 1> v{};
-    CHECK_EQ(int(r.read(kBlobHeader + std::size_t(Check::Reattach) * kAggBytes, v)), 1);
+    CHECK_EQ(int(r.read(kBlobHeader + std::size_t(Check::PpsSettle) * kAggBytes, v)), 1);
     CHECK_EQ(int(v[0]), int(Verdict::Unverified));
 }
 
@@ -94,26 +89,39 @@ void defs_are_complete() {
         CHECK_COND(std::string_view(d.label).size() <= 13);
     }
     CHECK_COND(std::string_view(def(Check::SourceReset).key) == "source_reset");
+    // PSC1 readers see the first 21 checks in their old order; the new ones are appended.
+    CHECK_EQ(int(Check::SourceReset) + 1, int(kChecksPsc1));
+    CHECK_COND(std::string_view(def(Check::ReattachCaps).key) == "reattach_caps");
+    // The verified limits are judged: the detach pair (Type-C) and the programmable band / PS_RDY; the 20 mV settle stays unverified.
+    for (const Check c : {Check::DetachSafe0V, Check::Reattach, Check::PpsBand, Check::PpsPsRdy, Check::PpsStatus, Check::AvsBand})
+        CHECK_COND(!def(c).inferred);
+    CHECK_COND(def(Check::PpsSettle).inferred);
+    for (std::size_t k = 0; k < kChecks; ++k) CHECK_COND(avs_check(Check(k)) == (std::string_view(kDefs[k].key).substr(0, 4) == "avs_"));
 }
 
 void blob_layout() {
     BlobHead h;
-    h.state = 3; h.stop = 1; h.n_trans = 2; h.n_pps = 1; h.score = 0x1234; h.elapsed_s = 300;
+    h.state = 3; h.stop = 1; h.n_trans = 2; h.n_pass = 1; h.score = 0x1234; h.elapsed_s = 300;
+    h.caps_note = CapsNote::PpsNoAvs; h.opts = kOptFull20;
     std::array<Agg, kChecks> agg{};
     agg[1].add(Kind::Max, {400000, 0, 0, 325000, 4, 1});
     Timers t;
     t.pps_ka_ms = 13500;
     std::array<TransRec, 2> tr{};
     tr[1].from = 4; tr[1].to = 1; tr[1].band_ms = 900;
-    std::array<PpsRec, 1> pp{};
-    pp[0].set_mv = 5000;
+    std::array<PassRec, 1> pp{};
+    pp[0].pos = 5; pp[0].cls = 2; pp[0].steps = 770; pp[0].lo_mv = 3300; pp[0].status = kPsOmf;
     const BlobReader r(h, agg, t, tr, pp);
     CHECK_EQ(int(r.size()), int(blob_len(2, 1)));
     std::vector<std::uint8_t> b(r.size());
     CHECK_EQ(int(r.read(0, b)), int(b.size()));
     CHECK_EQ(int(b[0]), int('P'));
-    CHECK_EQ(int(b[3]), int('1'));
+    CHECK_EQ(int(b[3]), int('2'));
+    CHECK_EQ(int(b[7]), 1);
     CHECK_EQ(int(b[8] | b[9] << 8), 0x1234);
+    CHECK_EQ(int(b[13]), int(kChecks));
+    CHECK_EQ(int(b[14]), int(CapsNote::PpsNoAvs));
+    CHECK_EQ(int(b[15]), int(kOptFull20));
     const std::size_t a1 = kBlobHeader + kAggBytes;
     CHECK_EQ(int(b[a1]), int(Verdict::Fail));
     CHECK_EQ(int(b[a1 + 2]), 4);
@@ -121,12 +129,17 @@ void blob_layout() {
     CHECK_EQ(int(b[a1 + 8] | b[a1 + 9] << 8 | b[a1 + 10] << 16), 400000);
     const std::size_t to = kBlobHeader + kChecks * kAggBytes;
     CHECK_EQ(int(b[to] | b[to + 1] << 8), 13500);
-    const std::size_t r1 = to + kTimerBytes + sizeof(TransRec);
+    const std::size_t r1 = to + kTimerBytes + kTransBytes;
     CHECK_EQ(int(b[r1]), 4);
     CHECK_EQ(int(b[r1 + 1]), 1);
     CHECK_EQ(int(b[r1 + 10] | b[r1 + 11] << 8), 900);
-    const std::size_t p0 = to + kTimerBytes + 2 * sizeof(TransRec);
-    CHECK_EQ(int(b[p0 + 4] | b[p0 + 5] << 8), 5000);
+    const std::size_t p0 = to + kTimerBytes + 2 * kTransBytes;
+    CHECK_EQ(int(b[p0]), 5);
+    CHECK_EQ(int(b[p0 + 1]), 2);
+    CHECK_EQ(int(b[p0 + 2] | b[p0 + 3] << 8), 770);
+    CHECK_EQ(int(b[p0 + 4] | b[p0 + 5] << 8), 3300);
+    CHECK_EQ(int(b[p0 + 26]), int(kPsOmf));
+    CHECK_EQ(int(b.size()), int(p0 + sizeof(PassRec)));
     // Chunked reads give the same bytes.
     std::array<std::uint8_t, 48> c{};
     CHECK_EQ(int(r.read(48, c)), 48);

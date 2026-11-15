@@ -49,11 +49,22 @@ struct TransitionOut {
     std::uint32_t max_gap_us = 0;          // the largest sample spacing after the Accept
 };
 
+struct StepIn {
+    std::uint32_t accept_us = 0;           // the Accept's RX edge on the capture's clock
+    std::int32_t from_mv = 0, to_mv = 0;   // the previous and the requested set point (PPS or AVS)
+};
+
 struct StepOut {
     bool valid = false;
     std::int32_t final_mv = 0;             // mean of the window's last kTailUs
     Timed settle;                          // Accept -> the first sample from which VBUS stays within kSettleTolMv of final_mv
     bool settled = false;
+    // On the raw samples (as analyze_transition): a mean would lag the entry by up to three samples, which the bracket does not cover,
+    // and shrink a short excursion; the monitor's +-13 mV scatter is nothing against a +-5 % band.
+    Timed band;                            // Accept -> the first sample from which VBUS stays inside +-5 % of to_mv (vPpsNew / vAvsNew)
+    std::uint32_t out_us = 0;              // after VBUS first entered that band: the longest stretch outside it (to the window's end
+                                           // when it never came back)
+    std::int32_t peak_mv = 0;              // after the Accept: the highest sample of an up-step, the lowest of a down-step
 };
 
 inline constexpr std::int32_t kDepartMinMv = 100;
@@ -164,9 +175,12 @@ TransitionOut analyze_transition(const Rec& r, const TransitionIn& in) {
     return o;
 }
 
-// A small programmable step (PPS): the level the source settled on and how long it took after the Accept.
+// A programmable step (PPS or AVS): the level the source settled on, when VBUS entered the new band and stayed, how long it left the
+// band again after entering it, and its peak, all after the Accept.
 template <class Rec>
-StepOut analyze_step(const Rec& r, std::uint32_t accept_us) {
+StepOut analyze_step(const Rec& r, StepIn in) {
+    const std::uint32_t accept_us = in.accept_us;
+    const bool up = in.to_mv >= in.from_mv;
     StepOut o;
     const std::size_t n = r.sample_count();
     if (n == 0) return o;
@@ -182,6 +196,9 @@ StepOut analyze_step(const Rec& r, std::uint32_t accept_us) {
     o.valid = true;
     o.final_mv = std::int32_t(sum / cnt);
     bool have = false, have_prev = false;
+    bool in_now = false, entered = false;  // the mean inside the band at the latest sample; it has been inside once
+    std::uint32_t out_from = 0;            // the first sample of the current stretch outside the band (after the first entry)
+    bool peak_set = false;
     std::uint32_t prev_t = 0;
     std::int32_t win[kSettleMeanN] = {};   // the last kSettleMeanN samples after the Accept (fewer at its start)
     std::size_t wn = 0;
@@ -204,8 +221,22 @@ StepOut analyze_step(const Rec& r, std::uint32_t accept_us) {
             have = false;
             o.settle = {};
         }
+        const std::int32_t v = s.vbus_mv;
+        if (!peak_set || (up ? v > o.peak_mv : v < o.peak_mv)) { o.peak_mv = v; peak_set = true; }
+        if (in_band(v, in.to_mv)) {
+            if (!in_now) {
+                o.band = {s.t_us - accept_us, gap, true};
+                if (entered && s.t_us - out_from > o.out_us) o.out_us = s.t_us - out_from;
+            }
+            in_now = entered = true;
+        } else {
+            if (in_now) out_from = s.t_us;
+            in_now = false;
+            o.band = {};
+        }
     }
     o.settled = have;
+    if (entered && !in_now && t_end - out_from > o.out_us) o.out_us = t_end - out_from;
     return o;
 }
 

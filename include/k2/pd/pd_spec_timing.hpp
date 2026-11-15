@@ -12,14 +12,24 @@
 namespace k2::pd::spec {
 
 // Message handshakes (ms).
-inline constexpr std::uint32_t kReceiverResponseMs = 15;      // tReceiverResponse: GoodCRC after a message
+// tReceiverResponse: the responder's answer (Accept / Reject / Wait to a Request, PPS_Status to a Get_PPS_Status, ...) starts within this
+// after the last bit of the GoodCRC that acknowledged the message (PD R3.3 Table 7.10, CTS COMMON.CHECK.PD.4#1;
+// docs/PD_TYPEC_BC12_SPEC_REFERENCE.md B.1). tSenderResponse below is the ASKING side's give-up timer, not the source's limit.
+inline constexpr std::uint32_t kReceiverResponseMs = 15;
 inline constexpr std::uint32_t kSenderResponseMinMs = 27;     // tSenderResponse: the source's Accept / Reject / Wait after a Request
 inline constexpr std::uint32_t kSenderResponseMaxMs = 50;
 inline constexpr std::uint32_t kSinkRequestMs = 100;          // tSinkRequest: earliest re-Request after a Wait
-// Request -> Accept as the K2 measures it, TX_START to the Accept's RX edge: the limit above plus the Request frame, its GoodCRC and the
-// Accept frame on the wire (about 1.5-2 ms at 300 kbit/s, inferred). The scorer applies it, not the bare 50 ms.
+// Request -> Accept as the K2 measures it, TX_START to the Accept's RX edge: tReceiverResponse plus what lies on the wire around it, at
+// 300 kbit/s (3.33 us a bit, 4b5b): the Request (preamble 64 + SOP 20 + header 20 + one object 40 + CRC 40 + EOP 5 = 189 bits, 0.63 ms),
+// the turnaround (tTransmit, under 0.2 ms), its GoodCRC (149 bits, 0.50 ms) and the Accept itself when the edge is its end (0.50 ms):
+// 1.8 ms, taken as 2 ms (derived). Conservative: the allowance only ever widens the window by the frames' own length.
 inline constexpr std::uint32_t kAcceptWireOverheadMs = 2;
+// The PD Spec Check judges the Accept against tReceiverResponse; the charger diagnostics (LateAccept) and PD Stress keep the looser
+// tSenderResponse bound (kAcceptLimitMs), a sink's own patience, so their verdicts do not move with this check.
+inline constexpr std::uint32_t kAcceptSpecLimitMs = kReceiverResponseMs + kAcceptWireOverheadMs;
 inline constexpr std::uint32_t kAcceptLimitMs = kSenderResponseMaxMs + kAcceptWireOverheadMs;
+// Get_PPS_Status -> PPS_Status the same way (a control message, its GoodCRC, then the extended answer: under 2 ms of frames, derived).
+inline constexpr std::uint32_t kPpsStatusLimitMs = kReceiverResponseMs + kAcceptWireOverheadMs;
 
 // Power transition.
 inline constexpr std::uint32_t kSrcTransitionMinMs = 25;      // tSrcTransition: Accept to the source starting to move VBUS
@@ -40,8 +50,19 @@ inline constexpr std::uint32_t kPpsSmallStepMs = 25;
 inline constexpr std::uint32_t kPpsLargeStepMs = 275;
 inline constexpr std::uint32_t kAvsStepMv = 100;              // AVS resolution
 inline constexpr std::uint32_t kAvsSmallStepMv = 1000;        // AVS: a step up to this is "small": kAvsSmallStepMs, bigger kAvsLargeStepMs
-inline constexpr std::uint32_t kAvsSmallStepMs = 50;
-inline constexpr std::uint32_t kAvsLargeStepMs = 700;
+inline constexpr std::uint32_t kAvsSmallStepMs = 50;          // tAvsSrcTransSmall, VBUS in vAvsNew and PS_RDY (PD R3.3 4.5.1.2)
+// A large AVS step is an ordinary transition in PD R3.3: tSrcTransition + tSrcReady (35 + 285 ms) for the level, tSrcTransReq (325 ms) for
+// PS_RDY; the check takes 325 ms for both (derived, docs/PD_PPS_AVS_SPEC_REFERENCE.md section 4).
+inline constexpr std::uint32_t kAvsLargeStepMs = 325;
+// The band beyond vPpsNew / vAvsNew a step may overshoot into, and how long VBUS may stay between the two (no load: tPpsTransient's
+// under-60 mA row; tAvsTransient has a single 5 ms row).
+inline constexpr std::int32_t kPpsValidExtraMv = 100;        // vPpsValid
+inline constexpr std::uint32_t kPpsTransientMs = 150;        // tPpsTransient, load < 60 mA
+inline constexpr std::int32_t kAvsValidExtraMv = 500;        // vAvsValid
+inline constexpr std::uint32_t kAvsTransientMs = 5;          // tAvsTransient
+inline constexpr std::uint32_t kAvsNewPermille = 50;         // vAvsNew, +-5 %
+// PPS_Status at no load (PD CTS SRC3.7#2): Output Voltage within +-3 % of the request (rounded to 20 mV) or 0xFFFF.
+inline constexpr std::uint32_t kPpsStatusVoltPermille = 30;
 
 // VBUS band after PS_RDY: vSrcNew is the nominal +-5 %, vSrcValid a further +-0.5 V while settling.
 inline constexpr std::uint32_t kVSrcNewPermille = 50;
@@ -65,8 +86,10 @@ inline constexpr std::uint32_t kHardResetRecoveryMaxMs = 2200;
 // settled tSrcSettle after it started, so tSrcTransition max + tSrcSettle after the Accept (derived).
 inline constexpr std::uint32_t kInBandSprMs = kSrcTransitionMaxMs + kSrcSettleSprMs;   // 310 ms (derived)
 inline constexpr std::uint32_t kInBandEprMs = kSrcTransitionMaxMs + kSrcSettleEprMs;   // 735 ms (derived)
-// PPS output: vPpsNew is the requested voltage +-5 % (same permille as vSrcNew). The step settles within tPpsSrcTransSmall /
-// tPpsSrcTransLarge (kPpsSmallStepMs / kPpsLargeStepMs), taken from the Accept (inferred: the table names the set-point time only).
+// PPS output: vPpsNew is the requested voltage +-5 % (same permille as vSrcNew). VBUS inside vPpsNew and PS_RDY sent, both within
+// tPpsSrcTransSmall / tPpsSrcTransLarge (kPpsSmallStepMs / kPpsLargeStepMs) of the last bit of the GoodCRC that acknowledged the Accept
+// (PD R3.3 4.5.2.1, SPT 7.1.4.2.1#11/#12, CTS PS.SRC.2#9/#10). The K2 times from the Accept's RX edge, under 1 ms earlier than that
+// GoodCRC's end: the measured time is a little longer than the source's, so the check is conservative.
 inline constexpr std::uint32_t kPpsNewPermille = 50;
 // Hard Reset, source side: tPSHardReset after the signalling the source starts to remove VBUS, VBUS reaches vSafe0V within tSafe0V,
 // stays off for tSrcRecover, is back at vSafe5V within tSrcTurnOn, and the first Source_Capabilities follow within tFirstSourceCap.
@@ -80,10 +103,18 @@ inline constexpr std::uint32_t kSrcRecoverEprMinMs = 1085;    // tSrcRecover whe
 inline constexpr std::uint32_t kSrcRecoverEprMaxMs = 1425;
 inline constexpr std::uint32_t kSrcTurnOnMs = 275;            // tSrcTurnOn
 inline constexpr std::uint32_t kFirstSourceCapMs = 250;       // tFirstSourceCap
-// A sink detach (Rd removed): the source removes VBUS, which must reach vSafe0V within tVBUSOFF (Type-C, 650 ms, the same figure as
-// tSafe0V; inferred) after the source's own CC debounce (tPDDebounce 10-20 ms, inferred). The check allows both.
+// A sink detach (Rd removed): the source sees SRC.Open within tSRCDisconnect (0-20 ms) and VBUS reaches vSafe0V within tVBUSOFF
+// (0-650 ms) (Type-C R2.5 Tables 4-34 / 4-32; docs/PD_TYPEC_BC12_SPEC_REFERENCE.md). The check allows both: 670 ms.
 inline constexpr std::uint32_t kVbusOffMs = 650;
-inline constexpr std::uint32_t kPdDebounceMaxMs = 20;
+inline constexpr std::uint32_t kSrcDisconnectMaxMs = 20;
+// Rd back: the source debounces it (tCCDebounce 100-200 ms), has its bulk capacitor ready (tBulkDischarge, 275 ms after a level up to
+// 21 V, 700 ms above), and VBUS reaches vSafe5V min within tVBUSON (275 ms) of entering Attached.SRC; the first Source_Capabilities
+// follow within tFirstSourceCap (above) of vSafe5V (Type-C R2.5 Tables 4-32 / 4-34).
+inline constexpr std::uint32_t kCcDebounceMaxMs = 200;
+inline constexpr std::uint32_t kBulkDischargeMs = 275;
+inline constexpr std::uint32_t kBulkDischargeHvMs = 700;
+inline constexpr std::int32_t kBulkDischargeHvAboveMv = 21000;
+inline constexpr std::uint32_t kVbusOnMs = 275;
 // Keep-alives: in a PPS contract the sink re-requests within tPPSRequest (10 s); the source's timer is tPPSTimeout (12-15 s) and it
 // answers the silence with a Hard Reset (that last part is unverified in the research: a source that never resets is reported).
 // In EPR mode the sink sends EPR_KeepAlive every tSinkEPRKeepAlive (250-500 ms); the source's timer is tSourceEPRKeepAlive (750-1000 ms).

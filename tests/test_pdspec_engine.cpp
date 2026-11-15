@@ -27,6 +27,15 @@ pd::Pdo fixed(std::uint16_t mv, bool epr_bit = false) {
     d.raw = (1u << 26) | (epr_bit ? 1u << 23 : 0u) | (std::uint32_t(mv / 50) << 10) | 300;
     return d;
 }
+pd::Pdo avs(std::uint16_t lo, std::uint16_t hi) {
+    pd::Pdo d;
+    d.type = pd::PdoType::Avs;
+    d.min_mv = lo;
+    d.max_mv = hi;
+    d.max_ma = 3000;
+    d.raw = 0xD0000000u;
+    return d;
+}
 pd::Pdo pps(std::uint16_t lo, std::uint16_t hi) {
     pd::Pdo d;
     d.type = pd::PdoType::Pps;
@@ -46,6 +55,10 @@ struct Sim final : Env {
     int accept_ms = 5, start_ms = 30, pps_start_ms = 5, psrdy_after_ms = 10;
     int early_psrdy_ms = -1;            // >= 0: PS_RDY this long after the Accept, wherever VBUS is
     int pps_offset_mv = 0;              // a PPS output this far off its set point
+    int pps_overshoot_mv = 0;           // a programmable step up overshoots its level by this much for pps_overshoot_ms
+    int pps_overshoot_ms = 0;
+    int pps_status_ms = 3;              // Get_PPS_Status -> PPS_Status
+    int pps_status_mode = 0;            // 0 a clean answer, 1 Not_Supported, 2 silence, 3 OMF set, 4 voltage off by 10 %
     std::uint8_t no_psrdy_pos = 0;      // Accept, then no PS_RDY: the sink Hard Resets after tPSTransition
     std::uint8_t wait_pos = 0;          // Wait until the sink gives up (WaitExhausted)
     std::uint8_t stuck_pos = 0;         // no answer at all, and no give-up (a stuck sink)
@@ -81,7 +94,9 @@ struct Sim final : Env {
     std::vector<transcap::Sample> cs;
     std::vector<transcap::Marker> cm;
     // ---- what the engine did ----
-    int releases = 0, captures = 0, requests = 0, notes = 0;
+    int releases = 0, captures = 0, requests = 0, notes = 0, pps_asks = 0, pps_asks_in_ka = 0;
+    std::uint32_t pps_status_at = 0, pps_ask_t = 0, over_until = 0;
+    std::int32_t over_v = 0;
     std::int32_t max_req_mv = 0;
     bool finished = false;
     Stop stop = Stop::None;
@@ -151,6 +166,7 @@ struct Sim final : Env {
             vt = level(want) + (p ? pps_offset_mv : 0);
             ramp_at = t + std::uint32_t(p ? pps_start_ms : start_ms);
             rate = vt >= v ? rise : fall;
+            if (p && pps_overshoot_mv && vt > v) over_v = vt + pps_overshoot_mv;
             reached = vt == v;
             reached_at = t;
             ev = want.pos == no_psrdy_pos ? Ev::Never : Ev::PsRdy;
@@ -180,10 +196,29 @@ struct Sim final : Env {
             if (s.epr_mode) s.epr_ka_at = t;
             ev = Ev::None;
         }
-        // VBUS.
-        if (t >= ramp_at && v != vt) {
+        // VBUS (an overshoot sits on top of the level for its while once the ramp is there).
+        if (over_until && t >= over_until) { over_until = 0; v = vt; }
+        if (t >= ramp_at && v != vt && !over_until) {
             v = v < vt ? (vt - v > rate ? v + rate : vt) : (v - vt > rate ? v - rate : vt);
-            if (v == vt) { reached = true; reached_at = t; }
+            if (v == vt) {
+                reached = true;
+                reached_at = t;
+                if (over_v) { v = over_v; over_v = 0; over_until = t + std::uint32_t(pps_overshoot_ms); }
+            }
+        }
+        // Get_PPS_Status.
+        if (s.pps_ask == pd::PpsAsk::Pending && pps_status_mode == 2 && t >= pps_ask_t + 200) { s.pps_ask = pd::PpsAsk::Timeout; ++s.pps_seq; }
+        if (s.pps_ask == pd::PpsAsk::Pending && pps_status_mode != 2 && t >= pps_status_at) {
+            s.pps_rx_us = (t * 1000) | 1;
+            ++s.pps_seq;
+            if (pps_status_mode == 1) {
+                s.pps_ask = pd::PpsAsk::NotSupported;
+            } else {
+                s.pps_ask = pd::PpsAsk::Got;
+                s.pps_mv_raw = std::uint16_t((pps_status_mode == 4 ? v * 11 / 10 : v) / 20);
+                s.pps_ma_raw = 0;
+                s.pps_flags = std::uint8_t(1 << 1 | (pps_status_mode == 3 ? 8 : 0));
+            }
         }
         // Keep-alives (the sink's) and the source's timers.
         if (s.attached && s.state == pd::SinkState::Ready) {
@@ -295,6 +330,17 @@ struct Sim final : Env {
         }
     }
     void keepalive_silence(Silence k) override { sil = k; }
+    pd::Err ask_pps_status() override {
+        if (!s.attached || s.state != pd::SinkState::Ready || ev != Ev::None || s.pps_ask == pd::PpsAsk::Pending) return pd::Err::Busy;
+        ++pps_asks;
+        if (sil == Silence::Pps) ++pps_asks_in_ka;
+        s.pps_ask = pd::PpsAsk::Pending;
+        s.pps_ask_us = (t * 1000) | 1;
+        s.pps_rx_us = 0;
+        pps_ask_t = t;
+        pps_status_at = t + std::uint32_t(pps_status_ms);
+        return pd::Err::Ok;
+    }
     bool capture_start(std::uint32_t post_us) override {
         if (cap_busy || cap_on) return false;
         ++captures;
@@ -309,7 +355,7 @@ struct Sim final : Env {
     bool capture_frozen() override { return cap_on && t * 1000 >= cap_end; }
     Edges capture_edges(std::uint32_t from_us) override { return find_edges(view(), from_us); }
     TransitionOut capture_transition(const TransitionIn& in) override { return analyze_transition(view(), in); }
-    StepOut capture_step(std::uint32_t accept_us) override { return analyze_step(view(), accept_us); }
+    StepOut capture_step(const StepIn& in) override { return analyze_step(view(), in); }
     void capture_stop() override { cap_on = false; }
     void on_note(const char*) override { ++notes; }
     void on_finish(Stop st) override { finished = true; stop = st; }
@@ -322,6 +368,8 @@ struct Sim final : Env {
         item_total[std::size_t(f)] = total;
     }
 };
+
+std::uint8_t bit(Family f) { return std::uint8_t(1u << std::uint8_t(f)); }
 
 void typical(Sim& m) { m.list({fixed(5000), fixed(9000), fixed(15000), fixed(20000), pps(3300, 11000)}); }
 
@@ -386,22 +434,54 @@ void clean_source_scores_zero() {
     }
     CHECK_COND(verdict(e, Check::AcceptTime) == Verdict::Pass);
     CHECK_EQ(e.agg(Check::AcceptTime).worst, 5000);
-    // PPS 3.3-11 V: three points (5000, 7940, 10900), 10 steps each.
-    CHECK_EQ(int(e.pps().size()), 3);
-    CHECK_EQ(int(e.agg(Check::PpsAccuracy).n), 30);
+    // PPS 3.3-11 V: four passes over the window (plan.hpp): 20 mV in three 10-step windows up and three down (60 moves), 100 mV (154),
+    // 500 mV (32) and the two slams; every move measured and judged.
+    CHECK_EQ(int(e.passes().size()), 4);
+    CHECK_EQ(int(e.agg(Check::PpsAccuracy).n), 248);
+    CHECK_EQ(int(e.agg(Check::PpsMonotonic).n), 248);
+    CHECK_EQ(int(e.agg(Check::PpsPsRdy).n), 248);
+    CHECK_EQ(int(e.agg(Check::PpsSettle).n), 60);
+    CHECK_EQ(int(e.agg(Check::PpsBand).n), 188);
     CHECK_COND(verdict(e, Check::PpsMonotonic) == Verdict::Pass);
-    CHECK_COND(verdict(e, Check::PpsSettle) == Verdict::Unverified);   // an inferred limit: reported, never judged
+    CHECK_COND(verdict(e, Check::PpsBand) == Verdict::Pass);
+    CHECK_COND(verdict(e, Check::PpsPsRdy) == Verdict::Pass);
+    CHECK_COND(verdict(e, Check::PpsOvershoot) == Verdict::Pass);
+    CHECK_COND(verdict(e, Check::PpsTransient) == Verdict::Pass);
+    CHECK_COND(verdict(e, Check::PpsSettle) == Verdict::Unverified);   // under the meter's resolution: reported, never judged
     CHECK_EQ(int(e.agg(Check::PpsSettle).fails), 0);
-    CHECK_EQ(int(e.pps()[1].set_mv), 7940);
-    CHECK_EQ(int(e.pps()[1].steps), 10);
+    // Get_PPS_Status at the top and the end of every pass, clean, answered in 3 ms; never inside the keep-alive silence.
+    CHECK_EQ(int(e.agg(Check::PpsStatus).n), 8);
+    CHECK_COND(verdict(e, Check::PpsStatus) == Verdict::Pass);
+    CHECK_EQ(e.agg(Check::PpsStatusTime).worst, 3000);
+    CHECK_EQ(m.pps_asks, 8);
+    CHECK_EQ(m.pps_asks_in_ka, 0);
+    const PassRec& p0 = e.passes()[0];
+    CHECK_EQ(int(p0.pos), 5);
+    CHECK_EQ(int(p0.cls), 0);
+    CHECK_EQ(int(p0.lo_mv), 3300);
+    CHECK_EQ(int(p0.hi_mv), 11000);
+    CHECK_EQ(int(p0.steps), 60);
+    CHECK_EQ(int(e.passes()[3].cls), 3);
+    CHECK_EQ(int(e.passes()[3].steps), 2);
+    // A 3.3 -> 11 V slam: the ramp's first 100 mV 5 ms after the Accept, 11 V on its 77th, PS_RDY 10 ms after: 91 ms, inside
+    // tPpsSrcTransLarge.
+    CHECK_EQ(int(e.passes()[3].psrdy_100us), 910);
+    // No AVS in the list: its checks say so, and the caps note is the advisory one.
+    CHECK_COND(e.agg(Check::AvsBand).skip == Skip::NoAvs);
+    CHECK_COND(e.caps_note() == CapsNote::PpsNoAvs);
     // The timers.
     CHECK_COND(verdict(e, Check::PpsKeepAlive) == Verdict::Pass);
     CHECK_COND(e.timers().pps_ka_ms >= 12900 && e.timers().pps_ka_ms <= 13100);
     CHECK_COND(verdict(e, Check::EprKeepAlive) == Verdict::Skip);
     CHECK_COND(e.agg(Check::EprKeepAlive).skip == Skip::NoEpr);
     for (const Check c : {Check::HrSafe0V, Check::HrRecover, Check::HrTurnOn, Check::HrCaps}) CHECK_COND(verdict(e, c) == Verdict::Pass);
-    // The detach limits are inferred: measured and reported, never judged.
-    for (const Check c : {Check::DetachSafe0V, Check::Reattach}) CHECK_COND(verdict(e, c) == Verdict::Unverified);
+    // The detach limits (Type-C R2.5): tSRCDisconnect + tVBUSOFF to vSafe0V; Rd back -> vSafe5V within tCCDebounce + tBulkDischarge +
+    // tVBUSON (750 ms from 20 V), the capabilities within tFirstSourceCap of it. The model: 300 ms dark, 5 V 50 ms into the rise, the
+    // capabilities 150 ms after the rise starts.
+    for (const Check c : {Check::DetachSafe0V, Check::Reattach, Check::ReattachCaps}) CHECK_COND(verdict(e, c) == Verdict::Pass);
+    CHECK_EQ(e.agg(Check::Reattach).hi, 750);
+    CHECK_COND(e.agg(Check::Reattach).worst >= 340 && e.agg(Check::Reattach).worst <= 360);
+    CHECK_COND(e.agg(Check::ReattachCaps).worst >= 90 && e.agg(Check::ReattachCaps).worst <= 110);
     // 20 V at 100 mV/ms after 25 ms: under 800 mV at 217 ms; 700 ms dark; 5 V at +43 ms, the capabilities 150 ms after the rise.
     CHECK_COND(e.timers().hr_off_ms >= 215 && e.timers().hr_off_ms <= 219);
     CHECK_COND(e.timers().hr_dark_ms >= 700 && e.timers().hr_dark_ms <= 720);
@@ -451,11 +531,13 @@ void pps_offset_and_slow_settle() {
     drive(m, e);
     check_safe_end(m, e);
     CHECK_COND(e.stop() == Stop::Done);
+    // Under 6 V the 300 mV are outside vPpsNew: the level, settled where it is, fails its accuracy (and never enters the band).
     CHECK_COND(verdict(e, Check::PpsAccuracy) == Verdict::Fail);
-    CHECK_EQ(int(e.agg(Check::PpsAccuracy).fails), 10);
-    CHECK_EQ(int(e.pps()[0].acc_fails), 10);
-    CHECK_EQ(int(e.pps()[0].worst_err_mv), 300);
-    CHECK_COND(verdict(e, Check::PpsSettle) == Verdict::Unverified);   // slow, but the limit is inferred: no fail, no penalty
+    CHECK_COND(e.agg(Check::PpsAccuracy).fails > 0);
+    CHECK_COND(e.passes()[0].acc_fails > 0);
+    CHECK_EQ(int(e.passes()[0].worst_err_mv), 300);
+    CHECK_COND(verdict(e, Check::PpsBand) == Verdict::Fail);           // 40 ms dead time: late for tPpsSrcTransSmall (verified)
+    CHECK_COND(verdict(e, Check::PpsSettle) == Verdict::Unverified);   // slow, but the 20 mV settle is unverified: no fail, no penalty
     CHECK_COND(e.agg(Check::PpsSettle).fails > 0);                     // the count over it is kept
     CHECK_COND(verdict(e, Check::PpsMonotonic) == Verdict::Pass);
     CHECK_COND(verdict(e, Check::Accuracy) == Verdict::Pass);   // the fixed levels are not touched
@@ -491,7 +573,7 @@ void source_back_at_its_old_level() {
     check_safe_end(m, e);
     CHECK_COND(e.stop() == Stop::Done);
     CHECK_EQ(int(e.score()), 0);
-    CHECK_COND(verdict(e, Check::Reattach) == Verdict::Unverified);
+    CHECK_COND(verdict(e, Check::Reattach) == Verdict::Pass);
 }
 
 void capture_busy_falls_back_to_stamps_and_polling() {
@@ -506,7 +588,7 @@ void capture_busy_falls_back_to_stamps_and_polling() {
     CHECK_EQ(int(e.score()), 0);
     for (const Check c : {Check::SrcStart, Check::PsRdyEarly, Check::PsRdyLow, Check::Overshoot, Check::PpsAccuracy})
         CHECK_COND(e.agg(c).skip == Skip::NoCapture);
-    CHECK_EQ(int(e.agg(Check::AcceptTime).n), 12 + 30);
+    CHECK_EQ(int(e.agg(Check::AcceptTime).n), 12 + 248);
     CHECK_EQ(int(e.agg(Check::RiseTime).n), 6);
     CHECK_EQ(int(e.agg(Check::FallTime).n), 6);
     for (const TransRec& r : e.trans()) CHECK_COND((r.flags & kTrNoCapture) && (r.flags & kTrLiveBand));
@@ -609,8 +691,8 @@ void item_counter_never_passes_its_total() {
         CHECK_EQ(m.items_over, 0);
         CHECK_EQ(m.item_total[std::size_t(Family::Transitions)], 12);
         CHECK_EQ(m.item_last[std::size_t(Family::Transitions)], 12);
-        CHECK_EQ(m.item_total[std::size_t(Family::Pps)], 3);
-        CHECK_EQ(m.item_last[std::size_t(Family::Pps)], 3);
+        CHECK_EQ(m.item_total[std::size_t(Family::Pps)], 4);   // one APDO window, four passes
+        CHECK_EQ(m.item_last[std::size_t(Family::Pps)], 4);
     }
 }
 
@@ -743,7 +825,7 @@ void family_selection() {
     CHECK_COND(e.agg(Check::AcceptTime).skip == Skip::NotSelected);
     CHECK_COND(e.agg(Check::PpsKeepAlive).skip == Skip::NotSelected);
     CHECK_COND(verdict(e, Check::HrSafe0V) == Verdict::Pass);
-    CHECK_COND(verdict(e, Check::DetachSafe0V) == Verdict::Unverified);
+    CHECK_COND(verdict(e, Check::DetachSafe0V) == Verdict::Pass);
     CHECK_EQ(m.max_req_mv, 20000);   // the top fixed level the reset is made from
 }
 
@@ -813,9 +895,9 @@ void cancel_anywhere_ends_safe() {
     }
 }
 
-// A source that drains slowly after the detach and comes back late: both are over the K2's inferred limits (tVBUSOFF + tPDDebounce,
-// the 5 s re-attach), so the numbers and the counts are reported, the verdict reads "unverified" and the score stays 0.
-void slow_detach_is_unverified_not_failed() {
+// A source that drains slowly after the detach and comes back late: both are over the Type-C limits (tSRCDisconnect + tVBUSOFF, 670 ms;
+// tCCDebounce + tBulkDischarge + tVBUSON, 750 ms from 20 V): two verified fails, their weights in the score.
+void slow_detach_fails_the_type_c_limits() {
     Sim m;
     typical(m);
     m.bleed = 20;          // 20 V at 20 mV/ms: about 960 ms to vSafe0V
@@ -828,9 +910,131 @@ void slow_detach_is_unverified_not_failed() {
     CHECK_COND(e.timers().det_off_ms >= 900);
     CHECK_COND(e.agg(Check::DetachSafe0V).fails == 1);
     CHECK_COND(e.agg(Check::Reattach).fails == 1);
-    CHECK_COND(verdict(e, Check::DetachSafe0V) == Verdict::Unverified);
-    CHECK_COND(verdict(e, Check::Reattach) == Verdict::Unverified);
+    CHECK_COND(verdict(e, Check::DetachSafe0V) == Verdict::Fail);
+    CHECK_COND(verdict(e, Check::Reattach) == Verdict::Fail);
+    CHECK_COND(verdict(e, Check::ReattachCaps) == Verdict::Pass);
+    CHECK_EQ(int(e.score()), int(def(Check::DetachSafe0V).weight + def(Check::Reattach).weight));
+}
+
+// Get_PPS_Status answers: a refusal (it is required of a PPS source), silence, OMF set at no load, a voltage 10 % off. Each is a verified
+// fail with its fault bit; the answer time is timed only when an answer came.
+void pps_status_answers() {
+    const struct { int mode; std::int32_t bits; } cases[] = {{1, kPsNotSupported}, {2, kPsNoAnswer}, {3, kPsOmf}, {4, kPsVoltage}};
+    for (const auto& k : cases) {
+        Sim m;
+        m.list({fixed(5000), pps(3300, 5900)});
+        m.pps_status_mode = k.mode;
+        Engine e(m);
+        CHECK_COND(e.start(0, bit(Family::Pps)) == StartResult::Ok);
+        drive(m, e);
+        check_safe_end(m, e);
+        CHECK_COND(e.stop() == Stop::Done);
+        CHECK_COND(verdict(e, Check::PpsStatus) == Verdict::Fail);
+        CHECK_EQ(e.agg(Check::PpsStatus).worst, k.bits);
+        CHECK_EQ(int(e.agg(Check::PpsStatus).n), 8);
+        CHECK_EQ(int(e.agg(Check::PpsStatus).fails), 8);
+        CHECK_EQ(int(e.passes()[0].status), int(k.bits));
+        CHECK_EQ(int(e.agg(Check::PpsStatusTime).n), k.mode == 2 ? 0 : 8);
+        CHECK_EQ(int(e.score()), 8 * int(def(Check::PpsStatus).weight));
+    }
+    // The pure judgement: 0xFFFF / 0xFF are "not supported" fields, PTF 1 is normal, +-3 % rounded to 20 mV.
+    CHECK_EQ(pps_status_faults(pd::PpsAsk::Got, 0xFFFF, 0xFF, 0x02, 5000), 0);
+    CHECK_EQ(pps_status_faults(pd::PpsAsk::Got, 5160 / 20, 3, 0x00, 5000), 0);       // +160 mV: 3 % of 5 V is 150, rounded to 160
+    CHECK_EQ(pps_status_faults(pd::PpsAsk::Got, 5180 / 20, 4, 0x01, 5000), kPsVoltage | kPsCurrent | kPsFlags);
+    CHECK_EQ(pps_status_faults(pd::PpsAsk::Got, 250, 0, 0x06, 5000), kPsFlags);       // PTF 3
+}
+
+// A step up that overshoots its level by 300 mV for 10 ms: beyond vPpsNew + vPpsValid on the low levels (5 % of 3.3 V is 165 mV),
+// inside it above 8 V; back inside vPpsNew well within tPpsTransient.
+void pps_overshoot_fails_low_levels() {
+    Sim m;
+    m.list({fixed(5000), pps(3300, 11000)});
+    m.pps_overshoot_mv = 300;
+    m.pps_overshoot_ms = 10;
+    Engine e(m);
+    CHECK_COND(e.start(0, bit(Family::Pps)) == StartResult::Ok);
+    drive(m, e);
+    check_safe_end(m, e);
+    CHECK_COND(e.stop() == Stop::Done);
+    CHECK_COND(verdict(e, Check::PpsOvershoot) == Verdict::Fail);
+    CHECK_COND(e.agg(Check::PpsOvershoot).fails > 0);
+    CHECK_COND(verdict(e, Check::PpsTransient) == Verdict::Pass);
+    CHECK_COND(e.agg(Check::PpsTransient).worst > 0);
+    CHECK_COND(verdict(e, Check::PpsAccuracy) == Verdict::Pass);
+}
+
+// An unloaded source that falls at 20 mV/ms: the down slam (7.7 V) takes 390 ms, past tPpsSrcTransLarge, and a 500 mV step down
+// 30 ms, past tPpsSrcTransSmall; the run waits for each level before the next move, so the later moves stay clean.
+void slow_pps_fall_fails_the_band() {
+    Sim m;
+    m.list({fixed(5000), pps(3300, 11000)});
+    m.fall = 20;
+    Engine e(m);
+    CHECK_COND(e.start(0, bit(Family::Pps)) == StartResult::Ok);
+    drive(m, e);
+    check_safe_end(m, e);
+    CHECK_COND(e.stop() == Stop::Done);
+    CHECK_COND(verdict(e, Check::PpsBand) == Verdict::Fail);
+    CHECK_COND(verdict(e, Check::PpsMonotonic) == Verdict::Pass);
+    CHECK_COND(verdict(e, Check::PpsAccuracy) == Verdict::Pass);
+    const PassRec& slam = e.passes()[3];
+    CHECK_EQ(int(slam.band_fails), 1);                   // the way down: 7.535 V to the top of vPpsNew (3465 mV), 377 ms + 5
+    CHECK_COND(slam.band_100us >= 3800 && slam.band_100us <= 3850);
+    // A 500 mV step down enters vPpsNew (+-5 %) after at most 335 mV of the fall (22 ms): in band in time, but PS_RDY comes 10 ms after
+    // the level, 40 ms after the Accept: the PS_RDY check is the one that tells (the 200 mV last step is 25 ms, on the limit).
+    CHECK_EQ(int(e.passes()[2].band_fails), 0);
+    CHECK_EQ(int(e.passes()[2].psrdy_fails), 15);
+    CHECK_EQ(int(e.passes()[1].band_fails), 0);          // 100 mV down: 10 ms
+    CHECK_COND(verdict(e, Check::PpsPsRdy) == Verdict::Fail);
+}
+
+// An SPR AVS APDO beside the PPS one: the AVS window (9-20 V) is swept at 100 / 500 / 1000 mV and slammed, against tAvsSrcTransSmall /
+// the large-step 325 ms, vAvsNew and vAvsValid; no Get_PPS_Status for it. The caps note says both kinds are there.
+void avs_sweep_and_caps_note() {
+    Sim m;
+    m.list({fixed(5000), fixed(9000), fixed(15000), fixed(20000), pps(3300, 11000), avs(9000, 20000)});
+    Engine e(m);
+    CHECK_COND(e.start(0, bit(Family::Pps)) == StartResult::Ok);
+    drive(m, e);
+    check_safe_end(m, e);
+    CHECK_COND(e.stop() == Stop::Done);
     CHECK_EQ(int(e.score()), 0);
+    CHECK_COND(e.caps_note() == CapsNote::PpsAvs);
+    CHECK_EQ(int(e.passes().size()), 8);
+    CHECK_EQ(int(e.passes()[4].cls), int(kPassAvs));
+    CHECK_EQ(int(e.passes()[4].pos), 6);
+    CHECK_EQ(int(e.agg(Check::AvsAccuracy).n), 220 + 44 + 22 + 2);
+    CHECK_EQ(int(e.agg(Check::AvsBand).n), 220 + 44 + 22 + 2);
+    for (const Check c : {Check::AvsMonotonic, Check::AvsAccuracy, Check::AvsBand, Check::AvsPsRdy, Check::AvsOvershoot, Check::AvsTransient})
+        CHECK_COND(verdict(e, c) == Verdict::Pass);
+    CHECK_EQ(int(e.agg(Check::PpsStatus).n), 8);         // the PPS passes only
+    CHECK_EQ(int(e.agg(Check::PpsAccuracy).n), 248);
+    // An AVS-only list: the PPS checks say why they are empty.
+    Sim m2;
+    m2.list({fixed(5000), fixed(9000), avs(9000, 15000)});
+    Engine e2(m2);
+    CHECK_COND(e2.start(0, bit(Family::Pps)) == StartResult::Ok);
+    drive(m2, e2);
+    CHECK_COND(e2.caps_note() == CapsNote::AvsOnly);
+    CHECK_COND(e2.agg(Check::PpsBand).skip == Skip::NoPps);
+    CHECK_COND(e2.agg(Check::PpsStatus).skip == Skip::NoPps);
+    CHECK_COND(verdict(e2, Check::AvsBand) == Verdict::Pass);
+    CHECK_EQ(m2.pps_asks, 0);
+}
+
+// The full 20 mV option sweeps the whole window at 20 mV (385 up, 385 down) instead of three 10-step windows each way.
+void full_20mv_sweep_option() {
+    Sim m;
+    m.list({fixed(5000), pps(3300, 11000)});
+    Engine e(m);
+    CHECK_COND(e.start(0, bit(Family::Pps), kOptFull20) == StartResult::Ok);
+    drive(m, e);
+    check_safe_end(m, e);
+    CHECK_COND(e.stop() == Stop::Done);
+    CHECK_EQ(int(e.opts()), int(kOptFull20));
+    CHECK_EQ(int(e.agg(Check::PpsSettle).n), 770);
+    CHECK_EQ(int(e.passes()[0].steps), 770);
+    CHECK_COND(verdict(e, Check::PpsMonotonic) == Verdict::Pass);
 }
 
 }  // namespace
@@ -855,7 +1059,12 @@ int main() {
     family_selection();
     start_refusals();
     cancel_anywhere_ends_safe();
-    slow_detach_is_unverified_not_failed();
+    slow_detach_fails_the_type_c_limits();
     item_counter_never_passes_its_total();
+    pps_status_answers();
+    pps_overshoot_fails_low_levels();
+    slow_pps_fall_fails_the_band();
+    avs_sweep_and_caps_note();
+    full_20mv_sweep_option();
     return test_report("test_pdspec_engine");
 }

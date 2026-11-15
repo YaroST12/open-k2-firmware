@@ -833,7 +833,8 @@ static_assert(5 + kPdStressChunk <= kMaxRspPayload);
 // PD_SPEC op codes (first payload byte of Cmd::PdSpec); the read reply header is off(2) total(2) n(1).
 constexpr uint8_t kPdSpecStatus = 0, kPdSpecStart = 1, kPdSpecRead = 2, kPdSpecStop = 3;
 constexpr size_t kPdSpecChunk = 48, kPdSpecStatusBytes = 17, kPdSpecStartArgs = 3;   // start payload: op families flags
-constexpr uint8_t kPdSpecFlagMask = kPdFlagConfirm;   // the start flags this protocol knows
+constexpr uint8_t kPdSpecFlagFull20 = 1 << 1;         // PPS 20 mV over the whole APDO window (pdspec::kOptFull20), not three windows
+constexpr uint8_t kPdSpecFlagMask = kPdFlagConfirm | kPdSpecFlagFull20;   // the start flags this protocol knows
 constexpr uint8_t kPdSpecFamilyMask = 0x3F;           // pdspec::kAllFamilies (six families; checked where the engine is seen)
 static_assert(5 + kPdSpecChunk <= kMaxRspPayload);
 // ---- end PD Spec Check ----

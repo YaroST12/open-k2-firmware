@@ -33,6 +33,7 @@ namespace k2 {
 // The footer a run puts on the page that is up, 8 px a character in 220 px: every form must fit (the widest family, two-digit counts).
 inline constexpr const char* kPdSpecFooters[] = {
     "PD Spec: Transitions 56/56",
+    "PD Spec: PPS/AVS 16/16",
     "PD Spec: stopping",
 };
 static_assert(all_fit(kPdSpecFooters, 8, 220), "a PD Spec Check footer is wider than the footer band");
@@ -41,9 +42,9 @@ class PdSpecSession final : private pdspec::Env {
 public:
     explicit PdSpecSession(UiContext& c) : ctx_(c) {}
 
-    // Starts a run of the families in `families` (a bit per pdspec::Family, 0 = all); the caller has done any confirming.
-    // Ok = running; anything else = refused, nothing changed (a previous result stays).
-    pdspec::StartResult start(std::uint8_t families, std::uint32_t now_ms);
+    // Starts a run of the families in `families` (a bit per pdspec::Family, 0 = all) with the options in `opts` (pdspec::kOptFull20);
+    // the caller has done any confirming. Ok = running; anything else = refused, nothing changed (a previous result stays).
+    pdspec::StartResult start(std::uint8_t families, std::uint32_t now_ms, std::uint8_t opts = 0);
     // The run ends at the next poll: the keep-alives come back, the Rd is on and the source is released to 5 V first. No-op when
     // nothing runs.
     void cancel();
@@ -90,17 +91,18 @@ private:
     bool hard_reset() override;
     void rd_off(bool off) override;
     void keepalive_silence(pdspec::Silence s) override;
+    pd::Err ask_pps_status() override;
     bool capture_start(std::uint32_t post_us) override;
     bool capture_frozen() override;
     pdspec::Edges capture_edges(std::uint32_t from_us) override;
     pdspec::TransitionOut capture_transition(const pdspec::TransitionIn& in) override;
-    pdspec::StepOut capture_step(std::uint32_t accept_us) override;
+    pdspec::StepOut capture_step(const pdspec::StepIn& in) override;
     void capture_stop() override;
     void on_item(pdspec::Family f, std::uint8_t idx, std::uint8_t total) override;
     void on_note(const char* why) override;
     void on_finish(pdspec::Stop why) override;
 
-    pdspec::StartResult start_run(std::uint8_t families, std::uint32_t now_ms);
+    pdspec::StartResult start_run(std::uint8_t families, std::uint32_t now_ms, std::uint8_t opts);
     bool self_supplied() const;
     void update_footer();
 

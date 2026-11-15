@@ -3,6 +3,7 @@
 // PD Spec Check, the timing analysis (k2/pdspec/analyze.hpp) over transition captures: synthetic traces with hand-worked expected
 // values, the capture stream round trip (encode -> decode -> analyze, the path a recorded fixture takes) and the live Hard Reset / detach
 // tracker. Recorded captures from the hardware go under tests/fixtures/pdspec/ and are read by the fixture cases at the end.
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -152,9 +153,13 @@ void pps_step() {
         const int noise = (ms % 3) - 1;   // -1, 0, +1, ... (x2 below)
         return (ms < 22 ? 5000 : 5020) + 2 * noise;
     });
-    const StepOut o = analyze_step(t.view(), kT0 + 10000);
+    const StepOut o = analyze_step(t.view(), {kT0 + 10000, 5000, 5020});
     CHECK_COND(o.valid);
     CHECK_EQ(o.final_mv, 5020);
+    // vPpsNew of 5020 mV is +-251 mV: the old level is already inside it, so the band is entered at the Accept's own sample.
+    CHECK_COND(o.band.seen);
+    CHECK_EQ(o.band.us, 0u);
+    CHECK_EQ(o.out_us, 0u);
     CHECK_COND(o.settled);
     CHECK_EQ(o.settle.us, 13000u);   // 23 ms: 5002, 4998, 5020, 5022 average 5010 (22 ms: 5000, 5002, 4998, 5020 = 5005, out)
 }
@@ -179,11 +184,46 @@ void pps_step_recorded() {
         t.s.push_back({us(ms), std::uint16_t(mv), 0, 0});
     }
     std::fclose(f);
-    const StepOut o = analyze_step(t.view(), us(kAcceptMs));
+    const StepOut o = analyze_step(t.view(), {us(kAcceptMs), 7000, 7020});
     CHECK_COND(o.valid);
     CHECK_COND(o.final_mv >= 7020 && o.final_mv <= 7032);
     CHECK_COND(o.settled);
     CHECK_COND(o.settle.us >= 4800 && o.settle.us <= 10000);
+}
+
+// A slam up (PPS 3.3 -> 11 V): Accept at 10 ms, VBUS rises 100 mV/ms from 15 ms, overshoots to 11.7 V for 4 ms (92-95 ms), then sits
+// at 11 V. vPpsNew of 11 V is 10450..11550 mV, judged on the raw samples (a mean would lag the entry and shrink the excursion): first
+// inside at 87 ms (10500), out at 92-95 ms, back at 96 ms for good: band entry 96 ms (86 ms after the Accept), a 4 ms stretch out after
+// the first entry, the peak 11.7 V (150 mV beyond vPpsNew).
+void slam_up_with_overshoot() {
+    Trace t;
+    t.fill(-20, 400, [](int ms) { return ms < 15 ? 3300 : ms < 92 ? 3300 + (ms - 15) * 100 : ms < 96 ? 11700 : 11000; });
+    const StepOut o = analyze_step(t.view(), {kT0 + 10000, 3300, 11000});
+    CHECK_COND(o.valid);
+    CHECK_EQ(o.final_mv, 11000);
+    CHECK_COND(o.band.seen);
+    CHECK_EQ(o.band.us, 86000u);
+    CHECK_EQ(o.band.gap_us, 1000u);
+    CHECK_EQ(o.out_us, 4000u);
+    CHECK_EQ(o.peak_mv, 11700);
+}
+
+// A slow unloaded slam down (11 -> 3.3 V at 20 mV/ms from 30 ms): vPpsNew of 3.3 V tops at 3465 mV; the first sample inside is 3460 mV
+// at 407 ms, 397 ms after the Accept. The lowest sample is the new level (no undershoot).
+void slow_slam_down() {
+    Trace t;
+    t.fill(-20, 700, [](int ms) { return ms < 30 ? 11000 : std::max(3300, 11000 - (ms - 30) * 20); });
+    const StepOut o = analyze_step(t.view(), {kT0 + 10000, 11000, 3300});
+    CHECK_COND(o.band.seen);
+    CHECK_EQ(o.band.us, 397000u);
+    CHECK_EQ(o.out_us, 0u);
+    CHECK_EQ(o.peak_mv, 3300);
+    CHECK_EQ(o.final_mv, 3300);
+    // An AVS band (the same +-5 %) and a window that ends before the level: no band, no final level inside it.
+    Trace u;
+    u.fill(-20, 200, [](int ms) { return ms < 30 ? 11000 : 11000 - (ms - 30) * 20; });
+    const StepOut p = analyze_step(u.view(), {kT0 + 10000, 11000, 3300});
+    CHECK_COND(!p.band.seen);
 }
 
 // The Hard Reset path, fed live at poll resolution: VBUS 20 V falls under vSafe0V 400 ms after the reset, stays dark until 1200 ms, is
@@ -248,6 +288,8 @@ int main() {
     edges_from_markers();
     pps_step();
     pps_step_recorded();
+    slam_up_with_overshoot();
+    slow_slam_down();
     reset_track();
     stream_round_trip();
     return test_report("test_pdspec_analyze");
