@@ -1132,6 +1132,11 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
   Open if resumed: the charger-test preflight refuses on USB-A ("load attached, latched by far rd": the A-to-C cable
   latches `InlineCause::FarRd`, which `svooc_run` waives for usb_a but the preflight does not), so the stage never ran;
   the trigger report header still prints "0x86 answer 0x005 / 0x82 constant 0x051" for the Phone and Probe profiles.
+  **2026-11-15 (k2/svooc-deep, host-tested):** the stage waits for D+/D- after the family release (it was refused "D+/D-
+  busy" 20 ms after the SVOOC pass, inside the engine's 500 ms 0 V hold; `runs/svooc-cap/run1.out`); usb-a mode waives
+  the far-Rd / foreign-VBUS inline latch for the run as the trigger does; a quiet adapter ends the stage as "stopped at
+  <t>, <A> claimed, <V> max". Open: the fast-charge engine still refuses the VOOC family on any inline reason, so the
+  detection row on a USB-A cable can fail "Inline" before the stage is queued.
 - **Inline interrogation** (k2/inline-interrogate, built and host-tested only; `docs/DEVICE_TWIN.md` 9.1, the one inline
   TX exception, `CONNECTION_MATRIX.md` X11). With a device inline behind its charger the K2 hard-resets the link (unless
   a fresh contract was sniffed), asks the device as its source (Discover Identity, Get_Sink_Cap, Get_Sink_Cap_Extended,

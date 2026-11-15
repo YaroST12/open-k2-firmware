@@ -337,6 +337,8 @@ struct Fake final : ct::Env {
     int ceil_starts = 0, ceil_stops = 0; bool ceil_usb_a_seen = false, ceil_on = false;
     uint32_t ceil_judged_ms = 0, ceil_partial_ms = 0, ceil_end_ms = 0, ceil_exit_ms = 1000, ceil_t0 = 0, ceil_stop_t = 0, ceil_start_at = 0;
     uint16_t ceil_partial_word = 0;
+    uint32_t ceil_quiet_at_ms = 0;   // the adapter's last edge this long after the start (0 = it keeps talking); the trigger runs on
+    uint16_t ceil_vmax_mv = 0;       // the highest VBUS the trigger saw
     uint8_t ceiling_start(bool usb_a) override {
         ++ceil_starts; ceil_usb_a_seen = usb_a; ceil_start_at = in.now;
         if (!lines_free_now()) return uint8_t(svooc::Refusal::Busy);
@@ -350,6 +352,10 @@ struct Fake final : ct::Env {
         const uint32_t t = in.now - ceil_t0;
         const bool judged = ceil_judged_ms && t >= ceil_judged_ms;
         in.svooc.judged = judged; in.svooc.commands = ceil_commands;
+        const bool quiet = ceil_quiet_at_ms && t >= ceil_quiet_at_ms;
+        in.svooc.quiet_ms = quiet ? t - ceil_quiet_at_ms : 0;
+        in.svooc_last_ms = uint16_t(quiet ? ceil_quiet_at_ms : t);
+        in.svooc_vmax_mv = ceil_vmax_mv;
         in.svooc_word = judged ? 0x06D : (ceil_partial_ms && t >= ceil_partial_ms) ? ceil_partial_word : 0;
         in.svooc_asks = judged ? 4 : in.svooc_word ? 2 : 0;
         if (ceil_stop_t) {
@@ -2322,6 +2328,25 @@ static void test_ceiling_usb_a_waiver_stays_narrow() {
         CHECK_EQ(f.ceil_starts, 0);                     // no trigger with a load behind the K2
         CHECK_EQ(r.reason() != ct::Reason::None, true);
     }
+}
+// The no-load stop (every hardware session so far: the adapter goes quiet ~3.3 s after the wake, the trigger itself keeps
+// listening): the stage notices the quiet adapter, stops the trigger long before the cap and records "stopped at" with the
+// highest claimed ask, the highest VBUS and the time of the adapter's last edge. A normal outcome: the row stays a pass.
+static void test_ceiling_quiet_adapter_is_stopped_at() {
+    Fake f; f.caps = {}; f.ceil_partial_ms = 2000; f.ceil_partial_word = 0x028; f.ceil_quiet_at_ms = 3300; f.ceil_vmax_mv = 9100;
+    ct::Runner r(f);
+    ceiling_run(f, r, sc::Mode::On);
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Ceiling; }, 20000), true);
+    const uint32_t t0 = f.in.now;
+    CHECK_EQ(run_until(f, r, [&] { return f.ceil_stops > 0; }, 20000), true);
+    CHECK_EQ(f.in.now - t0 >= 3300 + sc::kQuietMs, true);     // not before the adapter had been quiet that long
+    CHECK_EQ(f.in.now - t0 < sc::kCapMs, true);                // and well before the cap
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 120000), true);
+    CHECK_EQ(int(r.evidence().svooc_end), int(sc::End::Stopped));
+    CHECK_EQ(int(r.evidence().svooc_word), 0x028);
+    CHECK_EQ(int(r.evidence().svooc_vmax_mv), 9100);
+    CHECK_EQ(int(r.evidence().svooc_stop_ms), 3300);
+    CHECK_EQ(r.steps()[0].verdict, ct::Verdict::Pass);
 }
 // A VIVO charger that never answered its first row (no frame in the entry window) speaks nothing the other levels could
 // prove: they are skipped with that reason and get no session, as AFC / FCP / SCP / UFCS do.
@@ -7275,7 +7300,7 @@ int main() {
     test_hunt_evidence_marks_a_silent_source_as_a_timeout(); test_hunt_evidence_without_a_trace_is_unexplained();
     test_hunt_evidence_only_for_refused_rows(); test_classify_hunt_precedence();
     test_plan_and_run(); test_an_auto_hold_counts_as_released(); test_quiet_is_exactly_the_row_in_flight(); test_paint_blocked_needs_flight_and_an_engine_window(); test_refusals(); test_hold_keeps_the_baseline_until_released(); test_safe5_baseline();test_cancel_and_failed_release(); test_release_waits_for_the_sink_verification_and_its_hard_reset();
-    test_faults(); test_loop_lock_refuses_and_aborts(); test_timeouts_and_skips(); test_one_second_holds(); test_qc2_settles_within_two_percent(); test_qc2_5v_accepts_vsafe5_reading(); test_legacy_5v_accepts_vsafe5_reading(); test_qc3_rows_use_an_asymmetric_band(); test_legacy_rows_use_a_five_percent_band(); test_legacy_5v_row_uses_the_vsafe5_window(); test_scp_4v5_row_judges_the_adapter_readback(); test_qc3plus_without_response_is_a_distinct_skip(); test_unsupported_protocol_skips_its_other_rows(); test_silent_source_fails_every_handshake_row(); test_answered_handshake_passes_the_5v_row(); test_svooc_row_follows_the_adapter_ramp(); test_svooc_detected_is_a_pass(); test_vooc_family_shares_one_session(); test_ceiling_off_runs_no_stage(); test_ceiling_judged_ladder_is_the_result(); test_ceiling_refusal_is_recorded_and_the_run_goes_on(); test_ceiling_no_adapter_and_early_abort(); test_ceiling_cap_stops_a_session_that_is_never_judged(); test_ceiling_cancel_stops_the_trigger(); test_ceiling_needs_a_detected_svooc_family(); test_ceiling_waits_for_the_lines_after_the_family_release(); test_ceiling_lines_never_free_is_a_recorded_refusal(); test_ceiling_usb_a_waives_the_far_rd_latch(); test_ceiling_usb_a_waiver_stays_narrow(); test_vivo_no_response_skips_the_other_vivo_rows(); test_pps_min_step_accepts_unloaded_floor(); test_pps_up_step_uses_the_tight_band();
+    test_faults(); test_loop_lock_refuses_and_aborts(); test_timeouts_and_skips(); test_one_second_holds(); test_qc2_settles_within_two_percent(); test_qc2_5v_accepts_vsafe5_reading(); test_legacy_5v_accepts_vsafe5_reading(); test_qc3_rows_use_an_asymmetric_band(); test_legacy_rows_use_a_five_percent_band(); test_legacy_5v_row_uses_the_vsafe5_window(); test_scp_4v5_row_judges_the_adapter_readback(); test_qc3plus_without_response_is_a_distinct_skip(); test_unsupported_protocol_skips_its_other_rows(); test_silent_source_fails_every_handshake_row(); test_answered_handshake_passes_the_5v_row(); test_svooc_row_follows_the_adapter_ramp(); test_svooc_detected_is_a_pass(); test_vooc_family_shares_one_session(); test_ceiling_off_runs_no_stage(); test_ceiling_judged_ladder_is_the_result(); test_ceiling_refusal_is_recorded_and_the_run_goes_on(); test_ceiling_no_adapter_and_early_abort(); test_ceiling_cap_stops_a_session_that_is_never_judged(); test_ceiling_cancel_stops_the_trigger(); test_ceiling_needs_a_detected_svooc_family(); test_ceiling_waits_for_the_lines_after_the_family_release(); test_ceiling_lines_never_free_is_a_recorded_refusal(); test_ceiling_usb_a_waives_the_far_rd_latch(); test_ceiling_usb_a_waiver_stays_narrow(); test_ceiling_quiet_adapter_is_stopped_at(); test_vivo_no_response_skips_the_other_vivo_rows(); test_pps_min_step_accepts_unloaded_floor(); test_pps_up_step_uses_the_tight_band();
     test_missing_samples_and_wrap();
     test_fixed_band_judges_a_burst_mode_ripple_on_its_mean(); test_fixed_band_still_fails_a_steady_low_or_high_level(); test_fixed_band_keeps_the_per_sample_overvoltage_guards();
     test_pps_renewal();

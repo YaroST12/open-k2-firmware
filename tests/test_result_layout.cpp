@@ -705,18 +705,25 @@ static void test_scp_capability_note_row() {
     CHECK_EQ(find(dense, "SCP cap") != nullptr, true);
 }
 // The SuperVOOC ceiling stage's result is a passive fact row of the same section: the highest 0x86 ask the session went on
-// under ("6.3 A asked", the charger's accepted ceiling, never a drawn current), the words of svooc_ceiling::format_cap.
+// under ("6.3 A claimed", the charger's accepted ceiling, never a drawn current), the words of svooc_ceiling::format_cap.
 static void test_svooc_ceiling_note_row() {
     rl::Layout none;
     rl::build(none, baseus());
     CHECK_EQ(find(none, "SV cap") == nullptr, true);
     rl::OemNotes notes;
-    notes.svooc_cap = "6.3 A asked";
+    notes.svooc_cap = "6.3 A claimed";
     rl::Layout l;
     rl::build(l, baseus(), notes);
     const rl::Row* r = find(l, "SV cap");
     CHECK_EQ(r != nullptr, true);
-    CHECK_STR(chips(l, row_of(l, "SV cap")).c_str(), "6.3 A asked");
+    CHECK_STR(chips(l, row_of(l, "SV cap")).c_str(), "6.3 A claimed");
+    {   // the longest words (the no-load stop) are laid out whole: the phrase wraps, nothing is cut
+        rl::OemNotes stop;
+        stop.svooc_cap = "stopped at 12.5 s, 10.9 A claimed, 11.1 V max";
+        rl::Layout s;
+        rl::build(s, baseus(), stop);
+        CHECK_STR(chips(s, row_of(s, "SV cap")).c_str(), "stopped at 12.5 s, 10.9 A claimed, 11.1 V max");
+    }
     CHECK_EQ(int(r->algorithm), int(A::Count));
     notes.scp_cap = "20V 6A";
     rl::Layout both;

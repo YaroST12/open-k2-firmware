@@ -1527,15 +1527,16 @@ def charger_avs_sweep(link, on):
 
 
 SVOOC_CAP_MODES = ["off", "on", "usb-a"]
-SVOOC_CAP_ENDS = ["not run", "refused", "no adapter", "aborted", "cap", "judged", "cancelled"]
+SVOOC_CAP_ENDS = ["not run", "refused", "no adapter", "aborted", "cap", "judged", "cancelled", "stopped"]
 SVOOC_CAP_NOTE = ("the highest 0x86 word the K2 asked for while the adapter kept the session going (100 mA per count): "
                   "the charger's accepted ceiling from the protocol, not a drawn current")
 
 
 def charger_svooc_cap(link, mode=None):
     """Firmware command 0x59: read (mode None) or set the SuperVOOC ceiling stage of the NEXT charger run, and read the latest
-    run's result. Reply [mode, end, why, asks, word(2)]. Setting the mode changes nothing on the wire; the stage runs only
-    after a detected VOOC-family pass and never loads the charger (the 50 mA guard stays)."""
+    run's result. Reply [mode, end, why, asks, word(2), vmax_mv(2), stop_ms(2)] (the last two from 2026-11-15; an older 6-byte
+    reply reads them as None). Setting the mode changes nothing on the wire; the stage runs only after a detected VOOC-family
+    pass and never loads the charger (the 50 mA guard stays). "text" is the Results row's words (svooc_ceiling::format_cap)."""
     payload = b"" if mode is None else bytes([SVOOC_CAP_MODES.index(mode)])
     p = link.call(CMD_CHARGER_SVOOC_CAP, payload).payload
     _need(p, 6, "charger svooc cap")
@@ -1547,9 +1548,27 @@ def charger_svooc_cap(link, mode=None):
     elif end == "aborted":
         why = name(SVOOC_ABORTS, p[2])
     word = int.from_bytes(p[4:6], "little")
-    ceiling = {"word": word, "ma": word * SVOOC_MA_PER_COUNT, "text": svooc_amps(word) + " asked"} if word else None
+    vmax_mv = int.from_bytes(p[6:8], "little") if len(p) >= 10 else None
+    stop_ms = int.from_bytes(p[8:10], "little") if len(p) >= 10 else None
+    ceiling = {"word": word, "ma": word * SVOOC_MA_PER_COUNT, "text": svooc_amps(word) + " claimed"} if word else None
     return {"mode": name(SVOOC_CAP_MODES, p[0]), "end": end, "why": why, "asks": p[3], "ceiling": ceiling,
-            "note": SVOOC_CAP_NOTE}
+            "vmax_mv": vmax_mv, "stop_ms": stop_ms, "text": svooc_cap_text(end, word, vmax_mv, stop_ms), "note": SVOOC_CAP_NOTE}
+
+
+def svooc_cap_text(end, word, vmax_mv, stop_ms):
+    """The ceiling stage's words as the K2's Results row shows them (svooc_ceiling::format_cap, tenths rounded)."""
+    if end in ("refused", "no adapter"):
+        return end
+    if end == "not run":
+        return "-"
+    tenths = lambda v: f"{(v + 50) // 100 // 10}.{(v + 50) // 100 % 10}"
+    parts = []
+    if end == "stopped" and stop_ms is not None:
+        parts.append(f"stopped at {tenths(stop_ms)} s")
+    parts.append(svooc_amps(word) + " claimed" if word else "none claimed")
+    if vmax_mv:
+        parts.append(f"{tenths(vmax_mv)} V max")
+    return ", ".join(parts)
 
 
 def cmd_charger_svooc_cap(link, a):

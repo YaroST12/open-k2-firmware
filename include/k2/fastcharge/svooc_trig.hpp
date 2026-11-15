@@ -76,6 +76,9 @@ struct Snapshot {
     std::uint8_t rec_end = 0;                        // and how it ended (edges::End; 0 = still recording)
     stage::Worst stall{};                            // the main loop's longest stage since the wake (frozen at the release)
     std::uint32_t rel_timer = 0, rel_loop = 0, rel_edge = 0;   // who let D- go: the timer, the main loop, the next frame
+    // While the adapter talks (Stage::Answer): ms since its last D+/D- edge of this wake (log.last_edge_ms is that edge, ms
+    // after the wake). 0 in every other stage. The charger test's ceiling stage reads a long quiet as the adapter's stop.
+    std::uint32_t quiet_ms = 0;
 };
 Snapshot snapshot();   // a copy, interrupts masked for the wire's part
 

@@ -2044,7 +2044,7 @@ bool Runner::ceiling_wanted() const {
 }
 bool Runner::begin_ceiling(Input in) {
     ceiling_pending_ = false; ceiling_done_ = true;
-    evidence_.svooc_word = 0; evidence_.svooc_why = 0; evidence_.svooc_asks = 0;
+    evidence_.svooc_word = 0; evidence_.svooc_why = 0; evidence_.svooc_asks = 0; evidence_.svooc_vmax_mv = evidence_.svooc_stop_ms = 0;
     const uint8_t refused = env_.ceiling_start(opts_.svooc_cap == svooc_ceiling::Mode::UsbA);
     if (refused) {
         evidence_.svooc_end = static_cast<uint8_t>(svooc_ceiling::End::Refused); evidence_.svooc_why = refused;
@@ -2061,9 +2061,12 @@ void Runner::note_ceiling(const Input& in, svooc_ceiling::End e) {
     evidence_.svooc_end = static_cast<uint8_t>(e);
     evidence_.svooc_word = std::max(evidence_.svooc_word, in.svooc_word);
     evidence_.svooc_asks = std::max(evidence_.svooc_asks, in.svooc_asks);
+    evidence_.svooc_vmax_mv = std::max(evidence_.svooc_vmax_mv, in.svooc_vmax_mv);
+    if (in.svooc.commands) evidence_.svooc_stop_ms = in.svooc_last_ms;   // the adapter's last edge (nothing heard: 0)
     evidence_.svooc_why = e == svooc_ceiling::End::Aborted ? in.svooc.abort : uint8_t(0);
-    K2LOG("[CT] svooc_cap end=%u word=%u asks=%u why=%u\n", unsigned(evidence_.svooc_end), unsigned(evidence_.svooc_word),
-          unsigned(evidence_.svooc_asks), unsigned(evidence_.svooc_why));
+    K2LOG("[CT] svooc_cap end=%u word=%u asks=%u why=%u vmax=%umV stop=%ums\n", unsigned(evidence_.svooc_end),
+          unsigned(evidence_.svooc_word), unsigned(evidence_.svooc_asks), unsigned(evidence_.svooc_why),
+          unsigned(evidence_.svooc_vmax_mv), unsigned(evidence_.svooc_stop_ms));
 }
 void Runner::end_ceiling(Input in, svooc_ceiling::End e) {
     note_ceiling(in, e);

@@ -613,9 +613,11 @@ enum class Cmd : uint8_t {
     LoopProbe = 0x57,       // off(2): the loop probe's stored result file, chunked, see the layout above
     Battery = 0x58,         // battery efficiency recorder: status / start / end / next / finish / config / list / read, see above
     ChargerSvoocCap = 0x59, // [] reads, [mode(1)] sets (0 off, 1 on, 2 USB-A) the SuperVOOC ceiling stage of the next charger run (opt-in,
-                         // an Options flag, not journaled). rsp [mode, end, why, asks, word(2)]: the latest run's stage result
-                         // (svooc_ceiling::End, the refusal or abort behind it, asks made, the highest 0x86 word kept going, 100 mA
-                         // per count: what the K2 asked for, never a drawn current). Set: Busy while a run is active, BadArg > 2.
+                         // an Options flag, not journaled). rsp [mode, end, why, asks, word(2), vmax_mv(2), stop_ms(2)]: the latest
+                         // run's stage result (svooc_ceiling::End, the refusal or abort behind it, asks made, the highest 0x86 word
+                         // kept going, 100 mA per count: what the K2 claimed, never a drawn current; then the highest VBUS the
+                         // trigger saw and the adapter's last edge after the wake, appended 2026-11-15 for End::Stopped "stopped
+                         // at"). Set: Busy while a run is active, BadArg > 2.
     PdSpec = 0x5A,          // PD Spec Check: status / start / result (chunked) / stop, see the layout above
 };
 
@@ -1398,12 +1400,14 @@ struct ChargerSvoocCap {
     uint8_t why = 0;      // the svooc::Refusal (End::Refused) or svooc::Abort (End::Aborted) behind the end
     uint8_t asks = 0;     // 0x86 asks the K2 made
     uint16_t word = 0;    // the highest ask the session went on under, 100 mA per count (0 = none)
+    uint16_t vmax_mv = 0; // the highest VBUS the trigger saw (appended)
+    uint16_t stop_ms = 0; // the adapter's last D+/D- edge, ms after the wake: "stopped at" (appended)
 };
 struct ChargerSvoocCapReply {
     Status status = Status::Ok;
     ChargerSvoocCap info;
 };
-constexpr size_t kChargerSvoocCapLen = 6;
+constexpr size_t kChargerSvoocCapLen = 10;
 size_t encode_charger_svooc_cap(std::span<uint8_t> out, const ChargerSvoocCap &c);
 
 // Cmd::ChargerHunt: request [slot]; reply run_id(4), count(1) = refused hunt rows held, then the slot's evidence when slot < count:

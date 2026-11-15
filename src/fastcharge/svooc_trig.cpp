@@ -33,6 +33,7 @@ bool g_run_inited;
 alignas(svooc::Wire) std::uint8_t g_wire_raw[sizeof(svooc::Wire)];   // fed by the ISR; main loop reaches it with interrupts masked
 bool g_wire_inited;
 bool g_exit_pending;
+std::uint32_t g_wake_ms;   // systick ms of the latest wake (the wire's log clock starts there)
 bool g_vbus_owned;   // the sink is told this run owns VBUS (fusb302::sink_set_vbus_external)
 
 svooc::Run& run_obj() {
@@ -207,6 +208,7 @@ void wake() {
         g_timer_live = true;
         g_rel_timer = g_rel_loop = g_rel_edge = 0;
         stage::meter.reset(dpdm::cycles(), systick::millis());   // the stall diag counts from the wake
+        g_wake_ms = systick::millis();
     }
     dpsniff::hook_listen(&on_edge);
     K2LOG("[SVOOC] wake %u\n", unsigned(run_obj().report().tries));
@@ -394,6 +396,10 @@ Snapshot snapshot() {
     s.rel_timer = g_rel_timer;
     s.rel_loop = g_rel_loop;
     s.rel_edge = g_rel_edge;
+    if (s.stage == Stage::Answer) {   // the adapter has spoken in this wake: how long since its last edge
+        const std::uint32_t since_wake = systick::millis() - g_wake_ms;
+        s.quiet_ms = since_wake > s.log.last_edge_ms ? since_wake - s.log.last_edge_ms : 0;
+    }
     return s;
 }
 

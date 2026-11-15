@@ -284,6 +284,8 @@ struct Input {
     svooc_ceiling::Live svooc{};
     uint16_t svooc_word = 0;   // the highest ask the adapter went on under so far (svooc_trig Snapshot::ceiling_word)
     uint8_t svooc_asks = 0;    // the asks answered so far
+    uint16_t svooc_vmax_mv = 0;   // the highest VBUS the trigger saw (svooc::Report::vbus_max_mv)
+    uint16_t svooc_last_ms = 0;   // the adapter's last edge, ms after the wake (svooc::Log::last_edge_ms)
     // D+/D- are free for the ceiling stage's trigger: no owner holds them and they sit at the passive idle (the trigger's own
     // start check, svooc_trig::lines_free()). False for 500 ms after a legacy session's release (the engine's 0 V discharge).
     bool lines_free = true;
@@ -342,6 +344,9 @@ struct Evidence {
     // svooc::Refusal for Refused, svooc::Abort for Aborted), how many asks were made. A protocol readout: the K2 never drew.
     uint16_t svooc_word = 0;
     uint8_t svooc_end = 0, svooc_why = 0, svooc_asks = 0;
+    // ... the highest VBUS the trigger saw in the session (mV, its start and exit watch included) and when the adapter's last
+    // D+/D- edge came (ms after the wake, saturating): "stopped at" for End::Stopped.
+    uint16_t svooc_vmax_mv = 0, svooc_stop_ms = 0;
     pd::Revision reported{};
 };
 struct Summary {

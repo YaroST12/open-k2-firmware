@@ -136,11 +136,17 @@ aborts with `Overvoltage` and releases the lines), and the card and Results show
   run one more step at 5 V: the guarded SuperVOOC trigger (`svooc_trig`, Probe profile, 12 s cap) answers the adapter's
   0x82 polls like a phone and walks a 4-rung 0x86 ladder (100 mA per count: 0x00F 1.5 A, 0x028 4.0 A, 0x03F 6.3 A,
   0x06D 10.9 A). The **measured ceiling** is the highest 0x86 word the adapter kept the session going under, shown in the
-  Results tab as `SV cap` ("10.9 A asked"). It is the K2's own ask that the charger did not abort, read from the protocol;
+  Results tab as `SV cap` ("10.9 A claimed, 11.1 V max": the claimed ask and the highest VBUS the trigger saw). It is the
+  K2's own ask that the charger did not abort, read from the protocol;
   it is **not a drawn current**, and the K2 never loads the charger (the trigger's 50 mA guard and 12 V abort stay).
   Modes: `off` (default), `on` (the trigger's start guards must pass), `usb-a` (waiver for a USB-A charger on the bottom
-  port with the top port empty; never with a phone on the other port). A refusal, a missing adapter answer or an abort
-  ends the stage with its reason; the ceiling stays what had been accepted before. The stage is not journaled (a resumed
+  port with the top port empty; never with a phone on the other port). The usb-a waiver also reaches the run's own
+  inline checks, for the same two causes the trigger waives (`svooc::inline_waived`: FarRd, Vbus) and only in a run that
+  holds an SVOOC unit; a Load / Request / Rise latch still refuses. The stage starts only once D+/D- are free
+  (`svooc_trig::lines_free()`): the family session's release holds them at 0 V for 500 ms first. An adapter that talked
+  and then sent no edge for `kQuietMs` (500 ms) ended the session (every no-load session so far, ~3.3 s after the wake):
+  the stage stops the trigger and reads `stopped` ("stopped at 3.3 s, 4.0 A claimed, 9.1 V max"), a normal outcome. A
+  refusal, a missing adapter answer or an abort ends the stage with its reason; the ceiling stays what had been accepted before. The stage is not journaled (a resumed
   run skips it) and does not change the card format; the text is in the Results row, in the `--json` readout
   (`k2_remote.py charger-svooc-cap`) and in the log. A plain VOOC charger yields "no adapter" because the family
   detection cannot tell VOOC from SuperVOOC. `quiet()` covers the stage: no flash writes while the wire is held.
