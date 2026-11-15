@@ -832,6 +832,29 @@ private:
     bool hord_known_ = false;           // false until a header was written (or a replay adopted)
 };
 
+// Write gate. A journal write holds the main loop, and with it every PD reply, for 12 to 250 ms (the flash erases and programs
+// with interrupts masked; the app spans both banks, so no read-while-write). A source's own requests (Discover Identity,
+// Get_Sink_Cap, Get_Sink_Cap_Extended, VDMs) follow a new contract: 104 on record (2026-11) came a median 208 ms and 95 % within
+// 510 ms after PS_RDY, so a quiet link alone (kWriteQuietMs) lets a write start right inside that window
+// (runs/ugreen-qa/r2-stream: Get_Sink_Cap mid-write, answered 14.8 ms after the frame). A write starts once the link was quiet
+// for kWriteQuietMs AND the last Accept / PS_RDY is kAfterContractMs old, or after `max_wait_ms` of waiting whatever the link
+// does (a source that never goes quiet must not keep the records out for ever). A request a source makes later than that, or
+// during a forced write, still waits for the write: no time gate can bound it (docs/PD_SINK_REPLIES.md).
+inline constexpr std::uint32_t kWriteQuietMs = 80;
+inline constexpr std::uint32_t kAfterContractMs = 600;
+constexpr bool write_ok(std::uint32_t since_activity_ms, std::uint32_t contract_age_ms, std::uint32_t waited_ms,
+                        std::uint32_t max_wait_ms) {
+    if (waited_ms >= max_wait_ms) return true;
+    return since_activity_ms >= kWriteQuietMs && contract_age_ms >= kAfterContractMs;
+}
+// The age of the newest contract event: the later of the sink's Accept and PS_RDY stamps (millis; 0 = none, an inferred PS_RDY
+// leaves ps_rdy_at 0). No event at all reads as old.
+constexpr std::uint32_t contract_age_ms(std::uint32_t now, std::uint32_t accept_at, std::uint32_t ps_rdy_at) {
+    if (accept_at == 0 && ps_rdy_at == 0) return 0xFFFFFFFFu;
+    const std::uint32_t a = accept_at ? now - accept_at : 0xFFFFFFFFu, p = ps_rdy_at ? now - ps_rdy_at : 0xFFFFFFFFu;
+    return a < p ? a : p;
+}
+
 // Resume gate: the OK press is accepted only after VBUS sat in vSafe5V (4.75..5.50 V) for kStableMs.
 inline constexpr std::uint32_t kResumeStableMs = 500;
 class ResumeGate {

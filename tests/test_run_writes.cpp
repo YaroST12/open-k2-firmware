@@ -116,7 +116,7 @@ struct Sim {
         (running ? bb_run : bb_after).add(b);
         const std::uint32_t made = bb->status().saves - before;
         if (made > max_per_poll) max_per_poll = made;
-        if (journal_too && j->pending() && pdtrace::since_activity_ms() >= 80) {   // the UI's kJrQuietMs
+        if (journal_too && j->pending() && pdtrace::since_activity_ms() >= charger_journal::kWriteQuietMs) {   // the UI's gate (no contract here)
             const Counts c = spend([&] { j->pump(kRun, kOpt, evidence(), steps); });
             journal_run.add(c);
             j_rows.add(c);

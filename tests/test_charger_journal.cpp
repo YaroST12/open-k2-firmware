@@ -958,7 +958,29 @@ static void test_plan_pending_ignores_verdicts() {
     CHECK_EQ(v.j->plan_pending(), false); CHECK_EQ(v.j->pending(), false);
 }
 
+// ---- The write gate: no journal write while the source's own requests are due (docs/PD_SINK_REPLIES.md, latency) ----
+// runs/ugreen-qa/r2-stream: the arm's writes ran 80 ms after the link went quiet, 226 ms after PS_RDY; the source's Get_Sink_Cap
+// came in mid-write and its answer left 14.8 ms after the frame.
+static void test_the_write_gate_keeps_writes_out_of_the_post_contract_window() {
+    namespace cj = k2::charger_journal;
+    CHECK_EQ(cj::write_ok(100, 226, 50, 5000), false);              // quiet, but inside the source's discovery window
+    CHECK_EQ(cj::write_ok(100, cj::kAfterContractMs, 50, 5000), true);
+    CHECK_EQ(cj::write_ok(20, 5000, 50, 5000), false);              // a live exchange
+    CHECK_EQ(cj::write_ok(cj::kWriteQuietMs, 5000, 50, 5000), true);
+    CHECK_EQ(cj::write_ok(0, 0, 5000, 5000), true);                 // a source that never goes quiet does not starve the journal
+    // An EPR / PPS hold: our keep-alive every 400 ms is activity too, the contract is old: the gate opens between keep-alives
+    int open = 0;
+    for (std::uint32_t t = 0; t < 4000; t += 10) open += cj::write_ok(t % 400, 3000 + t, t, 1u << 30);
+    CHECK_EQ(open > 0, true);
+    // the contract's age: the later of Accept and PS_RDY (an inferred PS_RDY leaves ps_rdy_at 0), never one at all = old
+    CHECK_EQ(cj::contract_age_ms(1000, 0, 0) >= cj::kAfterContractMs, true);
+    CHECK_EQ(cj::contract_age_ms(1000, 700, 0), 300u);
+    CHECK_EQ(cj::contract_age_ms(1000, 700, 900), 100u);
+    CHECK_EQ(cj::contract_age_ms(5, 0xFFFFFFF0u, 1), 4u);           // across the millis wrap
+}
+
 int main() {
+    test_the_write_gate_keeps_writes_out_of_the_post_contract_window();
     test_a_resume_mid_pd_keeps_the_planners_step_order();
     test_the_header_carries_the_plan_order(); test_plan_pending_ignores_verdicts();
     test_section_mapping();

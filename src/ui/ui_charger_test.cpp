@@ -387,15 +387,21 @@ bool ChargerTestSession::journal_ready() {
     return !journal_active_ || journal_closed_ || !charger_journal::hw::plan_pending();
 }
 void ChargerTestSession::journal_waited(uint32_t ms) { K2LOG("[CJRN] wait-for-replan ms=%u\n", unsigned(ms)); }
-// Behind the row (the Runner out of Requesting/Holding): ONE file per tick, only while no PD message or VBUS change was seen
-// for kJrQuietMs, so the main loop is never away from a live exchange (2026-11-08: a 2.2 s begin with a contract up cost the
-// link). A source that never goes quiet does not keep the records out for ever: after kJrWaitMs of waiting they go in one per tick
-// regardless. A run that has ended writes without waiting (nothing is being negotiated any more). Nothing ever drains: no call
+// Behind the row (the Runner out of Requesting/Holding): ONE file per tick, only through charger_journal::write_ok - no PD message
+// or VBUS change for kWriteQuietMs and the last Accept / PS_RDY kAfterContractMs old - so the main loop is never away from a
+// live exchange (2026-11-08: a 2.2 s begin with a contract up cost the link) nor from the requests a source makes after a
+// contract (2026-11-15: a Get_Sink_Cap 226 ms after PS_RDY waited for an arm write, 14.8 ms). A source that never goes quiet
+// does not keep the records out for ever: after kJrWaitMs of waiting they go in one per tick regardless. A run that has ended writes without waiting (nothing is being negotiated any more). Nothing ever drains: no call
 // writes more than one file, so no tick is longer than the slowest section (about 250 ms with a compaction, 100 to 150 ms usual).
 namespace {
-constexpr uint32_t kJrQuietMs = 80;
-constexpr uint32_t kJrWaitMs = 400;
+constexpr uint32_t kJrWaitMs = 1000;   // past the 95th percentile of the post-contract requests (charger_journal.hpp)
 constexpr uint32_t kArmWaitMs = 5000;
+// The journal's write gate on the live link (charger_journal::write_ok), `waited` ms after the write began to wait
+bool journal_may_write(uint32_t now, uint32_t waited, uint32_t max_wait) {
+    const pd::SinkStatus& s = fusb302::sink_status();
+    return charger_journal::write_ok(pdtrace::since_activity_ms(), charger_journal::contract_age_ms(now, s.accept_at, s.ps_rdy_at),
+                                     waited, max_wait);
+}
 }
 void ChargerTestSession::journal_pump(uint32_t now) {
     if (!journal_active_ || journal_closed_ || arm_) return;
@@ -404,7 +410,7 @@ void ChargerTestSession::journal_pump(uint32_t now) {
     const bool ended = runner_.state() == ct::State::Done || runner_.state() == ct::State::Stopped;
     if (!ended) {
         if (!jr_wait_ms_) jr_wait_ms_ = now | 1u;
-        if (now - jr_wait_ms_ < kJrWaitMs && pdtrace::since_activity_ms() < kJrQuietMs) return;
+        if (!journal_may_write(now, now - jr_wait_ms_, kJrWaitMs)) return;
     }
     charger_journal::hw::pump(runner_.run_id(), options_, runner_.evidence(), runner_.steps());
 }
@@ -414,7 +420,7 @@ void ChargerTestSession::arm_step(uint32_t now) {
     namespace cj = charger_journal;
     if (!arm_) return;
     if (arm_ == 4) { claim_step(now); return; }   // no flash write: the wait is the probe's own, it does not wait for a quiet link
-    if (pdtrace::since_activity_ms() < kJrQuietMs && now - arm_t0_ < kArmWaitMs) return;
+    if (!journal_may_write(now, now - arm_t0_, kArmWaitMs)) return;
     if (arm_ == 1) {
         cj::hw::pump(runner_.run_id(), options_, runner_.evidence(), runner_.steps());
         if (!cj::hw::working()) arm_ = 2;
