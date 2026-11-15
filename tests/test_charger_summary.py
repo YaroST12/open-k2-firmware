@@ -203,6 +203,19 @@ def test_a_first_try_pass_has_no_retry_note():
     assert "retry" not in charger_summary.summarize(_epr_rows(1))
 
 
+def test_a_folded_row_is_a_caution_not_a_pass():
+    # a pass whose reason is "output folds back" (Reason::Folded): counted apart from the passes, named with the level it measured
+    run = _epr_rows(0)
+    run["steps"][1].update(reason="output folds back", measured_mv=34010)
+    text = charger_summary.summarize(run)
+    assert text.splitlines()[1].startswith("1 pass, 1 caution, 0 fail, 0 skip")
+    assert "36V ⚠ folds to 34V" in text
+    assert "all pass" not in text   # the group no longer collapses into the all-pass line
+    run["steps"][1]["sweep"] = True   # a sweep row has no single level of its own
+    assert "⚠ folds back" in charger_summary.summarize(run)
+    assert "caution" not in charger_summary.summarize(_epr_rows(0))   # a clean run keeps the old header
+
+
 def _mi_run(*rows):
     """Mi 6 A rows, each (result, reason, detail_reason, target_mv)."""
     steps = [{"result": res, "reason": why, "detail_reason": detail, "measured_mv": mv if res == "pass" else 0, "attempts": 1,
@@ -285,9 +298,23 @@ class CardSweepSummary(unittest.TestCase):
             {"alg": "PPS (PD3.x)", "lo_mv": 3300, "hi_mv": 11000, "max_mv": 11000, "fail_mv": 0},
         ]
         text = charger_summary.summarize_card(card)
-        self.assertIn("- PPS 3.3-21V: ✓ whole range, sweep peak 21.0 V at 21.0 V, folds back to 19.42 V from 20.0 V", text)
+        # a fold on a range that failed nothing is a caution: the note replaces the tick and the fold-back clause
+        self.assertIn("- PPS 3.3-21V: ⚠ folds to 19.4V above 19.9V, sweep peak 21.0 V at 21.0 V", text)
+        self.assertNotIn("folds back", text)
         self.assertIn("- PPS 3.3-11V: ✓ whole range", text)
         self.assertNotIn("sweep", text.splitlines()[-1])   # a range without a sweep block stays clean
+
+    def test_a_failing_range_keeps_its_fold_back_clause(self):
+        card = _card({})
+        card["ranges"] = [
+            {"alg": "PPS (PD3.x)", "lo_mv": 3300, "hi_mv": 21000, "max_mv": 13000, "fail_mv": 15000,
+             "sweep": {"min_mv": 0, "max_mv": 10, "worst_mv": -30, "worst_at_mv": 9000, "peak_mv": 13000, "peak_at_mv": 13000,
+                       "fold_mv": 9000, "fold_from_mv": 14000}},
+        ]
+        text = charger_summary.summarize_card(card)
+        self.assertIn("✗ at 15 V", text)   # a failure outranks the caution: the fold stays in the sweep clause, no warning
+        self.assertNotIn("⚠", text)
+        self.assertIn("folds back to 9.0 V from 14.0 V", text)
 
     def test_a_failing_range_carries_the_sweep_after_its_verdict(self):
         card = _card({})

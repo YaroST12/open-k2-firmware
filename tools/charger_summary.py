@@ -26,6 +26,7 @@ NO_QC3PLUS = "no QC3+ response"   # the skip reason of a QC3+ group the charger 
 ADVERTISED, NOT_ASKED = "advertised", "light run: not asked"
 NOTED = (ADVERTISED, NOT_ASKED)
 PORT_CUTS = "port cuts without load"   # Reason::PortCuts: the step lost VBUS to the port's own cut twice, so it is no verdict
+FOLDED = "output folds back"   # Reason::Folded: a pass on the folded side of a voltage fold; a caution, neither pass nor fail
 
 
 def _v(mv):
@@ -43,6 +44,11 @@ def _run_level(r):
     return r.get("level") or (r.get("selection") or {}).get("run_level") or "medium"
 
 
+def _caution(s):
+    """True for a step the run marked a voltage-fold caution (Reason::Folded on a pass)."""
+    return s["result"] == "pass" and s["reason"] == FOLDED
+
+
 def _retry(s):
     """'passed on retry N' for a PD row that took more than one attempt (the firmware counts the first attempt too), else ''."""
     n = s.get("attempts", 0) - 1
@@ -54,6 +60,9 @@ def _step_text(s, prev, amps=True):
     """One row of a group line: its step_label numbers ("5V 3A", "11→8V") and the verdict. `prev` = the plan row before it."""
     # A Mi 6 A probe row carries its protocol word ("Mi 20V 6A"): the group has no heading of its own.
     label = step_label.label(s, prev) if step_label.is_hunt(s) else step_label.params(s, prev, amps=amps)
+    if _caution(s):   # a fixed row measured the folded level; a sweep row has no single level of its own
+        at = "" if s.get("sweep") else f" to {report_card.dv_text(s['measured_mv'])}"
+        return f"{label} ⚠ folds{at}" if at else f"{label} ⚠ folds back"
     if s["result"] == "pass":
         return (f"{label} ✓ handshake ok" if s["detail_reason"] == "handshake ok" else
                 f"{label} ✓ detected" if s["detail_reason"].startswith("detected") else
@@ -79,6 +88,8 @@ def summarize(r):
     steps = r["steps"]
     ev = r.get("evidence", {})
     n = {k: sum(s["result"] == k for s in steps) for k in ("pass", "fail", "skip")}
+    caution = sum(_caution(s) for s in steps)   # a voltage fold: neither a pass nor a failure (the device counts it with "capped")
+    n["pass"] -= caution
     noted = sum(s["result"] == "skip" and s["reason"] in NOTED for s in steps)
     n["skip"] -= noted
     cable = ev.get("physical_cable", {})
@@ -97,7 +108,8 @@ def summarize(r):
     spoof = f" · SPOOF: {ident.get('run_name') or ident['run']}" if ident.get("run") not in (None, "off") else \
         " · SPOOF ON" if ev.get("spoof_on") else ""
     out = [f"Run {r['run_id']} · {ev.get('wire_revision', '?')} · {ev.get('pdo_count', '?')} PDOs · cable {cable_txt}" + spoof,
-           f"{n['pass']} pass, {n['fail']} fail, {n['skip']} skip" + (f", {noted} not asked (Light run)" if noted else "")
+           f"{n['pass']} pass" + (f", {caution} caution" if caution else "") + f", {n['fail']} fail, {n['skip']} skip"
+           + (f", {noted} not asked (Light run)" if noted else "")
            + f" · {r['state']}"
            + (f" ({r['reason']})" if r.get("reason") not in (None, "none") else ""),
            "Scope: Light run, nothing asked above 5 V, no load" if _run_level(r) == "light" else
@@ -152,7 +164,7 @@ def summarize(r):
         head = "" if hunt else f"{name}: "
         text = (lambda s, prev=None, amps=True: step_label.label(s, prev)) if hunt else \
             (lambda s, prev=None, amps=True: step_label.params(s, prev, amps=amps))
-        if all(s["result"] == "pass" for s in rows) and not any(s["continuous"] for s in rows):
+        if all(s["result"] == "pass" for s in rows) and not any(s["continuous"] or _caution(s) for s in rows):
             lo, hi = min(s["measured_mv"] for s in rows), max(s["measured_mv"] for s in rows)
             retried = "".join(f"; {text(s, amps=amps)} {_retry(s)}" for s in rows if _retry(s))
             out.append(f"- {head}{', '.join(text(s, prev_of[id(s)], amps) for s in rows)}, all pass "
@@ -250,8 +262,11 @@ def summarize_card(c):
         rng = f"- {step_label.range_protocol(r['alg'])} {step_label.range_text(r['lo_mv'], r['hi_mv'], r.get('max_ma', 0))}: "
         spread = _spread_text(r)   # v9 card: the setpoint error per passed level, e.g. ", err +10 / +20 / +8 / -12 mV"
         # v10 card: the deep-sweep summary of the APDO, same words as the results page ("sweep peak 21.0 V at 21.0 V, ...").
-        sweep = f", sweep {report_card.sweep_text(r['sweep'])}" if r.get("sweep") else ""
-        if r["fail_mv"]:
+        note = report_card.fold_text(r.get("sweep")) if not r["fail_mv"] else ""   # a fold on a range that failed nothing: a caution
+        sweep = f", sweep {report_card.sweep_text(r['sweep'], with_fold=not note)}" if r.get("sweep") else ""
+        if note:
+            out.append(rng + f"⚠ {note}" + spread + sweep)
+        elif r["fail_mv"]:
             out.append(rng + f"✗ at {_v(r['fail_mv'])} V" + (f", reached {_v(r['max_mv'])} V" if r["max_mv"] else "") + spread + sweep)
         elif r["max_mv"] >= r["hi_mv"]:
             out.append(rng + "✓ whole range" + spread + sweep)

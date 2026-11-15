@@ -452,7 +452,7 @@ test("charger-test sweep row: flags bit 5, the detail byte is the recorded point
 test("charger-test schema2 rejects malformed shapes, unknown masks and unselected rows", () => {
   const good = testPage(TEST_HEADER2, 0, [TEST_ROWS[0]]);
   for (const [at, value] of [[0, 3], [11, 107], [23, 0x42], [39, 12], [18, 0x80], [22, 0x30], [22, 0x08],
-                            [42, 20], [43, 12], [44, 0x80], [51, 5], [52, 51]]) {   // 51 = one past the last reason (50 = PortCuts); [22, 0x30] = draft bits 28..29 = 3, no level; [22, 0x08] = draft bit 27, below the level
+                            [42, 20], [43, 12], [44, 0x80], [51, 5], [52, 52]]) {   // 52 = one past the last reason (51 = Folded); [22, 0x30] = draft bits 28..29 = 3, no level; [22, 0x08] = draft bit 27, below the level
     const bad = new Uint8Array(good); bad[at] = value;
     assert.throws(() => P.decodeChargerTest(bad), P.FrameError, "offset " + at);
   }
@@ -477,6 +477,7 @@ test("charger-test reasons 45/46 (PPS coverage): floor and step resolution decod
   // step not followed; the detail byte is the measured move in mV)
   assert.equal(P.TEST_REASONS[45], "floored above target");
   assert.equal(P.TEST_REASONS[46], "step resolution");
+  assert.equal(P.TEST_REASONS[51], "output folds back");   // Folded: a pass on the folded side of a voltage fold
   const row = new Uint8Array(TEST_ROWS[1]);
   row[3] = 3300 & 0xFF; row[4] = 3300 >> 8;         // target 3.3 V
   row[7] = 5000 & 0xFF; row[8] = 5000 >> 8;          // measured 5.0 V (the floor)

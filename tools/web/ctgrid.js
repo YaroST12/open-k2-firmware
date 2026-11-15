@@ -125,7 +125,7 @@ var CtGrid = (function () {
              result: r.result, reason: r.reason || "none", detail: r.detail || 0, hunt: isHunt(r), sweep: isSweep(r), raw: r };
   }
   function count(t, s) {
-    if (s.result === "pass") t.pass++;
+    if (s.result === "pass") { if (s.reason === "output folds back") t.capped++; else t.pass++; }   // a voltage fold is a caution: counted with the capped rows, never a pass
     else if (s.result === "fail") { if (s.reason === "capped below target") t.capped++; else t.fail++; }
     else if (s.result === "skip") t.skip++;
     else t.pending++;
@@ -347,7 +347,8 @@ var CtGrid = (function () {
     }
     var WORD = { pass: "pass", fail: "fail", skip: "skipped", pending: "pending", running: "running", stopped: "stopped", partial: "partial", none: "" };
     function whyOf(c) {
-      var f = c.steps.filter(function (s) { return s.result === "fail"; })[0] || c.steps.filter(function (s) { return s.result === "skip"; })[0];
+      var f = c.steps.filter(function (s) { return s.result === "fail"; })[0] || c.steps.filter(function (s) { return s.result === "skip"; })[0]
+              || c.steps.filter(function (s) { return s.result === "pass" && s.reason === "output folds back"; })[0];   // a caution says why too
       if (!f) return "";
       var dr = f.raw.detail_reason;
       var w = f.result === "fail" && dr && dr !== "none" ? dr : f.reason !== "none" ? f.reason : "";

@@ -706,7 +706,7 @@ var K2Proto = (function () {
                       "timeout", "voltage outside band", "hard reset", "source lost", "cancelled", "5V release failed",
                       "offers changed", "PD active: use QC port", "revision cannot be forced", "select at least one test",
                       "physical cable limit", "unsupported PDO layout",
-                      "charger stayed in PD", "rebooted during request", "rebooted during handover", "EPR entry refused", "no contract", "source shut off (needs replug)", "no PD after re-attach", "VBUS cut, source recovered", "blocked by PD", "no QC3+ response", "rebooted 3x", "needs external power", "PD gave up before START", "Class A only (12 V max)", "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target", "withdrawn by source", "wrong voltage on 5V contract", "needs load", "floored above target", "step resolution", "HID-cable loop: 5V lock", "advertised", "light run: not asked", "port cuts without load"];
+                      "charger stayed in PD", "rebooted during request", "rebooted during handover", "EPR entry refused", "no contract", "source shut off (needs replug)", "no PD after re-attach", "VBUS cut, source recovered", "blocked by PD", "no QC3+ response", "rebooted 3x", "needs external power", "PD gave up before START", "Class A only (12 V max)", "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target", "withdrawn by source", "wrong voltage on 5V contract", "needs load", "floored above target", "step resolution", "HID-cable loop: 5V lock", "advertised", "light run: not asked", "port cuts without load", "output folds back"];
   var TEST_ALL = (1 << TEST_ALGORITHMS.length) - 1;
   var TEST_LEVELS = ["medium", "light", "deep"];   // charger_test::Level order: Medium 0 (the default), Light 1, Deep 2
   var LATENCY = ["n/a", "<10 ns (~1 m)", "10-20 ns (~2 m)", "20-30 ns (~3 m)", "30-40 ns (~4 m)",
@@ -3304,7 +3304,7 @@ var CtGrid = (function () {
              result: r.result, reason: r.reason || "none", detail: r.detail || 0, hunt: isHunt(r), sweep: isSweep(r), raw: r };
   }
   function count(t, s) {
-    if (s.result === "pass") t.pass++;
+    if (s.result === "pass") { if (s.reason === "output folds back") t.capped++; else t.pass++; }   // a voltage fold is a caution: counted with the capped rows, never a pass
     else if (s.result === "fail") { if (s.reason === "capped below target") t.capped++; else t.fail++; }
     else if (s.result === "skip") t.skip++;
     else t.pending++;
@@ -3526,7 +3526,8 @@ var CtGrid = (function () {
     }
     var WORD = { pass: "pass", fail: "fail", skip: "skipped", pending: "pending", running: "running", stopped: "stopped", partial: "partial", none: "" };
     function whyOf(c) {
-      var f = c.steps.filter(function (s) { return s.result === "fail"; })[0] || c.steps.filter(function (s) { return s.result === "skip"; })[0];
+      var f = c.steps.filter(function (s) { return s.result === "fail"; })[0] || c.steps.filter(function (s) { return s.result === "skip"; })[0]
+              || c.steps.filter(function (s) { return s.result === "pass" && s.reason === "output folds back"; })[0];   // a caution says why too
       if (!f) return "";
       var dr = f.raw.detail_reason;
       var w = f.result === "fail" && dr && dr !== "none" ? dr : f.reason !== "none" ? f.reason : "";
@@ -4887,7 +4888,8 @@ if (typeof module !== "undefined" && module.exports) module.exports = CtGrid;
   function fmtSecs(s) { return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); }
   function stepText(s) {
     return s.group.toUpperCase() + " " + s.protocol + (s.target_mv ? " " + volts(s.target_mv, 2) + " V" : "") +
-      (s.measured_mv ? " (measured " + volts(s.measured_mv, 2) + " V)" : "") + ": " + s.result.toUpperCase() +
+      (s.measured_mv ? " (measured " + volts(s.measured_mv, 2) + " V)" : "") + ": " +
+      (s.result === "pass" && s.reason === "output folds back" ? "CAUTION - folds back" : s.result.toUpperCase()) +   // a voltage fold: neither pass nor fail
       (s.result === "fail" || s.result === "skip" ? " - " + (s.explanation || s.reason) : "");
   }
   function ctRenderLive(st, v, active) {

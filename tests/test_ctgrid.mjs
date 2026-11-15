@@ -63,6 +63,19 @@ test("the finished grid folds the silent and the skipped units into word rows", 
   ]);
 });
 
+// A voltage fold is a caution: a pass with the reason "output folds back" tallies with the capped rows, so its cell is partial.
+test("a folded pass reads partial in the grid, a clean one stays pass", () => {
+  const steps = baseus();
+  const row = steps.find((s) => s.algorithm === "pd3x-fixed" && s.target_mv === 20000);
+  assert.ok(row && row.result === "pass");
+  const clean = lines(steps, { fold: true })[0];
+  assert.match(clean, /20V\/3\.35A:pass/);
+  row.reason = "output folds back";
+  const folded = lines(steps, { fold: true })[0];
+  assert.match(folded, /20V\/3\.35A:partial/);
+  assert.match(folded, /15V\/3A:pass/);   // its neighbours keep their verdict
+});
+
 test("sections: a 2 px rule where the unit's section changes, never on the first line", () => {
   const got = lines(baseus(), { fold: false });
   assert.ok(!got[0].startsWith("-- "));
