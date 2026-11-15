@@ -1578,9 +1578,14 @@ def charger_svooc_cap(link, mode=None):
             "ident": ident, "note": SVOOC_CAP_NOTE}
 
 
-def svooc_claim(word):
-    """The claimed ask as the Results row words it: "10.9A claimed" (no space before the unit), "none claimed" for 0."""
-    return f"{word * SVOOC_MA_PER_COUNT / 1000:.1f}A claimed" if word else "none claimed"
+def svooc_claim(word, vmax_mv=0):
+    """The claimed ask as the Results row words it: "10.9A claimed" (no space before the unit), "none claimed" for 0. With the
+    top VBUS seen it adds the claimed power in whole watts, vmax x ask ("10.9A 120W claimed"; svooc_ceiling::claim_w): a claim
+    read from the protocol, never a drawn power."""
+    if not word:
+        return "none claimed"
+    watts = f" {(vmax_mv * word * SVOOC_MA_PER_COUNT + 500000) // 1000000}W" if vmax_mv else ""
+    return f"{word * SVOOC_MA_PER_COUNT / 1000:.1f}A{watts} claimed"
 
 
 def svooc_cap_text(end, word, vmax_mv, stop_ms, abort_word=""):
@@ -1597,7 +1602,7 @@ def svooc_cap_text(end, word, vmax_mv, stop_ms, abort_word=""):
         parts.append(f"aborted: {abort_word}" if abort_word else "aborted")
     if vmax_mv:
         parts.append(f"<={tenths(vmax_mv)}V")
-    parts.append(svooc_claim(word))
+    parts.append(svooc_claim(word, vmax_mv))
     return ", ".join(parts)
 
 

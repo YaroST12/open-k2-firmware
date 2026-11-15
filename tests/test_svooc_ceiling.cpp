@@ -22,7 +22,7 @@ namespace {
 
 std::string cap_text(std::uint16_t word, End end, std::uint16_t vmax_mv = 0, std::uint16_t stop_ms = 0,
                      svooc::Abort why = svooc::Abort::None) {
-    char b[48];
+    char b[56];
     sc::format_cap({word, end, vmax_mv, stop_ms, std::uint8_t(why)}, b);
     return b;
 }
@@ -104,21 +104,27 @@ void test_result_text() {
     CHECK_STR(cap_text(0, End::None).c_str(), "-");
     // The highest VBUS the trigger saw ("<=11.1V": VBUS stayed at or under it), tenths rounded, ahead of the claim; "stopped at"
     // the adapter's last edge after the wake.
-    CHECK_STR(cap_text(0x06D, End::Judged, 11120).c_str(), "<=11.1V, 10.9A claimed");
-    CHECK_STR(cap_text(0x028, End::Stopped, 9100, 3300).c_str(), "stopped at 3.3s, <=9.1V, 4.0A claimed");
+    // The claimed power is the top VBUS x the ask, whole watts (never a drawn power): 11.12 V x 10.9 A = 121 W. It needs both
+    // numbers, so no VBUS read (above) or no ask (below) leaves it out.
+    CHECK_STR(cap_text(0x06D, End::Judged, 11120).c_str(), "<=11.1V, 10.9A 121W claimed");
+    CHECK_STR(cap_text(0x06D, End::Stopped, 11020, 3300).c_str(), "stopped at 3.3s, <=11.0V, 10.9A 120W claimed");
+    CHECK_STR(cap_text(0x028, End::Stopped, 9100, 3300).c_str(), "stopped at 3.3s, <=9.1V, 4.0A 36W claimed");
+    CHECK_STR(cap_text(0x00F, End::Judged, 5000).c_str(), "<=5.0V, 1.5A 8W claimed");   // 7.5 W rounds up
+    CHECK_STR(cap_text(0x06D, End::Judged, 11000).c_str(), "<=11.0V, 10.9A 120W claimed");   // 119.9 W
+    CHECK_STR(cap_text(0x06D, End::Stopped, 11999, 12000).c_str(), "stopped at 12.0s, <=12.0V, 10.9A 131W claimed");   // the worst case
     CHECK_STR(cap_text(0, End::Stopped, 5270, 12500).c_str(), "stopped at 12.5s, <=5.3V, none claimed");
     CHECK_STR(cap_text(0x028, End::Stopped, 0, 3349).c_str(), "stopped at 3.3s, 4.0A claimed");
     CHECK_STR(cap_text(0, End::Refused, 5270, 3300).c_str(), "refused");   // nothing ran: no numbers
     // An abort says so, with its cause in a short word (hardware 2026-11-15 read "none claimed" for a session the K2 cut).
     CHECK_STR(cap_text(0, End::Aborted, 7983, 1305, svooc::Abort::Sink).c_str(), "aborted: sink, <=8.0V, none claimed");
-    CHECK_STR(cap_text(0x028, End::Aborted, 9100, 0, svooc::Abort::Overvoltage).c_str(), "aborted: over 12V, <=9.1V, 4.0A claimed");
-    // The longest phrase (43 characters) still fits the 47 characters of the Results note.
+    CHECK_STR(cap_text(0x028, End::Aborted, 9100, 0, svooc::Abort::Overvoltage).c_str(), "aborted: over 12V, <=9.1V, 4.0A 36W claimed");
+    // The longest phrase (48 characters) still fits the 55 of the note buffer.
     CHECK_STR(cap_text(0x06D, End::Aborted, 11120, 0, svooc::Abort::OffScript).c_str(),
-              "aborted: off-script, <=11.1V, 10.9A claimed");
+              "aborted: off-script, <=11.1V, 10.9A 121W claimed");
     for (unsigned a = 0; a <= unsigned(svooc::Abort::ContractChanged) + 1; ++a) {
         const char* w = sc::abort_word(std::uint8_t(a));
         CHECK(w != nullptr && std::strlen(w) <= 10);
-        CHECK_EQ(int(cap_text(0x06D, End::Aborted, 11120, 0, svooc::Abort(a)).size()) <= 47, true);
+        CHECK_EQ(int(cap_text(0x06D, End::Aborted, 11120, 0, svooc::Abort(a)).size()) <= 55, true);
     }
     // The VOOC family's ident as the "VOOC id" row reads it; 0 (none heard) writes nothing.
     {

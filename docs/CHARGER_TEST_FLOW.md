@@ -145,18 +145,19 @@ aborts with `Overvoltage` and releases the lines), and the card and Results show
   0x82 polls like a phone and walks a 4-rung 0x86 ladder (100 mA per count: 0x00F 1.5 A, 0x028 4.0 A, 0x03F 6.3 A,
   0x06D 10.9 A), one rung per 12 polls (0.52 s) so all four are asked within about 1.6 s of the ramp end, before a no-load
   adapter's stop (`svooc::kProbeEscGapPolls`). The **measured ceiling** is the highest 0x86 word the adapter kept the session going under, shown in the
-  Results tab as `SV cap` ("<=11.1V, 10.9A claimed": the highest VBUS the trigger saw and the claimed ask). It is the
-  K2's own ask that the charger did not abort, read from the protocol;
-  it is **not a drawn current**, and the K2 never loads the charger (the trigger's 50 mA guard and 12 V abort stay).
+  Results tab as `SV cap` ("<=11.1V, 10.9A 121W claimed": the highest VBUS the trigger saw, the claimed ask and the
+  claimed power, VBUS x ask in whole watts; the watts need both numbers). It is the K2's own ask that the charger did not
+  abort, read from the protocol;
+  it is **not a drawn current** and the watts are not a drawn power, and the K2 never loads the charger (the trigger's 50 mA guard and 12 V abort stay).
   Modes: `off` (Light, Medium), `on` (Deep; the trigger's start guards must pass), `usb-a` (waiver for a USB-A charger on the bottom
   port with the top port empty; never with a phone on the other port). The usb-a waiver also reaches the run's own
   inline checks, for the same two causes the trigger waives (`svooc::inline_waived`: FarRd, Vbus) and only in a run that
   holds an SVOOC unit; a Load / Request / Rise latch still refuses. The stage starts only once D+/D- are free
   (`svooc_trig::lines_free()`): the family session's release holds them at 0 V for 500 ms first. An adapter that talked
   and then sent no edge for `kQuietMs` (500 ms) ended the session (every no-load session so far, ~3.3 s after the wake):
-  the stage stops the trigger and reads `stopped` ("stopped at 3.3s, <=9.1V, 4.0A claimed"), a normal outcome. A
+  the stage stops the trigger and reads `stopped` ("stopped at 3.3s, <=11.0V, 10.9A 120W claimed"), a normal outcome. A
   refusal, a missing adapter answer or an abort ends the stage with its reason; the ceiling stays what had been accepted before.
-  An abort reads "aborted: <cause>, ..." ("aborted: sink, <=8.0V, none claimed"); when the run's own guard (inline,
+  An abort reads "aborted: <cause>, ..." ("aborted: sink, <=8.0V, none claimed": no ask, no watts); when the run's own guard (inline,
   monitor) stopped the trigger, the recorded cause is that guard's, not the trigger's "stopped". While the trigger runs
   (exit watch included) the Link counts the adapter's VBUS ramp as the K2's own (`own_contract`), so the PD-silent session's
   missing contract does not latch inline with cause Rise (hardware 2026-11-15: that latch took the Rd off and the brick

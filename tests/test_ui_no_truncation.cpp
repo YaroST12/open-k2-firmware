@@ -660,7 +660,7 @@ void test_card_screens() {
         CHECK_EQ(labelled > 20, true);   // the sweep reaches Moto, QC4+, QC5 and Samsung labels
     }
     // The VOOC family's fact rows (ChargerTestPage::build_results): "VOOC id" with the ident at every level, and the Deep
-    // ceiling stage's words for every end and every abort cause at the widest numbers (10.9A claimed, <=11.1V, 12.5s), built
+    // ceiling stage's words for every end and every abort cause at the widest numbers (10.9A 131W claimed, <=12.0V, 12.0s), built
     // through the real formatters and checked like the rows above: the label against the strip, each grid line against its width.
     {
         namespace rl = result_layout;
@@ -669,8 +669,8 @@ void test_card_screens() {
         for (unsigned end = 0; end < sc::kEndCount; ++end)
             for (unsigned why = 0; why <= unsigned(svooc::Abort::ContractChanged); ++why) {
                 if (end != unsigned(sc::End::Aborted) && why) continue;
-                char cap[48] = {}, id[6] = {};
-                sc::format_cap({0x06D, sc::End(end), 11120, 12500, uint8_t(why)}, cap);
+                char cap[sc::kCapChars] = {}, id[6] = {};
+                sc::format_cap({0x06D, sc::End(end), 11999, 12000, uint8_t(why)}, cap);
                 sc::format_ident(0xAC, id);
                 rl::OemNotes oem;
                 oem.headers = false;

@@ -55,9 +55,9 @@ def test_svooc_ident_and_ceiling_lines():
     assert "- VOOC family ident 0xAC" in text
     assert "SVOOC ceiling" not in text
     # Deep: the stage's words as the K2's Results row reads them
-    run["svooc"] = {"mode": "on", "end": "stopped", "text": "stopped at 3.3s, <=9.1V, 4.0A claimed", "ident": 0xAC}
+    run["svooc"] = {"mode": "on", "end": "stopped", "text": "stopped at 3.3s, <=11.0V, 10.9A 120W claimed", "ident": 0xAC}
     text = charger_summary.summarize(run)
-    assert "- SVOOC ceiling: stopped at 3.3s, <=9.1V, 4.0A claimed (protocol read, no load)" in text
+    assert "- SVOOC ceiling: stopped at 3.3s, <=11.0V, 10.9A 120W claimed (protocol read, no load)" in text
     # nothing heard and nothing run (or firmware without the readout): no line
     run["svooc"] = {"mode": "off", "end": "not run", "text": "-", "ident": 0}
     assert "VOOC" not in charger_summary.summarize(run)

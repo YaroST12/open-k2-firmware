@@ -766,14 +766,14 @@ static void test_svooc_ceiling_note_row() {
     CHECK_STR(chips(l, row_of(l, "SV cap")).c_str(), "6.3A claimed");
     {   // the longest words (the no-load stop) are laid out whole: the phrase wraps, nothing is cut
         rl::OemNotes stop;
-        stop.svooc_cap = "stopped at 12.5s, <=11.1V, 10.9A claimed";
+        stop.svooc_cap = "stopped at 12.0s, <=11.0V, 10.9A 120W claimed";
         rl::Layout s;
         rl::build(s, baseus(), stop);
-        CHECK_STR(chips(s, row_of(s, "SV cap")).c_str(), "stopped at 12.5s, <=11.1V, 10.9A claimed");
-        stop.svooc_cap = "aborted: off-script, <=11.1V, 10.9A claimed";   // the longest abort phrase (43 characters)
+        CHECK_STR(chips(s, row_of(s, "SV cap")).c_str(), "stopped at 12.0s, <=11.0V, 10.9A 120W claimed");
+        stop.svooc_cap = "aborted: off-script, <=11.1V, 10.9A 121W claimed";   // the longest abort phrase (48 characters)
         rl::Layout a;
         rl::build(a, baseus(), stop);
-        CHECK_STR(chips(a, row_of(a, "SV cap")).c_str(), "aborted: off-script, <=11.1V, 10.9A claimed");
+        CHECK_STR(chips(a, row_of(a, "SV cap")).c_str(), "aborted: off-script, <=11.1V, 10.9A 121W claimed");
         CHECK_EQ(s.cuts + a.cuts, 0u);
     }
     {   // the ident of a Light / Medium run (no stage): its own row, beside the legacy rows' "detected"

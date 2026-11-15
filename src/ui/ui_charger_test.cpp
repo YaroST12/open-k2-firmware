@@ -1373,9 +1373,9 @@ void ChargerTestPage::build_grid(bool running_grid, bool note_cuts) {
     oem.rebalanced = s_.runner_.evidence().rebalanced;   // the source re-split its budget mid-run this many times
     char scp_note[24] = {};   // "SCP cap 20V 6A": the row's label is the first two words
     if (report_card::scp_note(card, scp_note, sizeof scp_note)) oem.scp_cap = scp_note + 8;
-    // "<=11.1V, 10.9A claimed" / "stopped at 3.3s, ...": the SuperVOOC ceiling stage's result (Deep only; nothing when it did not
+    // "<=11.1V, 10.9A 121W claimed" / "stopped at 3.3s, ...": the SuperVOOC ceiling stage's result (Deep only; nothing when it did not
     // run), and the VOOC family's ident the detection heard ("0xAC", every level)
-    char svooc_note[48] = {};
+    char svooc_note[svooc_ceiling::kCapChars] = {};
     char ident_note[6] = {};
     const auto& ev = s_.runner_.evidence();
     if (svooc_ceiling::format_ident(ev.vooc_ident, ident_note)) oem.vooc_ident = ident_note;

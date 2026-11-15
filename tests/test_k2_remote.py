@@ -1816,7 +1816,7 @@ class ChargerSvoocCapCli(unittest.TestCase):
         self.assertEqual(r["asks"], 4)
         self.assertEqual(r["ceiling"], {"word": 0x6D, "ma": 10900, "text": "10.9A claimed"})
         self.assertEqual(r["vmax_mv"], 11120)
-        self.assertEqual(r["text"], "<=11.1V, 10.9A claimed")
+        self.assertEqual(r["text"], "<=11.1V, 10.9A 121W claimed")
         self.assertIsNone(r["ident"])   # a 10-byte reply (before the ident byte)
         self.assertIn("not a drawn current", r["note"])
 
@@ -1833,7 +1833,7 @@ class ChargerSvoocCapCli(unittest.TestCase):
         self.assertEqual(r["end"], "stopped")
         self.assertIsNone(r["why"])
         self.assertEqual((r["vmax_mv"], r["stop_ms"]), (9100, 3300))
-        self.assertEqual(r["text"], "stopped at 3.3s, <=9.1V, 4.0A claimed")
+        self.assertEqual(r["text"], "stopped at 3.3s, <=9.1V, 4.0A 36W claimed")
 
     def test_an_abort_names_its_cause(self):
         # end=3 aborted, why=6 sink appeared: the K2 cut the session (hardware 2026-11-15 read "none claimed" here)
@@ -1844,7 +1844,7 @@ class ChargerSvoocCapCli(unittest.TestCase):
         self.assertEqual(r["text"], "aborted: sink, <=8.0V, none claimed")
         reply = bytes([1, 3, 3, 4, 0x6D, 0]) + (11120).to_bytes(2, "little") + bytes(2)
         r, _ = self.invoke(["charger-svooc-cap"], [reply])
-        self.assertEqual(r["text"], "aborted: off-script, <=11.1V, 10.9A claimed")
+        self.assertEqual(r["text"], "aborted: off-script, <=11.1V, 10.9A 121W claimed")
 
     def test_an_older_six_byte_reply_still_reads(self):
         r, _ = self.invoke(["charger-svooc-cap"], [bytes([1, 5, 0, 4, 0x6D, 0])])

@@ -1756,7 +1756,9 @@ var K2Proto = (function () {
     if (end === "stopped" && stopMs !== null) parts.push("stopped at " + tenths(stopMs) + "s");
     if (end === "aborted") parts.push(abortWord ? "aborted: " + abortWord : "aborted");
     if (vmaxMv) parts.push("<=" + tenths(vmaxMv) + "V");
-    parts.push(word ? (word * 100 / 1000).toFixed(1) + "A claimed" : "none claimed");
+    // The claimed power: top VBUS x the ask in whole watts (svooc_ceiling::claim_w), a claim read from the protocol, never drawn.
+    var watts = vmaxMv ? " " + Math.floor((vmaxMv * word * 100 + 500000) / 1000000) + "W" : "";
+    parts.push(word ? (word * 100 / 1000).toFixed(1) + "A" + watts + " claimed" : "none claimed");
     return parts.join(", ");
   }
   function decodeChargerSvoocCap(p) {

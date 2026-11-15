@@ -125,16 +125,26 @@ constexpr const char* abort_word(std::uint8_t why) {
     return "?";
 }
 
+// The power the claim stands for: the highest VBUS the trigger saw x the ask, in whole watts (mV x mA / 1e6, rounded). A claim read
+// from the protocol, not a drawn power. 11020 mV x 0x06D (10.9 A) = 120 W.
+constexpr std::uint32_t claim_w(std::uint16_t vmax_mv, std::uint16_t word) {
+    return (std::uint32_t(vmax_mv) * ceiling_ma(word) + 500000u) / 1000000u;
+}
+inline constexpr std::size_t kCapChars = 56;   // the buffer every caller of format_cap holds (the longest phrase is 48 characters)
+
 // The Results row's words. The ask is what the K2 claimed in the protocol (100 mA per count), never a drawn current:
-//   Stopped: "stopped at 3.3s, <=9.1V, 4.0A claimed" (the adapter's last edge, the top VBUS, the ask it went on under);
+//   Stopped: "stopped at 3.3s, <=11.0V, 10.9A 120W claimed" (the adapter's last edge, the top VBUS, the ask it went on under,
+//            and the power that pair claims);
 //   Aborted: "aborted: sink, <=8.0V, none claimed" (the cause's short word; "aborted, ..." with none recorded);
-//   any other run: "<=11.1V, 10.9A claimed" ("none claimed" without an accepted ask; no VBUS part when none was read).
+//   any other run: "<=11.1V, 10.9A 121W claimed" ("none claimed" without an accepted ask; no VBUS part when none was read).
+//   The watts are the top VBUS x the ask in whole W (kClaimW): a claim read from the protocol, never a drawn power, so the
+//   word "claimed" stays; no VBUS read or no ask leaves them out. The longest phrase is 48 characters (kCapChars).
 //   "<=" reads "VBUS stayed at or under"; units take no space (k2-micro-gui copy rule);
 //   "refused" / "no adapter" when nothing ran, "-" while it runs. Tenths are rounded. No stdio on the device: digits by hand.
 // Returns the length; a short buffer cuts the text (always terminated).
 inline std::size_t format_cap(const Outcome& c, std::span<char> out) {
     if (out.empty()) return 0;
-    char tmp[48] = {};
+    char tmp[kCapChars] = {};
     std::size_t n = 0;
     const auto put = [&](const char* s) { while (*s && n + 1 < sizeof tmp) tmp[n++] = *s++; };
     const auto tenths = [&](std::uint32_t t) {   // "12.5"
@@ -155,7 +165,19 @@ inline std::size_t format_cap(const Outcome& c, std::span<char> out) {
             if (*w) { put("aborted: "); put(w); put(", "); } else put("aborted, ");
         }
         if (c.vmax_mv) { put("<="); tenths((std::uint32_t(c.vmax_mv) + 50u) / 100u); put("V, "); }
-        if (c.word) { tenths(ceiling_ma(c.word) / 100u); put("A claimed"); }
+        if (c.word) {
+            tenths(ceiling_ma(c.word) / 100u);
+            put("A ");
+            if (c.vmax_mv) {   // "120W ": the claim in whole watts
+                char d[8];
+                std::size_t k = 0;
+                std::uint32_t w = claim_w(c.vmax_mv, c.word);
+                do { d[k++] = char('0' + w % 10u); w /= 10u; } while (w && k < sizeof d);
+                while (k && n + 1 < sizeof tmp) tmp[n++] = d[--k];
+                put("W ");
+            }
+            put("claimed");
+        }
         else put("none claimed");
     }
     n = n < out.size() - 1 ? n : out.size() - 1;

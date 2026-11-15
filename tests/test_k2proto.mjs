@@ -2039,8 +2039,9 @@ test("chargerSvoocCap: the ceiling words and the ident mirror k2_remote.charger_
   const stopped = [1, 7, 0, 2, ...le(0x28), ...le(9100), ...le(3300), 0xAC];
   const s = P.decodeChargerSvoocCap(u8(...stopped));
   assert.deepEqual([s.mode, s.end, s.word, s.ma, s.vmax_mv, s.stop_ms, s.ident], ["on", "stopped", 0x28, 4000, 9100, 3300, 0xAC]);
-  assert.equal(s.text, "stopped at 3.3s, <=9.1V, 4.0A claimed");
-  assert.equal(P.decodeChargerSvoocCap(u8(1, 5, 0, 4, ...le(0x6D), ...le(11120), 0, 0, 0)).text, "<=11.1V, 10.9A claimed");
+  assert.equal(s.text, "stopped at 3.3s, <=9.1V, 4.0A 36W claimed");
+  assert.equal(P.decodeChargerSvoocCap(u8(1, 5, 0, 4, ...le(0x6D), ...le(11120), 0, 0, 0)).text, "<=11.1V, 10.9A 121W claimed");
+  assert.equal(P.decodeChargerSvoocCap(u8(1, 7, 0, 4, ...le(0x6D), ...le(11020), ...le(3300), 0)).text, "stopped at 3.3s, <=11.0V, 10.9A 120W claimed");
   const ab = P.decodeChargerSvoocCap(u8(1, 3, 6, 0, 0, 0, ...le(7983), ...le(1305), 0));
   assert.equal(ab.text, "aborted: sink, <=8.0V, none claimed");
   assert.equal(ab.ident, 0);
@@ -2059,7 +2060,7 @@ test("chargerSvoocCap: the ceiling words and the ident mirror k2_remote.charger_
   await assert.rejects(() => remote.chargerSvoocCap("maybe"), RangeError);
   // the run summary's lines, as tools/charger_summary.py words them
   assert.deepEqual(P.svoocLines(light), ["VOOC family ident 0xA8"]);
-  assert.deepEqual(P.svoocLines(s), ["VOOC family ident 0xAC", "SVOOC ceiling: stopped at 3.3s, <=9.1V, 4.0A claimed (protocol read, no load)"]);
+  assert.deepEqual(P.svoocLines(s), ["VOOC family ident 0xAC", "SVOOC ceiling: stopped at 3.3s, <=9.1V, 4.0A 36W claimed (protocol read, no load)"]);
   assert.deepEqual(P.svoocLines(P.decodeChargerSvoocCap(u8(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))), []);
   assert.deepEqual(P.svoocLines(null), []);
 });
