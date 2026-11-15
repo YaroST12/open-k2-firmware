@@ -257,7 +257,7 @@ details > *:not(summary) { margin-top: 8px; }
 #log .web { color: #7aa7ff; }
 #log .fault { color: #ff7b72; }
 
-/* pages: hash routes inside this one file (#live, #test, #cables, #triggers, #device); one page shows at a time */
+/* pages: hash routes inside this one file (#live, #test, #pd, #fc, #spec, #cables, #device; #triggers is an alias of #pd); one page shows at a time */
 #tabs { display: flex; flex-wrap: wrap; gap: 0 2px; flex-basis: 100%; margin: 0 -4px -10px; }
 #tabs a { padding: 6px 12px 8px; color: var(--muted); text-decoration: none; font-weight: 600; white-space: nowrap;
           border-bottom: 2px solid transparent; }
@@ -267,10 +267,25 @@ details > *:not(summary) { margin-top: 8px; }
 #tabs a.live::after { content: " \25CF"; color: var(--accent); }
 main > [data-page] { display: none; }
 main[data-route="live"] > [data-page~="live"], main[data-route="test"] > [data-page~="test"],
-main[data-route="cables"] > [data-page~="cables"], main[data-route="triggers"] > [data-page~="triggers"],
-main[data-route="device"] > [data-page~="device"] { display: flex; }
+main[data-route="pd"] > [data-page~="pd"], main[data-route="fc"] > [data-page~="fc"], main[data-route="spec"] > [data-page~="spec"],
+main[data-route="cables"] > [data-page~="cables"], main[data-route="device"] > [data-page~="device"] { display: flex; }
 #route-note { grid-column: span 12; margin: 0; }
 @media (max-width: 720px) { header { padding: 8px 10px; } main { padding: 10px 8px 24px; gap: 10px; } .card { padding: 10px; } }
+
+/* the K2 kit pages (PD, Fast charge, Spec check, Cables): square panels on the kit surface, a TopBar with the live V and A,
+   and one footer band (armed, error or information) that sticks to the bottom of the window */
+#k-topbar { margin: 0; }
+.card.k-pan { border-radius: 0; background: var(--k-surface); border-color: var(--k-rule); font-family: var(--k-font); gap: 8px;
+              --k-kv-max: 560px; --k-rl-max: 640px; }
+.card.k-pan.k-wide { grid-column: span 12; }
+.card.k-pan > h2.k-h { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin: 0; font: 700 13px var(--k-font);
+                       letter-spacing: .08em; text-transform: uppercase; color: var(--k-dim); }
+.card.k-pan > h2.k-h .k-sub { margin: 0; font-weight: 400; text-transform: none; letter-spacing: 0; }
+.k-pan .k-in { width: 100%; max-width: 280px; }
+.k-pan [data-list] { min-width: 0; }
+.k-pan .k-actions { margin: 4px 0 0; }
+#k-foot { margin: 0; }
+@media (max-width: 720px) { .card.k-pan { padding: 10px; } .k-pan .k-actions .k-act { flex: 1 1 140px; } }
 
 /* charger test page */
 .units { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 6px; }
@@ -303,10 +318,11 @@ progress { width: 100%; height: 10px; accent-color: var(--accent); }
   <select id="poll"><option value="250">250 ms</option><option value="500" selected>500 ms</option><option value="1000">1 s</option><option value="2000">2 s</option></select>
   <button id="theme" aria-label="Toggle light and dark theme">Dark</button>
   <nav id="tabs" aria-label="Pages">
-    <a href="#live">Live</a><a href="#test" id="tab-test">Charger test</a><a href="#cables">Cables</a><a href="#triggers">Triggers</a><a href="#device">Device</a>
+    <a href="#live">Live</a><a href="#test" id="tab-test">Charger test</a><a href="#pd">PD</a><a href="#fc">Fast charge</a><a href="#spec">Spec check</a><a href="#cables">Cables</a><a href="#device">Device</a>
   </nav>
 </header>
 <div id="banner" role="alert"></div>
+<div id="k-topbar" hidden></div>
 <main id="main" data-route="live">
 
   <section class="card s12" id="c-power" data-page="live" aria-label="Power">
@@ -356,35 +372,24 @@ progress { width: 100%; height: 10px; accent-color: var(--accent); }
     </details>
   </section>
 
-  <section class="card" id="c-cable" data-page="cables" aria-label="Cable e-marker">
-    <h2>Cable / e-marker <span class="sub" id="em-age"></span></h2>
-    <div id="emarker" class="empty">Not connected.</div>
-    <div class="row">
-      <button id="em-refresh" class="needs-link" disabled>Refresh</button>
-      <button id="em-scan" class="needs-link" disabled>Scan cable</button>
-    </div>
-    <div class="msg" id="m-em"></div>
+    <section class="card k-pan" id="c-cable" data-page="cables" aria-label="Cable e-marker">
+    <h2 class="k-h">Cable / e-marker <span class="k-sub" id="em-age"></span></h2>
+    <div id="emarker"></div>
   </section>
 
-  <section class="card" id="c-cards" data-page="device" aria-label="Charger report cards">
-    <h2>Report cards <span class="sub" id="rc-count"></span></h2>
-    <div id="cards" class="empty">Not connected.</div>
-    <div class="row">
-      <button id="rc-refresh" class="needs-link" disabled>Refresh</button>
-      <span class="note">Read-only. Name or delete a card with <code>k2_remote.py cards</code>.</span>
-    </div>
-    <div class="msg" id="m-rc"></div>
+      <section class="card k-pan" id="c-saved" data-page="cables" aria-label="Saved cables">
+    <h2 class="k-h">Saved cables <span class="k-sub" id="sv-spoof"></span></h2>
+    <div id="saved"></div>
   </section>
 
-  <section class="card" id="c-saved" data-page="cables" aria-label="Saved cables">
-    <h2>Saved cables <span class="sub" id="sv-spoof"></span></h2>
-    <div id="saved" class="empty">Not connected.</div>
-    <div class="row">
-      <button id="sv-refresh" class="needs-link" disabled>Refresh</button>
-      <button id="sv-save" class="needs-link" disabled>Save current cable</button>
-      <button id="sv-off" class="needs-link" disabled>Spoof off</button>
-    </div>
-    <div class="msg" id="m-sv"></div>
+  <section class="card k-pan" id="c-cards" data-page="cables" aria-label="Charger report cards">
+    <h2 class="k-h">Report cards <span class="k-sub" id="rc-count"></span></h2>
+    <div id="cards"></div>
+  </section>
+
+  <section class="card k-pan" id="c-learn" data-page="cables" aria-label="E-marker learn" hidden>
+    <h2 class="k-h">Learn a cable</h2>
+    <div id="learn"></div>
   </section>
 
   <section class="card" id="c-lines" data-page="live" aria-label="Lines and analog">
@@ -449,47 +454,29 @@ progress { width: 100%; height: 10px; accent-color: var(--accent); }
     <div class="note">Stack figures are free bytes. Stack low is the deepest point since boot. FS free turns amber when under 20 % of the file storage is left and red under 10 %: delete cards or logs to free it. Refreshes every few seconds while this page is open.</div>
   </section>
 
-  <section class="card" id="c-ident" data-page="device" aria-label="Source identity" hidden>
-    <h2>Identity <span class="sub" id="id-age"></span></h2>
-    <div id="ident" class="empty">No answer yet.</div>
-    <div class="row">
-      <button id="id-refresh" class="needs-link" disabled>Refresh</button>
-      <button id="idd-run" class="needs-link" disabled title="Asks the attached device for its identity; CC must be idle">Identify device</button>
-    </div>
-    <div id="identify" class="empty">Not run yet.</div>
-    <div class="msg" id="m-id"></div>
+    <section class="card k-pan" id="c-pdtrig" data-page="pd" aria-label="PD request" hidden>
+    <h2 class="k-h">Request <span class="k-sub" id="pt-sub"></span></h2>
+    <div id="pt-body"></div>
   </section>
 
-  <section class="card" id="c-pdtrig" data-page="triggers" aria-label="PD trigger" hidden>
-    <h2>PD trigger (active) <span class="sub"><span class="pill mono" id="pt-state">-</span></span></h2>
-    <div class="note">Requests a contract from the source. Boot is passive; the K2 refuses this while a live sink (laptop) is attached. Anything above 5 V asks for confirmation. Use a known charger and nothing valuable on the output.</div>
-    <dl class="kv" id="pt-kv"></dl>
-    <div class="row">
-      <label for="pt-pos">PDO</label><input id="pt-pos" type="number" min="1" max="11" value="1" style="width:4em">
-      <label for="pt-mv">mV</label><input id="pt-mv" type="number" min="0" max="48000" step="100" value="0" style="width:6em" title="PPS / AVS only">
-      <label for="pt-ma">mA</label><input id="pt-ma" type="number" min="0" max="5000" step="50" value="0" style="width:5em" title="0 = PDO maximum">
-    </div>
-    <div class="row">
-      <button id="pt-go" class="needs-link danger" disabled>Request</button>
-      <button id="pt-attach" class="needs-link" disabled>Attach</button>
-      <button id="pt-release" class="needs-link" disabled>Back to 5 V</button>
-      <button id="pt-stop" class="needs-link" disabled title="Cancel a charger test, stop Fast Charge, release PD to 5 V, disarm a spoof">Stop</button>
-      <button id="pt-reset" class="needs-link danger" disabled>Hard reset</button>
-      <button id="pt-status" class="needs-link" disabled>Refresh</button>
-    </div>
-    <div class="msg" id="m-pt"></div>
+  <section class="card k-pan" id="c-ident" data-page="pd" aria-label="Source identity" hidden>
+    <h2 class="k-h">Identity</h2>
+    <div id="id-body"></div>
   </section>
 
-  <section class="card" id="c-cabler" data-page="cables" aria-label="Cable resistance" hidden>
-    <h2>Cable resistance <span class="sub"><span class="pill mono" id="cr-grade">-</span></span></h2>
-    <dl class="kv" id="cr-kv"></dl>
-    <div class="note" id="cr-note">Passive: uses your own load. Draw 1 A or more above an idle reading (under 0.2 A). The figure includes the K2's own path up to its VBUS tap.</div>
-    <div class="row">
-      <button id="cr-mode" class="needs-link" disabled>Mode: passive</button>
-      <button id="cr-status" class="needs-link" disabled>Refresh</button>
-      <button id="cr-reset" class="needs-link" disabled>Reset</button>
-    </div>
-    <div class="msg" id="m-cr"></div>
+  <section class="card k-pan" id="c-lab" data-page="pd" aria-label="Lab tools">
+    <h2 class="k-h">Lab tools</h2>
+    <div id="lab-body"></div>
+  </section>
+
+  <section class="card k-pan k-wide" id="c-pdmsg" data-page="pd" aria-label="Recent PD messages" hidden>
+    <h2 class="k-h">Recent PD messages</h2>
+    <div id="pm-body"></div>
+  </section>
+
+      <section class="card k-pan" id="c-cabler" data-page="cables" aria-label="Cable resistance" hidden>
+    <h2 class="k-h">Cable resistance</h2>
+    <div id="cr-body"></div>
   </section>
 
   <section class="card" id="c-bb" data-page="device" aria-label="PD black box" hidden>
@@ -506,29 +493,19 @@ progress { width: 100%; height: 10px; accent-color: var(--accent); }
     <div class="msg" id="m-bb"></div>
   </section>
 
-  <section class="card" id="c-fc" data-page="triggers" aria-label="Fast-charge trigger" hidden>
-    <h2>Fast-charge trigger <span class="sub"><span class="pill mono" id="fc-state">-</span></span></h2>
-    <dl class="kv" id="fc-kv"></dl>
-    <div id="fc-scan"></div>
-    <div class="row">
-      <button id="fc-status" class="needs-link" disabled>Refresh</button>
-      <button id="fc-reset" class="needs-link" disabled>Reset to 5 V</button>
-      <button id="fc-scanbtn" class="needs-link danger" disabled>Scan...</button>
-    </div>
-    <div class="row">
-      <label for="fc-proto">Protocol</label><select id="fc-proto"></select>
-      <label>Voltage</label>
-      <button id="fc-vm" class="needs-link" disabled aria-label="Lower voltage">-</button>
-      <output id="fc-v" class="mono" aria-live="polite">9.0 V</output>
-      <button id="fc-vp" class="needs-link" disabled aria-label="Raise voltage">+</button>
-      <button id="fc-go" class="needs-link danger" disabled>Engage</button>
-      <button id="fc-stop" class="needs-link" disabled>Stop</button>
-    </div>
-    <div class="row" id="fc-ovr" hidden>
-      <span class="note">Refused: a load is attached.</span>
-      <button id="fc-ovrgo" class="needs-link danger" disabled>Engage anyway...</button>
-    </div>
-    <div class="msg" id="m-fc"></div>
+    <section class="card k-pan" id="c-fcdet" data-page="fc" aria-label="Detected fast charge">
+    <h2 class="k-h">Detected on D+ / D-</h2>
+    <div id="fd-body"></div>
+  </section>
+
+  <section class="card k-pan" id="c-fc" data-page="fc" aria-label="Fast-charge trigger" hidden>
+    <h2 class="k-h">Trigger</h2>
+    <div id="fc-body"></div>
+  </section>
+
+  <section class="card k-pan k-wide" id="c-spec" data-page="spec" aria-label="PD Spec Check" hidden>
+    <h2 class="k-h">PD Spec Check</h2>
+    <div id="sp-body"></div>
   </section>
 
   <p id="route-note" class="empty" hidden></p>
@@ -607,6 +584,7 @@ progress { width: 100%; height: 10px; accent-color: var(--accent); }
   </section>
 
 </main>
+<div id="k-foot" class="k-pagefoot" hidden></div>
 <script id="k2proto">
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
@@ -3413,12 +3391,12 @@ if (typeof module !== "undefined" && module.exports) module.exports = CtGrid;
   var P = K2Proto;
   var $ = function (id) { return document.getElementById(id); };
   var VID = 0x0716, PID = 0x5060;
-  var S = { dev: null, link: null, k2: null, gen: 0, samples: [], pdoKey: "", pdoDirty: true, emDirty: true, lastCableAge: null,
+  var S = { dev: null, link: null, k2: null, gen: 0, samples: [], pdoKey: "", pdoDirty: true, emDirty: true, lastCableAge: null, pdos: null,
             timerStart: 0, lastEnergy: null, emScanAt: 0, st: null, due: {}, ping: null, pingAt: 0, vdd: null,
             stats: { usb: null, rst: null, fault: null }, rippleBusy: false, ripple: null };
   var MAX_MIN = 60;                                  // history kept, minutes
   // Slower data is refreshed at these intervals (ms) from the poll loop; state itself runs at the poll select.
-  var EVERY = { pdos: 5000, emarker: 10000, adc: 3000, ping: 5000, lease: 1000, ident: 5000, fc: 3000, trig: 4000, cabler: 1000, bb: 5000, ct: 4000, mem: 3000 };
+  var EVERY = { pdos: 5000, adc: 3000, ping: 5000, lease: 1000, ident: 5000, fc: 1500, trig: 1500, msg: 2000, spec: 1000, learn: 10000, cabler: 1000, kcab: 10000, bb: 5000, ct: 4000, mem: 3000 };
   var RIPPLE_CYCLES = ["1.5", "7.5", "13.5", "28.5", "41.5", "55.5", "71.5", "239.5"];
 
   function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
@@ -3459,7 +3437,6 @@ if (typeof module !== "undefined" && module.exports) module.exports = CtGrid;
 
   // ---- pages: hash routes inside this one file, so it works the same from GitHub Pages, a local server and the K2's own copy.
   // Every card keeps polling as before; a page only decides what shows. Unknown or empty hashes open Live.
-  var ROUTES = ["live", "test", "cables", "triggers", "device"];
   S.route = "live";
   function onRoute(card) { return (" " + card.getAttribute("data-page") + " ").indexOf(" " + S.route + " ") >= 0; }
   function routeNote() {
@@ -3469,15 +3446,16 @@ if (typeof module !== "undefined" && module.exports) module.exports = CtGrid;
     n.textContent = any ? "" : S.k2 ? "This firmware has none of this page's commands." : "Connect a K2 to use this page.";
   }
   function route() {
-    var r = (location.hash || "").replace(/^#\/?/, "");
-    if (ROUTES.indexOf(r) < 0) r = "live";
+    var r = K2Kit.routeFor(location.hash);
+    if (S.route !== r && K) { K.arm = null; K.error = ""; K.info = ""; }   // an armed press never follows you to another page
     S.route = r;
     if (r === "device" && S.due) S.due.mem = 0;   // the Memory card is stale: read it now
+    if (S.due) ["trig", "ident", "msg", "fc", "spec", "learn", "cabler", "kcab"].forEach(function (k) { S.due[k] = 0; });   // a page asks for its own data when opened
     $("main").setAttribute("data-route", r);
     Array.prototype.forEach.call(document.querySelectorAll("#tabs a"), function (a) {
       if (a.getAttribute("href") === "#" + r) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
     });
-    routeNote();
+    routeNote(); kitPaint();
     if (r === "test") ctEnter();
     drawChart(); drawRipple(); if (BBV.meta) drawBb();   // canvases measure themselves only while shown
   }
@@ -3550,7 +3528,6 @@ if (typeof module !== "undefined" && module.exports) module.exports = CtGrid;
       if (S.lastCableAge !== null && lk.cable_age_s < S.lastCableAge) S.emDirty = true;   // a new scan happened
       S.lastCableAge = lk.cable_age_s;
     }
-    showEmAge();
 
     // lines
     var ok = st.adc_valid;
@@ -3563,6 +3540,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = CtGrid;
     msg("m-lines", !("dp_mv" in st) ? "This firmware does not report the analog lines." :
         st.temp_valid && !st.temp_calibrated ? "Board NTC is not calibrated: the value is approximate." : "");
     addSample(st);
+    kitPaint();
   }
   setInterval(function () {
     put("r-timer", S.k2 && S.timerStart ? P.formatUptime(Date.now() - S.timerStart) : "-");
@@ -3635,6 +3613,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = CtGrid;
 
   // ---- USB-PD -----------------------------------------------------------------------------------------------
   function renderPdos(r) {
+    S.pdos = r.valid ? r.pdos : [];
     var box = $("pdos"); box.textContent = ""; box.className = "";
     if (!r.valid || !r.pdos.length) { box.className = "empty"; box.textContent = "No source capabilities (no PD contract yet)."; return; }
     var t = el("table"), h = el("tr");
@@ -3650,7 +3629,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = CtGrid;
     });
     box.appendChild(t);
   }
-  function refreshPdos() { S.pdoDirty = false; return guarded("PDOs", async function () { renderPdos(await S.k2.pdos()); }); }
+  function refreshPdos() { S.pdoDirty = false; return guarded("PDOs", async function () { renderPdos(await S.k2.pdos()); kitPaint(); }); }
   $("pd-refresh").onclick = refreshPdos;
   $("pd-rescan").onclick = function () { rescan(false); };
   $("pd-force").onclick = function () { rescan(true); };
@@ -3671,93 +3650,6 @@ if (typeof module !== "undefined" && module.exports) module.exports = CtGrid;
   $("fake-go").onclick = function () {
     guarded("debug pdos", async function () { await S.k2.debugPdos(Number($("fake").value)); S.pdoKey = ""; await refreshPdos(); });
   };
-
-  // ---- cable / e-marker ----------------------------------------------------------------------------------------
-  function renderEmarker(e) {
-    var box = $("emarker"); box.textContent = ""; box.className = "";
-    if (!e.valid) { box.className = "empty"; box.textContent = "No e-marker data. Scan cable runs a discovery and needs a cable with an e-marker."; return; }
-    var dl = el("dl", undefined, "kv"), d = e.detail;
-    var rows = [["Vendor", e.vendor || "-", false], ["VID:PID", hex(e.vid, 4) + ":" + hex(e.pid, 4)], ["Speed", e.speed || "-", false],
-      ["Rating", e.max_voltage_v + " V, " + e.max_current_a + " A, " + e.max_power_w + " W"], ["Active cable", e.active ? "yes" : "no", false],
-      ["XID", hex(e.xid, 8)], ["HW / FW", e.hw_rev + " / " + e.fw_rev]];
-    if (d) {
-      var fl = [];
-      [["type_c_plug", "Type-C plug"], ["vconn_required", "VCONN required"], ["epr_cable", "EPR"], ["usb4", "USB4"], ["usb_gen2", "Gen 2"],
-       ["optical", "optical"], ["thunderbolt", "Thunderbolt"]].forEach(function (f) { if (d[f[0]]) fl.push(f[1]); });
-      rows.push(["Plug", d.sop + (d.pd_rev ? ", PD " + d.pd_rev : "") + ", VDO v" + d.vdo_version, false],
-                ["Latency", d.latency, false], ["Termination", d.termination, false],
-                ["Max / shutdown", d.max_temp_c + " °C / " + d.shutdown_temp_c + " °C"],
-                ["U3 power / lanes", d.u3_power + " / " + d.usb_lanes], ["Flags", chips(fl), false]);
-    }
-    rows.push(["VDOs (" + e.num_vdos + ")", e.vdos.map(function (v) { return hex(v, 8); }).join(" ") || "-"]);
-    kv(dl, rows);
-    box.appendChild(dl);
-  }
-  function showEmAge() {
-    var lk = S.st && S.st.link, t = "";
-    if (lk && lk.cable_scanned) t = "scanned " + P.formatAgo(lk.cable_age_s);
-    else if (S.emScanAt) t = "scanned " + P.formatAgo(Math.floor((Date.now() - S.emScanAt) / 1000));
-    else if (lk) t = "not scanned yet";
-    put("em-age", t);
-  }
-  function refreshEmarker() { S.emDirty = false; S.due.emarker = Date.now(); return guarded("e-marker", async function () { renderEmarker(await S.k2.emarker()); }); }
-  $("em-refresh").onclick = refreshEmarker;
-  $("em-scan").onclick = function () {
-    setStatus("scanning cable...", "warn"); msg("m-em", "Scanning, the firmware pauses for a moment...");
-    guarded("e-marker scan", async function () {
-      await S.k2.action("emarker"); S.emScanAt = Date.now(); await refreshEmarker(); msg("m-em", "");
-    }).then(function () { if (S.link) setStatus("connected", "ok"); });
-  };
-
-  // ---- saved cables (command 0x61) ------------------------------------------------------------------------------
-  function showSpoof(st) { put("sv-spoof", st.active ? "spoofing id " + st.seq + " (" + st.replies + " replies)" : ""); }
-  function renderSaved(list) {
-    var box = $("saved"); box.textContent = ""; box.className = "";
-    if (!list.length) { box.className = "empty"; box.textContent = "No saved cables. Scan a cable, then Save current cable."; return; }
-    list.forEach(function (c) {
-      var row = el("div", undefined, "row"), inp = el("input");
-      inp.type = "text"; inp.maxLength = 24; inp.value = c.name; inp.setAttribute("aria-label", "Name of saved cable " + c.seq);
-      var info = el("span", hex(c.vid, 4) + ":" + hex(c.pid, 4), "note");
-      var ren = el("button", "Rename"), spf = el("button", "Spoof"), del = el("button", "Delete");
-      ren.onclick = function () {
-        guarded("rename", async function () { var r = await S.k2.emRename(c.seq, inp.value.trim()); msg("m-sv", "Renamed to " + r.name); await refreshSaved(); });
-      };
-      spf.onclick = function () {
-        guarded("spoof", async function () { var st = await S.k2.emSpoof(c.seq); showSpoof(st); msg("m-sv", "Spoofing " + c.name); });
-      };
-      del.onclick = function () {
-        if (!window.confirm("Delete the saved cable " + c.name + "?")) return;
-        guarded("delete", async function () { await S.k2.emDelete(c.seq); msg("m-sv", "Deleted " + c.name); await refreshSaved(); });
-      };
-      [inp, ren, spf, del, info].forEach(function (n) { row.appendChild(n); });
-      box.appendChild(row);
-    });
-  }
-  function refreshSaved() {
-    return guarded("saved cables", async function () {
-      renderSaved(await S.k2.emList()); showSpoof(await S.k2.emSpoof("status"));
-    });
-  }
-  $("sv-refresh").onclick = refreshSaved;
-  $("sv-save").onclick = function () {
-    guarded("save cable", async function () { var r = await S.k2.emSave(); msg("m-sv", (r.existed ? "Already saved as " : "Saved as ") + r.cable.name); await refreshSaved(); });
-  };
-  $("sv-off").onclick = function () { guarded("spoof off", async function () { showSpoof(await S.k2.emSpoof("off")); msg("m-sv", "Spoof off"); }); };
-
-  // ---- report cards (command 0x62, read-only) ---------------------------------------------------------------------
-  function renderCards(list) {
-    var box = $("cards"); box.textContent = ""; box.className = "";
-    put("rc-count", list.length ? list.length + " saved" : "");
-    if (!list.length) { box.className = "empty"; box.textContent = "No report cards. Finish a charger test to save one."; return; }
-    list.forEach(function (c) {
-      var row = el("div", undefined, "row");
-      row.appendChild(el("span", "#" + c.no + " " + (c.name || "(unnamed)"), "mono"));
-      row.appendChild(el("span", hex(c.vid, 4) + ":" + hex(c.pid, 4) + " · " + c.pdos + " PDOs · " + c.runs + " runs", "note"));
-      row.appendChild(el("span", c.pass + " pass, " + c.fail + " fail, " + c.skip + " skip · " + c.state, "note"));
-      box.appendChild(row);
-    });
-  }
-  $("rc-refresh").onclick = function () { guarded("report cards", async function () { renderCards(await S.k2.cardsList()); }); };
 
   // ---- ADC raw -----------------------------------------------------------------------------------------------
   var CH_NOTE = { 16: "temperature sensor", 17: "VREFINT" };
@@ -3865,200 +3757,470 @@ if (typeof module !== "undefined" && module.exports) module.exports = CtGrid;
     } catch (e) { reportError("dfu", e); }
   };
 
-  // ---- identity (k2/pd-read), hidden until the firmware answers ---------------------------------------------------------------
-  function renderIdentity(d) {
-    var box = $("ident"); box.textContent = ""; box.className = "";
-    if (!d.valid) { box.className = "empty"; box.textContent = "No identity yet (needs a PD source that answers Discover Identity)."; return; }
-    var fl = []; if (d.epr) fl.push("EPR"); if (d.epr_partial) fl.push("EPR partial"); if (d.cuktech) fl.push("CUKTECH"); if (d.xiaomi) fl.push("Xiaomi");
-    var dl = el("dl", undefined, "kv");
-    kv(dl, [["Vendor", d.vendor || "-", false], ["Model", d.model || "-", false], ["VID:PID", hex(d.vid, 4) + ":" + hex(d.pid, 4)],
-            ["bcdDevice", hex(d.bcd, 4)], ["SVIDs", chips(d.svids.map(function (s) { return hex(s, 4); }))], ["Flags", chips(fl), false]]);
-    box.appendChild(dl);
-  }
-  // The memory card: the firmware's cached figures (about 1 Hz), asked only while the Device page is open.
   function renderMemory(m) {
     var v = P.memoryView(m);
     $("mem").className = "";
     $("mem").innerHTML = K2Kit.kvTableHtml(v.rows, { footer: v.footer, tone: v.tone });
     put("mem-age", new Date().toLocaleTimeString());
   }
+  // The memory card: the firmware's cached figures (about 1 Hz), asked only while the Device page is open.
   function refreshMemory() {
     if (S.route !== "device" && S.memShown) return Promise.resolve();   // nothing to repaint on another page; the probe paints once
     S.due.mem = Date.now(); S.memShown = true;
     return guarded("memory", async function () { renderMemory(await S.k2.memory()); }, true);
   }
-  function refreshIdent() { S.due.ident = Date.now(); return guarded("identity", async function () { renderIdentity(await S.k2.identity()); }, true); }
-  $("id-refresh").onclick = refreshIdent;
-  function renderIdentify(r) {
-    var box = $("identify"); box.textContent = ""; box.className = "";
-    var p = r.identify, i = r.identity, dl = el("dl", undefined, "kv");
-    var rows = [["State", p.state], ["Answered", p.answered.join(", ") || "-"], ["No answer", p.no_answer.join(", ") || "-"], ["Retries", String(p.retries)]];
-    if (i.valid) rows = rows.concat([["Vendor", i.vendor || "-"], ["VID:PID", hex(i.vid, 4) + ":" + hex(i.pid, 4)], ["Model", i.model || "-"],
-                                     ["SVIDs", i.svids.map(function (v) { return hex(v, 4); }).join(" ") || "-"]]);
-    rows = rows.concat(p.sink_pdos.map(function (v, n) { return ["Sink PDO " + (n + 1), hex(v, 8)]; }));
-    if (p.revision) rows.push(["Revision", hex(p.revision, 8)]);
-    rows.forEach(function (r2) { dl.appendChild(el("dt", r2[0])); dl.appendChild(el("dd", r2[1], r2[0].indexOf("PDO") >= 0 ? "mono" : "")); });
-    box.appendChild(dl);
-  }
-  $("idd-run").onclick = function () {
-    msg("m-id", "Identifying...");
-    guarded("identify device", async function () {
-      var r;
-      try { r = await S.k2.identifyRun({ confirm: false }); }
-      catch (e) {
-        if (!(e instanceof P.RemoteError) || e.status !== P.STATUS.NEED_CONFIRM) throw e;
-        if (!window.confirm("A live sink (laptop or phone) looks attached. Send Discover Identity and friends anyway?")) { msg("m-id", ""); return; }
-        r = await S.k2.identifyRun({ confirm: true });
-      }
-      renderIdentify(r); msg("m-id", "");
-    });
-  };
 
-  // ---- PD trigger (k2/pd-read), hidden until the firmware answers ---------------------------------------------------------------
-  function renderTrigger(t) {
-    var pill = $("pt-state"); pill.textContent = t.state;
-    pill.className = "pill mono " + (t.state === "ready" ? "ok" : t.state === "failed" ? "bad" : t.state === "idle" ? "" : "warn");
-    kv($("pt-kv"), [["Result", t.result, true], ["Holding", t.held ? "yes (a request is active)" : "no"], ["PDO", t.pos ? String(t.pos) : "-"],
-                    ["Requested", (t.mv / 1000) + " V, " + (t.ma / 1000) + " A" + (t.epr ? ", EPR" : "")], ["Hard resets", String(t.hard_resets)]]);
+  // ---- kit pages: PD, Fast charge, Spec check and Cables, in the K2's own UI language (docs/UI_SYSTEM.md) ---------------------------
+  // One shared arm (a single confirm window, like the device), one footer band, one topbar. A painter builds an HTML string from the
+  // state and the kit renderers; setHtml replaces a panel only when its markup changed and keeps keyboard focus. Anything that raises
+  // VBUS or changes what the charger is asked needs two presses inside 5 s; lowering to 5 V, releasing and read-only calls run at once.
+  var KIT_ROUTES = ["pd", "fc", "spec", "cables"];
+  var kitCache = {};
+  function kitNew() {
+    return { arm: null, wasArmed: false, busy: "", error: "", info: "", picked: null, sp: null, contract: null, msgs: [], bbCursor: undefined,
+             ident: null, identify: null, fc: null, fcPick: null, spChecked: [true, true, true, true, true, true], spStatus: null, spBlob: null,
+             spTry: false, em: null, emScanAt: 0, saved: [], spoof: null, cards: [], selSaved: null, selCard: null, ren: { saved: null, card: null },
+             learn: null, learnSweep: false, unmatched: null, cr: null };
   }
-  function refreshTrig() { S.due.trig = Date.now(); return guarded("pd status", async function () { renderTrigger(await S.k2.pdStatus()); }, true); }
-  async function trigCall(what, fn) {
-    var t = await guarded(what, fn);
-    if (t) { renderTrigger(t); msg("m-pt", ""); }
+  var K = kitNew();
+  function kitReset() { K = kitNew(); kitCache = {}; }
+  function setHtml(id, html) {
+    var box = $(id);
+    if (!box || kitCache[id] === html) return;
+    var ae = document.activeElement, keep = null;
+    if (ae && box.contains(ae)) {
+      if (ae.tagName === "INPUT" && ae.type === "text") return;   // never rebuild under a text field
+      var at = ["data-act", "data-id", "data-step", "data-fam", "data-sweep"].filter(function (a) { return ae.hasAttribute(a); })[0];
+      if (at) keep = "[" + at + '="' + ae.getAttribute(at) + '"]';
+    }
+    box.innerHTML = html; kitCache[id] = html;
+    if (keep) { var n = box.querySelector(keep); if (n && !n.disabled) n.focus(); }
   }
-  $("pt-status").onclick = function () { trigCall("pd status", function () { return S.k2.pdStatus(); }); };
-  $("pt-attach").onclick = function () {
-    var mv = Number($("pt-mv").value), ma = Number($("pt-ma").value);
-    if (mv > 36000) { alert("VBUS monitor ceiling is 36 V. Capping to 36000 mV."); mv = 36000; }
-    trigCall("pd attach", async function () {
-      try { return await S.k2.pdAttach(mv, ma, { confirm: false }); }
-      catch (e) {
-        if (!(e instanceof P.RemoteError) || e.status !== P.STATUS.NEED_CONFIRM) throw e;
-        if (!window.confirm("Attach and request " + (mv / 1000) + " V?\n\nThis is above 5 V. Anything on the output sees it. " +
-                            "BACK on the K2 or Back to 5 V returns to 5 V.")) return S.k2.pdStatus();
-        return S.k2.pdAttach(mv, ma, { confirm: true });
-      }
-    });
-  };
-  $("pt-release").onclick = function () { trigCall("pd release", function () { return S.k2.pdRelease(); }); };
-  // Stop: no confirm (it only goes to 5 V and idle). The reply says what was running and where VBUS is.
-  $("pt-stop").onclick = async function () {
-    var r = await guarded("stop", function () { return S.k2.stop(); });
-    if (!r) return;
-    msg("m-pt", "Stop: " + (r.active.length ? "stopped " + r.active.join(", ") : "nothing was active") + "; " +
-        (r.vbus_mv < 0 ? "VBUS n/a" : "VBUS " + (r.vbus_mv / 1000).toFixed(2) + " V") +
-        (r.fc_release_busy ? " (Fast Charge release running, VBUS not settled yet)" : ""));
-    refreshTrig();
-  };
-  $("pt-reset").onclick = function () {
-    if (!window.confirm("Send a PD hard reset?\n\nThe source drops VBUS and comes back at 5 V.")) return;
-    trigCall("pd reset", function () { return S.k2.pdReset(); });
-  };
-  $("pt-go").onclick = function () {
-    var pos = Number($("pt-pos").value), mv = Number($("pt-mv").value), ma = Number($("pt-ma").value);
-    trigCall("pd request", async function () {
-      try { return await S.k2.pdRequest(pos, { mv: mv, ma: ma, confirm: false }); }
-      catch (e) {
-        if (!(e instanceof P.RemoteError) || e.status !== P.STATUS.NEED_CONFIRM) throw e;
-        if (!window.confirm("Request PDO " + pos + (mv ? " at " + mv / 1000 + " V" : "") + "?\n\nThis is above 5 V. Anything on the output sees it. " +
-                            "BACK on the K2 or Back to 5 V returns to 5 V.")) return S.k2.pdStatus();
-        return S.k2.pdRequest(pos, { mv: mv, ma: ma, confirm: true });
-      }
-    });
-  };
+  function acell(id, label, extra) {
+    var off = !S.k2 ? "Not connected" : K.busy ? (K.busy === id ? "busy" : "Another action is running") : extra || false;
+    return K2Kit.actCell({ id: id, label: label, reason: typeof off === "string" && off !== "busy" ? off : "" }, K.arm, Date.now(), off);
+  }
+  function actions() { return '<div class="k-actions">' + Array.prototype.join.call(arguments, "") + "</div>"; }
+  function noteHtml(t) { return '<div class="k-note">' + K2Kit.esc(t) + "</div>"; }
+  function subHtml(t) { return '<div class="k-sub">' + K2Kit.esc(t) + "</div>"; }
+  function listHtml(rows, opts) { return rows.length ? "<div data-list>" + K2Kit.rowListHtml(rows, opts) + "</div>" : ""; }
 
-  // ---- fast-charge trigger (k2/fc-trigger), hidden until the firmware answers ----------------------------------------------------
-  P.FC_PROTOS.forEach(function (n, i) { var o = el("option", n.toUpperCase()); o.value = n; $("fc-proto").appendChild(o); });
-  function renderFc(f) {
-    var pill = $("fc-state"); pill.textContent = f.state;
-    pill.className = "pill mono " + (f.state === "active" ? "ok" : f.state === "failed" ? "bad" : f.state === "negotiating" ? "warn" : "");
-    kv($("fc-kv"), [["Protocol", f.proto, true], ["Target", volts(f.target_mv) + " V"], ["VBUS", volts(f.vbus_mv) + " V"],
-                    ["Last failure", f.fail, false]]);
-    var box = $("fc-scan"); box.textContent = "";
-    var s = f.scan;
-    if (s.running || s.done || s.results.length) {
-      box.appendChild(el("div", s.running ? "Scan running (step " + s.step + ")" : s.done ? "Scan result" : "Scan partial", "note"));
-      var t = el("table"), h = el("tr");
-      ["Protocol", "Outcome", "Voltage (V)"].forEach(function (c, i) { h.appendChild(el("th", c, i === 2 ? "r" : "")); }); t.appendChild(h);
-      s.results.forEach(function (r) {
-        var tr = el("tr"); tr.appendChild(el("td", r.proto, "mono")); tr.appendChild(el("td", r.outcome)); tr.appendChild(el("td", r.mv ? volts(r.mv) : "-", "mono r")); t.appendChild(tr);
-      });
-      box.appendChild(t);
+  // The PD page state: the source's PDOs (from the Live poll), the selected row and its set point.
+  function pdState() {
+    var rows = K2Kit.pdoRows(S.pdos || []);
+    var sel = K2Kit.pdSelection(rows, K.contract, K.picked), row = null;
+    rows.forEach(function (r) { if (r.id === sel) row = r; });
+    if (row && (!K.sp || K.sp.id !== row.id)) {
+      var c = K.contract, held = !!(c && c.held && String(c.pos) === row.id);
+      K.sp = { id: row.id, mv: row.adjustable ? (held && c.mv ? c.mv : row.request.mv) : 0, ma: held && c.ma ? Math.min(c.ma, row.max_ma) : row.request.ma };
     }
+    return { rows: rows, sel: sel, row: row, req: row && K.sp ? K2Kit.pdRequestFor(row, K.sp.mv, K.sp.ma) : null };
   }
-  async function fcDo(what, fn) {
-    msg("m-fc", "");
-    try { renderFc(await fn()); }
-    catch (e) {
-      if (e instanceof RangeError) msg("m-fc", e.message, "warn");
-      else if (e instanceof P.RemoteError) msg("m-fc", "The firmware refused the " + what + ": " + e.message + (e.status === P.STATUS.BAD_ARG ? " (guard: output not safe or not allowed now)" : ""), "bad");
-      else reportError("fast charge " + what, e);
-    }
+  function fcState() {
+    var offers = K2Kit.fcOffers(P.FC_LEVELS, P.FC_PROTOS);
+    return { offers: offers, sel: K2Kit.fcSelection(offers, K.fcPick) };
   }
-  function refreshFc() { S.due.fc = Date.now(); return guarded("fast charge", async function () { renderFc(await S.k2.fc("status")); }, true); }
-  $("fc-status").onclick = function () { fcDo("status", function () { return S.k2.fc("status"); }); };
-  $("fc-reset").onclick = $("fc-stop").onclick = function () { $("fc-ovr").hidden = true; fcDo("stop", function () { return S.k2.fc("reset"); }); };
-  $("fc-scanbtn").onclick = function () {
-    if (!window.confirm("Scan fast-charge protocols?\n\nThe charger output is raised towards 9 V while probing. Only do this with nothing sensitive attached.")) return;
-    fcDo("scan", function () { return S.k2.fc("scan", { confirm: true }); });
+  function pdReqText(ps) { return "PDO " + ps.req.pos + " at " + (ps.row.adjustable ? K2Kit.fmtV(ps.req.mv) : K2Kit.fmtV(ps.row.max_mv)) + " V " + K2Kit.fmtA(ps.req.ma) + " A"; }
+  function selectedSaved() { var s = null; K.saved.forEach(function (c) { if (String(c.seq) === K.selSaved) s = c; }); return s; }
+  function selectedCard() { var s = null; K.cards.forEach(function (c) { if (String(c.no) === K.selCard) s = c; }); return s; }
+  function renameText(kind) {
+    var sel = kind === "saved" ? selectedSaved() : selectedCard(), r = K.ren[kind], id = kind === "saved" ? K.selSaved : K.selCard;
+    return r && r.id === id ? r.text : sel ? sel.name || "" : "";
+  }
+  function fcFailText() { return K.fc && K.fc.fail && K.fc.fail !== "none" ? K.fc.fail : ""; }
+
+  // Every action: arm (two presses) or immediate; what() is the footer's description of the armed action; run() does the work and
+  // may return a line for the footer. An immediate action that the firmware answers with "needs confirm" turns into an armed one.
+  var ACTS = {
+    request: { arm: true, what: function () { var ps = pdState(); return ps.req ? "request " + pdReqText(ps) : "request"; },
+      run: async function () {
+        var ps = pdState();
+        if (!ps.req) throw new RangeError("Pick a PDO first.");
+        K.contract = await S.k2.pdRequest(ps.req.pos, { mv: ps.req.mv, ma: ps.req.ma, confirm: ps.req.confirm });
+        return "Requested " + pdReqText(ps) + ": " + K.contract.result + ".";
+      } },
+    attach: { arm: true, what: function () { return "ask the source for its list at 5 V"; },
+      run: async function () { K.contract = await S.k2.pdAttach(5000, 0, { confirm: true }); return "Attach sent: " + K.contract.result + "."; } },
+    release: { arm: false, what: function () { return "release the held contract"; },
+      run: async function () { K.contract = await S.k2.pdRelease(); return "Released the held contract."; } },
+    back5v: { arm: false, what: function () { return "go back to 5 V"; },
+      run: async function () { await S.k2.stop(); K.contract = await S.k2.pdStatus(); return "Back to 5 V, everything released."; } },
+    hardreset: { arm: true, what: function () { return "send a Hard Reset to the source"; },
+      run: async function () { K.contract = await S.k2.pdReset(); return "Hard Reset sent."; } },
+    identify: { arm: false, escalate: true, what: function () { return "interrogate the attached device"; },
+      run: async function (confirm) {
+        var r = await S.k2.identifyRun({ confirm: !!confirm });
+        K.identify = r.identify; K.ident = r.identity;
+        return "Identify finished: " + r.identify.state + ".";
+      } },
+    handback: { arm: true, what: function () { return "hand the contract back to the far sink"; },
+      run: async function () { var r = await S.k2.pdHandback(true); return "Hand back: " + r.text + "."; } },
+    apple: { arm: true, what: function () { return "run the Apple readout (re-requests the current contract)"; },
+      run: async function () {
+        var r = await S.k2.appleRead(true), f = ["maker", "product", "fw", "hw", "field90", "serial"].filter(function (k) { return r[k]; })
+          .map(function (k) { return k + " " + r[k]; });
+        return "Apple readout " + r.why + (f.length ? ": " + f.join(", ") : "") + ".";
+      } },
+    fctrigger: { arm: true, what: function () { var s = fcState().sel; return s ? "engage " + s.proto.toUpperCase() + " at " + K2Kit.fmtV(s.mv) + " V" : "engage"; },
+      run: function () { return fcEngage(false); } },
+    fcovr: { arm: true, what: function () { var s = fcState().sel; return s ? "override the load guard and engage " + s.proto.toUpperCase() + " at " + K2Kit.fmtV(s.mv) + " V" : "override the guard"; },
+      run: function () { return fcEngage(true); } },
+    fcstop: { arm: false, what: function () { return "release the fast-charge request"; },
+      run: async function () { K.fc = await S.k2.fc("reset"); return "Fast-charge request released."; } },
+    fcscan: { arm: true, what: function () { return "scan every fast-charge protocol (VBUS moves up to 12 V)"; },
+      run: async function () { K.fc = await S.k2.fc("scan", { confirm: true }); return "Scan started."; } },
+    specstart: { arm: true, what: function () { return "start a PD Spec Check (" + (K2Kit.specFamilyMask(K.spChecked) ? P.PDSPEC_FAMILIES.filter(function (f, i) { return K.spChecked[i]; }).join(", ") : "nothing picked") + ")"; },
+      run: async function () {
+        K.spStatus = await S.k2.pdSpecStart(K2Kit.specFamilyMask(K.spChecked), true); K.spBlob = null; K.spTry = false;
+        return "Spec check started.";
+      } },
+    specstop: { arm: false, what: function () { return "stop the spec check"; },
+      run: async function () { K.spStatus = await S.k2.pdSpecStop(); return "Spec check stopped."; } },
+    specread: { arm: false, what: function () { return "read the spec check result"; },
+      run: async function () { K.spBlob = await S.k2.pdSpecRead(); return "Result read."; } },
+    emscan: { arm: false, what: function () { return "scan the cable"; },
+      run: async function () { await S.k2.action("emarker"); K.emScanAt = Date.now(); K.em = await S.k2.emarker(); return "Cable scanned."; } },
+    emsave: { arm: false, what: function () { return "save the current cable"; },
+      run: async function () {
+        var r = await S.k2.emSave(); K.saved = await S.k2.emList(); K.selSaved = String(r.seq);
+        return (r.existed ? "Already saved as " : "Saved as ") + r.cable.name + ".";
+      } },
+    svrename: { arm: false, what: function () { return "rename the saved cable"; },
+      run: async function () { await S.k2.emRename(Number(K.selSaved), renameText("saved")); K.saved = await S.k2.emList(); K.ren.saved = null; return "Renamed."; } },
+    spoof: { arm: true, what: function () { var c = selectedSaved(); return "spoof " + (c ? c.name : "the saved cable") + " on the top port"; },
+      run: async function () { var c = selectedSaved(); K.spoof = await S.k2.emSpoof(Number(K.selSaved)); return "Spoofing " + (c ? c.name : "the cable") + "."; } },
+    spoofoff: { arm: false, what: function () { return "turn the spoof off"; },
+      run: async function () { K.spoof = await S.k2.emSpoof("off"); return "Spoof off."; } },
+    svdel: { arm: true, what: function () { var c = selectedSaved(); return "delete " + (c ? c.name : "the saved cable"); },
+      run: async function () { await S.k2.emDelete(Number(K.selSaved)); K.saved = await S.k2.emList(); K.selSaved = null; return "Deleted."; } },
+    cdrename: { arm: false, what: function () { return "rename the report card"; },
+      run: async function () { await S.k2.cardsRename(Number(K.selCard), renameText("card")); K.cards = await S.k2.cardsList(); K.ren.card = null; return "Renamed."; } },
+    cddel: { arm: true, what: function () { var c = selectedCard(); return "delete report card #" + (c ? c.no : "?"); },
+      run: async function () { await S.k2.cardsDelete(Number(K.selCard)); K.cards = await S.k2.cardsList(); K.selCard = null; return "Deleted."; } },
+    learn: { arm: true, what: function () { return "learn the cable (the bottom port powers it and asks what a source asks)"; },
+      run: async function () {
+        K.learn = await S.k2.emLearn([], K.learnSweep, true);
+        try { K.unmatched = await S.k2.emUnmatched(); } catch (e) { K.unmatched = null; }
+        return "Learn finished: " + K.learn.summary.outcome + ".";
+      } },
+    learnsave: { arm: false, what: function () { return "save the learned cable"; },
+      run: async function () {
+        var r = await S.k2.emLearnSave(); K.saved = await S.k2.emList();
+        return (r.existed ? "Already saved as id " : "Saved as id ") + r.seq + ".";
+      } },
+    crmode: { arm: false, what: function () { return "switch the cable resistance mode"; },
+      run: async function () { K.cr = await S.k2.cableR(K.cr && K.cr.kelvin ? "passive" : "kelvin"); return ""; } },
+    crreset: { arm: false, what: function () { return "reset the cable resistance reading"; },
+      run: async function () { K.cr = await S.k2.cableR("reset"); return "Reading reset."; } }
   };
-  // Level selection mirrors the on-device trigger page: -/+ step the protocol's level table, clamped.
-  var fcLevel = 0;
-  function fcSetProto() { var l = P.FC_LEVELS[$("fc-proto").value]; fcLevel = l.def; fcShowLevel(); }
-  function fcMv() { return P.FC_LEVELS[$("fc-proto").value].mv[fcLevel]; }
-  function fcShowLevel() {
-    var l = P.FC_LEVELS[$("fc-proto").value].mv;
-    $("fc-v").textContent = volts(l[fcLevel], 1) + " V";
-    $("fc-vm").dataset.edge = fcLevel === 0 ? "1" : ""; $("fc-vp").dataset.edge = fcLevel === l.length - 1 ? "1" : "";
-  }
-  $("fc-proto").onchange = fcSetProto;
-  $("fc-vm").onclick = function () { fcLevel = Math.max(0, fcLevel - 1); fcShowLevel(); };
-  $("fc-vp").onclick = function () { fcLevel = Math.min(P.FC_LEVELS[$("fc-proto").value].mv.length - 1, fcLevel + 1); fcShowLevel(); };
-  fcSetProto();
-  // Engage: above 5 V needs a second confirmation, like OK twice on the device. A guard refusal (BadArg) is explained
-  // from the status "fail"; only "PD or load active" offers an explicit override.
   async function fcEngage(override) {
-    var mv = fcMv(), proto = $("fc-proto").value, high = mv > P.FC_SAFE_MV;
-    if ((high || override) && !window.confirm((override ? "Override the load guard and request " : "Request ") + proto.toUpperCase() + " at " + volts(mv, 1) + " V?\n\nThe output rises above 5 V. Check what is connected.")) return;
-    $("fc-ovr").hidden = true;
-    msg("m-fc", "");
-    try { renderFc(await S.k2.fc("trigger", { proto: proto, mv: mv, confirm: high || !!override, allowInline: !!override })); }
-    catch (e) {
+    var s = fcState().sel;
+    if (!s) throw new RangeError("No protocol to engage.");
+    try {
+      K.fc = await S.k2.fc("trigger", { proto: s.proto, mv: s.mv, confirm: s.mv > P.FC_SAFE_MV || override, allowInline: override });
+    } catch (e) {
       if (e instanceof P.RemoteError && e.status === P.STATUS.BAD_ARG) {
-        var why = "guard";
-        try { var st = await S.k2.fc("status"); renderFc(st); why = st.fail; } catch (e2) { /* keep generic reason */ }
-        msg("m-fc", "The firmware refused: " + why, "bad");
-        if (why === "PD or load active") $("fc-ovr").hidden = false;
-      } else if (e instanceof RangeError) msg("m-fc", e.message, "warn");
-      else reportError("fast charge trigger", e);
+        try { K.fc = await S.k2.fc("status"); } catch (e2) { /* keep the generic reason */ }
+        throw new RangeError("The K2 refused: " + (fcFailText() || "guard") + ".");
+      }
+      throw e;
+    }
+    return "Engaged " + s.proto.toUpperCase() + " at " + K2Kit.fmtV(s.mv) + " V.";
+  }
+  function acted(id) {
+    var a = ACTS[id];
+    return a && !a.run ? null : a;
+  }
+  async function kitRun(id, confirm) {
+    var a = acted(id), gen = S.gen;
+    if (!a) return;
+    K.busy = id; K.error = ""; K.info = ""; kitPaint();
+    try {
+      var r = await a.run(confirm);
+      if (S.gen !== gen) return;
+      if (typeof r === "string") K.info = r;
+    } catch (e) {
+      if (S.gen !== gen) return;
+      if (e instanceof P.BootloaderDetected) { showDfu(); return; }
+      if (!confirm && a.escalate && e instanceof P.RemoteError && e.status === P.STATUS.NEED_CONFIRM) {
+        K.arm = { id: id, at: Date.now() };
+      } else {
+        K.error = e instanceof P.RemoteError && /refused: /.test(e.message || "") ? e.message + "." : K2Kit.errorText(e, a.what());
+        logAppend("[web] " + a.what() + ": " + (e && e.message || e), true);
+      }
+    } finally {
+      if (S.gen === gen) K.busy = "";
+      kitPaint();
     }
   }
-  $("fc-go").onclick = function () { fcEngage(false); };
-  $("fc-ovrgo").onclick = function () { fcEngage(true); };
+  function kitPress(id) {
+    var a = acted(id);
+    if (!a || !S.k2 || K.busy) return;
+    var armed = !!(K.arm && K.arm.id === id);
+    if (!a.arm && !armed) { K.arm = null; kitRun(id, false); return; }
+    var r = K2Kit.armPress(K.arm, id, Date.now());
+    K.arm = r.st; K.error = ""; K.info = "";
+    if (r.fire) kitRun(id, true); else kitPaint();
+  }
+  // A pick, a step or a tick box changes what an armed action would do: the arm is dropped.
+  function kitPick(row) {
+    if (row.getAttribute("aria-disabled") === "true") return;
+    var id = row.getAttribute("data-id"), pan = row.closest("section");
+    K.arm = null; K.error = "";
+    if (pan.id === "c-pdtrig") K.picked = id;
+    else if (pan.id === "c-fc") K.fcPick = { proto: id, mv: null };
+    else if (pan.id === "c-saved") K.selSaved = id;
+    else if (pan.id === "c-cards") K.selCard = id;
+    kitPaint();
+  }
+  function kitStep(dir) {
+    K.arm = null; K.error = "";
+    if (/^fc[-+]$/.test(dir)) {
+      var s = fcState().sel;
+      if (s) K.fcPick = { proto: s.proto, mv: K2Kit.fcStepLevel(s.offer, s.mv, dir === "fc+" ? 1 : -1) };
+    } else {
+      var ps = pdState();
+      if (ps.row && K.sp) K.sp = Object.assign({ id: ps.row.id }, K2Kit.pdStep(ps.row, K.sp, dir));
+    }
+    kitPaint();
+  }
+  $("main").addEventListener("click", function (ev) {
+    var t = ev.target, b;
+    if ((b = t.closest(".k-act[data-act]"))) { kitPress(b.getAttribute("data-act")); return; }
+    if ((b = t.closest(".k-btn[data-step]"))) { kitStep(b.getAttribute("data-step")); return; }
+    if ((b = t.closest(".k-rl-row[data-id]"))) kitPick(b);
+  });
+  $("main").addEventListener("keydown", function (ev) {
+    var row = ev.target.closest && ev.target.closest(".k-rl-row[data-id]");
+    if (!row) return;
+    if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); kitPick(row); return; }
+    if (ev.key !== "ArrowDown" && ev.key !== "ArrowUp") return;
+    ev.preventDefault();
+    var all = Array.prototype.filter.call(row.parentNode.querySelectorAll(".k-rl-row[data-id]"), function (r) { return r.getAttribute("aria-disabled") !== "true"; });
+    var n = all[all.indexOf(row) + (ev.key === "ArrowDown" ? 1 : -1)];
+    if (n) kitPick(n);
+  });
+  $("main").addEventListener("change", function (ev) {
+    var t = ev.target;
+    if (t.hasAttribute && t.hasAttribute("data-fam")) { K.spChecked[Number(t.getAttribute("data-fam"))] = t.checked; K.arm = null; kitPaint(); }
+    else if (t.hasAttribute && t.hasAttribute("data-sweep")) { K.learnSweep = t.checked; K.arm = null; kitPaint(); }
+  });
+  $("main").addEventListener("input", function (ev) {
+    var t = ev.target;
+    if (t.id === "sv-name") K.ren.saved = { id: K.selSaved, text: t.value };
+    else if (t.id === "cd-name") K.ren.card = { id: K.selCard, text: t.value };
+  });
 
-  // ---- cable resistance (k2/cable_r, passive), hidden until the firmware answers -----------------------------------------------
-  function renderCableR(c) {
-    var pill = $("cr-grade"); pill.textContent = c.valid ? c.grade : "waiting";
-    pill.className = "pill mono " + (c.grade === "excellent" || c.grade === "good" ? "ok" : c.grade === "fair" ? "warn" : c.grade === "poor" ? "bad" : "");
-    S.crKelvin = c.kelvin;
-    $("cr-mode").textContent = c.kelvin ? "Mode: Kelvin 8-wire" : "Mode: passive";
-    $("cr-note").textContent = c.kelvin
-      ? "Kelvin 8-wire: needs the sense fixture (far-end sense on CC1, CC2, D-) and 0.45 A or more. The K2's own path is not included."
-      : "Passive: uses your own load. Draw 1 A or more above an idle reading (under 0.2 A). The figure includes the K2's own path up to its VBUS tap.";
-    if (c.kelvin) {
-      kv($("cr-kv"), [["Total", c.valid ? c.r_mohm + " m\u03A9" : "-"],
-                      ["Positive leg", c.valid ? c.pos_mohm + " m\u03A9" : "-"],
-                      ["Ground leg", c.valid ? c.gnd_mohm + " m\u03A9" : "-"]]);
-      return;
+  function pdPanel() {
+    if (!S.k2) return noteHtml("Not connected.");
+    var ps = pdState(), c = K.contract, held = !!(c && c.held), cv = K2Kit.contractView(c), h = "";
+    if (!ps.rows.length) h += noteHtml("No source capabilities yet. Attach asks the source for its list at 5 V.");
+    else h += listHtml(ps.rows.map(function (r) { return { id: r.id, label: r.label, value: r.value, note: r.note, disabled: r.disabled }; }),
+                       { selected: ps.sel, focus: ps.sel, name: "Source PDOs" });
+    if (ps.row && K.sp) {
+      var g = [];
+      if (ps.row.adjustable) g.push({ name: "Voltage", value: K2Kit.fmtV(ps.req.mv) + " V",
+        dec: [{ dir: "mv--", text: "-1 V" }, { dir: "mv-", text: "-0.1" }], inc: [{ dir: "mv+", text: "+0.1" }, { dir: "mv++", text: "+1 V" }] });
+      g.push({ name: "Current", value: K2Kit.fmtA(ps.req.ma) + " A", dec: [{ dir: "ma-", text: "-0.25" }], inc: [{ dir: "ma+", text: "+0.25" }] });
+      h += K2Kit.stepperHtml(g);
     }
-    kv($("cr-kv"), [["Resistance", c.valid ? c.r_mohm + " m\u03A9" : "-"],
-                    ["Idle", c.idle ? volts(c.idle_mv) + " V " + (c.idle_ma / 1000).toFixed(2) + " A" : "waiting (< 0.2 A)"],
-                    ["Load", c.valid ? volts(c.load_mv) + " V " + (c.load_ma / 1000).toFixed(2) + " A" : "-"]]);
+    h += actions(acell("request", ps.req ? "REQUEST " + K2Kit.fmtV(ps.row.adjustable ? ps.req.mv : ps.row.max_mv) + " V" : "REQUEST", ps.req ? false : "Pick a PDO"),
+                 ps.rows.length ? "" : acell("attach", "ATTACH AT 5 V"),
+                 acell("release", "RELEASE", held ? false : "Nothing held"), acell("back5v", "BACK TO 5 V"), acell("hardreset", "HARD RESET"));
+    return h + subHtml("Contract") + K2Kit.kvTableHtml(cv.rows, { footer: cv.footer, tone: cv.tone });
   }
-  $("cr-mode").onclick = function () { guarded("cable resistance", async function () { renderCableR(await S.k2.cableR(S.crKelvin ? "passive" : "kelvin")); }); };
-  function refreshCableR() { S.due.cabler = Date.now(); return guarded("cable resistance", async function () { renderCableR(await S.k2.cableR("status")); }, true); }
-  $("cr-status").onclick = refreshCableR;
-  $("cr-reset").onclick = function () { guarded("cable resistance", async function () { renderCableR(await S.k2.cableR("reset")); }); };
+  function identPanel() {
+    if (!S.k2) return noteHtml("Not connected.");
+    var d = K.ident, rows, fl = [];
+    if (d && d.valid) {
+      if (d.epr) fl.push("EPR"); if (d.epr_partial) fl.push("EPR partial"); if (d.cuktech) fl.push("CUKTECH"); if (d.xiaomi) fl.push("Xiaomi");
+      rows = [{ label: "Vendor", value: d.vendor || "-" }, { label: "Model", value: d.model || "-" }, { label: "VID:PID", value: hex(d.vid, 4) + ":" + hex(d.pid, 4) },
+              { label: "bcdDevice", value: hex(d.bcd, 4) }, { label: "SVIDs", value: d.svids.map(function (s) { return hex(s, 4); }).join(" ") || "-" },
+              { label: "Flags", value: fl.join(", ") || "-" }];
+    } else rows = [{ label: "Identity", value: "none yet" }];
+    var h = K2Kit.kvTableHtml(rows, { footer: d && d.valid ? "" : "Needs a source that answers Discover Identity.", tone: "info" });
+    var p = K.identify;
+    if (p) h += subHtml("Interrogation") + K2Kit.kvTableHtml([{ label: "State", value: p.state },
+      { label: "Answered", value: (p.answered || []).join(", ") || "-" }, { label: "No answer", value: (p.no_answer || []).join(", ") || "-" },
+      { label: "Retries", value: String(p.retries) }, { label: "Sink PDOs", value: String(p.sink_pdos) }, { label: "Revision", value: String(p.revision) }]);
+    return h + actions(acell("identify", "IDENTIFY"));
+  }
+  function labPanel() {
+    return noteHtml("Hand back returns the contract to the far sink on an inline link. Apple read re-requests the current contract and asks an Apple charger for its fields; it is off in most firmware builds.") +
+      actions(acell("handback", "HAND BACK"), acell("apple", "APPLE READ"));
+  }
+  function paintPd() {
+    setHtml("pt-body", pdPanel()); put("pt-sub", S.k2 && K.contract ? K.contract.state : "");
+    setHtml("id-body", identPanel()); setHtml("lab-body", labPanel());
+    setHtml("pm-body", S.k2 ? K2Kit.messageTableHtml(K.msgs) : noteHtml("Not connected."));
+  }
+
+  function fcDetPanel() {
+    if (!S.k2) return noteHtml("Not connected.");
+    var st = S.st, det = K2Kit.fcDetected(st && st.fc), rows = [{ label: "Detected", value: det.label },
+      { label: "D+", value: st && st.adc_valid ? volts(st.dp_mv) + " V" : "-" }, { label: "D-", value: st && st.adc_valid ? volts(st.dm_mv) + " V" : "-" }];
+    if (K.fc) {
+      rows.push({ label: "Trigger", value: K.fc.state + (K.fc.state !== "idle" && K.fc.proto ? " " + String(K.fc.proto).toUpperCase() : "") });
+      if (fcFailText()) rows.push({ label: "Last refusal", value: fcFailText(), level: "caution", word: "REFUSED" });
+      var res = K.fc.scan && K.fc.scan.results || [];
+      res.forEach(function (r) { rows.push({ label: "Scan " + String(r.proto).toUpperCase(), value: r.outcome + (r.mv ? " " + volts(r.mv) + " V" : "") }); });
+    }
+    return K2Kit.kvTableHtml(rows, { footer: det.note || "VOOC and SuperVOOC are read only: the K2 never triggers them.", tone: det.detectOnly ? "caution" : "info" });
+  }
+  function fcPanel() {
+    if (!S.k2) return noteHtml("Not connected.");
+    var fs = fcState();
+    if (!fs.sel) return noteHtml("No protocol to offer.");
+    var rows = fs.offers.map(function (o) {
+      return { id: o.proto, label: o.proto.toUpperCase(), value: o.proto === fs.sel.proto ? K2Kit.fmtV(fs.sel.mv) + " V" : o.mv.map(K2Kit.fmtV).join(" ") + " V",
+               note: "Levels: " + o.mv.map(K2Kit.fmtV).join(", ") + " V" + (o.proto.indexOf("qc") === 0 ? ". QC is never offered above 12 V." : "") };
+    });
+    var h = listHtml(rows, { selected: fs.sel.proto, focus: fs.sel.proto, name: "Fast-charge protocols" });
+    h += K2Kit.stepperHtml([{ name: "Level", value: K2Kit.fmtV(fs.sel.mv) + " V", dec: [{ dir: "fc-", text: "-" }], inc: [{ dir: "fc+", text: "+" }] }]);
+    return h + actions(acell("fctrigger", "ENGAGE " + fs.sel.proto.toUpperCase() + " " + K2Kit.fmtV(fs.sel.mv) + " V"), acell("fcstop", "STOP"), acell("fcscan", "SCAN"),
+                       fcFailText() === "PD or load active" ? acell("fcovr", "OVERRIDE GUARD") : "");
+  }
+  function paintFc() { setHtml("fd-body", fcDetPanel()); setHtml("fc-body", fcPanel()); }
+
+  function specPanel() {
+    if (!S.k2) return noteHtml("Not connected.");
+    var st = K.spStatus, running = !!(st && st.state === "running"), mask = K2Kit.specFamilyMask(K.spChecked), prog = st ? K2Kit.specProgress(st) : { tone: "info", text: "No run yet. Pick the families and start." };
+    var h = noteHtml("A spec check steps the charger through its levels, Hard Resets it and detaches it. Remove any load first.") + subHtml("Families");
+    K2Kit.SPEC_FAMILY_NOTES.forEach(function (n, i) {
+      h += '<label class="k-chk"><input type="checkbox" data-fam="' + i + '"' + (K.spChecked[i] ? " checked" : "") + (running ? " disabled" : "") + "><i></i><span>" +
+        K2Kit.esc(P.PDSPEC_FAMILIES[i]) + "<small>" + K2Kit.esc(n) + "</small></span></label>";
+    });
+    h += actions(acell("specstart", "START", running ? "A run is in progress" : mask ? false : "Pick a family"), acell("specstop", "STOP", running ? false : "No run in progress"),
+                 acell("specread", "READ RESULT", st && st.blob_len ? false : "No result yet"));
+    h += K2Kit.alertBandHtml(prog);
+    return h + (K.spBlob ? K2Kit.specResultHtml(K.spBlob, P) : "");
+  }
+  function paintSpec() { setHtml("sp-body", specPanel()); }
+
+  function emPanel() {
+    if (!S.k2) return noteHtml("Not connected.");
+    var e = K.em, h;
+    if (!e || !e.valid) h = noteHtml("No e-marker data. Scan cable runs a discovery and needs a cable with an e-marker.");
+    else {
+      var d = e.detail, rows = [{ label: "Vendor", value: e.vendor || "-" }, { label: "VID:PID", value: hex(e.vid, 4) + ":" + hex(e.pid, 4) }, { label: "Speed", value: e.speed || "-" },
+        { label: "Rating", value: e.max_voltage_v + " V, " + e.max_current_a + " A, " + e.max_power_w + " W" }, { label: "Active cable", value: e.active ? "yes" : "no" },
+        { label: "XID", value: hex(e.xid, 8) }, { label: "HW / FW", value: e.hw_rev + " / " + e.fw_rev }];
+      if (d) {
+        var fl = [];
+        [["type_c_plug", "Type-C plug"], ["vconn_required", "VCONN required"], ["epr_cable", "EPR"], ["usb4", "USB4"], ["usb_gen2", "Gen 2"], ["optical", "optical"], ["thunderbolt", "Thunderbolt"]]
+          .forEach(function (f) { if (d[f[0]]) fl.push(f[1]); });
+        rows.push({ label: "Plug", value: d.sop + (d.pd_rev ? ", PD " + d.pd_rev : "") + ", VDO v" + d.vdo_version }, { label: "Latency", value: String(d.latency) },
+                  { label: "Termination", value: String(d.termination) }, { label: "Max / shutdown", value: d.max_temp_c + " C / " + d.shutdown_temp_c + " C" },
+                  { label: "U3 power / lanes", value: d.u3_power + " / " + d.usb_lanes }, { label: "Flags", value: fl.join(", ") || "-" });
+      }
+      rows.push({ label: "VDOs (" + e.num_vdos + ")", value: e.vdos.map(function (v) { return hex(v, 8); }).join(" ") || "-" });
+      h = K2Kit.kvTableHtml(rows);
+    }
+    return h + actions(acell("emscan", "SCAN CABLE"), acell("emsave", "SAVE CURRENT CABLE", e && e.valid ? false : "Scan a cable first"));
+  }
+  function savedPanel() {
+    if (!S.k2) return noteHtml("Not connected.");
+    var sel = selectedSaved(), none = sel ? false : "Select a cable";
+    var h = K.saved.length ? listHtml(K2Kit.savedRows(K.saved), { selected: K.selSaved === null ? undefined : K.selSaved, focus: K.selSaved === null ? undefined : K.selSaved, name: "Saved cables" })
+                           : noteHtml("No saved cables. Scan a cable and save it.");
+    if (sel) h += '<input type="text" class="k-in" id="sv-name" maxlength="24" aria-label="Cable name" value="' + K2Kit.esc(renameText("saved")) + '">';
+    return h + actions(acell("svrename", "RENAME", none), acell("spoof", "SPOOF", none), acell("spoofoff", "SPOOF OFF", K.spoof && K.spoof.active ? false : "No spoof active"),
+                       acell("svdel", "DELETE", none));
+  }
+  function cardsPanel() {
+    if (!S.k2) return noteHtml("Not connected.");
+    var sel = selectedCard(), none = sel ? false : "Select a card";
+    var h = K.cards.length ? listHtml(K2Kit.cardRows(K.cards), { selected: K.selCard === null ? undefined : K.selCard, focus: K.selCard === null ? undefined : K.selCard, name: "Report cards" })
+                           : noteHtml("No report cards yet. A charger test writes one.");
+    if (sel) h += '<input type="text" class="k-in" id="cd-name" maxlength="20" aria-label="Card name" value="' + K2Kit.esc(renameText("card")) + '">';
+    return h + actions(acell("cdrename", "RENAME", none), acell("cddel", "DELETE", none));
+  }
+  function learnPanel() {
+    if (!S.k2) return noteHtml("Not connected.");
+    var l = K.learn, s = l && l.summary, h = noteHtml("Learn powers the cable on the bottom port and asks it what a source asks. Remove anything else from the cable first.") +
+      '<label class="k-chk"><input type="checkbox" data-sweep' + (K.learnSweep ? " checked" : "") + "><i></i><span>Sweep<small>Also try every standard request</small></span></label>";
+    h += actions(acell("learn", "LEARN"), acell("learnsave", "SAVE LEARNED", s && s.outcome === "learned" ? false : "Nothing learned yet"));
+    if (s) h += K2Kit.kvTableHtml([{ label: "Outcome", value: s.outcome }, { label: "VID:PID", value: hex(s.vid, 4) + ":" + hex(s.pid, 4) }, { label: "Entries", value: String(s.entries) },
+      { label: "Unmatched policy", value: s.unmatchedPolicy }]);
+    if (K.unmatched) { var u = K2Kit.unmatchedView(K.unmatched); h += subHtml("Unmatched") + K2Kit.kvTableHtml(u.rows, { footer: u.footer, tone: "info" }); }
+    return h;
+  }
+  function crPanel() {
+    if (!S.k2) return noteHtml("Not connected.");
+    var c = K.cr;
+    if (!c) return noteHtml("No reading yet.");
+    var rows = c.kelvin ? [{ label: "Total", value: c.valid ? c.r_mohm + " mΩ" : "-" }, { label: "Positive leg", value: c.valid ? c.pos_mohm + " mΩ" : "-" },
+                           { label: "Ground leg", value: c.valid ? c.gnd_mohm + " mΩ" : "-" }]
+      : [{ label: "Resistance", value: c.valid ? c.r_mohm + " mΩ" : "-" },
+         { label: "Idle", value: c.idle ? volts(c.idle_mv) + " V " + (c.idle_ma / 1000).toFixed(2) + " A" : "waiting (< 0.2 A)" },
+         { label: "Load", value: c.valid ? volts(c.load_mv) + " V " + (c.load_ma / 1000).toFixed(2) + " A" : "-" }];
+    rows.unshift({ label: "Grade", value: c.valid ? c.grade : "waiting", level: c.grade === "poor" ? "error" : c.grade === "fair" ? "caution" : undefined, word: c.grade === "poor" ? "POOR" : c.grade === "fair" ? "FAIR" : undefined });
+    return K2Kit.kvTableHtml(rows, { footer: c.kelvin ? "Kelvin 8-wire: needs the sense fixture (far-end sense on CC1, CC2, D-) and 0.45 A or more. The K2's own path is not included."
+      : "Passive: uses your own load. Draw 1 A or more above an idle reading (under 0.2 A). The figure includes the K2's own path up to its VBUS tap.", tone: "info" }) +
+      actions(acell("crmode", c.kelvin ? "MODE: KELVIN" : "MODE: PASSIVE"), acell("crreset", "RESET"));
+  }
+  function paintCables() {
+    setHtml("emarker", emPanel()); setHtml("saved", savedPanel()); setHtml("cards", cardsPanel()); setHtml("learn", learnPanel()); setHtml("cr-body", crPanel());
+    put("sv-spoof", S.k2 && K.spoof && K.spoof.active ? "spoofing id " + K.spoof.seq + " (" + K.spoof.replies + " replies)" : "");
+    put("rc-count", S.k2 ? K.cards.length + " cards" : "");
+    var lk = S.st && S.st.link, t = "";
+    if (S.k2) {
+      if (lk && lk.cable_scanned) t = "scanned " + P.formatAgo(lk.cable_age_s);
+      else if (K.emScanAt) t = "scanned " + P.formatAgo(Math.floor((Date.now() - K.emScanAt) / 1000));
+      else if (lk) t = "not scanned yet";
+    }
+    put("em-age", t);
+  }
+
+  function kitPaint() {
+    var on = KIT_ROUTES.indexOf(S.route) >= 0;
+    $("k-topbar").hidden = !on; $("k-foot").hidden = !on;
+    if (!on) return;
+    var st = S.k2 ? S.st : null;
+    setHtml("k-topbar", K2Kit.topBarHtml({ title: K2Kit.pageTitle(S.route), mv: st ? st.vbus_mv : undefined, ma: st ? Math.abs(st.current_ma) : undefined }));
+    ({ pd: paintPd, fc: paintFc, spec: paintSpec, cables: paintCables })[S.route]();
+    var a = K.arm && ACTS[K.arm.id];
+    var f = K2Kit.footerState({ connected: !!S.k2, error: K.error, armed: a ? a.what() : "", leftMs: K.arm ? K2Kit.armLeftMs(K.arm, Date.now()) : 0, info: K.info });
+    setHtml("k-foot", K2Kit.alertBandHtml(f));
+  }
+  setInterval(function () {
+    if (K.arm) K.arm = K2Kit.armExpire(K.arm, Date.now());
+    if (K.arm || K.wasArmed) { K.wasArmed = !!K.arm; kitPaint(); }
+  }, 250);
+
+  // Background refreshes (PROBES entries, asked only while their page is open).
+  function refreshTrig() { S.due.trig = Date.now(); return guarded("PD status", async function () { K.contract = await S.k2.pdStatus(); kitPaint(); }, true); }
+  function refreshIdent() { S.due.ident = Date.now(); return guarded("identity", async function () { K.ident = await S.k2.identity(); kitPaint(); }, true); }
+  function refreshFc() { S.due.fc = Date.now(); return guarded("fast charge", async function () { K.fc = await S.k2.fc("status"); kitPaint(); }, true); }
+  function refreshCableR() { S.due.cabler = Date.now(); return guarded("cable resistance", async function () { K.cr = await S.k2.cableR("status"); kitPaint(); }, true); }
+  function refreshSpec() {
+    S.due.spec = Date.now();
+    return guarded("PD Spec Check", async function () {
+      var st = K.spStatus = await S.k2.pdSpecStatus();
+      if (st.state === "running") K.spTry = false;
+      else if (st.state === "finished" && !K.spTry && st.blob_len > 0) { K.spTry = true; K.spBlob = await S.k2.pdSpecRead(); }
+      kitPaint();
+    }, true);
+  }
+  function refreshMsgs() {
+    S.due.msg = Date.now();
+    return guarded("PD messages", async function () {
+      for (var i = 0; i < 6; i++) {
+        var r = await S.k2.blackboxRead(K.bbCursor);
+        if (r.overwritten || r.rebooted) K.msgs = [];
+        K.msgs = K.msgs.concat(P.bbMessageRows(r.events, {})).slice(-30); K.bbCursor = r.next;
+        if (r.next >= r.head) break;
+      }
+      kitPaint();
+    }, true);
+  }
+  function refreshCables() {
+    S.due.kcab = Date.now(); S.emDirty = false;
+    return guarded("cables", async function () {
+      K.em = await S.k2.emarker(); K.saved = await S.k2.emList(); K.spoof = await S.k2.emSpoof("status"); K.cards = await S.k2.cardsList();
+      kitPaint();
+    }, true);
+  }
 
   // ---- PD black box: capture list, zoomable V/I/message timeline, JSON download -------------------------------------------------
   var BBV = { caps: [], sel: -1, meta: null, events: [], t0: 0, t1: 1, drag: null };
@@ -4586,10 +4748,13 @@ if (typeof module !== "undefined" && module.exports) module.exports = CtGrid;
   // succeeds; "unknown command" keeps it hidden. PD trigger has no command on any branch yet: add its probe here.
   var PROBES = [
     { card: "c-memory", run: function () { return S.k2.probe(async function () { renderMemory(await S.k2.memory()); S.memShown = true; }); }, refresh: refreshMemory, every: EVERY.mem, key: "mem" },
-    { card: "c-ident", run: function () { return S.k2.probe(async function () { renderIdentity(await S.k2.identity()); }); }, refresh: refreshIdent, every: EVERY.ident, key: "ident" },
-    { card: "c-pdtrig", run: function () { return S.k2.probe(async function () { renderTrigger(await S.k2.pdStatus()); }); }, refresh: refreshTrig, every: EVERY.trig, key: "trig" },
-    { card: "c-fc", run: function () { return S.k2.probe(async function () { renderFc(await S.k2.fc("status")); }); }, refresh: refreshFc, every: EVERY.fc, key: "fc" },
-    { card: "c-cabler", run: function () { return S.k2.probe(async function () { renderCableR(await S.k2.cableR("status")); }); }, refresh: refreshCableR, every: EVERY.cabler, key: "cabler" },
+    { card: "c-ident", run: function () { return S.k2.probe(async function () { K.ident = await S.k2.identity(); }); }, refresh: refreshIdent, every: EVERY.ident, key: "ident", route: "pd" },
+    { card: "c-pdtrig", run: function () { return S.k2.probe(async function () { K.contract = await S.k2.pdStatus(); }); }, refresh: refreshTrig, every: EVERY.trig, key: "trig", route: "pd" },
+    { card: "c-pdmsg", run: function () { return S.k2.probe(async function () { await S.k2.blackboxRead(); }); }, refresh: refreshMsgs, every: EVERY.msg, key: "msg", route: "pd" },
+    { card: "c-fc", run: function () { return S.k2.probe(async function () { K.fc = await S.k2.fc("status"); }); }, refresh: refreshFc, every: EVERY.fc, key: "fc", route: "fc" },
+    { card: "c-spec", run: function () { return S.k2.probe(async function () { K.spStatus = await S.k2.pdSpecStatus(); }); }, refresh: refreshSpec, every: EVERY.spec, key: "spec", route: "spec" },
+    { card: "c-learn", run: function () { return S.k2.probe(async function () { K.learn = await S.k2.emLearned(); }); }, refresh: function () { return Promise.resolve(); }, every: EVERY.learn, key: "learn", route: "cables" },
+    { card: "c-cabler", run: function () { return S.k2.probe(async function () { K.cr = await S.k2.cableR("status"); }); }, refresh: refreshCableR, every: EVERY.cabler, key: "cabler", route: "cables" },
     { card: "c-bb", run: function () { return S.k2.probe(async function () { renderBbList(await S.k2.blackboxCaptures()); }); }, refresh: refreshBb, every: EVERY.bb, key: "bb" },
     { card: "c-chargertest", run: function () { return S.k2.probe(async function () { renderChargerTest(await S.k2.chargerTest("status")); }); }, refresh: refreshChargerTest, every: EVERY.ct, key: "ct" }
   ];
@@ -4601,7 +4766,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = CtGrid;
       pr.on = yes; $(pr.card).hidden = !yes; S.due[pr.key] = Date.now();
       if (pr.card === "c-chargertest") { $("c-ctrun").hidden = !yes; if (yes && S.route === "test") ctEnter(); }
     }
-    routeNote();
+    routeNote(); kitPaint();
   }
 
   // ---- errors and connection --------------------------------------------------------------------------------------------------------
@@ -4624,18 +4789,17 @@ if (typeof module !== "undefined" && module.exports) module.exports = CtGrid;
     S.lastEnergy = null; S.emScanAt = 0; S.due = {}; S.memShown = false; $("mem").className = "empty"; $("mem").textContent = "No answer yet."; leaseSeenArmed = false; $("lease").hidden = true; S.stats = { usb: null, rst: null, fault: null }; S.ripple = null;
     S.chargerTest = null; $("ct-results").textContent = "No run read yet.";
     $("ct-kv").textContent = $("ct-evidence").textContent = "";
-    $("pdos").className = "empty"; $("pdos").textContent = "Not connected."; $("emarker").className = "empty"; $("emarker").textContent = "Not connected.";
-    $("saved").className = "empty"; $("saved").textContent = "Not connected."; put("sv-spoof", "");
+    $("pdos").className = "empty"; $("pdos").textContent = "Not connected."; S.pdos = null; kitReset();
     $("adc-raw").className = "empty"; $("adc-raw").textContent = "Not read yet.";
-    $("pd-force").hidden = true; ["m-pd", "m-em", "m-power", "m-rp", "m-fc", "m-dv", "m-id", "m-cr", "m-bb", "m-ct"].forEach(function (id) { msg(id, ""); });
+    $("pd-force").hidden = true; ["m-pd", "m-power", "m-rp", "m-dv", "m-bb", "m-ct"].forEach(function (id) { msg(id, ""); });
     $("rp-stats").textContent = "";
-    ["c-memory", "c-ident", "c-pdtrig", "c-fc", "c-cabler", "c-bb", "c-chargertest", "c-ctrun"].forEach(function (id) { $(id).hidden = true; });
+    ["c-memory", "c-ident", "c-pdtrig", "c-pdmsg", "c-fc", "c-spec", "c-learn", "c-cabler", "c-bb", "c-chargertest", "c-ctrun"].forEach(function (id) { $(id).hidden = true; });
     PROBES.forEach(function (p) { p.on = false; });
     ctReset(); routeNote();
     showStats(); drawChart(); drawRipple();
   }
   function stopSession() {
-    S.gen++; S.k2 = null;
+    S.gen++; S.k2 = null; kitReset(); kitPaint();
     if (S.link) S.link.abort(new P.RemoteTimeout("disconnected"));
     S.link = null; setEnabled(false); $("fw").hidden = true;
     var d = S.dev; S.dev = null;
@@ -4647,12 +4811,12 @@ if (typeof module !== "undefined" && module.exports) module.exports = CtGrid;
   async function slowTasks(gen) {
     var steps = [
       [S.pdoDirty || isDue("pdos", EVERY.pdos), function () { S.due.pdos = Date.now(); return refreshPdos(); }],
-      [S.emDirty || isDue("emarker", EVERY.emarker), refreshEmarker],
+      [S.route === "cables" && (S.emDirty || isDue("kcab", EVERY.kcab)), refreshCables],
       [isDue("adc", EVERY.adc), refreshAdc],
       [isDue("ping", EVERY.ping), refreshPing],
       [isDue("lease", EVERY.lease), refreshLease]
     ];
-    PROBES.forEach(function (p) { if (p.on) steps.push([isDue(p.key, p.every), p.refresh]); });
+    PROBES.forEach(function (p) { if (p.on && (!p.route || p.route === S.route)) steps.push([isDue(p.key, p.every), p.refresh]); });
     steps.push([ctLive() && isDue("ctlive", CT_LIVE_MS), function () { return guarded("charger test", ctTick, true); }]);
     for (var i = 0; i < steps.length && S.gen === gen; i++) if (steps[i][0]) await steps[i][1]();
   }

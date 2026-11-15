@@ -2049,12 +2049,12 @@ test("chargerTestRow reads one row of the table a status read describes", async 
 // ---- the dashboard's pages (hash routes in the one file) and the Charger test page (k2/web-ct) ------------------------------
 test("dashboard: every card belongs to a page, and every page has a tab", () => {
   const html = readFileSync(path.join(here, "../tools/web/k2.html"), "utf8");
-  const routes = JSON.parse(html.match(/var ROUTES = (\[[^\]]*\]);/)[1]);
-  assert.deepEqual(routes, ["live", "test", "cables", "triggers", "device"]);
+  const routes = ["live", "test", "pd", "fc", "spec", "cables", "device"];
+  assert.match(html, /ROUTES: \["live", "test", "pd", "fc", "spec", "cables", "device"\]|ROUTES = \["live", "test", "pd", "fc", "spec", "cables", "device"\]/, "the kit's route list");
   const tabs = [...html.match(/<nav id="tabs"[\s\S]*?<\/nav>/)[0].matchAll(/href="#(\w+)"/g)].map((m) => m[1]);
   assert.deepEqual(tabs, routes);
   const cards = [...html.matchAll(/<section class="card[^"]*" id="([\w-]+)"([^>]*)>/g)];
-  assert.equal(cards.length, 17);
+  assert.equal(cards.length, 22);
   for (const [, id, attrs] of cards) {
     const page = (attrs.match(/data-page="([^"]+)"/) || [])[1];
     assert.ok(page && page.split(" ").every((p) => routes.includes(p)), id + " has no page");

@@ -28,13 +28,13 @@ after(async () => {
 const $ = (id) => `document.getElementById(${JSON.stringify(id)})`;
 const text = (id) => page.eval(`${$(id)}.textContent`);
 
-test("the five tabs fit at 360 px, and the page does not scroll sideways", { skip }, async () => {
+test("the seven tabs fit at 360 px, and the page does not scroll sideways", { skip }, async () => {
   const m = await page.eval(`(function () {
     var t = ${$("tabs")}, tabs = Array.prototype.slice.call(t.querySelectorAll("a")), W = document.documentElement.clientWidth;
     return { n: tabs.length, over: t.scrollWidth - t.clientWidth, page: document.documentElement.scrollWidth - W,
              cut: tabs.filter(function (a) { var r = a.getBoundingClientRect(); return r.left < 0 || r.right > W; }).length };
   })()`);
-  assert.equal(m.n, 5);
+  assert.equal(m.n, 7);
   assert.ok(m.over <= 0, "tab bar scrolls by " + m.over + " px");
   assert.ok(m.page <= 0, "page is " + m.page + " px wider than the screen");
   assert.equal(m.cut, 0, "tabs outside the screen");

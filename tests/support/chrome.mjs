@@ -29,7 +29,7 @@ export function fakePage() {
   const at = html.indexOf('<script id="k2proto">');
   const end = at < 0 ? -1 : html.indexOf("</script>", at);
   if (end < 0) throw new Error("k2.html has no k2proto block");
-  const fake = readFileSync(path.join(here, "fakek2.js"), "utf8");
+  const fake = ["fakek2.js", "fakepages.js"].map((f) => readFileSync(path.join(here, f), "utf8")).join("\n");
   return html.slice(0, end + 9) + "\n<script>" + fake + "</script>\n" + html.slice(end + 9);
 }
 
