@@ -143,7 +143,17 @@ test("PD Spec Check: START is armed and carries the family mask; an empty mask d
   assert.deepEqual(await sent(), []);
   await press("specstart");
   await page.until("__fake.sent.length === 1", 3000, "start");
-  assert.deepEqual((await sent())[0], { call: "pdSpecStart", mask: 63, confirm: true });
+  assert.deepEqual((await sent())[0], { call: "pdSpecStart", mask: 63, confirm: true, full20: false });
+  await page.eval("__fake.spec.state = 'idle'");
+  await page.until("!document.querySelector('#sp-body .k-act[data-act=specstart]').disabled", 4000, "START free again");
+  // The PPS 20 mV option: the whole APDO window instead of three 10-step windows (start flags bit 1)
+  await page.eval("var c = document.querySelector('#sp-body input[data-full20]'); c.checked = true; c.dispatchEvent(new Event('change', { bubbles: true }))");
+  await clear();
+  await press("specstart");
+  await page.until(`/Armed/.test(${$("k-foot")}.textContent)`, 3000, "armed again");
+  await press("specstart");
+  await page.until("__fake.sent.length === 1", 3000, "start with the option");
+  assert.deepEqual((await sent())[0], { call: "pdSpecStart", mask: 63, confirm: true, full20: true });
   await page.eval("__fake.spec.state = 'idle'");
   await page.until("!document.querySelector('#sp-body .k-act[data-act=specstart]').disabled", 4000, "START free again");
   for (let i = 0; i < 6; i++) await page.eval("var c = document.querySelectorAll('#sp-body input[data-fam]')[" + i + "]; c.checked = false; c.dispatchEvent(new Event('change', { bubbles: true }))");

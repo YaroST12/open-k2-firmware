@@ -69,9 +69,9 @@
              retry_ms: 0, stall: { cmd: null, silent: 0 }, cmds: [] };
   };
   R.pdSpecStatus = async function () { return clone(F.spec); };
-  R.pdSpecStart = async function (mask, confirm) {
+  R.pdSpecStart = async function (mask, confirm, full20) {
     if (!confirm) throw new RangeError("confirm the spec check");
-    F.sent.push({ call: "pdSpecStart", mask: mask, confirm: !!confirm });
+    F.sent.push({ call: "pdSpecStart", mask: mask, confirm: !!confirm, full20: !!full20 });
     F.spec.state = "running"; F.spec.families = mask;
     return clone(F.spec);
   };

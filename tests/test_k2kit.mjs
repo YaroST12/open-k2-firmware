@@ -354,7 +354,8 @@ function specBlob(over) {
   const checks = P.PDSPEC_CHECKS.map((d) => ({ key: d.key, label: d.label, kind: d.kind, unit: d.unit, weight: d.weight,
     verdict: "pass", skip: null, n: 4, fails: 0, penalty: 0, worst: 12000, lo: -1000000, hi: 25000, a: 1, b: 2 }));
   return Object.assign({ state: "finished", stop: "done", score: 0, elapsed_s: 95, release_unconfirmed: false,
-    tally: { pass: checks.length, fail: 0, skip: 0, unverified: 0 }, checks, timers: {}, transitions: [], pps: [] }, over || {});
+    tally: { pass: checks.length, fail: 0, skip: 0, unverified: 0 }, checks, timers: {}, transitions: [], pps: [], passes: [], version: 2,
+    caps_note: null, full20: false }, over || {});
 }
 
 test("specResultHtml: the head is a KvTable, one grid line per check, a rule where the family changes", () => {
@@ -389,6 +390,52 @@ test("specResultHtml: inferred checks are shown unverified and never as a pass o
   assert.ok(row, "pps_settle row");
   assert.doesNotMatch(row, /k-fail|k-pass/);
   assert.match(row, /unverified/i);
+  assert.match(row, /class="k-vc k-unverified"/, "the outlined amber cell");
+});
+
+test("specResultHtml: the grid follows the device's order, the PPS/AVS checks right after the transitions", () => {
+  const html = K.specResultHtml(specBlob(), P);
+  const labels = [...html.matchAll(/<div class="k-rg-label">([^<]*)<\/div>/g)].map((m) => m[1]);
+  assert.deepEqual(labels.slice(0, 12), ["Accept", "PS_RDY time", "VBUS start", "PS_RDY early", "PS_RDY low", "Rise time", "Fall time",
+    "Overshoot", "Accuracy", "PPS monotonic", "PPS accuracy", "PPS settle"]);
+  assert.deepEqual(labels.slice(12, 18), ["PPS in band", "PPS PS_RDY", "PPS overshoot", "PPS transient", "PPS_Status", "PPS_Status t"]);
+  assert.equal(labels[18], "AVS monotonic");
+  assert.deepEqual(labels.slice(24), ["PPS timeout", "EPR timeout", "HR to 0 V", "HR off time", "HR turn-on", "HR caps", "Detach to 0 V",
+    "Re-attach", "Reattach caps", "Source reset"]);
+});
+
+test("specResultHtml: one line per programmable pass with band, PS_RDY, level and PPS_Status cells", () => {
+  const pass = (o) => Object.assign({ pos: 6, kind: "pps", class: 1, step: "100 mV", lo_mv: 3300, hi_mv: 11000, steps: 154, band_ms: 2.1,
+    psrdy_ms: 30.9, worst_err_mv: 17, min_delta_mv: 98, over_mv: -140, out_ms: 0,
+    fails: { band: 0, ps_rdy: 11, monotonic: 0, accuracy: 0, overshoot: 0, transient: 0 }, status: 0, status_text: "clean" }, o);
+  const b = specBlob({ caps_note: "PPS without AVS: allowed before PD R3.3", passes: [
+    pass({ class: 0, step: "20 mV", band_ms: 8.1, psrdy_ms: 25.5, fails: { band: 0, ps_rdy: 0, monotonic: 0, accuracy: 0, overshoot: 0, transient: 0 } }),
+    pass({}),
+    pass({ class: 3, step: "slams", status: 6, status_text: "no answer, voltage", fails: { band: 0, ps_rdy: 0, monotonic: 1, accuracy: 0, overshoot: 0, transient: 0 } }),
+    pass({ pos: 7, kind: "avs", class: 2, step: "1000 mV", status_text: null, psrdy_ms: null }),
+  ] });
+  const html = K.specResultHtml(b, P);
+  assert.match(html, /PPS without AVS/, "the caps note in the head");
+  const rows = html.split("Programmable passes")[1].split('<div class="k-rg-row').slice(1);
+  assert.equal(rows.length, 4);
+  // 20 mV: the band cell is the settle on the final level, unverified (outlined amber); PS_RDY within the limit passes
+  assert.match(rows[0], /k-rg-label">A6 PPS 20 mV</, "two APDOs: each line names its own");
+  assert.match(rows[0], /class="k-vc k-unverified"[^>]*aria-label="8\.1 ms unverified"/);
+  assert.match(rows[0], /class="k-vc k-pass"[^>]*aria-label="25\.5 ms pass"/);
+  // 100 mV: PS_RDY late on 11 moves is a fail cell with its count
+  assert.match(rows[1], /class="k-vc k-fail"[^>]*aria-label="30\.9 ms fail" title="worst Accept to PS_RDY of 154 moves, 11 fail"/);
+  assert.match(rows[1], /aria-label="clean pass"/);
+  // slams: a monotonic fail shows in the level cell, the PPS_Status fault bits in the status cell
+  assert.match(rows[2], /k-rg-label">A6 PPS slams</);
+  assert.match(rows[2], /class="k-vc k-fail"[^>]*aria-label="\+17 mV fail" title="[^"]*monotonic 1,/);
+  assert.match(rows[2], /class="k-vc k-fail"[^>]*aria-label="no answer, voltage fail"/);
+  // AVS: no PPS_Status, no PS_RDY seen
+  assert.match(rows[3], /k-rg-label">A7 AVS 1000 mV</);
+  assert.match(rows[3], /^ k-sec/, "a rule where the APDO changes");
+  assert.match(rows[3], /aria-label="not seen fail"/);
+  assert.doesNotMatch(rows[3], /clean/);
+  assert.match(html, /band/);
+  assert.match(html, /PS_RDY/);
 });
 
 test("specResultHtml: a run that stopped early or could not confirm its release says so in the footer", () => {

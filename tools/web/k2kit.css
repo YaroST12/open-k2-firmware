@@ -34,6 +34,8 @@ html[data-theme="dark"] {
 .k-pass { background: var(--k-ok-t); color: var(--k-ok); }
 .k-fail { background: var(--k-error); color: var(--k-ink-on-error); font-weight: 700; }
 .k-none, .k-stopped { background: none; color: var(--k-dim); }
+.k-rg.k-spec { --k-rg-label: 168px; --k-cell-max: 112px; --k-rg-max: 640px; }
+.k-unverified { background: none; color: var(--k-caution); box-shadow: inset 0 0 0 1px var(--k-caution); }
 .k-skip { background: none; color: var(--k-dim); }
 .k-skip .k-vl { text-decoration: line-through; text-decoration-thickness: 1px; }
 .k-pending, .k-running { background: none; color: var(--k-faint); }

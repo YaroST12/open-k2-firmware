@@ -31,11 +31,11 @@
 //   savedRows / cardRows / unmatchedView           the saved-cable and charger-card RowLists, the held-back e-marker replies
 //   fmtV / fmtA / fmtW                             voltage, current and power text
 //
-// verdict is one of pending running pass fail none skip stopped partial (the device's Verdict enum). Colour never
-// carries it alone: pass and fail differ in fill and ink, skip strikes the volts, running adds a dot, none and
-// stopped have no fill.
+// verdict is one of pending running pass fail none skip stopped partial (the device's Verdict enum), plus unverified (the PD
+// Spec Check's inferred limits: a 1 px amber outline, no fill, and the word in its label). Colour never carries it alone: pass and
+// fail differ in fill and ink, skip strikes the volts, running adds a dot, none and stopped have no fill.
 var K2Kit = (function () {
-  var VERDICTS = ["pending", "running", "pass", "fail", "none", "skip", "stopped", "partial"];
+  var VERDICTS = ["pending", "running", "pass", "fail", "none", "skip", "stopped", "partial", "unverified"];
   function esc(s) {
     return String(s === undefined || s === null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   }
@@ -333,13 +333,41 @@ var K2Kit = (function () {
   }
 
   // ---- PD Spec Check result ------------------------------------------------------------------------------------------------
-  // The blob (k2proto decodePdSpecBlob) as a KvTable head, a ResultGrid with one line per check, and one tone footer. p is the
-  // k2proto namespace (value / limit formatting in the K2's own words). Inferred checks carry no penalty and show as unverified.
-  var SPEC_SECTIONS = { accept_time: "Transitions", pps_monotonic: "PPS steps", pps_keepalive: "Timeouts", hr_safe0v: "Hard Reset",
+  // The blob (k2proto decodePdSpecBlob) as a KvTable head, a ResultGrid with one line per check in the device's order
+  // (ui_pdspec_page.cpp kOrder: the transitions, the PPS/AVS checks, the timeouts, Hard Reset, detach, source), one line per
+  // programmable pass, and one tone footer. p is the k2proto namespace (value / limit formatting in the K2's own words). Inferred
+  // checks carry no penalty and show as the outlined amber "unverified" cell.
+  var SPEC_ORDER = ["accept_time", "ps_rdy_time", "src_start", "ps_rdy_early", "ps_rdy_low", "rise_time", "fall_time", "overshoot", "accuracy",
+                    "pps_monotonic", "pps_accuracy", "pps_settle", "pps_band", "pps_ps_rdy", "pps_overshoot", "pps_transient", "pps_status",
+                    "pps_status_time", "avs_monotonic", "avs_accuracy", "avs_band", "avs_ps_rdy", "avs_overshoot", "avs_transient",
+                    "pps_keepalive", "epr_keepalive", "hr_safe0v", "hr_recover", "hr_turn_on", "hr_caps", "detach_safe0v", "reattach",
+                    "reattach_caps", "source_reset"];
+  var SPEC_SECTIONS = { accept_time: "Transitions", pps_monotonic: "PPS", avs_monotonic: "AVS", pps_keepalive: "Timeouts", hr_safe0v: "Hard Reset",
                         detach_safe0v: "Detach", source_reset: "Source" };
-  var SPEC_CELL = { pass: "pass", fail: "fail", skip: "skip", pending: "pending", unverified: "none" };
+  var SPEC_CELL = { pass: "pass", fail: "fail", skip: "skip", pending: "pending", unverified: "unverified" };
+  function specRank(key) { var i = SPEC_ORDER.indexOf(key); return i < 0 ? SPEC_ORDER.length : i; }
+  function msText(v) { return v === null || v === undefined ? "not seen" : v.toFixed(1) + " ms"; }
+  function failText(label, n) { return n ? label + ", " + n + " fail" : label; }
+  // One programmable pass (k2proto passes[]): the band entry (the 20 mV class: the settle on the final level, unverified), PS_RDY,
+  // the level (worst error; monotonic, accuracy, overshoot and transient fails) and PPS_Status (PPS only).
+  function specPassLine(ps) {
+    var f = ps.fails, settle = ps.kind === "pps" && ps["class"] === 0;
+    var band = settle ? { verdict: "unverified", label: msText(ps.band_ms), current: "settle", title: "Settle on the final level: inferred, not counted" }
+                      : { verdict: f.band || ps.band_ms === null ? "fail" : "pass", label: msText(ps.band_ms), current: "band",
+                          title: failText("worst entry into the band of " + ps.steps + " moves", f.band) };
+    var rdy = { verdict: f.ps_rdy || ps.psrdy_ms === null ? "fail" : "pass", label: msText(ps.psrdy_ms), current: "PS_RDY",
+                title: failText("worst Accept to PS_RDY of " + ps.steps + " moves", f.ps_rdy) };
+    var nLevel = f.monotonic + f.accuracy + f.overshoot + f.transient;
+    var lvl = { verdict: nLevel ? "fail" : "pass", label: (ps.worst_err_mv >= 0 ? "+" : "") + ps.worst_err_mv + " mV", current: "level",
+                title: "worst level error; fails: monotonic " + f.monotonic + ", accuracy " + f.accuracy + ", overshoot " + f.overshoot +
+                       ", transient " + f.transient };
+    var st = ps.kind === "pps" ? { verdict: ps.status ? "fail" : "pass", label: ps.status_text || "clean", current: "status" }
+                               : { verdict: "none", label: "-", current: "status" };
+    return { label: ps.kind.toUpperCase() + " " + ps.step, cells: [band, rdy, lvl, st] };
+  }
   function specResultHtml(b, p) {
-    var lines = b.checks.map(function (c) {
+    var checks = b.checks.slice().sort(function (x, y) { return specRank(x.key) - specRank(y.key); });
+    var lines = checks.map(function (c) {
       var v = SPEC_CELL[c.verdict] || "pending", unver = c.verdict === "unverified";
       var label = c.verdict === "skip" ? (c.skip || "skip") : c.verdict === "pending" || c.worst === null ? "-" : p.pdSpecValue(c.unit, c.worst);
       var cell = { verdict: v, label: label, title: unver ? "Inferred check: not counted in the penalty" : "" };
@@ -353,6 +381,8 @@ var K2Kit = (function () {
       { label: "Checks", value: t.pass + " pass, " + t.fail + " fail, " + t.skip + " skip" + (t.unverified ? ", " + t.unverified + " unverified" : "") },
       { label: "Time", value: b.elapsed_s + " s" }
     ];
+    if (b.caps_note) head.push({ label: "Caps note", value: b.caps_note });
+    if (b.passes && b.passes.length) head.push({ label: "PPS 20 mV", value: b.full20 ? "whole window" : "three 10-step windows" });
     var parts = [], tone = "ok";
     var raise = function (x) { if (x === "error" || (x === "caution" && tone !== "error") || (x === "info" && tone === "ok")) tone = x; };
     if (running) { parts.push("Check running."); raise("info"); }
@@ -360,7 +390,15 @@ var K2Kit = (function () {
     if (!running && b.stop !== "done" && b.stop !== "running") { parts.push("Stopped early: " + b.stop + "."); raise("caution"); }
     if (b.release_unconfirmed) { parts.push("The 5 V release was not confirmed."); raise("caution"); }
     if (!parts.length) parts.push("All checks passed.");
-    return kvTableHtml(head, { footer: parts.join(" "), tone: tone }) + resultGridHtml(lines);
+    var out = kvTableHtml(head, { footer: parts.join(" "), tone: tone }) + resultGridHtml(lines, { cls: "k-spec" });
+    if (b.passes && b.passes.length) {
+      var pl = b.passes.map(specPassLine), many = {};
+      b.passes.forEach(function (ps) { many[ps.pos] = 1; });
+      if (Object.keys(many).length > 1) pl.forEach(function (ln, i) { ln.label = "A" + b.passes[i].pos + " " + ln.label; });
+      pl.forEach(function (ln, i) { ln.section = i === 0 || b.passes[i].pos !== b.passes[i - 1].pos; });
+      out += '<div class="k-sub">Programmable passes</div>' + resultGridHtml(pl, { cls: "k-spec" });
+    }
+    return out;
   }
 
   // ---- the shared arm state as ActionCells, steppers, the spec picker and the cable lists ------------------------------------------
@@ -378,8 +416,8 @@ var K2Kit = (function () {
         g.dec.map(btn).join("") + '<span class="k-step-v">' + esc(g.value) + "</span>" + g.inc.map(btn).join("") + "</div>";
     }).join("") + "</div>";
   }
-  // One note per family, in the engine's order (Transitions, PPS steps, PPS timeout, EPR timeout, Hard Reset, Detach).
-  var SPEC_FAMILY_NOTES = ["Steps through the fixed levels", "Walks a programmable range", "Waits out the PPS keep-alive", "Waits out the EPR keep-alive",
+  // One note per family, in the engine's order (Transitions, PPS/AVS, PPS timeout, EPR timeout, Hard Reset, Detach).
+  var SPEC_FAMILY_NOTES = ["Steps through the fixed levels", "Sweeps each PPS / AVS range in 3 step sizes, then slams it", "Waits out the PPS keep-alive", "Waits out the EPR keep-alive",
                            "Hard Resets the source", "Detaches the source"];
   function specFamilyMask(checked) {
     var m = 0;
