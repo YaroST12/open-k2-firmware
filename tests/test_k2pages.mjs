@@ -185,6 +185,69 @@ test("an armed press does not follow you to another page", { skip }, async () =>
   assert.deepEqual(await sent(), []);
 });
 
+test("a firmware refusal reads in plain words in the footer, and the arm is gone", { skip }, async () => {
+  await go("pd");
+  await page.eval("document.querySelectorAll('#pt-body .k-rl-row')[1].click()");
+  for (const [fail, want] of [[{ call: "pdRequest", status: 4 }, /K2 is busy/], [{ call: "pdRequest", timeout: true }, /did not answer/]]) {
+    await clear();
+    await page.eval("__fake.fail = " + JSON.stringify(fail));
+    await press("request");
+    await press("request");
+    await page.until(`/${want.source}/.test(${$("k-foot")}.textContent)`, 3000, "the error wording " + want);
+    const f = await foot();
+    assert.ok(!/command \d+ failed|RemoteError|RemoteTimeout|\bat \w+\.js/.test(f), "no raw code or exception text: " + f);
+    assert.equal(await page.eval(`!!(${$("k-foot")}.querySelector(".k-foot-error") || ${$("k-foot")}.classList.contains("k-foot-error"))`), true, "the footer is in the error tone");
+    assert.equal(await page.eval("document.querySelectorAll('.k-act.k-armed').length"), 0, "no cell is still armed");
+  }
+});
+
+test("Identify: a NEED_CONFIRM answer escalates to an armed press, and the second press sends the confirmed call", { skip }, async () => {
+  await go("pd");
+  await clear();
+  await page.eval("__fake.needConfirmOnce = true");
+  await press("identify");
+  await page.until(`/Armed/.test(${$("k-foot")}.textContent)`, 3000, "armed after the firmware asked for a confirm");
+  assert.deepEqual((await sent()).map((s) => [s.call, s.confirm]), [["identifyRun", false]]);
+  await press("identify");
+  await page.until("__fake.sent.length === 2", 3000, "the confirmed run");
+  assert.deepEqual((await sent())[1], { call: "identifyRun", confirm: true });
+});
+
+test("VOOC: the monitor switch is one press and only listens; there is still no trigger", { skip }, async () => {
+  await go("fc");
+  await page.until(`/VOOC monitor/.test(${$("fd-body")}.textContent)`, 4000, "the monitor row");
+  await clear();
+  await press("voocmon");
+  await page.until("__fake.sent.length === 1", 3000, "the switch");
+  assert.deepEqual((await sent())[0], { call: "voocMonitor", on: true });
+  await page.until(`/Handshake/.test(${$("fd-body")}.textContent) && /0x82 replies/.test(${$("fd-body")}.textContent)`, 3000, "monitor rows");
+  assert.ok(!(await page.eval("Array.prototype.some.call(document.querySelectorAll('.k-act'), function (b) { return /vooc/i.test(b.getAttribute('data-act')) && /trigger|engage/i.test(b.textContent); })")));
+  await press("voocmon");
+  await page.until("__fake.sent.length === 2", 3000, "switch off");
+  assert.deepEqual((await sent())[1], { call: "voocMonitor", on: false });
+});
+
+test("not connected: every control on the four pages is disabled, nothing is sent, the footer says why", { skip }, async () => {
+  const p2 = await launch({ width: 900, height: 900 });
+  try {
+    await p2.goto(srv.url + "#/pd");
+    await p2.until('document.querySelectorAll("#pt-body .k-rl-row").length === 3', 10000, "connected first");
+    await p2.eval('document.getElementById("connect").click()');   // Disconnect
+    await p2.until('document.getElementById("connect").textContent === "Connect"', 4000, "disconnected");
+    await p2.eval("__fake.sent.length = 0");
+    for (const r of ["pd", "fc", "spec", "cables"]) {
+      await p2.eval("location.hash = " + JSON.stringify("#/" + r));
+      await p2.until("document.getElementById('main').getAttribute('data-route') === " + JSON.stringify(r), 3000, "route " + r);
+      await p2.until(`/Not connected/.test(document.getElementById("k-foot").textContent)`, 3000, "the footer on " + r);
+      const live = await p2.eval(`Array.prototype.filter.call(document.querySelectorAll("section[data-page~='${r}'] .k-act"), function (b) { return !b.disabled && b.getAttribute("aria-disabled") !== "true"; }).length`);
+      assert.equal(live, 0, "enabled controls on " + r);
+      await p2.eval(`Array.prototype.forEach.call(document.querySelectorAll("section[data-page~='${r}'] .k-act"), function (b) { b.click(); b.click(); })`);
+    }
+    assert.deepEqual(await p2.eval("JSON.parse(JSON.stringify(__fake.sent))"), [], "no call reached the K2");
+    assert.deepEqual([...await p2.errors], []);
+  } finally { await p2.close(); }
+});
+
 test("an armed action expires by itself after five seconds and the footer returns to Ready", { skip }, async () => {
   await go("pd");
   await page.eval("document.querySelectorAll('#pt-body .k-rl-row')[0].click()");

@@ -21,6 +21,7 @@
   R.pdRequest = async function (pos, o) {
     o = o || {};
     F.sent.push({ call: "pdRequest", pos: pos, mv: o.mv || 0, ma: o.ma || 0, confirm: !!o.confirm });
+    maybeFail("pdRequest");
     var p = F.pd.pdos[pos - 1];
     F.pd.status = { state: "ready", result: "ok", held: true, epr: false, pos: pos, mv: o.mv || p.max_mv, ma: o.ma || p.max_ma, hard_resets: 0, auto_hold: false };
     return clone(F.pd.status);
@@ -33,8 +34,18 @@
     return { valid: true, epr: false, epr_partial: false, cuktech: false, xiaomi: false, vid: 0x2B1D, pid: 0x1234, bcd: 0x100, svids: [0xFF01],
              vendor: "Fake Maker", model: "F-1" };
   };
+  // F.fail = { call: "pdRequest", status: 4 } makes the next such call answer with that firmware status once; F.needConfirmOnce does it for identify.
+  F.fail = null; F.needConfirmOnce = false;
+  function maybeFail(call) {
+    if (F.fail && F.fail.call === call) {
+      var f = F.fail; F.fail = null;
+      if (f.timeout) throw new P.RemoteTimeout("no answer");
+      throw new P.RemoteError(f.status, 0x41);
+    }
+  }
   R.identifyRun = async function (o) {
     F.sent.push({ call: "identifyRun", confirm: !!(o && o.confirm) });
+    if (F.needConfirmOnce && !(o && o.confirm)) { F.needConfirmOnce = false; throw new P.RemoteError(P.STATUS.NEED_CONFIRM, 0x40); }
     return { identify: { state: "done", answered: ["identity"], no_answer: [], retries: 0, sink_pdos: 3, revision: 3 }, identity: await R.identity() };
   };
   R.blackboxRead = async function () { return { overwritten: false, frozen: false, rebooted: false, next: 0, head: 0, events: [] }; };
@@ -48,6 +59,14 @@
     } else if (op === "scan") F.sent.push({ call: "fc", op: op, confirm: !!o.confirm });
     else if (op === "reset") { F.sent.push({ call: "fc", op: op }); F.fc.state = "idle"; F.fc.proto = "NONE"; }
     return clone(F.fc);
+  };
+  F.vooc = { on: false };
+  R.voocMonitor = async function (on) {
+    if (on !== undefined) { F.sent.push({ call: "voocMonitor", on: !!on }); F.vooc.on = !!on; }
+    return { enabled: F.vooc.on, running: F.vooc.on, session_active: false, handshake: F.vooc.on, paused: false, stalled: false,
+             sessions: F.vooc.on ? 2 : 0, wakes: 3, partials: 0, edges: 400, frames: 12, pairs: 6, hs_pairs: 3, ident: "0x86", ident_reply: "0x12A",
+             r82: { last: "0x12A", min: "0x120", max: "0x130", n: 5 }, p82_us: { last: 0, mean: 0, n: 0 }, ncmds: 0, other: 0, storms: 0,
+             retry_ms: 0, stall: { cmd: null, silent: 0 }, cmds: [] };
   };
   R.pdSpecStatus = async function () { return clone(F.spec); };
   R.pdSpecStart = async function (mask, confirm) {

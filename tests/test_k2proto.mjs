@@ -1180,6 +1180,51 @@ test("fc decode: state, protocol, scan results", () => {
   assert.throws(() => P.decodeFc(u8(...FC_PAYLOAD.slice(0, 12))), P.FrameError);
 });
 
+// vooc-monitor (fc op 4, passive): page 0 is 57 bytes, pages 1/2 are n { cmd, count(2), last(2) }
+function voocSummary() {
+  const p = new Array(57).fill(0);
+  p[0] = 0b101011;                                  // enabled, running, handshake, stalled
+  p[1] = 3; p[3] = 5; p[5] = 1;                      // sessions 3, wakes 5, partials 1
+  p[7] = 0x10; p[8] = 0x27;                          // edges 10000
+  p[11] = 20; p[15] = 9; p[19] = 4; p[20] = 0x86;    // frames 20, pairs 9, hs_pairs 4, ident 0x86
+  p[21] = 0x2A; p[22] = 0x01;                        // ident reply 0x012A
+  p[23] = 0xFF; p[24] = 0xFF;                        // r82 last: none
+  p[29] = 7; p[41] = 2; p[44] = 1;                   // r82 n 7, ncmds 2, storms 1
+  p[54] = 0x82; p[55] = 6;                           // stall cmd 0x82, 6 silent
+  return p;
+}
+
+test("vooc monitor decode: summary flags, counters, reply words", () => {
+  const v = P.decodeVoocSummary(u8(...voocSummary()));
+  assert.deepEqual([v.enabled, v.running, v.session_active, v.handshake, v.paused, v.stalled], [true, true, false, true, false, true]);
+  assert.deepEqual([v.sessions, v.wakes, v.partials, v.edges, v.frames, v.pairs], [3, 5, 1, 10000, 20, 9]);
+  assert.equal(v.ident_reply, "0x12A");
+  assert.equal(v.r82.last, null, "0xFFFF means no reply");
+  assert.deepEqual([v.r82.n, v.ncmds, v.storms, v.stall.cmd, v.stall.silent], [7, 2, 1, "0x82", 6]);
+  assert.throws(() => P.decodeVoocSummary(u8(...voocSummary().slice(0, 40))), P.FrameError);
+});
+
+test("vooc monitor decode: command rows", () => {
+  const rows = P.decodeVoocRows(u8(2, 0x82, 3, 0, 0x2A, 0x01, 0x20, 1, 0, 0xFF, 0xFF));
+  assert.deepEqual(rows, [{ cmd: "0x82", count: 3, last: "0x12A" }, { cmd: "0x20", count: 1, last: null }]);
+  assert.throws(() => P.decodeVoocRows(u8(2, 0x82, 3, 0, 0x2A, 0x01)), P.FrameError);
+});
+
+test("vooc monitor client: reads page 0 (and the rows) without ever sending the switch unless asked", async () => {
+  const sent = [];
+  const remote = new P.K2Remote({ call: async (cmd, payload = []) => {
+    sent.push([cmd, [...payload]]);
+    return { payload: payload[1] === 0 ? u8(...voocSummary()) : u8(2, 0x82, 3, 0, 0x2A, 0x01, 0x20, 1, 0, 0xFF, 0xFF) };
+  } });
+  const v = await remote.voocMonitor();
+  assert.deepEqual(sent[0], [P.CMD.FC, [4, 0]], "a plain read carries no on byte");
+  assert.equal(v.cmds.length, 2);
+  await remote.voocMonitor(true);
+  assert.deepEqual(sent.find((s) => s[1].length === 3), [P.CMD.FC, [4, 0, 1]]);
+  await remote.voocMonitor(false);
+  assert.deepEqual(sent.filter((s) => s[1].length === 3)[1], [P.CMD.FC, [4, 0, 0]]);
+});
+
 const CABLE_PAYLOAD = [3, 1, 0x64, 0, 0xEC, 0x13, 0x28, 0, 0x24, 0x13, 0x02, 0x08, 0x32, 0, 0x46, 0];
 
 test("cable-r decode and requests", async () => {

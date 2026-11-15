@@ -72,7 +72,7 @@ var K2Proto = (function () {
             "needs load", "handshake ok", "detected"];
   var FC_OUTCOMES = ["-", "accepted", "rejected", "skipped"];
   var FC_OP = { status: 0, reset: 1, scan: 2, trigger: 3 };
-  var FC_OP_VOOC = 4;   // vooc-monitor: inline VOOC monitor pages (k2_remote.py fc vooc); no web reader yet, kept for the table
+  var FC_OP_VOOC = 4;   // vooc-monitor: inline VOOC monitor pages (k2_remote.py fc vooc), read by K2Remote.voocMonitor
   var FC_CONFIRM = 1, FC_SAFE_MV = 5000;
   var TEST_GROUPS = ["pd", "qc2", "qc3", "qc3+", "afc", "fcp", "scp", "vooc", "svooc", "svooc65", "ufcs", "vivo"];
   var TEST_ALGORITHMS = ["pd2-fixed", "pd3x-fixed", "epr", "spr-avs", "pps", "qc2", "qc3", "qc3+", "afc",
@@ -467,6 +467,31 @@ var K2Proto = (function () {
     return { state: name(FC_STATES, p[0]), proto: name(FC_PROTOS, p[1]).toUpperCase(), fail: name(FC_FAILS, p[2]),
              target_mv: v.getUint16(5, true), vbus_mv: v.getUint16(7, true),
              scan: { running: !!(p[3] & 1), done: !!(p[3] & 2), step: p[4], results: results } };
+  }
+
+  // FC op 4, the passive inline VOOC monitor (never drives D+/D-). Page 0 is the 57-byte summary, pages 1 and 2 the command rows
+  // (8 each). Reply words are raw 10-bit values (0xFFFF = none), shown in hex; no word is turned into volts or amps.
+  var VOOC_SUMMARY_BYTES = 57, VOOC_NO_REPLY = 0xFFFF;
+  function voocWord(v) { return v === VOOC_NO_REPLY ? null : "0x" + v.toString(16).toUpperCase(); }
+  function decodeVoocSummary(p) {
+    need(p, VOOC_SUMMARY_BYTES, "vooc");
+    var v = dv(p), f = p[0], u16 = function (o) { return v.getUint16(o, true); }, u32 = function (o) { return v.getUint32(o, true); };
+    return { enabled: !!(f & 1), running: !!(f & 2), session_active: !!(f & 4), handshake: !!(f & 8), paused: !!(f & 16), stalled: !!(f & 32),
+             sessions: u16(1), wakes: u16(3), partials: u16(5), edges: u32(7), frames: u32(11), pairs: u32(15),
+             hs_pairs: p[19], ident: "0x" + p[20].toString(16).toUpperCase(), ident_reply: voocWord(u16(21)),
+             r82: { last: voocWord(u16(23)), min: voocWord(u16(25)), max: voocWord(u16(27)), n: u16(29) },
+             p82_us: { last: u32(31), mean: u32(35), n: u16(39) },
+             ncmds: p[41], other: u16(42), storms: u16(44), retry_ms: u32(50),
+             stall: { cmd: u16(55) ? "0x" + p[54].toString(16).toUpperCase() : null, silent: u16(55) } };
+  }
+  function decodeVoocRows(p) {
+    need(p, 1, "vooc rows");
+    var n = p[0], v;
+    need(p, 1 + 5 * n, "vooc rows");
+    v = dv(p);
+    var rows = [];
+    for (var i = 0; i < n; i++) rows.push({ cmd: "0x" + p[1 + 5 * i].toString(16).toUpperCase(), count: v.getUint16(2 + 5 * i, true), last: voocWord(v.getUint16(4 + 5 * i, true)) });
+    return rows;
   }
 
   // CABLE_R (k2/cable_r): flags grade r_mohm(2) idle_mv(2) idle_ma(2) load_mv(2) load_ma(2) pos_mohm(2) gnd_mohm(2)
@@ -1118,6 +1143,18 @@ var K2Proto = (function () {
       payload.push(pi, o.mv & 0xFF, o.mv >> 8, (o.confirm ? FC_CONFIRM : 0) | (o.allowInline ? FC_ALLOW_INLINE : 0));
     }
     return decodeFc((await this.link.call(CMD.FC, payload, { timeoutMs: 3000 })).payload);
+  };
+
+  // The VOOC monitor: on = undefined reads only, true / false switches the passive listener first (RAM only, the K2 never drives
+  // D+/D-). Returns the summary with the command rows of pages 1 and 2 as v.cmds.
+  K2Remote.prototype.voocMonitor = async function (on) {
+    var head = [FC_OP_VOOC, 0];
+    if (on !== undefined) head.push(on ? 1 : 0);
+    var s = decodeVoocSummary((await this.link.call(CMD.FC, head, { timeoutMs: 3000 })).payload), cmds = [];
+    for (var page = 1; page <= 2 && cmds.length < s.ncmds; page++)
+      cmds = cmds.concat(decodeVoocRows((await this.link.call(CMD.FC, [FC_OP_VOOC, page], { timeoutMs: 3000 })).payload));
+    s.cmds = cmds;
+    return s;
   };
 
   // Section probe: true when the firmware answers fn(), false on "unknown command", else rethrows.
@@ -1944,7 +1981,7 @@ var K2Proto = (function () {
     decodeChargerCable: decodeChargerCable, decodeChargerTestStart: decodeChargerTestStart, ctStartStep: ctStartStep,
     decodeEmarker: decodeEmarker, decodeEmarkerDetail: decodeEmarkerDetail, decodeAdcRaw: decodeAdcRaw,
     decodeRippleInfo: decodeRippleInfo, decodeIdentity: decodeIdentity, decodePdTrigger: decodePdTrigger, decodeMatch: decodeMatch, decodeMemory: decodeMemory, memoryView: memoryView, MEM_FS_CAUTION_PCT: MEM_FS_CAUTION_PCT, MEM_FS_ERROR_PCT: MEM_FS_ERROR_PCT, decodeStop: decodeStop, decodeLease: decodeLease, decodeIdentifyProgress: decodeIdentifyProgress, PD_ERRS: PD_ERRS,
-    decodeFc: decodeFc, decodeCableR: decodeCableR, parseLogStats: parseLogStats,
+    decodeFc: decodeFc, decodeVoocSummary: decodeVoocSummary, decodeVoocRows: decodeVoocRows, decodeCableR: decodeCableR, parseLogStats: parseLogStats,
     formatAgo: formatAgo, formatUptime: formatUptime, isUnknownCmd: isUnknownCmd, FC_PROTOS: FC_PROTOS, FC_LEVELS: FC_LEVELS, FC_NAMES: FC_NAMES,
     ADC_CHANNELS: ADC_CHANNELS, ADC_SCAN: ADC_SCAN, RIPPLE_SAMPLES: RIPPLE_SAMPLES, RIPPLE_FULL_SCALE: RIPPLE_FULL_SCALE,
     FC_SAFE_MV: FC_SAFE_MV, rle565Decode: rle565Decode, decodeScreenInfo: decodeScreenInfo,
