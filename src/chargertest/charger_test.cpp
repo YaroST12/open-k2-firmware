@@ -1381,7 +1381,7 @@ void Runner::request(Input in) {
     hot_ = false; busy_retry_at_ = 0; hunt_reject_until_ = 0;   // the next row: a list announced now is no answer to the old hunt row
     s.verdict = Verdict::Running;
     if (is_step_walk(s)) {   // the walk starts at the row's own level; each granted level gets a fresh steady wait
-        walk_mv_ = s.mv; walk_n_ = 0; walk_prev_mv_ = -1; walk_base_mv_ = -1;
+        walk_mv_ = s.mv; walk_n_ = 0; walk_prev_mv_ = -1; walk_base_mv_ = -1; walk_rebased_ = false;
         walk_steady_.clear(); walk_grant_ms_ = 0;
     }
     if (is_sweep(s)) sweep_begin(s, in);   // the sweep starts at the APDO's first point
@@ -1599,11 +1599,21 @@ void Runner::walk_step(Input in, const Step& eff) {
         // Only a jump fails a single step: the output creeps for ~2 s after each PS_RDY, so one move reads from <= 0 to
         // ~+36 mV on a good source; the total and the trend below judge the rest.
         const int move = level - walk_prev_mv_;
-        if (move >= int(2 * kStepMv)) {
+        if (walk_n_ == 1 && !walk_rebased_ && move <= -kStepWalkTolMv) {
+            // walk-rebase (qa-fixes item 1, ROADMAP "The PPS step walk's base can be an overshoot plateau"): +kStepMv was asked
+            // and the output stands kStepWalkTolMv or more BELOW the base - the base was a plateau the source holds for a while
+            // and then drops from (the UGREEN holds its 13.09 V overshoot for 0.5 to 1.1 s), not the settled level. Take this
+            // level as the base once and walk on from it (walk_n_ restarts, the Request for the next +kStepMv goes out below);
+            // a second drop is judged by the total and the trend like any other level.
+            walk_rebased_ = true;
+            walk_n_ = 0;
+            walk_lv_[0] = walk_prev_mv_ = walk_base_mv_ = level;
+        } else if (move >= int(2 * kStepMv)) {
             finish(in, Verdict::Fail, Reason::StepResolution, uint8_t(std::clamp(move, 0, 255)));
             return;
+        } else {
+            walk_prev_mv_ = level;
         }
-        walk_prev_mv_ = level;
     }
     if (walk_n_ >= kStepWalkCount) {
         const int total = level - walk_base_mv_;

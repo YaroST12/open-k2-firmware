@@ -42,6 +42,15 @@ struct Fake final : ct::Env {
     // 13.0 V base reads 13007 mV, then settles to 12990). While settling the output follows the script, not the target.
     int walk_settle_mv = -1, walk_settle_from_mv = 0, walk_settle_to_mv = 0;
     unsigned walk_settle_ms = 0;
+    // An overshoot PLATEAU before the settle (qa-fixes item 1, UGREEN run 1b): the base request reads walk_settle_from_mv flat for
+    // walk_settle_hold_ms, then the output settles to walk_settle_to_mv, and the +20 mV steps that follow are relative to the
+    // SETTLED level (the charger holds its 13.09 V overshoot for ~540 ms, then drops to 13.01 V and creeps up from there).
+    unsigned walk_settle_hold_ms = 0;
+    int settle_v(uint32_t t) const {
+        if (t >= walk_settle_hold_ms + walk_settle_ms) return walk_settle_to_mv;
+        if (t < walk_settle_hold_ms) return walk_settle_from_mv;
+        return walk_settle_from_mv + (walk_settle_to_mv - walk_settle_from_mv) * int(t - walk_settle_hold_ms) / int(walk_settle_ms);
+    }
     uint32_t settle_t0 = 0; bool settle_on = false;
     int walk_ripple_mv = 0;      // alternating ripple added to VBUS every tick: never within the steady span
     int noise_mv = 0; bool noise_flip = false;   // a symmetric +-noise_mv swing of every sample around the level (see tick)
@@ -255,8 +264,8 @@ struct Fake final : ct::Env {
             if (pps_req && walk_settle_mv >= 0 && int(c.mv) == walk_settle_mv) { settle_on = true; settle_t0 = in.now; }
             if (settle_on) {
                 const uint32_t t = in.now - settle_t0;
-                if (t >= walk_settle_ms) { settle_on = false; in.vbus_mv = walk_settle_to_mv; }
-                else in.vbus_mv = walk_settle_from_mv + (walk_settle_to_mv - walk_settle_from_mv) * int(t) / int(walk_settle_ms);
+                if (t >= walk_settle_hold_ms + walk_settle_ms) settle_on = false;
+                in.vbus_mv = settle_v(t);
             } else if (pps_req && last_pps_mv && int(c.mv) - last_pps_mv == 20 && !walk_deltas.empty()) {
                 in.vbus_mv = last_pd_vbus + walk_deltas[std::min<size_t>(walk_step_i, walk_deltas.size() - 1)];
                 ++walk_step_i;
@@ -265,7 +274,7 @@ struct Fake final : ct::Env {
             else
                 in.vbus_mv = low_mv_for_3v3 && c.mv == 3300 ? low_mv_for_3v3 : int(c.mv);
             if (pps_req && !(last_pps_mv && int(c.mv) - last_pps_mv == 20)) walk_step_i = 0;   // a base level: the walk restarts
-            if (pps_req) { last_pps_mv = int(c.mv); last_pd_vbus = in.vbus_mv; }
+            if (pps_req) { last_pps_mv = int(c.mv); last_pd_vbus = settle_on && walk_settle_hold_ms ? walk_settle_to_mv : in.vbus_mv; }
         }
         if (c.mv >= 5000) {   // the scripted output shape of the sweep tests
             if (pd_fold_from_mv && unsigned(c.mv) >= pd_fold_from_mv) in.vbus_mv = int(pd_fold_to_mv);
@@ -560,8 +569,8 @@ struct Fake final : ct::Env {
             in.epr_info = &info_shown;
             if (settle_on) {   // the scripted settle keeps moving VBUS between polls
                 const uint32_t t = in.now - settle_t0;
-                if (t >= walk_settle_ms) { settle_on = false; in.vbus_mv = walk_settle_to_mv; }
-                else in.vbus_mv = walk_settle_from_mv + (walk_settle_to_mv - walk_settle_from_mv) * int(t) / int(walk_settle_ms);
+                if (t >= walk_settle_hold_ms + walk_settle_ms) settle_on = false;
+                in.vbus_mv = settle_v(t);
             }
             if (walk_ripple_mv && in.vbus_mv > 1000) in.vbus_mv += ((in.now / 100) % 2) ? walk_ripple_mv : -walk_ripple_mv;
             if (out_on) {   // the scripted output of out_script_mv's Request
@@ -4404,6 +4413,42 @@ static void test_pps_step_walk_waits_for_the_base_to_settle() {
     CHECK_EQ(count_reason_all(r, ct::Reason::StepResolution), 0u);   // the base was recorded after it settled
 }
 
+// qa-fixes item 1 (UGREEN Nexode Air 65 W QA, run 1a pass / run 1b fail on the same row 41): the base request overshoots to
+// 13091 mV and HOLDS it flat for ~540 ms before dropping to 13010 mV; the walk's earliest possible base read (the 500 ms stable
+// hold plus the steady window) lands inside that plateau, so the base was recorded 80 mV high and the +20 mV steps that followed
+// read a total of ~0: "FAIL StepResolution / steps ignored" on a source that follows every step. No dwell is long enough for
+// every plateau (the row 35 base held the same 13091 for over 1.1 s), so the walk recognises it by its signature: the first
+// step's level is at least kStepWalkTolMv BELOW the base although +20 mV was asked, so the base was not the settled level and
+// the walk takes that level as the base once (the plateau lengths vary, the verdict must not).
+static void test_pps_step_walk_survives_an_overshoot_plateau_on_the_base() {
+    for (const unsigned hold : {300u, 540u, 900u, 1400u}) {
+        Fake f;
+        f.walk_settle_mv = 13000; f.walk_settle_from_mv = 13091; f.walk_settle_to_mv = 13010;
+        f.walk_settle_hold_ms = hold; f.walk_settle_ms = 100; f.pd_small_step_mv = 20;
+        ct::Runner r(f); r.start(f.caps, kPd, f.in, true);
+        f.tick(r, 400000);
+        CHECK_EQ(r.state(), ct::State::Done);
+        CHECK_EQ(count_reason_all(r, ct::Reason::StepResolution), 0u);
+    }
+}
+// The re-base is not a free pass: a source that really ignores the steps (and a base that never settles twice) still fails.
+static void test_pps_step_walk_overshoot_rebase_still_fails_ignored_steps() {
+    Fake f;
+    f.walk_settle_mv = 13000; f.walk_settle_from_mv = 13091; f.walk_settle_to_mv = 13010;
+    f.walk_settle_hold_ms = 540; f.walk_settle_ms = 100; f.pd_small_step_mv = 0;   // the +20 mV steps move the output not at all
+    ct::Runner r(f); r.start(f.caps, kPd, f.in, true);
+    f.tick(r, 400000);
+    CHECK_EQ(r.state(), ct::State::Done);
+    bool checked = false;
+    for (const auto& s : r.steps()) {
+        if (s.reason != ct::Reason::StepResolution) continue;
+        checked = true;
+        CHECK_EQ(int(s.verdict), int(ct::Verdict::Fail));
+        CHECK_EQ(s.detail, 0);   // "steps ignored"
+    }
+    CHECK_EQ(checked, true);
+}
+
 // walk-settle, pure: WalkSteady needs kWalkSteadySamples samples inside the window, all within kWalkSteadyMv.
 static void test_walk_steady_window() {
     ct::WalkSteady w;
@@ -7203,6 +7248,8 @@ int main() {
     test_avs_deep_sweep_plans_and_runs_per_spr_avs_apdo(); test_avs_deep_sweep_epr_capped_at_the_monitor_ceiling();
     test_pps_step_walk_passes_a_noisy_step_and_fails_a_short_sum();
     test_pps_step_walk_waits_for_the_base_to_settle();
+    test_pps_step_walk_survives_an_overshoot_plateau_on_the_base();
+    test_pps_step_walk_overshoot_rebase_still_fails_ignored_steps();
     test_walk_steady_window();
     test_pps_step_walk_steady_wait_is_bounded_by_the_timeout();
     test_walk_steady_mean(); test_pps_step_walk_records_the_mean_of_a_noisy_level(); test_a_capped_row_does_not_wait_the_full_timeout(); test_keep_alive_windows_do_not_restart_the_capped_plateau(); test_a_ledge_shorter_than_the_capped_plateau_still_passes_through_keep_alive(); test_a_long_unanswered_keep_alive_restarts_the_plateau(); test_pps_deep_sweep_records_the_mean_of_a_noisy_point();

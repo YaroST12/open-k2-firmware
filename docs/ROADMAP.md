@@ -749,6 +749,15 @@ and the hardware check). A row leaves this list when its fix is merged and the h
   the sum rule stays. Host test with this shape (base 13007 settling to 12990, then +20 mV steps) must pass. Done:
   walk_step records a granted level only once VBUS is steady (WalkSteady: 3 samples within 3 mV inside a 300 ms
   window, bounded by a 2 s timeout per level), sum rule unchanged; host test with the row's shape passes.
+  **Second shape: the base is a flat overshoot PLATEAU** (2026-11-15 UGREEN QA, k2/qa-fixes, hardware check pending): the
+  same row 41 passed in run 1a and failed "steps ignored" (detail 0) in run 1b. The base request overshoots to 13091 mV and
+  holds it flat ~540 ms, then drops to ~13010 mV and creeps up; the walk's earliest base read (~640 ms after the Request:
+  500 ms stable hold + the steady window) lands inside the plateau, so the base is 80 mV high and the five +20 mV steps add
+  up to ~0 (the later levels dwelled 2.54 s, 2.54 s, 0.98 s, 0.58 s, 0.58 s: the steady window exits early whenever the
+  output is flat, that is by design). No dwell fits every plateau (row 35's held the same level over 1.1 s), so
+  `Runner::walk_step` re-bases once on the signature: the first step's level at least `kStepWalkTolMv` below the base
+  makes that level the base (`walk_rebased_`, one extra step). Host tests: plateaus of 300, 540, 900 and 1400 ms pass,
+  a source that ignores the steps still fails "steps ignored".
 - ~~**Wake sleeping port ON breaks the charger test's unit re-attach**~~ completed: 1b0c62f (run-owner flag in the wake gate, Wake OFF releases the wake's Rd); UGREEN with Wake ON 23 pass / 0 fail and Wake OFF dropped VBUS to 0 on hardware 72c2e28. Open: the boot scan can still latch a dark CC2 first (released after 3 s).
 - **Crossed CC through the K2: tell the user to flip a cable** (2026-11-10, fixed in 7d1ae17, hardware check pending, connection matrix H22, be71f10, `runs/2026-11-10-merge2-hw/`
   dead-chain, attach-noreact.png): Anker IQ4 -> C-C cable -> K2 -> C-C cable -> Pixel, VBUS never came up, the K2 sat at

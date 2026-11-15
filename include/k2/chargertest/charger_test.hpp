@@ -788,6 +788,7 @@ private:
     uint8_t walk_n_ = 0;
     int walk_prev_mv_ = -1;
     int walk_base_mv_ = -1;   // VBUS at the walk's base level (the sum check)
+    bool walk_rebased_ = false;   // the base was an overshoot plateau and was replaced once by the first step's level (walk_step)
     std::array<int, kStepWalkCount + 1> walk_lv_{};   // VBUS recorded at each granted level, base first (the trend check)
     // walk-settle: before a granted level is recorded, VBUS must be steady (walk_steady_) or the wait timed out
     // (walk_grant_ms_ + kWalkSteadyTimeoutMs); both reset when the walk starts and when it advances to the next level.
