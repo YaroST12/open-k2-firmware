@@ -5,6 +5,7 @@
 #include <cstring>
 
 #include "fc_fake.hpp"
+#include "k2/chargertest/charger_test.hpp"   // kCutStepBudgetMs
 
 using namespace k2::fc;
 using W = std::pair<std::uint8_t, std::uint8_t>;
@@ -1056,14 +1057,14 @@ static void vooc_ident_is_detected_and_nothing_is_answered() {
 }
 
 // The wake: try 1 is the phone's burst from the 2026-11-11 capture (D+ 40 x 300 us high / 300 us low, D- released so the
-// adapter's D+/D- short carries it, ending low), try 2 the 13-period train of the 2026-11-02 work, try 3 the burst again.
+// adapter's D+/D- short carries it, ending low), try 2 the 13-period train of the 2026-11-02 work (two tries, kVoocTries).
 static void vooc_wake_forms_alternate() {
     FakeCharger c;
     Engine e(c);
     CHECK(e.start(Proto::Vooc, 5000, false) == Fail::None);
     c.run(e, 30000);
-    CHECK(c.vooc_wakes.size() == 3);
-    if (c.vooc_wakes.size() != 3) return;
+    CHECK(c.vooc_wakes.size() == static_cast<std::size_t>(kVoocTries));
+    if (c.vooc_wakes.size() != 2) return;
     const auto& burst = c.vooc_wakes[0];
     CHECK(burst.size() == kVoocBurstSteps);
     std::uint32_t us = 0;
@@ -1078,7 +1079,6 @@ static void vooc_wake_forms_alternate() {
     std::uint32_t tus = 0;
     for (const auto& s : train) { tus += s.us; CHECK(s.dm == Drive::HiZ); }
     CHECK(tus == 13 * 3536 + 1500);
-    CHECK(c.vooc_wakes[2].size() == kVoocBurstSteps);
     CHECK(dm_never_driven(c));
 }
 
@@ -1091,7 +1091,7 @@ static void vooc_all_ones_frame_is_nothing_heard() {
     c.vooc_raw = {0x1FF, 0x1FF, 0x1FF, 0x1FF};
     c.run(e, 30000);
     CHECK(e.state() == State::Failed && e.fail() == Fail::NeedsLoad);
-    CHECK(c.vooc_raw_i == 4 && c.wakes == 3);
+    CHECK(c.vooc_raw_i == 4 && c.wakes == kVoocTries);
 }
 
 // Frames that are not an ident (the adapter is mid-session, or noise) are heard but never answered: "no response".
@@ -1155,7 +1155,7 @@ static void vooc_stop_releases() {
     CHECK(e.state() == State::Idle && c.resets == 1);
 }
 
-// The adapter's clock is intermittent: a missed wake is retried after a rest, up to three tries.
+// The adapter's clock is intermittent: a missed wake is retried after a rest (kVoocTries tries in all).
 static void vooc_wake_retries_until_the_adapter_clocks() {
     FakeCharger c;
     c.vooc_wake_needed = 2;
@@ -1168,14 +1168,46 @@ static void vooc_wake_retries_until_the_adapter_clocks() {
     CHECK(e.state() == State::Failed && e.fail() == Fail::Detected);
 }
 
-static void vooc_wake_gives_up_after_three_tries() {
+static void vooc_wake_gives_up_after_the_last_try() {
     for (auto p : {Proto::Vooc, Proto::SuperVooc, Proto::SuperVooc65}) {
         FakeCharger c;
         Engine e(c);
         CHECK(e.start(p, 5000, false) == Fail::None);
         c.run(e, 30000);
         CHECK(e.state() == State::Failed && e.fail() == Fail::NeedsLoad);
-        CHECK(c.wakes == 3 && e.vooc_tries() == 3);
+        CHECK(c.wakes == kVoocTries && e.vooc_tries() == kVoocTries);
+    }
+}
+
+// A silent adapter is called silent inside kVoocDetectMaxMs (plus the two wake plays and one poll): the session is one step of the
+// charger test and must fit the clean window of a port that cuts VBUS at 5 V (charger_test.hpp kCutStepBudgetMs, tested there).
+static void vooc_silent_session_fits_the_derived_budget() {
+    CHECK(kVoocDetectMaxMs == 5000);
+    for (auto p : {Proto::Vooc, Proto::SuperVooc, Proto::SuperVooc65}) {
+        FakeCharger c;
+        Engine e(c);
+        const std::uint32_t t0 = c.now;
+        CHECK(e.start(p, 5000, false) == Fail::None);
+        for (int n = 0; n < 20000 && e.state() == State::Negotiating; ++n) c.run(e, 1);
+        CHECK(e.state() == State::Failed && e.fail() == Fail::NeedsLoad);
+        CHECK(c.now - t0 <= kVoocDetectMaxMs + 150);
+        CHECK(c.now - t0 <= k2::charger_test::kCutStepBudgetMs);
+    }
+}
+
+// The other 5 V-held steps of the legacy units that an ideal fake charger answers (QC2 5 V, QC3 5 V): time to a settled session on
+// the fake clock, bounded by the charger test's clean-window budget (5500 ms, charger_test.hpp kCutStepBudgetMs; the real adapter
+// adds its own ramp, measured on the CUKTECH USB-A port 2.4 s for QC2 and 3.6 s for QC3).
+static void legacy_5v_steps_fit_the_cut_window() {
+    constexpr std::uint32_t kBudgetMs = k2::charger_test::kCutStepBudgetMs;
+    for (auto p : {Proto::Qc2, Proto::Qc3}) {
+        FakeCharger c;
+        Engine e(c);
+        const std::uint32_t t0 = c.now;
+        CHECK(e.start(p, 5000, false) == Fail::None);
+        for (int n = 0; n < 12000 && e.state() == State::Negotiating; ++n) c.run(e, 1);
+        CHECK(e.state() == State::Active);
+        CHECK(c.now - t0 <= kBudgetMs);
     }
 }
 
@@ -1513,9 +1545,11 @@ int main() {
     vooc_vbus_above_5v5_aborts();
     vooc_never_inline();
     vooc_stop_releases();
+    legacy_5v_steps_fit_the_cut_window();
     vooc_silent_charger();
     vooc_wake_retries_until_the_adapter_clocks();
-    vooc_wake_gives_up_after_three_tries();
+    vooc_wake_gives_up_after_the_last_try();
+    vooc_silent_session_fits_the_derived_budget();
     svooc_silent_needs_load();
     vooc_overvoltage_aborts();
     std::printf("test_fc_engine: %d checks, %d failed\n", g_checks, g_failed);

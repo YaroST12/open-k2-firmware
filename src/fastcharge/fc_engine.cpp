@@ -32,9 +32,6 @@ constexpr int kQc3ClassAMaxMv = 12000, kQc3ClassABandMv = 11400, kQc3DeadBatches
 constexpr bool vooc_family(Proto p) { return p == Proto::Vooc || p == Proto::SuperVooc || p == Proto::SuperVooc65; }
 constexpr std::uint32_t kVoocRxTimeoutUs = 15000;  // one listen slice per poll: long, a frame that falls between slices is lost
 constexpr int kVoocGuardMv = 5000;                 // abort above 110 % of this (5.5 V): the K2 never asks a VOOC adapter for more
-constexpr std::uint32_t kVoocWakeListenMs = 1500;  // no ident this long after a wake (it came 0.54 s after one): rest and try again
-constexpr std::uint32_t kVoocRestMs = 3000;        // lines idle between wakes
-constexpr int kVoocTries = 3;                      // wakes before the adapter is called silent ("needs load")
 constexpr std::uint32_t kUfcsSilenceMs = 500;      // a running session that hears nothing at all for this long is lost
 constexpr std::uint32_t kUfcsBusyRetryMs = 100;    // Refuse "busy": the Request again after this (the standard names no wait)
 constexpr std::uint32_t kUfcsExitMs = 200;         // Exit_UFCS_Mode: the sink's check window (reference 5.3), the cap on the ACK wait

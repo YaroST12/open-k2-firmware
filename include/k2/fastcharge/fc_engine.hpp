@@ -45,6 +45,18 @@ enum class Fail : std::uint8_t {
 // (3.3 V 300 us, 0 V 300 us); and the 13-period train of the 2026-11-02 work.
 inline constexpr std::size_t kVoocBurstSteps = 80, kVoocTrainSteps = 13 * 4 + 3;
 
+// The VOOC family's detection session (one session answers VOOC, SVOOC and SVOOC65): wake, listen, and when nothing was
+// heard rest and wake again with the other wake list (burst, then train). The adapter clocked its first ident 539 ms
+// after a wake in both captures (reverse-engineered, 2026-11-11 phone burst and no-phone train), so a listen of 1.0 s has
+// the ident in with 0.46 s to spare; two tries cover both wake lists. A silent adapter ends the session after
+// 2 x 1.0 s listen + 3.0 s rest = 5.0 s (plus the two wake plays, 24 ms and 48 ms, played before each listen), so the
+// whole session fits one clean window of a port that cuts VBUS at 5 V (charger test kCutStepBudgetMs). The older 1.5 s listen,
+// 3 s rest and 3 tries took 10.5 s: never a fit. The rest stays 3 s, the lines idle between the two wakes (inferred).
+inline constexpr std::uint32_t kVoocWakeListenMs = 1000;   // no ident this long after a wake: rest and try again
+inline constexpr std::uint32_t kVoocRestMs = 3000;         // lines idle between wakes
+inline constexpr int kVoocTries = 2;                       // wakes before the adapter is called silent ("needs load")
+inline constexpr std::uint32_t kVoocDetectMaxMs = kVoocTries * kVoocWakeListenMs + (kVoocTries - 1) * kVoocRestMs;   // 5000
+
 // The HID-cable loop 5 V lock (Env::hv_locked): the highest target, and the highest VBUS a running session may show.
 inline constexpr int kLockMv = 5000, kLockVbusMv = 5500;
 

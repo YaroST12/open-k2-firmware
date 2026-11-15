@@ -189,14 +189,16 @@ the scan, the fast-charge engine and the UI. The one exception (operator, 2026-1
 below, reachable from the HID remote only.
 
 - Wake: odd tries play the phone's entry burst (80 steps of 300 us, D+ 3.3 V / 0 V, D- Hi-Z so the closed short carries
-  it, ending low; reverse-engineered from the capture above); even tries the older 13-period train. 3 tries, 1.5 s
-  listen after each (the ident came 0.54 s after the burst), 3 s rest between them.
+  it, ending low; reverse-engineered from the capture above); even tries the older 13-period train. 2 tries (kVoocTries), 1.0 s
+  listen after each (the ident came 0.54 s after the burst, so 0.46 s to spare), 3 s rest between them: a silent adapter ends
+  the session after 5.0 s, inside one clean window of a port that cuts VBUS at 5 V (was 3 tries and 1.5 s listen, 10.5 s;
+  changed 2026-11-15, the third wake repeated the first).
 - Listen: frames start on either D+ edge after D+ held one level for 2 ms (`vooc::FrameStart`). An all-ones word
   (0x1FF, command 0xFF) is the idle-high line, nothing heard (`vooc::heard`).
 - The first ident ends the session at once as `Fail::Detected` and releases the lines (both 0 V for 500 ms, then the
   passive idle). Any other command is counted, never answered. VBUS above 5.5 V aborts (`Overvoltage`) and releases.
   The engine refuses VOOC inline even with `allow_inline` and aborts if inline appears mid-session.
-- Outcomes: ident -> "detected"; only idle or no frames after 3 wakes -> `NeedsLoad` ("needs load", the old wording
+- Outcomes: ident -> "detected"; only idle or no frames after 2 wakes -> `NeedsLoad` ("needs load", the old wording
   for "never clocked"); frames but no ident -> `NoResponse`. Rules for the charger-test rows:
   `docs/CHARGER_TEST_FLOW.md`.
 - Not done: telling VOOC from SVOOC from SVOOC 65 W (needs answers), any voltage step.
@@ -390,8 +392,8 @@ Three pure parts (host-tested) and one glue file:
   contract changing to anything else aborts as "PD contract changed", and losing it (hard reset, detach) as "PD contract
   lost": the D+/D- session is meaningless then. The report carries the contract at the start and at the end
   (`none` / `own 5 V` / `other`). The exit never touches the contract or the Rd pin; the main session releases them
-  (`pd-reread --pin 0`). Wake / listen as the detection (burst, 1.5 s listen, 3 s
-  rest, 3 tries), "no adapter answer" after that.
+  (`pd-reread --pin 0`). Wake / listen as the detection (burst, 1.0 s listen, 3 s
+  rest, 2 tries), "no adapter answer" after that.
 - Exit, always: stop answering, release D-, both lines to the passive idle; then watch VBUS for 5 s. Back at or under
   5.5 V is reported as such (the log says "VBUS gone" under 4.5 V: the adapter switched its output off), still higher as
   "STILL ABOVE 5.5 V" with the reading. The exit line logs the run's highest VBUS (`vmax`, the exit watch included); the
