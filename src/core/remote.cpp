@@ -1185,7 +1185,8 @@ remote::SniffInfo Remote::lab_sniff(uint8_t sub) {
             out.refusal = static_cast<uint8_t>(why);
             return out;
         };
-        if (ui_.ports_busy() || fctrig::status().state != fc::State::Idle || fctrig::scan_running()) return refuse(remote::SniffRefusal::Ports);
+        if (ui_.ports_busy() || fctrig::status().state != fc::State::Idle || fctrig::scan_running() || fctrig::ufcs_exiting())
+            return refuse(remote::SniffRefusal::Ports);
         switch (dpsniff::arm()) {
         case dpsniff::ArmResult::Ok: break;
         case dpsniff::ArmResult::NoRam: return refuse(remote::SniffRefusal::NoRam);   // the USB drive holds the RAM, nothing is busy

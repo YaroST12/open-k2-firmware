@@ -140,7 +140,7 @@ public:
     // Leave the session and go Idle. A running UFCS session first sends Exit_UFCS_Mode and keeps the UART (D- idle high)
     // until the source's ACK or kUfcsExitMs, which poll() serves (exiting()); only then the bus reset takes both lines to 0 V:
     // D- low for 2 ms or more while the source is still in UFCS mode is a hardware reset, which cuts VBUS. Every other
-    // protocol, a failed session and a second stop() reset at once.
+    // protocol and a failed session reset at once; a repeated stop() keeps the wait (stop_now() and start() end it).
     void stop();
     // Return to 5 V now (reset helper), no Exit_UFCS_Mode wait: the guards' stop (inline, overvoltage, no monitor).
     void stop_now();

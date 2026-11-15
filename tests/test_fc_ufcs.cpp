@@ -877,7 +877,7 @@ static void exit_without_ack_is_capped() {
 }
 
 // start() while the exit runs ends it first (lines released, the reset stamped for the re-detection hold) and opens the new
-// session; a second stop() ends it at once.
+// session; a repeated stop() (stop_all, a charger test's release) keeps waiting for the ACK, stop_now() ends the wait at once.
 static void start_or_stop_during_exit() {
     FakeUfcs c;
     Engine e(c);
@@ -894,7 +894,17 @@ static void start_or_stop_during_exit() {
     d.run(f, 1500);
     f.stop();
     f.stop();
-    CHECK(!f.exiting() && d.closed && d.resets == 1 && d.exits == 1);
+    CHECK(f.exiting() && !d.closed && d.resets == 0 && d.exits == 1);
+    d.run(f, 10);
+    CHECK(!f.exiting() && d.closed && d.resets == 1 && d.hw_resets == 0);
+
+    FakeUfcs g;
+    Engine h(g);
+    CHECK(h.start(Proto::Ufcs, 9000, true) == Fail::None);
+    g.run(h, 1500);
+    h.stop();
+    h.stop_now();
+    CHECK(!h.exiting() && g.closed && g.resets == 1 && g.exits == 1);
 }
 
 // stop_now() (the scanner's guards: inline, overvoltage, no monitor) releases the lines at once, no Exit.

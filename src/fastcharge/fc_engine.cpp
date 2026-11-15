@@ -898,7 +898,7 @@ Fail Engine::set_target(int target_mv, bool confirmed, int ufcs_ma) {
 }
 
 void Engine::stop() {
-    if (phase_ == Phase::UfcsExit) return finish_exit();   // a second stop: now
+    if (phase_ == Phase::UfcsExit) return;   // already leaving: a repeated stop (stop_all, a test's release) keeps the wait
     if (proto_ != Proto::Ufcs || !uart_up_ || state_ == State::Failed) return stop_now();
     // Leave UFCS mode the polite way (Exit_UFCS_Mode, reference 5.3): the source goes back to DCP and 5 V with its ACK. The
     // UART keeps D- idle high until that ACK (or kUfcsExitMs); the bus reset right after the frame held D- low while the
