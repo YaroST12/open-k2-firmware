@@ -770,6 +770,10 @@ static void test_svooc_ceiling_note_row() {
         rl::Layout s;
         rl::build(s, baseus(), stop);
         CHECK_STR(chips(s, row_of(s, "SV cap")).c_str(), "stopped at 12.5 s, 10.9 A claimed, 11.1 V max");
+        stop.svooc_cap = "aborted: off-script, 10.9 A claimed, 11.1 V max";   // the longest abort phrase (47 characters)
+        rl::Layout a;
+        rl::build(a, baseus(), stop);
+        CHECK_STR(chips(a, row_of(a, "SV cap")).c_str(), "aborted: off-script, 10.9 A claimed, 11.1 V max");
     }
     CHECK_EQ(int(r->algorithm), int(A::Count));
     notes.scp_cap = "20V 6A";

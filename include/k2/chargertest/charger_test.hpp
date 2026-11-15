@@ -790,7 +790,11 @@ private:
     void note_ceiling(const Input&, svooc_ceiling::End);
     svooc_ceiling::End ceil_end_ = svooc_ceiling::End::None;
     bool ceiling_pending_ = false, ceiling_done_ = false, ceil_stopping_ = false;
-    uint32_t ceil_ms_ = 0, ceil_stop_ms_ = 0;
+    // ceil_recover_: the release after the stage watches for the adapter dropping VBUS (an Rd cycle brings it back);
+    // ceil_low_ms_: when VBUS went under vSafe5V in that release (0 = it is not).
+    bool ceil_recover_ = false;
+    uint8_t ceil_why_ = 0;   // the Runner's own guard that stopped the trigger, as a svooc::Abort (0 = the trigger's own end)
+    uint32_t ceil_ms_ = 0, ceil_stop_ms_ = 0, ceil_low_ms_ = 0;
     Env& env_;
     Evidence evidence_;
     std::array<Step, kMaxSteps> steps_{};

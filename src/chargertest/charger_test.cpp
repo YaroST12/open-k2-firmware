@@ -1324,7 +1324,7 @@ Reason Runner::start(const pd::SourceCaps& caps, Options o, Input in, bool confi
     selfpwr_ = in.self_powered; suspended_ = adopt_ = held_ = false; jwait_ms_ = 0;
     session_ = in.session; resets_ = link_resets(in.pd);
     handover_ = {}; unit_ = Unit::Count; mode_ = Mode::Pd;
-    ceiling_pending_ = ceiling_done_ = ceil_stopping_ = false; ceil_ms_ = ceil_stop_ms_ = 0;
+    ceiling_pending_ = ceiling_done_ = ceil_stopping_ = ceil_recover_ = false; ceil_ms_ = ceil_stop_ms_ = ceil_low_ms_ = 0; ceil_why_ = 0;
     attached_ = detached_ = ending_ = silent_ = legacy_active_ = never_dark_ = dipped_ = dark_ = false; attach_try_ = 0;
     rp_restart_ = false; contract_wrong_ = false; attach_max_mv_ = 0;
     pre_ms_ = 0;
@@ -1767,6 +1767,7 @@ size_t Runner::pick() const {
 // The run's one scheduler: the unit in progress goes on with its next row; when it has none left it ends with its detach, and
 // the next detached state starts the next unit (docs/CHARGER_TEST_FLOW.md).
 void Runner::next(Input in) {
+    ceil_recover_ = false;   // the release after the stage is over
     // The SVOOC ceiling stage runs once the VOOC family's session is let go: D+/D- free, VBUS back at 5 V, nothing drawn.
     if (ceiling_pending_ && attached_ && !ending_ && !pd_owned_ && !fc_owned_ && safe5(in.vbus_mv) && begin_ceiling(in)) return;
     const size_t i = pick();
@@ -2100,6 +2101,7 @@ bool Runner::begin_ceiling(Input in) {
     }
     evidence_.svooc_end = static_cast<uint8_t>(svooc_ceiling::End::None);
     state_ = State::Ceiling; ceil_ms_ = in.now; ceil_stopping_ = false; ceil_end_ = svooc_ceiling::End::None; stable_ = false;
+    ceil_why_ = 0;
     K2LOG("[CT] svooc_cap start usb_a=%u\n", unsigned(opts_.svooc_cap == svooc_ceiling::Mode::UsbA));
     return true;
 }
@@ -2110,7 +2112,8 @@ void Runner::note_ceiling(const Input& in, svooc_ceiling::End e) {
     evidence_.svooc_asks = std::max(evidence_.svooc_asks, in.svooc_asks);
     evidence_.svooc_vmax_mv = std::max(evidence_.svooc_vmax_mv, in.svooc_vmax_mv);
     if (in.svooc.commands) evidence_.svooc_stop_ms = in.svooc_last_ms;   // the adapter's last edge (nothing heard: 0)
-    evidence_.svooc_why = e == svooc_ceiling::End::Aborted ? in.svooc.abort : uint8_t(0);
+    // The Runner's own guard names the cause; the trigger only saw its stop() (Abort::Stopped).
+    evidence_.svooc_why = e == svooc_ceiling::End::Aborted ? (ceil_why_ ? ceil_why_ : in.svooc.abort) : uint8_t(0);
     K2LOG("[CT] svooc_cap end=%u word=%u asks=%u why=%u vmax=%umV stop=%ums\n", unsigned(evidence_.svooc_end),
           unsigned(evidence_.svooc_word), unsigned(evidence_.svooc_asks), unsigned(evidence_.svooc_why),
           unsigned(evidence_.svooc_vmax_mv), unsigned(evidence_.svooc_stop_ms));
@@ -2118,7 +2121,11 @@ void Runner::note_ceiling(const Input& in, svooc_ceiling::End e) {
 void Runner::end_ceiling(Input in, svooc_ceiling::End e) {
     note_ceiling(in, e);
     ceil_stopping_ = false;
-    release(in, false);   // nothing is owned and VBUS is at 5 V: the run goes straight on
+    // The adapter raised VBUS during the session: the release waits for a settled 5 V, and an adapter that drops its output
+    // instead is brought back by an Rd cycle (poll_impl, Releasing).
+    if (in.svooc_vmax_mv > pd::kVSafe5MaxMv) hot_ = true;
+    ceil_recover_ = true; ceil_low_ms_ = 0;
+    release(in, false);
 }
 void Runner::poll_ceiling(Input in) {
     if (!ceil_stopping_) {
@@ -2126,6 +2133,9 @@ void Runner::poll_ceiling(Input in) {
             in.inline_load ? Reason::Inline : in.fake ? Reason::Fake : Reason::None;
         const auto e = fault != Reason::None ? svooc_ceiling::End::Aborted : svooc_ceiling::end_of(in.svooc, in.now - ceil_ms_);
         if (e == svooc_ceiling::End::None) return;
+        if (fault != Reason::None)   // the record names the Runner's guard, in the trigger's own abort codes
+            ceil_why_ = static_cast<uint8_t>(fault == Reason::Inline ? svooc::Abort::Sink :
+                                             fault == Reason::NoMonitor ? svooc::Abort::NoMonitor : svooc::Abort::Stopped);
         if (in.svooc.running || fault != Reason::None) {   // judged, capped or faulted: ask the trigger to stop, its exit watch follows
             env_.ceiling_stop(); ceil_stopping_ = true; ceil_stop_ms_ = in.now; ceil_end_ = e;
             return;
@@ -2173,7 +2183,7 @@ void Runner::restore(const Options& o, const Evidence& e, uint32_t run_id, std::
     attached_ = detached_ = ending_ = silent_ = legacy_active_ = dark_ = false; pd_skips_recorded_ = true;
     pd_owned_ = fc_owned_ = stopping_ = stable_ = recover_ = hot_ = false; probe_ = Probe::Off; pd_retry_ = cut_index_ = SIZE_MAX;
     selfpwr_ = suspended_ = adopt_ = false;
-    ceiling_pending_ = ceil_stopping_ = false; ceiling_done_ = true;   // a resumed run never repeats the stage (it is not journaled)
+    ceiling_pending_ = ceil_stopping_ = ceil_recover_ = false; ceiling_done_ = true;   // a resumed run never repeats the stage (it is not journaled)
     for (auto& s : std::span<Step>(steps_.data(), count_)) if (s.verdict == Verdict::Running) s.verdict = Verdict::Pending;
     // The EPR proof (the source accepted EPR entry: it checked the cable itself) is not journaled as such, but its trace is: the EPR
     // list was heard (EprTable), or EPR rows were planned (a plan only holds them for a 50 V / 5 A cable). A cable the K2 reads live
@@ -2440,6 +2450,17 @@ void Runner::poll_impl(Input in, const pd::SourceCaps& caps) {
         if (pd_owned_ && in.pd.hard_resets != rel_hr_) {
             pd_owned_ = false; recover_ = true; phase_ms_ = in.now; stable_ = false; rel_hr_ = in.pd.hard_resets;
         }
+        // The SVOOC ceiling stage is over and the adapter dropped its output instead of going back to 5 V (it waits for a new
+        // sink): the run's own unit boundary brings it back, Rd off and on again, with the stage's result kept.
+        if (ceil_recover_ && !stopping_ && !pd_owned_ && !fc_owned_ && in.vbus_mv >= 0 && in.vbus_mv < kUnsafeLowMv) {
+            if (!ceil_low_ms_) ceil_low_ms_ = in.now ? in.now : 1;
+            if (in.now - ceil_low_ms_ >= svooc_ceiling::kDropMs) {
+                K2LOG("[CT] svooc_cap vbus=%dmV after the stage: Rd cycle\n", int(in.vbus_mv));
+                ceil_recover_ = false; ceil_low_ms_ = 0; recover_ = false;
+                ending_ = true; begin_detach(in);
+                return;
+            }
+        } else ceil_low_ms_ = 0;
         bool dropped = in.session != session_ || (in.vbus_mv >= 0 && in.vbus_mv < 1000);
         if (dropped && pd_owned_ && !stopping_ && index_ < count_ && low_programmable(steps_[index_])) {
             // The low edge cost the source its output while the row was handed back: wait for it like a cut row.

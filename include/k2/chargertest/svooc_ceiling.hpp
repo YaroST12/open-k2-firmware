@@ -39,6 +39,9 @@ inline constexpr std::uint32_t kExitGraceMs = 6000;            // after the stop
 inline constexpr std::size_t kLadder = 4;                      // rungs of the Probe ladder
 // An adapter that spoke and then sent no edge for this long has ended the session (it polls 0x82 every ~44 ms while it talks).
 inline constexpr std::uint32_t kQuietMs = 500;
+// VBUS under vSafe5V this long in the release after the stage: the adapter dropped its output (hardware 2026-11-15, OnePlus
+// 120 W: 7.98 V -> 0.74 V in 60 ms, 80 ms after the release) and the run brings it back with an Rd cycle.
+inline constexpr std::uint32_t kDropMs = 200;
 
 constexpr const char* name(Mode m) { return m == Mode::On ? "on" : m == Mode::UsbA ? "usb-a" : "off"; }
 constexpr const char* name(End e) {
@@ -92,16 +95,39 @@ constexpr End end_of(const Live& l, std::uint32_t elapsed_ms) {
 }
 
 // What the stage recorded (charger_test::Evidence): the highest ask the adapter went on under, how it ended, the highest VBUS
-// the trigger saw (mV) and when the adapter's last edge came (ms after the wake).
+// the trigger saw (mV), when the adapter's last edge came (ms after the wake) and, for an abort, its cause (svooc::Abort).
 struct Outcome {
     std::uint16_t word = 0;
     End end = End::None;
     std::uint16_t vmax_mv = 0;
     std::uint16_t stop_ms = 0;
+    std::uint8_t why = 0;
 };
+
+// An abort's cause in at most 10 characters for the Results row (svooc::name(Abort) is the log's longer form).
+constexpr const char* abort_word(std::uint8_t why) {
+    switch (static_cast<svooc::Abort>(why)) {
+    case svooc::Abort::None: return "";
+    case svooc::Abort::Overvoltage: return "over 12 V";
+    case svooc::Abort::Current: return "current";
+    case svooc::Abort::OffScript: return "off-script";
+    case svooc::Abort::HostGone: return "host gone";
+    case svooc::Abort::NoMonitor: return "no monitor";
+    case svooc::Abort::Sink: return "sink";
+    case svooc::Abort::PdContract: return "PD";
+    case svooc::Abort::Storm: return "edge storm";
+    case svooc::Abort::NoAdapter: return "no adapter";
+    case svooc::Abort::TimeCap: return "time cap";
+    case svooc::Abort::Stopped: return "stopped";
+    case svooc::Abort::ContractLost: return "PD lost";
+    case svooc::Abort::ContractChanged: return "PD changed";
+    }
+    return "?";
+}
 
 // The Results row's words. The ask is what the K2 claimed in the protocol (100 mA per count), never a drawn current:
 //   Stopped: "stopped at 3.3 s, 4.0 A claimed, 9.1 V max" (the adapter's last edge, the ask it went on under, the top VBUS);
+//   Aborted: "aborted: sink, none claimed, 8.0 V max" (the cause's short word; "aborted, ..." with none recorded);
 //   any other run: "10.9 A claimed, 11.1 V max" ("none claimed" without an accepted ask; no VBUS part when none was read);
 //   "refused" / "no adapter" when nothing ran, "-" while it runs. Tenths are rounded. No stdio on the device: digits by hand.
 // Returns the length; a short buffer cuts the text (always terminated).
@@ -123,6 +149,10 @@ inline std::size_t format_cap(const Outcome& c, std::span<char> out) {
     else if (c.end == End::None) put("-");
     else {
         if (c.end == End::Stopped) { put("stopped at "); tenths((std::uint32_t(c.stop_ms) + 50u) / 100u); put(" s, "); }
+        if (c.end == End::Aborted) {
+            const char* w = abort_word(c.why);
+            if (*w) { put("aborted: "); put(w); put(", "); } else put("aborted, ");
+        }
         if (c.word) { tenths(ceiling_ma(c.word) / 100u); put(" A claimed"); }
         else put("none claimed");
         if (c.vmax_mv) { put(", "); tenths((std::uint32_t(c.vmax_mv) + 50u) / 100u); put(" V max"); }

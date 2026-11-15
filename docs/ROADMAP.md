@@ -1144,6 +1144,12 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
   the far-Rd / foreign-VBUS inline latch for the run as the trigger does; a quiet adapter ends the stage as "stopped at
   <t>, <A> claimed, <V> max". Open: the fast-charge engine still refuses the VOOC family on any inline reason, so the
   detection row on a USB-A cable can fail "Inline" before the stage is queued.
+  **2026-11-15 phase 1b (host-tested):** the hardware run (OnePlus 120 W, C-to-C, `runs/svooc-cap/stream3`) never reached an
+  ask: 25 pairs after wake 2 the adapter raised VBUS (4.93 -> 6.90 V), the Link latched inline with cause Rise (no
+  contract in the PD-silent session), the Rd went off, the Runner stopped the trigger and the brick dropped VBUS, so the
+  run ended "source lost". Fixed: the SuperVOOC trigger counts as the K2's own VBUS in the Link; a Runner-guard abort
+  records its own cause ("aborted: sink ..."); a VBUS drop after the stage is recovered with an Rd cycle; the exit line
+  logs the run's single `vmax` and says "VBUS gone" instead of "back at 5 V" for a dark output.
 - **Inline interrogation** (k2/inline-interrogate, built and host-tested only; `docs/DEVICE_TWIN.md` 9.1, the one inline
   TX exception, `CONNECTION_MATRIX.md` X11). With a device inline behind its charger the K2 hard-resets the link (unless
   a fresh contract was sniffed), asks the device as its source (Discover Identity, Get_Sink_Cap, Get_Sink_Cap_Extended,

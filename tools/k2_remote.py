@@ -1566,15 +1566,17 @@ def charger_svooc_cap(link, mode=None):
         why = name(SVOOC_REFUSALS, p[2])
     elif end == "aborted":
         why = name(SVOOC_ABORTS, p[2])
+    abort_word = name(SVOOC_ABORT_WORDS, p[2]) if end == "aborted" else ""
     word = int.from_bytes(p[4:6], "little")
     vmax_mv = int.from_bytes(p[6:8], "little") if len(p) >= 10 else None
     stop_ms = int.from_bytes(p[8:10], "little") if len(p) >= 10 else None
     ceiling = {"word": word, "ma": word * SVOOC_MA_PER_COUNT, "text": svooc_amps(word) + " claimed"} if word else None
     return {"mode": name(SVOOC_CAP_MODES, p[0]), "end": end, "why": why, "asks": p[3], "ceiling": ceiling,
-            "vmax_mv": vmax_mv, "stop_ms": stop_ms, "text": svooc_cap_text(end, word, vmax_mv, stop_ms), "note": SVOOC_CAP_NOTE}
+            "vmax_mv": vmax_mv, "stop_ms": stop_ms, "text": svooc_cap_text(end, word, vmax_mv, stop_ms, abort_word),
+            "note": SVOOC_CAP_NOTE}
 
 
-def svooc_cap_text(end, word, vmax_mv, stop_ms):
+def svooc_cap_text(end, word, vmax_mv, stop_ms, abort_word=""):
     """The ceiling stage's words as the K2's Results row shows them (svooc_ceiling::format_cap, tenths rounded)."""
     if end in ("refused", "no adapter"):
         return end
@@ -1584,6 +1586,8 @@ def svooc_cap_text(end, word, vmax_mv, stop_ms):
     parts = []
     if end == "stopped" and stop_ms is not None:
         parts.append(f"stopped at {tenths(stop_ms)} s")
+    if end == "aborted":
+        parts.append(f"aborted: {abort_word}" if abort_word else "aborted")
     parts.append(svooc_amps(word) + " claimed" if word else "none claimed")
     if vmax_mv:
         parts.append(f"{tenths(vmax_mv)} V max")
@@ -3049,6 +3053,9 @@ SVOOC_REFUSALS = ["none", "not confirmed", "D+/D- busy", "no host link", "no pow
                   "USB-A waiver but PD is active"]
 SVOOC_ABORTS = ["none", "VBUS over 12 V", "current over 50 mA", "charger off-script", "host gone", "power monitor lost",
                 "sink appeared", "PD contract appeared", "D+/D- edge storm", "no adapter answer", "time cap", "stopped", "PD contract lost", "PD contract changed"]
+# svooc_ceiling::abort_word: the Results row's short form of each abort (at most 10 characters)
+SVOOC_ABORT_WORDS = ["", "over 12 V", "current", "off-script", "host gone", "no monitor", "sink", "PD", "edge storm", "no adapter",
+                     "time cap", "stopped", "PD lost", "PD changed"]
 SVOOC_CONTRACTS = ["none", "own 5 V", "other"]
 SVOOC_INLINE_REFUSAL = SVOOC_REFUSALS.index("inline mode")
 SVOOC_INLINE_ABORT = SVOOC_ABORTS.index("sink appeared")

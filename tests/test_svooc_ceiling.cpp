@@ -20,9 +20,10 @@ using sc::End;
 
 namespace {
 
-std::string cap_text(std::uint16_t word, End end, std::uint16_t vmax_mv = 0, std::uint16_t stop_ms = 0) {
+std::string cap_text(std::uint16_t word, End end, std::uint16_t vmax_mv = 0, std::uint16_t stop_ms = 0,
+                     svooc::Abort why = svooc::Abort::None) {
     char b[48];
-    sc::format_cap({word, end, vmax_mv, stop_ms}, b);
+    sc::format_cap({word, end, vmax_mv, stop_ms, std::uint8_t(why)}, b);
     return b;
 }
 
@@ -92,12 +93,12 @@ void test_result_text() {
     // The ask is what the K2 claimed in the protocol, never a drawn current.
     CHECK_STR(cap_text(0x00F, End::Judged).c_str(), "1.5 A claimed");
     CHECK_STR(cap_text(0x028, End::Cap).c_str(), "4.0 A claimed");
-    CHECK_STR(cap_text(0x03F, End::Aborted).c_str(), "6.3 A claimed");
+    CHECK_STR(cap_text(0x03F, End::Cap).c_str(), "6.3 A claimed");
     CHECK_STR(cap_text(0x06D, End::Judged).c_str(), "10.9 A claimed");
     CHECK_STR(cap_text(0x1FF, End::Judged).c_str(), "51.1 A claimed");
     CHECK_STR(cap_text(0, End::Refused).c_str(), "refused");
     CHECK_STR(cap_text(0, End::NoAdapter).c_str(), "no adapter");
-    CHECK_STR(cap_text(0, End::Aborted).c_str(), "none claimed");
+    CHECK_STR(cap_text(0, End::Aborted).c_str(), "aborted, none claimed");
     CHECK_STR(cap_text(0, End::Judged).c_str(), "none claimed");
     CHECK_STR(cap_text(0, End::None).c_str(), "-");
     // The highest VBUS the trigger saw, tenths rounded; "stopped at" the adapter's last edge after the wake.
@@ -106,6 +107,17 @@ void test_result_text() {
     CHECK_STR(cap_text(0, End::Stopped, 5270, 12500).c_str(), "stopped at 12.5 s, none claimed, 5.3 V max");
     CHECK_STR(cap_text(0x028, End::Stopped, 0, 3349).c_str(), "stopped at 3.3 s, 4.0 A claimed");
     CHECK_STR(cap_text(0, End::Refused, 5270, 3300).c_str(), "refused");   // nothing ran: no numbers
+    // An abort says so, with its cause in a short word (hardware 2026-11-15 read "none claimed" for a session the K2 cut).
+    CHECK_STR(cap_text(0, End::Aborted, 7983, 1305, svooc::Abort::Sink).c_str(), "aborted: sink, none claimed, 8.0 V max");
+    CHECK_STR(cap_text(0x028, End::Aborted, 9100, 0, svooc::Abort::Overvoltage).c_str(), "aborted: over 12 V, 4.0 A claimed, 9.1 V max");
+    // The longest phrase still fits the 47 characters of the Results note.
+    CHECK_STR(cap_text(0x06D, End::Aborted, 11120, 0, svooc::Abort::OffScript).c_str(),
+              "aborted: off-script, 10.9 A claimed, 11.1 V max");
+    for (unsigned a = 0; a <= unsigned(svooc::Abort::ContractChanged) + 1; ++a) {
+        const char* w = sc::abort_word(std::uint8_t(a));
+        CHECK(w != nullptr && std::strlen(w) <= 10);
+        CHECK_EQ(int(cap_text(0x06D, End::Aborted, 11120, 0, svooc::Abort(a)).size()) <= 47, true);
+    }
     // A short buffer truncates and still terminates.
     char tiny[4];
     CHECK_EQ(int(sc::format_cap({0x06D, End::Judged}, tiny)), 3);

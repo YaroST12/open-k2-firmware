@@ -1827,6 +1827,17 @@ class ChargerSvoocCapCli(unittest.TestCase):
         self.assertEqual((r["vmax_mv"], r["stop_ms"]), (9100, 3300))
         self.assertEqual(r["text"], "stopped at 3.3 s, 4.0 A claimed, 9.1 V max")
 
+    def test_an_abort_names_its_cause(self):
+        # end=3 aborted, why=6 sink appeared: the K2 cut the session (hardware 2026-11-15 read "none claimed" here)
+        reply = bytes([1, 3, 6, 0, 0, 0]) + (7983).to_bytes(2, "little") + (1305).to_bytes(2, "little")
+        r, _ = self.invoke(["charger-svooc-cap"], [reply])
+        self.assertEqual(r["end"], "aborted")
+        self.assertEqual(r["why"], "sink appeared")
+        self.assertEqual(r["text"], "aborted: sink, none claimed, 8.0 V max")
+        reply = bytes([1, 3, 3, 4, 0x6D, 0]) + (11120).to_bytes(2, "little") + bytes(2)
+        r, _ = self.invoke(["charger-svooc-cap"], [reply])
+        self.assertEqual(r["text"], "aborted: off-script, 10.9 A claimed, 11.1 V max")
+
     def test_an_older_six_byte_reply_still_reads(self):
         r, _ = self.invoke(["charger-svooc-cap"], [bytes([1, 5, 0, 4, 0x6D, 0])])
         self.assertEqual(r["end"], "judged")

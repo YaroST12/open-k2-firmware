@@ -146,7 +146,14 @@ aborts with `Overvoltage` and releases the lines), and the card and Results show
   (`svooc_trig::lines_free()`): the family session's release holds them at 0 V for 500 ms first. An adapter that talked
   and then sent no edge for `kQuietMs` (500 ms) ended the session (every no-load session so far, ~3.3 s after the wake):
   the stage stops the trigger and reads `stopped` ("stopped at 3.3 s, 4.0 A claimed, 9.1 V max"), a normal outcome. A
-  refusal, a missing adapter answer or an abort ends the stage with its reason; the ceiling stays what had been accepted before. The stage is not journaled (a resumed
+  refusal, a missing adapter answer or an abort ends the stage with its reason; the ceiling stays what had been accepted before.
+  An abort reads "aborted: <cause>, ..." ("aborted: sink, none claimed, 8.0 V max"); when the run's own guard (inline,
+  monitor) stopped the trigger, the recorded cause is that guard's, not the trigger's "stopped". While the trigger runs
+  (exit watch included) the Link counts the adapter's VBUS ramp as the K2's own (`own_contract`), so the PD-silent session's
+  missing contract does not latch inline with cause Rise (hardware 2026-11-15: that latch took the Rd off and the brick
+  dropped VBUS). `V max` is one number, the trigger report's `vbus_max_mv` with the exit watch included. If the adapter
+  drops its output after the stage (VBUS under vSafe5V for `kDropMs`, 200 ms, in the release) the run brings it back
+  with its unit boundary, Rd off and on (detach, then the next unit's attach), and goes on with the result kept. The stage is not journaled (a resumed
   run skips it) and does not change the card format; the text is in the Results row, in the `--json` readout
   (`k2_remote.py charger-svooc-cap`) and in the log. A plain VOOC charger yields "no adapter" because the family
   detection cannot tell VOOC from SuperVOOC. `quiet()` covers the stage: no flash writes while the wire is held.

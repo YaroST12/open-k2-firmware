@@ -1376,7 +1376,7 @@ void ChargerTestPage::build_grid(bool running_grid, bool note_cuts) {
     char svooc_note[48] = {};
     const auto& ev = s_.runner_.evidence();
     if (ev.svooc_end != 0) {
-        svooc_ceiling::format_cap({ev.svooc_word, static_cast<svooc_ceiling::End>(ev.svooc_end), ev.svooc_vmax_mv, ev.svooc_stop_ms},
+        svooc_ceiling::format_cap({ev.svooc_word, static_cast<svooc_ceiling::End>(ev.svooc_end), ev.svooc_vmax_mv, ev.svooc_stop_ms, ev.svooc_why},
                                   svooc_note);
         oem.svooc_cap = svooc_note;
     }
