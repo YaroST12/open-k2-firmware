@@ -1067,8 +1067,8 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
 
 - ~~**PPS coverage: floor, 20 mV steps, accuracy spread**~~ completed: f733009 + 91a9839; step walk (CUKTECH C1, IQ4), spread (card 55: +10..-49 mV) and floor (IQ4 3.3 V -> 3285 mV) verified 2026-11-10. Open: the floor's fail shape needs a source that floors; `cards show` spread print fixed in 45f170e, hardware check pending. Step walk follow-up (2026-11-10, `runs/2026-11-10-pps13/`): one run failed a good charger "steps ignored" because its output creeps 20-36 mV for ~2 s after each step, so a single move can read <= 0; the walk is now judged by the 5-step total (100 +- 20 mV) and the slope over the six levels (10..30 mV/step), and only a jump of 40 mV or more fails a single step (pattern `pps-output-creep`): fixed in b1c3b7d, hardware check pending.
 - **PPS deep sweep, a separate entry in the charger-test Tests list** (2026-11-10, user decision; after the coverage row
-  above; fixed in 64c0ba5, hardware check pending). **Default since 2026-11-14 (user decision, branch k2/pps-sweep):** the
-  session's default run sweeps every PPS APDO, split at 5 V: the part from 5 V up right after the APDO's own
+  above; fixed in 64c0ba5, hardware check pending). **The default from 2026-11-14 (user decision, branch k2/pps-sweep) until the test levels, which moved it to Deep (below):** the
+  session's default run swept every PPS APDO, split at 5 V: the part from 5 V up right after the APDO's own
   min / max / step rows (Pd, also self-powered), the part below 5 V in PdLow (external power); opt-out: the Tests list line, `k2_remote charger-sweep off` (Cmd 0x0F), `ct_start.py --no-sweep`. The AVS sweep below
   stays opt-in. **Since the test levels (k2/ct-level): Deep only.** Medium, the default level, runs no deep sweep; Deep runs the PPS and the AVS sweep (open decision: the brief's "Deep = Medium + PPS sweep" over the 2026-11-14 default). Order and opt-out: `docs/CHARGER_TEST_FLOW.md`. Originally opt-in, never in the default preset: every 100 mV across each PPS
   APDO, 1 A (AVS: the row below), Accept + PS_RDY + measured VBUS per point, results as a compact error-vs-setpoint

@@ -264,7 +264,8 @@ Notes:
 | **Medium** (default) | Every selected test at every level, no deep sweeps | each level the tests ask for |
 | **Deep** | Medium plus the PPS deep sweep and the AVS deep sweep over every APDO (every 100 mV at 1 A) | the whole range of each APDO |
 
-- A Light run's results never show a green pass for something it did not measure. A level the charger lists reads **Advertised**, a legacy protocol that answered at 5 V reads **Detected**, and a level nothing lists is "not asked". These cells have no fill and a grey bar on their left edge. The Results counters count them with the skips; a grid row's footer counts them apart ("1 pass, 4 listed"), and a step's Detail reads **LISTED** (a level the charger offers) or **NOT RUN** (a legacy level).
+- A Light run never shows a green pass for something it did not measure. On the K2, the 5 V levels it did measure (PDO 1, each legacy protocol's 5 V handshake) pass as usual. A level the charger lists but was not asked for reads **LISTED** in its Detail, a legacy level above 5 V reads **NOT RUN**; both cells have no fill and a grey bar on their left edge. The Results counters count them with the skips; a grid row's footer counts them apart ("PD3.x: 1 pass, 3 listed"), and a listed PPS or AVS range reads "advertised". EPR levels come from the EPR list the charger sends on request; the K2 does not enter EPR mode.
+- The run summary (`charger_summary.py`) says "advertised" for a listed level and "not asked" for a legacy level above 5 V.
 - A Light card says "Light run" in its header, and its rows read "detected" and "advertised", never a tick. A Deep card says "Deep run".
 - From the computer: `python3 tools/ct_start.py --level light|medium|deep` (default medium). `--avs-sweep` alone means deep. `--sweep` / `--no-sweep` turn the PPS deep sweep on or off on top of the level. `k2_remote.py charger-level light|medium|deep` sets the level of the next run without starting it.
 

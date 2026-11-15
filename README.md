@@ -93,7 +93,7 @@ Start it from **Test charger** in the Charger place. Plug the charger in with **
 </table>
 
 - Step 1 picks a preset (All tests, PD only, Legacy only, Vendor modes or Custom). **OK** picks it and goes on. Step 2 picks the cable identity to present; the Review step lists what will run.
-- The Review step's **Level** row (MINUS to reach it, **OK** to change) sets how far the run goes: **Light** lists what the charger advertises and keeps VBUS at 5 V, **Medium** (the default, set in Settings > Test level) tests every level, **Deep** adds the PPS and AVS deep sweeps. A Light run marks what it did not measure as Advertised or Detected, never as a pass.
+- The Review step's **Level** row (MINUS to reach it, **OK** to change) sets how far the run goes: **Light** lists what the charger advertises and keeps VBUS at 5 V, **Medium** (the default, set in Settings > Test level) tests every level, **Deep** adds the PPS and AVS deep sweeps. A Light run marks what it did not measure as listed or not run (on the card: advertised or detected), never as a pass.
 - On Review, **OK** (Start) arms the run. The button turns orange and reads CONFIRM; a bar drains over 5 s. A second **OK** inside that time starts the run; if the 5 s pass, it disarms.
 
 <table>
