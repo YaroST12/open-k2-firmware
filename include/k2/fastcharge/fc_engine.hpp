@@ -105,6 +105,7 @@ struct Env {
     virtual void log_ufcs_echo() {}   // the session ends: only our own frames came back (D+/D- shorted)
     virtual void log_ufcs_retry(const char* /*what*/, int /*try_no*/, std::span<const std::uint8_t> /*pending*/) {}
     virtual void log_ufcs_exit(bool /*acked*/, std::uint32_t /*ms*/, int /*vbus_mv*/) {}   // the Exit_UFCS_Mode wait ended
+    virtual void log_ufcs_busy_retry(std::uint32_t /*ms*/) {}   // a Request refused as busy goes out again after this wait
     // VIVO uses the same UART calls; vivo_open() only claims the UART with D+/D- high-Z (there
     // is no D+/D- handshake for it). False when the UART could not be claimed.
     virtual bool vivo_open() { return false; }
@@ -299,6 +300,7 @@ private:
     int vreq_ = 0;                               // VIVO: voltage in the last command-3 frame
     bool vheard_ = false;
     int utries_ = 0;
+    bool ubusy_retried_ = false;                 // this Request was already refused as busy once and sent again
     bool uart_up_ = false;
     bool uecho_ = false, uheard_ = false;        // UFCS: our own last frame came back verbatim / a frame addressed to the sink arrived
     std::uint32_t ulast_rx_ = 0;

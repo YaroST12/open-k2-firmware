@@ -36,6 +36,7 @@ constexpr std::uint32_t kVoocWakeListenMs = 1500;  // no ident this long after a
 constexpr std::uint32_t kVoocRestMs = 3000;        // lines idle between wakes
 constexpr int kVoocTries = 3;                      // wakes before the adapter is called silent ("needs load")
 constexpr std::uint32_t kUfcsSilenceMs = 500;      // a running session that hears nothing at all for this long is lost
+constexpr std::uint32_t kUfcsBusyRetryMs = 100;    // Refuse "busy": the Request again after this (the standard names no wait)
 constexpr std::uint32_t kUfcsExitMs = 200;         // Exit_UFCS_Mode: the sink's check window (reference 5.3), the cap on the ACK wait
 constexpr int kUfcsTries = 3;                      // asks per phase (Get_Output_Capabilities, Request) before "no response"
 // The opener's retransmit interval, the listen window before "no response" and the opener code are the
@@ -338,6 +339,7 @@ void Engine::ufcs_clear() {
     uref_ = false;
     usrc_valid_ = false;
     uecho_ = uheard_ = false;
+    ubusy_retried_ = false;
 }
 
 // A main message was answered before its ACK came (the source skipped it): the answer counts as the ACK.
@@ -466,6 +468,18 @@ void Engine::ufcs_on_msg(const ufcs::Frame& f, std::uint32_t now) {
         return go(Phase::UfcsRequest, 0);
     } else if (f.cmd == ufcs::kDataRefuse) {
         if (phase_ == Phase::UfcsCaps) return abort(Fail::NoResponse);
+        // Busy (table 24, 0x03: temporarily unable to respond) is not an answer about the level: the same Request once more
+        // after kUfcsBusyRetryMs, then a second busy gives the level up like any other reason.
+        if (ufcs::Refusal r; phase_ == Phase::UfcsRequest && !ubusy_retried_ && ufcs::decode_refuse(f.payload, r) &&
+                             r.reason == ufcs::kRefuseBusy) {
+            ubusy_retried_ = true;
+            ufcs_implicit_ack();
+            uwait_ = false;
+            upend_ = UPend::Request;
+            upend_ms_ = now + kUfcsBusyRetryMs;
+            env_.log_ufcs_busy_retry(kUfcsBusyRetryMs);
+            return;
+        }
         if (phase_ == Phase::UfcsRequest || phase_ == Phase::UfcsPower) return abort(Fail::NoBand);   // the level is refused
         return;
     }
@@ -883,6 +897,7 @@ Fail Engine::set_target(int target_mv, bool confirmed, int ufcs_ma) {
         }
         upk_ = pk;                          // goes out as soon as nothing else is in flight (a keep-alive Ping)
         ufcs_ma_ = ufcs_ma;
+        ubusy_retried_ = false;
         upend_ = UPend::Request;
         upend_ms_ = now;
         uwait_ = false;

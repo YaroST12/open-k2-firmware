@@ -319,6 +319,7 @@ struct HwEnv final : fc::Env {
             K2LOG("[UFCS] refused %s cmd=%d id=%d: %s (%d)\n", r.type == 1 ? "data" : r.type == 0 ? "ctl" : "vendor", r.cmd, r.id,
                   ufcs::refuse_name(r.reason), r.reason);
     }
+    void log_ufcs_busy_retry(std::uint32_t ms) override { K2LOG("[UFCS] busy: Request again in %u ms\n", u(ms)); }
     void log_ufcs_exit(bool acked, std::uint32_t ms, int vbus_mv) override {
         K2LOG("[UFCS] exit %s after %u ms vbus=%d\n", acked ? "acked" : "unanswered", u(ms), vbus_mv);
     }

@@ -23,6 +23,8 @@ struct FakeUfcs : FakeCharger {
     bool handshake_ok = true;
     bool answers = true;               // false: never speaks (no ACK, nothing)
     bool reject = false;               // Refuse (busy) instead of Accept
+    int busy_requests = 0;             // Refuse (busy) the next N Requests, then serve them
+    int range_requests = 0;            // Refuse (out of range) the next N Requests
     bool no_caps = false;              // ACKs Get_Output_Capabilities but never sends the capabilities
     bool no_power_ready = false;       // Accept, but never Power_Ready
     int accept_copies = 1;             // the Accept goes out this many times back to back (its retries piled up in the UART ring)
@@ -64,6 +66,8 @@ struct FakeUfcs : FakeCharger {
     struct ExitLog { bool acked; std::uint32_t ms; int vbus; };
     std::vector<ExitLog> exit_logs;
     void log_ufcs_exit(bool acked, std::uint32_t ms, int vbus) override { exit_logs.push_back({acked, ms, vbus}); }
+    std::vector<std::uint32_t> busy_logs;   // the wait each busy retry announced
+    void log_ufcs_busy_retry(std::uint32_t ms) override { busy_logs.push_back(ms); }
 
     bool powered() const { return ready_at != 0 && now >= ready_at; }
 
@@ -140,6 +144,16 @@ struct FakeUfcs : FakeCharger {
             if (c.pos == r.pos && r.mv >= c.min_mv && r.mv <= c.max_mv && r.ma >= c.min_ma && r.ma <= c.max_ma &&
                 r.mv % c.step_mv == 0 && r.ma % c.step_ma == 0)
                 ok = true;
+        }
+        if (range_requests > 0) {
+            range_requests--;
+            src_refuse(f.id, true, f.cmd, uf::kRefuseRange, t);
+            return;
+        }
+        if (busy_requests > 0 && ok) {
+            busy_requests--;
+            src_refuse(f.id, true, f.cmd, uf::kRefuseBusy, t);
+            return;
         }
         if (reject || !ok) {
             src_refuse(f.id, true, f.cmd, reject ? uf::kRefuseBusy : uf::kRefuseRange, t);
@@ -528,7 +542,7 @@ static void rejected() {
     CHECK(e.start(Proto::Ufcs, 9000, true) == Fail::None);
     c.run(e, 1500);
     CHECK(e.state() == State::Failed && e.fail() == Fail::NoBand);
-    CHECK(c.req_frames == 1 && c.resets >= 1);
+    CHECK(c.req_frames == 2 && c.resets >= 1);         // busy every time: one retry, then the level is given up
     CHECK(!c.accepted);
 }
 
@@ -917,6 +931,34 @@ static void stop_now_skips_the_exit() {
     CHECK(c.exits == 0 && c.closed && c.resets == 1 && !e.exiting() && e.state() == State::Idle);
 }
 
+// Refuse 0x03 "busy" (table 24: temporarily unable to respond): the Request goes out once more after kUfcsBusyRetryMs (the
+// standard names no wait), logged; a second busy gives the level up.
+static void busy_request_is_retried_once() {
+    FakeUfcs c;
+    c.busy_requests = 1;
+    Engine e(c);
+    CHECK(e.start(Proto::Ufcs, 9000, true) == Fail::None);
+    c.run(e, 1500);
+    CHECK(e.state() == State::Active);
+    CHECK(c.req_frames == 2 && c.requests.size() == 1 && c.requests[0].mv == 9000);
+    std::vector<std::uint32_t> at;
+    for (const auto& s : c.seen) if (s.data && s.cmd == uf::kDataRequest) at.push_back(s.at);
+    CHECK(at.size() == 2 && at[1] - at[0] >= 100 && at[1] - at[0] <= 130);
+    CHECK(c.busy_logs.size() == 1 && c.busy_logs[0] == 100);
+    CHECK(c.id_errors == 0 && c.ack_mismatch == 0 && c.soft_resets == 0);
+}
+
+// Any other reason (out of range) is final at once: no second Request, no busy log.
+static void range_refusal_is_not_retried() {
+    FakeUfcs c;
+    c.range_requests = 1;
+    Engine e(c);
+    CHECK(e.start(Proto::Ufcs, 9000, true) == Fail::None);
+    c.run(e, 1500);
+    CHECK(e.state() == State::Failed && e.fail() == Fail::NoBand);
+    CHECK(c.req_frames == 1 && c.busy_logs.empty() && !c.accepted);
+}
+
 int main() {
     refusals();
     happy_path();
@@ -950,6 +992,8 @@ int main() {
     exit_without_ack_is_capped();
     start_or_stop_during_exit();
     stop_now_skips_the_exit();
+    busy_request_is_retried_once();
+    range_refusal_is_not_retried();
     std::printf("test_fc_ufcs: %d checks, %d failed\n", g_checks, g_failed);
     return g_failed ? 1 : 0;
 }
