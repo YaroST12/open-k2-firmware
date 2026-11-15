@@ -1391,6 +1391,32 @@ static void test_tools_rows_open_single_tools() {
     ui.set_single_tools(false);
 }
 
+// Hardware 2026-11-15 (OnePlus 120 W, charger test SVOOC ceiling stage, PD-silent legacy session, no contract): the adapter
+// answered the K2's SuperVOOC trigger by raising VBUS (4.93 V -> 6.90 V in 20 ms) and the Link took that rise for a sink
+// behind the K2 (cause Rise): Rd off, the stage aborted, the brick dropped VBUS. The trigger's own ramp is the K2's doing.
+static void test_svooc_trigger_rise_is_not_a_sink() {
+    Ui &ui = fresh_ui();
+    g_stub.cc = 1; g_stub.pm.vbus_mv = 5270; g_stub.pm.current_ma = 0;
+    uint32_t t = 20000;
+    for (int i = 0; i < 5; i++) ui.tick(t += 100);
+    CHECK_EQ(int(ui.link().inline_mode()), 0);
+    g_stub.svooc_run = true;                           // the guarded trigger holds D+/D-
+    for (int i = 0; i < 3; i++) ui.tick(t += 100);
+    g_stub.pm.vbus_mv = 4931; ui.tick(t += 20);        // the dip before the ramp
+    for (int mv : {6903, 7879, 7965, 7983}) { g_stub.pm.vbus_mv = mv; ui.tick(t += 20); }
+    CHECK_EQ(int(ui.link().inline_mode()), 0);
+    g_stub.svooc_run = false;                          // the exit: VBUS back at 5 V inside the hold
+    g_stub.pm.vbus_mv = 5100;
+    for (int i = 0; i < 5; i++) ui.tick(t += 100);
+    CHECK_EQ(int(ui.link().inline_mode()), 0);
+    // Control: long after the trigger, a rise nobody on this side asked for still latches.
+    for (uint32_t i = 0; i < k2::pd::kOwnHoldMs / 100 + 5; i++) ui.tick(t += 100);
+    g_stub.pm.vbus_mv = 9000;
+    for (int i = 0; i < 3; i++) ui.tick(t += 100);
+    CHECK_EQ(int(ui.link().inline_mode()), 1);
+    g_stub.pm.vbus_mv = 5000; g_stub.cc = 0;
+}
+
 int main() {
     test_sink_tab_pd_body_shows_the_raw_vooc_note();
     test_sink_tab_no_pd_shows_the_raw_vooc_note();
@@ -1433,5 +1459,6 @@ int main() {
     test_pd_present_keeps_identify_offered();
     test_single_tools_lock_one_tab();
     test_tools_rows_open_single_tools();
+    test_svooc_trigger_rise_is_not_a_sink();
     return test_report("test_ui_connection_page");
 }

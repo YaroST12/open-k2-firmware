@@ -10,6 +10,7 @@
 #include "k2/core/rescan.hpp"
 #include "k2/core/survey.hpp"
 #include "k2/fastcharge/fctrig.hpp"
+#include "k2/fastcharge/svooc_trig.hpp"
 #include "k2/drivers/fusb302.hpp"
 #include "k2/drivers/lcd.hpp"
 #include "k2/pd/link.hpp"
@@ -1478,11 +1479,13 @@ K2_HOT UiAction Ui::tick(uint32_t now_ms) {
     in.cc2_mv = ctx_.analog ? ctx_.analog->cc2_mv : -1;
     in.passive = !fusb302::rd_for_run_on() && !fusb302::ra_active() && !fusb302::self_powered() && !link_.inline_mode();
     in.line_held = fusb302::idle_wake_line() != 0 || fusb302::pin_rd() != 0;   // a hold of ours (Wake sleeping port, boot-pinned Rd): not the far ports' own levels
-    {   // VBUS this K2 drives itself: the PD trigger (held or mid-negotiation) or a fast-charge trigger
+    {   // VBUS this K2 drives itself: the PD trigger (held or mid-negotiation), a fast-charge trigger, or the SuperVOOC trigger
+        // (its exit watch included). The SuperVOOC adapter raises VBUS on a PD-silent link with no contract of the K2's own: without
+        // this the ramp reads as a sink behind the K2 (cause Rise), the Rd goes off and the adapter drops VBUS (hardware 2026-11-15).
         const pd::SinkStatus &sk = fusb302::sink_status();
         const bool pd_busy = sk.held || (sk.state != pd::SinkState::Idle && sk.state != pd::SinkState::Failed);
         const fctrig::State fs = fctrig::status().state;
-        in.own_contract = pd_busy || fs == fctrig::State::Negotiating || fs == fctrig::State::Active;
+        in.own_contract = pd_busy || fs == fctrig::State::Negotiating || fs == fctrig::State::Active || svooc_trig::running();
     }
     if (pd::is_fake()) link_.force_attached(now_ms);   // fake PDOs count as attached
     const bool was_attached = link_.attached();
