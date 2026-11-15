@@ -377,16 +377,17 @@ Verdict, unchanged but now complete: not a ramp, not a protection trip. The outp
   - AVS sweep 9.0-20.0 V, 100 mV steps (`pd request 7`): all 111 points Accept + PS_RDY, VBUS within -47..+66 mV, slow
     monotonic slew (no step skipped), 20.0 V -> 20.07 V. The clean AVS reference against the FH22's
     `pps-folds-to-fixed-20v`.
-- 2026-11-15 (1.0.2-80-e9e4cd73, `runs/ugreen-qa/r1a-stream`, `r1b-stream`, `r2-stream`; the Legacy unit's SCP group): the
-  SCP detect row passes (the SCP register reads answer and the 0xA0..0xB2 writes are acked), but the 10 V row ends
-  "timeout" with VBUS flat at 5.00 V and the 12 V row ends differently from run to run, because this source power-cycles its own
-  5 V output after the failed SCP exchange and the K2's row only reports what VBUS did. Run 1a: VBUS dark (0.1 V) for ~1 s
-  right after row 4's reset-to-5V, back at 5.10 V with Source_Capabilities repeating (the K2 is PD-silent in a Legacy
-  unit), so row 5 was refused at its start as "PD or load active" (link guard: a decoded Source_Capabilities on CC).
-  Run 2: no SCP register read or write was logged in row 5 (row 4's first read came 3.1 s after its start) and the source cut
-  VBUS from 5.05 V to 0.7 V at +2.9 s, so the row ended "source lost at 0.70 V" and the recovery took VBUS back to
-  5.10 V ~1 s later. Neither 10 V nor 12 V ever left 5.0 V, so the row could not pass; both texts are true to the wire and
-  the K2 does not misreport. No handling change.
+- 2026-11-15 (1.0.2-80-e9e4cd73, `runs/ugreen-qa/r1a-stream`, `r1b-stream`, `r2-stream`; the first Legacy unit's SCP group): the
+  SCP 5 V detect row passes, the 10 V row (the 0xA0..0xB2 writes are acked) ends "timeout" with VBUS flat at 5.00 V, and the
+  12 V row reads differently from run to run. Pattern `output-reset-after-unanswered-scp` (same signature as the IQ4): in runs
+  1a and 1b the source cut VBUS (0.1 V for ~1 s) 27 ms after row 4's reset-to-5V and came back with Source_Capabilities repeating
+  (a fresh PD attach to a PD-silent sink, as in `silent-sink-reset`); the K2's row 5 started inside that announcement and the
+  link guard (a decoded Source_Capabilities on CC, `link::pd_active`) refused it as "PD or load active", by design (a Legacy
+  unit that sees PD live does not drive D+/D-). In run 2 the cut came 2.9 s into row 5 with no SCP register access logged in that
+  row (5.05 V to 0.7 V, back at 5.10 V ~1.0 s later), so the row ended "source lost at 0.70 V". The three cuts fell 31.8, 31.9
+  and 34.7 s after the unit's attach; the run's later Legacy units (25 s and 47 s long, other protocols) saw none. The trigger
+  (an SCP-specific reaction, or a timer on the PD-silent attach) is not isolated by these recordings. Both K2 texts match what
+  VBUS and CC did; the row could not pass either way (10 V never left 5.0 V). No handling change.
 
 ### Anker Prime 100W (USB-C)
 - `placeholder-vid`: identity FFFF:FFFF.
