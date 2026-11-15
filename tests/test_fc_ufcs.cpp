@@ -672,7 +672,7 @@ static void capabilities_never_come() {
     CHECK(c.resets >= 1 && c.soft_resets == 0);
 }
 
-// Every way the UFCS step can fail while the output is still at 5 V ends inside the clean window of a port that cuts VBUS every 7 s
+// The silent ways the UFCS step can fail (no source, no capabilities, deaf to the Request, no Power_Ready, a refused handshake; not a reject, busy or out-of-range answer) end inside the clean window of a port that cuts VBUS every 7 s
 // (fake clock: silent source 0.5 s, no capabilities 0.19 s, deaf to the Request 0.19 s, no Power_Ready 0.62 s; the real UFCS step took 1.2 s on
 // the CUKTECH port).
 static void silent_5v_steps_fit_the_cut_window() {

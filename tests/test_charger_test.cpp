@@ -5614,8 +5614,8 @@ static void test_a_cut_that_reads_no_response_does_not_skip_the_family() {
 // whole detection (kVoocDetectMaxMs): it has to fit one clean window, from whatever phase the unit starts in, so the family ends exactly as
 // on a port that never cuts (the control run: Fail / Request / needs load on the first row, the rest skipped the same way) and never
 // "port cuts without load". With the old 10.5 s detection no retry could fit and the same port read PortCuts.
-// The cuts begin once the first engine session has opened: a cut inside the very first Baseline (about 0.3 s after START) is a different
-// case (the Runner leaves the Baseline as Releasing and stops, all rows Lost; see the report), not what this test measures.
+// The cuts begin once the first engine session has opened: a cut within 0 to 0.6 s of the start of the run (its first Baseline) is a different
+// case (the run stops, all rows Skip / Lost; pre-existing, see the FLOW doc), not what this test measures.
 static void test_a_silent_vooc_family_on_a_7s_cut_port_ends_needs_load() {
     constexpr uint32_t kFamily = ct::bit(A::Vooc) | ct::bit(A::SuperVooc) | ct::bit(A::SuperVooc65);
     Fake clean; clean.caps = {}; clean.silent_session_ms = uint32_t(fc::kVoocDetectMaxMs) + 50u; ct::Runner rc(clean);
@@ -5674,6 +5674,30 @@ static void test_the_7s_cut_sequence_over_the_5v_steps_of_the_cuktech_run() {
     std::array<uint8_t, 58> page{};
     CHECK_EQ(remote::encode_charger_test(page, remote::charger_test_snapshot(r), 0, false, 2), remote::kChargerTestHeader2);
     CHECK_EQ(unsigned(page[40] >> 3), unsigned(r.evidence().cut_retries));
+}
+// The whole 10-unit run of the CUKTECH port, with a silent VOOC family (the port's real answer), the first cut swept over the whole
+// period (every 200 ms) once the first engine session has opened: whatever unit or row it lands in (a row, the Baseline or the detach
+// between two units), the run ends as the same run on a port that never cuts: one Fail (the VOOC family's needs-load row) and its two
+// skips, no PortCuts. A cut inside the run's very first Baseline is not part of this sweep (FLOW doc: open side issue).
+static void test_the_10_unit_run_over_every_cut_phase_ends_as_without_cuts() {
+    constexpr uint32_t kUnits = ct::bit(A::Fcp) | ct::bit(A::Scp) | ct::bit(A::Vooc) | ct::bit(A::SuperVooc) | ct::bit(A::SuperVooc65) |
+                            ct::bit(A::Vivo) | ct::bit(A::Qc2) | ct::bit(A::Qc3) | ct::bit(A::Afc) | ct::bit(A::Ufcs);
+    Fake clean; clean.caps = {}; clean.silent_session_ms = uint32_t(fc::kVoocDetectMaxMs) + 50u; ct::Runner rc(clean);
+    CHECK_EQ(rc.start(clean.caps, {.selected = kUnits}, clean.in, true), ct::Reason::None);
+    for (unsigned t = 0; rc.state() != ct::State::Done && t < 400000; t += 100) clean.tick(rc, 100);
+    CHECK_EQ(rc.state(), ct::State::Done);
+    CHECK_EQ(count_verdict_any(rc, ct::Verdict::Fail), 1u);
+    CHECK_EQ(count_verdict_any(rc, ct::Verdict::Skip), 2u);
+    for (uint32_t off = 0; off < 7040; off += 200) {
+        Fake f; f.caps = {}; f.cut_len_ms = 1000; f.silent_session_ms = clean.silent_session_ms; ct::Runner r(f);
+        CHECK_EQ(r.start(f.caps, {.selected = kUnits}, f.in, true), ct::Reason::None);
+        CHECK_EQ(run_until(f, r, [&] { return f.fc_requests >= 1; }, 60000), true);
+        f.cut_period_ms = 7040; f.cut_next_at = f.in.now + off;
+        for (unsigned t = 0; r.state() != ct::State::Done && t < 400000; t += 100) f.tick(r, 100);
+        CHECK_EQ(r.state(), ct::State::Done);
+        expect_same_plan(all_rows(rc), all_rows(r));
+        CHECK_EQ(f.cuts_seen >= 2, true);
+    }
 }
 // Outside a recovery nothing is adopted: a session change in a Baseline that no legacy row sag preceded is still source lost.
 static void test_session_change_in_baseline_without_a_sag_is_still_lost() {
@@ -7967,7 +7991,7 @@ int main() {
     test_measured_dwell_and_plan_capacity();
     test_usb_a_sag_tail_session_is_not_source_lost(); test_usb_a_sag_tail_waits_for_vbus_to_climb(); test_usb_a_sag_tail_with_dead_or_low_vbus_is_still_lost(); test_session_change_in_baseline_without_a_sag_is_still_lost(); test_usb_a_midrow_session_opens_the_adopt_window(); test_usb_a_sag_dip_under_1v_inside_the_window_waits();
     test_cut_in_the_row_then_a_clean_retry_passes(); test_a_retried_first_scp_row_replans_like_an_unretried_one(); test_a_retried_first_scp_row_keeps_the_rows_a_wide_list_offers(); test_a_retried_first_ufcs_row_replans_like_an_unretried_one(); test_a_retried_first_vooc_family_row_ends_like_an_unretried_one(); test_several_cuts_in_a_row_then_a_clean_retry_passes(); test_every_retry_cut_is_a_skip_not_a_fail(); test_the_retries_are_counted_per_row(); test_a_cut_that_reads_no_response_does_not_skip_the_family(); test_a_loss_that_does_not_come_back_in_the_window_is_a_fail();
-    test_a_dip_shorter_than_the_minimum_is_no_cut(); test_a_protocol_failure_after_a_clean_comeback_is_a_fail(); test_the_7s_cut_sequence_over_the_5v_steps_of_the_cuktech_run(); test_a_fall_in_a_raised_row_is_no_cut_casualty(); test_a_silent_vooc_family_on_a_7s_cut_port_ends_needs_load();
+    test_a_dip_shorter_than_the_minimum_is_no_cut(); test_a_protocol_failure_after_a_clean_comeback_is_a_fail(); test_the_7s_cut_sequence_over_the_5v_steps_of_the_cuktech_run(); test_a_fall_in_a_raised_row_is_no_cut_casualty(); test_a_silent_vooc_family_on_a_7s_cut_port_ends_needs_load(); test_the_10_unit_run_over_every_cut_phase_ends_as_without_cuts();
     test_custom_unit_list_runs_in_order(); test_pd_unit_attaches_with_a_contract(); test_a_failed_unit_does_not_stop_the_run();
     test_default_unit_order_is_vendor_modes_then_pd_then_legacy(); test_default_order_runs_vendor_modes_before_pd_before_legacy(); test_pd_between_vendor_and_legacy_units(); test_pd_replan_in_the_middle_keeps_the_rows_in_order(); test_consecutive_legacy_units_share_one_attach(); test_legacy_session_that_sees_pd_traffic_is_renewed(); test_silent_ufcs_source_reports_no_response_not_pd_active(); test_legacy_waits_between_units();
     test_legacy_attach_that_never_falls_back_is_blocked_by_pd(); test_legacy_retry_that_falls_back_runs_the_unit(); test_legacy_attach_waits_out_hard_reset_cycles();
