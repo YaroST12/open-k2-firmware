@@ -660,6 +660,23 @@ How a PD row is judged and how long it waits. All of it is host-tested; none of 
 - **A capped row ends on its plateau.** A PPS / AVS row whose output stands steady below the band with the contract live
   (ready, not a sweep row, plateau held `kCappedPlateauMs` = 5 s, `capped()` true) ends `Capped` there instead of at the 12 s
   row timeout; the timeout path keeps the old rule.
+- **A voltage fold is a CAUTION, neither pass nor fail** (user decision 2026-11-16). A deep-sweep row whose track check
+  (`pd::TrackScan`, the same scan the PD Spec Check uses) finds a fold (a point where the output drops by more than 50 mV on
+  a move up) keeps `Verdict::Pass` and gets `Reason::Folded` ("output folds back"): the kit's partial verdict, the same
+  tone as Capped, band word "CAUTION", never red. A real track break (offset jump) keeps its own verdict. The fold facts
+  (`fold_mv` = lowest value measured from the fold on, `fold_from_mv` = the setpoint of the first folded point) read
+  "folds to 19.4V above 19.9V" (the "above" is the last setpoint that still tracked, `ctsweep::format_fold`; a whole volt
+  drops the ".0"). A fixed PPS / AVS row inside the band but on the folded side of a fold of the same APDO gets the same
+  caution; the sweep runs after the APDO's fixed rows, so those rows are marked when the sweep closes
+  (`Runner::sweep_close` amends them through `Env::amend`), not while they run. Counting follows Capped: a caution is
+  tallied in the `capped` column ("~" in the summary line, "C caution" in the steps footer), never in pass or fail, and
+  the run verdict reads it as the partial band, not as a failure. Surfaces: results header (a fourth cell), steps row note
+  "CAUTION: folds back", Detail band and footer, sweep-row footer, card row "folds to 19.4V" and sheet "Caution" with a Note
+  row (card format v10 packs `fold_dv` / `fold_from_dv` in the sweep word; a card caution is `fold_dv != 0` with no range
+  failure), `tools/charger_summary.py`, `tools/web/k2proto.js` / `ctgrid.js` / `k2.html` and `docs/site/r/card.js`. Wire
+  schema 1 maps `Folded` to a plain pass; schema 2 carries the reason. Host tests: `test_a_fold_the_sweep_finds_is_a_caution_on_the_apdos_rows` in
+  `tests/test_charger_test.cpp`, `tests/test_sweep.cpp`, `tests/test_ui_charger_test.cpp`
+  (`test_a_voltage_fold_reads_as_a_caution`), `tests/test_ui_no_truncation.cpp`.
 - **PS_RDY timing is noted, never judged.** The sink stamps Accept and PS_RDY; per row the runner latches three flags in
   `Evidence::timing`: bit 0 PS_RDY while VBUS was outside the row's band (`early-ps-rdy`), bit 1 PS_RDY inferred by the sink
   (the no-PS_RDY down-step shortcut), bit 2 PS_RDY later than the spec maximum (550 ms SPR, 1020 ms EPR; the 1500 / 4000 ms
