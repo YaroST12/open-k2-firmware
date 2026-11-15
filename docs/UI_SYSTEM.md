@@ -468,6 +468,8 @@ It is drawn by the page today (`paint_detail`). It belongs in the kit beside Ale
   "Detected" for a protocol that answered at 5 V; it is never green and never red (`result_layout::Tone::Noted`,
   `report_card::tone`). A Light card's passing groups read Noted too. The results page (`docs/site/r/card.js`) uses
   the same tone: no fill, a grey left bar, the glyph `i`.
+  A `PortCuts` skip ("port cuts without load": a USB-A port that cut its own 5 V twice in one row) is a plain Skip,
+  not Noted: the row was not measured and nothing was advertised.
 
 - Label font: 16 in a cell 22 px or taller, else 12. The label is centred.
 - Glyph size: the cell's short side minus 4, at most 12.

@@ -183,6 +183,38 @@ Host tests: `test_charger_test` (`test_vooc_family_shares_one_session`,
 `vooc_other_commands_are_never_answered`, `vooc_all_ones_frame_is_nothing_heard`, `vooc_never_inline`,
 `vooc_stop_releases`, `vooc_wake_forms_alternate`).
 
+## A port that cuts its own 5 V rail: retry within a window (2026-11-15, host-tested, hardware check pending)
+
+Pattern `usb-a-no-load-auto-off` (`docs/CHARGER_QUIRKS.md`): a USB-A port with no load cuts VBUS every ~7.0 s at 5 V (to ~2 V for about
+1 s, then back at 5.1 V) and never cuts above 5 V (CUKTECH 120W A port, A-to-C cable, `runs/cuktech-usba/`). Without a rule, every
+legacy row that was in flight at a cut reads "source lost" (SCP 5 V, VOOC, SVOOC, QC2 5 V) and the rows that straddle the dip read
+"no response" or "timeout". These rows say nothing about the charger, so the Runner treats them as casualties of the cut, not verdicts.
+
+- **A cut** is a fall of VBUS under `kCutMv` (3 V) that starts from at most `kCutNoAboveMv` (5.5 V) and ends at the first
+  vSafe5V sample, lasting `kCutMinMs` (200 ms) to `kCutWindowMs` (2 s). The window is about twice the cut seen and far under the
+  7.0 s period, so a source that is gone (no comeback inside the window) is told from a cut; 200 ms leaves out the instant 0.65 V
+  dips of the fast VBUS reading. The tracker runs in legacy mode only (`Runner::track_cut`, from every poll).
+- **A casualty** is a legacy, non-PD step that would fail (Lost, Timeout, Request or Voltage) while its VBUS never went above 5.5 V
+  (a raised level is never a casualty: the port does not cut it). Lost qualifies on its own; the other three need a fall seen in
+  that row. The verdict is held, the row goes Pending and Releasing waits for the output to come back (`cut_hold`).
+- **The retry**: once VBUS is steady at vSafe5V after a dip of 200 ms to 2 s, the held row is asked once more from the start of
+  its step (`cut_resolve`, log `[CT] cut retry row=<i> dip=<ms>ms`, `Evidence::cut_retries` + 1). A retry that passes is a plain pass.
+- **A second cut in the retry** is a skip, never a fail: `Reason::PortCuts`, "port cuts without load" (a plain Skip in the
+  grid, the card and the summaries; `[CT] cut retry row=<i> cut again: skip`).
+- **A real failure keeps failing**: VBUS not back within the window (a long dip, a gone output), or the protocol silent or wrong
+  after a clean comeback (the retry's own verdict stands), or a dip shorter than 200 ms (no cut).
+- **The period** (`Evidence::cut_period_ds`, the median gap between the last eight cut onsets, `[CT] cut period=<ms>ms n=<n>`) is
+  recorded once two cuts were seen. The run does not start a row at a scheduled moment after a cut: the retry covers the casualties
+  and a start schedule would only move the next cut into another row. (Decided 2026-11-15, not built.)
+
+Export: the retry count rides in bits 3..7 of the schema-2 page header's PS_RDY timing byte (offset 40; the 42-byte header and its
+one row fill the 58-byte frame), saturating at 31; `k2_remote` and the web decoders show it as `evidence.cut_retries` and
+`charger_summary` adds "Port cut at 5 V: N steps asked again". The period, the report card and the on-flash journal do not carry it.
+
+Limits: a protocol the port does not speak with a timeout longer than the ~6 s clean gap reads "port cuts" (the retry meets the next
+cut); a cut hidden inside a blocked handshake is not seen, so casualties are never inferred from the period alone; a real brownout
+at 5 V that comes back within 2 s is asked again once. Host tests: `test_charger_test` (`test_cut_in_the_row_then_a_clean_retry_passes`, `test_a_second_cut_in_the_retry_is_a_skip_not_a_fail`, `test_a_loss_that_does_not_come_back_in_the_window_is_a_fail`, `test_the_7s_cut_sequence_over_the_5v_steps_of_the_cuktech_run` and the protocol-failure case).
+
 ## SCP and UFCS rows follow what the charger reported (2026-11-08)
 
 START plans the fixed rows of both units, because nothing is known of the charger yet (`Runner::build` / `preview` hand the
