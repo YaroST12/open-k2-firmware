@@ -746,11 +746,11 @@ static void test_three_step_header() {
     CHECK_EQ(ui.charger_test_stage(), 4);
     check_header("3/3 Review", 3);
 }
-// Review's Cable row (row 2 of the table, the value column at x72) is the identity the START presents. The armed state is not
+// Review's Spoof row (row 1 of the table, the value column at x72) is the identity the START presents. The armed state is not
 // part of the line: it is on the Cable step (the ARMED pill) and in the Refuse / Waiting stages.
 static void check_review_spoof(std::string_view text, uint16_t color) {
     char buf[kFitBuf];
-    const int y = kit::kBodyY + 2 * kit::kRowH + kit::row_text_y(kit::kRowH, kSmall.height);
+    const int y = 104 + 1 * 22 + kit::row_text_y(22, kSmall.height);   // Review's rows: three at a 22 px pitch from y 104 (Tests, Spoof, Level)
     check_text_at(kSmall, y, "Spoof", kDim, kBg, 6);   // the key of the identity row
     check_text_at(kSmall, y, fit_data(kSmall, text, 18 * kSmall.adv, buf), color, kBg, 72);
 }
@@ -1019,7 +1019,53 @@ static void test_self_powered_review_note() {
     for (unsigned self = 0; self < 2; ++self) {
         fixture(); g_stub.self_powered = self != 0;
         Ui ui; open(ui); review(ui);
-        CHECK_EQ(footer_says(self ? "Self-powered: VBUS stays up" : "Runs without a load", kText), true);
+        if (self) CHECK_EQ(footer_says("Self-powered: VBUS stays up", kText), true);
+        else CHECK_EQ(footer_says("Check the other port", kCaution), true);   // the default Review footer: the warning's one-line echo
+    }
+}
+// Review ALWAYS carries the stern other-port warning (user decision 2026-11-15): the amber band, the two lines, the START ticket's
+// hint and the Caution footer, on a bare idle link, a self-powered K2 and under the Level row's cursor alike; START's own confirm is
+// the acknowledgement (one confirm per run, nothing more). The band word must also fit its box (no cut).
+static void test_review_carries_the_other_port_warning() {
+    CHECK_EQ(text_width(kMid, "OTHER PORT FREE") <= 240 - 36 - 4, true);   // the band's word box
+    for (unsigned mode = 0; mode < 3; ++mode) {
+        fixture(); g_stub.self_powered = mode == 1;
+        Ui ui; open(ui); review(ui);
+        if (mode == 2) { press(ui, Button::Minus); settle(ui); CHECK_EQ(ui.charger_test_cursor(), 0); }   // the Level row
+        CHECK_EQ(g_panel[30 * LCD_WIDTH + 2], kCaution);   // the band's amber, left of the triangle
+        check_text_at(kMid, 30, "OTHER PORT FREE", kSpotInk, kCaution, 36);
+        check_text_at(kSmall, 68, "A device on the other port", kText, kBg, 6);
+        check_text_at(kSmall, 86, "can be damaged. Unplug it.", kText, kBg, 6);
+        if (mode == 0) CHECK_EQ(footer_says("Check the other port", kCaution), true);
+        if (mode == 1) CHECK_EQ(footer_says("Self-powered: VBUS stays up", kText), true);
+        no_operations();
+    }
+    // One confirm per run: START arms (CONFIRM), the second OK starts; the warning asks for nothing more.
+    fixture(); Ui ui; open(ui); review(ui);
+    start_press(ui, 1300);
+    CHECK_EQ(ui.charger_test_stage(), 4);      // armed, still on Review: nothing started
+    CHECK_EQ(ui.charger_test_busy(), false);
+    confirm_press(ui, 1400);
+    CHECK_EQ(ui.charger_test_busy(), true);    // the single confirm starts it
+}
+// The latch policy (user decision 2026-11-15): a CC level, a foreign VBUS level or a rise nothing caused is no evidence of a device
+// on the other port, so none of them refuses a run (hardware: a USB-A charger with nothing plugged in reads ~1.75 V on CC2); a load
+// beyond the K2's own supply or a Request the K2 did not send is, and still does. The real pd::Link runs inside the Ui here.
+static void set_lines(int cc1, int cc2);
+static void ticks_for(Ui& ui, uint32_t& t, uint32_t ms) { for (uint32_t end = t + ms; t < end; t += 100) { fusb302::service(); ui.tick(t); } }
+static void test_phantom_evidence_does_not_refuse_a_run_but_a_load_does() {
+    for (unsigned mode = 0; mode < 4; ++mode) {
+        fixture();
+        if (mode == 0) set_lines(3300, 1750);                       // a floating CC2 on a bare USB-A charger
+        if (mode == 1) { set_lines(3300, 3300); g_stub.pm.vbus_mv = 5100; }   // a foreign VBUS level, no current
+        if (mode == 2) { set_lines(1600, 1600); }   // both lines pulled to a sink-like level, nothing flowing
+        if (mode == 3) g_stub.pm.current_ma = 1500;                 // a real load beyond the K2's own supply
+        Ui ui; open(ui);
+        uint32_t t = 1200;
+        ticks_for(ui, t, k2::pd::kInlineQuietMs + 3000);
+        review(ui, t); start_run(ui, t + 100);
+        if (mode == 3) CHECK_EQ(ui.charger_test_busy(), false);
+        else CHECK_EQ(ui.charger_test_busy(), true);
     }
 }
 // The card of a self-powered run records it (cable flags bit 2), a HID-powered one does not.
@@ -4272,7 +4318,7 @@ static void test_view_says_what_the_wizard_shows() {
         CHECK_EQ(v.stage, 4); CHECK_EQ(v.rows, 2);   // Level, START
         CHECK_EQ(v.preview.runnable > 0, true); CHECK_EQ(v.preview.refusal, ct::Reason::None);
         CHECK_EQ(v.confirming, false); CHECK_EQ(v.confirm_left_ms, 0u);
-        CHECK_STR(view_text(v).c_str(), "Runs without a load");
+        CHECK_STR(view_text(v).c_str(), "Check the other port");
         start_press(ui, 1300); ui.tick(1400);
         v = ui.charger_test_view();
         CHECK_EQ(v.confirming, true); CHECK_EQ(v.confirm_left_ms > 0 && v.confirm_left_ms <= Ui::kConfirmWindowMs, true);
@@ -4510,7 +4556,7 @@ int main() {
     test_the_default_run_is_medium();
     test_review_level_row_cycles_and_counts();
     test_an_old_journal_resumes_without_the_default_sweep();
-    test_self_powered_review_note(); test_self_powered_run_is_on_the_card();
+    test_self_powered_review_note(); test_review_carries_the_other_port_warning(); test_phantom_evidence_does_not_refuse_a_run_but_a_load_does(); test_self_powered_run_is_on_the_card();
     test_pps_wire_headroom_note();
     test_first_menu_and_pd_bundles();
     test_tests_step_presets();

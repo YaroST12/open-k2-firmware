@@ -180,6 +180,17 @@ int main() {
     ui.on_button(Button::Minus, ButtonEvent::Short, t); t += 100;   // the Level row: its focus look and its footer note
     render(ui, t, "ct_review_level");
     ui.on_button(Button::Plus, ButtonEvent::Short, t); t += 100;    // back to START
+    // The always-on other-port warning, in all four rotations (the Review step idle, then armed for its single confirm).
+    for (uint8_t rot = 0; rot < 4; ++rot) {
+        char nm[32];
+        ui.set_rotation(rot, t); t += 200;
+        std::snprintf(nm, sizeof nm, "ct_review_rot%u", unsigned(rot)); render(ui, t, nm);
+        ui.on_button(Button::Ok, ButtonEvent::Short, t); t += 100;   // START: the confirm window
+        std::snprintf(nm, sizeof nm, "ct_confirm_rot%u", unsigned(rot)); render(ui, t, nm);
+        ui.on_button(Button::Back, ButtonEvent::Short, t); t += 100;   // disarm
+        for (int i = 0; i < 4 && ui.charger_test_cursor() != 1; ++i) { ui.on_button(Button::Plus, ButtonEvent::Short, t); t += 100; }
+    }
+    ui.set_rotation(0, t); t += 200;
     // Each scene is checked against the stage it is named after, so a change of the START flow cannot silently
     // retitle a scene. The first START press opens the confirm window on Review (no dialog: the cable identity was
     // chosen on the Cable step).

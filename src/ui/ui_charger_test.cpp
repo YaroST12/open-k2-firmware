@@ -1769,8 +1769,8 @@ void ChargerTestPage::announce(const char* words) {
         if (s_.confirming_) { f.put(s_.confirm_reattach_ ? kReattachConfirm : "Press again to start"); return FooterTone::Caution; }
         if (in.cable_mv == 20000 && s_.summary_.max_mv == 21000) { f.put("PPS: 21V on 20V wire"); return FooterTone::Info; }
         if (self_supplied()) { f.put("Self-powered: VBUS stays up"); return FooterTone::Info; }
-        f.put("Runs without a load");
-        return FooterTone::Info;
+        f.put("Check the other port");
+        return FooterTone::Caution;
     }
     case Stage::Refuse: f.put("Direct plug is the sure way"); return FooterTone::Caution;
     case Stage::Waiting: {
@@ -2047,6 +2047,12 @@ constexpr const char *kRdOn[2] = {"Rd on CC1", "Rd on CC2"};   // the checklist'
 static_assert(all_fit(kRdOn, kSmallAdvPx, 190), "a Waiting checklist item is wider than its row");
 // The Review table: five rows of 26 px from the body top, the key at x6 and the value from x72 (18 cells).
 constexpr kit::KvLayout kKv{kit::kBodyY, kit::kRowH, 6, nullptr, nullptr, 72, 18, Align::Left};
+// Review always carries the other-port warning: the alert band (36 px + its stripe, to y 66), two S16 lines under it, then the
+// three rows (Tests, Spoof, Level at a 22 px pitch) and the 48 px START ticket. The Peak and Power rows were dropped for the room.
+constexpr int16_t kWarnLine1Y = 68, kWarnLine2Y = 86;
+constexpr kit::KvLayout kReviewKv{104, 22, 6, nullptr, nullptr, 72, 18, Align::Left};
+constexpr int16_t kReviewCellY = 172, kReviewCellH = 48;
+constexpr int kReviewLevelCell = 2;
 // The Detail table: under the verdict band, the value column at x92 (16 cells).
 constexpr kit::KvLayout kDet{60, kit::kRowH, 6, nullptr, nullptr, 92, 16, Align::Left};
 
@@ -2165,44 +2171,28 @@ void ChargerTestPage::paint_review() {
     const Surface &c = ctx_.content;
     PaintBudget *const pbg = ctx_.budget;
     if (!laid_) {
-        if (pbg && !pbg->admit(300, true)) return;
-        gfx_fill(c, 0, 154, c.w, 1, kRule);
-        action_.init(c, 156, 64);
+        if (pbg && !pbg->admit(static_cast<int>(c.w) * 44 + 1400, true)) return;
+        // The stern warning, on every Review, whatever the link says: the test opens the lines and a device on the other port can
+        // be damaged. START's own arm + CONFIRM is the acknowledgement (one confirm per run).
+        kit::draw_alert_band(c, kit::kBodyY, false, "OTHER PORT FREE");
+        gfx_text(c, kSmall, 6, kWarnLine1Y, "A device on the other port", kText, kBg);
+        gfx_text(c, kSmall, 6, kWarnLine2Y, "can be damaged. Unplug it.", kText, kBg);
+        action_.init(c, kReviewCellY, kReviewCellH);
         laid_ = true;
     }
-    const auto &caps = fusb302::caps();
     auto kv = [&](int i, const char *key, std::string_view v, uint16_t color) -> bool {
         const uint32_t h = mix_u32(mix(mix(mix_init(), key), v), color) | 1u;
         if (h == cell_sig_[i]) return true;
-        if (pbg && !pbg->admit(static_cast<int>(c.w) * kit::kRowH, true)) return false;
+        if (pbg && !pbg->admit(static_cast<int>(c.w) * kReviewKv.pitch, true)) return false;
         cell_sig_[i] = h;
-        const int16_t y = kit::kv_row_y(kKv, i);
-        gfx_fill(c, 0, static_cast<int16_t>(y + 1), c.w, kit::kRowH - 1, kBg);
-        kit::kv_row(c, kKv, y, key, v, color);
+        const int16_t y = kit::kv_row_y(kReviewKv, i);
+        gfx_fill(c, 0, static_cast<int16_t>(y + 1), c.w, kReviewKv.pitch - 1, kBg);
+        kit::kv_row(c, kReviewKv, y, key, v, color);
         return true;
     };
     StrBuf<32> t;
     t.put_u32(s_.summary_.runnable).put(" run, ").put_u32(s_.summary_.skipped).put(" skip");
     if (!kv(0, "Tests", t.view(), s_.summary_.runnable ? kText : kCaution)) return;
-
-    StrBuf<32> pk;
-    const pd::Pdo *best = nullptr;
-    if (caps.valid)
-        for (size_t n = 0; n < caps.num_pdos && n < caps.pdos.size(); ++n)
-            if (!best || caps.pdos[n].max_mw > best->max_mw) best = &caps.pdos[n];
-    if (best) {
-        put_volts_trim(pk, best->max_mv);
-        pk.put("V ");
-        put_volts_trim(pk, best->max_ma);
-        pk.put_char('A');
-        if (best->max_mw) pk.put_char(' ').put_u32(best->max_mw / 1000).put_char('W');
-    } else if (s_.summary_.max_mv) {
-        put_volts_trim(pk, static_cast<int32_t>(s_.summary_.max_mv));
-        pk.put_char('V');
-    } else {
-        pk.put("--");
-    }
-    if (!kv(1, "Peak", pk.view(), pk.view() == "--" ? kDim : kText)) return;
 
     StrBuf<48> cb;
     const auto sel = ctx_.cables.selected();
@@ -2212,19 +2202,17 @@ void ChargerTestPage::paint_review() {
         cb.put(row_.text.view());
         if (!row_.rating.empty()) cb.put_char(' ').put(row_.rating);
     }
-    if (!kv(2, "Spoof", cb.view(), kText)) return;
+    if (!kv(1, "Spoof", cb.view(), kText)) return;
 
-    if (!kv(3, "Power", self_supplied() ? "From the charger" : "K2 on USB", kText)) return;
-    // The Level row (the one row the cursor can stand on besides START; OK cycles Light -> Medium -> Deep). The PD header
-    // revision row gave it its place: the PD page and the run's card still carry the revision.
+    // The Level row (the one row the cursor can stand on besides START; OK cycles Light -> Medium -> Deep).
     {
         const bool focus = s_.selection_ == kLevelRow;
         const char *lv = ct::name(s_.options_.level);
         const uint32_t h = mix_u32(mix(mix_init(), lv), focus ? 7u : 3u) | 1u;
-        if (h != cell_sig_[4]) {
-            if (pbg && !pbg->admit(static_cast<int>(c.w) * kit::kRowH, true)) return;
-            cell_sig_[4] = h;
-            kit::kv_row_sel(c, kKv, kit::kv_row_y(kKv, 4), "Level", lv, kText, focus);
+        if (h != cell_sig_[kReviewLevelCell]) {
+            if (pbg && !pbg->admit(static_cast<int>(c.w) * kReviewKv.pitch, true)) return;
+            cell_sig_[kReviewLevelCell] = h;
+            kit::kv_row_sel(c, kReviewKv, kit::kv_row_y(kReviewKv, kReviewLevelCell), "Level", lv, kText, focus);
         }
     }
 
@@ -2235,7 +2223,7 @@ void ChargerTestPage::paint_review() {
         sub.put("closes in ").put_u32(static_cast<uint32_t>((left + 999) / 1000)).put_char('s');
         action_.draw_armed("CONFIRM", sub.view(), permille, pbg);
     } else {
-        action_.draw_idle("START", "no load on the port", pbg, s_.selection_ == kStartRow);
+        action_.draw_idle("START", "other port must be empty", pbg, s_.selection_ == kStartRow);
     }
 }
 
