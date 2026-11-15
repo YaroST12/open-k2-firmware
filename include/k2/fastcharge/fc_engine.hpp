@@ -104,6 +104,7 @@ struct Env {
     virtual void log_ufcs_frame(const ufcs::Frame&) {}
     virtual void log_ufcs_echo() {}   // the session ends: only our own frames came back (D+/D- shorted)
     virtual void log_ufcs_retry(const char* /*what*/, int /*try_no*/, std::span<const std::uint8_t> /*pending*/) {}
+    virtual void log_ufcs_exit(bool /*acked*/, std::uint32_t /*ms*/, int /*vbus_mv*/) {}   // the Exit_UFCS_Mode wait ended
     // VIVO uses the same UART calls; vivo_open() only claims the UART with D+/D- high-Z (there
     // is no D+/D- handshake for it). False when the UART could not be claimed.
     virtual bool vivo_open() { return false; }
@@ -136,8 +137,17 @@ public:
                int ufcs_ma = 0);
     // Change the target of a running trigger (QC2 level, QC3 voltage, a new UFCS Request at `ufcs_ma`).
     Fail set_target(int target_mv, bool confirmed, int ufcs_ma = 0);
-    // Return to 5 V now (reset helper) and go Idle.
+    // Leave the session and go Idle. A running UFCS session first sends Exit_UFCS_Mode and keeps the UART (D- idle high)
+    // until the source's ACK or kUfcsExitMs, which poll() serves (exiting()); only then the bus reset takes both lines to 0 V:
+    // D- low for 2 ms or more while the source is still in UFCS mode is a hardware reset, which cuts VBUS. Every other
+    // protocol, a failed session and a second stop() reset at once.
     void stop();
+    // Return to 5 V now (reset helper), no Exit_UFCS_Mode wait: the guards' stop (inline, overvoltage, no monitor).
+    void stop_now();
+    // An Exit_UFCS_Mode wait is running: the state is Idle, but the UART still holds D+/D-.
+    bool exiting() const { return phase_ == Phase::UfcsExit; }
+    // End an Exit_UFCS_Mode wait now (lines released, the reset stamped); a no-op otherwise. start() calls it.
+    void finish_exit();
     void poll();
     // Only the UFCS message exchange (ACKs, retransmissions, timers) of poll(): safe to call from inside a long blocking
     // draw, so a source's tACKReceive window does not depend on how long the main loop spends elsewhere. No-op outside UFCS.
@@ -194,6 +204,7 @@ private:
         VoocListen, VoocRest,
         UfcsOpen, UfcsPing, UfcsCaps, UfcsRequest, UfcsPower, UfcsKeep,
         VivoOpen, VivoSeq, VivoRun,
+        UfcsExit,                                                 // Exit_UFCS_Mode sent, the UART kept until its ACK
     };
     // UFCS message exchange (reverse-engineered): every message that is not an ACK / NCK waits for its ACK.
     enum class UKind : std::uint8_t { Main, Keep, Refuse, Soft };   // Main: Ping opener, Get_Output_Capabilities, Request
@@ -235,6 +246,8 @@ private:
     bool reg_write(std::uint8_t reg, std::uint8_t val);
     void begin_script();
     void abort(Fail why);
+    void release_bus();                   // UART closed, both lines to 0 V, the release stamped
+    void ufcs_exit_poll(std::uint32_t now);
     void go(Phase p, std::uint32_t wait_ms);
     void apply_target_levels();
     Fail validate(Proto p, int& target_mv, bool confirmed) const;

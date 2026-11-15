@@ -61,8 +61,28 @@ struct FakeUfcs : FakeCharger {
     void log_ufcs_drop(std::span<const std::uint8_t>, std::size_t used, uf::Why why) override { drops.push_back({why, used}); }
     void log_ufcs_frame(const uf::Frame& f) override { frames_seen.push_back({f.data ? 1 : 0, f.cmd}); }
     void log_ufcs_retry(const char* what, int, std::span<const std::uint8_t>) override { retries.push_back(what); }
+    struct ExitLog { bool acked; std::uint32_t ms; int vbus; };
+    std::vector<ExitLog> exit_logs;
+    void log_ufcs_exit(bool acked, std::uint32_t ms, int vbus) override { exit_logs.push_back({acked, ms, vbus}); }
 
     bool powered() const { return ready_at != 0 && now >= ready_at; }
+
+    // The source's UFCS mode: entered with the handshake, left when it ACKs Exit_UFCS_Mode. The data line held low (our bus
+    // reset) while it is still in UFCS mode is a hardware reset: the source cuts VBUS for more than 1 s (reference 5.3).
+    bool in_mode = false;
+    std::uint32_t left_at = 0;         // when its ACK of Exit_UFCS_Mode went out; 0 = still in UFCS mode
+    std::uint32_t dark_until = 0;
+    int hw_resets = 0;
+    bool in_ufcs_mode() const { return in_mode && (left_at == 0 || now < left_at); }
+    void reset_bus() override {
+        if (in_ufcs_mode()) { hw_resets++; dark_until = now + 1100; }
+        in_mode = false;
+        FakeCharger::reset_bus();
+    }
+    int vbus_mv() override {
+        const int v = FakeCharger::vbus_mv();
+        return v >= 0 && now < dark_until ? 360 : v;
+    }
 
     // Frames the source sends.
     void push(std::uint32_t at, const std::uint8_t* p, std::size_t n) { evs.push_back({at, {p, p + n}}); }
@@ -101,6 +121,8 @@ struct FakeUfcs : FakeCharger {
     bool ufcs_open() override {
         if (!handshake_ok) return false;
         up = true;
+        in_mode = true;
+        left_at = 0;
         rxq.insert(rxq.end(), preload.begin(), preload.end());
         return true;
     }
@@ -180,6 +202,7 @@ struct FakeUfcs : FakeCharger {
         else if (f.id == ((exp + 15) & 15)) { push_ack(f.id); return true; }   // a repeat: acknowledged again, not served again
         else { id_errors++; exp = (f.id + 1) & 15; }
         push_ack(f.id);
+        if (!f.data && f.cmd == uf::kCtlExit) left_at = now + ack_ms;   // back to DCP and 5 V with its ACK
         const std::uint32_t t = now + ack_ms + resp_ms;
         if (!f.data && f.cmd == uf::kCtlGetOutputCap) {
             getcaps++;
@@ -270,12 +293,14 @@ static void happy_path() {
     CHECK(c.requests.size() == 2 && c.requests[1].pos == 1 && c.requests[1].mv == 5000 && c.requests[1].ma == 2000);
     CHECK(e.state() == State::Active);
     CHECK(c.id_errors == 0 && c.ack_mismatch == 0 && c.soft_resets == 0);
-    // stop: Exit_UFCS_Mode (no Request), then the bus reset and the UART released
+    // stop: Exit_UFCS_Mode (no Request), then, once the source has ACKed it, the bus reset and the UART released
     e.stop();
     CHECK(c.exits == 1 && c.seen.back().cmd == uf::kCtlExit);
     CHECK(c.requests.size() == 2);
-    CHECK(c.resets >= 1 && c.closed);
     CHECK(e.state() == State::Idle);
+    c.run(e, 10);
+    CHECK(c.resets >= 1 && c.closed);
+    CHECK(c.hw_resets == 0);
 }
 
 static void no_handshake() {
@@ -803,6 +828,85 @@ static void unsupported_requests_are_refused() {
     for (std::size_t i = b2; i < c.seen.size(); i++) CHECK(!(c.seen[i].data && c.seen[i].cmd == uf::kDataRefuse));
 }
 
+// Exit_UFCS_Mode the polite way (reference 5.3: the source returns to DCP and 5 V, the sink checks within 200 ms): stop()
+// sends it and keeps the UART, D- idle high, until the source's ACK; only then the bus reset takes the lines low. D- low at
+// once, with the source still in UFCS mode, is a hardware reset (data line low >= 2 ms) and the source cuts VBUS for over a
+// second (pattern ufcs-exit-cuts-vbus, inferred).
+static void exit_waits_for_the_ack() {
+    FakeUfcs c;
+    Engine e(c);
+    CHECK(e.start(Proto::Ufcs, 9000, true) == Fail::None);
+    c.run(e, 1500);
+    CHECK(e.state() == State::Active);
+    const int pings = c.pings;
+    e.stop();
+    CHECK(e.state() == State::Idle);
+    CHECK(c.exits == 1);
+    CHECK(e.exiting() && !c.closed && c.resets == 0);   // D- still idle high
+    const std::uint32_t took = c.run_until(e, [&] { return c.closed; }, 300);
+    CHECK(c.closed && c.resets == 1 && !e.exiting());
+    CHECK(took <= c.ack_ms + 5);                        // on the ACK, not at the 200 ms cap
+    CHECK(c.hw_resets == 0);
+    int low = 99999;
+    for (int i = 0; i < 1500; i++) {
+        c.run(e, 1);
+        low = std::min(low, c.vbus_mv());
+    }
+    CHECK(low >= 4750);                                 // back to the default 5 V, never cut
+    CHECK(c.exits == 1 && c.pings == pings);            // no Exit retransmit, no keep-alive while leaving
+    CHECK(c.exit_logs.size() == 1 && c.exit_logs[0].acked && c.exit_logs[0].vbus >= 4750);
+    CHECK(e.state() == State::Idle);
+}
+
+// A source that never ACKs the Exit: the lines are released at the 200 ms cap (that reset is the hardware reset the
+// standard escalates to anyway).
+static void exit_without_ack_is_capped() {
+    FakeUfcs c;
+    Engine e(c);
+    CHECK(e.start(Proto::Ufcs, 9000, true) == Fail::None);
+    c.run_until(e, [&] { return e.state() == State::Active; }, 1500);
+    CHECK(e.state() == State::Active);
+    c.answers = false;                                  // the source goes deaf
+    e.stop();
+    c.run(e, 150);
+    CHECK(e.exiting() && !c.closed && c.resets == 0);
+    c.run(e, 60);
+    CHECK(!e.exiting() && c.closed && c.resets == 1);
+    CHECK(e.state() == State::Idle);
+    CHECK(c.exit_logs.size() == 1 && !c.exit_logs[0].acked && c.exit_logs[0].ms >= 200);
+}
+
+// start() while the exit runs ends it first (lines released, the reset stamped for the re-detection hold) and opens the new
+// session; a second stop() ends it at once.
+static void start_or_stop_during_exit() {
+    FakeUfcs c;
+    Engine e(c);
+    CHECK(e.start(Proto::Ufcs, 9000, true) == Fail::None);
+    c.run(e, 1500);
+    e.stop();
+    CHECK(e.exiting());
+    CHECK(e.start(Proto::Ufcs, 5000, false) == Fail::None);
+    CHECK(!e.exiting() && c.closed && c.resets == 1 && e.state() == State::Negotiating);
+
+    FakeUfcs d;
+    Engine f(d);
+    CHECK(f.start(Proto::Ufcs, 9000, true) == Fail::None);
+    d.run(f, 1500);
+    f.stop();
+    f.stop();
+    CHECK(!f.exiting() && d.closed && d.resets == 1 && d.exits == 1);
+}
+
+// stop_now() (the scanner's guards: inline, overvoltage, no monitor) releases the lines at once, no Exit.
+static void stop_now_skips_the_exit() {
+    FakeUfcs c;
+    Engine e(c);
+    CHECK(e.start(Proto::Ufcs, 9000, true) == Fail::None);
+    c.run(e, 1500);
+    e.stop_now();
+    CHECK(c.exits == 0 && c.closed && c.resets == 1 && !e.exiting() && e.state() == State::Idle);
+}
+
 int main() {
     refusals();
     happy_path();
@@ -832,6 +936,10 @@ int main() {
     soft_reset_in_power_wait();
     soft_reset_twice_is_bounded();
     unsupported_requests_are_refused();
+    exit_waits_for_the_ack();
+    exit_without_ack_is_capped();
+    start_or_stop_during_exit();
+    stop_now_skips_the_exit();
     std::printf("test_fc_ufcs: %d checks, %d failed\n", g_checks, g_failed);
     return g_failed ? 1 : 0;
 }

@@ -36,6 +36,7 @@ constexpr std::uint32_t kVoocWakeListenMs = 1500;  // no ident this long after a
 constexpr std::uint32_t kVoocRestMs = 3000;        // lines idle between wakes
 constexpr int kVoocTries = 3;                      // wakes before the adapter is called silent ("needs load")
 constexpr std::uint32_t kUfcsSilenceMs = 500;      // a running session that hears nothing at all for this long is lost
+constexpr std::uint32_t kUfcsExitMs = 200;         // Exit_UFCS_Mode: the sink's check window (reference 5.3), the cap on the ACK wait
 constexpr int kUfcsTries = 3;                      // asks per phase (Get_Output_Capabilities, Request) before "no response"
 // The opener's retransmit interval, the listen window before "no response" and the opener code are the
 // UFCS tuner's (k2/fastcharge/ufcs_tune.hpp; defaults 20 ms, 500 ms, Get_Output_Capabilities). The first
@@ -805,6 +806,7 @@ Fail Engine::start(Proto p, int target_mv, bool confirmed, bool allow_inline, in
     if (allow_inline && !confirmed) return Fail::NeedConfirm;   // the override drives D+/D- with a sink possibly attached: both flags
     // VOOC detection never runs inline, override or not: the wake and the listen would sit on a phone's own VOOC lines.
     if ((!allow_inline || vooc_family(p)) && env_.inline_reason() != link::Reason::None) return Fail::Inline;
+    finish_exit();   // an Exit_UFCS_Mode wait still holding the lines ends now (its reset counts for the re-detection hold below)
     const std::uint32_t now = env_.now_ms();
     proto_ = p;
     target_mv_ = target_mv;
@@ -896,20 +898,64 @@ Fail Engine::set_target(int target_mv, bool confirmed, int ufcs_ma) {
 }
 
 void Engine::stop() {
-    if (proto_ == Proto::Ufcs && uart_up_ && state_ != State::Failed) {
-        // Leave UFCS mode in the polite way (Exit_UFCS_Mode, 8.2.3.16) so the source returns to 5 V by itself, then
-        // the bus reset below releases the lines. It is not waited for (no ACK is expected from a leaving source).
-        std::array<std::uint8_t, 8> b{};
-        env_.ufcs_send({b.data(), ufcs::encode_control(b, ufcs::kCtlExit, uid_, env_.ufcs_tuner())});
-    }
+    if (phase_ == Phase::UfcsExit) return finish_exit();   // a second stop: now
+    if (proto_ != Proto::Ufcs || !uart_up_ || state_ == State::Failed) return stop_now();
+    // Leave UFCS mode the polite way (Exit_UFCS_Mode, reference 5.3): the source goes back to DCP and 5 V with its ACK. The
+    // UART keeps D- idle high until that ACK (or kUfcsExitMs); the bus reset right after the frame held D- low while the
+    // source was still in UFCS mode, which is a hardware reset (pattern ufcs-exit-cuts-vbus, inferred). The Exit is numbered
+    // past a message still in flight, so the ACK of a pending keep-alive is not taken for it.
+    const std::uint32_t now = env_.now_ms();
+    uid_ = static_cast<std::uint8_t>((uid_ + (utx_n_ > 0 ? 1 : 0)) & 0xF);
+    upend_ = UPend::None;
+    uref_ = false;
+    uwait_ = false;
+    ufcs_track(ufcs::encode_control(utx_, ufcs::kCtlExit, uid_, env_.ufcs_tuner()), UKind::Main, now);
+    state_ = State::Idle;
+    fail_ = Fail::None;
+    target_mv_ = 0;
+    go(Phase::UfcsExit, kUfcsExitMs);
+}
+
+void Engine::stop_now() {
     if (state_ != State::Failed) vivo_release();
-    if (uart_up_) { uart_up_ = false; env_.ufcs_close(); }
-    env_.reset_bus();
-    reset_ms_ = env_.now_ms(); reset_seen_ = true;
+    release_bus();
     state_ = State::Idle;
     phase_ = Phase::Off;
     fail_ = Fail::None;
     target_mv_ = 0;
+}
+
+// The UART (if it holds the lines) let go, both lines to 0 V, the release stamped for the next session's re-detection hold.
+void Engine::release_bus() {
+    if (uart_up_) { uart_up_ = false; env_.ufcs_close(); }
+    env_.reset_bus();
+    reset_ms_ = env_.now_ms(); reset_seen_ = true;
+}
+
+void Engine::finish_exit() {
+    if (phase_ != Phase::UfcsExit) return;
+    utx_n_ = 0;
+    release_bus();
+    phase_ = Phase::Off;
+}
+
+// The Exit_UFCS_Mode wait: its ACK (same number) ends it, an NCK sends the frame again (nMsgRetryCount at most), nothing
+// else is answered or sent; kUfcsExitMs without the ACK ends it all the same.
+void Engine::ufcs_exit_poll(std::uint32_t now) {
+    ufcs::Frame f;
+    while (ufcs_take(f)) {
+        env_.log_ufcs_frame(f);
+        if (f.addr != ufcs::kAddrSink || f.data || f.id != utx_id_) continue;
+        if (f.cmd == ufcs::kCtlAck) {
+            env_.log_ufcs_exit(true, now - phase_ms_, env_.vbus_mv());
+            return finish_exit();
+        }
+        if (f.cmd == ufcs::kCtlNack && uretx_ < ufcs::kMsgRetryCount) ufcs_resend(now);
+    }
+    if (now >= due_ms_) {
+        env_.log_ufcs_exit(false, now - phase_ms_, env_.vbus_mv());
+        finish_exit();
+    }
 }
 
 void Engine::abort(Fail why) {
@@ -917,9 +963,7 @@ void Engine::abort(Fail why) {
     // not speak the protocol. The rest (overvoltage above the ceiling, source lost, ...) keeps its own code.
     if (unacked_handshake() && (why == Fail::NoResponse || why == Fail::NoHandshake)) why = Fail::Unsupported;
     vivo_release();
-    if (uart_up_) { uart_up_ = false; env_.ufcs_close(); }
-    env_.reset_bus();
-    reset_ms_ = env_.now_ms(); reset_seen_ = true;
+    release_bus();
     state_ = State::Failed;
     phase_ = Phase::Off;
     fail_ = why;
@@ -1014,7 +1058,8 @@ void Engine::service_hs() {
 void Engine::poll() {
     if (busy_) return;
     busy_ = true;
-    poll_step();
+    if (phase_ == Phase::UfcsExit) ufcs_exit_poll(env_.now_ms());   // Idle already: the abort guards of poll_step() do not apply
+    else poll_step();
     busy_ = false;
 }
 

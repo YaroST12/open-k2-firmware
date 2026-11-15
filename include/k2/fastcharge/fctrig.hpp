@@ -31,6 +31,9 @@ void stop();       // BACK / leaving the page / remote reset: discharge to 5 V, 
 // back to 5 V: start(), scan_start() and ufcs_probe_start() refuse with Busy, stop() ends it as well, poll() and
 // service_ufcs() run it. The UI's and the remote's busy checks read it here.
 bool svooc_running();
+// A UFCS session is leaving (Exit_UFCS_Mode sent, its ACK awaited, 200 ms at most): the state is Idle already, but the UART
+// still holds D+/D-. Line users that wait for dpdm::reset_busy() wait for this too.
+bool ufcs_exiting();
 
 // Call every main-loop iteration: runs the engine and the dpdm reset hold; logs state changes
 // as "[FC] ...".

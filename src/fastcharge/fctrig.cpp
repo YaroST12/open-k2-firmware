@@ -319,6 +319,9 @@ struct HwEnv final : fc::Env {
             K2LOG("[UFCS] refused %s cmd=%d id=%d: %s (%d)\n", r.type == 1 ? "data" : r.type == 0 ? "ctl" : "vendor", r.cmd, r.id,
                   ufcs::refuse_name(r.reason), r.reason);
     }
+    void log_ufcs_exit(bool acked, std::uint32_t ms, int vbus_mv) override {
+        K2LOG("[UFCS] exit %s after %u ms vbus=%d\n", acked ? "acked" : "unanswered", u(ms), vbus_mv);
+    }
     void log_ufcs_echo() override { K2LOG("[UFCS] echo: own frames only, D+/D- shorted (no UFCS)\n"); }
     void log_ufcs_retry(const char* what, int try_no, std::span<const std::uint8_t> pending) override {
         char h[2 * ufcs::kHexChunk + 1];
@@ -389,9 +392,10 @@ LabXfer lab_xfer(std::span<const std::uint8_t> tx, std::span<std::uint8_t> rx, i
 Fail start(Proto p, int target_mv, bool confirmed, bool allow_inline, int scp_ma, int ufcs_ma) {
     if (g_scanner.running() || dpsniff::armed() || g_prober.running() || svooc_trig::running())
         return Fail::Busy;   // the edge sniffer is passive and keeps the lines; the SuperVOOC trigger drives D-
-    const bool resetting = dpdm::reset_busy();
     const Fail f = g_engine.start(p, target_mv, confirmed, allow_inline, scp_ma, ufcs_ma);
-    if (resetting && f == Fail::None) dpdm::cancel_reset();   // the session drives the lines now
+    // The session drives the lines now: cancel a reset still holding them (also the one start() ran itself to end an
+    // Exit_UFCS_Mode wait).
+    if (f == Fail::None && dpdm::reset_busy()) dpdm::cancel_reset();
     K2LOG("[FC] start %s %dmV confirmed=%d inline_ok=%d -> %s (link: %s)\n", fc::name(p), target_mv,
                  confirmed ? 1 : 0, allow_inline ? 1 : 0, fc::name(f), link::name(link::inline_now()));
     g_refused = f;
@@ -438,7 +442,7 @@ bool ufcs_tuner_reset() {
 ufcs::ProbeStart ufcs_probe_start() {
     if (g_scanner.running() || dpsniff::armed() || g_engine.state() != State::Idle || svooc_trig::running())
         return ufcs::ProbeStart::Busy;
-    if (dpdm::reset_busy()) return ufcs::ProbeStart::Resetting;   // let the source see the lines released first
+    if (dpdm::reset_busy() || g_engine.exiting()) return ufcs::ProbeStart::Resetting;   // let the source see the lines released first
     g_prober.set_tuner(g_tuner);
     const ufcs::ProbeStart s = g_prober.start();
     g_probe_was_running = s == ufcs::ProbeStart::Ok;
@@ -453,6 +457,7 @@ std::span<const std::uint8_t> ufcs_probe_blob() { return g_prober.blob(); }
 const ufcs::ProbeResult& ufcs_probe_result() { return g_prober.result(); }
 
 bool svooc_running() { return svooc_trig::running(); }
+bool ufcs_exiting() { return g_engine.exiting(); }
 
 void stop() {
     svooc_trig::stop();   // first: stop answering and let D- go

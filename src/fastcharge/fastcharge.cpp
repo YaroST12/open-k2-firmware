@@ -39,7 +39,7 @@ void dcp_reset() {
 
 bool engine_idle() {
     return fctrig::status().state == fctrig::State::Idle && !fctrig::scan_running() && !fctrig::ufcs_probe_running() &&
-           !dpdm::reset_busy() && !dpsniff::armed() && !fctrig::svooc_running();
+           !dpdm::reset_busy() && !fctrig::ufcs_exiting() && !dpsniff::armed() && !fctrig::svooc_running();
 }
 
 void dcp_abort(bool have, bool idle, bool ours) {

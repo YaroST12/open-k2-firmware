@@ -130,7 +130,7 @@ bool lines_taken() {
     const dpdm::Pair d = dpdm::drive();
     const bool monitor_sniff = dpsniff::monitoring() && d.dp == dpdm::Drive::Sniff && d.dm == dpdm::Drive::Sniff;
     return fctrig::status().state != fc::State::Idle || fctrig::scan_running() || fctrig::ufcs_probe_running() ||
-           dpdm::reset_busy() || svooc::lines_off_idle(dpdm::mismatch(d), monitor_sniff) || dpsniff::armed() ||
+           dpdm::reset_busy() || fctrig::ufcs_exiting() || svooc::lines_off_idle(dpdm::mismatch(d), monitor_sniff) || dpsniff::armed() ||
            dpsniff::streaming() || dpsniff::hooked();
 }
 

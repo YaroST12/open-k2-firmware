@@ -89,7 +89,7 @@ void Scanner::poll() {
     else if (env_.vbus_mv() > env_.ceiling_mv()) guard = Fail::Overvoltage;
     else if (eng_.state() == State::Failed && (eng_.fail() == Fail::Overvoltage || eng_.fail() == Fail::NoMonitor)) guard = eng_.fail();
     if (guard != Fail::None) {
-        eng_.stop();
+        eng_.stop_now();   // a guard releases the lines at once, no Exit_UFCS_Mode wait
         phase_ = Phase::Off;
         fail_ = guard;
         return;
