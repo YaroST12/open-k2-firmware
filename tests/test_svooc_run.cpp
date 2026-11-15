@@ -3,6 +3,7 @@
 // The guarded SuperVOOC trigger's guards and session (k2/fastcharge/svooc_run.hpp): every refusal at the start, every
 // abort while it runs (with the 12.0 V and 50 mA boundaries), the wake / listen / rest steps, the exit check that VBUS
 // came back to 5 V, and the report.
+#include <cstring>
 #include <string_view>
 #include <utility>
 
@@ -581,7 +582,16 @@ void test_poll_gap() {
 
 }  // namespace
 
+// The exit line says what the watch saw: a dark output is no "back at 5 V" (hardware 2026-11-15 logged it at 2089 mV).
+static void test_exit_word() {
+    svooc::Report r;
+    r.exit_ok = true; r.vbus_exit_mv = 5050; CHECK(std::strcmp(svooc::exit_word(r), "back at 5 V") == 0);
+    r.vbus_exit_mv = 2089;                   CHECK(std::strcmp(svooc::exit_word(r), "VBUS gone") == 0);
+    r.exit_ok = false; r.vbus_exit_mv = 9000; CHECK(std::strcmp(svooc::exit_word(r), "STILL HIGH") == 0);
+}
+
 int main() {
+    test_exit_word();
     test_start_refusals();
     test_wake_listen_rest_and_no_adapter();
     test_answer_until_the_cap();

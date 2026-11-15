@@ -219,6 +219,13 @@ constexpr const char* name(Abort a) {
     return "?";
 }
 
+// The exit watch's verdict in words for the log: under kFiveMinMv the adapter switched its output off (hardware 2026-11-15: the
+// OnePlus 120 W at 2.09 V once its sink's Rd went away), which is not "back at 5 V".
+constexpr const char* exit_word(const Report& r) {
+    if (!r.exit_ok) return "STILL HIGH";
+    return r.vbus_exit_mv < kFiveMinMv ? "VBUS gone" : "back at 5 V";
+}
+
 constexpr const char* name(Contract c) {
     switch (c) {
     case Contract::None: return "none";

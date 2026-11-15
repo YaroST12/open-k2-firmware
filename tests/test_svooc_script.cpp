@@ -477,7 +477,23 @@ void test_profile_clamp() {
 
 }  // namespace
 
+// The run's first and last 0x86 answer, as the start log prints them: a Probe run must not read as the Fixed default 005/005
+// (hardware 2026-11-15: "i86=005/005 profile=probe" was taken for the ask).
+static void test_ask_words_per_profile() {
+    svooc::Params p;
+    CHECK_EQ(int(svooc::ask_word(p, 0)), int(svooc::kI86Default));
+    p.i86_first = 0x00A; p.i86_esc = 0x023;
+    CHECK_EQ(int(svooc::ask_word(p, 0)), 0x00A); CHECK_EQ(int(svooc::ask_word(p, svooc::ask_count(p) - 1)), 0x023);
+    p.profile = svooc::Profile::Probe;
+    CHECK_EQ(int(svooc::ask_word(p, 0)), 0x00F); CHECK_EQ(int(svooc::ask_word(p, svooc::ask_count(p) - 1)), 0x06D);
+    CHECK_EQ(int(svooc::ask_word(p, 9)), 0x06D);
+    p.profile = svooc::Profile::Phone;
+    CHECK_EQ(int(svooc::ask_word(p, 0)), 0x06D); CHECK_EQ(int(svooc::ask_word(p, 1)), 0x00F);
+    CHECK_EQ(int(svooc::ask_word(p, svooc::ask_count(p) - 1)), 0x023);
+}
+
 int main() {
+    test_ask_words_per_profile();
     test_phone_ramp_words();
     test_phone_82_sequence_and_escapes();
     test_phone_session_runs_long();

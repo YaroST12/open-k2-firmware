@@ -135,6 +135,19 @@ struct Params {
     }
 };
 
+// The 0x86 answers of a run: Fixed answers i86_first, then i86_esc after an escape. The Phone and Probe ladders ask k = 0 at
+// the ramp end and k = n after the n-th escape: Phone 06D, 00F, then i86_esc (the phone's own second ask); Probe 00F, 028,
+// 03F, 06D (every level the phone asked, upward).
+constexpr std::uint16_t ask_word(const Params& p, int k) {
+    if (p.profile == Profile::Probe) {
+        constexpr std::uint16_t kProbe[] = {0x00F, 0x028, 0x03F, 0x06D};
+        return kProbe[k < 4 ? k : 3];
+    }
+    if (p.profile == Profile::Phone) return k == 0 ? kPhoneFirstAsk : k == 1 ? kPhoneEscAsk : p.i86_esc;
+    return k == 0 ? p.i86_first : p.i86_esc;
+}
+constexpr int ask_count(const Params& p) { return p.profile == Profile::Probe ? 4 : p.profile == Profile::Phone ? 3 : 2; }
+
 // The telemetry fit, in counts: round((vbus_mv - 6918) / 20.35), negative below 6918 mV. A real phone's 0x82 word at 3.6 A.
 constexpr int vbus_count(std::int32_t vbus_mv) {
     const std::int32_t x = (vbus_mv - 6918) * 1000;
@@ -294,16 +307,8 @@ private:
     }
 
     bool ladder() const { return p_.profile != Profile::Fixed; }
-    // The ladder's asks: k = 0 at the ramp end, k = n after the n-th escape. Phone: 06D, 00F, then i86_esc (the phone's
-    // own second ask); Probe: 00F, 028, 03F, 06D (every level the phone asked, upward).
-    std::uint16_t ladder_word(int k) const {
-        if (p_.profile == Profile::Probe) {
-            constexpr std::uint16_t kProbe[] = {0x00F, 0x028, 0x03F, 0x06D};
-            return kProbe[k < 4 ? k : 3];
-        }
-        return k == 0 ? kPhoneFirstAsk : k == 1 ? kPhoneEscAsk : p_.i86_esc;
-    }
-    int ladder_len() const { return p_.profile == Profile::Probe ? 4 : 3; }
+    std::uint16_t ladder_word(int k) const { return ask_word(p_, k); }   // the ladder's asks (ask_word)
+    int ladder_len() const { return ask_count(p_); }
     void record_ask(std::uint32_t t_ms, std::uint16_t w) {
         const std::uint16_t t = t_ms > 0xFFFF ? 0xFFFF : std::uint16_t(t_ms);
         const std::size_t i = n_asks_ < kAsksMax ? n_asks_++ : kAsksMax - 1;   // full: the last slot follows the latest

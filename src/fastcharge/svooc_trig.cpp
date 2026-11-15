@@ -226,7 +226,7 @@ void release() {
     dpdm::idle();          // both lines to the passive idle
     const svooc::Report& r = run_obj().report();
     const svooc::Log& lg = wire().log();
-    K2LOG("[SVOOC] release: %s t=%ums cmds=%u replies=%u missed=%u cut=%u accepted=%u vmax=%dmV imax=%dmA contract=%s>%s inline=%s esc=%s\n",
+    K2LOG("[SVOOC] release: %s t=%ums cmds=%u replies=%u missed=%u cut=%u accepted=%u vmax_held=%dmV imax=%dmA contract=%s>%s inline=%s esc=%s\n",
           svooc::name(r.abort), unsigned(r.elapsed_ms), unsigned(lg.commands), unsigned(lg.replies), unsigned(lg.missed),
           unsigned(lg.cut), r.accepted ? 1u : 0u, int(r.vbus_max_mv), int(r.ibus_max_ma), svooc::name(r.contract_start),
           svooc::name(r.contract_end), pd::inline_cause_name(r.inline_cause), svooc::name(wire().responder().escape()));
@@ -309,7 +309,9 @@ svooc::Refusal start(bool confirmed, bool ports_busy, std::uint32_t cap_s, bool 
     K2LOG("[SVOOC] start (no load) cap=%ums vbus=%dmV ibus=%dmA contract=%s inline=%s%s i86=%03X/%03X r82=%03X vtarget=%umV esc=%us profile=%s\n",
           unsigned(run_obj().report().cap_ms), int(f.vbus_mv), int(f.ibus_ma), svooc::name(f.contract),
           pd::inline_cause_name(f.inline_cause), usb_a ? " far-sink / inline check waived (USB-A)" : "",
-          unsigned(ep.i86_first), unsigned(ep.i86_esc), unsigned(ep.r82), unsigned(ep.vtarget_mv), unsigned(ep.esc_at_s),
+          // i86 = the run's first and last 0x86 answer (svooc::ask_word): Probe prints 00F/06D, not the Fixed default 005/005
+          unsigned(svooc::ask_word(ep, 0)), unsigned(svooc::ask_word(ep, svooc::ask_count(ep) - 1)), unsigned(ep.r82),
+          unsigned(ep.vtarget_mv), unsigned(ep.esc_at_s),
           svooc::name(ep.profile));
     return r;
 }
@@ -365,7 +367,9 @@ void poll() {
     if (run_obj().stage() == Stage::Done && g_exit_pending) {
         g_exit_pending = false;
         const svooc::Report& r = run_obj().report();
-        K2LOG("[SVOOC] exit vbus=%dmV %s\n", int(r.vbus_exit_mv), r.exit_ok ? "back at 5 V" : "STILL HIGH");
+        // vmax: the run's one highest VBUS (Report::vbus_max_mv, the exit watch included), the number the charger test records;
+        // the release line's vmax_held is the same field read when the lines were let go.
+        K2LOG("[SVOOC] exit vbus=%dmV %s vmax=%dmV\n", int(r.vbus_exit_mv), svooc::exit_word(r), int(r.vbus_max_mv));
     }
 }
 

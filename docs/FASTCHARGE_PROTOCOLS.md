@@ -384,7 +384,10 @@ Three pure parts (host-tested) and one glue file:
   (`pd-reread --pin 0`). Wake / listen as the detection (burst, 1.5 s listen, 3 s
   rest, 3 tries), "no adapter answer" after that.
 - Exit, always: stop answering, release D-, both lines to the passive idle; then watch VBUS for 5 s. Back at or under
-  5.5 V is reported as such, still higher as "STILL ABOVE 5.5 V" with the reading. Report: highest VBUS, highest |I|,
+  5.5 V is reported as such (the log says "VBUS gone" under 4.5 V: the adapter switched its output off), still higher as
+  "STILL ABOVE 5.5 V" with the reading. The exit line logs the run's highest VBUS (`vmax`, the exit watch included); the
+  release line's `vmax_held` is the same field read when the lines were let go. While the trigger runs, the Link counts
+  its VBUS as the K2's own (`own_contract`), so the adapter's ramp on a PD-silent link is no "sink behind the K2". Report: highest VBUS, highest |I|,
   commands / replies / missed / cut, the command > reply pairs (the first 40 in the report, all through `svooc-log`), the abort or refusal reason. Log lines
   `[SVOOC] start / wake / release / exit`.
 - Glue (`src/fastcharge/svooc_trig.cpp`). The dpsniff ISR (EXTI7 D+ / EXTI2 D-) calls the wire through a hook; the
