@@ -5,7 +5,9 @@
 #include <algorithm>
 
 #include "k2/core/hot.h"
+#include "k2/pd/pd_ext.hpp"
 #include "k2/pd/pd_link.hpp"
+#include "k2/pd/pd_reply.hpp"
 
 namespace k2::pd {
 
@@ -262,10 +264,9 @@ K2_HOT bool Sink::take_tx(TxMsg& out) {
         last_tx_ = out;
         return true;
     }
-    if (swap_reply_ && !(tx_pending_ && tx_.hard_reset)) {   // a role-swap answer: also tSenderResponse
-        out = TxMsg{};
-        out.header = make_header(swap_reply_, 0, rev_);
-        swap_reply_ = 0;
+    if (ans_pending_ && !(tx_pending_ && tx_.hard_reset)) {   // the answer to a request: also tSenderResponse
+        out = ans_;
+        ans_pending_ = false;
         last_tx_ = out;
         return true;
     }
@@ -306,7 +307,7 @@ K2_HOT void Sink::do_hard_reset(SinkResult r, SinkState to, bool forced) {
     tx_pending_ = false;  // nothing else matters after a hard reset
     sink_cap_pending_ = false;
     sink_cap_ext_pending_ = false;
-    swap_reply_ = 0;
+    ans_pending_ = false;
     get_cap_sent_ = false;
     refresh_pending_ = false;
     sr_wait_ = false;
@@ -347,7 +348,7 @@ K2_HOT void Sink::on_hard_reset_rx(std::uint32_t) {
     tx_pending_ = false;
     sink_cap_pending_ = false;
     sink_cap_ext_pending_ = false;
-    swap_reply_ = 0;
+    ans_pending_ = false;
     st_.epr_mode = false;
     contract_ = false;
     st_.pos = 0;
@@ -382,7 +383,7 @@ void Sink::detach() {
     tx_pending_ = false;
     sink_cap_pending_ = false;
     sink_cap_ext_pending_ = false;
-    swap_reply_ = 0;
+    ans_pending_ = false;
     st_.epr_mode = false;
     contract_ = false;
     st_.pos = 0;
@@ -407,7 +408,7 @@ void Sink::detach() {
 K2_HOT void Sink::soft_reset(std::uint32_t now) {
     sink_cap_pending_ = false;
     sink_cap_ext_pending_ = false;
-    swap_reply_ = 0;
+    ans_pending_ = false;
     get_cap_sent_ = false;
     refresh_pending_ = false;
     TxMsg m;
@@ -773,14 +774,15 @@ K2_HOT void Sink::after_ps_rdy(std::uint32_t now) {
     settle_release(now);   // a release that waited behind this Request goes out now (not for the abort's own PS_RDY)
 }
 
-K2_HOT void Sink::request_chunk(std::uint16_t header, std::span<const std::uint8_t> payload) {
-    (void)header;
-    if (payload.size() < 2) return;
+// The Chunk Request for the next chunk of the chunked extended message `header` / `payload` (its own type); false when that
+// was the last chunk, a chunk request itself, or not chunked.
+static bool next_chunk_request(std::uint16_t header, std::span<const std::uint8_t> payload, std::uint8_t rev, TxMsg& m) {
+    if (payload.size() < 2) return false;
     const ExtHeader eh = decode_ext_header(std::uint16_t(payload[0] | (payload[1] << 8)));
-    if (eh.request || !eh.chunked) return;
-    if ((unsigned(eh.chunk_number) + 1) * kChunkBytes >= eh.data_size) return;  // that was the last chunk
-    TxMsg m;
-    m.header = make_header(kExtEprSourceCaps, 1, rev_, true);
+    if (eh.request || !eh.chunked) return false;
+    if ((unsigned(eh.chunk_number) + 1) * kChunkBytes >= eh.data_size) return false;  // that was the last chunk
+    m = TxMsg{};
+    m.header = make_header(std::uint8_t(header & 0x1F), 1, rev, true);
     // 4 B = 2 B extended header padded to the next 4-byte boundary, as required for a
     // chunked message with Data Size < 26 (USB PD R3.2 §6.5.1.1). The unpadded 2 B form was
     // tried and the Baseus 140 W stopped answering chunk requests, so keep the padded form.
@@ -788,7 +790,123 @@ K2_HOT void Sink::request_chunk(std::uint16_t header, std::span<const std::uint8
     const std::uint16_t req = std::uint16_t((1u << 15) | (1u << 10) | ((eh.chunk_number + 1u) << 11));
     m.data[0] = std::uint8_t(req);
     m.data[1] = std::uint8_t(req >> 8);
+    return true;
+}
+
+// A re-announced list inside a negotiation or a contract (Source_Capabilities in SPR mode, the last chunk of
+// EPR_Source_Capabilities in EPR mode) starts the source's SenderResponseTimer: answer it with a Request now.
+K2_HOT void Sink::answer_reannounce(std::uint32_t now) {
+    // Also while Requesting - the in-flight Request was for the old caps; without a fresh one the source's tSenderResponse
+    // expires and it Hard Resets (CUKTECH C1 right after the Xiaomi auth unlock re-announces, hardware 2026-11-04, SPR mode).
+    // In EPR mode the same holds for EPR_Source_Capabilities (USB PD R3.2: the sink answers them with an EPR_Request).
+    if (release_pending_ && caps_ && (st_.state == SinkState::Requesting || st_.state == SinkState::Transition)) {
+        // The runner already wants 5 V and its release waits behind a Request for the old list: answer the new list
+        // with the release itself (PDO 1), one Request, instead of PDO N first and the release after it.
+        begin_abort(SinkResult::Ok, now);
+    } else if (st_.state == SinkState::Aborting && caps_) {
+        restart_abort(now);   // the 5 V Request in flight was for the old list: the source wants the answer to the new one
+    } else if (st_.held && (st_.state == SinkState::Ready || st_.state == SinkState::Requesting ||
+                            st_.state == SinkState::Transition) && caps_) {
+        // A re-announce while held: answer with a Request for the HELD LEVEL looked up in the new list by
+        // voltage (fixed) or range (programmable) - never by position (review 2026-11-09: a list that moved
+        // the held PDO must not change what we hold). Found -> its new slot and current word, the hold stands.
+        // Not found -> the hold is lost: ask PDO 1 (5 V) and report it (begin_abort: held off, Aborted).
+        // In Transition the source restarts negotiation: the fresh list is answered the same way, with a
+        // Request inside tSenderResponse (with none the source Hard Resets).
+        // Also the answer to our own Refresh (request_source_caps): a Source_Capabilities, asked for or not,
+        // starts the source's tSenderResponse. An unchanged list plans the same RDO: Accept + PS_RDY, no change.
+        Choice hc = lookup_held(*caps_, plan_.mv, plan_.ma, plan_.type);
+        if (hc.pos) {
+            const Plan p = plan_for(hc, st_.epr_mode);   // refused under the 5 V lock too: the hold is lost, PDO 1
+            if (p.err != Err::Ok) { begin_abort(SinkResult::Aborted, now); return; }
+            plan_ = p;
+            st_.state = SinkState::Requesting;
+            send_request(now);
+        } else {
+            begin_abort(SinkResult::Aborted, now);   // the Request for PDO 1, and the hold reported lost
+        }
+    } else if (!st_.held && st_.state == SinkState::Ready && contract_ && caps_) {
+        // Re-announce with a contract but no trigger (the 5 V contract after a release, caps repeated after
+        // our CC rescan): stay silent and a source such as the C135 sends a Hard Reset 28 ms later. Ask for
+        // the contract's own level looked up by voltage, else PDO 1.
+        Choice hc = lookup_held(*caps_, plan_.mv, plan_.ma, plan_.type);
+        if (!hc.pos) hc = {1, 0, kReleaseMaxMa};
+        Plan p = plan_for(hc, st_.epr_mode);
+        if (p.err != Err::Ok && hv_lock_) p = plan_for({1, 0, kReleaseMaxMa}, st_.epr_mode);   // the 5 V lock: PDO 1
+        if (p.err != Err::Ok) return;
+        plan_ = p;
+        st_.state = SinkState::Requesting;
+        send_request(now);
+    }
+}
+
+K2_HOT bool Sink::request_chunk(std::uint16_t header, std::span<const std::uint8_t> payload) {
+    TxMsg m;
+    if (!next_chunk_request(header, payload, rev_, m)) return false;
     queue(m);
+    return true;
+}
+
+// An extended message with no handler above: EPR_Get_Sink_Cap gets the sink's EPR_Sink_Capabilities, a request the K2 does
+// not support gets Not_Supported once its last chunk is in (the rest is asked for first: USB PD R3.2 6.12.2 chunking), a chunk
+// request aimed at us is ignored (every extended message of ours is one chunk), replies get nothing (pd_reply.hpp).
+void Sink::on_unhandled_ext(std::uint16_t header, std::span<const std::uint8_t> payload) {
+    if (!answers_requests() || payload.size() < 2) return;
+    update_rev();
+    const ExtHeader eh = decode_ext_header(std::uint16_t(payload[0] | (payload[1] << 8)));
+    if (eh.request) return;
+    const std::uint8_t type = header & 0x1F;
+    const std::uint8_t ecdb = payload.size() > 2 ? payload[2] : 0;
+    if (type == kExtControl && ecdb == kEprGetSinkCap && eh.chunk_number == 0) { answer_epr_sink_caps(); return; }
+    const std::uint8_t refusal = refusal_for(header, ecdb, rev_);
+    if (refusal == 0) return;
+    TxMsg m;
+    if (next_chunk_request(header, payload, rev_, m)) { answer(m); return; }   // refused after its last chunk
+    answer_ctl(refusal);
+}
+
+void Sink::answer_ctl(std::uint8_t type) {
+    if (type == 0) return;
+    TxMsg m;
+    m.header = make_header(type, 0, rev_);
+    answer(m);
+}
+
+void Sink::answer_vdm(std::uint32_t word) {
+    TxMsg m;
+    m.header = make_header(kMsgVendorDefined, 1, rev_);
+    m.len = 4;
+    for (int b = 0; b < 4; b++) m.data[b] = std::uint8_t(word >> (8 * b));
+    answer(m);
+}
+
+// Get_Revision (PD 3.1 and later): the Revision data message, one RMDO. The K2 speaks USB PD Revision 3.2, Version 1.0
+// (bits 31..28 revision major, 27..24 minor, 23..20 version major, 19..16 minor).
+void Sink::answer_revision() {
+    TxMsg m;
+    m.header = make_header(kDataRevision, 1, rev_);
+    m.len = 4;
+    const std::uint32_t rmdo = kSinkRmdo;
+    for (int b = 0; b < 4; b++) m.data[b] = std::uint8_t(rmdo >> (8 * b));
+    answer(m);
+}
+
+// EPR_Get_Sink_Cap: EPR_Sink_Capabilities, one chunk (extended header + the sink's PDOs, the same words Get_Sink_Cap gets,
+// at most 6 so the message stays one chunk).
+void Sink::answer_epr_sink_caps() {
+    const std::uint32_t* words = override_pdos_ != nullptr ? override_pdos_ : kSinkCapPdos;
+    std::uint8_t nw = override_pdos_ != nullptr ? override_n_ : 2;
+    if (nw > 6) nw = 6;
+    TxMsg m;
+    const std::uint16_t eh = std::uint16_t((1u << 15) | (4u * nw));   // chunked, chunk 0, data size
+    m.data[0] = std::uint8_t(eh);
+    m.data[1] = std::uint8_t(eh >> 8);
+    for (int w = 0; w < nw; w++)
+        for (int i = 0; i < 4; i++) m.data[2 + 4 * w + i] = std::uint8_t(words[w] >> (8 * i));
+    const std::uint8_t objs = std::uint8_t((2 + 4 * nw + 3) / 4);
+    m.header = make_header(kExtEprSinkCaps, objs, rev_, true);
+    m.len = std::uint8_t(4 * objs);
+    answer(m);
 }
 
 K2_HOT void Sink::on_message(Sop sop, std::uint16_t header, std::span<const std::uint8_t> payload, std::uint32_t now) {
@@ -817,7 +935,7 @@ K2_HOT void Sink::on_message(Sop sop, std::uint16_t header, std::span<const std:
             }
             return;
         }
-        if (type != kExtEprSourceCaps) return;
+        if (type != kExtEprSourceCaps) { on_unhandled_ext(header, payload); return; }
         if (st_.epr_info == EprInfo::Pending && !st_.epr_mode) {
             // The answer to our SPR-mode EPR_Get_Source_Cap: informational (USB PD R3.2 6.5.17.1), never answered with a
             // Request. Fetch the remaining chunks; the engine decoded them into the bound info list.
@@ -826,9 +944,14 @@ K2_HOT void Sink::on_message(Sop sop, std::uint16_t header, std::span<const std:
             return;
         }
         epr_caps_seen_ = true;
-        request_chunk(header, payload);
+        if (request_chunk(header, payload)) return;   // more chunks to come
         if (st_.state == SinkState::EprWaitCaps && !tx_pending_ && caps_ && caps_->epr && !caps_->epr_partial) {
             proceed_after_epr_caps(now);
+        } else if (st_.epr_mode && st_.state != SinkState::EprWaitCaps && caps_ && caps_->epr && !caps_->epr_partial) {
+            // The EPR re-announce (the source re-sends its list in EPR mode, e.g. after a keep-alive): the same answer as the SPR
+            // re-announce, an EPR_Request now. Nothing answered it before: the source's timer ran on until something else of
+            // ours went out (streamA6 2026-11-09: the runner's release, 14.8 ms after the last chunk).
+            answer_reannounce(now);
         }
         return;
     }
@@ -851,49 +974,7 @@ K2_HOT void Sink::on_message(Sop sop, std::uint16_t header, std::span<const std:
                 resume_ = true;
                 return;
             }
-            // SPR-mode re-announce: answer it. Also while Requesting - the in-flight Request was for the old
-            // caps; without a fresh one the source's tSenderResponse expires and it Hard Resets
-            // (CUKTECH C1 right after the Xiaomi auth unlock re-announces, hardware 2026-11-04; that source
-            // has no EPR bit and was never in EPR mode, so it does not argue for answering in EPR mode).
-            if (release_pending_ && caps_ && (st_.state == SinkState::Requesting || st_.state == SinkState::Transition)) {
-                // The runner already wants 5 V and its release waits behind a Request for the old list: answer the new list
-                // with the release itself (PDO 1), one Request, instead of PDO N first and the release after it.
-                begin_abort(SinkResult::Ok, now);
-            } else if (st_.state == SinkState::Aborting && caps_) {
-                restart_abort(now);   // the 5 V Request in flight was for the old list: the source wants the answer to the new one
-            } else if (st_.held && (st_.state == SinkState::Ready || st_.state == SinkState::Requesting ||
-                                    st_.state == SinkState::Transition) && caps_) {
-                // A re-announce while held: answer with a Request for the HELD LEVEL looked up in the new list by
-                // voltage (fixed) or range (programmable) - never by position (review 2026-11-09: a list that moved
-                // the held PDO must not change what we hold). Found -> its new slot and current word, the hold stands.
-                // Not found -> the hold is lost: ask PDO 1 (5 V) and report it (begin_abort: held off, Aborted).
-                // In Transition the source restarts negotiation: the fresh list is answered the same way, with a
-                // Request inside tSenderResponse (with none the source Hard Resets).
-                // Also the answer to our own Refresh (request_source_caps): a Source_Capabilities, asked for or not,
-                // starts the source's tSenderResponse. An unchanged list plans the same RDO: Accept + PS_RDY, no change.
-                Choice hc = lookup_held(*caps_, plan_.mv, plan_.ma, plan_.type);
-                if (hc.pos) {
-                    const Plan p = plan_for(hc, st_.epr_mode);   // refused under the 5 V lock too: the hold is lost, PDO 1
-                    if (p.err != Err::Ok) { begin_abort(SinkResult::Aborted, now); return; }
-                    plan_ = p;
-                    st_.state = SinkState::Requesting;
-                    send_request(now);
-                } else {
-                    begin_abort(SinkResult::Aborted, now);   // the Request for PDO 1, and the hold reported lost
-                }
-            } else if (!st_.held && st_.state == SinkState::Ready && contract_ && caps_) {
-                // Re-announce with a contract but no trigger (the 5 V contract after a release, caps repeated after
-                // our CC rescan): stay silent and a source such as the C135 sends a Hard Reset 28 ms later. Ask for
-                // the contract's own level looked up by voltage, else PDO 1.
-                Choice hc = lookup_held(*caps_, plan_.mv, plan_.ma, plan_.type);
-                if (!hc.pos) hc = {1, 0, kReleaseMaxMa};
-                Plan p = plan_for(hc, st_.epr_mode);
-                if (p.err != Err::Ok && hv_lock_) p = plan_for({1, 0, kReleaseMaxMa}, st_.epr_mode);   // the 5 V lock: PDO 1
-                if (p.err != Err::Ok) return;
-                plan_ = p;
-                st_.state = SinkState::Requesting;
-                send_request(now);
-            }
+            answer_reannounce(now);
         } else if (type == kDataEprMode && payload.size() >= 4) {
             const std::uint8_t action = payload[3];
             if (action == kEprExit) { st_.epr_mode = false; return; }
@@ -911,6 +992,9 @@ K2_HOT void Sink::on_message(Sop sop, std::uint16_t header, std::span<const std:
                 st_.epr_fail = payload[2];
                 fail(SinkResult::EprFailed, SinkState::Idle);
             }
+        } else if (answers_requests()) {   // Get_Country_Info, Enter_USB, a reserved type: refused; the rest needs no answer
+            update_rev();
+            answer_ctl(refusal_for(header, 0, rev_));
         }
         return;
     }
@@ -998,14 +1082,14 @@ K2_HOT void Sink::on_message(Sop sop, std::uint16_t header, std::span<const std:
             std::uint8_t& n = swaps_rx_[std::size_t(k)];
             if (n < 255) n++;
             update_rev();
-            swap_reply_ = swap_reply(k, rev_);
+            answer_ctl(swap_reply(k, rev_));
             break;
         }
         case kCtlSoftReset: {
             bump(st_.soft_resets_rx);
             sink_cap_pending_ = false;
             sink_cap_ext_pending_ = false;
-            swap_reply_ = 0;
+            ans_pending_ = false;
             get_cap_sent_ = false;
             refresh_pending_ = false;
             sr_wait_ = false;
@@ -1025,7 +1109,13 @@ K2_HOT void Sink::on_message(Sop sop, std::uint16_t header, std::span<const std:
             fail(SinkResult::SoftReset, SinkState::Idle);
             break;
         }
-        default: break;
+        case kCtlGetRevision:   // PD 3.1 and later; a PD 2.0 port does not define the type and ignores it
+            update_rev();
+            if (answers_requests() && rev_ >= 2) answer_revision();
+            break;
+        default:   // every other control message: refused when it is a request the K2 does not support (pd_reply.hpp)
+            if (answers_requests()) { update_rev(); answer_ctl(refusal_for(header, 0, rev_)); }
+            break;
     }
 }
 
@@ -1325,12 +1415,22 @@ K2_HOT void Sink::on_vdm(std::uint16_t header, std::span<const std::uint8_t> pay
         return;
     }
 
-    // Only Xiaomi VDMs from here on; an unstructured 0x2717 REQ from the source is itself the
-    // evidence that it is Xiaomi-family (the source-driven flow never lists 0x2717 in an ACK)
-    if (svid != 0x2717) return;
+    // Every structured request the cases above did not take is NAKed (USB PD R3.2 6.4.4.2), never left to the source's
+    // timer: Discover Modes for an SVID we do not list or have no modes for, Enter / Exit Mode, SVID-specific commands,
+    // reserved commands (hardware 2026-11-15: 23 of 25 Discover Modes for SVID 0x05AC went unanswered). Attention and the
+    // source's ACK / NAK / BUSY get nothing (pd_reply.hpp vdm_nak_for).
+    if (structured) {
+        if (const std::uint32_t nak = vdm_nak_for(vdm_hdr); nak != 0 && answers_requests()) { update_rev(); answer_vdm(nak); }
+        return;
+    }
 
-    // Handle Xiaomi unstructured VDM commands (cmd_type = 0 = REQ from source)
-    if (structured) return;  // we only handle unstructured Xiaomi VDMs
+    // Only Xiaomi unstructured VDMs from here on; an unstructured 0x2717 REQ from the source is itself the evidence that it is
+    // Xiaomi-family (the source-driven flow never lists 0x2717 in an ACK). An unstructured VDM nobody here owns: PD 3
+    // Not_Supported (USB PD R3.2 6.4.4.1), PD 2.0 ignored.
+    if (svid != 0x2717) {
+        if (answers_requests()) { update_rev(); if (rev_ >= 2) answer_ctl(kCtlNotSupported); }
+        return;
+    }
 
     // Xiaomi commands: 0x27170201 through 0x2717020A
     // cmd field is 1..8, 0x0A

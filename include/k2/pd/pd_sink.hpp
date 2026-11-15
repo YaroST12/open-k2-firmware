@@ -403,7 +403,7 @@ public:
 
     // Answer Get_Sink_Cap with Sink_Capabilities (spec PE_SNK_Give_Sink_Cap, two words). Off for the
     // PD-silent legacy session and while the K2 sits inline: there it must not transmit at all.
-    void set_gives_sink_cap(bool on) { gives_sink_cap_ = on; if (!on) { sink_cap_pending_ = false; sink_cap_ext_pending_ = false; swap_reply_ = 0; } }
+    void set_gives_sink_cap(bool on) { gives_sink_cap_ = on; if (!on) { sink_cap_pending_ = false; sink_cap_ext_pending_ = false; ans_pending_ = false; } }
     // Answer what the partner sends on SOP: Discover Identity / Discover SVIDs / Xiaomi VDMs and Soft_Reset (the Accept). Off
     // while another sink may sit behind the K2 (inline, or a Request from a sink seen on the wire): those messages are the
     // far sink's conversation with the source, and any SOP frame of ours in it ends in Hard Resets (hardware 2026-11-07, three
@@ -480,10 +480,19 @@ private:
     void arm_verify(std::uint32_t now);
     void verify_vbus(std::uint32_t now);
     void after_ps_rdy(std::uint32_t now);
-    void request_chunk(std::uint16_t header, std::span<const std::uint8_t> payload);
+    bool request_chunk(std::uint16_t header, std::span<const std::uint8_t> payload);   // true: a Chunk Request was queued
+    void answer_reannounce(std::uint32_t now);
     void update_rev();
     void on_vdm(std::uint16_t header, std::span<const std::uint8_t> payload, std::uint32_t now);
     void send_xiaomi_vdm_reply(std::uint8_t cmd, std::span<const std::uint32_t> vdos, std::uint32_t now);
+    // Requests are answered only by a live Pd-mode sink that is the line's only sink (gives_sink_cap_ implies answers_sop_).
+    bool answers_requests() const { return gives_sink_cap_ && answers_sop_; }
+    void answer(const TxMsg& m) { ans_ = m; ans_pending_ = true; }
+    void answer_ctl(std::uint8_t type);     // 0 = nothing
+    void answer_vdm(std::uint32_t word);    // a one-object VDM (a NAK)
+    void answer_epr_sink_caps();
+    void answer_revision();
+    void on_unhandled_ext(std::uint16_t header, std::span<const std::uint8_t> payload);
 
     bool never_hard_reset_ = false;
     bool hv_lock_ = false;
@@ -546,7 +555,10 @@ private:
     const std::uint32_t* override_pdos_ = nullptr;
     SinkCapExtMode sink_cap_ext_mode_ = SinkCapExtMode::Skedb;
     bool sink_cap_ext_pending_ = false;   // a Get_Sink_Cap_Extended answer waits (own slot, as above)
-    std::uint8_t swap_reply_ = 0;         // a role-swap answer waits (Reject / Not_Supported type; own slot, as above)
+    // The answer to a source's request (a swap's Reject, Not_Supported, Revision, EPR_Sink_Capabilities, a VDM NAK) waits in its
+    // own slot, as above: one request is answered at a time, and the answer never displaces a queued Request.
+    TxMsg ans_;
+    bool ans_pending_ = false;
     std::array<std::uint8_t, 3> swaps_rx_{};
 
     // Xiaomi Mi Turbo Charge authentication (SVID 0x2717) state
@@ -588,6 +600,8 @@ inline constexpr std::uint32_t kSinkCapPdos[2] = {0x0001900A, 0xC0DC213C};
 inline constexpr std::uint32_t kXiaomiStep1ReplyVdo = 0x27170102;
 // Discover Identity ACK data objects:
 // [VDM header 0xFF00A041 (bit 13 set), ID header VDO 0x05C02717, Cert Stat 0, product VDO].
+// The Revision message the sink answers Get_Revision with: USB PD Revision 3.2, Version 1.0 (RMDO bits 31..16).
+inline constexpr std::uint32_t kSinkRmdo = 0x32100000;
 inline constexpr std::uint32_t kXiaomiIdentityAckHeader = 0xFF00A041;
 inline constexpr std::uint32_t kXiaomiIdHeaderVdo = 0x05C02717;
 inline constexpr std::uint32_t kXiaomiProductVdo = 0x0000A486;
