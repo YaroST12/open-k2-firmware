@@ -183,8 +183,10 @@ tPpsSrcTransSmall (25 ms) on 100 and 500 mV steps in both runs. These runs judge
 limit carries the 2 ms wire allowance (27 ms, see the limits table). The 20 mV worst (25.5 ms, run 1) passes under it; the 100 and
 500 mV worsts (29.7-32.7 ms) still fail: a real finding, pending a `pd_trace` cross-check (`late-ps-rdy-small-pps-step` in
 `docs/CHARGER_QUIRKS.md`). The blob keeps the worst per pass, not every move, so the fail counts under 27 ms are not known. A Get_PPS_Status answer is timed only when both edge stamps are real; 1-2 of
-the 8 per run were not, and are judged on content only. The reports in these two directories print an APDO move under `accept_time`
-as "PDO 134 to 33" (fixed in the decoder after the runs; `pd_spec.py report <dir>/result.json` prints "APDO 6 ... to 3.3 V").
+the 8 per run were not, and are judged on content only. The `report.txt` files in these two directories are re-rendered with the fixed decoder
+(`accept_time` at "APDO 6 20 mV down to 3.3 V", not "PDO 134 to 33"; the originals are `report.orig.txt`); the K2's Detail page had
+the same label and reads "APDO 6 c0 dn 3.3V" since then. The web Spec check page decodes the same PSC2 blob (`tools/web/k2proto.js`,
+checked against `pdspec_blob.py` on both runs' blobs) and shows the passes as their own grid.
 
 ## Safety
 
