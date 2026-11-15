@@ -27,7 +27,8 @@ ignored.
 ## Table
 
 Status: **ok** (was right before this page), **fixed** (branch k2/pd-replies), **exception** (deliberately different, see below).
-Timing is "loop" for every row: answered by the `service()` pass that reads the frame (fake-chip proof:
+Timing path: "loop" for every row, so the tables carry no column for it: every answer, VCONN_Swap's included, is queued and sent
+by the `service()` pass that reads the frame; nothing replies from an IRQ (fake-chip proof:
 `test_a_request_is_answered_in_the_service_pass_that_reads_it`, tests/test_fusb302_scan.cpp). Host tests for every row, SPR and
 EPR mode: tests/test_pd_sink_replies.cpp.
 
@@ -35,7 +36,7 @@ EPR mode: tests/test_pd_sink_replies.cpp.
 
 | Message (type) | Rev | Spec reply | K2 does (path:line) | Status |
 |---|---|---|---|---|
-| GoodCRC (1), Accept (3), Reject (4), PS_RDY (6), Wait (12), Not_Supported (16) | all | none (replies) | engine state only, pd_sink.cpp:1009 ff. | ok |
+| GoodCRC (1), Accept (3), Reject (4), PS_RDY (6), Wait (12), Not_Supported (16) | all | none (replies) | engine state only, pd_sink.cpp:1003 ff. | ok |
 | GotoMin (2), Ping (5), Data_Reset_Complete (15) | all | none | nothing, refusal_for 0 (pd_reply.hpp:19) | ok |
 | Get_Source_Cap (7) | PD 3 | Not_Supported (sink-only port) | Not_Supported, default branch pd_sink.cpp:1116 | fixed |
 | Get_Source_Cap (7) | PD 2.0 | Reject | Reject, same | fixed (inferred) |
@@ -64,7 +65,7 @@ EPR mode: tests/test_pd_sink_replies.cpp.
 | BIST (3) | all | none (carrier mode not supported) | nothing | ok |
 | Battery_Status (5), Alert (6), Source_Info (11), Revision (12) | PD 3 | none (notifications / replies) | nothing | ok |
 | Get_Country_Info (7), Enter_USB (8) | PD 3 | Not_Supported | Not_Supported, pd_sink.cpp:995 | fixed |
-| EPR_Mode (10) | PD 3 | none (Ack / Succeeded / Failed / Exit drive the entry) | engine state, pd_sink.cpp:980 ff. | ok |
+| EPR_Mode (10) | PD 3 | none (Ack / Succeeded / Failed / Exit drive the entry) | engine state, pd_sink.cpp:978 ff. | ok |
 | reserved (0, 13, 14, 16-31) | PD 3 | Not_Supported | Not_Supported, pd_sink.cpp:995 | fixed |
 | reserved | PD 2.0 | ignore | nothing | ok |
 
@@ -109,7 +110,7 @@ EPR mode: tests/test_pd_sink_replies.cpp.
 | Legacy (PD-silent) charger-test units, passive boot | no GoodCRC, no answers: the source hears nothing, so nothing is owed | same gate (`g_legacy_only`, Auto-CRC off) |
 | Get_Sink_Cap_Extended mode Silent / Not_Supported (lab, `k2_remote pd-reread --sink-cap-ext`) | that one answer withheld or refused | pd_sink.cpp:1074, test_lab_modes_keep_their_own_answers |
 | PD Spec Check keep-alive silence | our PPS / EPR keep-alive held back (not a reply) | `Sink::silence_keepalive` |
-| PD Stress | deliberately aggressive requests; its own journal writes (src/pdstress/journal_hw.cpp) are not gated and stall replies (9.5 to 11.6 ms Source_Capabilities -> Request after its Soft_Resets, runs/2026-11-11-integ-hw/pd-stress) | the tool's own budget |
+| PD Stress | deliberately aggressive requests; its own journal writes (src/pdstress/journal_hw.cpp) are not gated and stall replies (10.1 to 11.6 ms Source_Capabilities -> Request after its Soft_Resets, 7 on record in runs/2026-11-11-integ-hw/pd-stress) | the tool's own budget |
 | Device twin | Get_Sink_Cap and EPR_Get_Sink_Cap carry the twin's PDOs | `set_sink_cap_override`, src/twin/twin_hw.cpp |
 | Xiaomi chain (unstructured 0x2717), armed Apple readout (0x05AC) | the script owns the reply | pd_sink.cpp:1403, 1441 |
 
@@ -118,15 +119,16 @@ EPR mode: tests/test_pd_sink_replies.cpp.
 **The path.** The chip GoodCRCs a frame on its own. `service()` runs once per millisecond from the main loop
 (src/core/main_loop.cpp:368) and every millisecond inside long LCD draws (`idle_hook`, src/core/main_loop.cpp:294); it drains the
 RX FIFO, the engine queues the answer, and `active_tick` loads and starts it in the same call. On hardware the reply leaves
-1.5 to 1.7 ms after `service()` read the frame (TX record "1.6 ms after RX"), and 2.2 to 3.3 ms after the frame's INT_N edge
-when the loop is not held (`pd_reply_audit.py` over 181 traces: medians 2.5 to 3.0 ms per message).
+1.5 to 1.7 ms after `service()` read the frame (TX record "1.6 ms after RX"), and 2.2 to 3.3 ms from the frame's INT_N edge to the
+reply's TX_START when the loop is not held (`pd_reply_audit.py` over 183 trace files: minimum 2.19 ms, medians 2.5 to 3.2 ms
+per message).
 
 **Bound.** reply latency <= (time until `service()` next runs) + one pass (about 1.7 ms). The first term is 1 ms plus the longest
-thing in the main loop that neither returns nor calls `service()`. With nothing else running that is under 2 ms (trace minimum
-1.56 ms, medians below 3 ms). It is NOT bounded by code alone:
+thing in the main loop that neither returns nor calls `service()`. With nothing else running that is under 2 ms (medians
+below 3.3 ms edge to TX_START). It is NOT bounded by code alone:
 
-- **Flash writes** stop everything: program and erase run from RAM with interrupts masked (src/drivers/flash.cpp): 12 to 21 ms
-  for a small littlefs record on record ("[CJRN] ... worst=21ms"), up to 250 ms with an erase or compaction. The app spans both flash banks, so there
+- **Flash writes** stop everything: program and erase run from RAM with interrupts masked (src/drivers/flash.cpp): 17 to 38 ms
+  per journal pump on record ("[CJRN] begin ok ... worst=21ms" to "replan ok ... worst=38ms"), more with an erase or compaction. The app spans both flash banks, so there
   is no read-while-write. Writers that can run during a live contract: the charger journal (now gated, below), PD Stress's
   journal (exception), the phase / attempt / finish / meta records of a charger-test run (written just before the run's own
   Request, by design). The Black Box persister (include/k2/core/bbpersist.hpp) and the Rd comeback record (src/core/rd_comeback.cpp) wait for
@@ -134,19 +136,21 @@ thing in the main loop that neither returns nor calls `service()`. With nothing 
 - **`delay_ms`** waits do not call `service()` (`wait_hook`, src/core/main_loop.cpp:148, samples buttons and the transition
   capture only).
 
-**What was late, and the fixes.** Over 181 traces, 797 owed replies:
+**What was late, and the fixes.** `pd_reply_audit.py` over the 183 Black Box trace files under runs/ (all recorded before
+this branch): 797 owed replies, 42 flagged (16 over 10 ms, 26 missing). Latency is the frame's INT_N edge to the reply's TX_START:
 
 | Case | Worst | Cause | Fix |
 |---|---|---|---|
-| EPR_Source_Capabilities re-announced in EPR mode | 14.78 ms (streamA6), 10.5 to 11.6 ms (A2, A3, A4, splitter-pps) | the engine did not answer the last chunk in Ready; the runner's next Request happened to cover it | answered by the engine in the same pass (answer_reannounce, pd_sink.cpp:954) |
-| Get_Sink_Cap 226 ms after PS_RDY | 14.75 ms (ugreen-qa/r2-stream) | the charger journal's arm wrote flash 80 ms after the link went quiet ("[CJRN] begin ... busy=128ms", a 30 ms service() gap) | writes wait for 80 ms of quiet AND 600 ms since the last Accept / PS_RDY (charger_journal::write_ok, include/k2/chargertest/charger_journal.hpp:845; src/ui/ui_charger_test.cpp:401); forced only after 1000 ms (rows) / 5000 ms (arm) |
-| Discover Identity at a run's start | 13.55 ms (spec-audit/ufcs-2) | the same journal arm ("[CJRN] begin ok ... worst=21ms") | the same gate |
-| Source_Capabilities after a PD Stress Soft_Reset | 11.6 ms | PD Stress's own journal write | exception (PD Stress) |
-| Discover Modes REQ (0x05AC, structured 0x2717) | never (19 + 6) | no handler: silence | NAK (pd_sink.cpp:1422) |
+| EPR_Source_Capabilities re-announced in EPR mode | 15.69 ms (2026-11-09-splitter/streamA6); 6 of 18 over 10 ms (11.39 to 12.4 in A2, A3, A4, A6, splitter-pps); median 8.37 ms | the engine did not answer the last chunk in Ready; the runner's next Request happened to cover it | answered by the engine in the same pass (answer_reannounce, pd_sink.cpp:954) |
+| Get_Sink_Cap 226 ms after PS_RDY | 15.66 ms (ugreen-qa/r2-stream) | the charger journal's arm wrote flash 80 ms after the link went quiet ("[CJRN] begin ... busy=128ms", a 30 ms service() gap) | writes wait for 80 ms of quiet AND 600 ms since the last Accept / PS_RDY (charger_journal::write_ok, include/k2/chargertest/charger_journal.hpp:845; src/ui/ui_charger_test.cpp:401); forced only after 1000 ms (rows) / 5000 ms (arm) |
+| Discover Identity at a run's start | 14.76 ms (spec-audit/ufcs-2) | the same journal arm ("[CJRN] begin ok ... worst=21ms") | the same gate |
+| Source_Capabilities after a PD Stress Soft_Reset | 11.58 ms (7 over 10 ms, pd-stress owner-boot / owner-fail streams) | PD Stress's own journal write | exception (PD Stress) |
+| Discover Modes REQ (0x05AC, structured 0x2717) | never (19 + 6 missing) | no handler: silence | NAK (pd_sink.cpp:1422) |
+| Get_Sink_Cap_Extended (2026-11-11-integ-hw/fh22-5a/c2-silent) | never (1 missing) | the lab Silent mode, on purpose | exception (audit with `--ignore`) |
 
 The source's own requests come a median 208 ms, 90 % within 304 ms and 95 % within 510 ms after PS_RDY (104 on record), which is
 why the journal waits 600 ms after a contract. **Residual:** a request that comes later than that (5 % on record, one at 2.9 s)
-or during a forced write still waits for the write in progress: 12 to 21 ms for a record, more with an erase or compaction. Only
+or during a forced write still waits for the write in progress: 17 to 38 ms per journal pump on record, more with an erase or compaction. Only
 read-while-write (the app in one bank) or a write split into sub-10 ms pieces would bound it.
 
 ## Checking a recording
