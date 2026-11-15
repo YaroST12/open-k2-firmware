@@ -276,7 +276,7 @@ void PdSpecSession::update_footer() {
             foot_.put("PD Spec: ").put(sc::family_name(static_cast<sc::Family>(fam)));
             if (items > 1) foot_.put(" ").put_u32(std::min<unsigned>(item + 1u, items)).put("/").put_u32(items);
             break;
-        case 2: foot_.put(kPdSpecFooters[1]); break;
+        case 2: foot_.put(kPdSpecFooters[2]); break;
         default: break;
     }
 }

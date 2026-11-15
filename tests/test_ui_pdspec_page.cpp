@@ -198,6 +198,12 @@ void test_run_stop_results() {
     // A step or two later BACK stops: the source goes back to 5 V and the run ends on Results.
     run(ui, 3000);
     press(ui, Button::Back);
+    bool saw_stopping = false;
+    for (int i = 0; i < 40 && ui.pd_spec().running(); i++) {
+        run(ui, 1);
+        if (ui.pd_spec().running() && ui.pd_spec().footer() && std::string_view(ui.pd_spec().footer()) == "PD Spec: stopping") saw_stopping = true;
+    }
+    CHECK_EQ(saw_stopping, true);   // the footer says "stopping", not the PPS/AVS progress text
     for (int i = 0; i < 100 && ui.pd_spec().running(); i++) run(ui, 200);
     run(ui, 200);
     CHECK_EQ(ui.pd_spec().running(), false);

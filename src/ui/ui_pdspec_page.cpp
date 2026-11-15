@@ -430,7 +430,7 @@ void PdSpecPage::compose_footer(uint32_t now_ms) {
         foot_tone_ = FooterTone::Caution;
         foot_text_.put(kFooters[kReview]);
         return;
-    case Stage::Running: foot_text_.put(kFooters[session().footer() && std::string_view(session().footer()) == kPdSpecFooters[1] ? kStopping : kRunning]); return;
+    case Stage::Running: foot_text_.put(kFooters[session().footer() && std::string_view(session().footer()) == kPdSpecFooters[2] ? kStopping : kRunning]); return;
     case Stage::Results:
         if (!e) { foot_text_.put(kFooters[kNoResult]); return; }
         if (e->release_unconfirmed()) {
