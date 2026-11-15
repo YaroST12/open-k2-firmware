@@ -1324,7 +1324,7 @@ Reason Runner::start(const pd::SourceCaps& caps, Options o, Input in, bool confi
     selfpwr_ = in.self_powered; suspended_ = adopt_ = held_ = false; jwait_ms_ = 0;
     session_ = in.session; resets_ = link_resets(in.pd);
     handover_ = {}; unit_ = Unit::Count; mode_ = Mode::Pd;
-    ceiling_pending_ = ceiling_done_ = ceil_stopping_ = ceil_recover_ = false; ceil_ms_ = ceil_stop_ms_ = ceil_low_ms_ = 0; ceil_why_ = 0;
+    ceiling_pending_ = ceiling_done_ = ceil_stopping_ = ceil_recover_ = ceil_cycled_ = false; ceil_ms_ = ceil_stop_ms_ = ceil_low_ms_ = 0; ceil_why_ = 0;
     attached_ = detached_ = ending_ = silent_ = legacy_active_ = never_dark_ = dipped_ = dark_ = false; attach_try_ = 0;
     rp_restart_ = false; contract_wrong_ = false; attach_max_mv_ = 0;
     pre_ms_ = 0;
@@ -2018,6 +2018,14 @@ void Runner::fail_unit(Input in, const pd::SourceCaps& caps, Reason reason, int 
 }
 void Runner::poll_attach(Input in, const pd::SourceCaps& caps, uint32_t gap) {   // gap: ms since the previous poll (poll_impl() has already moved last_ms_)
     if (mode_ == Mode::Legacy) {
+        if (in.vbus_mv > attach_max_mv_) attach_max_mv_ = in.vbus_mv;
+        // After the SVOOC ceiling's Rd cycle: an output that never came back in kRecoverMs is a lost source (the run's rows
+        // are skipped "source lost", the ceiling's record stays), not a charger that kept PD up ("blocked by PD" after 80 s).
+        if (ceil_cycled_ && attach_max_mv_ < kUnsafeLowMv && in.now - att_ms_ >= kRecoverMs) {
+            ceil_cycled_ = false;
+            reason_ = Reason::Lost; skip_pending(reason_); end_legacy(); state_ = State::Stopped;
+            return;
+        }
         // PD-silent: caps are heard and recorded, never acknowledged. VBUS cycles around the source's Hard Resets are expected.
         if (late_pd_ && caps.valid) replan_pd(caps, in, true);
         if (safe5(in.vbus_mv) && in.pd_quiet_ms >= kLegacyQuietMs && in.fc_state == fc::State::Idle) {
@@ -2025,6 +2033,7 @@ void Runner::poll_attach(Input in, const pd::SourceCaps& caps, uint32_t gap) {  
             if (in.now - stable_ms_ >= kLegacySteadyMs) {
                 if (handover_.outcome == HandoverOutcome::NotTried) handover_ = {HandoverOutcome::FellBack, in.now - unit_ms_};
                 attached_ = silent_ = true; session_ = in.session; resets_ = link_resets(in.pd); hot_ = false; caps_gone_ms_ = in.now;
+                ceil_cycled_ = false;
                 // The first handshake waits 1000 ms after the PD-silent attach (the baseline settle is 500 of it).
                 pre_ms_ = kLegacyFirstWaitMs - 500 + (unit_ == Unit::Afc ? kAfcPreMs : 0);
                 state_ = State::Baseline; stable_ = true; stable_ms_ = in.now; phase_ms_ = in.now;
@@ -2072,7 +2081,7 @@ void Runner::poll_attach(Input in, const pd::SourceCaps& caps, uint32_t gap) {  
         return;
     }
     regrow_plan(caps, in);
-    attached_ = true; session_ = in.session; resets_ = link_resets(in.pd); hot_ = false; caps_gone_ms_ = in.now;
+    attached_ = true; session_ = in.session; resets_ = link_resets(in.pd); hot_ = false; caps_gone_ms_ = in.now; ceil_cycled_ = false;
     // EPR PDOs only exist after EPR entry: an EPR-capable source on an EPR cable is entered first, then the rows are rebuilt.
     // A cable that cannot carry EPR gets no entry, only the informational list (stage 4).
     if (epr_stage_ == 3 && unit_ == Unit::Pd) {
@@ -2183,7 +2192,7 @@ void Runner::restore(const Options& o, const Evidence& e, uint32_t run_id, std::
     attached_ = detached_ = ending_ = silent_ = legacy_active_ = dark_ = false; pd_skips_recorded_ = true;
     pd_owned_ = fc_owned_ = stopping_ = stable_ = recover_ = hot_ = false; probe_ = Probe::Off; pd_retry_ = cut_index_ = SIZE_MAX;
     selfpwr_ = suspended_ = adopt_ = false;
-    ceiling_pending_ = ceil_stopping_ = ceil_recover_ = false; ceiling_done_ = true;   // a resumed run never repeats the stage (it is not journaled)
+    ceiling_pending_ = ceil_stopping_ = ceil_recover_ = ceil_cycled_ = false; ceiling_done_ = true;   // a resumed run never repeats the stage (it is not journaled)
     for (auto& s : std::span<Step>(steps_.data(), count_)) if (s.verdict == Verdict::Running) s.verdict = Verdict::Pending;
     // The EPR proof (the source accepted EPR entry: it checked the cable itself) is not journaled as such, but its trace is: the EPR
     // list was heard (EprTable), or EPR rows were planned (a plan only holds them for a 50 V / 5 A cable). A cable the K2 reads live
@@ -2456,7 +2465,7 @@ void Runner::poll_impl(Input in, const pd::SourceCaps& caps) {
             if (!ceil_low_ms_) ceil_low_ms_ = in.now ? in.now : 1;
             if (in.now - ceil_low_ms_ >= svooc_ceiling::kDropMs) {
                 K2LOG("[CT] svooc_cap vbus=%dmV after the stage: Rd cycle\n", int(in.vbus_mv));
-                ceil_recover_ = false; ceil_low_ms_ = 0; recover_ = false;
+                ceil_recover_ = false; ceil_low_ms_ = 0; recover_ = false; ceil_cycled_ = true;
                 ending_ = true; begin_detach(in);
                 return;
             }

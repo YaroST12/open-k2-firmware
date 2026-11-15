@@ -345,6 +345,9 @@ struct Fake final : ct::Env {
     // The adapter drops VBUS this long after the K2 stopped the trigger (0 = never; hardware 2026-11-15: 80 ms, 7.98 V -> 2.09 V ->
     // 0.74 V in 60 ms) and keeps it off until the K2's Rd goes off and on again (or, ceil_drop_forever, never gives it back).
     uint32_t ceil_drop_ms = 0, ceil_drop_at = 0; bool ceil_drop_forever = false;
+    // The adapter's own ramp: ceil_ramp_mv on VBUS from 500 ms after the start (the K2's trigger, no load), back at 5 V
+    // ceil_ramp_back_ms after the stop (0 = it stays up).
+    int ceil_ramp_mv = 0; uint32_t ceil_ramp_back_ms = 100;
     uint8_t ceiling_start(bool usb_a) override {
         ++ceil_starts; ceil_usb_a_seen = usb_a; ceil_start_at = in.now;
         if (!lines_free_now()) return uint8_t(svooc::Refusal::Busy);
@@ -361,6 +364,10 @@ struct Fake final : ct::Env {
             in.vbus_mv = d < 20 ? 2089 : d < 40 ? 1256 : d < 60 ? 738 : 300;
         }
         const uint32_t t = in.now - ceil_t0;
+        if (ceil_ramp_mv && !ceil_drop_at && t >= 500) {
+            if (ceil_stop_t && ceil_ramp_back_ms && in.now - ceil_stop_t >= ceil_ramp_back_ms) { in.vbus_mv = 5000; ceil_ramp_mv = 0; }
+            else in.vbus_mv = ceil_ramp_mv;
+        }
         const bool judged = ceil_judged_ms && t >= ceil_judged_ms;
         in.svooc.judged = judged; in.svooc.commands = ceil_commands;
         const bool quiet = ceil_quiet_at_ms && t >= ceil_quiet_at_ms;
@@ -2419,6 +2426,38 @@ static void test_ceiling_vbus_lost_after_the_stage_is_recovered_by_an_rd_cycle()
         CHECK_EQ(r.steps()[0].verdict, ct::Verdict::Pass);
     }
 }
+// The adapter's own ramp during the stage (hardware: 7.98 V within 60 ms of the accept; 11.1 V with a higher ask) is no fault:
+// the stage ends on its own rule and the run closes as without the ramp, with no extra Rd cycle.
+static void test_ceiling_adapter_ramp_is_part_of_the_stage() {
+    int plain_detaches = -1;
+    for (const int ramp : {0, 9000}) {
+        Fake f; f.caps = {}; f.ceil_partial_ms = 2000; f.ceil_partial_word = 0x028; f.ceil_quiet_at_ms = 3300; f.ceil_vmax_mv = 9000;
+        f.ceil_ramp_mv = ramp;
+        ct::Runner r(f);
+        ceiling_run(f, r, sc::Mode::On);
+        CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Ceiling; }, 20000), true);
+        f.tick(r, 1000);
+        if (ramp) CHECK_EQ(f.in.vbus_mv, 9000);
+        CHECK_EQ(run_until(f, r, [&] { return !r.busy(); }, 120000), true);
+        CHECK_EQ(int(r.state()), int(ct::State::Done));
+        CHECK_EQ(int(r.evidence().svooc_end), int(sc::End::Stopped));
+        CHECK_EQ(int(r.evidence().svooc_word), 0x028);
+        if (ramp) CHECK_EQ(f.detaches, plain_detaches); else plain_detaches = f.detaches;
+    }
+}
+// An adapter that stays above vSafe5V after the stop and its exit watch: nothing elevated may be left behind, the run ends
+// "UNSAFE: unplug source" (VBUS not safe 5V), with the ceiling's record kept.
+static void test_ceiling_vbus_stuck_high_after_the_stage_is_unsafe() {
+    Fake f; f.caps = {}; f.ceil_partial_ms = 2000; f.ceil_partial_word = 0x028; f.ceil_quiet_at_ms = 3300; f.ceil_vmax_mv = 9000;
+    f.ceil_ramp_mv = 9000; f.ceil_ramp_back_ms = 0;
+    ct::Runner r(f);
+    ceiling_run(f, r, sc::Mode::On);
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Unsafe || !r.busy(); }, 120000), true);
+    CHECK_EQ(int(r.state()), int(ct::State::Unsafe));
+    CHECK_EQ(int(r.reason()), int(ct::Reason::Release));
+    CHECK_EQ(int(r.evidence().svooc_end), int(sc::End::Stopped));
+    CHECK_EQ(int(r.evidence().svooc_word), 0x028);
+}
 // The adapter never gives VBUS back, whatever the Rd does: the run still ends on its own, never Unsafe, the ceiling kept.
 static void test_ceiling_vbus_that_never_returns_ends_the_run() {
     Fake f; f.caps = {}; f.ceil_partial_ms = 2000; f.ceil_partial_word = 0x028; f.ceil_quiet_at_ms = 3300; f.ceil_vmax_mv = 7983;
@@ -2428,8 +2467,13 @@ static void test_ceiling_vbus_that_never_returns_ends_the_run() {
              int(ct::Reason::None));
     run_until(f, r, [&] { return f.fc_requests >= 1; });
     f.in.fc_state = fc::State::Failed; f.in.fc_fail = fc::Fail::Detected; f.in.fc_tries = 1; f.in.vbus_mv = 5000;
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Ceiling; }, 20000), true);
+    const uint32_t t0 = f.in.now;
     CHECK_EQ(run_until(f, r, [&] { return !r.busy(); }, 400000), true);
-    CHECK_EQ(r.state() != ct::State::Unsafe, true);
+    CHECK_EQ(f.in.now - t0 < 3300 + sc::kQuietMs + sc::kExitGraceMs + ct::kDetachDarkMs + ct::kRecoverMs + 2000, true);
+    CHECK_EQ(int(r.state()), int(ct::State::Stopped));
+    CHECK_EQ(int(r.reason()), int(ct::Reason::Lost));             // a dead output is a lost source, not "blocked by PD"
+    for (const auto& s : r.steps()) if (s.group == ct::Group::Ufcs) CHECK_EQ(int(s.reason), int(ct::Reason::Lost));
     CHECK_EQ(int(r.evidence().svooc_end), int(sc::End::Stopped));
     CHECK_EQ(int(r.evidence().svooc_word), 0x028);
     CHECK_EQ(r.steps()[0].verdict, ct::Verdict::Pass);
@@ -7578,7 +7622,7 @@ int main() {
     test_hunt_evidence_marks_a_silent_source_as_a_timeout(); test_hunt_evidence_without_a_trace_is_unexplained();
     test_hunt_evidence_only_for_refused_rows(); test_classify_hunt_precedence();
     test_plan_and_run(); test_an_auto_hold_counts_as_released(); test_quiet_is_exactly_the_row_in_flight(); test_paint_blocked_needs_flight_and_an_engine_window(); test_refusals(); test_hold_keeps_the_baseline_until_released(); test_safe5_baseline();test_cancel_and_failed_release(); test_release_waits_for_the_sink_verification_and_its_hard_reset();
-    test_faults(); test_loop_lock_refuses_and_aborts(); test_timeouts_and_skips(); test_one_second_holds(); test_qc2_settles_within_two_percent(); test_qc2_5v_accepts_vsafe5_reading(); test_legacy_5v_accepts_vsafe5_reading(); test_qc3_rows_use_an_asymmetric_band(); test_legacy_rows_use_a_five_percent_band(); test_legacy_5v_row_uses_the_vsafe5_window(); test_scp_4v5_row_judges_the_adapter_readback(); test_qc3plus_without_response_is_a_distinct_skip(); test_unsupported_protocol_skips_its_other_rows(); test_silent_source_fails_every_handshake_row(); test_answered_handshake_passes_the_5v_row(); test_svooc_row_follows_the_adapter_ramp(); test_svooc_detected_is_a_pass(); test_vooc_family_shares_one_session(); test_ceiling_off_runs_no_stage(); test_ceiling_judged_ladder_is_the_result(); test_ceiling_refusal_is_recorded_and_the_run_goes_on(); test_ceiling_no_adapter_and_early_abort(); test_ceiling_cap_stops_a_session_that_is_never_judged(); test_ceiling_cancel_stops_the_trigger(); test_ceiling_needs_a_detected_svooc_family(); test_ceiling_waits_for_the_lines_after_the_family_release(); test_ceiling_lines_never_free_is_a_recorded_refusal(); test_ceiling_usb_a_waives_the_far_rd_latch(); test_ceiling_usb_a_waiver_stays_narrow(); test_ceiling_quiet_adapter_is_stopped_at(); test_ceiling_runner_guard_names_its_cause(); test_ceiling_vbus_lost_after_the_stage_is_recovered_by_an_rd_cycle(); test_ceiling_vbus_that_never_returns_ends_the_run(); test_vivo_no_response_skips_the_other_vivo_rows(); test_pps_min_step_accepts_unloaded_floor(); test_pps_up_step_uses_the_tight_band();
+    test_faults(); test_loop_lock_refuses_and_aborts(); test_timeouts_and_skips(); test_one_second_holds(); test_qc2_settles_within_two_percent(); test_qc2_5v_accepts_vsafe5_reading(); test_legacy_5v_accepts_vsafe5_reading(); test_qc3_rows_use_an_asymmetric_band(); test_legacy_rows_use_a_five_percent_band(); test_legacy_5v_row_uses_the_vsafe5_window(); test_scp_4v5_row_judges_the_adapter_readback(); test_qc3plus_without_response_is_a_distinct_skip(); test_unsupported_protocol_skips_its_other_rows(); test_silent_source_fails_every_handshake_row(); test_answered_handshake_passes_the_5v_row(); test_svooc_row_follows_the_adapter_ramp(); test_svooc_detected_is_a_pass(); test_vooc_family_shares_one_session(); test_ceiling_off_runs_no_stage(); test_ceiling_judged_ladder_is_the_result(); test_ceiling_refusal_is_recorded_and_the_run_goes_on(); test_ceiling_no_adapter_and_early_abort(); test_ceiling_cap_stops_a_session_that_is_never_judged(); test_ceiling_cancel_stops_the_trigger(); test_ceiling_needs_a_detected_svooc_family(); test_ceiling_waits_for_the_lines_after_the_family_release(); test_ceiling_lines_never_free_is_a_recorded_refusal(); test_ceiling_usb_a_waives_the_far_rd_latch(); test_ceiling_usb_a_waiver_stays_narrow(); test_ceiling_quiet_adapter_is_stopped_at(); test_ceiling_runner_guard_names_its_cause(); test_ceiling_vbus_lost_after_the_stage_is_recovered_by_an_rd_cycle(); test_ceiling_vbus_that_never_returns_ends_the_run(); test_ceiling_adapter_ramp_is_part_of_the_stage(); test_ceiling_vbus_stuck_high_after_the_stage_is_unsafe(); test_vivo_no_response_skips_the_other_vivo_rows(); test_pps_min_step_accepts_unloaded_floor(); test_pps_up_step_uses_the_tight_band();
     test_missing_samples_and_wrap();
     test_fixed_band_judges_a_burst_mode_ripple_on_its_mean(); test_fixed_band_still_fails_a_steady_low_or_high_level(); test_fixed_band_keeps_the_per_sample_overvoltage_guards();
     test_pps_renewal();
