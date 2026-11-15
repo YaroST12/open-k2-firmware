@@ -269,7 +269,7 @@ remote::ChargerSvoocCapReply Remote::charger_svooc_cap(const uint8_t* set) {
     const auto& ev = ui_.charger_test_results().evidence();
     r.info.mode = ui_.charger_test_svooc_cap();
     r.info.end = ev.svooc_end; r.info.why = ev.svooc_why; r.info.asks = ev.svooc_asks; r.info.word = ev.svooc_word;
-    r.info.vmax_mv = ev.svooc_vmax_mv; r.info.stop_ms = ev.svooc_stop_ms;
+    r.info.vmax_mv = ev.svooc_vmax_mv; r.info.stop_ms = ev.svooc_stop_ms; r.info.ident = ev.vooc_ident;
     return r;
 }
 

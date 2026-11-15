@@ -2033,6 +2033,37 @@ test("charger units and cable: wire frames and the cable reply", async () => {
   assert.throws(() => P.decodeChargerCable(u8(...reply.slice(0, 29))), P.FrameError);
 });
 
+test("chargerSvoocCap: the ceiling words and the ident mirror k2_remote.charger_svooc_cap", async () => {
+  const le = (v) => [v & 255, v >> 8];
+  // [mode, end, why, asks, word(2), vmax_mv(2), stop_ms(2), ident]: a deep run stopped by a quiet adapter
+  const stopped = [1, 7, 0, 2, ...le(0x28), ...le(9100), ...le(3300), 0xAC];
+  const s = P.decodeChargerSvoocCap(u8(...stopped));
+  assert.deepEqual([s.mode, s.end, s.word, s.ma, s.vmax_mv, s.stop_ms, s.ident], ["on", "stopped", 0x28, 4000, 9100, 3300, 0xAC]);
+  assert.equal(s.text, "stopped at 3.3s, <=9.1V, 4.0A claimed");
+  assert.equal(P.decodeChargerSvoocCap(u8(1, 5, 0, 4, ...le(0x6D), ...le(11120), 0, 0, 0)).text, "<=11.1V, 10.9A claimed");
+  const ab = P.decodeChargerSvoocCap(u8(1, 3, 6, 0, 0, 0, ...le(7983), ...le(1305), 0));
+  assert.equal(ab.text, "aborted: sink, <=8.0V, none claimed");
+  assert.equal(ab.ident, 0);
+  // a Light / Medium run: the ident only
+  const light = P.decodeChargerSvoocCap(u8(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xA8));
+  assert.deepEqual([light.end, light.text, light.ident], ["not run", "-", 0xA8]);
+  // older replies: 6 and 10 bytes read the missing fields as null
+  const old = P.decodeChargerSvoocCap(u8(1, 5, 0, 4, ...le(0x6D)));
+  assert.deepEqual([old.vmax_mv, old.stop_ms, old.ident, old.text], [null, null, null, "10.9A claimed"]);
+  assert.equal(P.decodeChargerSvoocCap(u8(...stopped.slice(0, 10))).ident, null);
+  assert.throws(() => P.decodeChargerSvoocCap(u8(1, 5)), P.FrameError);
+  const { remote, sent } = ctRig(() => [...stopped]);
+  await remote.chargerSvoocCap();
+  await remote.chargerSvoocCap("usb-a");
+  assert.deepEqual(sent, [[0x59, []], [0x59, [2]]]);
+  await assert.rejects(() => remote.chargerSvoocCap("maybe"), RangeError);
+  // the run summary's lines, as tools/charger_summary.py words them
+  assert.deepEqual(P.svoocLines(light), ["VOOC family ident 0xA8"]);
+  assert.deepEqual(P.svoocLines(s), ["VOOC family ident 0xAC", "SVOOC ceiling: stopped at 3.3s, <=9.1V, 4.0A claimed (protocol read, no load)"]);
+  assert.deepEqual(P.svoocLines(P.decodeChargerSvoocCap(u8(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))), []);
+  assert.deepEqual(P.svoocLines(null), []);
+});
+
 test("ctStartStep: started, guard refusal, refusal after the confirmation or the wait", () => {
   const st = (id) => ({ run_id: id });
   assert.deepEqual(P.ctStartStep(7, st(8), null, false), { moved: false, outcome: "started" });

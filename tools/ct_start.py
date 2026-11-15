@@ -17,8 +17,10 @@ a run with 0 PDOs is invalid.
 
 --level sets the run's thoroughness (`charger-level`, sent before every START: the device keeps the last choice): light
 records what the charger advertises and asks for nothing above 5 V, medium (the default) is the full run without deep
-sweeps, deep adds the PPS and AVS deep sweeps. --avs-sweep without --level means deep; --sweep / --no-sweep override
-the level's PPS sweep for this run.
+sweeps, deep adds the PPS and AVS deep sweeps and the SuperVOOC ceiling stage (after a detected VOOC family; ct_start
+sends its mode on every deep run: --svooc-cap usb-a, else on). --avs-sweep or --svooc-cap without --level means deep;
+--sweep / --no-sweep override the level's PPS sweep for this run. The summary ends with the VOOC family's ident and, on a
+deep run, the ceiling stage's words.
 
 --units sends the unit list (names and order) with `charger-units` before START: only those test units run, in that
 order, each one detach -> attach -> rows -> detach. Without it the full default order runs: vendor modes (FCP, SCP, AFC, VOOC...), PD, then QC/UFCS.
@@ -224,8 +226,9 @@ def parse_args(argv=None):
     ap.add_argument("--avs-sweep", action="store_true",
                     help="also run the AVS deep sweep (every 100 mV across each AVS APDO, 1 A); alone it means --level deep")
     ap.add_argument("--svooc-cap", choices=["on", "usb-a"],
-                    help="also run the SuperVOOC ceiling stage when a SuperVOOC charger is detected (opt-in; reads the 0x86 "
-                         "ceiling from the protocol, never loads the charger). usb-a = USB-A charger, top port empty")
+                    help="the SuperVOOC ceiling stage's mode (deep runs only; alone it means --level deep; a deep run "
+                         "without it sends on): reads the 0x86 ceiling from the protocol, never loads the charger. "
+                         "usb-a = USB-A charger, top port empty")
     ap.add_argument("--units", default="",
                     help="run only these test units, in this order, e.g. qc2,qc3 or pd,qc2 (names: " + ", ".join(kr.TEST_UNITS) +
                          "); default = the full order: vendor modes, PD, QC/UFCS, pd-low. The PPS sweep is split at 5 V: "
@@ -236,12 +239,29 @@ def parse_args(argv=None):
     a = ap.parse_args(argv)
     if a.level == "light" and (a.sweep or a.avs_sweep):
         ap.error("--level light asks for nothing above 5 V: no deep sweep with it")
+    if a.level in ("light", "medium") and a.svooc_cap:
+        ap.error("the SuperVOOC ceiling stage runs at --level deep only (light and medium stop at the detection)")
     return a
 
 
 def run_level(a):
-    """The level ct_start sends for this run: --level, else deep for a bare --avs-sweep, else medium."""
-    return a.level or ("deep" if a.avs_sweep else "medium")
+    """The level ct_start sends for this run: --level, else deep for a bare --avs-sweep or --svooc-cap, else medium."""
+    return a.level or ("deep" if a.avs_sweep or a.svooc_cap else "medium")
+
+
+def svooc_mode(a):
+    """The SuperVOOC ceiling mode ct_start sends after the level: on a deep run always (--svooc-cap, else "on"), so an
+    earlier run's usb-a waiver never carries over unasked; None below deep (the level turns the stage off)."""
+    return (a.svooc_cap or "on") if run_level(a) == "deep" else None
+
+
+def svooc_readout(link):
+    """The run's VOOC-family readout (k2_remote.charger_svooc_cap: the ident and the ceiling stage's words), or None on
+    firmware without it."""
+    try:
+        return kr.charger_svooc_cap(link)
+    except (kr.RemoteError, kr.FrameError):
+        return None
 
 
 def send_level(link, level):
@@ -307,9 +327,9 @@ def main(argv=None):
         if a.avs_sweep and level != "deep":
             kr.charger_avs_sweep(link, True)
             print("AVS deep sweep: on (every 100 mV per AVS APDO, 1 A)", file=sys.stderr)
-        if a.svooc_cap:
-            kr.charger_svooc_cap(link, a.svooc_cap)
-            print(f"SuperVOOC ceiling stage: {a.svooc_cap} (protocol read, no load)", file=sys.stderr)
+        if svooc_mode(a):
+            kr.charger_svooc_cap(link, svooc_mode(a))
+            print(f"SuperVOOC ceiling stage: {svooc_mode(a)} (protocol read, no load)", file=sys.stderr)
         if units:
             try:    # the list serves the next START only; the firmware refuses it while a run is active
                 kr.charger_units(link, units)
@@ -365,6 +385,7 @@ def main(argv=None):
         r["cable_identity"] = kr.charger_cable(link)
         # the level the run ran at: the firmware's own (selection.run_level), else the one sent above
         r["level"] = (r.get("selection") or {}).get("run_level") or level
+        r["svooc"] = svooc_readout(link)   # the VOOC family's ident and, on a deep run, the ceiling stage's words
     print(charger_summary.summarize(r))
     if st["state"] != "done":
         print(f"run ended in state {st['state']}", file=sys.stderr)

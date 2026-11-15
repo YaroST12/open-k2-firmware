@@ -1798,8 +1798,8 @@ class ChargerSweepCli(unittest.TestCase):
 
 class ChargerSvoocCapCli(unittest.TestCase):
     """`charger-svooc-cap [off|on|usb-a]`: the SuperVOOC ceiling stage of the NEXT charger run (firmware command 0x59), and
-    the latest run's result read back. The reply is [mode, end, why, asks, word(2)]; the word is 100 mA per count, what the K2
-    asked for (never a drawn current)."""
+    the latest run's result read back. The reply is [mode, end, why, asks, word(2), vmax_mv(2), stop_ms(2), ident]; the word is
+    100 mA per count, what the K2 asked for (never a drawn current)."""
 
     Link = ChargerSweepCli.Link
 
@@ -1814,9 +1814,17 @@ class ChargerSvoocCapCli(unittest.TestCase):
         self.assertEqual(r["mode"], "on")
         self.assertEqual(r["end"], "judged")
         self.assertEqual(r["asks"], 4)
-        self.assertEqual(r["ceiling"], {"word": 0x6D, "ma": 10900, "text": "10.9 A claimed"})
+        self.assertEqual(r["ceiling"], {"word": 0x6D, "ma": 10900, "text": "10.9A claimed"})
         self.assertEqual(r["vmax_mv"], 11120)
+        self.assertEqual(r["text"], "<=11.1V, 10.9A claimed")
+        self.assertIsNone(r["ident"])   # a 10-byte reply (before the ident byte)
         self.assertIn("not a drawn current", r["note"])
+
+    def test_the_ident_byte_is_decoded(self):
+        # the 11th byte: the VOOC family's ident command the detection row heard (Light / Medium runs stop there)
+        reply = bytes([0, 0, 0, 0, 0, 0]) + bytes(4) + bytes([0xAC])
+        r, _ = self.invoke(["charger-svooc-cap"], [reply])
+        self.assertEqual((r["end"], r["ident"], r["text"]), ("not run", 0xAC, "-"))
 
     def test_the_quiet_adapter_reads_stopped_at(self):
         # [mode, end=7 stopped, why, asks, word(2), vmax_mv(2), stop_ms(2)]: the adapter went quiet 3.3 s after the wake
@@ -1825,7 +1833,7 @@ class ChargerSvoocCapCli(unittest.TestCase):
         self.assertEqual(r["end"], "stopped")
         self.assertIsNone(r["why"])
         self.assertEqual((r["vmax_mv"], r["stop_ms"]), (9100, 3300))
-        self.assertEqual(r["text"], "stopped at 3.3 s, 4.0 A claimed, 9.1 V max")
+        self.assertEqual(r["text"], "stopped at 3.3s, <=9.1V, 4.0A claimed")
 
     def test_an_abort_names_its_cause(self):
         # end=3 aborted, why=6 sink appeared: the K2 cut the session (hardware 2026-11-15 read "none claimed" here)
@@ -1833,17 +1841,18 @@ class ChargerSvoocCapCli(unittest.TestCase):
         r, _ = self.invoke(["charger-svooc-cap"], [reply])
         self.assertEqual(r["end"], "aborted")
         self.assertEqual(r["why"], "sink appeared")
-        self.assertEqual(r["text"], "aborted: sink, none claimed, 8.0 V max")
+        self.assertEqual(r["text"], "aborted: sink, <=8.0V, none claimed")
         reply = bytes([1, 3, 3, 4, 0x6D, 0]) + (11120).to_bytes(2, "little") + bytes(2)
         r, _ = self.invoke(["charger-svooc-cap"], [reply])
-        self.assertEqual(r["text"], "aborted: off-script, 10.9 A claimed, 11.1 V max")
+        self.assertEqual(r["text"], "aborted: off-script, <=11.1V, 10.9A claimed")
 
     def test_an_older_six_byte_reply_still_reads(self):
         r, _ = self.invoke(["charger-svooc-cap"], [bytes([1, 5, 0, 4, 0x6D, 0])])
         self.assertEqual(r["end"], "judged")
         self.assertIsNone(r["vmax_mv"])
         self.assertIsNone(r["stop_ms"])
-        self.assertEqual(r["text"], "10.9 A claimed")
+        self.assertIsNone(r["ident"])
+        self.assertEqual(r["text"], "10.9A claimed")
 
     def test_set_sends_the_mode_byte(self):
         for name, byte in (("off", 0), ("on", 1), ("usb-a", 2)):
@@ -1858,7 +1867,7 @@ class ChargerSvoocCapCli(unittest.TestCase):
         self.assertEqual((r["end"], r["why"]), ("refused", "sink on the bottom port"))
         r, _ = self.invoke(["charger-svooc-cap"], [bytes([1, 3, 3, 2, 0x28, 0])])
         self.assertEqual((r["end"], r["why"]), ("aborted", "charger off-script"))
-        self.assertEqual(r["ceiling"]["text"], "4.0 A claimed")
+        self.assertEqual(r["ceiling"]["text"], "4.0A claimed")
         r, _ = self.invoke(["charger-svooc-cap"], [bytes([1, 2, 0, 0, 0, 0])])
         self.assertEqual((r["end"], r["ceiling"]), ("no adapter", None))
 

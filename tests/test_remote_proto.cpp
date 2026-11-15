@@ -2869,16 +2869,17 @@ static void test_charger_level() {
 
 // Cmd::ChargerSvoocCap (0x59): no payload reads, [mode(1)] sets the ceiling stage of the next run (0 off, 1 on, 2 USB-A); the
 // reply is always [mode, end, why, asks, word(2), vmax_mv(2), stop_ms(2)] (the stage's result of the latest run; the last two
-// appended for "stopped at": the highest VBUS the trigger saw and the adapter's last edge after the wake). Busy while a run is active.
+// appended for "stopped at": the highest VBUS the trigger saw and the adapter's last edge after the wake; then the VOOC family's
+// ident byte of the run's detection row). Busy while a run is active.
 static void test_charger_svooc_cap() {
     Fake f; Frame r;
-    f.svooc_cap_info = {0, 5, 0, 4, 0x06D, 11120, 3300};
+    f.svooc_cap_info = {0, 5, 0, 4, 0x06D, 11120, 3300, 0xAC};
     const int calls = f.calls;
     CHECK_EQ(run(f, request(0x59, 1, {}), r), 1);                    // a read moves nothing
-    check_header(r, 0x59, 1, Status::Ok, 10); check_bytes(r, kRspHeader, {0, 5, 0, 4, 0x6D, 0x00, 0x70, 0x2B, 0xE4, 0x0C});
+    check_header(r, 0x59, 1, Status::Ok, 11); check_bytes(r, kRspHeader, {0, 5, 0, 4, 0x6D, 0x00, 0x70, 0x2B, 0xE4, 0x0C, 0xAC});
     CHECK_EQ(f.svooc_cap_sets, 0); CHECK_EQ(f.calls, calls + 1);
     CHECK_EQ(run(f, request(0x59, 2, {2}), r), 1);
-    check_header(r, 0x59, 2, Status::Ok, 10); check_bytes(r, kRspHeader, {2, 5, 0, 4, 0x6D, 0x00, 0x70, 0x2B, 0xE4, 0x0C});
+    check_header(r, 0x59, 2, Status::Ok, 11); check_bytes(r, kRspHeader, {2, 5, 0, 4, 0x6D, 0x00, 0x70, 0x2B, 0xE4, 0x0C, 0xAC});
     CHECK_EQ(f.svooc_cap_set, 2); CHECK_EQ(f.svooc_cap_sets, 1);
     f.svooc_cap_info.word = 0x1FF;
     CHECK_EQ(run(f, request(0x59, 3, {}), r), 1); check_bytes(r, kRspHeader + 4, {0xFF, 0x01});   // the word is 16-bit little endian

@@ -619,7 +619,9 @@ enum class Cmd : uint8_t {
                          // run's stage result (svooc_ceiling::End, the refusal or abort behind it, asks made, the highest 0x86 word
                          // kept going, 100 mA per count: what the K2 claimed, never a drawn current; then the highest VBUS the
                          // trigger saw and the adapter's last edge after the wake, appended 2026-11-15 for End::Stopped "stopped
-                         // at"). Set: Busy while a run is active, BadArg > 2.
+                         // at"), then [ident]: the VOOC family's ident command (0xA8 / 0xAC / 0xA6) the run's detection row heard,
+                         // 0 = none (appended 2026-11-15). The stage runs at Level::Deep only. Set: Busy while a run is active,
+                         // BadArg > 2.
     PdSpec = 0x5A,          // PD Spec Check: status / start / result (chunked) / stop, see the layout above
     ChargerLevel = 0x5B,    // [level(1)] the level of the next charger run (charger_test::Level: 0 Medium, 1 Light, 2 Deep; with_level
                          // also sets both deep-sweep flags: on for Deep, off otherwise). rsp [level]. Read back in CHARGER_TEST schema 2,
@@ -1408,12 +1410,13 @@ struct ChargerSvoocCap {
     uint16_t word = 0;    // the highest ask the session went on under, 100 mA per count (0 = none)
     uint16_t vmax_mv = 0; // the highest VBUS the trigger saw (appended)
     uint16_t stop_ms = 0; // the adapter's last D+/D- edge, ms after the wake: "stopped at" (appended)
+    uint8_t ident = 0;    // the VOOC family's ident command of the run's detection row, 0 = none heard (appended 2026-11-15)
 };
 struct ChargerSvoocCapReply {
     Status status = Status::Ok;
     ChargerSvoocCap info;
 };
-constexpr size_t kChargerSvoocCapLen = 10;
+constexpr size_t kChargerSvoocCapLen = 11;
 size_t encode_charger_svooc_cap(std::span<uint8_t> out, const ChargerSvoocCap &c);
 
 // Cmd::ChargerHunt: request [slot]; reply run_id(4), count(1) = refused hunt rows held, then the slot's evidence when slot < count:

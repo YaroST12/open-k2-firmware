@@ -1150,6 +1150,13 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
   run ended "source lost". Fixed: the SuperVOOC trigger counts as the K2's own VBUS in the Link; a Runner-guard abort
   records its own cause ("aborted: sink ..."); a VBUS drop after the stage is recovered with an Rd cycle; the exit line
   logs the run's single `vmax` and says "VBUS gone" instead of "back at 5 V" for a dark output.
+  **2026-11-15 phase 2 (host-tested):** levels wired in. Light and Medium stop at the VOOC family's detection and keep its
+  ident (`VOOC id 0xAC` in Results, "VOOC family ident 0xAC" in the summaries); the ceiling stage runs at Deep only
+  (`with_level`, and the Runner checks the level). The Results words follow the copy rules: "<=11.1V, 10.9A claimed",
+  "stopped at 3.3s, <=9.1V, 4.0A claimed". Command 0x59 appends the ident byte; `ct_start.py` sends the mode on every
+  deep run (`--svooc-cap` alone means deep) and prints both lines; the web dashboard's run summary reads them too. The
+  card is unchanged (its payload is full). Validate: a Light and a Deep run on the OnePlus 120 W (no load) show the ident
+  on both and the `SV cap` row on Deep only.
 - **Inline interrogation** (k2/inline-interrogate, built and host-tested only; `docs/DEVICE_TWIN.md` 9.1, the one inline
   TX exception, `CONNECTION_MATRIX.md` X11). With a device inline behind its charger the K2 hard-resets the link (unless
   a fresh contract was sniffed), asks the device as its source (Discover Identity, Get_Sink_Cap, Get_Sink_Cap_Extended,

@@ -1553,9 +1553,10 @@ SVOOC_CAP_NOTE = ("the highest 0x86 word the K2 asked for while the adapter kept
 
 def charger_svooc_cap(link, mode=None):
     """Firmware command 0x59: read (mode None) or set the SuperVOOC ceiling stage of the NEXT charger run, and read the latest
-    run's result. Reply [mode, end, why, asks, word(2), vmax_mv(2), stop_ms(2)] (the last two from 2026-11-15; an older 6-byte
-    reply reads them as None). Setting the mode changes nothing on the wire; the stage runs only after a detected VOOC-family
-    pass and never loads the charger (the 50 mA guard stays). "text" is the Results row's words (svooc_ceiling::format_cap)."""
+    run's result. Reply [mode, end, why, asks, word(2), vmax_mv(2), stop_ms(2), ident] (vmax/stop and then ident appended
+    2026-11-15; an older reply reads the missing ones as None). Setting the mode changes nothing on the wire; the stage runs only
+    in a Deep run, after a detected VOOC-family pass, and never loads the charger (the 50 mA guard stays). "text" is the
+    Results row's words (svooc_ceiling::format_cap); "ident" the VOOC family's ident command the detection row heard (0 = none)."""
     payload = b"" if mode is None else bytes([SVOOC_CAP_MODES.index(mode)])
     p = link.call(CMD_CHARGER_SVOOC_CAP, payload).payload
     _need(p, 6, "charger svooc cap")
@@ -1570,10 +1571,16 @@ def charger_svooc_cap(link, mode=None):
     word = int.from_bytes(p[4:6], "little")
     vmax_mv = int.from_bytes(p[6:8], "little") if len(p) >= 10 else None
     stop_ms = int.from_bytes(p[8:10], "little") if len(p) >= 10 else None
-    ceiling = {"word": word, "ma": word * SVOOC_MA_PER_COUNT, "text": svooc_amps(word) + " claimed"} if word else None
+    ident = p[10] if len(p) >= 11 else None
+    ceiling = {"word": word, "ma": word * SVOOC_MA_PER_COUNT, "text": svooc_claim(word)} if word else None
     return {"mode": name(SVOOC_CAP_MODES, p[0]), "end": end, "why": why, "asks": p[3], "ceiling": ceiling,
             "vmax_mv": vmax_mv, "stop_ms": stop_ms, "text": svooc_cap_text(end, word, vmax_mv, stop_ms, abort_word),
-            "note": SVOOC_CAP_NOTE}
+            "ident": ident, "note": SVOOC_CAP_NOTE}
+
+
+def svooc_claim(word):
+    """The claimed ask as the Results row words it: "10.9A claimed" (no space before the unit), "none claimed" for 0."""
+    return f"{word * SVOOC_MA_PER_COUNT / 1000:.1f}A claimed" if word else "none claimed"
 
 
 def svooc_cap_text(end, word, vmax_mv, stop_ms, abort_word=""):
@@ -1585,12 +1592,12 @@ def svooc_cap_text(end, word, vmax_mv, stop_ms, abort_word=""):
     tenths = lambda v: f"{(v + 50) // 100 // 10}.{(v + 50) // 100 % 10}"
     parts = []
     if end == "stopped" and stop_ms is not None:
-        parts.append(f"stopped at {tenths(stop_ms)} s")
+        parts.append(f"stopped at {tenths(stop_ms)}s")
     if end == "aborted":
         parts.append(f"aborted: {abort_word}" if abort_word else "aborted")
-    parts.append(svooc_amps(word) + " claimed" if word else "none claimed")
     if vmax_mv:
-        parts.append(f"{tenths(vmax_mv)} V max")
+        parts.append(f"<={tenths(vmax_mv)}V")
+    parts.append(svooc_claim(word))
     return ", ".join(parts)
 
 
@@ -3054,7 +3061,7 @@ SVOOC_REFUSALS = ["none", "not confirmed", "D+/D- busy", "no host link", "no pow
 SVOOC_ABORTS = ["none", "VBUS over 12 V", "current over 50 mA", "charger off-script", "host gone", "power monitor lost",
                 "sink appeared", "PD contract appeared", "D+/D- edge storm", "no adapter answer", "time cap", "stopped", "PD contract lost", "PD contract changed"]
 # svooc_ceiling::abort_word: the Results row's short form of each abort (at most 10 characters)
-SVOOC_ABORT_WORDS = ["", "over 12 V", "current", "off-script", "host gone", "no monitor", "sink", "PD", "edge storm", "no adapter",
+SVOOC_ABORT_WORDS = ["", "over 12V", "current", "off-script", "host gone", "no monitor", "sink", "PD", "edge storm", "no adapter",
                      "time cap", "stopped", "PD lost", "PD changed"]
 SVOOC_CONTRACTS = ["none", "own 5 V", "other"]
 SVOOC_INLINE_REFUSAL = SVOOC_REFUSALS.index("inline mode")

@@ -132,22 +132,28 @@ aborts with `Overvoltage` and releases the lines), and the card and Results show
   decides the others: "detected" passes them, "needs load" (never clocked, 3 wakes) or "no response" (frames, no ident)
   skips them with that reason. They keep their names and run no session. Cost on a charger that does not speak VOOC:
   one session of 3 wakes (about 10.5 s plus the 500 ms hold), instead of three.
-- **SuperVOOC ceiling stage (opt-in, `Options::svooc_cap`, `State::Ceiling`).** After a VOOC-family pass the Runner may
-  run one more step at 5 V: the guarded SuperVOOC trigger (`svooc_trig`, Probe profile, 12 s cap) answers the adapter's
+- **VOOC family ident (every level, `Evidence::vooc_ident`).** The family detection listens only and ends at the first
+  ident command it hears (0xA8 / 0xAC / 0xA6, `fc::Engine::vooc_ident()` -> `fctrig::Status::ident` -> `Input::fc_ident`).
+  The Runner keeps it for a VOOC-family row that passes `detected`; Results shows it as a `VOOC id` row ("0xAC") beside
+  the rows' "detected", the run summary as "VOOC family ident 0xAC". One ident proves the family, not the variant. Not
+  journaled, not on the card.
+- **SuperVOOC ceiling stage (Deep only, `Options::svooc_cap`, `State::Ceiling`).** `with_level` turns it on for Deep
+  (keeping a usb-a waiver) and off for Light and Medium, and the Runner also checks the level, so a run below Deep stops at
+  the detection and its ident. After a VOOC-family pass a Deep run may run one more step at 5 V: the guarded SuperVOOC trigger (`svooc_trig`, Probe profile, 12 s cap) answers the adapter's
   0x82 polls like a phone and walks a 4-rung 0x86 ladder (100 mA per count: 0x00F 1.5 A, 0x028 4.0 A, 0x03F 6.3 A,
   0x06D 10.9 A). The **measured ceiling** is the highest 0x86 word the adapter kept the session going under, shown in the
-  Results tab as `SV cap` ("10.9 A claimed, 11.1 V max": the claimed ask and the highest VBUS the trigger saw). It is the
+  Results tab as `SV cap` ("<=11.1V, 10.9A claimed": the highest VBUS the trigger saw and the claimed ask). It is the
   K2's own ask that the charger did not abort, read from the protocol;
   it is **not a drawn current**, and the K2 never loads the charger (the trigger's 50 mA guard and 12 V abort stay).
-  Modes: `off` (default), `on` (the trigger's start guards must pass), `usb-a` (waiver for a USB-A charger on the bottom
+  Modes: `off` (Light, Medium), `on` (Deep; the trigger's start guards must pass), `usb-a` (waiver for a USB-A charger on the bottom
   port with the top port empty; never with a phone on the other port). The usb-a waiver also reaches the run's own
   inline checks, for the same two causes the trigger waives (`svooc::inline_waived`: FarRd, Vbus) and only in a run that
   holds an SVOOC unit; a Load / Request / Rise latch still refuses. The stage starts only once D+/D- are free
   (`svooc_trig::lines_free()`): the family session's release holds them at 0 V for 500 ms first. An adapter that talked
   and then sent no edge for `kQuietMs` (500 ms) ended the session (every no-load session so far, ~3.3 s after the wake):
-  the stage stops the trigger and reads `stopped` ("stopped at 3.3 s, 4.0 A claimed, 9.1 V max"), a normal outcome. A
+  the stage stops the trigger and reads `stopped` ("stopped at 3.3s, <=9.1V, 4.0A claimed"), a normal outcome. A
   refusal, a missing adapter answer or an abort ends the stage with its reason; the ceiling stays what had been accepted before.
-  An abort reads "aborted: <cause>, ..." ("aborted: sink, none claimed, 8.0 V max"); when the run's own guard (inline,
+  An abort reads "aborted: <cause>, ..." ("aborted: sink, <=8.0V, none claimed"); when the run's own guard (inline,
   monitor) stopped the trigger, the recorded cause is that guard's, not the trigger's "stopped". While the trigger runs
   (exit watch included) the Link counts the adapter's VBUS ramp as the K2's own (`own_contract`), so the PD-silent session's
   missing contract does not latch inline with cause Rise (hardware 2026-11-15: that latch took the Rd off and the brick
@@ -155,9 +161,11 @@ aborts with `Overvoltage` and releases the lines), and the card and Results show
   drops its output after the stage (VBUS under vSafe5V for `kDropMs`, 200 ms, in the release) the run brings it back
   with its unit boundary, Rd off and on (detach, then the next unit's attach), and goes on with the result kept. The stage is not journaled (a resumed
   run skips it) and does not change the card format; the text is in the Results row, in the `--json` readout
-  (`k2_remote.py charger-svooc-cap`) and in the log. A plain VOOC charger yields "no adapter" because the family
+  (`k2_remote.py charger-svooc-cap`, whose reply also carries the ident byte), in the `ct_start.py` summary, in the web
+  dashboard's run summary (`K2Remote.chargerSvoocCap`) and in the log. A plain VOOC charger yields "no adapter" because the family
   detection cannot tell VOOC from SuperVOOC. `quiet()` covers the stage: no flash writes while the wire is held.
-  Shell: `k2_remote.py charger-svooc-cap [off|on|usb-a]`, `ct_start.py --svooc-cap on|usb-a`.
+  Shell: `k2_remote.py charger-svooc-cap [off|on|usb-a]`, `ct_start.py --level deep [--svooc-cap usb-a]` (a bare
+  `--svooc-cap` means deep; a deep run always sends its mode, so an earlier usb-a waiver never carries over unasked).
   Host tests: `test_svooc_ceiling`, `test_charger_test` (ceiling stage cases), `test_result_layout`
   (`test_svooc_ceiling_note_row`), `test_remote_proto` (`test_charger_svooc_cap`), `tests/test_k2_remote.py`
   (`ChargerSvoocCapCli`).

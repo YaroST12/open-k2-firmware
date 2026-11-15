@@ -157,11 +157,23 @@ def summarize(r):
                        f"({lo / 1000:.2f}–{hi / 1000:.2f} V measured{retried})")
             continue
         out.append(f"- {head}" + ", ".join(_step_text(s, prev_of[id(s)], amps) for s in rows))
+    out += _svooc_lines(r.get("svooc"))
     for why, names in skipped.items():
         out.append(f"- {', '.join(dict.fromkeys(names))}: skipped, {why}")
     if not_adv:
         out.append(f"- Not advertised: {', '.join(dict.fromkeys(not_adv))}")
     return "\n".join(out)
+
+
+def _svooc_lines(sv):
+    """ct_start's VOOC-family readout (k2_remote.charger_svooc_cap): the ident the detection heard (every level), and the
+    ceiling stage's words when it ran (Deep). Nothing for a run without either, or firmware without the readout."""
+    if not sv:
+        return []
+    out = [f"- VOOC family ident 0x{sv['ident']:02X}"] if sv.get("ident") else []
+    if sv.get("end") not in (None, "not run"):
+        out.append(f"- SVOOC ceiling: {sv['text']} (protocol read, no load)")
+    return out
 
 
 HANDSHAKE_MV = 5500   # a group whose highest passing voltage is 5 V got a handshake, not a charge level

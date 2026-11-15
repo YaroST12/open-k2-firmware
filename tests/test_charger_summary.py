@@ -47,6 +47,24 @@ def test_vendor_protocol_pass_rows_use_friendly_names():
     assert "- VIVO: 5V, 9V, all pass" in text
 
 
+def test_svooc_ident_and_ceiling_lines():
+    run = _skip_run([])
+    # Light / Medium: the detection's ident only (the stage did not run)
+    run["svooc"] = {"mode": "off", "end": "not run", "text": "-", "ident": 0xAC}
+    text = charger_summary.summarize(run)
+    assert "- VOOC family ident 0xAC" in text
+    assert "SVOOC ceiling" not in text
+    # Deep: the stage's words as the K2's Results row reads them
+    run["svooc"] = {"mode": "on", "end": "stopped", "text": "stopped at 3.3s, <=9.1V, 4.0A claimed", "ident": 0xAC}
+    text = charger_summary.summarize(run)
+    assert "- SVOOC ceiling: stopped at 3.3s, <=9.1V, 4.0A claimed (protocol read, no load)" in text
+    # nothing heard and nothing run (or firmware without the readout): no line
+    run["svooc"] = {"mode": "off", "end": "not run", "text": "-", "ident": 0}
+    assert "VOOC" not in charger_summary.summarize(run)
+    run.pop("svooc")
+    assert "VOOC" not in charger_summary.summarize(run)
+
+
 def test_card_summary():
     import report_card
     fix = Path(__file__).parent / "fixtures" / "report_card_sample.hex"

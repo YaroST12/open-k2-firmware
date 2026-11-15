@@ -2337,6 +2337,53 @@ var K2Proto = (function () {
     return decodeChargerCable((await this.link.call(CMD.CHARGER_CABLE, payload)).payload);
   };
 
+  // CMD 0x59 (k2_remote.charger_svooc_cap): the SuperVOOC ceiling stage of the next run (Deep only) and the latest run's
+  // VOOC-family readout. Reply [mode, end, why, asks, word(2), vmax_mv(2), stop_ms(2), ident]; an older reply stops after the
+  // word (6 bytes) or stop_ms (10): the missing fields read null. word = the highest 0x86 ask the adapter went on under, 100 mA
+  // per count: what the K2 claimed, never a drawn current. text = the Results "SV cap" row (svooc_ceiling::format_cap).
+  var SVOOC_CAP_MODES = ["off", "on", "usb-a"];
+  var SVOOC_CAP_ENDS = ["not run", "refused", "no adapter", "aborted", "cap", "judged", "cancelled", "stopped"];
+  var SVOOC_ABORT_WORDS = ["", "over 12V", "current", "off-script", "host gone", "no monitor", "sink", "PD", "edge storm",
+                           "no adapter", "time cap", "stopped", "PD lost", "PD changed"];
+  function svoocCapText(end, word, vmaxMv, stopMs, abortWord) {
+    if (end === "refused" || end === "no adapter") return end;
+    if (end === "not run") return "-";
+    var tenths = function (v) { var t = Math.floor((v + 50) / 100); return Math.floor(t / 10) + "." + (t % 10); };
+    var parts = [];
+    if (end === "stopped" && stopMs !== null) parts.push("stopped at " + tenths(stopMs) + "s");
+    if (end === "aborted") parts.push(abortWord ? "aborted: " + abortWord : "aborted");
+    if (vmaxMv) parts.push("<=" + tenths(vmaxMv) + "V");
+    parts.push(word ? (word * 100 / 1000).toFixed(1) + "A claimed" : "none claimed");
+    return parts.join(", ");
+  }
+  function decodeChargerSvoocCap(p) {
+    if (p.length < 6) throw new FrameError("invalid charger svooc cap reply");
+    var v = dv(p), at = function (t, i) { return i < t.length ? t[i] : String(i); };
+    var end = at(SVOOC_CAP_ENDS, p[1]), word = v.getUint16(4, true);
+    var vmax = p.length >= 10 ? v.getUint16(6, true) : null, stop = p.length >= 10 ? v.getUint16(8, true) : null;
+    var abortWord = end === "aborted" ? at(SVOOC_ABORT_WORDS, p[2]) : "";
+    return { mode: at(SVOOC_CAP_MODES, p[0]), end: end, why: p[2], abort_word: abortWord, asks: p[3], word: word, ma: word * 100,
+             vmax_mv: vmax, stop_ms: stop, ident: p.length >= 11 ? p[10] : null, text: svoocCapText(end, word, vmax, stop, abortWord) };
+  }
+  // The run summary's VOOC-family lines (tools/charger_summary.py _svooc_lines): the ident the detection heard (every level),
+  // then the ceiling stage's words when it ran (Deep). [] for a run without either, or a null readout (older firmware).
+  function svoocLines(sv) {
+    if (!sv) return [];
+    var out = sv.ident ? ["VOOC family ident 0x" + sv.ident.toString(16).toUpperCase().padStart(2, "0")] : [];
+    if (sv.end !== "not run") out.push("SVOOC ceiling: " + sv.text + " (protocol read, no load)");
+    return out;
+  }
+  // mode: undefined = read; "off" | "on" | "usb-a" = set (Busy while a run is active).
+  K2Remote.prototype.chargerSvoocCap = async function (mode) {
+    var payload = [];
+    if (mode !== undefined) {
+      var m = SVOOC_CAP_MODES.indexOf(mode);
+      if (m < 0) throw new RangeError("svooc cap mode is off, on or usb-a");
+      payload = [m];
+    }
+    return decodeChargerSvoocCap((await this.link.call(CMD.CHARGER_SVOOC_CAP, payload)).payload);
+  };
+
   // 0x0B [4, flags] reply: result (0 accepted, 1 refused), reason (TEST_REASONS), the VBUS behind the refusal (LE16 mV).
   function decodeChargerTestStart(p) {
     if (p.length !== 4 || p[0] > 1 || p[1] >= TEST_REASONS.length) throw new FrameError("invalid charger-test start reply");
@@ -2629,7 +2676,7 @@ var K2Proto = (function () {
     CT_START_REQ: CT_START_REQ, CT_CANCEL_REQ: CT_CANCEL_REQ, CT_START_CONFIRM: CT_START_CONFIRM, CT_START_ALL_TESTS: CT_START_ALL_TESTS,
     CT_STOPPED: CT_STOPPED, CT_CABLE_KINDS: CT_CABLE_KINDS, CT_BUILTINS: CT_BUILTINS, CT_GUARD_REFUSAL: CT_GUARD_REFUSAL,
     CT_START_FOLLOW_MS: CT_START_FOLLOW_MS, CT_START_POLL_MS: CT_START_POLL_MS,
-    decodeChargerCable: decodeChargerCable, decodeChargerTestStart: decodeChargerTestStart, ctStartStep: ctStartStep,
+    decodeChargerCable: decodeChargerCable, decodeChargerSvoocCap: decodeChargerSvoocCap, svoocLines: svoocLines, decodeChargerTestStart: decodeChargerTestStart, ctStartStep: ctStartStep,
     decodeEmarker: decodeEmarker, decodeEmarkerDetail: decodeEmarkerDetail, decodeAdcRaw: decodeAdcRaw,
     decodeRippleInfo: decodeRippleInfo, decodeIdentity: decodeIdentity, decodePdTrigger: decodePdTrigger, decodeMatch: decodeMatch, decodeMemory: decodeMemory, memoryView: memoryView, MEM_FS_CAUTION_PCT: MEM_FS_CAUTION_PCT, MEM_FS_ERROR_PCT: MEM_FS_ERROR_PCT, decodeStop: decodeStop, decodeLease: decodeLease, decodeIdentifyProgress: decodeIdentifyProgress, PD_ERRS: PD_ERRS,
     decodeFc: decodeFc, decodeVoocSummary: decodeVoocSummary, decodeVoocRows: decodeVoocRows, decodeCableR: decodeCableR, parseLogStats: parseLogStats,
@@ -4891,6 +4938,11 @@ if (typeof module !== "undefined" && module.exports) module.exports = CtGrid;
     // the headline above (ctr-headline) already says "Run #N complete": the summary starts with the counts
     box.appendChild(el("div", c.pass + " pass · " + c.fail + " fail · " + c.skip + " skip of " + r.steps.length +
       " steps · " + fmtSecs(secs), "mono"));
+    // the VOOC family's ident and, on a Deep run, the SVOOC ceiling stage's words (command 0x59; older firmware: nothing)
+    var sv = null;
+    try { sv = await k2.chargerSvoocCap(); } catch (e) { if (!(e instanceof P.FrameError || e instanceof P.RemoteError || e instanceof P.RemoteTimeout)) throw e; }
+    if (S.gen !== gen) return;
+    P.svoocLines(sv).forEach(function (line) { box.appendChild(el("div", line, "mono")); });
     var fails = r.steps.filter(function (s) { return s.result === "fail"; });
     if (fails.length) {
       var ul = el("ul");
