@@ -343,6 +343,21 @@ static void test_refuse_decode_and_words() {
     CHECK_STR(refuse_name(6), "reserved");
 }
 
+// 8.2.4.9 (table 24, reason 0x02): a sink refuses what it cannot serve, a message only a source receives (wrong
+// role) and a command ID the tables do not define; the messages a source sends a sink get no Refuse.
+static void test_refuse_reason_roles() {
+    for (int c : std::initializer_list<int>{kCtlPing, kCtlAck, kCtlNack, kCtlAccept, kCtlSoftReset, kCtlPowerReady, kCtlEndCableDetect, kCtlExit})
+        CHECK_EQ(refuse_reason(false, std::uint8_t(c)), 0);
+    for (int c : std::initializer_list<int>{kDataOutputCap, kDataSourceInfo, kDataCableInfo, kDataDeviceInfo, kDataErrorInfo, kDataRefuse,
+                  kDataVerifyResponse, kDataPowerChange})
+        CHECK_EQ(refuse_reason(true, std::uint8_t(c)), 0);
+    for (int c : std::initializer_list<int>{kCtlGetOutputCap, kCtlGetSourceInfo, kCtlGetSinkInfo, kCtlGetCableInfo, kCtlGetDeviceInfo, kCtlGetErrorInfo,
+                  kCtlDetectCableInfo, kCtlStartCableDetect, kCtlGetSinkInfoExt, 0x11, 0x42, 0xFF})
+        CHECK_EQ(refuse_reason(false, std::uint8_t(c)), kRefuseUnsupported);
+    for (int c : std::initializer_list<int>{0x00, kDataRequest, kDataSinkInfo, kDataConfigWatchdog, kDataVerifyRequest, kDataSinkInfoExt, 0x0E, 0x80, 0xFF})
+        CHECK_EQ(refuse_reason(true, std::uint8_t(c)), kRefuseUnsupported);
+}
+
 static void test_session_watchdog_period() {
     CHECK_EQ(kKeepaliveMs < kWatchdogMs, 1);
     CHECK_EQ(kWatchdogMs, 1000);   // the source's default watchdog (7.x): any message from the sink clears it
@@ -361,5 +376,6 @@ int main() {
     test_steps();
     test_session_watchdog_period();
     test_refuse_decode_and_words();
+    test_refuse_reason_roles();
     return test_report("test_ufcs_frame");
 }

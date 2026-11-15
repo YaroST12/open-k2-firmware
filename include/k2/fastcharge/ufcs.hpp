@@ -324,21 +324,36 @@ constexpr const char* refuse_name(std::uint8_t reason) {
     }
 }
 
-// What a sink answers to a request of the source it cannot serve (Get_Sink_Info, Get_Device_Info,
-// Detect_Cable_Info, Verify_Request ...): a Refuse with this reason (8.2.4.9, "unsupported"), within
-// tReceiverResponse. 0 = no answer owed.
+// What a sink answers to a message it cannot serve: a Refuse with reason "unsupported" (8.2.4.9, table 24,
+// 0x02), within tReceiverResponse. That covers the requests of the source we do not implement (Get_Sink_Info,
+// Get_Device_Info, Detect_Cable_Info, Verify_Request ...), a message only a source receives (wrong role:
+// Get_Output_Capabilities, Request, Config_Watchdog ...) and a command ID tables 14 / 15 do not define (the Test
+// Request 0xFF included: no test mode). 0 = no answer owed: what a source sends a sink (Ping, Accept,
+// Power_Ready, Output_Capabilities, Power_Change, Exit_UFCS_Mode ...) and the answers to requests.
 constexpr std::uint8_t refuse_reason(bool data, std::uint8_t cmd) {
-    if (data) return cmd == kDataVerifyRequest ? kRefuseUnsupported : 0;
+    if (data) {
+        switch (cmd) {
+        case kDataOutputCap:
+        case kDataSourceInfo:
+        case kDataCableInfo:
+        case kDataDeviceInfo:
+        case kDataErrorInfo:
+        case kDataRefuse:
+        case kDataVerifyResponse:
+        case kDataPowerChange: return 0;
+        default: return kRefuseUnsupported;
+        }
+    }
     switch (cmd) {
-    case kCtlGetSourceInfo:
-    case kCtlGetSinkInfo:
-    case kCtlGetCableInfo:
-    case kCtlGetDeviceInfo:
-    case kCtlGetErrorInfo:
-    case kCtlDetectCableInfo:
-    case kCtlStartCableDetect:
-    case kCtlGetSinkInfoExt: return kRefuseUnsupported;
-    default: return 0;
+    case kCtlPing:
+    case kCtlAck:
+    case kCtlNack:
+    case kCtlAccept:
+    case kCtlSoftReset:
+    case kCtlPowerReady:
+    case kCtlEndCableDetect:
+    case kCtlExit: return 0;
+    default: return kRefuseUnsupported;
     }
 }
 
