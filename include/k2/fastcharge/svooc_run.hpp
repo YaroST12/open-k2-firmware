@@ -10,12 +10,11 @@
 //   - D+/D- are free (no trigger, scan, charger test or sniffer of another owner);
 //   - the power monitor reads VBUS and current;
 //   - no sink is on the bottom port (Rd on CC) and the link is not inline (a device behind the K2). The operator may waive
-//     the far-sink check only (`--usb-a`, StartFacts::usb_a): a legacy A-to-C cable brings VBUS in through that port with no
-//     pull-down on CC, which reads as a sink. It is refused (UsbAWithPd) while PD is active anywhere (Contract != None). The
-//     same cable latches the link's inline mode with a topology cause (pd::InlineCause FarRd: the Rd on CC; Vbus: a VBUS
-//     above 5.5 V nobody on this side negotiated), so the waiver covers inline mode too, for those two causes only
-//     (inline_waived()). Load, Request, Rise (and a cause not known) are traffic from a device behind the K2: refused and
-//     aborted with or without the flag. The 50 mA limit, the VBUS window and every other in-run guard stay in force;
+//     the far-sink check only (`--usb-a`, StartFacts::usb_a). It is refused (UsbAWithPd) while PD is active anywhere
+//     (Contract != None). The link's inline latch is never waived: it only latches on certain evidence (a load, a foreign
+//     Request; pd_link.hpp), which is traffic from a device behind the K2, refused and aborted with or without the flag. The
+//     level evidence that once latched it for an A-to-C cable (a far Rd, a foreign VBUS) is retired. The 50 mA limit, the
+//     VBUS window and every other in-run guard stay in force;
 //   - no PD contract, except the K2's own: it holds it as the sink, a fixed PDO at or under 5.0 V (position 1, Ready,
 //     not EPR, not inline, no far sink). A USB-C adapter such as the OnePlus SUPERVOOC port keeps VBUS at 0 V until it
 //     sees Rd, so the K2 always has that contract, and the real phone does too before SuperVOOC takes over on D+/D-;
@@ -237,14 +236,6 @@ constexpr const char* name(Contract c) {
 
 inline constexpr std::int32_t magnitude(std::int32_t v) { return v < 0 ? -v : v; }
 
-// The USB-A waiver's reach over inline mode: only the causes the A-to-C topology explains on its own (see the header).
-// pd_link.cpp: FarRd = a sink's Rd on CC with none of ours while a source feeds the link; Vbus = VBUS above 5.5 V with no
-// contract of the K2's (kInlineForeignMs). Load (|I| over 50 mA), Request (a foreign sink's PD Request) and Rise (VBUS
-// rose above 5.5 V after being low) are evidence of a device, so they are never waived; neither is a latch with no cause.
-constexpr bool inline_waived(bool usb_a, pd::InlineCause c) {
-    return usb_a && (c == pd::InlineCause::FarRd || c == pd::InlineCause::Vbus);
-}
-
 // D+/D- are off the passive idle for a reason that blocks the start. `mismatch_bits` = dpdm::mismatch(dpdm::drive());
 // `monitor_sniff` = the passive VOOC monitor runs and both lines are its floating Sniff state: that one is no obstacle,
 // the start takes over from the monitor (dpsniff::monitor_yield) once every other check has passed.
@@ -258,7 +249,7 @@ constexpr Refusal refusal(const StartFacts& f) {
     // The waiver is for a PD-less legacy A port: any PD (a contract of ours or another, traffic on CC) refuses the flag itself.
     if (f.usb_a && f.contract != Contract::None) return Refusal::UsbAWithPd;
     if (f.far_sink && !f.usb_a) return Refusal::Sink;
-    if (f.inline_mode && !inline_waived(f.usb_a, f.inline_cause)) return Refusal::Inline;
+    if (f.inline_mode) return Refusal::Inline;
     if (f.contract == Contract::Other) return Refusal::PdContract;
     if (magnitude(f.ibus_ma) > kCurrentMaxMa) return Refusal::Current;
     if (f.vbus_mv < kFiveMinMv || f.vbus_mv > kFiveMaxMv) return Refusal::NotFiveVolts;
@@ -347,7 +338,7 @@ private:
         if (!s.vbus_known || !s.current_known) return Abort::NoMonitor;
         if (s.vbus_mv > kVbusMaxMv) return Abort::Overvoltage;
         if (magnitude(s.ibus_ma) > kCurrentMaxMa) return Abort::Current;
-        if ((s.far_sink && !usb_a_) || (s.inline_mode && !inline_waived(usb_a_, s.inline_cause))) return Abort::Sink;
+        if ((s.far_sink && !usb_a_) || s.inline_mode) return Abort::Sink;
         if (s.contract != start_contract_) {
             if (start_contract_ != Contract::Own5V) return Abort::PdContract;   // none at the start: one appeared
             return s.contract == Contract::None ? Abort::ContractLost : Abort::ContractChanged;

@@ -204,28 +204,22 @@ static void test_inline_by_foreign_request() {
     CHECK_EQ(l.inline_mode(), 1);
 }
 
-static void test_inline_by_vbus_without_own_contract() {
-    // VBUS at a PD level that this K2 did not ask for is somebody else's contract: possibly inline until proven otherwise.
-    // (Hardware 2026-11-09: a dock at 20 V feeding a laptop through the K2 is silent after the K2 boots into it: no load
-    // above 50 mA, no Request, no rise. The old rule called the K2 standalone and its Refresh transmitted into the session.)
+// A foreign VBUS level or a rise the K2 did not cause is NOT evidence of a device behind the K2 any more (user decision 2026-11-15:
+// "I'd only keep them when we are 100%, absolutely sure"). A charger that raises its own VBUS, a dock, a hub: none of it latches.
+static void test_a_foreign_vbus_level_or_rise_never_latches() {
     Link l;
-    l.update(inl(0, 9000, 0, 0, false));
-    l.update(inl(100, 9000, 0, 0, false));
-    CHECK_EQ(l.inline_mode(), 0);            // not for a sample or two
-    l.update(inl(kInlineForeignMs - 1, 9000, 0, 0, false));
+    for (std::uint32_t t = 0; t < 30000; t += 100) l.update(inl(t, 9000, 0, 0, false));
     CHECK_EQ(l.inline_mode(), 0);
-    l.update(inl(kInlineForeignMs + 1, 9000, 0, 0, false));
-    CHECK_EQ(l.inline_mode(), 1);            // a debounced foreign PD-level VBUS
-    // Our own trigger asked for it: a rise from 5 V is ours.
+    CHECK_EQ(int(l.inline_cause()), int(InlineCause::None));
     Link o;
     o.update(inl(0, 5000, 0, 0, true));
     o.update(inl(100, 9000, 0, 0, true));
     CHECK_EQ(o.inline_mode(), 0);
-    // A rise nobody on this side caused: somebody behind the K2 negotiated it.
-    Link m;
+    Link m;                                  // a rise nobody on this side caused
     m.update(inl(0, 5000, 0, 0, false));
     m.update(inl(100, 20000, 0, 0, false));
-    CHECK_EQ(m.inline_mode(), 1);
+    for (std::uint32_t t = 200; t < 30000; t += 100) m.update(inl(t, 20000, 0, 0, false));
+    CHECK_EQ(m.inline_mode(), 0);
 }
 
 // Hardware 2026-11-07 (Xiaomi 20K, SCP row after FCP 5/9/12 V): the SCP engine ran its handshake at 5 V, gave up
@@ -244,19 +238,21 @@ static void test_own_trigger_rise_after_the_trigger_ended_is_not_a_sink() {
     CHECK_EQ(l.inline_mode(), 0);
 }
 
-static void test_own_trigger_hold_ends_and_a_foreign_rise_still_latches() {
+static void test_a_rise_long_after_the_own_trigger_does_not_latch_either() {
     Link l;
     l.update(inl(0, 5000, 0, 0, true));
     l.update(inl(100, 5000, 0, 0, true));
-    l.update(inl(100 + kOwnHoldMs - 1, 5000, 0, 0, false));   // inside the hold: still ours
-    l.update(inl(100 + kOwnHoldMs + 1, 5000, 0, 0, false));   // hold over
-    l.update(inl(100 + kOwnHoldMs + 100, 20000, 0, 0, false));
-    CHECK_EQ(l.inline_mode(), 1);   // somebody behind the K2 negotiated 20 V
-    // A rise long after the trigger, never own in this attach: unchanged rule.
+    l.update(inl(10000, 5000, 0, 0, false));
+    l.update(inl(10100, 20000, 0, 0, false));
+    l.update(inl(20000, 20000, 0, 0, false));
+    CHECK_EQ(l.inline_mode(), 0);
     Link m;
     m.update(inl(0, 5000, 0, 0, false));
     m.update(inl(10, 9000, 0, 0, false));
+    CHECK_EQ(m.inline_mode(), 0);
+    m.update(inl(20, 9000, 400, 0, false));  // the same link, a load: now it is certain
     CHECK_EQ(m.inline_mode(), 1);
+    CHECK_EQ(int(m.inline_cause()), int(InlineCause::Load));
 }
 
 static void test_inline_by_request_then_vbus() {
@@ -343,68 +339,51 @@ static void test_inline_stays_while_active() {
     CHECK_EQ(l.inline_mode(), 0);
 }
 
-// Dock (20 V) - K2 - laptop, captured 2026-11-09: the K2 boots into a live contract. Nothing flows that it could measure as a load
-// (the laptop is full), nobody sends a Request, VBUS never rises. VBUS at 20 V that this K2 did not ask for is the evidence, and it
-// holds as long as it lasts: no quiet window can clear a state the data still shows.
-static void test_a_boot_into_a_live_contract_is_possibly_inline_and_stays() {
+// Dock (20 V) - K2 - laptop, captured 2026-11-09: the K2 boots into a live contract and nothing flows that it could measure as a
+// load (the laptop is full), nobody sends a Request, VBUS never rises. Since 2026-11-15 (user decision: keep the latch only on
+// evidence that is 100 % certain) that silent link no longer latches: a K2 inserted into a live but silent link is not protected
+// until a load or a sink's Request shows. The moment one does, the latch is back and says why.
+static void test_a_boot_into_a_silent_live_contract_does_not_latch_until_traffic() {
     Link l;
-    for (std::uint32_t t = 0; t <= 1000; t += 100) l.update(inl(t, 20190, 0, 0, false));
-    CHECK_EQ(l.inline_mode(), 0);                         // still inside the debounce
-    for (std::uint32_t t = 1100; t <= 3000; t += 100) l.update(inl(t, 20190, 0, 0, false));
-    CHECK_EQ(l.inline_mode(), 1);
-    for (std::uint32_t t = 3100; t <= 60000; t += 100) l.update(inl(t, 20190, 0, 0, false));
-    CHECK_EQ(l.inline_mode(), 1);                         // 57 s of silence is not proof of a standalone K2
-    for (std::uint32_t t = 60100; t <= 62000; t += 100) l.update(inl(t, 0, 0, 0, false));   // the dock is unplugged
-    CHECK_EQ(l.attached(), 0);
-    CHECK_EQ(l.inline_mode(), 1);                         // held across the gap
-    l.update(inl(62000 + kInlineHoldMs + 100, 0, 0, 0, false));
+    for (std::uint32_t t = 0; t <= 60000; t += 100) l.update(inl(t, 20190, 0, 0, false));
     CHECK_EQ(l.inline_mode(), 0);
+    CHECK_EQ(int(l.inline_cause()), int(InlineCause::None));
+    l.update(inl(60100, 20190, 600, 0, false));           // the laptop draws
+    CHECK_EQ(l.inline_mode(), 1);
+    CHECK_EQ(int(l.inline_cause()), int(InlineCause::Load));
+    Link r;
+    for (std::uint32_t t = 0; t <= 5000; t += 100) r.update(inl(t, 20190, 0, 0, false));
+    r.update(inl(5100, 20190, 0, 1, false));              // a Request nobody here sent
+    CHECK_EQ(r.inline_mode(), 1);
+    CHECK_EQ(int(r.inline_cause()), int(InlineCause::Request));
 }
 
-// A leftover 9 V that the K2 itself set earlier in this attach (a trigger that has ended) is its own doing, however long it lasts.
 static void test_a_voltage_the_k2_set_itself_is_never_foreign() {
     Link l;
     for (std::uint32_t t = 0; t < 3000; t += 100) l.update(inl(t, 5000, 0, 0, true));
     for (std::uint32_t t = 3000; t < 9000; t += 100) l.update(inl(t, 9000, 0, 0, true));      // the K2's own contract
     for (std::uint32_t t = 9000; t < 40000; t += 100) l.update(inl(t, 9000, 0, 0, false));    // the trigger ended, the charger stays
     CHECK_EQ(l.inline_mode(), 0);
-    Link o;                                                // an own contract right now masks everything
-    for (std::uint32_t t = 0; t < 20000; t += 100) {
-        LinkInput i = inl(t, 20000, 0, 0, true);
-        i.far_sink_cc = true;
-        o.update(i);
-    }
+    Link o;                                                // an own contract right now: never a sink
+    for (std::uint32_t t = 0; t < 20000; t += 100) o.update(inl(t, 20000, 0, 0, true));
     CHECK_EQ(o.inline_mode(), 0);
 }
 
-// A sink's Rd on a CC line while the K2 itself presents none and has no contract: a phone or laptop on the far side.
-static void test_a_sink_on_the_far_cc_is_possibly_inline() {
+// A sink's Rd on a CC line while the K2 itself presents none and has no contract (a phone or laptop on the far side) is no longer
+// a latch: hardware 2026-11-15 read ~1.75 V on CC2 of a USB-A charger with nothing plugged in (runs/cuktech-usba/cc-flip.txt in the
+// main checkout), so a CC level proves nothing. The levels still reach the Link for the waiting classifier; the latch ignores them.
+static void test_a_sink_band_cc_level_never_latches() {
     Link l;
-    for (std::uint32_t t = 0; t < 600; t += 100) {
+    for (std::uint32_t t = 0; t < 60000; t += 100) {
         LinkInput i = inl(t, 5000, 0, 0, false);
-        i.far_sink_cc = true;
+        i.cc = 2;
+        i.cc1_mv = 3300;
+        i.cc2_mv = 1750;                                   // the phantom
+        i.passive = true;
         l.update(i);
     }
-    CHECK_EQ(l.inline_mode(), 0);                          // a blip
-    l.update(inl(700, 5000, 0, 0, false));
-    for (std::uint32_t t = 800; t < 800 + kInlineForeignMs + 200; t += 100) {
-        LinkInput i = inl(t, 5000, 0, 0, false);
-        i.far_sink_cc = true;
-        l.update(i);
-    }
-    CHECK_EQ(l.inline_mode(), 1);                          // 1.5 s of continuous evidence
-    const std::uint32_t t1 = 800 + kInlineForeignMs + 200;
-    for (std::uint32_t t = t1; t < t1 + 30000; t += 100) {
-        LinkInput i = inl(t, 5000, 0, 0, false);
-        i.far_sink_cc = true;
-        l.update(i);
-    }
-    CHECK_EQ(l.inline_mode(), 1);                          // evidence present: no unlatch
-    const std::uint32_t t2 = t1 + 30000;
-    for (std::uint32_t t = t2; t < t2 + kInlineQuietMs - 500; t += 100) l.update(inl(t, 5000, 0, 0, false));
-    CHECK_EQ(l.inline_mode(), 1);                          // evidence gone, the quiet window runs
-    l.update(inl(t2 + kInlineQuietMs + 600, 5000, 0, 0, false));
-    CHECK_EQ(l.inline_mode(), 0);                          // proof: 10 s without it
+    CHECK_EQ(l.inline_mode(), 0);
+    CHECK_EQ(int(l.inline_cause()), int(InlineCause::None));
 }
 
 // A phone ALONE on the port (dual-role, no charger, VBUS dark): its toggling Rp reads as a sink's Rd part of the time and the
@@ -415,7 +394,7 @@ static void test_a_sink_on_the_far_cc_is_possibly_inline() {
 static LinkInput pixel_alone(std::uint32_t t) {
     LinkInput i = inl(t, (t / 20) % 10 == 0 ? 900 : 0, 0, 0, false);   // a spike every 200 ms: no 300 ms of continuous dark
     i.cc = 2;                                                           // the stale passive attach
-    i.far_sink_cc = true;                                               // the Rd-like level (steady in this model: the worst case)
+    i.cc2_mv = 1750;                                                    // the Rd-like level (steady in this model: the worst case)
     return i;
 }
 
@@ -425,14 +404,13 @@ static void test_a_dark_phone_alone_never_holds_the_inline_latch() {
     CHECK_EQ(l.attached(), 1);        // the premise: the spikes keep the Link attached
     CHECK_EQ(l.inline_mode(), 0);     // a sink's Rd with no VBUS in sight is not a contract
 
-    Link k;                           // a latch from the charger it was plugged into earlier, then the charger leaves
+    Link k;                           // a load latch from the charger it was plugged into earlier, then the charger leaves
     for (std::uint32_t t = 0; t < 4000; t += 20) {
-        LinkInput i = inl(t, 5000, 0, 0, false);
+        LinkInput i = inl(t, 5000, 400, 0, false);
         i.cc = 2;
-        i.far_sink_cc = true;
         k.update(i);
     }
-    CHECK_EQ(k.inline_mode(), 1);     // VBUS up and a sink's Rd: the latch is right while the contract lives
+    CHECK_EQ(k.inline_mode(), 1);     // a load: the latch is right while the contract lives
     for (std::uint32_t t = 4000; t < 4000 + 3000 + kInlineQuietMs + 1000; t += 20) k.update(pixel_alone(t));
     CHECK_EQ(k.inline_mode(), 0);     // the charger is gone: the dark evidence stops holding it
 }
@@ -694,7 +672,7 @@ static LinkInput auto_off_decay(std::uint32_t t) {
     if (p < kOn + kDecay) {
         LinkInput i = inl(t, std::int32_t(3400 - (p - kOn) * 2200 / kDecay), 0);   // 3.4 V down to 1.2 V
         i.cc = 2;
-        i.far_sink_cc = true;
+        i.cc2_mv = 1750;
         return i;
     }
     LinkInput i = inl(t, 300, 0);
@@ -734,42 +712,44 @@ static void test_a_sink_talking_pd_through_the_cuts_stays_inline() {
     CHECK_EQ(int(l.inline_cause()), int(InlineCause::Request));
 }
 
-static void test_a_far_rd_with_vbus_up_through_the_cuts_stays_inline() {
+// A sink-band CC level while the source feeds the link, cut after cut, is no evidence (user decision 2026-11-15).
+static void test_a_far_rd_with_vbus_up_through_the_cuts_never_latches() {
     Link l;
     for (std::uint32_t t = 0; t < 60000; t += 20) {
         LinkInput i = auto_off(t);
-        i.far_sink_cc = !ao_cut(t);   // a sink's Rd while the source feeds the link
+        if (!ao_cut(t)) { i.cc1_mv = 3300; i.cc2_mv = 1750; }   // a sink's Rd while the source feeds the link
         l.update(i);
     }
-    CHECK_EQ(l.inline_mode(), 1);
-    CHECK_EQ(int(l.inline_cause()), int(InlineCause::FarRd));
+    CHECK_EQ(l.inline_mode(), 0);
+    CHECK_EQ(int(l.inline_cause()), int(InlineCause::None));
 }
 
-// The cause of a latch that only the topology explains (a far Rd, a foreign VBUS) is replaced when traffic proves a device
-// (a load, a Request): the SuperVOOC trigger's USB-A waiver reads this and must not stay blind to a device that wakes later.
-// A VBUS rise is not such proof here: the trigger's own ramp raises VBUS and the latch stays what it was.
+// What latches the link is traffic only: a load or a sink's Request, never the topology (a far Rd, a foreign VBUS, a rise). The
+// cause says which of the two, and a load latch keeps its cause when a Request follows.
 static LinkInput far_rd_link(std::uint32_t t, std::int32_t vbus, std::int32_t ma, std::uint32_t req) {
     LinkInput i = inl(t, vbus, ma, req);
     i.cc = 2;
-    i.far_sink_cc = true;
+    i.cc2_mv = 1750;
     return i;
 }
 
-static void test_a_topology_cause_gives_way_to_traffic() {
+static void test_only_traffic_latches_and_names_its_cause() {
     for (const int later : {0, 1}) {   // 0: a load shows up, 1: a sink's Request shows up
         Link l;
         std::uint32_t t = 0;
         for (; t < 4000; t += 20) l.update(far_rd_link(t, 5100, 0, 0));
-        CHECK_EQ(l.inline_mode(), 1);
-        CHECK_EQ(int(l.inline_cause()), int(InlineCause::FarRd));
+        CHECK_EQ(l.inline_mode(), 0);                       // the topology alone latches nothing
+        CHECK_EQ(int(l.inline_cause()), int(InlineCause::None));
         l.update(far_rd_link(t, 5100, later == 0 ? 400 : 0, later == 1 ? 1 : 0));
+        CHECK_EQ(l.inline_mode(), 1);
         CHECK_EQ(int(l.inline_cause()), int(later == 0 ? InlineCause::Load : InlineCause::Request));
     }
-    Link l;   // a rise (VBUS 5.1 V up to 9 V) leaves the topology cause alone
+    Link l;   // a rise (VBUS 5.1 V up to 9 V) latches nothing
     std::uint32_t t = 0;
     for (; t < 4000; t += 20) l.update(far_rd_link(t, 5100, 0, 0));
     for (; t < 6000; t += 20) l.update(far_rd_link(t, 9000, 0, 0));
-    CHECK_EQ(int(l.inline_cause()), int(InlineCause::FarRd));
+    CHECK_EQ(l.inline_mode(), 0);
+    CHECK_EQ(int(l.inline_cause()), int(InlineCause::None));
     Link m;   // a load latch keeps its cause when a Request follows
     m.update(inl(0, 5100, 400));
     m.update(inl(20, 5100, 400, 1));
@@ -810,18 +790,18 @@ int main() {
     test_inline_by_current();
     test_self_supply_is_not_a_load();
     test_inline_by_foreign_request();
-    test_inline_by_vbus_without_own_contract();
+    test_a_foreign_vbus_level_or_rise_never_latches();
     test_own_trigger_rise_after_the_trigger_ended_is_not_a_sink();
-    test_own_trigger_hold_ends_and_a_foreign_rise_still_latches();
+    test_a_rise_long_after_the_own_trigger_does_not_latch_either();
     test_inline_by_request_then_vbus();
     test_inline_clears_when_idle();
     test_inline_stays_while_active();
     test_a_short_lull_is_not_proof_of_a_standalone_k2();
     test_inline_survives_a_vbus_collapse_and_the_reattach();
     test_inline_clears_after_a_long_detach();
-    test_a_boot_into_a_live_contract_is_possibly_inline_and_stays();
+    test_a_boot_into_a_silent_live_contract_does_not_latch_until_traffic();
     test_a_voltage_the_k2_set_itself_is_never_foreign();
-    test_a_sink_on_the_far_cc_is_possibly_inline();
+    test_a_sink_band_cc_level_never_latches();
     test_a_dark_phone_alone_never_holds_the_inline_latch();
     test_five_volts_alone_is_a_standalone_k2();
     test_force();
@@ -842,8 +822,8 @@ int main() {
     test_an_auto_off_ports_collapsing_rp_is_not_a_sink();
     test_a_sink_drawing_through_the_cuts_stays_inline();
     test_a_sink_talking_pd_through_the_cuts_stays_inline();
-    test_a_far_rd_with_vbus_up_through_the_cuts_stays_inline();
-    test_a_topology_cause_gives_way_to_traffic();
+    test_a_far_rd_with_vbus_up_through_the_cuts_never_latches();
+    test_only_traffic_latches_and_names_its_cause();
     test_after_a_cut_the_sink_gets_time_to_show_itself();
     return test_report("test_pd_link");
 }

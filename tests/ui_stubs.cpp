@@ -101,7 +101,6 @@ bool inline_mode() { return g_stub.inl; }
 void set_wait_kind(k2::raguard::WaitKind kind) { g_stub.wait_kind = kind; }
 k2::raguard::WaitKind wait_kind() { return g_stub.wait_kind; }
 bool caps_this_attach() { return g_stub.caps_this_attach; }
-bool sink_cc_far() { return g_stub.far_cc; }
 void new_source() { g_stub.new_sources++; }
 void clear_source() { g_stub.clear_sources++; g_stub.caps.num_pdos = 0; }
 bool cc_detach() { g_stub.cc_detaches++; return true; }

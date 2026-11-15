@@ -3747,27 +3747,24 @@ void test_the_far_sink_belongs_to_one_attach_for_the_rd_policy() {
     self_hold_end();
 }
 
-// A sink's Rd in the sink band on a CC line while the K2 pulls none down: the evidence the Link turns into "possibly inline" when a
-// dock - K2 - laptop session is silent (hardware 2026-11-09: cc1 1676 mV against an open 3303 mV). The K2's own Rd gives no verdict.
-void test_a_sink_band_level_without_rd_of_our_own_is_a_far_sink() {
+// A sink's Rd in the sink band on a CC line while the K2 pulls none down is NOT evidence of a device behind the K2 any more
+// (user decision 2026-11-15; hardware 2026-11-15: a USB-A charger with nothing plugged in read ~1.75 V on CC2). Only a
+// foreign Request, a PD message only a sink sends, or the link's load latch make the over-load facts say "far sink".
+void test_a_sink_band_level_without_rd_of_our_own_is_no_evidence() {
     reset_world();
     g_mark = 0;
-    fusb302::init();                                   // plain boot: SWITCHES0 without Rd
-    fusb302::sink_cc(3303, 3303);
-    CHECK_EQ(fusb302::sink_cc_far(), false);           // open Rp on both lines: a source alone
-    fusb302::sink_cc(1676, 3303);
-    CHECK_EQ(fusb302::sink_cc_far(), true);            // Rp 3 A into the laptop's Rd
-    fusb302::sink_cc(3303, 1676);
-    CHECK_EQ(fusb302::sink_cc_far(), true);            // either line
-    fusb302::sink_cc(410, 3303);
-    CHECK_EQ(fusb302::sink_cc_far(), false);           // default Rp into an Rd is out of the band: not enough to call it
-    fusb302::sink_cc(-1, -1);
-    CHECK_EQ(fusb302::sink_cc_far(), false);           // unknown is not evidence
-    const unsigned pin = self_hold_boot(0);            // PLUS boot, the brick attached: the K2's own Rd on CC2
-    CHECK_EQ(sw0_rd(), pin);
-    fusb302::sink_cc(3303, 1676);
-    CHECK_EQ(fusb302::sink_cc_far(), false);           // that level is the K2's own divider
-    self_hold_end();
+    passive_attach();                                  // a new attach: no earlier case's sink on record
+    settle_ms(100);
+    fusb302::set_inline(false);
+    const int levels[][2] = {{3303, 3303}, {1676, 3303}, {3303, 1676}, {410, 3303}, {-1, -1}};
+    for (const auto &l : levels) {
+        fusb302::sink_cc(l[0], l[1]);
+        fusb302::poll();
+        const pd::OverLoadFacts f = fusb302::over_load_facts();
+        CHECK_EQ(f.far_sink, false);
+        CHECK_EQ(int(pd::over_load_allowed(f)), 0);
+    }
+    clean_up_rd_tests();
 }
 
 // ---- No SW_RES on a pinned or comeback boot: both Rd for 0.13 ms (roadmap 2026-11-09) ----
@@ -3819,8 +3816,10 @@ void test_a_far_sinks_control_message_is_a_far_pd_message_for_the_over_load_gate
     passive_attach();
     settle_ms(100);
     fusb302::sink_vbus(5000);
-    fusb302::sink_cc(1676, 3303);              // a sink's Rd on CC1, none of ours on any line
+    fusb302::sink_cc(1676, 3303);              // a sink-band level: no evidence by itself
     fusb302::poll();
+    CHECK_EQ(fusb302::over_load_facts().far_sink, false);
+    fusb302::set_inline(true);                 // the link latched on a load: a sink draws behind the K2
     pd::OverLoadFacts f = fusb302::over_load_facts();
     CHECK_EQ(f.far_sink, true);
     CHECK_EQ(f.far_pd_message, false);         // nothing from the sink yet: a passive load
@@ -3836,13 +3835,13 @@ void test_a_far_sinks_control_message_is_a_far_pd_message_for_the_over_load_gate
     CHECK_EQ(fusb302::over_load_facts().far_pd_message, true);
     g_reg[0x40] = 0x00;                        // the source leaves: a detach
     settle_ms(2000);
-    CHECK_EQ(fusb302::sink_cc_far(), false);   // the far-sink CC reading is not stale-true after the detach
     g_reg[0x40] = 0x20;                        // a charger is back: a new attach
     for (int i = 0; i < 100 && !usb_has("Active CC detected"); i++) { g_ms += 20; fusb302::poll(); }
     CHECK_EQ(usb_has("Active CC detected"), true);
     fusb302::sink_vbus(5000);
     fusb302::sink_cc(1676, 3303);
     fusb302::poll();
+    fusb302::set_inline(true);                 // the link latches again on a load
     push_frame(0xE0, hdr(1, 0, true), {});     // the source's GoodCRC (power-role bit set)
     push_frame(0xE0, hdr(3, 0, true, 1), {});  // the source's Accept
     service_ms(10);
@@ -3850,6 +3849,7 @@ void test_a_far_sinks_control_message_is_a_far_pd_message_for_the_over_load_gate
     CHECK_EQ(f.far_sink, true);
     CHECK_EQ(f.far_pd_message, false);         // a new attach forgot the old sink's messages
     CHECK_EQ(int(pd::over_load_allowed(f)), 1);
+    fusb302::set_inline(false);
     clean_up_rd_tests();
 }
 
@@ -5357,7 +5357,7 @@ int main() {
     test_inline_survives_a_detach_and_the_pinned_rd_stays_off_until_the_link_clears_it();
     test_rescan_and_cc_open_are_passive_with_a_far_sink();
     test_the_far_sink_belongs_to_one_attach_for_the_rd_policy();
-    test_a_sink_band_level_without_rd_of_our_own_is_a_far_sink();
+    test_a_sink_band_level_without_rd_of_our_own_is_no_evidence();
     test_pinned_boot_never_soft_resets_so_no_rd_pair_at_sw_res();   // last: ends with a detach / Rd off
     test_a_far_sinks_control_message_is_a_far_pd_message_for_the_over_load_gate();   // last: ends with a detach / reset
     test_lab_pin_clears_when_the_far_end_detaches();            // last: each one ends with a detach / Rd off

@@ -213,7 +213,7 @@ struct Options {
     bool avs_sweep = false;
     // The SVOOC ceiling stage (svooc_ceiling.hpp): opt-in like the sweeps, never in a preset. On = after a detected VOOC family
     // the guarded trigger asks the adapter 1.5 / 4 / 6.3 / 10.9 A (a protocol word, no load) and the highest ask it went on
-    // under is the result; UsbA also waives the trigger's far-sink refusal (a legacy A port, the top port empty).
+    // under is the result. UsbA (the retired USB-A waiver, kept for the wire) runs as On: the inline latch only keeps certain evidence now.
     svooc_ceiling::Mode svooc_cap = svooc_ceiling::Mode::Off;
     // How thorough the run is (with_level). Medium is 0 on every wire (journal, remote status word, card), so data written before
     // the level existed reads as Medium.
@@ -228,8 +228,8 @@ struct Options {
 //   Deep   - Medium plus the PPS and AVS deep sweeps over every APDO and the SVOOC ceiling stage.
 // The sweep flags stay their own switches afterwards (the Custom flow's sweep rows and the remote commands toggle them).
 // The SVOOC ceiling stage (the guarded trigger, VBUS up to the adapter's ceiling) is Deep only: Light and Medium stop at the
-// VOOC family's detection and its ident. Deep turns it on, keeping the operator's usb-a waiver (never chosen here: the waiver
-// is the operator's word that nothing sits on the other port).
+// VOOC family's detection and its ident. Deep turns it on, keeping the mode the operator set (UsbA is the retired waiver and
+// runs as On).
 constexpr Options with_level(Options o, Level l) {
     o.level = l;
     o.pps_sweep = o.avs_sweep = l == Level::Deep;
@@ -327,9 +327,6 @@ struct Input {
     // D+/D- are free for the ceiling stage's trigger: no owner holds them and they sit at the passive idle (the trigger's own
     // start check, svooc_trig::lines_free()). False for 500 ms after a legacy session's release (the engine's 0 V discharge).
     bool lines_free = true;
-    // What latched inline_load (pd::Link::inline_cause()). The ceiling stage's USB-A waiver (Options::svooc_cap == UsbA) clears
-    // inline_load for the two causes an A-to-C cable explains on its own (svooc::inline_waived: FarRd, Vbus), as the trigger does.
-    pd::InlineCause inline_cause = pd::InlineCause::None;
 };
 // The runner waits for the source probe at most this long, so a charger that ignores it costs the run under 1 s.
 inline constexpr uint32_t kProbeMaxMs = 1000;
@@ -542,9 +539,8 @@ struct Env {
     virtual void hunt_evidence(const Step&, const HuntEvidence&) {}
     // The SVOOC ceiling stage (svooc_ceiling.hpp). ceiling_start starts the guarded trigger with the Probe profile and the
     // stage's cap: 0 = started, else the trigger's svooc::Refusal (never 0 for a refusal), 255 = no trigger on this build.
-    // `usb_a` is the operator's waiver (Options::svooc_cap == UsbA). ceiling_stop ends it (idempotent, the exit watch follows).
-    // The stage reads the rest from Input::svooc.
-    virtual uint8_t ceiling_start(bool usb_a) { (void)usb_a; return 255; }
+    // ceiling_stop ends it (idempotent, the exit watch follows). The stage reads the rest from Input::svooc.
+    virtual uint8_t ceiling_start() { return 255; }
     virtual void ceiling_stop() {}
 protected:
     ~Env() = default;
@@ -644,7 +640,7 @@ public:
     // card's final-reason path read them. A WrongVoltage under a live PDO 1 contract names the level in the log:
     // "VBUS 8.5 V on a 5 V contract (shared bus)". A Busy refusal names the holding tool via `detail` (the UI's
     // busy_reason footer text, e.g. "PD hold: release it"), so the log line says which tool holds the line; an Inline
-    // refusal names what latched the inline state (pd::inline_cause_name, e.g. "far rd"). Only outside a run.
+    // refusal names what latched the inline state (pd::inline_cause_name: load or sink request). Only outside a run.
     void note_preflight_refusal(Reason r, int vbus_mv, const char* detail = nullptr);
     uint16_t refusal_mv() const { return refusal_mv_; }   // the measured VBUS of the recorded preflight refusal
     // While held, a run that has just been start()ed stays in its Baseline: nothing is judged or requested, and the Baseline's

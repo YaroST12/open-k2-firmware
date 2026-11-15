@@ -493,11 +493,12 @@ static void test_source_tab_typec_advertisement() {
     g_stub.pm.vbus_mv = 5000;
 }
 
-// Dock -> K2 -> laptop with no PD traffic of its own (hardware 2026-11-09): a sink's Rd on the far side. Once the Link calls it
-// possibly inline, the Source tab's "PD none" row says the line is in use, and the Sink tab is not the NO DEVICE empty state.
+// Dock -> K2 -> laptop with no PD traffic of its own (hardware 2026-11-09). A sink's Rd on the far side no longer says anything
+// (user decision 2026-11-15: only a load or a sink's Request latches); once the laptop draws, the Link calls it inline, the
+// Source tab's "PD none" row says the line is in use, and the Sink tab is not the NO DEVICE empty state.
 static void test_source_and_sink_tabs_say_in_use_when_possibly_inline() {
     Ui &ui = fresh_ui();
-    g_stub.pm.vbus_mv = 5000;                          // 5 V alone is a standalone K2; the far Rd is what says "possibly inline"
+    g_stub.pm.vbus_mv = 5000;                          // 5 V alone is a standalone K2; a load is what says "inline"
     g_stub.cc = 1;
     g_stub.pd_seen_attach = true;                      // a decoded PD message: the verdict is Present, the rows body stays
     uint32_t t = 20000;
@@ -508,15 +509,18 @@ static void test_source_and_sink_tabs_say_in_use_when_possibly_inline() {
     CHECK_EQ(int(ui.link().inline_mode()), 0);
     const auto src_alone = show(ui, 0, t);
     const auto snk_alone = show(ui, 2, t);
-    g_stub.far_cc = true;                              // a sink-band level with no Rd of the K2's own
-    for (uint32_t i = 0; i < k2::pd::kInlineForeignMs / 100 + 3; i++) ui.tick(t += 100);
+    ui.tick(t += 100);
+    CHECK_EQ(int(ui.link().inline_mode()), 0);         // the sink-band level alone latches nothing
+    CHECK(show(ui, 0, t) == src_alone);
+    g_stub.pm.current_ma = 400;                        // the laptop draws: certain evidence
+    for (int i = 0; i < 3; i++) ui.tick(t += 100);
     CHECK_EQ(int(ui.link().inline_mode()), 1);
     CHECK(show(ui, 0, t) != src_alone);                // "PD none, line in use"
     CHECK(show(ui, 2, t) != snk_alone);                // the Sink tab leaves the empty state
 #ifdef K2_TRUNC_LOG
     CHECK_EQ(k2::trunc::failures(), 0);
 #endif
-    g_stub.far_cc = false;
+    g_stub.pm.current_ma = 0;
     g_stub.pm.vbus_mv = 5000;
 }
 
@@ -1137,7 +1141,6 @@ static void test_sink_tab_no_pd_offered_unanswered() {
     g_stub.cc = 1;
     g_stub.pm.vbus_mv = 5030;
     g_stub.pm.current_ma = 70;
-    g_stub.far_cc = true;
     g_stub.caps.valid = true;
     g_stub.caps.rx_count = 100;
     g_stub.pd_seen_attach = true;          // the caps themselves are PD messages
@@ -1179,7 +1182,6 @@ static void test_source_tab_no_pd_never_offered_all_rotations() {
     g_stub.cc = 1;
     g_stub.pm.vbus_mv = 5030;
     g_stub.pm.current_ma = 70;
-    g_stub.far_cc = true;
     g_stub.pd_seen_attach = false;         // nothing decoded this attach
     g_stub.caps.valid = false;
     g_stub.typec_ma_val = 1500;            // the source's advertised Rp: default USB
@@ -1214,7 +1216,6 @@ static void test_pd_present_keeps_identify_offered() {
     g_stub.cc = 1;
     g_stub.pm.vbus_mv = 5030;
     g_stub.pm.current_ma = 70;
-    g_stub.far_cc = true;
     g_stub.caps.valid = true;
     g_stub.caps.rx_count = 50;
     g_stub.pd_seen_attach = true;
@@ -1239,7 +1240,6 @@ static void test_sink_tab_no_pd_shows_the_raw_vooc_note() {
     g_stub.cc = 1;
     g_stub.pm.vbus_mv = 5030;
     g_stub.pm.current_ma = 70;
-    g_stub.far_cc = true;
     g_stub.caps.valid = true;
     g_stub.caps.rx_count = 100;
     g_stub.pd_seen_attach = true;
@@ -1279,7 +1279,6 @@ static void test_sink_tab_pd_body_shows_the_raw_vooc_note() {
     g_stub.cc = 1;
     g_stub.pm.vbus_mv = 5030;
     g_stub.pm.current_ma = 70;
-    g_stub.far_cc = true;
     g_stub.caps.valid = true;
     g_stub.caps.rx_count = 50;
     g_stub.pd_seen_attach = true;
@@ -1409,11 +1408,15 @@ static void test_svooc_trigger_rise_is_not_a_sink() {
     g_stub.pm.vbus_mv = 5100;
     for (int i = 0; i < 5; i++) ui.tick(t += 100);
     CHECK_EQ(int(ui.link().inline_mode()), 0);
-    // Control: long after the trigger, a rise nobody on this side asked for still latches.
-    for (uint32_t i = 0; i < k2::pd::kOwnHoldMs / 100 + 5; i++) ui.tick(t += 100);
+    // A rise nobody on this side asked for latches nothing either (user decision 2026-11-15); a load does.
+    for (int i = 0; i < 300; i++) ui.tick(t += 100);
     g_stub.pm.vbus_mv = 9000;
+    for (int i = 0; i < 30; i++) ui.tick(t += 100);
+    CHECK_EQ(int(ui.link().inline_mode()), 0);
+    g_stub.pm.current_ma = 400;
     for (int i = 0; i < 3; i++) ui.tick(t += 100);
     CHECK_EQ(int(ui.link().inline_mode()), 1);
+    g_stub.pm.current_ma = 0;
     g_stub.pm.vbus_mv = 5000; g_stub.cc = 0;
 }
 

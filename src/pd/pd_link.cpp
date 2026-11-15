@@ -12,13 +12,10 @@ void Link::set_attached(bool on, std::uint32_t at_ms) {
         detach_at_ = at_ms;
         rx_at_detach_ = last_rx_;
         waiting_ = false;
-        own_seen_ = false;   // inline_ stays: a collapse of VBUS is not proof that the sink left (see kInlineHoldMs)
-        own_ever_ = false;
-        foreign_timing_ = false;
+        // inline_ stays: a collapse of VBUS is not proof that the sink left (see kInlineHoldMs)
     } else {
         waiting_ = true;  // old data stays until new Source_Capabilities arrive (or kWaitingCapsMs pass)
         new_source_ = true;
-        vbus_was_low_ = false;
         attach_at_ = at_ms;
         // The count starts at the detach, not at this edge: the edge is the first tick that saw VBUS, and the driver may have
         // decoded the new source's caps before it (a paint held the tick, or the VBUS sample lagged the CC attach).
@@ -119,55 +116,22 @@ void Link::update(const LinkInput& in) {
         const bool loaded = in.current_known && mag > kInlineCurrentMa + (in.self_supply_ma > 0 ? in.self_supply_ma : 0);
         const bool new_request = in.requests != requests_seen_;
         requests_seen_ = in.requests;
-        // A rise above 5.5 V that the K2 did not cause: only counts after VBUS was seen at or
-        // below 5.5 V while attached. A charger already sitting at 9 V is not a sink.
-        // "Ours" lasts kOwnHoldMs past the end of the K2's trigger: a trigger that gave up releases the data lines and the
-        // charger answers a few ms later, when the trigger is already Failed or Idle.
-        if (in.own_contract) { own_seen_ = true; own_ever_ = true; own_last_ms_ = in.now_ms; }
-        const bool own_recent = in.own_contract || (own_seen_ && in.now_ms - own_last_ms_ <= kOwnHoldMs);
-        // The lines alone: a PD-level VBUS nobody on this side asked for, or a sink's Rd on CC (see kInlineForeignMs).
-        // A sink's Rd is evidence of a contract only while a source feeds the link: with VBUS never at vSafe5V for
-        // kDarkSinkMs (since the attach or the last time it was) the "sink" is a dual-role port toggling its Rp (a phone alone).
-        // In a VBUS cut the level is void too: a VBUS-fed Rp (A-to-C cable) sweeps the sink band while the output collapses.
-        const std::uint32_t up_since = vbus_up_ms_ > attach_at_ ? vbus_up_ms_ : attach_at_;
-        const bool dark_far = in.vbus_known && in.now_ms - up_since >= kDarkSinkMs;
-        const bool far = in.far_sink_cc && (up_now || (!cut && !dark_far));
-        const bool foreign_vbus = in.vbus_known && in.vbus_mv > kInlineVbusMv && !own_ever_;
-        const bool foreign_now = !own_recent && (foreign_vbus || far);
-        bool foreign = false;
-        if (foreign_now) {
-            if (!foreign_timing_) { foreign_timing_ = true; foreign_since_ = in.now_ms; }
-            foreign = in.now_ms - foreign_since_ >= kInlineForeignMs;
-        } else {
-            foreign_timing_ = false;
-        }
-        bool rise = false;
-        if (in.vbus_known) {
-            if (in.vbus_mv <= kInlineVbusMv) vbus_was_low_ = true;
-            else if (vbus_was_low_) {
-                vbus_was_low_ = false;   // consumed: it needs a new low before the next rise
-                rise = !own_recent;
-            }
-        }
+        // Only evidence that is certain latches: a load beyond the K2's own supply, or a sink's PD Request that the K2 did not
+        // send. Level evidence never latches (user decision 2026-11-15): a sink-band level on CC (a floating CC2 reads ~1.75 V on
+        // a USB-A port with nothing plugged in), a VBUS above 5.5 V and a VBUS rise can all be explained without a device behind
+        // the K2. The causes that named them (InlineCause::Rise / Vbus / FarRd) stay in the enum for the wire and the journal only.
         if (!inline_) {
             const bool request = in.requests != requests_at_attach_;
-            if (loaded || request || rise || foreign) {
+            if (loaded || request) {
                 inline_ = true;
                 quiet_since_ = in.now_ms;
-                cause_ = loaded ? InlineCause::Load : request ? InlineCause::Request : rise ? InlineCause::Rise :
-                         far ? InlineCause::FarRd : InlineCause::Vbus;
-            }
-        } else if (loaded || new_request || rise || foreign_now) {
-            quiet_since_ = in.now_ms;    // live traffic: keep the guard
-            // A latch that only the topology explained (a far Rd, a foreign VBUS) turns into the traffic cause once a load or
-            // a Request shows a device (the SuperVOOC trigger's USB-A waiver covers the topology causes only). A rise stays
-            // out: a trigger of the K2's own raises VBUS without a contract of ours, and would end its run.
-            if ((cause_ == InlineCause::FarRd || cause_ == InlineCause::Vbus) && (loaded || new_request))
                 cause_ = loaded ? InlineCause::Load : InlineCause::Request;
+            }
+        } else if (loaded || new_request) {
+            quiet_since_ = in.now_ms;    // live traffic: keep the guard
         } else if (in.now_ms - quiet_since_ > kInlineQuietMs && in.now_ms - paused_at_ >= kInlineResumeMs) {
             inline_ = false;             // the sink left without a CC detach: Auto-CRC comes back
             requests_at_attach_ = in.requests;
-            vbus_was_low_ = false;       // a high VBUS that stays does not re-latch
         }
     }
 }

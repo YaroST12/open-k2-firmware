@@ -278,10 +278,9 @@ pd::Err sink_request(const pd::Choice& c, bool confirmed = false, bool over_load
 // The one trigger gate (wizard, remote and sink_request all use it): None = a Request may go out.
 pd::TriggerRefusal trigger_refusal();
 // Lab-only over-load facts, derived from the existing foreign-evidence tracking (no second tracker):
-// far_sink = the inline latch, a sink Rd read while inline, a sink Rd on CC with none of ours, or a
-// foreign Request; far_pd_message = a Request we did not send this attach, any sink-role control
-// message (GoodCRC, Get_Source_Cap), or the sink-role records the engine already filed
-// (Sink_Capabilities, VDMs) - all cleared with the attach.
+// far_sink = the inline latch, a sink Rd read while inline, or a foreign Request; far_pd_message = a Request we did not
+// send this attach, any sink-role control message (GoodCRC, Get_Source_Cap), or the sink-role records the engine already
+// filed (Sink_Capabilities, VDMs) - all cleared with the attach.
 pd::OverLoadFacts over_load_facts();
 // Any PD message (any SOP: caps, Request, PS_RDY, VDM, GoodCRC) seen since this attach.
 bool pd_traffic();
@@ -311,10 +310,6 @@ void sink_set_hv_lock(bool on);
 // The owner clears it on every exit path.
 void sink_set_vbus_external(bool on);
 void sink_cc(std::int32_t cc1_mv, std::int32_t cc2_mv);  // measured CC voltages; inline, no sink Rd near 1.5 V = sink left. Also stored as the latest net levels (g_cc1_mv/g_cc2_mv) for the attach scan's Rd-window cross-check and its re-run on fresh levels while a line is attached with no PD decoded yet; -1 = unknown
-// A sink's Rd level (the sink band, about 1.5 V) on a CC line while the K2 pulls none down itself, from the latest sink_cc() levels:
-// a phone or laptop on the other end of an inline K2, visible even when no PD message is ever exchanged. False while the K2's own
-// Rd is on (the level is then its own divider) and while the levels are unknown.
-bool sink_cc_far();
 void sink_vbus(std::int32_t mv);      // measured VBUS; the engine aborts to 5 V above target + 10 % / the cap
 const pd::SinkStatus& sink_status();
 // The sink's record of the last Request it sent and the Xiaomi chain around it (diagnostics for a refused 6 A row).

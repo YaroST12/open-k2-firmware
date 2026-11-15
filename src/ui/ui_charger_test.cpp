@@ -208,7 +208,6 @@ charger_test::Input ChargerTestSession::input(uint32_t now) const {
     // No USB host: the K2 runs on this VBUS and its own draw crosses the shunt; only what is above it is a load.
     if (!usb::configured()) in.ibus_ma = std::max(0, in.ibus_ma - static_cast<int>(pd::kSelfSupplyAllowanceMa));
     in.inline_load = ctx_.inline_mode; in.fake = pd::is_fake(); in.busy = ctx_.ui->spoof_busy();
-    in.inline_cause = ctx_.inline_mode ? ctx_.ui->link().inline_cause() : pd::InlineCause::None;
     in.loop_lock = loopguard::locked();   // the HID-cable loop 5 V lock: refuses the start, ends a run (Reason::Loop)
     in.pd = fusb302::sink_status();
     in.epr_info = &fusb302::epr_info_list();
@@ -311,11 +310,11 @@ void ChargerTestSession::release(bool pd) {
 }
 // The SVOOC ceiling stage (docs/CHARGER_TEST_FLOW.md): the no-load trigger with the Probe responder (the 0x86 ladder asked
 // of the adapter, never answered with a draw). `ports_busy` is false: this session is the owner and has released the family
-// session before it asks. The trigger's own guards (50 mA, 5 V, the far-sink check unless USB-A, no PD) refuse by themselves.
-uint8_t ChargerTestSession::ceiling_start(bool usb_a) {
+// session before it asks. The trigger's own guards (50 mA, 5 V, the far-sink check, no PD) refuse by themselves.
+uint8_t ChargerTestSession::ceiling_start() {
     svooc::Params p;
     p.profile = svooc::Profile::Probe;
-    return static_cast<uint8_t>(svooc_trig::start(true, false, svooc_ceiling::kCapS, usb_a, p));
+    return static_cast<uint8_t>(svooc_trig::start(true, false, svooc_ceiling::kCapS, false, p));
 }
 void ChargerTestSession::ceiling_stop() { svooc_trig::stop(); }
 void ChargerTestSession::record(const ct::Step& s) {

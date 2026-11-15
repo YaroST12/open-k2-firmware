@@ -113,7 +113,6 @@ bool g_new_source = false;  // next Source_Capabilities on SOP starts a fresh so
 std::int32_t g_cc_sink_mv = -1;  // the CC voltage closest to the sink-Rd band (-1 unknown)
 std::int32_t g_cc1_mv = -1, g_cc2_mv = -1;  // latest ADC net levels from sink_cc(); -1 = unknown
 std::uint8_t g_sw0 = 0;          // the last SWITCHES0 written: whether the K2 itself pulls a CC line down (PDWN1/PDWN2)
-bool g_far_sink = false;         // a sink's Rd level on CC while the K2 presents none (sink_cc_far())
 std::array<pd::CcSample, 6> g_scan_samples{};   // the last attach scan's comparator samples, for the Rd-window re-check
 unsigned g_scan_sample_n = 0;
 std::uint32_t g_cc_recheck_at = 0;   // rate limit of the Rd-window re-check (kCcRecheckMinMs)
@@ -665,7 +664,6 @@ bool inline_now() { return g_inline; }
 bool g_down_prev = false;       // downstream_now() at the last downstream_edge()
 void rebase_far_sink() {        // a new attach or a detach: no other sink's Request is on record any more
     g_requests_base = g_engine.contract.requests;
-    g_far_sink = false;         // the raw CC reading belongs to the attach that measured it too
     g_req_seen = g_engine.contract.requests;
     g_req_last_ms = 0;
     g_req_period_ms = 0;
@@ -2943,14 +2941,14 @@ pd::TriggerRefusal trigger_refusal() {
 }
 
 // Lab-only over-load facts, one derivation from the existing foreign-evidence state: the far-sink
-// half is what downstream_now() and the raw CC reading already track (the inline latch, a sink Rd
-// read while inline, a sink Rd on CC with none of the K2's, a foreign Request); the far-PD-message
+// half is what downstream_now() already tracks (the inline latch, a sink Rd read while inline, a foreign Request; a sink
+// Rd level on CC alone is not evidence, user decision 2026-11-15); the far-PD-message
 // half is what the engine already attributes to a sink (a Request we did not send, any of its
 // control messages - GoodCRC, Get_Source_Cap - its Sink_Capabilities, its VDMs). All of it belongs
 // to one attach (rebase_far_sink / apply_cc_choice / reset_sink / reset_source).
 pd::OverLoadFacts over_load_facts() {
     const bool far_req = far_sink_seen();
-    return {inline_now() || g_detach.sink_was_seen() || g_far_sink || far_req,
+    return {inline_now() || g_detach.sink_was_seen() || far_req,
             far_req || g_engine.sink_ctl_seen || g_engine.sink.valid || g_engine.sink_vdm.num_svids != 0};
 }
 
@@ -3041,11 +3039,9 @@ void sink_cc(std::int32_t cc1_mv, std::int32_t cc2_mv) {
     // The CC line closest to 1.5 V; the other one is the unused line of the cable.
     auto dist = [](std::int32_t v) { const std::int32_t d = v - pd::kSinkBandCenterMv; return d < 0 ? -d : d; };
     g_cc_sink_mv = dist(cc1_mv) <= dist(cc2_mv) ? cc1_mv : cc2_mv;
-    // With no Rd of our own on any line, a level in the sink band is somebody else's Rd (the source's Rp into a sink behind the K2).
-    // With our Rd on, the level is the K2's own divider and says nothing: no verdict.
-    g_far_sink = (g_sw0 & (kPdwn1 | kPdwn2)) == 0 && g_cc_sink_mv >= 0 && pd::sink_present(g_cc_sink_mv);
+    // No verdict is drawn from a sink-band level while the K2 presents no Rd: a floating CC2 reads ~1.75 V on a USB-A port with
+    // nothing plugged in (hardware 2026-11-15), so a level is never evidence of a sink behind the K2.
 }
-bool sink_cc_far() { return g_far_sink; }
 void scan_service(std::int32_t vbus_mv) {
     if (g_active_cc != 0) return;
     if (vbus_mv >= 0) g_scan_pace.feed_vbus(vbus_mv);

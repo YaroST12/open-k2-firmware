@@ -140,10 +140,10 @@ constexpr const char* trigger_refusal_name(TriggerRefusal r) {
 // Lab-only over-load gate for the remote's `pd request ... --over-load` (never the UI, never the
 // charger test): let the K2 send its Request while a sink sits behind it, but only while that sink
 // stays a passive load - it showed its Rd and sent no PD message this attach. The facts come from
-// the one existing foreign-evidence tracking (pd::Link's inline latch, the sink Rd read on CC,
+// the one existing foreign-evidence tracking (pd::Link's inline latch, the sink Rd read while inline,
 // fusb302's far-sink records); the gate adds no second tracker.
 struct OverLoadFacts {
-    bool far_sink;        // a sink sits behind the K2 this attach (inline latch, sink Rd on CC, or a foreign Request)
+    bool far_sink;        // a sink sits behind the K2 this attach (inline latch, or a foreign Request)
     bool far_pd_message;  // that sink sent a PD message this attach (a Request we did not send, any of its control
                           // messages - GoodCRC, Get_Source_Cap -, its Sink_Capabilities / VDMs)
 };

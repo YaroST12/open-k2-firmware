@@ -7,7 +7,9 @@
 
 namespace k2::pd {
 
-// What latched the inline state (Link::inline_cause()): the [TEST] preflight refusal names it.
+// What latched the inline state (Link::inline_cause()): the [TEST] preflight refusal names it. Only Load and Request are
+// ever set (user decision 2026-11-15: the inline latch keeps certain evidence only). Rise, Vbus and FarRd are retired: the
+// values stay for the wire (remote summaries, journals) and the names of old records, and nothing sets them.
 enum class InlineCause : std::uint8_t { None, Load, Request, Rise, Vbus, FarRd };
 constexpr const char* inline_cause_name(InlineCause c) {
     switch (c) {
@@ -21,4 +23,4 @@ constexpr const char* inline_cause_name(InlineCause c) {
     return "?";
 }
 
-}  // namespace k2::pd
+}  // namespace k2::pd}  // namespace k2::pd

@@ -420,12 +420,11 @@ void test_usb_a_waiver() {
     CHECK_EQ(after([](svooc::Sample& s) { s.host_ok = false; }, true), Abort::HostGone);
 }
 
-// The waiver also covers inline mode, but only when the link latched it for a topology reason: a far Rd or a foreign VBUS
-// is what an A-to-C cable into the bottom port looks like. A load, a sink's Request or a VBUS rise says a device is there.
+// The waiver never covers the inline latch (user decision 2026-11-15): the link latches on a load or a sink's Request only,
+// both of them a device behind the K2, so the flag buys nothing there, at the start and while running.
 void test_usb_a_waiver_inline_cause() {
     using pd::InlineCause;
-    const InlineCause topology[] = {InlineCause::FarRd, InlineCause::Vbus};
-    const InlineCause device[] = {InlineCause::None, InlineCause::Load, InlineCause::Request, InlineCause::Rise};
+    const InlineCause causes[] = {InlineCause::None, InlineCause::Load, InlineCause::Request};
     const auto facts = [](InlineCause c, bool usb_a) {
         svooc::StartFacts f = ok_start();
         f.inline_mode = true;
@@ -433,18 +432,8 @@ void test_usb_a_waiver_inline_cause() {
         f.usb_a = usb_a;
         return f;
     };
-    for (const InlineCause c : topology) {
-        CHECK_EQ(svooc::refusal(facts(c, true)), Refusal::None);      // waived
-        CHECK_EQ(svooc::refusal(facts(c, false)), Refusal::Inline);   // never without the flag
-        svooc::StartFacts f = facts(c, true);
-        f.contract = svooc::Contract::Own5V;                           // PD anywhere still refuses the flag itself
-        CHECK_EQ(svooc::refusal(f), Refusal::UsbAWithPd);
-        f = facts(c, true);
-        f.ibus_ma = 51;                                                // and the 50 mA rule stays
-        CHECK_EQ(svooc::refusal(f), Refusal::Current);
-    }
-    for (const InlineCause c : device) {
-        CHECK_EQ(svooc::refusal(facts(c, true)), Refusal::Inline);    // the flag does not buy these
+    for (const InlineCause c : causes) {
+        CHECK_EQ(svooc::refusal(facts(c, true)), Refusal::Inline);    // the flag does not buy it
         CHECK_EQ(svooc::refusal(facts(c, false)), Refusal::Inline);
     }
     // The refusal carries the cause for the log and the remote.
@@ -452,36 +441,21 @@ void test_usb_a_waiver_inline_cause() {
     CHECK_EQ(refused.start(facts(InlineCause::Load, true), 0), Refusal::Inline);
     CHECK_EQ(int(refused.report().inline_cause), int(InlineCause::Load));
     CHECK_EQ(int(svooc::Run{}.report().inline_cause), int(InlineCause::None));
-    // Running with the waiver: a topology cause runs on, a later switch to a device cause aborts, the report says which.
-    const auto abort_on = [&](InlineCause start_cause, InlineCause now_cause, bool usb_a, bool inline_now = true) {
-        svooc::Run run;
-        CHECK_EQ(run.start(facts(start_cause, usb_a), 0), Refusal::None);
-        run.poll(ok_sample(0));
-        svooc::Sample s = ok_sample(10);
-        s.inline_mode = inline_now;
-        s.inline_cause = now_cause;
-        run.poll(s);
-        return std::pair{run.report().abort, run.report().inline_cause};
-    };
-    for (const InlineCause c : topology) {
-        CHECK_EQ(int(abort_on(c, c, true).first), int(Abort::None));
-        CHECK_EQ(int(abort_on(c, InlineCause::Load, true).first), int(Abort::Sink));
-        CHECK_EQ(int(abort_on(c, InlineCause::Request, true).first), int(Abort::Sink));
-        CHECK_EQ(int(abort_on(c, InlineCause::Rise, true).first), int(Abort::Sink));
-        CHECK_EQ(int(abort_on(c, InlineCause::None, true).first), int(Abort::Sink));
-    }
-    CHECK_EQ(int(abort_on(InlineCause::FarRd, InlineCause::Request, true).second), int(InlineCause::Request));
-    CHECK_EQ(int(abort_on(InlineCause::FarRd, InlineCause::FarRd, true, false).first), int(Abort::None));
-    // a plain run (no waiver) from a clear link aborts on any inline cause, topology ones included
-    for (const InlineCause c : topology) {
-        svooc::Run run;
-        CHECK_EQ(run.start(ok_start(), 0), Refusal::None);
-        svooc::Sample s = ok_sample(10);
-        s.inline_mode = true;
-        s.inline_cause = c;
-        run.poll(s);
-        CHECK_EQ(int(run.report().abort), int(Abort::Sink));
-        CHECK_EQ(int(run.report().inline_cause), int(c));
+    // Running: a latch that appears aborts the run with or without the flag, and the report says which cause.
+    for (const bool usb_a : {false, true}) {
+        for (const InlineCause c : {InlineCause::Load, InlineCause::Request}) {
+            svooc::StartFacts sf = ok_start();
+            sf.usb_a = usb_a;
+            svooc::Run run;
+            CHECK_EQ(run.start(sf, 0), Refusal::None);
+            run.poll(ok_sample(0));
+            svooc::Sample s = ok_sample(10);
+            s.inline_mode = true;
+            s.inline_cause = c;
+            run.poll(s);
+            CHECK_EQ(int(run.report().abort), int(Abort::Sink));
+            CHECK_EQ(int(run.report().inline_cause), int(c));
+        }
     }
 }
 

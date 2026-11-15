@@ -95,7 +95,7 @@ void Runner::note_preflight_refusal(Reason r, int vbus_mv, const char* detail) {
         // release it", "Test running: stop it", ...), so the refusal line names it for ct_start.py.
         K2LOG("[TEST] preflight refused: tool busy: %s (%d mV)\n", detail, vbus_mv);
     } else if (r == Reason::Inline && detail && detail[0]) {
-        // "load attached" at 0 mA says nothing: the latch's cause does (pd::inline_cause_name: load, sink request, far rd...).
+        // "load attached" at 0 mA says nothing: the latch's cause does (pd::inline_cause_name: load or sink request).
         K2LOG("[TEST] preflight refused: load attached, latched by %s (%d mV)\n", detail, vbus_mv);
     } else {
         K2LOG("[TEST] preflight refused: %s (%d mV)\n", refusal_words(r), vbus_mv);
@@ -375,15 +375,6 @@ uint16_t measured_cable_limit_mv(Input in, Algorithm algorithm) {
 Reason limit_reason(unsigned mv, Input in, Algorithm algorithm) {
     return !pd::fits_monitor(mv, in.cap_mv) ? Reason::OverCap : mv > cable_limit_mv(in, algorithm) ? Reason::CableLimit : Reason::None;
 }
-// The SVOOC ceiling stage's USB-A waiver (Options::svooc_cap == UsbA: the operator states a legacy A port, top port empty) reaches
-// the run's inline checks for the causes an A-to-C cable explains on its own, exactly as the trigger waives them
-// (svooc::inline_waived: FarRd, Vbus). Only for a run that holds an SVOOC unit; a Load / Request / Rise latch, a latch with no
-// cause and the run's own current check (kLoadAbortMa) all stay.
-bool inline_waived(const Options& o, const Input& in) {
-    const bool svooc = (o.selected & (bit(Algorithm::SuperVooc) | bit(Algorithm::SuperVooc65))) != 0;
-    return svooc && o.level == Level::Deep && svooc::inline_waived(o.svooc_cap == svooc_ceiling::Mode::UsbA, in.inline_cause);
-}
-void waive_inline(Input& in, const Options& o) { if (in.inline_load && inline_waived(o, in)) in.inline_load = false; }
 Reason refusal(Options o, Input in, bool busy, bool confirmed) {
     return busy || in.busy ? Reason::Busy : !(o.selected & kAllAlgorithms) ? Reason::EmptySelection :
         in.loop_lock ? Reason::Loop : !confirmed ? Reason::NeedConfirm : in.fake ? Reason::Fake : in.inline_load ? Reason::Inline :
@@ -910,7 +901,6 @@ uint32_t layout_sig(std::span<const Step> rows) {
 UnitList unit_order(const Options& o) { return resolve(o); }
 Summary Runner::preview(const pd::SourceCaps& caps, Options o, Input in) {
     Summary out;
-    waive_inline(in, o);
     in.epr_info = nullptr;   // a preview plans from the source list alone
     in.fc_caps = nullptr;
     out.refusal = refusal(o, in, false, true);
@@ -1289,7 +1279,6 @@ void Runner::adopt_list(const pd::SourceCaps& caps) {
 Reason Runner::start(const pd::SourceCaps& caps, Options o, Input in, bool confirmed) {
     o.selected &= kAllAlgorithms;
     epr_proof_ = in.epr_proof = false;
-    waive_inline(in, o);
     const Reason denied = refusal(o, in, busy(), confirmed);
     if (denied != Reason::None) {
         if (!run_id_) {
@@ -2104,7 +2093,7 @@ bool Runner::ceiling_wanted() const {
 bool Runner::begin_ceiling(Input in) {
     ceiling_pending_ = false; ceiling_done_ = true;
     evidence_.svooc_word = 0; evidence_.svooc_why = 0; evidence_.svooc_asks = 0; evidence_.svooc_vmax_mv = evidence_.svooc_stop_ms = 0;
-    const uint8_t refused = env_.ceiling_start(opts_.svooc_cap == svooc_ceiling::Mode::UsbA);
+    const uint8_t refused = env_.ceiling_start();
     if (refused) {
         evidence_.svooc_end = static_cast<uint8_t>(svooc_ceiling::End::Refused); evidence_.svooc_why = refused;
         K2LOG("[CT] svooc_cap refused why=%u\n", unsigned(refused));
@@ -2113,7 +2102,7 @@ bool Runner::begin_ceiling(Input in) {
     evidence_.svooc_end = static_cast<uint8_t>(svooc_ceiling::End::None);
     state_ = State::Ceiling; ceil_ms_ = in.now; ceil_stopping_ = false; ceil_end_ = svooc_ceiling::End::None; stable_ = false;
     ceil_why_ = 0;
-    K2LOG("[CT] svooc_cap start usb_a=%u\n", unsigned(opts_.svooc_cap == svooc_ceiling::Mode::UsbA));
+    K2LOG("[CT] svooc_cap start\n");
     return true;
 }
 // What the trigger has shown so far goes to the evidence (the word only ever rises: the highest ask accepted).
@@ -2158,7 +2147,6 @@ void Runner::poll_ceiling(Input in) {
 }
 void Runner::cancel(Input in) {
     if (!busy() || state_ == State::Unsafe || (state_ == State::Releasing && stopping_)) return;
-    waive_inline(in, opts_);
     end_probe();
     ++revision_;
     reason_ = Reason::Cancelled;
@@ -2304,7 +2292,6 @@ void Runner::poll(Input in, const pd::SourceCaps& caps) {
 }
 void Runner::poll_impl(Input in, const pd::SourceCaps& caps) {
     if (!busy()) return;
-    waive_inline(in, opts_);
     in.epr_proof = epr_proof_;
     if (in.pd.xiaomi_svid) xiaomi_seen_ = true;
     if (in.pd.oppo_svid) evidence_.seen |= SeenOppoSvid;   // latched: a Hard Reset in the run clears the sink's own flag

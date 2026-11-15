@@ -15,12 +15,14 @@
 //
 // Inline detection: the K2 sits between a charger and a real sink (a laptop). Anything that
 // touches Rd, the CC switches or transmits can then break the live contract, so every active
-// operation asks inline() first. It latches while attached on: more than 50 mA flowing, a sink's
-// Request decoded that the K2 did not send, a VBUS rise above 5.5 V that the K2 did not cause
-// (own_contract false, and not within kOwnHoldMs of the K2's own trigger), or the lines alone: VBUS above 5.5 V with no contract of
-// the K2's own in this attach, or a sink's Rd on CC with no Rd of the K2 (kInlineForeignMs). "Possibly inline" is the default
-// until proven standalone. It clears only on proof: kInlineQuietMs with no load, no Request and no such evidence while attached,
-// or a detach that outlasts kInlineHoldMs. A VBUS cut or a short detach pauses that window (vbus_cut()).
+// operation asks inline() first. It latches while attached on certain evidence only (user decision 2026-11-15): more than
+// 50 mA flowing beyond the K2's own supply, or a sink's Request decoded that the K2 did not send. Level evidence no longer
+// latches: a sink-band level on CC (a floating CC2 reads ~1.75 V on a USB-A port with nothing plugged in), a VBUS above 5.5 V
+// with no contract of the K2's, a VBUS rise the K2 did not cause. All three have a harmless explanation, and a latch on them
+// blocked every charger-test unit on a bare charger. The price: a K2 inserted into a live but silent link (no current, no sink
+// message yet) is not protected until the first load or Request shows up. It clears only on proof: kInlineQuietMs with no load
+// and no Request while attached, or a detach that outlasts kInlineHoldMs. A VBUS cut or a short detach pauses that window
+// (vbus_cut()).
 #pragma once
 #include <cstddef>
 #include <cstdint>
@@ -57,9 +59,6 @@ struct LinkInput {
     // its ~60-100 mA (LCD, MCU) reads as a load (hardware 2026-11-06, USB-A port, "Load attached" with nothing on the other
     // port). That much is not a sink.
     std::int32_t self_supply_ma = 0;
-    // A sink's Rd (about 1.5 V) on a CC line while the K2 presents none itself: something is plugged into the other end and
-    // announces itself as a sink. The driver decides it (fusb302::sink_cc_far()); false when unknown.
-    bool far_sink_cc = false;
     // The passive CC levels for the waiting classifier (raguard::RpTrace): a line at/above raguard::kRpMinMv carries
     // an Rp. -1 = no ADC reading. `passive` = the K2 holds nothing on the lines and no sink is inline, so the lines
     // are the far port's own advertisement (the same gate the connection page's topology uses).
@@ -77,26 +76,13 @@ struct LinkInput {
 inline constexpr std::int32_t kSelfSupplyAllowanceMa = 150;
 
 inline constexpr std::int32_t kInlineCurrentMa = 50;
-inline constexpr std::int32_t kInlineVbusMv = kVSafe5MaxMv;
 // A flip back to "standalone" needs proof, never a missed sample: no Request and below 50 mA for this long. A phone that sips
 // less than 50 mA for a few seconds is still a phone, and the K2's Rd on top of its own breaks the sink's contract.
 inline constexpr std::uint32_t kInlineQuietMs = 10000;
 // The inline state outlives a VBUS collapse (a hub or charger re-negotiating, a swap) for this long: "possibly inline" is the safe
 // state, the K2 stays passive through the gap. Detached longer than this = unplugged for real, the next attach starts standalone.
 inline constexpr std::uint32_t kInlineHoldMs = 15000;
-// "Possibly inline" from what the lines show, without any traffic: VBUS above vSafe5V that this K2 never asked for (it has had no
-// contract of its own in this attach), or a sink's Rd on CC with no Rd of the K2. A live dock - K2 - laptop contract is silent
-// to a K2 that booted into it. Continuous for this long before it latches (the K2's own contract ending, a sample glitch), and it
-// holds for as long as the evidence lasts: the quiet window only runs once the lines show nothing.
-inline constexpr std::uint32_t kInlineForeignMs = 1500;
-// A VBUS rise this soon after the K2's own trigger ended is still the K2's doing: a legacy trigger that gives up (abort,
-// reset_bus) releases D+/D- and the charger answers a few ms later, when fctrig is no longer Negotiating or Active.
-// The reset hold of the data lines is 500 ms; a real sink behind the K2 still latches by its current or its Request.
-inline constexpr std::uint32_t kOwnHoldMs = 2000;
-
-// A sink's Rd on CC (LinkInput::far_sink_cc) with VBUS never at vSafe5V for this long is not a sink in a contract: a dual-role
-// phone alone on the port toggles its Rp through that level (bench 2026-11-10, Pixel alone: inline held for minutes, which
-// blocked the idle wake). Longer than the foreign-evidence timer, so a charger that is still ramping up keeps its evidence.
+// A VBUS that was at or above vSafe5V this recently still counts as "up" for the cut test below (vbus_cut()).
 inline constexpr std::uint32_t kDarkSinkMs = 3000;
 
 // A VBUS cut (pattern usb-a-no-load-auto-off: a USB-A port that switches its output off every ~6.5 s while nothing draws, and back
@@ -104,8 +90,6 @@ inline constexpr std::uint32_t kDarkSinkMs = 3000;
 // nor evidence that one is there:
 //  - the inline quiet window pauses through it (and through any detach inside kInlineHoldMs) instead of starting over at the
 //    next attach, so the quiet gathered on both sides of a cut adds up; the cut's own time never counts as quiet;
-//  - a sink-band level on CC read during it is void: through an A-to-C cable the Rp is fed from VBUS and sweeps that band while
-//    the output collapses. A sink's Rd counts while VBUS is up (or, as before, while a fresh attach waits for VBUS to rise).
 // Current and Requests stay evidence everywhere. After a pause the latch clears no sooner than kInlineResumeMs of VBUS back:
 // a sink that returns with VBUS (a PD sink Requests within ~300 ms of the caps, a phone draws within ~1 s) shows itself first.
 inline constexpr std::uint32_t kInlineResumeMs = 2000;
@@ -144,7 +128,7 @@ public:
     // below raguard::kVbusAttachedMv; a verdict needs raguard::CrossTrace::kObserveMs of those lines. The Source tab, the bar,
     // Home and the remote state field read this one value.
     raguard::CrossKind cc_cross() const { return cross_trace_.classify(last_now_); }
-    // Latched by a load, a foreign Request or a foreign VBUS rise; held across a short detach (kInlineHoldMs) and left only on proof
+    // Latched by a load or a foreign Request (never by a level: see the header); held across a short detach (kInlineHoldMs) and left only on proof
     // (kInlineQuietMs of quiet while attached, paused through a VBUS cut or a short detach, or a detach that outlasts the hold).
     bool inline_mode() const { return inline_; }
     InlineCause inline_cause() const { return inline_ ? cause_ : InlineCause::None; }
@@ -176,12 +160,6 @@ private:
     std::uint32_t requests_at_attach_ = 0, requests_seen_ = 0, quiet_since_ = 0;
     std::uint32_t paused_at_ = 0;   // the last tick the quiet window was paused (a cut or a detach, see vbus_cut())
     bool up_seen_ = false;          // vbus_up_ms_ holds a real sample
-    bool vbus_was_low_ = false;
-    bool own_seen_ = false;
-    bool own_ever_ = false;   // the K2 had a contract of its own at any time since this attach: a high VBUS is then its doing
-    bool foreign_timing_ = false;
-    std::uint32_t foreign_since_ = 0;
-    std::uint32_t own_last_ms_ = 0;
     bool vbus_low_ = false, cc_gone_ = false;
     std::uint32_t vbus_up_ms_ = 0;   // the last sample at/above vSafe5V (see kDarkSinkMs)
     bool low_timing_ = false, gone_timing_ = false;

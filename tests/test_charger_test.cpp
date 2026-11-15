@@ -337,7 +337,7 @@ struct Fake final : ct::Env {
     // under from ceil_partial_ms; the trigger ends by itself with ceil_abort at ceil_end_ms (0 = it runs until stopped). After
     // ceiling_stop it still runs ceil_exit_ms (its exit watch), then reports Stopped.
     uint8_t ceil_refuse = 0, ceil_abort = 0, ceil_commands = 9;
-    int ceil_starts = 0, ceil_stops = 0; bool ceil_usb_a_seen = false, ceil_on = false;
+    int ceil_starts = 0, ceil_stops = 0; bool ceil_on = false;
     uint32_t ceil_judged_ms = 0, ceil_partial_ms = 0, ceil_end_ms = 0, ceil_exit_ms = 1000, ceil_t0 = 0, ceil_stop_t = 0, ceil_start_at = 0;
     uint16_t ceil_partial_word = 0;
     uint32_t ceil_quiet_at_ms = 0;   // the adapter's last edge this long after the start (0 = it keeps talking); the trigger runs on
@@ -348,8 +348,8 @@ struct Fake final : ct::Env {
     // The adapter's own ramp: ceil_ramp_mv on VBUS from 500 ms after the start (the K2's trigger, no load), back at 5 V
     // ceil_ramp_back_ms after the stop (0 = it stays up).
     int ceil_ramp_mv = 0; uint32_t ceil_ramp_back_ms = 100;
-    uint8_t ceiling_start(bool usb_a) override {
-        ++ceil_starts; ceil_usb_a_seen = usb_a; ceil_start_at = in.now;
+    uint8_t ceiling_start() override {
+        ++ceil_starts; ceil_start_at = in.now;
         if (!lines_free_now()) return uint8_t(svooc::Refusal::Busy);
         if (ceil_refuse) return ceil_refuse;
         ceil_on = true; ceil_t0 = in.now; ceil_stop_t = 0;
@@ -2242,7 +2242,7 @@ static void test_ceiling_judged_ladder_is_the_result() {
         CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Ceiling; }, 20000), true);
         CHECK_EQ(r.busy(), true);                       // the stage is part of the run
         CHECK_EQ(r.quiet(), true);                      // the trigger's wire is timed: no journal flash write, no heavy paint
-        CHECK_EQ(f.ceil_starts, 1); CHECK_EQ(f.ceil_usb_a_seen, usb_a);
+        CHECK_EQ(f.ceil_starts, 1);                      // UsbA (the retired waiver, kept on the wire) runs as On
         CHECK_EQ(f.ceil_stops, 0);                      // nothing stops it before it is judged
         CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 120000), true);
         CHECK_EQ(f.ceil_stops, 1);                      // the judged ladder asks the trigger to stop, once
@@ -2348,46 +2348,34 @@ static void test_ceiling_lines_never_free_is_a_recorded_refusal() {
     CHECK_EQ(int(r.evidence().svooc_why), int(svooc::Refusal::Busy));
     CHECK_EQ(r.steps()[0].verdict, ct::Verdict::Pass);
 }
-// USB-A (a legacy A-to-C cable on the bottom port, top port empty): the cable's CC reads as a far sink, so the link latches inline
-// with cause FarRd (or Vbus). The stage's USB-A waiver is the trigger's own (svooc::inline_waived): those two causes do not refuse
-// the START or end the run when the operator chose usb-a; every other cause, and the plain "on" mode, still refuse.
-static void test_ceiling_usb_a_waives_the_far_rd_latch() {
-    for (const auto cause : {pd::InlineCause::FarRd, pd::InlineCause::Vbus}) {
-        Fake f; f.caps = {}; f.ceil_judged_ms = 3000; f.in.inline_load = true; f.in.inline_cause = cause;
-        ct::Runner r(f);
-        CHECK_EQ(int(ct::Runner::preview(f.caps, {.selected = ct::bit(A::SuperVooc), .svooc_cap = sc::Mode::UsbA, .level = ct::Level::Deep}, f.in).refusal),
-                 int(ct::Reason::None));
-        if (ceiling_run(f, r, sc::Mode::UsbA) != ct::Reason::None) { CHECK_EQ(0, 1); continue; }
-        CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 120000), true);
-        CHECK_EQ(f.ceil_starts, 1); CHECK_EQ(f.ceil_usb_a_seen, true);
-        CHECK_EQ(int(r.evidence().svooc_end), int(sc::End::Judged));
-        CHECK_EQ(r.steps()[0].verdict, ct::Verdict::Pass);
+// USB-A (a legacy A-to-C cable on the bottom port, top port empty): the cable's CC can read as a far sink, but a CC level is no
+// longer evidence (user decision 2026-11-15: the inline latch keeps certain evidence only), so the link never latches on it and
+// the stage needs no waiver. The retired mode UsbA stays on the wire and behaves exactly like On: a latch on certain evidence
+// refuses the START in both, and a load that appears while the stage runs still ends the run.
+static void test_ceiling_usb_a_mode_is_the_plain_on() {
+    for (const auto mode : {sc::Mode::On, sc::Mode::UsbA}) {
+        {   // no latch: nothing to waive
+            Fake f; f.caps = {}; f.ceil_judged_ms = 3000;
+            ct::Runner r(f);
+            CHECK_EQ(int(ceiling_run(f, r, mode)), int(ct::Reason::None));
+            CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 120000), true);
+            CHECK_EQ(f.ceil_starts, 1);
+            CHECK_EQ(int(r.evidence().svooc_end), int(sc::End::Judged));
+            CHECK_EQ(r.steps()[0].verdict, ct::Verdict::Pass);
+        }
+        {   // a latch on certain evidence refuses, whatever the mode
+            Fake f; f.caps = {}; f.in.inline_load = true;
+            ct::Runner r(f);
+            CHECK_EQ(int(r.start(f.caps, {.selected = ct::bit(A::SuperVooc), .svooc_cap = mode, .level = ct::Level::Deep}, f.in, true)), int(ct::Reason::Inline));
+        }
     }
-}
-static void test_ceiling_usb_a_waiver_stays_narrow() {
-    {   // the plain "on" mode waives nothing
-        Fake f; f.caps = {}; f.in.inline_load = true; f.in.inline_cause = pd::InlineCause::FarRd;
-        ct::Runner r(f);
-        CHECK_EQ(int(r.start(f.caps, {.selected = ct::bit(A::SuperVooc), .svooc_cap = sc::Mode::On, .level = ct::Level::Deep}, f.in, true)), int(ct::Reason::Inline));
-    }
-    for (const auto cause : {pd::InlineCause::Load, pd::InlineCause::Request, pd::InlineCause::Rise, pd::InlineCause::None}) {
-        Fake f; f.caps = {}; f.in.inline_load = true; f.in.inline_cause = cause;   // evidence of a device: never waived
-        ct::Runner r(f);
-        CHECK_EQ(int(r.start(f.caps, {.selected = ct::bit(A::SuperVooc), .svooc_cap = sc::Mode::UsbA, .level = ct::Level::Deep}, f.in, true)), int(ct::Reason::Inline));
-    }
-    {   // the waiver belongs to the stage: a run with no SVOOC unit gets none
-        Fake f; f.caps = {}; f.in.inline_load = true; f.in.inline_cause = pd::InlineCause::FarRd;
-        ct::Runner r(f);
-        CHECK_EQ(int(r.start(f.caps, {.selected = ct::bit(A::Qc2), .svooc_cap = sc::Mode::UsbA, .level = ct::Level::Deep}, f.in, true)), int(ct::Reason::Inline));
-    }
-    {   // a waived latch keeps the load abort: current through the K2 still ends the run
-        Fake f; f.caps = {}; f.ceil_judged_ms = 3000; f.in.inline_load = true; f.in.inline_cause = pd::InlineCause::FarRd;
+    {   // a load that appears in the stage still ends the run
+        Fake f; f.caps = {}; f.ceil_judged_ms = 3000;
         ct::Runner r(f);
         CHECK_EQ(int(ceiling_run(f, r, sc::Mode::UsbA)), int(ct::Reason::None));
-        f.in.inline_cause = pd::InlineCause::Load;   // the link re-latched on a load: the release never counts as done
+        f.in.inline_load = true;
         CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Unsafe || r.state() == ct::State::Done ||
                                               r.state() == ct::State::Stopped; }, 120000), true);
-        CHECK_EQ(f.ceil_starts, 0);                     // no trigger with a load behind the K2
         CHECK_EQ(r.reason() != ct::Reason::None, true);
     }
 }
@@ -2418,7 +2406,7 @@ static void test_ceiling_runner_guard_names_its_cause() {
     ceiling_run(f, r, sc::Mode::On);
     CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Ceiling; }, 20000), true);
     f.tick(r, 1500);
-    f.in.inline_load = true; f.in.inline_cause = pd::InlineCause::Load;
+    f.in.inline_load = true;
     CHECK_EQ(run_until(f, r, [&] { return !r.busy(); }, 120000), true);
     CHECK_EQ(f.ceil_stops, 1);
     CHECK_EQ(int(r.evidence().svooc_end), int(sc::End::Aborted));
@@ -7379,14 +7367,14 @@ static void test_a_list_restored_before_the_unit_ends_runs_the_withdrawn_rows() 
 }
 
 // A "load attached" refusal names what latched the inline state (pd::Link::inline_cause()), so a refusal at 0 mA tells a held
-// load from a far Rd or a sink's Request without a Black Box dump (ROADMAP: the USB-A auto-off port refused at 0 mA).
+// load from a sink's Request without a Black Box dump (the only two causes the link latches on since 2026-11-15).
 static void test_an_inline_refusal_names_what_latched_it() {
     Fake f;
     ct::Runner r(f);
     g_stub.log_text.clear();
-    r.note_preflight_refusal(ct::Reason::Inline, 5100, "far rd");
+    r.note_preflight_refusal(ct::Reason::Inline, 5100, "load");
     CHECK_EQ(r.reason(), ct::Reason::Inline);
-    CHECK_EQ(g_stub.log_text.find("[TEST] preflight refused: load attached, latched by far rd (5100 mV)") != std::string::npos, true);
+    CHECK_EQ(g_stub.log_text.find("[TEST] preflight refused: load attached, latched by load (5100 mV)") != std::string::npos, true);
     g_stub.log_text.clear();
     r.note_preflight_refusal(ct::Reason::Inline, 5100);   // no cause known: the plain line
     CHECK_EQ(g_stub.log_text.find("[TEST] preflight refused: load attached (5100 mV)") != std::string::npos, true);
@@ -7464,7 +7452,7 @@ static void test_level_maps_to_the_run_switches() {
     CHECK_EQ(l.pps_sweep || l.avs_sweep, false); CHECK_EQ(int(l.svooc_cap), int(svooc_ceiling::Mode::Off));
     CHECK_EQ(m.pps_sweep || m.avs_sweep, false); CHECK_EQ(int(m.svooc_cap), int(svooc_ceiling::Mode::Off));   // detection + ident only
     CHECK_EQ(d.pps_sweep && d.avs_sweep, true); CHECK_EQ(int(d.svooc_cap), int(svooc_ceiling::Mode::On));    // the ceiling stage
-    ct::Options a; a.svooc_cap = svooc_ceiling::Mode::UsbA;   // the operator's usb-a waiver survives Deep
+    ct::Options a; a.svooc_cap = svooc_ceiling::Mode::UsbA;   // the retired usb-a mode survives Deep (wire value kept)
     CHECK_EQ(int(ct::with_level(a, ct::Level::Deep).svooc_cap), int(svooc_ceiling::Mode::UsbA));
     CHECK_EQ(int(l.level), int(ct::Level::Light)); CHECK_EQ(int(d.level), int(ct::Level::Deep));
     CHECK_EQ(int(ct::next_level(ct::Level::Light)), int(ct::Level::Medium));
@@ -7650,7 +7638,7 @@ int main() {
     test_hunt_evidence_marks_a_silent_source_as_a_timeout(); test_hunt_evidence_without_a_trace_is_unexplained();
     test_hunt_evidence_only_for_refused_rows(); test_classify_hunt_precedence();
     test_plan_and_run(); test_an_auto_hold_counts_as_released(); test_quiet_is_exactly_the_row_in_flight(); test_paint_blocked_needs_flight_and_an_engine_window(); test_refusals(); test_hold_keeps_the_baseline_until_released(); test_safe5_baseline();test_cancel_and_failed_release(); test_release_waits_for_the_sink_verification_and_its_hard_reset();
-    test_faults(); test_loop_lock_refuses_and_aborts(); test_timeouts_and_skips(); test_one_second_holds(); test_qc2_settles_within_two_percent(); test_qc2_5v_accepts_vsafe5_reading(); test_legacy_5v_accepts_vsafe5_reading(); test_qc3_rows_use_an_asymmetric_band(); test_legacy_rows_use_a_five_percent_band(); test_legacy_5v_row_uses_the_vsafe5_window(); test_scp_4v5_row_judges_the_adapter_readback(); test_qc3plus_without_response_is_a_distinct_skip(); test_unsupported_protocol_skips_its_other_rows(); test_silent_source_fails_every_handshake_row(); test_answered_handshake_passes_the_5v_row(); test_svooc_row_follows_the_adapter_ramp(); test_svooc_detected_is_a_pass(); test_vooc_family_shares_one_session(); test_ceiling_off_runs_no_stage(); test_ceiling_is_deep_only_and_the_ident_is_kept(); test_ceiling_judged_ladder_is_the_result(); test_ceiling_refusal_is_recorded_and_the_run_goes_on(); test_ceiling_no_adapter_and_early_abort(); test_ceiling_cap_stops_a_session_that_is_never_judged(); test_ceiling_cancel_stops_the_trigger(); test_ceiling_needs_a_detected_svooc_family(); test_ceiling_waits_for_the_lines_after_the_family_release(); test_ceiling_lines_never_free_is_a_recorded_refusal(); test_ceiling_usb_a_waives_the_far_rd_latch(); test_ceiling_usb_a_waiver_stays_narrow(); test_ceiling_quiet_adapter_is_stopped_at(); test_ceiling_runner_guard_names_its_cause(); test_ceiling_vbus_lost_after_the_stage_is_recovered_by_an_rd_cycle(); test_ceiling_vbus_that_never_returns_ends_the_run(); test_ceiling_adapter_ramp_is_part_of_the_stage(); test_ceiling_vbus_stuck_high_after_the_stage_is_unsafe(); test_vivo_no_response_skips_the_other_vivo_rows(); test_pps_min_step_accepts_unloaded_floor(); test_pps_up_step_uses_the_tight_band();
+    test_faults(); test_loop_lock_refuses_and_aborts(); test_timeouts_and_skips(); test_one_second_holds(); test_qc2_settles_within_two_percent(); test_qc2_5v_accepts_vsafe5_reading(); test_legacy_5v_accepts_vsafe5_reading(); test_qc3_rows_use_an_asymmetric_band(); test_legacy_rows_use_a_five_percent_band(); test_legacy_5v_row_uses_the_vsafe5_window(); test_scp_4v5_row_judges_the_adapter_readback(); test_qc3plus_without_response_is_a_distinct_skip(); test_unsupported_protocol_skips_its_other_rows(); test_silent_source_fails_every_handshake_row(); test_answered_handshake_passes_the_5v_row(); test_svooc_row_follows_the_adapter_ramp(); test_svooc_detected_is_a_pass(); test_vooc_family_shares_one_session(); test_ceiling_off_runs_no_stage(); test_ceiling_is_deep_only_and_the_ident_is_kept(); test_ceiling_judged_ladder_is_the_result(); test_ceiling_refusal_is_recorded_and_the_run_goes_on(); test_ceiling_no_adapter_and_early_abort(); test_ceiling_cap_stops_a_session_that_is_never_judged(); test_ceiling_cancel_stops_the_trigger(); test_ceiling_needs_a_detected_svooc_family(); test_ceiling_waits_for_the_lines_after_the_family_release(); test_ceiling_lines_never_free_is_a_recorded_refusal(); test_ceiling_usb_a_mode_is_the_plain_on(); test_ceiling_quiet_adapter_is_stopped_at(); test_ceiling_runner_guard_names_its_cause(); test_ceiling_vbus_lost_after_the_stage_is_recovered_by_an_rd_cycle(); test_ceiling_vbus_that_never_returns_ends_the_run(); test_ceiling_adapter_ramp_is_part_of_the_stage(); test_ceiling_vbus_stuck_high_after_the_stage_is_unsafe(); test_vivo_no_response_skips_the_other_vivo_rows(); test_pps_min_step_accepts_unloaded_floor(); test_pps_up_step_uses_the_tight_band();
     test_missing_samples_and_wrap();
     test_fixed_band_judges_a_burst_mode_ripple_on_its_mean(); test_fixed_band_still_fails_a_steady_low_or_high_level(); test_fixed_band_keeps_the_per_sample_overvoltage_guards();
     test_pps_renewal();
