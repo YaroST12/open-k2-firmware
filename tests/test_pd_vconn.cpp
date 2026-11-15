@@ -100,6 +100,16 @@ static void test_not_source_refuses_partner_swap() {
     CHECK_EQ(int(v.state()), int(VconnState::Off));
 }
 
+// PD 2.0 has no Not_Supported: the same refusal goes out as Reject (docs/PD_SINK_REPLIES.md)
+static void test_not_source_refuses_partner_swap_pd2() {
+    Vconn v;
+    v.on_control(kCtlVconnSwap, 0);
+    TxMsg m;
+    CHECK_EQ(v.take_tx(m, 1), true);
+    CHECK_EQ(int(m.header & 0x1F), int(kCtlReject));
+    CHECK_EQ(int((m.header >> 6) & 3), 1);
+}
+
 static void test_reset() {
     Vconn v;
     v.request(0);
@@ -118,6 +128,7 @@ int main() {
     test_partner_takes_role_back();
     test_partner_ps_rdy_missing();
     test_not_source_refuses_partner_swap();
+    test_not_source_refuses_partner_swap_pd2();
     test_reset();
     return test_report("test_pd_vconn");
 }

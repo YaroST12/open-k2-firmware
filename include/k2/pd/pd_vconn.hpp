@@ -140,7 +140,9 @@ public:
     bool take_tx(TxMsg& m, std::uint8_t rev) {
         if (pending_ == 0) return false;
         m = {};
-        m.header = make_header(pending_ == 0xFF ? 0 : pending_, 0, rev);
+        // PD 2.0 has no Not_Supported: a swap the K2 does not do is refused with Reject there (inferred from the revision)
+        const std::uint8_t type = pending_ == kCtlNotSupported && rev < 2 ? kCtlReject : pending_;
+        m.header = make_header(type == 0xFF ? 0 : type, 0, rev);
         pending_ = 0;
         return true;
     }
