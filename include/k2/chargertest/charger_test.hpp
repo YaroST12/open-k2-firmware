@@ -287,6 +287,9 @@ struct Input {
     // D+/D- are free for the ceiling stage's trigger: no owner holds them and they sit at the passive idle (the trigger's own
     // start check, svooc_trig::lines_free()). False for 500 ms after a legacy session's release (the engine's 0 V discharge).
     bool lines_free = true;
+    // What latched inline_load (pd::Link::inline_cause()). The ceiling stage's USB-A waiver (Options::svooc_cap == UsbA) clears
+    // inline_load for the two causes an A-to-C cable explains on its own (svooc::inline_waived: FarRd, Vbus), as the trigger does.
+    pd::InlineCause inline_cause = pd::InlineCause::None;
 };
 // The runner waits for the source probe at most this long, so a charger that ignores it costs the run under 1 s.
 inline constexpr uint32_t kProbeMaxMs = 1000;

@@ -370,6 +370,15 @@ uint16_t measured_cable_limit_mv(Input in, Algorithm algorithm) {
 Reason limit_reason(unsigned mv, Input in, Algorithm algorithm) {
     return !pd::fits_monitor(mv, in.cap_mv) ? Reason::OverCap : mv > cable_limit_mv(in, algorithm) ? Reason::CableLimit : Reason::None;
 }
+// The SVOOC ceiling stage's USB-A waiver (Options::svooc_cap == UsbA: the operator states a legacy A port, top port empty) reaches
+// the run's inline checks for the causes an A-to-C cable explains on its own, exactly as the trigger waives them
+// (svooc::inline_waived: FarRd, Vbus). Only for a run that holds an SVOOC unit; a Load / Request / Rise latch, a latch with no
+// cause and the run's own current check (kLoadAbortMa) all stay.
+bool inline_waived(const Options& o, const Input& in) {
+    const bool svooc = (o.selected & (bit(Algorithm::SuperVooc) | bit(Algorithm::SuperVooc65))) != 0;
+    return svooc && svooc::inline_waived(o.svooc_cap == svooc_ceiling::Mode::UsbA, in.inline_cause);
+}
+void waive_inline(Input& in, const Options& o) { if (in.inline_load && inline_waived(o, in)) in.inline_load = false; }
 Reason refusal(Options o, Input in, bool busy, bool confirmed) {
     return busy || in.busy ? Reason::Busy : !(o.selected & kAllAlgorithms) ? Reason::EmptySelection :
         in.loop_lock ? Reason::Loop : !confirmed ? Reason::NeedConfirm : in.fake ? Reason::Fake : in.inline_load ? Reason::Inline :
@@ -857,6 +866,7 @@ uint32_t layout_sig(std::span<const Step> rows) {
 UnitList unit_order(const Options& o) { return resolve(o); }
 Summary Runner::preview(const pd::SourceCaps& caps, Options o, Input in) {
     Summary out;
+    waive_inline(in, o);
     in.epr_info = nullptr;   // a preview plans from the source list alone
     in.fc_caps = nullptr;
     out.refusal = refusal(o, in, false, true);
@@ -1235,6 +1245,7 @@ void Runner::adopt_list(const pd::SourceCaps& caps) {
 Reason Runner::start(const pd::SourceCaps& caps, Options o, Input in, bool confirmed) {
     o.selected &= kAllAlgorithms;
     epr_proof_ = in.epr_proof = false;
+    waive_inline(in, o);
     const Reason denied = refusal(o, in, busy(), confirmed);
     if (denied != Reason::None) {
         if (!run_id_) {
@@ -2076,6 +2087,7 @@ void Runner::poll_ceiling(Input in) {
 }
 void Runner::cancel(Input in) {
     if (!busy() || state_ == State::Unsafe || (state_ == State::Releasing && stopping_)) return;
+    waive_inline(in, opts_);
     end_probe();
     ++revision_;
     reason_ = Reason::Cancelled;
@@ -2215,6 +2227,7 @@ void Runner::poll(Input in, const pd::SourceCaps& caps) {
 }
 void Runner::poll_impl(Input in, const pd::SourceCaps& caps) {
     if (!busy()) return;
+    waive_inline(in, opts_);
     in.epr_proof = epr_proof_;
     if (in.pd.xiaomi_svid) xiaomi_seen_ = true;
     if (in.pd.oppo_svid) evidence_.seen |= SeenOppoSvid;   // latched: a Hard Reset in the run clears the sink's own flag

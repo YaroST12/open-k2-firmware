@@ -2150,10 +2150,12 @@ static void test_vooc_family_shares_one_session() {
 // The SVOOC ceiling stage (svooc_ceiling.hpp): opt-in, after a detected VOOC family, no load. The guarded trigger asks the
 // adapter 1.5 / 4 / 6.3 / 10.9 A and the highest ask it went on under is the result (Evidence::svooc_*).
 namespace sc = k2::svooc_ceiling;
-static void ceiling_run(Fake& f, ct::Runner& r, sc::Mode mode, bool detected = true) {
-    r.start(f.caps, {.selected = ct::bit(A::SuperVooc), .svooc_cap = mode}, f.in, true);
+static ct::Reason ceiling_run(Fake& f, ct::Runner& r, sc::Mode mode, bool detected = true) {
+    const ct::Reason started = r.start(f.caps, {.selected = ct::bit(A::SuperVooc), .svooc_cap = mode}, f.in, true);
+    if (started != ct::Reason::None) return started;
     run_until(f, r, [&] { return f.fc_requests >= 1; });
     f.in.fc_state = fc::State::Failed; f.in.fc_fail = detected ? fc::Fail::Detected : fc::Fail::NeedsLoad; f.in.fc_tries = 1; f.in.vbus_mv = 5000;
+    return started;
 }
 static void test_ceiling_off_runs_no_stage() {
     Fake f; f.caps = {};
@@ -2277,6 +2279,49 @@ static void test_ceiling_lines_never_free_is_a_recorded_refusal() {
     CHECK_EQ(int(r.evidence().svooc_end), int(sc::End::Refused));
     CHECK_EQ(int(r.evidence().svooc_why), int(svooc::Refusal::Busy));
     CHECK_EQ(r.steps()[0].verdict, ct::Verdict::Pass);
+}
+// USB-A (a legacy A-to-C cable on the bottom port, top port empty): the cable's CC reads as a far sink, so the link latches inline
+// with cause FarRd (or Vbus). The stage's USB-A waiver is the trigger's own (svooc::inline_waived): those two causes do not refuse
+// the START or end the run when the operator chose usb-a; every other cause, and the plain "on" mode, still refuse.
+static void test_ceiling_usb_a_waives_the_far_rd_latch() {
+    for (const auto cause : {pd::InlineCause::FarRd, pd::InlineCause::Vbus}) {
+        Fake f; f.caps = {}; f.ceil_judged_ms = 3000; f.in.inline_load = true; f.in.inline_cause = cause;
+        ct::Runner r(f);
+        CHECK_EQ(int(ct::Runner::preview(f.caps, {.selected = ct::bit(A::SuperVooc), .svooc_cap = sc::Mode::UsbA}, f.in).refusal),
+                 int(ct::Reason::None));
+        if (ceiling_run(f, r, sc::Mode::UsbA) != ct::Reason::None) { CHECK_EQ(0, 1); continue; }
+        CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 120000), true);
+        CHECK_EQ(f.ceil_starts, 1); CHECK_EQ(f.ceil_usb_a_seen, true);
+        CHECK_EQ(int(r.evidence().svooc_end), int(sc::End::Judged));
+        CHECK_EQ(r.steps()[0].verdict, ct::Verdict::Pass);
+    }
+}
+static void test_ceiling_usb_a_waiver_stays_narrow() {
+    {   // the plain "on" mode waives nothing
+        Fake f; f.caps = {}; f.in.inline_load = true; f.in.inline_cause = pd::InlineCause::FarRd;
+        ct::Runner r(f);
+        CHECK_EQ(int(r.start(f.caps, {.selected = ct::bit(A::SuperVooc), .svooc_cap = sc::Mode::On}, f.in, true)), int(ct::Reason::Inline));
+    }
+    for (const auto cause : {pd::InlineCause::Load, pd::InlineCause::Request, pd::InlineCause::Rise, pd::InlineCause::None}) {
+        Fake f; f.caps = {}; f.in.inline_load = true; f.in.inline_cause = cause;   // evidence of a device: never waived
+        ct::Runner r(f);
+        CHECK_EQ(int(r.start(f.caps, {.selected = ct::bit(A::SuperVooc), .svooc_cap = sc::Mode::UsbA}, f.in, true)), int(ct::Reason::Inline));
+    }
+    {   // the waiver belongs to the stage: a run with no SVOOC unit gets none
+        Fake f; f.caps = {}; f.in.inline_load = true; f.in.inline_cause = pd::InlineCause::FarRd;
+        ct::Runner r(f);
+        CHECK_EQ(int(r.start(f.caps, {.selected = ct::bit(A::Qc2), .svooc_cap = sc::Mode::UsbA}, f.in, true)), int(ct::Reason::Inline));
+    }
+    {   // a waived latch keeps the load abort: current through the K2 still ends the run
+        Fake f; f.caps = {}; f.ceil_judged_ms = 3000; f.in.inline_load = true; f.in.inline_cause = pd::InlineCause::FarRd;
+        ct::Runner r(f);
+        CHECK_EQ(int(ceiling_run(f, r, sc::Mode::UsbA)), int(ct::Reason::None));
+        f.in.inline_cause = pd::InlineCause::Load;   // the link re-latched on a load: the release never counts as done
+        CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Unsafe || r.state() == ct::State::Done ||
+                                              r.state() == ct::State::Stopped; }, 120000), true);
+        CHECK_EQ(f.ceil_starts, 0);                     // no trigger with a load behind the K2
+        CHECK_EQ(r.reason() != ct::Reason::None, true);
+    }
 }
 // A VIVO charger that never answered its first row (no frame in the entry window) speaks nothing the other levels could
 // prove: they are skipped with that reason and get no session, as AFC / FCP / SCP / UFCS do.
@@ -7230,7 +7275,7 @@ int main() {
     test_hunt_evidence_marks_a_silent_source_as_a_timeout(); test_hunt_evidence_without_a_trace_is_unexplained();
     test_hunt_evidence_only_for_refused_rows(); test_classify_hunt_precedence();
     test_plan_and_run(); test_an_auto_hold_counts_as_released(); test_quiet_is_exactly_the_row_in_flight(); test_paint_blocked_needs_flight_and_an_engine_window(); test_refusals(); test_hold_keeps_the_baseline_until_released(); test_safe5_baseline();test_cancel_and_failed_release(); test_release_waits_for_the_sink_verification_and_its_hard_reset();
-    test_faults(); test_loop_lock_refuses_and_aborts(); test_timeouts_and_skips(); test_one_second_holds(); test_qc2_settles_within_two_percent(); test_qc2_5v_accepts_vsafe5_reading(); test_legacy_5v_accepts_vsafe5_reading(); test_qc3_rows_use_an_asymmetric_band(); test_legacy_rows_use_a_five_percent_band(); test_legacy_5v_row_uses_the_vsafe5_window(); test_scp_4v5_row_judges_the_adapter_readback(); test_qc3plus_without_response_is_a_distinct_skip(); test_unsupported_protocol_skips_its_other_rows(); test_silent_source_fails_every_handshake_row(); test_answered_handshake_passes_the_5v_row(); test_svooc_row_follows_the_adapter_ramp(); test_svooc_detected_is_a_pass(); test_vooc_family_shares_one_session(); test_ceiling_off_runs_no_stage(); test_ceiling_judged_ladder_is_the_result(); test_ceiling_refusal_is_recorded_and_the_run_goes_on(); test_ceiling_no_adapter_and_early_abort(); test_ceiling_cap_stops_a_session_that_is_never_judged(); test_ceiling_cancel_stops_the_trigger(); test_ceiling_needs_a_detected_svooc_family(); test_ceiling_waits_for_the_lines_after_the_family_release(); test_ceiling_lines_never_free_is_a_recorded_refusal(); test_vivo_no_response_skips_the_other_vivo_rows(); test_pps_min_step_accepts_unloaded_floor(); test_pps_up_step_uses_the_tight_band();
+    test_faults(); test_loop_lock_refuses_and_aborts(); test_timeouts_and_skips(); test_one_second_holds(); test_qc2_settles_within_two_percent(); test_qc2_5v_accepts_vsafe5_reading(); test_legacy_5v_accepts_vsafe5_reading(); test_qc3_rows_use_an_asymmetric_band(); test_legacy_rows_use_a_five_percent_band(); test_legacy_5v_row_uses_the_vsafe5_window(); test_scp_4v5_row_judges_the_adapter_readback(); test_qc3plus_without_response_is_a_distinct_skip(); test_unsupported_protocol_skips_its_other_rows(); test_silent_source_fails_every_handshake_row(); test_answered_handshake_passes_the_5v_row(); test_svooc_row_follows_the_adapter_ramp(); test_svooc_detected_is_a_pass(); test_vooc_family_shares_one_session(); test_ceiling_off_runs_no_stage(); test_ceiling_judged_ladder_is_the_result(); test_ceiling_refusal_is_recorded_and_the_run_goes_on(); test_ceiling_no_adapter_and_early_abort(); test_ceiling_cap_stops_a_session_that_is_never_judged(); test_ceiling_cancel_stops_the_trigger(); test_ceiling_needs_a_detected_svooc_family(); test_ceiling_waits_for_the_lines_after_the_family_release(); test_ceiling_lines_never_free_is_a_recorded_refusal(); test_ceiling_usb_a_waives_the_far_rd_latch(); test_ceiling_usb_a_waiver_stays_narrow(); test_vivo_no_response_skips_the_other_vivo_rows(); test_pps_min_step_accepts_unloaded_floor(); test_pps_up_step_uses_the_tight_band();
     test_missing_samples_and_wrap();
     test_fixed_band_judges_a_burst_mode_ripple_on_its_mean(); test_fixed_band_still_fails_a_steady_low_or_high_level(); test_fixed_band_keeps_the_per_sample_overvoltage_guards();
     test_pps_renewal();
