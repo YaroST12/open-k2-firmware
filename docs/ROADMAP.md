@@ -1070,7 +1070,7 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
   above; fixed in 64c0ba5, hardware check pending). **Default since 2026-11-14 (user decision, branch k2/pps-sweep):** the
   session's default run sweeps every PPS APDO, split at 5 V: the part from 5 V up right after the APDO's own
   min / max / step rows (Pd, also self-powered), the part below 5 V in PdLow (external power); opt-out: the Tests list line, `k2_remote charger-sweep off` (Cmd 0x0F), `ct_start.py --no-sweep`. The AVS sweep below
-  stays opt-in. Order and opt-out: `docs/CHARGER_TEST_FLOW.md`. Originally opt-in, never in the default preset: every 100 mV across each PPS
+  stays opt-in. **Since the test levels (k2/ct-level): Deep only.** Medium, the default level, runs no deep sweep; Deep runs the PPS and the AVS sweep (open decision: the brief's "Deep = Medium + PPS sweep" over the 2026-11-14 default). Order and opt-out: `docs/CHARGER_TEST_FLOW.md`. Originally opt-in, never in the default preset: every 100 mV across each PPS
   APDO, 1 A (AVS: the row below), Accept + PS_RDY + measured VBUS per point, results as a compact error-vs-setpoint
   strip on the results tab and the card (min / max / worst error and where, plus the peak delivered level and a
   fold-back: a steady out-of-band point is recorded, not a stop - "peak 19.75 V at 19.9 V, folds back to 19.42 V
@@ -1106,6 +1106,13 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
   hardware the Sweep row shows one chip that goes green, amber or red when the sweep closes.
 
 ## Not verified on hardware
+
+- **Charger-test levels** (k2/ct-level, built and host-tested only). Check on a PD charger with PPS (the Anker IQ4): a
+  Light run (Review Level row, or `ct_start.py --level light`) keeps VBUS at 5 V for the whole run (`pd_trace.py dump`:
+  no Request above 5 V, `vbus_fast` never above 5.5 V), the grid shows the listed PDOs/APDOs as Advertised (no fill, grey
+  left bar), the card header reads "Light run"; a Deep run sweeps every PPS and AVS APDO; Medium has no sweep rows.
+  Settings > Test level survives a reboot and sets the Review row; `stack_free` in the heartbeat stays above its
+  current floor on Review and Results.
 
 - A direct large PPS step-down of a running contract: 21 V to 13 V aborts at the +10 % overvoltage guard
   (`HW_TEST_PROCEDURES.md`, T02).
@@ -1268,6 +1275,8 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
 | Report cards, Results view, QR readout (card format versions in QR_SHARE.md) | done | verified (cards); QR phone scan not verified | `chargertest`, `qrshare_records`, `ui_share` |
 | Reboot-resume journal (`/jr`) | done | partial: see Not verified | `session_store` |
 | The 6 A hunt rows report "not unlocked" instead of failing when the source never offered 6 A | done | not verified on the CUKTECH 120 W | `chargertest` |
+| Test levels: Light (what is advertised, VBUS stays at 5 V), Medium (default, no deep sweeps), Deep (+ PPS and AVS deep sweeps); Review Level row, Settings > Test level, `charger-level` (0x5B), `ct_start.py --level`, level on the card and in the QR record; the Noted verdict for what a Light run did not measure | done | not verified | `chargertest`, `ui_charger_test`, `kit` |
+| A Legacy row waits through a source output restart (up to 10 s) instead of failing it | done | not verified | `chargertest` |
 
 ## USB-PD
 

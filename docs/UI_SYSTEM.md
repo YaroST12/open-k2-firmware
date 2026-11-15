@@ -402,7 +402,7 @@ repaints two rows. A change of the open height re-lays the rows below it.
 Seen in: `b_ct_algorithms.png` (radio, count tail, note, chevron), `b_ct_cable.png` (second column),
 `b_ct_steps.png` (verdict marker, volt tail, thumb), `ra_guard_refuse.png` (choices, no marker).
 
-### 5.5 KvTable: `kit::kv_static`, `kv_cells`, `kv_row`
+### 5.5 KvTable: `kit::kv_static`, `kv_cells`, `kv_row`, `kv_row_sel`
 
 | | |
 |---|---|
@@ -411,8 +411,9 @@ Seen in: `b_ct_algorithms.png` (radio, count tail, note, chevron), `b_ct_cable.p
 | Key | font 16, `kDim`, x6 |
 | Value | font 16, left edge at a page-fixed column: x72 (18 characters) or x92 (16 characters) |
 | Value colour | `kText`; the unit colour for a measured value; `kCaution` for the abnormal row; `kDim` or `kFaint` for `--` |
-| Repaints | one row (224 x 25) when its key, value or colour changes |
-| Seen in | `b_ct_review.png` (x72: Tests, Peak, Spoof, Header, Power), `b_ct_detail.png` (x92: Target, Measured, Window, Reason, Header or Mode, Scope) |
+| Settable row | `kv_row_sel`: a row the cursor can stand on (the charger test's Level). Focused, it takes the RowList focus look (`kFocusFill` ground, the 3 px `kFocusBar` when the theme has one, else the on-focus inks); OK changes its value in place, the strip says `Change` and the footer explains the value |
+| Repaints | one row (224 x 25) when its key, value, colour or focus changes |
+| Seen in | `b_ct_review.png` (x72: Tests, Peak, Spoof, Power, then the settable Level row), `b_ct_detail.png` (x92: Target, Measured, Window, Reason, Header or Mode, Scope) |
 
 ### 5.6 ActionCell: `kit::ActionCell`
 
@@ -421,6 +422,7 @@ Seen in: `b_ct_algorithms.png` (radio, count tail, note, chevron), `b_ct_cable.p
 | Purpose | The one thing OK does on a review page |
 | Geometry | full width, y156, 64 px (y156..219). A 1 px `kRule` at y154 closes the table above |
 | Idle | `kFocusT` fill, 2 px `kFocus` outline, verb in font 24 `kText` centred. Optional hint under it: 11 px `kCaution` triangle + font 12 `kCaution` text |
+| Idle, not focused | when the cursor stands on a settable KvTable row instead (`draw_idle(..., focused = false)`): `kBg` fill, 2 px `kRule` outline, verb and hint in `kInk2`, so the focus is never on two things at once |
 | Armed | `kCaution` fill, black word `CONFIRM` in font 24, black font-12 line `closes in 5s`, 4 px black bar along the bottom that drains to the left over 5 s (`Ui::kConfirmWindowMs`) |
 | Repaints | the whole cell on a state or text change; the bar repaints only the columns it leaves |
 | Seen in | `b_ct_review.png` (idle, hint `no load on the port`), `b_ct_confirm.png` (armed) |
@@ -443,7 +445,7 @@ Seen in: `b_ct_algorithms.png` (radio, count tail, note, chevron), `b_ct_cable.p
 | Purpose | The verdict of the one item a detail page shows |
 | Geometry | full width, y22..57 (36 px). 20 x 20 verdict glyph at x6, y30. Word in font 24 at x32, y28. Item name in font 16 right-aligned to x218, y32 |
 | Fill | the verdict's fill; `kSurface` for a verdict with no fill |
-| Words | `PASS`, `FAIL`, `CAPPED`, `SKIP`, `RUNNING`, `PENDING` |
+| Words | `PASS`, `FAIL`, `CAPPED`, `SKIP`, `RUNNING`, `PENDING`; a Light run's listing reads `LISTED` (a level the source offers) or `NOT RUN` (a legacy level above 5 V), both on the Noted look (`result_layout::verdict_word`) |
 | Seen in | `b_ct_detail.png` (FAIL), `ufcs_cuktech_detail.png` (PASS) |
 
 It is drawn by the page today (`paint_detail`). It belongs in the kit beside AlertBand: same box, same word place.
@@ -459,6 +461,13 @@ It is drawn by the page today (`paint_detail`). It belongs in the kit beside Ale
 | Partial | `kCautionT` | `kCaution` | tilde | 2 px `kCaution` bar on the bottom edge |
 | None, Stopped | none | `kDim` | 2 px dash | |
 | Skip | none | `kDim` | 2 px dash | 1 px strike through the label |
+| Noted | none | `kText` | upright 2 px `kDim` bar | 2 px `kDim` bar down the cell's left edge (`kNotedBarW`); never struck |
+
+- **Noted** is what a Light run records without measuring it: a level the source advertises (a Skip with reason
+  `Advertised`) or a legacy level not asked (`LightLevel`). It reads "Advertised" for a range or a listed level and
+  "Detected" for a protocol that answered at 5 V; it is never green and never red (`result_layout::Tone::Noted`,
+  `report_card::tone`). A Light card's passing groups read Noted too. The results page (`docs/site/r/card.js`) uses
+  the same tone: no fill, a grey left bar, the glyph `i`.
 
 - Label font: 16 in a cell 22 px or taller, else 12. The label is centred.
 - Glyph size: the cell's short side minus 4, at most 12.
@@ -564,7 +573,9 @@ them should move them into the kit first.
 - First OK arms: amber cell, `CONFIRM`, 5 s bar. Footer turns Caution and says what the second press does
   (`Press again to start`). Strip: `Confirm`.
 - Second OK inside the window starts. Any other key, or the window running out, disarms.
-- PLUS and MINUS have no short action on a review page; their short labels are blank.
+- PLUS and MINUS have no short action on a review page; their short labels are blank. The exception is a settable
+  KvTable row (`kv_row_sel`, the charger test's Level): PLUS and MINUS move between it and the ActionCell, which keeps
+  the focus by default; OK on the row changes the value in place.
 - A hazard that does not block rides in the cell as the hint line.
 
 **Alert with choices.** `ra_guard_refuse.png`
@@ -883,7 +894,7 @@ Scope: every interactive page takes the unified design; the read-only instrument
 | Progress rule | y20..21 | the lab drew it at y21..22 |
 | Row hairline | top line of the row | the lab drew it on the bottom line |
 | Strip | 16 px thick | the skill said 20 px |
-| Review keys | Tests, Peak, **Spoof**, Header, Power | the skill said Cable |
+| Review keys | Tests, Peak, **Spoof**, Power, then the settable **Level** row (2026-11-15: Level took Header's place) | the skill said Cable |
 | Step 2 title | `2/3 Spoof cable` | the skill said Cable |
 | Cable warning | band `Cable connected`; choices `Start anyway`, `Start, skip spoof`; BACK cancels | the skill said `Cable on plug` and a `Cancel` row |
 | Step detail rows | Target, Measured, Window or Reached, Reason, Header or Mode, Scope | the skill listed a `Settled` row |

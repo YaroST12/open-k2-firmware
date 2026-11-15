@@ -295,11 +295,12 @@ two rows:
 
 The results strip, the card and its summary keep ONE sweep per APDO: `ctsweep::View::apdo` summarizes both parts' points in
 setpoint order. The step labels name each part ("PPS 5-21V", "PPS 3.3-4.9V"). The cost is about 0.7 s per point (about 55 s
-for 3.3-11 V, 125 s for 3.3-21 V, both parts). Opt-out: the Tests list line "PPS sweep", `k2_remote charger-sweep off`
-(Cmd 0x0F with 0) or `ct_start.py --no-sweep`; the choice holds until the next change or a reboot. The AVS sweep stays
+for 3.3-11 V, 125 s for 3.3-21 V, both parts). Since the test levels (k2/ct-level) the Deep level turns it on and Medium,
+the default, leaves it off. On top of the level: the Tests list line "PPS sweep", `k2_remote charger-sweep on|off`
+(Cmd 0x0F) or `ct_start.py --sweep` / `--no-sweep`; the choice holds until the next change or a reboot. The AVS sweep stays
 opt-in (`charger-avs-sweep on`, `ct_start.py --avs-sweep`). It is not split, because AVS APDOs start at 9 V or 15 V. Both
 sweeps share the 640-point record in plan order (SPR AVS, PPS, EPR AVS): a typical list (SPR AVS 9-20 V 111 points, PPS
-3.3-11 V and 3.3-21 V 256, EPR AVS 15-36 V 211) needs 578, so the default-on PPS sweep takes nothing from an AVS sweep that
+3.3-11 V and 3.3-21 V 256, EPR AVS 15-36 V 211) needs 578, so a PPS sweep takes nothing from an AVS sweep that
 is turned on; a list past 640 points sweeps fewer parts, the parts from 5 V up first. A journal of a run without the sweep
 bit (older firmware) resumes without sweep rows. Host tests: `test_default_run_sweeps_each_pps_apdo_after_its_checks`,
 `test_pps_sweep_splits_at_5v_by_unit`, `test_default_sweep_on_a_low_latch_source`, `test_self_powered_run_sweeps_from_5v`.

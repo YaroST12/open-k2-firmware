@@ -66,7 +66,8 @@ Home -- Detail -- Charger test -- Lines -- Tools -- Settings      long MINUS / l
  |        |            |            |        |          |
  |        |            |            |        |          +-- USB Link (HID, Drive)
  |        |            |            |        |              Autorotate (Auto, Manual 0/90/180/270)
- |        |            |            |        |              Rotate buttons, Screenshot, Smoothing, Wake sleeping port
+ |        |            |            |        |              Rotate buttons, Screenshot, Smoothing, Wake sleeping port,
+ |        |            |            |        |              Test level (Light, Medium, Deep)
  |        |            |            |        |
  |        |            |            |        +-- FC trigger     QC / AFC / FCP / SCP / VOOC, scan
  |        |            |            |            PD trigger     pick a PDO or PPS/AVS voltage
@@ -234,8 +235,9 @@ Steps of the wizard:
 
 2. **Spoof cable (2 of 3)**: the cable identity the K2 presents to the charger (it answers the charger's cable query). The list is the shared one: **Off (real cable)** (no identity), built-ins (for example EPR 50 V 5 A, CUKTECH 6A, OnePlus 100W) and your saved cables. OK picks one and goes to Review. The choice is remembered. It applies to the PD units only.
 
-3. **Review (3 of 3)**: a START row and a summary (Tests, Peak, Cap, Header, Spoof).
-   - The first OK opens a confirmation window: "No load! OK twice within 5 s".
+3. **Review (3 of 3)**: a summary (Tests, Peak, Spoof, Power), the **Level** row and START. START has the focus.
+   - MINUS moves to the Level row; there OK cycles **Light**, **Medium**, **Deep** (see [Test levels](#test-levels)) and the Tests row's step count follows. PLUS goes back to START. The level of each new run starts at Settings > Test level.
+   - The first OK on START opens a confirmation window: "No load! OK twice within 5 s".
    - The second OK starts the test. BACK, a changed setting, or 5 s with no OK closes the window.
    - If a real cable is between the charger and the K2 (an Ra guard check), the screen says "Cable connected: the spoof won't reach the charger." and offers **Start anyway** or **Start, skip spoof** (this run without the identity; the remembered pick stays). BACK also returns to Review.
 
@@ -253,6 +255,18 @@ Notes:
 - QC at 20 V failing is normal (Class B) and is not a finding. QC2 and QC3 are limited to 12 V in the normal tests.
 - Never put a load on the output during a run.
 - Every run saves a **report card** (see [Report cards](#report-cards)) identified by a fingerprint of what the charger did, so repeat runs of the same charger update one card.
+
+#### Test levels
+
+| Level | What runs | VBUS |
+| :--- | :--- | :--- |
+| **Light** | Records what the charger advertises: Source_Capabilities, extended capabilities, EPR info, identity, every PDO and APDO as listed. Legacy protocols only to the point they are detectable at 5 V | stays at 5 V: nothing above 5 V is asked |
+| **Medium** (default) | Every selected test at every level, no deep sweeps | each level the tests ask for |
+| **Deep** | Medium plus the PPS deep sweep and the AVS deep sweep over every APDO (every 100 mV at 1 A) | the whole range of each APDO |
+
+- A Light run's results never show a green pass for something it did not measure. A level the charger lists reads **Advertised**, a legacy protocol that answered at 5 V reads **Detected**, and a level nothing lists is "not asked". These cells have no fill and a grey bar on their left edge. The Results counters count them with the skips; a grid row's footer counts them apart ("1 pass, 4 listed"), and a step's Detail reads **LISTED** (a level the charger offers) or **NOT RUN** (a legacy level).
+- A Light card says "Light run" in its header, and its rows read "detected" and "advertised", never a tick. A Deep card says "Deep run".
+- From the computer: `python3 tools/ct_start.py --level light|medium|deep` (default medium). `--avs-sweep` alone means deep. `--sweep` / `--no-sweep` turn the PPS deep sweep on or off on top of the level. `k2_remote.py charger-level light|medium|deep` sets the level of the next run without starting it.
 
 ### Lines
 
@@ -299,6 +313,7 @@ Spoof is a shortcut: it opens Who's attached on the Cable tab and then the Spoof
 | Screenshot | ON / OFF | across boots |
 | Smoothing | Off / Low / Medium / High | across boots |
 | Wake sleeping port | ON / OFF (default OFF) | across boots |
+| Test level | Light / Medium / Deep (default Medium) | across boots |
 
 +/- selects. OK opens, toggles or cycles (the label on the OK button says which). The footer says "Opens a settings page" or "Remembered across boots".
 
@@ -518,6 +533,7 @@ Radio rows: **Auto** (follows gravity), then **Manual** 0, 90, 180, 270 degrees.
 - **Screenshot**: ON allows remote and browser screen capture. Remembered. Turn it off if you do not want the screen readable over USB.
 - **Smoothing**: Off ("Raw readings"), Low ("Light calming"), Medium ("Balanced"), High ("Steady, slower"). OK cycles. Applied at once, remembered. It filters the display readings only, not the recorded data.
 - **Wake sleeping port**: OFF by default, and then the idle K2 presents no Rd and stays passive. ON lets an idle K2 hold its own Rd on one line at a time (2 s each) when that line reads like a sleeping source (about 3.0 to 3.3 V open, for example a splitter port with nothing plugged in), so the source can wake and the PD list appears without any pin. With it ON every waiting charger also sees the K2 as a sink for a moment, so turn it off again when you do not need it. It never acts during a charger test or a cable/source tool, and turning it off lets go of the line at once. Remembered.
+- **Test level**: the level each new charger test starts at: Light ("Charger test: offers at 5V"), Medium ("Charger test: levels, no sweeps", the default) or Deep ("Charger test: + PPS, AVS sweeps"). OK cycles Light, Medium, Deep. Remembered. The Review step's Level row changes the level too; that choice holds for every run until the next change or a reboot, which starts again from this setting. See [Test levels](#test-levels).
 
 ---
 
@@ -601,7 +617,7 @@ The bootloader area (0x08000000 to 0x080037FF) is never written by this firmware
 | Item | Where | Notes |
 | :--- | :--- | :--- |
 | USB link choice | flash, `/usb.cfg` | off by default, applies after replug |
-| Screenshot on/off, Smoothing, Rotate buttons, Autorotate, Wake sleeping port | flash, `/prefs.cfg` | remembered |
+| Screenshot on/off, Smoothing, Rotate buttons, Autorotate, Wake sleeping port, Test level | flash, `/prefs.cfg` | remembered |
 | Cable identity for the charger test | flash, `/cable.cfg` | remembered |
 | Saved cables (up to 140) | flash | also shown on the drive as JSON |
 | Report cards (up to 64) | flash | also on the drive as `CARDS.JSON` |
