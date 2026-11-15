@@ -990,6 +990,32 @@ void slow_pps_fall_fails_the_band() {
 
 // An SPR AVS APDO beside the PPS one: the AVS window (9-20 V) is swept at 100 / 500 / 1000 mV and slammed, against tAvsSrcTransSmall /
 // the large-step 325 ms, vAvsNew and vAvsValid; no Get_PPS_Status for it. The caps note says both kinds are there.
+// PS_RDY is stamped when its frame has been received, so the reading carries the frame's own wire time: a small PPS step's PS_RDY
+// is judged against tPpsSrcTransSmall (25 ms) plus the 2 ms wire allowance (pd_spec_timing.hpp kPsRdyWireOverheadMs). 26 ms after
+// the Accept passes, 28 ms fails on every small step; the slams (large steps, 275 + 2 ms) pass both.
+void pps_ps_rdy_wire_allowance() {
+    for (const int at : {26, 28}) {
+        Sim m;
+        m.list({fixed(5000), pps(3300, 11000)});
+        m.early_psrdy_ms = at;
+        Engine e(m);
+        CHECK_COND(e.start(0, bit(Family::Pps)) == StartResult::Ok);
+        drive(m, e);
+        check_safe_end(m, e);
+        CHECK_COND(e.stop() == Stop::Done);
+        CHECK_EQ(int(e.agg(Check::PpsPsRdy).hi), 27000);    // the worst is a small step's: 25 ms + 2
+        CHECK_EQ(int(e.passes()[3].psrdy_fails), 0);
+        if (at == 26) {
+            CHECK_COND(verdict(e, Check::PpsPsRdy) == Verdict::Pass);
+            CHECK_EQ(int(e.passes()[1].psrdy_fails), 0);
+        } else {
+            CHECK_COND(verdict(e, Check::PpsPsRdy) == Verdict::Fail);
+            CHECK_EQ(int(e.passes()[1].psrdy_fails), int(e.passes()[1].steps));
+            CHECK_EQ(int(e.agg(Check::PpsPsRdy).worst), 28000);
+        }
+    }
+}
+
 void avs_sweep_and_caps_note() {
     Sim m;
     m.list({fixed(5000), fixed(9000), fixed(15000), fixed(20000), pps(3300, 11000), avs(9000, 20000)});
@@ -1066,5 +1092,6 @@ int main() {
     slow_pps_fall_fails_the_band();
     avs_sweep_and_caps_note();
     full_20mv_sweep_option();
+    pps_ps_rdy_wire_allowance();
     return test_report("test_pdspec_engine");
 }

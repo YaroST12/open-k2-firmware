@@ -871,11 +871,13 @@ inline void Engine::judge_prog(const StepOut& o, const Edges& e, const Snapshot&
     PassRec scratch;
     PassRec* slot = pass_slot();
     PassRec& r = slot ? *slot : scratch;
-    const Lat l = latencies(e, s, avs ? Check::AvsPsRdy : Check::PpsPsRdy, lim_ms * 1000, a, b);
+    // PS_RDY is a received message: its limit carries the wire allowance (pd_spec_timing.hpp kPsRdyWireOverheadMs); the band does not.
+    const std::int32_t rdy_ms = lim_ms + std::int32_t(pd::spec::kPsRdyWireOverheadMs);
+    const Lat l = latencies(e, s, avs ? Check::AvsPsRdy : Check::PpsPsRdy, rdy_ms * 1000, a, b);
     if (l.acc) {
         const std::uint32_t t = l.rdy ? l.rdy_us / 100 : 0xFFFF;
         if (t > r.psrdy_100us) r.psrdy_100us = static_cast<std::uint16_t>(t > 0xFFFF ? 0xFFFF : t);
-        if (!l.rdy || l.rdy_us > std::uint32_t(lim_ms) * 1000) bump_sat(r.psrdy_fails);
+        if (!l.rdy || l.rdy_us > std::uint32_t(rdy_ms) * 1000) bump_sat(r.psrdy_fails);
     }
     if (!o.valid) return;
     ++r.steps;

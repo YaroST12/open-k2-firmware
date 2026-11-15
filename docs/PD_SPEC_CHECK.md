@@ -71,7 +71,7 @@ is sure and a fail can be over-reported by that much at most (conservative).
 | `pps_accuracy`, `avs_accuracy` | each settled level | inside vPpsNew (requested +-5 %) / vAvsNew (requested +-5 %) |
 | `pps_settle` | 20 mV steps: Accept to the settled level, the first sample from which the mean of the last four samples stays within 10 mV of the final level | tPpsSrcTransSmall (25 ms): unverified (a 20 mV step is under the meter's resolution, see Measurement) |
 | `pps_band`, `avs_band` | 100 / 500 mV PPS steps, all AVS steps, the slams: Accept to VBUS inside vPpsNew / vAvsNew | tPpsSrcTransSmall 25 ms for a step up to vPpsSmallStep (500 mV), tPpsSrcTransLarge 275 ms above; tAvsSrcTransSmall 50 ms up to vAvsSmallStep (1000 mV), tAvsSrcTransLarge 325 ms (SPR) above |
-| `pps_ps_rdy`, `avs_ps_rdy` | Accept to PS_RDY on every measured move | the same small / large limit as the band (the source sends PS_RDY once the output is in vPpsNew / vAvsNew) |
+| `pps_ps_rdy`, `avs_ps_rdy` | Accept to PS_RDY on every measured move | the same small / large limit as the band (the source sends PS_RDY once the output is in vPpsNew / vAvsNew) + 2 ms on the wire: the K2 stamps PS_RDY once it is received, so the reading carries the PS_RDY frame (149 bits, 0.50 ms), the K2's turnaround (under 0.2 ms) and its GoodCRC (0.50 ms), 1.2 ms rounded up as for `accept_time` (derived, `kPsRdyWireOverheadMs`): 27 ms on a small PPS step, 277 ms on a large one. The band check keeps the bare limit (a meter sample, not a message) |
 | `pps_overshoot`, `avs_overshoot` | the peak (up) or the dip (down) after the Accept | inside vPpsNew widened by vPpsValid (100 mV) / vAvsNew widened by vAvsValid (500 mV), on the side the move goes to |
 | `pps_transient`, `avs_transient` | after VBUS first entered the band: the longest stretch it left it again | tPpsTransient 150 ms (load under 60 mA, which no load is) / tAvsTransient 5 ms |
 | `pps_status` | each Get_PPS_Status answer (PPS passes only, never during the PPS timeout check): fault bits | 0. Output Voltage within +-3 % of the requested level (rounded to 20 mV) or 0xFFFF; Output Current 0..3 (no load, 50 mA units) or 0xFF; Real Time Flags bit 0 = 0, OMF = 0, bits 7..4 = 0 (PTF may read 0 or 1). Not_Supported and no answer are faults (Get_PPS_Status is required of a PPS source) |
@@ -179,9 +179,10 @@ Hard Reset 2 s, Detach 1 s. Each: 25 pass, 1 fail, 7 skip (EPR, AVS), 1 unverifi
 | `pps_keepalive` (source Hard Reset after the silence) | 13.3 s | 13.3 s |
 
 The IQ4's level is in band within 2-9 ms of the Accept, but its PS_RDY comes 22-33 ms after it on small steps, over
-tPpsSrcTransSmall (25 ms) on 100 and 500 mV steps in both runs: a real finding. The single 20 mV fail (25.5 ms, run 1) is inside the
-K2's own offset (timed from the Accept's RX edge, under 1 ms before the GoodCRC that starts the source's timer, plus the PS_RDY frame
-itself), so on its own it would not prove a violation. A Get_PPS_Status answer is timed only when both edge stamps are real; 1-2 of
+tPpsSrcTransSmall (25 ms) on 100 and 500 mV steps in both runs. These runs judged PS_RDY against the bare 25 ms; since then the
+limit carries the 2 ms wire allowance (27 ms, see the limits table). The 20 mV worst (25.5 ms, run 1) passes under it; the 100 and
+500 mV worsts (29.7-32.7 ms) still fail: a real finding, pending a `pd_trace` cross-check (`late-ps-rdy-small-pps-step` in
+`docs/CHARGER_QUIRKS.md`). The blob keeps the worst per pass, not every move, so the fail counts under 27 ms are not known. A Get_PPS_Status answer is timed only when both edge stamps are real; 1-2 of
 the 8 per run were not, and are judged on content only. The reports in these two directories print an APDO move under `accept_time`
 as "PDO 134 to 33" (fixed in the decoder after the runs; `pd_spec.py report <dir>/result.json` prints "APDO 6 ... to 3.3 V").
 

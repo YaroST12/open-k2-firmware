@@ -28,6 +28,13 @@ inline constexpr std::uint32_t kAcceptWireOverheadMs = 2;
 // tSenderResponse bound (kAcceptLimitMs), a sink's own patience, so their verdicts do not move with this check.
 inline constexpr std::uint32_t kAcceptSpecLimitMs = kReceiverResponseMs + kAcceptWireOverheadMs;
 inline constexpr std::uint32_t kAcceptLimitMs = kSenderResponseMaxMs + kAcceptWireOverheadMs;
+// PS_RDY after a programmable step, measured from the Accept's RX edge to the PS_RDY's RX edge. The K2 stamps a message when it has
+// been received and GoodCRC'd, so the PS_RDY reading carries what lies on the wire after the source started it: the PS_RDY frame
+// (preamble 64 + SOP 20 + header 20 + CRC 40 + EOP 5 = 149 bits, 0.50 ms at 300 kbit/s), the K2's turnaround (tTransmit, under 0.2 ms)
+// and its GoodCRC (149 bits, 0.50 ms): 1.2 ms, taken as the same 2 ms as the Accept (derived). The start edge (the Accept's) is under
+// 1 ms before the GoodCRC that starts the source's timer, so the reading is still at least the source's own time. VBUS in the band is
+// a sample of the meter, not a message: the band check keeps the bare tPpsSrcTransSmall / tPpsSrcTransLarge (and the AVS ones).
+inline constexpr std::uint32_t kPsRdyWireOverheadMs = kAcceptWireOverheadMs;
 // Get_PPS_Status -> PPS_Status the same way (a control message, its GoodCRC, then the extended answer: under 2 ms of frames, derived).
 inline constexpr std::uint32_t kPpsStatusLimitMs = kReceiverResponseMs + kAcceptWireOverheadMs;
 
