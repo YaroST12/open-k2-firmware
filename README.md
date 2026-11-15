@@ -7,6 +7,8 @@ Not affiliated: WITRN is a trademark of its owner, and this project is independe
 in this repository, and [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) for the bundled third-party
 components and their licences.
 
+**Jump to:** [What it does](#what-it-does) | [UI walkthrough](#ui-walkthrough) | [Hardware](#hardware) | [Download / flash](#download--flash) | [Build](#build) | [USB link modes](#usb-link-modes) | [Flashing](#flashing) | [USB drive](#usb-drive) | [Browser dashboard](#browser-dashboard-prototype) | [Recovery](#recovery) | [License](#license)
+
 ## What it does
 
 - **Power meter**: volts, amps, watts and energy, trend graphs, D+/D-/CC1/CC2 line levels.
@@ -20,6 +22,173 @@ components and their licences.
 How to use all of it: **[`docs/USER_GUIDE.md`](docs/USER_GUIDE.md)**, with a short Getting started part and a full reference of every page, tool and setting.
 Feature status, with what is verified on hardware and what is not, is in `docs/ROADMAP.md`.
 Step-by-step hardware test procedures for every protocol and feature, with a results log: `docs/HW_TEST_PROCEDURES.md`.
+
+## UI walkthrough
+
+The K2 has a 240x240 screen and four buttons: **BACK**, **MINUS**, **OK** and **PLUS**. A narrow strip along one edge of the screen always shows what each button does on the page you are on, so read the strip instead of learning keys. In the lists, MINUS and PLUS read **Up** and **Dn**. A grey or missing label means that button does nothing there.
+
+The pictures below are host renders: the real UI code drawn into a 240x240 buffer by the host tests, with stand-in readings (a 100 W PD charger on the port). They are not photos or device screenshots, so the numbers are examples. The regeneration recipe is at the end of this section. The full reference for every page is [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md).
+
+### Home
+
+<img src="docs/img/ui/home.png" width="240" alt="Home: the Flow face">
+
+- Flow is the page the K2 boots into. The big number is power (W); volts and amps sit below it, each with a trend.
+- The two cells on the right (peak, drop, cable, energy) turn by themselves. The bottom block names the PD state and how long the session has run.
+- **OK** opens the Bench. **Long OK** resets the energy counter and the peaks. **Long BACK** changes the big number (W, V, A). **Long PLUS / MINUS** change the trend window (10 s, 60 s, 10 min).
+
+### The other faces: Graphs, Numbers, Lines
+
+<table>
+<tr>
+<td align="center"><img src="docs/img/ui/graphs.png" width="240" alt="Graphs face"></td>
+<td align="center"><img src="docs/img/ui/numbers.png" width="240" alt="Numbers face"></td>
+<td align="center"><img src="docs/img/ui/lines.png" width="240" alt="Lines face"></td>
+</tr>
+<tr>
+<td align="center"><sub>Graphs: power, volts, amps, energy</sub></td>
+<td align="center"><sub>Numbers: every reading in a grid</sub></td>
+<td align="center"><sub>Lines: D+, D-, CC1, CC2</sub></td>
+</tr>
+</table>
+
+- **Dn** and **Up** flip through Flow, Graphs, Numbers and Lines. **OK** opens the Bench from any of them.
+- Graphs has its own trends. **OK** (Zoom) changes the time span.
+- Numbers shows the contract, cable rating, energy, charge, time and the line levels. Lines draws the levels of the four signal lines as bars.
+
+### Bench and the places
+
+<table>
+<tr>
+<td align="center"><img src="docs/img/ui/bench.png" width="240" alt="Bench with its seven places"></td>
+<td align="center"><img src="docs/img/ui/place-charger.png" width="240" alt="Charger place"></td>
+<td align="center"><img src="docs/img/ui/place-device.png" width="240" alt="Device place"></td>
+</tr>
+<tr>
+<td align="center"><sub>Bench: the places</sub></td>
+<td align="center"><sub>Charger: offers and tests</sub></td>
+<td align="center"><sub>Device: what it asks for</sub></td>
+</tr>
+</table>
+
+- The Bench lists seven places, each with a status line: Meter, Charger, Cable, Device, Battery, Log and K2. **Up** and **Dn** move, **OK** opens a place, **BACK** returns to the face you came from.
+- The Charger place is the PD page. It shows what the charger offers (fixed, PPS, AVS, EPR) and the actions you can run on it: Test charger, Request voltage, Fast charge, Report cards.
+- The Device place shows what the attached device asks the charger for. The Log place shows the PD diagnosis and opens the Black Box. The Battery place records charge efficiency.
+
+### Charger test
+
+Start it from **Test charger** in the Charger place. Plug the charger in with **nothing on the output**. The test steps through the voltages the charger offers and grades each one.
+
+<table>
+<tr>
+<td align="center"><img src="docs/img/ui/ct-tests.png" width="240" alt="Charger test, step 1 of 3: pick the tests"></td>
+<td align="center"><img src="docs/img/ui/ct-review.png" width="240" alt="Review step with START"></td>
+<td align="center"><img src="docs/img/ui/ct-confirm.png" width="240" alt="START armed: CONFIRM"></td>
+</tr>
+<tr>
+<td align="center"><sub>1/3 Tests: pick a preset</sub></td>
+<td align="center"><sub>3/3 Review: what will run</sub></td>
+<td align="center"><sub>OK again within 5 s</sub></td>
+</tr>
+</table>
+
+- Step 1 picks a preset (All tests, PD only, Legacy only, Vendor modes or Custom). **OK** picks it and goes on. Step 2 picks the cable identity to present; the Review step lists what will run.
+- On Review, **OK** (Start) arms the run. The button turns orange and reads CONFIRM; a bar drains over 5 s. A second **OK** inside that time starts the run; if the 5 s pass, it disarms.
+
+<table>
+<tr>
+<td align="center"><img src="docs/img/ui/ct-running.png" width="240" alt="Charger test running"></td>
+<td align="center"><img src="docs/img/ui/ct-results.png" width="240" alt="Charger test results"></td>
+<td align="center"><img src="docs/img/ui/ct-steps.png" width="240" alt="Steps list"></td>
+</tr>
+<tr>
+<td align="center"><sub>Running: the step under test</sub></td>
+<td align="center"><sub>Results: one cell per voltage</sub></td>
+<td align="center"><sub>Steps: the list for one unit</sub></td>
+</tr>
+</table>
+
+- Running shows the step count, VBUS, the target and a grid that follows the step in progress. **Up** and **Dn** scroll it. **BACK** (Stop) ends the run early.
+- Results grades every unit. A green cell passed, a red one failed, a struck-out one was skipped (here the EPR 28 V step). **OK** (Steps) opens the steps of the focused unit. **Long OK** shows a QR code that opens the full result on a phone.
+- Steps lists each step with the volts it measured. **OK** (Open) shows one step's detail.
+
+<table>
+<tr>
+<td align="center"><img src="docs/img/ui/ct-detail.png" width="240" alt="Step detail"></td>
+</tr>
+<tr>
+<td align="center"><sub>Detail: target, measured, window</sub></td>
+</tr>
+</table>
+
+### PD Spec Check
+
+This page is only in builds made with `K2_PDSPEC=1`; the default build does not have it. It is a no-load conformance pass over the attached PD charger, judged against the limits of the PD specification.
+
+<table>
+<tr>
+<td align="center"><img src="docs/img/ui/pdspec-setup.png" width="240" alt="PD Spec Check: pick the checks"></td>
+<td align="center"><img src="docs/img/ui/pdspec-running.png" width="240" alt="PD Spec Check running"></td>
+<td align="center"><img src="docs/img/ui/pdspec-results.png" width="240" alt="PD Spec Check results"></td>
+</tr>
+<tr>
+<td align="center"><sub>1/2 Checks: pick families</sub></td>
+<td align="center"><sub>Running: family and VBUS</sub></td>
+<td align="center"><sub>Results: a run stopped early</sub></td>
+</tr>
+</table>
+
+- Setup picks the check families (**OK** toggles one). Review shows what will run and uses the same two-press START as the charger test.
+- Running shows the check, VBUS and the counts. **BACK** (Stop) ends it and returns the charger to 5 V.
+- Results lists every check as pass, fail or skip with its worst value. The picture is a run that was stopped early, so most checks are skipped. **OK** opens a check's detail. The score is a penalty: 0 is ideal.
+
+### E-marker and cable read
+
+<table>
+<tr>
+<td align="center"><img src="docs/img/ui/place-cable.png" width="240" alt="Cable place"></td>
+</tr>
+<tr>
+<td align="center"><sub>Cable: e-marker identity and Read e-marker</sub></td>
+</tr>
+</table>
+
+- The Cable place shows what the cable's e-marker reports: current, voltage, type, length and the answered modes.
+- Plug the cable into the bottom port with nothing else attached, then press **OK** (Read) to read it. Save it, spoof it or measure its resistance from the same list.
+
+### Settings
+
+<table>
+<tr>
+<td align="center"><img src="docs/img/ui/settings.png" width="240" alt="K2 place: firmware and settings"></td>
+<td align="center"><img src="docs/img/ui/usblink.png" width="240" alt="USB Link page"></td>
+</tr>
+<tr>
+<td align="center"><sub>K2 place: settings</sub></td>
+<td align="center"><sub>USB Link: turn on HID</sub></td>
+</tr>
+</table>
+
+- The K2 place, last on the Bench, shows the firmware version, uptime and USB mode, then the settings: USB Link, Autorotate, Rotate buttons, Screenshot, Smoothing and Wake sleeping port.
+- **OK** opens a page or toggles a value. On USB Link, **OK** (Toggle) turns HID or Drive on; the change applies after a replug. The footer says so.
+- Hold **MINUS and PLUS together** to rotate the screen.
+
+### Also
+
+- **Reboot:** hold **OK and BACK together for 3 s** on any page. A card counts down after 1 s; release either button to cancel.
+- **Web page:** `tools/web/k2.html` is the browser dashboard (WebHID; it also opens WebUSB on builds made with `K2_WEBUSB=1`). It shows the readings and runs the same tools from a computer. See "Browser dashboard" below.
+
+### Regenerating the pictures
+
+The host tests draw each page to a 240x240 buffer. With `K2_DUMP=<dir>` set, the UI test programs write the frames, and `tools/panel2png.py <dir> <out> --scale 2` turns them into PNG files:
+
+```bash
+make host-build/test_ui_mockup host-build/test_ui_charger_test host-build/test_ui_graphs
+K2_DUMP=runs/shots ./host-build/test_ui_mockup
+python3 tools/panel2png.py runs/shots runs/png --scale 2
+```
+
+The pictures here come from the same drivers, taken at rotation 3 (the strip at the bottom). The stock drivers dump some frames before a page has finished painting, so the frames here were taken after ticking the UI until it stopped painting, and the PNG files were then reduced to 128 colours.
 
 ## Hardware
 
