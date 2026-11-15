@@ -18,7 +18,7 @@ a run with 0 PDOs is invalid.
 --level sets the run's thoroughness (`charger-level`, sent before every START: the device keeps the last choice): light
 records what the charger advertises and asks for nothing above 5 V, medium (the default) is the full run without deep
 sweeps, deep adds the PPS and AVS deep sweeps and the SuperVOOC ceiling stage (after a detected VOOC family; ct_start
-sends its mode on every deep run: --svooc-cap usb-a, else on). --avs-sweep or --svooc-cap without --level means deep;
+sends its mode on every deep run: --svooc-cap usb-a, else on; usb-a is a no-op, the ceiling stage runs as on). --avs-sweep or --svooc-cap without --level means deep;
 --sweep / --no-sweep override the level's PPS sweep for this run. The summary ends with the VOOC family's ident and, on a
 deep run, the ceiling stage's words.
 
@@ -228,7 +228,8 @@ def parse_args(argv=None):
     ap.add_argument("--svooc-cap", choices=["on", "usb-a"],
                     help="the SuperVOOC ceiling stage's mode (deep runs only; alone it means --level deep; a deep run "
                          "without it sends on): reads the 0x86 ceiling from the protocol, never loads the charger. "
-                         "usb-a = USB-A charger, top port empty")
+                         "usb-a is accepted and runs as on: the charger test waives nothing since the "
+                         "2026-11-15 latch policy, the Review step warns about the other port instead")
     ap.add_argument("--units", default="",
                     help="run only these test units, in this order, e.g. qc2,qc3 or pd,qc2 (names: " + ", ".join(kr.TEST_UNITS) +
                          "); default = the full order: vendor modes, PD, QC/UFCS, pd-low. The PPS sweep is split at 5 V: "

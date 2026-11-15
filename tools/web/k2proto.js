@@ -1778,7 +1778,8 @@ var K2Proto = (function () {
     if (sv.end !== "not run") out.push("SVOOC ceiling: " + sv.text + " (protocol read, no load)");
     return out;
   }
-  // mode: undefined = read; "off" | "on" | "usb-a" = set (Busy while a run is active).
+  // mode: undefined = read; "off" | "on" | "usb-a" = set (Busy while a run is active). "usb-a" stays on the wire and runs as "on":
+  // the charger test waives nothing now (latch policy 2026-11-15; the K2's Review step warns about the other port).
   K2Remote.prototype.chargerSvoocCap = async function (mode) {
     var payload = [];
     if (mode !== undefined) {

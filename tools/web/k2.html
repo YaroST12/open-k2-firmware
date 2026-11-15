@@ -303,6 +303,7 @@ main[data-route="cables"] > [data-page~="cables"], main[data-route="device"] > [
 .confirm { border: 1px solid var(--warn); background: var(--warn-bg); border-radius: 8px; padding: 10px 12px; display: flex;
            flex-direction: column; gap: 8px; }
 .confirm h3 { margin: 0; font-size: 15px; }
+.confirm .stern { font-weight: 700; color: var(--warn); }
 .confirm p { margin: 0; }
 progress { width: 100%; height: 10px; accent-color: var(--accent); }
 .vgrid { display: flex; flex-direction: column; gap: 6px; }
@@ -540,6 +541,7 @@ progress { width: 100%; height: 10px; accent-color: var(--accent); }
     </div>
     <div id="ctr-confirm" class="confirm" role="alertdialog" aria-labelledby="ctr-confirm-h" aria-describedby="ctr-confirm-p" hidden>
       <h3 id="ctr-confirm-h">Start the charger test?</h3>
+      <p id="ctr-warn" class="stern" role="alert">OTHER PORT FREE? A device on the other port can be damaged. Unplug it.</p>
       <p id="ctr-confirm-p">The K2 becomes an active sink and asks the charger for <b>every level it offers</b> in the chosen units:
         each PD voltage, the PPS / AVS steps, EPR levels up to the K2's monitor ceiling, and the QC and vendor fast-charge modes.
         The K2's output follows every level. Disconnect any phone, laptop or other load from the output first.</p>
@@ -2375,7 +2377,8 @@ var K2Proto = (function () {
     if (sv.end !== "not run") out.push("SVOOC ceiling: " + sv.text + " (protocol read, no load)");
     return out;
   }
-  // mode: undefined = read; "off" | "on" | "usb-a" = set (Busy while a run is active).
+  // mode: undefined = read; "off" | "on" | "usb-a" = set (Busy while a run is active). "usb-a" stays on the wire and runs as "on":
+  // the charger test waives nothing now (latch policy 2026-11-15; the K2's Review step warns about the other port).
   K2Remote.prototype.chargerSvoocCap = async function (mode) {
     var payload = [];
     if (mode !== undefined) {
