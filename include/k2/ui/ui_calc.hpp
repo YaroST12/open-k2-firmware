@@ -166,76 +166,67 @@ int fmt_count_capped(std::span<char> out, uint32_t value);
 int fmt_hms(std::span<char> out, uint32_t seconds);         // H:MM:SS
 int fmt_hex(std::span<char> out, uint32_t value, int digits);  // upper case, zero padded
 
-// StrBuf's out-of-line body, shared by every capacity N: StrBuf<N> forwards (buffer, N, length)
-// here, so flash holds one copy of each formatter wrapper instead of one per N.
-struct StrBufRef {
-    char *b;
-    size_t cap;
-    size_t &n;
-    void put(std::string_view s);  // appends what fits into b[0..cap-2], keeps b NUL-terminated
-    void put_u32(uint32_t v, int width);
-    void put_u32_compact(uint32_t v);
-    void put_count_capped(uint32_t v);
-    void put_fixed(int32_t milli, int decimals, int width);
-    void put_abs_fixed(int32_t milli, int decimals, int width);
-    void put_hex(uint32_t v, int digits);
-    void put_hms(uint32_t seconds);
-    void put_age(uint32_t seconds);
+// StrBuf's out-of-line body, shared by every capacity N. The length and the capacity sit in this 4-byte header and the
+// characters right after it (StrBuf<N>'s b_), so a call passes one pointer and flash holds one copy of each formatter
+// instead of one per N.
+class StrBufBase {
+public:
+    void clear();
+    StrBufBase &put(std::string_view s);  // appends what fits into the first cap-1 characters, keeps the text NUL-terminated
+    StrBufBase &put_char(char c);
+    StrBufBase &put_u32(uint32_t v, int width = 0);
+    StrBufBase &put_u32_compact(uint32_t v);
+    StrBufBase &put_count_capped(uint32_t v);
+    StrBufBase &put_fixed(int32_t milli, int decimals, int width = 0);
+    StrBufBase &put_abs_fixed(int32_t milli, int decimals, int width = 0);
+    StrBufBase &put_hex(uint32_t v, int digits);
+    StrBufBase &put_hms(uint32_t seconds);
+    StrBufBase &put_age(uint32_t seconds);
+    std::string_view view() const { return {data(), n_}; }
+    const char *c_str() const { return data(); }
+
+protected:
+    explicit StrBufBase(uint16_t cap) : n_(0), cap_(cap) {}
+    StrBufBase(const StrBufBase &) = default;              // only as part of a StrBuf<N> of the same N
+    StrBufBase &operator=(const StrBufBase &) = default;
+    ~StrBufBase() = default;
+
+private:
+    // The characters follow the header in the derived StrBuf<N> (its only member, char-aligned: offset sizeof(StrBufBase)).
+    char *data() { return reinterpret_cast<char *>(this) + sizeof(StrBufBase); }
+    const char *data() const { return reinterpret_cast<const char *>(this) + sizeof(StrBufBase); }
+    uint16_t n_;
+    uint16_t cap_;
 };
 
 // Fixed-capacity string builder (no heap). Output is always NUL-terminated and truncated to fit.
 template <size_t N>
-class StrBuf {
+class StrBuf : public StrBufBase {
+    static_assert(N >= 1 && N <= 0xFFFF, "StrBuf capacity is a 16-bit count");
+
 public:
-    StrBuf() { b_[0] = '\0'; }
-    void clear() { n_ = 0; b_[0] = '\0'; }
-    StrBuf &put(std::string_view s) {
-        ref().put(s);
+    StrBuf() : StrBufBase(static_cast<uint16_t>(N)) { b_[0] = '\0'; }
+    StrBuf(const StrBuf &) = default;
+    StrBuf &operator=(const StrBuf &) = default;
+    [[gnu::always_inline]] StrBuf &put(std::string_view s) { StrBufBase::put(s); return *this; }
+    [[gnu::always_inline]] StrBuf &put_char(char c) { StrBufBase::put_char(c); return *this; }
+    [[gnu::always_inline]] StrBuf &put_u32(uint32_t v, int width = 0) { StrBufBase::put_u32(v, width); return *this; }
+    [[gnu::always_inline]] StrBuf &put_u32_compact(uint32_t v) { StrBufBase::put_u32_compact(v); return *this; }
+    [[gnu::always_inline]] StrBuf &put_count_capped(uint32_t v) { StrBufBase::put_count_capped(v); return *this; }
+    [[gnu::always_inline]] StrBuf &put_fixed(int32_t milli, int decimals, int width = 0) {
+        StrBufBase::put_fixed(milli, decimals, width);
         return *this;
     }
-    StrBuf &put_char(char c) {
-        if (n_ + 1 < N) { b_[n_++] = c; b_[n_] = '\0'; }
+    [[gnu::always_inline]] StrBuf &put_abs_fixed(int32_t milli, int decimals, int width = 0) {
+        StrBufBase::put_abs_fixed(milli, decimals, width);
         return *this;
     }
-    StrBuf &put_u32(uint32_t v, int width = 0) {
-        ref().put_u32(v, width);
-        return *this;
-    }
-    StrBuf &put_u32_compact(uint32_t v) {
-        ref().put_u32_compact(v);
-        return *this;
-    }
-    StrBuf &put_count_capped(uint32_t v) {
-        ref().put_count_capped(v);
-        return *this;
-    }
-    StrBuf &put_fixed(int32_t milli, int decimals, int width = 0) {
-        ref().put_fixed(milli, decimals, width);
-        return *this;
-    }
-    StrBuf &put_abs_fixed(int32_t milli, int decimals, int width = 0) {
-        ref().put_abs_fixed(milli, decimals, width);
-        return *this;
-    }
-    StrBuf &put_hex(uint32_t v, int digits) {
-        ref().put_hex(v, digits);
-        return *this;
-    }
-    StrBuf &put_hms(uint32_t seconds) {
-        ref().put_hms(seconds);
-        return *this;
-    }
-    StrBuf &put_age(uint32_t seconds) {
-        ref().put_age(seconds);
-        return *this;
-    }
-    std::string_view view() const { return {b_, n_}; }
-    const char *c_str() const { return b_; }
+    [[gnu::always_inline]] StrBuf &put_hex(uint32_t v, int digits) { StrBufBase::put_hex(v, digits); return *this; }
+    [[gnu::always_inline]] StrBuf &put_hms(uint32_t seconds) { StrBufBase::put_hms(seconds); return *this; }
+    [[gnu::always_inline]] StrBuf &put_age(uint32_t seconds) { StrBufBase::put_age(seconds); return *this; }
 
 private:
-    StrBufRef ref() { return {b_, N, n_}; }
     char b_[N];
-    size_t n_ = 0;
 };
 
 }  // namespace k2

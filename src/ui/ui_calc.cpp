@@ -168,52 +168,66 @@ int fmt_ohms(std::span<char> out, int32_t vbus_mv, int32_t current_ma) {
     return fmt_fit(out, milli_ohm, 4, 2);
 }
 
-void StrBufRef::put(std::string_view s) {
-    for (char c : s) {
-        if (n + 1 >= cap) break;
-        b[n++] = c;
-    }
-    b[n] = '\0';
+void StrBufBase::clear() {
+    n_ = 0;
+    data()[0] = '\0';
 }
-void StrBufRef::put_u32(uint32_t v, int width) {
+StrBufBase &StrBufBase::put(std::string_view s) {
+    char *b = data();
+    for (char c : s) {
+        if (n_ + 1 >= cap_) break;
+        b[n_++] = c;
+    }
+    b[n_] = '\0';
+    return *this;
+}
+StrBufBase &StrBufBase::put_char(char c) {
+    if (n_ + 1 < cap_) {
+        char *b = data();
+        b[n_++] = c;
+        b[n_] = '\0';
+    }
+    return *this;
+}
+StrBufBase &StrBufBase::put_u32(uint32_t v, int width) {
     char t[16];
     fmt_u32(t, v, width);
-    put(t);
+    return put(t);
 }
-void StrBufRef::put_u32_compact(uint32_t v) {
+StrBufBase &StrBufBase::put_u32_compact(uint32_t v) {
     char t[8];
     const int len = fmt_u32_compact(t, v);
-    put({t, static_cast<size_t>(len)});
+    return put({t, static_cast<size_t>(len)});
 }
-void StrBufRef::put_count_capped(uint32_t v) {
+StrBufBase &StrBufBase::put_count_capped(uint32_t v) {
     char t[8];
     const int len = fmt_count_capped(t, v);
-    put({t, static_cast<size_t>(len)});
+    return put({t, static_cast<size_t>(len)});
 }
-void StrBufRef::put_fixed(int32_t milli, int decimals, int width) {
+StrBufBase &StrBufBase::put_fixed(int32_t milli, int decimals, int width) {
     char t[16];
     fmt_fixed(t, milli, decimals, width);
-    put(t);
+    return put(t);
 }
-void StrBufRef::put_abs_fixed(int32_t milli, int decimals, int width) {
+StrBufBase &StrBufBase::put_abs_fixed(int32_t milli, int decimals, int width) {
     char t[16];
     fmt_abs_fixed(t, milli, decimals, width);
-    put(t);
+    return put(t);
 }
-void StrBufRef::put_hex(uint32_t v, int digits) {
+StrBufBase &StrBufBase::put_hex(uint32_t v, int digits) {
     char t[16];
     fmt_hex(t, v, digits);
-    put(t);
+    return put(t);
 }
-void StrBufRef::put_hms(uint32_t seconds) {
+StrBufBase &StrBufBase::put_hms(uint32_t seconds) {
     char t[16];
     fmt_hms(t, seconds);
-    put(t);
+    return put(t);
 }
-void StrBufRef::put_age(uint32_t seconds) {
+StrBufBase &StrBufBase::put_age(uint32_t seconds) {
     char t[8];
     const int len = fmt_age(t, seconds);
-    put({t, static_cast<size_t>(len)});
+    return put({t, static_cast<size_t>(len)});
 }
 
 int fmt_u32(std::span<char> out, uint32_t value, int width) {
