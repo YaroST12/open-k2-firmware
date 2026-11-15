@@ -143,7 +143,8 @@ aborts with `Overvoltage` and releases the lines), and the card and Results show
   (keeping a usb-a waiver) and off for Light and Medium, and the Runner also checks the level, so a run below Deep stops at
   the detection and its ident. After a VOOC-family pass a Deep run may run one more step at 5 V: the guarded SuperVOOC trigger (`svooc_trig`, Probe profile, 12 s cap) answers the adapter's
   0x82 polls like a phone and walks a 4-rung 0x86 ladder (100 mA per count: 0x00F 1.5 A, 0x028 4.0 A, 0x03F 6.3 A,
-  0x06D 10.9 A). The **measured ceiling** is the highest 0x86 word the adapter kept the session going under, shown in the
+  0x06D 10.9 A), one rung per 12 polls (0.52 s) so all four are asked within about 1.6 s of the ramp end, before a no-load
+  adapter's stop (`svooc::kProbeEscGapPolls`). The **measured ceiling** is the highest 0x86 word the adapter kept the session going under, shown in the
   Results tab as `SV cap` ("<=11.1V, 10.9A claimed": the highest VBUS the trigger saw and the claimed ask). It is the
   K2's own ask that the charger did not abort, read from the protocol;
   it is **not a drawn current**, and the K2 never loads the charger (the trigger's 50 mA guard and 12 V abort stay).

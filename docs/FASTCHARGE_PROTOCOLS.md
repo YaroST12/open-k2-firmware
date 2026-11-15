@@ -308,6 +308,15 @@ current. Remote only, no UI entry:
     the charger then sends a fresh 0x86 instead of the next 0x82); that 0x86 is answered with N (default 0x005, range as
     above); every later 0x86 too. The outcome is `armed` (not reached), `sent`, `got 86` (the charger's next command
     was 0x86) or `no 86`, with the time of the 0x07F in ms since the wake.
+  - Profiles (`Params::profile`: Fixed, Phone, Probe; the charger test's ceiling stage runs Probe). Phone and Probe answer
+    with a OnePlus 15's own post-accept words (`0x84` 0x020 x4 then 0x030, `0x82` a slowly moving word) and re-ask `0x86`
+    on an escape (0x07F answering a 0x82 poll, the first one on the 12th poll after the ramp-end ask, 0.52 s). The `0x86`
+    word is the current limit asked for, 100 mA per count (0x00F 1.5 A, 0x028 4.0 A, 0x03F 6.3 A, 0x06D 10.9 A). Phone's
+    later escapes come every 34 polls (1.5 s: 0x06D, 0x00F, then the second ask). Probe asks upward, 0x00F, 0x028, 0x03F,
+    0x06D, and escapes every 12 polls (`kProbeEscGapPolls`, 0.52 s) all the way, because a no-load session ends about 3.3 s
+    after the wake (hardware 2026-11-15, OnePlus 120 W; at 34 polls only 0x00F and 0x028 were asked before the stop and
+    the result read "4.0A claimed"; the Phone profile's 0x06D at the ramp end kept the adapter polling at 11.02 V, which
+    is the 120 W claim, 11 V x 10.9 A). With 12 polls the four asks go out at 0, 0.52, 1.04 and 1.57 s after the ramp end.
   - Remote protocol (append-only, length-gated): the start request is `[5, 1, flags, cap]` (every parameter at its
     default) or ten bytes `[5, 1, flags, cap, i86_first, i86_esc, r82, vtarget_lo, vtarget_hi, esc_at_s]`; any other
     length is BadLength. The summary grew from 36 to 45 bytes (36..44: the effective i86_first, i86_esc, r82, vtarget

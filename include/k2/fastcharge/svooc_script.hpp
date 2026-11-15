@@ -33,7 +33,10 @@
 //          0x025 x11, 0x026 x10, 0x029 x12, 0x028 x11, ... up to 0x057, the battery telemetry), the first escape on the
 //          12th 82 poll (0.52 s after the ramp-end 0x86) answered 0x86 > 0x00F, the next one every 34 polls (1.5 s)
 //          answered by the ladder (Phone: 0x06D, the phone's own second ask; Probe: 0x028, 0x03F, 0x06D, upward from a
-//          0x00F first ask, so the highest level the adapter keeps polling under shows). Every 0x86 answered after the
+//          0x00F first ask, so the highest level the adapter keeps polling under shows). Probe keeps the first escape's
+//          gap for all of its escapes (kProbeEscGapPolls = 12 polls, 0.52 s): the adapter ends a no-load session about
+//          3.3 s after the wake (hardware, OnePlus 120 W), so at 34 polls only 0x00F and 0x028 were asked before the
+//          stop; at 12 the four asks go out at 0, 0.52, 1.04 and 1.57 s after the ramp end. Every 0x86 answered after the
 //          handshake is recorded (asks(): time, word, and the 82 polls that followed it).
 //          The 0x86 word is the CURRENT LIMIT the sink asks for, 100 mA per count (confirmed against measured current:
 //          0x00F 1.5 A, 0x028 4.0 A, 0x03F 6.3 A, 0x06D 10.9 A). It is the K2's own word: what the responder can say about
@@ -77,13 +80,14 @@ inline constexpr std::uint16_t kI86PhoneMax = 0x06D;    // the phone's top ask, 
 inline constexpr std::uint16_t kPhoneFirstAsk = 0x06D;  // 0x86 at the ramp end (Phone)
 inline constexpr std::uint16_t kPhoneEscAsk = 0x00F;    // 0x86 after the first escape
 inline constexpr int kEscFirstPoll = 11;                // the escape is the 12th 82 poll after the ramp end ...
-inline constexpr int kEscGapPolls = 34;                 // ... and then every 34th (43.5 ms each: 0.52 s, then 1.5 s)
+inline constexpr int kEscGapPolls = 34;                 // ... and then every 34th (43.5 ms each: 0.52 s, then 1.5 s) (Phone)
+inline constexpr int kProbeEscGapPolls = 12;            // Probe: every escape after the first uses the first one's gap (0.52 s)
 inline constexpr int kAcceptPolls = 4;                  // 82 polls the adapter kept on the script after an ask: accepted
 inline constexpr std::size_t kAsksMax = 8;
 
 // How the responder answers after the accept. Fixed = the operator's constants (the original, a OnePlus session survives
 // about 72 pairs of it); Phone = the OnePlus 15's own words and escapes; Probe = Phone's ramp and 0x82 words with an
-// ascending 0x86 ladder (0x00F, 0x028, 0x03F, 0x06D).
+// ascending 0x86 ladder (0x00F, 0x028, 0x03F, 0x06D) at one escape every 12 polls.
 enum class Profile : std::uint8_t { Fixed, Phone, Probe };
 constexpr const char* name(Profile p) {
     switch (p) {
@@ -294,7 +298,7 @@ private:
                 esc_t_ms_ = t_ms;
                 if (ladder()) {
                     ask_ = ladder_word(++esc_n_);
-                    next_esc_ = int(n82_) - 1 + kEscGapPolls;
+                    next_esc_ = int(n82_) - 1 + (p_.profile == Profile::Probe ? kProbeEscGapPolls : kEscGapPolls);
                 }
                 return {kEscapeWord, true};
             }

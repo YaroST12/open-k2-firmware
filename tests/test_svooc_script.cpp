@@ -436,6 +436,36 @@ void test_probe_ladder_and_ceiling() {
     CHECK_EQ(r.asks().size(), k2::svooc_ceiling::kLadder);
 }
 
+// Probe keeps the first escape's gap for every escape: the adapter ends a no-load session about 3.3 s after the wake, and at the
+// Phone's 34 polls only 00F and 028 went out before that (hardware 2026-11-15, OnePlus 120 W). Escapes on the 12th, 24th, 36th
+// 82 poll after the ramp end (0.52 s apart); the fourth ask (06D) is the third escape's, about 1.6 s after the ramp-end ask.
+void test_probe_escapes_every_12_polls() {
+    svooc::Responder r = handshaken(svooc::Profile::Probe);
+    r.on_command(0x94);
+    for (int i = 0; i < 5; ++i) r.on_command(0x84);
+    const std::uint32_t t0 = 1771;
+    CHECK_EQ(r.on_command(0x86, t0).word, 0x00F);
+    std::uint32_t t = t0 + 43;
+    int poll = 0;
+    std::array<int, 4> esc_poll{};
+    int n = 0;
+    for (; poll < 200 && n < 3; ++poll, t += 43) {
+        if (r.on_command(0x82, t).word == svooc::kEscapeWord) {
+            esc_poll[n++] = poll + 1;
+            r.on_command(0x86, t + 9);
+        }
+    }
+    CHECK_EQ(n, 3);
+    CHECK_EQ(esc_poll[0], 12);                        // the phone's first escape, unchanged
+    CHECK_EQ(esc_poll[1], 24);                        // 12 polls later, not 34
+    CHECK_EQ(esc_poll[2], 36);
+    CHECK_EQ(int(r.asks().size()), 4);
+    const std::uint32_t last_ms = r.asks()[3].t_ms - t0;
+    CHECK(last_ms >= 1500 && last_ms <= 1800);        // the top ask, about 1.6 s after the ramp end (34 polls would be 4.7 s)
+    CHECK_EQ(r.asks()[3].word, 0x06D);
+    CHECK_EQ(int(r.asks()[0].after), 12);             // each lower rung stood 12 82 polls (the escape poll included)
+}
+
 void test_ceiling_decode() {
     CHECK_EQ(svooc::ask_ma(0x00F), 1500);             // 100 mA per count, confirmed on measured current
     CHECK_EQ(svooc::ask_ma(0x028), 4000);
@@ -498,6 +528,7 @@ int main() {
     test_phone_82_sequence_and_escapes();
     test_phone_session_runs_long();
     test_probe_ladder_and_ceiling();
+    test_probe_escapes_every_12_polls();
     test_ceiling_decode();
     test_profile_clamp();
     test_i86_parameter_and_clamp();
