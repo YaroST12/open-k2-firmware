@@ -21,4 +21,11 @@ constexpr const char* inline_cause_name(InlineCause c) {
     return "?";
 }
 
+// The two causes the topology explains on its own (pd_link.cpp): FarRd = a sink's Rd on CC with none of ours while a source feeds
+// the link; Vbus = VBUS above 5.5 V with no contract of the K2's. Load (|I| over 50 mA), Request (a foreign sink's PD Request)
+// and Rise (VBUS rose above 5.5 V after being low) are evidence of a device behind the K2, and a latch with no cause is not
+// known to be topology: none of those is ever waived. The SuperVOOC USB-A waiver and the operator's VOOC override both skip
+// only a latch for which this is true.
+constexpr bool topology_only(InlineCause c) { return c == InlineCause::FarRd || c == InlineCause::Vbus; }
+
 }  // namespace k2::pd

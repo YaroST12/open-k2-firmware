@@ -224,6 +224,7 @@ struct HwEnv final : fc::Env {
     }
     int ceiling_mv() override { return power::max_vbus_mv(); }
     link::Reason inline_reason() override { return link::inline_now(); }
+    link::Reason inline_reason_waived() override { return link::inline_now_waived(); }
     bool hv_locked() override { return loopguard::locked(); }   // the HID-cable loop 5 V lock: no legacy raise, a raised session aborts
     void set_dp(fc::Drive d) override { dpdm::set_dp(d); }
     void set_dm(fc::Drive d) override { dpdm::set_dm(d); }
@@ -390,15 +391,15 @@ LabXfer lab_xfer(std::span<const std::uint8_t> tx, std::span<std::uint8_t> rx, i
     return r;
 }
 
-Fail start(Proto p, int target_mv, bool confirmed, bool allow_inline, int scp_ma, int ufcs_ma) {
+Fail start(Proto p, int target_mv, bool confirmed, bool allow_inline, int scp_ma, int ufcs_ma, bool vooc_inline_ok) {
     if (g_scanner.running() || dpsniff::armed() || g_prober.running() || svooc_trig::running())
         return Fail::Busy;   // the edge sniffer is passive and keeps the lines; the SuperVOOC trigger drives D-
-    const Fail f = g_engine.start(p, target_mv, confirmed, allow_inline, scp_ma, ufcs_ma);
+    const Fail f = g_engine.start(p, target_mv, confirmed, allow_inline, scp_ma, ufcs_ma, vooc_inline_ok);
     // The session drives the lines now: cancel a reset still holding them (also the one start() ran itself to end an
     // Exit_UFCS_Mode wait).
     if (f == Fail::None && dpdm::reset_busy()) dpdm::cancel_reset();
-    K2LOG("[FC] start %s %dmV confirmed=%d inline_ok=%d -> %s (link: %s)\n", fc::name(p), target_mv,
-                 confirmed ? 1 : 0, allow_inline ? 1 : 0, fc::name(f), link::name(link::inline_now()));
+    K2LOG("[FC] start %s %dmV confirmed=%d inline_ok=%d vooc_ok=%d -> %s (link: %s)\n", fc::name(p), target_mv,
+                 confirmed ? 1 : 0, allow_inline ? 1 : 0, vooc_inline_ok ? 1 : 0, fc::name(f), link::name(link::inline_now()));
     g_refused = f;
     return f;
 }

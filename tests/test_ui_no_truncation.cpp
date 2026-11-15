@@ -807,7 +807,39 @@ void test_whos_attached() {
 
 }  // namespace
 
+// The Other port warning (the VOOC family's inline override): the warning and its armed state at every rotation. Every constant line
+// is also checked at compile time (static_assert in ui_charger_test.cpp); this walk covers the painted rows.
+void test_other_port_warning() {
+    for (int rot = 0; rot < 4; ++rot) {
+        g_stub = {};
+        g_stub.pm_online = true; g_stub.pm.vbus_mv = 5000; g_stub.fc_answers = true;
+        g_stub.caps.valid = true; g_stub.caps.num_pdos = 1; g_stub.caps.active_cc = 1; g_stub.caps.spec_rev = 2;
+        g_stub.caps.pdos[0] = pd::decode_pdo((100u << 10) | 300);
+        g_stub.caps.raw_header = 0x1181;
+        static Ui ui;
+        g_t += 1000;
+        ui.init(g_t);
+        ui.set_rotation(static_cast<uint8_t>(rot), g_t);
+        auto press = [&](Button b) { g_t += 150; ui.on_button(b, ButtonEvent::Short, g_t); ui.tick(g_t + 50); g_t += 50; };
+        ui.goto_page(static_cast<uint8_t>(Page::ChargerTest), g_t);
+        press(Button::Ok); press(Button::Ok);
+        CHECK_EQ(ui.charger_test_stage(), 4);
+        g_stub.far_cc = true;
+        for (uint32_t i = 0; i < pd::kInlineForeignMs / 100 + 3; i++) { g_t += 100; ui.tick(g_t); }
+        press(Button::Ok);
+        CHECK_EQ(ui.charger_test_stage(), 15);   // Stage::Other
+        draw_for_a_while(ui, "other-port", rot, "idle");
+        press(Button::Ok);
+        draw_for_a_while(ui, "other-port-armed", rot, "armed");
+        for (int i = 0; i < 20; ++i) { g_t += 200; ui.tick(g_t); }   // the window closing: the countdown words
+        draw_for_a_while(ui, "other-port-armed", rot, "armed");
+        press(Button::Back); press(Button::Back);
+        ui.goto_page(static_cast<uint8_t>(Page::Home), g_t);
+    }
+}
+
 int main() {
+    test_other_port_warning();
     test_whos_attached();
     test_reason_words();
     test_reach_words();

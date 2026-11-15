@@ -583,6 +583,14 @@ them should move them into the kit first.
 - The risky choice is in `kCaution`. BACK cancels; there is no Cancel row.
 - Footer in Caution states the safe way (`Direct plug is the sure way`).
 
+**Other port warning** (charger test, `Stage::Other`, stage 15). In Review, when the first OK would meet a refusal that only the topology
+explains (the far-port latch, VOOC-family unit selected, no PD contract), the page shows AlertBand `kCaution` + triangle + "OTHER PORT",
+two lines at x6 (`kSmall`: "Nothing in the other port:", "a phone could be damaged."), the ActionCell at y156 (idle "ALLOW" /
+"this run only", armed "CONFIRM" / "closes in Ns" over a 5 s window) and a Caution footer ("Other port must stay empty",
+armed "Press again to allow"). OK arms, OK again accepts and returns to Review with the START window open; Back drops the
+window first, then the page. The strip verb is `Allow` / `Confirm`. Host renders: `mock_other_port_rot0..3.png`,
+`mock_other_port_armed_rot0..3.png` (`test_ui_mockup`, `runs/ui-svooc-override/png`).
+
 **Wait.** `start_waiting.png`, `wait_line_moved.png`, `wait_no_charger.png`
 - Hero, the line cells, a draining timeout bar, a checklist.
 - The footer gives a cause only when the lines prove it. Strip: `Cancel` on OK.

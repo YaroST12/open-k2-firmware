@@ -137,8 +137,25 @@ aborts with `Overvoltage` and releases the lines), and the card and Results show
   The Runner keeps it for a VOOC-family row that passes `detected`; Results shows it as a `VOOC id` row ("0xAC") beside
   the rows' "detected", the run summary as "VOOC family ident 0xAC". One ident proves the family, not the variant. Not
   journaled, not on the card. Behind the Link's inline latch (any cause, the far-Rd latch of a USB-A to C cable included)
-  the engine refuses the family, so neither the ident nor the Deep stage is reachable there (`test_fc_engine`
-  `vooc_never_inline`).
+  the engine refuses the family unless the operator waives it (next item), so neither the ident nor the Deep stage is
+  reachable there otherwise (`test_fc_engine` `vooc_never_inline`, `vooc_inline_waiver`).
+- **Operator override of the topology-only inline latch (`Options::vooc_inline_ok`, `ct::vooc_override_offer`).** A run
+  with a VOOC-family unit (VOOC, SuperVOOC, SuperVOOC 65 W) that the inline latch would refuse for a cause the topology
+  explains on its own (`pd::topology_only`: `FarRd`, `Vbus`) can be allowed by the operator. The waiver skips ONLY such
+  a latch: a `Load`, `Request` or `Rise` cause, a PD contract of the K2's own, and any current above the inline threshold
+  during the run (the engine's in-run guard and the trigger's 50 mA guard) still refuse or abort. The Runner copies the
+  flag at start, the preflight and the start preview apply it (`waive_inline`; at entry also not with a K2 PD contract),
+  and every VOOC-family `request_fc` carries it to `fctrig::start` / `fc::Engine::start` (`vooc_ok`, the `[FC] start
+  ... vooc_ok=` log field). The usb-a ceiling mode is the same word for a USB-A charger and keeps its own remote path
+  (`charger-svooc-cap usb-a`, `ct_start.py --svooc-cap usb-a`); at Deep it now also reaches the engine's check. The
+  waiver holds for the one run only: it is never saved, never journaled (a resumed run is refused again until accepted),
+  and dropped on the run's end, on Back, on a lapsed window and on re-entering the page. The remote START never sets it.
+  On the device, Review's first OK in that case opens the **Other port** warning (`Stage::Other`, stage 15 on the remote
+  wire, name `other`; the last value of the 4-bit stage field): AlertBand `kCaution` "OTHER PORT", two lines (nothing in the other port, a phone could be damaged), the
+  kit's ActionCell (ALLOW "this run only", then CONFIRM with the 5 s countdown). The second OK on it returns to Review with the
+  normal START confirmation window open; Back drops the window first, then the warning. Host tests: `test_link_guard`,
+  `test_fc_engine`, `test_charger_test` (each cause against the waiver), `test_ui_charger_test` (`test_other_port_warning`),
+  `test_ui_no_truncation`.
 - **SuperVOOC ceiling stage (Deep only, `Options::svooc_cap`, `State::Ceiling`).** `with_level` turns it on for Deep
   (keeping a usb-a waiver) and off for Light and Medium, and the Runner also checks the level, so a run below Deep stops at
   the detection and its ident. After a VOOC-family pass a Deep run may run one more step at 5 V: the guarded SuperVOOC trigger (`svooc_trig`, Probe profile, 12 s cap) answers the adapter's

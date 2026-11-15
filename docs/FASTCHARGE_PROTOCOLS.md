@@ -283,6 +283,12 @@ current. Remote only, no UI entry:
   PD-appears aborts. The passive VOOC monitor holding D+/D- in Sniff is not a line conflict (`svooc::lines_off_idle`);
   the trigger takes the lines over from it. The report (`usb_a_waiver`, summary flags bit 4, the summary's cause byte,
   state byte 53 `inline_cause`) and the `[SVOOC] start` log line say "far-sink / inline check waived (USB-A)".
+- Operator override inside the charger test (`fc::Engine::start(..., vooc_inline_ok)`, `fctrig::start`): the same rule as the
+  USB-A waiver, for the family's detection and ceiling stage, set by the operator's accept on the device's Other port
+  warning (see CHARGER_TEST_FLOW.md). It clears a sticky latch whose cause is `FarRd` or `Vbus` only
+  (`link::inline_reason_waived`, `pd::topology_only`); a PD contract (`pd_active`), a Load / Request / Rise cause and
+  any current above the inline threshold during the run (`link::inline_now_waived`) still refuse or abort. It is one run
+  only and never persisted.
 - Full pair list (`fc svooc-log`, FC op 5 sub-op 3 `[5, 3, from_lo, from_hi]`): the wire keeps up to 512 command>reply
   pairs of the latest wake (6 B each in RAM, plus 2 B of VBUS), each with the command's start in ms since that wake
   (u16, saturating) and the monitor's VBUS when the pair closed (0 = none); 7 rows (49 B) per reply page, so a whole

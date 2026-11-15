@@ -379,11 +379,31 @@ Reason limit_reason(unsigned mv, Input in, Algorithm algorithm) {
 // the run's inline checks for the causes an A-to-C cable explains on its own, exactly as the trigger waives them
 // (svooc::inline_waived: FarRd, Vbus). Only for a run that holds an SVOOC unit; a Load / Request / Rise latch, a latch with no
 // cause and the run's own current check (kLoadAbortMa) all stay.
-bool inline_waived(const Options& o, const Input& in) {
-    const bool svooc = (o.selected & (bit(Algorithm::SuperVooc) | bit(Algorithm::SuperVooc65))) != 0;
-    return svooc && o.level == Level::Deep && svooc::inline_waived(o.svooc_cap == svooc_ceiling::Mode::UsbA, in.inline_cause);
+// The operator's override (Options::vooc_inline_ok) is the same skip for a run with any VOOC-family algorithm at any level, from
+// the Review step's other-port warning. It adds one more condition at the run's entry (the preview and START): no K2 PD contract
+// (the topology causes cannot hold with one, so this only keeps the refusal honest). In-run the engine's own probe covers PD.
+constexpr uint32_t kVoocFamilyBits = bit(Algorithm::Vooc) | bit(Algorithm::SuperVooc) | bit(Algorithm::SuperVooc65);
+bool k2_pd_contract(const Input& in) {
+    return in.pd.state == pd::SinkState::Ready || in.pd.state == pd::SinkState::Requesting || in.pd.state == pd::SinkState::Transition;
 }
-void waive_inline(Input& in, const Options& o) { if (in.inline_load && inline_waived(o, in)) in.inline_load = false; }
+bool usb_a_waiver(const Options& o) {
+    const bool svooc = (o.selected & (bit(Algorithm::SuperVooc) | bit(Algorithm::SuperVooc65))) != 0;
+    return svooc && o.level == Level::Deep && o.svooc_cap == svooc_ceiling::Mode::UsbA;
+}
+bool inline_waived(const Options& o, const Input& in, bool entry = false) {
+    if (usb_a_waiver(o) && svooc::inline_waived(true, in.inline_cause)) return true;
+    return o.vooc_inline_ok && (o.selected & kVoocFamilyBits) && pd::topology_only(in.inline_cause) && !(entry && k2_pd_contract(in));
+}
+void waive_inline(Input& in, const Options& o, bool entry = false) { if (in.inline_load && inline_waived(o, in, entry)) in.inline_load = false; }
+// What the VOOC rows ask the engine: the override, or the usb-a mode at Deep (the same word, a topology-only latch).
+bool engine_vooc_ok(const Options& o) { return (o.vooc_inline_ok && (o.selected & kVoocFamilyBits)) || usb_a_waiver(o); }
+bool vooc_group(Group g) { return g == Group::Vooc || g == Group::SuperVooc || g == Group::SuperVooc65; }
+}
+bool vooc_override_offer(const Options& o, const Input& in) {
+    return in.inline_load && (o.selected & kVoocFamilyBits) && !usb_a_waiver(o) && !o.vooc_inline_ok && pd::topology_only(in.inline_cause) &&
+           !k2_pd_contract(in);
+}
+namespace {
 Reason refusal(Options o, Input in, bool busy, bool confirmed) {
     return busy || in.busy ? Reason::Busy : !(o.selected & kAllAlgorithms) ? Reason::EmptySelection :
         in.loop_lock ? Reason::Loop : !confirmed ? Reason::NeedConfirm : in.fake ? Reason::Fake : in.inline_load ? Reason::Inline :
@@ -910,7 +930,7 @@ uint32_t layout_sig(std::span<const Step> rows) {
 UnitList unit_order(const Options& o) { return resolve(o); }
 Summary Runner::preview(const pd::SourceCaps& caps, Options o, Input in) {
     Summary out;
-    waive_inline(in, o);
+    waive_inline(in, o, true);
     in.epr_info = nullptr;   // a preview plans from the source list alone
     in.fc_caps = nullptr;
     out.refusal = refusal(o, in, false, true);
@@ -1289,7 +1309,7 @@ void Runner::adopt_list(const pd::SourceCaps& caps) {
 Reason Runner::start(const pd::SourceCaps& caps, Options o, Input in, bool confirmed) {
     o.selected &= kAllAlgorithms;
     epr_proof_ = in.epr_proof = false;
-    waive_inline(in, o);
+    waive_inline(in, o, true);
     const Reason denied = refusal(o, in, busy(), confirmed);
     if (denied != Reason::None) {
         if (!run_id_) {
@@ -1464,7 +1484,7 @@ void Runner::request(Input in) {
     } else {
         const bool retarget = fc_owned_ && s.continuous;
         fc_owned_ = true;
-        const auto err = env_.request_fc(proto(s.group), s.mv, retarget, s.ma);
+        const auto err = env_.request_fc(proto(s.group), s.mv, retarget, s.ma, vooc_group(s.group) && engine_vooc_ok(opts_));
         if (err != fc::Fail::None) finish(in, Verdict::Fail, Reason::Request, static_cast<uint8_t>(err));
     }
 }

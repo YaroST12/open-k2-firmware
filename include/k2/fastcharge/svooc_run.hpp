@@ -242,7 +242,7 @@ inline constexpr std::int32_t magnitude(std::int32_t v) { return v < 0 ? -v : v;
 // contract of the K2's (kInlineForeignMs). Load (|I| over 50 mA), Request (a foreign sink's PD Request) and Rise (VBUS
 // rose above 5.5 V after being low) are evidence of a device, so they are never waived; neither is a latch with no cause.
 constexpr bool inline_waived(bool usb_a, pd::InlineCause c) {
-    return usb_a && (c == pd::InlineCause::FarRd || c == pd::InlineCause::Vbus);
+    return usb_a && pd::topology_only(c);
 }
 
 // D+/D- are off the passive idle for a reason that blocks the start. `mismatch_bits` = dpdm::mismatch(dpdm::drive());

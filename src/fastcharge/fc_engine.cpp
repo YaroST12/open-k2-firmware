@@ -813,13 +813,19 @@ void Engine::begin_protocol() {
     }
 }
 
-Fail Engine::start(Proto p, int target_mv, bool confirmed, bool allow_inline, int scp_ma, int ufcs_ma) {
+Fail Engine::start(Proto p, int target_mv, bool confirmed, bool allow_inline, int scp_ma, int ufcs_ma, bool vooc_inline_ok) {
     if (state_ == State::Negotiating || state_ == State::Active) return Fail::Busy;
     const Fail f = validate(p, target_mv, confirmed);
     if (f != Fail::None) return f;
     if (allow_inline && !confirmed) return Fail::NeedConfirm;   // the override drives D+/D- with a sink possibly attached: both flags
-    // VOOC detection never runs inline, override or not: the wake and the listen would sit on a phone's own VOOC lines.
-    if ((!allow_inline || vooc_family(p)) && env_.inline_reason() != link::Reason::None) return Fail::Inline;
+    // VOOC detection never runs inline, `allow_inline` or not: the wake and the listen would sit on a phone's own VOOC lines. The one
+    // way past is the operator's explicit `vooc_inline_ok` (Review's other-port warning, the usb-a ceiling mode), and it skips
+    // only a latch the topology explains (a far Rd, foreign VBUS): a PD contract, a load and every other cause still refuse.
+    if (vooc_inline_ok && !confirmed) return Fail::NeedConfirm;
+    const bool vooc_ok = vooc_inline_ok && vooc_family(p);
+    const link::Reason inl = vooc_ok ? env_.inline_reason_waived() : env_.inline_reason();
+    if ((!allow_inline || vooc_family(p)) && inl != link::Reason::None) return Fail::Inline;
+    vooc_ok_ = vooc_ok;
     finish_exit();   // an Exit_UFCS_Mode wait still holding the lines ends now (its reset counts for the re-detection hold below)
     const std::uint32_t now = env_.now_ms();
     proto_ = p;
@@ -1100,7 +1106,7 @@ void Engine::poll_step() {
     // the charger moved on its own, which the 110 % guard alone would let through.
     if (phase_ == Phase::Qc3Loop && qc3_learned_ && vbus > qc::open_loop_limit_mv(entry_mv_, target_mv_, qc3_step_mv_))
         return abort(Fail::Overvoltage);
-    if (vooc_family(proto_) && env_.inline_reason() != link::Reason::None) return abort(Fail::Inline);
+    if (vooc_family(proto_) && vooc_inline() != link::Reason::None) return abort(Fail::Inline);
 
     switch (phase_) {
     case Phase::RedetectHold:

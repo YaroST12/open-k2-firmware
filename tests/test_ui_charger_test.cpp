@@ -4327,6 +4327,84 @@ using RemoteStart = ChargerTestSession::RemoteStart;
 using Stopped = ChargerTestSession::Stopped;
 static void boot_home(Ui& ui) { ui.init(0); ui.set_rotation(0, 0); ui.tick(1000); settle(ui, 1000); }
 static void ticks(Ui& ui, uint32_t from, uint32_t to) { for (uint32_t t = from; t <= to; t += 20) ui.tick(t); }   // the main loop's UI tick
+// The Other port warning (the VOOC family's override of the topology-only inline latch): Review's first OK on a run with a VOOC-family
+// unit that the inline latch would refuse (FarRd or Vbus, no K2 contract) opens stage 15 instead of the footer refusal. OK arms the
+// 5 s window, OK again accepts it and returns to Review with the confirm window open; the third OK starts the run.
+constexpr int kOtherStage = 15;   // Stage::Other
+static void latch_far(Ui& ui, uint32_t& t) {   // a sink's Rd on the far port with none of ours: the link latches it (cause FarRd)
+    g_stub.far_cc = true;
+    for (uint32_t i = 0; i < pd::kInlineForeignMs / 100 + 3; i++) { t += 100; ui.tick(t); }
+}
+static void test_other_port_warning() {
+    { // FarRd: the warning, the arm, the accept, the start: the engine carries the waiver
+        fixture(); Ui ui; open(ui); review(ui);
+        uint32_t t = 1300; latch_far(ui, t);
+        CHECK_EQ(int(ui.link().inline_cause()), int(pd::InlineCause::FarRd));
+        press(ui, Button::Ok, t); settle(ui, t);
+        CHECK_EQ(ui.charger_test_stage(), kOtherStage);
+        CHECK_EQ(ui.charger_test_view().confirming, false);
+        press(ui, Button::Ok, t + 100); settle(ui, t + 100);
+        CHECK_EQ(ui.charger_test_stage(), kOtherStage); CHECK_EQ(ui.charger_test_view().confirming, true);   // armed
+        press(ui, Button::Ok, t + 200); settle(ui, t + 200);
+        CHECK_EQ(ui.charger_test_stage(), 4); CHECK_EQ(ui.charger_test_view().confirming, true);              // accepted: Review, window open
+        CHECK_EQ(g_stub.fc_vooc_ok, 0); no_operations();
+        press(ui, Button::Ok, t + 300);
+        finish_wait(ui, t + 300);
+        CHECK_EQ(ui.charger_test_busy(), true);                                                                // not refused as inline
+        uint32_t now = t + 400;
+        for (; now < t + 120000 && g_stub.fc_vooc_ok == 0; now += 20) { fusb302::service(); ui.tick(now); }
+        CHECK_EQ(g_stub.fc_vooc_ok > 0, true);                                                                 // the VOOC rows carry the waiver
+        CHECK_EQ(ui.charger_test_stop(now) == Stopped::Run, true);
+        for (const uint32_t end = now + 20000; now <= end && ui.charger_test_busy(); now += 100) ui.tick(now);
+        press(ui, Button::Back, now); settle(ui, now);   // out of Results: a new Review needs a new acceptance
+    }
+    { // BACK drops the warning, the armed window and the waiver
+        fixture(); Ui ui; open(ui); review(ui);
+        uint32_t t = 1300; latch_far(ui, t);
+        press(ui, Button::Ok, t); press(ui, Button::Ok, t + 100);
+        CHECK_EQ(ui.charger_test_stage(), kOtherStage); CHECK_EQ(ui.charger_test_view().confirming, true);
+        press(ui, Button::Back, t + 200); settle(ui, t + 200);
+        CHECK_EQ(ui.charger_test_stage(), kOtherStage); CHECK_EQ(ui.charger_test_view().confirming, false);   // the window first
+        press(ui, Button::Back, t + 250); settle(ui, t + 250);
+        CHECK_EQ(ui.charger_test_stage(), 4); CHECK_EQ(ui.charger_test_view().confirming, false);
+        press(ui, Button::Ok, t + 300); settle(ui, t + 300);
+        CHECK_EQ(ui.charger_test_stage(), kOtherStage);                                                         // asked again: nothing was kept
+    }
+    { // the accepted window lapses unused: the waiver goes with it
+        fixture(); Ui ui; open(ui); review(ui);
+        uint32_t t = 1300; latch_far(ui, t);
+        press(ui, Button::Ok, t); press(ui, Button::Ok, t + 100); press(ui, Button::Ok, t + 200); settle(ui, t + 200);
+        CHECK_EQ(ui.charger_test_stage(), 4); CHECK_EQ(ui.charger_test_view().confirming, true);
+        for (uint32_t n = t + 300; n < t + 7000; n += 100) ui.tick(n);
+        CHECK_EQ(ui.charger_test_view().confirming, false);
+        press(ui, Button::Ok, t + 7100); settle(ui, t + 7100);
+        CHECK_EQ(ui.charger_test_stage(), kOtherStage);
+    }
+    { // a load behind the K2 is not a topology cause: no warning, the run refuses as before
+        fixture(); Ui ui; open(ui); review(ui);
+        uint32_t t = 1300; g_stub.pm.current_ma = 1500; latch_far(ui, t);
+        CHECK_EQ(int(ui.link().inline_cause()), int(pd::InlineCause::Load));
+        press(ui, Button::Ok, t); settle(ui, t);
+        CHECK_EQ(ui.charger_test_stage(), 4); CHECK_EQ(ui.charger_test_view().confirming, false);               // the footer refusal, as before
+        press(ui, Button::Ok, t + 100); settle(ui, t + 100);
+        CHECK_EQ(ui.charger_test_stage(), 4);
+    }
+    { // a contract of the K2's own: the refusal stands even for a topology-only cause
+        fixture(); Ui ui; open(ui); review(ui);
+        uint32_t t = 1300; latch_far(ui, t);
+        g_stub.sink.state = pd::SinkState::Ready;
+        press(ui, Button::Ok, t); settle(ui, t);
+        CHECK_EQ(ui.charger_test_stage() == kOtherStage, false);
+    }
+    { // a PD-only run has no VOOC-family unit: no warning
+        fixture(); Ui ui; open(ui); top(ui); move(ui, kPdRow); press(ui, Button::Ok); settle(ui);
+        press(ui, Button::Ok); settle(ui);
+        CHECK_EQ(ui.charger_test_stage(), 4);
+        uint32_t t = 1300; latch_far(ui, t);
+        press(ui, Button::Ok, t); settle(ui, t);
+        CHECK_EQ(ui.charger_test_stage() == kOtherStage, false);
+    }
+}
 static void test_remote_start_is_the_devices_start() {
     { // from another page: the charger-test page opens on Review with the confirm window; nothing is touched until the Ra
       // guard's window is full, then the second-press path confirms it and the run starts by itself, shown on the screen
@@ -4527,5 +4605,6 @@ int main() {
     test_start_waits_for_the_caps();
     test_decisions_use_the_unaveraged_vbus();
     test_remote_start_is_the_devices_start();
+    test_other_port_warning();
     return test_report("test_ui_charger_test");
 }

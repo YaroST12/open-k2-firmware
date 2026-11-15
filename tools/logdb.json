@@ -696,6 +696,7 @@
   "699": "[PREFS] qc_after_pd=%d screenshot=%d smoothing=%s rotation=%s%u buttons=%d wake=%d hero=%u level=%u (%s)\n",
   "700": "[CT] svooc_cap vbus=%dmV after the stage: Rd cycle\n",
   "701": "[SVOOC] release: %s t=%ums cmds=%u replies=%u missed=%u cut=%u accepted=%u vmax_held=%dmV imax=%dmA contract=%s>%s inline=%s esc=%s\n",
-  "702": "[SVOOC] exit vbus=%dmV %s vmax=%dmV\n"
+  "702": "[SVOOC] exit vbus=%dmV %s vmax=%dmV\n",
+  "703": "[FC] start %s %dmV confirmed=%d inline_ok=%d vooc_ok=%d -> %s (link: %s)\n"
  }
 }

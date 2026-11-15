@@ -104,7 +104,47 @@ static void test_self_supply() {
     CHECK_EQ(inline_reason(p), Reason::DataDevice);                   // a real sink on top still counts
 }
 
+// The operator's VOOC override (inline_reason_waived): it skips only a latch whose cause the topology explains (a far Rd, foreign
+// VBUS); a PD contract, any other cause, a latch with no cause and the live current check all stay.
+static Probe latched(k2::pd::InlineCause c, int ma = 0, bool pd = false) {
+    Probe p = probe(5000, ma, pd);
+    p.sticky_inline = true;
+    p.inline_cause = c;
+    return p;
+}
+
+static void test_inline_reason_waived() {
+    using k2::pd::InlineCause;
+    CHECK_EQ(k2::pd::topology_only(InlineCause::FarRd), true);
+    CHECK_EQ(k2::pd::topology_only(InlineCause::Vbus), true);
+    for (auto c : {InlineCause::None, InlineCause::Load, InlineCause::Request, InlineCause::Rise})
+        CHECK_EQ(k2::pd::topology_only(c), false);
+    // Waived: the two topology causes, no PD, idle current.
+    for (auto c : {InlineCause::FarRd, InlineCause::Vbus}) {
+        CHECK_EQ(inline_reason(latched(c)), Reason::DataDevice);            // the plain guard still says so
+        CHECK_EQ(inline_reason_waived(latched(c)), Reason::None);
+        CHECK_EQ(inline_reason_waived(latched(c, 50)), Reason::None);       // the K2's own idle draw is under the limit
+        CHECK_EQ(inline_reason_waived(latched(c, 51)), Reason::DataDevice); // a load through the shunt is not waived
+        CHECK_EQ(inline_reason_waived(latched(c, -400)), Reason::DataDevice);
+        CHECK_EQ(inline_reason_waived(latched(c, 0, true)), Reason::PdContract);   // a PD contract is never waived
+    }
+    // Never waived: a device's own traffic, and a latch whose cause is not known.
+    for (auto c : {InlineCause::Load, InlineCause::Request, InlineCause::Rise, InlineCause::None})
+        CHECK_EQ(inline_reason_waived(latched(c)), Reason::DataDevice);
+    // No latch: the same answer as the plain guard.
+    CHECK_EQ(inline_reason_waived(probe(5000, 0)), Reason::None);
+    CHECK_EQ(inline_reason_waived(probe(5000, 400)), Reason::DataDevice);
+    CHECK_EQ(inline_reason_waived(probe(5000, 0, true)), Reason::PdContract);
+    // The K2's own supply draw still shifts the limit.
+    Probe s = latched(k2::pd::InlineCause::FarRd, 120);
+    s.self_supply_ma = 100;
+    CHECK_EQ(inline_reason_waived(s), Reason::None);
+    s.current_ma = 160;
+    CHECK_EQ(inline_reason_waived(s), Reason::DataDevice);
+}
+
 int main() {
+    test_inline_reason_waived();
     test_reason();
     test_self_supply();
     test_names();

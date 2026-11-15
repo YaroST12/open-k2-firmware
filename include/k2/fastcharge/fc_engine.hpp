@@ -65,6 +65,9 @@ struct Env {
     virtual int dm_mv() { return -1; }
     virtual int ceiling_mv() { return 0; }     // power::max_vbus_mv(); 0 = nothing may be triggered
     virtual link::Reason inline_reason() { return link::Reason::None; }   // k2::link::inline_now()
+    // The same with the operator's VOOC override applied (k2::link::inline_now_waived()): only a topology-only latch is skipped.
+    // The engine asks this for the VOOC family when start() got `vooc_inline_ok`; the default is the plain answer.
+    virtual link::Reason inline_reason_waived() { return inline_reason(); }
     // The HID-cable loop 5 V lock (k2::loopguard::locked()): no target above kLockMv starts or is retargeted to (OverLimit),
     // and a running session above it, or with VBUS above kLockVbusMv, is aborted with OverLimit (both lines to 0 V).
     virtual bool hv_locked() { return false; }
@@ -134,8 +137,12 @@ public:
     // `scp_ma` is the SCP current limit written before the target voltage; 0 = detect only (the adapter registers
     // are read, nothing is written, the session ends as Fail::Detected). Other protocols ignore it.
     // `ufcs_ma` is the UFCS Request current (0 = ufcs::kNoCableMa, the no-cable-info default), held to the mode's range.
+    // `vooc_inline_ok` is the operator's explicit VOOC override (charger test Review, the usb-a ceiling mode): for the VOOC family
+    // only, a latch from the topology alone (far Rd, foreign VBUS: Env::inline_reason_waived) no longer refuses or ends the
+    // session. A PD contract, a Load / Request / Rise latch and a load seen during the run (the same check, every poll) still
+    // do. It needs `confirmed` like `allow_inline` and means nothing for another protocol.
     Fail start(Proto p, int target_mv, bool confirmed, bool allow_inline = false, int scp_ma = accp::kScpInitMa,
-               int ufcs_ma = 0);
+               int ufcs_ma = 0, bool vooc_inline_ok = false);
     // Change the target of a running trigger (QC2 level, QC3 voltage, a new UFCS Request at `ufcs_ma`).
     Fail set_target(int target_mv, bool confirmed, int ufcs_ma = 0);
     // Leave the session and go Idle. A running UFCS session first sends Exit_UFCS_Mode and keeps the UART (D- idle high)
@@ -275,6 +282,8 @@ private:
     bool unacked_handshake() const { return !acked_ && (proto_ == Proto::Afc || proto_ == Proto::Fcp || proto_ == Proto::Scp); }
     int scp_ma_ = accp::kScpInitMa;
     int ufcs_ma_ = 0;   // UFCS Request current, 0 = ufcs::kNoCableMa
+    bool vooc_ok_ = false;   // start() got the operator's VOOC inline override (a VOOC-family session only): the guard reads the waived answer
+    link::Reason vooc_inline() { return vooc_ok_ ? env_.inline_reason_waived() : env_.inline_reason(); }
     int keep_i_ = 0, vooc_tries_ = 0, vooc_frames_ = 0;
     std::uint8_t vooc_ident_ = 0;   // VOOC: wakes sent, frames heard (not all ones)
     std::array<std::uint8_t, ufcs::kFrameMax> ux_{};          // UFCS receive accumulator

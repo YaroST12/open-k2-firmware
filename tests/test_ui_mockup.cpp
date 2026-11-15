@@ -372,6 +372,31 @@ int main() {
     g_stub.diag_report = {};
     g_stub.diag_state = 0;
 
+    // The Other port warning (the VOOC family's inline override), idle and armed, at every rotation.
+    for (uint8_t rot = 0; rot < 4; rot++) {
+        g_stub = {}; pd::set_fake(0);
+        g_stub.pm_online = true; g_stub.pm.vbus_mv = 5000; g_stub.fc_answers = true;
+        g_stub.caps.valid = true; g_stub.caps.num_pdos = 1; g_stub.caps.active_cc = 1; g_stub.caps.spec_rev = 2;
+        g_stub.caps.pdos[0] = pd::decode_pdo((100u << 10) | 300);
+        g_stub.caps.raw_header = 0x1181;
+        static Ui other_ui;
+        uint32_t u = 20000;
+        other_ui.init(u); other_ui.set_rotation(rot, u);
+        other_ui.goto_page(static_cast<uint8_t>(Page::ChargerTest), u += 100);
+        other_ui.on_button(Button::Ok, ButtonEvent::Short, u += 100); other_ui.tick(u += 100);   // the Tests preset
+        other_ui.on_button(Button::Ok, ButtonEvent::Short, u += 100); other_ui.tick(u += 100);   // the cable: Review
+        g_stub.far_cc = true;
+        for (uint32_t i = 0; i < pd::kInlineForeignMs / 100 + 3; i++) { u += 100; other_ui.tick(u); }
+        other_ui.on_button(Button::Ok, ButtonEvent::Short, u += 100);
+        char name[40];
+        std::snprintf(name, sizeof name, "other_port_rot%u", unsigned(rot));
+        render(other_ui, u, name);
+        other_ui.on_button(Button::Ok, ButtonEvent::Short, u += 100);
+        std::snprintf(name, sizeof name, "other_port_armed_rot%u", unsigned(rot));
+        render(other_ui, u, name);
+        other_ui.on_button(Button::Back, ButtonEvent::Short, u += 100); other_ui.on_button(Button::Back, ButtonEvent::Short, u += 100);
+    }
+
     printf("mockups dumped\n");
     return 0;
 }
