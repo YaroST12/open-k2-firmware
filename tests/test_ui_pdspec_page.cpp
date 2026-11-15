@@ -322,10 +322,27 @@ void test_results_extremes() {
 
 }  // namespace
 
+// Detail "Where": accept_time is shared by the fixed walk and the programmable sweep. A fixed pair has PDO indices (under 16); a
+// programmable move carries its position / class / direction in a and the level in 100 mV in b (33 and up), so it reads as the move,
+// never "PDO 150 to 106" (Anker IQ4 runs, 2026-11-15).
+void test_where_text() {
+    const auto where = [](sc::Check c, uint8_t a, uint8_t b) {
+        StrBuf<20> s;
+        const bool known = PdSpecPage::put_where(int(c), a, b, s);
+        return std::string(s.view()) + (known ? "" : "?");
+    };
+    CHECK_STR(where(sc::Check::AcceptTime, 2, 3).c_str(), "PDO 2 to 3");
+    CHECK_STR(where(sc::Check::AcceptTime, 0x96, 106).c_str(), "APDO 6 c1 dn 10.6V");
+    CHECK_STR(where(sc::Check::PpsBand, 0x25, 50).c_str(), "APDO 5 c2 up 5.0V");
+    CHECK_STR(where(sc::Check::HrSafe0V, 0, 0).c_str(), "the source?");
+    CHECK_STR(where(sc::Check::PpsKeepAlive, 6, 0).c_str(), "PDO 6");
+}
+
 int main() {
     test_setup();
     test_review_refusals();
     test_run_stop_results();
     test_results_extremes();
+    test_where_text();
     return test_report("test_ui_pdspec_page");
 }

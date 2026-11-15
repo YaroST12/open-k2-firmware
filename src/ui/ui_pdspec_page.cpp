@@ -365,13 +365,7 @@ void PdSpecPage::detail_value(int row, StrBuf<20> &s, uint16_t &color) const {
     case 4: s.put_u32(a->fails); color = a->fails && judged ? kCaution : kText; return;
     case 5:
         if (!measured) { s.put("none"); color = kDim; return; }
-        if (k < static_cast<int>(sc::Check::PpsMonotonic)) s.put("PDO ").put_u32(a->a).put(" to ").put_u32(a->b);
-        else if (k < static_cast<int>(sc::Check::PpsKeepAlive) || (k >= static_cast<int>(sc::Check::PpsBand) && k <= static_cast<int>(sc::Check::AvsTransient))) {
-            // A programmable move: APDO, step class, direction and the level asked for ("APDO 5 c2 dn 10.9V", result.hpp "where").
-            s.put("APDO ").put_u32(a->a & 0x0Fu).put(" c").put_u32((a->a >> 4) & 7u).put(a->a & 0x80u ? " dn " : " up ");
-            s.put_u32(a->b / 10u).put(".").put_u32(a->b % 10u).put("V");
-        } else if (a->a) s.put("PDO ").put_u32(a->a);
-        else { s.put("the source"); color = kDim; }
+        if (!put_where(k, a->a, a->b, s)) color = kDim;
         return;
     case 6: {
         const uint32_t pts = judged ? static_cast<uint32_t>(d.weight) * a->fails : 0;
@@ -379,6 +373,24 @@ void PdSpecPage::detail_value(int row, StrBuf<20> &s, uint16_t &color) const {
     }
     default: return;
     }
+}
+
+bool PdSpecPage::put_where(int k, uint8_t a, uint8_t b, StrBuf<20> &s) {
+    const bool fixed_walk = k < static_cast<int>(sc::Check::PpsMonotonic);
+    if (fixed_walk && b < 16) {
+        s.put("PDO ").put_u32(a).put(" to ").put_u32(b);
+    } else if (fixed_walk || k < static_cast<int>(sc::Check::PpsKeepAlive) ||
+               (k >= static_cast<int>(sc::Check::PpsBand) && k <= static_cast<int>(sc::Check::AvsTransient))) {
+        // A programmable move: APDO, step class, direction and the level asked for ("APDO 5 c2 dn 10.9V", result.hpp "where").
+        s.put("APDO ").put_u32(a & 0x0Fu).put(" c").put_u32((a >> 4) & 7u).put(a & 0x80u ? " dn " : " up ");
+        s.put_u32(b / 10u).put(".").put_u32(b % 10u).put("V");
+    } else if (a) {
+        s.put("PDO ").put_u32(a);
+    } else {
+        s.put("the source");
+        return false;
+    }
+    return true;
 }
 
 void PdSpecPage::setup_row_fn(void *ctx, int index, bool focused, kit::RowSpec &out) {

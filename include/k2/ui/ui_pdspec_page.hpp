@@ -53,6 +53,9 @@ public:
     static int row_of(pdspec::Check c);
     static pdspec::Check check_of(int row);
     void detail_value(int row, StrBuf<20> &out, uint16_t &color) const;
+    // Detail "Where": the PDO pair, the programmable move (accept_time's too: b of 16 and up is a level, not a PDO), a PDO or the
+    // source; false = "the source" (shown dim).
+    static bool put_where(int check, uint8_t a, uint8_t b, StrBuf<20> &out);
 
 private:
     PdSpecSession &session() const;
