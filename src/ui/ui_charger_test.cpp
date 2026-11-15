@@ -175,15 +175,19 @@ void put_hunt_line(StrBuf<64>& s, const ct::HuntEvidence& h, int n) {
         if (h.answer) s.put_char(' ').put_u32(h.answer_ms).put("ms");
     }
 }
+// pass / fail / skip by verdict; a caution (a Pass that carries Reason::Folded, a voltage fold the sweep found) is its own count:
+// neither a pass nor a fail. A Capped step stays a fail by verdict, as it always counted.
 struct Counts {
-    unsigned pass = 0, fail = 0, skip = 0, total = 0;
+    unsigned pass = 0, fail = 0, skip = 0, caution = 0, total = 0;
 };
 Counts counts(const ct::Runner& runner, int f = -1) {
     Counts out;
     for (const auto& s : runner.steps()) {
         if (f >= 0 && family(s) != f) continue;
         ++out.total;
-        out.pass += s.verdict == ct::Verdict::Pass;
+        const bool caution = result_layout::caution(s);
+        out.caution += caution;
+        out.pass += s.verdict == ct::Verdict::Pass && !caution;
         out.fail += s.verdict == ct::Verdict::Fail;
         out.skip += s.verdict == ct::Verdict::Skip;
     }
@@ -317,6 +321,12 @@ uint8_t ChargerTestSession::ceiling_start() {
     return static_cast<uint8_t>(svooc_trig::start(true, false, svooc_ceiling::kCapS, false, p));
 }
 void ChargerTestSession::ceiling_stop() { svooc_trig::stop(); }
+// A row whose verdict stands but whose reason changed afterwards (the sweep closing marks its APDO's fixed rows, Reason::Folded): only
+// the journal follows (the row's section is dirty, no flash here); the row's own events and log line went out when it ended.
+void ChargerTestSession::amend(const ct::Step& s) {
+    const auto idx = static_cast<size_t>(&s - runner_.steps().data());
+    if (journal_active_ && !journal_closed_ && idx < runner_.steps().size()) charger_journal::hw::note(runner_.steps(), idx);
+}
 void ChargerTestSession::record(const ct::Step& s) {
     const auto idx = static_cast<size_t>(&s - runner_.steps().data());
     // The record is a flash write (a section file: an erase and some programs, with interrupts masked): never while a row is in
@@ -1625,11 +1635,12 @@ kit::Verdict vmap(ct::Verdict v) {
     default: return kit::Verdict::Pending;
     }
 }
-// A step held a plateau below its target: amber (Partial), the same tone its chip wears (result_layout::tone).
+// A step held a plateau below its target: amber (Partial), the same tone its chip wears (result_layout::tone). A caution (a voltage fold) is
+// amber too: vmap(Step) below.
 bool is_capped(const ct::Step& s) { return s.verdict == ct::Verdict::Fail && s.reason == ct::Reason::Capped; }
 // A Light run's listing (Advertised / LightLevel skip) is Noted, never a skip mark: the same tone its chip wears.
 kit::Verdict vmap(const ct::Step& s) {
-    return is_capped(s) ? kit::Verdict::Partial : result_layout::noted(s) ? kit::Verdict::Noted : vmap(s.verdict);
+    return is_capped(s) || result_layout::caution(s) ? kit::Verdict::Partial : result_layout::noted(s) ? kit::Verdict::Noted : vmap(s.verdict);
 }
 // A delta range value (100 mV units) as "13V" / "13.5V".
 template <typename Buf> void put_dv(Buf &b, unsigned dv) {
@@ -1810,18 +1821,18 @@ void ChargerTestPage::announce(const char* words) {
         f.put(row.label).put(": ");
         if (row.algorithm == A::Count && !row.probe) { f.put("see steps"); return FooterTone::Info; }
         if (row.sweep) {   // the deep sweep's strip row: the footer names the peak (the full summary is the [SWEEP] log line)
-            f.put(row.label).put(": ");
+            f.clear();
             if (const auto rw = s_.runner_.sweep_view().apdo(uint8_t(row.algorithm), row.pos); rw && rw->sum.points) {   // both 5 V parts
+                char nb[ctsweep::kFoldTextMax];
+                if (const size_t len = ctsweep::format_fold(rw->sum, nb)) {   // a fold is a caution: it takes the whole footer, "folds to 19.4V above 19.9V"
+                    f.put(std::string_view(nb, len));
+                    return FooterTone::Caution;
+                }
                 char v[12] = {};
-                f.put("peak ");
+                f.put(row.label).put(": peak ");
                 f.put(std::string_view(v, ctsweep::format_mv(rw->sum.peak_mv, v))).put("V@");
                 f.put(std::string_view(v, ctsweep::format_mv(rw->sum.peak_at_mv, v))).put_char('V');
-                if (rw->sum.fold_mv) {
-                    f.put(" folds ");
-                    f.put(std::string_view(v, ctsweep::format_mv(rw->sum.fold_mv, v))).put("V@");
-                    f.put(std::string_view(v, ctsweep::format_mv(rw->sum.fold_from_mv, v))).put_char('V');
-                }
-            } else f.put("not run");
+            } else f.put(row.label).put(": not run");
             return FooterTone::Info;
         }
         if (!row.probe && (ct::kPpsAlgorithms & ct::bit(row.algorithm))) {   // a range says how far the source got, not a count
@@ -1850,10 +1861,23 @@ void ChargerTestPage::announce(const char* words) {
     }
     case Stage::Steps: {
         const auto c = counts(s_.runner_, s_.result_family_);
-        f.put_u32(c.total).put(" steps, ").put_u32(c.fail).put(" failed");
-        return c.fail ? FooterTone::Caution : FooterTone::Info;
+        f.put_u32(c.total).put(" steps, ");
+        if (!c.fail && c.caution) f.put_u32(c.caution).put(" caution");
+        else f.put_u32(c.fail).put(" failed");
+        return c.fail || c.caution ? FooterTone::Caution : FooterTone::Info;
     }
-    case Stage::Detail: f.put("Kept until the next start"); return FooterTone::Info;
+    case Stage::Detail: {
+        const auto steps = s_.runner_.steps();
+        if (s_.detail_index_ >= 0 && static_cast<size_t>(s_.detail_index_) < steps.size() && steps[static_cast<size_t>(s_.detail_index_)].reason == ct::Reason::Folded) {
+            const auto& st = steps[static_cast<size_t>(s_.detail_index_)];   // a caution says what folded, from the APDO's sweep: "folds to 19.4V above 19.9V"
+            char nb[ctsweep::kFoldTextMax] = {};
+            size_t len = 0;
+            if (const auto rw = s_.runner_.sweep_view().apdo(uint8_t(st.algorithm), st.pos)) len = ctsweep::format_fold(rw->sum, nb);
+            if (len) { f.put(std::string_view(nb, len)); return FooterTone::Caution; }
+        }
+        f.put("Kept until the next start");
+        return FooterTone::Info;
+    }
     case Stage::Changes: f.put_u32(s_.delta_n_).put(" changed, was run ").put_u32(s_.delta_runs_); return FooterTone::Info;
     case Stage::Resume: {
         const auto w = resume_words(ctx_.now);
@@ -1946,7 +1970,7 @@ void ChargerTestPage::list_row(int index, bool focused, kit::RowSpec &out) {
     case Stage::Resume:
         if (index == 0) {
             const auto c = counts(s_.runner_);
-            row_text_.put("Run ").put_u32(s_.runner_.run_id()).put(": ").put_u32(c.pass + c.fail + c.skip).put_char('/').put_u32(c.total).put(" done");
+            row_text_.put("Run ").put_u32(s_.runner_.run_id()).put(": ").put_u32(c.pass + c.fail + c.skip + c.caution).put_char('/').put_u32(c.total).put(" done");
             out.text = row_text_.view();
         } else if (index == 1) {
             out.text = ct::refusal_words(s_.runner_.reason());
@@ -2004,8 +2028,9 @@ void ChargerTestPage::list_row(int index, bool focused, kit::RowSpec &out) {
         out.tail = row_tail_.view();
         if (focused) {
             const bool listing = result_layout::noted(s);   // a Light run's listing: LISTED / NOT RUN, no skip cause
-            row_note_.put(listing ? result_layout::verdict_word(s) : ct::name(s.verdict));
-            if (!listing && (s.verdict == ct::Verdict::Fail || s.verdict == ct::Verdict::Skip)) row_note_.put(": ").put(detail_name(s));
+            const bool caution = result_layout::caution(s);   // a voltage fold: CAUTION: folds back
+            row_note_.put(listing || caution ? result_layout::verdict_word(s) : ct::name(s.verdict));
+            if (caution || (!listing && (s.verdict == ct::Verdict::Fail || s.verdict == ct::Verdict::Skip))) row_note_.put(": ").put(detail_name(s));
             if (s.pos) row_note_.put(" PDO #").put_u32(s.pos);
             out.note = row_note_.view().substr(0, kit::kNoteMaxPx / kLabelAdv);
         }
@@ -2443,7 +2468,7 @@ void ChargerTestPage::paint_running(uint32_t now) {
         StrBuf<16> n;
         n.put_u32(st ? static_cast<uint32_t>(at + 1) : 0).put_char('/').put_u32(static_cast<uint32_t>(steps.size())).put(" steps");
         put_line(c, kSmall, 6, 25, n.view(), kText, 12, cell_sig_[0], false, false, &bg);
-        const int done = static_cast<int>(all.pass + all.fail + all.skip), total = static_cast<int>(steps.size());
+        const int done = static_cast<int>(all.pass + all.fail + all.skip + all.caution), total = static_cast<int>(steps.size());
         if (bg.admit(prog_.cost(done, total))) prog_.set(done, total);
         const int fam = st ? family(*st) : -1;
         put_line(c, kLabelFont, 6, 52, fam >= 0 ? kFamilyNames[fam] : "", kDim, 16, cell_sig_[2], false, false, &bg);
@@ -2555,28 +2580,32 @@ void ChargerTestPage::paint_results() {
     const auto all = counts(s_.runner_);
     if (!laid_) {
         if (!bg.admit(1600)) return;
-        const kit::Verdict kinds[3] = {kit::Verdict::Pass, kit::Verdict::Fail, kit::Verdict::Skip};
-        for (int i = 0; i < 3; ++i) {
-            const int16_t x = static_cast<int16_t>(i * 75);
+        // pass / fail / skip; a run that found a voltage fold adds a fourth cell, "caution" (amber tilde), between pass and fail
+        const kit::Verdict kinds[4] = {kit::Verdict::Pass, kit::Verdict::Partial, kit::Verdict::Fail, kit::Verdict::Skip};
+        const int cols = all.caution ? 4 : 3, pitch = all.caution ? 56 : 75;
+        for (int i = 0; i < cols; ++i) {
+            const int16_t x = static_cast<int16_t>(i * pitch);
             if (i) gfx_fill(c, static_cast<int16_t>(x - 1), 22, 1, 24, kRule);
-            kit::draw_verdict(c, static_cast<int16_t>(x + 2), 28, 12, 12, kinds[i], {}, kBg);
+            kit::draw_verdict(c, static_cast<int16_t>(x + 2), 28, 12, 12, kinds[all.caution || i < 1 ? i : i + 1], {}, kBg);
         }
         gfx_fill(c, 0, 46, c.w, 1, kRule);
         gfx_fill(c, 0, 70, c.w, 2, kRule);
         grid_.init(c, 72, kFooterY, &ChargerTestPage::result_row_fn, this);
         laid_ = true;
     }
-    const unsigned n[3] = {all.pass, all.fail, all.skip};
-    static constexpr const char *kWords[3] = {"pass", "fail", "skip"};
-    const uint16_t ink[3] = {kOk, kError, kDim};
-    for (int i = 0; i < 3; ++i) {
+    const unsigned n4[4] = {all.pass, all.caution, all.fail, all.skip};
+    static constexpr const char *kWords4[4] = {"pass", "caution", "fail", "skip"};
+    const uint16_t ink4[4] = {kOk, kCaution, kError, kDim};
+    const int cols = all.caution ? 4 : 3, pitch = all.caution ? 56 : 75, chars = all.caution ? 5 : 7;
+    for (int i = 0; i < cols; ++i) {
+        const int k = all.caution || i < 1 ? i : i + 1;   // without a caution the cell is skipped: pass, fail, skip
         StrBuf<12> t;
-        t.put_u32(n[i]);
-        if (t.view().size() + 1 + std::strlen(kWords[i]) <= 7) t.put_char(' ').put(kWords[i]);
-        put_line(c, kSmall, static_cast<int16_t>(i * 75 + 16), 26, t.view(), ink[i], 7, cell_sig_[i], false, false, &bg);
+        t.put_u32(n4[k]);
+        if (!all.caution && t.view().size() + 1 + std::strlen(kWords4[k]) <= size_t(chars)) t.put_char(' ').put(kWords4[k]);
+        put_line(c, kSmall, static_cast<int16_t>(i * pitch + 16), 26, t.view(), ink4[k], chars, cell_sig_[i], false, false, &bg);
     }
     put_line(c, kSmall, 6, 51, best_.view().empty() ? std::string_view("No passing mode") : best_.view(), best_.view().empty() ? kDim : kText,
-             kBestChars, cell_sig_[3], false, true, &bg);
+             kBestChars, cell_sig_[4], false, true, &bg);   // [0..3] are the header's cells (four with a caution)
     if (pbg && pbg->more) return;
     grid_.set_count(static_cast<int>(line_n_) + (s_.delta_n_ ? 1 : 0));
     grid_.show(s_.selection_, 1);
@@ -2623,11 +2652,16 @@ void ChargerTestPage::paint_detail() {
         const uint16_t fill = vs.filled ? vs.fill : kSurface;
         gfx_fill(c, 0, 22, c.w, 36, fill);
         kit::draw_verdict(c, 6, 30, 20, 20, v, {}, fill);
-        gfx_text(c, kMid, 32, 28, result_layout::verdict_word(s), vs.ink, fill);   // LISTED / NOT RUN for a Light run's listing
         StrBuf<32> nm;
         nm.put(step_label::label(s, s_.detail_index_ > 0 ? &steps[static_cast<size_t>(s_.detail_index_) - 1] : nullptr).view());
+        // The band word (LISTED / NOT RUN for a Light run's listing) and the step's name share the band: a long word (CAUTION) beside
+        // a long name (PPS 7.14->11V) would overlap, so the word drops to the small font then and the name keeps its whole text.
+        const std::string_view word = result_layout::verdict_word(s);
+        const bool tight = word.size() > 6 && 32 + text_width(kMid, word) + 8 + static_cast<int>(nm.view().size() * kSmallAdvPx) > 218;
+        if (tight) gfx_text(c, kSmall, 32, 32, word, vs.ink, fill);
+        else gfx_text(c, kMid, 32, 28, word, vs.ink, fill);
         char buf[kFitBuf];
-        const std::string_view name = fit_data(kSmall, nm.view(), 96, buf);
+        const std::string_view name = fit_data(kSmall, nm.view(), tight ? 218 - 32 - 8 - text_width(kSmall, word) : 96, buf);
         const uint16_t name_ink = vs.ink == kDim || vs.ink == kFaint ? kText : vs.ink;
         gfx_text(c, kSmall, static_cast<int16_t>(218 - static_cast<int>(name.size()) * kSmallAdvPx), 32, name, name_ink, fill);
         detail_step_ = 1;
@@ -2681,7 +2715,7 @@ void ChargerTestPage::paint_detail() {
     }
     if (detail_step_ == 4) {
         if (pbg && !pbg->admit(2800, true)) return;
-        kv_step(3, "Reason", detail_name(s), s.verdict == ct::Verdict::Fail ? kCaution : kText);
+        kv_step(3, "Reason", detail_name(s), s.verdict == ct::Verdict::Fail || result_layout::caution(s) ? kCaution : kText);
         detail_step_ = 5;
     }
     if (has_cap) {

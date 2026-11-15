@@ -15,9 +15,10 @@ namespace ct = charger_test;
 bool noted(const ct::Step& s) {
     return s.verdict == ct::Verdict::Skip && (s.reason == ct::Reason::Advertised || s.reason == ct::Reason::LightLevel);
 }
+bool caution(const ct::Step& s) { return s.verdict == ct::Verdict::Pass && s.reason == ct::Reason::Folded; }
 const char* verdict_word(const ct::Step& s) {
     switch (s.verdict) {
-    case ct::Verdict::Pass: return "PASS";
+    case ct::Verdict::Pass: return s.reason == ct::Reason::Folded ? "CAUTION" : "PASS";
     case ct::Verdict::Fail: return s.reason == ct::Reason::Capped ? "CAPPED" : "FAIL";
     case ct::Verdict::Skip: return s.reason == ct::Reason::Advertised ? "LISTED" : s.reason == ct::Reason::LightLevel ? "NOT RUN" : "SKIP";
     case ct::Verdict::Running: return "RUNNING";
@@ -38,7 +39,7 @@ void put_text(Token& k, const char* s) { Out o{k.text, sizeof k.text}; o.put(s);
 // ceiling, so the tone table reads it as "reached something" (amber), never as "none passed" (red).
 void count(Tally& t, const ct::Step& y) {
     switch (y.verdict) {
-    case ct::Verdict::Pass: ++t.pass; break;
+    case ct::Verdict::Pass: caution(y) ? ++t.capped : ++t.pass; break;   // a fold is a caution: neither a pass nor a fail
     case ct::Verdict::Fail: y.reason == ct::Reason::Capped ? ++t.capped : ++t.fail; break;
     case ct::Verdict::Skip: noted(y) ? ++t.noted : ++t.skip; break;
     default: ++t.pending; break;
@@ -229,6 +230,10 @@ Reach reach_of(std::span<const ct::Step> s, A a, uint8_t pos) {
         if (y.verdict == ct::Verdict::Pass) {
             if (!r.lo_mv || y.mv < r.lo_mv) r.lo_mv = y.mv;
             r.hi_mv = std::max(r.hi_mv, y.mv);
+            if (caution(y)) {
+                r.folded = true;
+                if (!r.fold_mv || y.measured_mv < r.fold_mv) r.fold_mv = y.measured_mv;
+            }
         } else if (y.verdict == ct::Verdict::Fail && y.reason == ct::Reason::Capped) {
             r.capped = true;
             r.hi_mv = std::max(r.hi_mv, y.measured_mv);   // the ceiling the source held
@@ -283,6 +288,8 @@ step_label::Text reach_footer(const Reach& r) {
         put_word(t, "floor at "); put_level(t, r.floor_mv); put_word(t, "V");
     } else if (r.capped) {
         put_word(t, "caps "); put_level(t, r.hi_mv); put_word(t, "V of "); put_level(t, r.adv_mv); put_word(t, "V");
+    } else if (r.folded && r.fold_mv) {
+        put_word(t, "folds to "); put_level(t, r.fold_mv); put_word(t, "V");   // a level the sweep found folded back reads this low
     } else if (r.tone == Tone::Pending) {
         put_word(t, "not finished");
     } else if (r.tone == Tone::Noted) {
@@ -385,10 +392,11 @@ void sweep_row(Builder& b, std::span<const ct::Step> s, const ctsweep::View& v, 
     const ct::Step* step = nullptr;   // the first part in plan order (the one the planner places the row by)
     const ct::Step* skipped = nullptr;
     unsigned lo = ~0u, hi = 0;
-    bool pending = false, failed = false, passed = false;
+    bool pending = false, failed = false, passed = false, folded = false;
     for (const auto& x : s) {
         if (!ct::is_sweep(x) || x.algorithm != a || x.pos != pos) continue;
         if (!step) step = &x;
+        folded |= caution(x);
         const auto part = ct::sweep_range(x, cap_mv);
         if (!part.empty()) { lo = std::min(lo, part.lo); hi = std::max(hi, part.hi); }
         pending |= x.verdict == ct::Verdict::Pending || x.verdict == ct::Verdict::Running;
@@ -406,7 +414,7 @@ void sweep_row(Builder& b, std::span<const ct::Step> s, const ctsweep::View& v, 
     else if (failed) tn = Tone::Fail;
     else if (passed) {
         const int worst = rw ? std::abs(int(rw->sum.worst_err)) : 0;
-        tn = worst <= 100 ? Tone::Pass : worst <= 300 ? Tone::Partial : Tone::Fail;
+        tn = worst <= 100 ? (folded ? Tone::Partial : Tone::Pass) : worst <= 300 ? Tone::Partial : Tone::Fail;   // a fold: amber, never red
     } else if (skipped) tn = Tone::Skip;
     Token* k = b.token(true, tn);
     if (!k) return;

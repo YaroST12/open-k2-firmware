@@ -1413,6 +1413,113 @@ static void test_a_capped_range_reads_amber_and_says_how_far_it_got() {
     check_text_at(kSmall, ty, "Reached", kDim, kBg, 6);
     check_text_at(kSmall, ty, "3.3-19.4V of 21V", kCaution, kBg, 92);   // the PPS range starts at 3.3 V: 16 cells, the full value column
 }
+static void dump_screen(const char* name);
+static int ty_reason() { return 60 + 3 * kit::kRowH + kit::row_text_y(kit::kRowH, kSmall.height); }   // the fourth row of the Detail table
+// A voltage fold is a caution (user decision 2026-11-16): the sweep row and the APDO's fixed rows on the folded side read amber,
+// neither pass nor fail. The sweep itself is a clean run here; the fold is set on the finished run (the host stub cannot make a
+// converter fold back), then the Results grid is rebuilt. Checks the header's fourth cell, the Steps footer and the Detail page.
+static void test_a_voltage_fold_reads_as_a_caution() {
+    six_pdo_fixture();
+    g_stub.vbus_ceiling_mv = 36000;
+    Ui ui; open(ui);
+    CHECK_EQ(ui.charger_test_set_units(kPdOnly), true);
+    ui.charger_test_set_sweep(true);
+    review(ui);
+    start_press(ui, 1300); press(ui, Button::Ok, 1400);
+    uint32_t t = 1500;
+    for (; t <= 900000 && ui.charger_test_busy(); t += 100) ui.tick(t);
+    CHECK_EQ(ui.charger_test_stage(), 6);
+    int where = 0;
+    const auto calm = [&] {
+        ++where;
+        for (int i = 0; i < 64 && ui.painting(); ++i) ui.tick(t += 100);
+        if (ui.painting()) std::fprintf(stderr, "[fold-fixture] still painting at calm #%d\n", where);
+        CHECK_EQ(ui.painting(), false);
+    };
+    ui.tick(t += 200); ui.tick(t += 200);
+    calm();
+    const auto& r = ui.charger_test_results();
+    // The fold, set on the finished run: the sweep row and the PPS fixed rows at or above 10.4 V (the folded side) turn caution.
+    unsigned marked = 0, sweeps = 0;
+    for (size_t i = 0; i < r.steps().size(); ++i) {
+        auto& s = const_cast<ct::Step&>(r.steps()[i]);
+        if (s.group != ct::Group::Pd || !(ct::kPpsAlgorithms & ct::bit(s.algorithm))) continue;
+        std::fprintf(stderr, "[fold-fixture] step %zu mv=%u detail=%u verdict=%d sweep=%d\n", i, unsigned(s.mv), unsigned(s.detail), int(s.verdict), int(ct::is_sweep(s)));
+        if (ct::is_sweep(s)) {
+            ++sweeps;
+            CHECK_EQ(int(s.verdict), int(ct::Verdict::Pass));
+            if (ct::sweep_low(s)) continue;   // the low part (below the split) folds nothing
+            // The fold: the last five points of the high part fall away (the converter folds back above 10.5 V).
+            for (const auto& rw : r.sweep_view().rows)
+                if (rw.pos == s.pos && rw.alg == uint8_t(s.algorithm) && rw.lo_mv >= ctsweep::kSplitMv && rw.n >= 5)
+                    for (unsigned k = rw.n - 5; k < rw.n; ++k) {
+                        const unsigned set = rw.lo_mv + k * ctsweep::kStepMv;
+                        const_cast<int16_t&>(r.sweep_view().points[rw.first + k]) = int16_t(10000 - int(set) - int(k - (rw.n - 5)) * 200);
+                    }
+        } else if (s.verdict != ct::Verdict::Pass || s.mv < 10400) continue;
+        s.reason = ct::Reason::Folded;
+        ++marked;
+    }
+    CHECK_EQ(sweeps >= 1, true);
+    CHECK_EQ(marked >= 2, true);   // the sweep row and at least one fixed PPS row
+    unsigned caution = 0, pass = 0;
+    for (const auto& s : r.steps()) { const bool c = result_layout::caution(s); caution += c; pass += s.verdict == ct::Verdict::Pass && !c; }
+    CHECK_EQ(caution, marked);
+    // Rebuild the Results grid: into the Steps of a row and back.
+    top(ui, t); calm();
+    press(ui, Button::Ok); ui.tick(t += 100); calm();
+    CHECK_EQ(ui.charger_test_stage(), 7);
+    press(ui, Button::Back); ui.tick(t += 100); calm();
+    CHECK_EQ(ui.charger_test_stage(), 6);
+    top(ui, t); calm();
+    dump_screen("fold_results");
+    // The header: pass / caution / fail / skip; the caution cell is amber (four columns: the number only, behind its amber mark).
+    StrBuf<8> n; n.put_u32(caution);
+    check_text_at(kSmall, 26, n.view(), kCaution, kBg, 56 + 16);
+    n.clear(); n.put_u32(pass);
+    check_text_at(kSmall, 26, n.view(), kOk, kBg, 16);
+    // Steps of the first row: the footer counts the cautions, in the caution tone (no failures: "C caution", not "0 failed").
+    press(ui, Button::Ok); ui.tick(t += 100); calm();
+    CHECK_EQ(ui.charger_test_stage(), 7);
+    top(ui, t); calm();
+    StrBuf<32> foot;
+    foot.put_u32(static_cast<uint32_t>(ui.list_state().count)).put(" steps, ").put_u32(caution).put(" caution");
+    CHECK_EQ(footer_shows(foot.view(), kCaution), true);
+    {   // scroll to the first caution row of the list and keep that screen for the design review
+        size_t first_pd = r.steps().size(), first_caution = r.steps().size();
+        for (size_t i = 0; i < r.steps().size(); ++i) {
+            if (first_pd == r.steps().size() && r.steps()[i].group == ct::Group::Pd) first_pd = i;
+            if (result_layout::caution(r.steps()[i])) { first_caution = i; break; }
+        }
+        for (size_t k = first_pd; k < first_caution; ++k) { press(ui, Button::Plus); ui.tick(t += 100); calm(); }
+        dump_screen("fold_steps");
+        top(ui, t); calm();
+    }
+    // Walk the steps to one that reads amber and open its Detail: an amber CAUTION band, the reason and the fold's own words.
+    bool detail = false;
+    for (int k = 0; k < ui.list_state().count && !detail; ++k) {
+        press(ui, Button::Ok); ui.tick(t += 100); calm();
+        if (ui.charger_test_stage() == 8 && g_panel[24 * LCD_WIDTH + 100] == kPartFill) detail = true;
+        else { press(ui, Button::Back); ui.tick(t += 100); calm(); press(ui, Button::Plus); ui.tick(t += 100); calm(); }
+    }
+    CHECK_EQ(detail, true);
+    if (!detail) return;
+    dump_screen("fold_detail");
+    // The long word and the long name ("PPS 7.14->11V") share the band: the word drops to the small font and nothing overlaps.
+    check_text_at(kSmall, 32, "CAUTION", kOnPart, kPartFill, 32);
+    char want[ctsweep::kFoldTextMax] = {};
+    const ct::Step* st = nullptr;
+    for (const auto& s : r.steps()) if (result_layout::caution(s)) { st = &s; break; }
+    CHECK_EQ(st != nullptr, true);
+    if (!st) return;
+    const auto rw = r.sweep_view().apdo(uint8_t(st->algorithm), st->pos);
+    CHECK_EQ(rw.has_value(), true);
+    const size_t wl = rw ? ctsweep::format_fold(rw->sum, want) : 0;
+    CHECK_EQ(wl > 0, true);
+    CHECK_STR(want, "folds to 9.2V above 10.5V");   // the last five points fall 200 mV each from 10 V: the lowest is 9.2 V
+    CHECK_EQ(footer_shows(std::string_view(want, wl), kCaution), true);   // the fold's own words, from the APDO's sweep
+    check_text_at(kSmall, ty_reason(), "folds back", kCaution, kBg, 92);
+}
 // Every Steps row reads as a whole step label (step_label::label), never cut with dots: the ink of each visible row's text
 // cell is compared with the ink of every label of the run, and some label must match. The cut would end in "...". The same scan
 // found two repaint bugs in a list that scrolls under a fixed highlight or over a longer verdict (stale cells of the row before).
@@ -4549,6 +4656,7 @@ int main() {
     test_vsafe5_review();
     test_preflight_refusal_is_logged();
     test_preflight_wrong_voltage_under_pdo1_contract_is_logged();
+    test_a_voltage_fold_reads_as_a_caution();
     test_sweep_log_line_has_no_literal_format_bug();
     test_state_change_log_keeps_the_full_state_name_in_the_format();
     test_avs_sweep_is_a_selection_bit();

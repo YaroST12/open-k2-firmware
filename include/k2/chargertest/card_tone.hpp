@@ -10,6 +10,9 @@
 //           holds the failure); a fixed step that failed -> pass + fail when some level passed, else fail
 //   legacy  a protocol that never answered (nothing passed) is "not offered": grey, never red. Red is a protocol that answered
 //           and then failed with nothing passing, which a card cannot hold (the 5 V baseline would be a pass).
+// A voltage fold the sweep found (the sweep block's fold_dv) is a CAUTION: a range with no failure and a fold reads amber (pass +
+// capped), never green and never red. The card keeps no per-step verdicts, so the fold itself is the mark; an older card that
+// stored the fold reads the same.
 // A Light card (Card::level) measured 5 V only: a passing group reads Noted ("detected" / "advertised"), a range it never
 // asked for reads Noted, and the card head is Noted when nothing failed; never green.
 // The page (docs/site/r/card.js) carries the same table; tests/test_card_tone.cpp and tests/test_cardpage.mjs pin both to the
@@ -27,6 +30,12 @@ inline bool capped(const Card& c) {
     return c.group[0].verdict == GV::Fail && c.group[0].reason == uint8_t(ct::Reason::Capped);
 }
 
+// The range's sweep found a voltage fold and nothing failed: the card's caution (the device marks the sweep's Pass row Folded).
+inline bool folded(const Card& c, const Range& r) {
+    const size_t i = size_t(&r - c.range.data());
+    return i < c.n_ranges && i < c.sweep.size() && c.sweep[i].fold_dv && !r.fail_dv;
+}
+
 inline Tone range(const Card& c, const Range& r) {
     Tally t;
     if (c.level == ct::Level::Light && !r.fail_dv && !r.max_dv) return Tone::Noted;   // a Light run only lists the range
@@ -39,6 +48,7 @@ inline Tone range(const Card& c, const Range& r) {
     } else {
         t.pass = 1;
         if (unsigned(r.max_dv) + r.hi_dv / 20u < r.hi_dv) t.skip = 1;   // the top of the range was never exercised
+        if (folded(c, r)) t.capped = 1;                                   // a fold: a caution, amber
     }
     return result_layout::roll_up(t);
 }

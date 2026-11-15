@@ -39,12 +39,17 @@ char mark(Tone);
 //   some passed, or the source capped    -> Partial   amber ("~")
 //   none passed                          -> Fail      red
 // A Capped step (ct::Reason::Capped: the source plateaued below the target) counts as `capped`, not as `fail`.
+// A caution step (a Pass that carries ct::Reason::Folded: the output folded back inside a sweep) counts as `capped` too, never as
+// `pass` and never as `fail`: the source delivered every level, and one of them is worth a second look (amber, "CAUTION").
 // A Skip step whose reason is Advertised or LightLevel (a Light run's listing) counts as `noted`, not as `skip`.
 struct Tally { unsigned pass = 0, fail = 0, capped = 0, skip = 0, noted = 0, pending = 0; };
 Tone roll_up(const Tally&);
 // A Light run's listing: a Skip whose reason is Advertised or LightLevel (counted as `noted`, drawn as kit::Verdict::Noted).
 bool noted(const charger_test::Step& s);
-// The word of a step's verdict band (Step detail): PASS, FAIL, CAPPED (a Capped fail), SKIP, LISTED (Advertised), NOT RUN
+// A voltage fold the deep sweep found: a Pass that carries Reason::Folded (the sweep row, and the fixed rows of the same APDO
+// that sit on the folded side). A caution, drawn kit::Verdict::Partial.
+bool caution(const charger_test::Step& s);
+// The word of a step's verdict band (Step detail): PASS, CAUTION (a fold), FAIL, CAPPED (a Capped fail), SKIP, LISTED (Advertised), NOT RUN
 // (LightLevel), RUNNING, PENDING. At most 7 characters: the band's font-24 word ends before the step's name.
 const char* verdict_word(const charger_test::Step& s);
 
@@ -152,6 +157,8 @@ size_t summarize(std::span<const charger_test::Step>, std::span<SummaryLine> out
 struct Reach {
     uint16_t lo_mv = 0, hi_mv = 0, adv_mv = 0;
     bool capped = false;
+    bool folded = false;     // some level passed on the folded side of a fold the sweep found (Reason::Folded)
+    uint16_t fold_mv = 0;    // the level the lowest such row measured
     bool floored = false;
     uint16_t floor_mv = 0;   // the level a Floored low row measured (the source's floor)
     bool needs_load = false;
@@ -160,7 +167,7 @@ struct Reach {
 Reach reach(std::span<const charger_test::Step>, charger_test::Algorithm, int pos = -1);
 // The footer words after "<label>: " (at most 18 characters, so a 9-character label still fits 27): "caps 19.4V of 21V",
 // "reached 5-21V", "max 13V of 21V", "none reached", "not run", "advertised" (a Light run's listing), "needs load" (or "needs load >13V" after some levels passed:
-// the highest that did), "floor at 5V" (a low edge the source cannot reach). Levels at 0.1 V.
+// the highest that did), "floor at 5V" (a low edge the source cannot reach), "folds to 19.4V" (a level passed on the folded side of a sweep's fold). Levels at 0.1 V.
 step_label::Text reach_footer(const Reach&);
 // The Detail page's "Reached" value (at most 16): "5-19.4V of 21V", "5-21V"; empty when nothing passed.
 step_label::Text reach_span(const Reach&);

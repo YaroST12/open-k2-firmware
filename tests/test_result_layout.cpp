@@ -210,6 +210,44 @@ static void test_a_sweep_chip_takes_its_tone_from_the_sweep() {
     CHECK_EQ(tone_of(V::Pass, {-20, 450, 30}), int(rl::Tone::Fail));
     CHECK_EQ(tone_of(V::Fail, {-20, 30}), int(rl::Tone::Fail));          // a lost source, the points so far notwithstanding
 }
+// A voltage fold the sweep found is a CAUTION: neither a pass nor a fail (User decision 2026-11-16, FH22). The sweep row and the fixed rows
+// of the APDO that sit on the folded side keep their Pass verdict and carry Reason::Folded; every surface reads them amber, the
+// band says CAUTION, and the tally counts them in its own (capped) column - never pass, never fail.
+static void test_a_fold_is_a_caution_not_a_pass_and_not_a_fail() {
+    auto s = baseus();
+    for (size_t i = 0; i < s.size(); ++i) if (s[i].algorithm == A::Pps && s[i].pos == 7 && s[i].mv == 21000) s[i].reason = ct::Reason::Folded, s[i].measured_mv = 19428;
+    s.push_back(sweep_step(A::Pps, 7, 3248763456u, V::Pass));
+    s.back().reason = ct::Reason::Folded;
+    CHECK_STR(rl::verdict_word(s.back()), "CAUTION");
+    CHECK_EQ(rl::caution(s.back()), true);
+    CHECK_EQ(rl::caution(step(A::Pps, 13000, V::Pass, 7)), false);
+    CHECK_EQ(rl::caution(step(A::Pps, 13000, V::Fail, 7, 0, ct::Reason::Folded)), false);   // only a pass can be a caution
+    rl::Layout l; rl::build(l, s);
+    const rl::Row* r = sweep_row_of(l, 7);
+    CHECK_EQ(r != nullptr, true);
+    if (!r) return;
+    CHECK_EQ(int(l.tokens[r->first].tone), int(rl::Tone::Partial));                   // amber (tilde), not green and not red
+    CHECK_EQ(int(rl::mark(l.tokens[r->first].tone)), int(rl::mark(rl::Tone::Partial)));
+    // the APDO's range row (slot 7): some levels passed, one is a caution -> amber; slot 6 has no fold
+    CHECK_EQ(int(l.tokens[l.rows[row_of(l, "PPS")].first + 1].tone), int(rl::Tone::Partial));
+    // the tally never calls a caution a pass or a fail
+    auto reach = rl::reach(s, A::Pps, 7);
+    CHECK_EQ(reach.folded, true);
+    CHECK_EQ(reach.fold_mv, 19428);
+    CHECK_EQ(int(reach.tone), int(rl::Tone::Partial));
+    CHECK_EQ(reach.capped, false);                                                     // not a cap: nothing failed
+    CHECK_STR(rl::reach_footer(reach).c_str(), "folds to 19.4V");
+    CHECK_EQ(rl::reach_footer(reach).len <= 18, true);
+    // a clean slot reads as it did
+    CHECK_EQ(rl::reach(s, A::Pps, 6).folded, false);
+    // a caution rolled with passes is amber; a caution next to a failure never hides the failure
+    CHECK_EQ(int(rl::roll_up(rl::Tally{.pass = 3, .capped = 1})), int(rl::Tone::Partial));
+    CHECK_EQ(int(rl::roll_up(rl::Tally{.fail = 1, .capped = 1})), int(rl::Tone::Partial));
+    // a fold on a sweep that otherwise tracked clean still reads amber; without the caution the same sweep is green
+    s.back().reason = ct::Reason::None;
+    rl::build(l, s);
+    CHECK_EQ(int(l.tokens[sweep_row_of(l, 7)->first].tone), int(rl::Tone::Pass));
+}
 // ---- The tone rules (one table for fixed, range and legacy chips) ------------------------------------------------------------
 //   a step still to run  -> Pending      nothing sampled (all skipped) -> Skip (grey, the tag says why)
 //   every sampled step passed -> Pass    some passed, or capped -> Partial     none passed -> Fail
@@ -1184,6 +1222,7 @@ int main() {
     test_a_sweep_row_names_the_capped_range();
     test_an_avs_sweep_row_is_one_range_chip();
     test_a_sweep_chip_takes_its_tone_from_the_sweep();
+    test_a_fold_is_a_caution_not_a_pass_and_not_a_fail();
     test_roll_up_is_one_table();
     test_a_capped_range_chip_is_amber_and_keeps_the_advertised_range();
     test_a_range_with_nothing_passed_stays_red_and_all_skipped_grey();

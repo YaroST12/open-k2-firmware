@@ -92,7 +92,36 @@ static void test_light_card_is_noted_never_pass() {
     CHECK_EQ(int(tn::range(c, c.range[0])), int(Tone::Skip));
 }
 
+// A voltage fold the sweep found is a caution: amber, counted with the capped rows, never green and never red. A range that also
+// failed keeps its own verdict (the fold does not turn a failure into a caution).
+static void test_a_fold_is_a_caution() {
+    rc::Card c = cardfx::fh22_full();
+    CHECK_EQ(int(tn::range(c, c.range[0])), int(Tone::Pass));
+    c.sweep[0].fold_dv = 194;
+    c.sweep[0].fold_from_dv = 200;
+    CHECK_EQ(int(tn::folded(c, c.range[0])), 1);
+    CHECK_EQ(int(tn::range(c, c.range[0])), int(Tone::Partial));
+    const tn::Counts n = tn::counts(c);
+    CHECK_EQ(int(n.pass), 1);          // the fixed levels; the AVS range is now amber, the PPS range was already
+    CHECK_EQ(int(n.partial), 2);
+    CHECK_EQ(int(n.fail), 0);
+    CHECK_EQ(int(tn::card(c)), int(Tone::Partial));
+    // PPS: a plateau with a fold stays what it was (amber), the fold adds no mark of its own.
+    c.sweep[1].fold_dv = 194;
+    c.sweep[1].fold_from_dv = 200;
+    CHECK_EQ(int(tn::folded(c, c.range[1])), 0);
+    CHECK_EQ(int(tn::range(c, c.range[1])), int(Tone::Partial));
+    // A range that failed with nothing reached stays red whatever the sweep saw.
+    rc::Range r = c.range[0];
+    r.fail_dv = 100; r.max_dv = 0;
+    CHECK_EQ(int(tn::range(c, r)), int(Tone::Fail));
+    // A clean sweep (no fold stored) stays green.
+    c.sweep[0].fold_dv = 0; c.sweep[0].fold_from_dv = 0;
+    CHECK_EQ(int(tn::range(c, c.range[0])), int(Tone::Pass));
+}
+
 int main() {
+    test_a_fold_is_a_caution();
     test_fh22();
     test_rules();
     test_light_card_is_noted_never_pass();

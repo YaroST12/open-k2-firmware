@@ -533,9 +533,14 @@ void test_card_screens() {
     c.id.fp = 0x33333333; c.name[0] = 0;
     c.group[0] = {rc::GV::Fail, 0, 0, uint8_t(ct::Reason::Timeout), 90};
     c.n_ranges = 0;
+    rc::Card d = cardfx::fh22_full();          // a voltage fold on a range that failed nothing: the caution sheet and its Note row
+    d.id.fp = 0x55555555; rc::set_name(d, "Folding charger");
+    d.range[0].fail_dv = 0; d.range[0].max_dv = d.range[0].hi_dv;
+    d.sweep[0] = {-40, 25, -40, 200, 198, 199, 194, 200};   // peak 19.8 V at 19.9 V, folds to 19.4 V from 20 V
     CHECK_EQ(int(rc::hw::put(a)), int(rc::Err::Ok));
     CHECK_EQ(int(rc::hw::put(b)), int(rc::Err::Ok));
     CHECK_EQ(int(rc::hw::put(c)), int(rc::Err::Ok));
+    CHECK_EQ(int(rc::hw::put(d)), int(rc::Err::Ok));
     static Ui ui;
     const int data_before = trunc::data_hits();
     for (int rot = 0; rot < 4; ++rot) {
@@ -546,7 +551,7 @@ void test_card_screens() {
         ui.goto_page(static_cast<uint8_t>(Page::Tools), g_t);
         ui.push_menu(Menu::Cards, g_t);
         draw_for_a_while(ui, "cards-list", rot, "cards");
-        for (int card = 0; card < 3; ++card) {
+        for (int card = 0; card < 4; ++card) {
             press(Button::Ok);   // the open card
             draw_for_a_while(ui, "card", rot, "cards");
             // Row 0 (PD fixed) is the focused row on opening: its detail comes first. The walk once pressed PLUS before OK and so
@@ -736,10 +741,12 @@ void test_reach_words() {
                 for (unsigned hi = lo; hi <= adv; hi += 100)
                     for (const auto tone : kTones)
                         for (const bool capped : {false, true})
-                        for (const bool needs_load : {false, true}) {
+                        for (const bool needs_load : {false, true})
+                        for (const bool folded : {false, true}) {
                             result_layout::Reach r;
                             r.lo_mv = lo; r.hi_mv = static_cast<uint16_t>(hi); r.adv_mv = static_cast<uint16_t>(adv);
                             r.capped = capped; r.tone = tone; r.needs_load = needs_load;
+                            r.folded = folded; r.fold_mv = folded ? static_cast<uint16_t>(adv - 600) : 0;   // a level the source fell to
                             const auto foot = result_layout::reach_footer(r), span = result_layout::reach_span(r);
                             ++shapes;
                             if (label + 2 + foot.len > static_cast<size_t>(kFooterCells) || span.len > 16) {
