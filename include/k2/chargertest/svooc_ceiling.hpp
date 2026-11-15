@@ -108,7 +108,7 @@ struct Outcome {
 constexpr const char* abort_word(std::uint8_t why) {
     switch (static_cast<svooc::Abort>(why)) {
     case svooc::Abort::None: return "";
-    case svooc::Abort::Overvoltage: return "over 12 V";
+    case svooc::Abort::Overvoltage: return "over 12V";
     case svooc::Abort::Current: return "current";
     case svooc::Abort::OffScript: return "off-script";
     case svooc::Abort::HostGone: return "host gone";
@@ -126,9 +126,10 @@ constexpr const char* abort_word(std::uint8_t why) {
 }
 
 // The Results row's words. The ask is what the K2 claimed in the protocol (100 mA per count), never a drawn current:
-//   Stopped: "stopped at 3.3 s, 4.0 A claimed, 9.1 V max" (the adapter's last edge, the ask it went on under, the top VBUS);
-//   Aborted: "aborted: sink, none claimed, 8.0 V max" (the cause's short word; "aborted, ..." with none recorded);
-//   any other run: "10.9 A claimed, 11.1 V max" ("none claimed" without an accepted ask; no VBUS part when none was read);
+//   Stopped: "stopped at 3.3s, <=9.1V, 4.0A claimed" (the adapter's last edge, the top VBUS, the ask it went on under);
+//   Aborted: "aborted: sink, <=8.0V, none claimed" (the cause's short word; "aborted, ..." with none recorded);
+//   any other run: "<=11.1V, 10.9A claimed" ("none claimed" without an accepted ask; no VBUS part when none was read).
+//   "<=" reads "VBUS stayed at or under"; units take no space (k2-micro-gui copy rule);
 //   "refused" / "no adapter" when nothing ran, "-" while it runs. Tenths are rounded. No stdio on the device: digits by hand.
 // Returns the length; a short buffer cuts the text (always terminated).
 inline std::size_t format_cap(const Outcome& c, std::span<char> out) {
@@ -148,19 +149,30 @@ inline std::size_t format_cap(const Outcome& c, std::span<char> out) {
     else if (c.end == End::NoAdapter) put("no adapter");
     else if (c.end == End::None) put("-");
     else {
-        if (c.end == End::Stopped) { put("stopped at "); tenths((std::uint32_t(c.stop_ms) + 50u) / 100u); put(" s, "); }
+        if (c.end == End::Stopped) { put("stopped at "); tenths((std::uint32_t(c.stop_ms) + 50u) / 100u); put("s, "); }
         if (c.end == End::Aborted) {
             const char* w = abort_word(c.why);
             if (*w) { put("aborted: "); put(w); put(", "); } else put("aborted, ");
         }
-        if (c.word) { tenths(ceiling_ma(c.word) / 100u); put(" A claimed"); }
+        if (c.vmax_mv) { put("<="); tenths((std::uint32_t(c.vmax_mv) + 50u) / 100u); put("V, "); }
+        if (c.word) { tenths(ceiling_ma(c.word) / 100u); put("A claimed"); }
         else put("none claimed");
-        if (c.vmax_mv) { put(", "); tenths((std::uint32_t(c.vmax_mv) + 50u) / 100u); put(" V max"); }
     }
     n = n < out.size() - 1 ? n : out.size() - 1;
     for (std::size_t i = 0; i < n; ++i) out[i] = tmp[i];
     out[n] = '\0';
     return n;
+}
+
+// The VOOC family's ident command as the Results "VOOC id" row reads it: "0xAC". 0 (none heard) or a buffer shorter than the
+// whole word writes "" (never a cut). Returns the length.
+inline std::size_t format_ident(std::uint8_t ident, std::span<char> out) {
+    if (out.empty()) return 0;
+    out[0] = '\0';
+    if (!ident || out.size() < 5) return 0;
+    constexpr char hex[] = "0123456789ABCDEF";
+    out[0] = '0'; out[1] = 'x'; out[2] = hex[ident >> 4]; out[3] = hex[ident & 0xF]; out[4] = '\0';
+    return 4;
 }
 
 }  // namespace k2::svooc_ceiling

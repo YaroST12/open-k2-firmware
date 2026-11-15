@@ -545,7 +545,7 @@ void build(Layout& l, std::span<const ct::Step> steps, const OemNotes& oem, cons
         if (facts_done) return;
         facts_done = true;
         if (oem.mi_auth && !any_probe) { header(Section::Xiaomi); mi_auth_row(); }
-        if (!(oem.qc_label || oem.vendor || oem.oppo_svid || oem.scp_cap || oem.svooc_cap || oem.rebalanced)) return;
+        if (!(oem.qc_label || oem.vendor || oem.oppo_svid || oem.scp_cap || oem.vooc_ident || oem.svooc_cap || oem.rebalanced)) return;
         header(Section::OemPd);
         if (oem.rebalanced) {   // the source re-split its budget mid-run and the PD rows were re-planned per row
             b.begin("SOURCE", Tone::Caution, A::Count);
@@ -575,6 +575,10 @@ void build(Layout& l, std::span<const ct::Step> steps, const OemNotes& oem, cons
         if (oem.scp_cap) {   // what the adapter reported to the SCP session: "20V 6A"
             b.begin("SCP cap", Tone::Dim, A::Count);
             b.phrase(oem.scp_cap, Tone::Dim, false);
+        }
+        if (oem.vooc_ident) {   // the VOOC family's ident command the detection heard ("0xAC"); the legacy rows say "detected"
+            b.begin("VOOC id", Tone::Dim, A::Count);
+            b.phrase(oem.vooc_ident, Tone::Dim, false);
         }
         if (oem.svooc_cap) {   // the ceiling stage's result: what the charger accepted as an ask, no current drawn
             b.begin("SV cap", Tone::Dim, A::Count);

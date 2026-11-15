@@ -752,28 +752,38 @@ static void test_scp_capability_note_row() {
     CHECK_EQ(find(dense, "SCP cap") != nullptr, true);
 }
 // The SuperVOOC ceiling stage's result is a passive fact row of the same section: the highest 0x86 ask the session went on
-// under ("6.3 A claimed", the charger's accepted ceiling, never a drawn current), the words of svooc_ceiling::format_cap.
+// under ("6.3A claimed", the charger's accepted ceiling, never a drawn current), the words of svooc_ceiling::format_cap.
 static void test_svooc_ceiling_note_row() {
     rl::Layout none;
     rl::build(none, baseus());
     CHECK_EQ(find(none, "SV cap") == nullptr, true);
     rl::OemNotes notes;
-    notes.svooc_cap = "6.3 A claimed";
+    notes.svooc_cap = "6.3A claimed";
     rl::Layout l;
     rl::build(l, baseus(), notes);
     const rl::Row* r = find(l, "SV cap");
     CHECK_EQ(r != nullptr, true);
-    CHECK_STR(chips(l, row_of(l, "SV cap")).c_str(), "6.3 A claimed");
+    CHECK_STR(chips(l, row_of(l, "SV cap")).c_str(), "6.3A claimed");
     {   // the longest words (the no-load stop) are laid out whole: the phrase wraps, nothing is cut
         rl::OemNotes stop;
-        stop.svooc_cap = "stopped at 12.5 s, 10.9 A claimed, 11.1 V max";
+        stop.svooc_cap = "stopped at 12.5s, <=11.1V, 10.9A claimed";
         rl::Layout s;
         rl::build(s, baseus(), stop);
-        CHECK_STR(chips(s, row_of(s, "SV cap")).c_str(), "stopped at 12.5 s, 10.9 A claimed, 11.1 V max");
-        stop.svooc_cap = "aborted: off-script, 10.9 A claimed, 11.1 V max";   // the longest abort phrase (47 characters)
+        CHECK_STR(chips(s, row_of(s, "SV cap")).c_str(), "stopped at 12.5s, <=11.1V, 10.9A claimed");
+        stop.svooc_cap = "aborted: off-script, <=11.1V, 10.9A claimed";   // the longest abort phrase (43 characters)
         rl::Layout a;
         rl::build(a, baseus(), stop);
-        CHECK_STR(chips(a, row_of(a, "SV cap")).c_str(), "aborted: off-script, 10.9 A claimed, 11.1 V max");
+        CHECK_STR(chips(a, row_of(a, "SV cap")).c_str(), "aborted: off-script, <=11.1V, 10.9A claimed");
+        CHECK_EQ(s.cuts + a.cuts, 0u);
+    }
+    {   // the ident of a Light / Medium run (no stage): its own row, beside the legacy rows' "detected"
+        rl::OemNotes id;
+        id.vooc_ident = "0xAC";
+        rl::Layout v;
+        rl::build(v, baseus(), id);
+        CHECK_STR(chips(v, row_of(v, "VOOC id")).c_str(), "0xAC");
+        CHECK_EQ(find(v, "SV cap") == nullptr, true);
+        CHECK_EQ(v.cuts, 0u);
     }
     CHECK_EQ(int(r->algorithm), int(A::Count));
     notes.scp_cap = "20V 6A";

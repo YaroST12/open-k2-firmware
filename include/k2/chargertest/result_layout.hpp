@@ -110,9 +110,12 @@ struct OemNotes {
     unsigned monitor_mv = 36000;   // the K2's monitor ceiling, for planning a pending sweep row's strip range
     bool oppo_svid = false;   // the source listed OPPO's SVID: a passive "OPPO SVID 0x22D9 (discovery only)" row, nothing sent
     const char* scp_cap = nullptr;   // what the adapter's SCP readout reported, the words after "SCP cap " of report_card::scp_note ("20V 6A")
-    // The SuperVOOC ceiling stage's result, the words of svooc_ceiling::format_cap ("6.3 A asked", "refused", "none"): the highest
+    // The SuperVOOC ceiling stage's result, the words of svooc_ceiling::format_cap ("<=11.1V, 10.9A claimed", "refused"): the highest
     // current limit the K2 asked for under which the charger kept the session going. Never a drawn current. nullptr = no stage ran.
     const char* svooc_cap = nullptr;
+    // The VOOC family's ident command the detection row heard (svooc_ceiling::format_ident: "0xAC"): a passive "VOOC id" row at
+    // every level. One ident proves the family, not the variant. nullptr = none heard.
+    const char* vooc_ident = nullptr;
     unsigned rebalanced = 0;   // how often the source re-announced its list mid-run (budget-reannounce-mid-run): a passive "SOURCE rebalanced Nx" row
 };
 // Vendor-VID label for the OEM section; nullptr when the VID has no PD-derived OEM protocol to name.
