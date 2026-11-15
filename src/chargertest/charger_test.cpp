@@ -1322,7 +1322,7 @@ Reason Runner::start(const pd::SourceCaps& caps, Options o, Input in, bool confi
     pd_retry_ = cut_index_ = SIZE_MAX; retries_ = epr_tries_ = 0; settle_ms_ = settle_until_ = hunt_reject_until_ = 0; auth_open_ = false;
     xiaomi_seen_ = xiaomi_reset_ = x_svid_ = x_authed_ = false; tail_at_ = 0; hr_count_ = link_resets(in.pd);
     last_ms_ = phase_ms_ = in.now; stable_ = stopping_ = pd_owned_ = fc_owned_ = recover_ = hot_ = sag_cut_ = sag_open_ = false; busy_retry_at_ = 0;
-    cut_wait_ = cut_dark_ = false; cut_start_ms_ = cut_back_ms_ = 0; cut_retry_idx_ = SIZE_MAX; cut_last_mv_ = -1; n_cut_onsets_ = 0;
+    cut_wait_ = cut_dark_ = false; cut_start_ms_ = cut_back_ms_ = 0; cut_retry_idx_ = SIZE_MAX; cut_tries_ = 0; cut_last_mv_ = -1; n_cut_onsets_ = 0;
     list_tracking_ = false; flight_restart_ = false;   // the settle window is seeded by the first poll, not opened by START
     reason_ = Reason::None; refusal_mv_ = 0;
     probe_ = (has_unit(o.units, Unit::Pd) || has_unit(o.units, Unit::PdLow)) ? Probe::Pending : Probe::Off;   // ask the charger who it is once, at the end of the first Pd unit
@@ -1578,7 +1578,7 @@ bool Runner::cut_hold(Input in, Verdict v, Reason r, uint8_t detail) {
     if (r != Reason::Lost && r != Reason::Timeout && r != Reason::Request && r != Reason::Voltage) return false;
     if (std::max(row_hi_, in.vbus_mv) > kCutNoAboveMv) return false;
     if (r != Reason::Lost && !cut_dark_ && !cut_start_ms_) return false;
-    cut_wait_ = true; cut_final_ = cut_retry_idx_ == index_;
+    cut_wait_ = true; cut_final_ = cut_retry_idx_ == index_ && cut_tries_ >= kCutRetries;
     cut_v_ = v; cut_why_ = r; cut_detail_ = detail; cut_mv_ = in.vbus_mv;
     steps_[index_].verdict = Verdict::Pending; steps_[index_].reason = Reason::None;
     recover_ = true; sag_cut_ = true; session_ = in.session;
@@ -1586,21 +1586,22 @@ bool Runner::cut_hold(Input in, Verdict v, Reason r, uint8_t detail) {
     return true;
 }
 // The held casualty's output is back and steady (Releasing), or the recovery window ran out. A fall of VBUS that lasted
-// kCutMinMs..kCutWindowMs is the port's cut: the row is asked again once (cut_retry_idx_), or, when that was its retry, it reads
-// "port cuts without load". Anything else keeps the verdict it would have had: VBUS not back in the window, or no fall at all.
+// kCutMinMs..kCutWindowMs is the port's cut: the row is asked again (cut_retry_idx_, up to kCutRetries times), or, when
+// its last retry was cut too, it reads "port cuts without load". Anything else keeps the verdict it would have had: VBUS not back in the window, or no fall at all.
 void Runner::cut_resolve(Input in) {
     cut_wait_ = false;
     if (index_ >= count_ || steps_[index_].verdict != Verdict::Pending) return;
     const uint32_t dip = cut_start_ms_ && cut_back_ms_ ? cut_back_ms_ - cut_start_ms_ : 0;
     const bool cut = dip >= kCutMinMs && dip <= kCutWindowMs;
     if (cut && !cut_final_) {
+        cut_tries_ = cut_retry_idx_ == index_ ? uint8_t(cut_tries_ + 1) : uint8_t(1);
         cut_retry_idx_ = index_;
         if (evidence_.cut_retries < 255) ++evidence_.cut_retries;
-        K2LOG("[CT] cut retry row=%u dip=%ums\n", unsigned(index_), unsigned(dip));
+        K2LOG("[CT] cut retry row=%u dip=%ums try=%u\n", unsigned(index_), unsigned(dip), unsigned(cut_tries_));
         return;   // the row stays Pending: next() asks it again from a steady 5 V
     }
     in.vbus_mv = cut_mv_;
-    if (cut) K2LOG("[CT] cut retry row=%u cut again: skip\n", unsigned(index_));
+    if (cut) K2LOG("[CT] cut retry row=%u cut again after %u: skip\n", unsigned(index_), unsigned(cut_tries_));
     finish_row(in, cut ? Verdict::Skip : cut_v_, cut ? Reason::PortCuts : cut_why_, cut ? uint8_t(0) : cut_detail_);
 }
 void Runner::finish_row(Input in, Verdict v, Reason r, uint8_t detail) {
@@ -2254,7 +2255,7 @@ void Runner::restore(const Options& o, const Evidence& e, uint32_t run_id, std::
     handover_ = {}; unit_ = Unit::Count; mode_ = Mode::Pd; epr_stage_ = 0; info_ = 0; info_rows_ = false; n_hunt_ = 0; hunt_seq_ = 0;
     attached_ = detached_ = ending_ = silent_ = legacy_active_ = dark_ = false; pd_skips_recorded_ = true;
     pd_owned_ = fc_owned_ = stopping_ = stable_ = recover_ = hot_ = false; probe_ = Probe::Off; pd_retry_ = cut_index_ = SIZE_MAX;
-    cut_wait_ = cut_dark_ = false; cut_start_ms_ = cut_back_ms_ = 0; cut_retry_idx_ = SIZE_MAX; cut_last_mv_ = -1; n_cut_onsets_ = 0;
+    cut_wait_ = cut_dark_ = false; cut_start_ms_ = cut_back_ms_ = 0; cut_retry_idx_ = SIZE_MAX; cut_tries_ = 0; cut_last_mv_ = -1; n_cut_onsets_ = 0;
     selfpwr_ = suspended_ = adopt_ = false;
     ceiling_pending_ = ceil_stopping_ = ceil_recover_ = ceil_cycled_ = false; ceiling_done_ = true;   // a resumed run never repeats the stage (it is not journaled)
     for (auto& s : std::span<Step>(steps_.data(), count_)) if (s.verdict == Verdict::Running) s.verdict = Verdict::Pending;

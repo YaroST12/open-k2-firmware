@@ -195,6 +195,14 @@ inline constexpr uint32_t kRecoverMs = 10000;
 // kCutNoAboveMv: only a row that never went above 5 V can be a casualty (the port does not cut a raised output).
 inline constexpr int kCutMv = 3000, kCutNoAboveMv = 5500;
 inline constexpr uint32_t kCutMinMs = 200, kCutWindowMs = 2000;
+// A row lost to a cut is asked again up to kCutRetries times, each from the first steady 5 V after a clean comeback (user decision
+// 2026-11-15, the port cuts every ~7 s and a row can meet several); only when the last retry is cut too does it read PortCuts (a skip).
+// A row that fails with no cut at all, or a protocol that stays wrong or silent after a clean comeback, still fails at once.
+inline constexpr uint8_t kCutRetries = 3;
+// A 5 V-held legacy step on a port with a learned cut period must end inside one clean window. The CUKTECH USB-A port cuts every
+// 7.04 s with a dark of ~1.0 s; a retry starts ~0.15 s after the comeback, so the next fall comes ~5.86 s after the retry's start
+// (measured, runs/cuktech-usba/medium3-stream, 2026-11-15): 5500 ms is what a step may take, with ~0.3 s to spare.
+inline constexpr uint32_t kCutStepBudgetMs = 5500;
 inline constexpr unsigned kCutOnsets = 8;   // the onsets kept to read the cut period from (the median gap between them)
 // pattern usb-a-cuts-on-low-dpdm: a USB-A port drops VBUS to ~2-2.5 V for ~4 s when D+/D- are held near 0 V for about a second or
 // more (SCP detect, VOOC listen, VIVO; brief lows such as FCP/AFC/QC handshakes do not trigger it). An A-to-C cable's Rp is fed from
@@ -908,13 +916,13 @@ private:
     // pattern usb-a-no-load-auto-off (kCutMv): the cut clocks of the legacy attach. cut_start_ms_ = the first sample under kCutMv of the
     // last completed fall, cut_back_ms_ = the first vSafe5V sample after it, both 0 = none since the row's request, row_hi_ = the highest VBUS since the row's request.
     // cut_onsets_ = the onsets of the cuts that came back inside kCutWindowMs (the period is read from them), cut_retry_idx_ = the row
-    // asked again after a cut (one retry per row).
+    // asked again after a cut (up to kCutRetries per row).
     // cut_dark_ / cut_dark_ms_ / cut_last_mv_ = a fall under kCutMv in progress, its first sample, the sample before it.
     uint32_t cut_start_ms_ = 0, cut_back_ms_ = 0, cut_dark_ms_ = 0; int row_hi_ = 0, cut_last_mv_ = -1; bool cut_dark_ = false;
     std::array<uint32_t, kCutOnsets> cut_onsets_{}; uint8_t n_cut_onsets_ = 0;
-    size_t cut_retry_idx_ = SIZE_MAX;
+    size_t cut_retry_idx_ = SIZE_MAX; uint8_t cut_tries_ = 0;   // the row asked again, and how many times (kCutRetries at most)
     // A casualty whose cut is still in progress waits in Releasing (cut_wait_) for VBUS to come back: the row is Pending, the verdict it
-    // would have had is kept here (cut_v_ / cut_why_ / cut_detail_ / cut_mv_ = the VBUS of that moment), cut_final_ = this was its retry.
+    // would have had is kept here (cut_v_ / cut_why_ / cut_detail_ / cut_mv_ = the VBUS of that moment), cut_final_ = the retries of this row are used up.
     bool cut_wait_ = false, cut_final_ = false; Verdict cut_v_ = Verdict::Fail; Reason cut_why_ = Reason::None; uint8_t cut_detail_ = 0; int cut_mv_ = 0;
     void track_cut(const Input&);
     bool cut_hold(Input, Verdict, Reason, uint8_t detail);   // finish(): a casualty of a port cut is asked again (true) instead of failed

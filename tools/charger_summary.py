@@ -165,8 +165,8 @@ def summarize(r):
     if not_adv:
         out.append(f"- Not advertised: {', '.join(dict.fromkeys(not_adv))}")
     cuts = ev.get("cut_retries", 0)
-    if cuts:   # the source dropped VBUS for a moment at 5 V with no load; each such step was asked again once (Reason::PortCuts)
-        out.append(f"- Port cut at 5 V: {cuts} step{'s' if cuts != 1 else ''} asked again")
+    if cuts:   # the source dropped VBUS for a moment at 5 V with no load; a step lost to a cut is asked again, up to 3 times (Reason::PortCuts)
+        out.append(f"- Port cut at 5 V: {cuts} retr{'ies' if cuts != 1 else 'y'} of steps lost to a cut")
     return "\n".join(out)
 
 

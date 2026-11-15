@@ -129,9 +129,9 @@ aborts with `Overvoltage` and releases the lines), and the card and Results show
 
 - **One session for the family** (pattern `vooc-family-same-wake`): VOOC, SVOOC and SVOOC65 open with the same wake and
   the same ident (0xA8 on the 120 W brick), so one ident cannot tell the variants apart. The first family row that runs
-  decides the others: "detected" passes them, "needs load" (never clocked, 3 wakes) or "no response" (frames, no ident)
+  decides the others: "detected" passes them, "needs load" (never clocked, 2 wakes) or "no response" (frames, no ident)
   skips them with that reason. They keep their names and run no session. Cost on a charger that does not speak VOOC:
-  one session of 3 wakes (about 10.5 s plus the 500 ms hold), instead of three.
+  one session of 2 wakes (about 5.0 s plus the 500 ms hold, was 3 wakes and 10.5 s until 2026-11-15), instead of three.
 - **VOOC family ident (every level, `Evidence::vooc_ident`).** The family detection listens only and ends at the first
   ident command it hears (0xA8 / 0xAC / 0xA6, `fc::Engine::vooc_ident()` -> `fctrig::Status::ident` -> `Input::fc_ident`).
   The Runner keeps it for a VOOC-family row that passes `detected`; Results shows it as a `VOOC id` row ("0xAC") beside
@@ -197,19 +197,27 @@ legacy row that was in flight at a cut reads "source lost" (SCP 5 V, VOOC, SVOOC
 - **A casualty** is a legacy, non-PD step that would fail (Lost, Timeout, Request or Voltage) while its VBUS never went above 5.5 V
   (a raised level is never a casualty: the port does not cut it). Lost qualifies on its own; the other three need a fall seen in
   that row. The verdict is held, the row goes Pending and Releasing waits for the output to come back (`cut_hold`).
-- **The retry**: once VBUS is steady at vSafe5V after a dip of 200 ms to 2 s, the held row is asked once more from the start of
-  its step (`cut_resolve`, log `[CT] cut retry row=<i> dip=<ms>ms`, `Evidence::cut_retries` + 1). A retry that passes is a plain pass.
-- **A second cut in the retry** is a skip, never a fail: `Reason::PortCuts`, "port cuts without load" (a plain Skip in the
-  grid, the card and the summaries; `[CT] cut retry row=<i> cut again: skip`).
+- **The retries**: once VBUS is steady at vSafe5V after a dip of 200 ms to 2 s, the held row is asked again from the start of
+  its step (`cut_resolve`, log `[CT] cut retry row=<i> dip=<ms>ms try=<n>`, `Evidence::cut_retries` + 1), up to `kCutRetries` = 3
+  times per row (decided 2026-11-15: the port cuts every ~7 s and a long row can meet several). A retry that passes is a plain pass.
+- **The last retry cut too** is a skip, never a fail: `Reason::PortCuts`, "port cuts without load" (a plain Skip in the
+  grid, the card and the summaries; `[CT] cut retry row=<i> cut again after <n>: skip`).
 - **A real failure keeps failing**: VBUS not back within the window (a long dip, a gone output), or the protocol silent or wrong
   after a clean comeback (the retry's own verdict stands), or a dip shorter than 200 ms (no cut).
 - **The period** (`Evidence::cut_period_ds`, the median gap between the last eight cut onsets, `[CT] cut period=<ms>ms n=<n>`) is
-  recorded once two cuts were seen. The run does not start a row at a scheduled moment after a cut: the retry covers the casualties
-  and a start schedule would only move the next cut into another row. (Decided 2026-11-15, not built.)
+  recorded once two cuts were seen. The run does not start a row at a scheduled moment after a cut: every 5 V-held step is kept
+  inside one clean window instead (`kCutStepBudgetMs` = 5500 ms: a retry starts ~0.15 s after the comeback and the next fall comes
+  ~5.86 s after it on the CUKTECH USB-A port, period 7.04 s, dark ~1.0 s). Step times on that port (2026-11-15 run, `[FC] start`
+  to the verdict): FCP 2.55 s, SCP 5 V 3.3 s, AFC 0.6 s (a raised level), VIVO 2.0 s, QC2 5 V 2.4 s, QC3 and QC3+ 5 V 3.6 s,
+  UFCS 5 V 1.2 s: all fit. The VOOC family (VOOC, SVOOC, SVOOC65) was the only one that did not (a silent session ran 10.5 s,
+  5.8 to 6.4 s per attempt before a cut hit it): its detection is now 2 wakes, 1.0 s listen, 3 s rest = 5.0 s
+  (`fc::kVoocDetectMaxMs`, tests `tests/test_fc_engine.cpp`). The SCP 10 V row is a raised level (never cut) and ends at its own
+  12 s timeout when the adapter never answers the target (the CUKTECH USB-A port). A start schedule would only move the next cut into
+  another row. (Decided 2026-11-15.)
 
 Export: the retry count rides in bits 3..7 of the schema-2 page header's PS_RDY timing byte (offset 40; the 42-byte header and its
 one row fill the 58-byte frame), saturating at 31; `k2_remote` and the web decoders show it as `evidence.cut_retries` and
-`charger_summary` adds "Port cut at 5 V: N steps asked again". The period, the report card and the on-flash journal do not carry it.
+`charger_summary` adds "Port cut at 5 V: N retries of steps lost to a cut". The period, the report card and the on-flash journal do not carry it.
 
 Limits: a protocol the port does not speak with a timeout longer than the ~6 s clean gap reads "port cuts" (the retry meets the next
 cut); a cut hidden inside a blocked handshake is not seen, so casualties are never inferred from the period alone; a real brownout

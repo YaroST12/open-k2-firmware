@@ -5494,18 +5494,57 @@ static void test_a_retried_first_ufcs_row_replans_like_an_unretried_one() {
     CHECK_EQ(rr.evidence().cut_retries, 1);
     expect_same_plan(all_rows(rc), all_rows(rr));
 }
-static void test_a_second_cut_in_the_retry_is_a_skip_not_a_fail() {
-    Fake f; f.caps = {}; f.cut_on_requests = {1, 2}; f.cut_delay_ms = 0; ct::Runner r(f);   // the retry (request 2) meets a cut too
+// A row lost to a cut is asked again up to kCutRetries times, each from a clean comeback; it passes on whichever retry the port lets through.
+static void test_several_cuts_in_a_row_then_a_clean_retry_passes() {
+    static_assert(ct::kCutRetries == 3);
+    for (const unsigned cuts : {2u, 3u}) {   // the first attempt and the first retry (2), or the first two retries too (3), meet a cut
+        Fake f; f.caps = {}; f.cut_delay_ms = 0;
+        for (unsigned n = 1; n <= cuts; ++n) f.cut_on_requests.push_back(int(n));
+        ct::Runner r(f);
+        CHECK_EQ(r.start(f.caps, kQc2, f.in, true), ct::Reason::None);
+        f.tick(r, 120000);
+        CHECK_EQ(r.state(), ct::State::Done);
+        CHECK_EQ(f.cuts_seen, int(cuts));
+        CHECK_EQ(count_verdict(r, ct::Group::Qc2, ct::Verdict::Pass), qc2_rows(r));   // the cut row passed on its last retry: nothing of the cuts stays
+        CHECK_EQ(count_verdict_any(r, ct::Verdict::Fail), 0u);
+        CHECK_EQ(count_verdict_any(r, ct::Verdict::Skip), 0u);
+        CHECK_EQ(unsigned(r.evidence().cut_retries), cuts);
+    }
+}
+// Only when the last of the retries is cut too does the row read "port cuts without load" (a skip, no failure, no chain skip).
+static void test_every_retry_cut_is_a_skip_not_a_fail() {
+    Fake f; f.caps = {}; f.cut_on_requests = {1, 2, 3, 4}; f.cut_delay_ms = 0; ct::Runner r(f);   // the attempt and all 3 retries meet a cut
     CHECK_EQ(r.start(f.caps, kQc2, f.in, true), ct::Reason::None);
-    f.tick(r, 120000);
+    f.tick(r, 160000);
     CHECK_EQ(r.state(), ct::State::Done);
-    CHECK_EQ(f.cuts_seen, 2);
+    CHECK_EQ(f.cuts_seen, 4);
     CHECK_EQ(r.steps()[0].verdict, ct::Verdict::Skip);
     CHECK_EQ(r.steps()[0].reason, ct::Reason::PortCuts);
     CHECK_EQ(count_verdict_any(r, ct::Verdict::Fail), 0u);
     CHECK_EQ(count_verdict(r, ct::Group::Qc2, ct::Verdict::Pass), qc2_rows(r) - 1);   // the levels after it still ran: no chain skip
-    CHECK_EQ(r.evidence().cut_retries, 1);   // one retry, never a third try
+    CHECK_EQ(unsigned(r.evidence().cut_retries), unsigned(ct::kCutRetries));   // three retries, never a fourth
     CHECK_EQ(std::string_view(ct::name(ct::Reason::PortCuts)) == "port cuts without load", true);
+}
+// The retry count belongs to the row: the next row that meets a cut gets its own three.
+static void test_the_retries_are_counted_per_row() {
+    const uint32_t two = ct::bit(A::Qc2) | ct::bit(A::Qc3);   // each unit's first row is a 5 V row
+    size_t qc3_first = 0;   // the request that starts the second unit in a run without cuts
+    {   Fake c; c.caps = {}; ct::Runner r(c);
+        CHECK_EQ(r.start(c.caps, {.selected = two}, c.in, true), ct::Reason::None);
+        c.tick(r, 200000);
+        CHECK_EQ(r.state(), ct::State::Done);
+        for (size_t n = 0; n < c.protocols.size(); ++n) if (c.protocols[n] == fc::Proto::Qc3) { qc3_first = n + 1; break; }
+        CHECK_EQ(qc3_first > 1, true);
+    }
+    // the first QC2 row is cut four times (3 retries, then skipped: 4 requests instead of 1), the second unit's first row once
+    Fake f; f.caps = {}; f.cut_on_requests = {1, 2, 3, 4, int(qc3_first + 3)}; f.cut_delay_ms = 0; ct::Runner r(f);
+    CHECK_EQ(r.start(f.caps, {.selected = two}, f.in, true), ct::Reason::None);
+    f.tick(r, 300000);
+    CHECK_EQ(r.state(), ct::State::Done);
+    CHECK_EQ(f.cuts_seen, 5);
+    CHECK_EQ(r.steps()[0].reason, ct::Reason::PortCuts);
+    CHECK_EQ(count_verdict_any(r, ct::Verdict::Fail), 0u);
+    CHECK_EQ(unsigned(r.evidence().cut_retries), unsigned(ct::kCutRetries) + 1u);   // the other row retried once, from a fresh count
 }
 static void test_a_loss_that_does_not_come_back_in_the_window_is_a_fail() {
     for (const uint32_t len : {3000u, 5000u}) {   // an output that is gone for longer than kCutWindowMs is no cut of this port
@@ -5535,6 +5574,15 @@ static void test_a_protocol_failure_after_a_clean_comeback_is_a_fail() {
     CHECK_EQ(r.steps()[0].reason == ct::Reason::PortCuts, false);
     CHECK_EQ(r.evidence().cut_retries, 1);
     CHECK_EQ(f.cuts_seen, 1);
+    {   // after two cuts and a clean comeback a silent charger fails the same way, with no third retry
+        Fake g; g.caps = {}; g.cut_on_requests = {1, 2}; g.cut_delay_ms = 0; g.no_handshake_after_cut = true; ct::Runner q(g);
+        CHECK_EQ(q.start(g.caps, kQc2, g.in, true), ct::Reason::None);
+        g.tick(q, 120000);
+        CHECK_EQ(q.state(), ct::State::Done);
+        CHECK_EQ(q.steps()[0].verdict, ct::Verdict::Fail);
+        CHECK_EQ(q.steps()[0].reason == ct::Reason::PortCuts, false);
+        CHECK_EQ(q.evidence().cut_retries, 2);   // both cuts were retried; the third attempt was silent, not cut: the verdict stands at once
+    }
 }
 // An engine that ends "no response" (VIVO, UFCS) or "unsupported" (AFC, FCP, SCP) at the cut would skip the whole family as "never
 // answered" (finish() of the row is held, the family loop must not run): the row is asked again and the family keeps its rows.
@@ -7869,7 +7917,7 @@ int main() {
     test_avs_current_and_bad_offers(); test_pd_plan_follows_a_list_that_grows_during_the_attach(); test_reannounced_identical_caps_are_not_a_change();
     test_measured_dwell_and_plan_capacity();
     test_usb_a_sag_tail_session_is_not_source_lost(); test_usb_a_sag_tail_waits_for_vbus_to_climb(); test_usb_a_sag_tail_with_dead_or_low_vbus_is_still_lost(); test_session_change_in_baseline_without_a_sag_is_still_lost(); test_usb_a_midrow_session_opens_the_adopt_window(); test_usb_a_sag_dip_under_1v_inside_the_window_waits();
-    test_cut_in_the_row_then_a_clean_retry_passes(); test_a_retried_first_scp_row_replans_like_an_unretried_one(); test_a_retried_first_scp_row_keeps_the_rows_a_wide_list_offers(); test_a_retried_first_ufcs_row_replans_like_an_unretried_one(); test_a_retried_first_vooc_family_row_ends_like_an_unretried_one(); test_a_second_cut_in_the_retry_is_a_skip_not_a_fail(); test_a_cut_that_reads_no_response_does_not_skip_the_family(); test_a_loss_that_does_not_come_back_in_the_window_is_a_fail();
+    test_cut_in_the_row_then_a_clean_retry_passes(); test_a_retried_first_scp_row_replans_like_an_unretried_one(); test_a_retried_first_scp_row_keeps_the_rows_a_wide_list_offers(); test_a_retried_first_ufcs_row_replans_like_an_unretried_one(); test_a_retried_first_vooc_family_row_ends_like_an_unretried_one(); test_several_cuts_in_a_row_then_a_clean_retry_passes(); test_every_retry_cut_is_a_skip_not_a_fail(); test_the_retries_are_counted_per_row(); test_a_cut_that_reads_no_response_does_not_skip_the_family(); test_a_loss_that_does_not_come_back_in_the_window_is_a_fail();
     test_a_dip_shorter_than_the_minimum_is_no_cut(); test_a_protocol_failure_after_a_clean_comeback_is_a_fail(); test_the_7s_cut_sequence_over_the_5v_steps_of_the_cuktech_run(); test_a_fall_in_a_raised_row_is_no_cut_casualty();
     test_custom_unit_list_runs_in_order(); test_pd_unit_attaches_with_a_contract(); test_a_failed_unit_does_not_stop_the_run();
     test_default_unit_order_is_vendor_modes_then_pd_then_legacy(); test_default_order_runs_vendor_modes_before_pd_before_legacy(); test_pd_between_vendor_and_legacy_units(); test_pd_replan_in_the_middle_keeps_the_rows_in_order(); test_consecutive_legacy_units_share_one_attach(); test_legacy_session_that_sees_pd_traffic_is_renewed(); test_silent_ufcs_source_reports_no_response_not_pd_active(); test_legacy_waits_between_units();

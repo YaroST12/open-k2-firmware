@@ -700,6 +700,8 @@
   "703": "[CT] svooc_cap start\n",
   "704": "[CT] cut period=%ums n=%u\n",
   "705": "[CT] cut retry row=%u dip=%ums\n",
-  "706": "[CT] cut retry row=%u cut again: skip\n"
+  "706": "[CT] cut retry row=%u cut again: skip\n",
+  "707": "[CT] cut retry row=%u dip=%ums try=%u\n",
+  "708": "[CT] cut retry row=%u cut again after %u: skip\n"
  }
 }
