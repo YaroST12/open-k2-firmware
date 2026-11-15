@@ -465,6 +465,65 @@ void test_an_epr_reannounce_without_the_held_level_falls_back_to_pdo1() {
     CHECK_EQ(r.word_at(m, 0) >> 28, 1u);                        // PDO 1, the hold is reported lost
 }
 
+
+// ---- The deliberate exceptions keep their own answers (docs/PD_SINK_REPLIES.md, "exception" rows) ----
+
+void test_lab_modes_keep_their_own_answers() {
+    {   // the remote's Get_Sink_Cap_Extended mode Silent (a lab test of the source's timeout): no Not_Supported slips in
+        Rig r;
+        r.contract();
+        r.sink.set_sink_cap_ext_mode(SinkCapExtMode::Silent);
+        const std::size_t m = r.mark();
+        r.ctl(kCtlGetSinkCapExt);
+        r.expect_silence(m);
+    }
+    {   // a twin's PDOs (set_sink_cap_override) answer EPR_Get_Sink_Cap as they answer Get_Sink_Cap
+        Rig r(true);
+        r.contract(true);
+        static const std::uint32_t twin[3] = {0x0001912Cu, 0x0002D12Cu, 0x0004B12Cu};
+        r.sink.set_sink_cap_override(twin, 3);
+        const std::size_t m = r.mark();
+        r.ext(kExtControl, {kEprGetSinkCap, 0});
+        CHECK_EQ(r.sent.size(), m + 1);
+        if (r.sent.size() == m + 1) {
+            CHECK_EQ(r.type_at(m), unsigned(kExtEprSinkCaps));
+            CHECK_EQ(std::uint16_t(r.sent[m].data[0] | r.sent[m].data[1] << 8), std::uint16_t(0x8000 | 12));
+            CHECK_EQ((r.sent[m].header >> 12) & 7, 4u);
+            std::uint32_t w2 = 0;
+            for (int i = 0; i < 4; i++) w2 |= std::uint32_t(r.sent[m].data[10 + i]) << (8 * i);
+            CHECK_EQ(w2, twin[2]);
+        }
+        r.sink.set_sink_cap_override(nullptr, 0);
+    }
+    {   // the armed Apple readout (lab) owns SVID 0x05AC: its Discover Modes is the readout's, never NAKed
+        Rig r;
+        r.contract();
+        CHECK_EQ(int(r.sink.arm_apple_read(r.now)), int(Err::Ok));
+        r.pump();
+        const std::size_t m = r.mark();
+        r.vdm({0x05ACA003u});
+        bool naked = false;
+        for (std::size_t i = m; i < r.sent.size(); i++) naked |= r.type_at(i) == kMsgVendorDefined && r.word_at(i, 0) == 0x05ACA083u;
+        CHECK_EQ(int(naked), 0);
+    }
+}
+
+void test_an_epr_reannounce_without_a_hold_keeps_the_contract_level() {
+    Rig r(true);
+    r.contract(true);
+    CHECK_EQ(int(r.sink.trigger({9, 21000, 3000}, r.now)), int(Err::Ok));   // a new level, Rejected: the 28 V contract stands,
+    r.pump();                                                                // nobody holds it (streamA3 / A4: "ready held=no EPR")
+    r.ctl(kCtlReject);
+    CHECK_EQ(int(r.sink.status().state), int(SinkState::Ready));
+    CHECK_EQ(int(r.sink.status().held), 0);
+    CHECK_EQ(int(r.sink.status().epr_mode), 1);
+    const std::size_t m = r.mark();
+    r.epr_caps(0, 1);
+    CHECK_EQ(r.sent.size(), m + 1);
+    if (r.sent.size() != m + 1) return;
+    CHECK_EQ(r.type_at(m), unsigned(kDataEprRequest));   // answered in the same pass (the level is plan_'s, as in SPR mode)
+}
+
 }  // namespace
 
 int main() {
@@ -484,5 +543,7 @@ int main() {
     test_no_answers_when_not_the_sole_sink();
     test_an_epr_reannounce_is_answered_with_the_held_level();
     test_an_epr_reannounce_without_the_held_level_falls_back_to_pdo1();
+    test_lab_modes_keep_their_own_answers();
+    test_an_epr_reannounce_without_a_hold_keeps_the_contract_level();
     return test_report("pd_sink_replies");
 }

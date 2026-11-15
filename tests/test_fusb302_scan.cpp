@@ -4297,6 +4297,7 @@ void test_inline_interrogation_never_answers_a_device_vconn_swap();
 void test_inline_interrogation_spoof_answers_the_devices_cable_query();
 void test_stress_soft_reset_goes_out_and_keeps_rd_when_the_source_answers();
 void test_stress_soft_reset_to_a_silent_source_asks_for_the_caps_with_rd_kept();
+void test_a_request_is_answered_in_the_service_pass_that_reads_it();
 // ---- Settings > Wake sleeping port (pattern slow-rp-wake, idle path): opt-in, default off ----
 // A sleeping source's port reads ~3.3 V open on one line (CC2 here), nothing on the other, VBUS dark. With the setting off the
 // idle K2 stays exactly what the invariants say (I1/H2: no Rd at idle, a waiting charger stays passive); only with it on does it
@@ -5424,6 +5425,7 @@ int main() {
     test_inline_interrogation_spoof_answers_the_devices_cable_query();
     test_stress_soft_reset_goes_out_and_keeps_rd_when_the_source_answers();   // each ends with a detach
     test_stress_soft_reset_to_a_silent_source_asks_for_the_caps_with_rd_kept();
+    test_a_request_is_answered_in_the_service_pass_that_reads_it();   // ends with a detach
     return test_report("test_fusb302_scan");
 }
 
@@ -5766,5 +5768,34 @@ void test_stress_soft_reset_to_a_silent_source_asks_for_the_caps_with_rd_kept() 
     settle_ms(1000);
     CHECK_EQ(sw0_rd() != 0, true);
     CHECK_EQ(usb_has("Rd off"), false);
+    stress_end();
+}
+
+
+// ---- One pass (docs/PD_SINK_REPLIES.md): a request that service() reads is answered by that same service() call. A reply's latency
+// is therefore the main loop's own (until service() reads the frame) plus one pass; nothing waits for a later tick. Discover Modes
+// for an SVID the K2 does not list (0x05AC: 23 of 25 went unanswered on hardware, 2026-11-15) leaves as a NAK in that pass, and a
+// PD 3 request the K2 does not support (Get_Status) as Not_Supported.
+bool fifo_has(const char* bytes) {
+    for (const std::string& s : g_log)
+        if (s.rfind("FIFO 12 12 12 13 ", 0) == 0 && s.find(bytes) != std::string::npos) return true;
+    return false;
+}
+void test_a_request_is_answered_in_the_service_pass_that_reads_it() {
+    stress_held_contract();
+    g_log.clear();
+    g_txfifo.clear();
+    push_frame(0xE0, hdr(0x0F, 1, true, 4), {0x05ACA003u});   // Discover Modes REQ, SVID 0x05AC
+    fusb302::service();                                       // one pass, no time passes
+    std::vector<unsigned> h = tx_headers();
+    CHECK_EQ(h.size(), 1u);
+    CHECK_EQ(h.empty() ? 0u : h[0] & 0x1F, 15u);              // Vendor_Defined, one object
+    CHECK_EQ(h.empty() ? 0u : (h[0] >> 12) & 7, 1u);
+    CHECK_EQ(fifo_has("83 A0 AC 05") || fifo_has("83 a0 ac 05"), true);   // the NAK: 0x05ACA083, little endian
+    g_log.clear();
+    push_frame(0xE0, hdr(18, 0, true, 5), {});                // Get_Status
+    fusb302::service();
+    CHECK_EQ(sent_ctl(16), true);                             // Not_Supported, same pass
+    CHECK_EQ(usb_has("TX refused"), false);
     stress_end();
 }
