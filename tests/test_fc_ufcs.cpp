@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "fc_fake.hpp"
+#include "k2/chargertest/charger_test.hpp"   // kCutStepBudgetMs
 
 using namespace k2::fc;
 namespace uf = k2::ufcs;
@@ -671,6 +672,33 @@ static void capabilities_never_come() {
     CHECK(c.resets >= 1 && c.soft_resets == 0);
 }
 
+// Every way the UFCS step can fail while the output is still at 5 V ends inside the clean window of a port that cuts VBUS every 7 s
+// (fake clock: silent source 0.5 s, no capabilities 0.19 s, deaf to the Request 0.19 s, no Power_Ready 0.62 s; the real UFCS step took 1.2 s on
+// the CUKTECH port).
+static void silent_5v_steps_fit_the_cut_window() {
+    constexpr std::uint32_t kBudgetMs = k2::charger_test::kCutStepBudgetMs;
+    struct Case { int mv; void (*setup)(FakeUfcs&); };
+    static const Case cases[] = {
+        {5000, [](FakeUfcs& c) { c.answers = false; }},
+        {9000, [](FakeUfcs& c) { c.answers = false; }},
+        {5000, [](FakeUfcs& c) { c.no_caps = true; }},
+        {9000, [](FakeUfcs& c) { c.no_caps = true; }},
+        {9000, [](FakeUfcs& c) { c.deaf_to_requests = true; }},
+        {9000, [](FakeUfcs& c) { c.no_power_ready = true; }},
+        {5000, [](FakeUfcs& c) { c.handshake_ok = false; }},
+    };
+    for (const auto& k : cases) {
+        FakeUfcs c;
+        k.setup(c);
+        Engine e(c);
+        const std::uint32_t t0 = c.now;
+        CHECK(e.start(Proto::Ufcs, k.mv, k.mv > 5000) == Fail::None);
+        for (int n = 0; n < 20000 && e.state() == State::Negotiating; ++n) c.run(e, 1);
+        CHECK(e.state() == State::Failed);
+        CHECK(c.now - t0 <= kBudgetMs);
+    }
+}
+
 // TOPADRE 65 W (2026-11-08): the main loop stalled ~65 ms in an LCD redraw right after the Request, the source sent its
 // Accept four times (one per tACKReceive timeout) and all four sat in the UART ring. They are one message (same
 // number): the Accept is honoured once and ACKed once; only a retry that arrives in a later read (our ACK may have
@@ -982,6 +1010,7 @@ int main() {
     lost_ack_is_retransmitted();
     request_never_acked();
     capabilities_never_come();
+    silent_5v_steps_fit_the_cut_window();
     identical_retries_in_one_read();
     extra_polls_are_harmless();
     soft_reset_from_source();

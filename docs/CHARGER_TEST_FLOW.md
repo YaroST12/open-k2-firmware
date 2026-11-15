@@ -205,15 +205,18 @@ legacy row that was in flight at a cut reads "source lost" (SCP 5 V, VOOC, SVOOC
 - **A real failure keeps failing**: VBUS not back within the window (a long dip, a gone output), or the protocol silent or wrong
   after a clean comeback (the retry's own verdict stands), or a dip shorter than 200 ms (no cut).
 - **The period** (`Evidence::cut_period_ds`, the median gap between the last eight cut onsets, `[CT] cut period=<ms>ms n=<n>`) is
-  recorded once two cuts were seen. The run does not start a row at a scheduled moment after a cut: every 5 V-held step is kept
-  inside one clean window instead (`kCutStepBudgetMs` = 5500 ms: a retry starts ~0.15 s after the comeback and the next fall comes
+  recorded once two cuts were seen. The run does not start a row at a scheduled moment after a cut: the 5 V-held steps of the
+  protocols the port answers, or answers not at all (the exception below), are kept inside one clean window instead (`kCutStepBudgetMs` = 5500 ms: a retry starts ~0.15 s after the comeback and the next fall comes
   ~5.86 s after it on the CUKTECH USB-A port, period 7.04 s, dark ~1.0 s). Step times on that port (2026-11-15 run, `[FC] start`
   to the verdict): FCP 2.55 s, SCP 5 V 3.3 s, AFC 0.6 s (a raised level), VIVO 2.0 s, QC2 5 V 2.4 s, QC3 and QC3+ 5 V 3.6 s,
-  UFCS 5 V 1.2 s: all fit. The VOOC family (VOOC, SVOOC, SVOOC65) was the only one that did not (a silent session ran 10.5 s,
+  UFCS 5 V 1.2 s: all fit; the silent worst cases (no handshake, handshake but no answer, no UFCS / VIVO reply, no Power_Ready) are
+  held to the same budget by `test_fc_engine`, `test_fc_vivo` and `test_fc_ufcs`. The VOOC family (VOOC, SVOOC, SVOOC65) was the only one that did not (a silent session ran 10.5 s,
   5.8 to 6.4 s per attempt before a cut hit it): its detection is now 2 wakes, 1.0 s listen, 3 s rest = 5.0 s
-  (`fc::kVoocDetectMaxMs`, tests `tests/test_fc_engine.cpp`, `tests/test_charger_test.cpp`). The SCP 10 V row is a 5 V-held step on
-  a port that never answers that target: a cut hit it once (46.4 s) and the retry then waited out the generic 12 s row timeout without
-  a cut. That timeout is not measured against an SCP rise time, so it is left as it is (open decision). Open decision: a start
+  (`fc::kVoocDetectMaxMs`, tests `tests/test_fc_engine.cpp`, `tests/test_charger_test.cpp`). The exception is a class: any raised-target row the
+  adapter never answers sits at 5 V until the row timeout (12 s, QC2 15 s), longer than one clean window. The SCP 10 V row is the one seen
+  (a cut hit it at 46.4 s and the retry waited out the 12 s without a cut), and a VIVO source that sends its entry notice but acknowledges
+  nothing ends NoBand after 5.7 s (`test_fc_vivo`). The SCP timeout is not measured against an SCP rise time, so it is left as it is
+  (open decision). The SCP 4.5 V 5 A and 5 V 4.5 A rows were never measured at 5 V on hardware. Open decision: a start
   schedule (begin a 5 V-held step right after a cut once the period is learned). Waiting for the comeback costs the same time as being
   cut and retried (the span lost is identical), so a schedule would save no time, only spend fewer retries; the retry already is a
   start right after a clean comeback.
@@ -224,7 +227,9 @@ one row fill the 58-byte frame), saturating at 31; `k2_remote` and the web decod
 
 Limits: a protocol the port does not speak with a timeout longer than the ~6 s clean gap reads "port cuts" (the retry meets the next
 cut); a cut hidden inside a blocked handshake is not seen, so casualties are never inferred from the period alone; a real brownout
-at 5 V that comes back within 2 s is asked again once. Host tests: `test_charger_test` (`test_cut_in_the_row_then_a_clean_retry_passes`, `test_a_second_cut_in_the_retry_is_a_skip_not_a_fail`, `test_a_loss_that_does_not_come_back_in_the_window_is_a_fail`, `test_the_7s_cut_sequence_over_the_5v_steps_of_the_cuktech_run` and the protocol-failure case).
+at 5 V that comes back within 2 s is asked again once. A cut inside the run's very first Baseline (about 0.3 s after START, before any
+row ran; the test fake's dark level is 2 V) is not retried: the Runner leaves the Baseline as Releasing and stops, every row "lost" (open
+side issue, found by sweeping the first cut over the period; not part of this change). Host tests: `test_charger_test` (`test_cut_in_the_row_then_a_clean_retry_passes`, `test_a_second_cut_in_the_retry_is_a_skip_not_a_fail`, `test_a_loss_that_does_not_come_back_in_the_window_is_a_fail`, `test_the_7s_cut_sequence_over_the_5v_steps_of_the_cuktech_run` and the protocol-failure case).
 
 ## SCP and UFCS rows follow what the charger reported (2026-11-08)
 

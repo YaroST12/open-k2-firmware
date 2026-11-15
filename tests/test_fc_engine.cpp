@@ -1211,16 +1211,22 @@ static void legacy_5v_steps_fit_the_cut_window() {
     }
 }
 
-// Worst case of the other legacy 5 V-held steps: the adapter does not speak the protocol. The row ends (unsupported / no response) inside
-// the clean window of a port that cuts at 5 V. Fake-clock times: FCP 2.4 s, SCP 3.8 s, AFC 0.1 s, QC3+ 3.7 s. The real steps measured on
-// the CUKTECH port (medium3 run): FCP 2.6 s, SCP detect 3.3 s after the retry, AFC 0.6 s, VIVO 2.0 s without response (its own entry
-// wait), UFCS 1.2 s, QC3+ 3.6 s; the VOOC family is the one that did not fit (8.96 s per attempt before this change).
+// Worst case of the FCP / SCP / AFC / QC3+ steps: the adapter does not speak the protocol (no HVDCP handshake; the handshake opens but no
+// register frame is answered; a bank that only rises on the lines; AFC silent with and without a rise). The row ends Failed inside the
+// clean window of a port that cuts at 5 V. Fake-clock times: FCP 2.4 s / 1.5 s, SCP 3.8 s / 1.9 s / 1.9 s, AFC 0.6 s / 0.1 s, QC3+ 3.7 s.
+// The real steps measured on the CUKTECH port (medium3 run): FCP 2.6 s, SCP detect 3.3 s after the retry, AFC 0.6 s, VIVO 2.0 s without
+// response (its own entry wait, see test_fc_vivo), UFCS 1.2 s (see test_fc_ufcs), QC3+ 3.6 s; the VOOC family is the one that did not
+// fit (8.96 s per attempt before this change).
 static void silent_5v_steps_fit_the_cut_window() {
     constexpr std::uint32_t kBudgetMs = k2::charger_test::kCutStepBudgetMs;
     struct Case { Proto p; int mv; void (*setup)(FakeCharger&); };
     static const Case cases[] = {
-        {Proto::Fcp, 5000, [](FakeCharger& c) { c.hvdcp = false; }},
+        {Proto::Fcp, 5000, [](FakeCharger& c) { c.hvdcp = false; }},                     // no HVDCP handshake at all
         {Proto::Scp, 5000, [](FakeCharger& c) { c.hvdcp = false; }},
+        {Proto::Fcp, 5000, [](FakeCharger&) {}},                                           // the handshake opens, no register frame is answered
+        {Proto::Scp, 5000, [](FakeCharger&) {}},
+        {Proto::Scp, 5000, [](FakeCharger& c) { c.dpdm_rise_mv = 6700; }},                 // a QC bank that rises on the lines, then silence
+        {Proto::Afc, 9000, [](FakeCharger& c) { c.afc_ok = false; }},                      // silent, no rise
         {Proto::Afc, 9000, [](FakeCharger& c) { c.afc_ok = false; c.dpdm_rise_mv = 6700; }},
         {Proto::Qc3Plus, 9000, [](FakeCharger& c) { c.plus_step_mv = 0; }},
     };

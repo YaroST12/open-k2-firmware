@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "fc_fake.hpp"
+#include "k2/chargertest/charger_test.hpp"   // kCutStepBudgetMs
 
 using namespace k2::fc;
 namespace vv = k2::vivo;
@@ -169,6 +170,46 @@ static void no_answer() {
     CHECK(c.max_requested() < 7000);   // nothing above 5 V without a charger that talks back
 }
 
+// Every way the VIVO step can end without a charger that talks, with the output at 5 V, fits one clean window of a port that cuts VBUS
+// every 7 s (the real step took 2.0 s on the CUKTECH port: its own entry wait).
+static void silent_5v_steps_fit_the_cut_window() {
+    constexpr std::uint32_t kBudgetMs = k2::charger_test::kCutStepBudgetMs;
+    struct Case { int mv; void (*setup)(FakeVivo&); };
+    static const Case cases[] = {
+        {9000, [](FakeVivo& c) { c.answers = false; c.notice_on_open = false; }},
+        {5000, [](FakeVivo& c) { c.answers = false; c.notice_on_open = false; }},
+        {5000, [](FakeVivo& c) { c.answers = false; }},                  // the notice comes, no command is acknowledged
+        {9000, [](FakeVivo& c) { c.loopback = true; c.notice_on_open = false; }},
+        {9000, [](FakeVivo& c) { c.open_ok = false; }},
+    };
+    for (const auto& k : cases) {
+        FakeVivo c;
+        k.setup(c);
+        Engine e(c);
+        const std::uint32_t t0 = c.now;
+        CHECK(e.start(Proto::Vivo, k.mv, k.mv > 5000) == Fail::None);
+        for (int n = 0; n < 20000 && e.state() == State::Negotiating; ++n) c.run(e, 1);
+        // 5 V is in band as soon as the sequence is through (0.7 s) when a notice was heard: the row ends without a failure then.
+        CHECK(e.state() == State::Failed || (k.mv == 5000 && e.state() == State::Active));
+        CHECK(c.now - t0 <= kBudgetMs);
+    }
+}
+
+// The one VIVO branch that does not fit: a source that sends its entry notice, then acknowledges nothing, with a raised target. The sequence
+// runs on its timer, the ramp climbs 100 mV per 100 ms (4 s to 9 V) and the band wait ends it as NoBand, 5.7 s after the open. No real
+// adapter is known to do this (the CUKTECH port sends no notice at all); it belongs to the raised-target class that sits at 5 V until its
+// row timeout, and stays an open decision rather than a shortened constant.
+static void notice_without_acks_on_a_raised_target_is_the_long_branch() {
+    FakeVivo c;
+    c.answers = false;
+    Engine e(c);
+    const std::uint32_t t0 = c.now;
+    CHECK(e.start(Proto::Vivo, 9000, true) == Fail::None);
+    for (int n = 0; n < 20000 && e.state() == State::Negotiating; ++n) c.run(e, 1);
+    CHECK(e.state() == State::Failed && e.fail() == Fail::NoBand);
+    CHECK(c.now - t0 > k2::charger_test::kCutStepBudgetMs && c.now - t0 < 6000);
+}
+
 // The K2 hearing itself through a shorted D+/D- is no charger: every target, 5 V included, ends in "no response".
 static void own_echo_is_not_a_charger() {
     for (int mv : {5000, 9000}) {
@@ -247,6 +288,8 @@ int main() {
     five_volts_never_raises();
     no_handshake();
     no_answer();
+    silent_5v_steps_fit_the_cut_window();
+    notice_without_acks_on_a_raised_target_is_the_long_branch();
     own_echo_is_not_a_charger();
     notice_restarts_sequence();
     overvoltage();

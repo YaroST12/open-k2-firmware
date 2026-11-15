@@ -5611,29 +5611,41 @@ static void test_a_cut_that_reads_no_response_does_not_skip_the_family() {
     }
 }
 // The CUKTECH port cuts every 7.04 s and is dark about 1 s. A VOOC-family adapter that never clocks keeps its session open for the engine's
-// whole detection (kVoocDetectMaxMs): it has to fit one clean window, from whatever phase the unit starts in, so the family ends "needs
-// load" and never "port cuts without load". With the old 10.5 s detection no retry could fit and the same port read PortCuts.
+// whole detection (kVoocDetectMaxMs): it has to fit one clean window, from whatever phase the unit starts in, so the family ends exactly as
+// on a port that never cuts (the control run: Fail / Request / needs load on the first row, the rest skipped the same way) and never
+// "port cuts without load". With the old 10.5 s detection no retry could fit and the same port read PortCuts.
+// The cuts begin once the first engine session has opened: a cut inside the very first Baseline (about 0.3 s after START) is a different
+// case (the Runner leaves the Baseline as Releasing and stops, all rows Lost; see the report), not what this test measures.
 static void test_a_silent_vooc_family_on_a_7s_cut_port_ends_needs_load() {
+    constexpr uint32_t kFamily = ct::bit(A::Vooc) | ct::bit(A::SuperVooc) | ct::bit(A::SuperVooc65);
+    Fake clean; clean.caps = {}; clean.silent_session_ms = uint32_t(fc::kVoocDetectMaxMs) + 50u; ct::Runner rc(clean);
+    CHECK_EQ(rc.start(clean.caps, {.selected = kFamily}, clean.in, true), ct::Reason::None);
+    for (unsigned t = 0; rc.state() != ct::State::Done && t < 240000; t += 100) clean.tick(rc, 100);
+    CHECK_EQ(rc.state(), ct::State::Done);
+    CHECK_EQ(int(rc.steps()[0].verdict), int(ct::Verdict::Fail));   // the family's own result on a port that does not cut
+    CHECK_EQ(int(rc.steps()[0].reason), int(ct::Reason::Request));
+    CHECK_EQ(int(rc.steps()[0].detail), int(fc::Fail::NeedsLoad));
+    unsigned max_retries = 0;
     for (const uint32_t session : {uint32_t(fc::kVoocDetectMaxMs) + 50u, 10550u}) {
         for (uint32_t off = 0; off < 7040; off += 250) {   // where in the port's period the first session opens
             Fake f; f.caps = {}; f.silent_session_ms = session; f.cut_len_ms = 1000; ct::Runner r(f);
-            CHECK_EQ(r.start(f.caps, {.selected = ct::bit(A::Vooc) | ct::bit(A::SuperVooc) | ct::bit(A::SuperVooc65)}, f.in, true), ct::Reason::None);
+            CHECK_EQ(r.start(f.caps, {.selected = kFamily}, f.in, true), ct::Reason::None);
             CHECK_EQ(run_until(f, r, [&] { return f.fc_requests >= 1; }, 60000), true);
-            f.cut_period_ms = 7040; f.cut_next_at = f.in.now + off;   // the cuts start once the unit is running: the baseline is not what is measured
+            f.cut_period_ms = 7040; f.cut_next_at = f.in.now + off;
             for (unsigned t = 0; r.state() != ct::State::Done && t < 240000; t += 100) f.tick(r, 100);
             CHECK_EQ(r.state(), ct::State::Done);
-            bool port_cuts = false;
-            for (const auto& s : r.steps()) port_cuts |= s.reason == ct::Reason::PortCuts;
             if (session < 6000) {
-                CHECK_EQ(port_cuts, false);
-                CHECK_EQ(int(r.steps()[0].reason), int(ct::Reason::Request));
-                CHECK_EQ(int(r.steps()[0].detail), int(fc::Fail::NeedsLoad));   // the family's own result, as on a port that does not cut
-                CHECK_EQ(unsigned(r.evidence().cut_retries) <= unsigned(ct::kCutRetries), true);
+                expect_same_plan(all_rows(rc), all_rows(r));   // no row differs from the port that never cuts: no Fail, no PortCuts
+                CHECK_EQ(int(r.steps()[0].detail), int(fc::Fail::NeedsLoad));
+                max_retries = std::max<unsigned>(max_retries, r.evidence().cut_retries);
             } else {
+                bool port_cuts = false;
+                for (const auto& s : r.steps()) port_cuts |= s.reason == ct::Reason::PortCuts;
                 CHECK_EQ(port_cuts, true);   // the old budget cannot fit the window: this is why the detection was shortened
             }
         }
     }
+    CHECK_EQ(max_retries <= 1u, true);   // one cut can hit the session, and the retry then starts in the clean part of the period
 }
 static void test_a_fall_in_a_raised_row_is_no_cut_casualty() {
     Fake f; f.caps = {}; f.cut_on_requests = {2}; f.cut_raised = true; ct::Runner r(f);   // the 9 V row of QC2 loses its output: that is no 5 V port cut
