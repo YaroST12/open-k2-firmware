@@ -2193,7 +2193,7 @@ static void test_vooc_family_shares_one_session() {
 // adapter 1.5 / 4 / 6.3 / 10.9 A and the highest ask it went on under is the result (Evidence::svooc_*).
 namespace sc = k2::svooc_ceiling;
 static ct::Reason ceiling_run(Fake& f, ct::Runner& r, sc::Mode mode, bool detected = true) {
-    const ct::Reason started = r.start(f.caps, {.selected = ct::bit(A::SuperVooc), .svooc_cap = mode}, f.in, true);
+    const ct::Reason started = r.start(f.caps, {.selected = ct::bit(A::SuperVooc), .svooc_cap = mode, .level = ct::Level::Deep}, f.in, true);
     if (started != ct::Reason::None) return started;
     run_until(f, r, [&] { return f.fc_requests >= 1; });
     f.in.fc_state = fc::State::Failed; f.in.fc_fail = detected ? fc::Fail::Detected : fc::Fail::NeedsLoad; f.in.fc_tries = 1; f.in.vbus_mv = 5000;
@@ -2207,6 +2207,31 @@ static void test_ceiling_off_runs_no_stage() {
     CHECK_EQ(f.ceil_starts, 0); CHECK_EQ(f.ceil_stops, 0);
     CHECK_EQ(int(r.evidence().svooc_end), int(sc::End::None)); CHECK_EQ(int(r.evidence().svooc_word), 0);
     CHECK_EQ(r.steps()[0].verdict, ct::Verdict::Pass);
+}
+// Light and Medium stop at the detection and its ident: a run that carries svooc_cap On below Deep (a remote toggle after the
+// level, an old journal) still runs no stage; the ident of the passing row is the run's evidence at every level.
+static void test_ceiling_is_deep_only_and_the_ident_is_kept() {
+    for (const auto lv : {ct::Level::Light, ct::Level::Medium, ct::Level::Deep}) {
+        Fake f; f.caps = {}; f.ceil_judged_ms = 3000;
+        ct::Runner r(f);
+        CHECK_EQ(r.start(f.caps, {.selected = ct::bit(A::SuperVooc), .svooc_cap = sc::Mode::On, .level = lv}, f.in, true), ct::Reason::None);
+        run_until(f, r, [&] { return f.fc_requests >= 1; });
+        f.in.fc_state = fc::State::Failed; f.in.fc_fail = fc::Fail::Detected; f.in.fc_tries = 1; f.in.fc_ident = 0xAC;
+        f.in.vbus_mv = 5000;
+        CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 120000), true);
+        const bool deep = lv == ct::Level::Deep;
+        CHECK_EQ(f.ceil_starts, deep ? 1 : 0);
+        CHECK_EQ(int(r.evidence().svooc_end), int(deep ? sc::End::Judged : sc::End::None));
+        CHECK_EQ(int(r.evidence().vooc_ident), 0xAC);
+        CHECK_EQ(r.steps()[0].verdict, ct::Verdict::Pass);
+    }
+    // No ident heard (a failed row, or an engine that did not say): nothing recorded.
+    Fake f; f.caps = {};
+    ct::Runner r(f);
+    ceiling_run(f, r, sc::Mode::Off, false);
+    f.in.fc_ident = 0xA8;   // a stale ident beside a NeedsLoad fail is not evidence
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 120000), true);
+    CHECK_EQ(int(r.evidence().vooc_ident), 0);
 }
 static void test_ceiling_judged_ladder_is_the_result() {
     for (const bool usb_a : {false, true}) {
@@ -2291,7 +2316,7 @@ static void test_ceiling_needs_a_detected_svooc_family() {
     {   // the plain VOOC unit alone is not an SVOOC test
         Fake f; f.caps = {};
         ct::Runner r(f);
-        r.start(f.caps, {.selected = ct::bit(A::Vooc), .svooc_cap = sc::Mode::On}, f.in, true);
+        r.start(f.caps, {.selected = ct::bit(A::Vooc), .svooc_cap = sc::Mode::On, .level = ct::Level::Deep}, f.in, true);
         run_until(f, r, [&] { return f.fc_requests >= 1; });
         f.in.fc_state = fc::State::Failed; f.in.fc_fail = fc::Fail::Detected; f.in.fc_tries = 1; f.in.vbus_mv = 5000;
         CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 120000), true);
@@ -2329,7 +2354,7 @@ static void test_ceiling_usb_a_waives_the_far_rd_latch() {
     for (const auto cause : {pd::InlineCause::FarRd, pd::InlineCause::Vbus}) {
         Fake f; f.caps = {}; f.ceil_judged_ms = 3000; f.in.inline_load = true; f.in.inline_cause = cause;
         ct::Runner r(f);
-        CHECK_EQ(int(ct::Runner::preview(f.caps, {.selected = ct::bit(A::SuperVooc), .svooc_cap = sc::Mode::UsbA}, f.in).refusal),
+        CHECK_EQ(int(ct::Runner::preview(f.caps, {.selected = ct::bit(A::SuperVooc), .svooc_cap = sc::Mode::UsbA, .level = ct::Level::Deep}, f.in).refusal),
                  int(ct::Reason::None));
         if (ceiling_run(f, r, sc::Mode::UsbA) != ct::Reason::None) { CHECK_EQ(0, 1); continue; }
         CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 120000), true);
@@ -2342,17 +2367,17 @@ static void test_ceiling_usb_a_waiver_stays_narrow() {
     {   // the plain "on" mode waives nothing
         Fake f; f.caps = {}; f.in.inline_load = true; f.in.inline_cause = pd::InlineCause::FarRd;
         ct::Runner r(f);
-        CHECK_EQ(int(r.start(f.caps, {.selected = ct::bit(A::SuperVooc), .svooc_cap = sc::Mode::On}, f.in, true)), int(ct::Reason::Inline));
+        CHECK_EQ(int(r.start(f.caps, {.selected = ct::bit(A::SuperVooc), .svooc_cap = sc::Mode::On, .level = ct::Level::Deep}, f.in, true)), int(ct::Reason::Inline));
     }
     for (const auto cause : {pd::InlineCause::Load, pd::InlineCause::Request, pd::InlineCause::Rise, pd::InlineCause::None}) {
         Fake f; f.caps = {}; f.in.inline_load = true; f.in.inline_cause = cause;   // evidence of a device: never waived
         ct::Runner r(f);
-        CHECK_EQ(int(r.start(f.caps, {.selected = ct::bit(A::SuperVooc), .svooc_cap = sc::Mode::UsbA}, f.in, true)), int(ct::Reason::Inline));
+        CHECK_EQ(int(r.start(f.caps, {.selected = ct::bit(A::SuperVooc), .svooc_cap = sc::Mode::UsbA, .level = ct::Level::Deep}, f.in, true)), int(ct::Reason::Inline));
     }
     {   // the waiver belongs to the stage: a run with no SVOOC unit gets none
         Fake f; f.caps = {}; f.in.inline_load = true; f.in.inline_cause = pd::InlineCause::FarRd;
         ct::Runner r(f);
-        CHECK_EQ(int(r.start(f.caps, {.selected = ct::bit(A::Qc2), .svooc_cap = sc::Mode::UsbA}, f.in, true)), int(ct::Reason::Inline));
+        CHECK_EQ(int(r.start(f.caps, {.selected = ct::bit(A::Qc2), .svooc_cap = sc::Mode::UsbA, .level = ct::Level::Deep}, f.in, true)), int(ct::Reason::Inline));
     }
     {   // a waived latch keeps the load abort: current through the K2 still ends the run
         Fake f; f.caps = {}; f.ceil_judged_ms = 3000; f.in.inline_load = true; f.in.inline_cause = pd::InlineCause::FarRd;
@@ -2408,7 +2433,7 @@ static void test_ceiling_vbus_lost_after_the_stage_is_recovered_by_an_rd_cycle()
         f.ceil_drop_ms = 80;
         ct::Runner r(f);
         const uint32_t sel = ct::bit(A::SuperVooc) | (more ? ct::bit(A::Ufcs) : 0u);
-        CHECK_EQ(int(r.start(f.caps, {.selected = sel, .svooc_cap = sc::Mode::On}, f.in, true)), int(ct::Reason::None));
+        CHECK_EQ(int(r.start(f.caps, {.selected = sel, .svooc_cap = sc::Mode::On, .level = ct::Level::Deep}, f.in, true)), int(ct::Reason::None));
         run_until(f, r, [&] { return f.fc_requests >= 1; });
         f.in.fc_state = fc::State::Failed; f.in.fc_fail = fc::Fail::Detected; f.in.fc_tries = 1; f.in.vbus_mv = 5000;
         CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Ceiling; }, 20000), true);
@@ -2463,7 +2488,7 @@ static void test_ceiling_vbus_that_never_returns_ends_the_run() {
     Fake f; f.caps = {}; f.ceil_partial_ms = 2000; f.ceil_partial_word = 0x028; f.ceil_quiet_at_ms = 3300; f.ceil_vmax_mv = 7983;
     f.ceil_drop_ms = 80; f.ceil_drop_forever = true;
     ct::Runner r(f);
-    CHECK_EQ(int(r.start(f.caps, {.selected = ct::bit(A::SuperVooc) | ct::bit(A::Ufcs), .svooc_cap = sc::Mode::On}, f.in, true)),
+    CHECK_EQ(int(r.start(f.caps, {.selected = ct::bit(A::SuperVooc) | ct::bit(A::Ufcs), .svooc_cap = sc::Mode::On, .level = ct::Level::Deep}, f.in, true)),
              int(ct::Reason::None));
     run_until(f, r, [&] { return f.fc_requests >= 1; });
     f.in.fc_state = fc::State::Failed; f.in.fc_fail = fc::Fail::Detected; f.in.fc_tries = 1; f.in.vbus_mv = 5000;
@@ -7436,8 +7461,10 @@ static void test_level_maps_to_the_run_switches() {
     ct::Options any; any.pps_sweep = any.avs_sweep = true; any.svooc_cap = svooc_ceiling::Mode::On;
     const auto l = ct::with_level(any, ct::Level::Light), m = ct::with_level(any, ct::Level::Medium), d = ct::with_level({}, ct::Level::Deep);
     CHECK_EQ(l.pps_sweep || l.avs_sweep, false); CHECK_EQ(int(l.svooc_cap), int(svooc_ceiling::Mode::Off));
-    CHECK_EQ(m.pps_sweep || m.avs_sweep, false); CHECK_EQ(int(m.svooc_cap), int(svooc_ceiling::Mode::On));
-    CHECK_EQ(d.pps_sweep && d.avs_sweep, true);
+    CHECK_EQ(m.pps_sweep || m.avs_sweep, false); CHECK_EQ(int(m.svooc_cap), int(svooc_ceiling::Mode::Off));   // detection + ident only
+    CHECK_EQ(d.pps_sweep && d.avs_sweep, true); CHECK_EQ(int(d.svooc_cap), int(svooc_ceiling::Mode::On));    // the ceiling stage
+    ct::Options a; a.svooc_cap = svooc_ceiling::Mode::UsbA;   // the operator's usb-a waiver survives Deep
+    CHECK_EQ(int(ct::with_level(a, ct::Level::Deep).svooc_cap), int(svooc_ceiling::Mode::UsbA));
     CHECK_EQ(int(l.level), int(ct::Level::Light)); CHECK_EQ(int(d.level), int(ct::Level::Deep));
     CHECK_EQ(int(ct::next_level(ct::Level::Light)), int(ct::Level::Medium));
     CHECK_EQ(int(ct::next_level(ct::Level::Medium)), int(ct::Level::Deep));
@@ -7622,7 +7649,7 @@ int main() {
     test_hunt_evidence_marks_a_silent_source_as_a_timeout(); test_hunt_evidence_without_a_trace_is_unexplained();
     test_hunt_evidence_only_for_refused_rows(); test_classify_hunt_precedence();
     test_plan_and_run(); test_an_auto_hold_counts_as_released(); test_quiet_is_exactly_the_row_in_flight(); test_paint_blocked_needs_flight_and_an_engine_window(); test_refusals(); test_hold_keeps_the_baseline_until_released(); test_safe5_baseline();test_cancel_and_failed_release(); test_release_waits_for_the_sink_verification_and_its_hard_reset();
-    test_faults(); test_loop_lock_refuses_and_aborts(); test_timeouts_and_skips(); test_one_second_holds(); test_qc2_settles_within_two_percent(); test_qc2_5v_accepts_vsafe5_reading(); test_legacy_5v_accepts_vsafe5_reading(); test_qc3_rows_use_an_asymmetric_band(); test_legacy_rows_use_a_five_percent_band(); test_legacy_5v_row_uses_the_vsafe5_window(); test_scp_4v5_row_judges_the_adapter_readback(); test_qc3plus_without_response_is_a_distinct_skip(); test_unsupported_protocol_skips_its_other_rows(); test_silent_source_fails_every_handshake_row(); test_answered_handshake_passes_the_5v_row(); test_svooc_row_follows_the_adapter_ramp(); test_svooc_detected_is_a_pass(); test_vooc_family_shares_one_session(); test_ceiling_off_runs_no_stage(); test_ceiling_judged_ladder_is_the_result(); test_ceiling_refusal_is_recorded_and_the_run_goes_on(); test_ceiling_no_adapter_and_early_abort(); test_ceiling_cap_stops_a_session_that_is_never_judged(); test_ceiling_cancel_stops_the_trigger(); test_ceiling_needs_a_detected_svooc_family(); test_ceiling_waits_for_the_lines_after_the_family_release(); test_ceiling_lines_never_free_is_a_recorded_refusal(); test_ceiling_usb_a_waives_the_far_rd_latch(); test_ceiling_usb_a_waiver_stays_narrow(); test_ceiling_quiet_adapter_is_stopped_at(); test_ceiling_runner_guard_names_its_cause(); test_ceiling_vbus_lost_after_the_stage_is_recovered_by_an_rd_cycle(); test_ceiling_vbus_that_never_returns_ends_the_run(); test_ceiling_adapter_ramp_is_part_of_the_stage(); test_ceiling_vbus_stuck_high_after_the_stage_is_unsafe(); test_vivo_no_response_skips_the_other_vivo_rows(); test_pps_min_step_accepts_unloaded_floor(); test_pps_up_step_uses_the_tight_band();
+    test_faults(); test_loop_lock_refuses_and_aborts(); test_timeouts_and_skips(); test_one_second_holds(); test_qc2_settles_within_two_percent(); test_qc2_5v_accepts_vsafe5_reading(); test_legacy_5v_accepts_vsafe5_reading(); test_qc3_rows_use_an_asymmetric_band(); test_legacy_rows_use_a_five_percent_band(); test_legacy_5v_row_uses_the_vsafe5_window(); test_scp_4v5_row_judges_the_adapter_readback(); test_qc3plus_without_response_is_a_distinct_skip(); test_unsupported_protocol_skips_its_other_rows(); test_silent_source_fails_every_handshake_row(); test_answered_handshake_passes_the_5v_row(); test_svooc_row_follows_the_adapter_ramp(); test_svooc_detected_is_a_pass(); test_vooc_family_shares_one_session(); test_ceiling_off_runs_no_stage(); test_ceiling_is_deep_only_and_the_ident_is_kept(); test_ceiling_judged_ladder_is_the_result(); test_ceiling_refusal_is_recorded_and_the_run_goes_on(); test_ceiling_no_adapter_and_early_abort(); test_ceiling_cap_stops_a_session_that_is_never_judged(); test_ceiling_cancel_stops_the_trigger(); test_ceiling_needs_a_detected_svooc_family(); test_ceiling_waits_for_the_lines_after_the_family_release(); test_ceiling_lines_never_free_is_a_recorded_refusal(); test_ceiling_usb_a_waives_the_far_rd_latch(); test_ceiling_usb_a_waiver_stays_narrow(); test_ceiling_quiet_adapter_is_stopped_at(); test_ceiling_runner_guard_names_its_cause(); test_ceiling_vbus_lost_after_the_stage_is_recovered_by_an_rd_cycle(); test_ceiling_vbus_that_never_returns_ends_the_run(); test_ceiling_adapter_ramp_is_part_of_the_stage(); test_ceiling_vbus_stuck_high_after_the_stage_is_unsafe(); test_vivo_no_response_skips_the_other_vivo_rows(); test_pps_min_step_accepts_unloaded_floor(); test_pps_up_step_uses_the_tight_band();
     test_missing_samples_and_wrap();
     test_fixed_band_judges_a_burst_mode_ripple_on_its_mean(); test_fixed_band_still_fails_a_steady_low_or_high_level(); test_fixed_band_keeps_the_per_sample_overvoltage_guards();
     test_pps_renewal();

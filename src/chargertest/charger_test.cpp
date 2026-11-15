@@ -381,7 +381,7 @@ Reason limit_reason(unsigned mv, Input in, Algorithm algorithm) {
 // cause and the run's own current check (kLoadAbortMa) all stay.
 bool inline_waived(const Options& o, const Input& in) {
     const bool svooc = (o.selected & (bit(Algorithm::SuperVooc) | bit(Algorithm::SuperVooc65))) != 0;
-    return svooc && svooc::inline_waived(o.svooc_cap == svooc_ceiling::Mode::UsbA, in.inline_cause);
+    return svooc && o.level == Level::Deep && svooc::inline_waived(o.svooc_cap == svooc_ceiling::Mode::UsbA, in.inline_cause);
 }
 void waive_inline(Input& in, const Options& o) { if (in.inline_load && inline_waived(o, in)) in.inline_load = false; }
 Reason refusal(Options o, Input in, bool busy, bool confirmed) {
@@ -1547,6 +1547,7 @@ void Runner::finish(Input in, Verdict v, Reason r, uint8_t detail) {
     s.verdict = v; s.reason = r; s.detail = detail;
     if (sweep_row) { s.detail = kDetailSweep; sweep_close(s); }
     s.tries = s.group >= Group::Vooc && s.group <= Group::SuperVooc65 ? in.fc_tries : 0;
+    if (s.tries && v == Verdict::Pass && detail == uint8_t(fc::Fail::Detected) && in.fc_ident) evidence_.vooc_ident = in.fc_ident;
     if (s.group == Group::Pd) {
         // Item G: the row's PS_RDY quirks go to the run's evidence and the log (no verdict reads them, the card does not show them yet).
         evidence_.ps_rdy_max = std::max<uint8_t>(evidence_.ps_rdy_max, uint8_t(std::min<unsigned>(row_ps_rdy_ms_ / 20u, 255u)));
@@ -2094,7 +2095,7 @@ void Runner::poll_attach(Input in, const pd::SourceCaps& caps, uint32_t gap) {  
 // plan holds an SVOOC row. NO LOAD: the guarded trigger asks the adapter for 1.5 / 4 / 6.3 / 10.9 A in protocol words only, and
 // the highest ask the adapter went on under is the result. It runs at 5 V with the family session already released.
 bool Runner::ceiling_wanted() const {
-    if (opts_.svooc_cap == svooc_ceiling::Mode::Off || ceiling_done_) return false;
+    if (opts_.svooc_cap == svooc_ceiling::Mode::Off || opts_.level != Level::Deep || ceiling_done_) return false;   // Deep only
     for (size_t n = 0; n < count_; ++n)
         if (steps_[n].group == Group::SuperVooc || steps_[n].group == Group::SuperVooc65) return true;
     return false;

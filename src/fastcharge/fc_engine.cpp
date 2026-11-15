@@ -804,7 +804,7 @@ void Engine::begin_protocol() {
         ux_n_ = 0;
         go(Phase::VivoOpen, 0);
     } else {                        // VOOC / SVOOC / SVOOC65: one detection, the same for all three
-        vooc_frames_ = 0;
+        vooc_frames_ = 0; vooc_ident_ = 0;
         applied_mv_ = prev_mv_ = kVoocGuardMv;   // VBUS above 5.5 V at any point ends the session
         vooc_tries_ = 0;
         vooc_wake();
@@ -1166,7 +1166,8 @@ void Engine::poll_step() {
         const int f = env_.vooc_rx(kVoocRxTimeoutUs);
         if (vooc::heard(f)) {
             ++vooc_frames_;
-            if (vooc::is_ident(vooc::frame_cmd(static_cast<std::uint16_t>(f)))) return abort(Fail::Detected);
+            const std::uint8_t cmd = vooc::frame_cmd(static_cast<std::uint16_t>(f));
+            if (vooc::is_ident(cmd)) { vooc_ident_ = cmd; return abort(Fail::Detected); }
         }
         if (now - band_ms_ >= kVoocWakeListenMs) {
             if (vooc_tries_ >= kVoocTries) return abort(vooc_frames_ > 0 ? Fail::NoResponse : Fail::NeedsLoad);

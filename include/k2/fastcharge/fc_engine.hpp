@@ -186,6 +186,9 @@ public:
     Proto proto() const { return proto_; }
     Fail fail() const { return fail_; }
     int vooc_tries() const { return vooc_tries_; }   // VOOC/SVOOC wakes sent (1..3); 0 for other protocols
+    // The ident command the VOOC-family adapter clocked (0xA8 / 0xAC / 0xA6, vooc::is_ident) when the session ended Detected;
+    // 0 otherwise. One ident proves the family, never the variant.
+    std::uint8_t vooc_ident() const { return vooc_ident_; }
     int target_mv() const { return target_mv_; }
     int reached_mv() const { return reached_mv_; }   // VBUS at the last poll while running
     int adapter_mv() const { return adapter_mv_; }   // SCP: voltage the adapter reports (0 = unknown)
@@ -272,7 +275,8 @@ private:
     bool unacked_handshake() const { return !acked_ && (proto_ == Proto::Afc || proto_ == Proto::Fcp || proto_ == Proto::Scp); }
     int scp_ma_ = accp::kScpInitMa;
     int ufcs_ma_ = 0;   // UFCS Request current, 0 = ufcs::kNoCableMa
-    int keep_i_ = 0, vooc_tries_ = 0, vooc_frames_ = 0;   // VOOC: wakes sent, frames heard (not all ones)
+    int keep_i_ = 0, vooc_tries_ = 0, vooc_frames_ = 0;
+    std::uint8_t vooc_ident_ = 0;   // VOOC: wakes sent, frames heard (not all ones)
     std::array<std::uint8_t, ufcs::kFrameMax> ux_{};          // UFCS receive accumulator
     std::uint8_t ux_n_ = 0, ux_drop_ = 0;        // bytes held / bytes to drop (both below ufcs::kFrameMax)
     Caps caps_{};                                // what the adapter / source said about itself (see caps())

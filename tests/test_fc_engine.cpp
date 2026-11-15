@@ -1044,6 +1044,7 @@ static void vooc_ident_is_detected_and_nothing_is_answered() {
             while (c.vooc_i == 0 && c.now < 20000) c.run(e, 1);
             // the poll that decoded the ident already ended the session and released the lines
             CHECK(e.state() == State::Failed && e.fail() == Fail::Detected);
+            CHECK(e.vooc_ident() == ident);   // the command byte that proved the family (the Results "ident")
             CHECK(c.resets == 1);
             CHECK(c.now == c.vooc_last_rx_ms);
             c.run(e, 5000);

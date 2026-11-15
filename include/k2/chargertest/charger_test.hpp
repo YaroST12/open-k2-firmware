@@ -224,13 +224,17 @@ struct Options {
 //   Light  - VBUS stays at 5 V: the PD 5 V row, the 5 V handshake of each legacy protocol, the source's own list recorded as
 //            Advertised rows (Reason::Advertised); no Request above or below 5 V, no EPR entry (its levels are read in SPR mode),
 //            no sweeps, no SVOOC ceiling, no PdLow unit.
-//   Medium - the fixed levels, the PPS / AVS points, the legacy level steps; no deep sweeps.
-//   Deep   - Medium plus the PPS and AVS deep sweeps over every APDO.
+//   Medium - the fixed levels, the PPS / AVS points, the legacy level steps; no deep sweeps, no SVOOC ceiling.
+//   Deep   - Medium plus the PPS and AVS deep sweeps over every APDO and the SVOOC ceiling stage.
 // The sweep flags stay their own switches afterwards (the Custom flow's sweep rows and the remote commands toggle them).
+// The SVOOC ceiling stage (the guarded trigger, VBUS up to the adapter's ceiling) is Deep only: Light and Medium stop at the
+// VOOC family's detection and its ident. Deep turns it on, keeping the operator's usb-a waiver (never chosen here: the waiver
+// is the operator's word that nothing sits on the other port).
 constexpr Options with_level(Options o, Level l) {
     o.level = l;
     o.pps_sweep = o.avs_sweep = l == Level::Deep;
-    if (l == Level::Light) o.svooc_cap = svooc_ceiling::Mode::Off;
+    if (l != Level::Deep) o.svooc_cap = svooc_ceiling::Mode::Off;
+    else if (o.svooc_cap == svooc_ceiling::Mode::Off) o.svooc_cap = svooc_ceiling::Mode::On;
     return o;
 }
 constexpr Level next_level(Level l) { return l == Level::Light ? Level::Medium : l == Level::Medium ? Level::Deep : Level::Light; }
@@ -304,6 +308,7 @@ struct Input {
     fc::State fc_state = fc::State::Idle;
     fc::Fail fc_fail = fc::Fail::None;
     uint8_t fc_tries = 0;   // fctrig::Status::tries
+    uint8_t fc_ident = 0;   // fctrig::Status::ident: the VOOC family's ident command of a Detected session (0 = none)
     int fc_adapter_mv = 0;  // fctrig::Status::adapter_mv: the SCP adapter's own voltage readback of this session (0 = not read / not SCP)
     bool probe_done = false;   // the source probe the runner asked for has finished (answered, refused or timed out)
     bool epr_proof = false;    // set by the Runner, not the caller: the source accepted EPR entry earlier in this run (cable proven)
@@ -380,6 +385,9 @@ struct Evidence {
     // ... the highest VBUS the trigger saw in the session (mV, its start and exit watch included) and when the adapter's last
     // D+/D- edge came (ms after the wake, saturating): "stopped at" for End::Stopped.
     uint16_t svooc_vmax_mv = 0, svooc_stop_ms = 0;
+    // The VOOC family's ident command (0xA8 / 0xAC / 0xA6) when its detection row passed; 0 = none heard. One ident proves the
+    // family, not the variant. Not journaled, not on the card.
+    uint8_t vooc_ident = 0;
     pd::Revision reported{};
 };
 struct Summary {
