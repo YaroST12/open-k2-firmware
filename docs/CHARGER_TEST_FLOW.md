@@ -227,10 +227,10 @@ one row fill the 58-byte frame), saturating at 31; `k2_remote` and the web decod
 
 Limits: a protocol the port does not speak with a timeout longer than the ~6 s clean gap reads "port cuts" (the retry meets the next
 cut); a cut hidden inside a blocked handshake is not seen, so casualties are never inferred from the period alone; a real brownout
-at 5 V that comes back within 2 s is asked again once. A cut that begins within about 0 to 0.6 s of the start of the run (the run's first Baseline, before
+at 5 V that comes back within 2 s is asked again (up to three times). A cut that begins within about 0 to 0.6 s of the start of the run (the run's first Baseline, before
 any row ran; the test fake's dark level is 2 V) is not retried: the run stops with every row Skip / Lost (open side issue, pre-existing: no
 Baseline code changed; found by sweeping the first cut over the period in 100 ms steps, 7 of 71 phases hit, offsets 700 ms and later are clean;
-about 10 % of the START moments when START itself is not inside the dark, which was not tested; the exact path to Stopped was not traced). Host tests: `test_charger_test` (`test_cut_in_the_row_then_a_clean_retry_passes`, `test_a_second_cut_in_the_retry_is_a_skip_not_a_fail`, `test_a_loss_that_does_not_come_back_in_the_window_is_a_fail`, `test_the_7s_cut_sequence_over_the_5v_steps_of_the_cuktech_run` and the protocol-failure case).
+about 10 % of the START moments when START itself is not inside the dark, which was not tested; the exact path to Stopped was not traced). Host tests: `test_charger_test` (`test_cut_in_the_row_then_a_clean_retry_passes`, `test_several_cuts_in_a_row_then_a_clean_retry_passes`, `test_every_retry_cut_is_a_skip_not_a_fail`, `test_a_loss_that_does_not_come_back_in_the_window_is_a_fail`, `test_the_7s_cut_sequence_over_the_5v_steps_of_the_cuktech_run` `test_a_protocol_failure_after_a_clean_comeback_is_a_fail`, `test_a_silent_vooc_family_on_a_7s_cut_port_ends_needs_load`, `test_the_10_unit_run_over_every_cut_phase_ends_as_without_cuts`; engine step times in `test_fc_engine`, `test_fc_vivo`, `test_fc_ufcs`).
 
 ## SCP and UFCS rows follow what the charger reported (2026-11-08)
 
