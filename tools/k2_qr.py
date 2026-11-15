@@ -253,7 +253,16 @@ def decode_emrec(r):
            "vid": f"0x{idh & 0xFFFF:04X}", "pid": f"0x{product >> 16:04X}",
            "product_type": PRODUCT_TYPE.get(idh >> 27 & 7, "reserved")}
     if (idh >> 27 & 7) in (3, 4):
-        out.update(max_v=[20, 30, 40, 50][cable >> 9 & 3], max_a=5 if (cable >> 5 & 3) == 2 else 3,
+        # As src/pd/pd.cpp parse_emarker (docs/PD_EMARKER_SPEC_REFERENCE.md): the VDM header's SVDM version picks the layout;
+        # the deprecated 30 V / 40 V codes and every SVDM 1.0 answer are 20 V; EPR needs bit 17 (passive VDO v1.0, active
+        # VDO1 v1.3 with VBUS through, bit 4) with 5 A and 50 V.
+        svdm2 = (vdos[0] >> 13 & 3) != 0
+        active = (idh >> 27 & 7) == 4
+        max_v = 50 if svdm2 and (cable >> 9 & 3) == 3 else 20
+        max_a = 5 if (cable >> 5 & 3) == 2 else 3
+        ver = cable >> 21 & 7 if svdm2 else 0
+        bit17 = svdm2 and bool(cable >> 17 & 1) and ((ver == 3 and bool(cable >> 4 & 1)) if active else ver == 0)
+        out.update(max_v=max_v, max_a=max_a, epr=bit17 and max_a == 5 and max_v == 50,
                    speed=SPEED.get(cable & 7, f"code {cable & 7}"), termination=cable >> 11 & 3)
     return out
 

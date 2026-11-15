@@ -473,5 +473,40 @@ class Cli(unittest.TestCase):
         self.assertEqual((code, json.loads(out)["record"]["proto"]), (0, 1))
 
 
+def emrec(vdos, spec=2):
+    """A 66-byte e-marker record (include/k2/pd/emrec.hpp): name, PD spec rev, five VDOs, checksum."""
+    r = bytearray(66)
+    r[:4] = b"test"
+    r[20] = spec
+    for i, v in enumerate(vdos):
+        r[21 + 4 * i:25 + 4 * i] = v.to_bytes(4, "little")
+    r[65] = (sum(r[:65]) + 0xA5) & 0xFF
+    return bytes(r)
+
+
+class EmarkerSpecLayout(unittest.TestCase):
+    """The cable VDO read as the firmware reads it (src/pd/pd.cpp, docs/PD_EMARKER_SPEC_REFERENCE.md): the deprecated 30 V /
+    40 V codes and every SVDM 1.0 answer are 20 V; EPR needs bit 17 (passive v1.0, active v1.3 with VBUS through), 5 A, 50 V."""
+    PASSIVE = 0x18002B01
+    ACTIVE = 0x20002B01
+
+    def test_deprecated_codes_read_20v(self):
+        self.assertEqual(q.decode_emrec(emrec([0xFF00A041, self.PASSIVE, 0, 0, 0x80082A40]))["max_v"], 20)   # 30 V code
+        self.assertEqual(q.decode_emrec(emrec([0xFF00A041, self.PASSIVE, 0, 0, 0x00000440]))["max_v"], 20)   # 40 V code
+
+    def test_svdm1_has_no_50v(self):
+        r = q.decode_emrec(emrec([0xFF008041, self.PASSIVE, 0, 0, 0x000A2640]))
+        self.assertEqual((r["max_v"], r["epr"]), (20, False))
+
+    def test_epr_bit(self):
+        r = q.decode_emrec(emrec([0xFF00A041, self.PASSIVE, 0, 0, 0x000A2640]))
+        self.assertEqual((r["max_v"], r["max_a"], r["epr"]), (50, 5, True))
+        self.assertFalse(q.decode_emrec(emrec([0xFF00A041, self.PASSIVE, 0, 0, 0x00082640]))["epr"])   # no bit 17
+        active = (3 << 21) | (1 << 17) | (3 << 9) | (2 << 5) | (1 << 4)
+        self.assertTrue(q.decode_emrec(emrec([0xFF00A041, self.ACTIVE, 0, 0, active]))["epr"])
+        self.assertFalse(q.decode_emrec(emrec([0xFF00A041, self.ACTIVE, 0, 0, active & ~(1 << 4)]))["epr"])   # VBUS not through
+        self.assertFalse(q.decode_emrec(emrec([0xFF00A041, self.ACTIVE, 0, 0, (active & ~(7 << 21)) | (2 << 21)]))["epr"])   # v1.2
+
+
 if __name__ == "__main__":
     unittest.main()
