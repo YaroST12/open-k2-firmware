@@ -392,8 +392,8 @@ Three pure parts (host-tested) and one glue file:
   contract changing to anything else aborts as "PD contract changed", and losing it (hard reset, detach) as "PD contract
   lost": the D+/D- session is meaningless then. The report carries the contract at the start and at the end
   (`none` / `own 5 V` / `other`). The exit never touches the contract or the Rd pin; the main session releases them
-  (`pd-reread --pin 0`). Wake / listen as the detection (burst, 1.0 s listen, 3 s
-  rest, 2 tries), "no adapter answer" after that.
+  (`pd-reread --pin 0`). Wake / listen as the detection (burst, 1.5 s listen, 3 s
+  rest, 3 tries: `svooc_run` keeps its own constants, not the detection's), "no adapter answer" after that.
 - Exit, always: stop answering, release D-, both lines to the passive idle; then watch VBUS for 5 s. Back at or under
   5.5 V is reported as such (the log says "VBUS gone" under 4.5 V: the adapter switched its output off), still higher as
   "STILL ABOVE 5.5 V" with the reading. The exit line logs the run's highest VBUS (`vmax`, the exit watch included); the

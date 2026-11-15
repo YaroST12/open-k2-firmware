@@ -29,6 +29,9 @@ struct Fake final : ct::Env {
     // pattern usb-a-cuts-on-low-dpdm: an A-to-C cable's Rp is fed from VBUS, so CC comes back (a new attach session) only some ms
     // AFTER the output is back at 5 V. late_session_ms = that delay after the end of the drop (0 = no second session).
     uint32_t late_session_ms = 0, late_session_at = 0;
+    // A VOOC-family adapter that never clocks: the session stays Negotiating for silent_session_ms (the engine's own detection time,
+    // fc::kVoocDetectMaxMs plus the wake plays), then ends NeedsLoad after kVoocTries wakes. A cut in between kills it (the existing cut code).
+    uint32_t silent_session_ms = 0, silent_end_at = 0;
     int low_mv_for_3v3 = 0;   // a source whose output lands here (not at the target) on a 3.3 V programmable step
     int pd_small_step_mv = -1;   // see request_pd: the output move of a +20 mV PPS request (-1 = follow the target)
     int last_pps_mv = 0, last_pd_vbus = 0;
@@ -324,6 +327,10 @@ struct Fake final : ct::Env {
         if (unsupported_proto == p) { in.fc_state = fc::State::Failed; in.fc_fail = fc::Fail::Unsupported; in.vbus_mv = 5000; return fc::Fail::None; }
         if (drop_at == fc_requests) { ++in.session; low_until = in.now + (gone ? 1000000 : 4000); in.vbus_mv = gone ? 0 : 4450; return fc::Fail::None; }
         if (!request_ok) return fc::Fail::NoHandshake;
+        if (silent_session_ms && (p == fc::Proto::Vooc || p == fc::Proto::SuperVooc || p == fc::Proto::SuperVooc65)) {
+            in.fc_state = fc::State::Negotiating; in.fc_fail = fc::Fail::None; in.vbus_mv = 5000; silent_end_at = in.now + silent_session_ms;
+            return fc::Fail::None;
+        }
         if (contract_blocks_legacy && !handed && !retarget) { fc_blocked++; return fc::Fail::NoHandshake; }
         if (fussy && !retarget) { if (!fresh) { ++fussy_fails; return fc::Fail::NoHandshake; } fresh = false; }
         in.fc_state = fc::State::Active; in.vbus_mv = mv > 5000 ? mv + fc_offset_mv : fc_5v_mv ? fc_5v_mv : mv;
@@ -336,7 +343,7 @@ struct Fake final : ct::Env {
     void release(bool pd) override {
         if (!alive()) return;
         ++releases; fc_releases += !pd;
-        collapse_t0 = 0; in.ibus_ma = 0; out_on = false; ka_at = ka_end = 0;
+        collapse_t0 = 0; in.ibus_ma = 0; out_on = false; ka_at = ka_end = 0; silent_end_at = 0;
         if (!pd) { fc_released = true; fc_released_at = in.now; }
         if (!pd && restart_on_release && fc_releases == restart_on_release) restart_at = in.now + restart_delay_ms;
         if (!release_ok || latched) return;
@@ -616,7 +623,12 @@ struct Fake final : ct::Env {
                 if (!cut_on && in.vbus_mv >= 1000 && (in.vbus_mv <= 5500 || cut_raised)) {   // a raised output is never cut (unless a test says so)
                     cut_on = true; cut_end_at = in.now + cut_len_ms; ++in.session; ++cuts_seen; cut_onsets.push_back(in.now);
                     if (in.fc_state != fc::State::Idle) { in.fc_state = fc::State::Failed; in.fc_fail = fc::Fail::NoHandshake; }   // the engine's session died with the output
+                    silent_end_at = 0;
                 }
+            }
+            if (silent_end_at && in.now >= silent_end_at) {
+                silent_end_at = 0;
+                if (in.fc_state == fc::State::Negotiating) { in.fc_state = fc::State::Failed; in.fc_fail = fc::Fail::NeedsLoad; in.fc_tries = uint8_t(fc::kVoocTries); in.vbus_mv = 5000; }
             }
             if (cut_on) {
                 if (in.now < cut_end_at) in.vbus_mv = cut_dark_mv;
@@ -5598,6 +5610,31 @@ static void test_a_cut_that_reads_no_response_does_not_skip_the_family() {
         for (const auto& s : r.steps()) CHECK_EQ(s.reason == ct::Reason::Request, false);   // no row was skipped by the family rule
     }
 }
+// The CUKTECH port cuts every 7.04 s and is dark about 1 s. A VOOC-family adapter that never clocks keeps its session open for the engine's
+// whole detection (kVoocDetectMaxMs): it has to fit one clean window, from whatever phase the unit starts in, so the family ends "needs
+// load" and never "port cuts without load". With the old 10.5 s detection no retry could fit and the same port read PortCuts.
+static void test_a_silent_vooc_family_on_a_7s_cut_port_ends_needs_load() {
+    for (const uint32_t session : {uint32_t(fc::kVoocDetectMaxMs) + 50u, 10550u}) {
+        for (uint32_t off = 0; off < 7040; off += 250) {   // where in the port's period the first session opens
+            Fake f; f.caps = {}; f.silent_session_ms = session; f.cut_len_ms = 1000; ct::Runner r(f);
+            CHECK_EQ(r.start(f.caps, {.selected = ct::bit(A::Vooc) | ct::bit(A::SuperVooc) | ct::bit(A::SuperVooc65)}, f.in, true), ct::Reason::None);
+            CHECK_EQ(run_until(f, r, [&] { return f.fc_requests >= 1; }, 60000), true);
+            f.cut_period_ms = 7040; f.cut_next_at = f.in.now + off;   // the cuts start once the unit is running: the baseline is not what is measured
+            for (unsigned t = 0; r.state() != ct::State::Done && t < 240000; t += 100) f.tick(r, 100);
+            CHECK_EQ(r.state(), ct::State::Done);
+            bool port_cuts = false;
+            for (const auto& s : r.steps()) port_cuts |= s.reason == ct::Reason::PortCuts;
+            if (session < 6000) {
+                CHECK_EQ(port_cuts, false);
+                CHECK_EQ(int(r.steps()[0].reason), int(ct::Reason::Request));
+                CHECK_EQ(int(r.steps()[0].detail), int(fc::Fail::NeedsLoad));   // the family's own result, as on a port that does not cut
+                CHECK_EQ(unsigned(r.evidence().cut_retries) <= unsigned(ct::kCutRetries), true);
+            } else {
+                CHECK_EQ(port_cuts, true);   // the old budget cannot fit the window: this is why the detection was shortened
+            }
+        }
+    }
+}
 static void test_a_fall_in_a_raised_row_is_no_cut_casualty() {
     Fake f; f.caps = {}; f.cut_on_requests = {2}; f.cut_raised = true; ct::Runner r(f);   // the 9 V row of QC2 loses its output: that is no 5 V port cut
     CHECK_EQ(r.start(f.caps, kQc2, f.in, true), ct::Reason::None);
@@ -7918,7 +7955,7 @@ int main() {
     test_measured_dwell_and_plan_capacity();
     test_usb_a_sag_tail_session_is_not_source_lost(); test_usb_a_sag_tail_waits_for_vbus_to_climb(); test_usb_a_sag_tail_with_dead_or_low_vbus_is_still_lost(); test_session_change_in_baseline_without_a_sag_is_still_lost(); test_usb_a_midrow_session_opens_the_adopt_window(); test_usb_a_sag_dip_under_1v_inside_the_window_waits();
     test_cut_in_the_row_then_a_clean_retry_passes(); test_a_retried_first_scp_row_replans_like_an_unretried_one(); test_a_retried_first_scp_row_keeps_the_rows_a_wide_list_offers(); test_a_retried_first_ufcs_row_replans_like_an_unretried_one(); test_a_retried_first_vooc_family_row_ends_like_an_unretried_one(); test_several_cuts_in_a_row_then_a_clean_retry_passes(); test_every_retry_cut_is_a_skip_not_a_fail(); test_the_retries_are_counted_per_row(); test_a_cut_that_reads_no_response_does_not_skip_the_family(); test_a_loss_that_does_not_come_back_in_the_window_is_a_fail();
-    test_a_dip_shorter_than_the_minimum_is_no_cut(); test_a_protocol_failure_after_a_clean_comeback_is_a_fail(); test_the_7s_cut_sequence_over_the_5v_steps_of_the_cuktech_run(); test_a_fall_in_a_raised_row_is_no_cut_casualty();
+    test_a_dip_shorter_than_the_minimum_is_no_cut(); test_a_protocol_failure_after_a_clean_comeback_is_a_fail(); test_the_7s_cut_sequence_over_the_5v_steps_of_the_cuktech_run(); test_a_fall_in_a_raised_row_is_no_cut_casualty(); test_a_silent_vooc_family_on_a_7s_cut_port_ends_needs_load();
     test_custom_unit_list_runs_in_order(); test_pd_unit_attaches_with_a_contract(); test_a_failed_unit_does_not_stop_the_run();
     test_default_unit_order_is_vendor_modes_then_pd_then_legacy(); test_default_order_runs_vendor_modes_before_pd_before_legacy(); test_pd_between_vendor_and_legacy_units(); test_pd_replan_in_the_middle_keeps_the_rows_in_order(); test_consecutive_legacy_units_share_one_attach(); test_legacy_session_that_sees_pd_traffic_is_renewed(); test_silent_ufcs_source_reports_no_response_not_pd_active(); test_legacy_waits_between_units();
     test_legacy_attach_that_never_falls_back_is_blocked_by_pd(); test_legacy_retry_that_falls_back_runs_the_unit(); test_legacy_attach_waits_out_hard_reset_cycles();

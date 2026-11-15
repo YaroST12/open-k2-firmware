@@ -211,9 +211,12 @@ legacy row that was in flight at a cut reads "source lost" (SCP 5 V, VOOC, SVOOC
   to the verdict): FCP 2.55 s, SCP 5 V 3.3 s, AFC 0.6 s (a raised level), VIVO 2.0 s, QC2 5 V 2.4 s, QC3 and QC3+ 5 V 3.6 s,
   UFCS 5 V 1.2 s: all fit. The VOOC family (VOOC, SVOOC, SVOOC65) was the only one that did not (a silent session ran 10.5 s,
   5.8 to 6.4 s per attempt before a cut hit it): its detection is now 2 wakes, 1.0 s listen, 3 s rest = 5.0 s
-  (`fc::kVoocDetectMaxMs`, tests `tests/test_fc_engine.cpp`). The SCP 10 V row is a raised level (never cut) and ends at its own
-  12 s timeout when the adapter never answers the target (the CUKTECH USB-A port). A start schedule would only move the next cut into
-  another row. (Decided 2026-11-15.)
+  (`fc::kVoocDetectMaxMs`, tests `tests/test_fc_engine.cpp`, `tests/test_charger_test.cpp`). The SCP 10 V row is a 5 V-held step on
+  a port that never answers that target: a cut hit it once (46.4 s) and the retry then waited out the generic 12 s row timeout without
+  a cut. That timeout is not measured against an SCP rise time, so it is left as it is (open decision). Open decision: a start
+  schedule (begin a 5 V-held step right after a cut once the period is learned). Waiting for the comeback costs the same time as being
+  cut and retried (the span lost is identical), so a schedule would save no time, only spend fewer retries; the retry already is a
+  start right after a clean comeback.
 
 Export: the retry count rides in bits 3..7 of the schema-2 page header's PS_RDY timing byte (offset 40; the 42-byte header and its
 one row fill the 58-byte frame), saturating at 31; `k2_remote` and the web decoders show it as `evidence.cut_retries` and
