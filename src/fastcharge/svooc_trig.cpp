@@ -126,12 +126,16 @@ stage::Worst g_stall;   // the main loop's worst stage from the wake to the rele
 // only listens, so start() stops it (dpsniff::monitor_yield) once the other checks pass. A Black Box arm or stream is: it
 // keeps its recording, so the start refuses.
 // The monitor's own state is a line mismatch too (both lines Sniff, floating): it is no obstacle (svooc::lines_off_idle).
-bool lines_taken() {
+// One bit per owner, so a Busy refusal's log line names who held the lines: 0x01 the fast-charge engine, 0x02 its scan,
+// 0x04 the UFCS probe, 0x08 the release's 0 V hold (dpdm::reset_busy), 0x10 the UFCS exit, 0x20 a line off the passive idle,
+// 0x40 a Black Box arm, 0x80 a stream, 0x100 the edge hook.
+unsigned lines_owners() {
     const dpdm::Pair d = dpdm::drive();
     const bool monitor_sniff = dpsniff::monitoring() && d.dp == dpdm::Drive::Sniff && d.dm == dpdm::Drive::Sniff;
-    return fctrig::status().state != fc::State::Idle || fctrig::scan_running() || fctrig::ufcs_probe_running() ||
-           dpdm::reset_busy() || fctrig::ufcs_exiting() || svooc::lines_off_idle(dpdm::mismatch(d), monitor_sniff) || dpsniff::armed() ||
-           dpsniff::streaming() || dpsniff::hooked();
+    return (fctrig::status().state != fc::State::Idle ? 0x01u : 0u) | (fctrig::scan_running() ? 0x02u : 0u) |
+           (fctrig::ufcs_probe_running() ? 0x04u : 0u) | (dpdm::reset_busy() ? 0x08u : 0u) | (fctrig::ufcs_exiting() ? 0x10u : 0u) |
+           (svooc::lines_off_idle(dpdm::mismatch(d), monitor_sniff) ? 0x20u : 0u) | (dpsniff::armed() ? 0x40u : 0u) |
+           (dpsniff::streaming() ? 0x80u : 0u) | (dpsniff::hooked() ? 0x100u : 0u);
 }
 
 // VBUS (monitor sample) when each logged pair closed, parallel to the wire's pair list; 0 = no sample. The wire counts
@@ -255,7 +259,8 @@ svooc::Refusal start(bool confirmed, bool ports_busy, std::uint32_t cap_s, bool 
     svooc::StartFacts f;
     f.confirmed = confirmed;
     f.usb_a = usb_a;
-    f.ports_busy = ports_busy || lines_taken();
+    const unsigned owners = lines_owners();
+    f.ports_busy = ports_busy || owners != 0;
     f.host_ok = l.host_ok;
     f.vbus_known = l.vbus_known;
     f.current_known = l.current_known;
@@ -282,8 +287,8 @@ svooc::Refusal start(bool confirmed, bool ports_busy, std::uint32_t cap_s, bool 
     const svooc::Refusal r = run_obj().start(f, systick::millis(), cap_ms);
     if (r != svooc::Refusal::None) {
         if (claimed) dpsniff::hook_end();
-        K2LOG("[SVOOC] refused: %s vbus=%dmV ibus=%dmA contract=%s inline=%s%s\n", svooc::name(r), int(f.vbus_mv),
-              int(f.ibus_ma), svooc::name(f.contract), pd::inline_cause_name(f.inline_cause),
+        K2LOG("[SVOOC] refused: %s vbus=%dmV ibus=%dmA contract=%s inline=%s owners=0x%x%s\n", svooc::name(r), int(f.vbus_mv),
+              int(f.ibus_ma), svooc::name(f.contract), pd::inline_cause_name(f.inline_cause), owners,
               usb_a ? " (USB-A waiver asked)" : "");
         return r;
     }
@@ -363,6 +368,7 @@ void poll() {
 }
 
 bool running() { return g_run_inited && run_obj().running(); }
+bool lines_free() { return !running() && lines_owners() == 0; }
 bool lines_held() { return g_run_inited && run_obj().lines_held(); }
 
 Snapshot snapshot() {

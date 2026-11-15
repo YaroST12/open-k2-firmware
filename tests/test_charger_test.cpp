@@ -104,6 +104,10 @@ struct Fake final : ct::Env {
     // reset. A fresh QC2 / QC3 handshake that starts less than this long after the previous session's release gets no answer; a
     // retarget in the live session never does.
     uint32_t redetect_gap_ms = 0, fc_released_at = 0; bool fc_released = false; int redetect_refused = 0;
+    // D+/D- after a legacy release: the engine holds them at 0 V for lines_hold_ms (its discharge, 500 ms on the device), and
+    // lines_stuck = another owner never lets them go. The trigger refuses "D+/D- busy" (svooc::Refusal::Busy) while they are held.
+    uint32_t lines_hold_ms = 0; bool lines_stuck = false;
+    bool lines_free_now() const { return !lines_stuck && !(fc_released && in.now - fc_released_at < lines_hold_ms); }
     std::vector<int> fc_mvs;                          // the level each fc request asked for
     int fc_5v_mv = 0;                                 // a 5 V request lands here instead (a charger idling at 5.12 V); 0 = at 5 V
     int fc_low_mv = 0;                                // a request below 5 V lands here (an unloaded output cannot sink down); 0 = at the request
@@ -331,10 +335,11 @@ struct Fake final : ct::Env {
     // ceiling_stop it still runs ceil_exit_ms (its exit watch), then reports Stopped.
     uint8_t ceil_refuse = 0, ceil_abort = 0, ceil_commands = 9;
     int ceil_starts = 0, ceil_stops = 0; bool ceil_usb_a_seen = false, ceil_on = false;
-    uint32_t ceil_judged_ms = 0, ceil_partial_ms = 0, ceil_end_ms = 0, ceil_exit_ms = 1000, ceil_t0 = 0, ceil_stop_t = 0;
+    uint32_t ceil_judged_ms = 0, ceil_partial_ms = 0, ceil_end_ms = 0, ceil_exit_ms = 1000, ceil_t0 = 0, ceil_stop_t = 0, ceil_start_at = 0;
     uint16_t ceil_partial_word = 0;
     uint8_t ceiling_start(bool usb_a) override {
-        ++ceil_starts; ceil_usb_a_seen = usb_a;
+        ++ceil_starts; ceil_usb_a_seen = usb_a; ceil_start_at = in.now;
+        if (!lines_free_now()) return uint8_t(svooc::Refusal::Busy);
         if (ceil_refuse) return ceil_refuse;
         ceil_on = true; ceil_t0 = in.now; ceil_stop_t = 0;
         return 0;
@@ -484,6 +489,7 @@ struct Fake final : ct::Env {
     void tick(ct::Runner& r, unsigned ms) {
         for (unsigned n = 0; n < ms; n += step_ms) {
             in.now += step_ms;
+            in.lines_free = lines_free_now();
             in.pd.xiaomi_svid = xiaomi_svid && in.now >= svid_back_at; in.pd.xiaomi_authed = in.pd.xiaomi_svid && auth_at && in.now >= auth_at;
             if (auth_caps_on && in.pd.xiaomi_authed && in.now >= auth_at + auth_caps_delay_ms) { auth_caps_on = false; caps = auth_caps; xm_reannounce = true; }
             xm.authed = in.pd.xiaomi_authed; xm.authed_at = xm.authed ? auth_at : 0; xm.reannounced = xm.authed && xm_reannounce;
@@ -2247,6 +2253,30 @@ static void test_ceiling_needs_a_detected_svooc_family() {
         CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 120000), true);
         CHECK_EQ(f.ceil_starts, 0);
     }
+}
+// The stage takes D+/D- only once they are free: the family session's release holds them at 0 V for 500 ms (the engine's
+// discharge) and the trigger refuses "D+/D- busy" inside that hold (hardware 2026-11-15: refused 20 ms after the release).
+static void test_ceiling_waits_for_the_lines_after_the_family_release() {
+    Fake f; f.caps = {}; f.ceil_judged_ms = 3000; f.lines_hold_ms = 500;
+    ct::Runner r(f);
+    ceiling_run(f, r, sc::Mode::On);
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 120000), true);
+    CHECK_EQ(f.ceil_starts, 1);
+    CHECK_EQ(f.ceil_start_at - f.fc_released_at >= 500, true);
+    CHECK_EQ(int(r.evidence().svooc_end), int(sc::End::Judged));
+    CHECK_EQ(int(r.evidence().svooc_word), 0x06D);
+    CHECK_EQ(r.steps()[0].verdict, ct::Verdict::Pass);
+}
+// Lines that never come free (another owner): the wait is bounded, the refusal is recorded and the run ends normally.
+static void test_ceiling_lines_never_free_is_a_recorded_refusal() {
+    Fake f; f.caps = {}; f.lines_stuck = true;
+    ct::Runner r(f);
+    ceiling_run(f, r, sc::Mode::On);
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 120000), true);
+    CHECK_EQ(f.ceil_starts, 1);
+    CHECK_EQ(int(r.evidence().svooc_end), int(sc::End::Refused));
+    CHECK_EQ(int(r.evidence().svooc_why), int(svooc::Refusal::Busy));
+    CHECK_EQ(r.steps()[0].verdict, ct::Verdict::Pass);
 }
 // A VIVO charger that never answered its first row (no frame in the entry window) speaks nothing the other levels could
 // prove: they are skipped with that reason and get no session, as AFC / FCP / SCP / UFCS do.
@@ -7200,7 +7230,7 @@ int main() {
     test_hunt_evidence_marks_a_silent_source_as_a_timeout(); test_hunt_evidence_without_a_trace_is_unexplained();
     test_hunt_evidence_only_for_refused_rows(); test_classify_hunt_precedence();
     test_plan_and_run(); test_an_auto_hold_counts_as_released(); test_quiet_is_exactly_the_row_in_flight(); test_paint_blocked_needs_flight_and_an_engine_window(); test_refusals(); test_hold_keeps_the_baseline_until_released(); test_safe5_baseline();test_cancel_and_failed_release(); test_release_waits_for_the_sink_verification_and_its_hard_reset();
-    test_faults(); test_loop_lock_refuses_and_aborts(); test_timeouts_and_skips(); test_one_second_holds(); test_qc2_settles_within_two_percent(); test_qc2_5v_accepts_vsafe5_reading(); test_legacy_5v_accepts_vsafe5_reading(); test_qc3_rows_use_an_asymmetric_band(); test_legacy_rows_use_a_five_percent_band(); test_legacy_5v_row_uses_the_vsafe5_window(); test_scp_4v5_row_judges_the_adapter_readback(); test_qc3plus_without_response_is_a_distinct_skip(); test_unsupported_protocol_skips_its_other_rows(); test_silent_source_fails_every_handshake_row(); test_answered_handshake_passes_the_5v_row(); test_svooc_row_follows_the_adapter_ramp(); test_svooc_detected_is_a_pass(); test_vooc_family_shares_one_session(); test_ceiling_off_runs_no_stage(); test_ceiling_judged_ladder_is_the_result(); test_ceiling_refusal_is_recorded_and_the_run_goes_on(); test_ceiling_no_adapter_and_early_abort(); test_ceiling_cap_stops_a_session_that_is_never_judged(); test_ceiling_cancel_stops_the_trigger(); test_ceiling_needs_a_detected_svooc_family(); test_vivo_no_response_skips_the_other_vivo_rows(); test_pps_min_step_accepts_unloaded_floor(); test_pps_up_step_uses_the_tight_band();
+    test_faults(); test_loop_lock_refuses_and_aborts(); test_timeouts_and_skips(); test_one_second_holds(); test_qc2_settles_within_two_percent(); test_qc2_5v_accepts_vsafe5_reading(); test_legacy_5v_accepts_vsafe5_reading(); test_qc3_rows_use_an_asymmetric_band(); test_legacy_rows_use_a_five_percent_band(); test_legacy_5v_row_uses_the_vsafe5_window(); test_scp_4v5_row_judges_the_adapter_readback(); test_qc3plus_without_response_is_a_distinct_skip(); test_unsupported_protocol_skips_its_other_rows(); test_silent_source_fails_every_handshake_row(); test_answered_handshake_passes_the_5v_row(); test_svooc_row_follows_the_adapter_ramp(); test_svooc_detected_is_a_pass(); test_vooc_family_shares_one_session(); test_ceiling_off_runs_no_stage(); test_ceiling_judged_ladder_is_the_result(); test_ceiling_refusal_is_recorded_and_the_run_goes_on(); test_ceiling_no_adapter_and_early_abort(); test_ceiling_cap_stops_a_session_that_is_never_judged(); test_ceiling_cancel_stops_the_trigger(); test_ceiling_needs_a_detected_svooc_family(); test_ceiling_waits_for_the_lines_after_the_family_release(); test_ceiling_lines_never_free_is_a_recorded_refusal(); test_vivo_no_response_skips_the_other_vivo_rows(); test_pps_min_step_accepts_unloaded_floor(); test_pps_up_step_uses_the_tight_band();
     test_missing_samples_and_wrap();
     test_fixed_band_judges_a_burst_mode_ripple_on_its_mean(); test_fixed_band_still_fails_a_steady_low_or_high_level(); test_fixed_band_keeps_the_per_sample_overvoltage_guards();
     test_pps_renewal();

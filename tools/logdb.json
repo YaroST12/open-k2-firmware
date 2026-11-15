@@ -689,6 +689,7 @@
   "692": "[UFCS] refused %s cmd=%d id=%d: %s (%d)\n",
   "693": "[UFCS] exit %s after %u ms vbus=%d\n",
   "694": "[UFCS] busy: Request again in %u ms\n",
-  "695": "[RMT] pd request busy: %s\n"
+  "695": "[RMT] pd request busy: %s\n",
+  "696": "[SVOOC] refused: %s vbus=%dmV ibus=%dmA contract=%s inline=%s owners=0x%x%s\n"
  }
 }

@@ -921,6 +921,7 @@ void poll() {}
 void service() {}
 bool running() { return g_stub.svooc_run; }
 bool lines_held() { return g_stub.svooc_run; }
+bool lines_free() { return !g_stub.svooc_run; }
 Snapshot snapshot() {
     Snapshot s;
     s.n_asks = g_stub.svooc_n_asks; s.ceiling_word = g_stub.svooc_ceiling;

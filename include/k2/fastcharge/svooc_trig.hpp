@@ -52,6 +52,9 @@ void stop();         // stop answering, lines to passive idle (reason Stopped); 
 void poll();         // main loop
 void service();      // ~1 ms: the wire's tick only
 bool running();      // the lines are held, or the exit watch still runs: nothing else may take D+/D-
+// No owner holds D+/D- and they sit at the passive idle (or the passive monitor's Sniff): start() would not refuse them as
+// Busy. The charger test's ceiling stage waits for this after the family session's release (its 500 ms 0 V hold).
+bool lines_free();
 bool lines_held();
 
 struct Snapshot {

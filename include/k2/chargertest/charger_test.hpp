@@ -284,6 +284,9 @@ struct Input {
     svooc_ceiling::Live svooc{};
     uint16_t svooc_word = 0;   // the highest ask the adapter went on under so far (svooc_trig Snapshot::ceiling_word)
     uint8_t svooc_asks = 0;    // the asks answered so far
+    // D+/D- are free for the ceiling stage's trigger: no owner holds them and they sit at the passive idle (the trigger's own
+    // start check, svooc_trig::lines_free()). False for 500 ms after a legacy session's release (the engine's 0 V discharge).
+    bool lines_free = true;
 };
 // The runner waits for the source probe at most this long, so a charger that ignores it costs the run under 1 s.
 inline constexpr uint32_t kProbeMaxMs = 1000;

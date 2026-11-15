@@ -216,6 +216,8 @@ charger_test::Input ChargerTestSession::input(uint32_t now) const {
     in.fc_adapter_mv = fs.adapter_mv;
     in.pd_quiet_ms = fusb302::pd_quiet_ms();
     in.probe_done = fusb302::probe_status().state != pd::ProbeState::Running;
+    // D+/D- free for the ceiling stage (only the release before it waits on this).
+    if (runner_.state() == ct::State::Releasing) in.lines_free = svooc_trig::lines_free();
     // The SVOOC ceiling stage's view of the trigger (the snapshot is a copy: only while that stage is the state).
     if (runner_.state() == ct::State::Ceiling) {
         const auto sv = svooc_trig::snapshot();

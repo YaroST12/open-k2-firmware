@@ -2408,7 +2408,9 @@ void Runner::poll_impl(Input in, const pd::SourceCaps& caps) {
                               (in.pd.state == pd::SinkState::Idle ||
                                (in.pd.state == pd::SinkState::Ready && in.pd.mv == 5000) ||
                                in.pd.state == pd::SinkState::Failed))) &&
-                              (!fc_owned_ || in.fc_state == fc::State::Idle);
+                              (!fc_owned_ || in.fc_state == fc::State::Idle) &&
+                              // the ceiling stage's trigger needs D+/D- free: the engine's release holds them at 0 V for 500 ms
+                              (!ceiling_pending_ || in.lines_free);
         if (safe5(in.vbus_mv) && released && !in.inline_load && in.cap_mv >= 5000) {
             if (!stable_ || gap > 250) { stable_ = true; stable_ms_ = in.now; }
             // Settle only when VBUS actually moved or a PD contract was held; the source being back ends a recovery.
