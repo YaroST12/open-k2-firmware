@@ -86,7 +86,8 @@ struct Fake final : ct::Env {
     // is up at a raised level), and cut_period_ms (> 0) = a cut at cut_first_ms and every period after it. cut_len_ms is the dark time.
     // After a cut no_handshake_after_cut makes the protocol's next requests fail NoHandshake (the port is back, the charger is silent).
     std::vector<int> cut_on_requests; uint32_t cut_delay_ms = 200, cut_len_ms = 1000, cut_tail_ms = 80, cut_period_ms = 0, cut_first_ms = 0;
-    int cut_dark_mv = 2000, cuts_seen = 0; bool no_handshake_after_cut = false, cut_raised = false;   // cut_raised: a cut may hit a raised output too
+    int cut_dark_mv = 2000, cuts_seen = 0; bool no_handshake_after_cut = false, cut_raised = false;
+    fc::Fail cut_fail = fc::Fail::NoHandshake;   // the engine's failure at the comeback of a cut (a silent entry window reads NoResponse)   // cut_raised: a cut may hit a raised output too
     uint32_t cut_start_at = 0, cut_end_at = 0, cut_tail_at = 0, cut_next_at = 0; bool cut_on = false;
     std::vector<uint32_t> cut_onsets;
     // The FH22 shape (2026-11-11): a Request at out_script_mv starts a scripted output (out_script: {ms since the Request, VBUS mV},
@@ -618,7 +619,10 @@ struct Fake final : ct::Env {
             }
             if (cut_on) {
                 if (in.now < cut_end_at) in.vbus_mv = cut_dark_mv;
-                else { cut_on = false; in.vbus_mv = 5100; cut_tail_at = in.now + cut_tail_ms; }
+                else {
+                    cut_on = false; in.vbus_mv = 5100; cut_tail_at = in.now + cut_tail_ms;
+                    if (cut_fail != fc::Fail::NoHandshake && in.fc_state != fc::State::Idle) { in.fc_state = fc::State::Failed; in.fc_fail = cut_fail; }   // its own timeout, after the comeback
+                }
             }
             if (cut_tail_at && in.now >= cut_tail_at) { cut_tail_at = 0; ++in.session; }
             if (latch_at && in.now >= latch_at) { latch_at = 0; latched = true; latched_at = in.now; ++in.session; }
@@ -5447,6 +5451,20 @@ static void test_a_protocol_failure_after_a_clean_comeback_is_a_fail() {
     CHECK_EQ(r.evidence().cut_retries, 1);
     CHECK_EQ(f.cuts_seen, 1);
 }
+// An engine that ends "no response" (VIVO, UFCS) or "unsupported" (AFC, FCP, SCP) at the cut would skip the whole family as "never
+// answered" (finish() of the row is held, the family loop must not run): the row is asked again and the family keeps its rows.
+static void test_a_cut_that_reads_no_response_does_not_skip_the_family() {
+    for (const auto why : {fc::Fail::NoResponse, fc::Fail::Unsupported}) {
+        const bool vivo = why == fc::Fail::NoResponse;
+        Fake f; f.caps = {}; f.cut_on_requests = {1}; f.cut_fail = why; ct::Runner r(f);
+        CHECK_EQ(r.start(f.caps, {.selected = ct::bit(vivo ? A::Vivo : A::Scp)}, f.in, true), ct::Reason::None);
+        f.tick(r, 120000);
+        CHECK_EQ(r.state(), ct::State::Done);
+        CHECK_EQ(r.evidence().cut_retries, 1);
+        CHECK_EQ(f.cuts_seen, 1);
+        for (const auto& s : r.steps()) CHECK_EQ(s.reason == ct::Reason::Request, false);   // no row was skipped by the family rule
+    }
+}
 static void test_a_fall_in_a_raised_row_is_no_cut_casualty() {
     Fake f; f.caps = {}; f.cut_on_requests = {2}; f.cut_raised = true; ct::Runner r(f);   // the 9 V row of QC2 loses its output: that is no 5 V port cut
     CHECK_EQ(r.start(f.caps, kQc2, f.in, true), ct::Reason::None);
@@ -7766,7 +7784,7 @@ int main() {
     test_avs_current_and_bad_offers(); test_pd_plan_follows_a_list_that_grows_during_the_attach(); test_reannounced_identical_caps_are_not_a_change();
     test_measured_dwell_and_plan_capacity();
     test_usb_a_sag_tail_session_is_not_source_lost(); test_usb_a_sag_tail_waits_for_vbus_to_climb(); test_usb_a_sag_tail_with_dead_or_low_vbus_is_still_lost(); test_session_change_in_baseline_without_a_sag_is_still_lost(); test_usb_a_midrow_session_opens_the_adopt_window(); test_usb_a_sag_dip_under_1v_inside_the_window_waits();
-    test_cut_in_the_row_then_a_clean_retry_passes(); test_a_second_cut_in_the_retry_is_a_skip_not_a_fail(); test_a_loss_that_does_not_come_back_in_the_window_is_a_fail();
+    test_cut_in_the_row_then_a_clean_retry_passes(); test_a_second_cut_in_the_retry_is_a_skip_not_a_fail(); test_a_cut_that_reads_no_response_does_not_skip_the_family(); test_a_loss_that_does_not_come_back_in_the_window_is_a_fail();
     test_a_dip_shorter_than_the_minimum_is_no_cut(); test_a_protocol_failure_after_a_clean_comeback_is_a_fail(); test_the_7s_cut_sequence_over_the_5v_steps_of_the_cuktech_run(); test_a_fall_in_a_raised_row_is_no_cut_casualty();
     test_custom_unit_list_runs_in_order(); test_pd_unit_attaches_with_a_contract(); test_a_failed_unit_does_not_stop_the_run();
     test_default_unit_order_is_vendor_modes_then_pd_then_legacy(); test_default_order_runs_vendor_modes_before_pd_before_legacy(); test_pd_between_vendor_and_legacy_units(); test_pd_replan_in_the_middle_keeps_the_rows_in_order(); test_consecutive_legacy_units_share_one_attach(); test_legacy_session_that_sees_pd_traffic_is_renewed(); test_silent_ufcs_source_reports_no_response_not_pd_active(); test_legacy_waits_between_units();

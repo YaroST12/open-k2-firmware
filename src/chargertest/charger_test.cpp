@@ -2854,6 +2854,7 @@ void Runner::poll_impl(Input in, const pd::SourceCaps& caps) {
         if (s.hunt) if (const uint8_t why = not_unlocked_detail(in)) { finish(in, Verdict::Skip, Reason::NotUnlocked, why); return; }
         const auto group = s.group;
         finish(in, Verdict::Fail, Reason::Request, group == Group::Pd ? static_cast<uint8_t>(in.pd.result) : static_cast<uint8_t>(in.fc_fail));
+        if (cut_wait_) return;   // held as a port cut's casualty: its retry decides, so the family is not judged "never answered" yet
         // AFC / FCP / SCP the charger never answered (pattern qc-only-unacked-rise): the protocol is not spoken, so none of its
         // other levels can prove anything and none of them needs an engine session of its own.
         // A UFCS source that never answered the opening exchange is the same case (no response to its listen window), and so is a
