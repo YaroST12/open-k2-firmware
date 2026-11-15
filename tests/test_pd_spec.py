@@ -179,6 +179,11 @@ class Decode(unittest.TestCase):
         self.assertEqual(pb.fmt_at(k.index("pps_band"), b), "APDO 5 500 mV down to 5.0 V")
         self.assertEqual(pb.fmt_at(k.index("pps_settle"), u), "APDO 5 20 mV up to 5.0 V")
         self.assertEqual(pb.fmt_at(k.index("accept_time"), self.check("accept_time")), "PDO 2 to 3")
+        # accept_time is shared: its worst may come from a programmable move (b = the level in 100 mV, never a PDO index)
+        mv = {"key": "accept_time", "a": 0x96, "b": 106}
+        self.assertEqual(pb.fmt_at(k.index("accept_time"), mv), "APDO 6 100 mV down to 10.6 V")
+        self.assertEqual(pb.fmt_at(k.index("accept_time"), {"key": "accept_time", "a": 0x93, "b": 180},
+                                   passes=[{"pos": 3, "kind": "avs"}]), "APDO 3 500 mV down to 18.0 V")
 
     def test_timers_and_records(self):
         t = self.r["timers"]

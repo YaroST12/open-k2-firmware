@@ -210,18 +210,23 @@ def fmt_limit(c):
     return f"{fmt_value(u, lo)} .. {fmt_value(u, hi)}"
 
 
-def fmt_at(k, c, version=2):
+def fmt_at(k, c, version=2, passes=None):
     """Where the worst value came from: a PDO pair (transition checks), an APDO move (PSC2: position, step class, direction and the
-    level asked for; PSC1: an APDO point), a PDO or the source (timers)."""
+    level asked for; PSC1: an APDO point), a PDO or the source (timers). accept_time is shared by both kinds of move: a programmable
+    one carries the level in 100 mV in b (33 and up), a fixed one a PDO index (under 16); passes name the APDO's kind."""
     keys = [d["key"] for d in load_tables()["checks"]]
-    if k < keys.index("pps_monotonic"):
+    shared_prog = version >= 2 and k < keys.index("pps_monotonic") and c["b"] >= 16
+    if k < keys.index("pps_monotonic") and not shared_prog:
         return f"PDO {c['a']} to {c['b']}"
-    prog = k < keys.index("pps_keepalive") or keys.index("pps_band") <= k <= keys.index("avs_transient")
+    prog = shared_prog or k < keys.index("pps_keepalive") or keys.index("pps_band") <= k <= keys.index("avs_transient")
     if prog and version == 1:
         return f"APDO {c['a']}, point {c['b']}"
     if prog:
         a = c["a"]
-        kind = "avs" if c["key"].startswith("avs_") else "pps"
+        if shared_prog:
+            kind = next((p["kind"] for p in passes or [] if p["pos"] == a & 15), "pps")
+        else:
+            kind = "avs" if c["key"].startswith("avs_") else "pps"
         return f"APDO {a & 15} {step_text(kind, (a >> 4) & 7)} {'down' if a & 0x80 else 'up'} to {c['b'] / 10:.1f} V"
     return f"PDO {c['a']}" if c["a"] else "the source"
 
@@ -243,7 +248,7 @@ def render_text(r):
             continue
         worst = ps_text(c["worst"]) if c["key"] == "pps_status" else fmt_value(c["unit"], c["worst"])
         lines.append(f"  {c['key']:<15} {c['verdict']:<10} worst {worst:<11} limit {fmt_limit(c):<22} "
-                     f"n {c['n']:<3} fails {c['fails']:<3} at {fmt_at(k, c, r.get('version', 2))}"
+                     f"n {c['n']:<3} fails {c['fails']:<3} at {fmt_at(k, c, r.get('version', 2), r.get('passes'))}"
                      + (f"  penalty {c['penalty']}" if c["penalty"] else ""))
     tm = r["timers"]
     ms = lambda v: "-" if v is None else f"{v} ms"
