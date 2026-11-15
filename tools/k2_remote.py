@@ -1846,12 +1846,16 @@ class EmLibFailed(Exception):
     pass
 
 
+# What an err byte means for one op: save has no cable record to take when none was read (2026-11-15: a bare traceback)
+EM_HINTS = {("save", 2): "no cable read to save (read the cable first)"}
+
+
 def _emlib(link, payload, what):
     p = link.call(CMD_EM_LIB, bytes(payload)).payload
     _need(p, 1, what)
     if p[0]:
         e = EM_ERRS[p[0]] if p[0] < len(EM_ERRS) else str(p[0])
-        raise EmLibFailed(f"emarker {what}: {e}")
+        raise EmLibFailed(f"emarker {what}: {EM_HINTS.get((what, p[0]), e)}")
     return p
 
 
@@ -5475,7 +5479,7 @@ def _main(a):
     except FcRefused as e:
         print(f"refused: {e}", file=sys.stderr)
         return 5
-    except (StoreFailed, CardsFailed, TwinFailed, WipeFailed, DumpFailed) as e:
+    except (StoreFailed, CardsFailed, TwinFailed, WipeFailed, DumpFailed, EmLibFailed) as e:   # a refusal of the K2, not a crash
         print(f"error: {e}", file=sys.stderr)
         return 6
     except (RemoteError, FrameError) as e:

@@ -50,6 +50,27 @@ class EmLib(unittest.TestCase):
         with self.assertRaises(kr.EmLibFailed):
             run(["emarker", "save"], [bytes([1, 0, 0, 0])])
 
+    def test_save_without_a_cable_is_a_clean_refusal(self):
+        # 2026-11-15 UGREEN QA: `emarker save` with no cable read ended in a Python traceback (EmLibFailed: emarker save: Invalid)
+        import contextlib
+        import io
+        link = Link([bytes([2])])
+
+        class T:
+            def close(self):
+                pass
+        saved = kr.open_transport, kr.RemoteLink
+        kr.open_transport, kr.RemoteLink = (lambda path: T()), (lambda transport, timeout: link)
+        try:
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                code = kr._main(kr.build_parser().parse_args(["emarker", "save"]))
+        finally:
+            kr.open_transport, kr.RemoteLink = saved
+        self.assertNotEqual(code, 0)
+        self.assertIn("no cable read to save", err.getvalue())
+        self.assertNotIn("Traceback", err.getvalue())
+
     def test_delete_needs_confirm(self):
         with self.assertRaises(kr.FcRefused):
             run(["emarker", "delete", "7"], [])
