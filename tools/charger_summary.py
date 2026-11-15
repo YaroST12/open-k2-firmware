@@ -21,6 +21,10 @@ PROTO_NAMES = {"pd2-fixed": "PD2 fixed", "pd3x-fixed": "PD fixed", "epr-fixed": 
 
 
 NO_QC3PLUS = "no QC3+ response"   # the skip reason of a QC3+ group the charger does not do (Reason::NoQc3Plus)
+# A Light run's rows above 5 V: a level the source lists (Reason::Advertised) or one nothing lists (Reason::LightLevel). They
+# are not skips of a chosen test: the counts name them apart and the rows say "advertised" / "not asked".
+ADVERTISED, NOT_ASKED = "advertised", "light run: not asked"
+NOTED = (ADVERTISED, NOT_ASKED)
 
 
 def _v(mv):
@@ -31,6 +35,11 @@ def _group_key(s):
     # PPS/AVS rows are one sequence per APDO position, the Mi 6 A probe rows their own group; others group by protocol.
     pos = s["pos"] if s["protocol"] in ("pps", "spr-avs", "epr-avs") and s["pos"] else 0
     return (s["protocol"], pos, step_label.is_hunt(s))
+
+
+def _run_level(r):
+    """The level the run ran at: ct_start's "level", else the page's selection.run_level (run_selected bits 28..29)."""
+    return r.get("level") or (r.get("selection") or {}).get("run_level") or "medium"
 
 
 def _retry(s):
@@ -54,6 +63,8 @@ def _step_text(s, prev, amps=True):
         # A refused 6 A row: the firmware's classifier names the cause (k2_remote.attach_hunt_evidence).
         hunt = f" [{s['hunt']['cause']}: {s['hunt']['explanation']}]" if "hunt" in s else ""
         return f"{label} ✗ {why}{at}{hunt}"
+    if s["reason"] in NOTED:
+        return f"{label} advertised" if s["reason"] == ADVERTISED else f"{label} not asked"
     # A 6 A row the source did not offer: the firmware's "not unlocked" skip says which link of the OEM chain was missing.
     return f"{label} skipped: {_not_unlocked(s)}" if s["reason"] == "not unlocked" else f"{label} skipped"
 
@@ -66,6 +77,8 @@ def summarize(r):
     steps = r["steps"]
     ev = r.get("evidence", {})
     n = {k: sum(s["result"] == k for s in steps) for k in ("pass", "fail", "skip")}
+    noted = sum(s["result"] == "skip" and s["reason"] in NOTED for s in steps)
+    n["skip"] -= noted
     cable = ev.get("physical_cable", {})
     offered_ma = max((step_label.pdo_ma(s.get("raw_pdo", 0)) for s in steps), default=0)
     limits = f"{_v(cable.get('max_mv', 0))} V/{cable.get('max_ma', 0) / 1000:g} A"
@@ -82,8 +95,10 @@ def summarize(r):
     spoof = f" · SPOOF: {ident.get('run_name') or ident['run']}" if ident.get("run") not in (None, "off") else \
         " · SPOOF ON" if ev.get("spoof_on") else ""
     out = [f"Run {r['run_id']} · {ev.get('wire_revision', '?')} · {ev.get('pdo_count', '?')} PDOs · cable {cable_txt}" + spoof,
-           f"{n['pass']} pass, {n['fail']} fail, {n['skip']} skip · {r['state']}"
+           f"{n['pass']} pass, {n['fail']} fail, {n['skip']} skip" + (f", {noted} not asked (Light run)" if noted else "")
+           + f" · {r['state']}"
            + (f" ({r['reason']})" if r.get("reason") not in (None, "none") else ""),
+           "Scope: Light run, nothing asked above 5 V, no load" if _run_level(r) == "light" else
            "Scope: negotiation and measured voltage only, no load", ""]
 
     prev_of = {id(s): steps[i - 1] if i else None for i, s in enumerate(steps)}
@@ -113,6 +128,11 @@ def summarize(r):
             continue
         if all(s["result"] == "skip" for s in rows):
             why = rows[0]["reason"]
+            if all(s["reason"] in NOTED for s in rows):   # a Light run's listing, not a skip
+                rng = step_label.pdo_range(rows[0]["raw_pdo"]) if k[1] else ""
+                head = step_label.protocol(rows[0]) + (f" {rng}" if rng else "")
+                out.append(f"- {head}: " + ("advertised, not asked" if why == ADVERTISED else "not asked (Light run)"))
+                continue
             if why == "not advertised":
                 not_adv.append(name)
             else:
@@ -184,20 +204,24 @@ def summarize_card(c):
     """One report card in the run-summary format: a header, a verdict line, then one line per group."""
     g = c["groups"]
     n = {k: sum(e["verdict"] == k for e in g.values()) for k in ("pass", "fail", "skip")}
+    light = c.get("level") == "light"   # a Light run measured 5 V only: a passing group is "detected", never a tick
     out = [f"Card {c['no']} · {c['name'] or '(unnamed)'} · {c['pdos']} PDOs · {c['runs']} runs · "
            f"{c.get('brand', '')} {c['vid']:04X}:{c['pid']:04X}".strip()
            + (f" · {c['pdp_w']} W" if c.get("pdp_w") else "") + f" · fw {c['fw']}" + _card_spoof(c.get("cable")),
-           f"{n['pass']} pass, {n['fail']} fail, {n['skip']} skip of {len(g)} groups · {c['state']}"
+           f"{n['pass']} {'detected' if light else 'pass'}, {n['fail']} fail, {n['skip']} skip of {len(g)} groups · {c['state']}"
            + (f" ({c['reason']})" if c["reason"] else ""),
            f"Identity {c['fp']} · boot {c['boots']} · uptime {c['uptime_s']} s"
            + (f" · same result x{c['times']}, last boot {c['last_boots']} uptime {c['last_uptime_s']} s" if c.get("times", 1) > 1 else "")
-           + (f" · source rebalanced x{c['rebalanced']}" if c.get("rebalanced") else "")]   # v8 card field (report_card_json.cpp puts the same suffix here)
+           + (f" · source rebalanced x{c['rebalanced']}" if c.get("rebalanced") else "")   # v8 card field (report_card_json.cpp puts the same suffix here)
+           + (f" · {c['level'].capitalize()} run" if c.get("level") else "")]   # the run's level, Light / Deep only (Medium has no key)
     if c["handover"] != "not tried":
         out.append(f"Handover: {c['handover']} after {c['handover_ms'] / 1000:g} s")
     out.append("")
     skipped = {}
     for name, e in g.items():
-        if e["verdict"] in ("pass", "fail"):
+        if light and e["verdict"] == "pass":
+            out.append(f"- {name}: detected")
+        elif e["verdict"] in ("pass", "fail"):
             out.append(f"- {name}: " + _group_text(e))
         elif e.get("reason") == NO_QC3PLUS:
             out.append(f"- {name}: no QC3+")   # not folded into the "skipped" list; same words as the firmware's card text
@@ -215,7 +239,8 @@ def summarize_card(c):
         elif r["max_mv"] >= r["hi_mv"]:
             out.append(rng + "✓ whole range" + spread + sweep)
         else:
-            out.append(rng + (f"reached {_v(r['max_mv'])} V" if r["max_mv"] else "no step measured") + spread + sweep)
+            out.append(rng + (f"reached {_v(r['max_mv'])} V" if r["max_mv"] else "advertised" if light else "no step measured")
+                       + spread + sweep)
     return "\n".join(out)
 
 

@@ -56,7 +56,7 @@ var K2Card = (function () {
     "charger stayed in PD", "rebooted during request", "rebooted during handover", "EPR entry refused", "no contract",
     "source shut off (needs replug)", "no PD after re-attach", "VBUS cut, source recovered", "blocked by PD",
     "no QC3+ response", "rebooted 3x", "needs external power", "PD gave up before START", "Class A only (12 V max)",
-    "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target", "withdrawn by source", "wrong voltage on 5V contract", "needs load", "floored above target", "step resolution", "HID-cable loop: 5V lock"];
+    "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target", "withdrawn by source", "wrong voltage on 5V contract", "needs load", "floored above target", "step resolution", "HID-cable loop: 5V lock", "advertised", "light run: not asked"];
   var CAPPED = "capped below target";
   var STATES = ["Setup", "Verify 5V", "Negotiating", "Hold", "Return to 5V", "Complete", "Stopped",
     "UNSAFE: unplug source", "Detach charger", "Initializing..."];
@@ -294,6 +294,7 @@ var K2Card = (function () {
     if (b.length * 8 - r.pos > 16 && r.get(1)) {          // v10: the sweep presence bit + 4 x 9 bytes (absent before it)
       for (var si = 0; si < 36; si++) rec[p + 214 + si] = r.get(8);
     }
+    if (b.length * 8 - r.pos >= 24) rec[p + 197] = r.get(8);   // the run's level (Light/Deep only), a whole byte before the CRC
     rec[4 + PAYLOAD] = r.get(8);                          // the v1 record's CRC-16, carried so the integrity check is unchanged
     rec[4 + PAYLOAD + 1] = r.get(8);
     return rec;
@@ -648,6 +649,8 @@ var K2Card = (function () {
       card.last_uptime_s = u(b, REPEAT_AT + 3, 3);
     }
     if (fmt >= 8 && b.length >= V8_PAYLOAD && b[V8_AT]) card.rebalanced = b[V8_AT];   // v8: the source re-balanced mid-run this often
+    if (fmt >= 8 && b.length >= V8_PAYLOAD && (b[V8_AT + 1] === 1 || b[V8_AT + 1] === 2))   // the run's level (v8 spare byte, 0 = Medium)
+      card.level = b[V8_AT + 1] === 1 ? "Light" : "Deep";
     card.fw = hex8(u(b, 20, 4));
     card.state = STATES[b[29]];
     card.reason = REASONS[b[30]];
@@ -758,8 +761,25 @@ var K2Card = (function () {
 
   // ---- the view model --------------------------------------------------------------------------------------------------
 
-  var GLYPH = {pass: "✓", partial: "~", fail: "✕", skip: "–"};
-  var TONE_WORD = {pass: "achieved", partial: "partly", fail: "failed", skip: "not offered"};
+  var GLYPH = {pass: "✓", partial: "~", fail: "✕", skip: "–", noted: "i"};
+  var TONE_WORD = {pass: "achieved", partial: "partly", fail: "failed", skip: "not offered", noted: "detected"};
+
+  // A Light run (card.level) measured 5 V only (include/k2/chargertest/card_tone.hpp): what passed is "detected" and a range it
+  // only listed is "advertised", both in the noted tone (no fill, never green). Medium and Deep cards keep their tones.
+  function lightTone(card, tone, isRange, r) {
+    if (card.level !== "Light") return tone;
+    if (isRange) return !r.fail_mv && !r.max_mv ? "noted" : tone;
+    return tone === "pass" ? "noted" : tone;
+  }
+  function lighten(card, b) {
+    var t = lightTone(card, b.tone, b.kind === "range", b.range);
+    if (t === "noted" && b.tone !== "noted") {
+      b.tone = "noted";
+      if (b.kind === "range") b.status = "advertised";
+    }
+    delete b.range;
+    return b;
+  }
 
   function volts(mv) {   // 19400 -> "19.4V", 5000 -> "5V", 3300 -> "3.3V"
     var dv = Math.round(mv / 100);
@@ -823,7 +843,7 @@ var K2Card = (function () {
       label = name + " " + span(r.lo_mv, r.hi_mv);
       status = "not run";
     }
-    return {id: "range:" + r.alg + ":" + r.lo_mv + "-" + r.hi_mv, kind: "range", tone: tone, label: label, status: status};
+    return {id: "range:" + r.alg + ":" + r.lo_mv + "-" + r.hi_mv, kind: "range", tone: tone, label: label, status: status, range: r};
   }
 
   // The fixed PDOs are fine when the group failed only through a range (the failing target is recorded as 0 and something
@@ -902,8 +922,12 @@ var K2Card = (function () {
     if (epr) out.push(epr);
     card.ranges.forEach(function (r) { out.push(rangeBadge(r, capped)); });
     GROUPS.slice(1).forEach(function (n) { if (card.groups[n]) out.push(groupBadge(n, card.groups[n], card)); });
-    var rank = {pass: 0, partial: 1, fail: 2, skip: 3};
-    out.forEach(function (b, i) { b.order = i; b.glyph = GLYPH[b.tone]; b.word = TONE_WORD[b.tone]; });
+    out.forEach(function (b) { lighten(card, b); });
+    var rank = {pass: 0, partial: 1, fail: 2, noted: 3, skip: 4};
+    out.forEach(function (b, i) {
+      b.order = i; b.glyph = GLYPH[b.tone];
+      b.word = b.tone === "noted" && b.kind === "range" ? "advertised" : TONE_WORD[b.tone];
+    });
     out.sort(function (a, b) { return rank[a.tone] - rank[b.tone] || a.order - b.order; });
     return out;
   }
@@ -934,13 +958,14 @@ var K2Card = (function () {
       boot: card.boots, run: card.runs, uptime: duration(card.uptime_s),
       ident: "Card #" + card.no + " · run " + card.runs + " · boot " + card.boots + " · up " + duration(card.uptime_s) +
         (card.times > 1 ? " · same result x" + card.times : "") +
-        (card.rebalanced ? " · source rebalanced x" + card.rebalanced : "") + " · fingerprint " + card.fp};
+        (card.rebalanced ? " · source rebalanced x" + card.rebalanced : "") + (card.level ? " · " + card.level + " run" : "") +
+        " · fingerprint " + card.fp};
   }
 
   function row(label, value, tone) { return {label: label, value: value, tone: tone || ""}; }
 
-  function groupRows(name, g, detailRow, extra) {
-    var tone = groupTone(name, g);
+  function groupRows(name, g, detailRow, extra, card) {
+    var tone = card ? lightTone(card, groupTone(name, g), false) : groupTone(name, g);
     var rows = [row("Result", TONE_WORD[tone], tone)];
     var okDetail = g.detail === 14 || g.detail === 15;
     if (okDetail) rows.push(row("Max reached", g.why || "handshake ok"));
@@ -960,16 +985,16 @@ var K2Card = (function () {
     var pd = [];
     var g = card.groups.PD;
     if (g) {
-      var fixed = groupRows("PD", g, true);
+      var fixed = groupRows("PD", g, true, null, card);
       if (g.verdict === "fail" && fixedPdOk(g, card.ranges)) {
         // the group's max, reason and detail describe the range that stopped early (shown under its own heading)
-        fixed = [row("Result", "fixed levels passed; a range stopped early", "pass")];
+        fixed = [row("Result", "fixed levels passed; a range stopped early", lightTone(card, "pass", false))];
         if (g.max_ma) fixed.push(row("Max current", amps(g.max_ma)));
       }
-      pd.push({title: "PD fixed levels", tone: pdBadge(card).tone, rows: fixed});
+      pd.push({title: "PD fixed levels", tone: lighten(card, pdBadge(card)).tone, rows: fixed});
     }
     card.ranges.forEach(function (r) {
-      var b = rangeBadge(r, capped);
+      var b = lighten(card, rangeBadge(r, capped));
       var rows = [row("Result", b.status, b.tone), row("Offered", span(r.lo_mv, r.hi_mv)),
         row("Max reached", r.max_mv ? volts(r.max_mv) : "none")];
       if (r.fail_mv) rows.push(row("Failed at", volts(r.fail_mv), "fail"));
@@ -981,7 +1006,7 @@ var K2Card = (function () {
       EPR_LEVELS.forEach(function (n) {
         var e = card.epr_levels[n];
         if (!e) return;
-        var tone = e.verdict === "pass" ? "pass" : e.verdict === "fail" ? (e.max_mv ? "partial" : "fail") : "skip";
+        var tone = lightTone(card, e.verdict === "pass" ? "pass" : e.verdict === "fail" ? (e.max_mv ? "partial" : "fail") : "skip", false);
         var rows = [row("Result", TONE_WORD[tone], tone), row("Max reached", e.max_mv ? volts(e.max_mv) : "none")];
         if (e.fail_mv) rows.push(row("Failed at", volts(e.fail_mv), "fail"));
         if (e.why) rows.push(row("Why", e.why, tone === "pass" ? "" : "partial"));
@@ -994,9 +1019,9 @@ var K2Card = (function () {
     GROUPS.slice(1).forEach(function (n) {
       var lg = card.groups[n];
       if (!lg) return;
-      var b = groupBadge(n, lg, card);
+      var b = lighten(card, groupBadge(n, lg, card));
       var modeRows = n === "UFCS" && card.ufcs ? card.ufcs.map(function (m, i) { return row("Mode " + (i + 1), ufcsModeText(m)); }) : null;
-      legacy.push({title: GROUP_NAMES[n] || n, tone: b.tone, rows: groupRows(n, lg, true, modeRows)});
+      legacy.push({title: GROUP_NAMES[n] || n, tone: b.tone, rows: groupRows(n, lg, true, modeRows, card)});
     });
     out.push({title: "Other fast-charge protocols", groups: legacy, empty: "None were tested."});
 

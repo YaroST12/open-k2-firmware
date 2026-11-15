@@ -238,6 +238,41 @@ static std::vector<ct::Step> fh22() {
     s[2].measured_mv = 12970; s[3].measured_mv = 8990; s[4].measured_mv = 4990;
     return s;
 }
+// ---- A Light run lists what it did not ask for: "advertised" / "not asked" steps read Noted, never pass or struck -------------
+static void test_light_run_chips_read_noted() {
+    using T = rl::Tally;
+    CHECK_EQ(int(rl::roll_up(T{.noted = 2})), int(rl::Tone::Noted));             // only listed: its own tone
+    CHECK_EQ(int(rl::roll_up(T{.pass = 1, .noted = 2})), int(rl::Tone::Pass));     // a measured level beside listed ones
+    CHECK_EQ(int(rl::roll_up(T{.skip = 1, .noted = 1})), int(rl::Tone::Skip));
+    CHECK_EQ(int(rl::roll_up(T{.noted = 1, .pending = 1})), int(rl::Tone::Pending));
+    CHECK_EQ(rl::mark(rl::Tone::Noted) != rl::mark(rl::Tone::Pass) && rl::mark(rl::Tone::Noted) != rl::mark(rl::Tone::Skip) &&
+             rl::mark(rl::Tone::Noted) != rl::mark(rl::Tone::Dim), true);          // a shape of its own
+    std::vector<ct::Step> s;
+    s.push_back(step(A::Pd3Fixed, 5000, V::Pass, 1, 167874860u));
+    s.push_back(step(A::Pd3Fixed, 9000, V::Skip, 2, 184620u, ct::Reason::Advertised));
+    s.push_back(step(A::Pps, 11000, V::Skip, 6, 3235656292u, ct::Reason::Advertised));
+    s.push_back(step(A::Qc2, 5000, V::Pass));
+    for (unsigned mv : {9000u, 12000u}) s.push_back(step(A::Qc2, mv, V::Skip, 0, 0, ct::Reason::LightLevel));
+    rl::Layout l; rl::build(l, s);
+    const auto& pd = l.rows[row_of(l, "PD3.x")];
+    CHECK_EQ(int(l.tokens[pd.first].tone), int(rl::Tone::Pass));        // 5 V was asked and measured
+    CHECK_EQ(int(l.tokens[pd.first + 1].tone), int(rl::Tone::Noted));   // 9 V only listed
+    CHECK_EQ(int(l.tokens[l.rows[row_of(l, "PPS")].first].tone), int(rl::Tone::Noted));   // never a whole-range verdict
+    const auto& qc = l.rows[row_of(l, "QC2")];
+    CHECK_STR(chips(l, row_of(l, "QC2")).c_str(), "5V 9V 12V");
+    CHECK_EQ(int(l.tokens[qc.first].tone), int(rl::Tone::Pass));
+    CHECK_EQ(int(l.tokens[qc.first + 1].tone), int(rl::Tone::Noted));
+    CHECK_EQ(int(l.tokens[qc.first + 2].tone), int(rl::Tone::Noted));
+    // The Step detail band names a listing for what it is, never SKIP: LISTED (the source advertised it), NOT RUN (a Light
+    // run did not ask it); a skip for any other reason stays SKIP.
+    CHECK_STR(rl::verdict_word(s[1]), "LISTED");
+    CHECK_STR(rl::verdict_word(s[4]), "NOT RUN");
+    CHECK_STR(rl::verdict_word(s[0]), "PASS");
+    CHECK_STR(rl::verdict_word(step(A::Pd3Fixed, 9000, V::Skip, 2, 184620u, ct::Reason::CableLimit)), "SKIP");
+    CHECK_STR(rl::verdict_word(step(A::Pps, 11000, V::Fail, 6, 3235656292u, ct::Reason::Capped)), "CAPPED");
+    CHECK_STR(rl::verdict_word(step(A::Pps, 11000, V::Fail, 6, 3235656292u, ct::Reason::Timeout)), "FAIL");
+    CHECK_EQ(rl::noted(s[1]) && rl::noted(s[4]) && !rl::noted(s[0]), true);
+}
 static void test_a_capped_range_chip_is_amber_and_keeps_the_advertised_range() {
     auto s = fh22();
     rl::Layout l; rl::build(l, s);
@@ -1150,5 +1185,6 @@ int main() {
     test_summary_names_a_handshake_without_a_voltage();
     test_summary_class_b_folds_into_the_qc_family();
     test_default_sweep_rows_fit_without_a_cut();
+    test_light_run_chips_read_noted();
     return test_report("test_result_layout");
 }

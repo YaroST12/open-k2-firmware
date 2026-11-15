@@ -31,11 +31,12 @@ REASONS = ["", "disabled", "not advertised", "over voltage cap", "not implemente
            "request failed", "timeout", "voltage outside band", "hard reset", "source lost",
            "cancelled", "5V release failed", "offers changed", "PD active: use QC port",
            "revision cannot be forced", "select at least one test", "physical cable limit", "unsupported PDO layout",
-           "charger stayed in PD", "rebooted during request", "rebooted during handover", "EPR entry refused", "no contract", "source shut off (needs replug)", "no PD after re-attach", "VBUS cut, source recovered", "blocked by PD", "no QC3+ response", "rebooted 3x", "needs external power", "PD gave up before START", "Class A only (12 V max)", "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target", "withdrawn by source", "wrong voltage on 5V contract", "needs load", "floored above target", "step resolution", "HID-cable loop: 5V lock"]
+           "charger stayed in PD", "rebooted during request", "rebooted during handover", "EPR entry refused", "no contract", "source shut off (needs replug)", "no PD after re-attach", "VBUS cut, source recovered", "blocked by PD", "no QC3+ response", "rebooted 3x", "needs external power", "PD gave up before START", "Class A only (12 V max)", "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target", "withdrawn by source", "wrong voltage on 5V contract", "needs load", "floored above target", "step resolution", "HID-cable loop: 5V lock", "advertised", "light run: not asked"]
 STATES = ["Setup", "Verify 5V", "Negotiating", "Hold", "Return to 5V", "Complete", "Stopped",
           "UNSAFE: unplug source", "Detach charger", "Initializing..."]
 HANDOVER = ["not tried", "fell back", "stayed PD", "fault", "reboot", "in PD contract"]
 VERDICT = ["none", "pass", "fail", "skip"]
+LEVELS = ["medium", "light", "deep"]   # charger_test::Level, the wire values (0 = Medium)
 MAX_RANGES = 4
 # What a group's detail byte means: pd::Err (stored as 128 + err) and pd::SinkResult for PD, fc::Fail for the rest.
 # Mirrors fc::name(Fail), pd::err_name and pd::result_name; tests/test_report_card_py.py parses those and compares.
@@ -240,6 +241,8 @@ def decode(b):
         card.update({"times": b[REPEAT_AT], "last_boots": _u(b, REPEAT_AT + 1, 2), "last_uptime_s": _u(b, REPEAT_AT + 3, 3)})
     if b[33] >= 8 and len(b) >= PAYLOAD and b[V8_AT]:   # v8: the source re-balanced its budget mid-run this often
         card["rebalanced"] = b[V8_AT]
+    if b[33] >= 8 and len(b) >= PAYLOAD and b[V8_AT + 1] in (1, 2):   # the run's level (v8 spare byte; 0 = Medium, no key)
+        card["level"] = LEVELS[b[V8_AT + 1]]
     card.update({"fw": f"{_u(b, 20, 4):08X}",
             "state": STATES[b[29]], "reason": REASONS[b[30]], "pdos": b[27], "spec_rev": b[26],
             "handover": HANDOVER[b[28]], "handover_ms": _u(b, 24, 2) * 100, "groups": groups, "ranges": ranges})

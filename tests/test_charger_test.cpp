@@ -7311,6 +7311,144 @@ static void test_legacy_restart_wait_is_bounded_and_a_load_still_refuses() {
         CHECK_EQ(f.fc_times.size(), size_t(1));
     }
 }
+// Charger-test level (user decision 2026-11-15). A source with every kind of offer: 5/9/15/20 V 3 A, PPS 3.3-21 V 5 A,
+// PPS 3.3-11 V 5 A, SPR AVS 9-20 V; `epr` sets PDO 1's EPR bit.
+static pd::SourceCaps level_caps(bool epr = false) {
+    pd::SourceCaps c = four_pdo_caps(300); c.num_pdos = 7;
+    c.pdos[4] = pd::decode_pdo(0xc0000000u | (210u << 17) | (33u << 8) | 100);
+    c.pdos[5] = pd::decode_pdo(0xc0000000u | (110u << 17) | (33u << 8) | 100);
+    c.pdos[6] = pd::decode_pdo(0xE004B145);
+    if (epr) c.pdos[0] = pd::decode_pdo(c.pdos[0].raw | (1u << 23));
+    return c;
+}
+static void test_level_maps_to_the_run_switches() {
+    CHECK_EQ(int(ct::Options{}.level), int(ct::Level::Medium));
+    CHECK_EQ(int(ct::Level::Medium), 0);   // 0 on every wire: data from before the level reads Medium
+    ct::Options any; any.pps_sweep = any.avs_sweep = true; any.svooc_cap = svooc_ceiling::Mode::On;
+    const auto l = ct::with_level(any, ct::Level::Light), m = ct::with_level(any, ct::Level::Medium), d = ct::with_level({}, ct::Level::Deep);
+    CHECK_EQ(l.pps_sweep || l.avs_sweep, false); CHECK_EQ(int(l.svooc_cap), int(svooc_ceiling::Mode::Off));
+    CHECK_EQ(m.pps_sweep || m.avs_sweep, false); CHECK_EQ(int(m.svooc_cap), int(svooc_ceiling::Mode::On));
+    CHECK_EQ(d.pps_sweep && d.avs_sweep, true);
+    CHECK_EQ(int(l.level), int(ct::Level::Light)); CHECK_EQ(int(d.level), int(ct::Level::Deep));
+    CHECK_EQ(int(ct::next_level(ct::Level::Light)), int(ct::Level::Medium));
+    CHECK_EQ(int(ct::next_level(ct::Level::Medium)), int(ct::Level::Deep));
+    CHECK_EQ(int(ct::next_level(ct::Level::Deep)), int(ct::Level::Light));
+    CHECK_STR(ct::name(ct::Level::Light), "Light"); CHECK_STR(ct::name(ct::Level::Medium), "Medium"); CHECK_STR(ct::name(ct::Level::Deep), "Deep");
+    CHECK_STR(ct::name(ct::Reason::Advertised), "advertised");
+}
+// The plan per level on one source: Light < Medium < Deep in rows that run and in time; Light runs the 5 V row and lists every
+// other PDO / APDO once as Advertised (no hunts, no step walk, no full-current rows, no PdLow unit).
+static void test_level_plans_per_level() {
+    Fake f; f.caps = level_caps();
+    const auto pv = [&](ct::Level l) { return ct::Runner::preview(f.caps, ct::with_level({}, l), f.in); };
+    const auto pl = pv(ct::Level::Light), pm = pv(ct::Level::Medium), pdp = pv(ct::Level::Deep);
+    CHECK_EQ(pl.refusal, ct::Reason::None);
+    CHECK_EQ(pl.runnable < pm.runnable, true); CHECK_EQ(pm.runnable < pdp.runnable, true);
+    CHECK_EQ(pl.estimate_ms < pm.estimate_ms, true); CHECK_EQ(pm.estimate_ms < pdp.estimate_ms, true);
+    CHECK_EQ(pl.max_mv, 5000);   // nothing above 5 V is asked
+    std::printf("[levels] 5/9/15/20 V + PPS 21 V + PPS 11 V + AVS 20 V, every unit: Light %u run / %u rows ~%u s, Medium %u / %u ~%u s, "
+                "Deep %u / %u ~%u s\n", unsigned(pl.runnable), unsigned(pl.total), unsigned(pl.estimate_ms / 1000), unsigned(pm.runnable),
+                unsigned(pm.total), unsigned(pm.estimate_ms / 1000), unsigned(pdp.runnable), unsigned(pdp.total), unsigned(pdp.estimate_ms / 1000));
+    ct::Runner r(f);
+    CHECK_EQ(r.start(f.caps, ct::with_level(with_units(ct::kDefaultAlgorithms, {ct::Unit::Pd, ct::Unit::PdLow}), ct::Level::Light), f.in, true),
+             ct::Reason::None);
+    unsigned pending = 0, advertised[8] = {};
+    for (const auto& s : r.steps()) {
+        CHECK_EQ(int(ct::unit_of(s)), int(ct::Unit::Pd));   // Light plans no PdLow rows
+        if (s.verdict == ct::Verdict::Pending) { ++pending; CHECK_EQ(s.pos, 1); CHECK_EQ(s.mv, 5000); }
+        if (s.reason == ct::Reason::Advertised && s.pos < 8) ++advertised[s.pos];
+        CHECK_EQ(s.hunt, false);
+        CHECK_EQ(ct::is_step_walk(s) || ct::is_sweep(s), false);
+    }
+    CHECK_EQ(pending, 1u);
+    for (unsigned pos = 2; pos <= 7; ++pos) CHECK_EQ(advertised[pos], 1u);
+    // the advertised row names its whole offer: the fixed level, or the APDO's top
+    for (const auto& s : r.steps()) if (s.reason == ct::Reason::Advertised && s.pos >= 2 && s.pos <= 7)
+        CHECK_EQ(s.mv, f.caps.pdos[s.pos - 1].max_mv);
+}
+// The whole Light run, every unit, against a source that also lists a UFCS mode set and grows its list mid-run: the Fake's
+// recorded requests show nothing above or below 5 V, no EPR entry, no hunt. EPR-capable twice: with an EPR cable and without.
+static void test_light_run_requests_nothing_but_5v() {
+    for (const bool epr_cable : {false, true}) {
+        Fake f; f.caps = level_caps(true); f.caps.num_pdos = 6; f.caps.pdos[6] = {};
+        f.grown = level_caps(true); f.grow_after_ms = 400;   // the AVS APDO arrives with a later list
+        if (epr_cable) { f.in.cable_mv = 50000; f.in.cable_ma = 5000; f.in.cable_observed = true; }
+        f.epr_caps = level_caps(true); f.epr_caps.epr = true; f.epr_caps.num_pdos = 8;
+        f.epr_caps.pdos[7] = pd::decode_pdo(((28000u / 50) << 10) | 500);
+        const auto ucaps = ufcs_caps_of({ufcs_mode(1, 3400, 11000, 1000, 5000), ufcs_mode(2, 5000, 20000, 1000, 3000)});
+        const auto scaps = scp_caps_of(3300, 20000, 1000, 6000);
+        f.serve_caps = &ucaps;
+        ct::Runner r(f);
+        CHECK_EQ(r.start(f.caps, ct::with_level({}, ct::Level::Light), f.in, true), ct::Reason::None);
+        CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done || r.state() == ct::State::Stopped; }, 900000), true);
+        CHECK_EQ(int(r.state()), int(ct::State::Done));
+        bool pd5 = false;
+        for (const auto& s : r.steps()) pd5 |= s.group == ct::Group::Pd && s.pos == 1 && s.verdict == ct::Verdict::Pass;
+        CHECK_EQ(pd5, true);   // the 5 V row ran
+        for (const auto& c : f.choices) { CHECK_EQ(c.pos, 1); CHECK_EQ(c.mv, 5000); CHECK_EQ(c.hunt, false); }
+        for (const int mv : f.fc_mvs) CHECK_EQ(mv, 5000);
+        CHECK_EQ(f.entry_times.size(), size_t(0));
+        unsigned ufcs_adv = 0;
+        for (const auto& s : r.steps()) {
+            CHECK_EQ(s.verdict == ct::Verdict::Pass && s.mv != 5000, false);
+            if (s.group == ct::Group::Ufcs && s.reason == ct::Reason::Advertised) ++ufcs_adv;
+        }
+        CHECK_EQ(ufcs_adv > 0, true);   // the modes the adapter read back are recorded, not asked
+        (void)scaps;
+    }
+}
+// A Light run resumed after a power loss is replanned Light (the level rides in the journal meta) and still asks only 5 V.
+// The schema-2 page says which level the run in hand ran at: run_selected bits 28..29 (the draft's own level is in the draft
+// mask), so a results export names the run's level even after the next run's level was changed.
+static void test_the_page_names_the_run_level() {
+    for (const auto lv : {ct::Level::Medium, ct::Level::Light, ct::Level::Deep}) {
+        Fake f; f.caps = level_caps(); ct::Runner r(f);
+        CHECK_EQ(r.start(f.caps, ct::with_level(with_units(ct::kDefaultAlgorithms, {ct::Unit::Pd}), lv), f.in, true), ct::Reason::None);
+        std::array<uint8_t, remote::kMaxRspPayload> b{};
+        CHECK_EQ(remote::encode_charger_test(b, remote::charger_test_snapshot(r), 0, false, 2) >= remote::kChargerTestHeader2, true);
+        const uint32_t run_sel = uint32_t(b[15]) | uint32_t(b[16]) << 8 | uint32_t(b[17]) << 16 | uint32_t(b[18]) << 24;
+        CHECK_EQ((run_sel >> 28) & 3u, unsigned(lv));
+        CHECK_EQ(run_sel & 0x0FFFFFFFu, r.evidence().selected & 0x0FFFFFFFu);
+    }
+}
+static void test_a_resumed_light_run_stays_light() {
+    const auto o = ct::with_level(with_units(ct::kDefaultAlgorithms, {ct::Unit::Pd, ct::Unit::Qc2, ct::Unit::Ufcs}), ct::Level::Light);
+    const auto ucaps = ufcs_caps_of({ufcs_mode(1, 3400, 11000, 1000, 5000)});
+    Fake rf; rf.caps = level_caps(); rf.serve_caps = &ucaps; ct::Runner ref(rf);
+    CHECK_EQ(ref.start(rf.caps, o, rf.in, true), ct::Reason::None);
+    rf.tick(ref, 400000);
+    CHECK_EQ(int(ref.state()), int(ct::State::Done));
+    const size_t total = rf.events;
+    size_t resumed_runs = 0;
+    // Power lost at every event; every other cut also loses the meta record (the replay then has the header and rows only, as
+    // after a cut between the header and the meta): the resumed run must stay Light either way.
+    for (size_t k = 0; k < total; ++k) {
+        const bool with_meta = k % 2 == 0;
+        k2test::RamDisk fl(96); JStore js(fl); cj::Journal& j = js.j;
+        Fake f; f.caps = level_caps(); f.serve_caps = &ucaps; ct::Runner r(f);
+        f.jr = &j; f.rn = &r; f.cut_event = k;
+        if (r.start(f.caps, o, f.in, true) != ct::Reason::None) { CHECK_EQ(0, 1); continue; }
+        if (f.dead) continue;
+        j.begin(r.run_id(), o, r.evidence(), r.steps());
+        if (with_meta) j.meta({.units = o.units, .level = o.level});
+        for (int n = 0; n < 4000 && !f.dead && r.state() != ct::State::Done; ++n) f.tick(r, 100);
+        f.k2_rebooted();
+        ct::Runner r2(f); f.rn = &r2;
+        cj::Replay rep; j.replay(rep);
+        if (!rep.found || !rep.unfinished) continue;
+        if (with_meta) CHECK_EQ(int(rep.options.level), int(ct::Level::Light));
+        r2.restore(rep.options, rep.evidence, rep.run_id, {rep.steps.data(), rep.count}, rep.phase, rep.phase_index, rep.resumed,
+                   rep.attempt_index, rep.attempts);
+        CHECK_EQ(int(r2.level()), int(ct::Level::Light));   // from the meta, or read back from the Light rows without it
+        if (r2.resume(f.in, true) != ct::Reason::None) continue;
+        for (int n = 0; n < 8000 && r2.state() != ct::State::Done && r2.state() != ct::State::Stopped; ++n) f.tick(r2, 100);
+        CHECK_EQ(int(r2.state()), int(ct::State::Done));
+        for (const auto& c : f.choices) CHECK_EQ(c.mv, 5000);
+        for (const int mv : f.fc_mvs) CHECK_EQ(mv, 5000);
+        ++resumed_runs;
+    }
+    CHECK_EQ(resumed_runs > 4, true);
+}
 int main() {
     test_an_above_5v_request_waits_for_the_journal_without_blocking();
     test_reannounce_before_the_first_row_replans(); test_reannounce_during_the_first_row_follows_the_new_slots();
@@ -7438,5 +7576,8 @@ int main() {
     test_default_sweep_on_a_low_latch_source();
     test_self_powered_run_sweeps_from_5v();
     test_legacy_row_waits_through_a_source_restart(); test_legacy_restart_wait_is_bounded_and_a_load_still_refuses();
+    test_level_maps_to_the_run_switches(); test_level_plans_per_level(); test_light_run_requests_nothing_but_5v();
+    test_a_resumed_light_run_stays_light();
+    test_the_page_names_the_run_level();
     return test_report("test_charger_test");
 }

@@ -218,7 +218,7 @@ static void test_worst_case_fits_version_21() {
 }
 
 // The worst report card as the store keeps it: format 10, the full 256 byte record, plain and incompressible, 392 characters
-// of the 929 of one version 21 code. Its v2 form is 83 B for a real card and at most 241 B with every field at its limit (322
+// of the 929 of one version 21 code. Its v2 form is 83 B for a real card and at most 242 B with every field at its limit (323
 // characters), still one code.
 static void test_worst_card_fits_one_code() {
     static_assert(rc::kMaxRecord <= lk::kMaxRecord, "the worst card record fits one code");
@@ -243,10 +243,10 @@ static void test_worst_card_fits_one_code() {
     const std::string t = link_of(qs::Type::Card, rec, false, true);
     CHECK_EQ(t.size(), 392u);
     CHECK(t.size() <= lk::kMaxText);
-    // ... and its v2 form: 241 B worst case, 322 characters, still a version 11 code
+    // ... and its v2 form: 242 B worst case, 323 characters, still a version 11 code
     Bytes v2(qs::records::kMaxEmarker);
     const std::size_t vn = qs::records::pack_v2(qs::Type::Card, rec, v2);
-    CHECK(vn <= qs::records::kMaxCardV2);   // the bit-count bound (241 B) covers the sweep block too; the packed worst card is 204 B
+    CHECK(vn <= qs::records::kMaxCardV2);   // the bit-count bound (242 B) covers the sweep and level blocks too; the packed worst card is 204 B
     CHECK_EQ(vn, 204u);
     v2.resize(vn);
     char out[lk::kMaxText + 1];

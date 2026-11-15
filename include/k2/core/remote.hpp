@@ -57,6 +57,7 @@ public:
     remote::Status charger_units(std::span<const uint8_t> units);   // unit order of the next charger run (empty = default)
     remote::Status charger_sweep(bool on);   // the PPS deep sweep of the next charger run (on by default; off = opt-out)
     remote::Status charger_avs_sweep(bool on);   // the AVS deep sweep of the next charger run (opt-in)
+    remote::Status charger_level(uint8_t level); // the level of the next charger run (charger_test::Level, below kLevelCount)
     remote::ChargerCableReply charger_cable(const ctcable::Choice* set);   // cable identity of the START dialog (null = read)
     remote::ChargerSvoocCapReply charger_svooc_cap(const uint8_t* set);    // SVOOC ceiling stage: mode of the next run (null = read) and the latest result
     remote::ChargerHuntReply charger_hunt(uint8_t slot) const;   // evidence of a refused 6 A hunt row (read-only)

@@ -93,6 +93,28 @@ class SchemaV2(unittest.TestCase):
                 expand = q.expand_card_v2 if FIX[v2name]["type"] == 4 else q.expand_emk_v2
                 self.assertEqual(expand(rec), FIX[v1name]["record"])
 
+    def test_v2_carries_the_run_level_and_keeps_the_crc(self):
+        # The level (v8 spare byte 197: 1 Light, 2 Deep) rides in the v2 record as one trailing byte, written only when it is
+        # not Medium; a Medium card packs exactly as before, so older links keep their bytes.
+        import qr_corpus
+        v1 = bytearray(FIX["card"]["record"])
+        self.assertGreaterEqual(v1[4 + 33], 8)
+        medium = qr_corpus.pack_card_v2(qr_corpus.parse_card(bytes(v1)))
+        for level in (1, 2):
+            with self.subTest(level=level):
+                rec = bytearray(v1)
+                rec[4 + 197] = level
+                crc = qr_corpus.crc16_ccitt(bytes(rec[:-2]))
+                rec[-2], rec[-1] = crc & 0xFF, crc >> 8
+                v2 = qr_corpus.pack_card_v2(qr_corpus.parse_card(bytes(rec)))
+                self.assertEqual(len(v2), len(medium) + 1)
+                back = q.expand_card_v2(v2)
+                self.assertEqual(back, bytes(rec))
+                d = q.decode_card(back)
+                self.assertTrue(d["_store_crc_ok"])
+                self.assertEqual(d["level"], ["medium", "light", "deep"][level])
+        self.assertEqual(q.expand_card_v2(medium), bytes(v1))   # Medium: no byte, still reads back whole
+
     def test_v2_card_json_matches_the_v1_card(self):
         a = q.decode_texts(FIX["card_v2"]["parts"])[0]["record"]
         b = q.decode_texts(FIX["card"]["parts"])[0]["record"]

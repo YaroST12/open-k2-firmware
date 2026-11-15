@@ -60,11 +60,19 @@ enum class Reason : uint8_t {
                          // but regulates at 5 V. A fail, measured_mv = the floor (the mirror of Capped's ceiling logic)
     StepResolution,      // a PPS step-walk row whose +20 mV step the source did not follow (rounded to a coarser quantum or ignored):
                          // a fail, detail = the measured move in mV (0 = no move)
-    Loop                 // the HID-cable loop 5 V lock (k2/core/loop_guard.hpp, Input::loop_lock): no run starts; a lock mid-run fails the
+    Loop,                // the HID-cable loop 5 V lock (k2/core/loop_guard.hpp, Input::loop_lock): no run starts; a lock mid-run fails the
                          // row in flight and ends the run back at 5 V
+    Advertised,          // a Light run (Level::Light): a level the source's own list offers (a PD PDO / APDO, an EPR level, a UFCS mode, an
+                         // SCP limit read from the adapter), recorded as advertised and never requested. A skip that is no failure and
+                         // no "not tested": the UI shows it as noted, never as pass
+    LightLevel           // a Light run: a legacy level other than the 5 V handshake (nothing advertises it), or a protocol only told
+                         // apart above 5 V (AFC, QC3+, QC Class B): not asked at this level, a Medium run asks it
 };
 // Step.detail of a PPS step-walk row while it is Pending/Running (finish() overwrites it with the result); sits above every
 // engine code and the EPR skip codes so the card and the tools never mistake it for one.
+// Charger-test thoroughness (Options::level, with_level). The values are the wire values: 0 = Medium.
+enum class Level : uint8_t { Medium = 0, Light = 1, Deep = 2 };
+inline constexpr unsigned kLevelCount = 3;
 inline constexpr uint8_t kDetailStepWalk = 160;
 // Step.detail of a deep-sweep row (ROADMAP "PPS deep sweep"; the AVS sweep reuses the marker on its AVS algorithms).
 // Unlike the walk's marker it SURVIVES finish() (finish keeps it), so a finished run's results strip and the card can
@@ -207,8 +215,26 @@ struct Options {
     // the guarded trigger asks the adapter 1.5 / 4 / 6.3 / 10.9 A (a protocol word, no load) and the highest ask it went on
     // under is the result; UsbA also waives the trigger's far-sink refusal (a legacy A port, the top port empty).
     svooc_ceiling::Mode svooc_cap = svooc_ceiling::Mode::Off;
+    // How thorough the run is (with_level). Medium is 0 on every wire (journal, remote status word, card), so data written before
+    // the level existed reads as Medium.
+    Level level = Level::Medium;
     bool contains(Algorithm a) const { return selected & bit(a); }
 };
+// The one place a level maps to the run's switches (user decision 2026-11-15):
+//   Light  - VBUS stays at 5 V: the PD 5 V row, the 5 V handshake of each legacy protocol, the source's own list recorded as
+//            Advertised rows (Reason::Advertised); no Request above or below 5 V, no EPR entry (its levels are read in SPR mode),
+//            no sweeps, no SVOOC ceiling, no PdLow unit.
+//   Medium - the fixed levels, the PPS / AVS points, the legacy level steps; no deep sweeps.
+//   Deep   - Medium plus the PPS and AVS deep sweeps over every APDO.
+// The sweep flags stay their own switches afterwards (the Custom flow's sweep rows and the remote commands toggle them).
+constexpr Options with_level(Options o, Level l) {
+    o.level = l;
+    o.pps_sweep = o.avs_sweep = l == Level::Deep;
+    if (l == Level::Light) o.svooc_cap = svooc_ceiling::Mode::Off;
+    return o;
+}
+constexpr Level next_level(Level l) { return l == Level::Light ? Level::Medium : l == Level::Medium ? Level::Deep : Level::Light; }
+const char* name(Level);
 struct Step {
     Group group = Group::Pd;
     Algorithm algorithm = Algorithm::Pd3Fixed;
@@ -640,6 +666,7 @@ public:
     bool suspended() const { return suspended_; }
     Reason resume(Input, bool confirmed);
     uint8_t resumed() const { return resumed_; }
+    Level level() const { return opts_.level; }   // the level of the run in hand (started or restored)
     uint8_t reattach_count() const { return reattach_; }   // how many times the run went through the planned re-attach
     bool busy() const { return (state_ >= State::Baseline && state_ <= State::Releasing) || state_ == State::Unsafe || state_ == State::Detach || state_ == State::Attach || state_ == State::Ceiling; }
     // The page scans for the source's Rp while a unit attaches (the main loop's own scan is too slow for a fast announcer).

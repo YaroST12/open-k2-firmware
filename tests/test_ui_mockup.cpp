@@ -56,6 +56,8 @@ static void fixture() {
 
 static void render(Ui& ui, uint32_t& t, const char* name) {
     ui.tick(t); t += 200; ui.tick(t); t += 200;
+    // A budgeted repaint (a stage change, a page switch) takes more than two ticks: the frame is dumped once it is whole.
+    for (int more = 0; more < 40 && ui.painting(); ++more) { ui.tick(t); t += 20; }
     dump(name);
 }
 
@@ -175,6 +177,9 @@ int main() {
     render(ui, t, "ct_cable");
     ui.on_button(Button::Ok, ButtonEvent::Short, t); t += 100;   // Next -> Review
     render(ui, t, "ct_review");
+    ui.on_button(Button::Minus, ButtonEvent::Short, t); t += 100;   // the Level row: its focus look and its footer note
+    render(ui, t, "ct_review_level");
+    ui.on_button(Button::Plus, ButtonEvent::Short, t); t += 100;    // back to START
     // Each scene is checked against the stage it is named after, so a change of the START flow cannot silently
     // retitle a scene. The first START press opens the confirm window on Review (no dialog: the cable identity was
     // chosen on the Cable step).

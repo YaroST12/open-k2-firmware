@@ -86,9 +86,13 @@ void paint_texts(const Surface &s, Box ground, const TextRun *runs, int n, uint1
 // cell to cell in the tick the step changes (ResultGrid::sync_dots) without repainting either label;
 // partial: amber tint + amber ink, a 2 px amber bar along the bottom edge (a labelled cell) or a tilde (no label): some of the
 // steps passed or the source capped below the target. Amber because it is abnormal; the bar / tilde because colour alone never
-// carries a state (redundant coding). Appended last: the values travel in RowSpec::state.
-enum class Verdict : uint8_t { Pending, Running, Pass, Fail, None, Skip, Stopped, Partial };
+// carries a state (redundant coding);
+// noted: no fill, normal text ink, a 2 px dim bar down the left edge (a labelled cell) or a short vertical bar (no label): only
+// listed, measured nothing and failed nothing (a Light run's advertised level, a level it did not ask for, a card group that
+// answered at 5 V). Never green, never struck. Appended last: the values travel in RowSpec::state.
+enum class Verdict : uint8_t { Pending, Running, Pass, Fail, None, Skip, Stopped, Partial, Noted };
 constexpr int16_t kPartialBarH = 2;   // the bar of a labelled Partial cell
+constexpr int16_t kNotedBarW = 2;     // the bar of a labelled Noted cell
 constexpr int16_t kRunFrame = 2;      // the Running cell's outline: this many px along each edge, inside the cell
 // The outline's pixels on a w x h cell (the four edges, the corners once).
 constexpr int run_mark_px(int w, int h) {
@@ -107,6 +111,7 @@ inline VerdictStyle verdict_style(Verdict v) {
     case Verdict::Partial: return {kPartFill, kOnPart, 0, true, false};
     case Verdict::Running: return {0, kFaint, kAccent, false, true};   // the pending look + the accent outline (the shape cue)
     case Verdict::Pending: return {0, kFaint, 0, false, false};
+    case Verdict::Noted:   return {0, kText, kDim, false, false};     // the left bar (mark colour) is the shape cue
     case Verdict::None:
     case Verdict::Skip:
     case Verdict::Stopped: break;
@@ -278,6 +283,11 @@ void kv_ground(const Surface &s, const KvLayout &l, const char *const *labels, i
 // (fit_data: cut by design, only counted).
 void kv_row(const Surface &s, const KvLayout &l, int16_t y, std::string_view key, std::string_view value, uint16_t value_color,
             bool ours = false K2_TRUNC_DECL);
+// A key/value row the cursor can stand on (Review's Level): the row below its hairline is laid first, then kv_row's texts. Focused,
+// it takes the RowList's focus look (the focus ground, the 3 px kFocusBar when the theme has one, else the on-focus inks); the
+// value is firmware text (a cut fails the host gate).
+void kv_row_sel(const Surface &s, const KvLayout &l, int16_t y, std::string_view key, std::string_view value, uint16_t value_color,
+                bool focused K2_TRUNC_DECL);
 
 // ---- AlertBand -----------------------------------------------------------------------------------------------------------
 // Full-width band, kCaution or kError fill: a 20 px black triangle and the word in S24 (black ink). Short lines below it
@@ -298,7 +308,9 @@ class ActionCell {
 public:
     static constexpr int16_t kBarH = 4;
     void init(const Surface &s, int16_t y, int16_t h) { surf_ = s; y_ = y; h_ = h; invalidate(); }
-    bool draw_idle(std::string_view verb, std::string_view hint, PaintBudget *bg = nullptr);
+    // `focused` false: the cell is not under the cursor (another row of the page is): plain ground, a 2 px kRule outline and
+    // the verb and hint in kInk2, so the focus is never on two things at once.
+    bool draw_idle(std::string_view verb, std::string_view hint, PaintBudget *bg = nullptr, bool focused = true);
     // `left_permille` 1000..0: the share of the window still left; `sub` is the line under the word.
     bool draw_armed(std::string_view word, std::string_view sub, int left_permille, PaintBudget *bg = nullptr);
     void invalidate() { e_.invalidate(); bar_px_ = -1; }

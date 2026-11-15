@@ -68,7 +68,9 @@ constexpr const char* kFamilyNames[] = {"Huawei / Honor", "Samsung", "OPPO / viv
 static_assert(all_fit(kFamilyNames, kSmallAdvPx, 112), "a family name is wider than its row");
 // Tests rows (wizard step 1): 0..3 the presets, 4 "Custom...", 5 "Last results" once a run exists.
 // Custom rows: 0..kFamilyCount-1 the families, then "Done" (row kFamilyCount).
-constexpr int kFamilyCount = 6, kPresets = 4, kCustomRow = 4, kViewRow = 5, kStartRow = 0;
+constexpr int kFamilyCount = 6, kPresets = 4, kCustomRow = 4, kViewRow = 5;
+// Review: the Level row above START (index order = screen order); START is where the stage opens and where the remote lands.
+constexpr int kLevelRow = 0, kStartRow = 1;
 // The presets are subsets of "All tests" (the default set, Class B included): PD = the PD family (its Mi 6A probes ride
 // along), Legacy = every D+/D- family (OEM vendor modes + QC / UFCS), Vendor modes = the OEM D+/D- families only.
 constexpr const char* kPresetNames[kPresets] = {"All tests", "PD only", "Legacy only", "Vendor modes"};
@@ -81,6 +83,11 @@ static_assert(all_fit(kPresetNames, kSmallAdvPx, 150), "a preset name is wider t
 // stage of its own (27 characters at most): the second press goes straight on.
 constexpr const char* kReattachConfirm = "Press again, K2 blinks once";
 static_assert(fits_px(kSmallAdvPx, kReattachConfirm, 216), "the re-attach confirmation is wider than the footer");
+// Review's footer while the cursor is on the Level row: what the level does (charger_test::Level order: Medium, Light, Deep).
+constexpr const char *kLevelNotes[ct::kLevelCount] = {"Medium: levels, no sweeps", "Light: lists offers at 5V",
+                                                       "Deep: + PPS and AVS sweeps"};
+static_assert(all_fit(kLevelNotes, kSmallAdvPx, 216), "a level note is wider than the footer");
+const char *level_note(ct::Level l) { return kLevelNotes[unsigned(l) < ct::kLevelCount ? unsigned(l) : 0]; }
 // A row whose engine times its own pulses stops the screen for the length of the handshake (the engine window the LCD idle hook
 // does not serve, Runner::paint_blocked; Engine::blocks_paint names the protocols). One Info footer line says why, painted before
 // the engine starts and left alone until the window ends. Protocols with no such window say nothing: the QC2 / QC3 / QC3+ handshake
@@ -167,11 +174,6 @@ void put_hunt_line(StrBuf<64>& s, const ct::HuntEvidence& h, int n) {
          .put(kAnswers[h.answer & 3]);
         if (h.answer) s.put_char(' ').put_u32(h.answer_ms).put("ms");
     }
-}
-void put_revision(StrBuf<48>& s, uint8_t wire, const pd::Revision& r) {
-    s.put(pd::wire_revision_name(wire)).put("  RMDO ");
-    if (r.valid) s.put_u32(r.rev_major).put_char('.').put_u32(r.rev_minor);
-    else s.put("-");
 }
 struct Counts {
     unsigned pass = 0, fail = 0, skip = 0, total = 0;
@@ -757,6 +759,7 @@ void ChargerTestSession::capture_identity() {
     report_card::build_into(card_, runner_.steps(), runner_.evidence(), runner_.handover(), card_id_,
                             report_card::hw::context(), runner_.state(), runner_.reason(), cable, runner_.resumed(),
                             runner_.sweep_view());
+    card_.level = runner_.level();             // the card names a Light / Deep run (v8 spare byte)
     report_card::set_auto_name(card_, mfr_);   // "<Brand> <PDP>W"; hw::put keeps a name the user gave
     save_card_store();
 }
@@ -1253,11 +1256,13 @@ void ChargerTestSession::begin_run() {
     journal_active_ = false; capture_kept_ = false; reattach_plan_ = false; reattach_ask_ = false; reattach_ = 0;
     capture_identity();
     const auto r = runner_.start(fusb302::caps(), options_, in, true);
-    K2LOG("[TEST] start selected=%u units=%u -> %s\n", unsigned(options_.selected), unsigned(options_.units.n), ct::name(r));
+    K2LOG("[TEST] start selected=%u units=%u level=%s -> %s\n", unsigned(options_.selected), unsigned(options_.units.n),
+          ct::name(options_.level), ct::name(r));
     charger_journal::RunMeta meta;
     meta.units = options_.units;
     meta.pps_sweep = options_.pps_sweep;   // a resumed run re-plans the sweep rows from the journaled options
     meta.avs_sweep = options_.avs_sweep;
+    meta.level = options_.level;           // a resumed Light run stays Light (never replanned as Medium)
     meta.unattended = self_supplied();   // the K2 runs on the measured port (pinned Rd or bus-powered): the run never detaches
     self_run_ = meta.unattended;
     meta.cable_kind = static_cast<uint8_t>(run_cable_.kind); meta.cable_seq = run_cable_.seq;
@@ -1300,6 +1305,10 @@ bool ChargerTestSession::set_units(std::span<const uint8_t> units) {
     options_.units = list;
     invalidate_confirmation();   // the preview's runnable count follows the list
     return true;
+}
+void ChargerTestSession::set_level(ct::Level l) {
+    options_ = ct::with_level(options_, l);
+    invalidate_confirmation();   // the preview's step count follows the level
 }
 void ChargerTestSession::enter() {
     ctx_.cables.sync();
@@ -1523,7 +1532,7 @@ int ChargerTestPage::row_count() const {
         return 2 + (pps_pts ? 1 : 0) + (avs_pts ? 1 : 0);
     }
     case Stage::Cable: return ctx_.cables.count();
-    case Stage::Review: return 1;
+    case Stage::Review: return 2;   // Level, START
     case Stage::Running: return static_cast<int>(s_.runner_.steps().size());
     case Stage::Results: return static_cast<int>(line_n_) + (s_.delta_n_ ? 1 : 0);
     case Stage::Changes: return static_cast<int>(s_.delta_n_);
@@ -1605,7 +1614,10 @@ kit::Verdict vmap(ct::Verdict v) {
 }
 // A step held a plateau below its target: amber (Partial), the same tone its chip wears (result_layout::tone).
 bool is_capped(const ct::Step& s) { return s.verdict == ct::Verdict::Fail && s.reason == ct::Reason::Capped; }
-kit::Verdict vmap(const ct::Step& s) { return is_capped(s) ? kit::Verdict::Partial : vmap(s.verdict); }
+// A Light run's listing (Advertised / LightLevel skip) is Noted, never a skip mark: the same tone its chip wears.
+kit::Verdict vmap(const ct::Step& s) {
+    return is_capped(s) ? kit::Verdict::Partial : result_layout::noted(s) ? kit::Verdict::Noted : vmap(s.verdict);
+}
 // A delta range value (100 mV units) as "13V" / "13.5V".
 template <typename Buf> void put_dv(Buf &b, unsigned dv) {
     b.put_u32(dv / 10);
@@ -1750,6 +1762,7 @@ void ChargerTestPage::announce(const char* words) {
             return FooterTone::Caution;
         }
         if (!s_.summary_.runnable) { f.put("Nothing to run: all skip"); return FooterTone::Caution; }
+        if (s_.selection_ == kLevelRow) { f.put(level_note(s_.options_.level)); return FooterTone::Info; }
         if (s_.confirming_) { f.put(s_.confirm_reattach_ ? kReattachConfirm : "Press again to start"); return FooterTone::Caution; }
         if (in.cable_mv == 20000 && s_.summary_.max_mv == 21000) { f.put("PPS: 21V on 20V wire"); return FooterTone::Info; }
         if (self_supplied()) { f.put("Self-powered: VBUS stays up"); return FooterTone::Info; }
@@ -1805,16 +1818,19 @@ void ChargerTestPage::announce(const char* words) {
             return rc.tone == Tone::Pass ? FooterTone::Ok : rc.tone == Tone::Partial || rc.tone == Tone::Fail ? FooterTone::Caution
                                                                                                                 : FooterTone::Info;
         }
-        unsigned pass = 0, fail = 0, other = 0;
+        unsigned pass = 0, fail = 0, listed = 0, other = 0;
         for (const auto &s : s_.runner_.steps()) {
             if (!result_layout::row_has(row, s)) continue;
+            const bool noted = result_layout::noted(s);   // a Light run's listing: neither a result nor a skip
             pass += s.verdict == ct::Verdict::Pass;
             fail += s.verdict == ct::Verdict::Fail;
-            other += s.verdict != ct::Verdict::Pass && s.verdict != ct::Verdict::Fail;
+            listed += noted;
+            other += !noted && s.verdict != ct::Verdict::Pass && s.verdict != ct::Verdict::Fail;
         }
         bool first = true;
         put_part(f, pass, "pass", first);
         put_part(f, fail, "fail", first);
+        put_part(f, listed, "listed", first);
         put_part(f, other, "other", first);
         if (first) f.put("no result");
         return fail ? FooterTone::Caution : pass ? FooterTone::Ok : FooterTone::Info;
@@ -1974,8 +1990,9 @@ void ChargerTestPage::list_row(int index, bool focused, kit::RowSpec &out) {
         }
         out.tail = row_tail_.view();
         if (focused) {
-            row_note_.put(ct::name(s.verdict));
-            if (s.verdict == ct::Verdict::Fail || s.verdict == ct::Verdict::Skip) row_note_.put(": ").put(detail_name(s));
+            const bool listing = result_layout::noted(s);   // a Light run's listing: LISTED / NOT RUN, no skip cause
+            row_note_.put(listing ? result_layout::verdict_word(s) : ct::name(s.verdict));
+            if (!listing && (s.verdict == ct::Verdict::Fail || s.verdict == ct::Verdict::Skip)) row_note_.put(": ").put(detail_name(s));
             if (s.pos) row_note_.put(" PDO #").put_u32(s.pos);
             out.note = row_note_.view().substr(0, kit::kNoteMaxPx / kLabelAdv);
         }
@@ -2037,6 +2054,7 @@ kit::Verdict tone_verdict(Tone t) {
     case Tone::Partial: return kit::Verdict::Partial;
     case Tone::Pending: return kit::Verdict::Pending;
     case Tone::Skip: return kit::Verdict::Skip;
+    case Tone::Noted: return kit::Verdict::Noted;   // a Light run's listing: advertised / not asked
     default: return kit::Verdict::None;
     }
 }
@@ -2149,7 +2167,6 @@ void ChargerTestPage::paint_review() {
         action_.init(c, 156, 64);
         laid_ = true;
     }
-    const auto in = input(ctx_.now);
     const auto &caps = fusb302::caps();
     auto kv = [&](int i, const char *key, std::string_view v, uint16_t color) -> bool {
         const uint32_t h = mix_u32(mix(mix(mix_init(), key), v), color) | 1u;
@@ -2194,11 +2211,19 @@ void ChargerTestPage::paint_review() {
     }
     if (!kv(2, "Spoof", cb.view(), kText)) return;
 
-    StrBuf<48> hd;
-    if (caps.valid) put_revision(hd, caps.spec_rev, in.reported);
-    else hd.put("--");
-    if (!kv(3, "Header", hd.view(), caps.valid ? kText : kDim)) return;
-    if (!kv(4, "Power", self_supplied() ? "From the charger" : "K2 on USB", kText)) return;
+    if (!kv(3, "Power", self_supplied() ? "From the charger" : "K2 on USB", kText)) return;
+    // The Level row (the one row the cursor can stand on besides START; OK cycles Light -> Medium -> Deep). The PD header
+    // revision row gave it its place: the PD page and the run's card still carry the revision.
+    {
+        const bool focus = s_.selection_ == kLevelRow;
+        const char *lv = ct::name(s_.options_.level);
+        const uint32_t h = mix_u32(mix(mix_init(), lv), focus ? 7u : 3u) | 1u;
+        if (h != cell_sig_[4]) {
+            if (pbg && !pbg->admit(static_cast<int>(c.w) * kit::kRowH, true)) return;
+            cell_sig_[4] = h;
+            kit::kv_row_sel(c, kKv, kit::kv_row_y(kKv, 4), "Level", lv, kText, focus);
+        }
+    }
 
     if (s_.confirming_) {
         const int32_t left = std::max<int32_t>(0, static_cast<int32_t>(s_.confirm_until_ - ctx_.now));
@@ -2207,7 +2232,7 @@ void ChargerTestPage::paint_review() {
         sub.put("closes in ").put_u32(static_cast<uint32_t>((left + 999) / 1000)).put_char('s');
         action_.draw_armed("CONFIRM", sub.view(), permille, pbg);
     } else {
-        action_.draw_idle("START", "no load on the port", pbg);
+        action_.draw_idle("START", "no load on the port", pbg, s_.selection_ == kStartRow);
     }
 }
 
@@ -2597,15 +2622,7 @@ void ChargerTestPage::paint_detail() {
         const uint16_t fill = vs.filled ? vs.fill : kSurface;
         gfx_fill(c, 0, 22, c.w, 36, fill);
         kit::draw_verdict(c, 6, 30, 20, 20, v, {}, fill);
-        const char *word = "PENDING";
-        switch (s.verdict) {
-        case ct::Verdict::Pass: word = "PASS"; break;
-        case ct::Verdict::Fail: word = is_capped(s) ? "CAPPED" : "FAIL"; break;
-        case ct::Verdict::Skip: word = "SKIP"; break;
-        case ct::Verdict::Running: word = "RUNNING"; break;
-        default: break;
-        }
-        gfx_text(c, kMid, 32, 28, word, vs.ink, fill);
+        gfx_text(c, kMid, 32, 28, result_layout::verdict_word(s), vs.ink, fill);   // LISTED / NOT RUN for a Light run's listing
         StrBuf<32> nm;
         nm.put(step_label::label(s, s_.detail_index_ > 0 ? &steps[static_cast<size_t>(s_.detail_index_) - 1] : nullptr).view());
         char buf[kFitBuf];
@@ -2906,6 +2923,10 @@ __attribute__((noinline)) void ChargerTestPage::ok_event() {
         set_stage(Stage::Review, kStartRow);
         break;
     case Stage::Review:
+        if (s_.selection_ == kLevelRow) {   // Light -> Medium -> Deep -> Light; the Tests row's step count follows (update_summary)
+            s_.set_level(ct::next_level(s_.options_.level));
+            break;
+        }
         if (confirm_live()) confirmed_start();   // the second press: guard, identity, then Rd and the wait last
         else open_confirmation();                // the first press: the confirm window, nothing touched
         break;
@@ -2967,7 +2988,7 @@ PanelLabels ChargerTestPage::labels() const {
             break;
         case Stage::Group: ok = "Set"; ok_long = "Grp"; break;
         case Stage::Cable: ok = "Pick"; break;
-        case Stage::Review: ok = s_.confirming_ ? "Confirm" : "Start"; break;
+        case Stage::Review: ok = s_.selection_ == kLevelRow ? "Change" : s_.confirming_ ? "Confirm" : "Start"; break;
         case Stage::Refuse: ok = "Start"; break;
         case Stage::Waiting: ok = ""; break;   // BACK reads Stop
         case Stage::Results:
@@ -2983,7 +3004,7 @@ PanelLabels ChargerTestPage::labels() const {
         }
     }
     PanelLabels l = setup::labels(base_labels(), tests_stage(s_.stage_) ? setup::Step::Tests : setup::Step::Cable, ok, ok_long);
-    if (s_.stage_ == Stage::Detail || s_.stage_ == Stage::Review || s_.stage_ == Stage::Waiting) {   // nothing to move the cursor over
+    if (s_.stage_ == Stage::Detail || s_.stage_ == Stage::Waiting) {   // nothing to move the cursor over (Review: Level and START)
         l.b[static_cast<int>(Button::Minus)].shrt = "";
         l.b[static_cast<int>(Button::Plus)].shrt = "";
     }

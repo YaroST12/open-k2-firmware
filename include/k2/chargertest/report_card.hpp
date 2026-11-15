@@ -80,7 +80,7 @@ inline constexpr unsigned kMaxRanges = 4;
 inline constexpr unsigned kSpreadLevels = 4;   // v9: the setpoint errors kept per APDO (the plan has at most 4 distinct levels)
 inline constexpr int8_t kSpreadNone = -128;     // an empty spread slot
 inline constexpr unsigned kNameMax = 20;
-inline constexpr unsigned kReasonCount = unsigned(ct::Reason::Loop) + 1;   // 48 values fit the card's 6-bit reason field
+inline constexpr unsigned kReasonCount = unsigned(ct::Reason::LightLevel) + 1;   // 50 values fit the card's 6-bit reason field
 static_assert(kReasonCount <= 64, "the card stores a reason in 6 bits");
 inline constexpr uint8_t kMagic = 0xA6, kTypeCard = 1, kTypeDelete = 2;
 inline constexpr uint8_t kFormat = 10;  // payload byte 33: v4 adds per-EPR-level verdicts, v5 the cable block (Card carries it), v6 the UFCS modes, v7 the repeat counter, v8 the source's mid-run re-balance count, v9 the per-level setpoint-error spread, v10 the deep-sweep summary per range
@@ -206,6 +206,7 @@ struct Card {
     Cable cable{};             // the cable of the run (v5 only; older cards decode to an empty cable)
     uint8_t resumed = 0;       // times the run lost power and resumed (cable block byte 14; 0 on older cards)
     uint8_t rebalanced = 0;    // how often the source re-announced mid-run and the PD rows were re-planned (v8 byte 196; 0 on older cards): the "SOURCE rebalanced Nx" note
+    ct::Level level = ct::Level::Medium;   // the run's level (v8 byte 197, the block's spare byte: 0 = Medium on every older card; no format bump)
     uint8_t src_flags = 0;     // what the source's own messages showed (cable block byte 15; 0 on older cards): kSrcOppoSvid, bits 1..7 the SCP limit (scp_cap_ma)
     uint8_t format = kFormat;   // payload byte 33 this card was decoded from (kFormat when built): renderers gate v4/v5 fields on it
     ct::HandoverOutcome handover = ct::HandoverOutcome::NotTried;
@@ -228,7 +229,7 @@ struct Card {
     }
     bool operator==(const Card& o) const {
         return id == o.id && num_pdos == o.num_pdos && spec_rev == o.spec_rev && ev_flags == o.ev_flags && group == o.group &&
-               n_ranges == o.n_ranges && pd_ma == o.pd_ma && range == o.range && spread == o.spread && sweep == o.sweep && epr == o.epr && ufcs == o.ufcs && cable == o.cable && resumed == o.resumed && rebalanced == o.rebalanced && src_flags == o.src_flags && format == o.format &&
+               n_ranges == o.n_ranges && pd_ma == o.pd_ma && range == o.range && spread == o.spread && sweep == o.sweep && epr == o.epr && ufcs == o.ufcs && cable == o.cable && resumed == o.resumed && rebalanced == o.rebalanced && level == o.level && src_flags == o.src_flags && format == o.format &&
                handover == o.handover && handover_ds == o.handover_ds &&
                state == o.state && reason == o.reason && fw == o.fw && boots == o.boots && uptime_s == o.uptime_s &&
                card_no == o.card_no && runs == o.runs && times == o.times && last_boots == o.last_boots && last_uptime_s == o.last_uptime_s && std::memcmp(name, o.name, sizeof name) == 0 && name_auto == o.name_auto;
@@ -644,7 +645,8 @@ constexpr bool same_result(const GroupResult& a, const GroupResult& b) {
 inline bool same_results(const Card& prev, const Card& run) {
     if (prev.id.fp != run.id.fp || prev.num_pdos != run.num_pdos || prev.spec_rev != run.spec_rev || prev.ev_flags != run.ev_flags ||
         prev.pd_ma != run.pd_ma || prev.src_flags != run.src_flags || prev.fw != run.fw || prev.handover != run.handover ||
-        prev.state != run.state || prev.reason != run.reason || prev.n_ranges != run.n_ranges || prev.ufcs != run.ufcs)
+        prev.state != run.state || prev.reason != run.reason || prev.n_ranges != run.n_ranges || prev.ufcs != run.ufcs ||
+        prev.level != run.level)   // a Light run lists what a Medium run measures: never the same results
         return false;
     const Cable &a = prev.cable, &b = run.cable;
     if (a.vid != b.vid || a.pid != b.pid || a.max_mv != b.max_mv || a.max_ma != b.max_ma || a.kind != b.kind) return false;
@@ -951,10 +953,10 @@ inline size_t encode_card(std::span<uint8_t> out, const Card& c) {
         q[0] = c.times; put16(q + 1, c.last_boots);
         q[3] = uint8_t(up); q[4] = uint8_t(up >> 8); q[5] = uint8_t(up >> 16);
     }
-    // V8: the re-balance count u8 (+ a spare byte: the payload stays even)
+    // V8: the re-balance count u8, then the run's level (the block's spare byte, 0 = Medium before the level existed)
     {
         uint8_t* q = p + off::kV8;
-        q[0] = c.rebalanced; q[1] = 0;
+        q[0] = c.rebalanced; q[1] = uint8_t(c.level);
     }
     // V9: the per-level setpoint-error spread, int8 mV per level, kSpreadNone in the empty slots
     for (unsigned i = 0; i < kMaxRanges; ++i)
@@ -1050,6 +1052,7 @@ inline bool decode_card(std::span<const uint8_t> payload, Card& c) {
     }
     // V8: the re-balance count; a v7 payload has no such byte (its CRC/padding sits there and is not read)
     if (p[33] >= 8 && payload.size() >= off::kV8 + 1) d.rebalanced = p[off::kV8];
+    if (p[33] >= 8 && payload.size() >= off::kV8 + 2 && p[off::kV8 + 1] < ct::kLevelCount) d.level = ct::Level(p[off::kV8 + 1]);
     // V9: the per-level setpoint-error spread; older payloads end before it (their CRC/padding is not read)
     if (p[33] >= 9 && payload.size() >= off::kV9 + kMaxRanges * kSpreadLevels)
         for (unsigned i = 0; i < kMaxRanges; ++i)

@@ -261,7 +261,38 @@ class ChargerTest(unittest.TestCase):
         self.assertEqual(r["selection"]["configured_mask"], draft)
         self.assertEqual(r["selection"]["configured"], ["pps", "pd3.2-revision"])
         self.assertFalse(kr.decode_charger_test(HEADER2)["selection"]["pps_sweep"])
-        struct.pack_into("<I", h, 19, draft | (1 << 29))   # an unknown bit below the flags still fails
+        struct.pack_into("<I", h, 19, draft | (1 << 27))   # an unknown bit below the flags and the level still fails
+        with self.assertRaises(kr.FrameError):
+            kr.decode_charger_test(bytes(h))
+
+    def test_schema2_draft_bits_28_29_are_the_level(self):
+        # remote_proto.hpp: draft_selected bits 28..29 = the level of the next run (charger_test::Level: 0 Medium, 1 Light,
+        # 2 Deep); 3 is no level and fails like any unknown bit
+        h = bytearray(HEADER2)
+        draft = struct.unpack_from("<I", h, 19)[0]
+        self.assertEqual(kr.decode_charger_test(HEADER2)["selection"]["level"], "medium")
+        for code, name in ((1, "light"), (2, "deep")):
+            struct.pack_into("<I", h, 19, draft | (code << 28))
+            r = kr.decode_charger_test(bytes(h))
+            self.assertEqual(r["selection"]["level"], name)
+            self.assertEqual(r["selection"]["configured_mask"], draft)
+        struct.pack_into("<I", h, 19, draft | (3 << 28))
+        with self.assertRaises(kr.FrameError):
+            kr.decode_charger_test(bytes(h))
+
+    def test_schema2_run_bits_28_29_are_the_run_level(self):
+        # remote_proto.hpp: run_selected bits 28..29 = the level the run in hand ran at (selection.run_level), apart from the
+        # draft's level; 3 is no level and fails
+        h = bytearray(HEADER2)
+        run = struct.unpack_from("<I", h, 15)[0]
+        self.assertEqual(kr.decode_charger_test(HEADER2)["selection"]["run_level"], "medium")
+        for code, name in ((1, "light"), (2, "deep")):
+            struct.pack_into("<I", h, 15, run | (code << 28))
+            r = kr.decode_charger_test(bytes(h))
+            self.assertEqual(r["selection"]["run_level"], name)
+            self.assertEqual(r["selection"]["level"], "medium")
+            self.assertEqual(r["selection"]["run_mask"], run)
+        struct.pack_into("<I", h, 15, run | (3 << 28))
         with self.assertRaises(kr.FrameError):
             kr.decode_charger_test(bytes(h))
 
@@ -353,13 +384,13 @@ class ChargerTest(unittest.TestCase):
     def test_reason_42_withdrawn_by_source_decodes(self):
         # Hardware-run item 8 (2026-11-09, runs/2026-11-09-splitter): the re-plan row's new Reason::Withdrawn (#42)
         # must decode, not raise FrameError("invalid charger-test row") - ct_start.py crashed at the summary with it.
-        self.assertEqual(len(kr.TEST_REASONS), 48)   # 43 reasons + WrongVoltage (#43) + NeedsLoad (#44) + Floored (#45) + StepResolution (#46) + Loop (#47)
+        self.assertEqual(len(kr.TEST_REASONS), 50)   # 43 reasons + WrongVoltage (#43) + NeedsLoad (#44) + Floored (#45) + StepResolution (#46) + Loop (#47) + Advertised (#48) + LightLevel (#49)
         self.assertEqual(kr.TEST_REASONS[42], "withdrawn by source")
         row = struct.pack("<BBBHHHBBBI", 2, 4, 0, 20000, 0, 0, 4, 42, 0, 0)   # a pd3-fixed 20 V row, skip, why 42
         step = kr.decode_charger_test(page(HEADER2, 0, [row]))["steps"][0]
         self.assertEqual((step["result"], step["reason"]), ("skip", "withdrawn by source"))
         self.assertEqual(step["explanation"], "withdrawn by source")
-        bad = bytearray(row); bad[10] = 48   # the why byte, one past the last reason, still fails the row check
+        bad = bytearray(row); bad[10] = 50   # the why byte, one past the last reason, still fails the row check
         with self.assertRaises(kr.FrameError):
             kr.decode_charger_test(page(HEADER2, 0, [bytes(bad)]))
 
@@ -373,7 +404,7 @@ class ChargerTest(unittest.TestCase):
         self.assertEqual((step["result"], step["reason"]), ("fail", "wrong voltage on 5V contract"))
         self.assertEqual(step["explanation"], "wrong voltage on 5V contract")
         self.assertEqual(step["measured_mv"], 7600)
-        bad = bytearray(row); bad[10] = 48   # the why byte, one past the last reason, still fails the row check
+        bad = bytearray(row); bad[10] = 50   # the why byte, one past the last reason, still fails the row check
         with self.assertRaises(kr.FrameError):
             kr.decode_charger_test(page(HEADER2, 0, [bytes(bad)]))
 
@@ -386,7 +417,7 @@ class ChargerTest(unittest.TestCase):
         self.assertEqual((step["result"], step["reason"]), ("skip", "needs load"))
         self.assertEqual(step["explanation"], "needs load")
         self.assertEqual(step["measured_mv"], 1800)
-        bad = bytearray(row); bad[10] = 48   # one past the last reason
+        bad = bytearray(row); bad[10] = 50   # one past the last reason
         with self.assertRaises(kr.FrameError):
             kr.decode_charger_test(page(HEADER2, 0, [bytes(bad)]))
 
@@ -403,9 +434,21 @@ class ChargerTest(unittest.TestCase):
         step = kr.decode_charger_test(page(HEADER2, 0, [row]))["steps"][0]
         self.assertEqual((step["result"], step["reason"], step["detail"]), ("fail", "step resolution", 100))
         self.assertEqual(step["explanation"], "step resolution 100mV")
-        bad = bytearray(row); bad[10] = 48   # one past the last reason
+        bad = bytearray(row); bad[10] = 50   # one past the last reason
         with self.assertRaises(kr.FrameError):
             kr.decode_charger_test(page(HEADER2, 0, [bytes(bad)]))
+
+    def test_reasons_48_49_light_level_decode(self):
+        # Light runs (user decision 2026-11-15): 48 = an offer the source lists, recorded and never requested (a skip),
+        # 49 = a legacy level a Light run does not ask (a skip)
+        self.assertEqual(kr.TEST_REASONS[48], "advertised")
+        self.assertEqual(kr.TEST_REASONS[49], "light run: not asked")
+        row = struct.pack("<BBBHHHBBBI", 2, 4, 0, 20000, 3000, 0, 4, 48, 0, 0)   # a pd3-fixed 20 V row, skip, why 48
+        step = kr.decode_charger_test(page(HEADER2, 0, [row]))["steps"][0]
+        self.assertEqual((step["result"], step["reason"]), ("skip", "advertised"))
+        row = struct.pack("<BBBHHHBBBI", 5, 1, 0, 9000, 0, 0, 4, 49, 0, 0)   # a QC2 9 V row, skip, why 49
+        step = kr.decode_charger_test(page(HEADER2, 0, [row]))["steps"][0]
+        self.assertEqual((step["result"], step["reason"]), ("skip", "light run: not asked"))
 
     def test_schema2_epr_avs_is_a_programmable_test(self):
         meta = bytearray(HEADER2)
@@ -442,8 +485,8 @@ class ChargerTest(unittest.TestCase):
     def test_schema2_shape_and_origin_races_leave_output_untouched(self):
         row = bytes([6]) + ROW0[1:]
         good = page(HEADER2, 0, [row])
-        for offset, value in ((0, 3), (11, 113), (23, 0x3C), (39, 12), (18, 0x80), (22, 0x20),
-                              (40, 8), (42, 20), (43, 12), (44, 0x80), (51, 5), (52, len(kr.TEST_REASONS))):   # (22, 0x20) = draft bit 29: below the sweep flags, still illegal
+        for offset, value in ((0, 3), (11, 113), (23, 0x3C), (39, 12), (18, 0x80), (22, 0x30),
+                              (40, 8), (42, 20), (43, 12), (44, 0x80), (51, 5), (52, len(kr.TEST_REASONS))):   # (22, 0x30) = draft bits 28..29 = level 3: no such level
             bad = bytearray(good); bad[offset] = value
             with self.subTest(offset=offset), self.assertRaises(kr.FrameError):
                 kr.decode_charger_test(bad)

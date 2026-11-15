@@ -34,6 +34,7 @@
 using namespace k2;
 namespace qs = k2::qrshare;
 namespace rc = k2::report_card;
+namespace ct = k2::charger_test;
 using Bytes = std::vector<std::uint8_t>;
 
 struct Fixture {
@@ -321,7 +322,7 @@ static void test_pack_v2() {
     CHECK(r::has_v2(qs::Type::Card) && r::has_v2(qs::Type::Emarker));
     CHECK(!r::has_v2(qs::Type::PdCaps) && !r::has_v2(qs::Type::Log) && !r::has_v2(qs::Type::Identity) &&
           !r::has_v2(qs::Type::BootInfo));
-    CHECK_EQ(r::kMaxCardV2, 241u);
+    CHECK_EQ(r::kMaxCardV2, 242u);   // 241 + the level byte (Light / Deep cards only)
     CHECK_EQ(r::kMaxEmkV2, 459u);
 
     // A card: valid v1 record in, v2 out; in place gives the same bytes; the v2 record is never longer.
@@ -335,6 +336,14 @@ static void test_pack_v2() {
     inplace.resize(n);
     CHECK(v2 == inplace);
     CHECK_EQ(v2[0], r::kSchemaV2);
+    // the run's level: one more byte before the CRC on a Light or Deep card (tools/k2_qr.py expands it back to byte 197);
+    // a Medium card packs exactly as before
+    for (const ct::Level lv : {ct::Level::Light, ct::Level::Deep}) {
+        rc::Card c = card_v5(); c.level = lv;
+        const Bytes rec = build([&](auto o) { return r::card(c, o); }, r::kMaxCard);
+        Bytes lv2(r::kMaxEmarker);
+        CHECK_EQ(r::pack_v2(qs::Type::Card, rec, lv2), n + 1);
+    }
     // the other kinds and the malformed records refuse
     CHECK(!r::valid_v1(qs::Type::Card, pattern_bytes(202)));
     CHECK_EQ(r::pack_v2(qs::Type::Card, pattern_bytes(202), v2), 0u);

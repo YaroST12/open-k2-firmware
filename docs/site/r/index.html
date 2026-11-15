@@ -44,13 +44,16 @@ h4 { margin: 0 0 4px; font-size: 15px; }
 .badge.partial { border-color: var(--partial); background: var(--partial-bg); }
 .badge.fail { border-color: var(--fail); background: var(--fail-bg); }
 .badge.skip { background: var(--skip-bg); }
+.badge.noted { border-left: 3px solid var(--dim); }
 .badge.info .glyph:empty { display: none; }
 .pass .glyph, .row.pass dd { color: var(--pass); }
 .partial .glyph, .row.partial dd { color: var(--partial); }
 .fail .glyph, .row.fail dd { color: var(--fail); }
 .skip .glyph, .skip .label { color: var(--skip); }
+.noted .glyph { color: var(--dim); }
 .group.pass { border-left-color: var(--pass); } .group.partial { border-left-color: var(--partial); }
 .group.fail { border-left-color: var(--fail); } .group.skip { border-left-color: var(--skip); }
+.group.noted { border-left-color: var(--dim); }
 .section { border-top: 1px solid var(--rule); }
 .section summary { cursor: pointer; padding: 12px 0; font-weight: 600; min-height: 44px; }
 .section[open] summary { color: var(--focus); }

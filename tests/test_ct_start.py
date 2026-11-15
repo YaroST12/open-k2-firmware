@@ -325,17 +325,82 @@ class SvoocCapOption(unittest.TestCase):
                 ct_start.main(["--svooc-cap", bad])
 
 
-class SweepOption(unittest.TestCase):
-    """The PPS deep sweep is part of the default run (2026-11-14): ct_start sends the state on every start (the device
-    keeps the last choice until reboot), on unless --no-sweep. --sweep stays accepted for older scripts."""
+class LevelOption(unittest.TestCase):
+    """--level light|medium|deep is sent on every start (the device keeps the last choice): Medium by default, the run
+    without deep sweeps; Deep turns the PPS and AVS sweeps on; --avs-sweep alone stands for Deep. Light asks for nothing
+    above 5 V, so a sweep flag with it is refused before any device access."""
 
-    def test_the_pps_sweep_is_on_by_default(self):
-        self.assertTrue(ct_start.pps_sweep(ct_start.parse_args([])))
+    def test_the_default_level_is_medium(self):
+        self.assertEqual(ct_start.run_level(ct_start.parse_args([])), "medium")
+
+    def test_each_level_parses(self):
+        for name in ("light", "medium", "deep"):
+            self.assertEqual(ct_start.run_level(ct_start.parse_args(["--level", name])), name)
+
+    def test_an_unknown_level_is_refused(self):
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            ct_start.parse_args(["--level", "max"])
+
+    def test_avs_sweep_alone_means_deep(self):
+        self.assertEqual(ct_start.run_level(ct_start.parse_args(["--avs-sweep"])), "deep")
+
+    def test_avs_sweep_with_medium_adds_the_avs_sweep_to_medium(self):
+        a = ct_start.parse_args(["--level", "medium", "--avs-sweep"])
+        self.assertEqual(ct_start.run_level(a), "medium")
+        self.assertTrue(a.avs_sweep)
+
+    def test_light_with_a_sweep_flag_is_refused(self):
+        for flag in ("--avs-sweep", "--sweep"):
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                ct_start.parse_args(["--level", "light", flag])
+
+
+class ReviewCursor(unittest.TestCase):
+    """START is not Review's top row any more (Level is above it, and Review opens on START): the walker expects the
+    firmware's own kStartRow after a pick on Cable, or ct_start's press check reads every START as WRONG."""
+
+    def test_the_walker_expects_the_firmware_start_row(self):
+        import re
+        import ui_walk
+        src = (Path(__file__).resolve().parent.parent / "src" / "ui" / "ui_charger_test.cpp").read_text()
+        m = re.search(r"constexpr int kLevelRow = (\d+), kStartRow = (\d+);", src)
+        self.assertIsNotNone(m)
+        self.assertEqual(ui_walk.START_ROW, int(m.group(2)))
+        self.assertEqual(ui_walk.LEVEL_ROW, int(m.group(1)))
+        self.assertIs(ct_start.START_ROW, ui_walk.START_ROW)
+
+
+class SendLevel(unittest.TestCase):
+    """The level command is refused while a run is active (Busy) and unknown to older firmware: ct_start names the cause
+    and stops before START instead of a traceback."""
+
+    def test_a_refused_level_is_a_message(self):
+        for status in (ct_start.kr.STATUS_BUSY, ct_start.kr.STATUS_UNKNOWN_CMD):
+            err = ct_start.kr.RemoteError(status, ct_start.kr.CMD_CHARGER_LEVEL)
+            def refuse(link, level, err=err):
+                raise err
+            with patch.object(ct_start.kr, "charger_level", refuse):
+                why = ct_start.send_level(None, "light")
+            self.assertIn("could not set the level", why)
+            self.assertIn("light", why)
+
+    def test_an_accepted_level_is_none(self):
+        with patch.object(ct_start.kr, "charger_level", lambda link, level: level):
+            self.assertIsNone(ct_start.send_level(None, "deep"))
+
+
+class SweepOption(unittest.TestCase):
+    """The PPS deep sweep follows the level (Deep on, Light and Medium off): ct_start sends a sweep state only when
+    --sweep or --no-sweep is given, after the level, so the flag overrides the level's choice for this run."""
+
+    def test_the_level_decides_by_default(self):
+        self.assertIsNone(ct_start.pps_sweep(ct_start.parse_args([])))
+        self.assertIsNone(ct_start.pps_sweep(ct_start.parse_args(["--level", "deep"])))
 
     def test_no_sweep_turns_it_off(self):
         self.assertFalse(ct_start.pps_sweep(ct_start.parse_args(["--no-sweep"])))
 
-    def test_the_old_sweep_flag_is_still_accepted(self):
+    def test_sweep_turns_it_on_over_medium(self):
         self.assertTrue(ct_start.pps_sweep(ct_start.parse_args(["--sweep"])))
 
     def test_sweep_and_no_sweep_together_are_refused(self):
@@ -375,6 +440,7 @@ class LockReleaseAfterStart(unittest.TestCase):
     def test_lock_is_released_once_start_is_confirmed(self):
         events = []          # ("A"|"R"|"start"|"poll"|"call", lock depth after the event)
         sweeps = []          # the PPS deep sweep states sent (kr.charger_sweep)
+        levels = []          # the levels sent (kr.charger_level)
         depth = 0
 
         def acquire(wait_s=None, report=None):
@@ -440,11 +506,13 @@ class LockReleaseAfterStart(unittest.TestCase):
              patch.object(ct_start.kr, "cmd_charger_test", fake_ct), \
              patch.object(ct_start.kr, "charger_cable", lambda link, choice=None: {"run": "off"}), \
              patch.object(ct_start.kr, "charger_sweep", lambda link, on: sweeps.append(on) or on), \
+             patch.object(ct_start.kr, "charger_level", lambda link, level: levels.append(level) or level), \
              patch.object(ct_start.charger_summary, "summarize", lambda r: "SUMMARY"), \
              contextlib.redirect_stderr(io.StringIO()):
             rc = ct_start.main(["--wait", "5"])
         self.assertEqual(rc, 0)
-        self.assertEqual(sweeps, [True])                    # the PPS sweep state is sent on every start (default on)
+        self.assertEqual(levels, ["medium"])                # the level is sent on every start (default Medium)
+        self.assertEqual(sweeps, [])                        # no sweep flag: the level decides, no sweep command
         self.assertEqual(depth, 0)                          # every acquire was released
         kinds = [e for e, _ in events]
         start, first_poll = kinds.index("start"), kinds.index("poll")

@@ -791,6 +791,29 @@ static void test_codec_identity_fields_and_old_formats() {
     CHECK_EQ(rc::decode_card({buf.data() + 4, rc::kPayload}, d), 0);
 }
 
+// The run's level rides in the v8 block's spare byte (197): Light / Deep survive the record, an older card (the byte 0, or a format
+// before 8) reads Medium, and a Light card is never "the same results" as a Medium card of the same charger.
+static void test_v8_level_roundtrip() {
+    rc::Card c = rc::build(run_a(), evidence(), {ct::HandoverOutcome::FellBack, 1200}, {.fp = 0xAABBCCDDu, .vid = 0x2717, .pid = 9, .pdp_w = 67}, {},
+                           ct::State::Done, ct::Reason::None);
+    CHECK_EQ(int(c.level), int(ct::Level::Medium));
+    std::array<uint8_t, rc::kMaxRecord> buf{};
+    rc::encode_card(buf, c);
+    CHECK_EQ(buf[4 + 197], 0);   // Medium is 0: the spare byte older firmware wrote
+    rc::Card m = c;
+    c.level = ct::Level::Light;
+    rc::encode_card(buf, c);
+    CHECK_EQ(buf[4 + 197], 1);
+    rc::Card d;
+    CHECK_EQ(rc::decode_card({buf.data() + 4, rc::kPayload}, d), 1);
+    CHECK_EQ(int(d.level), int(ct::Level::Light));
+    CHECK_EQ(d == c, 1);
+    CHECK_EQ(rc::same_results(m, c), false);
+    CHECK_EQ(rc::same_results(c, d), true);
+    buf[4 + 33] = 7;   // a v7 card: no v8 block
+    CHECK_EQ(rc::decode_card({buf.data() + 4, rc::kPayload}, d), 1);
+    CHECK_EQ(int(d.level), int(ct::Level::Medium));
+}
 // V8: the source's mid-run re-balance count (Evidence::rebalanced, "SOURCE rebalanced Nx") is carried on the
 // shared card and survives the record: build a card from a run with two re-plans, encode, decode, compare.
 static void test_v8_rebalanced_roundtrip() {
@@ -1198,6 +1221,7 @@ static void test_same_results_tolerates_one_stored_step_of_noise() {
 
 
 int main() {
+    test_v8_level_roundtrip();
     test_spr_avs_range_limits();
     test_late_reasons_and_states_roundtrip();
     test_legacy_fingerprint();

@@ -260,6 +260,10 @@ void draw_verdict(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, 
         if (v == Verdict::Partial) {   // the shape cue: a bar along the bottom edge, so a partial never reads as a pass in grey
             inner.h = static_cast<int16_t>(inner.h - kPartialBarH);
             gfx_fill(s, x, static_cast<int16_t>(y + h - kPartialBarH), w, kPartialBarH, st.ink);
+        } else if (v == Verdict::Noted) {   // the shape cue: a dim bar down the left edge (listed, not measured)
+            inner.x = static_cast<int16_t>(inner.x + kNotedBarW);
+            inner.w = static_cast<int16_t>(inner.w - kNotedBarW);
+            gfx_fill(s, x, y, kNotedBarW, h, st.mark);
         }
         fill_except(s, inner, &hole, 1, base);
         gfx_text(s, *lay.font, hole.x, hole.y, lay.text, st.ink, base);
@@ -280,6 +284,7 @@ void draw_verdict(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, 
     case Verdict::Skip:
     case Verdict::Stopped: hole = {gx, static_cast<int16_t>(gy + sz / 2 - 1), static_cast<int16_t>(sz), 2}; break;
     case Verdict::Pending: hole = {static_cast<int16_t>(gx + sz / 2 - 1), static_cast<int16_t>(gy + sz / 2 - 1), 2, 2}; break;
+    case Verdict::Noted: hole = {static_cast<int16_t>(gx + sz / 2 - 1), gy, 2, static_cast<int16_t>(sz)}; break;   // the upright bar
     case Verdict::Running:   // a hollow accent square, the glyph's whole box
     case Verdict::Pass:
     case Verdict::Fail: break;
@@ -307,6 +312,7 @@ void draw_verdict(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, 
     case Verdict::Skip:
     case Verdict::Stopped: gfx_fill(s, gx, static_cast<int16_t>(gy + sz / 2 - 1), static_cast<int16_t>(sz), 2, st.ink); break;
     case Verdict::Pending: gfx_fill(s, static_cast<int16_t>(gx + sz / 2 - 1), static_cast<int16_t>(gy + sz / 2 - 1), 2, 2, st.ink); break;
+    case Verdict::Noted: gfx_fill(s, static_cast<int16_t>(gx + sz / 2 - 1), gy, 2, static_cast<int16_t>(sz), st.ink); break;
     case Verdict::Running: {   // the frame, then its inside in the base (each pixel of the box once)
         const int16_t t = sz >= 8 ? kRunFrame : 1;
         frame_box(s, gx, gy, static_cast<int16_t>(sz), static_cast<int16_t>(sz), t, st.mark);
@@ -743,6 +749,21 @@ K2_HOT void kv_row(const Surface &s, const KvLayout &l, int16_t y, std::string_v
              ours ? fit_text(vf, value, box, buf K2_TRUNC_ARG) : fit_data(vf, value, box, buf K2_TRUNC_ARG), value_color, kBg);
 }
 
+void kv_row_sel(const Surface &s, const KvLayout &l, int16_t y, std::string_view key, std::string_view value, uint16_t value_color,
+                bool focused K2_TRUNC_DEF) {
+    const Font &kf = font_or_small(l.label_font), &vf = font_or_small(l.value_font);
+    const bool bar = focused && kFocusBar != 0, inverted = focused && !bar;
+    const uint16_t bg = focused ? kFocusFill : kBg;
+    const int16_t gx = bar ? 3 : 0, body = static_cast<int16_t>(l.pitch - 1);
+    gfx_fill(s, 0, y, s.w, 1, kBg);
+    if (bar) gfx_fill(s, 0, static_cast<int16_t>(y + 1), 3, body, kFocusBar);
+    gfx_fill(s, gx, static_cast<int16_t>(y + 1), static_cast<int16_t>(s.w - gx), body, bg);
+    char buf[kFitBuf];
+    gfx_text(s, kf, l.label_x, static_cast<int16_t>(y + row_text_y(l.pitch, kf.height)), key, inverted ? kOnFocusDim : kInk2, bg);
+    gfx_text(s, vf, l.value_x, static_cast<int16_t>(y + row_text_y(l.pitch, vf.height)),
+             fit_text(vf, value, l.value_chars * vf.adv, buf K2_TRUNC_ARG), inverted ? kOnFocus : value_color, bg);
+}
+
 // ---- AlertBand -----------------------------------------------------------------------------------------------------------
 void draw_warn_triangle(const Surface &s, int16_t x, int16_t y, int16_t sz, uint16_t color, uint16_t ink) {
     for (int r = 0; r < sz; r++) {
@@ -777,20 +798,23 @@ void draw_alert_band(const Surface &s, int16_t y, bool error, std::string_view w
 }
 
 // ---- ActionCell ----------------------------------------------------------------------------------------------------------
-bool ActionCell::draw_idle(std::string_view verb, std::string_view hint, PaintBudget *bg) {
-    uint32_t sig = mix_u32(mix_init(), 0);
+bool ActionCell::draw_idle(std::string_view verb, std::string_view hint, PaintBudget *bg, bool focused) {
+    uint32_t sig = mix_u32(mix_init(), focused ? 0 : 2);
     sig = mix(mix(sig, verb), hint);
     return e_.paint_budgeted(sig, bg, static_cast<int>(surf_.w) * h_, [&] {
         bar_px_ = -1;
-        // The ticket: an ink block inset by the side gutters (Classic: its tint with the 2 px cyan frame).
+        // The ticket: an ink block inset by the side gutters (Classic: its tint with the 2 px cyan frame). Not under the cursor:
+        // the plain ground inside a 2 px rule-coloured frame, dim inks.
         const int16_t w = static_cast<int16_t>(surf_.w - 2 * kTicketInset);
+        const uint16_t fill = focused ? kTicket : kBg, ink = focused ? kOnTicket : kInk2;
+        const uint16_t frame = focused ? kTicketFrame : kRule;
         gfx_fill(surf_, 0, y_, kTicketInset, h_, kBg);
         gfx_fill(surf_, static_cast<int16_t>(kTicketInset + w), y_, kTicketInset, h_, kBg);
-        gfx_fill(surf_, kTicketInset, y_, w, h_, kTicket);
-        if (kTicketFrame) outline(surf_, kTicketInset, y_, w, h_, 2, kTicketFrame);
+        gfx_fill(surf_, kTicketInset, y_, w, h_, fill);
+        if (frame) outline(surf_, kTicketInset, y_, w, h_, 2, frame);
         const int content = kMid.height + (hint.empty() ? 0 : 6 + kLabelFont.height);
         const int16_t top = static_cast<int16_t>(y_ + (h_ - content) / 2);
-        centred_text(surf_, kMid, 4, static_cast<int16_t>(surf_.w - 8), top, verb, kOnTicket, kTicket);
+        centred_text(surf_, kMid, 4, static_cast<int16_t>(surf_.w - 8), top, verb, ink, fill);
         if (hint.empty()) return;
         char buf[kFitBuf];
         constexpr int16_t kTri = 11;
@@ -798,8 +822,8 @@ bool ActionCell::draw_idle(std::string_view verb, std::string_view hint, PaintBu
         const int tw = kTri + 4 + text_width(kLabelFont, t);
         const int16_t x0 = static_cast<int16_t>((surf_.w - tw) / 2);
         const int16_t ly = static_cast<int16_t>(top + kMid.height + 6);
-        draw_warn_triangle(surf_, x0, static_cast<int16_t>(ly + (kLabelFont.height - kTri) / 2), kTri, kCaution, kTicket);
-        gfx_text(surf_, kLabelFont, static_cast<int16_t>(x0 + kTri + 4), ly, t, kOnTicket, kTicket);
+        draw_warn_triangle(surf_, x0, static_cast<int16_t>(ly + (kLabelFont.height - kTri) / 2), kTri, kCaution, fill);
+        gfx_text(surf_, kLabelFont, static_cast<int16_t>(x0 + kTri + 4), ly, t, ink, fill);
     });
 }
 

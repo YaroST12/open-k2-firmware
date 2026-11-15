@@ -27,8 +27,10 @@ import k2_remote as kr
 DEFAULT_MASK = 0x38FFFF     # charger_test::kDefaultAlgorithms: every algorithm selected except the three revision rows (Class B included)
 # Setup lists, 0-based. The Tests step ("algorithms"): rows 0 All tests, 1 PD only, 2 Legacy, 3 Vendor, 4 Custom...,
 # 5 Last results; a preset pick advances to Cable. The Custom list: rows 0..5 are the families, 6 Done.
-# Review has one row, START (0): NEXT_ROW is kept as the name of that top row for callers (ct_start).
+# A list's top row (Custom, a family group): NEXT_ROW is kept as its name. Review has two rows, 0 Level and 1 START, and opens
+# on START (kLevelRow / kStartRow in src/ui/ui_charger_test.cpp).
 NEXT_ROW = 0
+LEVEL_ROW, START_ROW = 0, 1
 ALG_ALL_ROW, ALG_CUSTOM_ROW, ALG_FAMILY_ROW = 0, 4, 0   # Tests: All tests, Custom...; Custom: the first family (Huawei)
 SETTLE_S = 0.8
 
@@ -90,9 +92,9 @@ class Walk:
             back = {"custom": ("algorithms", ALG_CUSTOM_ROW), "group": ("custom", None),
                     "cable": ("algorithms", None),         # the cursor is on the preset in force
                     "identity": ("cable", None), "review": ("cable", None),   # on the identity in force
-                    "ask": ("review", NEXT_ROW),   # retired stage: never entered
-                    "refuse": ("review", NEXT_ROW),   # the Ra guard's refusal ("Cable connected"): BACK returns to Review
-                    "waiting": ("review", NEXT_ROW)}[stage]   # START's wait for the charger: BACK cancels it, Rd released
+                    "ask": ("review", START_ROW),   # retired stage: never entered
+                    "refuse": ("review", START_ROW),   # the Ra guard's refusal ("Cable connected"): BACK returns to Review
+                    "waiting": ("review", START_ROW)}[stage]   # START's wait for the charger: BACK cancels it, Rd released
             if back[1] is None:
                 kr.cmd_press(self.link, Namespace(button="back", ms=0, long=False))
                 self.presses += 1
@@ -115,7 +117,7 @@ class Walk:
         ok = ok and self.press("back", ("custom", ALG_FAMILY_ROW))      # a family: BACK keeps the row
         ok = ok and self.press("back", ("algorithms", ALG_CUSTOM_ROW))  # Custom: BACK is the Tests step
         ok = ok and self.pick_all()                                      # a preset pick advances to Cable
-        ok = ok and self.press("ok", ("review", NEXT_ROW))               # a pick on Cable advances to Review
+        ok = ok and self.press("ok", ("review", START_ROW))              # a pick on Cable advances to Review, on START
         ok = ok and self.press("back", ("cable", None))                  # never OK on START
         return ok
 

@@ -332,6 +332,8 @@ public:
     void set_sweep(bool on) { options_.pps_sweep = on; }
     bool avs_sweep_on() const { return options_.avs_sweep; }
     void set_avs_sweep(bool on) { options_.avs_sweep = on; }
+    charger_test::Level level() const { return options_.level; }
+    void set_level(charger_test::Level l);   // with_level: the level and both deep sweeps; a START armed on the old plan is disarmed
     // The SVOOC ceiling stage (opt-in, Cmd::ChargerSvoocCap): Off, On (the far-sink check stays) or UsbA (waived: a legacy A port).
     svooc_ceiling::Mode svooc_cap() const { return options_.svooc_cap; }
     void set_svooc_cap(svooc_ceiling::Mode m) { options_.svooc_cap = m; }
@@ -476,10 +478,10 @@ private:
     void arm_abort();
     ctcable::Choice resume_cable_{};     // the journaled identity of that run, re-armed by reapply_cable()
     uint32_t resume_judged_ = 0;         // when the guard last judged (and logged) for the resume
-    // The default run includes the PPS deep sweep (user decision 2026-11-14): the session starts with it on, the Tests list
-    // line and the remote knob (charger-sweep off, Cmd 0x0F) turn it off for the next run. The struct default stays off so a
-    // journal without the sweep bit (older runs, no meta record) resumes without sweep rows.
-    charger_test::Options options_{.pps_sweep = true};
+    // The draft starts at Medium (no deep sweeps); boot applies the stored Settings > Test level (Ui::charger_test_set_level),
+    // Review's Level row and the remote (Cmd 0x5B) change it, and Deep turns both deep sweeps on (with_level). The Tests list
+    // lines and the remote knob (charger-sweep, Cmd 0x0F) still toggle each sweep on its own after that.
+    charger_test::Options options_{};
     charger_test::Summary summary_;
     uint32_t run_t0_ = 0;                  // when the run entered Running (the m:ss on screen)
     StrBuf<32> message_;
@@ -1209,8 +1211,8 @@ public:
     // The row count follows the build: the Screenshot row exists only with K2_SCREENSHOT=1 (the default is 0). ui_pages.cpp
     // static_asserts these against its SettingRow enum, and test_settings_rows0 pins the K2_SCREENSHOT=0 values.
     static constexpr int kScreenshotRows = K2_SCREENSHOT ? 1 : 0;
-    static constexpr int kRows = 8 + kScreenshotRows;
-    static constexpr int kSystemRow = 5 + kScreenshotRows, kMemoryRow = 6 + kScreenshotRows, kBootRow = 7 + kScreenshotRows;
+    static constexpr int kRows = 9 + kScreenshotRows;
+    static constexpr int kSystemRow = 6 + kScreenshotRows, kMemoryRow = 7 + kScreenshotRows, kBootRow = 8 + kScreenshotRows;
     static constexpr int16_t kIdHeadY = 25, kIdLineY = 46, kIdDashY = 63, kListY = 66;   // identity y22..65, the list under it
 private:
     static void row_fn(void *ctx, int index, bool focused, kit::RowSpec &out);   // reads the live settings: no value cache
@@ -1219,6 +1221,7 @@ private:
     int &sel_ = ctx_.keep.settings_sel;   // remembered across page switches
     Elem foot_, id_;
     uint8_t static_step_ = 0;
+    uint8_t ct_level_ = 0;                // Test level: the stored default (uiprefs::Prefs::ct_level), read once in enter()
     mutable usbcfg::LinkNote usb_note_;   // the USB Link row's note, filled by row_fn and drawn at once
 };
 

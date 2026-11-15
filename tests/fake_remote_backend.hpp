@@ -36,6 +36,8 @@ struct Fake {
     Status charger_sweep(bool on) { calls++; sweep_set = on; ++sweep_sets; return sweep_status; }
     bool avs_sweep_set = false; int avs_sweep_sets = 0; Status avs_sweep_status = Status::Ok;
     Status charger_avs_sweep(bool on) { calls++; avs_sweep_set = on; ++avs_sweep_sets; return avs_sweep_status; }
+    int level_set = -1, level_sets = 0; Status level_status = Status::Ok;
+    Status charger_level(uint8_t l) { calls++; level_set = l; ++level_sets; return level_status; }
     uint8_t svooc_cap_set = 0; int svooc_cap_sets = 0; Status svooc_cap_status = Status::Ok;   // what charger_svooc_cap() was given, and its answer
     ChargerSvoocCap svooc_cap_info{};
     ChargerSvoocCapReply charger_svooc_cap(const uint8_t* set) {

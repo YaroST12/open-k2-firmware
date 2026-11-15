@@ -390,6 +390,28 @@ test("charger-test schema2: draft bit 31 is the PPS deep sweep flag, not a test"
   assert.deepEqual(sel.configured, plain.configured);
 });
 
+test("charger-test schema2: draft bits 28..29 are the level of the next run, not tests", () => {
+  const h = new Uint8Array(TEST_HEADER2);
+  const plain = P.decodeChargerTest(h).selection;
+  assert.equal(plain.level, "medium");   // 0 = Medium, what every older firmware sends
+  for (const [bits, name] of [[0x10, "light"], [0x20, "deep"]]) {
+    const l = new Uint8Array(TEST_HEADER2); l[22] |= bits;
+    const sel = P.decodeChargerTest(l).selection;
+    assert.equal(sel.level, name);
+    assert.equal(sel.configured_mask, plain.configured_mask);
+  }
+  assert.equal(P.CMD.CHARGER_LEVEL, 0x5B);
+  // run_selected bits 28..29: the level the run in hand ran at, apart from the draft's
+  assert.equal(plain.run_level, "medium");
+  const r = new Uint8Array(TEST_HEADER2); r[18] |= 0x10;
+  const rs = P.decodeChargerTest(r).selection;
+  assert.equal(rs.run_level, "light");
+  assert.equal(rs.level, "medium");
+  assert.equal(rs.run_mask, plain.run_mask);
+  const bad = new Uint8Array(TEST_HEADER2); bad[18] |= 0x30;
+  assert.throws(() => P.decodeChargerTest(bad), P.FrameError);
+});
+
 test("charger-test schema2: draft bit 30 is the AVS deep sweep flag, not a test", () => {
   const h = new Uint8Array(TEST_HEADER2);
   const plain = P.decodeChargerTest(h).selection;
@@ -422,8 +444,8 @@ test("charger-test sweep row: flags bit 5, the detail byte is the recorded point
 
 test("charger-test schema2 rejects malformed shapes, unknown masks and unselected rows", () => {
   const good = testPage(TEST_HEADER2, 0, [TEST_ROWS[0]]);
-  for (const [at, value] of [[0, 3], [11, 107], [23, 0x42], [39, 12], [18, 0x80], [22, 0x20],
-                            [40, 8], [42, 20], [43, 12], [44, 0x80], [51, 5], [52, 48]]) {   // 48 = one past the last reason (47 = Loop); [22, 0x20] = draft bit 29, below the sweep flags
+  for (const [at, value] of [[0, 3], [11, 107], [23, 0x42], [39, 12], [18, 0x80], [22, 0x30], [22, 0x08],
+                            [40, 8], [42, 20], [43, 12], [44, 0x80], [51, 5], [52, 50]]) {   // 50 = one past the last reason (49 = LightLevel); [22, 0x30] = draft bits 28..29 = 3, no level; [22, 0x08] = draft bit 27, below the level
     const bad = new Uint8Array(good); bad[at] = value;
     assert.throws(() => P.decodeChargerTest(bad), P.FrameError, "offset " + at);
   }

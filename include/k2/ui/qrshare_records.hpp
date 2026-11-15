@@ -33,7 +33,9 @@
 //             cable_present u1 [+ varint seq, vid u16, pid u16, max_mv u16, max_ma u16, kind code u3 (0 = 0, 1 = 1, 2 = 2,
 //             3 = 4, 4 = 0xFF), flags u8, resumed u8, src_flags u8]; n_ufcs u3, that many modes of (lo_dv u8, hi_dv u9, ma50 u7);
 //             varint times [+ last_boots u16, last_uptime_s u24 when times > 1]; varint rebalanced (v8: the source's mid-run
-//             re-balance count, 0 on a v7 record); crc16 u16 of the v1 record.
+//             re-balance count, 0 on a v7 record); [v9 spread, v10 sweep blocks]; level u8 only on a Light or Deep card (the v8
+//             spare byte; a reader takes it when 24 or more bits are left, so the CRC's padding never reads as one);
+//             crc16 u16 of the v1 record.
 //   Emarker v2: schema u8 = 2; name_len u5 (<= 24), the name as u7 chars; flags u8; the emrec: name_len u5 (<= 20), the name as
 //             u7 chars, spec_rev u2, five VDOs u32, checksum u8; has_quirks u1 [+ flags u2, unmatched u2, count u4, then count
 //             rows of (sop u2, kind u2, nreq u2, nrep u3, mask_is_kSvdmMask u1, hdr_val u32, hdr_mask u32 when the mask is not
@@ -111,7 +113,8 @@ consteval std::size_t card_v2_worst_bits() {
     b += 16;                                                // the v8 rebalanced varint (worst case 2 bytes)
     b += 1 + report_card::kMaxRanges * report_card::kSpreadLevels * 8;   // v9: the spread presence bit + 16 int8 bytes
     b += 1 + report_card::kMaxRanges * report_card::kSweepBytes * 8;     // v10: the sweep presence bit + 4 x 9 bytes
-    return b;                                               // 1924 bits
+    b += 8;                                                 // the run's level byte (Light / Deep cards only)
+    return b;                                               // 1932 bits
 }
 consteval std::size_t emk_v2_worst_bits() {
     std::size_t b = 8 + 5 + 24 * 7 + 8;                     // schema, name, flags
@@ -120,8 +123,8 @@ consteval std::size_t emk_v2_worst_bits() {
     b += emk_quirk::kMaxRows * (2 + 2 + 2 + 3 + 1 + 32 + 32 + 2 * 64 + 6 * 32);   // rows, full mask
     return b;                                               // 3665 bits
 }
-inline constexpr std::size_t kMaxCardV2 = (card_v2_worst_bits() + 7) / 8;   // 241 B
+inline constexpr std::size_t kMaxCardV2 = (card_v2_worst_bits() + 7) / 8;   // 242 B
 inline constexpr std::size_t kMaxEmkV2 = (emk_v2_worst_bits() + 7) / 8;     // 459 B
-static_assert(kMaxCardV2 == 241 && kMaxEmkV2 == 459);
+static_assert(kMaxCardV2 == 242 && kMaxEmkV2 == 459);
 
 }  // namespace k2::qrshare::records

@@ -13,7 +13,12 @@ that did not start. Then polls `charger-test status`
 until the run ends (done, stopped, unsafe...) and prints `charger-test summary`. Run `k2_remote.py action pd-rescan` first:
 a run with 0 PDOs is invalid.
 
-    python3 tools/ct_start.py [--wait 300] [--units qc2,qc3,pd] [--cable off|builtin|builtin:N|saved:N]
+    python3 tools/ct_start.py [--wait 300] [--level light|medium|deep] [--units qc2,qc3,pd] [--cable off|builtin|builtin:N|saved:N]
+
+--level sets the run's thoroughness (`charger-level`, sent before every START: the device keeps the last choice): light
+records what the charger advertises and asks for nothing above 5 V, medium (the default) is the full run without deep
+sweeps, deep adds the PPS and AVS deep sweeps. --avs-sweep without --level means deep; --sweep / --no-sweep override
+the level's PPS sweep for this run.
 
 --units sends the unit list (names and order) with `charger-units` before START: only those test units run, in that
 order, each one detach -> attach -> rows -> detach. Without it the full default order runs: vendor modes (FCP, SCP, AFC, VOOC...), PD, then QC/UFCS.
@@ -33,7 +38,7 @@ import charger_summary
 import k2_lock
 import k2_remote as kr
 import logdb
-from ui_walk import NEXT_ROW, Walk
+from ui_walk import START_ROW, Walk
 
 MIN_VBUS_MV = 4500
 START_WAIT_S = 45.0     # the K2's own wait is <= ~21 s (VBUS 5-10 s, caps 2 s, one Rd re-present), plus the presses
@@ -204,17 +209,20 @@ def start_run(link, before, press=press_ok, run_id=None, stage=None, back=press_
 
 def parse_args(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    # The default run sweeps every PPS APDO (about 0.7 s per 100 mV point: ~55 s for 3.3-11 V, ~125 s for 3.3-21 V)
+    # A deep run sweeps every PPS APDO (about 0.7 s per 100 mV point: ~55 s for 3.3-11 V, ~125 s for 3.3-21 V)
     ap.add_argument("--wait", type=float, default=900)
+    ap.add_argument("--level", choices=kr.TEST_LEVELS,
+                    help="light: what is advertised, nothing above 5 V; medium (default): the full run, no deep sweeps; "
+                         "deep: medium plus the PPS and AVS deep sweeps")
     ap.add_argument("--path")
     sweep = ap.add_mutually_exclusive_group()
     sweep.add_argument("--sweep", action="store_true",
-                       help="run the PPS deep sweep (the default since 2026-11-14: every 100 mV across each PPS APDO, 1 A, "
-                            "after the APDO's own checks); kept for older scripts")
+                       help="also run the PPS deep sweep (every 100 mV across each PPS APDO, 1 A, after the APDO's own "
+                            "checks; part of --level deep)")
     sweep.add_argument("--no-sweep", action="store_true",
-                       help="leave the PPS deep sweep out of this run (the device keeps the choice until it is set again)")
+                       help="leave the PPS deep sweep out of this run (e.g. a deep run with the AVS sweep alone)")
     ap.add_argument("--avs-sweep", action="store_true",
-                    help="also run the AVS deep sweep (opt-in: every 100 mV across each AVS APDO, 1 A; never in a preset)")
+                    help="also run the AVS deep sweep (every 100 mV across each AVS APDO, 1 A); alone it means --level deep")
     ap.add_argument("--svooc-cap", choices=["on", "usb-a"],
                     help="also run the SuperVOOC ceiling stage when a SuperVOOC charger is detected (opt-in; reads the 0x86 "
                          "ceiling from the protocol, never loads the charger). usb-a = USB-A charger, top port empty")
@@ -225,12 +233,31 @@ def parse_args(argv=None):
     ap.add_argument("--cable", default="off",
                     help="cable identity of the run: off (default), builtin, builtin:<1|2|4|epr-50v|cuktech-6a|oneplus> "
                          "or saved:<library id>")
-    return ap.parse_args(argv)
+    a = ap.parse_args(argv)
+    if a.level == "light" and (a.sweep or a.avs_sweep):
+        ap.error("--level light asks for nothing above 5 V: no deep sweep with it")
+    return a
+
+
+def run_level(a):
+    """The level ct_start sends for this run: --level, else deep for a bare --avs-sweep, else medium."""
+    return a.level or ("deep" if a.avs_sweep else "medium")
+
+
+def send_level(link, level):
+    """Send the run's level; None when the K2 took it, else the cause (Busy while a run is active, an unknown command on
+    firmware without levels)."""
+    try:
+        kr.charger_level(link, level)
+    except kr.RemoteError as e:
+        return f"could not set the level {level}: {e}"
+    return None
 
 
 def pps_sweep(a):
-    """The PPS deep sweep state ct_start sends for this run: on unless --no-sweep."""
-    return not a.no_sweep
+    """The PPS deep sweep state ct_start sends after the level: True (--sweep), False (--no-sweep) or None (the level
+    decides: on at deep, off at light and medium)."""
+    return True if a.sweep else False if a.no_sweep else None
 
 
 def main(argv=None):
@@ -259,16 +286,25 @@ def main(argv=None):
             print(f"refusing to start: {why}", file=sys.stderr)
             return 4
         # The wizard advances on a pick: "All tests" -> Cable, the identity in force -> Review (no Next row).
-        ok = (w.to_algorithms() and w.pick_all() and w.press("ok", ("review", NEXT_ROW)))
+        ok = (w.to_algorithms() and w.pick_all() and w.press("ok", ("review", START_ROW)))
         if not ok:
             print("\n".join(w.log))
             print("could not reach Review START", file=sys.stderr)
             return 1
-        # Sent on every start: the device keeps the last choice (a --no-sweep run, the Tests list line) until reboot.
-        kr.charger_sweep(link, pps_sweep(a))
-        print("PPS deep sweep: " + ("on (every 100 mV per PPS APDO, 1 A)" if pps_sweep(a) else "off (--no-sweep)"),
-              file=sys.stderr)
-        if a.avs_sweep:
+        # Sent on every start: the device keeps the last choice (Review's Level row, Settings > Test level) until it is set
+        # again. The level sets both deep sweeps; a sweep flag after it overrides that for this run.
+        level = run_level(a)
+        why = send_level(link, level)
+        if why:
+            print(why, file=sys.stderr)
+            return 1
+        print("level: " + level + {"light": " (what is advertised, nothing above 5 V)", "medium": " (no deep sweeps)",
+                                   "deep": " (PPS and AVS deep sweeps)"}[level], file=sys.stderr)
+        if pps_sweep(a) is not None:
+            kr.charger_sweep(link, pps_sweep(a))
+            print("PPS deep sweep: " + ("on (every 100 mV per PPS APDO, 1 A)" if pps_sweep(a) else "off (--no-sweep)"),
+                  file=sys.stderr)
+        if a.avs_sweep and level != "deep":
             kr.charger_avs_sweep(link, True)
             print("AVS deep sweep: on (every 100 mV per AVS APDO, 1 A)", file=sys.stderr)
         if a.svooc_cap:
@@ -327,6 +363,8 @@ def main(argv=None):
         r = kr.cmd_charger_test(link, Namespace(test_cmd="summary", out=None))
         r.pop("_summary", None)
         r["cable_identity"] = kr.charger_cable(link)
+        # the level the run ran at: the firmware's own (selection.run_level), else the one sent above
+        r["level"] = (r.get("selection") or {}).get("run_level") or level
     print(charger_summary.summarize(r))
     if st["state"] != "done":
         print(f"run ended in state {st['state']}", file=sys.stderr)

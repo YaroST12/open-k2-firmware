@@ -129,7 +129,8 @@ size_t encode_charger_test(std::span<uint8_t> out, const ChargerTestSnapshot& s,
     w.u8(static_cast<uint8_t>(total)); w.u8(static_cast<uint8_t>(current)); w.u8(start); w.u8(static_cast<uint8_t>(n));
     if (modern) {
         const auto& e = s.evidence;
-        w.u32(e.selected); w.u32(s.configured);
+        static_assert(unsigned(charger_test::Algorithm::Count) <= 28, "the run's level sits above the algorithm bits");
+        w.u32((e.selected & 0x0FFFFFFFu) | (uint32_t(s.level) & 3u) << 28); w.u32(s.configured);
         w.u8((e.wire_rev & 3) | ((s.stage & 15) << 2) | (std::min<unsigned>(s.resumed, 3) << 6));
         w.u8((e.reported.rev_major << 4) | e.reported.rev_minor); w.u8(e.flags);
         w.u16(e.monitor_mv); w.u16(e.cable_mv); w.u16(e.cable_ma);

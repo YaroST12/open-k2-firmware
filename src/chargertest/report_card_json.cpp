@@ -31,6 +31,8 @@ std::size_t render_json(const Card& c, std::span<char> out) {
     // v8: how often the source re-announced its list mid-run and the PD rows were re-planned (budget-reannounce-mid-run).
     if (c.format >= 8 && c.rebalanced)
         t.put("\"rebalanced\":%u,", unsigned(c.rebalanced));
+    // The run's level (v8 spare byte): only a Light or Deep run names it, so every older card reads as Medium.
+    if (c.level == ct::Level::Light || c.level == ct::Level::Deep) t.put("\"level\":\"%s\",", c.level == ct::Level::Light ? "light" : "deep");
     t.put("\"fw\":\"%08x\",\"state\":\"%s\",\"reason\":\"%s\",\"pdos\":%u,\"spec_rev\":%u,", unsigned(c.fw), ct::name(c.state),
           ct::name(c.reason), unsigned(c.num_pdos), unsigned(c.spec_rev));
     t.put("\"handover\":\"%s\",\"handover_ms\":%u,\"groups\":{", kHandover[unsigned(c.handover)], unsigned(c.handover_ds) * 100u);
@@ -149,14 +151,17 @@ std::size_t render_summary(const Card& c, std::span<char> out) {
     if (c.id.pdp_w) t.put(" \xC2\xB7 %u W", unsigned(c.id.pdp_w));
     t.put(" \xC2\xB7 fw %08x\n", unsigned(c.fw));
     // counts() counts group verdicts, not steps: say so, or the header reads "1 pass" next to a run summary's "25 pass".
-    t.put("%u pass, %u fail, %u skip of %u groups \xC2\xB7 %s", unsigned(n.pass), unsigned(n.fail), unsigned(n.skip),
-          unsigned(kGroups), ct::name(c.state));
+    // A Light run measured 5 V only: its passing groups are "detected" (card_tone.hpp: the noted tone), never a tick.
+    const bool light = c.level == ct::Level::Light;
+    t.put("%u %s, %u fail, %u skip of %u groups \xC2\xB7 %s", unsigned(n.pass), light ? "detected" : "pass", unsigned(n.fail),
+          unsigned(n.skip), unsigned(kGroups), ct::name(c.state));
     if (c.reason != ct::Reason::None) t.put(" (%s)", ct::name(c.reason));
     t.put("\nIdentity %08X \xC2\xB7 boot %u \xC2\xB7 uptime %u s", unsigned(c.id.fp), unsigned(c.boots), unsigned(c.uptime_s));
     if (c.times > 1)
         t.put(" \xC2\xB7 same result x%u, last boot %u uptime %u s", unsigned(c.times), unsigned(c.last_boots), unsigned(c.last_uptime_s));
     if (c.format >= 8 && c.rebalanced)
         t.put(" \xC2\xB7 source rebalanced x%u", unsigned(c.rebalanced));
+    if (c.level == ct::Level::Light || c.level == ct::Level::Deep) t.put(" \xC2\xB7 %s run", ct::name(c.level));
     t.put("\n");
     if (c.handover != ct::HandoverOutcome::NotTried) {
         t.put("Handover: %s after ", kHandover[unsigned(c.handover)]);
@@ -171,7 +176,9 @@ std::size_t render_summary(const Card& c, std::span<char> out) {
         if (r.verdict != GV::Pass && r.verdict != GV::Fail) continue;
         t.put("- %s: ", ct::name(ct::Group(g)));
         const bool handshake = r.max_mv && r.max_mv <= kHandshakeMv;
-        if (group_handshake_ok(r)) {
+        if (light && r.verdict == GV::Pass) {
+            t.put("detected");
+        } else if (group_handshake_ok(r)) {
             t.put("\xE2\x9C\x93 handshake ok");
         } else if (group_detected(r)) {
             t.put("\xE2\x9C\x93 detected");
@@ -214,7 +221,7 @@ std::size_t render_summary(const Card& c, std::span<char> out) {
         } else if (r.max_dv) {
             t.put("reached "); volts(t, unsigned(r.max_dv) * 100u); t.put(" V");
         } else {
-            t.put("no step measured");
+            t.put(light ? "advertised" : "no step measured");
         }
         t.put("\n");
     }

@@ -2112,6 +2112,7 @@ enum class SettingRow : uint8_t {
 #endif
     Smoothing,
     IdleWake,
+    TestLevel,
     SystemState,
     Memory,
     BootInfo,
@@ -2127,6 +2128,7 @@ static_assert(static_cast<int>(SettingRow::BootInfo) == SettingsPage::kBootRow);
 
 void SettingsPage::enter() {
     sel_ = std::clamp(sel_, 0, kSettingsRows - 1);
+    ct_level_ = uiprefs::stored().ct_level;   // one volume read per visit; row_fn paints from the copy
     ctx_.rows.init(ctx_.content, kListY, row_fn, this);
     ctx_.rows.set_count(kSettingsRows);
     ctx_.rows.select(sel_);
@@ -2202,15 +2204,19 @@ void SettingsPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
 #if K2_SCREENSHOT
         "Screenshot",
 #endif
-        "Smoothing", "Wake sleeping port", "System state", "Memory", "Boot info"};
+        "Smoothing", "Wake sleeping port", "Test level", "System state", "Memory", "Boot info"};
     static constexpr Icon kIcons[kSettingsRows] = {
         Icon::Usb, Icon::Rotate, Icon::Keys,
 #if K2_SCREENSHOT
         Icon::Camera,
 #endif
-        Icon::Wave, Icon::Plug, Icon::Chip, Icon::Chip, Icon::Report};
+        Icon::Wave, Icon::Plug, Icon::Bolt, Icon::Chip, Icon::Chip, Icon::Report};
     static constexpr const char *kPresets[smoothing::kPresetCount] = {"Off", "Low", "Medium", "High"};
     static constexpr const char *kPresetNotes[smoothing::kPresetCount] = {"Raw readings", "Light calming", "Balanced", "Steady, slower"};
+    // charger_test::Level order (Medium 0, Light 1, Deep 2): the charger test's default level and what it runs.
+    static constexpr const char *kLevels[charger_test::kLevelCount] = {"Medium", "Light", "Deep"};
+    static constexpr const char *kLevelNotes[charger_test::kLevelCount] = {"Charger test: levels, no sweeps", "Charger test: offers at 5V",
+                                                                           "Charger test: + PPS, AVS sweeps"};
     const auto *self = static_cast<const SettingsPage *>(ctx);
     out.marker = kit::Marker::Icon;
     out.icon = kIcons[i];
@@ -2253,6 +2259,12 @@ void SettingsPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
         out.tail = on ? "ON" : "OFF";
         out.tail_color = on ? kOk : kDim;
         out.note = on ? "Idle Rd on a sleeping port" : "Idle stays passive";
+        break;
+    }
+    case SettingRow::TestLevel: {
+        const unsigned l = self->ct_level_ < charger_test::kLevelCount ? self->ct_level_ : 0;
+        out.tail = kLevels[l];
+        out.note = kLevelNotes[l];
         break;
     }
     case SettingRow::SystemState:
@@ -2313,6 +2325,15 @@ bool SettingsPage::on_event(Event e) {
             update(ctx_.now);
             break;
         }
+        case SettingRow::TestLevel: {   // Light -> Medium -> Deep -> Light (Review's order); remembered, the idle draft follows
+            uiprefs::Prefs p = uiprefs::stored();
+            p.ct_level = static_cast<uint8_t>(charger_test::next_level(charger_test::Level(ct_level_ < charger_test::kLevelCount ? ct_level_ : 0)));
+            uiprefs::set(p);
+            ct_level_ = p.ct_level;
+            if (!ctx_.ui->charger_test_busy()) ctx_.ui->charger_test_set_level(p.ct_level);   // a running test keeps its level
+            update(ctx_.now);
+            break;
+        }
         case SettingRow::RotateButtons:
             ctx_.ui->set_rotate_buttons(!ctx_.ui->rotate_buttons());
             update(ctx_.now);
@@ -2350,7 +2371,8 @@ bool SettingsPage::on_event(Event e) {
 PanelLabels SettingsPage::labels() const {
     const auto row = static_cast<SettingRow>(sel_);
     const bool opens = row < SettingRow::RotateButtons || row >= SettingRow::SystemState;
-    PanelLabels labels = setting_labels(base_labels(), opens ? "Open" : row == SettingRow::Smoothing ? "Cycle" : "Toggle");
+    const bool cycles = row == SettingRow::Smoothing || row == SettingRow::TestLevel;
+    PanelLabels labels = setting_labels(base_labels(), opens ? "Open" : cycles ? "Cycle" : "Toggle");
     labels.b[static_cast<int>(Button::Plus)] = {"Dn", "", "", false};
     return labels;
 }

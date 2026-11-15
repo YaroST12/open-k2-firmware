@@ -38,6 +38,11 @@ const char* name(Verdict v) {
     static constexpr const char* names[] = {"WAIT", "RUN", "PASS", "FAIL", "SKIP"};
     return names[static_cast<unsigned>(v)];
 }
+const char* name(Level l) {
+    static constexpr const char* names[] = {"Medium", "Light", "Deep"};
+    static_assert(std::size(names) == kLevelCount);
+    return unsigned(l) < kLevelCount ? names[unsigned(l)] : "?";
+}
 const char* name(Reason r) {
     static constexpr const char* names[] = {
         "", "disabled", "not advertised", "over voltage cap", "not implemented", "confirm no load",
@@ -50,9 +55,9 @@ const char* name(Reason r) {
         "blocked by PD", "no QC3+ response", "rebooted 3x", "needs external power", "PD gave up before START",
         "Class A only (12 V max)", "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target",
         "withdrawn by source", "wrong voltage on 5V contract", "needs load", "floored above target", "step resolution",
-        "HID-cable loop: 5V lock"
+        "HID-cable loop: 5V lock", "advertised", "light run: not asked"
     };
-    static_assert(std::size(names) == unsigned(Reason::Loop) + 1);
+    static_assert(std::size(names) == unsigned(Reason::LightLevel) + 1);
     return names[static_cast<unsigned>(r)];
 }
 const char* refusal_words(Reason r) {
@@ -472,8 +477,10 @@ bool unit_selected(Unit u, const Options& o) {
 UnitList resolve(const Options& o) {
     const UnitList& in = o.units;
     UnitList out;
-    if (!in.n) { for (const Unit u : kDefaultUnits) if (unit_selected(u, o)) out.add(u); return out; }
-    for (size_t n = 0; n < in.n; ++n) if (!has_unit(out, in.u[n]) && unit_selected(in.u[n], o)) out.add(in.u[n]);
+    // A Light run has no PdLow unit: its rows are the low edge of the APDOs (below 5 V), which Light lists, never asks.
+    auto takes = [&](Unit u) { return unit_selected(u, o) && !(o.level == Level::Light && u == Unit::PdLow); };
+    if (!in.n) { for (const Unit u : kDefaultUnits) if (takes(u)) out.add(u); return out; }
+    for (size_t n = 0; n < in.n; ++n) if (!has_unit(out, in.u[n]) && takes(in.u[n])) out.add(in.u[n]);
     size_t pd = SIZE_MAX, low = SIZE_MAX;
     for (size_t n = 0; n < out.n; ++n) { if (out.u[n] == Unit::Pd) pd = n; if (out.u[n] == Unit::PdLow) low = n; }
     if (pd != SIZE_MAX && low != SIZE_MAX && low < pd) std::swap(out.u[pd], out.u[low]);
@@ -492,7 +499,44 @@ private:
     void (*fn_)(void*, const Step&);
 };
 // The rows of one unit, in plan order. Pd and PdLow share the PD plan: the low programmable rows (below 5 V) are the PdLow unit.
-void plan_unit(Unit unit, const pd::SourceCaps& caps, Options o, Input in, AddRef add) {
+void plan_unit(Unit unit, const pd::SourceCaps& caps, Options o, Input in, AddRef out) {
+    // Light (Options::level, with_level): VBUS stays at 5 V. The PD 5 V row and each legacy unit's first 5 V row (its handshake)
+    // run; every other offer the source lists is one Advertised row naming the whole offer (a PDO / APDO by its top, a UFCS mode by
+    // its top, an SCP level inside the limits the adapter reported); a legacy level nothing advertises, and a protocol only told
+    // apart above 5 V (AFC, QC3+, QC Class B), is a LightLevel skip. No hunts, walks, sweeps or full-current rows (one row per
+    // offer). Rows that already carry a reason (not offered, over the monitor, the cable) keep it.
+    const bool light = o.level == Level::Light;
+    bool light_open = false;                                  // the unit's 5 V handshake row is planned
+    uint8_t light_pos = 0; Algorithm light_alg = Algorithm::Count; uint32_t light_pdo = 0;   // the offer the last row named
+    auto add = [&](Step s) {
+        if (!light) { out(s); return; }
+        if (s.group == Group::Pd) {
+            const bool same = s.pos && s.algorithm == light_alg && s.pos == light_pos;
+            light_alg = s.algorithm; light_pos = s.pos;
+            if (same) return;
+            if (s.detail == kDetailEprOffered) { s.reason = Reason::Advertised; s.detail = 0; }   // listed in SPR mode, never entered
+            else if (s.verdict == Verdict::Pending && !(s.pos == 1 && s.mv == 5000 && !s.hunt)) {
+                const auto p = pd::decode_pdo(s.pdo);
+                s.verdict = Verdict::Skip; s.reason = Reason::Advertised; s.mv = p.max_mv; s.ma = p.max_ma;
+                s.continuous = s.hunt = false; s.detail = 0;
+            }
+            out(s); return;
+        }
+        if (s.verdict != Verdict::Pending) { out(s); return; }
+        const bool above_only = s.group == Group::Afc || s.group == Group::Qc3Plus ||
+                                s.algorithm == Algorithm::Qc2ClassB || s.algorithm == Algorithm::Qc3ClassB;
+        if (!above_only && s.mv == 5000) { if (!light_open) out(s); light_open = true; return; }   // a later 5 V row adds nothing
+        if (s.group == Group::Ufcs && s.pdo) {   // a mode the adapter reported: one row, at its top
+            if (s.pdo == light_pdo) return;
+            light_pdo = s.pdo;
+            if (UfcsMode m; ufcs_mode_of(s, m)) { s.mv = uint16_t(m.max_mv); s.ma = uint16_t(m.max_ma); }
+            s.verdict = Verdict::Skip; s.reason = Reason::Advertised; s.continuous = false;
+            out(s); return;
+        }
+        s.verdict = Verdict::Skip;
+        s.reason = s.group == Group::Scp && in.fc_caps && in.fc_caps->scp.valid ? Reason::Advertised : Reason::LightLevel;
+        out(s);
+    };
     const bool pd_unit = unit == Unit::Pd || unit == Unit::PdLow;
     size_t n_low = 0; uint8_t low_pos = 0;
     bool hunt_11v = false, hunt_20v = false;   // one 6 A probe per target voltage, not per PDO
@@ -789,7 +833,7 @@ void plan_unit(Unit unit, const pd::SourceCaps& caps, Options o, Input in, AddRe
                     w.detail = kDetailStepWalk;   // the runner's marker while the row is in flight
                     emit(w);
                 }
-                // Deep sweep (ROADMAP "PPS deep sweep", Options::pps_sweep, on in the session by default since 2026-11-14):
+                // Deep sweep (ROADMAP "PPS deep sweep", Options::pps_sweep, on at Level::Deep or by the Tests list line):
                 // emitted last of the APDO's rows (a plan that would overflow kMaxSteps drops it first), split at
                 // ctsweep::kSplitMv (user decision 2026-11-14). The part from 5 V up is a Pd row right after the APDO's own
                 // checks, so any unit list with pd and a self-powered K2 sweep it; the part below 5 V is a low programmable
@@ -1368,8 +1412,11 @@ void Runner::request(Input in) {
     const auto limit = limit_reason(s.mv, in, s.algorithm);
     // A PD row above 5 A that is no OEM hunt (a 6.25 A APDO's full-current row) needs a cable vouched for above 5 A.
     const bool over5 = s.group == Group::Pd && !s.hunt && s.ma > 5000 && over5_cable_ma(in) <= 5000;
-    if (limit != Reason::None || over5 || ((s.algorithm == Algorithm::Epr || s.algorithm == Algorithm::EprAvs) && !epr_cable(in))) {
-        s.verdict = Verdict::Skip; s.reason = limit == Reason::None ? Reason::CableLimit : limit;
+    // Light: the backstop behind the planner. Whatever a replan left in the plan, nothing but 5 V (PDO 1, a legacy 5 V row) goes out.
+    const bool light = opts_.level == Level::Light && (s.mv != 5000 || (s.group == Group::Pd && (s.pos != 1 || s.hunt)));
+    if (light || limit != Reason::None || over5 || ((s.algorithm == Algorithm::Epr || s.algorithm == Algorithm::EprAvs) && !epr_cable(in))) {
+        s.verdict = Verdict::Skip;
+        s.reason = light ? (s.group == Group::Pd ? Reason::Advertised : Reason::LightLevel) : limit == Reason::None ? Reason::CableLimit : limit;
         s.detail = s.reason == Reason::OverCap && (s.algorithm == Algorithm::Epr || s.algorithm == Algorithm::EprAvs) ? monitor_detail(in.cap_mv) : uint8_t(0);
         env_.record(s);
         // A skipped step must not leave a contract held: hand it back and wait for vSafe5V.
@@ -2028,7 +2075,7 @@ void Runner::poll_attach(Input in, const pd::SourceCaps& caps, uint32_t gap) {  
     // EPR PDOs only exist after EPR entry: an EPR-capable source on an EPR cable is entered first, then the rows are rebuilt.
     // A cable that cannot carry EPR gets no entry, only the informational list (stage 4).
     if (epr_stage_ == 3 && unit_ == Unit::Pd) {
-        epr_stage_ = !caps.epr && epr_capable_caps(caps) && caps.active_cc ? (epr_cable_unfit(in) ? 4 : 1) : 0;
+        epr_stage_ = !caps.epr && epr_capable_caps(caps) && caps.active_cc ? (epr_cable_unfit(in) || opts_.level == Level::Light ? 4 : 1) : 0;
         info_ = 0; info_rows_ = false;
     }
     state_ = State::Baseline; stable_ = false; phase_ms_ = in.now;   // the usual 500 ms of vSafe5V, then the first row
@@ -2113,7 +2160,13 @@ void Runner::restore(const Options& o, const Evidence& e, uint32_t run_id, std::
     count_ = std::min(steps.size(), steps_.size());
     std::copy_n(steps.begin(), count_, steps_.begin());
     evidence_ = e; run_id_ = run_id; ++revision_; resumed_ = resumed; reattach_planned_ = planned_reattach; loaded_ = true; plan_frozen_ = true;
-    opts_ = o; opts_.units = resolve(o); n_order_ = opts_.units.n; order_ = opts_.units.u;
+    opts_ = o;
+    // A replay without the meta record (power cut between the header and it) carries no level: a Light plan names itself by its
+    // rows (Advertised / LightLevel skips exist only there), so it never resumes as Medium and asks above 5 V.
+    if (opts_.level == Level::Medium)
+        for (const auto& s : std::span<const Step>(steps_.data(), count_))
+            if (s.verdict == Verdict::Skip && (s.reason == Reason::Advertised || s.reason == Reason::LightLevel)) { opts_ = with_level(opts_, Level::Light); break; }
+    opts_.units = resolve(opts_); n_order_ = opts_.units.n; order_ = opts_.units.u;
     // A resumed run re-sweeps a pending sweep row from its first point: the record starts empty, the journaled row is the plan.
     sweep_used_ = 0; n_sweep_rows_ = 0; sweep_n_ = 0; sweep_mv_ = sweep_lo_ = sweep_hi_ = 0;
     handover_ = {}; unit_ = Unit::Count; mode_ = Mode::Pd; epr_stage_ = 0; info_ = 0; info_rows_ = false; n_hunt_ = 0; hunt_seq_ = 0;
@@ -2313,7 +2366,7 @@ void Runner::poll_impl(Input in, const pd::SourceCaps& caps) {
         ((caps.valid && list_settled(in.now)) || (!caps.valid && !dark && in.now - caps_gone_ms_ >= kCapsReturnMs))) {
         if (late_pd_) replan_pd(caps, in, true);
         if (epr_stage_ == 3 && unit_ == Unit::Pd) {
-            epr_stage_ = !caps.epr && epr_capable_caps(caps) && caps.active_cc ? (epr_cable_unfit(in) ? 4 : 1) : 0;
+            epr_stage_ = !caps.epr && epr_capable_caps(caps) && caps.active_cc ? (epr_cable_unfit(in) || opts_.level == Level::Light ? 4 : 1) : 0;
             info_ = 0; info_rows_ = false;
         }
     }

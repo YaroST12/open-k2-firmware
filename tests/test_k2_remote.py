@@ -1786,6 +1786,15 @@ class ChargerSweepCli(unittest.TestCase):
         with self.assertRaises(SystemExit):
             kr.build_parser().parse_args(["charger-avs-sweep", "maybe"])
 
+    def test_level_sends_0x5b_with_the_level_index(self):
+        for name, code in (("medium", 0), ("light", 1), ("deep", 2)):
+            r, link = self.invoke(["charger-level", name], [bytes([code])])
+            self.assertEqual(link.sent, [(kr.CMD_CHARGER_LEVEL, bytes([code]))])
+            self.assertEqual(r, {"level": name})
+        self.assertEqual(kr.CMD_CHARGER_LEVEL, 0x5B)
+        with self.assertRaises(SystemExit):
+            kr.build_parser().parse_args(["charger-level", "max"])
+
 
 class ChargerSvoocCapCli(unittest.TestCase):
     """`charger-svooc-cap [off|on|usb-a]`: the SuperVOOC ceiling stage of the NEXT charger run (firmware command 0x59), and

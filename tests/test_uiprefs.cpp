@@ -190,6 +190,29 @@ void test_retired_theme_bits() {
     CHECK_EQ(uiprefs::decode(paper) == Prefs{}, 1);
 }
 
+// Settings > Test level (user decision 2026-11-15): bits 6..7 of the smoothing byte hold the charger test's default level,
+// 0 = Medium (the default, and what every older file holds); 3 is no level and reads Medium; the smoothing preset beside it is
+// untouched either way.
+void test_ct_level_bits() {
+    using uiprefs::Prefs;
+    CHECK_EQ(Prefs{}.ct_level, 0);
+    const std::array<std::uint8_t, 8> old{'K', '2', 'U', 'P', 0, 0xFF, 0x02, 0};   // an older record: preset index 1 only
+    CHECK_EQ(uiprefs::decode(old).ct_level, 0);
+    CHECK_EQ(uiprefs::encode(Prefs{}) == uiprefs::encode(Prefs{.ct_level = 0}), 1);   // Medium adds nothing to the file
+    const std::array<std::uint8_t, 8> light{'K', '2', 'U', 'P', 0, 0xFF, 0x42, 0};
+    CHECK_EQ(uiprefs::encode(Prefs{.smoothing = smoothing::preset_from_index(1), .ct_level = 1}) == light, 1);
+    CHECK_EQ(uiprefs::decode(light).ct_level, 1);
+    CHECK_EQ(uiprefs::decode(light).smoothing == smoothing::preset_from_index(1), 1);
+    const std::array<std::uint8_t, 8> bad{'K', '2', 'U', 'P', 0, 0xFF, 0xC0, 0};
+    CHECK_EQ(uiprefs::decode(bad).ct_level, 0);
+    for (std::uint8_t l = 0; l < 3; l++) {
+        const Prefs in{.smoothing = smoothing::preset_from_index(3), .rotation_manual = true, .idle_wake = true, .home_hero = 2, .ct_level = l};
+        CHECK_EQ(uiprefs::decode(uiprefs::encode(in)) == in, 1);
+    }
+    Vol v;
+    CHECK_EQ(uiprefs::save(v.f, Prefs{.ct_level = 2}) == true, 1);
+    CHECK_EQ(uiprefs::load(v.f).ct_level, 2);
+}
 void test_legacy_page_is_outside_the_volume() {
     CHECK_EQ(flash::store_sector_allowed(uiprefs::kLegacyAddr), 0);   // no static grant: erasable only with our signature on it
     CHECK_EQ(flash::legacy_candidate(uiprefs::kLegacyAddr), 1);
@@ -208,6 +231,7 @@ int main() {
     test_idle_wake_bit();
     test_home_hero_bits();
     test_retired_theme_bits();
+    test_ct_level_bits();
     test_legacy_page_is_outside_the_volume();
     return test_report("test_uiprefs");
 }

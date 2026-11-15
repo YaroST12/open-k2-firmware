@@ -88,9 +88,11 @@
 //                                    Schema 1 projects legacy groups/reasons; new unavailable/revision
 //                                    rows are omitted. Selection and source evidence are unavailable.
 //                                    Opt-in schema 2: req 2 (metadata), or 2 start run_id revision.
-//                                    rsp the same first 15 bytes, schema=2, then run_selected(4),
+//                                    rsp the same first 15 bytes, schema=2, then run_selected(4; bits 28..29 = the
+//                                    level the run in hand ran at, as in draft_selected),
 //                                    draft_selected(4; bit 31 = the PPS deep sweep on, bit 30 = the AVS deep sweep
-//                                    on - Options flags, not algorithm bits - they were always 0 before),
+//                                    on, bits 28..29 = the level, 0 Medium / 1 Light / 2 Deep - Options fields, not
+//                                    algorithm bits - they were always 0 before),
 //                                    wire_rev[1:0]/draft_stage[5:2](1),
 //                                    RMDO spec nibbles(1), EvidenceFlag(1), monitor_mv(2),
 //                                    physical_cable_mv(2) ma(2), RMDO version nibbles(1),
@@ -602,11 +604,11 @@ enum class Cmd : uint8_t {
                          // Busy while a run is active, BadArg for an unknown unit or a duplicate. Reset to default by every START.
     ChargerCable = 0x0D, // [kind, seq(2)] the cable identity of the next START (k2/chargertest/ct_cable.hpp); no payload reads it back.
     ChargerHunt = 0x0E,  // [slot] read-only: the evidence of one refused 6 A hunt row (charger_test::HuntEvidence), see kHuntSlotBytes.
-    ChargerSweep = 0x0F, // [on(1)] the PPS deep sweep of the next charger run (on by default since 2026-11-14, 0 leaves it
-                         // out; an Options flag, not an algorithm bit - bit 31 of the draft selection in CHARGER_TEST schema 2).
+    ChargerSweep = 0x0F, // [on(1)] the PPS deep sweep of the next charger run (off at the Light and Medium levels, on
+                         // at Deep; this knob overrides the level's choice; an Options flag, not an algorithm bit - bit 31 of the draft selection in CHARGER_TEST schema 2).
                          // No payload reads it back.
                          // Busy while a run is active.
-    ChargerAvsSweep = 0x54, // [on(1)] the AVS deep sweep of the next charger run (opt-in, never in a preset; an Options flag
+    ChargerAvsSweep = 0x54, // [on(1)] the AVS deep sweep of the next charger run (off at Light and Medium, on at Deep; an Options flag
                          // next to the PPS sweep's, journaled in the meta record). rsp [on(1)]. Busy while a run is active.
     PdStress = 0x55,        // PD Stress: status / start / result (chunked) / stop, see the layout above (0x54 is the AVS sweep)
     EmarkerProbe = 0x56,    // optional [vconn_pc]: the silent-cable-chip probe, raw ADC samples only -> see encode_ra_probe (k2/pd/ra_probe.hpp); a refusal = Busy + [raprobe::Refusal], a bad argument = BadArg + [raprobe::ArgError]
@@ -619,6 +621,9 @@ enum class Cmd : uint8_t {
                          // trigger saw and the adapter's last edge after the wake, appended 2026-11-15 for End::Stopped "stopped
                          // at"). Set: Busy while a run is active, BadArg > 2.
     PdSpec = 0x5A,          // PD Spec Check: status / start / result (chunked) / stop, see the layout above
+    ChargerLevel = 0x5B,    // [level(1)] the level of the next charger run (charger_test::Level: 0 Medium, 1 Light, 2 Deep; with_level
+                         // also sets both deep-sweep flags: on for Deep, off otherwise). rsp [level]. Read back in CHARGER_TEST schema 2,
+                         // draft selection bits 28..29. Busy while a run is active, BadArg above 2.
 };
 
 inline constexpr Cmd kCmdIds[] = {
@@ -631,7 +636,7 @@ inline constexpr Cmd kCmdIds[] = {
     Cmd::CableR, Cmd::Lab, Cmd::Ufcs, Cmd::QRTest, Cmd::Store, Cmd::EmLib, Cmd::Cards, Cmd::Twin, Cmd::BlackBox, Cmd::TransCap, Cmd::ChargerTest,
     Cmd::ChargerUnits, Cmd::ChargerCable, Cmd::ChargerHunt, Cmd::ChargerSweep, Cmd::ChargerAvsSweep, Cmd::BootInfo, Cmd::Memory,
     Cmd::PdStress, Cmd::EmarkerProbe, Cmd::LoopProbe, Cmd::Diagnose, Cmd::TraceHid, Cmd::Battery, Cmd::ChargerSvoocCap,
-    Cmd::PdSpec,
+    Cmd::PdSpec, Cmd::ChargerLevel,
 };
 
 constexpr bool cmd_ids_unique() {
@@ -907,12 +912,13 @@ struct ChargerTestSnapshot {
     uint8_t cursor = 0;    // setup list cursor, saturates at 15 (wire: high nibble of the PDO-count byte)
     uint8_t resumed = 0;   // times this run was resumed after a reboot (the wire saturates at 3)
     ctsweep::View sweep{}; // the finished sweep rows; a sweep row's wire detail byte is its recorded point count
+    charger_test::Level level = charger_test::Level::Medium;   // the run in hand's level (wire: run_selected bits 28..29)
 };
 inline ChargerTestSnapshot charger_test_snapshot(const charger_test::Runner& r,
                                                  uint32_t configured = charger_test::kAllAlgorithms, uint8_t stage = 0, uint8_t cursor = 0) {
     return {r.run_id(), r.revision(), static_cast<uint8_t>(r.state()),
             static_cast<uint8_t>(r.reason()), static_cast<uint8_t>(r.index()), r.steps(), r.evidence(), configured, stage, cursor,
-            r.resumed(), r.sweep_view()};
+            r.resumed(), r.sweep_view(), r.level()};
 }
 constexpr uint8_t kChargerTestSchema = 1;
 constexpr size_t kChargerTestHeader = 15, kChargerTestRow = 16, kChargerTestPage = 2;
@@ -1433,8 +1439,9 @@ concept Backend = requires(B &b, uint8_t u8, uint16_t u16, bool on) {
     { b.charger_test_start(u8) } -> std::same_as<ChargerTestStartReply>;   // 0x0B req [4, flags]: the device's own START (confirmed)
     { b.charger_test_cancel() } -> std::same_as<uint8_t>;                  // 0x0B req [5]: the device's own stop; kCtStop*
     { b.charger_units(std::span<const uint8_t>{}) } -> std::same_as<Status>;   // unit order of the next run (empty = default)
-    { b.charger_sweep(true) } -> std::same_as<Status>;   // the PPS deep sweep of the next run (on by default; off = opt-out)
+    { b.charger_sweep(true) } -> std::same_as<Status>;   // the PPS deep sweep of the next run (the level sets it; this overrides)
     { b.charger_avs_sweep(true) } -> std::same_as<Status>;   // the AVS deep sweep of the next run (opt-in)
+    { b.charger_level(u8) } -> std::same_as<Status>;         // the level of the next run (charger_test::Level; sets the sweeps)
     { b.charger_cable(static_cast<const ctcable::Choice *>(nullptr)) } -> std::same_as<ChargerCableReply>;   // null = read only
     { b.charger_svooc_cap(static_cast<const uint8_t *>(nullptr)) } -> std::same_as<ChargerSvoocCapReply>;   // the SVOOC ceiling stage; null = read only
     { b.charger_hunt(u8) } -> std::same_as<ChargerHuntReply>;   // evidence of refused hunt row `u8`
@@ -1639,6 +1646,14 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
     case Cmd::ChargerAvsSweep: {
         if (p.size() != 1 || p[0] > 1) return reply(Status::BadLength);
         const Status st = backend.charger_avs_sweep(p[0] != 0);
+        if (st != Status::Ok) return reply(st);
+        buf[0] = p[0];
+        return reply_n(1);
+    }
+    case Cmd::ChargerLevel: {
+        if (p.size() != 1) return reply(Status::BadLength);
+        if (p[0] >= charger_test::kLevelCount) return reply(Status::BadArg);
+        const Status st = backend.charger_level(p[0]);
         if (st != Status::Ok) return reply(st);
         buf[0] = p[0];
         return reply_n(1);

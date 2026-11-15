@@ -112,6 +112,7 @@ kit::Verdict to_kit(tone::Tone t) {
     case tone::Tone::Partial: return kit::Verdict::Partial;
     case tone::Tone::Fail: return kit::Verdict::Fail;
     case tone::Tone::Skip: return kit::Verdict::Skip;
+    case tone::Tone::Noted: return kit::Verdict::Noted;   // a Light card: detected / advertised, never pass
     default: return kit::Verdict::None;
     }
 }
@@ -120,6 +121,7 @@ uint16_t tone_color(tone::Tone t) {
     case tone::Tone::Pass: return kOk;
     case tone::Tone::Partial: return kCaution;
     case tone::Tone::Fail: return kError;
+    case tone::Tone::Noted: return kText;
     default: return kDim;
     }
 }
@@ -151,12 +153,14 @@ void card_name(const Surface &c, int16_t x, int16_t y, int max_px, std::string_v
     }
 }
 // The Verdict word of a sheet: the tone of the card's rows. Grey is "Skipped" for a unit that was skipped, "No reply" for a
-// protocol that never answered, "Not run" for a range with no step measured.
+// protocol that never answered, "Not run" for a range with no step measured; a Light card's Noted rows are "Detected" (a group
+// that answered at 5 V) and "Advertised" (a range it only listed).
 const char *verdict_word(tone::Tone t, bool skipped, bool range) {
     switch (t) {
     case tone::Tone::Pass: return "Pass";
     case tone::Tone::Partial: return "Partial";
     case tone::Tone::Fail: return "Fail";
+    case tone::Tone::Noted: return range ? "Advertised" : "Detected";   // a Light card: listed or answered at 5 V, not measured
     default: return skipped ? "Skipped" : range ? "Not run" : "No reply";
     }
 }

@@ -47,9 +47,9 @@ static void fixture() {
     g_stub.caps.raw_header = 0x1181;
 }
 static void press(Ui& ui, Button b, uint32_t now = 1200) { ui.on_button(b, ButtonEvent::Short, now); }
-// The algorithm part of the draft selection: charger_test_selection() also carries the deep-sweep flags (bit 31 PPS, on by
-// default since 2026-11-14; bit 30 AVS), which are Options flags, not algorithms.
-static uint32_t algos(const Ui& ui) { return ui.charger_test_selection() & ~((1u << 31) | (1u << 30)); }
+// The algorithm part of the draft selection: charger_test_selection() also carries the deep-sweep flags (bit 31 PPS, bit 30
+// AVS) and the level (bits 28..29), which are Options, not algorithms.
+static uint32_t algos(const Ui& ui) { return ui.charger_test_selection() & 0x0FFFFFFFu; }
 static void move(Ui& ui, unsigned n, uint32_t now = 1200) { for (unsigned i = 0; i < n; ++i) press(ui, Button::Plus, now); }
 static void top(Ui& ui, uint32_t now = 1200) { for (unsigned i = 0; i < ct::kMaxSteps; ++i) press(ui, Button::Minus, now); }
 static void settle(Ui& ui, uint32_t now = 1200) {
@@ -65,7 +65,7 @@ static void cable(Ui& ui, uint32_t now = 1200) {
 // A cable pick selects and advances: the cursor starts on the cable in force, so one OK keeps it and goes on to Review.
 static void review(Ui& ui, uint32_t now = 1200) {
     cable(ui, now); press(ui, Button::Ok, now); settle(ui, now);
-    CHECK_EQ(ui.charger_test_stage(), 4); CHECK_EQ(ui.charger_test_cursor(), 0);
+    CHECK_EQ(ui.charger_test_stage(), 4); CHECK_EQ(ui.charger_test_cursor(), 1);   // START (row 1, under the Level row)
 }
 constexpr int kCustomStage = 14;   // Stage::Custom, the per-family / per-algorithm list under Tests step "Custom..." (not a numbered step)
 // Tests step rows (0-based): 0 All tests, 1 PD only, 2 Legacy only, 3 Vendor modes, 4 Custom..., 5 Last results (after a run).
@@ -856,7 +856,11 @@ static void test_tools_spoof_survives_a_runs_end() {
         fixture(); Ui ui; open(ui);
         arm_tools_spoof(ui);                       // Tools -> Spoof arms AND selects the identity
         if (presents) { review(ui, 1500); ui.tick(1510); check_review_spoof(label, kText); }
-        else { cable(ui, 1500); pick_row(ui, kOffRow, 1500); top(ui, 1500); press(ui, Button::Ok, 1500); ui.tick(1510); check_review_spoof("Off", kText); }
+        else {
+            cable(ui, 1500); pick_row(ui, kOffRow, 1500);
+            if (ui.charger_test_stage() != 4) { top(ui, 1500); press(ui, Button::Ok, 1500); }
+            ui.tick(1510); check_review_spoof("Off", kText);
+        }
         start_press(ui, 1600); confirm_press(ui, 1700);
         CHECK_EQ(ui.charger_test_busy(), true);
         CHECK_EQ(g_stub.ra_on, presents);          // the Ra mode belongs to the run; Off never turns it on
@@ -1004,7 +1008,8 @@ static void test_pps_wire_headroom_note() {
 }
 static void test_review_start_is_only_row() {
     fixture(); Ui ui; open(ui); review(ui);
-    press(ui, Button::Plus); CHECK_EQ(ui.charger_test_cursor(), 0);
+    press(ui, Button::Plus); CHECK_EQ(ui.charger_test_cursor(), 1);    // START is the last row
+    press(ui, Button::Minus); CHECK_EQ(ui.charger_test_cursor(), 0);   // the Level row above it
     press(ui, Button::Minus); CHECK_EQ(ui.charger_test_cursor(), 0);
     press(ui, Button::Back);
     CHECK_EQ(ui.charger_test_stage(), 2); CHECK_EQ(ui.charger_test_cursor(), 0);
@@ -1146,15 +1151,53 @@ static void test_avs_sweep_row_follows_the_only_sweep_kind() {
     press(ui, Button::Ok, 1320); ui.tick(1320);                    // toggle the sweep row
     CHECK_EQ(ui.charger_test_selection() & (1u << 30), 1u << 30);   // red today: row 2 toggles the PPS bit, not the AVS flag
 }
-// User decision 2026-11-14: the PPS deep sweep is part of the default run (each PPS APDO: its min / max / step rows, then
-// the sweep); the AVS sweep stays opt-in. A fresh session's draft carries bit 31 (PPS sweep) and not bit 30 (AVS sweep),
-// and the remote knob still turns the PPS sweep off for the next run.
-static void test_pps_sweep_is_on_by_default() {
+// User decision 2026-11-15: the default run is the Medium level, without the deep sweeps; Deep turns both on (bits 31 PPS,
+// 30 AVS), and the draft carries the level in bits 28..29. The remote knob still turns one sweep off after that.
+static void test_the_default_run_is_medium() {
     fixture(); Ui ui; open(ui);
-    CHECK_EQ(ui.charger_test_selection() & (1u << 31), 1u << 31);
-    CHECK_EQ(ui.charger_test_selection() & (1u << 30), 0u);
+    CHECK_EQ(ui.charger_test_selection() >> 28, 0u);                   // Medium, no sweep
+    CHECK_EQ(ui.charger_test_set_level(uint8_t(ct::Level::Deep)), true);
+    CHECK_EQ(ui.charger_test_selection() >> 28, 0xEu);                 // PPS + AVS sweep, level 2
     ui.charger_test_set_sweep(false);
-    CHECK_EQ(ui.charger_test_selection() & (1u << 31), 0u);
+    CHECK_EQ(ui.charger_test_selection() >> 28, 0x6u);                 // the AVS sweep stays, the level stays Deep
+    CHECK_EQ(ui.charger_test_set_level(uint8_t(ct::Level::Light)), true);
+    CHECK_EQ(ui.charger_test_selection() >> 28, 0x1u);
+    CHECK_EQ(ui.charger_test_set_level(3), false);                     // no such level
+}
+// Review (step 3/3): the Level row sits above START. START keeps the opening focus; MINUS reaches Level, whose OK cycles
+// Medium -> Deep -> Light -> Medium (next_level), the Tests row's step count follows the level, and the footer says what the
+// level does. PLUS goes back to START, whose OK opens the confirmation as before.
+static void test_review_level_row_cycles_and_counts() {
+    fixture();
+    g_stub.caps.num_pdos = 3;
+    g_stub.caps.pdos[1] = pd::decode_pdo((180u << 10) | 300);                                       // 9 V 3 A
+    g_stub.caps.pdos[2] = pd::decode_pdo(0xC0000000u | (210u << 17) | (33u << 8) | 100u);           // PPS 3.3-21 V 5 A
+    g_stub.vbus_ceiling_mv = 36000;
+    Ui ui; open(ui); review(ui);
+    const unsigned medium = ui.charger_test_view().preview.runnable;
+    CHECK_EQ(ui.charger_test_selection() >> 28, 0u);
+    press(ui, Button::Minus); settle(ui);
+    CHECK_EQ(ui.charger_test_cursor(), 0);
+    auto v = ui.charger_test_view();
+    CHECK_STR(std::string(v.message, v.message_len).c_str(), "Medium: levels, no sweeps");
+    press(ui, Button::Ok); settle(ui);
+    CHECK_EQ(ui.charger_test_stage(), 4); CHECK_EQ(ui.charger_test_cursor(), 0);   // OK on Level never starts
+    CHECK_EQ(ui.charger_test_selection() >> 28, 0xEu);                             // Deep: both sweeps, level 2
+    const unsigned deep = ui.charger_test_view().preview.runnable;
+    press(ui, Button::Ok); settle(ui);
+    CHECK_EQ(ui.charger_test_selection() >> 28, 0x1u);                             // Light
+    v = ui.charger_test_view();
+    const unsigned light = v.preview.runnable;
+    CHECK_STR(std::string(v.message, v.message_len).c_str(), "Light: lists offers at 5V");
+    std::printf("[review-level] runnable: Light %u, Medium %u, Deep %u\n", light, medium, deep);
+    CHECK_EQ(light < medium && medium < deep, true);
+    press(ui, Button::Ok); settle(ui);
+    CHECK_EQ(ui.charger_test_selection() >> 28, 0u);                               // back to Medium
+    CHECK_EQ(ui.charger_test_view().preview.runnable, medium);
+    press(ui, Button::Plus); settle(ui);
+    CHECK_EQ(ui.charger_test_cursor(), 1);
+    press(ui, Button::Ok, 1300); settle(ui, 1300);
+    CHECK_EQ(ui.charger_test_view().confirming, true);                             // START: the confirmation, as before
 }
 static void test_results_counters_are_words() {
     for (unsigned kind = 0; kind < 3; ++kind) {
@@ -1408,6 +1451,11 @@ static void test_step_label_gallery() {
             std::snprintf(name, sizeof name, "labels_rot%u_%s", unsigned(rot), scene);
             dump_panel(name);
         };
+        {   // Review, whole (a stage change paints over several ticks): the README's ct-review.png at rotation 3
+            uint32_t at = 1100;
+            for (int i = 0; i < 60 && ui.painting(); ++i) ui.tick(at += 20);
+            shot("review", at);
+        }
         start_press(ui, 1300); press(ui, Button::Ok, 1400);
         uint32_t t = 1500;
         // Running: stop with some rows done above the one being negotiated.
@@ -1435,6 +1483,32 @@ static void test_step_label_gallery() {
             press(ui, Button::Ok, t); ui.tick(t); t += 200; shot("detail", t);
             break;
         }
+    }
+    {   // The same offer at Light: the Results grid with the Advertised / Detected cells (Verdict::Noted), rotation 3
+        fixture();
+        g_stub.caps.num_pdos = 8; g_stub.caps.epr = true;
+        for (unsigned i = 0; i < 8; ++i) g_stub.caps.pdos[i] = pd::decode_pdo(kOffer[i]);
+        Ui ui;
+        open(ui); ui.set_rotation(3, 1100);
+        CHECK_EQ(ui.charger_test_set_level(uint8_t(ct::Level::Light)), true);
+        move(ui, kPdRow); press(ui, Button::Ok); press(ui, Button::Ok);
+        CHECK_EQ(ui.charger_test_stage(), 4);
+        start_press(ui, 1300); press(ui, Button::Ok, 1400);
+        uint32_t t = 1500;
+        for (; t <= 900000 && ui.charger_test_busy(); t += 100) ui.tick(t);
+        CHECK_EQ(ui.charger_test_stage(), 6);
+        for (int i = 0; i < 60 && ui.painting(); ++i) ui.tick(t += 20);
+        dump_panel("labels_rot3_results_light");
+        top(ui, t); press(ui, Button::Ok, t);   // the PD line's Steps, then its second row (9 V: Advertised)
+        if (ui.charger_test_stage() == 7) {
+            for (int i = 0; i < 60 && ui.painting(); ++i) ui.tick(t += 20);
+            dump_panel("labels_rot3_steps_light");
+            move(ui, 1, t); press(ui, Button::Ok, t);
+            for (int i = 0; i < 60 && ui.painting(); ++i) ui.tick(t += 20);
+            dump_panel("labels_rot3_detail_light");
+        }
+        for (const auto& s : ui.charger_test_results().steps())   // a Light run asks for nothing above 5 V
+            CHECK_EQ(s.verdict == ct::Verdict::Pass || s.verdict == ct::Verdict::Fail ? s.mv <= 5000u : true, true);
     }
 }
 // A UFCS unit planned from the charger's Output_Capabilities: the Results grid and the Detail page say the current each mode
@@ -1774,7 +1848,7 @@ static void test_start_wait_is_not_blocking() {
         start_press(ui, 1300); confirm_press_nowait(ui, 1300);
         ui.tick(1400);
         press(ui, Button::Back, 1500);
-        CHECK_EQ(ui.charger_test_stage(), 4); CHECK_EQ(ui.charger_test_cursor(), 0);
+        CHECK_EQ(ui.charger_test_stage(), 4); CHECK_EQ(ui.charger_test_cursor(), 1);
         CHECK_EQ(g_stub.rd_run, false); CHECK_EQ(g_stub.rd_run_changes, 2);
         CHECK_EQ(ui.charger_test_busy(), false);
         for (uint32_t t = 1520; t < 30000; t += 20) ui.tick(t);
@@ -1821,7 +1895,7 @@ static void test_start_wait_is_not_blocking() {
         fixture(); g_stub.pm.vbus_mv = 0;
         Ui ui; open(ui); review(ui);
         start_run(ui, 1300);
-        CHECK_EQ(ui.charger_test_stage(), 4); CHECK_EQ(ui.charger_test_cursor(), 0);
+        CHECK_EQ(ui.charger_test_stage(), 4); CHECK_EQ(ui.charger_test_cursor(), 1);
         CHECK_EQ(g_stub.rd_run, false); CHECK_EQ(ui.charger_test_busy(), false);
         press(ui, Button::Ok, g_wait_end + 100);          // a new first OK, not a start
         CHECK_EQ(ui.charger_test_stage(), 4); CHECK_EQ(ui.charger_test_busy(), false); CHECK_EQ(g_stub.rd_run, false);
@@ -1886,7 +1960,7 @@ static void rd_fixture() { fixture(); g_stub.pm.vbus_mv = 0; g_stub.vbus_on_rd =
 // The Cable step with one row picked (the pick advances): the Review page with that identity chosen.
 static void review_with(Ui& ui, int row, uint32_t now = 1200) {
     cable(ui, now); pick_row(ui, row, now);
-    CHECK_EQ(ui.charger_test_stage(), 4); CHECK_EQ(ui.charger_test_cursor(), 0);
+    CHECK_EQ(ui.charger_test_stage(), 4); CHECK_EQ(ui.charger_test_cursor(), 1);
 }
 static void test_cable_list_rows_and_default() {
     fixture(); g_stub.lib = {saved(1), saved(2)};
@@ -2319,13 +2393,14 @@ static void interrupted_run(bool unattended) {
     g_stub.requests = g_stub.releases = 0;
     g_stub.pm.vbus_mv = 5000;
 }
-// A run journaled without the PPS sweep bit (older firmware, or charger-sweep off) resumes without it: the replayed options
-// replace the session's default (sweep on), so the resumed plan matches the journaled rows.
+// A run journaled without the PPS sweep bit (older firmware, a Medium run, or charger-sweep off) resumes without it: the
+// replayed options replace the session's default (here Deep, as Settings > Test level sets it at boot), so the resumed plan
+// matches the journaled rows.
 static void test_an_old_journal_resumes_without_the_default_sweep() {
     interrupted_run(true);
-    CHECK_EQ(g_stub.journal.meta.pps_sweep, true);   // this run itself started with the default sweep on
+    CHECK_EQ(g_stub.journal.meta.pps_sweep, false);   // this run itself started at the default level, Medium: no sweep
     g_stub.journal.meta.pps_sweep = false; g_stub.journal.options.pps_sweep = false;   // what an older journal replays to
-    Ui ui; ui.init(0); ui.set_rotation(0, 0); ui.tick(1000);
+    Ui ui; ui.charger_test_set_level(uint8_t(ct::Level::Deep)); ui.init(0); ui.set_rotation(0, 0); ui.tick(1000);
     CHECK_EQ(ui.charger_test_stage(), kResumeStage);
     CHECK_EQ(ui.charger_test_selection() & (1u << 31), 0u);
 }
@@ -4173,7 +4248,7 @@ static void test_view_says_what_the_wizard_shows() {
     { // Review: the preview counts, the footer, then the confirmation window with its timer
         fixture(); Ui ui; open(ui); review(ui); ui.tick(1300);
         auto v = ui.charger_test_view();
-        CHECK_EQ(v.stage, 4); CHECK_EQ(v.rows, 1);
+        CHECK_EQ(v.stage, 4); CHECK_EQ(v.rows, 2);   // Level, START
         CHECK_EQ(v.preview.runnable > 0, true); CHECK_EQ(v.preview.refusal, ct::Reason::None);
         CHECK_EQ(v.confirming, false); CHECK_EQ(v.confirm_left_ms, 0u);
         CHECK_STR(view_text(v).c_str(), "Runs without a load");
@@ -4411,7 +4486,8 @@ int main() {
     test_state_change_log_keeps_the_full_state_name_in_the_format();
     test_avs_sweep_is_a_selection_bit();
     test_avs_sweep_row_follows_the_only_sweep_kind();
-    test_pps_sweep_is_on_by_default();
+    test_the_default_run_is_medium();
+    test_review_level_row_cycles_and_counts();
     test_an_old_journal_resumes_without_the_default_sweep();
     test_self_powered_review_note(); test_self_powered_run_is_on_the_card();
     test_pps_wire_headroom_note();

@@ -481,6 +481,25 @@ static void test_meta_and_attempt_roundtrip() {
     CHECK_EQ(r.has_meta, false); CHECK_EQ(r.attempts, 0); CHECK_EQ(r.options.units.n, 0);
     (void)j;
 }
+// The run's level rides in the meta byte p[1] bits 3..4 (user decision 2026-11-15): a resumed Light run is replanned Light, never as
+// Medium; a meta written before the level existed (bits 3..4 zero) reads Medium.
+static void test_meta_keeps_the_level() {
+    for (const auto l : {ct::Level::Light, ct::Level::Medium, ct::Level::Deep}) {
+        Vol v; cj::Replay r;
+        cj::RunMeta m = meta3(); m.level = l; m.pps_sweep = l == ct::Level::Deep;
+        arm(v, plan(6));
+        CHECK_EQ(int(v.j->meta(m)), 0);
+        v.reboot(); v.j->replay(r);
+        CHECK_EQ(int(r.meta.level), int(l)); CHECK_EQ(int(r.options.level), int(l));
+        CHECK_EQ(r.meta.unattended, true); CHECK_EQ(r.options.pps_sweep, l == ct::Level::Deep);
+    }
+    std::array<std::uint8_t, 64> buf{};
+    cj::RunMeta m = meta3(); m.level = ct::Level::Deep;
+    cj::encode_meta(buf, m);
+    CHECK_EQ((buf[4 + 1] >> 3) & 3, 2);   // Deep = 2 in bits 3..4
+    m.level = ct::Level::Medium; cj::encode_meta(buf, m);
+    CHECK_EQ((buf[4 + 1] >> 3) & 3, 0);   // Medium = 0: an older journal's zero bits read Medium
+}
 // A meta written without a guard reading (no identity, or a firmware before the byte existed) replays as "not judged".
 static void test_meta_without_a_guard_reads_zero() {
     Vol v; cj::Replay r;
@@ -951,7 +970,7 @@ int main() {
     test_polled_arm_stops_at_a_failure_and_a_too_big_plan();
     test_failure_keeps_the_filesystem_error();
     test_roundtrip(); test_capped_step_roundtrip(); test_power_cut_at_every_operation(); test_power_cut_during_begin();
-    test_restart_replaces_the_run(); test_flash_failure_marks_broken(); test_meta_and_attempt_roundtrip(); test_meta_without_a_guard_reads_zero();
+    test_restart_replaces_the_run(); test_flash_failure_marks_broken(); test_meta_and_attempt_roundtrip(); test_meta_without_a_guard_reads_zero(); test_meta_keeps_the_level();
     test_meta_and_attempt_power_cut(); test_an_ended_run_is_not_resumable(); test_finish_cut_at_every_operation();
     test_finish_is_tried_after_a_failed_write(); test_resume_gate();
     return test_report("test_charger_journal");

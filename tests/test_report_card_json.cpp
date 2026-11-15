@@ -192,6 +192,7 @@ static void test_worst_case_fits() {
     c.handover = ct::HandoverOutcome::StayedPd; c.handover_ds = 65535;
     c.uptime_s = 0xFFFFFFFF; c.boots = 0xFFFFFFFF; c.fw = 0xFFFFFFFF; c.id = {0xFFFFFFFF, 0xFFFF, 0xFFFF};
     c.times = 255; c.last_boots = 0xFFFF; c.last_uptime_s = 0xFFFFFF;
+    c.rebalanced = 255; c.level = ct::Level::Light;   // "level":"light", the longest level key
     for (auto& g : c.group) g = {rc::GV::Fail, 65535, uint8_t(k2::fc::Fail::Inline), uint8_t(ct::Reason::Voltage), 65535};
     c.n_ranges = 4;
     for (auto& r : c.range) r = {uint8_t(ct::Algorithm::SprAvs), 255, uint16_t(65535), uint16_t(65535), uint16_t(65535), uint16_t(65535)};
@@ -259,6 +260,32 @@ static void test_repeat_renders() {
     CHECK_EQ(std::string(sb.data(), m).find("same result x3, last boot 9 uptime 4567 s") != std::string::npos, true);
 }
 
+// A Light or Deep run names its level (Medium, the default and every older card, has no key), in the JSON and the summary line.
+static void test_level_renders() {
+    rc::Card c = sample();
+    std::array<char, rc::kJsonMax> jb;
+    std::array<char, rc::kSummaryMax> sb;
+    std::string j(jb.data(), rc::render_json(c, jb));
+    CHECK_EQ(j.find("\"level\"") == std::string::npos, true);
+    c.level = ct::Level::Light;
+    j.assign(jb.data(), rc::render_json(c, jb));
+    CHECK_EQ(j.find("\"level\":\"light\",") != std::string::npos, true);
+    const size_t m = rc::render_summary(c, std::span<char>(sb.data(), sb.size() - 1));
+    CHECK_EQ(std::string(sb.data(), m).find("Light run") != std::string::npos, true);
+    {   // A Light card measured 5 V only: a passing group reads "detected", a listed range "advertised", never a tick.
+        rc::Card l = c;
+        l.group[0] = {rc::GV::Pass, 5000, 0, 0};
+        l.range[0].max_dv = 0; l.range[0].fail_dv = 0;
+        const std::string s(sb.data(), rc::render_summary(l, std::span<char>(sb.data(), sb.size() - 1)));
+        CHECK_EQ(s.find("1 detected, 2 fail, 1 skip of " + std::to_string(rc::kGroups) + " groups") != std::string::npos, true);
+        CHECK_EQ(s.find("- PD: detected\n") != std::string::npos, true);
+        CHECK_EQ(s.find("- PPS 3.3-11V: advertised\n") != std::string::npos, true);
+        CHECK_EQ(s.find("- PD: \xE2\x9C\x93") == std::string::npos, true);
+    }
+    c.level = ct::Level::Deep;
+    j.assign(jb.data(), rc::render_json(c, jb));
+    CHECK_EQ(j.find("\"level\":\"deep\",") != std::string::npos, true);
+}
 static void test_in_contract_handover_renders() {
     rc::Card c = sample();
     c.handover = ct::HandoverOutcome::InContract;
@@ -285,6 +312,7 @@ static void test_qc3plus_skip_reads_no_qc3plus() {
 }
 
 int main() {
+    test_level_renders();
     test_repeat_renders();
     test_qc3plus_skip_reads_no_qc3plus();
     test_in_contract_handover_renders();

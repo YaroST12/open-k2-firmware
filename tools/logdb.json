@@ -691,6 +691,8 @@
   "694": "[UFCS] busy: Request again in %u ms\n",
   "695": "[RMT] pd request busy: %s\n",
   "696": "[SVOOC] refused: %s vbus=%dmV ibus=%dmA contract=%s inline=%s owners=0x%x%s\n",
-  "697": "[CT] svooc_cap end=%u word=%u asks=%u why=%u vmax=%umV stop=%ums\n"
+  "697": "[CT] svooc_cap end=%u word=%u asks=%u why=%u vmax=%umV stop=%ums\n",
+  "698": "[TEST] start selected=%u units=%u level=%s -> %s\n",
+  "699": "[PREFS] qc_after_pd=%d screenshot=%d smoothing=%s rotation=%s%u buttons=%d wake=%d hero=%u level=%u (%s)\n"
  }
 }

@@ -10,6 +10,8 @@
 //           holds the failure); a fixed step that failed -> pass + fail when some level passed, else fail
 //   legacy  a protocol that never answered (nothing passed) is "not offered": grey, never red. Red is a protocol that answered
 //           and then failed with nothing passing, which a card cannot hold (the 5 V baseline would be a pass).
+// A Light card (Card::level) measured 5 V only: a passing group reads Noted ("detected" / "advertised"), a range it never
+// asked for reads Noted, and the card head is Noted when nothing failed; never green.
 // The page (docs/site/r/card.js) carries the same table; tests/test_card_tone.cpp and tests/test_cardpage.mjs pin both to the
 // FH22 card.
 #pragma once
@@ -27,6 +29,7 @@ inline bool capped(const Card& c) {
 
 inline Tone range(const Card& c, const Range& r) {
     Tally t;
+    if (c.level == ct::Level::Light && !r.fail_dv && !r.max_dv) return Tone::Noted;   // a Light run only lists the range
     if (r.fail_dv) {
         if (!r.max_dv) t.fail = 1;
         else if (capped(c)) t.capped = 1;
@@ -53,7 +56,7 @@ inline Tone group(const Card& c, unsigned gi) {
     const GroupResult& g = c.group[gi];
     Tally t;
     switch (g.verdict) {
-    case GV::Pass: t.pass = 1; break;
+    case GV::Pass: (c.level == ct::Level::Light ? t.noted : t.pass) = 1; break;   // Light: answered at 5 V, levels not asked
     case GV::Skip: t.skip = 1; break;
     case GV::Fail:
         if (gi == 0) {
@@ -69,7 +72,7 @@ inline Tone group(const Card& c, unsigned gi) {
 }
 
 // The card's rows by tone (PD fixed, the ranges, the tested legacy groups). Grey rows are not counted as failures.
-struct Counts { unsigned pass = 0, partial = 0, fail = 0, grey = 0; };
+struct Counts { unsigned pass = 0, partial = 0, fail = 0, grey = 0, noted = 0; };
 inline Counts counts(const Card& c) {
     Counts n;
     auto add = [&](Tone t) {
@@ -77,6 +80,7 @@ inline Counts counts(const Card& c) {
         case Tone::Pass: ++n.pass; break;
         case Tone::Partial: ++n.partial; break;
         case Tone::Fail: ++n.fail; break;
+        case Tone::Noted: ++n.noted; break;
         default: ++n.grey; break;
         }
     };
@@ -92,7 +96,7 @@ inline Tone card(const Card& c) {
     const Counts n = counts(c);
     Tally t;
     t.pass = n.pass; t.fail = n.fail; t.capped = n.partial;
-    if (!t.pass && !t.fail && !t.capped) return n.grey ? Tone::Skip : Tone::Pending;
+    if (!t.pass && !t.fail && !t.capped) return n.noted ? Tone::Noted : n.grey ? Tone::Skip : Tone::Pending;
     return result_layout::roll_up(t);
 }
 }  // namespace k2::report_card::tone

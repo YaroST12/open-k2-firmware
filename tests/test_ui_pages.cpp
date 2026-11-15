@@ -1574,6 +1574,29 @@ static void test_log_place() {
 
 // Bench > K2 is the settings page as a place: the settings, then System state (the Diag page) and Boot info (this boot's
 // record as QR codes); BACK lands on the Bench with K2 focused.
+// Settings > Test level: the charger test's default level, Medium out of the box. OK cycles Light -> Medium -> Deep ->
+// Light (from Medium: Deep, Light, Medium), stores it in uiprefs and moves the idle draft with it (the run Review shows next).
+static void test_settings_test_level_row() {
+    Ui &ui = fresh_ui();
+    g_stub.prefs = {};
+    CHECK_EQ(g_stub.prefs.ct_level, 0);   // default Medium
+    ui.context().keep.settings_sel = 0;
+    ui.open_place(bench::Place::K2, kT0);
+    for (int i = 0; i < SettingsPage::kSystemRow - 1; i++) press(ui, Button::Plus, ButtonEvent::Short, kT0 + 10 + i);
+    CHECK_EQ(ui.context().keep.settings_sel, SettingsPage::kSystemRow - 1);
+    CHECK_STR(label(ui, Button::Ok), "Cycle");
+    const int sets = g_stub.prefs_sets;
+    static constexpr uint8_t kNext[3] = {2, 1, 0};   // Deep, Light, Medium
+    for (int i = 0; i < 3; i++) {
+        press(ui, Button::Ok, ButtonEvent::Short, kT0 + 40 + i * 10);
+        CHECK_EQ(g_stub.prefs.ct_level, kNext[i]);
+        CHECK_EQ((ui.charger_test_selection() >> 28) & 3u, kNext[i]);
+        CHECK_EQ(ui.page() == Page::Settings, true);
+    }
+    CHECK_EQ(g_stub.prefs_sets, sets + 3);
+    press(ui, Button::Back, ButtonEvent::Short, kT0 + 90);
+}
+
 static void test_k2_place() {
     Ui &ui = fresh_ui();
     ui.context().keep.settings_sel = 0;
@@ -1952,6 +1975,7 @@ int main() {
     test_blackbox_submenu();
     test_log_place();
     test_k2_place();
+    test_settings_test_level_row();
     test_debug_fake_zero_clears();
     test_fake_zero_leaves_no_gone_rows();
     test_pd_list_clears_on_detach();   // last: it leaves the forced link detached

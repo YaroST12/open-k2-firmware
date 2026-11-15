@@ -78,7 +78,7 @@ REASONS = ["", "disabled", "not advertised", "over voltage cap", "not implemente
            "charger stayed in PD", "rebooted during request", "rebooted during handover", "EPR entry refused", "no contract",
            "source shut off (needs replug)", "no PD after re-attach", "VBUS cut, source recovered", "blocked by PD",
            "no QC3+ response", "rebooted 3x", "needs external power", "PD gave up before START", "Class A only (12 V max)",
-           "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target", "withdrawn by source", "wrong voltage on 5V contract", "needs load", "floored above target", "step resolution", "HID-cable loop: 5V lock"]
+           "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target", "withdrawn by source", "wrong voltage on 5V contract", "needs load", "floored above target", "step resolution", "HID-cable loop: 5V lock", "advertised", "light run: not asked"]
 STATES = ["Setup", "Verify 5V", "Negotiating", "Hold", "Return to 5V", "Complete", "Stopped",
           "UNSAFE: unplug source", "Detach charger", "Initializing..."]
 HANDOVER = ["not tried", "fell back", "stayed PD", "fault", "reboot", "in PD contract"]
@@ -197,6 +197,7 @@ def parse_card(rec: bytes) -> dict:
         "ranges": [], "epr": [], "cable": None, "ufcs": [], "times": p[190],
         "last_boots": u16(p, 191), "last_uptime_s": p[193] | (p[194] << 8) | (p[195] << 16),
         "rebalanced": p[196] if len(rec) >= 204 and p[33] >= 8 else 0,
+        "level": p[197] if len(rec) >= 204 and p[33] >= 8 and p[197] < 3 else 0,   # v8 spare byte: 0 Medium, 1 Light, 2 Deep
         "crc16": u16(rec, len(rec) - 2),
     }
     for i in range(4):
@@ -315,6 +316,7 @@ def card_payload_from_json(j: dict) -> bytes:
     p[193] = up & 0xFF; p[194] = (up >> 8) & 0xFF; p[195] = (up >> 16) & 0xFF
     p[33] = 10   # v10: the sweep block (captures predate it: all zero); v9 spread block below
     p[196] = j.get("rebalanced", 0) & 0xFF
+    p[197] = {"light": 1, "deep": 2}.get(j.get("level"), 0)   # the run's level (the JSON names Light and Deep only)
     for i, rg in enumerate(j.get("ranges", [])[:4]):   # v9: the per-level setpoint errors at 198
         for k, e in enumerate(rg.get("err_mv", [])[:4]):
             p[198 + 4 * i + k] = e & 0xFF
@@ -501,6 +503,8 @@ def pack_card_v2(c: dict) -> bytes:
         for i in range(4):
             for byte in sweep_block(sweeps[i] or {}):
                 w.put(byte, 8)
+    if c.get("level", 0):
+        w.put(c["level"], 8)           # the run's level, one byte and only when not Medium: a Medium card packs as before
     w.put(c["crc16"], 16)             # the v1 record's CRC-16, kept: the integrity check is unchanged
     return w.bytes()
 
@@ -549,6 +553,7 @@ def unpack_card_v2(b: bytes) -> dict:
             sw = sweep_unblock(bytes(r.get(8) for _ in range(9)))
             if i < len(c["ranges"]) and sw:
                 c["ranges"][i]["sweep"] = sw
+    c["level"] = r.get(8) if len(b) * 8 - r.pos >= 24 else 0   # a whole byte before the CRC: never the CRC's padding
     c["crc16"] = r.get(16)
     return c
 

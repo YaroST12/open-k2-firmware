@@ -293,3 +293,46 @@ class CardVerdictLineIsLabelled(unittest.TestCase):
                       "AFC": {"verdict": "skip", "reason": "not advertised"}})
         text = charger_summary.summarize_card(card)
         self.assertIn("1 pass, 1 fail, 2 skip of 4 groups · Complete", text)
+
+
+def _light_step(proto, pos, mv, result, reason="none", raw_pdo=0):
+    return {"protocol": proto, "pos": pos, "result": result, "reason": reason, "detail_reason": "none",
+            "target_mv": mv, "measured_mv": mv if result == "pass" else 0, "continuous": False, "raw_pdo": raw_pdo}
+
+
+def test_a_light_run_counts_what_it_did_not_ask_apart_from_the_skips():
+    # A Light run asks for 5 V only: the PD 9 V row is "advertised", the QC2 9 V row "light run: not asked". Neither is a skip
+    # of a test the user chose, so the counts line names them apart, and their rows say what they are.
+    steps = [_light_step("pd3x-fixed", 1, 5000, "pass", raw_pdo=_fixed_pdo(3000, 5000)),
+             _light_step("pd3x-fixed", 2, 9000, "skip", "advertised", raw_pdo=_fixed_pdo(3000, 9000)),
+             _light_step("qc2", 0, 5000, "pass"),
+             _light_step("qc2", 0, 9000, "skip", "light run: not asked"),
+             _light_step("afc", 0, 9000, "skip", "light run: not asked")]
+    text = charger_summary.summarize({"run_id": 3, "state": "done", "reason": "none", "evidence": {}, "steps": steps,
+                                      "level": "light"})
+    assert "2 pass, 0 fail, 0 skip, 3 not asked (Light run) · done" in text
+    assert "- PD: 5V 3A ✓, 9V 3A advertised" in text
+    assert "- QC2: 5V ✓, 9V not asked" in text
+    assert "Scope: Light run, nothing asked above 5 V, no load" in text
+    assert "- AFC: not asked (Light run)" in text
+    assert "skipped" not in text
+    # a results export (k2_remote charger-test results --out) carries the run's level in selection.run_level
+    run = {"run_id": 3, "state": "done", "reason": "none", "evidence": {}, "steps": steps,
+           "selection": {"run_level": "light", "level": "medium"}}
+    assert "Scope: Light run" in charger_summary.summarize(run)
+    run["selection"]["run_level"] = "medium"
+    assert "Scope: negotiation" in charger_summary.summarize(run)
+
+
+def test_a_light_card_reads_detected_and_advertised_never_a_tick():
+    card = _card({"PD": {"verdict": "pass", "max_mv": 5000}, "QC2": {"verdict": "pass", "max_mv": 5000},
+                  "AFC": {"verdict": "skip", "reason": "light run: not asked"}})
+    card["level"] = "light"
+    card["ranges"] = [{"alg": "PPS (PD3.x)", "lo_mv": 3300, "hi_mv": 11000, "max_mv": 0, "fail_mv": 0}]
+    text = charger_summary.summarize_card(card)
+    assert "2 detected, 0 fail, 1 skip of 3 groups" in text
+    assert "- PD: detected" in text and "- QC2: detected" in text
+    assert "- PPS 3.3-11V: advertised" in text
+    assert "✓" not in text
+    card.pop("level")   # the same card at Medium keeps its ticks
+    assert "- QC2: ✓ 5 V only" in charger_summary.summarize_card(card)

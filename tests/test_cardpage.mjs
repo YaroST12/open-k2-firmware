@@ -356,3 +356,20 @@ test("the SCP current limit (src_flags bits 1..7, 50 mA units) decodes as scp_ma
   assert.equal(K2Card.decodePayload(p).scp_ma, 2250);
   assert.equal(K2Card.decodePayload(p).oppo_svid, 1);
 });
+
+// include/k2/chargertest/card_tone.hpp: a Light run measured 5 V only, so a passing group reads "detected" and a range it only
+// listed reads "advertised", in the noted tone (no fill, never green); the same card at Medium keeps its greens.
+test("a Light card is noted, never green: a group reads detected, a listed range advertised", () => {
+  const base = K2Card.parseLink(golden.allpass.link).card;
+  const card = { ...base, level: "Light", ranges: base.ranges.map((r) => ({ ...r, max_mv: 0, fail_mv: 0 })) };
+  const b = K2Card.badges(card);
+  assert.ok(!b.some((x) => x.tone === "pass"));
+  const noted = b.filter((x) => x.tone === "noted");
+  assert.ok(noted.some((x) => x.kind === "range") && noted.some((x) => x.kind !== "range"));
+  for (const x of noted) assert.equal(x.word, x.kind === "range" ? "advertised" : "detected");
+  for (const x of noted.filter((x) => x.kind === "range")) assert.equal(x.status, "advertised");
+  const groups = K2Card.sections(card).flatMap((s) => s.groups);
+  assert.ok(!groups.some((g) => g.tone === "pass"));
+  assert.ok(!groups.flatMap((g) => g.rows).some((r) => r.tone === "pass"));
+  assert.ok(K2Card.badges(base).every((x) => x.tone === "pass"));   // Medium: unchanged
+});

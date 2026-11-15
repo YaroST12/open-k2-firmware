@@ -211,6 +211,9 @@ static std::size_t pack_card_v2(std::span<const std::uint8_t> rec, std::span<std
         for (unsigned i = 0; i < rc::kMaxRanges; ++i)
             for (unsigned k = 0; k < rc::kSweepBytes; ++k)
                 w.put(p[rc::off::kV10 + rc::kSweepBytes * i + k], 8);
+    // the run's level (v8 spare byte, 1 Light, 2 Deep): a whole byte, only when not Medium, so a Medium card packs as before
+    // and a reader tells it from the CRC's padding (at most 7 bits) by needing 8 bits more than the CRC
+    if (p[33] >= 8 && p[rc::off::kV8 + 1] != 0) w.put(p[rc::off::kV8 + 1], 8);
     w.put(crc16, 16);                           // the v1 record's CRC-16: the integrity check is unchanged
     return w.finish();
 }

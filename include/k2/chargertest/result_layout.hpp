@@ -23,8 +23,9 @@
 
 namespace k2::result_layout {
 
-// Partial = some steps of the range passed, some did not; Skip = nothing ran (every step skipped).
-enum class Tone : uint8_t { Pass, Fail, Partial, Pending, Dim, Caution, Skip };
+// Partial = some steps of the range passed, some did not; Skip = nothing ran (every step skipped); Noted = only listed: the
+// source advertises it (or a Light run did not ask for it), so nothing was measured there and nothing failed.
+enum class Tone : uint8_t { Pass, Fail, Partial, Pending, Dim, Caution, Skip, Noted };
 // The shape that says the verdict without the colour: check (pass), cross (fail), tilde (mixed), dash (skip), dot (pending).
 // '\x01' / '\x02' are the in-text check / cross markers of k2::draw_marked_text (include/k2/ui/text.hpp); a plain token has none (' ').
 char mark(Tone);
@@ -32,12 +33,20 @@ char mark(Tone);
 // more steps: a fixed level is one, a PPS / AVS range is all the steps sampling it, a legacy level is its up and down steps.
 //   a step still to run                  -> Pending   dim
 //   nothing sampled (every step skipped) -> Skip      grey, the glued tag says why
+//   only listed (Light: advertised or not asked) -> Noted  framed, neither green nor struck; beside a measured or
+//                                           skipped step it adds nothing (5 V passed + 9 V listed = Pass)
 //   every step passed                    -> Pass      green
 //   some passed, or the source capped    -> Partial   amber ("~")
 //   none passed                          -> Fail      red
 // A Capped step (ct::Reason::Capped: the source plateaued below the target) counts as `capped`, not as `fail`.
-struct Tally { unsigned pass = 0, fail = 0, capped = 0, skip = 0, pending = 0; };
+// A Skip step whose reason is Advertised or LightLevel (a Light run's listing) counts as `noted`, not as `skip`.
+struct Tally { unsigned pass = 0, fail = 0, capped = 0, skip = 0, noted = 0, pending = 0; };
 Tone roll_up(const Tally&);
+// A Light run's listing: a Skip whose reason is Advertised or LightLevel (counted as `noted`, drawn as kit::Verdict::Noted).
+bool noted(const charger_test::Step& s);
+// The word of a step's verdict band (Step detail): PASS, FAIL, CAPPED (a Capped fail), SKIP, LISTED (Advertised), NOT RUN
+// (LightLevel), RUNNING, PENDING. At most 7 characters: the band's font-24 word ends before the step's name.
+const char* verdict_word(const charger_test::Step& s);
 
 struct Token {
     char text[16] = {};   // the longest chip, "3.3-21V 5.25A", is 13

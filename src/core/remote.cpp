@@ -253,6 +253,12 @@ remote::Status Remote::charger_avs_sweep(bool on) {
     return remote::Status::Ok;
 }
 
+remote::Status Remote::charger_level(uint8_t level) {
+    if (ui_.charger_test_busy()) return remote::Status::Busy;
+    if (!ui_.charger_test_set_level(level)) return remote::Status::BadArg;
+    return remote::Status::Ok;
+}
+
 remote::ChargerSvoocCapReply Remote::charger_svooc_cap(const uint8_t* set) {
     remote::ChargerSvoocCapReply r;
     if (set) {

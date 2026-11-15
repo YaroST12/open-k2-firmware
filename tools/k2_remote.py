@@ -37,8 +37,8 @@ CMD_CHARGER_TEST = 0x0B  # read-only RAM suite metadata / paged results
 CMD_CHARGER_UNITS = 0x0C  # [n, unit...] the test units of the next run, in order (n = 0: default order)
 CMD_CHARGER_CABLE = 0x0D  # [kind, seq(2)] the cable identity of the next START (no payload reads it back)
 CMD_CHARGER_HUNT = 0x0E   # [slot] read-only: the evidence of one refused 6 A hunt row
-CMD_CHARGER_SWEEP = 0x0F  # [on(1)] the PPS deep sweep of the next charger run (on by default since 2026-11-14; 0 = leave it out)
-CMD_CHARGER_AVS_SWEEP = 0x54  # [on(1)] the AVS deep sweep of the next charger run (opt-in, never in a preset)
+CMD_CHARGER_SWEEP = 0x0F  # [on(1)] the PPS deep sweep of the next charger run (off at Light/Medium; Deep turns it on)
+CMD_CHARGER_AVS_SWEEP = 0x54  # [on(1)] the AVS deep sweep of the next charger run (off at Light/Medium; Deep turns it on)
 CMD_CHARGER_SVOOC_CAP = 0x59  # [mode(1)] SuperVOOC ceiling stage of the next charger run; no payload reads mode + result
 CMD_GET_IDENTITY = 0x24  # source identity: VID/PID/bcd, SVIDs, vendor, Apple model
 CMD_DEBUG_LINK = 0x25     # debug: 1 hold the link attached, 0 detached (until the next rescan)
@@ -130,6 +130,7 @@ PDS_STOPS = ["running", "done", "cancelled", "run time cap", "transition cap", "
 # ---- end PD Stress constants ----
 # ---- PD Spec Check (docs/PD_SPEC_CHECK.md): constants ----
 CMD_PD_SPEC = 0x5A        # PD Spec Check: status / start / result (chunked) / stop (k2/core/remote_proto.hpp, tools/pd_spec.py)
+CMD_CHARGER_LEVEL = 0x5B  # [level(1)] the level of the next charger run (0 medium, 1 light, 2 deep); Deep sets both deep sweeps
 PSC_STATUS, PSC_START, PSC_READ, PSC_STOP = 0, 1, 2, 3
 PSC_CHUNK = 48
 PSC_FLAG_CONFIRM = 1 << 0
@@ -270,6 +271,9 @@ TEST_STAGES = ["algorithms", "group", "cable", "identity", "review", "running", 
 TEST_ALL = (1 << len(TEST_ALGORITHMS)) - 1
 TEST_SWEEP_BIT = 1 << 31   # draft_selected bit 31 = the PPS deep sweep on (remote_proto.hpp)
 TEST_AVS_SWEEP_BIT = 1 << 30   # draft_selected bit 30 = the AVS deep sweep on (remote_proto.hpp)
+TEST_LEVEL_SHIFT = 28          # draft_selected bits 28..29 = the level of the next run (charger_test::Level)
+TEST_LEVEL_MASK = 3 << TEST_LEVEL_SHIFT
+TEST_LEVELS = ["medium", "light", "deep"]   # charger_test::Level order: Medium 0 (the default), Light 1, Deep 2
 TEST_STATES = ["idle", "baseline", "requesting", "holding", "releasing", "done", "stopped", "unsafe", "detach charger", "initializing...",
                "svooc ceiling"]
 TEST_RESULTS = ["pending", "running", "pass", "fail", "skip"]
@@ -283,7 +287,7 @@ TEST_REASONS = ["none", "disabled", "not advertised", "over voltage cap", "not i
                 "rebooted during request", "rebooted during handover", "EPR entry refused", "no contract",
                 "source shut off (needs replug)", "no PD after re-attach", "VBUS cut, source recovered", "blocked by PD",
                 "no QC3+ response", "rebooted 3x", "needs external power", "PD gave up before START", "Class A only (12 V max)",
-                "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target", "withdrawn by source", "wrong voltage on 5V contract", "needs load", "floored above target", "step resolution", "HID-cable loop: 5V lock"]
+                "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target", "withdrawn by source", "wrong voltage on 5V contract", "needs load", "floored above target", "step resolution", "HID-cable loop: 5V lock", "advertised", "light run: not asked"]
 TEST_MAX_STEPS = 112  # Runner's bounded storage: pd::kMaxPdos * 6 + 46
 # fastcharge::Protocol in enum order (include/k2/fastcharge/fastcharge_classify.hpp)
 FC_NAMES = ["...", "NO INPUT", "NO QUICK", "DCP 5V", "QC3.0", "QC2.0 5V", "QC2.0 9V", "QC2.0 12V",
@@ -1267,11 +1271,16 @@ def decode_charger_test(p):
         out["resumed"] = p[23] >> 6   # times this run was resumed after a reboot (saturates at 3)
         sweep = bool(draft_mask & TEST_SWEEP_BIT)   # draft bit 31: the PPS deep sweep is on (an Options flag, not a test)
         avs_sweep = bool(draft_mask & TEST_AVS_SWEEP_BIT)   # draft bit 30: the AVS deep sweep is on
-        draft_mask &= ~(TEST_SWEEP_BIT | TEST_AVS_SWEEP_BIT)
-        if (run_mask | draft_mask) & ~TEST_ALL or stage >= len(TEST_STAGES) or p[39] & 15 > 11 or (header == 42 and p[40] & ~7):
+        level = (draft_mask & TEST_LEVEL_MASK) >> TEST_LEVEL_SHIFT   # draft bits 28..29: the level of the next run
+        draft_mask &= ~(TEST_SWEEP_BIT | TEST_AVS_SWEEP_BIT | TEST_LEVEL_MASK)
+        run_level = (run_mask & TEST_LEVEL_MASK) >> TEST_LEVEL_SHIFT   # run bits 28..29: the level the run in hand ran at
+        run_mask &= ~TEST_LEVEL_MASK
+        if (run_mask | draft_mask) & ~TEST_ALL or level >= len(TEST_LEVELS) or run_level >= len(TEST_LEVELS) \
+                or stage >= len(TEST_STAGES) or p[39] & 15 > 11 \
+                or (header == 42 and p[40] & ~7):
             raise FrameError("invalid charger-test selection or evidence")
         out["selection"] = {"run_mask": run_mask, "configured_mask": draft_mask, "pps_sweep": sweep,
-                            "avs_sweep": avs_sweep,
+                            "avs_sweep": avs_sweep, "level": TEST_LEVELS[level], "run_level": TEST_LEVELS[run_level],
                             "run": [a for i, a in enumerate(TEST_ALGORITHMS) if run_mask & (1 << i)],
                             "configured": [a for i, a in enumerate(TEST_ALGORITHMS) if draft_mask & (1 << i)]}
         out["stage"] = TEST_STAGES[stage]
@@ -1513,10 +1522,20 @@ HUNT_SLOT_BYTES = 29
 
 
 def charger_sweep(link, on):
-    """Turn the PPS deep sweep of the next charger-test run on or off (on by default since 2026-11-14: off is the opt-out)."""
+    """Turn the PPS deep sweep of the next charger-test run on or off (off at Light and Medium; the Deep level turns it on)."""
     p = link.call(CMD_CHARGER_SWEEP, bytes([1 if on else 0])).payload
     _need(p, 1, "charger sweep")
     return bool(p[0])
+
+
+def charger_level(link, level):
+    """Set the level of the next charger-test run ("light", "medium" or "deep", or its index). Light asks for nothing above
+    5 V (it records what is advertised), Medium is the default run, Deep is Medium plus the PPS and AVS deep sweeps (it turns
+    both sweep flags on; Light and Medium turn them off). Refused while a run is in progress. Returns the level name."""
+    idx = TEST_LEVELS.index(level) if isinstance(level, str) else int(level)
+    p = link.call(CMD_CHARGER_LEVEL, bytes([idx])).payload
+    _need(p, 1, "charger level")
+    return TEST_LEVELS[p[0]] if p[0] < len(TEST_LEVELS) else str(p[0])
 
 
 def charger_avs_sweep(link, on):
@@ -1581,6 +1600,10 @@ def cmd_charger_sweep(link, a):
 
 def cmd_charger_avs_sweep(link, a):
     return {"avs_sweep": charger_avs_sweep(link, a.state == "on")}
+
+
+def cmd_charger_level(link, a):
+    return {"level": charger_level(link, a.level)}
 
 
 def charger_hunt(link, slot):
@@ -4796,6 +4819,7 @@ def _render(name, r):
                              f"{c.get('brand', ''):8} {str(c['pdp_w']) + 'W' if c.get('pdp_w') else '':5} runs={c['runs']}"
                              + (f" same x{c['times']}, last boot {c['last_boots']} up {c['last_uptime_s']}s" if c.get("times", 1) > 1 else "")
                              + (f" rebalanced x{c['rebalanced']}" if c.get("rebalanced") else "")   # v8 field (offset 196)
+                             + (f" level={c['level']}" if c.get("level") else "")   # the run's level (offset 197; Medium has no key)
                              for c in r["list"])
         if k == "show":
             return charger_summary.summarize_card(r["card"])
@@ -4959,7 +4983,7 @@ COMMANDS = {"ping": cmd_ping, "press": cmd_press, "state": cmd_state, "pdos": cm
             "pd": cmd_pd, "identify-device": cmd_identify_device, "pd-reread": cmd_pd_reread, "apple-read": cmd_apple_read,
             "stop": cmd_stop, "lease": cmd_lease, "store": cmd_store, "blackbox": cmd_blackbox, "transcap": cmd_transcap,
             "diagnose": cmd_diagnose, "cable-r": cmd_cable_r, "ufcs": cmd_ufcs, "pd-stress": cmd_pd_stress, "pd-spec": cmd_pd_spec, "loop-probe": cmd_loop_probe, "battery": cmd_battery, "lab": cmd_lab, "qrtest": cmd_qrtest, "charger-test": cmd_charger_test, "charger-units": cmd_charger_units,
-            "charger-cable": cmd_charger_cable, "charger-sweep": cmd_charger_sweep, "charger-avs-sweep": cmd_charger_avs_sweep, "charger-svooc-cap": cmd_charger_svooc_cap, "cards": cmd_cards,
+            "charger-cable": cmd_charger_cable, "charger-sweep": cmd_charger_sweep, "charger-avs-sweep": cmd_charger_avs_sweep, "charger-level": cmd_charger_level, "charger-svooc-cap": cmd_charger_svooc_cap, "cards": cmd_cards,
             "twin": cmd_twin}
 
 
@@ -5008,8 +5032,11 @@ def build_parser():
     cc = sub.add_parser("charger-cable", help="cable identity the charger-test START dialog opens on (no argument: read it back)")
     cc.add_argument("cable", nargs="?", help="off | builtin | builtin:<id 1, 2, 4 | epr-50v | cuktech-6a | oneplus> | "
                     "saved:<library id>; Ra mode + spoof for the run unless off")
-    for name, what, how in (("charger-sweep", "PPS", "on by default, off leaves it out"),
-                            ("charger-avs-sweep", "AVS", "opt-in, never in a preset")):
+    cl = sub.add_parser("charger-level", help="level of the NEXT charger run: light = nothing above 5 V (what is advertised), "
+                        "medium = the default run, deep = medium + the PPS and AVS deep sweeps")
+    cl.add_argument("level", choices=TEST_LEVELS)
+    for name, what, how in (("charger-sweep", "PPS", "off at Light and Medium; Deep turns it on"),
+                            ("charger-avs-sweep", "AVS", "off at Light and Medium; Deep turns it on")):
         cs = sub.add_parser(name, help=f"turn the {what} deep sweep of the NEXT charger run on or off "
                             f"(every 100 mV across each APDO, 1 A; {how})")
         cs.add_argument("state", choices=["on", "off"])

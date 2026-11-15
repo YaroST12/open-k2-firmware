@@ -473,7 +473,8 @@ CABLE_KIND_DEC = {0: 0, 1: 1, 2: 2, 3: 4, 4: 0xFF}
 def expand_card_v2(b: bytes) -> bytes:
     """A schema v2 card record -> the 256-byte v1 record (format 10), so decode_card() reads it as before.
     A v2 record packed before the rebalanced varint existed ends at the CRC: the varint is then absent and reads 0;
-    likewise the v9 spread presence bit and the v10 sweep presence bit."""
+    likewise the v9 spread presence bit and the v10 sweep presence bit. The run's level byte follows only on a Light or
+    Deep card (Medium writes nothing), read when at least a byte is left before the CRC."""
     r = BitR(b)
     if r.get(8) != 2:
         raise QrError("not a schema v2 record")
@@ -574,6 +575,8 @@ def expand_card_v2(b: bytes) -> bytes:
         if r.get(1):
             for i in range(36):
                 rec[p + 214 + i] = r.get(8)
+    if len(b) * 8 - r.pos >= 24:   # the run's level (v8 spare byte 197), a whole byte: the CRC's padding is at most 7 bits
+        rec[p + 197] = r.get(8)
     rec[254] = r.get(8)      # the v1 record's CRC-16, carried so the integrity check is unchanged
     rec[255] = r.get(8)
     return bytes(rec)

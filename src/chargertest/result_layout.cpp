@@ -11,6 +11,19 @@
 
 namespace k2::result_layout {
 namespace ct = charger_test;
+
+bool noted(const ct::Step& s) {
+    return s.verdict == ct::Verdict::Skip && (s.reason == ct::Reason::Advertised || s.reason == ct::Reason::LightLevel);
+}
+const char* verdict_word(const ct::Step& s) {
+    switch (s.verdict) {
+    case ct::Verdict::Pass: return "PASS";
+    case ct::Verdict::Fail: return s.reason == ct::Reason::Capped ? "CAPPED" : "FAIL";
+    case ct::Verdict::Skip: return s.reason == ct::Reason::Advertised ? "LISTED" : s.reason == ct::Reason::LightLevel ? "NOT RUN" : "SKIP";
+    case ct::Verdict::Running: return "RUNNING";
+    default: return "PENDING";
+    }
+}
 using A = ct::Algorithm;
 namespace {
 struct Out {
@@ -27,7 +40,7 @@ void count(Tally& t, const ct::Step& y) {
     switch (y.verdict) {
     case ct::Verdict::Pass: ++t.pass; break;
     case ct::Verdict::Fail: y.reason == ct::Reason::Capped ? ++t.capped : ++t.fail; break;
-    case ct::Verdict::Skip: ++t.skip; break;
+    case ct::Verdict::Skip: noted(y) ? ++t.noted : ++t.skip; break;
     default: ++t.pending; break;
     }
 }
@@ -246,7 +259,7 @@ void put_word(step_label::Text& t, const char* w) {
 
 Tone roll_up(const Tally& t) {
     if (t.pending) return Tone::Pending;
-    if (!t.pass && !t.fail && !t.capped) return t.skip ? Tone::Skip : Tone::Pending;
+    if (!t.pass && !t.fail && !t.capped) return t.skip ? Tone::Skip : t.noted ? Tone::Noted : Tone::Pending;
     if (!t.fail && !t.capped && !t.skip) return Tone::Pass;
     return t.pass || t.capped ? Tone::Partial : Tone::Fail;
 }
@@ -685,6 +698,7 @@ char mark(Tone t) {
     case Tone::Partial: return '~';
     case Tone::Skip: return '-';
     case Tone::Pending: return '.';
+    case Tone::Noted: return 'i';   // listed (advertised / not asked): information, not a verdict
     default: return ' ';
     }
 }
