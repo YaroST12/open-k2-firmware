@@ -373,3 +373,32 @@ test("a Light card is noted, never green: a group reads detected, a listed range
   assert.ok(!groups.flatMap((g) => g.rows).some((r) => r.tone === "pass"));
   assert.ok(K2Card.badges(base).every((x) => x.tone === "pass"));   // Medium: unchanged
 });
+
+// A voltage fold the deep sweep found on a range that failed nothing is a caution: amber, with the note in the words of the
+// device card ("folds to 19.4V above 19.9V"); a failing range keeps its own verdict and never reads as a caution.
+test("a sweep fold on a range that failed nothing is a caution, never a pass or a fail", () => {
+  const base = JSON.parse(JSON.stringify(K2Card.parseLink(golden.allpass.link).card));
+  const pps = base.ranges.find((r) => r.alg === "PPS (PD3.x)");
+  assert.ok(pps && !pps.fail_mv);
+  pps.sweep = { min_mv: -40, max_mv: 25, worst_mv: -40, worst_at_mv: 20000, peak_mv: 19800, peak_at_mv: 19900, fold_mv: 19400, fold_from_mv: 20000 };
+  assert.equal(K2Card.rangeVerdict(pps, false), "partial");
+  const b = K2Card.badges(base).find((x) => x.id.startsWith("range:PPS (PD3.x)"));
+  assert.equal(b.tone, "partial");
+  assert.match(b.status, /^folds to 19\.4V above 19\.9V, sweep peak 19\.8V at 19\.9V$/);
+  assert.doesNotMatch(b.status, /folds back/);
+  const rows = K2Card.sections(base).flatMap((s) => s.groups).flatMap((g) => g.rows);
+  const note = rows.find((r) => r.label === "Caution");
+  assert.equal(note.value, "folds to 19.4V above 19.9V");
+  assert.equal(note.tone, "partial");
+  pps.sweep.fold_mv = 20000;   // a fold back to a whole volt reads without ".0", as the device does
+  assert.equal(K2Card.badges(base).find((x) => x.id.startsWith("range:PPS (PD3.x)")).status.startsWith("folds to 20V above 19.9V"), true);
+  delete pps.sweep.fold_mv;    // no fold: the plain sweep summary and the old tone
+  assert.equal(K2Card.rangeVerdict(pps, false), "pass");
+  assert.doesNotMatch(K2Card.badges(base).find((x) => x.id.startsWith("range:PPS (PD3.x)")).status, /folds/);
+  pps.sweep.fold_mv = 19400;
+  pps.fail_mv = 15000; pps.max_mv = 13000;   // a real failure outranks the caution and keeps the fold-back clause
+  const failing = K2Card.badges(base).find((x) => x.id.startsWith("range:PPS (PD3.x)"));
+  assert.equal(failing.tone, "partial");
+  assert.match(failing.status, /folds back to 19\.4V from 20V/);
+  assert.ok(!K2Card.sections(base).flatMap((s) => s.groups).flatMap((g) => g.rows).some((r) => r.label === "Caution"));
+});

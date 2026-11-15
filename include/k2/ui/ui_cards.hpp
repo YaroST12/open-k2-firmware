@@ -28,6 +28,8 @@ void cards_amps_text(unsigned ma, StrBuf<8> &out);
 // (the PD group's reason is Capped), "at 13V" when a step failed, "reached 20V" when it stopped early without a failure; empty
 // when the range passed (the marker says so; a 20 V step that measured 19.4 V passed, within the tolerance) or nothing ran.
 void cards_range_status_text(const report_card::Card &c, const report_card::Range &r, StrBuf<16> &out);
+// The caution a stored voltage fold gives the range (26 cells): "folds to 19.4V above 19.9V"; empty when the sweep found none.
+void cards_fold_text(const report_card::Card &c, const report_card::Range &r, StrBuf<32> &out);
 // The cause on the PD fixed row when nothing passed and no target is stored (22 cells): the group's reason, or "see detail"
 // when the words are longer (the group's detail screen carries them in full).
 void cards_pd_why_text(const report_card::GroupResult &r, StrBuf<24> &out);
@@ -69,6 +71,7 @@ struct SheetRow {
 };
 struct CardSheet {
     SheetRow row[kSheetRows];
+    char note[32] = {};                      // the text a row views when it is longer than a row's own number box (the fold note)
     unsigned n = 0;
     int height() const { int h = 0; for (unsigned i = 0; i < n; ++i) h += row[i].height(); return h; }
 };

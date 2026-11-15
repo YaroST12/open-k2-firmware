@@ -224,7 +224,23 @@ void cards_amps_text(unsigned ma, StrBuf<8> &out) {
     if (ma) put_amps(out, ma);
 }
 
+void cards_fold_text(const rc::Card &c, const rc::Range &r, StrBuf<32> &out) {
+    const std::size_t i = std::size_t(&r - c.range.data());
+    if (i >= c.n_ranges || i >= c.sweep.size() || !c.sweep[i].fold_dv) return;
+    // "folds to 19.4V above 19.9V": the level it fell to, the last good setpoint (one 0.1 V step under the first folded one); the
+    // device's note (ctsweep::format_fold) reads the same, both at the nearest 0.1 V
+    out.put("folds to ");
+    put_volts(out, c.sweep[i].fold_dv);
+    out.put(" above ");
+    put_volts(out, unsigned(c.sweep[i].fold_from_dv > 1 ? c.sweep[i].fold_from_dv - 1 : 0));
+}
+
 void cards_range_status_text(const rc::Card &c, const rc::Range &r, StrBuf<16> &out) {
+    if (tone::folded(c, r)) {   // a fold is a caution: the row says what it fell to ("folds to 19.4V"), the sheet the whole note
+        out.put("folds to ");
+        put_volts(out, c.sweep[std::size_t(&r - c.range.data())].fold_dv);
+        return;
+    }
     if (r.fail_dv) {
         if (r.max_dv && tone::capped(c)) {
             out.put("caps ");
@@ -394,7 +410,7 @@ void cards_sheet(const rc::Card &c, bool range, unsigned idx, CardSheet &out) {
     if (range) {
         const rc::Range &r = c.range[idx];
         const tone::Tone rt = tone::range(c, r);
-        sheet_verdict(out, rt, verdict_word(rt, false, true));
+        sheet_verdict(out, rt, tone::folded(c, r) ? "Caution" : verdict_word(rt, false, true));
         StrBuf<32> rg;
         cards_range_text(r, rg);
         sheet_add_num(out, "Offered", kVolt, rg.view());
@@ -406,6 +422,11 @@ void cards_sheet(const rc::Card &c, bool range, unsigned idx, CardSheet &out) {
         cards_amps_text(r.ma, a);
         if (a.view().size()) sheet_add_num(out, "Max current", kAmp, a.view());
         if (r.pos) { StrBuf<8> p; p.put_char('#').put_u32(r.pos); sheet_add_num(out, "PDO", kText, p.view()); }
+        if (tone::folded(c, r)) {   // the caution's own words, kept in the sheet (the value is longer than the box: it sits under the key)
+            StrBuf<32> fold;
+            cards_fold_text(c, r, fold);
+            sheet_add(out, "Note", kCaution, stash(out.note, sizeof out.note, fold.view()));
+        }
         // A failing range of a card whose PD group failed only through a range: the group's cause is this range's cause too.
         if (r.fail_dv && tone::fixed_ok_despite_group(c)) sheet_add(out, "Reason", kCaution, rc::group_why(0, c.group[0]));
         return;

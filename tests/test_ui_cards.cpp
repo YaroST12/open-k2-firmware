@@ -90,6 +90,34 @@ static void test_text() {
     sm.clear(); cards_summary_text(c, sm);                      // make_card: PD, AVS pass, PPS fails at 13 V (a pass + fail), QC2 pass, QC3 never answered
     CHECK_STR(sm.view().data(), "3P 1~");
 
+    // A voltage fold on a range that failed nothing is a caution: the row says what it fell to, the sheet carries the word and the
+    // note in full (26 cells, under its key), the summary counts it with the amber rows.
+    rc::Card fold = cardfx::fh22_full();
+    fold.sweep[0].fold_dv = 194;
+    fold.sweep[0].fold_from_dv = 200;
+    m.clear(); cards_range_status_text(fold, fold.range[0], m);
+    CHECK_STR(m.view().data(), "folds to 19.4V");
+    StrBuf<32> fn;
+    cards_fold_text(fold, fold.range[0], fn);
+    CHECK_STR(fn.view().data(), "folds to 19.4V above 19.9V");
+    fn.clear(); cards_fold_text(fold, fold.range[1], fn);       // no fold stored on the PPS range
+    CHECK_EQ(int(fn.view().size()), 0);
+    sm.clear(); cards_summary_text(fold, sm);
+    CHECK_STR(sm.view().data(), "1P 2~");
+    CardSheet sheet;
+    cards_sheet(fold, true, 0, sheet);
+    CHECK_STR(std::string(sheet.row[0].line[0]).c_str(), "Caution");
+    bool noted = false;
+    for (unsigned i = 0; i < sheet.n; ++i)
+        if (std::string_view(sheet.row[i].key) == "Note") {
+            noted = true;
+            CHECK_STR(std::string(sheet.row[i].line[0]).c_str(), "folds to 19.4V above 19.9V");
+            CHECK_EQ(int(sheet.row[i].lines), 1);
+            CHECK_EQ(int(sheet.row[i].below), 1);
+        }
+    CHECK_EQ(int(noted), 1);
+    CHECK_EQ(int(sheet.height() <= 222 - 60), 1);
+
     // The PD row's cause: the reason when it fits 136 px, else "see detail" (the group screen has it in full; nothing is cut).
     StrBuf<24> why;
     cards_pd_why_text({rc::GV::Fail, 0, 0, uint8_t(ct::Reason::NoOffer), 0}, why);
@@ -475,6 +503,28 @@ static void test_dump_renders() {
         std::fwrite(g_panel, 2, LCD_WIDTH * LCD_HEIGHT, f);
         std::fclose(f);
     }
+    // A sweep fold on a range that failed nothing: the row reads amber with the fold's words, the sheet says Caution and the note.
+    stub_cards_reset();
+    rc::Card fc = cardfx::fh22_full();
+    fc.sweep[0].fold_dv = 194;
+    fc.sweep[0].fold_from_dv = 200;
+    CHECK_EQ(int(rc::hw::put(fc)), int(rc::Err::Ok));
+    Ui &ui3 = open_cards(80000);
+    ui3.set_rotation(3, 80100);
+    uint32_t t3 = 80200;
+    const auto press3 = [&](Button b) { ui3.on_button(b, ButtonEvent::Short, t3 += 150); ui3.tick(t3 += 50); };
+    const auto shot3 = [&](const char *name) {
+        ui3.tick(t3 += 200); ui3.tick(t3 += 200);
+        char path[256];
+        std::snprintf(path, sizeof path, "%s/k2_cards_%s.panel", dir, name);
+        if (FILE *f = std::fopen(path, "wb")) { std::fwrite(g_panel, 2, LCD_WIDTH * LCD_HEIGHT, f); std::fclose(f); }
+    };
+    ui3.push_menu(Menu::Cards, t3);
+    press3(Button::Ok);
+    press3(Button::Plus);   // the first range (the fold sits on it)
+    shot3("fold_row");
+    press3(Button::Ok);
+    shot3("fold_detail");
     stub_cards_reset();
 }
 

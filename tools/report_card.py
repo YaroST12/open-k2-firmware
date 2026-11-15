@@ -31,7 +31,7 @@ REASONS = ["", "disabled", "not advertised", "over voltage cap", "not implemente
            "request failed", "timeout", "voltage outside band", "hard reset", "source lost",
            "cancelled", "5V release failed", "offers changed", "PD active: use QC port",
            "revision cannot be forced", "select at least one test", "physical cable limit", "unsupported PDO layout",
-           "charger stayed in PD", "rebooted during request", "rebooted during handover", "EPR entry refused", "no contract", "source shut off (needs replug)", "no PD after re-attach", "VBUS cut, source recovered", "blocked by PD", "no QC3+ response", "rebooted 3x", "needs external power", "PD gave up before START", "Class A only (12 V max)", "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target", "withdrawn by source", "wrong voltage on 5V contract", "needs load", "floored above target", "step resolution", "HID-cable loop: 5V lock", "advertised", "light run: not asked", "port cuts without load"]
+           "charger stayed in PD", "rebooted during request", "rebooted during handover", "EPR entry refused", "no contract", "source shut off (needs replug)", "no PD after re-attach", "VBUS cut, source recovered", "blocked by PD", "no QC3+ response", "rebooted 3x", "needs external power", "PD gave up before START", "Class A only (12 V max)", "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target", "withdrawn by source", "wrong voltage on 5V contract", "needs load", "floored above target", "step resolution", "HID-cable loop: 5V lock", "advertised", "light run: not asked", "port cuts without load", "output folds back"]
 STATES = ["Setup", "Verify 5V", "Negotiating", "Hold", "Return to 5V", "Complete", "Stopped",
           "UNSAFE: unplug source", "Detach charger", "Initializing..."]
 HANDOVER = ["not tried", "fell back", "stayed PD", "fault", "reboot", "in PD contract"]
@@ -294,13 +294,32 @@ def _mv2(mv):
     return f"{r // 1000}.{frac // 10}"
 
 
-def sweep_text(sw):
+def _dv(mv):
+    """A level at the nearest 0.1 V, a whole volt without its '.0': 19419 -> '19.4V', 20000 -> '20V' (the firmware's put_volts)."""
+    t = (mv + 50) // 100
+    return f"{t // 10}.{t % 10}V" if t % 10 else f"{t // 10}V"
+
+
+dv_text = _dv   # the whole-volt-without-".0" form of one level, for the callers that print a measured value
+
+
+def fold_text(sw):
+    """A range's sweep dict -> the caution note: 'folds to 19.4V above 19.9V' (the level the output fell to, and the last
+    setpoint that still tracked, one 100 mV step under the first folded one); '' when the sweep found no fold. Mirrors
+    ctsweep::format_fold, the card sheet's Note row and the page's note, so every surface says the same."""
+    if not sw or not sw.get("fold_mv"):
+        return ""
+    return f"folds to {_dv(sw['fold_mv'])} above {_dv(max(sw['fold_from_mv'] - 100, 0))}"
+
+
+def sweep_text(sw, with_fold=True):
     """A range's sweep dict -> the summary line: 'peak 19.75 V at 19.9 V, folds back to 19.42 V from 20.0 V'
-    (the FH22 shape); 'peak 21.0 V at 21.0 V' without a fold-back. Mirrors ctsweep::format_summary."""
+    (the FH22 shape); 'peak 21.0 V at 21.0 V' without a fold-back. Mirrors ctsweep::format_summary. with_fold=False leaves the
+    fold-back clause out (a caution line already carries fold_text)."""
     if not sw or not sw.get("peak_mv"):
         return "no points"
     t = f"peak {_mv2(sw['peak_mv'])} V at {_mv2(sw['peak_at_mv'])} V"
-    if sw.get("fold_mv"):
+    if with_fold and sw.get("fold_mv"):
         t += f", folds back to {_mv2(sw['fold_mv'])} V from {_mv2(sw['fold_from_mv'])} V"
     return t
 

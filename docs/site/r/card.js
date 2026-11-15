@@ -56,7 +56,7 @@ var K2Card = (function () {
     "charger stayed in PD", "rebooted during request", "rebooted during handover", "EPR entry refused", "no contract",
     "source shut off (needs replug)", "no PD after re-attach", "VBUS cut, source recovered", "blocked by PD",
     "no QC3+ response", "rebooted 3x", "needs external power", "PD gave up before START", "Class A only (12 V max)",
-    "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target", "withdrawn by source", "wrong voltage on 5V contract", "needs load", "floored above target", "step resolution", "HID-cable loop: 5V lock", "advertised", "light run: not asked", "port cuts without load"];
+    "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target", "withdrawn by source", "wrong voltage on 5V contract", "needs load", "floored above target", "step resolution", "HID-cable loop: 5V lock", "advertised", "light run: not asked", "port cuts without load", "output folds back"];
   var CAPPED = "capped below target";
   var STATES = ["Setup", "Verify 5V", "Negotiating", "Hold", "Return to 5V", "Complete", "Stopped",
     "UNSAFE: unplug source", "Detach charger", "Initializing..."];
@@ -799,9 +799,11 @@ var K2Card = (function () {
   // keeps no per-step verdicts, so the tally is rebuilt from the row: a failure with something reached is amber (capped or
   // stopped), a failure with nothing reached is red, no failure with the top reached (within the 5 % VBUS tolerance: a 20 V step
   // that measured 19.4 V passed) is green, no failure but the top never exercised is amber, nothing measured is grey.
+  // A voltage fold on a range that failed nothing is a caution: amber, neither pass nor fail (card_tone.hpp folded()).
   function rangeVerdict(r, capped) {
     if (r.fail_mv) return r.max_mv ? "partial" : "fail";
     if (!r.max_mv) return "skip";
+    if (foldText(r.sweep)) return "partial";
     var maxDv = Math.round(r.max_mv / 100), hiDv = Math.round(r.hi_mv / 100);
     return maxDv + Math.floor(hiDv / 20) < hiDv ? "partial" : "pass";
   }
@@ -814,17 +816,26 @@ var K2Card = (function () {
     return name === "PD" ? "fail" : "skip";
   }
 
-  function sweepText(sw) {   // mirrors tools/report_card.py sweep_text / ctsweep::format_summary
+  // The caution note, the same words as ctsweep::format_fold, tools/report_card.py fold_text and the device's card sheet:
+  // "folds to 19.4V above 19.9V" (the level it fell to, and the last setpoint that still tracked, one 100 mV step under the
+  // first folded one). Empty when the sweep found no fold.
+  function foldText(sw) {
+    if (!sw || !sw.fold_mv) return "";
+    return "folds to " + volts(sw.fold_mv) + " above " + volts(Math.max(sw.fold_from_mv - 100, 0));
+  }
+
+  function sweepText(sw, noFold) {   // mirrors tools/report_card.py sweep_text / ctsweep::format_summary
     if (!sw || !sw.peak_mv) return "no points";
     var t = "sweep peak " + volts(sw.peak_mv) + " at " + volts(sw.peak_at_mv);
-    if (sw.fold_mv) t += ", folds back to " + volts(sw.fold_mv) + " from " + volts(sw.fold_from_mv);
+    if (sw.fold_mv && !noFold) t += ", folds back to " + volts(sw.fold_mv) + " from " + volts(sw.fold_from_mv);
     return t;
   }
 
   function rangeBadge(r, capped) {
     var tone = rangeVerdict(r, capped), name = rangeName(r.alg), label, status;
     var amp = r.max_ma ? " " + amps(r.max_ma) : "";
-    if (r.sweep) status = sweepText(r.sweep);   // the deep sweep's summary overrides the range status
+    var caution = !r.fail_mv && !!foldText(r.sweep);   // a fold on a range that failed nothing: a caution
+    if (r.sweep) status = caution ? foldText(r.sweep) + ", " + sweepText(r.sweep, true) : sweepText(r.sweep);   // the deep sweep's summary overrides the range status
     if (r.sweep) {
       label = name + " sweep " + span(r.lo_mv, r.hi_mv);
     } else if (tone === "pass") {
@@ -998,6 +1009,7 @@ var K2Card = (function () {
       var rows = [row("Result", b.status, b.tone), row("Offered", span(r.lo_mv, r.hi_mv)),
         row("Max reached", r.max_mv ? volts(r.max_mv) : "none")];
       if (r.fail_mv) rows.push(row("Failed at", volts(r.fail_mv), "fail"));
+      if (!r.fail_mv && foldText(r.sweep)) rows.push(row("Caution", foldText(r.sweep), "partial"));
       if (capped && b.tone === "partial" && r.fail_mv) rows.push(row("Reason", "output capped below the advertised range", "partial"));
       if (r.max_ma) rows.push(row("Max current", amps(r.max_ma)));
       pd.push({title: rangeName(r.alg) + " " + span(r.lo_mv, r.hi_mv), tone: b.tone, rows: rows});
