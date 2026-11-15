@@ -10,6 +10,7 @@ device lock, so this runs next to ct_start.py and k2_remote.py (they use the HID
   k2_stream.py record --out runs/NAME [--kinds all|log,trace,power=50,run] [--old] [--seconds N]
                       [--until-run-end] [--port /dev/serial/by-id/usb-...-ifNN] [--echo run,log,gap | --quiet]
   k2_stream.py view runs/NAME [--kind run,log] [--grep REGEX] [--from MS] [--to MS] [--wall] [--summary]
+  k2_stream.py replies runs/NAME [--limit-ms 10] [--ignore TEXT] [--json]
 
 `record` writes one folder: one jsonl per kind (trace, log, power, run, beat, gaps, boot), trace.raw
 (`pd_trace.py decode` reads it), meta.json (firmware hash, mapping of the K2 clock to wall time, the
@@ -622,9 +623,18 @@ def main(argv=None):
     v.add_argument("--to", dest="t_to", type=float, metavar="MS")
     v.add_argument("--wall", action="store_true", help="prefix the estimated wall-clock time")
     v.add_argument("--summary", action="store_true", help="the completeness summary only")
+    p = sub.add_parser("replies", help="audit the K2's answers to the source in a session folder (tools/pd_reply_audit.py)")
+    p.add_argument("dir")
+    p.add_argument("--limit-ms", default="10", help="flag replies later than this (default 10)")
+    p.add_argument("--ignore", action="append", default=[], metavar="TEXT", help="leave out messages whose name contains TEXT")
+    p.add_argument("--json", action="store_true")
     a = ap.parse_args(argv)
     if a.cmd == "view":
         return cmd_view(a)
+    if a.cmd == "replies":
+        import pd_reply_audit
+        return pd_reply_audit.main([a.dir, "--limit-ms", a.limit_ms] + [x for i in a.ignore for x in ("--ignore", i)] +
+                                   (["--json"] if a.json else []))
     if a.port is None:
         a.port = default_port()
     try:

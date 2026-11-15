@@ -1,0 +1,32 @@
+{"note": "synthetic Black Box trace for tests/test_pd_reply_audit.py"}
+{"t_ms": 1000.0, "type": "RX", "text": "RX        SOP  Source_Capabilities (id 0, PD3.x, src/dfp)", "raw": "e081112c91010801020304", "kind": "trace"}
+{"t_ms": 1000.5, "type": "IRQ", "text": "IRQ       INTERRUPTB=I_GCRCSENT  INTERRUPT=I_ACTIVITY", "raw": "000171", "kind": "trace"}
+{"t_ms": 1002.0, "type": "TX", "text": "TX        SOP  Request (id 0, PD3.x, snk/ufp)", "raw": "82102c910113e0", "kind": "trace"}
+{"t_ms": 1002.8, "type": "REG", "text": "REG       CONTROL0 <= 0x01  TX_START HOST_CUR=0", "raw": "0601", "kind": "trace"}
+{"t_ms": 1300.0, "type": "RX", "text": "RX        SOP  Get_Sink_Cap (id 0, PD3.x, src/dfp)", "raw": "e0880101020304", "kind": "trace"}
+{"t_ms": 1313.9, "type": "IRQ", "text": "IRQ       INTERRUPTB=I_GCRCSENT  INTERRUPT=I_ACTIVITY", "raw": "000171", "kind": "trace"}
+{"t_ms": 1314.0, "type": "TX", "text": "TX        SOP  Sink_Capabilities (id 0, PD3.x, snk/ufp)", "raw": "84100a900100e0", "kind": "trace"}
+{"t_ms": 1314.9, "type": "REG", "text": "REG       CONTROL0 <= 0x01  TX_START HOST_CUR=0", "raw": "0601", "kind": "trace"}
+{"t_ms": 1599.6, "type": "IRQ", "text": "IRQ       INTERRUPTB=I_GCRCSENT  INTERRUPT=I_ACTIVITY", "raw": "000171", "kind": "trace"}
+{"t_ms": 1600.0, "type": "RX", "text": "RX        SOP  Vendor_Defined (id 0, PD3.x, src/dfp)", "raw": "e08f1103a0ac0501020304", "kind": "trace"}
+{"t_ms": 1700.0, "type": "RX", "text": "RX        SOP  Vendor_Defined (id 0, PD3.x, src/dfp)", "raw": "e08f2106a101ff0100000001020304", "kind": "trace"}
+{"t_ms": 1700.5, "type": "IRQ", "text": "IRQ       INTERRUPTB=I_GCRCSENT  INTERRUPT=I_ACTIVITY", "raw": "000171", "kind": "trace"}
+{"t_ms": 1800.0, "type": "RX", "text": "RX        SOP  Get_Status (id 0, PD3.x, src/dfp)", "raw": "e0920101020304", "kind": "trace"}
+{"t_ms": 1800.5, "type": "IRQ", "text": "IRQ       INTERRUPTB=I_GCRCSENT  INTERRUPT=I_ACTIVITY", "raw": "000171", "kind": "trace"}
+{"t_ms": 1801.5, "type": "TX", "text": "TX        SOP  Not_Supported (id 0, PD3.x, snk/ufp)", "raw": "9000e0", "kind": "trace"}
+{"t_ms": 1802.3, "type": "REG", "text": "REG       CONTROL0 <= 0x01  TX_START HOST_CUR=0", "raw": "0601", "kind": "trace"}
+{"t_ms": 1900.0, "type": "RX", "text": "RX        SOP  Extended_Control (id 0, PD3.x, src/dfp)", "raw": "e090910280040001020304", "kind": "trace"}
+{"t_ms": 1900.5, "type": "IRQ", "text": "IRQ       INTERRUPTB=I_GCRCSENT  INTERRUPT=I_ACTIVITY", "raw": "000171", "kind": "trace"}
+{"t_ms": 2100.0, "type": "RX", "text": "RX        SOP  Get_Sink_Cap (id 0, PD3.x, src/dfp)", "raw": "e0880101020304", "kind": "trace"}
+{"t_ms": 5000.0, "type": "SINK", "text": "SINK      state=ready result=ok held=yes pos=8 EPR", "raw": "06010201", "kind": "trace"}
+{"t_ms": 5100.0, "type": "RX", "text": "RX        SOP  EPR_Source_Capabilities (id 0, PD3.x, src/dfp)", "raw": "e091f11880000000000000000000000000000000000000000000000000000001020304", "kind": "trace"}
+{"t_ms": 5100.5, "type": "IRQ", "text": "IRQ       INTERRUPTB=I_GCRCSENT  INTERRUPT=I_ACTIVITY", "raw": "000171", "kind": "trace"}
+{"t_ms": 5103.0, "type": "TX", "text": "TX        SOP  EPR_Request (id 0, PD3.x, snk/ufp)", "raw": "89202cb10483f4c10800e0", "kind": "trace"}
+{"t_ms": 5103.8, "type": "REG", "text": "REG       CONTROL0 <= 0x01  TX_START HOST_CUR=0", "raw": "0601", "kind": "trace"}
+{"t_ms": 5300.0, "type": "RX", "text": "RX        SOP  Vendor_Defined (id 0, PD3.x, src/dfp)", "raw": "e08f1103a001ff01020304", "kind": "trace"}
+{"t_ms": 5300.5, "type": "IRQ", "text": "IRQ       INTERRUPTB=I_GCRCSENT  INTERRUPT=I_ACTIVITY", "raw": "000171", "kind": "trace"}
+{"t_ms": 5301.0, "type": "TX", "text": "TX        SOP  Vendor_Defined (id 0, PD3.x, snk/ufp)", "raw": "8f1083a001ffe0", "kind": "trace"}
+{"t_ms": 5302.0, "type": "REG", "text": "REG       CONTROL0 <= 0x01  TX_START HOST_CUR=0", "raw": "0601", "kind": "trace"}
+{"t_ms": 9000.0, "type": "RX", "text": "RX        SOP  Request (id 0, PD3.x, snk/ufp)", "raw": "e082102c91011301020304", "kind": "trace"}
+{"t_ms": 9005.0, "type": "RX", "text": "RX        SOP  Get_Sink_Cap (id 0, PD3.x, src/dfp)", "raw": "e0880101020304", "kind": "trace"}
+{"t_ms": 9005.5, "type": "IRQ", "text": "IRQ       INTERRUPTB=I_GCRCSENT  INTERRUPT=I_ACTIVITY", "raw": "000171", "kind": "trace"}

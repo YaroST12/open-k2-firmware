@@ -211,6 +211,7 @@ python3 tools/k2_stream.py view runs/NAME --kind run,gap           # one kind at
 python3 tools/k2_stream.py view runs/NAME --grep 'row 7|reason='   # regex over the timeline lines
 python3 tools/k2_stream.py view runs/NAME --from 62000 --to 65000 --wall
 python3 tools/k2_stream.py view runs/NAME --summary                # completeness only
+python3 tools/k2_stream.py replies runs/NAME                       # the K2's answers to the source: owed, given, latency (docs/PD_SINK_REPLIES.md)
 grep -E ' RUN | GAP ' runs/NAME/timeline.txt                       # plain grep works: every line starts with time and kind
 ```
 
