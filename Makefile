@@ -37,6 +37,10 @@ K2_WHOS_ATTACHED ?= 0
 # K2_SCREENSHOT=1 builds the RLE565/strip screenshot capture path and Settings > Screenshot row back in
 # (include/k2/core/build_config.h). Off by default; host tests enable it via HOST_CXXFLAGS.
 K2_SCREENSHOT ?= 0
+# K2_STACKPROBE=1 builds the PSP probe in (include/k2/core/stack_probe.hpp): SysTick samples the thread stack pointer and the
+# interrupted PC / LR at each new low, the main loop logs "[STK] low=<free> pc=0x.. lr=0x..". Off by default (diagnosis builds
+# only; give one its own BUILD_DIR).
+K2_STACKPROBE ?= 0
 # K2_HOST_REPORT=1 builds the loop probe's Host report prototype (the PD interrogation of a USB-C host port through the HID
 # loop, docs/LOOP_PROBE.md): its K2 binding, the FUSB302 loop-host line, the USB enumeration tap and the Loop probe page's
 # Host view. Off by default (flash). Its pure logic is host-tested either way (TEST_CXX_LIB).
@@ -183,7 +187,7 @@ CFLAGS += -Os -g3 -Wall -Wextra -ffunction-sections -fdata-sections -fno-math-er
 # Measured -800 B text under LTO.
 CFLAGS += -fmerge-all-constants
 CFLAGS += -I$(INC_DIR)
-CFLAGS += -DK2_NET=$(K2_NET) -DK2_WEBUSB=$(K2_WEBUSB) -DK2_PDSTRESS=$(K2_PDSTRESS) -DK2_PDSPEC=$(K2_PDSPEC) -DK2_WHOS_ATTACHED=$(K2_WHOS_ATTACHED) -DK2_SCREENSHOT=$(K2_SCREENSHOT)
+CFLAGS += -DK2_NET=$(K2_NET) -DK2_WEBUSB=$(K2_WEBUSB) -DK2_PDSTRESS=$(K2_PDSTRESS) -DK2_PDSPEC=$(K2_PDSPEC) -DK2_WHOS_ATTACHED=$(K2_WHOS_ATTACHED) -DK2_SCREENSHOT=$(K2_SCREENSHOT) -DK2_STACKPROBE=$(K2_STACKPROBE)
 CFLAGS += -DK2_HOST_REPORT=$(K2_HOST_REPORT)
 CFLAGS += -DK2_HOT_BLOCK=$(K2_HOT_BLOCK)
 CFLAGS += -MMD -MP
@@ -674,7 +678,7 @@ nav-headers:
 	@$(COMPDB)
 
 docker-build: | $(NAV_DIR)/dirs.txt
-	$(DOCKER_RUN) $(DOCKER_IMG) make K2_GIT=$(K2_GIT) K2_FW_VERSION=$(K2_FW_VERSION) K2_WERROR=$(K2_WERROR) K2_64BIT=$(K2_64BIT) K2_NET=$(K2_NET) K2_WEBUSB=$(K2_WEBUSB) K2_PDSTRESS=$(K2_PDSTRESS) K2_PDSPEC=$(K2_PDSPEC) K2_WHOS_ATTACHED=$(K2_WHOS_ATTACHED) K2_SCREENSHOT=$(K2_SCREENSHOT) K2_HOST_REPORT=$(K2_HOST_REPORT) K2_HOT_BLOCK=$(K2_HOT_BLOCK) BUILD_DIR=$(BUILD_DIR) K2_HOST_ROOT=$(CURDIR)
+	$(DOCKER_RUN) $(DOCKER_IMG) make K2_GIT=$(K2_GIT) K2_FW_VERSION=$(K2_FW_VERSION) K2_WERROR=$(K2_WERROR) K2_64BIT=$(K2_64BIT) K2_NET=$(K2_NET) K2_WEBUSB=$(K2_WEBUSB) K2_PDSTRESS=$(K2_PDSTRESS) K2_PDSPEC=$(K2_PDSPEC) K2_WHOS_ATTACHED=$(K2_WHOS_ATTACHED) K2_SCREENSHOT=$(K2_SCREENSHOT) K2_HOST_REPORT=$(K2_HOST_REPORT) K2_HOT_BLOCK=$(K2_HOT_BLOCK) K2_STACKPROBE=$(K2_STACKPROBE) BUILD_DIR=$(BUILD_DIR) K2_HOST_ROOT=$(CURDIR)
 
 docker-flash:
 	docker run --rm --privileged -v $(CURDIR):/workspace -v /dev:/dev $(DOCKER_IMG) make flash

@@ -25,6 +25,7 @@
 #include "k2/core/remote.hpp"
 #include "k2/core/rescan.hpp"
 #include "k2/core/shell_hw.hpp"
+#include "k2/core/stack_probe.hpp"
 #include "k2/core/stage_meter.hpp"
 #include "k2/core/survey.hpp"
 #include "k2/core/trace_hid_hw.hpp"
@@ -248,6 +249,14 @@ constexpr uint32_t kStackLowBytes = 1024;
 uint32_t g_stack_lowest = kStackLowBytes;
 
 [[gnu::noinline]] K2_HOT void watch_stack(uint32_t &lowest) {
+#if K2_STACKPROBE
+    // The PSP probe's newest low: the code SysTick interrupted at the deepest sample (addr2line -f -C on pc and lr).
+    k2::stackprobe::Low probe;
+    uint32_t probe_free = 0;
+    if (k2::stackprobe::take(probe, probe_free))
+        K2LOG("[STK] low=%u pc=0x%08X lr=0x%08X\n", static_cast<unsigned>(probe_free), static_cast<unsigned>(probe.pc),
+              static_cast<unsigned>(probe.lr));
+#endif
     const uint32_t free_bytes = k2_stack_free_bytes();
     if (free_bytes >= lowest) return;
     lowest = free_bytes;
