@@ -318,3 +318,70 @@ test("pdspec: the check table is the firmware's own (result.hpp kDefs and engine
   const steps = (kind) => new RegExp(kind + "\\[3\\]\\s*=\\s*\\{([^}]*)\\}").exec(plan)[1].split(",").map(Number);
   assert.deepEqual(P.PDSPEC_STEPS, { pps: steps("pps"), avs: steps("avs") });
 });
+
+
+// ---- the PD spec section of a Deep charger test (0x0B [6, off]; specsec::to_wire) -----------------------------------------
+const specFx = JSON.parse(readFileSync(path.join(here, "fixtures/ct_spec_section.json"), "utf8"));
+const specWire = Uint8Array.from(Buffer.from(specFx.wire, "hex"));
+
+test("charger spec section: the tables are the firmware's own (spec_section.hpp order, spec_text.hpp labels)", () => {
+  const sec = readFileSync(path.join(here, "../include/k2/chargertest/spec_section.hpp"), "utf8");
+  const keys = P.PDSPEC_CHECKS.map((c) => c.key);
+  const enumNames = [...readFileSync(path.join(here, "../include/k2/pdspec/result.hpp"), "utf8").matchAll(/kDefs\{\{([\s\S]*?)\n\}\};/g)][0][1]
+    .match(/\{"(\w+)"/g).map((s) => s.slice(2, -1));
+  assert.deepEqual(enumNames, keys);
+  const order = /kOrder\{\s*([\s\S]*?)\};/.exec(sec)[1].match(/C::(\w+)/g).map((s) => s.slice(3));
+  // Check::PpsMonotonic is "pps_monotonic": the enumerators are the CamelCase of the keys
+  const camel = (k) => k.split("_").map((w) => w[0].toUpperCase() + w.slice(1)).join("");
+  assert.deepEqual(P.CT_SPEC_ORDER.map(camel), order);
+  assert.equal(P.CT_SPEC_WIRE, 3 + 4 * order.length);
+  const text = readFileSync(path.join(here, "../include/k2/ui/spec_text.hpp"), "utf8");
+  const short = [...(/kCheckShort\[\]\[9\] = \{([\s\S]*?)\};/.exec(text)[1]).matchAll(/"([^"]*)"/g)].map((m) => m[1]);
+  assert.equal(short.length, keys.length);
+  keys.forEach((k, i) => { if (P.CT_SPEC_ORDER.includes(k)) assert.equal(P.CT_SPEC_SHORT[k], short[i], k); });
+  const starts = [...sec.matchAll(/kOrder\[i\] == C::(\w+)/g)].map((m) => m[1]);
+  const sections = P.decodeChargerSpecSection(specWire).cells.filter((c) => c.section).map((c) => camel(c.key));
+  assert.deepEqual(sections, [camel(P.CT_SPEC_ORDER[0]), ...starts]);
+});
+
+test("charger spec section: decodes the firmware's own bytes like the Python tool", () => {
+  const s = P.decodeChargerSpecSection(specWire), want = specFx.decoded;
+  assert.deepEqual({ end: s.end, why: s.why, unconfirmed: s.unconfirmed, tally: s.tally }, { end: want.end, why: want.why, unconfirmed: want.unconfirmed, tally: want.tally });
+  assert.deepEqual(s.cells.map((c) => ({ key: c.key, label: c.label, unit: c.unit, verdict: c.verdict, skip: c.skip, fails: c.fails, value: c.value, value_text: c.value_text })),
+                   want.cells);
+  assert.equal(s.cells[0].short, "Accept");
+  assert.throws(() => P.decodeChargerSpecSection(specWire.subarray(1)), /expected 111/);
+  const bad = Uint8Array.from(specWire); bad[0] = 9;
+  assert.throws(() => P.decodeChargerSpecSection(bad), /not a PD spec section/);
+});
+
+test("charger spec section: summary lines", () => {
+  const lines = P.specLines(P.decodeChargerSpecSection(specWire));
+  assert.match(lines[0], /^PD spec: 2 pass, 1 fail, 1 skip, 1 unverified, 22 not judged$/);
+  assert.ok(lines.some((l) => /FAIL, worst 40\.0 ms, 3 over/.test(l)));
+  assert.ok(lines.some((l) => /skipped, no PPS/.test(l)));
+  assert.ok(lines.some((l) => /WARNING: the end-of-run return to 5 V was not confirmed/.test(l)));
+  assert.deepEqual(P.specLines(null), []);
+});
+
+const specChunks = (runId, blob) => (f) => {
+  const off = body(f)[1], n = Math.min(48, blob.length - off);
+  return [rsp(0x0B, f[3], 0, [...le32(runId), blob.length, off, n, ...blob.subarray(off, off + n)])];
+};
+
+test("charger spec section: read in 48-byte chunks, 0x0B [6, off]", async () => {
+  const { remote, sent } = rig(specChunks(0x01020304, specWire));
+  const s = await remote.chargerSpecSection(0x01020304);
+  assert.deepEqual(sent.map(body), [[6, 0], [6, 48], [6, 96]]);
+  assert.equal(s.cells.length, 27);
+  assert.equal(s.cells[1].value_text, "40.0 ms");
+});
+
+test("charger spec section: none, a moved run and a stuck chunk", async () => {
+  const none = rig((f) => [rsp(0x0B, f[3], 0, [...le32(7), 0, 0, 0])]);
+  assert.equal(await none.remote.chargerSpecSection(7), null);
+  const moved = rig(specChunks(8, specWire));
+  await assert.rejects(() => moved.remote.chargerSpecSection(7), /another run/);
+  const stuck = rig((f) => [rsp(0x0B, f[3], 0, [...le32(7), 111, 0, 0])]);
+  await assert.rejects(() => stuck.remote.chargerSpecSection(7), /did not advance/);
+});

@@ -2251,6 +2251,80 @@ var K2Proto = (function () {
     return decodePdSpecBlob(Uint8Array.from(out));
   };
 
+  // ---- the PD spec section of a Deep charger test (0x0B [6, off], specsec::to_wire; tools/pdspec_blob.py decode_section) ---------
+  // 111 bytes: end, why, flags, then per check of the grid's order a code (bits 0..2 verdict, 3..6 skip), the fails and an int16 worst
+  // value (us in 0.1 ms steps, mV in 10 mV, ms and counts whole, 32767 = never seen). Read in 48-byte chunks behind a 7-byte header
+  // (run_id u32, total u8, off u8, n u8); total 0 = the run has no section.
+  var CT_SPEC_REQ = 6, CT_SPEC_HEADER = 7, CT_SPEC_ENDS = ["not run", "done", "cancelled", "fault", "refused"];
+  var CT_SPEC_STEP = { us: 100, mv: 10, ms: 1, count: 1 }, CT_SPEC_UNSEEN = 32767;
+  // specsec::kOrder (keys) and the grid's short labels (spectext::kCheckShort, at most 8 characters), the section rules above
+  // pps_monotonic, avs_monotonic and source_reset (specsec::section_start).
+  var CT_SPEC_ORDER = ["accept_time", "ps_rdy_time", "src_start", "ps_rdy_early", "ps_rdy_low", "rise_time", "fall_time", "overshoot", "accuracy",
+                       "pps_monotonic", "pps_accuracy", "pps_settle", "pps_band", "pps_ps_rdy", "pps_overshoot", "pps_transient", "pps_status",
+                       "pps_status_time", "pps_track", "avs_monotonic", "avs_accuracy", "avs_band", "avs_ps_rdy", "avs_overshoot", "avs_transient",
+                       "avs_track", "source_reset"];
+  var CT_SPEC_SHORT = { accept_time: "Accept", ps_rdy_time: "PS_RDY", src_start: "VBUS go", ps_rdy_early: "Rdy high", ps_rdy_low: "Rdy low",
+                        rise_time: "Rise", fall_time: "Fall", overshoot: "Oversh.", accuracy: "Level", pps_monotonic: "PPS mono",
+                        pps_accuracy: "PPS lvl", pps_settle: "PPS set", pps_band: "PPS band", pps_ps_rdy: "PPS rdy", pps_overshoot: "PPS ovs",
+                        pps_transient: "PPS tr.", pps_status: "PPS stat", pps_status_time: "Stat t", pps_track: "PPS trk",
+                        avs_monotonic: "AVS mono", avs_accuracy: "AVS lvl", avs_band: "AVS band", avs_ps_rdy: "AVS rdy", avs_overshoot: "AVS ovs",
+                        avs_transient: "AVS tr.", avs_track: "AVS trk", source_reset: "Src rst" };
+  var CT_SPEC_SECTION_AT = { pps_monotonic: 1, avs_monotonic: 1, source_reset: 1 };
+  var CT_SPEC_WIRE = 3 + 4 * CT_SPEC_ORDER.length;
+  function decodeChargerSpecSection(b) {
+    if (b.length !== CT_SPEC_WIRE) throw new FrameError("PD spec section is " + b.length + " bytes, expected " + CT_SPEC_WIRE);
+    if (b[0] >= CT_SPEC_ENDS.length || (b[2] & ~1)) throw new FrameError("not a PD spec section (end or flags out of range)");
+    var end = CT_SPEC_ENDS[b[0]], why = null;
+    if (end === "cancelled" || end === "fault") why = name(PDSPEC_STOPS, b[1]);
+    else if (end === "refused") why = name(PDSPEC_STARTS, b[1]);
+    var tally = { pass: 0, fail: 0, skip: 0, unverified: 0, pending: 0 };
+    var cells = CT_SPEC_ORDER.map(function (key, i) {
+      var d = PDSPEC_CHECKS.filter(function (c) { return c.key === key; })[0], o = 3 + 4 * i, code = b[o];
+      var verdict = PDSPEC_VERDICTS[code & 7], skip = (code >> 3) & 15, raw = s16(b, o + 2);
+      if (verdict === undefined || skip >= PDSPEC_SKIPS.length) throw new FrameError("PD spec section cell " + i + " has an unknown verdict or skip reason");
+      var measured = verdict !== "pending" && verdict !== "skip";
+      var value = !measured ? null : raw === CT_SPEC_UNSEEN ? PDSPEC_NEVER : raw * CT_SPEC_STEP[d.unit];
+      var text = value === null ? "-" : key === "pps_status" && value < PDSPEC_NEVER ? pdSpecPsText(value) : pdSpecValue(d.unit, value);
+      tally[verdict]++;
+      return { key: key, label: d.label, short: CT_SPEC_SHORT[key], unit: d.unit, verdict: verdict, skip: verdict === "skip" ? PDSPEC_SKIPS[skip] : null,
+               fails: b[o + 1], value: value, value_text: text, section: i === 0 || !!CT_SPEC_SECTION_AT[key] };
+    });
+    return { end: end, why: why, unconfirmed: !!(b[2] & 1), tally: tally, cells: cells };
+  }
+  // The run summary's PD spec lines (tools/charger_summary.py _spec_lines): the tally and how the stage ended, each failed or
+  // unverified check with its worst value, the skips grouped by reason. Nothing for a run without a section.
+  function specLines(sp) {
+    if (!sp) return [];
+    var tl = sp.tally, head = "PD spec: " + tl.pass + " pass, " + tl.fail + " fail, " + tl.skip + " skip" +
+      (tl.unverified ? ", " + tl.unverified + " unverified" : "") + (tl.pending ? ", " + tl.pending + " not judged" : "") +
+      (sp.end !== "done" ? " · " + sp.end + (sp.why ? " (" + sp.why + ")" : "") : "");
+    var out = [head], skips = {}, order = [];
+    sp.cells.forEach(function (c) {
+      if (c.verdict === "fail") out.push("  " + c.label + ": FAIL, worst " + c.value_text + ", " + c.fails + " over");
+      else if (c.verdict === "unverified") out.push("  " + c.label + ": unverified (a K2 figure, no spec limit), worst " + c.value_text);
+      else if (c.verdict === "skip") { if (!skips[c.skip]) { skips[c.skip] = []; order.push(c.skip); } skips[c.skip].push(c.label); }
+    });
+    order.forEach(function (why) { out.push("  skipped, " + why + ": " + skips[why].join(", ")); });
+    if (sp.unconfirmed) out.push("  WARNING: the end-of-run return to 5 V was not confirmed: unplug the charger");
+    return out;
+  }
+  // 0x0B [6, off] until the section is whole: null when the run has none; FrameError when the run moved under the read.
+  K2Remote.prototype.chargerSpecSection = async function (runId) {
+    var blob = [], total = null;
+    while (total === null || blob.length < total) {
+      var p = (await this.link.call(CMD.CHARGER_TEST, [CT_SPEC_REQ, blob.length])).payload;
+      need(p, CT_SPEC_HEADER, "charger-test spec");
+      var v = dv(p), n = p[6];
+      if (p.length !== CT_SPEC_HEADER + n) throw new FrameError("charger-test spec reply length does not match its count");
+      if (v.getUint32(0, true) !== runId) throw new FrameError("charger-test spec belongs to another run; retry results");
+      if (total === null) { total = p[4]; if (!total) return null; }
+      else if (p[4] !== total) throw new FrameError("charger-test spec changed during the read; retry results");
+      if (p[5] !== blob.length || !n) throw new FrameError("charger-test spec chunk did not advance");
+      for (var i = 0; i < n; i++) blob.push(p[CT_SPEC_HEADER + i]);
+    }
+    return decodeChargerSpecSection(Uint8Array.from(blob));
+  };
+
   K2Remote.prototype.chargerTest = async function (mode) {
     if (mode === undefined) mode = "status";
     if (mode !== "status" && mode !== "results" && mode !== "view") throw new RangeError("charger-test supports status / results / view only");
@@ -2289,6 +2363,15 @@ var K2Proto = (function () {
     var end = decodeChargerTest((await this.link.call(CMD.CHARGER_TEST, query)).payload);
     if (key(end) !== expected || end.start || end.count) throw new FrameError("charger-test results changed during export; retry results");
     out.steps = steps;
+    // A Deep run also carries the PD spec section (read apart: the results reply has no room). Firmware without the form, or a
+    // section this build cannot read, leaves the export as it was.
+    if (out.selection && out.selection.run_level === "deep") {
+      try { var spec = await this.chargerSpecSection(meta.run_id); if (spec) out.spec = spec; }
+      catch (e) {
+        var absent = e instanceof RemoteError && (e.status === STATUS.BAD_LENGTH || e.status === STATUS.BAD_ARG);
+        if (!absent) throw e;
+      }
+    }
     return out;
   };
 
@@ -2693,7 +2776,8 @@ var K2Proto = (function () {
     formatBbDelta: formatBbDelta, bbJson: bbJson, bbIdentity: bbIdentity, bbLink: bbLink, bbMessageRows: bbMessageRows,
     HANDBACK_VERDICTS: HANDBACK_VERDICTS, handbackText: handbackText, APPLE_REFUSALS: APPLE_REFUSALS, CARD_NAME_RE: CARD_NAME_RE,
     decodePdSpecStatus: decodePdSpecStatus, decodePdSpecBlob: decodePdSpecBlob, pdSpecValue: pdSpecValue, pdSpecLimit: pdSpecLimit, pdSpecAt: pdSpecAt,
-    PDSPEC_CHECKS: PDSPEC_CHECKS, PDSPEC_SKIPS: PDSPEC_SKIPS, PDSPEC_CAPS_NOTES: PDSPEC_CAPS_NOTES, PDSPEC_STEPS: PDSPEC_STEPS, pdSpecPsText: pdSpecPsText, PDSPEC_STOPS: PDSPEC_STOPS, PDSPEC_STARTS: PDSPEC_STARTS, PDSPEC_FAMILIES: PDSPEC_FAMILIES, PDSPEC_STATES: PDSPEC_STATES
+    PDSPEC_CHECKS: PDSPEC_CHECKS, PDSPEC_SKIPS: PDSPEC_SKIPS, PDSPEC_CAPS_NOTES: PDSPEC_CAPS_NOTES, PDSPEC_STEPS: PDSPEC_STEPS, pdSpecPsText: pdSpecPsText, PDSPEC_STOPS: PDSPEC_STOPS, PDSPEC_STARTS: PDSPEC_STARTS, PDSPEC_FAMILIES: PDSPEC_FAMILIES, PDSPEC_STATES: PDSPEC_STATES,
+    decodeChargerSpecSection: decodeChargerSpecSection, CT_SPEC_ORDER: CT_SPEC_ORDER, CT_SPEC_SHORT: CT_SPEC_SHORT, CT_SPEC_WIRE: CT_SPEC_WIRE, specLines: specLines
   };
 })();
 if (typeof module !== "undefined" && module.exports) module.exports = K2Proto;
@@ -3348,6 +3432,7 @@ var CtGrid = (function () {
   //   live, current   the running dot goes on the cell of step `current` (a step index) while live
   //   stopped     a step that never ran reads stopped (no fill, dim), not pending
   //   monitorMv   the meter's ceiling: a deep sweep's range stops there
+  //   spec        the Deep run's PD spec section (k2proto decodeChargerSpecSection): its checks follow the unit lines
   // Returns lines: [{label, section, cells: [{verdict, label, current, title}]}], the K2Kit row spec.
   function layout(wire, opts) {
     opts = opts || {};
@@ -3582,12 +3667,32 @@ var CtGrid = (function () {
       if (r.sec !== null) lastSec = r.sec;
       prevSec = sec; first = false;
     });
-    return lines;
+    return lines.concat(specLines(opts.spec));
+  }
+
+  // The Deep run's PD spec section (k2proto decodeChargerSpecSection) as grid lines: one wide cell per check under its short label,
+  // a rule above the first row and above each family block (the device's spec rows, src/ui/ui_charger_test.cpp). The cell reads like
+  // spectext::cell_view: a skip says why, struck; a pending one is empty; an unverified one (a K2 figure, no spec limit) shows the
+  // number with no pass or fail look; a judged one shows the worst value, then ", N fail" when it failed.
+  function specLines(sp) {
+    if (!sp || !sp.cells || sp.end === "not run") return [];
+    return sp.cells.map(function (c) {
+      var verdict = "pending", label = "";
+      if (c.verdict === "skip") { verdict = "skip"; label = c.skip || "skipped"; }
+      else if (c.verdict === "unverified") { verdict = "none"; label = c.value_text; }
+      else if (c.verdict === "pass" || c.verdict === "fail") {
+        label = c.value_text + (c.fails ? ", " + c.fails + " fail" : "");
+        verdict = c.fails ? "fail" : "pass";
+      }
+      var word = c.verdict === "unverified" ? "unverified" : verdict === "none" ? "" : verdict === "skip" ? "skipped" : verdict;
+      return { label: c.short || c.label, section: !!c.section,
+               cells: [{ verdict: verdict, label: label, current: "", title: c.label + (word ? ": " + word : "") + (label && verdict !== "skip" ? " (" + label + ")" : "") }] };
+    });
   }
 
   return { milli: milli, isHunt: isHunt, isSweep: isSweep, isFullCurrent: isFullCurrent, protocolWord: protocolWord, pdoMa: pdoMa,
            ampsMa: ampsMa, params: params, label: label, stepLabel: label, pdoRange: pdoRange, rangeText: rangeText,
-           ufcsLevel: ufcsLevel, skipTag: skipTag, layout: layout, NAMES: NAMES };
+           ufcsLevel: ufcsLevel, skipTag: skipTag, layout: layout, specLines: specLines, NAMES: NAMES };
 })();
 if (typeof module !== "undefined" && module.exports) module.exports = CtGrid;
 </script>
@@ -4689,7 +4794,8 @@ if (typeof module !== "undefined" && module.exports) module.exports = CtGrid;
   var CT_LIVE_MS = 1000, CT_ROW_BUDGET_MS = 450;
   var CT_ACTIVE = ["baseline", "requesting", "holding", "releasing", "detach charger", "initializing...", "svooc ceiling", "pd spec"];
   var CT = { phase: "setup", meta: null, view: null, noView: false, rows: [], rowsFor: "", fetchKey: "", queue: [], sig: "",
-             cancelling: false, busy: false, quiet: 0, runId: 0, startedAt: 0, cancelled: false, savedLoaded: false, plan: null };
+             cancelling: false, busy: false, quiet: 0, runId: 0, startedAt: 0, cancelled: false, savedLoaded: false, plan: null,
+             spec: null };   // spec: the Deep run's PD spec section, read once the run is over (it joins the grid below the unit rows)
   function unitLabel(u) { return P.TEST_UNIT_LABELS[P.TEST_UNITS.indexOf(u)] || u; }
   function ctUnitBoxes() { return Array.prototype.slice.call($("ctr-units").querySelectorAll("input")); }
   P.TEST_DEFAULT_UNITS.forEach(function (u) {
@@ -4872,7 +4978,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = CtGrid;
   async function ctRead(k2, st, gen) {
     if (st.schema !== 2 || !st.total || !st.run_id) { if (CT.rowsFor) ctGridClear(); return; }
     var plan = st.run_id + "/" + st.total, i, r;
-    if (plan !== CT.rowsFor) { CT.rows = new Array(st.total); CT.rowsFor = plan; CT.fetchKey = ""; CT.queue = []; CT.sig = ""; }
+    if (plan !== CT.rowsFor) { CT.rows = new Array(st.total); CT.rowsFor = plan; CT.fetchKey = ""; CT.queue = []; CT.sig = ""; CT.spec = null; }
     if (ctKey(st) !== CT.fetchKey) {
       var first = [], rest = [];
       for (i = 0; i < st.total; i++) {
@@ -4897,7 +5003,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = CtGrid;
     if (CT.queue.length) S.due.ctlive = Date.now() - (CT_LIVE_MS - 250);   // quick re-tick
   }
   function ctGridClear() {
-    CT.rows = []; CT.rowsFor = ""; CT.fetchKey = ""; CT.queue = []; CT.sig = "";
+    CT.rows = []; CT.rowsFor = ""; CT.fetchKey = ""; CT.queue = []; CT.sig = ""; CT.spec = null;
     $("ctr-grid").textContent = ""; $("ctr-gridbox").hidden = true; put("ctr-gridhead", ""); put("ctr-pick", "");
   }
   function fmtSecs(s) { return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); }
@@ -4931,11 +5037,12 @@ if (typeof module !== "undefined" && module.exports) module.exports = CtGrid;
     var head = !shown ? "Reading the test plan: " + have + " of " + total + " steps" : CT.phase === "setup" ? "Last run #" + st.run_id + " · " + st.state : "";
     put("ctr-gridhead", head); $("ctr-gridhead").parentNode.hidden = !head;
     if (!shown) return;
-    var sig = [ctKey(st), st.current, st.state, active ? 1 : 0, CT.rows.map(function (r) { return r.result; }).join(",")].join("|");
+    var sig = [ctKey(st), st.current, st.state, active ? 1 : 0, CT.rows.map(function (r) { return r.result; }).join(","),
+               CT.spec ? CT.spec.cells.map(function (c) { return c.verdict + c.fails + c.value_text; }).join(",") : ""].join("|");
     if (sig === CT.sig) return;
     CT.sig = sig;
     $("ctr-grid").innerHTML = K2Kit.resultGridHtml(CtGrid.layout(CT.rows, { fold: false, absentCell: true, live: active, current: st.current,
-      stopped: st.state === "stopped", monitorMv: st.evidence ? st.evidence.monitor_mv : 0 }));
+      stopped: st.state === "stopped", monitorMv: st.evidence ? st.evidence.monitor_mv : 0, spec: CT.spec }));
   }
   async function ctFinish(k2, gen) {
     CT.quiet = 0;
@@ -4951,7 +5058,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = CtGrid;
     ctPhase("done");
     var box = $("ctr-summary"); box.textContent = "";
     if (!r) { box.appendChild(el("p", "The run ended; its results did not read cleanly. Use Refresh results below.", "note")); return; }
-    CT.rows = r.steps.slice(); CT.rowsFor = r.run_id + "/" + r.total; CT.fetchKey = ctKey(r); CT.queue = []; CT.sig = "";
+    CT.rows = r.steps.slice(); CT.rowsFor = r.run_id + "/" + r.total; CT.fetchKey = ctKey(r); CT.queue = []; CT.sig = ""; CT.spec = r.spec || null;
     renderChargerTest(r); ctDrawGrid(r, false);
     var c = { pass: 0, fail: 0, skip: 0 };
     r.steps.forEach(function (s) { if (s.result in c) c[s.result]++; });
@@ -4965,6 +5072,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = CtGrid;
     try { sv = await k2.chargerSvoocCap(); } catch (e) { if (!(e instanceof P.FrameError || e instanceof P.RemoteError || e instanceof P.RemoteTimeout)) throw e; }
     if (S.gen !== gen) return;
     P.svoocLines(sv).forEach(function (line) { box.appendChild(el("div", line, "mono")); });
+    P.specLines(r.spec).forEach(function (line) { box.appendChild(el("div", line, "mono")); });   // a Deep run's PD spec section
     var fails = r.steps.filter(function (s) { return s.result === "fail"; });
     if (fails.length) {
       var ul = el("ul");

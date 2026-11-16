@@ -261,3 +261,25 @@ test("k2.html embeds the kit and the grid layout byte for byte", () => {
     assert.equal(m[1], readFileSync(path.join(root, "tools/web", file), "utf8"), file + ": run make web-sync");
   }
 });
+
+
+// ---- the PD spec section joins the grid below the unit rows -----------------------------------------------------------------
+test("the spec section is one wide cell per check, with rules above the family blocks", () => {
+  const P = require("../tools/web/k2proto.js");
+  const fx = JSON.parse(readFileSync(path.join(root, "tests/fixtures/ct_spec_section.json"), "utf8"));
+  const sp = P.decodeChargerSpecSection(Uint8Array.from(Buffer.from(fx.wire, "hex")));
+  const out = CtGrid.layout([], { spec: sp });
+  assert.equal(out.length, 27);
+  assert.deepEqual(out.filter((l) => l.section).map((l) => l.label), ["Accept", "PPS mono", "AVS mono", "Src rst"]);
+  const cell = (i) => out[i].cells[0];
+  assert.equal(out[0].cells.length, 1);
+  assert.deepEqual([cell(0).verdict, cell(0).label], ["pass", "2.5 ms"]);
+  assert.deepEqual([cell(1).verdict, cell(1).label], ["fail", "40.0 ms, 3 fail"]);
+  assert.deepEqual([cell(2).verdict, cell(2).label], ["skip", "no PPS"]);
+  assert.deepEqual([cell(3).verdict, cell(3).label], ["none", "1.200 V"]);
+  assert.deepEqual([cell(5).verdict, cell(5).label], ["pending", ""]);
+  assert.ok(out.every((l) => l.label.length <= 8));
+  // no section, a section that did not begin: no rows
+  assert.deepEqual(CtGrid.layout([], {}), []);
+  assert.deepEqual(CtGrid.specLines({ end: "not run", cells: [] }), []);
+});

@@ -5,6 +5,7 @@
 
 The decoder is checked against the firmware's own bytes: a small host program built from include/k2/chargertest/spec_section.hpp
 fills a Result, writes its wire form with specsec::to_wire, and the decoder must read back what was put in."""
+import json
 import shutil
 import struct
 import subprocess
@@ -107,6 +108,12 @@ class Decode(unittest.TestCase):
         self.assertEqual(c[1]["value_text"], "40.0 ms")
         # the event that never came
         self.assertEqual((c[4]["value"], c[4]["value_text"]), (pb.NEVER, "not seen"))
+
+    def test_the_shared_fixture_is_current(self):
+        # tests/fixtures/ct_spec_section.json is read by the web tests too: the firmware's bytes and this decoder's reading of them
+        fx = json.loads((ROOT / "tests" / "fixtures" / "ct_spec_section.json").read_text())
+        self.assertEqual(fx["wire"], self.fw["wire"][0])
+        self.assertEqual(fx["decoded"], self.sec)
 
     def test_bad_blobs(self):
         with self.assertRaises(ValueError):

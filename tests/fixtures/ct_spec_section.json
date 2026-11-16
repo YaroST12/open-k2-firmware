@@ -1,0 +1,287 @@
+{
+ "wire": "01000101001900020390011b000000040178000100ff7f00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+ "decoded": {
+  "end": "done",
+  "why": null,
+  "unconfirmed": true,
+  "tally": {
+   "pass": 2,
+   "fail": 1,
+   "skip": 1,
+   "unverified": 1,
+   "pending": 22
+  },
+  "cells": [
+   {
+    "key": "accept_time",
+    "label": "Accept",
+    "unit": "us",
+    "verdict": "pass",
+    "skip": null,
+    "fails": 0,
+    "value": 2500,
+    "value_text": "2.5 ms"
+   },
+   {
+    "key": "ps_rdy_time",
+    "label": "PS_RDY time",
+    "unit": "us",
+    "verdict": "fail",
+    "skip": null,
+    "fails": 3,
+    "value": 40000,
+    "value_text": "40.0 ms"
+   },
+   {
+    "key": "src_start",
+    "label": "VBUS start",
+    "unit": "us",
+    "verdict": "skip",
+    "skip": "no PPS",
+    "fails": 0,
+    "value": null,
+    "value_text": "-"
+   },
+   {
+    "key": "ps_rdy_early",
+    "label": "PS_RDY early",
+    "unit": "mv",
+    "verdict": "unverified",
+    "skip": null,
+    "fails": 1,
+    "value": 1200,
+    "value_text": "1.200 V"
+   },
+   {
+    "key": "ps_rdy_low",
+    "label": "PS_RDY low",
+    "unit": "mv",
+    "verdict": "pass",
+    "skip": null,
+    "fails": 0,
+    "value": 99999999,
+    "value_text": "not seen"
+   },
+   {
+    "key": "rise_time",
+    "label": "Rise time",
+    "unit": "us",
+    "verdict": "pending",
+    "skip": null,
+    "fails": 0,
+    "value": null,
+    "value_text": "-"
+   },
+   {
+    "key": "fall_time",
+    "label": "Fall time",
+    "unit": "us",
+    "verdict": "pending",
+    "skip": null,
+    "fails": 0,
+    "value": null,
+    "value_text": "-"
+   },
+   {
+    "key": "overshoot",
+    "label": "Overshoot",
+    "unit": "mv",
+    "verdict": "pending",
+    "skip": null,
+    "fails": 0,
+    "value": null,
+    "value_text": "-"
+   },
+   {
+    "key": "accuracy",
+    "label": "Accuracy",
+    "unit": "mv",
+    "verdict": "pending",
+    "skip": null,
+    "fails": 0,
+    "value": null,
+    "value_text": "-"
+   },
+   {
+    "key": "pps_monotonic",
+    "label": "PPS monotonic",
+    "unit": "mv",
+    "verdict": "pending",
+    "skip": null,
+    "fails": 0,
+    "value": null,
+    "value_text": "-"
+   },
+   {
+    "key": "pps_accuracy",
+    "label": "PPS accuracy",
+    "unit": "mv",
+    "verdict": "pending",
+    "skip": null,
+    "fails": 0,
+    "value": null,
+    "value_text": "-"
+   },
+   {
+    "key": "pps_settle",
+    "label": "PPS settle",
+    "unit": "us",
+    "verdict": "pending",
+    "skip": null,
+    "fails": 0,
+    "value": null,
+    "value_text": "-"
+   },
+   {
+    "key": "pps_band",
+    "label": "PPS in band",
+    "unit": "us",
+    "verdict": "pending",
+    "skip": null,
+    "fails": 0,
+    "value": null,
+    "value_text": "-"
+   },
+   {
+    "key": "pps_ps_rdy",
+    "label": "PPS PS_RDY",
+    "unit": "us",
+    "verdict": "pending",
+    "skip": null,
+    "fails": 0,
+    "value": null,
+    "value_text": "-"
+   },
+   {
+    "key": "pps_overshoot",
+    "label": "PPS overshoot",
+    "unit": "mv",
+    "verdict": "pending",
+    "skip": null,
+    "fails": 0,
+    "value": null,
+    "value_text": "-"
+   },
+   {
+    "key": "pps_transient",
+    "label": "PPS transient",
+    "unit": "us",
+    "verdict": "pending",
+    "skip": null,
+    "fails": 0,
+    "value": null,
+    "value_text": "-"
+   },
+   {
+    "key": "pps_status",
+    "label": "PPS_Status",
+    "unit": "count",
+    "verdict": "pending",
+    "skip": null,
+    "fails": 0,
+    "value": null,
+    "value_text": "-"
+   },
+   {
+    "key": "pps_status_time",
+    "label": "PPS_Status t",
+    "unit": "us",
+    "verdict": "pending",
+    "skip": null,
+    "fails": 0,
+    "value": null,
+    "value_text": "-"
+   },
+   {
+    "key": "pps_track",
+    "label": "PPS tracking",
+    "unit": "mv",
+    "verdict": "pending",
+    "skip": null,
+    "fails": 0,
+    "value": null,
+    "value_text": "-"
+   },
+   {
+    "key": "avs_monotonic",
+    "label": "AVS monotonic",
+    "unit": "mv",
+    "verdict": "pending",
+    "skip": null,
+    "fails": 0,
+    "value": null,
+    "value_text": "-"
+   },
+   {
+    "key": "avs_accuracy",
+    "label": "AVS accuracy",
+    "unit": "mv",
+    "verdict": "pending",
+    "skip": null,
+    "fails": 0,
+    "value": null,
+    "value_text": "-"
+   },
+   {
+    "key": "avs_band",
+    "label": "AVS in band",
+    "unit": "us",
+    "verdict": "pending",
+    "skip": null,
+    "fails": 0,
+    "value": null,
+    "value_text": "-"
+   },
+   {
+    "key": "avs_ps_rdy",
+    "label": "AVS PS_RDY",
+    "unit": "us",
+    "verdict": "pending",
+    "skip": null,
+    "fails": 0,
+    "value": null,
+    "value_text": "-"
+   },
+   {
+    "key": "avs_overshoot",
+    "label": "AVS overshoot",
+    "unit": "mv",
+    "verdict": "pending",
+    "skip": null,
+    "fails": 0,
+    "value": null,
+    "value_text": "-"
+   },
+   {
+    "key": "avs_transient",
+    "label": "AVS transient",
+    "unit": "us",
+    "verdict": "pending",
+    "skip": null,
+    "fails": 0,
+    "value": null,
+    "value_text": "-"
+   },
+   {
+    "key": "avs_track",
+    "label": "AVS tracking",
+    "unit": "mv",
+    "verdict": "pending",
+    "skip": null,
+    "fails": 0,
+    "value": null,
+    "value_text": "-"
+   },
+   {
+    "key": "source_reset",
+    "label": "Source reset",
+    "unit": "count",
+    "verdict": "pending",
+    "skip": null,
+    "fails": 0,
+    "value": null,
+    "value_text": "-"
+   }
+  ]
+ }
+}

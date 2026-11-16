@@ -169,6 +169,7 @@ var CtGrid = (function () {
   //   live, current   the running dot goes on the cell of step `current` (a step index) while live
   //   stopped     a step that never ran reads stopped (no fill, dim), not pending
   //   monitorMv   the meter's ceiling: a deep sweep's range stops there
+  //   spec        the Deep run's PD spec section (k2proto decodeChargerSpecSection): its checks follow the unit lines
   // Returns lines: [{label, section, cells: [{verdict, label, current, title}]}], the K2Kit row spec.
   function layout(wire, opts) {
     opts = opts || {};
@@ -403,11 +404,31 @@ var CtGrid = (function () {
       if (r.sec !== null) lastSec = r.sec;
       prevSec = sec; first = false;
     });
-    return lines;
+    return lines.concat(specLines(opts.spec));
+  }
+
+  // The Deep run's PD spec section (k2proto decodeChargerSpecSection) as grid lines: one wide cell per check under its short label,
+  // a rule above the first row and above each family block (the device's spec rows, src/ui/ui_charger_test.cpp). The cell reads like
+  // spectext::cell_view: a skip says why, struck; a pending one is empty; an unverified one (a K2 figure, no spec limit) shows the
+  // number with no pass or fail look; a judged one shows the worst value, then ", N fail" when it failed.
+  function specLines(sp) {
+    if (!sp || !sp.cells || sp.end === "not run") return [];
+    return sp.cells.map(function (c) {
+      var verdict = "pending", label = "";
+      if (c.verdict === "skip") { verdict = "skip"; label = c.skip || "skipped"; }
+      else if (c.verdict === "unverified") { verdict = "none"; label = c.value_text; }
+      else if (c.verdict === "pass" || c.verdict === "fail") {
+        label = c.value_text + (c.fails ? ", " + c.fails + " fail" : "");
+        verdict = c.fails ? "fail" : "pass";
+      }
+      var word = c.verdict === "unverified" ? "unverified" : verdict === "none" ? "" : verdict === "skip" ? "skipped" : verdict;
+      return { label: c.short || c.label, section: !!c.section,
+               cells: [{ verdict: verdict, label: label, current: "", title: c.label + (word ? ": " + word : "") + (label && verdict !== "skip" ? " (" + label + ")" : "") }] };
+    });
   }
 
   return { milli: milli, isHunt: isHunt, isSweep: isSweep, isFullCurrent: isFullCurrent, protocolWord: protocolWord, pdoMa: pdoMa,
            ampsMa: ampsMa, params: params, label: label, stepLabel: label, pdoRange: pdoRange, rangeText: rangeText,
-           ufcsLevel: ufcsLevel, skipTag: skipTag, layout: layout, NAMES: NAMES };
+           ufcsLevel: ufcsLevel, skipTag: skipTag, layout: layout, specLines: specLines, NAMES: NAMES };
 })();
 if (typeof module !== "undefined" && module.exports) module.exports = CtGrid;
