@@ -705,6 +705,7 @@
   "708": "[CT] cut retry row=%u cut again after %u: skip\n",
   "709": "[AFC] settle short=%dmV dm=%dmV waited=%dms\n",
   "710": "[CT] settle after cut age=%ums wait=%ums vbus=%d\n",
-  "711": "[CT] retry after cut row=%u age=%ums fail=%u\n"
+  "711": "[CT] retry after cut row=%u age=%ums fail=%u\n",
+  "712": "[STK] low=%u pc=0x%08X lr=0x%08X\n"
  }
 }
