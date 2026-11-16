@@ -733,7 +733,7 @@ class ChargerHunt(unittest.TestCase):
         probes = set(re.findall(r"h\.ma = (\d+);", src))
         self.assertEqual(probes, {"6000"})                      # every hunt row asks 6 A
         self.assertGreater(6000, step_label.HUNT_MA)
-        cable = re.search(r"uint16_t cable_ma\(Input in\) \{.*?: std::min<unsigned>\(in\.cable_ma, in\.cable_observed \? (\d+) : (\d+)\)", src)
+        cable = re.search(r"uint16_t cable_ma\((?:const Input& |Input )in\) \{.*?: std::min<unsigned>\(in\.cable_ma, in\.cable_observed \? (\d+) : (\d+)\)", src)
         self.assertEqual(int(cable.group(1)), step_label.HUNT_MA)   # the most a plan row can ask: the 5 A cable
         self.assertEqual(int(re.search(r"kPlanRowMa = (\d+);", hdr).group(1)), step_label.PLAN_ROW_MA)
 

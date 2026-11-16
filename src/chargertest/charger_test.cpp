@@ -265,30 +265,30 @@ fc::Proto proto(Group g) {
 bool safe5(int mv) { return pd::is_vsafe5(mv); }
 // A cable nobody read is taken as 20 V / 3 A, except while the source has us in EPR mode: it only accepts EPR_Mode Enter after it
 // has checked the cable itself (Enter_Failed data 1 otherwise), so that contract proves a 50 V / 5 A cable.
-bool epr_proven(Input in) { return !in.cable_observed && (in.pd.epr_mode || in.epr_proof); }
-uint16_t cable_mv(Input in) { return epr_proven(in) ? 50000 : std::min<unsigned>(in.cable_mv, in.cable_observed ? 50000 : 20000); }
+bool epr_proven(const Input& in) { return !in.cable_observed && (in.pd.epr_mode || in.epr_proof); }
+uint16_t cable_mv(const Input& in) { return epr_proven(in) ? 50000 : std::min<unsigned>(in.cable_mv, in.cable_observed ? 50000 : 20000); }
 constexpr unsigned kScpLowMa = 2250;   // Huawei SCP 10 V 2.25 A (22.5 W)
 constexpr unsigned kUfcs60wMa = 3000;   // UFCS 20 V row: 20 V 3 A = 60 W
 constexpr int kUfcsLevelMa = 1000;      // the levels planned from Output_Capabilities ask 1 A (or the mode's smallest current)
-uint16_t cable_ma(Input in) { return epr_proven(in) ? 5000 : std::min<unsigned>(in.cable_ma, in.cable_observed ? 5000 : 3000); }
+uint16_t cable_ma(const Input& in) { return epr_proven(in) ? 5000 : std::min<unsigned>(in.cable_ma, in.cable_observed ? 5000 : 3000); }
 // PDO1 of the SPR list carries "EPR Mode Capable" (bit 23): the source offers EPR PDOs only after EPR_Mode entry.
 bool epr_capable_caps(const pd::SourceCaps& c) {
     return c.valid && c.num_pdos && c.pdos[0].type == pd::PdoType::Fixed && (c.pdos[0].raw & (1u << 23));
 }
 // EPR rows need a 50 V / 5 A cable: one that was read as such, or one the source accepted EPR entry over (epr_proven).
-bool epr_cable(Input in) { return (in.cable_observed || epr_proven(in)) && cable_mv(in) == 50000 && cable_ma(in) == 5000; }
+bool epr_cable(const Input& in) { return (in.cable_observed || epr_proven(in)) && cable_mv(in) == 50000 && cable_ma(in) == 5000; }
 // The cable limit a hunt row is judged against and the evidence records. Nothing physical read (and no EPR proof): a spoofed identity
 // is the cable the source saw, so its VDO limits count; only a cable nobody presented falls back to the 20 V / 3 A default.
-bool spoof_cable(Input in) { return !in.cable_observed && !epr_proven(in) && in.spoof_on && in.spoof_ma != 0; }
-uint16_t used_cable_mv(Input in) { return spoof_cable(in) ? std::min<uint16_t>(in.spoof_mv ? in.spoof_mv : 20000, 50000) : cable_mv(in); }
-uint16_t used_cable_ma(Input in) { return spoof_cable(in) ? std::min<uint16_t>(in.spoof_ma, 5000) : cable_ma(in); }
+bool spoof_cable(const Input& in) { return !in.cable_observed && !epr_proven(in) && in.spoof_on && in.spoof_ma != 0; }
+uint16_t used_cable_mv(const Input& in) { return spoof_cable(in) ? std::min<uint16_t>(in.spoof_mv ? in.spoof_mv : 20000, 50000) : cable_mv(in); }
+uint16_t used_cable_ma(const Input& in) { return spoof_cable(in) ? std::min<uint16_t>(in.spoof_ma, 5000) : cable_ma(in); }
 // What the cable is vouched for above 5 A (0 = nothing): a cable VDO tops out at 5 A, so only a read cable that says more, or the
 // spoofed identity the run presents, lets a row ask beyond it (a PPS APDO of 6.25 A, e.g. Motorola TurboPower).
-uint16_t over5_cable_ma(Input in) { return spoof_cable(in) ? in.spoof_ma : in.cable_observed ? in.cable_ma : uint16_t(0); }
+uint16_t over5_cable_ma(const Input& in) { return spoof_cable(in) ? in.spoof_ma : in.cable_observed ? in.cable_ma : uint16_t(0); }
 // A 6 A hunt row the source refused or ignored: the OEM mode is not unlocked, not refused. The detail says what is missing, from the
 // SVID 0x2717 chain first, then the cable (an unread cable counts as 3 A, see cable_ma; a spoofed identity counts as its own VDO says,
 // and a 5 A one means the source did not accept it). 0 = nothing explains it: a real failure.
-uint8_t not_unlocked_detail(Input in) {
+uint8_t not_unlocked_detail(const Input& in) {
     if (!in.pd.xiaomi_svid) return kDetailNoChain;
     if (!in.pd.xiaomi_authed) return kDetailChainUnfinished;
     if (used_cable_ma(in) < 5000) return kDetailCableCap;
@@ -297,14 +297,14 @@ uint8_t not_unlocked_detail(Input in) {
 // The same for a hunt row the source answered with a Hard Reset. The sink cleared its chain state with the reset, so `in` carries the
 // run's own snapshot from before it. The chain links and a cable the K2 read keep their reasons; an unread cable (counted as 3 A only
 // by default) and a proven 5 A cable with the chain done explain nothing, so the row says what happened.
-uint8_t hunt_reset_detail(Input in) {
+uint8_t hunt_reset_detail(const Input& in) {
     const uint8_t why = not_unlocked_detail(in);
     const bool assumed_cable = !in.cable_observed && !spoof_cable(in);   // nobody read it, nobody presented one: the 3 A is a default
     return (why == kDetailCableCap && assumed_cable) || why == 0 ? kDetailSourceReset : why;
 }
 // A cable that was read and is not 50 V / 5 A: no EPR entry is attempted. An unread cable does not block the attempt (the START
 // skips the SOP' scan while a source's Rp is on the line), the source's own cable check answers it.
-bool epr_cable_unfit(Input in) { return in.cable_observed && !epr_cable(in); }
+bool epr_cable_unfit(const Input& in) { return in.cable_observed && !epr_cable(in); }
 // FNV-1a over the list (valid, count, raw PDO words): tells "the same offer list" from a list that grew or changed.
 uint32_t caps_sig(const pd::SourceCaps& c) {
     uint32_t h = 2166136261u;
@@ -362,12 +362,12 @@ bool hunt_advertised(const Step& s) {
     const pd::Pdo p = pd::decode_pdo(s.pdo);
     return p.type != pd::PdoType::Unknown && s.mv >= p.min_mv && s.mv <= p.max_mv && p.max_ma >= s.ma;
 }
-uint16_t cable_limit_mv(Input in, Algorithm algorithm) {
+uint16_t cable_limit_mv(const Input& in, Algorithm algorithm) {
     const auto limit = cable_mv(in);
     // SPR PPS permits a 21 V request without promoting the physical cable to EPR.
     return algorithm == Algorithm::Pps && limit == 20000 ? 21000 : limit;
 }
-uint16_t measured_cable_limit_mv(Input in, Algorithm algorithm) {
+uint16_t measured_cable_limit_mv(const Input& in, Algorithm algorithm) {
     const auto limit = cable_limit_mv(in, algorithm);
     // The 20 V SPR cable class permits the 5% VBUS tolerance on a 20 V target, and on the 21 V PPS ceiling (22.05 V). The 50 V EPR
     // class permits it on the 48 V level (50.4 V): without it the cable guard (50.0 V) would trip before the monitor's overvoltage
@@ -492,7 +492,7 @@ private:
     void (*fn_)(void*, const Step&);
 };
 // The rows of one unit, in plan order. Pd and PdLow share the PD plan: the low programmable rows (below 5 V) are the PdLow unit.
-void plan_unit(Unit unit, const pd::SourceCaps& caps, Options o, Input in, AddRef out) {
+void plan_unit(Unit unit, const pd::SourceCaps& caps, Options o, const Input& in, AddRef out) {
     // Light (Options::level, with_level): VBUS stays at 5 V. The PD 5 V row and each legacy unit's first 5 V row (its handshake)
     // run; every other offer the source lists is one Advertised row naming the whole offer (a PDO / APDO by its top, a UFCS mode by
     // its top, an SCP level inside the limits the adapter reported); a legacy level nothing advertises, and a protocol only told
@@ -882,12 +882,12 @@ void plan_unit(Unit unit, const pd::SourceCaps& caps, Options o, Input in, AddRe
 }
 // Row layout: the units in execution order, each with its own rows. The PD rows (Pd, PdLow) can be re-planned when the source list
 // arrives late (replan_pd); `placeholders` stands one unplanned row in for each PD unit until then.
-void plan_pd_unit(Unit u, const pd::SourceCaps& caps, Options o, Input in, AddRef add, bool placeholders) {
+void plan_pd_unit(Unit u, const pd::SourceCaps& caps, Options o, const Input& in, AddRef add, bool placeholders) {
     if (!placeholders) { plan_unit(u, caps, o, in, add); return; }
     Step s; s.group = Group::Pd; s.algorithm = u == Unit::Pd ? Algorithm::Pd3Fixed : Algorithm::Pps; s.mv = u == Unit::Pd ? 5000 : 3300;
     add(s);
 }
-void plan_units(const pd::SourceCaps& caps, Options o, Input in, const UnitList& units, AddRef add, bool placeholders = false) {
+void plan_units(const pd::SourceCaps& caps, Options o, const Input& in, const UnitList& units, AddRef add, bool placeholders = false) {
     for (size_t n = 0; n < units.n; ++n) {
         if (mode(units.u[n]) == Mode::Pd) plan_pd_unit(units.u[n], caps, o, in, add, placeholders);
         else plan_unit(units.u[n], caps, o, in, add);
@@ -957,12 +957,12 @@ void Runner::epr_skips(Reason r, uint8_t detail) {
     for (const auto& s : steps()) if (s.verdict == Verdict::Skip) env_.record(s);
     pd_skips_recorded_ = true;
 }
-bool Runner::info_ready(Input in) const {
+bool Runner::info_ready(const Input& in) const {
     return in.pd.epr_info == pd::EprInfo::Got && in.epr_info && in.epr_info->num_pdos > 7;
 }
 // Ask the charger for its EPR list without entering EPR mode (once per Pd attach). The answer (a list, a refusal, silence) changes
 // no verdict by itself: it only names the levels the EPR rows stand for.
-bool Runner::ask_info(Input in) {
+bool Runner::ask_info(const Input& in) {
     if (info_ == 3) return true;
     if (info_ == 0) { info_ = 1; info_ms_ = in.now; }
     if (info_ == 1) {
@@ -975,7 +975,7 @@ bool Runner::ask_info(Input in) {
     info_ = 3; return true;
 }
 // With the informational list in hand the EPR rows stand for the levels the charger offers; without it nothing changes.
-void Runner::epr_info_rows(const pd::SourceCaps& caps, Input in) {
+void Runner::epr_info_rows(const pd::SourceCaps& caps, const Input& in) {
     if (info_ != 3 || !info_ready(in) || !epr_capable_caps(caps)) return;
     info_rows_ = true;
     replan_pd(caps, in, false);
@@ -1044,15 +1044,16 @@ void Runner::replan_pd(const pd::SourceCaps& caps, Input in, bool refresh_eviden
 // The SCP / UFCS rows after the unit's first row (its 5 V handshake, which read the adapter's limits / the source's modes) follow
 // those: planned again, once per unit. The first row is the same row either way, and the rows ahead of it keep their place, so the
 // cursor stays; only the unit's own block grows or shrinks and the units behind it move. Nothing changes when nothing was read.
-void Runner::replan_fc(Input in) {
-    if (plan_frozen_ || !in.fc_caps) return;
+// The planning half of replan_fc() (the fresh rows' array, ~460 B), out of line so its frame is gone before the Env calls.
+size_t Runner::replan_fc_rows(const Input& in, size_t& first_out) {
+    if (plan_frozen_ || !in.fc_caps) return 0;
     const Step& done = steps_[index_];
-    if (done.group != Group::Scp && done.group != Group::Ufcs) return;
+    if (done.group != Group::Scp && done.group != Group::Ufcs) return 0;
     const Unit u = unit_of(done);
     const uint8_t bit = done.group == Group::Scp ? 1 : 2;
     size_t first = 0;
     while (first < count_ && unit_of(steps_[first]) != u) ++first;
-    if (first != index_ || (fc_replanned_ & bit)) return;   // only the unit's first row reads the limits
+    if (first != index_ || (fc_replanned_ & bit)) return 0;   // only the unit's first row reads the limits
     fc_replanned_ |= bit;
     if (done.group == Group::Scp && in.fc_caps->scp.valid) evidence_.scp_ma = uint16_t(in.fc_caps->scp.max_ma);
     constexpr size_t kMaxFresh = 2 + 3 * ufcs::kMaxCaps;   // 5 V, three levels per mode, the step back to 5 V
@@ -1063,24 +1064,31 @@ void Runner::replan_fc(Input in) {
     size_t end = first;
     while (end < count_ && unit_of(steps_[end]) == u) ++end;
     const size_t tail = count_ - end, new_end = first + nf;
-    if (nf == 0 || new_end + tail > steps_.size()) return;
+    if (nf == 0 || new_end + tail > steps_.size()) return 0;
     // The first row is the same row either way except for the UFCS mode it now names (the baseline is judged in the mode that reaches 5 V).
     bool changed = nf != end - first || fresh[0].pdo != steps_[first].pdo;
     for (size_t n = 1; !changed && n < nf; ++n)
         changed = std::memcmp(&fresh[n], &steps_[first + n], sizeof(Step)) != 0;
-    if (!changed) return;
+    if (!changed) return 0;
     steps_[first].pdo = fresh[0].pdo;
     if (new_end < end) std::copy(steps_.begin() + end, steps_.begin() + count_, steps_.begin() + new_end);
     else std::copy_backward(steps_.begin() + end, steps_.begin() + count_, steps_.begin() + new_end + tail);
     for (size_t n = 1; n < nf; ++n) steps_[first + n] = fresh[n];
     count_ = new_end + tail;
+    first_out = first;
+    return nf;
+}
+void Runner::replan_fc(const Input& in) {
+    size_t first = 0;
+    const size_t nf = replan_fc_rows(in, first);
+    if (nf == 0) return;
     ++revision_; env_.plan_changed();
     for (size_t n = 1; n < nf; ++n) if (steps_[first + n].verdict == Verdict::Skip) env_.record(steps_[first + n]);
 }
 // A source can list more PDOs within the attach (UGREEN X865: the SPR AVS APDO comes with the list re-sent after our
 // Sink_Capabilities_Extended, ~360-390 ms after the first one, i.e. after the 5 V contract is Ready and inside the baseline):
 // the rows follow the list in hand until a PD row has run.
-void Runner::regrow_plan(const pd::SourceCaps& caps, Input in) {
+void Runner::regrow_plan(const pd::SourceCaps& caps, const Input& in) {
     if (late_pd_ || !caps.valid || caps_sig(caps) == plan_sig_) return;
     for (size_t n = 0; n < count_; ++n)
         if (mode(unit_of(steps_[n])) == Mode::Pd && steps_[n].verdict != Verdict::Pending && steps_[n].verdict != Verdict::Skip) return;
@@ -1111,7 +1119,7 @@ void Runner::regrow_plan(const pd::SourceCaps& caps, Input in) {
 // came back or moved slot - never on a re-announce that changes nothing for the plan (cable discovery before the first
 // row, a current-only raise such as the Xiaomi post-auth 5 -> 6 A, the pre-auth short list): a word-only change still
 // refreshes the row's PDO word (a fixed offer whose current dropped runs at the new, lower word).
-void Runner::follow_list(const pd::SourceCaps& caps, Input in) {
+void Runner::follow_list(const pd::SourceCaps& caps, const Input& in) {
     // A COMPLETE EPR_Source_Capabilities outside the K2's own EPR entry/exit (epr_stage_ == 2) is a re-announce like any
     // other (2026-11-09, run A6); only a partial chunk stays excluded.
     if (mode_ != Mode::Pd || late_pd_ || !caps.valid || caps.epr_partial || epr_stage_ == 2 ||
@@ -1404,7 +1412,7 @@ bool Runner::floored(const Step& s, const Input& in, bool ready) const {
 pd::Choice Runner::pd_choice(const Step& s) const {
     return {s.pos, is_step_walk(s) ? walk_mv_ : is_sweep(s) ? sweep_mv_ : s.mv, s.ma, s.hunt};
 }
-void Runner::request(Input in) {
+void Runner::request(const Input& in) {
     auto& s = steps_[index_];
     cut_start_ms_ = cut_back_ms_ = 0; row_hi_ = 0;   // the cut clocks of a row start with its request (track_cut)
     const auto limit = limit_reason(s.mv, in, s.algorithm);
@@ -1527,7 +1535,7 @@ uint32_t Runner::hold_ms() const {
 uint32_t Runner::hold_left_ms(uint32_t now) const {
     return state_ == State::Holding ? hold_ms() - std::min(hold_ms(), now - phase_ms_) : 0;
 }
-void Runner::release(Input in, bool stop) {
+void Runner::release(const Input& in, bool stop) {
     stopping_ = stop;
     if (stop) skip_pending(reason_);
     reissue_release();
@@ -1539,7 +1547,7 @@ void Runner::reissue_release() {
     if (pd_owned_) env_.release(true);
     if (fc_owned_) env_.release(false);
 }
-void Runner::finish(Input in, Verdict v, Reason r, uint8_t detail) {
+void Runner::finish(const Input& in, Verdict v, Reason r, uint8_t detail) {
     if (cut_hold(in, v, r, detail)) return;
     finish_row(in, v, r, detail);
 }
@@ -1634,7 +1642,7 @@ bool Runner::post_cut_again(const Input& in) {
 // finish() for a legacy row that fails (Lost, Timeout, Request, Voltage) while it sat at 5 V and a fall of VBUS under kCutMv is in
 // progress or has come back since the row's request: the verdict is kept, the row goes back to Pending and waits in Releasing for
 // the output (cut_resolve decides). A Lost always waits: its fall may not have shown in VBUS yet.
-bool Runner::cut_hold(Input in, Verdict v, Reason r, uint8_t detail) {
+bool Runner::cut_hold(const Input& in, Verdict v, Reason r, uint8_t detail) {
     if (v != Verdict::Fail || cut_wait_ || index_ >= count_ || mode_ != Mode::Legacy || pd_owned_ || steps_[index_].group == Group::Pd) return false;
     if (r != Reason::Lost && r != Reason::Timeout && r != Reason::Request && r != Reason::Voltage) return false;
     if (std::max(row_hi_, in.vbus_mv) > kCutNoAboveMv) return false;
@@ -1668,7 +1676,7 @@ void Runner::cut_resolve(Input in) {
     if (cut) K2LOG("[CT] cut retry row=%u cut again after %u: skip\n", unsigned(index_), unsigned(cut_tries_));
     finish_row(in, cut ? Verdict::Skip : cut_v_, cut ? Reason::PortCuts : cut_why_, cut ? uint8_t(0) : cut_detail_);
 }
-void Runner::finish_row(Input in, Verdict v, Reason r, uint8_t detail) {
+void Runner::finish_row(const Input& in, Verdict v, Reason r, uint8_t detail) {
     auto& s = steps_[index_];
     const bool sweep_row = is_sweep(s);   // read before detail is overwritten: the marker survives on sweep rows
     s.verdict = v; s.reason = r; s.detail = detail;
@@ -1764,7 +1772,7 @@ void Runner::finish_row(Input in, Verdict v, Reason r, uint8_t detail) {
 // slope over all levels inside kStepWalkSlopeMinMv..kStepWalkSlopeMaxMv. A jump fails "step resolution N mV" with detail
 // = the observed move in mV; a total or trend that misses fails the same way with detail = the mean move (0 = "steps
 // ignored"). A single move is not judged for direction: the output creeps after each PS_RDY.
-void Runner::walk_step(Input in, const Step& eff) {
+void Runner::walk_step(const Input& in, const Step& eff) {
     (void)eff;
     auto& s = steps_[index_];
     // walk-settle (ROADMAP "The PPS step walk fails a good source..."): the granted level is recorded only once VBUS is
@@ -1830,7 +1838,7 @@ void Runner::walk_step(Input in, const Step& eff) {
 // The deep-sweep row starts (request()): the point range comes from the row's own PDO word, clamped like the planner
 // did (monitor ceiling and cable voltage limit), and the row's slice of the point record is reset. A resumed row
 // re-sweeps from its first point: a power loss mid-sweep ends cleanly that way (the journal re-runs the row).
-void Runner::sweep_begin(const Step& s, Input in) {
+void Runner::sweep_begin(const Step& s, const Input& in) {
     const unsigned cap = std::min<unsigned>(in.cap_mv, cable_limit_mv(in, s.algorithm));
     const auto pr = sweep_range(s, cap);
     sweep_lo_ = uint16_t(pr.lo);
@@ -1845,7 +1853,7 @@ void Runner::sweep_begin(const Step& s, Input in) {
 // next point through the sink's single Request gate. A steady OUT-OF-BAND point is recorded too, not a stop - the
 // sweep stops only on a lost source (the row's failure paths in poll_impl: no PS_RDY, Reject, Hard Reset, VBUS drop,
 // withdrawn). The sink's own PPS keep-alive (kPpsKeepAliveMs, 5 s < 10 s) re-requests a held level between points.
-void Runner::sweep_point(Input in, const Step& eff) {
+void Runner::sweep_point(const Input& in, const Step& eff) {
     (void)eff;
     auto& s = steps_[index_];
     // The point's level is the mean of the last kWalkSteadyWindowMs of samples (fed by poll_impl), not the one sample that closes it
@@ -1912,7 +1920,7 @@ size_t Runner::pick() const {
 }
 // The run's one scheduler: the unit in progress goes on with its next row; when it has none left it ends with its detach, and
 // the next detached state starts the next unit (docs/CHARGER_TEST_FLOW.md).
-void Runner::next(Input in) {
+void Runner::next(const Input& in) {
     ceil_recover_ = false;   // the release after the stage is over
     // The SVOOC ceiling stage runs once the VOOC family's session is let go: D+/D- free, VBUS back at 5 V, nothing drawn.
     if (ceiling_pending_ && attached_ && !ending_ && !pd_owned_ && !fc_owned_ && safe5(in.vbus_mv) && begin_ceiling(in)) return;
@@ -2045,7 +2053,7 @@ bool Runner::can_retry(const Step& s) const {
     const unsigned limit = s.algorithm == Algorithm::Epr || s.algorithm == Algorithm::EprAvs ? kEprEntryRetries : 1;
     return (pd_retry_ == index_ ? retries_ : 0u) < limit;
 }
-void Runner::retry_pd_row(Input in) {
+void Runner::retry_pd_row(const Input& in) {
     if (pd_retry_ != index_) retries_ = 0;
     pd_retry_ = index_; ++retries_; end_probe();
     const auto algo = steps_[index_].algorithm;
@@ -2095,8 +2103,8 @@ void Runner::end_legacy() {
     else if (legacy_active_) { env_.legacy_only(false); env_.pd_rescan(); }
     legacy_active_ = false; ending_ = false;
 }
-void Runner::end_run(Input) { end_legacy(); if (!pd_skips_recorded_) record_pd_skips(); state_ = State::Done; }
-void Runner::begin_unit(Unit u, Input in) {
+void Runner::end_run(const Input&) { end_legacy(); if (!pd_skips_recorded_) record_pd_skips(); state_ = State::Done; }
+void Runner::begin_unit(Unit u, const Input& in) {
     if (selfpwr_ && self_path(u) == SelfPath::NeedsExternalPower) {   // a row that can cut the output cannot run on the output itself
         unit_ = u; skip_unit(Reason::NeedsExternalPower); next(in); return;
     }
@@ -2110,7 +2118,7 @@ void Runner::begin_unit(Unit u, Input in) {
     if (detached_) begin_attach(in); else begin_detach(in);
 }
 // The next Legacy unit inside the same PD-silent attach: no detach, a gap for the D+/D- cleanup, then its first handshake.
-void Runner::continue_legacy(Unit u, Input in) {
+void Runner::continue_legacy(Unit u, const Input& in) {
     unit_ = u; own_cut_ = false; post_cut_ms_ = 0; retried_ = false;
     pd_owned_ = fc_owned_ = recover_ = hot_ = false; pd_retry_ = cut_index_ = SIZE_MAX;
     unit_ms_ = in.now;
@@ -2119,7 +2127,7 @@ void Runner::continue_legacy(Unit u, Input in) {
     state_ = State::Baseline; stable_ = true; stable_ms_ = in.now; phase_ms_ = in.now;   // kLegacyGapMs (+ kAfcPreMs) before the first row
 }
 // Detach: Rd off, the 5 V default, then wait for the source to drop its output (VBUS below vSafe0V for kDetachDarkHoldMs).
-void Runner::begin_detach(Input in) {
+void Runner::begin_detach(const Input& in) {
     if (selfpwr_) {
         // The K2 runs on this source's VBUS through its pinned Rd: CC is never opened. The boundary is only a bookkeeping step; the
         // next attach is a hold (Soft_Reset or PD-silent). legacy_active_ stays so the run's end gives the PD policy back.
@@ -2131,7 +2139,7 @@ void Runner::begin_detach(Input in) {
     attached_ = legacy_active_ = false;
     env_.detach();
 }
-void Runner::poll_detach(Input in) {
+void Runner::poll_detach(const Input& in) {
     if (in.vbus_mv < pd::kVSafe0Mv) { dipped_ = true; if (!dark_) { dark_ = true; dark_ms_ = in.now; } } else dark_ = false;
     const uint32_t limit = never_dark_ ? kDetachQuickMs : kDetachDarkMs;
     if (!((dark_ && in.now - dark_ms_ >= kDetachDarkHoldMs) || in.now - att_ms_ >= limit)) return;
@@ -2140,7 +2148,7 @@ void Runner::poll_detach(Input in) {
     if (ending_) { ending_ = false; next(in); }
     else begin_attach(in);
 }
-void Runner::begin_attach(Input in) {
+void Runner::begin_attach(const Input& in) {
     state_ = State::Attach; att_ = Att::Caps; att_ms_ = in.now; stable_ = dark_ = false;
     rp_restart_ = false; contract_wrong_ = false; attach_max_mv_ = std::max(in.vbus_mv, 0);
     detached_ = false; legacy_active_ = mode_ == Mode::Legacy;
@@ -2152,7 +2160,7 @@ void Runner::begin_attach(Input in) {
 // The unit's charger never came back: the rows fail with NoReattach, or, when no list was ever heard (not a PD source), are skipped.
 // A PDO 1 contract whose PS_RDY was seen during the wait (contract_wrong_, latched in poll_attach) with VBUS outside vSafe5V
 // fails WrongVoltage instead (pattern shared-bus-split), with the highest VBUS seen during the wait, not the reading at the timeout.
-void Runner::fail_unit(Input in, const pd::SourceCaps& caps, Reason reason, int measured_mv) {
+void Runner::fail_unit(const Input& in, const pd::SourceCaps& caps, Reason reason, int measured_mv) {
     if (late_pd_ && !caps.valid && !evidence_.num_pdos) replan_pd(caps, in, true);   // no PD source at all: the plan says NoOffer
     const int measured = reason == Reason::WrongVoltage ? std::max(attach_max_mv_, 0)
                                                         : (measured_mv >= 0 ? measured_mv : in.vbus_mv);   // -1 default: the live reading
@@ -2163,7 +2171,7 @@ void Runner::fail_unit(Input in, const pd::SourceCaps& caps, Reason reason, int 
     }
     ending_ = true; begin_detach(in);
 }
-void Runner::poll_attach(Input in, const pd::SourceCaps& caps, uint32_t gap) {   // gap: ms since the previous poll (poll_impl() has already moved last_ms_)
+void Runner::poll_attach(const Input& in, const pd::SourceCaps& caps, uint32_t gap) {   // gap: ms since the previous poll (poll_impl() has already moved last_ms_)
     if (mode_ == Mode::Legacy) {
         if (in.vbus_mv > attach_max_mv_) attach_max_mv_ = in.vbus_mv;
         // After the SVOOC ceiling's Rd cycle: an output that never came back in kRecoverMs is a lost source (the run's rows
@@ -2246,7 +2254,7 @@ bool Runner::ceiling_wanted() const {
         if (steps_[n].group == Group::SuperVooc || steps_[n].group == Group::SuperVooc65) return true;
     return false;
 }
-bool Runner::begin_ceiling(Input in) {
+bool Runner::begin_ceiling(const Input& in) {
     ceiling_pending_ = false; ceiling_done_ = true;
     evidence_.svooc_word = 0; evidence_.svooc_why = 0; evidence_.svooc_asks = 0; evidence_.svooc_vmax_mv = evidence_.svooc_stop_ms = 0;
     const uint8_t refused = env_.ceiling_start();
@@ -2274,7 +2282,7 @@ void Runner::note_ceiling(const Input& in, svooc_ceiling::End e) {
           unsigned(evidence_.svooc_word), unsigned(evidence_.svooc_asks), unsigned(evidence_.svooc_why),
           unsigned(evidence_.svooc_vmax_mv), unsigned(evidence_.svooc_stop_ms));
 }
-void Runner::end_ceiling(Input in, svooc_ceiling::End e) {
+void Runner::end_ceiling(const Input& in, svooc_ceiling::End e) {
     note_ceiling(in, e);
     ceil_stopping_ = false;
     // The adapter raised VBUS during the session: the release waits for a settled 5 V, and an adapter that drops its output
@@ -2283,7 +2291,7 @@ void Runner::end_ceiling(Input in, svooc_ceiling::End e) {
     ceil_recover_ = true; ceil_low_ms_ = 0;
     release(in, false);
 }
-void Runner::poll_ceiling(Input in) {
+void Runner::poll_ceiling(const Input& in) {
     if (!ceil_stopping_) {
         const Reason fault = in.vbus_mv < 0 || in.cap_mv < 5000 ? Reason::NoMonitor : in.loop_lock ? Reason::Loop :
             in.inline_load ? Reason::Inline : in.fake ? Reason::Fake : Reason::None;
@@ -2449,7 +2457,16 @@ void Runner::poll(Input in, const pd::SourceCaps& caps) {
     // Stored rows change only with a state/index transition; timer-only polls do not invalidate reads.
     if (state_ != state || reason_ != reason || index_ != index) ++revision_;
 }
-void Runner::poll_impl(Input in, const pd::SourceCaps& caps) {
+// A hunt row the source answered with a Hard Reset (poll_impl): its evidence, from a snapshot of the run (the sink cleared the
+// chain state and its trace with the reset). Out of line: the Input copy (156 B) would otherwise sit in poll_impl's frame under
+// every call it makes. Returns the row's detail.
+uint8_t Runner::hunt_reset_note(const Input& in) {
+    Input snap = in;
+    snap.pd.xiaomi_svid = x_svid_; snap.pd.xiaomi_authed = x_authed_; snap.xm = nullptr;
+    note_hunt_refusal(snap, false, HfHardReset);
+    return hunt_reset_detail(snap);
+}
+void Runner::poll_impl(Input& in, const pd::SourceCaps& caps) {
     if (!busy()) return;
     in.epr_proof = epr_proof_;
     if (in.pd.xiaomi_svid) xiaomi_seen_ = true;
@@ -2899,11 +2916,9 @@ void Runner::poll_impl(Input in, const pd::SourceCaps& caps) {
         // did not unlock, the same as one that rejects it. The row is a Skip, not a retry (a second Request gets the same reset, and
         // the re-announced list is the pre-auth one) and not a run-level HardReset fail.
         if (s.hunt && s.group == Group::Pd) {
-            Input snap = in;   // the sink cleared the chain state and its trace with the reset: use the run's snapshot
-            snap.pd.xiaomi_svid = x_svid_; snap.pd.xiaomi_authed = x_authed_; snap.xm = nullptr;
-            note_hunt_refusal(snap, false, HfHardReset);
+            const uint8_t detail = hunt_reset_note(in);
             pd_owned_ = false; recover_ = true; session_ = in.session;
-            finish(in, Verdict::Skip, Reason::NotUnlocked, hunt_reset_detail(snap));
+            finish(in, Verdict::Skip, Reason::NotUnlocked, detail);
             if (state_ == State::Releasing) phase_ms_ = in.now;
             return;
         }

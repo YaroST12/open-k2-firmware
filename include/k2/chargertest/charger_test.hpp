@@ -791,9 +791,10 @@ private:
     void build(const pd::SourceCaps&, Options, Input);
     void caps_evidence(const pd::SourceCaps&);
     void replan_pd(const pd::SourceCaps&, Input, bool refresh_evidence);
-    void replan_fc(Input);   // the SCP / UFCS rows still to run, planned again from what the unit's first row read (fc::Caps)
-    void regrow_plan(const pd::SourceCaps&, Input);
-    void follow_list(const pd::SourceCaps&, Input);   // the source announced again mid-run (pattern budget-reannounce-mid-run): per PD row the
+    void replan_fc(const Input&);   // the SCP / UFCS rows still to run, planned again from what the unit's first row read (fc::Caps)
+    [[gnu::noinline]] size_t replan_fc_rows(const Input&, size_t& first);   // its planning half: rows replaced (0 = none)
+    void regrow_plan(const pd::SourceCaps&, const Input&);
+    void follow_list(const pd::SourceCaps&, const Input&);   // the source announced again mid-run (pattern budget-reannounce-mid-run): per PD row the
     // new list is followed where it still offers the row (new slot and PDO word), rows with no offer are skipped as Withdrawn, rows a
     // withdrawn PDO comes back for are Pending again; before the first PD row the plan is rebuilt from the new list (replan_pd).
     // A COMPLETE EPR_Source_Capabilities outside the K2's own EPR entry/exit (epr_stage_ == 2) is a re-announce like any other (2026-11-09);
@@ -807,15 +808,15 @@ private:
     void adopt_list(const pd::SourceCaps&);
     void record_pd_skips();
     void epr_skips(Reason, uint8_t detail = 0);   // detail: the source's Enter_Failed code for EprRefused
-    bool info_ready(Input) const;                 // the EPR list the charger answered is usable
-    bool ask_info(Input);                         // false while the informational EPR list is still being asked, true when done
-    void epr_info_rows(const pd::SourceCaps&, Input);   // lay the EPR rows out per level from the info list (when one was heard)
-    void request(Input);
-    void finish(Input, Verdict, Reason, uint8_t detail = 0);
-    void finish_row(Input, Verdict, Reason, uint8_t detail);   // finish() once the cut-retry check (cut_hold) let the verdict stand
-    void release(Input, bool stop);
+    bool info_ready(const Input&) const;                 // the EPR list the charger answered is usable
+    bool ask_info(const Input&);                         // false while the informational EPR list is still being asked, true when done
+    void epr_info_rows(const pd::SourceCaps&, const Input&);   // lay the EPR rows out per level from the info list (when one was heard)
+    void request(const Input&);
+    void finish(const Input&, Verdict, Reason, uint8_t detail = 0);
+    void finish_row(const Input&, Verdict, Reason, uint8_t detail);   // finish() once the cut-retry check (cut_hold) let the verdict stand
+    void release(const Input&, bool stop);
     void reissue_release();
-    void next(Input);
+    void next(const Input&);
     size_t pick() const;
     void skip_pending(Reason);
     void suspend();
@@ -825,30 +826,31 @@ private:
     bool legacy_row_ran() const;      // a Legacy row of the run has a protocol verdict (Pass/Fail)
     bool unit_row_ran() const;        // a row of the running unit has a protocol verdict (Pass/Fail)
     bool legacy_row_cut() const;      // a Legacy row of the run failed as Lost: a row of ours already cost the source its output
-    void begin_attach(Input);
-    void end_run(Input);
+    void begin_attach(const Input&);
+    void end_run(const Input&);
     void unsafe(Reason);
-    void begin_unit(Unit, Input);
-    void continue_legacy(Unit, Input);
-    void begin_detach(Input);
-    void poll_detach(Input);
-    void poll_attach(Input, const pd::SourceCaps&, uint32_t gap);
-    void fail_unit(Input, const pd::SourceCaps&, Reason = Reason::NoReattach, int measured_mv = -1);
+    void begin_unit(Unit, const Input&);
+    void continue_legacy(Unit, const Input&);
+    void begin_detach(const Input&);
+    void poll_detach(const Input&);
+    void poll_attach(const Input&, const pd::SourceCaps&, uint32_t gap);
+    void fail_unit(const Input&, const pd::SourceCaps&, Reason = Reason::NoReattach, int measured_mv = -1);
     // ^ measured_mv < 0: record the live in.vbus_mv (a genuine NoReattach keeps the reading at the fail, not a clamped 0)
     void end_legacy();
     void end_probe();
     void end_sag_recovery(const Input& in);
-    void retry_pd_row(Input in);
+    void retry_pd_row(const Input& in);
     // noinline: LTO folded poll_impl into the single Runner::poll call site (ChargerTestSession::runner_tick), next to the
     // caller's Input copies: 1048 B of frame against FRAME_MAX 1024.
-    [[gnu::noinline]] void poll_impl(Input, const pd::SourceCaps&);
+    [[gnu::noinline]] void poll_impl(Input&, const pd::SourceCaps&);
+    [[gnu::noinline]] uint8_t hunt_reset_note(const Input&);   // poll_impl's hunt row lost to a Hard Reset: evidence + detail
     uint32_t hold_ms() const;
     // The SVOOC ceiling stage: queued by finish() when the VOOC family was detected and the options asked for it, begun by next()
     // once the family session is released (D+/D- free, 5 V), ended by poll_ceiling(). One stage per run.
     bool ceiling_wanted() const;
-    bool begin_ceiling(Input);   // false = the stage did not start (refused): the run goes on
-    void poll_ceiling(Input);
-    void end_ceiling(Input, svooc_ceiling::End);
+    bool begin_ceiling(const Input&);   // false = the stage did not start (refused): the run goes on
+    void poll_ceiling(const Input&);
+    void end_ceiling(const Input&, svooc_ceiling::End);
     void note_ceiling(const Input&, svooc_ceiling::End);
     svooc_ceiling::End ceil_end_ = svooc_ceiling::End::None;
     bool ceiling_pending_ = false, ceiling_done_ = false, ceil_stopping_ = false;
@@ -906,7 +908,7 @@ private:
     // (walk_grant_ms_ + kWalkSteadyTimeoutMs); both reset when the walk starts and when it advances to the next level.
     WalkSteady walk_steady_;
     uint32_t walk_grant_ms_ = 0;   // first walk_step call at the current granted level (0 = none yet)
-    void walk_step(Input, const Step& eff);   // one granted level of the walk: record it, ask for the next or judge the walk
+    void walk_step(const Input&, const Step& eff);   // one granted level of the walk: record it, ask for the next or judge the walk
     // The deep-sweep row in flight (is_sweep). The record: one int16 error (measured - setpoint) per point, no heap;
     // sweep_rows_ holds one RowView per APDO part (ctsweep::part_range), filled when the row closes (sweep_close in finish()).
     std::array<int16_t, ctsweep::kMaxPoints> sweep_err_{};
@@ -915,8 +917,8 @@ private:
     uint16_t sweep_used_ = 0;                 // points recorded so far, all sweep rows together
     uint16_t sweep_first_ = 0, sweep_n_ = 0;   // the row in flight: first slot in sweep_err_, points so far
     uint16_t sweep_mv_ = 0, sweep_lo_ = 0, sweep_hi_ = 0;   // the point whose Request is out / the row's point range
-    void sweep_begin(const Step&, Input);   // request(): the point range from the row's PDO word, the row's record reset
-    void sweep_point(Input, const Step&);   // one granted point: record it, ask the next or finish the row
+    void sweep_begin(const Step&, const Input&);   // request(): the point range from the row's PDO word, the row's record reset
+    void sweep_point(const Input&, const Step&);   // one granted point: record it, ask the next or finish the row
     void sweep_close(Step&);                // finish(): summarize the row's points into sweep_rows_ (and mark a fold, fold_caution)
     void fold_caution(Step& sweep, const ctsweep::Summary&);   // a fold: the sweep row and the APDO's fixed rows above it read Reason::Folded
     bool xiaomi_seen_ = false, xiaomi_reset_ = false, x_svid_ = false, x_authed_ = false; uint32_t tail_at_ = 0, hr_count_ = 0;
@@ -972,7 +974,7 @@ private:
     void track_dip(const Input&);                            // the dip clocks above (every poll)
     bool dip_wait(const Input&) const;                       // VBUS is in a dip that may still come back: the 5 V check waits
     bool dip_adopts(const Input&) const;                     // a session change is the dip's (during it, or its tail after the comeback)
-    bool cut_hold(Input, Verdict, Reason, uint8_t detail);   // finish(): a casualty of a port cut is asked again (true) instead of failed
+    bool cut_hold(const Input&, Verdict, Reason, uint8_t detail);   // finish(): a casualty of a port cut is asked again (true) instead of failed
     void cut_resolve(Input);                                 // Releasing: the held casualty's cut came back (retry or skip) or the window ran out (it fails)
     // Sink Hard Resets sent when the release started: a later one is the sink's own last resort for a release that did not
     // bring VBUS down (pattern budget-reannounce-mid-run), a recovery and not a lost source.
