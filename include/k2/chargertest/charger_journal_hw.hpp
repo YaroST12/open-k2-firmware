@@ -29,6 +29,7 @@ void cancel();
 // rewritten by later pump() calls, one per call.
 void note(std::span<const charger_test::Step>, std::size_t index);
 void note_plan(std::span<const charger_test::Step>);
+void note_spec();   // Evidence::spec is final (the PD spec stage ended): the next pumps write its record
 // Something is still to be written (an arm, a section file, the header that names them). The Runner does not request above
 // 5 V while this is true.
 bool pending();

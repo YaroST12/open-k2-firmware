@@ -1050,6 +1050,7 @@ void meta(const RunMeta& m) {
     g_stub.journal_arm_open = false;
 }
 void attempt(std::size_t, std::uint8_t) { g_stub.journal_attempts++; }
+void note_spec() { g_stub.journal_spec_notes++; }
 void finish(std::uint8_t, std::uint8_t) { g_stub.journal_finishes++; g_stub.journal_log += 'N'; g_stub.journal_arm_open = false; }
 }  // namespace k2::charger_journal::hw
 

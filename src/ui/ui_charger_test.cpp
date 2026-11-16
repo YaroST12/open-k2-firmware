@@ -358,6 +358,11 @@ void ChargerTestSession::spec_collect(specsec::Result& r) {
     (void)r;
 #endif
 }
+// The stage's result is final: noted for the journal (one small record, written by journal_pump behind the rows and the header, on the
+// same write gate), so a reboot after the stage resumes with the section on the grid.
+void ChargerTestSession::spec_done(const specsec::Result&) {
+    if (journal_active_ && !journal_closed_) charger_journal::hw::note_spec();
+}
 // A row whose verdict stands but whose reason changed afterwards (the sweep closing marks its APDO's fixed rows, Reason::Folded): only
 // the journal follows (the row's section is dirty, no flash here); the row's own events and log line went out when it ended.
 void ChargerTestSession::amend(const ct::Step& s) {

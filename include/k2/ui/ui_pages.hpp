@@ -417,6 +417,7 @@ private:
     uint8_t spec_start() override;      // PdSpecSession::start_in_test; 0 = running, else pdspec::StartResult (255 = not built)
     void spec_stop() override;
     void spec_collect(specsec::Result&) override;
+    void spec_done(const specsec::Result&) override;   // the journal keeps the result (noted here, written by journal_pump)
     void legacy_only(bool) override;
     void pd_rescan() override;
     void detach() override;
