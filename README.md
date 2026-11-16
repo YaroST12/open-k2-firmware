@@ -113,7 +113,8 @@ Start it from **Test charger** in the Charger place. Plug the charger in with **
 </table>
 
 - Step 1 picks a preset (All tests, PD only, Legacy only, Vendor modes or Custom). **OK** picks it and goes on. Step 2 picks the cable identity to present; the Review step lists what will run.
-- The Review step's **Level** row (MINUS to reach it, **OK** to change) sets how far the run goes: **Light** lists what the charger advertises and keeps VBUS at 5 V, **Medium** (the default, set in Settings > Test level) tests every level, **Deep** adds the PPS and AVS deep sweeps (every 100 mV across each range). A Light run marks what it did not measure as listed or not run (on the card: advertised or detected), never as a pass.- Review always opens with the orange **OTHER PORT FREE** banner: a device on the other port can be damaged, so unplug it first. The K2 only knows a device is there when it sees proof of one, so the banner is always on and START carries the note "other port must be empty".
+- The Review step's **Level** bar (**Light | Medium | Deep**; MINUS or PLUS moves the cursor between it and START, **OK** steps the pick Light, Medium, Deep and back to Light) sets how far the run goes: **Light** lists what the charger advertises and keeps VBUS at 5 V, **Medium** (the default, set in Settings > Test level) tests every level, **Deep** adds the PPS and AVS deep sweeps (every 100 mV across each range). A Light run marks what it did not measure as listed or not run (on the card: advertised or detected), never as a pass.
+- Review always opens with the orange **OTHER PORT FREE** banner: a device on the other port can be damaged, so unplug it first. The K2 only knows a device is there when it sees proof of one, so the banner is always on and START carries the note "other port must be empty".
 - On Review, **OK** (Start) arms the run. The button turns orange and reads CONFIRM; a bar drains over 5 s. A second **OK** inside that time starts the run; if the 5 s pass, it disarms. Make sure the other port is empty and the output has no load before the first press.
 
 <table>
@@ -153,10 +154,11 @@ The level shows in the results and on the running page:
 </tr>
 <tr>
 <td align="center"><sub>Light: 5 V measured, the rest listed</sub></td>
-<td align="center"><sub>Deep: a PPS sweep row running</sub></td>
+<td align="center"><sub>Deep: a PPS sweep row, set and err</sub></td>
 </tr>
 </table>
 
+- A Deep run's PPS and AVS sweep rows show the voltage with three decimals (for example 9.000 V) and a line under it, "set 9.000  err +0 mV": the setpoint the K2 asked for and how far VBUS is from it. Other rows keep the two-decimal readout.
 - A Light run keeps VBUS at 5 V. In its Results only the 5 V cell is a measured pass; the other levels are drawn without a fill and the footer says "1 pass, 3 listed".
 - A Deep run steps a PPS or AVS range in 100 mV points. While a sweep row runs, the hero shows VBUS with the voltage the K2 asked for (**req**), the voltage the charger gave (**got**) and the error between them. The grid shows the range row and, below it, the **Sweep** strip for that range; the strip turns green, amber or red when the sweep closes, graded by the worst error.
 
