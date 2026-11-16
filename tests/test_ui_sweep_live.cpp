@@ -30,9 +30,11 @@ using A = ct::Algorithm;
 namespace {
 constexpr int kRunningStage = 5, kCustomStage = 14;
 constexpr int kFamHuawei = 0, kFamSamsung = 1, kFamOppo = 2, kFamPd = 4, kFamQc = 5, kFamDone = 6;
-// The Running view's gauge strip, the target line (rows 88..99, its last two rows share the strip's first two), the per-point line
-// of a sweep row (two rows higher, so it never touches the strip) and the name line.
+// The Running view's gauge strip, the target line (rows 88..99, its last two rows share the strip's first two) and the name line.
 constexpr int kStripY = 98, kTargetY = 88, kPointY = 86, kNameY = 68;
+// A sweep row restacks the view: the name moves up, the VBUS hero is six characters with three decimals, a font-16 line under it
+// reads the setpoint and the error, and the gauge and the grid move down to make room.
+constexpr int kSweepNameY = 48, kSweepHeroY = 67, kSweepHeroRight = 196, kSweepHeroChars = 6, kSweepLineY = 98, kSweepStripY = 115;
 
 void press(Ui& ui, Button b, uint32_t now) { ui.on_button(b, ButtonEvent::Short, now); }
 void move(Ui& ui, unsigned n, uint32_t now) { for (unsigned i = 0; i < n; ++i) press(ui, Button::Plus, now); }
@@ -155,12 +157,12 @@ void check_scene(bool avs, int ceiling_mv, unsigned points, bool expect_out_of_b
     // 1. the badge names the range being swept
     const std::string badge = step_label::label(st, r.index() ? &r.steps()[r.index() - 1] : nullptr).c_str();
     CHECK_STR(badge.c_str(), avs ? "AVS 9-20V" : "PPS 5-21V");   // the sweep's part from 5 V up runs first (split 2026-11-14)
-    CHECK_EQ(text_diff(kSmall, 6, kNameY, badge, kText), 0u);
+    CHECK_EQ(text_diff(kSmall, 6, kSweepNameY, badge, kText), 0u);
     // 2. the range: two dotted 2 px lines at the swept range's ends, in the strip's top row; the setpoint marker (6 px, kFocus) and
     // the 2 px needle sit where the geometry says
     const int32_t vbus = ui.charger_test_results().sweep_live().last_measured_mv();
     (void)vbus;
-    const auto ok = columns_of(kOk);
+    const auto ok = columns_of(kOk, kSweepStripY);
     CHECK_EQ(ok.size(), 4u);
     const auto geom = kit::range_geom(6, 210, 0, live.set_mv, live.lo_mv, live.hi_mv, full_scale(r));
     if (ok.size() == 4) {
@@ -168,17 +170,23 @@ void check_scene(bool avs, int ceiling_mv, unsigned points, bool expect_out_of_b
         CHECK_EQ(ok[2], int(geom.hi) - 1); CHECK_EQ(ok[3], int(geom.hi));
     }
     // the marker is 6 columns wide (mark-2 .. mark+3); the 2 px needle is drawn over it where the two meet (the reading follows the setpoint)
-    const auto needle = columns_of(kText);
+    const auto needle = columns_of(kText, kSweepStripY);
     CHECK_EQ(needle.size(), 2u);
     std::vector<int> want;
     for (int x = int(geom.mark) - 2; x <= int(geom.mark) + 3; ++x)
         if (std::find(needle.begin(), needle.end(), x) == needle.end()) want.push_back(x);
-    CHECK_EQ(columns_of(kFocus) == want, true);
-    // 3. the per-point line: the last recorded point's request, reading and error
-    char b[ctsweep::kPointTextMax];
-    const std::string line(b, ctsweep::format_point(live.last_set_mv(), live.last_measured_mv(), b));
-    CHECK_EQ(line.empty(), false);
-    CHECK_EQ(text_diff(kLabelFont, 6, kPointY, line, expect_out_of_band ? kCaution : kDim), 0u);
+    CHECK_EQ(columns_of(kFocus, kSweepStripY) == want, true);
+    // 3. the hero: the VBUS reading, six characters, three decimals, the point fixed in the third cell whether the volts have one
+    // digit or two (" 9.000", "20.050")
+    const int32_t shown = g_stub.pm.vbus_mv;
+    char hv[16];
+    std::snprintf(hv, sizeof hv, "%6.3f", shown / 1000.0);
+    CHECK_EQ(hv[2], '.');
+    CHECK_EQ(text_diff(kBig, kSweepHeroRight - kSweepHeroChars * kBig.adv, kSweepHeroY, hv, kVolt, kBig.ascent), 0u);
+    // 4. the line under it: the setpoint the last Request asked for and the reading's signed error, in mV, no deadband
+    char sl[48];
+    std::snprintf(sl, sizeof sl, "set %.3f  err %+d mV", live.set_mv / 1000.0, int(shown - int32_t(live.set_mv)));
+    CHECK_EQ(text_diff(kSmall, 6, kSweepLineY, sl, expect_out_of_band ? kCaution : kText), 0u);
     CHECK_EQ(ctsweep::out_of_band(live.last_set_mv(), live.last_measured_mv()), expect_out_of_band);
     dump_panel(name);
 }
@@ -194,10 +202,10 @@ int main() {
         start_sweep(ui, t, false, 0, 36000);
         CHECK_EQ(run_to_point(ui, t, 8), true);
         t += 600; ui.tick(t);
-        const auto early = columns_of(kFocus);
+        const auto early = columns_of(kFocus, kSweepStripY);
         CHECK_EQ(run_to_point(ui, t, 90), true);
         t += 600; ui.tick(t);
-        const auto late = columns_of(kFocus);
+        const auto late = columns_of(kFocus, kSweepStripY);
         CHECK_EQ(early.size() >= 4u && early.size() <= 6u, true); CHECK_EQ(late.size() >= 4u && late.size() <= 6u, true);   // 6 less the needle's overlap
         if (!early.empty() && !late.empty()) CHECK_EQ(late.front() > early.front() + 20, true);
         dump_panel("sweep_pps_rot0_late");
@@ -230,6 +238,55 @@ int main() {
             int inside = 0;
             for (int x : needle) inside += x > ok.front() && x < ok.back();
             CHECK_EQ(int(ok.back() - ok.front() + 1), int(ok.size()) + inside);
+        }
+    }
+    // The hero's point stays in the third cell from 9.999 V to 10.000 V (the digits never shift), and the line follows the reading.
+    {
+        Ui ui; uint32_t t;
+        start_sweep(ui, t, false, 0, 36000);
+        CHECK_EQ(run_to_point(ui, t, 8), true);
+        std::array<uint16_t, size_t(LCD_WIDTH) * LCD_HEIGHT> low{};
+        for (const int32_t mv : {9999, 10000}) {
+            g_stub.pm.vbus_mv = mv;
+            t += 600; ui.tick(t); settle(ui, t);
+            CHECK_EQ(g_stub.pm.vbus_mv, mv);   // the fixture left the reading alone, so the page painted it
+            char hv[16];
+            std::snprintf(hv, sizeof hv, "%6.3f", mv / 1000.0);
+            CHECK_EQ(text_diff(kBig, kSweepHeroRight - kSweepHeroChars * kBig.adv, kSweepHeroY, hv, kVolt, kBig.ascent), 0u);
+            // the point's cell (third of six, x100..123) holds the same ink at both readings
+            std::array<uint16_t, 24 * 30> cell{};
+            for (int y = 0; y < 30; ++y) for (int x = 0; x < 24; ++x) cell[size_t(y) * 24 + x] = at(kSweepHeroRight - 4 * 24 + x, kSweepHeroY + y);
+            if (mv == 9999) { for (size_t i = 0; i < cell.size(); ++i) low[i] = cell[i]; }
+            else CHECK_EQ(std::equal(cell.begin(), cell.end(), low.begin()), true);
+        }
+    }
+    // Back on a plain row after the sweep: today's layout returns whole (target line, pass band, the 4-cell hero), and nothing of
+    // the sweep's stack is left behind (the hero's lower rows, the line, the gauge's old place).
+    {
+        Ui ui; uint32_t t;
+        start_sweep(ui, t, false, 0, 36000);
+        CHECK_EQ(run_to_point(ui, t, 8), true);
+        bool back = false;
+        for (; t <= 2000000 && ui.charger_test_busy() && !back; t += 100) {
+            ui.tick(t);
+            const auto& r = ui.charger_test_results();
+            back = ui.charger_test_stage() == kRunningStage && r.index() < r.steps().size() && r.steps()[r.index()].verdict == ct::Verdict::Running &&
+                   !r.sweep_live().active;
+        }
+        CHECK_EQ(back, true);
+        if (back) {
+            t += 600; ui.tick(t); settle(ui, t);
+            const auto& r = ui.charger_test_results();
+            const auto& st = r.steps()[r.index()];
+            std::string target = "target ";
+            char v[16]; std::snprintf(v, sizeof v, "%g", st.mv / 1000.0);
+            target += v; target += "V";
+            CHECK_EQ(text_diff(kLabelFont, 6, kTargetY, target, kDim, 10), 0u);
+            CHECK_EQ(columns_of(kOk, kStripY + 4).empty(), false);
+            for (int y = kPointY; y < kTargetY; ++y) for (int x = 0; x < 224; ++x) CHECK_EQ(at(x, y), kBg);
+            for (int y = 85; y < 98; ++y) for (int x = 120; x < 224; ++x) CHECK_EQ(at(x, y), kBg);   // the sweep hero's lower rows
+            for (int x = 0; x < 224; ++x) CHECK_EQ(at(x, 48), kBg);
+            dump_panel("plan_row_after_sweep_rot0");
         }
     }
     // Both ranges, both orientations, rendered for the contact sheet (the truncation gate runs on every scene through test_report).

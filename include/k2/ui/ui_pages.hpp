@@ -593,8 +593,11 @@ public:
     static constexpr int kHeroPx = 5000;         // the 4-digit 48 px readout (4 x 24 x 48) plus its unit
     static constexpr int kNeedlePx = 200;        // the old and the new needle column and the window edge they cross
     static constexpr int kRangePx = 36 * 12;     // a sweep row's gauge move: the old and new marker (6 columns each) and needle (2 each)
-    static constexpr int kPointChars = 34;       // a sweep row's per-point line ("req 12.30V  got 12.15V  err-150mV"), 6 px a cell
+    static constexpr int kSweepHeroPx = 6 * 24 * 48 + 500;   // a sweep row's 6-digit readout and its unit
+    static constexpr int kSweepLineChars = 26;   // a sweep row's line under the hero ("set 20.000  err +48 mV", at most 25), 8 px a cell
+    static constexpr int kSweepLinePx = kSweepLineChars * 8 * 16;
     static constexpr uint32_t kHeroMs = 250;     // the hero and the needle repaint at most this often in flight (~4 Hz)
+    static constexpr uint32_t kSweepHeroMs = 500;   // ... a sweep row's, with its line, twice a second (the digits are the busy part)
     static constexpr uint32_t kFollowResumeMs = 5000;   // a manual scroll of the grid holds this long, or until the step changes
 private:
     ChargerTestSession& s_;
@@ -632,6 +635,8 @@ private:
     [[gnu::noinline]] void paint_detail();
     [[gnu::noinline]] void paint_resume();
     [[gnu::noinline]] void paint_hero(bool full, int16_t x, int16_t y, uint8_t chars, int32_t vbus_mv, uint16_t color);
+    // Running's static layout, plain or the sweep row's restack; a switch wipes the body below the progress bar first.
+    [[gnu::noinline]] void lay_running(bool sweeping, bool wipe);
     void list_row(int, bool, kit::RowSpec&);   // row_fn's body (fills the page's shared text buffers, consumed at once)
     void grid_row(int, kit::ResultRowSpec&);
     // Build the grid's layout and lines into layout_ / lines_. Results: once per entry of the stage, from the stored run and
@@ -674,6 +679,7 @@ private:
     uint8_t bar_key_ = 0;                  // the top bar drawn for this stage + 1 (0 = not drawn)
     uint8_t detail_step_ = 0;
     bool laid_ = false;                   // the stage's static part is on screen
+    bool sweep_laid_ = false;             // Running: the layout on screen is the sweep row's (Layout kSweep), not the plain one
 };
 
 // The Home protocol row's source: the one derive_proto call site. Home paints from it on every live frame, and the
