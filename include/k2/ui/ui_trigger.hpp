@@ -248,23 +248,24 @@ private:
 };
 
 // Panel labels. Minus holds 6 characters, Plus 8, OK 6 (the slot lengths follow the physical buttons).
-inline SlotLabel plus_label(const Model &m) {
-    if (m.stage() == Stage::Pick) return {"Dn", "", "", m.sel() == kEntries - 1};
-    if (m.stage() == Stage::Edit) return {"+", "Big*", "", false};
-    if (m.stage() == Stage::Live && m.can_step()) return {"+", "", "", false};
-    return {};
+inline sl::Id plus_label(const Model &m) {
+    if (m.stage() == Stage::Pick) return m.sel() == kEntries - 1 ? sl::DnDim : sl::Dn;
+    if (m.stage() == Stage::Edit) return sl::IncBig;
+    if (m.stage() == Stage::Live && m.can_step()) return sl::Inc;
+    return sl::None;
 }
-inline SlotLabel minus_label(const Model &m) {
-    if (m.stage() == Stage::Pick) return {"Up", "", "", m.sel() == 0};
-    if (m.stage() == Stage::Edit) return {"-", "Big*", "", false};
-    if (m.stage() == Stage::Live && m.can_step()) return {"-", "", "", false};
-    return {};
+inline sl::Id minus_label(const Model &m) {
+    if (m.stage() == Stage::Pick) return m.sel() == 0 ? sl::UpDim : sl::Up;
+    if (m.stage() == Stage::Edit) return sl::DecBig;
+    if (m.stage() == Stage::Live && m.can_step()) return sl::Dec;
+    return sl::None;
 }
 // OK advances the staged editor; only Review sends. While a scan, handshake or level runs, BACK reads Stop and OK is blank.
-inline SlotLabel ok_label(const Model &m, Run run) {
-    if (run == Run::Scan || run == Run::Negotiating || m.stage() == Stage::Live) return {};   // BACK reads Stop
-    if (m.armed()) return {"Confirm", "", "", false};
-    return {m.stage() == Stage::Review ? "Send" : "Next", "", "", !m.available()};
+inline sl::Id ok_label(const Model &m, Run run) {
+    if (run == Run::Scan || run == Run::Negotiating || m.stage() == Stage::Live) return sl::None;   // BACK reads Stop
+    if (m.armed()) return sl::Confirm;
+    if (m.stage() == Stage::Review) return m.available() ? sl::Send : sl::SendDim;
+    return m.available() ? sl::Next : sl::NextDim;
 }
 
 inline const char *fail_short(fc::Fail f) {

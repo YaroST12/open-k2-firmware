@@ -205,28 +205,14 @@ void ConnectionPage::close_popup() {
     sig_valid_ = false;
 }
 
-PanelLabels ConnectionPage::labels() const {
-    PanelLabels l = base_labels();
-    if (popup_) {
-        l.b[static_cast<int>(Button::Ok)] = {"Select", "", "", false};
-        l.b[static_cast<int>(Button::Plus)] = {"Dn", "", "", false};
-        l.b[static_cast<int>(Button::Minus)] = {"Up", "", "", false};
-        l.b[static_cast<int>(Button::Back)] = {"Back", "", "", false};
-        return l;
-    }
+Strip ConnectionPage::labels() const {
+    if (popup_) return {{sl::Back, sl::Up, sl::Select, sl::Dn}};
     const bool share = (tab_ == conn::Tab::Source && pd::active_caps().valid) || (tab_ == conn::Tab::Cable && fusb302::emarker().valid);
-    if (locked_) {
+    if (locked_) {   // a place page always scrolls or moves the focus
         const int i = act_sel_ < 0 ? 0 : 1 + act_sel_;
-        const char *verb = i < n_items_ ? conn::act_verb(items_[static_cast<std::size_t>(i)].act, more_) : "";
-        l.b[static_cast<int>(Button::Ok)] = {verb, share ? "Share" : "", "", false};
-        l.b[static_cast<int>(Button::Plus)] = {"Dn", "", "", false};    // a place page always scrolls or moves the focus
-        l.b[static_cast<int>(Button::Minus)] = {"Up", "", "", false};
-        return l;
+        return {{sl::Back, sl::Up, i < n_items_ ? conn::act_slot(items_[static_cast<std::size_t>(i)].act, more_, share) : share ? sl::ShareLong : sl::None, sl::Dn}};
     }
-    l.b[static_cast<int>(Button::Ok)] = {"Actions", share ? "Share" : "", "", false};
-    l.b[static_cast<int>(Button::Plus)] = {"Tab+", "", "", false};
-    l.b[static_cast<int>(Button::Minus)] = {"Tab-", "", "", false};
-    return l;
+    return {{sl::Back, sl::TabPrev, share ? sl::ActionsShare : sl::Actions, sl::TabNext}};
 }
 
 bool ConnectionPage::on_event(Event e) {

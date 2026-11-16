@@ -234,9 +234,9 @@ bool ToolsPage::on_event(Event e) {
     return false;
 }
 
-PanelLabels ToolsPage::labels() const {
-    PanelLabels l = list_labels(base_labels());   // short [+]/[-] move the focus
-    l.b[static_cast<int>(Button::Ok)] = {"Open", "", "", false};
+Strip ToolsPage::labels() const {
+    Strip l = list_strip(base_labels());   // short [+]/[-] move the focus
+    l[Button::Ok] = sl::Open;
     return l;
 }
 

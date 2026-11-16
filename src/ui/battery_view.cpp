@@ -162,17 +162,17 @@ const char *act_name(Act a, const Shown &s) {
     return "";
 }
 
-const char *act_verb(Act a) {
+sl::Id act_verb(Act a) {
     switch (a) {
-    case Act::StartCharge: case Act::StartDischarge: case Act::StartRoundTrip: case Act::Next: return "Start";
-    case Act::EndPhase: case Act::Finish: return "Stop";
-    case Act::Wiring: return "Toggle";
-    case Act::EndMa: case Act::EndS: return "Cycle";
-    case Act::Runs: return "Open";
-    case Act::Share: return "Share";
+    case Act::StartCharge: case Act::StartDischarge: case Act::StartRoundTrip: case Act::Next: return sl::Start;
+    case Act::EndPhase: case Act::Finish: return sl::Stop;
+    case Act::Wiring: return sl::Toggle;
+    case Act::EndMa: case Act::EndS: return sl::Cycle;
+    case Act::Runs: return sl::Open;
+    case Act::Share: return sl::Share;
     case Act::In: case Act::Out: case Act::Time: case Act::Eff: break;
     }
-    return "";
+    return sl::None;
 }
 
 uint16_t next_step(const uint16_t *steps, int n, uint16_t cur) {

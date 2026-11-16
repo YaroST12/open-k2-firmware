@@ -791,7 +791,7 @@ is a real choice, the options are listed and none is marked.
 
 | finding | where seen | proposal |
 |---|---|---|
-| The list pair has four spellings: `Up/Prev` + `Dn/Next`, `Up/Prev` + `Dn`, `Up/Prv` + `Dn`, `Up` + `Dn` | `mock_tools.png`, `mock_settings.png`, `mock_twin_list.png`, `mock_diag.png` | Rotation pages: `Up/Prev`, `Dn/Next`. Menus: `Up`, `Dn`. `list_labels()` adds the long alternative `Prv` even on a menu, where no long press exists; drop it there |
+| The list pair has four spellings: `Up/Prev` + `Dn/Next`, `Up/Prev` + `Dn`, `Up/Prv` + `Dn`, `Up` + `Dn` | `mock_tools.png`, `mock_settings.png`, `mock_twin_list.png`, `mock_diag.png` | Rotation pages: `Up/Prev`, `Dn/Next`. Menus: `Up`, `Dn`. `list_strip()` adds the long alternative `Prv` even on a menu, where no long press exists; drop it there |
 | A tinted footer stops at panel x224 in landscape; the last 16 px stay `kBar` | `b_ct_confirm.png`, `mock_tools.png`, `mock_diag.png` | `draw_footer` fills `s.w` (224) inside a 240 px band. Fill the band's width |
 | Who reads `Stop`: charger test puts `Stop` and `Cancel` on OK and keeps `Back`; twins and Loop probe put `Stop` on BACK and blank OK | `b_ct_running.png`, `mock_twin_running.png`, `mock_loop_running.png` | Option A: the charger-test way everywhere (OK stops, BACK reads `Back` and stops first). Option B: BACK reads `Stop` everywhere, OK is free for `View`. The reference is A |
 | Table row pitch: 26 (kit), 25 (Detail), 22 (Diag), 20 (Who's attached, PD trigger). Key font 16 (kit) or 12 | `b_ct_review.png`, `mock_detail.png`, `mock_diag.png`, `mock_pd_cable.png` | Option A: 26 px and font-16 keys everywhere; dense pages scroll or merge rows. Option B: allow one dense variant in the kit (22 px, font-12 key) and name it |

@@ -20,7 +20,7 @@ public:
     void draw_static() override {}   // update() lays every pixel on its first pass (the page is opaque)
     void update(uint32_t now_ms) override;
     bool on_event(Event e) override;
-    PanelLabels labels() const override;
+    Strip labels() const override;
     void invalidate() override;
 
     // What a column shows, in rows from the graph's top. kNoRow = nothing; lo == kUnknown = the panel is not known (the

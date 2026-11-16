@@ -454,9 +454,9 @@ bool BlackBoxPage::on_event(Event e) {
     return scroll_event(list_, e, ctx_.now);
 }
 
-PanelLabels BlackBoxPage::labels() const {
-    PanelLabels l = base_labels();
-    l.b[static_cast<int>(Button::Ok)] = {mode_ == Mode::List ? "Open" : mode_ == Mode::Timeline ? "Link" : "", "", "", mode_ == Mode::Link};
+Strip BlackBoxPage::labels() const {
+    Strip l = base_labels();
+    l[Button::Ok] = mode_ == Mode::List ? sl::Open : mode_ == Mode::Timeline ? sl::Link : mode_ == Mode::Link ? sl::Dim : sl::None;
     return l;
 }
 

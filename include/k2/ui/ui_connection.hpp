@@ -26,6 +26,7 @@
 #include "k2/pd/pd_verdict.hpp"
 #include "k2/pd/ra_guard.hpp"
 #include "k2/ui/text/connection.hpp"
+#include "k2/ui/ui_labels.hpp"
 #include "k2/ui/ui_calc.hpp"
 #include "k2/ui/ui_tools.hpp"
 
@@ -290,18 +291,18 @@ struct ActFacts {
     bool pd_none = false;       // the settled verdict is "no PD this attach": a no-PD device cannot be identified
 };
 
-// The strip verb of an action (kOkVerbs): a single tool's OK names the action it runs.
-constexpr const char *act_verb(Act a, bool more) {
+// The strip slot of an action (the kOkVerbs word): a single tool's OK names the action it runs; `share` adds the long Share.
+constexpr sl::Id act_slot(Act a, bool more, bool share) {
     switch (a) {
-    case Act::Refresh: return "Refresh";
-    case Act::Details: return more ? "Cancel" : "View";
-    case Act::ShareCaps: case Act::ShareCable: return "Share";
-    case Act::ReadCable: return "Read";
-    case Act::SaveCable: return "Save";
-    case Act::SpoofAs: case Act::SavedCables: case Act::Bench: return "Open";
-    case Act::Identify: return "Ask";
+    case Act::Refresh: return share ? sl::RefreshShare : sl::Refresh;
+    case Act::Details: return more ? (share ? sl::CancelShare : sl::Cancel) : (share ? sl::ViewShare : sl::View);
+    case Act::ShareCaps: case Act::ShareCable: return share ? sl::ShareShare : sl::Share;
+    case Act::ReadCable: return share ? sl::ReadShare : sl::Read;
+    case Act::SaveCable: return share ? sl::SaveShare : sl::Save;
+    case Act::SpoofAs: case Act::SavedCables: case Act::Bench: return share ? sl::OpenShare : sl::Open;
+    case Act::Identify: return share ? sl::AskShare : sl::Ask;
     }
-    return "";
+    return share ? sl::ShareLong : sl::None;
 }
 
 inline constexpr const char *kWhyLiveSink = "Live sink: unplug load";

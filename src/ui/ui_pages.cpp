@@ -271,16 +271,9 @@ bool PageBase::scroll_event(ListView &lv, Event e, uint32_t now_ms) {
     return true;
 }
 
-PanelLabels PageBase::base_labels() const {
-    if (is_menu()) {   // modal: short [+] / [-] scroll or step, BACK leaves
-        PanelLabels p;
-        p.b[static_cast<int>(Button::Back)] = {"Back", "", "", false};
-        p.b[static_cast<int>(Button::Minus)] = {kUp, "", "", false};
-        p.b[static_cast<int>(Button::Plus)] = {kDn, "", "", false};
-        return p;
-    }
-    PanelLabels p = nav_labels();
-    if (any_face()) p.b[static_cast<int>(Button::Ok)] = {"Bench", "", "", false};
+Strip PageBase::base_labels() const {
+    Strip p = nav_strip();   // modal menus too: short [+] / [-] scroll or step, BACK leaves
+    if (!is_menu() && any_face()) p[Button::Ok] = sl::Bench;
     return p;
 }
 
@@ -584,22 +577,20 @@ bool EmarkerPage::on_event(Event e) {
     return false;
 }
 
-PanelLabels EmarkerPage::labels() const {
-    PanelLabels l = base_labels();
-    SlotLabel &ok = l.b[static_cast<int>(Button::Ok)];
+Strip EmarkerPage::labels() const {
+    Strip l = base_labels();
     switch (menu_.view) {
     case EmView::List:
-        l = list_labels(l);
-        ok = {n_seqs_ > 0 ? "View" : "", "", "", false};
+        l = list_strip(l);
+        l[Button::Ok] = n_seqs_ > 0 ? sl::View : sl::None;
         break;
     case EmView::Detail:
-        l = list_labels(l);
-        ok = {"Delete", "Share", "", false};
+        l = list_strip(l);
+        l[Button::Ok] = sl::DeleteShare;
         break;
     case EmView::Confirm:
-        ok = {"Delete", "", "", false};
-        l.b[static_cast<int>(Button::Minus)] = {};
-        l.b[static_cast<int>(Button::Plus)] = {};
+        l[Button::Ok] = sl::Delete;
+        l[Button::Minus] = l[Button::Plus] = sl::None;
         break;
     }
     return l;
@@ -725,9 +716,9 @@ bool DiagPage::on_event(Event e) {
     return back_event(e);
 }
 
-PanelLabels DiagPage::labels() const {
-    PanelLabels l = base_labels();
-    l.b[static_cast<int>(Button::Ok)] = {"", "Share", "", false};
+Strip DiagPage::labels() const {
+    Strip l = base_labels();
+    l[Button::Ok] = sl::ShareLong;
     return l;
 }
 
@@ -809,7 +800,7 @@ void MemoryPage::update(uint32_t) {
 
 bool MemoryPage::on_event(Event e) { return back_event(e); }
 
-PanelLabels MemoryPage::labels() const { return base_labels(); }
+Strip MemoryPage::labels() const { return base_labels(); }
 
 void MemoryPage::invalidate() {
     static_step_ = 0;
@@ -1024,7 +1015,7 @@ bool LinesPage::on_event(Event e) {
     return back_event(e);
 }
 
-PanelLabels LinesPage::labels() const {
+Strip LinesPage::labels() const {
     return base_labels();
 }
 
@@ -1473,18 +1464,15 @@ bool PdTriggerPage::on_event(Event e) {
     return false;
 }
 
-PanelLabels PdTriggerPage::labels() const {
-    PanelLabels l = base_labels();
+Strip PdTriggerPage::labels() const {
+    Strip l = base_labels();
     if (refusal_ != Refusal::None) return l;
-    auto &ok = l.b[static_cast<int>(Button::Ok)];
-    auto &up = l.b[static_cast<int>(Button::Plus)];
-    auto &dn = l.b[static_cast<int>(Button::Minus)];
     switch (wiz_.step) {
-    case WizStep::Offer: ok = blocked_ ? SlotLabel{"", "", "", false} : SlotLabel{"Next", "", "", false}; up = {kDn, "", "", false}; dn = {kUp, "", "", false}; break;
-    case WizStep::Voltage: ok = {"Next", "", "", false}; up = {"+", "1V", "", false}; dn = {"-", "1V", "", false}; break;
-    case WizStep::Current: ok = {"Next", "", "", false}; up = {"+", "0.5A", "", false}; dn = {"-", "0.5A", "", false}; break;
-    case WizStep::Confirm: ok = {"Send", "", "", false}; up = {"", "", "", false}; dn = {"", "", "", false}; break;
-    case WizStep::Live: ok = {"", "", "", false}; up = {"", "", "", false}; dn = {"", "", "", false}; break;
+    case WizStep::Offer: l = {{sl::Back, sl::Up, blocked_ ? sl::None : sl::Next, sl::Dn}}; break;
+    case WizStep::Voltage: l = {{sl::Back, sl::Dec1V, sl::Next, sl::Inc1V}}; break;
+    case WizStep::Current: l = {{sl::Back, sl::Dec05A, sl::Next, sl::Inc05A}}; break;
+    case WizStep::Confirm: l = {{sl::Back, sl::None, sl::Send, sl::None}}; break;
+    case WizStep::Live: l = {{sl::Back, sl::None, sl::None, sl::None}}; break;
     }
     return l;
 }
@@ -1621,12 +1609,8 @@ bool CableRPage::on_event(Event e) {
     return false;
 }
 
-PanelLabels CableRPage::labels() const {
-    PanelLabels l = base_labels();
-    l.b[static_cast<int>(Button::Ok)] = {"Reset", "", "", false};
-    l.b[static_cast<int>(Button::Minus)] = {"", "", "", true};
-    l.b[static_cast<int>(Button::Plus)] = {"Mode", "", "", false};
-    return l;
+Strip CableRPage::labels() const {
+    return {{sl::Back, sl::Dim, sl::Reset, sl::Mode}};
 }
 
 void CableRPage::invalidate() {
@@ -2049,21 +2033,20 @@ bool TriggerPage::on_event(Event e) {
     return consumed;
 }
 
-PanelLabels TriggerPage::labels() const {
-    PanelLabels l = base_labels();
+Strip TriggerPage::labels() const {
+    Strip l = base_labels();
     const trig::Run r = run();
-    l.b[static_cast<int>(Button::Minus)] = {};
-    l.b[static_cast<int>(Button::Plus)] = {};
+    l[Button::Minus] = l[Button::Plus] = sl::None;
     if (ctx_.ui->fc_release().busy()) {
-        l.b[static_cast<int>(Button::Ok)] = {};
+        l[Button::Ok] = sl::None;
         return l;
     }
     if (r != trig::Run::Idle || model_.retargeting())
-        l.b[static_cast<int>(Button::Back)] = {"Stop", "", "", false};   // any BACK press stops; one word
-    l.b[static_cast<int>(Button::Ok)] = trig::ok_label(model_, r);
+        l[Button::Back] = sl::Stop;   // any BACK press stops; one word
+    l[Button::Ok] = trig::ok_label(model_, r);
     if (r != trig::Run::Scan && r != trig::Run::Negotiating) {
-        l.b[static_cast<int>(Button::Plus)] = trig::plus_label(model_);
-        l.b[static_cast<int>(Button::Minus)] = trig::minus_label(model_);
+        l[Button::Plus] = trig::plus_label(model_);
+        l[Button::Minus] = trig::minus_label(model_);
     }
     return l;
 }
@@ -2097,9 +2080,9 @@ int rotation_choice(const Ui &ui) {
     return ui.rotation_locked() ? 1 + ui.rotation() : 0;
 }
 
-PanelLabels setting_labels(PanelLabels labels, const char *action) {
-    labels = list_labels(labels);
-    labels.b[static_cast<int>(Button::Ok)] = {action, "", "", false};
+Strip setting_labels(Strip labels, sl::Id action) {
+    labels = list_strip(labels);
+    labels[Button::Ok] = action;
     return labels;
 }
 
@@ -2368,13 +2351,11 @@ bool SettingsPage::on_event(Event e) {
     return back_event(e);
 }
 
-PanelLabels SettingsPage::labels() const {
+Strip SettingsPage::labels() const {
     const auto row = static_cast<SettingRow>(sel_);
     const bool opens = row < SettingRow::RotateButtons || row >= SettingRow::SystemState;
     const bool cycles = row == SettingRow::Smoothing || row == SettingRow::TestLevel;
-    PanelLabels labels = setting_labels(base_labels(), opens ? "Open" : cycles ? "Cycle" : "Toggle");
-    labels.b[static_cast<int>(Button::Plus)] = {"Dn", "", "", false};
-    return labels;
+    return setting_labels(base_labels(), opens ? sl::Open : cycles ? sl::Cycle : sl::Toggle);
 }
 
 void AutorotatePage::enter() {
@@ -2421,7 +2402,7 @@ bool AutorotatePage::on_event(Event e) {
     return false;
 }
 
-PanelLabels AutorotatePage::labels() const { return setting_labels(base_labels(), "Apply"); }
+Strip AutorotatePage::labels() const { return setting_labels(base_labels(), sl::Apply); }
 
 // ---------------------------------------------------------------------------------------
 // USB link submenu (what enumerates at the next boot)
@@ -2515,9 +2496,9 @@ bool UsbLinkPage::on_event(Event e) {
     return false;
 }
 
-PanelLabels UsbLinkPage::labels() const {
-    PanelLabels l = base_labels();
-    l.b[static_cast<int>(Button::Ok)] = {"Toggle", "", "", false};
+Strip UsbLinkPage::labels() const {
+    Strip l = base_labels();
+    l[Button::Ok] = sl::Toggle;
     return l;
 }
 
@@ -2575,9 +2556,9 @@ bool QrTestPage::on_event(Event) {
     return false;   // every button is declined: a short BACK pops the page (the Ui does it)
 }
 
-PanelLabels QrTestPage::labels() const {
-    PanelLabels l = base_labels();
-    for (Button b : {Button::Ok, Button::Minus, Button::Plus}) l.b[static_cast<int>(b)] = {};
+Strip QrTestPage::labels() const {
+    Strip l = base_labels();
+    l[Button::Ok] = l[Button::Minus] = l[Button::Plus] = sl::None;
     return l;
 }
 

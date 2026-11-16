@@ -277,15 +277,15 @@ bool SharePage::on_event(Event e) {
     return true;
 }
 
-PanelLabels SharePage::labels() const {
-    PanelLabels l = base_labels();
-    for (Button b : {Button::Ok, Button::Minus, Button::Plus}) l.b[static_cast<int>(b)] = {};
+Strip SharePage::labels() const {
+    Strip l = base_labels();
+    l[Button::Ok] = l[Button::Minus] = l[Button::Plus] = sl::None;
     if (has_link_form()) {   // names the code the press switches TO
-        l.b[static_cast<int>(Button::Ok)] = {link_ ? "K2 data" : "Link", "", "", false};
+        l[Button::Ok] = link_ ? sl::K2Data : sl::Link;
     } else if (parts() > 1) {
-        l.b[static_cast<int>(Button::Ok)] = {cycling_ ? "Hold" : "Auto", "", "", false};
-        l.b[static_cast<int>(Button::Minus)] = {"Prev", "", "", false};
-        l.b[static_cast<int>(Button::Plus)] = {"Next", "", "", false};
+        l[Button::Ok] = cycling_ ? sl::Hold : sl::Auto;
+        l[Button::Minus] = sl::Prev;
+        l[Button::Plus] = sl::Next;
     }
     return l;
 }

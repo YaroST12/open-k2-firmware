@@ -9,6 +9,7 @@
 
 #include "k2/battery/battery.hpp"
 #include "k2/ui/kit.hpp"
+#include "k2/ui/ui_labels.hpp"
 
 namespace k2::battery::view {
 
@@ -63,7 +64,7 @@ struct Rows {
 Rows rows(const Shown &s, bool stored);
 bool is_fact(Act a);
 const char *act_name(Act a, const Shown &s);   // the row text (font 16, <= 18 characters)
-const char *act_verb(Act a);                   // the OK label of an action row ("" for a fact)
+sl::Id act_verb(Act a);                        // the OK strip slot of an action row (sl::None for a fact)
 
 // The settings' steps: OK on the row moves to the next one (wrapping).
 inline constexpr uint16_t kEndMaSteps[] = {20, 50, 100, 200, 500};

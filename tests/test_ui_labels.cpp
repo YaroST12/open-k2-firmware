@@ -6,6 +6,7 @@
 #include "k2/ui/font_aa.hpp"
 #include "k2/ui/ui_style.hpp"
 #include <initializer_list>
+#include <stdio.h>
 #include <string.h>
 
 using namespace k2;
@@ -34,7 +35,7 @@ static void test_label_text() {
 static void test_nav_labels() {
     const unsigned minus_chars = label_max_chars(Button::Minus);
     // Fieldbook has no paging press: [-] / [+] move (a list's focus, the Meter's face) as Up / Dn with no long word.
-    const PanelLabels l = nav_labels();
+    const PanelLabels l = resolve(nav_strip());
     CHECK_STR(l.b[static_cast<int>(Button::Minus)].shrt, kUp);
     CHECK_STR(l.b[static_cast<int>(Button::Plus)].shrt, kDn);
     CHECK_STR(l.b[static_cast<int>(Button::Minus)].lng, "");
@@ -105,9 +106,9 @@ static void test_vocabulary() {
         p.b[static_cast<int>(Button::Ok)] = ok;       p.b[static_cast<int>(Button::Plus)] = plus;
         return p;
     };
-    // The shared labels are a list pair already; list_labels keeps them so, and adds the "Prv" spelling only to a real long.
-    CHECK_EQ(label_violation(nav_labels()) == nullptr, 1);
-    PanelLabels lst = list_labels(nav_labels());
+    // The shared labels are a list pair already; list_strip keeps them so.
+    CHECK_EQ(label_violation(resolve(nav_strip())) == nullptr, 1);
+    PanelLabels lst = resolve(list_strip(nav_strip()));
     CHECK_STR(text_of(lst.b[static_cast<int>(Button::Minus)], label_max_chars(Button::Minus)), "Up");
     CHECK_STR(text_of(lst.b[static_cast<int>(Button::Plus)], label_max_chars(Button::Plus)), "Dn");
     CHECK_EQ(label_violation(lst) == nullptr, 1);
@@ -140,7 +141,51 @@ static void test_vocabulary() {
         CHECK_EQ(footer_is_clean(f), 0);
 }
 
+// The strip pool: ids resolve to the words the pages showed before, and no two entries are the same text (the panel's
+// redraw signature is the id, so a duplicate would only cost a repaint, but the pool is meant to hold each slot once).
+static void test_pool() {
+    CHECK_EQ(static_cast<int>(sl::kCount) < 128, 1);
+    for (int a = 0; a < sl::kCount; a++) {
+        const SlotLabel x = slot_label(static_cast<sl::Id>(a));
+        CHECK_EQ(x.shrt != nullptr && x.lng != nullptr && x.lng_alt != nullptr, 1);
+        // An empty slot has no fallback; a fallback only rides on a real long word.
+        if (*x.lng_alt) CHECK_EQ(*x.lng != 0, 1);
+        for (int b = a + 1; b < sl::kCount; b++) {
+            const SlotLabel y = slot_label(static_cast<sl::Id>(b));
+            const bool same = !strcmp(x.shrt, y.shrt) && !strcmp(x.lng, y.lng) && !strcmp(x.lng_alt, y.lng_alt) && x.dim == y.dim;
+            if (same) printf("pool: entries %d and %d are the same slot \"%s\"/\"%s\"\n", a, b, x.shrt, x.lng);
+            CHECK_EQ(same, false);
+        }
+    }
+    auto is = [](sl::Id id, const char *s, const char *l, const char *a, bool dim) {
+        const SlotLabel x = slot_label(id);
+        return !strcmp(x.shrt, s) && !strcmp(x.lng, l) && !strcmp(x.lng_alt, a) && x.dim == dim;
+    };
+    CHECK_EQ(is(sl::None, "", "", "", false), true);
+    CHECK_EQ(is(sl::Dim, "", "", "", true), true);
+    CHECK_EQ(is(sl::Hero, "", "Hero", "", false), true);
+    CHECK_EQ(is(sl::BackDel, "Back", "Delete", "Del", false), true);
+    CHECK_EQ(is(sl::BenchReset, "Bench", "Reset", "", false), true);
+    CHECK_EQ(is(sl::IncBig, "+", "Big*", "", false), true);
+    CHECK_EQ(is(sl::Dec05A, "-", "0.5A", "", false), true);
+    CHECK_EQ(is(sl::SendDim, "Send", "", "", true), true);
+    CHECK_EQ(is(sl::K2Data, "K2 data", "", "", false), true);
+    CHECK_EQ(is(sl::OpenShare, "Open", "Share", "", false), true);
+    // The shared strip: BACK Back, [-] Up, OK nothing, [+] Dn; the list pair puts Up/Dn on a value strip.
+    const PanelLabels nav = resolve(nav_strip());
+    CHECK_EQ(label_violation(nav) == nullptr, true);
+    Strip v = {{sl::Stop, sl::Dec, sl::Start, sl::Inc}};
+    CHECK_EQ(label_violation(resolve(v)) == nullptr, true);
+    const Strip lst = list_strip(v);
+    CHECK_EQ(int(lst[Button::Minus]), int(sl::Up));
+    CHECK_EQ(int(lst[Button::Plus]), int(sl::Dn));
+    CHECK_EQ(int(lst[Button::Back]), int(sl::Stop));    // the rest of the strip is untouched
+    CHECK_EQ(int(lst[Button::Ok]), int(sl::Start));
+    CHECK_EQ(sizeof(Strip), 4u);
+}
+
 int main() {
+    test_pool();
     test_vocabulary();
     test_label_text();
     test_nav_labels();

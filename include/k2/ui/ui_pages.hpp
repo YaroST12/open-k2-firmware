@@ -214,7 +214,7 @@ public:
     virtual void draw_static() = 0;                 // clear-screen layout: title, headers, fields
     virtual void update(uint32_t now_ms) = 0;       // refresh what changed (also the list rows)
     virtual bool on_event(Event e) = 0;             // true = consumed
-    virtual PanelLabels labels() const = 0;         // what the four buttons do now
+    virtual Strip labels() const = 0;         // what the four buttons do now
     virtual void invalidate() = 0;                  // forget what is on screen (after a capture)
     // Copy the live counters the page shows (those that change while the UI is drawing, like the
     // USB stats) so that every draw of one frame sees one consistent set. Default: nothing live.
@@ -251,7 +251,7 @@ protected:
     bool back_event(Event e);
     // Short [+] / [-] scroll `lv` down / up one row; declined when the list does not overflow.
     bool scroll_event(ListView &lv, Event e, uint32_t now_ms = 0);
-    PanelLabels base_labels() const;
+    Strip base_labels() const;
 
     UiContext &ctx_;
     Page id_;
@@ -565,7 +565,7 @@ public:
     void draw_static() override;
     void update(uint32_t now_ms) override;
     bool on_event(Event e) override;
-    PanelLabels labels() const override;
+    Strip labels() const override;
     void invalidate() override;
     void leave() override { s_.leave(); }
     // Repaint hooks the session calls while this page is alive.
@@ -706,7 +706,7 @@ public:
     void draw_static() override;
     void update(uint32_t now_ms) override;
     bool on_event(Event e) override;
-    PanelLabels labels() const override;
+    Strip labels() const override;
     void invalidate() override;
 private:
     struct Frame;   // everything one update decides before it draws (ui_home.cpp)
@@ -772,7 +772,7 @@ public:
     void draw_static() override;
     void update(uint32_t now_ms) override;
     bool on_event(Event e) override { return back_event(e); }
-    PanelLabels labels() const override { return base_labels(); }
+    Strip labels() const override { return base_labels(); }
     void invalidate() override;
 private:
     void reset_cells();
@@ -816,7 +816,7 @@ public:
     void draw_static() override;
     void update(uint32_t now_ms) override;
     bool on_event(Event e) override;
-    PanelLabels labels() const override;
+    Strip labels() const override;
     void invalidate() override;
     void leave() override;
     ListState list_state() const { return ListState{}; }   // tabs, not a scrolling list
@@ -946,7 +946,7 @@ public:
     void draw_static() override;
     void update(uint32_t now_ms) override;
     bool on_event(Event e) override;
-    PanelLabels labels() const override;
+    Strip labels() const override;
     void invalidate() override;
     void leave() override;
     ListState list_state() const { return menu_.view == EmView::List && n_seqs_ > 0 ? ctx_.rows.state() : ListState{}; }
@@ -982,7 +982,7 @@ public:
     void draw_static() override;
     void update(uint32_t now_ms) override;
     bool on_event(Event e) override;
-    PanelLabels labels() const override;
+    Strip labels() const override;
     void invalidate() override;
     void sample() override;
     ListState list_state() const { return ListState{}; }
@@ -1014,7 +1014,7 @@ public:
     void draw_static() override;
     void update(uint32_t now_ms) override;
     bool on_event(Event e) override;
-    PanelLabels labels() const override;
+    Strip labels() const override;
     void invalidate() override;
     ListState list_state() const { return ListState{}; }
     static constexpr int kRows = memstat::kRows;
@@ -1032,7 +1032,7 @@ public:
     void draw_static() override;
     void update(uint32_t now_ms) override;
     bool on_event(Event e) override;
-    PanelLabels labels() const override;
+    Strip labels() const override;
     void invalidate() override;
     ListState list_state() const { return ListState{}; }   // fixed layout: nothing scrolls
 private:
@@ -1059,7 +1059,7 @@ public:
     void draw_static() override;
     void update(uint32_t now_ms) override;
     bool on_event(Event e) override;
-    PanelLabels labels() const override;
+    Strip labels() const override;
     void invalidate() override;
     ListState list_state() const { return ListState{}; }
     int count() const { return bench::kPlaces; }   // rows: the seven places
@@ -1099,7 +1099,7 @@ public:
     void draw_static() override;
     void update(uint32_t now_ms) override;
     bool on_event(Event e) override;
-    PanelLabels labels() const override;
+    Strip labels() const override;
     void invalidate() override;
     void sample() override;
     void leave() override;
@@ -1151,7 +1151,7 @@ public:
     void draw_static() override;
     void update(uint32_t now_ms) override;
     bool on_event(Event e) override;
-    PanelLabels labels() const override;
+    Strip labels() const override;
     void invalidate() override;
     void enter() override;
     void leave() override;
@@ -1195,7 +1195,7 @@ public:
     void draw_static() override;
     void update(uint32_t now_ms) override;
     bool on_event(Event e) override;
-    PanelLabels labels() const override;
+    Strip labels() const override;
     void invalidate() override;
 private:
     void paint_table(const CrView &v);
@@ -1216,7 +1216,7 @@ public:
     void draw_static() override;
     void update(uint32_t now_ms) override;
     bool on_event(Event e) override;
-    PanelLabels labels() const override;
+    Strip labels() const override;
     void invalidate() override { static_step_ = 0; ctx_.rows.invalidate(); foot_.invalidate(); id_.invalidate(); }
     ListState list_state() const { return ctx_.rows.state(); }
     int selected() const { return sel_; }
@@ -1244,7 +1244,7 @@ public:
     void draw_static() override;
     void update(uint32_t now_ms) override;
     bool on_event(Event e) override;
-    PanelLabels labels() const override;
+    Strip labels() const override;
     void invalidate() override { ctx_.rows.invalidate(); foot_.invalidate(); }
     ListState list_state() const { return {5, 5, 0}; }
 private:
@@ -1262,7 +1262,7 @@ public:
     void draw_static() override;
     void update(uint32_t now_ms) override;
     bool on_event(Event e) override;
-    PanelLabels labels() const override;
+    Strip labels() const override;
     void invalidate() override;
     void enter() override;
     int selected() const { return sel_; }
@@ -1284,7 +1284,7 @@ public:
     void draw_static() override;
     void update(uint32_t now_ms) override;
     bool on_event(Event e) override;
-    PanelLabels labels() const override;
+    Strip labels() const override;
     void invalidate() override { painted_ = false; }
     void enter() override;
     bool hides_strip() const override { return true; }    // the code covers the whole panel

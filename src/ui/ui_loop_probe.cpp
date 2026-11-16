@@ -381,20 +381,20 @@ bool LoopProbePage::on_event(Event e) {
     return false;
 }
 
-PanelLabels LoopProbePage::labels() const {
-    PanelLabels l = base_labels();
+Strip LoopProbePage::labels() const {
+    Strip l = base_labels();
     const bool live = runner_.running();
-    l.b[static_cast<int>(Button::Back)].shrt = live ? "Stop" : "Back";
-    l.b[static_cast<int>(Button::Minus)] = {"", "", "", false};
-    l.b[static_cast<int>(Button::Plus)] = {"", "", "", false};
-    const char *ok = live ? "" : confirm_until_ != 0 ? "Confirm" : "Start";
-    const char *share = !live && (ran_ || have_stored_) ? "Share" : "";
-    l.b[static_cast<int>(Button::Ok)] = {ok, share, "", false};
+    l[Button::Back] = live ? sl::Stop : sl::Back;
+    l[Button::Minus] = l[Button::Plus] = sl::None;
+    const bool share = !live && (ran_ || have_stored_);
+    if (live) l[Button::Ok] = sl::None;
+    else if (confirm_until_ != 0) l[Button::Ok] = share ? sl::ConfirmShare : sl::Confirm;
+    else l[Button::Ok] = share ? sl::StartShare : sl::Start;
 #if K2_HOST_REPORT
-    if (!live) l.b[static_cast<int>(Button::Minus)] = {host_view_ ? "Steps" : "Host", "", "", false};
+    if (!live) l[Button::Minus] = host_view_ ? sl::Steps : sl::Host;
     if (!live && host_view_) {
-        l.b[static_cast<int>(Button::Plus)] = {lph::hw::active() ? "Cancel" : host_confirm_until_ != 0 ? "Confirm" : "Arm", "", "", false};
-        l.b[static_cast<int>(Button::Ok)] = {"", "", "", false};
+        l[Button::Plus] = lph::hw::active() ? sl::Cancel : host_confirm_until_ != 0 ? sl::Confirm : sl::Arm;
+        l[Button::Ok] = sl::None;
     }
 #endif
     return l;
