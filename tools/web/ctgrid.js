@@ -256,7 +256,8 @@ var CtGrid = (function () {
       var st = steps.filter(function (s) { return s.alg === a && s.pos === pos && s.sweep; })[0];
       var pdo = (st && st.pdo) || (steps.filter(function (s) { return s.alg === a && s.pos === pos && s.pdo; })[0] || {}).pdo;
       var apdo = decodeApdo(pdo || 0);
-      return { st: st, text: apdo ? rangeText(sweepLo(apdo), sweepHi(apdo), apdo.ma) : "sweep" };
+      var parts = steps.filter(function (s) { return s.alg === a && s.pos === pos && s.sweep; });
+      return { st: st, parts: parts, text: apdo ? rangeText(sweepLo(apdo), sweepHi(apdo), apdo.ma) : "sweep" };
     }
     function sweepLo(apdo) { var lo = Math.ceil(apdo.lo / 20) * 20, hi = sweepHi(apdo); return hi < lo ? apdo.lo : lo; }
     function sweepHi(apdo) {
@@ -276,13 +277,24 @@ var CtGrid = (function () {
       }
       if (key.sweep) {
         row = begin("Sweep", key); row.pos = key.mv;
-        var sw = sweepRange(a, key.mv), st = sw.st, tone = !st ? "pending" : st.result === "skip" ? "skip" :
-                  st.result === "fail" ? "fail" : st.result === "pass" ? "pass" : "pending";
-        // A sweep that carries the fold caution is amber at any depth, never green (firmware sweep_row, 33ecb488: it reds only when the
-        // output failed to track BEFORE the fold by more than 300 mV, and the wire rows carry no per-point error, so the flag decides).
-        if (tone === "pass" && steps.some(function (s) { return s.sweep && s.alg === a && s.pos === key.mv && s.result === "pass" && s.reason === "output folds back"; })) tone = "partial";
-        chip(row, sw.text, tone, st ? [st] : [], st ? st.mv : 0);
-        if (st && tone === "skip") row.chips[0].tag = skipTag(st);
+        // A PPS sweep split at 5 V is two steps (from 5 V up, the part below) in ONE row: the chip reads them together, as the firmware
+        // sweep_row does. Pending while either part is pending or running, fail when either failed, skip only when every part skipped.
+        var sw = sweepRange(a, key.mv), st = sw.st, parts = sw.parts, tone = "pending", skipPart = null;
+        var isPending = false, failed = false, passed = false, folded = false;
+        parts.forEach(function (s) {
+          if (s.result === "pass") { passed = true; if (s.reason === "output folds back") folded = true; }
+          else if (s.result === "fail") failed = true;
+          else if (s.result === "skip") { if (!skipPart) skipPart = s; }
+          else isPending = true;
+        });
+        // Tone: the verdicts alone. The wire rows carry no per-point error (no worst_err, no track_err), so the web cannot grade a
+        // passing sweep by its error as the device does (green to 100 mV, amber above): a pass is green here, and amber only with the fold flag.
+        if (isPending) tone = "pending";
+        else if (failed) tone = "fail";
+        else if (passed) tone = folded ? "partial" : "pass";
+        else if (skipPart) tone = "skip";
+        chip(row, sw.text, tone, parts, st ? st.mv : 0);
+        if (skipPart && tone === "skip") row.chips[0].tag = skipTag(skipPart);
         return;
       }
       var legacy = !isPd(a);

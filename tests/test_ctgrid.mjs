@@ -137,6 +137,30 @@ test("a deep sweep that folds back is an amber chip, not a green one", () => {
   assert.deepEqual(lines([...base, S("pps", 5000, "fail", { pos: 7, pdo: 3248763456, detail: 161, sweep: true, reason: "output folds back" })], opts), ["PPS: 5-21V/3.2A:pass", "Sweep: 5-21V/3.2A:fail"]);
 });
 
+// A PPS sweep split at 5 V is two steps (the part from 5 V up, the part below it, PdLow) in ONE strip row. The firmware reads the
+// two together (sweep_row: Fail when either failed, Pending while either is pending, Skip only when every part skipped, amber when
+// either carries the fold caution); the web must not take the verdict of the first part alone.
+test("a split deep sweep is graded over both parts, a failure in the second half is red", () => {
+  const part = (result, extra) => S("pps", 5000, result, { pos: 7, pdo: 3248763456, detail: 161, sweep: true, ...extra });
+  const base = [S("pps", 5000, "pass", { pos: 7, pdo: 3248763456 }), S("pps", 21000, "pass", { pos: 7, pdo: 3248763456 })];
+  const opts = { fold: false, monitorMv: 36000 };
+  const sweep = (...parts) => lines([...base, ...parts], opts)[1];
+  assert.equal(sweep(part("pass"), part("fail", { reason: "output folds back" })), "Sweep: 5-21V/3.2A:fail");
+  assert.equal(sweep(part("pass"), part("fail")), "Sweep: 5-21V/3.2A:fail");
+  assert.equal(sweep(part("fail"), part("pass")), "Sweep: 5-21V/3.2A:fail");
+  assert.equal(sweep(part("pass"), part("pending")), "Sweep: 5-21V/3.2A:pending");
+  assert.equal(sweep(part("pass"), part("running")), "Sweep: 5-21V/3.2A:pending");
+  assert.equal(sweep(part("skip", { reason: "cable" }), part("pass")), "Sweep: 5-21V/3.2A:pass");
+  assert.equal(sweep(part("pass"), part("pass", { reason: "output folds back" })), "Sweep: 5-21V/3.2A:partial");
+  assert.equal(sweep(part("pass"), part("pass")), "Sweep: 5-21V/3.2A:pass");
+  // The tooltip names the part that failed, not the first part.
+  const cell = CtGrid.layout([...base, part("pass"), part("fail", { reason: "request failed" })], opts)[1].cells[0];
+  assert.match(cell.title, /fail \(request failed\)/);
+  // The running dot still sits on the one chip while the second part runs.
+  const run = CtGrid.layout([...base, part("pass"), part("running")], { ...opts, live: true, current: 3 });
+  assert.equal(run[1].cells[0].verdict, "running");
+});
+
 test("legacy levels roll the up and down steps into one cell; a ramp that stops fails its level", () => {
   const s = [S("qc3", 5000, "pass"), S("qc3", 9000, "pass"), S("qc3", 20000, "fail"), S("qc3", 9000, "pass", { cont: true })];
   assert.deepEqual(lines(s, { fold: false }), ["QC3: 5V:pass 9V:pass 20V:fail"]);
