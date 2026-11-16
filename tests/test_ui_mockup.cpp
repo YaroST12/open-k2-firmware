@@ -61,6 +61,31 @@ static void render(Ui& ui, uint32_t& t, const char* name) {
     dump(name);
 }
 
+// The Battery place: idle, a round trip charging (the running dot), the Bench with the run on its row, then done. Frames are
+// named <prefix>place_battery, <prefix>place_battery_charging, <prefix>bench_battery_running and <prefix>place_battery_done.
+static void battery_frames(Ui& ui, uint32_t& t, const char* prefix) {
+    namespace bt = battery;
+    const auto name = [&](const char* scene) { static char buf[64]; std::snprintf(buf, sizeof buf, "%s%s", prefix, scene); return buf; };
+    stub_battery_reset();
+    ui.goto_page(uint8_t(Page::Home), t); t += 100;
+    ui.open_place(bench::Place::Battery, t); render(ui, t, name("place_battery"));
+    uint32_t tb = t;   // the recorder's own clock: the pages after this one keep the UI's
+    bt::hw::service().start(bt::Mode::RoundTrip, bt::Wiring::SamePort, true);
+    for (int k = 0; k < 600; k++) bt::hw::poll(tb += 1000, true);
+    render(ui, t, name("place_battery_charging"));
+    ui.goto_page(uint8_t(Page::Tools), t); render(ui, t, name("bench_battery_running"));
+    bt::hw::service().rec().end_phase();
+    bt::hw::service().rec().next();
+    const int32_t ma = g_stub.pm.current_ma;
+    g_stub.pm.current_ma = -1500;   // same port: the bank's outflow runs backwards through the K2
+    for (int k = 0; k < 600; k++) bt::hw::poll(tb += 1000, true);
+    bt::hw::service().rec().finish();
+    bt::hw::poll(tb += 1000, true);
+    g_stub.pm.current_ma = ma;
+    ui.open_place(bench::Place::Battery, t); render(ui, t, name("place_battery_done"));
+    stub_battery_reset();
+}
+
 int main() {
     fixture();
     Ui ui;
@@ -101,27 +126,7 @@ int main() {
     for (int i = 0; i < 400 && ui.painting(); i++) ui.tick(t += 20);   // the identity and the list paint in budgeted steps
     render(ui, t, "place_k2");
     // The Battery place: idle, a round trip charging (the running dot), then done; the Bench with the run on its row.
-    stub_battery_reset();
-    ui.goto_page(uint8_t(Page::Home), t); t += 100;
-    ui.open_place(bench::Place::Battery, t); render(ui, t, "place_battery");
-    {
-        namespace bt = battery;
-        uint32_t tb = t;   // the recorder's own clock: the pages after this one keep the UI's
-        bt::hw::service().start(bt::Mode::RoundTrip, bt::Wiring::SamePort, true);
-        for (int k = 0; k < 600; k++) bt::hw::poll(tb += 1000, true);
-        render(ui, t, "place_battery_charging");
-        ui.goto_page(uint8_t(Page::Tools), t); render(ui, t, "bench_battery_running");
-        bt::hw::service().rec().end_phase();
-        bt::hw::service().rec().next();
-        const int32_t ma = g_stub.pm.current_ma;
-        g_stub.pm.current_ma = -1500;   // same port: the bank's outflow runs backwards through the K2
-        for (int k = 0; k < 600; k++) bt::hw::poll(tb += 1000, true);
-        bt::hw::service().rec().finish();
-        bt::hw::poll(tb += 1000, true);
-        g_stub.pm.current_ma = ma;
-        ui.open_place(bench::Place::Battery, t); render(ui, t, "place_battery_done");
-    }
-    stub_battery_reset();
+    battery_frames(ui, t, "");
 
     // The Cable tab of a cable that gave no identity, alone: a chip's pull-down on a CC line ("chip silent") versus none
     // ("no chip"), and the older / unprobed reading. Charger and contract are gone, as they are with the cable alone.
@@ -382,6 +387,41 @@ int main() {
     render(ui, t, "pd_source_diag_case1");
     g_stub.diag_report = {};
     g_stub.diag_state = 0;
+
+    // The README's Home, Numbers, Lines, Bench, Battery and Settings pictures (docs/img/ui, tools/panel2png.py --scale 2): one live
+    // session on a fresh Ui at rotation 3 - the 100 W charger's contract flowing, a healthy Black Box report, CC1 at the 3 A Rp level
+    // with D+/D- at 0 V, the PD fast-charge verdict - so no row says "no session" or "--" beside a live contract. Frames are
+    // named k2_mock_readme_*.
+    {
+        fixture();
+        pd::diag::Report healthy;
+        healthy.empty = false; healthy.power = pd::diag::kPowerOk;
+        g_stub.diag_report = healthy;
+        g_stub.diag_state = 1;
+        k2::adc::Reading rd{};
+        rd.cc1_mv = 1650; rd.cc2_mv = 0; rd.dp_mv = 0; rd.dm_mv = 0;
+        rd.temp = {325, true, true};
+        rd.mcu = {325, true, true};   // the Numbers Temp row reads the die sensor
+        g_stub.adc = rd;
+        g_stub.fc = k2::fastcharge::Protocol::Pd;
+        static Ui live;
+        live.init(0);
+        live.configure_rotation(false, 3);
+        uint32_t tl = 1000;
+        live.goto_page(uint8_t(Page::Home), tl); render(live, tl, "readme_home");
+        live.goto_page(uint8_t(Page::Detail), tl + 100); render(live, tl, "readme_numbers");
+        live.goto_page(uint8_t(Page::Lines), tl + 100); render(live, tl, "readme_lines");
+        battery_frames(live, tl, "readme_");
+        live.open_place(bench::Place::Battery, tl);   // the Bench cursor rests on the place last opened
+        live.goto_page(uint8_t(Page::Tools), tl + 100); render(live, tl, "readme_bench");
+        live.goto_page(uint8_t(Page::Home), tl + 100); tl += 100;
+        live.open_place(bench::Place::K2, tl);
+        for (int i = 0; i < 400 && live.painting(); i++) live.tick(tl += 20);
+        render(live, tl, "readme_place_k2");
+        g_stub.diag_report = {};
+        g_stub.diag_state = 0;
+        g_stub.adc.reset();
+    }
 
     printf("mockups dumped\n");
     return 0;

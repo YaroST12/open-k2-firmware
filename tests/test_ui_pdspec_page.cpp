@@ -326,6 +326,43 @@ void test_results_extremes() {
     ui.set_rotation(0, g_now);
 }
 
+// The README's PD Spec Check pictures (docs/img/ui/pdspec-*.png), rotation 3 (the button strip at the bottom): Setup, the run in
+// flight, and a finished run with every check at its limit. Writes $K2_DUMP/k2_readme_pdspec_<scene>.panel; without K2_DUMP it only
+// walks the scenes. A frame is taken once the page has stopped painting.
+void readme_dump(Ui &ui, const char *scene) {
+    for (int i = 0; i < 64 && ui.painting(); ++i) run(ui, 20);
+    CHECK_EQ(ui.painting(), false);
+    const char *dir = std::getenv("K2_DUMP");
+    if (!dir) return;
+    char path[160];
+    std::snprintf(path, sizeof path, "%s/k2_readme_pdspec_%s.panel", dir, scene);
+    if (FILE *f = std::fopen(path, "wb")) { std::fwrite(g_panel, 2, size_t(LCD_WIDTH) * LCD_HEIGHT, f); std::fclose(f); }
+}
+
+void test_readme_frames() {
+    fixture();
+    std::unique_ptr<Ui> h; Ui &ui = boot(h);
+    ui.set_rotation(3, g_now);
+    PdSpecPage &p = open(ui);
+    readme_dump(ui, "setup");
+    to_review(ui, 1u << int(sc::Family::Transitions));
+    press(ui, Button::Ok);
+    press(ui, Button::Ok);
+    run(ui, 200);
+    CHECK_EQ(int(p.stage()), int(PdSpecPage::Stage::Running));
+    readme_dump(ui, "running");
+    press(ui, Button::Back);
+    for (int i = 0; i < 100 && ui.pd_spec().running(); i++) run(ui, 200);
+    run(ui, 200);
+    CHECK_EQ(int(p.stage()), int(PdSpecPage::Stage::Results));
+    const sc::Engine *e = ui.pd_spec().engine();
+    CHECK_EQ(e != nullptr, true);
+    if (!e) return;
+    sc::EngineProbe::lay(*e, 1);   // every check passes at its limit
+    run(ui, 200);
+    readme_dump(ui, "results");
+}
+
 }  // namespace
 
 // Detail "Where": accept_time is shared by the fixed walk and the programmable sweep. A fixed pair has PDO indices (under 16); a
@@ -349,6 +386,7 @@ int main() {
     test_review_refusals();
     test_run_stop_results();
     test_results_extremes();
+    test_readme_frames();
     test_where_text();
     return test_report("test_ui_pdspec_page");
 }

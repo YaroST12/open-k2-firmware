@@ -1471,6 +1471,12 @@ static void test_a_voltage_fold_reads_as_a_caution() {
     CHECK_EQ(ui.charger_test_stage(), 6);
     top(ui, t); calm();
     dump_screen("fold_results");
+    const auto readme_rot3 = [&](const char* name) {   // the README's picture of the same screen, rotation 3 (the strip at the bottom)
+        ui.set_rotation(3, t); calm();
+        dump_screen(name);
+        ui.set_rotation(0, t); calm();
+    };
+    readme_rot3("readme_ct_caution");
     // The header: pass / caution / fail / skip; the caution cell is amber (four columns: the number only, behind its amber mark).
     StrBuf<8> n; n.put_u32(caution);
     check_text_at(kSmall, 26, n.view(), kCaution, kBg, 56 + 16);
@@ -1503,6 +1509,7 @@ static void test_a_voltage_fold_reads_as_a_caution() {
     CHECK_EQ(detail, true);
     if (!detail) return;
     dump_screen("fold_detail");
+    readme_rot3("readme_ct_caution_detail");
     // The long word and the long name ("PPS 7.14->11V") share the band: the word drops to the small font and nothing overlaps.
     check_text_at(kSmall, 32, "CAUTION", kOnPart, kPartFill, 32);
     char want[ctsweep::kFoldTextMax] = {};
@@ -1681,6 +1688,76 @@ static void test_step_label_gallery() {
         }
         for (const auto& s : ui.charger_test_results().steps())   // a Light run asks for nothing above 5 V
             CHECK_EQ(s.verdict == ct::Verdict::Pass || s.verdict == ct::Verdict::Fail ? s.mv <= 5000u : true, true);
+    }
+}
+// The README's charger-test pictures (docs/img/ui/ct-*.png), rotation 3 (the button strip at the bottom): an EPR-capable charger
+// (fixed 5/9/15/20 V, two PPS ranges, SPR AVS, EPR 28 V) behind a converter that follows every request up to the monitor's 36 V
+// ceiling, so a PD-only run is a clean pass. Writes $K2_DUMP/k2_readme_ct_<scene>.panel; without K2_DUMP it only walks the scenes.
+// (The caution frames come from test_a_voltage_fold_reads_as_a_caution.)
+static void test_readme_frames() {
+    constexpr uint32_t kOffer[] = {0x0001912C, 0x0002D12C, 0x0004B12C, 0x000641F4, 0xC0DC213C, 0xC1A42164, 0xE004B000, 0x0008C1F4};
+    const auto offer = [&] {
+        fixture();
+        g_stub.vbus_ceiling_mv = 36000;
+        g_stub.caps.num_pdos = 8; g_stub.caps.epr = true;
+        for (unsigned i = 0; i < 8; ++i) g_stub.caps.pdos[i] = pd::decode_pdo(kOffer[i]);
+    };
+    const auto shot = [](Ui& ui, const char* scene, uint32_t& t) {
+        for (int i = 0; i < 60 && ui.painting(); ++i) ui.tick(t += 20);
+        CHECK_EQ(ui.painting(), false);
+        char name[48]; std::snprintf(name, sizeof name, "readme_ct_%s", scene);
+        dump_screen(name);
+    };
+    {   // Medium (the default level): Review, armed, Running, Results, the Steps of the first PD line, one step's Detail
+        offer();
+        Ui ui; open(ui); ui.set_rotation(3, 1100);
+        move(ui, kPdRow); press(ui, Button::Ok);
+        press(ui, Button::Ok);
+        CHECK_EQ(ui.charger_test_stage(), 4);
+        uint32_t t = 1100;
+        shot(ui, "review", t);
+        start_press(ui, 1300);                      // the first OK arms: CONFIRM, the 5 s bar
+        shot(ui, "confirm", t);
+        press(ui, Button::Ok, 1400);
+        t = 1500;
+        for (; t <= 900000 && ui.charger_test_busy(); t += 100) {
+            ui.tick(t);
+            const auto& steps = ui.charger_test_results().steps();
+            if (ui.charger_test_stage() == 5 && steps.size() > 12 &&
+                std::count_if(steps.begin(), steps.end(), [](const ct::Step& s) { return s.verdict > ct::Verdict::Running; }) >= 8) break;
+        }
+        CHECK_EQ(ui.charger_test_stage(), 5);
+        shot(ui, "running", t);
+        for (; t <= 900000 && ui.charger_test_busy(); t += 100) ui.tick(t);
+        CHECK_EQ(ui.charger_test_stage(), 6);
+        ui.tick(t); t += 200; ui.tick(t); t += 200;
+        shot(ui, "results", t);
+        for (const auto& s : ui.charger_test_results().steps())   // a clean run: no failure anywhere
+            CHECK_EQ(s.verdict == ct::Verdict::Fail, false);
+        for (unsigned k = 0; k < 10; ++k) {
+            top(ui, t); move(ui, k, t); press(ui, Button::Ok, t);
+            if (ui.charger_test_stage() != 7) { CHECK_EQ(ui.charger_test_stage(), 6); continue; }
+            ui.tick(t); t += 200;
+            const auto& steps = ui.charger_test_results().steps();
+            if (steps.size() < 12 || steps[0].group != ct::Group::Pd) { press(ui, Button::Back, t); continue; }
+            shot(ui, "steps", t);
+            press(ui, Button::Plus, t); press(ui, Button::Ok, t); ui.tick(t); t += 200;
+            CHECK_EQ(ui.charger_test_stage(), 8);
+            shot(ui, "detail", t);
+            break;
+        }
+    }
+    {   // Light: the Results grid with the Advertised cells (nothing above 5 V was asked for)
+        offer();
+        Ui ui; open(ui); ui.set_rotation(3, 1100);
+        CHECK_EQ(ui.charger_test_set_level(uint8_t(ct::Level::Light)), true);
+        move(ui, kPdRow); press(ui, Button::Ok); press(ui, Button::Ok);
+        CHECK_EQ(ui.charger_test_stage(), 4);
+        start_press(ui, 1300); press(ui, Button::Ok, 1400);
+        uint32_t t = 1500;
+        for (; t <= 900000 && ui.charger_test_busy(); t += 100) ui.tick(t);
+        CHECK_EQ(ui.charger_test_stage(), 6);
+        shot(ui, "light", t);
     }
 }
 // A UFCS unit planned from the charger's Output_Capabilities: the Results grid and the Detail page say the current each mode
@@ -4647,6 +4724,7 @@ int main() {
     test_a_capped_range_reads_amber_and_says_how_far_it_got();
     test_steps_rows_show_whole_labels();
     test_step_label_gallery();
+    test_readme_frames();
     test_ufcs_results_and_detail_show_the_mode_current();
     test_results_best_line_names_the_best_modes();
     test_results_grid_is_frozen_at_run_end();
