@@ -42,15 +42,20 @@ Summary summarize(std::span<const int16_t> a, unsigned a_lo_mv, std::span<const 
         const int measured = e + int(set);
         if (i == 0 || e < s.min_err) s.min_err = int16_t(e);
         if (i == 0 || e > s.max_err) s.max_err = int16_t(e);
+        // The fold rule runs before this point's own worst-error update, so the worst |err| held at the onset is the one over the
+        // points BEFORE it (track_err_mv) without a per-point max: that update is the rare branch, the loop stays as it was.
+        track.feed(int(set), measured);
+        if (!fold_at && track.kind() == pd::Track::Fold) {   // a break is not a fold: it names no level
+            fold_at = i;
+            s.track_err_mv = uint16_t(std::max(worst_abs, 0));   // the points before the onset: how it tracked
+        }
         if (std::abs(e) > worst_abs) { worst_abs = std::abs(e); s.worst_err = int16_t(e); s.worst_mv = uint16_t(set); }
         if (i == 0 || measured > s.peak_mv) { s.peak_mv = uint16_t(measured); s.peak_at_mv = uint16_t(set); }
-        track.feed(int(set), measured);
-        if (!fold_at && track.kind() == pd::Track::Fold) fold_at = i;   // a break is not a fold: it names no level
-        if (!fold_at) s.track_err_mv = std::max(s.track_err_mv, uint16_t(std::abs(e)));   // the points before the onset: how it tracked
         // A point outside the row's band (the PPS band is one-sided: within 5 % / 100 mV below, the ceiling above) was
         // steady and recorded; the summary says so, the strip colours it.
         if (out_of_band(set, measured)) s.out_of_band = true;
     }
+    if (!fold_at) s.track_err_mv = uint16_t(worst_abs);   // no fold: every point is tracking
     if (fold_at) {   // at 100 mV steps the rule can only name a fold; a break needs a gap in the points (the two parts of a split sweep)
         s.fold_from_mv = uint16_t(set_at(fold_at));
         int low = 0;
