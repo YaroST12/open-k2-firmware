@@ -58,21 +58,26 @@ void put_value(StrBuf<N>& s, sc::Unit u, std::int32_t v) {
     }
 }
 
-// The limit the engine judged against (the aggregate keeps the bounds).
+// The limit a check was judged against, from its bounds in the check's unit.
 template <std::size_t N>
-void put_limit(StrBuf<N>& s, const sc::CheckDef& d, const sc::Agg& a) {
+void put_limit(StrBuf<N>& s, const sc::CheckDef& d, std::int32_t lo, std::int32_t hi) {
     switch (d.kind) {
-        case sc::Kind::Max: s.put("max "); put_value(s, d.unit, a.hi); return;
-        case sc::Kind::Min: s.put("min "); put_value(s, d.unit, a.lo); return;
+        case sc::Kind::Max: s.put("max "); put_value(s, d.unit, hi); return;
+        case sc::Kind::Min: s.put("min "); put_value(s, d.unit, lo); return;
         case sc::Kind::Range:
             // One open side (an overshoot): only the bound that applies.
-            if (a.lo <= -sc::kOpenLimit) { s.put("max "); put_value(s, d.unit, a.hi); return; }
-            if (a.hi >= sc::kOpenLimit) { s.put("min "); put_value(s, d.unit, a.lo); return; }
-            put_value(s, d.unit, a.lo);
+            if (lo <= -sc::kOpenLimit) { s.put("max "); put_value(s, d.unit, hi); return; }
+            if (hi >= sc::kOpenLimit) { s.put("min "); put_value(s, d.unit, lo); return; }
+            put_value(s, d.unit, lo);
             s.put_char('-');
-            put_value(s, d.unit, a.hi);
+            put_value(s, d.unit, hi);
             return;
     }
+}
+// The limit the cell kept (live and restored alike).
+template <std::size_t N>
+void put_limit(StrBuf<N>& s, const sc::CheckDef& d, const specsec::Cell& c) {
+    put_limit(s, d, specsec::dequantize_limit(d.unit, c.lo, false), specsec::dequantize_limit(d.unit, c.hi, true));
 }
 
 // Where the worst measurement happened (the aggregate's a / b, result.hpp "where"). false = no object ("the source").
@@ -121,9 +126,9 @@ kit::Verdict cell_view(int check, const specsec::Cell& c, StrBuf<N>& text, std::
     return kit::Verdict::None;
 }
 
-// One Detail row. `a` is the engine's aggregate of the same run when it is still the one this cell came from (the live run), else
-// null: then the limit, the count and the place, which the cell does not keep, read a dim "-".
-inline void detail_value(int row, int check, const specsec::Cell& c, const sc::Agg* a, StrBuf<20>& s, std::uint16_t& color) {
+// One Detail row. The limit, the count and the place come from the cell (live run and journal resume alike); a cell restored from a
+// journal written before the detail record has none (n = 0) and reads a dim "-".
+inline void detail_value(int row, int check, const specsec::Cell& c, StrBuf<20>& s, std::uint16_t& color) {
     color = kText;
     const sc::CheckDef& d = sc::kDefs[static_cast<std::size_t>(check)];
     const sc::Verdict v = c.verdict();
@@ -144,18 +149,18 @@ inline void detail_value(int row, int check, const specsec::Cell& c, const sc::A
             else { s.put(sc::skip_name(c.skip())); color = kDim; }
             return;
         case 2:
-            if (measured && a && a->n) put_limit(s, d, *a);
+            if (measured && c.detailed()) put_limit(s, d, c);
             else { s.put(measured ? "-" : "not judged"); color = kDim; }
             return;
         case 3:
-            if (a && measured) s.put_u32(a->n);
+            if (c.detailed()) s.put_u32(c.n);
             else { s.put(measured ? "-" : "0"); if (measured) color = kDim; }
             return;
         case 4: s.put_u32(c.fails); color = c.fails && judged ? kCaution : kText; return;
         case 5:
             if (!measured) { s.put("none"); color = kDim; return; }
-            if (!a) { s.put("-"); color = kDim; return; }
-            if (!put_where(check, a->a, a->b, s)) color = kDim;
+            if (!c.detailed()) { s.put("-"); color = kDim; return; }
+            if (!put_where(check, c.a, c.b, s)) color = kDim;
             return;
         case 6: {
             const std::uint32_t pts = judged ? static_cast<std::uint32_t>(d.weight) * c.fails : 0;

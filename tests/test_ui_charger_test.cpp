@@ -1528,7 +1528,7 @@ static void test_the_spec_detail_shows_the_limit_while_the_engine_holds_the_run(
     dump_screen("spec_detail_live");
     const pdspec::Agg& a = e->agg()[static_cast<size_t>(specsec::kOrder[static_cast<size_t>(k)])];
     StrBuf<20> lim, cnt;
-    spectext::put_limit(lim, pdspec::kDefs[static_cast<size_t>(specsec::kOrder[static_cast<size_t>(k)])], a);
+    spectext::put_limit(lim, pdspec::kDefs[static_cast<size_t>(specsec::kOrder[static_cast<size_t>(k)])], a.lo, a.hi);   // the engine's own bounds
     cnt.put_u32(a.n);
     const int row_y = [&](int row) { return kit::kBodyY + row * kit::kRowH + kit::row_text_y(kit::kRowH, kSmall.height); }(2);
     check_text_at(kSmall, row_y, lim.view(), kText, kBg, kit::kKvValueX);                                  // Limit: the engine's bound

@@ -27,6 +27,7 @@ PS_BITS = [(1, "Not_Supported"), (2, "no answer"), (4, "voltage"), (8, "current"
 NEVER = 99999999        # pdspec::kNever: an event that never came
 OPEN = 1000000          # pdspec::kOpenLimit: the open side of a one-sided Range limit
 SEC_HEADER, SEC_CELL = 3, 4   # specsec::kWireBytes = 3 + 4 per cell
+SEC_DETAIL_CELL = 8           # specsec::kDetailBytes = 8 per cell: limit lo(2) hi(2), count(2), a, b
 NOT_SEEN16 = 0xFFFF
 NOT_SEEN32 = 0xFFFFFFFF
 STATES = ["idle", "running", "finished"]          # PdSpecSession::State (the status block and the blob header)
@@ -107,18 +108,24 @@ def section_tables():
          "ends": [re.sub(r"(?<!^)(?=[A-Z])", " ", n).lower() for n in _enum_names(text, "End")],
          "steps": {"us": int(step.group(1)), "mv": int(step.group(2)), "ms": int(step.group(3))},
          "unseen": int(re.search(r"kUnseen\s*=\s*(\d+)", text).group(1)),
-         "wire_bytes": SEC_HEADER + SEC_CELL * len(order)}
+         "wire_bytes": SEC_HEADER + SEC_CELL * len(order),
+         "detail_bytes": SEC_DETAIL_CELL * len(order)}
     _cache["s"] = s
     return s
 
 
-def decode_section(b):
+def decode_section(b, detail=None):
     """The charger test's PD spec section (specsec::to_wire: end, why, flags, then code, fails and the quantized worst value per cell)
-    as a dict: how the stage ended, the tally and one entry per check in grid order. Raises ValueError on a wrong size or value."""
+    as a dict: how the stage ended, the tally and one entry per check in grid order. `detail` is the second form
+    (specsec::to_detail_wire: limit lo, hi, count, a, b per cell, the remote read 0x0B [7, off]): each measured cell then carries
+    limit_text, count and at_text ("-" / None for a cell the device kept no detail for: a journal from before it). Raises ValueError
+    on a wrong size or value."""
     s, t = section_tables(), load_tables()
     b = bytes(b)
     if len(b) != s["wire_bytes"]:
         raise ValueError(f"PD spec section is {len(b)} bytes, expected {s['wire_bytes']}")
+    if detail is not None and len(detail) != s["detail_bytes"]:
+        raise ValueError(f"PD spec detail is {len(detail)} bytes, expected {s['detail_bytes']}")
     end, why, flags = b[0], b[1], b[2]
     if end >= len(s["ends"]) or flags & ~1:
         raise ValueError("not a PD spec section (end or flags out of range)")
@@ -135,10 +142,31 @@ def decode_section(b):
         measured = name not in ("pending", "skip")
         value = None if not measured else NEVER if raw == s["unseen"] else raw * s["steps"][d["unit"]] if d["unit"] in s["steps"] else raw
         text = "-" if value is None else ps_text(value) if d["key"] == "pps_status" and value < NEVER else fmt_value(d["unit"], value)
-        cells.append({"key": d["key"], "label": d["label"], "unit": d["unit"], "verdict": name,
-                      "skip": t["skips"][skip] if name == "skip" else None, "fails": fails, "value": value, "value_text": text})
+        cell = {"key": d["key"], "label": d["label"], "unit": d["unit"], "verdict": name,
+                "skip": t["skips"][skip] if name == "skip" else None, "fails": fails, "value": value, "value_text": text}
+        if detail is not None:
+            cell.update(_detail_of(s, t, d, measured, detail, i))
+        cells.append(cell)
     tally = {v: sum(1 for c in cells if c["verdict"] == v) for v in ("pass", "fail", "skip", "unverified", "pending")}
-    return {"end": end_name, "why": why_text, "unconfirmed": bool(flags & 1), "tally": tally, "cells": cells}
+    return {"end": end_name, "why": why_text, "unconfirmed": bool(flags & 1), "tally": tally, "cells": cells,
+            "detailed": detail is not None and any(c["count"] for c in cells)}
+
+
+def _detail_of(s, t, d, measured, detail, i):
+    """The limit, count and place of grid cell i from the detail form: the device's own readings, as its detail page shows them.
+    A measured cell with count 0 has none kept (a journal from before the detail record); a cell nothing measured has none to show."""
+    lo, hi, n, a, b = struct.unpack_from("<hhHBB", detail, SEC_DETAIL_CELL * i)
+    none = {"count": n, "limit": None, "limit_text": None, "at_text": None}
+    if not measured or not n:
+        return none
+    def side(raw, high):
+        if raw == s["unseen"]:
+            return OPEN if high else -OPEN
+        return raw * s["steps"][d["unit"]] if d["unit"] in s["steps"] else raw
+    lim = {"kind": d["kind"], "unit": d["unit"], "lo": side(lo, False), "hi": side(hi, True)}
+    k = next(j for j, x in enumerate(t["checks"]) if x["key"] == d["key"])
+    return {"count": n, "limit": [lim["lo"], lim["hi"]], "limit_text": fmt_limit(lim),
+            "at_text": fmt_at(k, {"key": d["key"], "a": a, "b": b})}
 
 
 def _name(lst, i):

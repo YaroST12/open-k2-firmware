@@ -16,6 +16,9 @@
 //   /jr/mt.rec      Meta    (unit order, unattended flag, cable identity of the run)
 //   /jr/at.rec      Attempt (which unit lost power how many times)
 //   /jr/sp.rec      Spec    (the PD spec stage's result: end, why, the cells; written once, when the stage ends)
+//   /jr/spd.rec     SpecDetail (the cells' limit, count and place; written right behind sp.rec. A journal without it still loads:
+//                   those cells read n = 0 and the detail page shows "-". The format byte stays 3 for that reason: the record is
+//                   additive and sp.rec is unchanged, so an older firmware reads the newer journal and the other way round)
 //   /jr/fin.rec     Finish  (the run ended: Done, Stopped or abandoned)
 // A section file: 8 bytes (id, row count, layout hash u32, crc16 over the whole file but these two bytes) then 18 bytes per
 // row (the plan row and its result). Rows are addressed by (section, ordinal): the n-th row of the plan that belongs to the
@@ -34,8 +37,9 @@
 // the wrong addresses, and a "last good copy" would need a second copy of every section (flash and a second consistency
 // story). The one window is the gap between a section file replaced and the header that names its new hash and order (one
 // flash write, tens of ms); it is the only way a clean power cut loses a run, and it is reported, never mis-read.
-// Format 2 (sections, the order re-derived at replay), format 1 (one file per row, header payload 30) and any other format
-// byte are Problem::OldFormat: dropped at boot, never read.
+// Format 4 = format 3 plus the optional /jr/spd.rec (spec cell limit, count, place); the header layout is the same, so a
+// format 3 journal is read as it is. Format 2 (sections, the order re-derived at replay), format 1 (one file per row, header
+// payload 30) and any other format byte are Problem::OldFormat: dropped at boot, never read.
 //
 // Order of an arm: header dropped FIRST (a cut during the rest leaves no run at all), stale files swept, every section
 // written, the header LAST. Replay order: header, sections, phase (void unless it still names a pending row), resume, meta,
@@ -60,10 +64,11 @@ namespace k2::charger_journal {
 inline constexpr std::uint8_t kMagic = 0xA5;
 inline constexpr const char* kDir = "/jr";
 inline constexpr const char* kHeaderPath = "/jr/h.rec";
-inline constexpr std::uint8_t kFormat = 3;
+inline constexpr std::uint8_t kFormat = 4;       // 4: the spec cells' limit, count and place ride in /jr/spd.rec
+inline constexpr std::uint8_t kMinFormat = 3;    // a format 3 journal (no spd.rec) still loads: its detail reads "-"
 
 // Type::Step is the format 1 record (one row per file); nothing writes it any more.
-enum class Type : std::uint8_t { Header = 1, Step = 2, Phase = 3, Finish = 4, Resume = 5, Meta = 6, Attempt = 7, Spec = 8 };
+enum class Type : std::uint8_t { Header = 1, Step = 2, Phase = 3, Finish = 4, Resume = 5, Meta = 6, Attempt = 7, Spec = 8, SpecDetail = 9 };
 using Phase = charger_test::Phase;
 enum class Err : std::uint8_t { Ok, TooBig, Flash, Broken };
 
@@ -77,13 +82,17 @@ inline constexpr std::size_t kOrderBytes = charger_test::kMaxSteps;   // the pla
 inline constexpr std::size_t kHeaderPayload = kHeaderBase + kOrderBytes, kPhasePayload = 10, kFinishPayload = 2, kResumePayload = 2;
 inline constexpr std::size_t kMetaPayload = 24, kAttemptPayload = 4;
 inline constexpr std::size_t kSpecPayload = (specsec::kWireBytes + 1) & ~std::size_t(1);   // the wire form, padded to an even length
+inline constexpr std::size_t kSpecDetailPayload = specsec::kDetailBytes;                      // 8 bytes per cell, already even
 inline constexpr std::size_t kRecordOverhead = 6;
 inline constexpr std::size_t kMaxRecord = kRecordOverhead + kHeaderPayload;
+inline constexpr std::size_t kSpecDetailRecord = kRecordOverhead + kSpecDetailPayload;   // the spec detail is the one record larger than the header
+inline constexpr std::size_t kReadRecord = kSpecDetailRecord > kMaxRecord ? kSpecDetailRecord : kMaxRecord;   // what a read buffer holds
 inline constexpr std::size_t kOldHeaderPayload = 30;
 inline constexpr std::size_t kSecHeader = 8, kRowBytes = 18;
 static_assert(kMetaPayload <= kHeaderPayload && charger_test::kMaxUnits == 16, "the meta record is sized for 16 units");
 static_assert(charger_test::kMaxSteps < 255, "a section header counts rows in a byte");
 static_assert(kSpecPayload <= kHeaderPayload && kSpecPayload <= 254, "the spec record fits a header-sized buffer");
+static_assert(kSpecDetailPayload <= 254 && kSpecDetailPayload % 2 == 0, "the spec detail record is one even length byte; it is the largest record, so a read takes kReadRecord");
 static_assert(kHeaderPayload <= 254 && kHeaderPayload % 2 == 0, "a record payload length is one even byte");
 static_assert(kSecHeader + kRowBytes * charger_test::kMaxSteps <= fs::kBlockSize - 8, "a section is at most one block");
 
@@ -279,6 +288,14 @@ inline std::size_t encode_spec(std::span<std::uint8_t> out, const specsec::Resul
     return finish_record(out, Type::Spec, kSpecPayload);
 }
 
+inline std::size_t encode_spec_detail(std::span<std::uint8_t> out, const specsec::Result& s) {
+    std::array<std::uint8_t, specsec::kDetailBytes> w{};
+    specsec::to_detail_wire(s, w);
+    std::uint8_t* p = out.data() + 4;
+    std::memcpy(p, w.data(), w.size());
+    return finish_record(out, Type::SpecDetail, kSpecDetailPayload);
+}
+
 // Folds one valid small record (resume, meta, attempt, finish, spec) into the replay state. Header, rows and the phase marker need the
 // sections and are handled by Journal::replay.
 inline void apply(Replay& r, Type t, std::span<const std::uint8_t> p) {
@@ -304,6 +321,9 @@ inline void apply(Replay& r, Type t, std::span<const std::uint8_t> p) {
         break;
     case Type::Spec:   // a record of another version or a damaged one leaves the stage NotRun
         if (r.found && p.size() == kSpecPayload && p[specsec::kWireBytes] == 0) specsec::from_wire(p.data(), specsec::kWireBytes, r.evidence.spec);
+        break;
+    case Type::SpecDetail:   // only on a stage the sp.rec brought back (it is read first); else ignored
+        if (r.found && r.evidence.spec.end != specsec::End::NotRun && p.size() == kSpecDetailPayload) specsec::from_detail_wire(p.data(), p.size(), r.evidence.spec);
         break;
     case Type::Finish:
         if (r.found) { r.unfinished = false; r.phase = Phase::None; }
@@ -405,7 +425,7 @@ public:
     // Rebuilds the last run from the files.
     void replay(Replay& r) const {
         reset(r);
-        std::array<std::uint8_t, kMaxRecord> b{};
+        std::array<std::uint8_t, kReadRecord> b{};
         std::size_t n = 0;
         const fs::Err he = fs_.read_file(kHeaderPath, b, n);
         if (he != fs::Err::Ok) {
@@ -437,6 +457,7 @@ public:
         read_small("/jr/rs.rec", b, r);
         read_small("/jr/at.rec", b, r);
         read_small("/jr/sp.rec", b, r);
+        read_small("/jr/spd.rec", b, r);   // behind sp.rec: it folds into the cells that record brought back
         read_small("/jr/fin.rec", b, r);
         conclude(r);
     }
@@ -485,7 +506,7 @@ public:
             dirty_ |= kOrderBit, plan_dirty_ |= kOrderBit;
     }
     // The PD spec stage ended: Evidence::spec is written by a later pump() (one small record, behind any section or header write).
-    void note_spec() { if (live()) dirty_ |= kSpecBit; }
+    void note_spec() { if (live()) dirty_ |= kSpecBit | kSpecDetailBit; }
     // The journal now mirrors a run read back at boot (its sections are on flash as read): later changes are written as changes.
     void adopt(const Replay& r) {
         forget();
@@ -582,6 +603,11 @@ public:
         std::array<std::uint8_t, kMaxRecord> buf{};
         return put("/jr/sp.rec", {buf.data(), encode_spec(buf, s)});
     }
+    // The detail of the same result (limit, count and place per cell): its own file, written by the pump right behind sp.rec.
+    Err spec_detail(const specsec::Result& s) {
+        std::array<std::uint8_t, kSpecDetailRecord> buf{};
+        return put("/jr/spd.rec", {buf.data(), encode_spec_detail(buf, s)});
+    }
     // Closes the run: the next boot does not resume it, whatever its rows say. Tried even after an earlier write failed (broken_):
     // a lost record must not keep a run that ended open for ever (it would come back on every boot).
     Err finish(std::uint8_t state, std::uint8_t reason) {
@@ -594,7 +620,7 @@ private:
     static constexpr std::uint16_t kUnknown = 0xFFFF;
     enum class Stage : std::uint8_t { Idle, Mkdir, DropHeader, Sweep, Sections, Header, Late };
     static constexpr std::uint8_t bit(Section s) { return std::uint8_t(1u << unsigned(s)); }
-    static constexpr std::uint8_t kSectionMask = 0x1F, kOrderBit = 0x20, kSpecBit = 0x40;   // dirty_ bits: one per section, "the header's plan order is stale", "the spec result is to be written"
+    static constexpr std::uint8_t kSectionMask = 0x1F, kOrderBit = 0x20, kSpecBit = 0x40, kSpecDetailBit = 0x80;   // dirty_ bits: one per section, "the header's plan order is stale", "the spec result is to be written", "and its detail"
     bool live() const { return armed_ || stage_ != Stage::Idle; }
     void forget() {
         armed_ = false; dirty_ = plan_dirty_ = 0;
@@ -618,6 +644,7 @@ private:
         Err x = write_dirty(steps, did);
         if (x == Err::Ok && !did && header_stale()) x = write_header(run_id, o, e, steps);
         else if (x == Err::Ok && !did && (dirty_ & kSpecBit)) { dirty_ &= std::uint8_t(~kSpecBit); x = spec(e.spec); }
+        else if (x == Err::Ok && !did && (dirty_ & kSpecDetailBit)) { dirty_ &= std::uint8_t(~kSpecDetailBit); x = spec_detail(e.spec); }
         if (x != Err::Ok) dirty_ = plan_dirty_ = 0;   // nothing more is tried on a failed volume
         return x;
     }
@@ -722,13 +749,13 @@ private:
     }
 
     // ---- reading
-    // The header record: format and counts. OldFormat for format 1 (payload 30) and any format byte that is not ours.
+    // The header record: format and counts. OldFormat for format 1 (payload 30) and any format byte outside kMinFormat..kFormat.
     static Problem parse_header(std::span<const std::uint8_t> img, Replay& r, SectionInfo& si) {
         using namespace charger_test;
         std::span<const std::uint8_t> pl;
         scan(img, [&](Type t, std::span<const std::uint8_t> p) { if (t == Type::Header && pl.empty()) pl = p; });
         if (pl.empty()) return Problem::None;   // torn or blank: no run
-        if (pl.size() == kOldHeaderPayload || pl.size() != kHeaderPayload || pl[8] != kFormat) return Problem::OldFormat;
+        if (pl.size() == kOldHeaderPayload || pl.size() != kHeaderPayload || pl[8] < kMinFormat || pl[8] > kFormat) return Problem::OldFormat;
         const std::uint8_t* p = pl.data();
         r.found = true; r.run_id = detail::get32(p);
         r.options.selected = detail::get32(p + 4);
@@ -802,7 +829,7 @@ private:
             r.phase_index = base[sec] + ord;
         });
     }
-    bool read_small(const char* path, std::array<std::uint8_t, kMaxRecord>& b, Replay& r) const {
+    bool read_small(const char* path, std::array<std::uint8_t, kReadRecord>& b, Replay& r) const {
         std::size_t n = 0;
         if (fs_.read_file(path, b, n) != fs::Err::Ok || n < 4) return false;
         bool any = false;

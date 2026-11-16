@@ -422,8 +422,10 @@ var CtGrid = (function () {
         verdict = c.fails ? "fail" : "pass";
       }
       var word = c.verdict === "unverified" ? "unverified" : verdict === "none" ? "" : verdict === "skip" ? "skipped" : verdict;
+      // The detail the device kept (limit, count, place; the second wire form): the same three the detail page shows, in the title.
+      var kept = c.limit_text ? " · limit " + c.limit_text + " · " + c.count + " measured" + (c.at_text ? " · " + c.at_text : "") : "";
       return { label: c.short || c.label, section: !!c.section,
-               cells: [{ verdict: verdict, label: label, current: "", title: c.label + (word ? ": " + word : "") + (label && verdict !== "skip" ? " (" + label + ")" : "") }] };
+               cells: [{ verdict: verdict, label: label, current: "", title: c.label + (word ? ": " + word : "") + (label && verdict !== "skip" ? " (" + label + ")" : "") + kept }] };
     });
   }
 

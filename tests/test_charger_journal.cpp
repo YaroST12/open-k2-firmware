@@ -487,7 +487,15 @@ static void test_meta_and_attempt_roundtrip() {
 static specsec::Result spec_result() {
     specsec::Result s;
     s.end = specsec::End::Done; s.why = 0; s.unconfirmed = true;
-    for (size_t i = 0; i < specsec::kCells; ++i) s.cells[i] = {uint8_t(i % 5), uint8_t(i % 3), int16_t(int(i) * 37 - 400)};
+    for (size_t i = 0; i < specsec::kCells; ++i)
+        s.cells[i] = {uint8_t(i % 5), uint8_t(i % 3), int16_t(int(i) * 37 - 400), int16_t(int(i) * 11 - 90),
+                      i % 4 == 0 ? specsec::kUnseen : int16_t(int(i) * 53 + 7), uint16_t(300 * i + 1), uint8_t(0x90 + i), uint8_t(i * 7)};
+    return s;
+}
+// The same result as a journal written before the detail record held it: the cells without limit, count and place.
+static specsec::Result spec_result_without_detail() {
+    specsec::Result s = spec_result();
+    for (auto& c : s.cells) { c.lo = c.hi = 0; c.n = 0; c.a = c.b = 0; }
     return s;
 }
 static void test_the_spec_result_rides_in_its_own_record() {
@@ -497,14 +505,16 @@ static void test_the_spec_result_rides_in_its_own_record() {
     CHECK_EQ(int(r.evidence.spec.end), int(specsec::End::NotRun));   // an older run, or a run without the stage
     const specsec::Result s = spec_result();
     CHECK_EQ(int(v.j->spec(s)), 0);
+    CHECK_EQ(int(v.j->spec_detail(s)), 0);
     v.reboot(); v.j->replay(r);
     CHECK_EQ(r.found, true);
-    CHECK_EQ(r.evidence.spec.same(s), true);
+    CHECK_EQ(r.evidence.spec.same(s), true);   // the limit, the count and the place included: what the live run showed
     CHECK_EQ(r.evidence.spec.unconfirmed, true);
     CHECK_EQ(int(r.evidence.spec.end), int(specsec::End::Done));
     // A newer write replaces the older.
     specsec::Result t = s; t.end = specsec::End::Cancelled; t.unconfirmed = false;
     CHECK_EQ(int(v.j->spec(t)), 0);
+    CHECK_EQ(int(v.j->spec_detail(t)), 0);
     v.reboot(); v.j->replay(r);
     CHECK_EQ(int(r.evidence.spec.end), int(specsec::End::Cancelled)); CHECK_EQ(r.evidence.spec.unconfirmed, false);
     // The record does not grow the header or any section: the plan's files stay as they were.
@@ -525,11 +535,68 @@ static void test_a_damaged_spec_record_reads_as_not_run() {
         CHECK_EQ(r.found, true); CHECK_EQ(int(r.evidence.spec.end), int(specsec::End::NotRun));
     }
 }
+// A journal written before the detail record (sp.rec alone) still loads: verdicts, fails and worst values, no limit, count or place.
+static void test_a_journal_without_the_detail_record_still_loads() {
+    Vol v; cj::Replay r;
+    arm(v, plan(4));
+    CHECK_EQ(int(v.j->spec(spec_result())), 0);
+    v.reboot(); v.j->replay(r);
+    CHECK_EQ(r.found, true);
+    CHECK_EQ(r.evidence.spec.same(spec_result_without_detail()), true);
+    for (const auto& c : r.evidence.spec.cells) CHECK_EQ(c.detailed(), false);
+}
+// A damaged detail record, or one with no sp.rec behind it, changes nothing: the stage reads what sp.rec says, or stays NotRun.
+// A format 3 journal (the header byte 3, no spd.rec) resumes on this firmware; its cells read "-". The next header this firmware
+// writes says 4; a format byte above ours is still dropped.
+static void test_a_format_3_journal_resumes_with_no_detail() {
+    Vol v; cj::Replay r;
+    arm(v, plan(4));
+    CHECK_EQ(int(v.j->spec(spec_result())), 0);
+    std::array<uint8_t, cj::kMaxRecord> b{};
+    std::size_t n = 0;
+    CHECK_EQ(int(v.fs->read_file(cj::kHeaderPath, b, n)), 0);
+    CHECK_EQ(b[4 + 8], cj::kFormat);
+    b[4 + 8] = 3;
+    std::uint16_t crc = bbstore::crc16(0xFFFF, {b.data(), n - 2});
+    b[n - 2] = uint8_t(crc); b[n - 1] = uint8_t(crc >> 8);
+    v.fs->write_file(cj::kHeaderPath, {b.data(), n});
+    v.reboot(); v.j->replay(r);
+    CHECK_EQ(r.found, true); CHECK_EQ(int(r.problem), int(cj::Problem::None));
+    CHECK_EQ(r.evidence.spec.same(spec_result_without_detail()), true);
+    for (const auto& c : r.evidence.spec.cells) CHECK_EQ(c.detailed(), false);
+    b[4 + 8] = cj::kFormat + 1;                                     // newer than ours: dropped
+    crc = bbstore::crc16(0xFFFF, {b.data(), n - 2});
+    b[n - 2] = uint8_t(crc); b[n - 1] = uint8_t(crc >> 8);
+    v.fs->write_file(cj::kHeaderPath, {b.data(), n});
+    v.j->replay(r);
+    CHECK_EQ(r.found, false); CHECK_EQ(int(r.problem), int(cj::Problem::OldFormat));
+}
+static void test_a_damaged_or_orphaned_detail_record_is_ignored() {
+    for (size_t cut = 0; cut < 150; cut += 13) {
+        Vol v; cj::Replay r;
+        arm(v, plan(4));
+        CHECK_EQ(int(v.j->spec(spec_result())), 0);
+        std::array<uint8_t, cj::kSpecDetailRecord> buf{};
+        const size_t n = cj::encode_spec_detail(buf, spec_result());
+        buf[4 + cut % 200] ^= 0x5A;
+        CHECK_EQ(int(v.fs->write_file("/jr/spd.rec", std::span<const uint8_t>(buf.data(), n))), 0);
+        v.reboot(); v.j->replay(r);
+        CHECK_EQ(r.evidence.spec.same(spec_result_without_detail()), true);
+    }
+    Vol v; cj::Replay r;
+    arm(v, plan(4));
+    CHECK_EQ(int(v.j->spec_detail(spec_result())), 0);
+    v.reboot(); v.j->replay(r);
+    CHECK_EQ(r.found, true); CHECK_EQ(int(r.evidence.spec.end), int(specsec::End::NotRun));
+    CHECK_EQ(r.evidence.spec.cells[3].detailed(), false);
+}
 static void test_the_spec_record_is_even_and_fits() {
     std::array<uint8_t, cj::kMaxRecord> buf{};
     const size_t n = cj::encode_spec(buf, spec_result());
     CHECK_EQ(n, cj::kRecordOverhead + cj::kSpecPayload); CHECK_EQ(buf[2] % 2, 0);
     CHECK_EQ(cj::kSpecPayload >= specsec::kWireBytes, true);
+    std::array<uint8_t, cj::kSpecDetailRecord> d{};
+    CHECK_EQ(cj::encode_spec_detail(d, spec_result()), cj::kRecordOverhead + cj::kSpecDetailPayload); CHECK_EQ(d[2] % 2, 0);
 }
 // The polled path the page uses: note_spec marks it, pending() holds the next above-5 V request back, and one pump writes the record
 // from the evidence (behind any section or header write), then nothing is pending.
@@ -1066,6 +1133,7 @@ int main() {
     test_meta_and_attempt_power_cut(); test_an_ended_run_is_not_resumable(); test_finish_cut_at_every_operation();
     test_finish_is_tried_after_a_failed_write(); test_resume_gate();
     test_the_spec_result_rides_in_its_own_record(); test_a_damaged_spec_record_reads_as_not_run(); test_the_spec_record_is_even_and_fits();
-    test_a_noted_spec_result_is_written_by_a_pump();
+    test_a_journal_without_the_detail_record_still_loads(); test_a_damaged_or_orphaned_detail_record_is_ignored();
+    test_a_noted_spec_result_is_written_by_a_pump(); test_a_format_3_journal_resumes_with_no_detail();
     return test_report("test_charger_journal");
 }

@@ -353,8 +353,8 @@ void ChargerTestSession::spec_collect(specsec::Result& r) {
     const pdspec::Engine* e = ctx_.ui->pd_spec().engine_for_test();
     if (!e) return;
     const pdspec::Stop st = e->stop();
-    r = specsec::from_aggs(e->agg(), st == pdspec::Stop::Done ? specsec::End::Done : st == pdspec::Stop::Cancelled || st == pdspec::Stop::None ? specsec::End::Cancelled : specsec::End::Fault,
-                           static_cast<uint8_t>(st), e->release_unconfirmed());
+    specsec::fill_from_aggs(r, e->agg(), st == pdspec::Stop::Done ? specsec::End::Done : st == pdspec::Stop::Cancelled || st == pdspec::Stop::None ? specsec::End::Cancelled : specsec::End::Fault,
+                            static_cast<uint8_t>(st), e->release_unconfirmed());
 #else
     (void)r;
 #endif
@@ -1144,20 +1144,6 @@ raguard::Topology ChargerTestSession::guard_topology(uint32_t now, bool log) {
 }
 int ChargerTestPage::last_row() const { return std::max(0, row_count() - 1); }
 int ChargerTestPage::spec_n() const { return s_.runner_.evidence().spec.shown() ? static_cast<int>(specsec::kCells) : 0; }
-// The engine's aggregate behind cell `k`, while the engine still holds the run the cell came from (the live run; after a journal restore
-// or another pdspec run it is gone and the detail page shows only what the cell keeps).
-const pdspec::Agg* ChargerTestPage::spec_agg(int k) const {
-#if K2_PDSPEC
-    const pdspec::Engine* e = ctx_.ui->pd_spec().engine_for_test();
-    if (!e || k < 0 || k >= spec_n()) return nullptr;
-    const pdspec::Check c = specsec::kOrder[static_cast<size_t>(k)];
-    const pdspec::Agg& a = e->agg()[static_cast<size_t>(c)];
-    return specsec::cell_of(c, a) == s_.runner_.evidence().spec.cells[static_cast<size_t>(k)] ? &a : nullptr;
-#else
-    (void)k;
-    return nullptr;
-#endif
-}
 bool ChargerTestSession::confirm_live() const {
     return confirming_ && static_cast<int32_t>(ctx_.now - confirm_until_) < 0 && proposal(input(ctx_.now)) == confirm_proposal_;
 }
@@ -1801,7 +1787,7 @@ void ChargerTestPage::announce(const char* words) {
 
 // The footer of the stage (no key names: the strip says what the keys do). Returns its tone; a message takes it on every stage.
 // The footer of a PD spec check (a Results row or its detail page): what the cell says in words, the verdict's tone.
-static FooterTone spec_footer(StrBuf<32>& f, int check, const specsec::Cell& c, const pdspec::Agg* a, bool detail) {
+static FooterTone spec_footer(StrBuf<32>& f, int check, const specsec::Cell& c, bool detail) {
     const char* name = spectext::label(static_cast<pdspec::Check>(check));
     const pdspec::Verdict v = c.verdict();
     switch (v) {
@@ -1814,11 +1800,11 @@ static FooterTone spec_footer(StrBuf<32>& f, int check, const specsec::Cell& c, 
     if (!detail) f.put(name).put(": ");
     if (c.fails) {
         f.put("fail ").put_u32(c.fails);
-        if (detail && a && a->n) f.put(" of ").put_u32(a->n).put(" measured");
+        if (detail && c.detailed()) f.put(" of ").put_u32(c.n).put(" measured");
         return FooterTone::Caution;
     }
     f.put("pass");
-    if (detail && a && a->n) f.put(", ").put_u32(a->n).put(" measured");
+    if (detail && c.detailed()) f.put(", ").put_u32(c.n).put(" measured");
     return FooterTone::Ok;
 }
 
@@ -1905,7 +1891,7 @@ static FooterTone spec_footer(StrBuf<32>& f, int check, const specsec::Cell& c, 
         if (s_.selection_ >= delta_row()) { f.put("Compare with the last card"); return FooterTone::Info; }
         if (s_.selection_ >= static_cast<int>(line_n_)) {   // a PD spec row
             const int k = s_.selection_ - static_cast<int>(line_n_);
-            return spec_footer(f, static_cast<int>(specsec::kOrder[static_cast<size_t>(k)]), s_.runner_.evidence().spec.cells[static_cast<size_t>(k)], nullptr, false);
+            return spec_footer(f, static_cast<int>(specsec::kOrder[static_cast<size_t>(k)]), s_.runner_.evidence().spec.cells[static_cast<size_t>(k)], false);
         }
         const auto &row = layout_.rows[lines_[s_.selection_].row];
         f.put(row.label).put(": ");
@@ -1952,7 +1938,7 @@ static FooterTone spec_footer(StrBuf<32>& f, int check, const specsec::Cell& c, 
     case Stage::SpecDetail: {
         const int k = s_.detail_index_;
         if (k < 0 || k >= spec_n()) { f.put("No result"); return FooterTone::Info; }
-        return spec_footer(f, static_cast<int>(specsec::kOrder[static_cast<size_t>(k)]), s_.runner_.evidence().spec.cells[static_cast<size_t>(k)], spec_agg(k), true);
+        return spec_footer(f, static_cast<int>(specsec::kOrder[static_cast<size_t>(k)]), s_.runner_.evidence().spec.cells[static_cast<size_t>(k)], true);
     }
     case Stage::Steps: {
         const auto c = counts(s_.runner_, s_.result_family_);
@@ -2950,7 +2936,7 @@ void ChargerTestPage::paint_detail() {
 }
 
 // One PD spec check's detail: the same seven rows the old Spec page showed (verdict, worst, limit, count, fails, place, penalty) in a
-// KvTable from the body top. The limit, the count and the place come from the engine while it still holds this run, else read "-".
+// KvTable from the body top. The limit, the count and the place are what the cell kept (a restored cell from an old journal reads "-").
 void ChargerTestPage::paint_spec_detail() {
     if (laid_) return;
     const int k = s_.detail_index_;
@@ -2958,12 +2944,11 @@ void ChargerTestPage::paint_spec_detail() {
     constexpr kit::KvLayout kSpecDet{kit::kBodyY, kit::kRowH, 6, nullptr, nullptr, kit::kKvValueX, 18, Align::Left};
     PaintBudget *const pbg = ctx_.budget;
     const specsec::Cell &cell = s_.runner_.evidence().spec.cells[static_cast<size_t>(k)];
-    const pdspec::Agg *agg = spec_agg(k);
     while (detail_step_ < spectext::kDetailRows) {
         if (pbg && !pbg->admit(2800, true)) return;
         StrBuf<20> v;
         uint16_t color = kText;
-        spectext::detail_value(detail_step_, static_cast<int>(specsec::kOrder[static_cast<size_t>(k)]), cell, agg, v, color);
+        spectext::detail_value(detail_step_, static_cast<int>(specsec::kOrder[static_cast<size_t>(k)]), cell, v, color);
         kit::kv_row(ctx_.content, kSpecDet, kit::kv_row_y(kSpecDet, detail_step_), spectext::kDetailKeys[detail_step_], v.view(), color);
         ++detail_step_;
     }

@@ -38,11 +38,22 @@ int main() {
     r.cells[2] = make_cell(sc::Verdict::Skip, sc::Skip::NoPps, 0);
     r.cells[3] = make_cell(sc::Verdict::Unverified, sc::Skip::None, 1, quantize(unit(3), 1200));
     r.cells[4] = make_cell(sc::Verdict::Pass, sc::Skip::None, 0, quantize(unit(4), sc::kNever));
+    // The detail form: the limits, count and place the device keeps beside the worst value (a count 0 cell has none).
+    r.cells[0].lo = quantize_limit(unit(0), -sc::kOpenLimit); r.cells[0].hi = quantize_limit(unit(0), 25000);
+    r.cells[0].n = 12; r.cells[0].a = 2; r.cells[0].b = 3;
+    r.cells[1].lo = quantize_limit(unit(1), 0); r.cells[1].hi = quantize_limit(unit(1), 25000);
+    r.cells[1].n = 300; r.cells[1].a = 4; r.cells[1].b = 2;
+    r.cells[3].lo = quantize_limit(unit(3), 0); r.cells[3].hi = quantize_limit(unit(3), 1000);
+    r.cells[3].n = 7;
     std::array<std::uint8_t, kWireBytes> w{};
     to_wire(r, w);
+    std::array<std::uint8_t, kDetailBytes> dw{};
+    to_detail_wire(r, dw);
     std::printf("wire ");
     for (auto b : w) std::printf("%02x", b);
-    std::printf("\nsize %zu\norder", kWireBytes);
+    std::printf("\ndetail ");
+    for (auto b : dw) std::printf("%02x", b);
+    std::printf("\ndetailsize %zu\nsize %zu\norder", kDetailBytes, kWireBytes);
     for (std::size_t i = 0; i < kCells; ++i) std::printf(" %s", sc::kDefs[static_cast<std::size_t>(kOrder[i])].key);
     std::printf("\nsteps %d %d %d\nunseen %d\n", int(unit_step(sc::Unit::Us)), int(unit_step(sc::Unit::Mv)),
                 int(unit_step(sc::Unit::Ms)), int(kUnseen));
@@ -77,11 +88,14 @@ class Decode(unittest.TestCase):
     def setUpClass(cls):
         cls.fw = fw_dump()
         cls.blob = bytes.fromhex(cls.fw["wire"][0])
+        cls.detail = bytes.fromhex(cls.fw["detail"][0])
         cls.sec = pb.decode_section(cls.blob)
+        cls.full = pb.decode_section(cls.blob, cls.detail)
 
     def test_tables_match_the_firmware(self):
         t = pb.section_tables()
         self.assertEqual(t["wire_bytes"], int(self.fw["size"][0]))
+        self.assertEqual(t["detail_bytes"], int(self.fw["detailsize"][0]))
         self.assertEqual([c["key"] for c in t["cells"]], self.fw["order"][0].split())
         self.assertEqual(len(t["cells"]), 27)
         self.assertEqual((t["steps"]["us"], t["steps"]["mv"], t["steps"]["ms"]), tuple(int(x) for x in self.fw["steps"][0].split()))
@@ -114,6 +128,31 @@ class Decode(unittest.TestCase):
         fx = json.loads((ROOT / "tests" / "fixtures" / "ct_spec_section.json").read_text())
         self.assertEqual(fx["wire"], self.fw["wire"][0])
         self.assertEqual(fx["decoded"], self.sec)
+        self.assertEqual(fx["detail"], self.fw["detail"][0])
+        self.assertEqual(fx["decoded_detail"], self.full)
+
+    def test_the_detail_form_gives_limit_count_and_place(self):
+        c = self.full["cells"]
+        # accept_time: a one-sided max 25 ms judged 12 times, the worst between PDO 2 and 3
+        self.assertEqual((c[0]["count"], c[0]["limit_text"], c[0]["limit"], c[0]["at_text"]), (12, "<= 25.0 ms", [-pb.OPEN, 25000], "PDO 2 to 3"))
+        self.assertEqual((c[1]["count"], c[1]["limit_text"]), (300, "<= 25.0 ms"))
+        # ps_rdy_early (mV, a max) keeps a limit and its count; nothing for a pending or skipped cell
+        self.assertEqual((c[3]["count"], c[3]["limit_text"]), (7, "<= 1.000 V"))
+        self.assertEqual((c[2]["count"], c[2]["limit_text"], c[2]["at_text"]), (0, None, None))
+        self.assertEqual((c[5]["count"], c[5]["limit_text"]), (0, None))
+        self.assertTrue(self.full["detailed"])
+        self.assertFalse(self.sec["detailed"])
+        self.assertNotIn("count", self.sec["cells"][0])   # the first form alone adds no detail keys
+
+    def test_a_measured_cell_with_no_count_has_no_detail(self):
+        # a section restored from a journal written before the detail record: counts 0, the cells show nothing kept
+        blank = pb.decode_section(self.blob, bytes(pb.section_tables()["detail_bytes"]))
+        self.assertTrue(all(c["limit_text"] is None for c in blank["cells"]))
+        self.assertFalse(blank["detailed"])
+
+    def test_a_wrong_detail_size_is_rejected(self):
+        with self.assertRaises(ValueError):
+            pb.decode_section(self.blob, self.detail[:-1])
 
     def test_bad_blobs(self):
         with self.assertRaises(ValueError):
@@ -132,7 +171,7 @@ class Decode(unittest.TestCase):
 
 
 def wire_chunks(blob, run_id, total=None):
-    """The 0x0B [6, off] replies the firmware gives: run_id u32, total u8, off u8, n u8, data (48 bytes a chunk)."""
+    """The 0x0B [6, off] (or [7, off]) replies the firmware gives: run_id u32, total u8, off u8, n u8, data (48 bytes a chunk)."""
     total = len(blob) if total is None else total
     out = []
     for off in range(0, max(total, 1), 48):
@@ -158,16 +197,31 @@ class Read(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.blob = bytes.fromhex(fw_dump()["wire"][0])
+        cls.detail = bytes.fromhex(fw_dump()["detail"][0])
 
     def test_chunked_read_and_exact_requests(self):
-        link = Link(wire_chunks(self.blob, 0x01020304))
+        link = Link(wire_chunks(self.blob, 0x01020304) + wire_chunks(self.detail, 0x01020304))
         sec = kr.read_charger_spec(link, 0x01020304)
-        self.assertEqual(link.sent, [(0x0B, bytes([6, 0])), (0x0B, bytes([6, 48])), (0x0B, bytes([6, 96]))])
+        self.assertEqual(link.sent, [(0x0B, bytes([6, 0])), (0x0B, bytes([6, 48])), (0x0B, bytes([6, 96])),
+                                     (0x0B, bytes([7, 0])), (0x0B, bytes([7, 48])), (0x0B, bytes([7, 96])), (0x0B, bytes([7, 144])),
+                                     (0x0B, bytes([7, 192]))])
+        self.assertEqual(sec, pb.decode_section(self.blob, self.detail))
+        self.assertEqual(sec["cells"][1]["count"], 300)
+
+    def test_firmware_without_the_detail_form_gives_the_section_alone(self):
+        link = Link(wire_chunks(self.blob, 5) + [kr.RemoteError(kr.STATUS_BAD_LENGTH, 0x0B)])
+        sec = kr.read_charger_spec(link, 5)
         self.assertEqual(sec, pb.decode_section(self.blob))
+        self.assertEqual(link.sent[-1], (0x0B, bytes([7, 0])))
+
+    def test_a_run_that_moves_during_the_detail_read_is_a_changed_result(self):
+        link = Link(wire_chunks(self.blob, 5) + wire_chunks(self.detail, 6))
+        with self.assertRaises(kr.ResultsChanged):
+            kr.read_charger_spec(link, 5)
 
     def test_no_section_is_none(self):
         link = Link(wire_chunks(b"", 7, total=0))
-        self.assertIsNone(kr.read_charger_spec(link, 7))
+        self.assertIsNone(kr.read_charger_spec(link, 7))   # nothing asked for the detail either
         self.assertEqual(link.sent, [(0x0B, bytes([6, 0]))])
 
     def test_a_moved_run_is_a_changed_result(self):
@@ -193,6 +247,7 @@ class Export(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.blob = bytes.fromhex(fw_dump()["wire"][0])
+        cls.detail = bytes.fromhex(fw_dump()["detail"][0])
 
     def args(self, *args):
         return kr.build_parser().parse_args(["charger-test", *args])
@@ -200,11 +255,12 @@ class Export(unittest.TestCase):
     def test_a_deep_export_carries_the_spec_section(self):
         meta = deep_meta()
         run_id = int.from_bytes(meta[1:5], "little")
-        link = Link([meta, page(meta, 0, [ROW0]), meta, *wire_chunks(self.blob, run_id)])
+        link = Link([meta, page(meta, 0, [ROW0]), meta, *wire_chunks(self.blob, run_id), *wire_chunks(self.detail, run_id)])
         r = kr.cmd_charger_test(link, self.args("results"))
         self.assertEqual(r["selection"]["run_level"], "deep")
-        self.assertEqual([p for _, p in link.sent[3:]], [bytes([6, 0]), bytes([6, 48]), bytes([6, 96])])
-        self.assertEqual(r["spec"], pb.decode_section(self.blob))
+        self.assertEqual([p for _, p in link.sent[3:]], [bytes([6, 0]), bytes([6, 48]), bytes([6, 96]), bytes([7, 0]), bytes([7, 48]),
+                                                         bytes([7, 96]), bytes([7, 144]), bytes([7, 192])])
+        self.assertEqual(r["spec"], pb.decode_section(self.blob, self.detail))
         text = kr._render("charger-test", dict(r, _summary=True))
         self.assertIn("PD spec", text)
 
@@ -227,6 +283,7 @@ class Summary(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.sec = pb.decode_section(bytes.fromhex(fw_dump()["wire"][0]))
+        cls.full = pb.decode_section(bytes.fromhex(fw_dump()["wire"][0]), bytes.fromhex(fw_dump()["detail"][0]))
 
     def lines(self, sec):
         return charger_summary._spec_lines(sec)
@@ -242,6 +299,12 @@ class Summary(unittest.TestCase):
         self.assertIn(f"{fail}: FAIL", text)
         self.assertIn("40.0 ms", text)
         self.assertIn("no PPS", text)
+
+    def test_the_limit_and_count_join_the_failure_line_when_the_device_kept_them(self):
+        text = "\n".join(self.lines(self.full))
+        fail = pb.section_tables()["cells"][1]["label"]
+        self.assertIn(f"{fail}: FAIL, worst 40.0 ms, 3 over (limit <= 25.0 ms, 300 measured)", text)
+        self.assertNotIn("(limit", "\n".join(self.lines(self.sec)))   # a journal from before the detail: the line as it was
 
     def test_an_ended_early_stage_says_why(self):
         sec = dict(self.sec, end="cancelled", why="user stop")

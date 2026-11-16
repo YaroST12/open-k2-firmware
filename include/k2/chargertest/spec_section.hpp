@@ -63,10 +63,25 @@ constexpr std::int16_t quantize(sc::Unit u, std::int32_t v) {
 // The value back in the unit (pdspec::kNever for kUnseen), as the grid and the detail page show it.
 constexpr std::int32_t dequantize(sc::Unit u, std::int16_t s) { return s == kUnseen ? sc::kNever : static_cast<std::int32_t>(s) * unit_step(u); }
 
+// A limit the cell keeps (the bound the worst measurement was judged against): the same quantisation as the value, kOpenLimit and
+// beyond (an overshoot's open side) as kUnseen. dequantize_limit takes the side back: an open low side reads -kOpenLimit.
+constexpr std::int16_t quantize_limit(sc::Unit u, std::int32_t v) {
+    return (v >= sc::kOpenLimit || v <= -sc::kOpenLimit) ? kUnseen : quantize(u, v);
+}
+constexpr std::int32_t dequantize_limit(sc::Unit u, std::int16_t s, bool high) {
+    return s == kUnseen ? (high ? sc::kOpenLimit : -sc::kOpenLimit) : static_cast<std::int32_t>(s) * unit_step(u);
+}
+
 // One check's outcome. code: bits 0..2 = pdspec::Verdict (0 = Pending: nothing judged), bits 3..6 = pdspec::Skip; fails saturates.
+// The detail the page shows (limit, count, place) rides in the cell, so a resumed run reads what the live one did. n = 0 on a
+// measured cell = not kept (a result restored from a journal written before the detail record): the page reads dim "-".
 struct Cell {
     std::uint8_t code = 0, fails = 0;
     std::int16_t value = 0;   // quantize(unit, worst); 0 when nothing was measured
+    std::int16_t lo = 0, hi = 0;   // quantize_limit of the bounds the worst measurement was judged against
+    std::uint16_t n = 0;           // the measurements the check judged (the engine's count, as the aggregate kept it)
+    std::uint8_t a = 0, b = 0;     // where the worst one happened (pdspec::Agg a / b, spec_text.hpp put_where)
+    constexpr bool detailed() const { return n != 0; }
     constexpr sc::Verdict verdict() const { return static_cast<sc::Verdict>(code & 7u); }
     constexpr sc::Skip skip() const { return static_cast<sc::Skip>((code >> 3) & 15u); }
     constexpr bool measured() const { return verdict() != sc::Verdict::Skip && verdict() != sc::Verdict::Pending; }
@@ -106,19 +121,29 @@ struct Result {
         return t;
     }
 };
-static_assert(sizeof(Result) == 4 + 4 * kCells, "RAM: three header bytes padded to four, then four bytes per cell");
+static_assert(sizeof(Result) == 4 + 12 * kCells, "RAM: three header bytes padded to four, then twelve bytes per cell");
 
 // One check's cell from its aggregate (the verdict the pdspec result shows: an inferred limit is Unverified).
 constexpr Cell cell_of(sc::Check c, const sc::Agg& a) {
     const auto k = static_cast<std::size_t>(c);
-    return make_cell(sc::verdict(c, a), a.skip, a.fails, a.n ? quantize(sc::kDefs[k].unit, a.worst) : std::int16_t{0});
+    const sc::Unit u = sc::kDefs[k].unit;
+    Cell cell = make_cell(sc::verdict(c, a), a.skip, a.fails, a.n ? quantize(u, a.worst) : std::int16_t{0});
+    if (a.n) {
+        cell.lo = quantize_limit(u, a.lo); cell.hi = quantize_limit(u, a.hi);
+        cell.n = a.n; cell.a = a.a; cell.b = a.b;
+    }
+    return cell;
 }
 
-// What the engine's aggregates say, one cell per kOrder entry.
-constexpr Result from_aggs(const std::array<sc::Agg, sc::kChecks>& agg, End e, std::uint8_t why, bool unconfirmed) {
-    Result r;
+// What the engine's aggregates say, one cell per kOrder entry. fill_from_aggs writes into a Result in place (the Runner's own, no
+// stack copy of its 328 bytes); from_aggs is the by-value form for tests and tools.
+constexpr void fill_from_aggs(Result& r, const std::array<sc::Agg, sc::kChecks>& agg, End e, std::uint8_t why, bool unconfirmed) {
     r.end = e; r.why = why; r.unconfirmed = unconfirmed;
     for (std::size_t i = 0; i < kCells; ++i) r.cells[i] = cell_of(kOrder[i], agg[static_cast<std::size_t>(kOrder[i])]);
+}
+constexpr Result from_aggs(const std::array<sc::Agg, sc::kChecks>& agg, End e, std::uint8_t why, bool unconfirmed) {
+    Result r;
+    fill_from_aggs(r, agg, e, why, unconfirmed);
     return r;
 }
 
@@ -130,7 +155,8 @@ constexpr Result all_skipped(End e, std::uint8_t why, sc::Skip reason) {
     return r;
 }
 
-// The wire form (the journal record): end, why, flags, then code, fails and the value (little endian) per cell.
+// The wire form (the journal record /jr/sp.rec and the remote read 0x0B [6, off]): end, why, flags, then code, fails and the value
+// (little endian) per cell. The detail (limits, count, place) is a second form below: both carry a one-byte total and offset.
 inline constexpr std::size_t kWireBytes = 3 + 4 * kCells;
 constexpr void to_wire(const Result& r, std::array<std::uint8_t, kWireBytes>& w) {
     w[0] = static_cast<std::uint8_t>(r.end); w[1] = r.why; w[2] = r.unconfirmed ? 1 : 0;
@@ -152,6 +178,35 @@ constexpr bool from_wire(const std::uint8_t* w, std::size_t n, Result& r) {
             return false;
     }
     r = o;
+    return true;
+}
+
+// The detail wire form (the journal record /jr/spd.rec and the remote read 0x0B [7, off]): per cell lo, hi, n (little endian), a, b.
+// Apart from the first form so that a record written before it still loads (its cells read n = 0) and each form stays inside the
+// one-byte total, offset and record length.
+inline constexpr std::size_t kDetailBytes = 8 * kCells;
+constexpr void to_detail_wire(const Result& r, std::array<std::uint8_t, kDetailBytes>& w) {
+    for (std::size_t i = 0; i < kCells; ++i) {
+        const Cell& c = r.cells[i];
+        const auto lo = static_cast<std::uint16_t>(c.lo), hi = static_cast<std::uint16_t>(c.hi);
+        std::uint8_t* p = w.data() + 8 * i;
+        p[0] = static_cast<std::uint8_t>(lo & 0xFF); p[1] = static_cast<std::uint8_t>(lo >> 8);
+        p[2] = static_cast<std::uint8_t>(hi & 0xFF); p[3] = static_cast<std::uint8_t>(hi >> 8);
+        p[4] = static_cast<std::uint8_t>(c.n & 0xFF); p[5] = static_cast<std::uint8_t>(c.n >> 8);
+        p[6] = c.a; p[7] = c.b;
+    }
+}
+// Folds the detail into a result that already holds its cells (from_wire first). False = not a record of this form: nothing changes.
+constexpr bool from_detail_wire(const std::uint8_t* w, std::size_t n, Result& r) {
+    if (n != kDetailBytes) return false;
+    for (std::size_t i = 0; i < kCells; ++i) {
+        const std::uint8_t* p = w + 8 * i;
+        Cell& c = r.cells[i];
+        c.lo = static_cast<std::int16_t>(static_cast<std::uint16_t>(p[0] | (p[1] << 8)));
+        c.hi = static_cast<std::int16_t>(static_cast<std::uint16_t>(p[2] | (p[3] << 8)));
+        c.n = static_cast<std::uint16_t>(p[4] | (p[5] << 8));
+        c.a = p[6]; c.b = p[7];
+    }
     return true;
 }
 
