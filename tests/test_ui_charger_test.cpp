@@ -1433,7 +1433,6 @@ static void test_a_voltage_fold_reads_as_a_caution() {
     const auto calm = [&] {
         ++where;
         for (int i = 0; i < 64 && ui.painting(); ++i) ui.tick(t += 100);
-        if (ui.painting()) std::fprintf(stderr, "[fold-fixture] still painting at calm #%d\n", where);
         CHECK_EQ(ui.painting(), false);
     };
     ui.tick(t += 200); ui.tick(t += 200);
@@ -1444,7 +1443,6 @@ static void test_a_voltage_fold_reads_as_a_caution() {
     for (size_t i = 0; i < r.steps().size(); ++i) {
         auto& s = const_cast<ct::Step&>(r.steps()[i]);
         if (s.group != ct::Group::Pd || !(ct::kPpsAlgorithms & ct::bit(s.algorithm))) continue;
-        std::fprintf(stderr, "[fold-fixture] step %zu mv=%u detail=%u verdict=%d sweep=%d\n", i, unsigned(s.mv), unsigned(s.detail), int(s.verdict), int(ct::is_sweep(s)));
         if (ct::is_sweep(s)) {
             ++sweeps;
             CHECK_EQ(int(s.verdict), int(ct::Verdict::Pass));
