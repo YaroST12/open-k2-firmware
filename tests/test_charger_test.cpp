@@ -72,7 +72,7 @@ struct Fake final : ct::Env {
     // The engine's fc::Caps (fctrig::caps()): a SCP / UFCS request makes the charger's capabilities readable, as its session does.
     const fc::Caps* serve_caps = nullptr;
     int serve_caps_from = 1;   // the first fc request that reads the limits: the engine clears them at a session start, so a first attempt that a cut ends before the read leaves none
-    std::vector<fc::Proto> protocols;
+    std::vector<fc::Proto> protocols; std::vector<uint32_t> proto_times;   // every request_fc call: its protocol and its `now`
     fc::Proto no_response_proto = fc::Proto::Count;   // a protocol whose engine fails with NoResponse on the first raised request
     // A QC-only bank asked for a protocol it does not speak: the engine ends every request of it as Unsupported (it never got an
     // answer, whatever VBUS did) and the abort puts the lines back to 0 V, so the output is back at 5 V.
@@ -91,6 +91,10 @@ struct Fake final : ct::Env {
     // After a cut no_handshake_after_cut makes the protocol's next requests fail NoHandshake (the port is back, the charger is silent).
     std::vector<int> cut_on_requests; uint32_t cut_delay_ms = 200, cut_len_ms = 1000, cut_tail_ms = 80, cut_period_ms = 0, cut_first_ms = 0;
     int cut_dark_mv = 2000, cut_fall_mv = 0, cuts_seen = 0; bool no_handshake_after_cut = false, cut_raised = false;
+    // pattern usb-a-restarting-after-cut (a USB-A port that cuts its output restarts its charger controller: it answers nothing on
+    // D+/D- for a while after the output is back at 5 V). cut_unsupported_proto answers "unsupported" for cut_unsupported_ms after the
+    // comeback of the last cut (cut_back_at) and for the next cut_unsupported_n requests of that protocol (a count that does not depend on the clock).
+    fc::Proto cut_unsupported_proto = fc::Proto::Afc; uint32_t cut_unsupported_ms = 0, cut_back_at = 0; int cut_unsupported_n = 0, cut_unsupported_left = 0, cut_unsupported_hits = 0;
     fc::Fail cut_fail = fc::Fail::NoHandshake;   // the engine's failure at the comeback of a cut (a silent entry window reads NoResponse)   // cut_raised: a cut may hit a raised output too
     uint32_t cut_start_at = 0, cut_end_at = 0, cut_tail_at = 0, cut_next_at = 0; bool cut_on = false;
     std::vector<uint32_t> cut_onsets;
@@ -307,9 +311,13 @@ struct Fake final : ct::Env {
     }
     fc::Fail request_fc(fc::Proto p, int mv, bool retarget, int ma) override {
         if (!alive()) return fc::Fail::NoHandshake;
-        ++fc_requests; retargets += retarget; retarget_log.push_back(retarget); protocols.push_back(p); fc_mas.push_back(ma); fc_mvs.push_back(mv);
+        ++fc_requests; retargets += retarget; retarget_log.push_back(retarget); protocols.push_back(p); proto_times.push_back(in.now); fc_mas.push_back(ma); fc_mvs.push_back(mv);
         if (std::find(cut_on_requests.begin(), cut_on_requests.end(), fc_requests) != cut_on_requests.end()) cut_start_at = in.now + cut_delay_ms;
         if (cut_on) { in.fc_state = fc::State::Failed; in.fc_fail = fc::Fail::NoHandshake; return fc::Fail::None; }   // the output is dark: nobody answers
+        if (cut_back_at && p == cut_unsupported_proto && (in.now - cut_back_at < cut_unsupported_ms || cut_unsupported_left > 0)) {
+            if (cut_unsupported_left > 0) --cut_unsupported_left;
+            ++cut_unsupported_hits; in.fc_state = fc::State::Failed; in.fc_fail = fc::Fail::Unsupported; in.vbus_mv = 5000; return fc::Fail::None;
+        }
         if (no_handshake_after_cut && cuts_seen) { in.fc_state = fc::State::Failed; in.fc_fail = fc::Fail::NoHandshake; in.vbus_mv = 5000; return fc::Fail::None; }
         if (ra_dead_legacy && ra_on) { ++ra_dead_fc; return fc::Fail::NoHandshake; }
         if (serve_caps && fc_requests >= serve_caps_from && (p == fc::Proto::Scp || p == fc::Proto::Ufcs)) in.fc_caps = serve_caps;
@@ -636,7 +644,7 @@ struct Fake final : ct::Env {
                 if (cut_fall_mv && !cut_onsets.empty() && in.now == cut_onsets.back() + step_ms) ++in.session;
                 if (in.now < cut_end_at) in.vbus_mv = fall ? cut_fall_mv : cut_dark_mv;
                 else {
-                    cut_on = false; in.vbus_mv = 5100; cut_tail_at = in.now + cut_tail_ms;
+                    cut_on = false; in.vbus_mv = 5100; cut_tail_at = in.now + cut_tail_ms; cut_back_at = in.now; cut_unsupported_left = cut_unsupported_n;
                     if (cut_fail != fc::Fail::NoHandshake && in.fc_state != fc::State::Idle) { in.fc_state = fc::State::Failed; in.fc_fail = cut_fail; }   // its own timeout, after the comeback
                 }
             }
@@ -5721,6 +5729,92 @@ static void test_a_protocol_failure_after_a_clean_comeback_is_a_fail() {
         CHECK_EQ(q.evidence().cut_retries, 2);   // both cuts were retried; the third attempt was silent, not cut: the verdict stands at once
     }
 }
+// pattern usb-a-restarting-after-cut: the port cut its output, and the charger controller behind it answers nothing on D+/D- until it has
+// restarted (TOPADRE 65 W USB-A, 2026-11-16: AFC "unsupported" 2.7 s after the comeback, the 12 V row skipped as "never answered").
+constexpr uint32_t kScpAfc = ct::bit(A::Scp) | ct::bit(A::Afc);
+static unsigned count_proto(const Fake& f, fc::Proto p) { return unsigned(std::count(f.protocols.begin(), f.protocols.end(), p)); }
+// SCP, then AFC; with cut_it the port cuts its output 100 ms into the AFC unit's Baseline (dark for cut_len_ms), once.
+static void run_scp_afc(Fake& f, ct::Runner& r, bool cut_it) {
+    CHECK_EQ(r.start(f.caps, {.selected = kScpAfc}, f.in, true), ct::Reason::None);
+    if (cut_it) {
+        CHECK_EQ(run_until(f, r, [&] { return r.unit() == ct::Unit::Afc && r.state() == ct::State::Baseline; }, 120000), true);
+        f.cut_period_ms = 100000000; f.cut_next_at = f.in.now + 100;
+    }
+    f.tick(r, 200000);
+    CHECK_EQ(r.state(), ct::State::Done);
+}
+static uint32_t first_request_ms(const Fake& f, fc::Proto p) {
+    for (size_t n = 0; n < f.protocols.size(); ++n) if (f.protocols[n] == p) return f.proto_times[n];
+    return 0;
+}
+// The pure decisions: how long a unit's first handshake waits after a cut, and whether a silent first handshake is asked once more.
+static void test_the_post_cut_decisions() {
+    constexpr uint32_t kNever = UINT32_MAX;   // no cut seen in the run
+    CHECK_EQ(ct::post_cut_wait(kNever, 0), 0u);
+    CHECK_EQ(ct::post_cut_wait(ct::kPostCutSettleMs, 0), 0u);   // settled: the age is the whole wait
+    CHECK_EQ(ct::post_cut_wait(ct::kPostCutSettleMs + 1, 0), 0u);
+    CHECK_EQ(ct::post_cut_wait(1000, 0), ct::kPostCutSettleMs - 1000);
+    CHECK_EQ(ct::post_cut_wait(0, 0), ct::kPostCutSettleMs);
+    CHECK_EQ(ct::post_cut_wait(1000, ct::kPostCutWaitMs - 1), ct::kPostCutSettleMs - 1000);   // inside the bound the age decides
+    CHECK_EQ(ct::post_cut_wait(1000, ct::kPostCutWaitMs), 0u);   // the bound ends the wait, however young the comeback
+    CHECK_EQ(ct::post_cut_wait(0, ct::kPostCutWaitMs + 5000), 0u);
+    static_assert(ct::kPostCutSettleMs < ct::kPostCutWaitMs && ct::kPostCutWaitMs < ct::kPostCutRetryMs);   // the wait fits inside what still counts as recent
+    for (const auto why : {fc::Fail::Unsupported, fc::Fail::NoHandshake, fc::Fail::NoResponse}) {
+        CHECK_EQ(ct::post_cut_retry(true, false, why, 2700), true);   // TOPADRE: silent 2.7 s after the comeback
+        CHECK_EQ(ct::post_cut_retry(true, false, why, ct::kPostCutRetryMs - 1), true);
+        CHECK_EQ(ct::post_cut_retry(true, false, why, ct::kPostCutRetryMs), false);   // the cut is not recent
+        CHECK_EQ(ct::post_cut_retry(true, false, why, kNever), false);   // no cut: a silent charger fails at once, as before
+        CHECK_EQ(ct::post_cut_retry(false, false, why, 2700), false);   // only the unit's first handshake
+        CHECK_EQ(ct::post_cut_retry(true, true, why, 2700), false);   // once
+    }
+    for (const auto why : {fc::Fail::None, fc::Fail::OverLimit, fc::Fail::Busy, fc::Fail::Overvoltage, fc::Fail::NoBand, fc::Fail::SourceLost,
+                           fc::Fail::Aborted, fc::Fail::Inline, fc::Fail::NeedsLoad, fc::Fail::NoVoltage, fc::Fail::Detected})
+        CHECK_EQ(ct::post_cut_retry(true, false, why, 2700), false);   // an answer or a stop of the engine's own is no silence
+}
+// The unit that follows a cut waits for the charger to restart: its first handshake never goes out before kPostCutSettleMs after the
+// comeback, so the unit passes and its other rows run, exactly as on a port that never cut.
+static void test_afc_after_a_cut_waits_for_the_restart_and_passes() {
+    Fake clean; clean.caps = {}; ct::Runner rc(clean); run_scp_afc(clean, rc, false);
+    Fake f; f.caps = {}; f.cut_unsupported_ms = 2800; ct::Runner r(f); run_scp_afc(f, r, true);
+    CHECK_EQ(f.cuts_seen, 1);
+    CHECK_EQ(f.cut_unsupported_hits, 0);   // the charger was never asked while it restarted
+    CHECK_EQ(count_proto(f, fc::Proto::Afc), count_proto(clean, fc::Proto::Afc));   // and no attempt was repeated
+    CHECK_EQ(f.cut_back_at > 0, true);
+    CHECK_EQ(first_request_ms(f, fc::Proto::Afc) - f.cut_back_at >= ct::kPostCutSettleMs, true);
+    CHECK_EQ(count_unit_verdict(r, ct::Unit::Afc, ct::Verdict::Pass) > 0, true);
+    CHECK_EQ(count_unit_verdict(r, ct::Unit::Afc, ct::Verdict::Skip), 0u);   // the 12 V row ran
+    expect_same_plan(all_rows(rc), all_rows(r));
+}
+// Without a cut nothing waits: the unit starts at the usual Baseline time.
+static void test_afc_without_a_cut_does_not_wait() {
+    Fake f; f.caps = {}; ct::Runner r(f); run_scp_afc(f, r, false);
+    CHECK_EQ(f.cuts_seen, 0);
+    unsigned gap = 0;   // the SCP row's last request to the first AFC request: the release, the 500 ms gap and the AFC pre-wait
+    for (size_t n = 1; n < f.protocols.size(); ++n) if (f.protocols[n] == fc::Proto::Afc) { gap = f.proto_times[n] - f.proto_times[n - 1]; break; }
+    CHECK_EQ(gap > 0 && gap < ct::kPostCutSettleMs, true);
+}
+// A first handshake that is still met by silence (the charger restarts slower than the wait) is asked once more; the second one passes.
+static void test_a_silent_first_handshake_after_a_cut_is_asked_once_more() {
+    Fake clean; clean.caps = {}; ct::Runner rc(clean); run_scp_afc(clean, rc, false);
+    Fake f; f.caps = {}; f.cut_unsupported_n = 1; ct::Runner r(f); run_scp_afc(f, r, true);
+    CHECK_EQ(f.cuts_seen, 1);
+    CHECK_EQ(f.cut_unsupported_hits, 1);
+    CHECK_EQ(count_proto(f, fc::Proto::Afc), count_proto(clean, fc::Proto::Afc) + 1);   // the one repeat, nothing else
+    expect_same_plan(all_rows(rc), all_rows(r));   // the discarded attempt left no trace: no Fail, no skipped 12 V row
+    CHECK_EQ(count_unit_verdict(r, ct::Unit::Afc, ct::Verdict::Fail), 0u);
+}
+// A real negative with a recent cut gets exactly two attempts and ends as it always did (Fail, the family skipped as never answered);
+// without a cut it gets exactly one.
+static void test_a_silent_charger_after_a_cut_gets_exactly_two_attempts() {
+    Fake clean; clean.caps = {}; clean.unsupported_proto = fc::Proto::Afc; ct::Runner rc(clean); run_scp_afc(clean, rc, false);
+    Fake f; f.caps = {}; f.unsupported_proto = fc::Proto::Afc; ct::Runner r(f); run_scp_afc(f, r, true);
+    CHECK_EQ(count_proto(clean, fc::Proto::Afc), 1u);   // no cut: the first answer stands
+    CHECK_EQ(f.cuts_seen, 1);
+    CHECK_EQ(count_proto(f, fc::Proto::Afc), 2u);   // a recent cut: once more
+    expect_same_plan(all_rows(rc), all_rows(r));   // the same verdicts and the same family skip
+    CHECK_EQ(count_unit_verdict(r, ct::Unit::Afc, ct::Verdict::Pass), 0u);
+    CHECK_EQ(count_unit_verdict(r, ct::Unit::Afc, ct::Verdict::Fail) > 0, true);
+}
 // An engine that ends "no response" (VIVO, UFCS) or "unsupported" (AFC, FCP, SCP) at the cut would skip the whole family as "never
 // answered" (finish() of the row is held, the family loop must not run): the row is asked again and the family keeps its rows.
 static void test_a_cut_that_reads_no_response_does_not_skip_the_family() {
@@ -5794,7 +5888,9 @@ static void test_the_7s_cut_sequence_over_the_5v_steps_of_the_cuktech_run() {
     CHECK_EQ(count_verdict_any(r, ct::Verdict::Fail), 0u);
     CHECK_EQ(count_verdict_any(r, ct::Verdict::Skip) == 0, true);
     CHECK_EQ(unsigned(r.evidence().cut_retries) >= 1u, true);
-    CHECK_EQ(r.evidence().cut_period_ds, 70);   // every gap between two cuts is 7.0 s
+    // The port cuts every 7.0 s but never a raised output: a cut that falls on a 9 V / 12 V row leaves no onset, so the median gap of the
+    // ones seen is a whole number of periods (where the cuts land depends on the run's pacing, e.g. the settle after a comeback).
+    CHECK_EQ(r.evidence().cut_period_ds >= 70 && r.evidence().cut_period_ds % 70 == 0, true);
     // the export carries the count: timing byte bits 3..7 of the schema-2 page header
     std::array<uint8_t, 58> page{};
     CHECK_EQ(remote::encode_charger_test(page, remote::charger_test_snapshot(r), 0, false, 2), remote::kChargerTestHeader2);
@@ -8161,7 +8257,8 @@ int main() {
     test_measured_dwell_and_plan_capacity();
     test_usb_a_sag_tail_session_is_not_source_lost(); test_usb_a_sag_tail_waits_for_vbus_to_climb(); test_usb_a_sag_tail_with_dead_or_low_vbus_is_still_lost(); test_session_change_in_baseline_without_a_sag_is_still_lost(); test_usb_a_midrow_session_opens_the_adopt_window(); test_usb_a_sag_dip_under_1v_inside_the_window_waits();
     test_cut_in_the_row_then_a_clean_retry_passes(); test_a_retried_first_scp_row_replans_like_an_unretried_one(); test_a_retried_first_scp_row_keeps_the_rows_a_wide_list_offers(); test_a_retried_first_ufcs_row_replans_like_an_unretried_one(); test_a_retried_first_vooc_family_row_ends_like_an_unretried_one(); test_several_cuts_in_a_row_then_a_clean_retry_passes(); test_every_retry_cut_is_a_skip_not_a_fail(); test_the_retries_are_counted_per_row(); test_a_cut_that_reads_no_response_does_not_skip_the_family(); test_a_loss_that_does_not_come_back_in_the_window_is_a_fail();
-    test_a_dip_shorter_than_the_minimum_is_no_cut(); test_a_protocol_failure_after_a_clean_comeback_is_a_fail(); test_the_7s_cut_sequence_over_the_5v_steps_of_the_cuktech_run(); test_a_fall_in_a_raised_row_is_no_cut_casualty(); test_a_silent_vooc_family_on_a_7s_cut_port_ends_needs_load(); test_the_10_unit_run_over_every_cut_phase_ends_as_without_cuts();
+    test_a_dip_shorter_than_the_minimum_is_no_cut(); test_a_protocol_failure_after_a_clean_comeback_is_a_fail();
+    test_the_post_cut_decisions(); test_afc_after_a_cut_waits_for_the_restart_and_passes(); test_afc_without_a_cut_does_not_wait(); test_a_silent_first_handshake_after_a_cut_is_asked_once_more(); test_a_silent_charger_after_a_cut_gets_exactly_two_attempts(); test_the_7s_cut_sequence_over_the_5v_steps_of_the_cuktech_run(); test_a_fall_in_a_raised_row_is_no_cut_casualty(); test_a_silent_vooc_family_on_a_7s_cut_port_ends_needs_load(); test_the_10_unit_run_over_every_cut_phase_ends_as_without_cuts();
     test_a_cut_in_the_first_baseline_waits_for_the_comeback(); test_a_baseline_dip_that_does_not_come_back_still_stops();
     test_custom_unit_list_runs_in_order(); test_pd_unit_attaches_with_a_contract(); test_a_failed_unit_does_not_stop_the_run();
     test_default_unit_order_is_vendor_modes_then_pd_then_legacy(); test_default_order_runs_vendor_modes_before_pd_before_legacy(); test_pd_between_vendor_and_legacy_units(); test_pd_replan_in_the_middle_keeps_the_rows_in_order(); test_consecutive_legacy_units_share_one_attach(); test_legacy_session_that_sees_pd_traffic_is_renewed(); test_silent_ufcs_source_reports_no_response_not_pd_active(); test_legacy_waits_between_units();

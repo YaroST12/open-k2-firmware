@@ -207,6 +207,24 @@ inline constexpr uint8_t kCutRetries = 3;
 // (measured, runs/cuktech-usba/medium3-stream, 2026-11-15): 5500 ms is what a step may take, with ~0.3 s to spare.
 inline constexpr uint32_t kCutStepBudgetMs = 5500;
 inline constexpr unsigned kCutOnsets = 8;   // the onsets kept to read the cut period from (the median gap between them)
+// pattern usb-a-restarting-after-cut: the charger controller behind a port that cut its output restarts, and answers nothing on D+/D- for
+// seconds after the output is back at 5 V while VBUS and CC already look normal (TOPADRE 65 W USB-A, runs/topadre-usba, 2026-11-16: SCP
+// answered 4.2 s after a comeback, AFC asked 2.1 s after one read "unsupported" and its 12 V row was skipped as never answered). A unit's
+// first handshake therefore waits until the last comeback is kPostCutSettleMs old, for at most kPostCutWaitMs (a port that cuts every
+// 3 s never gets that old); and a first handshake that is still met by silence within kPostCutRetryMs of a comeback is asked once more.
+// The age is measured from the comeback, not read from D+/D-: the idle lines read 2.7 V / 2.7 V on this port whether it is restarting or not.
+inline constexpr uint32_t kPostCutSettleMs = 4000, kPostCutWaitMs = 6000, kPostCutRetryMs = 8000;
+// How much longer a unit's first handshake waits (0 = go): age_ms = the time since the last comeback (UINT32_MAX = none seen),
+// waited_ms = how long this wait has run already.
+constexpr uint32_t post_cut_wait(uint32_t age_ms, uint32_t waited_ms) {
+    return age_ms >= kPostCutSettleMs || waited_ms >= kPostCutWaitMs ? 0u : kPostCutSettleMs - age_ms;
+}
+// A unit's first handshake that ended silent (the engine's unsupported / no handshake / no response) is asked once more when it was
+// recent enough after a comeback to have met a charger that was still restarting. Never for the second try, never without a cut.
+constexpr bool post_cut_retry(bool first_row_of_unit, bool already_retried, fc::Fail why, uint32_t age_ms) {
+    return first_row_of_unit && !already_retried && age_ms < kPostCutRetryMs &&
+        (why == fc::Fail::Unsupported || why == fc::Fail::NoHandshake || why == fc::Fail::NoResponse);
+}
 // pattern usb-a-cuts-on-low-dpdm: a USB-A port drops VBUS to ~2-2.5 V for ~4 s when D+/D- are held near 0 V for about a second or
 // more (SCP detect, VOOC listen, VIVO; brief lows such as FCP/AFC/QC handshakes do not trigger it). An A-to-C cable's Rp is fed from
 // VBUS, so CC vanishes with the output and comes back (a new attach session) a few tens of ms after VBUS is back at 5 V: after a
@@ -944,6 +962,13 @@ private:
     // would have had is kept here (cut_v_ / cut_why_ / cut_detail_ / cut_mv_ = the VBUS of that moment), cut_final_ = the retries of this row are used up.
     bool cut_wait_ = false, cut_final_ = false; Verdict cut_v_ = Verdict::Fail; Reason cut_why_ = Reason::None; uint8_t cut_detail_ = 0; int cut_mv_ = 0;
     void track_cut(const Input&);
+    // pattern usb-a-restarting-after-cut (kPostCutSettleMs): last_cut_back_ms_ = the comeback of the last cut seen in this attach (0 = none;
+    // unlike cut_back_ms_ it survives a row's request), post_cut_ms_ = when the running unit's first-handshake wait began (0 = not waiting),
+    // retried_ = the unit's first handshake was already asked once more (post_cut_retry).
+    uint32_t last_cut_back_ms_ = 0, post_cut_ms_ = 0; bool retried_ = false;
+    uint32_t post_cut_age(uint32_t now) const { return last_cut_back_ms_ ? now - last_cut_back_ms_ : UINT32_MAX; }
+    bool post_cut_hold(const Input&);                  // the Baseline's first-handshake gate: true while the unit waits for the charger to restart
+    bool post_cut_again(const Input&);                 // the failure path: a silent first handshake after a recent cut is asked once more (true)
     void track_dip(const Input&);                            // the dip clocks above (every poll)
     bool dip_wait(const Input&) const;                       // VBUS is in a dip that may still come back: the 5 V check waits
     bool dip_adopts(const Input&) const;                     // a session change is the dip's (during it, or its tail after the comeback)

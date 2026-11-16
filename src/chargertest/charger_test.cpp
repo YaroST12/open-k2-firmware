@@ -1325,6 +1325,7 @@ Reason Runner::start(const pd::SourceCaps& caps, Options o, Input in, bool confi
     xiaomi_seen_ = xiaomi_reset_ = x_svid_ = x_authed_ = false; tail_at_ = 0; hr_count_ = link_resets(in.pd);
     last_ms_ = phase_ms_ = in.now; stable_ = stopping_ = pd_owned_ = fc_owned_ = recover_ = hot_ = sag_cut_ = sag_open_ = false; busy_retry_at_ = 0;
     cut_wait_ = cut_dark_ = false; cut_start_ms_ = cut_back_ms_ = 0; cut_retry_idx_ = SIZE_MAX; cut_tries_ = 0; cut_last_mv_ = -1; n_cut_onsets_ = 0;
+    last_cut_back_ms_ = post_cut_ms_ = 0; retried_ = false;
     list_tracking_ = false; flight_restart_ = false;   // the settle window is seeded by the first poll, not opened by START
     reason_ = Reason::None; refusal_mv_ = 0;
     probe_ = (has_unit(o.units, Unit::Pd) || has_unit(o.units, Unit::PdLow)) ? Probe::Pending : Probe::Off;   // ask the charger who it is once, at the end of the first Pd unit
@@ -1581,6 +1582,7 @@ void Runner::track_cut(const Input& in) {
         if (dip >= kCutMinMs && dip <= kCutWindowMs) {
             if (n_cut_onsets_ == kCutOnsets) { std::copy(cut_onsets_.begin() + 1, cut_onsets_.end(), cut_onsets_.begin()); --n_cut_onsets_; }
             cut_onsets_[n_cut_onsets_++] = cut_start_ms_;
+            last_cut_back_ms_ = cut_back_ms_;
             // The period: the median gap between the onsets kept (the port does not cut a raised output, so a gap may be longer than
             // the period and a cut hidden in a handshake leaves none; the middle gap is the period the port keeps at 5 V).
             if (n_cut_onsets_ >= 2) {
@@ -1600,6 +1602,34 @@ void Runner::track_cut(const Input& in) {
         }
     }
     cut_last_mv_ = v;
+}
+// pattern usb-a-restarting-after-cut. The Baseline gate of a Legacy unit's first handshake: while the last comeback of the port's cut is
+// younger than kPostCutSettleMs the unit waits (at most kPostCutWaitMs), so the charger controller has restarted when D+/D- are driven.
+bool Runner::post_cut_hold(const Input& in) {
+    if (mode_ != Mode::Legacy) return false;
+    const uint32_t age = post_cut_age(in.now);
+    const uint32_t more = post_cut_wait(age, post_cut_ms_ ? in.now - post_cut_ms_ : 0u);
+    if (!more) return false;
+    if (!post_cut_ms_) {
+        post_cut_ms_ = in.now ? in.now : 1;
+        K2LOG("[CT] settle after cut age=%ums wait=%ums vbus=%d\n", unsigned(age), unsigned(more), int(in.vbus_mv));
+    }
+    return true;
+}
+// pattern usb-a-restarting-after-cut. The unit's first handshake ended silent (unsupported / no handshake / no response) within
+// kPostCutRetryMs of a comeback: it is asked once more from a released 5 V (next() requests the same pending row) and nothing is
+// recorded for the discarded attempt, so the family is not judged "never answered" on it either.
+bool Runner::post_cut_again(const Input& in) {
+    if (mode_ != Mode::Legacy || pd_owned_ || index_ >= count_ || steps_[index_].group == Group::Pd) return false;
+    // A row that met a cut itself is the cut retry's (cut_hold, after the failure is recorded), not this one's.
+    if (cut_dark_ || cut_start_ms_ || (dip_open_ && dip_reading(in.vbus_mv) && in.now - dip_ms_ < kCutWindowMs)) return false;
+    const uint32_t age = post_cut_age(in.now);
+    if (!post_cut_retry(!unit_row_ran(), retried_, in.fc_fail, age)) return false;
+    retried_ = true;
+    steps_[index_].verdict = Verdict::Pending; steps_[index_].reason = Reason::None;
+    K2LOG("[CT] retry after cut row=%u age=%ums fail=%u\n", unsigned(index_), unsigned(age), unsigned(in.fc_fail));
+    release(in, false);
+    return true;
 }
 // finish() for a legacy row that fails (Lost, Timeout, Request, Voltage) while it sat at 5 V and a fall of VBUS under kCutMv is in
 // progress or has come back since the row's request: the verdict is kept, the row goes back to Pending and waits in Releasing for
@@ -2075,12 +2105,13 @@ void Runner::begin_unit(Unit u, Input in) {
     rp_restart_ = false; contract_wrong_ = false; attach_max_mv_ = 0;
     pd_owned_ = fc_owned_ = recover_ = hot_ = sag_cut_ = sag_open_ = own_cut_ = false;   // a detach/attach boundary: the window does not cross it
     unit_ms_ = in.now; pre_ms_ = 0;
+    last_cut_back_ms_ = post_cut_ms_ = 0; retried_ = false;   // the detach below restarts the charger for real: no cut of the last attach counts
     if (mode_ == Mode::Legacy) env_.phase(Phase::Handover, index_);   // journal marker BEFORE the detach: a reboot from here is a skipped handover
     if (detached_) begin_attach(in); else begin_detach(in);
 }
 // The next Legacy unit inside the same PD-silent attach: no detach, a gap for the D+/D- cleanup, then its first handshake.
 void Runner::continue_legacy(Unit u, Input in) {
-    unit_ = u; own_cut_ = false;
+    unit_ = u; own_cut_ = false; post_cut_ms_ = 0; retried_ = false;
     pd_owned_ = fc_owned_ = recover_ = hot_ = false; pd_retry_ = cut_index_ = SIZE_MAX;
     unit_ms_ = in.now;
     pre_ms_ = u == Unit::Afc ? kAfcPreMs : 0;
@@ -2307,6 +2338,7 @@ void Runner::restore(const Options& o, const Evidence& e, uint32_t run_id, std::
     attached_ = detached_ = ending_ = silent_ = legacy_active_ = dark_ = false; pd_skips_recorded_ = true;
     pd_owned_ = fc_owned_ = stopping_ = stable_ = recover_ = hot_ = false; probe_ = Probe::Off; pd_retry_ = cut_index_ = SIZE_MAX;
     cut_wait_ = cut_dark_ = false; cut_start_ms_ = cut_back_ms_ = 0; cut_retry_idx_ = SIZE_MAX; cut_tries_ = 0; cut_last_mv_ = -1; n_cut_onsets_ = 0;
+    last_cut_back_ms_ = post_cut_ms_ = 0; retried_ = false;
     selfpwr_ = suspended_ = adopt_ = false;
     ceiling_pending_ = ceil_stopping_ = ceil_recover_ = ceil_cycled_ = false; ceiling_done_ = true;   // a resumed run never repeats the stage (it is not journaled)
     for (auto& s : std::span<Step>(steps_.data(), count_)) if (s.verdict == Verdict::Running) s.verdict = Verdict::Pending;
@@ -2811,6 +2843,7 @@ void Runner::poll_impl(Input in, const pd::SourceCaps& caps) {
         if (mode_ == Mode::Pd && epr_stage_ == 0) regrow_plan(caps, in);   // the list may still grow during the baseline
         if (!stable_ || gap > 250) { stable_ = true; stable_ms_ = in.now; }
         if (in.now - stable_ms_ >= 500 + pre_ms_) {
+            if (post_cut_hold(in)) return;
             pre_ms_ = 0;
             if (probe_ == Probe::Closing) {
                 if (in.pd.state == pd::SinkState::Ready) {   // a live contract: the source is quiet and ACKs
@@ -2898,6 +2931,7 @@ void Runner::poll_impl(Input in, const pd::SourceCaps& caps) {
     if ((s.group == Group::Pd && (in.pd.state == pd::SinkState::Failed || hunt_rejected ||
         (in.pd.state == pd::SinkState::Ready && in.pd.result != pd::SinkResult::None && in.pd.result != pd::SinkResult::Ok))) ||
         (s.group != Group::Pd && in.fc_state == fc::State::Failed)) {
+        if (post_cut_again(in)) return;   // a silent first handshake right after a port cut: the charger may still have been restarting
         if (s.group == Group::Qc3Plus && in.fc_fail == fc::Fail::NoResponse) {   // VBUS never left 5 V: the charger does not do QC3+
             finish(in, Verdict::Skip, Reason::NoQc3Plus, static_cast<uint8_t>(in.fc_fail));
             return;
