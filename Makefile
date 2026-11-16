@@ -315,8 +315,9 @@ LDFLAGS += $(STACK_PARAMS)
 # path by 150 B (the option to take if the stack budget gets tight).
 SIZE_FLAGS = -fno-schedule-insns2 -fno-partial-inlining
 CFLAGS += $(SIZE_FLAGS)
-# --sort-section=alignment groups sections by alignment inside each input wildcard, saving alignment padding (-508 B .text, -256 B .bss).
-LDFLAGS += $(SIZE_FLAGS) -flto-partition=one -Wl,--sort-section=alignment
+# --sort-section=alignment (-508 B .text, -256 B .bss) is NOT used: it reorders the cold text so that hot-path callees in cold files
+# (lz::compress's lambda, ctsweep::summarize, ...) leave the zero-wait window; selftest lz_pack/sweep_sum/fmt_line slowed 30-100 %.
+LDFLAGS += $(SIZE_FLAGS) -flto-partition=one
 endif
 
 # Hot acquisition / DSP / power-conversion objects compile at speed levels while UI pages stay at -Os
