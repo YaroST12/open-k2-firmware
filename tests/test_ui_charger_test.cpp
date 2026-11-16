@@ -28,6 +28,7 @@
 #include "k2/ui/trunc.hpp"
 #include "k2/ui/ui_widgets.hpp"
 #include "k2/ui/blend.hpp"
+#include "k2/ui/spec_text.hpp"
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
@@ -1493,6 +1494,45 @@ static void test_the_results_grid_carries_the_pdspec_section() {
         press(ui, Button::Back, t); ui.tick(t += 100); calm();
         CHECK_EQ(ui.charger_test_stage(), 6);
     }
+}
+// The detail page of a check whose run the session's engine still holds (the live run, right after the Deep test): the limit, the count
+// and the place come from the engine's aggregate, not the dim "-" a restored result shows. The stage's own result is built from the
+// engine exactly as the Runner does (spec_collect), then the grid is rebuilt and a measured check's detail opened.
+static void test_the_spec_detail_shows_the_limit_while_the_engine_holds_the_run() {
+    six_pdo_fixture(); Ui ui; uint32_t t;
+    finished_results(ui, t);
+    const auto calm = [&] { for (int i = 0; i < 64 && ui.painting(); ++i) ui.tick(t += 100); CHECK_EQ(ui.painting(), false); };
+    PdSpecSession& s = ui.pd_spec();
+    CHECK_EQ(int(s.start_in_test(t)), int(pdspec::StartResult::Ok));
+    for (int i = 0; i < 400 && s.running(); ++i) { t += 20; fusb302::service(); ui.tick(t); if (i == 150) s.cancel(); }
+    CHECK_EQ(s.running(), false);
+    const pdspec::Engine* e = s.engine_for_test();
+    CHECK_EQ(e != nullptr, true);
+    if (!e) return;
+    specsec::Result r = specsec::from_aggs(e->agg(), specsec::End::Cancelled, static_cast<uint8_t>(e->stop()), e->release_unconfirmed());
+    int k = -1;   // the first check the run measured and judged
+    for (size_t i = 0; i < specsec::kCells; ++i)
+        if (r.cells[i].measured() && e->agg()[static_cast<size_t>(specsec::kOrder[i])].n) { k = int(i); break; }
+    CHECK_EQ(k >= 0, true);
+    if (k < 0) return;
+    const_cast<ct::Evidence&>(ui.charger_test_results().evidence()).spec = r;
+    const int units = ui.list_state().count;
+    top(ui, t); press(ui, Button::Ok, t); ui.tick(t += 100); calm();   // into a unit's Steps and back: the grid is rebuilt
+    press(ui, Button::Back, t); ui.tick(t += 100); calm();
+    CHECK_EQ(ui.charger_test_stage(), 6);
+    top(ui, t);
+    for (int i = 0; i < units + k; ++i) press(ui, Button::Plus, t);
+    ui.tick(t += 100); calm();
+    press(ui, Button::Ok, t); ui.tick(t += 100); calm();
+    CHECK_EQ(ui.charger_test_stage(), 15);   // SpecDetail
+    dump_screen("spec_detail_live");
+    const pdspec::Agg& a = e->agg()[static_cast<size_t>(specsec::kOrder[static_cast<size_t>(k)])];
+    StrBuf<20> lim, cnt;
+    spectext::put_limit(lim, pdspec::kDefs[static_cast<size_t>(specsec::kOrder[static_cast<size_t>(k)])], a);
+    cnt.put_u32(a.n);
+    const int row_y = [&](int row) { return kit::kBodyY + row * kit::kRowH + kit::row_text_y(kit::kRowH, kSmall.height); }(2);
+    check_text_at(kSmall, row_y, lim.view(), kText, kBg, kit::kKvValueX);                                  // Limit: the engine's bound
+    check_text_at(kSmall, row_y + kit::kRowH, cnt.view(), kText, kBg, kit::kKvValueX);                    // Count
 }
 // A voltage fold is a caution (user decision 2026-11-16): the sweep row and the APDO's fixed rows on the folded side read amber,
 // neither pass nor fail. The sweep itself is a clean run here; the fold is set on the finished run (the host stub cannot make a
@@ -4867,6 +4907,7 @@ int main() {
     test_preflight_refusal_is_logged();
     test_preflight_wrong_voltage_under_pdo1_contract_is_logged();
     test_the_results_grid_carries_the_pdspec_section();
+    test_the_spec_detail_shows_the_limit_while_the_engine_holds_the_run();
     test_a_voltage_fold_reads_as_a_caution();
     test_a_sweep_off_by_more_than_100mv_reads_as_a_caution();
     test_sweep_log_line_has_no_literal_format_bug();
