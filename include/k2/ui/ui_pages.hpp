@@ -120,11 +120,6 @@ struct UiContext {
             std::uint8_t pace = 0;                        // pdstress::Options::pace
             std::uint8_t sel = 0;                         // the Setup list's cursor
         } pdstress;
-        struct PdSpec {                                   // Tools > PD Spec Check: the setup the next START uses
-            std::uint8_t mask = 0x3F;                     // picked families (bit = pdspec::Family), all six by default
-            std::uint8_t sel = 0;                         // the Setup list's cursor
-            std::uint16_t seen_run = 0;                   // PdSpecSession::run_no() of the result the page has shown
-        } pdspec;
         std::array<uint8_t, bench::kPlaces> place_sel{};  // each place's last action: repeating a job is OK, OK, OK
         uint8_t face = 0;                                 // Meter: the face last shown (0 Flow, 1 Graphs, 2 Numbers, 3 Lines)
     } keep;
@@ -1088,7 +1083,7 @@ public:
         constexpr Menu kMenus[kToolSlots] = {Menu::Trigger, Menu::PdTrigger, Menu::Spoof, Menu::CableR,
                                              Menu::Connection, Menu::Connection, Menu::Connection,
                                              Menu::BlackBox, Menu::Diagnosis, Menu::Cards, Menu::Diag,
-                                             Menu::Twin, Menu::LoopProbe, Menu::PdStress, Menu::PdSpec};
+                                             Menu::Twin, Menu::LoopProbe, Menu::PdStress};
         return kMenus[tool_built(i) ? i : 0];
     }
     static const char *tool_name(int i);

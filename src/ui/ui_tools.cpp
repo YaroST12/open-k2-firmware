@@ -70,7 +70,6 @@ constexpr ToolRule kRules[kToolSlots] = {
     {ToolHurt::Nothing, always_ready},   // 11 Device twins (the live proof refuses a live sink itself)
     {ToolHurt::Nothing, cable_r},        // 12 Loop probe (every reading comes from the power monitor; it refuses above 5.5 V itself)
     {ToolHurt::Load, pd_stress},         // 13 PD Stress
-    {ToolHurt::Load, pd_stress},         // 14 PD Spec Check: asks for every advertised level, so the same three needs
 };
 
 }  // namespace
@@ -92,7 +91,7 @@ using K = ActKind;
 constexpr uint8_t pg(Page p) { return static_cast<uint8_t>(p); }
 
 // Tool slots (ui_tools.hpp / text/tools.hpp): 0 FC trigger, 1 PD trigger, 2 Spoof, 3 Cable R, 4 Charger ID, 5 Cable read,
-// 6 Device ID, 7 Black Box, 8 PD diagnosis, 9 Report cards, 10 Diag, 11 Device twins, 12 Loop probe, 13 PD Stress, 14 PD Spec Check.
+// 6 Device ID, 7 Black Box, 8 PD diagnosis, 9 Report cards, 10 Diag, 11 Device twins, 12 Loop probe, 13 PD Stress.
 // Charger, Cable and Device are the place pages (the Connection page in place mode, conn::place_actions): their own reads
 // (Charger ID, Cable read with Spoof and Saved cables, Device ID) are the page itself; these are the tools it adds.
 constexpr Act kCharger[] = {
@@ -102,9 +101,6 @@ constexpr Act kCharger[] = {
     {"Report cards", K::Tool, 9, nullptr},
 #if K2_PDSTRESS
     {"Stress test", K::Tool, 13, nullptr},
-#endif
-#if K2_PDSPEC
-    {"Spec check", K::Tool, 14, nullptr},
 #endif
 };
 constexpr Act kCable[] = {

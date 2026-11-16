@@ -14,8 +14,9 @@
 // run never cuts its own supply. A K2 that reboots anyway (a crash, the reboot chord) comes up passive: a plain boot presents no Rd,
 // the source sees a detach and drops VBUS to vSafe0V; nothing of the run resumes (no journal), the result is lost.
 //
-// The Tools-page entry is PdSpecPage (Menu::PdSpec): it picks the families, starts after a two-press confirm, reads engine() while a
-// run goes on and the result afterwards. The remote (Cmd::PdSpec) uses start() / cancel() / status() / result_read().
+// Two users. The charger test's Deep level runs the engine as its PD spec section (start_in_test(), engine_for_test(), cancel():
+// the test owns Rd and the run, this session adds nothing visible). The remote (Cmd::PdSpec) starts a standalone run with start()
+// and reads it with status() / result_read() / cancel().
 #pragma once
 
 #include <cstddef>
@@ -57,14 +58,10 @@ public:
 
     bool running() const { return engine_ && engine_->running(); }
     bool active() const { return running(); }
-    bool has_result() const { return engine_.has_value(); }
     const pdspec::Engine* engine() const { return engine_ ? &*engine_ : nullptr; }
-    // A new number (never 0) each time a run starts: the page keeps the one it has shown.
-    std::uint16_t run_no() const { return run_no_; }
     // The result blob (pdspec/result.hpp) from byte `off`; 0 when there is no result or `off` is past the end.
     std::size_t result_read(std::size_t off, std::span<std::uint8_t> out) const;
     std::uint16_t blob_len() const;
-    std::uint32_t elapsed_ms(std::uint32_t now_ms) const { return engine_ ? engine_->elapsed_ms(now_ms) : 0; }
 
     // The status the remote op serves.
     enum class State : std::uint8_t { Idle, Running, Finished };
@@ -118,7 +115,6 @@ private:
     bool cancel_asked_ = false;
     bool test_run_ = false;              // the engine's run is the charger test's (start_in_test)
     std::uint8_t last_start_ = 0;        // pdspec::StartResult of the last start() call
-    std::uint16_t run_no_ = 0;
     std::uint8_t foot_fam_ = 0xFF, foot_item_ = 0xFF, foot_items_ = 0xFF, foot_kind_ = 0xFF;
     StrBuf<28> foot_;
 };

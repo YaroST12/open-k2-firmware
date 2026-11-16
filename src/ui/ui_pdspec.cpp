@@ -187,7 +187,6 @@ sc::StartResult PdSpecSession::start_run(std::uint8_t families, std::uint32_t no
     if (!s.attached || !fusb302::caps().valid) return sc::StartResult::NoCaps;
     engine_.emplace(static_cast<sc::Env&>(*this));
     test_run_ = in_test;
-    run_no_ = static_cast<std::uint16_t>(run_no_ + 1 ? run_no_ + 1 : 1);
     cancel_asked_ = false;
     captured_ = false;
     rd_away_ = false;

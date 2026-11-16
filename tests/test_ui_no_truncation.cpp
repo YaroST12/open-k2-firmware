@@ -37,7 +37,6 @@ namespace {
 
 uint32_t g_t = 10000;   // the stub clock this test drives
 int g_ps_results = 0;   // walks whose PD Stress run reached its Results (the walk must cover them, not only the refusals)
-int g_sc_results = 0;   // the same for the PD Spec Check
 
 struct Scenario {
     const char *name;
@@ -116,7 +115,7 @@ void walk_pages(Ui &ui, int rot, const Scenario &sc) {
     }
     static const char *const kMenuNames[] = {"trigger", "emarker", "pd-trigger", "cable-r", "black-box", "spoof", "usb-link",
                                              "autorotate", "cards", "share", "connection", "diag", "qrtest", "twin", "loop-probe",
-                                             "pd-stress", "diagnosis", "battery", "memory", "pd-spec"};
+                                             "pd-stress", "diagnosis", "battery", "memory"};
     static_assert(std::size(kMenuNames) == static_cast<std::size_t>(Menu::Count), "a menu without a name here is walked under another's label");
     for (uint8_t m = 0; m < static_cast<uint8_t>(Menu::Count); ++m) {
         enter(kMenuNames[m], rot, sc.name);
@@ -192,37 +191,6 @@ void walk_pages(Ui &ui, int rot, const Scenario &sc) {
             step(Button::Ok, "ps-saved");
             ui.context().keep.pdstress.sel = PdStressPage::kSavedRow0;
             step(Button::Ok, "ps-saved-result");
-        }
-    }
-    // PD Spec Check: every Setup row focused (its note open), Review idle and armed, a run, its stop, every result row and its
-    // Detail. The extreme values and every skip reason are drawn in tests/test_ui_pdspec_page.cpp.
-    enter("pd-spec", rot, sc.name);
-    ui.goto_page(static_cast<uint8_t>(Page::Tools), g_t);
-    if (ui.push_menu(Menu::PdSpec, g_t)) {
-        auto step = [&](Button b, const char *what) {
-            ui.on_button(b, ButtonEvent::Short, g_t);
-            draw_for_a_while(ui, what, rot, sc.name);
-        };
-        ui.context().keep.pdspec.sel = 0;
-        ui.context().keep.pdspec.mask = 0x3F;
-        draw_for_a_while(ui, "sc-setup", rot, sc.name);
-        for (int i = 0; i < 8; ++i) step(Button::Plus, "sc-setup-rows");
-        ui.context().keep.pdspec.sel = PdSpecPage::kDoneRow;
-        step(Button::Ok, "sc-review");
-        step(Button::Ok, "sc-armed");
-        step(Button::Ok, "sc-running");                                          // starts (or the refusal footer)
-        for (int i = 0; i < 10; ++i) { g_t += 500; ui.tick(g_t); }
-        draw_for_a_while(ui, "sc-running", rot, sc.name);
-        step(Button::Back, "sc-stopping");                                       // stops a run (Setup on an idle Review)
-        for (int i = 0; i < 60 && ui.pd_spec().running(); ++i) { g_t += 500; ui.tick(g_t); }
-        draw_for_a_while(ui, "sc-results", rot, sc.name);
-        if (ui.pd_spec_page() && ui.pd_spec_page()->stage() == PdSpecPage::Stage::Results) {
-            g_sc_results++;
-            for (int k = 0; k < static_cast<int>(pdspec::kChecks); ++k) {
-                step(Button::Ok, "sc-detail");
-                step(Button::Back, "sc-results");
-                step(Button::Plus, "sc-result-rows");
-            }
         }
     }
     g_stub.pm.current_ma = amps_before;
@@ -824,6 +792,5 @@ int main() {
     test_card_screens();
     test_walk();
     CHECK_EQ(g_ps_results > 0, true);
-    CHECK_EQ(g_sc_results > 0, true);
     return test_report("test_ui_no_truncation");
 }

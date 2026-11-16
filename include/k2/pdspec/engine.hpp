@@ -247,9 +247,6 @@ public:
     std::uint8_t families() const { return mask_; }
 
 private:
-    // Host tests only (tests/test_ui_pdspec_page.cpp): lays a finished result with chosen values in place, so the Results and
-    // Detail screens can be drawn with every skip reason and the extreme values. Never defined in the firmware.
-    friend struct EngineProbe;
     enum class Ph : std::uint8_t {
         FamStart, Goto, Settle, Measure, Frozen, LiveBand, Status, KaWait, ResetWatch, DetachGap, Recover, Restore, Finishing, Done
     };

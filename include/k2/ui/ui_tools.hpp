@@ -20,19 +20,17 @@ struct Readiness {
     const char *reason = "";         // footer sentence when not ready, at most 27 characters; empty when ready
 };
 
-constexpr int kToolSlots = 15;       // the per-tool tables: PD Stress and PD Spec Check are the last two slots (each built in by its flag)
-constexpr int kToolCount = K2_PDSPEC ? 15 : K2_PDSTRESS ? 14 : K2_LOOPPROBE ? 13 : 12;   // slots up to the last one built: FC trigger, PD trigger, Spoof, Cable R, Charger ID, Cable read, Device ID, Black Box, PD diagnosis, Report cards, Diag, Device twins, Loop probe, PD Stress, PD Spec Check (ToolsPage::tool_menu maps to Menu)
+constexpr int kToolSlots = 14;       // the per-tool tables: Loop probe and PD Stress are the last two slots (each built in by its flag)
+constexpr int kToolCount = K2_PDSTRESS ? 14 : K2_LOOPPROBE ? 13 : 12;   // slots up to the last one built: FC trigger, PD trigger, Spoof, Cable R, Charger ID, Cable read, Device ID, Black Box, PD diagnosis, Report cards, Diag, Device twins, Loop probe, PD Stress (ToolsPage::tool_menu maps to Menu)
 constexpr int kToolSpoof = 2;        // the Spoof row opens Cable read's Spoof list, not a menu of its own
 constexpr int kToolChargerId = 4;    // Charger ID, Cable read, Device ID: the Connection page on one tab each (Tab order)
 constexpr int kToolCableRead = 5;
 constexpr int kToolDeviceId = 6;
 constexpr int kToolLoopProbe = 12;   // the HID-cable loop probe (needs the power monitor, like Cable R)
 constexpr int kToolPdStress = 13;    // renegotiation stress: a PD charger, the power monitor, nothing on the output
-constexpr int kToolPdSpec = 14;      // the no-load PD conformance check: the same three needs as PD Stress
-// A slot whose tool is in this build (Loop probe, PD Stress and PD Spec Check are opt-in: K2_LOOPPROBE, K2_PDSTRESS, K2_PDSPEC).
+// A slot whose tool is in this build (Loop probe and PD Stress are opt-in: K2_LOOPPROBE, K2_PDSTRESS).
 constexpr bool tool_built(int t) {
-    return t >= 0 && t < kToolSlots && (t != kToolLoopProbe || K2_LOOPPROBE) && (t != kToolPdStress || K2_PDSTRESS) &&
-           (t != kToolPdSpec || K2_PDSPEC);
+    return t >= 0 && t < kToolSlots && (t != kToolLoopProbe || K2_LOOPPROBE) && (t != kToolPdStress || K2_PDSTRESS);
 }
 constexpr int kToolRows = 13;        // one row per tool (the list scrolls: not all of them fit above the footer at once)
 
