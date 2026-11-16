@@ -122,6 +122,21 @@ test("a deep sweep is one range cell under its own Sweep label", () => {
   assert.deepEqual(lines(s, { fold: false, monitorMv: 36000 }), ["PPS: 5-21V/3.2A:pass", "Sweep: 5-21V/3.2A:pending"]);
 });
 
+// The firmware's sweep chip (src/chargertest/result_layout.cpp sweep_row, 33ecb488): a sweep carrying the fold caution is amber at any depth.
+// The wire rows carry no per-point error (no track_err), so the web grades by the fold flag alone: amber, never green, never red for the fold.
+test("a deep sweep that folds back is an amber chip, not a green one", () => {
+  const swp = (extra) => S("pps", 5000, "pass", { pos: 7, pdo: 3248763456, detail: 161, sweep: true, ...extra });
+  const base = [S("pps", 5000, "pass", { pos: 7, pdo: 3248763456 }), S("pps", 21000, "pass", { pos: 7, pdo: 3248763456 })];
+  const opts = { fold: false, monitorMv: 36000 };
+  assert.deepEqual(lines([...base, swp({ reason: "output folds back" })], opts), ["PPS: 5-21V/3.2A:pass", "Sweep: 5-21V/3.2A:partial"]);
+  // The caution on any part of a split sweep (the part from 5 V up, the part below) colours the one chip.
+  const low = S("pps", 5000, "pass", { pos: 7, pdo: 3248763456, detail: 161, sweep: true, reason: "output folds back" });
+  assert.deepEqual(lines([...base, swp({}), low], opts), ["PPS: 5-21V/3.2A:pass", "Sweep: 5-21V/3.2A:partial"]);
+  // No caution keeps the plain grade; a failed sweep stays red and a fold does not hide it.
+  assert.deepEqual(lines([...base, swp({})], opts), ["PPS: 5-21V/3.2A:pass", "Sweep: 5-21V/3.2A:pass"]);
+  assert.deepEqual(lines([...base, S("pps", 5000, "fail", { pos: 7, pdo: 3248763456, detail: 161, sweep: true, reason: "output folds back" })], opts), ["PPS: 5-21V/3.2A:pass", "Sweep: 5-21V/3.2A:fail"]);
+});
+
 test("legacy levels roll the up and down steps into one cell; a ramp that stops fails its level", () => {
   const s = [S("qc3", 5000, "pass"), S("qc3", 9000, "pass"), S("qc3", 20000, "fail"), S("qc3", 9000, "pass", { cont: true })];
   assert.deepEqual(lines(s, { fold: false }), ["QC3: 5V:pass 9V:pass 20V:fail"]);

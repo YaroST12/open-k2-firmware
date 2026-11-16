@@ -3457,6 +3457,9 @@ var CtGrid = (function () {
         row = begin("Sweep", key); row.pos = key.mv;
         var sw = sweepRange(a, key.mv), st = sw.st, tone = !st ? "pending" : st.result === "skip" ? "skip" :
                   st.result === "fail" ? "fail" : st.result === "pass" ? "pass" : "pending";
+        // A sweep that carries the fold caution is amber at any depth, never green (firmware sweep_row, 33ecb488: it reds only when the
+        // output failed to track BEFORE the fold by more than 300 mV, and the wire rows carry no per-point error, so the flag decides).
+        if (tone === "pass" && steps.some(function (s) { return s.sweep && s.alg === a && s.pos === key.mv && s.result === "pass" && s.reason === "output folds back"; })) tone = "partial";
         chip(row, sw.text, tone, st ? [st] : [], st ? st.mv : 0);
         if (st && tone === "skip") row.chips[0].tag = skipTag(st);
         return;
