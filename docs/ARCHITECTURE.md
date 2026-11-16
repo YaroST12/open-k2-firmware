@@ -252,7 +252,14 @@ into silent `.bss` corruption. Four layers:
   TODO), and `--param=large-stack-frame=256 --param=large-stack-frame-growth=100` so the optimiser does not merge
   big frames. The analyzer follows page virtuals, `ListView` row callbacks, the remote `handle_request`
   dispatch, littlefs / TinyUSB / lwIP callbacks through `RESOLVE` rules, with a per-class nesting limit
-  (`LIMITS`); add a rule when a new callback table appears. Rule: no big arrays on the stack; transient
+  (`LIMITS`), and abstract interfaces through `INTERFACES` (the implementer's methods with the interface's virtual
+  names, read from the header: `charger_test::Env` -> `ChargerTestSession`). The LCD stream's idle hook
+  (`run_round` -> `mainloop::idle_hook`) and the systick wait hook are followed too: every long paint carries the PD
+  service, the fast-charge service and the transition capture's sampling on top (the capture's write runs from the
+  main loop only, `transcap::sample()` in the hooks). A rule whose caller matches but whose callee pattern finds
+  nothing (a renamed seam) counts as unresolved. `make stack-report STACK_ARGS="--scenario charger-test"` models a
+  charger-test run (that page only, no key presses), `--via REGEX` names the deepest chain through a function.
+  Add a rule when a new callback table appears. Rule: no big arrays on the stack; transient
   buffers use the main-loop scratch arena (`include/k2/core/scratch.hpp`, one owner tag at a time).
   Three habits keep the deep paths shallow (worst main-loop depth 5192 B at b1f99de7, 4524 B after the trim):
   a TinyUSB callback never renders (the LCD waits and `systick::delay_ms` run `usb::service()` nested under a

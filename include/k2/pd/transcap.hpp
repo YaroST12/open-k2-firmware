@@ -60,6 +60,9 @@ void mark(Mark code, std::uint8_t step = 0, std::uint16_t arg = 0);
 void keep(std::uint32_t run_id, std::uint16_t step);
 // Main loop: one sample when due, the arm timeout, persistence of a kept capture.
 void poll();
+// The LCD idle hook and the systick wait hook: poll() without the persistence. A kept capture is written by the main loop's
+// next poll(): from inside a paint or a delay_ms the littlefs commit would stack on the caller's frames (tools/stack_depth.py).
+void sample();
 
 Status status();
 bool active();   // armed, in the post window or frozen (the overlay is held)

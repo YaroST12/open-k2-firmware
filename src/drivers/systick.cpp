@@ -71,4 +71,9 @@ void delay_ms(std::uint32_t ms) {
 
 }  // namespace k2::systick
 
+#if K2_STACKPROBE
+#include "k2/core/stack_probe.hpp"
+extern "C" K2_HOT void SysTick_Handler() { k2::systick::tick(); k2::stackprobe::sample(); }   // the PSP probe's 1 kHz sample
+#else
 extern "C" K2_HOT void SysTick_Handler() { k2::systick::tick(); }
+#endif
