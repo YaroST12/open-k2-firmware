@@ -1386,16 +1386,22 @@ static bool only_pass_or_skip(const ct::Runner& r) {
     return true;
 }
 static void test_a_cut_short_list_that_never_grows_is_still_offers_changed() {
-    // The tolerance is bounded: a list that stays cut short past kXiaomiAuthWaitMs is another charger (or a dead chain).
+    // The tolerance is bounded: a list that stays cut short past kXiaomiAuthWaitMs is no longer tolerated. Since 2026-11-17 the rows
+    // above the cut are withdrawn by the source (a re-split like any other) - not "offers changed" - and the unit waits
+    // kWithdrawnWaitMs for the full list: it is back after 6 s here, so the withdrawn rows run again.
     Fake f; ct::Runner r(f); hunt_reset_run(f, r, true, ct::kXiaomiAuthWaitMs + 4000);
-    CHECK_EQ(any_caps_changed(r), true);
+    CHECK_EQ(any_caps_changed(r), false);
+    CHECK_EQ(r.evidence().rebalanced > 0, true);   // the cut-short list was a re-split
+    CHECK_EQ(count_reason_all(r, ct::Reason::Withdrawn), 0u);   // ... and the full list brought every row back
     // The rows below the cut are untouched.
     for (const auto& s : r.steps()) if (s.pos <= 5) CHECK_EQ(s.verdict, ct::Verdict::Pass);
 }
 static void test_a_cut_short_list_without_a_xiaomi_chain_is_still_offers_changed() {
-    // The pattern belongs to a source that listed SVID 0x2717: any other source that comes back with fewer PDOs changed its offers.
+    // The pattern belongs to a source that listed SVID 0x2717: any other source that comes back with fewer PDOs withdrew the rows
+    // above the cut (a re-split, 2026-11-17), with no tolerance window of its own; its full list, back 640 ms later, revives them.
     Fake f; ct::Runner r(f); hunt_reset_run(f, r, false);
-    CHECK_EQ(any_caps_changed(r), true);
+    CHECK_EQ(any_caps_changed(r), false);
+    CHECK_EQ(count_reason_all(r, ct::Reason::Withdrawn), 0u);
 }// ---- pattern reject-then-reduced-list: the list announced again after the hunt row's own Reject ----
 // A CUKTECH-like source without SVID 0x2717 (a Rejected hunt row reads "not unlocked (no OEM chain)") announces `again` reannounce_ms
 // after its first Reject. 100 ms is before the runner has looked at the Reject (row Requesting), 600 ms while the row is released.
@@ -1458,14 +1464,16 @@ static void test_an_unsolicited_list_change_during_a_normal_row_replans_per_row(
     CHECK_EQ(count_reason_all(r, ct::Reason::Withdrawn) > 0, true);
     CHECK_EQ(only_pass_or_skip(r), true);
     CHECK_EQ(f.replans.empty(), false);   // the re-plan was logged once, with its counts
-    // A later unsolicited change is re-planned the same way - unless no pending PD row can be placed at all (here only APDO
-    // rows are left and the APDOs are gone): that is still "offers changed".
+    // A later unsolicited change is re-planned the same way - also when no pending PD row can be placed at all (here only APDO
+    // rows are left and the APDOs are gone): a re-split since 2026-11-17, the rows are withdrawn, not "offers changed".
     // (6 A advertised so a hunt row is sent and Rejected)
     Fake g; g.caps = cuktech_caps(6000); g.reject_hunts = true; ct::Runner rg(g); rg.start(g.caps, kPd, g.in, true);
     CHECK_EQ(run_until(g, rg, [&] { return g.hunt_times.size() == 1 && rg.state() == ct::State::Requesting && !rg.steps()[rg.index()].hunt; }), true);
     g.caps = without_pps(g.caps);
     g.tick(rg, 3000);
-    CHECK_EQ(any_caps_changed(rg), true);
+    CHECK_EQ(any_caps_changed(rg), false);
+    g.tick(rg, 200000);
+    CHECK_EQ(count_reason_all(rg, ct::Reason::Withdrawn) > 0, true);
 }
 // ---- hunt evidence: why a refused 6 A row was refused ----
 // One refused hunt scenario against a scripted CUKTECH-like sink: `svid`/`auth_at` the chain, `reannounce` the caps after the auth,
@@ -7533,8 +7541,9 @@ static void test_a_withdrawn_pdo_that_comes_back_revives_its_rows() {
     }
     CHECK_EQ(v20, 2u); CHECK_EQ(v15, 1u);   // the third re-announce withdrew them again before they ran; the 15 V row passed
 }
-// A re-announce that places no PD row at all - the row in flight included - is still a different charger: "offers changed".
-static void test_a_reannounce_that_places_no_row_is_still_offers_changed() {
+// A re-announce that places no PD row at all - the row in flight included - is a re-split like any other (2026-11-17): every
+// row it drops is withdrawn by the source, the re-split is counted, and only a changed wire revision is "offers changed".
+static void test_a_reannounce_that_places_no_row_is_a_resplit_not_offers_changed() {
     Fake f; f.caps = splitter_caps();
     ct::Runner r(f);
     CHECK_EQ(r.start(f.caps, kSplitterPd, f.in, true), ct::Reason::None);
@@ -7543,9 +7552,128 @@ static void test_a_reannounce_that_places_no_row_is_still_offers_changed() {
     f.caps.pdos[0] = pd::decode_pdo((240u << 10) | 300);   // only a 12 V 3 A PDO: no offered voltage matches any row (not even the 5 V row in flight)
     f.tick(r, 200000);
     CHECK_EQ(r.state(), ct::State::Done);
-    CHECK_EQ(count_reason_all(r, ct::Reason::CapsChanged) > 0, true);
-    CHECK_EQ(f.replans.empty(), true);
+    CHECK_EQ(count_reason_all(r, ct::Reason::CapsChanged), 0u);
+    CHECK_EQ(count_reason_all(r, ct::Reason::Withdrawn) >= 4u, true);
+    CHECK_EQ(f.replans.size(), 1u);
+    CHECK_EQ(r.evidence().rebalanced, 1u);
+}
+
+// ---- k2/resplit-all (2026-11-17): the Anker 2-way splitter trace, runs/splitter-offers/r1/old/timeline.txt ----
+// Caps 5/9/12/15/20 V at 1.5 A. After the 5 V and 9 V rows passed the splitter re-announced 5 V 1.5 A + 9 V 3 A (the other
+// port took the budget): every pending row - 12 V, 15 V, 20 V and the 6 A hunt row behind it - was gone. That is a re-split
+// like any other: the rows are Withdrawn, the unit stays open for kWithdrawnWaitMs for the offer to come back, then closes.
+static pd::SourceCaps anker_caps() {
+    pd::SourceCaps c; c.valid = true; c.spec_rev = 2; c.active_cc = 1; c.num_pdos = 5; c.raw_header = 0x7181;
+    const unsigned volts[] = {5000, 9000, 12000, 15000, 20000};
+    for (unsigned n = 0; n < 5; ++n) c.pdos[n] = pd::decode_pdo(((volts[n] / 50) << 10) | 150);
+    return c;
+}
+static pd::SourceCaps anker_resplit() {   // 5 V 1.5 A + 9 V 3 A
+    pd::SourceCaps c; c.valid = true; c.spec_rev = 2; c.active_cc = 1; c.num_pdos = 2; c.raw_header = 0x7181;
+    c.pdos[0] = pd::decode_pdo((100u << 10) | 150);
+    c.pdos[1] = pd::decode_pdo((180u << 10) | 300);
+    return c;
+}
+static bool row_passed(const ct::Runner& r, unsigned mv) {
+    for (const auto& s : r.steps()) if (s.mv == mv && !s.hunt && s.verdict == ct::Verdict::Pass) return true;
+    return false;
+}
+// Runs the trace to the moment the splitter re-announces (the 9 V row just passed) and returns the time of the re-announce.
+static uint32_t anker_to_resplit(Fake& f, ct::Runner& r) {
+    f.caps = anker_caps();
+    CHECK_EQ(r.start(f.caps, kSplitterPd, f.in, true), ct::Reason::None);
+    CHECK_EQ(run_until(f, r, [&] { return row_passed(r, 9000); }), true);
+    const uint32_t at = f.in.now;
+    f.caps = anker_resplit();
+    return at;
+}
+static unsigned anker_pending_rows(const ct::Runner& r) {   // the rows behind the 9 V row: 12 V, 15 V, 20 V, the 6 A hunt
+    unsigned n = 0;
+    for (const auto& s : r.steps()) if (s.mv >= 12000 && s.group == ct::Group::Pd && s.verdict == ct::Verdict::Pending) ++n;
+    return n;
+}
+// (a) The re-announce drops every pending row and the offer never comes back: the rows end Withdrawn - not CapsChanged -
+// after the bounded wait, which the unit sits out (it closes no earlier than kWithdrawnWaitMs after the re-split).
+static void test_resplit_dropping_every_pending_row_waits_then_ends_withdrawn() {
+    Fake f; ct::Runner r(f);
+    const uint32_t at = anker_to_resplit(f, r);
+    CHECK_EQ(anker_pending_rows(r), 4u);
+    uint32_t closed_at = 0;
+    for (unsigned n = 0; n < 120000 && r.state() != ct::State::Done; n += 100) {
+        f.tick(r, 100);
+        if (!closed_at && (r.state() == ct::State::Detach || r.state() == ct::State::Done)) closed_at = f.in.now;
+    }
+    CHECK_EQ(r.state(), ct::State::Done);
+    CHECK_EQ(count_reason_all(r, ct::Reason::CapsChanged), 0u);
+    CHECK_EQ(count_reason_all(r, ct::Reason::Withdrawn), 4u);
+    CHECK_EQ(anker_pending_rows(r), 0u);
+    CHECK_EQ(row_passed(r, 5000), true); CHECK_EQ(row_passed(r, 9000), true);
+    CHECK_EQ(r.evidence().rebalanced, 1u);
+    CHECK_EQ(f.replans.size(), 1u);
+    if (!f.replans.empty()) CHECK_EQ(f.replans[0][1], 4u);   // the four pending rows withdrawn in the one re-plan
+    CHECK_EQ(closed_at != 0 && closed_at - at >= ct::kWithdrawnWaitMs, true);   // the unit waited for the offer
+    CHECK_EQ(closed_at - at < ct::kWithdrawnWaitMs + 10000, true);               // ... and not much longer than the bound
+}
+// (b) The original list comes back inside the wait (the splitter's next re-announce, one 6.6 s period later): the withdrawn rows
+// run against it and end exactly as in a run without the re-split; the 5 V and 9 V rows are not run again.
+static void test_resplit_with_the_offer_back_inside_the_wait_runs_the_rows() {
+    Fake c; ct::Runner control(c);   // control: no re-split
+    c.caps = anker_caps();
+    CHECK_EQ(control.start(c.caps, kSplitterPd, c.in, true), ct::Reason::None);
+    c.tick(control, 200000);
+    CHECK_EQ(control.state(), ct::State::Done);
+    Fake f; ct::Runner r(f);
+    anker_to_resplit(f, r);
+    f.tick(r, 6600);
+    CHECK_EQ(r.state() != ct::State::Done && r.state() != ct::State::Detach, true);   // the unit is still open
+    CHECK_EQ(anker_pending_rows(r), 0u);
+    f.caps = anker_caps();
+    f.tick(r, 200000);
+    CHECK_EQ(r.state(), ct::State::Done);
+    CHECK_EQ(count_reason_all(r, ct::Reason::CapsChanged), 0u);
+    CHECK_EQ(count_reason_all(r, ct::Reason::Withdrawn), 0u);
+    CHECK_EQ(r.steps().size(), control.steps().size());
+    for (size_t n = 0; n < std::min(r.steps().size(), control.steps().size()); ++n) {
+        CHECK_EQ(r.steps()[n].verdict, control.steps()[n].verdict);
+        CHECK_EQ(r.steps()[n].reason, control.steps()[n].reason);
+        CHECK_EQ(r.steps()[n].tries, control.steps()[n].tries);
+    }
+    CHECK_EQ(row_passed(r, 12000) && row_passed(r, 15000) && row_passed(r, 20000), true);
+    CHECK_EQ(r.evidence().rebalanced, 2u);   // away and back
+    unsigned at9 = 0;                        // the passed 9 V row was not asked again
+    for (const auto& ch : f.choices) if (ch.mv == 9000) ++at9;
+    CHECK_EQ(at9, 1u);
+}
+// (c) The offer comes back only after the unit has closed: the rows stay Withdrawn (nothing is run after the unit's end).
+static void test_resplit_with_the_offer_back_after_the_unit_closed_stays_withdrawn() {
+    Fake f; ct::Runner r(f);
+    anker_to_resplit(f, r);
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Detach || r.state() == ct::State::Done; }, 60000), true);
+    f.caps = anker_caps();
+    f.tick(r, 60000);
+    CHECK_EQ(r.state(), ct::State::Done);
+    CHECK_EQ(count_reason_all(r, ct::Reason::Withdrawn), 4u);
+    CHECK_EQ(count_reason_all(r, ct::Reason::CapsChanged), 0u);
+    CHECK_EQ(anker_pending_rows(r), 0u);
+    CHECK_EQ(r.evidence().rebalanced, 1u);
+    CHECK_EQ(row_passed(r, 12000) || row_passed(r, 15000) || row_passed(r, 20000), false);
+}
+// (d) Another wire revision is still "offers changed": the unit ends at once with CapsChanged, no wait, nothing withdrawn.
+static void test_resplit_with_another_spec_revision_is_still_caps_changed() {
+    Fake f; ct::Runner r(f);
+    const uint32_t at = anker_to_resplit(f, r);
+    f.caps.spec_rev = 1;
+    uint32_t closed_at = 0;
+    for (unsigned n = 0; n < 120000 && r.state() != ct::State::Done; n += 100) {
+        f.tick(r, 100);
+        if (!closed_at && (r.state() == ct::State::Detach || r.state() == ct::State::Done)) closed_at = f.in.now;
+    }
+    CHECK_EQ(r.state(), ct::State::Done);
+    CHECK_EQ(count_reason_all(r, ct::Reason::CapsChanged), 4u);
+    CHECK_EQ(count_reason_all(r, ct::Reason::Withdrawn), 0u);
     CHECK_EQ(r.evidence().rebalanced, 0u);
+    CHECK_EQ(f.replans.empty(), true);
+    CHECK_EQ(closed_at != 0 && closed_at - at < ct::kWithdrawnWaitMs, true);
 }
 // (A current-only drop on a fixed PDO does NOT count as "places no row": per the 2026-11-09 decision the fixed row whose
 // voltage is still offered keeps its row and runs at the new, lower current word - see the fixed-offer test below.)
@@ -8265,7 +8393,11 @@ int main() {
     test_midrun_reannounce_dropping_one_offer_replans_per_row();
     test_midrun_reannounce_withdrawing_the_row_in_flight_ends_it_and_releases();
     test_a_withdrawn_pdo_that_comes_back_revives_its_rows();
-    test_a_reannounce_that_places_no_row_is_still_offers_changed();
+    test_a_reannounce_that_places_no_row_is_a_resplit_not_offers_changed();
+    test_resplit_dropping_every_pending_row_waits_then_ends_withdrawn();
+    test_resplit_with_the_offer_back_inside_the_wait_runs_the_rows();
+    test_resplit_with_the_offer_back_after_the_unit_closed_stays_withdrawn();
+    test_resplit_with_another_spec_revision_is_still_caps_changed();
     test_a_pps_change_during_the_pd_unit_does_not_withdraw_the_pdlow_rows();
     test_a_reannounce_that_only_raises_a_current_counts_nothing();
     test_a_pps_change_keeps_the_rows_whose_target_still_fits();

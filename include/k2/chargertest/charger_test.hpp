@@ -376,6 +376,13 @@ inline constexpr uint32_t kCapsReturnMs = 8000;   // how long an invalid cap lis
 // unchanged for kListSettleMs; each list that arrives inside the window restarts it. The sink's single-Request gate
 // still applies (the Runner sends every Request through it).
 inline constexpr uint32_t kListSettleMs = 1500;
+// Pattern budget-reannounce-mid-run, the end-of-unit wait (2026-11-17): when a re-split left rows of the running PD unit Withdrawn and
+// the list in force still lacks them, the unit stays open this long for the offer to come back before it closes. The Anker 2-way
+// splitter re-announces its list about every 6.6 s (hardware trace), so the bound covers two periods (13.3 s) plus the settle
+// window (1.5 s) the returned list needs before a row may ask: 14.8 s, rounded up to 15 s. A source that does not return the
+// offer in that time costs one wait, once per re-split (a revival re-arms it); a charger that withdrew rows for good is
+// otherwise a unit closed on time.
+inline constexpr uint32_t kWithdrawnWaitMs = 15000;
 inline constexpr uint32_t kEprInfoBusyMs = 1000;   // how long the informational EPR_Get_Source_Cap retries a busy line
 inline constexpr uint32_t kEprReadyMs = 8000;   // how long EPR entry waits for a live contract to enter from
 // pattern epr-entry-hard-reset (Baseus 140W, 2026-11-05): the source Hard Resets in the middle of the EPR entry (after our
@@ -1007,6 +1014,8 @@ private:
     bool list_valid_ = false, list_tracking_ = false;
     bool flight_restart_ = false;   // the row in flight was re-placed by follow_list: re-ask at the new slot/word once the list settles
     pd::SourceCaps caps_now_{};     // the list of the last poll (the end-of-unit sweep re-checks the Withdrawn rows against it)
+    bool wd_wait_ = false;          // the unit is held open for a withdrawn offer to return (next(), kWithdrawnWaitMs from wd_wait_ms_)
+    uint32_t wd_wait_ms_ = 0;
     bool plan_frozen_ = false;    // a restored run: the journaled rows are the plan, a later list does not replan them
     uint8_t fc_replanned_ = 0;    // bit 0: the SCP rows follow the adapter's limits already, bit 1: the UFCS rows follow its modes
     bool pd_skips_recorded_ = true, probe_asked_ = false;

@@ -627,14 +627,22 @@ Restart rules for a mid-run re-announce (user decision 2026-11-09):
   each list that arrives inside the window restarts it. The sink's single-Request gate still applies.
 - The row in flight is restarted at its new slot and current word once the list has settled (the restart is not a try:
   `tries` counts only source failures). Not offered: `Withdrawn`, then a release to 5 V through the sink gate.
-- Before the PD unit closes, the Withdrawn rows are re-checked once against the list in hand (after a settle) and the ones
-  that came back run (the end-of-unit sweep in `next()`).
+- Before the PD unit closes, the Withdrawn rows are re-checked against the list in force (after a settle) and the ones
+  that are offered then run at the new slot and current word (the end-of-unit sweep in `next()`). If the list in force
+  still lacks them, the unit stays open, idle at 5 V in the Baseline, for `kWithdrawnWaitMs` (15 s) from the first time
+  it would have closed; a list that comes back inside the wait revives the rows through `follow_list` as above (a
+  passed row is never run again, a row whose voltage came back at another current runs at the new word). Then the unit
+  closes with the rows `Withdrawn`; an offer that returns only after that stays unseen. The bound is two of the Anker
+  splitter's ~6.6 s re-announce periods (13.3 s) plus the 1.5 s settle window, rounded up; a revival re-arms the wait for
+  the next re-split. The Mi 20 V 6 A hunt row is an ordinary row of the PD unit and follows the same rule.
 - Flapping is not a failure: no counter gives up; keep settling and re-planning.
 
-Limits: a list that places no PD row at all (pending or in flight), a `spec_rev` change, and no list back within
-`kCapsReturnMs` are a genuinely different list and stay `CapsChanged` ("offers changed": the unit is skipped, the run
-continues) — never a re-split while attached. The excluded cases (VBUS dark, the `preauth_tail` window, EPR entry/exit,
-the hunt-Reject answer) keep their own handling. The cause of the Baseus re-announce (the SOP' query itself, or the Ra) is
+Limits: a `spec_rev` change and no list back within `kCapsReturnMs` are a genuinely different list and stay
+`CapsChanged` ("offers changed": the unit is skipped, the run continues). A same-revision list that drops EVERY pending
+and in-flight row of the unit is a re-split like any other (user decision 2026-11-17, Anker 2-way splitter: after the 5 V
+and 9 V rows passed it re-announced 5 V 1.5 A + 9 V 3 A; the 12/15/20 V rows and the Mi 20 V 6 A row were gone): the rows
+are `Withdrawn`, `Evidence::rebalanced` counts it and the unit waits as above instead of being skipped. The excluded
+cases (VBUS dark, the `preauth_tail` window, EPR entry/exit, the hunt-Reject answer) keep their own handling. The cause of the Baseus re-announce (the SOP' query itself, or the Ra) is
 not provable from the logs; the planner follows the list either way.
 
 ## PD row judging (review pass 2026-11-11, host-tested, hardware check pending)
