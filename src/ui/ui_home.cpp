@@ -74,15 +74,27 @@ constexpr int kReloadLagSteps = 8;                   // a sweep this many steps 
 
 constexpr int32_t abs32(int32_t v) { return v < 0 ? (v == INT32_MIN ? INT32_MAX : -v) : v; }
 
-constexpr trend::Qty trend_qty(hm::Qty q) { return q == hm::Qty::W ? trend::Qty::W : q == hm::Qty::V ? trend::Qty::V : trend::Qty::A; }
-constexpr std::string_view qty_label(hm::Qty q) { return q == hm::Qty::W ? "POWER" : q == hm::Qty::V ? "VBUS" : "IBUS"; }
-constexpr std::string_view qty_unit(hm::Qty q) { return q == hm::Qty::W ? "W" : q == hm::Qty::V ? "V" : "A"; }
-constexpr char qty_unit_char(hm::Qty q) { return q == hm::Qty::W ? 'W' : q == hm::Qty::V ? 'V' : 'A'; }
-// Quantity fields: a black field, the quantity's own colour for its digits, and the trend as a dark tint column under a
-// brighter 1 px level line (the look of the pre-Fieldbook Home, restored 2026-11-13). Stale: the grey, idle: faint.
-uint16_t qty_color(hm::Qty q) { return q == hm::Qty::W ? kWatt : q == hm::Qty::V ? kVolt : kAmp; }
-uint16_t qty_tint(hm::Qty q) { return q == hm::Qty::W ? kWattT : q == hm::Qty::V ? kVoltT : kAmpT; }
-uint16_t qty_line(hm::Qty q) { return q == hm::Qty::W ? kWattL : q == hm::Qty::V ? kVoltL : kAmpL; }
+struct QtyMeta {
+    trend::Qty tq;
+    const char *label, *unit;
+    char uc;
+    uint16_t color, tint, line;
+};
+constexpr QtyMeta kQtyMeta[3] = {
+    {trend::Qty::W, "POWER", "W", 'W', kWatt, kWattT, kWattL},   // Qty::W = 0
+    {trend::Qty::V, "VBUS",  "V", 'V', kVolt, kVoltT, kVoltL},   // Qty::V = 1
+    {trend::Qty::A, "IBUS",  "A", 'A', kAmp,  kAmpT,  kAmpL},    // Qty::A = 2
+};
+static_assert(static_cast<unsigned>(hm::Qty::W) == 0 && static_cast<unsigned>(hm::Qty::V) == 1 &&
+              static_cast<unsigned>(hm::Qty::A) == 2);
+inline const QtyMeta &qty_meta(hm::Qty q) { return kQtyMeta[static_cast<unsigned>(q)]; }
+constexpr trend::Qty trend_qty(hm::Qty q) { return qty_meta(q).tq; }
+constexpr std::string_view qty_label(hm::Qty q) { return qty_meta(q).label; }
+constexpr std::string_view qty_unit(hm::Qty q) { return qty_meta(q).unit; }
+constexpr char qty_unit_char(hm::Qty q) { return qty_meta(q).uc; }
+inline uint16_t qty_color(hm::Qty q) { return qty_meta(q).color; }
+inline uint16_t qty_tint(hm::Qty q) { return qty_meta(q).tint; }
+inline uint16_t qty_line(hm::Qty q) { return qty_meta(q).line; }
 // A field's look in one mode: the ground, the digit ink, the label ink. An alarm over the limit is white on red.
 struct FieldLook { uint16_t fill, ink, label; };
 FieldLook field_look(hm::Mode m, hm::Qty q, bool over, bool near_) {
@@ -245,8 +257,7 @@ void HomePage::sample_values(Frame &f, uint32_t now_ms) {
 // One sweep per slot: the hero's 110 columns, the ledger rows' 66 over the same window. The hero steps on the clock; a
 // ledger row steps when the hero cursor crosses one of its columns (cursor x 66 / 110), so all three show one span.
 
-void HomePage::update_sweep(const Frame &f, uint32_t now_ms, int (&step_col)[3], int (&step_n)[3]) {
-    for (int i = 0; i < 3; i++) { step_col[i] = -1; step_n[i] = 0; }
+void HomePage::update_sweep(const Frame &f, uint32_t now_ms) {
     if (f.mode != hm::Mode::Live && f.mode != hm::Mode::Stale) return;
     const hm::Qty hero = ctx_.keep.home_hero;
     const hm::Ledger led = hm::ledger_of(hero);
@@ -288,17 +299,13 @@ void HomePage::update_sweep(const Frame &f, uint32_t now_ms, int (&step_col)[3],
     while (f.mode == hm::Mode::Live && !replay && hero_n < kCatchUpSteps && now_ms - sweep_t_ >= step) {
         sweep_t_ += step;
         const uint8_t lv = static_cast<uint8_t>(hm::sweep_rows(ctx_.trend.latest(window_, trend_qty(q[0])), scale[0], span[0]));
-        const int first = sw_[0].step(lv);
-        if (step_n[0] == 0) step_col[0] = first;
-        step_n[0]++;
+        sw_[0].step(lv);
         hero_n++;
         const int target = sw_[0].cursor * hm::kLedgerCols / hm::kCols;
         for (int i = 1; i < 3; i++) {
             if (sw_[i].cursor == target) continue;
             const uint8_t l = static_cast<uint8_t>(hm::sweep_rows(ctx_.trend.latest(window_, trend_qty(q[i])), scale[i], span[i]));
-            const int fc = sw_[i].step(l);
-            if (step_n[i] == 0) step_col[i] = fc;
-            step_n[i]++;
+            sw_[i].step(l);
         }
     }
 }
@@ -376,7 +383,7 @@ uint32_t HomePage::qty_head(int si, hm::Qty q, const Frame &f, QtyHead &h, hm::I
         it[n++] = hm::text(kLabelFont, static_cast<int16_t>(right_x + 1 - 6 * mn), ly, mtxt.view(), label);
     }
     head = mix_u32(mix_u32(head, static_cast<uint32_t>(al)), static_cast<uint32_t>(pill));
-    return mix(mix(mix(head, ptxt.view()), mtxt.view()), atxt.view());
+    return pg::mix_str(pg::mix_str(pg::mix_str(head, ptxt.view()), mtxt.view()), atxt.view());
 }
 
 bool HomePage::paint_cell_sliced(int slot_id, uint32_t base_sig, const home::Cell &cell,
@@ -411,7 +418,7 @@ bool HomePage::paint_cell_sliced(int slot_id, uint32_t base_sig, const home::Cel
     return true;
 }
 
-void HomePage::paint_qty(int si, hm::Qty q, const Frame &f, int step_col, int step_n) {
+void HomePage::paint_qty(int si, hm::Qty q, const Frame &f) {
     const bool hero = si == 0;
     const Slot s = slot_of(si);
     const hm::Mode m = f.mode;
@@ -556,13 +563,6 @@ void HomePage::paint_qty(int si, hm::Qty q, const Frame &f, int step_col, int st
                 hm::paint(cell, st.r[i].x0, g0.t0, st.r[i].x1, g0.t1);
             painted_cursor_[si] = static_cast<int8_t>(cur);
         }
-    } else if (step_col >= 0 && cell.sweep) {
-        const hm::Strip st = hm::strip_of(step_col, step_n, sw_[si].n);
-        for (int i = 0; i < st.n; i++) {
-            const int cost = static_cast<int>(st.r[i].x1 - st.r[i].x0 + 1) * (g0.t1 - g0.t0 + 1);
-            if (bg_budget) bg_budget->spent += cost;
-            hm::paint(cell, st.r[i].x0, g0.t0, st.r[i].x1, g0.t1);
-        }
     }
     if (digits_changed) {
         const int cost = static_cast<int>(px1 - px0 + 1) * (hero ? kHeroRows : kLedRows);
@@ -602,8 +602,7 @@ void HomePage::paint_card(int ci, const Frame &f) {
     if (dot) add(hm::fill(kDotX, static_cast<int16_t>(y0 + 1), 5, 5, kAccent));
 
     char b0[12], b1[12];
-    StrBuf<8> s0, s1, lines[4];
-    StrBuf<12> sp, speed;
+    StrBuf<12> sb[4];
     switch (card) {
     case hm::Card::Energy: {   // ENERGY title, then Wh over Ah, decimal-aligned on x182
         label("ENERGY", 3);
@@ -672,14 +671,15 @@ void HomePage::paint_card(int ci, const Frame &f) {
         label("CABLE", 3);
         zone(16, 36);
         if (em.valid) {
+            StrBuf<8> s0, s1;
             emarker_amps_text(em, s0);
             emarker_volts_text(em, s1);
-            sp.put(s0.view()).put_char(' ').put(s1.view());
+            sb[0].put(s0.view()).put_char(' ').put(s1.view());
         }
-        right(kSmall, 29, em.valid ? sp.view() : std::string_view("--"), em.valid ? tone(m, kText) : kFaint);
+        right(kSmall, 29, em.valid ? sb[0].view() : std::string_view("--"), em.valid ? tone(m, kText) : kFaint);
         zone(37, -1);
-        if (em.valid) emarker_speed_pill(em, speed);
-        right(kLabelFont, 50, speed.view(), kDim);
+        if (em.valid) emarker_speed_pill(em, sb[1]);
+        right(kLabelFont, 50, sb[1].view(), kDim);
         break;
     }
     case hm::Card::Lines: {
@@ -692,8 +692,8 @@ void HomePage::paint_card(int ci, const Frame &f) {
             if (mv < 0 || !live) {
                 right(kLabelFont, base, "--", kFaint);
             } else {
-                lines[r].put_fixed(mv, 2).put_char('V');
-                right(kLabelFont, base, lines[r].view(), kText);
+                sb[r].put_fixed(mv, 2).put_char('V');
+                right(kLabelFont, base, sb[r].view(), kText);
             }
         }
         break;
@@ -929,8 +929,7 @@ void HomePage::update(uint32_t now_ms) {
         if (want != hm::Card::Count || was != hm::Card::Count) ctx_.keep.cards.force_top(want, ok);
     }
 
-    int step_col[3], step_n[3];
-    update_sweep(f, now_ms, step_col, step_n);
+    update_sweep(f, now_ms);
     const hm::Ledger led = hm::ledger_of(hero);
     const hm::Qty q[3] = {hero, led.row[0], led.row[1]};
     int start = rr_slot_ % 6;
@@ -939,7 +938,7 @@ void HomePage::update(uint32_t now_ms) {
     }
     for (int off = 0; off < 6; ++off) {
         const int s = (start + off) % 6;
-        if (s < 3) paint_qty(s, q[s], f, step_col[s], step_n[s]);
+        if (s < 3) paint_qty(s, q[s], f);
         else if (s < 5) paint_card(s - 3, f);
         else paint_info(f);
         if (ctx_.budget && ctx_.budget->more) {

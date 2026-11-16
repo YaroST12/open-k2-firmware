@@ -7,6 +7,7 @@
 
 #include "k2/core/bbpersist.hpp"
 #include "k2/pd/pd_vdm.hpp"
+#include "k2/ui/ui_pages.hpp"
 #include "k2/ui/ui_widgets.hpp"
 #include "k2/ui/ui_style.hpp"
 
@@ -29,39 +30,23 @@ static_assert(all_fit(kTriggerNames, kSmallAdvPx, kit::kTailX - 8 - 7 * kSmallAd
 constexpr const char *kLinkNames[] = {"USB", "Thunderbolt", "DisplayPort", "Cable", "Partner USB"};
 static_assert(all_fit(kLinkNames, 6, 92 - 6 - 6), "a link key is wider than its column");
 
-const char *trigger_name(pdtrace::Trigger t) {
-    switch (t) {
-    case pdtrace::Trigger::Contract:  return kTriggerNames[0];
-    case pdtrace::Trigger::HardReset: return kTriggerNames[1];
-    case pdtrace::Trigger::VbusDip:   return kTriggerNames[2];
-    case pdtrace::Trigger::Detach:    return kTriggerNames[3];
-    case pdtrace::Trigger::Edges:     return kTriggerNames[4];
-    case pdtrace::Trigger::Refusal:   return kTriggerNames[5];
-    default:                          return kTriggerNames[6];
-    }
+struct TrigMeta { const char *name; uint16_t color; Icon icon; };
+constexpr TrigMeta kTrigMeta[7] = {
+    {kTriggerNames[6], kDim,     Icon::Info},   // None = 0
+    {kTriggerNames[0], kDim,     Icon::Pd},     // Contract = 1
+    {kTriggerNames[1], kError,   Icon::Warn},   // HardReset = 2
+    {kTriggerNames[2], kCaution, Icon::Wave},   // VbusDip = 3
+    {kTriggerNames[3], kDim,     Icon::Plug},   // Detach = 4
+    {kTriggerNames[4], kDim,     Icon::Usb},    // Edges = 5
+    {kTriggerNames[5], kError,   Icon::Cross},  // Refusal = 6
+};
+const TrigMeta &trig_meta(pdtrace::Trigger t) {
+    const unsigned i = static_cast<unsigned>(t);
+    return kTrigMeta[i < 7 ? i : 0];
 }
-
-// Only the triggers that mean trouble are coloured: a hard reset and a refused 6 A in red, a VBUS dip in amber.
-uint16_t trigger_color(pdtrace::Trigger t) {
-    switch (t) {
-    case pdtrace::Trigger::HardReset: return kError;
-    case pdtrace::Trigger::VbusDip:   return kCaution;
-    case pdtrace::Trigger::Refusal:   return kError;
-    default:                          return kDim;
-    }
-}
-
-Icon trigger_icon(pdtrace::Trigger t) {
-    switch (t) {
-    case pdtrace::Trigger::Contract:  return Icon::Pd;
-    case pdtrace::Trigger::HardReset: return Icon::Warn;
-    case pdtrace::Trigger::VbusDip:   return Icon::Wave;
-    case pdtrace::Trigger::Detach:    return Icon::Plug;
-    case pdtrace::Trigger::Edges:     return Icon::Usb;
-    case pdtrace::Trigger::Refusal:   return Icon::Cross;
-    default:                          return Icon::Info;
-    }
-}
+const char *trigger_name(pdtrace::Trigger t) { return trig_meta(t).name; }
+uint16_t trigger_color(pdtrace::Trigger t) { return trig_meta(t).color; }
+Icon trigger_icon(pdtrace::Trigger t) { return trig_meta(t).icon; }
 
 // "05AC:1234 Apple" / "67W 5PDO+2PPS" / "?": the key text and, apart, the vendor name (may be empty).
 struct KeyText {
@@ -84,11 +69,6 @@ KeyText key_text(const view::Identity &id) {
     return k;
 }
 
-uint32_t hash_mix(uint32_t h, std::string_view s) {
-    for (char c : s) h = (h ^ static_cast<uint8_t>(c)) * 16777619u;
-    return h;
-}
-
 // "#7 2.5s 5 msg" (sequence number, time span, messages) as its three parts. Absolute, so it does not change while the
 // screen stays up. A capture still recording has no span yet: `rec` is set and the parts stay empty.
 struct CaptureParts {
@@ -108,17 +88,8 @@ void capture_parts(CaptureParts &p, const pdtrace::CaptureInfo &info, std::span<
     p.count = all.substr(b + 1);
 }
 
-// Copies s (cut to fit) into dst[0..cap-1] and returns the view of the copy.
-std::string_view stash(char *dst, std::size_t cap, std::string_view s) {
-    const std::size_t n = std::min(s.size(), cap - 1);
-    std::memcpy(dst, s.data(), n);
-    dst[n] = 0;
-    return {dst, n};
-}
-
 // "41K free" of the flash ring, or "idle, not saving" once no PD traffic came for the idle time.
-template <size_t N>
-void put_flash(StrBuf<N> &f, const bbpersist::Status &s) {
+void put_flash(StrBufBase &f, const bbpersist::Status &s) {
     if (s.idle) f.put("Idle, not saving. ");
     f.put_u32(s.free_bytes / 1024).put("K free");
 }
@@ -208,9 +179,9 @@ void BlackBoxPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
         if (k.vendor[0] && text_cells(std::string_view(k.key, k.n)) + 1 + text_cells(k.vendor) <= 20) a.put(" ").put(k.vendor);
         t.put_char('x').put_u32(r.count);
         out.marker = kit::Marker::None;
-        out.text = stash(abuf, acap, a.view());
+        out.text = pg::stash_str(abuf, acap, a.view());
         out.text_color = k.identity ? kText : kDim;
-        out.tail = stash(tbuf, tcap, t.view());
+        out.tail = pg::stash_str(tbuf, tcap, t.view());
         return;
     }
     const auto info = pdtrace::capture_info(r.slot);
@@ -226,8 +197,8 @@ void BlackBoxPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
     }
     StrBuf<acap> a;
     a.put(cp.seq).put("  ").put(cp.count);
-    out.tail = stash(tbuf, tcap, cp.span);
-    out.note = stash(abuf, acap, a.view());
+    out.tail = pg::stash_str(tbuf, tcap, cp.span);
+    out.note = pg::stash_str(abuf, acap, a.view());
 }
 
 void BlackBoxPage::paint_empty_text() {
@@ -241,7 +212,7 @@ void BlackBoxPage::paint_list() {
     const Surface &c = ctx_.content;
     const bool empty = nrows_ == 0;
     if (bound_ != (empty ? 1 : 0)) {                  // first paint, or the list became empty / non-empty
-        if (!ctx_.blank) gfx_fill(c, 0, kBarH, c.w, static_cast<int16_t>(kFooterY - kBarH), kBg);   // a blank screen is kBg already
+        if (!ctx_.blank) pg::clear_body(c);   // a blank screen is kBg already
         if (empty) paint_empty_text();
         ctx_.rows.init(c, empty ? kEmptyListY : kit::kBodyY, row_fn, this);
         ctx_.rows.invalidate();
@@ -270,10 +241,10 @@ void BlackBoxPage::paint_timeline_head() {
     CaptureParts cp;
     capture_parts(cp, info, data());
     const std::string_view at = cp.rec ? std::string_view("REC") : cp.all;
-    uint32_t sig = hash_mix(2166136261u, at);
-    sig = hash_mix(sig, std::string_view(k.key, k.n));
-    sig = hash_mix(sig, k.vendor);
-    sig = (sig ^ static_cast<uint8_t>(info.trigger)) * 16777619u;
+    uint32_t sig = pg::mix_str(2166136261u, at);
+    sig = pg::mix_str(sig, std::string_view(k.key, k.n));
+    sig = pg::mix_cstr(sig, k.vendor);
+    sig = mix_u32(sig, static_cast<uint8_t>(info.trigger));
     if (head_painted_ && sig == head_sig_) return;
     gfx_fill(c, 0, kTlHeadY, c.w, static_cast<int16_t>(kStripBoxY - kTlHeadY), kBg);
     draw_icon(c, 6, kTlHeadY + 2, trigger_icon(info.trigger), trigger_color(info.trigger), kBg);
@@ -304,13 +275,13 @@ void BlackBoxPage::paint_link() {
     const Surface &c = ctx_.content;
     const view::Link l = link_live_ ? pdtrace::live_link() : view::link_of(data());
     const view::LinkText t = view::link_text(l);
-    char dp[16] = {};
-    if (t.dp[0]) { dp[0] = 'D'; dp[1] = 'P'; dp[2] = ' '; dp[3] = 'a'; dp[4] = 'l'; dp[5] = 't'; dp[6] = ' '; dp[7] = t.dp[0]; }
-    const char *const rows[5] = {t.usb, t.tbt, dp, t.cable, t.peer};
-    uint32_t sig = hash_mix(2166136261u ^ (link_live_ ? 1u : 0u), std::string_view(rows[0]));
-    for (int i = 1; i < 5; i++) sig = hash_mix(sig, std::string_view(rows[i]));
+    StrBuf<16> dp;
+    if (t.dp[0]) dp.put("DP alt ").put_char(t.dp[0]);
+    const char *const rows[5] = {t.usb, t.tbt, dp.c_str(), t.cable, t.peer};
+    uint32_t sig = 2166136261u ^ (link_live_ ? 1u : 0u);
+    for (int i = 0; i < 5; i++) sig = pg::mix_cstr(sig, rows[i]);
     if (link_painted_ && sig == link_sig_) return;
-    gfx_fill(c, 0, kBarH, c.w, static_cast<int16_t>(kFooterY - kBarH), kBg);
+    pg::clear_body(c);
     gfx_text(c, kSmall, 8, kTlHeadY, link_live_ ? "Live link" : "Link", kText, kBg);
     for (int i = 0; i < 5; i++) {
         const bool seen = rows[i][0] != 0;
@@ -359,7 +330,7 @@ void BlackBoxPage::draw_line_row(void *self, int index, const Rect &, bool, Fiel
 void BlackBoxPage::enter_mode(Mode m) {
     mode_ = m;
     const Surface &c = ctx_.content;
-    if (!ctx_.blank) gfx_fill(c, 0, kBarH, c.w, static_cast<int16_t>(kFooterY - kBarH), kBg);   // keep the status bar; a blank screen is kBg already
+    if (!ctx_.blank) pg::clear_body(c);   // keep the status bar; a blank screen is kBg already
     bound_ = -1;
     head_painted_ = false;
     link_painted_ = false;

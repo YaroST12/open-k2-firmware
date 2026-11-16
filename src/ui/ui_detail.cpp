@@ -116,7 +116,7 @@ void lay_row_ground(const Surface &c, int r) {
 void DetailPage::reset_cells() {
     bar_valid_ = false;
     flow_sig_ = 0xFF;
-    for (int i = 0; i < SCount; i++) f_[i].invalidate();
+    pg::invalidate_fields(f_, SCount);
 }
 
 void DetailPage::draw_static() {
@@ -216,19 +216,20 @@ void DetailPage::update(uint32_t now_ms) {
     const std::optional<adc::Reading> &an = ctx_.analog;
     const bool vbus = online && pm.vbus_mv >= 1000;
     const bool live = vbus;
-    auto col = [&](uint16_t on) { return live ? on : kFaint; };
-    auto put = [&](int slot, std::string_view s, uint16_t color) -> bool {
-        if (bg && !f_[slot].valid() && !bg->admit(f_[slot].box_px(), true)) return false;
-        f_[slot].set_colors(color, kBg);
-        f_[slot].draw(s);
-        return true;
+    const uint16_t live_col = live ? kText : kFaint;
+    StrBuf<16> s;
+    auto put = [&](int slot, std::string_view sv, uint16_t color) {
+        return pg::put_field(f_[slot], bg, sv, color);
     };
 
     if (online) {
-        StrBuf<12> v; v.put_fixed(pm.vbus_mv, 2); if (!put(SV, v.view(), col(kText))) return;
-        StrBuf<12> a; a.put_abs_fixed(pm.current_ma, 3); if (!put(SA, a.view(), col(kText))) return;
+        s.put_fixed(pm.vbus_mv, 2);
+        if (!put(SV, s.view(), live_col)) return;
+        s.clear(); s.put_abs_fixed(pm.current_ma, 3);
+        if (!put(SA, s.view(), live_col)) return;
         // Five cells: "99.99" is the last two-decimal reading, from 100 W on one decimal ("180.0").
-        StrBuf<12> w; w.put_abs_fixed(pm.power_mw, pm.power_mw >= 99995 ? 1 : 2); if (!put(SW, w.view(), col(kText))) return;
+        s.clear(); s.put_abs_fixed(pm.power_mw, pm.power_mw >= 99995 ? 1 : 2);
+        if (!put(SW, s.view(), live_col)) return;
     } else {
         if (!put(SV, "--.--", kFaint) || !put(SA, "-.---", kFaint) || !put(SW, "--.--", kFaint)) return;
     }
@@ -239,7 +240,7 @@ void DetailPage::update(uint32_t now_ms) {
         StrBuf<13> ct;
         home_contract_short(ctr, ctx_.fc, vbus ? pm.vbus_mv : 0, ct);
         const bool none = ct.view().empty();
-        if (!put(SContract, none ? "--" : ct.view(), none ? kFaint : col(kText))) return;
+        if (!put(SContract, none ? "--" : ct.view(), none ? kFaint : live_col)) return;
     }
 
     // Max: the largest offer of the attached source ("100W").
@@ -247,9 +248,10 @@ void DetailPage::update(uint32_t now_ms) {
         const pd::SourceCaps &caps = pd::active_caps();
         uint32_t mw = 0;
         for (int i = 0; i < caps.num_pdos && caps.valid; i++) mw = caps.pdos[i].max_mw > mw ? caps.pdos[i].max_mw : mw;
+        s.clear();
         if (caps.valid && mw >= 1000) {
-            StrBuf<8> m; m.put_u32((mw + 500) / 1000).put("W");
-            if (!put(SMaxW, m.view(), col(kText))) return;
+            s.put_u32((mw + 500) / 1000).put("W");
+            if (!put(SMaxW, s.view(), live_col)) return;
         } else {
             if (!put(SMaxW, "--", kFaint)) return;
         }
@@ -258,21 +260,21 @@ void DetailPage::update(uint32_t now_ms) {
     // Cable: the e-marker's rating ("5A 100W"); EPR / active tags stay with the Cable place.
     {
         const pd::Emarker &em = fusb302::emarker();
-        StrBuf<10> cb;
+        s.clear();
         if (em.valid && em.max_current_a) {
-            cb.put_u32(em.max_current_a).put_char('A');
-            if (em.max_power_w) { cb.put_char(' ').put_u32(em.max_power_w).put_char('W'); }
+            s.put_u32(em.max_current_a).put_char('A');
+            if (em.max_power_w) s.put_char(' ').put_u32(em.max_power_w).put_char('W');
         } else {
-            cb.put("--");
+            s.put("--");
         }
-        if (!put(SCable, cb.view(), em.valid ? col(kText) : kFaint)) return;
+        if (!put(SCable, s.view(), em.valid ? live_col : kFaint)) return;
     }
 
     {   // The lines, one cell each. They are measured whether or not VBUS is up (a waiting charger shows its Rp with VBUS dark).
         const int32_t mv[4] = {an ? an->cc1_mv : 0, an ? an->cc2_mv : 0, an ? an->dp_mv : 0, an ? an->dm_mv : 0};
         const int slot[4] = {SCc1, SCc2, SDp, SDm};
         for (int i = 0; i < 4; i++) {
-            StrBuf<8> s;
+            s.clear();
             if (an) s.put_fixed(mv[i] < 0 ? 0 : mv[i], 2).put_char('V'); else s.put("--");
             if (!put(slot[i], s.view(), an ? kText : kFaint)) return;
         }
@@ -292,17 +294,16 @@ void DetailPage::update(uint32_t now_ms) {
         char whb[16], ahb[16];
         fmt_energy_pair(whb, ahb, ctx_.meter.mwh(), ctx_.meter.mah(), 5);
         auto trim = [](const char *p) { while (*p == ' ') p++; return std::string_view(p); };
-        StrBuf<10> wh, ah;
-        wh.put(trim(whb)).put("Wh");
-        ah.put(trim(ahb)).put("Ah");
-        if (!put(SWh, wh.view(), kText)) return;
-        if (!put(SAh, ah.view(), kText)) return;
+        s.clear(); s.put(trim(whb)).put("Wh");
+        if (!put(SWh, s.view(), kText)) return;
+        s.clear(); s.put(trim(ahb)).put("Ah");
+        if (!put(SAh, s.view(), kText)) return;
     }
 
     {
-        StrBuf<10> el;
-        el.put_hms(ctx_.meter.elapsed_s(now_ms));
-        if (!put(STime, el.view(), kText)) return;
+        s.clear();
+        s.put_hms(ctx_.meter.elapsed_s(now_ms));
+        if (!put(STime, s.view(), kText)) return;
         StrBuf<8> tmp;
         temp_short_text(an, tmp);
         std::string_view ts = tmp.view();
@@ -312,21 +313,21 @@ void DetailPage::update(uint32_t now_ms) {
     }
 
     {   // Fast chg: the passive D+/D- verdict; R: the load resistance ("--" without a load).
-        StrBuf<10> fp;
+        s.clear();
         if (ctx_.fc != fastcharge::Protocol::NoInput && ctx_.fc != fastcharge::Protocol::NoQuick &&
             ctx_.fc != fastcharge::Protocol::Pending)
-            fp.put(fastcharge::short_name(ctx_.fc));
-        const bool none = fp.view().empty();
-        if (!put(SFc, none ? "--" : fp.view(), none || !live ? kFaint : kText)) return;
+            s.put(fastcharge::short_name(ctx_.fc));
+        const bool none = s.view().empty();
+        if (!put(SFc, none ? "--" : s.view(), none || !live ? kFaint : kText)) return;
         if (live && pm.current_ma) {
             char r[16];
             const int n = fmt_ohms(r, pm.vbus_mv, pm.current_ma);
-            StrBuf<10> rs;
             std::string_view rv{r, static_cast<size_t>(n)};
             while (!rv.empty() && rv.front() == ' ') rv.remove_prefix(1);
-            rs.put(rv);
-            if (rv != "--") rs.put_char('R');
-            if (!put(SOhm, rs.view(), rv == "--" ? kFaint : kText)) return;
+            s.clear();
+            s.put(rv);
+            if (rv != "--") s.put_char('R');
+            if (!put(SOhm, s.view(), rv == "--" ? kFaint : kText)) return;
         } else {
             if (!put(SOhm, "--", kFaint)) return;
         }

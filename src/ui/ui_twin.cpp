@@ -17,6 +17,7 @@
 #include "k2/ui/text.hpp"
 #include "k2/ui/ui.hpp"
 #include "k2/ui/ui_elem.hpp"
+#include "k2/ui/ui_pages.hpp"
 #include "k2/ui/ui_style.hpp"
 
 namespace k2 {
@@ -95,14 +96,12 @@ constexpr int16_t kCellY = 156, kCellH = 64;     // the armed ActionCell / the p
 // x6..100), right of it the device's (right-aligned to x218, x110..218). A fact too wide for its half drops to font 12.
 constexpr int16_t kSplitX = 104, kLeftRoom = kSplitX - 4 - kLeft, kRightX = kSplitX + 6, kRightRoom = kRight - kRightX;
 
-template <size_t N>
-void put_level(StrBuf<N> &b, uint32_t milli, char unit) {
+void put_level(StrBufBase &b, uint32_t milli, char unit) {
     char t[12];
     const int n = home::fmt_level(t, milli);
     b.put(std::string_view(t, static_cast<std::size_t>(n))).put_char(unit);
 }
-template <size_t N>
-void put_w(StrBuf<N> &b, uint32_t mw) {
+void put_w(StrBufBase &b, uint32_t mw) {
     b.put_u32((mw + 500) / 1000).put_char('W');
 }
 constexpr uint32_t kNoDraw = 0xFFFFFFFFu;   // no power monitor: the live draw is unknown
@@ -115,8 +114,7 @@ const char *limiter_word(twin::Limiter l) {
 }
 
 // The charger's top offer in the protocol-row format: its highest-power fixed level, "PD 20V3A" ("EPR 28V5A" above 20 V).
-template <size_t N>
-void put_top_offer(StrBuf<N> &b, const pd::SourceCaps &caps) {
+void put_top_offer(StrBufBase &b, const pd::SourceCaps &caps) {
     const pd::Pdo *best = nullptr;
     for (std::size_t i = 0; caps.valid && i < caps.num_pdos && i < caps.pdos.size(); i++) {
         const pd::Pdo &p = caps.pdos[i];
@@ -173,7 +171,7 @@ void TwinPage::draw_static() {
     has_icon_ = !detail_;
     title_bar();
     if (detail_) {
-        gfx_fill(ctx_.content, 0, kit::kBelowBar, ctx_.content.w, static_cast<int16_t>(kFooterY - kit::kBelowBar), kBg);
+        pg::clear_body(ctx_.content, kit::kBelowBar);
         det_sig_ = 0;
         draw_next_ = 0;   // sample the live draw at once
         cell_.invalidate();
@@ -810,14 +808,8 @@ void TwinPage::build_info() {
 }
 
 int16_t TwinPage::line_h(int i) const {
-    switch (i) {
-    case 0: return kNameH;
-    case 1: return kGetsH;
-    case 2: return kBarLineH;
-    case 3: return kContractH;
-    case 4: return kRuleH;
-    default: return kit::kInfoPitch;
-    }
+    static constexpr int16_t kLineH[5] = {kNameH, kGetsH, kBarLineH, kContractH, kRuleH};
+    return static_cast<unsigned>(i) < 5 ? kLineH[i] : kit::kInfoPitch;
 }
 
 // The action box sits under the last body line; lines scroll off the top (whole lines) until the focused action row fits.

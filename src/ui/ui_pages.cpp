@@ -42,16 +42,60 @@ namespace k2 {
 
 namespace {
 
-// Whole volts without a decimal, otherwise one decimal: 5, 20, 3.3, 9.5.
-template <size_t N>
-void put_volts(StrBuf<N> &s, uint32_t mv) {
-    if (mv % 1000 == 0) s.put_u32(mv / 1000);
-    else s.put_fixed(static_cast<int32_t>(mv / 100 * 100), 1);
-}
-
 constexpr unsigned kModelLabelVersion = 55;   // version digits of the model label ("N6.55")
 
+// Whole volts without a decimal, otherwise one decimal: 5, 20, 3.3, 9.5.
+void put_volts(StrBufBase &s, uint32_t mv) {
+    pg::put_exact_unit(s, (mv / 100u) * 100u, 0);
+}
+
 }  // namespace
+
+namespace pg {
+bool put_field(Field &f, PaintBudget *bg, std::string_view s, uint16_t fg, uint16_t bg_col) {
+    if (bg && !f.valid() && !bg->admit(f.box_px(), true)) return false;
+    f.set_colors(fg, bg_col);
+    f.draw(s);
+    return true;
+}
+
+void invalidate_fields(Field *f, int n) {
+    for (int i = 0; i < n; i++) f[i].invalidate();
+}
+
+void clear_body(const Surface &c, int16_t y0) {
+    if (y0 < kFooterY) gfx_fill(c, 0, y0, c.w, static_cast<int16_t>(kFooterY - y0), kBg);
+}
+
+std::string_view stash_str(char *dst, std::size_t cap, std::string_view s) {
+    const std::size_t n = std::min(s.size(), cap - 1);
+    std::memcpy(dst, s.data(), n);
+    dst[n] = 0;
+    return {dst, n};
+}
+
+[[gnu::noinline]] uint32_t mix_str(uint32_t h, std::string_view s) {
+    for (char c : s) h = (h ^ static_cast<uint8_t>(c)) * 16777619u;
+    return h;
+}
+
+[[gnu::noinline]] uint32_t mix_cstr(uint32_t h, const char *s, std::size_t max_len) {
+    if (!s) return h;
+    for (std::size_t i = 0; i < max_len && s[i]; i++) h = (h ^ static_cast<uint8_t>(s[i])) * 16777619u;
+    return h;
+}
+
+[[gnu::noinline]] uint32_t mix_u32s(uint32_t h, const uint32_t *w, std::size_t n) {
+    for (std::size_t i = 0; i < n; i++) h = mix_u32(h, w[i]);
+    return h;
+}
+
+[[gnu::noinline]] void put_exact_unit(StrBufBase &out, uint32_t milli, char unit) {
+    if (milli % 1000 == 0) out.put_u32(milli / 1000);
+    else out.put_fixed(static_cast<int32_t>(milli), milli % 100 == 0 ? 1 : milli % 10 == 0 ? 2 : 3);
+    if (unit) out.put_char(unit);
+}
+}  // namespace pg
 
 
 void lines_row_text(int i, const std::optional<adc::Reading> &r, fastcharge::Protocol p, StrBuf<24> &s) {
@@ -228,11 +272,8 @@ void PageBase::title_badge(bool last) {
     const std::string_view as{ab, mode == StatusReadout::Live ? readout::fmt3(std::span(ab), pm.current_ma, 'A') : 0};
     // The chevron slot of the live readout: a direction change or a rotation repaints it, nothing else does.
     const Arrow flow = mode == StatusReadout::Live ? arrow_of(pm) : Arrow::Idle;
-    uint32_t sig = 2166136261u ^ static_cast<uint32_t>(mode);
-    for (char ch : vs) sig = (sig ^ static_cast<uint8_t>(ch)) * 16777619u;
-    for (char ch : as) sig = (sig ^ static_cast<uint8_t>(ch)) * 16777619u;
-    sig = (sig ^ static_cast<uint32_t>(flow)) * 16777619u;
-    sig = (sig ^ static_cast<uint32_t>(ctx_.rotation & 3u)) * 16777619u;
+    uint32_t sig = pg::mix_str(pg::mix_str(2166136261u ^ static_cast<uint32_t>(mode), vs), as);
+    sig = mix_u32(mix_u32(sig, static_cast<uint32_t>(flow)), static_cast<uint32_t>(ctx_.rotation & 3u));
     if (bar_valid_ && sig == bar_sig_) return;
     const int full_cost = static_cast<int>(ctx_.content.w > 140 ? ctx_.content.w - 140 : 84) * (kBarH - 1);
     if (ctx_.budget && !ctx_.budget->admit(bar_valid_ ? 600 : full_cost, true)) return;
@@ -449,7 +490,7 @@ void EmarkerPage::update(uint32_t now_ms) {
     const uint32_t vsig = static_cast<uint32_t>(menu_.view);
     if (vsig != view_sig_) {   // a view change wipes the body once and forgets every cached piece
         view_sig_ = vsig;
-        gfx_fill(c, 0, kit::kBodyY, c.w, static_cast<int16_t>(kFooterY - kit::kBodyY), kBg);
+        pg::clear_body(c, kit::kBodyY);
         body_.invalidate();
         ctx_.rows.invalidate();
     }
@@ -461,7 +502,7 @@ void EmarkerPage::update(uint32_t now_ms) {
     } else {
         const bool confirm = menu_.view == EmView::Confirm;
         uint32_t sg = mix_u32(mix_init(), vsig) + static_cast<uint32_t>(have_cur_) * 3u;
-        if (have_cur_) sg = mix(mix_u32(sg, cur_.seq), cur_.name.data());
+        if (have_cur_) sg = pg::mix_str(mix_u32(sg, cur_.seq), cur_.name.data());
         body_.paint(sg, [&] {
             if (!have_cur_) return;
             if (confirm) {
@@ -471,8 +512,9 @@ void EmarkerPage::update(uint32_t now_ms) {
                 gfx_text(c, kSmall, kit::kTextX, static_cast<int16_t>(kEmConfirmY + 22), "Erased for good", kDim, kBg);
                 return;
             }
+            StrBuf<24> v;
             for (int i = 0; i < kEmDetailRows; i++) {
-                StrBuf<24> v;
+                v.clear();
                 em_detail_value(i, cur_, v);
                 kit::kv_row(c, i == 0 ? kEmNameKv : kEmKv, kit::kv_row_y(kEmKv, i), kEmKey[i], v.view(), kText);
             }
@@ -633,7 +675,7 @@ void DiagPage::draw_static() {
         kit::kv_cells(c, kDgLayout, val_, kRows, kDgValueChars);
         marks_ = 0xFF;
         foot_.invalidate();
-        for (Field &f : val_) f.invalidate();
+        pg::invalidate_fields(val_, kRows);
         static_step_ = 1;
     }
     constexpr uint32_t kMarksMask = (1u << 0) | (1u << 3) | (1u << 6);
@@ -670,36 +712,45 @@ void DiagPage::update(uint32_t now_ms) {
     const bool on = ctx_.pm_online;
     const bool meter_wait = home::meter_starting(on, now_ms);   // still being found: not yet an error
     const uint8_t fusb_id = fusb302::device_id();
-    StrBuf<24> t[kRows];
-    t[0].put(live_.configured ? "ready" : "waiting");
-    // Capped counts (10K, 999M, ">999M") are at most 5 chars, so "a / b" is at most 13 and always fits.
-    t[1].put_count_capped(live_.resets).put(" / ").put_count_capped(live_.isrs);
-    t[2].put_count_capped(live_.log_sent).put(" / ").put_count_capped(live_.log_dropped);
-    t[3].put("ID 0x").put_hex(fusb_id, 2);
-    t[4].put_u32(live_.rx_count).put(live_.cc == 1 ? " on CC1" : live_.cc == 2 ? " on CC2" : " on CC-");
-    t[5].put_u32(live_.poll_gap_max).put(" ms");
-    if (on) t[6].put(power::name(power::chip())); else t[6].put(meter_wait ? "wait" : "missing");
-    t[7].put_hms(now_ms / 1000);
-    model_row_text(power::chip(), t[8]);
+    StrBuf<24> t;
     for (int i = 0; i < kRows; i++) {
-        if (bg && !val_[i].valid() && !bg->admit(val_[i].box_px(), true)) return;
+        t.clear();
         uint16_t col = kText;
-        // Amber means "log lines were dropped"; a saturated count is a garbage cue, so it stays neutral.
-        if (i == 2 && live_.log_dropped > 0 && !count_overflowed(live_.log_dropped) &&
-            !count_overflowed(live_.log_sent))
-            col = kCaution;
-        if (i == 6 && !on && !meter_wait) col = kError;
-        val_[i].set_colors(col, kBg);
-        val_[i].draw(t[i].view());
+        switch (i) {
+        case 0: t.put(live_.configured ? "ready" : "waiting"); break;
+        // Capped counts (10K, 999M, ">999M") are at most 5 chars, so "a / b" is at most 13 and always fits.
+        case 1: t.put_count_capped(live_.resets).put(" / ").put_count_capped(live_.isrs); break;
+        case 2:
+            t.put_count_capped(live_.log_sent).put(" / ").put_count_capped(live_.log_dropped);
+            // Amber means "log lines were dropped"; a saturated count is a garbage cue, so it stays neutral.
+            if (live_.log_dropped > 0 && !count_overflowed(live_.log_dropped) && !count_overflowed(live_.log_sent))
+                col = kCaution;
+            break;
+        case 3: t.put("ID 0x").put_hex(fusb_id, 2); break;
+        case 4: t.put_u32(live_.rx_count).put(live_.cc == 1 ? " on CC1" : live_.cc == 2 ? " on CC2" : " on CC-"); break;
+        case 5: t.put_u32(live_.poll_gap_max).put(" ms"); break;
+        case 6:
+            if (on) t.put(power::name(power::chip()));
+            else { t.put(meter_wait ? "wait" : "missing"); if (!meter_wait) col = kError; }
+            break;
+        case 7: t.put_hms(now_ms / 1000); break;
+        default: model_row_text(power::chip(), t); break;
+        }
+        if (!pg::put_field(val_[i], bg, t.view(), col)) return;
     }
     paint_marks(live_.configured, fusb_id != 0, on, meter_wait);
     if (bg && bg->more) return;
     const bool usb_ok = live_.configured, fusb_ok = fusb_id != 0;
     const int state = !on ? (meter_wait ? 4 : 1) : !usb_ok ? 2 : !fusb_ok ? 3 : 0;
-    static const char *const msg[5] = {"All subsystems up", "Power meter not found", "USB not configured", "FUSB302 not answering",
-                                       "Power meter starting"};
-    draw_footer_budgeted(ctx_.content, state == 0 ? FooterTone::Ok : state == 4 ? FooterTone::Info : state == 2 ? FooterTone::Caution : FooterTone::Error,
-                         msg[state], foot_, bg);
+    struct DiagFoot { FooterTone tone; const char *msg; };
+    static constexpr DiagFoot kDiagFoot[5] = {
+        {FooterTone::Ok, "All subsystems up"},
+        {FooterTone::Error, "Power meter not found"},
+        {FooterTone::Caution, "USB not configured"},
+        {FooterTone::Error, "FUSB302 not answering"},
+        {FooterTone::Info, "Power meter starting"},
+    };
+    draw_footer_budgeted(ctx_.content, kDiagFoot[state].tone, kDiagFoot[state].msg, foot_, bg);
 }
 
 bool DiagPage::on_event(Event e) {
@@ -761,7 +812,7 @@ void MemoryPage::draw_static() {
         title_bar();
         kit::kv_cells(c, kMemLayout, val_, kRows, kMemValueChars.data());
         foot_.invalidate();
-        for (Field &f : val_) f.invalidate();
+        pg::invalidate_fields(val_, kRows);
         static_step_ = 1;
     }
     while (static_step_ <= kRows) {
@@ -781,14 +832,14 @@ void MemoryPage::update(uint32_t) {
     title_badge(false);
     if (bg && bg->more) return;
     const memstat::Snapshot s = memstat::snapshot();   // the cached figures; the main loop refreshes them
+    char t[memstat::kValueMax + 1];
     for (int i = 0; i < kRows; i++) {
-        if (bg && !val_[i].valid() && !bg->admit(val_[i].box_px(), true)) return;
-        char t[memstat::kValueMax + 1];
         const auto row = static_cast<memstat::Row>(i);
         const std::size_t n = memstat::row_text(row, s, std::span<char>(t, memstat::kValueMax));
         const memstat::Level lv = memstat::row_level(row, s);
-        val_[i].set_colors(lv == memstat::Level::Error ? kError : lv == memstat::Level::Caution ? kCaution : kText, kBg);
-        val_[i].draw(std::string_view(t, n));
+        if (!pg::put_field(val_[i], bg, std::string_view(t, n),
+                       lv == memstat::Level::Error ? kError : lv == memstat::Level::Caution ? kCaution : kText))
+            return;
     }
     if (bg && bg->more) return;
     char f[memstat::kFooterMax + 1];
@@ -805,7 +856,7 @@ Strip MemoryPage::labels() const { return base_labels(); }
 void MemoryPage::invalidate() {
     static_step_ = 0;
     foot_.invalidate();
-    for (Field &f : val_) f.invalidate();
+    pg::invalidate_fields(val_, kRows);
 }
 
 // ---------------------------------------------------------------------------------------
@@ -967,7 +1018,7 @@ bool LinesPage::paint_verdict(const std::optional<adc::Reading> &r, uint32_t now
     }
     StrBuf<24> rp;
     rp_text(rp, r.has_value(), fusb302::active_cc(), r ? r->cc1_mv : 0, r ? r->cc2_mv : 0);
-    uint32_t sig = mix(mix(2166136261u, v.main.view()), v.extra.view());
+    uint32_t sig = pg::mix_str(pg::mix_str(2166136261u, v.main.view()), v.extra.view());
     sig = sig * 31 + static_cast<uint32_t>(v.tone) + 1;
     if (!painted_ || sig != vsig_) {   // the chips row; the Rp cell below repaints on its own char diff
         if (bg && !bg->admit(static_cast<int>(c.w) * kit::kChipH, true)) return false;
@@ -986,9 +1037,7 @@ bool LinesPage::paint_verdict(const std::optional<adc::Reading> &r, uint32_t now
         if (x < c.w) gfx_fill(c, x, y, static_cast<int16_t>(c.w - x), kit::kChipH, kBg);   // a shorter row must not leave the old tail
         painted_ = true;
     }
-    if (bg && !pv_[0].valid() && !bg->admit(pv_[0].box_px(), true)) return false;
-    pv_[0].set_colors(r ? kText : kFaint, kBg);
-    pv_[0].draw(rp.view());
+    if (!pg::put_field(pv_[0], bg, rp.view(), r ? kText : kFaint)) return false;
     return draw_footer_budgeted(c, v.tone == Tone::Ok ? FooterTone::Ok : v.tone == Tone::Caution ? FooterTone::Caution : FooterTone::Info,
                                 v.footer.view(), foot_, bg);   // Info and Dim are neutral
 }
@@ -999,12 +1048,11 @@ void LinesPage::update(uint32_t now_ms) {
     if (bg && bg->more) return;
     const std::optional<adc::Reading> &r = ctx_.analog;
     const int32_t mv[4] = {r ? r->dp_mv : 0, r ? r->dm_mv : 0, r ? r->cc1_mv : 0, r ? r->cc2_mv : 0};
+    StrBuf<8> s;
     for (int i = 0; i < 4; i++) {
-        StrBuf<8> s;
+        s.clear();
         if (r) s.put_fixed(mv[i] < 0 ? 0 : mv[i], 2).put_char('V'); else s.put("--");
-        if (bg && !v_[i].valid() && !bg->admit(v_[i].box_px(), true)) return;
-        v_[i].set_colors(r && mv[i] >= kLnFaintMv ? kText : kFaint, kBg);   // a line with nothing on it reads faint
-        v_[i].draw(s.view());
+        if (!pg::put_field(v_[i], bg, s.view(), r && mv[i] >= kLnFaintMv ? kText : kFaint)) return;   // a line with nothing on it reads faint
         paint_bar(i, mv[i], r.has_value());
         if (bg && bg->more) return;
     }
@@ -1025,8 +1073,8 @@ void LinesPage::invalidate() {
     vsig_ = 0;
     foot_.invalidate();
     for (int &p : px_) p = -1;
-    for (Field &f : v_) f.invalidate();
-    for (Field &f : pv_) f.invalidate();
+    pg::invalidate_fields(v_, 4);
+    pg::invalidate_fields(pv_, 1);
 }
 
 // ---------------------------------------------------------------------------------------
@@ -1041,13 +1089,6 @@ constexpr kit::KvLayout kPtLiveKv{kit::kBodyY + kit::kAlertH + 8, 20, 6, &kLabel
 constexpr int16_t kPtBigY = 112, kPtRangeY = 162, kPtRangeX = 10, kPtRangeW = 204;   // Voltage / Current: big value, range bar
 constexpr int16_t kPtSendY = 120, kPtSendH = 72;                                     // Confirm: the SEND cell
 constexpr uint8_t kNoStep = 0xFF;
-uint32_t sigu(uint32_t h, uint32_t v) { return (h ^ v) * 16777619u; }
-template <size_t N>
-void put_exact_unit(StrBuf<N> &out, uint32_t milli, char unit) {
-    if (milli % 1000 == 0) out.put_u32(milli / 1000);
-    else out.put_fixed(static_cast<int32_t>(milli), milli % 100 == 0 ? 1 : milli % 10 == 0 ? 2 : 3);
-    out.put_char(unit);
-}
 int16_t pt_text_y(const kit::KvLayout &l, int row) {
     return static_cast<int16_t>(kit::kv_row_y(l, row) + kit::row_text_y(l.pitch, 16));
 }
@@ -1055,7 +1096,7 @@ int16_t pt_text_y(const kit::KvLayout &l, int row) {
 
 void PdTriggerPage::draw_static() {
     reset_paint();
-    if (!ctx_.blank) gfx_fill(ctx_.content, 0, kit::kBelowBar, ctx_.content.w, int16_t(kFooterY - kit::kBelowBar), kBg);
+    if (!ctx_.blank) pg::clear_body(ctx_.content, kit::kBelowBar);
     paint_bar();
 }
 
@@ -1074,17 +1115,12 @@ void PdTriggerPage::paint_bar() {
     if (sg == barsig_) return;
     barsig_ = sg;
     bar_valid_ = false;   // the band repaint erased the readout: title_badge redraws it
-    const char *title = "PD trigger";
-    int step = 0;
-    if (!refused) {
-        switch (st) {
-        case WizStep::Offer: title = "PD offer"; step = 1; break;
-        case WizStep::Voltage: title = "PD voltage"; step = 2; break;
-        case WizStep::Current: title = "PD current"; step = 2; break;
-        case WizStep::Confirm: title = "PD confirm"; step = 3; break;
-        case WizStep::Live: title = "PD live"; break;
-        }
-    }
+    struct PtBar { const char *title; uint8_t step; };
+    static constexpr PtBar kBar[5] = {
+        {"PD offer", 1}, {"PD voltage", 2}, {"PD current", 2}, {"PD confirm", 3}, {"PD live", 0}
+    };
+    const char *title = refused ? "PD trigger" : kBar[static_cast<unsigned>(st)].title;
+    const int step = refused ? 0 : kBar[static_cast<unsigned>(st)].step;
     kit::draw_top_bar(ctx_.content, title, step, fusb302::self_powered() ? "SNK" : "PAS", true);   // (a plain bar also clears the rule's 2nd row)
 }
 
@@ -1150,7 +1186,7 @@ void PdTriggerPage::update(uint32_t now_ms) {
         const uint32_t keep_bar = barsig_;
         reset_paint();
         barsig_ = keep_bar;
-        if (!ctx_.blank) gfx_fill(ctx_.content, 0, kit::kBodyY, ctx_.content.w, int16_t(kFooterY - kit::kBodyY), kBg);   // below the progress rule
+        if (!ctx_.blank) pg::clear_body(ctx_.content, kit::kBodyY);   // below the progress rule
         body_step_ = static_cast<uint8_t>(wiz_.step);
     }
     paint_bar();
@@ -1211,24 +1247,20 @@ void PdTriggerPage::paint_value() {
     const uint32_t hi = volt ? d.max_mv : cl;
     const uint32_t mw_v = !volt && d.type == pd::PdoType::Fixed ? d.max_mv : wiz_.mv;   // the voltage the current is drawn at
     const uint32_t mw = math::mw_of(mw_v, volt ? cl : wiz_.ma);
-    const bool can_dn = [&] { Wizard t = wiz_; return t.nudge(*caps_, -1, false, cap); }();
-    const bool can_up = [&] { Wizard t = wiz_; return t.nudge(*caps_, +1, false, cap); }();
     const uint16_t col = volt ? kVolt : kAmp;
-    uint32_t sig = sigu(sigu(sigu(sigu(2166136261u, volt ? 1u : 2u), wiz_.cursor), cap), volt ? 0u : mw_v);
-    sig = sigu(sig, hi) | 1u;
+    uint32_t sig = mix_u32(mix_u32(mix_u32(mix_u32(2166136261u, volt ? 1u : 2u), wiz_.cursor), cap), volt ? 0u : mw_v);
+    sig = mix_u32(sig, hi) | 1u;
+    StrBuf<12> s;
     if (sig != bsig_) {
         bsig_ = sig;
-        tsig_ = 0;
-        gfx_fill(c, 0, kit::kBodyY, c.w, int16_t(kFooterY - kit::kBodyY), kBg);
+        pg::clear_body(c, kit::kBodyY);
         static const char *const kVoltKeys[] = {"Offer", "Max amps", "Max power"};
         static const char *const kAmpKeys[] = {"Offer", "Voltage", "Power"};
         kit::kv_static(c, kPtKv, volt ? kVoltKeys : kAmpKeys, 3);
         pdo_line(d, line_);
         gfx_text(c, kSmall, kPtKv.value_x, pt_text_y(kPtKv, 0), line_.text.view(), kText, kBg);
-        StrBuf<12> t;
-        if (volt) put_exact_unit(t, d.max_ma, 'A');
-        else put_exact_unit(t, mw_v, 'V');
-        gfx_text(c, kSmall, kPtKv.value_x, pt_text_y(kPtKv, 1), t.view(), col == kVolt ? kAmp : kVolt, kBg);
+        pg::put_exact_unit(s, volt ? d.max_ma : mw_v, volt ? 'A' : 'V');
+        gfx_text(c, kSmall, kPtKv.value_x, pt_text_y(kPtKv, 1), s.view(), col == kVolt ? kAmp : kVolt, kBg);
         f_[0].init(c, kSmall, kPtKv.value_x, pt_text_y(kPtKv, 2), 8, Align::Left, kWatt, kBg);   // power_mw
         constexpr uint8_t kNumChars = 5;
         const int16_t x0 = static_cast<int16_t>((c.w - (kNumChars * kBig.adv + 2 + kMid.adv)) / 2);
@@ -1236,27 +1268,21 @@ void PdTriggerPage::paint_value() {
         gfx_text(c, kMid, static_cast<int16_t>(x0 + kNumChars * kBig.adv + 2), static_cast<int16_t>(kPtBigY + kBig.ascent - kMid.ascent),
                  volt ? "V" : "A", col, kBg);
         range_.init(c, kPtRangeX, kPtRangeY, kPtRangeW);
-        StrBuf<8> minl, maxl;
-        put_exact_unit(minl, lo, volt ? 'V' : 'A');
-        put_exact_unit(maxl, hi, volt ? 'V' : 'A');
+        const char u = volt ? 'V' : 'A';
+        s.clear();
+        pg::put_exact_unit(s, lo, u);
         const int16_t ly = static_cast<int16_t>(kPtRangeY + kit::ProgressBar::kH + 5);
-        gfx_text(c, kLabelFont, kPtRangeX, ly, minl.view(), kDim, kBg);
-        gfx_text(c, kLabelFont, static_cast<int16_t>(kPtRangeX + kPtRangeW - static_cast<int>(maxl.view().size()) * kLabelFont.adv), ly, maxl.view(), kDim, kBg);
+        gfx_text(c, kLabelFont, kPtRangeX, ly, s.view(), kDim, kBg);
+        s.clear();
+        pg::put_exact_unit(s, hi, u);
+        gfx_text(c, kLabelFont, static_cast<int16_t>(kPtRangeX + kPtRangeW - static_cast<int>(s.view().size()) * kLabelFont.adv), ly, s.view(), kDim, kBg);
     }
-    StrBuf<12> s;
+    s.clear();
     s.put_fixed(static_cast<int32_t>(mw), 1).put_char('W');
     f_[0].draw(s.view());
     s.clear();
     s.put_fixed(static_cast<int32_t>(value), 2);
     f_[1].draw(s.view());
-    const uint32_t tri = 1u + (can_dn ? 1u : 0u) + (can_up ? 2u : 0u);
-    if (tri != tsig_) {
-        tsig_ = tri;
-        constexpr int kTriH = 21;
-        const int16_t ty = static_cast<int16_t>(kPtBigY + (kBig.height - kTriH) / 2);
-        draw_triangle(c, 4, ty, kTriH, false, can_dn ? col : kRule);   // both always drawn; dim at a limit
-        draw_triangle(c, static_cast<int16_t>(c.w - 4 - tri_width(kTriH)), ty, kTriH, true, can_up ? col : kRule);
-    }
     range_.set(static_cast<int>(value > lo ? value - lo : 0), static_cast<int>(hi > lo ? hi - lo : 0));
 }
 
@@ -1267,12 +1293,12 @@ void PdTriggerPage::paint_confirm(uint32_t now_ms) {
     const Surface &c = ctx_.content;
     WizSummary s;
     const bool ok = wiz_summary(*caps_, wiz_.choice(*caps_), ctx_.cap_mv, s);
-    uint32_t sig = sigu(sigu(sigu(2166136261u, ok ? 1u : 0u), static_cast<uint32_t>(s.err)), s.needs_confirm ? 1u : 0u);
-    sig = mix(mix(mix(mix(mix(sig, s.volts.view()), s.amps.view()), s.watts.view()), s.offer_w.view()), s.kind.view()) | 1u;
-    sig = sigu(sig, wiz_.cursor) | 1u;
+    uint32_t sig = mix_u32(mix_u32(mix_u32(2166136261u, ok ? 1u : 0u), static_cast<uint32_t>(s.err)), s.needs_confirm ? 1u : 0u);
+    sig = pg::mix_str(pg::mix_str(pg::mix_str(pg::mix_str(pg::mix_str(sig, s.volts.view()), s.amps.view()), s.watts.view()), s.offer_w.view()), s.kind.view());
+    sig = mix_u32(sig, wiz_.cursor) | 1u;
     if (sig != bsig_) {
         bsig_ = sig;
-        gfx_fill(c, 0, kit::kBodyY, c.w, int16_t(kFooterY - kit::kBodyY), kBg);
+        pg::clear_body(c, kit::kBodyY);
         send_.invalidate();
         if (ok && s.err != pd::Err::Ok) {   // the plan refused it: say so instead of a summary
             kit::draw_alert_band(c, kit::kBodyY, true, "NOT SENDABLE");
@@ -1314,11 +1340,11 @@ void PdTriggerPage::paint_live() {
     wiz_summary(*caps_, wiz_.choice(*caps_), ctx_.cap_mv, s);
     const bool on = ctx_.pm_online;
     const bool good = live_good(ls), bad = live_bad(ls);
-    const uint32_t sig = mix(mix(sigu(2166136261u, static_cast<uint32_t>(ls)), s.volts.view()), s.amps.view()) | 1u;
+    const uint32_t sig = pg::mix_str(pg::mix_str(mix_u32(2166136261u, static_cast<uint32_t>(ls)), s.volts.view()), s.amps.view()) | 1u;
     if (sig != bsig_) {
         bsig_ = sig;
         vsig_ = tsig_ = 0;
-        gfx_fill(c, 0, kit::kBodyY, c.w, int16_t(kFooterY - kit::kBodyY), kBg);
+        pg::clear_body(c, kit::kBodyY);
         static const char *const kKeys[] = {"Requested V", "Measured V", "Requested A", "Measured A", "Resets"};
         kit::kv_static(c, kPtLiveKv, kKeys, 5);
         gfx_text(c, kSmall, kPtLiveKv.value_x, pt_text_y(kPtLiveKv, 0), s.volts.view(), kVolt, kBg);
@@ -1332,24 +1358,22 @@ void PdTriggerPage::paint_live() {
                                (ls == LiveState::Dropping || ls == LiveState::Released) ? kit::Verdict::None : kit::Verdict::Running;
         kit::draw_verdict(c, 0, kit::kBodyY, c.w, kit::kAlertH, v, live_name(ls), kBg);
     }
-    StrBuf<12> s1, s2;
-    if (on) {
-        s1.put_abs_fixed(ctx_.pm.vbus_mv, 2).put_char('V');
-        s2.put_abs_fixed(ctx_.pm.current_ma, 2).put_char('A');
-    } else {
-        s1.put("--");
-        s2.put("--");
-    }
-    f_[0].set_colors(on ? kVolt : kDim, kBg);
-    f_[0].draw(s1.view());
-    f_[1].set_colors(on ? kAmp : kDim, kBg);
-    f_[1].draw(s2.view());
+    StrBuf<12> buf;
+    const auto fmt = [&](int32_t mv_or_ma, char unit) {
+        buf.clear();
+        if (on) buf.put_abs_fixed(mv_or_ma, 2).put_char(unit);
+        else buf.put("--");
+    };
+    fmt(ctx_.pm.vbus_mv, 'V');
+    pg::put_field(f_[0], nullptr, buf.view(), on ? kVolt : kDim);
+    fmt(ctx_.pm.current_ma, 'A');
+    pg::put_field(f_[1], nullptr, buf.view(), on ? kAmp : kDim);
     const uint32_t rs = 1u + st.hard_resets;
     if (rs != tsig_) {
         tsig_ = rs;
-        StrBuf<8> n;
-        n.put_u32(st.hard_resets);
-        gfx_text(c, kSmall, kPtLiveKv.value_x, pt_text_y(kPtLiveKv, 4), n.view(), st.hard_resets ? kCaution : kDim, kBg);
+        buf.clear();
+        buf.put_u32(st.hard_resets);
+        gfx_text(c, kSmall, kPtLiveKv.value_x, pt_text_y(kPtLiveKv, 4), buf.view(), st.hard_resets ? kCaution : kDim, kBg);
     }
 }
 
@@ -1372,7 +1396,7 @@ void PdTriggerPage::paint_footer() {
     } else if (wiz_.step == WizStep::Voltage && std::min<uint32_t>(caps_->pdos[wiz_.cursor].max_mv, std::max<uint32_t>(ctx_.cap_mv, pd::kVsafe5vMv)) < caps_->pdos[wiz_.cursor].max_mv) {
         const uint32_t vmax = std::max<uint32_t>(ctx_.cap_mv, pd::kVsafe5vMv);
         msg.put("Capped at ");
-        put_exact_unit(msg, vmax, 'V');
+        pg::put_exact_unit(msg, vmax, 'V');
         msg.put(" by monitor");
         tone = FooterTone::Caution;
     } else {
@@ -1384,7 +1408,7 @@ void PdTriggerPage::paint_footer() {
             tone = FooterTone::Caution;
         }
     }
-    const uint32_t sig = mix(2166136261u, msg.view()) * 7u + static_cast<uint32_t>(tone) + 1u;
+    const uint32_t sig = pg::mix_str(2166136261u, msg.view()) * 7u + static_cast<uint32_t>(tone) + 1u;
     if (sig == fsig_) return;
     fsig_ = sig;
     draw_footer(c, tone, msg.view());
@@ -1393,12 +1417,12 @@ void PdTriggerPage::paint_footer() {
 void PdTriggerPage::paint_refusal() {
     const Surface &c = ctx_.content;
     const SetupView v = setup_view(Tool::PdTrigger, refusal_state());
-    uint32_t sig = mix(2166136261u, v.footer);
+    uint32_t sig = pg::mix_str(2166136261u, v.footer);
     for (int k = 0; k < v.n; k++) sig = sig * 3 + (v.met[k] ? 1u : 0u);
     sig |= 1u;
     if (sig == rsig_) return;
     rsig_ = sig;
-    gfx_fill(c, 0, kBarH, c.w, int16_t(kFooterY - kBarH), kBg);
+    pg::clear_body(c);
     FlowSpec f;
     f.top_role = v.top_role; f.bottom_role = v.bottom_role;
     f.top_color = f.bottom_color = kError; f.top_tint = f.bottom_tint = kErrorT;
@@ -1465,15 +1489,16 @@ bool PdTriggerPage::on_event(Event e) {
 }
 
 Strip PdTriggerPage::labels() const {
-    Strip l = base_labels();
-    if (refusal_ != Refusal::None) return l;
-    switch (wiz_.step) {
-    case WizStep::Offer: l = {{sl::Back, sl::Up, blocked_ ? sl::None : sl::Next, sl::Dn}}; break;
-    case WizStep::Voltage: l = {{sl::Back, sl::Dec1V, sl::Next, sl::Inc1V}}; break;
-    case WizStep::Current: l = {{sl::Back, sl::Dec05A, sl::Next, sl::Inc05A}}; break;
-    case WizStep::Confirm: l = {{sl::Back, sl::None, sl::Send, sl::None}}; break;
-    case WizStep::Live: l = {{sl::Back, sl::None, sl::None, sl::None}}; break;
-    }
+    if (refusal_ != Refusal::None) return base_labels();
+    static constexpr Strip kStrips[5] = {
+        {{sl::Back, sl::Up, sl::Next, sl::Dn}},
+        {{sl::Back, sl::Dec1V, sl::Next, sl::Inc1V}},
+        {{sl::Back, sl::Dec05A, sl::Next, sl::Inc05A}},
+        {{sl::Back, sl::None, sl::Send, sl::None}},
+        {{sl::Back, sl::None, sl::None, sl::None}},
+    };
+    Strip l = kStrips[static_cast<unsigned>(wiz_.step)];
+    if (wiz_.step == WizStep::Offer && blocked_) l[Button::Ok] = sl::None;
     return l;
 }
 
@@ -1493,12 +1518,9 @@ constexpr int16_t kCrNumX = 8, kCrBadgeX = 150, kCrBadgeW = kit::kTailX - kCrBad
 constexpr int16_t kCrSegX[3] = {8, 76, 144}, kCrSegW = 66, kCrSegH = 6;   // grade scale: flat segments, the held one lit
 
 uint16_t cr_color(CrTone t) {
-    switch (t) {
-    case CrTone::Ok:      return kOk;
-    case CrTone::Caution: return kCaution;
-    case CrTone::Error:   return kError;
-    default:              return kDim;
-    }
+    static constexpr uint16_t kCrCols[4] = {kOk, kCaution, kDim, kError};
+    const unsigned i = static_cast<unsigned>(t);
+    return i < 4 ? kCrCols[i] : kDim;
 }
 uint16_t cr_value_color(CrTone t) { return t == CrTone::Dim ? kDim : t == CrTone::Ok ? kVolt : cr_color(t); }
 }  // namespace
@@ -1513,13 +1535,13 @@ void CableRPage::draw_static() {
 // the meter's presence changes, which is what the keys depend on.
 void CableRPage::paint_table(const CrView &v) {
     uint32_t sig = v.meter_missing ? 1u : 2u;
-    for (const CrCard &cd : v.step) sig = mix(sig * 7, cd.label);
+    for (const CrCard &cd : v.step) sig = pg::mix_str(sig * 7, cd.label);
     if (sig == csig_) return;
     csig_ = sig;
     const Surface &c = ctx_.content;
-    if (!ctx_.blank) gfx_fill(c, 0, kBarH, c.w, int16_t(kFooterY - kBarH), kBg);   // body between the bars (a blank screen is kBg)
+    if (!ctx_.blank) pg::clear_body(c);   // body between the bars (a blank screen is kBg)
     rsig_ = 0;
-    for (Field &f : val_) f.invalidate();
+    pg::invalidate_fields(val_, 2);
     if (v.meter_missing) {
         kit::draw_alert_band(c, kit::kBodyY, true, "METER MISSING");
         gfx_text(c, kSmall, kit::kMarkX, kit::kBodyY + kit::kAlertH + 10, "Cable R needs INA2xx", kText, kBg);
@@ -1538,8 +1560,8 @@ void CableRPage::paint_table(const CrView &v) {
 void CableRPage::paint_result(const CrView &v) {
     uint32_t sig = v.has_result ? 1u : 0u;
     if (v.has_result) {
-        sig = mix(mix(sig, v.number.view()), v.detail.view()) * 31 + static_cast<uint32_t>(v.grade);
-        sig = mix(sig, v.unit);
+        sig = pg::mix_str(pg::mix_str(sig, v.number.view()), v.detail.view()) * 31 + static_cast<uint32_t>(v.grade);
+        sig = pg::mix_str(sig, v.unit);
     }
     if (sig == rsig_) return;
     rsig_ = sig;
@@ -1550,8 +1572,6 @@ void CableRPage::paint_result(const CrView &v) {
     gfx_text(c, kBig, kCrNumX, ny, v.number.view(), kEnergy, kBg);
     gfx_text(c, kMid, static_cast<int16_t>(kCrNumX + text_width(kBig, v.number.view()) + 4),
              static_cast<int16_t>(ny + kBig.ascent - kMid.ascent), v.unit, kEnergy, kBg);
-    // The grade is a verdict cell: green for excellent / good, solid red for poor; fair has no verdict style, so it takes the
-    // caution fill by hand.
     const int16_t by = kCrResY + 12;
     if (v.grade == cable_r::Grade::Fair) {
         gfx_fill(c, kCrBadgeX, by, kCrBadgeW, kCrBadgeH, kCaution);
@@ -1561,7 +1581,6 @@ void CableRPage::paint_result(const CrView &v) {
         kit::draw_verdict(c, kCrBadgeX, by, kCrBadgeW, kCrBadgeH,
                           v.grade == cable_r::Grade::Poor ? kit::Verdict::Fail : kit::Verdict::Pass, v.grade_pill, kBg);
     }
-    // Grade scale: the segment holding the result is lit, the others stay on the rule colour.
     const int lit = v.grade == cable_r::Grade::Poor ? 2 : v.grade == cable_r::Grade::Fair ? 1 : 0;
     const uint16_t segc[3] = {kOk, kCaution, kError};
     static constexpr const char *kScale[3] = {"<150", "<300", ">300"};
@@ -1577,10 +1596,7 @@ void CableRPage::update(uint32_t) {
     const CrView v = cr_view(ctx_.pm_online, ctx_.pm.vbus_mv, ctx_.pm.current_ma, ctx_.cable_mode, ctx_.cable, ctx_.kelvin);
     paint_table(v);
     if (!v.meter_missing) {
-        for (int i = 0; i < 2; i++) {
-            val_[i].set_colors(cr_value_color(v.step[i].tone), kBg);
-            val_[i].draw(v.step[i].value.view());
-        }
+        for (int i = 0; i < 2; i++) pg::put_field(val_[i], nullptr, v.step[i].value.view(), cr_value_color(v.step[i].tone));
         paint_result(v);
     }
     const bool cleared = ctx_.now < cleared_until_;
@@ -1614,7 +1630,7 @@ Strip CableRPage::labels() const {
 }
 
 void CableRPage::invalidate() {
-    for (Field &f : val_) f.invalidate();
+    pg::invalidate_fields(val_, 2);
     csig_ = rsig_ = 0;
     foot_.invalidate();
 }
@@ -1750,7 +1766,7 @@ void TriggerPage::row_fn(void *self, int index, bool, kit::RowSpec &out) {
 }
 
 // The Offered cell of the table: what the protocol takes.
-static void fc_offered_text(const trig::Entry &e, StrBuf<24> &s) {
+static void fc_offered_text(const trig::Entry &e, StrBufBase &s) {
     if (e.kind == trig::Kind::Range) {
         s.put_fixed(e.lo, 1).put("-").put_fixed(e.hi, 1).put_char('V');
     } else if (e.kind == trig::Kind::Levels) {
@@ -1804,13 +1820,14 @@ void TriggerPage::paint_main(uint32_t now_ms) {
         // the protocol list only around it: the list writes every row it owns.
         if (!ctx_.blank) {
             if (stage == trig::Stage::Pick && !cleanup) kit::RowList::clear_body_around(c);
-            else gfx_fill(c, 0, kit::kBelowBar, c.w, int16_t(kFooterY - kit::kBelowBar), kBg);
+            else pg::clear_body(c, kit::kBelowBar);
         }
         bsig_ = sig;
         fsig_ = 0;
         tsig_ = 0;
         send_.invalidate();
     }
+    StrBuf<32> s;
     if (cleanup) {
         paint_release(fresh);
     } else if (stage == trig::Stage::Pick) {
@@ -1835,16 +1852,15 @@ void TriggerPage::paint_main(uint32_t now_ms) {
                 target_v_.init(c, kSmall, kFcKv.value_x, fc_row_text_y(2), 8, Align::Left, kVolt, kBg);
                 vbus_v_.init(c, kSmall, kFcKv.value_x, fc_row_text_y(3), 8, Align::Left, kVolt, kBg);
             } else {
-                StrBuf<24> offered;
-                fc_offered_text(e, offered);
-                gfx_text(c, kSmall, kFcKv.value_x, fc_row_text_y(1), offered.view(), e.kind == trig::Kind::Scan ? kText : kVolt, kBg);
+                fc_offered_text(e, s);
+                gfx_text(c, kSmall, kFcKv.value_x, fc_row_text_y(1), s.view(), e.kind == trig::Kind::Scan ? kText : kVolt, kBg);
                 vbus_v_.init(c, kSmall, kFcKv.value_x, fc_row_text_y(2), 8, Align::Left, kVolt, kBg);
                 if (retarget) {
                     held_v_.init(c, kSmall, kFcKv.value_x, fc_row_text_y(3), 8, Align::Left, kVolt, kBg);
                 } else {
-                    StrBuf<12> cap;
-                    cap.put_fixed(power::max_vbus_mv(), 1).put_char('V');
-                    gfx_text(c, kSmall, kFcKv.value_x, fc_row_text_y(3), cap.view(), kVolt, kBg);
+                    s.clear();
+                    s.put_fixed(power::max_vbus_mv(), 1).put_char('V');
+                    gfx_text(c, kSmall, kFcKv.value_x, fc_row_text_y(3), s.view(), kVolt, kBg);
                 }
                 // The draft: the big number with its unit, or the sweep word.
                 const int16_t unit_y = static_cast<int16_t>(kFcBigY + kBig.ascent - kMid.ascent);
@@ -1858,11 +1874,10 @@ void TriggerPage::paint_main(uint32_t now_ms) {
                 if (stage == trig::Stage::Review) send_.init(c, kFcSendY, kFcSendH);
             }
         }
-        StrBuf<12> s;
+        s.clear();
         if (live) {
             const bool waiting = run() == trig::Run::Negotiating;
-            state_v_.set_colors(waiting ? kCaution : kOk, kBg);
-            state_v_.draw(waiting ? "Requesting" : "Holding");
+            pg::put_field(state_v_, nullptr, waiting ? "Requesting" : "Holding", waiting ? kCaution : kOk);
             s.put_fixed(model_.target_mv(), 2).put_char('V');
             target_v_.draw(s.view());
         } else if (!scan_sel) {
@@ -1880,10 +1895,10 @@ void TriggerPage::paint_main(uint32_t now_ms) {
         if (live && tsig_ != trace_ms_ + 1) { tsig_ = trace_ms_ + 1; draw_trace(); }
         if (stage == trig::Stage::Review) {
             if (model_.armed()) {
-                StrBuf<32> sub;
-                sub.put("Send again: ");
-                if (scan_sel) sub.put("SCAN"); else sub.put_fixed(model_.target_mv(), 2).put_char('V');
-                send_.draw_armed("CONFIRM", sub.view(), static_cast<int>(model_.arm_left_permille(ctx_.now)));
+                s.clear();
+                s.put("Send again: ");
+                if (scan_sel) s.put("SCAN"); else s.put_fixed(model_.target_mv(), 2).put_char('V');
+                send_.draw_armed("CONFIRM", s.view(), static_cast<int>(model_.arm_left_permille(ctx_.now)));
             } else {
                 send_.draw_idle("SEND", scan_sel ? "SCAN requests HV" : model_.needs_confirm() ? "Above 5V: other port empty" :
                                                                                            "Other port must be empty");
@@ -1891,19 +1906,28 @@ void TriggerPage::paint_main(uint32_t now_ms) {
         }
     }
     // Footer: facts only. The Edit hint says how far one step moves.
-    StrBuf<28> edit_hint;
-    if (stage == trig::Stage::Edit && e.kind == trig::Kind::Range)
-        edit_hint.put("Step ").put_u32(e.step).put("mV, hold ").put_u32(e.step < 1000 ? 1000 : e.step).put("mV");
-    else
-        edit_hint.put("Choose offered voltage");
-    const char *footer = cleanup ? release == trig::Release::State::Unsafe ?
-        "Unsafe VBUS: unplug source" : "Releasing; measuring VBUS" :
-        refused_ != fc::Fail::None ? trig::fail_long(refused_) : !model_.available() ? "No voltage within monitor cap" :
-        stage == trig::Stage::Pick ? release == trig::Release::State::Safe ? "5V verified. Pick protocol" : "Pick a protocol" :
-        stage == trig::Stage::Edit ? edit_hint.c_str() :
-        stage == trig::Stage::Review ? model_.needs_confirm() ?
-            model_.armed() ? "Above 5V! Send again" : "Above 5V: send twice" : "Ready to send" :
-        run() == trig::Run::Negotiating ? "Requesting the voltage" : "VBUS 10s trace, 0-20V";
+    const char *footer = nullptr;
+    if (cleanup) {
+        footer = release == trig::Release::State::Unsafe ? "Unsafe VBUS: unplug source" : "Releasing; measuring VBUS";
+    } else if (refused_ != fc::Fail::None) {
+        footer = trig::fail_long(refused_);
+    } else if (!model_.available()) {
+        footer = "No voltage within monitor cap";
+    } else if (stage == trig::Stage::Pick) {
+        footer = release == trig::Release::State::Safe ? "5V verified. Pick protocol" : "Pick a protocol";
+    } else if (stage == trig::Stage::Edit) {
+        if (e.kind == trig::Kind::Range) {
+            s.clear();
+            s.put("Step ").put_u32(e.step).put("mV, hold ").put_u32(e.step < 1000 ? 1000 : e.step).put("mV");
+            footer = s.c_str();
+        } else {
+            footer = "Choose offered voltage";
+        }
+    } else if (stage == trig::Stage::Review) {
+        footer = model_.needs_confirm() ? (model_.armed() ? "Above 5V! Send again" : "Above 5V: send twice") : "Ready to send";
+    } else {
+        footer = run() == trig::Run::Negotiating ? "Requesting the voltage" : "VBUS 10s trace, 0-20V";
+    }
     const bool unsafe = cleanup && release == trig::Release::State::Unsafe;
     const bool error = unsafe || refused_ != fc::Fail::None || !model_.available();
     const bool caution = cleanup || (model_.needs_confirm() && (stage == trig::Stage::Review || live));
@@ -1929,7 +1953,7 @@ void TriggerPage::paint_scan() {
         }
         StrBuf<8> volts;
         if (o == fc::Outcome::Accepted) { volts.put_u32(static_cast<uint32_t>((res_[k].mv + 500) / 1000)).put_char('V'); tail = volts.c_str(); }
-        const uint32_t ts = mix(2166136261u, tail) * 31u + static_cast<uint32_t>(v) + 1u;
+        const uint32_t ts = pg::mix_str(2166136261u, tail) * 31u + static_cast<uint32_t>(v) + 1u;
         if (ts == tile_sig_[k]) continue;
         tile_sig_[k] = ts;
         gfx_fill(c, 0, y, c.w, kFcScanPitch, kBg);
@@ -1977,7 +2001,7 @@ void TriggerPage::update(uint32_t now_ms) {
         // First paint after an invalidate on a blank screen (ctx_.blank): the body is kBg already.
         const bool blank = kind_ == 255 && ctx_.blank;
         kind_ = kind;
-        if (!blank) gfx_fill(ctx_.content, 0, kit::kBelowBar, ctx_.content.w, int16_t(kFooterY - kit::kBelowBar), kBg);
+        if (!blank) pg::clear_body(ctx_.content, kit::kBelowBar);
         bsig_ = fsig_ = tsig_ = ysig_ = 0;
         tile_sig_.fill(0);
     }
@@ -2204,6 +2228,11 @@ void SettingsPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
     out.marker = kit::Marker::Icon;
     out.icon = kIcons[i];
     out.text = kTitles[i];
+    auto set_toggle = [&](bool on, const char *on_note, const char *off_note) {
+        out.tail = on ? "ON" : "OFF";
+        out.tail_color = on ? kOk : kDim;
+        out.note = on ? on_note : off_note;
+    };
     switch (static_cast<SettingRow>(i)) {
     case SettingRow::UsbLink:
         out.chevron = true;
@@ -2215,21 +2244,13 @@ void SettingsPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
         out.tail = self->ctx_.ui->rotation_locked() ? "Locked" : "Auto";
         out.note = self->ctx_.ui->rotation_locked() ? "Fixed orientation" : "Follows gravity";
         break;
-    case SettingRow::RotateButtons: {
-        const bool on = self->ctx_.ui->rotate_buttons();
-        out.tail = on ? "ON" : "OFF";
-        out.tail_color = on ? kOk : kDim;
-        out.note = on ? "Follow the display" : "Physical keys";
+    case SettingRow::RotateButtons:
+        set_toggle(self->ctx_.ui->rotate_buttons(), "Follow the display", "Physical keys");
         break;
-    }
 #if K2_SCREENSHOT
-    case SettingRow::Screenshot: {
-        const bool on = uiprefs::screenshot_enabled;
-        out.tail = on ? "ON" : "OFF";
-        out.tail_color = on ? kOk : kDim;
-        out.note = on ? "Remote and web capture" : "No capture";
+    case SettingRow::Screenshot:
+        set_toggle(uiprefs::screenshot_enabled, "Remote and web capture", "No capture");
         break;
-    }
 #endif
     case SettingRow::Smoothing: {
         const auto p = static_cast<unsigned>(power::smoothing_preset());
@@ -2237,13 +2258,9 @@ void SettingsPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
         out.note = kPresetNotes[p < smoothing::kPresetCount ? p : 0];
         break;
     }
-    case SettingRow::IdleWake: {   // the opt-in exception to "no Rd at idle": a sleeping source's port is asked with our Rd
-        const bool on = fusb302::idle_wake();
-        out.tail = on ? "ON" : "OFF";
-        out.tail_color = on ? kOk : kDim;
-        out.note = on ? "Idle Rd on a sleeping port" : "Idle stays passive";
+    case SettingRow::IdleWake:   // the opt-in exception to "no Rd at idle": a sleeping source's port is asked with our Rd
+        set_toggle(fusb302::idle_wake(), "Idle Rd on a sleeping port", "Idle stays passive");
         break;
-    }
     case SettingRow::TestLevel: {
         const unsigned l = self->ct_level_ < charger_test::kLevelCount ? self->ct_level_ : 0;
         out.tail = kLevels[l];
@@ -2411,26 +2428,15 @@ Strip AutorotatePage::labels() const { return setting_labels(base_labels(), sl::
 namespace {
 constexpr int kUlRows = usbcfg::rows();   // 2 without the network function (K2_NET=0) and the WebUSB transport (K2_WEBUSB=0)
 constexpr usbcfg::Row ul_row(int i) { return usbcfg::row_at(i); }
-const char *ul_name(int i) {
-    switch (ul_row(i)) {
-        case usbcfg::Row::Hid: return "HID";
-        case usbcfg::Row::Drive: return "Drive";
-        case usbcfg::Row::Net: return "Network";
-        case usbcfg::Row::Webusb: return "WebUSB";
-    }
-    return "";
-}
-const char *ul_hint(int i) {
-    switch (ul_row(i)) {
-        case usbcfg::Row::Hid: return "logs and remote";
-        case usbcfg::Row::Drive: return "read-only files";
-        case usbcfg::Row::Net: return "web 192.168.7.1";
-        case usbcfg::Row::Webusb: return "web + remote";
-    }
-    return "";
-}
-bool ul_on(const usbcfg::Setting &s, int i) {
-    switch (ul_row(i)) {
+struct UlMeta { const char *name, *hint; Icon icon; };
+constexpr UlMeta kUlMeta[4] = {
+    {"HID", "logs and remote", Icon::Plug},
+    {"Drive", "read-only files", Icon::Chip},
+    {"Network", "web 192.168.7.1", Icon::Pc},
+    {"WebUSB", "web + remote", Icon::Pc},
+};
+bool ul_on(const usbcfg::Setting &s, usbcfg::Row r) {
+    switch (r) {
         case usbcfg::Row::Hid: return s.hid;
         case usbcfg::Row::Drive: return s.drive;
         case usbcfg::Row::Net: return s.net;
@@ -2456,14 +2462,16 @@ void UsbLinkPage::draw_static() {
 // One row per USB function: its icon (green when on), the name, ON / OFF at the right and, focused, what it carries.
 void UsbLinkPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
     const auto *self = static_cast<const UsbLinkPage *>(ctx);
-    const bool on = ul_on(self->pending_, i);
+    const usbcfg::Row r = ul_row(i);
+    const UlMeta &m = kUlMeta[static_cast<unsigned>(r)];
+    const bool on = ul_on(self->pending_, r);
     out.marker = kit::Marker::Icon;
-    out.icon = i == 0 ? Icon::Plug : i == 1 ? Icon::Chip : Icon::Pc;   // Network and WebUSB both reach a host: the PC
+    out.icon = m.icon;
     out.marker_color = on ? kOk : 0;
-    out.text = ul_name(i);
+    out.text = m.name;
     out.tail = on ? "ON" : "OFF";
     out.tail_color = on ? kOk : kDim;
-    out.note = ul_hint(i);
+    out.note = m.hint;
 }
 
 void UsbLinkPage::update(uint32_t) {

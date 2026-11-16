@@ -10,6 +10,7 @@
 #include "k2/chargertest/report_card_hw.hpp"
 #include "k2/chargertest/step_label.hpp"
 #include "k2/ui/ui.hpp"
+#include "k2/ui/ui_pages.hpp"
 #include "k2/ui/ui_style.hpp"
 #include "k2/ui/text.hpp"
 
@@ -21,37 +22,13 @@ namespace tone = report_card::tone;
 namespace {
 
 // 100 mV units: "3.3V", "21V", "20.5V".
-template <size_t N>
-void put_volts(StrBuf<N> &s, unsigned dv) {
-    s.put_u32(dv / 10);
-    if (dv % 10) s.put_char('.').put_u32(dv % 10);
-    s.put_char('V');
-}
+inline void put_volts(StrBufBase &s, unsigned dv) { pg::put_dv(s, dv); }
 
 // Milliamps in 50 mA steps: "3A", "1.5A", "4.55A".
-template <size_t N>
-void put_amps(StrBuf<N> &s, unsigned ma) {
-    s.put_u32(ma / 1000);
-    const unsigned frac = (ma % 1000) / 10;
-    if (frac) {
-        s.put_char('.');
-        if (frac % 10) s.put_char(char('0' + frac / 10)).put_char(char('0' + frac % 10));
-        else s.put_char(char('0' + frac / 10));
-    }
-    s.put_char('A');
-}
+inline void put_amps(StrBufBase &s, unsigned ma) { pg::put_exact_unit(s, (ma / 10u) * 10u, 'A'); }
 
 // Hex digits of the fingerprint, 8 wide.
-template <size_t N>
-void put_fp(StrBuf<N> &s, uint32_t fp) { s.put_hex(fp, 8); }
-
-// Copies s (cut to fit) into dst[0..cap-1] and returns the view of the copy.
-std::string_view stash(char *dst, std::size_t cap, std::string_view s) {
-    const std::size_t n = std::min(s.size(), cap - 1);
-    std::memcpy(dst, s.data(), n);
-    dst[n] = 0;
-    return {dst, n};
-}
+inline void put_fp(StrBufBase &s, uint32_t fp) { s.put_hex(fp, 8); }
 
 constexpr unsigned kHandshakeDv = 55;   // a group whose highest passing voltage is 5 V got a handshake, not a charge level
 
@@ -106,25 +83,23 @@ constexpr kit::KvLayout kHandover = {kDY, kDP, 8, &kLabelFont, &kLabelFont, 80, 
 
 // Every verdict marker of a card is the Results grid's tone (report_card::tone, result_layout::roll_up): green all passed, amber
 // some or capped, red none passed, grey nothing offered or nothing ran.
-kit::Verdict to_kit(tone::Tone t) {
-    switch (t) {
-    case tone::Tone::Pass: return kit::Verdict::Pass;
-    case tone::Tone::Partial: return kit::Verdict::Partial;
-    case tone::Tone::Fail: return kit::Verdict::Fail;
-    case tone::Tone::Skip: return kit::Verdict::Skip;
-    case tone::Tone::Noted: return kit::Verdict::Noted;   // a Light card: detected / advertised, never pass
-    default: return kit::Verdict::None;
-    }
+struct ToneMeta { kit::Verdict verdict; uint16_t color; };
+constexpr ToneMeta kToneMeta[8] = {
+    {kit::Verdict::Pass,    kOk},       // Pass = 0
+    {kit::Verdict::Fail,    kError},    // Fail = 1
+    {kit::Verdict::Partial, kCaution},  // Partial = 2
+    {kit::Verdict::None,    kDim},      // Pending = 3
+    {kit::Verdict::None,    kDim},      // Dim = 4
+    {kit::Verdict::None,    kDim},      // Caution = 5
+    {kit::Verdict::Skip,    kDim},      // Skip = 6
+    {kit::Verdict::Noted,   kText},     // Noted = 7
+};
+const ToneMeta &tone_meta(tone::Tone t) {
+    const unsigned i = static_cast<unsigned>(t);
+    return kToneMeta[i < 8 ? i : 4];
 }
-uint16_t tone_color(tone::Tone t) {
-    switch (t) {
-    case tone::Tone::Pass: return kOk;
-    case tone::Tone::Partial: return kCaution;
-    case tone::Tone::Fail: return kError;
-    case tone::Tone::Noted: return kText;
-    default: return kDim;
-    }
-}
+kit::Verdict to_kit(tone::Tone t) { return tone_meta(t).verdict; }
+uint16_t tone_color(tone::Tone t) { return tone_meta(t).color; }
 // Every firmware string this screen draws goes through these two (the one place that calls gfx_text; tests/test_ui_no_truncation
 // scans this file for any other). `max_px` is the box the text must fit: x to the next thing on the row. On the host a text that
 // does not fit is a gate failure (K2_TRUNC_LOG); on the device fit_text is the last-resort cut. Names the user typed use
@@ -391,7 +366,7 @@ SheetRow *sheet_add(CardSheet &s, const char *key, uint16_t color, std::string_v
 SheetRow *sheet_add_num(CardSheet &s, const char *key, uint16_t color, std::string_view v) {
     if (s.n >= unsigned(kSheetRows)) return nullptr;
     char *dst = s.row[s.n].num;
-    return sheet_add(s, key, color, stash(dst, sizeof s.row[s.n].num, v));
+    return sheet_add(s, key, color, pg::stash_str(dst, sizeof s.row[s.n].num, v));
 }
 void sheet_verdict(CardSheet &s, tone::Tone t, const char *word) {
     SheetRow &r = s.row[s.n++];
@@ -426,7 +401,7 @@ void cards_sheet(const rc::Card &c, bool range, unsigned idx, CardSheet &out) {
         if (tone::folded(c, r)) {   // the caution's own words, kept in the sheet (the value is longer than the box: it sits under the key)
             StrBuf<32> fold;
             cards_fold_text(c, r, fold);
-            sheet_add(out, "Note", kCaution, stash(out.note, sizeof out.note, fold.view()));
+            sheet_add(out, "Note", kCaution, pg::stash_str(out.note, sizeof out.note, fold.view()));
         }
         if (tone::deviates(c, r)) sheet_add(out, "Note", kCaution, "sweep off >100mV");   // 16 cells, the value column; a caution by tracking
         // A failing range of a card whose PD group failed only through a range: the group's cause is this range's cause too.
@@ -602,19 +577,17 @@ Strip CardsPage::labels() const {
 }
 
 void CardsPage::clear_body() {
-    const Surface &c = ctx_.content;
-    gfx_fill(c, 0, kBarH, c.w, int16_t(kFooterY - kBarH), kBg);
+    pg::clear_body(ctx_.content);
 }
 
 void CardsPage::update(uint32_t now_ms) {
     title_badge(false);
     if (note_until_ && int32_t(now_ms - note_until_) >= 0) { note_until_ = 0; note_.clear(); }
     // Content signature: mode, card list, store generation, note -- any change rebuilds the body.
-    uint32_t csig = uint32_t(mode_) * 7u + uint32_t(n_) * 1031u + 1;
-    csig = (csig ^ rc::hw::generation()) * 16777619u;   // every save, rename and delete bumps it
-    for (int i = 0; i < n_; i++) csig = (csig ^ nums_[i]) * 16777619u;
-    for (char ch : note_.view()) csig = (csig ^ uint8_t(ch)) * 16777619u;
-    if (mode_ == Mode::Group) csig = (csig ^ uint32_t(row_ + 1)) * 16777619u;   // the sub-screen is rebuilt for every row
+    uint32_t csig = mix_u32(uint32_t(mode_) * 7u + uint32_t(n_) * 1031u + 1u, rc::hw::generation());
+    for (int i = 0; i < n_; i++) csig = mix_u32(csig, nums_[i]);
+    csig = pg::mix_str(csig, note_.view());
+    if (mode_ == Mode::Group) csig = mix_u32(csig, uint32_t(row_ + 1));   // the sub-screen is rebuilt for every row
     // Move signature: +/- navigation only.
     const uint32_t msig = uint32_t(mode_) * 7u + uint32_t(row_) * 211u + uint32_t(idx_) * 31u + 1;
     if (csig != content_sig_) {
@@ -662,17 +635,17 @@ void CardsPage::row_fn(void *self, int index, bool focused, kit::RowSpec &out) {
     cards_summary_text(cd, t);
     out.marker = kit::Marker::Verdict;
     out.state = uint8_t(to_kit(tone::card(cd)));
-    out.tail = stash(p.line_.tail, sizeof p.line_.tail, t.view());
+    out.tail = pg::stash_str(p.line_.tail, sizeof p.line_.tail, t.view());
     out.tail_color = kDim;
     StrBuf<24> title;
     cards_title_text(cd, title);
     const int avail = 178 - int(out.tail.size()) * int(kSmall.adv) + (out.tail.empty() ? 8 : 0);   // x28 .. the tail's left gap
     char fitted[kFitBuf];
-    out.text = stash(p.line_.text, sizeof p.line_.text, fit_text_mid(kSmall, title.view(), avail, fitted));
+    out.text = pg::stash_str(p.line_.text, sizeof p.line_.text, fit_text_mid(kSmall, title.view(), avail, fitted));
     if (focused) {
         StrBuf<32> note;
         cards_note_text(cd, note);
-        out.note = stash(p.line_.note, sizeof p.line_.note, note.view());
+        out.note = pg::stash_str(p.line_.note, sizeof p.line_.note, note.view());
     }
 }
 
@@ -720,16 +693,13 @@ void CardsPage::paint_cell(int row, bool focused) {
         const tone::Tone pt = tone::group(cd, 0);
         kit::draw_verdict(c, 8, int16_t(g.y + 1), 12, 12, to_kit(pt), "", bg);
         card_name(c, kit::kTextX, ty, 84 - 4 - kit::kTextX, "PD fixed", pt, r.verdict == rc::GV::Skip, bg);
-        StrBuf<16> mx, fl;
-        cards_group_max_text(r, mx);
-        cards_group_fail_text(r, fl);
-        put_marked_right(c, kLabelFont, 150, 84, ty, mx.view(), kVolt, bg);
-        if (fl.view().size()) {
-            put_marked_right(c, kLabelFont, kRightEdge, 150, ty, fl.view(), pt == tone::Tone::Fail ? kError : kCaution, bg);
-        } else if (pt != tone::Tone::Pass && !mx.view().size() && (r.verdict == rc::GV::Fail || r.verdict == rc::GV::Skip)) {
-            // Nothing passed and no target is stored (a skip, an old card): name the cause. With a maximum there is no room for
-            // the words ("capped below target" is 19 cells; the box after "max 20V" holds 10), and the group's detail screen
-            // carries them. A group that failed only through a range reads as its fixed levels (green): the range row says why.
+        StrBuf<16> a, b;
+        cards_group_max_text(r, a);
+        cards_group_fail_text(r, b);
+        put_marked_right(c, kLabelFont, 150, 84, ty, a.view(), kVolt, bg);
+        if (b.view().size()) {
+            put_marked_right(c, kLabelFont, kRightEdge, 150, ty, b.view(), pt == tone::Tone::Fail ? kError : kCaution, bg);
+        } else if (pt != tone::Tone::Pass && !a.view().size() && (r.verdict == rc::GV::Fail || r.verdict == rc::GV::Skip)) {
             StrBuf<24> why;
             cards_pd_why_text(r, why);
             put_line(c, kLabelFont, 84, ty, kPdWhyPx, why.view(), tone_color(pt), bg);
@@ -743,9 +713,9 @@ void CardsPage::paint_cell(int row, bool focused) {
         StrBuf<32> rg;
         cards_range_text(r, rg);
         put_line(c, kLabelFont, kRangeX, ty, kRightEdge - kRangeX, rg.view(), kVolt, bg);
+        int16_t end = int16_t(kRangeX + int(rg.view().size()) * kLabelFont.adv);   // the end of the left items; the status goes after it
         StrBuf<8> am;
         cards_amps_text(r.ma, am);
-        int16_t end = int16_t(kRangeX + int(rg.view().size()) * kLabelFont.adv);   // the end of the left items; the status goes after it
         if (am.view().size()) {
             const int16_t ax = int16_t(end + kLabelFont.adv);
             put_line(c, kLabelFont, ax, ty, kRightEdge - ax, am.view(), kAmp, bg);

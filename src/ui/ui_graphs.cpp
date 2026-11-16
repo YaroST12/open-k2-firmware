@@ -15,6 +15,7 @@
 #include "k2/ui/kit.hpp"
 #include "k2/ui/ui.hpp"
 #include "k2/ui/ui_elem.hpp"
+#include "k2/ui/ui_pages.hpp"
 #include "k2/ui/ui_style.hpp"
 #include "k2/ui/ui_viewport.hpp"
 
@@ -388,7 +389,7 @@ void GraphsPage::invalidate() {
     frame_ok_ = false;
     info_ok_ = false;
     for (bool &h : head_ok_) h = false;
-    for (Field &f : val_) f.invalidate();
+    pg::invalidate_fields(val_, kBands);
     el_.invalidate();
     for (auto &band : col_) for (Col &c : band) c.lo = kUnknown;
     graph_dirty_ = true;

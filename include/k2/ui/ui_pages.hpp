@@ -183,6 +183,20 @@ void open_bench_act(Ui &ui, const bench::Act &a, uint32_t now_ms);
 // ("QC3", "AFC", "VOOC"); empty when there is no verdict worth a pill.
 void fc_pill_text(fastcharge::Protocol p, StrBuf<6> &out);
 
+// Shared out-of-line page helpers (implemented in src/ui/ui_pages.cpp) to avoid per-TU duplication.
+namespace pg {
+[[gnu::noinline]] bool put_field(Field &f, PaintBudget *bg, std::string_view s, uint16_t fg = kText, uint16_t bg_col = kBg);
+[[gnu::noinline]] void invalidate_fields(Field *f, int n);
+[[gnu::noinline]] void clear_body(const Surface &c, int16_t y0 = kBarH);
+[[gnu::noinline]] std::string_view stash_str(char *dst, std::size_t cap, std::string_view s);
+[[gnu::noinline]] uint32_t mix_str(uint32_t h, std::string_view s);
+[[gnu::noinline]] uint32_t mix_cstr(uint32_t h, const char *s, std::size_t max_len = ~std::size_t(0));
+[[gnu::noinline]] uint32_t mix_u32s(uint32_t h, const uint32_t *w, std::size_t n);
+[[gnu::noinline]] void put_exact_unit(StrBufBase &out, uint32_t milli, char unit = 0);
+inline void put_dv(StrBufBase &out, unsigned dv) { put_exact_unit(out, dv * 100u, 'V'); }
+inline void put_volts_trim(StrBufBase &out, int32_t mv) { put_exact_unit(out, mv < 0 ? 0u : static_cast<uint32_t>(mv), 0); }
+}  // namespace pg
+
 // "20V 3A" for the negotiated PD contract (home_contract_text without the "PD " tag), "QC3 9V" for legacy.
 void home_contract_short(const pd::Contract &c, fastcharge::Protocol p, int32_t vbus_mv, StrBuf<13> &out);
 // "PD 9V 3A" for the negotiated contract (the Request on the line), "QC3 9V" for a detected legacy
@@ -716,9 +730,9 @@ public:
 private:
     struct Frame;   // everything one update decides before it draws (ui_home.cpp)
     void sample_values(Frame &f, uint32_t now_ms);
-    void update_sweep(const Frame &f, uint32_t now_ms, int (&step_col)[3], int (&step_n)[3]);
+    void update_sweep(const Frame &f, uint32_t now_ms);
     void paint_statics();                 // after an invalidate / mode / hero change: the digit fields, every cell dirty
-    void paint_qty(int slot, home::Qty q, const Frame &f, int step_col, int step_n);   // slot 0 hero, 1 / 2 ledger rows
+    void paint_qty(int slot, home::Qty q, const Frame &f);   // slot 0 hero, 1 / 2 ledger rows
     struct QtyHead;   // the head line's texts (ui_home.cpp); the items view them while the cell paints
     // The head line of a quantity cell: the label or the alarm line, the span, the pill or the max badge, appended to
     // `it` at `n`; returns the head's signature. Kept out of paint_qty so its text helpers' locals are not on the

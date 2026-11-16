@@ -46,11 +46,6 @@ Tri sniffed_mismatch() {
     return (c.flags & pd::kRdoFMismatch) ? Tri::Yes : Tri::No;
 }
 
-uint32_t fnv(uint32_t h, uint32_t v) {
-    for (int i = 0; i < 4; i++) { h ^= (v >> (8 * i)) & 0xFF; h *= 16777619u; }
-    return h;
-}
-
 // `until` is a deadline in millis(); 0 = none. Wrap-safe.
 bool before(uint32_t now, uint32_t until) { return until != 0 && int32_t(until - now) > 0; }
 
@@ -890,18 +885,18 @@ void word_row(Rows &R, const char *key, pd::SvField f) {
 // What the Details page and the status line read from the survey and the extended answers, hashed for the paint signatures.
 uint32_t survey_sig(bool more) {
     const pd::Survey &sv = survey::state();
-    uint32_t h = fnv(2166136261u, uint32_t(more) | uint32_t(sv.running()) << 1 | uint32_t(sv.ran()) << 2 | sv.resolved() << 8 | sv.planned() << 16);
+    uint32_t h = mix_u32(2166136261u, uint32_t(more) | uint32_t(sv.running()) << 1 | uint32_t(sv.ran()) << 2 | sv.resolved() << 8 | sv.planned() << 16);
     for (unsigned i = 0; i < pd::kSvFields; i++) {
         const pd::SvEntry &e = sv.entry(static_cast<pd::SvField>(i));
-        h = fnv(h, uint32_t(e.state) | uint32_t(e.why) << 8);
+        h = mix_u32(h, uint32_t(e.state) | uint32_t(e.why) << 8);
     }
     const pd::ExtInfo &ex = fusb302::ext();
-    h = fnv(h, uint32_t(ex.mfr.valid) | uint32_t(ex.mfr.vid) << 8 | uint32_t(ex.mfr.pid) << 24);
-    for (char ch : ex.mfr.name) { if (!ch) break; h = fnv(h, uint8_t(ch)); }
-    h = fnv(h, uint32_t(ex.caps_ext.valid) | uint32_t(ex.caps_ext.pdp_w) << 8 | uint32_t(ex.caps_ext.epr_pdp_w) << 16);
+    h = mix_u32(h, uint32_t(ex.mfr.valid) | uint32_t(ex.mfr.vid) << 8 | uint32_t(ex.mfr.pid) << 24);
+    h = pg::mix_cstr(h, ex.mfr.name, sizeof ex.mfr.name);
+    h = mix_u32(h, uint32_t(ex.caps_ext.valid) | uint32_t(ex.caps_ext.pdp_w) << 8 | uint32_t(ex.caps_ext.epr_pdp_w) << 16);
     const pd::SourceCaps &epr = fusb302::epr_info_list();
-    h = fnv(h, uint32_t(epr.valid) | uint32_t(epr.num_pdos) << 8);
-    for (std::size_t i = 0; i < epr.num_pdos && i < pd::kMaxPdos; i++) h = fnv(h, epr.pdos[i].raw);
+    h = mix_u32(h, uint32_t(epr.valid) | uint32_t(epr.num_pdos) << 8);
+    for (std::size_t i = 0; i < epr.num_pdos && i < pd::kMaxPdos; i++) h = mix_u32(h, epr.pdos[i].raw);
     return h;
 }
 
@@ -992,13 +987,13 @@ bool paint_list(const Surface &c, const Rows &R, int16_t y0, bool dim, bool blan
     std::array<uint32_t, kVisRows> sigs{};
     for (int i = 0; i < n; i++) {
         const Rows::R &row = R.r[i];
-        uint32_t h = fnv(2166136261u, uint32_t(row.c) | uint32_t(row.cut) << 16 | uint32_t(dim) << 24);
-        h = fnv(h, uint32_t(uint8_t(row.act)) | uint32_t(row.focus) << 8 | uint32_t(row.off) << 9 | uint32_t(row.drill) << 10
-                       | uint32_t(row.perf) << 11);
-        for (const char *k = row.key; *k; k++) h = fnv(h, uint8_t(*k));
-        h = fnv(h, 0x100u);   // key / value separator
-        for (char ch : row.v.view()) h = fnv(h, uint8_t(ch));
-        for (const char *k = row.tail; *k; k++) h = fnv(h, uint8_t(*k));
+        uint32_t h = mix_u32(2166136261u, uint32_t(row.c) | uint32_t(row.cut) << 16 | uint32_t(dim) << 24);
+        h = mix_u32(h, uint32_t(uint8_t(row.act)) | uint32_t(row.focus) << 8 | uint32_t(row.off) << 9 | uint32_t(row.drill) << 10
+                           | uint32_t(row.perf) << 11);
+        h = pg::mix_cstr(h, row.key);
+        h = mix_u32(h, 0x100u);   // key / value separator
+        h = pg::mix_str(h, row.v.view());
+        h = pg::mix_cstr(h, row.tail);
         sigs[static_cast<std::size_t>(i)] = h | 1u;
     }
     if (!st.tail_cleared) {
@@ -1217,11 +1212,11 @@ int16_t ConnectionPage::row_y0() const { return locked_ ? kTabY : kRowY0; }
 
 uint32_t ConnectionPage::actions_sig() const {
     if (!locked_) return 0;
-    uint32_t h = fnv(2166136261u, uint32_t(act_sel_ + 1) | uint32_t(n_items_) << 8 | uint32_t(more_) << 16 | uint32_t(first_) << 20);
+    uint32_t h = mix_u32(2166136261u, uint32_t(act_sel_ + 1) | uint32_t(n_items_) << 8 | uint32_t(more_) << 16 | uint32_t(first_) << 20);
     for (int i = 0; i < n_items_; i++) {
         const conn::Item &it = items_[static_cast<std::size_t>(i)];
-        h = fnv(h, uint32_t(it.enabled) | uint32_t(it.caution) << 1);
-        for (const char *k = it.tag; *k; k++) h = fnv(h, uint8_t(*k));
+        h = mix_u32(h, uint32_t(it.enabled) | uint32_t(it.caution) << 1);
+        h = pg::mix_cstr(h, it.tag);
     }
     return h;
 }
@@ -1294,7 +1289,7 @@ bool ConnectionPage::paint_empty(bool) {
         paint_band(c, y0, e.title);
         band_done_ = true;
     }
-    const uint32_t hsig = mix(mix_u32(mix_init(), static_cast<uint32_t>(tab_)), e.hint) | 1u;
+    const uint32_t hsig = pg::mix_cstr(mix_u32(mix_init(), static_cast<uint32_t>(tab_)), e.hint) | 1u;
     if (hsig != nopd_msg_sig_) {
         if (bg && !bg->admit(static_cast<int>(c.w) * (list_y - y0 - kBandH), true)) return false;
         const kit::TextRun line{kKeyX, static_cast<int16_t>(y0 + kLineDy), &kSmall, e.hint, kDim};
@@ -1435,9 +1430,7 @@ bool ConnectionPage::paint_body(const MatchResult &r, const pd::SourceCaps &caps
     }
     if (!paint_tab_indicator()) return false;
     // The verdict band and its one line, painted only when the line moved (a live draw must not repaint them).
-    uint32_t mh = fnv(2166136261u, uint32_t(tab_) | uint32_t(none_why_) << 4);
-    for (const char *p = line; *p; p++) mh = fnv(mh, uint8_t(*p));
-    mh |= 1u;
+    uint32_t mh = pg::mix_cstr(mix_u32(2166136261u, uint32_t(tab_) | uint32_t(none_why_) << 4), line) | 1u;
     if (mh != nopd_msg_sig_) {
         if (!band_done_) {
             if (bg && !bg->admit(static_cast<int>(c.w) * kBandH, true)) return false;
@@ -1516,36 +1509,40 @@ void ConnectionPage::paint_status(uint32_t now_ms) {
         txt.put("Reading cable...");
     } else if (before(now_ms, ctx_.em_listen_until)) {
         txt.put("Listening for cable...");
-    } else if (id_asked_ && ids.state == pd::IdState::Running) {
-        StrBuf<24> t;
-        identify_status_text(ids, t);
-        txt.put(t.view());
     } else {
-        if (id_asked_) {   // Identify ended: its result stays a few seconds
+        bool showed_id = false;
+        if (id_asked_) {
             StrBuf<24> t;
             identify_status_text(ids, t);
-            id_asked_ = false;
-            set_op(t.c_str(), now_ms, 4000);
+            if (ids.state == pd::IdState::Running) {
+                txt.put(t.view());
+                showed_id = true;
+            } else {   // Identify ended: its result stays a few seconds
+                id_asked_ = false;
+                set_op(t.c_str(), now_ms, 4000);
+            }
         }
-        conn::StatusIn s;
-        s.tab = tab_;
-        s.f = facts_;
-        s.spoof_armed = ctx_.cables.armed();
-        s.sv = &survey::state();
-        s.no_pd = no_pd_body();
-        const bool op = before(now_ms, op_until_);
-        if (op) s.op = op_.view();
-        // The PD diagnosis verdict, only while its session is open: a finished one would contradict the tab's live state.
-        char dv[pd::diag::screen::kVerdictChars + 8];
-        const pd::diag::Report &dr = pd::diag::live::report();
-        const bool diag_on = pd::diag::live::state() == pd::diag::live::State::Open && !dr.empty && !dr.no_pd;
-        if (diag_on) {
-            pd::diag::screen::verdict(dr, dv);
-            s.diag = dv;
+        if (!showed_id) {
+            conn::StatusIn s;
+            s.tab = tab_;
+            s.f = facts_;
+            s.spoof_armed = ctx_.cables.armed();
+            s.sv = &survey::state();
+            s.no_pd = no_pd_body();
+            const bool op = before(now_ms, op_until_);
+            if (op) s.op = op_.view();
+            // The PD diagnosis verdict, only while its session is open: a finished one would contradict the tab's live state.
+            char dv[pd::diag::screen::kVerdictChars + 8];
+            const pd::diag::Report &dr = pd::diag::live::report();
+            const bool diag_on = pd::diag::live::state() == pd::diag::live::State::Open && !dr.empty && !dr.no_pd;
+            if (diag_on) {
+                pd::diag::screen::verdict(dr, dv);
+                s.diag = dv;
+            }
+            conn::status_text(s, txt);
+            if (!op && s.spoof_armed && facts_.charger) tone = FooterTone::Caution;
+            else if (diag_on && txt.view() == s.diag) tone = DiagnosisPage::tone_of(dr);
         }
-        conn::status_text(s, txt);
-        if (!op && s.spoof_armed && facts_.charger) tone = FooterTone::Caution;
-        else if (diag_on && txt.view() == s.diag) tone = DiagnosisPage::tone_of(dr);
     }
     status_txt_ = txt;
     draw_footer_budgeted(ctx_.content, tone, txt.view(), status_, ctx_.budget);
@@ -1596,58 +1593,58 @@ void ConnectionPage::update(uint32_t now_ms) {
     if (!ctx_.vooc.seen) vooc_ = 0;   // a session end clears the note at once
     else if (!vooc_ || uint32_t(now_ms - vooc_at_) >= kVoocNoteMs) { vooc_ = 1u << 16 | ctx_.vooc.r82; vooc_at_ = now_ms; }
     uint32_t c = 2166136261u;
-    c = fnv(c, vooc_);
-    c = fnv(c, uint32_t(link.attached()) | uint32_t(link.waiting()) << 1 | uint32_t(link.inline_mode()) << 2
+    c = mix_u32(c, vooc_);
+    c = mix_u32(c, uint32_t(link.attached()) | uint32_t(link.waiting()) << 1 | uint32_t(link.inline_mode()) << 2
               | uint32_t(pd::is_fake()) << 3 | uint32_t(fusb302::active_cc()) << 4
               | uint32_t(tab_) << 8 | uint32_t(link.cable_stale()) << 12 | fc_ << 16
               | uint32_t(facts_.topo) << 24 | uint32_t(facts_.wait) << 26 | uint32_t(fusb302::self_powered()) << 28);
-    c = fnv(c, uint32_t(verdict_) | uint32_t(none_why_) << 4);   // the no-PD gate's verdict settles at attach+1.5 s
-    c = fnv(c, uint32_t(facts_.cable_fact));                     // the empty Cable tab's words: chip silent / no chip
-    c = fnv(c, fusb302::session());
-    c = fnv(c, uint32_t(live_caps.valid) | uint32_t(live_caps.num_pdos) << 8 | uint32_t(live_caps.epr) << 16
+    c = mix_u32(c, uint32_t(verdict_) | uint32_t(none_why_) << 4);   // the no-PD gate's verdict settles at attach+1.5 s
+    c = mix_u32(c, uint32_t(facts_.cable_fact));                     // the empty Cable tab's words: chip silent / no chip
+    c = mix_u32(c, fusb302::session());
+    c = mix_u32(c, uint32_t(live_caps.valid) | uint32_t(live_caps.num_pdos) << 8 | uint32_t(live_caps.epr) << 16
               | uint32_t(live_caps.spec_rev) << 17 | uint32_t(live_caps.epr_partial) << 19);
-    c = fnv(c, live_caps.raw_header);
-    c = fnv(c, live_caps.rx_count);
-    c = fnv(c, uint32_t(ct.valid) | uint32_t(ct.ready) << 1 | uint32_t(ct.accepted) << 2
+    c = mix_u32(c, live_caps.raw_header);
+    c = mix_u32(c, live_caps.rx_count);
+    c = mix_u32(c, uint32_t(ct.valid) | uint32_t(ct.ready) << 1 | uint32_t(ct.accepted) << 2
               | uint32_t(ct.rejected) << 3 | uint32_t(ct.pos) << 8 | uint32_t(ct.flags) << 16);
-    c = fnv(c, uint32_t(ct.mv) | uint32_t(ct.op_ma) << 16);
-    c = fnv(c, ct.max_ma);
-    c = fnv(c, uint32_t(sniffed.valid) | uint32_t(sniffed.n) << 8);
-    for (int i = 0; i < sniffed.n; i++) c = fnv(c, sniffed.raw[i]);
-    c = fnv(c, uint32_t(fusb302::identify_current()) | uint32_t(idst.ok_mask) << 8 | uint32_t(idst.num_sink_pdos) << 16);
-    for (int i = 0; i < idst.num_sink_pdos; i++) c = fnv(c, idst.sink_pdos[i]);
-    c = fnv(c, uint32_t(fusb302::pd_traffic()) | uint32_t(fusb302::pin_rd()) << 2);
-    c = fnv(c, uint32_t(em.valid) | uint32_t(em.is_active) << 1 | uint32_t(em.vid) << 8 | uint32_t(em.num_vdos) << 24);
-    c = fnv(c, em.raw_vdos[4]);
-    c = fnv(c, uint32_t(em.max_power_w) | uint32_t(em.sop) << 16);
-    c = fnv(c, fusb302::cable_seq());
-    c = fnv(c, uint32_t(vdm.identity.valid) | uint32_t(vdm.identity.vid) << 8 | uint32_t(vdm.identity.pid) << 16);
-    c = fnv(c, vdm.identity.id_header);
-    c = fnv(c, uint32_t(vdm.num_svids) | uint32_t(vdm.modes_svid) << 8 | uint32_t(vdm.num_modes) << 24);
-    for (int i = 0; i < vdm.num_svids; i++) c = fnv(c, vdm.svids[i]);
-    for (int i = 0; i < vdm.num_modes; i++) c = fnv(c, vdm.modes[i]);
-    c = fnv(c, uint32_t(vdm.cuktech) | uint32_t(vdm.xiaomi) << 1 | uint32_t(vdm.xiaomi_cmd) << 2);
+    c = mix_u32(c, uint32_t(ct.mv) | uint32_t(ct.op_ma) << 16);
+    c = mix_u32(c, ct.max_ma);
+    c = mix_u32(c, uint32_t(sniffed.valid) | uint32_t(sniffed.n) << 8);
+    c = pg::mix_u32s(c, sniffed.raw.data(), sniffed.n);
+    c = mix_u32(c, uint32_t(fusb302::identify_current()) | uint32_t(idst.ok_mask) << 8 | uint32_t(idst.num_sink_pdos) << 16);
+    c = pg::mix_u32s(c, idst.sink_pdos.data(), idst.num_sink_pdos);
+    c = mix_u32(c, uint32_t(fusb302::pd_traffic()) | uint32_t(fusb302::pin_rd()) << 2);
+    c = mix_u32(c, uint32_t(em.valid) | uint32_t(em.is_active) << 1 | uint32_t(em.vid) << 8 | uint32_t(em.num_vdos) << 24);
+    c = mix_u32(c, em.raw_vdos[4]);
+    c = mix_u32(c, uint32_t(em.max_power_w) | uint32_t(em.sop) << 16);
+    c = mix_u32(c, fusb302::cable_seq());
+    c = mix_u32(c, uint32_t(vdm.identity.valid) | uint32_t(vdm.identity.vid) << 8 | uint32_t(vdm.identity.pid) << 16);
+    c = mix_u32(c, vdm.identity.id_header);
+    c = mix_u32(c, uint32_t(vdm.num_svids) | uint32_t(vdm.modes_svid) << 8 | uint32_t(vdm.num_modes) << 24);
+    for (int i = 0; i < vdm.num_svids; i++) c = mix_u32(c, vdm.svids[i]);
+    c = pg::mix_u32s(c, vdm.modes.data(), vdm.num_modes);
+    c = mix_u32(c, uint32_t(vdm.cuktech) | uint32_t(vdm.xiaomi) << 1 | uint32_t(vdm.xiaomi_cmd) << 2);
     {   // the lab-only Apple readout's rows (the serial is never displayed nor hashed)
         const pd::AppleInfo &ap = fusb302::apple_info();
-        c = fnv(c, uint32_t(ap.valid) | uint32_t(ap.why) << 1 | uint32_t(ap.reads) << 9 | uint32_t(ap.ok) << 17);
-        for (char ch : ap.product) c = fnv(c, uint32_t(uint8_t(ch)));
-        for (char ch : ap.fw) c = fnv(c, uint32_t(uint8_t(ch)));
-        for (char ch : ap.hw) c = fnv(c, uint32_t(uint8_t(ch)));
+        c = mix_u32(c, uint32_t(ap.valid) | uint32_t(ap.why) << 1 | uint32_t(ap.reads) << 9 | uint32_t(ap.ok) << 17);
+        c = pg::mix_cstr(c, ap.product.data(), ap.product.size());
+        c = pg::mix_cstr(c, ap.fw.data(), ap.fw.size());
+        c = pg::mix_cstr(c, ap.hw.data(), ap.hw.size());
     }
-    c = fnv(c, uint32_t(snk.identity.valid) | uint32_t(snk.identity.vid) << 8 | uint32_t(snk.identity.pid) << 16);
-    c = fnv(c, snk.identity.id_header);
-    c = fnv(c, uint32_t(snk.num_svids));
-    for (int i = 0; i < snk.num_svids; i++) c = fnv(c, snk.svids[i]);
-    c = fnv(c, uint32_t(ctx_.analog.has_value()));
-    c = fnv(c, uint32_t(dp_));
-    c = fnv(c, uint32_t(dm_));   // the debounced ADC levels (Row D): raw jitter is not hashed
-    c = fnv(c, uint32_t(cc1_));
-    c = fnv(c, uint32_t(cc2_));
-    c = fnv(c, uint32_t(vbus_));   // the Type-C row's VBUS (100 mV steps)
+    c = mix_u32(c, uint32_t(snk.identity.valid) | uint32_t(snk.identity.vid) << 8 | uint32_t(snk.identity.pid) << 16);
+    c = mix_u32(c, snk.identity.id_header);
+    c = mix_u32(c, uint32_t(snk.num_svids));
+    for (int i = 0; i < snk.num_svids; i++) c = mix_u32(c, snk.svids[i]);
+    c = mix_u32(c, uint32_t(ctx_.analog.has_value()));
+    c = mix_u32(c, uint32_t(dp_));
+    c = mix_u32(c, uint32_t(dm_));   // the debounced ADC levels (Row D): raw jitter is not hashed
+    c = mix_u32(c, uint32_t(cc1_));
+    c = mix_u32(c, uint32_t(cc2_));
+    c = mix_u32(c, uint32_t(vbus_));   // the Type-C row's VBUS (100 mV steps)
     const uint32_t svs = survey_sig(more_);
-    c = fnv(c, svs);
+    c = mix_u32(c, svs);
     const uint32_t asig = actions_sig();
-    c = fnv(c, asig);
+    c = mix_u32(c, asig);
     if (!body_pending_ && sig_valid_ && c == cheap_sig_) return;   // nothing changed: skip match_live + the full sig
     const bool inputs_changed = !match_valid_ || c != cheap_sig_;
     cheap_sig_ = c;
@@ -1655,12 +1652,12 @@ void ConnectionPage::update(uint32_t now_ms) {
     const bool empty = conn::tab_empty(tab_, facts_) && !(tab_ == conn::Tab::Sink && fusb302::self_powered());
     if (empty) {
         match_valid_ = false;
-        uint32_t h = fnv(2166136261u, uint32_t(tab_) | uint32_t(facts_.topo) << 4 | 1u << 8 | uint32_t(facts_.inline_sink) << 9
-                                     | uint32_t(facts_.wait) << 10 | uint32_t(facts_.open_cc_mv) << 12
-                                     | uint32_t(facts_.wake_port_off) << 24
-                                     | uint32_t(facts_.vbus_mv >= raguard::kVbusAttachedMv) << 25);
-        h = fnv(h, uint32_t(facts_.cable_fact));
-        h = fnv(h, asig);
+        uint32_t h = mix_u32(2166136261u, uint32_t(tab_) | uint32_t(facts_.topo) << 4 | 1u << 8 | uint32_t(facts_.inline_sink) << 9
+                                      | uint32_t(facts_.wait) << 10 | uint32_t(facts_.open_cc_mv) << 12
+                                      | uint32_t(facts_.wake_port_off) << 24
+                                      | uint32_t(facts_.vbus_mv >= raguard::kVbusAttachedMv) << 25);
+        h = mix_u32(h, uint32_t(facts_.cable_fact));
+        h = mix_u32(h, asig);
         if (!body_pending_ && sig_valid_ && h == sig_) return;
         const bool redraw = !sig_valid_;
         body_pending_ = true;
@@ -1693,41 +1690,41 @@ void ConnectionPage::update(uint32_t now_ms) {
     const std::span<const uint32_t> sink = wl.pdos;
 
     uint32_t h = 2166136261u;
-    h = fnv(h, uint32_t(verdict_) | uint32_t(none_why_) << 4);   // the no-PD body switches on the verdict edge
-    h = fnv(h, uint32_t(tab_) | uint32_t(link.cable_stale()) << 8 | uint32_t(link.waiting()) << 9 | uint32_t(caps->epr) << 10 | uint32_t(caps->spec_rev) << 11 | uint32_t(r.verdict) << 16 | uint32_t(r.flags) << 24);
-    h = fnv(h, r.typec_ma | uint32_t(fusb302::pd_traffic()) << 16 | uint32_t(link.inline_mode()) << 17);
-    h = fnv(h, uint32_t(r.typec_rp));
-    h = fnv(h, uint32_t(vbus_mv));
-    h = fnv(h, r.want_mv); h = fnv(h, r.want_ma); h = fnv(h, r.want_mw); h = fnv(h, uint32_t(r.want_pos));
-    h = fnv(h, uint32_t(r.gone) | g_book.offered << 8); h = fnv(h, r.src_max_mw); h = fnv(h, r.sink_max_mv);
+    h = mix_u32(h, uint32_t(verdict_) | uint32_t(none_why_) << 4);   // the no-PD body switches on the verdict edge
+    h = mix_u32(h, uint32_t(tab_) | uint32_t(link.cable_stale()) << 8 | uint32_t(link.waiting()) << 9 | uint32_t(caps->epr) << 10 | uint32_t(caps->spec_rev) << 11 | uint32_t(r.verdict) << 16 | uint32_t(r.flags) << 24);
+    h = mix_u32(h, r.typec_ma | uint32_t(fusb302::pd_traffic()) << 16 | uint32_t(link.inline_mode()) << 17);
+    h = mix_u32(h, uint32_t(r.typec_rp));
+    h = mix_u32(h, uint32_t(vbus_mv));
+    h = mix_u32(h, r.want_mv); h = mix_u32(h, r.want_ma); h = mix_u32(h, r.want_mw); h = mix_u32(h, uint32_t(r.want_pos));
+    h = mix_u32(h, uint32_t(r.gone) | g_book.offered << 8); h = mix_u32(h, r.src_max_mw); h = mix_u32(h, r.sink_max_mv);
     for (int i = 0; i < r.rows; i++) {
         const pd::Pdo &p = caps->pdos[i];
-        h = fnv(h, uint32_t(r.row[i]) | uint32_t(p.type) << 8);
-        h = fnv(h, uint32_t(p.min_mv) | uint32_t(p.max_mv) << 16);
-        h = fnv(h, p.max_ma);
+        h = mix_u32(h, uint32_t(r.row[i]) | uint32_t(p.type) << 8);
+        h = mix_u32(h, uint32_t(p.min_mv) | uint32_t(p.max_mv) << 16);
+        h = mix_u32(h, p.max_ma);
     }
-    for (uint32_t raw : sink) h = fnv(h, raw);
-    h = fnv(h, svs);
-    h = fnv(h, asig);
-    h = fnv(h, uint32_t(wl.src));
-    h = fnv(h, uint32_t(ct.flags) | uint32_t(ct.accepted) << 8 | uint32_t(ct.ready) << 9 | uint32_t(ct.rejected) << 10);
+    h = pg::mix_u32s(h, sink.data(), sink.size());
+    h = mix_u32(h, svs);
+    h = mix_u32(h, asig);
+    h = mix_u32(h, uint32_t(wl.src));
+    h = mix_u32(h, uint32_t(ct.flags) | uint32_t(ct.accepted) << 8 | uint32_t(ct.ready) << 9 | uint32_t(ct.rejected) << 10);
     {   // the tab bodies read more than the match: cable, identity, USB link, protocol, sink mode
         const pd::Identity &id = vdm.identity;
         const usblink::Link ul = fusb302::usb_link(dp_, dm_);   // debounced levels (Row D)
-        h = fnv(h, uint32_t(em.valid) | uint32_t(em.is_active) << 1 | uint32_t(em.vid) << 8 | uint32_t(em.raw_vdos[4]) << 24);
-        h = fnv(h, em.raw_vdos[4] | uint32_t(em.max_power_w) << 8 | uint32_t(em.sop) << 24);
-        h = fnv(h, uint32_t(id.valid) | uint32_t(id.vid) << 8 | uint32_t(id.pid) << 16);
-        h = fnv(h, id.id_header);
+        h = mix_u32(h, uint32_t(em.valid) | uint32_t(em.is_active) << 1 | uint32_t(em.vid) << 8 | uint32_t(em.raw_vdos[4]) << 24);
+        h = mix_u32(h, em.raw_vdos[4] | uint32_t(em.max_power_w) << 8 | uint32_t(em.sop) << 24);
+        h = mix_u32(h, uint32_t(id.valid) | uint32_t(id.vid) << 8 | uint32_t(id.pid) << 16);
+        h = mix_u32(h, id.id_header);
         const pd::Identity &sid = snk.identity;
-        h = fnv(h, uint32_t(sid.valid) | uint32_t(sid.vid) << 8 | uint32_t(sid.pid) << 16);
-        h = fnv(h, sid.id_header);
-        h = fnv(h, uint32_t(vdm.num_svids) | uint32_t(snk.num_svids) << 8);
-        for (int i = 0; i < vdm.num_svids; i++) h = fnv(h, vdm.svids[i]);
-        for (int i = 0; i < snk.num_svids; i++) h = fnv(h, snk.svids[i]);
-        h = fnv(h, uint32_t(ul.family) | uint32_t(ul.tbt) << 4 | uint32_t(ul.dp) << 8 | uint32_t(ul.cable_limited) << 9 | ul.mbps << 12);
-        h = fnv(h, uint32_t(ul.dp_adv) | uint32_t(ul.tbt_adv) << 1 | uint32_t(ul.dp_2lane) << 2 | uint32_t(ul.dp_4lane) << 3);
-        h = fnv(h, fc_ | uint32_t(fusb302::self_powered()) << 8 | uint32_t(fusb302::pin_rd() == 1) << 9);
-        h = fnv(h, vooc_);   // the Sink tab's raw VOOC note (sampled every kVoocNoteMs)
+        h = mix_u32(h, uint32_t(sid.valid) | uint32_t(sid.vid) << 8 | uint32_t(sid.pid) << 16);
+        h = mix_u32(h, sid.id_header);
+        h = mix_u32(h, uint32_t(vdm.num_svids) | uint32_t(snk.num_svids) << 8);
+        for (int i = 0; i < vdm.num_svids; i++) h = mix_u32(h, vdm.svids[i]);
+        for (int i = 0; i < snk.num_svids; i++) h = mix_u32(h, snk.svids[i]);
+        h = mix_u32(h, uint32_t(ul.family) | uint32_t(ul.tbt) << 4 | uint32_t(ul.dp) << 8 | uint32_t(ul.cable_limited) << 9 | ul.mbps << 12);
+        h = mix_u32(h, uint32_t(ul.dp_adv) | uint32_t(ul.tbt_adv) << 1 | uint32_t(ul.dp_2lane) << 2 | uint32_t(ul.dp_4lane) << 3);
+        h = mix_u32(h, fc_ | uint32_t(fusb302::self_powered()) << 8 | uint32_t(fusb302::pin_rd() == 1) << 9);
+        h = mix_u32(h, vooc_);   // the Sink tab's raw VOOC note (sampled every kVoocNoteMs)
     }
     if (!body_pending_ && sig_valid_ && h == sig_) return;
     const bool redraw = !sig_valid_;   // invalidated (page entered, tab, pop-up closed, repaint pass): the area is stale
