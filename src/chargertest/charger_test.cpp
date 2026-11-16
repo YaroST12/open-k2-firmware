@@ -1114,8 +1114,10 @@ void Runner::regrow_plan(const pd::SourceCaps& caps, const Input& in) {
 //    current word once the list has settled (rule 1/2: no Request until kListSettleMs unchanged; the restart is not a try -
 //    flight_restart_, sent by poll_impl); if not offered, it ends as withdrawn and is released to 5 V (the sink's single-Request
 //    gate serialises that release).
-// A list that places no PD row of the RUNNING unit at all (pending or in flight), another wire revision, and no list back
-// within kCapsReturnMs stay CapsChanged (the caller's check below), as before - never a re-split while attached (rule 5).
+// A list that places no PD row of the RUNNING unit at all (pending or in flight) is a re-split like the others (2026-11-17,
+// Anker 2-way splitter: every pending row gone after the 9 V row): every such row is withdrawn, the re-split is counted, and the
+// unit stays open - next() holds it for kWithdrawnWaitMs for the offer to return, then closes it with the rows Withdrawn. Another
+// wire revision and no list back within kCapsReturnMs stay CapsChanged (the caller's check below), as before.
 // Only rows of the running unit (unit_of(s) == unit_) may be withdrawn here or counted as placeable (review 2026-11-09):
 // a re-announce during the Pd unit must not withdraw the PdLow rows for good. Their pending rows are re-queued silently
 // when the list still offers them, so they are not stale when their unit starts; the running unit's own rows are re-placed
@@ -1161,21 +1163,10 @@ void Runner::follow_list(const pd::SourceCaps& caps, const Input& in) {
     // the source's chain re-runs.
     bool tail_wait = false;
     preauth_tail(in, tail_wait);
-    // A list that places no PD row of the running unit at all - pending or in flight - is a different charger: leave the
-    // rows to the caller's CapsChanged check. (The row in flight counts: if the list still offers it, it finishes and the
-    // rest is re-planned.)
+    // A list that places no row of the running unit at all is a re-split like any other (2026-11-17, Anker 2-way splitter: every
+    // pending row gone after the 9 V row): its rows are withdrawn below, the unit stays open and next() waits for the offer.
     Step* flight0 = index_ < count_ && steps_[index_].verdict == Verdict::Running && mode(unit_of(steps_[index_])) == Mode::Pd
                        ? &steps_[index_] : nullptr;
-    bool any_row = flight0 != nullptr, any_placeable = false;
-    if (flight0) any_placeable = offer_at(*flight0) >= 0;
-    for (const auto& s : steps()) {
-        if (mode(unit_of(s)) != Mode::Pd || s.verdict != Verdict::Pending || unit_of(s) != unit_) continue;
-        any_row = true;
-        if (s.pos >= 8) { any_placeable |= offer_at(s) >= 0; continue; }
-        if (s.pos > caps.num_pdos && tail_wait) { any_placeable = true; continue; }
-        any_placeable |= find_offer(caps, s) >= 0;
-    }
-    if (any_row && !any_placeable) return;
     unsigned follow = 0, withdrawn = 0, back = 0;
     bool moved = false;       // any change, a refreshed PDO word included: the evidence follows the list
     bool plan_moved = false;  // a row was withdrawn, came back or moved slot: the plan itself changed
@@ -1254,6 +1245,7 @@ void Runner::follow_list(const pd::SourceCaps& caps, const Input& in) {
         }
     }
     plan_sig_ = caps_sig(caps);
+    if (back) wd_wait_ = false;   // an offer came back: a later re-split gets its own wait
     if (moved) caps_evidence(caps);   // the evidence follows the list only when a row actually moved (an EPR exit keeps EprTable)
     if (plan_moved) {
         ++revision_; env_.plan_changed();   // once per re-plan, and only when the plan really changed
@@ -1339,7 +1331,7 @@ Reason Runner::start(const pd::SourceCaps& caps, Options o, Input in, bool confi
     xiaomi_seen_ = xiaomi_reset_ = x_svid_ = x_authed_ = false; tail_at_ = 0; hr_count_ = link_resets(in.pd);
     last_ms_ = phase_ms_ = in.now; stable_ = stopping_ = pd_owned_ = fc_owned_ = recover_ = hot_ = sag_cut_ = sag_open_ = false; busy_retry_at_ = 0;
     cut_wait_ = cut_dark_ = false; cut_start_ms_ = cut_back_ms_ = 0; cut_retry_idx_ = SIZE_MAX; cut_tries_ = 0; cut_last_mv_ = -1; n_cut_onsets_ = 0;
-    list_tracking_ = false; flight_restart_ = false;   // the settle window is seeded by the first poll, not opened by START
+    list_tracking_ = false; flight_restart_ = wd_wait_ = false;   // the settle window is seeded by the first poll, not opened by START
     reason_ = Reason::None; refusal_mv_ = 0;
     probe_ = (has_unit(o.units, Unit::Pd) || has_unit(o.units, Unit::PdLow)) ? Probe::Pending : Probe::Off;   // ask the charger who it is once, at the end of the first Pd unit
     state_ = State::Baseline;
@@ -1919,6 +1911,7 @@ void Runner::next(const Input& in) {
             s.verdict = Verdict::Pending; s.reason = Reason::None; env_.record(s); ++back;
         }
         if (back) {
+            wd_wait_ = false;   // a revival re-arms the wait for the next re-split
             ++revision_; env_.plan_changed();
             if (evidence_.rebalanced < 255) ++evidence_.rebalanced;
             env_.replan(0, 0, back);
@@ -1929,6 +1922,22 @@ void Runner::next(const Input& in) {
     index_ = i == SIZE_MAX ? count_ : i;
     if (attached_) {
         if (pd_owned_ || fc_owned_) { release(in, false); return; }   // Done only after the 5 V confirmation
+        // A re-split left rows Withdrawn and the list in force still lacks them (or has not settled yet): the unit stays open, idle at
+        // 5 V in the Baseline (every poll asks again, so a returned offer is picked up above), for kWithdrawnWaitMs from the first
+        // time it would have closed - then it closes with the rows Withdrawn.
+        if (mode_ == Mode::Pd && !ending_ && (i == SIZE_MAX || unit_of(steps_[i]) != unit_)) {
+            unsigned withdrawn = 0;
+            for (const auto& s : std::span<const Step>(steps_.data(), count_))
+                if (s.verdict == Verdict::Skip && s.reason == Reason::Withdrawn && unit_of(s) == unit_) ++withdrawn;
+            if (withdrawn) {
+                if (!wd_wait_) { wd_wait_ = true; wd_wait_ms_ = in.now; K2LOG("[CT] withdrawn wait rows=%u\n", withdrawn); }
+                if (in.now - wd_wait_ms_ < kWithdrawnWaitMs) {
+                    index_ = count_;
+                    if (state_ != State::Baseline) { state_ = State::Baseline; stable_ = false; phase_ms_ = in.now; pre_ms_ = 0; }
+                    return;
+                }
+            }
+        }
         if (probe_ == Probe::Pending && mode_ == Mode::Pd && safe5(in.vbus_mv)) {
             // The first Pd unit is done, back at a settled 5 V: ask the charger who it is, bounded (a failure changes no row).
             probe_ = Probe::Closing; state_ = State::Baseline; stable_ = false; phase_ms_ = in.now; return;
@@ -2086,7 +2095,7 @@ void Runner::begin_unit(Unit u, const Input& in) {
     if (selfpwr_ && self_path(u) == SelfPath::NeedsExternalPower) {   // a row that can cut the output cannot run on the output itself
         unit_ = u; skip_unit(Reason::NeedsExternalPower); next(in); return;
     }
-    unit_ = u; mode_ = mode(u);
+    unit_ = u; mode_ = mode(u); wd_wait_ = false;
     attached_ = silent_ = ending_ = false; attach_try_ = 0; pd_retry_ = cut_index_ = SIZE_MAX;
     rp_restart_ = false; contract_wrong_ = false; attach_max_mv_ = 0;
     pd_owned_ = fc_owned_ = recover_ = hot_ = sag_cut_ = sag_open_ = own_cut_ = false;   // a detach/attach boundary: the window does not cross it
@@ -2433,7 +2442,7 @@ void Runner::restore(const Options& o, const Evidence& e, uint32_t run_id, std::
     }
     index_ = 0;
     while (index_ < count_ && steps_[index_].verdict != Verdict::Pending) ++index_;
-    list_tracking_ = false; flight_restart_ = false;   // the settle window is seeded by the first poll after the resume
+    list_tracking_ = false; flight_restart_ = wd_wait_ = false;   // the settle window is seeded by the first poll after the resume
     state_ = State::Stopped;
 }
 bool Runner::unfinished() const {
