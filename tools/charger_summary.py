@@ -172,6 +172,7 @@ def summarize(r):
             continue
         out.append(f"- {head}" + ", ".join(_step_text(s, prev_of[id(s)], amps) for s in rows))
     out += _svooc_lines(r.get("svooc"))
+    out += _spec_lines(r.get("spec"))
     for why, names in skipped.items():
         out.append(f"- {', '.join(dict.fromkeys(names))}: skipped, {why}")
     if not_adv:
@@ -180,6 +181,33 @@ def summarize(r):
     if cuts:   # the source dropped VBUS for a moment at 5 V with no load; a step lost to a cut is asked again, up to 3 times (Reason::PortCuts)
         out.append(f"- Port cut at 5 V: {cuts} retr{'ies' if cuts != 1 else 'y'} of steps lost to a cut")
     return "\n".join(out)
+
+
+def _spec_lines(sp):
+    """The Deep run's PD spec section (pdspec_blob.decode_section): the tally and how the stage ended, then each failed or
+    unverified check with its worst value, then the skips grouped by reason. Nothing when the run had no section."""
+    if not sp:
+        return []
+    tl = sp["tally"]
+    head = f"- PD spec: {tl['pass']} pass, {tl['fail']} fail, {tl['skip']} skip" + (f", {tl['unverified']} unverified" if tl["unverified"] else "")
+    if tl["pending"]:
+        head += f", {tl['pending']} not judged"
+    if sp["end"] != "done":
+        head += f" · {sp['end']}" + (f" ({sp['why']})" if sp.get("why") else "")
+    out = [head]
+    for c in sp["cells"]:
+        if c["verdict"] == "fail":
+            out.append(f"  - {c['label']}: FAIL, worst {c['value_text']}, {c['fails']} over")
+        elif c["verdict"] == "unverified":
+            out.append(f"  - {c['label']}: unverified (a K2 figure, no spec limit), worst {c['value_text']}")
+    skips = {}
+    for c in sp["cells"]:
+        if c["verdict"] == "skip":
+            skips.setdefault(c["skip"], []).append(c["label"])
+    out += [f"  - skipped, {why}: {', '.join(names)}" for why, names in skips.items()]
+    if sp.get("unconfirmed"):
+        out.append("  - WARNING: the end-of-run return to 5 V was not confirmed: unplug the charger")
+    return out
 
 
 def _svooc_lines(sv):

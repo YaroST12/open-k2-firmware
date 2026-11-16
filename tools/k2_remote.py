@@ -1692,6 +1692,54 @@ class ResultsChanged(FrameError):
     """The firmware's RAM results moved under an export (a running suite rewrites rows and the revision)."""
 
 
+CT_SPEC_REQ, CT_SPEC_HEADER = 6, 7   # 0x0B req [6, off]: run_id u32, total u8, off u8, n u8, then n bytes (kChargerTestSpecReq)
+
+
+def read_charger_spec(link, run_id):
+    """The PD spec section of a Deep run (0x0B [6, off], 48-byte chunks of specsec::to_wire), decoded; None when the run has no
+    section (total 0: not a Deep run, or the stage did not begin). A reply of another run is a moved result (ResultsChanged)."""
+    import pdspec_blob
+    blob, total = bytearray(), None
+    while total is None or len(blob) < total:
+        p = link.call(CMD_CHARGER_TEST, bytes([CT_SPEC_REQ, len(blob)])).payload
+        if len(p) < CT_SPEC_HEADER:
+            raise FrameError("short charger-test spec reply")
+        rid, tot, off, n = struct.unpack_from("<IBBB", p)
+        if len(p) != CT_SPEC_HEADER + n:
+            raise FrameError("charger-test spec reply length does not match its count")
+        if rid != run_id:
+            raise ResultsChanged("charger-test spec belongs to another run; retry results")
+        if total is None:
+            total = tot
+            if not total:
+                return None
+        elif tot != total:
+            raise ResultsChanged("charger-test spec changed during the read; retry results")
+        if off != len(blob) or not n:
+            raise FrameError("charger-test spec chunk did not advance")
+        blob += p[CT_SPEC_HEADER:]
+    return pdspec_blob.decode_section(bytes(blob))
+
+
+def attach_spec_section(link, result, run_id):
+    """Put the Deep run's PD spec section on an export as result["spec"]; a run at another level asks nothing, and firmware without
+    the form (older, or a build without the engine) attaches nothing."""
+    if (result.get("selection") or {}).get("run_level") != "deep":
+        return
+    try:
+        spec = read_charger_spec(link, run_id)
+    except RemoteError as e:
+        if e.status not in (STATUS_BAD_LENGTH, STATUS_BAD_ARG):
+            raise
+        return
+    except ValueError as e:
+        if isinstance(e, FrameError):
+            raise
+        return   # a section this tool cannot read (a newer layout): the export stands without it
+    if spec:
+        result["spec"] = spec
+
+
 RESULTS_ATTEMPTS = 4     # whole exports tried before the results are declared unsettled
 RESULTS_RETRY_S = 0.3    # pause between exports, so a row boundary can pass
 
@@ -1835,6 +1883,7 @@ def _charger_test_export(link, a):
         raise ResultsChanged("charger-test results changed during export; retry results")
     attach_hunt_evidence(link, meta["run_id"], rows)   # read after the export proved stable; the evidence is not part of that check
     attach_svooc_readout(link, result, rows)
+    attach_spec_section(link, result, meta["run_id"])
     result["steps"] = rows
     if a.test_cmd == "summary" and not getattr(a, "json", False):
         result["_summary"] = True
@@ -4742,6 +4791,8 @@ def _render(name, r):
                         f"{s['result']} ({s.get('explanation', s['reason'])}; {s['detail_reason']})")
             if "hunt" in s:
                 rows.append(_hunt_line(s["hunt"]))
+        if r.get("spec"):
+            rows += ["  " + line for line in charger_summary._spec_lines(r["spec"])]
         return "\n".join([head] + notes + rows)
     if name == "diagnose" and isinstance(r, dict):
         return diagnose_text(r)

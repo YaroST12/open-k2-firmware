@@ -26,6 +26,7 @@ PASS_AVS = 0x80         # pdspec::kPassAvs
 PS_BITS = [(1, "Not_Supported"), (2, "no answer"), (4, "voltage"), (8, "current"), (16, "OMF"), (32, "flags")]   # pdspec::kPs*
 NEVER = 99999999        # pdspec::kNever: an event that never came
 OPEN = 1000000          # pdspec::kOpenLimit: the open side of a one-sided Range limit
+SEC_HEADER, SEC_CELL = 3, 4   # specsec::kWireBytes = 3 + 4 per cell
 NOT_SEEN16 = 0xFFFF
 NOT_SEEN32 = 0xFFFFFFFF
 STATES = ["idle", "running", "finished"]          # PdSpecSession::State (the status block and the blob header)
@@ -90,6 +91,54 @@ def load_tables():
     }
     _cache["t"] = t
     return t
+
+
+def section_tables():
+    """The Deep charger test's PD spec section (include/k2/chargertest/spec_section.hpp), parsed from the header: the checks of its
+    cells in grid order (the kDefs entries kOrder names), the End names, the unit steps of the quantized value and the wire size."""
+    if "s" in _cache:
+        return _cache["s"]
+    text = (ROOT / "include" / "k2" / "chargertest" / "spec_section.hpp").read_text()
+    t = load_tables()
+    by_enum = {d["enum"]: d for d in t["checks"]}
+    order = re.findall(r"C::(\w+)", re.search(r"kOrder\{(.*?)\};", _strip_comments(text), re.S).group(1))
+    step = re.search(r"Unit::Us\s*\?\s*(\d+)\s*:\s*u\s*==\s*sc::Unit::Mv\s*\?\s*(\d+)\s*:\s*(\d+)", text)
+    s = {"cells": [by_enum[n] for n in order],
+         "ends": [re.sub(r"(?<!^)(?=[A-Z])", " ", n).lower() for n in _enum_names(text, "End")],
+         "steps": {"us": int(step.group(1)), "mv": int(step.group(2)), "ms": int(step.group(3))},
+         "unseen": int(re.search(r"kUnseen\s*=\s*(\d+)", text).group(1)),
+         "wire_bytes": SEC_HEADER + SEC_CELL * len(order)}
+    _cache["s"] = s
+    return s
+
+
+def decode_section(b):
+    """The charger test's PD spec section (specsec::to_wire: end, why, flags, then code, fails and the quantized worst value per cell)
+    as a dict: how the stage ended, the tally and one entry per check in grid order. Raises ValueError on a wrong size or value."""
+    s, t = section_tables(), load_tables()
+    b = bytes(b)
+    if len(b) != s["wire_bytes"]:
+        raise ValueError(f"PD spec section is {len(b)} bytes, expected {s['wire_bytes']}")
+    end, why, flags = b[0], b[1], b[2]
+    if end >= len(s["ends"]) or flags & ~1:
+        raise ValueError("not a PD spec section (end or flags out of range)")
+    end_name = s["ends"][end]
+    why_text = (_name(t["stops"], why) if end_name in ("cancelled", "fault") else
+                _name(t["starts"], why) if end_name == "refused" else None)
+    cells = []
+    for i, d in enumerate(s["cells"]):
+        code, fails, raw = struct.unpack_from("<BBh", b, SEC_HEADER + SEC_CELL * i)
+        verdict, skip = code & 7, (code >> 3) & 15
+        if verdict >= len(t["verdicts"]) or skip >= len(t["skips"]):
+            raise ValueError(f"PD spec section cell {i} has an unknown verdict or skip reason")
+        name = t["verdicts"][verdict]
+        measured = name not in ("pending", "skip")
+        value = None if not measured else NEVER if raw == s["unseen"] else raw * s["steps"][d["unit"]] if d["unit"] in s["steps"] else raw
+        text = "-" if value is None else ps_text(value) if d["key"] == "pps_status" and value < NEVER else fmt_value(d["unit"], value)
+        cells.append({"key": d["key"], "label": d["label"], "unit": d["unit"], "verdict": name,
+                      "skip": t["skips"][skip] if name == "skip" else None, "fails": fails, "value": value, "value_text": text})
+    tally = {v: sum(1 for c in cells if c["verdict"] == v) for v in ("pass", "fail", "skip", "unverified", "pending")}
+    return {"end": end_name, "why": why_text, "unconfirmed": bool(flags & 1), "tally": tally, "cells": cells}
 
 
 def _name(lst, i):
