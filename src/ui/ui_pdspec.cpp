@@ -6,6 +6,7 @@
 #include <algorithm>
 
 #include "k2/core/log.hpp"
+#include "k2/chargertest/spec_section.hpp"
 #include "k2/core/loop_guard.hpp"
 #include "k2/drivers/fusb302.hpp"
 #include "k2/drivers/power_monitor.hpp"
@@ -19,6 +20,24 @@
 namespace k2 {
 
 namespace sc = pdspec;
+
+// The Deep section's family mask and cell list must follow the engine: the mask selects exactly the families whose checks the cells
+// list (plus the Source reset observer, owned by no family).
+namespace {
+constexpr bool spec_section_matches_engine() {
+    for (std::size_t k = 0; k < sc::kChecks; ++k) {
+        bool listed = false;
+        for (const sc::Check c : specsec::kOrder) listed = listed || static_cast<std::size_t>(c) == k;
+        bool owned = false;
+        for (std::size_t f = 0; f < sc::kFamilies; ++f)
+            owned = owned || ((specsec::kFamilyMask >> f & 1u) && sc::owns(static_cast<sc::Family>(f), static_cast<sc::Check>(k)));
+        if (static_cast<sc::Check>(k) == sc::Check::SourceReset) owned = true;
+        if (listed != owned) return false;
+    }
+    return true;
+}
+static_assert(spec_section_matches_engine(), "specsec::kOrder / kFamilyMask are out of step with the pdspec engine");
+}  // namespace
 
 bool PdSpecSession::self_supplied() const { return fusb302::self_powered() || power_source::bus_powered(); }
 
@@ -137,6 +156,7 @@ void PdSpecSession::on_finish(sc::Stop why) {
     rd_off(false);   // the engine already put the Rd back; this only closes a gap the session still thinks open
     // Every end of a run comes through here, after the 5 V release. The run gives the line back the way the charger test does: the
     // sleeping-port wake may act again, and the run's Rd goes off (sink_release keeps the 5 V contract for its linger first).
+    if (test_run_) return;   // the charger test gives the line back when its run ends
     fusb302::set_run_owner(false);
     fusb302::rd_for_run(false);
 }
@@ -144,16 +164,20 @@ void PdSpecSession::on_finish(sc::Stop why) {
 // ---- start, cancel, tick ---------------------------------------------------------------------------------------------------------------
 
 sc::StartResult PdSpecSession::start(std::uint8_t families, std::uint32_t now_ms, std::uint8_t opts) {
-    const sc::StartResult r = start_run(families, now_ms, opts);
+    const sc::StartResult r = start_run(families, now_ms, opts, false);
     last_start_ = static_cast<std::uint8_t>(r);
     return r;
 }
 
-sc::StartResult PdSpecSession::start_run(std::uint8_t families, std::uint32_t now_ms, std::uint8_t opts) {
+sc::StartResult PdSpecSession::start_in_test(std::uint32_t now_ms) {
+    return start_run(specsec::kFamilyMask, now_ms, 0, true);
+}
+
+sc::StartResult PdSpecSession::start_run(std::uint8_t families, std::uint32_t now_ms, std::uint8_t opts, bool in_test) {
     if (running()) return sc::StartResult::Running;
     if (!ctx_.pm_online) return sc::StartResult::NoMonitor;
     // Refuse before the previous result is replaced: the engine's own checks come after the emplace.
-    if (const char* b = foreign_busy()) {
+    if (const char* b = in_test ? nullptr : foreign_busy()) {
         K2LOG("[PDSPEC] start refused: %s\n", b);
         return sc::StartResult::Busy;
     }
@@ -162,6 +186,7 @@ sc::StartResult PdSpecSession::start_run(std::uint8_t families, std::uint32_t no
     if (s.self_powered) return sc::StartResult::SelfPowered;
     if (!s.attached || !fusb302::caps().valid) return sc::StartResult::NoCaps;
     engine_.emplace(static_cast<sc::Env&>(*this));
+    test_run_ = in_test;
     run_no_ = static_cast<std::uint16_t>(run_no_ + 1 ? run_no_ + 1 : 1);
     cancel_asked_ = false;
     captured_ = false;
@@ -170,11 +195,14 @@ sc::StartResult PdSpecSession::start_run(std::uint8_t families, std::uint32_t no
     if (r != sc::StartResult::Ok) {
         K2LOG("[PDSPEC] start refused: %s\n", sc::start_name(r));
         engine_.reset();
+        test_run_ = false;
     } else {
         const sc::Levels& L = engine_->levels();
         // (The move count is the host's to work out from the caps: sc::family_moves; not computed here, for the flash budget.)
         K2LOG("[PDSPEC] start families=0x%x fixed=%u pps=%u prog=%u full20=%u cap_mv=%u\n", unsigned(engine_->families()),
               unsigned(L.n_fixed), unsigned(L.n_pps), unsigned(L.n_prog), unsigned(opts & sc::kOptFull20), unsigned(ctx_.cap_mv));
+        // A charger test owns the link and its Rd already; the engine only borrows them.
+        if (in_test) { update_footer(); return r; }
         // The run owns the link from here: a pd-reread attach it starts on is the run's, and the re-read's release must not fire
         // inside a step.
         fusb302::reread_take_over();
@@ -259,7 +287,7 @@ std::size_t PdSpecSession::result_read(std::size_t off, std::span<std::uint8_t> 
 
 void PdSpecSession::update_footer() {
     std::uint8_t kind = 0, fam = 0, item = 0, items = 0;
-    if (running()) {
+    if (running() && !test_run_) {   // a test's section has no footer: the test page has its own
         if (cancel_asked_) kind = 2;
         else {
             kind = 1;

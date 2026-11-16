@@ -414,6 +414,9 @@ private:
     void release(bool) override;
     uint8_t ceiling_start() override;   // svooc_trig::start with the Probe profile; 0 = running, else svooc::Refusal
     void ceiling_stop() override;
+    uint8_t spec_start() override;      // PdSpecSession::start_in_test; 0 = running, else pdspec::StartResult (255 = not built)
+    void spec_stop() override;
+    void spec_collect(specsec::Result&) override;
     void legacy_only(bool) override;
     void pd_rescan() override;
     void detach() override;

@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <span>
+#include "k2/chargertest/spec_section.hpp"
 #include "k2/chargertest/svooc_ceiling.hpp"
 #include "k2/core/math_opt.hpp"
 #include "k2/chargertest/sweep.hpp"
@@ -116,7 +117,9 @@ constexpr bool resume_wanted(bool back_held, bool gate_ready) { return !back_hel
 // Detach / Attach are the two ends of every unit (see Unit below); they replace the old Handover / Reattach states in the same numbering.
 // Ceiling = the SVOOC ceiling stage (svooc_ceiling.hpp): the guarded trigger runs in a Legacy unit after the VOOC family's
 // session was released, at 5 V, nothing drawn. Appended last so the earlier numbers (the wire, the journal) stay.
-enum class State : uint8_t { Idle, Baseline, Requesting, Holding, Releasing, Done, Stopped, Unsafe, Detach, Attach, Ceiling };
+// Spec = the PD spec stage of a Deep run (spec_section.hpp): the pdspec engine runs the no-load conformance checks on the Pd unit's
+// own link, at the end of the Pd unit, once its contract is released to 5 V.
+enum class State : uint8_t { Idle, Baseline, Requesting, Holding, Releasing, Done, Stopped, Unsafe, Detach, Attach, Ceiling, Spec };
 // Journal phase markers, reported through Env::phase() BEFORE the action they name. Handover = a Legacy attach begins (index of
 // the unit's first pending row): a power loss there is charged to the unit like one in a Request (kRebootBudget, then RebootLimit).
 enum class Phase : uint8_t { None, Request, Handover };
@@ -247,6 +250,8 @@ struct Options {
     // the guarded trigger asks the adapter 1.5 / 4 / 6.3 / 10.9 A (a protocol word, no load) and the highest ask it went on
     // under is the result. UsbA (the retired USB-A waiver, kept for the wire) runs as On: the inline latch only keeps certain evidence now.
     svooc_ceiling::Mode svooc_cap = svooc_ceiling::Mode::Off;
+    // The PD spec stage (spec_section.hpp): Deep only, like the SVOOC ceiling. Journaled in the meta byte (bit 5).
+    bool spec = false;
     // How thorough the run is (with_level). Medium is 0 on every wire (journal, remote status word, card), so data written before
     // the level existed reads as Medium.
     Level level = Level::Medium;
@@ -257,14 +262,15 @@ struct Options {
 //            Advertised rows (Reason::Advertised); no Request above or below 5 V, no EPR entry (its levels are read in SPR mode),
 //            no sweeps, no SVOOC ceiling, no PdLow unit.
 //   Medium - the fixed levels, the PPS / AVS points, the legacy level steps; no deep sweeps, no SVOOC ceiling.
-//   Deep   - Medium plus the PPS and AVS deep sweeps over every APDO and the SVOOC ceiling stage.
+//   Deep   - Medium plus the PPS and AVS deep sweeps over every APDO, the SVOOC ceiling stage and the PD spec stage (no-load
+//            conformance of the transitions and the PPS / AVS moves, one more section of the results).
 // The sweep flags stay their own switches afterwards (the Custom flow's sweep rows and the remote commands toggle them).
 // The SVOOC ceiling stage (the guarded trigger, VBUS up to the adapter's ceiling) is Deep only: Light and Medium stop at the
 // VOOC family's detection and its ident. Deep turns it on, keeping the mode the operator set (UsbA is the retired waiver and
 // runs as On).
 constexpr Options with_level(Options o, Level l) {
     o.level = l;
-    o.pps_sweep = o.avs_sweep = l == Level::Deep;
+    o.pps_sweep = o.avs_sweep = o.spec = l == Level::Deep;
     if (l != Level::Deep) o.svooc_cap = svooc_ceiling::Mode::Off;
     else if (o.svooc_cap == svooc_ceiling::Mode::Off) o.svooc_cap = svooc_ceiling::Mode::On;
     return o;
@@ -356,6 +362,8 @@ struct Input {
     uint8_t svooc_asks = 0;    // the asks answered so far
     uint16_t svooc_vmax_mv = 0;   // the highest VBUS the trigger saw (svooc::Report::vbus_max_mv)
     uint16_t svooc_last_ms = 0;   // the adapter's last edge, ms after the wake (svooc::Log::last_edge_ms)
+    // The PD spec stage: the pdspec engine is still running (Env::spec_start was accepted and it has not finished).
+    bool spec_running = false;
     // D+/D- are free for the ceiling stage's trigger: no owner holds them and they sit at the passive idle (the trigger's own
     // start check, svooc_trig::lines_free()). False for 500 ms after a legacy session's release (the engine's 0 V discharge).
     bool lines_free = true;
@@ -414,6 +422,8 @@ struct Evidence {
     // ... the highest VBUS the trigger saw in the session (mV, its start and exit watch included) and when the adapter's last
     // D+/D- edge came (ms after the wake, saturating): "stopped at" for End::Stopped.
     uint16_t svooc_vmax_mv = 0, svooc_stop_ms = 0;
+    // The PD spec stage (spec_section.hpp): how it ended and one verdict per check. Journaled (/jr/sp.rec), not on the card.
+    specsec::Result spec{};
     // The VOOC family's ident command (0xA8 / 0xAC / 0xA6) when its detection row passed; 0 = none heard. One ident proves the
     // family, not the variant. Not journaled, not on the card.
     uint8_t vooc_ident = 0;
@@ -427,6 +437,7 @@ struct Summary {
     uint8_t total = 0, runnable = 0, skipped = 0;
     uint16_t max_mv = 0;
     uint32_t estimate_ms = 500;
+    uint8_t spec_checks = 0;   // the PD spec stage's checks (specsec::kCells; 0 = no stage: not Deep, no PD unit, or not built)
     Reason refusal = Reason::None;
     uint16_t refusal_mv = 0;   // the measured VBUS (mV) behind a Release / WrongVoltage refusal (0 = none)
 };
@@ -581,6 +592,16 @@ struct Env {
     // ceiling_stop ends it (idempotent, the exit watch follows). The stage reads the rest from Input::svooc.
     virtual uint8_t ceiling_start() { return 255; }
     virtual void ceiling_stop() {}
+    // The PD spec stage (spec_section.hpp). spec_start starts the pdspec engine on the live link (the transitions and PPS / AVS
+    // families, specsec::kFamilyMask): 0 = started, else the refusal (pdspec::StartResult, never 0), 255 = no engine on this build.
+    // spec_stop asks it to end in order (the keep-alives back, the source released to 5 V; idempotent). spec_collect reads the
+    // finished run into `r`: the cells, how it stopped and whether the return to 5 V was confirmed; a run still going (the Runner's
+    // abandon after the grace) is ended hard first. Input::spec_running says it is over.
+    virtual uint8_t spec_start() { return 255; }
+    virtual void spec_stop() {}
+    virtual void spec_collect(specsec::Result& r) { (void)r; }
+    // The stage's result is final (called once, before the source is released to 5 V): the journal keeps it.
+    virtual void spec_done(const specsec::Result& r) { (void)r; }
 protected:
     ~Env() = default;
 };
@@ -711,7 +732,7 @@ public:
     uint8_t resumed() const { return resumed_; }
     Level level() const { return opts_.level; }   // the level of the run in hand (started or restored)
     uint8_t reattach_count() const { return reattach_; }   // how many times the run went through the planned re-attach
-    bool busy() const { return (state_ >= State::Baseline && state_ <= State::Releasing) || state_ == State::Unsafe || state_ == State::Detach || state_ == State::Attach || state_ == State::Ceiling; }
+    bool busy() const { return (state_ >= State::Baseline && state_ <= State::Releasing) || state_ == State::Unsafe || state_ == State::Detach || state_ == State::Attach || state_ == State::Ceiling || state_ == State::Spec; }
     // The page scans for the source's Rp while a unit attaches (the main loop's own scan is too slow for a fast announcer).
     bool attaching() const { return state_ == State::Attach; }
     State state() const { return state_; }
@@ -720,7 +741,7 @@ public:
     // nothing heavy then (a full LCD redraw is 100-200 ms, a littlefs erase masks interrupts). Baseline, Releasing, the unit
     // attach / detach states and the end of the run are the gaps in which that work is done. Derived from the state: no storage.
     // The SVOOC ceiling stage counts: its wire is timed in the main loop too, and a littlefs erase masks interrupts.
-    bool quiet() const { return state_ == State::Requesting || state_ == State::Holding || state_ == State::Ceiling; }
+    bool quiet() const { return state_ == State::Requesting || state_ == State::Holding || state_ == State::Ceiling || state_ == State::Spec; }
     // Nothing may paint at all: a row is in flight AND the fast-charge engine is inside a window that only the main loop serves
     // (`engine_window` = fctrig::paint_critical(): the HVDCP handshake pulses, the VOOC receive slices, the UFCS handshake, the
     // vivo UART frames; the LCD idle hook serves the PD engine, the UFCS Ping..Keep exchange and the transition capture, so those
@@ -842,6 +863,14 @@ private:
     bool ceil_cycled_ = false;   // that Rd cycle ran: an attach after it that never sees VBUS is a lost source (poll_attach)
     uint8_t ceil_why_ = 0;   // the Runner's own guard that stopped the trigger, as a svooc::Abort (0 = the trigger's own end)
     uint32_t ceil_ms_ = 0, ceil_stop_ms_ = 0, ceil_low_ms_ = 0;
+    // The PD spec stage: begun by next() at the end of the Pd unit (after its contract is released, at a settled 5 V), ended by
+    // poll_spec(). One stage per run; a resumed run never repeats it (its result is journaled).
+    bool spec_wanted() const;
+    bool begin_spec(const Input&);   // false = the stage did not start (refused): the run goes on
+    void poll_spec(const Input&);
+    void end_spec(const Input&, specsec::End);
+    bool spec_pending_ = false, spec_done_ = false, spec_stopping_ = false, spec_fault_ = false;
+    uint32_t spec_ms_ = 0, spec_stop_ms_ = 0;
     Env& env_;
     Evidence evidence_;
     std::array<Step, kMaxSteps> steps_{};

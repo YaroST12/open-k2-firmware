@@ -231,6 +231,9 @@ charger_test::Input ChargerTestSession::input(uint32_t now) const {
     in.fc_adapter_mv = fs.adapter_mv;
     in.pd_quiet_ms = fusb302::pd_quiet_ms();
     in.probe_done = fusb302::probe_status().state != pd::ProbeState::Running;
+#if K2_PDSPEC
+    in.spec_running = ctx_.ui->pd_spec().running();   // the engine's own run (the stage ends when it has finished and released)
+#endif
     // D+/D- free for the ceiling stage (only the release before it waits on this).
     if (runner_.state() == ct::State::Releasing) in.lines_free = svooc_trig::lines_free();
     // The SVOOC ceiling stage's view of the trigger (the snapshot is a copy: only while that stage is the state).
@@ -329,6 +332,31 @@ uint8_t ChargerTestSession::ceiling_start() {
     return static_cast<uint8_t>(svooc_trig::start(true, false, svooc_ceiling::kCapS, false, p));
 }
 void ChargerTestSession::ceiling_stop() { svooc_trig::stop(); }
+// The PD spec stage (include/k2/chargertest/spec_section.hpp): the pdspec engine runs inside this test (PdSpecSession::start_in_test:
+// the test keeps the ports, the Rd and the run-owner flag) and Ui::poll ticks it after this session's poll.
+uint8_t ChargerTestSession::spec_start() {
+#if K2_PDSPEC
+    return static_cast<uint8_t>(ctx_.ui->pd_spec().start_in_test(ctx_.now));
+#else
+    return 255;
+#endif
+}
+void ChargerTestSession::spec_stop() {
+#if K2_PDSPEC
+    ctx_.ui->pd_spec().cancel();
+#endif
+}
+void ChargerTestSession::spec_collect(specsec::Result& r) {
+#if K2_PDSPEC
+    const pdspec::Engine* e = ctx_.ui->pd_spec().engine_for_test();
+    if (!e) return;
+    const pdspec::Stop st = e->stop();
+    r = specsec::from_aggs(e->agg(), st == pdspec::Stop::Done ? specsec::End::Done : st == pdspec::Stop::Cancelled || st == pdspec::Stop::None ? specsec::End::Cancelled : specsec::End::Fault,
+                           static_cast<uint8_t>(st), e->release_unconfirmed());
+#else
+    (void)r;
+#endif
+}
 // A row whose verdict stands but whose reason changed afterwards (the sweep closing marks its APDO's fixed rows, Reason::Folded): only
 // the journal follows (the row's section is dirty, no flash here); the row's own events and log line went out when it ended.
 void ChargerTestSession::amend(const ct::Step& s) {
@@ -1001,6 +1029,7 @@ void ChargerTestSession::poll(uint32_t now) {
         case ct::State::Detach:     K2LOG("[TEST] Detach charger %s\n", reason_name); break;
         case ct::State::Attach:     K2LOG("[TEST] Initializing... %s\n", reason_name); break;
         case ct::State::Ceiling:    K2LOG("[TEST] SVOOC ceiling %s\n", reason_name); break;
+        case ct::State::Spec:       K2LOG("[TEST] PD spec %s\n", reason_name); break;
         }
         if (runner_.state() == ct::State::Done) save_card();
         if (runner_.state() == ct::State::Done || runner_.state() == ct::State::Stopped) {
