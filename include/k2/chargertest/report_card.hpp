@@ -184,6 +184,9 @@ inline const char* group_why(unsigned group, const GroupResult& r) {
 struct Counts { unsigned pass = 0, fail = 0, skip = 0; };
 
 struct Card {
+    // Out of line (report_card_json.cpp): the zeroed arrays and the spread_none() fill are about 130 B, and nine pages and
+    // stores each built a Card inline.
+    Card();
     Identity id;
     uint8_t num_pdos = 0, spec_rev = 0, ev_flags = 0;
     std::array<GroupResult, kGroups> group{};
