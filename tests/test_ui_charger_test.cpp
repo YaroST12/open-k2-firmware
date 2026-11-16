@@ -1250,10 +1250,16 @@ static void test_review_level_row_cycles_and_counts() {
     CHECK_EQ(ui.charger_test_selection() >> 28, 0xEu);                             // Deep: both sweeps, level 2
     const unsigned deep = ui.charger_test_view().preview.runnable;
     CHECK_EQ(picked(), 2);
+    // Deep also runs the PD spec stage (specsec): the footer names it, the preview counts its checks, Light and Medium have none.
+    v = ui.charger_test_view();
+    CHECK_STR(std::string(v.message, v.message_len).c_str(), "Deep: + sweeps, PD spec");
+    CHECK_EQ(unsigned(v.preview.spec_checks), unsigned(specsec::kCells));
+    CHECK_EQ(unsigned(ui.charger_test_view().preview.total) >= deep, true);
     press(ui, Button::Ok); settle(ui);
     CHECK_EQ(picked(), 0);
     CHECK_EQ(ui.charger_test_selection() >> 28, 0x1u);                             // Light
     v = ui.charger_test_view();
+    CHECK_EQ(unsigned(v.preview.spec_checks), 0u);
     const unsigned light = v.preview.runnable;
     CHECK_STR(std::string(v.message, v.message_len).c_str(), "Light: lists offers at 5V");
     std::printf("[review-level] runnable: Light %u, Medium %u, Deep %u\n", light, medium, deep);

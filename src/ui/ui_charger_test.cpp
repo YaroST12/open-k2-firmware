@@ -87,8 +87,9 @@ static_assert(all_fit(kPresetNames, kSmallAdvPx, 150), "a preset name is wider t
 constexpr const char* kReattachConfirm = "Press again, K2 blinks once";
 static_assert(fits_px(kSmallAdvPx, kReattachConfirm, 216), "the re-attach confirmation is wider than the footer");
 // Review's footer while the cursor is on the Level row: what the level does (charger_test::Level order: Medium, Light, Deep).
+// A build with the PD spec stage (K2_PDSPEC) says so on Deep; the default image has no such stage and keeps the old words.
 constexpr const char *kLevelNotes[ct::kLevelCount] = {"Medium: levels, no sweeps", "Light: lists offers at 5V",
-                                                       "Deep: + PPS and AVS sweeps"};
+                                                       specsec::kBuilt ? "Deep: + sweeps, PD spec" : "Deep: + PPS and AVS sweeps"};
 static_assert(all_fit(kLevelNotes, kSmallAdvPx, 216), "a level note is wider than the footer");
 const char *level_note(ct::Level l) { return kLevelNotes[unsigned(l) < ct::kLevelCount ? unsigned(l) : 0]; }
 // A row whose engine times its own pulses stops the screen for the length of the handshake (the engine window the LCD idle hook
@@ -1892,6 +1893,7 @@ static FooterTone spec_footer(StrBuf<32>& f, int check, const specsec::Cell& c, 
         if (s_.runner_.state() == ct::State::Unsafe) { f.put("Unplug; verify measured 5V"); return FooterTone::Error; }
         if (s_.runner_.reason() != ct::Reason::None) { f.put(ct::refusal_words(s_.runner_.reason())); return FooterTone::Caution; }
         if (steps.empty()) { f.put("Starting"); return FooterTone::Info; }
+        if (s_.runner_.state() == ct::State::Spec) { f.put("PD spec checks"); return FooterTone::Info; }
         if (s_.fc_words_ && fctrig::paint_critical()) { f.put(s_.fc_words_); return FooterTone::Info; }   // the window the screen sits out
         unsigned i, n;
         const char *unit;
@@ -2346,7 +2348,8 @@ void ChargerTestPage::paint_review() {
         return true;
     };
     StrBuf<32> t;
-    t.put_u32(s_.summary_.runnable).put(" run, ").put_u32(s_.summary_.skipped).put(" skip");
+    // the PD spec stage's checks (Deep, K2_PDSPEC) are tests too
+    t.put_u32(s_.summary_.runnable + s_.summary_.spec_checks).put(" run, ").put_u32(s_.summary_.skipped).put(" skip");
     if (!kv(0, "Tests", t.view(), s_.summary_.runnable ? kText : kCaution)) return;
 
     StrBuf<48> cb;
