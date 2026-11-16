@@ -702,8 +702,6 @@
   "705": "[CT] cut retry row=%u dip=%ums\n",
   "706": "[CT] cut retry row=%u cut again: skip\n",
   "707": "[CT] cut retry row=%u dip=%ums try=%u\n",
-  "708": "[CT] cut retry row=%u cut again after %u: skip\n",
-  "709": "[CT] settle after cut age=%ums wait=%ums vbus=%d\n",
-  "710": "[CT] retry after cut row=%u age=%ums fail=%u\n"
+  "708": "[CT] cut retry row=%u cut again after %u: skip\n"
  }
 }
