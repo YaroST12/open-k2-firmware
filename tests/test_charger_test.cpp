@@ -4427,6 +4427,36 @@ static void test_an_avs_fold_marks_the_fixed_row_inside_the_band() {
     CHECK_EQ(sweep, 1u);
     CHECK_EQ(fixed >= 1u, true);
 }
+// The FH22 list as the brief quotes it (fw 1.0.2-128): PDO6 PPS 5-21 V and PDO7 SPR AVS 9-20 V, both folding at 20.0 V to ~19.42 V. Both
+// sweep rows are cautions; the fixed AVS 20 V row (19428 mV, inside its band) is marked; the PPS 21 V rows read below their band and
+// stay their own Capped finding (a fold never softens a fail).
+static void test_the_fh22_list_cautions_pdo6_and_pdo7() {
+    Fake f;
+    f.caps.num_pdos = 7;
+    for (unsigned n = 0; n < 5; ++n) f.caps.pdos[n] = pd::decode_pdo(((5000 + 4000 * n) / 50 << 10) | 325);
+    f.caps.pdos[5] = pd::decode_pdo(0xc0000000 | (210u << 17) | (50u << 8) | 100);   // PDO6: PPS 5-21 V 5 A
+    f.caps.pdos[6] = pd::decode_pdo(0xE004B145);                                       // PDO7: SPR AVS 9-20 V
+    f.pd_offset_mv = -90; f.pd_fold_from_mv = 20000; f.pd_fold_to_mv = 19420;
+    ct::Runner r(f);
+    ct::Options o{.selected = ct::bit(A::Pps) | ct::bit(A::SprAvs)}; o.pps_sweep = true; o.avs_sweep = true;
+    CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+    f.tick(r, 1800000);
+    CHECK_EQ(r.state(), ct::State::Done);
+    unsigned sweep6 = 0, sweep7 = 0, avs_fixed = 0, capped_pps = 0;
+    for (const auto& s : r.steps()) {
+        if (ct::is_sweep(s) && s.reason == ct::Reason::Folded) {
+            CHECK_EQ(s.verdict, ct::Verdict::Pass);
+            if (s.pos == 6 && s.algorithm == A::Pps) ++sweep6;
+            if (s.pos == 7 && s.algorithm == A::SprAvs) ++sweep7;
+        }
+        if (!ct::is_sweep(s) && s.algorithm == A::SprAvs && s.reason == ct::Reason::Folded) { ++avs_fixed; CHECK_EQ(s.verdict, ct::Verdict::Pass); }
+        if (s.algorithm == A::Pps && s.reason == ct::Reason::Capped) { CHECK_EQ(s.verdict, ct::Verdict::Fail); ++capped_pps; }
+        if (s.reason == ct::Reason::Folded) CHECK_EQ(s.verdict == ct::Verdict::Fail, false);
+    }
+    CHECK_EQ(sweep6, 1u); CHECK_EQ(sweep7, 1u);
+    CHECK_EQ(avs_fixed >= 1u, true);
+    CHECK_EQ(capped_pps >= 1u, true);
+}
 // The sweep stops at the first LOST source (a Hard Reset mid-sweep): the row fails there, the points recorded so far
 // stay in the record, and the run goes on to its end.
 static void test_pps_deep_sweep_stops_at_the_first_lost_source() {
@@ -8161,7 +8191,7 @@ int main() {
     test_fixed_row_collapse_stays_lost(); test_pps_collapse_after_ps_rdy_stays_lost();
     test_low_edge_that_regulates_at_5v_is_a_floored_fail();
     test_pps_step_walk_passes_on_20mv_steps(); test_pps_step_walk_fails_when_steps_round_to_100mv(); test_pps_step_walk_fails_when_steps_are_ignored();
-    test_a_fold_the_sweep_finds_is_a_caution_on_the_apdos_rows(); test_a_fold_never_softens_a_capped_row(); test_an_avs_fold_marks_the_fixed_row_inside_the_band(); test_pps_deep_sweep_records_every_point_and_the_fold_back(); test_pps_deep_sweep_stops_at_the_first_lost_source(); test_pps_deep_sweep_is_opt_in();
+    test_a_fold_the_sweep_finds_is_a_caution_on_the_apdos_rows(); test_a_fold_never_softens_a_capped_row(); test_an_avs_fold_marks_the_fixed_row_inside_the_band(); test_the_fh22_list_cautions_pdo6_and_pdo7(); test_pps_deep_sweep_records_every_point_and_the_fold_back(); test_pps_deep_sweep_stops_at_the_first_lost_source(); test_pps_deep_sweep_is_opt_in();
     test_sweep_live_follows_the_row_in_flight(); test_sweep_live_is_idle_without_a_sweep_row();
     test_claim_sweep_record_lends_the_point_buffer();
     test_avs_deep_sweep_plans_and_runs_per_spr_avs_apdo(); test_avs_deep_sweep_epr_capped_at_the_monitor_ceiling();
