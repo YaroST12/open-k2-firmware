@@ -527,7 +527,7 @@ It is drawn by the page today (`paint_detail`). It belongs in the kit beside Ale
 |---|---|
 | Purpose | The one live value of a walk-by screen |
 | Geometry | font 48 digits right-aligned in a fixed box; unit in font 24 on the baseline, 3 px behind |
-| Running | right edge x196, top y54, 4 characters |
+| Running | right edge x196, top y54, 4 characters (a sweep row: the signed error, 3 characters, right edge x90, top y72; see Live run, sweep row) |
 | Waiting | right edge x170, top y34, 5 characters, overline `VBUS` in font 12 at x6, y26 |
 | Colours | `kVolt` when up; `kCaution` between 0.5 V and the start threshold; `kFaint` at 0 |
 | Format | 2 decimals below 10 V, 1 above; `--` when unknown |
@@ -543,7 +543,7 @@ It is drawn by the page today (`paint_detail`). It belongs in the kit beside Ale
 | Pass band | `kOk` core 4 px in a `kOkT` window 8 px, +-5 % of the target, at least 5 px wide |
 | Needle | 2 px white, full strip height |
 | Scale | one per run: 0 to 110 % of the plan's top target |
-| Range (sweeps) | two dotted `kOk` lines at the range ends, `kOkT` between, a 6 px `kFocus` cap at the setpoint |
+| Range (sweeps) | two dotted `kOk` lines at the range ends, `kOkT` between, a 6 px `kFocus` cap at the setpoint; on a sweep row the strip sits at y116 (not y98) |
 | Repaints | the old and new needle columns; the whole strip once per target (2520 px) |
 | Seen in | `b_ct_running.png`, `ufcs_cuktech_running.png` |
 
@@ -628,6 +628,34 @@ them should move them into the kit first.
 
 - The step name has its own line. It never shares a row with the hero.
 - Footer: `<unit>: step i of n`. Strip: `Stop` on OK.
+
+**Live run, sweep row (PPS, AVS)**. The signed ERROR is the hero (user decision 2026-11-16). Geometry and numbers live in
+`include/k2/ui/run_layout.hpp` (`kSweepRun`, the `runlay` constants), the formatting in `include/k2/ui/sweep_hero.hpp`;
+`tests/test_ui_sweep_live.cpp` checks every box below in 4 rotations.
+
+| y | part |
+|---|---|
+| 25, 44..46 | as above |
+| 48 | step name font 16 at x6; family font 12 `kDim` at x122 |
+| 65 | `act` label (12 px, `kDim`, x120), the act value in font 24 (`kVolt`, x144, 6 characters, right-aligned on the point), unit `V` in font 12 |
+| 72..101 | ERROR hero: up to three digits of font 48, right edge x90; unit `mV` (24 px, on the digits' baseline, x93); the sign in font 24 just left of the first digit, 4 px below the hero's top (`kSignDy`), `kSignGap` 3 px clear of the digit cell |
+| 90 | `set` label, the set value in font 24 (`kText`, x144), unit `V`: stacked under act, both on the decimal point |
+| 116..127 | gauge (range gauge, cap at the setpoint) |
+| 130..131 | 2 px rule |
+| 132..221 | ResultGrid |
+
+- Colour by size of the error: `kOk` up to 100 mV, `kCaution` up to 300 mV, `kError` above (`chargertest::kErrOkMv`,
+  `kErrCautionMv`). The sign is the hero's colour. Zero reads `0` with no sign.
+- Format: below 1000 mV the digits are mV; from 1000 mV the hero turns to volts (`1.2` with unit `V`, whole volts from
+  10 V, capped at 99). Font 48 has no `+`, so the sign is drawn in font 24 (a '+' glyph in font 48 would cost flash and a
+  4-cell hero with its unit and the act / set block does not fit in 224 px).
+- Repaints: the hero is a `Field` (char-diff) updated at most twice a second; a change of colour repaints the whole field
+  (and the sign cell); the act and set values are Fields of their own.
+- No overlap in any rotation: in landscape (240 x 224) a text cell keeps its native height while the fill under it is
+  squeezed, so a box under a text cell needs a gap of at least h / 14 rows. `runlay::sweep_clear` is a `static_assert`
+  for both mappings and the host test walks the pixels. (The earlier 3-decimal VBUS hero with a `set / err` line under it lost its
+  last ink row in rot 1 and 3 this way.)
+- Outside a sweep row the Running screen is unchanged (the 4-character VBUS hero).
 
 **Live result grid.** `results_end.png`, `b_ct_results_sel.png`
 
