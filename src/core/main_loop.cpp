@@ -146,7 +146,7 @@ K2_HOT bool sample_buttons(uint32_t now) {
 }
 
 K2_HOT void wait_hook() {
-    k2::transcap::poll();
+    k2::transcap::sample();   // a kept capture is written by pass()'s poll()
     sample_buttons(k2::systick::millis());
 }
 
@@ -303,7 +303,7 @@ K2_HOT void idle_hook() {   // drain PD frames during long draws (tSenderRespons
         if (!k2::power::fast_vbus_mv(mv)) mv = -1;
         k2::fusb302::scan_service(mv);
     }
-    k2::transcap::poll();   // keep the transition capture's 1 kHz timeline through a redraw
+    k2::transcap::sample();   // keep the transition capture's 1 kHz timeline through a redraw
 }
 
 void install_hooks() {

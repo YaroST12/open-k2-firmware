@@ -31,8 +31,8 @@ namespace k2::scratch {
 // >= the largest user: QrTestPage::paint() (3428 B: v25 code[1713] + union(temp[1713], line[240])), then the charger-journal
 // replay (about 2790 B on the device, 2808 on a 64-bit host; boot_restore), then ChargerTestPage result_layout (~2456 B), then
 // bbpersist (lz::bound(2048) = 2072). There is one holder at a time. A lease must not span a call that can run the LCD
-// idle hook or the systick wait hook (both call transcap::poll()), except where the hooks are lease-free by contract:
-// the only lease those hooks can take is the transcap save, and it defers (persist_due) while the arena is held.
+// idle hook or the systick wait hook (both call transcap::sample()), except where the hooks are lease-free by contract:
+// sample() never writes a capture (only the main loop's poll() does, and it defers via persist_due while the arena is held).
 inline constexpr std::size_t kSize = 3432;
 inline constexpr std::size_t kAlign = 8;
 

@@ -183,22 +183,33 @@ void poll_once() {
         }
         return;
     }
-    if (st == State::Frozen) {
-        // Deferred while a scratch lease is held (this poll can run inside a paint or delay_ms under a lease).
-        if (persist_due(g_keep, g_saved_seq, systick::millis() - g_frozen_ms, pdtrace::since_activity_ms(), kQuietMs,
-                        kPersistMaxWaitMs, scratch::held())) {
-            const std::uint32_t seq = save_frozen(g_keep_run, g_keep_step);
-            g_keep = false;
-            if (seq != 0) hold_release();   // the flash holds it now; the overlay is free again
-        }
-        // The fast mode has no job once frozen.
-        if (g_held && power::fast_active()) power::fast_end();
+    // The fast mode has no job once frozen.
+    if (st == State::Frozen && g_held && power::fast_active()) power::fast_end();
+}
+
+// A kept capture goes to the volume once frozen and quiet; deferred while a scratch lease is held.
+void persist_kept() {
+    if (persist_due(g_keep, g_saved_seq, systick::millis() - g_frozen_ms, pdtrace::since_activity_ms(), kQuietMs,
+                    kPersistMaxWaitMs, scratch::held())) {
+        const std::uint32_t seq = save_frozen(g_keep_run, g_keep_step);
+        g_keep = false;
+        if (seq != 0) hold_release();   // the flash holds it now; the overlay is free again
     }
 }
 
 }  // namespace
 
 K2_HOT void poll() {
+    if (!g_held || g_in_poll) return;
+    g_in_poll = true;
+    if (g_rec.state() == State::Frozen) persist_kept();
+    poll_once();
+    g_in_poll = false;
+}
+
+// The hooks' poll: sampling only. They run deep inside a paint or a delay_ms, where the littlefs commit path (about 2 KB of
+// stack) would sit on top of the caller's frames; the write waits for the main loop's next poll().
+K2_HOT void sample() {
     if (!g_held || g_in_poll) return;
     g_in_poll = true;
     poll_once();

@@ -1197,7 +1197,7 @@ namespace boottrace { void flush_log() {} void poll() {} }   // poll: the self-p
 namespace bootscreen { void draw_live(std::uint32_t) {} }
 namespace bootinfo { bool boot_key_held() { return false; } }
 namespace bbpersist { void poll(bool) {} }
-namespace transcap { void poll() {} }
+namespace transcap { void poll() {} void sample() {} }
 
 }  // namespace k2
 
