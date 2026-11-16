@@ -274,7 +274,7 @@ public:
     void set_cable_mode(cable_r::Mode m) { ctx_.cable_mode = m; cable_reset(); }
     const std::optional<cable_r::Kelvin> &kelvin() const { return ctx_.kelvin; }
     // What the four buttons do on the current page (Button order).
-    PanelLabels labels() { return current().labels(); }
+    PanelLabels labels() { return resolve(current().labels()); }
     // True when the current page covers the strip (the QR code): its four labels are not drawn (GET_STATE part 3).
     bool strip_hidden() { return current().hides_strip(); }
     bool charger_test_busy() const { return charger_test_.busy(); }

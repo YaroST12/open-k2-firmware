@@ -223,9 +223,9 @@ bool DiagnosisPage::on_event(Event e) {
     return back_event(e);
 }
 
-PanelLabels DiagnosisPage::labels() const {
-    PanelLabels l = list_labels(base_labels());   // short [+]/[-] move the selection; OK opens only the Black Box row
-    l.b[static_cast<int>(Button::Ok)] = {on_blackbox() ? "Open" : "", "", "", false};
+Strip DiagnosisPage::labels() const {
+    Strip l = list_strip(base_labels());   // short [+]/[-] move the selection; OK opens only the Black Box row
+    l[Button::Ok] = on_blackbox() ? sl::Open : sl::None;
     return l;
 }
 

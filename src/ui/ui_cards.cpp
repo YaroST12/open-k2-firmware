@@ -581,30 +581,21 @@ bool CardsPage::on_event(Event e) {
     return false;
 }
 
-PanelLabels CardsPage::labels() const {
-    PanelLabels l = base_labels();
+Strip CardsPage::labels() const {
+    Strip l = base_labels();
     switch (mode_) {
     case Mode::List:
-        l.b[int(Button::Ok)] = {n_ > 0 ? "Open" : "", "", "", false};
-        l.b[int(Button::Back)] = {"Back", n_ > 0 ? "Delete" : "", n_ > 0 ? "Del" : "", false};
+        l[Button::Ok] = n_ > 0 ? sl::Open : sl::None;
+        l[Button::Back] = n_ > 0 ? sl::BackDel : sl::Back;
         break;
     case Mode::Detail:
-        l.b[int(Button::Ok)] = {"Open", "Share", "", false};
-        l.b[int(Button::Back)] = {"Back", "Delete", "Del", false};
-        l.b[int(Button::Minus)] = {kUp, "", "", false};
-        l.b[int(Button::Plus)] = {kDn, "", "", false};
+        l = {{sl::BackDel, sl::Up, sl::OpenShare, sl::Dn}};
         break;
     case Mode::Group:
-        l.b[int(Button::Ok)] = {"", "", "", true};
-        l.b[int(Button::Back)] = {"Back", "", "", false};
-        l.b[int(Button::Minus)] = {kUp, "", "", false};
-        l.b[int(Button::Plus)] = {kDn, "", "", false};
+        l = {{sl::Back, sl::Up, sl::Dim, sl::Dn}};
         break;
     case Mode::Confirm:
-        l.b[int(Button::Ok)] = {"Delete", "", "", false};
-        l.b[int(Button::Back)] = {"Back", "", "", false};
-        l.b[int(Button::Minus)] = {"", "", "", true};
-        l.b[int(Button::Plus)] = {"", "", "", true};
+        l = {{sl::Back, sl::Dim, sl::Delete, sl::Dim}};
         break;
     }
     return l;

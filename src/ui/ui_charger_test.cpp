@@ -3109,41 +3109,37 @@ __attribute__((noinline)) void ChargerTestPage::ok_event() {
     update(ctx_.now);
 }
 
-PanelLabels ChargerTestPage::labels() const {
-    const char *ok = "";
-    const char *ok_long = "";
-    if (s_.runner_.busy()) {
-        ok = "";   // BACK reads Stop (UI_SYSTEM.md 7.13.1)
-    } else {
+Strip ChargerTestPage::labels() const {
+    sl::Id ok = sl::None;   // while a run is busy BACK reads Stop (UI_SYSTEM.md 7.13.1) and OK is blank
+    if (!s_.runner_.busy()) {
         switch (s_.stage_) {
-        case Stage::Algorithms: ok = s_.selection_ < kPresets ? "Pick" : "Open"; break;
+        case Stage::Algorithms: ok = s_.selection_ < kPresets ? sl::Pick : sl::Open; break;
         case Stage::Custom:
-            ok = s_.selection_ >= kFamilyCount ? "Next" : s_.selection_ == kFamXiaomi ? "" : "Toggle";
-            if (s_.selection_ < kFamilyCount && s_.selection_ != kFamXiaomi) ok_long = "Open";
+            ok = s_.selection_ >= kFamilyCount ? sl::Next : s_.selection_ == kFamXiaomi ? sl::None : sl::ToggleOpen;
             break;
-        case Stage::Group: ok = "Set"; ok_long = "Grp"; break;
-        case Stage::Cable: ok = "Pick"; break;
-        case Stage::Review: ok = s_.selection_ == kLevelRow ? "Change" : s_.confirming_ ? "Confirm" : "Start"; break;
-        case Stage::Refuse: ok = "Start"; break;
-        case Stage::Waiting: ok = ""; break;   // BACK reads Stop
+        case Stage::Group: ok = sl::SetGrp; break;
+        case Stage::Cable: ok = sl::Pick; break;
+        case Stage::Review: ok = s_.selection_ == kLevelRow ? sl::Change : s_.confirming_ ? sl::Confirm : sl::Start; break;
+        case Stage::Refuse: ok = sl::Start; break;
+        case Stage::Waiting: break;   // BACK reads Stop
         case Stage::Results:
-            ok = s_.selection_ >= static_cast<int>(line_n_) ? "Diff" : "Steps";
-            if (s_.card_no_ != 0) ok_long = "Share";
+            ok = s_.selection_ >= static_cast<int>(line_n_) ? (s_.card_no_ != 0 ? sl::DiffShare : sl::Diff)
+                                                              : (s_.card_no_ != 0 ? sl::StepsShare : sl::Steps);
             break;
-        case Stage::Changes: ok = "View"; break;
-        case Stage::Steps: ok = "Open"; break;
-        case Stage::Detail: ok = "Steps"; if (s_.card_no_ != 0) ok_long = "Share"; break;
-        case Stage::Resume: ok = "Resume"; break;
-        case Stage::Running: ok = "View"; break;
+        case Stage::Changes: ok = sl::View; break;
+        case Stage::Steps: ok = sl::Open; break;
+        case Stage::Detail: ok = s_.card_no_ != 0 ? sl::StepsShare : sl::Steps; break;
+        case Stage::Resume: ok = sl::Resume; break;
+        case Stage::Running: ok = sl::View; break;
         default: break;   // Identity / Ask are retired
         }
     }
-    PanelLabels l = setup::labels(base_labels(), tests_stage(s_.stage_) ? setup::Step::Tests : setup::Step::Cable, ok, ok_long);
+    Strip l = setup::labels(base_labels(), tests_stage(s_.stage_) ? setup::Step::Tests : setup::Step::Cable, ok);
     if (s_.stage_ == Stage::Detail || s_.stage_ == Stage::Waiting) {   // nothing to move the cursor over (Review: Level and START)
-        l.b[static_cast<int>(Button::Minus)].shrt = "";
-        l.b[static_cast<int>(Button::Plus)].shrt = "";
+        l[Button::Minus] = sl::None;
+        l[Button::Plus] = sl::None;
     }
-    if (s_.runner_.busy() || s_.stage_ == Stage::Waiting) l.b[static_cast<int>(Button::Back)].shrt = "Stop";
+    if (s_.runner_.busy() || s_.stage_ == Stage::Waiting) l[Button::Back] = sl::Stop;
     return l;
 }
 

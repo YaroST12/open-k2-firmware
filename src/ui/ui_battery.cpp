@@ -410,13 +410,11 @@ bool BatteryPage::on_event(Event e) {
     return false;   // BACK in the Main view: the Ui pops the place
 }
 
-PanelLabels BatteryPage::labels() const {
-    PanelLabels l = list_labels(base_labels());
-    const char *verb = "";
-    if (view_ == View::Runs) verb = n_runs_ ? "View" : "";
-    else if (armed()) verb = "Confirm";
-    else verb = view::act_verb(act());
-    l.b[static_cast<int>(Button::Ok)] = {verb, "", "", false};
+Strip BatteryPage::labels() const {
+    Strip l = list_strip(base_labels());
+    if (view_ == View::Runs) l[Button::Ok] = n_runs_ ? sl::View : sl::None;
+    else if (armed()) l[Button::Ok] = sl::Confirm;
+    else l[Button::Ok] = view::act_verb(act());
     return l;
 }
 

@@ -779,36 +779,29 @@ bool PdSpecPage::on_event(Event e) {
     return used;
 }
 
-PanelLabels PdSpecPage::labels() const {
-    PanelLabels l = base_labels();
-    auto &ok = l.b[static_cast<int>(Button::Ok)];
-    const auto none = SlotLabel{"", "", "", false};
+Strip PdSpecPage::labels() const {
+    Strip l = base_labels();
     switch (stage_) {
     case Stage::Setup: {
-        l = list_labels(l);
+        l = list_strip(l);
         const int s = ctx_.keep.pdspec.sel;
-        l.b[static_cast<int>(Button::Ok)].shrt = s < kFamilyRows ? "Toggle" : s == kDoneRow ? "Next" : "Open";
+        l[Button::Ok] = s < kFamilyRows ? sl::Toggle : s == kDoneRow ? sl::Next : sl::Open;
         break;
     }
     case Stage::Review:
-        l.b[static_cast<int>(Button::Minus)] = none;
-        l.b[static_cast<int>(Button::Plus)] = none;
-        ok.shrt = confirm_until_ != 0 ? "Confirm" : "Start";
+        l[Button::Minus] = l[Button::Plus] = sl::None;
+        l[Button::Ok] = confirm_until_ != 0 ? sl::Confirm : sl::Start;
         break;
     case Stage::Running:
-        l.b[static_cast<int>(Button::Back)].shrt = "Stop";
-        l.b[static_cast<int>(Button::Minus)] = none;
-        l.b[static_cast<int>(Button::Plus)] = none;
-        ok = none;
+        l[Button::Back] = sl::Stop;
+        l[Button::Minus] = l[Button::Plus] = l[Button::Ok] = sl::None;
         break;
     case Stage::Results:
-        l = list_labels(l);
-        l.b[static_cast<int>(Button::Ok)].shrt = "Open";
+        l = list_strip(l);
+        l[Button::Ok] = sl::Open;
         break;
     case Stage::Detail:
-        l.b[static_cast<int>(Button::Minus)] = none;
-        l.b[static_cast<int>(Button::Plus)] = none;
-        ok = none;
+        l[Button::Minus] = l[Button::Plus] = l[Button::Ok] = sl::None;
         break;
     }
     return l;

@@ -404,9 +404,9 @@ bool GraphsPage::on_event(Event e) {
     return back_event(e);   // Up / Dn flip the faces, BACK goes to Flow
 }
 
-PanelLabels GraphsPage::labels() const {
-    PanelLabels l = base_labels();
-    l.b[static_cast<int>(Button::Ok)] = {"Zoom", "", "", false};
+Strip GraphsPage::labels() const {
+    Strip l = base_labels();
+    l[Button::Ok] = sl::Zoom;
     return l;
 }
 

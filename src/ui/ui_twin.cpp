@@ -1093,19 +1093,19 @@ bool TwinPage::on_event(Event e) {
     return false;
 }
 
-PanelLabels TwinPage::labels() const {
-    PanelLabels l = list_labels(base_labels());
-    const char *ok = "";
+Strip TwinPage::labels() const {
+    Strip l = list_strip(base_labels());
+    sl::Id ok = sl::None;
     if (running() || learn_wait_ || iq_wait_) {
-        l.b[static_cast<int>(Button::Back)].shrt = "Stop";
+        l[Button::Back] = sl::Stop;
     } else if (arm_ != Arm::None) {
-        ok = "Confirm";
+        ok = sl::Confirm;
     } else if (!detail_) {
-        ok = sel_ > n_ ? "Ask" : sel_ == n_ ? "Learn" : "Open";
+        ok = sel_ > n_ ? sl::Ask : sel_ == n_ ? sl::Learn : sl::Open;
     } else {
-        ok = act_ == 0 ? "Run" : act_ == 1 ? "Learn" : "Delete";
+        ok = act_ == 0 ? sl::Run : act_ == 1 ? sl::Learn : sl::Delete;
     }
-    l.b[static_cast<int>(Button::Ok)] = {ok, "", "", false};
+    l[Button::Ok] = ok;
     return l;
 }
 

@@ -102,7 +102,7 @@ public:
     void draw_static() override;
     void update(uint32_t now_ms) override;
     bool on_event(Event e) override;
-    PanelLabels labels() const override;
+    Strip labels() const override;
     void invalidate() override { painted_ = false; }
     void enter() override;
     bool hides_strip() const override { return true; }   // the code covers the whole panel, button strip included

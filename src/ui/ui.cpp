@@ -741,7 +741,7 @@ K2_HOT void Ui::draw_slot(unsigned slot) {
     ContentViewport::Pause unscaled_labels;
     const Button b = slot_button(orient_, slot);
     const Button action = oriented_button(b, orient_.rotation, rotate_buttons_);
-    const SlotLabel lab = current().labels().b[static_cast<int>(action)];
+    const SlotLabel lab = slot_label(current().labels()[action]);
     const bool down = pressed_[static_cast<int>(b)];
     slot_sig_[slot] = slot_sig(slot);
     if (current().hides_strip()) return;   // a full-panel page (the QR code) owns the strip's pixels
@@ -756,16 +756,10 @@ void Ui::draw_panel() {
     for (unsigned i = 0; i < 4; i++) draw_slot(i);
 }
 
-// FNV-1a over the label texts and the dim flag of what the current page shows in this slot.
+// What the current page shows in this slot: its pool id (the pool holds each distinct text once), offset so it is never 0.
 K2_HOT uint32_t Ui::slot_sig(unsigned slot) {
     const Button physical = slot_button(orient_, slot);
-    const SlotLabel lab = current().labels().b[static_cast<int>(oriented_button(physical, orient_.rotation, rotate_buttons_))];
-    uint32_t h = 2166136261u;
-    for (const char *t : {lab.shrt, lab.lng, lab.lng_alt}) {
-        for (; *t; t++) h = (h ^ static_cast<uint8_t>(*t)) * 16777619u;
-        h = (h ^ 0xFFu) * 16777619u;
-    }
-    return (h ^ (lab.dim ? 1u : 0u)) * 16777619u;
+    return 0x100u | current().labels()[oriented_button(physical, orient_.rotation, rotate_buttons_)];
 }
 
 void Ui::sync_panel() {

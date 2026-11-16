@@ -93,14 +93,14 @@ bool SpoofPage::on_event(Event e) {
     }
 }
 
-PanelLabels SpoofPage::labels() const {
-    PanelLabels l = list_labels(base_labels());
+Strip SpoofPage::labels() const {
+    Strip l = list_strip(base_labels());
     const CableIdentityList &cl = ctx_.cables;
     const ctcable::Choice c = cl.choice_at(sel_);
-    const char *ok = "Arm";
-    if (c.kind == ctcable::Kind::Off) ok = emk_spoof::active() ? "Disarm" : cl.selected().kind != ctcable::Kind::Off ? "Off" : "";
-    else if (cl.armed_choice() == c) ok = "Disarm";
-    l.b[static_cast<int>(Button::Ok)] = {ok, "", "", false};
+    sl::Id ok = sl::Arm;
+    if (c.kind == ctcable::Kind::Off) ok = emk_spoof::active() ? sl::Disarm : cl.selected().kind != ctcable::Kind::Off ? sl::Off : sl::None;
+    else if (cl.armed_choice() == c) ok = sl::Disarm;
+    l[Button::Ok] = ok;
     return l;
 }
 

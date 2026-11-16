@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
 #include "k2/ui/ui_labels.hpp"
+#include <array>
 #include <initializer_list>
 
 namespace k2 {
@@ -33,21 +34,64 @@ unsigned label_text(char (&out)[24], const SlotLabel &l, unsigned max_chars) {
     return ns;
 }
 
-PanelLabels nav_labels() {
-    PanelLabels p;
-    // Reboot is OK + Back held together for 3 s (on every page and menu) and is not advertised on the panel.
-    p.b[static_cast<int>(Button::Back)] = {"Back", "", "", false};
-    p.b[static_cast<int>(Button::Minus)] = {kUp, "", "", false};
-    p.b[static_cast<int>(Button::Plus)] = {kDn, "", "", false};
-    return p;
+// The pool. Every distinct word is stored once (kWords); an entry is three bytes: short and long word index, and the
+// fallback word index with the dim flag in bit 7. The texts come from the same K2_SLOT_POOL rows as the ids.
+namespace {
+struct Def { const char *s, *l, *a; bool dim; };
+constexpr Def kDefs[] = {
+#define K2_SLOT_DEF(name, s, l, a, dim) {s, l, a, dim},
+    K2_SLOT_POOL(K2_SLOT_DEF)
+#undef K2_SLOT_DEF
+};
+static_assert(sizeof(kDefs) / sizeof(kDefs[0]) == sl::kCount);
+
+constexpr bool same(const char *a, const char *b) {
+    while (*a && *a == *b) { a++; b++; }
+    return *a == *b;
 }
 
-PanelLabels list_labels(PanelLabels base) {
-    base.b[static_cast<int>(Button::Minus)].shrt = kUp;
-    // A tight slot may shorten a real long press ("Prev" -> "Prv"); a menu has no long press, so no "Up/Prv" there.
-    if (*base.b[static_cast<int>(Button::Minus)].lng) base.b[static_cast<int>(Button::Minus)].lng_alt = "Prv";
-    base.b[static_cast<int>(Button::Plus)].shrt = kDn;
-    return base;
+struct WordSet { const char *w[3 * sl::kCount + 1]; unsigned n; };
+constexpr unsigned word_index(WordSet &ws, const char *s) {
+    for (unsigned i = 0; i < ws.n; i++) if (same(ws.w[i], s)) return i;
+    ws.w[ws.n] = s;
+    return ws.n++;
+}
+constexpr WordSet collect() {
+    WordSet ws{};
+    word_index(ws, "");   // word 0 is the empty text
+    for (const Def &d : kDefs) { word_index(ws, d.s); word_index(ws, d.l); word_index(ws, d.a); }
+    return ws;
+}
+constexpr unsigned kWordCount = collect().n;
+static_assert(kWordCount < 128);   // bit 7 of the fallback index is the dim flag
+
+constexpr auto kWords = [] {
+    std::array<const char *, kWordCount> a{};
+    const WordSet ws = collect();
+    for (unsigned i = 0; i < kWordCount; i++) a[i] = ws.w[i];
+    return a;
+}();
+
+struct Packed { uint8_t s, l, a_dim; };
+constexpr auto kPacked = [] {
+    std::array<Packed, sl::kCount> a{};
+    WordSet ws = collect();
+    for (unsigned i = 0; i < sl::kCount; i++)
+        a[i] = {static_cast<uint8_t>(word_index(ws, kDefs[i].s)), static_cast<uint8_t>(word_index(ws, kDefs[i].l)),
+                static_cast<uint8_t>(word_index(ws, kDefs[i].a) | (kDefs[i].dim ? 0x80u : 0u))};
+    return a;
+}();
+}  // namespace
+
+SlotLabel slot_label(sl::Id id) {
+    const Packed &p = kPacked[id];
+    return {kWords[p.s], kWords[p.l], kWords[p.a_dim & 0x7F], (p.a_dim & 0x80) != 0};
+}
+
+PanelLabels resolve(const Strip &s) {
+    PanelLabels p;
+    for (int i = 0; i < 4; i++) p.b[i] = slot_label(s.b[i]);
+    return p;
 }
 
 namespace {

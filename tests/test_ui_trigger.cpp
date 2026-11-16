@@ -155,8 +155,8 @@ static void test_scan_labels() {
     for (int i = 0; i < kEntries; ++i) {
         Model q; select(q, i);
         for (int s = 0; s < 3; ++s) {
-            for (auto pair : {std::pair{Button::Plus, plus_label(q)}, std::pair{Button::Minus, minus_label(q)},
-                              std::pair{Button::Ok, ok_label(q, Run::Idle)}}) {
+            for (auto pair : {std::pair{Button::Plus, slot_label(plus_label(q))}, std::pair{Button::Minus, slot_label(minus_label(q))},
+                              std::pair{Button::Ok, slot_label(ok_label(q, Run::Idle))}}) {
                 char text[24];
                 label_text(text, pair.second, label_max_chars(pair.first));
                 CHECK_EQ(std::string(text).size() <= label_max_chars(pair.first), true);
@@ -164,6 +164,37 @@ static void test_scan_labels() {
             event(q, Button::Ok);
         }
     }
+}
+// The strip words by stage, as the pages showed them before the pool: Pick pairs Up/Dn (dim at either end), Edit is +/- with
+// the long "Big*", OK is Next, Review's Send, Confirm once armed; the dim flag follows available().
+static void test_strip_words() {
+    auto is = [](sl::Id id, const char *s, const char *l, bool dim) {
+        const SlotLabel x = slot_label(id);
+        return std::string(x.shrt) == s && std::string(x.lng) == l && std::string(x.lng_alt).empty() && x.dim == dim;
+    };
+    Model first; select(first, 0);
+    CHECK_EQ(first.stage() == Stage::Pick, true);
+    CHECK_EQ(is(minus_label(first), "Up", "", true), true);
+    CHECK_EQ(is(plus_label(first), "Dn", "", false), true);
+    Model last; select(last, kEntries - 1);
+    CHECK_EQ(is(minus_label(last), "Up", "", false), true);
+    CHECK_EQ(is(plus_label(last), "Dn", "", true), true);
+    Model m; select(m, 1);
+    CHECK_EQ(is(ok_label(m, Run::Idle), "Next", "", !m.available()), true);
+    CHECK_EQ(int(ok_label(m, Run::Scan)), int(sl::None));
+    CHECK_EQ(int(ok_label(m, Run::Negotiating)), int(sl::None));
+    event(m, Button::Ok);
+    if (m.stage() == Stage::Edit) {
+        CHECK_EQ(is(plus_label(m), "+", "Big*", false), true);
+        CHECK_EQ(is(minus_label(m), "-", "Big*", false), true);
+        event(m, Button::Ok);
+    }
+    CHECK_EQ(int(m.stage()), int(Stage::Review));
+    CHECK_EQ(is(ok_label(m, Run::Idle), "Send", "", !m.available()), true);
+    CHECK_EQ(int(plus_label(m)), int(sl::None));
+    CHECK_EQ(int(minus_label(m)), int(sl::None));
+    event(m, Button::Ok);   // arms (the first press asks)
+    if (m.armed()) CHECK_EQ(is(ok_label(m, Run::Idle), "Confirm", "", false), true);
 }
 static void test_release() {
     for (int mv : {4750, 5269, 5500}) {
@@ -209,6 +240,6 @@ static void test_widgets() {
 }
 int main() {
     test_pick_edit(); test_levels_fixed(); test_confirmation(); test_retarget_stop();
-    test_scan_labels(); test_release(); test_widgets();
+    test_scan_labels(); test_strip_words(); test_release(); test_widgets();
     return test_report("test_ui_trigger");
 }

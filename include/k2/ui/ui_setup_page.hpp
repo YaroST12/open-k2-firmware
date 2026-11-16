@@ -11,17 +11,13 @@ namespace k2::setup {
 
 enum class Step : uint8_t { Tests, Cable, Review, Results };
 
-// Side panel of a wizard page: [+]/[-] move the cursor one row, OK acts on the row (`ok`), a long OK does `ok_long`
-// (the group toggle on the Custom list), BACK goes to the previous step ("Back" leaves the wizard at step 1).
-// The long [+]/[-] page switch stays global and is kept from `base`.
-inline PanelLabels labels(PanelLabels base, Step s, const char* ok, const char* ok_long = "") {
-    auto at = [&](Button b) -> SlotLabel& { return base.b[static_cast<int>(b)]; };
-    at(Button::Minus).shrt = "Up";
-    if (*at(Button::Minus).lng) at(Button::Minus).lng_alt = "Prv";   // only a real long press gets the short spelling
-    at(Button::Plus).shrt = "Dn";
-    at(Button::Ok) = {ok, ok_long, "", false};
+// Side panel of a wizard page: [+]/[-] move the cursor one row, OK acts on the row (`ok`, a pool entry: its long press, the
+// group toggle on the Custom list, rides in the entry), BACK goes to the previous step ("Back" leaves the wizard at step 1).
+inline Strip labels(Strip base, Step s, sl::Id ok) {
+    base = list_strip(base);
+    base[Button::Ok] = ok;
     (void)s;
-    at(Button::Back).shrt = "Back";   // BACK reads "Back" on every step (label vocabulary, ui_labels.hpp)
+    base[Button::Back] = sl::Back;   // BACK reads "Back" on every step (label vocabulary, ui_labels.hpp)
     return base;
 }
 

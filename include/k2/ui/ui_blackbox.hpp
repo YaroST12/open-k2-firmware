@@ -18,7 +18,7 @@ public:
     void draw_static() override;
     void update(uint32_t now_ms) override;
     bool on_event(Event e) override;
-    PanelLabels labels() const override;
+    Strip labels() const override;
     void invalidate() override;
     void enter() override { mode_ = Mode::List; select_first_ = true; }   // opens on the newest capture
     const ListState &list_state() const { return list_.state(); }

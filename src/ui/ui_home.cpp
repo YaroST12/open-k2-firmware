@@ -138,10 +138,10 @@ void HomePage::invalidate() {
     for (hm::DigitField &d : hd_) d.invalidate();
 }
 
-PanelLabels HomePage::labels() const {
-    PanelLabels l = base_labels();                                        // Up / Dn flip the faces (long: the trend span)
-    l.b[static_cast<int>(Button::Back)] = {"", "Hero", "", false};       // no level above Flow; long: the hero cycles W -> V -> A
-    l.b[static_cast<int>(Button::Ok)] = {"Bench", "Reset", "", false};   // short: the Bench; long: energy reset
+Strip HomePage::labels() const {
+    Strip l = base_labels();                  // Up / Dn flip the faces (long: the trend span)
+    l[Button::Back] = sl::Hero;               // no level above Flow; long: the hero cycles W -> V -> A
+    l[Button::Ok] = sl::BenchReset;           // short: the Bench; long: energy reset
     return l;
 }
 
