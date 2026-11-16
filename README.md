@@ -27,7 +27,7 @@ Step-by-step hardware test procedures for every protocol and feature, with a res
 
 The K2 has a 240x240 screen and four buttons: **BACK**, **MINUS**, **OK** and **PLUS**. A narrow strip along one edge of the screen always shows what each button does on the page you are on, so read the strip instead of learning keys. In the lists, MINUS and PLUS read **Up** and **Dn**. A grey or missing label means that button does nothing there.
 
-The pictures below are host renders: the real UI code drawn into a 240x240 buffer by the host tests, with stand-in readings (a 100 W PD charger on the port, a live session and a healthy diagnosis; the charger-test and PD Spec pages use an EPR-capable charger instead). They are not photos or device screenshots, so the numbers are examples. The regeneration recipe is at the end of this section. The full reference for every page is [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md).
+The pictures below are host renders: the real UI code drawn into a 240x240 buffer by the host tests, with stand-in readings (a 100 W PD charger on the port, a live session and a healthy diagnosis; the charger-test and PD Spec pages use an EPR-capable charger instead, and the Battery place a made-up round trip). They are not photos or device screenshots, so the numbers are examples. The regeneration recipe is at the end of this section. The full reference for every page is [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md).
 
 ### Home
 
@@ -73,7 +73,27 @@ The pictures below are host renders: the real UI code drawn into a 240x240 buffe
 
 - The Bench lists seven places, each with a status line: Meter, Charger, Cable, Device, Battery, Log and K2. **Up** and **Dn** move, **OK** opens a place, **BACK** returns to the face you came from.
 - The Charger place is the PD page. It shows what the charger offers (fixed, PPS, AVS, EPR) and the actions you can run on it: Test charger, Request voltage, Fast charge, Report cards.
-- The Device place shows what the attached device asks the charger for. The Log place shows the PD diagnosis and opens the Black Box. The Battery place records charge efficiency.
+- The Device place shows what the attached device asks the charger for. The Log place shows the PD diagnosis and opens the Black Box. The Battery place records charge efficiency (next section).
+
+### Battery place
+
+<table>
+<tr>
+<td align="center"><img src="docs/img/ui/place-battery.png" width="240" alt="Battery place: no run yet"></td>
+<td align="center"><img src="docs/img/ui/place-battery-charging.png" width="240" alt="Battery place: a round trip charging"></td>
+<td align="center"><img src="docs/img/ui/place-battery-done.png" width="240" alt="Battery place: a finished round trip"></td>
+</tr>
+<tr>
+<td align="center"><sub>No run: pick a mode</sub></td>
+<td align="center"><sub>Charging: Wh in so far</sub></td>
+<td align="center"><sub>Done: the efficiency</sub></td>
+</tr>
+</table>
+
+- The recorder measures what flows into and out of a power bank over hours, from the power monitor, and runs in the background while you use any other page. The Bench row shows it: `No run`, `Charging 1h05m, 12.34Wh`, then `Round trip 80.0%`.
+- **Start charge** records one charge, **Start discharge** one discharge, and **Start round trip** a charge, a wait and then a discharge; the round trip reports the efficiency, Wh out divided by Wh in. A finished run shows In, Out, Time and Efficiency.
+- **Wiring** says where the bank sits: **Same port** (the bank stays on the output and feeds a load on the input) or **Moved** (the bank moves to the input). The K2 needs this to tell energy in from energy out.
+- A phase ends by itself when the current stays under **End below** (default 50 mA) for **End after** (default 60 s). **End charge** or **End discharge** ends it by hand: **OK**, then **OK** again within 5 s. **Saved runs** keeps the newest three; **Share as QR** shows one on screen. The same controls are in `tools/k2_remote.py battery`, and the rules are in [`docs/BATTERY_RECORDER.md`](docs/BATTERY_RECORDER.md).
 
 ### Charger test
 
@@ -87,14 +107,14 @@ Start it from **Test charger** in the Charger place. Plug the charger in with **
 </tr>
 <tr>
 <td align="center"><sub>1/3 Tests: pick a preset</sub></td>
-<td align="center"><sub>3/3 Review: what will run</sub></td>
+<td align="center"><sub>3/3 Review: warning, Level, START</sub></td>
 <td align="center"><sub>OK again within 5 s</sub></td>
 </tr>
 </table>
 
 - Step 1 picks a preset (All tests, PD only, Legacy only, Vendor modes or Custom). **OK** picks it and goes on. Step 2 picks the cable identity to present; the Review step lists what will run.
-- The Review step's **Level** row (MINUS to reach it, **OK** to change) sets how far the run goes: **Light** lists what the charger advertises and keeps VBUS at 5 V, **Medium** (the default, set in Settings > Test level) tests every level, **Deep** adds the PPS and AVS deep sweeps. A Light run marks what it did not measure as listed or not run (on the card: advertised or detected), never as a pass.
-- On Review, **OK** (Start) arms the run. The button turns orange and reads CONFIRM; a bar drains over 5 s. A second **OK** inside that time starts the run; if the 5 s pass, it disarms.
+- The Review step's **Level** row (MINUS to reach it, **OK** to change) sets how far the run goes: **Light** lists what the charger advertises and keeps VBUS at 5 V, **Medium** (the default, set in Settings > Test level) tests every level, **Deep** adds the PPS and AVS deep sweeps (every 100 mV across each range). A Light run marks what it did not measure as listed or not run (on the card: advertised or detected), never as a pass.- Review always opens with the orange **OTHER PORT FREE** banner: a device on the other port can be damaged, so unplug it first. The K2 only knows a device is there when it sees proof of one, so the banner is always on and START carries the note "other port must be empty".
+- On Review, **OK** (Start) arms the run. The button turns orange and reads CONFIRM; a bar drains over 5 s. A second **OK** inside that time starts the run; if the 5 s pass, it disarms. Make sure the other port is empty and the output has no load before the first press.
 
 <table>
 <tr>
@@ -110,8 +130,10 @@ Start it from **Test charger** in the Charger place. Plug the charger in with **
 </table>
 
 - Running shows the step count, VBUS, the target and a grid that follows the step in progress. **Up** and **Dn** scroll it. **BACK** (Stop) ends the run early.
-- Results grades every unit. A green cell passed, a red one failed, a struck-out one was skipped (here the EPR 28 V step). **OK** (Steps) opens the steps of the focused unit. **Long OK** shows a QR code that opens the full result on a phone.
-- Steps lists each step with the volts it measured. **OK** (Open) shows one step's detail.
+- Results grades every unit. The header counts pass, fail and skip. A green cell passed, a red one failed, a struck-out one was skipped (here the EPR 28 V step). **OK** (Steps) opens the steps of the focused unit. **Long OK** shows a QR code that opens the full result on a phone.
+- Steps lists each step with the volts it measured; its footer counts the steps and the failures ("25 steps, 0 failed"; with cautions and no failure it reads "25 steps, 2 caution"). **OK** (Open) shows one step's detail.
+- A level that holds its voltage but **folds back** (the output drops on a step up, for example "folds to 9.2V above 10.5V") is a **caution**, not a failure: the step stays a pass, the Detail band is amber and reads CAUTION, and a run with a caution gets a fourth header cell, "caution", between pass and fail. A real track break keeps its own verdict.
+- Probe rows (the Xiaomi 6 A probe at a level) get a row of their own between the PD rows. On a SuperVOOC charger a Deep run adds an **SV cap** row: the highest current ask the charger kept the session going under, read as "6.3A claimed", "<=11.1V, 10.9A 121W claimed" or "stopped at 3.3s, <=11.0V, 10.9A 120W claimed". It is the K2's own ask read from the protocol, never a drawn current or power (the watts are VBUS times the ask); the K2 never loads the charger. Status: host-tested only; the hardware check on a OnePlus 120 W charger was parked because the probe ends about 3.3 s after the wake, so the "ceiling" is the last ask.
 
 <table>
 <tr>
@@ -121,6 +143,22 @@ Start it from **Test charger** in the Charger place. Plug the charger in with **
 <td align="center"><sub>Detail: target, measured, window</sub></td>
 </tr>
 </table>
+
+The level shows in the results and on the running page:
+
+<table>
+<tr>
+<td align="center"><img src="docs/img/ui/ct-light.png" width="240" alt="Light results: advertised levels"></td>
+<td align="center"><img src="docs/img/ui/sweep-running.png" width="240" alt="Deep run: a PPS sweep row running"></td>
+</tr>
+<tr>
+<td align="center"><sub>Light: 5 V measured, the rest listed</sub></td>
+<td align="center"><sub>Deep: a PPS sweep row running</sub></td>
+</tr>
+</table>
+
+- A Light run keeps VBUS at 5 V. In its Results only the 5 V cell is a measured pass; the other levels are drawn without a fill and the footer says "1 pass, 3 listed".
+- A Deep run steps a PPS or AVS range in 100 mV points. While a sweep row runs, the hero shows VBUS with the voltage the K2 asked for (**req**), the voltage the charger gave (**got**) and the error between them. The grid shows the range row and, below it, the **Sweep** strip for that range; the strip turns green, amber or red when the sweep closes, graded by the worst error.
 
 ### PD Spec Check
 
@@ -170,7 +208,7 @@ This page is only in builds made with `K2_PDSPEC=1`; the default build does not 
 </tr>
 </table>
 
-- The K2 place, last on the Bench, shows the firmware version, uptime and USB mode, then the settings: USB Link, Autorotate, Rotate buttons, Screenshot, Smoothing and Wake sleeping port.
+- The K2 place, last on the Bench, shows the firmware version, uptime and USB mode, then the settings: USB Link, Autorotate, Rotate buttons, Screenshot, Smoothing, Wake sleeping port and Test level (the level each new charger test starts at: Light, Medium or Deep; **OK** cycles it).
 - **OK** opens a page or toggles a value. On USB Link, **OK** (Toggle) turns HID or Drive on; the change applies after a replug. The footer says so.
 - Hold **MINUS and PLUS together** to rotate the screen.
 
@@ -181,15 +219,31 @@ This page is only in builds made with `K2_PDSPEC=1`; the default build does not 
 
 ### Regenerating the pictures
 
-The host tests draw each page to a 240x240 buffer. With `K2_DUMP=<dir>` set, the UI test programs write the frames, and `tools/panel2png.py <dir> <out> --scale 2` turns them into PNG files:
+The host tests draw each page to a 240x240 buffer. With `K2_DUMP=<dir>` set, the UI test programs write the frames, and `tools/panel2png.py <dir> <out> --scale 2` turns them into PNG files (480x480). Host builds only; no firmware build or K2 is needed:
 
 ```bash
-make host-build/test_ui_mockup host-build/test_ui_charger_test host-build/test_ui_graphs
-K2_DUMP=runs/shots ./host-build/test_ui_mockup
+make host-build/test_ui_mockup host-build/test_ui_charger_test host-build/test_ui_pdspec_page \
+     host-build/test_ui_sweep_live host-build/test_ui_graphs
+mkdir -p runs/shots runs/png
+for t in mockup charger_test pdspec_page sweep_live graphs; do K2_DUMP=runs/shots ./host-build/test_ui_$t; done
 python3 tools/panel2png.py runs/shots runs/png --scale 2
 ```
 
-The pictures here come from the same drivers, taken at rotation 3 (the strip at the bottom). The stock drivers dump some frames before a page has finished painting, so the frames here were taken after ticking the UI until it stopped painting, and the PNG files were then reduced to 128 colours. For the Home, Bench, Numbers and Lines frames the stub also carried a live PD session's other readings (a healthy Black Box report, CC1 1.65 V with D+/D- at 0 V, the PD verdict), so no row says "no session" or "--" beside a live contract.
+Each picture is one frame of `runs/png` (the `k2_` prefix and the `.panel` suffix of the dump are the file name there), reduced to 128 colours (`Image.quantize(128, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE)` in PIL):
+
+| Picture in `docs/img/ui` | Frame | Driver |
+| :--- | :--- | :--- |
+| `home`, `numbers`, `lines`, `bench`, `settings` | `mock_readme_home`, `_numbers`, `_lines`, `_bench`, `_place_k2` | `test_ui_mockup` |
+| `place-battery`, `place-battery-charging`, `place-battery-done` | `mock_readme_place_battery`, `_charging`, `_done` | `test_ui_mockup` |
+| `place-charger`, `place-device`, `place-cable`, `usblink`, `ct-tests` | `mock_place_charger`, `_device`, `_cable`, `mock_usblink`, `mock_ct_setup` | `test_ui_mockup` |
+| `ct-review`, `ct-confirm`, `ct-running`, `ct-results`, `ct-steps`, `ct-detail`, `ct-light` | `readme_ct_review`, `_confirm`, `_running`, `_results`, `_steps`, `_detail`, `_light` | `test_ui_charger_test` |
+| `sweep-running` | `sweep_pps_rot3` | `test_ui_sweep_live` |
+| `pdspec-setup`, `pdspec-running`, `pdspec-results` | `readme_pdspec_setup`, `_running`, `_results` | `test_ui_pdspec_page` |
+| `graphs` | `mock_graphs_pps_r3` | `test_ui_graphs` |
+
+The `readme_*` frames exist for this section: they are taken at rotation 3 (the strip at the bottom) after ticking the UI until it stops painting, because the stock gallery frames of the same pages are taken mid-paint or with a charger the stub's converter cannot follow (red failures). The Home, Bench, Numbers, Lines and Battery frames carry the stand-in live session (a healthy Black Box report, CC1 1.65 V with D+/D- at 0 V, the MCU temperature, the PD verdict), so no row says "no session" or "--" beside a live contract. The charger-test frames use an EPR charger the stub's converter follows up to 36 V, run at Medium (Light for `ct-light`).
+
+What the host pictures cannot show: LCD timing and SPI glitches, real readings, a real voltage fold (the caution state is covered by the UI tests, not by a picture here), the SuperVOOC ceiling row, QR codes that scan, and the PD Spec pages on a default build.
 
 ## Hardware
 

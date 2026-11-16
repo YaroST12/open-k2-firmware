@@ -146,6 +146,7 @@ For QC, AFC, FCP, SCP and VOOC chargers use **FC trigger** (start with **SCAN**)
 - [Controls in detail](#controls-in-detail)
 - [Top-level pages](#top-level-pages): [Home](#home), [Detail](#detail), [Charger test](#charger-test), [Lines](#lines), [Tools](#tools), [Settings](#settings)
 - [Tools](#tools-reference): [FC trigger](#fc-trigger), [PD trigger](#pd-trigger), [Spoof](#spoof), [Cable R](#cable-r), [Who's attached](#whos-attached), [Saved cables](#saved-cables), [Black Box](#black-box), [Report cards](#report-cards), [Device twins](#device-twins), [PD Stress](#pd-stress), [Diag](#diag)
+- [Battery recorder](#battery-recorder)
 - [Share (QR)](#share-qr)
 - [Settings](#settings-reference): [USB Link](#usb-link), [Autorotate](#autorotate), [Rotate buttons, Screenshot, Smoothing, Wake sleeping port](#other-settings)
 - [USB link modes](#usb-link-modes) and [USB drive contents](#usb-drive-contents)
@@ -245,7 +246,10 @@ Steps of the wizard:
 
 5. **Running**: the hero readout shows the step in flight, VBUS against the target on a pass-band gauge, and a grid of verdicts per step. +/- scroll the grid, OK opens a step view. OK shows **Stop** while a step is busy. A BACK hold cancels. When it ends or stops, the K2 returns to 5 V and checks it.
 
-6. **Results**: counters (N pass, N fail, N skip), a summary strip and a grid of units. OK opens the Steps list (on a "Changes" row it opens the diff against the previous run). A step opens its Detail (OK = Steps, long OK = Share). Long OK on Results shares the saved card once it exists.
+6. **Results**: counters (N pass, N fail, N skip, plus a "caution" counter between pass and fail when a step is a caution), a summary strip and a grid of units. OK opens the Steps list (on a "Changes" row it opens the diff against the previous run; its footer reads like "25 steps, 0 failed", or "25 steps, 2 caution" when there are cautions and no failure). A step opens its Detail (OK = Steps, long OK = Share). Long OK on Results shares the saved card once it exists.
+   - A **voltage fold** is a **caution**, not a failure: a PPS or AVS level that holds its voltage but whose output drops back on a step up keeps its pass, gets an amber **CAUTION** band and the reason "folds back", and the fold is named ("folds to 9.2V above 10.5V": the lowest value measured from the fold on, and the last setpoint that still tracked). A real track break keeps its own verdict.
+   - **Probe rows**: the Xiaomi 6 A probe at a level has a grid row of its own.
+   - **SV cap** (Deep runs on a SuperVOOC charger only): the highest current ask the charger kept the session going under, for example "6.3A claimed", "<=11.1V, 10.9A 121W claimed" or "stopped at 3.3s, <=11.0V, 10.9A 120W claimed". It is the K2's own ask read from the protocol, never a drawn current or power (the watts are VBUS times the ask); the K2 does not load the charger. Status: host-tested only; the hardware check was parked because the probe ends about 3.3 s after the wake.
 
 7. **Resume**: if the K2 reset mid-run (a journal survives), it offers OK = Resume or BACK = abandon.
 
@@ -262,7 +266,7 @@ Notes:
 | :--- | :--- | :--- |
 | **Light** | Records what the charger advertises: Source_Capabilities, extended capabilities, EPR info, identity, every PDO and APDO as listed. Legacy protocols only to the point they are detectable at 5 V | stays at 5 V: nothing above 5 V is asked |
 | **Medium** (default) | Every selected test at every level, no deep sweeps | each level the tests ask for |
-| **Deep** | Medium plus the PPS deep sweep and the AVS deep sweep over every APDO (every 100 mV at 1 A) | the whole range of each APDO |
+| **Deep** | Medium plus the PPS deep sweep and the AVS deep sweep over every APDO (every 100 mV at 1 A), and the SuperVOOC ceiling step on a SuperVOOC charger | the whole range of each APDO |
 
 - A Light run never shows a green pass for something it did not measure. On the K2, the 5 V levels it did measure (PDO 1, each legacy protocol's 5 V handshake) pass as usual. A level the charger lists but was not asked for reads **LISTED** in its Detail, a legacy level above 5 V reads **NOT RUN**; both cells have no fill and a grey bar on their left edge. The Results counters count them with the skips; a grid row's footer counts them apart ("PD3.x: 1 pass, 3 listed"), and a listed PPS or AVS range reads "advertised". EPR levels come from the EPR list the charger sends on request; the K2 does not enter EPR mode.
 - The run summary (`charger_summary.py`) says "advertised" for a listed level and "not asked" for a legacy level above 5 V.
@@ -494,6 +498,21 @@ Only in builds made with `K2_PDSPEC=1` (Tools > PD Spec Check, or "Spec check" i
 ![Diag](guide/img/diag.png)
 
 Nine rows: Link (USB), RST/ISR, TX/drop, FUSB302 (PD chip, its ID), RX (which CC line), Poll gap, Meter (power monitor chip), Uptime, Model. The footer says "All subsystems up" when nothing is wrong. Long OK shares the recent log as a QR code. Buttons: Up, Share, Dn.
+
+### Battery recorder
+
+Reach it from the Bench, the list of places that OK opens from the live faces (Battery is the fifth place; see the UI walkthrough in the [README](../README.md)). It measures what flows into and out of a power bank over hours, from the power monitor, and keeps running while you use other pages. The Bench row says where it stands: `No run`, `Charging 1h05m, 12.34Wh`, `Round trip 80.0%`.
+
+| Mode | What it records |
+| :--- | :--- |
+| Charge | one charge phase |
+| Discharge | one discharge phase |
+| Round trip | a charge, a wait, then a discharge; the efficiency is Wh out / Wh in |
+
+- The place page starts with the identity block (the last result, or "No run"), then the facts of the run (**In**, **Out**, **Time**, **Efficiency**) and the actions: **Start charge**, **Start discharge**, **Start round trip**, **Wiring**, **End below**, **End after**, **Saved runs** and **Share as QR**.
+- **Wiring**: **Same port** (the charger on the input and the bank on the output; to discharge, the bank stays on the output and feeds a load on the input) or **Moved** (to discharge, the bank moves to the input and feeds a load on the output). The K2 reads the direction of the current to tell energy in from energy out, so set it before you start.
+- A phase ends by itself when the current stays under **End below** (default 50 mA) for **End after** (default 60 s). By hand: **End charge** or **End discharge** (OK, then OK again within 5 s); **Finish run** ends a round trip after its charge alone. A round trip waits after its charge until you press **Start discharge** or the bank starts feeding current out.
+- The newest three runs are kept. **Share as QR** shows a run as a QR code. Shell: `k2_remote.py battery ...`. Rules, the record format and the wiring table: [`BATTERY_RECORDER.md`](BATTERY_RECORDER.md).
 
 ---
 
