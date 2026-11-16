@@ -1586,7 +1586,13 @@ void Runner::track_cut(const Input& in) {
             if (n_cut_onsets_ >= 2) {
                 std::array<uint32_t, kCutOnsets> gap{};
                 for (unsigned n = 1; n < n_cut_onsets_; ++n) gap[n - 1] = cut_onsets_[n] - cut_onsets_[n - 1];
-                std::sort(gap.begin(), gap.begin() + (n_cut_onsets_ - 1));
+                // Insertion sort: at most kCutOnsets - 1 gaps, and std::sort would link its introsort and heap code (about 470 B) for this one use.
+                for (unsigned i = 1; i + 1 < n_cut_onsets_; ++i) {
+                    const uint32_t x = gap[i];
+                    unsigned j = i;
+                    for (; j > 0 && gap[j - 1] > x; --j) gap[j] = gap[j - 1];
+                    gap[j] = x;
+                }
                 const uint32_t mid = gap[(n_cut_onsets_ - 2) / 2];
                 evidence_.cut_period_ds = mid / 100u <= 255u ? uint8_t((mid + 50u) / 100u) : uint8_t(0);
                 K2LOG("[CT] cut period=%ums n=%u\n", unsigned(mid), unsigned(n_cut_onsets_));
