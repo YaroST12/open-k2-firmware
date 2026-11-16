@@ -43,7 +43,6 @@ constexpr int kUfcsTries = 3;                      // asks per phase (Get_Output
 // to start (nothing in the reference bounds it), and the old ~60 ms window could not tell "silent" from "late".
 constexpr std::uint32_t kVivoStepMs = 50, kVivoTickMs = 100, kVivoEntryMs = 2000, kVivoSilenceMs = 2000;
 constexpr int kVivoRampMv = 100, kVivoReleaseSends = 3, kVivoMaxNotices = 4;
-constexpr std::uint32_t kAfcSettleMs = 500;   // D+ held at 0.6 V before the first ping
 constexpr std::uint32_t kAfcRetryLowMs = 100; // D- low before the one retry of an unanswered first exchange
 }  // namespace
 
@@ -791,7 +790,8 @@ void Engine::begin_protocol() {
     if (p == Proto::Afc) {          // no HVDCP handshake: D+ at 0.6 V, D- idle low, then the ping
         env_.set_dp(Drive::V0p6);
         env_.set_dm(Drive::V0);
-        go(Phase::AfcSettle, kAfcSettleMs);
+        dm0_mv_ = 0;
+        go(Phase::AfcSettle, 0);
     } else if (p == Proto::Ufcs) {  // the handshake and the UART claim happen in ufcs_open()
         caps_.ufcs_n = ux_n_ = 0;
         ufcs_clear();
@@ -1188,9 +1188,19 @@ void Engine::poll_step() {
     case Phase::VivoSeq:
     case Phase::VivoRun:
         return vivo_poll(now);
-    case Phase::AfcSettle:
+    case Phase::AfcSettle: {
+        // D+ at 0.6 V first; a BC1.2 short that is still closed (D- follows D+) has to open before the ping (qc::afc_ping_due)
         if (now < due_ms_) return;
+        const int dm = env_.dm_mv();
+        if (qc::handshake_initial_ok(dm) && dm > dm0_mv_) dm0_mv_ = dm;
+        const std::uint32_t since = now - phase_ms_;
+        if (!qc::afc_ping_due(since, dm0_mv_, dm)) {
+            due_ms_ = now + kDropPollMs;
+            return;
+        }
+        env_.log_afc_settle(dm0_mv_, dm, int(since));
         go(Phase::AfcSend, 0);
+    }
         [[fallthrough]];
     case Phase::AfcSend: {
         if (now < due_ms_) return;

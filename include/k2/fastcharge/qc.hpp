@@ -34,6 +34,17 @@ constexpr std::optional<Levels> qc2_levels(int mv) {
 constexpr bool handshake_initial_ok(int dm0_mv) { return dm0_mv >= 350 && dm0_mv <= 1150; }
 constexpr bool handshake_dropped(int dm0_mv, int dm_mv) { return dm0_mv - dm_mv >= 350; }
 
+// AFC settle (pattern afc-dcp-short-open). D+ is held at 0.6 V with D- driven low; a port that keeps its BC1.2 short closed (D- reads
+// 0.35 .. 1.15 V even driven low) answers no ping until it opens the short, about 1.25 s after D+ went up (hardware: TOPADRE USB-A
+// read D+ / D- 0.6 / 0.6 V for 1.2 s, then D- fell to 0 V; the 0x46 sent 0.5 s after the start got no slave ping). `dm0_mv` is the
+// highest short level seen so far (0 = none). No short: the ping goes at kAfcSettleMs as it always did. A short: at its drop, and
+// at kAfcDropWaitMs at the latest (a port that never opens it is judged by the ping, not by the wait).
+inline constexpr std::uint32_t kAfcSettleMs = 500, kAfcDropWaitMs = 2000;
+constexpr bool afc_ping_due(std::uint32_t since_ms, int dm0_mv, int dm_mv) {
+    if (dm0_mv <= 0) return since_ms >= kAfcSettleMs;
+    return handshake_dropped(dm0_mv, dm_mv) || since_ms >= kAfcDropWaitMs;
+}
+
 // Strict handshake (method B), used before SCP: 1000 ms at 0 V, D- floating with D+ 0.6 V
 // for 190 ms (D- must read 0.20 .. 1.00 V), then D+ 0 V 322 ms / 0.6 V 190 ms / 0 V 87 ms / 0.6 V
 // 50 ms, then wait for D- < 0.50 V (up to 2000 ms) and 38 ms.

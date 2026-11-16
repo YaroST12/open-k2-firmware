@@ -702,6 +702,7 @@
   "705": "[CT] cut retry row=%u dip=%ums\n",
   "706": "[CT] cut retry row=%u cut again: skip\n",
   "707": "[CT] cut retry row=%u dip=%ums try=%u\n",
-  "708": "[CT] cut retry row=%u cut again after %u: skip\n"
+  "708": "[CT] cut retry row=%u cut again after %u: skip\n",
+  "709": "[AFC] settle short=%dmV dm=%dmV waited=%dms\n"
  }
 }

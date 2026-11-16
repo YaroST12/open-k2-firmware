@@ -244,6 +244,9 @@ struct HwEnv final : fc::Env {
     void log_afc(int n, std::uint8_t tx, int rx, int vbus_mv) override {
         K2LOG("[AFC] n=%d tx=0x%02X rx=%d vbus=%d\n", n, static_cast<unsigned>(tx), rx, vbus_mv);
     }
+    void log_afc_settle(int short_mv, int dm_mv, int waited_ms) override {
+        K2LOG("[AFC] settle short=%dmV dm=%dmV waited=%dms\n", short_mv, dm_mv, waited_ms);
+    }
     void log_reg(std::uint8_t reg, std::uint8_t value) override {
         K2LOG("[FC] reg 0x%02X = 0x%02X\n", reg, value);
     }

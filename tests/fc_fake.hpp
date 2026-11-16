@@ -38,6 +38,10 @@ struct FakeCharger : k2::fc::Env {
     std::uint32_t last_xfer = 0;
     bool stuck_at_12v = false;     // misbehaving charger: ignores requests and sits at 12 V once opened
     int dm_fixed_mv = -1;          // >= 0: D- reads this with the pin released (Apple divider 2.7 V, a bare 0 V), never an HVDCP
+    // An AFC port that keeps its BC1.2 short closed for this many ms after D+ goes to 0.6 V (TOPADRE USB-A, hardware 2026-11-16:
+    // D+ / D- read 0.6 V / 0.6 V even with D- driven low, the first 0x46 goes unanswered, the short opens about 1.25 s after D+ went
+    // up and D- then reads 0 V). 0 = no short: D- driven low reads 0 V and the ping is answered at once.
+    int afc_short_ms = 0;
     // A QC-only bank (Xiaomi 20K, hardware 2026-11-07): it reads D+ 0.6 V / D- 0 V as a QC request and moves VBUS to this
     // many mV 100 ms later, whatever protocol the K2 means to speak (AFC / FCP / SCP never get an answer unless the usual
     // afc_ok / accp_charger knobs say so). 0 = off.
@@ -97,6 +101,7 @@ struct FakeCharger : k2::fc::Env {
     }
     int dp_mv() override { return level(dp); }
     int dm_mv() override {
+        if (afc_short_ms > 0 && dp == Drive::V0p6 && dm == Drive::V0 && now - dp_since < std::uint32_t(afc_short_ms)) return 600;
         if (dm != Drive::HiZ) return level(dm);
         if (dm_fixed_mv >= 0) return dm_fixed_mv;   // a divider (Apple style) or a bare pin, whatever D+ does
         if (!hvdcp || !open) return level(dp);   // D- follows D+ through the shorted switch
@@ -215,6 +220,7 @@ struct FakeCharger : k2::fc::Env {
         if (accp_charger) return accp_xfer(tx, rx);
         if (int(xfer_times.size()) <= afc_fail_first) return false;
         if (!afc_ok || dp != Drive::V0p6 || tx.size() != 1) return false;
+        if (afc_short_ms > 0 && now - dp_since < std::uint32_t(afc_short_ms)) return false;   // the short is still closed
         if (tx[0] == 0x46) { vbus_pending = 9000; apply_at = now + 100; }
         else if (tx[0] == 0x79) { vbus_pending = 12000; apply_at = now + 100; }
         if (!rx.empty()) rx[0] = 0x00;

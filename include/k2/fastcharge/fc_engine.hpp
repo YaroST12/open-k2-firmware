@@ -92,6 +92,8 @@ struct Env {
     // One line per AFC exchange: n counts the session's exchanges from 1, tx is the command byte, rx the byte heard (-1 when the
     // exchange failed), vbus_mv the VBUS sample right after it.
     virtual void log_afc(int /*n*/, std::uint8_t /*tx*/, int /*rx*/, int /*vbus_mv*/) {}
+    // The AFC settle ended: the highest D- level read while D+ sat at 0.6 V (0 = no BC1.2 short seen), D- now, ms waited.
+    virtual void log_afc_settle(int /*short_mv*/, int /*dm_mv*/, int /*waited_ms*/) {}
     virtual void log_reg(std::uint8_t /*reg*/, std::uint8_t /*value*/) {}   // informational register reads
     virtual void log_qc3(int /*vbus_mv*/, int /*pending_mv*/, int /*step_mv*/, int /*n*/) {}   // one line per QC3 pulse batch
     virtual void log_qc3_coarse(int /*step_mv*/) {}   // a QC3+ session whose pulses move VBUS by QC3-sized steps (ends as no response)

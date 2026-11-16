@@ -620,6 +620,51 @@ static void afc_retry_after_a_missed_ping_goes_on() {
     CHECK(f.state() == State::Active && d.xfer_times.size() == 3 && d.afc_log.size() == 3);
 }
 
+// Pattern afc-dcp-short-open (TOPADRE USB-A, hardware 2026-11-16): the port holds its BC1.2 short closed for about 1.25 s after D+ went
+// to 0.6 V and answers nothing meanwhile (D- reads D+ even driven low). The first ping waits for the short to open, as the HVDCP
+// handshake does for FCP; every session repeats the wait.
+static void afc_waits_for_the_dcp_short_to_open() {
+    FakeCharger c;
+    c.afc_short_ms = 1250;
+    Engine e(c);
+    for (int round = 0; round < 2; ++round) {
+        c.xfer_times.clear();
+        c.afc_log.clear();
+        const std::uint32_t t0 = c.now;
+        CHECK(e.start(Proto::Afc, 9000, true) == Fail::None);
+        c.run(e, 3000);
+        CHECK(e.state() == State::Active && c.vbus_mv() == 9000);
+        CHECK(c.xfer_times.size() == 3);   // no miss, no retry: the first ping already found the short open
+        CHECK(!c.xfer_times.empty() && c.xfer_times[0] >= t0 + 1250 && c.xfer_times[0] <= t0 + 1400);
+        CHECK(!c.afc_log.empty() && c.afc_log[0].rx == 0);
+        e.stop();
+        c.run(e, 3000);
+    }
+}
+
+// A short that never opens (a DCP-only port) does not hold the row for good: the ping goes out at 2 s, the usual two exchanges end
+// the session as unsupported.
+static void afc_stops_waiting_for_a_short_that_never_opens() {
+    FakeCharger c;
+    c.afc_short_ms = 100000;
+    Engine e(c);
+    CHECK(e.start(Proto::Afc, 9000, true) == Fail::None);
+    c.run(e, 3000);
+    CHECK(e.state() == State::Failed && e.fail() == Fail::Unsupported);
+    CHECK(c.xfer_times.size() == 2);
+    CHECK(c.xfer_times.size() == 2 && c.xfer_times[0] >= 2000 && c.xfer_times[0] <= 2100);
+}
+
+// No short at all (D- reads 0 V with the weak low drive): the 500 ms settle of before, nothing longer.
+static void afc_without_a_short_pings_after_the_settle() {
+    FakeCharger c;
+    Engine e(c);
+    CHECK(e.start(Proto::Afc, 9000, true) == Fail::None);
+    c.run(e, 1000);
+    CHECK(e.state() == State::Active);
+    CHECK(!c.xfer_times.empty() && c.xfer_times[0] >= 500 && c.xfer_times[0] <= 600);
+}
+
 static FakeCharger* fcp_charger(FakeCharger& c) {
     c.accp_charger = true;
     c.regs[accp::kRegFcpCaps] = 1;
@@ -1564,6 +1609,9 @@ int main() {
     afc_no_answer_fails();
     afc_ends_on_the_first_unanswered_exchange();
     afc_retry_after_a_missed_ping_goes_on();
+    afc_waits_for_the_dcp_short_to_open();
+    afc_stops_waiting_for_a_short_that_never_opens();
+    afc_without_a_short_pings_after_the_settle();
     fcp_9v();
     fcp_without_caps_fails();
     fcp_current_register_refused_still_switches();
