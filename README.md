@@ -52,7 +52,7 @@ The pictures below are host renders: the real UI code drawn into a 240x240 buffe
 </tr>
 </table>
 
-- **Dn** and **Up** flip through Flow, Graphs, Numbers and Lines. **OK** opens the Bench from any of them.
+- **Dn** and **Up** flip through Flow, Graphs, Numbers and Lines and wrap round. **OK** opens the Bench from Flow, Numbers and Lines; on Graphs it is Zoom. **BACK** goes to Flow.
 - Graphs has its own trends. **OK** (Zoom) changes the time span.
 - Numbers shows the contract, cable rating, energy, charge, time and the line levels. Lines draws the levels of the four signal lines as bars.
 
@@ -210,7 +210,7 @@ This page is only in builds made with `K2_PDSPEC=1`; the default build does not 
 </tr>
 </table>
 
-- The K2 place, last on the Bench, shows the firmware version, uptime and USB mode, then the settings: USB Link, Autorotate, Rotate buttons, Screenshot, Smoothing, Wake sleeping port and Test level (the level each new charger test starts at: Light, Medium or Deep; **OK** cycles it).
+- The K2 place, last on the Bench, shows the firmware version, uptime and USB mode, then the settings: USB Link, Autorotate, Rotate buttons, Screenshot, Smoothing, Wake sleeping port and Test level (the level each new charger test starts at: Light, Medium or Deep; **OK** cycles it), and last System state, Memory and Boot info.
 - **OK** opens a page or toggles a value. On USB Link, **OK** (Toggle) turns HID or Drive on; the change applies after a replug. The footer says so.
 - Hold **MINUS and PLUS together** to rotate the screen.
 

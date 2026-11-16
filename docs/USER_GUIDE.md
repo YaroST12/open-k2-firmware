@@ -38,7 +38,7 @@ Other ways: pick a `.k2` file with the page's file picker, or use the Python fla
 
 USB is **off** after a fresh flash. Without it the K2 still works as a meter, but the remote control, the browser tools and the drive have nothing to talk to.
 
-1. On the K2 go to Settings (long PLUS from Home until the Settings page, or see the map below).
+1. On the K2 press OK on Home to open the Bench, move to **K2** (the last place) and press OK: that is the Settings page.
 2. Open **USB Link**, select **HID** (and **Drive** if you want the read-only `K2 DRIVE`), press OK to toggle.
 3. Unplug and replug the K2. The left port needs a **USB C-to-A cable**; a C-to-C cable does not enumerate there.
 
@@ -46,47 +46,46 @@ USB is **off** after a fresh flash. Without it the K2 still works as a meter, bu
 
 | Button | Short press | Long press (0.5 s) |
 | :--- | :--- | :--- |
-| **BACK** | Go back one level; on a top-level page, go Home | On Home: change the big number (W, V, A); elsewhere nothing |
-| **MINUS** | Select up / previous / decrease | Previous page |
-| **OK** | Do the page's main action | A second action (Share, Reset, Delete...) |
-| **PLUS** | Select down / next / increase | Next page |
+| **BACK** | Go back one level; on a face, go Home | On Home: change the big number (W, V, A); from anywhere else, straight Home |
+| **MINUS** | Select up / previous / decrease; on a face, the previous face | On Home: the trend window, previous |
+| **OK** | Do the page's main action; on a face, open the Bench | A second action (Share, Reset, Delete...) |
+| **PLUS** | Select down / next / increase; on a face, the next face | On Home: the trend window, next |
 
 - **OK and BACK held together for 3 s** reboot the K2 from any page. A card ("Reboot in N", "Release to cancel")
   appears after 1 s; let go of either button to cancel.
 
 - The strip on the right edge of the screen **always shows what each button does right now**. Read it instead of memorising.
-- Long MINUS / long PLUS page between the six top-level pages. There is no wrap-around: long MINUS does nothing on Home, long PLUS does nothing on Settings.
-- Inside a tool (a "submenu") paging is off; BACK leaves the tool and the page it came from is still there.
+- There is no page carousel. The K2 has four **faces** (Flow, Graphs, Numbers, Lines) that MINUS and PLUS flip through, wrapping round, and the **Bench**, the list of places that OK opens from Flow, Numbers and Lines. Long BACK goes straight Home from anywhere (on Home it changes the big number instead). A BACK held for 5 s stops a running charger test.
+- Inside a place or a tool, BACK steps back one level and finally returns to the Bench with that place still selected; BACK on the Bench returns to the face you came from.
 - Hold MINUS and PLUS together to rotate the screen through the four orientations (remembered across boots).
 
 ## Navigation map
 
+There is no page carousel. Four live **faces** flip with MINUS / PLUS (wrapping round). OK on Flow, Numbers or Lines opens the **Bench**, a list of seven places (on Graphs, OK is Zoom, so flip to another face first). OK on a place opens it; BACK steps back.
+
 ```
-Home -- Detail -- Charger test -- Lines -- Tools -- Settings      long MINUS / long PLUS
- |        |            |            |        |          |
- |        |            |            |        |          +-- USB Link (HID, Drive)
- |        |            |            |        |              Autorotate (Auto, Manual 0/90/180/270)
- |        |            |            |        |              Rotate buttons, Screenshot, Smoothing, Wake sleeping port,
- |        |            |            |        |              Test level (Light, Medium, Deep)
- |        |            |            |        |
- |        |            |            |        +-- FC trigger     QC / AFC / FCP / SCP / VOOC, scan
- |        |            |            |            PD trigger     pick a PDO or PPS/AVS voltage
- |        |            |            |            Spoof          answer a charger as a saved cable
- |        |            |            |            Cable R        cable resistance
- |        |            |            |            Who's attached Source | Cable | Sink
- |        |            |            |            |                 +-- Actions: Read cable, Save cable,
- |        |            |            |            |                     Spoof as, Saved cables, Share, Identify
- |        |            |            |            Black Box      PD trace captures, Link view
- |        |            |            |            Report cards   saved charger results
- |        |            |            |            Diag           system state
- |        |            |            |
- |        |            |            +-- (read-only bars: D+, D-, CC1, CC2)
- |        |            +-- Tests (presets, Custom) > Spoof cable > Review > run > Results
- |        +-- 8x2 grid of readings
- +-- big W (or V or A), the other two, trends, cycling cards
+Faces (MINUS / PLUS flips, wraps)            OK opens the Bench     BACK returns to the face
+ Flow (Home) -- Graphs -- Numbers -- Lines  ------------------->  Bench
+                                                                        |
+ Bench places (MINUS / PLUS selects, OK opens)                          |
+  Meter ......... back to the last face                                 |
+  Charger ....... what it offers; own read: Read again                  |
+   |                Test charger  (the charger test: Tests > Spoof cable > Review > run > Results)
+   |                Request voltage (PD trigger), Fast charge (FC trigger), Report cards
+   |                [Stress test, Spec check: only in builds that carry them]
+  Cable ......... the e-marker; own read: Read e-marker
+   |                Save cable, Saved cables, Spoof as..., Resistance (Cable R), Loop probe
+  Device ........ what it asks for; own read: Ask device
+   |                Twins (Device twins)
+  Battery ....... the charge-efficiency recorder
+  Log ........... the PD diagnosis, its findings and the Black Box
+  K2 ............ the Settings page
+                    USB Link (HID, Drive), Autorotate (Auto, Manual 0/90/180/270),
+                    Rotate buttons, Screenshot, Smoothing, Wake sleeping port, Test level,
+                    System state (Diag), Memory, Boot info (QR)
 ```
 
-![Home](guide/img/home.png) ![Tools](guide/img/tools.png)
+![Home](img/ui/home.png) ![Bench](img/ui/bench.png)
 
 ## Common tasks
 
@@ -95,38 +94,38 @@ Home -- Detail -- Charger test -- Lines -- Tools -- Settings      long MINUS / l
 1. Plug the charger into one port and the device into the other (the K2 sits inline).
 2. Look at **Home**: power (W) is the big number at the top; volts and amps are the two rows below it. Long BACK
    makes V or A the big number instead (remembered across boots).
-3. OK cycles the trend window (10 s, 60 s, 10 min). Long OK resets the energy counter, the peaks and the cards.
+3. Long PLUS or long MINUS changes the trend window (10 s, 60 s, 10 min). Long OK resets the energy counter, the peaks and the cards. For every reading at once, flip to **Numbers** (PLUS twice).
 
 ### See what a charger offers over PD
 
 1. Plug the charger in.
-2. Go to **Tools > Who's attached** and stay on the **Source** tab: every offer (fixed, PPS, AVS, EPR) is listed.
-3. For a one-glance view with the contract, open **Detail**.
+2. Press OK on Home to open the Bench and open the **Charger** place: every offer (fixed, PPS, AVS, EPR) is listed.
+3. For a one-glance view with the contract next to the live numbers, flip to **Numbers** (PLUS twice from Home).
 
 ### Run the charger test and share the result
 
-1. Plug the charger in with **no load**. Go to the **Charger test** page (third page from Home).
+1. Plug the charger in with **no load**. From Home press OK for the Bench, open the **Charger** place and choose **Test charger**.
 2. Pick a preset (for example **PD only**), then a cable identity, then the Review step.
 3. Press OK on START, then OK again within 5 seconds. Wait: the K2 steps through voltages and holds each briefly.
-4. On Results, long OK shows a QR code. A phone camera opens a results page with badges for what the charger achieved. Cards stay in **Tools > Report cards**.
+4. On Results, long OK shows a QR code. A phone camera opens a results page with badges for what the charger achieved. Cards stay under **Report cards** in the Charger place.
 
 ### Read a cable's e-marker
 
-1. Go to **Tools > Who's attached > Cable** (the chip in an e-marked cable tells its current and voltage rating).
-2. Plug the cable into the bottom port with **nothing else** connected, press OK, choose **Read cable**.
-3. Choose **Save cable** to keep it. Saved cables are listed under **Saved cables** and exported as JSON on the USB drive.
+1. Open the **Cable** place on the Bench (the chip in an e-marked cable tells its current and voltage rating).
+2. Plug the cable into the bottom port with **nothing else** connected. With no row selected, press OK: that reads the e-marker.
+3. Move down to **Save cable** and press OK to keep it. Saved cables are listed under **Saved cables** and exported as JSON on the USB drive.
 
 ### Ask a charger for a voltage
 
 1. Plug a PD charger in. Make sure **nothing is connected to the output**.
-2. **Tools > PD trigger**: pick the offer, the voltage and the current, then press OK on Send. Anything above 5 V needs a confirm.
+2. Charger place, **Request voltage** (the PD trigger): pick the offer, the voltage and the current, then press OK on Send. Anything above 5 V needs a confirm.
 3. BACK ends it and returns the charger to 5 V.
-For QC, AFC, FCP, SCP and VOOC chargers use **FC trigger** (start with **SCAN**).
+For QC, AFC, FCP, SCP and VOOC chargers use **Fast charge** in the same place (the FC trigger; start with **SCAN**).
 
 ### Check the system
 
-1. **Tools > Diag** shows the link, PD chip, power meter, uptime and model.
-2. Long OK shares the log as a QR code.
+1. Open the **K2** place on the Bench, then **System state** (Diag): the link, PD chip, power meter, uptime and model.
+2. Long OK shares the log as a QR code. The **Log** place holds the PD diagnosis and the Black Box.
 
 ## Safety in one place
 
@@ -144,8 +143,9 @@ For QC, AFC, FCP, SCP and VOOC chargers use **FC trigger** (start with **SCAN**)
 ## Contents
 
 - [Controls in detail](#controls-in-detail)
-- [Top-level pages](#top-level-pages): [Home](#home), [Detail](#detail), [Charger test](#charger-test), [Lines](#lines), [Tools](#tools), [Settings](#settings)
-- [Tools](#tools-reference): [FC trigger](#fc-trigger), [PD trigger](#pd-trigger), [Spoof](#spoof), [Cable R](#cable-r), [Who's attached](#whos-attached), [Saved cables](#saved-cables), [Black Box](#black-box), [Report cards](#report-cards), [Device twins](#device-twins), [PD Stress](#pd-stress), [Diag](#diag)
+- [The faces](#the-faces): [Home](#home), [Graphs](#graphs), [Numbers](#numbers), [Lines](#lines)
+- [The Bench and its places](#the-bench-and-its-places): [Bench](#bench), [Charger, Cable and Device](#the-charger-cable-and-device-places), [Charger test](#charger-test), [Settings](#settings)
+- [Tools](#tools-reference) (reached from the places): [FC trigger](#fc-trigger), [PD trigger](#pd-trigger), [Spoof](#spoof), [Cable R](#cable-r), [Who's attached](#whos-attached), [Saved cables](#saved-cables), [Black Box](#black-box), [Report cards](#report-cards), [Device twins](#device-twins), [PD Stress](#pd-stress), [PD Spec Check](#pd-spec-check), [Diag](#diag)
 - [Battery recorder](#battery-recorder)
 - [Share (QR)](#share-qr)
 - [Settings](#settings-reference): [USB Link](#usb-link), [Autorotate](#autorotate), [Rotate buttons, Screenshot, Smoothing, Wake sleeping port](#other-settings)
@@ -161,63 +161,121 @@ For QC, AFC, FCP, SCP and VOOC chargers use **FC trigger** (start with **SCAN**)
 
 Every press has three kinds: **short** (acts on release), **long** (fires at 0.5 s, while still held) and **hold** (5 s).
 
-- **Top-level pages** (Home, Detail, Charger test, Lines, Tools, Settings): long PLUS goes to the next page, long MINUS to the previous. Short BACK goes Home (on Home it does nothing).
-- **Inside a tool or settings submenu**: paging is off. Short BACK first lets the page handle it (for example, step back from a detail view), otherwise it leaves the submenu.
-- **OK + BACK held together (3 s)** works everywhere and reboots the K2. After 1 s a counting card ("Reboot in N", "Release to cancel") appears; let go of either button before it reaches zero to cancel. While both are held, neither button does its own action; each works again from its next press. Holding BACK alone no longer reboots.
+- **Faces** (Flow, Graphs, Numbers, Lines): short PLUS shows the next face, short MINUS the previous one, wrapping round (Flow, Graphs, Numbers, Lines, Flow). Short OK opens the Bench, except on Graphs, where OK is Zoom. Short BACK goes to Flow (on Flow it does nothing). Long BACK goes to Flow from anywhere; on Flow it changes the big number.
+- **Bench**: short MINUS / PLUS select a place (they stop at the first and last), OK opens it, BACK returns to the last face.
+- **Places and tools**: the place page or tool handles the buttons itself. Short BACK first lets it step back (for example out of a detail view or a pop-up), otherwise it leaves and the page it came from is still there.
+- **OK + BACK held together (3 s)** works everywhere and reboots the K2. After 1 s a counting card ("Reboot in N", "Release to cancel") appears; let go of either button before it reaches zero to cancel. While both are held, neither button does its own action; each works again from its next press.
+- **A BACK hold (5 s)** stops a running charger test. Holding BACK alone does not reboot.
 - **MINUS and PLUS held together** cycle the screen orientation (remembered across boots).
-- **Label strip**: the narrow column on the right shows the current action of each button. Navigation pages show Back, "-/Prev" and "+/Next". Lists show Up and Dn. Greyed or missing labels mean the button does nothing there.
+- **Label strip**: the narrow column on the right shows the current action of each button. On the faces and the Bench, MINUS and PLUS read Up and Dn. Lists show Up and Dn as well. Greyed or missing labels mean the button does nothing there.
 
 Colours follow one scheme everywhere: green = good or ready, amber = caution or pending, red = fault or failed, grey = not applicable.
 
-## Top-level pages
+## The faces
+
+The K2 starts on **Flow** (Home). Flow, Graphs, Numbers and Lines are the four live faces. They never change what the charger or device does.
 
 ### Home
 
-![Home](guide/img/home.png)
+![Home](img/ui/home.png)
 
-The live meter.
+The live meter, also called Flow.
 
 - **One big number** at the top: power (W) by default, with `max NNW` (the contract) at the top right, a **limit bar**
   with a tick at 90 % of the contract and a sweeping trace behind it. Long BACK makes V or A the big number instead.
 - **Two rows** below on the left: the other two readings, each with its own trace, and the flow arrow beside the amps.
 - **Two cards** on the right that take turns every few seconds: **PEAK** (highest W, V and A since the plug-in),
   **DROP / SAG** (how far the voltage dips under load), **CABLE** (only with a read e-marker), **LINES** (D+, D-, CC),
-  and **Energy** (Wh over Ah) in the lower card every other turn. Cards with nothing to show are skipped. Unplugged
+  and **Energy** (Wh over Ah) in the lower card every other turn. A card whose reading starts to move takes the upper
+  cell and shows a small cyan dot for a few seconds. Cards with nothing to show are skipped. Unplugged
   or idle, PEAK and Energy stay in grey.
 - **Alarms**: power turns amber from 90 % of the contract ("93% OF 100W") and red above it ("OVER 100W LIMIT"); the
   current does the same against the contract current. Volts have no alarm.
-- Two info rows at the bottom: the USB protocol in use and the source/role.
+- Two info rows at the bottom: the PD diagnosis (or the line levels when there is no PD) with the elapsed time, and the protocol in use with the source/role.
 - Pills: **NO VBUS** (top right) when the port has no voltage; **PAS** (bottom right) while the K2 is passive.
 
 | Button | Action |
 | :--- | :--- |
-| OK | Zoom: cycles the trend window 10 s, 60 s, 10 min (all three traces) |
-| long OK | Reset the energy counter, the peaks and the cards |
+| OK | Open the Bench |
+| long OK | Reset the energy counter, the peaks, the sag and the cards |
 | long BACK | Change the big number: W, then V, then A (remembered across boots) |
+| PLUS / MINUS | Next / previous face |
+| long PLUS / long MINUS | Next / previous trend window: 10 s, 60 s, 10 min (all three traces) |
 | BACK | nothing |
 
 Readings are filtered by the **Smoothing** setting; see [Other settings](#other-settings).
 
-### Detail
+### Graphs
 
-![Detail](guide/img/detail.png)
+![Graphs](img/ui/graphs.png)
 
-A dense 8 x 2 grid of everything at once, with no actions of its own.
+Four stacked live graphs over the same time window: **POWER** (W), **VBUS** (V), **IBUS** (A) and **ENERGY** (Wh), each with its current value and, where the contract gives one, its ceiling after a slash. An info line under them names the protocol.
+
+| Button | Action |
+| :--- | :--- |
+| OK | Zoom: cycles the trend window 10 s, 60 s, 10 min (the same window Home uses) |
+| PLUS / MINUS | Next / previous face |
+| BACK | Flow |
+
+### Numbers
+
+![Numbers](img/ui/numbers.png)
+
+Everything at once, with no actions of its own. The three live values (V, A and W) sit at the top in large type, each with a colour key. Under them is a two-column, eight-row receipt:
 
 | Row | Left | Right |
 | :--- | :--- | :--- |
-| 1 | V and the PDO in use (the contract) | A and the cable rating |
-| 2 | W and the contract's maximum W | CC1 / CC2 levels and D+ / D- levels |
-| 3 | USB version and alternate mode | Wh and Ah |
-| 4 | Time and temperature | Fast-charge protocol and R |
+| 1 | Energy (Wh) | PDO in use (the contract) |
+| 2 | Charge (Ah) | Cable rating |
+| 3 | Time | Max (the contract's maximum W) |
+| 4 | Temp (MCU) | D+ level |
+| 5 | R | D- level |
+| 6 | CC1 level | Fast-charge protocol |
+| 7 | CC2 level | USB version |
+| 8 | Flow (direction arrow) | Alternate mode |
 
-Use it when you want the contract and the line levels next to the live numbers.
+Use it when you want the contract and the line levels next to the live numbers. PLUS / MINUS flip faces, OK opens the Bench, BACK goes to Flow.
+
+### Lines
+
+![Lines](img/ui/lines.png)
+
+Four bars for **D+**, **D-**, **CC1** and **CC2** with ticks at 0.4 V and 2.0 V (the usual PD and Rp thresholds), plus:
+
+- a status badge ("No VBUS", and so on),
+- an **Rp** row naming the current advertisement on a CC line (for example "3.0A on CC2") when a source is attached,
+- the **MCU temperature**,
+- a footer hint ("Plug in a source").
+
+Read-only. Use it to see whether a charger is waiting, which CC line the cable uses and what D+/D- are doing. PLUS / MINUS flip faces, OK opens the Bench, BACK goes to Flow.
+
+## The Bench and its places
+
+### Bench
+
+![Bench](img/ui/bench.png)
+
+The list of seven places. Each row shows a one-line status. MINUS / PLUS select (labels Up and Dn), OK opens the place, BACK returns to the face you came from.
+
+| Place | Status on the row | OK opens |
+| :--- | :--- | :--- |
+| Meter | "No VBUS", or the live W, V and A | the last face |
+| Charger | "PD3.x 100W, 6 offers", "<protocol> on the lines" or "None on either port" | the Charger place: the offers and these actions: **Test charger**, **Request voltage**, **Fast charge**, **Report cards**, and in builds that carry them **Stress test** and **Spec check** |
+| Cable | "5A 20V, 100W" or "Not read" | the Cable place: the e-marker, with **Read e-marker**, **Save cable**, **Saved cables**, **Spoof as...**, **Resistance** (Cable R) and **Loop probe** |
+| Device | "Asks 20V 3A, gets 60W" or "None inline" | the Device place: what the attached device asks for, with **Ask device** and **Twins** |
+| Battery | "No run", "Charging 1h05m, 12.34Wh", "Round trip 80.0%" | the [Battery recorder](#battery-recorder) |
+| Log | the PD diagnosis and the number of captures | the PD diagnosis with its findings and the [Black Box](#black-box) |
+| K2 | the version and the USB mode | [Settings](#settings) |
+
+### The Charger, Cable and Device places
+
+Three places share one page, the same one that [Who's attached](#whos-attached) describes: Charger shows the **Source** record, Cable the **Cable** record (the e-marker) and Device the **Sink** record. MINUS / PLUS move the focus down the action rows under the record; OK on a focused row opens it; with no row focused, OK runs the place's own read: **Read again** (Charger), **Read e-marker** (Cable) or **Ask device** (Device). Long OK shares the Source caps or the Cable record as a QR code. BACK returns to the Bench with the place still selected. A row that is not ready (a live sink inline, no cable read yet) still opens and says why.
 
 ### Charger test
 
 ![Charger test, Tests step](guide/img/charger-test-tests.png)
 
-A guided, no-load test of what a charger really negotiates: fixed PDOs, PPS and AVS ranges and the legacy protocols. It checks **voltage negotiation**, not maximum current or loaded power. Full description of the units and their order: [`CHARGER_TEST_FLOW.md`](CHARGER_TEST_FLOW.md). Status: **partly verified** (PD and several legacy units were run on real chargers; not every unit on every charger).
+Start it from **Test charger** in the Charger place (the Bench, then Charger). A guided, no-load test of what a charger really negotiates: fixed PDOs, PPS and AVS ranges and the legacy protocols. It checks **voltage negotiation**, not maximum current or loaded power. Full description of the units and their order: [`CHARGER_TEST_FLOW.md`](CHARGER_TEST_FLOW.md). Status: **partly verified** (PD and several legacy units were run on real chargers; not every unit on every charger).
 
 Steps of the wizard:
 
@@ -273,62 +331,38 @@ Notes:
 - A Light card says "Light run" in its header, and its rows read "detected" and "advertised", never a tick. A Deep card says "Deep run".
 - From the computer: `python3 tools/ct_start.py --level light|medium|deep` (default medium). `--avs-sweep` alone means deep. `--sweep` / `--no-sweep` turn the PPS deep sweep on or off on top of the level. `k2_remote.py charger-level light|medium|deep` sets the level of the next run without starting it.
 
-### Lines
-
-![Lines](guide/img/lines.png)
-
-Four bars for **D+**, **D-**, **CC1** and **CC2** with ticks at 0.4 V and 2.0 V (the usual PD and Rp thresholds), plus:
-
-- a status badge ("No VBUS", and so on),
-- an **Rp** row naming the current advertisement on a CC line (for example "3.0A on CC2") when a source is attached,
-- the **MCU temperature**,
-- a footer hint ("Plug in a source").
-
-Read-only. Use it to see whether a charger is waiting, which CC line the cable uses and what D+/D- are doing.
-
-### Tools
-
-![Tools](guide/img/tools.png)
-
-The hub. Nine entries; each row shows a readiness tag, or a chevron when it is ready. +/- moves, OK opens.
-
-| Entry | Hint on the row | Tag when not ready |
-| :--- | :--- | :--- |
-| FC trigger | charger on top or bottom | LOAD (a load is inline) |
-| PD trigger | PD charger, either port | LOAD, or NO PD (no PD source) |
-| Spoof | act as a saved cable | LOAD (a live sink is inline) |
-| Cable R | charger + cable + load | NO PM (power monitor not found) |
-| Who's attached | source, cable and device | always ready |
-| Black Box | passive PD recorder | always ready |
-| Report cards | saved charger results | always ready |
-| Device twins | what a charger gives your devices | always ready (the live proof refuses a live sink itself) |
-| Diag | USB, PD and system state | always ready |
-
-Spoof is a shortcut: it opens Who's attached on the Cable tab and then the Spoof page.
-
 ### Settings
 
-![Settings](guide/img/settings.png)
+![Settings](img/ui/settings.png)
+
+Reached as the **K2** place, the last row of the Bench. The top shows the firmware version, uptime and the USB mode ("up 1h05m  USB HID"), then the rows:
 
 | Row | Value | Kept |
 | :--- | :--- | :--- |
 | USB Link | opens a submenu | across boots |
 | Autorotate | Auto / Locked, opens a submenu | across boots |
 | Rotate buttons | ON / OFF | across boots |
-| Screenshot | ON / OFF | across boots |
+| Screenshot | ON / OFF (only in builds with screenshots) | across boots |
 | Smoothing | Off / Low / Medium / High | across boots |
 | Wake sleeping port | ON / OFF (default OFF) | across boots |
 | Test level | Light / Medium / Deep (default Medium) | across boots |
+| System state | opens [Diag](#diag) | |
+| Memory | opens the memory page | |
+| Boot info | opens the boot record as a QR code to share | |
 
-+/- selects. OK opens, toggles or cycles (the label on the OK button says which). The footer says "Opens a settings page" or "Remembered across boots".
+MINUS / PLUS select (they stop at the first and last row). OK opens, toggles or cycles (the label on the OK button says which). The footer says "Opens a settings page" or "Remembered across boots". BACK returns to the Bench.
 
 ---
 
 ## Tools reference
 
+Each tool opens from a place on the Bench: the Charger place has Request voltage (PD trigger), Fast charge (FC trigger), Report cards and, in builds that carry them, Stress test and Spec check; the Cable place has Resistance (Cable R), Loop probe, Saved cables and Spoof as...; the Device place has Twins; the Log place holds the PD diagnosis and the Black Box; the K2 place holds System state (Diag). BACK from a tool returns to its place.
+
 ### FC trigger
 
 ![FC trigger](guide/img/fc-trigger.png)
+
+Opens from the Charger place, **Fast charge**.
 
 **Puts voltage on the output.** Requests a voltage over D+/D- from fast-charge chargers. Protocol facts: [`FASTCHARGE_PROTOCOLS.md`](FASTCHARGE_PROTOCOLS.md) (Quick Charge is its section 1). Status: **not verified on hardware in this build** (VOOC and related modes need a load to be meaningful); UFCS handshake verified on one charger.
 
@@ -353,6 +387,8 @@ Safety: anything above 5 V needs **two OK presses within 3 s**. Targets are clam
 
 ![PD trigger, refusal checklist](guide/img/pd-trigger-no-source.png)
 
+Opens from the Charger place, **Request voltage**.
+
 **Puts voltage on the output.** A wizard that makes the K2 request a specific offer from a PD charger: **Offer** (choose a PDO, Next, Dn/Up), **Voltage** (+/- 1 V, for PPS/AVS), **Current** (+/- 0.5 A), **Confirm** (OK = Send), **Live** (the contract is active; BACK releases). Status: **verified** for fixed and PPS on a lone charger.
 
 If it refuses, a checklist shows why: **Charger seen**, **PD caps read**, **Other empty** (the other port must be empty), with the hint "Plug PD charger in". The tool is refused while a live sink is inline.
@@ -361,6 +397,8 @@ If it refuses, a checklist shows why: **Charger seen**, **PD caps read**, **Othe
 
 ![Spoof](guide/img/spoof.png)
 
+Opens from the Cable place, **Spoof as...**.
+
 Makes the K2 answer a charger's cable query (SOP') as if it were a chosen cable, so you can see how a charger reacts to, say, a 5 A or EPR cable without owning one. Facts and measurements: [`K2_PORTS_SPEC.md`](K2_PORTS_SPEC.md). Status: **verified** on the top port with a charger and no cable (a 5 A and an EPR 28 V contract were obtained with a spoofed identity).
 
 The page shows State (OFF or ARMED), "Asked / Replied" counts and the cable list: "Off (real cable)", built-ins (EPR 50 V 5 A, CUKTECH 6A, OnePlus 100W), then your saved cables (marked "saved"). OK = **Arm**, **Disarm** or **Off**. The armed row wears an amber ARMED pill. Footer: "Plug in charger only": arm first, then plug the charger so the identity is presented at attach. Refused while a live sink is inline. Do not use with a phone or laptop attached.
@@ -368,6 +406,8 @@ The page shows State (OFF or ARMED), "Asked / Replied" counts and the cable list
 ### Cable R
 
 ![Cable R](guide/img/cable-r.png)
+
+Opens from the Cable place, **Resistance**.
 
 Measures a cable's resistance from the voltage drop under a load. Status: passive mode **not checked against a reference**; Kelvin mode **not verified**.
 
@@ -389,6 +429,8 @@ Buttons: OK = Reset (clear the readings), PLUS = Mode (**Passive** <-> **Kelvin*
 ### Who's attached
 
 ![Who's attached, Source tab](guide/img/connection-source.png)
+
+The default build shows one tab at a time as the **Charger** (Source), **Cable** and **Device** (Sink) places, with their actions as rows under the record (see [The Charger, Cable and Device places](#the-charger-cable-and-device-places)). The tabbed page below, with its Actions pop-up and Tab+ / Tab- keys, is what a build made with `K2_WHOS_ATTACHED=1` opens; the records, the actions and the refusals are the same.
 
 One screen for the three parties on the two ports: **Source** (charger), **Cable** and **Sink** (device). Background: [`SOURCE_SINK_DETECTION.md`](SOURCE_SINK_DETECTION.md).
 
@@ -429,7 +471,7 @@ A greyed item tells you why when chosen: "No caps yet", "No cable read", "Live s
 
 ![Saved cables](guide/img/saved-cables.png)
 
-Reached from Who's attached > Cable > Actions > Saved cables. A list ("Cable 1 of 12") of your library, which holds up to 140 cables. Labels: Back, Up, **View**, Dn. OK opens the detail:
+Reached from the Cable place, **Saved cables** (in a `K2_WHOS_ATTACHED=1` build: Who's attached > Cable > Actions > Saved cables). A list ("Cable 1 of 12") of your library, which holds up to 140 cables. Labels: Back, Up, **View**, Dn. OK opens the detail:
 
 ![Saved cable detail](guide/img/saved-cable-detail.png)
 
@@ -438,6 +480,8 @@ VID/PID, XID, PD version, ID VDO, Cable VDO and the Rating (for example "5A 50V"
 ### Black Box
 
 ![Black Box](guide/img/black-box.png)
+
+Opens from the Log place: its last row is the Black Box.
 
 A passive recorder of the PD conversation, always running. Trigger events freeze the recent window into a capture, which is kept in **flash** (up to 32, the oldest dropped) and survives power-off. Triggers: Contract (a new contract), Hard reset, VBUS dip, Detach, D+/D- edges, "6 A refused".
 
@@ -457,6 +501,8 @@ For the raw trace use `python3 tools/pd_trace.py live | dump | captures | captur
 
 ![Report cards](guide/img/report-cards.png)
 
+Opens from the Charger place, **Report cards**.
+
 Every charger test run is stored as a card for that charger. The list shows a badge, the name (the name you set, else `VID:PID`, else `#` plus a fingerprint), a row summary and the boot count. Footer: "1/44 chargers" (the selected row, then how many cards are held). The store holds up to 64 cards; saving a new charger when full drops the oldest.
 
 Row summary, for example `2P 1~ 1F`: tests passed (P), partly (~; capped or stopped early) and failed (F). Protocols the charger never answered are grey and not counted.
@@ -475,9 +521,11 @@ Cards are saved in flash and exported on the USB drive and with `k2_remote.py ca
 
 ### Device twins
 
+Opens from the Device place, **Twins**.
+
 **Will this charger charge my device, and how fast?** A twin is a stored device: its sink capabilities (what it asks a charger for), and optionally the Request it was seen to make. The page lists your twins against the charger that is attached now. Each row shows the contract that device would get (for example `PPS up to 33W`, `36W of 55W`, `5V only`, `no contract`; a PPS charger gives a range, so the figure is the ceiling, not the voltage the device settles on), and the focused row says what limits it: the device, this charger or the cable. Nothing is sent for the prediction.
 
-- **Learn** (last row): learns a twin from the last Who's attached > Identify of a device that sat alone on the K2. From the shell or host: `twin learn identify` (device alone) or `twin learn sniff` (a device and its charger, K2 between them).
+- **Learn** (last row): learns a twin from the last **Ask device** (Identify) of a device that sat alone on the K2. From the shell or host: `twin learn identify` (device alone) or `twin learn sniff` (a device and its charger, K2 between them).
 - **Learn with the device inline** (the device charging from its charger through the K2): OK shows "Resets the link. Confirm"; a second OK lets the K2 reset the link, ask the device itself (identity, what it can take, its PD revision) and reset the link again, so the device's charging stops for a moment twice. The footer follows it ("Resetting the link", "Asking the device"); BACK stops it. It is refused while a test or tool runs, while the K2 holds its own contract, or when the K2 is powered from that line. From the shell or host: `twin learn inline confirm` / `twin learn inline --confirm`.
 - **Ask charger again** (a device inline, but the K2 never saw the charger's list, so the page says "No charger: no predictions"): the last row of the list. OK shows "Resets the link. Confirm"; a second OK sends one Hard Reset, the charger restarts and lists again ("Asking the charger again", then "Charger offered again"), and the predictions fill in. The device's charging stops for a moment. It is refused while a test or tool runs.
 - **Prove it** (OK on a twin, OK again within 5 s): the K2 answers the charger as that device, sends the Request it predicted and checks that the charger accepts it and VBUS settles. It needs a PD charger attached and the K2 as an active sink (not inline with a live device), asks for a confirmation (the contract changes), and returns to 5 V when done. BACK stops it.
@@ -487,21 +535,23 @@ Shell: `twin list | predict | run n confirm | status | cancel | learn | rename |
 
 ### PD Stress
 
-A separate tool, run from the computer only (no Tools page): it renegotiates the attached charger hard, inside the PD protocol and with nothing on the output, and scores the result (0 = ideal). While it runs, a one-line footer on whatever page is up shows the sequence. Start it with `python3 tools/pd_stress.py run --charger NAME --confirm`. Sequences, safety rules, the score table and how to retune it: [`PD_SPEC_CHECK.md`](PD_SPEC_CHECK.md), appendix PD Stress.
+A separate tool, started from the computer (a build made with `K2_PDSTRESS=1` also lists **Stress test** in the Charger place): it renegotiates the attached charger hard, inside the PD protocol and with nothing on the output, and scores the result (0 = ideal). While it runs, a one-line footer on whatever page is up shows the sequence. Start it with `python3 tools/pd_stress.py run --charger NAME --confirm`. Sequences, safety rules, the score table and how to retune it: [`PD_SPEC_CHECK.md`](PD_SPEC_CHECK.md), appendix PD Stress.
 
 ### PD Spec Check
 
-Only in builds made with `K2_PDSPEC=1` (Tools > PD Spec Check, or "Spec check" in the Charger place). A no-load conformance pass over the attached PD charger: it steps through every pair of fixed levels up and down, steps PPS by 20 mV, lets the PPS and EPR keep-alives lapse, sends a Hard Reset and takes its Rd away, and judges each measurement against the USB PD limit it names. Setup picks the families, Review shows what will run and asks for a two-press START, Running shows the family, VBUS and the counts (BACK stops and returns the charger to 5 V), Results lists every check as pass, fail or skip with its worst value, and OK opens a check's detail. The score is a penalty: 0 = ideal. Nothing may be on the output, and the K2 must not be powered by the charger under test (refused). From the computer: `python3 tools/pd_spec.py run --charger NAME --confirm`, or `k2_remote.py pd-spec start --confirm | status | result | stop`. Checks, limits, weights and the safety rules: [`PD_SPEC_CHECK.md`](PD_SPEC_CHECK.md).
+Only in builds made with `K2_PDSPEC=1` (**Spec check** in the Charger place). A no-load conformance pass over the attached PD charger: it steps through every pair of fixed levels up and down, steps PPS by 20 mV, lets the PPS and EPR keep-alives lapse, sends a Hard Reset and takes its Rd away, and judges each measurement against the USB PD limit it names. Setup picks the families, Review shows what will run and asks for a two-press START, Running shows the family, VBUS and the counts (BACK stops and returns the charger to 5 V), Results lists every check as pass, fail or skip with its worst value, and OK opens a check's detail. The score is a penalty: 0 = ideal. Nothing may be on the output, and the K2 must not be powered by the charger under test (refused). From the computer: `python3 tools/pd_spec.py run --charger NAME --confirm`, or `k2_remote.py pd-spec start --confirm | status | result | stop`. Checks, limits, weights and the safety rules: [`PD_SPEC_CHECK.md`](PD_SPEC_CHECK.md).
 
 ### Diag
 
 ![Diag](guide/img/diag.png)
 
+Opens from the K2 place, **System state**.
+
 Nine rows: Link (USB), RST/ISR, TX/drop, FUSB302 (PD chip, its ID), RX (which CC line), Poll gap, Meter (power monitor chip), Uptime, Model. The footer says "All subsystems up" when nothing is wrong. Long OK shares the recent log as a QR code. Buttons: Up, Share, Dn.
 
 ### Battery recorder
 
-Reach it from the Bench, the list of places that OK opens from the live faces (Battery is the fifth place; see the UI walkthrough in the [README](../README.md)). It measures what flows into and out of a power bank over hours, from the power monitor, and keeps running while you use other pages. The Bench row says where it stands: `No run`, `Charging 1h05m, 12.34Wh`, `Round trip 80.0%`.
+Reach it from the Bench, the list of places that OK opens from the live faces: the **Battery** place (the fifth one; see the UI walkthrough in the [README](../README.md)). It measures what flows into and out of a power bank over hours, from the power monitor, and keeps running while you use other pages. The Bench row says where it stands: `No run`, `Charging 1h05m, 12.34Wh`, `Round trip 80.0%`.
 
 | Mode | What it records |
 | :--- | :--- |
@@ -593,7 +643,7 @@ With HID on, from a computer:
 | `python3 tools/k2_remote.py ping` | firmware version, git hash, uptime |
 | `... state`, `... pdos`, `... emarker list`, `... cards list` | read data |
 | `... press ok`, `... press --long plus` | press buttons |
-| `... page home`, `... page tools` | switch page (`home detail chargertest lines tools settings`, or 0..5) |
+| `... page home`, `... page tools` | switch page (`home detail chargertest lines tools settings graphs`, or 0..6; `detail` is the Numbers face and `tools` the Bench; submenu names such as `diag` or `connection` open that page) |
 | `... screenshot out.png --scale 2` | save the screen as a PNG (needs Screenshot ON) |
 | `... fc scan`, `... pd request ...` | active triggers (above 5 V needs `--confirm`) |
 | `python3 tools/pd_trace.py live` | stream the Black Box |
