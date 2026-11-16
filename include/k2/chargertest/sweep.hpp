@@ -92,6 +92,11 @@ Summary summarize(std::span<const int16_t> a, unsigned a_lo_mv, std::span<const 
 // one-sided (above the setpoint is the ceiling's business, not the point's); the summary and the live line share it.
 bool out_of_band(unsigned set_mv, int measured_mv);
 
+// How the Running view grades the live error (reading - setpoint) of a sweep row: green up to kErrOkMv, amber up to kErrCautionMv, red
+// above. kErrOkMv is the Results chip's pass window (result_layout::kSweepPassMv; a static_assert in the view keeps them one number).
+inline constexpr unsigned kErrOkMv = 100;
+inline constexpr unsigned kErrCautionMv = 300;
+
 // The sweep row in flight, as the Running view reads it (Runner::sweep_live): the planned point range, the setpoint of the
 // Request that is out, and the last recorded point. Not a record: the view keeps nothing of its own.
 struct Live {
