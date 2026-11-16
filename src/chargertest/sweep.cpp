@@ -46,6 +46,7 @@ Summary summarize(std::span<const int16_t> a, unsigned a_lo_mv, std::span<const 
         if (i == 0 || measured > s.peak_mv) { s.peak_mv = uint16_t(measured); s.peak_at_mv = uint16_t(set); }
         track.feed(int(set), measured);
         if (!fold_at && track.kind() == pd::Track::Fold) fold_at = i;   // a break is not a fold: it names no level
+        if (!fold_at) s.track_err_mv = std::max(s.track_err_mv, uint16_t(std::abs(e)));   // the points before the onset: how it tracked
         // A point outside the row's band (the PPS band is one-sided: within 5 % / 100 mV below, the ceiling above) was
         // steady and recorded; the summary says so, the strip colours it.
         if (out_of_band(set, measured)) s.out_of_band = true;

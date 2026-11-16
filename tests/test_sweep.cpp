@@ -160,6 +160,45 @@ static void test_recorded_sweeps_fold_or_stay_clean() {
     CHECK_EQ(s.fold_mv, 0u); CHECK_EQ(s.fold_from_mv, 0u);
     CHECK_STR(std::string(buf, sw::format_summary(s, buf)).c_str(), "peak 20.07 V at 20.0 V");
 }
+// Summary::track_err_mv is the worst |err| before the first fold's onset, so a fold of any depth does not read as a tracking failure
+// (the Results chip grades a caution by it); worst_err keeps the whole record. Without a fold it is the whole record's worst |err|.
+static void test_track_err_stops_at_the_fold_onset() {
+    auto s = sw::summarize(std::vector<int16_t>{0, 0, 0, 0, -400, -400, -400}, 5000);
+    CHECK_EQ(s.fold_from_mv, 5400u);
+    CHECK_EQ(s.track_err_mv, 0u); CHECK_EQ(s.worst_err, -400);          // tracked, then fell 400 mV: the fold is not tracking
+    s = sw::summarize(std::vector<int16_t>{-250, -300, -250, -900, -900}, 5000);
+    CHECK_EQ(s.fold_from_mv, 5300u);
+    CHECK_EQ(s.track_err_mv, 300u); CHECK_EQ(s.worst_err, -900);        // the offset before the onset counts, the fold's depth does not
+    s = sw::summarize(std::vector<int16_t>{-400, -400, -400}, 5000);
+    CHECK_EQ(s.fold_mv, 0u);
+    CHECK_EQ(s.track_err_mv, 400u);                                    // no fold: every point is tracking
+    s = sw::summarize(std::vector<int16_t>{20, 450, 450}, 5000);
+    CHECK_EQ(s.track_err_mv, 450u);                                    // an excess counts as much as a shortfall
+    CHECK_EQ(sw::summarize({}, 5000).track_err_mv, 0u);
+    // The recorded FH22 sweeps: tracks within 100 mV, then the fold (1.5 V deep) that used to turn the chip red.
+    unsigned lo = 0;
+    for (const char* f : {"tests/fixtures/sweep/fh22_pps_5000_21000.csv", "tests/fixtures/sweep/fh22_avs_9000_20000.csv"}) {
+        const auto err = fixture_err(f, lo);
+        s = sw::summarize(err, lo);
+        CHECK_EQ(s.fold_from_mv, 20000u);
+        CHECK_EQ(s.track_err_mv <= 100u, true);
+        CHECK_EQ(unsigned(std::abs(s.worst_err)) > 300u, s.fold_mv < 19500u);   // the PPS fold is deep, the AVS one is 340 mV
+    }
+    // A clean source: no fold, the worst error of the record.
+    const auto clean = fixture_err("tests/fixtures/sweep/ugreen_avs_9000_20000.csv", lo);
+    s = sw::summarize(clean, lo);
+    CHECK_EQ(s.track_err_mv, unsigned(std::abs(s.worst_err)));
+    // A split sweep (low part recorded after the high one) is judged over the points in setpoint order, like the fold itself.
+    const auto whole_err = fixture_err("tests/fixtures/sweep/fh22_pps_5000_21000.csv", lo);
+    const auto merged = sw::summarize({whole_err.data(), 40}, lo, {whole_err.data() + 40, whole_err.size() - 40}, lo + 40 * sw::kStepMv);
+    CHECK_EQ(merged.track_err_mv, sw::summarize(whole_err, lo).track_err_mv);
+    // A fold that begins in the second part: the first part's points are all before the onset.
+    const auto a = std::vector<int16_t>{-300, -300};
+    const auto b = std::vector<int16_t>{0, 0, -900};
+    const auto j = sw::summarize(a, 4800, b, 5000);   // 4.8 4.9 | 5.0 5.1 5.2 (measured 4500 4600 5000 5100 4300)
+    CHECK_EQ(j.fold_from_mv, 5200u);
+    CHECK_EQ(j.track_err_mv, 300u);
+}
 // The margin: a dip of up to 50 mV is meter noise and the DNL, not a fold (it used to flag every falling point).
 static void test_a_small_dip_is_not_a_fold() {
     std::vector<int16_t> err{0, 0, -40, 0, 0};   // measured 5000 5100 5160 5300 5400: a 40 mV dip below the trend, still rising
@@ -426,6 +465,7 @@ int main() {
     test_summary_of_a_clean_track_names_peak_and_errors();
     test_fh22_fold_back_is_recorded_not_a_stop();
     test_recorded_sweeps_fold_or_stay_clean();
+    test_track_err_stops_at_the_fold_onset();
     test_a_small_dip_is_not_a_fold();
     test_catching_up_is_not_a_finding();
     test_fh22_avs_sweep_shape();

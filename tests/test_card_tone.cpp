@@ -106,6 +106,12 @@ static void test_a_fold_is_a_caution() {
     CHECK_EQ(int(n.partial), 2);
     CHECK_EQ(int(n.fail), 0);
     CHECK_EQ(int(tn::card(c)), int(Tone::Partial));
+    // The depth of the fold never turns the caution red: the card holds the worst error (here the clamp, 1.6 V down at 21 V) and the
+    // tone still reads the fold alone, as the device's sweep chip does (Results: amber at any depth).
+    c.sweep[0].min_err = -127; c.sweep[0].worst_err = -127; c.sweep[0].worst_dv = 210;
+    CHECK_EQ(int(tn::range(c, c.range[0])), int(Tone::Partial));
+    CHECK_EQ(int(tn::counts(c).fail), 0);
+    CHECK_EQ(int(tn::card(c)), int(Tone::Partial));
     // PPS: a plateau with a fold stays what it was (amber), the fold adds no mark of its own.
     c.sweep[1].fold_dv = 194;
     c.sweep[1].fold_from_dv = 200;

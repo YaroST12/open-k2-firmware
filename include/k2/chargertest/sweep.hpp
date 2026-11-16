@@ -78,6 +78,10 @@ struct Summary {
     uint16_t peak_at_mv = 0;  // the setpoint it was delivered at
     uint16_t fold_mv = 0;     // 0 = no fold (pd::track_step); else the lowest level from that point on
     uint16_t fold_from_mv = 0;   // the setpoint of the first point the rule names ("folds back ... from")
+    // The worst |err| over the points BEFORE the first fold's onset (all points when there is no fold): how well the output
+    // tracked until it folded. The points after the onset are the fold, not tracking, so the Results chip grades a caution
+    // by this and a fold of any depth stays amber (user decision 2026-11-16). worst_err above stays the whole record's.
+    uint16_t track_err_mv = 0;
     bool out_of_band = false;    // some recorded point sat outside the row's band (steady, still recorded)
 };
 Summary summarize(std::span<const int16_t> err, unsigned lo_mv);

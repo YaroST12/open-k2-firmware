@@ -384,7 +384,10 @@ const char* display_name(A a) {
 // APDO range capped at the monitor ceiling. The chip has no level (Token::mv 0), so the Running dot sits on it while the
 // sweep is in flight and the live band above shows where the sweep is; the per-point errors are the footer's and the log's.
 // Tone: Pending until the sweep closes (Running included: the dot needs it), Skip when skipped, Fail when the source was
-// lost, else by the worst recorded |error| (<= 100 mV Pass, <= 300 mV Partial, above Fail).
+// lost, else by the worst recorded |error| (<= 100 mV Pass, <= 300 mV Partial, above Fail). A sweep that carries a fold caution
+// (Reason::Folded) is graded by the worst |error| before the fold's onset instead (Summary::track_err_mv) and is never green: a
+// fold of any depth is amber (user decision 2026-11-16: a fold is a caution, never a fail), red only when the output failed to
+// track before it.
 // A PPS sweep split at 5 V has two steps (the part from 5 V up in Pd, the part below in PdLow): the strip stays ONE row per
 // APDO. Its range is the planned parts together (the recorded parts once any closed), its tone the two steps together: Pending
 // while either is pending or running, Fail when either failed, Skip when every part skipped, else graded by the worst error.
@@ -413,8 +416,10 @@ void sweep_row(Builder& b, std::span<const ct::Step> s, const ctsweep::View& v, 
     if (pending) tn = Tone::Pending;
     else if (failed) tn = Tone::Fail;
     else if (passed) {
-        const int worst = rw ? std::abs(int(rw->sum.worst_err)) : 0;
-        tn = worst <= 100 ? (folded ? Tone::Partial : Tone::Pass) : worst <= 300 ? Tone::Partial : Tone::Fail;   // a fold: amber, never red
+        // A caution (a fold) is graded by how the output tracked BEFORE the fold: the points after its onset are the fold, which is
+        // amber at any depth, never red. Any other sweep is graded by every recorded point.
+        const int worst = !rw ? 0 : folded ? int(rw->sum.track_err_mv) : std::abs(int(rw->sum.worst_err));
+        tn = worst <= 100 ? (folded ? Tone::Partial : Tone::Pass) : worst <= 300 ? Tone::Partial : Tone::Fail;
     } else if (skipped) tn = Tone::Skip;
     Token* k = b.token(true, tn);
     if (!k) return;

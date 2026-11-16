@@ -210,6 +210,47 @@ static void test_a_sweep_chip_takes_its_tone_from_the_sweep() {
     CHECK_EQ(tone_of(V::Pass, {-20, 450, 30}), int(rl::Tone::Fail));
     CHECK_EQ(tone_of(V::Fail, {-20, 30}), int(rl::Tone::Fail));          // a lost source, the points so far notwithstanding
 }
+// A voltage fold is a caution whatever its depth (user decision 2026-11-16): a sweep whose only deviation is the fold region reads
+// amber, never red, so the chip never contradicts a header that says 0 fail. The chip is graded by the tracking error BEFORE the
+// fold onset (ctsweep::Summary::track_err_mv): the points after the first fold are the fold, not tracking. A real tracking failure
+// before it (and any error on a sweep without a caution) keeps the 100 / 300 mV grading.
+static int fold_chip_tone(std::vector<int16_t> pts, ct::Reason reason, unsigned want_fold_from_mv, std::vector<ct::Step>* run = nullptr) {
+    auto s = baseus();
+    s.push_back(sweep_step(A::Pps, 7, 3248763456u, V::Pass));
+    s.back().reason = reason;
+    ctsweep::RowView rw; rw.pos = 7; rw.alg = uint8_t(A::Pps); rw.lo_mv = 5000; rw.hi_mv = 21000; rw.n = uint16_t(pts.size());
+    rw.sum = ctsweep::summarize(pts, 5000);
+    CHECK_EQ(unsigned(rw.sum.fold_from_mv), want_fold_from_mv);   // the vector means what the test says it means
+    ctsweep::View view; view.rows = std::span<const ctsweep::RowView>(&rw, 1); view.points = pts;
+    rl::Layout l; rl::build(l, s, {}, view);
+    if (run) *run = s;
+    const rl::Row* r = sweep_row_of(l, 7);
+    return r ? int(l.tokens[r->first].tone) : -1;
+}
+static void test_a_fold_only_sweep_is_amber_at_any_depth() {
+    const auto F = ct::Reason::Folded;
+    const int amber = int(rl::Tone::Partial), red = int(rl::Tone::Fail);
+    // The fold alone: the output tracks to 5.3 V, then falls 400 mV (and stays) - a caution, not a failure.
+    CHECK_EQ(fold_chip_tone({0, 0, 0, 0, -400, -400, -400}, F, 5400), amber);
+    // The FH22 shape: tracks within 100 mV, folds 1.5 V under the request from the first folded point on.
+    CHECK_EQ(fold_chip_tone({-20, -30, -20, -1200, -1500, -1600}, F, 5300), amber);
+    // A mild fold stays amber as before (the caution is never green).
+    CHECK_EQ(fold_chip_tone({0, 0, 0, -200, -200}, F, 5300), amber);
+    // Tracking error elsewhere keeps its grade: a steady 400 mV offset from the first point, then a fold, is a failure to track.
+    CHECK_EQ(fold_chip_tone({-400, -400, -400, -400, -900, -900}, F, 5400), red);
+    CHECK_EQ(fold_chip_tone({-250, -250, -250, -900, -900}, F, 5300), amber);   // 100..300 mV before the fold: amber, as ever
+    // Without the caution the chip is graded by every recorded point (a sweep that never got a Folded reason), as before.
+    CHECK_EQ(fold_chip_tone({0, 0, 0, 0, -400, -400, -400}, ct::Reason::None, 5400), red);
+    CHECK_EQ(fold_chip_tone({-400, -400, -400, -400}, ct::Reason::None, 0), red);     // no fold at all: a steady 400 mV offset
+    CHECK_EQ(fold_chip_tone({-20, 450, 450, 450}, ct::Reason::None, 0), red);          // a steady 450 mV excess
+    // The run says the same everywhere: no failed step, the fold step counted as a caution, so the chip may not be red.
+    std::vector<ct::Step> run;
+    CHECK_EQ(fold_chip_tone({0, 0, 0, 0, -400, -400, -400}, F, 5400, &run), amber);
+    rl::Tally t;
+    for (const auto& y : run) if (ct::is_sweep(y)) (rl::caution(y) ? ++t.capped : y.verdict == V::Fail ? ++t.fail : ++t.pass);
+    CHECK_EQ(t.fail, 0u);
+    CHECK_EQ(t.capped, 1u);
+}
 // A voltage fold the sweep found is a CAUTION: neither a pass nor a fail (User decision 2026-11-16, FH22). The sweep row and the fixed rows
 // of the APDO that sit on the folded side keep their Pass verdict and carry Reason::Folded; every surface reads them amber, the
 // band says CAUTION, and the tally counts them in its own (capped) column - never pass, never fail.
@@ -1222,6 +1263,7 @@ int main() {
     test_a_sweep_row_names_the_capped_range();
     test_an_avs_sweep_row_is_one_range_chip();
     test_a_sweep_chip_takes_its_tone_from_the_sweep();
+    test_a_fold_only_sweep_is_amber_at_any_depth();
     test_a_fold_is_a_caution_not_a_pass_and_not_a_fail();
     test_roll_up_is_one_table();
     test_a_capped_range_chip_is_amber_and_keeps_the_advertised_range();
