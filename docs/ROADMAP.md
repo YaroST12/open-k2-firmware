@@ -1191,8 +1191,11 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
 - **PD Spec Check** (`K2_PDSPEC=1` builds only, k2/pd-spec-check; engine, remote protocol and host tools host-tested, the
   page and its Ui binding compile-checked only until the next full test run; `docs/PD_SPEC_CHECK.md`). No-load
   conformance pass: fixed-level pairs up and down, PPS 20 mV steps, PPS and EPR keep-alive timeouts, Hard Reset and detach
-  recovery, 21 checks judged against named spec limits, pass / fail / skip and a penalty score (0 = ideal); Tools > PD Spec
-  Check (Setup, Review, Running, Results, Detail), remote 0x5A, `k2_remote pd-spec`, `tools/pd_spec.py`. Validate
+  recovery, 21 checks judged against named spec limits, pass / fail / skip and a penalty score (0 = ideal); remote 0x5A,
+  `k2_remote pd-spec`, `tools/pd_spec.py`. The polite part (Transitions, PPS / AVS, source reset: 27 checks) also runs as the
+  last stage of a Deep charger test and fills a "PD spec" section of its results grid (k2/spec-in-deep, built only, host-tested;
+  the Tools page is gone). Validate that on hardware with a Deep run (`ct_start.py --level deep`): the section appears, VBUS ends
+  at 5 V, no Hard Reset in the Black Box. Validate
   (hardware, output empty, K2 powered from the PC, a PD charger with PPS on the bottom port, active sink via
   `k2_remote pd attach` before each run): (1) `pd_spec.py run --charger NAME --confirm` twice; `k2_remote ping` uptime covers each run
   (no reboot); every family ends at 5 V (`[PDSPEC] item` lines, VBUS back at 5 V after each); the second run's verdicts
@@ -1312,7 +1315,7 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
 | Attach/detach, inline-load detection and guard | done | verified | `pd_link`, `link`, `link_guard` | |
 | PD trigger (Request, PPS/AVS voltage, voltage-cap safety) | done | verified (lone charger) | `pd_sink` | HV |
 | PPS step-down of a running contract | done | partial: small steps verified, a direct 21 V to 13 V step aborts at the +10 % guard | `pd_sink` | HV |
-| PD Spec Check: no-load conformance of the attached charger, 21 checks against named spec limits, score 0 = ideal (`docs/PD_SPEC_CHECK.md`) | done, opt-in (`K2_PDSPEC=1`) | not verified (engine, protocol and tools host-tested; see Not verified) | `k2::pdspec`, `PdSpecSession`, `PdSpecPage` | HV |
+| PD Spec Check: no-load conformance of the attached charger, 21 checks against named spec limits, score 0 = ideal; its polite 27 checks are a Deep charger-test section (`docs/PD_SPEC_CHECK.md`) | done, opt-in (`K2_PDSPEC=1`) | not verified (engine, protocol, tools and the Deep section host-tested; see Not verified) | `k2::pdspec`, `PdSpecSession`, `specsec` | HV |
 | Identify (identity, SVIDs, modes, sink caps) | done (an action of the Connection page) | verified (Pixel) | `pd_identify` | |
 | Connection page: Source, Cable and Sink tabs, Actions pop-up (Refresh, Share, Read cable, Save cable, Spoof as, Saved cables, Identify) | done | hardware pass of the page still open | `ui_connection_page`, `pdtabs`, `usblink` | |
 | Pixel replug after Identify | open | not verified | `pd_link`, `pd_identify` | |

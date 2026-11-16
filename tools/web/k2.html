@@ -3119,7 +3119,7 @@ var K2Kit = (function () {
 
   // ---- PD Spec Check result ------------------------------------------------------------------------------------------------
   // The blob (k2proto decodePdSpecBlob) as a KvTable head, a ResultGrid with one line per check in the device's order
-  // (ui_pdspec_page.cpp kOrder: the transitions, the PPS/AVS checks, the timeouts, Hard Reset, detach, source), one line per
+  // (the engine's check order, pdspec/result.hpp: the transitions, the PPS/AVS checks, the timeouts, Hard Reset, detach, source), one line per
   // programmable pass, and one tone footer. p is the k2proto namespace (value / limit formatting in the K2's own words). Inferred
   // checks carry no penalty and show as the outlined amber "unverified" cell.
   var SPEC_ORDER = ["accept_time", "ps_rdy_time", "src_start", "ps_rdy_early", "ps_rdy_low", "rise_time", "fall_time", "overshoot", "accuracy",

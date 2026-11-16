@@ -503,7 +503,7 @@ It is drawn by the page today (`paint_detail`). It belongs in the kit beside Ale
 | Cells | x61..223, up to 5 per row, equal width, 1 px `kBg` gaps |
 | Row, volts only | 26 px: a 25 px cell |
 | Row with currents | 40 px: a 24 px cell, then one bracket per run of equal current: font 12 `kDim` text at y+25, a line at y+31 with 3 px end ticks |
-| Section | a 2 px `kRule` above the first row of a family; no header text |
+| Section | a 2 px `kRule` above the first row of a family; no header text. A Deep run's PD spec section follows the same rule (above the PPS block, the AVS block and the observer; cells carry the worst value, 8-character labels from `spec_text.hpp`) |
 | Lone cell that never ran | spells its reason: `None`, `no reply`, `needs load` |
 | Focus (Results) | the label strip turns `kFocusT` with the 3 px bar; label and bracket text turn `kFocus` |
 | Scroll | by pixels, whole rows only, up to 8 rows on screen |

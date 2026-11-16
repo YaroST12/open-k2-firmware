@@ -60,7 +60,7 @@ constexpr std::int16_t quantize(sc::Unit u, std::int32_t v) {
     if (r < -32766) r = -32766;
     return static_cast<std::int16_t>(r);
 }
-// The value back in the unit (pdspec::kNever for kUnseen), as the old Spec page's put_value took it.
+// The value back in the unit (pdspec::kNever for kUnseen), as the grid and the detail page show it.
 constexpr std::int32_t dequantize(sc::Unit u, std::int16_t s) { return s == kUnseen ? sc::kNever : static_cast<std::int32_t>(s) * unit_step(u); }
 
 // One check's outcome. code: bits 0..2 = pdspec::Verdict (0 = Pending: nothing judged), bits 3..6 = pdspec::Skip; fails saturates.

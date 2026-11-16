@@ -724,6 +724,21 @@ current is 40 px (cells 24 px plus one bracket per run of equal current), a volt
 opens with a 2 px section rule. A unit that never ran spells the reason as its one cell. The focused unit lights its label
 strip. The grid scrolls by pixel height (`list_state()` reports the grid's own first/visible values) and a last
 pseudo-row, `Changes` (`N changed`), follows the units when the run saw the source change its offers.
+
+### PD spec section (Deep run, K2_PDSPEC build)
+
+A Deep run ends with one more stage, `State::Spec`: the pdspec engine (`include/k2/pdspec/`) runs on the live PD link, Transitions
+and PPS / AVS families only (mask 0x03), plus the Source reset observer. It is the polite part of the standalone PD Spec Check
+(`docs/PD_SPEC_CHECK.md`, "Deep run"): no keep-alive silence, no Hard Reset, no detach, nothing above what the charger advertised.
+The stage is planned only for a Deep level with the full Pd unit in the plan, on a build that links the engine and with `Options::spec` on (`spec_planned`); Review lists it as a step and the
+Running footer names it. A stop (BACK) asks the engine to end in order (the charger back at 5 V, `kStopGraceMs` grace, then it is
+ended hard); a lost link ends it as a fault. The default image has no spec stage and nothing in this page changes.
+
+The grid gains a section after the units: 27 VerdictCells (`specsec::kOrder`, labels in `spec_text.hpp`, at most 8 characters in
+the 52 px label strip) in the ordinary rows, a 2 px rule above the PPS block, the AVS block and the observer. A cell shows the worst value (or, for a skipped check, the
+reason, struck out); OK on a cell opens `SpecDetail`: the verdict band,
+then Worst, Limit, Count, Fails, At and Penalty. The journal keeps the section (`Type::Spec`, journal format 3); the report card
+does not. Remote `0x0B [6, off]` reads it; `ct_start.py` and the web grid (`ctgrid.js`) show it as its own section.
 `result_layout` turns the run's steps into rows and tokens (`build`; the on-device grid has no header rows, a skip tag
 glued to a token is not drawn), `wrap` fits them to the cell area (`Metrics{adv, pad, gap, avail, mark, max_groups, cells}`:
 the grid sets `cells` (equal-width cells, only the head's volt text counts) and `max_groups = 5` (163 px at 8 px advance);

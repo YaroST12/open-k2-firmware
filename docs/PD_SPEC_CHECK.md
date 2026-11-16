@@ -12,8 +12,9 @@ counted events; PD Spec Check is polite and judges every measurement against a n
 
 Source of truth: `include/k2/pdspec/` (`plan.hpp` the levels and the walk, `analyze.hpp` the capture analysis, `engine.hpp` the
 state machine over an `Env` seam, `result.hpp` the checks, limits, weights and the result blob), the limits in
-`include/k2/pd/pd_spec_timing.hpp`, the session glue `include/k2/ui/pd_spec_session.hpp` + `src/ui/ui_pdspec.cpp`, the page
-`src/ui/ui_pdspec_page.cpp`, the host side `tools/pd_spec.py`, `tools/pdspec_blob.py` and `k2_remote pd-spec`.
+`include/k2/pd/pd_spec_timing.hpp`, the session glue `include/k2/ui/pd_spec_session.hpp` + `src/ui/ui_pdspec.cpp`, the Deep charger-test section
+`include/k2/chargertest/spec_section.hpp`, the host side `tools/pd_spec.py`, `tools/pdspec_blob.py` and `k2_remote pd-spec`. There is no
+spec-check page on the K2 any more (removed 2026-11-16): the checks run as the last stage of a Deep charger test ("Deep run" below).
 
 ## What it is and is not
 
@@ -246,19 +247,34 @@ and leaves VBUS at 0 V, and a second run needs `pd attach` again (hardware 2026-
 
 ## Use
 
-On the K2: Tools > PD Spec Check (or the Charger place's "Spec check" row).
+On the K2 the checks are part of the charger test's **Deep** level (a K2_PDSPEC build; the default image has no spec stage and its Deep
+run is unchanged). The full six-family run, with the keep-alive, Hard Reset and detach checks, is the standalone tooling below
+(`pd_spec.py`, `k2_remote pd-spec`, the web Spec check page).
 
-1. **Setup**: the six families as checkboxes (each with a one-line note), Done; "Last result" once a run exists.
-2. **Review**: what will run (checks, charger, ceiling, EPR, output) and START with the two-press confirm. A refusal lands in the
-   footer ("No PD source", "K2 runs on this charger", ...).
-3. **Running**: family and item, elapsed time, a progress bar, the live VBUS and the fail and score counts. BACK stops; the footer
-   says "Stopped" once the charger is back at 5 V.
-4. **Results**: the score, the pass / fail / skip tallies (an unverified check is in none of them) and one ResultGrid row per check (worst value or the skip reason in the
-   cell; rows grouped as transitions, PPS, AVS, timers, Hard Reset, detach, source reset). OK opens a check's **Detail**: verdict,
-   worst value, limit, count, fails, where (PDO pair, or "APDO p cC up/dn V.vV": the APDO, the step class, the direction and the
-   level) and penalty.
+### Deep run
 
-While a run goes on, any other page shows a one-line footer ("PD Spec: Transitions 12/56", "PD Spec: PPS/AVS 3/16"), and the session block names the owner
+Light, Medium and Deep stay the three levels. A Deep run, after its units, runs the engine once more (`State::Spec` in the charger-test
+`Runner`, `Env::spec_start / spec_stop / spec_collect / spec_done`; the session glue is `ChargerTestSession` in
+`src/ui/ui_charger_test.cpp`, which drives `PdSpecSession::start_in_test()`). The Review page of a Deep run names the stage and counts it
+in the plan's steps; the Running footer reads "PD spec ..." while it goes.
+
+It is a polite, no-load conformance run: nothing in it lies to the charger or asks above what the charger advertised.
+
+- **Runs:** the Transitions family (fixed level pairs, up and down) and PPS / AVS (sweeps and slams inside each advertised APDO range),
+  plus the Source reset observer (it only watches). The engine families mask is `0x03`. The result is 27 checks (`specsec::kOrder`).
+- **Left out, on purpose:** PPS keep-alive and EPR keep-alive (the source Hard Resets by design), Hard Reset (the K2's own) and Detach
+  (Rd off). They stay in the standalone tooling.
+- **Session:** `start_in_test()` runs on the live link the test already owns: no foreign-busy check, no Rd take-over, no give-back, no
+  footer of its own. The standalone `start()` (the remote `pd-spec` command) keeps all of those.
+- **Results grid:** the section follows the units, one VerdictCell per check, rules above the PPS block, the AVS block and the
+  observer. A cell's detail page shows the worst value, the limit and the verdict. A stage that did not run (no PD unit, a stop, a refusal) leaves the section out.
+- **Record:** the journal keeps it (`Type::Spec`, journal format 3, `/jr/sp.rec`, written once when the stage ends). The report card
+  does not carry the cells. The remote reads the section with `0x0B [6, off]` (`encode_charger_test_spec`); `ct_start.py` and the `k2_remote` charger-test
+  export carry it in their summary and files; the web charger-test grid draws it (`tools/web/ctgrid.js`).
+- **Owner:** the stage holds the session while it runs, so `BusyWhy::PdSpec` (12) can still appear on the wire; the dead-man lease
+  leaves it alone.
+
+While a standalone run (the remote `pd-spec start`) goes on, any other page shows a one-line footer ("PD Spec: Transitions 12/56", "PD Spec: PPS/AVS 3/16"), and the session block names the owner
 (`BusyWhy::PdSpec`, 12; `pd-spec` in `k2_remote` and the web page). The dead-man lease leaves a run alone (`Ui::run_busy`): a host
 that goes away leaves the run to finish within its 20 min cap.
 
@@ -475,7 +491,7 @@ ops 0 status, 1 start, 2 read result (48-byte chunks), 3 stop. Start needs the c
 A run started on the attach of a lab `pd-reread` (the usual way to get a contract on a brick before the run) takes that attach over
 (`fusb302::reread_take_over()` in `start_run`): the re-read's 30 s release timer is cancelled and the Rd and contract belong to the run.
 The release never fires while a run owns the line, so a run cannot be cut by it (hardware 2026-11-11 saw it at a Soft_Reset step). From the
-start (and from a resume) the run presents its own Rd (`fusb302::rd_for_run(true)`, as PD Spec Check and a charger-test START do): a run
+start (and from a resume) the run presents its own Rd (`fusb302::rd_for_run(true)`, as the Deep spec stage and a charger-test START do): a run
 started on a contract that was still up had Rd only through the sink's demand, which a source Hard Reset ends with the contract, so the
 Rd went 300 ms later and the source never came back. At the end (`on_finish`) the run gives that Rd back.
 
