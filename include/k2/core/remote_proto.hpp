@@ -2171,6 +2171,10 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
         }
         return reply_n(encode_ufcs(buf, backend.ufcs_info()));
     }
+#if !K2_LOOPPROBE
+    case Cmd::LoopProbe:   // K2_LOOPPROBE=0: not built in, the command is unknown
+        return reply(Status::UnknownCmd);
+#else
     case Cmd::LoopProbe: {
         if (p.size() != 2 && p.size() != 3) return reply(Status::BadLength);
         const uint16_t off = detail::rd16(&p[0]);
@@ -2185,6 +2189,7 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
         buf[2] = uint8_t(total); buf[3] = uint8_t(total >> 8); buf[4] = uint8_t(n);
         return reply_n(5 + n);
     }
+#endif
     // ---- PD Stress (K2_PDSTRESS=0: not built in, the command is unknown) ----
 #if K2_PDSTRESS
     case Cmd::PdStress: {

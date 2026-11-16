@@ -17,8 +17,10 @@
 #include "k2/ui/ui_spoof.hpp"
 #include "k2/ui/ui_cards.hpp"
 #include "k2/ui/ui_twin.hpp"
-#include "k2/ui/ui_loop_probe.hpp"
 #include "k2/core/build_config.h"
+#if K2_LOOPPROBE
+#include "k2/ui/ui_loop_probe.hpp"
+#endif
 #if K2_PDSTRESS
 #include "k2/ui/ui_pdstress_page.hpp"
 #endif
@@ -75,8 +77,11 @@ inline constexpr std::size_t kLongestMenuChain =
     std::max({arena_bytes<ConnectionPage, EmarkerPage, SharePage>(), arena_bytes<ConnectionPage, SpoofPage>(),
               arena_bytes<ConnectionPage, PdTriggerPage>(), arena_bytes<ConnectionPage, TriggerPage>(),
               arena_bytes<ConnectionPage, CardsPage, SharePage>(), arena_bytes<ConnectionPage, CableRPage>(),
-              arena_bytes<ConnectionPage, LoopProbePage, SharePage>(), arena_bytes<ConnectionPage, TwinPage>(),
+              arena_bytes<ConnectionPage, TwinPage>(),
               arena_bytes<ConnectionPage, SharePage>(),
+#if K2_LOOPPROBE
+              arena_bytes<ConnectionPage, LoopProbePage, SharePage>(), arena_bytes<LoopProbePage, SharePage>(),
+#endif
 #if K2_PDSTRESS
               arena_bytes<ConnectionPage, PdStressPage>(),
 #endif
@@ -85,17 +90,21 @@ inline constexpr std::size_t kLongestMenuChain =
 #endif
               arena_bytes<TriggerPage, EmarkerPage, ConnectionPage>(), arena_bytes<CardsPage, SharePage>(),
               arena_bytes<DiagnosisPage, BlackBoxPage, SharePage>(), arena_bytes<BlackBoxPage, SharePage>(),
-              arena_bytes<LoopProbePage, SharePage>(), arena_bytes<BatteryPage, SharePage>(), arena_bytes<QrTestPage>(),
+              arena_bytes<BatteryPage, SharePage>(), arena_bytes<QrTestPage>(),
               arena_bytes<DiagPage, SharePage>(), arena_bytes<UsbLinkPage>(), arena_bytes<AutorotatePage>(), arena_bytes<MemoryPage>()});
 inline constexpr std::size_t kLongestChain = kLargestBase + kLongestMenuChain;   // the deepest rotation page + the deepest menus
 inline constexpr std::size_t kPageArenaBytes = kLongestChain;
 // The named worst cases (each rotation page that has one, the review's reachable chains) hold by construction; spelled out so
 // a page that grows or a new chain shows up in the diff of this file, not as a refused menu on a device.
+#if K2_LOOPPROBE
 static_assert(kPageArenaBytes >= arena_bytes<ChargerTestPage, ConnectionPage, LoopProbePage, SharePage>(), "charger test + loop probe card");
+#endif
 static_assert(kPageArenaBytes >= arena_bytes<ChargerTestPage, ConnectionPage, TwinPage>(), "charger test + twins");
 static_assert(kPageArenaBytes >= arena_bytes<DetailPage, ConnectionPage, TwinPage>(), "detail + twins");
+#if K2_LOOPPROBE
 static_assert(kPageArenaBytes >= arena_bytes<DetailPage, ConnectionPage, LoopProbePage>(), "detail + loop probe");
 static_assert(kPageArenaBytes >= arena_bytes<HomePage, ConnectionPage, LoopProbePage, SharePage>(), "home + loop probe card");
+#endif
 static_assert(kPageArenaBytes >= arena_bytes<ToolsPage, ConnectionPage, EmarkerPage, SharePage>(), "the deepest Tools chain fits");
 static_assert(kPageArenaBytes >= arena_bytes<ChargerTestPage, BlackBoxPage>(), "black box opens over charger test");
 static_assert(kPageArenaBytes >= arena_bytes<ToolsPage, QrTestPage>(), "the qrtest page fits over Tools");
@@ -202,8 +211,10 @@ public:
     const QrTestPage &qrtest_page() const { return *find<QrTestPage>(Menu::QrTest); }
     // The open Device twins page (host tests); it exists only while Menu::Twin is on the stack. Not const: peek() builds a row.
     TwinPage &twin_page() { return *find<TwinPage>(Menu::Twin); }
+#if K2_LOOPPROBE
     // The Loop probe page while Menu::LoopProbe is on the stack, else nullptr (host tests).
     LoopProbePage *loop_probe_page() const { return find<LoopProbePage>(Menu::LoopProbe); }
+#endif
     // The PD Stress page while Menu::PdStress is on the stack, else nullptr (host tests).
 #if K2_PDSTRESS
     PdStressPage *pd_stress_page() const { return find<PdStressPage>(Menu::PdStress); }
@@ -335,7 +346,11 @@ public:
     }
     bool twin_live_busy() const;
     // A loop probe run (Tools -> Loop probe) drives D+/D-, the backlight and the K2's own Rd: the ports are its until it ends.
+#if K2_LOOPPROBE
     bool loop_probe_busy() const;
+#else
+    bool loop_probe_busy() const { return false; }   // K2_LOOPPROBE=0: the tool is not built in
+#endif
     // What the twin live runner needs from the UI: the clock, the monitor ceiling, the latest VBUS and who else owns the ports
     // (the twin run itself is not "else"). The remote's `twin run` and the Device twins page start a run with it.
     twin_hw::LiveCtx twin_ctx(uint32_t now_ms) const;

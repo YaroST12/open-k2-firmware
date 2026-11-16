@@ -24,7 +24,12 @@
  * K2_PDSPEC  1 = Tools > PD Spec Check (the no-load PD conformance check, docs/PD_SPEC_CHECK.md), its remote command (0x5A)
  *               and its page are built in.
  *            0 = none of it (the default while flash is short): the remote answers UnknownCmd, the Tools row is not shown.
- *                The host tests pass -DK2_PDSPEC=1; `make K2_PDSPEC=1` builds the tool in. */
+ *                The host tests pass -DK2_PDSPEC=1; `make K2_PDSPEC=1` builds the tool in.
+ *
+ * K2_LOOPPROBE  1 = Tools > Loop probe (the HID-cable loop probe, docs/LOOP_PROBE.md): its page, session, stored result and
+ *                   the remote command 0x57 (LOOP_PROBE) are built in.
+ *               0 = none of it (the default while flash is short): the remote answers UnknownCmd, the Bench has no Loop probe row.
+ *                   The host tests pass -DK2_LOOPPROBE=1; `make K2_LOOPPROBE=1` builds the tool in. */
 /* K2_WHOS_ATTACHED  1 = Tools > Charger ID / Cable read / Device ID open the old tabbed "Who's attached" page on that tab
  *                     (tab strip, Tab+/Tab-, the action pop-up).
  *                   0 = each opens its own single tool: one tab, no strip, OK runs the tool's action, the other actions are
@@ -54,6 +59,10 @@
 #define K2_PDSPEC 0
 #endif
 
+#ifndef K2_LOOPPROBE
+#define K2_LOOPPROBE 0
+#endif
+
 #ifndef K2_WHOS_ATTACHED
 #define K2_WHOS_ATTACHED 0
 #endif
@@ -67,6 +76,9 @@
  *                 0 = none of it (the default). The pure half (host_report.cpp, usb_fp.cpp) is host-tested either way. */
 #ifndef K2_HOST_REPORT
 #define K2_HOST_REPORT 0
+#endif
+#if K2_HOST_REPORT && !K2_LOOPPROBE
+#error "K2_HOST_REPORT=1 needs K2_LOOPPROBE=1: the Host report is a view of the Loop probe"
 #endif
 
 #endif /* K2_BUILD_CONFIG_H_ */

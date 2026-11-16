@@ -74,7 +74,8 @@ Faces (MINUS / PLUS flips, wraps)            OK opens the Bench     BACK returns
    |                Request voltage (PD trigger), Fast charge (FC trigger), Report cards
    |                [Stress test, Spec check: only in builds that carry them]
   Cable ......... the e-marker; own read: Read e-marker
-   |                Save cable, Saved cables, Spoof as..., Resistance (Cable R), Loop probe
+   |                Save cable, Saved cables, Spoof as..., Resistance (Cable R)
+   |                [Loop probe: only in builds that carry it]
   Device ........ what it asks for; own read: Ask device
    |                Twins (Device twins)
   Battery ....... the charge-efficiency recorder
@@ -261,7 +262,7 @@ The list of seven places. Each row shows a one-line status. MINUS / PLUS select 
 | :--- | :--- | :--- |
 | Meter | "No VBUS", or the live W, V and A | the last face |
 | Charger | "PD3.x 100W, 6 offers", "<protocol> on the lines" or "None on either port" | the Charger place: the offers and these actions: **Test charger**, **Request voltage**, **Fast charge**, **Report cards**, and in builds that carry them **Stress test** and **Spec check** |
-| Cable | "5A 20V, 100W" or "Not read" | the Cable place: the e-marker, with **Read e-marker**, **Save cable**, **Saved cables**, **Spoof as...**, **Resistance** (Cable R) and **Loop probe** |
+| Cable | "5A 20V, 100W" or "Not read" | the Cable place: the e-marker, with **Read e-marker**, **Save cable**, **Saved cables**, **Spoof as...**, **Resistance** (Cable R) and, in builds made with `K2_LOOPPROBE=1`, **Loop probe** |
 | Device | "Asks 20V 3A, gets 60W" or "None inline" | the Device place: what the attached device asks for, with **Ask device** and **Twins** |
 | Battery | "No run", "Charging 1h05m, 12.34Wh", "Round trip 80.0%" | the [Battery recorder](#battery-recorder) |
 | Log | the PD diagnosis and the number of captures | the PD diagnosis with its findings and the [Black Box](#black-box) |
@@ -356,7 +357,7 @@ MINUS / PLUS select (they stop at the first and last row). OK opens, toggles or 
 
 ## Tools reference
 
-Each tool opens from a place on the Bench: the Charger place has Request voltage (PD trigger), Fast charge (FC trigger), Report cards and, in builds that carry them, Stress test and Spec check; the Cable place has Resistance (Cable R), Loop probe, Saved cables and Spoof as...; the Device place has Twins; the Log place holds the PD diagnosis and the Black Box; the K2 place holds System state (Diag). BACK from a tool returns to its place.
+Each tool opens from a place on the Bench: the Charger place has Request voltage (PD trigger), Fast charge (FC trigger), Report cards and, in builds that carry them, Stress test and Spec check; the Cable place has Resistance (Cable R), Saved cables and Spoof as... and, in builds made with `K2_LOOPPROBE=1`, Loop probe (a build option since 2026-11-16: the default build does not have it); the Device place has Twins; the Log place holds the PD diagnosis and the Black Box; the K2 place holds System state (Diag). BACK from a tool returns to its place.
 
 ### FC trigger
 

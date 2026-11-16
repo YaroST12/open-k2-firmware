@@ -15,7 +15,7 @@ components and their licences.
 - **USB-PD analyzer**: passive by default; decodes the charger's offers (Fixed, PPS, AVS, EPR), reads the partner's identity, and can request a PDO or a PPS/AVS voltage (**PD trigger**).
 - **Fast-charge triggers** on D+/D-: QC, AFC, FCP/SCP, VOOC and a one-click auto detector.
 - **Charger test**: guided no-load voltage sweeps with per-step results, saved as report cards you can share as a QR code.
-- **Cables**: e-marker read and save (library of up to 140), cable-identity Spoof, cable resistance.
+- **Cables**: e-marker read and save (library of up to 140), cable-identity Spoof, cable resistance. The HID-cable Loop probe is a build option (`K2_LOOPPROBE=1`, see `docs/LOOP_PROBE.md`); the default build does not have it.
 - **Black Box**: a PD trace recorder with trigger-frozen captures that survive power-off.
 - **USB**: remote control (`tools/k2_remote.py`), a browser dashboard, a read-only drive, and a WebHID flasher.
 

@@ -52,8 +52,10 @@
 #include "k2/twin/twin_hw.hpp"
 #include "k2/twin/wire.hpp"
 #include "k2/ui/ui_qrtest.hpp"
-#include "k2/loopprobe/loop_probe_hw.hpp"
 #include "k2/core/build_config.h"
+#if K2_LOOPPROBE
+#include "k2/loopprobe/loop_probe_hw.hpp"
+#endif
 #if K2_HOST_REPORT
 #include "k2/loopprobe/host_report_hw.hpp"
 #endif
@@ -1363,9 +1365,15 @@ size_t Remote::pdspec_read(uint16_t, std::span<uint8_t>) { return 0; }
 #endif
 // ---- end PD Spec Check ----
 
+#if K2_LOOPPROBE
 uint16_t Remote::loopprobe_len() { return loopprobe::hw::file_len(); }
 
 size_t Remote::loopprobe_read(uint16_t off, std::span<uint8_t> out) { return loopprobe::hw::file_read(off, out); }
+#else
+// K2_LOOPPROBE=0: the dispatcher answers the command UnknownCmd and never calls these; they only satisfy the backend concept.
+uint16_t Remote::loopprobe_len() { return 0; }
+size_t Remote::loopprobe_read(uint16_t, std::span<uint8_t>) { return 0; }
+#endif
 
 #if K2_HOST_REPORT
 uint16_t Remote::hostreport_len() { return loopprobe::host::hw::file_len(); }

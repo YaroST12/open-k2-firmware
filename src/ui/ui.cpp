@@ -21,7 +21,9 @@
 #include "k2/drivers/systick.hpp"
 #include "k2/drivers/usb.hpp"
 #include "k2/drivers/buttons.hpp"
+#if K2_LOOPPROBE
 #include "k2/loopprobe/loop_probe_hw.hpp"
+#endif
 #include "k2/ui/kit.hpp"
 #include "k2/ui/text.hpp"
 #include "k2/ui/ui_calc.hpp"
@@ -85,7 +87,9 @@ PageIf *Ui::build_menu(Menu m) {
     case Menu::Autorotate: return pages_.push<AutorotatePage>(ctx_);
     case Menu::QrTest: return pages_.push<QrTestPage>(ctx_);
     case Menu::Twin: return pages_.push<TwinPage>(ctx_);
+#if K2_LOOPPROBE
     case Menu::LoopProbe: return pages_.push<LoopProbePage>(ctx_);
+#endif
 #if K2_PDSTRESS
     case Menu::PdStress: return pages_.push<PdStressPage>(ctx_);
 #endif
@@ -147,10 +151,12 @@ void Ui::init(uint32_t now_ms, bool cancel_resume) {
     else pdstress_.boot_restore(cancel_resume, now_ms);   // a PD Stress journal resumes by itself once VBUS is steady
 #endif
     booting_ = false;
+#if K2_LOOPPROBE
     // A loop probe record still marked in progress: the K2 restarted inside its CC step. Close it (CC Interrupted / Rebooted);
     // Tools -> Loop probe and `k2_remote loop-probe` report it. The probe itself never resumes.
     if (const auto step = loopprobe::boot_check(loopprobe::hw::store()))
         K2LOG("[LPRB] boot: closed the run interrupted in %s\n", loopprobe::step_name(*step));
+#endif
     K2LOG("[ROT] Settings > Autorotate: auto or manual\n");
 }
 
@@ -344,13 +350,17 @@ void Ui::cancel_runs() {
 #if K2_PDSPEC
     pdspec_.cancel();
 #endif
+#if K2_LOOPPROBE
     if (LoopProbePage *probe = find<LoopProbePage>(Menu::LoopProbe)) probe->cancel(ctx_.now);
+#endif
 }
 
+#if K2_LOOPPROBE
 bool Ui::loop_probe_busy() const {
     const LoopProbePage *probe = find<LoopProbePage>(Menu::LoopProbe);
     return probe && probe->running();
 }
+#endif
 
 // The hold that START's own PDO 1 request puts on the sink (Rd presented for a run) is not a foreign tool, and neither is the
 // self-hold of a self-powered or bus-powered K2 (its own plain 5 V contract): that hold is the K2's supply, so releasing it
@@ -1376,7 +1386,9 @@ K2_HOT UiAction Ui::tick(uint32_t now_ms) {
     ctx_.vbus_fast_mv = power::vbus_fast_mv().value_or(ctx_.pm.vbus_mv);
     const auto previous_release = fc_release_.state();
     if (TriggerPage *trigger = find<TriggerPage>(Menu::Trigger)) trigger->poll();   // no page, no session: leave() ended it
+#if K2_LOOPPROBE
     if (LoopProbePage *probe = find<LoopProbePage>(Menu::LoopProbe)) probe->poll(now_ms);   // the same: leaving the page ends a run
+#endif
     const auto fs = fctrig::status().state;
     const auto &sk = fusb302::sink_status();
     const bool released = fs == fc::State::Idle && !fctrig::scan_running() && !fctrig::svooc_running() &&

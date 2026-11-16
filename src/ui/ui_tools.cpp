@@ -109,7 +109,9 @@ constexpr Act kCharger[] = {
 };
 constexpr Act kCable[] = {
     {"Resistance", K::Tool, 3, nullptr},
+#if K2_LOOPPROBE
     {"Loop probe", K::Tool, 12, nullptr},
+#endif
 };
 constexpr Act kDevice[] = {
     {"Twins", K::Tool, 11, nullptr},

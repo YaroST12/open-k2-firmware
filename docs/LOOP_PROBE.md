@@ -1,5 +1,9 @@
 # HID-cable loop probe
 
+**Opt-in build: `K2_LOOPPROBE=1`** (`make docker-build K2_LOOPPROBE=1`; off by default since 2026-11-16 for the flash budget: the
+default image has no Loop probe row and the remote answers command 0x57 UnknownCmd; the host tests always build it; the Host
+report below also needs `K2_HOST_REPORT=1`).
+
 A research lab on the K2 (Tools > Loop probe). It reads what a cable looped from the K2's PD-bus port back into its own
 HID port shows, at 5 V only, and keeps the raw numbers. It gives no verdict on the K2: the reading of the numbers is
 done on the host, with this page as the guide.
