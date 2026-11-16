@@ -674,8 +674,11 @@ How a PD row is judged and how long it waits. All of it is host-tested; none of 
   "CAUTION: folds back", Detail band and footer, sweep-row footer, card row "folds to 19.4V" and sheet "Caution" with a Note
   row (card format v10 packs `fold_dv` / `fold_from_dv` in the sweep word; a card caution is `fold_dv != 0` with no range
   failure), `tools/charger_summary.py`, `tools/web/k2proto.js` / `ctgrid.js` / `k2.html` and `docs/site/r/card.js`. Wire
-  schema 1 maps `Folded` to a plain pass; schema 2 carries the reason. Host tests: `test_a_fold_the_sweep_finds_is_a_caution_on_the_apdos_rows` in
-  `tests/test_charger_test.cpp`, `tests/test_sweep.cpp`, `tests/test_ui_charger_test.cpp`
+  schema 1 maps `Folded` to a plain pass; schema 2 carries the reason. A card range that also failed (the FH22
+  PPS 5-21 V range, whose 21 V rows end Capped) keeps its "caps" text: the card holds no per-step verdicts, so the Capped
+  finding reads instead of the fold note, both amber; the device's sweep row for that APDO still reads CAUTION. The `[SWEEP]`
+  and `[TEST]` log lines print the engine words, so a folded sweep logs "pass" followed by the reason "output folds back". Host tests: `test_a_fold_the_sweep_finds_is_a_caution_on_the_apdos_rows`,
+  `test_the_fh22_list_cautions_pdo6_and_pdo7` (PDO6 PPS 5-21 V, PDO7 SPR AVS 9-20 V) in `tests/test_charger_test.cpp`, `tests/test_sweep.cpp`, `tests/test_ui_charger_test.cpp`
   (`test_a_voltage_fold_reads_as_a_caution`), `tests/test_ui_no_truncation.cpp`.
 - **PS_RDY timing is noted, never judged.** The sink stamps Accept and PS_RDY; per row the runner latches three flags in
   `Evidence::timing`: bit 0 PS_RDY while VBUS was outside the row's band (`early-ps-rdy`), bit 1 PS_RDY inferred by the sink
