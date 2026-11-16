@@ -66,6 +66,15 @@ TERMINAL = ("done", "stopped", "unsafe", "aborted", "failed")
 def preflight(link, sleep=time.sleep):
     """None when a run may start, else the refusal text. A PD charger whose caps were not read is rescanned once."""
     st = kr.cmd_state(link, None)
+    if st["vbus_mv"] < MIN_VBUS_MV and st.get("inline", False):
+        # Inline, a reading under the floor may be the fall of a USB-A port's auto-off cut (pattern usb-a-no-load-auto-off: a
+        # healthy source, back within ~2 s, 1.0.2-137 read the first sample of one and called the source unsafe): wait for VBUS
+        # before refusing, as the rescan below does.
+        waited = 0.0
+        while st["vbus_mv"] < MIN_VBUS_MV and waited < VBUS_WAIT_S:
+            sleep(0.5)
+            waited += 0.5
+            st = kr.cmd_state(link, None)
     if st["vbus_mv"] < MIN_VBUS_MV and not st.get("inline", False):
         # A charger alone on the bottom port gets no VBUS without Rd, and plain boot presents none. A sleeping
         # source (pattern slow-rp-wake) answers 1.1-1.7 s after a steady Rd, so wait for VBUS to come up on its

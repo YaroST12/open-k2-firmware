@@ -22,7 +22,15 @@ class Preflight(unittest.TestCase):
             return ct_start.preflight(None, sleep=lambda s: None)
 
     def test_low_vbus_inline_refused(self):
-        self.assertIn("4.30 V", self.run_pf([{"vbus_mv": 4300, "pd_valid": True, "inline": True}]))
+        # dark for the whole wait: refused, naming the last reading
+        self.assertIn("4.30 V", self.run_pf([{"vbus_mv": 4300, "pd_valid": True, "inline": True}] * 20))
+
+    def test_inline_reading_in_a_cut_waits_for_the_comeback(self):
+        # a USB-A port's auto-off cut (first sample 4.3 V, dark 2 V, back at 5.1 V): not a missing charger
+        fall = {"vbus_mv": 4300, "pd_valid": True, "inline": True}
+        dark = {"vbus_mv": 2000, "pd_valid": True, "inline": True}
+        back = {"vbus_mv": 5100, "pd_valid": True, "inline": True}
+        self.assertIsNone(self.run_pf([fall, dark, dark, dark, back, back]))
 
     def test_low_vbus_without_sink_lets_start_present_rd(self):
         # dark the whole wait: START still presents Rd (the note says so); the wait ran VBUS_WAIT_S worth of polls
