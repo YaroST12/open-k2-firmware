@@ -10,7 +10,6 @@
 #include "k2/ui/ui_viewport.hpp"
 #include <algorithm>
 #include <array>
-#include <cmath>
 
 namespace k2 {
 
@@ -54,7 +53,7 @@ struct BandRow {
         for (int i = first; i < last; i++) pixels[i] = color;
     }
 
-    K2_HOT void text(const Font &font, int x, int top, std::string_view value, uint16_t fg, uint16_t bg) {
+    [[gnu::noinline]] K2_HOT void text(const Font &font, int x, int top, std::string_view value, uint16_t fg, uint16_t bg) {
         if (y < top || y >= top + font.height || x < origin || x >= origin + width) return;
         uint16_t lut[16];
         make_blend_lut(fg, bg, lut);
@@ -81,10 +80,7 @@ struct BandRow {
         const TextBounds tb = badge_text_bounds(kLabelFont, value);
         const int w = tb.w + 8;
         const int x = 222 - w;
-        if (y >= 2 && y < 16) {
-            const int inset = round_row_inset(3, 14, y - 2);
-            fill(x + inset, w - 2 * inset, kStale);
-        }
+        if (y >= 2 && y < 16) fill(x, w, kStale);
         const TextOrigin p = center_in_box({static_cast<int16_t>(x), 2, static_cast<int16_t>(w), 14}, tb);
         text(kLabelFont, p.x, p.y, value, kBg, kStale);
     }
@@ -96,8 +92,47 @@ struct BandClip {
     int c0 = 0, c1 = kScreenW, r0 = 0, r1 = kScreenW;
 };
 
-template <class Paint>
-K2_HOT void draw_band(const Surface &s, int x, int y, int h, Paint paint, int max_w = kScreenW, BandClip clip = {}) {
+constexpr int kSlotPx = ReadoutShown::kCells * kLabelAdv;
+K2_HOT std::string_view slot_text(std::string_view value) { return text_width(kLabelFont, value) > kSlotPx ? "OVR" : value; }
+
+K2_HOT void readout_row(BandRow &row, StatusReadout mode, std::string_view v, std::string_view a, Arrow flow, uint8_t rotation,
+                 std::string_view last_text) {
+    if (mode == StatusReadout::Live) {
+        if (flow != Arrow::Idle) {   // slot x 140..149, centred on the 12 px text rows
+            const unsigned rot = rotation & 3u;
+            row.chevron(ReadoutShown::kChevX + (kChevW - physical_chevron_w(rot)) / 2,
+                        kBarTextY + (static_cast<int>(kLabelFont.height) - physical_chevron_h(rot)) / 2,
+                        flow == Arrow::Up, rot, kInk);
+        }
+        // Fixed slots right-aligned so the digits never jitter horizontally, each led by a 3 px colour key (the
+        // quantity's spot colour: the text itself is ink). Values too wide for their slot show "OVR".
+        if (row.y >= kMastKeyY && row.y < kMastKeyY + kMastKeyH) {
+            row.fill(kMastVoltKeyX, kMastKeyW, kSpotVolt);
+            row.fill(kMastAmpKeyX, kMastKeyW, kSpotAmp);
+        }
+        row.text(kLabelFont, ReadoutShown::kVoltX + kSlotPx - text_width(kLabelFont, v), kBarTextY, v, kInk, kBar);
+        row.text(kLabelFont, ReadoutShown::kAmpX + kSlotPx - text_width(kLabelFont, a), kBarTextY, a, kInk, kBar);
+    } else if (mode == StatusReadout::Stale) {
+        row.last_pill(last_text);   // BandRow-native: no nested stream inside the band write
+    }
+}
+
+enum class BandKind : uint8_t { Footer, StatusLeft, Readout, Pager };
+struct BandOp {
+    BandKind kind = BandKind::Footer;
+    FooterStyle fst{};
+    const Font *font = nullptr;
+    std::string_view s0{}, s1{}, s2{};
+    int16_t fy = 0, tx = 0, ty = 0, sep = 0;
+    bool flag = false;
+    Icon icon = Icon::Bolt;
+    StatusReadout mode = StatusReadout::None;
+    Arrow flow = Arrow::Idle;
+    uint8_t rotation = 0;
+    int count = 0, current = 0;
+};
+
+[[gnu::noinline]] K2_HOT void draw_band(const Surface &s, int x, int y, int h, const BandOp &op, int max_w = kScreenW, BandClip clip = {}) {
     const int width = std::min<int>(s.w - x, std::min<int>(kScreenW, max_w));
     h = std::min<int>(h, s.h - y);
     if (x < 0 || y < 0 || width <= 0 || h <= 0) return;
@@ -120,77 +155,91 @@ K2_HOT void draw_band(const Surface &s, int x, int y, int h, Paint paint, int ma
                       static_cast<uint16_t>(band.x + c1 - 1), static_cast<uint16_t>(band.y + cr1 - 1));
     for (int r = cr0; r < cr1; r++) {
         row.y = y + r;
-        row.fill(x, band.w, kBar);
-        paint(row);
+        if (op.kind != BandKind::Footer) row.fill(x, band.w, kBar);
+        switch (op.kind) {
+        case BandKind::Footer:
+            row.fill(0, kScreenW, row.y == op.fy && op.fst.rule ? op.fst.rule : op.fst.fill);
+            if (op.fst.bar) row.fill(0, kFooterBarW, op.fst.bar);
+            row.text(kSmall, kFooterTextX, op.fy + 1, op.s0, op.fst.text, op.fst.fill);
+            break;
+        case BandKind::StatusLeft:
+            if (op.flag) row.icon(kMastIconX, kBarTextY, op.icon, kInk, kBar);
+            row.text(*op.font, op.tx, op.ty, op.s0, kInk, kBar);
+            if (!op.s1.empty()) {
+                row.fill(op.sep, 1, kInk3);
+                row.text(kLabelFont, op.sep + 5, kBarTextY, op.s1, kInk2, kBar);
+            }
+            break;
+        case BandKind::Readout:
+            readout_row(row, op.mode, op.s0, op.s1, op.flow, op.rotation, op.s2);
+            break;
+        case BandKind::Pager: {
+            const int pr = row.y - kPagerY;
+            if (pr >= 0 && pr < kPagerBox) {
+                const bool edge = pr == 0 || pr == kPagerBox - 1;
+                for (int i = 0; i < op.count; i++) {
+                    const int px0 = kPagerRight - (op.count - i) * kPagerPitch + (kPagerPitch - kPagerBox);
+                    if (i == op.current || edge) row.fill(px0, kPagerBox, kInk);
+                    else { row.fill(px0, 1, kInk); row.fill(px0 + kPagerBox - 1, 1, kInk); }
+                }
+            }
+            break;
+        }
+        }
         lcd::stream_pixels({row.pixels + c0, static_cast<std::size_t>(c1 - c0)});
     }
     lcd::stream_end();
 }
 
-// Fill row `i` of a rounded rectangle, merging runs of rows that share an inset into one fill.
-K2_HOT void span(const Surface &s, int x, int y, int w, int h, int r, uint16_t color, int i0, int i1) {
-    if (i0 >= i1 || w <= 0) return;
-    int off0 = 0, off1 = i1 - i0;
-    if (!clip_box_to_band(s, x, y + i0, w, i1 - i0, off0, off1)) return;
-    i1 = i0 + off1;
-    i0 = i0 + off0;
-    int i = i0;
-    while (i < i1) {
-        const int in = round_row_inset(r, h, i);
-        int j = i + 1;
-        while (j < i1 && round_row_inset(r, h, j) == in) j++;
-        gfx_fill(s, static_cast<int16_t>(x + in), static_cast<int16_t>(y + i), static_cast<int16_t>(w - 2 * in),
-                 static_cast<int16_t>(j - i), color);
-        i = j;
+K2_HOT void stream_mono(const Surface &s, int16_t x, int16_t y, int sz, int src,
+                        const uint16_t *rows, int msb, uint16_t fg, uint16_t bg) {
+    if (sz <= 0 || sz > 16 || !fits(s, x, y, sz, sz)) return;
+    int r0 = 0, r1 = sz;
+    if (!clip_box_to_band(s, x, y, sz, sz, r0, r1)) return;
+    uint16_t line[16];
+    lcd::stream_begin(static_cast<uint16_t>(s.x + x), static_cast<uint16_t>(s.y + y + r0),
+                      static_cast<uint16_t>(s.x + x + sz - 1), static_cast<uint16_t>(s.y + y + r1 - 1));
+    for (int r = r0; r < r1; r++) {
+        const uint16_t bits = rows[sz == src ? r : (r * src) / sz];
+        for (int c = 0; c < sz; c++) {
+            const int sc = sz == src ? c : (c * src) / sz;
+            line[c] = (bits >> (msb - sc)) & 1 ? fg : bg;
+        }
+        lcd::stream_pixels({line, static_cast<std::size_t>(sz)});
     }
+    lcd::stream_end();
 }
 
 }  // namespace
 
-K2_HOT void fill_round(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, int r, uint16_t color) {
-    span(s, x, y, w, h, r, color, 0, h);
+K2_HOT void fill_round(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, int, uint16_t color) {
+    gfx_fill(s, x, y, w, h, color);
 }
 
-void fill_round_hole(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, int r, uint16_t color, int16_t hx, int16_t hy,
+void fill_round_hole(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, int, uint16_t color, int16_t hx, int16_t hy,
                      int16_t hw, int16_t hh) {
-    const auto holed = [&](int row) { return y + row >= hy && y + row < hy + hh; };
-    for (int i = 0; i < h;) {
-        const int in = round_row_inset(r, h, i);
-        int j = i + 1;
-        while (j < h && round_row_inset(r, h, j) == in && holed(j) == holed(i)) j++;
-        const int x0 = x + in, x1 = x + w - in;
-        if (!holed(i)) {
-            gfx_fill(s, static_cast<int16_t>(x0), static_cast<int16_t>(y + i), static_cast<int16_t>(x1 - x0), static_cast<int16_t>(j - i), color);
-        } else {
-            const int left = std::min<int>(hx, x1), right = std::max<int>(hx + hw, x0);
-            if (left > x0) gfx_fill(s, static_cast<int16_t>(x0), static_cast<int16_t>(y + i), static_cast<int16_t>(left - x0), static_cast<int16_t>(j - i), color);
-            if (right < x1) gfx_fill(s, static_cast<int16_t>(right), static_cast<int16_t>(y + i), static_cast<int16_t>(x1 - right), static_cast<int16_t>(j - i), color);
-        }
-        i = j;
-    }
+    const int x1 = x + w, y1 = y + h;
+    const int ax0 = std::max<int>(x, hx), ax1 = std::min<int>(x1, hx + hw);
+    const int ay0 = std::max<int>(y, hy), ay1 = std::min<int>(y1, hy + hh);
+    if (ax0 >= ax1 || ay0 >= ay1) { gfx_fill(s, x, y, w, h, color); return; }
+    if (ay0 > y) gfx_fill(s, x, y, w, static_cast<int16_t>(ay0 - y), color);
+    if (ay1 < y1) gfx_fill(s, x, static_cast<int16_t>(ay1), w, static_cast<int16_t>(y1 - ay1), color);
+    if (ax0 > x) gfx_fill(s, x, static_cast<int16_t>(ay0), static_cast<int16_t>(ax0 - x), static_cast<int16_t>(ay1 - ay0), color);
+    if (ax1 < x1) gfx_fill(s, static_cast<int16_t>(ax1), static_cast<int16_t>(ay0), static_cast<int16_t>(x1 - ax1), static_cast<int16_t>(ay1 - ay0), color);
 }
 
-K2_HOT void frame_round(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, int r, int t, uint16_t color) {
-    if (w <= 2 * t || h <= 2 * t) { fill_round(s, x, y, w, h, r, color); return; }
-    const int ro = (r * 2 > h) ? h / 2 : r;
-    const int ri = ro > t ? ro - t : 0;
-    const int ih = h - 2 * t;
-    for (int i = 0; i < h; i++) {
-        const int a = round_row_inset(ro, h, i);
-        if (i < t || i >= h - t) {
-            gfx_fill(s, static_cast<int16_t>(x + a), static_cast<int16_t>(y + i), static_cast<int16_t>(w - 2 * a), 1, color);
-            continue;
-        }
-        const int b = t + round_row_inset(ri, ih, i - t);   // hole starts here
-        gfx_fill(s, static_cast<int16_t>(x + a), static_cast<int16_t>(y + i), static_cast<int16_t>(b - a), 1, color);
-        gfx_fill(s, static_cast<int16_t>(x + w - b), static_cast<int16_t>(y + i), static_cast<int16_t>(b - a), 1, color);
-    }
+K2_HOT void frame_round(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, int, int t, uint16_t color) {
+    if (w <= 2 * t || h <= 2 * t) { gfx_fill(s, x, y, w, h, color); return; }
+    gfx_fill(s, x, y, w, static_cast<int16_t>(t), color);
+    gfx_fill(s, x, static_cast<int16_t>(y + h - t), w, static_cast<int16_t>(t), color);
+    gfx_fill(s, x, static_cast<int16_t>(y + t), static_cast<int16_t>(t), static_cast<int16_t>(h - 2 * t), color);
+    gfx_fill(s, static_cast<int16_t>(x + w - t), static_cast<int16_t>(y + t), static_cast<int16_t>(t), static_cast<int16_t>(h - 2 * t), color);
 }
 
 void draw_bar_label(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, int fill_px, uint16_t track,
                     uint16_t fill, std::string_view text, uint16_t fg) {
-    fill_round(s, x, y, w, h, 3, track);
-    if (fill_px > 0) fill_round(s, x, y, static_cast<int16_t>(fill_px), h, fill_px < 6 ? fill_px / 2 : 3, fill);
+    gfx_fill(s, x, y, w, h, track);
+    if (fill_px > 0) gfx_fill(s, x, y, static_cast<int16_t>(fill_px), h, fill);
     const int16_t ty = static_cast<int16_t>(y + (h - kLabelFont.height) / 2);
     // Whole label on the track, then the part over the fill again through a surface clipped to it.
     gfx_text(s, kLabelFont, static_cast<int16_t>(x + 4), ty, text, fg, track);
@@ -202,18 +251,7 @@ void draw_bar_label(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h
 }
 
 K2_HOT void draw_icon(const Surface &s, int16_t x, int16_t y, Icon icon, uint16_t fg, uint16_t bg) {
-    if (!fits(s, x, y, kIconSize, kIconSize)) return;
-    int r0 = 0, r1 = kIconSize;
-    if (!clip_box_to_band(s, x, y, kIconSize, kIconSize, r0, r1)) return;
-    const uint16_t *rows = kIconBits[static_cast<int>(icon)];
-    uint16_t line[kIconSize];
-    lcd::stream_begin(static_cast<uint16_t>(s.x + x), static_cast<uint16_t>(s.y + y + r0),
-                      static_cast<uint16_t>(s.x + x + kIconSize - 1), static_cast<uint16_t>(s.y + y + r1 - 1));
-    for (int r = r0; r < r1; r++) {
-        for (int c = 0; c < kIconSize; c++) line[c] = (rows[r] >> (kIconSize - 1 - c)) & 1 ? fg : bg;
-        lcd::stream_pixels({line, static_cast<std::size_t>(kIconSize)});
-    }
-    lcd::stream_end();
+    stream_mono(s, x, y, kIconSize, kIconSize, kIconBits[static_cast<int>(icon)], kIconSize - 1, fg, bg);
 }
 
 namespace {
@@ -243,53 +281,18 @@ constexpr const char *kPlugArt[14] = {
 }  // namespace
 
 K2_HOT void draw_icon14(const Surface &s, int16_t x, int16_t y, Icon14 icon, uint16_t fg, uint16_t bg) {
-    if (!fits(s, x, y, 14, 14)) return;
-    int r0 = 0, r1 = 14;
-    if (!clip_box_to_band(s, x, y, 14, 14, r0, r1)) return;
     static constexpr std::array<uint16_t, 14> kBits[2] = {art(kChargerArt), art(kPlugArt)};
-    const auto &rows = kBits[static_cast<int>(icon)];
-    uint16_t line[14];
-    lcd::stream_begin(static_cast<uint16_t>(s.x + x), static_cast<uint16_t>(s.y + y + r0),
-                      static_cast<uint16_t>(s.x + x + 13), static_cast<uint16_t>(s.y + y + r1 - 1));
-    for (int r = r0; r < r1; r++) {
-        for (int c = 0; c < 14; c++) line[c] = (rows[r] >> (13 - c)) & 1 ? fg : bg;
-        lcd::stream_pixels({line, 14});
-    }
-    lcd::stream_end();
+    stream_mono(s, x, y, 14, 14, kBits[static_cast<int>(icon)].data(), 13, fg, bg);
 }
 
 void draw_mark(const Surface &s, int16_t x, int16_t y, int size, bool check, uint16_t fg, uint16_t bg) {
-    if (size > 16 || !fits(s, x, y, size, size)) return;
-    struct Seg { float ax, ay, bx, by; };
-    const float n = static_cast<float>(size);
-    const Seg check_s[2] = {{0.08f * n, 0.55f * n, 0.38f * n, 0.88f * n}, {0.38f * n, 0.88f * n, 0.95f * n, 0.12f * n}};
-    const Seg cross_s[2] = {{0.12f * n, 0.12f * n, 0.88f * n, 0.88f * n}, {0.88f * n, 0.12f * n, 0.12f * n, 0.88f * n}};
-    const Seg *seg = check ? check_s : cross_s;
-    const float half = 0.5f + (n >= 10 ? 0.45f : 0.35f);   // stroke half width + half a pixel of edge
-    uint16_t lut[16], line[16];
-    make_blend_lut(fg, bg, lut);
-    lcd::stream_begin(static_cast<uint16_t>(s.x + x), static_cast<uint16_t>(s.y + y),
-                      static_cast<uint16_t>(s.x + x + size - 1), static_cast<uint16_t>(s.y + y + size - 1));
-    for (int r = 0; r < size; r++) {
-        for (int c = 0; c < size; c++) {
-            const float px = c + 0.5f, py = r + 0.5f;
-            float best = 1e9f;
-            for (int k = 0; k < 2; k++) {
-                const float dx = seg[k].bx - seg[k].ax, dy = seg[k].by - seg[k].ay;
-                float t = ((px - seg[k].ax) * dx + (py - seg[k].ay) * dy) / (dx * dx + dy * dy);
-                t = t < 0 ? 0 : t > 1 ? 1 : t;
-                const float ex = px - (seg[k].ax + t * dx), ey = py - (seg[k].ay + t * dy);
-                const float d2 = ex * ex + ey * ey;
-                if (d2 < best) best = d2;
-            }
-            const float g = best > 0.0f ? std::sqrt(best) : 0.0f;
-            const float a = half - g;
-            const int q = a <= 0 ? 0 : a >= 1 ? 15 : static_cast<int>(a * 15.0f + 0.5f);
-            line[c] = lut[q];
-        }
-        lcd::stream_pixels({line, static_cast<std::size_t>(size)});
-    }
-    lcd::stream_end();
+    static constexpr uint16_t kMarkBits[2][16] = {
+        {0x0000, 0x0000, 0x0006, 0x000E, 0x001E, 0x003C, 0x0078, 0x60F0,
+         0x70E0, 0x79C0, 0x3F80, 0x1F80, 0x0F00, 0x0600, 0x0000, 0x0000},   // check
+        {0x0000, 0x0000, 0x300C, 0x381C, 0x1C38, 0x0E70, 0x07E0, 0x03C0,
+         0x03C0, 0x07E0, 0x0E70, 0x1C38, 0x381C, 0x300C, 0x0000, 0x0000},   // cross
+    };
+    stream_mono(s, x, y, size, 16, kMarkBits[check ? 0 : 1], 15, fg, bg);
 }
 
 int marked_width(const Font &f, std::string_view text) {
@@ -320,27 +323,28 @@ int draw_marked_text(const Surface &s, const Font &f, int16_t x, int16_t y, std:
     return x;
 }
 
-int draw_pill(const Surface &s, int16_t x, int16_t y, std::string_view text, uint16_t color, uint16_t tint,
-              bool solid) {
+void draw_label_box(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, std::string_view text,
+                    uint16_t fg, uint16_t bg) {
     const TextBounds tb = badge_text_bounds(kLabelFont, text);
-    const int w = pill_width(static_cast<int>(text.size()));
-    const uint16_t fill = solid ? color : tint;
-    const uint16_t fg = solid ? kBg : color;
-    // The pill's ground goes round the text's box, which the glyphs paint themselves: every pixel is streamed once (a scaled
-    // page keeps the whole fill, there a glyph box does not match the logical hole, and centers the native glyphs in it).
     if (ContentViewport::scaled()) {
-        fill_round(s, x, y, static_cast<int16_t>(w), kPillH, 3, fill);
+        gfx_fill(s, x, y, w, h, bg);
         const Rect mb = ContentViewport::mapped_rect(
-            {static_cast<int16_t>(s.x + x), static_cast<int16_t>(s.y + y), static_cast<int16_t>(w), kPillH});
+            {static_cast<int16_t>(s.x + x), static_cast<int16_t>(s.y + y), w, h});
         const TextOrigin p = center_in_box(mb, tb);
         ContentViewport::Pause unscaled;
-        gfx_text({0, 0, kScreenW, kScreenW}, kLabelFont, p.x, p.y, text, fg, fill);
+        gfx_text({0, 0, kScreenW, kScreenW}, kLabelFont, p.x, p.y, text, fg, bg);
     } else {
-        const TextOrigin p = center_in_box({x, y, static_cast<int16_t>(w), kPillH}, tb);
-        fill_round_hole(s, x, y, static_cast<int16_t>(w), kPillH, 3, fill, p.x, p.y,
+        const TextOrigin p = center_in_box({x, y, w, h}, tb);
+        fill_round_hole(s, x, y, w, h, 0, bg, p.x, p.y,
                         static_cast<int16_t>(text_width(kLabelFont, text)), static_cast<int16_t>(kLabelFont.height));
-        gfx_text(s, kLabelFont, p.x, p.y, text, fg, fill);
+        gfx_text(s, kLabelFont, p.x, p.y, text, fg, bg);
     }
+}
+
+int draw_pill(const Surface &s, int16_t x, int16_t y, std::string_view text, uint16_t color, uint16_t tint,
+              bool solid) {
+    const int w = pill_width(static_cast<int>(text.size()));
+    draw_label_box(s, x, y, static_cast<int16_t>(w), kPillH, text, solid ? kBg : color, solid ? color : tint);
     return w;
 }
 
@@ -441,18 +445,16 @@ K2_HOT void draw_footer(const Surface &s, FooterTone tone, std::string_view text
     const FooterStyle st = footer_style(tone);
     char buf[kFitBuf];                                  // a footer that would run off the surface ends in "..."
     const auto fitted = fit_text(kSmall, text, std::min<int>(kFooterTextPx, s.w - kFooterTextX), buf K2_TRUNC_ARG);
-    draw_band(s, 0, fy, s.h - fy, [&](BandRow &row) {
-        // the whole band row: in landscape it is 240 panel px, not the 224 logical ones
-        row.fill(0, kScreenW, row.y == fy && st.rule ? st.rule : st.fill);
-        if (st.bar) row.fill(0, kFooterBarW, st.bar);
-        row.text(kSmall, kFooterTextX, fy + 1, fitted, st.text, st.fill);
-    });
+    BandOp op{};
+    op.kind = BandKind::Footer;
+    op.fst = st;
+    op.s0 = fitted;
+    op.fy = fy;
+    draw_band(s, 0, fy, s.h - fy, op);
 }
 
 void draw_footer_cached(const Surface &s, FooterTone tone, std::string_view text, Elem &e K2_TRUNC_DEF) {
-    uint32_t sg = mix_u32(mix_init(), static_cast<uint32_t>(tone) * 31u + 1u);
-    sg = mix(sg, text);
-    e.paint(sg, [&] { draw_footer(s, tone, text K2_TRUNC_ARG); });
+    draw_footer_budgeted(s, tone, text, e, nullptr K2_TRUNC_ARG);
 }
 
 bool draw_footer_budgeted(const Surface &s, FooterTone tone, std::string_view text, Elem &e, PaintBudget *bg K2_TRUNC_DEF) {
@@ -480,46 +482,19 @@ K2_HOT void draw_status_left(const Surface &s, bool has_icon, Icon icon, std::st
     const Font &tf = big ? kSmall : kLabelFont;
     const auto fitted = fit_text(tf, title, sep - (big ? 4 : 3) - x, buf);
     const int ty = big ? kMastTitleY : kBarTextY;
-    draw_band(s, 0, 0, kBarH - 1, [&](BandRow &row) {   // the band stops above the rule row, which is painted once below
-        if (has_icon && fits(s, kMastIconX, kBarTextY, kIconSize, kIconSize)) row.icon(kMastIconX, kBarTextY, icon, kInk, kBar);
-        row.text(tf, x, ty, fitted, kInk, kBar);
-        if (!badge.empty()) {
-            row.fill(sep, 1, kInk3);
-            row.text(kLabelFont, sep + 5, kBarTextY, badge, kInk2, kBar);
-        }
-    }, readout_follows ? kReadoutX : kScreenW);
+    BandOp op{};
+    op.kind = BandKind::StatusLeft;
+    op.font = &tf;
+    op.s0 = fitted;
+    op.s1 = badge;
+    op.tx = static_cast<int16_t>(x);
+    op.ty = static_cast<int16_t>(ty);
+    op.sep = static_cast<int16_t>(sep);
+    op.flag = has_icon && fits(s, kMastIconX, kBarTextY, kIconSize, kIconSize);
+    op.icon = icon;
+    draw_band(s, 0, 0, kBarH - 1, op, readout_follows ? kReadoutX : kScreenW);
     gfx_fill(s, 0, static_cast<int16_t>(kBarH - 1), s.w, 1, kAccent);   // the masthead rule
 }
-
-// The call repaints the band rows 0..kBarH-2 over x 140..223; the hairline row (kBarH-1) is never
-// touched here: it belongs to title_bar()'s full-band repaint, and touching it here would make the
-// capture passes (which redraw once per strip) leave different pixels behind than a plain tick.
-namespace {
-constexpr int kSlotPx = ReadoutShown::kCells * kLabelAdv;
-K2_HOT std::string_view slot_text(std::string_view value) { return text_width(kLabelFont, value) > kSlotPx ? "OVR" : value; }
-
-K2_HOT void readout_row(BandRow &row, StatusReadout mode, std::string_view v, std::string_view a, Arrow flow, uint8_t rotation,
-                 std::string_view last_text) {
-    if (mode == StatusReadout::Live) {
-        if (flow != Arrow::Idle) {   // slot x 140..149, centred on the 12 px text rows
-            const unsigned rot = rotation & 3u;
-            row.chevron(ReadoutShown::kChevX + (kChevW - physical_chevron_w(rot)) / 2,
-                        kBarTextY + (static_cast<int>(kLabelFont.height) - physical_chevron_h(rot)) / 2,
-                        flow == Arrow::Up, rot, kInk);
-        }
-        // Fixed slots right-aligned so the digits never jitter horizontally, each led by a 3 px colour key (the
-        // quantity's spot colour: the text itself is ink). Values too wide for their slot show "OVR".
-        if (row.y >= kMastKeyY && row.y < kMastKeyY + kMastKeyH) {
-            row.fill(kMastVoltKeyX, kMastKeyW, kSpotVolt);
-            row.fill(kMastAmpKeyX, kMastKeyW, kSpotAmp);
-        }
-        row.text(kLabelFont, ReadoutShown::kVoltX + kSlotPx - text_width(kLabelFont, v), kBarTextY, v, kInk, kBar);
-        row.text(kLabelFont, ReadoutShown::kAmpX + kSlotPx - text_width(kLabelFont, a), kBarTextY, a, kInk, kBar);
-    } else if (mode == StatusReadout::Stale) {
-        row.last_pill(last_text);   // BandRow-native: no nested stream inside the band write
-    }
-}
-}  // namespace
 
 K2_HOT void draw_top_readout(const Surface &s, StatusReadout mode, std::string_view volts, std::string_view amps,
                       Arrow flow, uint8_t rotation, std::string_view last_text) {
@@ -528,7 +503,15 @@ K2_HOT void draw_top_readout(const Surface &s, StatusReadout mode, std::string_v
         if (v.data() != volts.data()) K2_TRUNC_NOTE_HERE(trunc::Kind::Data, volts, kSlotPx);   // a measurement, not copy
         if (a.data() != amps.data()) K2_TRUNC_NOTE_HERE(trunc::Kind::Data, amps, kSlotPx);
     }
-    draw_band(s, kReadoutX, 0, kBarH - 1, [&](BandRow &row) { readout_row(row, mode, v, a, flow, rotation, last_text); });
+    BandOp op{};
+    op.kind = BandKind::Readout;
+    op.mode = mode;
+    op.s0 = v;
+    op.s1 = a;
+    op.s2 = last_text;
+    op.flow = flow;
+    op.rotation = rotation;
+    draw_band(s, kReadoutX, 0, kBarH - 1, op);
 }
 
 K2_HOT void draw_top_readout(const Surface &s, StatusReadout mode, std::string_view volts, std::string_view amps, Arrow flow,
@@ -545,9 +528,15 @@ K2_HOT void draw_top_readout(const Surface &s, StatusReadout mode, std::string_v
         draw_top_readout(s, mode, volts, amps, flow, rotation);
     } else {
         const ReadoutDelta d = readout_delta(shown, now);
+        BandOp op{};
+        op.kind = BandKind::Readout;
+        op.mode = mode;
+        op.s0 = v;
+        op.s1 = a;
+        op.flow = flow;
+        op.rotation = rotation;
         for (int i = 0; i < d.n; i++)
-            draw_band(s, kReadoutX, 0, kBarH - 1,
-                      [&](BandRow &row) { readout_row(row, mode, v, a, flow, rotation, {}); }, kScreenW,
+            draw_band(s, kReadoutX, 0, kBarH - 1, op, kScreenW,
                       BandClip{d.span[i].x0 - kReadoutX, d.span[i].x1 - kReadoutX, kBarTextY,
                                kBarTextY + static_cast<int>(kLabelFont.height)});
     }
@@ -556,16 +545,11 @@ K2_HOT void draw_top_readout(const Surface &s, StatusReadout mode, std::string_v
 }
 
 K2_HOT void draw_top_pager(const Surface &s, int count, int current) {
-    draw_band(s, kReadoutX, 0, kBarH - 1, [&](BandRow &row) {
-        const int r = row.y - kPagerY;
-        if (r < 0 || r >= kPagerBox) return;
-        const bool edge = r == 0 || r == kPagerBox - 1;
-        for (int i = 0; i < count; i++) {
-            const int x = kPagerRight - (count - i) * kPagerPitch + (kPagerPitch - kPagerBox);
-            if (i == current || edge) row.fill(x, kPagerBox, kInk);
-            else { row.fill(x, 1, kInk); row.fill(x + kPagerBox - 1, 1, kInk); }
-        }
-    });
+    BandOp op{};
+    op.kind = BandKind::Pager;
+    op.count = count;
+    op.current = current;
+    draw_band(s, kReadoutX, 0, kBarH - 1, op);
 }
 
 namespace {
@@ -633,12 +617,8 @@ std::string_view fit_text_mid(const Font &f, std::string_view text, int max_px, 
 }
 
 void draw_last_pill(const Surface &s, std::string_view text) {
-    const TextBounds tb = badge_text_bounds(kLabelFont, text);
-    const int16_t w = static_cast<int16_t>(tb.w + 8);
-    const int16_t x = static_cast<int16_t>(222 - w);
-    fill_round(s, x, 2, w, 14, 3, kStale);
-    const TextOrigin p = center_in_box({x, 2, w, 14}, tb);
-    gfx_text(s, kLabelFont, p.x, p.y, text, kBg, kStale);
+    const int16_t w = static_cast<int16_t>(badge_text_bounds(kLabelFont, text).w + 8);
+    draw_label_box(s, static_cast<int16_t>(222 - w), 2, w, 14, text, kBg, kStale);
 }
 
 void draw_party_glyph(const Surface &s, int16_t x, int16_t y, int party, uint16_t color) {
@@ -662,18 +642,18 @@ void draw_party_glyph(const Surface &s, int16_t x, int16_t y, int party, uint16_
 
 void draw_flow_diagram(const Surface &s, int16_t x, int16_t y, int16_t h, const FlowSpec &f) {
     const FlowGeom g = flow_geom(h);
-    fill_round(s, x, y, kFlowW, h, 6, kSurface);
+    gfx_fill(s, x, y, kFlowW, h, kSurface);
     draw_port_male(s, static_cast<int16_t>(x + 6), static_cast<int16_t>(y + g.top_port_y), f.top_color, kSurface);
     draw_port_female(s, static_cast<int16_t>(x + 6), static_cast<int16_t>(y + g.bottom_port_y), f.bottom_color);
-    if (!f.top_role.empty()) {
-        const int16_t w = static_cast<int16_t>(f.top_role.size() * kLabelAdv + 8);
-        fill_round(s, static_cast<int16_t>(x + 28), static_cast<int16_t>(y + g.role_top_y), w, kPillH, 3, f.top_tint);
-        gfx_text(s, kLabelFont, static_cast<int16_t>(x + 32), static_cast<int16_t>(y + g.role_top_y + 1), f.top_role, f.top_color, f.top_tint);
-    }
-    if (!f.bottom_role.empty()) {
-        const int16_t w = static_cast<int16_t>(f.bottom_role.size() * kLabelAdv + 8);
-        fill_round(s, static_cast<int16_t>(x + 28), static_cast<int16_t>(y + g.role_bottom_y), w, kPillH, 3, f.bottom_tint);
-        gfx_text(s, kLabelFont, static_cast<int16_t>(x + 32), static_cast<int16_t>(y + g.role_bottom_y + 1), f.bottom_role, f.bottom_color, f.bottom_tint);
+    const struct { int16_t ry; std::string_view role; uint16_t color, tint; } roles[2] = {
+        {g.role_top_y, f.top_role, f.top_color, f.top_tint},
+        {g.role_bottom_y, f.bottom_role, f.bottom_color, f.bottom_tint},
+    };
+    for (const auto &rl : roles) {
+        if (rl.role.empty()) continue;
+        const int16_t w = static_cast<int16_t>(rl.role.size() * kLabelAdv + 8);
+        gfx_fill(s, static_cast<int16_t>(x + 28), static_cast<int16_t>(y + rl.ry), w, kPillH, rl.tint);
+        gfx_text(s, kLabelFont, static_cast<int16_t>(x + 32), static_cast<int16_t>(y + rl.ry + 1), rl.role, rl.color, rl.tint);
     }
     if (f.flow == Arrow::Idle) {
         gfx_fill(s, static_cast<int16_t>(x + 14), static_cast<int16_t>(y + g.line_y), 2, g.line_h, kFaint);
@@ -690,8 +670,8 @@ void draw_flow_diagram(const Surface &s, int16_t x, int16_t y, int16_t h, const 
 
 void draw_checklist(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, uint16_t accent,
                     const CheckItem *items, int n) {
-    fill_round(s, x, y, w, h, 5, kSurface);
-    fill_round(s, x, static_cast<int16_t>(y + 4), 3, static_cast<int16_t>(h - 8), 1, accent);
+    gfx_fill(s, x, y, w, h, kSurface);
+    gfx_fill(s, x, static_cast<int16_t>(y + 4), 3, static_cast<int16_t>(h - 8), accent);
     for (int i = 0; i < n; i++) {
         const CheckItem &it = items[i];
         draw_icon(s, static_cast<int16_t>(x + 8), static_cast<int16_t>(y + checklist_icon_y(i)),
@@ -703,7 +683,7 @@ void draw_checklist(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h
 
 void draw_step_tile(const Surface &s, int16_t x, int16_t y, int number, bool done) {
     const uint16_t c = done ? kOk : kCaution;
-    fill_round(s, x, y, 22, 22, 5, c);
+    gfx_fill(s, x, y, 22, 22, c);
     const char d[2] = {static_cast<char>('0' + number % 10), 0};
     gfx_text(s, kSmall, static_cast<int16_t>(x + 6), static_cast<int16_t>(y + 2), d, kBg, c);
 }

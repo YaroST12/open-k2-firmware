@@ -80,14 +80,12 @@ static void test_geometry() {
 static void test_fill_round() {
     clear();
     fill_round(kScr, 10, 20, 14, 14, 3, 0x1234);
-    CHECK_EQ(px(10, 20), 0);          // corner pixel cut
-    CHECK_EQ(px(11, 20), 0x1234);
-    CHECK_EQ(px(10, 21), 0x1234);
-    CHECK_EQ(px(23, 20), 0);          // right corner cut
-    CHECK_EQ(px(22, 20), 0x1234);
-    CHECK_EQ(px(10, 33), 0);          // bottom-left cut
+    CHECK_EQ(px(10, 20), 0x1234);     // rectangular fill
+    CHECK_EQ(px(23, 20), 0x1234);
+    CHECK_EQ(px(10, 33), 0x1234);
     CHECK_EQ(px(17, 27), 0x1234);
-    CHECK_EQ(px(24, 27), 0);          // nothing outside
+    CHECK_EQ(px(9, 20), 0);           // nothing outside
+    CHECK_EQ(px(24, 27), 0);
     CHECK_EQ(px(17, 34), 0);
 }
 
@@ -102,7 +100,7 @@ static void test_frame_round() {
     CHECK_EQ(px(2, 13), 0);
     CHECK_EQ(px(25, 13), 0xAAAA);
     CHECK_EQ(px(13, 25), 0xAAAA);
-    CHECK_EQ(px(0, 0), 0);            // rounded corner
+    CHECK_EQ(px(0, 0), 0xAAAA);       // rectangular corner
     clear();
     frame_round(kScr, 0, 0, 18, 8, 3, 1, 0xBBBB);
     CHECK_EQ(px(9, 0), 0xBBBB);
@@ -169,9 +167,9 @@ static void test_pill() {
     clear();
     int w = draw_pill(kScr, 20, 30, "PD3.0", kEnergy, kEnergyT, false);
     CHECK_EQ(w, 38);
-    CHECK_EQ(px(20, 30), 0);                 // r=3 corner cut
-    CHECK_EQ(px(21, 30), kEnergyT);          // tint fill
-    CHECK_EQ(px(20 + 42, 30 + 13) , 0);      // bottom-right corner cut
+    CHECK_EQ(px(20, 30), kEnergyT);          // rectangular tint fill
+    CHECK_EQ(px(21, 30), kEnergyT);
+    CHECK_EQ(px(20 + 37, 30 + 13), kEnergyT);
     CHECK_EQ(px(20 + 43, 30 + 5), 0);        // nothing beyond the width
     clear();
     draw_pill(kScr, 20, 30, "CC1", kVolt, kVoltT, true);
@@ -244,7 +242,7 @@ static void test_chevron_ports() {
 
     clear();
     draw_port_male(kScr, 10, 10, kText, kBg);
-    CHECK_EQ(px(10, 10), 0);                 // r=3 corner
+    CHECK_EQ(px(10, 10), kText);              // rectangular plug
     CHECK_EQ(px(11, 10), kText);
     CHECK_EQ(px(8 + 10, 10 + 3), kBg);       // slot
     CHECK_EQ(px(10, 14), kText);
@@ -548,7 +546,8 @@ static void test_tool_widgets() {
     clear();
     draw_step_tile(kScr, 6, 30, 2, false);
     CHECK_EQ(px(6 + 11, 30 + 2), kCaution);
-    CHECK_EQ(px(6, 30), 0);                      // rounded corner
+    CHECK_EQ(px(6, 30), kCaution);               // rectangular tile
+    CHECK_EQ(px(5, 30), 0);
     clear();
     draw_step_tile(kScr, 6, 30, 1, true);
     CHECK_EQ(px(6 + 11, 30 + 2), kOk);

@@ -473,12 +473,11 @@ static void test_alert_band() {
     kit::draw_alert_band(kSurf, 30, false, "CAUTION");
     CHECK_EQ(px(200, 33), kCaution);
     CHECK_EQ(px(0, 30 + kit::kAlertH - 1), kCaution);
-    {   // the hazard stripe under the band: ink and band-colour spans on every row, then nothing
-        for (int r = 0; r < kit::kAlertStripeH; r++) {
-            CHECK_EQ(ink_in(0, 224, 30 + kit::kAlertH + r, 30 + kit::kAlertH + r + 1, kCaution) > 0, 1);
-            int fill = 0;
-            for (int x = 0; x < 224; x++) fill += px(x, 30 + kit::kAlertH + r) == kCaution;
-            CHECK_EQ(fill >= 106 && fill <= 118, 1);   // about half of each row: diagonal bars 12 px apart
+    {   // compact 2 px rule under the band + ground fill, then nothing below
+        for (int x = 0; x < 224; x++) {
+            CHECK_EQ(px(x, 30 + kit::kAlertH), kSpotInk);
+            CHECK_EQ(px(x, 30 + kit::kAlertH + 1), kSpotInk);
+            CHECK_EQ(px(x, 30 + kit::kAlertH + 2), kBg);
         }
         CHECK_EQ(px(100, 30 + kit::kAlertH + kit::kAlertStripeH), kBase);
     }

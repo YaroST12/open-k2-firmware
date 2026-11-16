@@ -15,15 +15,8 @@ constexpr int16_t kChevW = 6, kChevH = 9;
 
 const Font &font_or_small(const Font *f) { return f ? *f : kSmall; }
 
-void outline(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, int16_t t, uint16_t color) {
-    gfx_fill(s, x, y, w, t, color);
-    gfx_fill(s, x, static_cast<int16_t>(y + h - t), w, t, color);
-    gfx_fill(s, x, static_cast<int16_t>(y + t), t, static_cast<int16_t>(h - 2 * t), color);
-    gfx_fill(s, static_cast<int16_t>(x + w - t), static_cast<int16_t>(y + t), t, static_cast<int16_t>(h - 2 * t), color);
-}
-
 // Text centred in a box (x, w) on the line whose top is `y`.
-K2_HOT void centred_text(const Surface &s, const Font &f, int16_t x, int16_t w, int16_t y, std::string_view text, uint16_t fg, uint16_t bg) {
+void centred_text(const Surface &s, const Font &f, int16_t x, int16_t w, int16_t y, std::string_view text, uint16_t fg, uint16_t bg) {
     char buf[kFitBuf];
     const std::string_view t = fit_text(f, text, w, buf);
     gfx_text(s, f, static_cast<int16_t>(x + (w - text_width(f, t)) / 2), y, t, fg, bg);
@@ -231,19 +224,8 @@ void draw_struck_text(const Surface &s, const Font &f, int16_t x, int16_t y, std
 }
 
 // ---- VerdictCell --------------------------------------------------------------------------------------------------------
-namespace {
-// A t px frame of the box in `ink`: top and bottom full width, the sides between them (each pixel once).
-K2_HOT void frame_box(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, int16_t t, uint16_t ink) {
-    if (w <= 2 * t || h <= 2 * t) { gfx_fill(s, x, y, w, h, ink); return; }
-    gfx_fill(s, x, y, w, t, ink);
-    gfx_fill(s, x, static_cast<int16_t>(y + h - t), w, t, ink);
-    gfx_fill(s, x, static_cast<int16_t>(y + t), t, static_cast<int16_t>(h - 2 * t), ink);
-    gfx_fill(s, static_cast<int16_t>(x + w - t), static_cast<int16_t>(y + t), t, static_cast<int16_t>(h - 2 * t), ink);
-}
-}  // namespace
-
 void draw_run_mark(const Surface &s, const CellRect &cell, bool on, uint16_t under) {
-    frame_box(s, cell.x, cell.y, cell.w, cell.h, kRunFrame, on ? verdict_style(Verdict::Running).mark : under);
+    frame_round(s, cell.x, cell.y, cell.w, cell.h, 0, kRunFrame, on ? verdict_style(Verdict::Running).mark : under);
 }
 
 // Every pixel of the cell is streamed once: the fill leaves a hole for the label or the glyph. The exceptions are a Skip
@@ -278,22 +260,24 @@ void draw_verdict(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, 
     int sz = (w < h ? w : h) - 4;
     if (sz > 12) sz = 12;
     const int16_t gx = static_cast<int16_t>(x + (w - sz) / 2), gy = static_cast<int16_t>(y + (h - sz) / 2);
-    Box hole{gx, gy, static_cast<int16_t>(sz), static_cast<int16_t>(sz)};   // the check and the cross paint their whole square
+    Box hole{gx, gy, static_cast<int16_t>(sz), static_cast<int16_t>(sz)};
+    bool solid_hole = false;
     switch (v) {
     case Verdict::None:
     case Verdict::Skip:
-    case Verdict::Stopped: hole = {gx, static_cast<int16_t>(gy + sz / 2 - 1), static_cast<int16_t>(sz), 2}; break;
-    case Verdict::Pending: hole = {static_cast<int16_t>(gx + sz / 2 - 1), static_cast<int16_t>(gy + sz / 2 - 1), 2, 2}; break;
-    case Verdict::Noted: hole = {static_cast<int16_t>(gx + sz / 2 - 1), gy, 2, static_cast<int16_t>(sz)}; break;   // the upright bar
-    case Verdict::Running:   // a hollow accent square, the glyph's whole box
+    case Verdict::Stopped: hole = {gx, static_cast<int16_t>(gy + sz / 2 - 1), static_cast<int16_t>(sz), 2}; solid_hole = true; break;
+    case Verdict::Pending: hole = {static_cast<int16_t>(gx + sz / 2 - 1), static_cast<int16_t>(gy + sz / 2 - 1), 2, 2}; solid_hole = true; break;
+    case Verdict::Noted:   hole = {static_cast<int16_t>(gx + sz / 2 - 1), gy, 2, static_cast<int16_t>(sz)}; solid_hole = true; break;
+    case Verdict::Partial: hole = {gx, static_cast<int16_t>(gy + sz / 2 - 3), static_cast<int16_t>(sz), 6}; break;
+    case Verdict::Running:
     case Verdict::Pass:
     case Verdict::Fail: break;
-    case Verdict::Partial: hole = {gx, static_cast<int16_t>(gy + sz / 2 - 3), static_cast<int16_t>(sz), 6}; break;   // the tilde's strip
     }
     fill_except(s, inner, &hole, sz < 4 ? 0 : 1, base);
     if (sz < 4) return;
-    switch (v) {
-    case Verdict::Partial: {
+    if (solid_hole) {
+        gfx_fill(s, hole.x, hole.y, hole.w, hole.h, st.ink);
+    } else if (v == Verdict::Partial) {
         // A tilde: four columns of 2 px bars stepping mid, up, down, mid inside the 6 px strip, each column painted once.
         const int16_t c = static_cast<int16_t>(gy + sz / 2 - 1), q = static_cast<int16_t>(sz / 4);
         static constexpr int8_t kStep[4] = {0, -2, 2, 0};
@@ -304,22 +288,13 @@ void draw_verdict(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, 
             gfx_fill(s, cx, static_cast<int16_t>(c + kStep[i]), cw, 2, st.ink);
             if (below) gfx_fill(s, cx, static_cast<int16_t>(c + kStep[i] + 2), cw, below, base);
         }
-        break;
-    }
-    case Verdict::Pass:  draw_mark(s, gx, gy, sz, true, st.ink, base); break;
-    case Verdict::Fail:  draw_mark(s, gx, gy, sz, false, st.ink, base); break;
-    case Verdict::None:
-    case Verdict::Skip:
-    case Verdict::Stopped: gfx_fill(s, gx, static_cast<int16_t>(gy + sz / 2 - 1), static_cast<int16_t>(sz), 2, st.ink); break;
-    case Verdict::Pending: gfx_fill(s, static_cast<int16_t>(gx + sz / 2 - 1), static_cast<int16_t>(gy + sz / 2 - 1), 2, 2, st.ink); break;
-    case Verdict::Noted: gfx_fill(s, static_cast<int16_t>(gx + sz / 2 - 1), gy, 2, static_cast<int16_t>(sz), st.ink); break;
-    case Verdict::Running: {   // the frame, then its inside in the base (each pixel of the box once)
+    } else if (v == Verdict::Running) {
         const int16_t t = sz >= 8 ? kRunFrame : 1;
-        frame_box(s, gx, gy, static_cast<int16_t>(sz), static_cast<int16_t>(sz), t, st.mark);
+        frame_round(s, gx, gy, static_cast<int16_t>(sz), static_cast<int16_t>(sz), 0, t, st.mark);
         gfx_fill(s, static_cast<int16_t>(gx + t), static_cast<int16_t>(gy + t), static_cast<int16_t>(sz - 2 * t),
                  static_cast<int16_t>(sz - 2 * t), base);
-        break;
-    }
+    } else {
+        draw_mark(s, gx, gy, sz, v == Verdict::Pass, st.ink, base);
     }
 }
 
@@ -369,29 +344,26 @@ void draw_marker(const Surface &s, int16_t x, int16_t y, const RowSpec &r, uint1
     const auto fill = [&](int16_t ox, int16_t oy, int16_t fw, int16_t fh, uint16_t c) {
         gfx_fill_panel({static_cast<int16_t>(m.x + ox), static_cast<int16_t>(m.y + oy), fw, fh}, c);
     };
+    const auto frame = [&] {
+        fill(0, 0, m.w, 1, col);
+        fill(0, static_cast<int16_t>(m.h - 1), m.w, 1, col);
+        fill(0, 1, 1, static_cast<int16_t>(m.h - 2), col);
+        fill(static_cast<int16_t>(m.w - 1), 1, 1, static_cast<int16_t>(m.h - 2), col);
+    };
     switch (r.marker) {
     case Marker::None: break;
     case Marker::Radio:
-        // A square, no circle to rasterise: the pick is a solid block, the others a hollow 1 px frame. The whole 12 px
-        // square is repainted on every state, so a half-drawn one cannot exist; solid versus hollow is the shape cue.
         if (on) {
             fill(0, 0, m.w, m.h, col);
-        } else {   // the frame's four sides, then the inside: every pixel of the square once
-            fill(0, 0, m.w, 1, col);
-            fill(0, static_cast<int16_t>(m.h - 1), m.w, 1, col);
-            fill(0, 1, 1, static_cast<int16_t>(m.h - 2), col);
-            fill(static_cast<int16_t>(m.w - 1), 1, 1, static_cast<int16_t>(m.h - 2), col);
+        } else {
+            frame();
             fill(1, 1, static_cast<int16_t>(m.w - 2), static_cast<int16_t>(m.h - 2), bg);
         }
         break;
     case Marker::Level: {
-        // Every pixel of the square once: the frame, then the inside (ground above the level, ink below it).
         const int16_t in = static_cast<int16_t>(m.h - 2);
         const int16_t ink = r.state >= 2 ? in : r.state == 1 ? static_cast<int16_t>(in / 2) : 0;
-        fill(0, 0, m.w, 1, col);
-        fill(0, static_cast<int16_t>(m.h - 1), m.w, 1, col);
-        fill(0, 1, 1, in, col);
-        fill(static_cast<int16_t>(m.w - 1), 1, 1, in, col);
+        frame();
         if (in - ink > 0) fill(1, 1, static_cast<int16_t>(m.w - 2), static_cast<int16_t>(in - ink), bg);
         if (ink > 0) fill(1, static_cast<int16_t>(1 + in - ink), static_cast<int16_t>(m.w - 2), ink, col);
         break;
@@ -399,10 +371,7 @@ void draw_marker(const Surface &s, int16_t x, int16_t y, const RowSpec &r, uint1
     case Marker::Box3:
     case Marker::Check:
         fill(1, 1, static_cast<int16_t>(m.w - 2), static_cast<int16_t>(m.h - 2), bg);
-        fill(0, 0, m.w, 1, col);
-        fill(0, static_cast<int16_t>(m.h - 1), m.w, 1, col);
-        fill(0, 1, 1, static_cast<int16_t>(m.h - 2), col);
-        fill(static_cast<int16_t>(m.w - 1), 1, 1, static_cast<int16_t>(m.h - 2), col);
+        frame();
         if (r.marker == Marker::Box3) {
             if (r.state >= 2) fill(3, 3, 6, 6, col);
             else if (r.state == 1) fill(3, 5, 6, 2, col);
@@ -603,46 +572,16 @@ void draw_leader(const Surface &s, int16_t x0, int16_t x1, int16_t y) {
 }
 
 int draw_chip(const Surface &s, int16_t x, int16_t y, std::string_view text, uint16_t fill, uint16_t ink, int16_t min_w) {
-    const TextBounds tb = badge_text_bounds(kLabelFont, text);
-    const int16_t tw = static_cast<int16_t>(text_width(kLabelFont, text));
-    const int16_t w = std::max<int16_t>(static_cast<int16_t>(tb.w + 8), min_w);
-    if (ContentViewport::scaled()) {
-        gfx_fill(s, x, y, w, kChipH, fill);
-        const Rect mb = ContentViewport::mapped_rect(
-            {static_cast<int16_t>(s.x + x), static_cast<int16_t>(s.y + y), w, kChipH});
-        const TextOrigin p = center_in_box(mb, tb);
-        ContentViewport::Pause unscaled;
-        gfx_text({0, 0, kScreenW, kScreenW}, kLabelFont, p.x, p.y, text, ink, fill);
-    } else {
-        const TextOrigin p = center_in_box({x, y, w, kChipH}, tb);
-        const Box hole{p.x, p.y, tw, static_cast<int16_t>(kLabelFont.height)};
-        fill_except(s, {x, y, w, kChipH}, &hole, 1, fill);
-        gfx_text(s, kLabelFont, p.x, p.y, text, ink, fill);
-    }
+    const int16_t w = std::max<int16_t>(static_cast<int16_t>(badge_text_bounds(kLabelFont, text).w + 8), min_w);
+    draw_label_box(s, x, y, w, kChipH, text, ink, fill);
     return w;
 }
 
 int draw_chip_frame(const Surface &s, int16_t x, int16_t y, std::string_view text, uint16_t frame, uint16_t ink, uint16_t bg) {
-    const TextBounds tb = badge_text_bounds(kLabelFont, text);
-    const int16_t tw = static_cast<int16_t>(text_width(kLabelFont, text));
-    const int16_t w = static_cast<int16_t>(tb.w + 8);
-    gfx_fill(s, x, y, w, 1, frame);
-    gfx_fill(s, x, static_cast<int16_t>(y + kChipH - 1), w, 1, frame);
-    gfx_fill(s, x, static_cast<int16_t>(y + 1), 1, kChipH - 2, frame);
-    gfx_fill(s, static_cast<int16_t>(x + w - 1), static_cast<int16_t>(y + 1), 1, kChipH - 2, frame);
-    if (ContentViewport::scaled()) {
-        gfx_fill(s, static_cast<int16_t>(x + 1), static_cast<int16_t>(y + 1), static_cast<int16_t>(w - 2), kChipH - 2, bg);
-        const Rect mb = ContentViewport::mapped_rect(
-            {static_cast<int16_t>(s.x + x), static_cast<int16_t>(s.y + y), w, kChipH});
-        const TextOrigin p = center_in_box(mb, tb);
-        ContentViewport::Pause unscaled;
-        gfx_text({0, 0, kScreenW, kScreenW}, kLabelFont, p.x, p.y, text, ink, bg);
-    } else {
-        const TextOrigin p = center_in_box({x, y, w, kChipH}, tb);
-        const Box hole{p.x, p.y, tw, static_cast<int16_t>(kLabelFont.height)};
-        fill_except(s, {static_cast<int16_t>(x + 1), static_cast<int16_t>(y + 1), static_cast<int16_t>(w - 2), kChipH - 2}, &hole, 1, bg);
-        gfx_text(s, kLabelFont, p.x, p.y, text, ink, bg);
-    }
+    const int16_t w = static_cast<int16_t>(badge_text_bounds(kLabelFont, text).w + 8);
+    frame_round(s, x, y, w, kChipH, 0, 1, frame);
+    draw_label_box(s, static_cast<int16_t>(x + 1), static_cast<int16_t>(y + 1), static_cast<int16_t>(w - 2),
+                   static_cast<int16_t>(kChipH - 2), text, ink, bg);
     return w;
 }
 
@@ -658,16 +597,13 @@ K2_HOT void draw_dashed(const Surface &s, int16_t x0, int16_t x1, int16_t y, uin
 static_assert(8 + 35 * 6 <= 224 - 4, "the identity line's 35 cells of font 12 fit beside the lane");
 
 bool paint_identity(const Surface &c, const Ident &id, bool full, uint32_t &sig, PaintBudget *bg) {
-    const auto fnv = [](uint32_t h, uint32_t v) { return (h ^ v) * 16777619u; };
-    uint32_t h = fnv(2166136261u, uint32_t(id.dim) | uint32_t(id.n) << 1);
-    for (char ch : id.head.view()) h = fnv(h, uint8_t(ch));
+    uint32_t h = mix_u32(mix_init(), uint32_t(id.dim) | uint32_t(id.n) << 1);
+    h = mix(h, id.head.view());
     for (int i = 0; i < id.n; i++) {
-        h = fnv(h, 0x100u | id.chip[i].k);
-        for (char ch : id.chip[i].t.view()) h = fnv(h, uint8_t(ch));
+        h = mix_u32(h, 0x100u | id.chip[i].k);
+        h = mix(h, id.chip[i].t.view());
     }
-    h = fnv(h, 0x200u);
-    for (char ch : id.line.view()) h = fnv(h, uint8_t(ch));
-    h |= 1u;
+    h = mix(mix_u32(h, 0x200u), id.line.view()) | 1u;
     if (!full && h == sig) return true;
     if (bg && !bg->admit(static_cast<int>(c.w) * (kPlaceListY - kIdY), true)) return false;
     sig = h;
@@ -689,14 +625,14 @@ bool paint_identity(const Surface &c, const Ident &id, bool full, uint32_t &sig,
     if (lw > 0) holes[nh++] = {8, kIdLineY, lw, static_cast<int16_t>(kLabelFont.height)};
     fill_except(c, {0, kIdY, c.w, static_cast<int16_t>(kIdDashY - kIdY)}, holes, nh, kBg);
     gfx_text(c, kMid, 8, kIdHeadY, id.head.view(), id.dim ? kInk2 : kInk, kBg);
+    static constexpr struct { uint16_t fill, ink; } kChipCols[4] = {
+        {kChip, kOnChip}, {kInk2, kInk}, {kPassFill, kOnPass}, {kSpotVolt, kSpotInk},
+    };
     for (int i = 0; i < shown; i++) {
         const Ident::Chip &ch = id.chip[i];
-        switch (ch.k) {
-        case Ident::Solid: draw_chip(c, cx[i], chip_y, ch.t.view(), kChip, kOnChip); break;
-        case Ident::Outline: draw_chip_frame(c, cx[i], chip_y, ch.t.view(), kInk2, kInk, kBg); break;
-        case Ident::Ok: draw_chip(c, cx[i], chip_y, ch.t.view(), kPassFill, kOnPass); break;
-        case Ident::Volt: draw_chip(c, cx[i], chip_y, ch.t.view(), kSpotVolt, kSpotInk); break;
-        }
+        const auto &cc = kChipCols[ch.k];
+        if (ch.k == Ident::Outline) draw_chip_frame(c, cx[i], chip_y, ch.t.view(), cc.fill, cc.ink, kBg);
+        else draw_chip(c, cx[i], chip_y, ch.t.view(), cc.fill, cc.ink);
     }
     if (lw > 0) gfx_text(c, kLabelFont, 8, kIdLineY, id.line.view(), kInk2, kBg);
     gfx_fill(c, 0, kIdDashY, 8, 1, kBg);
@@ -784,7 +720,7 @@ void draw_segmented(const Surface &s, int16_t y, std::string_view label, const c
                  static_cast<int16_t>(by + (kSegBarH - kSmall.height) / 2), t, on ? kSpotInk : inverted ? kOnFocus : kText, on ? kFocus : bg);
         // The frame goes over the word's cell: in a landscape mapping the bar loses a row or two while the glyphs keep their size,
         // so the cell would otherwise cut into the frame.
-        if (!on) outline(s, sp.x, by, sp.w, kSegBarH, 2, focused ? kFocus : kRule);
+        if (!on) frame_round(s, sp.x, by, sp.w, kSegBarH, 0, 2, focused ? kFocus : kRule);
     }
 }
 
@@ -805,21 +741,17 @@ void draw_alert_band(const Surface &s, int16_t y, bool error, std::string_view w
     draw_warn_triangle(s, 8, static_cast<int16_t>(y + 8), 20, ink, fill);
     char buf[kFitBuf];
     gfx_text(s, kMid, 36, static_cast<int16_t>(y + (kAlertH - kMid.height) / 2), fit_text(kMid, word, s.w - 36 - 4, buf), ink, fill);
-    // The hazard stripe under the band: alternating ink and band-colour spans of 6 px, shifted 1 px per row (diagonal
-    // bars 12 px apart). Every pixel is written once.
-    constexpr int kS = kAlertStripeH, kP = 2 * kAlertStripeH;
-    for (int r = 0; r < kS; r++) {
-        const int16_t ry = static_cast<int16_t>(y + kAlertH + r);
-        const int o = kS - 1 - r;
-        for (int x = 0; x < s.w;) {
-            const int pos = ((x - o) % kP + kP) % kP;
-            const bool bar = pos >= kS;
-            const int len = std::min<int>(bar ? kP - pos : kS - pos, s.w - x);
-            gfx_fill(s, static_cast<int16_t>(x), ry, static_cast<int16_t>(len), 1, bar ? fill : ink);
-            x += len;
-        }
-    }
+    gfx_fill(s, 0, static_cast<int16_t>(y + kAlertH), s.w, 2, ink);
+    gfx_fill(s, 0, static_cast<int16_t>(y + kAlertH + 2), s.w, static_cast<int16_t>(kAlertStripeH - 2), kBg);
 }
+
+namespace {
+void ticket_ground(const Surface &s, int16_t y, int16_t h, int16_t w, uint16_t fill) {
+    gfx_fill(s, 0, y, kTicketInset, h, kBg);
+    gfx_fill(s, static_cast<int16_t>(kTicketInset + w), y, kTicketInset, h, kBg);
+    gfx_fill(s, kTicketInset, y, w, h, fill);
+}
+}  // namespace
 
 // ---- ActionCell ----------------------------------------------------------------------------------------------------------
 bool ActionCell::draw_idle(std::string_view verb, std::string_view hint, PaintBudget *bg, bool focused) {
@@ -827,15 +759,11 @@ bool ActionCell::draw_idle(std::string_view verb, std::string_view hint, PaintBu
     sig = mix(mix(sig, verb), hint);
     return e_.paint_budgeted(sig, bg, static_cast<int>(surf_.w) * h_, [&] {
         bar_px_ = -1;
-        // The ticket: an ink block inset by the side gutters (Classic: its tint with the 2 px cyan frame). Not under the cursor:
-        // the plain ground inside a 2 px rule-coloured frame, dim inks.
         const int16_t w = static_cast<int16_t>(surf_.w - 2 * kTicketInset);
         const uint16_t fill = focused ? kTicket : kBg, ink = focused ? kOnTicket : kInk2;
         const uint16_t frame = focused ? kTicketFrame : kRule;
-        gfx_fill(surf_, 0, y_, kTicketInset, h_, kBg);
-        gfx_fill(surf_, static_cast<int16_t>(kTicketInset + w), y_, kTicketInset, h_, kBg);
-        gfx_fill(surf_, kTicketInset, y_, w, h_, fill);
-        if (frame) outline(surf_, kTicketInset, y_, w, h_, 2, frame);
+        ticket_ground(surf_, y_, h_, w, fill);
+        if (frame) frame_round(surf_, kTicketInset, y_, w, h_, 0, 2, frame);
         const int content = kMid.height + (hint.empty() ? 0 : 6 + kLabelFont.height);
         const int16_t top = static_cast<int16_t>(y_ + (h_ - content) / 2);
         centred_text(surf_, kMid, 4, static_cast<int16_t>(surf_.w - 8), top, verb, ink, fill);
@@ -857,9 +785,7 @@ bool ActionCell::draw_armed(std::string_view word, std::string_view sub, int lef
     const int16_t w = static_cast<int16_t>(surf_.w - 2 * kTicketInset);
     if (!e_.paint_budgeted(sig, bg, static_cast<int>(surf_.w) * h_, [&] {
         bar_px_ = -1;
-        gfx_fill(surf_, 0, y_, kTicketInset, h_, kBg);
-        gfx_fill(surf_, static_cast<int16_t>(kTicketInset + w), y_, kTicketInset, h_, kBg);
-        gfx_fill(surf_, kTicketInset, y_, w, h_, kCaution);
+        ticket_ground(surf_, y_, h_, w, kCaution);
         const int content = kMid.height + 4 + kLabelFont.height;
         const int16_t top = static_cast<int16_t>(y_ + (h_ - kBarH - content) / 2);
         centred_text(surf_, kMid, 4, static_cast<int16_t>(surf_.w - 8), top, word, kSpotInk, kCaution);
@@ -1005,14 +931,6 @@ void draw_result_row(const Surface &s, int16_t y, int16_t h, std::string_view ro
             holes[0] = b.text;
             for (int k = 0; k < b.nseg; k++) holes[1 + k] = b.segs[k];
             fill_except(s, {zx, zy, zw, zh}, holes, 1 + b.nseg, kBg);
-        }
-        i = j + 1;
-    }
-    for (int i = 0; i < n;) {
-        int j = i;
-        while (j + 1 < n && cells[j + 1].current == cells[i].current) j++;
-        if (!cells[i].current.empty()) {
-            const Bracket b = bracket_of(s, y, n, i, j, cells[i].current);
             gfx_text(s, kLabelFont, b.text.x, b.text.y, cells[i].current, focus ? kInk : kDim, kBg);
             for (int k = 0; k < b.nseg; k++) gfx_fill(s, b.segs[k].x, b.segs[k].y, b.segs[k].w, b.segs[k].h, kInk3);
         }
@@ -1033,27 +951,19 @@ void ResultGrid::invalidate() {
 }
 
 namespace {
-// A row's shape: everything but the cells' verdicts. A different shape repaints the whole row.
-uint32_t row_shape(const ResultRowSpec &r, int16_t y, int16_t h) {
+uint32_t row_hash(const ResultRowSpec &r, int16_t y, int16_t h, bool with_cur) {
     uint32_t k = mix_u32(mix_init(), static_cast<uint32_t>(r.n) | (static_cast<uint32_t>(r.section) << 4) |
                                          (static_cast<uint32_t>(r.focus) << 5) | (static_cast<uint32_t>(y) << 8) |
-                                         (static_cast<uint32_t>(h) << 20));
+                                         (with_cur ? static_cast<uint32_t>(h) << 20 : 0u));
     k = mix(k, r.label);
     for (int i = 0; i < r.n; i++) {
         k = mix(k, r.cells[i].label);
-        k = mix(k, r.cells[i].current);
+        if (with_cur) k = mix(k, r.cells[i].current);
     }
     return k;
 }
-// A row's core: where it is and which cells it has (the shape without the height and the cells' currents). A Running dot sits on
-// the top edge of its cell, so a row whose currents alone changed still has the dot's cell where the rows put it.
-uint32_t row_core(const ResultRowSpec &r, int16_t y) {
-    uint32_t k = mix_u32(mix_init(), static_cast<uint32_t>(r.n) | (static_cast<uint32_t>(r.section) << 4) |
-                                         (static_cast<uint32_t>(r.focus) << 5) | (static_cast<uint32_t>(y) << 8));
-    k = mix(k, r.label);
-    for (int i = 0; i < r.n; i++) k = mix(k, r.cells[i].label);
-    return k;
-}
+uint32_t row_shape(const ResultRowSpec &r, int16_t y, int16_t h) { return row_hash(r, y, h, true); }
+uint32_t row_core(const ResultRowSpec &r, int16_t y) { return row_hash(r, y, 0, false); }
 // The cells' verdicts, 3 bits each (7 values, at most 5 cells). Same shape and other verdicts: only those cells repaint.
 uint16_t row_verdicts(const ResultRowSpec &r) {
     uint16_t v = 0;
@@ -1086,6 +996,11 @@ unsigned changed_cells(uint16_t a, uint16_t b, int n) {
         if (((a ^ b) >> (3 * k)) & 7) m |= 1u << k;
     return m;
 }
+int16_t grid_row(ResultGrid::RowFn fn, void *ctx, int first, int i, ResultRowSpec &r) {
+    fn(ctx, i, r);
+    if (i == first) r.section = false;
+    return result_row_h(r);
+}
 }  // namespace
 
 void ResultGrid::show(int index, int lead) {
@@ -1100,9 +1015,7 @@ void ResultGrid::show(int index, int lead) {
         int sum = 0;
         for (int i = first_; i <= index; i++) {
             ResultRowSpec r;
-            fn_(ctx_, i, r);
-            if (i == first_) r.section = false;
-            sum += result_row_h(r);
+            sum += grid_row(fn_, ctx_, first_, i, r);
         }
         if (sum <= avail) break;
         first_++;
@@ -1131,9 +1044,7 @@ int ResultGrid::row_y(int index) const {
     int16_t yy = y_;
     for (int i = first_; i < count_; i++) {
         ResultRowSpec r;
-        fn_(ctx_, i, r);
-        if (i == first_) r.section = false;
-        const int16_t h = result_row_h(r);
+        const int16_t h = grid_row(fn_, ctx_, first_, i, r);
         if (yy + h > bottom_) break;
         if (i == index) return yy;
         yy = static_cast<int16_t>(yy + h);
@@ -1180,9 +1091,7 @@ int ResultGrid::sync_dots() {
     int slot = 0;
     for (int i = first_; i < count_ && slot < kMaxSlots; i++, slot++) {
         ResultRowSpec r;
-        fn_(ctx_, i, r);
-        if (i == first_) r.section = false;
-        const int16_t h = result_row_h(r);
+        const int16_t h = grid_row(fn_, ctx_, first_, i, r);
         if (yy + h > bottom_) break;
         if (valid_[slot] && core_[slot] == row_core(r, yy)) {
             const int16_t cy = static_cast<int16_t>(yy + (r.section ? kResultSectionH : 0)), vh = verdict_part_h(r, h);
@@ -1234,13 +1143,13 @@ int ResultGrid::draw_some(int budget_px, int prefer, bool strict) {
         slot = 0;
         for (int i = first_; i < count_ && slot < kMaxSlots; i++, slot++) {
             ResultRowSpec r;
-            fn_(ctx_, i, r);
-            if (i == first_) r.section = false;
-            const int16_t h = result_row_h(r);
+            const int16_t h = grid_row(fn_, ctx_, first_, i, r);
             if (yy + h > bottom_) break;
             if ((i == prefer) == (pass == 0)) {
                 const uint32_t sh = row_shape(r, yy, h);
                 const uint16_t vd = row_verdicts(r);
+                const int16_t cy = static_cast<int16_t>(yy + (r.section ? kResultSectionH : 0));
+                const int16_t vh = verdict_part_h(r, h);
                 if (!valid_[slot] || sig_[slot] != sh) {
                     const int cost = surf_.w * h + row_overlay_px(surf_, r, h, ~0u);
                     if ((strict || spent > 0) && spent + cost > budget_px) {
@@ -1250,13 +1159,11 @@ int ResultGrid::draw_some(int budget_px, int prefer, bool strict) {
                         spent += cost;
                         sig_[slot] = sh; vd_[slot] = vd; core_[slot] = row_core(r, yy); valid_[slot] = true;
                         if (dot_on_ && dot_cell_.y >= yy && dot_cell_.y < yy + h) dot_on_ = false;   // the row covers the whole width
-                        const int16_t cy = static_cast<int16_t>(yy + (r.section ? kResultSectionH : 0)), vh = verdict_part_h(r, h);
                         for (int k = 0; k < r.n; k++)
                             if (r.cells[k].verdict == Verdict::Running)
                                 note_dot(verdict_cell_rect(surf_, cy, vh, r.n, k), true, r.cells[k].label, slot, k);
                     }
                 } else if (vd_[slot] != vd) {
-                    const int16_t cy = static_cast<int16_t>(yy + (r.section ? kResultSectionH : 0)), vh = verdict_part_h(r, h);
                     const unsigned chg = changed_cells(vd_[slot], vd, r.n);
                     int cost = row_overlay_px(surf_, r, h, chg);
                     for (int k = 0; k < r.n; k++)

@@ -111,10 +111,13 @@ constexpr int mark_cell(const Font &f) { return mark_size(f) + 4; }   // 2 px le
 int draw_marked_text(const Surface &s, const Font &f, int16_t x, int16_t y, std::string_view text, uint16_t fg, uint16_t bg);
 int marked_width(const Font &f, std::string_view text);
 
-// Tag: r 3, S12 text. solid = fill in `color` with black text, otherwise `tint` fill with `color` text.
+// Tag: S12 text in a kPillH box. solid = fill in `color` with black text, otherwise `tint` fill with `color` text.
 // Returns the pill width.
 int draw_pill(const Surface &s, int16_t x, int16_t y, std::string_view text, uint16_t color, uint16_t tint,
               bool solid);
+// Shared single-pass S12 label-in-box painter (pills, chips, LAST badge).
+void draw_label_box(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, std::string_view text,
+                    uint16_t fg, uint16_t bg);
 
 // Track (kRule) plus fill; only the fill/track boundary is repainted when `prev_px` is given.
 void draw_gauge(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, int fill_px, uint16_t color,
