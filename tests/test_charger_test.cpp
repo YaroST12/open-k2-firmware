@@ -90,7 +90,7 @@ struct Fake final : ct::Env {
     // is up at a raised level), and cut_period_ms (> 0) = a cut at cut_first_ms and every period after it. cut_len_ms is the dark time.
     // After a cut no_handshake_after_cut makes the protocol's next requests fail NoHandshake (the port is back, the charger is silent).
     std::vector<int> cut_on_requests; uint32_t cut_delay_ms = 200, cut_len_ms = 1000, cut_tail_ms = 80, cut_period_ms = 0, cut_first_ms = 0;
-    int cut_dark_mv = 2000, cuts_seen = 0; bool no_handshake_after_cut = false, cut_raised = false;
+    int cut_dark_mv = 2000, cut_fall_mv = 0, cuts_seen = 0; bool no_handshake_after_cut = false, cut_raised = false;
     fc::Fail cut_fail = fc::Fail::NoHandshake;   // the engine's failure at the comeback of a cut (a silent entry window reads NoResponse)   // cut_raised: a cut may hit a raised output too
     uint32_t cut_start_at = 0, cut_end_at = 0, cut_tail_at = 0, cut_next_at = 0; bool cut_on = false;
     std::vector<uint32_t> cut_onsets;
@@ -621,7 +621,7 @@ struct Fake final : ct::Env {
                 if (cut_start_at && in.now >= cut_start_at) cut_start_at = 0;
                 if (cut_next_at && in.now >= cut_next_at) cut_next_at += cut_period_ms;
                 if (!cut_on && in.vbus_mv >= 1000 && (in.vbus_mv <= 5500 || cut_raised)) {   // a raised output is never cut (unless a test says so)
-                    cut_on = true; cut_end_at = in.now + cut_len_ms; ++in.session; ++cuts_seen; cut_onsets.push_back(in.now);
+                    cut_on = true; cut_end_at = in.now + cut_len_ms; if (!cut_fall_mv) ++in.session; ++cuts_seen; cut_onsets.push_back(in.now);   // with a fall sample the session follows it
                     if (in.fc_state != fc::State::Idle) { in.fc_state = fc::State::Failed; in.fc_fail = fc::Fail::NoHandshake; }   // the engine's session died with the output
                     silent_end_at = 0;
                 }
@@ -631,7 +631,10 @@ struct Fake final : ct::Env {
                 if (in.fc_state == fc::State::Negotiating) { in.fc_state = fc::State::Failed; in.fc_fail = fc::Fail::NeedsLoad; in.fc_tries = uint8_t(fc::kVoocTries); in.vbus_mv = 5000; }
             }
             if (cut_on) {
-                if (in.now < cut_end_at) in.vbus_mv = cut_dark_mv;
+                // cut_fall_mv: the first sample of the fall lands part-way down (CUKTECH USB-A, 4.65 V), before the dark level
+                const bool fall = cut_fall_mv && !cut_onsets.empty() && in.now == cut_onsets.back();
+                if (cut_fall_mv && !cut_onsets.empty() && in.now == cut_onsets.back() + step_ms) ++in.session;
+                if (in.now < cut_end_at) in.vbus_mv = fall ? cut_fall_mv : cut_dark_mv;
                 else {
                     cut_on = false; in.vbus_mv = 5100; cut_tail_at = in.now + cut_tail_ms;
                     if (cut_fail != fc::Fail::NoHandshake && in.fc_state != fc::State::Idle) { in.fc_state = fc::State::Failed; in.fc_fail = cut_fail; }   // its own timeout, after the comeback
@@ -1632,13 +1635,22 @@ static void test_safe5_baseline() {
         CHECK_EQ(r.state(), ct::State::Baseline);
         CHECK_EQ(run_until(f, r, [&] { return f.pd_requests == 1; }), true);   // every unit starts with its own detach and attach
     }
-    for (int mv : {4749, 5501}) {
-        Fake f; f.in.vbus_mv = mv;
+    {   // above vSafe5V: never waited for; under it (a dip: the fall of a port cut) the Baseline waits, and a dip that stays is unsafe
+        Fake f; f.in.vbus_mv = 5501;
         CHECK_EQ(ct::Runner::preview(f.caps, kPd, f.in).refusal, ct::Reason::Release);
         ct::Runner r(f);
         CHECK_EQ(r.start(f.caps, kPd, f.in, true), ct::Reason::Release);
         CHECK_EQ(r.state(), ct::State::Unsafe);
         CHECK_EQ(f.pd_requests + f.fc_requests, 0);
+        Fake g; g.in.vbus_mv = 4749;
+        CHECK_EQ(ct::Runner::preview(g.caps, kPd, g.in).refusal, ct::Reason::Release);
+        ct::Runner q(g);
+        CHECK_EQ(q.start(g.caps, kPd, g.in, true), ct::Reason::None);
+        CHECK_EQ(q.state(), ct::State::Baseline);
+        g.tick(q, ct::kCutWindowMs + 500);
+        CHECK_EQ(q.state(), ct::State::Unsafe);
+        CHECK_EQ(q.reason(), ct::Reason::Release);
+        CHECK_EQ(g.pd_requests + g.fc_requests, 0);
     }
     Fake fixed;
     fixed.in.vbus_mv = 5269;
@@ -5614,8 +5626,8 @@ static void test_a_cut_that_reads_no_response_does_not_skip_the_family() {
 // whole detection (kVoocDetectMaxMs): it has to fit one clean window, from whatever phase the unit starts in, so the family ends exactly as
 // on a port that never cuts (the control run: Fail / Request / needs load on the first row, the rest skipped the same way) and never
 // "port cuts without load". With the old 10.5 s detection no retry could fit and the same port read PortCuts.
-// The cuts begin once the first engine session has opened: a cut within 0 to 0.6 s of the start of the run (its first Baseline) is a different
-// case (the run stops, all rows Skip / Lost; pre-existing, see the FLOW doc), not what this test measures.
+// The cuts begin once the first engine session has opened; a cut inside the run's first Baseline is swept by
+// test_a_cut_in_the_first_baseline_waits_for_the_comeback.
 static void test_a_silent_vooc_family_on_a_7s_cut_port_ends_needs_load() {
     constexpr uint32_t kFamily = ct::bit(A::Vooc) | ct::bit(A::SuperVooc) | ct::bit(A::SuperVooc65);
     Fake clean; clean.caps = {}; clean.silent_session_ms = uint32_t(fc::kVoocDetectMaxMs) + 50u; ct::Runner rc(clean);
@@ -5678,7 +5690,7 @@ static void test_the_7s_cut_sequence_over_the_5v_steps_of_the_cuktech_run() {
 // The whole 10-unit run of the CUKTECH port, with a silent VOOC family (the port's real answer), the first cut swept over the whole
 // period (every 200 ms) once the first engine session has opened: whatever unit or row it lands in (a row, the Baseline or the detach
 // between two units), the run ends as the same run on a port that never cuts: one Fail (the VOOC family's needs-load row) and its two
-// skips, no PortCuts. A cut inside the run's very first Baseline is not part of this sweep (FLOW doc: open side issue).
+// skips, no PortCuts. A cut inside the run's very first Baseline is swept by test_a_cut_in_the_first_baseline_waits_for_the_comeback.
 static void test_the_10_unit_run_over_every_cut_phase_ends_as_without_cuts() {
     constexpr uint32_t kUnits = ct::bit(A::Fcp) | ct::bit(A::Scp) | ct::bit(A::Vooc) | ct::bit(A::SuperVooc) | ct::bit(A::SuperVooc65) |
                             ct::bit(A::Vivo) | ct::bit(A::Qc2) | ct::bit(A::Qc3) | ct::bit(A::Afc) | ct::bit(A::Ufcs);
@@ -5698,6 +5710,49 @@ static void test_the_10_unit_run_over_every_cut_phase_ends_as_without_cuts() {
         expect_same_plan(all_rows(rc), all_rows(r));
         CHECK_EQ(f.cuts_seen >= 2, true);
     }
+}
+// The run's very first Baseline meets a cut (CUKTECH USB-A, hardware 2026-11-15, fw a19874f0): the check read the fall's first sample
+// (4.65 V, under vSafe5V) and ended the run as "5V release failed / UNSAFE: unplug source". A fall that comes back inside
+// kCutWindowMs is waited for, never a stop. Swept: the first cut starts every 100 ms of the first 2 s after START, and START itself
+// lands in every 100 ms of the dark; every phase ends like the run on a port that never cuts.
+static constexpr uint32_t kTenUnits = ct::bit(A::Fcp) | ct::bit(A::Scp) | ct::bit(A::Vooc) | ct::bit(A::SuperVooc) | ct::bit(A::SuperVooc65) |
+                                      ct::bit(A::Vivo) | ct::bit(A::Qc2) | ct::bit(A::Qc3) | ct::bit(A::Afc) | ct::bit(A::Ufcs);
+static void test_a_cut_in_the_first_baseline_waits_for_the_comeback() {
+    Fake clean; clean.caps = {}; clean.silent_session_ms = uint32_t(fc::kVoocDetectMaxMs) + 50u; ct::Runner rc(clean);
+    CHECK_EQ(rc.start(clean.caps, {.selected = kTenUnits}, clean.in, true), ct::Reason::None);
+    for (unsigned t = 0; rc.state() != ct::State::Done && t < 400000; t += 100) clean.tick(rc, 100);
+    CHECK_EQ(rc.state(), ct::State::Done);
+    // 0..2000 ms: the cut falls after START (first sample 4.65 V); 2100..3000: START lands inside the dark (dark_ms into the 1 s cut)
+    for (uint32_t phase = 0; phase <= 3000; phase += 100) {
+        const bool in_dark = phase > 2000;
+        Fake f; f.caps = {}; f.cut_len_ms = 1000; f.cut_fall_mv = 4650; f.silent_session_ms = clean.silent_session_ms; ct::Runner r(f);
+        f.cut_period_ms = 7040;
+        if (!in_dark) f.cut_next_at = f.in.now + phase;
+        else {   // the cut began (phase - 2000) ms before START
+            const uint32_t elapsed = phase - 2000;
+            f.cut_on = true; f.cut_end_at = f.in.now + 1000 - elapsed; f.in.vbus_mv = f.cut_dark_mv; ++f.in.session;
+            f.cut_next_at = f.in.now + 7040 - elapsed;
+        }
+        CHECK_EQ(r.start(f.caps, {.selected = kTenUnits}, f.in, true), ct::Reason::None);
+        for (unsigned t = 0; r.state() != ct::State::Done && r.state() != ct::State::Stopped && r.state() != ct::State::Unsafe &&
+                             t < 400000; t += 100) f.tick(r, 100);
+        CHECK_EQ(r.state(), ct::State::Done);
+        expect_same_plan(all_rows(rc), all_rows(r));
+    }
+}
+// A real failure keeps the stop: VBUS stuck under vSafe5V past the window, or above it.
+static void test_a_baseline_dip_that_does_not_come_back_still_stops() {
+    Fake f; f.caps = {}; ct::Runner r(f);
+    CHECK_EQ(r.start(f.caps, kFcpVooc, f.in, true), ct::Reason::None);
+    f.in.vbus_mv = 4000;   // a sag that never ends: not a cut
+    f.tick(r, 5000);
+    CHECK_EQ(r.state() == ct::State::Unsafe || r.state() == ct::State::Stopped, true);
+    Fake g; g.caps = {}; ct::Runner q(g);
+    CHECK_EQ(q.start(g.caps, kFcpVooc, g.in, true), ct::Reason::None);
+    g.in.vbus_mv = 6200;   // above the release level: never waited for
+    g.tick(q, 300);
+    CHECK_EQ(q.state(), ct::State::Unsafe);
+    CHECK_EQ(q.reason(), ct::Reason::Release);
 }
 // Outside a recovery nothing is adopted: a session change in a Baseline that no legacy row sag preceded is still source lost.
 static void test_session_change_in_baseline_without_a_sag_is_still_lost() {
@@ -7992,6 +8047,7 @@ int main() {
     test_usb_a_sag_tail_session_is_not_source_lost(); test_usb_a_sag_tail_waits_for_vbus_to_climb(); test_usb_a_sag_tail_with_dead_or_low_vbus_is_still_lost(); test_session_change_in_baseline_without_a_sag_is_still_lost(); test_usb_a_midrow_session_opens_the_adopt_window(); test_usb_a_sag_dip_under_1v_inside_the_window_waits();
     test_cut_in_the_row_then_a_clean_retry_passes(); test_a_retried_first_scp_row_replans_like_an_unretried_one(); test_a_retried_first_scp_row_keeps_the_rows_a_wide_list_offers(); test_a_retried_first_ufcs_row_replans_like_an_unretried_one(); test_a_retried_first_vooc_family_row_ends_like_an_unretried_one(); test_several_cuts_in_a_row_then_a_clean_retry_passes(); test_every_retry_cut_is_a_skip_not_a_fail(); test_the_retries_are_counted_per_row(); test_a_cut_that_reads_no_response_does_not_skip_the_family(); test_a_loss_that_does_not_come_back_in_the_window_is_a_fail();
     test_a_dip_shorter_than_the_minimum_is_no_cut(); test_a_protocol_failure_after_a_clean_comeback_is_a_fail(); test_the_7s_cut_sequence_over_the_5v_steps_of_the_cuktech_run(); test_a_fall_in_a_raised_row_is_no_cut_casualty(); test_a_silent_vooc_family_on_a_7s_cut_port_ends_needs_load(); test_the_10_unit_run_over_every_cut_phase_ends_as_without_cuts();
+    test_a_cut_in_the_first_baseline_waits_for_the_comeback(); test_a_baseline_dip_that_does_not_come_back_still_stops();
     test_custom_unit_list_runs_in_order(); test_pd_unit_attaches_with_a_contract(); test_a_failed_unit_does_not_stop_the_run();
     test_default_unit_order_is_vendor_modes_then_pd_then_legacy(); test_default_order_runs_vendor_modes_before_pd_before_legacy(); test_pd_between_vendor_and_legacy_units(); test_pd_replan_in_the_middle_keeps_the_rows_in_order(); test_consecutive_legacy_units_share_one_attach(); test_legacy_session_that_sees_pd_traffic_is_renewed(); test_silent_ufcs_source_reports_no_response_not_pd_active(); test_legacy_waits_between_units();
     test_legacy_attach_that_never_falls_back_is_blocked_by_pd(); test_legacy_retry_that_falls_back_runs_the_unit(); test_legacy_attach_waits_out_hard_reset_cycles();

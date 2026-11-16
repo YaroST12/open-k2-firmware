@@ -1327,8 +1327,10 @@ Reason Runner::start(const pd::SourceCaps& caps, Options o, Input in, bool confi
     reason_ = Reason::None; refusal_mv_ = 0;
     probe_ = (has_unit(o.units, Unit::Pd) || has_unit(o.units, Unit::PdLow)) ? Probe::Pending : Probe::Off;   // ask the charger who it is once, at the end of the first Pd unit
     state_ = State::Baseline;
-    // An already elevated source is not safe to take over blindly.
-    if (!safe5(in.vbus_mv)) { unsafe(Reason::Release); return reason_; }
+    // An already elevated source is not safe to take over blindly. A reading inside a dip is the fall of a port cut: the Baseline waits for
+    // the comeback (bounded, see kDipMinMv) instead of ending the run before it began.
+    dip_open_ = dip_reading(in.vbus_mv); dip_ms_ = in.now; dip_back_ = false; dips_ = 0;   // a START inside the dark has its clock from now
+    if (!safe5(in.vbus_mv) && !dip_reading(in.vbus_mv)) { unsafe(Reason::Release); return reason_; }
     return Reason::None;
 }
 // The level the rail starts the row from: a row in the live session of the one before it (a retarget) starts at the last passed row of
@@ -1538,6 +1540,27 @@ void Runner::finish(Input in, Verdict v, Reason r, uint8_t detail) {
     if (cut_hold(in, v, r, detail)) return;
     finish_row(in, v, r, detail);
 }
+// kDipMinMv: the clocks of a dip, every poll. A dip opens at the first reading in the dip range and ends at the first vSafe5V reading
+// (a comeback: counted, its tail session is adopted for kDipTailMs); a reading above vSafe5V or under kDipMinMv ends it uncounted (those
+// keep their own verdicts). Dips are counted per stretch between two rows: a row that runs clears the count.
+void Runner::track_dip(const Input& in) {
+    const int v = in.vbus_mv;
+    if (state_ == State::Requesting || state_ == State::Holding) dips_ = 0;
+    if (dip_back_ && in.now - dip_back_ms_ >= kDipTailMs) dip_back_ = false;
+    if (dip_reading(v)) {
+        if (!dip_open_) { dip_open_ = true; dip_ms_ = in.now; dip_back_ = false; }
+    } else if (dip_open_) {
+        dip_open_ = false;
+        if (safe5(v)) { dip_back_ = true; dip_back_ms_ = in.now; if (dips_ < 255) ++dips_; }
+    }
+}
+// The 5 V check waits while VBUS is in a dip that has lasted less than kCutWindowMs and fewer than kCutRetries dips came back before it.
+bool Runner::dip_wait(const Input& in) const {
+    return dip_open_ && dip_reading(in.vbus_mv) && in.now - dip_ms_ < kCutWindowMs && dips_ < kCutRetries;
+}
+bool Runner::dip_adopts(const Input& in) const {
+    return (dip_open_ && in.now - dip_ms_ < kCutWindowMs) || (dip_back_ && in.now - dip_back_ms_ < kDipTailMs);
+}
 // pattern usb-a-no-load-auto-off. Called at every poll of a Legacy attach: follows the falls of VBUS under kCutMv that start at the 5 V
 // level (the sample before is not above kCutNoAboveMv), closes one when VBUS is back at vSafe5V and keeps the onsets of the ones that
 // lasted kCutMinMs..kCutWindowMs (the cut period is read from them, see Evidence::cut_period_ds).
@@ -1577,7 +1600,10 @@ bool Runner::cut_hold(Input in, Verdict v, Reason r, uint8_t detail) {
     if (v != Verdict::Fail || cut_wait_ || index_ >= count_ || mode_ != Mode::Legacy || pd_owned_ || steps_[index_].group == Group::Pd) return false;
     if (r != Reason::Lost && r != Reason::Timeout && r != Reason::Request && r != Reason::Voltage) return false;
     if (std::max(row_hi_, in.vbus_mv) > kCutNoAboveMv) return false;
-    if (r != Reason::Lost && !cut_dark_ && !cut_start_ms_) return false;
+    // The engine's failure may land on the very poll that reads the fall's first sample (4.65 V, not yet under kCutMv): a dip that has
+    // just opened (track_dip) holds the row too, and cut_resolve keeps the verdict when the fall never reached the dark.
+    const bool falling = dip_open_ && dip_reading(in.vbus_mv) && in.now - dip_ms_ < kCutWindowMs;
+    if (r != Reason::Lost && !cut_dark_ && !cut_start_ms_ && !falling) return false;
     cut_wait_ = true; cut_final_ = cut_retry_idx_ == index_ && cut_tries_ >= kCutRetries;
     cut_v_ = v; cut_why_ = r; cut_detail_ = detail; cut_mv_ = in.vbus_mv;
     steps_[index_].verdict = Verdict::Pending; steps_[index_].reason = Reason::None;
@@ -2354,7 +2380,8 @@ Reason Runner::resume(Input in, bool confirmed) {
     selfpwr_ = in.self_powered; adopt_ = true; held_ = false; jwait_ms_ = 0;   // the page arms the spoof/cable now: that session change is not a loss
     probe_ = Probe::Off;   // a resumed run does not ask again
     state_ = State::Baseline;
-    if (!safe5(in.vbus_mv)) { unsafe(Reason::Release); return reason_; }
+    dip_open_ = dip_reading(in.vbus_mv); dip_ms_ = in.now; dip_back_ = false; dips_ = 0;
+    if (!safe5(in.vbus_mv) && !dip_reading(in.vbus_mv)) { unsafe(Reason::Release); return reason_; }
     return Reason::None;
 }
 void Runner::poll(Input in, const pd::SourceCaps& caps) {
@@ -2381,6 +2408,7 @@ void Runner::poll_impl(Input in, const pd::SourceCaps& caps) {
     }
     const uint32_t gap = in.now - last_ms_; last_ms_ = in.now;
     track_cut(in);
+    track_dip(in);
     // Restart rules (2026-11-09), rule 1: every new list opens a settle window - no Request until the list in hand has
     // been unchanged for kListSettleMs, and each list arriving inside the window restarts it. Attach/Detach settle the
     // list on their own (poll_attach waits for caps + contract), so the window is tracked only in the run states; the
@@ -2600,8 +2628,8 @@ void Runner::poll_impl(Input in, const pd::SourceCaps& caps) {
         } else stable_ = false;
         // The sink is still verifying VBUS after its 5 V release (retries, then its own Hard Reset): its window is bounded by the
         // sink, so this one is not cut short at 8 s.
-        if (state_ == State::Releasing && !in.pd.verifying && !(wait_caps && safe5(in.vbus_mv)) &&
-            in.now - phase_ms_ >= (recover_ ? kRecoverMs : 8000)) {
+        if (state_ == State::Releasing && !in.pd.verifying && !(wait_caps && safe5(in.vbus_mv)) && !dip_wait(in) &&
+            in.now - phase_ms_ >= (recover_ ? kRecoverMs : 8000)) {   // a cut's fall at the window's end waits for its comeback (bounded)
             if (cut_wait_) cut_resolve(in);   // the window ran out: the verdict the row would have had, before the run ends
             if (recover_ && in.vbus_mv >= 0 && in.vbus_mv < 1000 && cut_index_ < count_) {
                 // pattern latch-off-low-pps: the source shut its output off on the low edge and stays dead until a replug.
@@ -2662,6 +2690,9 @@ void Runner::poll_impl(Input in, const pd::SourceCaps& caps) {
         if (safe5(in.vbus_mv)) session_ = in.session;
         else { stable_ = false; return; }
     }
+    // The cut's own session changes (the Rp of the cable falls with VBUS and returns after it) belong to the dip, in the Baseline of
+    // either mode: adopted while the dip is open and for kDipTailMs after the comeback.
+    if (baseline && in.session != session_ && dip_adopts(in)) session_ = in.session;
     const Reason fault = in.vbus_mv < 0 || in.cap_mv < 5000 ? Reason::NoMonitor : in.loop_lock ? Reason::Loop :
         in.inline_load ? Reason::Inline :
         !baseline && in.ibus_ma > kLoadAbortMa ? Reason::Inline :   // the suite draws no current: a load aborts
@@ -2748,6 +2779,9 @@ void Runner::poll_impl(Input in, const pd::SourceCaps& caps) {
         if (epr_stage_ < 2 && epr_tries_ && !safe5(in.vbus_mv) && in.vbus_mv >= 1000 && in.now - phase_ms_ < kRecoverMs) {
             stable_ = false; return;
         }
+        // A port cut's fall reads under vSafe5V first (CUKTECH USB-A 4.65 V, then ~2 V for about a second, then back): wait for the
+        // comeback, bounded by kCutWindowMs and kCutRetries dips; a source stuck low, above vSafe5V or not back in time is still unsafe.
+        if (dip_wait(in)) { stable_ = false; return; }
         if (!safe5(in.vbus_mv)) { unsafe(Reason::Release); return; }
         if (mode_ == Mode::Pd && epr_stage_ == 0) regrow_plan(caps, in);   // the list may still grow during the baseline
         if (!stable_ || gap > 250) { stable_ = true; stable_ms_ = in.now; }

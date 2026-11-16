@@ -1187,7 +1187,9 @@ void ChargerTestSession::open_confirmation() {
     const auto preview = ct::Runner::preview(fusb302::caps(), options_, in);
     const bool later = (preview.refusal == ct::Reason::NoSource || preview.refusal == ct::Reason::Release) &&
                        pd::start_needs_rd(ctx_.inline_mode, ctx_.vbus_fast_mv);
-    if (preview.refusal != ct::Reason::None && !later) {
+    // One reading inside the fall of a USB-A port's auto-off cut (1 V up to vSafe5V) is not a refusal: START's own check waits for it.
+    const bool in_cut = preview.refusal == ct::Reason::Release && ct::dip_reading(in.vbus_mv);
+    if (preview.refusal != ct::Reason::None && !later && !in_cut) {
         start_failed(preview.refusal, ctx_.ui->busy_reason(), in.vbus_mv);   // the log line + footer + recorded reason
         return;
     }
@@ -1251,7 +1253,9 @@ void ChargerTestSession::start_failed(ct::Reason r, const char* busy, int vbus_m
 void ChargerTestSession::launch() {
     const auto in = input(ctx_.now);
     const auto preview = ct::Runner::preview(fusb302::caps(), options_, in);
-    if (preview.refusal != ct::Reason::None) {
+    // A reading inside a port cut's fall is waited for by the runner's own 5 V check (Runner::start), not refused here.
+    const bool in_cut = preview.refusal == ct::Reason::Release && ct::dip_reading(in.vbus_mv);
+    if (preview.refusal != ct::Reason::None && !in_cut) {
         start_failed(preview.refusal, ctx_.ui->busy_reason(), in.vbus_mv);   // the wait ended in a refusal: the log says why
         return;
     }

@@ -218,6 +218,15 @@ inline constexpr uint32_t kSagAdoptMs = 5000;
 // in is shorter) acknowledges the stop and the page may start a new run. VBUS above vSafe5V never ends it.
 inline constexpr uint32_t kUnsafeGoneMs = 1000;
 inline constexpr int kUnsafeLowMv = pd::kVSafe5MinMv;
+// A reading from kDipMinMv up to (not including) vSafe5V is a dip: the fall of a port's cut (pattern usb-a-no-load-auto-off: the first
+// falling sample of the CUKTECH USB-A port read 4.65 V, then 3.1, 2.7 ... down to ~2.0 V) or a sag. Only the samples after it show
+// which. Every 5 V check of the run's Baseline, the START and the release windows therefore waits for the dip to come back (VBUS at
+// vSafe5V) inside kCutWindowMs and for at most kCutRetries dips between two rows, and only then calls the source unsafe / lost.
+// VBUS above vSafe5V and under kDipMinMv (a source that is gone) keep their own verdicts. kDipTailMs: the cable's Rp returns after
+// VBUS (a new attach session, the same cut's tail), so a session change this soon after the comeback is adopted.
+inline constexpr int kDipMinMv = 1000;
+inline constexpr uint32_t kDipTailMs = 1000;
+constexpr bool dip_reading(int mv) { return mv >= kDipMinMv && mv < pd::kVSafe5MinMv; }
 // What the first Legacy attach of the last run did; the report card keeps it with its duration (ms from the unit's detach).
 // InContract is no longer produced (stored cards of the old flow still carry it).
 enum class HandoverOutcome : uint8_t { NotTried, FellBack, StayedPd, Fault, Reboot, InContract };
@@ -921,10 +930,16 @@ private:
     uint32_t cut_start_ms_ = 0, cut_back_ms_ = 0, cut_dark_ms_ = 0; int row_hi_ = 0, cut_last_mv_ = -1; bool cut_dark_ = false;
     std::array<uint32_t, kCutOnsets> cut_onsets_{}; uint8_t n_cut_onsets_ = 0;
     size_t cut_retry_idx_ = SIZE_MAX; uint8_t cut_tries_ = 0;   // the row asked again, and how many times (kCutRetries at most)
+    // kDipMinMv: dip_open_ = VBUS has been in the dip range since dip_ms_; dip_back_ = it came back to vSafe5V at dip_back_ms_ (its tail
+    // session is adopted for kDipTailMs); dips_ = the dips that came back since the last row ran (kCutRetries are waited for).
+    uint32_t dip_ms_ = 0, dip_back_ms_ = 0; bool dip_open_ = false, dip_back_ = false; uint8_t dips_ = 0;
     // A casualty whose cut is still in progress waits in Releasing (cut_wait_) for VBUS to come back: the row is Pending, the verdict it
     // would have had is kept here (cut_v_ / cut_why_ / cut_detail_ / cut_mv_ = the VBUS of that moment), cut_final_ = the retries of this row are used up.
     bool cut_wait_ = false, cut_final_ = false; Verdict cut_v_ = Verdict::Fail; Reason cut_why_ = Reason::None; uint8_t cut_detail_ = 0; int cut_mv_ = 0;
     void track_cut(const Input&);
+    void track_dip(const Input&);                            // the dip clocks above (every poll)
+    bool dip_wait(const Input&) const;                       // VBUS is in a dip that may still come back: the 5 V check waits
+    bool dip_adopts(const Input&) const;                     // a session change is the dip's (during it, or its tail after the comeback)
     bool cut_hold(Input, Verdict, Reason, uint8_t detail);   // finish(): a casualty of a port cut is asked again (true) instead of failed
     void cut_resolve(Input);                                 // Releasing: the held casualty's cut came back (retry or skip) or the window ran out (it fails)
     // Sink Hard Resets sent when the release started: a later one is the sink's own last resort for a release that did not

@@ -227,10 +227,18 @@ one row fill the 58-byte frame), saturating at 31; `k2_remote` and the web decod
 
 Limits: a protocol the port does not speak with a timeout longer than the ~6 s clean gap reads "port cuts" (the retry meets the next
 cut); a cut hidden inside a blocked handshake is not seen, so casualties are never inferred from the period alone; a real brownout
-at 5 V that comes back within 2 s is asked again (up to three times). A cut that begins within about 0 to 0.6 s of the start of the run (the run's first Baseline, before
-any row ran; the test fake's dark level is 2 V) is not retried: the run stops with every row Skip / Lost (open side issue, pre-existing: no
-Baseline code changed; found by sweeping the first cut over the period in 100 ms steps, 7 of 71 phases hit, offsets 700 ms and later are clean;
-about 10 % of the START moments when START itself is not inside the dark, which was not tested; the exact path to Stopped was not traced). Host tests: `test_charger_test` (`test_cut_in_the_row_then_a_clean_retry_passes`, `test_several_cuts_in_a_row_then_a_clean_retry_passes`, `test_every_retry_cut_is_a_skip_not_a_fail`, `test_a_loss_that_does_not_come_back_in_the_window_is_a_fail`, `test_the_7s_cut_sequence_over_the_5v_steps_of_the_cuktech_run` `test_a_protocol_failure_after_a_clean_comeback_is_a_fail`, `test_a_silent_vooc_family_on_a_7s_cut_port_ends_needs_load`, `test_the_10_unit_run_over_every_cut_phase_ends_as_without_cuts`; engine step times in `test_fc_engine`, `test_fc_vivo`, `test_fc_ufcs`).
+at 5 V that comes back within 2 s is asked again (up to three times).
+
+The 5 V gates wait out a cut too (CUKTECH USB-A, hardware 2026-11-15: the run's first Baseline read the first sample of the port's fall,
+4.65 V, and ended "5V release failed / UNSAFE: unplug source" on a healthy source). `Runner::track_dip` follows VBUS readings from 1 V up
+to vSafe5V (`dip_reading`, `kDipMinMv`): while such a dip is open for less than `kCutWindowMs` and fewer than `kCutRetries` dips came
+back before, the Baseline (the run-start check included), the Releasing window and the legacy row sag adoption wait for the comeback and
+check again; a source that comes back is adopted (the session the port's own restart bumps, up to `kDipTailMs` after the comeback). START
+itself reads a dip as a cut under way (`start()`, `restore()`: the 5 V gate is the same wait), and `cut_hold` also holds a row whose
+engine failure lands on the poll of the fall's first sample. Still a stop: VBUS above the release level, VBUS under 1 V (no source), a dip
+that does not come back inside the window, or the same dip repeating more than the retry count. `Runner::preview` (one reading, used by
+the confirmation page and `tools/ct_start.py` preflight) refuses a dip like any other non-5 V reading; the UI and the script re-read before
+refusing. Host tests: `test_charger_test` (`test_cut_in_the_row_then_a_clean_retry_passes`, `test_several_cuts_in_a_row_then_a_clean_retry_passes`, `test_every_retry_cut_is_a_skip_not_a_fail`, `test_a_loss_that_does_not_come_back_in_the_window_is_a_fail`, `test_the_7s_cut_sequence_over_the_5v_steps_of_the_cuktech_run` `test_a_protocol_failure_after_a_clean_comeback_is_a_fail`, `test_a_silent_vooc_family_on_a_7s_cut_port_ends_needs_load`, `test_the_10_unit_run_over_every_cut_phase_ends_as_without_cuts`, `test_a_cut_in_the_first_baseline_waits_for_the_comeback` (the first cut in every 100 ms of the first 2 s, START inside the dark, the fall's first sample at 4.65 V), `test_a_baseline_dip_that_does_not_come_back_still_stops`; engine step times in `test_fc_engine`, `test_fc_vivo`, `test_fc_ufcs`).
 
 ## SCP and UFCS rows follow what the charger reported (2026-11-08)
 
