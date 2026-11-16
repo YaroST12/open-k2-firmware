@@ -273,6 +273,21 @@ HOT_MATH_O3_OBJS = $(BUILD_DIR)/drivers/adc_calc.o $(BUILD_DIR)/drivers/power_ca
 $(HOT_MATH_O2_OBJS): CFLAGS += -O2
 $(HOT_MATH_O3_OBJS): CFLAGS += -O3
 
+# Cold objects: every firmware C++ file that has no K2_HOT function and is not one of the speed objects above
+# (a new K2_HOT use moves its file out by itself). These flags trade a little speed for size; cold UI, test-flow
+# and protocol code never feels it, and no hot path is compiled with them. Measured on the shipping build
+# (K2_WEBUSB=1 K2_PDSPEC=1, text 715200 B before): -fno-reorder-blocks -1252 B, then the four after it -3096 B,
+# then the last three -2360 B (-6708 B together). Stack worst case unchanged (PSP free 2360 -> 2368 B). Rejected
+# on the same build (they grow it, or change under 100 B): -fno-tree-ccp, -fno-tree-pta, -fno-ipa-pure-const,
+# -fno-tree-vrp, -fno-gcse, -fno-tree-pre, -fno-ssa-phiopt, -fno-peephole2, -fno-tree-dse, -fno-crossjumping.
+COLD_SIZE_FLAGS = -fno-reorder-blocks -fno-caller-saves -fno-if-conversion -fno-tree-dominator-opts -fno-tree-loop-im \
+                  -fno-move-loop-invariants -fno-optimize-sibling-calls -fno-inline-functions
+HOT_SRC_FILES = $(shell grep -rl K2_HOT $(SRC_DIR) --include='*.cpp')
+COLD_CXX_SRCS = $(filter-out $(HOT_SRC_FILES) $(FONT_SRCS) $(SRC_DIR)/battery/battery.cpp $(SRC_DIR)/fastcharge/dpsniff.cpp \
+                $(SRC_DIR)/drivers/adc_calc.cpp $(SRC_DIR)/drivers/power_calc.cpp $(SRC_DIR)/fastcharge/fastcharge_classify.cpp,$(CXX_SRCS))
+COLD_OBJS = $(patsubst $(SRC_DIR)/%.cpp,$(BUILD_DIR)/%.o,$(COLD_CXX_SRCS))
+$(COLD_OBJS): CFLAGS += $(COLD_SIZE_FLAGS)
+
 DOCKER_IMG = open-k2-builder:latest
 
 .PHONY: all clean flash probe reboot nav-headers docker-build docker-flash test web web-sync webhid gate smoke stack-report check-64bit
@@ -308,7 +323,7 @@ $(LOGDB_HDR): $(CXX_SRCS) $(wildcard $(INC_DIR)/*.hpp $(INC_DIR)/k2/*.hpp $(INC_
 # and linker setting (tools, CFLAGS, CXXFLAGS, LDFLAGS, -Werror, LTO); any flag edit or K2_WERROR /
 # EXTRA_*FLAGS change gives a new stamp, which deletes the old one and rebuilds and relinks everything.
 # Defined after the last global flag edit above; target-specific flags (version.o) are not part of it.
-CFG_FLAGS := $(CC) | $(CXX) | $(CFLAGS) | $(CXXFLAGS) | $(LDFLAGS) | $(OWN_WERROR) | $(LTO) | $(NOLTO_OBJS) | $(HOT_MATH_O2_OBJS) | $(HOT_MATH_O3_OBJS)
+CFG_FLAGS := $(CC) | $(CXX) | $(CFLAGS) | $(CXXFLAGS) | $(LDFLAGS) | $(OWN_WERROR) | $(LTO) | $(NOLTO_OBJS) | $(HOT_MATH_O2_OBJS) | $(HOT_MATH_O3_OBJS) | $(COLD_SIZE_FLAGS) | $(COLD_OBJS)
 CFG_STAMP := $(BUILD_DIR)/.cfg-$(word 1,$(shell printf '%s' '$(subst ','"'"',$(CFG_FLAGS))' | md5sum))
 # A missing stamp must rebuild (.SECONDARY would otherwise treat it as an intermediate and skip it).
 .NOTINTERMEDIATE: $(CFG_STAMP)
