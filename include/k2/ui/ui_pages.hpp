@@ -593,11 +593,10 @@ public:
     static constexpr int kHeroPx = 5000;         // the 4-digit 48 px readout (4 x 24 x 48) plus its unit
     static constexpr int kNeedlePx = 200;        // the old and the new needle column and the window edge they cross
     static constexpr int kRangePx = 36 * 12;     // a sweep row's gauge move: the old and new marker (6 columns each) and needle (2 each)
-    static constexpr int kSweepHeroPx = 6 * 24 * 48 + 500;   // a sweep row's 6-digit readout and its unit
-    static constexpr int kSweepLineChars = 26;   // a sweep row's line under the hero ("set 20.000  err +48 mV", at most 25), 8 px a cell
-    static constexpr int kSweepLinePx = kSweepLineChars * 8 * 16;
+    // a sweep row's error hero: three 48 px digit cells, the 24 px unit, the sign (erase + draw), the act and set values (six 24 px cells each)
+    static constexpr int kSweepHeroPx = 3 * 24 * 30 + 2 * 12 * 24 + 2 * 12 * 24 + 2 * 6 * 12 * 24;
     static constexpr uint32_t kHeroMs = 250;     // the hero and the needle repaint at most this often in flight (~4 Hz)
-    static constexpr uint32_t kSweepHeroMs = 500;   // ... a sweep row's, with its line, twice a second (the digits are the busy part)
+    static constexpr uint32_t kSweepHeroMs = 500;   // ... a sweep row's, with the act / set pair, twice a second
     static constexpr uint32_t kFollowResumeMs = 5000;   // a manual scroll of the grid holds this long, or until the step changes
 private:
     ChargerTestSession& s_;
@@ -635,6 +634,7 @@ private:
     [[gnu::noinline]] void paint_detail();
     [[gnu::noinline]] void paint_resume();
     [[gnu::noinline]] void paint_hero(bool full, int16_t x, int16_t y, uint8_t chars, int32_t vbus_mv, uint16_t color);
+    [[gnu::noinline]] void paint_sweep_hero(int32_t vbus_mv, uint16_t set_mv);   // Running, a sweep row: the signed error and the act / set pair
     // Running's static layout, plain or the sweep row's restack; a switch wipes the body below the progress bar first.
     [[gnu::noinline]] void lay_running(bool sweeping, bool wipe);
     void list_row(int, bool, kit::RowSpec&);   // row_fn's body (fills the page's shared text buffers, consumed at once)
@@ -658,7 +658,8 @@ private:
     kit::ActionCell action_;               // Review: START / CONFIRM
     kit::ProgressBar prog_;                // Running: steps done of all
     kit::ResultGrid grid_;                 // Running and Results: the verdict grid
-    Field hero_;                           // Waiting and Running: the live VBUS digits
+    Field hero_;                           // Waiting and Running: the live VBUS digits (a sweep row: the signed error)
+    Field act_;                            // Running, a sweep row: the act value beside the error hero
     Elem foot_;                            // footer cache (draw_footer_cached)
     Elem body_;                            // the static part of a dense stage (laid_)
     uint32_t cell_sig_[12] = {};           // dense stages: per-line caches (Waiting lines, Running texts); 0 = not drawn
@@ -672,7 +673,11 @@ private:
     int mark_px_ = -1;                     // a sweep row's gauge: the setpoint marker's column, -1 = not drawn (needle_px_ is its needle)
     uint32_t foot_sig_ = 0;                // Running: the footer (tone + text) last painted; 0 = not drawn
     uint32_t hero_sig_ = 0;                // Waiting: the cached VBUS + color signature; 0 = not drawn
-    uint16_t hero_color_ = 0;
+    uint16_t hero_color_ = 0;              // the hero's colour on screen (a sweep row: its grade), 0 = not drawn
+    uint16_t act_color_ = 0;               // a sweep row's act value colour on screen
+    int16_t sign_x_ = -1;                  // a sweep row's error sign cell on screen (left edge), -1 = none
+    uint32_t sign_sig_ = 0;                // ... and what it shows (sign + colour)
+    bool hero_volts_ = false;              // a sweep row's error hero reads in V, not mV
     int16_t clear_y_ = kFooterY;           // progressive stage-transition wipe cursor (< kFooterY = clearing)
     char cell_txt_[kit::kResultMaxCells][2][12] = {};   // the verdict grid's cells: volts and current text
     char cell_lbl_[10] = {};               // ... and the unit label of the row

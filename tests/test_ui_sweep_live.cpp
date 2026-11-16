@@ -2,8 +2,10 @@
 // Copyright (C) 2026 Yaraslau Furman
 // The charger-test Running view of a deep-sweep row (ROADMAP "Sweep live view"), driven end to end through the page on the host
 // stubs: the badge names the range, the gauge shows the range as two dotted lines with a setpoint marker that moves point by
-// point, and one text line reads the last point's request, reading and error. A non-sweep row keeps today's look.
-// K2_DUMP=dir host-build/test_ui_sweep_live writes dir/k2_sweep_*.panel (tools/panel2png.py makes the PNGs).
+// point, and the signed ERROR (reading - setpoint) is the hero, with the act / set pair beside it (include/k2/ui/run_layout.hpp).
+// A non-sweep row keeps today's look. The geometry is checked in both content mappings (portrait 224 x 240, landscape 240 x 224:
+// a fill stretches, a text cell keeps its native height), and the error hero and the act / set block pixel by pixel in all four
+// rotations. K2_DUMP=dir host-build/test_ui_sweep_live writes dir/k2_sweep_*.panel (tools/panel2png.py makes the PNGs).
 #include <algorithm>
 #include <array>
 #include <cstdio>
@@ -22,6 +24,10 @@
 #include "k2/chargertest/charger_test.hpp"
 #include "k2/chargertest/step_label.hpp"
 #include "k2/chargertest/sweep.hpp"
+#include "k2/ui/run_layout.hpp"
+#include "k2/ui/sweep_hero.hpp"
+#include "k2/ui/ui_layout.hpp"
+#include "k2/ui/blend.hpp"
 
 using namespace k2;
 namespace ct = charger_test;
@@ -32,9 +38,12 @@ constexpr int kRunningStage = 5, kCustomStage = 14;
 constexpr int kFamHuawei = 0, kFamSamsung = 1, kFamOppo = 2, kFamPd = 4, kFamQc = 5, kFamDone = 6;
 // The Running view's gauge strip, the target line (rows 88..99, its last two rows share the strip's first two) and the name line.
 constexpr int kStripY = 98, kTargetY = 88, kPointY = 86, kNameY = 68;
-// A sweep row restacks the view: the name moves up, the VBUS hero is six characters with three decimals, a font-16 line under it
-// reads the setpoint and the error, and the gauge and the grid move down to make room.
-constexpr int kSweepNameY = 48, kSweepHeroY = 67, kSweepHeroRight = 196, kSweepHeroChars = 6, kSweepLineY = 98, kSweepStripY = 115;
+// A sweep row restacks the view (run_layout.hpp): the name moves up, the signed error is the hero (three 48 px cells at x18..89, a
+// 24 px sign left of the first digit, "mV" / "V" on the baseline), the act / set pair stacks on the right, and the gauge and the
+// grid move down to make room.
+using runlay::kSweepRun;
+constexpr int kSweepNameY = kSweepRun.name_y, kSweepStripY = kSweepRun.gauge_y, kHeroY = kSweepRun.hero_y;
+constexpr int kHeroLeft = runlay::kHeroDigitsRight - 3 * runlay::kAdv48;
 
 void press(Ui& ui, Button b, uint32_t now) { ui.on_button(b, ButtonEvent::Short, now); }
 void move(Ui& ui, unsigned n, uint32_t now) { for (unsigned i = 0; i < n; ++i) press(ui, Button::Plus, now); }
@@ -141,6 +150,107 @@ void settle(Ui& ui, uint32_t& t) {
     for (int i = 0; i < 40 && ui.painting(); ++i) { t += 10; ui.tick(t); }
 }
 
+// ---- the error hero and the act / set block, in any rotation ---------------------------------------------------------------------
+
+// Where the logical content sits on the panel in a rotation, and where a logical point lands: mapped(c) = c * extent / logical, the
+// origin of a glyph cell only (a cell keeps its native size).
+Rect content_box(uint8_t rot) { return compute_layout(orientation_for(rot).edge, kSlotCenters, kSlotLens, kPanelThickness).content; }
+int map_x(const Rect& b, int x) { return b.x + x * b.w / 224; }
+int map_y(const Rect& b, int y) { return b.y + y * b.h / 240; }
+
+// The number of pixels of the glyph cell 'text' (font, logical x / y, colour on ground) that differ on the panel; the cell sits at the
+// mapped origin at native size, every row of it (a neighbour's stretched fill overwriting the last row shows here).
+unsigned glyph_diff(const Rect& b, const Font& f, int x, int y, std::string_view text, uint16_t fg, int dx = 0) {
+    const int px = map_x(b, x) + dx, py = map_y(b, y);
+    uint16_t lut[16], line[240];
+    make_blend_lut(fg, kBg, lut);
+    unsigned d = 0;
+    for (int row = 0; row < f.height; ++row) {
+        const int n = render_row(f, text, row, lut, line, 240);
+        for (int i = 0; i < n; ++i) d += line[i] != g_panel[size_t(py + row) * LCD_WIDTH + px + i];
+    }
+    if (d && std::getenv("K2_DBG")) std::printf("   glyph_diff font h%d x%d y%d '%.*s' fg %04x: %u\n", f.height, x, y, int(text.size()), text.data(), fg, d);
+    return d;
+}
+struct Cell { int x0, y0, x1, y1; };
+Cell cell_of(const Rect& b, const Font& f, int x, int y, std::string_view text, int dx = 0) {
+    return {map_x(b, x) + dx, map_y(b, y), map_x(b, x) + dx + text_width(f, text), map_y(b, y) + f.height};
+}
+// Pixels of the panel rectangle [x0, x1) x [y0, y1) (logical x range, mapped rows: y0 / y1 are mapped panel rows) that are not ground
+// and not inside one of the allowed cells.
+unsigned stray_ink(int px0, int py0, int px1, int py1, const std::vector<Cell>& allowed) {
+    unsigned n = 0;
+    for (int y = py0; y < py1; ++y)
+        for (int x = px0; x < px1; ++x) {
+            if (g_panel[size_t(y) * LCD_WIDTH + x] == kBg) continue;
+            bool in = false;
+            for (const Cell& c : allowed) in = in || (x >= c.x0 && x < c.x1 && y >= c.y0 && y < c.y1);
+            n += !in;
+        }
+    return n;
+}
+
+uint16_t grade_color(sweep_hero::Grade g) { return g == sweep_hero::Grade::Ok ? kOk : g == sweep_hero::Grade::Caution ? kCaution : kError; }
+std::string cells6(int32_t mv) { char s[16]; std::snprintf(s, sizeof s, "%6.3f", mv / 1000.0); return s; }
+
+// Everything the sweep row's hero and block paint, checked against a reading and a setpoint in the rotation of the content box 'b': each
+// element's pixels equal its glyph cell, and nothing else is inked in the hero's band (x < the family label) or the block's.
+// vbus < 0 or set == 0: the dim placeholders in their places.
+void check_error_hero(const Rect& b, int32_t vbus, unsigned set, const char* what) {
+    const bool have = vbus >= 0 && set != 0;
+    const sweep_hero::Err e = sweep_hero::format(have ? vbus - int32_t(set) : 0);
+    const uint16_t col = have ? grade_color(e.grade) : kDim;
+    const bool volts = have && e.volts;
+    // the digits right-aligned in the three cells; the blank cells are not compared (the sign stands in the first of them)
+    const std::string digits = have ? std::string(e.digits, e.len) : std::string("--");
+    const int digits_dx = (3 - int(digits.size())) * runlay::kAdv48;
+    const std::string unit = volts ? "V " : "mV";
+    unsigned bad = 0;
+    std::vector<Cell> allowed;
+    // dx: native pixels from the mapped origin (a Field lays its cells out from its own mapped origin)
+    auto elem = [&](const Font& f, int x, int y, const std::string& s, uint16_t fg, int dx = 0) {
+        bad += glyph_diff(b, f, x, y, s, fg, dx);
+        allowed.push_back(cell_of(b, f, x, y, s, dx));
+    };
+    // the hero
+    elem(kBig, kHeroLeft, kHeroY, digits, col, digits_dx);
+    elem(kMid, runlay::kHeroUnitX, kHeroY + runlay::kH48 - runlay::kA24, unit, col);
+    if (have && e.sign) {
+        const char s1[2] = {e.sign, 0};
+        elem(kMid, sweep_hero::sign_x(runlay::kHeroDigitsRight, runlay::kAdv48, runlay::kAdv24, e.len, runlay::kSignGap), kHeroY + runlay::kSignDy, s1, col);
+    }
+    const int band_y0 = map_y(b, kHeroY);
+    const unsigned hero_stray = stray_ink(map_x(b, 0), band_y0, map_x(b, runlay::kBlockLabelX), band_y0 + runlay::kH48, allowed);
+    // the block: act over set, the labels and the units on the values' baselines
+    allowed.clear();
+    const int dy = runlay::kA24 - runlay::kA12;
+    elem(kLabelFont, runlay::kBlockLabelX, runlay::kActY + dy, "act", kDim);
+    elem(kMid, runlay::kBlockValueX, runlay::kActY, vbus >= 0 ? cells6(vbus) : std::string("    --"), vbus >= 0 ? kVolt : kDim);
+    elem(kLabelFont, runlay::kBlockUnitX, runlay::kActY + dy, "V", vbus >= 0 ? kVolt : kDim);
+    elem(kLabelFont, runlay::kBlockLabelX, runlay::kSetY + dy, "set", kDim);
+    elem(kMid, runlay::kBlockValueX, runlay::kSetY, set ? cells6(int32_t(set)) : std::string("    --"), set ? kText : kDim);
+    elem(kLabelFont, runlay::kBlockUnitX, runlay::kSetY + dy, "V", kDim);
+    const unsigned block_stray = stray_ink(map_x(b, runlay::kBlockLabelX), map_y(b, runlay::kActY),
+                                           b.x + b.w, map_y(b, runlay::kSetY) + runlay::kH24, allowed);
+    if (bad || hero_stray || block_stray)
+        std::printf("  %s: vbus %d set %u: %u pixels differ, %u stray in the hero band, %u in the block\n", what, int(vbus), set, bad, hero_stray, block_stray);
+    CHECK_EQ(bad, 0u);
+    CHECK_EQ(hero_stray, 0u);
+    CHECK_EQ(block_stray, 0u);
+}
+
+// Sets the reading to (the live setpoint + delta), lets the page paint it, and returns the setpoint it was painted against (0 when the
+// sweep moved on to the next point during the paint: the caller asks again).
+unsigned inject(Ui& ui, uint32_t& t, int32_t delta) {
+    for (int tries = 0; tries < 6; ++tries) {
+        const unsigned set = ui.charger_test_results().sweep_live().set_mv;
+        g_stub.pm.vbus_mv = int32_t(set) + delta;
+        t += 600; ui.tick(t); settle(ui, t);
+        if (ui.charger_test_results().sweep_live().set_mv == set && g_stub.pm.vbus_mv == int32_t(set) + delta) return set;
+    }
+    return 0;
+}
+
 // One scene at rotation 0, pixel-checked: the badge, the gauge, the per-point line.
 void check_scene(bool avs, int ceiling_mv, unsigned points, bool expect_out_of_band, const char* name) {
     Ui ui; uint32_t t;
@@ -176,24 +286,43 @@ void check_scene(bool avs, int ceiling_mv, unsigned points, bool expect_out_of_b
     for (int x = int(geom.mark) - 2; x <= int(geom.mark) + 3; ++x)
         if (std::find(needle.begin(), needle.end(), x) == needle.end()) want.push_back(x);
     CHECK_EQ(columns_of(kFocus, kSweepStripY) == want, true);
-    // 3. the hero: the VBUS reading, six characters, three decimals, the point fixed in the third cell whether the volts have one
-    // digit or two (" 9.000", "20.050")
+    // 3. the hero is the signed error of the reading against the setpoint the last Request asked for (to the mV, no deadband), graded by
+    // size; the act / set pair stacks beside it
     const int32_t shown = g_stub.pm.vbus_mv;
-    char hv[16];
-    std::snprintf(hv, sizeof hv, "%6.3f", shown / 1000.0);
-    CHECK_EQ(hv[2], '.');
-    CHECK_EQ(text_diff(kBig, kSweepHeroRight - kSweepHeroChars * kBig.adv, kSweepHeroY, hv, kVolt, kBig.ascent), 0u);
-    // 4. the line under it: the setpoint the last Request asked for and the reading's signed error, in mV, no deadband
-    char sl[48];
-    std::snprintf(sl, sizeof sl, "set %.3f  err %+d mV", live.set_mv / 1000.0, int(shown - int32_t(live.set_mv)));
-    CHECK_EQ(text_diff(kSmall, 6, kSweepLineY, sl, expect_out_of_band ? kCaution : kText), 0u);
+    check_error_hero(content_box(0), shown, live.set_mv, name);
+    // an out-of-band point (the output holds 12 V while the request climbs) is red; a following converter's error is +0 in green
+    const auto err = sweep_hero::format(shown - int32_t(live.set_mv));
+    CHECK_EQ(err.grade == sweep_hero::Grade::Error, expect_out_of_band);
     CHECK_EQ(ctsweep::out_of_band(live.last_set_mv(), live.last_measured_mv()), expect_out_of_band);
     dump_panel(name);
 }
 }  // namespace
 
 int main() {
-    // PPS 3.3-21 V and SPR AVS 9-20 V on a converter that follows every request: the line reads err+0mV in the plain colour.
+    // The geometry: the real fonts are what run_layout.hpp's constants say, and no two boxes of the sweep row overlap in either mapping.
+    CHECK_EQ(kLabelFont.height, runlay::kH12); CHECK_EQ(kLabelFont.ascent, runlay::kA12); CHECK_EQ(kLabelFont.adv, runlay::kAdv12);
+    CHECK_EQ(kSmall.height, runlay::kH16); CHECK_EQ(kSmall.ascent, runlay::kA16); CHECK_EQ(kSmall.adv, runlay::kAdv16);
+    CHECK_EQ(kMid.height, runlay::kH24); CHECK_EQ(kMid.ascent, runlay::kA24); CHECK_EQ(kMid.adv, runlay::kAdv24);
+    CHECK_EQ(kBig.height, runlay::kH48); CHECK_EQ(kBig.ascent, runlay::kA48); CHECK_EQ(kBig.adv, runlay::kAdv48);
+    for (int n = 0; n <= 3; ++n) {
+        CHECK_EQ(runlay::sweep_clear(n, 224, 240), true);   // portrait (rot 0, 2)
+        CHECK_EQ(runlay::sweep_clear(n, 240, 224), true);   // landscape (rot 1, 3)
+    }
+    // the walk itself bites: the layout of dc7aec88 (name y48, a 30 px hero at y67, a font-16 line at y98) overlaps in landscape only, which
+    // is why its rot 0 test passed while the hero's bottom ink row was gone on a device in the default (gravity) rotation
+    {
+        using runlay::Box;
+        const Box old_name{"name", 6, 48, 88, 16, true}, old_hero{"hero", 52, 67, 144, 30, true}, old_line{"line", 6, 98, 208, 16, true};
+        CHECK_EQ(runlay::overlap(old_hero, old_line, 224, 240), false);
+        CHECK_EQ(runlay::overlap(old_hero, old_line, 240, 224), true);
+        CHECK_EQ(runlay::overlap(old_name, old_hero, 240, 224), false);
+        // and the sign's gap is needed: without it a one-digit error's sign stands two columns into its digit cell in landscape
+        const Box bare{"sign", int16_t(sweep_hero::sign_x(runlay::kHeroDigitsRight, runlay::kAdv48, runlay::kAdv24, 1)), kHeroY + runlay::kSignDy, runlay::kAdv24, runlay::kH24, true};
+        CHECK_EQ(runlay::overlap(bare, runlay::digits_box(1), 240, 224), true);
+        CHECK_EQ(runlay::overlap(bare, runlay::digits_box(1), 224, 240), false);
+        CHECK_EQ(runlay::overlap(runlay::sign_box(1), runlay::digits_box(1), 240, 224), false);
+    }
+    // PPS 3.3-21 V and SPR AVS 9-20 V on a converter that follows every request: the error reads 0, green, in the hero.
     check_scene(false, 36000, 12, false, "sweep_pps_rot0_early");
     check_scene(true, 36000, 12, false, "sweep_avs_rot0_early");
     // The marker moves along the range with the points: later in the sweep it sits further right.
@@ -210,7 +339,7 @@ int main() {
         if (!early.empty() && !late.empty()) CHECK_EQ(late.front() > early.front() + 20, true);
         dump_panel("sweep_pps_rot0_late");
     }
-    // A source that holds 12 V while the request climbs: the points above fall out of the band; the line turns to the caution colour.
+    // A source that holds 12 V while the request climbs: the points above fall out of the band; the error hero turns red.
     check_scene(false, 12000, 100, true, "sweep_pps_rot0_out_of_band");
     // A non-sweep row keeps today's look: the "target" line and the pass band (a solid window, no dotted lines, no marker).
     {
@@ -238,26 +367,6 @@ int main() {
             int inside = 0;
             for (int x : needle) inside += x > ok.front() && x < ok.back();
             CHECK_EQ(int(ok.back() - ok.front() + 1), int(ok.size()) + inside);
-        }
-    }
-    // The hero's point stays in the third cell from 9.999 V to 10.000 V (the digits never shift), and the line follows the reading.
-    {
-        Ui ui; uint32_t t;
-        start_sweep(ui, t, false, 0, 36000);
-        CHECK_EQ(run_to_point(ui, t, 8), true);
-        std::array<uint16_t, size_t(LCD_WIDTH) * LCD_HEIGHT> low{};
-        for (const int32_t mv : {9999, 10000}) {
-            g_stub.pm.vbus_mv = mv;
-            t += 600; ui.tick(t); settle(ui, t);
-            CHECK_EQ(g_stub.pm.vbus_mv, mv);   // the fixture left the reading alone, so the page painted it
-            char hv[16];
-            std::snprintf(hv, sizeof hv, "%6.3f", mv / 1000.0);
-            CHECK_EQ(text_diff(kBig, kSweepHeroRight - kSweepHeroChars * kBig.adv, kSweepHeroY, hv, kVolt, kBig.ascent), 0u);
-            // the point's cell (third of six, x100..123) holds the same ink at both readings
-            std::array<uint16_t, 24 * 30> cell{};
-            for (int y = 0; y < 30; ++y) for (int x = 0; x < 24; ++x) cell[size_t(y) * 24 + x] = at(kSweepHeroRight - 4 * 24 + x, kSweepHeroY + y);
-            if (mv == 9999) { for (size_t i = 0; i < cell.size(); ++i) low[i] = cell[i]; }
-            else CHECK_EQ(std::equal(cell.begin(), cell.end(), low.begin()), true);
         }
     }
     // Back on a plain row after the sweep: today's layout returns whole (target line, pass band, the 4-cell hero), and nothing of
@@ -289,16 +398,30 @@ int main() {
             dump_panel("plan_row_after_sweep_rot0");
         }
     }
-    // Both ranges, both orientations, rendered for the contact sheet (the truncation gate runs on every scene through test_report).
+    // Both ranges, all four rotations: the error hero walks through every look (the sign moving with the digit count, a colour change
+    // repainting the field whole, the mV -> V unit switch and back, zero without a sign) and after each the hero, the act / set block and
+    // the ground around them equal the glyph cells exactly, in every row of every cell (the landscape rotations map the gauge's fill onto
+    // the row under the hero's text cell). Each look is dumped for the contact sheet (the truncation gate runs through test_report).
+    struct Look { int32_t delta; const char* tag; };
+    const Look looks[] = {{50, "ok_p050"}, {123, "amber_p123"}, {5, "ok_p005"}, {0, "ok_zero"}, {-7, "ok_m007"}, {-400, "red_m400"},
+                          {50, "ok_p050b"}, {-1200, "red_m1v2"}, {2, "ok_p002"}, {-100, "ok_m100"}, {-101, "amber_m101"}, {300, "amber_p300"},
+                          {301, "red_p301"}, {12000, "red_p12v"}};
     for (const bool avs : {false, true})
         for (const uint8_t rot : {uint8_t(0), uint8_t(1), uint8_t(2), uint8_t(3)}) {
             Ui ui; uint32_t t;
             start_sweep(ui, t, avs, rot, 36000);
             CHECK_EQ(run_to_point(ui, t, 40), true);
-            t += 600; ui.tick(t); settle(ui, t);
-            char name[48];
-            std::snprintf(name, sizeof name, "sweep_%s_rot%u", avs ? "avs" : "pps", unsigned(rot));
-            dump_panel(name);
+            const Rect b = content_box(rot);
+            for (const Look& l : looks) {
+                const unsigned set = inject(ui, t, l.delta);
+                CHECK_EQ(set != 0, true);
+                if (!set) continue;
+                char name[64];
+                std::snprintf(name, sizeof name, "%s rot %u %s", avs ? "avs" : "pps", unsigned(rot), l.tag);
+                check_error_hero(b, int32_t(set) + l.delta, set, name);
+                std::snprintf(name, sizeof name, "sweep_%s_rot%u_%s", avs ? "avs" : "pps", unsigned(rot), l.tag);
+                dump_panel(name);
+            }
         }
     return test_report("test_ui_sweep_live");
 }

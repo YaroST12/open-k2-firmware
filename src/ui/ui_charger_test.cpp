@@ -6,6 +6,8 @@
 #include "k2/core/loop_guard.hpp"
 #include "k2/core/math_opt.hpp"
 #include "k2/ui/ui_style.hpp"
+#include "k2/ui/run_layout.hpp"
+#include "k2/ui/sweep_hero.hpp"
 #include "k2/ui/text.hpp"
 #include "k2/core/bbpersist.hpp"
 #include "k2/core/gap_meter.hpp"
@@ -2219,23 +2221,20 @@ void hero_text(StrBuf<12> &b, int32_t mv, bool fine) {
     if (mv < 0) { b.put("--"); return; }
     b.put_fixed(mv, fine ? 3 : mv < 10000 ? 2 : 1);
 }
-// Running's two stackings below the progress bar (y44..46). Plain: family y52, name y68 (x6), the 4-cell hero beside them
-// (y54..83), the target line y88, the gauge strip y98, a rule, the grid from y114. A sweep row (user decision 2026-11-16)
-// has a 6-cell hero that would meet the name, so it restacks: name y48 (the family label right of it), hero y67..96, the
-// set / err line y98 (font 16), the gauge y115, the rule, the grid from y131 (17 px less of it). A switch wipes the body.
-struct RunLayout {
-    int16_t name_y, hero_y, gauge_y, rule_y, grid_y;
-    uint8_t hero_chars;
-};
-constexpr RunLayout kPlainRun{68, 54, 98, 112, 114, 4};
-constexpr RunLayout kSweepRun{48, 67, 115, 129, 131, 6};
-constexpr int16_t kRunBelowBar = 47, kRunHeroRight = 196, kSweepLineY = 98, kSweepFamX = 122;
-constexpr int kBigAscent = 30, kSmallH = 16;   // font_48's ascent (no descent), font_16's cell height
-static_assert(kSweepRun.name_y >= kRunBelowBar && kSweepRun.name_y + kSmallH <= kSweepRun.hero_y, "sweep: name above the hero");
-static_assert(kSweepRun.hero_y + kBigAscent <= kSweepLineY && kSweepLineY + kSmallH <= kSweepRun.gauge_y, "sweep: hero, line, gauge in order");
+// Running's two stackings below the progress bar (y44..46), in k2/ui/run_layout.hpp with the sweep stack's overlap proof (every
+// painted box disjoint, portrait and landscape). Plain: family y52, name y68 (x6), the 4-cell VBUS hero beside them, the target
+// line y88, the gauge strip y98, a rule, the grid from y114. A sweep row (user decision 2026-11-16) makes the signed error the
+// hero: it restacks, name y48, the error hero left, the act / set pair right, the gauge y116, the grid from y132. A switch wipes
+// the body.
+using runlay::RunLayout;
+using runlay::kPlainRun;
+using runlay::kSweepRun;
+constexpr int16_t kRunBelowBar = runlay::kBelowBar, kRunHeroRight = runlay::kPlainHeroRight;
 static_assert(kSweepRun.gauge_y + kit::kPassBandH <= kSweepRun.rule_y && kSweepRun.rule_y + 2 <= kSweepRun.grid_y, "sweep: gauge, rule, grid in order");
-static_assert(kRunHeroRight + 3 + 12 <= 224, "the hero's unit fits the content width");
-static_assert(kRunHeroRight - 6 * 24 >= 6, "the 6-cell hero fits the content width");
+static_assert(kRunHeroRight + 3 + 12 <= 224, "the plain hero's unit fits the content width");
+static_assert(runlay::kBlockUnitX + runlay::kAdv12 <= 224, "the act / set unit fits the content width");
+static_assert(ctsweep::kErrOkMv == result_layout::kSweepPassMv, "the error hero and the sweep chip share the pass window");
+static_assert(runlay::kHeroDigitsRight - 3 * runlay::kAdv48 - runlay::kAdv24 >= 0, "the sign and the three digit cells fit the content width");
 }  // namespace
 
 void ChargerTestPage::paint_review() {
@@ -2304,16 +2303,72 @@ void ChargerTestPage::paint_hero(bool full, int16_t x, int16_t y, uint8_t chars,
     kit::draw_hero(ctx_.content, hero_, kit::HeroSpec{&kBig, x, y, chars, color, "V"}, t.view(), full);
 }
 
+// A sweep row's error hero (run_layout.hpp): the signed error of the live reading against the setpoint in the 48 px font, its sign
+// (the font has no '+') in the 24 px font against the first digit, the unit on the digits' baseline, graded green / amber / red
+// by size. Beside it the act / set pair, 24 px values stacked on the decimal point. The error digits and the act value are Fields
+// (char-diff); a colour or unit change repaints the Field whole; a sign that moves erases its old cell first. With no reading or
+// no setpoint yet every value is a dim placeholder in its place.
+void ChargerTestPage::paint_sweep_hero(int32_t vbus_mv, uint16_t set_mv) {
+    const Surface &c = ctx_.content;
+    const bool have = vbus_mv >= 0 && set_mv != 0;
+    const sweep_hero::Err e = sweep_hero::format(have ? vbus_mv - static_cast<int32_t>(set_mv) : 0);
+    const uint16_t color = !have ? kDim : e.grade == sweep_hero::Grade::Ok ? kOk : e.grade == sweep_hero::Grade::Caution ? kCaution : kError;
+    const bool first = hero_color_ == 0;
+    const bool volts = have && e.volts;
+    const bool full = first || color != hero_color_ || volts != hero_volts_;
+    // the sign: the cell left of the first digit, none for a zero or a placeholder
+    const char sign = have ? e.sign : char(0);
+    const int sx = sign ? sweep_hero::sign_x(runlay::kHeroDigitsRight, runlay::kAdv48, runlay::kAdv24, e.len, runlay::kSignGap) : -1;
+    if (sign_x_ >= 0 && sx != sign_x_)   // before the digits: a cell the old sign stood in may now hold a digit
+        gfx_text(c, kMid, static_cast<int16_t>(sign_x_), static_cast<int16_t>(kSweepRun.hero_y + runlay::kSignDy), " ", kText, kBg);
+    StrBuf<12> t;
+    if (have) t.put(std::string_view(e.digits, e.len)); else t.put("--");
+    kit::draw_hero(c, hero_, kit::HeroSpec{&kBig, runlay::kHeroDigitsRight, kSweepRun.hero_y, kSweepRun.hero_chars, color, volts ? "V " : "mV"}, t.view(), full);
+    const uint32_t ssig = (sign ? mix_u32(mix_u32(0x51u, static_cast<uint32_t>(sign)), color) : 0u) | 1u;
+    if (full || sx != sign_x_ || ssig != sign_sig_) {
+        if (sign) {
+            const char s1[2] = {sign, 0};
+            gfx_text(c, kMid, static_cast<int16_t>(sx), static_cast<int16_t>(kSweepRun.hero_y + runlay::kSignDy), s1, color, kBg);
+        }
+        sign_x_ = static_cast<int16_t>(sx);
+        sign_sig_ = ssig;
+    }
+    hero_color_ = color;
+    hero_volts_ = volts;
+    // the act value, then the set value: both six cells, right-aligned, so the points line up
+    const uint16_t acol = vbus_mv >= 0 ? kVolt : kDim;
+    if (first || acol != act_color_) {
+        act_.init(c, kMid, runlay::kBlockValueX, runlay::kActY, runlay::kBlockValueChars, Align::Right, acol, kBg);
+        act_color_ = acol;
+    }
+    StrBuf<12> a;
+    if (vbus_mv >= 0) a.put_fixed(vbus_mv, 3); else a.put("--");
+    act_.draw(a.view());
+    StrBuf<12> s;
+    if (set_mv) s.put_fixed(set_mv, 3); else s.put("--");
+    put_line(c, kMid, runlay::kBlockValueX, runlay::kSetY, s.view(), set_mv ? kText : kDim, runlay::kBlockValueChars, cell_sig_[6], true);
+}
+
 void ChargerTestPage::lay_running(bool sweeping, bool wipe) {
     const Surface &c = ctx_.content;
     const RunLayout &L = sweeping ? kSweepRun : kPlainRun;
     if (wipe) gfx_fill(c, 0, kRunBelowBar, c.w, kFooterY - kRunBelowBar, kBg);
     else gfx_fill(c, 0, L.gauge_y, c.w, kit::kPassBandH, kBg);
     gfx_fill(c, 0, L.rule_y, c.w, 2, kRule);
+    if (sweeping) {   // the act / set block's fixed words: labels and units, on their values' baselines
+        const int16_t dy = static_cast<int16_t>(runlay::kA24 - runlay::kA12);
+        gfx_text(c, kLabelFont, runlay::kBlockLabelX, static_cast<int16_t>(runlay::kActY + dy), "act", kDim, kBg);
+        gfx_text(c, kLabelFont, runlay::kBlockUnitX, static_cast<int16_t>(runlay::kActY + dy), "V", kVolt, kBg);
+        gfx_text(c, kLabelFont, runlay::kBlockLabelX, static_cast<int16_t>(runlay::kSetY + dy), "set", kDim, kBg);
+        gfx_text(c, kLabelFont, runlay::kBlockUnitX, static_cast<int16_t>(runlay::kSetY + dy), "V", kDim, kBg);
+    }
     grid_.init(c, L.grid_y, kFooterY, &ChargerTestPage::result_row_fn, this);   // every row dirty again
     for (int i = 2; i <= 6; ++i) cell_sig_[i] = 0;   // family, name, target, gauge strip, set / err line: they paint again
     needle_px_ = mark_px_ = -1;
     hero_color_ = 0;   // the next hero paints whole, at once
+    hero_volts_ = false;
+    sign_x_ = -1;
+    sign_sig_ = 0;
     hero_ms_ = 0;
     grid_key_ = 0;     // and the step outline is rebuilt
     sweep_laid_ = sweeping;
@@ -2503,25 +2558,16 @@ void ChargerTestPage::paint_running(uint32_t now) {
         put_line(c, kSmall, 170, 25, e.view(), kDim, 6, cell_sig_[1], true, false, &bg);
     }
     // 3. the live VBUS and its needle: every update between steps, about 4 Hz while a step is in flight (yields refreshes while grid rows are pending).
-    // A sweep row's hero reads to the mV and its line (setpoint, signed error of the same reading) repaints with it: twice a second.
-    if ((!flight || now - hero_ms_ >= (sweeping ? kSweepHeroMs : kHeroMs)) && !(pbg && grid_.pending() && hero_color_ == kVolt) &&
-        bg.admit((sweeping ? kSweepHeroPx + kSweepLinePx : kHeroPx) + (needle_px_ >= 0 ? kNeedlePx : 0))) {
+    // A sweep row's hero is the signed error (reading - setpoint, to the mV) with the act / set pair beside it, all of one reading:
+    // twice a second.
+    if ((!flight || now - hero_ms_ >= (sweeping ? kSweepHeroMs : kHeroMs)) && !(pbg && grid_.pending() && hero_color_ != 0) &&
+        bg.admit((sweeping ? kSweepHeroPx : kHeroPx) + (needle_px_ >= 0 ? kNeedlePx : 0))) {
         hero_ms_ = now;
-        paint_hero(hero_color_ != kVolt, kRunHeroRight, L.hero_y, L.hero_chars, vbus, kVolt);
-        hero_color_ = kVolt;
         if (sweeping) {
-            // "set 20.000  err +48 mV": the setpoint whose Request is out, the reading's error against it (no deadband; a sign here
-            // is an error, not a flow direction). Caution only when the last recorded point fell outside the sweep's tolerance.
-            StrBuf<32> sl;
-            sl.put("set ").put_fixed(live.set_mv, 3).put("  err ");
-            if (vbus < 0) {
-                sl.put("--");
-            } else {
-                const int32_t err = vbus - static_cast<int32_t>(live.set_mv);
-                sl.put_char(err < 0 ? '-' : '+').put_u32(static_cast<uint32_t>(err < 0 ? -err : err)).put(" mV");
-            }
-            const bool bad = live.n > 0 && ctsweep::out_of_band(live.last_set_mv(), live.last_measured_mv());
-            put_line(c, kSmall, 6, kSweepLineY, sl.view(), bad ? kCaution : kText, kSweepLineChars, cell_sig_[6]);
+            paint_sweep_hero(vbus, live.set_mv);
+        } else {
+            paint_hero(hero_color_ != kVolt, kRunHeroRight, L.hero_y, L.hero_chars, vbus, kVolt);
+            hero_color_ = kVolt;
         }
         if (sweeping && needle_px_ >= 0 && mark_px_ >= 0) {
             const kit::RangePos p = kit::draw_range_gauge(c, 6, L.gauge_y, 210, vbus_g, live.set_mv, live.lo_mv, live.hi_mv, full, {static_cast<int16_t>(mark_px_), static_cast<int16_t>(needle_px_)});
@@ -2541,7 +2587,7 @@ void ChargerTestPage::paint_running(uint32_t now) {
         const int fam = st ? family(*st) : -1;
         // the family label (dim, 12 px) above the name; a sweep row's name moves up and the label goes to its right, baseline to baseline
         const char *const fam_name = fam >= 0 ? kFamilyNames[fam] : "";
-        if (sweeping) put_line(c, kLabelFont, kSweepFamX, L.name_y + kSmall.ascent - kLabelFont.ascent, fam_name, kDim, 16, cell_sig_[2], true, false, &bg);
+        if (sweeping) put_line(c, kLabelFont, runlay::kSweepFamX, L.name_y + kSmall.ascent - kLabelFont.ascent, fam_name, kDim, 16, cell_sig_[2], true, false, &bg);
         else put_line(c, kLabelFont, 6, 52, fam_name, kDim, 16, cell_sig_[2], false, false, &bg);
         StrBuf<32> nm;
         if (st) nm.put(step_label::label(*st, at > 0 ? &steps[at - 1] : nullptr).view());
