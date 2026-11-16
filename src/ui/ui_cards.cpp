@@ -241,6 +241,7 @@ void cards_range_status_text(const rc::Card &c, const rc::Range &r, StrBuf<16> &
         put_volts(out, c.sweep[std::size_t(&r - c.range.data())].fold_dv);
         return;
     }
+    if (tone::deviates(c, r)) { out.put("off >100mV"); return; }   // a sweep that tracked worse than the pass window: a caution
     if (r.fail_dv) {
         if (r.max_dv && tone::capped(c)) {
             out.put("caps ");
@@ -410,7 +411,7 @@ void cards_sheet(const rc::Card &c, bool range, unsigned idx, CardSheet &out) {
     if (range) {
         const rc::Range &r = c.range[idx];
         const tone::Tone rt = tone::range(c, r);
-        sheet_verdict(out, rt, tone::folded(c, r) ? "Caution" : verdict_word(rt, false, true));
+        sheet_verdict(out, rt, tone::caution(c, r) ? "Caution" : verdict_word(rt, false, true));
         StrBuf<32> rg;
         cards_range_text(r, rg);
         sheet_add_num(out, "Offered", kVolt, rg.view());
@@ -427,6 +428,7 @@ void cards_sheet(const rc::Card &c, bool range, unsigned idx, CardSheet &out) {
             cards_fold_text(c, r, fold);
             sheet_add(out, "Note", kCaution, stash(out.note, sizeof out.note, fold.view()));
         }
+        if (tone::deviates(c, r)) sheet_add(out, "Note", kCaution, "sweep off >100mV");   // 16 cells, the value column; a caution by tracking
         // A failing range of a card whose PD group failed only through a range: the group's cause is this range's cause too.
         if (r.fail_dv && tone::fixed_ok_despite_group(c)) sheet_add(out, "Reason", kCaution, rc::group_why(0, c.group[0]));
         return;

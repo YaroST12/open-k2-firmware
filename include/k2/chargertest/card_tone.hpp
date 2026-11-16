@@ -12,7 +12,8 @@
 //           and then failed with nothing passing, which a card cannot hold (the 5 V baseline would be a pass).
 // A voltage fold the sweep found (the sweep block's fold_dv) is a CAUTION: a range with no failure and a fold reads amber (pass +
 // capped), never green and never red. The card keeps no per-step verdicts, so the fold itself is the mark; an older card that
-// stored the fold reads the same.
+// stored the fold reads the same. A sweep that tracked worse than 100 mV (the block's worst_err, stored clamped to +/-127 mV) is a
+// caution too (deviates): the device's chip is amber on a passing sweep above the pass window, never red, so the card says the same.
 // A Light card (Card::level) measured 5 V only: a passing group reads Noted ("detected" / "advertised"), a range it never
 // asked for reads Noted, and the card head is Noted when nothing failed; never green.
 // The page (docs/site/r/card.js) carries the same table; tests/test_card_tone.cpp and tests/test_cardpage.mjs pin both to the
@@ -36,6 +37,16 @@ inline bool folded(const Card& c, const Range& r) {
     return i < c.n_ranges && i < c.sweep.size() && c.sweep[i].fold_dv && !r.fail_dv;
 }
 
+// The range's sweep tracked worse than the pass window (result_layout::kSweepPassMv) and nothing failed: a caution by deviation. A fold
+// already is one (folded), so this is the sweep without a fold.
+inline bool deviates(const Card& c, const Range& r) {
+    const size_t i = size_t(&r - c.range.data());
+    return i < c.n_ranges && i < c.sweep.size() && !c.sweep[i].fold_dv && !r.fail_dv &&
+           unsigned(c.sweep[i].worst_err < 0 ? -int(c.sweep[i].worst_err) : int(c.sweep[i].worst_err)) > result_layout::kSweepPassMv;
+}
+// A caution of either kind: the row reads amber, the sheet says "Caution".
+inline bool caution(const Card& c, const Range& r) { return folded(c, r) || deviates(c, r); }
+
 inline Tone range(const Card& c, const Range& r) {
     Tally t;
     if (c.level == ct::Level::Light && !r.fail_dv && !r.max_dv) return Tone::Noted;   // a Light run only lists the range
@@ -48,7 +59,7 @@ inline Tone range(const Card& c, const Range& r) {
     } else {
         t.pass = 1;
         if (unsigned(r.max_dv) + r.hi_dv / 20u < r.hi_dv) t.skip = 1;   // the top of the range was never exercised
-        if (folded(c, r)) t.capped = 1;                                   // a fold: a caution, amber
+        if (caution(c, r)) t.capped = 1;                                  // a fold or a tracking deviation: a caution, amber
     }
     return result_layout::roll_up(t);
 }

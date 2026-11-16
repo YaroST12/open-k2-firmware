@@ -49,6 +49,20 @@ bool noted(const charger_test::Step& s);
 // A voltage fold the deep sweep found: a Pass that carries Reason::Folded (the sweep row, and the fixed rows of the same APDO
 // that sit on the folded side). A caution, drawn kit::Verdict::Partial.
 bool caution(const charger_test::Step& s);
+// The deep sweep's pass window: a passing sweep whose worst recorded |error| stays within it is a plain pass (green), beyond it a
+// caution (amber). A passing sweep is never red: red is a failed step, so the chip, the header, the Steps footer and the report
+// card agree (user decision 2026-11-16, the rule of the fold caution).
+inline constexpr unsigned kSweepPassMv = 100;
+// The worst recorded |error| over both parts of the APDO's sweep, mV (0 when no part closed): what the chip is graded by.
+unsigned sweep_worst_mv(const ctsweep::View&, uint8_t alg, uint8_t pos);
+// A passing sweep step (no fold caution of its own) whose APDO's worst error passes kSweepPassMv: a caution by deviation. The two
+// parts of a split PPS sweep share one APDO summary, so both read the same.
+bool deviates(const charger_test::Step& s, const ctsweep::View&);
+// A caution of either kind: the fold (Reason::Folded on the step) or a tracking deviation (the sweep view). Counts, notes and tones
+// read this; the one-argument form above sees only the fold.
+bool caution(const charger_test::Step& s, const ctsweep::View&);
+// verdict_word with the view: a deviating sweep reads CAUTION as well.
+const char* verdict_word(const charger_test::Step& s, const ctsweep::View&);
 // The word of a step's verdict band (Step detail): PASS, CAUTION (a fold), FAIL, CAPPED (a Capped fail), SKIP, LISTED (Advertised), NOT RUN
 // (LightLevel), RUNNING, PENDING. At most 7 characters: the band's font-24 word ends before the step's name.
 const char* verdict_word(const charger_test::Step& s);

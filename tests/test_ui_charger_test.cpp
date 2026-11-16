@@ -1537,6 +1537,56 @@ static void test_a_voltage_fold_reads_as_a_caution() {
     CHECK_EQ(footer_shows(std::string_view(want, wl), kCaution), true);   // the fold's own words, from the APDO's sweep
     check_text_at(kSmall, ty_reason(), "folds back", kCaution, kBg, 92);
 }
+// A passing sweep that tracked worse than 100 mV is a caution as well (result_layout::deviates, user decision 2026-11-16): the header's
+// fourth cell, the Steps footer and the focused row's note count it, and the chip is amber, never red, so "0 fail" never sits over a
+// red cell. The host stub tracks cleanly, so the run's summaries are set to a 250 mV error on the finished run, then the grid is rebuilt.
+static void test_a_sweep_off_by_more_than_100mv_reads_as_a_caution() {
+    six_pdo_fixture();
+    g_stub.vbus_ceiling_mv = 36000;
+    Ui ui; open(ui);
+    CHECK_EQ(ui.charger_test_set_units(kPdOnly), true);
+    ui.charger_test_set_sweep(true);
+    review(ui);
+    start_press(ui, 1300); press(ui, Button::Ok, 1400);
+    uint32_t t = 1500;
+    for (; t <= 900000 && ui.charger_test_busy(); t += 100) ui.tick(t);
+    CHECK_EQ(ui.charger_test_stage(), 6);
+    const auto calm = [&] {
+        for (int i = 0; i < 64 && ui.painting(); ++i) ui.tick(t += 100);
+        CHECK_EQ(ui.painting(), false);
+    };
+    ui.tick(t += 200); ui.tick(t += 200);
+    calm();
+    const auto& r = ui.charger_test_results();
+    unsigned before = 0;
+    for (const auto& s : r.steps()) before += result_layout::caution(s, r.sweep_view());
+    for (const auto& rw : r.sweep_view().rows) {   // every recorded part: a steady 250 mV shortfall (within the 300 mV the old chip called amber)
+        auto& m = const_cast<ctsweep::RowView&>(rw);
+        m.sum.worst_err = -250; m.sum.min_err = -250; m.sum.worst_mv = m.lo_mv;
+    }
+    unsigned caution = 0, pass = 0, fail = 0, sweeps = 0;
+    for (const auto& s : r.steps()) {
+        const bool c = result_layout::caution(s, r.sweep_view());
+        caution += c; pass += s.verdict == ct::Verdict::Pass && !c; fail += s.verdict == ct::Verdict::Fail;
+        if (ct::is_sweep(s) && s.verdict == ct::Verdict::Pass) { ++sweeps; CHECK_EQ(c, true); CHECK_EQ(result_layout::deviates(s, r.sweep_view()), true); }
+    }
+    CHECK_EQ(sweeps >= 1, true);
+    CHECK_EQ(caution >= before + sweeps, true);
+    top(ui, t); calm();
+    press(ui, Button::Ok); ui.tick(t += 100); calm();   // into the Steps and back: the Results grid is rebuilt
+    press(ui, Button::Back); ui.tick(t += 100); calm();
+    top(ui, t); calm();
+    StrBuf<8> n; n.put_u32(caution);
+    check_text_at(kSmall, 26, n.view(), kCaution, kBg, 56 + 16);        // the header's caution cell holds the deviating sweeps
+    n.clear(); n.put_u32(pass);
+    check_text_at(kSmall, 26, n.view(), kOk, kBg, 16);
+    press(ui, Button::Ok); ui.tick(t += 100); calm();
+    CHECK_EQ(ui.charger_test_stage(), 7);
+    top(ui, t); calm();
+    StrBuf<32> foot;
+    foot.put_u32(static_cast<uint32_t>(ui.list_state().count)).put(" steps, ").put_u32(caution).put(" caution");
+    CHECK_EQ(footer_shows(foot.view(), kCaution), fail == 0);
+}
 // Every Steps row reads as a whole step label (step_label::label), never cut with dots: the ink of each visible row's text
 // cell is compared with the ink of every label of the run, and some label must match. The cut would end in "...". The same scan
 // found two repaint bugs in a list that scrolls under a fixed highlight or over a longer verdict (stale cells of the row before).
@@ -4750,6 +4800,7 @@ int main() {
     test_preflight_refusal_is_logged();
     test_preflight_wrong_voltage_under_pdo1_contract_is_logged();
     test_a_voltage_fold_reads_as_a_caution();
+    test_a_sweep_off_by_more_than_100mv_reads_as_a_caution();
     test_sweep_log_line_has_no_literal_format_bug();
     test_state_change_log_keeps_the_full_state_name_in_the_format();
     test_avs_sweep_is_a_selection_bit();

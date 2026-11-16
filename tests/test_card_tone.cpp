@@ -121,12 +121,40 @@ static void test_a_fold_is_a_caution() {
     rc::Range r = c.range[0];
     r.fail_dv = 100; r.max_dv = 0;
     CHECK_EQ(int(tn::range(c, r)), int(Tone::Fail));
-    // A clean sweep (no fold stored) stays green.
+    // A clean sweep (no fold stored, tracked within 100 mV) stays green; the same error with no fold is the other caution (deviates).
     c.sweep[0].fold_dv = 0; c.sweep[0].fold_from_dv = 0;
+    CHECK_EQ(int(tn::range(c, c.range[0])), int(Tone::Partial));
+    c.sweep[0].min_err = -40; c.sweep[0].worst_err = -40;
     CHECK_EQ(int(tn::range(c, c.range[0])), int(Tone::Pass));
 }
 
+// A passing sweep that tracked worse than 100 mV is a caution by the same rule (the device's chip is amber, never red, on a Pass
+// step): the card stores the worst error clamped to +/-127 mV, so 101..127 is "deviates". A fold dominates (already amber); a failed
+// range keeps its own verdict; a card without a sweep block never deviates.
+static void test_a_tracking_deviation_is_a_caution() {
+    rc::Card c = cardfx::fh22_full();
+    c.sweep[0] = {};
+    CHECK_EQ(int(tn::range(c, c.range[0])), int(Tone::Pass));            // no sweep stored: as before
+    c.sweep[0].peak_dv = 210; c.sweep[0].peak_at_dv = 210;
+    c.sweep[0].worst_err = -100; c.sweep[0].min_err = -100;
+    CHECK_EQ(int(tn::deviates(c, c.range[0])), 0);                        // exactly 100 mV is inside
+    CHECK_EQ(int(tn::range(c, c.range[0])), int(Tone::Pass));
+    c.sweep[0].worst_err = -101;
+    CHECK_EQ(int(tn::deviates(c, c.range[0])), 1);
+    CHECK_EQ(int(tn::caution(c, c.range[0])), 1);
+    CHECK_EQ(int(tn::range(c, c.range[0])), int(Tone::Partial));
+    c.sweep[0].worst_err = 127;                                           // the clamp (a 450 mV excess): amber, never red
+    CHECK_EQ(int(tn::range(c, c.range[0])), int(Tone::Partial));
+    CHECK_EQ(int(tn::counts(c).fail), 0);
+    CHECK_EQ(int(tn::card(c)), int(Tone::Partial));
+    rc::Range r = c.range[0];                                             // a range that failed keeps its verdict, no caution
+    r.fail_dv = 100; r.max_dv = 0;
+    CHECK_EQ(int(tn::deviates(c, r)), 0);
+    CHECK_EQ(int(tn::range(c, r)), int(Tone::Fail));
+}
+
 int main() {
+    test_a_tracking_deviation_is_a_caution();
     test_a_fold_is_a_caution();
     test_fh22();
     test_rules();

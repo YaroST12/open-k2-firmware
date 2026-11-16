@@ -402,3 +402,27 @@ test("a sweep fold on a range that failed nothing is a caution, never a pass or 
   assert.match(failing.status, /folds back to 19\.4V from 20V/);
   assert.ok(!K2Card.sections(base).flatMap((s) => s.groups).flatMap((g) => g.rows).some((r) => r.label === "Caution"));
 });
+
+// A sweep that tracked worse than 100 mV and folded nothing is a caution too (card_tone.hpp deviates()): the device's chip is amber
+// on a passing sweep, never red, so the page reads the same. The card stores the worst error clamped to +/-127 mV.
+test("a sweep that tracked worse than 100 mV is a caution, never red", () => {
+  const base = JSON.parse(JSON.stringify(K2Card.parseLink(golden.allpass.link).card));
+  const pps = base.ranges.find((r) => r.alg === "PPS (PD3.x)");
+  assert.ok(pps && !pps.fail_mv);
+  pps.sweep = { min_mv: -100, max_mv: 25, worst_mv: -100, worst_at_mv: 20000, peak_mv: 19800, peak_at_mv: 19900 };
+  assert.equal(K2Card.rangeVerdict(pps, false), "pass");   // exactly 100 mV is inside the window
+  pps.sweep.worst_mv = -101;
+  assert.equal(K2Card.rangeVerdict(pps, false), "partial");
+  pps.sweep.worst_mv = 127;                                 // the clamp of a 450 mV excess
+  assert.equal(K2Card.rangeVerdict(pps, false), "partial");
+  const b = K2Card.badges(base).find((x) => x.id.startsWith("range:PPS (PD3.x)"));
+  assert.equal(b.tone, "partial");
+  assert.match(b.status, /^off >100mV, sweep peak 19\.8V at 19\.9V$/);
+  const note = K2Card.sections(base).flatMap((s) => s.groups).flatMap((g) => g.rows).find((r) => r.label === "Caution");
+  assert.equal(note.value, "sweep off >100mV");
+  pps.sweep.fold_mv = 19400; pps.sweep.fold_from_mv = 20000;   // a fold keeps its own words
+  assert.match(K2Card.badges(base).find((x) => x.id.startsWith("range:PPS (PD3.x)")).status, /^folds to 19\.4V above 19\.9V/);
+  delete pps.sweep.fold_mv; delete pps.sweep.fold_from_mv;
+  pps.fail_mv = 15000; pps.max_mv = 13000;                     // a failed range keeps its own verdict and no caution row
+  assert.ok(!K2Card.sections(base).flatMap((s) => s.groups).flatMap((g) => g.rows).some((r) => r.label === "Caution"));
+});

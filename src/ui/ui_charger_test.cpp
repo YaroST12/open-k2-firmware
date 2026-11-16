@@ -158,6 +158,10 @@ const char* detail_name(const ct::Step& s) {
     return s.detail >= 128 ? pd::err_name(static_cast<pd::Err>(s.detail - 128)) :
                             pd::result_name(static_cast<pd::SinkResult>(s.detail));
 }
+// A caution by tracking (a passing sweep whose worst error passes the pass window, result_layout::deviates): the reason words, "off 450mV".
+void put_off(StrBuf<16>& b, const ctsweep::View& v, const ct::Step& s) {
+    b.put("off ").put_u32(result_layout::sweep_worst_mv(v, static_cast<uint8_t>(s.algorithm), s.pos)).put("mV");
+}
 // One line (n = 0..3) of a refused hunt row's evidence, each at most about 32 characters (the detail page's width).
 void put_hunt_line(StrBuf<64>& s, const ct::HuntEvidence& h, int n) {
     const auto yn = [&](ct::HuntFlag f) { return h.flags & f ? 'Y' : 'n'; };
@@ -175,17 +179,19 @@ void put_hunt_line(StrBuf<64>& s, const ct::HuntEvidence& h, int n) {
         if (h.answer) s.put_char(' ').put_u32(h.answer_ms).put("ms");
     }
 }
-// pass / fail / skip by verdict; a caution (a Pass that carries Reason::Folded, a voltage fold the sweep found) is its own count:
-// neither a pass nor a fail. A Capped step stays a fail by verdict, as it always counted.
+// pass / fail / skip by verdict; a caution (a Pass that carries Reason::Folded, a voltage fold the sweep found, or a passing sweep
+// whose worst error passes 100 mV, result_layout::deviates) is its own count: neither a pass nor a fail. A Capped step stays a fail
+// by verdict, as it always counted. The sweep view is the Results grid's: a chip and its counts read one rule.
 struct Counts {
     unsigned pass = 0, fail = 0, skip = 0, caution = 0, total = 0;
 };
 Counts counts(const ct::Runner& runner, int f = -1) {
     Counts out;
+    const auto view = runner.sweep_view();
     for (const auto& s : runner.steps()) {
         if (f >= 0 && family(s) != f) continue;
         ++out.total;
-        const bool caution = result_layout::caution(s);
+        const bool caution = result_layout::caution(s, view);
         out.caution += caution;
         out.pass += s.verdict == ct::Verdict::Pass && !caution;
         out.fail += s.verdict == ct::Verdict::Fail;
@@ -1639,8 +1645,8 @@ kit::Verdict vmap(ct::Verdict v) {
 // amber too: vmap(Step) below.
 bool is_capped(const ct::Step& s) { return s.verdict == ct::Verdict::Fail && s.reason == ct::Reason::Capped; }
 // A Light run's listing (Advertised / LightLevel skip) is Noted, never a skip mark: the same tone its chip wears.
-kit::Verdict vmap(const ct::Step& s) {
-    return is_capped(s) || result_layout::caution(s) ? kit::Verdict::Partial : result_layout::noted(s) ? kit::Verdict::Noted : vmap(s.verdict);
+kit::Verdict vmap(const ct::Step& s, const ctsweep::View& view) {
+    return is_capped(s) || result_layout::caution(s, view) ? kit::Verdict::Partial : result_layout::noted(s) ? kit::Verdict::Noted : vmap(s.verdict);
 }
 // A delta range value (100 mV units) as "13V" / "13.5V".
 template <typename Buf> void put_dv(Buf &b, unsigned dv) {
@@ -2014,7 +2020,8 @@ void ChargerTestPage::list_row(int index, bool focused, kit::RowSpec &out) {
         const auto &steps = s_.runner_.steps();
         const auto &s = steps[static_cast<size_t>(si)];
         out.marker = kit::Marker::Verdict;
-        out.state = static_cast<uint8_t>(vmap(s));
+        const auto view = s_.runner_.sweep_view();
+        out.state = static_cast<uint8_t>(vmap(s, view));
         row_text_.put(step_label::label(s, si > 0 ? &steps[static_cast<size_t>(si) - 1] : nullptr).view());
         out.text = row_text_.view();
         out.data = true;
@@ -2028,9 +2035,10 @@ void ChargerTestPage::list_row(int index, bool focused, kit::RowSpec &out) {
         out.tail = row_tail_.view();
         if (focused) {
             const bool listing = result_layout::noted(s);   // a Light run's listing: LISTED / NOT RUN, no skip cause
-            const bool caution = result_layout::caution(s);   // a voltage fold: CAUTION: folds back
-            row_note_.put(listing || caution ? result_layout::verdict_word(s) : ct::name(s.verdict));
-            if (caution || (!listing && (s.verdict == ct::Verdict::Fail || s.verdict == ct::Verdict::Skip))) row_note_.put(": ").put(detail_name(s));
+            const bool caution = result_layout::caution(s, view);   // a voltage fold (CAUTION: folds back) or a tracking deviation (off 450mV)
+            row_note_.put(listing || caution ? result_layout::verdict_word(s, view) : ct::name(s.verdict));
+            if (result_layout::deviates(s, view)) { StrBuf<16> off; put_off(off, view, s); row_note_.put(": ").put(off.view()); }
+            else if (caution || (!listing && (s.verdict == ct::Verdict::Fail || s.verdict == ct::Verdict::Skip))) row_note_.put(": ").put(detail_name(s));
             if (s.pos) row_note_.put(" PDO #").put_u32(s.pos);
             out.note = row_note_.view().substr(0, kit::kNoteMaxPx / kLabelAdv);
         }
@@ -2688,7 +2696,8 @@ void ChargerTestPage::paint_detail() {
 
     if (detail_step_ == 0) {
         if (pbg && !pbg->admit(static_cast<int>(c.w) * 36, true)) return;
-        const kit::Verdict v = vmap(s);
+        const auto view = s_.runner_.sweep_view();
+        const kit::Verdict v = vmap(s, view);
         const auto vs = kit::verdict_style(v);
         const uint16_t fill = vs.filled ? vs.fill : kSurface;
         gfx_fill(c, 0, 22, c.w, 36, fill);
@@ -2697,7 +2706,7 @@ void ChargerTestPage::paint_detail() {
         nm.put(step_label::label(s, s_.detail_index_ > 0 ? &steps[static_cast<size_t>(s_.detail_index_) - 1] : nullptr).view());
         // The band word (LISTED / NOT RUN for a Light run's listing) and the step's name share the band: a long word (CAUTION) beside
         // a long name (PPS 7.14->11V) would overlap, so the word drops to the small font then and the name keeps its whole text.
-        const std::string_view word = result_layout::verdict_word(s);
+        const std::string_view word = result_layout::verdict_word(s, view);
         const bool tight = word.size() > 6 && 32 + text_width(kMid, word) + 8 + static_cast<int>(nm.view().size() * kSmallAdvPx) > 218;
         if (tight) gfx_text(c, kSmall, 32, 32, word, vs.ink, fill);
         else gfx_text(c, kMid, 32, 28, word, vs.ink, fill);
@@ -2756,7 +2765,11 @@ void ChargerTestPage::paint_detail() {
     }
     if (detail_step_ == 4) {
         if (pbg && !pbg->admit(2800, true)) return;
-        kv_step(3, "Reason", detail_name(s), s.verdict == ct::Verdict::Fail || result_layout::caution(s) ? kCaution : kText);
+        StrBuf<16> off;
+        const bool deviates = result_layout::deviates(s, s_.runner_.sweep_view());
+        if (deviates) put_off(off, s_.runner_.sweep_view(), s);
+        kv_step(3, "Reason", deviates ? off.view() : std::string_view(detail_name(s)),
+                s.verdict == ct::Verdict::Fail || deviates || result_layout::caution(s) ? kCaution : kText);
         detail_step_ = 5;
     }
     if (has_cap) {

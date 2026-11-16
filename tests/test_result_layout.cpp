@@ -190,7 +190,9 @@ static void test_default_sweep_rows_fit_without_a_cut() {
     }
 }
 // The chip's colour is the sweep's own result: pending until it ran, grey when skipped, red when the source was lost, and
-// green / amber / red by the worst error of the recorded points (<= 100 mV, <= 300 mV, above).
+// green / amber by the worst error of the recorded points (<= 100 mV green, above amber). A PASSING sweep is never red: red is
+// a failed step (user decision 2026-11-16: the chip never contradicts the step's verdict, so the header cannot say "0 fail" over
+// a red cell).
 static void test_a_sweep_chip_takes_its_tone_from_the_sweep() {
     const auto tone_of = [](V v, std::vector<int16_t> pts) {
         auto s = baseus();
@@ -207,13 +209,14 @@ static void test_a_sweep_chip_takes_its_tone_from_the_sweep() {
     CHECK_EQ(tone_of(V::Skip, {}), int(rl::Tone::Skip));
     CHECK_EQ(tone_of(V::Pass, {-20, 30, -90}), int(rl::Tone::Pass));
     CHECK_EQ(tone_of(V::Pass, {-20, -250, 30}), int(rl::Tone::Partial));
-    CHECK_EQ(tone_of(V::Pass, {-20, 450, 30}), int(rl::Tone::Fail));
+    CHECK_EQ(tone_of(V::Pass, {-20, 450, 30}), int(rl::Tone::Partial));  // a passing sweep is never red, however far off
+    CHECK_EQ(tone_of(V::Pass, {-20, -1500, 30}), int(rl::Tone::Partial));
     CHECK_EQ(tone_of(V::Fail, {-20, 30}), int(rl::Tone::Fail));          // a lost source, the points so far notwithstanding
 }
 // A voltage fold is a caution whatever its depth (user decision 2026-11-16): a sweep whose only deviation is the fold region reads
 // amber, never red, so the chip never contradicts a header that says 0 fail. The chip is graded by the tracking error BEFORE the
 // fold onset (ctsweep::Summary::track_err_mv): the points after the first fold are the fold, not tracking. A real tracking failure
-// before it (and any error on a sweep without a caution) keeps the 100 / 300 mV grading.
+// before it is amber as well: no passing sweep is red (the verdict of the step is Pass; the chip never contradicts it).
 static int fold_chip_tone(std::vector<int16_t> pts, ct::Reason reason, unsigned want_fold_from_mv, std::vector<ct::Step>* run = nullptr) {
     auto s = baseus();
     s.push_back(sweep_step(A::Pps, 7, 3248763456u, V::Pass));
@@ -229,20 +232,22 @@ static int fold_chip_tone(std::vector<int16_t> pts, ct::Reason reason, unsigned 
 }
 static void test_a_fold_only_sweep_is_amber_at_any_depth() {
     const auto F = ct::Reason::Folded;
-    const int amber = int(rl::Tone::Partial), red = int(rl::Tone::Fail);
+    const int amber = int(rl::Tone::Partial);
     // The fold alone: the output tracks to 5.3 V, then falls 400 mV (and stays) - a caution, not a failure.
     CHECK_EQ(fold_chip_tone({0, 0, 0, 0, -400, -400, -400}, F, 5400), amber);
     // The FH22 shape: tracks within 100 mV, folds 1.5 V under the request from the first folded point on.
     CHECK_EQ(fold_chip_tone({-20, -30, -20, -1200, -1500, -1600}, F, 5300), amber);
     // A mild fold stays amber as before (the caution is never green).
     CHECK_EQ(fold_chip_tone({0, 0, 0, -200, -200}, F, 5300), amber);
-    // Tracking error elsewhere keeps its grade: a steady 400 mV offset from the first point, then a fold, is a failure to track.
-    CHECK_EQ(fold_chip_tone({-400, -400, -400, -400, -900, -900}, F, 5400), red);
+    // Tracking error before the fold is amber too: the step passed, so the chip is never red (the old rule graded it red).
+    CHECK_EQ(fold_chip_tone({-400, -400, -400, -400, -900, -900}, F, 5400), amber);
     CHECK_EQ(fold_chip_tone({-250, -250, -250, -900, -900}, F, 5300), amber);   // 100..300 mV before the fold: amber, as ever
-    // Without the caution the chip is graded by every recorded point (a sweep that never got a Folded reason), as before.
-    CHECK_EQ(fold_chip_tone({0, 0, 0, 0, -400, -400, -400}, ct::Reason::None, 5400), red);
-    CHECK_EQ(fold_chip_tone({-400, -400, -400, -400}, ct::Reason::None, 0), red);     // no fold at all: a steady 400 mV offset
-    CHECK_EQ(fold_chip_tone({-20, 450, 450, 450}, ct::Reason::None, 0), red);          // a steady 450 mV excess
+    // Without the caution the chip is graded by every recorded point (a sweep that never got a Folded reason): amber above 100 mV
+    // (a deviation caution), never red on a Pass step.
+    CHECK_EQ(fold_chip_tone({0, 0, 0, 0, -400, -400, -400}, ct::Reason::None, 5400), amber);
+    CHECK_EQ(fold_chip_tone({-400, -400, -400, -400}, ct::Reason::None, 0), amber);   // no fold at all: a steady 400 mV offset
+    CHECK_EQ(fold_chip_tone({-20, 450, 450, 450}, ct::Reason::None, 0), amber);        // a steady 450 mV excess
+    CHECK_EQ(fold_chip_tone({-20, 30, -90}, ct::Reason::None, 0), int(rl::Tone::Pass));   // within 100 mV: green
     // The run says the same everywhere: no failed step, the fold step counted as a caution, so the chip may not be red.
     std::vector<ct::Step> run;
     CHECK_EQ(fold_chip_tone({0, 0, 0, 0, -400, -400, -400}, F, 5400, &run), amber);
@@ -288,6 +293,71 @@ static void test_a_fold_is_a_caution_not_a_pass_and_not_a_fail() {
     s.back().reason = ct::Reason::None;
     rl::build(l, s);
     CHECK_EQ(int(l.tokens[sweep_row_of(l, 7)->first].tone), int(rl::Tone::Pass));
+}
+// A passing sweep whose worst error passes 100 mV is a CAUTION by the same rule as a fold (user decision 2026-11-16): the step keeps
+// its Pass verdict, the sweep view says it deviates, every count and word reads it as a caution (amber, "CAUTION"), the chip is amber
+// and never red, so a header that counts "0 fail" never sits over a red cell. A fail stays a fail, a clean pass stays a pass.
+static ctsweep::RowView sweep_rowview(uint8_t pos, unsigned lo_mv, unsigned hi_mv, std::vector<int16_t>& pts, unsigned first) {
+    ctsweep::RowView rw; rw.pos = pos; rw.alg = uint8_t(A::Pps); rw.lo_mv = uint16_t(lo_mv); rw.hi_mv = uint16_t(hi_mv);
+    rw.first = uint16_t(first); rw.n = uint16_t(pts.size());
+    rw.sum = ctsweep::summarize(pts, lo_mv);
+    return rw;
+}
+static void test_a_deviating_sweep_is_a_caution_never_red() {
+    const auto want = [](std::vector<int16_t> pts, V v, bool caution, const char* word) {
+        auto s = baseus();
+        s.push_back(sweep_step(A::Pps, 7, 3248763456u, v));
+        s.back().mv = 5000;
+        auto rw = sweep_rowview(7, 5000, 21000, pts, 0);
+        ctsweep::View view; view.rows = std::span<const ctsweep::RowView>(&rw, 1); view.points = pts;
+        CHECK_EQ(rl::caution(s.back(), view), caution);
+        CHECK_EQ(rl::deviates(s.back(), view), caution);
+        CHECK_STR(rl::verdict_word(s.back(), view), word);
+        CHECK_EQ(rl::caution(s.back()), false);                       // the step alone carries no reason: the view decides
+        CHECK_EQ(rl::caution(s[0], view), false);                     // a fixed row is never a deviating sweep
+        rl::Layout l; rl::build(l, s, {}, view);
+        const rl::Row* r = sweep_row_of(l, 7);
+        CHECK_EQ(r != nullptr, true);
+        if (!r) return;
+        const rl::Tone tn = l.tokens[r->first].tone;
+        const rl::Tone expect = v == V::Fail ? rl::Tone::Fail : v == V::Running ? rl::Tone::Pending : v == V::Skip ? rl::Tone::Skip
+                              : caution ? rl::Tone::Partial : rl::Tone::Pass;
+        CHECK_EQ(int(tn), int(expect));
+        // the tally the strip's footer and the header use: a caution is counted apart, red appears only with a failed step
+        rl::Tally t;
+        for (const auto& y : s) if (ct::is_sweep(y)) (rl::caution(y, view) ? ++t.capped : y.verdict == V::Fail ? ++t.fail : ++t.pass);
+        CHECK_EQ(t.fail, v == V::Fail ? 1u : 0u);
+        CHECK_EQ(t.capped, caution ? 1u : 0u);
+    };
+    want({-20, 30, -90}, V::Pass, false, "PASS");           // within 100 mV
+    want({-20, 100, 30}, V::Pass, false, "PASS");           // exactly 100 mV is still inside
+    want({-20, -250, 30}, V::Pass, true, "CAUTION");        // 100..300 mV
+    want({-20, 450, 30}, V::Pass, true, "CAUTION");         // above 300 mV: still a caution, not a fail (the old chip was red here)
+    want({-20, -1500, 30}, V::Pass, true, "CAUTION");
+    want({-20, 450, 30}, V::Fail, false, "FAIL");           // a failed step is no caution; it stays red
+    want({-20, 450, 30}, V::Running, false, "RUNNING");
+    want({-20, 450, 30}, V::Skip, false, "SKIP");
+}
+// A split sweep (the part from 5 V up and the part below, two steps in one strip row): the parts share one APDO verdict. Either
+// part's deviation makes the APDO's chip amber; a failed part keeps the chip red; and each Pass part reads as a caution when the
+// APDO deviates, so the counts agree with the one chip.
+static void test_a_split_sweep_deviation_reads_the_same_on_both_parts() {
+    auto s = baseus();
+    s.push_back(sweep_step(A::Pps, 7, 3248763456u, V::Pass)); s.back().mv = 5000;   // the part from 5 V up
+    s.push_back(sweep_step(A::Pps, 7, 3248763456u, V::Pass)); s.back().mv = 3300;   // the part below
+    std::vector<int16_t> hi = {-20, 30, -40}, lo = {10, -350};   // the deviation sits in the low part
+    std::vector<int16_t> all = hi; all.insert(all.end(), lo.begin(), lo.end());
+    ctsweep::RowView rws[2] = {sweep_rowview(7, 5000, 21000, hi, 0), sweep_rowview(7, 3300, 4900, lo, 3)};
+    ctsweep::View view; view.rows = std::span<const ctsweep::RowView>(rws, 2); view.points = all;
+    const size_t n = s.size();
+    CHECK_EQ(rl::caution(s[n - 2], view), true);    // the high part is clean itself, but the chip is one APDO's: amber
+    CHECK_EQ(rl::caution(s[n - 1], view), true);
+    rl::Layout l; rl::build(l, s, {}, view);
+    CHECK_EQ(int(l.tokens[sweep_row_of(l, 7)->first].tone), int(rl::Tone::Partial));
+    s[n - 1].verdict = V::Fail;                      // the low part failed: red, and the clean-looking high part is a caution only
+    rl::build(l, s, {}, view);
+    CHECK_EQ(int(l.tokens[sweep_row_of(l, 7)->first].tone), int(rl::Tone::Fail));
+    CHECK_EQ(rl::caution(s[n - 1], view), false);
 }
 // ---- The tone rules (one table for fixed, range and legacy chips) ------------------------------------------------------------
 //   a step still to run  -> Pending      nothing sampled (all skipped) -> Skip (grey, the tag says why)
@@ -1265,6 +1335,8 @@ int main() {
     test_a_sweep_chip_takes_its_tone_from_the_sweep();
     test_a_fold_only_sweep_is_amber_at_any_depth();
     test_a_fold_is_a_caution_not_a_pass_and_not_a_fail();
+    test_a_deviating_sweep_is_a_caution_never_red();
+    test_a_split_sweep_deviation_reads_the_same_on_both_parts();
     test_roll_up_is_one_table();
     test_a_capped_range_chip_is_amber_and_keeps_the_advertised_range();
     test_a_range_with_nothing_passed_stays_red_and_all_skipped_grey();
