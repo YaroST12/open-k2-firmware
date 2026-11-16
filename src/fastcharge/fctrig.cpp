@@ -45,6 +45,15 @@ bool slave_ping() {
     return w >= 0 && wire::slave_ping_ok(static_cast<std::uint32_t>(w));
 }
 
+// One command frame on the wire (bits + the trailing master ping). Out of line: the step list (~520 B) is gone before
+// exchange_once() captures the reply and logs, both of which can sit under the LCD idle hook (tools/stack_depth.py).
+[[gnu::noinline]] void play_frame(std::span<const std::uint8_t> tx) {
+    fc::StepList<64> l;
+    wire::frame_steps(l, tx);
+    wire::master_ping(l);
+    dpdm::play(l.span());
+}
+
 constexpr std::size_t kMaxRxBytes = 3;
 constexpr std::size_t kRxSamplesPerByte = 175;
 
@@ -54,10 +63,7 @@ bool exchange_once(std::span<const std::uint8_t> tx, std::span<std::uint8_t> rx)
     master_ping();
     if (!slave_ping()) return false;
     dpdm::delay_us(200);
-    fc::StepList<64> l;
-    wire::frame_steps(l, tx);
-    wire::master_ping(l);
-    dpdm::play(l.span());
+    play_frame(tx);
     dpdm::delay_us(50);
     if (!slave_ping()) return false;
     if (!rx.empty()) {
