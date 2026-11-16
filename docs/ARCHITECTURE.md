@@ -186,12 +186,12 @@ RAM is 96 KB at 0x20000000 (`link.ld`); never touch SRAM above it. Layout, low t
 
 | Region | Content |
 | :--- | :--- |
-| `.data` | initialised data and `.ramfunc` (flash programming runs from RAM); about 0.9 KB |
-| `.noinit` | the SRAM retention probe (`src/core/rd_comeback.cpp`, `bootinfo` `sr=`): 32 words, NOLOAD, **not zeroed at reset** (the zero loop starts at `_sbss`). SRAM does not survive a VBUS dark on this board (0 of 32 words after 1 s, 2026-11-11), so the Rd marker's stale-record voucher is the backup-register session record (`session::backup_alive`), not SRAM; 128 B |
+| `.data` | initialised data and `.ramfunc` (flash programming runs from RAM); 728 B at 8090d079 |
+| `.noinit` | the SRAM retention probe (`src/core/rd_comeback.cpp`, `bootinfo` `sr=`): 32 words, NOLOAD, **not zeroed at reset** (the zero loop starts at `_sbss`). SRAM does not survive a VBUS dark on this board (0 of 32 words after 1 s, 2026-11-11), so the Rd marker's stale-record voucher is the backup-register session record (`session::backup_alive`), not SRAM; 128 B for the probe, plus the battery recorder's checkpoint (`src/battery/battery_hw.cpp`): 456 B in all at 8090d079 |
 | `OVERLAY` `.mode_net` / `.mode_drive` / `.mode_sniff` / `.mode_trans` | one shared region at the same address, sized to the largest tenant. Default build (`K2_NET=0`): 16 KB, the D+/D- edge buffer (`.mode_sniff`) is the largest, the transition recorder is 15.9 KB, the drive image about 8 KB. `K2_NET=1` build: about 24 KB, lwIP + NCM + DHCP + HTTP (`.mode_net`) is the largest, which is the ~8 KB the default build gets back |
-| `.bss` | everything else (about 55 KB in the build inspected, 859f858) |
+| `.bss` | everything else: 71 496 B in the shipping build (`K2_WEBUSB=1 K2_PDSPEC=1`) at 8090d079. It holds the scratch arena (`k2::scratch`, 3432 B, owned by core) and the `Ui` object (21 952 B, which carries the page arena and `share_rec_`) |
 | `.stack_guard` | 128 B no-access MPU region (`_sguard`..`_eguard`, 128-aligned) right above `.bss` (`end`/`_end` symbols for newlib's `_sbrk`) |
-| PSP stack | `_eguard`..`_psp_top`, the remainder above `.bss` (20160 B at b1f99de7; `make gate` prints the current figure): thread mode (main loop, UI, drivers), grows down from `_psp_top` |
+| PSP stack | `_eguard`..`_psp_top`, the remainder above `.bss` (7744 B on the shipping build at 8090d079: every `.bss` byte comes out of it; `make gate` prints the current figure): thread mode (main loop, UI, drivers), grows down from `_psp_top` |
 | `.msp_stack` | `_psp_top`..`_estack` = 0x20018000, 1344 B: exceptions (ISRs) and the `[FAULT]` handler; MSP starts at `_estack` |
 
 The numbers come from `arm-none-eabi-objdump -h build/open_k2.elf` on one build and drift with every
@@ -215,7 +215,7 @@ zeroes, so the owner starts from zeros; overlay objects carry no initialiser and
 after `claim()`. Only buffers nothing touches outside their own mode belong here (TinyUSB's
 `ncm_interface` and `_mscd_itf` are reset by `tud_init()` in every mode and stay in `.bss`). Host tests:
 `tests/test_mode_ram.cpp`. `size` double counts the overlay (four sections at one address), so its `bss`
-figure exceeds the real RAM use.
+figure exceeds the real RAM use: at 8090d079 it reports 114264 B = `.bss` 71496 + `.noinit` 456 + the four overlay sections summed 40840 (the region itself is 16384) + the 128 B guard + the 1344 B MSP stack, i.e. the overlay alone is counted about 24 KB too high.
 
 **Stack layout.** Memory above `.bss` is, from low to high: the MPU guard (`_sguard`..`_eguard`, 128 B), the PSP
 stack (`_eguard`..`_psp_top`, the application) and the MSP stack (`.msp_stack`, `_psp_top`..`_estack`,
@@ -516,7 +516,10 @@ Reuse these before writing a new one. Headers under `include/k2/<group>/` unless
   `operator new` or `__cxa_` in the map.
 * ISRs, the vector table and meta objects keep `extern "C"` and their `section`/`used` attributes. Include
   `k2/` headers before, never inside, an `extern "C"` block.
-* Big buffers are static (`.bss`) or leased from the mode overlay, not on the stack (stack gate, 2.4).
+* Big transient buffers lease the scratch arena (`k2::scratch`, `include/k2/core/scratch.hpp`, owned by core: main loop
+  only, one holder at a time), not `.bss` and not the stack (stack gate, 2.4). Buffers that belong to one USB mode go in
+  the mode overlay; what must live across loop iterations is a small static in `.bss`. The page arena (`Ui::pages_`)
+  and the share record (`Ui::share_rec_`) belong to `Ui`.
 * Drivers are self-contained: one header, one `.cpp`, own namespace, own pins/registers/clocks/DMA/IRQ,
   small init/poll/read API. Reaching into another driver's registers or globals is a bug. Protocol logic is
   pure and host-tested.

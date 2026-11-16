@@ -1,7 +1,7 @@
 # The firmware build shared by ci.yml and release.yml, so the two cannot drift: builds the toolchain image from
 # ./Dockerfile (layer cache in the GitHub Actions cache), then builds in it. Call it after actions/checkout with
 # fetch-depth: 0 and submodules: true (git describe needs the tags; TinyUSB and lwIP are submodules).
-# Result: build/open_k2.{k2,bin,elf} (and build-net/ when the gate ran).
+# Result: build/open_k2.{k2,bin,elf} (and build-net/, build-webusb/ when the gate ran with K2_WEB=1).
 name: Build firmware
 description: Build open_k2 in the Docker toolchain image, optionally through the full make gate
 
@@ -10,7 +10,7 @@ inputs:
     description: "Override for K2_FW_VERSION. Empty (the default): the Makefile derives <major>.<minor>.<patch>-<iteration>-<hash> from the newest v* tag (tools/fw_version.py)"
     default: ""
   gate:
-    description: "true: run make gate (-Werror build, invariants, stack, map, ids, host tests, size, K2_NET=1 variant); false: plain make docker-build"
+    description: "true: run make gate (-Werror build, invariants, stack, map, ids, host tests, sanitizers, size, perf; the K2_NET / K2_WEBUSB variants only with K2_WEB=1); false: plain make docker-build"
     default: "true"
 
 runs:

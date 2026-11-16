@@ -38,7 +38,7 @@ void lcd_meter_trace_dump(const char *label);   // K2_OVERDRAW_TRACE=1: print an
 struct LcdTiming {
     void (*spend_us)(double us);   // advance the virtual clock (the world serves its own events inside)
     double (*now_us)();
-    double px_us;                  // wire time of one pixel (lcd_timing.hpp wire_us at the shipped divider)
+    double px_us;                  // wire time of one pixel in us (the caller's figure: the replay model uses the /8 value 1.0667, the shipped /4 is 0.533)
     double call_us;                // CPU per stream_* call (the driver's own bookkeeping)
     double window_us;              // per stream_begin: CASET / RASET / RAMWR in 8-bit frames
     double px_cpu_us;              // CPU per stream_pixels pixel: rendering the run the call pushes

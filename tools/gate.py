@@ -5,28 +5,33 @@
 
   1 build   docker build as the host uid, -Werror on our sources only
   2 invariants  section addresses and the four unmangled symbols the bootloader needs
-  2b stack  link layout + worst call depth (tools/stack_depth.py: main loop incl. the deepest page path, ISRs,
+  3 stack   link layout + worst call depth (tools/stack_depth.py: main loop incl. the deepest page path, ISRs,
             the [FAULT] handler) must fit the PSP / MSP stacks with margin; no interrupt priorities set
-  3 map     no malloc / operator new / __cxa_ / 64-bit divmod linked
-  4 ids     remote command ids unique across remote_proto.hpp, k2_remote.py, k2proto.js
-  4b 64bit  no unallowlisted 64-bit integer types in src/ or include/k2/ (tools/check_64bit.py)
-  5 tests   make test (C++, Python, node)
-  5b sanitizers  tools/static_check.sh sanitize: every host test under ASan + UBSan in the builder image, once with
+  4 map     no malloc / operator new / __cxa_ / 64-bit divmod linked
+  5 hot     the hot block (K2_HOT code and K2_HOT_DATA, link.ld __hot_start..__hot_end) ends inside the zero-wait
+            flash window (below 0x08040000); prints its size and headroom; SKIPPED with K2_HOT_BLOCK=0
+  6 ids     remote command ids unique across remote_proto.hpp, k2_remote.py, k2proto.js
+  7 64bit   no unallowlisted 64-bit integer types in src/ or include/k2/ (tools/check_64bit.py)
+  8 tests   make test (C++, Python; node only with K2_WEB=1)
+  9 sanitizers  tools/static_check.sh sanitize: every host test under ASan + UBSan in the builder image, once with
             g++ and once with clang (extras: float casts, local bounds, sign change); any report from our code or any
             failed test fails; incremental in build/san-gcc and build/san-clang
-  6 size    report against tools/size_baseline.txt; over +5 % text is a WARNING, not a failure
-  6a perf   the on-device `selftest` (3 runs, per-check minimum cycles) against tools/perf_baseline.json, on the build
+ 10 size    report against tools/size_baseline.txt; over +5 % text is a WARNING, not a failure
+ 11 perf    the on-device `selftest` (3 runs, per-check minimum cycles) against tools/perf_baseline.json, on the build
             that is ON the K2 now (the gate runs before a flash and never flashes): fails on a FAIL line, a zw 1 -> 0,
             or a check slower than baseline + tolerance; SKIPPED (never failed, repeated after "GATE PASSED") when no
             K2 answers, the K2 runs another build than the one just built, or the baseline is unseeded.
             `make perf-check` (`gate.py --perf-only`) runs just this step after a flash; `make perf-baseline`
             (`gate.py --perf-baseline`) re-takes the baseline (5 runs); see tools/perf_gate.py, docs/MATH_SELFTEST.md
-  6b net    the K2_NET=1 variant (off by default) in build-net/: -Werror build, layout invariants, stack budget, map;
-            only with K2_WEB=1 (env or `make K2_WEB=1 gate`), which also puts the web tests back into step 5
-  6c webusb the K2_WEBUSB=1 variant (off by default) in build-webusb/: the same checks; also only with K2_WEB=1
 
-  7 static  (opt-in, --static) tools/static_check.sh all: clang-tidy, ARM g++ -fanalyzer and cppcheck, counts printed
-            (report only, never a failure)
+  Only with K2_WEB=1 (env or `make K2_WEB=1 gate`), which also puts the node tests back into step 8:
+ 12 net     the K2_NET=1 variant (off by default) in build-net/: -Werror build, layout invariants, stack budget, map
+ 13 webusb  the K2_WEBUSB=1 variant (off by default) in build-webusb/: the same checks
+
+  --static  (opt-in, appended as the last step) tools/static_check.sh all: clang-tidy, ARM g++ -fanalyzer and
+            cppcheck, counts printed (report only, never a failure)
+
+The printed `== gate i/N` lines are the numbering above (N = 11 by default).
 
 `python3 tools/gate.py --update-baseline` rewrites the baseline from the current build."""
 import os

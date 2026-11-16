@@ -11,7 +11,7 @@ flash map, USB modes, PD driver model: [`ARCHITECTURE.md`](../ARCHITECTURE.md). 
 
 | Item | Value |
 |---|---|
-| MCU | Artery AT32F403AVGT7, Cortex-M4F, 1 MB flash. 8 MHz HEXT through the PLL to 240 MHz (HICK fallback), APB2 120 MHz, APB1 60 MHz (`src/drivers/crm.cpp`) |
+| MCU | Artery AT32F403AVGT7, Cortex-M4F, 1 MB flash. 8 MHz HEXT through the PLL to 240 MHz (HICK fallback), APB2 120 MHz, APB1 120 MHz (both /2: SPI3 and USART2 sit on APB1; `src/drivers/crm.cpp`) |
 | Pins | `include/k2/drivers/pins.hpp` (the single pin map) |
 | PD controller | FUSB302 on the bit-banged I2C bus PB10/PB11, address 0x22 (`include/k2/drivers/fusb302.hpp`) |
 | Power monitor | INA226 at 0x40 on the bit-banged bus PB8/PB9; INA228 and INA237 are auto-detected (`include/k2/drivers/power_monitor.hpp`) |

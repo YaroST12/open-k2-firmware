@@ -195,7 +195,8 @@ struct Spi {
     static constexpr uint16_t CTRL2_TXDMAEN = 1u << 1;  // TDBE raises a DMA request
 
     // LCD link: master, mode 3 (CPOL=1 CPHA=1), 8-bit frames, MSB first, software NSS,
-    // 1-line TX-only (BIDI), APB1/8.
+    // 1-line TX-only (BIDI). The BR field here (APB1/8) is only the template: lcd.cpp ctrl1_for() masks it and
+    // applies the divider in use (boot value /4 = 30 MHz, lcd_timing.hpp kBootSpiDiv).
     static constexpr uint16_t CTRL1_LCD = CTRL1_BIDIEN | CTRL1_BIDIOEN | CTRL1_SSM | CTRL1_SSI |
                                           CTRL1_SPIEN | CTRL1_BR_DIV8 | CTRL1_MSTEN | CTRL1_CPOL | CTRL1_CPHA;
     // Same link with 16-bit data frames, used for the pixel stream only: ST7789 commands and

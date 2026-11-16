@@ -17,10 +17,14 @@ status: `docs/ROADMAP.md`.
    add new entries, do not reorder, rename or reformat existing ones. Keeps parallel branches mergeable.
 5. **Tests first for pure logic.** Decoders, parsers, formatters and state machines get a host test under `tests/` before
    the change (`make test`: C++, Python, node). Hardware-facing code is verified on the device.
-6. **`make gate` before every commit.** It builds with `-Werror` on our sources, checks the section layout and four symbols,
-   the map, the command ids, runs the tests and prints the size delta against `tools/size_baseline.txt`. Text growth over
-   5 % is a WARNING: explain it in the commit body. Commit format: `type(scope): summary` plus Summary / Rationale /
-   Key Changes sections.
+6. **`make gate` before every commit, after the last commit.** Its 11 steps: build with `-Werror` on our sources, section
+   layout and four symbols, stack budget (worst call depth against the PSP/MSP, no interrupt priorities), map (no
+   `malloc` / `operator new` / `__cxa_` / 64-bit divmod), hot block inside the zero-wait flash window, command ids,
+   64-bit integer guard, the host tests, the ASan/UBSan host tests (g++ and clang), the size delta against
+   `tools/size_baseline.txt`, and the perf check (device selftest; SKIPPED without a matching K2). Text growth over 5 %
+   is a WARNING: explain it in the commit body. `K2_WEB=1` adds the node tests and the `K2_NET=1` / `K2_WEBUSB=1`
+   variant builds. Commit format: `type(scope): summary` plus Summary / Rationale / Key Changes sections
+   ([agents/COMMITS.md](agents/COMMITS.md)).
 7. **Hardware validation only via `make smoke`.** It is gate plus `tools/hw_smoke.py` (auto-DFU flash, ping and git hash,
    log capture, state check, every page screenshot, harmless remote exercise). Do not hand-roll flash/probe loops overnight.
 8. **One owner of the K2.** Every host tool takes an exclusive lock (`tools/k2_lock.py`, flock on `/tmp/k2-device.lock`,

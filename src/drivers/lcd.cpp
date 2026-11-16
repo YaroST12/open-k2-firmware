@@ -56,7 +56,8 @@ static_assert((ctrl1_for(SpiDiv::Div8) | Spi::CTRL1_DSIZE) == 0xCB57, "CTRL1 16-
 #endif
 constexpr bool kLcdDma = K2_LCD_DMA != 0;
 // A transfer whose count does not move for this long (SPI3 stuck, wrong request mapping) is
-// abandoned: the remainder goes out polled and DMA stays off. One pixel takes 1.07 us at DIV8.
+// abandoned: the remainder goes out polled and DMA stays off. One pixel takes 0.53 us at the boot divider
+// (DIV4: 16 bits x 4 / 120 MHz; 1.07 us at DIV8).
 constexpr std::uint32_t kDmaStallMs = 3;
 
 // DMA2 channel 2 carries the SPI3 TX request (inferred from the STM32F1-style layout, fixed

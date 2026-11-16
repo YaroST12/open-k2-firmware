@@ -58,7 +58,7 @@ struct Timing {
     double delay_us_factor = 2.79;  // delay_us(1000) on hardware: the scan's delay_ms(2) + read + write = 5.85 ms (trace)
     double clock_read_us = 0.2;     // one millis() / micros() / ticks() read
     double pass_us = 15.0;          // one main-loop pass outside the calls modelled here
-    double px_us = 1.0667;          // LCD wire time per pixel at /8 (lcd_timing.hpp wire_us)
+    double px_us = 1.0667;          // LCD wire time per pixel at /8 (lcd_timing.hpp wire_us); the shipped boot divider /4 is 0.533, the model keeps the /8 figure
     double lcd_call_us = 2.0;       // per stream_* call
     double lcd_window_us = 8.0;     // per window (CASET/RASET/RAMWR)
     double px_cpu_us = 0.0;         // CPU per streamed pixel (rendering), calibrated on the 421.4 s Home repaint

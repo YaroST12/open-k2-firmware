@@ -252,7 +252,7 @@ CFLAGS += $(STACK_PARAMS)
 LDFLAGS += $(STACK_PARAMS)
 
 # Size flags, measured one by one and combined on the integration tip (text 564392 B, `make gate` stack
-# numbers unchanged within 72 B; runs/size/exp_results.txt, tools/size_report.py for the per-function view):
+# numbers unchanged within 72 B; tools/size_report.py gives the per-function view):
 #   -flto-partition=one       -3180 B  ltrans in one partition: cross-partition duplicates merge, one LTO
 #                                      link process instead of parallel ones (the link is single-threaded)
 #   -fno-schedule-insns2      -1432 B  the post-RA scheduler lengthens live ranges and costs spills; on the
@@ -305,7 +305,7 @@ check-64bit:
 	@$(PYTHON) tools/check_64bit.py --mode $(K2_64BIT)
 
 # compile_commands.json at the repo root, merged from the <object>.cmd fragments of build/ (firmware) and host-build/
-# (tests) by tools/compdb.py; see "Code navigation" in docs/DEVELOPING.md. Only the default build directory owns the
+# (tests) by tools/compdb.py (its header describes the usage). Only the default build directory owns the
 # file: build-net/ and experiment directories (BUILD_DIR=...) leave it alone. K2_HOST_ROOT is the repo's host path
 # (docker-build passes it; the container sees the repo as /workspace); it becomes `directory` in every entry.
 K2_HOST_ROOT ?= $(CURDIR)

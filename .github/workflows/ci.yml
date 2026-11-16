@@ -3,10 +3,12 @@
 #
 # What runs (see .github/actions/build-firmware): the toolchain image from ./Dockerfile, then `make gate` =
 #   -Werror build of our sources in the container, bootloader layout invariants, stack budget, map check (no
-#   malloc / operator new / __cxa_), remote command id uniqueness, all host tests (C++, Python, node), size against
-#   tools/size_baseline.txt, and the K2_NET=1 variant (-Werror, layout, stack, map).
-# Skipped: only what needs the device. `make smoke` (flash + exercise the K2) and the opt-in `make gate` ASan/UBSan
-# step (`--static`, a local pre-merge check) do not run here.
+#   malloc / operator new / __cxa_), hot block inside the zero-wait flash window, remote command id uniqueness,
+#   64-bit integer guard, all host tests (C++ and Python), the ASan/UBSan host tests (g++ and clang, always part of
+#   the gate), size against tools/size_baseline.txt, and the perf step.
+# Not run here: what needs the device (`make smoke`, and the gate's perf step, which reports SKIPPED without a K2),
+#   the web parts (node tests and the K2_NET=1 / K2_WEBUSB=1 variant builds, only with K2_WEB=1, which CI does not
+#   set) and `python3 tools/gate.py --static` (clang-tidy, -fanalyzer, cppcheck: a local report, opt-in).
 name: ci
 
 on:

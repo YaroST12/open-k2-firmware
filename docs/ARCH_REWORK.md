@@ -8,7 +8,7 @@ replay.
 
 The firmware runs one cooperative loop (`src/core/main_loop.cpp`, ARCHITECTURE §2.2). Every 20 ms it runs `Ui::tick`,
 and a page paint runs to completion inside that call. A full page costs about 1.07 us of SPI wire time per pixel at
-/8, plus about 1.65 us of CPU rendering per pixel (calibrated on the bench). A full repaint (clear plus page,
+/8 (the divider when this was measured; the boot divider is /4 since 2026-11-12, 0.53 us per pixel), plus about 1.65 us of CPU rendering per pixel (calibrated on the bench). A full repaint (clear plus page,
 115 200 px) therefore holds the pass for about 215 ms.
 
 During a paint only the LCD idle hook runs, from inside `lcd.cpp`. It runs `fusb302::service`, the UFCS and HVDCP

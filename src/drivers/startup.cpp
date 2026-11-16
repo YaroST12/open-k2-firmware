@@ -117,8 +117,9 @@ std::uint32_t k2_msp_free_bytes() {
 
 [[gnu::used, gnu::noinline]] void k2_reset_main();   // named in Reset_Handler's asm: keep it out of LTO's reach
 
-// Reset entry: the application runs in thread mode on PSP (link.ld: .psp_stack), so exceptions, including the
-// fault raised when PSP overflows into the MPU guard, run on MSP, a stack the overflow cannot have damaged.
+// Reset entry: the application runs in thread mode on PSP (the RAM between link.ld's .stack_guard and _psp_top), so
+// exceptions, including the fault raised when PSP overflows into the MPU guard, run on MSP, a stack the overflow
+// cannot have damaged.
 // No C code runs before the switch.
 [[gnu::naked]] void Reset_Handler() {
     __asm volatile(

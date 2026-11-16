@@ -83,7 +83,7 @@ The test picks the new file up with no code change.
 | `delay_us(n)` | n × 2.79 | trace: the scan's `delay_ms(2)` + read + write = 5.85 ms |
 | `millis()` / `micros()` read | 0.2 µs | keeps a polling loop moving |
 | one main-loop pass | 15 µs | the work not modelled call by call |
-| LCD wire, per pixel | 1.0667 µs | SPI at /8 (`lcd_timing.hpp` `wire_us`) |
+| LCD wire, per pixel | 1.0667 µs | the model's default `px_us` (`tests/world_sim.h`), the SPI /8 figure of `lcd_timing.hpp` `wire_us`; the shipped boot divider is /4 = 0.533 µs, so modelled paints are conservative |
 | LCD per stream call / per window | 2 µs / 8 µs | CASET/RASET/RAMWR overhead |
 | LCD CPU, per streamed pixel | 1.65 µs | calibrated, below |
 | INA226 bus register | mean over the last conversion period | 4.48 ms at the driver's 0x4407, 280 µs in its fast mode |
