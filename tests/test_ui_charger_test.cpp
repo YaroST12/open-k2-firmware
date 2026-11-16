@@ -1222,6 +1222,7 @@ static void test_the_default_run_is_medium() {
 // Review (step 3/3): the Level row sits above START. START keeps the opening focus; MINUS reaches Level, whose OK cycles
 // Medium -> Deep -> Light -> Medium (next_level), the Tests row's step count follows the level, and the footer says what the
 // level does. PLUS goes back to START, whose OK opens the confirmation as before.
+static void dump_screen(const char* name);
 static void test_review_level_row_cycles_and_counts() {
     fixture();
     g_stub.caps.num_pdos = 3;
@@ -1253,6 +1254,7 @@ static void test_review_level_row_cycles_and_counts() {
     // Deep also runs the PD spec stage (specsec): the footer names it, the preview counts its checks, Light and Medium have none.
     v = ui.charger_test_view();
     CHECK_STR(std::string(v.message, v.message_len).c_str(), "Deep: + sweeps, PD spec");
+    dump_screen("spec_review_deep");   // K2_DUMP: the Level page with Deep picked
     CHECK_EQ(unsigned(v.preview.spec_checks), unsigned(specsec::kCells));
     CHECK_EQ(unsigned(ui.charger_test_view().preview.total) >= deep, true);
     press(ui, Button::Ok); settle(ui);
@@ -1482,6 +1484,8 @@ static void test_the_results_grid_carries_the_pdspec_section() {
         for (int i = 0; i < row; ++i) press(ui, Button::Plus, t);
         ui.tick(t += 100); calm();
         CHECK_EQ(ui.charger_test_cursor(), row);
+        if (row == units) dump_screen("spec_results_first");   // K2_DUMP: the first spec row, the unit rows scrolled off
+        if (row == units + 12) dump_screen("spec_results_mid");
         press(ui, Button::Ok, t); ui.tick(t += 100); calm();
         CHECK_EQ(ui.charger_test_stage(), 15);
         press(ui, Button::Back, t); ui.tick(t += 100); calm();
