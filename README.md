@@ -162,26 +162,9 @@ The level shows in the results and on the running page:
 - A Light run keeps VBUS at 5 V. In its Results only the 5 V cell is a measured pass; the other levels are drawn without a fill and the footer says "1 pass, 3 listed".
 - A Deep run steps a PPS or AVS range in 100 mV points. While a sweep row runs, the hero shows VBUS with the voltage the K2 asked for (**req**), the voltage the charger gave (**got**) and the error between them. The grid shows the range row and, below it, the **Sweep** strip for that range; the strip turns green, amber or red when the sweep closes, graded by the worst error.
 
-### PD Spec Check
+### PD spec checks in a Deep run
 
-This page is only in builds made with `K2_PDSPEC=1`; the default build does not have it. It is a no-load conformance pass over the attached PD charger, judged against the limits of the PD specification.
-
-<table>
-<tr>
-<td align="center"><img src="docs/img/ui/pdspec-setup.png" width="240" alt="PD Spec Check: pick the checks"></td>
-<td align="center"><img src="docs/img/ui/pdspec-running.png" width="240" alt="PD Spec Check running"></td>
-<td align="center"><img src="docs/img/ui/pdspec-results.png" width="240" alt="PD Spec Check results"></td>
-</tr>
-<tr>
-<td align="center"><sub>1/2 Checks: pick families</sub></td>
-<td align="center"><sub>Running: family and VBUS</sub></td>
-<td align="center"><sub>Results: a run stopped early</sub></td>
-</tr>
-</table>
-
-- Setup picks the check families (**OK** toggles one). Review shows what will run and uses the same two-press START as the charger test.
-- Running shows the check, VBUS and the counts. **BACK** (Stop) ends it and returns the charger to 5 V.
-- Results lists every check as pass, fail or skip with its worst value. The picture is a run that was stopped early, so most checks are skipped. **OK** opens a check's detail. The score is a penalty: 0 is ideal.
+In builds made with `K2_PDSPEC=1` (the default build does not have it) a Deep charger test also runs a no-load conformance pass over the attached PD charger, judged against the limits of the PD specification, as one more section of the results: a cell per check with its verdict, and **OK** opens a check's value, limit and verdict. The score is a penalty: 0 is ideal. It never asks for more than the charger advertises; the keep-alive timeouts and the Hard Reset and detach recovery checks, which make a source reset by design, stay with `tools/pd_spec.py`.
 
 ### E-marker and cable read
 
@@ -224,10 +207,10 @@ This page is only in builds made with `K2_PDSPEC=1`; the default build does not 
 The host tests draw each page to a 240x240 buffer. With `K2_DUMP=<dir>` set, the UI test programs write the frames, and `tools/panel2png.py <dir> <out> --scale 2` turns them into PNG files (480x480). Host builds only; no firmware build or K2 is needed:
 
 ```bash
-make host-build/test_ui_mockup host-build/test_ui_charger_test host-build/test_ui_pdspec_page \
+make host-build/test_ui_mockup host-build/test_ui_charger_test \
      host-build/test_ui_sweep_live host-build/test_ui_graphs
 mkdir -p runs/shots runs/png
-for t in mockup charger_test pdspec_page sweep_live graphs; do K2_DUMP=runs/shots ./host-build/test_ui_$t; done
+for t in mockup charger_test sweep_live graphs; do K2_DUMP=runs/shots ./host-build/test_ui_$t; done
 python3 tools/panel2png.py runs/shots runs/png --scale 2
 ```
 
@@ -240,12 +223,11 @@ Each picture is one frame of `runs/png` (the `k2_` prefix and the `.panel` suffi
 | `place-charger`, `place-device`, `place-cable`, `usblink`, `ct-tests` | `mock_place_charger`, `_device`, `_cable`, `mock_usblink`, `mock_ct_setup` | `test_ui_mockup` |
 | `ct-review`, `ct-confirm`, `ct-running`, `ct-results`, `ct-steps`, `ct-detail`, `ct-light` | `readme_ct_review`, `_confirm`, `_running`, `_results`, `_steps`, `_detail`, `_light` | `test_ui_charger_test` |
 | `sweep-running` | `sweep_pps_rot3` | `test_ui_sweep_live` |
-| `pdspec-setup`, `pdspec-running`, `pdspec-results` | `readme_pdspec_setup`, `_running`, `_results` | `test_ui_pdspec_page` |
 | `graphs` | `mock_graphs_pps_r3` | `test_ui_graphs` |
 
 The `readme_*` frames exist for this section: they are taken at rotation 3 (the strip at the bottom) after ticking the UI until it stops painting, because the stock gallery frames of the same pages are taken mid-paint or with a charger the stub's converter cannot follow (red failures). The Home, Bench, Numbers, Lines and Battery frames carry the stand-in live session (a healthy Black Box report, CC1 1.65 V with D+/D- at 0 V, the MCU temperature, the PD verdict), so no row says "no session" or "--" beside a live contract. The charger-test frames use an EPR charger the stub's converter follows up to 36 V, run at Medium (Light for `ct-light`).
 
-What the host pictures cannot show: LCD timing and SPI glitches, real readings, a real voltage fold (the caution state is covered by the UI tests, not by a picture here), the SuperVOOC ceiling row, QR codes that scan, and the PD Spec pages on a default build.
+What the host pictures cannot show: LCD timing and SPI glitches, real readings, a real voltage fold (the caution state is covered by the UI tests, not by a picture here), the SuperVOOC ceiling row and QR codes that scan.
 
 ## Hardware
 

@@ -403,6 +403,35 @@ struct Fake final : ct::Env {
         } else if (ceil_end_ms && t >= ceil_end_ms) { in.svooc.running = false; in.svooc.abort = ceil_abort; }
         else { in.svooc.running = true; in.svooc.abort = 0; }
     }
+    // The PD spec stage (spec_section.hpp): a scripted pdspec engine. spec_engine = false is a build without it (spec_start 255);
+    // spec_refuse is the engine's StartResult refusal. Started, it holds VBUS at spec_level_mv and ends by itself after
+    // spec_run_ms (0 = it runs until stopped); after spec_stop it still runs spec_exit_ms (its orderly return to 5 V), then ends.
+    // spec_leave_hot: it ends with VBUS still at spec_level_mv (the return to 5 V is the Runner's to do). spec_collect hands back
+    // spec_result. detach_vbus is the VBUS the last detach() saw.
+    bool spec_engine = false, spec_leave_hot = false, spec_on = false; uint8_t spec_refuse = 0;
+    int spec_starts = 0, spec_stops = 0, spec_collects = 0, spec_level_mv = 20000, detach_vbus = -1, pd_at_spec_start = 0, pd_at_spec_end = 0;
+    uint32_t spec_run_ms = 20000, spec_exit_ms = 500, spec_t0 = 0, spec_stop_t = 0, spec_started_at = 0;
+    specsec::Result spec_result;
+    uint8_t spec_start() override {
+        ++spec_starts; spec_started_at = in.now; pd_at_spec_start = pd_requests;
+        if (!spec_engine) return 255;
+        if (spec_refuse) return spec_refuse;
+        spec_on = true; spec_t0 = in.now; spec_stop_t = 0; in.spec_running = true;
+        return 0;
+    }
+    void spec_stop() override { ++spec_stops; if (spec_on && !spec_stop_t) spec_stop_t = in.now; }
+    void spec_collect(specsec::Result& r) override { ++spec_collects; r = spec_result; }
+    void spec_tick() {
+        if (!spec_on) return;
+        if ((spec_stop_t && in.now - spec_stop_t >= spec_exit_ms) || (spec_run_ms && in.now - spec_t0 >= spec_run_ms)) {
+            spec_on = false; in.spec_running = false; pd_at_spec_end = pd_requests;
+            in.vbus_mv = spec_leave_hot ? spec_level_mv : 5000;
+            if (!spec_leave_hot) in.pd.mv = 5000;
+            return;
+        }
+        in.spec_running = true;
+        if (!spec_stop_t) in.vbus_mv = spec_level_mv;
+    }
     // Journal hooks: what the UI Env does, so a test can cut the run anywhere and reboot into the journal.
     cj::Journal* jr = nullptr;
     const ct::Runner* rn = nullptr;
@@ -490,7 +519,7 @@ struct Fake final : ct::Env {
     void detach() override {
         if (!alive()) return;
         if (caps.valid) saved = caps;
-        ++detaches; seq.push_back('D'); rd_on = false; rd_off_at = in.now; fc_at_off = fc_requests; pd_at_off = pd_requests;
+        ++detaches; detach_vbus = in.vbus_mv; seq.push_back('D'); rd_on = false; rd_off_at = in.now; fc_at_off = fc_requests; pd_at_off = pd_requests;
         handed = false; caps.valid = false; in.pd.state = pd::SinkState::Idle; in.pd.held = false; in.pd.epr_mode = false;
         in.pd.epr_info = pd::EprInfo::None; info_shown = {};
         in.pd.mv = 5000; in.fc_state = fc::State::Idle; low_now = false;
@@ -694,6 +723,7 @@ struct Fake final : ct::Env {
             if (noise_mv && before > 1000) bump = (((in.now / 100) % 2) != 0) != (noise_flip && (pd_requests & 1)) ? noise_mv : -noise_mv;
             in.vbus_mv += bump;
             ceil_tick();
+            spec_tick();
             r.poll(in, caps);
             if (bump && in.vbus_mv == before + bump) in.vbus_mv = before;
             min_vbus = std::min(min_vbus, in.vbus_mv);
@@ -8030,6 +8060,152 @@ static void test_light_run_requests_nothing_but_5v() {
         (void)scaps;
     }
 }
+// ---- The PD spec stage (spec_section.hpp) of a Deep run ------------------------------------------------------------------
+// The pdspec engine runs the no-load conformance checks on the Pd unit's link, at the end of the Pd unit, once its contract is back
+// at 5 V and the charger's identity was asked. The Runner starts it through Env::spec_start, waits for Input::spec_running to drop,
+// reads the result through Env::spec_collect and brings the source back to 5 V before the unit's detach.
+static ct::Options spec_opts(ct::Level lv = ct::Level::Deep) { return ct::with_level(with_units(ct::kDefaultAlgorithms, {ct::Unit::Pd}), lv); }
+static specsec::Result spec_cells(specsec::End end = specsec::End::Done) {
+    specsec::Result r; r.end = end;
+    for (size_t i = 0; i < specsec::kCells; ++i)
+        r.cells[i] = i % 5 == 0 ? specsec::make_cell(pdspec::Verdict::Fail, pdspec::Skip::None, 2) : specsec::make_cell(pdspec::Verdict::Pass, pdspec::Skip::None, 0);
+    return r;
+}
+static void test_spec_stage_runs_once_in_a_deep_pd_unit() {
+    Fake f; f.caps = level_caps(); f.spec_engine = true; f.spec_result = spec_cells();
+    ct::Runner r(f);
+    CHECK_EQ(r.start(f.caps, spec_opts(), f.in, true), ct::Reason::None);
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Spec; }, 400000), true);
+    CHECK_EQ(r.busy(), true);                    // the stage is part of the run
+    CHECK_EQ(r.quiet(), true);                   // the engine's wire is timed: no journal flash write, no heavy paint
+    CHECK_EQ(f.spec_starts, 1); CHECK_EQ(f.spec_stops, 0);
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 400000), true);
+    CHECK_EQ(f.spec_starts, 1);                  // once per run
+    CHECK_EQ(f.spec_collects, 1);
+    CHECK_EQ(f.spec_stops, 0);                   // it ended by itself
+    CHECK_EQ(int(r.evidence().spec.end), int(specsec::End::Done));
+    CHECK_EQ(r.evidence().spec.same(f.spec_result), true);
+    CHECK_EQ(f.pd_at_spec_end, f.pd_at_spec_start);   // the Runner asks no PDO itself in the stage (the engine's levels are its own)
+    CHECK_EQ(f.detach_vbus, 5000);               // the unit's detach comes at 5 V
+    for (const auto& s : r.steps()) CHECK_EQ(s.verdict == ct::Verdict::Pending || s.verdict == ct::Verdict::Running, false);
+}
+// The stage is Deep only, and needs a build with the engine: Light and Medium never start it, a build without the engine (the
+// Env's default answer) records nothing and shows no section.
+static void test_spec_stage_is_deep_only() {
+    for (const auto lv : {ct::Level::Light, ct::Level::Medium, ct::Level::Deep}) {
+        Fake f; f.caps = level_caps(); f.spec_engine = true; f.spec_result = spec_cells();
+        ct::Runner r(f);
+        CHECK_EQ(r.start(f.caps, spec_opts(lv), f.in, true), ct::Reason::None);
+        CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 400000), true);
+        CHECK_EQ(f.spec_starts, lv == ct::Level::Deep ? 1 : 0);
+        CHECK_EQ(r.evidence().spec.shown(), lv == ct::Level::Deep);
+    }
+    Fake f; f.caps = level_caps(); f.spec_engine = false;   // spec_start answers 255
+    ct::Runner r(f);
+    CHECK_EQ(r.start(f.caps, spec_opts(), f.in, true), ct::Reason::None);
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 400000), true);
+    CHECK_EQ(f.spec_starts, 1); CHECK_EQ(f.spec_collects, 0);
+    CHECK_EQ(int(r.evidence().spec.end), int(specsec::End::NotRun));
+    // A legacy-only run has no Pd unit: no stage
+    Fake g; g.caps = {}; g.spec_engine = true;
+    ct::Runner q(g);
+    CHECK_EQ(q.start(g.caps, ct::with_level({.selected = ct::bit(A::Qc2)}, ct::Level::Deep), g.in, true), ct::Reason::None);
+    run_until(g, q, [&] { return q.state() == ct::State::Done; }, 400000);
+    CHECK_EQ(g.spec_starts, 0);
+}
+// The engine refuses (no list, an inline load, ...): the section reads skipped with the refusal, the run goes on and detaches.
+static void test_spec_refusal_is_recorded_and_the_run_goes_on() {
+    Fake f; f.caps = level_caps(); f.spec_engine = true; f.spec_refuse = 2;
+    ct::Runner r(f);
+    CHECK_EQ(r.start(f.caps, spec_opts(), f.in, true), ct::Reason::None);
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 400000), true);
+    CHECK_EQ(f.spec_starts, 1); CHECK_EQ(f.spec_collects, 0);
+    CHECK_EQ(int(r.evidence().spec.end), int(specsec::End::Refused));
+    CHECK_EQ(int(r.evidence().spec.why), 2);
+    for (const auto& c : r.evidence().spec.cells) CHECK_EQ(int(c.verdict()), int(pdspec::Verdict::Skip));
+    CHECK_EQ(r.evidence().spec.shown(), true);
+}
+// A cancel in the middle asks the engine to end in order and waits for it: the source is released to 5 V, the result is kept
+// as Cancelled, the run is Stopped.
+static void test_spec_cancel_ends_in_order() {
+    Fake f; f.caps = level_caps(); f.spec_engine = true; f.spec_run_ms = 0; f.spec_result = spec_cells(specsec::End::Cancelled);
+    ct::Runner r(f);
+    CHECK_EQ(r.start(f.caps, spec_opts(), f.in, true), ct::Reason::None);
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Spec; }, 400000), true);
+    f.tick(r, 3000);
+    CHECK_EQ(f.in.vbus_mv, 20000);
+    r.cancel(f.in);
+    CHECK_EQ(f.spec_stops, 1);                   // the engine was asked, once
+    CHECK_EQ(r.busy(), true);                    // and the run waits for its orderly end
+    CHECK_EQ(run_until(f, r, [&] { return !r.busy(); }, 60000), true);
+    CHECK_EQ(int(r.state()), int(ct::State::Stopped));
+    CHECK_EQ(int(r.reason()), int(ct::Reason::Cancelled));
+    CHECK_EQ(int(r.evidence().spec.end), int(specsec::End::Cancelled));
+    CHECK_EQ(f.spec_collects, 1);
+    CHECK_EQ(f.in.vbus_mv, 5000);
+}
+// The engine ends (or is stopped) with the source still at its last level: the Runner releases it to 5 V and only then detaches.
+static void test_spec_leaves_the_source_at_5v_before_the_detach() {
+    Fake f; f.caps = level_caps(); f.spec_engine = true; f.spec_leave_hot = true; f.spec_result = spec_cells();
+    ct::Runner r(f);
+    CHECK_EQ(r.start(f.caps, spec_opts(), f.in, true), ct::Reason::None);
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Spec; }, 400000), true);
+    const int releases = f.releases;
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 400000), true);
+    CHECK_EQ(f.releases > releases, true);       // the release went out
+    CHECK_EQ(f.detach_vbus, 5000);               // before the Rd went off
+}
+// An engine that never ends is bounded by the Runner: it is asked to stop, then abandoned after the grace, and the run goes on.
+static void test_spec_watchdog_bounds_a_stuck_engine() {
+    Fake f; f.caps = level_caps(); f.spec_engine = true; f.spec_run_ms = 0; f.spec_exit_ms = 1000000; f.spec_result = spec_cells();
+    ct::Runner r(f);
+    CHECK_EQ(r.start(f.caps, spec_opts(), f.in, true), ct::Reason::None);
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Spec; }, 400000), true);
+    const uint32_t t0 = f.in.now;
+    CHECK_EQ(run_until(f, r, [&] { return r.state() != ct::State::Spec; }, 2000000), true);
+    CHECK_EQ(f.in.now - t0 >= specsec::kMaxMs, true);
+    CHECK_EQ(f.in.now - t0 <= specsec::kMaxMs + specsec::kStopGraceMs + 3000, true);
+    CHECK_EQ(f.spec_stops, 1);
+    CHECK_EQ(int(r.evidence().spec.end), int(specsec::End::Fault));
+}
+// The run's other guards reach into the stage: a lost monitor stops the engine and ends the stage as a fault.
+static void test_spec_runner_guard_stops_the_engine() {
+    Fake f; f.caps = level_caps(); f.spec_engine = true; f.spec_run_ms = 0; f.spec_result = spec_cells();
+    ct::Runner r(f);
+    CHECK_EQ(r.start(f.caps, spec_opts(), f.in, true), ct::Reason::None);
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Spec; }, 400000), true);
+    f.in.inline_load = true;
+    CHECK_EQ(run_until(f, r, [&] { return f.spec_stops == 1; }, 5000), true);
+    CHECK_EQ(run_until(f, r, [&] { return r.state() != ct::State::Spec; }, 60000), true);
+    CHECK_EQ(int(r.evidence().spec.end), int(specsec::End::Fault));
+}
+// A power loss inside the stage: the resumed run never repeats it (restore() keeps what was journaled and marks it done).
+static void test_spec_resumed_run_never_repeats_the_stage() {
+    Fake f; f.caps = level_caps(); f.spec_engine = true; f.spec_run_ms = 0;
+    ct::Runner r(f);
+    CHECK_EQ(r.start(f.caps, spec_opts(), f.in, true), ct::Reason::None);
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Spec; }, 400000), true);
+    // the power goes here: every row is done, the stage was running. The journal gives the rows back; the stage is not repeated.
+    Fake g; g.caps = level_caps(); g.spec_engine = true;
+    ct::Runner q(g);
+    std::vector<ct::Step> rows(r.steps().begin(), r.steps().end());
+    ct::Evidence ev = r.evidence(); ev.spec = spec_cells();
+    q.restore(spec_opts(), ev, r.run_id(), {rows.data(), rows.size()}, ct::Phase::None, 0, 1, SIZE_MAX, 0, false);
+    CHECK_EQ(q.evidence().spec.same(ev.spec), true);
+    run_until(g, q, [&] { return !q.busy() && q.state() != ct::State::Idle; }, 400000);
+    CHECK_EQ(g.spec_starts, 0);
+    CHECK_EQ(q.evidence().spec.same(ev.spec), true);
+}
+// The preview names the stage: Deep on a PD charger adds its checks and its time; Light and Medium add nothing.
+static void test_spec_preview_counts_the_stage() {
+    Fake f; f.caps = level_caps();
+    const auto pv = [&](ct::Level l) { return ct::Runner::preview(f.caps, spec_opts(l), f.in); };
+    CHECK_EQ(unsigned(pv(ct::Level::Light).spec_checks), 0u); CHECK_EQ(unsigned(pv(ct::Level::Medium).spec_checks), 0u);
+    CHECK_EQ(unsigned(pv(ct::Level::Deep).spec_checks), unsigned(specsec::kBuilt ? specsec::kCells : 0));
+    const auto plain = ct::Runner::preview(f.caps, [&] { auto o = spec_opts(); o.spec = false; return o; }(), f.in);
+    CHECK_EQ(unsigned(plain.spec_checks), 0u);
+    CHECK_EQ(pv(ct::Level::Deep).estimate_ms, plain.estimate_ms + (specsec::kBuilt ? specsec::kEstimateMs : 0));
+}
 // A Light run resumed after a power loss is replanned Light (the level rides in the journal meta) and still asks only 5 V.
 // The schema-2 page says which level the run in hand ran at: run_selected bits 28..29 (the draft's own level is in the draft
 // mask), so a results export names the run's level even after the next run's level was changed.
@@ -8215,5 +8391,8 @@ int main() {
     test_level_maps_to_the_run_switches(); test_level_plans_per_level(); test_light_run_requests_nothing_but_5v();
     test_a_resumed_light_run_stays_light();
     test_the_page_names_the_run_level();
+    test_spec_stage_runs_once_in_a_deep_pd_unit(); test_spec_stage_is_deep_only(); test_spec_refusal_is_recorded_and_the_run_goes_on(); test_spec_cancel_ends_in_order();
+    test_spec_leaves_the_source_at_5v_before_the_detach(); test_spec_watchdog_bounds_a_stuck_engine(); test_spec_runner_guard_stops_the_engine();
+    test_spec_resumed_run_never_repeats_the_stage(); test_spec_preview_counts_the_stage();
     return test_report("test_charger_test");
 }

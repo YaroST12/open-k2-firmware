@@ -93,9 +93,6 @@ PageIf *Ui::build_menu(Menu m) {
 #if K2_PDSTRESS
     case Menu::PdStress: return pages_.push<PdStressPage>(ctx_);
 #endif
-#if K2_PDSPEC
-    case Menu::PdSpec: return pages_.push<PdSpecPage>(ctx_);
-#endif
     case Menu::Diagnosis: {
         DiagnosisPage *p = pages_.push<DiagnosisPage>(ctx_);
         if (p && place_next_) p->as_place();   // the Log place, before enter() and the first paint
@@ -485,7 +482,7 @@ const char *Ui::foreign_busy() const {
     const auto fs = fctrig::status();
     if (loopguard::locked()) return loopguard::kLockText;   // a run starts nothing above 5 V, a restore waits (k2/core/loop_guard.hpp)
     if (charger_test_busy()) return "Test running: stop it";
-    if (pdspec_active()) return "PD Spec: stop it";   // PD Stress asks this; the PD Spec Check never does while its own run goes on
+    if (pdspec_active()) return "PD Spec: stop it";   // PD Stress and the charger test ask this; a remote-started spec run asks nothing while it goes on
     if (loop_probe_busy()) return "Loop probe: stop it";
     if (fc_release_.busy()) return "5V release: wait";
     if (fctrig::scan_running() || fs.state == fc::State::Negotiating || fs.state == fc::State::Active ||
@@ -686,7 +683,7 @@ void Ui::refuse_menu(Menu m, const char *why, uint32_t now_ms) {
 
 bool Ui::push_menu(Menu m, uint32_t now_ms) {
     // The PD Stress page opens over its own run (a run the remote started shows there, and its BACK stops it); it only reads the session.
-    if (ports_busy() && !(m == Menu::PdStress && pdstress_active()) && !(m == Menu::PdSpec && pdspec_active())) {
+    if (ports_busy() && !(m == Menu::PdStress && pdstress_active())) {
         K2LOG("[TEST] menu refused: test/release in progress\n");
         return false;
     }
@@ -1594,7 +1591,7 @@ void Ui::draw_release_notice() {
     }
 #endif
 #if K2_PDSPEC
-    else if (const char *line = pdspec_.footer(); line && menu() != Menu::Trigger && menu() != Menu::PdSpec) {
+    else if (const char *line = pdspec_.footer(); line && menu() != Menu::Trigger) {
         draw_footer(ctx_.content, FooterTone::Info, line);
     }
 #endif

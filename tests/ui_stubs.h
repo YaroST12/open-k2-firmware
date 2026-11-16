@@ -33,7 +33,7 @@ struct StubState {
     // The charger-test journal as the boot finds it (load() answers journal_load) and what the page wrote back.
     k2::charger_journal::Replay journal{};
     bool journal_load = false, rd_inherited = false;
-    int journal_finishes = 0, journal_resumes = 0, journal_attempts = 0, journal_metas = 0, rd_releases = 0;
+    int journal_finishes = 0, journal_resumes = 0, journal_attempts = 0, journal_spec_notes = 0, journal_metas = 0, rd_releases = 0;
     int bb_holds = 0;   // bbpersist::hold_run() calls: a live charger-test run renews it every tick
     int bb_make_rooms = 0;   // bbpersist::make_room() calls: START makes the Black Box ring's spare sector blank before Rd goes on
     // The journal's polled jobs (arm = rows and header of a run start, replan = the changed rows). A job needs `arm_pumps` /

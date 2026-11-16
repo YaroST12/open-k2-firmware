@@ -29,8 +29,9 @@ K2_WEBUSB ?= 0
 # `pdstress` shell commands). Off by default since 2026-11-12: it found no charger fault. The host tests always build it
 # (HOST_CXXFLAGS) so its logic keeps compiling. See include/k2/core/build_config.h.
 K2_PDSTRESS ?= 0
-# K2_PDSPEC=1 builds Tools > PD Spec Check in (the no-load PD conformance check: its session, page and the remote command 0x5A,
-# docs/PD_SPEC_CHECK.md). Off by default while flash is short; the host tests always build it (HOST_CXXFLAGS).
+# K2_PDSPEC=1 builds the no-load PD conformance check in (the charger test's Deep PD spec section, the remote command 0x5A
+# and the [6, off] read of the section; docs/PD_SPEC_CHECK.md). No Tools page since 2026-11-16. Off by default while flash is
+# short; the host tests always build it (HOST_CXXFLAGS).
 K2_PDSPEC ?= 0
 # K2_LOOPPROBE=1 builds Tools > Loop probe in (the HID-cable loop probe: its page, session, stored result and the remote command
 # 0x57; docs/LOOP_PROBE.md). Off by default since 2026-11-16 (flash); the host tests always build it (HOST_CXXFLAGS).
@@ -111,7 +112,7 @@ PDSTRESS_CXX_SRCS = $(wildcard $(SRC_DIR)/pdstress/*.cpp) $(SRC_DIR)/ui/ui_pdstr
 ifneq ($(K2_PDSTRESS),1)
 CXX_SRCS := $(filter-out $(PDSTRESS_CXX_SRCS),$(CXX_SRCS))
 endif
-PDSPEC_CXX_SRCS = $(SRC_DIR)/ui/ui_pdspec.cpp $(SRC_DIR)/ui/ui_pdspec_page.cpp   # K2_PDSPEC=1 only
+PDSPEC_CXX_SRCS = $(SRC_DIR)/ui/ui_pdspec.cpp   # K2_PDSPEC=1 only
 ifneq ($(K2_PDSPEC),1)
 CXX_SRCS := $(filter-out $(PDSPEC_CXX_SRCS),$(CXX_SRCS))
 endif
@@ -470,7 +471,7 @@ TEST_CXX_LIB  += $(SRC_DIR)/loopprobe/loop_probe.cpp
 TEST_CXX_LIB  += $(SRC_DIR)/loopprobe/host_report.cpp $(SRC_DIR)/loopprobe/usb_fp.cpp
 TEST_CXX_LIB  += $(SRC_DIR)/ui/ui_loop_probe.cpp
 TEST_CXX_LIB  += $(SRC_DIR)/ui/ui_pdstress_page.cpp
-TEST_CXX_LIB  += $(SRC_DIR)/ui/ui_pdspec.cpp $(SRC_DIR)/ui/ui_pdspec_page.cpp
+TEST_CXX_LIB  += $(SRC_DIR)/ui/ui_pdspec.cpp
 TEST_CXX_LIB  += $(SRC_DIR)/pd/diag.cpp $(SRC_DIR)/pd/diag_screen.cpp $(SRC_DIR)/ui/ui_diagnosis.cpp
 TEST_CXX_LIB  += $(SRC_DIR)/battery/battery.cpp $(SRC_DIR)/battery/battery_store.cpp $(SRC_DIR)/battery/battery_wire.cpp
 TEST_CXX_LIB  += $(SRC_DIR)/ui/battery_view.cpp $(SRC_DIR)/ui/ui_battery.cpp

@@ -97,6 +97,7 @@ void cancel() {
 }
 void note(std::span<const charger_test::Step> steps, std::size_t index) { g_j.note(steps, index); }
 void note_plan(std::span<const charger_test::Step> steps) { g_j.note_plan(steps); }
+void note_spec() { g_j.note_spec(); }
 
 void pump(std::uint32_t run_id, const charger_test::Options& o, const charger_test::Evidence& e,
           std::span<const charger_test::Step> steps) {

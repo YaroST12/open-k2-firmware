@@ -127,6 +127,12 @@
 //                                    after the wait - shows in the view: stage refuse, or review with the run id unchanged and
 //                                    the metadata reason). Busy (no payload) while a run, a wait, a resume or an earlier
 //                                    remote START holds the session. Never arms the lease: the run is the device's own.
+//                                    SPEC, req 6 off(1): the PD spec section of the run in hand (the Deep run's PD spec stage, K2_PDSPEC
+//                                    builds): the result in the form of the journal's record (end(1) why(1) flags(1), then per
+//                                    check, in the grid's order, code(1) fails(1) value(2 LE); 3 + 4 x 27 = 111 bytes) from byte
+//                                    off. rsp run_id(4) total(1) off(1) n(1) data(n), n <= 48. total 0 = the run has no spec
+//                                    section (a default image, a Light or Medium run, a stage that never began). off past total is
+//                                    BadArg. Read-only, from the run's evidence; an older firmware answers BadLength (two bytes).
 //                                    CANCEL, req 5 (one byte): the device's own stop (BACK) - a run stops, the wait is
 //                                    cancelled (Rd released), the confirm window (and a pending remote START) closes, the
 //                                    Refuse stage returns to Review, a pending resume is abandoned. rsp what(1): kCtStop*.
@@ -971,6 +977,13 @@ struct ChargerTestView {
 size_t encode_charger_test_view(std::span<uint8_t> out, const ChargerTestView&);
 // `0x0B req [4, flags]` START and `[5]` CANCEL (see the command table above).
 constexpr uint8_t kChargerTestStartReq = 4, kChargerTestCancelReq = 5;
+// `0x0B req [6, off]`: the PD spec section of the run in hand (a Deep run on a K2_PDSPEC build), see the command table. The result's
+// wire form (specsec::to_wire, 3 + 4 x 27 bytes) in chunks: rsp run_id(4) total(1) off(1) n(1) data(n).
+constexpr uint8_t kChargerTestSpecReq = 6;
+constexpr size_t kCtSpecChunk = 48, kCtSpecHeader = 7;
+static_assert(kCtSpecHeader + kCtSpecChunk <= kMaxRspPayload);
+static_assert(specsec::kWireBytes <= 255, "total and off are one byte");
+size_t encode_charger_test_spec(std::span<uint8_t> out, const ChargerTestSnapshot&, uint8_t off);
 constexpr uint8_t kCtStartConfirm = 1u << 0,    // required: the START raises the output
                   kCtStartAllTests = 1u << 1;   // the "All tests" preset before the START (ct_start.py's pick)
 constexpr uint8_t kCtStartAccepted = 0, kCtStartRefused = 1;
@@ -1587,6 +1600,11 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
             return reply_n(kChargerTestStartLen);
         }
         if (p.size() == 1 && p[0] == kChargerTestCancelReq) { buf[0] = backend.charger_test_cancel(); return reply_n(1); }
+        if (p.size() == 2 && p[0] == kChargerTestSpecReq) {
+            const auto s = backend.charger_test_results();
+            if (p[1] > (s.evidence.spec.shown() ? specsec::kWireBytes : 0)) return reply(Status::BadArg);
+            return reply_n(encode_charger_test_spec(buf, s, p[1]));
+        }
         if (!p.empty() && p.size() != 1 && p.size() != 9 && p.size() != 10) return reply(Status::BadLength);
         if (p.size() == 1 && p[0] == kChargerTestViewReq) return reply_n(encode_charger_test_view(buf, backend.charger_test_view()));
         const bool modern = p.size() == 1 || p.size() == 10;

@@ -24,9 +24,6 @@
 #if K2_PDSTRESS
 #include "k2/ui/ui_pdstress_page.hpp"
 #endif
-#if K2_PDSPEC
-#include "k2/ui/ui_pdspec_page.hpp"
-#endif
 #include "k2/ui/ui_diagnosis.hpp"
 #include "k2/ui/ui_battery.hpp"
 #include "k2/ui/ui_connection.hpp"
@@ -84,9 +81,6 @@ inline constexpr std::size_t kLongestMenuChain =
 #endif
 #if K2_PDSTRESS
               arena_bytes<ConnectionPage, PdStressPage>(),
-#endif
-#if K2_PDSPEC
-              arena_bytes<ConnectionPage, PdSpecPage>(),
 #endif
               arena_bytes<TriggerPage, EmarkerPage, ConnectionPage>(), arena_bytes<CardsPage, SharePage>(),
               arena_bytes<DiagnosisPage, BlackBoxPage, SharePage>(), arena_bytes<BlackBoxPage, SharePage>(),
@@ -218,9 +212,6 @@ public:
     // The PD Stress page while Menu::PdStress is on the stack, else nullptr (host tests).
 #if K2_PDSTRESS
     PdStressPage *pd_stress_page() const { return find<PdStressPage>(Menu::PdStress); }
-#endif
-#if K2_PDSPEC
-    PdSpecPage *pd_spec_page() const { return find<PdSpecPage>(Menu::PdSpec); }
 #endif
     // The open PD diagnosis page (host tests); it exists only while Menu::Diagnosis is on the stack.
     const DiagnosisPage &diagnosis_page() const { return *find<DiagnosisPage>(Menu::Diagnosis); }

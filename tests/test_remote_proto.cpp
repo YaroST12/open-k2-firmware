@@ -2730,6 +2730,46 @@ static void test_charger_test_view_wire() {
     check_header(r, 0x0B, 36, Status::Ok, 15);
 }
 
+// The PD spec section of a Deep run, `0x0B req [6, off]`: the result's wire form (3 + 4 x 27 = 111 bytes, the journal's record)
+// in chunks of at most 48, behind run_id(4) total(1) off(1) n(1). total 0 = the run has no spec section (a default image, a
+// Light or Medium run, a stage that never began). A read, never moves anything; the other forms of 0x0B keep their answers.
+static void test_charger_test_spec_wire() {
+    namespace ss = k2::specsec;
+    Fake f; Frame r;
+    f.test_results.run_id = 0x01020304;
+    CHECK_EQ(run(f, request(0x0B, 40, {6, 0}), r), 1);
+    check_header(r, 0x0B, 40, Status::Ok, 7);
+    check_bytes(r, 6, {4, 3, 2, 1, 0, 0, 0});   // run_id, total 0, off 0, n 0
+
+    ss::Result& s = f.test_results.evidence.spec;
+    s.end = ss::End::Done; s.why = 0; s.unconfirmed = true;
+    for (size_t i = 0; i < ss::kCells; ++i) s.cells[i] = {static_cast<uint8_t>(i), static_cast<uint8_t>(100 + i), static_cast<int16_t>(-1000 + int(i))};
+    std::array<uint8_t, ss::kWireBytes> wire{};
+    ss::to_wire(s, wire);
+    std::vector<uint8_t> got;
+    for (unsigned off = 0; off < wire.size();) {
+        CHECK_EQ(run(f, request(0x0B, 41, {6, uint8_t(off)}), r), 1);
+        const uint8_t n = r[12];
+        CHECK_EQ(r[5], uint8_t(7 + n));
+        CHECK_EQ(r[10], uint8_t(wire.size()));   // total
+        CHECK_EQ(r[11], uint8_t(off));
+        CHECK(n > 0 && n <= 48);
+        if (n == 0 || n > 48) break;   // red-state guard: never loops on a reply that does not advance
+        for (unsigned i = 0; i < n; ++i) got.push_back(r[13 + i]);
+        off += n;
+    }
+    CHECK_EQ(got.size(), wire.size());
+    CHECK(std::equal(got.begin(), got.end(), wire.begin()));
+    CHECK_EQ(run(f, request(0x0B, 42, {6, uint8_t(wire.size())}), r), 1);   // past the end: an empty chunk, not an error
+    check_header(r, 0x0B, 42, Status::Ok, 7);
+    CHECK_EQ(run(f, request(0x0B, 43, {6, uint8_t(wire.size() + 1)}), r), 1);
+    check_header(r, 0x0B, 43, Status::BadArg, 0);
+    CHECK_EQ(run(f, request(0x0B, 44, {6}), r), 1);
+    check_header(r, 0x0B, 44, Status::BadArg, 0);   // one byte: an unknown form, as any other
+    CHECK_EQ(run(f, request(0x0B, 45, {3}), r), 1);   // the view form is untouched
+    check_header(r, 0x0B, 45, Status::Ok, 30);
+}
+
 // QA 2026-11-10 row B item 2 (red): a deep-sweep row goes over the wire with the sweep flag set (row flags bit 5)
 // and its detail byte carrying the recorded point count - the in-RAM marker kDetailSweep (161) stays on the step,
 // but the host must read the 61 points the sweep logged, not the marker 161.
@@ -3284,7 +3324,7 @@ int main() {
     test_charger_avs_sweep();
     test_charger_level();
     test_charger_svooc_cap();
-    test_charger_test_wire(); test_charger_test_view_wire(); test_sweep_row_wire_carries_points(); test_sweep_row_that_never_ran_carries_zero_points(); test_folded_pass_reason_over_both_schemas();
+    test_charger_test_wire(); test_charger_test_view_wire(); test_charger_test_spec_wire(); test_sweep_row_wire_carries_points(); test_sweep_row_that_never_ran_carries_zero_points(); test_folded_pass_reason_over_both_schemas();
     test_identify_refusal_wire_mapping();
     test_pd_attach_wire();
     test_active_pd_commands();

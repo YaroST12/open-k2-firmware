@@ -120,11 +120,6 @@ struct UiContext {
             std::uint8_t pace = 0;                        // pdstress::Options::pace
             std::uint8_t sel = 0;                         // the Setup list's cursor
         } pdstress;
-        struct PdSpec {                                   // Tools > PD Spec Check: the setup the next START uses
-            std::uint8_t mask = 0x3F;                     // picked families (bit = pdspec::Family), all six by default
-            std::uint8_t sel = 0;                         // the Setup list's cursor
-            std::uint16_t seen_run = 0;                   // PdSpecSession::run_no() of the result the page has shown
-        } pdspec;
         std::array<uint8_t, bench::kPlaces> place_sel{};  // each place's last action: repeating a job is OK, OK, OK
         uint8_t face = 0;                                 // Meter: the face last shown (0 Flow, 1 Graphs, 2 Numbers, 3 Lines)
     } keep;
@@ -286,7 +281,7 @@ public:
     // 1 Start, skip spoof (this run without the identity; the stored pick stays). BACK returns to Review.
     // Waiting = START's wait for the charger after the Rd went on (VBUS, then the caps): driven by poll(), never blocks;
     // BACK or OK cancels it.
-    enum class Stage : uint8_t { Algorithms, Group, Cable, Identity, Review, Running, Results, Steps, Detail, Resume, Changes, Ask, Refuse, Waiting, Custom };
+    enum class Stage : uint8_t { Algorithms, Group, Cable, Identity, Review, Running, Results, Steps, Detail, Resume, Changes, Ask, Refuse, Waiting, Custom, SpecDetail };
     using Proposal = std::array<uint32_t, pd::kMaxPdos + 24>;
     explicit ChargerTestSession(UiContext& c) : ctx_(c), runner_(*this) {}
     void enter();                  // the page is (re)entered: the wizard starts at Algorithms, or at Resume for a journaled run
@@ -414,6 +409,10 @@ private:
     void release(bool) override;
     uint8_t ceiling_start() override;   // svooc_trig::start with the Probe profile; 0 = running, else svooc::Refusal
     void ceiling_stop() override;
+    uint8_t spec_start() override;      // PdSpecSession::start_in_test; 0 = running, else pdspec::StartResult (255 = not built)
+    void spec_stop() override;
+    void spec_collect(specsec::Result&) override;
+    void spec_done(const specsec::Result&) override;   // the journal keeps the result (noted here, written by journal_pump)
     void legacy_only(bool) override;
     void pd_rescan() override;
     void detach() override;
@@ -632,6 +631,7 @@ private:
     [[gnu::noinline]] void paint_running(uint32_t now);
     [[gnu::noinline]] void paint_results();
     [[gnu::noinline]] void paint_detail();
+    [[gnu::noinline]] void paint_spec_detail();    // one PD spec check: its verdict, worst value, limit, count, fails, place, penalty
     [[gnu::noinline]] void paint_resume();
     [[gnu::noinline]] void paint_hero(bool full, int16_t x, int16_t y, uint8_t chars, int32_t vbus_mv, uint16_t color);
     [[gnu::noinline]] void paint_sweep_hero(int32_t vbus_mv, uint16_t set_mv);   // Running, a sweep row: the signed error and the act / set pair
@@ -645,6 +645,10 @@ private:
     [[gnu::noinline]] void draw_capture(const k2::transcap::Meta&);   // VBUS thumbnail of the step's stored transition capture
     int last_row() const;          // the last row the cursor may rest on
     int row_count() const;
+    // The PD spec section (Deep runs, K2_PDSPEC): rows after the unit rows in the Results grid, then the Changes row.
+    int spec_n() const;            // rows shown (0 = no section)
+    int delta_row() const { return static_cast<int>(line_n_) + spec_n(); }   // the Changes pseudo-row, when there is one
+    const pdspec::Agg* spec_agg(int cell) const;   // the engine's aggregate of the same run (null once it is gone or replaced)
     void build_results();      // chips layout of the stored run (k2/chargertest/result_layout.hpp), wrapped into display lines
     // The summary line of Results: the best passing mode per protocol family of the stored run ("PD 20V 3A  QC3 12V").
     void compose_best();
@@ -681,6 +685,7 @@ private:
     int16_t clear_y_ = kFooterY;           // progressive stage-transition wipe cursor (< kFooterY = clearing)
     char cell_txt_[kit::kResultMaxCells][2][12] = {};   // the verdict grid's cells: volts and current text
     char cell_lbl_[10] = {};               // ... and the unit label of the row
+    StrBuf<24> spec_txt_;                  // ... and a PD spec row's wide cell ("-327.66V, 255 fail")
     uint8_t bar_key_ = 0;                  // the top bar drawn for this stage + 1 (0 = not drawn)
     uint8_t detail_step_ = 0;
     bool laid_ = false;                   // the stage's static part is on screen
@@ -1078,7 +1083,7 @@ public:
         constexpr Menu kMenus[kToolSlots] = {Menu::Trigger, Menu::PdTrigger, Menu::Spoof, Menu::CableR,
                                              Menu::Connection, Menu::Connection, Menu::Connection,
                                              Menu::BlackBox, Menu::Diagnosis, Menu::Cards, Menu::Diag,
-                                             Menu::Twin, Menu::LoopProbe, Menu::PdStress, Menu::PdSpec};
+                                             Menu::Twin, Menu::LoopProbe, Menu::PdStress};
         return kMenus[tool_built(i) ? i : 0];
     }
     static const char *tool_name(int i);

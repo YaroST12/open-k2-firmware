@@ -166,6 +166,19 @@ size_t encode_charger_test(std::span<uint8_t> out, const ChargerTestSnapshot& s,
     return w.size();
 }
 
+size_t encode_charger_test_spec(std::span<uint8_t> out, const ChargerTestSnapshot& s, uint8_t off) {
+    if (out.size() < kCtSpecHeader) return 0;
+    std::array<uint8_t, specsec::kWireBytes> wire{};
+    const bool shown = s.evidence.spec.shown();
+    if (shown) specsec::to_wire(s.evidence.spec, wire);
+    const size_t total = shown ? wire.size() : 0;
+    const size_t n = off < total ? std::min({total - off, kCtSpecChunk, out.size() - kCtSpecHeader}) : 0;
+    Writer w(out);
+    w.u32(s.run_id); w.u8(static_cast<uint8_t>(total)); w.u8(off); w.u8(static_cast<uint8_t>(n));
+    for (size_t i = 0; i < n; ++i) w.u8(wire[off + i]);
+    return w.size();
+}
+
 size_t encode_charger_test_view(std::span<uint8_t> out, const ChargerTestView& v) {
     const size_t len = std::min<size_t>(v.message_len, kChargerTestViewMessage);
     if (out.size() < kChargerTestViewFixed + len) return 0;

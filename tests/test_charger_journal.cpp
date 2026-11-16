@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 #include "k2/chargertest/charger_journal.hpp"
+#include "k2/chargertest/spec_section.hpp"
 #include "k2/core/bbstore.hpp"
 #include "ramdisk.hpp"
 
@@ -480,6 +481,75 @@ static void test_meta_and_attempt_roundtrip() {
     arm(v, plan(3), 2); v.j->replay(r);
     CHECK_EQ(r.has_meta, false); CHECK_EQ(r.attempts, 0); CHECK_EQ(r.options.units.n, 0);
     (void)j;
+}
+// The PD spec stage's result is one small record (/jr/sp.rec): it survives a reboot into the resumed run's evidence, a damaged one
+// leaves the stage NotRun, and the next run's arm sweeps it away with the other records.
+static specsec::Result spec_result() {
+    specsec::Result s;
+    s.end = specsec::End::Done; s.why = 0; s.unconfirmed = true;
+    for (size_t i = 0; i < specsec::kCells; ++i) s.cells[i] = {uint8_t(i % 5), uint8_t(i % 3), int16_t(int(i) * 37 - 400)};
+    return s;
+}
+static void test_the_spec_result_rides_in_its_own_record() {
+    Vol v; cj::Replay r;
+    arm(v, plan(6));
+    v.reboot(); v.j->replay(r);
+    CHECK_EQ(int(r.evidence.spec.end), int(specsec::End::NotRun));   // an older run, or a run without the stage
+    const specsec::Result s = spec_result();
+    CHECK_EQ(int(v.j->spec(s)), 0);
+    v.reboot(); v.j->replay(r);
+    CHECK_EQ(r.found, true);
+    CHECK_EQ(r.evidence.spec.same(s), true);
+    CHECK_EQ(r.evidence.spec.unconfirmed, true);
+    CHECK_EQ(int(r.evidence.spec.end), int(specsec::End::Done));
+    // A newer write replaces the older.
+    specsec::Result t = s; t.end = specsec::End::Cancelled; t.unconfirmed = false;
+    CHECK_EQ(int(v.j->spec(t)), 0);
+    v.reboot(); v.j->replay(r);
+    CHECK_EQ(int(r.evidence.spec.end), int(specsec::End::Cancelled)); CHECK_EQ(r.evidence.spec.unconfirmed, false);
+    // The record does not grow the header or any section: the plan's files stay as they were.
+    CHECK_EQ(r.count, 6u);
+    // The next run starts clean.
+    arm(v, plan(3), 2); v.j->replay(r);
+    CHECK_EQ(int(r.evidence.spec.end), int(specsec::End::NotRun));
+}
+static void test_a_damaged_spec_record_reads_as_not_run() {
+    for (size_t cut = 0; cut < 120; cut += 7) {
+        Vol v; cj::Replay r;
+        arm(v, plan(4));
+        std::array<uint8_t, cj::kMaxRecord> buf{};
+        const size_t n = cj::encode_spec(buf, spec_result());
+        buf[8 + cut % 100] ^= 0x5A;                                   // a flipped bit inside the payload: the CRC fails
+        CHECK_EQ(int(v.fs->write_file("/jr/sp.rec", std::span<const uint8_t>(buf.data(), n))), 0);
+        v.reboot(); v.j->replay(r);
+        CHECK_EQ(r.found, true); CHECK_EQ(int(r.evidence.spec.end), int(specsec::End::NotRun));
+    }
+}
+static void test_the_spec_record_is_even_and_fits() {
+    std::array<uint8_t, cj::kMaxRecord> buf{};
+    const size_t n = cj::encode_spec(buf, spec_result());
+    CHECK_EQ(n, cj::kRecordOverhead + cj::kSpecPayload); CHECK_EQ(buf[2] % 2, 0);
+    CHECK_EQ(cj::kSpecPayload >= specsec::kWireBytes, true);
+}
+// The polled path the page uses: note_spec marks it, pending() holds the next above-5 V request back, and one pump writes the record
+// from the evidence (behind any section or header write), then nothing is pending.
+static void test_a_noted_spec_result_is_written_by_a_pump() {
+    Vol v; cj::Replay r;
+    auto p4 = plan(4);
+    arm(v, p4);
+    ct::Evidence ev = evidence();
+    ev.spec = spec_result();
+    CHECK_EQ(v.j->pending(), false);
+    v.j->note_spec();
+    CHECK_EQ(v.j->pending(), true); CHECK_EQ(v.j->plan_pending(), false);   // a result, not the plan's shape
+    v.j->note(p4, 1);                                                       // a verdict behind it: the section goes first
+    CHECK_EQ(int(v.j->pump(kRun, kOpt, ev, p4)), 0); CHECK_EQ(v.j->pending(), true);
+    v.reboot(); v.j->replay(r); CHECK_EQ(int(r.evidence.spec.end), int(specsec::End::NotRun));   // not on flash yet
+    v.j->adopt(r);                         // the boot path: the journal mirrors the run it read back
+    v.j->note_spec(); v.j->note(p4, 1);
+    CHECK_EQ(int(v.j->settle(kRun, kOpt, ev, p4)), 0);
+    CHECK_EQ(v.j->pending(), false);
+    v.reboot(); v.j->replay(r); CHECK_EQ(r.evidence.spec.same(ev.spec), true);
 }
 // The run's level rides in the meta byte p[1] bits 3..4 (user decision 2026-11-15): a resumed Light run is replanned Light, never as
 // Medium; a meta written before the level existed (bits 3..4 zero) reads Medium.
@@ -995,5 +1065,7 @@ int main() {
     test_restart_replaces_the_run(); test_flash_failure_marks_broken(); test_meta_and_attempt_roundtrip(); test_meta_without_a_guard_reads_zero(); test_meta_keeps_the_level();
     test_meta_and_attempt_power_cut(); test_an_ended_run_is_not_resumable(); test_finish_cut_at_every_operation();
     test_finish_is_tried_after_a_failed_write(); test_resume_gate();
+    test_the_spec_result_rides_in_its_own_record(); test_a_damaged_spec_record_reads_as_not_run(); test_the_spec_record_is_even_and_fits();
+    test_a_noted_spec_result_is_written_by_a_pump();
     return test_report("test_charger_journal");
 }

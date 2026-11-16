@@ -28,6 +28,7 @@
 #include "k2/ui/trunc.hpp"
 #include "k2/ui/ui_widgets.hpp"
 #include "k2/ui/blend.hpp"
+#include "k2/ui/spec_text.hpp"
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
@@ -1222,6 +1223,7 @@ static void test_the_default_run_is_medium() {
 // Review (step 3/3): the Level row sits above START. START keeps the opening focus; MINUS reaches Level, whose OK cycles
 // Medium -> Deep -> Light -> Medium (next_level), the Tests row's step count follows the level, and the footer says what the
 // level does. PLUS goes back to START, whose OK opens the confirmation as before.
+static void dump_screen(const char* name);
 static void test_review_level_row_cycles_and_counts() {
     fixture();
     g_stub.caps.num_pdos = 3;
@@ -1250,10 +1252,17 @@ static void test_review_level_row_cycles_and_counts() {
     CHECK_EQ(ui.charger_test_selection() >> 28, 0xEu);                             // Deep: both sweeps, level 2
     const unsigned deep = ui.charger_test_view().preview.runnable;
     CHECK_EQ(picked(), 2);
+    // Deep also runs the PD spec stage (specsec): the footer names it, the preview counts its checks, Light and Medium have none.
+    v = ui.charger_test_view();
+    CHECK_STR(std::string(v.message, v.message_len).c_str(), "Deep: + sweeps, PD spec");
+    dump_screen("spec_review_deep");   // K2_DUMP: the Level page with Deep picked
+    CHECK_EQ(unsigned(v.preview.spec_checks), unsigned(specsec::kCells));
+    CHECK_EQ(unsigned(ui.charger_test_view().preview.total) >= deep, true);
     press(ui, Button::Ok); settle(ui);
     CHECK_EQ(picked(), 0);
     CHECK_EQ(ui.charger_test_selection() >> 28, 0x1u);                             // Light
     v = ui.charger_test_view();
+    CHECK_EQ(unsigned(v.preview.spec_checks), 0u);
     const unsigned light = v.preview.runnable;
     CHECK_STR(std::string(v.message, v.message_len).c_str(), "Light: lists offers at 5V");
     std::printf("[review-level] runnable: Light %u, Medium %u, Deep %u\n", light, medium, deep);
@@ -1427,6 +1436,104 @@ static void test_a_capped_range_reads_amber_and_says_how_far_it_got() {
 }
 static void dump_screen(const char* name);
 static int ty_reason() { return 60 + 3 * kit::kRowH + kit::row_text_y(kit::kRowH, kSmall.height); }   // the fourth row of the Detail table
+// The PD spec section of a Deep run (include/k2/chargertest/spec_section.hpp): one row per check after the unit rows, each a one-cell
+// VerdictCell with the worst value; OK opens the check's detail page, BACK returns to the row. The cells are set on the finished
+// run (the host stub has no pdspec engine run), including the extremes the quantised value can hold.
+static specsec::Result spec_fixture() {
+    namespace sc = pdspec;
+    specsec::Result r;
+    r.end = specsec::End::Done;
+    for (size_t i = 0; i < specsec::kCells; ++i) {
+        const sc::Unit u = sc::kDefs[static_cast<size_t>(specsec::kOrder[i])].unit;
+        switch (i % 6) {
+            case 0: r.cells[i] = specsec::make_cell(sc::Verdict::Pass, sc::Skip::None, 0, specsec::quantize(u, 1234)); break;
+            case 1: r.cells[i] = specsec::make_cell(sc::Verdict::Fail, sc::Skip::None, 255, specsec::quantize(u, 987654)); break;   // widest text
+            case 2: r.cells[i] = specsec::make_cell(sc::Verdict::Skip, sc::Skip::NoEprProof, 0); break;                           // longest reason
+            case 3: r.cells[i] = specsec::make_cell(sc::Verdict::Unverified, sc::Skip::None, 0, specsec::quantize(u, -5432)); break;
+            case 4: r.cells[i] = specsec::make_cell(sc::Verdict::Pass, sc::Skip::None, 0, specsec::kUnseen); break;                // "not seen"
+            default: r.cells[i] = specsec::make_cell(sc::Verdict::Pending, sc::Skip::None, 0); break;
+        }
+    }
+    return r;
+}
+static void test_the_results_grid_carries_the_pdspec_section() {
+    six_pdo_fixture(); Ui ui; uint32_t t;
+    finished_results(ui, t);
+    const int units = ui.list_state().count;
+    const auto calm = [&] { for (int i = 0; i < 64 && ui.painting(); ++i) ui.tick(t += 100); CHECK_EQ(ui.painting(), false); };
+    // Without a spec result (every Light / Medium run, the default image) the grid is the unit rows alone.
+    CHECK_EQ(specsec::kBuilt, true);   // the host build has the engine glue (K2_PDSPEC=1)
+    const_cast<ct::Evidence&>(ui.charger_test_results().evidence()).spec = spec_fixture();
+    top(ui, t); press(ui, Button::Ok, t); ui.tick(t += 100); calm();   // into a unit's Steps and back: the grid is rebuilt
+    press(ui, Button::Back, t); ui.tick(t += 100); calm();
+    CHECK_EQ(ui.charger_test_stage(), 6);
+    CHECK_EQ(ui.list_state().count, units + int(specsec::kCells));
+    // The cursor runs on past the unit rows, one check per press, and stops on the last.
+    for (int i = 0; i < units + 40; ++i) press(ui, Button::Plus, t);
+    ui.tick(t += 100); calm();
+    CHECK_EQ(ui.charger_test_cursor(), units + int(specsec::kCells) - 1);
+    dump_screen("spec_results_end");
+    press(ui, Button::Ok, t); ui.tick(t += 100); calm();
+    CHECK_EQ(ui.charger_test_stage(), 15);   // SpecDetail
+    dump_screen("spec_detail_last");
+    press(ui, Button::Back, t); ui.tick(t += 100); calm();
+    CHECK_EQ(ui.charger_test_stage(), 6);
+    CHECK_EQ(ui.charger_test_cursor(), units + int(specsec::kCells) - 1);   // the cursor is where it was
+    // Every row and detail page of every kind draws whole (the truncation walk fails the run on any cut).
+    for (int row = units; row < units + int(specsec::kCells); ++row) {
+        top(ui, t);
+        for (int i = 0; i < row; ++i) press(ui, Button::Plus, t);
+        ui.tick(t += 100); calm();
+        CHECK_EQ(ui.charger_test_cursor(), row);
+        if (row == units) dump_screen("spec_results_first");   // K2_DUMP: the first spec row, the unit rows scrolled off
+        if (row == units + 12) dump_screen("spec_results_mid");
+        press(ui, Button::Ok, t); ui.tick(t += 100); calm();
+        CHECK_EQ(ui.charger_test_stage(), 15);
+        if (row == units) dump_screen("spec_detail_pass");        // K2_DUMP: value, limit and verdict of a passing and a failing check
+        if (row == units + 1) dump_screen("spec_detail_fail");
+        press(ui, Button::Back, t); ui.tick(t += 100); calm();
+        CHECK_EQ(ui.charger_test_stage(), 6);
+    }
+}
+// The detail page of a check whose run the session's engine still holds (the live run, right after the Deep test): the limit, the count
+// and the place come from the engine's aggregate, not the dim "-" a restored result shows. The stage's own result is built from the
+// engine exactly as the Runner does (spec_collect), then the grid is rebuilt and a measured check's detail opened.
+static void test_the_spec_detail_shows_the_limit_while_the_engine_holds_the_run() {
+    six_pdo_fixture(); Ui ui; uint32_t t;
+    finished_results(ui, t);
+    const auto calm = [&] { for (int i = 0; i < 64 && ui.painting(); ++i) ui.tick(t += 100); CHECK_EQ(ui.painting(), false); };
+    PdSpecSession& s = ui.pd_spec();
+    CHECK_EQ(int(s.start_in_test(t)), int(pdspec::StartResult::Ok));
+    for (int i = 0; i < 400 && s.running(); ++i) { t += 20; fusb302::service(); ui.tick(t); if (i == 150) s.cancel(); }
+    CHECK_EQ(s.running(), false);
+    const pdspec::Engine* e = s.engine_for_test();
+    CHECK_EQ(e != nullptr, true);
+    if (!e) return;
+    specsec::Result r = specsec::from_aggs(e->agg(), specsec::End::Cancelled, static_cast<uint8_t>(e->stop()), e->release_unconfirmed());
+    int k = -1;   // the first check the run measured and judged
+    for (size_t i = 0; i < specsec::kCells; ++i)
+        if (r.cells[i].measured() && e->agg()[static_cast<size_t>(specsec::kOrder[i])].n) { k = int(i); break; }
+    CHECK_EQ(k >= 0, true);
+    if (k < 0) return;
+    const_cast<ct::Evidence&>(ui.charger_test_results().evidence()).spec = r;
+    const int units = ui.list_state().count;
+    top(ui, t); press(ui, Button::Ok, t); ui.tick(t += 100); calm();   // into a unit's Steps and back: the grid is rebuilt
+    press(ui, Button::Back, t); ui.tick(t += 100); calm();
+    CHECK_EQ(ui.charger_test_stage(), 6);
+    top(ui, t);
+    for (int i = 0; i < units + k; ++i) press(ui, Button::Plus, t);
+    ui.tick(t += 100); calm();
+    press(ui, Button::Ok, t); ui.tick(t += 100); calm();
+    CHECK_EQ(ui.charger_test_stage(), 15);   // SpecDetail
+    dump_screen("spec_detail_live");
+    const pdspec::Agg& a = e->agg()[static_cast<size_t>(specsec::kOrder[static_cast<size_t>(k)])];
+    StrBuf<20> lim, cnt;
+    spectext::put_limit(lim, pdspec::kDefs[static_cast<size_t>(specsec::kOrder[static_cast<size_t>(k)])], a);
+    cnt.put_u32(a.n);
+    const int row_y = [&](int row) { return kit::kBodyY + row * kit::kRowH + kit::row_text_y(kit::kRowH, kSmall.height); }(2);
+    check_text_at(kSmall, row_y, lim.view(), kText, kBg, kit::kKvValueX);                                  // Limit: the engine's bound
+    check_text_at(kSmall, row_y + kit::kRowH, cnt.view(), kText, kBg, kit::kKvValueX);                    // Count
+}
 // A voltage fold is a caution (user decision 2026-11-16): the sweep row and the APDO's fixed rows on the folded side read amber,
 // neither pass nor fail. The sweep itself is a clean run here; the fold is set on the finished run (the host stub cannot make a
 // converter fold back), then the Results grid is rebuilt. Checks the header's fourth cell, the Steps footer and the Detail page.
@@ -4799,6 +4906,8 @@ int main() {
     test_vsafe5_review();
     test_preflight_refusal_is_logged();
     test_preflight_wrong_voltage_under_pdo1_contract_is_logged();
+    test_the_results_grid_carries_the_pdspec_section();
+    test_the_spec_detail_shows_the_limit_while_the_engine_holds_the_run();
     test_a_voltage_fold_reads_as_a_caution();
     test_a_sweep_off_by_more_than_100mv_reads_as_a_caution();
     test_sweep_log_line_has_no_literal_format_bug();

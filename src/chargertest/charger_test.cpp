@@ -103,7 +103,7 @@ void Runner::note_preflight_refusal(Reason r, int vbus_mv, const char* detail) {
     }
 }
 const char* name(State s) {
-    static constexpr const char* names[] = {"Setup", "Verify 5V", "Negotiating", "Hold", "Return to 5V", "Complete", "Stopped", "UNSAFE: unplug source", "Detach charger", "Initializing...", "SVOOC ceiling"};
+    static constexpr const char* names[] = {"Setup", "Verify 5V", "Negotiating", "Hold", "Return to 5V", "Complete", "Stopped", "UNSAFE: unplug source", "Detach charger", "Initializing...", "SVOOC ceiling", "PD spec"};
     return names[static_cast<unsigned>(s)];
 }
 const char* name(Unit u) {
@@ -903,6 +903,10 @@ uint32_t layout_sig(std::span<const Step> rows) {
 }
 }
 UnitList unit_order(const Options& o) { return resolve(o); }
+// The PD spec stage (spec_section.hpp) is planned for a Deep run that has the full Pd unit, on a build that links the engine.
+static bool spec_planned(const Options& o, const UnitList& units) {
+    return specsec::kBuilt && o.spec && o.level == Level::Deep && has_unit(units, Unit::Pd);
+}
 Summary Runner::preview(const pd::SourceCaps& caps, Options o, Input in) {
     Summary out;
     in.epr_info = nullptr;   // a preview plans from the source list alone
@@ -936,6 +940,7 @@ Summary Runner::preview(const pd::SourceCaps& caps, Options o, Input in) {
         }
     };
     plan_units(caps, o, in, units, count);
+    if (spec_planned(o, units)) { out.spec_checks = static_cast<uint8_t>(specsec::kCells); out.estimate_ms += specsec::kEstimateMs; }
     return out;
 }
 void Runner::add(Step s) {
@@ -1326,6 +1331,7 @@ Reason Runner::start(const pd::SourceCaps& caps, Options o, Input in, bool confi
     session_ = in.session; resets_ = link_resets(in.pd);
     handover_ = {}; unit_ = Unit::Count; mode_ = Mode::Pd;
     ceiling_pending_ = ceiling_done_ = ceil_stopping_ = ceil_recover_ = ceil_cycled_ = false; ceil_ms_ = ceil_stop_ms_ = ceil_low_ms_ = 0; ceil_why_ = 0;
+    spec_done_ = spec_stopping_ = spec_fault_ = false; spec_ms_ = spec_stop_ms_ = 0; spec_pending_ = spec_wanted();
     attached_ = detached_ = ending_ = silent_ = legacy_active_ = never_dark_ = dipped_ = dark_ = false; attach_try_ = 0;
     rp_restart_ = false; contract_wrong_ = false; attach_max_mv_ = 0;
     pre_ms_ = 0;
@@ -1927,6 +1933,8 @@ void Runner::next(const Input& in) {
             // The first Pd unit is done, back at a settled 5 V: ask the charger who it is, bounded (a failure changes no row).
             probe_ = Probe::Closing; state_ = State::Baseline; stable_ = false; phase_ms_ = in.now; return;
         }
+        // The first Pd unit is done, its contract back at a settled 5 V and the charger asked who it is: the PD spec stage follows.
+        if (spec_pending_ && mode_ == Mode::Pd && unit_ == Unit::Pd && !ending_ && probe_ == Probe::Off && safe5(in.vbus_mv) && begin_spec(in)) return;
         // Legacy -> Legacy keeps the PD-silent session: only the D+/D- cleanup (the release above) sits in between. Any PD traffic
         // since the attach, or a VBUS that is not at 5 V, means the session is gone: detach and attach again as before.
         if (i != SIZE_MAX && mode_ == Mode::Legacy && mode(unit_of(steps_[i])) == Mode::Legacy && legacy_active_ && silent_ &&
@@ -2278,11 +2286,68 @@ void Runner::poll_ceiling(const Input& in) {
     }
     if (!in.svooc.running || in.now - ceil_stop_ms_ >= svooc_ceiling::kExitGraceMs) end_ceiling(in, ceil_end_);
 }
+// The PD spec stage (spec_section.hpp). One stage per run, queued at START for a Deep run with a Pd unit and begun by next() when the
+// first Pd unit is over: its contract released to a settled 5 V, the charger asked who it is. NO LOAD, nothing above what the charger
+// advertises: the engine runs only its Transitions and PPS / AVS families (specsec::kFamilyMask) and takes every level from the live
+// list. It owns the link while it runs (the Runner asks no PDO itself); the Runner only watches the run's guards and the clock, and
+// brings the source back to 5 V before the unit's detach.
+bool Runner::spec_wanted() const { return !spec_done_ && spec_planned(opts_, opts_.units); }
+bool Runner::begin_spec(const Input& in) {
+    spec_pending_ = false; spec_done_ = true;
+    evidence_.spec = {};
+    const uint8_t refused = env_.spec_start();
+    if (refused == 255) return false;   // a build without the engine: no stage, no section
+    if (refused) {
+        evidence_.spec = specsec::all_skipped(specsec::End::Refused, refused, specsec::sc::Skip::Refused);
+        K2LOG("[CT] spec refused why=%u\n", unsigned(refused));
+        env_.spec_done(evidence_.spec);
+        return false;
+    }
+    state_ = State::Spec; spec_ms_ = in.now; spec_stopping_ = spec_fault_ = false; stable_ = false;
+    K2LOG("[CT] spec start\n");
+    return true;
+}
+void Runner::poll_spec(const Input& in) {
+    if (!spec_stopping_) {
+        if (!in.spec_running) { end_spec(in, specsec::End::Done); return; }
+        const Reason fault = in.vbus_mv < 0 || in.cap_mv < 5000 ? Reason::NoMonitor : in.loop_lock ? Reason::Loop :
+            in.inline_load ? Reason::Inline : in.fake ? Reason::Fake : Reason::None;
+        if (fault != Reason::None || in.now - spec_ms_ >= specsec::kMaxMs) {   // a guard of the run, or the engine's own cap passed
+            spec_fault_ = true; spec_stopping_ = true; spec_stop_ms_ = in.now;
+            env_.spec_stop();
+        }
+        return;
+    }
+    if (!in.spec_running || in.now - spec_stop_ms_ >= specsec::kStopGraceMs)
+        end_spec(in, spec_fault_ ? specsec::End::Fault : specsec::End::Cancelled);
+}
+// The engine is over (or abandoned): its cells are the stage's evidence. The source goes back to 5 V; a cancelled run stops there.
+void Runner::end_spec(const Input& in, specsec::End e) {
+    specsec::Result& r = evidence_.spec;   // filled in place: a local copy would add 112 B to the deepest stack path
+    r = {};
+    env_.spec_collect(r);
+    if (e != specsec::End::Done || r.end == specsec::End::NotRun) r.end = e;
+    const auto t = r.tally();
+    K2LOG("[CT] spec end=%u why=%u pass=%u fail=%u skip=%u unconfirmed=%u\n", unsigned(r.end), unsigned(r.why), t.pass, t.fail, t.skip,
+          unsigned(r.unconfirmed));
+    env_.spec_done(evidence_.spec);
+    const bool cancelled = spec_stopping_ && !spec_fault_;
+    spec_stopping_ = false;
+    // The engine's own release should have left a Ready contract at 5 V; anything else is handed back like a row's level.
+    pd_owned_ = !safe5(in.vbus_mv) || in.pd.mv != 5000 || in.pd.state != pd::SinkState::Ready || r.unconfirmed;
+    hot_ = !safe5(in.vbus_mv);
+    release(in, cancelled);
+}
 void Runner::cancel(Input in) {
     if (!busy() || state_ == State::Unsafe || (state_ == State::Releasing && stopping_)) return;
     end_probe();
     ++revision_;
     reason_ = Reason::Cancelled;
+    if (state_ == State::Spec) {   // the engine ends in order (its own return to 5 V); poll_spec() then stops the run
+        spec_fault_ = false;
+        if (!spec_stopping_) { env_.spec_stop(); spec_stopping_ = true; spec_stop_ms_ = in.now; }
+        return;
+    }
     if (state_ == State::Ceiling) {   // the trigger's exit watch brings the lines back to 5 V while the run is Releasing
         note_ceiling(in, svooc_ceiling::End::Cancelled);
         env_.ceiling_stop(); ceil_stopping_ = false;
@@ -2317,6 +2382,7 @@ void Runner::restore(const Options& o, const Evidence& e, uint32_t run_id, std::
     cut_wait_ = cut_dark_ = false; cut_start_ms_ = cut_back_ms_ = 0; cut_retry_idx_ = SIZE_MAX; cut_tries_ = 0; cut_last_mv_ = -1; n_cut_onsets_ = 0;
     selfpwr_ = suspended_ = adopt_ = false;
     ceiling_pending_ = ceil_stopping_ = ceil_recover_ = ceil_cycled_ = false; ceiling_done_ = true;   // a resumed run never repeats the stage (it is not journaled)
+    spec_pending_ = spec_stopping_ = spec_fault_ = false; spec_done_ = true;   // nor the spec stage (its result is: evidence_.spec)
     for (auto& s : std::span<Step>(steps_.data(), count_)) if (s.verdict == Verdict::Running) s.verdict = Verdict::Pending;
     // The EPR proof (the source accepted EPR entry: it checked the cable itself) is not journaled as such, but its trace is: the EPR
     // list was heard (EprTable), or EPR rows were planned (a plan only holds them for a 50 V / 5 A cable). A cable the K2 reads live
@@ -2379,6 +2445,7 @@ void Runner::suspend() {
     // loss to it exactly like any other power loss). Nothing is released: there is no output left to hand back.
     for (auto& s : std::span<Step>(steps_.data(), count_)) if (s.verdict == Verdict::Running) s.verdict = Verdict::Pending;
     pd_owned_ = fc_owned_ = stopping_ = recover_ = false;
+    if (state_ == State::Spec) { env_.spec_stop(); spec_stopping_ = false; }   // the engine has no link left to run on
     if (selfpwr_) {   // no output to talk to: give the PD policy back, but send nothing
         if (legacy_active_) env_.legacy_only(false);
         legacy_active_ = detached_ = ending_ = false;
@@ -2507,6 +2574,7 @@ void Runner::poll_impl(Input& in, const pd::SourceCaps& caps) {
         return;
     }
     if (state_ == State::Ceiling) { poll_ceiling(in); return; }
+    if (state_ == State::Spec) { poll_spec(in); return; }
     bool offers_changed = false, legacy_pending = false, tail_seen = false, tail_wait = false;
     // A source whose output is dark (VBUS gone) announces nothing: that is "source lost", not "offers changed". The grace for the
     // list to come back restarts when VBUS does. Lenovo C135, 2026-11-03: the output drained 20 V -> 0 in 9 s after a Hard Reset.

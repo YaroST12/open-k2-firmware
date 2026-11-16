@@ -119,6 +119,7 @@ namespace sl {
     X(Set, "Set", "", "", false)                                                                                       \
     X(Resume, "Resume", "", "", false)                                                                                 \
     X(Diff, "Diff", "", "", false)                                                                                     \
+    X(Results, "Results", "", "", false)                                                                               \
     X(Change, "Change", "", "", false)                                                                                 \
     X(Off, "Off", "", "", false)                                                                                       \
     X(Cancel, "Cancel", "", "", false)                                                                                 \
@@ -135,6 +136,7 @@ namespace sl {
     X(DeleteShare, "Delete", "Share", "", false)                                                                       \
     X(StepsShare, "Steps", "Share", "", false)                                                                         \
     X(DiffShare, "Diff", "Share", "", false)                                                                           \
+    X(ResultsShare, "Results", "Share", "", false)                                                                     \
     X(ActionsShare, "Actions", "Share", "", false)                                                                     \
     X(ConfirmShare, "Confirm", "Share", "", false)                                                                     \
     X(RefreshShare, "Refresh", "Share", "", false)                                                                     \

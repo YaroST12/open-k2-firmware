@@ -706,6 +706,10 @@
   "709": "[AFC] settle short=%dmV dm=%dmV waited=%dms\n",
   "710": "[CT] settle after cut age=%ums wait=%ums vbus=%d\n",
   "711": "[CT] retry after cut row=%u age=%ums fail=%u\n",
-  "712": "[STK] low=%u pc=0x%08X lr=0x%08X\n"
+  "712": "[STK] low=%u pc=0x%08X lr=0x%08X\n",
+  "713": "[CT] spec refused why=%u\n",
+  "714": "[CT] spec start\n",
+  "715": "[CT] spec end=%u why=%u pass=%u fail=%u skip=%u unconfirmed=%u\n",
+  "716": "[TEST] PD spec %s\n"
  }
 }

@@ -21,10 +21,11 @@
  *                  ROADMAP). The Tools list ends at Loop probe, the remote and the shell answer "unsupported". The host tests
  *                  pass -DK2_PDSTRESS=1 so the logic keeps compiling; `make K2_PDSTRESS=1` builds the tool back.
  *
- * K2_PDSPEC  1 = Tools > PD Spec Check (the no-load PD conformance check, docs/PD_SPEC_CHECK.md), its remote command (0x5A)
- *               and its page are built in.
- *            0 = none of it (the default while flash is short): the remote answers UnknownCmd, the Tools row is not shown.
- *                The host tests pass -DK2_PDSPEC=1; `make K2_PDSPEC=1` builds the tool in.
+ * K2_PDSPEC  1 = the no-load PD conformance check (docs/PD_SPEC_CHECK.md) is built in: the charger test's Deep level runs it as
+ *               one more section (the results grid, the journal and the web grid carry it), and the remote command (0x5A)
+ *               starts it alone. There is no Tools page.
+ *            0 = none of it (the default while flash is short): the remote answers UnknownCmd, a Deep run has no spec section.
+ *                The host tests pass -DK2_PDSPEC=1; `make K2_PDSPEC=1` builds it in.
  *
  * K2_LOOPPROBE  1 = Tools > Loop probe (the HID-cable loop probe, docs/LOOP_PROBE.md): its page, session, stored result and
  *                   the remote command 0x57 (LOOP_PROBE) are built in.

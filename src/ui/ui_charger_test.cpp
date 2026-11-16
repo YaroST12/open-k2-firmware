@@ -3,6 +3,7 @@
 #include "k2/ui/ui_pages.hpp"
 #include "k2/ui/ui.hpp"
 #include "k2/ui/ui_setup_page.hpp"
+#include "k2/ui/spec_text.hpp"
 #include "k2/core/loop_guard.hpp"
 #include "k2/core/math_opt.hpp"
 #include "k2/ui/ui_style.hpp"
@@ -86,8 +87,9 @@ static_assert(all_fit(kPresetNames, kSmallAdvPx, 150), "a preset name is wider t
 constexpr const char* kReattachConfirm = "Press again, K2 blinks once";
 static_assert(fits_px(kSmallAdvPx, kReattachConfirm, 216), "the re-attach confirmation is wider than the footer");
 // Review's footer while the cursor is on the Level row: what the level does (charger_test::Level order: Medium, Light, Deep).
+// A build with the PD spec stage (K2_PDSPEC) says so on Deep; the default image has no such stage and keeps the old words.
 constexpr const char *kLevelNotes[ct::kLevelCount] = {"Medium: levels, no sweeps", "Light: lists offers at 5V",
-                                                       "Deep: + PPS and AVS sweeps"};
+                                                       specsec::kBuilt ? "Deep: + sweeps, PD spec" : "Deep: + PPS and AVS sweeps"};
 static_assert(all_fit(kLevelNotes, kSmallAdvPx, 216), "a level note is wider than the footer");
 const char *level_note(ct::Level l) { return kLevelNotes[unsigned(l) < ct::kLevelCount ? unsigned(l) : 0]; }
 // A row whose engine times its own pulses stops the screen for the length of the handshake (the engine window the LCD idle hook
@@ -231,6 +233,9 @@ charger_test::Input ChargerTestSession::input(uint32_t now) const {
     in.fc_adapter_mv = fs.adapter_mv;
     in.pd_quiet_ms = fusb302::pd_quiet_ms();
     in.probe_done = fusb302::probe_status().state != pd::ProbeState::Running;
+#if K2_PDSPEC
+    in.spec_running = ctx_.ui->pd_spec().running();   // the engine's own run (the stage ends when it has finished and released)
+#endif
     // D+/D- free for the ceiling stage (only the release before it waits on this).
     if (runner_.state() == ct::State::Releasing) in.lines_free = svooc_trig::lines_free();
     // The SVOOC ceiling stage's view of the trigger (the snapshot is a copy: only while that stage is the state).
@@ -329,6 +334,36 @@ uint8_t ChargerTestSession::ceiling_start() {
     return static_cast<uint8_t>(svooc_trig::start(true, false, svooc_ceiling::kCapS, false, p));
 }
 void ChargerTestSession::ceiling_stop() { svooc_trig::stop(); }
+// The PD spec stage (include/k2/chargertest/spec_section.hpp): the pdspec engine runs inside this test (PdSpecSession::start_in_test:
+// the test keeps the ports, the Rd and the run-owner flag) and Ui::poll ticks it after this session's poll.
+uint8_t ChargerTestSession::spec_start() {
+#if K2_PDSPEC
+    return static_cast<uint8_t>(ctx_.ui->pd_spec().start_in_test(ctx_.now));
+#else
+    return 255;
+#endif
+}
+void ChargerTestSession::spec_stop() {
+#if K2_PDSPEC
+    ctx_.ui->pd_spec().cancel();
+#endif
+}
+void ChargerTestSession::spec_collect(specsec::Result& r) {
+#if K2_PDSPEC
+    const pdspec::Engine* e = ctx_.ui->pd_spec().engine_for_test();
+    if (!e) return;
+    const pdspec::Stop st = e->stop();
+    r = specsec::from_aggs(e->agg(), st == pdspec::Stop::Done ? specsec::End::Done : st == pdspec::Stop::Cancelled || st == pdspec::Stop::None ? specsec::End::Cancelled : specsec::End::Fault,
+                           static_cast<uint8_t>(st), e->release_unconfirmed());
+#else
+    (void)r;
+#endif
+}
+// The stage's result is final: noted for the journal (one small record, written by journal_pump behind the rows and the header, on the
+// same write gate), so a reboot after the stage resumes with the section on the grid.
+void ChargerTestSession::spec_done(const specsec::Result&) {
+    if (journal_active_ && !journal_closed_) charger_journal::hw::note_spec();
+}
 // A row whose verdict stands but whose reason changed afterwards (the sweep closing marks its APDO's fixed rows, Reason::Folded): only
 // the journal follows (the row's section is dirty, no flash here); the row's own events and log line went out when it ended.
 void ChargerTestSession::amend(const ct::Step& s) {
@@ -1001,6 +1036,7 @@ void ChargerTestSession::poll(uint32_t now) {
         case ct::State::Detach:     K2LOG("[TEST] Detach charger %s\n", reason_name); break;
         case ct::State::Attach:     K2LOG("[TEST] Initializing... %s\n", reason_name); break;
         case ct::State::Ceiling:    K2LOG("[TEST] SVOOC ceiling %s\n", reason_name); break;
+        case ct::State::Spec:       K2LOG("[TEST] PD spec %s\n", reason_name); break;
         }
         if (runner_.state() == ct::State::Done) save_card();
         if (runner_.state() == ct::State::Done || runner_.state() == ct::State::Stopped) {
@@ -1107,6 +1143,21 @@ raguard::Topology ChargerTestSession::guard_topology(uint32_t now, bool log) {
     return t;
 }
 int ChargerTestPage::last_row() const { return std::max(0, row_count() - 1); }
+int ChargerTestPage::spec_n() const { return s_.runner_.evidence().spec.shown() ? static_cast<int>(specsec::kCells) : 0; }
+// The engine's aggregate behind cell `k`, while the engine still holds the run the cell came from (the live run; after a journal restore
+// or another pdspec run it is gone and the detail page shows only what the cell keeps).
+const pdspec::Agg* ChargerTestPage::spec_agg(int k) const {
+#if K2_PDSPEC
+    const pdspec::Engine* e = ctx_.ui->pd_spec().engine_for_test();
+    if (!e || k < 0 || k >= spec_n()) return nullptr;
+    const pdspec::Check c = specsec::kOrder[static_cast<size_t>(k)];
+    const pdspec::Agg& a = e->agg()[static_cast<size_t>(c)];
+    return specsec::cell_of(c, a) == s_.runner_.evidence().spec.cells[static_cast<size_t>(k)] ? &a : nullptr;
+#else
+    (void)k;
+    return nullptr;
+#endif
+}
 bool ChargerTestSession::confirm_live() const {
     return confirming_ && static_cast<int32_t>(ctx_.now - confirm_until_) < 0 && proposal(input(ctx_.now)) == confirm_proposal_;
 }
@@ -1565,10 +1616,10 @@ int ChargerTestPage::row_count() const {
     case Stage::Cable: return ctx_.cables.count();
     case Stage::Review: return 2;   // Level, START
     case Stage::Running: return static_cast<int>(s_.runner_.steps().size());
-    case Stage::Results: return static_cast<int>(line_n_) + (s_.delta_n_ ? 1 : 0);
+    case Stage::Results: return delta_row() + (s_.delta_n_ ? 1 : 0);
     case Stage::Changes: return static_cast<int>(s_.delta_n_);
     case Stage::Steps: return static_cast<int>(counts(s_.runner_, s_.result_family_).total);
-    case Stage::Detail: return 0;
+    case Stage::Detail: case Stage::SpecDetail: return 0;
     case Stage::Resume: return 3;
     case Stage::Identity: case Stage::Ask: return 0;   // retired, never entered
     case Stage::Refuse: return 2;   // Start anyway, Start, skip spoof
@@ -1712,6 +1763,10 @@ void ChargerTestPage::bar() {
     case Stage::Results: t.put("Results"); break;
     case Stage::Changes: t.put("Changes"); break;
     case Stage::Detail: t.put("Step detail"); break;
+    case Stage::SpecDetail:
+        if (s_.detail_index_ >= 0 && s_.detail_index_ < spec_n()) t.put(pdspec::kDefs[static_cast<size_t>(specsec::kOrder[static_cast<size_t>(s_.detail_index_)])].label);
+        else t.put("PD spec");
+        break;
     case Stage::Steps:
         if (results_row_ >= 0 && static_cast<size_t>(results_row_) < line_n_) t.put(layout_.rows[lines_[results_row_].row].label).put_char(' ');
         t.put("steps");
@@ -1745,6 +1800,28 @@ void ChargerTestPage::announce(const char* words) {
 }
 
 // The footer of the stage (no key names: the strip says what the keys do). Returns its tone; a message takes it on every stage.
+// The footer of a PD spec check (a Results row or its detail page): what the cell says in words, the verdict's tone.
+static FooterTone spec_footer(StrBuf<32>& f, int check, const specsec::Cell& c, const pdspec::Agg* a, bool detail) {
+    const char* name = spectext::label(static_cast<pdspec::Check>(check));
+    const pdspec::Verdict v = c.verdict();
+    switch (v) {
+        case pdspec::Verdict::Skip: f.put(pdspec::skip_name(c.skip())); return FooterTone::Info;
+        case pdspec::Verdict::Pending: if (!detail) f.put(name).put(": "); f.put("not judged"); return FooterTone::Info;
+        case pdspec::Verdict::Unverified: if (!detail) f.put(name).put(": "); f.put("limit unverified"); return FooterTone::Info;
+        case pdspec::Verdict::Pass:
+        case pdspec::Verdict::Fail: break;
+    }
+    if (!detail) f.put(name).put(": ");
+    if (c.fails) {
+        f.put("fail ").put_u32(c.fails);
+        if (detail && a && a->n) f.put(" of ").put_u32(a->n).put(" measured");
+        return FooterTone::Caution;
+    }
+    f.put("pass");
+    if (detail && a && a->n) f.put(", ").put_u32(a->n).put(" measured");
+    return FooterTone::Ok;
+}
+
 [[gnu::noinline]] FooterTone ChargerTestPage::footer_line(StrBuf<32> &f) {
     if (!s_.message_.view().empty()) {
         f.put(s_.message_.view().substr(0, kFooterCells));
@@ -1816,6 +1893,7 @@ void ChargerTestPage::announce(const char* words) {
         if (s_.runner_.state() == ct::State::Unsafe) { f.put("Unplug; verify measured 5V"); return FooterTone::Error; }
         if (s_.runner_.reason() != ct::Reason::None) { f.put(ct::refusal_words(s_.runner_.reason())); return FooterTone::Caution; }
         if (steps.empty()) { f.put("Starting"); return FooterTone::Info; }
+        if (s_.runner_.state() == ct::State::Spec) { f.put("PD spec checks"); return FooterTone::Info; }
         if (s_.fc_words_ && fctrig::paint_critical()) { f.put(s_.fc_words_); return FooterTone::Info; }   // the window the screen sits out
         unsigned i, n;
         const char *unit;
@@ -1824,7 +1902,11 @@ void ChargerTestPage::announce(const char* words) {
         return FooterTone::Info;
     }
     case Stage::Results: {
-        if (s_.selection_ >= static_cast<int>(line_n_)) { f.put("Compare with the last card"); return FooterTone::Info; }
+        if (s_.selection_ >= delta_row()) { f.put("Compare with the last card"); return FooterTone::Info; }
+        if (s_.selection_ >= static_cast<int>(line_n_)) {   // a PD spec row
+            const int k = s_.selection_ - static_cast<int>(line_n_);
+            return spec_footer(f, static_cast<int>(specsec::kOrder[static_cast<size_t>(k)]), s_.runner_.evidence().spec.cells[static_cast<size_t>(k)], nullptr, false);
+        }
         const auto &row = layout_.rows[lines_[s_.selection_].row];
         f.put(row.label).put(": ");
         if (row.algorithm == A::Count && !row.probe) { f.put("see steps"); return FooterTone::Info; }
@@ -1866,6 +1948,11 @@ void ChargerTestPage::announce(const char* words) {
         put_part(f, other, "other", first);
         if (first) f.put("no result");
         return fail ? FooterTone::Caution : pass ? FooterTone::Ok : FooterTone::Info;
+    }
+    case Stage::SpecDetail: {
+        const int k = s_.detail_index_;
+        if (k < 0 || k >= spec_n()) { f.put("No result"); return FooterTone::Info; }
+        return spec_footer(f, static_cast<int>(specsec::kOrder[static_cast<size_t>(k)]), s_.runner_.evidence().spec.cells[static_cast<size_t>(k)], spec_agg(k), true);
     }
     case Stage::Steps: {
         const auto c = counts(s_.runner_, s_.result_family_);
@@ -2261,7 +2348,8 @@ void ChargerTestPage::paint_review() {
         return true;
     };
     StrBuf<32> t;
-    t.put_u32(s_.summary_.runnable).put(" run, ").put_u32(s_.summary_.skipped).put(" skip");
+    // the PD spec stage's checks (Deep, K2_PDSPEC) are tests too
+    t.put_u32(s_.summary_.runnable + s_.summary_.spec_checks).put(" run, ").put_u32(s_.summary_.skipped).put(" skip");
     if (!kv(0, "Tests", t.view(), s_.summary_.runnable ? kText : kCaution)) return;
 
     StrBuf<48> cb;
@@ -2626,6 +2714,18 @@ void ChargerTestPage::result_row_fn(void *p, int index, kit::ResultRowSpec &out)
 void ChargerTestPage::grid_row(int index, kit::ResultRowSpec &out) {
     out = {};
     const bool results = s_.stage_ == Stage::Results;
+    if (index >= static_cast<int>(line_n_) && index < delta_row()) {   // a PD spec check: one wide cell, the number it measured
+        const int k = index - static_cast<int>(line_n_);
+        const size_t ck = static_cast<size_t>(specsec::kOrder[static_cast<size_t>(k)]);
+        std::string_view shown;
+        const kit::Verdict v = spectext::cell_view(static_cast<int>(ck), s_.runner_.evidence().spec.cells[static_cast<size_t>(k)], spec_txt_, shown);
+        out.label = spectext::label(static_cast<pdspec::Check>(ck));
+        out.cells[0] = {v, shown, {}};
+        out.n = 1;
+        out.focus = results && s_.selection_ == index;
+        out.section = specsec::section_start(static_cast<size_t>(k)) || k == 0;
+        return;
+    }
     if (index >= static_cast<int>(line_n_)) {
         StrBuf<12> t;
         t.put_u32(static_cast<uint32_t>(s_.delta_n_)).put(" changed");
@@ -2633,6 +2733,7 @@ void ChargerTestPage::grid_row(int index, kit::ResultRowSpec &out) {
         out.label = "Changes";
         out.cells[0] = {kit::Verdict::None, cell_txt_[0][0], {}};
         out.n = 1;
+        out.section = spec_n() > 0;
         out.focus = results && s_.selection_ == index;
         return;
     }
@@ -2702,7 +2803,7 @@ void ChargerTestPage::paint_results() {
     put_line(c, kSmall, 6, 51, best_.view().empty() ? std::string_view("No passing mode") : best_.view(), best_.view().empty() ? kDim : kText,
              kBestChars, cell_sig_[4], false, true, &bg);   // [0..3] are the header's cells (four with a caution)
     if (pbg && pbg->more) return;
-    grid_.set_count(static_cast<int>(line_n_) + (s_.delta_n_ ? 1 : 0));
+    grid_.set_count(delta_row() + (s_.delta_n_ ? 1 : 0));
     grid_.show(s_.selection_, 1);
     const int room = pbg ? (pbg->spent == 0 ? kFlightRowPx : pbg->left()) : (1 << 30);
     const int drawn = grid_.draw_some(room, -1, pbg && pbg->spent != 0);
@@ -2848,6 +2949,27 @@ void ChargerTestPage::paint_detail() {
     }
 }
 
+// One PD spec check's detail: the same seven rows the old Spec page showed (verdict, worst, limit, count, fails, place, penalty) in a
+// KvTable from the body top. The limit, the count and the place come from the engine while it still holds this run, else read "-".
+void ChargerTestPage::paint_spec_detail() {
+    if (laid_) return;
+    const int k = s_.detail_index_;
+    if (k < 0 || k >= spec_n()) { laid_ = true; return; }
+    constexpr kit::KvLayout kSpecDet{kit::kBodyY, kit::kRowH, 6, nullptr, nullptr, kit::kKvValueX, 18, Align::Left};
+    PaintBudget *const pbg = ctx_.budget;
+    const specsec::Cell &cell = s_.runner_.evidence().spec.cells[static_cast<size_t>(k)];
+    const pdspec::Agg *agg = spec_agg(k);
+    while (detail_step_ < spectext::kDetailRows) {
+        if (pbg && !pbg->admit(2800, true)) return;
+        StrBuf<20> v;
+        uint16_t color = kText;
+        spectext::detail_value(detail_step_, static_cast<int>(specsec::kOrder[static_cast<size_t>(k)]), cell, agg, v, color);
+        kit::kv_row(ctx_.content, kSpecDet, kit::kv_row_y(kSpecDet, detail_step_), spectext::kDetailKeys[detail_step_], v.view(), color);
+        ++detail_step_;
+    }
+    laid_ = true;
+}
+
 void ChargerTestPage::paint_resume() {
     const Surface &c = ctx_.content;
     PaintBudget *const pbg = ctx_.budget;
@@ -2918,6 +3040,7 @@ void ChargerTestPage::update(uint32_t now) {
     case Stage::Running: paint_running(now); break;
     case Stage::Results: paint_results(); break;
     case Stage::Detail: paint_detail(); break;
+    case Stage::SpecDetail: paint_spec_detail(); break;
     case Stage::Resume: paint_resume(); break;
     default: paint_list(); break;
     }
@@ -2935,7 +3058,7 @@ bool ChargerTestPage::on_event(Event e) {
     if (s_.stage_ == Stage::Waiting && (e.button == Button::Plus || e.button == Button::Minus)) return true;
     const bool long_ok = e.press == Press::Long && e.button == Button::Ok;
     // Long OK on the Results / Detail is Share: the run's report card as QR (a card exists once the run is saved).
-    if (long_ok && (s_.stage_ == Stage::Results || s_.stage_ == Stage::Detail) && !s_.runner_.busy() && s_.card_no_ != 0) {
+    if (long_ok && (s_.stage_ == Stage::Results || s_.stage_ == Stage::Detail || s_.stage_ == Stage::SpecDetail) && !s_.runner_.busy() && s_.card_no_ != 0) {
         share_card();
         return true;
     }
@@ -2977,14 +3100,15 @@ bool ChargerTestPage::on_event(Event e) {
         case Stage::Identity: case Stage::Ask: set_stage(Stage::Cable, ctx_.cables.index_of(ctx_.cables.selected())); break;   // retired, never entered
         case Stage::Steps: set_stage(Stage::Results, results_row_); break;
         case Stage::Detail: set_stage(Stage::Steps, s_.detail_row_); break;
-        case Stage::Changes: set_stage(Stage::Results, static_cast<int>(line_n_)); break;
+        case Stage::Changes: set_stage(Stage::Results, delta_row()); break;
+        case Stage::SpecDetail: set_stage(Stage::Results, s_.detail_row_); break;
         default: set_stage(Stage::Algorithms); break;
         }
         update(ctx_.now);
         return true;
     }
     if (e.button == Button::Plus || e.button == Button::Minus) {
-        if (s_.stage_ == Stage::Detail) return true;
+        if (s_.stage_ == Stage::Detail || s_.stage_ == Stage::SpecDetail) return true;
         const int dir = e.button == Button::Plus ? 1 : -1;
         if (s_.stage_ == Stage::Running) {   // scroll the verdict grid by hand; following resumes (paint_running) after kFollowResumeMs or at the next step
             s_.scroll_line_ = std::clamp(grid_.first() + dir, 0, std::max(0, static_cast<int>(line_n_) - 1));
@@ -3078,10 +3202,15 @@ __attribute__((noinline)) void ChargerTestPage::ok_event() {
             confirmed_start();
         }
         break;
-    case Stage::Changes: set_stage(Stage::Results, static_cast<int>(line_n_)); break;
+    case Stage::Changes: set_stage(Stage::Results, delta_row()); break;
+    case Stage::SpecDetail: set_stage(Stage::Results, s_.detail_row_); break;
     case Stage::Results:
-        if (s_.selection_ >= static_cast<int>(line_n_)) {
+        if (s_.selection_ >= delta_row()) {
             if (s_.delta_n_) set_stage(Stage::Changes);
+        } else if (s_.selection_ >= static_cast<int>(line_n_)) {   // a PD spec check opens its detail
+            s_.detail_index_ = s_.selection_ - static_cast<int>(line_n_);
+            s_.detail_row_ = s_.selection_;
+            set_stage(Stage::SpecDetail);
         } else {
             int fam = -2;
             const auto &row = layout_.rows[lines_[static_cast<size_t>(s_.selection_)].row];
@@ -3123,19 +3252,21 @@ Strip ChargerTestPage::labels() const {
         case Stage::Refuse: ok = sl::Start; break;
         case Stage::Waiting: break;   // BACK reads Stop
         case Stage::Results:
-            ok = s_.selection_ >= static_cast<int>(line_n_) ? (s_.card_no_ != 0 ? sl::DiffShare : sl::Diff)
-                                                              : (s_.card_no_ != 0 ? sl::StepsShare : sl::Steps);
+            ok = s_.selection_ >= delta_row() ? (s_.card_no_ != 0 ? sl::DiffShare : sl::Diff)
+               : s_.selection_ >= static_cast<int>(line_n_) ? (s_.card_no_ != 0 ? sl::OpenShare : sl::Open)
+                                                            : (s_.card_no_ != 0 ? sl::StepsShare : sl::Steps);
             break;
         case Stage::Changes: ok = sl::View; break;
         case Stage::Steps: ok = sl::Open; break;
         case Stage::Detail: ok = s_.card_no_ != 0 ? sl::StepsShare : sl::Steps; break;
+        case Stage::SpecDetail: ok = s_.card_no_ != 0 ? sl::ResultsShare : sl::Results; break;
         case Stage::Resume: ok = sl::Resume; break;
         case Stage::Running: ok = sl::View; break;
         default: break;   // Identity / Ask are retired
         }
     }
     Strip l = setup::labels(base_labels(), tests_stage(s_.stage_) ? setup::Step::Tests : setup::Step::Cable, ok);
-    if (s_.stage_ == Stage::Detail || s_.stage_ == Stage::Waiting) {   // nothing to move the cursor over (Review: Level and START)
+    if (s_.stage_ == Stage::Detail || s_.stage_ == Stage::SpecDetail || s_.stage_ == Stage::Waiting) {   // nothing to move the cursor over (Review: Level and START)
         l[Button::Minus] = sl::None;
         l[Button::Plus] = sl::None;
     }
