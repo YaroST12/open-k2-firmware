@@ -681,9 +681,9 @@ var K2Proto = (function () {
                          "pd3.0-revision", "pd3.1-revision", "pd3.2-revision", "epr-avs", "qc2b", "qc3b"];
   var TEST_ALGORITHM_GROUPS = [0, 0, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 0, 0, 0, 0, 1, 2];
   var TEST_STAGES = ["algorithms", "group", "cable", "identity", "review", "running", "results", "steps", "detail",
-                     "resume", "changes", "ask", "refuse", "waiting", "custom"];
+                     "resume", "changes", "ask", "refuse", "waiting", "custom", "specdetail"];
   var TEST_STATES = ["idle", "baseline", "requesting", "holding", "releasing", "done", "stopped", "unsafe", "detach charger", "initializing...",
-                     "svooc ceiling"];
+                     "svooc ceiling", "pd spec"];
   // charger_test::Unit in enum order (the wire value is the index), the device's labels, and kDefaultUnits: the order a run takes
   // when no unit list is set (include/k2/chargertest/charger_test.hpp, src/chargertest/charger_test.cpp).
   var TEST_UNITS = ["pd", "qc2", "qc3", "qc3+", "afc", "fcp", "scp", "vooc", "svooc", "svooc65", "ufcs", "vivo", "pd-low"];
@@ -4687,7 +4687,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = CtGrid;
   // change when the revision moves; the whole table once at the end. A poll the K2 does not answer (it is busy with a
   // handshake) is skipped, not an error.
   var CT_LIVE_MS = 1000, CT_ROW_BUDGET_MS = 450;
-  var CT_ACTIVE = ["baseline", "requesting", "holding", "releasing", "detach charger", "initializing...", "svooc ceiling"];
+  var CT_ACTIVE = ["baseline", "requesting", "holding", "releasing", "detach charger", "initializing...", "svooc ceiling", "pd spec"];
   var CT = { phase: "setup", meta: null, view: null, noView: false, rows: [], rowsFor: "", fetchKey: "", queue: [], sig: "",
              cancelling: false, busy: false, quiet: 0, runId: 0, startedAt: 0, cancelled: false, savedLoaded: false, plan: null };
   function unitLabel(u) { return P.TEST_UNIT_LABELS[P.TEST_UNITS.indexOf(u)] || u; }

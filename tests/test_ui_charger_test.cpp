@@ -1427,6 +1427,61 @@ static void test_a_capped_range_reads_amber_and_says_how_far_it_got() {
 }
 static void dump_screen(const char* name);
 static int ty_reason() { return 60 + 3 * kit::kRowH + kit::row_text_y(kit::kRowH, kSmall.height); }   // the fourth row of the Detail table
+// The PD spec section of a Deep run (include/k2/chargertest/spec_section.hpp): one row per check after the unit rows, each a one-cell
+// VerdictCell with the worst value; OK opens the check's detail page, BACK returns to the row. The cells are set on the finished
+// run (the host stub has no pdspec engine run), including the extremes the quantised value can hold.
+static specsec::Result spec_fixture() {
+    namespace sc = pdspec;
+    specsec::Result r;
+    r.end = specsec::End::Done;
+    for (size_t i = 0; i < specsec::kCells; ++i) {
+        const sc::Unit u = sc::kDefs[static_cast<size_t>(specsec::kOrder[i])].unit;
+        switch (i % 6) {
+            case 0: r.cells[i] = specsec::make_cell(sc::Verdict::Pass, sc::Skip::None, 0, specsec::quantize(u, 1234)); break;
+            case 1: r.cells[i] = specsec::make_cell(sc::Verdict::Fail, sc::Skip::None, 255, specsec::quantize(u, 987654)); break;   // widest text
+            case 2: r.cells[i] = specsec::make_cell(sc::Verdict::Skip, sc::Skip::NoEprProof, 0); break;                           // longest reason
+            case 3: r.cells[i] = specsec::make_cell(sc::Verdict::Unverified, sc::Skip::None, 0, specsec::quantize(u, -5432)); break;
+            case 4: r.cells[i] = specsec::make_cell(sc::Verdict::Pass, sc::Skip::None, 0, specsec::kUnseen); break;                // "not seen"
+            default: r.cells[i] = specsec::make_cell(sc::Verdict::Pending, sc::Skip::None, 0); break;
+        }
+    }
+    return r;
+}
+static void test_the_results_grid_carries_the_pdspec_section() {
+    six_pdo_fixture(); Ui ui; uint32_t t;
+    finished_results(ui, t);
+    const int units = ui.list_state().count;
+    const auto calm = [&] { for (int i = 0; i < 64 && ui.painting(); ++i) ui.tick(t += 100); CHECK_EQ(ui.painting(), false); };
+    // Without a spec result (every Light / Medium run, the default image) the grid is the unit rows alone.
+    CHECK_EQ(specsec::kBuilt, true);   // the host build has the engine glue (K2_PDSPEC=1)
+    const_cast<ct::Evidence&>(ui.charger_test_results().evidence()).spec = spec_fixture();
+    top(ui, t); press(ui, Button::Ok, t); ui.tick(t += 100); calm();   // into a unit's Steps and back: the grid is rebuilt
+    press(ui, Button::Back, t); ui.tick(t += 100); calm();
+    CHECK_EQ(ui.charger_test_stage(), 6);
+    CHECK_EQ(ui.list_state().count, units + int(specsec::kCells));
+    // The cursor runs on past the unit rows, one check per press, and stops on the last.
+    for (int i = 0; i < units + 40; ++i) press(ui, Button::Plus, t);
+    ui.tick(t += 100); calm();
+    CHECK_EQ(ui.charger_test_cursor(), units + int(specsec::kCells) - 1);
+    dump_screen("spec_results_end");
+    press(ui, Button::Ok, t); ui.tick(t += 100); calm();
+    CHECK_EQ(ui.charger_test_stage(), 15);   // SpecDetail
+    dump_screen("spec_detail_last");
+    press(ui, Button::Back, t); ui.tick(t += 100); calm();
+    CHECK_EQ(ui.charger_test_stage(), 6);
+    CHECK_EQ(ui.charger_test_cursor(), units + int(specsec::kCells) - 1);   // the cursor is where it was
+    // Every row and detail page of every kind draws whole (the truncation walk fails the run on any cut).
+    for (int row = units; row < units + int(specsec::kCells); ++row) {
+        top(ui, t);
+        for (int i = 0; i < row; ++i) press(ui, Button::Plus, t);
+        ui.tick(t += 100); calm();
+        CHECK_EQ(ui.charger_test_cursor(), row);
+        press(ui, Button::Ok, t); ui.tick(t += 100); calm();
+        CHECK_EQ(ui.charger_test_stage(), 15);
+        press(ui, Button::Back, t); ui.tick(t += 100); calm();
+        CHECK_EQ(ui.charger_test_stage(), 6);
+    }
+}
 // A voltage fold is a caution (user decision 2026-11-16): the sweep row and the APDO's fixed rows on the folded side read amber,
 // neither pass nor fail. The sweep itself is a clean run here; the fold is set on the finished run (the host stub cannot make a
 // converter fold back), then the Results grid is rebuilt. Checks the header's fourth cell, the Steps footer and the Detail page.
@@ -4799,6 +4854,7 @@ int main() {
     test_vsafe5_review();
     test_preflight_refusal_is_logged();
     test_preflight_wrong_voltage_under_pdo1_contract_is_logged();
+    test_the_results_grid_carries_the_pdspec_section();
     test_a_voltage_fold_reads_as_a_caution();
     test_a_sweep_off_by_more_than_100mv_reads_as_a_caution();
     test_sweep_log_line_has_no_literal_format_bug();

@@ -70,6 +70,7 @@ struct Cell {
     constexpr sc::Verdict verdict() const { return static_cast<sc::Verdict>(code & 7u); }
     constexpr sc::Skip skip() const { return static_cast<sc::Skip>((code >> 3) & 15u); }
     constexpr bool measured() const { return verdict() != sc::Verdict::Skip && verdict() != sc::Verdict::Pending; }
+    constexpr bool operator==(const Cell&) const = default;
 };
 constexpr Cell make_cell(sc::Verdict v, sc::Skip s, unsigned fails, std::int16_t value = 0) {
     return {static_cast<std::uint8_t>(static_cast<unsigned>(v) | (static_cast<unsigned>(s) << 3)),
@@ -86,7 +87,7 @@ struct Result {
     constexpr bool same(const Result& o) const {
         if (end != o.end || why != o.why || unconfirmed != o.unconfirmed) return false;
         for (std::size_t i = 0; i < kCells; ++i)
-            if (cells[i].code != o.cells[i].code || cells[i].fails != o.cells[i].fails || cells[i].value != o.cells[i].value) return false;
+            if (!(cells[i] == o.cells[i])) return false;
         return true;
     }
     // pass / fail / skip counts as the grid's tally reads them (an unverified or pending cell is in none of the three).
@@ -107,15 +108,17 @@ struct Result {
 };
 static_assert(sizeof(Result) == 4 + 4 * kCells, "RAM: three header bytes padded to four, then four bytes per cell");
 
-// What the engine's aggregates say, one cell per kOrder entry (the verdict the pdspec result shows: an inferred limit is Unverified).
+// One check's cell from its aggregate (the verdict the pdspec result shows: an inferred limit is Unverified).
+constexpr Cell cell_of(sc::Check c, const sc::Agg& a) {
+    const auto k = static_cast<std::size_t>(c);
+    return make_cell(sc::verdict(c, a), a.skip, a.fails, a.n ? quantize(sc::kDefs[k].unit, a.worst) : std::int16_t{0});
+}
+
+// What the engine's aggregates say, one cell per kOrder entry.
 constexpr Result from_aggs(const std::array<sc::Agg, sc::kChecks>& agg, End e, std::uint8_t why, bool unconfirmed) {
     Result r;
     r.end = e; r.why = why; r.unconfirmed = unconfirmed;
-    for (std::size_t i = 0; i < kCells; ++i) {
-        const auto k = static_cast<std::size_t>(kOrder[i]);
-        const sc::Verdict v = sc::verdict(kOrder[i], agg[k]);
-        r.cells[i] = make_cell(v, agg[k].skip, agg[k].fails, agg[k].n ? quantize(sc::kDefs[k].unit, agg[k].worst) : std::int16_t{0});
-    }
+    for (std::size_t i = 0; i < kCells; ++i) r.cells[i] = cell_of(kOrder[i], agg[static_cast<std::size_t>(kOrder[i])]);
     return r;
 }
 
