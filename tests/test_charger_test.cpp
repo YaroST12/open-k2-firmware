@@ -5700,8 +5700,10 @@ static void test_the_10_unit_run_over_every_cut_phase_ends_as_without_cuts() {
     CHECK_EQ(rc.state(), ct::State::Done);
     CHECK_EQ(count_verdict_any(rc, ct::Verdict::Fail), 1u);
     CHECK_EQ(count_verdict_any(rc, ct::Verdict::Skip), 2u);
-    for (uint32_t off = 0; off < 7040; off += 200) {
-        Fake f; f.caps = {}; f.cut_len_ms = 1000; f.silent_session_ms = clean.silent_session_ms; ct::Runner r(f);
+    // 0: the port drops straight to the dark; 4650 / 3500: the first sample of the fall lands part-way down (the CUKTECH USB-A shape,
+    // under and over the cut threshold), which every 5 V gate between the rows, the final release and the rescan has to wait out too
+    for (const uint16_t fall : {uint16_t(0), uint16_t(4650), uint16_t(3500)}) for (uint32_t off = 0; off < 7040; off += 200) {
+        Fake f; f.caps = {}; f.cut_len_ms = 1000; f.cut_fall_mv = fall; f.silent_session_ms = clean.silent_session_ms; ct::Runner r(f);
         CHECK_EQ(r.start(f.caps, {.selected = kUnits}, f.in, true), ct::Reason::None);
         CHECK_EQ(run_until(f, r, [&] { return f.fc_requests >= 1; }, 60000), true);
         f.cut_period_ms = 7040; f.cut_next_at = f.in.now + off;

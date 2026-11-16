@@ -529,10 +529,12 @@ Ports (operator, 2026-11-10): C1 and C2 are the 120 W ports (20 V 6 A with the X
   the decoded minimum is no floor this port enforces, and the replan no longer reads it: the SCP rows follow only the reported maximum
   voltage and current, and the 4.5 V and 5 V rows ask min(row current, reported max) and run (host-pinned,
   `tests/test_charger_test.cpp`, retried first row). The port never answers a 10 V target (timeout / unsupported), the top level it
-  reports (open). Row labels (2026-11-16, `medium2-stream` on 6429a696 against `medium5-stream` on a19874f0): the registers are
-  identical in both runs and the wire carried Iset 0x09C4 (2.5 A) in both, because the engine lowers every SCP current to the
-  reported maximum; the old "4.5V 5A" / "5V 4.5A" row names were the fixed plan's labels, and the replanned rows now name the
-  2.5 A that is asked (nothing was lost; host-pinned in `tests/test_fc_engine.cpp`, CUKTECH register values).
+  reports (open). Row labels (2026-11-16, `medium2-stream` on 6429a696 against `medium5-stream` on a19874f0): the limit registers are
+  identical in both runs, and every low-voltage row wrote Iset high byte 0xB2 = 0x09 (2500 mA = 0x09C4; 4500 mA would be 0x11) in both:
+  the 5 V 4.5 A row that passed in `medium2-stream` (request 4500 mA in the log) already went out at 2.5 A, because the engine lowers
+  every SCP current to the reported maximum, and the 4.5 V row of that run never reached its write (lost to a cut, "source lost").
+  The old "4.5V 5A" / "5V 4.5A" names were the fixed plan's labels; the replanned rows now name the 2.5 A that is asked (nothing was
+  lost; host-pinned in `tests/test_fc_engine.cpp`, CUKTECH register values).
 - **Re-validation, C1 full run** (2026-11-07, 32a279f, top plug direct, Cable off, `runs/revalidate/cuktech-c1-full.log`):
   23 pass / 16 fail / 24 skip, no Hard Reset, no reboot. PD fixed 5-20 V 3 A and both PPS ranges pass (5.20-19.93 V, 3 A
   without a cable, as `no-sop-prime-for-dumb-plug`); **UFCS 5/9/11/5/12/20 V all pass in the full sequence**; VIVO "no
