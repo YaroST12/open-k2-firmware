@@ -14,6 +14,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <new>
+#include <type_traits>
 #include <utility>
 
 namespace k2 {
@@ -40,21 +41,22 @@ public:
     template <class T, class... A>
     T *push(A &&...a) {
         static_assert(alignof(T) <= alignof(std::max_align_t), "arena objects must not be over-aligned");
-        if (depth_ >= Depth) return nullptr;
-        std::size_t at = align_up(used_, alignof(T));
-        if (at + sizeof(T) > Capacity) return nullptr;
-        T *obj = ::new (static_cast<void *>(buf_ + at)) T(std::forward<A>(a)...);
-        e_[depth_] = {obj, [](Base *b) { static_cast<T *>(b)->~T(); }, used_};
-        used_ = at + sizeof(T);
-        depth_++;
+        void *mem = (alignof(T) <= 4) ? alloc_slot4(sizeof(T)) : alloc_slot(sizeof(T), alignof(T));
+        if (!mem) return nullptr;
+        T *obj = ::new (mem) T(std::forward<A>(a)...);
+        if constexpr (std::is_trivially_destructible_v<T>) {
+            commit_slot(obj);
+        } else {
+            commit_slot_d(obj, [](Base *b) { static_cast<T *>(b)->~T(); });
+        }
         return obj;
     }
 
     // Destroys the top object; a no-op on an empty stack.
-    void pop() {
+    [[gnu::noinline]] void pop() {
         if (depth_ == 0) return;
         Entry &t = e_[depth_ - 1];
-        t.destroy(t.obj);
+        if (t.destroy) t.destroy(t.obj);
         used_ = t.prev_used;
         depth_--;
     }
@@ -78,6 +80,21 @@ private:
         std::size_t prev_used;   // `used_` before this object, restored on pop
     };
     static constexpr std::size_t align_up(std::size_t v, std::size_t a) { return (v + a - 1) / a * a; }
+    [[gnu::noinline]] void *alloc_slot4(std::size_t size) { return alloc_slot(size, 4); }
+    [[gnu::noinline]] void *alloc_slot(std::size_t size, std::size_t align) {
+        if (depth_ >= Depth) return nullptr;
+        const std::size_t at = align_up(used_, align);
+        if (at + size > Capacity) return nullptr;
+        e_[depth_].prev_used = used_;
+        used_ = at + size;
+        return buf_ + at;
+    }
+    [[gnu::noinline]] void commit_slot(Base *obj) { commit_slot_d(obj, nullptr); }
+    [[gnu::noinline]] void commit_slot_d(Base *obj, void (*destroy)(Base *)) {
+        Entry &t = e_[depth_++];
+        t.obj = obj;
+        t.destroy = destroy;
+    }
 
     alignas(std::max_align_t) std::uint8_t buf_[Capacity];
     Entry e_[Depth] = {};

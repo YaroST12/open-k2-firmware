@@ -187,10 +187,11 @@ public:
     const char *c_str() const { return data(); }
 
 protected:
-    explicit StrBufBase(uint16_t cap) : n_(0), cap_(cap) {}
+    StrBufBase() = default;
     StrBufBase(const StrBufBase &) = default;              // only as part of a StrBuf<N> of the same N
     StrBufBase &operator=(const StrBufBase &) = default;
     ~StrBufBase() = default;
+    [[gnu::noinline]] void init(uint16_t cap);
 
 private:
     // The characters follow the header in the derived StrBuf<N> (its only member, char-aligned: offset sizeof(StrBufBase)).
@@ -206,26 +207,9 @@ class StrBuf : public StrBufBase {
     static_assert(N >= 1 && N <= 0xFFFF, "StrBuf capacity is a 16-bit count");
 
 public:
-    StrBuf() : StrBufBase(static_cast<uint16_t>(N)) { b_[0] = '\0'; }
+    StrBuf() { init(static_cast<uint16_t>(N)); }
     StrBuf(const StrBuf &) = default;
     StrBuf &operator=(const StrBuf &) = default;
-    [[gnu::always_inline]] StrBuf &put(std::string_view s) { StrBufBase::put(s); return *this; }
-    [[gnu::always_inline]] StrBuf &put(const char *s) { StrBufBase::put(s); return *this; }
-    [[gnu::always_inline]] StrBuf &put_char(char c) { StrBufBase::put_char(c); return *this; }
-    [[gnu::always_inline]] StrBuf &put_u32(uint32_t v, int width = 0) { StrBufBase::put_u32(v, width); return *this; }
-    [[gnu::always_inline]] StrBuf &put_u32_compact(uint32_t v) { StrBufBase::put_u32_compact(v); return *this; }
-    [[gnu::always_inline]] StrBuf &put_count_capped(uint32_t v) { StrBufBase::put_count_capped(v); return *this; }
-    [[gnu::always_inline]] StrBuf &put_fixed(int32_t milli, int decimals, int width = 0) {
-        StrBufBase::put_fixed(milli, decimals, width);
-        return *this;
-    }
-    [[gnu::always_inline]] StrBuf &put_abs_fixed(int32_t milli, int decimals, int width = 0) {
-        StrBufBase::put_abs_fixed(milli, decimals, width);
-        return *this;
-    }
-    [[gnu::always_inline]] StrBuf &put_hex(uint32_t v, int digits) { StrBufBase::put_hex(v, digits); return *this; }
-    [[gnu::always_inline]] StrBuf &put_hms(uint32_t seconds) { StrBufBase::put_hms(seconds); return *this; }
-    [[gnu::always_inline]] StrBuf &put_age(uint32_t seconds) { StrBufBase::put_age(seconds); return *this; }
 
 private:
     char b_[N];

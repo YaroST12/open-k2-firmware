@@ -436,6 +436,7 @@ private:
     const char *notice_ = nullptr;   // a literal shown on the notice strip instead of the rotation text (refuse_menu)
     void refuse_menu(Menu m, const char *why, uint32_t now_ms);
     void rotation_gesture(uint32_t now_ms);
+    void suppress_flipped_arrows();
     void store_orientation(uint8_t rotation);   // writes the orientation fields into /prefs.cfg when they changed
     void draw_rotation_notice(uint32_t now_ms);
     Layout layout_{};

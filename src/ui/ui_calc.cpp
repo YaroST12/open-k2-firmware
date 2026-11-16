@@ -168,6 +168,11 @@ int fmt_ohms(std::span<char> out, int32_t vbus_mv, int32_t current_ma) {
     return fmt_fit(out, milli_ohm, 4, 2);
 }
 
+void StrBufBase::init(uint16_t cap) {
+    n_ = 0;
+    cap_ = cap;
+    data()[0] = '\0';
+}
 void StrBufBase::clear() {
     n_ = 0;
     data()[0] = '\0';
@@ -205,13 +210,13 @@ StrBufBase &StrBufBase::put_u32(uint32_t v, int width) {
 }
 StrBufBase &StrBufBase::put_u32_compact(uint32_t v) {
     char t[8];
-    const int len = fmt_u32_compact(t, v);
-    return put({t, static_cast<size_t>(len)});
+    fmt_u32_compact(t, v);
+    return put(t);
 }
 StrBufBase &StrBufBase::put_count_capped(uint32_t v) {
     char t[8];
-    const int len = fmt_count_capped(t, v);
-    return put({t, static_cast<size_t>(len)});
+    fmt_count_capped(t, v);
+    return put(t);
 }
 StrBufBase &StrBufBase::put_fixed(int32_t milli, int decimals, int width) {
     char t[16];

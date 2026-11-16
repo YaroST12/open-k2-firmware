@@ -157,6 +157,12 @@ void Ui::init(uint32_t now_ms, bool cancel_resume) {
     K2LOG("[ROT] Settings > Autorotate: auto or manual\n");
 }
 
+void Ui::suppress_flipped_arrows() {
+    ctx_.keep.trigger.invalidate_confirmation();
+    suppress_rotated_press_[static_cast<int>(Button::Minus)] = down_[static_cast<int>(Button::Minus)];
+    suppress_rotated_press_[static_cast<int>(Button::Plus)] = down_[static_cast<int>(Button::Plus)];
+}
+
 void Ui::set_rotation(uint8_t rotation, uint32_t now_ms) {
     rotation &= 3;
     // orient_ is only ever assigned from orientation_for() (and kDefaultOrientation ==
@@ -164,11 +170,7 @@ void Ui::set_rotation(uint8_t rotation, uint32_t now_ms) {
     // the button strip stays attached to the physical button edge in every rotation.
     if (rotation == orient_.rotation) return;
     charger_test_.invalidate_confirmation();
-    if (rotate_buttons_ && (rotation >= 2) != (orient_.rotation >= 2)) {
-        ctx_.keep.trigger.invalidate_confirmation();
-        suppress_rotated_press_[static_cast<int>(Button::Minus)] = down_[static_cast<int>(Button::Minus)];
-        suppress_rotated_press_[static_cast<int>(Button::Plus)] = down_[static_cast<int>(Button::Plus)];
-    }
+    if (rotate_buttons_ && (rotation >= 2) != (orient_.rotation >= 2)) suppress_flipped_arrows();
     orient_ = orientation_for(rotation);
     ctx_.rotation = rotation;
     layout_ = compute_layout(orient_.edge, kSlotCenters, kSlotLens, kPanelThickness);
@@ -186,10 +188,8 @@ void Ui::set_rotation(uint8_t rotation, uint32_t now_ms) {
 void Ui::set_rotate_buttons(bool enabled) {
     if (rotate_buttons_ == enabled) return;
     if (orient_.rotation >= 2) {
-        ctx_.keep.trigger.invalidate_confirmation();
         charger_test_.invalidate_confirmation();
-        suppress_rotated_press_[static_cast<int>(Button::Minus)] = down_[static_cast<int>(Button::Minus)];
-        suppress_rotated_press_[static_cast<int>(Button::Plus)] = down_[static_cast<int>(Button::Plus)];
+        suppress_flipped_arrows();
     }
     rotate_buttons_ = enabled;
     sync_panel();
