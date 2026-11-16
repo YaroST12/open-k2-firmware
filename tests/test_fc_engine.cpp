@@ -621,11 +621,11 @@ static void afc_retry_after_a_missed_ping_goes_on() {
 }
 
 // Pattern afc-dcp-short-open (TOPADRE USB-A, hardware 2026-11-16): the port holds its BC1.2 short closed for about 1.25 s after D+ went
-// to 0.6 V and answers nothing meanwhile (D- reads D+ even driven low). The first ping waits for the short to open, as the HVDCP
-// handshake does for FCP; every session repeats the wait.
+// to 0.6 V and answers nothing meanwhile. The first ping waits for the short to open (D- released while it waits, as in the HVDCP
+// handshake FCP uses on that port); every session repeats the wait.
 static void afc_waits_for_the_dcp_short_to_open() {
     FakeCharger c;
-    c.afc_short_ms = 1250;
+    c.afc_needs_open = true;
     Engine e(c);
     for (int round = 0; round < 2; ++round) {
         c.xfer_times.clear();
@@ -637,6 +637,7 @@ static void afc_waits_for_the_dcp_short_to_open() {
         CHECK(c.xfer_times.size() == 3);   // no miss, no retry: the first ping already found the short open
         CHECK(!c.xfer_times.empty() && c.xfer_times[0] >= t0 + 1250 && c.xfer_times[0] <= t0 + 1400);
         CHECK(!c.afc_log.empty() && c.afc_log[0].rx == 0);
+        CHECK(!c.dm_log.empty() && c.dm_log[0] == Drive::HiZ && c.dm == Drive::V0);   // released while it waited, low for the ping
         e.stop();
         c.run(e, 3000);
     }
@@ -646,7 +647,8 @@ static void afc_waits_for_the_dcp_short_to_open() {
 // the session as unsupported.
 static void afc_stops_waiting_for_a_short_that_never_opens() {
     FakeCharger c;
-    c.afc_short_ms = 100000;
+    c.afc_needs_open = true;
+    c.hvdcp = false;   // the short never opens
     Engine e(c);
     CHECK(e.start(Proto::Afc, 9000, true) == Fail::None);
     c.run(e, 3000);
@@ -655,9 +657,10 @@ static void afc_stops_waiting_for_a_short_that_never_opens() {
     CHECK(c.xfer_times.size() == 2 && c.xfer_times[0] >= 2000 && c.xfer_times[0] <= 2100);
 }
 
-// No short at all (D- reads 0 V with the weak low drive): the 500 ms settle of before, nothing longer.
+// No short at all (D- released reads 0 V): the 500 ms settle of before, nothing longer.
 static void afc_without_a_short_pings_after_the_settle() {
     FakeCharger c;
+    c.dm_fixed_mv = 0;
     Engine e(c);
     CHECK(e.start(Proto::Afc, 9000, true) == Fail::None);
     c.run(e, 1000);

@@ -281,6 +281,7 @@ private:
     std::size_t script_n_ = 0, script_i_ = 0;
     int afc_n_ = 0;               // AFC exchanges of this session (the log's n)
     bool afc_retried_ = false;    // the one retry of an unanswered first AFC exchange was used
+    bool afc_short_seen_ = false; // the settle has judged D- once (qc::afc_ping_due)
     int sends_ = 0, ok_sends_ = 0, wake_i_ = 0, keep_fail_ = 0, adapter_mv_ = 0, adapter_ma_ = 0;
     // AFC / FCP / SCP: the charger answered the protocol itself (a CRC-valid ACCP frame or an AFC byte exchange). Until it has,
     // a failure of the session says "this charger does not speak it" (see abort()), whatever VBUS did: QC-only banks move VBUS

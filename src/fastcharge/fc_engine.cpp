@@ -787,10 +787,11 @@ void Engine::vooc_wake() {
 // The first move of a protocol that has no HVDCP handshake; start() calls it at once or when RedetectHold ends.
 void Engine::begin_protocol() {
     const Proto p = proto_;
-    if (p == Proto::Afc) {          // no HVDCP handshake: D+ at 0.6 V, D- idle low, then the ping
+    if (p == Proto::Afc) {          // no HVDCP handshake: D+ at 0.6 V, D- released until the short is gone, then low and the ping
         env_.set_dp(Drive::V0p6);
-        env_.set_dm(Drive::V0);
+        env_.set_dm(Drive::HiZ);   // released while the port may still hold its BC1.2 short (qc::afc_ping_due)
         dm0_mv_ = 0;
+        afc_short_seen_ = false;
         go(Phase::AfcSettle, 0);
     } else if (p == Proto::Ufcs) {  // the handshake and the UART claim happen in ufcs_open()
         caps_.ufcs_n = ux_n_ = 0;
@@ -1192,13 +1193,17 @@ void Engine::poll_step() {
         // D+ at 0.6 V first; a BC1.2 short that is still closed (D- follows D+) has to open before the ping (qc::afc_ping_due)
         if (now < due_ms_) return;
         const int dm = env_.dm_mv();
-        if (qc::handshake_initial_ok(dm) && dm > dm0_mv_) dm0_mv_ = dm;
         const std::uint32_t since = now - phase_ms_;
+        if (since >= qc::kAfcSettleMs && !afc_short_seen_) {   // judge once, past the slew
+            afc_short_seen_ = true;
+            if (qc::handshake_initial_ok(dm)) dm0_mv_ = dm;
+        }
         if (!qc::afc_ping_due(since, dm0_mv_, dm)) {
             due_ms_ = now + kDropPollMs;
             return;
         }
         env_.log_afc_settle(dm0_mv_, dm, int(since));
+        env_.set_dm(Drive::V0);   // the UART idle level
         go(Phase::AfcSend, 0);
     }
         [[fallthrough]];

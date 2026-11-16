@@ -34,14 +34,16 @@ constexpr std::optional<Levels> qc2_levels(int mv) {
 constexpr bool handshake_initial_ok(int dm0_mv) { return dm0_mv >= 350 && dm0_mv <= 1150; }
 constexpr bool handshake_dropped(int dm0_mv, int dm_mv) { return dm0_mv - dm_mv >= 350; }
 
-// AFC settle (pattern afc-dcp-short-open). D+ is held at 0.6 V with D- driven low; a port that keeps its BC1.2 short closed (D- reads
-// 0.35 .. 1.15 V even driven low) answers no ping until it opens the short, about 1.25 s after D+ went up (hardware: TOPADRE USB-A
-// read D+ / D- 0.6 / 0.6 V for 1.2 s, then D- fell to 0 V; the 0x46 sent 0.5 s after the start got no slave ping). `dm0_mv` is the
-// highest short level seen so far (0 = none). No short: the ping goes at kAfcSettleMs as it always did. A short: at its drop, and
-// at kAfcDropWaitMs at the latest (a port that never opens it is judged by the ping, not by the wait).
+// AFC settle (pattern afc-dcp-short-open). D+ is held at 0.6 V with D- released, as in the HVDCP handshake FCP runs on the same port.
+// A port that keeps its BC1.2 short closed (D- follows D+, 0.35 .. 1.15 V; hardware: TOPADRE USB-A read 662 / 662 mV from the FCP bias
+// step) answers no ping until it opens the short, about 1.25 s after D+ went up and then D- reads 0 V; a 0x46 sent 0.5 s after the start
+// got no slave ping. Nothing is judged before kAfcSettleMs: D- still slews from the idle level (Apple divider 2.7 V) before that.
+// `dm0_mv` is the short level latched at that point (0 = no short): the ping goes at once. A short: at its drop, and at
+// kAfcDropWaitMs at the latest (a port that never opens it is judged by the ping, not by the wait).
 inline constexpr std::uint32_t kAfcSettleMs = 500, kAfcDropWaitMs = 2000;
 constexpr bool afc_ping_due(std::uint32_t since_ms, int dm0_mv, int dm_mv) {
-    if (dm0_mv <= 0) return since_ms >= kAfcSettleMs;
+    if (since_ms < kAfcSettleMs) return false;
+    if (dm0_mv <= 0) return true;
     return handshake_dropped(dm0_mv, dm_mv) || since_ms >= kAfcDropWaitMs;
 }
 
