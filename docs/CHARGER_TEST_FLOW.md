@@ -204,6 +204,14 @@ legacy row that was in flight at a cut reads "source lost" (SCP 5 V, VOOC, SVOOC
   grid, the card and the summaries; `[CT] cut retry row=<i> cut again after <n>: skip`).
 - **A real failure keeps failing**: VBUS not back within the window (a long dip, a gone output), or the protocol silent or wrong
   after a clean comeback (the retry's own verdict stands), or a dip shorter than 200 ms (no cut).
+- **The charger restarts after a cut** (pattern `usb-a-restarting-after-cut`, TOPADRE USB-A): the first handshake of a Legacy unit that
+  follows a cut is not asked before the comeback is `kPostCutSettleMs` (4 s) old (the Baseline holds, at most `kPostCutWaitMs` = 6 s,
+  `[CT] settle after cut age=<ms>ms wait=<ms>ms vbus=<mv>`), and a unit's first row that ends Unsupported / NoHandshake / NoResponse
+  within `kPostCutRetryMs` (8 s) of a comeback is asked once more with nothing recorded for the discarded attempt (`[CT] retry after cut
+  row=<n> age=<ms>ms fail=<n>`), so the family is not judged never-answered on it. A row that met a cut itself stays with the retry above.
+  A detach between units, a new unit after a detach and a new run forget the cut. On a port that cuts every ~7 s the settle leaves the
+  unit's first row ~2 s of clean window: a longer row is the cut's casualty and is retried as above; the period read from the onsets then
+  often reads a multiple (cuts that fall on raised rows leave none). Hardware check pending.
 - **The period** (`Evidence::cut_period_ds`, the median gap between the last eight cut onsets, `[CT] cut period=<ms>ms n=<n>`) is
   recorded once two cuts were seen. The run does not start a row at a scheduled moment after a cut: the 5 V-held steps of the
   protocols the port answers, or does not answer (apart from the raised-target rows described below), are kept inside one clean window instead (`kCutStepBudgetMs` = 5500 ms: a retry starts ~0.15 s after the comeback and the next fall comes

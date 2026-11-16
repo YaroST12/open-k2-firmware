@@ -5733,11 +5733,16 @@ static void test_a_protocol_failure_after_a_clean_comeback_is_a_fail() {
 // restarted (TOPADRE 65 W USB-A, 2026-11-16: AFC "unsupported" 2.7 s after the comeback, the 12 V row skipped as "never answered").
 constexpr uint32_t kScpAfc = ct::bit(A::Scp) | ct::bit(A::Afc);
 static unsigned count_proto(const Fake& f, fc::Proto p) { return unsigned(std::count(f.protocols.begin(), f.protocols.end(), p)); }
-// SCP, then AFC; with cut_it the port cuts its output 100 ms into the AFC unit's Baseline (dark for cut_len_ms), once.
-static void run_scp_afc(Fake& f, ct::Runner& r, bool cut_it) {
+// SCP, then AFC; the port cuts its output once (dark for cut_len_ms): cut_it = 1: 100 ms into the AFC unit's Baseline; cut_it = 2: 100 ms
+// into the Releasing of the last SCP row (the TOPADRE run: the comeback lands before the hand-over to AFC, which keeps the PD-silent attach).
+static void run_scp_afc(Fake& f, ct::Runner& r, int cut_it) {
     CHECK_EQ(r.start(f.caps, {.selected = kScpAfc}, f.in, true), ct::Reason::None);
-    if (cut_it) {
+    if (cut_it == 1) {
         CHECK_EQ(run_until(f, r, [&] { return r.unit() == ct::Unit::Afc && r.state() == ct::State::Baseline; }, 120000), true);
+        f.cut_period_ms = 100000000; f.cut_next_at = f.in.now + 100;
+    } else if (cut_it == 2) {
+        CHECK_EQ(run_until(f, r, [&] { return r.unit() == ct::Unit::Scp && r.state() == ct::State::Releasing &&
+                                              count_unit_verdict(r, ct::Unit::Scp, ct::Verdict::Pending) == 0; }, 120000), true);
         f.cut_period_ms = 100000000; f.cut_next_at = f.in.now + 100;
     }
     f.tick(r, 200000);
@@ -5783,6 +5788,21 @@ static void test_afc_after_a_cut_waits_for_the_restart_and_passes() {
     CHECK_EQ(first_request_ms(f, fc::Proto::Afc) - f.cut_back_at >= ct::kPostCutSettleMs, true);
     CHECK_EQ(count_unit_verdict(r, ct::Unit::Afc, ct::Verdict::Pass) > 0, true);
     CHECK_EQ(count_unit_verdict(r, ct::Unit::Afc, ct::Verdict::Skip), 0u);   // the 12 V row ran
+    expect_same_plan(all_rows(rc), all_rows(r));
+}
+// The TOPADRE order: the cut comes back while the SCP unit's last row releases, the AFC unit follows in the same attach and is asked
+// kPostCutSettleMs after that comeback, not at its own Baseline time (2.1 s on the hardware run).
+static void test_afc_after_a_cut_in_the_scp_release_waits_and_passes() {
+    Fake clean; clean.caps = {}; ct::Runner rc(clean); run_scp_afc(clean, rc, 0);
+    Fake f; f.caps = {}; f.cut_unsupported_ms = 2800; ct::Runner r(f); run_scp_afc(f, r, 2);
+    CHECK_EQ(f.cuts_seen, 1);
+    CHECK_EQ(f.cut_unsupported_hits, 0);
+    CHECK_EQ(count_proto(f, fc::Proto::Afc), count_proto(clean, fc::Proto::Afc));
+    CHECK_EQ(f.cut_back_at > 0, true);
+    CHECK_EQ(first_request_ms(f, fc::Proto::Afc) - f.cut_back_at >= ct::kPostCutSettleMs, true);
+    CHECK_EQ(count_unit_verdict(r, ct::Unit::Scp, ct::Verdict::Fail), 0u);   // the SCP rows were not the cut's casualties
+    CHECK_EQ(count_unit_verdict(r, ct::Unit::Afc, ct::Verdict::Pass) > 0, true);
+    CHECK_EQ(count_unit_verdict(r, ct::Unit::Afc, ct::Verdict::Skip), 0u);
     expect_same_plan(all_rows(rc), all_rows(r));
 }
 // Without a cut nothing waits: the unit starts at the usual Baseline time.
@@ -8258,7 +8278,7 @@ int main() {
     test_usb_a_sag_tail_session_is_not_source_lost(); test_usb_a_sag_tail_waits_for_vbus_to_climb(); test_usb_a_sag_tail_with_dead_or_low_vbus_is_still_lost(); test_session_change_in_baseline_without_a_sag_is_still_lost(); test_usb_a_midrow_session_opens_the_adopt_window(); test_usb_a_sag_dip_under_1v_inside_the_window_waits();
     test_cut_in_the_row_then_a_clean_retry_passes(); test_a_retried_first_scp_row_replans_like_an_unretried_one(); test_a_retried_first_scp_row_keeps_the_rows_a_wide_list_offers(); test_a_retried_first_ufcs_row_replans_like_an_unretried_one(); test_a_retried_first_vooc_family_row_ends_like_an_unretried_one(); test_several_cuts_in_a_row_then_a_clean_retry_passes(); test_every_retry_cut_is_a_skip_not_a_fail(); test_the_retries_are_counted_per_row(); test_a_cut_that_reads_no_response_does_not_skip_the_family(); test_a_loss_that_does_not_come_back_in_the_window_is_a_fail();
     test_a_dip_shorter_than_the_minimum_is_no_cut(); test_a_protocol_failure_after_a_clean_comeback_is_a_fail();
-    test_the_post_cut_decisions(); test_afc_after_a_cut_waits_for_the_restart_and_passes(); test_afc_without_a_cut_does_not_wait(); test_a_silent_first_handshake_after_a_cut_is_asked_once_more(); test_a_silent_charger_after_a_cut_gets_exactly_two_attempts(); test_the_7s_cut_sequence_over_the_5v_steps_of_the_cuktech_run(); test_a_fall_in_a_raised_row_is_no_cut_casualty(); test_a_silent_vooc_family_on_a_7s_cut_port_ends_needs_load(); test_the_10_unit_run_over_every_cut_phase_ends_as_without_cuts();
+    test_the_post_cut_decisions(); test_afc_after_a_cut_waits_for_the_restart_and_passes(); test_afc_after_a_cut_in_the_scp_release_waits_and_passes(); test_afc_without_a_cut_does_not_wait(); test_a_silent_first_handshake_after_a_cut_is_asked_once_more(); test_a_silent_charger_after_a_cut_gets_exactly_two_attempts(); test_the_7s_cut_sequence_over_the_5v_steps_of_the_cuktech_run(); test_a_fall_in_a_raised_row_is_no_cut_casualty(); test_a_silent_vooc_family_on_a_7s_cut_port_ends_needs_load(); test_the_10_unit_run_over_every_cut_phase_ends_as_without_cuts();
     test_a_cut_in_the_first_baseline_waits_for_the_comeback(); test_a_baseline_dip_that_does_not_come_back_still_stops();
     test_custom_unit_list_runs_in_order(); test_pd_unit_attaches_with_a_contract(); test_a_failed_unit_does_not_stop_the_run();
     test_default_unit_order_is_vendor_modes_then_pd_then_legacy(); test_default_order_runs_vendor_modes_before_pd_before_legacy(); test_pd_between_vendor_and_legacy_units(); test_pd_replan_in_the_middle_keeps_the_rows_in_order(); test_consecutive_legacy_units_share_one_attach(); test_legacy_session_that_sees_pd_traffic_is_renewed(); test_silent_ufcs_source_reports_no_response_not_pd_active(); test_legacy_waits_between_units();
