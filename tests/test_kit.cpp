@@ -589,6 +589,64 @@ static void test_kv_and_info() {
     CHECK_EQ(px(100, 70), kBase);
 }
 
+// ---- SegmentedControl ---------------------------------------------------------------------------------------------------------
+static void test_segmented_control() {
+    const char *const items[3] = {"Light", "Medium", "Deep"};
+    constexpr int16_t y = 100, bar = y + kit::kSegLabelH, bar_end = y + kit::kSegH;
+    // The segments tile x6..w-6 with a 2 px gap, whatever the count.
+    for (int n = 2; n <= 4; n++) {
+        int16_t edge = 6;
+        for (int i = 0; i < n; i++) {
+            const kit::SegSpan sp = kit::seg_span(224, n, i);
+            CHECK_EQ(sp.x, i ? edge + 2 : 6);
+            CHECK_EQ(sp.w > 40, 1);
+            edge = sp.x + sp.w;
+        }
+        CHECK_EQ(edge, 218);
+    }
+    // Unfocused, Medium picked: the picked segment is a solid kFocus block with dark text, the others 2 px kRule frames.
+    lcd::fill(kBase);
+    kit::draw_segmented(kSurf, y, "Level", items, 3, 1, false);
+    CHECK_EQ(px(100, y - 1), kBase);                       // nothing above the block
+    CHECK_EQ(px(100, bar_end), kBase);                     // nor below it
+    CHECK_EQ(px(100, y + 1), kBg);                         // the label row's ground
+    CHECK_EQ(ink_in(6, 60, y, y + kit::kSegLabelH, kBg) > 0, 1);   // the dim label
+    const kit::SegSpan s0 = kit::seg_span(224, 3, 0), s1 = kit::seg_span(224, 3, 1), s2 = kit::seg_span(224, 3, 2);
+    CHECK_EQ(px(s1.x, bar), kFocus);                       // picked: filled to its corner
+    CHECK_EQ(px(s1.x + s1.w - 1, bar_end - 1), kFocus);
+    CHECK_EQ(px(s1.x + 3, bar + 3), kFocus);
+    CHECK_EQ(ink_in(s1.x + 2, s1.x + s1.w - 2, bar + 2, bar_end - 2, kFocus) > 0, 1);   // its word, in dark ink
+    {
+        int dark = 0;                                      // the glyph cores are the dark ink (edges blend)
+        for (int yy = bar + 2; yy < bar_end - 2; yy++)
+            for (int xx = s1.x + 2; xx < s1.x + s1.w - 2; xx++) dark += px(xx, yy) == kSpotInk;
+        CHECK_EQ(dark > 0, 1);
+    }
+    for (const kit::SegSpan &o : {s0, s2}) {               // the others: frame, ground inside, normal text
+        CHECK_EQ(px(o.x, bar), kRule);
+        CHECK_EQ(px(o.x + 1, bar + 1), kRule);             // 2 px thick
+        CHECK_EQ(px(o.x + o.w - 1, bar_end - 1), kRule);
+        CHECK_EQ(px(o.x + 3, bar + 3), kBg);
+        CHECK_EQ(ink_in(o.x + 2, o.x + o.w - 2, bar + 2, bar_end - 2, kBg) > 0, 1);
+    }
+    CHECK_EQ(px(s0.x + s0.w + 1, bar + 4), kBg);           // the 2 px gap between segments is ground
+    CHECK_EQ(px(1, y + 1), kBg);                           // no focus bar
+    // Picking another segment moves the fill (and clears the old one).
+    lcd::fill(kBase);
+    kit::draw_segmented(kSurf, y, "Level", items, 3, 2, false);
+    CHECK_EQ(px(s2.x + 3, bar + 3), kFocus);
+    CHECK_EQ(px(s1.x + 3, bar + 3), kBg);
+    // Focused: the row takes the focus look (ground, bar), the unpicked frames turn kFocus.
+    lcd::fill(kBase);
+    kit::draw_segmented(kSurf, y, "Level", items, 3, 0, true);
+    CHECK_EQ(px(100, y + 1), kFocusFill);
+    CHECK_EQ(px(s1.x + 3, bar + 3), kFocusFill);
+    if (kFocusBar) CHECK_EQ(px(1, y + 1), kFocusBar);
+    CHECK_EQ(px(s1.x, bar), kFocus);
+    CHECK_EQ(px(s0.x + 3, bar + 3), kFocus);               // the picked one stays solid
+    CHECK_EQ(px(100, bar_end), kBase);
+}
+
 // ---- wave 2: ResultGrid, PassBandGauge, HeroReadout --------------------------------------------------------------------------
 static void test_result_row() {
     using kit::ResultCell;
@@ -1266,5 +1324,6 @@ int main() {
     test_action_cell();
     test_progress_bar();
     test_kv_and_info();
+    test_segmented_control();
     return test_report("test_kit");
 }

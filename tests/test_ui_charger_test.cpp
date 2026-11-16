@@ -750,7 +750,7 @@ static void test_three_step_header() {
 // part of the line: it is on the Cable step (the ARMED pill) and in the Refuse / Waiting stages.
 static void check_review_spoof(std::string_view text, uint16_t color) {
     char buf[kFitBuf];
-    const int y = 104 + 1 * 22 + kit::row_text_y(22, kSmall.height);   // Review's rows: three at a 22 px pitch from y 104 (Tests, Spoof, Level)
+    const int y = 100 + 1 * 18 + kit::row_text_y(18, kSmall.height);   // Review's table: two rows at an 18 px pitch from y 100 (Tests, Spoof), the Level control under them
     check_text_at(kSmall, y, "Spoof", kDim, kBg, 6);   // the key of the identity row
     check_text_at(kSmall, y, fit_data(kSmall, text, 18 * kSmall.adv, buf), color, kBg, 72);
 }
@@ -1034,8 +1034,8 @@ static void test_review_carries_the_other_port_warning() {
         if (mode == 2) { press(ui, Button::Minus); settle(ui); CHECK_EQ(ui.charger_test_cursor(), 0); }   // the Level row
         CHECK_EQ(g_panel[30 * LCD_WIDTH + 2], kCaution);   // the band's amber, left of the triangle
         check_text_at(kMid, 30, "OTHER PORT FREE", kSpotInk, kCaution, 36);
-        check_text_at(kSmall, 68, "A device on the other port", kText, kBg, 6);
-        check_text_at(kSmall, 86, "can be damaged. Unplug it.", kText, kBg, 6);
+        check_text_at(kSmall, 66, "A device on the other port", kText, kBg, 6);
+        check_text_at(kSmall, 82, "can be damaged. Unplug it.", kText, kBg, 6);
         if (mode == 0) CHECK_EQ(footer_says("Check the other port", kCaution), true);
         if (mode == 1) CHECK_EQ(footer_says("Self-powered: VBUS stays up", kText), true);
         no_operations();
@@ -1231,6 +1231,16 @@ static void test_review_level_row_cycles_and_counts() {
     Ui ui; open(ui); review(ui);
     const unsigned medium = ui.charger_test_view().preview.runnable;
     CHECK_EQ(ui.charger_test_selection() >> 28, 0u);
+    // The Level control: its picked segment (solid kFocus) is the level, whatever the wire value (Light 1, Medium 0, Deep 2).
+    auto picked = [&] {
+        int found = -1;
+        for (int i = 0; i < 3; ++i) {
+            const kit::SegSpan sp = kit::seg_span(224, 3, i);
+            if (g_panel[(136 + kit::kSegLabelH + 3) * LCD_WIDTH + sp.x + 3] == kFocus) { CHECK_EQ(found, -1); found = i; }
+        }
+        return found;
+    };
+    CHECK_EQ(picked(), 1);   // Medium
     press(ui, Button::Minus); settle(ui);
     CHECK_EQ(ui.charger_test_cursor(), 0);
     auto v = ui.charger_test_view();
@@ -1239,7 +1249,9 @@ static void test_review_level_row_cycles_and_counts() {
     CHECK_EQ(ui.charger_test_stage(), 4); CHECK_EQ(ui.charger_test_cursor(), 0);   // OK on Level never starts
     CHECK_EQ(ui.charger_test_selection() >> 28, 0xEu);                             // Deep: both sweeps, level 2
     const unsigned deep = ui.charger_test_view().preview.runnable;
+    CHECK_EQ(picked(), 2);
     press(ui, Button::Ok); settle(ui);
+    CHECK_EQ(picked(), 0);
     CHECK_EQ(ui.charger_test_selection() >> 28, 0x1u);                             // Light
     v = ui.charger_test_view();
     const unsigned light = v.preview.runnable;
@@ -1622,6 +1634,11 @@ static void test_step_label_gallery() {
             uint32_t at = 1100;
             for (int i = 0; i < 60 && ui.painting(); ++i) ui.tick(at += 20);
             shot("review", at);
+            press(ui, Button::Minus, at += 20);   // the cursor on Level: the focus look (README / review renders)
+            for (int i = 0; i < 20 && ui.painting(); ++i) ui.tick(at += 20);
+            shot("review_level", at);
+            press(ui, Button::Plus, at += 20);    // back on START
+            for (int i = 0; i < 20 && ui.painting(); ++i) ui.tick(at += 20);
         }
         start_press(ui, 1300); press(ui, Button::Ok, 1400);
         uint32_t t = 1500;

@@ -2083,11 +2083,21 @@ static_assert(all_fit(kRdOn, kSmallAdvPx, 190), "a Waiting checklist item is wid
 // The Review table: five rows of 26 px from the body top, the key at x6 and the value from x72 (18 cells).
 constexpr kit::KvLayout kKv{kit::kBodyY, kit::kRowH, 6, nullptr, nullptr, 72, 18, Align::Left};
 // Review always carries the other-port warning: the alert band (36 px + its stripe, to y 66), two S16 lines under it, then the
-// three rows (Tests, Spoof, Level at a 22 px pitch) and the 48 px START ticket. The Peak and Power rows were dropped for the room.
-constexpr int16_t kWarnLine1Y = 68, kWarnLine2Y = 86;
-constexpr kit::KvLayout kReviewKv{104, 22, 6, nullptr, nullptr, 72, 18, Align::Left};
-constexpr int16_t kReviewCellY = 172, kReviewCellH = 48;
+// two rows (Tests, Spoof at an 18 px pitch), the Level control (a label row and a segment bar, kit::kSegH = 34 px) and the 46 px
+// START ticket. The Peak and Power rows were dropped for the room; the two warning lines moved to a 16 px pitch and the rows' pitch
+// went from 22 to 18 to make room for the Level control.
+constexpr int16_t kWarnLine1Y = 66, kWarnLine2Y = 82;
+constexpr kit::KvLayout kReviewKv{100, 18, 6, nullptr, nullptr, 72, 18, Align::Left};
+constexpr int16_t kReviewLevelY = 136, kReviewCellY = 174, kReviewCellH = 46;
+static_assert(kReviewLevelY == 100 + 2 * 18 && kReviewLevelY + kit::kSegH + 4 <= kReviewCellY && kReviewCellY + kReviewCellH == kFooterY - 2,
+              "Review: the table, the Level control and START stack above the footer");
 constexpr int kReviewLevelCell = 2;
+// The segments run Light, Medium, Deep (the order OK steps them in); Level's wire values are 0 Medium, 1 Light, 2 Deep.
+constexpr const char *kLevelItems[ct::kLevelCount] = {"Light", "Medium", "Deep"};
+constexpr int level_segment(ct::Level l) { return l == ct::Level::Light ? 0 : l == ct::Level::Medium ? 1 : 2; }
+static_assert(level_segment(ct::next_level(ct::Level::Light)) == 1 && level_segment(ct::next_level(ct::Level::Medium)) == 2 &&
+              level_segment(ct::next_level(ct::Level::Deep)) == 0, "OK steps the picked segment to the right and wraps");
+static_assert(all_fit(kLevelItems, kSmallAdvPx, kit::seg_span(224, ct::kLevelCount, 0).w - 4), "a Level segment is wider than its word");
 // The Detail table: under the verdict band, the value column at x92 (16 cells).
 constexpr kit::KvLayout kDet{60, kit::kRowH, 6, nullptr, nullptr, 92, 16, Align::Left};
 
@@ -2195,11 +2205,29 @@ void put_line(const Surface &c, const Font &f, int16_t x, int16_t y, std::string
     if (!right) for (size_t i = 0; i < pad; ++i) line.put_char(' ');
     gfx_text(c, f, x, y, line.view(), color, kBg);
 }
-// The hero reading: 2 decimals below 10 V, 1 above; an unknown reading is two dashes.
-void hero_text(StrBuf<12> &b, int32_t mv) {
+// The hero reading: 2 decimals below 10 V, 1 above; an unknown reading is two dashes. A sweep row's (`fine`) is every mV, so its
+// six cells keep the point in the third whether the volts have one digit or two (" 5.000", "20.050").
+void hero_text(StrBuf<12> &b, int32_t mv, bool fine) {
     if (mv < 0) { b.put("--"); return; }
-    b.put_fixed(mv, mv < 10000 ? 2 : 1);
+    b.put_fixed(mv, fine ? 3 : mv < 10000 ? 2 : 1);
 }
+// Running's two stackings below the progress bar (y44..46). Plain: family y52, name y68 (x6), the 4-cell hero beside them
+// (y54..83), the target line y88, the gauge strip y98, a rule, the grid from y114. A sweep row (user decision 2026-11-16)
+// has a 6-cell hero that would meet the name, so it restacks: name y48 (the family label right of it), hero y67..96, the
+// set / err line y98 (font 16), the gauge y115, the rule, the grid from y131 (17 px less of it). A switch wipes the body.
+struct RunLayout {
+    int16_t name_y, hero_y, gauge_y, rule_y, grid_y;
+    uint8_t hero_chars;
+};
+constexpr RunLayout kPlainRun{68, 54, 98, 112, 114, 4};
+constexpr RunLayout kSweepRun{48, 67, 115, 129, 131, 6};
+constexpr int16_t kRunBelowBar = 47, kRunHeroRight = 196, kSweepLineY = 98, kSweepFamX = 122;
+constexpr int kBigAscent = 30, kSmallH = 16;   // font_48's ascent (no descent), font_16's cell height
+static_assert(kSweepRun.name_y >= kRunBelowBar && kSweepRun.name_y + kSmallH <= kSweepRun.hero_y, "sweep: name above the hero");
+static_assert(kSweepRun.hero_y + kBigAscent <= kSweepLineY && kSweepLineY + kSmallH <= kSweepRun.gauge_y, "sweep: hero, line, gauge in order");
+static_assert(kSweepRun.gauge_y + kit::kPassBandH <= kSweepRun.rule_y && kSweepRun.rule_y + 2 <= kSweepRun.grid_y, "sweep: gauge, rule, grid in order");
+static_assert(kRunHeroRight + 3 + 12 <= 224, "the hero's unit fits the content width");
+static_assert(kRunHeroRight - 6 * 24 >= 6, "the 6-cell hero fits the content width");
 }  // namespace
 
 void ChargerTestPage::paint_review() {
@@ -2239,15 +2267,15 @@ void ChargerTestPage::paint_review() {
     }
     if (!kv(1, "Spoof", cb.view(), kText)) return;
 
-    // The Level row (the one row the cursor can stand on besides START; OK cycles Light -> Medium -> Deep).
+    // The Level control (the one thing the cursor can stand on besides START; OK steps Light -> Medium -> Deep -> Light).
     {
         const bool focus = s_.selection_ == kLevelRow;
-        const char *lv = ct::name(s_.options_.level);
-        const uint32_t h = mix_u32(mix(mix_init(), lv), focus ? 7u : 3u) | 1u;
+        const int lv = level_segment(s_.options_.level);
+        const uint32_t h = mix_u32(mix_u32(mix_init(), static_cast<uint32_t>(lv)), focus ? 7u : 3u) | 1u;
         if (h != cell_sig_[kReviewLevelCell]) {
-            if (pbg && !pbg->admit(static_cast<int>(c.w) * kReviewKv.pitch, true)) return;
+            if (pbg && !pbg->admit(static_cast<int>(c.w) * kit::kSegH, true)) return;
             cell_sig_[kReviewLevelCell] = h;
-            kit::kv_row_sel(c, kReviewKv, kit::kv_row_y(kReviewKv, kReviewLevelCell), "Level", lv, kText, focus);
+            kit::draw_segmented(c, kReviewLevelY, "Level", kLevelItems, ct::kLevelCount, lv, focus);
         }
     }
 
@@ -2264,8 +2292,23 @@ void ChargerTestPage::paint_review() {
 
 void ChargerTestPage::paint_hero(bool full, int16_t x, int16_t y, uint8_t chars, int32_t vbus_mv, uint16_t color) {
     StrBuf<12> t;
-    hero_text(t, vbus_mv);
+    hero_text(t, vbus_mv, chars > 5);
     kit::draw_hero(ctx_.content, hero_, kit::HeroSpec{&kBig, x, y, chars, color, "V"}, t.view(), full);
+}
+
+void ChargerTestPage::lay_running(bool sweeping, bool wipe) {
+    const Surface &c = ctx_.content;
+    const RunLayout &L = sweeping ? kSweepRun : kPlainRun;
+    if (wipe) gfx_fill(c, 0, kRunBelowBar, c.w, kFooterY - kRunBelowBar, kBg);
+    else gfx_fill(c, 0, L.gauge_y, c.w, kit::kPassBandH, kBg);
+    gfx_fill(c, 0, L.rule_y, c.w, 2, kRule);
+    grid_.init(c, L.grid_y, kFooterY, &ChargerTestPage::result_row_fn, this);   // every row dirty again
+    for (int i = 2; i <= 6; ++i) cell_sig_[i] = 0;   // family, name, target, gauge strip, set / err line: they paint again
+    needle_px_ = mark_px_ = -1;
+    hero_color_ = 0;   // the next hero paints whole, at once
+    hero_ms_ = 0;
+    grid_key_ = 0;     // and the step outline is rebuilt
+    sweep_laid_ = sweeping;
 }
 
 void ChargerTestPage::paint_waiting(uint32_t now) {
@@ -2290,7 +2333,7 @@ void ChargerTestPage::paint_waiting(uint32_t now) {
     }
     const uint16_t color = vbus >= pd::kStartVbusMv ? kVolt : vbus > 500 ? kCaution : kFaint;
     StrBuf<12> ht;
-    hero_text(ht, vbus);
+    hero_text(ht, vbus, false);
     const uint32_t hsig = mix_u32(mix(mix_init(), ht.view()), color) | 1u;
     if (hsig != hero_sig_) {
         if (!bg.admit(color != hero_color_ ? kHeroPx : 2000)) return;
@@ -2373,20 +2416,21 @@ void ChargerTestPage::paint_running(uint32_t now) {
     Budget bg{pbg, flight ? kFlightPx : (1 << 30)};
     const size_t at = steps.empty() ? 0 : std::min(s_.runner_.index(), steps.size() - 1);
     const ct::Step *st = steps.empty() ? nullptr : &steps[at];
-    if (!laid_) {
-        if (!bg.admit(c.w * (kit::kPassBandH + 2))) return;
-        prog_.init(c, 6, 44, 212);
-        gfx_fill(c, 0, 98, c.w, kit::kPassBandH, kBg);
-        gfx_fill(c, 0, 112, c.w, 2, kRule);
-        grid_.init(c, 114, kFooterY, &ChargerTestPage::result_row_fn, this);
+    // A deep-sweep row (one per APDO) has no single target: its strip shows the swept range as a dotted band, the setpoint as a
+    // marker that moves point by point, and the needle; the hero reads to the mV with the setpoint and error under it. Every other
+    // row keeps the pass band. The two rows stack the view differently (RunLayout): a switch lays the body out again.
+    const ctsweep::Live live = s_.runner_.sweep_live();
+    const bool sweeping = live.active;
+    const RunLayout &L = sweeping ? kSweepRun : kPlainRun;
+    if (!laid_ || sweeping != sweep_laid_) {
+        const bool wipe = sweeping != sweep_laid_;
+        if (!bg.admit(wipe ? c.w * (kFooterY - kRunBelowBar) : c.w * (kit::kPassBandH + 2))) return;
+        if (!laid_) prog_.init(c, 6, 44, 212);
+        lay_running(sweeping, wipe);
         laid_ = true;
     }
     const int32_t vbus = ctx_.pm_online ? ctx_.pm.vbus_mv : -1;
     const int32_t target = st ? st->mv : 0;
-    // A deep-sweep row (one per APDO) has no single target: its strip shows the swept range as a dotted band, the setpoint as a
-    // marker that moves point by point, and the needle; its text line reads the last point. Every other row keeps the pass band.
-    const ctsweep::Live live = s_.runner_.sweep_live();
-    const bool sweeping = live.active;
     const int32_t full = gauge_full_mv(steps, sweeping ? live.hi_mv : 0);
     const int32_t vbus_g = std::max<int32_t>(vbus, 0);
     // 1. the gauge strip, once per target (a new step, or the sweep range): the whole strip, the needle drawn at the live reading
@@ -2395,18 +2439,18 @@ void ChargerTestPage::paint_running(uint32_t now) {
         cell_sig_[5] = strip_sig;
         needle_px_ = mark_px_ = -1;
         if (sweeping) {
-            const kit::RangePos p = kit::draw_range_gauge(c, 6, 98, 210, vbus_g, live.set_mv, live.lo_mv, live.hi_mv, full);
+            const kit::RangePos p = kit::draw_range_gauge(c, 6, L.gauge_y, 210, vbus_g, live.set_mv, live.lo_mv, live.hi_mv, full);
             needle_px_ = p.needle; mark_px_ = p.mark;
         } else if (target > 0) {
-            needle_px_ = kit::draw_pass_band(c, 6, 98, 210, vbus_g, target, full, -1);
+            needle_px_ = kit::draw_pass_band(c, 6, L.gauge_y, 210, vbus_g, target, full, -1);
         } else {
-            gfx_fill(c, 0, 98, c.w, kit::kPassBandH, kBg);
+            gfx_fill(c, 0, L.gauge_y, c.w, kit::kPassBandH, kBg);
         }
     }
     // 1a. a sweep row's marker follows the setpoint: the next point's Request is out, so the marker moves on without waiting for the hero
     if (sweeping && needle_px_ >= 0 && mark_px_ >= 0 &&
         kit::range_geom(6, 210, vbus_g, live.set_mv, live.lo_mv, live.hi_mv, full).mark != mark_px_ && bg.admit(kRangePx)) {
-        const kit::RangePos p = kit::draw_range_gauge(c, 6, 98, 210, vbus_g, live.set_mv, live.lo_mv, live.hi_mv, full, {static_cast<int16_t>(mark_px_), static_cast<int16_t>(needle_px_)});
+        const kit::RangePos p = kit::draw_range_gauge(c, 6, L.gauge_y, 210, vbus_g, live.set_mv, live.lo_mv, live.hi_mv, full, {static_cast<int16_t>(mark_px_), static_cast<int16_t>(needle_px_)});
         needle_px_ = p.needle; mark_px_ = p.mark;
     }
     // 1b. the step outline, in the same tick as the gauge band: the layout follows the runner now, and the grid moves the
@@ -2450,16 +2494,32 @@ void ChargerTestPage::paint_running(uint32_t now) {
         e.put_u32(secs % 60);
         put_line(c, kSmall, 170, 25, e.view(), kDim, 6, cell_sig_[1], true, false, &bg);
     }
-    // 3. the live VBUS and its needle: every update between steps, about 4 Hz while a step is in flight (yields refreshes while grid rows are pending)
-    if ((!flight || now - hero_ms_ >= kHeroMs) && !(pbg && grid_.pending() && hero_color_ == kVolt) && bg.admit(kHeroPx + (needle_px_ >= 0 ? kNeedlePx : 0))) {
+    // 3. the live VBUS and its needle: every update between steps, about 4 Hz while a step is in flight (yields refreshes while grid rows are pending).
+    // A sweep row's hero reads to the mV and its line (setpoint, signed error of the same reading) repaints with it: twice a second.
+    if ((!flight || now - hero_ms_ >= (sweeping ? kSweepHeroMs : kHeroMs)) && !(pbg && grid_.pending() && hero_color_ == kVolt) &&
+        bg.admit((sweeping ? kSweepHeroPx + kSweepLinePx : kHeroPx) + (needle_px_ >= 0 ? kNeedlePx : 0))) {
         hero_ms_ = now;
-        paint_hero(hero_color_ != kVolt, 196, 54, 4, vbus, kVolt);
+        paint_hero(hero_color_ != kVolt, kRunHeroRight, L.hero_y, L.hero_chars, vbus, kVolt);
         hero_color_ = kVolt;
+        if (sweeping) {
+            // "set 20.000  err +48 mV": the setpoint whose Request is out, the reading's error against it (no deadband; a sign here
+            // is an error, not a flow direction). Caution only when the last recorded point fell outside the sweep's tolerance.
+            StrBuf<32> sl;
+            sl.put("set ").put_fixed(live.set_mv, 3).put("  err ");
+            if (vbus < 0) {
+                sl.put("--");
+            } else {
+                const int32_t err = vbus - static_cast<int32_t>(live.set_mv);
+                sl.put_char(err < 0 ? '-' : '+').put_u32(static_cast<uint32_t>(err < 0 ? -err : err)).put(" mV");
+            }
+            const bool bad = live.n > 0 && ctsweep::out_of_band(live.last_set_mv(), live.last_measured_mv());
+            put_line(c, kSmall, 6, kSweepLineY, sl.view(), bad ? kCaution : kText, kSweepLineChars, cell_sig_[6]);
+        }
         if (sweeping && needle_px_ >= 0 && mark_px_ >= 0) {
-            const kit::RangePos p = kit::draw_range_gauge(c, 6, 98, 210, vbus_g, live.set_mv, live.lo_mv, live.hi_mv, full, {static_cast<int16_t>(mark_px_), static_cast<int16_t>(needle_px_)});
+            const kit::RangePos p = kit::draw_range_gauge(c, 6, L.gauge_y, 210, vbus_g, live.set_mv, live.lo_mv, live.hi_mv, full, {static_cast<int16_t>(mark_px_), static_cast<int16_t>(needle_px_)});
             needle_px_ = p.needle; mark_px_ = p.mark;
         } else if (target > 0 && needle_px_ >= 0) {
-            needle_px_ = kit::draw_pass_band(c, 6, 98, 210, vbus_g, target, full, needle_px_);
+            needle_px_ = kit::draw_pass_band(c, 6, L.gauge_y, 210, vbus_g, target, full, needle_px_);
         }
     }
     // 4. the step header: counter, progress bar, protocol, step name, target. A step change is visible within a tick or two.
@@ -2471,33 +2531,14 @@ void ChargerTestPage::paint_running(uint32_t now) {
         const int done = static_cast<int>(all.pass + all.fail + all.skip + all.caution), total = static_cast<int>(steps.size());
         if (bg.admit(prog_.cost(done, total))) prog_.set(done, total);
         const int fam = st ? family(*st) : -1;
-        put_line(c, kLabelFont, 6, 52, fam >= 0 ? kFamilyNames[fam] : "", kDim, 16, cell_sig_[2], false, false, &bg);
+        // the family label (dim, 12 px) above the name; a sweep row's name moves up and the label goes to its right, baseline to baseline
+        const char *const fam_name = fam >= 0 ? kFamilyNames[fam] : "";
+        if (sweeping) put_line(c, kLabelFont, kSweepFamX, L.name_y + kSmall.ascent - kLabelFont.ascent, fam_name, kDim, 16, cell_sig_[2], true, false, &bg);
+        else put_line(c, kLabelFont, 6, 52, fam_name, kDim, 16, cell_sig_[2], false, false, &bg);
         StrBuf<32> nm;
         if (st) nm.put(step_label::label(*st, at > 0 ? &steps[at - 1] : nullptr).view());
-        put_line(c, kSmall, 6, 68, nm.view(), kText, 11, cell_sig_[3], false, true, &bg);
-        if (sweeping) {
-            // a deep-sweep row: the last recorded point ("req 12.30V  got 12.15V  err-150mV"), caution outside the sweep's tolerance.
-            // The line sits at y86 (rows 86..97) so its cell stays clear of the strip; the target line is repainted after the sweep.
-            StrBuf<ctsweep::kPointTextMax> pt;
-            uint16_t col = kDim;
-            if (live.n > 0) {
-                const unsigned set = live.last_set_mv();
-                const int got = live.last_measured_mv();
-                char buf[ctsweep::kPointTextMax];
-                const size_t len = ctsweep::format_point(set, got, buf);
-                pt.put(std::string_view(buf, len));
-                if (ctsweep::out_of_band(set, got)) col = kCaution;
-            } else {
-                pt.put("no point yet");
-            }
-            put_line(c, kLabelFont, 6, 86, pt.view(), col, kPointChars, cell_sig_[6], false, false, &bg);
-            cell_sig_[4] = 0;
-        } else if (cell_sig_[6] && bg.admit(c.w * 12)) {
-            gfx_fill(c, 0, 86, c.w, 12, kBg);   // the sweep line's rows, before the target line paints over rows 88..99
-            cell_sig_[6] = 0;
-            cell_sig_[4] = 0;
-        }
-        if (!sweeping && !cell_sig_[6]) {
+        put_line(c, kSmall, 6, L.name_y, nm.view(), kText, 11, cell_sig_[3], false, true, &bg);
+        if (!sweeping) {
             StrBuf<16> tg;
             if (st && st->mv) { tg.put("target "); put_volts_trim(tg, st->mv); tg.put_char('V'); }
             put_line(c, kLabelFont, 6, 88, tg.view(), kDim, 16, cell_sig_[4], false, false, &bg);

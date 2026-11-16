@@ -289,6 +289,24 @@ void kv_row(const Surface &s, const KvLayout &l, int16_t y, std::string_view key
 void kv_row_sel(const Surface &s, const KvLayout &l, int16_t y, std::string_view key, std::string_view value, uint16_t value_color,
                 bool focused K2_TRUNC_DECL);
 
+// ---- SegmentedControl ----------------------------------------------------------------------------------------------------
+// A choice that is plainly a control: a dim label row (S12) and under it a full-width bar of n equal segments (S16 words), one
+// picked. The picked segment is a solid kFocus block with dark ink; the others are 2 px frames (kRule, kFocus when the control
+// holds the cursor) with the normal ink. Focused, the whole block takes the RowList focus look (kFocusFill ground, the 3 px
+// kFocusBar when the theme has one). OK steps to the next segment (the page's job); a stateless painter like kv_row_sel.
+// The frame is 2 px and painted after the word, so a landscape mapping that drops rows never opens it.
+constexpr int16_t kSegLabelH = 14, kSegBarH = 20, kSegH = kSegLabelH + kSegBarH;   // label row, segment bar, the block
+constexpr int kSegMax = 4;
+struct SegSpan { int16_t x, w; };
+// Segment i of n across a surface w px wide: x6 .. w-6, 2 px between neighbours (pure).
+constexpr SegSpan seg_span(int16_t w, int n, int i) {
+    const int span = w - 12;
+    const int l = 6 + span * i / n + (i ? 1 : 0), r = 6 + span * (i + 1) / n - (i < n - 1 ? 1 : 0);
+    return SegSpan{static_cast<int16_t>(l), static_cast<int16_t>(r - l)};
+}
+void draw_segmented(const Surface &s, int16_t y, std::string_view label, const char *const *items, int n, int picked,
+                    bool focused K2_TRUNC_DECL);
+
 // ---- AlertBand -----------------------------------------------------------------------------------------------------------
 // Full-width band, kCaution or kError fill: a 20 px black triangle and the word in S24 (black ink). Short lines below it
 // are the page's (S16 on kBg), choices below those are a RowList.
