@@ -287,6 +287,8 @@ COLD_CXX_SRCS = $(filter-out $(HOT_SRC_FILES) $(FONT_SRCS) $(SRC_DIR)/battery/ba
                 $(SRC_DIR)/drivers/adc_calc.cpp $(SRC_DIR)/drivers/power_calc.cpp $(SRC_DIR)/fastcharge/fastcharge_classify.cpp,$(CXX_SRCS))
 COLD_OBJS = $(patsubst $(SRC_DIR)/%.cpp,$(BUILD_DIR)/%.o,$(COLD_CXX_SRCS))
 $(COLD_OBJS): CFLAGS += $(COLD_SIZE_FLAGS)
+# The bundled filesystem and QR encoder are cold too (-224 B); the USB stack is left alone (-16 B more is not worth it).
+$(LFS_OBJS) $(QR_OBJS): CFLAGS += $(COLD_SIZE_FLAGS)
 
 DOCKER_IMG = open-k2-builder:latest
 
@@ -323,7 +325,7 @@ $(LOGDB_HDR): $(CXX_SRCS) $(wildcard $(INC_DIR)/*.hpp $(INC_DIR)/k2/*.hpp $(INC_
 # and linker setting (tools, CFLAGS, CXXFLAGS, LDFLAGS, -Werror, LTO); any flag edit or K2_WERROR /
 # EXTRA_*FLAGS change gives a new stamp, which deletes the old one and rebuilds and relinks everything.
 # Defined after the last global flag edit above; target-specific flags (version.o) are not part of it.
-CFG_FLAGS := $(CC) | $(CXX) | $(CFLAGS) | $(CXXFLAGS) | $(LDFLAGS) | $(OWN_WERROR) | $(LTO) | $(NOLTO_OBJS) | $(HOT_MATH_O2_OBJS) | $(HOT_MATH_O3_OBJS) | $(COLD_SIZE_FLAGS) | $(COLD_OBJS)
+CFG_FLAGS := $(CC) | $(CXX) | $(CFLAGS) | $(CXXFLAGS) | $(LDFLAGS) | $(OWN_WERROR) | $(LTO) | $(NOLTO_OBJS) | $(HOT_MATH_O2_OBJS) | $(HOT_MATH_O3_OBJS) | $(COLD_SIZE_FLAGS) | $(COLD_OBJS) | $(LFS_OBJS) | $(QR_OBJS)
 CFG_STAMP := $(BUILD_DIR)/.cfg-$(word 1,$(shell printf '%s' '$(subst ','"'"',$(CFG_FLAGS))' | md5sum))
 # A missing stamp must rebuild (.SECONDARY would otherwise treat it as an intermediate and skip it).
 .NOTINTERMEDIATE: $(CFG_STAMP)
