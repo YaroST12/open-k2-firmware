@@ -127,7 +127,7 @@
 //                                    after the wait - shows in the view: stage refuse, or review with the run id unchanged and
 //                                    the metadata reason). Busy (no payload) while a run, a wait, a resume or an earlier
 //                                    remote START holds the session. Never arms the lease: the run is the device's own.
-//                                    SPEC, req 6 off(1): the PD spec section of the run in hand (the Deep run's last stage, K2_PDSPEC
+//                                    SPEC, req 6 off(1): the PD spec section of the run in hand (the Deep run's PD spec stage, K2_PDSPEC
 //                                    builds): the result in the form of the journal's record (end(1) why(1) flags(1), then per
 //                                    check, in the grid's order, code(1) fails(1) value(2 LE); 3 + 4 x 27 = 111 bytes) from byte
 //                                    off. rsp run_id(4) total(1) off(1) n(1) data(n), n <= 48. total 0 = the run has no spec

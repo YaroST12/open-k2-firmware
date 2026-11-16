@@ -1193,7 +1193,7 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
   conformance pass: fixed-level pairs up and down, PPS 20 mV steps, PPS and EPR keep-alive timeouts, Hard Reset and detach
   recovery, 21 checks judged against named spec limits, pass / fail / skip and a penalty score (0 = ideal); remote 0x5A,
   `k2_remote pd-spec`, `tools/pd_spec.py`. The polite part (Transitions, PPS / AVS, source reset: 27 checks) also runs as the
-  last stage of a Deep charger test and fills a "PD spec" section of its results grid (k2/spec-in-deep, built only, host-tested;
+  stage of a Deep charger test (right after its PD unit) and fills a "PD spec" section of its results grid (k2/spec-in-deep, built only, host-tested;
   the Tools page is gone). Validate that on hardware with a Deep run (`ct_start.py --level deep`): the section appears, VBUS ends
   at 5 V, no Hard Reset in the Black Box. Validate
   (hardware, output empty, K2 powered from the PC, a PD charger with PPS on the bottom port, active sink via

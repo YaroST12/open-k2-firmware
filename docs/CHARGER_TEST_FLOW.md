@@ -727,7 +727,7 @@ pseudo-row, `Changes` (`N changed`), follows the units when the run saw the sour
 
 ### PD spec section (Deep run, K2_PDSPEC build)
 
-A Deep run ends with one more stage, `State::Spec`: the pdspec engine (`include/k2/pdspec/`) runs on the live PD link, Transitions
+A Deep run has one more stage, `State::Spec`, right after its Pd unit (the contract released to a settled 5 V and the charger asked who it is, before the unit's detach): the pdspec engine (`include/k2/pdspec/`) runs on the live PD link, Transitions
 and PPS / AVS families only (mask 0x03), plus the Source reset observer. It is the polite part of the standalone PD Spec Check
 (`docs/PD_SPEC_CHECK.md`, "Deep run"): no keep-alive silence, no Hard Reset, no detach, nothing above what the charger advertised.
 The stage is planned only for a Deep level with the full Pd unit in the plan, on a build that links the engine and with `Options::spec` on (`spec_planned`); Review lists it as a step and the
@@ -736,8 +736,10 @@ ended hard); a lost link ends it as a fault. The default image has no spec stage
 
 The grid gains a section after the units: 27 VerdictCells (`specsec::kOrder`, labels in `spec_text.hpp`, at most 8 characters in
 the 52 px label strip) in the ordinary rows, a 2 px rule above the PPS block, the AVS block and the observer. A cell shows the worst value (or, for a skipped check, the
-reason, struck out); OK on a cell opens `SpecDetail`: the verdict band,
-then Worst, Limit, Count, Fails, At and Penalty. The journal keeps the section (`Type::Spec`, journal format 3); the report card
+reason, struck out); OK on a cell opens `SpecDetail`: a KvTable of Verdict,
+Worst, Limit, Count, Fails, At and Penalty. A cell keeps only its verdict, fail count and worst value, so Limit, Count and At
+come from the engine's aggregate while it still holds the same run (the live run); after a journal restore or another pdspec run
+they read a dim "-" and the Worst value and the verdict carry the page. The journal keeps the section (`Type::Spec`, journal format 3); the report card
 does not. Remote `0x0B [6, off]` reads it; `ct_start.py` and the web grid (`ctgrid.js`) show it as its own section.
 `result_layout` turns the run's steps into rows and tokens (`build`; the on-device grid has no header rows, a skip tag
 glued to a token is not drawn), `wrap` fits them to the cell area (`Metrics{adv, pad, gap, avail, mark, max_groups, cells}`:

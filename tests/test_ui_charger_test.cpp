@@ -1488,6 +1488,8 @@ static void test_the_results_grid_carries_the_pdspec_section() {
         if (row == units + 12) dump_screen("spec_results_mid");
         press(ui, Button::Ok, t); ui.tick(t += 100); calm();
         CHECK_EQ(ui.charger_test_stage(), 15);
+        if (row == units) dump_screen("spec_detail_pass");        // K2_DUMP: value, limit and verdict of a passing and a failing check
+        if (row == units + 1) dump_screen("spec_detail_fail");
         press(ui, Button::Back, t); ui.tick(t += 100); calm();
         CHECK_EQ(ui.charger_test_stage(), 6);
     }

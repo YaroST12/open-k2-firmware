@@ -14,7 +14,7 @@ Source of truth: `include/k2/pdspec/` (`plan.hpp` the levels and the walk, `anal
 state machine over an `Env` seam, `result.hpp` the checks, limits, weights and the result blob), the limits in
 `include/k2/pd/pd_spec_timing.hpp`, the session glue `include/k2/ui/pd_spec_session.hpp` + `src/ui/ui_pdspec.cpp`, the Deep charger-test section
 `include/k2/chargertest/spec_section.hpp`, the host side `tools/pd_spec.py`, `tools/pdspec_blob.py` and `k2_remote pd-spec`. There is no
-spec-check page on the K2 any more (removed 2026-11-16): the checks run as the last stage of a Deep charger test ("Deep run" below).
+spec-check page on the K2 any more (removed 2026-11-16): the checks run as a stage of a Deep charger test, right after its PD unit ("Deep run" below).
 
 ## What it is and is not
 
@@ -253,7 +253,7 @@ run is unchanged). The full six-family run, with the keep-alive, Hard Reset and 
 
 ### Deep run
 
-Light, Medium and Deep stay the three levels. A Deep run, after its units, runs the engine once more (`State::Spec` in the charger-test
+Light, Medium and Deep stay the three levels. A Deep run runs the engine once more, right after its PD unit (its contract back at a settled 5 V, the charger asked who it is, before the unit's detach; `State::Spec` in the charger-test
 `Runner`, `Env::spec_start / spec_stop / spec_collect / spec_done`; the session glue is `ChargerTestSession` in
 `src/ui/ui_charger_test.cpp`, which drives `PdSpecSession::start_in_test()`). The Review page of a Deep run names the stage and counts it
 in the plan's steps; the Running footer reads "PD spec ..." while it goes.
@@ -271,8 +271,8 @@ It is a polite, no-load conformance run: nothing in it lies to the charger or as
 - **Record:** the journal keeps it (`Type::Spec`, journal format 3, `/jr/sp.rec`, written once when the stage ends). The report card
   does not carry the cells. The remote reads the section with `0x0B [6, off]` (`encode_charger_test_spec`); `ct_start.py` and the `k2_remote` charger-test
   export carry it in their summary and files; the web charger-test grid draws it (`tools/web/ctgrid.js`).
-- **Owner:** the stage holds the session while it runs, so `BusyWhy::PdSpec` (12) can still appear on the wire; the dead-man lease
-  leaves it alone.
+- **Owner:** while the stage runs the charger test is the owner (`BusyWhy::TestRunning`, which wins over `BusyWhy::PdSpec`); `PdSpecSession`
+  stays out of the way of the standalone owner checks. `BusyWhy::PdSpec` (12) is the standalone run's.
 
 While a standalone run (the remote `pd-spec start`) goes on, any other page shows a one-line footer ("PD Spec: Transitions 12/56", "PD Spec: PPS/AVS 3/16"), and the session block names the owner
 (`BusyWhy::PdSpec`, 12; `pd-spec` in `k2_remote` and the web page). The dead-man lease leaves a run alone (`Ui::run_busy`): a host
