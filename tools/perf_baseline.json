@@ -1,9 +1,9 @@
 {
   "status": "seeded",
-  "version": "1.0.1-126-9ca0dd51",
+  "version": "1.0.2-155-62893311",
   "hot": 1,
   "runs": 5,
-  "taken": "2026-11-14",
+  "taken": "2026-11-16",
   "tolerance_default": {
     "pct": 2.0,
     "min_cycles": 50
@@ -11,79 +11,99 @@
   "note": "per-check minimum cycles of the default build; entries with `tol` override the default tolerance (twice the spread seen over the runs). Refresh: make perf-baseline (needs the K2 on this build).",
   "checks": {
     "scale_div": {
-      "cyc": 59528,
+      "cyc": 61192,
       "zw": 1
     },
     "adc_calc": {
-      "cyc": 41415,
+      "cyc": 41413,
       "zw": 1
     },
     "power_calc": {
-      "cyc": 30129,
+      "cyc": 30253,
       "zw": 1
     },
     "math_opt": {
-      "cyc": 13353,
+      "cyc": 13601,
       "zw": 1
     },
     "readout_fmt": {
-      "cyc": 17454,
+      "cyc": 17501,
       "zw": 1
     },
     "fpu_sqrt": {
-      "cyc": 3229,
+      "cyc": 3227,
       "zw": 1
     },
     "one_euro": {
-      "cyc": 14828,
+      "cyc": 14826,
       "zw": 1
     },
     "blend565": {
-      "cyc": 15116,
+      "cyc": 15114,
       "zw": 1
     },
     "text_aa": {
-      "cyc": 847200,
+      "cyc": 847151,
       "zw": 1
     },
     "text_big": {
-      "cyc": 805137,
+      "cyc": 805314,
       "zw": 1
     },
     "gfx_fill": {
-      "cyc": 379343,
+      "cyc": 379866,
       "zw": 1
     },
     "mem_ops": {
-      "cyc": 340477,
+      "cyc": 340475,
       "zw": 1
     },
     "fmt_line": {
-      "cyc": 94427,
+      "cyc": 93263,
       "zw": 1
     },
     "pd_codec": {
-      "cyc": 53464,
+      "cyc": 52697,
       "zw": 1
     },
     "pd_sink": {
-      "cyc": 30880,
+      "cyc": 30849,
       "zw": 1
     },
     "pdtrace_ring": {
-      "cyc": 81933,
+      "cyc": 82311,
       "zw": 1
     },
+    "qr_encode": {
+      "cyc": 1426407,
+      "zw": 1
+    },
+    "lz_pack": {
+      "cyc": 32139,
+      "zw": 1
+    },
+    "sweep_sum": {
+      "cyc": 33026,
+      "zw": 1
+    },
+    "rd_fast": {
+      "cyc": 41084,
+      "zw": 1
+    },
+    "rd_slow": {
+      "cyc": 66940,
+      "zw": 0
+    },
     "tu_fifo": {
-      "cyc": 20910,
+      "cyc": 20908,
       "zw": 1
     },
     "ws_fast": {
-      "cyc": 41053,
+      "cyc": 41051,
       "zw": 1
     },
     "ws_slow": {
-      "cyc": 136084,
+      "cyc": 136082,
       "zw": 0
     }
   }
