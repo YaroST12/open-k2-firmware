@@ -166,16 +166,28 @@ size_t encode_charger_test(std::span<uint8_t> out, const ChargerTestSnapshot& s,
     return w.size();
 }
 
-size_t encode_charger_test_spec(std::span<uint8_t> out, const ChargerTestSnapshot& s, uint8_t off) {
+size_t charger_test_spec_total(const ChargerTestSnapshot& s, uint8_t form) {
+    if (!s.evidence.spec.shown()) return 0;
+    return form == kChargerTestSpecDetailReq ? specsec::kDetailBytes : specsec::kWireBytes;
+}
+
+size_t encode_charger_test_spec(std::span<uint8_t> out, const ChargerTestSnapshot& s, uint8_t form, uint8_t off) {
     if (out.size() < kCtSpecHeader) return 0;
-    std::array<uint8_t, specsec::kWireBytes> wire{};
-    const bool shown = s.evidence.spec.shown();
-    if (shown) specsec::to_wire(s.evidence.spec, wire);
-    const size_t total = shown ? wire.size() : 0;
+    const size_t total = charger_test_spec_total(s, form);
     const size_t n = off < total ? std::min({total - off, kCtSpecChunk, out.size() - kCtSpecHeader}) : 0;
     Writer w(out);
     w.u32(s.run_id); w.u8(static_cast<uint8_t>(total)); w.u8(off); w.u8(static_cast<uint8_t>(n));
-    for (size_t i = 0; i < n; ++i) w.u8(wire[off + i]);
+    if (n == 0) return w.size();
+    // One of the two wire forms (they are never both built: no second array on the stack).
+    if (form == kChargerTestSpecDetailReq) {
+        std::array<uint8_t, specsec::kDetailBytes> wire{};
+        specsec::to_detail_wire(s.evidence.spec, wire);
+        for (size_t i = 0; i < n; ++i) w.u8(wire[off + i]);
+    } else {
+        std::array<uint8_t, specsec::kWireBytes> wire{};
+        specsec::to_wire(s.evidence.spec, wire);
+        for (size_t i = 0; i < n; ++i) w.u8(wire[off + i]);
+    }
     return w.size();
 }
 

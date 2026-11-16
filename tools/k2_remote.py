@@ -1693,15 +1693,15 @@ class ResultsChanged(FrameError):
 
 
 CT_SPEC_REQ, CT_SPEC_HEADER = 6, 7   # 0x0B req [6, off]: run_id u32, total u8, off u8, n u8, then n bytes (kChargerTestSpecReq)
+CT_SPEC_DETAIL_REQ = 7                # 0x0B req [7, off]: the same chunks of the detail form (kChargerTestSpecDetailReq)
 
 
-def read_charger_spec(link, run_id):
-    """The PD spec section of a Deep run (0x0B [6, off], 48-byte chunks of specsec::to_wire), decoded; None when the run has no
-    section (total 0: not a Deep run, or the stage did not begin). A reply of another run is a moved result (ResultsChanged)."""
-    import pdspec_blob
+def _read_charger_spec_form(link, run_id, form):
+    """One chunked form of the spec section (0x0B [form, off], 48-byte chunks) as bytes; None when the run has none (total 0).
+    A reply of another run is a moved result (ResultsChanged)."""
     blob, total = bytearray(), None
     while total is None or len(blob) < total:
-        p = link.call(CMD_CHARGER_TEST, bytes([CT_SPEC_REQ, len(blob)])).payload
+        p = link.call(CMD_CHARGER_TEST, bytes([form, len(blob)])).payload
         if len(p) < CT_SPEC_HEADER:
             raise FrameError("short charger-test spec reply")
         rid, tot, off, n = struct.unpack_from("<IBBB", p)
@@ -1718,7 +1718,25 @@ def read_charger_spec(link, run_id):
         if off != len(blob) or not n:
             raise FrameError("charger-test spec chunk did not advance")
         blob += p[CT_SPEC_HEADER:]
-    return pdspec_blob.decode_section(bytes(blob))
+    return bytes(blob)
+
+
+def read_charger_spec(link, run_id):
+    """The PD spec section of a Deep run (0x0B [6, off], 48-byte chunks of specsec::to_wire), decoded, with the limit, count and place
+    of each check from the detail form (0x0B [7, off]); None when the run has no section (total 0: not a Deep run, or the stage did
+    not begin). Firmware without the detail form (BadLength) gives the cells without it. A reply of another run is a moved result
+    (ResultsChanged)."""
+    import pdspec_blob
+    blob = _read_charger_spec_form(link, run_id, CT_SPEC_REQ)
+    if blob is None:
+        return None
+    try:
+        detail = _read_charger_spec_form(link, run_id, CT_SPEC_DETAIL_REQ)
+    except RemoteError as e:
+        if e.status not in (STATUS_BAD_LENGTH, STATUS_BAD_ARG):
+            raise
+        detail = None
+    return pdspec_blob.decode_section(blob, detail)
 
 
 def attach_spec_section(link, result, run_id):

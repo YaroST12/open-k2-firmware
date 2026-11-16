@@ -267,9 +267,10 @@ It is a polite, no-load conformance run: nothing in it lies to the charger or as
 - **Session:** `start_in_test()` runs on the live link the test already owns: no foreign-busy check, no Rd take-over, no give-back, no
   footer of its own. The standalone `start()` (the remote `pd-spec` command) keeps all of those.
 - **Results grid:** the section follows the units, one VerdictCell per check, rules above the PPS block, the AVS block and the
-  observer. A cell's detail page shows the worst value, the limit and the verdict. A stage that did not run (no PD unit, a stop, a refusal) leaves the section out.
-- **Record:** the journal keeps it (`Type::Spec`, journal format 3, `/jr/sp.rec`, written once when the stage ends). The report card
-  does not carry the cells. The remote reads the section with `0x0B [6, off]` (`encode_charger_test_spec`); `ct_start.py` and the `k2_remote` charger-test
+  observer. A cell's detail page shows the worst value, the limit, the count, the place and the verdict (all kept in the cell, live or resumed). A stage that did not run (no PD unit, a stop, a refusal) leaves the section out.
+- **Record:** the journal keeps it (`Type::Spec`, `/jr/sp.rec`, written once when the stage ends) and the cells' limit, count and place (`Type::SpecDetail`,
+  `/jr/spd.rec`, behind it; journal format 4; a format 3 journal still loads, with "-" for those). The report card
+  does not carry the cells. The remote reads the section with `0x0B [6, off]` and the detail with `[7, off]` (`encode_charger_test_spec`); `ct_start.py` and the `k2_remote` charger-test
   export carry it in their summary and files; the web charger-test grid draws it (`tools/web/ctgrid.js`).
 - **Owner:** while the stage runs the charger test is the owner (`BusyWhy::TestRunning`, which wins over `BusyWhy::PdSpec`); `PdSpecSession`
   stays out of the way of the standalone owner checks. `BusyWhy::PdSpec` (12) is the standalone run's.

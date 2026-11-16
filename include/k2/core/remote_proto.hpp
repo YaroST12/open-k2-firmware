@@ -133,6 +133,11 @@
 //                                    off. rsp run_id(4) total(1) off(1) n(1) data(n), n <= 48. total 0 = the run has no spec
 //                                    section (a default image, a Light or Medium run, a stage that never began). off past total is
 //                                    BadArg. Read-only, from the run's evidence; an older firmware answers BadLength (two bytes).
+//                                    SPEC DETAIL, req 7 off(1): the same chunked read of the detail form, per check in the same order
+//                                    lo(2 LE) hi(2 LE) count(2 LE) a(1) b(1) (the limit as the grid shows it, in 0.1 ms / 10 mV /
+//                                    whole units, 32767 = not seen; the engine's count; At = a, b); 8 x 27 = 216 bytes; same reply
+//                                    layout and rules. Count 0 = no detail kept (a journal from before it): shown as "-". An older
+//                                    firmware answers BadLength: no detail anywhere.
 //                                    CANCEL, req 5 (one byte): the device's own stop (BACK) - a run stops, the wait is
 //                                    cancelled (Rd released), the confirm window (and a pending remote START) closes, the
 //                                    Refuse stage returns to Review, a pending resume is abandoned. rsp what(1): kCtStop*.
@@ -978,12 +983,15 @@ size_t encode_charger_test_view(std::span<uint8_t> out, const ChargerTestView&);
 // `0x0B req [4, flags]` START and `[5]` CANCEL (see the command table above).
 constexpr uint8_t kChargerTestStartReq = 4, kChargerTestCancelReq = 5;
 // `0x0B req [6, off]`: the PD spec section of the run in hand (a Deep run on a K2_PDSPEC build), see the command table. The result's
-// wire form (specsec::to_wire, 3 + 4 x 27 bytes) in chunks: rsp run_id(4) total(1) off(1) n(1) data(n).
-constexpr uint8_t kChargerTestSpecReq = 6;
+// wire form (specsec::to_wire, 3 + 4 x 27 bytes) in chunks: rsp run_id(4) total(1) off(1) n(1) data(n). `[7, off]` is the same
+// chunked read of the detail form (specsec::to_detail_wire, 8 x 27 bytes: limit lo/hi, count, a, b per check): two forms because total
+// and off are one byte each and the two do not fit together. An older firmware answers [7] with BadLength: the cells have no detail.
+constexpr uint8_t kChargerTestSpecReq = 6, kChargerTestSpecDetailReq = 7;
 constexpr size_t kCtSpecChunk = 48, kCtSpecHeader = 7;
 static_assert(kCtSpecHeader + kCtSpecChunk <= kMaxRspPayload);
-static_assert(specsec::kWireBytes <= 255, "total and off are one byte");
-size_t encode_charger_test_spec(std::span<uint8_t> out, const ChargerTestSnapshot&, uint8_t off);
+static_assert(specsec::kWireBytes <= 255 && specsec::kDetailBytes <= 255, "total and off are one byte");
+size_t charger_test_spec_total(const ChargerTestSnapshot&, uint8_t form);   // 0 = no spec section
+size_t encode_charger_test_spec(std::span<uint8_t> out, const ChargerTestSnapshot&, uint8_t form, uint8_t off);
 constexpr uint8_t kCtStartConfirm = 1u << 0,    // required: the START raises the output
                   kCtStartAllTests = 1u << 1;   // the "All tests" preset before the START (ct_start.py's pick)
 constexpr uint8_t kCtStartAccepted = 0, kCtStartRefused = 1;
@@ -1600,10 +1608,10 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
             return reply_n(kChargerTestStartLen);
         }
         if (p.size() == 1 && p[0] == kChargerTestCancelReq) { buf[0] = backend.charger_test_cancel(); return reply_n(1); }
-        if (p.size() == 2 && p[0] == kChargerTestSpecReq) {
+        if (p.size() == 2 && (p[0] == kChargerTestSpecReq || p[0] == kChargerTestSpecDetailReq)) {
             const auto s = backend.charger_test_results();
-            if (p[1] > (s.evidence.spec.shown() ? specsec::kWireBytes : 0)) return reply(Status::BadArg);
-            return reply_n(encode_charger_test_spec(buf, s, p[1]));
+            if (p[1] > charger_test_spec_total(s, p[0])) return reply(Status::BadArg);
+            return reply_n(encode_charger_test_spec(buf, s, p[0], p[1]));
         }
         if (!p.empty() && p.size() != 1 && p.size() != 9 && p.size() != 10) return reply(Status::BadLength);
         if (p.size() == 1 && p[0] == kChargerTestViewReq) return reply_n(encode_charger_test_view(buf, backend.charger_test_view()));
