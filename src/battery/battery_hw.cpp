@@ -16,7 +16,7 @@ namespace {
 // Not zeroed at reset (.noinit, link.ld): a warm reset finds the last checkpoint here; its magic and CRC say whether it is one.
 // Raw bytes, not a Checkpoint object: Recorder's member initializers would give that a static constructor, which runs before
 // main and would wipe the checkpoint it is meant to keep.
-__attribute__((section(".noinit"))) alignas(Service::Checkpoint) std::uint8_t g_ckpt_raw[sizeof(Service::Checkpoint)];
+alignas(Service::Checkpoint) __attribute__((section(".noinit"))) std::uint8_t g_ckpt_raw[sizeof(Service::Checkpoint)];
 alignas(Service) std::uint8_t g_service_raw[sizeof(Service)];
 bool g_service_inited;
 State g_logged = State::Idle;

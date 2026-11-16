@@ -1,10 +1,19 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 Yaraslau Furman
+CLANG   ?= 0
+ifeq ($(CLANG),1)
+CC      = clang
+CXX     = clang++
+OBJCOPY = llvm-objcopy
+OBJDUMP = llvm-objdump
+SIZE    = llvm-size
+else
 CC      = arm-none-eabi-gcc
 CXX     = arm-none-eabi-g++
 OBJCOPY = arm-none-eabi-objcopy
 OBJDUMP = arm-none-eabi-objdump
 SIZE    = arm-none-eabi-size
+endif
 PYTHON  = python3
 
 TARGET  = open_k2
@@ -187,9 +196,22 @@ QR_SRCS = $(QR_DIR)/qrcodegen.c
 QR_OBJS = $(patsubst $(QR_DIR)/%.c, $(BUILD_DIR)/qrcodegen/%.o, $(QR_SRCS))
 OBJS += $(QR_OBJS)
 
+NAV_DIR = .cache/arm-none-eabi
+ifeq ($(CLANG),1)
+ARCH_FLAGS = --target=thumbv7em-none-eabihf -mcpu=cortex-m4 -mthumb -mfloat-abi=hard -mfpu=fpv4-sp-d16
+CLANG_RES_DIR := $(shell $(CC) --print-resource-dir)
+CLANG_SYS_DIRS := /usr/include/newlib/c++/14.2.1 /usr/include/newlib/c++/14.2.1/arm-none-eabi/thumb/v7e-m+fp/hard /usr/include/newlib/c++/14.2.1/backward /usr/lib/gcc/arm-none-eabi/14.2.1/include /usr/lib/gcc/arm-none-eabi/14.2.1/include-fixed /usr/include/newlib
+CLANG_SYS_INC := $(if $(wildcard $(NAV_DIR)/dirs.txt),$(addprefix -isystem $(NAV_DIR)/root,$(shell cat $(NAV_DIR)/dirs.txt)),$(addprefix -isystem ,$(CLANG_SYS_DIRS)))
+CLANG_SYS_LIB := $(if $(wildcard $(NAV_DIR)/lib),-L$(NAV_DIR)/lib,-L/usr/lib/arm-none-eabi/lib/thumb/v7e-m+fp/hard -L/usr/lib/gcc/arm-none-eabi/14.2.1/thumb/v7e-m+fp/hard)
+CLANG_OPT ?= -Oz
+CLANG_SIZE_FLAGS ?= -mllvm -inline-threshold=0 -fno-unroll-loops -fno-vectorize -fno-slp-vectorize -fwhole-program-vtables
+CFLAGS  = $(ARCH_FLAGS) -nostdinc -isystem $(CLANG_RES_DIR)/include $(CLANG_SYS_INC)
+CFLAGS += $(CLANG_OPT) $(CLANG_SIZE_FLAGS) -g3 -Wall -Wextra -ffunction-sections -fdata-sections -fno-math-errno
+else
 ARCH_FLAGS = -mcpu=cortex-m4 -mthumb -mfloat-abi=hard -mfpu=fpv4-sp-d16
 CFLAGS  =$(ARCH_FLAGS)
 CFLAGS += -Os -g3 -Wall -Wextra -ffunction-sections -fdata-sections -fno-math-errno
+endif
 # Identical constant objects share one copy. Not ISO-conforming (two const objects may get one
 # address); nothing here compares the addresses of two const tables.
 # Measured -800 B text under LTO.
@@ -207,13 +229,26 @@ CFLAGS += -I$(LWIP_DIR)/include -I$(TUSB_NET_DIR) -I$(LFS_DIR) -I$(QR_DIR)
 
 # Bare-metal C++: no exceptions, RTTI, thread-safe statics or atexit registration; no heap.
 CXXFLAGS  = $(CFLAGS) -std=c++23 -fno-exceptions -fno-rtti -fno-threadsafe-statics -fno-use-cxa-atexit
+ifeq ($(CLANG),1)
+CXXFLAGS += -nostdinc++ -Wno-deprecated-volatile
+else
 CXXFLAGS += -Wno-volatile
+endif
 
 LDFLAGS = $(ARCH_FLAGS)
+ifeq ($(CLANG),1)
+LDFLAGS += -fuse-ld=lld
+endif
 ifeq ($(K2_NET),1)
 LDFLAGS += -Wl,--wrap=udp_sendto
 endif
+ifeq ($(CLANG),1)
+LDFLAGS += -T$(LINK_LD) -Wl,--gc-sections -nostdlib
+LDLIBS   = $(CLANG_SYS_LIB) -Wl,--start-group -lstdc++ -lm -lc -lgcc -Wl,--end-group
+else
 LDFLAGS += -T$(LINK_LD) -Wl,--gc-sections -nostartfiles
+LDLIBS   =
+endif
 LDFLAGS += -Wl,--wrap=sqrtf -Wl,--wrap=__aeabi_ldivmod -Wl,--wrap=__aeabi_uldivmod
 LDFLAGS += -Wl,-Map=$(BUILD_DIR)/$(TARGET).map
 
@@ -227,7 +262,11 @@ NOLTO_OBJS = $(LWIP_OBJS) $(BUILD_DIR)/net/net.o $(BUILD_DIR)/net/http_server.o 
              $(BUILD_DIR)/tusb/class/net/ncm_device.o $(BUILD_DIR)/tusb/net/dhserver.o
 $(NOLTO_OBJS): LTO =
 endif
+ifeq ($(CLANG),1)
+LDFLAGS += -flto $(CLANG_OPT) -ffunction-sections -fdata-sections -fmerge-all-constants -fno-math-errno -Wl,--icf=all -Wl,--sort-section=alignment -Wl,--defsym=_fini=0
+else
 LDFLAGS += -flto=auto -Os -ffunction-sections -fdata-sections -fmerge-all-constants -fno-math-errno
+endif
 
 # Extra flags for flag experiments and the stack report; empty in normal builds. Build such
 # variants in their own BUILD_DIR (link.ld matches the Net objects by name under any directory).
@@ -238,6 +277,10 @@ LDFLAGS += $(EXTRA_LDFLAGS)
 # writes them: the LTO ltrans partitions into $(CG_DIR), the non-LTO objects (lwIP, Net) next to their .o.
 # It only adds side files; the image is byte-identical.
 CG_DIR = $(BUILD_DIR)/cg
+ifeq ($(CLANG),1)
+CLANG_LLD_FLAGS ?= -Wl,-mllvm,-enable-machine-outliner=always -Wl,-mllvm,-machine-outliner-reruns=2 -Wl,-mllvm,-enable-merge-functions -Wl,-mllvm,-inline-threshold=-20 -Wl,--lto-whole-program-visibility
+LDFLAGS += $(CLANG_LLD_FLAGS)
+else
 CFLAGS += -fcallgraph-info=su,da
 LDFLAGS += -fcallgraph-info=su,da -dumpdir $(CG_DIR)/
 
@@ -272,7 +315,9 @@ LDFLAGS += $(STACK_PARAMS)
 # path by 150 B (the option to take if the stack budget gets tight).
 SIZE_FLAGS = -fno-schedule-insns2 -fno-partial-inlining
 CFLAGS += $(SIZE_FLAGS)
-LDFLAGS += $(SIZE_FLAGS) -flto-partition=one
+# --sort-section=alignment groups sections by alignment inside each input wildcard, saving alignment padding (-508 B .text, -256 B .bss).
+LDFLAGS += $(SIZE_FLAGS) -flto-partition=one -Wl,--sort-section=alignment
+endif
 
 # Hot acquisition / DSP / power-conversion objects compile at speed levels while UI pages stay at -Os
 # to preserve Flash budget: battery/dpsniff stay at -O2 (-O3 bloats dpsniff +9 KB), small integer hot
@@ -292,7 +337,9 @@ $(HOT_MATH_O3_OBJS): CFLAGS += -O3
 # then the last three -2360 B (-6708 B together). Stack worst case unchanged (PSP free 2360 -> 2368 B). Rejected
 # on the same build (they grow it, or change under 100 B): -fno-tree-ccp, -fno-tree-pta, -fno-ipa-pure-const,
 # -fno-tree-vrp, -fno-gcse, -fno-tree-pre, -fno-ssa-phiopt, -fno-peephole2, -fno-tree-dse, -fno-crossjumping.
-COLD_SIZE_FLAGS = -fno-reorder-blocks -fno-caller-saves -fno-if-conversion -fno-tree-dominator-opts -fno-tree-loop-im \
+ifneq ($(CLANG),1)
+# -Oz on cold objects stops GCC LTO from inlining cold callees into -Os hot callers (-124 B .text, -14.8 KB hot block, -56 B stack).
+COLD_SIZE_FLAGS = -Oz -fno-reorder-blocks -fno-caller-saves -fno-if-conversion -fno-tree-dominator-opts -fno-tree-loop-im \
                   -fno-move-loop-invariants -fno-optimize-sibling-calls -fno-inline-functions
 HOT_SRC_FILES = $(shell grep -rl K2_HOT $(SRC_DIR) --include='*.cpp')
 COLD_CXX_SRCS = $(filter-out $(HOT_SRC_FILES) $(FONT_SRCS) $(SRC_DIR)/battery/battery.cpp $(SRC_DIR)/fastcharge/dpsniff.cpp \
@@ -301,6 +348,7 @@ COLD_OBJS = $(patsubst $(SRC_DIR)/%.cpp,$(BUILD_DIR)/%.o,$(COLD_CXX_SRCS))
 $(COLD_OBJS): CFLAGS += $(COLD_SIZE_FLAGS)
 # The bundled filesystem and QR encoder are cold too (-224 B); the USB stack is left alone (-16 B more is not worth it).
 $(LFS_OBJS) $(QR_OBJS): CFLAGS += $(COLD_SIZE_FLAGS)
+endif
 
 DOCKER_IMG = open-k2-builder:latest
 
@@ -337,7 +385,7 @@ $(LOGDB_HDR): $(CXX_SRCS) $(wildcard $(INC_DIR)/*.hpp $(INC_DIR)/k2/*.hpp $(INC_
 # and linker setting (tools, CFLAGS, CXXFLAGS, LDFLAGS, -Werror, LTO); any flag edit or K2_WERROR /
 # EXTRA_*FLAGS change gives a new stamp, which deletes the old one and rebuilds and relinks everything.
 # Defined after the last global flag edit above; target-specific flags (version.o) are not part of it.
-CFG_FLAGS := $(CC) | $(CXX) | $(CFLAGS) | $(CXXFLAGS) | $(LDFLAGS) | $(OWN_WERROR) | $(LTO) | $(NOLTO_OBJS) | $(HOT_MATH_O2_OBJS) | $(HOT_MATH_O3_OBJS) | $(COLD_SIZE_FLAGS) | $(COLD_OBJS) | $(LFS_OBJS) | $(QR_OBJS)
+CFG_FLAGS := $(CLANG) | $(CC) | $(CXX) | $(CFLAGS) | $(CXXFLAGS) | $(LDFLAGS) | $(LDLIBS) | $(OWN_WERROR) | $(LTO) | $(NOLTO_OBJS) | $(HOT_MATH_O2_OBJS) | $(HOT_MATH_O3_OBJS) | $(COLD_SIZE_FLAGS) | $(COLD_OBJS) | $(LFS_OBJS) | $(QR_OBJS)
 CFG_STAMP := $(BUILD_DIR)/.cfg-$(word 1,$(shell printf '%s' '$(subst ','"'"',$(CFG_FLAGS))' | md5sum))
 # A missing stamp must rebuild (.SECONDARY would otherwise treat it as an intermediate and skip it).
 .NOTINTERMEDIATE: $(CFG_STAMP)
@@ -408,7 +456,7 @@ $(BUILD_DIR)/link_nohot.ld: link.ld | $(BUILD_DIR)
 $(BUILD_DIR)/$(TARGET).elf: $(OBJS) $(LINK_LD) link.ld $(CFG_STAMP) | check-64bit
 	@echo "  LD    $@"
 	@mkdir -p $(CG_DIR) && rm -f $(CG_DIR)/*.ci
-	@$(CXX) $(OBJS) $(LDFLAGS) -o $@
+	@$(CXX) $(OBJS) $(LDFLAGS) $(LDLIBS) -o $@
 	@$(SIZE) $@
 
 $(BUILD_DIR)/$(TARGET).bin: $(BUILD_DIR)/$(TARGET).elf
@@ -673,7 +721,6 @@ DOCKER_RUN = docker run --rm --cpus=$(K2_J) --user $(shell id -u):$(shell id -g)
 # $(NAV_DIR)/root (dirs.txt lists them, as paths inside the image) so clangd on the host finds <cstdint> and the
 # rest of newlib / libstdc++ (tools/compdb.py adds them to the firmware entries). Done once, by the first docker-build
 # (a failure only costs the std headers); `make nav-headers` redoes it after a toolchain image change.
-NAV_DIR = .cache/arm-none-eabi
 $(NAV_DIR)/dirs.txt:
 	-@rm -rf $(NAV_DIR) && mkdir -p $(NAV_DIR)/root \
 	  && $(DOCKER_RUN) $(DOCKER_IMG) sh -c 'arm-none-eabi-g++ $(ARCH_FLAGS) -std=c++23 -x c++ -E -v /dev/null 2>&1 | sed -n "/^#include <...>/,/^End of search/p" | grep "^ /" | while read p; do realpath "$$p"; done' > $(NAV_DIR)/dirs.tmp \

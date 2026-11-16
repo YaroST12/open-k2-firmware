@@ -6,8 +6,13 @@
 
 #include <cstddef>
 
+#if !defined(__clang__)
 #pragma GCC push_options
 #pragma GCC optimize("Os", "no-tree-loop-distribute-patterns")
+#define K2_TINY_LIBC_ATTR
+#else
+#define K2_TINY_LIBC_ATTR __attribute__((no_builtin))
+#endif
 
 namespace {
 
@@ -32,7 +37,16 @@ std::size_t span_impl(const char* s, const char* set, bool accept) {
 
 extern "C" {
 
-int strcmp(const char* a, const char* b) {
+K2_TINY_LIBC_ATTR std::size_t strlen(const char* s) {
+    const char* p = s;
+    while (*p != '\0') {
+        ++p;
+        __asm__ volatile("" : "+r"(p));
+    }
+    return static_cast<std::size_t>(p - s);
+}
+
+K2_TINY_LIBC_ATTR int strcmp(const char* a, const char* b) {
     const auto* p = reinterpret_cast<const unsigned char*>(a);
     const auto* q = reinterpret_cast<const unsigned char*>(b);
     while (*p && *p == *q) {
@@ -131,6 +145,9 @@ int memcmp(const void* a, const void* b, std::size_t n) {
 
 }  // extern "C"
 
+#if !defined(__clang__)
 #pragma GCC pop_options
+#endif
+#undef K2_TINY_LIBC_ATTR
 
 #endif  // defined(__arm__) && !defined(__unix__)

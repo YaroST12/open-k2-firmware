@@ -126,6 +126,7 @@ SECTIONS
     *libc.a:libc_a-memcpy.o(.text .text.*)
     *libc.a:libc_a-memmove.o(.text .text.*)
     *libc.a:libc_a-memset.o(.text .text.*)
+    *(.text.strlen .text.strlen.*)
     *libc.a:libc_a-strlen.o(.text .text.*)
     *(.rodata.hot .rodata.hot.*)
     /* K2_HOT_BLOCK_END */

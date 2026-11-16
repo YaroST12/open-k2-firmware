@@ -1258,7 +1258,7 @@ constexpr std::array<std::uint8_t, 1024> make_rd_table() {
 K2_HOT_DATA const std::array<std::uint8_t, 1024> kRdHot = make_rd_table();
 K2_COLD_DATA const std::array<std::uint8_t, 1024> kRdCold = make_rd_table();
 
-K2_HOT [[gnu::noinline]] std::uint32_t rd_sum(const std::uint8_t* t, std::uint32_t passes) {
+[[gnu::noinline]] K2_HOT std::uint32_t rd_sum(const std::uint8_t* t, std::uint32_t passes) {
     std::uint32_t h = kFnvBasis;
     for (std::uint32_t p = 0; p < passes; ++p)
         for (std::size_t i = 0; i < 1024; ++i) h = (h ^ t[i]) * 16777619u;
@@ -1293,7 +1293,7 @@ K2_HOT bool check_rd_slow(Out& o) {
     return h;
 }
 
-K2_HOT [[gnu::noinline]] std::uint32_t ws_fast_fn(std::uint32_t n) { return ws_body(0xC0FFEEu, n); }
+[[gnu::noinline]] K2_HOT std::uint32_t ws_fast_fn(std::uint32_t n) { return ws_body(0xC0FFEEu, n); }
 [[gnu::noinline]] K2_COLD_PROBE std::uint32_t ws_slow_fn(std::uint32_t n) { return ws_body(0xC0FFEEu, n); }
 
 bool placed_ok(bool fast, std::uintptr_t addr) {
