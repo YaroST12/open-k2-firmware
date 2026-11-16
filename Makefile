@@ -700,5 +700,7 @@ smoke: gate
 # Worst-case stack per entry point from the call graph every build writes (build/cg + the non-LTO .ci files):
 # the main-loop chain with every frame (page virtuals and list rows followed), each ISR, the largest frames.
 # Run `make docker-build` first. Extra options: make stack-report STACK_ARGS="--root k2_fault_main --top 20".
+# A charger-test run (its page only, no presses): STACK_ARGS="--scenario charger-test"; the deepest chain through a
+# function: STACK_ARGS="--scenario charger-test --via ChargerTestSession::phase".
 stack-report:
 	@$(PYTHON) tools/stack_depth.py --build $(BUILD_DIR) $(STACK_ARGS)
