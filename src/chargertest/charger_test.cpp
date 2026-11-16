@@ -2323,10 +2323,10 @@ void Runner::poll_spec(const Input& in) {
 }
 // The engine is over (or abandoned): its cells are the stage's evidence. The source goes back to 5 V; a cancelled run stops there.
 void Runner::end_spec(const Input& in, specsec::End e) {
-    specsec::Result r;
+    specsec::Result& r = evidence_.spec;   // filled in place: a local copy would add 112 B to the deepest stack path
+    r = {};
     env_.spec_collect(r);
     if (e != specsec::End::Done || r.end == specsec::End::NotRun) r.end = e;
-    evidence_.spec = r;
     const auto t = r.tally();
     K2LOG("[CT] spec end=%u why=%u pass=%u fail=%u skip=%u unconfirmed=%u\n", unsigned(r.end), unsigned(r.why), t.pass, t.fail, t.skip,
           unsigned(r.unconfirmed));
