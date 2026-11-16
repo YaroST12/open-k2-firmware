@@ -2271,8 +2271,23 @@ var K2Proto = (function () {
                         avs_transient: "AVS tr.", avs_track: "AVS trk", source_reset: "Src rst" };
   var CT_SPEC_SECTION_AT = { pps_monotonic: 1, avs_monotonic: 1, source_reset: 1 };
   var CT_SPEC_WIRE = 3 + 4 * CT_SPEC_ORDER.length;
-  function decodeChargerSpecSection(b) {
+  // The detail form (0x0B [7, off], specsec::to_detail_wire): per check limit lo and hi (int16, the value's quantisation, 32767 = the
+  // open side), the count (u16), a and b (the place of the worst value); 8 x 27 bytes. A journal from before it reads count 0.
+  var CT_SPEC_DETAIL_REQ = 7, CT_SPEC_DETAIL_WIRE = 8 * CT_SPEC_ORDER.length;
+  function ctSpecDetail(d, measured, detail, i) {
+    var o = 8 * i, n = u16(detail, o + 4);
+    var none = { count: n, limit: null, limit_text: null, at_text: null };
+    if (!measured || !n) return none;
+    var step = CT_SPEC_STEP[d.unit];
+    var side = function (raw, high) { return raw === CT_SPEC_UNSEEN ? (high ? PDSPEC_OPEN : -PDSPEC_OPEN) : raw * step; };
+    var lo = side(s16(detail, o), false), hi = side(s16(detail, o + 2), true);
+    var k = PDSPEC_CHECKS.indexOf(d);
+    return { count: n, limit: [lo, hi], limit_text: pdSpecLimit({ kind: d.kind, unit: d.unit, lo: lo, hi: hi }),
+             at_text: pdSpecAt({ key: d.key, a: detail[o + 6], b: detail[o + 7] }, k) };
+  }
+  function decodeChargerSpecSection(b, detail) {
     if (b.length !== CT_SPEC_WIRE) throw new FrameError("PD spec section is " + b.length + " bytes, expected " + CT_SPEC_WIRE);
+    if (detail && detail.length !== CT_SPEC_DETAIL_WIRE) throw new FrameError("PD spec detail is " + detail.length + " bytes, expected " + CT_SPEC_DETAIL_WIRE);
     if (b[0] >= CT_SPEC_ENDS.length || (b[2] & ~1)) throw new FrameError("not a PD spec section (end or flags out of range)");
     var end = CT_SPEC_ENDS[b[0]], why = null;
     if (end === "cancelled" || end === "fault") why = name(PDSPEC_STOPS, b[1]);
@@ -2286,10 +2301,16 @@ var K2Proto = (function () {
       var value = !measured ? null : raw === CT_SPEC_UNSEEN ? PDSPEC_NEVER : raw * CT_SPEC_STEP[d.unit];
       var text = value === null ? "-" : key === "pps_status" && value < PDSPEC_NEVER ? pdSpecPsText(value) : pdSpecValue(d.unit, value);
       tally[verdict]++;
-      return { key: key, label: d.label, short: CT_SPEC_SHORT[key], unit: d.unit, verdict: verdict, skip: verdict === "skip" ? PDSPEC_SKIPS[skip] : null,
-               fails: b[o + 1], value: value, value_text: text, section: i === 0 || !!CT_SPEC_SECTION_AT[key] };
+      var cell = { key: key, label: d.label, short: CT_SPEC_SHORT[key], unit: d.unit, verdict: verdict, skip: verdict === "skip" ? PDSPEC_SKIPS[skip] : null,
+                   fails: b[o + 1], value: value, value_text: text, section: i === 0 || !!CT_SPEC_SECTION_AT[key] };
+      if (detail) {
+        var x = ctSpecDetail(d, measured, detail, i);
+        cell.count = x.count; cell.limit = x.limit; cell.limit_text = x.limit_text; cell.at_text = x.at_text;
+      }
+      return cell;
     });
-    return { end: end, why: why, unconfirmed: !!(b[2] & 1), tally: tally, cells: cells };
+    return { end: end, why: why, unconfirmed: !!(b[2] & 1), tally: tally, cells: cells,
+             detailed: !!detail && cells.some(function (c) { return c.count > 0; }) };
   }
   // The run summary's PD spec lines (tools/charger_summary.py _spec_lines): the tally and how the stage ended, each failed or
   // unverified check with its worst value, the skips grouped by reason. Nothing for a run without a section.
@@ -2300,19 +2321,21 @@ var K2Proto = (function () {
       (sp.end !== "done" ? " · " + sp.end + (sp.why ? " (" + sp.why + ")" : "") : "");
     var out = [head], skips = {}, order = [];
     sp.cells.forEach(function (c) {
-      if (c.verdict === "fail") out.push("  " + c.label + ": FAIL, worst " + c.value_text + ", " + c.fails + " over");
-      else if (c.verdict === "unverified") out.push("  " + c.label + ": unverified (a K2 figure, no spec limit), worst " + c.value_text);
+      var kept = c.limit_text ? " (limit " + c.limit_text + ", " + c.count + " measured)" : "";   // the detail form, when the device kept it
+      if (c.verdict === "fail") out.push("  " + c.label + ": FAIL, worst " + c.value_text + ", " + c.fails + " over" + kept);
+      else if (c.verdict === "unverified") out.push("  " + c.label + ": unverified (a K2 figure, no spec limit), worst " + c.value_text + kept);
       else if (c.verdict === "skip") { if (!skips[c.skip]) { skips[c.skip] = []; order.push(c.skip); } skips[c.skip].push(c.label); }
     });
     order.forEach(function (why) { out.push("  skipped, " + why + ": " + skips[why].join(", ")); });
     if (sp.unconfirmed) out.push("  WARNING: the end-of-run return to 5 V was not confirmed: unplug the charger");
     return out;
   }
-  // 0x0B [6, off] until the section is whole: null when the run has none; FrameError when the run moved under the read.
-  K2Remote.prototype.chargerSpecSection = async function (runId) {
+  // 0x0B [form, off] until the form is whole (form 6 the section, 7 its detail): null when the run has none; FrameError when the run
+  // moved under the read.
+  K2Remote.prototype.chargerSpecForm = async function (runId, form) {
     var blob = [], total = null;
     while (total === null || blob.length < total) {
-      var p = (await this.link.call(CMD.CHARGER_TEST, [CT_SPEC_REQ, blob.length])).payload;
+      var p = (await this.link.call(CMD.CHARGER_TEST, [form, blob.length])).payload;
       need(p, CT_SPEC_HEADER, "charger-test spec");
       var v = dv(p), n = p[6];
       if (p.length !== CT_SPEC_HEADER + n) throw new FrameError("charger-test spec reply length does not match its count");
@@ -2322,7 +2345,19 @@ var K2Proto = (function () {
       if (p[5] !== blob.length || !n) throw new FrameError("charger-test spec chunk did not advance");
       for (var i = 0; i < n; i++) blob.push(p[CT_SPEC_HEADER + i]);
     }
-    return decodeChargerSpecSection(Uint8Array.from(blob));
+    return Uint8Array.from(blob);
+  };
+  // The section with its detail (limit, count, place): the detail form is asked after the first; firmware without it (BadLength) or a
+  // section with no detail leaves the cells as the first form gives them.
+  K2Remote.prototype.chargerSpecSection = async function (runId) {
+    var blob = await this.chargerSpecForm(runId, CT_SPEC_REQ);
+    if (!blob) return null;
+    var detail = null;
+    try { detail = await this.chargerSpecForm(runId, CT_SPEC_DETAIL_REQ); }
+    catch (e) {
+      if (!(e instanceof RemoteError) || (e.status !== STATUS.BAD_LENGTH && e.status !== STATUS.BAD_ARG)) throw e;
+    }
+    return decodeChargerSpecSection(blob, detail || undefined);
   };
 
   K2Remote.prototype.chargerTest = async function (mode) {
@@ -2777,7 +2812,7 @@ var K2Proto = (function () {
     HANDBACK_VERDICTS: HANDBACK_VERDICTS, handbackText: handbackText, APPLE_REFUSALS: APPLE_REFUSALS, CARD_NAME_RE: CARD_NAME_RE,
     decodePdSpecStatus: decodePdSpecStatus, decodePdSpecBlob: decodePdSpecBlob, pdSpecValue: pdSpecValue, pdSpecLimit: pdSpecLimit, pdSpecAt: pdSpecAt,
     PDSPEC_CHECKS: PDSPEC_CHECKS, PDSPEC_SKIPS: PDSPEC_SKIPS, PDSPEC_CAPS_NOTES: PDSPEC_CAPS_NOTES, PDSPEC_STEPS: PDSPEC_STEPS, pdSpecPsText: pdSpecPsText, PDSPEC_STOPS: PDSPEC_STOPS, PDSPEC_STARTS: PDSPEC_STARTS, PDSPEC_FAMILIES: PDSPEC_FAMILIES, PDSPEC_STATES: PDSPEC_STATES,
-    decodeChargerSpecSection: decodeChargerSpecSection, CT_SPEC_ORDER: CT_SPEC_ORDER, CT_SPEC_SHORT: CT_SPEC_SHORT, CT_SPEC_WIRE: CT_SPEC_WIRE, specLines: specLines
+    decodeChargerSpecSection: decodeChargerSpecSection, CT_SPEC_ORDER: CT_SPEC_ORDER, CT_SPEC_SHORT: CT_SPEC_SHORT, CT_SPEC_WIRE: CT_SPEC_WIRE, CT_SPEC_DETAIL_WIRE: CT_SPEC_DETAIL_WIRE, specLines: specLines
   };
 })();
 if (typeof module !== "undefined" && module.exports) module.exports = K2Proto;
@@ -3685,8 +3720,10 @@ var CtGrid = (function () {
         verdict = c.fails ? "fail" : "pass";
       }
       var word = c.verdict === "unverified" ? "unverified" : verdict === "none" ? "" : verdict === "skip" ? "skipped" : verdict;
+      // The detail the device kept (limit, count, place; the second wire form): the same three the detail page shows, in the title.
+      var kept = c.limit_text ? " · limit " + c.limit_text + " · " + c.count + " measured" + (c.at_text ? " · " + c.at_text : "") : "";
       return { label: c.short || c.label, section: !!c.section,
-               cells: [{ verdict: verdict, label: label, current: "", title: c.label + (word ? ": " + word : "") + (label && verdict !== "skip" ? " (" + label + ")" : "") }] };
+               cells: [{ verdict: verdict, label: label, current: "", title: c.label + (word ? ": " + word : "") + (label && verdict !== "skip" ? " (" + label + ")" : "") + kept }] };
     });
   }
 

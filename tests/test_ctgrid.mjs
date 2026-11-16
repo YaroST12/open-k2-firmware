@@ -279,6 +279,13 @@ test("the spec section is one wide cell per check, with rules above the family b
   assert.deepEqual([cell(3).verdict, cell(3).label], ["none", "1.200 V"]);
   assert.deepEqual([cell(5).verdict, cell(5).label], ["pending", ""]);
   assert.ok(out.every((l) => l.label.length <= 8));
+  assert.ok(!/limit/.test(cell(0).title));   // the first form alone: no limit in the title
+  // with the detail form (the device kept limit, count and place): the title carries them
+  const full = P.decodeChargerSpecSection(Uint8Array.from(Buffer.from(fx.wire, "hex")), Uint8Array.from(Buffer.from(fx.detail, "hex")));
+  const withDetail = CtGrid.layout([], { spec: full });
+  assert.match(withDetail[0].cells[0].title, /limit <= 25\.0 ms · 12 measured · PDO 2 to 3/);
+  assert.match(withDetail[1].cells[0].title, /limit <= 25\.0 ms · 300 measured/);
+  assert.equal(withDetail[2].cells[0].title.includes("limit"), false);   // a skipped check keeps none
   // no section, a section that did not begin: no rows
   assert.deepEqual(CtGrid.layout([], {}), []);
   assert.deepEqual(CtGrid.specLines({ end: "not run", cells: [] }), []);

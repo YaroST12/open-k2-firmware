@@ -662,7 +662,6 @@ private:
     // The PD spec section (Deep runs, K2_PDSPEC): rows after the unit rows in the Results grid, then the Changes row.
     int spec_n() const;            // rows shown (0 = no section)
     int delta_row() const { return static_cast<int>(line_n_) + spec_n(); }   // the Changes pseudo-row, when there is one
-    const pdspec::Agg* spec_agg(int cell) const;   // the engine's aggregate of the same run (null once it is gone or replaced)
     void build_results();      // chips layout of the stored run (k2/chargertest/result_layout.hpp), wrapped into display lines
     // The summary line of Results: the best passing mode per protocol family of the stored run ("PD 20V 3A  QC3 12V").
     void compose_best();

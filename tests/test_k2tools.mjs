@@ -323,6 +323,7 @@ test("pdspec: the check table is the firmware's own (result.hpp kDefs and engine
 // ---- the PD spec section of a Deep charger test (0x0B [6, off]; specsec::to_wire) -----------------------------------------
 const specFx = JSON.parse(readFileSync(path.join(here, "fixtures/ct_spec_section.json"), "utf8"));
 const specWire = Uint8Array.from(Buffer.from(specFx.wire, "hex"));
+const specDetail = Uint8Array.from(Buffer.from(specFx.detail, "hex"));
 
 test("charger spec section: the tables are the firmware's own (spec_section.hpp order, spec_text.hpp labels)", () => {
   const sec = readFileSync(path.join(here, "../include/k2/chargertest/spec_section.hpp"), "utf8");
@@ -335,6 +336,8 @@ test("charger spec section: the tables are the firmware's own (spec_section.hpp 
   const camel = (k) => k.split("_").map((w) => w[0].toUpperCase() + w.slice(1)).join("");
   assert.deepEqual(P.CT_SPEC_ORDER.map(camel), order);
   assert.equal(P.CT_SPEC_WIRE, 3 + 4 * order.length);
+  assert.equal(P.CT_SPEC_DETAIL_WIRE, 8 * order.length);
+  assert.match(sec, /kDetailBytes = 8 \* kCells/);
   const text = readFileSync(path.join(here, "../include/k2/ui/spec_text.hpp"), "utf8");
   const short = [...(/kCheckShort\[\]\[9\] = \{([\s\S]*?)\};/.exec(text)[1]).matchAll(/"([^"]*)"/g)].map((m) => m[1]);
   assert.equal(short.length, keys.length);
@@ -355,6 +358,22 @@ test("charger spec section: decodes the firmware's own bytes like the Python too
   assert.throws(() => P.decodeChargerSpecSection(bad), /not a PD spec section/);
 });
 
+test("charger spec section: the detail form decodes like the Python tool (limit, count, place)", () => {
+  const s = P.decodeChargerSpecSection(specWire, specDetail), want = specFx.decoded_detail;
+  assert.equal(s.detailed, want.detailed);
+  assert.deepEqual(s.cells.map((c) => ({ key: c.key, count: c.count, limit: c.limit, limit_text: c.limit_text, at_text: c.at_text })),
+                   want.cells.map((c) => ({ key: c.key, count: c.count, limit: c.limit, limit_text: c.limit_text, at_text: c.at_text })));
+  assert.equal(s.cells[0].limit_text, "<= 25.0 ms");
+  assert.equal(s.cells[1].count, 300);
+  assert.equal(P.decodeChargerSpecSection(specWire).detailed, false);   // the first form alone: no detail keys
+  assert.equal(P.decodeChargerSpecSection(specWire).cells[0].count, undefined);
+  assert.throws(() => P.decodeChargerSpecSection(specWire, specDetail.subarray(1)), /expected 216/);
+  // a measured cell with no count (a journal from before the detail record) keeps nothing
+  const blank = P.decodeChargerSpecSection(specWire, new Uint8Array(216));
+  assert.equal(blank.detailed, false);
+  assert.ok(blank.cells.every((c) => c.limit_text === null));
+});
+
 test("charger spec section: summary lines", () => {
   const lines = P.specLines(P.decodeChargerSpecSection(specWire));
   assert.match(lines[0], /^PD spec: 2 pass, 1 fail, 1 skip, 1 unverified, 22 not judged$/);
@@ -362,19 +381,34 @@ test("charger spec section: summary lines", () => {
   assert.ok(lines.some((l) => /skipped, no PPS/.test(l)));
   assert.ok(lines.some((l) => /WARNING: the end-of-run return to 5 V was not confirmed/.test(l)));
   assert.deepEqual(P.specLines(null), []);
+  assert.ok(P.specLines(P.decodeChargerSpecSection(specWire, specDetail)).some((l) => /FAIL, worst 40\.0 ms, 3 over \(limit <= 25\.0 ms, 300 measured\)/.test(l)));
 });
 
-const specChunks = (runId, blob) => (f) => {
-  const off = body(f)[1], n = Math.min(48, blob.length - off);
-  return [rsp(0x0B, f[3], 0, [...le32(runId), blob.length, off, n, ...blob.subarray(off, off + n)])];
+const specChunks = (runId, blob, detail) => (f) => {
+  const form = body(f)[0], data = form === 7 ? detail : blob;
+  if (!data) return [rsp(0x0B, f[3], 2, [])];   // BadLength: no such form (an older firmware)
+  const off = body(f)[1], n = Math.min(48, data.length - off);
+  return [rsp(0x0B, f[3], 0, [...le32(runId), data.length, off, n, ...data.subarray(off, off + n)])];
 };
 
-test("charger spec section: read in 48-byte chunks, 0x0B [6, off]", async () => {
-  const { remote, sent } = rig(specChunks(0x01020304, specWire));
+test("charger spec section: read in 48-byte chunks, 0x0B [6, off] then the detail form [7, off]", async () => {
+  const { remote, sent } = rig(specChunks(0x01020304, specWire, specDetail));
   const s = await remote.chargerSpecSection(0x01020304);
-  assert.deepEqual(sent.map(body), [[6, 0], [6, 48], [6, 96]]);
+  assert.deepEqual(sent.map(body), [[6, 0], [6, 48], [6, 96], [7, 0], [7, 48], [7, 96], [7, 144], [7, 192]]);
   assert.equal(s.cells.length, 27);
   assert.equal(s.cells[1].value_text, "40.0 ms");
+  assert.equal(s.cells[1].count, 300);
+  assert.equal(s.cells[0].limit_text, "<= 25.0 ms");
+  assert.equal(s.detailed, true);
+});
+
+test("charger spec section: firmware without the detail form gives the cells alone", async () => {
+  const { remote, sent } = rig(specChunks(0x01020304, specWire, null));
+  const s = await remote.chargerSpecSection(0x01020304);
+  assert.deepEqual(sent.map(body), [[6, 0], [6, 48], [6, 96], [7, 0]]);
+  assert.equal(s.cells[1].value_text, "40.0 ms");
+  assert.equal(s.detailed, false);
+  assert.equal(s.cells[1].count, undefined);
 });
 
 test("charger spec section: none, a moved run and a stuck chunk", async () => {

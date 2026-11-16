@@ -196,10 +196,11 @@ def _spec_lines(sp):
         head += f" · {sp['end']}" + (f" ({sp['why']})" if sp.get("why") else "")
     out = [head]
     for c in sp["cells"]:
+        kept = f" (limit {c['limit_text']}, {c['count']} measured)" if c.get("limit_text") else ""   # the detail form, when the device kept it
         if c["verdict"] == "fail":
-            out.append(f"  - {c['label']}: FAIL, worst {c['value_text']}, {c['fails']} over")
+            out.append(f"  - {c['label']}: FAIL, worst {c['value_text']}, {c['fails']} over{kept}")
         elif c["verdict"] == "unverified":
-            out.append(f"  - {c['label']}: unverified (a K2 figure, no spec limit), worst {c['value_text']}")
+            out.append(f"  - {c['label']}: unverified (a K2 figure, no spec limit), worst {c['value_text']}{kept}")
     skips = {}
     for c in sp["cells"]:
         if c["verdict"] == "skip":

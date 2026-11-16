@@ -2768,6 +2768,33 @@ static void test_charger_test_spec_wire() {
     check_header(r, 0x0B, 44, Status::BadArg, 0);   // one byte: an unknown form, as any other
     CHECK_EQ(run(f, request(0x0B, 45, {3}), r), 1);   // the view form is untouched
     check_header(r, 0x0B, 45, Status::Ok, 30);
+
+    // The detail form, [7, off]: limit lo/hi, count, a, b per check (8 x 27 = 216 bytes), the same chunks and rules.
+    f.test_results.evidence.spec.cells[3].lo = 20; f.test_results.evidence.spec.cells[3].hi = 5200;
+    f.test_results.evidence.spec.cells[3].n = 300; f.test_results.evidence.spec.cells[3].a = 7; f.test_results.evidence.spec.cells[3].b = 9;
+    std::array<uint8_t, ss::kDetailBytes> dwire{};
+    ss::to_detail_wire(s, dwire);
+    std::vector<uint8_t> dgot;
+    for (unsigned off = 0; off < dwire.size();) {
+        CHECK_EQ(run(f, request(0x0B, 46, {7, uint8_t(off)}), r), 1);
+        const uint8_t n = r[12];
+        CHECK_EQ(r[10], uint8_t(dwire.size()));
+        CHECK_EQ(r[11], uint8_t(off));
+        CHECK(n > 0 && n <= 48);
+        if (n == 0 || n > 48) break;
+        for (unsigned i = 0; i < n; ++i) dgot.push_back(r[13 + i]);
+        off += n;
+    }
+    CHECK_EQ(dgot.size(), dwire.size());
+    CHECK(std::equal(dgot.begin(), dgot.end(), dwire.begin()));
+    CHECK_EQ(int(dgot[8 * 3 + 4]), 300 & 255);   // cell 3's count, little endian
+    CHECK_EQ(int(dgot[8 * 3 + 5]), 300 >> 8);
+    CHECK_EQ(run(f, request(0x0B, 47, {7, uint8_t(dwire.size() + 1)}), r), 1);
+    check_header(r, 0x0B, 47, Status::BadArg, 0);
+    f.test_results.evidence.spec = {};
+    CHECK_EQ(run(f, request(0x0B, 48, {7, 0}), r), 1);   // no section: total 0, as the first form
+    check_header(r, 0x0B, 48, Status::Ok, 7);
+    check_bytes(r, 6, {4, 3, 2, 1, 0, 0, 0});
 }
 
 // QA 2026-11-10 row B item 2 (red): a deep-sweep row goes over the wire with the sweep flag set (row flags bit 5)

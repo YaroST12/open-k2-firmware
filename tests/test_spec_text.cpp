@@ -55,18 +55,36 @@ static const sc::CheckDef& cdef(sc::Check c) { return sc::kDefs[static_cast<std:
 
 static void test_limit_text() {
     StrBuf<24> s;
-    sc::Agg a;
-    a.hi = 5000;
-    spectext::put_limit(s, cdef(sc::Check::AcceptTime), a);
+    spectext::put_limit(s, cdef(sc::Check::AcceptTime), 0, 5000);
     CHECK_COND(s.view().substr(0, 4) == "max ");
     s.clear();
-    a.lo = 4750; a.hi = 5250;
-    spectext::put_limit(s, cdef(sc::Check::Accuracy), a);
+    spectext::put_limit(s, cdef(sc::Check::Accuracy), 4750, 5250);
     CHECK_COND(s.view() == "4.75V-5.25V");
     s.clear();
-    a.lo = -sc::kOpenLimit; a.hi = 500;   // an open low side: only the bound that applies
-    spectext::put_limit(s, cdef(sc::Check::Overshoot), a);
+    spectext::put_limit(s, cdef(sc::Check::Overshoot), -sc::kOpenLimit, 500);   // an open low side: only the bound that applies
     CHECK_COND(s.view() == "max 0.50V");
+    // The limit a cell keeps: the same text, the open side through the sentinel.
+    sc::Agg a;
+    a.n = 1; a.worst = 520; a.lo = -sc::kOpenLimit; a.hi = 500;
+    s.clear();
+    spectext::put_limit(s, cdef(sc::Check::Overshoot), specsec::cell_of(sc::Check::Overshoot, a));
+    CHECK_COND(s.view() == "max 0.50V");
+    a.lo = 500; a.hi = sc::kOpenLimit;
+    s.clear();
+    spectext::put_limit(s, cdef(sc::Check::Overshoot), specsec::cell_of(sc::Check::Overshoot, a));
+    CHECK_COND(s.view() == "min 0.50V");
+}
+static void test_limit_quantize() {
+    using specsec::quantize_limit; using specsec::dequantize_limit; using specsec::kUnseen;
+    CHECK_EQ(int(quantize_limit(sc::Unit::Us, 25000)), 250);
+    CHECK_EQ(dequantize_limit(sc::Unit::Us, 250, true), 25000);
+    CHECK_EQ(int(quantize_limit(sc::Unit::Mv, 5250)), 525);
+    CHECK_EQ(int(quantize_limit(sc::Unit::Mv, -5250)), -525);
+    CHECK_EQ(int(quantize_limit(sc::Unit::Mv, sc::kOpenLimit)), int(kUnseen));      // the open sides
+    CHECK_EQ(int(quantize_limit(sc::Unit::Mv, -sc::kOpenLimit)), int(kUnseen));
+    CHECK_EQ(dequantize_limit(sc::Unit::Mv, kUnseen, true), sc::kOpenLimit);
+    CHECK_EQ(dequantize_limit(sc::Unit::Mv, kUnseen, false), -sc::kOpenLimit);
+    CHECK_EQ(dequantize_limit(sc::Unit::Ms, 90, false), 90);
 }
 
 static void test_where_text() {
@@ -127,49 +145,112 @@ static void test_detail_rows() {
     StrBuf<20> s;
     std::uint16_t col = 0;
     const specsec::Cell pass = cell_of(sc::Verdict::Pass, 0, 123);
-    spectext::detail_value(0, 0, pass, nullptr, s, col);
+    spectext::detail_value(0, 0, pass, s, col);
     CHECK_COND(s.view() == "Pass");
     s.clear();
-    spectext::detail_value(1, 0, pass, nullptr, s, col);
+    spectext::detail_value(1, 0, pass, s, col);
     CHECK_COND(s.view() == "12.3ms");
-    // Without the engine the limit, the count and the place read dim "-".
+    // A cell with no detail (a journal written before it) reads the limit, the count and the place as dim "-".
     for (int row : {2, 3, 5}) {
-        s.clear();
-        spectext::detail_value(row, 0, pass, nullptr, s, col);
+        s.clear(); col = 0;
+        spectext::detail_value(row, 0, pass, s, col);
         CHECK_COND(s.view() == "-");
+        CHECK_EQ(int(col), int(kDim));
     }
     s.clear();
-    spectext::detail_value(4, 0, pass, nullptr, s, col);
+    spectext::detail_value(4, 0, pass, s, col);
     CHECK_COND(s.view() == "0");
     // The penalty is the check's weight times its fails.
     const specsec::Cell bad = cell_of(sc::Verdict::Fail, 2, 505);
     s.clear();
-    spectext::detail_value(6, 8, bad, nullptr, s, col);
+    spectext::detail_value(6, 8, bad, s, col);
     CHECK_EQ(static_cast<unsigned>(s.view().empty() ? 0 : s.view()[0] - '0') > 0u, true);
     s.clear();
-    spectext::detail_value(0, 8, bad, nullptr, s, col);
+    spectext::detail_value(0, 8, bad, s, col);
     CHECK_COND(s.view() == "Fail");
-    // With the engine's aggregate they all read.
+    // With the detail in the cell they all read.
     sc::Agg a;
     a.n = 4; a.fails = 2; a.worst = 5050; a.lo = 4750; a.hi = 5250; a.a = 0x02; a.b = 3;
+    const specsec::Cell kept = specsec::cell_of(sc::Check::Accuracy, a);
     s.clear();
-    spectext::detail_value(2, 8, bad, &a, s, col);
+    spectext::detail_value(2, 8, kept, s, col);
     CHECK_COND(s.view() == "4.75V-5.25V");
     s.clear();
-    spectext::detail_value(3, 8, bad, &a, s, col);
+    spectext::detail_value(3, 8, kept, s, col);
     CHECK_COND(s.view() == "4");
+    s.clear();
+    spectext::detail_value(5, 8, kept, s, col);
+    CHECK_COND(s.view() == "PDO 2 to 3");
     // Skip: the reason in the Worst row, no limit.
     const specsec::Cell skip = cell_of(sc::Verdict::Skip, 0, 0, sc::Skip::NoPps);
     s.clear();
-    spectext::detail_value(1, 9, skip, nullptr, s, col);
+    spectext::detail_value(1, 9, skip, s, col);
     CHECK_COND(s.view() == sc::skip_name(sc::Skip::NoPps));
     s.clear();
-    spectext::detail_value(0, 9, skip, nullptr, s, col);
+    spectext::detail_value(0, 9, skip, s, col);
     CHECK_COND(s.view() == "Skip");
     // An inferred limit is reported, never judged: Unverified.
     s.clear();
-    spectext::detail_value(0, static_cast<int>(sc::Check::PpsSettle), cell_of(sc::Verdict::Unverified, 0, 40), nullptr, s, col);
+    spectext::detail_value(0, static_cast<int>(sc::Check::PpsSettle), cell_of(sc::Verdict::Unverified, 0, 40), s, col);
     CHECK_COND(s.view() == "Unverified");
+}
+
+// The user's decision of 2026-11-16: a resumed run reads the same limit, count and place as the live one. Every check of a result is
+// shown from the engine's aggregates (the live cells), then through both wire forms and back (the journal's two records), and every
+// Detail row must read the same text and colour; and each of them equals what the aggregate itself says.
+static void test_a_restored_cell_shows_what_the_live_one_does() {
+    std::array<sc::Agg, sc::kChecks> agg{};
+    for (std::size_t i = 0; i < specsec::kCells; ++i) {
+        sc::Agg& a = agg[static_cast<std::size_t>(specsec::kOrder[i])];
+        const sc::CheckDef& d = sc::kDefs[static_cast<std::size_t>(specsec::kOrder[i])];
+        a.n = static_cast<std::uint16_t>(1 + 37 * i);
+        a.fails = static_cast<std::uint16_t>(i % 3);
+        a.worst = d.unit == sc::Unit::Mv ? 5000 + 13 * static_cast<int>(i) : 1000 + 250 * static_cast<int>(i);
+        a.lo = d.unit == sc::Unit::Mv ? 4750 : 0;
+        a.hi = d.unit == sc::Unit::Mv ? 5250 : 2500 + 100 * static_cast<int>(i);
+        if (d.kind == sc::Kind::Range && i % 2) a.lo = -sc::kOpenLimit;   // overshoots: one open side
+        if (d.kind == sc::Kind::Range && i % 4 == 0) { a.lo = 4750; a.hi = sc::kOpenLimit; }
+        a.a = static_cast<std::uint8_t>(0x10 + i); a.b = static_cast<std::uint8_t>(20 + i);
+    }
+    const specsec::Result live = specsec::from_aggs(agg, specsec::End::Done, 0, false);
+    std::array<std::uint8_t, specsec::kWireBytes> w{};
+    std::array<std::uint8_t, specsec::kDetailBytes> dw{};
+    specsec::to_wire(live, w);
+    specsec::to_detail_wire(live, dw);
+    specsec::Result back;
+    CHECK_COND(specsec::from_wire(w.data(), w.size(), back));
+    CHECK_COND(!back.same(live));   // the first record alone has no detail
+    CHECK_COND(specsec::from_detail_wire(dw.data(), dw.size(), back));
+    CHECK_COND(back.same(live));
+    CHECK_EQ(dw.size(), static_cast<std::size_t>(8 * specsec::kCells));
+    CHECK_COND(!specsec::from_detail_wire(dw.data(), dw.size() - 1, back));
+    int judged = 0;
+    for (std::size_t i = 0; i < specsec::kCells; ++i) {
+        const int check = static_cast<int>(specsec::kOrder[i]);
+        const sc::Agg& a = agg[static_cast<std::size_t>(check)];
+        for (int row = 0; row < spectext::kDetailRows; ++row) {
+            StrBuf<20> x, y;
+            std::uint16_t cx = 0, cy = 0;
+            spectext::detail_value(row, check, live.cells[i], x, cx);
+            spectext::detail_value(row, check, back.cells[i], y, cy);
+            CHECK_COND(x.view() == y.view());
+            CHECK_EQ(int(cx), int(cy));
+        }
+        // And the cell's own text is the aggregate's: the limit as put_limit prints the bounds, the count, the place.
+        if (!live.cells[i].measured()) continue;
+        ++judged;
+        StrBuf<20> lim, ref, cnt, at, refat;
+        std::uint16_t col = 0;
+        spectext::detail_value(2, check, back.cells[i], lim, col);
+        spectext::put_limit(ref, sc::kDefs[static_cast<std::size_t>(check)], a.lo, a.hi);
+        CHECK_COND(lim.view() == ref.view());
+        spectext::detail_value(3, check, back.cells[i], cnt, col);
+        CHECK_COND(cnt.view() == StrBuf<20>().put_u32(a.n).view());
+        spectext::detail_value(5, check, back.cells[i], at, col);
+        spectext::put_where(check, a.a, a.b, refat);
+        CHECK_COND(at.view() == refat.view());
+    }
+    CHECK_EQ(judged > 20, true);
 }
 
 static void test_from_aggs_and_wire() {
@@ -206,8 +287,13 @@ static void test_from_aggs_and_wire() {
     specsec::to_wire(r, w);
     specsec::Result back;
     CHECK_COND(specsec::from_wire(w.data(), w.size(), back));
+    CHECK_COND(!back.same(r));   // the first form carries no detail (the second does, below)
+    std::array<std::uint8_t, specsec::kDetailBytes> dw{};
+    specsec::to_detail_wire(r, dw);
+    CHECK_COND(specsec::from_detail_wire(dw.data(), dw.size(), back));
     CHECK_COND(back.same(r));
     CHECK_EQ(int(back.cells[0].value), int(r.cells[0].value));
+    CHECK_EQ(int(back.cells[8].n), 3);   // Accuracy: the engine's count rides along
     CHECK_EQ(w.size(), static_cast<std::size_t>(3 + 4 * specsec::kCells));
     // A different value is a different result (same() reads the number too).
     specsec::Result other = r;
@@ -240,6 +326,8 @@ int main() {
     test_quantize();
     test_value_text();
     test_limit_text();
+    test_limit_quantize();
+    test_a_restored_cell_shows_what_the_live_one_does();
     test_where_text();
     test_cell_text();
     test_detail_rows();

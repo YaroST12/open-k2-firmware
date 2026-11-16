@@ -737,10 +737,14 @@ ended hard); a lost link ends it as a fault. The default image has no spec stage
 The grid gains a section after the units: 27 VerdictCells (`specsec::kOrder`, labels in `spec_text.hpp`, at most 8 characters in
 the 52 px label strip) in the ordinary rows, a 2 px rule above the PPS block, the AVS block and the observer. A cell shows the worst value (or, for a skipped check, the
 reason, struck out); OK on a cell opens `SpecDetail`: a KvTable of Verdict,
-Worst, Limit, Count, Fails, At and Penalty. A cell keeps only its verdict, fail count and worst value, so Limit, Count and At
-come from the engine's aggregate while it still holds the same run (the live run); after a journal restore or another pdspec run
-they read a dim "-" and the Worst value and the verdict carry the page. The journal keeps the section (`Type::Spec`, journal format 3); the report card
-does not. Remote `0x0B [6, off]` reads it; `ct_start.py` and the web grid (`ctgrid.js`) show it as its own section.
+Worst, Limit, Count, Fails, At and Penalty. A cell keeps its verdict, fail count and worst value plus the detail the page shows
+(user decision 2026-11-16): the limit it was judged against (two int16, the value's quantisation, 32767 = the open side), the engine's
+count and the place (a, b). Live and resumed runs read the same stored values; a journal written before the detail record has none
+(count 0) and its cells read a dim "-" with the Worst value and the verdict carrying the page. The journal keeps the section
+(`Type::Spec`, `/jr/sp.rec`) and its detail (`Type::SpecDetail`, `/jr/spd.rec`, written right behind it): a second
+record. The journal format is 4; a format 3 journal still loads (its cells read "-"), a firmware that only knows format 3 drops a format 4 journal. The report card does not carry either.
+Remote `0x0B [6, off]` reads the section and `0x0B [7, off]` its detail (216 bytes, chunks of 48; each form fits the one-byte total);
+`ct_start.py`, `k2_remote` and the web grid (`ctgrid.js`) show it as its own section with the limit and count in the failure lines and titles.
 `result_layout` turns the run's steps into rows and tokens (`build`; the on-device grid has no header rows, a skip tag
 glued to a token is not drawn), `wrap` fits them to the cell area (`Metrics{adv, pad, gap, avail, mark, max_groups, cells}`:
 the grid sets `cells` (equal-width cells, only the head's volt text counts) and `max_groups = 5` (163 px at 8 px advance);
