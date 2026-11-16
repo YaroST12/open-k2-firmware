@@ -411,9 +411,22 @@ Seen in: `b_ct_algorithms.png` (radio, count tail, note, chevron), `b_ct_cable.p
 | Key | font 16, `kDim`, x6 |
 | Value | font 16, left edge at a page-fixed column: x72 (18 characters) or x92 (16 characters) |
 | Value colour | `kText`; the unit colour for a measured value; `kCaution` for the abnormal row; `kDim` or `kFaint` for `--` |
-| Settable row | `kv_row_sel`: a row the cursor can stand on (the charger test's Level). Focused, it takes the RowList focus look (`kFocusFill` ground, the 3 px `kFocusBar` when the theme has one, else the on-focus inks); OK changes its value in place, the strip says `Change` and the footer explains the value |
+| Settable row | `kv_row_sel`: a row the cursor can stand on. Focused, it takes the RowList focus look (`kFocusFill` ground, the 3 px `kFocusBar` when the theme has one, else the on-focus inks); OK changes its value in place, the strip says `Change` and the footer explains the value. A choice of a few words is a SegmentedControl instead (below) |
 | Repaints | one row (224 x 25) when its key, value, colour or focus changes |
-| Seen in | `b_ct_review.png` (x72: Tests, Spoof, then the settable Level row; the 2026-11-15 Review keeps three rows), `b_ct_detail.png` (x92: Target, Measured, Window, Reason, Header or Mode, Scope) |
+| Seen in | `b_ct_review.png` (x72: Tests, Spoof; the Level choice under them is a SegmentedControl since 2026-11-16), `b_ct_detail.png` (x92: Target, Measured, Window, Reason, Header or Mode, Scope) |
+
+**SegmentedControl: `kit::draw_segmented`** (user decision 2026-11-16: the Review step's Level must obviously be a control).
+
+| | |
+|---|---|
+| Purpose | A pick of 2 to 4 short words that is plainly a control (the charger test's Level: Light, Medium, Deep) |
+| Block | `kit::kSegH` = 34 px, full width: a label row (`kSegLabelH` 14 px, font 12, `kInk2`, x6) and a segment bar (`kSegBarH` 20 px) |
+| Segments | equal width across x6..w-6, 2 px apart (`kit::seg_span`); the word centred in font 16 |
+| Picked | solid `kFocus`, dark `kSpotInk` word |
+| Others | 2 px frame (`kRule`; `kFocus` when the control holds the cursor), normal ink; the frame is painted after the word so a landscape mapping that loses rows never opens it |
+| Focused | the whole block takes the RowList focus look (`kFocusFill` ground, the 3 px `kFocusBar`); OK steps to the next segment and wraps, the footer says what the pick does |
+| Repaints | the block (224 x 34) when the pick or the focus changes; the page caches it by signature |
+| Seen in | the charger test's Review (`runs/ui-sweep-hero/review-*.png`); Settings > Test level is still a list row |
 
 ### 5.6 ActionCell: `kit::ActionCell`
 
@@ -576,15 +589,16 @@ them should move them into the kit first.
   (`Press again to start`). Strip: `Confirm`.
 - Second OK inside the window starts. Any other key, or the window running out, disarms.
 - PLUS and MINUS have no short action on a review page; their short labels are blank. The exception is a settable
-  KvTable row (`kv_row_sel`, the charger test's Level): PLUS and MINUS move between it and the ActionCell, which keeps
-  the focus by default; OK on the row changes the value in place.
+  settable control (a `kv_row_sel` row, or the charger test's Level SegmentedControl): PLUS and MINUS move between it and
+  the ActionCell, which keeps the focus by default; OK on the control changes the value in place.
 - A hazard that does not block rides in the cell as the hint line.
 - **Review warning (charger test, 2026-11-15, the user's decision).** Review step 3/3 always carries a stern warning: an
   amber AlertBand `OTHER PORT FREE` (word box 184 px = 15 characters of font 24, so "OTHER PORT EMPTY?" does not fit),
-  two font-16 lines at y68 and y86 ("A device on the other port" / "can be damaged. Unplug it.", at most 27 characters),
-  three kv rows at a 22 px pitch from y104 (Tests, Spoof, Level), the ActionCell at y172, 48 px, hint `other port must be
-  empty`, and the Caution footer `Check the other port`. The Peak and Power rows were dropped and the cell shrank from 64
-  to 48 px to make room. START's arm + CONFIRM is the acknowledgement: no extra step. It replaces the conditional OTHER PORT
+  two font-16 lines at y66 and y82 ("A device on the other port" / "can be damaged. Unplug it.", at most 27 characters),
+  two kv rows at an 18 px pitch from y100 (Tests, Spoof), the Level SegmentedControl at y136 (34 px), the ActionCell at
+  y174, 46 px, hint `other port must be empty`, and the Caution footer `Check the other port`. The Peak and Power rows
+  were dropped and the cell shrank from 64 to 46 px to make room (2026-11-16: the lines went to a 16 px pitch and the kv
+  rows from 22 to 18 px for the Level control). START's arm + CONFIRM is the acknowledgement: no extra step. It replaces the conditional OTHER PORT
   override of 5f1714a6 (reverted): the K2 no longer guesses about the other port (the inline latch keeps only certain
   evidence, `docs/CHARGER_TEST_FLOW.md`), it tells the person every time. `test_ui_no_truncation` covers it in four
   rotations; renders `mock_ct_review*`, `mock_ct_confirm*`.
@@ -905,7 +919,7 @@ Scope: every interactive page takes the unified design; the read-only instrument
 | Progress rule | y20..21 | the lab drew it at y21..22 |
 | Row hairline | top line of the row | the lab drew it on the bottom line |
 | Strip | 16 px thick | the skill said 20 px |
-| Review keys | Tests, **Spoof**, then the settable **Level** row (2026-11-15: Level took Header's place; Peak and Power dropped for the other-port warning) | the skill said Cable |
+| Review keys | Tests, **Spoof**, then the **Level** SegmentedControl (2026-11-15: Level took Header's place; Peak and Power dropped for the other-port warning; 2026-11-16: a segment bar) | the skill said Cable |
 | Step 2 title | `2/3 Spoof cable` | the skill said Cable |
 | Cable warning | band `Cable connected`; choices `Start anyway`, `Start, skip spoof`; BACK cancels | the skill said `Cable on plug` and a `Cancel` row |
 | Step detail rows | Target, Measured, Window or Reached, Reason, Header or Mode, Scope | the skill listed a `Settled` row |

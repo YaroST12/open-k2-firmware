@@ -2083,11 +2083,21 @@ static_assert(all_fit(kRdOn, kSmallAdvPx, 190), "a Waiting checklist item is wid
 // The Review table: five rows of 26 px from the body top, the key at x6 and the value from x72 (18 cells).
 constexpr kit::KvLayout kKv{kit::kBodyY, kit::kRowH, 6, nullptr, nullptr, 72, 18, Align::Left};
 // Review always carries the other-port warning: the alert band (36 px + its stripe, to y 66), two S16 lines under it, then the
-// three rows (Tests, Spoof, Level at a 22 px pitch) and the 48 px START ticket. The Peak and Power rows were dropped for the room.
-constexpr int16_t kWarnLine1Y = 68, kWarnLine2Y = 86;
-constexpr kit::KvLayout kReviewKv{104, 22, 6, nullptr, nullptr, 72, 18, Align::Left};
-constexpr int16_t kReviewCellY = 172, kReviewCellH = 48;
+// two rows (Tests, Spoof at an 18 px pitch), the Level control (a label row and a segment bar, kit::kSegH = 34 px) and the 46 px
+// START ticket. The Peak and Power rows were dropped for the room; the two warning lines moved to a 16 px pitch and the rows' pitch
+// went from 22 to 18 to make room for the Level control.
+constexpr int16_t kWarnLine1Y = 66, kWarnLine2Y = 82;
+constexpr kit::KvLayout kReviewKv{100, 18, 6, nullptr, nullptr, 72, 18, Align::Left};
+constexpr int16_t kReviewLevelY = 136, kReviewCellY = 174, kReviewCellH = 46;
+static_assert(kReviewLevelY == 100 + 2 * 18 && kReviewLevelY + kit::kSegH + 4 <= kReviewCellY && kReviewCellY + kReviewCellH == kFooterY - 2,
+              "Review: the table, the Level control and START stack above the footer");
 constexpr int kReviewLevelCell = 2;
+// The segments run Light, Medium, Deep (the order OK steps them in); Level's wire values are 0 Medium, 1 Light, 2 Deep.
+constexpr const char *kLevelItems[ct::kLevelCount] = {"Light", "Medium", "Deep"};
+constexpr int level_segment(ct::Level l) { return l == ct::Level::Light ? 0 : l == ct::Level::Medium ? 1 : 2; }
+static_assert(level_segment(ct::next_level(ct::Level::Light)) == 1 && level_segment(ct::next_level(ct::Level::Medium)) == 2 &&
+              level_segment(ct::next_level(ct::Level::Deep)) == 0, "OK steps the picked segment to the right and wraps");
+static_assert(all_fit(kLevelItems, kSmallAdvPx, kit::seg_span(224, ct::kLevelCount, 0).w - 4), "a Level segment is wider than its word");
 // The Detail table: under the verdict band, the value column at x92 (16 cells).
 constexpr kit::KvLayout kDet{60, kit::kRowH, 6, nullptr, nullptr, 92, 16, Align::Left};
 
@@ -2257,15 +2267,15 @@ void ChargerTestPage::paint_review() {
     }
     if (!kv(1, "Spoof", cb.view(), kText)) return;
 
-    // The Level row (the one row the cursor can stand on besides START; OK cycles Light -> Medium -> Deep).
+    // The Level control (the one thing the cursor can stand on besides START; OK steps Light -> Medium -> Deep -> Light).
     {
         const bool focus = s_.selection_ == kLevelRow;
-        const char *lv = ct::name(s_.options_.level);
-        const uint32_t h = mix_u32(mix(mix_init(), lv), focus ? 7u : 3u) | 1u;
+        const int lv = level_segment(s_.options_.level);
+        const uint32_t h = mix_u32(mix_u32(mix_init(), static_cast<uint32_t>(lv)), focus ? 7u : 3u) | 1u;
         if (h != cell_sig_[kReviewLevelCell]) {
-            if (pbg && !pbg->admit(static_cast<int>(c.w) * kReviewKv.pitch, true)) return;
+            if (pbg && !pbg->admit(static_cast<int>(c.w) * kit::kSegH, true)) return;
             cell_sig_[kReviewLevelCell] = h;
-            kit::kv_row_sel(c, kReviewKv, kit::kv_row_y(kReviewKv, kReviewLevelCell), "Level", lv, kText, focus);
+            kit::draw_segmented(c, kReviewLevelY, "Level", kLevelItems, ct::kLevelCount, lv, focus);
         }
     }
 

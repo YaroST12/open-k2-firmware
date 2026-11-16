@@ -764,6 +764,30 @@ void kv_row_sel(const Surface &s, const KvLayout &l, int16_t y, std::string_view
              fit_text(vf, value, l.value_chars * vf.adv, buf K2_TRUNC_ARG), inverted ? kOnFocus : value_color, bg);
 }
 
+// ---- SegmentedControl ----------------------------------------------------------------------------------------------------
+void draw_segmented(const Surface &s, int16_t y, std::string_view label, const char *const *items, int n, int picked,
+                    bool focused K2_TRUNC_DEF) {
+    const bool bar = focused && kFocusBar != 0, inverted = focused && !bar;
+    const uint16_t bg = focused ? kFocusFill : kBg;
+    const int16_t gx = bar ? 3 : 0;
+    gfx_fill(s, gx, y, static_cast<int16_t>(s.w - gx), kSegH, bg);
+    if (bar) gfx_fill(s, 0, y, 3, kSegH, kFocusBar);
+    gfx_text(s, kLabelFont, 6, static_cast<int16_t>(y + 2), label, inverted ? kOnFocusDim : kInk2, bg);
+    const int16_t by = static_cast<int16_t>(y + kSegLabelH);
+    char buf[kFitBuf];
+    for (int i = 0; i < n; i++) {
+        const SegSpan sp = seg_span(s.w, n, i);
+        const bool on = i == picked;
+        if (on) gfx_fill(s, sp.x, by, sp.w, kSegBarH, kFocus);
+        const std::string_view t = fit_text(kSmall, items[i], sp.w - 4, buf K2_TRUNC_ARG);
+        gfx_text(s, kSmall, static_cast<int16_t>(sp.x + (sp.w - text_width(kSmall, t)) / 2),
+                 static_cast<int16_t>(by + (kSegBarH - kSmall.height) / 2), t, on ? kSpotInk : inverted ? kOnFocus : kText, on ? kFocus : bg);
+        // The frame goes over the word's cell: in a landscape mapping the bar loses a row or two while the glyphs keep their size,
+        // so the cell would otherwise cut into the frame.
+        if (!on) outline(s, sp.x, by, sp.w, kSegBarH, 2, focused ? kFocus : kRule);
+    }
+}
+
 // ---- AlertBand -----------------------------------------------------------------------------------------------------------
 void draw_warn_triangle(const Surface &s, int16_t x, int16_t y, int16_t sz, uint16_t color, uint16_t ink) {
     for (int r = 0; r < sz; r++) {
