@@ -849,6 +849,25 @@ static void scp_asks_up_to_the_reported_maximum_and_current() {
     CHECK(e.target_mv() == 12000);
     CHECK(c.regs[0xB2] == accp::hi8(2500) && c.regs[0xB3] == accp::lo8(2500));   // 6 A asked, 2.5 A reported
 }
+// The CUKTECH USB-A port (hardware 2026-11-15, regs 0x90..0x97 = 99 99 B7 CA 5E 99 14 32: 5.5..10 V, 2.5 A): the planner names its direct-charge
+// rows 4.5 V 5 A and 5 V 4.5 A (the old label) or 4.5 V / 5 V 2.5 A (the label now), and the wire is the same either way: Iset 0x09C4
+// (2.5 A) in 0xB2/0xB3, the target in 0xB0/0xB1 (0x1194 = 4.5 V, 0x1388 = 5 V). A 5 A or 4.5 A ask was never written to this port.
+static void scp_cuktech_port_writes_2500_ma_for_the_5a_and_4500ma_rows() {
+    for (const auto& row : {std::pair<int, int>{4500, 5000}, std::pair<int, int>{5000, 4500}, std::pair<int, int>{4500, 2500}, std::pair<int, int>{5000, 2500}}) {
+        FakeCharger c;
+        fcp_charger(c);
+        c.scp_charger = true;
+        set_scp_limits(c, 0xB7, 0xCA, 0x99);
+        c.regs[0x90] = 0x99; c.regs[0x91] = 0x99; c.regs[0x96] = 0x14; c.regs[0x97] = 0x32;
+        Engine e(c);
+        CHECK(e.start(Proto::Scp, row.first, true, false, row.second) == Fail::None);
+        c.run(e, 6000);
+        CHECK(e.caps().scp.valid);
+        CHECK(e.caps().scp.min_mv == 5500 && e.caps().scp.max_mv == 10000 && e.caps().scp.max_ma == 2500);
+        CHECK(c.regs[0xB2] == accp::hi8(2500) && c.regs[0xB3] == accp::lo8(2500));
+        CHECK(c.regs[0xB0] == accp::hi8(row.first) && c.regs[0xB1] == accp::lo8(row.first));
+    }
+}
 static void scp_without_caps_keeps_the_old_cap_and_current() {
     FakeCharger c;
     fcp_charger(c);
@@ -1559,6 +1578,7 @@ int main() {
     scp_current_follows_the_request();
     scp_caps_are_kept_from_the_detect_session();
     scp_asks_up_to_the_reported_maximum_and_current();
+    scp_cuktech_port_writes_2500_ma_for_the_5a_and_4500ma_rows();
     scp_without_caps_keeps_the_old_cap_and_current();
     scp_session_rereads_caps_and_refuses_above_them();
     scp_not_supported(); scp_down_target_with_unchanged_vbus_is_not_overvoltage();
