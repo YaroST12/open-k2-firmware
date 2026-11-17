@@ -277,14 +277,21 @@ static void test_xiaomi_cmd_07() {
 }
 
 // Test Xiaomi auth command 0x27170208, two wire shapes:
-//  - payload 1 (Baseus FH22 family): the chain is verified at step 8 - authed goes up and
-//    Get_Source_Cap is queued. We ALSO send 0x2717010A (the CUKTECH re-announces 6 A only after
-//    the 010A/020A exchange); a 0x2717020A answer then triggers a SECOND Get_Source_Cap, a
-//    Not_Supported just clears the pending flag.
+//  - payload 1 (Baseus FH22 family): the chain is verified at step 8 - authed goes up and exactly one
+//    Get_Source_Cap is queued, nothing else. No 0x2717010A: on hardware (FH22 2C1A, 2026-11-17) a
+//    010A sent right behind that Get_Source_Cap, before its Source_Capabilities, broke the AMS and
+//    drew a Hard Reset; the source answers 010A Not_Supported anyway.
 //  - payload 0 (CUKTECH 120 W, the hardware-verified 6 A unlock): we answer 0x2717010A and the
 //    auth finishes on the 0x2717020A reply.
+static std::size_t count_of(const std::vector<TxMsg>& sent, std::uint8_t type) {
+    std::size_t n = 0;
+    for (const auto& m : sent)
+        if ((m.header & 0x1F) == type && (m.header & 0x8000) == 0 && (type == kMsgVendorDefined || ((m.header >> 12) & 7) == 0)) n++;
+    return n;
+}
+
 static void test_xiaomi_cmd_08() {
-    {   // payload 1: verified at step 8, 010A still probed
+    {   // payload 1: verified at step 8 - one Get_Source_Cap, no 010A, also not after its TX completes
         Rig r;
         constexpr std::array vdos1 = {vdm_header(0xFF00, true, 1, 2), 0x27170000u, 0x00000000u};
         send_vdm(r.sink, vdos1, r.now);
@@ -293,43 +300,26 @@ static void test_xiaomi_cmd_08() {
         const std::array vdos8 = {vdm_header(0x2717, false, 0, 8), 0x00000001u};
         send_vdm(r.sink, vdos8, r.now);
         r.pump();
+        r.run(50);
         CHECK_EQ(r.sink.status().xiaomi_authed, true);
-        bool get_cap = false, vdm_010a = false;
-        for (const auto& m : r.sent) {
-            if ((m.header & 0x1F) == kCtlGetSourceCap) get_cap = true;
-            if ((m.header & 0x1F) == kMsgVendorDefined && r.last_vdm_header() == 0x2717010Au) vdm_010a = true;
-        }
-        CHECK_EQ(get_cap, true);
-        CHECK_EQ(vdm_010a, true);
-        CHECK_EQ(r.last_vdm_header(), 0x2717010Au);
-        CHECK_EQ(r.last_vdo(1), 0x00000001u);
+        CHECK_EQ(count_of(r.sent, kCtlGetSourceCap), std::size_t(1));
+        CHECK_EQ(count_of(r.sent, kMsgVendorDefined), std::size_t(0));
+        CHECK_EQ(r.sent.size(), std::size_t(1));
+    }
+    {   // payload 1, then an unsolicited 0x2717020A: the auth is already done, no second Get_Source_Cap
+        Rig r;
+        constexpr std::array vdos1 = {vdm_header(0xFF00, true, 1, 2), 0x27170000u, 0x00000000u};
+        send_vdm(r.sink, vdos1, r.now);
+        r.pump();
+        const std::array vdos8 = {vdm_header(0x2717, false, 0, 8), 0x00000001u};
+        send_vdm(r.sink, vdos8, r.now);
+        r.pump();
         r.sent.clear();
         const std::array vdosA = {vdm_header(0x2717, false, 0, 0x0A), 0x00000000u};
         send_vdm(r.sink, vdosA, r.now);
         r.pump();
-        CHECK_EQ(r.sink.status().xiaomi_authed, true);   // stays authed
-        bool get_cap2 = false;
-        for (const auto& m : r.sent)
-            if ((m.header & 0x1F) == kCtlGetSourceCap) get_cap2 = true;
-        CHECK_EQ(get_cap2, true);   // the 020A finish fetches the re-announced caps again
-    }
-    {   // payload 1, the source answers Not_Supported to our 0x2717010A: authed finish stands
-        Rig r;
-        constexpr std::array vdos1 = {vdm_header(0xFF00, true, 1, 2), 0x27170000u, 0x00000000u};
-        send_vdm(r.sink, vdos1, r.now);
-        r.pump();
-        r.sent.clear();
-        const std::array vdos8 = {vdm_header(0x2717, false, 0, 8), 0x00000001u};
-        send_vdm(r.sink, vdos8, r.now);
-        r.pump();
         CHECK_EQ(r.sink.status().xiaomi_authed, true);
-        r.sent.clear();
-        r.ctl(kCtlNotSupported);
-        CHECK_EQ(r.sink.status().xiaomi_authed, true);
-        bool get_cap = false;
-        for (const auto& m : r.sent)
-            if ((m.header & 0x1F) == kCtlGetSourceCap) get_cap = true;
-        CHECK_EQ(get_cap, false);   // no extra fetch after Not_Supported
+        CHECK_EQ(count_of(r.sent, kCtlGetSourceCap), std::size_t(0));
     }
     {   // payload 0: answer 0x2717010A, authed on 0x2717020A
         Rig r;
@@ -1057,6 +1047,22 @@ static void test_discover_svids_waits_out_a_transition() {
     CHECK_EQ(vdm, true);
 }
 
+// Payload 0 with a source that never answers our 0x2717010A: nothing of the chain may linger and eat a later, unrelated
+// Not_Supported (here the answer to a Get_PPS_Status asked once the chain is over).
+static void test_unanswered_010a_does_not_swallow_a_later_not_supported() {
+    Rig r;
+    start_chain(r);
+    r.run(250);
+    xiaomi_cmd_w(r, 8, 0);                                   // our 0x2717010A goes out; the source stays silent
+    CHECK_EQ(r.last_vdm_header(), 0x2717010Au);
+    r.run(kXiaomiChainBoundMs + 500);
+    CHECK_EQ(r.sink.xiaomi_chain_active(r.now), false);
+    CHECK_EQ(r.sink.request_pps_status(r.now), Err::Ok);
+    r.pump();
+    r.ctl(kCtlNotSupported);
+    CHECK_EQ(int(r.sink.pps_answer().ask), int(PpsAsk::NotSupported));
+}
+
 int main() {
     test_source_svids_ack_listing_22d9_is_recorded_and_never_answered();
     test_source_svids_req_alone_is_not_xiaomi();
@@ -1092,5 +1098,6 @@ int main() {
     test_xiaomi_cmd_0A();
     test_full_xiaomi_auth_sequence();
     test_discover_svids_waits_out_a_transition();
+    test_unanswered_010a_does_not_swallow_a_later_not_supported();
     return test_report("test_pd_sink_xiaomi");
 }
