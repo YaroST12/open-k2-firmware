@@ -1063,6 +1063,39 @@ static void test_unanswered_010a_does_not_swallow_a_later_not_supported() {
     CHECK_EQ(int(r.sink.pps_answer().ask), int(PpsAsk::NotSupported));
 }
 
+// The list in force when the chain finishes is kept (XiaomiTrace::pre, the SPR words) with the step that finished it, so the charger
+// test can tell what the re-announced list unlocked. Payload 1 at 0x27170208 finishes there (8); payload 0 finishes on 0x2717020A.
+static void test_trace_keeps_the_pre_auth_list_and_the_finish_step() {
+    for (const bool verified : {true, false}) {
+        Rig r;
+        constexpr std::array vdos1 = {vdm_header(0xFF00, true, 1, 2), 0x27170000u, 0x00000000u};
+        send_vdm(r.sink, vdos1, r.now);
+        r.pump();
+        CHECK_EQ(int(r.sink.xiaomi_trace().n_pre), 0);
+        const std::array vdos8 = {vdm_header(0x2717, false, 0, 8), verified ? 0x00000001u : 0x00000000u};
+        send_vdm(r.sink, vdos8, r.now);
+        r.pump();
+        if (!verified) {
+            CHECK_EQ(int(r.sink.xiaomi_trace().finish), 0);
+            const std::array vdosA = {vdm_header(0x2717, false, 0, 0x0A), 0x00000000u};
+            send_vdm(r.sink, vdosA, r.now);
+            r.pump();
+        }
+        const XiaomiTrace& t = r.sink.xiaomi_trace();
+        CHECK_EQ(int(t.finish), verified ? 8 : 0x0A);
+        CHECK_EQ(int(t.n_pre), 6);
+        for (int i = 0; i < 6; ++i) CHECK_EQ(t.pre[size_t(i)], r.caps.pdos[size_t(i)].raw);
+        CHECK_EQ(t.pre[6], 0u);
+        // the re-announced list does not overwrite it
+        r.caps.pdos[4] = decode_pdo(0xC0DC2178);
+        const std::array vdosA = {vdm_header(0x2717, false, 0, 0x0A), 0x00000000u};
+        send_vdm(r.sink, vdosA, r.now);
+        r.pump();
+        CHECK_EQ(r.sink.xiaomi_trace().pre[4], 0xC0DC2164u);
+        CHECK_EQ(int(r.sink.xiaomi_trace().finish), verified ? 8 : 0x0A);
+    }
+}
+
 int main() {
     test_source_svids_ack_listing_22d9_is_recorded_and_never_answered();
     test_source_svids_req_alone_is_not_xiaomi();
@@ -1099,5 +1132,6 @@ int main() {
     test_full_xiaomi_auth_sequence();
     test_discover_svids_waits_out_a_transition();
     test_unanswered_010a_does_not_swallow_a_later_not_supported();
+    test_trace_keeps_the_pre_auth_list_and_the_finish_step();
     return test_report("test_pd_sink_xiaomi");
 }
