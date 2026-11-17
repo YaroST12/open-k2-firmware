@@ -1342,6 +1342,7 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
 | Save, list, rename, delete (device, remote, drive) | done | verified | `emlib`, `ui_emarker` | **FLASH** |
 | Spoof (answer SOP' with a saved cable) | done; refused while a sink is inline | verified on the top plug (2026-11-06) | `emk_spoof` | HV (a faked 5 A / 50 V cable) |
 | Spoof quirk table, K2E2 clones, `emarker learn` (power a real cable, replay DI / SVIDs / Modes / seeded vendor commands, record the replies) | done | not verified (host tests only) | `emk_quirk`, `emk_learn`, `emk_learn_hw` | PASSIVE (cable in the bottom port, no charger) |
+| Lab listen attach (`k2_remote lab listen-attach --secs 10 --port bottom`, then `k2_stream timeline`): Rd on, Auto-CRC off, passive receive of SOP / SOP' / SOP'', never transmits; hears what a brick says to its own cable (SOP' Discover Identity, the OPPO command 31 challenge and the cable's answer) | done | not verified (host tests only) | `pd_listen`, `fusb302`, `remote` | PASSIVE (charger in the bottom or top port, no load) |
 | Passive cable resistance (idle vs load) | done | not verified against a reference | `cable_r`, `ui_cabler` | PASSIVE |
 | Kelvin 8-wire cable resistance (`cable-r kelvin`, Mode on the Cable R page) | done | not verified (needs a sense fixture and at least 0.45 A of load) | `cable_r`, `ui_cabler` | |
 

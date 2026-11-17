@@ -334,6 +334,40 @@ static void test_lab() {
     check_bytes(r, kRspHeader, {1});
 }
 
+// Lab listen attach: [2, sub] stop 0 / status 2, [2, 1, secs, port] start. Reply state, end, secs, left_s, frames (LE), port.
+static void test_lab_listen() {
+    Fake f; Frame r;
+    { const auto q = request(0x51, 1, {2, 1, 10, 2}); CHECK_EQ(run(f, q, r), 1); }
+    check_header(r, 0x51, 1, Status::Ok, 7);
+    check_bytes(r, kRspHeader, {1, 2, 10, 7, 0x02, 0x01, 2});
+    CHECK_EQ(f.listen_sub, 1); CHECK_EQ(f.listen_secs, 10); CHECK_EQ(f.listen_port, 2);
+    { const auto q = request(0x51, 2, {2, 2}); CHECK_EQ(run(f, q, r), 1); }                   // status: no start arguments reach the backend
+    check_header(r, 0x51, 2, Status::Ok, 7);
+    CHECK_EQ(f.listen_sub, 2); CHECK_EQ(f.listen_secs, 0); CHECK_EQ(f.listen_port, 0);
+    { const auto q = request(0x51, 3, {2, 0}); CHECK_EQ(run(f, q, r), 1); }                   // stop
+    check_header(r, 0x51, 3, Status::Ok, 7);
+    CHECK_EQ(f.listen_sub, 0);
+    f.listen_sub = 0xFF;
+    { const auto q = request(0x51, 4, {2, 1, 31, 0}); CHECK_EQ(run(f, q, r), 1); }            // over the 30 s cap
+    check_header(r, 0x51, 4, Status::BadArg, 0);
+    { const auto q = request(0x51, 5, {2, 1, 10, 3}); CHECK_EQ(run(f, q, r), 1); }            // unknown port label
+    check_header(r, 0x51, 5, Status::BadArg, 0);
+    { const auto q = request(0x51, 6, {2, 3}); CHECK_EQ(run(f, q, r), 1); }                   // unknown sub-op
+    check_header(r, 0x51, 6, Status::BadArg, 0);
+    { const auto q = request(0x51, 7, {2, 1, 10}); CHECK_EQ(run(f, q, r), 1); }               // start needs secs and port
+    check_header(r, 0x51, 7, Status::BadLength, 0);
+    { const auto q = request(0x51, 8, {2, 2, 0}); CHECK_EQ(run(f, q, r), 1); }                // status takes nothing
+    check_header(r, 0x51, 8, Status::BadLength, 0);
+    { const auto q = request(0x51, 9, {2}); CHECK_EQ(run(f, q, r), 1); }
+    check_header(r, 0x51, 9, Status::BadLength, 0);
+    CHECK_EQ(f.listen_sub, 0xFF);                                                           // none of the bad frames reached the backend
+    // A refused start carries the one-byte reason (pd::ListenRefusal) of the backend.
+    f.listen_status = static_cast<uint8_t>(Status::Busy); f.listen_refusal = 3;
+    { const auto q = request(0x51, 10, {2, 1, 10, 0}); CHECK_EQ(run(f, q, r), 1); }
+    check_header(r, 0x51, 10, Status::Busy, 1);
+    check_bytes(r, kRspHeader, {3});
+}
+
 static void test_cable_r() {
     Fake f; Frame r;
     // Status with no payload and with op 0: read-only, no reset.
@@ -1466,6 +1500,7 @@ static void test_lines_locked_by_the_svooc_trigger() {
         {{1, 1}, 0x51},                       // lab sniff arm
         {{1, 0}, 0x51},                       // lab sniff cancel
         {{1, 3, 1}, 0x51},                    // lab sniff selftest
+        {{2, 1, 10, 0}, 0x51},                // lab listen start (Rd on the CC line)
         {{0, 50, 10, 0, 1}, 0x51},            // lab load (a load on the output)
         {{kUfcsProbe}, 0x52},                 // UFCS probe
         {{kActionFcScan, 1}, 0x06},           // the FcScan action
@@ -1486,7 +1521,7 @@ static void test_lines_locked_by_the_svooc_trigger() {
     // still open: fc status and reset, the vooc read, the trigger's status and stop, lab sniff status, UFCS status / stop
     const Case open[] = {
         {{0}, 0x32}, {{1}, 0x32}, {{4, 0}, 0x32}, {{5, 0, 0}, 0x32}, {{5, 2}, 0x32},
-        {{1, 2}, 0x51}, {{kUfcsStatus}, 0x52}, {{kUfcsStop}, 0x52},
+        {{1, 2}, 0x51}, {{2, 2}, 0x51}, {{2, 0}, 0x51}, {{kUfcsStatus}, 0x52}, {{kUfcsStop}, 0x52},
     };
     for (const Case &c : open) {
         CHECK_EQ(run(f, request(c.cmd, seq, c.req), r), 1);
@@ -3452,6 +3487,7 @@ int main() {
     test_fc();
     test_fc_vooc_monitor();   // vooc-monitor
     test_fc_svooc_trigger();  // svooc-trigger
+    test_lab_listen();
     test_lines_locked_by_the_svooc_trigger();
     test_ripple_frame();
     test_pdos();

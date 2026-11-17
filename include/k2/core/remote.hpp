@@ -135,6 +135,7 @@ public:
     remote::CableRInfo cable_r_info();
     remote::LabResult lab_load(uint8_t duty, uint16_t ms);
     remote::SniffInfo lab_sniff(uint8_t sub);
+    remote::ListenInfo lab_listen(uint8_t sub, uint8_t secs, uint8_t port);   // listen attach (k2::fusb302::listen_*)
     // --- vooc-monitor (k2/vooc-detect) ---
     remote::VoocSnapshot vooc_monitor(uint8_t set);           // inline VOOC monitor: 0 off, 1 on, 2 keep; never drives
     svooc::Refusal svooc_start(uint8_t cap_s, bool usb_a, const svooc::Params &params);    // guarded no-load SuperVOOC trigger (FC op 5), remote only; usb_a = far-sink waiver; params = responder knobs
@@ -175,7 +176,7 @@ public:
     remote::Status qrtest_show(uint8_t version, uint8_t px, uint8_t quiet);
     bool qrtest_stop();
     size_t blackbox(uint8_t op, uint32_t arg, std::span<uint8_t> out);   // PD black box ring (k2::pdtrace)
-    bool ports_busy() { return ui_.ports_busy(); }   // a charger test or an FC release owns the link
+    bool ports_busy();   // a charger test or an FC release owns the link
     size_t emlib(std::span<const uint8_t> req, std::span<uint8_t> out);   // saved-cable library and spoof (k2::storage, k2::emk_spoof)
     size_t cards(std::span<const uint8_t> req, std::span<uint8_t> out);   // charger report cards (k2::report_card::hw)
     size_t twin(std::span<const uint8_t> req, std::span<uint8_t> out);    // device twins (k2::twin::wire over k2::storage and k2::twin_hw)

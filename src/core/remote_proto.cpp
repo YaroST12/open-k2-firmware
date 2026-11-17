@@ -458,6 +458,12 @@ size_t encode_sniff(std::span<uint8_t> out, const SniffInfo &r) {
     return w.size();
 }
 
+size_t encode_listen(std::span<uint8_t> out, const ListenInfo &r) {
+    Writer w(out);
+    w.u8(r.state); w.u8(r.end); w.u8(r.secs); w.u8(r.left_s); w.u16(r.frames); w.u8(r.port);
+    return w.size();
+}
+
 // --- vooc-monitor (k2/vooc-detect): FC op 4 pages, layout in remote_proto.hpp ---
 size_t encode_vooc(std::span<uint8_t> out, const VoocSnapshot &v, uint8_t page) {
     Writer w(out);

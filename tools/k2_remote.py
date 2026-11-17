@@ -4109,7 +4109,40 @@ SNIFF_END = {0: "none", 1: "full", 2: "idle", 3: "detach", 4: "timeout", 5: "can
              6: "storm"}   # vooc-monitor: the edge-storm guard ended it (data traffic on D+/D-)
 
 
+LISTEN_END = {0: "none", 1: "done", 2: "stopped", 3: "lost the port"}   # pd::ListenEnd
+LISTEN_REFUSALS = {1: "bad argument", 2: "busy: a charger test, PD Stress, a trigger or another tool owns the link",
+                   3: "inline: a sink or host is attached behind the K2", 4: "Rd is pinned at boot (self-powered)",
+                   5: "the e-marker spoof or Ra mode is armed", 6: "a listen window is already running"}   # pd::ListenRefusal
+LISTEN_PORTS = {"auto": 0, "top": 1, "bottom": 2}   # a label only: the top plug and the bottom receptacle share the CC nets
+
+
+def decode_listen(p):
+    _need(p, 7, "lab listen-attach")
+    return {"state": "listening" if p[0] else "idle", "end": LISTEN_END.get(p[1], p[1]), "secs": p[2], "left_s": p[3],
+            "frames": p[4] | p[5] << 8, "port": {v: k for k, v in LISTEN_PORTS.items()}.get(p[6], p[6])}
+
+
+def cmd_listen_attach(link, a):
+    """Present Rd with Auto-CRC off and listen for --secs; the K2 never transmits. Frames land in the Black Box (k2_stream timeline)."""
+    secs = a.secs
+    if not 1 <= secs <= 30:
+        raise SystemExit("lab listen-attach: --secs must be 1..30")
+    try:
+        d = decode_listen(link.call(CMD_LAB, bytes([2, 1, secs, LISTEN_PORTS[a.port]])).payload)
+    except RemoteError as e:
+        if e.status == STATUS_BUSY and e.payload:
+            raise SystemExit(f"lab listen-attach refused: {LISTEN_REFUSALS.get(e.payload[0], e.payload[0])}") from None
+        raise
+    deadline = time.monotonic() + secs + 5
+    while d["state"] == "listening" and time.monotonic() < deadline:
+        time.sleep(0.5)
+        d = decode_listen(link.call(CMD_LAB, bytes([2, 2])).payload)
+    return d
+
+
 def cmd_lab(link, a):
+    if a.lab_cmd == "listen-attach":
+        return cmd_listen_attach(link, a)
     if a.lab_cmd == "load":
         args = bytes([0, a.duty]) + a.ms.to_bytes(2, "little") + bytes([1 if a.confirm else 0])
         return decode_lab(link.call(CMD_LAB, args).payload)
@@ -5589,6 +5622,9 @@ def build_parser():
     sll.add_argument("duty", type=int)
     sll.add_argument("ms", type=int)
     sll.add_argument("--confirm", action="store_true", help="required: acknowledges the PA8 pulse")
+    slla = sls.add_parser("listen-attach", help="Rd on, Auto-CRC off, passive receive of SOP/SOP'/SOP'' for --secs; transmits nothing; frames go to the Black Box")
+    slla.add_argument("--secs", type=int, default=10, help="window length, 1..30 (default 10)")
+    slla.add_argument("--port", choices=sorted(LISTEN_PORTS), default="auto", help="label only: both ports share the CC nets")
     sln = sls.add_parser("sniff", help="passive D+/D- edge capture into the Black Box (never drives; see tools/vooc_edges.py)")
     slns = sln.add_subparsers(dest="sniff_cmd", required=True)
     for nm, hp in (("arm", "start listening; the capture ends 150 ms after the last edge"), ("status", "state and edge count"),
