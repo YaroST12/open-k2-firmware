@@ -70,6 +70,7 @@ LIMITS = {
     "shell": 1,      # shell hardware seams
     "idle": 1,       # the LCD stream's idle hook (the pacer never nests a service round)
     "addref": 1,     # the charger-test planner's step sink
+    "listview": 1,   # ListView -> RowList row/sig adapter (which then dispatches once via "row")
 }
 
 PAGE_VIRTUALS = ("update", "on_event", "draw_static", "enter", "leave", "sample", "labels", "invalidate")
@@ -99,7 +100,7 @@ RESOLVE = [
      ("page", "*virt")),
     (r"k2::http_server::.*::start\(", r"^k2::capture_begin\(", ("hook",)),     # Shot::begin is main's capture lambda
     (r"^(Reset_Handler|k2_reset_main)$", r"^_GLOBAL__sub_I_", ("init", "*empty")),  # the static constructors (may be none)
-    (r"k2::ListView::", r"k2::\w+Page::(draw_row|row_sig)\(", ("row",)),
+    (r"k2::ListView::", r"^k2::kit::RowList::(draw_row_cb|row_sig_cb)\(", ("listview",)),
     # ResultGrid's row-spec callback fn_ (grid_.init(..., &Page::result_row_fn, this)); the call site shows up
     # in the page's paint methods too when anchor_bottom/draw_some are inlined into them.
     (r"k2::kit::ResultGrid::|k2::\w+Page::", r"k2::\w+Page::result_row_fn\(", ("row",)),
@@ -135,9 +136,8 @@ RESOLVE = [
     (r"k2::drive::Drive::read\(|k2::vfat::Image::read\(", r"k2::drive::Drive::(fill|lfn)\(", ("drive",)),
     (r"k2::vfat::Image::dir_", r"k2::drive::Drive::lfn\(", ("drive",)),
     (r"k2::drive::Drive::(render|rebuild)", r"k2::drive::.*_FUN", ("drive",)),
-    # Fs::list_raw's callback is a storage-layer lambda (a UI lambda is never handed to it)
-    (r"k2::fs::Fs::list_raw", r"k2::(?!\w*Page)[\w:]*(Store|Library|Storage|Brief|emlib|transcap|store|emrec)"
-                              r"[\w:]*(_FUN|lambda)", ("list",)),
+    # Fs::list_raw's callback is a storage/journal-layer Fs::list<F> thunk (never a UI page lambda)
+    (r"k2::fs::Fs::list_raw", r"^k2::fs::Fs::list<(?!.*Page::).*_FUN\(", ("list",)),
     (r"^(tud_task_ext|invoke_class_control|configuration_reset)",
      r"^(hidd|mscd|cdcd|netd|tud_\w+_cb|tud_hid\w*|tud_msc\w*)", ("usb",)),
 ]
