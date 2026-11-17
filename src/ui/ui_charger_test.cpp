@@ -30,6 +30,7 @@
 #include "k2/pd/transcap_reason.hpp"
 #include "k2/pd/pd_source.hpp"
 #include "k2/pd/pdtrace.hpp"
+#include "k2/chargertest/report_card_deep.hpp"
 #include "k2/chargertest/report_card_delta.hpp"
 #include "k2/chargertest/report_card_hw.hpp"
 #include "k2/chargertest/run_events.hpp"
@@ -820,16 +821,19 @@ void ChargerTestSession::capture_identity() {
                             runner_.sweep_view());
     card_.level = runner_.level();             // the card names a Light / Deep run (v8 spare byte)
     report_card::set_auto_name(card_, mfr_);   // "<Brand> <PDP>W"; hw::put keeps a name the user gave
-    save_card_store();
+    // A Deep run's block (spec summary, SVOOC ceiling, sweep graphs) is built now, while the sweep is in RAM, into the share
+    // buffer (no share view is open under a finishing run); it is stored beside the card and the share link carries it.
+    const std::size_t blk = report_card::deep::build(card_, runner_.evidence(), runner_.sweep_view(), ctx_.ui->share_buffer());
+    save_card_store(std::span<const uint8_t>(ctx_.ui->share_buffer()).first(blk));
 }
 // save_card's tail, on its own frame: it holds the charger's previous Card (292 B) that save_card used to keep
 // beside the new one — with both on save_card's stack the frame was stack-gated (tools/stack_depth.py). The one
 // previous Card is filled by the store's own read before the write (after put the file holds the new card) and
 // handed back, so the store keeps none of its own; the delta is taken after the write.
-[[gnu::noinline]] void ChargerTestSession::save_card_store() {
+[[gnu::noinline]] void ChargerTestSession::save_card_store(std::span<const uint8_t> blk) {
     report_card::Card prev;
     bool had = false;
-    const auto err = report_card::hw::put(card_, prev, had);
+    const auto err = report_card::hw::put(card_, prev, had, blk);
     if (err != report_card::Err::Ok) { K2LOG("[CARD] save failed %d\n", int(err)); return; }
     card_no_ = card_.card_no;
     std::memcpy(card_name_, card_.name, std::min(sizeof card_name_ - 1, sizeof card_.name)); card_name_[sizeof card_name_ - 1] = 0;
@@ -2962,7 +2966,8 @@ void ChargerTestPage::share_card() {
     report_card::Card card;
     if (!report_card::hw::get(s_.card_no_, card)) return;
     const std::size_t len = qrshare::records::card(card, ctx_.ui->share_buffer());
-    ctx_.ui->open_share(qrshare::Type::Card, qrshare::kSchemaCard, s_.card_name_[0] ? s_.card_name_ : "Card", len, ctx_.now);
+    ctx_.ui->open_share(qrshare::Type::Card, qrshare::kSchemaCard, s_.card_name_[0] ? s_.card_name_ : "Card", len, ctx_.now,
+                        report_card::hw::ext(s_.card_no_));
 }
 
 void ChargerTestPage::draw_static() {

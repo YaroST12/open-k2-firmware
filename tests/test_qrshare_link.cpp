@@ -262,6 +262,33 @@ static void test_worst_card_fits_one_code() {
     const qrdec::Result d = qrdec::decode(modules, [&](int x, int y) { return qr::dark(w, x, y); });
     CHECK(d.ok);
     CHECK(d.text == std::string(out, n2));
+
+    // format 11: the same worst card at Deep with the worst Deep block (3273 bits, 412 B) is one code: 921 characters of 929
+    c.level = ct::Level::Deep;
+    const Bytes drec = card_record(c);
+    Bytes blob(rc::deep::kMaxBlob);
+    blob[0] = std::uint8_t(rc::deep::kMaxBits); blob[1] = std::uint8_t(rc::deep::kMaxBits >> 8);
+    for (std::size_t i = 2; i < blob.size(); i++) blob[i] = std::uint8_t(0xA7 ^ (i * 29));
+    blob.back() &= std::uint8_t((1u << (rc::deep::kMaxBits % 8)) - 1);
+    CHECK(rc::deep::blob_valid(blob));
+    Bytes dv2(qs::records::kMaxCardDeepV2);
+    const std::size_t dn = qs::records::pack_v2(qs::Type::Card, drec, dv2, blob);
+    CHECK(dn != 0 && dn <= qs::records::kMaxCardDeepV2 && dn <= lk::kMaxRecord);
+    CHECK_EQ(dn, 204u + 1 + (1 + 12 + rc::deep::kMaxBits + 7) / 8);   // the packed worst card, the level byte, the block (the 653 B bound has slack)
+    dv2.resize(dn);
+    char dout[lk::kMaxText + 1];
+    const std::size_t dl = lk::encode_v2(qs::Type::Card, dv2, dout);
+    CHECK_EQ(dl, lk::kHead + lk::b64_len(dn));
+    CHECK(dl != 0 && dl <= lk::kQrBytes);
+    CHECK_EQ(qs::records::kMaxCardDeepV2, 653u);
+    CHECK_EQ(lk::kHead + lk::b64_len(qs::records::kMaxCardDeepV2), 921u);
+    static std::uint8_t dcode[qr::buf_len_for(lk::kMaxVersion)], dtemp[qr::buf_len_for(lk::kMaxVersion)];
+    std::memcpy(dtemp, dout, dl);
+    const int dm = qr::encode_placed(dcode, dtemp, dl, lk::kMaxVersion);
+    CHECK(dm != 0 && dm <= 101);
+    const qrdec::Result dd = qrdec::decode(dm, [&](int x, int y) { return qr::dark_code(dcode, x, y); });
+    CHECK(dd.ok);
+    CHECK(dd.text == std::string(dout, dl));
 }
 
 // ---- the golden cards ----------------------------------------------------------------------------

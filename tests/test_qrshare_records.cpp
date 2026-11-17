@@ -18,6 +18,7 @@
 #include <cstdarg>
 
 #include "k2/battery/battery.hpp"
+#include "k2/chargertest/report_card_deep.hpp"
 #include "k2/core/binlog.hpp"
 #include "k2/core/bootinfo.hpp"
 #include "k2/core/lz.hpp"
@@ -90,6 +91,41 @@ static rc::Card card_v5() {
     rc::decode_card(raw, c);
     rc::migrate_to_current(c);
     return c;
+}
+
+// A realistic Deep run for the golden link: mixed spec verdicts, a stopped ceiling stage, a PPS and an AVS sweep. The error of
+// PPS point i is (i % 9) * 10 - 20 mV; the AVS one is a steady +35 mV (tests/test_k2_qr.py recomputes the graph from these).
+static Bytes deep_blob() {
+    namespace sc = k2::pdspec;
+    namespace dp = rc::deep;
+    rc::Card c = card_v5();
+    c.level = ct::Level::Deep;
+    c.n_ranges = 2;
+    c.range[0] = {std::uint8_t(ct::Algorithm::Pps), 1, 33, 160, 160, 0, 100};
+    c.range[1] = {std::uint8_t(ct::Algorithm::SprAvs), 2, 150, 280, 280, 0, 100};
+    std::vector<std::int16_t> pts;
+    std::vector<ctsweep::RowView> rows;
+    auto row = [&](ct::Algorithm alg, unsigned pos, unsigned lo_mv, unsigned hi_mv, unsigned n, auto err) {
+        ctsweep::RowView rv{};
+        rv.pos = std::uint8_t(pos); rv.alg = std::uint8_t(alg);
+        rv.lo_mv = std::uint16_t(lo_mv); rv.hi_mv = std::uint16_t(hi_mv);
+        rv.first = std::uint16_t(pts.size()); rv.n = std::uint16_t(n);
+        for (unsigned i = 0; i < n; ++i) pts.push_back(std::int16_t(err(i)));
+        rows.push_back(rv);
+    };
+    row(ct::Algorithm::Pps, 1, 3300, 16000, 128, [](unsigned i) { return int(i % 9) * 10 - 20; });
+    row(ct::Algorithm::SprAvs, 2, 15000, 28000, 131, [](unsigned) { return 35; });
+    ct::Evidence ev{};
+    ev.spec.end = specsec::End::Done;
+    ev.spec.cells[0] = specsec::make_cell(sc::Verdict::Pass, sc::Skip::None, 0, 1234);
+    ev.spec.cells[1] = specsec::make_cell(sc::Verdict::Fail, sc::Skip::None, 7, -321);
+    ev.spec.cells[1].a = 5; ev.spec.cells[1].b = 9;
+    ev.spec.cells[2] = specsec::make_cell(sc::Verdict::Skip, sc::Skip::NoAvs, 0);
+    ev.spec.cells[3] = specsec::make_cell(sc::Verdict::Unverified, sc::Skip::None, 0, specsec::kUnseen);
+    ev.svooc_end = 7; ev.svooc_why = 0; ev.svooc_asks = 2; ev.svooc_word = 55; ev.svooc_vmax_mv = 11250; ev.svooc_stop_ms = 3300;
+    Bytes out(dp::kMaxBlob);
+    out.resize(dp::build(c, ev, {{rows.data(), rows.size()}, {pts.data(), pts.size()}}, out));
+    return out;
 }
 
 static void bin_push(BinLog<30>& ring, std::uint32_t ms, std::uint16_t id, std::uint32_t sig, ...) {
@@ -230,6 +266,21 @@ static std::vector<Fixture> fixtures() {
             f.push_back({x.name + "_v2", x.type, r::kSchemaV2, v2});
         }
     }
+    // The format 11 card with a Deep block: the v2 stream of a Deep card, the block after the level byte.
+    {
+        rc::Card c = card_v5();
+        c.level = ct::Level::Deep;
+        c.n_ranges = 2;
+        c.range[0] = {std::uint8_t(ct::Algorithm::Pps), 1, 33, 160, 160, 0, 100};
+        c.range[1] = {std::uint8_t(ct::Algorithm::SprAvs), 2, 150, 280, 280, 0, 100};
+        const Bytes rec = build([&](auto o) { return r::card(c, o); }, r::kMaxCard);
+        Bytes v2(r::kMaxCardDeepV2);
+        const std::size_t n = r::pack_v2(qs::Type::Card, rec, v2, deep_blob());
+        if (n != 0) {
+            v2.resize(n);
+            f.push_back({"card_deep_v2", qs::Type::Card, r::kSchemaV2, v2});
+        }
+    }
     return f;
 }
 
@@ -343,6 +394,43 @@ static void test_pack_v2() {
         const Bytes rec = build([&](auto o) { return r::card(c, o); }, r::kMaxCard);
         Bytes lv2(r::kMaxEmarker);
         CHECK_EQ(r::pack_v2(qs::Type::Card, rec, lv2), n + 1);
+    }
+    // format 11: the Deep block rides after the level byte. A Deep card without it packs as before, Medium and Light cards ignore
+    // it, the worst block fills exactly kMaxCardDeepV2, and a block that is not whole is left out.
+    {
+        rc::Card c = card_v5(); c.level = ct::Level::Deep;
+        const Bytes rec = build([&](auto o) { return r::card(c, o); }, r::kMaxCard);
+        Bytes none(r::kMaxCardDeepV2), with(r::kMaxCardDeepV2);
+        const std::size_t n0 = r::pack_v2(qs::Type::Card, rec, none);
+        CHECK_EQ(n0, n + 1);
+        auto blob = [](unsigned nbits) {
+            Bytes b(2 + (nbits + 7) / 8);
+            b[0] = std::uint8_t(nbits); b[1] = std::uint8_t(nbits >> 8);
+            for (std::size_t i = 2; i < b.size(); i++) b[i] = std::uint8_t(0x5A ^ (i * 37));
+            if (nbits % 8) b.back() &= std::uint8_t((1u << (nbits % 8)) - 1);
+            return b;
+        };
+        const Bytes small_blob = blob(100);
+        const std::size_t n1 = r::pack_v2(qs::Type::Card, rec, with, small_blob);
+        CHECK(n1 > n0 && n1 <= n0 + 1 + (1 + 12 + 100 + 7) / 8 + 1);
+        Bytes none2(r::kMaxCardDeepV2);
+        CHECK_EQ(r::pack_v2(qs::Type::Card, rec, none2, Bytes{}), n0);   // an empty block changes nothing
+        CHECK(std::equal(none.begin(), none.begin() + n0, none2.begin()));
+        Bytes bad = small_blob; bad.pop_back();
+        CHECK_EQ(r::pack_v2(qs::Type::Card, rec, none2, bad), n0);       // not whole: left out
+        const Bytes worst = blob(rc::deep::kMaxBits);
+        CHECK_EQ(worst.size(), rc::deep::kMaxBlob);
+        const std::size_t nw = r::pack_v2(qs::Type::Card, rec, with, worst);
+        CHECK(nw != 0 && nw <= r::kMaxCardDeepV2);
+        CHECK_EQ(r::kMaxCardDeepV2, 653u);
+        for (const ct::Level lv : {ct::Level::Light, ct::Level::Medium}) {   // only a Deep card carries the block
+            rc::Card m = card_v5(); m.level = lv;
+            const Bytes mrec = build([&](auto o) { return r::card(m, o); }, r::kMaxCard);
+            Bytes a(r::kMaxCardDeepV2), b(r::kMaxCardDeepV2);
+            const std::size_t na = r::pack_v2(qs::Type::Card, mrec, a), nb = r::pack_v2(qs::Type::Card, mrec, b, worst);
+            CHECK_EQ(na, nb);
+            CHECK(std::equal(a.begin(), a.begin() + na, b.begin()));
+        }
     }
     // the other kinds and the malformed records refuse
     CHECK(!r::valid_v1(qs::Type::Card, pattern_bytes(202)));

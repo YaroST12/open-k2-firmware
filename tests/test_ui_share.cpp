@@ -708,7 +708,7 @@ static void test_link_kinds() {
     struct Case { qs::Type type; std::size_t len; char kind; std::string_view caption; };
     const Case cases[] = {
         {qs::Type::Emarker, 91, 'e', "Scan: cable details"},
-        {qs::Type::Emarker, ShareRecord::kBuffer, 'e', "Scan: cable details"},   // 510 B: a 730 character link, version 19 (2 px)
+        {qs::Type::Emarker, rec::kMaxEmarker, 'e', "Scan: cable details"},   // 510 B: a 730 character link, version 19 (2 px)
         {qs::Type::PdCaps, 26, 'p', "Scan: charger offers"},
         {qs::Type::PdCaps, 50, 'p', "Scan: charger offers"},
         {qs::Type::Identity, 40, 'i', "Scan: firmware info"},

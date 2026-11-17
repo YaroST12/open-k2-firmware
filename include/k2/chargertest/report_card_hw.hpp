@@ -19,7 +19,8 @@ std::uint32_t generation();                      // bumped by every successful w
 bool find(std::uint32_t fp, Card& c);
 bool get(std::uint16_t card_no, Card& c);
 Err put(Card& c);                                // see Store::put
-Err put(Card& c, Card& prev, bool& had);         // same, with the caller's buffer for the card it replaces (Store::put)
+Err put(Card& c, Card& prev, bool& had, std::span<const std::uint8_t> blk = {});   // same, with the caller's buffer for the card it replaces and a Deep run's block (Store::put)
+std::span<const std::uint8_t> ext(std::uint16_t card_no);   // the Deep block stored with a card (mapped flash, use it at once), empty when none
 Err rename(std::uint16_t card_no, std::string_view name);
 Err remove(std::uint16_t card_no);
 Context context();                               // firmware hash, boot counter and uptime for a new card

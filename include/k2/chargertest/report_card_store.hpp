@@ -6,7 +6,10 @@
 //
 // Records (ring type byte):
 //   kRecCard  stamp u32, then the card as k2/chargertest/report_card.hpp frames it (4 byte header, kPayload, CRC16):
-//             260 bytes, 274 with the ring's framing, 7 to a sector
+//             260 bytes, 274 with the ring's framing, 7 to a sector. A Deep card may carry its Deep block (the spec summary,
+//             the SVOOC ceiling and the per-range sweep graphs, k2/chargertest/report_card_deep.hpp, at most 412 bytes) after
+//             the card: 260 + the block, 2 to a sector at the most. The block is what the share link carries; it never
+//             enters the 256 byte card, so every reader of the card is unchanged.
 //   kRecGone  fp u32: the charger's card was deleted (tombstone)
 // The latest record of a fingerprint wins: a save, a re-test, a repeat or a rename appends a new kRecCard (a rename keeps
 // the old stamp, so the card keeps its place), a delete appends a kRecGone. The stamp is a counter that grows with every
@@ -27,7 +30,11 @@
 // header that closes the sector it was written into (the spare blank sector is where the next pass goes), a finished
 // copy and its original are the same card. Two cuts in a row inside passes of a full ring can leave no room at all:
 // saves are refused then (Err::Full, logged) until a factory wipe.
-// The in-RAM index (fingerprint, stamp, record address, number per card, 768 bytes) is built on the first use and kept
+// Deep blocks: a rename or a repeat carries the block along (a repeat that brings a new one replaces it); a re-test without
+// one drops it. The kMaxDeep newest blocks are never shed: maintain() carries an older card forward without its block, so
+// the blocks give way to the cards when the ring needs room (12 blocks and 52 plain cards are 22 KB of the 34 KB the ring
+// keeps in use, so that always fits); a save that finds no room for its block is retried without it (the card matters more).
+// The in-RAM index (fingerprint, stamp, record address, number per card, 1 KB) is built on the first use and kept
 // up to date by every write of this object.
 #pragma once
 #include <array>
@@ -38,6 +45,7 @@
 #include <string_view>
 
 #include "k2/chargertest/report_card.hpp"
+#include "k2/chargertest/report_card_deep.hpp"
 #include "k2/core/ringlog.hpp"
 
 namespace k2::report_card {
@@ -45,7 +53,8 @@ namespace k2::report_card {
 inline constexpr unsigned kMaxCards = 64;
 inline constexpr std::uint8_t kRingKind = 'C';                             // the ring's sector kind byte
 inline constexpr std::uint8_t kRecCard = 1, kRecGone = 2;
-inline constexpr std::size_t kRecBytes = 4 + kMaxRecord;                   // stamp + framed card: 260
+inline constexpr std::size_t kRecBytes = 4 + kMaxRecord;                   // stamp + framed card: 260 (+ the Deep block when it has one)
+inline constexpr unsigned kMaxDeep = 12;                                    // cards that keep their Deep block (the newest)
 // Blank sectors only maintain() writes: one to carry cards forward into, the rest it never fills, because a power cut that
 // tears a record header closes the sector being written (see ringlog.hpp) and the next pass needs somewhere to go. Four, so
 // three cuts in a row inside carries of a full ring still leave room (two cuts could exhaust a reserve of 2; user,
@@ -54,6 +63,7 @@ inline constexpr unsigned kRingReserve = 4;
 inline constexpr unsigned kSpare = kRingReserve + 1;                        // blank sectors maintain() keeps when it may
 static_assert(kRecBytes <= ringlog::kMaxPayload);
 static_assert(ringlog::per_sector(kRecBytes) == 7, "seven cards to a sector");
+static_assert(kRecBytes + deep::kMaxBlob <= ringlog::kMaxPayload, "a card with its worst Deep block is one record");
 
 enum class Err : std::uint8_t { Ok, Invalid, NotFound, Flash, Full };
 
@@ -96,10 +106,19 @@ public:
         bool had = false;
         return put(c, prev, had);
     }
+    // The Deep block stored with card `card_no` (a view of the mapped flash: use it before the next write or maintenance),
+    // empty when the card has none.
+    std::span<const std::uint8_t> ext(std::uint16_t card_no) const {
+        ensure();
+        for (unsigned i = 0; i < n_; ++i) if (idx_[i].card_no == card_no) return ext_of(idx_[i]);
+        return {};
+    }
     // The same save with the caller's buffer for the card it replaces: prev holds the stored card of the same
     // charger when `had` comes back true (read before the write, never modified by it), so a caller that wants
     // that card for a delta does not read it a second time or keep a second Card on the stack beside this frame.
-    Err put(Card& c, Card& prev, bool& had) {
+    // `blk`: the run's Deep block (report_card::deep::build), empty for a run without one; see the header for what
+    // becomes of it on a repeat.
+    Err put(Card& c, Card& prev, bool& had, std::span<const std::uint8_t> blk = {}) {
         had = false;
         if (c.id.fp == 0) return Err::Invalid;
         ensure();
@@ -109,13 +128,13 @@ public:
         for (unsigned i = 0; i < n_; ++i) if (idx_[i].stamp > top_stamp) top_stamp = idx_[i].stamp;
         if (had && same_results(prev, c)) {                       // identical to the stored run: count it, keep one copy
             fold_repeat(prev, c);
-            return write(c, top_stamp + 1);
+            return write(c, top_stamp + 1, blk.empty() ? ext_of(idx_[unsigned(by_fp(c.id.fp))]) : blk);
         }
         if (had) {
             c.card_no = prev.card_no;
             c.runs = prev.runs == 0xFFFF ? prev.runs : std::uint16_t(prev.runs + 1);
             inherit(c, prev);
-            return write(c, top_stamp + 1);
+            return write(c, top_stamp + 1, blk);
         }
         std::uint16_t top = 0;
         for (unsigned i = 0; i < n_; ++i) if (idx_[i].card_no > top) top = idx_[i].card_no;
@@ -125,7 +144,7 @@ public:
         // live records, of which the index lists the newest 64).
         const bool full = n_ >= kMaxCards;
         const std::uint32_t oldest = full ? idx_[lowest()].fp : 0;
-        if (const Err e = write(c, top_stamp + 1); e != Err::Ok) return e;
+        if (const Err e = write(c, top_stamp + 1, blk); e != Err::Ok) return e;
         if (full) gone(oldest);
         return Err::Ok;
     }
@@ -135,7 +154,8 @@ public:
         if (!get(card_no, c)) return Err::NotFound;
         set_name(c, name);
         c.name_auto = false;
-        return write(c, idx_[unsigned(by_fp(c.id.fp))].stamp);
+        const Ent& e = idx_[unsigned(by_fp(c.id.fp))];
+        return write(c, e.stamp, ext_of(e));
     }
     Err remove(std::uint16_t card_no) {
         Card c;
@@ -157,8 +177,9 @@ public:
         ring_.each_in(v, [&](const ringlog::Record& r) {
             const int i = keep(r, tail);
             if (i == kDrop) return true;
-            if (!ring_.append(r.type, r.payload(), {}, true)) { ok = false; return false; }
-            if (i >= 0) idx_[unsigned(i)].at = ring_.last();
+            const std::size_t n = carried(r, i);
+            if (!ring_.append(r.type, r.payload().first(n), {}, true)) { ok = false; return false; }
+            if (i >= 0) { idx_[unsigned(i)].at = ring_.last(); idx_[unsigned(i)].deep = n > kRecBytes; }
             return true;
         });
         if (!ok) { valid_ = false; return false; }   // no room even in the reserve: nothing erased
@@ -170,7 +191,8 @@ public:
     void invalidate() { valid_ = false; }
 
 private:
-    struct Ent { std::uint32_t fp = 0, stamp = 0, at = 0; std::uint16_t card_no = 0; bool current = false; };   // current: kFormat
+    // current: kFormat; deep: the record carries a Deep block
+    struct Ent { std::uint32_t fp = 0, stamp = 0, at = 0; std::uint16_t card_no = 0; bool current = false, deep = false; };
     struct Order { std::array<std::uint8_t, kMaxCards> at{}; unsigned n = 0; };
 
     ringlog::Ring& ring_;
@@ -187,8 +209,23 @@ private:
     // and, out of any sector but the oldest, the tombstone of a charger with no card now (kGone), since an older record
     // of that charger may sit in an older sector. Anything else is dropped (kDrop).
     static constexpr int kDrop = -2, kGone = -1;
+    // A card record: the stamp and the card, then nothing or a whole Deep block.
+    static bool is_card(const ringlog::Record& r) {
+        return r.type == kRecCard &&
+               (r.len == kRecBytes || (r.len > kRecBytes && deep::blob_valid({r.data + kRecBytes, r.len - kRecBytes})));
+    }
+    // Whether card `i` keeps its Deep block when carried forward: only the kMaxDeep newest of those that have one.
+    bool block_kept(int i) const {
+        unsigned newer = 0;
+        for (unsigned j = 0; j < n_; ++j) if (idx_[j].deep && idx_[j].stamp > idx_[unsigned(i)].stamp) ++newer;
+        return newer < kMaxDeep;
+    }
+    // The bytes of record `r` (index entry `i`, see keep()) that maintain() carries forward.
+    std::size_t carried(const ringlog::Record& r, int i) const {
+        return i >= 0 && r.len > kRecBytes && !block_kept(i) ? kRecBytes : std::size_t(r.len);
+    }
     int keep(const ringlog::Record& r, bool tail) const {
-        if (r.type == kRecCard && r.len == kRecBytes) {
+        if (is_card(r)) {
             for (unsigned i = 0; i < n_; ++i) if (idx_[i].at == r.at) return int(i);
             return kDrop;
         }
@@ -218,7 +255,7 @@ private:
         };
         const bool tail = s == ring_.tail();
         ring_.each_in(s, [&](const ringlog::Record& r) {
-            if (keep(r, tail) != kDrop) place(ringlog::record_bytes(r.len));
+            if (const int i = keep(r, tail); i != kDrop) place(ringlog::record_bytes(std::uint32_t(carried(r, i))));
             return ok;
         }, false);
         return ok;
@@ -250,22 +287,29 @@ private:
     static const std::uint8_t* record_of(const std::uint8_t* payload) { return payload + 4; }
 
     bool load(const Ent& e, Card& c) const {
-        const std::uint8_t* p = ring_view(e.at);
+        const std::uint8_t* p = ring_view(e.at).p;
         if (!p) return false;
         if (!decode_card({record_of(p) + 4, kPayload}, c) || c.id.fp != e.fp) return false;
         migrate_to_current(c);
         c.card_no = e.card_no;   // the number the index gives it (renumber()), which the card's next save stores
         return true;
     }
-    // The payload of the card record at `at` (mapped flash), nullptr when it is not one any more.
-    const std::uint8_t* ring_view(std::uint32_t at) const {
-        const std::uint8_t* p = nullptr;
+    // The payload of the card record at `at` (mapped flash) and its length, p == nullptr when it is not one any more.
+    struct View { const std::uint8_t* p = nullptr; std::size_t len = 0; };
+    View ring_view(std::uint32_t at) const {
+        View v;
         ring_.each_in(at - (at - ring_.base()) % ringlog::kSector, [&](const ringlog::Record& r) {
             if (r.at != at) return true;
-            if (r.type == kRecCard && r.len == kRecBytes) p = r.data;
+            if (is_card(r)) v = {r.data, r.len};
             return false;
         }, false);
-        return p;
+        return v;
+    }
+    std::span<const std::uint8_t> ext_of(const Ent& e) const {
+        if (!e.deep) return {};
+        const View v = ring_view(e.at);
+        return v.p && v.len > kRecBytes ? std::span<const std::uint8_t>(v.p + kRecBytes, v.len - kRecBytes)
+                                        : std::span<const std::uint8_t>();
     }
 
     // Builds the index from the whole ring, oldest record first: the latest record per fingerprint, tombstones remove.
@@ -274,7 +318,7 @@ private:
         n_ = 0;
         ring_.each([this](const ringlog::Record& r) {
             if (r.type == kRecGone && r.len == 4) drop_ent(detail::get32(r.data));
-            else if (r.type == kRecCard && r.len == kRecBytes) index_card(r);
+            else if (is_card(r)) index_card(r);
             return true;
         });
         renumber();
@@ -285,7 +329,7 @@ private:
     [[gnu::noinline]] void index_card(const ringlog::Record& r) const {
         Card c;
         if (!decode_card({record_of(r.data) + 4, kPayload}, c) || c.id.fp == 0) return;
-        const Ent e{c.id.fp, detail::get32(r.data), r.at, c.card_no, c.format >= kFormat};
+        const Ent e{c.id.fp, detail::get32(r.data), r.at, c.card_no, c.format >= kFormat, r.len > kRecBytes};
         if (const int i = by_fp(e.fp); i >= 0) { idx_[unsigned(i)] = e; return; }
         if (n_ < kMaxCards) { idx_[n_++] = e; return; }
         const unsigned lo = lowest();
@@ -328,12 +372,18 @@ private:
         return o;
     }
 
-    Err write(const Card& c, std::uint32_t stamp) {
+    // `blk` may be a view of the card's own old record (a rename, a repeat): the old record stays on flash until a sector
+    // erase, which only maintain() does.
+    Err write(const Card& c, std::uint32_t stamp, std::span<const std::uint8_t> blk = {}) {
         std::array<std::uint8_t, kRecBytes> b{};
         detail::put32(&b[0], stamp);
         encode_card(std::span<std::uint8_t>(b).subspan(4), c);
-        if (!ring_.append(kRecCard, b)) return ring_.scanned() ? Err::Full : Err::Flash;
-        const Ent e{c.id.fp, stamp, ring_.last(), c.card_no, true};
+        bool with = !blk.empty() && deep::blob_valid(blk);
+        if (!with || !ring_.append(kRecCard, b, blk)) {
+            with = false;                           // no block, or no room for it: the card alone
+            if (!ring_.append(kRecCard, b)) return ring_.scanned() ? Err::Full : Err::Flash;
+        }
+        const Ent e{c.id.fp, stamp, ring_.last(), c.card_no, true, with};
         if (const int i = by_fp(c.id.fp); i >= 0) idx_[unsigned(i)] = e;
         else if (n_ < kMaxCards) idx_[n_++] = e;
         else idx_[lowest()] = e;
