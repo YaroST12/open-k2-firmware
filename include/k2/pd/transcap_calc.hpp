@@ -482,6 +482,12 @@ constexpr bool persist_due(bool keep, std::uint32_t saved_seq, std::uint32_t wai
     return since_activity_ms >= quiet_ms || waited_ms >= max_wait_ms;
 }
 
+// A frozen capture nobody is waiting to persist: never kept, or kept and already stored (or its save failed and cleared the
+// keep). It holds the overlay for nothing; the next owner may drop it. A kept capture still waiting for its write is not.
+constexpr bool unkept_frozen(State s, bool keep, std::uint32_t saved_seq) {
+    return s == State::Frozen && (!keep || saved_seq != 0);
+}
+
 // A decoded capture as a Recorder-shaped view (for make_thumb / the host plot code paths).
 struct View {
     std::span<const Sample> s;
