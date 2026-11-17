@@ -37,15 +37,6 @@ struct Entry {
     const char* args;
     Id id;
     Raise raise;
-    std::string_view family() const {
-        const std::string_view n(name);
-        return n.substr(0, n.find('.'));
-    }
-    std::string_view verb() const {
-        const std::string_view n(name);
-        const std::size_t dot = n.find('.');
-        return dot == std::string_view::npos ? std::string_view{} : n.substr(dot + 1);
-    }
 };
 
 constexpr Row kRows[] = {
@@ -191,33 +182,43 @@ int level(std::string_view w, bool& raises) {
     return -1;
 }
 
+// "fam.verb" -> {fam, verb}; a bare "fam" has an empty verb.
+struct FamVerb { std::string_view fam, verb; };
+FamVerb split_name(const char* name) {
+    const std::string_view s(name);
+    const auto dot = s.find('.');
+    if (dot == std::string_view::npos) return {s, {}};
+    return {s.substr(0, dot), s.substr(dot + 1)};
+}
+
 const Entry* find(std::string_view fam, std::string_view verb, bool& verbless) {
     verbless = false;
     const Entry* bare = nullptr;
-    bool fam_seen = false;
     for (const Entry& e : kTable) {
-        if (fam != e.family()) continue;
-        fam_seen = true;
-        if (e.verb().empty()) bare = &e;
-        else if (verb == e.verb()) return &e;
+        const auto [f, v] = split_name(e.name);
+        if (f != fam) continue;
+        if (v.empty()) bare = &e;
+        else if (v == verb) return &e;
     }
     if (bare) { verbless = true; return bare; }
-    return fam_seen ? nullptr : nullptr;
+    return nullptr;
 }
 
 }  // namespace
 
-bool is_family(std::string_view w) {
-    for (const Entry& e : kTable) if (w == e.family()) return true;
+[[gnu::noinline]] bool is_family(std::string_view w) {
+    for (const Entry& e : kTable) if (split_name(e.name).fam == w) return true;
     return false;
 }
 
 std::string_view name(Id id) {
+    const auto idx = static_cast<std::size_t>(id);
+    if (idx < static_cast<std::size_t>(Id::Count) && kTable[idx].id == id) return kTable[idx].name;
     for (const Entry& e : kTable) if (e.id == id) return e.name;
     return {};
 }
 
-const char* parse(const std::string_view* t, std::size_t n, Cmd& out) {
+[[gnu::noinline]] const char* parse(const std::string_view* t, std::size_t n, Cmd& out) {
     out = Cmd{};
     if (n == 0) return "empty";
     bool verbless;
