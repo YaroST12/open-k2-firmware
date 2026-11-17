@@ -1327,7 +1327,30 @@ static void test_pps_needs_load_reads_as_a_skip_not_a_fail() {
     CHECK_EQ(chips(m, row_of(m, "PPS")).find("needs load") != std::string::npos, true);
     CHECK_EQ(int(m.tokens[find(m, "PPS")->first].tone), int(rl::Tone::Skip));
 }
+// The Running view's progress bar counts rows the run executes: plan-time skips (a Light run's advertised PD rows, a protocol the
+// charger never offered) are not part of the work, so a fresh run starts at 0 and the bar never starts half full.
+static void test_run_progress_counts_executed_rows_only() {
+    std::vector<ct::Step> s;
+    for (unsigned i = 0; i < 5; ++i) s.push_back(step(A::Pd3Fixed, 9000 + i, V::Skip, uint8_t(i + 2), 1u, ct::Reason::Advertised));
+    for (unsigned i = 0; i < 5; ++i) s.push_back(step(A::Fcp, 5000 + i, V::Pending));
+    rl::Progress p = rl::run_progress(s);
+    CHECK_EQ(p.done, 0u); CHECK_EQ(p.total, 5u);                       // 10 rows, 5 planned away: empty bar, 5 to run
+    s[5].verdict = V::Pass;
+    p = rl::run_progress(s); CHECK_EQ(p.done, 1u); CHECK_EQ(p.total, 5u);
+    s[6].verdict = V::Fail;
+    p = rl::run_progress(s); CHECK_EQ(p.done, 2u); CHECK_EQ(p.total, 5u);
+    s[7].verdict = V::Running;                                           // the row under test is work still to do
+    p = rl::run_progress(s); CHECK_EQ(p.done, 2u); CHECK_EQ(p.total, 5u);
+    s[8].verdict = V::Skip; s[8].reason = ct::Reason::Request;           // a runtime skip leaves the work: the total shrinks
+    p = rl::run_progress(s); CHECK_EQ(p.done, 2u); CHECK_EQ(p.total, 4u);
+    s[9].verdict = V::Pass; s[9].reason = ct::Reason::Folded;            // a caution is a pass that ran
+    p = rl::run_progress(s); CHECK_EQ(p.done, 3u); CHECK_EQ(p.total, 4u);
+    std::vector<ct::Step> none{step(A::Pd3Fixed, 9000, V::Skip, 2, 1u, ct::Reason::Advertised)};
+    p = rl::run_progress(none); CHECK_EQ(p.done, 0u); CHECK_EQ(p.total, 0u);   // nothing to run: empty, never a division by zero
+    p = rl::run_progress({}); CHECK_EQ(p.done, 0u); CHECK_EQ(p.total, 0u);
+}
 int main() {
+    test_run_progress_counts_executed_rows_only();
     test_pps_needs_load_reads_as_a_skip_not_a_fail();
     test_ufcs_chips_carry_the_mode_current();
     test_ufcs_chips_follow_the_modes_current_when_it_changes();

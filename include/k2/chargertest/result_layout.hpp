@@ -73,6 +73,12 @@ const char* verdict_word(const charger_test::Step& s, const ctsweep::View&);
 // (LightLevel), RUNNING, PENDING. At most 7 characters: the band's font-24 word ends before the step's name.
 const char* verdict_word(const charger_test::Step& s);
 
+// The Running view's progress bar: rows the run executes. done = Pass and Fail rows (a caution is a pass that ran); total = every row
+// that is not a Skip, so a plan-time skip (a Light run's advertised PD rows, a protocol the charger never offered) is never work, a fresh
+// run reads 0 and a runtime skip of a pending row leaves the total instead of counting as done. total 0 draws an empty bar.
+struct Progress { unsigned done = 0, total = 0; };
+Progress run_progress(std::span<const charger_test::Step> steps);
+
 struct Token {
     char text[16] = {};   // the longest chip, "3.3-21V 5.25A", is 13
     Tone tone = Tone::Dim;

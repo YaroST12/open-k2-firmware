@@ -521,7 +521,7 @@ It is drawn by the page today (`paint_detail`). It belongs in the kit beside Ale
 
 | | |
 |---|---|
-| Purpose | Steps done of total |
+| Purpose | Steps done of total. The Running view counts rows the run executes (`result_layout::run_progress`: Pass and Fail over every row that is not a Skip), so plan-time skips are not work and a fresh run reads empty |
 | Geometry | 3 px tall. Running: x6, y44, 212 px |
 | Colours | `kRule` track, `kFocus` fill |
 | Repaints | only the span that changed, between steps |

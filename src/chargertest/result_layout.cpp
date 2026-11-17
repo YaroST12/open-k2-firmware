@@ -38,6 +38,15 @@ bool deviates(const ct::Step& s, const ctsweep::View& v) {
 }
 bool caution(const ct::Step& s, const ctsweep::View& v) { return caution(s) || deviates(s, v); }
 const char* verdict_word(const ct::Step& s, const ctsweep::View& v) { return deviates(s, v) ? "CAUTION" : verdict_word(s); }
+Progress run_progress(std::span<const ct::Step> steps) {
+    Progress p;
+    for (const auto& s : steps) {
+        if (s.verdict == ct::Verdict::Skip) continue;
+        ++p.total;
+        p.done += s.verdict == ct::Verdict::Pass || s.verdict == ct::Verdict::Fail;
+    }
+    return p;
+}
 using A = ct::Algorithm;
 namespace {
 struct Out {

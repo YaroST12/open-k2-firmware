@@ -3430,6 +3430,12 @@ static bool running_cell_rows(int& top, int& bottom) {
     top = dots.front().second; bottom = top + 25;
     return true;
 }
+// The Running bar's filled pixels (kFocus on its middle line, x6..217): how far the run has come.
+static unsigned run_bar_px() {
+    unsigned n = 0;
+    for (int x = 6; x < 218; ++x) n += g_panel[45 * LCD_WIDTH + x] == kFocus;
+    return n;
+}
 // How many pixels above `y` in the grid wear the Pending ink (a chip that has not run yet).
 static unsigned pending_ink_above(int y) {
     unsigned n = 0;
@@ -3652,6 +3658,26 @@ static void test_the_running_screen_keeps_updating_through_a_qc_handshake() {
     CHECK_EQ(dead_buckets, 0u);       // and every second of the handshake the screen changed
 }
 // The grid follows the step under test: the Running cell is on screen a few ticks after every step starts, with no scrolling.
+// A Light run plans most of its rows away (advertised PD items are skips from the start): its bar must start at 0 and then only fill
+// with the rows that ran, never jump in on the plan-time skips.
+static void test_a_light_run_bar_starts_empty_and_only_fills() {
+    fixture();
+    g_stub.caps.num_pdos = 3; g_stub.caps.pdos[1] = pd::decode_pdo((180u << 10) | 300); g_stub.caps.pdos[2] = pd::decode_pdo((240u << 10) | 300);
+    Ui ui; ui.init(0); ui.set_rotation(0, 0); ui.tick(1000); ui.goto_page(static_cast<uint8_t>(Page::ChargerTest), 1100);
+    CHECK_EQ(ui.charger_test_set_level(uint8_t(ct::Level::Light)), true);
+    review(ui); start_press(ui, 1300); press(ui, Button::Ok, 1400);
+    unsigned prev = 0, ticks_running = 0; bool first = true, grew = false;
+    for (uint32_t now = 1500; now <= 400000 && ui.charger_test_busy(); now += 100) {
+        ui.tick(now);
+        if (ui.charger_test_stage() != kRunningStage) continue;
+        if (!ui.charger_test_results().quiet()) continue;
+        const unsigned px = run_bar_px();
+        if (first) { CHECK_EQ(px, 0u); dump_screen("light_start"); first = false; }   // K2_DUMP: the Light run's first screen
+        CHECK_EQ(px >= prev, true); grew |= px > prev; prev = px; ++ticks_running;
+    }
+    CHECK_EQ(ticks_running > 0, true);
+    CHECK_EQ(grew, true);
+}
 static void test_the_running_grid_follows_the_step() {
     Ui ui; start_all_run(ui);
     uint32_t now = 1500; size_t seen_idx = ~size_t(0); unsigned since = 0, steps_followed = 0, worst_lag = 0, lag = 0, missed = 0;
@@ -3674,7 +3700,7 @@ static void test_the_running_grid_follows_the_step() {
             CHECK_EQ(bottom <= kGridBottom, true);
             const unsigned pend = pending_ink_above(top);            if (pend) ++pending_above;
             const unsigned total = static_cast<unsigned>(r.steps().size());
-            if (!early_done) { dump_screen("follow_early"); early_done = true; }
+            if (!early_done) { CHECK_EQ(run_bar_px(), 0u); dump_screen("follow_early"); early_done = true; }   // the first executed row: the bar starts empty
             if (!mid_done && r.index() >= total / 2) { dump_screen("follow_mid"); mid_done = true; }
             if (r.index() + 6 >= total) dump_screen("follow_end");   // the last one followed wins
             if (top > kGridTop + 60) ++rows_above;   // the window holds finished rows above the running row
@@ -4857,7 +4883,7 @@ int main() {
     test_a_final_stop_closes_the_journal_before_it_skips();
     test_a_row_in_flight_writes_no_journal_record(); test_a_row_in_flight_paints_inside_the_budget();
     test_the_plan_is_written_in_pieces_before_the_first_request(); test_a_busy_link_defers_the_plan_but_not_for_ever(); test_a_cancel_during_the_plan_leaves_no_run(); test_a_replan_is_polled_and_done_before_the_first_phase_marker();
-    test_a_row_in_an_engine_window_paints_nothing(); test_the_running_grid_follows_the_step();
+    test_a_row_in_an_engine_window_paints_nothing(); test_the_running_grid_follows_the_step(); test_a_light_run_bar_starts_empty_and_only_fills();
     test_the_gap_line_names_the_blocked_window(); test_a_started_row_that_ends_as_a_skip_still_logs_its_gap();
     test_a_handshake_window_says_why_the_screen_is_still(); test_the_running_screen_keeps_updating_through_a_qc_handshake();
     test_failed_units_stay_above_the_running_row(); test_the_gauge_band_and_the_dot_move_in_the_same_tick();
