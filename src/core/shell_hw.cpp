@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Yaraslau Furman
 // Debug shell glue, see k2/core/shell_hw.hpp.
 #include "k2/core/shell_hw.hpp"
+#include "shell_hw_detail.hpp"
 
 #include <algorithm>
 #include <array>
@@ -15,7 +16,6 @@
 #include "k2/fastcharge/fastcharge.hpp"
 #include "k2/fastcharge/fctrig.hpp"
 #include "k2/core/fmt.hpp"
-#include "k2/core/hot.h"
 #include "k2/core/loop_guard.hpp"
 #include "k2/drivers/fusb302.hpp"
 #include "k2/drivers/lcd.hpp"
@@ -48,25 +48,35 @@
 #include "k2/ui/ui.hpp"
 
 namespace k2::shell_hw {
+
+namespace detail {
+Remote* g_remote = nullptr;
+Ui* g_ui = nullptr;
+bool g_session = false;        // the host has the port open (DTR) and the link is up
+bool g_fc_started = false;     // a trigger this shell started and has not reset
+bool g_raw_dp = false, g_raw_dm = false;   // a raw level is driven
+std::uint32_t g_silent_until = 0;          // `pd silent` deadline (ms), 0 = not silent
+}  // namespace detail
+
 namespace {
 
 constexpr std::uint32_t kWriteTimeoutMs = 50;   // a stalled host must not stall the main loop
 
-Remote* g_remote = nullptr;
-Ui* g_ui = nullptr;
+using detail::g_remote;
+using detail::g_ui;
+using detail::g_session;
+using detail::g_fc_started;
+using detail::g_raw_dp;
+using detail::g_raw_dm;
+using detail::g_silent_until;
+using detail::kLabAbortMv;
 
-bool g_session = false;        // the host has the port open (DTR) and the link is up
 bool g_log_on = false;         // `log on`
-bool g_fc_started = false;     // a trigger this shell started and has not reset
-bool g_raw_dp = false, g_raw_dm = false;   // a raw level is driven
-std::uint32_t g_silent_until = 0;          // `pd silent` deadline (ms), 0 = not silent
 bool g_putting = false;        // put() is part-way through a text: the log tap keeps out of it
-
-bool session_up() { return tud_mounted() && !tud_suspended() && tud_cdc_connected(); }
 
 // Whole text to the host, waiting briefly for FIFO room (the help text is longer than the FIFO). The wait keeps the 1 ms PD
 // service going through the main loop's idle hook, as a long LCD draw does: a slow or stalled host must not starve PD.
-void put(std::string_view s) {
+void put_impl(std::string_view s) {
     if (!g_session || usb::cdc_hold()) return;
     const std::uint32_t t0 = systick::millis();
     g_putting = true;
@@ -81,6 +91,8 @@ void put(std::string_view s) {
     }
     g_putting = false;
 }
+
+inline void put(std::string_view s) { detail::put(s); }
 
 // usb::log tap: one chip log line to the terminal; dropped when the FIFO has no room.
 void tap(std::string_view line) {
@@ -98,7 +110,7 @@ const char* fc_reason(remote::Status s) {
     return f == fc::Fail::None ? "refused" : fc::name(f);
 }
 
-void raw_to_hiz() {
+void raw_to_hiz_impl() {
     if (!g_raw_dp && !g_raw_dm) return;
     dpdm::set_dp(dpdm::Drive::HiZ);
     dpdm::set_dm(dpdm::Drive::HiZ);
@@ -111,11 +123,14 @@ void fc_stop() {
     g_fc_started = false;
 }
 
-void silent_end() {
+void silent_end_impl() {
     if (!g_silent_until) return;
     g_silent_until = 0;
     fusb302::legacy_only(false);
 }
+
+using detail::raw_to_hiz;
+using detail::silent_end;
 
 void sniff_stop() {
     dpsniff::cancel();
@@ -150,7 +165,6 @@ void stream_stop() {
 
 // ---- protocol lab (k2/core/lab.hpp): the table is parsed and confirm-checked by the shell; this runs it ----
 
-constexpr int kLabAbortMv = 12000;           // lab commands (no `fc trigger` running) drop the lines above this
 constexpr int kLabDefaultRetries = 3;
 constexpr unsigned kMaxPulses = 200;
 
@@ -1136,7 +1150,7 @@ Hw g_hw;
 shell::Shell g_shell{g_hw};
 
 // The session ended: back to 5 V and passive idle.
-void session_end() {
+void session_end_impl() {
     g_session = false;
     g_log_on = false;
     if (dpsniff::streaming()) dpsniff::cancel();
@@ -1152,52 +1166,20 @@ void session_end() {
 
 }  // namespace
 
+namespace detail {
+shell::Shell* const g_shell_ptr = &g_shell;
+void put(std::string_view s) { put_impl(s); }
+void raw_to_hiz() { raw_to_hiz_impl(); }
+void silent_end() { silent_end_impl(); }
+void session_end() { session_end_impl(); }
+}  // namespace detail
+
 void init(Remote& remote, Ui& ui) {
     if (!usbcfg::current.shell) return;
     g_remote = &remote;
     g_ui = &ui;
     dbg_hw::init(remote, ui);
     usb::set_log_tap(tap);
-}
-
-K2_HOT void poll() {
-    if (!g_remote) return;
-    const bool up = session_up();
-    if (!up) {
-        if (g_session) session_end();
-        return;
-    }
-    if (!g_session) {
-        g_session = true;
-        put("open-k2 shell, 'help' lists the commands\r\n");
-    }
-    // A raw level above 5 V-class signalling is only safe under the monitor's ceiling: drop it if VBUS got there.
-    if (g_raw_dp || g_raw_dm) {
-        const auto pm = power::read();
-        if (!pm || pm->vbus_mv > power::max_vbus_mv() || (!g_fc_started && pm->vbus_mv > kLabAbortMv) || loopguard::locked()) raw_to_hiz();
-    }
-    if (g_silent_until && static_cast<std::int32_t>(systick::millis() - g_silent_until) >= 0) silent_end();
-    std::array<char, 32> buf;
-    for (std::uint32_t n; (n = tud_cdc_read(buf.data(), buf.size())) > 0;)
-        for (std::uint32_t i = 0; i < n; i++) g_shell.feed(buf[i]);
-    if (!usb::cdc_hold()) {
-        // Edge stream: whole frames while the FIFO has room, a few per call, never waiting.
-        if (dpsniff::streaming()) {
-            dpsniff::stream_service();
-            std::array<std::uint8_t, edges::kFrameMax> f;
-            for (int i = 0; i < 8 && tud_cdc_write_available() >= f.size(); i++) {
-                const std::size_t n = dpsniff::stream_frame(f);
-                if (n == 0) break;
-                tud_cdc_write(f.data(), static_cast<std::uint32_t>(n));
-            }
-        }
-        // Debug stream (k2/core/dbg_stream.hpp): whole frames while the FIFO has room, a bounded number per pass, never waiting.
-        if (dbg_hw::running())
-            dbg_hw::service(tud_cdc_write_available(), [](std::span<const std::uint8_t> f) {
-                tud_cdc_write(f.data(), static_cast<std::uint32_t>(f.size()));
-            });
-    }
-    tud_cdc_write_flush();
 }
 
 }  // namespace k2::shell_hw
