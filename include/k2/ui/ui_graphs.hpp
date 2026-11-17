@@ -26,7 +26,7 @@ public:
     // What a column shows, in rows from the graph's top. kNoRow = nothing; lo == kUnknown = the panel is not known (the
     // column repaints whole).
     static constexpr uint8_t kNoRow = 0xFF, kUnknown = 0xFE;
-    struct Col { uint8_t lo = kUnknown, hi = kNoRow, lim = kNoRow, dot = kNoRow; };
+    struct Col { uint8_t lo = kUnknown, hi = kNoRow; };
 
 private:
     struct Shown;   // the values and texts one update shows (ui_graphs.cpp)
@@ -43,8 +43,9 @@ private:
         return m == home::Mode::Live ? live : m == home::Mode::Stale ? kStale : kFaint;
     }
     static bool admit(PaintBudget *bg, int px) { return !bg || bg->admit(px, true); }
-    void want(int k, Col (&out)[graphs::kCols]) const;
-    void paint_col(int k, int c, const Col &now, int r0, int r1) const;
+    [[gnu::noinline]] void want(int k, Col (&out)[graphs::kCols], uint8_t (&lim_out)[graphs::kCols / 2],
+                                uint8_t &dot_out) const;
+    [[gnu::noinline]] void paint_col(int k, int c, const Col &now, uint8_t lim, uint8_t dot, int r0, int r1) const;
     // Left x of the newest point's 3 x 3 dot: one pixel before the right-most column, kept inside the graph.
     int dot_x0() const {
         const int x = g_.col_x(graphs::kCols - 1) - 1, last = g_.col_x(graphs::kCols) - 3;
@@ -63,12 +64,14 @@ private:
     bool info_ok_ = false;
     uint32_t info_sig_ = 0;
     bool el_shown_ = false;
-    Field val_[graphs::kBands];
-    Field el_;
+    SmallField<6> val_[graphs::kBands];
+    SmallField<6> el_;
     uint32_t seq_seen_ = 0;
     bool graph_dirty_ = true;                // columns left for the next pass (budget) or a full repaint pending
     uint8_t rr_ = 0;                         // the band whose columns go first (a sliced pass starves none)
     Col col_[graphs::kBands][graphs::kCols];
+    uint8_t lim_[graphs::kCols / 2] = {};    // W-band limit row at odd columns (c >> 1)
+    uint8_t dot_row_[graphs::kBands] = {kNoRow, kNoRow, kNoRow, kNoRow};
 };
 
 }  // namespace k2

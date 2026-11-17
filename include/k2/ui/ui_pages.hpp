@@ -185,7 +185,12 @@ void fc_pill_text(fastcharge::Protocol p, StrBuf<6> &out);
 
 // Shared out-of-line page helpers (implemented in src/ui/ui_pages.cpp) to avoid per-TU duplication.
 namespace pg {
-[[gnu::noinline]] bool put_field(Field &f, PaintBudget *bg, std::string_view s, uint16_t fg = kText, uint16_t bg_col = kBg);
+[[gnu::noinline]] bool put_field_buf(FieldBase &f, char *cur, PaintBudget *bg, std::string_view s,
+                                     uint16_t fg = kText, uint16_t bg_col = kBg);
+template <uint8_t N>
+inline bool put_field(SmallField<N> &f, PaintBudget *bg, std::string_view s, uint16_t fg = kText, uint16_t bg_col = kBg) {
+    return put_field_buf(f, f.cur_data(), bg, s, fg, bg_col);
+}
 [[gnu::noinline]] void invalidate_fields(Field *f, int n);
 [[gnu::noinline]] void clear_body(const Surface &c, int16_t y0 = kBarH);
 [[gnu::noinline]] std::string_view stash_str(char *dst, std::size_t cap, std::string_view s);
@@ -793,10 +798,12 @@ public:
     Strip labels() const override { return base_labels(); }
     void invalidate() override;
 private:
+    struct CellState { uint16_t fg = kText; bool valid = false; char cur[10] = {}; };
     void reset_cells();
+    [[gnu::noinline]] bool put(int slot, std::string_view sv, uint16_t color);
     void paint_flow(bool live, power::Flow flow);
     static constexpr int kFields = 19;   // V, A, W, then 8 rows x 2 receipt cells (Flow paints itself)
-    Field f_[kFields];
+    CellState f_[kFields];
     uint8_t flow_sig_ = 0xFF;
     uint8_t static_step_ = 0;
 };
@@ -969,7 +976,7 @@ public:
     void leave() override;
     ListState list_state() const { return menu_.view == EmView::List && n_seqs_ > 0 ? ctx_.rows.state() : ListState{}; }
 private:
-    static constexpr int kNameSlots = 8;   // names cached for the visible window (7 rows at most): index & 7
+    static constexpr int kNameSlots = 7;   // names cached for the visible window (7 rows at most): index % 7
     static void row_fn(void *ctx, int index, bool focused, kit::RowSpec &out);
     std::string_view name_of(int index);
     void run_cmd(EmCmd cmd);
@@ -984,8 +991,8 @@ private:
     std::uint16_t cur_seq_ = 0;            // seq of cur_, 0 = none loaded
     bool have_cur_ = false;
     std::array<std::array<char, emlib::kNameMax + 1>, kNameSlots> names_{};
-    std::array<int16_t, kNameSlots> name_idx_{-1, -1, -1, -1, -1, -1, -1, -1};
-    StrBuf<24> note_;                      // what a delete answered, shown in the footer until note_until_
+    std::array<std::uint8_t, kNameSlots> name_idx_{0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+    StrBuf<12> note_;                      // what a delete answered, shown in the footer until note_until_
     bool note_caution_ = false;
     uint32_t note_until_ = 0;              // 0 = none
     uint32_t view_sig_ = ~0u;              // the view painted: a change wipes the body once
@@ -1138,7 +1145,8 @@ private:
     static void row_fn(void *self, int index, bool focused, kit::RowSpec &out);   // the protocol list
 
     static constexpr int kTraceLen = 40;  // 10 s at 4 samples per second
-    Field target_v_, vbus_v_, held_v_, state_v_;
+    SmallField<8> target_v_, vbus_v_, held_v_;
+    SmallField<12> state_v_;
     kit::ActionCell send_;                // Review: SEND, then CONFIRM with the draining bar
     uint8_t kind_ = 255;                  // body painted: 0 main, 1 scan
     uint32_t bsig_ = 0, barsig_ = 0, fsig_ = 0, tsig_ = 0, ysig_ = 0;

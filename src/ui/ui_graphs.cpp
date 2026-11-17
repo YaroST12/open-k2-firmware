@@ -217,13 +217,15 @@ bool GraphsPage::paint_info(const Shown &s, bool digits) {
 // The columns band k should show now: per column the vertical run from the previous point to this one, the W band's
 // limit row (dotted: odd columns only, anchored to the screen, so a flat limit never repaints), and the newest point's
 // 3 x 3 dot on the columns it covers.
-void GraphsPage::want(int k, Col (&out)[kCols]) const {
+[[gnu::noinline]] void GraphsPage::want(int k, Col (&out)[kCols], uint8_t (&lim_out)[kCols / 2],
+                                      uint8_t &dot_out) const {
     const trend::Trend &t = ctx_.trend;
     const trend::Window w = window_;
     const int gh = g_.graph_rows();
     uint16_t v[kCols];
     uint8_t lim[kCols] = {};
     uint32_t top = 0;
+    dot_out = kNoRow;
     if (k == 3) {
         t.energy(w, v, kCols);
         uint32_t mx = 0;
@@ -246,8 +248,9 @@ void GraphsPage::want(int k, Col (&out)[kCols]) const {
     int prev = -1, newest = -1;
     for (int c = 0; c < kCols; c++) {
         Col &o = out[c];
-        o = Col{kNoRow, kNoRow, kNoRow, kNoRow};
-        if (k == 0 && lim[c] && (c & 1)) o.lim = static_cast<uint8_t>(gh - 1 - gr::level(lim[c] * 100u, top, gh));
+        o = Col{kNoRow, kNoRow};
+        if (k == 0 && (c & 1))
+            lim_out[c >> 1] = lim[c] ? static_cast<uint8_t>(gh - 1 - gr::level(lim[c] * 100u, top, gh)) : kNoRow;
         if (v[c] == trend::kNone) { prev = -1; continue; }
         const int row = gh - 1 - gr::level(v[c], top, gh);
         const int a = prev < 0 ? row : prev;
@@ -257,12 +260,10 @@ void GraphsPage::want(int k, Col (&out)[kCols]) const {
         newest = c;
     }
     if (newest != kCols - 1) return;   // the newest point is always the right-most column (Trend::columns)
-    const int dx0 = dot_x0();
     int dr = prev - 1;
     if (dr > gh - 3) dr = gh - 3;
     if (dr < 0) dr = 0;
-    for (int c = 0; c < kCols; c++)
-        if (g_.col_x(c) <= dx0 + 2 && g_.col_x(c + 1) - 1 >= dx0) out[c].dot = static_cast<uint8_t>(dr);
+    dot_out = static_cast<uint8_t>(dr);
 }
 
 // ---- update ----------------------------------------------------------------------------------------------
@@ -316,9 +317,10 @@ void GraphsPage::invalidate() {
     frame_ok_ = false;
     info_ok_ = false;
     for (bool &h : head_ok_) h = false;
-    pg::invalidate_fields(val_, kBands);
+    for (auto &f : val_) f.invalidate();
     el_.invalidate();
     for (auto &band : col_) for (Col &c : band) c.lo = kUnknown;
+    for (uint8_t &d : dot_row_) d = kNoRow;
     graph_dirty_ = true;
 }
 

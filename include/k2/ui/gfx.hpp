@@ -29,8 +29,6 @@ Rect gfx_native_rect(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t 
 // can have a 1 px edge squeezed away to zero physical rows in a landscape rotation, and which
 // edges vanish moves as the rows scroll.
 void gfx_fill_panel(const Rect &r, uint16_t color);
-// Convenience: gfx_fill_panel(gfx_native_rect(...)).
-void gfx_fill_native(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color);
 
 // Draw UTF-8 text with its line box's top-left at (x, y); the box is painted in `bg`
 // (glyphs are blended between fg and bg), so no separate clear is needed.
@@ -54,28 +52,53 @@ constexpr int16_t top_for_baseline(const Font &f, int16_t baseline) {
 // only the cells that changed since the last call, inside its own box.
 enum class Align : uint8_t { Left, Right };
 
-class Field {
+// Diffing fixed-width text field helper shared by Field/SmallField and compact cell arrays.
+void field_draw_buf(const Surface &s, const Font &f, int16_t x, int16_t y, uint8_t chars, Align a,
+                    uint16_t fg, uint16_t bg, bool &valid, char *cur,
+                    std::string_view text K2_TRUNC_DECL);
+
+class FieldBase {
 public:
     static constexpr int kMaxChars = 32;   // the charger-test list rows are 29 chars wide
 
-    void init(const Surface &s, const Font &f, int16_t x, int16_t y, uint8_t chars, Align a,
-              uint16_t fg, uint16_t bg);
     void set_colors(uint16_t fg, uint16_t bg);   // takes effect with the next invalidate()/draw
     void invalidate() { valid_ = false; }        // next draw repaints the whole box
     bool valid() const { return valid_; }
-    void draw(std::string_view text K2_TRUNC_DECL);
     int16_t width_px() const { return static_cast<int16_t>(chars_ * font_->adv); }
     int box_px() const { return font_ ? static_cast<int>(chars_) * font_->adv * font_->height : 0; }
+    void draw_buf(char *cur, std::string_view text K2_TRUNC_DECL);
+
+protected:
+    void init_base(const Surface &s, const Font &f, int16_t x, int16_t y, uint8_t chars, uint8_t max_chars,
+                   Align a, uint16_t fg, uint16_t bg);
 
 private:
-    Surface surf_{};
     const Font *font_ = nullptr;
+    Surface surf_{};
     int16_t x_ = 0, y_ = 0;
+    uint16_t fg_ = 0, bg_ = 0;
     uint8_t chars_ = 0;
     Align align_ = Align::Left;
-    uint16_t fg_ = 0, bg_ = 0;
     bool valid_ = false;
-    char cur_[kMaxChars + 1] = {};
 };
+
+template <uint8_t MaxChars>
+class SmallField : public FieldBase {
+public:
+    static_assert(MaxChars <= kMaxChars);
+    static constexpr int kFieldChars = MaxChars;
+
+    void init(const Surface &s, const Font &f, int16_t x, int16_t y, uint8_t chars, Align a,
+              uint16_t fg, uint16_t bg) {
+        init_base(s, f, x, y, chars, MaxChars, a, fg, bg);
+    }
+    void draw(std::string_view text K2_TRUNC_DECL) { draw_buf(cur_, text K2_TRUNC_ARG); }
+    char *cur_data() { return cur_; }
+
+private:
+    char cur_[MaxChars] = {};
+};
+
+using Field = SmallField<32>;
 
 }  // namespace k2

@@ -193,7 +193,15 @@ public:
     // Clears the body around a default list (one at kBodyY): the strips above and below it. The list repaints every row it
     // owns (opaque rows, the tail strip), so a body fill under it would write those pixels twice.
     static void clear_body_around(const Surface &s);
-    void detach() { fn_ = nullptr; ctx_ = nullptr; count_ = 0; extra_ = -1; list_.invalidate(); }
+    void detach() {
+        fn_ = nullptr; ctx_ = nullptr; count_ = 0; extra_ = -1;
+        list_.set_row_sig(nullptr, nullptr);
+        list_.clear_row_bg();
+        list_.set_highlight(-1);
+        list_.invalidate();
+    }
+    ListView &raw() { return list_; }
+    const ListView &raw() const { return list_; }
 
 private:
     static void draw_row_cb(void *ctx, int index, const Rect &r, bool highlighted, Field &f);

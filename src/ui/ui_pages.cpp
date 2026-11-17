@@ -52,10 +52,10 @@ void put_volts(StrBufBase &s, uint32_t mv) {
 }  // namespace
 
 namespace pg {
-bool put_field(Field &f, PaintBudget *bg, std::string_view s, uint16_t fg, uint16_t bg_col) {
+bool put_field_buf(FieldBase &f, char *cur, PaintBudget *bg, std::string_view s, uint16_t fg, uint16_t bg_col) {
     if (bg && !f.valid() && !bg->admit(f.box_px(), true)) return false;
     f.set_colors(fg, bg_col);
-    f.draw(s);
+    f.draw_buf(cur, s);
     return true;
 }
 
@@ -452,11 +452,11 @@ void EmarkerPage::draw_static() {
     ctx_.rows.invalidate();
 }
 
-// The saved cable's name for list row `i`, from the slot cache (a window is at most 7 rows, so i % 8 never collides).
+// The saved cable's name for list row `i`, from the slot cache (a window is at most 7 rows, so i % 7 never collides).
 std::string_view EmarkerPage::name_of(int i) {
-    const int slot = i & (kNameSlots - 1);
+    const int slot = i % kNameSlots;
     if (name_idx_[slot] != i) {
-        name_idx_[slot] = static_cast<int16_t>(i);
+        name_idx_[slot] = static_cast<uint8_t>(i);
         names_[slot][0] = 0;
         cur_seq_ = 0;   // cur_ is the read buffer: the detail reloads it
         if (i >= 0 && i < n_seqs_ && storage::lib_get(seqs_[i], cur_)) {
@@ -483,7 +483,7 @@ void EmarkerPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
 
 void EmarkerPage::update(uint32_t now_ms) {
     title_badge(false);
-    if (note_until_ && static_cast<int32_t>(now_ms - note_until_) >= 0) { note_until_ = 0; note_ = StrBuf<24>(); }
+    if (note_until_ && static_cast<int32_t>(now_ms - note_until_) >= 0) { note_until_ = 0; note_.clear(); }
     const Surface &c = ctx_.content;
     const int n = n_seqs_;
     const int idx = menu_.idx;
@@ -561,7 +561,7 @@ void EmarkerPage::refresh_lib() {
     n_seqs_ = static_cast<int>(storage::lib_list(std::span<std::uint16_t>(seqs_)));
     menu_.set_count(n_seqs_);
     cur_seq_ = 0;
-    for (int16_t &i : name_idx_) i = -1;
+    for (uint8_t &i : name_idx_) i = 0xFF;
 }
 
 // What the Detail table shows on row `i` (0 = the name): the saved cable's own record, decoded.
@@ -588,7 +588,7 @@ void EmarkerPage::run_cmd(EmCmd cmd) {
     const int i = menu_.idx;
     if (i >= 0 && i < n_seqs_) {
         const bool ok = storage::lib_remove(seqs_[i]) == emlib::Err::Ok;
-        note_ = StrBuf<24>();
+        note_.clear();
         note_.put(ok ? "Deleted" : "Flash error");
         note_caution_ = !ok;
         note_until_ = ctx_.now + 2500;
@@ -600,7 +600,7 @@ void EmarkerPage::run_cmd(EmCmd cmd) {
 // Pushed from Connection's "Saved cables": the list view, a fresh library read, the first cable selected.
 void EmarkerPage::enter() {
     menu_ = EmMenu();
-    note_ = StrBuf<24>();
+    note_.clear();
     note_until_ = 0;
     refresh_lib();
 }
@@ -641,7 +641,7 @@ Strip EmarkerPage::labels() const {
 // BACK or the remote's set-page: the next visit starts on the list again.
 void EmarkerPage::leave() {
     menu_ = EmMenu();
-    note_ = StrBuf<24>();
+    note_.clear();
     note_until_ = 0;
 }
 

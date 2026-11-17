@@ -99,10 +99,6 @@ void frame_round(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, i
 // 12 x 12 icon; set bits take fg, clear bits bg (opaque).
 void draw_icon(const Surface &s, int16_t x, int16_t y, Icon icon, uint16_t fg, uint16_t bg);
 
-// 14 x 14 one-bit icons of the Big page: a wall charger (power pins on a block) and a USB-C plug.
-enum class Icon14 : uint8_t { Charger, PlugC };
-void draw_icon14(const Surface &s, int16_t x, int16_t y, Icon14 icon, uint16_t fg, uint16_t bg);
-
 // Anti-aliased vector check / cross, a square of `size` px (the font's cap height) at (x, y), fg over bg.
 void draw_mark(const Surface &s, int16_t x, int16_t y, int size, bool check, uint16_t fg, uint16_t bg);
 // Text where kMarkCheck / kMarkCross draw a green check / red cross sitting on the baseline. Returns the end x.
@@ -122,12 +118,6 @@ void draw_label_box(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h
 // Track (kRule) plus fill; only the fill/track boundary is repainted when `prev_px` is given.
 void draw_gauge(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, int fill_px, uint16_t color,
                 int prev_px = -1);
-
-// Bar with a label drawn over it (the PD trigger watt bar): rounded `track`, rounded `fill` of
-// `fill_px`, then `text` (S12, 4 px in from the left, `fg`) blended over whichever of the two is
-// behind each pixel. 0 <= fill_px <= w.
-void draw_bar_label(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, int fill_px, uint16_t track,
-                    uint16_t fill, std::string_view text, uint16_t fg);
 
 void draw_triangle(const Surface &s, int16_t x, int16_t y, int h, bool right, uint16_t color);
 
@@ -240,9 +230,6 @@ inline std::string_view role_badge(std::uint8_t pin, char (&buf)[11]) {
     return kPas;
 }
 
-// Solid stale-grey pill right-aligned to x 222, 2 px side padding ("LAST", no counter).
-void draw_last_pill(const Surface &s, std::string_view text);
-
 // Right end of the top chrome bar: the compact readout, fmt3(V) x fmt3(A) in fixed slots right-aligned
 // to x 218 (volts x152..182 in the volt colour, the multiplication sign at x 184, amps x 190..218 in
 // the amp colour; the units live in the text, the colours are redundant). Stale: the frozen readout
@@ -304,11 +291,6 @@ void draw_top_readout(const Surface &s, StatusReadout mode, std::string_view vol
 // the others a 1 px ink outline. Repaints the band rows of the right half (x 140..223), like draw_top_readout.
 constexpr int kPagerBox = 7, kPagerPitch = 11, kPagerRight = 220, kPagerY = 7;
 void draw_top_pager(const Surface &s, int count, int current);
-
-// 8 x 8 party markers of the PD match strip (the fonts have no such glyphs): 0 source (bolt),
-// 1 cable (diameter sign), 2 sink / device (rectangle).
-inline constexpr int kPartyGlyphs = 3, kPartySize = 8;
-void draw_party_glyph(const Surface &s, int16_t x, int16_t y, int party, uint16_t color);
 
 // Text that fits in `max_px` with font `f`: the text itself, or its start plus "..." written into `buf`.
 // Characters are whole UTF-8 sequences; with no room for even the dots the result is as many dots as fit.

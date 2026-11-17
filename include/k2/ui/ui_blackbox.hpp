@@ -20,8 +20,8 @@ public:
     bool on_event(Event e) override;
     Strip labels() const override;
     void invalidate() override;
-    void enter() override { mode_ = Mode::List; select_first_ = true; }   // opens on the newest capture
-    const ListState &list_state() const { return list_.state(); }
+    void enter() override { mode_ = Mode::List; select_first_ = true; tl_offset_ = 0; }   // opens on the newest capture
+    ListState list_state() const { return mode_ == Mode::Timeline ? ctx_.rows.state() : ListState{}; }
 
     static constexpr uint8_t kLive = 0xFF;  // sel_slot_ value of the live-link row
     static constexpr int kStripMax = 232;   // VBUS strip columns (upper bound)
@@ -54,7 +54,7 @@ private:
     std::span<const uint8_t> data() const { return pdtrace::capture_data(slot_); }
 
     Mode mode_ = Mode::List;
-    ListView list_;                        // timeline rows
+    int tl_offset_ = 0;                    // saved timeline scroll across draw_static()
     SlotId ids_[pdtrace::kCapSlots];
     Row rows_[2 * pdtrace::kCapSlots] = {};
     uint8_t nrows_ = 0;

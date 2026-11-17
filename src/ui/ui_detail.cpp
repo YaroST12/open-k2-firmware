@@ -116,7 +116,18 @@ void lay_row_ground(const Surface &c, int r) {
 void DetailPage::reset_cells() {
     bar_valid_ = false;
     flow_sig_ = 0xFF;
-    pg::invalidate_fields(f_, SCount);
+    for (auto &cell : f_) cell.valid = false;
+}
+
+bool DetailPage::put(int slot, std::string_view sv, uint16_t color) {
+    CellState &cell = f_[slot];
+    const Pos p = pos_of(slot);
+    const Font &font = slot < kFirstCell ? kMid : kSmall;
+    if (ctx_.budget && !cell.valid && !ctx_.budget->admit(static_cast<int>(p.chars) * font.adv * font.height, true))
+        return false;
+    if (cell.fg != color) { cell.fg = color; cell.valid = false; }
+    field_draw_buf(ctx_.content, font, p.x, p.y, p.chars, Align::Right, color, kBg, cell.valid, cell.cur, sv);
+    return true;
 }
 
 void DetailPage::draw_static() {
@@ -125,11 +136,6 @@ void DetailPage::draw_static() {
     if (static_step_ == 0) {
         if (bg && !bg->admit(140 * kBarH, true)) return;
         title_bar();
-        for (int i = 0; i < SCount; i++) {
-            const Pos p = pos_of(i);
-            if (i == SFlow) continue;   // painted whole by paint_flow (its arrow is a multi-byte glyph)
-            f_[i].init(c, i < kFirstCell ? kMid : kSmall, p.x, p.y, p.chars, Align::Right, kText, kBg);
-        }
         reset_cells();
         static_step_ = 1;
     }
@@ -218,9 +224,6 @@ void DetailPage::update(uint32_t now_ms) {
     const bool live = vbus;
     const uint16_t live_col = live ? kText : kFaint;
     StrBuf<16> s;
-    auto put = [&](int slot, std::string_view sv, uint16_t color) {
-        return pg::put_field(f_[slot], bg, sv, color);
-    };
 
     if (online) {
         s.put_fixed(pm.vbus_mv, 2);

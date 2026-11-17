@@ -337,11 +337,18 @@ void BlackBoxPage::enter_mode(Mode m) {
     foot_.invalidate();
     if (m == Mode::Timeline) {
         const int vis = std::max(1, std::min(ListView::kMaxRows, (kFooterY - kTlY) / kTlRowH));
-        list_.init(c, 6, kTlY, 21, kTlRowH, vis, kSmall, &BlackBoxPage::draw_line_row, this);
+        ctx_.rows.detach();
+        ListView &lv = ctx_.rows.raw();
+        lv.init(c, 6, kTlY, 21, kTlRowH, vis, kSmall, &BlackBoxPage::draw_line_row, this);
+        lv.set_count(int(view::count_rows(data())), false);
+        lv.set_offset(tl_offset_);
         strip_w_ = std::min<int>(kStripMax, kStripBoxW - 12);
         strip_dirty_ = true;
         shown_len_ = 0xFFFF;
-        list_.invalidate();
+        lv.invalidate();
+    } else if (m == Mode::List) {
+        ctx_.rows.detach();
+        tl_offset_ = 0;
     }
 }
 
@@ -365,12 +372,14 @@ void BlackBoxPage::update(uint32_t) {
     if (info.len != shown_len_) {          // still recording, or replaced: recount and repaint
         shown_len_ = info.len;
         strip_dirty_ = true;
-        list_.invalidate();
+        ctx_.rows.raw().invalidate();
     }
     if (strip_dirty_) { draw_strip(); strip_dirty_ = false; }
-    list_.set_count(int(view::count_rows(data())));
-    list_.draw(ctx_.now, ctx_.budget);
-    const ListState &st = list_.state();
+    ListView &lv = ctx_.rows.raw();
+    lv.set_count(int(view::count_rows(data())));
+    lv.draw(ctx_.now, ctx_.budget);
+    const ListState &st = lv.state();
+    tl_offset_ = st.offset;
     StrBuf<30> f;
     char sm[32];
     f.put(std::string_view(sm, view::format_capture_long(data(), info.seq, sm)));
@@ -395,6 +404,7 @@ bool BlackBoxPage::on_event(Event e) {
                 enter_mode(Mode::Link);
             } else {
                 slot_ = sel_slot_;
+                tl_offset_ = 0;
                 enter_mode(Mode::Timeline);
             }
             update(ctx_.now);
@@ -422,7 +432,9 @@ bool BlackBoxPage::on_event(Event e) {
         update(ctx_.now);
         return true;
     }
-    return scroll_event(list_, e, ctx_.now);
+    const bool handled = scroll_event(ctx_.rows.raw(), e, ctx_.now);
+    if (handled) tl_offset_ = ctx_.rows.state().offset;
+    return handled;
 }
 
 Strip BlackBoxPage::labels() const {
@@ -432,7 +444,6 @@ Strip BlackBoxPage::labels() const {
 }
 
 void BlackBoxPage::invalidate() {
-    list_.invalidate();
     ctx_.rows.invalidate();
     bound_ = -1;
     head_painted_ = false;

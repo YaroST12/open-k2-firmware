@@ -38,10 +38,6 @@ K2_HOT void gfx_fill_panel(const Rect &r, uint16_t color) {
                    static_cast<uint16_t>(r.w), static_cast<uint16_t>(r.h), color);
 }
 
-K2_HOT void gfx_fill_native(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color) {
-    gfx_fill_panel(gfx_native_rect(s, x, y, w, h), color);
-}
-
 K2_HOT void gfx_text(const Surface &s, const Font &f, int16_t x, int16_t y, std::string_view text,
               uint16_t fg, uint16_t bg, int16_t cell_offset K2_TRUNC_DEF) {
     if (x < 0 || y < 0 || x >= s.w || y >= s.h || text.empty()) return;
@@ -114,39 +110,47 @@ K2_HOT void gfx_text_rot(const Surface &s, const Font &f, int16_t x, int16_t y, 
     lcd::stream_end();
 }
 
-void Field::init(const Surface &s, const Font &f, int16_t x, int16_t y, uint8_t chars, Align a,
-                 uint16_t fg, uint16_t bg) {
+K2_HOT void field_draw_buf(const Surface &s, const Font &f, int16_t x, int16_t y, uint8_t chars, Align a,
+                           uint16_t fg, uint16_t bg, bool &valid, char *cur,
+                           std::string_view text K2_TRUNC_DEF) {
+    if (chars > FieldBase::kMaxChars) chars = FieldBase::kMaxChars;
+    char next[FieldBase::kMaxChars];
+    if (text.size() > chars)
+        K2_TRUNC_NOTE(trunc::Kind::Cut, text, static_cast<int>(chars) * f.adv);   // a field never wraps or grows
+    size_t len = text.size() < chars ? text.size() : chars;
+    size_t pad = a == Align::Right ? chars - len : 0;
+    for (size_t i = 0; i < chars; i++) next[i] = ' ';
+    for (size_t i = 0; i < len; i++) next[pad + i] = text[i];
+
+    int first = 0, last = chars - 1;
+    if (valid) {
+        while (first <= last && next[first] == cur[first]) first++;
+        while (last >= first && next[last] == cur[last]) last--;
+        if (first > last) return;                       // nothing changed
+    }
+    for (int i = 0; i < chars; i++) cur[i] = next[i];
+    valid = true;
+    gfx_text(s, f, x, y,
+             std::string_view(next + first, static_cast<size_t>(last - first + 1)), fg, bg,
+             static_cast<int16_t>(first * f.adv) K2_TRUNC_ARG);
+}
+
+void FieldBase::init_base(const Surface &s, const Font &f, int16_t x, int16_t y, uint8_t chars, uint8_t max_chars,
+                          Align a, uint16_t fg, uint16_t bg) {
     surf_ = s; font_ = &f; x_ = x; y_ = y; align_ = a;
-    chars_ = chars > kMaxChars ? kMaxChars : chars;
+    chars_ = chars > max_chars ? max_chars : chars;
     fg_ = fg; bg_ = bg;
     valid_ = false;
 }
 
-K2_HOT void Field::set_colors(uint16_t fg, uint16_t bg) {
+K2_HOT void FieldBase::set_colors(uint16_t fg, uint16_t bg) {
     if (fg != fg_ || bg != bg_) valid_ = false;
     fg_ = fg;
     bg_ = bg;
 }
 
-K2_HOT void Field::draw(std::string_view text K2_TRUNC_DEF) {
-    char next[kMaxChars + 1];
-    if (text.size() > chars_) K2_TRUNC_NOTE(trunc::Kind::Cut, text, width_px());   // a field never wraps or grows
-    size_t len = text.size() < chars_ ? text.size() : chars_;
-    size_t pad = align_ == Align::Right ? chars_ - len : 0;
-    for (size_t i = 0; i < chars_; i++) next[i] = ' ';
-    for (size_t i = 0; i < len; i++) next[pad + i] = text[i];
-
-    int first = 0, last = chars_ - 1;
-    if (valid_) {
-        while (first <= last && next[first] == cur_[first]) first++;
-        while (last >= first && next[last] == cur_[last]) last--;
-        if (first > last) return;                       // nothing changed
-    }
-    for (int i = 0; i < chars_; i++) cur_[i] = next[i];
-    valid_ = true;
-    gfx_text(surf_, *font_, x_, y_,
-             std::string_view(next + first, static_cast<size_t>(last - first + 1)), fg_, bg_,
-             static_cast<int16_t>(first * font_->adv) K2_TRUNC_ARG);
+K2_HOT void FieldBase::draw_buf(char *cur, std::string_view text K2_TRUNC_DEF) {
+    field_draw_buf(surf_, *font_, x_, y_, chars_, align_, fg_, bg_, valid_, cur, text K2_TRUNC_ARG);
 }
 
 }  // namespace k2
