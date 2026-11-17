@@ -518,14 +518,15 @@ static void test_a_compact_row_regenerates_the_merged_chip_with_its_mark() {
     CHECK_EQ(found, 1);
     CHECK_EQ(g.cuts, 0);
 }
-// The mark takes one glyph cell beside the volts (the kit draws a 6 px "S" 2 px right of the text), so the grid cell and the chip
-// width grow by one advance; a chip without the mark keeps its width.
-static void test_the_sweep_mark_widens_the_chip_by_one_glyph() {
+// The mark keeps m.sweep (12 px) beside the volts (the kit draws a 6 px "S" a fixed 6 px right of the text), so the grid cell
+// and the chip width grow by that; a chip without the mark keeps its width.
+static void test_the_sweep_mark_widens_the_chip_by_its_gap_and_glyph() {
     rl::Token t; std::strcpy(t.text, "5-21V 3.2A"); t.chip = true;
     rl::Token u = t; u.sweep = true;
     const rl::Metrics m = rl::kGridMetrics;
-    CHECK_EQ(rl::cell_width(u, m), rl::cell_width(t, m) + m.adv);
-    CHECK_EQ(rl::token_width(u, m), rl::token_width(t, m) + m.adv);
+    CHECK_EQ(m.sweep, 12);
+    CHECK_EQ(rl::cell_width(u, m), rl::cell_width(t, m) + m.sweep);
+    CHECK_EQ(rl::token_width(u, m), rl::token_width(t, m) + m.sweep);
     CHECK_EQ(rl::cell_width(t, m), 5 * m.adv + 2 * m.pad);                          // the volts only: "5-21V"
 }
 // ---- The tone rules (one table for fixed, range and legacy chips) ------------------------------------------------------------
@@ -1579,7 +1580,7 @@ int main() {
     test_a_skipped_sweep_leaves_no_mark_and_no_verdict();
     test_the_merged_row_owns_the_sweep_steps_of_its_apdo();
     test_a_compact_row_regenerates_the_merged_chip_with_its_mark();
-    test_the_sweep_mark_widens_the_chip_by_one_glyph();
+    test_the_sweep_mark_widens_the_chip_by_its_gap_and_glyph();
     test_a_sweep_chip_takes_its_tone_from_the_sweep();
     test_a_fold_only_sweep_is_amber_at_any_depth();
     test_a_fold_is_a_caution_not_a_pass_and_not_a_fail();

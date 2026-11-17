@@ -49,7 +49,7 @@ void draw_verdict(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, 
         const detail::LabelLayout lay = detail::label_layout(x, y, sweep ? static_cast<int16_t>(w - kSweepMarkW) : w, h, label, buf);
         const Box hole = lay.hole;
         // The sweep mark sits on the label's baseline, right of it; it is a second hole, so every pixel is still streamed once.
-        const Box sm{static_cast<int16_t>(hole.x + hole.w + 2), static_cast<int16_t>(hole.y + lay.font->ascent - kLabelFont.ascent),
+        const Box sm{static_cast<int16_t>(hole.x + hole.w + kSweepGap), static_cast<int16_t>(hole.y + lay.font->ascent - kLabelFont.ascent),
                      static_cast<int16_t>(kLabelFont.adv), static_cast<int16_t>(kLabelFont.height)};
         if (v == Verdict::Partial) {   // the shape cue: a bar along the bottom edge, so a partial never reads as a pass in grey
             inner.h = static_cast<int16_t>(inner.h - kPartialBarH);

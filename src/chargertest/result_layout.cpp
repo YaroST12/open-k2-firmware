@@ -962,12 +962,12 @@ size_t summarize(std::span<const ct::Step> steps, std::span<SummaryLine> out) {
 }
 
 int token_width(const Token& t, const Metrics& m) {
-    return int(std::strlen(t.text)) * m.adv + (t.chip ? 2 * m.pad + m.mark : 0) + (t.sweep ? m.adv : 0);   // the S mark: one glyph cell
+    return int(std::strlen(t.text)) * m.adv + (t.chip ? 2 * m.pad + m.mark : 0) + (t.sweep ? m.sweep : 0);   // the S mark: its fixed gap + one glyph
 }
 int cell_width(const Token& t, const Metrics& m) {
     int n = 0;
     while (t.text[n] && (!t.chip || t.text[n] != ' ')) ++n;   // a chip's volt text; a word is whole
-    return n * m.adv + 2 * m.pad + (t.sweep ? m.adv : 0);
+    return n * m.adv + 2 * m.pad + (t.sweep ? m.sweep : 0);
 }
 char mark(Tone t) {
     switch (t) {

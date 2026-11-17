@@ -422,11 +422,22 @@ static void test_sweep_mark() {
         lcd::fill(kBase);
         g_lcd_pixels = 0;
         kit::draw_verdict(kSurf, 10, 100, 72, 24, v, "3.3-11V", kBg, true);
-        const int mark = v == Verdict::Fail ? 0 : count(72, 78, 100, 124, kDim);   // the label is 7 x 8 px, centred in 72 - 8: x14..69, the mark at x72..77
-        const int inked = count(72, 78, 100, 124, v == Verdict::Fail ? kit::verdict_style(v).ink : kDim);
+        // the label is 7 x 8 px, centred in 72 - 12: x12..67, a 6 px gap, the mark at x74..79, 2 px inside the cell
+        const uint16_t mink = v == Verdict::Fail ? kit::verdict_style(v).ink : kDim;
+        const uint16_t link = kit::verdict_style(v).ink;
+        const int mark = v == Verdict::Fail ? 0 : count(74, 80, 100, 124, kDim);
+        const int inked = count(74, 80, 100, 124, mink);
         CHECK_EQ(inked > 0, true);
         if (v != Verdict::Fail) CHECK_EQ(mark > 0, true);
-        CHECK_EQ(count(78, 82, 100, 124, kDim), 0);   // nothing right of it: the group ends 4 px inside the cell
+        CHECK_EQ(count(80, 82, 100, 124, kDim), 0);   // nothing right of it
+        // the fixed gap: from the label's last ink column to the mark's first, at least one 12 px advance (6 px) of plain cell
+        int last_label = -1, first_mark = 1000;
+        for (int xx = 10; xx < 82; ++xx) {
+            const int lc = count(xx, xx + 1, 104, 120, link), mc = count(xx, xx + 1, 104, 120, mink);   // inside the Partial bar and the rim
+            if (xx < 74 && lc > 0) last_label = xx;
+            if (xx >= 70 && mc > 0 && xx < first_mark && !(v == Verdict::Fail && lc > 0 && xx < 74)) first_mark = xx;
+        }
+        CHECK_EQ(first_mark - last_label - 1 >= 6, true);
         CHECK_EQ(g_lcd_pixels, 72u * 24u + unsigned(kit::mark_px(v, true, 72, 24)));   // no pixel twice (a Running rim is the only overlay)
         const kit::CellRect cell{10, 100, 72, 24};
         CHECK_EQ(kit::mark_hits_label(cell, "3.3-11V", true), false);
@@ -434,7 +445,7 @@ static void test_sweep_mark() {
     // the mark is not a verdict: Pass with and without it differ only by the mark and the label's 4 px shift
     lcd::fill(kBase);
     kit::draw_verdict(kSurf, 10, 100, 72, 24, Verdict::Pass, "3.3-11V", kBg, false);
-    CHECK_EQ(count(72, 78, 100, 124, kDim), 0);
+    CHECK_EQ(count(74, 80, 100, 124, kDim), 0);
     // a 12 px label (a cell under 22 px tall) puts the mark on the same baseline
     lcd::fill(kBase);
     kit::draw_verdict(kSurf, 10, 100, 60, 18, Verdict::Pass, "5V", kBg, true);
@@ -776,11 +787,13 @@ static void test_result_rows_stream_each_pixel_once() {
                 if (h == 12 && !label.empty()) continue;   // a 12 px cell is the row marker: it never carries a label
                 lcd::fill(kBase);
                 g_lcd_pixels = 0;
-                kit::draw_verdict(kSurf, 70, 100, 34, h, v, label, kBg, !label.empty() && h == 24);   // the S mark is part of the cell: no extra pixels
+                const bool sw = !label.empty() && h == 24;
+                const int16_t cw = sw ? 46 : 34;   // a chip with the S mark keeps 12 px (gap + mark) beside a 24 px label
+                kit::draw_verdict(kSurf, 70, 100, cw, h, v, label, kBg, sw);   // the S mark is part of the cell: no extra pixels
                 // A Skip label is struck through: the line (text width 24 + 2 px) is painted twice; a labelled Running cell's
                 // outline is painted over its rim (a label-less one paints its square inside the glyph's hole).
-                CHECK_EQ(g_lcd_pixels, 34u * unsigned(h) + (v == Verdict::Skip && !label.empty() ? 26u : 0u) +
-                                           unsigned(kit::mark_px(v, !label.empty(), 34, h)));
+                CHECK_EQ(g_lcd_pixels, unsigned(cw) * unsigned(h) + (v == Verdict::Skip && !label.empty() ? 26u : 0u) +
+                                           unsigned(kit::mark_px(v, !label.empty(), cw, h)));
             }
         }
     }

@@ -2895,7 +2895,7 @@ void ChargerTestPage::result_row_fn(void *p, int index, kit::ResultRowSpec &out)
 }
 
 // Row `index` of the verdict grid (a layout line, or the Changes pseudo-row after them). The text lives in the page's cell buffers.
-static_assert(result_layout::kGridMetrics.adv == kit::kSweepMarkW, "the S mark's room in a chip's cell width is the kit's mark width");   // result_layout::cell_width
+static_assert(result_layout::kGridMetrics.sweep == kit::kSweepMarkW, "the S mark's room in a chip's cell width is the kit's mark width");   // result_layout::cell_width
 void ChargerTestPage::grid_row(int index, kit::ResultRowSpec &out) {
     out = {};
     const bool header = s_.stage_ == Stage::Steps;   // the Steps page's header: the picked row's own lines, never focused, no section rule
