@@ -87,7 +87,10 @@ test("every single-part golden frame gives the firmware's record and the page's 
     assert.equal(l.kind, KIND[fx.type & 0x7F], name);
     assert.equal(l.version, String(fx.schema), name);
     if (name.endsWith("_lz")) same(l.record, fix[plainName].record);              // packed: the inflated record
-    else if (fx.schema === 2) same(l.record, fix[name.replace(/_v2$/, "")].record);   // schema 2: expanded to the schema 1 record
+    else if (name === "card_deep_v2") {   // no schema 1 twin (a Deep card's block has no place in one): the expansion carries the block
+      same(l.record, K2Card.expandCardV2(fx.record));
+      assert.ok(l.record.deep && l.record.deep.length > 2, name);
+    } else if (fx.schema === 2) same(l.record, fix[name.replace(/_v2$/, "")].record);   // schema 2: expanded to the schema 1 record
     else same(l.record, fx.record);
     const r = K2Records.read(fx.parts[0]);
     assert.equal(r.kind, l.kind, name);
