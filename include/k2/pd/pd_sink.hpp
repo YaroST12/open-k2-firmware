@@ -209,14 +209,14 @@ inline constexpr std::uint8_t kVerifyRetries = 2;
 inline constexpr std::uint32_t kVerifyFreshMs = 1000;
 
 // Xiaomi chain guard (hardware 2026-11-06, CUKTECH 120 W C1): a sink-initiated Request in the middle of the 0x2717 VDM
-// exchange makes the charger drop the chain (no 0x2717020A, no Get_Source_Cap, no 6 A caps for the session). While the
+// exchange makes the charger drop the chain (no 0x27170208, no Get_Source_Cap, no 6 A caps for the session). While the
 // chain runs the sink holds back its own Requests / EPR entry / Get_Source_Cap; answers to the source's messages go out.
 // The chain is over when no 0x2717 exchange happened for this long. The CUKTECH C1 chain pauses up to ~336 ms between two of
 // its own steps (hardware 2026-11-06, runs/cuktech6a-scheme1/bb.txt: RX 0x2717 335.9 ms after our TX), so 300 ms let a Request
 // slip into the gap; 600 ms covers it with margin and kXiaomiChainBoundMs still caps a stalled chain.
 inline constexpr std::uint32_t kXiaomiChainQuietMs = 600;
 inline constexpr std::uint32_t kXiaomiChainBoundMs = 2500;   // absolute bound from the SVID 0x2717 listing: a stalled chain never holds longer
-inline constexpr std::uint32_t kXiaomiCapsWaitMs = 1000;     // after 0x2717020A: wait this long for the re-announced Source_Capabilities
+inline constexpr std::uint32_t kXiaomiCapsWaitMs = 1000;     // after the auth finish (0x27170208 payload 1, else 0x2717020A): wait this long for the re-announced caps
 
 // EPR_Get_Source_Cap asked in SPR mode (the list is informational; no EPR entry): None = not asked this attach,
 // Pending = waiting for the answer, Got = the whole list is in the bound info caps, Refused = Not_Supported / Reject
@@ -297,7 +297,7 @@ constexpr bool auto_own_hold(const SinkStatus& s) {
 // empty on a source that never listed the SVID. Cleared on a Hard Reset and a detach, with the rest of the Xiaomi state.
 enum class ReqAnswer : std::uint8_t { None, Accept, Reject, Wait };
 struct XiaomiTrace {
-    std::uint32_t authed_at = 0;      // 0x2717020A seen (the auth chain finished)
+    std::uint32_t authed_at = 0;      // 0x27170208 seen (the auth chain finished)
     std::uint32_t reannounce_at = 0;  // the first Source_Capabilities after authed_at
     std::uint32_t req_at = 0;         // when the last Request was queued (not when a held one was asked for)
     std::uint32_t answer_at = 0;      // when that Request was answered (Accept / Reject / Wait)
@@ -434,7 +434,7 @@ public:
 
     // True while a Xiaomi auth chain is in progress: the source listed SVID 0x2717 this contract, it is not authed yet and
     // the last 0x2717 exchange is younger than kXiaomiChainQuietMs (and the chain is younger than kXiaomiChainBoundMs);
-    // after 0x2717020A until the re-announced caps arrive (kXiaomiCapsWaitMs at most). The sink holds its own Request /
+    // after 0x27170208 until the re-announced caps arrive (kXiaomiCapsWaitMs at most). The sink holds its own Request /
     // EPR entry back meanwhile, and the driver holds its own Get_Source_Cap: any of them kills the chain.
     bool xiaomi_chain_active(std::uint32_t now) const;
 
@@ -566,6 +566,8 @@ private:
     bool xiaomi_authed_ = false;      // auth completed, 20V+ PPS should be available
     bool source_has_xiaomi_svid_ = false;  // the SOURCE is Xiaomi-family: its SVIDs ACK listed 0x2717 or it sent a 0x2717 VDM (never its Discover SVIDs REQUEST)
     std::uint8_t xiaomi_cmd_ = 0;     // current Xiaomi command being processed
+    bool source_asked_identity_ = false;   // the source sent a Discover Identity REQ: our ACK's product VDO feeds the auth digest's adapter_id
+    std::uint32_t xiaomi_adapter_id_ = 0;  // adapter_id picked from the charger's 0x27170205 answer (primary until one matches)
     bool discover_svids_sent_ = false;    // we have sent Discover SVIDs REQ in this session
     // send Discover SVIDs once after the contract settles; default ON since the sink-initiated
     // Xiaomi opener (2026-11-04, CUKTECH C1) broke the old deadlock - the SVIDs ACK now arms

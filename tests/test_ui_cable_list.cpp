@@ -55,8 +55,8 @@ static void test_index_space() {
     CHECK_EQ(l.choice_at(99).kind == Kind::Off, 1);
 }
 
-// Built-ins come before every saved clone, and a clone that shares a built-in's VID (a sniffed copy of the same vendor's cable,
-// CUKTECH C1 2026-11-07: the built-in CUKTECH 6A unlocks 6 A, the sniffed Kowsi clones do not) never moves ahead of it, so the
+// Built-ins come before every saved clone, and a clone that shares a built-in's VID (a sniffed copy of the same vendor's cable:
+// the Kowsi clones carry the 0x2B01 VID of the built-in EPR 50V 5A, CUKTECH C1 2026-11-07) never moves ahead of it, so the
 // first row of a vendor is the built-in. Stored choices keep their ids: a built-in is its builtin id, a clone its library id.
 static uint16_t vid_of(const emrec::Record &r) { return uint16_t(emrec::vdo(r, 1) & 0xFFFF); }
 static void test_builtins_lead_a_vendor_that_a_clone_shares() {
@@ -65,7 +65,7 @@ static void test_builtins_lead_a_vendor_that_a_clone_shares() {
     add_clone(5, "Kowsi-Nubia-6A");
     CableIdentityList l;
     l.sync();
-    const uint16_t vid = vid_of(emrec::builtin_cable(2));   // the CUKTECH 6A chip (builtin id 2)
+    const uint16_t vid = vid_of(emrec::builtin_cable(1));   // the EPR 50V 5A chip (builtin id 1), the vendor add_clone copies
     CHECK_EQ(vid_of(g_stub.lib[0].rec), vid);                // the clone is of the same vendor
     int first_of_vendor = -1;
     for (int i = 1; i < l.count() && first_of_vendor < 0; i++) {
@@ -109,7 +109,7 @@ static void test_row_text_and_names() {
     CHECK_EQ(l.row(0).rating.empty(), true);   // the long name takes the whole row: no rating column
     CHECK_STR(text(l, 1).c_str(), "EPR");
     CHECK_STR(std::string(l.row(1).rating).c_str(), "50V 5A");
-    CHECK_STR(text(l, 2).c_str(), "CUKTECH");
+    CHECK_STR(text(l, 2).c_str(), "Xiaomi");
     CHECK_STR(std::string(l.row(2).rating).c_str(), "6A");
     CHECK_STR(text(l, 3).c_str(), "OnePlus");
     CHECK_STR(std::string(l.row(3).rating).c_str(), "100W");
@@ -235,8 +235,10 @@ static void test_cable_step_marks() {
     CHECK_EQ(l.select(Choice{Kind::Builtin, 2}) ? 1 : 0, 1);
     CHECK_EQ(int(l.row(2, V::CableStep).mark), int(CableIdentityList::Mark::Use));
     CHECK_EQ(int(l.row(2).mark), int(CableIdentityList::Mark::Use));
-    // Armed CUKTECH (row 2), pick Off: NEXT on Off, CURR on CUKTECH in the Cable step; the Spoof view keeps ARMED.
+    // Armed Xiaomi 6A (row 2), pick Off: NEXT on Off, CURR on Xiaomi 6A in the Cable step; the Spoof view keeps ARMED.
     CHECK_EQ(int(l.arm(Choice{Kind::Builtin, 2}, f, name)), int(CableIdentityList::ArmErr::Ok));
+    // the record the cable-auth answer is gated on (emk_spoof: g_rec == builtin_cable(kXiaomi6aId)) is what the list arms
+    CHECK_EQ(emk_spoof::matches(emrec::builtin_cable(emrec::kXiaomi6aId), emk_quirk::builtin_quirks(emrec::kXiaomi6aId)), true);
     CHECK_EQ(l.select(Choice{}) ? 1 : 0, 1);
     CHECK_EQ(int(l.row(0, V::CableStep).mark), int(CableIdentityList::Mark::Next));
     CHECK_EQ(int(l.row(2, V::CableStep).mark), int(CableIdentityList::Mark::Curr));
@@ -309,7 +311,7 @@ static void test_pill_style() {
 
 static void test_fill_spec() {
     CableIdentityList::Row r;
-    r.text.put("CUKTECH 6A");
+    r.text.put("Xiaomi 6A");
     r.tail = "saved";
     r.mark = CableIdentityList::Mark::Use;
     kit::RowSpec sp;
@@ -334,6 +336,30 @@ static void test_fill_spec() {
     CHECK_EQ(sp.state, 1);
 }
 
+// Ids 6 and 7 were sniffed identities on unreleased test builds (removed 2026-11-17). A remembered, picked or armed 6 or 7 falls
+// back to the default EPR spoof (id 1), never to another cable and never to "nothing".
+static void test_removed_xiaomi_ids_fall_back_to_the_epr_spoof() {
+    for (uint16_t id : {uint16_t(5), uint16_t(6), uint16_t(7)}) {
+        g_stub = StubState();
+        g_stub.cable_pref = Choice{Kind::Builtin, id};
+        g_stub.cable_pref_set = true;   // /cable.cfg written by such a build
+        CableIdentityList l;
+        l.load();
+        l.sync();
+        CHECK_EQ(l.selected() == ctcable::kDefaultChoice ? 1 : 0, 1);
+        CHECK_STR(l.selected_name(), "EPR 50V 5A");
+        CHECK_EQ(l.select(Choice{Kind::Builtin, 2}) ? 1 : 0, 1);
+        CHECK_EQ(l.select(Choice{Kind::Builtin, id}) ? 1 : 0, 1);   // a remote pick of a removed id
+        CHECK_EQ(l.selected() == ctcable::kDefaultChoice ? 1 : 0, 1);
+        ctcable::Facts facts{};
+        char name[emlib::kNameMax + 1] = {};
+        CHECK_EQ(int(l.arm(Choice{Kind::Builtin, id}, facts, name)), int(CableIdentityList::ArmErr::Ok));
+        CHECK_EQ(l.armed_choice() == ctcable::kDefaultChoice ? 1 : 0, 1);
+        CHECK_EQ(facts.max_mv, 50000); CHECK_EQ(facts.max_ma, 5000); CHECK_EQ(facts.vid, 0x2B01);
+        emk_spoof::disarm();
+    }
+}
+
 int main() {
     test_fill_spec();
     test_index_space();
@@ -346,5 +372,6 @@ int main() {
     test_arm_errors();
     test_window();
     test_pill_style();
+    test_removed_xiaomi_ids_fall_back_to_the_epr_spoof();
     return test_report("test_ui_cable_list");
 }

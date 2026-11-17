@@ -26,7 +26,7 @@ deep run, the ceiling stage's words.
 --units sends the unit list (names and order) with `charger-units` before START: only those test units run, in that
 order, each one detach -> attach -> rows -> detach. Without it the full default order runs: vendor modes (FCP, SCP, AFC, VOOC...), PD, then QC/UFCS.
 --cable picks the Spoof cable step's identity (`charger-cable`): off (no spoof, no Ra), builtin
-(the built-in EPR 50 V / 5 A cable), builtin:<id|name> (1 epr-50v, 2 cuktech-6a, 4 oneplus; 3 is the retired oneplus-mag, read as 4: the list's
+(the built-in EPR 50 V / 5 A cable), builtin:<id|name> (1 epr-50v, 2 xiaomi-6a (older name cuktech-6a), 4 oneplus; 3 is the retired oneplus-mag, read as 4: the list's
 captured-cable rows) or saved:<library id>. Any identity arms that spoof and runs in Ra mode (PC13 high,
 Rd on CC2 alone) until the run ends. Without --cable the device's own choice runs: the EPR spoof (builtin) on a K2 where nobody
 picked another, so a charger whose PDO 1 has the EPR bit gets its EPR and AVS levels tested; the choice is read back and printed
@@ -255,7 +255,7 @@ def parse_args(argv=None):
                          "); default = the full order: vendor modes, PD, QC/UFCS, pd-low. The PPS sweep is split at 5 V: "
                          "the part from 5 V up runs in pd, the part below 5 V in pd-low (a list without pd-low skips it)")
     ap.add_argument("--cable", default=None,
-                    help="cable identity of the run: off, builtin, builtin:<1|2|4|epr-50v|cuktech-6a|oneplus> "
+                    help="cable identity of the run: off, builtin, builtin:<id|name> (1 epr-50v, 2 xiaomi-6a, 4 oneplus) "
                          "or saved:<library id>. Default: the device's own choice (the EPR spoof until another one is picked); "
                          "it is printed before START. 'off' is remembered by the device like any pick")
     a = ap.parse_args(argv)

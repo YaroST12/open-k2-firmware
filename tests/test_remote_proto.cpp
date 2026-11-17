@@ -721,12 +721,13 @@ static void test_emlib() {
     check_header(r, 0x61, 16, Status::BadArg, 0);
     CHECK_EQ(run(f, request(0x61, 17, {}), r), 1);
     check_header(r, 0x61, 17, Status::BadLength, 0);
-    // Built-in spoof [5, 3, id]: ids 0..4 arm, the first id past the table is refused, a missing id is a length error.
-    for (uint8_t id = 0; id < k2::emrec::kBuiltinCount; ++id) {
+    // Built-in spoof [5, 3, id]: ids 0..7 arm (3 as 4, the removed 5, 6 and 7 as the EPR cable 1), the first id past them is refused,
+    // a missing id is a length error.
+    for (uint8_t id = 0; id < k2::emrec::kBuiltinIdEnd; ++id) {
         CHECK_EQ(run(f, request(0x61, 30, {5, 3, id}), r), 1);
         check_header(r, 0x61, 30, Status::Ok, 3);
     }
-    CHECK_EQ(run(f, request(0x61, 31, {5, 3, uint8_t(k2::emrec::kBuiltinCount)}), r), 1);
+    CHECK_EQ(run(f, request(0x61, 31, {5, 3, uint8_t(k2::emrec::kBuiltinIdEnd)}), r), 1);
     check_header(r, 0x61, 31, Status::BadArg, 0);
     CHECK_EQ(run(f, request(0x61, 32, {5, 3}), r), 1);
     check_header(r, 0x61, 32, Status::BadLength, 0);
@@ -3058,13 +3059,17 @@ static void test_charger_cable() {
     CHECK_EQ(f.cable_sets, 5); CHECK_EQ(f.cable_set.seq, 4);
     CHECK_EQ(run(f, request(0x0D, 22, {1, 0, 0}), r), 1); check_header(r, 0x0D, 22, Status::Ok, 30);
     CHECK_EQ(f.cable_sets, 6); CHECK_EQ(f.cable_set.seq, 0);                     // 0 stays the default built-in (older clients)
+    for (uint8_t id = 5; id < k2::emrec::kBuiltinIdEnd; ++id) {                 // 5, 6, 7 removed, read as 1 by the list
+        CHECK_EQ(run(f, request(0x0D, 23 + id, {1, id, 0}), r), 1); check_header(r, 0x0D, 23 + id, Status::Ok, 30);
+    }
     // malformed requests never reach the backend
     const int calls = f.calls;
     CHECK_EQ(run(f, request(0x0D, 5, {1}), r), 1); check_header(r, 0x0D, 5, Status::BadLength, 0);
     CHECK_EQ(run(f, request(0x0D, 6, {1, 0, 0, 0}), r), 1); check_header(r, 0x0D, 6, Status::BadLength, 0);
     CHECK_EQ(run(f, request(0x0D, 7, {3, 0, 0}), r), 1); check_header(r, 0x0D, 7, Status::BadArg, 0);   // unknown kind
     CHECK_EQ(run(f, request(0x0D, 8, {2, 0, 0}), r), 1); check_header(r, 0x0D, 8, Status::BadArg, 0);   // a clone needs its id
-    CHECK_EQ(run(f, request(0x0D, 9, {1, 5, 0}), r), 1); check_header(r, 0x0D, 9, Status::BadArg, 0);   // the built-in carries none
+    CHECK_EQ(run(f, request(0x0D, 9, {1, uint8_t(k2::emrec::kBuiltinIdEnd), 0}), r), 1);
+    check_header(r, 0x0D, 9, Status::BadArg, 0);   // the first id past every id ever used is refused
     CHECK_EQ(f.calls, calls);
     // a run is active or the clone is gone: the backend's answer is the reply
     f.cable_status = Status::Busy;
@@ -3382,6 +3387,41 @@ static void test_lease_arms_only_for_what_was_raised() {
     f.rq_result = {};
 }
 
+// Cmd::MiCableAuth (0x5C): [0] reads, [1, on, key, trailing u32 LE, half, reply, payload] sets; rsp the 9 config bytes. Every other
+// length (the empty payload included: no byte of it may be read before its size is known) is BadLength, an out-of-range field BadArg,
+// and neither reaches the backend.
+static void test_mi_cable_auth() {
+    Fake f; Frame r;
+    const auto req = [](uint8_t seq, const std::vector<uint8_t>& p) {
+        std::vector<uint8_t> v = {kReqMagic0, kReqMagic1, 0x5C, seq, static_cast<uint8_t>(p.size())};
+        v.insert(v.end(), p.begin(), p.end());
+        v.resize(kFrameSize, 0);
+        return v;
+    };
+    const int calls = f.calls;
+    CHECK_EQ(run(f, request(0x5C, 1, {}), r), 1); check_header(r, 0x5C, 1, Status::BadLength, 0);
+    CHECK_EQ(run(f, request(0x5C, 2, {0, 0}), r), 1); check_header(r, 0x5C, 2, Status::BadLength, 0);
+    CHECK_EQ(run(f, request(0x5C, 3, {2}), r), 1); check_header(r, 0x5C, 3, Status::BadLength, 0);
+    for (uint8_t n = 1; n <= 11; ++n) {
+        if (n == 10) continue;
+        std::vector<uint8_t> p(n, 0); p[0] = 1;
+        CHECK_EQ(run(f, req(uint8_t(10 + n), p), r), 1); check_header(r, 0x5C, uint8_t(10 + n), Status::BadLength, 0);
+    }
+    const std::vector<uint8_t> good = {1, 1, 9, 0x78, 0x56, 0x34, 0x12, 1, 1, 1};
+    for (unsigned i : {1u, 2u, 7u, 8u, 9u}) {
+        std::vector<uint8_t> p = good; p[i] = i == 2 ? 10 : 2;
+        CHECK_EQ(run(f, req(uint8_t(30 + i), p), r), 1); check_header(r, 0x5C, uint8_t(30 + i), Status::BadArg, 0);
+    }
+    CHECK_EQ(f.calls, calls);
+    CHECK_EQ(run(f, request(0x5C, 40, {0}), r), 1);
+    check_header(r, 0x5C, 40, Status::Ok, 9); check_bytes(r, kRspHeader, {1, 7, 0, 0, 0, 0, 0, 0, 0});
+    CHECK_EQ(f.mi_auth_req == std::vector<uint8_t>{0}, true);
+    CHECK_EQ(run(f, req(41, good), r), 1);
+    check_header(r, 0x5C, 41, Status::Ok, 9);
+    CHECK_EQ(f.mi_auth_req == good, true);
+    CHECK_EQ(f.calls, calls + 2);
+}
+
 int main() {
     test_lease_arms_only_for_what_was_raised();
     test_lease_wire();
@@ -3465,5 +3505,6 @@ int main() {
     test_qrtest();
     test_debug_fault();
     test_build_response_pads_and_cuts();
+    test_mi_cable_auth();
     return test_report("test_remote_proto");
 }

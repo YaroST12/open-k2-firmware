@@ -152,9 +152,10 @@
 //                                    Refuse stage returns to Review, a pending resume is abandoned. rsp what(1): kCtStop*.
 //   0x0D CHARGER_CABLE req - (read) or kind(1) seq(2) (set).  rsp kind(1) seq(2) run_kind(1) run_seq(2) name(24)
 //                                    The cable identity of the "Cable identity" dialog (k2/chargertest/ct_cable.hpp): kind 0 = Off,
-//                                    1 = built-in cable (seq = its id 1, 2 or 4: EPR 50V 5A, CUKTECH 6A,
+//                                    1 = built-in cable (seq = its id 1, 2 or 4: EPR 50V 5A, Xiaomi 6A,
 //                                    OnePlus 100W; seq 0 = id 1, answered back as 1; seq 3 is the retired OnePlus 100W
-//                                    (mag), accepted and answered back as 4), 2 = saved clone (seq =
+//                                    (mag), accepted and answered back as 4; seq 5, 6 and 7, removed sniffed identities,
+//                                    are accepted and answered back as 1), 2 = saved clone (seq =
 //                                    library id). The set form
 //                                    picks the row the START dialog opens on (the device remembers the last choice, so
 //                                    tools/ct_start.py sets it before every START: its default is Off). rsp: the choice,
@@ -647,6 +648,10 @@ enum class Cmd : uint8_t {
     ChargerLevel = 0x5B,    // [level(1)] the level of the next charger run (charger_test::Level: 0 Medium, 1 Light, 2 Deep; with_level
                          // also sets both deep-sweep flags: on for Deep, off otherwise). rsp [level]. Read back in CHARGER_TEST schema 2,
                          // draft selection bits 28..29. Busy while a run is active, BadArg above 2.
+    MiCableAuth = 0x5C,     // Xiaomi cable-side auth config (k2/pd/emk_spoof.hpp MiAuthCfg): [0] reads, [1, on, key, trailing u32 LE, half, reply, payload]
+                         // sets (on/key/half/reply/payload bounded). rsp [on, key, trailing u32 LE, half, reply, payload]. Lab-only: while a
+                         // spoof is armed, an SOP' 0x27170104 is answered (reply 0: cmd 0x...105, reply 1: mirrored 0x...204) with a HMAC-SHA256
+                         // half of the challenge (payload 0) or the raw session seed seed[key] (payload 1).
 };
 
 inline constexpr Cmd kCmdIds[] = {
@@ -659,7 +664,7 @@ inline constexpr Cmd kCmdIds[] = {
     Cmd::CableR, Cmd::Lab, Cmd::Ufcs, Cmd::QRTest, Cmd::Store, Cmd::EmLib, Cmd::Cards, Cmd::Twin, Cmd::BlackBox, Cmd::TransCap, Cmd::ChargerTest,
     Cmd::ChargerUnits, Cmd::ChargerCable, Cmd::ChargerHunt, Cmd::ChargerSweep, Cmd::ChargerAvsSweep, Cmd::BootInfo, Cmd::Memory,
     Cmd::PdStress, Cmd::EmarkerProbe, Cmd::LoopProbe, Cmd::Diagnose, Cmd::TraceHid, Cmd::Battery, Cmd::ChargerSvoocCap,
-    Cmd::PdSpec, Cmd::ChargerLevel,
+    Cmd::PdSpec, Cmd::ChargerLevel, Cmd::MiCableAuth,
 };
 
 constexpr bool cmd_ids_unique() {
@@ -788,8 +793,8 @@ inline constexpr size_t kCardsNameMax = 20, kCardsChunks = 6;   // 250 bytes / 4
 //   SPOOF   req [5, 0]              rsp [err, active, requests u16, replies u16, seq u16] (8 bytes)  status
 //           req [5, 1, seq u16]     arm that cable;  req [5, 2]   disarm (same response)
 //           req [5, 3, id]          arm a built-in cable (emrec::builtin_cable ids: 0 generic 5 A/20 V, 1 EPR 50V 5A,
-//                                   2 CUKTECH 6A, 4 OnePlus 100W; 3 is the retired OnePlus 100W (mag) and arms 4);
-//                                   an id past the table is BadArg
+//                                   2 Xiaomi 6A, 4 OnePlus 100W; 3 is the retired OnePlus 100W (mag) and arms 4; 5, 6
+//                                   and 7, removed sniffed identities, arm 1); an id past 7 is BadArg
 //   LEARN   (blocks: a run takes seconds; refused with kEmErrBusy while a PD tool is active)
 //           req [6, 0]              rsp summary (k2::emk_learn::kSummaryBytes = 20, bytes 13..16 are the answered
 //                                   tail, 17..18 the read tail, 19 the pull-down verdict; absent on older firmware): the last run, outcome 0 = none yet
@@ -1584,6 +1589,7 @@ concept Backend = requires(B &b, uint8_t u8, uint16_t u16, bool on) {
     { b.diagnose(std::span<const uint8_t>{}, std::span<uint8_t>{}) } -> std::same_as<size_t>;   // same shape (Cmd::Diagnose)
     { b.trace_hid(std::span<const uint8_t>{}, std::span<uint8_t>{}) } -> std::same_as<size_t>;   // same shape (Cmd::TraceHid, validated by the dispatcher)
     { b.battery(std::span<const uint8_t>{}, std::span<uint8_t>{}) } -> std::same_as<size_t>;    // same shape (Cmd::Battery)
+    { b.mi_cable_auth(std::span<const uint8_t>{}, std::span<uint8_t>{}) } -> std::same_as<size_t>;   // same shape (Cmd::MiCableAuth, validated by the dispatcher)
 };
 
 namespace detail {
@@ -1841,6 +1847,14 @@ template <Backend B>
         if (p.size() != 1) return reply_bad_len(f);
         if (p[0] >= charger_test::kLevelCount) return reply_bad_arg(f);
         return reply_status_or_byte(f, backend.charger_level(p[0]), p[0]);
+    case Cmd::MiCableAuth:
+        if (p.empty()) return reply_bad_len(f);   // p[0] below: nothing may be read before the size is known
+        if (p[0] == 0 && p.size() == 1) return reply_ok(f, {backend.mi_cable_auth(p, f.span())});
+        if (p[0] == 1 && p.size() == 10) {
+            if (p[1] > 1 || p[2] >= 10 || p[7] > 1 || p[8] > 1 || p[9] > 1) return reply_bad_arg(f);
+            return reply_ok(f, {backend.mi_cable_auth(p, f.span())});
+        }
+        return reply_bad_len(f);
     default:
         return reply_status(f, Status::UnknownCmd);
     }
@@ -2364,6 +2378,7 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
         return detail::handle_state(cmd, p, backend, f);
     case Cmd::ChargerTest: case Cmd::ChargerUnits: case Cmd::ChargerCable: case Cmd::ChargerSvoocCap:
     case Cmd::ChargerHunt: case Cmd::ChargerSweep: case Cmd::ChargerAvsSweep: case Cmd::ChargerLevel:
+    case Cmd::MiCableAuth:
         return detail::handle_charger(cmd, p, backend, f);
     case Cmd::IdentifyDevice: case Cmd::PdReread: case Cmd::AppleRead: case Cmd::PdRequest:
     case Cmd::PdReset: case Cmd::PdRelease: case Cmd::Stop: case Cmd::Lease:

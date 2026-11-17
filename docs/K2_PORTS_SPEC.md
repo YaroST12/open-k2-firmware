@@ -60,15 +60,15 @@ powered cable, sends SOP' Discover Identity, and the armed e-marker spoof answer
   preflight runs on the fresh reading and the run starts by itself, with no third press; a refusal there lands on
   Review with the reason on the footer and a passive K2.
 - Built-in cable identities (`k2::emrec::builtin_info`, `emarker spoof builtin:<id|name>`, spoof sub-command
-  `[5, 3, id]`). All answer SOP' Discover Identity as PD spec rev 2 passive cables. Provenance: ids 1, 2 and 4
-  are captured from the user's cables 2026-11-06 (every VDO word is byte-exact; id 1 is the set that passed EPR
-  28 V on the Baseus 140 W); id 0 is a synthetic generic 20 V 5 A cable.
+  `[5, 3, id]`). All answer SOP' Discover Identity as PD spec rev 2 passive cables. Provenance: ids 1 and 4
+  are captured from the user's cables 2026-11-06, id 2 from a Xiaomi-VID 0x2717 cable 2026-11-11 (every VDO word is
+  byte-exact; id 1 is the set that passed EPR 28 V on the Baseus 140 W); id 0 is a synthetic generic 20 V 5 A cable.
 
   | id | Label | Names accepted by `emarker spoof` | Rating | In the dialog |
   |---|---|---|---|---|
   | 0 | generic 20V 5A | `generic` | 20 V 5 A, no EPR | no (remote only) |
   | 1 | EPR 50V 5A | `epr-50v`, `generic-epr` | 50 V 5 A, EPR | yes (default built-in) |
-  | 2 | CUKTECH 6A | `cuktech-6a`, `cuktech-240w` | 50 V 5 A, EPR | yes |
+  | 2 | Xiaomi 6A | `xiaomi-6a`, `cuktech-6a`, `cuktech-240w` | 20 V 5 A, no EPR; VID 0x2717 | yes |
   | 3 | (retired alias of 4) | `oneplus-mag` | as id 4 | no |
   | 4 | OnePlus 100W | `oneplus` | 30 V 5 A | yes |
 
@@ -76,6 +76,13 @@ powered cable, sends SOP' Discover Identity, and the armed e-marker spoof answer
   ratings) and is retired. The id stays reserved so stored data keeps working: a remote `[5, 3, 3]`, a CHARGER_CABLE
   seq 3, an old `/cable.cfg` record or a journal-resumed run with 3 all read as id 4 (OnePlus 100W), and every reply,
   stored record and report card kind then carries 4. Ids are never renumbered.
+
+  Ids 5, 6 and 7 were sniffed identities on test builds (5 the Xiaomi-VID cable whose words id 2 now carries, 6 a
+  Xiaomi-VID EPR variant, 7 a Kowsi clone); removed 2026-11-17, they read as id 1 wherever they arrive. Until
+  2026-11-17 id 2 was "CUKTECH 6A", the CUKTECH bundled cable 0x2B01:0x4051 (50 V 5 A, EPR); those words are gone.
+  While id 2 is armed the K2 also answers the source's SOP' 0x27170104 cable-auth challenge (reply 0x27170204 + a
+  4-word digest; the shape is inferred, not hardware-proven). `k2_remote mi-cable-auth` overrides the shape or turns
+  the answer off until the next set or a reboot; no other identity answers the challenge.
 
   The OnePlus USB-C to USB-A SUPERVOOC cable has no e-marker (no answer to Discover Identity in either
   orientation), so identifying an A-to-C SUPERVOOC cable is out of scope; id 4 is the e-marked

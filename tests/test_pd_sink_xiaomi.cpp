@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "k2/pd/pd_sink.hpp"
+#include "k2/pd/xiaomi_auth.hpp"
 #include "test_util.h"
 
 using namespace k2::pd;
@@ -173,16 +174,14 @@ static void test_xiaomi_cmd_03() {
     send_vdm(r.sink, vdos2, r.now);
     r.pump();
     
-    // Should reply with 5-DO: 0x27170104, 0xA601934C, 0x1403BFD9, 0x55EBD77F, 0x509BA17F
+    // Should reply with 5-DO: 0x27170104 + the active session seed from the key table
+    // (the table bytes live in the gitignored priv/, referenced by variable name only)
     CHECK_EQ(r.sent.size() >= 1, true);
     const auto& m = r.sent.back();
     CHECK_EQ((m.header & 0x1F), kMsgVendorDefined);
     CHECK_EQ(m.len, 20);  // 5 * 4 bytes
     CHECK_EQ(r.last_vdm_header(), 0x27170104u);
-    CHECK_EQ(r.last_vdo(1), 0xA601934Cu);
-    CHECK_EQ(r.last_vdo(2), 0x1403BFD9u);
-    CHECK_EQ(r.last_vdo(3), 0x55EBD77Fu);
-    CHECK_EQ(r.last_vdo(4), 0x509BA17Fu);
+    for (unsigned i = 0; i < 4; i++) CHECK_EQ(r.last_vdo(1 + i), mi::kSessionSeed[mi::kActiveKeyIndex][i]);
 }
 
 // Test Xiaomi auth command 0x27170204 -> reply 5-DO payload
@@ -199,15 +198,12 @@ static void test_xiaomi_cmd_04() {
     send_vdm(r.sink, vdos2, r.now);
     r.pump();
     
-    // Should reply with 5-DO: 0x27170105, 0x0BED65CD, 0xB2579250, 0x3AA3D437, 0x51EB9F51
+    // Should reply with 5-DO: 0x27170105 + the fixed challenge (the digest's nonce)
     CHECK_EQ(r.sent.size() >= 1, true);
     const auto& m = r.sent.back();
     CHECK_EQ(m.len, 20);
     CHECK_EQ(r.last_vdm_header(), 0x27170105u);
-    CHECK_EQ(r.last_vdo(1), 0x0BED65CDu);
-    CHECK_EQ(r.last_vdo(2), 0xB2579250u);
-    CHECK_EQ(r.last_vdo(3), 0x3AA3D437u);
-    CHECK_EQ(r.last_vdo(4), 0x51EB9F51u);
+    for (unsigned i = 0; i < 4; i++) CHECK_EQ(r.last_vdo(1 + i), mi::kChallenge[i]);
 }
 
 // Test Xiaomi auth command 0x27170205 -> reply 2-DO payload
@@ -268,38 +264,163 @@ static void test_xiaomi_cmd_07() {
     send_vdm(r.sink, vdos2, r.now);
     r.pump();
     
-    // Should reply with 5-DO: 0x27170108, 0x5D808AA6, 0x1D79FAA7, 0x11D10BDD, 0x8F158DE2
+    // Should reply with 5-DO: 0x27170108 + HMAC[16..31] for adapter_id 0 (no identity REQ and no
+    // prior 0x27170205: the primary candidate)
+    std::uint8_t digest[32];
+    mi::auth_digest(mi::kActiveKeyIndex, mi::kChallenge, 0u, digest);
     CHECK_EQ(r.sent.size() >= 1, true);
     const auto& m = r.sent.back();
+    CHECK_EQ((m.header & 0x1F), kMsgVendorDefined);
     CHECK_EQ(m.len, 20);
     CHECK_EQ(r.last_vdm_header(), 0x27170108u);
-    CHECK_EQ(r.last_vdo(1), 0x5D808AA6u);
-    CHECK_EQ(r.last_vdo(2), 0x1D79FAA7u);
-    CHECK_EQ(r.last_vdo(3), 0x11D10BDDu);
-    CHECK_EQ(r.last_vdo(4), 0x8F158DE2u);
+    for (unsigned i = 0; i < 4; i++) CHECK_EQ(r.last_vdo(1 + i), mi::digest_word(digest + 16, i));
 }
 
-// Test Xiaomi auth command 0x27170208 -> reply 2-DO payload
+// Test Xiaomi auth command 0x27170208, two wire shapes:
+//  - payload 1 (Baseus FH22 family): the chain is verified at step 8 - authed goes up and exactly one
+//    Get_Source_Cap is queued, nothing else. No 0x2717010A: on hardware (FH22 2C1A, 2026-11-17) a
+//    010A sent right behind that Get_Source_Cap, before its Source_Capabilities, broke the AMS and
+//    drew a Hard Reset; the source answers 010A Not_Supported anyway.
+//  - payload 0 (CUKTECH 120 W, the hardware-verified 6 A unlock): we answer 0x2717010A and the
+//    auth finishes on the 0x2717020A reply.
+static std::size_t count_of(const std::vector<TxMsg>& sent, std::uint8_t type) {
+    std::size_t n = 0;
+    for (const auto& m : sent)
+        if ((m.header & 0x1F) == type && (m.header & 0x8000) == 0 && (type == kMsgVendorDefined || ((m.header >> 12) & 7) == 0)) n++;
+    return n;
+}
+
 static void test_xiaomi_cmd_08() {
-    Rig r;
-    // First, mark that source has Xiaomi SVID
-    constexpr std::array vdos1 = {vdm_header(0xFF00, true, 1, 2), 0x27170000u, 0x00000000u};
-    send_vdm(r.sink, vdos1, r.now);
-    r.pump();
-    r.sent.clear();
-    
-    // Source sends Xiaomi cmd 0x27170208
-    constexpr std::array vdos2 = {vdm_header(0x2717, false, 0, 8)};
-    send_vdm(r.sink, vdos2, r.now);
-    r.pump();
-    
-    // Should reply with 2-DO: 0x2717010A, 0x00000001
-    // Note: cmd 0x08 -> response cmd 0x0A (cmd + 2 pattern)
-    CHECK_EQ(r.sent.size() >= 1, true);
-    const auto& m = r.sent.back();
-    CHECK_EQ(m.len, 8);
-    CHECK_EQ(r.last_vdm_header(), 0x2717010Au);
-    CHECK_EQ(r.last_vdo(1), 0x00000001u);
+    {   // payload 1: verified at step 8 - one Get_Source_Cap, no 010A, also not after its TX completes
+        Rig r;
+        constexpr std::array vdos1 = {vdm_header(0xFF00, true, 1, 2), 0x27170000u, 0x00000000u};
+        send_vdm(r.sink, vdos1, r.now);
+        r.pump();
+        r.sent.clear();
+        const std::array vdos8 = {vdm_header(0x2717, false, 0, 8), 0x00000001u};
+        send_vdm(r.sink, vdos8, r.now);
+        r.pump();
+        r.run(50);
+        CHECK_EQ(r.sink.status().xiaomi_authed, true);
+        CHECK_EQ(count_of(r.sent, kCtlGetSourceCap), std::size_t(1));
+        CHECK_EQ(count_of(r.sent, kMsgVendorDefined), std::size_t(0));
+        CHECK_EQ(r.sent.size(), std::size_t(1));
+    }
+    {   // payload 1, then an unsolicited 0x2717020A: the auth is already done, no second Get_Source_Cap
+        Rig r;
+        constexpr std::array vdos1 = {vdm_header(0xFF00, true, 1, 2), 0x27170000u, 0x00000000u};
+        send_vdm(r.sink, vdos1, r.now);
+        r.pump();
+        const std::array vdos8 = {vdm_header(0x2717, false, 0, 8), 0x00000001u};
+        send_vdm(r.sink, vdos8, r.now);
+        r.pump();
+        r.sent.clear();
+        const std::array vdosA = {vdm_header(0x2717, false, 0, 0x0A), 0x00000000u};
+        send_vdm(r.sink, vdosA, r.now);
+        r.pump();
+        CHECK_EQ(r.sink.status().xiaomi_authed, true);
+        CHECK_EQ(count_of(r.sent, kCtlGetSourceCap), std::size_t(0));
+    }
+    {   // payload 0: answer 0x2717010A, authed on 0x2717020A
+        Rig r;
+        constexpr std::array vdos1 = {vdm_header(0xFF00, true, 1, 2), 0x27170000u, 0x00000000u};
+        send_vdm(r.sink, vdos1, r.now);
+        r.pump();
+        r.sent.clear();
+        const std::array vdos8 = {vdm_header(0x2717, false, 0, 8), 0x00000000u};
+        send_vdm(r.sink, vdos8, r.now);
+        r.pump();
+        CHECK_EQ(r.sink.status().xiaomi_authed, false);
+        CHECK_EQ(r.last_vdm_header(), 0x2717010Au);
+        CHECK_EQ(r.last_vdo(1), 0x00000001u);
+        bool get_cap = false;
+        for (const auto& m : r.sent)
+            if ((m.header & 0x1F) == kCtlGetSourceCap) get_cap = true;
+        CHECK_EQ(get_cap, false);   // no Get_Source_Cap before the 020A answer
+        r.sent.clear();
+        const std::array vdosA = {vdm_header(0x2717, false, 0, 0x0A), 0x00000000u};
+        send_vdm(r.sink, vdosA, r.now);
+        r.pump();
+        CHECK_EQ(r.sink.status().xiaomi_authed, true);
+        get_cap = false;
+        for (const auto& m : r.sent)
+            if ((m.header & 0x1F) == kCtlGetSourceCap) get_cap = true;
+        CHECK_EQ(get_cap, true);
+    }
+}
+
+// RX 0x27170205 with the charger's digest[0..15] in the payload: the sink picks the adapter_id
+// whose digest matches the answer and uses that same adapter_id for the 0x27170108 half.
+// Without an identity REQ the adapter_id-0 digest matches; after an identity REQ it is the ACK's
+// product VDO id. A non-matching 0x27170205 still gets VERIFIED=1 (the observed chargers gate the
+// unlock on the 0108 half) and 0108 falls back to the primary candidate.
+static void test_0205_picks_adapter_and_0108_follows() {
+    {   // adapter 0: the source never sent Discover Identity REQ
+        Rig r;
+        constexpr std::array vdos1 = {vdm_header(0xFF00, true, 1, 2), 0x27170000u, 0x00000000u};
+        send_vdm(r.sink, vdos1, r.now);
+        r.pump();
+        r.sent.clear();
+        std::uint8_t digest[32];
+        mi::auth_digest(mi::kActiveKeyIndex, mi::kChallenge, 0u, digest);
+        const std::array vdos5 = {vdm_header(0x2717, false, 0, 5), mi::digest_word(digest, 0), mi::digest_word(digest, 1),
+                                  mi::digest_word(digest, 2), mi::digest_word(digest, 3)};
+        send_vdm(r.sink, vdos5, r.now);
+        r.pump();
+        CHECK_EQ(r.last_vdm_header(), 0x27170106u);
+        CHECK_EQ(r.last_vdo(1), 0x00000001u);
+        r.sent.clear();
+        const std::array vdos7 = {vdm_header(0x2717, false, 0, 7)};
+        send_vdm(r.sink, vdos7, r.now);
+        r.pump();
+        CHECK_EQ(r.last_vdm_header(), 0x27170108u);
+        for (unsigned i = 0; i < 4; i++) CHECK_EQ(r.last_vdo(1 + i), mi::digest_word(digest + 16, i));
+    }
+    {   // our identity ACK's id: the source asked for our identity first
+        Rig r;
+        constexpr std::array id_req = {vdm_header(0xFF00, true, 0, 1)};
+        send_vdm(r.sink, id_req, r.now);
+        r.pump();
+        constexpr std::array vdos1 = {vdm_header(0xFF00, true, 1, 2), 0x27170000u, 0x00000000u};
+        send_vdm(r.sink, vdos1, r.now);
+        r.pump();
+        r.sent.clear();
+        const std::uint32_t ack_id = kXiaomiProductVdo & 0xFFFFu;
+        std::uint8_t digest[32];
+        mi::auth_digest(mi::kActiveKeyIndex, mi::kChallenge, ack_id, digest);
+        const std::array vdos5 = {vdm_header(0x2717, false, 0, 5), mi::digest_word(digest, 0), mi::digest_word(digest, 1),
+                                  mi::digest_word(digest, 2), mi::digest_word(digest, 3)};
+        send_vdm(r.sink, vdos5, r.now);
+        r.pump();
+        CHECK_EQ(r.last_vdm_header(), 0x27170106u);
+        CHECK_EQ(r.last_vdo(1), 0x00000001u);
+        r.sent.clear();
+        const std::array vdos7 = {vdm_header(0x2717, false, 0, 7)};
+        send_vdm(r.sink, vdos7, r.now);
+        r.pump();
+        CHECK_EQ(r.last_vdm_header(), 0x27170108u);
+        for (unsigned i = 0; i < 4; i++) CHECK_EQ(r.last_vdo(1 + i), mi::digest_word(digest + 16, i));
+    }
+    {   // a 0x27170205 matching no candidate: VERIFIED=1 anyway, 0108 with the primary (0 here)
+        Rig r;
+        constexpr std::array vdos1 = {vdm_header(0xFF00, true, 1, 2), 0x27170000u, 0x00000000u};
+        send_vdm(r.sink, vdos1, r.now);
+        r.pump();
+        r.sent.clear();
+        const std::array vdos5 = {vdm_header(0x2717, false, 0, 5), 0xDEADBEEFu, 0xDEADBEEFu, 0xDEADBEEFu, 0xDEADBEEFu};
+        send_vdm(r.sink, vdos5, r.now);
+        r.pump();
+        CHECK_EQ(r.last_vdm_header(), 0x27170106u);
+        CHECK_EQ(r.last_vdo(1), 0x00000001u);
+        r.sent.clear();
+        const std::array vdos7 = {vdm_header(0x2717, false, 0, 7)};
+        send_vdm(r.sink, vdos7, r.now);
+        r.pump();
+        std::uint8_t digest[32];
+        mi::auth_digest(mi::kActiveKeyIndex, mi::kChallenge, 0u, digest);
+        CHECK_EQ(r.last_vdm_header(), 0x27170108u);
+        for (unsigned i = 0; i < 4; i++) CHECK_EQ(r.last_vdo(1 + i), mi::digest_word(digest + 16, i));
+    }
 }
 
 // Test Xiaomi auth command 0x2717020A -> triggers Get_Source_Cap
@@ -588,6 +709,13 @@ static void xiaomi_cmd(Rig& r, std::uint8_t cmd) {
     r.pump();
 }
 
+// The same with a payload word (cmd 8's discriminator: 1 = chain done, 0 = answer with 0x2717010A).
+static void xiaomi_cmd_w(Rig& r, std::uint8_t cmd, std::uint32_t word) {
+    const std::array<std::uint32_t, 2> v = {vdm_header(0x2717, false, 0, cmd), word};
+    send_vdm(r.sink, v, r.now);
+    r.pump();
+}
+
 // A source's own Discover SVIDs REQUEST is a question to us, not evidence about the source (Lenovo 65 W laptop brick,
 // hardware 2026-11-08: it asks, never lists 0x2717, never runs a chain). We still answer [0x2717] (our sink identity) and
 // the opener still goes out for the chargers that wait on it, but nothing treats the source as Xiaomi-family.
@@ -824,10 +952,11 @@ static void test_trace_follows_the_chain_the_request_and_the_answer() {
     CHECK_EQ(t.opener_sent, true); CHECK_EQ(t.authed, false); CHECK_EQ(unsigned(t.last_step), 0u);
     CHECK_EQ(r.sink.trigger({2, 9000, 3000}, r.now), Err::Ok);   // the chain guard holds it back: nothing sent, the trace says so
     CHECK_EQ(t.req_held, true); CHECK_EQ(unsigned(t.req_n), n0);
-    for (std::uint8_t cmd = 1; cmd <= 8; cmd++) { r.run(30); xiaomi_cmd(r, cmd); CHECK_EQ(unsigned(t.last_step), unsigned(cmd)); }
+    for (std::uint8_t cmd = 1; cmd <= 8; cmd++) { r.run(30); if (cmd == 8) xiaomi_cmd_w(r, 8, 1); else xiaomi_cmd(r, cmd); CHECK_EQ(unsigned(t.last_step), unsigned(cmd)); }
+    CHECK_EQ(t.authed, true); CHECK_EQ(t.authed_at, r.now);            // the chain finishes at 0x27170208 (payload 1) now
     r.run(30);
     xiaomi_cmd(r, 0x0A);
-    CHECK_EQ(unsigned(t.last_step), 0x0Au); CHECK_EQ(t.authed, true); CHECK_EQ(t.authed_at, r.now); CHECK_EQ(t.reannounced, false);
+    CHECK_EQ(unsigned(t.last_step), 0x0Au); CHECK_EQ(t.authed, true); CHECK_EQ(t.reannounced, false);
     r.run(100);
     CHECK_EQ(unsigned(t.req_n), n0);                              // still waiting for the re-announce
     r.data(kDataSourceCap, 0x0001912C);                           // the re-announce: the Request goes out
@@ -918,6 +1047,22 @@ static void test_discover_svids_waits_out_a_transition() {
     CHECK_EQ(vdm, true);
 }
 
+// Payload 0 with a source that never answers our 0x2717010A: nothing of the chain may linger and eat a later, unrelated
+// Not_Supported (here the answer to a Get_PPS_Status asked once the chain is over).
+static void test_unanswered_010a_does_not_swallow_a_later_not_supported() {
+    Rig r;
+    start_chain(r);
+    r.run(250);
+    xiaomi_cmd_w(r, 8, 0);                                   // our 0x2717010A goes out; the source stays silent
+    CHECK_EQ(r.last_vdm_header(), 0x2717010Au);
+    r.run(kXiaomiChainBoundMs + 500);
+    CHECK_EQ(r.sink.xiaomi_chain_active(r.now), false);
+    CHECK_EQ(r.sink.request_pps_status(r.now), Err::Ok);
+    r.pump();
+    r.ctl(kCtlNotSupported);
+    CHECK_EQ(int(r.sink.pps_answer().ask), int(PpsAsk::NotSupported));
+}
+
 int main() {
     test_source_svids_ack_listing_22d9_is_recorded_and_never_answered();
     test_source_svids_req_alone_is_not_xiaomi();
@@ -949,8 +1094,10 @@ int main() {
     test_xiaomi_cmd_06();
     test_xiaomi_cmd_07();
     test_xiaomi_cmd_08();
+    test_0205_picks_adapter_and_0108_follows();
     test_xiaomi_cmd_0A();
     test_full_xiaomi_auth_sequence();
     test_discover_svids_waits_out_a_transition();
+    test_unanswered_010a_does_not_swallow_a_later_not_supported();
     return test_report("test_pd_sink_xiaomi");
 }

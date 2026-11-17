@@ -131,6 +131,7 @@ PDS_STOPS = ["running", "done", "cancelled", "run time cap", "transition cap", "
 # ---- PD Spec Check (docs/PD_SPEC_CHECK.md): constants ----
 CMD_PD_SPEC = 0x5A        # PD Spec Check: status / start / result (chunked) / stop (k2/core/remote_proto.hpp, tools/pd_spec.py)
 CMD_CHARGER_LEVEL = 0x5B  # [level(1)] the level of the next charger run (0 medium, 1 light, 2 deep); Deep sets both deep sweeps
+CMD_MI_CABLE_AUTH = 0x5C  # Xiaomi cable-side auth (emk_spoof::MiAuthCfg): [0] read, [1, on, key, trailing u32 LE, half, reply, payload] set; rsp [on, key, trailing(4), half, reply, payload]
 PSC_STATUS, PSC_START, PSC_READ, PSC_STOP = 0, 1, 2, 3
 PSC_CHUNK = 48
 PSC_FLAG_CONFIRM = 1 << 0
@@ -1439,9 +1440,10 @@ CABLE_KINDS = ["off", "builtin", "saved"]   # k2::ctcable::Kind in enum order
 
 # The firmware's built-in cables (k2::emrec::builtin_cable ids): captured from real cables except 0.
 # Id 3 ("OnePlus 100W (mag)") is retired: the firmware reads a 3 as 4 and always answers 4, so 3 has no label of its own.
-BUILTIN_LABELS = {0: "generic 20V 5A", 1: "EPR 50V 5A", 2: "CUKTECH 6A", 3: "OnePlus 100W", 4: "OnePlus 100W"}
-BUILTIN_NAMES = {"generic": 0, "epr-50v": 1, "generic-epr": 1, "cuktech-6a": 2, "cuktech-240w": 2,
-                 "oneplus-mag": 4, "oneplus": 4}   # spellings; cuktech-240w and generic-epr are the older names, oneplus-mag the retired one
+BUILTIN_LABELS = {0: "generic 20V 5A", 1: "EPR 50V 5A", 2: "Xiaomi 6A", 3: "OnePlus 100W", 4: "OnePlus 100W"}
+# 5, 6 and 7 (mi-2717, mi-2717-epr, kowsi-6a) were removed 2026-11-17 (5's words are id 2's now); the device reads them as 1
+BUILTIN_NAMES = {"generic": 0, "epr-50v": 1, "generic-epr": 1, "xiaomi-6a": 2, "cuktech-6a": 2, "cuktech-240w": 2,
+                 "oneplus-mag": 4, "oneplus": 4}   # spellings; cuktech-6a (id 2's name until 2026-11-17), cuktech-240w and generic-epr are older names, oneplus-mag the retired one
 DIALOG_BUILTINS = (1, 2, 4)                        # the ids the charger-test START dialog lists (3 is a retired alias of 4)
 
 
@@ -1473,7 +1475,7 @@ def spoof_target(t, what):
 
 def parse_cable(text):
     """'off' -> (0, 0); 'builtin' (the default built-in, EPR 50V 5A), 'builtin:N' or 'builtin:<name>' -> (1, id);
-    'saved:3' (a library id; 'clone:3' too) -> (2, 3). 'off' is the no-spoof default. Built-in ids 1, 2 and 4 are the dialog's rows (3 is the retired spelling of 4)."""
+    'saved:3' (a library id; 'clone:3' too) -> (2, 3). 'off' is the no-spoof default. Built-in ids 1, 2 and 4 are the dialog's rows (3 is the retired spelling of 4); 0 is remote-only."""
     t = text.strip().lower()
     if t in ("", "off", "none"):
         return 0, 0
@@ -1484,10 +1486,9 @@ def parse_cable(text):
         bid = parse_builtin(seq)
         if bid == 3:
             bid = 4                      # the retired id: the device reads it as 4 and answers 4
-        if bid in DIALOG_BUILTINS:
+        if bid in BUILTIN_LABELS:
             return 1, bid
-        raise FrameError(f"unknown built-in cable '{seq}' (ids 1, 2, 4 or " + ", ".join(
-            n for n, i in BUILTIN_NAMES.items() if i in DIALOG_BUILTINS) + ")")
+        raise FrameError(f"unknown built-in cable '{seq}' (ids 0..4 or " + ", ".join(BUILTIN_NAMES) + ")")
     if kind in ("saved", "clone") and seq.isdigit() and 0 < int(seq) <= 0xFFFF:
         return 2, int(seq)
     raise FrameError(f"unknown cable identity '{text}' (off, builtin, builtin:<id|name> or saved:<library id>)")
@@ -1537,6 +1538,20 @@ def charger_level(link, level):
     p = link.call(CMD_CHARGER_LEVEL, bytes([idx])).payload
     _need(p, 1, "charger level")
     return TEST_LEVELS[p[0]] if p[0] < len(TEST_LEVELS) else str(p[0])
+
+
+def mi_cable_auth(link, on=None, key=None, trailing=None, half=None, reply=None, payload=None):
+    """Xiaomi cable-side auth config (SOP' 0x27170104 answer while a spoof is armed).
+    No arguments: read back. Otherwise set (on, key, trailing, half, reply, payload).
+    Returns (on, key, trailing, half, reply, payload)."""
+    if on is None:
+        p = link.call(CMD_MI_CABLE_AUTH, bytes([0])).payload
+    else:
+        p = link.call(CMD_MI_CABLE_AUTH, bytes([1, 1 if on else 0, int(key)]) +
+                     bytes([int(trailing) & 0xFF, (int(trailing) >> 8) & 0xFF, (int(trailing) >> 16) & 0xFF,
+                            (int(trailing) >> 24) & 0xFF, int(half), int(reply), int(payload)])).payload
+    _need(p, 9, "mi-cable-auth")
+    return bool(p[0]), p[1], p[2] | (p[3] << 8) | (p[4] << 16) | (p[5] << 24), p[6], p[7], p[8]
 
 
 def charger_avs_sweep(link, on):
@@ -1621,6 +1636,19 @@ def cmd_charger_avs_sweep(link, a):
 
 def cmd_charger_level(link, a):
     return {"level": charger_level(link, a.level)}
+
+
+def cmd_mi_cable_auth(link, a):
+    if a.set and (len(a.set) != 6 or a.set[0] not in ("on", "off")):   # refused before anything goes to the K2
+        raise FrameError("mi-cable-auth: no argument reads back; a set is 'on|off KEY TRAILING HALF REPLY PAYLOAD' "
+                         f"(6 arguments, got {len(a.set)}: {' '.join(a.set)})")
+    if not a.set:
+        on, key, trailing, half, reply, payload = mi_cable_auth(link)
+    else:
+        on, key, trailing, half, reply, payload = mi_cable_auth(link, on=a.set[0] == "on", key=a.set[1],
+                                                                 trailing=int(a.set[2], 0), half=a.set[3], reply=a.set[4],
+                                                                 payload=a.set[5])
+    return {"on": on, "key": key, "trailing": f"0x{trailing:08X}", "half": half, "reply": reply, "payload": payload}
 
 
 def charger_hunt(link, slot):
@@ -5133,6 +5161,7 @@ COMMANDS = {"ping": cmd_ping, "press": cmd_press, "state": cmd_state, "pdos": cm
             "stop": cmd_stop, "lease": cmd_lease, "store": cmd_store, "blackbox": cmd_blackbox, "transcap": cmd_transcap,
             "diagnose": cmd_diagnose, "cable-r": cmd_cable_r, "ufcs": cmd_ufcs, "pd-stress": cmd_pd_stress, "pd-spec": cmd_pd_spec, "loop-probe": cmd_loop_probe, "battery": cmd_battery, "lab": cmd_lab, "qrtest": cmd_qrtest, "charger-test": cmd_charger_test, "charger-units": cmd_charger_units,
             "charger-cable": cmd_charger_cable, "charger-sweep": cmd_charger_sweep, "charger-avs-sweep": cmd_charger_avs_sweep, "charger-level": cmd_charger_level, "charger-svooc-cap": cmd_charger_svooc_cap, "cards": cmd_cards,
+            "mi-cable-auth": cmd_mi_cable_auth,
             "twin": cmd_twin}
 
 
@@ -5179,11 +5208,19 @@ def build_parser():
     cu = sub.add_parser("charger-units", help="set the test units (and their order) of the NEXT charger run; reset by every START")
     cu.add_argument("units", help="comma list, e.g. qc2,qc3,pd (names: " + ", ".join(TEST_UNITS) + "); 'default' = the default order")
     cc = sub.add_parser("charger-cable", help="cable identity the charger-test START dialog opens on (no argument: read it back)")
-    cc.add_argument("cable", nargs="?", help="off | builtin | builtin:<id 1, 2, 4 | epr-50v | cuktech-6a | oneplus> | "
+    cc.add_argument("cable", nargs="?", help="off | builtin | builtin:<id 1, 2, 4 | epr-50v | xiaomi-6a | oneplus> | "
                     "saved:<library id>; Ra mode + spoof for the run unless off")
     cl = sub.add_parser("charger-level", help="level of the NEXT charger run: light = nothing above 5 V (what is advertised), "
                         "medium = the default run, deep = medium + the PPS and AVS deep sweeps")
     cl.add_argument("level", choices=TEST_LEVELS)
+    mc = sub.add_parser("mi-cable-auth", help="Xiaomi cable-side auth, answered only while the built-in Xiaomi 6A (id 2) is armed "
+                        "(on by default at boot: 'on 7 0 0 1 0'; a set holds until the next set or a reboot, so 'off' silences "
+                        "the automatic answer): no argument reads the config; "
+                        "'on|off <key 0..9> <trailing hex> <half 0|1> <reply 0|1> <payload 0|1>' sets it (answer to an SOP' "
+                        "0x27170104 challenge: payload 0 = HMAC-SHA256(secret[key], challenge || trailing), digest half "
+                        "0 = [0..15], 1 = [16..31]; payload 1 = raw seed[key]; reply 0 = cmd 0x27170105, reply 1 = mirrored 0x27170204)")
+    mc.add_argument("set", nargs="*", default=None, metavar="ARG",
+                    help="on|off KEY TRAILING HEX HALF REPLY PAYLOAD, e.g. 'on 7 0 0 1 0'; omitted = read back")
     for name, what, how in (("charger-sweep", "PPS", "off at Light and Medium; Deep turns it on"),
                             ("charger-avs-sweep", "AVS", "off at Light and Medium; Deep turns it on")):
         cs = sub.add_parser(name, help=f"turn the {what} deep sweep of the NEXT charger run on or off "
@@ -5206,8 +5243,8 @@ def build_parser():
     er.add_argument("id", type=int)
     er.add_argument("name")
     ep = es.add_parser("spoof", help="arm a saved cable as e-marker, or off / status")
-    ep.add_argument("target", help="saved-cable id, a built-in (builtin:0..4, or generic, epr-50v, cuktech-6a, oneplus; "
-                    "older names generic-epr = epr-50v, cuktech-240w = cuktech-6a, oneplus-mag = oneplus, id 3 = id 4), off or status")
+    ep.add_argument("target", help="saved-cable id, a built-in (builtin:0..4, or generic, epr-50v, xiaomi-6a, oneplus; "
+                    "older names generic-epr = epr-50v, cuktech-6a = cuktech-240w = xiaomi-6a, oneplus-mag = oneplus, id 3 = id 4), off or status")
     el = es.add_parser("learn", help="power the cable in the BOTTOM port (no charger) and record what it answers: Discover "
                        "Identity / SVIDs / Modes plus the seeds; --save stores the clone with those replies")
     el.add_argument("--seed", action="append", default=[], metavar="SVID:CMD[:VDO[:VDO]]",

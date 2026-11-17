@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Yaraslau Furman
 #include "k2/core/log.hpp"
 #include "k2/pd/emk_spoof.hpp"
+#include "k2/pd/xiaomi_auth.hpp"
 
 #include "k2/drivers/fusb302.hpp"
 #include "k2/drivers/usb.hpp"
@@ -18,10 +19,51 @@ std::uint32_t g_replies = 0;
 std::uint32_t g_requests = 0;
 std::uint32_t g_unmatched = 0;
 std::uint32_t g_generation = 0;
+MiAuthCfg g_mi_auth = kMiAuthDefault;   // a remote set replaces it until the next set or a reboot; arm() never touches it
 
 std::uint32_t word(std::span<const std::uint8_t> p, unsigned i) {
     if (p.size() < 4 * (i + 1)) return 0;
     return p[4 * i] | (p[4 * i + 1] << 8) | (p[4 * i + 2] << 16) | (std::uint32_t(p[4 * i + 3]) << 24);
+}
+
+// True for an SOP' VDM whose header is exactly 0x27170104 (SVID 0x2717, unstructured, command 0x0104) carrying 4
+// challenge words (the cable-auth request some Xiaomi-family sources send to a Xiaomi-VID cable after Discover Identity).
+bool is_mi_cable_challenge(std::uint16_t header, std::span<const std::uint8_t> payload) {
+    if ((header & 0x8000) != 0) return false;                       // extended
+    if ((header & 0x1F) != kMsgVendorDefined || ((header >> 12) & 7) < 5 || payload.size() < 20) return false;
+    return word(payload, 0) == 0x27170104u;
+}
+
+// FIFO tokens of the 0x27170105 answer: sync, PACKSYM, cable header (5 objects), VDM header + 4 digest words.
+Frame mi_auth_frame(std::uint32_t req_vdm, std::span<const std::uint8_t> challenge, std::uint8_t msg_id) {
+    std::uint32_t ch[4];
+    for (unsigned i = 0; i < 4; i++) ch[i] = word(challenge, 1 + i);
+    std::uint8_t digest[32];
+    pd::mi::auth_digest(g_mi_auth.key, ch, g_mi_auth.trailing, digest);
+    const unsigned off = g_mi_auth.half ? 16 : 0;
+    const std::uint32_t reply_vdm = g_mi_auth.reply ? (req_vdm + 0x100u) : ((req_vdm & 0xFFFFFF00u) | 0x05u);
+    std::array<std::uint32_t, 5> w = {reply_vdm, 0, 0, 0, 0};
+    if (g_mi_auth.payload == 1) {   // answer with the session seed instead of a digest (the sink-flow 0104 content)
+        const unsigned ki = g_mi_auth.key < pd::mi::kKeyCount ? g_mi_auth.key : 0;
+        for (unsigned i = 0; i < 4; i++) w[1 + i] = pd::mi::kSessionSeed[ki][i];
+    } else {
+        for (unsigned i = 0; i < 4; i++) w[1 + i] = pd::mi::digest_word(digest + off, i);
+    }
+    Frame f;
+    std::size_t n = 0;
+    for (std::uint8_t b : {0x12, 0x12, 0x1B, 0x1B}) f.t[n++] = b;
+    f.t[n++] = static_cast<std::uint8_t>(0x80 | (2 + 4 * w.size()));
+    const std::uint16_t h = static_cast<std::uint16_t>(kMsgVendorDefined | ((g_rec[0x14] & 3u) << 6) | (1u << 8) |
+                                                       ((msg_id & 7u) << 9) | (5u << 12));
+    f.t[n++] = static_cast<std::uint8_t>(h);
+    f.t[n++] = static_cast<std::uint8_t>(h >> 8);
+    for (std::uint32_t v : w)
+        for (int i = 0; i < 4; i++) f.t[n++] = static_cast<std::uint8_t>(v >> (8 * i));
+    f.t[n++] = 0xFF;   // JAM_CRC
+    f.t[n++] = 0x14;   // EOP
+    f.t[n++] = 0xFE;   // TXOFF
+    f.n = static_cast<std::uint8_t>(n);
+    return f;
 }
 
 // Called by fusb302 for every received SOP' / SOP'' message while armed. Only SOP' is answered: the SOP'' answer
@@ -36,6 +78,23 @@ void on_sop_prime(std::uint8_t sop, std::uint16_t header, std::span<const std::u
         return;
     }
     if (is_discover_identity_req(header, payload)) g_requests++;
+    // Only the built-in Xiaomi 6A identity answers the cable-auth challenge (compared at challenge time: g_rec is lent to learn
+    // while disarmed, so a flag set at arm() could go stale). Every other identity leaves it to respond() / unmatched.
+    if (g_mi_auth.on && sop == 1 && is_mi_cable_challenge(header, payload) && g_rec == emrec::builtin_cable(emrec::kXiaomi6aId)) {
+        const std::uint32_t req_vdm = word(payload, 0);
+        Frame f = mi_auth_frame(req_vdm, payload, g_msg_id);
+        const bool ok = fusb302::send_sop_prime_frame(f.tokens());
+        // The reply words are never logged: in payload mode 1 they are the session seed. The TX frame stays visible
+        // in the PD trace (wire data).
+        K2LOG("[EMK] Mi cable-auth req=%08X key=%u trail=%08X half=%u reply=%u payload=%u %s\n",
+              static_cast<unsigned>(req_vdm), static_cast<unsigned>(g_mi_auth.key),
+              static_cast<unsigned>(g_mi_auth.trailing), static_cast<unsigned>(g_mi_auth.half), static_cast<unsigned>(g_mi_auth.reply),
+              static_cast<unsigned>(g_mi_auth.payload), ok ? "sent" : "FAILED");
+        if (!ok) return;
+        g_msg_id = (g_msg_id + 1) & 7;
+        g_replies++;
+        return;
+    }
     const Outcome o = respond(g_rec, g_quirks, emk_quirk::kSopP, header, payload, g_msg_id);
     if (o.unmatched) {   // what a source asks beyond what this cable knows: the raw words are the way to learn it
         g_unmatched++;
@@ -96,5 +155,8 @@ std::uint32_t unmatched() { return g_unmatched; }
 const emk_quirk::SeenLog& seen() { return g_seen; }
 emrec::Record& scratch_record() { return g_rec; }
 emk_quirk::Quirks& scratch_quirks() { return g_quirks; }
+
+void set_mi_auth(const MiAuthCfg& c) { g_mi_auth = c; }
+MiAuthCfg mi_auth() { return g_mi_auth; }
 
 }  // namespace k2::emk_spoof

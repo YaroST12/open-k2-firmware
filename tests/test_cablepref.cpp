@@ -69,6 +69,21 @@ void test_damage_reads_as_no_record() {
     CHECK_EQ(cablepref::decode(cablepref::encode(kOffId)).has_value(), false);
 }
 
+// Ids 5, 6 and 7 were sniffed cable identities on unreleased test builds (removed 2026-11-17; 5's words are now id 2's).
+// A /cable.cfg that names one reads as the default, the EPR spoof, and is stored as id 1 from then on; the first id past every
+// id ever used is still an impossible choice.
+void test_removed_xiaomi_ids_read_as_the_epr_spoof() {
+    for (std::uint8_t id : {std::uint8_t(5), std::uint8_t(6), std::uint8_t(7)}) {
+        const std::array<std::uint8_t, 8> rec{'K', '2', 'C', 'B', 1, id, 0, static_cast<std::uint8_t>(1 ^ id ^ 0xA5)};
+        CHECK_EQ(cablepref::decode(rec) == cablepref::kDefault, 1);
+        CHECK_EQ(cablepref::encode(Choice{Kind::Builtin, id}) == cablepref::encode(kB1), 1);
+        Vol v;
+        CHECK_EQ(v.f.write_file(cablepref::kPath, rec) == fs::Err::Ok, true);
+        CHECK_EQ(cablepref::load(v.f) == cablepref::kDefault, 1);
+    }
+    CHECK_EQ(cablepref::decode(cablepref::encode(Choice{Kind::Builtin, 8})).has_value(), false);
+}
+
 void test_save_and_reload() {
     Vol v;
     CHECK_EQ(cablepref::load(v.f).has_value(), false);                  // blank volume: no record, the list starts on the default
@@ -116,6 +131,7 @@ int main() {
     test_the_old_builtin_spelling_is_stored_canonical();
     test_damage_reads_as_no_record();
     test_save_and_reload();
+    test_removed_xiaomi_ids_read_as_the_epr_spoof();
     test_clear_returns_to_no_record();
     test_the_prefs_file_is_untouched();
     test_a_short_or_long_file_reads_as_no_record();

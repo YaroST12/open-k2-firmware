@@ -8562,6 +8562,94 @@ static void test_a_resumed_light_run_stays_light() {
     }
     CHECK_EQ(resumed_runs > 4, true);
 }
+// A spoofed cable identity (Ra mode, nothing physical read): the identity is the cable the source saw, so the PPS full-current row
+// asks up to what the identity's cable VDO says (capped at 5 A, never above the APDO), not the 3 A default of an unread cable
+// (Xiaomi 20K bank, EPR 50V 5A spoof, PPS 5-11 V 5 A after the 0x2717 chain: row "11V" asked 3000 mA, run 2026-11-17-full-epr).
+static bool asked_full(const Fake& f, unsigned mv, unsigned ma) {
+    for (const auto& c : f.choices) if (c.pos == 2 && c.mv == mv && c.ma == ma && !c.hunt) return true;
+    return false;
+}
+static void test_pps_full_current_row_follows_a_spoofed_5a_identity() {
+    {   // spoof on, 5 A identity, APDO 5 A: 5 A
+        Fake f; f.caps = pps_caps(11000, 5000); ct::Runner r(f);
+        f.in.cable_mv = 20000; f.in.cable_ma = 3000; f.in.cable_observed = false;
+        f.in.spoof_on = true; f.in.spoof_mv = 50000; f.in.spoof_ma = 5000;
+        CHECK_EQ(r.start(f.caps, kPd, f.in, true), ct::Reason::None);
+        const auto rows = full_rows(r);
+        CHECK_EQ(rows.size(), 1);
+        if (rows.size() == 1) { CHECK_EQ(rows[0].mv, 11000); CHECK_EQ(rows[0].ma, 5000); }
+        f.tick(r, 200000);
+        CHECK_EQ(asked_full(f, 11000, 5000), true);
+        for (const auto& s : full_rows(r)) CHECK_EQ(s.ma, 5000);   // the row (its label) and the Request agree
+    }
+    {   // spoof on, 5 A identity, APDO 3 A: never above the offer
+        Fake f; f.caps = pps_caps(11000, 3000); ct::Runner r(f);
+        f.in.cable_mv = 20000; f.in.cable_ma = 3000; f.in.cable_observed = false;
+        f.in.spoof_on = true; f.in.spoof_mv = 50000; f.in.spoof_ma = 5000;
+        CHECK_EQ(r.start(f.caps, kPd, f.in, true), ct::Reason::None);
+        const auto rows = full_rows(r);
+        CHECK_EQ(rows.size(), 1);
+        if (rows.size() == 1) CHECK_EQ(rows[0].ma, 3000);
+    }
+    {   // spoof off, unread cable: the 3 A default
+        Fake f; f.caps = pps_caps(11000, 5000); ct::Runner r(f);
+        f.in.cable_mv = 20000; f.in.cable_ma = 3000; f.in.cable_observed = false; f.in.spoof_on = false;
+        CHECK_EQ(r.start(f.caps, kPd, f.in, true), ct::Reason::None);
+        f.tick(r, 200000);
+        CHECK_EQ(asked_full(f, 11000, 3000), true);
+        for (const auto& c : f.choices) CHECK_EQ(c.hunt || c.ma <= 3000, true);
+    }
+    {   // spoof on but a 3 A cable was read: the read cable wins
+        Fake f; f.caps = pps_caps(11000, 5000); ct::Runner r(f);
+        f.in.cable_mv = 20000; f.in.cable_ma = 3000; f.in.cable_observed = true;
+        f.in.spoof_on = true; f.in.spoof_mv = 50000; f.in.spoof_ma = 5000;
+        CHECK_EQ(r.start(f.caps, kPd, f.in, true), ct::Reason::None);
+        const auto rows = full_rows(r);
+        CHECK_EQ(rows.size(), 1);
+        if (rows.size() == 1) CHECK_EQ(rows[0].ma, 3000);
+    }
+}
+// The APDO's current rises after the plan was made (the Xiaomi 0x2717 chain re-announces PPS 5-11 V 3 A as 5 A): the full-current
+// row asks the current of the list in hand, not the one it was planned from. Both paths: the list arrives while the PD rows run
+// (follow_list's per-row pass) and before any PD row ran (the PD rows are planned again).
+static void test_pps_full_current_row_follows_a_reannounced_current() {
+    {   // mid-unit: a 1 A row of the APDO is running when the list changes
+        Fake f; f.caps = pps_caps(11000, 3000); ct::Runner r(f);
+        f.in.cable_mv = 20000; f.in.cable_ma = 3000; f.in.cable_observed = false;
+        f.in.spoof_on = true; f.in.spoof_mv = 50000; f.in.spoof_ma = 5000;
+        CHECK_EQ(r.start(f.caps, kPd, f.in, true), ct::Reason::None);
+        CHECK_EQ(run_until(f, r, [&] { return a_pd_row_is_running(r) && r.steps()[r.index()].algorithm == A::Pps; }), true);
+        f.caps = pps_caps(11000, 5000);
+        f.tick(r, 200000);
+        CHECK_EQ(r.state(), ct::State::Done);
+        CHECK_EQ(asked_full(f, 11000, 5000), true);
+        CHECK_EQ(asked_full(f, 11000, 3000), false);
+        const auto rows = full_rows(r);
+        CHECK_EQ(rows.size(), 1);
+        if (rows.size() == 1) { CHECK_EQ(rows[0].ma, 5000); CHECK_EQ(rows[0].verdict, ct::Verdict::Pass); }
+    }
+    {   // before the first PD row: the replan reads the new list
+        Fake f; f.caps = pps_caps(11000, 3000); ct::Runner r(f);
+        f.in.cable_mv = 20000; f.in.cable_ma = 3000; f.in.cable_observed = false;
+        f.in.spoof_on = true; f.in.spoof_mv = 50000; f.in.spoof_ma = 5000;
+        CHECK_EQ(r.start(f.caps, kPd, f.in, true), ct::Reason::None);
+        f.caps = pps_caps(11000, 5000);
+        f.tick(r, 200000);
+        CHECK_EQ(asked_full(f, 11000, 5000), true);
+        CHECK_EQ(asked_full(f, 11000, 3000), false);
+    }
+    {   // no spoof, unread cable: the re-announce changes nothing, the row stays at 3 A
+        Fake f; f.caps = pps_caps(11000, 3000); ct::Runner r(f);
+        f.in.cable_mv = 20000; f.in.cable_ma = 3000; f.in.cable_observed = false;
+        CHECK_EQ(r.start(f.caps, kPd, f.in, true), ct::Reason::None);
+        CHECK_EQ(run_until(f, r, [&] { return a_pd_row_is_running(r) && r.steps()[r.index()].algorithm == A::Pps; }), true);
+        f.caps = pps_caps(11000, 5000);
+        f.tick(r, 200000);
+        CHECK_EQ(asked_full(f, 11000, 3000), true);
+        for (const auto& c : f.choices) CHECK_EQ(c.hunt || c.ma <= 3000, true);
+    }
+}
+
 int main() {
     test_an_above_5v_request_waits_for_the_journal_without_blocking();
     test_reannounce_before_the_first_row_replans(); test_reannounce_during_the_first_row_follows_the_new_slots();
@@ -8704,5 +8792,6 @@ int main() {
     test_spec_stage_runs_once_in_a_deep_pd_unit(); test_spec_stage_is_deep_only(); test_spec_refusal_is_recorded_and_the_run_goes_on(); test_spec_cancel_ends_in_order();
     test_spec_leaves_the_source_at_5v_before_the_detach(); test_spec_watchdog_bounds_a_stuck_engine(); test_spec_runner_guard_stops_the_engine();
     test_spec_resumed_run_never_repeats_the_stage(); test_spec_preview_counts_the_stage();
+    test_pps_full_current_row_follows_a_spoofed_5a_identity(); test_pps_full_current_row_follows_a_reannounced_current();
     return test_report("test_charger_test");
 }

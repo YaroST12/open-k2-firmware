@@ -6,7 +6,7 @@
 // Off          no spoof and no Ra: today's behaviour, a spoof the user armed elsewhere stays as it is.
 // Builtin      a built-in passive cable, `seq` = its emrec::builtin_cable() id (1, 2 or 4, see kDialogIds), answered on SOP'.
 //              Seq 0 is the older spelling of the default built-in (kBuiltinKind), seq 3 the retired "OnePlus 100W (mag)"
-//              (now id 4); canonical() maps both.
+//              (now id 4), seq 5, 6 and 7 removed identities (now the default); canonical() maps them all.
 // Saved        a clone from the e-marker library (`seq` = its library id).
 // Any identity but Off also turns the Ra mode on for the run (PC13 high = an Ra on CC1, Rd on CC2 alone, k2/pd/emk_ra.hpp).
 #pragma once
@@ -24,7 +24,7 @@ constexpr unsigned kBuiltinKind = 1;                       // the default built-
 // The dialog / Spoof list shows the built-in ids 1, 2 and 4 (id 0, generic, is remote only; id 3 is retired, see emrec.hpp).
 constexpr unsigned kDialogBuiltins = 3;
 constexpr unsigned kDialogIds[kDialogBuiltins] = {1, 2, emrec::kOnePlusId};
-static_assert(kDialogBuiltins + 2 == emrec::kBuiltinCount);
+static_assert(kDialogBuiltins == emrec::kBuiltinCount - 2);   // every table id but 0 (generic, remote-only) and 3 (retired)
 constexpr unsigned dialog_id(unsigned row) { return kDialogIds[row < kDialogBuiltins ? row : 0]; }   // built-in id of dialog row `row` (0-based)
 constexpr int dialog_row(unsigned id) {   // 0-based dialog row of built-in `id` (a retired id reads as its successor); not in the list: row 0
     id = emrec::canonical_builtin_id(id);
@@ -44,12 +44,13 @@ struct Choice {
 constexpr Choice kDefaultChoice{Kind::Builtin, static_cast<uint16_t>(kBuiltinKind)};
 
 constexpr bool valid(Choice c) {
-    if (c.kind == Kind::Builtin) return c.seq < emrec::kBuiltinCount;
+    if (c.kind == Kind::Builtin) return emrec::builtin_id_known(c.seq);
     return c.kind == Kind::Off ? c.seq == 0 : c.kind == Kind::Saved && c.seq != 0;
 }
 constexpr Choice canonical(Choice c) {
     if (c.kind == Kind::Builtin && c.seq == 0) c.seq = kBuiltinKind;
-    if (c.kind == Kind::Builtin && c.seq == emrec::kRetiredMagId) c.seq = emrec::kOnePlusId;   // stored / remote 3 = OnePlus 100W
+    // stored / remote 3 = OnePlus 100W; the removed ids 6 and 7 = the default EPR cable (emrec.hpp)
+    if (c.kind == Kind::Builtin) c.seq = static_cast<uint16_t>(emrec::canonical_builtin_id(c.seq));
     return c;
 }
 

@@ -296,7 +296,7 @@ pd::IqRefusal inline_start_cable(std::string_view name, bool save, bool confirme
         if (!storage::lib_get(id, ent, quirks)) return pd::IqRefusal::BadSpoof;
         rec = ent.rec;
     } else {
-        if (id >= emrec::kBuiltinCount) return pd::IqRefusal::BadSpoof;
+        if (!emrec::builtin_id_known(id)) return pd::IqRefusal::BadSpoof;   // builtin_cable() maps the retired ids
         rec = emrec::builtin_cable(id);
         quirks = emk_quirk::builtin_quirks(id);
     }
