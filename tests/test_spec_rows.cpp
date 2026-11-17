@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
-// The PD spec check's per-transition rows (k2/chargertest/spec_rows.hpp) and their words (k2/ui/spec_text.hpp): the 8-byte row wire
+// The PD spec check's per-transition rows (k2/chargertest/spec_rows.hpp) and their words (k2/ui/spec_text.hpp): the 10-byte row wire
 // form, the file header and its refusals, the row texts and the width every text keeps inside its column.
 #include <array>
 #include <cstdint>
