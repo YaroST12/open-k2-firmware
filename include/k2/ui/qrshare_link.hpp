@@ -62,6 +62,10 @@ static_assert(kMaxText <= kQrBytes, "the worst-case link must stay a version 21 
 static_assert(qr::buf_len_for(kMaxVersion) >= kQrBytes, "the version 21 buffer holds a link of kQrBytes characters");
 static_assert(kHead + b64_len(records::kMaxCardV2) <= kQrBytes, "a version '2' card link stays one code");
 static_assert(records::kMaxCardV2 <= kMaxRecord, "the v2 card record never grows past one code's record cap");
+// The worst Deep card (every v2 field at its widest, plus the Deep block at its worst: 4 full range graphs, every spec check
+// failing, the SVOOC stage): 653 record bytes, a 921 character link of the 929 one version 21 code holds.
+static_assert(kHead + b64_len(records::kMaxCardDeepV2) <= kQrBytes && records::kMaxCardDeepV2 <= kMaxRecord,
+              "the worst Deep card's link (with its Deep block) stays one version 21 code");
 static_assert(kHead + b64_len(kMaxRecord) <= kQrBytes, "a version '2' cable link and a kind 't' link stay one code");
 static_assert(records::kMaxCard <= kMaxRecord && records::kMaxPdCaps <= kMaxRecord && records::kMaxIdentity <= kMaxRecord &&
                   records::kMaxEmarker <= kMaxRecord,

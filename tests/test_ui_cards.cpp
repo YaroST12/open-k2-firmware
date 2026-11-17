@@ -423,6 +423,26 @@ static void test_sheet_ufcs_modes() {
 #undef CHECK
 }
 
+// A Light card's sheet says "Advertised" for what the PD source lists (its PD group, a range with nothing measured) and "Detected"
+// for a legacy group that answered at 5 V; the same rows on a Medium card read Pass / No reply as before.
+static void test_sheet_light_words() {
+    rc::Card c = cardfx::fh22_full();
+    c.level = ct::Level::Light;
+    for (unsigned i = 0; i < c.n_ranges; ++i) { c.range[i].max_dv = 0; c.range[i].fail_dv = 0; }
+    c.group[0] = {rc::GV::Pass, 5000, 0, 0};
+    c.group[unsigned(ct::Group::Qc2)] = {rc::GV::Pass, 5000, 0, 0};
+    CardSheet s;
+    cards_sheet(c, false, 0, s);
+    CHECK_STR(std::string(s.row[0].line[0]).c_str(), "Advertised");
+    cards_sheet(c, true, 0, s);
+    CHECK_STR(std::string(s.row[0].line[0]).c_str(), "Advertised");
+    cards_sheet(c, false, unsigned(ct::Group::Qc2), s);
+    CHECK_STR(std::string(s.row[0].line[0]).c_str(), "Detected");
+    c.level = ct::Level::Medium;
+    cards_sheet(c, false, 0, s);
+    CHECK_STR(std::string(s.row[0].line[0]).c_str(), "Pass");
+}
+
 // Source lint for the cards page (2026-11-08: raw gfx_text calls and fit_data on firmware text let cuts through the gate):
 // firmware text is drawn only through put_line / put_marked (fit_text, which the gate fails on); gfx_text may be called directly
 // only by that helper and for the user's own card name; fit_data / fit_text_mid only on that name.
@@ -533,6 +553,7 @@ int main() {
     test_sheet_wrap();
     test_sheet_never_overflows();
     test_sheet_ufcs_modes();
+    test_sheet_light_words();
     test_cards_source_draws_firmware_text_through_checked_helpers();
     test_dump_renders();
     return test_report("test_ui_cards");

@@ -703,7 +703,14 @@ void plan_unit(Unit unit, const pd::SourceCaps& caps, Options o, const Input& in
             skip(epr_capable_caps(caps) && (withheld || epr_cable_unfit(in)) ? Reason::CableLimit : Reason::NoOffer); continue;
         }
         bool found = false;
-        for (size_t i = 0; i < std::min<size_t>(caps.num_pdos, caps.pdos.size()); ++i) {
+        // The fixed rows (SPR fixed, and the EPR fixed ones in their own section) run from the top voltage down (2026-11-17: a shared-port
+        // splitter re-splits its budget a few seconds after it announces and withdraws the high levels, so those are asked first; the 5 V
+        // row, the attach contract's own level, comes last). Each row still starts from the released 5 V contract, so every request is an
+        // up-step from 5 V. The Results grid keeps ascending voltages (result_layout fixed_row); ranges and sweeps keep their order.
+        const size_t n_pdo = std::min<size_t>(caps.num_pdos, caps.pdos.size());
+        const bool top_down = algorithm == Algorithm::Pd2Fixed || algorithm == Algorithm::Pd3Fixed || algorithm == Algorithm::Epr;
+        for (size_t k = 0; k < n_pdo; ++k) {
+            const size_t i = top_down ? n_pdo - 1 - k : k;
             const auto& p = caps.pdos[i];
             if (!p.raw) continue;
             const bool epr = i >= 7;

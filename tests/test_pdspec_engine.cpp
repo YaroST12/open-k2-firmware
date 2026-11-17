@@ -53,6 +53,8 @@ struct Sim final : Env {
     pd::SourceCaps c{};
     std::uint32_t cap = 36000;
     bool proof = false, self = false, inl = false, cap_busy = false;
+    bool inferred_rdy = false;          // the PS_RDY was inferred (a down-step): no read time for it
+    bool no_accept_stamp = false;       // the Accept came in behind another frame of the same service pass: no RX edge for it (hardware 2026-11-17)
     int accept_ms = 5, start_ms = 30, pps_start_ms = 5, psrdy_after_ms = 10;
     int early_psrdy_ms = -1;            // >= 0: PS_RDY this long after the Accept, wherever VBUS is
     int pps_offset_mv = 0;              // a PPS output this far off its set point
@@ -165,7 +167,7 @@ struct Sim final : Env {
             ev = Ev::None;
         } else if (ev == Ev::Accept && t >= ev_at) {
             s.accept_at = t;
-            s.accept_us = (t * 1000) | 1;
+            s.accept_us = no_accept_stamp ? 0 : (t * 1000) | 1;
             mark(transcap::Mark::Accept);
             s.state = pd::SinkState::Transition;
             const bool p = c.pdos[want.pos - 1].type != pd::PdoType::Fixed;
@@ -191,8 +193,8 @@ struct Sim final : Env {
         } else if (ev == Ev::PsRdy &&
                    ((early_psrdy_ms >= 0 && t >= ev_at + std::uint32_t(early_psrdy_ms)) ||
                     (early_psrdy_ms < 0 && reached && t >= reached_at + std::uint32_t(psrdy_after_ms)))) {
-            s.ps_rdy_at = t;
-            s.ps_rdy_us = (t * 1000) | 1;
+            s.ps_rdy_at = inferred_rdy ? 0 : t;
+            s.ps_rdy_us = inferred_rdy ? 0 : (t * 1000) | 1;
             mark(transcap::Mark::PsRdy);
             s.state = pd::SinkState::Ready;
             s.result = pd::SinkResult::Ok;
@@ -696,6 +698,42 @@ void capture_busy_falls_back_to_stamps_and_polling() {
     CHECK_EQ(int(e.agg(Check::RiseTime).n), 6);
     CHECK_EQ(int(e.agg(Check::FallTime).n), 6);
     for (const TransRec& r : e.trans()) CHECK_COND((r.flags & kTrNoCapture) && (r.flags & kTrLiveBand));
+}
+
+// The Accept's edge stamp can be missing (read behind the GoodCRC in one service pass) while the PS_RDY's is there: with no capture to
+// fall back on, Accept and PS_RDY time still come from the sink's millisecond stamps, bracketed, flagged as suspect.
+void missing_accept_stamp_falls_back_to_ms_stamps() {
+    Sim m;
+    typical(m);
+    m.cap_busy = true;
+    m.no_accept_stamp = true;
+    Engine e(m);
+    CHECK_COND(e.start(0) == StartResult::Ok);
+    drive(m, e);
+    check_safe_end(m, e);
+    CHECK_COND(e.stop() == Stop::Done);
+    CHECK_EQ(int(e.score()), 0);
+    CHECK_EQ(int(e.agg(Check::AcceptTime).n), 12 + 248);
+    CHECK_COND(e.agg(Check::PsRdyTime).n > 0);
+    CHECK_COND(e.agg(Check::AcceptTime).skip == Skip::None);
+    for (const TransRec& r : e.trans()) CHECK_COND(r.flags & kTrSuspectStamp);
+}
+
+// An inferred PS_RDY has no read time: the ms fallback times the Accept alone and records no PS_RDY value (and no "never" failure).
+void ms_fallback_without_a_ps_rdy_read_time_gives_no_rdy_value() {
+    Sim m;
+    typical(m);
+    m.cap_busy = true;
+    m.no_accept_stamp = true;
+    m.inferred_rdy = true;
+    Engine e(m);
+    CHECK_COND(e.start(0) == StartResult::Ok);
+    drive(m, e);
+    check_safe_end(m, e);
+    CHECK_COND(e.stop() == Stop::Done);
+    CHECK_EQ(int(e.agg(Check::AcceptTime).n), 12 + 248);
+    CHECK_EQ(int(e.agg(Check::PsRdyTime).n), 0);
+    CHECK_EQ(int(e.agg(Check::PsRdyTime).fails), 0);
 }
 
 void wait_exhausted_is_a_refusal() {
@@ -1325,6 +1363,8 @@ int main() {
     epr_and_pps_on_one_charger();
     source_back_at_its_old_level();
     capture_busy_falls_back_to_stamps_and_polling();
+    missing_accept_stamp_falls_back_to_ms_stamps();
+    ms_fallback_without_a_ps_rdy_read_time_gives_no_rdy_value();
     wait_exhausted_is_a_refusal();
     missing_ps_rdy_is_a_measurement();
     stuck_request_stops();

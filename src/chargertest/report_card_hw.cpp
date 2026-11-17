@@ -41,8 +41,9 @@ std::size_t numbers(std::span<std::uint16_t> out) { return g_store.numbers(out);
 std::uint32_t generation() { return g_gen; }
 bool find(std::uint32_t fp, Card& c) { return g_store.find(fp, c); }
 bool get(std::uint16_t card_no, Card& c) { return g_store.get(card_no, c); }
-[[gnu::noinline]] Err put(Card& c, Card& prev, bool& had) {   // the caller owns the previous Card: no second one on this stack
-    const Err e = g_store.put(c, prev, had);
+std::span<const std::uint8_t> ext(std::uint16_t card_no) { return g_store.ext(card_no); }
+[[gnu::noinline]] Err put(Card& c, Card& prev, bool& had, std::span<const std::uint8_t> blk) {   // the caller owns the previous Card: no second one on this stack
+    const Err e = g_store.put(c, prev, had, blk);
     K2LOG("[CARD] save #%u fp=%08x runs=%u times=%u -> %d\n", unsigned(c.card_no), unsigned(c.id.fp), unsigned(c.runs), unsigned(c.times), int(e));
     return written(e);   // Full: the run's card is lost (the ring's spare is kept blank while idle, so only a ring that never idled)
 }

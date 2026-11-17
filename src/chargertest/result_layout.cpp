@@ -15,6 +15,7 @@ namespace ct = charger_test;
 bool noted(const ct::Step& s) {
     return s.verdict == ct::Verdict::Skip && (s.reason == ct::Reason::Advertised || s.reason == ct::Reason::LightLevel);
 }
+bool advertised(const ct::Step& s) { return s.verdict == ct::Verdict::Skip && s.reason == ct::Reason::Advertised && s.group == ct::Group::Pd; }
 bool caution(const ct::Step& s) { return s.verdict == ct::Verdict::Pass && s.reason == ct::Reason::Folded; }
 const char* verdict_word(const ct::Step& s) {
     switch (s.verdict) {
@@ -37,6 +38,15 @@ bool deviates(const ct::Step& s, const ctsweep::View& v) {
 }
 bool caution(const ct::Step& s, const ctsweep::View& v) { return caution(s) || deviates(s, v); }
 const char* verdict_word(const ct::Step& s, const ctsweep::View& v) { return deviates(s, v) ? "CAUTION" : verdict_word(s); }
+Progress run_progress(std::span<const ct::Step> steps) {
+    Progress p;
+    for (const auto& s : steps) {
+        if (s.verdict == ct::Verdict::Skip) continue;
+        ++p.total;
+        p.done += s.verdict == ct::Verdict::Pass || s.verdict == ct::Verdict::Fail;
+    }
+    return p;
+}
 using A = ct::Algorithm;
 namespace {
 struct Out {
@@ -53,7 +63,7 @@ void count(Tally& t, const ct::Step& y) {
     switch (y.verdict) {
     case ct::Verdict::Pass: caution(y) ? ++t.capped : ++t.pass; break;   // a fold is a caution: neither a pass nor a fail
     case ct::Verdict::Fail: y.reason == ct::Reason::Capped ? ++t.capped : ++t.fail; break;
-    case ct::Verdict::Skip: noted(y) ? ++t.noted : ++t.skip; break;
+    case ct::Verdict::Skip: noted(y) ? ++t.noted : ++t.skip; t.adv += advertised(y); break;
     default: ++t.pending; break;
     }
 }
@@ -165,14 +175,26 @@ void tag(Builder& b, const ct::Step& x) {
     if (const char* t = skip_tag(x))
         if (Token* k = b.token(false, Tone::Caution, true)) std::strncpy(k->text, t, sizeof k->text - 1);
 }
+// The plan runs the fixed levels from the top voltage down, the grid reads them left to right ascending: chips go out in
+// (voltage, plan index) order, one selection pass per chip (at most kMaxSteps steps, no scratch array).
 void fixed_row(Builder& b, std::span<const ct::Step> s, A a) {
-    for (const auto& x : s) {
-        if (x.algorithm != a || !x.mv || x.hunt) continue;   // a 6 A probe is a row of its own (probe_row)
-        Token* k = b.token(true, tone(x));
+    uint32_t done = 0;   // the sort key of the chip emitted last; keys are unique and start above 0
+    for (;;) {
+        const ct::Step* next = nullptr;
+        uint32_t best = UINT32_MAX;
+        for (size_t i = 0; i < s.size(); ++i) {
+            const auto& x = s[i];
+            if (x.algorithm != a || !x.mv || x.hunt) continue;   // a 6 A probe is a row of its own (probe_row)
+            const uint32_t key = (uint32_t(x.mv) << 10) | uint32_t(i);
+            if (key > done && key < best) { best = key; next = &x; }
+        }
+        if (!next) return;
+        done = best;
+        Token* k = b.token(true, tone(*next));
         if (!k) return;
-        k->mv = x.mv;
-        put_text(*k, step_label::params(x).c_str());   // "9V 3A", "20V 3.35A", "28V 5A"
-        tag(b, x);
+        k->mv = next->mv;
+        put_text(*k, step_label::params(*next).c_str());   // "9V 3A", "20V 3.35A", "28V 5A"
+        tag(b, *next);
     }
 }
 // One chip for one APDO (`pos`): the row is one advertised range, so a probe the plan runs between two APDOs lands
@@ -255,6 +277,7 @@ Reach reach_of(std::span<const ct::Step> s, A a, uint8_t pos) {
         }
     }
     r.tone = roll_up(t);
+    r.listed = t.adv && !t.pass && !t.fail && !t.capped;
     r.needs_load = needs_load && !t.fail;   // a plain failure in the range is the headline, never hidden behind "needs load"
     return r;
 }
@@ -276,9 +299,10 @@ void put_word(step_label::Text& t, const char* w) {
 
 Tone roll_up(const Tally& t) {
     if (t.pending) return Tone::Pending;
-    if (!t.pass && !t.fail && !t.capped) return t.skip ? Tone::Skip : t.noted ? Tone::Noted : Tone::Pending;
+    const unsigned ok = t.pass + t.adv;   // an advertised PD offer reads as a pass (nothing measured: only the tone)
+    if (!ok && !t.fail && !t.capped) return t.skip ? Tone::Skip : t.noted ? Tone::Noted : Tone::Pending;
     if (!t.fail && !t.capped && !t.skip) return Tone::Pass;
-    return t.pass || t.capped ? Tone::Partial : Tone::Fail;
+    return ok || t.capped ? Tone::Partial : Tone::Fail;
 }
 
 Reach reach(std::span<const ct::Step> s, A a, int pos) {
@@ -304,9 +328,8 @@ step_label::Text reach_footer(const Reach& r) {
         put_word(t, "folds to "); put_level(t, r.fold_mv); put_word(t, "V");   // a level the sweep found folded back reads this low
     } else if (r.tone == Tone::Pending) {
         put_word(t, "not finished");
-    } else if (r.tone == Tone::Noted) {
+    } else if (r.listed) {
         put_word(t, "advertised");   // a Light run's listing: never asked, so never a shortfall
-
     } else if (r.needs_load && r.adv_mv && (r.tone == Tone::Skip || r.tone == Tone::Partial)) {
         // pattern pps-off-at-no-load: the levels were skipped, not failed and not never-run; say why
         put_word(t, "needs load");

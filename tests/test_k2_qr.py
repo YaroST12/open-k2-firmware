@@ -3,9 +3,11 @@
 """tools/k2_qr.py against the golden vectors the firmware encoder produced (tests/fixtures/qrshare.tsv,
 checked by tests/test_qrshare_records.cpp): the Python side decodes every fixture, re-encodes the record to the same
 part texts byte for byte (an implementation independent of src/ui/qrshare.cpp), and reads the fields back."""
+import base64
 import io
 import json
 import os
+import re
 import sys
 import unittest
 from contextlib import redirect_stdout, redirect_stderr
@@ -14,6 +16,7 @@ from unittest import mock
 HERE = os.path.dirname(__file__)
 sys.path.insert(0, os.path.join(HERE, "..", "tools"))
 import k2_qr as q  # noqa: E402
+import report_card  # noqa: E402
 import loop_probe_rec as lp  # noqa: E402
 
 
@@ -34,7 +37,8 @@ FIX = load()
 class Golden(unittest.TestCase):
     def test_every_fixture_present(self):
         self.assertEqual(set(FIX), {"boot", "identity", "emk_plain", "emk_rows", "pdcaps_spr", "pdcaps_epr", "card",
-                                    "log", "loop", "battery", "emk_rows_lz", "card_lz", "emk_rows_v2", "card_v2"})
+                                    "log", "loop", "battery", "emk_rows_lz", "card_lz", "emk_rows_v2", "card_v2",
+                                    "card_deep_v2"})
 
     def test_decode_joins_the_golden_record(self):
         for name, fx in FIX.items():
@@ -115,6 +119,87 @@ class SchemaV2(unittest.TestCase):
                 self.assertEqual(d["level"], ["medium", "light", "deep"][level])
         self.assertEqual(q.expand_card_v2(medium), bytes(v1))   # Medium: no byte, still reads back whole
 
+    def test_v10_links_keep_their_crc_and_have_no_deep_block(self):
+        # A format-10 firmware's link carries the CRC of its format-10 record; the reader writes format 11 and falls back to the
+        # CRC with the byte before it. A flipped bit still fails.
+        import qr_corpus
+        v1 = bytearray(FIX["card"]["record"])
+        v1[4 + 33] = 10
+        crc = qr_corpus.crc16_ccitt(bytes(v1[:-2]))
+        v1[-2], v1[-1] = crc & 0xFF, crc >> 8
+        v2 = qr_corpus.pack_card_v2(qr_corpus.parse_card(bytes(v1)))
+        d = q.decode_card_v2(v2)
+        self.assertTrue(d["_store_crc_ok"])
+        self.assertNotIn("deep", d)
+        bad = bytearray(v2)
+        bad[-1] ^= 0x01                      # the CRC itself
+        self.assertFalse(q.decode_card_v2(bytes(bad))["_store_crc_ok"])
+
+    def test_deep_card_golden(self):
+        # The row tests/test_qrshare_records.cpp builds from a Deep run (PPS error (i % 9) * 10 - 20 mV over 128 points from
+        # 3.3 V, an AVS sweep of a steady +35 mV): the v2 stream carries the block after the level byte, the CRC holds.
+        res, code = q.decode_texts(FIX["card_deep_v2"]["parts"])
+        self.assertEqual(code, 0)
+        self.assertNotIn("decode_error", res)
+        card = res["record"]
+        self.assertTrue(card["_store_crc_ok"])
+        self.assertEqual(card["level"], "deep")
+        deep = card["deep"]
+        self.assertEqual(deep["svooc"], {"end": "stopped", "asks": 2, "ceiling_ma": 5500, "vmax_mv": 11200, "stop_ms": 3300})
+        spec = deep["spec"]
+        self.assertEqual(spec["end"], "done")
+        self.assertEqual(spec["tally"], {"pass": 1, "fail": 1, "skip": 1, "unverified": 1, "pending": 23})
+        by = {c["key"]: c for c in spec["cells"]}
+        self.assertEqual(by["accept_time"]["verdict"], "pass")
+        self.assertEqual(by["accept_time"]["value"], 123400)        # 1234 steps of 100 us
+        self.assertEqual(by["ps_rdy_time"]["verdict"], "fail")
+        self.assertEqual(by["ps_rdy_time"]["fails"], 7)
+        self.assertEqual(by["ps_rdy_time"]["at_text"], "PDO 5 to 9")
+        self.assertEqual(by["src_start"]["skip"], "no AVS")
+        self.assertEqual(by["ps_rdy_early"]["value_text"], "not seen")
+        # the graphs: the PPS range, then the AVS one (range index 1 of the card)
+        g0, g1 = deep["graphs"]
+        self.assertEqual((g0["range"], g0["lo_mv"], g0["n"], g0["step_mv"]), (0, 3300, 128, 100))
+        self.assertEqual(len(g0["buckets"]), 32)
+        e = g0["unit_mv"]
+        self.assertEqual(e, 4)
+        for b, got in enumerate(g0["buckets"]):
+            pts = [i % 9 * 10 - 20 for i in range(b * 128 // 32, (b + 1) * 128 // 32)]
+            self.assertLessEqual(abs(got["mean_mv"] - sum(pts) / len(pts)), e / 2 + 1e-9, b)
+            self.assertLessEqual(got["min_mv"], min(pts))               # the band always covers the data
+            self.assertGreaterEqual(got["max_mv"], max(pts))
+            self.assertLessEqual(got["max_mv"] - max(pts), e)           # and by less than one unit
+        self.assertEqual((g1["range"], g1["lo_mv"], g1["n"]), (1, 15000, 131))
+        for got in g1["buckets"]:
+            self.assertLessEqual(abs(got["mean_mv"] - 35), g1["unit_mv"] / 2)
+            self.assertLessEqual(got["min_mv"], 35)
+            self.assertGreaterEqual(got["max_mv"], 35)
+
+    def test_deep_decode_is_pinned_for_the_web_page(self):
+        # tests/fixtures/deep_decoded.json is what decode_deep gives for the golden Deep card; docs/site/r/deep.js (the web viewer)
+        # must give the same and tests/test_cardpage.mjs checks it. K2_QRLINK_WRITE=1 rewrites the file.
+        deep = q.decode_texts(FIX["card_deep_v2"]["parts"])[0]["record"]["deep"]
+        path = os.path.join(HERE, "fixtures", "deep_decoded.json")
+        text = json.dumps(deep, indent=1, sort_keys=True) + "\n"
+        if os.environ.get("K2_QRLINK_WRITE"):
+            with open(path, "w") as f:
+                f.write(text)
+        with open(path) as f:
+            self.assertEqual(json.loads(text), json.load(f))
+        # the same card as a version 2 link (what the K2's QR carries) reads the same through decode_link
+        link = "https://yarost12.github.io/open-k2-firmware/r/#2c." + base64.urlsafe_b64encode(FIX["card_deep_v2"]["record"]).rstrip(b"=").decode()
+        self.assertEqual(q.decode_link(link)["record"]["deep"], deep)
+
+    def test_deep_block_is_only_read_after_the_level_byte(self):
+        # The golden's block is the tail of the stream: cutting it leaves the card the older readers see (CRC unchanged).
+        rec = FIX["card_deep_v2"]["record"]
+        full_rec, blob = q.expand_card_v2_deep(rec)
+        self.assertIsNotNone(blob)
+        self.assertEqual(len(blob), 2 + (int.from_bytes(blob[:2], "little") + 7) // 8)
+        plain = q.expand_card_v2_deep(FIX["card_v2"]["record"])
+        self.assertIsNone(plain[1])
+        self.assertEqual(q.expand_card_v2(rec), full_rec)
+
     def test_v2_card_json_matches_the_v1_card(self):
         a = q.decode_texts(FIX["card_v2"]["parts"])[0]["record"]
         b = q.decode_texts(FIX["card"]["parts"])[0]["record"]
@@ -122,6 +207,108 @@ class SchemaV2(unittest.TestCase):
         self.assertTrue(b.pop("_store_crc_ok"))
         self.assertEqual(a, b)
         self.assertEqual(a["name"], "Desk 65W")
+
+
+ROOT = os.path.join(HERE, "..")
+
+
+def _switch_strings(path, marker):
+    """The return strings of the switch in the function that starts with `marker`, in case order."""
+    with open(os.path.join(ROOT, path)) as f:
+        src = f.read()
+    body = src[src.index(marker):]
+    body = body[:body.index("\n}\n")]
+    return re.findall(r'case [\w:]+: return "([^"]*)";', body)
+
+
+def _blob(bits):
+    """Bits (0/1 list) -> the Deep blob: u16 LE bit count, then the bytes, LSB first."""
+    data = bytearray((len(bits) + 7) // 8)
+    for i, b in enumerate(bits):
+        data[i >> 3] |= b << (i & 7)
+    return bytes([len(bits) & 0xFF, len(bits) >> 8]) + bytes(data)
+
+
+def _bits(value, width):
+    return [(value >> i) & 1 for i in range(width)]
+
+
+class DeepBlob(unittest.TestCase):
+    """report_card.decode_deep(): the Deep block's own reader (the firmware's layout is in include/k2/chargertest/report_card_deep.hpp;
+    the golden card above is the cross check against the firmware's builder)."""
+
+    def test_svooc_tables_match_the_headers(self):
+        # decode_deep names the ceiling stage from these lists; the headers own the order
+        self.assertEqual(_switch_strings("include/k2/chargertest/svooc_ceiling.hpp", "constexpr const char* abort_word"),
+                         report_card.SVOOC_ABORTS)
+        self.assertEqual(_switch_strings("include/k2/fastcharge/svooc_run.hpp", "constexpr const char* name(Refusal r)"),
+                         report_card.SVOOC_REFUSALS)
+        with open(os.path.join(ROOT, "include/k2/chargertest/svooc_ceiling.hpp")) as f:
+            enum = re.search(r"enum class End : std::uint8_t \{([^}]*)\}", f.read()).group(1)
+        self.assertEqual([x.strip() for x in enum.split(",")],
+                         ["None", "Refused", "NoAdapter", "Aborted", "Cap", "Judged", "Cancelled", "Stopped"])
+        self.assertEqual(len(report_card.SVOOC_ENDS), 8)
+
+    def test_svooc_only_blob_with_a_gap_in_the_sweep(self):
+        # header: no spec, ceiling stage, sweep on range 1 only; the stage ended Aborted (3) because of "current" (2)
+        bits = _bits(0, 1) + _bits(1, 1) + _bits(0b0010, 4)
+        bits += _bits(3, 3) + _bits(2, 4) + _bits(1, 3) + _bits(109, 8) + _bits(112, 9) + _bits(33, 10)
+        # 3 points from 5.0 V (lo 50 dV), scale 1 (E = 2 mV): bucket means +3, empty, -2 units; spreads 1/2, 0/0, 3/0
+        bits += _bits(50, 9) + _bits(3, 10) + _bits(1, 3)
+        bits += _bits(3, 8) + _bits(1, 4) + _bits(2, 4)
+        bits += _bits(0x80, 8) + _bits(0, 4) + _bits(0, 4)
+        bits += _bits(-2 & 0xFF, 8) + _bits(3, 4) + _bits(0, 4)
+        d = report_card.decode_deep(_blob(bits), [{"alg": "x"}, {"alg": "Pps"}])
+        self.assertNotIn("spec", d)
+        self.assertEqual(d["svooc"], {"end": "aborted", "why": "current", "asks": 1, "ceiling_ma": 10900, "vmax_mv": 11200,
+                                      "stop_ms": 3300})
+        (g,) = d["graphs"]
+        self.assertEqual((g["range"], g["lo_mv"], g["n"], g["unit_mv"], g["step_mv"]), (1, 5000, 3, 2, 100))
+        self.assertEqual(g["buckets"][0], {"mean_mv": 6, "min_mv": 4, "max_mv": 10})
+        self.assertIsNone(g["buckets"][1])                                  # nothing recorded there
+        self.assertEqual(g["buckets"][2], {"mean_mv": -4, "min_mv": -10, "max_mv": -4})
+
+    def test_web_viewer_tables_match_the_firmware_tables(self):
+        # docs/site/r/deep.js carries the same tables as pdspec_blob.py (parsed from the firmware headers) and report_card.py
+        import shutil
+        import subprocess
+        import pdspec_blob as pb
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node is not installed")
+        js = os.path.join(ROOT, "docs", "site", "r", "deep.js")
+        out = subprocess.run([node, "-e", "process.stdout.write(JSON.stringify(require(process.argv[1]).tables))", js],
+                             capture_output=True, text=True, timeout=30, check=True).stdout
+        t = json.loads(out)
+        s, tb = pb.section_tables(), pb.load_tables()
+        keys = [d["key"] for d in tb["checks"]]
+        ix = keys.index
+        cells = []
+        for d in s["cells"]:
+            k = ix(d["key"])
+            at = 0 if k < ix("pps_monotonic") else \
+                1 if k < ix("pps_keepalive") or ix("pps_band") <= k <= ix("avs_transient") or k >= ix("pps_track") else 2
+            cells.append([d["key"], d["label"], d["unit"], at])
+        self.assertEqual(t["CELLS"], cells)
+        self.assertEqual(t["ENDS"], s["ends"])
+        self.assertEqual(t["VERDICTS"], tb["verdicts"])
+        self.assertEqual(t["SKIPS"], tb["skips"])
+        self.assertEqual(t["STOPS"], tb["stops"])
+        self.assertEqual(t["STARTS"], tb["starts"])
+        self.assertEqual(t["STEPS"], s["steps"])
+        self.assertEqual(t["PLAN"], tb["steps"])
+        self.assertEqual(t["SVOOC_ENDS"], report_card.SVOOC_ENDS)
+        self.assertEqual(t["SVOOC_ABORTS"], report_card.SVOOC_ABORTS)
+        self.assertEqual(t["SVOOC_REFUSALS"], report_card.SVOOC_REFUSALS)
+        self.assertEqual(t["MAX_BITS"], report_card.DEEP_MAX_BITS)
+        self.assertEqual(t["BUCKETS"], report_card.DEEP_BUCKETS)
+
+    def test_a_bad_length_is_refused(self):
+        good = _blob(_bits(0, 1) + _bits(1, 1) + _bits(0, 4) + _bits(0, 3 + 4 + 3 + 8 + 9 + 10))
+        report_card.decode_deep(good, [])
+        for bad in (b"", good[:-1], good + b"\0", bytes([0, 0, 0]), bytes([0xFF, 0x0F]) + good[2:]):
+            with self.subTest(bad=bad.hex()), self.assertRaises(report_card.BadCard):
+                report_card.decode_deep(bad, [])
 
 
 class Links(unittest.TestCase):

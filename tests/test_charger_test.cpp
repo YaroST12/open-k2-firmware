@@ -1692,6 +1692,7 @@ static void test_safe5_baseline() {
     }
     Fake fixed;
     fixed.in.vbus_mv = 5269;
+    fixed.caps.num_pdos = 1;   // the 5 V row alone (it runs last in a full list)
     ct::Runner r(fixed);
     CHECK_EQ(r.start(fixed.caps, kPd, fixed.in, true), ct::Reason::None);
     CHECK_EQ(run_until(fixed, r, [&] { return fixed.pd_requests == 1; }), true);
@@ -1753,7 +1754,7 @@ static void test_cancel_and_failed_release() {
     Fake f; ct::Runner r(f); r.start(f.caps, kPd, f.in, true);
     for (unsigned n = 0; n < 150 && f.pd_requests < 2; ++n) f.tick(r, 100);
     CHECK_EQ(f.pd_requests, 2);
-    CHECK_EQ(f.in.vbus_mv, 9000);
+    CHECK_EQ(f.in.vbus_mv, 15000);   // the second row, top-down
     f.release_ok = false; r.cancel(f.in); f.tick(r, 9000);
     CHECK_EQ(r.state(), ct::State::Unsafe);
     read_only(r, f);
@@ -1771,7 +1772,7 @@ static void test_release_waits_for_the_sink_verification_and_its_hard_reset() {
     auto at_9v = [](Fake& f, ct::Runner& r) {
         r.start(f.caps, kPd, f.in, true);
         for (unsigned n = 0; n < 150 && f.pd_requests < 2; ++n) f.tick(r, 100);
-        CHECK_EQ(f.in.vbus_mv, 9000);
+        CHECK_EQ(f.in.vbus_mv, 15000);   // the second row, top-down
         f.release_ok = false;   // the fake source does not follow the release: VBUS stays up
         f.in.pd.verifying = true; f.in.pd.held = false; f.in.pd.state = pd::SinkState::Ready; f.in.pd.mv = 5000;
         r.cancel(f.in);
@@ -1887,7 +1888,7 @@ static void test_faults() {
         if (mode == 1) ++f.in.session;
         if (mode == 2) f.in.vbus_mv = -1;
         if (mode == 3) ++f.in.pd.source_hard_resets;
-        if (mode == 4) --f.caps.pdos[0].raw;   // current limit dropped on the row's own PDO
+        if (mode == 4) --f.caps.pdos[4].raw;   // current limit dropped on the row's own PDO (the 20 V one runs first)
         if (mode == 5) f.in.vbus_mv = 5501;
         f.tick(r, 100);
         // A source loss or hard reset mid-row costs one retry of the row (see the hard-reset tests); everything else fails it.
@@ -3457,6 +3458,41 @@ static void test_epr_physical_guard_and_spoof_separation() {
         }
     }
 }
+// 2026-11-17 (an Anker splitter withdraws the high rows ~4 s after it announces): the fixed rows run from the top voltage down and
+// the 5 V row runs last; every Request is an up-step from the 5 V the previous row's release returned to. SPR and EPR fixed rows
+// both (EPR inside its own section; the entry Request keeps its place).
+static void test_fixed_pd_rows_are_requested_from_the_top_voltage_down() {
+    for (const bool epr : {false, true}) {
+        Fake f; f.in.cap_mv = 36000; f.in.cable_mv = 50000; f.in.cable_ma = 5000; f.in.cable_observed = true;
+        if (epr) {
+            f.caps.epr = true; f.caps.num_pdos = 10;
+            for (unsigned i = 0; i < 7; ++i) f.caps.pdos[i] = pd::decode_pdo(i ? 0 : (100u << 10) | 300);
+            f.caps.pdos[7] = pd::decode_pdo((560u << 10) | 300);   // EPR 28 V 5 A
+            f.caps.pdos[8] = pd::decode_pdo((720u << 10) | 300);   // EPR 36 V 5 A
+        }
+        ct::Runner r(f);
+        ct::Options o{.selected = ct::bit(epr ? A::Epr : A::Pd3Fixed)}; o.units.add(ct::Unit::Pd);
+        r.start(f.caps, o, f.in, true);
+        f.tick(r, 200000);
+        CHECK_EQ(r.state(), ct::State::Done);
+        // The plan: the fixed rows' volts strictly fall, the 5 V row is the last fixed row of the section.
+        unsigned prev = 1000000, n = 0;
+        for (const auto& s : r.steps()) {
+            if (s.algorithm != (epr ? A::Epr : A::Pd3Fixed)) continue;
+            CHECK_EQ(s.mv < prev, true); prev = s.mv; ++n;
+        }
+        CHECK_EQ(n >= 2, true);
+        if (!epr) CHECK_EQ(prev, 5000u);
+        // The Requests as they went out: the fixed PDOs' voltages never rise again (no ascending ladder).
+        unsigned last_mv = 1000000; size_t asked = 0;
+        for (const auto& c : f.choices) {
+            if (c.hunt || c.pos == 0 || c.pos > f.caps.num_pdos || f.caps.pdos[c.pos - 1].type != pd::PdoType::Fixed) continue;
+            const unsigned mv = f.caps.pdos[c.pos - 1].max_mv;
+            CHECK_EQ(mv <= last_mv, true); last_mv = mv; ++asked;
+        }
+        CHECK_EQ(asked >= 1, true);
+    }
+}
 static void test_epr_rows_respect_the_36v_ceiling() {
     Fake f; f.in.cap_mv = 36000; f.in.cable_mv = 50000; f.in.cable_ma = 5000; f.in.cable_observed = true;
     f.caps.epr = true; f.caps.num_pdos = 10;
@@ -3848,25 +3884,25 @@ static void test_standard_cable_measured_tolerance() {
         f.caps.num_pdos = 5;
         ct::Runner r(f);
         r.start(f.caps, {.selected = ct::bit(A::Pd3Fixed)}, f.in, true);
-        for (unsigned n = 0; n < 200 && f.pd_requests < 5; ++n) f.tick(r, 100);
-        CHECK_EQ(f.pd_requests, 5);
-        CHECK_EQ(r.steps()[4].mv, 20000);
+        for (unsigned n = 0; n < 200 && f.pd_requests < 1; ++n) f.tick(r, 100);
+        CHECK_EQ(f.pd_requests, 1);
+        CHECK_EQ(r.steps()[0].mv, 20000);   // the top row runs first
         f.in.vbus_mv = mv;
         f.tick(r, mv <= 21000 ? 1100 : 100);
-        CHECK_EQ(r.steps()[4].verdict, mv <= 21000 ? ct::Verdict::Pass : ct::Verdict::Skip);
-        if (mv > 21000) CHECK_EQ(r.steps()[4].reason, ct::Reason::CableLimit);
+        CHECK_EQ(r.steps()[0].verdict, mv <= 21000 ? ct::Verdict::Pass : ct::Verdict::Skip);
+        if (mv > 21000) CHECK_EQ(r.steps()[0].reason, ct::Reason::CableLimit);
     }
     Fake limited;
     limited.in.cable_mv = 20000; limited.in.cable_observed = false; limited.in.cap_mv = 20000;
     limited.caps.num_pdos = 5;
     ct::Runner r(limited);
     r.start(limited.caps, {.selected = ct::bit(A::Pd3Fixed)}, limited.in, true);
-    for (unsigned n = 0; n < 200 && limited.pd_requests < 5; ++n) limited.tick(r, 100);
-    CHECK_EQ(limited.pd_requests, 5);
+    for (unsigned n = 0; n < 200 && limited.pd_requests < 1; ++n) limited.tick(r, 100);
+    CHECK_EQ(limited.pd_requests, 1);
     limited.in.vbus_mv = 21001;   // the monitor ceiling + 5 % (20 V cap: 21 V)
     limited.tick(r, 100);
-    CHECK_EQ(r.steps()[4].verdict, ct::Verdict::Fail);
-    CHECK_EQ(r.steps()[4].reason, ct::Reason::OverCap);
+    CHECK_EQ(r.steps()[0].verdict, ct::Verdict::Fail);
+    CHECK_EQ(r.steps()[0].reason, ct::Reason::OverCap);
 }
 static void test_observed_30v_cable() {
     for (int mv : {21013, 30001}) {
@@ -6988,8 +7024,8 @@ static void test_epr_row_cut_by_a_source_hard_reset_passes_on_retry() {
         const auto* s28 = epr_row(r, 28000); const auto* s36 = epr_row(r, 36000);
         CHECK_EQ(s28 != nullptr && s36 != nullptr, true);
         if (!s28 || !s36) continue;
-        // The first row asked from SPR eats the cuts (the baseline entry came first, so the 28 V row is already in EPR: the 36 V row
-        // is the one entered from SPR).
+        // The first row asked from SPR eats the cuts (the baseline entry came first, so the 36 V row, the first one top-down, is already in
+        // EPR: the 28 V row is the one entered from SPR).
         for (const auto* s : {s28, s36}) CHECK_EQ(s->reason == ct::Reason::CapsChanged, false);
         // Each retry request comes only after the cut's partial window, the source's dark time, and the settle with its backoff.
         for (size_t k = 2; k < f.entry_times.size(); ++k)
@@ -7000,9 +7036,9 @@ static void test_epr_row_cut_by_a_source_hard_reset_passes_on_retry() {
             CHECK_EQ(s28->verdict == ct::Verdict::Pass && s36->verdict == ct::Verdict::Pass, true);
             CHECK_EQ(std::max(s28->tries, s36->tries), unsigned(cuts ? 1 + cuts : 0));
         } else {
-            CHECK_EQ(s28->verdict == ct::Verdict::Pass, true);
-            CHECK_EQ(s36->verdict == ct::Verdict::Fail && s36->reason == ct::Reason::HardReset, true);
-            CHECK_EQ(s36->tries, unsigned(1 + ct::kEprEntryRetries));
+            CHECK_EQ(s36->verdict == ct::Verdict::Pass, true);
+            CHECK_EQ(s28->verdict == ct::Verdict::Fail && s28->reason == ct::Reason::HardReset, true);
+            CHECK_EQ(s28->tries, unsigned(1 + ct::kEprEntryRetries));
         }
     }
 }
@@ -7019,10 +7055,10 @@ static void test_baseline_epr_entry_cut_by_a_source_hard_reset_is_retried() {
         for (size_t k = 1; k < f.entry_times.size() && k <= size_t(cuts); ++k)
             CHECK_EQ(f.entry_times[k] - f.entry_times[k - 1] >=
                      f.partial_ms + f.reset_dark_ms + ct::kEprSettleMs + ct::kEprSettleStepMs * uint32_t(k - 1), true);
-        const auto* s28 = epr_row(r, 28000);
+        const auto* s36 = epr_row(r, 36000);   // the first EPR row, top-down
         if (cuts <= int(ct::kEprEntryRetries)) {
-            CHECK_EQ(s28 != nullptr && s28->verdict == ct::Verdict::Pass, true);
-            if (s28) CHECK_EQ(unsigned(s28->tries), unsigned(cuts ? 1 + cuts : 0));
+            CHECK_EQ(s36 != nullptr && s36->verdict == ct::Verdict::Pass, true);
+            if (s36) CHECK_EQ(unsigned(s36->tries), unsigned(cuts ? 1 + cuts : 0));
         } else {
             for (const auto& s : r.steps())
                 if (s.algorithm == A::Epr) CHECK_EQ(s.verdict == ct::Verdict::Pass, false);
@@ -7457,16 +7493,24 @@ static pd::SourceCaps splitter_rebalanced_back() {   // the re-announced list wi
     c.pdos[3] = pd::decode_pdo((400u << 10) | 250);
     return c;
 }
+static pd::SourceCaps splitter_without_9v() {   // the first list with the 9 V PDO gone: 5/15/20 V
+    pd::SourceCaps c = splitter_caps();
+    c.num_pdos = 3; c.pdos[1] = c.pdos[2]; c.pdos[2] = c.pdos[3]; c.pdos[3] = {};
+    return c;
+}
 static const ct::Options kSplitterPd = with_units(ct::bit(A::Pd2Fixed) | ct::bit(A::Pd3Fixed), {ct::Unit::Pd});
 // The re-announce lands between rows (while the 9 V row is in flight) or while the 15 V row is in flight: the 15 V row follows
 // the new list and passes at the new 3 A word, both 20 V rows (the ordinary one and the 6 A hunt) are withdrawn by the source,
 // the unit is not ended, one re-plan ran.
+// The rows run from the top voltage down (20 V, its 6 A hunt, 15 V, 9 V, 5 V), so the splitter's re-split lands on the 20 V row in
+// flight (when 0): it is withdrawn with its hunt, 15 V and 9 V follow the new list at the new 3 A word, 5 V runs last. When it lands
+// later, with the 15 V row in flight (when 1), the 20 V rows have already passed and nothing is withdrawn.
 static void test_midrun_reannounce_dropping_one_offer_replans_per_row() {
     for (const unsigned when : {0u, 1u}) {
         Fake f; f.caps = splitter_caps();
         ct::Runner r(f);
         CHECK_EQ(r.start(f.caps, kSplitterPd, f.in, true), ct::Reason::None);
-        if (when == 0) CHECK_EQ(run_until(f, r, [&] { return f.pd_requests >= 2; }), true);   // the 5 V row done, the 9 V row in flight
+        if (when == 0) CHECK_EQ(run_until(f, r, [&] { return a_pd_row_is_running(r) && r.steps()[r.index()].mv == 20000; }), true);
         else CHECK_EQ(run_until(f, r, [&] { return a_pd_row_is_running(r) && r.steps()[r.index()].mv == 15000; }), true);
         f.caps = splitter_reannounced();
         f.tick(r, 200000);
@@ -7475,18 +7519,24 @@ static void test_midrun_reannounce_dropping_one_offer_replans_per_row() {
         unsigned v15 = 0, v20 = 0;
         for (const auto& s : r.steps()) {
             if (s.mv == 15000) { CHECK_EQ(s.verdict, ct::Verdict::Pass); CHECK_EQ(pd::decode_pdo(s.pdo).max_ma, 3000u); ++v15; }
-            if (s.mv == 20000) { CHECK_EQ(s.verdict, ct::Verdict::Skip); CHECK_EQ(s.reason, ct::Reason::Withdrawn); ++v20; }
+            if (s.mv == 20000) {
+                if (when == 0) { CHECK_EQ(s.verdict, ct::Verdict::Skip); CHECK_EQ(s.reason, ct::Reason::Withdrawn); }
+                else CHECK_EQ(s.verdict == ct::Verdict::Pass || s.verdict == ct::Verdict::Skip, true);   // already run (the hunt is dropped, not offered)
+                ++v20;
+            }
         }
-        CHECK_EQ(v15, 1u); CHECK_EQ(v20, 2u);   // the 20 V row and its 6 A hunt
-        // The 15 V request went to the new slot (PDO 3), one Request per row, never two in flight.
+        CHECK_EQ(v15, 1u); CHECK_EQ(v20, when == 0 ? 2u : 1u);   // the 20 V row and its 6 A hunt (a hunt that already ran left no row)
+        // The 15 V request went to the new slot (PDO 3) in the re-planned case, one Request per row, never two in flight.
         unsigned at15 = 0;
         for (const auto& c : f.choices) if (c.pos == 3 && c.mv == 15000) ++at15;
         CHECK_EQ(at15, 1u);
-        CHECK_EQ(f.pd_requests, 3u);   // 5 V, 9 V, 15 V: the re-plan sent no Request of its own
-        CHECK_EQ(f.replans.size(), 1u);
-        CHECK_EQ(f.replans[0][1] >= 2u, true);   // both 20 V rows withdrawn in the one re-plan
-        CHECK_EQ(r.evidence().rebalanced, 1u);
-        CHECK_EQ(f.plan_changes >= 1, true);
+        if (when == 0) {
+            CHECK_EQ(f.pd_requests, 4u);   // 20 V (in flight when the list changed), 15 V, 9 V, 5 V: the re-plan sent no Request of its own
+            CHECK_EQ(f.replans.size(), 1u);
+            CHECK_EQ(f.replans[0][1] >= 2u, true);   // both 20 V rows withdrawn in the one re-plan
+            CHECK_EQ(r.evidence().rebalanced, 1u);
+            CHECK_EQ(f.plan_changes >= 1, true);
+        }
     }
 }
 // The row in flight when the list changes loses its offer (here the 15 V PDO is withdrawn while the 15 V row runs): it ends as
@@ -7508,8 +7558,8 @@ static void test_midrun_reannounce_withdrawing_the_row_in_flight_ends_it_and_rel
     CHECK_EQ(count_reason_all(r, ct::Reason::CapsChanged), 0u);
     for (const auto& s : r.steps()) {
         if (s.mv == 15000) { CHECK_EQ(s.verdict, ct::Verdict::Skip); CHECK_EQ(s.reason, ct::Reason::Withdrawn); }
-        if (s.mv == 20000 && !s.hunt) { CHECK_EQ(s.verdict, ct::Verdict::Pass); CHECK_EQ(s.pos, 3u); }
-        if (s.mv < 15000) CHECK_EQ(s.verdict, ct::Verdict::Pass);
+        if (s.mv == 20000 && !s.hunt) { CHECK_EQ(s.verdict, ct::Verdict::Pass); CHECK_EQ(s.pos, 4u); }   // it ran first, before the list changed
+        if (s.mv < 15000) CHECK_EQ(s.verdict, ct::Verdict::Pass);   // 9 V and 5 V run after it, on the new list
     }
     CHECK_EQ(f.releases > releases_before, true);   // the withdrawn row was released to 5 V
     CHECK_EQ(f.in.vbus_mv, 5000);
@@ -7518,28 +7568,29 @@ static void test_midrun_reannounce_withdrawing_the_row_in_flight_ends_it_and_rel
 }
 // A withdrawn PDO that comes back revives its rows (pending again, not left as withdrawn), as long as the unit has not ended;
 // several re-announces in one run are normal (re-plan each time, no counter that gives up).
+// The rows run top-down, so the 9 V PDO (still pending) is the one that goes away while the 15 V row is in flight.
 static void test_a_withdrawn_pdo_that_comes_back_revives_its_rows() {
     Fake f; f.caps = splitter_caps();
     ct::Runner r(f);
     CHECK_EQ(r.start(f.caps, kSplitterPd, f.in, true), ct::Reason::None);
-    CHECK_EQ(run_until(f, r, [&] { return a_pd_row_is_running(r) && r.steps()[r.index()].mv == 9000; }), true);
-    f.caps = splitter_reannounced(); f.tick(r, 100);   // 20 V withdrawn
+    CHECK_EQ(run_until(f, r, [&] { return a_pd_row_is_running(r) && r.steps()[r.index()].mv == 15000; }), true);
+    f.caps = splitter_without_9v(); f.tick(r, 100);   // 9 V withdrawn
     CHECK_EQ(f.replans.size(), 1u);
-    f.caps = splitter_rebalanced_back(); f.tick(r, 100);   // the splitter re-balanced back: the 20 V PDO is offered again
+    f.caps = splitter_caps(); f.tick(r, 100);   // the splitter re-balanced back: the 9 V PDO is offered again
     CHECK_EQ(f.replans.size(), 2u);
-    f.caps = splitter_reannounced(); f.tick(r, 100);   // and away again
+    f.caps = splitter_without_9v(); f.tick(r, 100);   // and away again
     CHECK_EQ(f.replans.size(), 3u);
     f.tick(r, 200000);
     CHECK_EQ(r.state(), ct::State::Done);
     CHECK_EQ(r.evidence().rebalanced, 3u);
     CHECK_EQ(count_reason_all(r, ct::Reason::CapsChanged), 0u);
-    CHECK_EQ(f.replans[1][2] >= 2u, true);   // the second re-plan brought both 20 V rows back
-    unsigned v20 = 0, v15 = 0;
+    CHECK_EQ(f.replans[1][2] >= 1u, true);   // the second re-plan brought the 9 V row back
+    unsigned v9 = 0, v15 = 0;
     for (const auto& s : r.steps()) {
-        if (s.mv == 20000) { CHECK_EQ(s.verdict, ct::Verdict::Skip); CHECK_EQ(s.reason, ct::Reason::Withdrawn); ++v20; }
+        if (s.mv == 9000) { CHECK_EQ(s.verdict, ct::Verdict::Skip); CHECK_EQ(s.reason, ct::Reason::Withdrawn); ++v9; }
         if (s.mv == 15000) { CHECK_EQ(s.verdict, ct::Verdict::Pass); ++v15; }
     }
-    CHECK_EQ(v20, 2u); CHECK_EQ(v15, 1u);   // the third re-announce withdrew them again before they ran; the 15 V row passed
+    CHECK_EQ(v9, 1u); CHECK_EQ(v15, 1u);   // the third re-announce withdrew it again before it ran; the 15 V row passed
 }
 // A re-announce that places no PD row at all - the row in flight included - is a re-split like any other (2026-11-17): every
 // row it drops is withdrawn by the source, the re-split is counted, and only a changed wire revision is "offers changed".
@@ -7547,7 +7598,7 @@ static void test_a_reannounce_that_places_no_row_is_a_resplit_not_offers_changed
     Fake f; f.caps = splitter_caps();
     ct::Runner r(f);
     CHECK_EQ(r.start(f.caps, kSplitterPd, f.in, true), ct::Reason::None);
-    CHECK_EQ(run_until(f, r, [&] { return f.pd_requests >= 1; }), true);   // the 5 V row is in flight
+    CHECK_EQ(run_until(f, r, [&] { return f.pd_requests >= 1; }), true);   // the 20 V row (the first, top-down) is in flight
     f.caps = splitter_reannounced(); f.caps.num_pdos = 1;
     f.caps.pdos[0] = pd::decode_pdo((240u << 10) | 300);   // only a 12 V 3 A PDO: no offered voltage matches any row (not even the 5 V row in flight)
     f.tick(r, 200000);
@@ -7559,9 +7610,10 @@ static void test_a_reannounce_that_places_no_row_is_a_resplit_not_offers_changed
 }
 
 // ---- k2/resplit-all (2026-11-17): the Anker 2-way splitter trace, runs/splitter-offers/r1/old/timeline.txt ----
-// Caps 5/9/12/15/20 V at 1.5 A. After the 5 V and 9 V rows passed the splitter re-announced 5 V 1.5 A + 9 V 3 A (the other
-// port took the budget): every pending row - 12 V, 15 V, 20 V and the 6 A hunt row behind it - was gone. That is a re-split
-// like any other: the rows are Withdrawn, the unit stays open for kWithdrawnWaitMs for the offer to come back, then closes.
+// Caps 5/9/12/15/20 V at 1.5 A. The rows run top-down; after the 20 V row passed the splitter re-announced 5 V 1.5 A + 9 V 3 A (the
+// other port took the budget): the 6 A hunt row behind the 20 V row, 15 V and 12 V were gone. That is a re-split like any other:
+// those rows are Withdrawn, the 9 V and 5 V rows run on the new list, then the unit stays open for kWithdrawnWaitMs for the offer to
+// come back, then closes.
 static pd::SourceCaps anker_caps() {
     pd::SourceCaps c; c.valid = true; c.spec_rev = 2; c.active_cc = 1; c.num_pdos = 5; c.raw_header = 0x7181;
     const unsigned volts[] = {5000, 9000, 12000, 15000, 20000};
@@ -7578,44 +7630,46 @@ static bool row_passed(const ct::Runner& r, unsigned mv) {
     for (const auto& s : r.steps()) if (s.mv == mv && !s.hunt && s.verdict == ct::Verdict::Pass) return true;
     return false;
 }
-// Runs the trace to the moment the splitter re-announces (the 9 V row just passed) and returns the time of the re-announce.
+// Runs the trace to the moment the splitter re-announces (the 20 V row just passed) and returns the time of the re-announce.
 static uint32_t anker_to_resplit(Fake& f, ct::Runner& r) {
     f.caps = anker_caps();
     CHECK_EQ(r.start(f.caps, kSplitterPd, f.in, true), ct::Reason::None);
-    CHECK_EQ(run_until(f, r, [&] { return row_passed(r, 9000); }), true);
+    CHECK_EQ(run_until(f, r, [&] { return row_passed(r, 20000); }), true);
     const uint32_t at = f.in.now;
     f.caps = anker_resplit();
     return at;
 }
-static unsigned anker_pending_rows(const ct::Runner& r) {   // the rows behind the 9 V row: 12 V, 15 V, 20 V, the 6 A hunt
+static unsigned anker_pending_rows(const ct::Runner& r) {   // the rows the re-split drops: the 20 V 6 A hunt, 15 V, 12 V
     unsigned n = 0;
     for (const auto& s : r.steps()) if (s.mv >= 12000 && s.group == ct::Group::Pd && s.verdict == ct::Verdict::Pending) ++n;
     return n;
 }
-// (a) The re-announce drops every pending row and the offer never comes back: the rows end Withdrawn - not CapsChanged -
-// after the bounded wait, which the unit sits out (it closes no earlier than kWithdrawnWaitMs after the re-split).
-static void test_resplit_dropping_every_pending_row_waits_then_ends_withdrawn() {
+// (a) The re-announce drops the rows still to run at the top and the offer never comes back: the rows end Withdrawn - not
+// CapsChanged - after the bounded wait, which the unit sits out once the rows the new list still offers (9 V, 5 V) have run (it
+// closes no earlier than kWithdrawnWaitMs after the last of them).
+static void test_resplit_dropping_the_pending_top_rows_waits_then_ends_withdrawn() {
     Fake f; ct::Runner r(f);
-    const uint32_t at = anker_to_resplit(f, r);
-    CHECK_EQ(anker_pending_rows(r), 4u);
-    uint32_t closed_at = 0;
+    anker_to_resplit(f, r);
+    CHECK_EQ(anker_pending_rows(r), 3u);
+    uint32_t closed_at = 0, last_row_at = 0;
     for (unsigned n = 0; n < 120000 && r.state() != ct::State::Done; n += 100) {
         f.tick(r, 100);
+        if (!last_row_at && row_passed(r, 5000)) last_row_at = f.in.now;
         if (!closed_at && (r.state() == ct::State::Detach || r.state() == ct::State::Done)) closed_at = f.in.now;
     }
     CHECK_EQ(r.state(), ct::State::Done);
     CHECK_EQ(count_reason_all(r, ct::Reason::CapsChanged), 0u);
-    CHECK_EQ(count_reason_all(r, ct::Reason::Withdrawn), 4u);
+    CHECK_EQ(count_reason_all(r, ct::Reason::Withdrawn), 3u);
     CHECK_EQ(anker_pending_rows(r), 0u);
-    CHECK_EQ(row_passed(r, 5000), true); CHECK_EQ(row_passed(r, 9000), true);
+    CHECK_EQ(row_passed(r, 5000), true); CHECK_EQ(row_passed(r, 9000), true); CHECK_EQ(row_passed(r, 20000), true);
     CHECK_EQ(r.evidence().rebalanced, 1u);
     CHECK_EQ(f.replans.size(), 1u);
-    if (!f.replans.empty()) CHECK_EQ(f.replans[0][1], 4u);   // the four pending rows withdrawn in the one re-plan
-    CHECK_EQ(closed_at != 0 && closed_at - at >= ct::kWithdrawnWaitMs, true);   // the unit waited for the offer
-    CHECK_EQ(closed_at - at < ct::kWithdrawnWaitMs + 10000, true);               // ... and not much longer than the bound
+    if (!f.replans.empty()) CHECK_EQ(f.replans[0][1], 3u);   // the three dropped rows withdrawn in the one re-plan
+    CHECK_EQ(last_row_at != 0 && closed_at != 0 && closed_at - last_row_at >= ct::kWithdrawnWaitMs, true);   // the unit waited for the offer
+    CHECK_EQ(closed_at - last_row_at < ct::kWithdrawnWaitMs + 10000, true);                                  // ... and not much longer than the bound
 }
 // (b) The original list comes back inside the wait (the splitter's next re-announce, one 6.6 s period later): the withdrawn rows
-// run against it and end exactly as in a run without the re-split; the 5 V and 9 V rows are not run again.
+// run against it and end exactly as in a run without the re-split; the 20 V row is not run again.
 static void test_resplit_with_the_offer_back_inside_the_wait_runs_the_rows() {
     Fake c; ct::Runner control(c);   // control: no re-split
     c.caps = anker_caps();
@@ -7640,9 +7694,9 @@ static void test_resplit_with_the_offer_back_inside_the_wait_runs_the_rows() {
     }
     CHECK_EQ(row_passed(r, 12000) && row_passed(r, 15000) && row_passed(r, 20000), true);
     CHECK_EQ(r.evidence().rebalanced, 2u);   // away and back
-    unsigned at9 = 0;                        // the passed 9 V row was not asked again
-    for (const auto& ch : f.choices) if (ch.mv == 9000) ++at9;
-    CHECK_EQ(at9, 1u);
+    unsigned at20 = 0;                       // the passed 20 V row was not asked again
+    for (const auto& ch : f.choices) if (ch.mv == 20000) ++at20;
+    CHECK_EQ(at20, 1u);
 }
 // (c) The offer comes back only after the unit has closed: the rows stay Withdrawn (nothing is run after the unit's end).
 static void test_resplit_with_the_offer_back_after_the_unit_closed_stays_withdrawn() {
@@ -7652,11 +7706,11 @@ static void test_resplit_with_the_offer_back_after_the_unit_closed_stays_withdra
     f.caps = anker_caps();
     f.tick(r, 60000);
     CHECK_EQ(r.state(), ct::State::Done);
-    CHECK_EQ(count_reason_all(r, ct::Reason::Withdrawn), 4u);
+    CHECK_EQ(count_reason_all(r, ct::Reason::Withdrawn), 3u);
     CHECK_EQ(count_reason_all(r, ct::Reason::CapsChanged), 0u);
     CHECK_EQ(anker_pending_rows(r), 0u);
     CHECK_EQ(r.evidence().rebalanced, 1u);
-    CHECK_EQ(row_passed(r, 12000) || row_passed(r, 15000) || row_passed(r, 20000), false);
+    CHECK_EQ(row_passed(r, 12000) || row_passed(r, 15000), false);
 }
 // (d) Another wire revision is still "offers changed": the unit ends at once with CapsChanged, no wait, nothing withdrawn.
 static void test_resplit_with_another_spec_revision_is_still_caps_changed() {
@@ -7669,7 +7723,7 @@ static void test_resplit_with_another_spec_revision_is_still_caps_changed() {
         if (!closed_at && (r.state() == ct::State::Detach || r.state() == ct::State::Done)) closed_at = f.in.now;
     }
     CHECK_EQ(r.state(), ct::State::Done);
-    CHECK_EQ(count_reason_all(r, ct::Reason::CapsChanged), 4u);
+    CHECK_EQ(count_reason_all(r, ct::Reason::CapsChanged), 5u);   // the hunt, 15 V, 12 V, 9 V, 5 V: everything still pending
     CHECK_EQ(count_reason_all(r, ct::Reason::Withdrawn), 0u);
     CHECK_EQ(r.evidence().rebalanced, 0u);
     CHECK_EQ(f.replans.empty(), true);
@@ -7834,22 +7888,22 @@ static void test_a_revived_row_actually_runs_and_passes() {
     Fake f; f.caps = splitter_caps();
     ct::Runner r(f);
     CHECK_EQ(r.start(f.caps, kSplitterPd, f.in, true), ct::Reason::None);
-    CHECK_EQ(run_until(f, r, [&] { return a_pd_row_is_running(r) && r.steps()[r.index()].mv == 9000; }), true);
-    f.caps = splitter_reannounced(); f.tick(r, 100);   // 20 V withdrawn
+    CHECK_EQ(run_until(f, r, [&] { return a_pd_row_is_running(r) && r.steps()[r.index()].mv == 15000; }), true);
+    f.caps = splitter_without_9v(); f.tick(r, 100);   // 9 V withdrawn (it is still pending: the rows run top-down)
     CHECK_EQ(f.replans.size(), 1u);
-    f.caps = splitter_rebalanced_back(); f.tick(r, 100);   // 20 V back: the rows are pending again
+    f.caps = splitter_caps(); f.tick(r, 100);   // 9 V back: the row is pending again
     CHECK_EQ(f.replans.size(), 2u);
     f.tick(r, 300000);
     CHECK_EQ(r.state(), ct::State::Done);
     CHECK_EQ(count_reason_all(r, ct::Reason::CapsChanged), 0u);
     for (const auto& s : r.steps())
-        if (s.mv == 20000 && !s.hunt) CHECK_EQ(s.verdict, ct::Verdict::Pass);   // the revived row ran and passed
+        if (s.mv == 9000 && !s.hunt) CHECK_EQ(s.verdict, ct::Verdict::Pass);   // the revived row ran and passed
     CHECK_EQ(r.evidence().rebalanced, 2u);
 }
 // Item 5: a "between rows" re-announce - the list changes while the runner is in Releasing (after a row finished,
 // before the next one) or in the Baseline - re-plans the pending rows, with the counts exactly right.
 static void test_a_reannounce_between_rows_replans_with_the_counts_exact() {
-    {   // a tick in Releasing: the 5 V row is done, its release is in progress
+    {   // a tick in Releasing: the 20 V row (the first, top-down) is done, its release is in progress
         Fake f; f.caps = splitter_caps();
         ct::Runner r(f);
         CHECK_EQ(r.start(f.caps, kSplitterPd, f.in, true), ct::Reason::None);
@@ -7865,7 +7919,8 @@ static void test_a_reannounce_between_rows_replans_with_the_counts_exact() {
         CHECK_EQ(count_reason_all(r, ct::Reason::CapsChanged), 0u);
         unsigned v20 = 0, v15 = 0;
         for (const auto& s : r.steps()) {
-            if (s.mv == 20000) { CHECK_EQ(s.verdict, ct::Verdict::Skip); CHECK_EQ(s.reason, ct::Reason::Withdrawn); ++v20; }
+            if (s.mv == 20000 && s.hunt) { CHECK_EQ(s.verdict, ct::Verdict::Skip); CHECK_EQ(s.reason, ct::Reason::Withdrawn); ++v20; }
+            if (s.mv == 20000 && !s.hunt) { CHECK_EQ(s.verdict, ct::Verdict::Pass); ++v20; }   // it ran before the list changed
             if (s.mv == 15000) { CHECK_EQ(s.verdict, ct::Verdict::Pass); ++v15; }
         }
         CHECK_EQ(v20, 2u); CHECK_EQ(v15, 1u);
@@ -7924,62 +7979,63 @@ static void test_two_lists_300ms_apart_send_one_request_after_the_second_settles
     Fake f; f.caps = splitter_caps();
     ct::Runner r(f);
     CHECK_EQ(r.start(f.caps, kSplitterPd, f.in, true), ct::Reason::None);
-    CHECK_EQ(run_until(f, r, [&] { return f.pd_requests >= 1 && r.steps()[r.index()].verdict == ct::Verdict::Pass; }), true);   // the 5 V row passed
+    CHECK_EQ(run_until(f, r, [&] { return f.pd_requests >= 1 && r.steps()[r.index()].verdict == ct::Verdict::Pass; }), true);   // the 20 V row passed
     f.caps = splitter_reannounced();   // list 1: 20 V withdrawn, 9/15 V raised to 3 A
     f.tick(r, 300);
     const uint32_t t1 = f.in.now;
     pd::SourceCaps again = splitter_reannounced();
-    again.pdos[1] = pd::decode_pdo((180u << 10) | 250);   // list 2, 300 ms after list 1: a word-only change on 9 V
+    again.pdos[2] = pd::decode_pdo((300u << 10) | 250);   // list 2, 300 ms after list 1: a word-only change on 15 V
     f.caps = again;
     f.tick(r, 30000);
-    unsigned at9 = 0; uint32_t t9 = 0;
+    unsigned at15 = 0; uint32_t t15 = 0;
     for (unsigned n = 0; n < f.choices.size(); ++n)
-        if (f.choices[n].mv == 9000) { ++at9; t9 = f.req_times[n]; }
-    CHECK_EQ(at9, 1u);                                   // one Request for the 9 V row, not two
-    CHECK_EQ(t9 >= t1 + ct::kListSettleMs, true);        // ... and only after the second list settled
+        if (f.choices[n].mv == 15000) { ++at15; t15 = f.req_times[n]; }
+    CHECK_EQ(at15, 1u);                                  // one Request for the 15 V row (the next one), not two
+    CHECK_EQ(t15 >= t1 + ct::kListSettleMs, true);       // ... and only after the second list settled
     f.tick(r, 200000);
     CHECK_EQ(r.state(), ct::State::Done);
     CHECK_EQ(count_reason_all(r, ct::Reason::CapsChanged), 0u);
     CHECK_EQ(f.replans.size(), 1u);   // only list 1 (20 V withdrawn) was a re-plan; the word-only list 2 was not logged
     unsigned v20 = 0;
     for (const auto& s : r.steps())
-        if (s.mv == 20000) { CHECK_EQ(s.verdict, ct::Verdict::Skip); CHECK_EQ(s.reason, ct::Reason::Withdrawn); ++v20; }
+        if (s.mv == 20000 && s.hunt) { CHECK_EQ(s.verdict, ct::Verdict::Skip); CHECK_EQ(s.reason, ct::Reason::Withdrawn); ++v20; }
+        else if (s.mv == 20000) { CHECK_EQ(s.verdict, ct::Verdict::Pass); ++v20; }
     CHECK_EQ(v20, 2u);
 }
-// Item 7 + rule 2: a re-split during row 0 delivered as a COMPLETE EPR_Source_Capabilities (outside the K2's own EPR
-// entry/exit - Epr is not selected, epr_stage_ == 0) is a re-announce like any other and goes through the per-row
+// Item 7 + rule 2: a re-split during row 0 (the 20 V row, top-down) delivered as a COMPLETE EPR_Source_Capabilities (outside the
+// K2's own EPR entry/exit - Epr is not selected, epr_stage_ == 0) is a re-announce like any other and goes through the per-row
 // re-plan: row 0 restarts at the new current word and passes with tries = 0 (a restart is not a try), the still
-// offered rows follow at their new words, only the dropped 20 V is Withdrawn, nothing ends CapsChanged.
+// offered rows follow at their new words, only the dropped 15 V is Withdrawn, nothing ends CapsChanged.
 static void test_a_complete_epr_reannounce_during_row_0_restarts_the_row() {
     Fake f; f.caps = four_pdo_caps(300);   // 5/9/15/20 V 3 A, SPR list, no EPR bit
     ct::Runner r(f);
     CHECK_EQ(r.start(f.caps, kSplitterPd, f.in, true), ct::Reason::None);
-    CHECK_EQ(run_until(f, r, [&] { return a_pd_row_is_running(r) && r.steps()[r.index()].mv == 5000; }), true);
+    CHECK_EQ(run_until(f, r, [&] { return a_pd_row_is_running(r) && r.steps()[r.index()].mv == 20000; }), true);
     pd::SourceCaps e; e.valid = true; e.spec_rev = 2; e.active_cc = 1; e.raw_header = 0x7181;
     e.epr = true; e.epr_partial = false; e.num_pdos = 8;   // a complete 8-PDO EPR_Source_Capabilities
     e.pdos[0] = pd::decode_pdo((100u << 10) | 150);   // 5 V 1.5 A
     e.pdos[1] = pd::decode_pdo((180u << 10) | 150);   // 9 V 1.5 A
-    e.pdos[2] = pd::decode_pdo((300u << 10) | 150);   // 15 V 1.5 A: the 20 V PDO is gone
+    e.pdos[2] = pd::decode_pdo((400u << 10) | 150);   // 20 V 1.5 A: the 15 V PDO is gone
     e.pdos[7] = pd::decode_pdo((560u << 10) | 400);   // EPR 28 V 4 A at position 8
     f.caps = e;
     f.tick(r, 300000);
     CHECK_EQ(r.state(), ct::State::Done);
     CHECK_EQ(count_reason_all(r, ct::Reason::CapsChanged), 0u);
     for (const auto& s : r.steps()) {
-        if (s.mv == 5000) {
+        if (s.mv == 20000 && !s.hunt) {
             CHECK_EQ(s.verdict, ct::Verdict::Pass);
             CHECK_EQ(s.tries, 0u);                             // the restart is not a try
             CHECK_EQ(pd::decode_pdo(s.pdo).max_ma, 1500u);     // row 0 runs at the new, lower current word
         }
-        if (s.mv == 9000 || s.mv == 15000) { CHECK_EQ(s.verdict, ct::Verdict::Pass); CHECK_EQ(pd::decode_pdo(s.pdo).max_ma, 1500u); }
-        if (s.mv == 20000) { CHECK_EQ(s.verdict, ct::Verdict::Skip); CHECK_EQ(s.reason, ct::Reason::Withdrawn); }
+        if (s.mv == 5000 || s.mv == 9000) { CHECK_EQ(s.verdict, ct::Verdict::Pass); CHECK_EQ(pd::decode_pdo(s.pdo).max_ma, 1500u); }
+        if (s.mv == 15000) { CHECK_EQ(s.verdict, ct::Verdict::Skip); CHECK_EQ(s.reason, ct::Reason::Withdrawn); }
     }
     CHECK_EQ(r.evidence().rebalanced, 1u);
     CHECK_EQ(f.replans.size(), 1u);
 }
-// Item 6 (the A3 run): a re-split during the 15 V row keeps the 15/20/28 V rows at the new, lower current words and
-// withdraws only the PPS rows; no row ends CapsChanged.
-static void test_a_resplit_during_15v_keeps_15_20_28_at_the_new_words_and_withdraws_pps() {
+// Item 6 (the A3 run): a re-split during the 20 V row (the first, top-down) keeps the 15/20/28 V rows at the new, lower current
+// words and withdraws only the PPS rows; no row ends CapsChanged.
+static void test_a_resplit_during_20v_keeps_15_20_28_at_the_new_words_and_withdraws_pps() {
     Fake f; f.in.cap_mv = 36000; f.in.cable_mv = 50000; f.in.cable_ma = 5000; f.in.cable_observed = true;
     pd::SourceCaps full; full.valid = true; full.spec_rev = 2; full.active_cc = 1; full.raw_header = 0x7181;
     full.epr = true; full.num_pdos = 8;   // 5/9/12/15 V 3 A, 20 V 5 A, PPS 3.3-11 V 5 A (slot 7), EPR 28 V 5 A (slot 8)
@@ -7991,7 +8047,7 @@ static void test_a_resplit_during_15v_keeps_15_20_28_at_the_new_words_and_withdr
     ct::Runner r(f);
     const auto o = with_units(ct::bit(A::Pd3Fixed) | ct::bit(A::Pps) | ct::bit(A::Epr), {ct::Unit::Pd});
     CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
-    CHECK_EQ(run_until(f, r, [&] { return a_pd_row_is_running(r) && r.steps()[r.index()].mv == 15000; }), true);
+    CHECK_EQ(run_until(f, r, [&] { return a_pd_row_is_running(r) && r.steps()[r.index()].mv == 20000; }), true);
     pd::SourceCaps cut = full;   // the re-split: 15 V 1.5 A, 20 V 4.1 A, the PPS APDO gone, EPR 28 V 4 A
     cut.pdos[3] = pd::decode_pdo((300u << 10) | 150);
     cut.pdos[4] = pd::decode_pdo((400u << 10) | 410);
@@ -8011,24 +8067,24 @@ static void test_a_resplit_during_15v_keeps_15_20_28_at_the_new_words_and_withdr
     CHECK_EQ(pps_w >= 1u, true);   // only the PPS rows were withdrawn
     CHECK_EQ(r.evidence().rebalanced >= 1u, true);
 }
-// Rule 4 (end-of-unit sweep): a list restored before the unit ends runs the rows that came back - the Withdrawn 20 V
-// rows are re-checked once against the list in hand (after a settle) and run, not left as withdrawn.
+// Rule 4 (end-of-unit sweep): a list restored before the unit ends runs the rows that came back - the Withdrawn 9 V
+// row is re-checked once against the list in hand (after a settle) and runs, not left as withdrawn.
 static void test_a_list_restored_before_the_unit_ends_runs_the_withdrawn_rows() {
     Fake f; f.caps = splitter_caps();
     ct::Runner r(f);
     CHECK_EQ(r.start(f.caps, kSplitterPd, f.in, true), ct::Reason::None);
-    CHECK_EQ(run_until(f, r, [&] { return a_pd_row_is_running(r) && r.steps()[r.index()].mv == 9000; }), true);
-    f.caps = splitter_reannounced(); f.tick(r, 100);   // 20 V withdrawn
-    CHECK_EQ(f.replans.size(), 1u);
     CHECK_EQ(run_until(f, r, [&] { return a_pd_row_is_running(r) && r.steps()[r.index()].mv == 15000; }), true);
-    f.caps = splitter_rebalanced_back();   // the splitter re-balanced back before the unit ended: 20 V offered again
+    f.caps = splitter_without_9v(); f.tick(r, 100);   // 9 V withdrawn
+    CHECK_EQ(f.replans.size(), 1u);
+    CHECK_EQ(run_until(f, r, [&] { return a_pd_row_is_running(r) && r.steps()[r.index()].mv == 5000; }), true);
+    f.caps = splitter_caps();   // the splitter re-balanced back before the unit ended: 9 V offered again
     f.tick(r, 300000);
     CHECK_EQ(r.state(), ct::State::Done);
     CHECK_EQ(count_reason_all(r, ct::Reason::CapsChanged), 0u);
-    unsigned v20_pass = 0;
+    unsigned v9_pass = 0;
     for (const auto& s : r.steps())
-        if (s.mv == 20000 && !s.hunt) { CHECK_EQ(s.verdict, ct::Verdict::Pass); ++v20_pass; }
-    CHECK_EQ(v20_pass, 1u);   // the restored 20 V row ran before the unit closed
+        if (s.mv == 9000 && !s.hunt) { CHECK_EQ(s.verdict, ct::Verdict::Pass); ++v9_pass; }
+    CHECK_EQ(v9_pass, 1u);   // the restored 9 V row ran before the unit closed
     CHECK_EQ(r.evidence().rebalanced >= 2u, true);
 }
 
@@ -8186,6 +8242,30 @@ static void test_light_run_requests_nothing_but_5v() {
         }
         CHECK_EQ(ufcs_adv > 0, true);   // the modes the adapter read back are recorded, not asked
         (void)scaps;
+    }
+}
+// Light answers "we have EPR": the EPR levels the source lists in its informational EPR list (asked once, no EPR entry) are one
+// Advertised row each, never the cable-limit skip a Medium run gives them when the cable cannot carry EPR, never a Request.
+static void test_light_lists_the_epr_levels_as_advertised() {
+    for (const bool epr_cable : {false, true}) {
+        Fake f = epr_capable_fake();
+        f.info_mode = 1;
+        if (epr_cable) { f.in.cable_mv = 50000; f.in.cable_ma = 5000; f.in.cable_observed = true; }
+        ct::Runner r(f);
+        CHECK_EQ(r.start(f.caps, ct::with_level({.selected = ct::bit(A::Epr) | ct::bit(A::EprAvs)}, ct::Level::Light), f.in, true), ct::Reason::None);
+        f.tick(r, 90000);
+        CHECK_EQ(int(r.state()), int(ct::State::Done));
+        unsigned levels = 0;
+        for (const auto& s : r.steps()) {
+            if (s.algorithm != A::Epr && s.algorithm != A::EprAvs) continue;
+            ++levels;
+            CHECK_EQ(int(s.verdict), int(ct::Verdict::Skip));
+            CHECK_EQ(int(s.reason), int(ct::Reason::Advertised));
+        }
+        CHECK_EQ(levels >= 3, true);   // 28 V, 36 V, 48 V and the EPR AVS range of the fake's list
+        CHECK_EQ(f.info_asks, 1);
+        for (const auto& c : f.choices) { CHECK_EQ(c.pos, 1); CHECK_EQ(c.mv, 5000); CHECK_EQ(c.hunt, false); }
+        CHECK_EQ(f.entry_times.size(), size_t(0));
     }
 }
 // ---- The PD spec stage (spec_section.hpp) of a Deep run ------------------------------------------------------------------
@@ -8394,7 +8474,8 @@ int main() {
     test_midrun_reannounce_withdrawing_the_row_in_flight_ends_it_and_releases();
     test_a_withdrawn_pdo_that_comes_back_revives_its_rows();
     test_a_reannounce_that_places_no_row_is_a_resplit_not_offers_changed();
-    test_resplit_dropping_every_pending_row_waits_then_ends_withdrawn();
+    test_fixed_pd_rows_are_requested_from_the_top_voltage_down();
+    test_resplit_dropping_the_pending_top_rows_waits_then_ends_withdrawn();
     test_resplit_with_the_offer_back_inside_the_wait_runs_the_rows();
     test_resplit_with_the_offer_back_after_the_unit_closed_stays_withdrawn();
     test_resplit_with_another_spec_revision_is_still_caps_changed();
@@ -8407,7 +8488,7 @@ int main() {
     test_a_slot_only_move_of_the_row_in_flight_requeues_it();
     test_two_lists_300ms_apart_send_one_request_after_the_second_settles();
     test_a_complete_epr_reannounce_during_row_0_restarts_the_row();
-    test_a_resplit_during_15v_keeps_15_20_28_at_the_new_words_and_withdraws_pps();
+    test_a_resplit_during_20v_keeps_15_20_28_at_the_new_words_and_withdraws_pps();
     test_a_list_restored_before_the_unit_ends_runs_the_withdrawn_rows();
     test_identity_follows_the_unit_mode(); test_identity_is_back_for_the_pd_unit_after_a_legacy_one();
     test_identity_matches_every_attach_of_the_default_order(); test_self_powered_run_never_touches_the_identity();
@@ -8520,7 +8601,7 @@ int main() {
     test_default_sweep_on_a_low_latch_source();
     test_self_powered_run_sweeps_from_5v();
     test_legacy_row_waits_through_a_source_restart(); test_legacy_restart_wait_is_bounded_and_a_load_still_refuses();
-    test_level_maps_to_the_run_switches(); test_level_plans_per_level(); test_light_run_requests_nothing_but_5v();
+    test_level_maps_to_the_run_switches(); test_level_plans_per_level(); test_light_run_requests_nothing_but_5v(); test_light_lists_the_epr_levels_as_advertised();
     test_a_resumed_light_run_stays_light();
     test_the_page_names_the_run_level();
     test_spec_stage_runs_once_in_a_deep_pd_unit(); test_spec_stage_is_deep_only(); test_spec_refusal_is_recorded_and_the_run_goes_on(); test_spec_cancel_ends_in_order();

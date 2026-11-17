@@ -277,7 +277,7 @@ def summarize_card(c):
     """One report card in the run-summary format: a header, a verdict line, then one line per group."""
     g = c["groups"]
     n = {k: sum(e["verdict"] == k for e in g.values()) for k in ("pass", "fail", "skip")}
-    light = c.get("level") == "light"   # a Light run measured 5 V only: a passing group is "detected", never a tick
+    light = c.get("level") == "light"   # a Light run measured 5 V only: PD is "✓ advertised", a legacy group "detected"
     out = [f"Card {c['no']} · {c['name'] or '(unnamed)'} · {c['pdos']} PDOs · {c['runs']} runs · "
            f"{c.get('brand', '')} {c['vid']:04X}:{c['pid']:04X}".strip()
            + (f" · {c['pdp_w']} W" if c.get("pdp_w") else "") + f" · fw {c['fw']}" + _card_spoof(c.get("cable")),
@@ -293,7 +293,7 @@ def summarize_card(c):
     skipped = {}
     for name, e in g.items():
         if light and e["verdict"] == "pass":
-            out.append(f"- {name}: detected")
+            out.append(f"- {name}: " + ("✓ advertised" if name == "PD" else "detected"))   # PD is listed by the source (green); a legacy group only answered
         elif e["verdict"] in ("pass", "fail"):
             out.append(f"- {name}: " + _group_text(e))
         elif e.get("reason") == NO_QC3PLUS:
@@ -315,7 +315,7 @@ def summarize_card(c):
         elif r["max_mv"] >= r["hi_mv"]:
             out.append(rng + "✓ whole range" + spread + sweep)
         else:
-            out.append(rng + (f"reached {_v(r['max_mv'])} V" if r["max_mv"] else "advertised" if light else "no step measured")
+            out.append(rng + (f"reached {_v(r['max_mv'])} V" if r["max_mv"] else "✓ advertised" if light else "no step measured")
                        + spread + sweep)
     return "\n".join(out)
 

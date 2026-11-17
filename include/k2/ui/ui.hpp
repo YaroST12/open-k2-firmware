@@ -198,7 +198,8 @@ public:
     // record into share_buffer() (k2/ui/qrshare_records.hpp), then open_share() names it and pushes the share view. False
     // (nothing pushed) when the record has no part or push_menu refuses.
     std::span<std::uint8_t> share_buffer() { return share_rec_.buffer(); }
-    bool open_share(qrshare::Type type, std::uint8_t schema, std::string_view title, std::size_t len, uint32_t now_ms);
+    // `ext`: a Deep card's block (report_card::deep, outside share_buffer()), packed into its link.
+    bool open_share(qrshare::Type type, std::uint8_t schema, std::string_view title, std::size_t len, uint32_t now_ms, std::span<const std::uint8_t> ext = {});
     // The open Share view (host tests); it exists only while Menu::Share is on the stack.
     const SharePage &share() const { return *find<SharePage>(Menu::Share); }
     // The open QR scan-test page (host tests); it exists only while Menu::QrTest is on the stack.

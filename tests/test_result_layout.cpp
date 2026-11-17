@@ -64,6 +64,24 @@ static void test_failed_and_skipped_fixed_chips() {
     CHECK_EQ(int(l.tokens[r.first + 1].tone), int(rl::Tone::Fail));
     CHECK_EQ(int(l.tokens[r.first + 2].tone), int(rl::Tone::Skip));   // a skip is its own tone (grey dash), not "some passed"
 }
+// The plan runs the fixed rows from the top voltage down (2026-11-17); the grid still reads left to right, ascending, with a chip's
+// reason tag glued behind it, and each chip keeps its own level (the Running view finds the step in flight by it).
+static void test_fixed_chips_read_ascending_whatever_the_plan_order() {
+    std::vector<ct::Step> s;
+    const uint32_t fixed[] = {167874860u, 184620u, 246060u, 307500u, 409935u};
+    const unsigned mv[] = {5000, 9000, 12000, 15000, 20000};
+    for (int i = 4; i >= 0; --i) s.push_back(step(A::Pd3Fixed, mv[i], V::Pass, uint8_t(i + 1), fixed[i]));   // 20 V first, 5 V last
+    s[0] = step(A::Pd3Fixed, 20000, V::Skip, 5, fixed[4], ct::Reason::CableLimit);   // a tagged chip travels with its voltage
+    s[4].verdict = V::Running;
+    rl::Layout l; rl::build(l, s);
+    const size_t r = row_of(l, "PD3.x");
+    CHECK_STR(chips(l, r).c_str(), "5V 3A 9V 3A 12V 3A 15V 3A 20V 3.35A cable");
+    CHECK_EQ(int(l.tokens[l.rows[r].first].mv), 5000);
+    CHECK_EQ(int(l.tokens[l.rows[r].first].tone), int(rl::Tone::Pending));   // the 5 V row in flight is the first chip
+    CHECK_EQ(int(l.tokens[l.rows[r].first + 4].mv), 20000);
+    CHECK_EQ(int(l.tokens[l.rows[r].first + 4].tone), int(rl::Tone::Skip));
+    CHECK_EQ(l.tokens[l.rows[r].first + 5].glue, true);
+}
 static void test_marks_give_each_verdict_its_own_shape() {
     CHECK_EQ(int(rl::mark(rl::Tone::Pass)), 1);   // check
     CHECK_EQ(int(rl::mark(rl::Tone::Fail)), 2);   // cross
@@ -405,8 +423,8 @@ static void test_light_run_chips_read_noted() {
     rl::Layout l; rl::build(l, s);
     const auto& pd = l.rows[row_of(l, "PD3.x")];
     CHECK_EQ(int(l.tokens[pd.first].tone), int(rl::Tone::Pass));        // 5 V was asked and measured
-    CHECK_EQ(int(l.tokens[pd.first + 1].tone), int(rl::Tone::Noted));   // 9 V only listed
-    CHECK_EQ(int(l.tokens[l.rows[row_of(l, "PPS")].first].tone), int(rl::Tone::Noted));   // never a whole-range verdict
+    CHECK_EQ(int(l.tokens[pd.first + 1].tone), int(rl::Tone::Pass));    // 9 V is advertised by the source: the pass look, no request went out
+    CHECK_EQ(int(l.tokens[l.rows[row_of(l, "PPS")].first].tone), int(rl::Tone::Pass));    // an advertised range reads green too
     const auto& qc = l.rows[row_of(l, "QC2")];
     CHECK_STR(chips(l, row_of(l, "QC2")).c_str(), "5V 9V 12V");
     CHECK_EQ(int(l.tokens[qc.first].tone), int(rl::Tone::Pass));
@@ -421,6 +439,14 @@ static void test_light_run_chips_read_noted() {
     CHECK_STR(rl::verdict_word(step(A::Pps, 11000, V::Fail, 6, 3235656292u, ct::Reason::Capped)), "CAPPED");
     CHECK_STR(rl::verdict_word(step(A::Pps, 11000, V::Fail, 6, 3235656292u, ct::Reason::Timeout)), "FAIL");
     CHECK_EQ(rl::noted(s[1]) && rl::noted(s[4]) && !rl::noted(s[0]), true);
+    // A PD offer the source advertises is green (advertised()); a legacy level nothing advertises, and a non-PD listing (a UFCS mode,
+    // an SCP level), stay Noted: the green is the PD family's "we have it", never a measured pass.
+    CHECK_EQ(rl::advertised(s[1]) && rl::advertised(s[2]) && !rl::advertised(s[0]) && !rl::advertised(s[4]), true);
+    const auto ufcs = step(A::Ufcs, 9000, V::Skip, 0, 0, ct::Reason::Advertised);
+    CHECK_EQ(rl::advertised(ufcs), false);
+    CHECK_EQ(rl::noted(ufcs), true);
+    rl::Layout lu; rl::build(lu, std::vector<ct::Step>{step(A::Ufcs, 5000, V::Pass), ufcs});
+    CHECK_EQ(int(lu.tokens[lu.rows[row_of(lu, "UFCS")].first + 1].tone), int(rl::Tone::Noted));
     // a step the port's own 5 V cut spoiled twice is a plain skip: no verdict, but never "listed" and never a pass or fail
     const auto cut = step(A::Qc2, 5000, V::Skip, 0, 0, ct::Reason::PortCuts);
     CHECK_STR(rl::verdict_word(cut), "SKIP");
@@ -530,13 +556,15 @@ static void test_reach_footer_names_the_floor() {
     CHECK_EQ(9 + rl::reach_footer(manual).len <= 27, true);
 }
 // A Light run lists a range without asking for it (Reason::Advertised): the footer says "advertised", never a shortfall
-// such as "none reached", and the range's tone is Noted (an Info footer, never amber).
+// such as "none reached", and the range's tone is Pass (the source has it: a green footer, never amber).
 static void test_reach_footer_of_a_listed_range_says_advertised() {
     const uint32_t pdo = 3248763456u;   // PPS 5-21V, slot 7
     for (const A a : {A::Pps, A::SprAvs, A::EprAvs}) {
         std::vector<ct::Step> all{step(a, 5000, V::Skip, 7, pdo, ct::Reason::Advertised), step(a, 21000, V::Skip, 7, pdo, ct::Reason::Advertised)};
         const auto r = rl::reach(all, a);
-        CHECK_EQ(int(r.tone), int(rl::Tone::Noted));
+        CHECK_EQ(int(r.tone), int(rl::Tone::Pass));
+        CHECK_EQ(r.listed, true);
+        CHECK_EQ(r.lo_mv, 0);   // nothing was measured: no "reached" span
         CHECK_STR(text_of(r, true).c_str(), "advertised");
         CHECK_EQ(9 + rl::reach_footer(r).len <= 27, true);
     }
@@ -1299,7 +1327,30 @@ static void test_pps_needs_load_reads_as_a_skip_not_a_fail() {
     CHECK_EQ(chips(m, row_of(m, "PPS")).find("needs load") != std::string::npos, true);
     CHECK_EQ(int(m.tokens[find(m, "PPS")->first].tone), int(rl::Tone::Skip));
 }
+// The Running view's progress bar counts rows the run executes: plan-time skips (a Light run's advertised PD rows, a protocol the
+// charger never offered) are not part of the work, so a fresh run starts at 0 and the bar never starts half full.
+static void test_run_progress_counts_executed_rows_only() {
+    std::vector<ct::Step> s;
+    for (unsigned i = 0; i < 5; ++i) s.push_back(step(A::Pd3Fixed, 9000 + i, V::Skip, uint8_t(i + 2), 1u, ct::Reason::Advertised));
+    for (unsigned i = 0; i < 5; ++i) s.push_back(step(A::Fcp, 5000 + i, V::Pending));
+    rl::Progress p = rl::run_progress(s);
+    CHECK_EQ(p.done, 0u); CHECK_EQ(p.total, 5u);                       // 10 rows, 5 planned away: empty bar, 5 to run
+    s[5].verdict = V::Pass;
+    p = rl::run_progress(s); CHECK_EQ(p.done, 1u); CHECK_EQ(p.total, 5u);
+    s[6].verdict = V::Fail;
+    p = rl::run_progress(s); CHECK_EQ(p.done, 2u); CHECK_EQ(p.total, 5u);
+    s[7].verdict = V::Running;                                           // the row under test is work still to do
+    p = rl::run_progress(s); CHECK_EQ(p.done, 2u); CHECK_EQ(p.total, 5u);
+    s[8].verdict = V::Skip; s[8].reason = ct::Reason::Request;           // a runtime skip leaves the work: the total shrinks
+    p = rl::run_progress(s); CHECK_EQ(p.done, 2u); CHECK_EQ(p.total, 4u);
+    s[9].verdict = V::Pass; s[9].reason = ct::Reason::Folded;            // a caution is a pass that ran
+    p = rl::run_progress(s); CHECK_EQ(p.done, 3u); CHECK_EQ(p.total, 4u);
+    std::vector<ct::Step> none{step(A::Pd3Fixed, 9000, V::Skip, 2, 1u, ct::Reason::Advertised)};
+    p = rl::run_progress(none); CHECK_EQ(p.done, 0u); CHECK_EQ(p.total, 0u);   // nothing to run: empty, never a division by zero
+    p = rl::run_progress({}); CHECK_EQ(p.done, 0u); CHECK_EQ(p.total, 0u);
+}
 int main() {
+    test_run_progress_counts_executed_rows_only();
     test_pps_needs_load_reads_as_a_skip_not_a_fail();
     test_ufcs_chips_carry_the_mode_current();
     test_ufcs_chips_follow_the_modes_current_when_it_changes();
@@ -1326,6 +1377,7 @@ int main() {
     test_headers_can_be_left_out();
     test_fixed_pd_chips_carry_advertised_current();
     test_failed_and_skipped_fixed_chips();
+    test_fixed_chips_read_ascending_whatever_the_plan_order();
     test_marks_give_each_verdict_its_own_shape();
     test_chip_width_includes_the_mark_cell();
     test_pps_one_coloured_chip_per_range();

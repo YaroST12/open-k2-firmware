@@ -134,6 +134,10 @@ void disarm_if_armed() {
     if (g_held && g_rec.state() == State::Armed) disarm();
 }
 
+void release_unkept() {
+    if (g_held && unkept_frozen(g_rec.state(), g_keep, g_saved_seq)) disarm();
+}
+
 bool trigger(Reason r) {
     return g_held && g_rec.trigger(systick::micros(), r);
 }

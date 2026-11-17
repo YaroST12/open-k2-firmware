@@ -888,7 +888,7 @@ static void test_tools_spoof_survives_a_runs_end() {
         start_press(ui, 1600); confirm_press(ui, 1700);
         CHECK_EQ(ui.charger_test_busy(), true);
         uint32_t now = 1800;
-        const auto passes = [&] { unsigned n = 0; for (const auto& s : ui.charger_test_results().steps()) n += s.verdict == ct::Verdict::Pass; return n; };
+        const auto passes = [&] { unsigned n = 0; for (const auto& s : ui.charger_test_results().steps()) n += s.verdict == ct::Verdict::Pass || s.verdict == ct::Verdict::Fail; return n; };
         for (; now <= 60000 && passes() < 1; now += 100) ui.tick(now);
         g_stub.pm.vbus_mv = 0;
         for (const uint32_t end = now + 1000; now < end; now += 100) ui.tick(now);
@@ -1951,22 +1951,22 @@ static void test_step_label_gallery() {
         CHECK_EQ(ui.charger_test_stage(), 6);
         for (int i = 0; i < 60 && ui.painting(); ++i) ui.tick(t += 20);
         dump_panel("labels_rot3_results_light");
-        // A grid row's footer counts the listing apart from the results; a listed range reads "advertised" in the Info
-        // tone, never a shortfall in amber.
+        // A grid row's footer counts the listing apart from the results; a listed range reads "advertised" in the Ok
+        // tone (the source has it, nothing was asked), never a shortfall in amber.
         ui.set_rotation(0, t); top(ui, t); settle(ui, t);   // the text checks read rotation 0's panel
         CHECK_EQ(footer_shows("PD3.x: 1 pass, 3 listed", kOk), true);
         bool avs = false;
         for (int n = 0; n < 12 && !avs; ++n) {
-            avs = footer_shows("SPR AVS: advertised", kText);
+            avs = footer_shows("SPR AVS: advertised", kOk);
             if (!avs) { press(ui, Button::Plus); ui.tick(t += 100); settle(ui, t); }
         }
         CHECK_EQ(avs, true);
-        ui.set_rotation(3, t); top(ui, t); settle(ui, t); press(ui, Button::Ok, t);   // the PD line's Steps, then its second row (9 V: Advertised)
+        ui.set_rotation(3, t); top(ui, t); settle(ui, t); press(ui, Button::Ok, t);   // the PD line's Steps, then its third row (top-down order: 20 V, 15 V, 9 V: Advertised)
         if (ui.charger_test_stage() == 7) {
             for (int i = 0; i < 60 && ui.painting(); ++i) ui.tick(t += 20);
             dump_panel("labels_rot3_steps_light");
-            ui.set_rotation(0, t); move(ui, 1, t); settle(ui, t);
-            check_row_note(1, "LISTED PDO #2");   // the focused note: the band word, no skip cause
+            ui.set_rotation(0, t); move(ui, 2, t); settle(ui, t);
+            check_row_note(2, "LISTED PDO #2");   // the focused note: the band word, no skip cause
             ui.set_rotation(3, t); settle(ui, t); press(ui, Button::Ok, t);
             for (int i = 0; i < 60 && ui.painting(); ++i) ui.tick(t += 20);
             dump_panel("labels_rot3_detail_light");
@@ -2245,6 +2245,31 @@ static void test_transition_capture_hooks() {
         const auto& r = ui.charger_test_results();
         CHECK_EQ(g_stub.tc_keep_run, r.run_id());
         CHECK_EQ(int(r.steps()[g_stub.tc_keep_step].verdict), int(ct::Verdict::Fail));
+    }
+    { // a passing step whose capture froze on its own (a detach of the cut, never kept) gives the recorder back: it would hold the
+      // overlay, and the PD spec section's own capture, for the rest of the run (hardware 2026-11-17)
+        fixture(); two_pdos(); g_stub.tc_freeze_on_arm = true; g_stub.vbus_ceiling_mv = 20000;   // the converter follows the Request
+        Ui ui; open(ui);
+        CHECK_EQ(ui.charger_test_set_units(kPdOnly), true);
+        review(ui);
+        start_press(ui, 1300); press(ui, Button::Ok, 1400);
+        for (uint32_t t = 1500; t <= 900000 && ui.charger_test_busy(); t += 100) ui.tick(t);
+        CHECK_EQ(g_stub.tc_arms >= 1, true); CHECK_EQ(g_stub.tc_keeps, 0);
+        CHECK_EQ(int(g_stub.tc_state), int(transcap::State::Off));
+    }
+    { // a retried request does NOT re-arm over a capture that froze on its own: it is the row's evidence (the cut's trace) until the row
+      // ends, and the failed step then keeps it (the existing case above); a re-arm here would record an empty window
+        fixture(); two_pdos(); g_stub.request_err = pd::Err::Busy; g_stub.tc_freeze_on_arm = true;
+        Ui ui; open(ui); run_to_end(ui);
+        CHECK_EQ(g_stub.tc_arms, 1);
+        CHECK_EQ(g_stub.tc_keeps, 1);
+    }
+    { // a kept capture waits for its write: nothing drops it (the stub marks it kept until arm / disarm)
+        fixture(); two_pdos(); g_stub.request_err = pd::Err::BadPos;
+        Ui ui; open(ui); run_to_end(ui);
+        CHECK_EQ(g_stub.tc_keeps, 1);
+        CHECK_EQ(g_stub.tc_keep_pending, true);
+        CHECK_EQ(int(g_stub.tc_state), int(transcap::State::Post));   // a run end leaves a kept capture to the main loop
     }
     { // another tool owns the overlay: the run goes on without a capture
         fixture(); two_pdos(); g_stub.request_err = pd::Err::Busy; g_stub.tc_arm_result = transcap::ArmResult::Busy;
@@ -2731,7 +2756,7 @@ static void test_abandoned_resume_releases_the_runs_identity() {
         CHECK_EQ(g_stub.spoof_on, true);
         const auto count_pass = [&] {
             unsigned n = 0;
-            for (const auto& s : ui.charger_test_results().steps()) n += s.verdict == ct::Verdict::Pass;
+            for (const auto& s : ui.charger_test_results().steps()) n += s.verdict == ct::Verdict::Pass || s.verdict == ct::Verdict::Fail;   // decided (top-down: the stub holds 5 V, the high rows fail first)
             return n;
         };
         for (; now <= 60000 && count_pass() < 1; now += 100) ui.tick(now);
@@ -2899,7 +2924,7 @@ static void interrupted_run(bool unattended) {
         CHECK_EQ(g_stub.journal_meta.units.n, 2);
         const auto count_pass = [&] {
             unsigned n = 0;
-            for (const auto& s : ui.charger_test_results().steps()) n += s.verdict == ct::Verdict::Pass;
+            for (const auto& s : ui.charger_test_results().steps()) n += s.verdict == ct::Verdict::Pass || s.verdict == ct::Verdict::Fail;   // decided (top-down: the stub holds 5 V, the high rows fail first)
             return n;
         };
         uint32_t now = 1500;
@@ -3254,7 +3279,7 @@ static void test_self_powered_vbus_loss_keeps_the_journal_open() {
     CHECK_EQ(ui.charger_test_busy(), true);
     const auto count_pass = [&] {
         unsigned n = 0;
-        for (const auto& s : ui.charger_test_results().steps()) n += s.verdict == ct::Verdict::Pass;
+        for (const auto& s : ui.charger_test_results().steps()) n += s.verdict == ct::Verdict::Pass || s.verdict == ct::Verdict::Fail;   // decided (top-down: the stub holds 5 V, the high rows fail first)
         return n;
     };
     uint32_t now = 1500;
@@ -3297,7 +3322,7 @@ static void test_bus_powered_run_behaves_like_self_powered() {
     CHECK_EQ(g_stub.journal_meta.unattended, true);
     const auto count_pass = [&] {
         unsigned n = 0;
-        for (const auto& s : ui.charger_test_results().steps()) n += s.verdict == ct::Verdict::Pass;
+        for (const auto& s : ui.charger_test_results().steps()) n += s.verdict == ct::Verdict::Pass || s.verdict == ct::Verdict::Fail;   // decided (top-down: the stub holds 5 V, the high rows fail first)
         return n;
     };
     uint32_t now = 1500;
@@ -3541,6 +3566,12 @@ static bool running_cell_rows(int& top, int& bottom) {
     top = dots.front().second; bottom = top + 25;
     return true;
 }
+// The Running bar's filled pixels (kFocus on its middle line, x6..217): how far the run has come.
+static unsigned run_bar_px() {
+    unsigned n = 0;
+    for (int x = 6; x < 218; ++x) n += g_panel[45 * LCD_WIDTH + x] == kFocus;
+    return n;
+}
 // How many pixels above `y` in the grid wear the Pending ink (a chip that has not run yet).
 static unsigned pending_ink_above(int y) {
     unsigned n = 0;
@@ -3763,6 +3794,26 @@ static void test_the_running_screen_keeps_updating_through_a_qc_handshake() {
     CHECK_EQ(dead_buckets, 0u);       // and every second of the handshake the screen changed
 }
 // The grid follows the step under test: the Running cell is on screen a few ticks after every step starts, with no scrolling.
+// A Light run plans most of its rows away (advertised PD items are skips from the start): its bar must start at 0 and then only fill
+// with the rows that ran, never jump in on the plan-time skips.
+static void test_a_light_run_bar_starts_empty_and_only_fills() {
+    fixture();
+    g_stub.caps.num_pdos = 3; g_stub.caps.pdos[1] = pd::decode_pdo((180u << 10) | 300); g_stub.caps.pdos[2] = pd::decode_pdo((240u << 10) | 300);
+    Ui ui; ui.init(0); ui.set_rotation(0, 0); ui.tick(1000); ui.goto_page(static_cast<uint8_t>(Page::ChargerTest), 1100);
+    CHECK_EQ(ui.charger_test_set_level(uint8_t(ct::Level::Light)), true);
+    review(ui); start_press(ui, 1300); press(ui, Button::Ok, 1400);
+    unsigned prev = 0, ticks_running = 0; bool first = true, grew = false;
+    for (uint32_t now = 1500; now <= 400000 && ui.charger_test_busy(); now += 100) {
+        ui.tick(now);
+        if (ui.charger_test_stage() != kRunningStage) continue;
+        if (!ui.charger_test_results().quiet()) continue;
+        const unsigned px = run_bar_px();
+        if (first) { CHECK_EQ(px, 0u); dump_screen("light_start"); first = false; }   // K2_DUMP: the Light run's first screen
+        CHECK_EQ(px >= prev, true); grew |= px > prev; prev = px; ++ticks_running;
+    }
+    CHECK_EQ(ticks_running > 0, true);
+    CHECK_EQ(grew, true);
+}
 static void test_the_running_grid_follows_the_step() {
     Ui ui; start_all_run(ui);
     uint32_t now = 1500; size_t seen_idx = ~size_t(0); unsigned since = 0, steps_followed = 0, worst_lag = 0, lag = 0, missed = 0;
@@ -3785,7 +3836,7 @@ static void test_the_running_grid_follows_the_step() {
             CHECK_EQ(bottom <= kGridBottom, true);
             const unsigned pend = pending_ink_above(top);            if (pend) ++pending_above;
             const unsigned total = static_cast<unsigned>(r.steps().size());
-            if (!early_done) { dump_screen("follow_early"); early_done = true; }
+            if (!early_done) { CHECK_EQ(run_bar_px(), 0u); dump_screen("follow_early"); early_done = true; }   // the first executed row: the bar starts empty
             if (!mid_done && r.index() >= total / 2) { dump_screen("follow_mid"); mid_done = true; }
             if (r.index() + 6 >= total) dump_screen("follow_end");   // the last one followed wins
             if (top > kGridTop + 60) ++rows_above;   // the window holds finished rows above the running row
@@ -4968,7 +5019,7 @@ int main() {
     test_a_final_stop_closes_the_journal_before_it_skips();
     test_a_row_in_flight_writes_no_journal_record(); test_a_row_in_flight_paints_inside_the_budget();
     test_the_plan_is_written_in_pieces_before_the_first_request(); test_a_busy_link_defers_the_plan_but_not_for_ever(); test_a_cancel_during_the_plan_leaves_no_run(); test_a_replan_is_polled_and_done_before_the_first_phase_marker();
-    test_a_row_in_an_engine_window_paints_nothing(); test_the_running_grid_follows_the_step();
+    test_a_row_in_an_engine_window_paints_nothing(); test_the_running_grid_follows_the_step(); test_a_light_run_bar_starts_empty_and_only_fills();
     test_the_gap_line_names_the_blocked_window(); test_a_started_row_that_ends_as_a_skip_still_logs_its_gap();
     test_a_handshake_window_says_why_the_screen_is_still(); test_the_running_screen_keeps_updating_through_a_qc_handshake();
     test_failed_units_stay_above_the_running_row(); test_the_gauge_band_and_the_dot_move_in_the_same_tick();

@@ -221,6 +221,7 @@ struct StubState {
     k2::transcap::State tc_state = k2::transcap::State::Off;
     k2::transcap::ArmResult tc_arm_result = k2::transcap::ArmResult::Ok;
     bool tc_freeze_on_arm = false;   // an earlier event (the detach of the cut) freezes the capture before the step's verdict
+    bool tc_keep_pending = false;    // keep() was called and the (never written) save has not come: status().keep
     int tc_arms = 0, tc_disarms = 0, tc_triggers = 0, tc_keeps = 0;
     int tc_arm_pos = 0, tc_arm_mv = 0;
     k2::transcap::Reason tc_reason = k2::transcap::Reason::None;

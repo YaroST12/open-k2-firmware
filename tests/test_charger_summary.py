@@ -376,8 +376,8 @@ def test_a_light_card_reads_detected_and_advertised_never_a_tick():
     card["ranges"] = [{"alg": "PPS (PD3.x)", "lo_mv": 3300, "hi_mv": 11000, "max_mv": 0, "fail_mv": 0}]
     text = charger_summary.summarize_card(card)
     assert "2 detected, 0 fail, 1 skip of 3 groups" in text
-    assert "- PD: detected" in text and "- QC2: detected" in text
-    assert "- PPS 3.3-11V: advertised" in text
-    assert "✓" not in text
+    assert "- PD: ✓ advertised" in text and "- QC2: detected" in text   # PD is green ("we have it"), a legacy group is only detected
+    assert "- PPS 3.3-11V: ✓ advertised" in text
+    assert "- QC2: ✓" not in text
     card.pop("level")   # the same card at Medium keeps its ticks
     assert "- QC2: ✓ 5 V only" in charger_summary.summarize_card(card)

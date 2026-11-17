@@ -428,6 +428,17 @@ static void test_pacer_first_poll_after_reset_samples_at_once() {
 
 // The kept capture is saved through a scratch lease. poll() also runs from the LCD idle hook and delay_ms(),
 // i.e. inside a page paint or a storage call that may hold the lease: the save must wait, never trap.
+// release_unkept() drops a capture a holder left behind: frozen, and either nobody asked to keep it or it is on flash already. Never one
+// still recording (Armed, Post) and never a kept capture waiting for its write.
+static void test_unkept_frozen_is_only_a_finished_capture_nobody_waits_for() {
+    CHECK_COND(unkept_frozen(State::Frozen, false, 0));
+    CHECK_COND(unkept_frozen(State::Frozen, false, 5));     // saved by hand (the remote's save)
+    CHECK_COND(unkept_frozen(State::Frozen, true, 5));      // kept and already written
+    CHECK_COND(!unkept_frozen(State::Frozen, true, 0));     // kept, the write is still due
+    CHECK_COND(!unkept_frozen(State::Post, false, 0));
+    CHECK_COND(!unkept_frozen(State::Armed, false, 0));
+    CHECK_COND(!unkept_frozen(State::Off, false, 0));
+}
 static void test_persist_due_defers_while_scratch_is_held() {
     constexpr std::uint32_t kQuiet = 300, kMax = 2000;
     // args: keep, saved_seq, waited_ms, since_activity_ms, quiet, max_wait, scratch_busy
@@ -475,5 +486,6 @@ int main() {
     test_pacer_keeps_the_minimum_gap_and_survives_the_clock_wrap();
     test_pacer_first_poll_after_reset_samples_at_once();
     test_persist_due_defers_while_scratch_is_held();
+    test_unkept_frozen_is_only_a_finished_capture_nobody_waits_for();
     return test_report("test_transcap");
 }

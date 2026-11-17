@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Yaraslau Furman
 #include "k2/chargertest/report_card_json.hpp"
 
+#include "k2/chargertest/report_card_deep.hpp"
 #include "k2/chargertest/step_label.hpp"
 #include "k2/core/textbuf.hpp"
 #include "k2/pd/ra_guard.hpp"
@@ -131,6 +132,28 @@ std::size_t render_json(const Card& c, std::span<char> out) {
     return t.size();
 }
 
+std::size_t render_json(const Card& c, std::span<const std::uint8_t> deep, std::span<char> out) {
+    const std::size_t n = render_json(c, out);
+    constexpr char kKey[] = ",\"deep\":\"";
+    const std::size_t chars = (deep.size() * 4 + 2) / 3;
+    if (!deep::blob_valid(deep) || n == 0 || n + sizeof kKey + chars + 2 > out.size() || out[n - 1] != '}') return n;   // out of room: the card alone
+    char* p = out.data() + n - 1;   // over the closing brace
+    for (const char ch : kKey) if (ch) *p++ = ch;
+    static constexpr char kAlphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    for (std::size_t i = 0; i < deep.size(); i += 3) {
+        const unsigned left = unsigned(deep.size() - i);
+        const std::uint32_t v = std::uint32_t(deep[i]) << 16 | (left > 1 ? std::uint32_t(deep[i + 1]) << 8 : 0u) | (left > 2 ? deep[i + 2] : 0u);
+        *p++ = kAlphabet[v >> 18];
+        *p++ = kAlphabet[v >> 12 & 63];
+        if (left > 1) *p++ = kAlphabet[v >> 6 & 63];
+        if (left > 2) *p++ = kAlphabet[v & 63];
+    }
+    *p++ = '"';
+    *p++ = '}';
+    *p = '\0';
+    return std::size_t(p - out.data());
+}
+
 namespace {
 // Volts the way Python's %g prints them at 10 mV resolution: 5, 9, 20, 3.3, 4.75.
 void volts(TextBuf& t, unsigned mv) {
@@ -153,7 +176,8 @@ std::size_t render_summary(const Card& c, std::span<char> out) {
     if (c.id.pdp_w) t.put(" \xC2\xB7 %u W", unsigned(c.id.pdp_w));
     t.put(" \xC2\xB7 fw %08x\n", unsigned(c.fw));
     // counts() counts group verdicts, not steps: say so, or the header reads "1 pass" next to a run summary's "25 pass".
-    // A Light run measured 5 V only: its passing groups are "detected" (card_tone.hpp: the noted tone), never a tick.
+    // A Light run measured 5 V only: the PD group is "advertised" (a tick: card_tone.hpp reads it green), a legacy group that answered is
+    // "detected" (the noted tone), never a tick.
     const bool light = c.level == ct::Level::Light;
     t.put("%u %s, %u fail, %u skip of %u groups \xC2\xB7 %s", unsigned(n.pass), light ? "detected" : "pass", unsigned(n.fail),
           unsigned(n.skip), unsigned(kGroups), ct::name(c.state));
@@ -179,7 +203,7 @@ std::size_t render_summary(const Card& c, std::span<char> out) {
         t.put("- %s: ", ct::name(ct::Group(g)));
         const bool handshake = r.max_mv && r.max_mv <= kHandshakeMv;
         if (light && r.verdict == GV::Pass) {
-            t.put("detected");
+            t.put(g == 0 ? "\xE2\x9C\x93 advertised" : "detected");
         } else if (group_handshake_ok(r)) {
             t.put("\xE2\x9C\x93 handshake ok");
         } else if (group_detected(r)) {
@@ -223,7 +247,7 @@ std::size_t render_summary(const Card& c, std::span<char> out) {
         } else if (r.max_dv) {
             t.put("reached "); volts(t, unsigned(r.max_dv) * 100u); t.put(" V");
         } else {
-            t.put(light ? "advertised" : "no step measured");
+            t.put(light ? "\xE2\x9C\x93 advertised" : "no step measured");
         }
         t.put("\n");
     }

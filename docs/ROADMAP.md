@@ -1119,8 +1119,7 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
 
 - **Charger-test levels** (k2/ct-level, built and host-tested only). Check on a PD charger with PPS (the Anker IQ4): a
   Light run (Review Level row, or `ct_start.py --level light`) keeps VBUS at 5 V for the whole run (`pd_trace.py dump`:
-  no Request above 5 V, `vbus_fast` never above 5.5 V), the grid shows the listed PDOs/APDOs as Advertised (no fill, grey
-  left bar), the card header reads "Light run"; a Deep run sweeps every PPS and AVS APDO; Medium has no sweep rows.
+  no Request above 5 V, `vbus_fast` never above 5.5 V), the grid shows the listed PDOs/APDOs/EPR levels in green as advertised (the Pass look; no Request, no EPR entry, no Mi 6A hunt), legacy listings Noted (grey left bar), the card header reads "Light run"; a Deep run sweeps every PPS and AVS APDO; Medium has no sweep rows.
   Settings > Test level survives a reboot and sets the Review row; `stack_free` in the heartbeat stays above its
   current floor on Review and Results.
 

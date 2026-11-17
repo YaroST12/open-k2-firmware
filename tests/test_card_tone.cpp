@@ -68,24 +68,30 @@ static void test_rules() {
     CHECK_EQ(int(tn::card(grey)), int(Tone::Skip));
 }
 
-// A Light run measured only 5 V: its card lists what the charger offers and what answered, so no group, range or card head
-// reads pass (green); a failure is still a failure.
-static void test_light_card_is_noted_never_pass() {
+// A Light run measured only 5 V: its card lists what the charger offers and what answered. What the PD family advertises (the PD
+// group and the listed ranges) reads pass (green: "we have it", nothing was requested); a legacy protocol that answered at 5 V stays
+// Noted ("detected"); a failure is still a failure.
+static void test_light_card_pd_is_green_legacy_is_noted() {
     rc::Card c = cardfx::fh22_full();
     c.level = charger_test::Level::Light;
     for (unsigned i = 0; i < c.n_ranges; ++i) { c.range[i].max_dv = 0; c.range[i].fail_dv = 0; }   // ranges only listed
     c.group[0] = {rc::GV::Pass, 5000, 0, 0};
     c.group[1] = {rc::GV::Pass, 5000, 0, 0};   // QC2 answered and held 5 V
-    CHECK_EQ(int(tn::group(c, 0)), int(Tone::Noted));
+    CHECK_EQ(int(tn::group(c, 0)), int(Tone::Pass));
     CHECK_EQ(int(tn::group(c, 1)), int(Tone::Noted));
-    for (unsigned i = 0; i < c.n_ranges; ++i) CHECK_EQ(int(tn::range(c, c.range[i])), int(Tone::Noted));
-    CHECK_EQ(int(tn::card(c)), int(Tone::Noted));
+    for (unsigned i = 0; i < c.n_ranges; ++i) CHECK_EQ(int(tn::range(c, c.range[i])), int(Tone::Pass));
+    CHECK_EQ(int(tn::card(c)), int(Tone::Pass));
     const tn::Counts n = tn::counts(c);
-    CHECK_EQ(int(n.pass), 0);
-    CHECK_EQ(int(n.noted), 2 + int(c.n_ranges));
+    CHECK_EQ(int(n.pass), 1 + int(c.n_ranges));
+    CHECK_EQ(int(n.noted), 1);
+    // a card with no PD at all keeps the Noted head: only legacy protocols answered
+    rc::Card legacy = c;
+    legacy.group[0] = {rc::GV::None, 0, 0, 0};
+    legacy.n_ranges = 0;
+    CHECK_EQ(int(tn::card(legacy)), int(Tone::Noted));
     c.group[2] = {rc::GV::Fail, 0, 0, uint8_t(charger_test::Reason::Timeout), 5000};   // answered, then lost 5 V
     c.group[2].max_mv = 0;
-    CHECK_EQ(int(tn::group(c, 0)), int(Tone::Noted));
+    CHECK_EQ(int(tn::group(c, 0)), int(Tone::Pass));
     // the same card at Medium reads as before
     c.level = charger_test::Level::Medium;
     CHECK_EQ(int(tn::group(c, 0)), int(Tone::Pass));
@@ -158,6 +164,6 @@ int main() {
     test_a_fold_is_a_caution();
     test_fh22();
     test_rules();
-    test_light_card_is_noted_never_pass();
+    test_light_card_pd_is_green_legacy_is_noted();
     return test_report("card_tone");
 }

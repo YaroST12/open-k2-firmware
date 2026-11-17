@@ -176,7 +176,7 @@ static void test_v9_spread_records_setpoint_error_per_level() {
     rc::encode_card(rec, c);
     CHECK_EQ(rec[2], rc::kPayload);                       // the payload grew for the sweep block
     CHECK_EQ(rc::kPayload, 250);
-    CHECK_EQ(rec[4 + 33], 10);                            // format v10
+    CHECK_EQ(rec[4 + 33], 11);                            // format v11
     CHECK_EQ(rc::decode_card({rec + 4, rc::kPayload}, d), 1);
     CHECK_EQ(d == c, 1);
     CHECK_EQ(d.spread[0][0], 88); CHECK_EQ(d.spread[0][3], -24);
@@ -829,7 +829,7 @@ static void test_v8_rebalanced_roundtrip() {
     CHECK_EQ(d.rebalanced, 2u);
     CHECK_EQ(d == c, 1);
     // an older card (format byte below 8) decodes with the count at 0
-    buf[4 + 33] = rc::kFormat - 3;   // below 8: the count byte is not read
+    buf[4 + 33] = rc::kFormat - 4;   // below 8: the count byte is not read
     CHECK_EQ(rc::decode_card({buf.data() + 4, rc::kPayload}, d), 1);
     CHECK_EQ(d.rebalanced, 0u);
 }
@@ -1050,7 +1050,7 @@ static ct::Step ufcs_step(unsigned mv, int lo_mv, int hi_mv, int ma) {
 }
 static void test_v6_ufcs_modes() {
     static_assert(rc::kMaxUfcs == 4);
-    CHECK_EQ(rc::kFormat, 10u);
+    CHECK_EQ(rc::kFormat, 11u);
     CHECK_EQ(unsigned(rc::off::kUfcs), 178u);
     CHECK_EQ(unsigned(rc::off::kRepeat), 190u);
     CHECK_EQ(unsigned(rc::off::kV9), 198u);
@@ -1063,7 +1063,7 @@ static void test_v6_ufcs_modes() {
         ufcs_step(20000, 5000, 20000, 5000),
     };
     rc::Card c = rc::build(steps, evidence(), {}, rc::Identity{.fp = 0x30000001u}, {}, ct::State::Done, ct::Reason::None);
-    CHECK_EQ(c.format, 10u);
+    CHECK_EQ(c.format, 11u);
     CHECK_EQ(rc::ufcs_modes(c), 3u);
     CHECK_EQ(c.ufcs[0].lo_dv, 34u); CHECK_EQ(c.ufcs[0].hi_dv, 55u); CHECK_EQ(c.ufcs[0].ma, 3000u);
     CHECK_EQ(c.ufcs[1].lo_dv, 50u); CHECK_EQ(c.ufcs[1].hi_dv, 110u); CHECK_EQ(c.ufcs[1].ma, 3000u);
@@ -1071,10 +1071,10 @@ static void test_v6_ufcs_modes() {
     CHECK_EQ(c.ufcs[3].hi_dv, 0u);
     uint8_t rec[rc::kMaxRecord]; rc::Card d;
     CHECK_EQ(rc::encode_card(rec, c), size_t(rc::kMaxRecord));
-    CHECK_EQ(rec[4 + 33], 10u);
+    CHECK_EQ(rec[4 + 33], 11u);
     CHECK_EQ(rc::decode_card({rec + 4, rc::kPayload}, d), 1);
     CHECK_EQ(d == c, 1);
-    CHECK_EQ(d.format, 10u);
+    CHECK_EQ(d.format, 11u);
     // u24 per mode, little endian: bits 0..7 lo, 8..16 hi, 17..23 current.
     const uint32_t m2 = rec[4 + 178 + 6] | uint32_t(rec[4 + 178 + 7]) << 8 | uint32_t(rec[4 + 178 + 8]) << 16;
     CHECK_EQ(m2, 50u | 200u << 8 | 100u << 17);
@@ -1110,7 +1110,7 @@ static void test_v5_payload_has_no_ufcs_modes() {
     CHECK_EQ(rc::ufcs_modes(d), 0u);
     CHECK_EQ(d.group[0].max_mv, 20000u);
     rc::migrate_to_current(d);
-    CHECK_EQ(d.format, 10u);
+    CHECK_EQ(d.format, 11u);
     CHECK_EQ(rc::ufcs_modes(d), 0u);
 }
 
@@ -1149,7 +1149,7 @@ static void test_v7_repeat_block() {
     CHECK_EQ(d.times, 1u); CHECK_EQ(d.last_boots, 0u); CHECK_EQ(d.last_uptime_s, 0u);
     CHECK_EQ(d.group[0].max_mv, 20000u);
     rc::migrate_to_current(d);
-    CHECK_EQ(d.format, 10u);
+    CHECK_EQ(d.format, 11u);
     CHECK_EQ(d.times, 1u);
 }
 

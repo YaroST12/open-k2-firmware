@@ -190,6 +190,9 @@ inline constexpr std::uint8_t kOvPolls = 3;
 inline constexpr std::int32_t kMonoAllowMv = 8;          // a 20 mV step may read this much the wrong way (monitor noise)
 inline constexpr std::int32_t kRestoreMaxMv = 5500;      // a 5 V restore is confirmed at or under this
 inline constexpr std::uint32_t kSuspectAcceptUs = 300;   // an edge-stamp Accept faster than this is not credible
+// The millisecond fallback (no usable edge stamp, no capture): the Accept's read lags the real edge by up to a service pass, the Request
+// leaves up to a pass after send(); each side of a difference of two read times is off by about one pass.
+inline constexpr std::int32_t kMsFallbackAcceptGapUs = 5000, kMsFallbackRdyGapUs = 2000;
 // The age a live VBUS reading can have (the INA226's normal mode refreshes every ~4.5 ms): added to the bracket of every value timed
 // from live polling (the capture's own samples carry their real spacing instead).
 inline constexpr std::uint32_t kVbusPeriodMs = 5;
@@ -681,16 +684,31 @@ inline Engine::Lat Engine::latencies(const Edges& e, const Snapshot& s, Check rd
     } else if (e.accept && (s.req_us & 1) == 0) {
         cur_.flags |= kTrSuspectStamp;
     }
+    std::int32_t acc_gap = 0, rdy_gap = 0;
+    if (!have_acc && s.accept_at != accept0_ && s.accept_at - send_t0_ < 1000) {
+        // No edge stamp and no capture marker for the Accept (inferred from the trace: it is read behind the GoodCRC of the same service
+        // pass, which takes the only stamp). The sink's ms stamps still time it, to a service pass: Request = send(), PS_RDY = its own read.
+        // Everything of the capture's own (microsecond) PS_RDY is dropped: it must not be mixed with a millisecond Accept.
+        cur_.flags |= kTrSuspectStamp;
+        req = send_t0_; acc = s.accept_at;
+        have_acc = true; have_rdy = false;
+        acc_gap = kMsFallbackAcceptGapUs;
+        l.acc_us = (acc - req) * 1000;
+        if (s.ps_rdy_at && static_cast<std::int32_t>(s.ps_rdy_at - s.accept_at) >= 0) {   // 0 while inferred or not come yet
+            rdy = s.ps_rdy_at; have_rdy = true; rdy_gap = kMsFallbackRdyGapUs;
+            l.rdy_us = (rdy - acc) * 1000;
+        }
+    }
     if (have_acc) {
         l.acc = true;
-        l.acc_us = acc - req;
-        meas(Check::AcceptTime, {std::int32_t(l.acc_us), 0, 0, std::int32_t(pd::spec::kAcceptSpecLimitMs * 1000), a, b});
+        if (!acc_gap) l.acc_us = acc - req;
+        meas(Check::AcceptTime, {std::int32_t(l.acc_us), acc_gap, 0, std::int32_t(pd::spec::kAcceptSpecLimitMs * 1000), a, b});
     }
     if (have_acc && have_rdy) {
         l.rdy = true;
-        l.rdy_us = rdy - acc;
-        meas(rdy_c, {std::int32_t(l.rdy_us), 0, 0, rdy_lim_us, a, b});
-    } else if (have_acc) {
+        if (!rdy_gap) l.rdy_us = rdy - acc;
+        meas(rdy_c, {std::int32_t(l.rdy_us), rdy_gap, 0, rdy_lim_us, a, b});
+    } else if (have_acc && !acc_gap) {   // (the ms fallback cannot tell "never" from an inferred PS_RDY: no value, not a failure)
         meas(rdy_c, {kNever, 0, 0, rdy_lim_us, a, b});   // the contract was taken without a PS_RDY
     }
     return l;

@@ -458,7 +458,7 @@ Seen in: `b_ct_algorithms.png` (radio, count tail, note, chevron), `b_ct_cable.p
 | Purpose | The verdict of the one item a detail page shows |
 | Geometry | full width, y22..57 (36 px). 20 x 20 verdict glyph at x6, y30. Word in font 24 at x32, y28. Item name in font 16 right-aligned to x218, y32 |
 | Fill | the verdict's fill; `kSurface` for a verdict with no fill |
-| Words | `PASS`, `FAIL`, `CAPPED`, `SKIP`, `RUNNING`, `PENDING`; a Light run's listing reads `LISTED` (a level the source offers) or `NOT RUN` (a legacy level above 5 V), both on the Noted look (`result_layout::verdict_word`) |
+| Words | `PASS`, `FAIL`, `CAPPED`, `SKIP`, `RUNNING`, `PENDING`; a Light run's listing reads `LISTED` (a level the source offers; the PD family's on the green Pass look, a UFCS or SCP level on the Noted look) or `NOT RUN` (a legacy level above 5 V, Noted) (`result_layout::verdict_word`) |
 | Seen in | `b_ct_detail.png` (FAIL), `ufcs_cuktech_detail.png` (PASS) |
 
 It is drawn by the page today (`paint_detail`). It belongs in the kit beside AlertBand: same box, same word place.
@@ -476,11 +476,17 @@ It is drawn by the page today (`paint_detail`). It belongs in the kit beside Ale
 | Skip | none | `kDim` | 2 px dash | 1 px strike through the label |
 | Noted | none | `kText` | upright 2 px `kDim` bar | 2 px `kDim` bar down the cell's left edge (`kNotedBarW`); never struck |
 
-- **Noted** is what a Light run records without measuring it: a level the source advertises (a Skip with reason
-  `Advertised`) or a legacy level not asked (`LightLevel`). It reads "Advertised" for a range or a listed level and
-  "Detected" for a protocol that answered at 5 V; it is never green and never red (`result_layout::Tone::Noted`,
-  `report_card::tone`). A Light card's passing groups read Noted too. The results page (`docs/site/r/card.js`) uses
-  the same tone: no fill, a grey left bar, the glyph `i`.
+- **A Light run records without measuring.** What the PD family advertises (a Skip with reason `Advertised` in the PD group:
+  a fixed PDO, a PPS or AVS APDO, an EPR level) is drawn with the **Pass look** (`kOkT` fill, `kOk` ink): "we have it", nothing was
+  requested (`result_layout::advertised`, `vmap` in `ui_charger_test.cpp`). Counts stay honest ("1 pass, 3 listed"; the
+  roll-up counts them as pass for tone only, `Tally::adv`), the footer word is "advertised", the Step detail band says `LISTED`.
+  The card agrees: the PD group and a range with nothing measured read green and say "Advertised" (the sheet's Verdict word,
+  the JSON/summary "✓ advertised", the page's `advertised` word); the card's head is green when PD is listed and nothing failed.
+- **Noted** is what a Light run records about everything that is not the PD family: a legacy group that answered at 5 V
+  ("Detected"), a UFCS mode or SCP level listed from adapter data (Advertised, still Noted), a legacy level not asked
+  (`LightLevel`). It is never green and never red (`result_layout::Tone::Noted`, `report_card::tone`); the head reads Noted
+  when only legacy groups answered. The results page (`docs/site/r/card.js`) uses the same tone: no fill, a grey left bar,
+  the glyph `i`.
   A `PortCuts` skip ("port cuts without load": a USB-A port that cut its own 5 V twice in one row) is a plain Skip,
   not Noted: the row was not measured and nothing was advertised.
 
@@ -515,7 +521,7 @@ It is drawn by the page today (`paint_detail`). It belongs in the kit beside Ale
 
 | | |
 |---|---|
-| Purpose | Steps done of total |
+| Purpose | Steps done of total. The Running view counts rows the run executes (`result_layout::run_progress`: Pass and Fail over every row that is not a Skip), so plan-time skips are not work and a fresh run reads empty |
 | Geometry | 3 px tall. Running: x6, y44, 212 px |
 | Colours | `kRule` track, `kFocus` fill |
 | Repaints | only the span that changed, between steps |

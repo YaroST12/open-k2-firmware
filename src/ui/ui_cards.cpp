@@ -129,10 +129,11 @@ void card_name(const Surface &c, int16_t x, int16_t y, int max_px, std::string_v
 }
 // The Verdict word of a sheet: the tone of the card's rows. Grey is "Skipped" for a unit that was skipped, "No reply" for a
 // protocol that never answered, "Not run" for a range with no step measured; a Light card's Noted rows are "Detected" (a group
-// that answered at 5 V) and "Advertised" (a range it only listed).
-const char *verdict_word(tone::Tone t, bool skipped, bool range) {
+// that answered at 5 V) and "Advertised" (a range it only listed). `listed`: a green row of a Light card that only lists what the
+// PD source advertises (its PD group, a range with nothing measured): "Advertised", not "Pass".
+const char *verdict_word(tone::Tone t, bool skipped, bool range, bool listed = false) {
     switch (t) {
-    case tone::Tone::Pass: return "Pass";
+    case tone::Tone::Pass: return listed ? "Advertised" : "Pass";
     case tone::Tone::Partial: return "Partial";
     case tone::Tone::Fail: return "Fail";
     case tone::Tone::Noted: return range ? "Advertised" : "Detected";   // a Light card: listed or answered at 5 V, not measured
@@ -386,7 +387,7 @@ void cards_sheet(const rc::Card &c, bool range, unsigned idx, CardSheet &out) {
     if (range) {
         const rc::Range &r = c.range[idx];
         const tone::Tone rt = tone::range(c, r);
-        sheet_verdict(out, rt, tone::caution(c, r) ? "Caution" : verdict_word(rt, false, true));
+        sheet_verdict(out, rt, tone::caution(c, r) ? "Caution" : verdict_word(rt, false, true, c.level == charger_test::Level::Light && !r.max_dv && !r.fail_dv));
         StrBuf<32> rg;
         cards_range_text(r, rg);
         sheet_add_num(out, "Offered", kVolt, rg.view());
@@ -410,7 +411,7 @@ void cards_sheet(const rc::Card &c, bool range, unsigned idx, CardSheet &out) {
     }
     const rc::GroupResult &r = c.group[idx];
     const tone::Tone gt = tone::group(c, idx);
-    sheet_verdict(out, gt, verdict_word(gt, r.verdict == rc::GV::Skip, false));
+    sheet_verdict(out, gt, verdict_word(gt, r.verdict == rc::GV::Skip, false, c.level == charger_test::Level::Light && idx == 0));
     StrBuf<16> v;
     if (rc::group_handshake_ok(r)) sheet_add(out, "Max reached", kVolt, "handshake ok");
     else if (rc::group_detected(r)) sheet_add(out, "Max reached", kVolt, "detected");
@@ -469,7 +470,7 @@ void CardsPage::share_cur() {
     StrBuf<24> title;
     cards_title_text(cur_, title);
     const std::size_t len = qrshare::records::card(cur_, ctx_.ui->share_buffer());
-    ctx_.ui->open_share(qrshare::Type::Card, qrshare::kSchemaCard, title.view(), len, ctx_.now);
+    ctx_.ui->open_share(qrshare::Type::Card, qrshare::kSchemaCard, title.view(), len, ctx_.now, rc::hw::ext(cur_.card_no));
 }
 
 void CardsPage::enter() {
