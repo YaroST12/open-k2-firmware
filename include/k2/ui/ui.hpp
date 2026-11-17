@@ -293,6 +293,8 @@ public:
         return true;
     }
     uint8_t charger_test_svooc_cap() const { return static_cast<uint8_t>(charger_test_.svooc_cap()); }
+    uint16_t charger_test_spec_rows_len() const { return charger_test_.spec_rows_len(); }
+    size_t charger_test_spec_rows_read(uint16_t off, std::span<uint8_t> out) const { return charger_test_.spec_rows_read(off, out); }
     uint8_t charger_test_cursor() const { return static_cast<uint8_t>(charger_test_.cursor()); }
     uint8_t charger_test_stage() const { return static_cast<uint8_t>(charger_test_.stage()); }
     bool charger_test_set_units(std::span<const uint8_t> units) { return charger_test_.set_units(units); }

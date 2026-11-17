@@ -1018,7 +1018,14 @@ static void publish(std::span<const charger_test::Step> steps) {
     }
     g_stub.journal_noted.clear();
 }
-void pump(std::uint32_t, const charger_test::Options&, const charger_test::Evidence&, std::span<const charger_test::Step> steps) {
+void pump(std::uint32_t, const charger_test::Options&, const charger_test::Evidence&, std::span<const charger_test::Step> steps,
+          const SpecRowsSource* rows) {
+    if (rows && g_stub.journal_rows_noted) {   // the real pump writes the file once after note_spec(), from the source
+        g_stub.journal_rows_noted = false;
+        g_stub.journal_rows.assign(rows->size, 0);
+        for (std::size_t off = 0; rows->fill && off < rows->size; off += 64)
+            rows->fill(rows->ctx, off, {g_stub.journal_rows.data() + off, std::min<std::size_t>(64, rows->size - off)});
+    }
     if (!pending()) return;
     note_write(); g_stub.journal_pumps++;
     if (g_stub.journal_job) {
@@ -1050,7 +1057,13 @@ void meta(const RunMeta& m) {
     g_stub.journal_arm_open = false;
 }
 void attempt(std::size_t, std::uint8_t) { g_stub.journal_attempts++; }
-void note_spec() { g_stub.journal_spec_notes++; }
+void note_spec() { g_stub.journal_spec_notes++; g_stub.journal_rows_noted = true; }
+std::size_t spec_rows_size() { return g_stub.journal_rows.size(); }
+bool spec_rows_read(std::uint32_t off, std::span<std::uint8_t> out) {
+    if (std::size_t(off) + out.size() > g_stub.journal_rows.size()) return false;
+    std::memcpy(out.data(), g_stub.journal_rows.data() + off, out.size());
+    return true;
+}
 void finish(std::uint8_t, std::uint8_t) { g_stub.journal_finishes++; g_stub.journal_log += 'N'; g_stub.journal_arm_open = false; }
 }  // namespace k2::charger_journal::hw
 

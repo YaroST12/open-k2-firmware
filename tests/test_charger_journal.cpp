@@ -571,6 +571,91 @@ static void test_a_format_3_journal_resumes_with_no_detail() {
     v.j->replay(r);
     CHECK_EQ(r.found, false); CHECK_EQ(int(r.problem), int(cj::Problem::OldFormat));
 }
+// A format 4 journal (the spec detail, no rows file) replays as it is; the header this firmware writes says 5.
+static void test_a_format_4_journal_still_loads_and_has_no_rows() {
+    Vol v; cj::Replay r;
+    arm(v, plan(4));
+    CHECK_EQ(int(v.j->spec(spec_result())), 0);
+    CHECK_EQ(int(v.j->spec_detail(spec_result())), 0);
+    std::array<uint8_t, cj::kMaxRecord> b{};
+    std::size_t n = 0;
+    CHECK_EQ(int(v.fs->read_file(cj::kHeaderPath, b, n)), 0);
+    CHECK_EQ(b[4 + 8], 5);
+    b[4 + 8] = 4;
+    const std::uint16_t crc = bbstore::crc16(0xFFFF, {b.data(), n - 2});
+    b[n - 2] = uint8_t(crc); b[n - 1] = uint8_t(crc >> 8);
+    v.fs->write_file(cj::kHeaderPath, {b.data(), n});
+    v.reboot(); v.j->replay(r);
+    CHECK_EQ(r.found, true); CHECK_EQ(int(r.problem), int(cj::Problem::None));
+    CHECK_EQ(r.evidence.spec.same(spec_result()), true);
+    CHECK_EQ(v.j->spec_rows_size(), size_t(0));
+}
+// The rows file: a source's bytes land in /jr/spt.rec through write_chunks and read back in pieces; size 0 removes it; a source past
+// kSpecRowsMax is refused (TooBig) and leaves the file as it was.
+struct RowsSrc { std::vector<uint8_t> data; };
+static void rows_fill(void* ctx, std::size_t off, std::span<uint8_t> out) {
+    const auto& d = static_cast<RowsSrc*>(ctx)->data;
+    for (std::size_t i = 0; i < out.size(); ++i) out[i] = d[off + i];
+}
+static void test_the_spec_rows_file_is_written_read_dropped_and_bounded() {
+    Vol v;
+    arm(v, plan(4));
+    RowsSrc s; for (std::size_t i = 0; i < 1000; ++i) s.data.push_back(uint8_t(i * 7 + 3));
+    CHECK_EQ(v.j->spec_rows_size(), size_t(0));
+    const cj::SpecRowsSource src{s.data.size(), &rows_fill, &s};
+    CHECK_EQ(int(v.j->spec_rows(&src)), 0);
+    CHECK_EQ(v.j->spec_rows_size(), size_t(1000));
+    std::array<uint8_t, 48> piece{};
+    for (std::size_t off = 0; off < 1000; off += 48) {
+        std::size_t n = 0;
+        CHECK_EQ(int(v.j->spec_rows_read(uint32_t(off), piece, n)), 0);
+        CHECK_EQ(n, std::min<std::size_t>(48, 1000 - off));
+        for (std::size_t i = 0; i < n; ++i) CHECK_EQ(piece[i], s.data[off + i]);
+    }
+    v.reboot();                                                   // it is on flash, not in a cache
+    CHECK_EQ(v.j->spec_rows_size(), size_t(1000));
+    // Past the cap: refused, the earlier file stays.
+    RowsSrc big; big.data.assign(cj::kSpecRowsMax + 1, 0xAA);
+    const cj::SpecRowsSource bs{big.data.size(), &rows_fill, &big};
+    CHECK_EQ(int(v.j->spec_rows(&bs)), int(cj::Err::TooBig));
+    CHECK_EQ(v.j->spec_rows_size(), size_t(1000));
+    // The cap itself is accepted.
+    big.data.assign(cj::kSpecRowsMax, 0x55);
+    const cj::SpecRowsSource at{big.data.size(), &rows_fill, &big};
+    CHECK_EQ(int(v.j->spec_rows(&at)), 0);
+    CHECK_EQ(v.j->spec_rows_size(), cj::kSpecRowsMax);
+    // Size 0 (no transitions) or no source removes it.
+    const cj::SpecRowsSource none{0, &rows_fill, &s};
+    CHECK_EQ(int(v.j->spec_rows(&none)), 0);
+    CHECK_EQ(v.j->spec_rows_size(), size_t(0));
+    CHECK_EQ(int(v.j->spec_rows(&src)), 0);
+    CHECK_EQ(int(v.j->spec_rows(nullptr)), 0);
+    CHECK_EQ(v.j->spec_rows_size(), size_t(0));
+}
+// The pump writes the rows file behind the spec records from the source it is given, once, and a noted spec result is pending until it has.
+static void test_a_pump_writes_the_rows_behind_the_spec_records() {
+    Vol v; auto p4 = plan(4);
+    arm(v, p4);
+    ct::Evidence ev = evidence();
+    ev.spec = spec_result();
+    RowsSrc s; for (std::size_t i = 0; i < 90 + 20; ++i) s.data.push_back(uint8_t(i));
+    const cj::SpecRowsSource src{s.data.size(), &rows_fill, &s};
+    v.j->note_spec();
+    int pumps = 0;
+    while (v.j->pending() && pumps < 8) { CHECK_EQ(int(v.j->pump(kRun, kOpt, ev, p4, &src)), 0); ++pumps; }
+    CHECK_EQ(v.j->pending(), false);
+    CHECK_EQ(v.j->spec_rows_size(), s.data.size());
+    CHECK_EQ(pumps <= 4, true);                                   // sp.rec, spd.rec, spt.rec: one file per pump
+    // A power cut at any operation of the rows write leaves either no file or a whole one, never half of one.
+    for (std::size_t cut = 1; cut < 40; ++cut) {
+        Vol w; arm(w, p4); w.j->note_spec();
+        w.disk.cut_after(int(cut));
+        for (int i = 0; i < 8 && w.j->pending(); ++i) w.j->pump(kRun, kOpt, ev, p4, &src);
+        w.reboot();
+        const std::size_t sz = w.j->spec_rows_size();
+        CHECK_EQ(sz == 0 || sz == s.data.size(), true);
+    }
+}
 static void test_a_damaged_or_orphaned_detail_record_is_ignored() {
     for (size_t cut = 0; cut < 150; cut += 13) {
         Vol v; cj::Replay r;
@@ -1135,5 +1220,7 @@ int main() {
     test_the_spec_result_rides_in_its_own_record(); test_a_damaged_spec_record_reads_as_not_run(); test_the_spec_record_is_even_and_fits();
     test_a_journal_without_the_detail_record_still_loads(); test_a_damaged_or_orphaned_detail_record_is_ignored();
     test_a_noted_spec_result_is_written_by_a_pump(); test_a_format_3_journal_resumes_with_no_detail();
+    test_a_format_4_journal_still_loads_and_has_no_rows(); test_the_spec_rows_file_is_written_read_dropped_and_bounded();
+    test_a_pump_writes_the_rows_behind_the_spec_records();
     return test_report("test_charger_journal");
 }
