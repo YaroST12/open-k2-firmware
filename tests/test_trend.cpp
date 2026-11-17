@@ -218,7 +218,29 @@ static void test_energy_survives_a_long_session() {
     CHECK_EQ(std::abs(static_cast<int>(e[109]) - (m - 1) * 5455 * 10 / 60 / 100) <= 2, true);
 }
 
+static void test_compact_trend() {
+    CompactTrend t;
+    uint16_t c[CompactTrend::kPoints];
+    CHECK_EQ(t.columns(Window::S10, Qty::V, c, CompactTrend::kPoints), 0);
+    for (uint16_t v : c) CHECK_EQ(v, kNone);
+    CHECK_EQ(t.latest(Window::S10, Qty::V), kNone);
+    t.push(0, 2001, 321, 6423, 100, 500);
+    t.push(100, 4800, 500, 24000, 240, 507);
+    CHECK_EQ(std::abs(static_cast<int>(t.latest(Window::S10, Qty::V)) - 4800) <= 2, true);
+    CHECK_EQ(std::abs(static_cast<int>(t.latest(Window::S10, Qty::A)) - 500) <= 1, true);
+    CHECK_EQ(std::abs(static_cast<int>(t.latest(Window::S10, Qty::W)) - 24000) <= 10, true);
+    CHECK_EQ(t.columns(Window::S10, Qty::V, c, CompactTrend::kPoints), 2);
+    CHECK_EQ(c[107], kNone);
+    CHECK_EQ(std::abs(static_cast<int>(c[108]) - 2001) <= 2, true);
+    CHECK_EQ(std::abs(static_cast<int>(c[109]) - 4800) <= 2, true);
+    uint8_t lim[CompactTrend::kPoints];
+    CHECK_EQ(t.limits(Window::S10, lim, CompactTrend::kPoints), 2);
+    CHECK_EQ(lim[108], 100);
+    CHECK_EQ(lim[109], 240);
+}
+
 int main() {
+    test_compact_trend();
     test_latest_per_window();
     test_window_cycle();
     test_empty_is_all_none();

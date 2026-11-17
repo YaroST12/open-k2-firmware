@@ -75,9 +75,7 @@ struct UiContext {
     power::Metrics pm_avg{};         // the 128-sample average: the charger test's current, link detection, cable resistance
     std::int32_t vbus_fast_mv = 0;   // VBUS without the 2.5 s average: every judgement of a VBUS transition reads this, pm is display
     EnergyMeter meter;
-    WattHistory watts;           // Big sparklines, one sample per second: forward power (mW)
-    trend::Trend trend;          // Home v3 strips: V / A / W at 100 ms, 1 s and 10 s resolution
-    WattHistory volts, amps;     // ... VBUS (mV) and |current| (mA)
+    trend::CompactTrend trend;   // Home v3 strips & Graphs: V / A / W at 100 ms, 1 s and 10 s resolution
     uint32_t em_listen_until = 0;   // passive listen window after a sniff that heard nothing (0 = none)
     std::optional<adc::Reading> analog;                          // averaged ADC sweep, once available
     vooc::Live vooc{};           // inline VOOC monitor: a proven session now + the last raw 0x82 reply (fastcharge::vooc_live)

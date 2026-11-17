@@ -545,15 +545,18 @@ void EmarkerPage::load_cur() {
 }
 
 // The shown saved cable (with its quirk table) as a share record, then the share view. The record goes straight into the
-// view's buffer. The quirk table (about 420 bytes) is a static, not a local: the call-depth gate counts this frame on the
-// deepest main-loop path (tools/stack_depth.py), and the entry is the page's own cur_.
+// view's buffer. The quirk table (420 bytes) is leased from scratch::arena() and released before open_share() paints.
 void EmarkerPage::share_cur() {
     if (menu_.idx < 0 || menu_.idx >= n_seqs_) return;
-    static emk_quirk::Quirks quirks;
-    if (!storage::lib_get(seqs_[menu_.idx], cur_, quirks)) return;
-    cur_seq_ = seqs_[menu_.idx];
-    have_cur_ = true;
-    const std::size_t len = qrshare::records::emarker(cur_.rec, cur_.name.data(), quirks, ctx_.ui->share_buffer());
+    std::size_t len = 0;
+    {
+        const scratch::Lease lease("emk.share");
+        auto &quirks = scratch::make<emk_quirk::Quirks>();
+        if (!storage::lib_get(seqs_[menu_.idx], cur_, quirks)) return;
+        cur_seq_ = seqs_[menu_.idx];
+        have_cur_ = true;
+        len = qrshare::records::emarker(cur_.rec, cur_.name.data(), quirks, ctx_.ui->share_buffer());
+    }
     ctx_.ui->open_share(qrshare::Type::Emarker, qrshare::kSchemaEmarker, cur_.name.data(), len, ctx_.now);
 }
 

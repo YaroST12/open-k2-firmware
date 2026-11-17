@@ -16,6 +16,7 @@
 #pragma once
 #include <cstdint>
 #include <memory>
+#include <type_traits>
 
 namespace k2::trend {
 
@@ -69,12 +70,13 @@ constexpr int level(uint16_t v, const Range &r, int h) {
     return d * (h - 1) / (r.hi - r.lo);
 }
 
-class Trend {
+template <bool Compact = false>
+class TrendBase {
 public:
     static constexpr int kPoints = 110;          // columns per tier
     static constexpr int kEnergyEvery = 10;      // a Wh point every 10th column of a tier
     static constexpr int kFast = kPoints, kMid = kPoints, kSlow = kPoints;
-    void clear() { std::construct_at(this); }   // in place: `*this = Trend{}` builds a ~3 KB temporary on the stack
+    void clear() { std::construct_at(this); }   // in place: `*this = TrendBase{}` builds a ~3 KB temporary on the stack
     // Time-ordered; v10 / a10 / w10 in 10 mV / 10 mA / 10 mW, limit_w the contract's maximum in whole watts (0 = none),
     // mwh the session's energy so far (EnergyMeter::mwh()).
     void push(uint32_t now_ms, uint32_t v10, uint32_t a10, uint32_t w10, uint32_t limit_w = 0, uint32_t mwh = 0) {
@@ -112,7 +114,7 @@ public:
         for (int c = 0; c < cols; c++) {
             const int back = (cols - 1 - c) * kPoints / cols;   // 0 = newest sample
             if (back >= t.n) { out[c] = kNone; continue; }
-            out[c] = t.s[at(t.head, back)][static_cast<int>(q)];
+            out[c] = get_sample(t, at(t.head, back), q);
             have++;
         }
         return have;
@@ -152,16 +154,20 @@ public:
     // Newest sample of the window's ring; the faster rings stand in while it is still empty (the
     // 10 min tier gets its first sample after 5.5 s). kNone when nothing was pushed at all.
     uint16_t latest(Window w, Qty q) const {
-        const int i = static_cast<int>(q);
         const Tier &f = t_[0], &m = t_[1], &s = t_[2];
-        if (w == Window::M10 && s.n > 0) return s.s[at(s.head, 0)][i];
-        if (w != Window::S10 && m.n > 0) return m.s[at(m.head, 0)][i];
-        return f.n > 0 ? f.s[at(f.head, 0)][i] : kNone;
+        if (w == Window::M10 && s.n > 0) return get_sample(s, at(s.head, 0), q);
+        if (w != Window::S10 && m.n > 0) return get_sample(m, at(m.head, 0), q);
+        return f.n > 0 ? get_sample(f, at(f.head, 0), q) : kNone;
     }
 
 private:
+    // Compact mode packs (V @ 30 mV [0..61.41 V], A @ 20 mA [0..20.46 A], W @ 200 mW [0..409.4 W]) into uint32_t.
+    struct ExactSamples { uint16_t v[kPoints][3] = {}; };
+    struct CompactSamples { uint32_t v[kPoints] = {}; };
+    using SampleBuf = std::conditional_t<Compact, CompactSamples, ExactSamples>;
+
     struct Tier {
-        uint16_t s[kPoints][3] = {};   // V, A, W per column
+        SampleBuf s{};                 // V, A, W per column
         uint8_t lim[kPoints] = {};     // contract maximum, W
         uint16_t e[kPoints] = {};      // energy points (wrapping, energy_unit_mwh)
         uint8_t n = 0, head = 0;       // columns held, next column slot
@@ -171,8 +177,25 @@ private:
     };
     static constexpr uint16_t clamp(uint32_t v) { return v > 0xFFFE ? 0xFFFE : static_cast<uint16_t>(v); }
     static constexpr int at(int head, int back) { return (head - 1 - back + 2 * kPoints) % kPoints; }
+    static constexpr uint16_t get_sample(const Tier &t, int idx, Qty q) {
+        if constexpr (Compact) {
+            const uint32_t p = t.s.v[idx];
+            if (q == Qty::V) return static_cast<uint16_t>((p & 0x7FFu) * 3u);
+            if (q == Qty::A) return static_cast<uint16_t>(((p >> 11) & 0x3FFu) * 2u);
+            return static_cast<uint16_t>(((p >> 21) & 0x7FFu) * 20u);
+        } else {
+            return t.s.v[idx][static_cast<int>(q)];
+        }
+    }
     static void put(Tier &t, const uint16_t *s, uint8_t lim, uint32_t energy) {
-        for (int q = 0; q < 3; q++) t.s[t.head][q] = s[q];
+        if constexpr (Compact) {
+            const uint32_t qv = (s[0] + 1u) / 3u > 2047u ? 2047u : (s[0] + 1u) / 3u;
+            const uint32_t qa = (s[1] + 1u) / 2u > 1023u ? 1023u : (s[1] + 1u) / 2u;
+            const uint32_t qw = (s[2] + 10u) / 20u > 2047u ? 2047u : (s[2] + 10u) / 20u;
+            t.s.v[t.head] = qv | (qa << 11) | (qw << 21);
+        } else {
+            for (int q = 0; q < 3; q++) t.s.v[t.head][q] = s[q];
+        }
         t.lim[t.head] = lim;
         t.head = static_cast<uint8_t>((t.head + 1) % kPoints);
         if (t.n < kPoints) t.n++;
@@ -187,5 +210,8 @@ private:
     uint32_t acc_[3] = {}, acc_n_ = 0;
     bool started_ = false;
 };
+
+using Trend = TrendBase<false>;
+using CompactTrend = TrendBase<true>;
 
 }  // namespace k2::trend

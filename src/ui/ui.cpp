@@ -1049,9 +1049,6 @@ bool Ui::run_action(Action a, uint32_t now_ms, bool confirm) {
         }
     case Action::EnergyReset:
         ctx_.meter.reset(now_ms);
-        ctx_.watts.clear();
-        ctx_.volts.clear();
-        ctx_.amps.clear();
         ctx_.trend.clear();
         ctx_.extremes.reset();     // and Home's PEAK / SAG and the card cycle
         ctx_.keep.cards.reset();
@@ -1404,10 +1401,6 @@ K2_HOT UiAction Ui::tick(uint32_t now_ms) {
         const power::Metrics raw = power::read_raw().value_or(ctx_.pm);
         ctx_.meter.update(now_ms, raw.power_mw, raw.current_ma);
         if (ctx_.pm.vbus_mv >= 1000) {
-            ctx_.watts.push(now_ms, ctx_.pm.power_mw);
-            ctx_.volts.push(now_ms, ctx_.pm.vbus_mv);
-            // |current| without negating INT32_MIN (UB); the trace saturates at INT32_MAX.
-            ctx_.amps.push(now_ms, static_cast<int32_t>(std::min<uint32_t>(power::magnitude(ctx_.pm.current_ma), INT32_MAX)));
             ctx_.trend.push(now_ms, static_cast<uint32_t>(ctx_.pm.vbus_mv) / 10, power::magnitude(ctx_.pm.current_ma) / 10,
                             power::magnitude(ctx_.pm.power_mw) / 10, ctx_.limit_w, ctx_.meter.mwh());
             // Home's PEAK and SAG cards: every raw sample counts (a short spike the display filter rounds away is a peak).
