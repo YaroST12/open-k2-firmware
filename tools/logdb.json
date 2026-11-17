@@ -716,6 +716,7 @@
   "719": "[MI] 0205 %s adapter=0x%04X rx=%08X %08X %08X %08X\n",
   "720": "[MI] 0x2717010A Not_Supported (0208 was verified)\n",
   "721": "[EMK] Mi cable-auth 0105 key=%u trail=%08X half=%u -> %08X %08X %08X %08X %s\n",
-  "722": "[EMK] Mi cable-auth req=%08X key=%u trail=%08X half=%u reply=%u -> %08X %08X %08X %08X %s\n"
+  "722": "[EMK] Mi cable-auth req=%08X key=%u trail=%08X half=%u reply=%u -> %08X %08X %08X %08X %s\n",
+  "723": "[EMK] Mi cable-auth req=%08X key=%u trail=%08X half=%u reply=%u payload=%u %s\n"
  }
 }

@@ -82,15 +82,12 @@ void on_sop_prime(std::uint8_t sop, std::uint16_t header, std::span<const std::u
         const std::uint32_t req_vdm = word(payload, 0);
         Frame f = mi_auth_frame(req_vdm, payload, g_msg_id);
         const bool ok = fusb302::send_sop_prime_frame(f.tokens());
-        const auto fw = [&f](unsigned i) {
-            return std::uint32_t(f.t[7 + 4 * i]) | (std::uint32_t(f.t[8 + 4 * i]) << 8) |
-                   (std::uint32_t(f.t[9 + 4 * i]) << 16) | (std::uint32_t(f.t[10 + 4 * i]) << 24);
-        };
-        K2LOG("[EMK] Mi cable-auth req=%08X key=%u trail=%08X half=%u reply=%u -> %08X %08X %08X %08X %s\n",
+        // The reply words are never logged: in payload mode 1 they are the session seed. The TX frame stays visible
+        // in the PD trace (wire data).
+        K2LOG("[EMK] Mi cable-auth req=%08X key=%u trail=%08X half=%u reply=%u payload=%u %s\n",
               static_cast<unsigned>(req_vdm), static_cast<unsigned>(g_mi_auth.key),
               static_cast<unsigned>(g_mi_auth.trailing), static_cast<unsigned>(g_mi_auth.half), static_cast<unsigned>(g_mi_auth.reply),
-              static_cast<unsigned>(fw(1)), static_cast<unsigned>(fw(2)), static_cast<unsigned>(fw(3)), static_cast<unsigned>(fw(4)),
-              ok ? "sent" : "FAILED");
+              static_cast<unsigned>(g_mi_auth.payload), ok ? "sent" : "FAILED");
         if (!ok) return;
         g_msg_id = (g_msg_id + 1) & 7;
         g_replies++;
