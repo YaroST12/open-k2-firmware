@@ -324,6 +324,12 @@ private:
     bool uart_up_ K2_BSS_INIT(false);
     bool uecho_ K2_BSS_INIT(false), uheard_ K2_BSS_INIT(false);        // UFCS: our own last frame came back verbatim / a frame addressed to the sink arrived
     std::uint32_t ulast_rx_ K2_BSS_INIT(0);
+    void rx_shift(std::size_t n);
+    void hsb_poll(std::uint32_t now);
+    void afc_poll(std::uint32_t now);
+    void vooc_poll(std::uint32_t now);
+    void qc3_send_pulses(qc::Mode m, int total, int cap, int vbus);
+    bool qc3_poll(std::uint32_t now, int vbus, bool& rests_at_5v);
     void vooc_wake();
     std::array<std::uint8_t, 4> keep_raw_ K2_BSS_ZERO;
     int target_mv_ K2_BSS_INIT(0), applied_mv_ = 5000, prev_mv_ = 5000, entry_mv_ K2_BSS_INIT(0), reached_mv_ K2_BSS_INIT(0), dm0_mv_ K2_BSS_INIT(0), qc3_pending_mv_ K2_BSS_INIT(0), qc3_seen_mv_ K2_BSS_INIT(0), qc3_step_mv_ K2_BSS_INIT(0), qc3_base_mv_ K2_BSS_INIT(0), qc3_cmd_n_ K2_BSS_INIT(0);
