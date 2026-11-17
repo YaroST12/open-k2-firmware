@@ -2945,6 +2945,19 @@ void ChargerTestPage::draw_capture(const transcap::Meta &m) {
     if (m.thumb.accept_col != 0xFF) gfx_text(ctx_.content, kLabelFont, 160, kTop + kHeight + 1, "|Accept", kCaution, kBg);
 }
 
+// The verdict band of a detail page (y22..57): the verdict's fill and glyph, the word (font 24; font 12 when `tight`) and `right` (font 12,
+// right-aligned to x218).
+static void draw_band(const Surface &c, kit::Verdict v, std::string_view word, bool tight, std::string_view right) {
+    const auto vs = kit::verdict_style(v);
+    const uint16_t fill = vs.filled ? vs.fill : kSurface;
+    gfx_fill(c, 0, 22, c.w, 36, fill);
+    kit::draw_verdict(c, 6, 30, 20, 20, v, {}, fill);
+    if (tight) gfx_text(c, kSmall, 32, 32, word, vs.ink, fill);
+    else gfx_text(c, kMid, 32, 28, word, vs.ink, fill);
+    const uint16_t ink = vs.ink == kDim || vs.ink == kFaint ? kText : vs.ink;
+    gfx_text(c, kSmall, static_cast<int16_t>(218 - static_cast<int>(right.size()) * kSmallAdvPx), 32, right, ink, fill);
+}
+
 // One step's detail: a verdict band, then a fixed table (no scroll). A step with a stored capture gives its last two rows to the
 // VBUS trace; a refused 6 A hunt row shows its evidence where the header rows would be.
 void ChargerTestPage::paint_detail() {
@@ -2964,21 +2977,13 @@ void ChargerTestPage::paint_detail() {
         if (pbg && !pbg->admit(static_cast<int>(c.w) * 36, true)) return;
         const auto view = s_.runner_.sweep_view();
         const kit::Verdict v = vmap(s, view);
-        const auto vs = kit::verdict_style(v);
-        const uint16_t fill = vs.filled ? vs.fill : kSurface;
-        gfx_fill(c, 0, 22, c.w, 36, fill);
-        kit::draw_verdict(c, 6, 30, 20, 20, v, {}, fill);
         val.put(step_label::label(s, s_.detail_index_ > 0 ? &steps[static_cast<size_t>(s_.detail_index_) - 1] : nullptr).view());
         // The band word (LISTED / NOT RUN for a Light run's listing) and the step's name share the band: a long word (CAUTION) beside
         // a long name (PPS 7.14->11V) would overlap, so the word drops to the small font then and the name keeps its whole text.
         const std::string_view word = result_layout::verdict_word(s, view);
         const bool tight = word.size() > 6 && 32 + text_width(kMid, word) + 8 + static_cast<int>(val.view().size() * kSmallAdvPx) > 218;
-        if (tight) gfx_text(c, kSmall, 32, 32, word, vs.ink, fill);
-        else gfx_text(c, kMid, 32, 28, word, vs.ink, fill);
         char buf[kFitBuf];
-        const std::string_view name = fit_data(kSmall, val.view(), tight ? 218 - 32 - 8 - text_width(kSmall, word) : 96, buf);
-        const uint16_t name_ink = vs.ink == kDim || vs.ink == kFaint ? kText : vs.ink;
-        gfx_text(c, kSmall, static_cast<int16_t>(218 - static_cast<int>(name.size()) * kSmallAdvPx), 32, name, name_ink, fill);
+        draw_band(c, v, word, tight, fit_data(kSmall, val.view(), tight ? 218 - 32 - 8 - text_width(kSmall, word) : 96, buf));
         detail_step_ = 1;
     }
     while (detail_step_ >= 1 && detail_step_ <= 6) {
@@ -3074,16 +3079,10 @@ void ChargerTestPage::paint_spec_detail() {
             const Surface &c = ctx_.content;
             if (ctx_.budget && !ctx_.budget->admit(static_cast<int>(c.w) * 36, true)) return;
             const bool fail = spec_list_.fails != 0;
-            const kit::Verdict v = fail ? kit::Verdict::Fail : kit::Verdict::Pass;
-            const auto vs = kit::verdict_style(v);
-            const uint16_t fill = vs.filled ? vs.fill : kSurface;
-            gfx_fill(c, 0, 22, c.w, 36, fill);
-            kit::draw_verdict(c, 6, 30, 20, 20, v, {}, fill);
-            gfx_text(c, kMid, 32, 28, fail ? "FAIL" : "PASS", vs.ink, fill);
             StrBuf<20> cnt;
             if (fail) cnt.put_u32(spec_list_.fails).put(" of ").put_u32(spec_list_.n).put(" fail");
             else cnt.put_u32(spec_list_.n).put(" within limit");
-            gfx_text(c, kSmall, static_cast<int16_t>(218 - static_cast<int>(cnt.view().size()) * kSmallAdvPx), 32, cnt.view(), vs.ink == kDim ? kText : vs.ink, fill);
+            draw_band(c, fail ? kit::Verdict::Fail : kit::Verdict::Pass, fail ? "FAIL" : "PASS", false, cnt.view());
             detail_step_ = 1;
         }
         paint_list();

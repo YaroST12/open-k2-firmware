@@ -1578,6 +1578,17 @@ static void test_the_spec_detail_lists_the_transitions_of_the_journal() {
     cells[1] = {fixed_trans_row(1, 5000, 9000, 90000, -10000, false), fixed_trans_row(1, 9000, 12000, 540000, 40000, true),
                 fixed_trans_row(1, 12000, 15000, 120000, -9000, false)};   // a fail: one of three
     for (unsigned i = 0; i < 20; ++i) cells[6].push_back(fixed_trans_row(6, 5000 + 500 * i, 5500 + 500 * i, 400 + 3 * i, -90 + int(i), false));   // a long list
+    {   // a programmable check: the margin is a count of failed steps, unsigned ("3 bad"), and keeps one space in the footer
+        const uint8_t chk = static_cast<uint8_t>(specsec::kOrder[19]);
+        specsec::Row ok, bad;
+        ok.check = bad.check = chk;
+        ok.flags = specsec::kRowProg;
+        bad.flags = specsec::kRowProg | specsec::kRowFail;
+        ok.a = bad.a = 5000; ok.b = bad.b = 9000;
+        ok.value = bad.value = 0;
+        ok.margin = 0; bad.margin = 3;
+        cells[19] = {ok, bad};
+    }
     cells[7] = {fixed_trans_row(7, 5000, 9000, 9210, 210, false), fixed_trans_row(7, 9000, 12000, 12040, 40, false)};   // a FAIL verdict with no failing row: the summary
     cells[4] = {fixed_trans_row(4, 5000, 9000, 4000, -100, false)};   // one row: the summary
     g_stub.journal_rows = spec_rows_image(run, cells);
@@ -1606,6 +1617,10 @@ static void test_the_spec_detail_lists_the_transitions_of_the_journal() {
     CHECK_EQ(ui.list_state().count, 3);
     dump_screen("spec_transitions_fail");
     CHECK_EQ(footer_shows("worst 9→12V: 540ms +40ms", kError), true);   // the failing transition, the margin in 27 cells
+    close_check();
+    open_check(19);
+    CHECK_EQ(ui.list_state().count, 2);
+    CHECK_EQ(footer_shows("worst 5-9V 100mV: 0mV 3 bad", kError), true);   // an unsigned margin: one space, no "+"
     close_check();
     open_check(6);
     CHECK_EQ(ui.list_state().count, 20);
