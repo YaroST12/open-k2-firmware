@@ -43,9 +43,13 @@ Frame mi_auth_frame(std::uint32_t req_vdm, std::span<const std::uint8_t> challen
     pd::mi::auth_digest(g_mi_auth.key, ch, g_mi_auth.trailing, digest);
     const unsigned off = g_mi_auth.half ? 16 : 0;
     const std::uint32_t reply_vdm = g_mi_auth.reply ? (req_vdm + 0x100u) : ((req_vdm & 0xFFFFFF00u) | 0x05u);
-    std::array<std::uint32_t, 5> w = {reply_vdm, pd::mi::digest_word(digest + off, 0),
-                                      pd::mi::digest_word(digest + off, 1), pd::mi::digest_word(digest + off, 2),
-                                      pd::mi::digest_word(digest + off, 3)};
+    std::array<std::uint32_t, 5> w = {reply_vdm, 0, 0, 0, 0};
+    if (g_mi_auth.payload == 1) {   // answer with the session seed instead of a digest (the sink-flow 0104 content)
+        const unsigned ki = g_mi_auth.key < pd::mi::kKeyCount ? g_mi_auth.key : 0;
+        for (unsigned i = 0; i < 4; i++) w[1 + i] = pd::mi::kSessionSeed[ki][i];
+    } else {
+        for (unsigned i = 0; i < 4; i++) w[1 + i] = pd::mi::digest_word(digest + off, i);
+    }
     Frame f;
     std::size_t n = 0;
     for (std::uint8_t b : {0x12, 0x12, 0x1B, 0x1B}) f.t[n++] = b;

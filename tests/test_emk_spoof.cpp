@@ -324,6 +324,10 @@ static void test_mi_cable_auth_reply() {
     CHECK_EQ(fw(sent.back(), 0), 0x27170204u);
     pd::mi::auth_digest(7, w + 1, 0, digest);
     for (unsigned i = 0; i < 4; i++) CHECK_EQ(fw(sent.back(), 1 + i), pd::mi::digest_word(digest, i));
+    c.reply = 0; c.payload = 1; emk_spoof::set_mi_auth(c);               // payload 1: answer with the raw seed[key]
+    hook(0x528F, {ch, 20});
+    CHECK_EQ(fw(sent.back(), 0), 0x27170105u);
+    for (unsigned i = 0; i < 4; i++) CHECK_EQ(fw(sent.back(), 1 + i), pd::mi::kSessionSeed[7][i]);
     const std::uint8_t other[4] = {0x05, 0x01, 0xB0, 0x2B};    // SVID 0x2BB0, cmd 5: not intercepted
     const std::size_t n2 = sent.size();
     hook(0x128F, {other, 4});

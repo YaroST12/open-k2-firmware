@@ -1540,17 +1540,18 @@ def charger_level(link, level):
     return TEST_LEVELS[p[0]] if p[0] < len(TEST_LEVELS) else str(p[0])
 
 
-def mi_cable_auth(link, on=None, key=None, trailing=None, half=None, reply=None):
-    """Xiaomi cable-side auth config (SOP' 0x27170104 HMAC answer while a spoof is armed).
-    No arguments: read back. Otherwise set (on, key, trailing, half, reply). Returns (on, key, trailing, half, reply)."""
+def mi_cable_auth(link, on=None, key=None, trailing=None, half=None, reply=None, payload=None):
+    """Xiaomi cable-side auth config (SOP' 0x27170104 answer while a spoof is armed).
+    No arguments: read back. Otherwise set (on, key, trailing, half, reply, payload).
+    Returns (on, key, trailing, half, reply, payload)."""
     if on is None:
         p = link.call(CMD_MI_CABLE_AUTH, bytes([0])).payload
     else:
         p = link.call(CMD_MI_CABLE_AUTH, bytes([1, 1 if on else 0, int(key)]) +
                      bytes([int(trailing) & 0xFF, (int(trailing) >> 8) & 0xFF, (int(trailing) >> 16) & 0xFF,
-                            (int(trailing) >> 24) & 0xFF, int(half), int(reply)])).payload
-    _need(p, 8, "mi-cable-auth")
-    return bool(p[0]), p[1], p[2] | (p[3] << 8) | (p[4] << 16) | (p[5] << 24), p[6], p[7]
+                            (int(trailing) >> 24) & 0xFF, int(half), int(reply), int(payload)])).payload
+    _need(p, 9, "mi-cable-auth")
+    return bool(p[0]), p[1], p[2] | (p[3] << 8) | (p[4] << 16) | (p[5] << 24), p[6], p[7], p[8]
 
 
 def charger_avs_sweep(link, on):
@@ -1639,11 +1640,12 @@ def cmd_charger_level(link, a):
 
 def cmd_mi_cable_auth(link, a):
     if not a.set:
-        on, key, trailing, half, reply = mi_cable_auth(link)
+        on, key, trailing, half, reply, payload = mi_cable_auth(link)
     else:
-        on, key, trailing, half, reply = mi_cable_auth(link, on=a.set[0] == "on", key=a.set[1],
-                                                        trailing=int(a.set[2], 0), half=a.set[3], reply=a.set[4])
-    return {"on": on, "key": key, "trailing": f"0x{trailing:08X}", "half": half, "reply": reply}
+        on, key, trailing, half, reply, payload = mi_cable_auth(link, on=a.set[0] == "on", key=a.set[1],
+                                                                 trailing=int(a.set[2], 0), half=a.set[3], reply=a.set[4],
+                                                                 payload=a.set[5])
+    return {"on": on, "key": key, "trailing": f"0x{trailing:08X}", "half": half, "reply": reply, "payload": payload}
 
 
 def charger_hunt(link, slot):
@@ -5209,11 +5211,11 @@ def build_parser():
                         "medium = the default run, deep = medium + the PPS and AVS deep sweeps")
     cl.add_argument("level", choices=TEST_LEVELS)
     mc = sub.add_parser("mi-cable-auth", help="Xiaomi cable-side auth while a spoof is armed: no argument reads the config; "
-                        "'on|off <key 0..9> <trailing hex> <half 0|1> <reply 0|1>' sets it (answer to an SOP' 0x27170104 challenge: "
-                        "HMAC-SHA256(secret[key], challenge || trailing), digest half 0 = [0..15], 1 = [16..31]; "
-                        "reply 0 = cmd 0x27170105, reply 1 = mirrored cmd 0x27170204)")
+                        "'on|off <key 0..9> <trailing hex> <half 0|1> <reply 0|1> <payload 0|1>' sets it (answer to an SOP' "
+                        "0x27170104 challenge: payload 0 = HMAC-SHA256(secret[key], challenge || trailing), digest half "
+                        "0 = [0..15], 1 = [16..31]; payload 1 = raw seed[key]; reply 0 = cmd 0x27170105, reply 1 = mirrored 0x27170204)")
     mc.add_argument("set", nargs="*", default=None, metavar="ARG",
-                    help="on|off KEY TRAILING HEX HALF REPLY, e.g. 'on 7 0 0 1'; omitted = read back")
+                    help="on|off KEY TRAILING HEX HALF REPLY PAYLOAD, e.g. 'on 7 0 0 1 0'; omitted = read back")
     for name, what, how in (("charger-sweep", "PPS", "off at Light and Medium; Deep turns it on"),
                             ("charger-avs-sweep", "AVS", "off at Light and Medium; Deep turns it on")):
         cs = sub.add_parser(name, help=f"turn the {what} deep sweep of the NEXT charger run on or off "
