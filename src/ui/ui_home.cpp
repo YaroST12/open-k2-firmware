@@ -63,7 +63,7 @@ static_assert(hm::kInfoTagX + hm::kDiagTag.size() * kSmallAdvPx <= static_cast<u
 // Repaint zones of the info cell (logical, inclusive). A zone is wider and lower than its fields on purpose: a glyph
 // keeps its native pixel size while the landscape mapping squeezes the rows, so an old text can reach a few pixels
 // past the logical box of the new one, and the rect repainted for a change has to cover all of it.
-struct Zone { int16_t x0, y0, x1, y1; };
+using Zone = HomePage::ZoneRect;
 constexpr Zone kInfoZones[3] = {
     {0, 196, 186, 226},     // info row 1: tag and value
     {176, 196, 223, 226},   // info row 1: elapsed time
@@ -418,6 +418,123 @@ bool HomePage::paint_cell_sliced(int slot_id, uint32_t base_sig, const home::Cel
     return true;
 }
 
+struct HomePage::QtyCommit {
+    uint32_t base, head, arrow_sig, bar_sig;
+    int16_t top, x1, cell_bottom;
+    int16_t t0, t1;
+    int16_t ax, ay, abox;
+    hm::BarGeom bg;
+    int16_t dtop, drows, px0, px1;
+    bool digits_changed, sweep;
+    hm::DigitField prev_hd;
+};
+
+[[gnu::noinline]] bool HomePage::commit_zoned_cell(int slot_id, uint32_t base, uint32_t zone_seed,
+                                                   const hm::Cell &cell, const int *zone_start,
+                                                   const ZoneRect *zones, int nz,
+                                                   bool &valid, uint32_t *old_sig, uint32_t *slice_zones,
+                                                   int16_t cx0, int16_t cy0, int16_t cx1, int16_t cy1,
+                                                   uint32_t *saved_base) {
+    uint32_t sig[4] = {};
+    for (int z = 0; z < nz; z++)
+        sig[z] = sig_items(zone_seed, cell.items.subspan(static_cast<size_t>(zone_start[z]),
+                                                          static_cast<size_t>(zone_start[z + 1] - zone_start[z])));
+    PaintBudget *const bg_budget = ctx_.budget;
+    if (!valid || (saved_base && *saved_base != base)) {
+        if (slice_y_[slot_id] < 0 || slice_sig_[slot_id] != base) {
+            for (int z = 0; z < nz; z++) slice_zones[z] = sig[z];
+        }
+        if (!paint_cell_sliced(slot_id, base, cell, cx0, cy0, cx1, cy1)) return false;
+        valid = true;
+        if (saved_base) *saved_base = base;
+        bool delta = false;
+        for (int z = 0; z < nz; z++) {
+            old_sig[z] = slice_zones[z];
+            if (old_sig[z] != sig[z]) delta = true;
+        }
+        if (!delta) return true;
+    }
+    for (int z = 0; z < nz; z++) {
+        if (sig[z] == old_sig[z]) continue;
+        const int cost = static_cast<int>(zones[z].x1 - zones[z].x0 + 1) * (zones[z].y1 - zones[z].y0 + 1);
+        if (bg_budget && !bg_budget->admit(cost, true)) return false;
+        old_sig[z] = sig[z];
+        hm::paint(cell, zones[z].x0, zones[z].y0, zones[z].x1, zones[z].y1);
+    }
+    return true;
+}
+
+[[gnu::noinline]] void HomePage::commit_qty_cell(int si, const QtyCommit &qc, const hm::Cell &cell) {
+    PaintBudget *const bg_budget = ctx_.budget;
+    uint32_t *sig = cell_sig_[si];
+    if (!cell_valid_[si] || sig[0] != qc.base) {   // a new state: the whole cell
+        if (slice_y_[si] < 0 || slice_sig_[si] != qc.base) {
+            painted_cursor_[si] = qc.sweep ? static_cast<int8_t>(sw_[si].cursor) : -1;
+            slice_dirty_ &= static_cast<uint8_t>(~(1u << si));
+            slice_parts_[si][0] = qc.head;
+            slice_parts_[si][1] = qc.arrow_sig;
+            slice_parts_[si][2] = qc.bar_sig;
+        } else if (qc.digits_changed) {
+            slice_dirty_ |= static_cast<uint8_t>(1u << si);
+        }
+        if (!paint_cell_sliced(si, qc.base, cell, 0, qc.top, qc.x1, qc.cell_bottom)) return;
+        sig[0] = qc.base;
+        sig[1] = slice_parts_[si][0];
+        sig[2] = slice_parts_[si][1];
+        sig[3] = slice_parts_[si][2];
+        cell_valid_[si] = true;
+        if (slice_dirty_ & (1u << si)) {
+            slice_dirty_ &= static_cast<uint8_t>(~(1u << si));
+            hd_[si].invalidate();
+        }
+        if (!qc.digits_changed && sig[1] == qc.head && sig[2] == qc.arrow_sig && sig[3] == qc.bar_sig &&
+            (!qc.sweep || painted_cursor_[si] == static_cast<int8_t>(sw_[si].cursor)))
+            return;
+    }
+    auto abort_delta = [&]() {
+        if (qc.digits_changed) hd_[si] = qc.prev_hd;
+    };
+    if (sig[1] != qc.head) {
+        const int cost = static_cast<int>(qc.x1 - 3) * 19;
+        if (bg_budget && !bg_budget->admit(cost, true)) { abort_delta(); return; }
+        sig[1] = qc.head;
+        hm::paint(cell, 4, qc.top, qc.x1, static_cast<int16_t>(qc.top + 18));
+    }
+    if (sig[2] != qc.arrow_sig) {
+        const int cost = qc.abox * qc.abox;
+        if (bg_budget && !bg_budget->admit(cost, true)) { abort_delta(); return; }
+        sig[2] = qc.arrow_sig;
+        hm::paint(cell, qc.ax, qc.ay, static_cast<int16_t>(qc.ax + qc.abox - 1), static_cast<int16_t>(qc.ay + qc.abox - 1));
+    }
+    if (sig[3] != qc.bar_sig) {
+        const int cost = static_cast<int>(qc.bg.x1 - qc.bg.x0 + 1) * (hm::kBarH + 4);
+        if (bg_budget && !bg_budget->admit(cost, true)) { abort_delta(); return; }
+        sig[3] = qc.bar_sig;
+        hm::paint(cell, qc.bg.x0, static_cast<int16_t>(qc.bg.y - 2), qc.bg.x1, static_cast<int16_t>(qc.bg.y + hm::kBarH + 1));
+    }
+    if (qc.sweep) {
+        const int cur = static_cast<int>(sw_[si].cursor);
+        if (painted_cursor_[si] < 0) painted_cursor_[si] = static_cast<int8_t>(cur);
+        else if (painted_cursor_[si] != cur) {
+            const int first = painted_cursor_[si];
+            const int steps = (cur - first + sw_[si].n) % sw_[si].n;
+            const hm::Strip st = hm::strip_of(first, steps, sw_[si].n);
+            int cost = 0;
+            for (int i = 0; i < st.n; i++)
+                cost += static_cast<int>(st.r[i].x1 - st.r[i].x0 + 1) * (qc.t1 - qc.t0 + 1);
+            if (bg_budget && !bg_budget->admit(cost, true)) { abort_delta(); return; }
+            for (int i = 0; i < st.n; i++)
+                hm::paint(cell, st.r[i].x0, qc.t0, st.r[i].x1, qc.t1);
+            painted_cursor_[si] = static_cast<int8_t>(cur);
+        }
+    }
+    if (qc.digits_changed) {
+        const int cost = static_cast<int>(qc.px1 - qc.px0 + 1) * qc.drows;
+        if (bg_budget && !bg_budget->admit(cost, true)) { abort_delta(); return; }
+        hm::paint(cell, qc.px0, qc.dtop, qc.px1, static_cast<int16_t>(qc.dtop + qc.drows - 1));
+    }
+}
+
 void HomePage::paint_qty(int si, hm::Qty q, const Frame &f) {
     const bool hero = si == 0;
     const Slot s = slot_of(si);
@@ -431,9 +548,21 @@ void HomePage::paint_qty(int si, hm::Qty q, const Frame &f) {
     const hm::CellGeom g0 = hm::cell_geom(s.top, s.bottom, bar);
     const FieldLook look = field_look(m, q, over, near_);
     const uint16_t ink = look.ink;   // digits and unit
-    int16_t px0 = 0, px1 = 0;
-    const hm::DigitField prev_hd = hd_[si];
-    const bool digits_changed = hd_[si].set(f.text[qi], px0, px1);   // before the items: the digit item views hd_'s text
+
+    QtyCommit qc{};
+    qc.top = s.top;
+    qc.x1 = s.x1;
+    qc.cell_bottom = s.cell_bottom;
+    qc.t0 = g0.t0;
+    qc.t1 = g0.t1;
+    qc.dtop = hero ? kHeroDigitTop : static_cast<int16_t>(kLedBase[si - 1] - 30);
+    qc.drows = hero ? kHeroRows : kLedRows;
+    qc.bg = hero ? hm::kHeroBar : hm::ledger_bar(si - 1);
+    qc.ax = hero ? kHeroArrowX : kLedArrowX;
+    qc.ay = hero ? kHeroArrowY : static_cast<int16_t>(s.top + kLedArrowDy);
+    qc.abox = hero ? static_cast<int16_t>(hm::kArrowBox) : kLedArrowBox;
+    qc.prev_hd = hd_[si];
+    qc.digits_changed = hd_[si].set(f.text[qi], qc.px0, qc.px1);   // before the items: the digit item views hd_'s text
 
     // At most 12 items: 2 gaps (ledger) or gap + key (hero), 4 head items, the unit, 3 bar items, the arrow, the digits.
     QtyHead texts;
@@ -448,37 +577,31 @@ void HomePage::paint_qty(int si, hm::Qty q, const Frame &f) {
     }
     if (hero)   // the 4 px status edge in the field's ink (white on the alarm red)
         it[n++] = hm::fill(0, s.top, 4, static_cast<int16_t>(s.bottom - s.top + 1), over ? kAlarmInk : ink);
-    const uint32_t head = qty_head(si, q, f, texts, it, n);
+    qc.head = qty_head(si, q, f, texts, it, n);
 
     // Unit, bar, arrow, digits.
-    const int16_t dtop = hero ? kHeroDigitTop : static_cast<int16_t>(kLedBase[si - 1] - 30);
     if (hero) it[n++] = hm::text(kMid, kHeroUnitX, kHeroUnitTop, qty_unit(q), ink);
     else it[n++] = hm::text(kSmall, kLedUnitX, static_cast<int16_t>(kLedBase[si - 1] - 12), qty_unit(q), ink);
-    const hm::BarGeom bg = hero ? hm::kHeroBar : hm::ledger_bar(si - 1);
-    uint32_t bar_sig = 0, arrow_sig = 0;
     if (bar && shown) {   // contract bar: track, fill, 90 % tick
         const uint32_t abs = static_cast<uint32_t>(q == hm::Qty::W ? w_mw_ : a_ma_);
-        const int fw = hm::bar_fill_w(abs, mx, bg);
+        const int fw = hm::bar_fill_w(abs, mx, qc.bg);
         // The quantity's colour on a rule-grey track, the 90 % tick in text (dim when stale); orange from 90 %; white on red.
         const uint16_t fc = ink;
         const uint16_t tc = over ? kAlarmInk : m == hm::Mode::Stale ? kDim : kText;
         const uint16_t track = over ? kErrD : kRule;
-        it[n++] = hm::fill(bg.x0, bg.y, static_cast<int16_t>(hm::bar_track(bg)), hm::kBarH, track);
-        if (fw > 0) it[n++] = hm::fill(bg.x0, bg.y, static_cast<int16_t>(fw), hm::kBarH, fc);
-        it[n++] = hm::fill(hm::bar_tick_x(bg), static_cast<int16_t>(bg.y - 2), 1, hm::kBarH + 4, tc);
-        bar_sig = mix_u32(mix_u32(mix_u32(1, static_cast<uint32_t>(fw)), fc), tc);
+        it[n++] = hm::fill(qc.bg.x0, qc.bg.y, static_cast<int16_t>(hm::bar_track(qc.bg)), hm::kBarH, track);
+        if (fw > 0) it[n++] = hm::fill(qc.bg.x0, qc.bg.y, static_cast<int16_t>(fw), hm::kBarH, fc);
+        it[n++] = hm::fill(hm::bar_tick_x(qc.bg), static_cast<int16_t>(qc.bg.y - 2), 1, hm::kBarH + 4, tc);
+        qc.bar_sig = mix_u32(mix_u32(mix_u32(1, static_cast<uint32_t>(fw)), fc), tc);
     }
-    const int16_t ax = hero ? kHeroArrowX : kLedArrowX;
-    const int16_t ay = hero ? kHeroArrowY : static_cast<int16_t>(s.top + kLedArrowDy);
-    const int16_t abox = hero ? static_cast<int16_t>(hm::kArrowBox) : kLedArrowBox;
     if (q == hm::Qty::A && shown) {
         const bool dash = flow_ == power::Flow::Idle;
         const uint8_t aux = dash ? hm::dash_dir(ctx_.rotation) : hm::arrow_dir(flow_ == power::Flow::Forward, ctx_.rotation);
         const uint16_t ac = over ? kAlarmInk : dash ? kFaint : live ? kFlow : kStale;   // a resting dash faint, the stale arrow grey
-        it[n++] = hm::arrow(ax, ay, aux, ac, hero ? 0 : kLedArrowBox);
-        arrow_sig = mix_u32(mix_u32(1, aux), ac);
+        it[n++] = hm::arrow(qc.ax, qc.ay, aux, ac, hero ? 0 : kLedArrowBox);
+        qc.arrow_sig = mix_u32(mix_u32(1, aux), ac);
     }
-    it[n++] = hm::text(hero ? kHero : kBig, hero ? kHeroDigitX : kLedDigitX, dtop, hd_[si].view(), ink);
+    it[n++] = hm::text(hero ? kHero : kBig, hero ? kHeroDigitX : kLedDigitX, qc.dtop, hd_[si].view(), ink);
 
     hm::Cell cell;
     cell.geom = g0;
@@ -486,6 +609,7 @@ void HomePage::paint_qty(int si, hm::Qty q, const Frame &f) {
     cell.x1 = s.x1;
     cell.bg = look.fill;
     cell.sweep = shown && !over && sweep_ok_;
+    qc.sweep = cell.sweep;
     // The trend: a dark tint column under a brighter 1 px line, live in the quantity's own shades, stale in grey. The
     // cursor is a 1 px rule-coloured gap in it.
     cell.tint = live ? qty_tint(q) : kPanelBg;
@@ -497,78 +621,8 @@ void HomePage::paint_qty(int si, hm::Qty q, const Frame &f) {
     uint32_t base = mix_u32(mix_init(), static_cast<uint32_t>(m));
     base = mix_u32(base, (over ? 1u : 0u) | (near_ ? 2u : 0u) | (cell.sweep ? 4u : 0u) | (bar ? 8u : 0u));
     base = mix_u32(mix_u32(base, static_cast<uint32_t>(window_)), sweep_epoch_);
-    base = mix_u32(mix_u32(base, ctx_.rotation & 3u), static_cast<uint32_t>(q));
-
-    PaintBudget *const bg_budget = ctx_.budget;
-    uint32_t *sig = cell_sig_[si];
-    if (!cell_valid_[si] || sig[0] != base) {   // a new state: the whole cell
-        if (slice_y_[si] < 0 || slice_sig_[si] != base) {
-            painted_cursor_[si] = cell.sweep ? static_cast<int8_t>(sw_[si].cursor) : -1;
-            slice_dirty_ &= static_cast<uint8_t>(~(1u << si));
-            slice_parts_[si][0] = head;
-            slice_parts_[si][1] = arrow_sig;
-            slice_parts_[si][2] = bar_sig;
-        } else if (digits_changed) {
-            slice_dirty_ |= static_cast<uint8_t>(1u << si);
-        }
-        if (!paint_cell_sliced(si, base, cell, 0, s.top, s.x1, s.cell_bottom)) return;
-        sig[0] = base;
-        sig[1] = slice_parts_[si][0];
-        sig[2] = slice_parts_[si][1];
-        sig[3] = slice_parts_[si][2];
-        cell_valid_[si] = true;
-        if (slice_dirty_ & (1u << si)) {
-            slice_dirty_ &= static_cast<uint8_t>(~(1u << si));
-            hd_[si].invalidate();
-        }
-        if (!digits_changed && sig[1] == head && sig[2] == arrow_sig && sig[3] == bar_sig &&
-            (!cell.sweep || painted_cursor_[si] == static_cast<int8_t>(sw_[si].cursor)))
-            return;
-    }
-    const bool just_painted_cell = !sig[0];
-    (void)just_painted_cell;
-    auto abort_delta = [&]() {
-        if (digits_changed) hd_[si] = prev_hd;
-    };
-    if (sig[1] != head) {
-        const int cost = static_cast<int>(s.x1 - 3) * 19;
-        if (bg_budget && !bg_budget->admit(cost, true)) { abort_delta(); return; }
-        sig[1] = head;
-        hm::paint(cell, 4, s.top, s.x1, static_cast<int16_t>(s.top + 18));
-    }
-    if (sig[2] != arrow_sig) {
-        const int cost = abox * abox;
-        if (bg_budget && !bg_budget->admit(cost, true)) { abort_delta(); return; }
-        sig[2] = arrow_sig;
-        hm::paint(cell, ax, ay, static_cast<int16_t>(ax + abox - 1), static_cast<int16_t>(ay + abox - 1));
-    }
-    if (sig[3] != bar_sig) {
-        const int cost = static_cast<int>(bg.x1 - bg.x0 + 1) * (hm::kBarH + 4);
-        if (bg_budget && !bg_budget->admit(cost, true)) { abort_delta(); return; }
-        sig[3] = bar_sig;
-        hm::paint(cell, bg.x0, static_cast<int16_t>(bg.y - 2), bg.x1, static_cast<int16_t>(bg.y + hm::kBarH + 1));
-    }
-    if (cell.sweep) {
-        const int cur = static_cast<int>(sw_[si].cursor);
-        if (painted_cursor_[si] < 0) painted_cursor_[si] = static_cast<int8_t>(cur);
-        else if (painted_cursor_[si] != cur) {
-            const int first = painted_cursor_[si];
-            const int steps = (cur - first + sw_[si].n) % sw_[si].n;
-            const hm::Strip st = hm::strip_of(first, steps, sw_[si].n);
-            int cost = 0;
-            for (int i = 0; i < st.n; i++)
-                cost += static_cast<int>(st.r[i].x1 - st.r[i].x0 + 1) * (g0.t1 - g0.t0 + 1);
-            if (bg_budget && !bg_budget->admit(cost, true)) { abort_delta(); return; }
-            for (int i = 0; i < st.n; i++)
-                hm::paint(cell, st.r[i].x0, g0.t0, st.r[i].x1, g0.t1);
-            painted_cursor_[si] = static_cast<int8_t>(cur);
-        }
-    }
-    if (digits_changed) {
-        const int cost = static_cast<int>(px1 - px0 + 1) * (hero ? kHeroRows : kLedRows);
-        if (bg_budget && !bg_budget->admit(cost, true)) { abort_delta(); return; }
-        hm::paint(cell, px0, dtop, px1, static_cast<int16_t>(dtop + (hero ? kHeroRows : kLedRows) - 1));
-    }
+    qc.base = mix_u32(mix_u32(base, ctx_.rotation & 3u), static_cast<uint32_t>(q));
+    commit_qty_cell(si, qc, cell);
 }
 
 // ---- cards -----------------------------------------------------------------------------------
@@ -586,14 +640,17 @@ void HomePage::paint_card(int ci, const Frame &f) {
 
     hm::Item it[14];
     int n = 0;
-    struct ZoneY { int16_t a, b; } zy[4] = {};
+    Zone zy[4] = {};
     int zone_start[5] = {};
     int nz = 0;
     auto add = [&](const hm::Item &item) {
         if (item.kind == hm::ItemKind::Text && item.text.empty()) return;
         it[n++] = item;
     };
-    auto zone = [&](int16_t a, int16_t b) { zy[nz] = {static_cast<int16_t>(y0 + a), b < 0 ? y1 : static_cast<int16_t>(y0 + b)}; zone_start[nz++] = n; };
+    auto zone = [&](int16_t a, int16_t b) {
+        zy[nz] = {hm::kCardX0, static_cast<int16_t>(y0 + a), static_cast<int16_t>(hm::kW - 1), b < 0 ? y1 : static_cast<int16_t>(y0 + b)};
+        zone_start[nz++] = n;
+    };
     auto right = [&](const Font &font, int16_t base, std::string_view s, uint16_t col) {
         add(hm::text(font, static_cast<int16_t>(kCardR + 1 - static_cast<int>(s.size()) * font.adv), static_cast<int16_t>(y0 + base - font.ascent), s, col));
     };
@@ -709,32 +766,9 @@ void HomePage::paint_card(int ci, const Frame &f) {
     zone_start[nz] = n;
     uint32_t base = mix_u32(mix_u32(mix_init(), static_cast<uint32_t>(card)), static_cast<uint32_t>(m));
     base = mix_u32(mix_u32(base, dot ? 1u : 0u), ctx_.rotation & 3u);
-    uint32_t sig[4] = {};
-    for (int z = 0; z < nz; z++)
-        sig[z] = sig_items(mix_init(), cell.items.subspan(static_cast<size_t>(zone_start[z]), static_cast<size_t>(zone_start[z + 1] - zone_start[z])));
-    PaintBudget *const bg_budget = ctx_.budget;
-    uint32_t *old = card_sig_[ci];
-    if (!card_valid_[ci] || card_base_[ci] != base) {   // a new card or state: the whole cell
-        if (slice_y_[3 + ci] < 0 || slice_sig_[3 + ci] != base) {
-            for (int z = 0; z < 4; z++) slice_card_[ci][z] = sig[z];
-        }
-        if (!paint_cell_sliced(3 + ci, base, cell, hm::kCardX0, y0, hm::kW - 1, cell_bottom)) return;
-        card_valid_[ci] = true;
-        card_base_[ci] = base;
-        bool delta = false;
-        for (int z = 0; z < 4; z++) {
-            old[z] = slice_card_[ci][z];
-            if (z < nz && old[z] != sig[z]) delta = true;
-        }
-        if (!delta) return;
-    }
-    for (int z = 0; z < nz; z++) {
-        if (sig[z] == old[z]) continue;
-        const int cost = static_cast<int>(hm::kW - hm::kCardX0) * (zy[z].b - zy[z].a + 1);
-        if (bg_budget && !bg_budget->admit(cost, true)) return;
-        old[z] = sig[z];
-        hm::paint(cell, hm::kCardX0, zy[z].a, hm::kW - 1, zy[z].b);
-    }
+    commit_zoned_cell(3 + ci, base, mix_init(), cell, zone_start, zy, nz,
+                      card_valid_[ci], card_sig_[ci], slice_card_[ci],
+                      hm::kCardX0, y0, hm::kW - 1, cell_bottom, &card_base_[ci]);
 }
 
 // ---- info block --------------------------------------------------------------------------------
@@ -835,31 +869,9 @@ void HomePage::paint_info(const Frame &f) {
     cell.bg = kBg;
     cell.items = std::span<const hm::Item>(it, static_cast<size_t>(n));
 
-    uint32_t sig[3];
-    for (int z = 0; z < 3; z++)
-        sig[z] = sig_items(mix_u32(mix_init(), static_cast<uint32_t>(m)),
-                           cell.items.subspan(static_cast<size_t>(zone_start[z]), static_cast<size_t>(zone_start[z + 1] - zone_start[z])));
-    PaintBudget *const bg_budget = ctx_.budget;
-    if (!info_ok_) {   // a new state: the whole cell
-        if (slice_y_[5] < 0 || slice_sig_[5] != static_cast<uint32_t>(m)) {
-            for (int z = 0; z < 3; z++) slice_info_[z] = sig[z];
-        }
-        if (!paint_cell_sliced(5, static_cast<uint32_t>(m), cell, 0, hm::kRule3Y, hm::kW - 1, 239)) return;
-        info_ok_ = true;
-        bool delta = false;
-        for (int z = 0; z < 3; z++) {
-            info_sig_[z] = slice_info_[z];
-            if (info_sig_[z] != sig[z]) delta = true;
-        }
-        if (!delta) return;
-    }
-    for (int z = 0; z < 3; z++) {
-        if (sig[z] == info_sig_[z]) continue;
-        const int cost = static_cast<int>(kInfoZones[z].x1 - kInfoZones[z].x0 + 1) * (kInfoZones[z].y1 - kInfoZones[z].y0 + 1);
-        if (bg_budget && !bg_budget->admit(cost, true)) return;
-        info_sig_[z] = sig[z];
-        hm::paint(cell, kInfoZones[z].x0, kInfoZones[z].y0, kInfoZones[z].x1, kInfoZones[z].y1);
-    }
+    commit_zoned_cell(5, static_cast<uint32_t>(m), mix_u32(mix_init(), static_cast<uint32_t>(m)),
+                      cell, zone_start, kInfoZones, 3,
+                      info_ok_, info_sig_, slice_info_, 0, hm::kRule3Y, hm::kW - 1, 239);
 }
 
 // ---- statics ---------------------------------------------------------------------------------

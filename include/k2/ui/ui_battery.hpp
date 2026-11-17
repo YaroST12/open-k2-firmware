@@ -44,8 +44,8 @@ public:
 private:
     enum class View : uint8_t { Main, Runs, Stored };
     static void row_fn(void *self, int index, bool focused, kit::RowSpec &out);
-    void action_row(battery::view::Act a, bool focused, kit::RowSpec &out);
-    void run_row(int i, bool focused, kit::RowSpec &out);
+    [[gnu::noinline]] void action_row(battery::view::Act a, bool focused, kit::RowSpec &out);
+    [[gnu::noinline]] void run_row(int i, bool focused, kit::RowSpec &out);
     void build();                      // rec_ (Main: the run in RAM), shown_ and rows_ of the view
     void load_runs();                  // runs_ from the volume
     int count() const;                 // the list's rows in the current view

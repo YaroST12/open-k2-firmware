@@ -277,8 +277,7 @@ void DetailPage::update(uint32_t now_ms) {
         const int32_t mv[4] = {an ? an->cc1_mv : 0, an ? an->cc2_mv : 0, an ? an->dp_mv : 0, an ? an->dm_mv : 0};
         const int slot[4] = {SCc1, SCc2, SDp, SDm};
         for (int i = 0; i < 4; i++) {
-            s.clear();
-            if (an) s.put_fixed(mv[i] < 0 ? 0 : mv[i], 2).put_char('V'); else s.put("--");
+            pg::put_unit_or_dash(s, an.has_value(), mv[i], 2, 'V');
             if (!put(slot[i], s.view(), an ? kText : kFaint)) return;
         }
     }
@@ -296,10 +295,9 @@ void DetailPage::update(uint32_t now_ms) {
     {   // Energy and charge, each with its unit.
         char whb[16], ahb[16];
         fmt_energy_pair(whb, ahb, ctx_.meter.mwh(), ctx_.meter.mah(), 5);
-        auto trim = [](const char *p) { while (*p == ' ') p++; return std::string_view(p); };
-        s.clear(); s.put(trim(whb)).put("Wh");
+        s.clear(); s.put(pg::trim_left(whb)).put("Wh");
         if (!put(SWh, s.view(), kText)) return;
-        s.clear(); s.put(trim(ahb)).put("Ah");
+        s.clear(); s.put(pg::trim_left(ahb)).put("Ah");
         if (!put(SAh, s.view(), kText)) return;
     }
 
@@ -325,8 +323,7 @@ void DetailPage::update(uint32_t now_ms) {
         if (live && pm.current_ma) {
             char r[16];
             const int n = fmt_ohms(r, pm.vbus_mv, pm.current_ma);
-            std::string_view rv{r, static_cast<size_t>(n)};
-            while (!rv.empty() && rv.front() == ' ') rv.remove_prefix(1);
+            std::string_view rv = pg::trim_left({r, static_cast<size_t>(n)});
             s.clear();
             s.put(rv);
             if (rv != "--") s.put_char('R');

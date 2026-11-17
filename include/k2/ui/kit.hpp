@@ -232,6 +232,12 @@ constexpr int16_t kv_row_y(const KvLayout &l, int i) { return static_cast<int16_
 // The static part (Fieldbook receipt): keys in ink2, a dot leader from each key to the value column, white space
 // between the rows (the row lines stay owned, in the ground colour). `labels` holds n strings.
 void kv_static(const Surface &s, const KvLayout &l, const char *const *labels, int n);
+// Paint a kSmall static value at row `row`'s value column.
+[[gnu::noinline]] void kv_draw_text(const Surface &s, const KvLayout &l, int row, std::string_view text,
+                                    uint16_t fg = kText, uint16_t bg = kBg);
+// Paint a kMid unit label baseline-aligned beside a kBig `num_chars`-wide value field at (x, y).
+[[gnu::noinline]] void draw_big_unit(const Surface &s, int16_t x, int16_t y, uint8_t num_chars,
+                                     std::string_view unit, uint16_t col);
 // Single-row version for progressive drawing; draws trailing 1 px bottom line under row `i` when `trailing_line` is true.
 void kv_static_row(const Surface &s, const KvLayout &l, const char *label, int i, bool trailing_line);
 // Same as kv_ground for a single row `i`.

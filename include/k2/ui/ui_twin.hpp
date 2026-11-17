@@ -79,7 +79,7 @@ private:
     void build_action_row(int index, bool focused, kit::RowSpec &out);
     void entry_note(const Entry &e, bool running_this, StrBuf<40> &out) const;
     void reload();                                           // the library and the predictions
-    void compose_footer();
+    [[gnu::noinline]] void compose_footer();
     void say(std::string_view text, uint16_t color);
     void learn();
     void learned(const twin_hw::Learned &r, bool contract_changed);
@@ -97,10 +97,10 @@ private:
     // Detail layout: the body lines (name, gets, bar, contract, rule, InfoBlock) and where the action box starts.
     int line_count() const { return 5 + info_n_; }
     int16_t line_h(int i) const;
-    void paint_line(int i, int16_t y);
+    [[gnu::noinline]] void paint_line(int i, int16_t y);
     void layout_detail();                                    // first_ and the action box for the focused action
-    void paint_detail(uint32_t now_ms);
-    void build_info(const twin::Twin &det);                  // the charger (left) and device (right) fact columns of the open twin
+    [[gnu::noinline]] void paint_detail(uint32_t now_ms);
+    [[gnu::noinline]] void build_info(const twin::Twin &det);                  // the charger (left) and device (right) fact columns of the open twin
     int rows() const { return detail_ ? kActions : n_ + 1 + (renego_ok_ ? 1 : 0); }   // twins + the Learn row (+ "Ask charger again")
     int list_last() const { return n_ + (renego_ok_ ? 1 : 0); }                         // the last list row
     bool running() const;

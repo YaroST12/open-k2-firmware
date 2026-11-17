@@ -993,8 +993,7 @@ void TwinPage::paint_detail(uint32_t now_ms) {
     } else if (run) {
         if (vbus_sig_ == 0 || static_cast<int32_t>(now_ms - vbus_next_) >= 0) {
             StrBuf<12> v;
-            if (ctx_.pm_online && ctx_.vbus_fast_mv >= 0) v.put_fixed(ctx_.vbus_fast_mv, 2).put_char('V');
-            else v.put("--");
+            pg::put_unit_or_dash(v, ctx_.pm_online && ctx_.vbus_fast_mv >= 0, ctx_.vbus_fast_mv, 2, 'V');
             // "Step: waking the charger" until it lists, then "Asked: 11V3A"; the row repaints only when its text changes.
             const bool waking = twin_hw::live().waking();   // Rd is on, the charger has not listed yet: nothing is asked of it
             StrBuf<24> asked;

@@ -213,6 +213,18 @@ void kv_static(const Surface &s, const KvLayout &l, const char *const *labels, i
     for (int i = 0; i < n; i++) kv_static_row(s, l, labels[i], i, i + 1 == n);
 }
 
+[[gnu::noinline]] void kv_draw_text(const Surface &s, const KvLayout &l, int row, std::string_view text,
+                                    uint16_t fg, uint16_t bg) {
+    gfx_text(s, kSmall, l.value_x, static_cast<int16_t>(kv_row_y(l, row) + row_text_y(l.pitch, kSmall.height)),
+             text, fg, bg);
+}
+
+[[gnu::noinline]] void draw_big_unit(const Surface &s, int16_t x, int16_t y, uint8_t num_chars,
+                                     std::string_view unit, uint16_t col) {
+    gfx_text(s, kMid, static_cast<int16_t>(x + num_chars * kBig.adv + 2),
+             static_cast<int16_t>(y + kBig.ascent - kMid.ascent), unit, col, kBg);
+}
+
 void draw_leader(const Surface &s, int16_t x0, int16_t x1, int16_t y) {
     for (int x = (x0 + kLeaderPitch - 1) / kLeaderPitch * kLeaderPitch; x + kLeaderDot <= x1; x += kLeaderPitch)
         gfx_fill(s, static_cast<int16_t>(x), y, kLeaderDot, kLeaderDot, kInk3);
