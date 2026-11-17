@@ -115,66 +115,76 @@ static void test_pps_one_coloured_chip_per_range() {
     CHECK_STR(chips(l, r2).c_str(), "5-21V 3.2A");
     CHECK_EQ(int(l.tokens[l.rows[r2].first].tone), int(rl::Tone::Pass));    // every step of the second PDO passed
 }
-// ---- A deep-sweep row is one range chip, like the range row above it (no per-volt badges, no marker of its own) --------------
+// ---- A deep sweep has no row of its own: its APDO's range chip carries it (an "S" mark, the worst of steps and sweep) ------
 static ct::Step sweep_step(A a, uint8_t pos, uint32_t pdo, V v) {
     ct::Step s = step(a, 0, v, pos, pdo);
     s.detail = ct::kDetailSweep;
     s.avs = a == A::SprAvs || a == A::EprAvs;
     return s;
 }
-static const rl::Row* sweep_row_of(const rl::Layout& l, uint8_t pos) {
-    for (size_t i = 0; i < l.row_count; ++i) if (l.rows[i].sweep && l.rows[i].pos == pos) return &l.rows[i];
+// The grid row of one PPS / AVS APDO (the sweep's chip lives there), and its words.
+static const rl::Row* sweep_row_of(const rl::Layout& l, uint8_t pos, A a = A::Pps) {
+    for (size_t i = 0; i < l.row_count; ++i) if (!l.rows[i].header && !l.rows[i].probe && l.rows[i].algorithm == a && l.rows[i].pos == pos) return &l.rows[i];
     return nullptr;
 }
-static std::string sweep_chips(const rl::Layout& l, uint8_t pos) {
-    const rl::Row* r = sweep_row_of(l, pos);
+static std::string sweep_chips(const rl::Layout& l, uint8_t pos, A a = A::Pps) {
+    const rl::Row* r = sweep_row_of(l, pos, a);
     return r ? chips(l, size_t(r - l.rows.data())) : "(no row)";
 }
-// The PPS sweep row: ONE chip with the swept range and the APDO's current ("5-21V 3.2A"), the same words as the range row of
-// that slot; the old strip showed one badge per volt (5V 6V 7V ...) whose marker never moved.
-static void test_a_pps_sweep_row_is_one_range_chip() {
+static size_t rows_labelled(const rl::Layout& l, const char* label) {
+    size_t n = 0;
+    for (size_t i = 0; i < l.row_count; ++i) n += std::string(l.rows[i].label) == label;
+    return n;
+}
+// The PPS sweep is no row of its own: its APDO's range chip ("5-21V 3.2A", the advertised range, as before) carries a small "S"
+// (Token::sweep) and the worst verdict of the range steps and the sweep. Slot 6 ran no sweep: no S.
+static void test_a_pps_sweep_merges_into_its_apdos_range_chip() {
     auto s = baseus();
     s.push_back(sweep_step(A::Pps, 7, 3248763456u, V::Pending));
     rl::Layout l; rl::build(l, s);
+    CHECK_EQ(rows_labelled(l, "Sweep"), 0u);                                        // no Sweep row
+    CHECK_EQ(rows_labelled(l, "PPS"), 2u);                                          // one row per APDO, as before the sweep
     const rl::Row* r = sweep_row_of(l, 7);
     CHECK_EQ(r != nullptr, true);
     if (!r) return;
-    CHECK_EQ(r->count, 1);                                                          // not one badge per volt
+    CHECK_EQ(r->count, 1);                                                          // one chip, not one per volt
     CHECK_STR(sweep_chips(l, 7).c_str(), "5-21V 3.2A");
-    CHECK_STR(sweep_chips(l, 7).c_str(), chips(l, row_of(l, "PPS") + 1).c_str());   // the range row of slot 7, word for word
+    CHECK_STR(sweep_chips(l, 7).c_str(), chips(l, row_of(l, "PPS") + 1).c_str());
     const rl::Token& k = l.tokens[r->first];
     CHECK_EQ(k.chip, true);
+    CHECK_EQ(k.sweep, true);                                                        // the S mark
     CHECK_EQ(k.mv, 0);                                                              // a range has no level: no per-level dot
-    CHECK_EQ(int(k.tone), int(rl::Tone::Pending));                                  // the step has not run: the Running dot sits here
+    CHECK_EQ(int(k.tone), int(rl::Tone::Pending));                                  // the sweep has not run: the Running dot sits here
+    CHECK_EQ(l.tokens[sweep_row_of(l, 6)->first].sweep, false);                     // slot 6 ran none
 }
-// The monitor ceiling caps the swept range: "5-12V" on a 12 V monitor, still with the APDO's current.
-static void test_a_sweep_row_names_the_capped_range() {
-    auto s = baseus();
-    s.push_back(sweep_step(A::Pps, 7, 3248763456u, V::Pending));
-    rl::OemNotes oem; oem.monitor_mv = 12000;
-    rl::Layout l; rl::build(l, s, oem);
-    CHECK_STR(sweep_chips(l, 7).c_str(), "5-12V 3.2A");
-    CHECK_EQ(l.cuts, 0);
-}
-// The AVS sweep row is the same: one chip, the AVS range of its slot.
-static void test_an_avs_sweep_row_is_one_range_chip() {
+// The AVS rows merge the same way: SPR AVS and EPR AVS, one chip, the S mark, no Sweep row.
+static void test_an_avs_sweep_merges_into_its_apdos_range_chip() {
     std::vector<ct::Step> s;
     s.push_back(step(A::Pd3Fixed, 5000, V::Pass, 1, 167874860u));
     ct::Step range = step(A::SprAvs, 9000, V::Pass, 3, 0xE004B145u); range.avs = true;
     s.push_back(range);
-    s.push_back(sweep_step(A::SprAvs, 3, 0xE004B145u, V::Pending));
+    s.push_back(sweep_step(A::SprAvs, 3, 0xE004B145u, V::Pass));
+    ct::Step erange = step(A::EprAvs, 15000, V::Pass, 9, 0xE004B145u); erange.avs = true;
+    s.push_back(erange);
+    s.push_back(sweep_step(A::EprAvs, 9, 0xE004B145u, V::Fail));
     rl::Layout l; rl::build(l, s);
-    const rl::Row* r = sweep_row_of(l, 3);
-    CHECK_EQ(r != nullptr, true);
-    if (!r) return;
-    CHECK_EQ(r->count, 1);
-    CHECK_STR(sweep_chips(l, 3).c_str(), chips(l, row_of(l, "SPR AVS")).c_str());   // the AVS range row of slot 3, word for word
-    CHECK_EQ(sweep_chips(l, 3).compare(0, 5, "9-20V"), 0);
-    CHECK_EQ(l.tokens[r->first].mv, 0);
+    CHECK_EQ(rows_labelled(l, "Sweep"), 0u);
+    CHECK_EQ(rows_labelled(l, "SPR AVS"), 1u);
+    CHECK_EQ(rows_labelled(l, "EPR AVS"), 1u);
+    const rl::Row* sp = sweep_row_of(l, 3, A::SprAvs);
+    const rl::Row* ep = sweep_row_of(l, 9, A::EprAvs);
+    CHECK_EQ(sp != nullptr && ep != nullptr, true);
+    if (!sp || !ep) return;
+    CHECK_EQ(sp->count, 1);
+    CHECK_EQ(l.tokens[sp->first].sweep, true);
+    CHECK_EQ(int(l.tokens[sp->first].tone), int(rl::Tone::Pass));
+    CHECK_EQ(l.tokens[ep->first].sweep, true);
+    CHECK_EQ(int(l.tokens[ep->first].tone), int(rl::Tone::Fail));                   // the failed sweep wins over the passing step
+    CHECK_EQ(sweep_chips(l, 3, A::SprAvs).compare(0, 5, "9-20V"), 0);
 }
 // Default run (2026-11-14): every PPS APDO now gets its sweep, split at 5 V into two steps (the part from 5 V up after the APDO's
 // checks, the part below at the end of the plan, PdLow). Three 3.3 V APDOs at once, with the widest current words a real APDO
-// gives (4.75 A), build without a single cut: ONE strip row per APDO owns both steps and its chip names the whole range.
+// gives (4.75 A), build without a single cut: ONE row per APDO owns the range steps and both sweep parts, its chip names the range.
 static void test_default_sweep_rows_fit_without_a_cut() {
     std::vector<ct::Step> s;
     s.push_back(step(A::Pd3Fixed, 5000, V::Pass, 1, 167874860u));
@@ -200,15 +210,18 @@ static void test_default_sweep_rows_fit_without_a_cut() {
         CHECK_EQ(r != nullptr, true);
         if (!r) continue;
         CHECK_EQ(r->count, 1);                              // one chip for both parts
+        CHECK_EQ(l.tokens[r->first].sweep, true);
         CHECK_EQ(int(l.tokens[r->first].tone), int(rl::Tone::Pending));   // the low part is still to run
         const std::string chip = sweep_chips(l, pos);
         CHECK_EQ(chip.compare(0, 4, "3.3-"), 0);
         CHECK_EQ(chip.find("..."), std::string::npos);
         std::printf("[sweep-chip] pos %u: %s\n", unsigned(pos), chip.c_str());
     }
+    CHECK_EQ(rows_labelled(l, "Sweep"), 0u);
 }
-// The chip's colour is the sweep's own result: pending until it ran, grey when skipped, red when the source was lost, and
-// green / amber by the worst error of the recorded points (<= 100 mV green, above amber). A PASSING sweep is never red: red is
+// The sweep's part of the chip's colour: pending until it ran, nothing (the range steps decide) when skipped, red when the source
+// was lost, and green / amber by the worst error of the recorded points (<= 100 mV green, above amber). Slot 7's range steps all
+// pass, so the chip reads the sweep alone. A PASSING sweep is never red: red is
 // a failed step (user decision 2026-11-16: the chip never contradicts the step's verdict, so the header cannot say "0 fail" over
 // a red cell).
 static void test_a_sweep_chip_takes_its_tone_from_the_sweep() {
@@ -224,7 +237,7 @@ static void test_a_sweep_chip_takes_its_tone_from_the_sweep() {
     };
     CHECK_EQ(tone_of(V::Pending, {}), int(rl::Tone::Pending));
     CHECK_EQ(tone_of(V::Running, {-20, 30}), int(rl::Tone::Pending));    // in flight: Pending keeps the Running dot on the chip
-    CHECK_EQ(tone_of(V::Skip, {}), int(rl::Tone::Skip));
+    CHECK_EQ(tone_of(V::Skip, {}), int(rl::Tone::Pass));                 // a skipped sweep adds nothing: the passing steps stand
     CHECK_EQ(tone_of(V::Pass, {-20, 30, -90}), int(rl::Tone::Pass));
     CHECK_EQ(tone_of(V::Pass, {-20, -250, 30}), int(rl::Tone::Partial));
     CHECK_EQ(tone_of(V::Pass, {-20, 450, 30}), int(rl::Tone::Partial));  // a passing sweep is never red, however far off
@@ -294,6 +307,7 @@ static void test_a_fold_is_a_caution_not_a_pass_and_not_a_fail() {
     CHECK_EQ(int(rl::mark(l.tokens[r->first].tone)), int(rl::mark(rl::Tone::Partial)));
     // the APDO's range row (slot 7): some levels passed, one is a caution -> amber; slot 6 has no fold
     CHECK_EQ(int(l.tokens[l.rows[row_of(l, "PPS")].first + 1].tone), int(rl::Tone::Partial));
+    CHECK_EQ(l.tokens[l.rows[row_of(l, "PPS")].first + 1].sweep, true);
     // the tally never calls a caution a pass or a fail
     auto reach = rl::reach(s, A::Pps, 7);
     CHECK_EQ(reach.folded, true);
@@ -307,8 +321,9 @@ static void test_a_fold_is_a_caution_not_a_pass_and_not_a_fail() {
     // a caution rolled with passes is amber; a caution next to a failure never hides the failure
     CHECK_EQ(int(rl::roll_up(rl::Tally{.pass = 3, .capped = 1})), int(rl::Tone::Partial));
     CHECK_EQ(int(rl::roll_up(rl::Tally{.fail = 1, .capped = 1})), int(rl::Tone::Partial));
-    // a fold on a sweep that otherwise tracked clean still reads amber; without the caution the same sweep is green
+    // a fold on a sweep that otherwise tracked clean still reads amber; without any caution the same APDO is green
     s.back().reason = ct::Reason::None;
+    for (auto& y : s) if (y.reason == ct::Reason::Folded) y.reason = ct::Reason::None;
     rl::build(l, s);
     CHECK_EQ(int(l.tokens[sweep_row_of(l, 7)->first].tone), int(rl::Tone::Pass));
 }
@@ -338,8 +353,8 @@ static void test_a_deviating_sweep_is_a_caution_never_red() {
         CHECK_EQ(r != nullptr, true);
         if (!r) return;
         const rl::Tone tn = l.tokens[r->first].tone;
-        const rl::Tone expect = v == V::Fail ? rl::Tone::Fail : v == V::Running ? rl::Tone::Pending : v == V::Skip ? rl::Tone::Skip
-                              : caution ? rl::Tone::Partial : rl::Tone::Pass;
+        const rl::Tone expect = v == V::Fail ? rl::Tone::Fail : v == V::Running ? rl::Tone::Pending
+                              : caution ? rl::Tone::Partial : rl::Tone::Pass;   // a skipped sweep leaves the passing steps' Pass
         CHECK_EQ(int(tn), int(expect));
         // the tally the strip's footer and the header use: a caution is counted apart, red appears only with a failed step
         rl::Tally t;
@@ -376,6 +391,143 @@ static void test_a_split_sweep_deviation_reads_the_same_on_both_parts() {
     rl::build(l, s, {}, view);
     CHECK_EQ(int(l.tokens[sweep_row_of(l, 7)->first].tone), int(rl::Tone::Fail));
     CHECK_EQ(rl::caution(s[n - 1], view), false);
+}
+// The chip is the WORST of the APDO's range steps and its sweep (fail > partial / caution > pass; pending while anything is
+// pending; skip only when every part skipped). Slot 6 of the fixture has a failed and a skipped step among passes (Partial).
+static void test_the_merged_chip_is_the_worst_of_its_steps_and_its_sweep() {
+    const auto tone6 = [](V sweep_verdict, ct::Reason sweep_reason = ct::Reason::None) {
+        auto s = baseus();
+        s.push_back(sweep_step(A::Pps, 6, 3235656292u, sweep_verdict));
+        s.back().reason = sweep_reason;
+        rl::Layout l; rl::build(l, s);
+        return int(l.tokens[sweep_row_of(l, 6)->first].tone);
+    };
+    const auto tone7 = [](V sweep_verdict, ct::Reason sweep_reason = ct::Reason::None) {
+        auto s = baseus();
+        s.push_back(sweep_step(A::Pps, 7, 3248763456u, sweep_verdict));
+        s.back().reason = sweep_reason;
+        rl::Layout l; rl::build(l, s);
+        return int(l.tokens[sweep_row_of(l, 7)->first].tone);
+    };
+    // slot 6: the steps alone read Partial (a failed and a skipped step beside the passes)
+    CHECK_EQ(tone6(V::Pass), int(rl::Tone::Partial));                       // a clean sweep does not lift a partial APDO
+    CHECK_EQ(tone6(V::Fail), int(rl::Tone::Fail));                          // a lost source is worse than a partial range
+    CHECK_EQ(tone6(V::Pass, ct::Reason::Folded), int(rl::Tone::Partial));
+    CHECK_EQ(tone6(V::Running), int(rl::Tone::Pending));
+    // slot 7: every step passed
+    CHECK_EQ(tone7(V::Pass), int(rl::Tone::Pass));
+    CHECK_EQ(tone7(V::Pass, ct::Reason::Folded), int(rl::Tone::Partial));   // a fold is a caution
+    CHECK_EQ(tone7(V::Fail), int(rl::Tone::Fail));
+    CHECK_EQ(tone7(V::Pending), int(rl::Tone::Pending));
+    // the range steps worse than the sweep: a clean sweep never hides a failed APDO
+    std::vector<ct::Step> s;
+    for (unsigned t : {5000u, 8000u}) s.push_back(step(A::Pps, t, V::Fail, 6, 3235656292u));
+    s.push_back(sweep_step(A::Pps, 6, 3235656292u, V::Pass));
+    rl::Layout l; rl::build(l, s);
+    CHECK_EQ(int(l.tokens[sweep_row_of(l, 6)->first].tone), int(rl::Tone::Fail));
+    // a capped step (the source plateaued) is a partial, the clean sweep leaves it so
+    s.clear();
+    s.push_back(step(A::Pps, 5000, V::Pass, 6, 3235656292u));
+    s.push_back(step(A::Pps, 11000, V::Fail, 6, 3235656292u, ct::Reason::Capped));
+    s.push_back(sweep_step(A::Pps, 6, 3235656292u, V::Pass));
+    rl::build(l, s);
+    CHECK_EQ(int(l.tokens[sweep_row_of(l, 6)->first].tone), int(rl::Tone::Partial));
+    // both parts of a split sweep count: one failed part fails the chip
+    s.clear();
+    s.push_back(step(A::Pps, 5000, V::Pass, 6, 3235656292u));
+    s.push_back(sweep_step(A::Pps, 6, 3235656292u, V::Pass)); s.back().mv = 5000;
+    s.push_back(sweep_step(A::Pps, 6, 3235656292u, V::Fail)); s.back().mv = 3300;
+    rl::build(l, s);
+    CHECK_EQ(int(l.tokens[sweep_row_of(l, 6)->first].tone), int(rl::Tone::Fail));
+}
+// A sweep that never ran (every part skipped) neither marks the chip nor lowers it; the chip is Skip only when the range steps
+// are skipped too, and then it carries the skip tag as before.
+static void test_a_skipped_sweep_leaves_no_mark_and_no_verdict() {
+    auto s = baseus();
+    s.push_back(sweep_step(A::Pps, 7, 3248763456u, V::Skip));
+    s.back().reason = ct::Reason::CableLimit;
+    rl::Layout l; rl::build(l, s);
+    const rl::Token& k = l.tokens[sweep_row_of(l, 7)->first];
+    CHECK_EQ(k.sweep, false);
+    CHECK_EQ(int(k.tone), int(rl::Tone::Pass));
+    // everything skipped (range and sweep): grey, no mark, the reason beside the chip
+    s.clear();
+    s.push_back(step(A::Pps, 5000, V::Skip, 7, 3248763456u, ct::Reason::CableLimit));
+    s.push_back(sweep_step(A::Pps, 7, 3248763456u, V::Skip));
+    s.back().reason = ct::Reason::CableLimit;
+    rl::build(l, s);
+    const rl::Row* r = sweep_row_of(l, 7);
+    CHECK_EQ(r != nullptr, true);
+    if (!r) return;
+    CHECK_EQ(int(l.tokens[r->first].tone), int(rl::Tone::Skip));
+    CHECK_EQ(l.tokens[r->first].sweep, false);
+    CHECK_STR(chips(l, size_t(r - l.rows.data())).c_str(), "5-21V 3.2A cable");
+    CHECK_EQ(l.cuts, 0);
+}
+// Opening the merged row lists the range steps AND the sweep steps of its APDO (and only its APDO's); a fixed row and the other
+// slot's row own none of them.
+static void test_the_merged_row_owns_the_sweep_steps_of_its_apdo() {
+    auto s = baseus();
+    s.push_back(sweep_step(A::Pps, 7, 3248763456u, V::Pass)); s.back().mv = 5000;
+    s.push_back(sweep_step(A::Pps, 7, 3248763456u, V::Pass)); s.back().mv = 3300;
+    const ct::Step& hi = s[s.size() - 2];
+    const ct::Step& lo = s.back();
+    rl::Layout l; rl::build(l, s);
+    const rl::Row& r7 = *sweep_row_of(l, 7);
+    const rl::Row& r6 = *sweep_row_of(l, 6);
+    CHECK_EQ(rl::row_has(r7, hi), true);
+    CHECK_EQ(rl::row_has(r7, lo), true);
+    CHECK_EQ(rl::row_has(r6, hi), false);
+    CHECK_EQ(rl::row_has(r7, step(A::Pps, 13000, V::Pass, 7)), true);              // its range steps, as before
+    CHECK_EQ(rl::row_has(l.rows[row_of(l, "PD3.x")], hi), false);                  // a fixed row never owns a sweep
+    size_t owners = 0;
+    for (size_t i = 0; i < l.row_count; ++i) owners += rl::row_has(l.rows[i], hi);
+    CHECK_EQ(owners, 1u);                                                           // exactly one row per sweep step
+    size_t listed = 0;
+    for (const auto& x : s) listed += rl::row_has(r7, x);
+    CHECK_EQ(listed, 5u);                                                           // 3 range steps + the 2 sweep parts
+    // the same through the compact grid the page keeps
+    rl::CompactGrid g; std::array<rl::CompactLine, rl::kMaxLines> lines;
+    rl::build_compact(g, rl::kGridMetrics, lines, s);
+    size_t cowners = 0;
+    for (size_t i = 0; i < g.row_count; ++i) {
+        cowners += rl::row_has(g.rows[i], hi);
+    }
+    CHECK_EQ(cowners, 1u);
+}
+// The compact grid regenerates a row's tokens on demand (row_tokens): the merged chip keeps its mark and verdict there, and the
+// label of a range row never reads "Sweep".
+static void test_a_compact_row_regenerates_the_merged_chip_with_its_mark() {
+    auto s = baseus();
+    s.push_back(sweep_step(A::Pps, 7, 3248763456u, V::Pass));
+    s.back().reason = ct::Reason::Folded;
+    rl::CompactGrid g; std::array<rl::CompactLine, rl::kMaxLines> lines;
+    rl::build_compact(g, rl::kGridMetrics, lines, s);
+    int found = 0;
+    for (size_t r = 0; r < g.row_count; ++r) {
+        CHECK_EQ(std::string(rl::row_label(g, r)) == "Sweep", false);
+        if (g.rows[r].kind != rl::CompactKind::Range || g.rows[r].mv != 7) continue;
+        ++found;
+        rl::RowTokens rt;
+        rl::row_tokens(g, r, s, {}, rt);
+        CHECK_EQ(rt.count, 1);
+        CHECK_STR(rt.toks[0].text, "5-21V 3.2A");
+        CHECK_EQ(rt.toks[0].sweep, true);
+        CHECK_EQ(int(rt.toks[0].tone), int(rl::Tone::Partial));
+    }
+    CHECK_EQ(found, 1);
+    CHECK_EQ(g.cuts, 0);
+}
+// The mark keeps m.sweep (12 px) beside the volts (the kit draws a 6 px "S" a fixed 6 px right of the text), so the grid cell
+// and the chip width grow by that; a chip without the mark keeps its width.
+static void test_the_sweep_mark_widens_the_chip_by_its_gap_and_glyph() {
+    rl::Token t; std::strcpy(t.text, "5-21V 3.2A"); t.chip = true;
+    rl::Token u = t; u.sweep = true;
+    const rl::Metrics m = rl::kGridMetrics;
+    CHECK_EQ(m.sweep, 12);
+    CHECK_EQ(rl::cell_width(u, m), rl::cell_width(t, m) + m.sweep);
+    CHECK_EQ(rl::token_width(u, m), rl::token_width(t, m) + m.sweep);
+    CHECK_EQ(rl::cell_width(t, m), 5 * m.adv + 2 * m.pad);                          // the volts only: "5-21V"
 }
 // ---- The tone rules (one table for fixed, range and legacy chips) ------------------------------------------------------------
 //   a step still to run  -> Pending      nothing sampled (all skipped) -> Skip (grey, the tag says why)
@@ -1422,9 +1574,13 @@ int main() {
     test_marks_give_each_verdict_its_own_shape();
     test_chip_width_includes_the_mark_cell();
     test_pps_one_coloured_chip_per_range();
-    test_a_pps_sweep_row_is_one_range_chip();
-    test_a_sweep_row_names_the_capped_range();
-    test_an_avs_sweep_row_is_one_range_chip();
+    test_a_pps_sweep_merges_into_its_apdos_range_chip();
+    test_an_avs_sweep_merges_into_its_apdos_range_chip();
+    test_the_merged_chip_is_the_worst_of_its_steps_and_its_sweep();
+    test_a_skipped_sweep_leaves_no_mark_and_no_verdict();
+    test_the_merged_row_owns_the_sweep_steps_of_its_apdo();
+    test_a_compact_row_regenerates_the_merged_chip_with_its_mark();
+    test_the_sweep_mark_widens_the_chip_by_its_gap_and_glyph();
     test_a_sweep_chip_takes_its_tone_from_the_sweep();
     test_a_fold_only_sweep_is_amber_at_any_depth();
     test_a_fold_is_a_caution_not_a_pass_and_not_a_fail();

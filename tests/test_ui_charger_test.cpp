@@ -1242,6 +1242,28 @@ static void test_the_default_run_is_medium() {
 // Medium -> Deep -> Light -> Medium (next_level), the Tests row's step count follows the level, and the footer says what the
 // level does. PLUS goes back to START, whose OK opens the confirmation as before.
 static void dump_screen(const char* name);
+// The panel's blank columns between the amber chip's label ink and its dim "S" mark (-1: no such chip): the label is drawn with
+// kCaution on the kCautionT fill, the mark with kDim; the rows scanned are the chip body (the Partial bar below it is kCaution too).
+static int amber_chip_sweep_gap() {
+    int y0 = -1, y1 = -1;
+    for (int y = 0; y < LCD_HEIGHT; ++y) {
+        int n = 0;
+        for (int x = 0; x < LCD_WIDTH; ++x) n += g_panel[y * LCD_WIDTH + x] == kCautionT;
+        if (n >= 100) { if (y0 < 0) y0 = y; y1 = y; }
+    }
+    if (y0 < 0) return -1;
+    int fill_x0 = LCD_WIDTH, first_dim = LCD_WIDTH;
+    for (int x = 0; x < LCD_WIDTH; ++x)
+        if (g_panel[y0 * LCD_WIDTH + x] == kCautionT && x < fill_x0) fill_x0 = x;
+    for (int y = y0; y <= y1; ++y)
+        for (int x = fill_x0; x < LCD_WIDTH; ++x)   // inside the chip: the row label ("PPS") is dim too, left of it
+            if (g_panel[y * LCD_WIDTH + x] == kDim && x < first_dim) first_dim = x;
+    int last_ink = -1;
+    for (int y = y0; y <= y1; ++y)
+        for (int x = 0; x < first_dim; ++x)
+            if (g_panel[y * LCD_WIDTH + x] == kCaution && x > last_ink) last_ink = x;
+    return first_dim < LCD_WIDTH && last_ink >= 0 ? first_dim - last_ink - 1 : -1;
+}
 static void test_review_level_row_cycles_and_counts() {
     fixture();
     g_stub.caps.num_pdos = 3;
@@ -1764,6 +1786,7 @@ struct FamilyPick {
     int line = -1;
     unsigned count = 0;
     int first_caution = -1;
+    uint8_t algo = 0, pos = 0;   // the row's own APDO (a range row)
     result_layout::FamilyTally tally;
 };
 static FamilyPick pick_family(Ui& ui, const char* label) {
@@ -1779,6 +1802,7 @@ static FamilyPick pick_family(Ui& ui, const char* label) {
         if (std::string_view(layout.rows[ln[k].row].label) == label) pick.line = int(k);
     if (pick.line < 0) return pick;
     const auto& row = layout.rows[ln[size_t(pick.line)].row];
+    pick.algo = uint8_t(row.algorithm); pick.pos = row.pos;
     for (const auto& s : steps) {
         if (!result_layout::row_has(row, s)) continue;
         const bool caution = result_layout::caution(s, view);
@@ -1846,11 +1870,12 @@ static void test_family_steps_scenes() {
             CHECK_EQ(ui.charger_test_stage(), 7);
             if (ui.charger_test_stage() != 7) { press(ui, Button::Back, t); calm(); continue; }
             // Only this row's steps: its own range, level family or sweep, not the whole protocol family.
-            unsigned want = 0;
+            unsigned want = 0, swept = 0, ranged = 0;
             result_layout::FamilyTally tally;
             for (const auto& s : steps) {
                 if (!result_layout::row_has(row, s)) continue;
                 ++want;
+                (ct::is_sweep(s) ? swept : ranged) += 1;
                 const bool caution = result_layout::caution(s, view);
                 tally.caution += caution;
                 tally.pass += s.verdict == ct::Verdict::Pass && !caution;
@@ -1859,6 +1884,12 @@ static void test_family_steps_scenes() {
                 tally.skip += s.verdict == ct::Verdict::Skip && !result_layout::advertised(s);
             }
             CHECK_EQ(want > 0, true);
+            bool marked = false;
+            for (size_t i = row.first; i < size_t(row.first) + row.count; ++i) marked = marked || layout.tokens[i].sweep;
+            if (marked) {
+                CHECK_EQ(swept >= 1, true);   // a chip marked S: its Steps page lists the sweep beside the range steps
+                CHECK_EQ(ranged >= 1, true);
+            }
             CHECK_EQ(unsigned(ui.list_state().count), want);
             if (want < steps.size()) CHECK_EQ(ui.list_state().count < int(steps.size()), true);
             const auto foot = result_layout::family_footer(row.label, tally);
@@ -1999,12 +2030,20 @@ static void test_a_voltage_fold_reads_as_a_caution() {
     CHECK_EQ(ui.charger_test_stage(), 6);
     top(ui, t); calm();
     dump_screen("fold_results");
-    const auto readme_rot3 = [&](const char* name) {   // the README's picture of the same screen, rotation 3 (the strip at the bottom)
+    CHECK_EQ(amber_chip_sweep_gap() >= 6, true);   // the S mark never hugs the label: at least one font-12 advance in every rotation
+    const auto readme_rot3 = [&](const char* name, bool results = true) {   // the README's picture of the same screen, rotation 3 (the strip at the bottom)
         ui.set_rotation(3, t); calm();
         dump_screen(name);
+        if (results) CHECK_EQ(amber_chip_sweep_gap() >= 6, true);   // the Results grid has the chip; the Detail page does not
         ui.set_rotation(0, t); calm();
     };
     readme_rot3("readme_ct_caution");
+    for (const uint8_t rot : {1, 2}) {   // the merged chip with its S mark in the landscape mappings too (every cut would fail the run)
+        ui.set_rotation(rot, t); calm();
+        dump_screen(rot == 1 ? "fold_results_rot1" : "fold_results_rot2");
+        CHECK_EQ(amber_chip_sweep_gap() >= 6, true);
+        ui.set_rotation(0, t); calm();
+    }
     // The header: pass / caution / fail / skip; the caution cell is amber (four columns: the number only, behind its amber mark).
     StrBuf<8> n; n.put_u32(caution);
     check_text_at(kSmall, 26, n.view(), kCaution, kBg, 56 + 16);
@@ -2018,6 +2057,13 @@ static void test_a_voltage_fold_reads_as_a_caution() {
     CHECK_EQ(pps.first_caution >= 0, true);
     top(ui, t); calm();
     for (int k = 0; k < pps.line; ++k) { press(ui, Button::Plus); ui.tick(t += 100); calm(); }
+    {   // the merged row on the Results screen: its footer carries the sweep's fold words, in the caution tone (the Sweep row's old job)
+        char fold[ctsweep::kFoldTextMax] = {};
+        const auto rw = r.sweep_view().apdo(pps.algo, pps.pos);
+        const size_t fl = rw ? ctsweep::format_fold(rw->sum, fold) : 0;
+        CHECK_EQ(fl > 0, true);
+        CHECK_EQ(footer_shows(std::string_view(fold, fl), kCaution), true);
+    }
     press(ui, Button::Ok); ui.tick(t += 100); calm();
     CHECK_EQ(ui.charger_test_stage(), 7);
     CHECK_EQ(unsigned(ui.list_state().count), pps.count);
@@ -2038,7 +2084,7 @@ static void test_a_voltage_fold_reads_as_a_caution() {
     CHECK_EQ(detail, true);
     if (!detail) return;
     dump_screen("fold_detail");
-    readme_rot3("readme_ct_caution_detail");
+    readme_rot3("readme_ct_caution_detail", false);
     // The long word and the long name ("PPS 7.14->11V") share the band: the word drops to the small font and nothing overlaps.
     check_text_at(kSmall, 32, "CAUTION", kOnPart, kPartFill, 32);
     char want[ctsweep::kFoldTextMax] = {};
@@ -2097,17 +2143,71 @@ static void test_a_sweep_off_by_more_than_100mv_reads_as_a_caution() {
     check_text_at(kSmall, 26, n.view(), kCaution, kBg, 56 + 16);        // the header's caution cell holds the deviating sweeps
     n.clear(); n.put_u32(pass);
     check_text_at(kSmall, 26, n.view(), kOk, kBg, 16);
-    // The sweep row's steps: its page counts the deviating sweeps as cautions ("Sweep: m caution").
-    const auto sw = pick_family(ui, "Sweep");
+    // The PPS row's steps page lists the range steps and the APDO's sweep, and counts its deviating sweep as a caution.
+    const auto sw = pick_family(ui, "PPS");
     CHECK_EQ(sw.line >= 0, true);
     if (sw.line < 0) return;
-    CHECK_EQ(sw.tally.caution >= sweeps, true);
+    CHECK_EQ(sw.tally.caution >= 1, true);
     for (int k = 0; k < sw.line; ++k) { press(ui, Button::Plus); ui.tick(t += 100); calm(); }
     press(ui, Button::Ok); ui.tick(t += 100); calm();
     CHECK_EQ(ui.charger_test_stage(), 7);
     CHECK_EQ(unsigned(ui.list_state().count), sw.count);
     top(ui, t); calm();
-    CHECK_EQ(footer_shows(result_layout::family_footer("Sweep", sw.tally).view(), kCaution), true);
+    CHECK_EQ(footer_shows(result_layout::family_footer("PPS", sw.tally).view(), kCaution), true);
+}
+// A sweep part that failed (the source was lost mid-sweep) paints the merged chip red; the Results footer of that row must then speak
+// of the sweep in the caution tone, never of the range's reach alone ("PPS: 3.3-11V reached" in green under a red chip): the
+// peak it did record, or "sweep failed" when no point was recorded at all.
+static void test_a_failed_sweep_footer_never_reads_as_reached() {
+    six_pdo_fixture();
+    g_stub.vbus_ceiling_mv = 36000;
+    Ui ui; open(ui);
+    CHECK_EQ(ui.charger_test_set_units(kPdOnly), true);
+    ui.charger_test_set_sweep(true);
+    review(ui);
+    start_press(ui, 1300); press(ui, Button::Ok, 1400);
+    uint32_t t = 1500;
+    for (; t <= 900000 && ui.charger_test_busy(); t += 100) ui.tick(t);
+    CHECK_EQ(ui.charger_test_stage(), 6);
+    const auto calm = [&] {
+        for (int i = 0; i < 64 && ui.painting(); ++i) ui.tick(t += 100);
+        CHECK_EQ(ui.painting(), false);
+    };
+    ui.tick(t += 200); ui.tick(t += 200);
+    calm();
+    const auto& r = ui.charger_test_results();
+    for (size_t i = 0; i < r.steps().size(); ++i) {   // every sweep part of the run lost its source
+        auto& s = const_cast<ct::Step&>(r.steps()[i]);
+        if (ct::is_sweep(s)) s.verdict = ct::Verdict::Fail;
+    }
+    top(ui, t); calm();
+    press(ui, Button::Ok); ui.tick(t += 100); calm();   // into the Steps and back: the Results grid is rebuilt
+    press(ui, Button::Back); ui.tick(t += 100); calm();
+    top(ui, t); calm();
+    const auto pps = pick_family(ui, "PPS");
+    CHECK_EQ(pps.line >= 0, true);
+    if (pps.line < 0) return;
+    const auto at_pps = [&] {
+        top(ui, t); calm();
+        for (int k = 0; k < pps.line; ++k) { press(ui, Button::Plus); ui.tick(t += 100); calm(); }
+    };
+    at_pps();
+    const auto rw = r.sweep_view().apdo(pps.algo, pps.pos);
+    CHECK_EQ(rw.has_value() && rw->sum.points > 0, true);
+    if (!rw) return;
+    char a[12] = {}, b[12] = {};
+    StrBuf<40> want;
+    want.put("PPS: peak ").put(std::string_view(a, ctsweep::format_mv(rw->sum.peak_mv, a))).put("V@");
+    want.put(std::string_view(b, ctsweep::format_mv(rw->sum.peak_at_mv, b))).put_char('V');
+    CHECK_EQ(footer_shows(want.view(), kCaution), true);   // the peak it recorded, amber
+    for (const auto& row : r.sweep_view().rows)             // no point recorded at all
+        const_cast<ctsweep::RowView&>(row).n = 0, const_cast<ctsweep::RowView&>(row).sum.points = 0;
+    ui.tick(t += 100); calm();
+    top(ui, t); calm();
+    press(ui, Button::Ok); ui.tick(t += 100); calm();
+    press(ui, Button::Back); ui.tick(t += 100); calm();
+    at_pps();
+    CHECK_EQ(footer_shows("PPS: sweep failed", kCaution), true);
 }
 // Every Steps row reads as a whole step label (step_label::label), never cut with dots: the ink of each visible row's text
 // cell is compared with the ink of every label of the run, and some label must match. The cut would end in "...". The same scan
@@ -5442,6 +5542,7 @@ int main() {
     test_family_steps_scenes();
     test_a_long_family_list_scrolls_under_its_header();
     test_a_voltage_fold_reads_as_a_caution();
+    test_a_failed_sweep_footer_never_reads_as_reached();
     test_a_sweep_off_by_more_than_100mv_reads_as_a_caution();
     test_sweep_log_line_has_no_literal_format_bug();
     test_state_change_log_keeps_the_full_state_name_in_the_format();

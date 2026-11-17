@@ -3,9 +3,10 @@
 // Charger-test Results screen, pure layout: the run's steps become one row per protocol (a label plus
 // chips), then the rows wrap into display lines. No drawing here; host-tested in tests/test_result_layout.cpp.
 //   Fixed PD:  one chip per offered PDO, "5V 3A" (the advertised current, from the PDO in the run evidence).
-//   PPS / AVS: one row per advertised range (APDO), one chip in it, "3.3-11V 3A", coloured by how many of its
-//              steps passed; a range the charger does not offer reads "None". One row per APDO keeps a Mi 6A
-//              probe the plan runs between two APDOs between their rows, where it executes.
+//   PPS / AVS: one row per advertised range (APDO), one chip in it, "3.3-11V 3A", coloured by the worst of its range
+//              steps and its deep sweep; a small "S" beside the volts says a sweep ran on that APDO (Token::sweep). A
+//              range the charger does not offer reads "None". One row per APDO keeps a Mi 6A probe the plan runs
+//              between two APDOs between their rows, where it executes. The sweep has no row of its own.
 //   Legacy:    one chip per distinct target voltage ("9V"), so QC3 up and down steps collapse; SCP adds its limit ("10V 2.25A").
 //   Mi 6 A:    one row "Mi 6A" per probed level, a chip per probe step, "20V 6A", where the plan runs it.
 //   The words are k2/chargertest/step_label.hpp's, the same as the Running / Steps rows and the report card.
@@ -86,6 +87,7 @@ struct Token {
     bool glue = false;   // stays on the line of the previous token
     uint16_t mv = 0;     // the level a fixed or legacy chip stands for (0: a range, a word, or a probe): the Running grid finds the
                          // chip of the step in flight by it (a legacy chip merges the up and down steps of one level)
+    bool sweep = false;  // a range chip whose APDO ran (or runs) a deep sweep: the grid draws a small dim "S" after the volts
 };
 struct Row {
     char label[9] = {};
@@ -93,8 +95,7 @@ struct Row {
     charger_test::Algorithm algorithm = charger_test::Algorithm::Count;   // Count: a collapsed row or a header
     bool header = false;            // section header row: no tokens, not openable
     bool probe = false;             // a Mi 6A probe row (algorithm Count): the 6 A hunt steps at `mv`
-    bool sweep = false;             // a deep-sweep row (one per APDO): one range chip, the swept range ("5-21V 3.2A")
-    uint8_t pos = 0;                // the PDO slot of a range or sweep row; 0: not one of those
+    uint8_t pos = 0;                // the PDO slot of a range row; 0: not one
     uint16_t mv = 0;                // the probed level of a probe row
     uint8_t first = 0, count = 0;   // tokens
 };
@@ -113,10 +114,11 @@ struct Line {
 // max_groups = most chips (a chip and the tags glued to it count once) on one line, 0 = no limit (the verdict grid: 5 cells).
 // cells = the verdict grid: a line is `groups` EQUAL cells as wide as the widest volt text (a chip's text before its space, a
 // word whole; the glued tags are not shown there) plus 2 * pad, one `gap` apart, in `avail` px in all.
-struct Metrics { int adv = 6, pad = 2, gap = 2, avail = 158, mark = 11, max_groups = 0; bool cells = false; };
+// sweep = the room a chip with a sweep keeps right of its text: the gap + the "S" glyph (kit::kSweepMarkW, checked in ui_charger_test).
+struct Metrics { int adv = 6, pad = 2, gap = 2, avail = 158, mark = 11, max_groups = 0; bool cells = false; int sweep = 12; };
 // The Results / Running verdict grid wraps the layout into lines of at most 5 equal cells (8 px glyphs, 163 px beside the label
 // strip, 1 px gaps). Shared with the gate's sweep of every passive label (tests/test_ui_no_truncation.cpp).
-inline constexpr Metrics kGridMetrics{.adv = 8, .pad = 2, .gap = 1, .avail = 163, .max_groups = 5, .cells = true};
+inline constexpr Metrics kGridMetrics{.adv = 8, .pad = 2, .gap = 1, .avail = 163, .max_groups = 5, .cells = true, .sweep = 12};
 
 // Results-tab sections, in the default run order (docs/CHARGER_TEST_FLOW.md): the OEM vendor modes by company
 // (Huawei / Honor, Samsung, OPPO / OnePlus / vivo), the identity facts of a PD source (QC4+/QC5, Lenovo, HP), USB PD (CC) with
@@ -138,7 +140,6 @@ struct OemNotes {
     // The Running grid keeps such a unit's row where the plan put it (fold = false): a row that jumps to the end when its unit
     // fails would take the finished rows from above the running one and shuffle the window mid-run.
     bool fold = true;
-    unsigned monitor_mv = 36000;   // the K2's monitor ceiling, for planning a pending sweep row's strip range
     bool oppo_svid = false;   // the source listed OPPO's SVID: a passive "OPPO SVID 0x22D9 (discovery only)" row, nothing sent
     const char* scp_cap = nullptr;   // what the adapter's SCP readout reported, the words after "SCP cap " of report_card::scp_note ("20V 6A")
     // The SuperVOOC ceiling stage's result, the words of svooc_ceiling::format_cap ("<=11.1V, 10.9A claimed", "refused"): the highest
@@ -154,13 +155,13 @@ const char* vendor_oem_name(uint16_t vid);
 
 // The rows come from the steps alone: they are the plan, in the order the runner executes them, so a row stands where the plan first
 // runs one of its steps. A row is a protocol's steps (a fixed PD row: one per algorithm; a PPS / AVS row: one per APDO, Row::pos),
-// or (a probe row, Row::probe) the 6 A hunt steps at one level, wherever the planner put them, or (a sweep row, Row::sweep) the
-// deep sweep of one APDO: one range chip like the range row's, coloured by the sweep's result and the worst recorded error
-// (the points come from `sweep`, the runner's record). The Running grid, the Results page and the Steps page read the
+// or (a probe row, Row::probe) the 6 A hunt steps at one level, wherever the planner put them. A PPS / AVS APDO's deep sweep
+// steps belong to its range row: the chip is the worst of the range steps and the sweep (the sweep's tracking error and fold come
+// from `sweep`, the runner's record) and wears the "S" mark. The Running grid, the Results page and the Steps page read the
 // same step list, so none keeps an order of its own.
 void build(Layout&, std::span<const charger_test::Step>, const OemNotes& = {}, const ctsweep::View& sweep = {});
-// Does step `s` belong to layout row `r`? A probe row owns the hunt steps at its level; a sweep row the sweep step of its
-// APDO; a range row (one per APDO) owns its slot's other steps; any other protocol row the protocol's other steps.
+// Does step `s` belong to layout row `r`? A probe row owns the hunt steps at its level; a range row (one per APDO) owns its
+// slot's steps, the sweep steps included; any other protocol row the protocol's steps except sweeps (they only exist on APDOs).
 bool row_has(const Row& r, const charger_test::Step& s);
 // Appends a fact row of plain words after the protocol rows (a collapsed row: its OK opens the whole step list).
 // Dropped when the layout is full.
@@ -216,12 +217,12 @@ inline constexpr size_t kCompactPoolBytes = 200;
 inline constexpr size_t kMaxFactTokens = 24;
 
 enum class CompactKind : uint8_t {
-    Header, Probe, Sweep, Range, RangeNone, NoQc3Plus, Fixed, Legacy, Fact, Collapsed
+    Header, Probe, Range, RangeNone, NoQc3Plus, Fixed, Legacy, Fact, Collapsed
 };
 struct CompactRow {
     CompactKind kind = CompactKind::Header;
     uint8_t algo = 0;      // charger_test::Algorithm, Section (Header), or Tone (Fact / Collapsed label tone)
-    uint16_t mv = 0;       // Probe mv, Range/Sweep pos, Fact label pool offset, or Collapsed (0=absent, 1=skipped)
+    uint16_t mv = 0;       // Probe mv, Range pos, Fact label pool offset, or Collapsed (0=absent, 1=skipped)
     uint8_t first = 0;     // Fact: first fact_tok index
     uint8_t count = 0;     // Fact: fact_tok count
 };
@@ -246,7 +247,6 @@ struct CompactGrid {
     std::array<FactToken, kMaxFactTokens> fact_toks{};
     std::array<char, kCompactPoolBytes> pool{};
     std::array<uint32_t, 2> collapsed_masks{};   // [0]=absent, [1]=skipped
-    uint16_t monitor_mv = 36000;
     uint8_t row_count = 0, fact_count = 0, pool_used = 0, cuts = 0;
 };
 struct RowTokens {

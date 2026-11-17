@@ -40,14 +40,17 @@ void draw_run_mark(const Surface &s, const CellRect &cell, bool on, uint16_t und
 // Every pixel of the cell is streamed once: the fill leaves a hole for the label or the glyph. The exceptions are a Skip
 // label's strike, a 1 px line painted over the text (strike_px), and a Running label's outline over the cell's rim (mark_px).
 void draw_verdict(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, Verdict v, std::string_view label,
-                  uint16_t under) {
+                  uint16_t under, bool sweep) {
     const VerdictStyle st = verdict_style(v);
     const uint16_t base = st.filled ? st.fill : under;
     Box inner{x, y, w, h};
     if (!label.empty()) {
         char buf[kFitBuf];
-        const detail::LabelLayout lay = detail::label_layout(x, y, w, h, label, buf);
+        const detail::LabelLayout lay = detail::label_layout(x, y, sweep ? static_cast<int16_t>(w - kSweepMarkW) : w, h, label, buf);
         const Box hole = lay.hole;
+        // The sweep mark sits on the label's baseline, right of it; it is a second hole, so every pixel is still streamed once.
+        const Box sm{static_cast<int16_t>(hole.x + hole.w + kSweepGap), static_cast<int16_t>(hole.y + lay.font->ascent - kLabelFont.ascent),
+                     static_cast<int16_t>(kLabelFont.adv), static_cast<int16_t>(kLabelFont.height)};
         if (v == Verdict::Partial) {   // the shape cue: a bar along the bottom edge, so a partial never reads as a pass in grey
             inner.h = static_cast<int16_t>(inner.h - kPartialBarH);
             gfx_fill(s, x, static_cast<int16_t>(y + h - kPartialBarH), w, kPartialBarH, st.ink);
@@ -56,7 +59,13 @@ void draw_verdict(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, 
             inner.w = static_cast<int16_t>(inner.w - kNotedBarW);
             gfx_fill(s, x, y, kNotedBarW, h, st.mark);
         }
-        fill_except(s, inner, &hole, 1, base);
+        if (sweep) {
+            const Box holes[2] = {hole, sm};
+            fill_except(s, inner, holes, 2, base);
+            gfx_text(s, kLabelFont, sm.x, sm.y, "S", v == Verdict::Fail ? st.ink : kDim, base);   // dim; black on the solid red
+        } else {
+            fill_except(s, inner, &hole, 1, base);
+        }
         gfx_text(s, *lay.font, hole.x, hole.y, lay.text, st.ink, base);
         if (v == Verdict::Skip && !lay.text.empty()) {
             const Box k = detail::strike_line(*lay.font, hole.x, hole.y, hole.w, x, w);
@@ -529,7 +538,7 @@ void draw_result_row(const Surface &s, int16_t y, int16_t h, std::string_view ro
     const int16_t vh = two ? 24 : body;
     for (int i = 0; i < n; i++) {
         const CellRect cr = verdict_cell_rect(s, y, vh, n, i);
-        draw_verdict(s, cr.x, cr.y, cr.w, cr.h, cells[i].verdict, cells[i].label, kBg);
+        draw_verdict(s, cr.x, cr.y, cr.w, cr.h, cells[i].verdict, cells[i].label, kBg, cells[i].sweep);
         gfx_fill(s, static_cast<int16_t>(cr.x + cr.w), y, 1, vh, kBg);   // the gap column between neighbours
     }
     if (!two) return;
@@ -574,6 +583,7 @@ uint32_t row_hash(const ResultRowSpec &r, int16_t y, int16_t h, bool with_cur) {
     k = mix(k, r.label);
     for (int i = 0; i < r.n; i++) {
         k = mix(k, r.cells[i].label);
+        k = mix_u32(k, r.cells[i].sweep);   // the mark moves the label: a new shape
         if (with_cur) k = mix(k, r.cells[i].current);
     }
     return k;
@@ -671,9 +681,9 @@ int ResultGrid::row_y(int index) const {
 // Whether the outline's rim of a labelled cell overlaps the ink box of one of its glyphs (then wiping the outline would wipe
 // label pixels, so the caller repaints the cell instead). The ink boxes are exact: in a grid cell the line box starts 4 px
 // down and the ink 7, and a label is narrower than its cell by more than the rim, so the cheap wipe applies.
-bool mark_hits_label(const CellRect &cr, std::string_view label) {
+bool mark_hits_label(const CellRect &cr, std::string_view label, bool sweep) {
     char buf[kFitBuf];
-    const detail::LabelLayout lay = detail::label_layout(cr.x, cr.y, cr.w, cr.h, label, buf);
+    const detail::LabelLayout lay = detail::label_layout(cr.x, cr.y, sweep ? static_cast<int16_t>(cr.w - kSweepMarkW) : cr.w, cr.h, label, buf);
     const int x0 = cr.x + kRunFrame, x1 = cr.x + cr.w - kRunFrame, y0 = cr.y + kRunFrame, y1 = cr.y + cr.h - kRunFrame;
     const Font &f = *lay.font;
     int pen = lay.hole.x;
@@ -690,11 +700,11 @@ bool mark_hits_label(const CellRect &cr, std::string_view label) {
 
 // The grid's dot bookkeeping after a paint: the cell was painted (so a dot that was on it is gone), and a Running one has its
 // dot again (draw_verdict paints it).
-void ResultGrid::note_dot(const CellRect &cell, bool running, std::string_view label, int slot, int k) {
+void ResultGrid::note_dot(const CellRect &cell, bool running, const ResultCell &c, int slot, int k) {
     if (dot_on_ && dot_cell_.x == cell.x && dot_cell_.y == cell.y) dot_on_ = false;
-    if (!running || label.empty()) return;
+    if (!running || c.label.empty()) return;
     dot_on_ = true; dot_cell_ = cell; dot_slot_ = slot; dot_k_ = k;
-    dot_hit_ = mark_hits_label(cell, label);
+    dot_hit_ = mark_hits_label(cell, c.label, c.sweep);
 }
 
 int ResultGrid::sync_dots() {
@@ -714,7 +724,7 @@ int ResultGrid::sync_dots() {
             for (int k = 0; k < r.n; k++) {
                 if (r.cells[k].verdict != Verdict::Running || r.cells[k].label.empty()) continue;
                 want = verdict_cell_rect(surf_, cy, vh, r.n, k);
-                want_hit = mark_hits_label(want, r.cells[k].label);
+                want_hit = mark_hits_label(want, r.cells[k].label, r.cells[k].sweep);
                 wslot = slot; wk = k; have = true;
             }
         }
@@ -777,7 +787,7 @@ int ResultGrid::draw_some(int budget_px, int prefer, bool strict) {
                         if (dot_on_ && dot_cell_.y >= yy && dot_cell_.y < yy + h) dot_on_ = false;   // the row covers the whole width
                         for (int k = 0; k < r.n; k++)
                             if (r.cells[k].verdict == Verdict::Running)
-                                note_dot(verdict_cell_rect(surf_, cy, vh, r.n, k), true, r.cells[k].label, slot, k);
+                                note_dot(verdict_cell_rect(surf_, cy, vh, r.n, k), true, r.cells[k], slot, k);
                     }
                 } else if (vd_[slot] != vd) {
                     const unsigned chg = changed_cells(vd_[slot], vd, r.n);
@@ -790,8 +800,8 @@ int ResultGrid::draw_some(int budget_px, int prefer, bool strict) {
                         for (int k = 0; k < r.n; k++) {
                             if (!((chg >> k) & 1)) continue;
                             const CellRect cr = verdict_cell_rect(surf_, cy, vh, r.n, k);
-                            draw_verdict(surf_, cr.x, cr.y, cr.w, cr.h, r.cells[k].verdict, r.cells[k].label, kBg);
-                            note_dot(cr, r.cells[k].verdict == Verdict::Running, r.cells[k].label, slot, k);
+                            draw_verdict(surf_, cr.x, cr.y, cr.w, cr.h, r.cells[k].verdict, r.cells[k].label, kBg, r.cells[k].sweep);
+                            note_dot(cr, r.cells[k].verdict == Verdict::Running, r.cells[k], slot, k);
                         }
                         spent += cost;
                         vd_[slot] = vd;

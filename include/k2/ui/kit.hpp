@@ -120,8 +120,10 @@ inline VerdictStyle verdict_style(Verdict v) {
 }
 // Paints the cell (w x h at x, y): its base (the style's fill, else `under`), the outline, then `label` centred (S12, or
 // S16 from 22 px tall) in the ink colour, or the state's glyph (check, cross, tilde, dash, dot) when the label is empty.
+// `sweep` adds the small dim "S" mark right of a labelled cell's text (a deep sweep ran on what the chip names): the label is
+// centred in the cell minus kSweepMarkW, so label + a fixed kSweepGap (6 px) + mark is the centred group; the mark takes no tone of its own.
 void draw_verdict(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, Verdict v, std::string_view label,
-                  uint16_t under);
+                  uint16_t under, bool sweep = false);
 // Pixels a cell streams beyond its area: a Skip label's strike is painted over the text, the label's width + 2 px (clipped to
 // the cell). 0 for every other verdict and for an empty label. The budgeted grid adds it to the cell's cost.
 int strike_px(Verdict v, std::string_view label, int16_t w, int16_t h);
@@ -388,6 +390,8 @@ constexpr int16_t kResultLabelW = 60;                       // label strip, x0..
 // Worst case of strike_px in one 224 px grid row: a strike never exceeds its own cell and the cells tile what is right of the
 // rule, so all five struck at once is the cell span (the headroom the page's one-row budget adds, ui_pages.hpp kFlightRowPx).
 constexpr int kStrikeRowMaxPx = 224 - kResultLabelW - 1;
+constexpr int16_t kSweepGap = 6;                           // the fixed gap between a chip's label and its "S" mark: one 12 px advance
+constexpr int16_t kSweepMarkW = 12;                        // the "S" mark group: kSweepGap + one 6 px label glyph (ctx: result_layout cell_width)
 constexpr int16_t kResultRowH = 26, kResultRowHCur = 40;    // volt-only and with-current row heights
 // Worst case of the outlines in one row: the running step is one cell (a row never wears two), at most the whole span right
 // of the rule and the tallest verdict part (a volt-only row under a section rule: 26 - 1).
@@ -397,6 +401,7 @@ struct ResultCell {
     Verdict verdict = Verdict::Pending;
     std::string_view label;     // the volt text ("5V"), or the reason on a lone never-ran cell
     std::string_view current;   // "3A": brackets are drawn under the run of cells that share it; empty = volt-only
+    bool sweep = false;         // a deep sweep ran on this chip's APDO: the dim "S" mark after the label
 };
 struct ResultRowSpec {
     std::string_view label;     // unit label, up to 9 chars at S12
@@ -418,7 +423,7 @@ struct CellRect {
 // `under` (the cell has no fill, so its base is the caller's background). run_mark_px(cell) pixels either way; the label is
 // not touched as long as its ink stays off the rim (mark_hits_label; the grid's cells clear it: tests/test_kit.cpp).
 void draw_run_mark(const Surface &s, const CellRect &cell, bool on, uint16_t under = kBg);
-bool mark_hits_label(const CellRect &cell, std::string_view label);
+bool mark_hits_label(const CellRect &cell, std::string_view label, bool sweep = false);
 // One row at y (h from result_row_h). Every pixel of the row is streamed exactly once, so repainting it needs no erase.
 void draw_result_row(const Surface &s, int16_t y, int16_t h, std::string_view row_label, const ResultCell *cells, int n,
                      bool focus = false, bool section = false);
@@ -477,7 +482,7 @@ private:
     bool dot_hit_ = false;              // ... its box touches the label's ink (a cell too short for the cheap erase),
     CellRect dot_cell_{};               // ... on this cell,
     int dot_slot_ = 0, dot_k_ = 0;      // ... of this slot's row, cell k
-    void note_dot(const CellRect &cell, bool running, std::string_view label, int slot, int k);
+    void note_dot(const CellRect &cell, bool running, const ResultCell &c, int slot, int k);
 };
 
 // ---- PassBandGauge -------------------------------------------------------------------------------------------------------
