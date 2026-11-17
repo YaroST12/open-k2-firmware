@@ -2636,11 +2636,11 @@ void ChargerTestPage::paint_running(uint32_t now) {
     }
     // 4. the step header: counter, progress bar, protocol, step name, target. A step change is visible within a tick or two.
     {
-        buf.clear();
-        buf.put_u32(st ? static_cast<uint32_t>(at + 1) : 0).put_char('/').put_u32(static_cast<uint32_t>(steps.size())).put(" steps");
-        put_line(c, kSmall, 6, 25, buf.view(), kText, 12, cell_sig_[0], false, false, &bg);
-        const auto work = result_layout::run_progress(steps);   // rows the run executes: a plan-time skip is not work
+        const auto work = result_layout::run_progress(steps);   // rows the run executes: a plan-time skip is not work (the counter and the bar read it alike)
         const int done = static_cast<int>(work.done), total = static_cast<int>(work.total);
+        buf.clear();
+        buf.put_u32(work.done).put_char('/').put_u32(work.total).put(" steps");
+        put_line(c, kSmall, 6, 25, buf.view(), kText, 12, cell_sig_[0], false, false, &bg);
         if (bg.admit(prog_.cost(done, total))) prog_.set(done, total);
         const int fam = st ? family(*st) : -1;
         // the family label (dim, 12 px) above the name; a sweep row's name moves up and the label goes to its right, baseline to baseline

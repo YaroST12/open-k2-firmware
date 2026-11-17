@@ -1537,6 +1537,40 @@ static void test_the_spec_detail_shows_the_limit_while_the_engine_holds_the_run(
 // A voltage fold is a caution (user decision 2026-11-16): the sweep row and the APDO's fixed rows on the folded side read amber,
 // neither pass nor fail. The sweep itself is a clean run here; the fold is set on the finished run (the host stub cannot make a
 // converter fold back), then the Results grid is rebuilt. Checks the header's fourth cell, the Steps footer and the Detail page.
+// The Running header's counter beside the bar: executed rows done of executed rows (result_layout::run_progress), the numbers the
+// bar draws. A plan-time skip (a level the K2's own ceiling cannot reach) is no work: it is in neither number.
+static bool counter_says(std::string_view text) {
+    std::array<uint16_t, LCD_WIDTH * LCD_HEIGHT> actual;
+    std::copy_n(g_panel, actual.size(), actual.begin());
+    gfx_text({0, 0, 224, 240}, kSmall, 6, 25, text, kText, kBg);
+    unsigned diff = 0;
+    for (int y = 25; y < 25 + kSmall.height; ++y)
+        for (int x = 6; x < 6 + text_width(kSmall, text); ++x) diff += actual[y * LCD_WIDTH + x] != g_panel[y * LCD_WIDTH + x];
+    std::copy(actual.begin(), actual.end(), g_panel);
+    return diff == 0;
+}
+static void test_the_running_counter_counts_executed_rows_like_the_bar() {
+    six_pdo_fixture();
+    g_stub.vbus_ceiling_mv = 12000;
+    Ui ui; open(ui);
+    CHECK_EQ(ui.charger_test_set_units(kPdOnly), true);
+    review(ui);
+    start_press(ui, 1300); press(ui, Button::Ok, 1400);
+    unsigned checked = 0, skips_seen = 0;
+    for (uint32_t t = 1500; t <= 900000 && ui.charger_test_busy(); t += 100) {
+        ui.tick(t);
+        if (ui.charger_test_stage() != 5 || ui.painting()) continue;
+        const auto steps = ui.charger_test_results().steps();
+        const auto work = result_layout::run_progress(steps);
+        skips_seen += std::count_if(steps.begin(), steps.end(), [](const ct::Step& s) { return s.verdict == ct::Verdict::Skip; }) != 0;
+        StrBuf<16> want;
+        want.put_u32(work.done).put_char('/').put_u32(work.total).put(" steps");
+        CHECK_EQ(counter_says(want.view()), true);
+        ++checked;
+    }
+    CHECK_EQ(checked > 3, true);
+    CHECK_EQ(skips_seen > 0, true);   // the run did plan-time skips, or the check above proves nothing
+}
 static void test_a_voltage_fold_reads_as_a_caution() {
     six_pdo_fixture();
     g_stub.vbus_ceiling_mv = 36000;
@@ -4934,6 +4968,7 @@ int main() {
     test_preflight_wrong_voltage_under_pdo1_contract_is_logged();
     test_the_results_grid_carries_the_pdspec_section();
     test_the_spec_detail_shows_the_limit_while_the_engine_holds_the_run();
+    test_the_running_counter_counts_executed_rows_like_the_bar();
     test_a_voltage_fold_reads_as_a_caution();
     test_a_sweep_off_by_more_than_100mv_reads_as_a_caution();
     test_sweep_log_line_has_no_literal_format_bug();
