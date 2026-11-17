@@ -647,9 +647,10 @@ enum class Cmd : uint8_t {
     ChargerLevel = 0x5B,    // [level(1)] the level of the next charger run (charger_test::Level: 0 Medium, 1 Light, 2 Deep; with_level
                          // also sets both deep-sweep flags: on for Deep, off otherwise). rsp [level]. Read back in CHARGER_TEST schema 2,
                          // draft selection bits 28..29. Busy while a run is active, BadArg above 2.
-    MiCableAuth = 0x5C,     // Xiaomi cable-side auth config (k2/pd/emk_spoof.hpp MiAuthCfg): [0] reads, [1, on, key, trailing u32 LE, half]
-                         // sets (on <= 1, key < 10, half <= 1). rsp [on, key, trailing u32 LE, half]. Lab-only: while a spoof is armed,
-                         // an SOP' 0x27170104 is answered with 0x27170105 + a HMAC-SHA256 half of the challenge.
+    MiCableAuth = 0x5C,     // Xiaomi cable-side auth config (k2/pd/emk_spoof.hpp MiAuthCfg): [0] reads, [1, on, key, trailing u32 LE, half, reply]
+                         // sets (on <= 1, key < 10, half <= 1, reply <= 1). rsp [on, key, trailing u32 LE, half, reply]. Lab-only: while a
+                         // spoof is armed, an SOP' 0x27170104 is answered with a HMAC-SHA256 half of the challenge (reply 0: cmd 0x...105,
+                         // reply 1: the mirrored cmd 0x...204).
 };
 
 inline constexpr Cmd kCmdIds[] = {
@@ -1847,8 +1848,8 @@ template <Backend B>
         return reply_status_or_byte(f, backend.charger_level(p[0]), p[0]);
     case Cmd::MiCableAuth:
         if (p[0] == 0 && p.size() == 1) return reply_ok(f, {backend.mi_cable_auth(p, f.span())});
-        if (p[0] == 1 && p.size() == 8) {
-            if (p[1] > 1 || p[2] >= 10 || p[7] > 1) return reply_bad_arg(f);
+        if (p[0] == 1 && p.size() == 9) {
+            if (p[1] > 1 || p[2] >= 10 || p[7] > 1 || p[8] > 1) return reply_bad_arg(f);
             return reply_ok(f, {backend.mi_cable_auth(p, f.span())});
         }
         return reply_bad_len(f);

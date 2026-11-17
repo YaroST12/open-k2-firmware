@@ -42,7 +42,8 @@ Frame mi_auth_frame(std::uint32_t req_vdm, std::span<const std::uint8_t> challen
     std::uint8_t digest[32];
     pd::mi::auth_digest(g_mi_auth.key, ch, g_mi_auth.trailing, digest);
     const unsigned off = g_mi_auth.half ? 16 : 0;
-    std::array<std::uint32_t, 5> w = {((req_vdm & 0xFFFFFF00u) | 0x05u), pd::mi::digest_word(digest + off, 0),
+    const std::uint32_t reply_vdm = g_mi_auth.reply ? (req_vdm + 0x100u) : ((req_vdm & 0xFFFFFF00u) | 0x05u);
+    std::array<std::uint32_t, 5> w = {reply_vdm, pd::mi::digest_word(digest + off, 0),
                                       pd::mi::digest_word(digest + off, 1), pd::mi::digest_word(digest + off, 2),
                                       pd::mi::digest_word(digest + off, 3)};
     Frame f;
@@ -82,9 +83,11 @@ void on_sop_prime(std::uint8_t sop, std::uint16_t header, std::span<const std::u
             return std::uint32_t(f.t[7 + 4 * i]) | (std::uint32_t(f.t[8 + 4 * i]) << 8) |
                    (std::uint32_t(f.t[9 + 4 * i]) << 16) | (std::uint32_t(f.t[10 + 4 * i]) << 24);
         };
-        K2LOG("[EMK] Mi cable-auth 0105 key=%u trail=%08X half=%u -> %08X %08X %08X %08X %s\n", static_cast<unsigned>(g_mi_auth.key),
-              static_cast<unsigned>(g_mi_auth.trailing), static_cast<unsigned>(g_mi_auth.half), static_cast<unsigned>(fw(1)),
-              static_cast<unsigned>(fw(2)), static_cast<unsigned>(fw(3)), static_cast<unsigned>(fw(4)), ok ? "sent" : "FAILED");
+        K2LOG("[EMK] Mi cable-auth req=%08X key=%u trail=%08X half=%u reply=%u -> %08X %08X %08X %08X %s\n",
+              static_cast<unsigned>(req_vdm), static_cast<unsigned>(g_mi_auth.key),
+              static_cast<unsigned>(g_mi_auth.trailing), static_cast<unsigned>(g_mi_auth.half), static_cast<unsigned>(g_mi_auth.reply),
+              static_cast<unsigned>(fw(1)), static_cast<unsigned>(fw(2)), static_cast<unsigned>(fw(3)), static_cast<unsigned>(fw(4)),
+              ok ? "sent" : "FAILED");
         if (!ok) return;
         g_msg_id = (g_msg_id + 1) & 7;
         g_replies++;

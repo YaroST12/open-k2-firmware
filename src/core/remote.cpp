@@ -262,13 +262,14 @@ remote::Status Remote::charger_level(uint8_t level) {
 }
 
 size_t Remote::mi_cable_auth(std::span<const uint8_t> p, std::span<uint8_t> out) {
-    if (p.size() >= 8 && p[0] == 1) {   // set: [1, on, key, trailing u32 LE, half]
+    if (p.size() >= 9 && p[0] == 1) {   // set: [1, on, key, trailing u32 LE, half, reply]
         emk_spoof::MiAuthCfg c;
         c.on = p[1] != 0;
         c.key = p[2];
         c.trailing = std::uint32_t(p[3]) | (std::uint32_t(p[4]) << 8) | (std::uint32_t(p[5]) << 16) |
                      (std::uint32_t(p[6]) << 24);
         c.half = p[7];
+        c.reply = p[8];
         emk_spoof::set_mi_auth(c);
     }
     const emk_spoof::MiAuthCfg c = emk_spoof::mi_auth();
@@ -279,7 +280,8 @@ size_t Remote::mi_cable_auth(std::span<const uint8_t> p, std::span<uint8_t> out)
     out[4] = std::uint8_t(c.trailing >> 16);
     out[5] = std::uint8_t(c.trailing >> 24);
     out[6] = c.half;
-    return 7;
+    out[7] = c.reply;
+    return 8;
 }
 
 remote::ChargerSvoocCapReply Remote::charger_svooc_cap(const uint8_t* set) {

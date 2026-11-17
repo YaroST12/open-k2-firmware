@@ -140,6 +140,7 @@ struct MiAuthCfg {
     std::uint8_t key = 7;          // usbpd_secret index (kActiveKeyIndex by default)
     std::uint32_t trailing = 0;    // the adapter_id-equivalent word appended to the HMAC message
     std::uint8_t half = 0;         // 0 = digest[0..15], 1 = digest[16..31]
+    std::uint8_t reply = 0;        // 0 = answer cmd 0x27170105 (req cmd + 1), 1 = mirror the request (req + 0x100, e.g. 0x27170204)
 };
 void set_mi_auth(const MiAuthCfg& c);
 MiAuthCfg mi_auth();
