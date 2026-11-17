@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
 // Protocol lab grammar (k2/core/lab.hpp): verbs, positionals, options, ranges and the confirm rule.
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -171,5 +172,28 @@ int main() {
     CHECK_EQ(ok("accp nope"), false);
     CHECK_EQ(ok("--confirm"), false);
     CHECK_STR(std::string(lab::name(lab::Id::AccpRead)).c_str(), "accp.read");
+    // The printed name of every command id (the shell, the remote ids and the host tools key on it), in Id order; the
+    // view must be NUL-terminated at its size because the printers pass it to %s.
+    {
+        static const char* const kNames[] = {
+        "accp.ping", "accp.read", "accp.write", "accp.dump", "qc2", "qc3.set",
+        "qc3.up", "qc3.down", "qc3+.set", "qc3+.up", "qc3+.down", "afc",
+        "fcp", "scp", "vooc.wake", "vooc.listen", "vooc.answer", "vooc.sniff",
+        "ufcs.ping", "ufcs.caps", "ufcs.request", "ufcs.raw", "ufcs.set", "ufcs.show",
+        "ufcs.reset", "ufcs.probe", "ufcs.result", "vivo.raw", "vivo.request", "dpdm",
+        "cc.rp", "cc.rd", "vbus", "pd.caps", "pd.request", "pd.pps",
+        "pd.avs", "pd.epr", "pd.vdm", "pd.get", "pd.reread", "pd.hardreset",
+        "pd.softreset", "pd.raw", "lcd.show", "lcd.spi", "pdstress.start", "pdstress.status",
+        "pdstress.result", "pdstress.stop",
+        };
+        static_assert(sizeof kNames / sizeof kNames[0] == std::size_t(lab::Id::Count), "one name per lab::Id");
+        for (int i = 0; i < int(lab::Id::Count); i++) {
+            const std::string_view n = lab::name(lab::Id(i));
+            CHECK_EQ(n == kNames[i], true);
+            CHECK_EQ(std::strlen(n.data()), n.size());
+            const std::string s(n);
+            if (s.find('.') != std::string::npos) CHECK_EQ(lab::is_family(s.substr(0, s.find('.'))), true);
+        }
+    }
     return test_report("test_lab");
 }

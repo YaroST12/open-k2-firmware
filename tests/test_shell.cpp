@@ -349,5 +349,92 @@ int main() {
                       Id::PdStressResult, Id::PdStressStop})
             CHECK_EQ(lab::drives_lines(id), false);
     }
+    // Golden output: the exact reply text of the debug shell, captured from the table-less original, so the host tools
+    // that parse it (tools/k2_remote.py, proto_lab) see the same bytes after any refactor of the printers.
+    {
+        struct Gold { const char* line; const char* out; };
+        static const Gold kGold[] = {
+        {"", ""},
+        {"unknown", "err: unknown command (help)\r\n"},
+        {"state extra", ""},
+        {"log maybe", "err: usage: log on|off\r\n"},
+        {"dp 0.6", "err: this level needs a trailing confirm\r\n"},
+        {"dp xyz", "err: level is hiz, 0, 0.6 or 3.3\r\n"},
+        {"cc open 0", "err: usage: cc open <1..1000 ms>\r\n"},
+        {"cc open", "err: usage: cc open <1..1000 ms>\r\n"},
+        {"pd silent 9999", "err: usage: pd silent <1..600 s>\r\n"},
+        {"pd foo", "err: unknown verb (help lab)\r\n"},
+        {"fc trigger qc3 9000", "err: above 5000 mV needs a trailing confirm\r\n"},
+        {"fc trigger nope 5000", "err: unknown protocol\r\n"},
+        {"fc", "err: usage: fc trigger <proto> <mV> [confirm] | fc reset\r\n"},
+        {"stop now", "err: usage: stop\r\n"},
+        {"sniff", "err: usage: sniff stream | sniff stop | sniff synth <1..100000 edges/s>\r\n"},
+        {"trace x", "err: usage: trace stream [all] | trace stop\r\n"},
+        {"vooc x", "err: unknown verb (help lab)\r\n"},
+        {"stream x 5", "err: usage: stream on [log|trace|power[=1..100 Hz]|run|all] [old] | stream off\r\n"},
+        {"twin x", "err: usage: twin list | predict [n|all] | run [n|all] confirm | status | cancel | learn identify|sniff [dry] [name] | learn inline confirm [spoof lib|builtin n] [dry] [name] | rename n name | delete n confirm\r\n"},
+        {"twin rename 2", "err: usage: twin rename 1..12 <name>\r\n"},
+        {"twin delete", "err: usage: twin delete 1..12 confirm\r\n"},
+        {"accp read 0x100", "err: argument must be a byte (0..255 or 0x00..0xFF)\r\n"},
+        {"accp write 0xA0 0xC0", "err: this can raise VBUS: add --confirm or a trailing confirm\r\n"},
+        {"accp nope", "err: unknown verb (help lab)\r\n"},
+        {"pdstress start 5 confirm", "err: too many arguments\r\n"},
+        {"ufcs request 5000", "err: missing argument\r\n"},
+        {"ufcs raw", "err: missing argument\r\n"},
+        {"vivo raw zz", "err: argument must be an even-length hex string (max 32 bytes)\r\n"},
+        {"vooc answer 1", "err: missing argument\r\n"},
+        {"qc2 36001 confirm", "err: argument must be a number (max 36000)\r\n"},
+        {"pd request", "err: missing argument\r\n"},
+        {"pd pps 1", "err: missing argument\r\n"},
+        {"lcd show", "ok\r\n"},
+        {"lcd spi", "err: missing argument\r\n"},
+        {"cc rp", "ok\r\n"},
+        {"vbus extra", "err: too many arguments\r\n"},
+        {"dpdm", "err: missing argument\r\n"},
+        {"accp ping --bogus", "err: unknown option\r\n"},
+        {"accp ping --retries", "err: option needs a number\r\n"},
+        {"accp read 1 --json --json", "ok\r\n"},
+        {"ufcs show 1 2 3 4 5 6 7 8 9", "err: too many arguments\r\n"},
+        };
+        Fake g;
+        for (const Gold& e : kGold) {
+            run(g, e.line);
+            if (g.out != e.out) std::printf("  golden mismatch for '%s': '%s'\n", e.line, g.out.c_str());
+            CHECK_EQ(g.out == e.out, true);
+        }
+        // the help text and the replies of every lab verb (bare, family-only and with a spread of arguments and options,
+        // backend ok / failing / D+D- locked) as length + FNV-1a, since they are too long to list
+        auto fnv = [](const std::string& s, std::uint32_t h) {
+            for (unsigned char ch : s) { h ^= ch; h *= 16777619u; }
+            return h;
+        };
+        run(g, "help");
+#if K2_PDSTRESS   // the help text lists pdstress only in builds that have it (the host tests always do)
+        CHECK_EQ(g.out.size(), 2089);
+        CHECK_EQ(fnv(g.out, 2166136261u), 0x9c0e1d7fu);
+#endif
+        static const char* const kSfx[] = {"", " 1", " 1 2", " 5000 9000", " 0x10 0xFF", " --json", " --retries 3", " --retries",
+                                           " --bogus", " confirm", " 1 2 3 4 5 6 7 8", " zz"};
+        std::uint32_t h = 2166136261u;
+        std::size_t total = 0;
+        for (int mode = 0; mode < 3; mode++) {
+            g.fail = mode == 1 ? "reason-x" : nullptr;
+            g.locked = mode == 2 ? "locked-y" : nullptr;
+            for (int id = 0; id < int(lab::Id::Count); id++) {
+                std::string nm(lab::name(lab::Id(id)));
+                for (char& ch : nm) if (ch == '.') ch = ' ';   // "accp.read" is typed "accp read"
+                const std::string fam = nm.substr(0, nm.find(' '));
+                for (const char* s : kSfx)
+                    for (const std::string& base : {nm, fam}) {
+                        run(g, (base + s).c_str());
+                        h = fnv(g.out, h);
+                        total += g.out.size();
+                    }
+            }
+        }
+        CHECK_EQ(total, 99036);
+        CHECK_EQ(h, 0x6a139103u);
+    }
+
     return test_report("test_shell");
 }
