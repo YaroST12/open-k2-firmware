@@ -1073,6 +1073,75 @@ int main() {
         r.pump();
         CHECK_EQ(r.sent.size(), 2u);
     }
+    // ---- EPR entry for the list only (trigger pos 0, the charger test's entry): the last EPR_Source_Capabilities chunk starts
+    // the source's SenderResponseTimer (~30 ms) and only an EPR_Request stops it, so the engine answers it in the same
+    // on_message, with no tick in between: the contract's own level (PDO 1 here). Nobody else's Request is waited for (Baseus
+    // FH22 140W, 2026-11-17: left unanswered, Hard Reset 31 ms after the last chunk while the charger test planned its next
+    // row). Ready again on its PS_RDY, held off, still in EPR mode. ----
+    {
+        Rig r;
+        r.sink.trigger({1, 0, 0}, r.now); r.pump(); r.accept_and_ready();   // the 5 V contract the entry starts from
+        CHECK_EQ(int(r.sink.trigger({0, 0, 0}, r.now)), int(Err::Ok)); r.pump();
+        r.data(kDataEprMode, std::uint32_t(kEprAck) << 24);
+        r.data(kDataEprMode, std::uint32_t(kEprSucceeded) << 24);
+        r.caps = make_caps(true);   // the engine decoded the whole EPR list
+        const std::size_t n0 = r.sent.size();
+        r.epr_caps_done();          // on_message, then take_tx: no tick
+        CHECK_EQ(r.sent.size(), n0 + 1);
+        CHECK_EQ(r.last_type(), kDataEprRequest);
+        CHECK_EQ(r.sent.back().len, 8);
+        CHECK_EQ(r.last_rdo() >> 28, 1u);
+        const auto& d = r.sent.back().data;
+        CHECK_EQ(std::uint32_t(d[4] | (d[5] << 8) | (d[6] << 16) | (std::uint32_t(d[7]) << 24)), r.caps.pdos[0].raw);
+        CHECK_EQ(int(r.sink.status().state), int(SinkState::Requesting));
+        r.accept_and_ready();
+        CHECK_EQ(int(r.sink.status().state), int(SinkState::Ready));
+        CHECK_EQ(int(r.sink.status().result), int(SinkResult::Ok));
+        CHECK_EQ(r.sink.status().held, false);
+        CHECK_EQ(r.sink.status().epr_mode, true);
+        CHECK_EQ(int(r.sink.status().pos), 1);
+        CHECK_EQ(int(r.sink.status().mv), 5000);
+    }
+    // ---- the same answer is never held back: SinkTxNG on CC (the source's own message sequence) holds only sink-initiated
+    // messages for up to kTxOkWaitMs (50 ms, past the source's ~30 ms timer). Both the list-only entry and an entry for an EPR
+    // level answer the last chunk at once. ----
+    for (std::uint8_t want : {std::uint8_t(0), std::uint8_t(8)}) {
+        Rig r;
+        r.sink.trigger({1, 0, 0}, r.now); r.pump(); r.accept_and_ready();
+        r.sink.on_rp(kRpTxOk, r.now);      // a SinkTxOK signaller
+        CHECK_EQ(int(r.sink.trigger({want, 0, 0}, r.now)), int(Err::Ok)); r.pump();
+        CHECK_EQ(r.last_type(), kDataEprMode);
+        r.data(kDataEprMode, std::uint32_t(kEprAck) << 24);
+        r.data(kDataEprMode, std::uint32_t(kEprSucceeded) << 24);
+        r.caps = make_caps(true);
+        r.sink.on_rp(kRpTxNg, r.now);      // the source's EPR_Source_Capabilities sequence: SinkTxNG
+        const std::size_t n0 = r.sent.size();
+        r.epr_caps_done();
+        CHECK_EQ(r.sent.size(), n0 + 1);
+        CHECK_EQ(r.last_type(), kDataEprRequest);
+        CHECK_EQ(r.last_rdo() >> 28, want ? std::uint32_t(want) : 1u);
+    }
+    // ---- an entry whose wanted level cannot be asked (28 V on a 20 V monitor ceiling) still answers the list: PDO 1 (5 V) at
+    // once, and the reason (OverCap) is reported on its PS_RDY, held off; the 5 V Request leaves EPR mode behind it. ----
+    {
+        Rig r(20000);
+        r.sink.trigger({1, 0, 0}, r.now); r.pump(); r.accept_and_ready();
+        CHECK_EQ(int(r.sink.trigger({8, 0, 0}, r.now)), int(Err::Ok)); r.pump();
+        r.data(kDataEprMode, std::uint32_t(kEprAck) << 24);
+        r.data(kDataEprMode, std::uint32_t(kEprSucceeded) << 24);
+        r.caps = make_caps(true);
+        const std::size_t n0 = r.sent.size();
+        r.epr_caps_done();
+        CHECK_EQ(r.sent.size(), n0 + 1);
+        CHECK_EQ(r.last_type(), kDataEprRequest);
+        CHECK_EQ(r.last_rdo() >> 28, 1u);
+        r.accept_and_ready();
+        CHECK_EQ(int(r.sink.status().result), int(SinkResult::OverCap));
+        CHECK_EQ(r.sink.status().held, false);
+        CHECK_EQ(int(r.sink.status().pos), 1);
+        CHECK_EQ(r.last_type(), kDataEprMode);
+        CHECK_EQ(r.sent.back().data[3], kEprExit);
+    }
     {
         Rig r;
         r.caps = make_caps(true);           // pretend the engine decoded the whole EPR list

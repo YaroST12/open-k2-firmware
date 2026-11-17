@@ -603,7 +603,7 @@ Err Sink::trigger(Choice c, std::uint32_t now) {
     verify_ = false;            // a new wish ends the check of the last release
     st_.verifying = false;
     if (defer) {
-        if (st_.epr_mode) { proceed_after_epr_caps(now); return Err::Ok; }
+        if (st_.epr_mode) { proceed_after_epr_caps(now, false); return Err::Ok; }
         epr_caps_seen_ = false;
         send_epr_enter(now, true);
         return Err::Ok;
@@ -637,18 +637,37 @@ void Sink::set_hv_lock(bool on, std::uint32_t now) {
     if (entering || (high && (contract_ || st_.state != SinkState::Idle))) release(now);
 }
 
-K2_HOT void Sink::proceed_after_epr_caps(std::uint32_t now) {
+// `answer`: the last chunk of the source's EPR_Source_Capabilities is in (on_message). That message started the source's
+// SenderResponseTimer (~30 ms) and only an EPR_Request stops it, so the Request goes out from this same pass: never held back
+// (SinkTxOK, Xiaomi chain) and never left to the caller's next poll (Baseus FH22 140W, 2026-11-17: a list-only entry left
+// the list unanswered while the charger test planned its next row, Hard Reset 31 ms after the last chunk). Without
+// `answer` (trigger() while already in EPR mode) nothing is waiting for an answer: the Request is sink-initiated.
+K2_HOT void Sink::proceed_after_epr_caps(std::uint32_t now, bool answer) {
     if (want_.pos == 0) {  // only the list was wanted
         st_.result = SinkResult::Ok;
         st_.held = false;
         st_.state = SinkState::Ready;
         next_epr_ka_ = now + kEprKeepAliveMs;
         st_.epr_ka_at = now;
+        if (!answer) return;
+        // The answer keeps what the contract holds: its level looked up in the EPR list, else PDO 1; Ready again on its PS_RDY.
+        Choice hc{};
+        if (contract_) hc = lookup_held(*caps_, contract_plan_.mv, contract_plan_.ma, contract_plan_.type);
+        if (!hc.pos) hc = {1, 0, kReleaseMaxMa};
+        Plan p = plan_for(hc, true);
+        if (p.err != Err::Ok) p = plan_for({1, 0, kReleaseMaxMa}, true);   // the 5 V lock: PDO 1
+        if (p.err != Err::Ok) return;
+        plan_ = p;
+        st_.state = SinkState::Requesting;
+        send_request(now);
         return;
     }
     const Plan p = plan_for(want_, true);
     if (p.err != Err::Ok) {
-        fail(p.err == Err::OverCap ? SinkResult::OverCap : SinkResult::BadChoice, SinkState::Ready);
+        const SinkResult why = p.err == Err::OverCap ? SinkResult::OverCap : SinkResult::BadChoice;
+        // The wanted level cannot be asked: the list is still answered, with PDO 1 (5 V), and the reason is reported on its PS_RDY.
+        if (answer) { begin_abort(why, now); return; }
+        fail(why, SinkState::Ready);
         next_epr_ka_ = now + kEprKeepAliveMs;
         st_.epr_ka_at = now;
         return;
@@ -656,7 +675,7 @@ K2_HOT void Sink::proceed_after_epr_caps(std::uint32_t now) {
     plan_ = p;
     fresh_ = true;
     st_.state = SinkState::Requesting;
-    send_request(now, true);
+    send_request(now, !answer);
 }
 
 void Sink::begin_abort(SinkResult why, std::uint32_t now) {
@@ -950,7 +969,7 @@ K2_HOT void Sink::on_message(Sop sop, std::uint16_t header, std::span<const std:
         epr_caps_seen_ = true;
         if (request_chunk(header, payload)) return;   // more chunks to come
         if (st_.state == SinkState::EprWaitCaps && !tx_pending_ && caps_ && caps_->epr && !caps_->epr_partial) {
-            proceed_after_epr_caps(now);
+            proceed_after_epr_caps(now, true);
         } else if (st_.epr_mode && st_.state != SinkState::EprWaitCaps && caps_ && caps_->epr && !caps_->epr_partial) {
             // The EPR re-announce (the source re-sends its list in EPR mode, e.g. after a keep-alive): the same answer as the SPR
             // re-announce, an EPR_Request now. Nothing answered it before: the source's timer ran on until something else of
@@ -1460,14 +1479,14 @@ K2_HOT void Sink::on_vdm(std::uint16_t header, std::span<const std::uint8_t> pay
             break;
         }
         case 3: {
-            // RX 0x27170203 -> TX 5-DO: 0x27170104, 0xA601934C, 0x1403BFD9, 0x55EBD77F, 0x509BA17F
-            constexpr std::array<std::uint32_t, 5> vdos = {0x27170104u, 0xA601934Cu, 0x1403BFD9u, 0x55EBD77Fu, 0x509BA17Fu};
+            // RX 0x27170203 -> TX 5-DO: (captured words removed)
+            constexpr std::array<std::uint32_t, 5> vdos = {0u, 0u, 0u, 0u, 0u};
             send_xiaomi_vdm_reply(cmd, std::span<const std::uint32_t>(vdos), now);
             break;
         }
         case 4: {
-            // RX 0x27170204 -> TX 5-DO: 0x27170105, 0x0BED65CD, 0xB2579250, 0x3AA3D437, 0x51EB9F51
-            constexpr std::array<std::uint32_t, 5> vdos = {0x27170105u, 0x0BED65CDu, 0xB2579250u, 0x3AA3D437u, 0x51EB9F51u};
+            // RX 0x27170204 -> TX 5-DO: (captured words removed)
+            constexpr std::array<std::uint32_t, 5> vdos = {0u, 0u, 0u, 0u, 0u};
             send_xiaomi_vdm_reply(cmd, std::span<const std::uint32_t>(vdos), now);
             break;
         }
@@ -1484,8 +1503,8 @@ K2_HOT void Sink::on_vdm(std::uint16_t header, std::span<const std::uint8_t> pay
             break;
         }
         case 7: {
-            // RX 0x27170207 -> TX 5-DO: 0x27170108, 0x5D808AA6, 0x1D79FAA7, 0x11D10BDD, 0x8F158DE2
-            constexpr std::array<std::uint32_t, 5> vdos = {0x27170108u, 0x5D808AA6u, 0x1D79FAA7u, 0x11D10BDDu, 0x8F158DE2u};
+            // RX 0x27170207 -> TX 5-DO: (captured words removed)
+            constexpr std::array<std::uint32_t, 5> vdos = {0u, 0u, 0u, 0u, 0u};
             send_xiaomi_vdm_reply(cmd, std::span<const std::uint32_t>(vdos), now);
             break;
         }
