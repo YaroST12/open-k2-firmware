@@ -721,7 +721,7 @@ static void test_emlib() {
     check_header(r, 0x61, 16, Status::BadArg, 0);
     CHECK_EQ(run(f, request(0x61, 17, {}), r), 1);
     check_header(r, 0x61, 17, Status::BadLength, 0);
-    // Built-in spoof [5, 3, id]: ids 0..7 arm (3 as 4, the removed 6 and 7 as the EPR cable 1), the first id past them is refused,
+    // Built-in spoof [5, 3, id]: ids 0..7 arm (3 as 4, the removed 5, 6 and 7 as the EPR cable 1), the first id past them is refused,
     // a missing id is a length error.
     for (uint8_t id = 0; id < k2::emrec::kBuiltinIdEnd; ++id) {
         CHECK_EQ(run(f, request(0x61, 30, {5, 3, id}), r), 1);
@@ -3059,7 +3059,7 @@ static void test_charger_cable() {
     CHECK_EQ(f.cable_sets, 5); CHECK_EQ(f.cable_set.seq, 4);
     CHECK_EQ(run(f, request(0x0D, 22, {1, 0, 0}), r), 1); check_header(r, 0x0D, 22, Status::Ok, 30);
     CHECK_EQ(f.cable_sets, 6); CHECK_EQ(f.cable_set.seq, 0);                     // 0 stays the default built-in (older clients)
-    for (uint8_t id = 5; id < k2::emrec::kBuiltinIdEnd; ++id) {                 // 5 the Xiaomi-VID cable; 6, 7 removed, read as 1 by the list
+    for (uint8_t id = 5; id < k2::emrec::kBuiltinIdEnd; ++id) {                 // 5, 6, 7 removed, read as 1 by the list
         CHECK_EQ(run(f, request(0x0D, 23 + id, {1, id, 0}), r), 1); check_header(r, 0x0D, 23 + id, Status::Ok, 30);
     }
     // malformed requests never reach the backend

@@ -507,7 +507,7 @@ a timeout bar.
 The cable identity is the one list shared with Tools -> Spoof (`CableIdentityList`, `include/k2/ui/ui_cable_list.hpp`, held in
 `UiContext::cables`): `Off (real cable)` (no rating column; the note under the focused row says "Nothing answers for the cable"), the three built-in chips (ids 1, 2, 4; id 3 is a retired alias of 4), then the saved clones, with the same names, the same
 order, one selection and one armed marker. A row is a short name (`EPR`, `Xiaomi`, `OnePlus`) with its rating in a second
-column (`50V 5A`, `6A`, `100W`); a saved clone shows its library name in data colour with a dim "saved" tail, so it reads
+column (`50V 5A`, `6A`, `100W`; `Xiaomi` 6A is the Xiaomi-VID 20 V 5 A identity, no EPR, and the only one that answers the source's SOP' 0x2717 cable-auth challenge); a saved clone shows its library name in data colour with a dim "saved" tail, so it reads
 apart from the built-ins. The solid square marks the pick (there is no "USE" word). OK on a row of the Spoof cable step selects it
 and goes to Review; nothing is armed while browsing. The tail pill depends on the screen the row is built for
 (`CableIdentityList::fill_spec` builds the row for both): in Tools -> Spoof the identity answering right now wears the

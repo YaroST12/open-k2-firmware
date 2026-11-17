@@ -1440,10 +1440,10 @@ CABLE_KINDS = ["off", "builtin", "saved"]   # k2::ctcable::Kind in enum order
 
 # The firmware's built-in cables (k2::emrec::builtin_cable ids): captured from real cables except 0.
 # Id 3 ("OnePlus 100W (mag)") is retired: the firmware reads a 3 as 4 and always answers 4, so 3 has no label of its own.
-BUILTIN_LABELS = {0: "generic 20V 5A", 1: "EPR 50V 5A", 2: "Xiaomi 6A", 3: "OnePlus 100W", 4: "OnePlus 100W",
-                  5: "Mi cable 2717"}   # 6 and 7 (mi-2717-epr, kowsi-6a) were removed 2026-11-17; the device reads them as 1
+BUILTIN_LABELS = {0: "generic 20V 5A", 1: "EPR 50V 5A", 2: "Xiaomi 6A", 3: "OnePlus 100W", 4: "OnePlus 100W"}
+# 5, 6 and 7 (mi-2717, mi-2717-epr, kowsi-6a) were removed 2026-11-17 (5's words are id 2's now); the device reads them as 1
 BUILTIN_NAMES = {"generic": 0, "epr-50v": 1, "generic-epr": 1, "xiaomi-6a": 2, "cuktech-6a": 2, "cuktech-240w": 2,
-                 "oneplus-mag": 4, "oneplus": 4, "mi-2717": 5}   # spellings; cuktech-6a (id 2's name until 2026-11-17), cuktech-240w and generic-epr are older names, oneplus-mag the retired one
+                 "oneplus-mag": 4, "oneplus": 4}   # spellings; cuktech-6a (id 2's name until 2026-11-17), cuktech-240w and generic-epr are older names, oneplus-mag the retired one
 DIALOG_BUILTINS = (1, 2, 4)                        # the ids the charger-test START dialog lists (3 is a retired alias of 4)
 
 
@@ -1462,7 +1462,7 @@ def spoof_target(t, what):
     if t in BUILTIN_NAMES or t.startswith(("builtin:", "built-in:")):
         bid = parse_builtin(t.partition(":")[2]) if ":" in t else BUILTIN_NAMES[t]
         if bid is None:
-            raise FcRefused("built-in cable: builtin:0..5 or " + ", ".join(BUILTIN_NAMES))
+            raise FcRefused("built-in cable: builtin:0..4 or " + ", ".join(BUILTIN_NAMES))
         return twin_proto.IQ_SPOOF_BUILTIN, bid
     try:
         q = int(t)
@@ -1475,7 +1475,7 @@ def spoof_target(t, what):
 
 def parse_cable(text):
     """'off' -> (0, 0); 'builtin' (the default built-in, EPR 50V 5A), 'builtin:N' or 'builtin:<name>' -> (1, id);
-    'saved:3' (a library id; 'clone:3' too) -> (2, 3). 'off' is the no-spoof default. Built-in ids 1, 2 and 4 are the dialog's rows (3 is the retired spelling of 4); 0 and 5 are remote-only."""
+    'saved:3' (a library id; 'clone:3' too) -> (2, 3). 'off' is the no-spoof default. Built-in ids 1, 2 and 4 are the dialog's rows (3 is the retired spelling of 4); 0 is remote-only."""
     t = text.strip().lower()
     if t in ("", "off", "none"):
         return 0, 0
@@ -1488,7 +1488,7 @@ def parse_cable(text):
             bid = 4                      # the retired id: the device reads it as 4 and answers 4
         if bid in BUILTIN_LABELS:
             return 1, bid
-        raise FrameError(f"unknown built-in cable '{seq}' (ids 0..5 or " + ", ".join(BUILTIN_NAMES) + ")")
+        raise FrameError(f"unknown built-in cable '{seq}' (ids 0..4 or " + ", ".join(BUILTIN_NAMES) + ")")
     if kind in ("saved", "clone") and seq.isdigit() and 0 < int(seq) <= 0xFFFF:
         return 2, int(seq)
     raise FrameError(f"unknown cable identity '{text}' (off, builtin, builtin:<id|name> or saved:<library id>)")
@@ -5213,7 +5213,9 @@ def build_parser():
     cl = sub.add_parser("charger-level", help="level of the NEXT charger run: light = nothing above 5 V (what is advertised), "
                         "medium = the default run, deep = medium + the PPS and AVS deep sweeps")
     cl.add_argument("level", choices=TEST_LEVELS)
-    mc = sub.add_parser("mi-cable-auth", help="Xiaomi cable-side auth while a spoof is armed: no argument reads the config; "
+    mc = sub.add_parser("mi-cable-auth", help="Xiaomi cable-side auth, answered only while the built-in Xiaomi 6A (id 2) is armed "
+                        "(on by default at boot: 'on 7 0 0 1 0'; a set holds until the next set or a reboot, so 'off' silences "
+                        "the automatic answer): no argument reads the config; "
                         "'on|off <key 0..9> <trailing hex> <half 0|1> <reply 0|1> <payload 0|1>' sets it (answer to an SOP' "
                         "0x27170104 challenge: payload 0 = HMAC-SHA256(secret[key], challenge || trailing), digest half "
                         "0 = [0..15], 1 = [16..31]; payload 1 = raw seed[key]; reply 0 = cmd 0x27170105, reply 1 = mirrored 0x27170204)")
@@ -5241,7 +5243,7 @@ def build_parser():
     er.add_argument("id", type=int)
     er.add_argument("name")
     ep = es.add_parser("spoof", help="arm a saved cable as e-marker, or off / status")
-    ep.add_argument("target", help="saved-cable id, a built-in (builtin:0..5, or generic, epr-50v, xiaomi-6a, oneplus, mi-2717; "
+    ep.add_argument("target", help="saved-cable id, a built-in (builtin:0..4, or generic, epr-50v, xiaomi-6a, oneplus; "
                     "older names generic-epr = epr-50v, cuktech-6a = cuktech-240w = xiaomi-6a, oneplus-mag = oneplus, id 3 = id 4), off or status")
     el = es.add_parser("learn", help="power the cable in the BOTTOM port (no charger) and record what it answers: Discover "
                        "Identity / SVIDs / Modes plus the seeds; --save stores the clone with those replies")

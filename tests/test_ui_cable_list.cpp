@@ -55,8 +55,8 @@ static void test_index_space() {
     CHECK_EQ(l.choice_at(99).kind == Kind::Off, 1);
 }
 
-// Built-ins come before every saved clone, and a clone that shares a built-in's VID (a sniffed copy of the same vendor's cable,
-// CUKTECH C1 2026-11-07: the built-in Xiaomi 6A, then named CUKTECH 6A, unlocks 6 A, the sniffed Kowsi clones do not) never moves ahead of it, so the
+// Built-ins come before every saved clone, and a clone that shares a built-in's VID (a sniffed copy of the same vendor's cable:
+// the Kowsi clones carry the 0x2B01 VID of the built-in EPR 50V 5A, CUKTECH C1 2026-11-07) never moves ahead of it, so the
 // first row of a vendor is the built-in. Stored choices keep their ids: a built-in is its builtin id, a clone its library id.
 static uint16_t vid_of(const emrec::Record &r) { return uint16_t(emrec::vdo(r, 1) & 0xFFFF); }
 static void test_builtins_lead_a_vendor_that_a_clone_shares() {
@@ -65,7 +65,7 @@ static void test_builtins_lead_a_vendor_that_a_clone_shares() {
     add_clone(5, "Kowsi-Nubia-6A");
     CableIdentityList l;
     l.sync();
-    const uint16_t vid = vid_of(emrec::builtin_cable(2));   // the Xiaomi 6A chip (builtin id 2)
+    const uint16_t vid = vid_of(emrec::builtin_cable(1));   // the EPR 50V 5A chip (builtin id 1), the vendor add_clone copies
     CHECK_EQ(vid_of(g_stub.lib[0].rec), vid);                // the clone is of the same vendor
     int first_of_vendor = -1;
     for (int i = 1; i < l.count() && first_of_vendor < 0; i++) {
@@ -337,7 +337,7 @@ static void test_fill_spec() {
 // Ids 6 and 7 were sniffed identities on unreleased test builds (removed 2026-11-17). A remembered, picked or armed 6 or 7 falls
 // back to the default EPR spoof (id 1), never to another cable and never to "nothing".
 static void test_removed_xiaomi_ids_fall_back_to_the_epr_spoof() {
-    for (uint16_t id : {uint16_t(6), uint16_t(7)}) {
+    for (uint16_t id : {uint16_t(5), uint16_t(6), uint16_t(7)}) {
         g_stub = StubState();
         g_stub.cable_pref = Choice{Kind::Builtin, id};
         g_stub.cable_pref_set = true;   // /cable.cfg written by such a build

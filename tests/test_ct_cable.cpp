@@ -37,9 +37,8 @@ static void test_canonical_builtin_ids() {
     CHECK_EQ(ctcable::canonical(two) == two, true);
     CHECK_EQ(ctcable::canonical(four) == four, true);
     CHECK_EQ(ctcable::canonical(Choice{Kind::Builtin, 3}) == four, true);   // retired id 3 (OnePlus 100W mag) is OnePlus 100W
-    for (uint16_t id : {uint16_t(6), uint16_t(7)})                             // the removed sniffed ids: the default EPR spoof
+    for (uint16_t id : {uint16_t(5), uint16_t(6), uint16_t(7)})                // the removed sniffed ids: the default EPR spoof
         CHECK_EQ(ctcable::canonical(Choice{Kind::Builtin, id}) == ctcable::kDefaultChoice, true);
-    CHECK_EQ(ctcable::canonical(Choice{Kind::Builtin, 5}) == (Choice{Kind::Builtin, 5}), true);   // the Xiaomi-VID cable stays
     CHECK_EQ(ctcable::canonical(saved) == saved, true);
     CHECK_EQ((ctcable::canonical(Choice{Kind::Saved, 3}) == Choice{Kind::Saved, 3}), true);   // a clone's library id 3 is untouched
     CHECK_EQ(ctcable::canonical(Choice{}) == Choice{}, true);
@@ -57,7 +56,7 @@ static void test_canonical_builtin_ids() {
 
 static void test_facts_of_every_dialog_builtin() {
     struct Row { unsigned id, vid, pid, mv, ma; };
-    const Row rows[] = {{1, 0x2B01, 0x4051, 50000, 5000}, {2, 0x2B01, 0x4051, 50000, 5000},
+    const Row rows[] = {{1, 0x2B01, 0x4051, 50000, 5000}, {2, 0x2717, 0x0000, 20000, 5000},   // 2: the Xiaomi-VID cable, no EPR
                         {3, 0x22D9, 0x6116, 30000, 5000}, {4, 0x22D9, 0x6116, 30000, 5000}};   // 3 retired: reads as 4
     for (const Row& r : rows) {
         const auto f = ctcable::facts(emrec::builtin_cable(r.id));

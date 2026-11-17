@@ -36,25 +36,27 @@ Record make(std::span<const std::uint32_t> vdos, std::uint8_t spec_rev, std::str
 
 // Built-in passive-cable identities for the e-marker spoof, always available whatever is saved. The table is the one
 // place that lists them (src/pd/emrec.cpp). Id 0 is a generic 5 A / 20 V USB 3.2 Gen2 cable; ids 1, 2 and 4 are identities read
-// from real cables (Discover Identity ACK on SOP', PD 3.x, VDO v0), so every word is byte exact:
+// from real cables (Discover Identity ACK on SOP', PD 3.x), so every word is byte exact:
 //   1 EPR 50V 5A        0x2B01:0x4051  the hardware-proven set (EPR 28 V on the Baseus 140 W); a generated EPR identity
 //                       made that charger hard-reset in EPR
-//   2 Xiaomi 6A         0x2B01:0x4051  the cable bundled with the CUKTECH 10 / 120 W charger, 50 V 5 A EPR, USB 2.0
-//                       (shown as "CUKTECH 6A" until 2026-11-17)
+//   2 Xiaomi 6A         0x2717:0x0000  a Xiaomi-VID cable (runs/kowsi captures, 2026-11-11), 20 V 5 A, no EPR. While it is
+//                       armed the spoof also answers the source's SOP' 0x2717 cable-auth challenge (emk_spoof::MiAuthCfg).
+//                       Until 2026-11-17 id 2 was "CUKTECH 6A", the CUKTECH 10 / 120 W bundled cable 0x2B01:0x4051
+//                       (50 V 5 A EPR); those words are no longer built in.
 //   4 OnePlus 100W      0x22D9:0x6116  C-to-C, 30 V 5 A, VCONN required, no certification id
 // Id 3 was "OnePlus 100W (mag)" (0x22D9:0x1196), a duplicate of id 4 (same VID, same ratings) and is retired. Ids are on the
 // wire and in stored data (remote spoof / cable choice, report card kind, /cable.cfg), so the numbering stays: id 3 is a
 // reserved alias that reads as id 4 (canonical_builtin_id()), and no table row or UI row carries it any more.
-// Id 5 is a sniffed Xiaomi-VID 0x2717 20 V 5 A cable identity (remote-only, not in the START dialog).
-// Ids 6 and 7 were sniffed identities too (Xiaomi VID with the EPR 50 V 5 A VDO; the Kowsi "Mi 6A" clone 0x2B01:0x4052), on
-// unreleased test builds; removed 2026-11-17 (they never unlocked a higher offer). They may still sit in stored data or come from
-// an older client, so they stay in the id space (builtin_id_known()) and read as the default EPR 50V 5A (id 1); no row carries them.
-inline constexpr unsigned kBuiltinCount = 6;        // the table's ids 0..5 (id 3 is the retired alias)
-inline constexpr unsigned kBuiltinIdEnd = 8;        // every id ever used: 0..7 (6 and 7 removed, read as id 1)
+// Ids 5, 6 and 7 were sniffed identities on unreleased test builds (5 the Xiaomi-VID cable that is now id 2; 6 the Xiaomi VID
+// with the EPR 50 V 5 A VDO; 7 the Kowsi "Mi 6A" clone 0x2B01:0x4052), removed 2026-11-17. They may still sit in stored data or
+// come from an older client, so they stay in the id space (builtin_id_known()) and read as the default EPR 50V 5A (id 1); no row
+// carries them.
+inline constexpr unsigned kBuiltinCount = 5;        // the table's ids 0..4 (id 3 is the retired alias)
+inline constexpr unsigned kBuiltinIdEnd = 8;        // every id ever used: 0..7 (5, 6 and 7 removed, read as id 1)
 inline constexpr unsigned kEprId = 1;
+inline constexpr unsigned kXiaomi6aId = 2;
 inline constexpr unsigned kRetiredMagId = 3;
 inline constexpr unsigned kOnePlusId = 4;
-inline constexpr unsigned kMiCableId = 5;
 
 // An id the firmware ever used for a built-in (the table's own and the retired ones); anything else is the caller's to refuse.
 constexpr bool builtin_id_known(unsigned id) { return id < kBuiltinIdEnd; }

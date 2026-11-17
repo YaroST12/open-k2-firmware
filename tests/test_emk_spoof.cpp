@@ -131,13 +131,12 @@ static void test_soft_reset() {
 // Every built-in answers a Discover Identity request with exactly its captured words: the VDM header as read from the
 // cable (ACK, SVDM v2.0, SOP' cable-plug bit set in the PD header, PD 3.x), then the four identity VDOs byte-exact.
 static void test_builtin_replies_carry_the_captured_words() {
-    static const std::uint32_t kWords[6][5] = {
+    static const std::uint32_t kWords[5][5] = {
         {},                                              // id 0, the generic cable, is not a capture
         {0xFF00A041u, 0x18002B01u, 0x00000910u, 0x40516910u, 0x000A2640u},
-        {0xFF00A041u, 0x18602B01u, 0x00000A2Eu, 0x40516910u, 0x000A2640u},
+        {0xFF00A041u, 0x18602717u, 0x00000000u, 0x00000000u, 0x00082040u},   // id 2 Xiaomi 6A: the Xiaomi-VID 0x2717 cable
         {0xFF00A041u, 0x180022D9u, 0x00000000u, 0x61160000u, 0x80082A40u},   // id 3 is retired: it answers as id 4
         {0xFF00A041u, 0x180022D9u, 0x00000000u, 0x61160000u, 0x80082A40u},
-        {0xFF00A041u, 0x18602717u, 0x00000000u, 0x00000000u, 0x00082040u},   // id 5: sniffed Xiaomi-VID cable
     };
     inline_mode = false; send_ok = true;
     const uint8_t di[4] = {0x01, 0xA0, 0x00, 0xFF};
@@ -286,8 +285,9 @@ static void test_run_scoped_arm() {
     inline_mode = false;
 }
 
-// The Xiaomi cable-side auth: an SOP' unstructured 0x27170104 + 4 challenge words is answered with 0x27170105 +
-// a HMAC-SHA256 half of the challenge, but only while enabled (default off: the request just logs as unmatched).
+// The Xiaomi cable-side auth: an SOP' unstructured 0x27170104 + 4 challenge words is answered with a reply header and 4 words
+// (a HMAC-SHA256 half of the challenge, or the seed), only while the built-in Xiaomi 6A identity is armed; the lab override
+// (set_mi_auth, remote 0x5C) picks the shape. Any other identity leaves the challenge unmatched.
 static void test_mi_cable_auth_reply() {
     inline_mode = false; send_ok = true;
     sent.clear();
@@ -301,13 +301,15 @@ static void test_mi_cable_auth_reply() {
                (std::uint32_t(f[9 + 4 * i]) << 16) | (std::uint32_t(f[10 + 4 * i]) << 24);
     };
     const std::size_t before = sent.size();
-    hook(0x528F, {ch, 20});                                   // disabled: falls through to unmatched, no reply
-    CHECK_EQ(sent.size(), before); CHECK_EQ(emk_spoof::unmatched(), 1);
     emk_spoof::MiAuthCfg c; c.on = true; c.key = 7; c.trailing = 0; c.half = 0;
     emk_spoof::set_mi_auth(c);
     CHECK_EQ(emk_spoof::mi_auth().on, true); CHECK_EQ(emk_spoof::mi_auth().key, 7);
+    hook(0x528F, {ch, 20});                                   // another identity never answers, even with the lab override on
+    CHECK_EQ(sent.size(), before); CHECK_EQ(emk_spoof::unmatched(), 1);
+    emk_spoof::disarm();
+    CHECK_EQ(emk_spoof::arm(emrec::builtin_cable(emrec::kXiaomi6aId)), emk_spoof::Err::Ok);   // the shapes below: Xiaomi 6A armed
     hook(0x528F, {ch, 20});
-    CHECK_EQ(sent.size(), before + 1); CHECK_EQ(emk_spoof::replies(), 1); CHECK_EQ(emk_spoof::unmatched(), 1);
+    CHECK_EQ(sent.size(), before + 1); CHECK_EQ(emk_spoof::replies(), 1); CHECK_EQ(emk_spoof::unmatched(), 0);   // arm() reset the counters
     CHECK_EQ(sent.back()[4], 0x80 | 22);                      // PACKSYM | 22 bytes
     CHECK_EQ(fw(sent.back(), 0), 0x27170105u);                 // VDM header: SVID kept, cmd 5
     std::uint8_t digest[32];
@@ -348,10 +350,76 @@ static void test_mi_cable_auth_reply() {
     hook(0x128F, {other, 4});
     CHECK_EQ(sent.size(), n2);                                 // unmatched policy may answer; never the Mi auth path
     emk_spoof::disarm();
-    emk_spoof::set_mi_auth({});
+    emk_spoof::set_mi_auth(emk_spoof::kMiAuthDefault);
+}
+
+// Boot state: the cable-side answer is on with the default shape (key 7, trailing 0, digest half 0, mirrored reply, digest).
+static void test_mi_auth_boot_default() {
+    const emk_spoof::MiAuthCfg c = emk_spoof::mi_auth();
+    CHECK_EQ(c.on, true); CHECK_EQ(c.key, 7); CHECK_EQ(c.trailing, 0u); CHECK_EQ(c.half, 0); CHECK_EQ(c.reply, 1); CHECK_EQ(c.payload, 0);
+}
+
+// Built-in id 2 (Xiaomi 6A) armed: the SOP' 0x27170104 challenge is answered with no remote call, mirrored 0x27170204 + the
+// first digest half; ids 1 and 4 never answer it; a remote 'off' holds across disarm / re-arm until the next set; an override
+// set changes the shape.
+static void test_xiaomi_6a_answers_the_cable_challenge() {
+    inline_mode = false; send_ok = true;
+    emk_spoof::set_mi_auth(emk_spoof::kMiAuthDefault);
+    const std::uint32_t w[5] = {0x27170104u, 0x11223344u, 0x55667788u, 0x99AABBCCu, 0xDDEEFF00u};
+    std::uint8_t ch[20];
+    for (unsigned i = 0; i < 5; i++)
+        for (int b = 0; b < 4; b++) ch[4 * i + b] = std::uint8_t(w[i] >> (8 * b));
+    auto fw = [](const std::vector<std::uint8_t>& f, unsigned i) {
+        return std::uint32_t(f[7 + 4 * i]) | (std::uint32_t(f[8 + 4 * i]) << 8) |
+               (std::uint32_t(f[9 + 4 * i]) << 16) | (std::uint32_t(f[10 + 4 * i]) << 24);
+    };
+    std::uint8_t digest[32];
+    pd::mi::auth_digest(7, w + 1, 0, digest);
+    sent.clear();
+    CHECK_EQ(emk_spoof::arm(emrec::builtin_cable(2)), emk_spoof::Err::Ok);
+    hook(0x528F, {ch, 20});
+    CHECK_EQ(sent.size(), 1);
+    if (sent.size() == 1) {
+        CHECK_EQ(sent[0][4], 0x80 | 22);                        // PACKSYM | 22: header + 5 objects
+        CHECK_EQ(fw(sent[0], 0), 0x27170204u);
+        for (unsigned i = 0; i < 4; i++) CHECK_EQ(fw(sent[0], 1 + i), pd::mi::digest_word(digest, i));
+    }
+    CHECK_EQ(emk_spoof::replies(), 1);
+    emk_spoof::disarm();
+    for (unsigned id : {1u, 4u}) {                               // the other built-ins: unmatched, never the Mi answer
+        sent.clear();
+        CHECK_EQ(emk_spoof::arm(emrec::builtin_cable(id)), emk_spoof::Err::Ok);
+        hook(0x528F, {ch, 20});
+        for (const auto& f : sent) CHECK_COND(f.size() < 11 || (fw(f, 0) & 0xFFFF0000u) != 0x27170000u);
+        CHECK_EQ(emk_spoof::replies(), 0);
+        emk_spoof::disarm();
+    }
+    emk_spoof::MiAuthCfg off = emk_spoof::kMiAuthDefault; off.on = false;
+    emk_spoof::set_mi_auth(off);                                 // remote 'off': silent, and it stays off across a re-arm
+    for (int pass = 0; pass < 2; ++pass) {
+        sent.clear();
+        CHECK_EQ(emk_spoof::arm(emrec::builtin_cable(2)), emk_spoof::Err::Ok);
+        hook(0x528F, {ch, 20});
+        CHECK_EQ(sent.size(), 0); CHECK_EQ(emk_spoof::replies(), 0);
+        emk_spoof::disarm();
+    }
+    emk_spoof::MiAuthCfg o = emk_spoof::kMiAuthDefault; o.reply = 0; o.half = 1; o.trailing = 0xA819;   // the next set: a new shape
+    emk_spoof::set_mi_auth(o);
+    sent.clear();
+    CHECK_EQ(emk_spoof::arm(emrec::builtin_cable(2)), emk_spoof::Err::Ok);
+    hook(0x528F, {ch, 20});
+    CHECK_EQ(sent.size(), 1);
+    pd::mi::auth_digest(7, w + 1, 0xA819, digest);
+    if (sent.size() == 1) {
+        CHECK_EQ(fw(sent[0], 0), 0x27170105u);
+        for (unsigned i = 0; i < 4; i++) CHECK_EQ(fw(sent[0], 1 + i), pd::mi::digest_word(digest + 16, i));
+    }
+    emk_spoof::disarm();
+    emk_spoof::set_mi_auth(emk_spoof::kMiAuthDefault);
 }
 
 int main() {
+    test_mi_auth_boot_default();   // first: nothing has set the config yet
     test_match();
     test_reply();
     test_explicit_activation_and_identity();
@@ -362,5 +430,6 @@ int main() {
     test_sop_pp_is_ignored();
     test_run_scoped_arm();
     test_mi_cable_auth_reply();
+    test_xiaomi_6a_answers_the_cable_challenge();
     return test_report("test_emk_spoof");
 }

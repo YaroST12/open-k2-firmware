@@ -19,7 +19,7 @@ std::uint32_t g_replies = 0;
 std::uint32_t g_requests = 0;
 std::uint32_t g_unmatched = 0;
 std::uint32_t g_generation = 0;
-MiAuthCfg g_mi_auth;
+MiAuthCfg g_mi_auth = kMiAuthDefault;   // a remote set replaces it until the next set or a reboot; arm() never touches it
 
 std::uint32_t word(std::span<const std::uint8_t> p, unsigned i) {
     if (p.size() < 4 * (i + 1)) return 0;
@@ -78,7 +78,9 @@ void on_sop_prime(std::uint8_t sop, std::uint16_t header, std::span<const std::u
         return;
     }
     if (is_discover_identity_req(header, payload)) g_requests++;
-    if (g_mi_auth.on && sop == 1 && is_mi_cable_challenge(header, payload)) {
+    // Only the built-in Xiaomi 6A identity answers the cable-auth challenge (compared at challenge time: g_rec is lent to learn
+    // while disarmed, so a flag set at arm() could go stale). Every other identity leaves it to respond() / unmatched.
+    if (g_mi_auth.on && sop == 1 && is_mi_cable_challenge(header, payload) && g_rec == emrec::builtin_cable(emrec::kXiaomi6aId)) {
         const std::uint32_t req_vdm = word(payload, 0);
         Frame f = mi_auth_frame(req_vdm, payload, g_msg_id);
         const bool ok = fusb302::send_sop_prime_frame(f.tokens());

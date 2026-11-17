@@ -132,9 +132,14 @@ emk_quirk::Quirks& scratch_quirks();
 
 // Xiaomi cable-side auth (SVID 0x2717 on SOP'): some sources (Baseus FH22 2C1A, CUKTECH C1) send the CABLE an
 // unstructured 0x27170104 + 4 challenge words after its Discover Identity shows a Xiaomi-VID cable, and gate the
-// 6 A re-announce on the answer. While armed and enabled, such a request is answered with 0x27170105 + the first
-// (or second) 16 bytes of HMAC-SHA256(secret[key], BE32(challenge) || BE32(trailing)) - the same digest shape as the
-// sink-side 0x27170108. `trailing` plays the adapter_id role (0 unless learned otherwise).
+// 6 A re-announce on the answer. Only while the built-in Xiaomi 6A identity (emrec::kXiaomi6aId) is armed and the config
+// is on, such a request is answered with a reply header (0x27170105, or mirrored 0x27170204) + 4 words: the first (or
+// second) 16 bytes of HMAC-SHA256(secret[key], BE32(challenge) || BE32(trailing)) - the same digest shape as the sink-side
+// 0x27170108 - or the raw seed. `trailing` plays the adapter_id role (0 unless learned otherwise). Every other identity
+// leaves the challenge unanswered (unmatched), whatever the config says.
+// The boot default (kMiAuthDefault: on, key 7, trailing 0, half 0, mirrored reply, digest) is inferred, NOT hardware-proven:
+// no source has accepted this answer on the wire yet. The remote (Cmd::MiCableAuth, k2_remote mi-cable-auth) is the lab
+// override: a set replaces the whole config until the next set or a reboot, so 'off' silences the automatic answer.
 struct MiAuthCfg {
     bool on = false;
     std::uint8_t key = 7;          // usbpd_secret index (kActiveKeyIndex by default)
@@ -143,6 +148,7 @@ struct MiAuthCfg {
     std::uint8_t reply = 0;        // 0 = answer cmd 0x27170105 (req cmd + 1), 1 = mirror the request (req + 0x100, e.g. 0x27170204)
     std::uint8_t payload = 0;      // 0 = HMAC digest half, 1 = the raw session seed seed[key] (the sink-flow 0104 content)
 };
+inline constexpr MiAuthCfg kMiAuthDefault{.on = true, .key = 7, .trailing = 0, .half = 0, .reply = 1, .payload = 0};
 void set_mi_auth(const MiAuthCfg& c);
 MiAuthCfg mi_auth();
 

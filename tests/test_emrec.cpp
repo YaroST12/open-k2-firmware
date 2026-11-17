@@ -288,13 +288,12 @@ struct Captured {
 };
 static const Captured kCaptured[] = {
     {1, "[EPR 50V 5A]", "EPR 50V 5A", {0xFF00A041u, 0x18002B01u, 0x00000910u, 0x40516910u, 0x000A2640u}, 0x2B01, 0x4051, 5, 50, true, false},
-    {2, "[Xiaomi 6A]", "Xiaomi 6A", {0xFF00A041u, 0x18602B01u, 0x00000A2Eu, 0x40516910u, 0x000A2640u}, 0x2B01, 0x4051, 5, 50, true, false},
+    {2, "[Xiaomi 6A]", "Xiaomi 6A", {0xFF00A041u, 0x18602717u, 0x00000000u, 0x00000000u, 0x00082040u}, 0x2717, 0x0000, 5, 20, false, false},
     {4, "[OnePlus 100W]", "OnePlus 100W", {0xFF00A041u, 0x180022D9u, 0x00000000u, 0x61160000u, 0x80082A40u}, 0x22D9, 0x6116, 5, 30, false, true},
-    {5, "[Mi cable 2717]", "Mi cable 2717", {0xFF00A041u, 0x18602717u, 0x00000000u, 0x00000000u, 0x00082040u}, 0x2717, 0x0000, 5, 20, false, false},
 };
 
 static void test_builtin_table_round_trips() {
-    CHECK_EQ(kBuiltinCount, 6u);                            // the table's ids 0..5: 0 generic, 1 2 4 captured, 3 retired, 5 sniffed Xiaomi VID
+    CHECK_EQ(kBuiltinCount, 5u);                            // the table's ids 0..4: 0 generic, 1 2 4 captured, 3 retired
     for (const Captured& c : kCaptured) {
         const Record r = builtin_cable(c.id);
         CHECK_EQ(valid(r), true);
@@ -329,11 +328,15 @@ static void test_builtin_table_ratings() {
         CHECK_EQ((cable >> 13) & 15, 1u);                   // latency <10 ns
     }
     char buf[600];
-    const std::size_t n = describe(builtin_cable(2), buf);
+    const std::size_t n = describe(builtin_cable(1), buf);
     const std::string s(buf, n);
     CHECK_EQ(s.find("current: 5 A\n") != std::string::npos, true);
     CHECK_EQ(s.find("voltage: 50 V\n") != std::string::npos, true);
-    CHECK_EQ(s.find("cert stat: 00000A2E\n") != std::string::npos, true);
+    CHECK_EQ(s.find("cert stat: 00000910\n") != std::string::npos, true);
+    const std::size_t k = describe(builtin_cable(kXiaomi6aId), buf);
+    const std::string x(buf, k);
+    CHECK_EQ(x.find("current: 5 A\n") != std::string::npos, true);
+    CHECK_EQ(x.find("voltage: 20 V\n") != std::string::npos, true);
     const std::size_t m = describe(builtin_cable(4), buf);
     const std::string t(buf, m);
     CHECK_EQ(t.find("voltage: 30 V\n") != std::string::npos, true);
@@ -359,17 +362,17 @@ static void test_retired_mag_id_reads_as_oneplus_100w() {
     CHECK_EQ(vdo(builtin_cable(3), 3) >> 16, 0x6116u);
     for (unsigned id = 0; id < kBuiltinCount; ++id) CHECK_EQ(builtin_info(id).label == std::string_view("OnePlus 100W (mag)"), false);
 }
-// Ids 6 and 7 were sniffed identities (the Xiaomi VID with an EPR VDO, the Kowsi clone) on unreleased test builds, removed
-// 2026-11-17 because they never unlocked a higher offer. A stored or remote 6 or 7 reads as the default EPR 50V 5A (id 1), never as
-// another cable and never as past the table; the id space ends at 8.
+// Ids 5, 6 and 7 were sniffed identities (the Xiaomi-VID cable, now id 2's words; the Xiaomi VID with an EPR VDO; the Kowsi
+// clone) on unreleased test builds, removed 2026-11-17. A stored or remote 5, 6 or 7 reads as the default EPR 50V 5A (id 1), never
+// as another cable and never as past the table; the id space ends at 8.
 static void test_removed_xiaomi_ids_read_as_the_epr_cable() {
     CHECK_EQ(kBuiltinIdEnd, 8u);
-    for (unsigned id : {6u, 7u}) {
+    for (unsigned id : {5u, 6u, 7u}) {
         CHECK_EQ(canonical_builtin_id(id), 1u);
         CHECK_EQ(builtin_cable(id) == builtin_cable(1), true);
         CHECK_EQ(builtin_info(id).label == std::string_view("EPR 50V 5A"), true);
     }
-    CHECK_EQ(canonical_builtin_id(5), 5u);
+    CHECK_EQ(canonical_builtin_id(kXiaomi6aId), 2u);
     for (unsigned id = 0; id < kBuiltinIdEnd; ++id) {
         const std::string_view l = builtin_info(id).label;
         CHECK_EQ(l.find("EPR 50V 5A") == std::string_view::npos || builtin_cable(id) == builtin_cable(1), true);

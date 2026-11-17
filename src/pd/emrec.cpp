@@ -46,7 +46,7 @@ namespace {
 // latency 1 (<10 ns), EPR not capable, plug type 10b (Type-C), VDO version 1.0.
 constexpr std::uint32_t kGenericCableVdo = 2u | (2u << 5) | (1u << 13) | (2u << 18);
 
-// Five rows for the six ids 0..5: id 3 (kRetiredMagId) has no row of its own, canonical_builtin_id() sends it to id 4.
+// Four rows for the five ids 0..4: id 3 (kRetiredMagId) has no row of its own, canonical_builtin_id() sends it to id 4.
 constexpr std::size_t kBuiltinRows = kBuiltinCount - 1;
 constexpr std::array<BuiltinInfo, kBuiltinRows> kBuiltins{{
     {"[generic 5A 20V]", "generic 20V 5A", "Generic passive 20V 5A",
@@ -54,21 +54,19 @@ constexpr std::array<BuiltinInfo, kBuiltinRows> kBuiltins{{
     // Captured 2026-11-06 from the user's cables (reverse-engineered), cable VDO 0x000A2640: 5 A, 50 V, EPR, Type-C plug.
     {"[EPR 50V 5A]", "EPR 50V 5A", "Passive cable, EPR 50V 5A",
      {0xFF00A041u, 0x18002B01u, 0x00000910u, 0x40516910u, 0x000A2640u}, 2},
-    // Shown as "Xiaomi 6A" since 2026-11-17 (was "CUKTECH 6A"); the words are the cable bundled with the CUKTECH 120 W charger.
-    {"[Xiaomi 6A]", "Xiaomi 6A", "Xiaomi 6A, 50V 5A EPR",
-     {0xFF00A041u, 0x18602B01u, 0x00000A2Eu, 0x40516910u, 0x000A2640u}, 2},
+    // A sniffed Xiaomi-VID cable (runs/kowsi captures, 2026-11-11, reverse-engineered): passive, 20 V 5 A, no EPR. Until
+    // 2026-11-17 id 2 was "CUKTECH 6A" (0x2B01:0x4051, 50 V 5 A EPR).
+    {"[Xiaomi 6A]", "Xiaomi 6A", "Xiaomi VID 20V 5A",
+     {0xFF00A041u, 0x18602717u, 0x00000000u, 0x00000000u, 0x00082040u}, 2},
     // OPPO VID; cable VDO bit 11 = VCONN required, bits 10:9 = 01b = 30 V (the legacy voltage code), no EPR bit.
     {"[OnePlus 100W]", "OnePlus 100W", "OnePlus/OPPO 30V 5A",
      {0xFF00A041u, 0x180022D9u, 0x00000000u, 0x61160000u, 0x80082A40u}, 2},
-    // A sniffed Xiaomi-VID cable (runs/kowsi captures, 2026-11-11), remote-only.
-    {"[Mi cable 2717]", "Mi cable 2717", "Xiaomi VID 20V 5A",
-     {0xFF00A041u, 0x18602717u, 0x00000000u, 0x00000000u, 0x00082040u}, 2},
 }};
 }  // namespace
 
 unsigned canonical_builtin_id(unsigned id) {
     if (id == kRetiredMagId) return kOnePlusId;
-    return id >= kBuiltinCount && builtin_id_known(id) ? kEprId : id;   // the removed ids 6 and 7
+    return id >= kBuiltinCount && builtin_id_known(id) ? kEprId : id;   // the removed ids 5, 6 and 7
 }
 
 const BuiltinInfo& builtin_info(unsigned id) {

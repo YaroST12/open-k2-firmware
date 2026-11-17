@@ -69,11 +69,11 @@ void test_damage_reads_as_no_record() {
     CHECK_EQ(cablepref::decode(cablepref::encode(kOffId)).has_value(), false);
 }
 
-// Ids 6 and 7 were sniffed cable identities on unreleased test builds (removed 2026-11-17: they never unlocked a higher offer).
-// A /cable.cfg that names one reads as the default, the EPR spoof, and is stored as id 1 from then on; id 5 (the Xiaomi-VID cable)
-// stays itself, and the first id past every id ever used is still an impossible choice.
+// Ids 5, 6 and 7 were sniffed cable identities on unreleased test builds (removed 2026-11-17; 5's words are now id 2's).
+// A /cable.cfg that names one reads as the default, the EPR spoof, and is stored as id 1 from then on; the first id past every
+// id ever used is still an impossible choice.
 void test_removed_xiaomi_ids_read_as_the_epr_spoof() {
-    for (std::uint8_t id : {std::uint8_t(6), std::uint8_t(7)}) {
+    for (std::uint8_t id : {std::uint8_t(5), std::uint8_t(6), std::uint8_t(7)}) {
         const std::array<std::uint8_t, 8> rec{'K', '2', 'C', 'B', 1, id, 0, static_cast<std::uint8_t>(1 ^ id ^ 0xA5)};
         CHECK_EQ(cablepref::decode(rec) == cablepref::kDefault, 1);
         CHECK_EQ(cablepref::encode(Choice{Kind::Builtin, id}) == cablepref::encode(kB1), 1);
@@ -81,7 +81,6 @@ void test_removed_xiaomi_ids_read_as_the_epr_spoof() {
         CHECK_EQ(v.f.write_file(cablepref::kPath, rec) == fs::Err::Ok, true);
         CHECK_EQ(cablepref::load(v.f) == cablepref::kDefault, 1);
     }
-    CHECK_EQ(cablepref::decode(cablepref::encode(Choice{Kind::Builtin, 5})) == (Choice{Kind::Builtin, 5}), 1);
     CHECK_EQ(cablepref::decode(cablepref::encode(Choice{Kind::Builtin, 8})).has_value(), false);
 }
 

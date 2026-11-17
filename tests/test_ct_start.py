@@ -441,7 +441,9 @@ class CableOption(unittest.TestCase):
         self.assertEqual(ct_start.main(["--cable", "bogus"]), 4)
         self.assertEqual(ct_start.main(["--cable", "saved:0"]), 4)
         self.assertEqual(ct_start.main(["--cable", "saved"]), 4)
-        self.assertEqual(ct_start.main(["--cable", "builtin:6"]), 4)     # past the built-in table 0..5 (6, 7 removed 2026-11-17)
+        self.assertEqual(ct_start.main(["--cable", "builtin:5"]), 4)     # past the built-in table 0..4 (5, 6, 7 removed 2026-11-17)
+        self.assertEqual(ct_start.main(["--cable", "builtin:6"]), 4)
+        self.assertEqual(ct_start.main(["--cable", "builtin:mi-2717"]), 4)
         self.assertEqual(ct_start.main(["--cable", "builtin:kowsi-6a"]), 4)
         self.assertEqual(ct_start.main(["--cable", "builtin:nope"]), 4)
 
@@ -459,8 +461,7 @@ class CableOption(unittest.TestCase):
         self.assertEqual(ct_start.kr.parse_cable("builtin:xiaomi-6a"), (1, 2))
         self.assertEqual(ct_start.kr.parse_cable("Builtin:CUKTECH-6A"), (1, 2))       # id 2's name until 2026-11-17, still accepted
         self.assertEqual(ct_start.kr.parse_cable("builtin:oneplus"), (1, 4))
-        self.assertEqual(ct_start.kr.parse_cable("builtin:0"), (1, 0))                # remote-only ids: generic and the sniffed Xiaomi cables
-        self.assertEqual(ct_start.kr.parse_cable("builtin:mi-2717"), (1, 5))
+        self.assertEqual(ct_start.kr.parse_cable("builtin:0"), (1, 0))                # remote-only: the generic cable
         self.assertEqual(ct_start.kr.parse_cable("saved:3"), (2, 3))
         self.assertEqual(ct_start.kr.parse_cable("Clone:65535"), (2, 65535))
 
