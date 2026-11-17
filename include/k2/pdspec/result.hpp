@@ -213,7 +213,8 @@ struct Agg {
     Skip skip = Skip::None;
     bool worst_failed = false;       // the kept measurement failed (its rank is redone from worst/lo/hi: 20 bytes, RAM)
 
-    void add(Kind k, const Meas& m) {
+    // True when the measurement failed (the engine marks the transition's record with it).
+    bool add(Kind k, const Meas& m) {
         const std::int32_t ex = excess(k, m);
         if (ex > 0) ++fails;
         // Among passing measurements the worst is the one closest to its limit. The kept one is ranked again from its stored value
@@ -221,6 +222,7 @@ struct Agg {
         if (n++ == 0 || rank(k, m, ex > 0) > rank(k, {worst, 0, lo, hi}, worst_failed)) {
             worst = m.value; lo = m.lo; hi = m.hi; a = m.a; b = m.b; worst_failed = ex > 0;
         }
+        return ex > 0;
     }
     static std::int32_t rank(Kind k, const Meas& m, bool failed) {
         if (!failed) return closeness(k, m);
@@ -247,7 +249,7 @@ constexpr Verdict verdict(Check c, const Agg& a) {
 // ---- per-item records (the report's detail) ------------------------------------------------------------------------------------
 
 // One fixed transition of the walk. Times in units of 0.1 ms (Accept) or ms; 0xFFFF = not seen.
-// In RAM 18 bytes (the record pool, engine.hpp); on the wire 20 (kTransBytes: flags, a zero byte, ..., gap_ms as a u16 last).
+// In RAM 20 bytes (the record pool, engine.hpp); on the wire 20 (kTransBytes: flags, a zero byte, ..., gap_ms as a u16 last).
 struct TransRec {
     std::uint8_t from = 0, to = 0;       // PDO positions
     std::uint8_t flags = 0;              // kTr* below
@@ -259,9 +261,24 @@ struct TransRec {
     std::uint16_t psrdy_mv = 0;          // VBUS at PS_RDY (0 = unknown)
     std::uint16_t peak_mv = 0;           // highest (up) / lowest (down) VBUS after the Accept
     std::uint16_t final_mv = 0;          // settled level (0 = not settled in the capture)
+    std::uint8_t seen = 0, fails = 0;    // per check (kTrBit* below): measured on this transition, and judged failing; RAM only, the per-transition rows
 };
-static_assert(sizeof(TransRec) == 18);
+static_assert(sizeof(TransRec) == 20);
 inline constexpr std::size_t kTransBytes = 20;   // a TransRec on the wire
+// The per-check bits of TransRec::seen / fails: the checks that measure once per fixed transition.
+inline constexpr std::uint8_t kTrBitAccept = 1, kTrBitPsRdy = 2, kTrBitSrcStart = 4, kTrBitEarly = 8, kTrBitOver = 16, kTrBitSlew = 32, kTrBitAcc = 64;
+constexpr std::uint8_t tr_bit(Check c) {
+    switch (c) {
+        case Check::AcceptTime: return kTrBitAccept;
+        case Check::PsRdyTime: return kTrBitPsRdy;
+        case Check::SrcStart: return kTrBitSrcStart;
+        case Check::PsRdyEarly: case Check::PsRdyLow: return kTrBitEarly;
+        case Check::Overshoot: return kTrBitOver;
+        case Check::RiseTime: case Check::FallTime: return kTrBitSlew;
+        case Check::Accuracy: return kTrBitAcc;
+        default: return 0;
+    }
+}
 inline constexpr std::uint8_t kTrEpr = 1, kTrLiveBand = 2, kTrRefused = 4, kTrNoCapture = 8, kTrSuspectStamp = 16;
 
 // One pass of the programmable sweep: one window of an APDO (plan.hpp Prog) at one step class (20 / 100 / 500 mV for PPS, 100 / 500 /

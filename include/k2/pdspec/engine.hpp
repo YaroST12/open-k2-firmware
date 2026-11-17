@@ -215,7 +215,10 @@ public:
         note_ = pdspec::caps_note(env_->caps());
         hr0_ = s.source_hard_resets;
         caps0_ = s.caps_rx;
-        for (std::uint8_t k = 0; k < L_.n_fixed; ++k) if (pdo(L_.fixed[k]).max_mv > top_mv_) top_mv_ = pdo(L_.fixed[k]).max_mv;
+        for (std::uint8_t k = 0; k < L_.n_fixed; ++k) {
+            fixed_mv_[k] = static_cast<std::uint16_t>(pdo(L_.fixed[k]).max_mv);   // the rows name the levels after the capabilities are gone
+            if (pdo(L_.fixed[k]).max_mv > top_mv_) top_mv_ = pdo(L_.fixed[k]).max_mv;
+        }
         for (std::uint8_t k = 0; k < L_.n_prog; ++k) if (L_.prog[k].hi > top_mv_) top_mv_ = L_.prog[k].hi;
         fam_ = Family::Transitions;
         ph_ = Ph::FamStart;
@@ -244,6 +247,11 @@ public:
     std::uint8_t opts() const { return full20_ ? kOptFull20 : 0; }
     std::uint16_t score() const { return pdspec::score(agg_); }
     const Levels& levels() const { return L_; }
+    // The level of fixed position pos in mV (0 = not a level of this run).
+    std::uint16_t fixed_mv(std::uint8_t pos) const {
+        for (std::uint8_t k = 0; k < L_.n_fixed; ++k) if (L_.fixed[k] == pos) return fixed_mv_[k];
+        return 0;
+    }
     std::uint8_t families() const { return mask_; }
 
 private:
@@ -258,7 +266,15 @@ private:
     const pd::Pdo& pdo(std::uint8_t pos) const { return env_->caps().pdos[pos - 1]; }
     std::int32_t level_mv(std::uint8_t pos, std::uint16_t mv) const { return mv ? mv : pdo(pos).max_mv; }
     bool programmable(std::uint8_t pos) const { return pos && pdo(pos).type != pd::PdoType::Fixed; }
-    void meas(Check c, const Meas& m) { agg_[static_cast<std::size_t>(c)].add(def(c).kind, m); }
+    // A fixed transition's measurement also marks the record in flight (cur_): measured, and failed (the aggregate's own judgement, the
+    // bracket counted), so the per-transition rows (chargertest/spec_rows.hpp) agree with the check's cell.
+    void meas(Check c, const Meas& m) {
+        const bool bad = agg_[static_cast<std::size_t>(c)].add(def(c).kind, m);
+        if (const std::uint8_t b = tr_bit(c)) {
+            cur_.seen = static_cast<std::uint8_t>(cur_.seen | b);
+            if (bad) cur_.fails = static_cast<std::uint8_t>(cur_.fails | b);
+        }
+    }
     void skip(Check c, Skip why) { auto& a = agg_[static_cast<std::size_t>(c)]; if (a.n == 0 && a.skip == Skip::None) a.skip = why; }
     void skip_family(Family f, Skip why);
     void next_family();
@@ -320,6 +336,7 @@ private:
     std::uint8_t bad_ = 0;              // walk nodes the source refused (bit per node): pairs with them are left out
     std::int32_t allowed_mv_ = 5000;    // the highest level the step in flight may show (the overvoltage guard)
     std::int32_t top_mv_ = 5000;        // the highest level of the run (the guard between steps: resets, recovery)
+    std::array<std::uint16_t, kMaxNodes> fixed_mv_{};   // the mV of L_.fixed[k]
     std::uint8_t ov_polls_ = 0;
     // The measurement in flight.
     std::uint32_t from_us_ = 0;

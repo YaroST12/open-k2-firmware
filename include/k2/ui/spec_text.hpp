@@ -10,7 +10,9 @@
 #include <iterator>
 #include <string_view>
 
+#include "k2/chargertest/spec_rows.hpp"
 #include "k2/chargertest/spec_section.hpp"
+#include "k2/pdspec/plan.hpp"
 #include "k2/pdspec/result.hpp"
 #include "k2/ui/kit.hpp"
 #include "k2/ui/trunc.hpp"
@@ -169,6 +171,131 @@ inline void detail_value(int row, int check, const specsec::Cell& c, StrBuf<20>&
             return;
         }
         default: return;
+    }
+}
+
+// ---- the per-transition rows (specsec::Row): name, value, tail ----------------------------------------------------------------------
+// A row of the spec detail list reads  5->9V      9.21V  -0.29V : the pair (or the programmable window and step) at x28, the value in the
+// check's own unit at x104, the margin right-aligned to x214. Every text keeps its column for any row (a row read back from a journal
+// can hold anything): the name 9 cells (fixed) / 16 (programmable), the value and the tail 6.
+
+namespace rowtext {
+
+inline constexpr int kNameFixedCells = 9, kNameProgCells = 16, kNumCells = 6;
+
+// The number part of a fixed-point text (a '+' before a positive one when asked), as precise as the room allows: max_dec decimals,
+// then fewer until it fits `width` characters.
+inline void fit_fixed(StrBuf<16>& out, std::int32_t milli, int max_dec, int width, bool plus) {
+    for (int d = max_dec;; --d) {
+        out.clear();
+        if (plus && milli > 0) out.put_char('+');
+        out.put_fixed(milli, d);
+        if (static_cast<int>(out.view().size()) <= width || d == 0) return;
+    }
+}
+
+// A time given in tenths of a millisecond: 4.5ms, 12ms, 169ms, 1.5s. `plus` prefixes '+' to a positive one (a margin). 6 cells at most.
+template <std::size_t N>
+void put_time(StrBuf<N>& s, std::int32_t tenths, bool plus) {
+    const bool neg = tenths < 0;
+    const std::uint32_t a = neg ? 0u - static_cast<std::uint32_t>(tenths) : static_cast<std::uint32_t>(tenths);
+    if (neg) s.put_char('-');
+    else if (plus && a) s.put_char('+');
+    if (a < 100u) s.put_fixed(static_cast<std::int32_t>(a * 100u), 1).put("ms");
+    else if (a < 9950u) s.put_u32((a + 5u) / 10u).put("ms");
+    else s.put_fixed(static_cast<std::int32_t>((a + 500u) / 1000u * 100u), 1).put_char('s');
+}
+
+// Millivolts as volts, 'V' included, 6 cells at most.
+template <std::size_t N>
+void put_volts(StrBuf<N>& s, std::int32_t mv, bool plus) {
+    StrBuf<16> t;
+    fit_fixed(t, mv, 2, kNumCells - 1, plus);
+    s.put(t.view()).put_char('V');
+}
+
+// One level of a pair, with the decimals it has (at most `dec`): 9, 9.5, 9.25.
+template <std::size_t N>
+void put_level(StrBuf<N>& s, std::uint16_t mv, int dec) {
+    const int nat = mv % 100u ? 2 : mv % 1000u ? 1 : 0;
+    s.put_fixed(mv, nat < dec ? nat : dec);
+}
+
+}  // namespace rowtext
+
+constexpr bool row_known(const specsec::Row& r) { return r.check < sc::kChecks; }
+
+// 5->9V, 12->15V, 5->9.5V. A programmable pass: its window and step class, 3.3-11V 100mV, 15-28V slam.
+template <std::size_t N>
+void put_row_name(const specsec::Row& r, StrBuf<N>& s) {
+    if (r.flags & specsec::kRowProg) {
+        rowtext::put_level(s, r.a, 1);
+        s.put_char('-');
+        rowtext::put_level(s, r.b, 1);
+        s.put_char('V').put_char(' ');
+        const std::uint8_t cls = specsec::row_class(r);
+        if (cls >= sc::kSlam) {
+            s.put("slam");
+        } else {
+            const bool avs = row_known(r) && sc::avs_check(static_cast<sc::Check>(r.check));
+            const std::int32_t mv = sc::step_mv(avs ? sc::ProgKind::Avs : sc::ProgKind::Pps, cls);
+            if (mv >= 1000) s.put_u32(static_cast<std::uint32_t>(mv / 1000)).put_char('V');
+            else s.put_u32(static_cast<std::uint32_t>(mv)).put("mV");
+        }
+        return;
+    }
+    // The pair keeps its decimals while it fits the 9 cells, then loses them.
+    for (int dec = 2;; --dec) {
+        StrBuf<24> t;
+        rowtext::put_level(t, r.a, dec);
+        t.put("\xE2\x86\x92");
+        rowtext::put_level(t, r.b, dec);
+        t.put_char('V');
+        if (text_cells(t.view()) <= rowtext::kNameFixedCells || dec == 0) { s.put(t.view()); return; }
+    }
+}
+
+// The value in the check's unit: 9.21V, 4.5ms, 169ms, 1.5s; signed millivolts for a programmable pass's error; `never` for no event.
+template <std::size_t N>
+void put_row_value(const specsec::Row& r, StrBuf<N>& s) {
+    if (!row_known(r)) return;
+    if (r.value == specsec::kUnseen) { s.put("never"); return; }
+    const std::int32_t v = r.value;
+    switch (sc::kDefs[r.check].unit) {
+        case sc::Unit::Us: rowtext::put_time(s, v, false); return;
+        case sc::Unit::Ms: rowtext::put_time(s, v * 10, false); return;
+        case sc::Unit::Mv:
+            if (!(r.flags & specsec::kRowProg)) { rowtext::put_volts(s, v * 10, false); return; }
+            if (v > -100 && v < 100) {   // under a volt: whole millivolts with their sign
+                if (v > 0) s.put_char('+');
+                put_int(s, v * 10);
+                s.put("mV");
+            } else {
+                rowtext::put_volts(s, v * 10, true);
+            }
+            return;
+        case sc::Unit::Count: put_int(s, v); return;
+    }
+}
+
+// The margin past the nearest limit, signed (positive = outside), in the value's unit; a programmable pass: how many of its steps failed.
+template <std::size_t N>
+void put_row_tail(const specsec::Row& r, StrBuf<N>& s) {
+    if (!row_known(r)) return;
+    if (r.flags & specsec::kRowProg) {
+        const std::int32_t n = r.margin < 0 ? 0 : r.margin;
+        if (n > 99) s.put(">99");
+        else if (n) s.put_u32(static_cast<std::uint32_t>(n)).put(" bad");
+        else s.put((r.flags & specsec::kRowFail) ? "bad" : "ok");
+        return;
+    }
+    if (r.value == specsec::kUnseen || r.margin == specsec::kUnseen) return;
+    const std::int32_t m = r.margin;
+    switch (sc::kDefs[r.check].unit) {
+        case sc::Unit::Us: rowtext::put_time(s, m, true); return;
+        case sc::Unit::Ms: rowtext::put_time(s, m * 10, true); return;
+        case sc::Unit::Mv: rowtext::put_volts(s, m * 10, true); return;
+        case sc::Unit::Count: if (m > 0) s.put_char('+'); put_int(s, m); return;
     }
 }
 
