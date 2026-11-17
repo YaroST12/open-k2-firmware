@@ -44,10 +44,14 @@ Record make(std::span<const std::uint32_t> vdos, std::uint8_t spec_rev, std::str
 // Id 3 was "OnePlus 100W (mag)" (0x22D9:0x1196), a duplicate of id 4 (same VID, same ratings) and is retired. Ids are on the
 // wire and in stored data (remote spoof / cable choice, report card kind, /cable.cfg), so the numbering stays: id 3 is a
 // reserved alias that reads as id 4 (canonical_builtin_id()), and no table row or UI row carries it any more.
-// Always valid().
-inline constexpr unsigned kBuiltinCount = 5;        // the id space 0..4 (id 3 is the retired alias)
+// Ids 5..7 are sniffed Xiaomi-ecosystem cable identities (remote-only, not in the START dialog): 5 a Xiaomi-VID 0x2717
+// 20 V 5 A cable, 6 Xiaomi VID with the EPR 50 V 5 A VDO, 7 the Kowsi "Mi 6A" clone (0x2B01:0x6921). Always valid().
+inline constexpr unsigned kBuiltinCount = 8;        // the id space 0..7 (id 3 is the retired alias)
 inline constexpr unsigned kRetiredMagId = 3;
 inline constexpr unsigned kOnePlusId = 4;
+inline constexpr unsigned kMiCableId = 5;
+inline constexpr unsigned kMiEprId = 6;
+inline constexpr unsigned kKowsiId = 7;
 
 // The id a stored or remote `id` stands for: the retired id 3 is OnePlus 100W (4), every other id is itself (an id past the
 // table is the caller's to refuse, builtin_info() reads it as the generic cable).

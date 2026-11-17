@@ -3058,13 +3058,17 @@ static void test_charger_cable() {
     CHECK_EQ(f.cable_sets, 5); CHECK_EQ(f.cable_set.seq, 4);
     CHECK_EQ(run(f, request(0x0D, 22, {1, 0, 0}), r), 1); check_header(r, 0x0D, 22, Status::Ok, 30);
     CHECK_EQ(f.cable_sets, 6); CHECK_EQ(f.cable_set.seq, 0);                     // 0 stays the default built-in (older clients)
+    for (uint8_t id = 5; id < k2::emrec::kBuiltinCount; ++id) {                 // the sniffed Xiaomi-ecosystem ids arm too
+        CHECK_EQ(run(f, request(0x0D, 23 + id, {1, id, 0}), r), 1); check_header(r, 0x0D, 23 + id, Status::Ok, 30);
+    }
     // malformed requests never reach the backend
     const int calls = f.calls;
     CHECK_EQ(run(f, request(0x0D, 5, {1}), r), 1); check_header(r, 0x0D, 5, Status::BadLength, 0);
     CHECK_EQ(run(f, request(0x0D, 6, {1, 0, 0, 0}), r), 1); check_header(r, 0x0D, 6, Status::BadLength, 0);
     CHECK_EQ(run(f, request(0x0D, 7, {3, 0, 0}), r), 1); check_header(r, 0x0D, 7, Status::BadArg, 0);   // unknown kind
     CHECK_EQ(run(f, request(0x0D, 8, {2, 0, 0}), r), 1); check_header(r, 0x0D, 8, Status::BadArg, 0);   // a clone needs its id
-    CHECK_EQ(run(f, request(0x0D, 9, {1, 5, 0}), r), 1); check_header(r, 0x0D, 9, Status::BadArg, 0);   // the built-in carries none
+    CHECK_EQ(run(f, request(0x0D, 9, {1, uint8_t(k2::emrec::kBuiltinCount), 0}), r), 1);
+    check_header(r, 0x0D, 9, Status::BadArg, 0);   // the first id past the table is refused
     CHECK_EQ(f.calls, calls);
     // a run is active or the clone is gone: the backend's answer is the reply
     f.cable_status = Status::Busy;

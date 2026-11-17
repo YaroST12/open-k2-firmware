@@ -5,6 +5,7 @@
 #include <algorithm>
 
 #include "k2/core/hot.h"
+#include "k2/core/log.hpp"
 #include "k2/pd/pd_ext.hpp"
 #include "k2/pd/pd_link.hpp"
 #include "k2/pd/pd_reply.hpp"
@@ -1529,6 +1530,8 @@ K2_HOT void Sink::on_vdm(std::uint16_t header, std::span<const std::uint8_t> pay
             }
             if (!matched) mi::auth_digest(mi::kActiveKeyIndex, mi::kChallenge, primary, digest);
             xiaomi_adapter_id_ = chosen;
+            K2LOG("[MI] 0205 %s adapter=0x%04X rx=%08X %08X %08X %08X\n", matched ? "match" : "no-match",
+                  unsigned(chosen), unsigned(rx[0]), unsigned(rx[1]), unsigned(rx[2]), unsigned(rx[3]));
             // VERIFIED is 1: the observed chargers gate the unlock on the 0x27170108 half, not on
             // this word, and the known-good flow always sent 1.
             const std::array<std::uint32_t, 2> vdos = {0x27170106u, 0x00000001u};
@@ -1553,21 +1556,33 @@ K2_HOT void Sink::on_vdm(std::uint16_t header, std::span<const std::uint8_t> pay
             break;
         }
         case 8: {
-            // RX 0x27170208: the reverse-auth ACK, the chain's last step - mark authed and fetch the
-            // re-announced caps. No 0x2717010A from us: sources that implement only cmds 1..8 answer
-            // it Not_Supported, and gating on 0x2717020A kept those chargers un-authed forever.
-            xiaomi_authed_ = true;
-            st_.xiaomi_authed = true;
-            xiaomi_cmd_ = cmd;
-            xm_.authed = true; xm_.authed_at = now; xm_.reannounced = false; xm_.reannounce_at = 0;
-            TxMsg m;
-            m.header = make_header(kCtlGetSourceCap, 0, rev_);
-            queue(m);
-            get_cap_sent_ = true;
+            // RX 0x27170208, the chain's last step. Two shapes observed on the wire:
+            //  - payload 1 (Baseus FH22 family, cmds 1..8 only): the chain is done here - mark authed
+            //    and fetch the re-announced caps. Sending 0x2717010A to these only earns Not_Supported.
+            //  - payload 0 (CUKTECH 120 W, the hardware-verified 6 A unlock): the charger wants our
+            //    0x2717010A and answers 0x2717020A, which then finishes the auth (case 0x0A below).
+            std::uint32_t w8 = 0;
+            if (num_do >= 2 && payload.size() >= 8)
+                w8 = std::uint32_t(payload[4]) | (std::uint32_t(payload[5]) << 8) |
+                     (std::uint32_t(payload[6]) << 16) | (std::uint32_t(payload[7]) << 24);
+            if (w8 == 1) {
+                xiaomi_authed_ = true;
+                st_.xiaomi_authed = true;
+                xiaomi_cmd_ = cmd;
+                xm_.authed = true; xm_.authed_at = now; xm_.reannounced = false; xm_.reannounce_at = 0;
+                TxMsg m;
+                m.header = make_header(kCtlGetSourceCap, 0, rev_);
+                queue(m);
+                get_cap_sent_ = true;
+            } else {
+                const std::array<std::uint32_t, 2> vdos = {0x2717010Au, 0x00000001u};
+                send_xiaomi_vdm_reply(cmd, std::span<const std::uint32_t>(vdos), now);
+            }
             break;
         }
         case 0x0A: {
-            // RX 0x2717020A from a source that does send it: same finish as 0x27170208 (idempotent)
+            // RX 0x2717020A (the CUKTECH-style finish after our 0x2717010A): mark authed and fetch
+            // the re-announced caps. Idempotent with a 0x27170208-payload-1 finish.
             if (!xiaomi_authed_) {
                 xiaomi_authed_ = true;
                 st_.xiaomi_authed = true;

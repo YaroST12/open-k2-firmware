@@ -59,6 +59,14 @@ constexpr std::array<BuiltinInfo, kBuiltinRows> kBuiltins{{
     // OPPO VID; cable VDO bit 11 = VCONN required, bits 10:9 = 01b = 30 V (the legacy voltage code), no EPR bit.
     {"[OnePlus 100W]", "OnePlus 100W", "OnePlus/OPPO 30V 5A",
      {0xFF00A041u, 0x180022D9u, 0x00000000u, 0x61160000u, 0x80082A40u}, 2},
+    // Sniffed Xiaomi-ecosystem cables (runs/kowsi captures, 2026-11-11), remote-only: the Xiaomi-VID cable as sniffed,
+    // the same VID with the EPR 50 V 5 A VDO, and the Kowsi "Mi 6A" clone (0x2B01:0x6921, cert 0xEDF).
+    {"[Mi cable 2717]", "Mi cable 2717", "Xiaomi VID 20V 5A",
+     {0xFF00A041u, 0x18602717u, 0x00000000u, 0x00000000u, 0x00082040u}, 2},
+    {"[Mi 2717 EPR]", "Mi 2717 EPR", "Xiaomi VID EPR 50V 5A",
+     {0xFF00A041u, 0x18602717u, 0x00000000u, 0x00000000u, 0x000A2640u}, 2},
+    {"[Kowsi 6A]", "Kowsi 6A", "Kowsi clone 50V 5A",
+     {0xFF00A041u, 0x18602B01u, 0x00000EDFu, 0x40526921u, 0x000A2640u}, 2},
 }};
 }  // namespace
 
@@ -66,7 +74,8 @@ unsigned canonical_builtin_id(unsigned id) { return id == kRetiredMagId ? kOnePl
 
 const BuiltinInfo& builtin_info(unsigned id) {
     id = canonical_builtin_id(id);
-    return kBuiltins[id == kOnePlusId ? kBuiltinRows - 1 : id < kBuiltinRows - 1 ? id : 0];
+    const unsigned row = id < kRetiredMagId ? id : id - 1;   // the retired id 3 has no row of its own
+    return kBuiltins[row < kBuiltinRows ? row : 0];
 }
 
 Record builtin_cable(unsigned id) {

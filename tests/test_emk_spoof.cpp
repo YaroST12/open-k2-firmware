@@ -129,12 +129,15 @@ static void test_soft_reset() {
 // Every built-in answers a Discover Identity request with exactly its captured words: the VDM header as read from the
 // cable (ACK, SVDM v2.0, SOP' cable-plug bit set in the PD header, PD 3.x), then the four identity VDOs byte-exact.
 static void test_builtin_replies_carry_the_captured_words() {
-    static const std::uint32_t kWords[5][5] = {
+    static const std::uint32_t kWords[8][5] = {
         {},                                              // id 0, the generic cable, is not a capture
         {0xFF00A041u, 0x18002B01u, 0x00000910u, 0x40516910u, 0x000A2640u},
         {0xFF00A041u, 0x18602B01u, 0x00000A2Eu, 0x40516910u, 0x000A2640u},
         {0xFF00A041u, 0x180022D9u, 0x00000000u, 0x61160000u, 0x80082A40u},   // id 3 is retired: it answers as id 4
         {0xFF00A041u, 0x180022D9u, 0x00000000u, 0x61160000u, 0x80082A40u},
+        {0xFF00A041u, 0x18602717u, 0x00000000u, 0x00000000u, 0x00082040u},   // id 5: sniffed Xiaomi-VID cable
+        {0xFF00A041u, 0x18602717u, 0x00000000u, 0x00000000u, 0x000A2640u},   // id 6: Xiaomi VID + EPR 50V 5A VDO
+        {0xFF00A041u, 0x18602B01u, 0x00000EDFu, 0x40526921u, 0x000A2640u},   // id 7: Kowsi "Mi 6A" clone
     };
     inline_mode = false; send_ok = true;
     const uint8_t di[4] = {0x01, 0xA0, 0x00, 0xFF};

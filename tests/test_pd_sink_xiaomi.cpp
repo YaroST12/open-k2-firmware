@@ -276,31 +276,52 @@ static void test_xiaomi_cmd_07() {
     for (unsigned i = 0; i < 4; i++) CHECK_EQ(r.last_vdo(1 + i), mi::digest_word(digest + 16, i));
 }
 
-// Test Xiaomi auth command 0x27170208 -> auth finished, Get_Source_Cap queued, no VDM reply
+// Test Xiaomi auth command 0x27170208, two wire shapes:
+//  - payload 1 (Baseus FH22 family, cmds 1..8 only): the chain is done at step 8 - authed goes up,
+//    Get_Source_Cap is queued, no 0x2717010A is sent (those sources answer it Not_Supported).
+//  - payload 0 (CUKTECH 120 W, the hardware-verified 6 A unlock): we answer 0x2717010A and the
+//    auth finishes on the 0x2717020A reply.
 static void test_xiaomi_cmd_08() {
-    Rig r;
-    // First, mark that source has Xiaomi SVID
-    constexpr std::array vdos1 = {vdm_header(0xFF00, true, 1, 2), 0x27170000u, 0x00000000u};
-    send_vdm(r.sink, vdos1, r.now);
-    r.pump();
-    r.sent.clear();
-    
-    // Source sends Xiaomi cmd 0x27170208
-    constexpr std::array vdos2 = {vdm_header(0x2717, false, 0, 8)};
-    send_vdm(r.sink, vdos2, r.now);
-    r.pump();
-    
-    // RX 0x27170208 is the chain's last step (the reverse-auth ACK): no 0x2717010A goes out
-    // (sources that only implement cmds 1..8 answer it Not_Supported), the authed flag goes up
-    // and Get_Source_Cap is queued for the re-announced caps
-    CHECK_EQ(r.sink.status().xiaomi_authed, true);
-    bool get_cap = false, vdm = false;
-    for (const auto& m : r.sent) {
-        if ((m.header & 0x1F) == kCtlGetSourceCap) get_cap = true;
-        if ((m.header & 0x1F) == kMsgVendorDefined) vdm = true;
+    {   // payload 1: finished at step 8
+        Rig r;
+        constexpr std::array vdos1 = {vdm_header(0xFF00, true, 1, 2), 0x27170000u, 0x00000000u};
+        send_vdm(r.sink, vdos1, r.now);
+        r.pump();
+        r.sent.clear();
+        const std::array vdos8 = {vdm_header(0x2717, false, 0, 8), 0x00000001u};
+        send_vdm(r.sink, vdos8, r.now);
+        r.pump();
+        CHECK_EQ(r.sink.status().xiaomi_authed, true);
+        bool get_cap = false, vdm = false;
+        for (const auto& m : r.sent) {
+            if ((m.header & 0x1F) == kCtlGetSourceCap) get_cap = true;
+            if ((m.header & 0x1F) == kMsgVendorDefined) vdm = true;
+        }
+        CHECK_EQ(get_cap, true);
+        CHECK_EQ(vdm, false);
     }
-    CHECK_EQ(get_cap, true);
-    CHECK_EQ(vdm, false);
+    {   // payload 0: answer 0x2717010A, authed on 0x2717020A
+        Rig r;
+        constexpr std::array vdos1 = {vdm_header(0xFF00, true, 1, 2), 0x27170000u, 0x00000000u};
+        send_vdm(r.sink, vdos1, r.now);
+        r.pump();
+        r.sent.clear();
+        const std::array vdos8 = {vdm_header(0x2717, false, 0, 8), 0x00000000u};
+        send_vdm(r.sink, vdos8, r.now);
+        r.pump();
+        CHECK_EQ(r.sink.status().xiaomi_authed, false);
+        CHECK_EQ(r.last_vdm_header(), 0x2717010Au);
+        CHECK_EQ(r.last_vdo(1), 0x00000001u);
+        r.sent.clear();
+        const std::array vdosA = {vdm_header(0x2717, false, 0, 0x0A), 0x00000000u};
+        send_vdm(r.sink, vdosA, r.now);
+        r.pump();
+        CHECK_EQ(r.sink.status().xiaomi_authed, true);
+        bool get_cap = false;
+        for (const auto& m : r.sent)
+            if ((m.header & 0x1F) == kCtlGetSourceCap) get_cap = true;
+        CHECK_EQ(get_cap, true);
+    }
 }
 
 // RX 0x27170205 with the charger's digest[0..15] in the payload: the sink picks the adapter_id
@@ -663,6 +684,13 @@ static void xiaomi_cmd(Rig& r, std::uint8_t cmd) {
     r.pump();
 }
 
+// The same with a payload word (cmd 8's discriminator: 1 = chain done, 0 = answer with 0x2717010A).
+static void xiaomi_cmd_w(Rig& r, std::uint8_t cmd, std::uint32_t word) {
+    const std::array<std::uint32_t, 2> v = {vdm_header(0x2717, false, 0, cmd), word};
+    send_vdm(r.sink, v, r.now);
+    r.pump();
+}
+
 // A source's own Discover SVIDs REQUEST is a question to us, not evidence about the source (Lenovo 65 W laptop brick,
 // hardware 2026-11-08: it asks, never lists 0x2717, never runs a chain). We still answer [0x2717] (our sink identity) and
 // the opener still goes out for the chargers that wait on it, but nothing treats the source as Xiaomi-family.
@@ -899,8 +927,8 @@ static void test_trace_follows_the_chain_the_request_and_the_answer() {
     CHECK_EQ(t.opener_sent, true); CHECK_EQ(t.authed, false); CHECK_EQ(unsigned(t.last_step), 0u);
     CHECK_EQ(r.sink.trigger({2, 9000, 3000}, r.now), Err::Ok);   // the chain guard holds it back: nothing sent, the trace says so
     CHECK_EQ(t.req_held, true); CHECK_EQ(unsigned(t.req_n), n0);
-    for (std::uint8_t cmd = 1; cmd <= 8; cmd++) { r.run(30); xiaomi_cmd(r, cmd); CHECK_EQ(unsigned(t.last_step), unsigned(cmd)); }
-    CHECK_EQ(t.authed, true); CHECK_EQ(t.authed_at, r.now);            // the chain finishes at 0x27170208 now
+    for (std::uint8_t cmd = 1; cmd <= 8; cmd++) { r.run(30); if (cmd == 8) xiaomi_cmd_w(r, 8, 1); else xiaomi_cmd(r, cmd); CHECK_EQ(unsigned(t.last_step), unsigned(cmd)); }
+    CHECK_EQ(t.authed, true); CHECK_EQ(t.authed_at, r.now);            // the chain finishes at 0x27170208 (payload 1) now
     r.run(30);
     xiaomi_cmd(r, 0x0A);
     CHECK_EQ(unsigned(t.last_step), 0x0Au); CHECK_EQ(t.authed, true); CHECK_EQ(t.reannounced, false);

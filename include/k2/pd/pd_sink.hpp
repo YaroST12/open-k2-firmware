@@ -216,7 +216,7 @@ inline constexpr std::uint32_t kVerifyFreshMs = 1000;
 // slip into the gap; 600 ms covers it with margin and kXiaomiChainBoundMs still caps a stalled chain.
 inline constexpr std::uint32_t kXiaomiChainQuietMs = 600;
 inline constexpr std::uint32_t kXiaomiChainBoundMs = 2500;   // absolute bound from the SVID 0x2717 listing: a stalled chain never holds longer
-inline constexpr std::uint32_t kXiaomiCapsWaitMs = 1000;     // after 0x27170208: wait this long for the re-announced Source_Capabilities
+inline constexpr std::uint32_t kXiaomiCapsWaitMs = 1000;     // after the auth finish (0x27170208 payload 1, else 0x2717020A): wait this long for the re-announced caps
 
 // EPR_Get_Source_Cap asked in SPR mode (the list is informational; no EPR entry): None = not asked this attach,
 // Pending = waiting for the answer, Got = the whole list is in the bound info caps, Refused = Not_Supported / Reject

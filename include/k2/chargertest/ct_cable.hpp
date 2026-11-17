@@ -24,7 +24,7 @@ constexpr unsigned kBuiltinKind = 1;                       // the default built-
 // The dialog / Spoof list shows the built-in ids 1, 2 and 4 (id 0, generic, is remote only; id 3 is retired, see emrec.hpp).
 constexpr unsigned kDialogBuiltins = 3;
 constexpr unsigned kDialogIds[kDialogBuiltins] = {1, 2, emrec::kOnePlusId};
-static_assert(kDialogBuiltins + 2 == emrec::kBuiltinCount);
+static_assert(kDialogBuiltins < emrec::kBuiltinCount - 2);   // the dialog's rows are a subset of the id space (0 generic, 3 retired, rest remote-only)
 constexpr unsigned dialog_id(unsigned row) { return kDialogIds[row < kDialogBuiltins ? row : 0]; }   // built-in id of dialog row `row` (0-based)
 constexpr int dialog_row(unsigned id) {   // 0-based dialog row of built-in `id` (a retired id reads as its successor); not in the list: row 0
     id = emrec::canonical_builtin_id(id);

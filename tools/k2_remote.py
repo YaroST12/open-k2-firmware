@@ -1439,9 +1439,10 @@ CABLE_KINDS = ["off", "builtin", "saved"]   # k2::ctcable::Kind in enum order
 
 # The firmware's built-in cables (k2::emrec::builtin_cable ids): captured from real cables except 0.
 # Id 3 ("OnePlus 100W (mag)") is retired: the firmware reads a 3 as 4 and always answers 4, so 3 has no label of its own.
-BUILTIN_LABELS = {0: "generic 20V 5A", 1: "EPR 50V 5A", 2: "CUKTECH 6A", 3: "OnePlus 100W", 4: "OnePlus 100W"}
+BUILTIN_LABELS = {0: "generic 20V 5A", 1: "EPR 50V 5A", 2: "CUKTECH 6A", 3: "OnePlus 100W", 4: "OnePlus 100W",
+                  5: "Mi cable 2717", 6: "Mi 2717 EPR", 7: "Kowsi 6A"}
 BUILTIN_NAMES = {"generic": 0, "epr-50v": 1, "generic-epr": 1, "cuktech-6a": 2, "cuktech-240w": 2,
-                 "oneplus-mag": 4, "oneplus": 4}   # spellings; cuktech-240w and generic-epr are the older names, oneplus-mag the retired one
+                 "oneplus-mag": 4, "oneplus": 4, "mi-2717": 5, "mi-2717-epr": 6, "kowsi-6a": 7}   # spellings; cuktech-240w and generic-epr are the older names, oneplus-mag the retired one
 DIALOG_BUILTINS = (1, 2, 4)                        # the ids the charger-test START dialog lists (3 is a retired alias of 4)
 
 
@@ -1460,7 +1461,7 @@ def spoof_target(t, what):
     if t in BUILTIN_NAMES or t.startswith(("builtin:", "built-in:")):
         bid = parse_builtin(t.partition(":")[2]) if ":" in t else BUILTIN_NAMES[t]
         if bid is None:
-            raise FcRefused("built-in cable: builtin:0..4 or " + ", ".join(BUILTIN_NAMES))
+            raise FcRefused("built-in cable: builtin:0..7 or " + ", ".join(BUILTIN_NAMES))
         return twin_proto.IQ_SPOOF_BUILTIN, bid
     try:
         q = int(t)
@@ -1473,7 +1474,7 @@ def spoof_target(t, what):
 
 def parse_cable(text):
     """'off' -> (0, 0); 'builtin' (the default built-in, EPR 50V 5A), 'builtin:N' or 'builtin:<name>' -> (1, id);
-    'saved:3' (a library id; 'clone:3' too) -> (2, 3). 'off' is the no-spoof default. Built-in ids 1, 2 and 4 are the dialog's rows (3 is the retired spelling of 4)."""
+    'saved:3' (a library id; 'clone:3' too) -> (2, 3). 'off' is the no-spoof default. Built-in ids 1, 2 and 4 are the dialog's rows (3 is the retired spelling of 4); 0 and 5..7 are remote-only."""
     t = text.strip().lower()
     if t in ("", "off", "none"):
         return 0, 0
@@ -1484,10 +1485,9 @@ def parse_cable(text):
         bid = parse_builtin(seq)
         if bid == 3:
             bid = 4                      # the retired id: the device reads it as 4 and answers 4
-        if bid in DIALOG_BUILTINS:
+        if bid in BUILTIN_LABELS:
             return 1, bid
-        raise FrameError(f"unknown built-in cable '{seq}' (ids 1, 2, 4 or " + ", ".join(
-            n for n, i in BUILTIN_NAMES.items() if i in DIALOG_BUILTINS) + ")")
+        raise FrameError(f"unknown built-in cable '{seq}' (ids 0..7 or " + ", ".join(BUILTIN_NAMES) + ")")
     if kind in ("saved", "clone") and seq.isdigit() and 0 < int(seq) <= 0xFFFF:
         return 2, int(seq)
     raise FrameError(f"unknown cable identity '{text}' (off, builtin, builtin:<id|name> or saved:<library id>)")
