@@ -258,7 +258,8 @@ charger_test::Input ChargerTestSession::input(uint32_t now) const {
 pd::Err ChargerTestSession::request_pd(pd::Choice c) {
     if (c.pos > 1 || c.mv > 5000) {
         const auto st = transcap::status().state;
-        if (st == transcap::State::Off || st == transcap::State::Armed) {   // not over a capture still being written
+        // Not over a capture still being written, nor over one an event of this row froze (its evidence: the step's verdict keeps it).
+        if (st == transcap::State::Off || st == transcap::State::Armed) {
             if (transcap::arm(c.pos, c.mv) == transcap::ArmResult::Ok) capture_kept_ = false;   // a new recording: its row may keep it
         }
     }
@@ -584,10 +585,12 @@ void ChargerTestSession::closing(ct::Reason r) {
 // A failed step freezes the capture and asks for it to be stored with the run; a passed step just ends the
 // recording (it is overwritten by the next arm). Skip rows (the followers of a failure) change nothing.
 void ChargerTestSession::note_transition(const ct::Step& s) {
-    if (s.verdict == ct::Verdict::Pass) { transcap::disarm_if_armed(); return; }
+    // The recorder goes back to free for whatever step follows (the PD spec section's captures included): an armed or frozen
+    // capture that no row keeps would hold it for the rest of the run (hardware 2026-11-17).
+    if (s.verdict == ct::Verdict::Pass) { transcap::disarm_if_armed(); transcap::release_unkept(); return; }
     if (s.verdict != ct::Verdict::Fail) return;
     const transcap::Reason r = ct::capture_reason(s.reason);
-    if (r == transcap::Reason::None) return;
+    if (r == transcap::Reason::None) { transcap::disarm_if_armed(); transcap::release_unkept(); return; }
     const auto idx = static_cast<size_t>(&s - runner_.steps().data());
     if (idx >= runner_.steps().size()) return;
     // The units no longer end on the PD rows: a Legacy row that fails after a PD failure finds that failure's frozen capture still
@@ -1042,7 +1045,7 @@ void ChargerTestSession::poll(uint32_t now) {
         if (runner_.state() == ct::State::Done || runner_.state() == ct::State::Stopped) {
             emit_end(now);
             release_run();   // the run is over: passive again (Ra mode and the dialog's spoof end with it)
-            transcap::disarm_if_armed();
+            transcap::disarm_if_armed(); transcap::release_unkept();
             freeze_facts();   // the Results grid is the run's, whatever the source does after this
             set_stage(Stage::Results);
         }
@@ -1087,7 +1090,7 @@ void ChargerTestSession::cancel() {
     runner_.cancel(input(ctx_.now)); invalidate_confirmation();
     if (runner_.state() != before && (runner_.state() == ct::State::Done || runner_.state() == ct::State::Stopped)) emit_end(ctx_.now);
     release_run();
-    transcap::disarm_if_armed();
+    transcap::disarm_if_armed(); transcap::release_unkept();
 }
 // The run is over (Done or Stopped): how it ended and how many rows got a verdict, for the live stream.
 void ChargerTestSession::emit_end(uint32_t now) {

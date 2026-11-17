@@ -46,6 +46,9 @@ void disarm();
 // disarm() only while still just recording: a capture in its post window, or frozen and waiting to be kept, is left
 // to finish (the main loop writes it and releases the overlay by itself). For callers that end a run.
 void disarm_if_armed();
+// disarm() for a frozen capture that is not waiting to be kept (never kept, or its save is done / failed): it would hold the
+// overlay forever. A recording one, or a kept one still due for its write, is left alone.
+void release_unkept();
 // Starts the post window of an armed capture; the reason sticks. False when not armed.
 bool trigger(Reason r);
 // The same with a post window of post_us instead of kPostUs (the PD Spec Check: the whole of a slow transition in one window).

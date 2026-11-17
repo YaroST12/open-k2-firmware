@@ -151,10 +151,40 @@ void test_start_alone() {
     CHECK_EQ(magic[0], 'P'); CHECK_EQ(magic[3], '2');
 }
 
+// The recorder is not free when a step wants it. A frozen capture nobody waits for (the charger test never kept it) is taken over; a kept
+// one waiting for its write, or a recording another tool runs (a manual arm / a capture in its post window), is left alone and the
+// engine times from the stamps. Inside the charger test an Armed leftover of an earlier row is the run's own and is dropped.
+struct Held { transcap::State st; bool keep; };
+int arms_with_recorder_held(Held h, bool in_test) {
+    fixture();
+    g_stub.tc_arm_result = transcap::ArmResult::Ok;
+    g_stub.tc_state = h.st; g_stub.tc_keep_pending = h.keep;
+    std::unique_ptr<Ui> hd; Ui &ui = boot(hd);
+    PdSpecSession &s = ui.pd_spec();
+    const auto r = in_test ? s.start_in_test(g_now) : s.start(1u << int(sc::Family::Transitions), g_now);
+    CHECK_EQ(int(r), int(sc::StartResult::Ok));
+    run(ui, 3000);
+    s.cancel();
+    finish(ui);
+    return g_stub.tc_arms;
+}
+void test_capture_takes_over_only_what_nobody_waits_for() {
+    using transcap::State;
+    CHECK_EQ(arms_with_recorder_held({State::Off, false}, false) >= 1, true);      // free: the usual path
+    CHECK_EQ(arms_with_recorder_held({State::Frozen, false}, false) >= 1, true);   // finished, never kept (hardware 2026-11-17)
+    CHECK_EQ(arms_with_recorder_held({State::Frozen, true}, false), 0);            // waiting for its flash write
+    CHECK_EQ(arms_with_recorder_held({State::Armed, false}, false), 0);            // someone else is recording
+    CHECK_EQ(arms_with_recorder_held({State::Post, false}, false), 0);
+    CHECK_EQ(arms_with_recorder_held({State::Armed, false}, true) >= 1, true);     // the test's own earlier row left it armed
+    CHECK_EQ(arms_with_recorder_held({State::Frozen, true}, true), 0);             // a kept failure still waits, in the test too
+    CHECK_EQ(arms_with_recorder_held({State::Post, false}, true), 0);
+}
+
 }  // namespace
 
 int main() {
     test_start_in_test();
     test_start_alone();
+    test_capture_takes_over_only_what_nobody_waits_for();
     return test_report("test_ui_pdspec_session");
 }
