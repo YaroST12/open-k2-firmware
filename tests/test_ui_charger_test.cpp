@@ -1663,6 +1663,239 @@ static void test_a_deep_run_lists_its_transitions_from_the_engine() {
 // A voltage fold is a caution (user decision 2026-11-16): the sweep row and the APDO's fixed rows on the folded side read amber,
 // neither pass nor fail. The sweep itself is a clean run here; the fold is set on the finished run (the host stub cannot make a
 // converter fold back), then the Results grid is rebuilt. Checks the header's fourth cell, the Steps footer and the Detail page.
+// The Running header's counter beside the bar: executed rows done of executed rows (result_layout::run_progress), the numbers the
+// bar draws. A plan-time skip (a level the K2's own ceiling cannot reach) is no work: it is in neither number.
+static bool counter_says(std::string_view text) {
+    std::array<uint16_t, LCD_WIDTH * LCD_HEIGHT> actual;
+    std::copy_n(g_panel, actual.size(), actual.begin());
+    gfx_text({0, 0, 224, 240}, kSmall, 6, 25, text, kText, kBg);
+    unsigned diff = 0;
+    for (int y = 25; y < 25 + kSmall.height; ++y)
+        for (int x = 6; x < 6 + text_width(kSmall, text); ++x) diff += actual[y * LCD_WIDTH + x] != g_panel[y * LCD_WIDTH + x];
+    std::copy(actual.begin(), actual.end(), g_panel);
+    return diff == 0;
+}
+static void test_the_running_counter_counts_executed_rows_like_the_bar() {
+    six_pdo_fixture();
+    g_stub.vbus_ceiling_mv = 12000;
+    Ui ui; open(ui);
+    CHECK_EQ(ui.charger_test_set_units(kPdOnly), true);
+    review(ui);
+    start_press(ui, 1300); press(ui, Button::Ok, 1400);
+    unsigned checked = 0, skips_seen = 0;
+    for (uint32_t t = 1500; t <= 900000 && ui.charger_test_busy(); t += 100) {
+        ui.tick(t);
+        if (ui.charger_test_stage() != 5 || ui.painting()) continue;
+        const auto steps = ui.charger_test_results().steps();
+        const auto work = result_layout::run_progress(steps);
+        skips_seen += std::count_if(steps.begin(), steps.end(), [](const ct::Step& s) { return s.verdict == ct::Verdict::Skip; }) != 0;
+        StrBuf<16> want;
+        want.put_u32(work.done).put_char('/').put_u32(work.total).put(" steps");
+        CHECK_EQ(counter_says(want.view()), true);
+        ++checked;
+    }
+    CHECK_EQ(checked > 3, true);
+    CHECK_EQ(skips_seen > 0, true);   // the run did plan-time skips, or the check above proves nothing
+}
+// The family Steps pages of a source that offers fixed 5/9/15/20 V, two PPS ranges, SPR AVS and EPR fixed 28 V, behind a converter
+// that follows every request (a clean PD-only run with the sweep on): every Results line opened, at the four rotations, plus the
+// list scrolled. K2_DUMP=dir writes dir/k2_fam_rot<r>_line<k>[_scrolled].panel (tools/panel2png.py makes the PNGs); without K2_DUMP
+// it walks the scenes. The whole truncation walk (every UI test fails on a cut) runs over these screens.
+static void family_offer() {
+    constexpr uint32_t kOffer[] = {0x0001912C, 0x0002D12C, 0x0004B12C, 0x000641F4, 0xC0DC213C, 0xC1A42164, 0xE004B000, 0x0008C1F4};
+    fixture();
+    g_stub.vbus_ceiling_mv = 36000;
+    g_stub.caps.num_pdos = 8; g_stub.caps.epr = true;
+    for (unsigned i = 0; i < 8; ++i) g_stub.caps.pdos[i] = pd::decode_pdo(kOffer[i]);
+}
+// The Results line of the first row called `label`, and what its Steps page must say: how many steps it lists, their tally and the
+// place of the first caution among them. -1 line when no such row. Built from the finished run the way the page builds its grid.
+struct FamilyPick {
+    int line = -1;
+    unsigned count = 0;
+    int first_caution = -1;
+    result_layout::FamilyTally tally;
+};
+static FamilyPick pick_family(Ui& ui, const char* label) {
+    FamilyPick pick;
+    const auto steps = ui.charger_test_results().steps();
+    const auto view = ui.charger_test_results().sweep_view();
+    result_layout::Layout layout;
+    result_layout::OemNotes oem; oem.headers = false;
+    result_layout::build(layout, steps, oem, view);
+    std::array<result_layout::Line, result_layout::kMaxLines> ln;
+    const size_t line_n = result_layout::wrap(layout, result_layout::kGridMetrics, ln);
+    for (size_t k = 0; k < line_n && pick.line < 0; ++k)
+        if (std::string_view(layout.rows[ln[k].row].label) == label) pick.line = int(k);
+    if (pick.line < 0) return pick;
+    const auto& row = layout.rows[ln[size_t(pick.line)].row];
+    for (const auto& s : steps) {
+        if (!result_layout::row_has(row, s)) continue;
+        const bool caution = result_layout::caution(s, view);
+        if (caution && pick.first_caution < 0) pick.first_caution = int(pick.count);
+        ++pick.count;
+        pick.tally.caution += caution;
+        pick.tally.pass += s.verdict == ct::Verdict::Pass && !caution;
+        pick.tally.fail += s.verdict == ct::Verdict::Fail;
+        pick.tally.listed += result_layout::advertised(s);
+        pick.tally.skip += s.verdict == ct::Verdict::Skip && !result_layout::advertised(s);
+    }
+    return pick;
+}
+// The y of the first list row's top on a family Steps page: the grid header sits above it. The cursor is on the first row, so the focus
+// bar (x 0..2) starts 1 px under that row's top hairline.
+static int family_list_top() {
+    int y = kit::kBodyY;
+    while (y < LCD_HEIGHT && g_panel[y * LCD_WIDTH + 1] != kFocus) ++y;
+    return y - 1;
+}
+static void test_family_steps_scenes() {
+    family_offer();
+    Ui ui; open(ui);
+    CHECK_EQ(ui.charger_test_set_units(kPdOnly), true);
+    ui.charger_test_set_sweep(true);
+    review(ui);
+    start_press(ui, 1300); press(ui, Button::Ok, 1400);
+    uint32_t t = 1500;
+    for (; t <= 900000 && ui.charger_test_busy(); t += 100) ui.tick(t);
+    CHECK_EQ(ui.charger_test_stage(), 6);
+    const auto calm = [&] {
+        for (int i = 0; i < 80 && ui.painting(); ++i) ui.tick(t += 20);
+        CHECK_EQ(ui.painting(), false);
+    };
+    ui.tick(t += 200); ui.tick(t += 200); calm();
+    const int lines = ui.list_state().count;
+    CHECK_EQ(lines >= 5, true);
+    // The same layout the page built: the rows and lines the Results cursor walks (no section headers: the grid is units only).
+    const auto steps = ui.charger_test_results().steps();
+    const auto view = ui.charger_test_results().sweep_view();
+    result_layout::Layout layout;
+    result_layout::OemNotes oem; oem.headers = false;
+    result_layout::build(layout, steps, oem, view);
+    std::array<result_layout::Line, result_layout::kMaxLines> ln;
+    const size_t line_n = result_layout::wrap(layout, result_layout::kGridMetrics, ln);
+    CHECK_EQ(int(line_n), lines);
+    // A line of the grid is tall (a current under the volts) when one of its chips carries a current after the space.
+    const auto line_h = [&](const result_layout::Line& l) {
+        for (size_t i = l.first; i < size_t(l.first) + l.count; ++i)
+            if (layout.tokens[i].chip && std::strchr(layout.tokens[i].text, ' ')) return int(kit::kResultRowHCur);
+        return int(kit::kResultRowH);
+    };
+    for (uint8_t rot = 0; rot < 4; ++rot) {
+        ui.set_rotation(rot, t); calm();
+        top(ui, t); calm();
+        {
+            char name[64];
+            std::snprintf(name, sizeof name, "fam_rot%u_results", unsigned(rot));
+            dump_screen(name);
+        }
+        for (int k = 0; k < lines; ++k) {
+            const auto& row = layout.rows[ln[size_t(k)].row];
+            top(ui, t); move(ui, unsigned(k), t); calm();
+            press(ui, Button::Ok, t); calm();
+            CHECK_EQ(ui.charger_test_stage(), 7);
+            if (ui.charger_test_stage() != 7) { press(ui, Button::Back, t); calm(); continue; }
+            // Only this row's steps: its own range, level family or sweep, not the whole protocol family.
+            unsigned want = 0;
+            result_layout::FamilyTally tally;
+            for (const auto& s : steps) {
+                if (!result_layout::row_has(row, s)) continue;
+                ++want;
+                const bool caution = result_layout::caution(s, view);
+                tally.caution += caution;
+                tally.pass += s.verdict == ct::Verdict::Pass && !caution;
+                tally.fail += s.verdict == ct::Verdict::Fail;
+                tally.listed += result_layout::advertised(s);
+                tally.skip += s.verdict == ct::Verdict::Skip && !result_layout::advertised(s);
+            }
+            CHECK_EQ(want > 0, true);
+            CHECK_EQ(unsigned(ui.list_state().count), want);
+            if (want < steps.size()) CHECK_EQ(ui.list_state().count < int(steps.size()), true);
+            const auto foot = result_layout::family_footer(row.label, tally);
+            const uint16_t tone = tally.fail || tally.caution ? kCaution : tally.pass || tally.listed ? kOk : kText;
+            if (rot == 0) CHECK_EQ(footer_shows(foot.view(), tone), true);   // the footer helper reads the panel as it is at rotation 0
+            char name[64];
+            std::snprintf(name, sizeof name, "fam_rot%u_line%d", unsigned(rot), k);
+            dump_screen(name);
+            if (rot == 0) {   // the grid header is the picked row's own lines (at most two); the list starts under it (its hairline, then the focus bar at x 0..2)
+                int first = k;
+                while (first > 0 && !ln[size_t(first)].head) --first;
+                int h = 0, n = 0;
+                while (n < 2 && first + n < int(line_n) && ln[size_t(first + n)].row == ln[size_t(first)].row && (n == 0 || !ln[size_t(first + n)].head)) h += line_h(ln[size_t(first + n++)]);
+                int y = 24;
+                while (y < 240 && g_panel[y * LCD_WIDTH + 1] != kFocus) ++y;
+                CHECK_EQ(y, 24 + h + 1);
+                press(ui, Button::Ok, t); calm();   // a step's detail and back: the header is still there
+                CHECK_EQ(ui.charger_test_stage(), 8);
+                press(ui, Button::Back, t); calm();
+                CHECK_EQ(ui.charger_test_stage(), 7);
+                y = 24;
+                while (y < 240 && g_panel[y * LCD_WIDTH + 1] != kFocus) ++y;
+                CHECK_EQ(y, 24 + h + 1);
+            }
+            const int cnt = ui.list_state().count;
+            if (cnt > ui.list_state().visible) {
+                move(ui, 8, t); calm();
+                std::snprintf(name, sizeof name, "fam_rot%u_line%d_scrolled", unsigned(rot), k);
+                dump_screen(name);
+            }
+            press(ui, Button::Back, t); calm();
+            CHECK_EQ(ui.charger_test_stage(), 6);
+            CHECK_EQ(int(ui.charger_test_cursor()), k);   // Back lands on the row it left
+        }
+    }
+}
+// A family with more steps than the room under its grid header (the PPS ranges of the run: seven steps): the page scrolls its list
+// under the fixed header, at the four rotations; the header stays and the list's last step is reachable.
+static void test_a_long_family_list_scrolls_under_its_header() {
+    family_offer();
+    Ui ui; open(ui);
+    CHECK_EQ(ui.charger_test_set_units(kPdOnly), true);
+    review(ui);
+    start_press(ui, 1300); press(ui, Button::Ok, 1400);
+    uint32_t t = 1500;
+    for (; t <= 900000 && ui.charger_test_busy(); t += 100) ui.tick(t);
+    CHECK_EQ(ui.charger_test_stage(), 6);
+    const auto calm = [&] {
+        for (int i = 0; i < 80 && ui.painting(); ++i) ui.tick(t += 20);
+        CHECK_EQ(ui.painting(), false);
+    };
+    ui.tick(t += 200); ui.tick(t += 200); calm();
+    const int lines = ui.list_state().count;
+    // The longest family page of the run.
+    int best = -1, best_count = 0;
+    for (int k = 0; k < lines; ++k) {
+        top(ui, t); move(ui, unsigned(k), t); calm();
+        press(ui, Button::Ok, t); calm();
+        if (ui.charger_test_stage() == 7 && ui.list_state().count > best_count) { best_count = ui.list_state().count; best = k; }
+        press(ui, Button::Back, t); calm();   // (a spec line opens its own detail, not a step list)
+    }
+    CHECK_EQ(best_count > 6, true);   // a header of one grid line leaves the list room for six rows
+    if (best < 0) return;
+    for (uint8_t rot = 0; rot < 4; ++rot) {
+        ui.set_rotation(rot, t); calm();
+        top(ui, t); move(ui, unsigned(best), t); calm();
+        press(ui, Button::Ok, t); calm();
+        CHECK_EQ(ui.charger_test_stage(), 7);
+        char name[64];
+        std::snprintf(name, sizeof name, "fam_long_rot%u", unsigned(rot));
+        dump_screen(name);
+        if (rot == 0) {   // a turn of the device on the page and back: the header is laid out again, the list under it where it was
+            const int y0 = family_list_top();
+            ui.set_rotation(1, t); calm();
+            ui.set_rotation(0, t); calm();
+            CHECK_EQ(family_list_top(), y0);
+            CHECK_EQ(ui.charger_test_stage(), 7);
+        }
+        move(ui, unsigned(best_count - 1), t); calm();   // the last step: the window scrolled, the header did not
+        CHECK_EQ(ui.list_state().count > ui.list_state().visible, true);
+        CHECK_EQ(ui.list_state().offset > 0, true);
+        std::snprintf(name, sizeof name, "fam_long_rot%u_scrolled", unsigned(rot));
+        dump_screen(name);
+        press(ui, Button::Back, t); calm();
+        CHECK_EQ(ui.charger_test_stage(), 6);
+    }
+}
 static void test_a_voltage_fold_reads_as_a_caution() {
     six_pdo_fixture();
     g_stub.vbus_ceiling_mv = 36000;
@@ -1727,20 +1960,21 @@ static void test_a_voltage_fold_reads_as_a_caution() {
     check_text_at(kSmall, 26, n.view(), kCaution, kBg, 56 + 16);
     n.clear(); n.put_u32(pass);
     check_text_at(kSmall, 26, n.view(), kOk, kBg, 16);
-    // Steps of the first row: the footer counts the cautions, in the caution tone (no failures: "C caution", not "0 failed").
+    // Steps of the PPS row: the footer counts that family's cautions, in the caution tone ("PPS: n pass, m caution").
+    const auto pps = pick_family(ui, "PPS");
+    CHECK_EQ(pps.line >= 0, true);
+    if (pps.line < 0) return;
+    CHECK_EQ(pps.tally.caution >= 1, true);
+    CHECK_EQ(pps.first_caution >= 0, true);
+    top(ui, t); calm();
+    for (int k = 0; k < pps.line; ++k) { press(ui, Button::Plus); ui.tick(t += 100); calm(); }
     press(ui, Button::Ok); ui.tick(t += 100); calm();
     CHECK_EQ(ui.charger_test_stage(), 7);
+    CHECK_EQ(unsigned(ui.list_state().count), pps.count);
     top(ui, t); calm();
-    StrBuf<32> foot;
-    foot.put_u32(static_cast<uint32_t>(ui.list_state().count)).put(" steps, ").put_u32(caution).put(" caution");
-    CHECK_EQ(footer_shows(foot.view(), kCaution), true);
+    CHECK_EQ(footer_shows(result_layout::family_footer("PPS", pps.tally).view(), kCaution), true);
     {   // scroll to the first caution row of the list and keep that screen for the design review
-        size_t first_pd = r.steps().size(), first_caution = r.steps().size();
-        for (size_t i = 0; i < r.steps().size(); ++i) {
-            if (first_pd == r.steps().size() && r.steps()[i].group == ct::Group::Pd) first_pd = i;
-            if (result_layout::caution(r.steps()[i])) { first_caution = i; break; }
-        }
-        for (size_t k = first_pd; k < first_caution; ++k) { press(ui, Button::Plus); ui.tick(t += 100); calm(); }
+        for (int k = 0; k < pps.first_caution; ++k) { press(ui, Button::Plus); ui.tick(t += 100); calm(); }
         dump_screen("fold_steps");
         top(ui, t); calm();
     }
@@ -1813,12 +2047,17 @@ static void test_a_sweep_off_by_more_than_100mv_reads_as_a_caution() {
     check_text_at(kSmall, 26, n.view(), kCaution, kBg, 56 + 16);        // the header's caution cell holds the deviating sweeps
     n.clear(); n.put_u32(pass);
     check_text_at(kSmall, 26, n.view(), kOk, kBg, 16);
+    // The sweep row's steps: its page counts the deviating sweeps as cautions ("Sweep: m caution").
+    const auto sw = pick_family(ui, "Sweep");
+    CHECK_EQ(sw.line >= 0, true);
+    if (sw.line < 0) return;
+    CHECK_EQ(sw.tally.caution >= sweeps, true);
+    for (int k = 0; k < sw.line; ++k) { press(ui, Button::Plus); ui.tick(t += 100); calm(); }
     press(ui, Button::Ok); ui.tick(t += 100); calm();
     CHECK_EQ(ui.charger_test_stage(), 7);
+    CHECK_EQ(unsigned(ui.list_state().count), sw.count);
     top(ui, t); calm();
-    StrBuf<32> foot;
-    foot.put_u32(static_cast<uint32_t>(ui.list_state().count)).put(" steps, ").put_u32(caution).put(" caution");
-    CHECK_EQ(footer_shows(foot.view(), kCaution), fail == 0);
+    CHECK_EQ(footer_shows(result_layout::family_footer("Sweep", sw.tally).view(), kCaution), true);
 }
 // Every Steps row reads as a whole step label (step_label::label), never cut with dots: the ink of each visible row's text
 // cell is compared with the ink of every label of the run, and some label must match. The cut would end in "...". The same scan
@@ -1828,6 +2067,7 @@ static void test_steps_rows_show_whole_labels() {
     finished_results(ui, t);
     const auto steps = ui.charger_test_results().steps();
     unsigned rows_checked = 0, ramps = 0, failed_rows = 0;
+    int list_y = kit::kBodyY;   // the first list row's top: under the picked row's grid header
     // The Steps rows are kit rows: a Verdict marker, the label at x28 (16 px, up to the voltage tail), the measured voltage right
     // aligned at x214. A row is a whole label when some step of the run (label + its own voltage tail) reproduces its ink.
     const auto check_window = [&] {
@@ -1835,7 +2075,7 @@ static void test_steps_rows_show_whole_labels() {
         const int open = ui.charger_test_cursor() - offset;
         const int w = kit::kTailX - 40 - 8 - kit::kTextX;   // the room of a 5-character voltage tail ("20.1V")
         for (int slot = 0; slot < shown && offset + slot < ui.list_state().count; ++slot) {
-            const int y = wizard_text_y(slot, open);
+            const int y = wizard_text_y(slot, open, list_y);
             const uint16_t bg = g_panel[y * LCD_WIDTH + kit::kMarkX + kit::kMarkSize + 2];   // clear of the marker and the text
             std::vector<uint8_t> seen;
             for (int yy = y; yy < y + kSmall.height; ++yy)
@@ -1865,6 +2105,7 @@ static void test_steps_rows_show_whole_labels() {
         top(ui, t); move(ui, k, t); press(ui, Button::Ok, t);
         if (ui.charger_test_stage() != 7) { CHECK_EQ(ui.charger_test_stage(), 6); continue; }
         ui.tick(t); t += 200; settle(ui, t);
+        list_y = family_list_top();   // the cursor is on the first row
         for (int window = 0; window < 4; ++window) {   // the list scrolls a window at a time
             check_window();
             move(ui, 6, t);
@@ -1980,8 +2221,10 @@ static void test_step_label_gallery() {
         if (ui.charger_test_stage() == 7) {
             for (int i = 0; i < 60 && ui.painting(); ++i) ui.tick(t += 20);
             dump_panel("labels_rot3_steps_light");
-            ui.set_rotation(0, t); move(ui, 2, t); settle(ui, t);
-            check_row_note(2, "LISTED PDO #2");   // the focused note: the band word, no skip cause
+            ui.set_rotation(0, t); top(ui, t); settle(ui, t);
+            const int list_y = family_list_top();   // under the PD row's own grid header
+            move(ui, 2, t); settle(ui, t);
+            check_row_note(2, "LISTED PDO #2", list_y);   // the focused note: the band word, no skip cause
             ui.set_rotation(3, t); settle(ui, t); press(ui, Button::Ok, t);
             for (int i = 0; i < 60 && ui.painting(); ++i) ui.tick(t += 20);
             dump_panel("labels_rot3_detail_light");
@@ -5087,6 +5330,9 @@ int main() {
     test_the_spec_detail_shows_the_limit_while_the_engine_holds_the_run();
     test_the_spec_detail_lists_the_transitions_of_the_journal();
     test_a_deep_run_lists_its_transitions_from_the_engine();
+    test_the_running_counter_counts_executed_rows_like_the_bar();
+    test_family_steps_scenes();
+    test_a_long_family_list_scrolls_under_its_header();
     test_a_voltage_fold_reads_as_a_caution();
     test_a_sweep_off_by_more_than_100mv_reads_as_a_caution();
     test_sweep_log_line_has_no_literal_format_bug();

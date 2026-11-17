@@ -346,6 +346,32 @@ step_label::Text reach_footer(const Reach& r) {
     return t;
 }
 
+step_label::Text family_footer(const char* label, const FamilyTally& c) {
+    static constexpr const char* kWords[5] = {" pass", " fail", " caution", " listed", " skip"};
+    const unsigned n[5] = {c.pass, c.fail, c.caution, c.listed, c.skip};
+    step_label::Text t;
+    put_word(t, label); put_word(t, ": ");
+    size_t head = t.len;
+    for (int pass = 0; pass < 2; ++pass) {   // the second pass, when a count did not fit beside the label: the counts alone
+        if (pass) t.len = head = 0;
+        bool cut = false;
+        for (unsigned i = 0; i < 5; ++i) {   // every non-zero count, in order, while it fits the band
+            if (!n[i]) continue;
+            char d[12]; unsigned k = 0;
+            for (unsigned v = n[i]; v; v /= 10) d[k++] = char('0' + v % 10);
+            const bool first = t.len == head;
+            if (t.len + (first ? 0 : 2) + k + std::strlen(kWords[i]) > kFooterChars) { cut = i < 3; break; }   // the first that does not fit ends the line (never a lesser count in its place); only a pass, fail or caution count that would be lost sends the label away (a lost skip or listed count is no loss)
+            if (!first) put_word(t, ", ");
+            while (k) t.s[t.len++] = d[--k];
+            t.s[t.len] = 0;
+            put_word(t, kWords[i]);
+        }
+        if (!cut) break;
+    }
+    if (t.len == head) put_word(t, "no steps");
+    return t;
+}
+
 step_label::Text reach_span(const Reach& r) {
     step_label::Text t;
     if (!r.hi_mv) return t;

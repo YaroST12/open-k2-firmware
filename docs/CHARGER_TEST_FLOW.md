@@ -468,6 +468,10 @@ the pick that was made.
    short section headers (`Huawei`, `Samsung`, `OPPO`, `Xiaomi`, `USB PD`, `QC/UFCS`, plus `OEM / PD` for the
    vendor-label facts of a PD source; `Row.label` holds 8 characters); a section whose rows all fold into the `No reply` /
    `Skipped` summary rows drops its header. The on-device grid is units only (no header rows).
+   A PD row (fixed levels, EPR, SPR AVS, EPR AVS, one PPS range, a sweep) opens a Steps page of THAT row only (`row_has`, the
+   mapping the grid cells use): the row's own grid lines (at most two) as a header, only its steps below, title `<row> steps`,
+   footer `<row>: n pass, m caution` (`result_layout::family_footer`). A PPS row is one APDO range; its sweep is a row of its own.
+   Back returns to the same Results row. The other units keep the whole-unit step list and the `N steps, M failed` footer.
 2. **Spoof cable** (stage 2). The shared cable-identity list (below); OK on a row picks it and goes to Review.
 3. **Review** (stage 4). The other-port warning (below), the kv rows `Tests`, `Spoof` (the short identity name plus its
    rating, plain `Off` when the pick is Off — a START with Off disarms whatever is armed) and the settable `Level`, then

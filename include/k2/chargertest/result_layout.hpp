@@ -196,6 +196,12 @@ Reach reach(std::span<const charger_test::Step>, charger_test::Algorithm, int po
 // "reached 5-21V", "max 13V of 21V", "none reached", "not run", "advertised" (a Light run's listing), "needs load" (or "needs load >13V" after some levels passed:
 // the highest that did), "floor at 5V" (a low edge the source cannot reach), "folds to 19.4V" (a level passed on the folded side of a sweep's fold). Levels at 0.1 V.
 step_label::Text reach_footer(const Reach&);
+// A Results row's footer and its Steps page's footer, "<row label>: n pass, m caution": the counts of the steps one row owns, the
+// non-zero ones in the order pass, fail, caution, listed (a Light run's listing), skip; "no steps" when all are 0. The label goes
+// when a count would not fit kFooterChars (the UI's footer band, kFooterCells) beside it; the first count that still does not fit ends the line.
+inline constexpr unsigned kFooterChars = 27;
+struct FamilyTally { unsigned pass = 0, caution = 0, fail = 0, listed = 0, skip = 0; };
+step_label::Text family_footer(const char* label, const FamilyTally&);
 // The Detail page's "Reached" value (at most 16): "5-19.4V of 21V", "5-21V"; empty when nothing passed.
 step_label::Text reach_span(const Reach&);
 int token_width(const Token&, const Metrics&);

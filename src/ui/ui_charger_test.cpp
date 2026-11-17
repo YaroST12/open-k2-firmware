@@ -188,21 +188,42 @@ void put_hunt_line(StrBuf<64>& s, const ct::HuntEvidence& h, int n) {
 // whose worst error passes 100 mV, result_layout::deviates) is its own count: neither a pass nor a fail. A Capped step stays a fail
 // by verdict, as it always counted. The sweep view is the Results grid's: a chip and its counts read one rule.
 struct Counts {
-    unsigned pass = 0, fail = 0, skip = 0, caution = 0, total = 0;
+    unsigned pass = 0, fail = 0, skip = 0, caution = 0, listed = 0, adv = 0, total = 0;   // listed, adv: a Light run's listing (also in skip)
 };
-Counts counts(const ct::Runner& runner, int f = -1) {
+// The steps of the picked grid row (`row`, result_layout::row_has) and of one protocol family (`f`); no row, no family: all of them.
+Counts counts(const ct::Runner& runner, const result_layout::Row* row = nullptr, int f = -1) {
     Counts out;
     const auto view = runner.sweep_view();
     for (const auto& s : runner.steps()) {
-        if (f >= 0 && family(s) != f) continue;
+        if ((row && !result_layout::row_has(*row, s)) || (f >= 0 && family(s) != f)) continue;
         ++out.total;
         const bool caution = result_layout::caution(s, view);
         out.caution += caution;
         out.pass += s.verdict == ct::Verdict::Pass && !caution;
         out.fail += s.verdict == ct::Verdict::Fail;
+        out.listed += result_layout::noted(s);
+        out.adv += result_layout::advertised(s);
         out.skip += s.verdict == ct::Verdict::Skip;
     }
     return out;
+}
+// One slice of a grid's paint under the page budget: a whole row when the pass is fresh, else what is left. True when the
+// budget wants the rest of the page held back until the next tick.
+bool draw_grid_slice(kit::ResultGrid& grid, PaintBudget* pbg) {
+    const int room = pbg ? (pbg->spent == 0 ? ChargerTestPage::kFlightRowPx : pbg->left()) : (1 << 30);
+    const int drawn = grid.draw_some(room, -1, pbg && pbg->spent != 0);
+    if (!pbg) return false;
+    pbg->spent += drawn;
+    if (grid.pending()) pbg->defer();
+    return pbg->more;
+}
+// A row's footer ("PPS: 3 pass, 1 caution", the Results line's and its Steps page's) and its tone: amber for a failure or a caution,
+// green for a pass or an advertised PD offer (a Light run's listing), else plain.
+FooterTone put_counts(StrBuf<32>& f, const char* label, const Counts& c) {
+    result_layout::FamilyTally t;
+    t.pass = c.pass; t.caution = c.caution; t.fail = c.fail; t.listed = c.listed; t.skip = c.skip - c.listed;
+    f.put(result_layout::family_footer(label, t).view());
+    return c.fail || c.caution ? FooterTone::Caution : c.pass || c.adv ? FooterTone::Ok : FooterTone::Info;
 }
 }
 
@@ -1602,11 +1623,16 @@ A ChargerTestSession::algorithm_at(int row) const {
     }
     return A::Count;
 }
+const result_layout::Row* ChargerTestSession::picked() const { return result_family_ == kFamPd ? &result_row_ : nullptr; }
+bool ChargerTestSession::shows(const ct::Step& s) const {
+    const auto* row = picked();
+    return row ? result_layout::row_has(*row, s) : result_family_ < 0 || family(s) == result_family_;
+}
 int ChargerTestSession::step_index(int row) const {
     if (stage_ == Stage::Running) return row;
     const auto steps = runner_.steps();
     for (size_t n = 0; n < steps.size(); ++n) {
-        if (result_family_ >= 0 && family(steps[n]) != result_family_) continue;
+        if (!shows(steps[n])) continue;
         if (!row--) return static_cast<int>(n);
     }
     return -1;
@@ -1714,7 +1740,7 @@ int ChargerTestPage::row_count() const {
     case Stage::Running: return static_cast<int>(s_.runner_.steps().size());
     case Stage::Results: return delta_row() + (s_.delta_n_ ? 1 : 0);
     case Stage::Changes: return static_cast<int>(s_.delta_n_);
-    case Stage::Steps: return static_cast<int>(counts(s_.runner_, s_.result_family_).total);
+    case Stage::Steps: return static_cast<int>(counts(s_.runner_, s_.picked(), s_.result_family_).total);
     case Stage::SpecDetail: return spec_list_.n >= 2 ? spec_list_.n : 0;   // the open check's transitions; the summary table has no rows
     case Stage::Detail: return 0;
     case Stage::Resume: return 3;
@@ -1810,16 +1836,6 @@ const char *cc_word(int mv) {
     return "open";
 }
 using waitplus::cc_open;   // the same ladder cut as cc_word's "open" (and the footer's choice)
-// "12 pass" style parts of a counter line, appended only while the footer's 27 cells still hold them.
-void put_part(StrBufBase &b, unsigned n, const char *word, bool &first) {
-    if (!n) return;
-    StrBuf<16> part;
-    part.put_u32(n).put_char(' ').put(word);
-    if (b.view().size() + (first ? 0 : 2) + part.view().size() > kFooterCells) return;
-    if (!first) b.put(", ");
-    b.put(part.view());
-    first = false;
-}
 // One line of the Running grid's step counters: the unit of step `at`, and which of its steps this is.
 void unit_progress(const ct::Runner &runner, size_t at, unsigned &i, unsigned &n, const char *&unit) {
     const auto &steps = runner.steps();
@@ -2011,23 +2027,8 @@ static FooterTone spec_footer(StrBuf<32>& f, int check, const specsec::Cell& c, 
             return rc.tone == Tone::Pass ? FooterTone::Ok : rc.tone == Tone::Partial || rc.tone == Tone::Fail ? FooterTone::Caution
                                                                                                                 : FooterTone::Info;
         }
-        unsigned pass = 0, fail = 0, listed = 0, other = 0, adv = 0;
-        for (const auto &s : s_.runner_.steps()) {
-            if (!result_layout::row_has(row, s)) continue;
-            const bool noted = result_layout::noted(s);   // a Light run's listing: neither a result nor a skip
-            adv += result_layout::advertised(s);
-            pass += s.verdict == ct::Verdict::Pass;
-            fail += s.verdict == ct::Verdict::Fail;
-            listed += noted;
-            other += !noted && s.verdict != ct::Verdict::Pass && s.verdict != ct::Verdict::Fail;
-        }
-        bool first = true;
-        put_part(f, pass, "pass", first);
-        put_part(f, fail, "fail", first);
-        put_part(f, listed, "listed", first);
-        put_part(f, other, "other", first);
-        if (first) f.put("no result");
-        return fail ? FooterTone::Caution : pass || adv ? FooterTone::Ok : FooterTone::Info;   // advertised PD offers read green, worded "listed"
+        f.clear();   // the row's name leads the line again
+        return put_counts(f, row.label, counts(s_.runner_, &row));
     }
     case Stage::SpecDetail: {
         const int k = s_.detail_index_;
@@ -2055,8 +2056,9 @@ static FooterTone spec_footer(StrBuf<32>& f, int check, const specsec::Cell& c, 
         return spec_footer(f, static_cast<int>(specsec::kOrder[static_cast<size_t>(k)]), s_.runner_.evidence().spec.cells[static_cast<size_t>(k)], true);
     }
     case Stage::Steps: {
-        const auto c = counts(s_.runner_, s_.result_family_);
-        f.put_u32(c.total).put(" steps, ");
+        const auto c = counts(s_.runner_, s_.picked(), s_.result_family_);
+        if (s_.picked()) return put_counts(f, s_.result_row_.label, c);   // "PPS: 3 pass, 1 caution": the name the bar's title uses
+        f.put_u32(c.total).put(" steps, ");   // a non-PD unit (QC, UFCS, ...): its whole step list
         if (!c.fail && c.caution) f.put_u32(c.caution).put(" caution");
         else f.put_u32(c.fail).put(" failed");
         return c.fail || c.caution ? FooterTone::Caution : FooterTone::Info;
@@ -2256,13 +2258,32 @@ void ChargerTestPage::list_row(int index, bool focused, kit::RowSpec &out) {
 }
 
 // RowList stages: bind the list on first paint after an invalidate, then apply count and selection (the window follows).
+// The Steps stage of a PD row has the row's own grid lines on top (a range or level chips as the Results grid shows them, at most
+// two lines); any other unit, and every other list, has no header and the list takes the whole body.
 void ChargerTestPage::paint_list() {
     if (!laid_) {
-        const int16_t y = s_.stage_ == Stage::Resume ? 56 : s_.stage_ == Stage::Refuse ? 110 : s_.stage_ == Stage::SpecDetail ? 58 : kit::kBodyY;
+        int16_t y = s_.stage_ == Stage::Resume ? 56 : s_.stage_ == Stage::Refuse ? 110 : s_.stage_ == Stage::SpecDetail ? 58 : kit::kBodyY;
+        hdr_n_ = 0;
+        if (s_.stage_ == Stage::Steps && s_.picked() && results_row_ >= 0 && static_cast<size_t>(results_row_) < line_n_) {
+            size_t first = static_cast<size_t>(results_row_);
+            while (first > 0 && !lines_[first].head) --first;
+            hdr_first_ = static_cast<uint8_t>(first);
+            while (hdr_n_ < 2 && first + hdr_n_ < line_n_ && lines_[first + hdr_n_].row == lines_[first].row) {   // a row's lines
+                kit::ResultRowSpec spec;
+                grid_row(hdr_n_, spec);
+                y = static_cast<int16_t>(y + kit::result_row_h(spec));
+                ++hdr_n_;
+            }
+            grid_.init(ctx_.content, kit::kBodyY, y, &ChargerTestPage::result_row_fn, this);
+        }
         ctx_.rows.init(ctx_.content, y, &ChargerTestPage::row_fn, this);
         ctx_.rows.restart();
         ctx_.rows.invalidate();
         laid_ = true;
+    }
+    if (hdr_n_) {
+        grid_.set_count(hdr_n_);
+        if (draw_grid_slice(grid_, ctx_.budget)) return;
     }
     ctx_.rows.set_count(row_count());
     ctx_.rows.select(s_.selection_);
@@ -2280,6 +2301,7 @@ void ChargerTestPage::paint_warning() {
         ctx_.rows.init(c, 110, &ChargerTestPage::row_fn, this);
         ctx_.rows.restart();
         ctx_.rows.invalidate();
+        hdr_n_ = 0;
         laid_ = true;
     }
     paint_list();
@@ -2784,11 +2806,11 @@ void ChargerTestPage::paint_running(uint32_t now) {
     }
     // 4. the step header: counter, progress bar, protocol, step name, target. A step change is visible within a tick or two.
     {
-        buf.clear();
-        buf.put_u32(st ? static_cast<uint32_t>(at + 1) : 0).put_char('/').put_u32(static_cast<uint32_t>(steps.size())).put(" steps");
-        put_line(c, kSmall, 6, 25, buf.view(), kText, 12, cell_sig_[0], false, false, &bg);
-        const auto work = result_layout::run_progress(steps);   // rows the run executes: a plan-time skip is not work
+        const auto work = result_layout::run_progress(steps);   // rows the run executes: a plan-time skip is not work (the counter and the bar read it alike)
         const int done = static_cast<int>(work.done), total = static_cast<int>(work.total);
+        buf.clear();
+        buf.put_u32(work.done).put_char('/').put_u32(work.total).put(" steps");
+        put_line(c, kSmall, 6, 25, buf.view(), kText, 12, cell_sig_[0], false, false, &bg);
         if (bg.admit(prog_.cost(done, total))) prog_.set(done, total);
         const int fam = st ? family(*st) : -1;
         // the family label (dim, 12 px) above the name; a sweep row's name moves up and the label goes to its right, baseline to baseline
@@ -2831,6 +2853,8 @@ void ChargerTestPage::result_row_fn(void *p, int index, kit::ResultRowSpec &out)
 // Row `index` of the verdict grid (a layout line, or the Changes pseudo-row after them). The text lives in the page's cell buffers.
 void ChargerTestPage::grid_row(int index, kit::ResultRowSpec &out) {
     out = {};
+    const bool header = s_.stage_ == Stage::Steps;   // the Steps page's header: the picked row's own lines, never focused, no section rule
+    if (header) index += hdr_first_;
     const bool results = s_.stage_ == Stage::Results;
     if (index >= static_cast<int>(line_n_) && index < delta_row()) {   // a PD spec check: one wide cell, the number it measured
         const int k = index - static_cast<int>(line_n_);
@@ -2862,7 +2886,7 @@ void ChargerTestPage::grid_row(int index, kit::ResultRowSpec &out) {
         std::memcpy(cell_lbl_, row.label, std::min<size_t>(std::strlen(row.label), sizeof cell_lbl_ - 1));
         out.label = cell_lbl_;
     }
-    const int running = results ? -1 : running_token(layout_, s_.runner_, ln.row);
+    const int running = results || header ? -1 : running_token(layout_, s_.runner_, ln.row);
     int n = 0;
     for (int k = 0; k < ln.count && n < kit::kResultMaxCells; ++k) {
         const size_t ti = static_cast<size_t>(ln.first + k);
@@ -2884,7 +2908,7 @@ void ChargerTestPage::grid_row(int index, kit::ResultRowSpec &out) {
     }
     out.n = static_cast<uint8_t>(n);
     out.focus = results && s_.selection_ >= 0 && s_.selection_ < static_cast<int>(line_n_) && lines_[static_cast<size_t>(s_.selection_)].row == ln.row;
-    out.section = section_break(layout_, std::span<const result_layout::Line>(lines_.data(), line_n_), static_cast<size_t>(index));
+    out.section = !header && section_break(layout_, std::span<const result_layout::Line>(lines_.data(), line_n_), static_cast<size_t>(index));
 }
 
 void ChargerTestPage::paint_results() {
@@ -2923,12 +2947,7 @@ void ChargerTestPage::paint_results() {
     if (pbg && pbg->more) return;
     grid_.set_count(delta_row() + (s_.delta_n_ ? 1 : 0));
     grid_.show(s_.selection_, 1);
-    const int room = pbg ? (pbg->spent == 0 ? kFlightRowPx : pbg->left()) : (1 << 30);
-    const int drawn = grid_.draw_some(room, -1, pbg && pbg->spent != 0);
-    if (pbg) {
-        pbg->spent += drawn;
-        if (grid_.pending()) pbg->defer();
-    }
+    draw_grid_slice(grid_, pbg);
 }
 
 // VBUS around the failed step, from the stored transition capture: min..max per column over the ~2 s window, the first PD
@@ -3355,6 +3374,7 @@ __attribute__((noinline)) void ChargerTestPage::ok_event() {
             if (fam != -2) {
                 results_row_ = s_.selection_;
                 s_.result_family_ = fam;
+                s_.result_row_ = row;   // a PD row opens its own steps (a range, a level family, a sweep), the others their family
                 set_stage(Stage::Steps);
             }
         }

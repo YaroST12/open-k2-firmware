@@ -509,6 +509,11 @@ private:
     uint32_t run_t0_ = 0;                  // when the run entered Running (the m:ss on screen)
     StrBuf<32> message_;
     int selection_ = 0, family_ = 0, result_family_ = -1, detail_index_ = 0, detail_row_ = 0;
+    // The Steps page opened from a PD Results row lists that row's steps only (picked(): result_layout::row_has on this copy of the
+    // row, its range or fixed levels); any other row lists its protocol family (result_family_, -1 = all).
+    result_layout::Row result_row_{};
+    const result_layout::Row* picked() const;   // result_row_ while the Steps page lists a PD row, else nullptr
+    bool shows(const charger_test::Step&) const;
     // The identity the next START presents lives in ctx_.cables (the list Tools -> Spoof shares), not here.
     ctcable::Choice run_cable_{};        // the identity of the current / last run
     ctcable::Facts run_facts_{};         // its VID / PID / limits, for the report card
@@ -688,6 +693,7 @@ private:
     StrBuf<32> best_;
     size_t line_n_ = 0;
     int results_row_ = 0;      // selected line to restore when BACK leaves the step list
+    uint8_t hdr_first_ = 0, hdr_n_ = 0;   // Steps: the picked row's lines shown as the header (its first line, at most two)
     kit::ActionCell action_;               // Review: START / CONFIRM
     kit::ProgressBar prog_;                // Running: steps done of all
     kit::ResultGrid grid_;                 // Running and Results: the verdict grid

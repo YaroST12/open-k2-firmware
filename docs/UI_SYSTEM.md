@@ -702,7 +702,7 @@ them should move them into the kit first.
 | alert | `Direct plug is the sure way` |
 | running | `FCP: step 1 of 3` |
 | results | `FCP: 1 pass, 1 fail` |
-| steps | `25 steps, 5 failed` |
+| steps | `25 steps, 5 failed`; a PD grid row's page `PPS: 3 pass, 1 caution` (the row's name, then every non-zero count that fits the 27 cells; a skip or listed count that does not fit is left off, a pass, fail or caution count that would not fit sends the name away) |
 | detail | `Kept until the next start` |
 
 ### 6.2 Strip vocabulary (`label_violation`, `kOkVerbs`)
