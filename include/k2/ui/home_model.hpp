@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <span>
 #include <string_view>
+#include "k2/core/bss_zero.hpp"
 #include "k2/core/math_opt.hpp"
 #include "k2/pd/diag.hpp"
 #include "k2/ui/ui_calc.hpp"
@@ -184,12 +185,13 @@ public:
 
 private:
     struct Seen {
-        uint32_t sig = 0;     // code, severity, time and the first two fields: a moved count is a new occurrence
-        uint32_t since = 0;   // when Home first saw it
+        uint32_t sig K2_BSS_ZERO;     // code, severity, time and the first two fields: a moved count is a new occurrence
+        uint32_t since K2_BSS_ZERO;   // when Home first saw it
     };
-    std::array<Seen, pd::diag::kMaxFindings> seen_{};
-    uint32_t start_us_ = 0;
-    uint8_t n_ = 0;
+    // The one instance is UiContext::Remembered::diag_dwell in the .bss global Ui.
+    std::array<Seen, pd::diag::kMaxFindings> seen_ K2_BSS_ZERO;
+    uint32_t start_us_ K2_BSS_ZERO;
+    uint8_t n_ K2_BSS_ZERO;
 };
 // The power meter has not answered YET: the first seconds of a boot, while the chip is still being found (a key-mode boot lives on a
 // VBUS that is still ramping when the first probe runs, and the main loop is busy with the charger link for seconds). The page says

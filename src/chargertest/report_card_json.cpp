@@ -9,8 +9,6 @@
 
 namespace k2::report_card {
 
-[[gnu::noinline]] Card::Card() = default;
-
 namespace {
 constexpr const char* kVerdict[] = {"none", "pass", "fail", "skip"};
 constexpr const char* kHandover[] = {"not tried", "fell back", "stayed PD", "fault", "reboot", "in PD contract"};

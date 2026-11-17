@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Yaraslau Furman
 #pragma once
 #include <cstdint>
+#include "k2/core/bss_zero.hpp"
 #include "k2/pd/pd_link.hpp"
 
 namespace k2::trig {
@@ -30,8 +31,9 @@ public:
     bool busy() const { return state_ == State::Releasing || state_ == State::Unsafe; }
     State state() const { return state_; }
 private:
-    State state_ = State::Idle;
-    uint32_t started_ = 0, last_ = 0, stable_since_ = 0;
-    bool stable_ = false;
+    // The one instance is Ui::fc_release_ in the .bss global Ui; State::Idle is 0.
+    State state_ K2_BSS_ZERO;
+    uint32_t started_ K2_BSS_ZERO, last_ K2_BSS_ZERO, stable_since_ K2_BSS_ZERO;
+    bool stable_ K2_BSS_ZERO;
 };
 }  // namespace k2::trig

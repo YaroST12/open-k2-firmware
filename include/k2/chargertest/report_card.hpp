@@ -170,24 +170,11 @@ constexpr std::array<std::array<int8_t, kSpreadLevels>, kMaxRanges> spread_none(
 // stored as 128 + err, pd::SinkResult below that, fc::Fail for the fast-charge groups), else the step's reason.
 inline bool group_handshake_ok(const GroupResult& r) { return r.verdict == GV::Pass && r.detail == uint8_t(fc::Fail::NoVoltage); }
 inline bool group_detected(const GroupResult& r) { return r.verdict == GV::Pass && r.detail == uint8_t(fc::Fail::Detected); }
-inline const char* group_why(unsigned group, const GroupResult& r) {
-    // QC3+ the charger does not do (no movement, or QC3-sized steps): the engine code is "no response", the group says "no QC3+".
-    if (r.reason == uint8_t(ct::Reason::NoQc3Plus)) return "no QC3+";
-    if (r.detail) {
-        if (group == unsigned(ct::Group::Pd)) {
-            if (const char* epr = ct::epr_detail_name(r.detail)) return epr;   // an EPR skip: the monitor ceiling or Enter_Failed's reason
-            if (r.detail >= 128 && unsigned(r.detail) - 128u <= unsigned(pd::Err::BadChoice)) return pd::err_name(pd::Err(r.detail - 128));
-            if (r.detail <= unsigned(pd::SinkResult::BadChoice)) return pd::result_name(pd::SinkResult(r.detail));
-        } else if (r.detail <= unsigned(fc::Fail::Detected)) {
-            return fc::name(fc::Fail(r.detail));
-        }
-    }
-    return ct::name(ct::Reason(r.reason));
-}
+const char* group_why(unsigned group, const GroupResult& r);
 struct Counts { unsigned pass = 0, fail = 0, skip = 0; };
 
 struct Card {
-    // Out of line (report_card_json.cpp): the zeroed arrays and the spread_none() fill are about 130 B, and nine pages and
+    // Out of line (report_card.cpp): the zeroed arrays and the spread_none() fill are about 130 B, and nine pages and
     // stores each built a Card inline.
     Card();
     Identity id;
@@ -258,40 +245,8 @@ constexpr const char* oppo_note(const Card& c) { return (c.src_flags & kSrcOppoS
 // from before the bits meant anything). The voltage of the note is the highest SCP level that passed, which is the adapter's own
 // top level whenever the planned top row passed; a failed or absent group names the current alone.
 constexpr unsigned scp_cap_ma(const Card& c) { return c.format >= 5 ? unsigned(c.src_flags >> 1) * 50u : 0u; }
-namespace detail {
-// value (milli-units) as "6", "2.25" or "5.5": whole part, then the decimals that are not trailing zeros, at most `dec` of them.
-inline size_t put_milli(char* out, size_t cap, unsigned v, unsigned dec) {
-    size_t n = 0;
-    auto put = [&](char ch) { if (n + 1 < cap) out[n++] = ch; };
-    char whole[8]; unsigned w = v / 1000, k = 0;
-    do { whole[k++] = char('0' + w % 10); w /= 10; } while (w && k < sizeof whole);
-    while (k) put(whole[--k]);
-    unsigned frac = v % 1000, scale = 100;
-    char digits[3]; unsigned nd = 0;
-    for (unsigned i = 0; i < dec && i < 3; ++i, scale /= 10) { digits[nd++] = char('0' + frac / scale % 10); }
-    while (nd && digits[nd - 1] == '0') --nd;
-    if (nd) { put('.'); for (unsigned i = 0; i < nd; ++i) put(digits[i]); }
-    out[n] = 0;
-    return n;
-}
-}  // namespace detail
 // "SCP cap 20V 6A" (or "SCP cap 6A"): the adapter's own readout, passive. false when the card holds no current.
-inline bool scp_note(const Card& c, char* out, size_t cap) {
-    if (cap == 0) return false;
-    out[0] = 0;
-    const unsigned ma = scp_cap_ma(c);
-    if (ma == 0) return false;
-    size_t n = 0;
-    auto put = [&](const char* s) { while (*s && n + 1 < cap) out[n++] = *s++; };
-    put("SCP cap ");
-    const GroupResult& g = c.group[unsigned(ct::Group::Scp)];
-    if (g.verdict == GV::Pass && g.max_mv >= 1000) {
-        n += detail::put_milli(out + n, cap - n, g.max_mv, 1); put("V ");
-    }
-    n += detail::put_milli(out + n, cap - n, ma, 2); put("A");
-    out[n] = 0;
-    return true;
-}
+bool scp_note(const Card& c, char* out, size_t cap);
 
 // Quick Charge 4+/5 label of a source, from facts the card already holds (passive: no probe, and never a key for any
 // behaviour). A Qualcomm USB vendor ID (Discover Identity or Source_Capabilities_Extended) together with a PPS APDO is
@@ -312,331 +267,61 @@ inline constexpr unsigned kQc5MinWatts = 100;
 inline constexpr unsigned kMotoMinMa = 5000;      // a PPS APDO above this is TurboPower class
 inline constexpr unsigned kSfc2MaxCapMa = 4050;   // SFC 2.0 at 3.3-11 V
 
-inline QcLabel qc_label(const Card& c) {
-    bool pps = false, epr = false, over5 = false, sfc3 = false, sfc2_15 = false, sfc2_11 = false;
-    for (unsigned i = 0; i < c.n_ranges && i < kMaxRanges; ++i) {
-        const Range& r = c.range[i];
-        epr = epr || r.alg == uint8_t(ct::Algorithm::EprAvs);
-        if (r.alg != uint8_t(ct::Algorithm::Pps)) continue;
-        pps = true;
-        over5 = over5 || r.ma > kMotoMinMa;
-        sfc3 = sfc3 || (r.hi_dv >= 200 && r.ma >= 3000);
-        sfc2_15 = sfc2_15 || (r.hi_dv >= 150 && r.ma >= 3000);
-        sfc2_11 = sfc2_11 || (r.lo_dv && r.lo_dv <= 33 && r.hi_dv >= 110 && r.ma >= kSfc2MaxCapMa);
-    }
-    if (!pps) return QcLabel::None;
-    if (c.id.vid == kQualcommVid) return c.id.pdp_w >= kQc5MinWatts || epr ? QcLabel::Qc5 : QcLabel::Qc4Plus;
-    if ((c.id.vid == kMotorolaVid || c.id.vid == kLenovoVid) && over5) return QcLabel::MotoTurbo;
-    if (c.id.vid != kSamsungVid) return QcLabel::None;   // no brand claim without the brand's VID
-    if (sfc3) return QcLabel::Sfc3;
-    if (sfc2_15 || (sfc2_11 && c.cable.max_ma >= 5000)) return QcLabel::Sfc2;
-    return QcLabel::None;
-}
-inline const char* qc_label_name(QcLabel l) {
-    switch (l) {
-    case QcLabel::Qc5: return "QC5";
-    case QcLabel::Qc4Plus: return "QC4+";
-    case QcLabel::MotoTurbo: return "Moto TurboPower";
-    case QcLabel::Sfc2: return "Samsung SFC 2.0";
-    case QcLabel::Sfc3: return "Samsung SFC 3.0";
-    default: return "";
-    }
-}
+QcLabel qc_label(const Card& c);
+const char* qc_label_name(QcLabel l);
 
 // The PPS span the label rests on, "3.3-21V": the lowest minimum to the highest maximum of the card's PPS ranges.
 // Returns the length written (0 and an empty string when the card has no PPS range).
-inline size_t qc_pps_span_text(const Card& c, char* out, size_t cap) {
-    if (cap == 0) return 0;
-    out[0] = 0;
-    unsigned lo = 0xFFFF, hi = 0;
-    bool any = false;
-    for (unsigned i = 0; i < c.n_ranges && i < kMaxRanges; ++i) {
-        if (c.range[i].alg != uint8_t(ct::Algorithm::Pps)) continue;
-        any = true;
-        lo = c.range[i].lo_dv < lo ? c.range[i].lo_dv : lo;
-        hi = c.range[i].hi_dv > hi ? c.range[i].hi_dv : hi;
-    }
-    if (!any) return 0;
-    size_t n = 0;
-    auto put = [&](const char* s) { while (*s && n + 1 < cap) out[n++] = *s++; };
-    auto put_dv = [&](unsigned dv) {   // 100 mV units: 33 -> "3.3", 210 -> "21"
-        char b[8]; unsigned k = 0;
-        if (dv >= 100) b[k++] = char('0' + dv / 100 % 10);
-        b[k++] = char('0' + dv / 10 % 10);
-        if (dv % 10) { b[k++] = '.'; b[k++] = char('0' + dv % 10); }
-        b[k] = 0;
-        put(b);
-    };
-    put_dv(lo); put("-"); put_dv(hi); put("V");
-    out[n] = 0;
-    return n;
-}
+size_t qc_pps_span_text(const Card& c, char* out, size_t cap);
 
 // The PPS V/A span, e.g. "5-20V 5A": the lowest minimum to the highest maximum voltage of the card's PPS ranges,
 // plus the maximum advertised current of those ranges. Returns the length written (0 and an empty string when
 // the card has no PPS range or no current info).
-inline size_t qc_pps_va_text(const Card& c, char* out, size_t cap) {
-    if (cap == 0) return 0;
-    out[0] = 0;
-    unsigned lo = 0xFFFF, hi = 0;
-    uint16_t max_ma = 0;
-    bool any = false;
-    for (unsigned i = 0; i < c.n_ranges && i < kMaxRanges; ++i) {
-        if (c.range[i].alg != uint8_t(ct::Algorithm::Pps)) continue;
-        any = true;
-        if (c.range[i].lo_dv < lo) lo = c.range[i].lo_dv;
-        if (c.range[i].hi_dv > hi) hi = c.range[i].hi_dv;
-        if (c.range[i].ma > max_ma) max_ma = c.range[i].ma;
-    }
-    if (!any) return 0;
-    size_t n = 0;
-    auto put = [&](const char* s) { while (*s && n + 1 < cap) out[n++] = *s++; };
-    auto put_dv = [&](unsigned dv) {   // 100 mV units: 33 -> "3.3", 210 -> "21"
-        char b[8]; unsigned k = 0;
-        if (dv >= 100) b[k++] = char('0' + dv / 100 % 10);
-        b[k++] = char('0' + dv / 10 % 10);
-        if (dv % 10) { b[k++] = '.'; b[k++] = char('0' + dv % 10); }
-        b[k] = 0;
-        put(b);
-    };
-    put_dv(lo); put("-"); put_dv(hi);
-    // Append current in A: max_ma is in mA
-    if (max_ma > 0) {
-        put("V ");
-        const uint16_t whole_a = max_ma / 1000;
-        const uint16_t frac_ma = max_ma % 1000; // 0..999, multiple of 50
-        char b[8]; unsigned k = 0;
-        if (whole_a >= 10) b[k++] = char('0' + whole_a / 10);
-        b[k++] = char('0' + whole_a % 10);
-        if (frac_ma > 0) {
-            b[k++] = '.';
-            b[k++] = char('0' + frac_ma / 100);
-            b[k++] = char('0' + (frac_ma % 100) / 10);
-        }
-        b[k++] = 'A'; b[k] = 0;
-        put(b);
-    } else {
-        put("V");
-    }
-    out[n] = 0;
-    return n;
-}
+size_t qc_pps_va_text(const Card& c, char* out, size_t cap);
 
 // The highest-wattage fixed PDO V/A text, e.g. "20V 5A". Uses the highest voltage measured on fixed PDOs
 // (group[pd].max_mv) and the highest advertised current of any fixed PDO (pd_ma). Returns the length written
 // (0 and an empty string when the card has no fixed PDO current info or no measured voltage).
-inline size_t qc_pd_va_text(const Card& c, char* out, size_t cap) {
-    if (cap == 0) return 0;
-    out[0] = 0;
-    if (c.pd_ma == 0) return 0; // unknown current
-    const uint16_t volts_mv = c.group[unsigned(ct::Group::Pd)].max_mv; // in mV
-    if (volts_mv == 0) return 0;
-    const uint16_t volts = volts_mv / 1000; // convert to V (integer)
-    const uint16_t amps_ma = c.pd_ma; // in mA
-    const uint16_t whole_a = amps_ma / 1000;
-    const uint16_t frac_ma = amps_ma % 1000;
-    size_t n = 0;
-    auto put = [&](const char* s) { while (*s && n + 1 < cap) out[n++] = *s++; };
-    char b[16]; unsigned k = 0;
-    if (volts >= 10) b[k++] = char('0' + volts / 10);
-    b[k++] = char('0' + volts % 10);
-    b[k++] = 'V'; b[k++] = ' ';
-    if (whole_a >= 10) b[k++] = char('0' + whole_a / 10);
-    b[k++] = char('0' + whole_a % 10);
-    if (frac_ma > 0) {
-        b[k++] = '.';
-        b[k++] = char('0' + frac_ma / 100);
-        b[k++] = char('0' + (frac_ma % 100) / 10);
-    }
-    b[k++] = 'A'; b[k] = 0;
-    put(b);
-    out[n] = 0;
-    return n;
-}
+size_t qc_pd_va_text(const Card& c, char* out, size_t cap);
 
 // The justification part of the QC label, e.g. "via PPS 5-20V 5A" or "via PD 20V 5A".
 // Returns the length written (0 and an empty string when the card has no label).
-inline size_t qc_label_justification(const Card& c, char* out, size_t cap) {
-    if (cap == 0) return 0;
-    out[0] = 0;
-    const QcLabel l = qc_label(c);
-    if (l == QcLabel::None) return 0;
-    size_t n = 0;
-    auto put = [&](const char* s) { while (*s && n + 1 < cap) out[n++] = *s++; };
-    if (l == QcLabel::Qc5) {
-        char pd_va[20];
-        if (qc_pd_va_text(c, pd_va, sizeof pd_va)) {
-            put("via PD "); put(pd_va);
-        } else {
-            // Fallback to PPS span when PD info is missing
-            char span[16];
-            if (qc_pps_span_text(c, span, sizeof span)) {
-                put("Qualcomm VID, PPS "); put(span);
-            }
-        }
-    } else { // Qc4Plus, Moto TurboPower, Samsung SFC: all read off the PPS range
-        char pps_va[20];
-        if (qc_pps_va_text(c, pps_va, sizeof pps_va)) {
-            put("via PPS "); put(pps_va);
-        } else {
-            // Fallback to PPS span
-            char span[16];
-            if (qc_pps_span_text(c, span, sizeof span)) {
-                put(l == QcLabel::Qc4Plus ? "Qualcomm VID, PPS " : "PPS "); put(span);
-            }
-        }
-    }
-    out[n] = 0;
-    return n;
-}
+size_t qc_label_justification(const Card& c, char* out, size_t cap);
 
 // The fact line behind the label, e.g. "QC5 (via PD 20V 5A)" or "QC4+ (via PPS 5-20V 5A)".
 // Returns the length written (0 and an empty string when the card has no label).
-inline size_t qc_label_text(const Card& c, char* out, size_t cap) {
-    if (cap == 0) return 0;
-    out[0] = 0;
-    const QcLabel l = qc_label(c);
-    if (l == QcLabel::None) return 0;
-    size_t n = 0;
-    auto put = [&](const char* s) { while (*s && n + 1 < cap) out[n++] = *s++; };
-    put(qc_label_name(l));
-    char justification[32];
-    if (qc_label_justification(c, justification, sizeof justification)) {
-        put(" ("); put(justification); put(")");
-    }
-    out[n] = 0;
-    return n;
-}
+size_t qc_label_text(const Card& c, char* out, size_t cap);
 
-constexpr uint32_t fingerprint(std::span<const uint32_t> pdos, uint8_t spec_rev) {
-    uint32_t h = 2166136261u;
-    auto put = [&h](uint8_t b) { h = (h ^ b) * 16777619u; };
-    for (uint32_t p : pdos) for (unsigned i = 0; i < 4; ++i) put(uint8_t(p >> (8 * i)));
-    put(spec_rev);
-    return h ? h : 1;
-}
+uint32_t fingerprint(std::span<const uint32_t> pdos, uint8_t spec_rev);
 
 // Identity of a source that advertised no PD caps (a bank on its legacy port): FNV-1a 32 over, for every passing
 // step, the group and the level in 100 mV, behind a salt that no PDO fingerprint uses. The same charger keeps the
 // same card while its answers stay the same; a different set of answered protocols is another charger.
-constexpr uint32_t legacy_fingerprint(std::span<const ct::Step> steps) {
-    uint32_t h = 2166136261u;
-    auto put = [&h](uint8_t b) { h = (h ^ b) * 16777619u; };
-    put('L'); put('G'); put('C'); put('Y');
-    for (const auto& s : steps)
-        if (s.verdict == ct::Verdict::Pass) { put(uint8_t(s.group)); put(uint8_t(s.mv / 100)); put(uint8_t(s.mv / 25600)); }
-    return h ? h : 1;
-}
+uint32_t legacy_fingerprint(std::span<const ct::Step> steps);
 
 // Firmware build id for the card: the commit token of the build's describe string (hex, first 8 digits,
 // a leading "g" stripped); 0 when the text has none.
-constexpr uint32_t fw_hash(std::string_view text) {
-    auto hex = [](char c) { return c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : -1; };
-    size_t end = text.size();
-    while (end > 0) {
-        size_t begin = end;
-        while (begin > 0 && text[begin - 1] != '-') --begin;
-        std::string_view tok = std::string_view(text.data() + begin, end - begin);   // no substr: it can throw
-        if (tok.size() >= 8 && tok.front() == 'g' && hex(tok[1]) >= 0) tok.remove_prefix(1);
-        bool ok = tok.size() >= 7;
-        for (char c : tok) ok = ok && hex(c) >= 0;
-        if (ok) {
-            uint32_t v = 0;
-            for (size_t i = 0; i < tok.size() && i < 8; ++i) v = v << 4 | uint32_t(hex(tok[i]));
-            return v;
-        }
-        end = begin ? begin - 1 : 0;
-    }
-    return 0;
-}
+uint32_t fw_hash(std::string_view text);
 
 constexpr bool valid_name(std::string_view n) { return emlib::name_valid(n) && n.size() <= kNameMax; }
-inline void set_name(Card& c, std::string_view n) {
-    c.name[0] = 0;
-    const size_t k = n.size() < kNameMax ? n.size() : kNameMax;
-    std::memcpy(c.name, n.data(), k);
-    c.name[k] = 0;
-}
+void set_name(Card& c, std::string_view n);
 
 // Brand of a USB-IF vendor ID, nullptr when it is not in the (short) table. Every entry is checked against the
 // linux-usb.org usb.ids list except Anker, which is not in that list; unverified IDs are left out.
 // Honor 0x339B, vivo 0x2D95 and Zimi/CUKTECH 0x2B01 are not in that list (checked against usb.ids 2026.06.26), so they stay out.
-constexpr const char* brand(uint16_t vid) {
-    switch (vid) {
-        case 0x05AC: return "Apple";
-        case kSamsungVid: return "Samsung";
-        case 0x18D1: return "Google";
-        case 0x2717: return "Xiaomi";
-        case 0x12D1: return "Huawei";
-        case 0x17EF: return "Lenovo";
-        case 0x413C: return "Dell";
-        case 0x03F0: return "HP";
-        case 0x2A70: return "OnePlus";
-        case 0x22D9: return "OPPO";
-        case 0x0B05: return "ASUS";
-        case 0x050D: return "Belkin";
-        case 0x22B8: return "Motorola";
-        case 0x19D2: return "ZTE";
-        case 0x291A: return "Anker";
-        default: return nullptr;
-    }
-}
+const char* brand(uint16_t vid);
 
 // "<Brand> <PDP>W" for the card name, written to out (kNameMax + 1 bytes) and returned as its length (0 = nothing known).
 // The brand is the VID's, else the manufacturer text (only the name alphabet, trimmed), else "VID xxxx"; the
 // wattage suffix is left out when pdp_w is 0. The base is cut so the whole name stays within kNameMax.
-inline size_t auto_name(char* out, uint16_t vid, std::string_view mfr, uint8_t pdp_w) {
-    if (vid == 0xFFFF) vid = 0;   // placeholder VID: never a brand or a "VID FFFF" name
-    char base[kNameMax + 1] = {};
-    size_t n = 0;
-    if (const char* b = brand(vid)) { n = std::strlen(b); std::memcpy(base, b, n); }
-    else {
-        for (char c : mfr) {
-            if (n >= kNameMax) break;
-            const bool ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.';
-            if (ok || (c == ' ' && n > 0)) base[n++] = c;
-        }
-        while (n && base[n - 1] == ' ') base[--n] = 0;
-        if (n == 0 && vid) {
-            static constexpr char hx[] = "0123456789ABCDEF";
-            std::memcpy(base, "VID ", 4);
-            for (unsigned i = 0; i < 4; ++i) base[4 + i] = hx[(vid >> (12 - 4 * i)) & 15];
-            n = 8;
-        }
-    }
-    char suffix[6] = {};
-    size_t sn = 0;
-    if (n && pdp_w) {
-        suffix[sn++] = ' ';
-        if (pdp_w >= 100) suffix[sn++] = char('0' + pdp_w / 100);
-        if (pdp_w >= 10) suffix[sn++] = char('0' + pdp_w / 10 % 10);
-        suffix[sn++] = char('0' + pdp_w % 10);
-        suffix[sn++] = 'W';
-    }
-    if (n + sn > kNameMax) n = kNameMax - sn;
-    while (n && base[n - 1] == ' ') --n;
-    std::memcpy(out, base, n);
-    std::memcpy(out + n, suffix, sn);
-    out[n + sn] = 0;
-    return n ? n + sn : 0;
-}
+size_t auto_name(char* out, uint16_t vid, std::string_view mfr, uint8_t pdp_w);
 
 // Gives an unnamed card its automatic name from the identity it holds (+ the manufacturer text, which is not stored).
-inline void set_auto_name(Card& c, std::string_view mfr) {
-    char buf[kNameMax + 1] = {};
-    if (auto_name(buf, c.id.vid, mfr, c.id.pdp_w) == 0) return;
-    set_name(c, buf);
-    c.name_auto = true;
-}
+void set_auto_name(Card& c, std::string_view mfr);
 
 // Carries what an earlier card of the same charger knew into the new one: a user name always wins over an automatic
 // one, an automatic name is replaced by a newer automatic name, and an identity the run did not learn is kept.
-inline void inherit(Card& c, const Card& prev) {
-    if (prev.name[0] && !prev.name_auto) { std::memcpy(c.name, prev.name, sizeof c.name); c.name_auto = false; }
-    else if (c.name[0] == 0) { std::memcpy(c.name, prev.name, sizeof c.name); c.name_auto = prev.name_auto; }
-    if (c.id.vid == 0 && c.id.pid == 0) { c.id.vid = prev.id.vid; c.id.pid = prev.id.pid; }
-    if (c.id.pdp_w == 0) c.id.pdp_w = prev.id.pdp_w;
-}
+void inherit(Card& c, const Card& prev);
 
 namespace detail {
 constexpr bool within(unsigned a, unsigned b, unsigned step) { return (a > b ? a - b : b - a) <= step; }
@@ -648,45 +333,13 @@ constexpr bool same_result(const GroupResult& a, const GroupResult& b) {
 
 // True when `run` gave the same results as the stored card `prev`: the rule written at the top of this file. Pure, symmetric
 // except for the one-step tolerance, which is the same both ways.
-inline bool same_results(const Card& prev, const Card& run) {
-    if (prev.id.fp != run.id.fp || prev.num_pdos != run.num_pdos || prev.spec_rev != run.spec_rev || prev.ev_flags != run.ev_flags ||
-        prev.pd_ma != run.pd_ma || prev.src_flags != run.src_flags || prev.fw != run.fw || prev.handover != run.handover ||
-        prev.state != run.state || prev.reason != run.reason || prev.n_ranges != run.n_ranges || prev.ufcs != run.ufcs ||
-        prev.level != run.level)   // a Light run lists what a Medium run measures: never the same results
-        return false;
-    const Cable &a = prev.cable, &b = run.cable;
-    if (a.vid != b.vid || a.pid != b.pid || a.max_mv != b.max_mv || a.max_ma != b.max_ma || a.kind != b.kind) return false;
-    for (unsigned g = 0; g < kGroups; ++g) if (!detail::same_result(prev.group[g], run.group[g])) return false;
-    for (unsigned i = 0; i < kMaxRanges; ++i) {
-        const Range &x = prev.range[i], &y = run.range[i];
-        if (x.alg != y.alg || x.pos != y.pos || x.lo_dv != y.lo_dv || x.hi_dv != y.hi_dv || x.ma != y.ma || x.fail_dv != y.fail_dv || !detail::within(x.max_dv, y.max_dv, 1))
-            return false;
-    }
-    for (unsigned i = 0; i < kEprLevels; ++i)
-        if (prev.epr[i].dv != run.epr[i].dv || !detail::same_result(prev.epr[i].r, run.epr[i].r)) return false;
-    return true;
-}
+bool same_results(const Card& prev, const Card& run);
 
 // Turns `c`, a run that repeated the stored card `prev` (same_results), into the card to store: the stored rows and first-run time
 // stay, the run counts, the repeat counter grows and last_* name the newest run. What only the repeat learned (an identity the
 // first probe missed, an automatic name where the stored card had none) is added; a user name always stays. It works in place
 // (no second Card on the stack: the save path runs on the UI task's small frame).
-inline void fold_repeat(const Card& prev, Card& c) {
-    char name[sizeof c.name];
-    std::memcpy(name, c.name, sizeof name);
-    const bool name_auto = c.name_auto;
-    const uint32_t boots = c.boots, uptime_s = c.uptime_s;
-    const uint16_t vid = c.id.vid, pid = c.id.pid, pdp_w = c.id.pdp_w;
-    c = prev;
-    c.format = kFormat;
-    c.runs = prev.runs == 0xFFFF ? prev.runs : uint16_t(prev.runs + 1);
-    c.times = prev.times == 0xFF ? prev.times : uint8_t(prev.times + 1);
-    c.last_boots = boots > 0xFFFF ? uint16_t(0xFFFF) : uint16_t(boots);
-    c.last_uptime_s = uptime_s > 0xFFFFFF ? 0xFFFFFFu : uptime_s;
-    if (!(c.name[0] && !c.name_auto) && name[0]) { std::memcpy(c.name, name, sizeof name); c.name_auto = name_auto; }
-    if (c.id.vid == 0 && c.id.pid == 0) { c.id.vid = vid; c.id.pid = pid; }
-    if (c.id.pdp_w == 0) c.id.pdp_w = pdp_w;
-}
+void fold_repeat(const Card& prev, Card& c);
 
 namespace detail {
 constexpr uint16_t dv_round(unsigned mv) { return uint16_t((mv + 50) / 100); }
@@ -716,166 +369,12 @@ inline void migrate_to_current(Card& c) { if (c.format < kFormat) c.format = kFo
 // (ChargerTestSession::save_card): returning a Card by value puts a second Card on that frame. Never inlined: its
 // per-group tally arrays are dead once it returns, but inlined they would keep their slots in save_card's frame
 // all through the store write below it (tools/stack_depth.py).
-[[gnu::noinline]] inline void build_into(Card& c, std::span<const ct::Step> steps, const ct::Evidence& ev, ct::HandoverInfo h, Identity id, Context cx,
-                       ct::State state, ct::Reason reason, const Cable& cable = {}, uint8_t resumed = 0,
-                       ctsweep::View sweep = {}) {
-    c.id = id; c.num_pdos = ev.num_pdos; c.spec_rev = ev.wire_rev; c.ev_flags = ev.flags; c.cable = cable; c.resumed = resumed;
-    c.rebalanced = ev.rebalanced;   // v8: the source's mid-run re-balance count goes on the shared card
-    c.src_flags = uint8_t(((ev.seen & ct::SeenOppoSvid) ? kSrcOppoSvid : 0) | (std::min<unsigned>(ev.scp_ma / 50u, 127u) << 1));
-    c.handover = h.outcome; c.handover_ds = h.ms / 100 > 65535 ? uint16_t(65535) : uint16_t(h.ms / 100);
-    c.state = state; c.reason = reason; c.fw = cx.fw; c.boots = cx.boots; c.uptime_s = cx.uptime_s;
-    std::array<unsigned, kGroups> passes{}, fails{}, skips{};
-    std::array<bool, kGroups> have_fail{}, have_skip{}, no_response{};   // no_response: a QC3+ skip "no QC3+ response" (the 5 V baseline passed)
-    std::array<GroupResult, kGroups> first_fail{}, first_skip{};
-    std::array<bool, kGroups> proven{};           // a pass with real evidence (a voltage reached) outranks detected
-    std::array<uint8_t, kGroups> pass_detail{};   // fc::Fail::Detected: a pass that only proved the adapter answered
-    for (auto& a : c.spread) a.fill(kSpreadNone);   // v9: the empty spread slots read "none"
-    for (const auto& s : steps) {
-        const unsigned g = unsigned(s.group);
-        if (g >= kGroups) continue;
-        const bool range_step = (ct::kPpsAlgorithms & ct::bit(s.algorithm)) != 0;
-        // The failing target belongs to a fixed step; a range step reports its own fail_dv. A step-walk row's detail is the
-        // observed mV count, which the card's 6-bit detail field would misread as a sink result: the card keeps the reason only.
-        const uint8_t det = s.reason == ct::Reason::StepResolution ? uint8_t(0) : s.detail;
-        const GroupResult why{GV::None, 0, det, uint8_t(s.reason), range_step ? uint16_t(0) : uint16_t(detail::dv_round(s.mv) * 100u)};
-        if (s.verdict == ct::Verdict::Pass) {
-            ++passes[g];
-            if (s.detail != uint8_t(fc::Fail::Detected) && s.detail != uint8_t(fc::Fail::NoVoltage)) proven[g] = true;
-            else if (s.detail == uint8_t(fc::Fail::NoVoltage)) pass_detail[g] = s.detail;   // the stronger result wins
-            else if (pass_detail[g] == 0) pass_detail[g] = s.detail;
-            // The group max is the fixed-supply maximum (100 mV); a range step is reported by its own range.
-            if (!range_step && detail::dv_round(s.measured_mv) * 100u > c.group[g].max_mv) c.group[g].max_mv = uint16_t(detail::dv_round(s.measured_mv) * 100u);
-        } else if (s.verdict == ct::Verdict::Fail) {
-            ++fails[g];
-            // The first failing fixed step names the group; a range-only failure is the fallback.
-            if (!have_fail[g] || (!range_step && first_fail[g].fail_mv == 0)) { have_fail[g] = true; first_fail[g] = why; }
-        } else if (s.verdict == ct::Verdict::Skip) {
-            ++skips[g]; if (!have_skip[g]) { have_skip[g] = true; first_skip[g] = why; }
-            if (s.reason == ct::Reason::NoQc3Plus) no_response[g] = true;
-        }
-        // UFCS rows name the mode they sample: one entry per distinct mode, the planner's order (a source lists up to 7, the card keeps 4).
-        if (ct::UfcsMode m; ct::ufcs_mode_of(s, m) && m.max_mv != 0) {
-            const UfcsRange r{uint16_t(std::min<unsigned>(m.min_mv / 100u, 255u)), uint16_t(std::min<unsigned>(m.max_mv / 100u, 511u)),
-                              uint16_t(std::min<unsigned>(m.max_ma / 50u, 127u) * 50u)};
-            unsigned n = 0;
-            while (n < kMaxUfcs && c.ufcs[n].hi_dv != 0 && !(c.ufcs[n] == r)) ++n;
-            if (n < kMaxUfcs && c.ufcs[n].hi_dv == 0) c.ufcs[n] = r;
-        }
-        // Fixed PDOs (type bits 00): the highest advertised current of any of them.
-        if (g == unsigned(ct::Group::Pd) && !range_step && s.pdo && (s.pdo >> 30) == 0) {
-            const unsigned ma = std::min<unsigned>((s.pdo & 0x3FFu) * 10u / 50u * 50u, 6350u);
-            if (ma > c.pd_ma) c.pd_ma = uint16_t(ma);
-        }
-        // Continuous (range) steps: one entry per algorithm and PDO; the PDO word carries the offered limits.
-        if (s.continuous && s.pdo && (ct::kPpsAlgorithms & ct::bit(s.algorithm))) {
-            // PPS and EPR AVS carry min V in 15:8 and max V from bit 17 (100 mV). The PD 3.2 SPR AVS APDO has no
-            // voltage fields: it starts at 9 V and ends at 20 V when its 20 V current (9:0) is set, else at 15 V.
-            const bool spr_avs = s.algorithm == ct::Algorithm::SprAvs;
-            const uint16_t lo = spr_avs ? uint16_t(90) : uint16_t((s.pdo >> 8) & 0xFF);
-            const uint16_t hi = spr_avs ? uint16_t((s.pdo & 0x3FFu) ? 200 : 150)
-                                        : uint16_t((s.pdo >> 17) & (s.algorithm == ct::Algorithm::EprAvs ? 0x1FFu : 0xFFu));
-            Range* rg = nullptr;
-            for (unsigned i = 0; i < c.n_ranges; ++i) if (c.range[i].alg == uint8_t(s.algorithm) && c.range[i].pos == s.pos) rg = &c.range[i];
-            if (!rg && c.n_ranges < kMaxRanges) {
-                rg = &c.range[c.n_ranges++];
-                rg->alg = uint8_t(s.algorithm); rg->pos = s.pos; rg->lo_dv = lo; rg->hi_dv = hi;
-            }
-            if (rg && !rg->ma) rg->ma = detail::apdo_ma(s.algorithm, s.pdo, rg->hi_dv);
-            // max_dv = the highest level the output reached: a passed step's, or the ceiling a Capped step measured (the source
-            // accepted the level but stopped below it), so "max 19.4 V of 21 V" survives in the card without a format change.
-            if (rg && (s.verdict == ct::Verdict::Pass || s.reason == ct::Reason::Capped)) { const uint16_t m = detail::dv_round(s.measured_mv); if (m > rg->max_dv) rg->max_dv = m; }
-            if (rg && s.verdict == ct::Verdict::Fail && rg->fail_dv == 0) rg->fail_dv = detail::dv_round(s.mv);
-        }
-    }
-    // V4: collect per-EPR-level verdicts for Algorithm::Epr steps in group Pd
-    // EPR fixed supplies are at most 3: 28 V, 36 V, 48 V
-    for (const auto& s : steps) {
-        if (s.group == ct::Group::Pd && s.algorithm == ct::Algorithm::Epr && !s.continuous) {
-            const uint16_t target_dv = uint16_t(detail::dv_round(s.mv));   // 100 mV units: 280, 360, 480
-            // Find the matching EPR level entry by target voltage
-            for (unsigned i = 0; i < kEprLevels; ++i) {
-                if (c.epr[i].dv == target_dv) {
-                    // Already have an entry for this voltage: update with first fail, then pass
-                    if (s.verdict == ct::Verdict::Fail && c.epr[i].r.verdict != GV::Fail) {
-                        c.epr[i].r = {GV::Fail, 0, s.detail, uint8_t(s.reason), uint16_t(detail::dv_round(s.mv) * 100u)};
-                    } else if (s.verdict == ct::Verdict::Pass) {
-                        if (detail::dv_round(s.measured_mv) * 100u > c.epr[i].r.max_mv) {
-                            c.epr[i].r.max_mv = uint16_t(detail::dv_round(s.measured_mv) * 100u);
-                        }
-                        if (c.epr[i].r.verdict == GV::None) c.epr[i].r.verdict = GV::Pass;
-                    } else if (s.verdict == ct::Verdict::Skip && c.epr[i].r.verdict == GV::None) {
-                        c.epr[i].r = {GV::Skip, 0, s.detail, uint8_t(s.reason), 0};
-                    }
-                    break;
-                }
-                if (c.epr[i].dv == 0) {
-                    // Empty slot: claim it
-                    c.epr[i].dv = target_dv;
-                    if (s.verdict == ct::Verdict::Fail) {
-                        c.epr[i].r = {GV::Fail, 0, s.detail, uint8_t(s.reason), uint16_t(detail::dv_round(s.mv) * 100u)};
-                    } else if (s.verdict == ct::Verdict::Pass) {
-                        c.epr[i].r = {GV::Pass, uint16_t(detail::dv_round(s.measured_mv) * 100u), 0, uint8_t(s.reason), 0};
-                    } else if (s.verdict == ct::Verdict::Skip) {
-                        c.epr[i].r = {GV::Skip, 0, s.detail, uint8_t(s.reason), 0};
-                    }
-                    break;
-                }
-            }
-        }
-    }
-    // V9: the setpoint error per level of each APDO (ROADMAP "PPS coverage" item 3): the passed range steps, deduped by
-    // target and sorted low to high, at most kSpreadLevels of them (the plan's five targets hold at most four distinct
-    // levels), so a converter that drifts at the ends shows on the card.
-    {
-        std::array<std::array<std::pair<uint16_t, int>, kSpreadLevels>, kMaxRanges> lvl{};
-        std::array<uint8_t, kMaxRanges> n_lvl{};
-        for (const auto& s : steps) {
-            if (!(s.continuous && s.pdo && (ct::kPpsAlgorithms & ct::bit(s.algorithm)))) continue;
-            if (s.verdict != ct::Verdict::Pass) continue;
-            int ri = -1;
-            for (unsigned i = 0; i < c.n_ranges; ++i)
-                if (c.range[i].alg == uint8_t(s.algorithm) && c.range[i].pos == s.pos) { ri = int(i); break; }
-            if (ri < 0) continue;
-            auto& a = lvl[ri];
-            unsigned n = n_lvl[ri];
-            if (n >= kSpreadLevels) continue;   // the plan's five targets hold at most four distinct levels
-            unsigned at = n;
-            while (at > 0 && a[at - 1].first > s.mv) { a[at] = a[at - 1]; --at; }   // insert sorted by target
-            if (at < n && a[at].first == s.mv) continue;                            // the same level twice: one entry
-            a[at] = {s.mv, int(s.measured_mv) - int(s.mv)}; ++n_lvl[ri];
-        }
-        for (unsigned i = 0; i < kMaxRanges; ++i)
-            for (unsigned k = 0; k < kSpreadLevels; ++k)
-                c.spread[i][k] = k < n_lvl[i] ? int8_t(std::clamp(lvl[i][k].second, -127, 127)) : kSpreadNone;
-    }
-    // V10: the deep-sweep summary of each range, from the runner's sweep record (matched by algorithm + PDO slot; a PPS sweep
-    // split at 5 V is one summary over both parts)
-    for (unsigned i = 0; i < c.n_ranges && i < kMaxRanges; ++i) {
-        const auto rw = sweep.apdo(c.range[i].alg, c.range[i].pos);
-        if (!rw) continue;
-        const auto& sm = rw->sum;
-        auto& w = c.sweep[i];
-        w = {int8_t(std::clamp(int(sm.min_err), -127, 127)), int8_t(std::clamp(int(sm.max_err), -127, 127)),
-             int8_t(std::clamp(int(sm.worst_err), -127, 127)),
-             uint16_t(std::min<unsigned>(sm.worst_mv / 100u, 511u)), uint16_t(std::min<unsigned>(sm.peak_mv / 100u, 511u)),
-             uint16_t(std::min<unsigned>(sm.peak_at_mv / 100u, 511u)), uint16_t(std::min<unsigned>(detail::dv_round(sm.fold_mv), 511u)),   // nearest 0.1 V: the device's fold note reads the same
-             uint16_t(std::min<unsigned>(detail::dv_round(sm.fold_from_mv), 511u))};
-    }
-    for (unsigned g = 0; g < kGroups; ++g) {
-        GroupResult& r = c.group[g];
-        r.verdict = fails[g] ? GV::Fail : no_response[g] ? GV::Skip : passes[g] ? GV::Pass : skips[g] ? GV::Skip : GV::None;
-        if (r.verdict == GV::Fail) { r.detail = first_fail[g].detail; r.reason = first_fail[g].reason; r.fail_mv = first_fail[g].fail_mv; }
-        else if (r.verdict == GV::Pass) r.detail = proven[g] ? uint8_t(0) : pass_detail[g];
-        else if (r.verdict == GV::Skip) { r.detail = first_skip[g].detail; r.reason = first_skip[g].reason; }
-    }
-}
+[[gnu::noinline]] void build_into(Card& c, std::span<const ct::Step> steps, const ct::Evidence& ev, ct::HandoverInfo h, Identity id, Context cx,
+                                  ct::State state, ct::Reason reason, const Cable& cable = {}, uint8_t resumed = 0,
+                                  ctsweep::View sweep = {});
 
-inline Card build(std::span<const ct::Step> steps, const ct::Evidence& ev, ct::HandoverInfo h, Identity id, Context cx,
-                  ct::State state, ct::Reason reason, const Cable& cable = {}, uint8_t resumed = 0, ctsweep::View sweep = {}) {
-    Card c;
-    build_into(c, steps, ev, h, id, cx, state, reason, cable, resumed, sweep);
-    return c;
-}
+Card build(std::span<const ct::Step> steps, const ct::Evidence& ev, ct::HandoverInfo h, Identity id, Context cx,
+           ct::State state, ct::Reason reason, const Cable& cable = {}, uint8_t resumed = 0, ctsweep::View sweep = {});
 
 // ---- codec -------------------------------------------------------------------------------------------------
 namespace off {
@@ -905,177 +404,11 @@ constexpr uint8_t unpack_detail(uint32_t d) { return uint8_t(d & 0x20 ? 128 + (d
 }  // namespace detail
 
 // Frames the card as a record into out (>= kMaxRecord bytes); returns the record size.
-inline size_t encode_card(std::span<uint8_t> out, const Card& c) {
-    using namespace detail;
-    uint8_t* b = out.data();
-    std::memset(b, 0, kMaxRecord);
-    b[0] = kMagic; b[1] = kTypeCard; b[2] = kPayload; b[3] = 0;
-    uint8_t* p = b + 4;
-    put32(p + 0, c.id.fp); put16(p + 4, c.id.vid); put16(p + 6, c.id.pid);
-    put16(p + 8, c.card_no); put16(p + 10, c.runs);
-    put32(p + 12, c.boots); put32(p + 16, c.uptime_s); put32(p + 20, c.fw);
-    put16(p + 24, c.handover_ds);
-    p[26] = c.spec_rev; p[27] = c.num_pdos; p[28] = uint8_t(c.handover); p[29] = uint8_t(c.state); p[30] = uint8_t(c.reason);
-    p[31] = c.n_ranges; p[32] = c.ev_flags; p[33] = kFormat;
-    std::memcpy(p + off::kName, c.name, kNameMax);
-    p[off::kPdp] = c.id.pdp_w; p[off::kFlags] = uint8_t((c.name_auto && c.name[0] ? kFlagNameAuto : 0) | (c.pd_ma / 50 > 127 ? 127 : c.pd_ma / 50) << 1);
-    for (unsigned g = 0; g < kGroups; ++g) {
-        uint8_t* q = p + off::kGroups + 4 * g;
-        const uint32_t v = group_dv(c.group[g].max_mv) | group_dv(c.group[g].fail_mv) << 9 | pack_detail(c.group[g].detail) << 18;
-        q[0] = uint8_t(unsigned(c.group[g].verdict) << 6 | (c.group[g].reason & 0x3F));
-        q[1] = uint8_t(v); q[2] = uint8_t(v >> 8); q[3] = uint8_t(v >> 16);
-    }
-    for (unsigned i = 0; i < kMaxRanges; ++i) {
-        uint8_t* q = p + off::kRanges + 10 * i;
-        q[0] = c.range[i].alg; q[1] = c.range[i].pos;
-        put16(q + 2, uint16_t((c.range[i].lo_dv & 0x1FF) | (c.range[i].ma / 50 > 127 ? 127 : c.range[i].ma / 50) << 9)); put16(q + 4, c.range[i].hi_dv); put16(q + 6, c.range[i].max_dv); put16(q + 8, c.range[i].fail_dv);
-    }
-    // V4: EPR levels (3 entries of 6 bytes each: u16 dv + 4-byte group packing)
-    for (unsigned i = 0; i < kEprLevels; ++i) {
-        uint8_t* q = p + off::kEpr + 6 * i;
-        put16(q, c.epr[i].dv);
-        const uint32_t v = group_dv(c.epr[i].r.max_mv) | group_dv(c.epr[i].r.fail_mv) << 9 | pack_detail(c.epr[i].r.detail) << 18;
-        q[2] = uint8_t(unsigned(c.epr[i].r.verdict) << 6 | (c.epr[i].r.reason & 0x3F));
-        q[3] = uint8_t(v); q[4] = uint8_t(v >> 8); q[5] = uint8_t(v >> 16);
-    }
-    // V5: cable block (16 bytes)
-    {
-        uint8_t* q = p + off::kCable;
-        put32(q, c.cable.seq); put16(q + 4, c.cable.vid); put16(q + 6, c.cable.pid);
-        put16(q + 8, c.cable.max_mv); put16(q + 10, c.cable.max_ma);
-        q[12] = c.cable.kind; q[13] = c.cable.flags; q[14] = c.resumed; q[15] = c.src_flags;
-    }
-    // V6: the UFCS modes, a u24 each (bits 0..7 lo_dv, 8..16 hi_dv, 17..23 current in 50 mA); an unused slot is all zero
-    for (unsigned i = 0; i < kMaxUfcs; ++i) {
-        uint8_t* q = p + off::kUfcs + 3 * i;
-        const UfcsRange& r = c.ufcs[i];
-        const uint32_t v = r.hi_dv == 0 ? 0u : std::min<unsigned>(r.lo_dv, 255u) | std::min<unsigned>(r.hi_dv, 511u) << 8 | std::min<unsigned>(r.ma / 50u, 127u) << 17;
-        q[0] = uint8_t(v); q[1] = uint8_t(v >> 8); q[2] = uint8_t(v >> 16);
-    }
-    // V7: the repeat block: times u8, last_boots u16, last_uptime_s u24 (all saturating)
-    {
-        uint8_t* q = p + off::kRepeat;
-        const uint32_t up = c.last_uptime_s > 0xFFFFFFu ? 0xFFFFFFu : c.last_uptime_s;
-        q[0] = c.times; put16(q + 1, c.last_boots);
-        q[3] = uint8_t(up); q[4] = uint8_t(up >> 8); q[5] = uint8_t(up >> 16);
-    }
-    // V8: the re-balance count u8, then the run's level (the block's spare byte, 0 = Medium before the level existed)
-    {
-        uint8_t* q = p + off::kV8;
-        q[0] = c.rebalanced; q[1] = uint8_t(c.level);
-    }
-    // V9: the per-level setpoint-error spread, int8 mV per level, kSpreadNone in the empty slots
-    for (unsigned i = 0; i < kMaxRanges; ++i)
-        for (unsigned k = 0; k < kSpreadLevels; ++k)
-            p[off::kV9 + kSpreadLevels * i + k] = uint8_t(c.spread[i][k]);
-    // V10: the deep-sweep summary per range: int8 min/max/worst error, then the five 100 mV fields packed in 6 bytes
-    for (unsigned i = 0; i < kMaxRanges; ++i) {
-        uint8_t* q = p + off::kV10 + kSweepBytes * i;
-        const auto& w = c.sweep[i];
-        q[0] = uint8_t(w.min_err); q[1] = uint8_t(w.max_err); q[2] = uint8_t(w.worst_err);
-        const uint64_t v = uint64_t(std::min<unsigned>(w.worst_dv, 511u)) | uint64_t(std::min<unsigned>(w.peak_dv, 511u)) << 9 |
-                           uint64_t(std::min<unsigned>(w.peak_at_dv, 511u)) << 18 | uint64_t(std::min<unsigned>(w.fold_dv, 511u)) << 27 |
-                           uint64_t(std::min<unsigned>(w.fold_from_dv, 511u)) << 36;
-        for (unsigned k = 0; k < 6; ++k) q[3 + k] = uint8_t(v >> (8 * k));
-    }
-    put16(b + 4 + kPayload, bbstore::crc16(0xFFFF, {b, 4 + kPayload}));
-    return kMaxRecord;
-}
+size_t encode_card(std::span<uint8_t> out, const Card& c);
 
 // Parses a payload (the bytes after the 4 byte record header). False on a wrong length or an out of range field.
 // Any even payload from 144 (v3) to kPayload (v10) is accepted; an older payload's trailing bytes are the CRC/padding of
 // the shorter record and are not read.
-inline bool decode_card(std::span<const uint8_t> payload, Card& c) {
-    using namespace detail;
-    if (payload.size() < 144 || payload.size() > kPayload || payload.size() % 2) return false;
-    const uint8_t* p = payload.data();
-    Card d;
-    for (auto& a : d.spread) a.fill(kSpreadNone);
-    d.id.fp = get32(p); d.id.vid = get16(p + 4); d.id.pid = get16(p + 6);
-    d.card_no = get16(p + 8); d.runs = get16(p + 10);
-    d.boots = get32(p + 12); d.uptime_s = get32(p + 16); d.fw = get32(p + 20);
-    d.handover_ds = get16(p + 24);
-    d.spec_rev = p[26]; d.num_pdos = p[27];
-    if (p[28] > uint8_t(ct::HandoverOutcome::InContract) || p[29] > uint8_t(ct::State::Attach) || p[30] >= kReasonCount || p[31] > kMaxRanges) return false;
-    d.handover = ct::HandoverOutcome(p[28]); d.state = ct::State(p[29]); d.reason = ct::Reason(p[30]);
-    if (p[33] > kFormat) return false;
-    d.format = p[33];
-    d.n_ranges = p[31]; d.ev_flags = p[32];
-    std::memcpy(d.name, p + off::kName, kNameMax); d.name[kNameMax] = 0;
-    if (p[33] >= 2) { d.id.pdp_w = p[off::kPdp]; d.name_auto = (p[off::kFlags] & kFlagNameAuto) && d.name[0]; }
-    if (p[33] >= 3) d.pd_ma = uint16_t((p[off::kFlags] >> 1) * 50);   // older cards: spare bytes ignored
-    for (unsigned g = 0; g < kGroups; ++g) {
-        const uint8_t* q = p + off::kGroups + 4 * g;
-        if ((q[0] & 0x3F) >= kReasonCount) return false;
-        if (p[33] == 0) {   // first cards: detail byte, u16 max in mV, no failing target
-            d.group[g] = {GV(q[0] >> 6), uint16_t(dv_round(get16(q + 2)) * 100u), q[1], uint8_t(q[0] & 0x3F), 0};
-        } else {
-            const uint32_t v = q[1] | uint32_t(q[2]) << 8 | uint32_t(q[3]) << 16;
-            d.group[g] = {GV(q[0] >> 6), uint16_t((v & 0x1FF) * 100), unpack_detail(v >> 18), uint8_t(q[0] & 0x3F), uint16_t((v >> 9 & 0x1FF) * 100)};
-        }
-    }
-    for (unsigned i = 0; i < kMaxRanges; ++i) {
-        const uint8_t* q = p + off::kRanges + 10 * i;
-        if (q[0] >= unsigned(ct::Algorithm::Count)) return false;
-        const uint16_t lo = get16(q + 2);
-        d.range[i] = {q[0], q[1], p[33] >= 3 ? uint16_t(lo & 0x1FF) : lo, get16(q + 4), get16(q + 6), get16(q + 8),
-                      p[33] >= 3 ? uint16_t((lo >> 9) * 50) : uint16_t(0)};
-    }
-    // V4: EPR levels (format >= 4)
-    if (p[33] >= 4) {
-        for (unsigned i = 0; i < kEprLevels; ++i) {
-            const uint8_t* q = p + off::kEpr + 6 * i;
-            if ((q[2] & 0x3F) >= kReasonCount) return false;
-            const uint32_t v = get16(q + 3) | uint32_t(q[5]) << 16;
-            d.epr[i] = {get16(q),
-                        {GV(q[2] >> 6), uint16_t((v & 0x1FF) * 100), unpack_detail(v >> 18), uint8_t(q[2] & 0x3F), uint16_t((v >> 9 & 0x1FF) * 100)}};
-        }
-    } else {
-        // Older formats: EPR entries are all GV::None
-        for (unsigned i = 0; i < kEprLevels; ++i) d.epr[i] = {0, {GV::None, 0, 0, 0, 0}};
-    }
-    // V5: the cable block; older formats decode to an empty cable (migrate_to_current keeps the marker bit)
-    if (p[33] >= 5) {
-        const uint8_t* q = p + off::kCable;
-        d.cable = {get32(q), get16(q + 4), get16(q + 6), get16(q + 8), get16(q + 10), q[12], q[13]};
-        d.resumed = q[14];
-        d.src_flags = q[15];   // cards written before it was assigned hold 0 here (the byte was reserved)
-    }
-    // V6: the UFCS modes; older formats keep them empty (their padding is never read as modes)
-    if (p[33] >= 6) {
-        for (unsigned i = 0; i < kMaxUfcs; ++i) {
-            const uint8_t* q = p + off::kUfcs + 3 * i;
-            const uint32_t v = q[0] | uint32_t(q[1]) << 8 | uint32_t(q[2]) << 16;
-            if ((v >> 8 & 0x1FF) != 0) d.ufcs[i] = {uint16_t(v & 0xFF), uint16_t(v >> 8 & 0x1FF), uint16_t((v >> 17) * 50)};
-        }
-    }
-    // V7: the repeat block; older formats were run once (their bytes here are a CRC and padding)
-    if (p[33] >= 7) {
-        const uint8_t* q = p + off::kRepeat;
-        d.times = q[0] ? q[0] : uint8_t(1);
-        d.last_boots = get16(q + 1);
-        d.last_uptime_s = q[3] | uint32_t(q[4]) << 8 | uint32_t(q[5]) << 16;
-    }
-    // V8: the re-balance count; a v7 payload has no such byte (its CRC/padding sits there and is not read)
-    if (p[33] >= 8 && payload.size() >= off::kV8 + 1) d.rebalanced = p[off::kV8];
-    if (p[33] >= 8 && payload.size() >= off::kV8 + 2 && p[off::kV8 + 1] < ct::kLevelCount) d.level = ct::Level(p[off::kV8 + 1]);
-    // V9: the per-level setpoint-error spread; older payloads end before it (their CRC/padding is not read)
-    if (p[33] >= 9 && payload.size() >= off::kV9 + kMaxRanges * kSpreadLevels)
-        for (unsigned i = 0; i < kMaxRanges; ++i)
-            for (unsigned k = 0; k < kSpreadLevels; ++k)
-                d.spread[i][k] = int8_t(p[off::kV9 + kSpreadLevels * i + k]);
-    // V10: the deep-sweep summary per range; v9 payloads end before it (their CRC/padding is not read)
-    if (p[33] >= 10 && payload.size() >= kPayload)
-        for (unsigned i = 0; i < kMaxRanges; ++i) {
-            const uint8_t* q = p + off::kV10 + kSweepBytes * i;
-            uint64_t v = 0;
-            for (unsigned k = 0; k < 6; ++k) v |= uint64_t(q[3 + k]) << (8 * k);
-            d.sweep[i] = {int8_t(q[0]), int8_t(q[1]), int8_t(q[2]),
-                          uint16_t(v & 0x1FFu), uint16_t(v >> 9 & 0x1FFu), uint16_t(v >> 18 & 0x1FFu),
-                          uint16_t(v >> 27 & 0x1FFu), uint16_t(v >> 36 & 0x1FFu)};
-        }
-    c = d;
-    return true;
-}
+bool decode_card(std::span<const uint8_t> payload, Card& c);
 
 }  // namespace k2::report_card
