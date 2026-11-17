@@ -542,6 +542,38 @@ static void test_reach_footer_says_needs_load_not_not_run() {
 }
 // ROADMAP "PPS coverage" item 1: a low edge the source cannot reach (it advertises 3.3 V, regulates at 5 V) is a
 // Floored fail, and the Results footer names the floor ("floor at 5V"), like "caps 19.4V" names a ceiling.
+// The family Steps page's footer: "<row label>: n pass, m caution". At most two counts, in the order pass, fail, caution, listed,
+// skip (a fail takes the caution's place); a Light run's advertised rows read "listed". The label goes when the line is too long.
+static void test_family_footer_words() {
+    rl::FamilyTally t;
+    t.pass = 3; t.caution = 1;
+    CHECK_STR(rl::family_footer("PPS", t).c_str(), "PPS: 3 pass, 1 caution");
+    t = {}; t.pass = 4;
+    CHECK_STR(rl::family_footer("PPS", t).c_str(), "PPS: 4 pass");
+    t = {}; t.pass = 2; t.fail = 1; t.caution = 1;
+    CHECK_STR(rl::family_footer("PPS", t).c_str(), "PPS: 2 pass, 1 fail");
+    t = {}; t.fail = 2; t.caution = 1;
+    CHECK_STR(rl::family_footer("SPR AVS", t).c_str(), "SPR AVS: 2 fail, 1 caution");
+    t = {}; t.listed = 5;
+    CHECK_STR(rl::family_footer("PD", t).c_str(), "PD: 5 listed");
+    t = {}; t.pass = 2; t.skip = 3;
+    CHECK_STR(rl::family_footer("PD", t).c_str(), "PD: 2 pass, 3 skip");
+    t = {};
+    CHECK_STR(rl::family_footer("PD", t).c_str(), "PD: no steps");
+    t = {}; t.pass = 99; t.caution = 99;
+    CHECK_STR(rl::family_footer("ABCDEFGHI", t).c_str(), "99 pass, 99 caution");   // 30 cells with the label: the label goes
+}
+// Whatever the counts, the footer fits the 27 cells of the footer band (the UI's kFooterCells) next to a 9-character label.
+static void test_family_footer_fits_the_band() {
+    static_assert(rl::kFooterChars == 27);
+    const unsigned vals[] = {0, 1, 9, 10, 99, 100};
+    for (const unsigned a : vals) for (const unsigned b : vals) for (const unsigned c : vals) for (const unsigned d : vals) {
+        rl::FamilyTally t; t.pass = a; t.fail = b; t.caution = c; t.skip = d; t.listed = a ? 0 : d;
+        const auto f = rl::family_footer("ABCDEFGHI", t);
+        CHECK_EQ(f.len <= rl::kFooterChars, true);
+        CHECK_EQ(f.len > 0, true);
+    }
+}
 static void test_reach_footer_names_the_floor() {
     const uint32_t pdo = 3248763456u;   // PPS 3.3-21V, slot 7
     std::vector<ct::Step> all{step(A::Pps, 3300, V::Fail, 7, pdo, ct::Reason::Floored), step(A::Pps, 13000, V::Pass, 7, pdo)};
@@ -1395,6 +1427,8 @@ int main() {
     test_a_legacy_chip_with_a_pass_and_a_fail_is_amber();
     test_reach_says_what_the_source_delivered();
     test_reach_footer_says_needs_load_not_not_run();
+    test_family_footer_words();
+    test_family_footer_fits_the_band();
     test_reach_footer_names_the_floor();
     test_reach_footer_of_a_listed_range_says_advertised();
     test_row_reach_picks_the_range_that_is_not_clean();

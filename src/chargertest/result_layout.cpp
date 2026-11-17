@@ -346,6 +346,29 @@ step_label::Text reach_footer(const Reach& r) {
     return t;
 }
 
+step_label::Text family_footer(const char* label, const FamilyTally& c) {
+    struct Part { unsigned n; const char* word; };
+    const Part parts[] = {{c.pass, " pass"}, {c.fail, " fail"}, {c.caution, " caution"}, {c.listed, " listed"}, {c.skip, " skip"}};
+    const auto body = [&](step_label::Text& t) {
+        unsigned shown = 0;
+        for (const auto& p : parts) {
+            if (!p.n || shown == 2) continue;
+            if (shown++) put_word(t, ", ");
+            char d[12]; unsigned k = 0;
+            for (unsigned v = p.n; v; v /= 10) d[k++] = char('0' + v % 10);
+            while (k && t.len + 1 < step_label::kMax) t.s[t.len++] = d[--k];
+            t.s[t.len] = 0;
+            put_word(t, p.word);
+        }
+        if (!shown) put_word(t, "no steps");
+    };
+    step_label::Text t;
+    put_word(t, label); put_word(t, ": ");
+    body(t);
+    if (t.len > kFooterChars) { t = {}; body(t); }   // too long beside the label: the counts alone
+    return t;
+}
+
 step_label::Text reach_span(const Reach& r) {
     step_label::Text t;
     if (!r.hi_mv) return t;
