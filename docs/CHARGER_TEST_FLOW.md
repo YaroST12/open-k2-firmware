@@ -641,6 +641,14 @@ a shared-port splitter re-splitting its budget mid-run drops one offer while the
 A complete `EPR_Source_Capabilities` outside the K2's own EPR entry/exit (`epr_stage_ == 2`) is a re-announce like any
 other; only a partial chunk stays excluded.
 
+An EPR-capable SPR list (PDO 1 EPR bit) never gives its EPR rows `NoOffer` (2026-11-17, Baseus 140 W on its own cable): the
+rows wait as placeholders until the EPR list is read, `record_pd_skips` keeps them out of the journal until the unit decided
+(`pd_skips_held_`; the end of the run or a skipped unit journals them for good), and `follow_list` leaves the plan alone
+while an EPR proof is held and the list that came back after a source Hard Reset is SPR-only: the entry is retried (the
+`kEprEntryRetries` budget) instead of the rows being re-planned away. The cable the run read stays with the run
+(`ChargerTestSession::physical_cable()`): the driver forgets it at every attach, so the card header would read "cable not
+read" after the charger's own SOP' query had been answered by the real cable.
+
 Restart rules for a mid-run re-announce (user decision 2026-11-09):
 
 - Settle first: after any new list, no Request is sent until the list has been unchanged for `kListSettleMs` (1500 ms);
