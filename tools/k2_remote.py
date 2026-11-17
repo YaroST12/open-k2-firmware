@@ -1638,7 +1638,7 @@ def cmd_charger_level(link, a):
 
 
 def cmd_mi_cable_auth(link, a):
-    if a.set is None:
+    if not a.set:
         on, key, trailing, half, reply = mi_cable_auth(link)
     else:
         on, key, trailing, half, reply = mi_cable_auth(link, on=a.set[0] == "on", key=a.set[1],
