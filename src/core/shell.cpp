@@ -36,21 +36,21 @@ constexpr std::string_view kHelp =
 #endif
     "above 5 V needs a trailing confirm; closing the port returns to 5 V\r\n";
 
-constexpr std::array<std::string_view, static_cast<std::size_t>(fc::Proto::Count)> kProtos = {
+constexpr std::array<const char*, static_cast<std::size_t>(fc::Proto::Count)> kProtos = {
     "qc2", "qc3", "qc3+", "afc", "fcp", "scp", "vooc", "svooc", "svooc65", "ufcs", "vivo"};
 
 bool is_space(char c) { return c == ' ' || c == '\t'; }
 
 char lower(char c) { return c >= 'A' && c <= 'Z' ? static_cast<char>(c + 32) : c; }
 
-bool same(std::string_view a, std::string_view b) {
+[[gnu::noinline]] bool same(std::string_view a, std::string_view b) {
     if (a.size() != b.size()) return false;
     for (std::size_t i = 0; i < a.size(); i++) if (lower(a[i]) != b[i]) return false;
     return true;
 }
 
 // Unsigned decimal, at most 6 digits; false on anything else.
-bool number(std::string_view s, std::uint32_t& out) {
+[[gnu::noinline]] bool number(std::string_view s, std::uint32_t& out) {
     if (s.empty() || s.size() > 6) return false;
     std::uint32_t v = 0;
     for (char c : s) {
@@ -61,13 +61,17 @@ bool number(std::string_view s, std::uint32_t& out) {
     return true;
 }
 
+[[gnu::noinline]] bool number_range(std::string_view s, std::uint32_t& out, std::uint32_t lo, std::uint32_t hi) {
+    return number(s, out) && out >= lo && out <= hi;
+}
+
 struct Tokens {
     std::array<std::string_view, kMaxTokens> t{};
     std::size_t n = 0;
     bool overflow = false;
 };
 
-Tokens split(std::string_view line) {
+[[gnu::noinline]] Tokens split(std::string_view line) {
     Tokens r;
     std::size_t i = 0;
     while (i < line.size()) {
@@ -81,33 +85,33 @@ Tokens split(std::string_view line) {
     return r;
 }
 
-void err(Backend& b, const char* why) {
+[[gnu::noinline]] void err(Backend& b, const char* why) {
     b.write("err: ");
     b.write(why);
     b.write("\r\n");
 }
 
-void done(Backend& b, const char* result) {
+[[gnu::noinline]] void done(Backend& b, const char* result) {
     if (result) err(b, result);
     else b.write("ok\r\n");
 }
 
 // D+/D- locked by the backend: the refusal is written and true returned; the command must not reach the backend.
-bool locked(Backend& b) {
+[[gnu::noinline]] bool locked(Backend& b) {
     const char* why = b.lines_locked();
     if (why) err(b, why);
     return why != nullptr;
 }
 
 // Consumes an optional trailing `confirm` from [first, n); false when something else follows.
-bool trailing_confirm(const Tokens& k, std::size_t first, bool& confirm) {
+[[gnu::noinline]] bool trailing_confirm(const Tokens& k, std::size_t first, bool& confirm) {
     confirm = false;
     if (k.n == first) return true;
     if (k.n == first + 1 && same(k.t[first], "confirm")) { confirm = true; return true; }
     return false;
 }
 
-void cmd_drive(Backend& b, const Tokens& k, bool dp) {
+[[gnu::noinline]] void cmd_drive(Backend& b, const Tokens& k, bool dp) {
     if (k.n < 2) return err(b, "usage: dp|dm hiz|0|0.6|3.3");
     dpdm::Drive d;
     bool needs_confirm = false;
@@ -123,17 +127,17 @@ void cmd_drive(Backend& b, const Tokens& k, bool dp) {
     done(b, b.drive(dp, d));
 }
 
-void cmd_cc(Backend& b, const Tokens& k) {
+[[gnu::noinline]] void cmd_cc(Backend& b, const Tokens& k) {
     std::uint32_t ms;
-    if (k.n != 3 || !same(k.t[1], "open") || !number(k.t[2], ms) || ms < 1 || ms > 1000)
+    if (k.n != 3 || !same(k.t[1], "open") || !number_range(k.t[2], ms, 1, 1000))
         return err(b, "usage: cc open <1..1000 ms>");
     done(b, b.cc_open(ms));
 }
 
-void cmd_pd(Backend& b, const Tokens& k) {
+[[gnu::noinline]] void cmd_pd(Backend& b, const Tokens& k) {
     std::uint32_t s;
     if (k.n == 3 && same(k.t[1], "silent")) {
-        if (!number(k.t[2], s) || s < 1 || s > 600) return err(b, "usage: pd silent <1..600 s>");
+        if (!number_range(k.t[2], s, 1, 600)) return err(b, "usage: pd silent <1..600 s>");
         return done(b, b.pd_silent(s));
     }
     if (k.n == 2 && same(k.t[1], "reset")) return done(b, b.pd_reset());
@@ -141,7 +145,7 @@ void cmd_pd(Backend& b, const Tokens& k) {
     err(b, "usage: pd silent <s> | reset | rescan");
 }
 
-void cmd_fc(Backend& b, const Tokens& k) {
+[[gnu::noinline]] void cmd_fc(Backend& b, const Tokens& k) {
     if (k.n == 2 && same(k.t[1], "reset")) return done(b, b.fc_reset());
     if (k.n >= 2 && same(k.t[1], "vooc")) {
         if (k.n == 2) return done(b, b.vooc_monitor(2));
@@ -154,7 +158,7 @@ void cmd_fc(Backend& b, const Tokens& k) {
     for (std::size_t i = 0; i < kProtos.size(); i++) if (same(k.t[2], kProtos[i])) proto = i;
     if (proto == kProtos.size()) return err(b, "unknown protocol");
     std::uint32_t mv;
-    if (!number(k.t[3], mv) || mv < 1 || mv > static_cast<std::uint32_t>(kMaxMv))
+    if (!number_range(k.t[3], mv, 1, static_cast<std::uint32_t>(kMaxMv)))
         return err(b, "mV must be 1..36000");
     bool confirm;
     if (!trailing_confirm(k, 4, confirm)) return err(b, "unexpected argument");
@@ -163,17 +167,17 @@ void cmd_fc(Backend& b, const Tokens& k) {
     done(b, b.fc_trigger(static_cast<fc::Proto>(proto), static_cast<int>(mv), confirm));
 }
 
-void cmd_sniff(Backend& b, const Tokens& k) {
+[[gnu::noinline]] void cmd_sniff(Backend& b, const Tokens& k) {
     std::uint32_t rate = 0;
     int mode = -1;
     if (k.n == 2 && same(k.t[1], "stream")) mode = 1;
     else if (k.n == 2 && same(k.t[1], "stop")) mode = 0;
-    else if (k.n == 3 && same(k.t[1], "synth") && number(k.t[2], rate) && rate >= 1 && rate <= 100000) mode = 2;
+    else if (k.n == 3 && same(k.t[1], "synth") && number_range(k.t[2], rate, 1, 100000)) mode = 2;
     if (mode >= 0) return locked(b) ? void() : done(b, b.sniff(mode, mode == 2 ? rate : 0));
     err(b, "usage: sniff stream | sniff stop | sniff synth <1..100000 edges/s>");
 }
 
-void cmd_trace(Backend& b, const Tokens& k) {
+[[gnu::noinline]] void cmd_trace(Backend& b, const Tokens& k) {
     if (k.n == 2 && same(k.t[1], "stream")) return done(b, b.trace(1));
     if (k.n == 3 && same(k.t[1], "stream") && same(k.t[2], "all")) return done(b, b.trace(2));
     if (k.n == 2 && same(k.t[1], "stop")) return done(b, b.trace(0));
@@ -182,10 +186,12 @@ void cmd_trace(Backend& b, const Tokens& k) {
 
 // stream on [log|trace|power[=Hz]|run|all ...] [old] | stream off. Kind bits match k2::dbg::Mask. `all power=50` is fine
 // (every kind, power at 50 Hz); naming one kind twice is a typo.
-void cmd_stream(Backend& b, const Tokens& k) {
+[[gnu::noinline]] void cmd_stream(Backend& b, const Tokens& k) {
     constexpr const char* kUsage = "usage: stream on [log|trace|power[=1..100 Hz]|run|all] [old] | stream off";
     if (k.n == 2 && same(k.t[1], "off")) return done(b, b.stream(0, 0, false));
     if (k.n < 2 || !same(k.t[1], "on")) return err(b, kUsage);
+    struct Kind { const char* name; unsigned bit; };
+    static constexpr Kind kKinds[] = {{"log", 1}, {"trace", 2}, {"run", 8}, {"all", 15}, {"power", 4}};
     unsigned mask = 0, named = 0, hz = 0;
     bool history = false;
     for (std::size_t i = 2; i < k.n; i++) {
@@ -197,17 +203,16 @@ void cmd_stream(Backend& b, const Tokens& k) {
             history = true;
             continue;
         }
-        if (same(t, "log")) bit = 1;
-        else if (same(t, "trace")) bit = 2;
-        else if (same(t, "run")) bit = 8;
-        else if (same(t, "all")) bit = 15;
-        else if (same(t, "power")) bit = 4;
-        else if (t.size() > 6 && same(t.substr(0, 6), "power=") && number(t.substr(6), v) && v >= 1 && v <= 100) {
-            if (hz) return err(b, kUsage);
-            hz = v;
-            mask |= 4;
-            continue;
-        } else return err(b, kUsage);
+        for (const Kind& kd : kKinds) if (same(t, kd.name)) { bit = kd.bit; break; }
+        if (!bit) {
+            if (t.size() > 6 && same(t.substr(0, 6), "power=") && number_range(t.substr(6), v, 1, 100)) {
+                if (hz) return err(b, kUsage);
+                hz = v;
+                mask |= 4;
+                continue;
+            }
+            return err(b, kUsage);
+        }
         if (named & bit) return err(b, kUsage);
         named |= bit;
         mask |= bit;
@@ -218,7 +223,7 @@ void cmd_stream(Backend& b, const Tokens& k) {
 // A library number 1..12.
 bool twin_seq(std::string_view s, std::uint8_t& out) {
     std::uint32_t v;
-    if (!number(s, v) || v < 1 || v > kTwinMax) return false;
+    if (!number_range(s, v, 1, kTwinMax)) return false;
     out = static_cast<std::uint8_t>(v);
     return true;
 }
@@ -232,7 +237,7 @@ bool twin_name(const Tokens& k, std::size_t first, std::string_view& name) {
     return name.size() <= kTwinNameMax;
 }
 
-void cmd_twin(Backend& b, const Tokens& k) {
+[[gnu::noinline]] void cmd_twin(Backend& b, const Tokens& k) {
     constexpr const char* kUsage =
         "usage: twin list | predict [n|all] | run [n|all] confirm | status | cancel | learn identify|sniff [dry] [name] | "
         "learn inline confirm [spoof lib|builtin n] [dry] [name] | rename n name | delete n confirm";
@@ -240,9 +245,11 @@ void cmd_twin(Backend& b, const Tokens& k) {
     if (k.n < 2) return err(b, kUsage);
     const std::string_view s = k.t[1];
     TwinCmd c;
-    if (same(s, "list") && k.n == 2) { c.op = TwinOp::List; return done(b, b.twin(c)); }
-    if (same(s, "status") && k.n == 2) { c.op = TwinOp::Status; return done(b, b.twin(c)); }
-    if (same(s, "cancel") && k.n == 2) { c.op = TwinOp::Cancel; return done(b, b.twin(c)); }
+    struct Simple { const char* word; TwinOp op; };
+    static constexpr Simple kSimple[] = {{"list", TwinOp::List}, {"status", TwinOp::Status}, {"cancel", TwinOp::Cancel}};
+    for (const Simple& sp : kSimple) {
+        if (same(s, sp.word) && k.n == 2) { c.op = sp.op; return done(b, b.twin(c)); }
+    }
     if (same(s, "predict")) {
         c.op = TwinOp::Predict;
         if (k.n == 2 || (k.n == 3 && same(k.t[2], "all"))) c.all = true;
@@ -319,8 +326,10 @@ void Shell::execute(std::string_view line) {
         return done(b_, b_.stop());
     }
     if (same(c, "log")) {
-        if (k.n == 2 && same(k.t[1], "on")) { b_.log_stream(true); return b_.write("ok\r\n"); }
-        if (k.n == 2 && same(k.t[1], "off")) { b_.log_stream(false); return b_.write("ok\r\n"); }
+        if (k.n == 2 && (same(k.t[1], "on") || same(k.t[1], "off"))) {
+            b_.log_stream(same(k.t[1], "on"));
+            return done(b_, nullptr);
+        }
         return err(b_, "usage: log on|off");
     }
     if (same(c, "dp")) return cmd_drive(b_, k, true);
@@ -335,27 +344,23 @@ void Shell::execute(std::string_view line) {
         if (lab::drives_lines(cmd.id) && locked(b_)) return;
         return done(b_, b_.lab(cmd));
     }
-    if (same(c, "cc")) return cmd_cc(b_, k);
-    if (same(c, "pd")) return cmd_pd(b_, k);
-    if (same(c, "fc")) return cmd_fc(b_, k);
-    if (same(c, "sniff")) return cmd_sniff(b_, k);
-    if (same(c, "trace")) return cmd_trace(b_, k);
-    if (same(c, "stream")) return cmd_stream(b_, k);
-    if (same(c, "twin")) return cmd_twin(b_, k);
-    if (same(c, "diag")) {
-        if (k.n != 1) return err(b_, "usage: diag");
-        if (const char* why = b_.diag()) err(b_, why);
-        return;
-    }
-    if (same(c, "mem")) {
-        if (k.n != 1) return err(b_, "usage: mem");
-        if (const char* why = b_.memory()) err(b_, why);
-        return;
-    }
-    if (same(c, "selftest")) {
-        if (k.n != 1) return err(b_, "usage: selftest");
-        if (const char* why = b_.selftest()) err(b_, why);
-        return;
+    struct CmdEntry { const char* name; void (*fn)(Backend&, const Tokens&); };
+    static constexpr CmdEntry kCmds[] = {
+        {"fc", cmd_fc}, {"sniff", cmd_sniff}, {"trace", cmd_trace}, {"stream", cmd_stream}, {"twin", cmd_twin},
+    };
+    for (const CmdEntry& ce : kCmds) if (same(c, ce.name)) return ce.fn(b_, k);
+    struct NoArg { const char* name; const char* usage; const char* (Backend::*fn)(); };
+    static constexpr NoArg kNoArg[] = {
+        {"diag", "usage: diag", &Backend::diag},
+        {"mem", "usage: mem", &Backend::memory},
+        {"selftest", "usage: selftest", &Backend::selftest},
+    };
+    for (const NoArg& na : kNoArg) {
+        if (same(c, na.name)) {
+            if (k.n != 1) return err(b_, na.usage);
+            if (const char* why = (b_.*(na.fn))()) err(b_, why);
+            return;
+        }
     }
     err(b_, "unknown command (help)");
 }
