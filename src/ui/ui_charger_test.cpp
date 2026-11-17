@@ -2035,6 +2035,12 @@ static FooterTone spec_footer(StrBuf<32>& f, int check, const specsec::Cell& c, 
             const auto rc = result_layout::reach(s_.runner_.steps(), algo, static_cast<int>(row.mv));   // one row per APDO: its own reach
             // The APDO's deep sweep is part of this row: a fold it found takes the whole footer ("folds to 19.4V above 19.9V"), a lost
             // source or a clean range with a sweep names the sweep's peak; a range that fell short says how far (the full summary is the [SWEEP] log line).
+            bool lost = false, dev = false;   // a failed sweep part (the source was lost) colours the chip red: the footer must not read "reached"
+            for (const auto &y : s_.runner_.steps())
+                if (ct::is_sweep(y) && y.algorithm == algo && y.pos == row.mv) {
+                    lost |= y.verdict == ct::Verdict::Fail;
+                    dev |= result_layout::caution(y, s_.runner_.sweep_view());
+                }
             if (const auto rw = s_.runner_.sweep_view().apdo(row.algo, static_cast<uint8_t>(row.mv)); rw && rw->sum.points) {   // both 5 V parts
                 char nb[ctsweep::kFoldTextMax];
                 if (const size_t len = ctsweep::format_fold(rw->sum, nb)) {
@@ -2042,12 +2048,6 @@ static FooterTone spec_footer(StrBuf<32>& f, int check, const specsec::Cell& c, 
                     f.put(std::string_view(nb, len));
                     return FooterTone::Caution;
                 }
-                bool lost = false, dev = false;
-                for (const auto &y : s_.runner_.steps())
-                    if (ct::is_sweep(y) && y.algorithm == algo && y.pos == row.mv) {
-                        lost |= y.verdict == ct::Verdict::Fail;
-                        dev |= result_layout::caution(y, s_.runner_.sweep_view());
-                    }
                 if (lost || rc.tone == result_layout::Tone::Pass) {
                     char v[12] = {};
                     f.put("peak ");
@@ -2055,6 +2055,9 @@ static FooterTone spec_footer(StrBuf<32>& f, int check, const specsec::Cell& c, 
                     f.put(std::string_view(v, ctsweep::format_mv(rw->sum.peak_at_mv, v))).put_char('V');
                     return lost || dev ? FooterTone::Caution : FooterTone::Ok;
                 }
+            } else if (lost) {   // no recorded point at all: say so rather than let the range's reach read as the whole story
+                f.put("sweep failed");
+                return FooterTone::Caution;
             }
             f.put(result_layout::reach_footer(rc).c_str());
             using result_layout::Tone;

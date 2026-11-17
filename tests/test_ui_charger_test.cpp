@@ -2014,6 +2014,11 @@ static void test_a_voltage_fold_reads_as_a_caution() {
         ui.set_rotation(0, t); calm();
     };
     readme_rot3("readme_ct_caution");
+    for (const uint8_t rot : {1, 2}) {   // the merged chip with its S mark in the landscape mappings too (every cut would fail the run)
+        ui.set_rotation(rot, t); calm();
+        dump_screen(rot == 1 ? "fold_results_rot1" : "fold_results_rot2");
+        ui.set_rotation(0, t); calm();
+    }
     // The header: pass / caution / fail / skip; the caution cell is amber (four columns: the number only, behind its amber mark).
     StrBuf<8> n; n.put_u32(caution);
     check_text_at(kSmall, 26, n.view(), kCaution, kBg, 56 + 16);
@@ -2124,6 +2129,60 @@ static void test_a_sweep_off_by_more_than_100mv_reads_as_a_caution() {
     CHECK_EQ(unsigned(ui.list_state().count), sw.count);
     top(ui, t); calm();
     CHECK_EQ(footer_shows(result_layout::family_footer("PPS", sw.tally).view(), kCaution), true);
+}
+// A sweep part that failed (the source was lost mid-sweep) paints the merged chip red; the Results footer of that row must then speak
+// of the sweep in the caution tone, never of the range's reach alone ("PPS: 3.3-11V reached" in green under a red chip): the
+// peak it did record, or "sweep failed" when no point was recorded at all.
+static void test_a_failed_sweep_footer_never_reads_as_reached() {
+    six_pdo_fixture();
+    g_stub.vbus_ceiling_mv = 36000;
+    Ui ui; open(ui);
+    CHECK_EQ(ui.charger_test_set_units(kPdOnly), true);
+    ui.charger_test_set_sweep(true);
+    review(ui);
+    start_press(ui, 1300); press(ui, Button::Ok, 1400);
+    uint32_t t = 1500;
+    for (; t <= 900000 && ui.charger_test_busy(); t += 100) ui.tick(t);
+    CHECK_EQ(ui.charger_test_stage(), 6);
+    const auto calm = [&] {
+        for (int i = 0; i < 64 && ui.painting(); ++i) ui.tick(t += 100);
+        CHECK_EQ(ui.painting(), false);
+    };
+    ui.tick(t += 200); ui.tick(t += 200);
+    calm();
+    const auto& r = ui.charger_test_results();
+    for (size_t i = 0; i < r.steps().size(); ++i) {   // every sweep part of the run lost its source
+        auto& s = const_cast<ct::Step&>(r.steps()[i]);
+        if (ct::is_sweep(s)) s.verdict = ct::Verdict::Fail;
+    }
+    top(ui, t); calm();
+    press(ui, Button::Ok); ui.tick(t += 100); calm();   // into the Steps and back: the Results grid is rebuilt
+    press(ui, Button::Back); ui.tick(t += 100); calm();
+    top(ui, t); calm();
+    const auto pps = pick_family(ui, "PPS");
+    CHECK_EQ(pps.line >= 0, true);
+    if (pps.line < 0) return;
+    const auto at_pps = [&] {
+        top(ui, t); calm();
+        for (int k = 0; k < pps.line; ++k) { press(ui, Button::Plus); ui.tick(t += 100); calm(); }
+    };
+    at_pps();
+    const auto rw = r.sweep_view().apdo(pps.algo, pps.pos);
+    CHECK_EQ(rw.has_value() && rw->sum.points > 0, true);
+    if (!rw) return;
+    char a[12] = {}, b[12] = {};
+    StrBuf<40> want;
+    want.put("PPS: peak ").put(std::string_view(a, ctsweep::format_mv(rw->sum.peak_mv, a))).put("V@");
+    want.put(std::string_view(b, ctsweep::format_mv(rw->sum.peak_at_mv, b))).put_char('V');
+    CHECK_EQ(footer_shows(want.view(), kCaution), true);   // the peak it recorded, amber
+    for (const auto& row : r.sweep_view().rows)             // no point recorded at all
+        const_cast<ctsweep::RowView&>(row).n = 0, const_cast<ctsweep::RowView&>(row).sum.points = 0;
+    ui.tick(t += 100); calm();
+    top(ui, t); calm();
+    press(ui, Button::Ok); ui.tick(t += 100); calm();
+    press(ui, Button::Back); ui.tick(t += 100); calm();
+    at_pps();
+    CHECK_EQ(footer_shows("PPS: sweep failed", kCaution), true);
 }
 // Every Steps row reads as a whole step label (step_label::label), never cut with dots: the ink of each visible row's text
 // cell is compared with the ink of every label of the run, and some label must match. The cut would end in "...". The same scan
@@ -5458,6 +5517,7 @@ int main() {
     test_family_steps_scenes();
     test_a_long_family_list_scrolls_under_its_header();
     test_a_voltage_fold_reads_as_a_caution();
+    test_a_failed_sweep_footer_never_reads_as_reached();
     test_a_sweep_off_by_more_than_100mv_reads_as_a_caution();
     test_sweep_log_line_has_no_literal_format_bug();
     test_state_change_log_keeps_the_full_state_name_in_the_format();
