@@ -68,7 +68,7 @@ powered cable, sends SOP' Discover Identity, and the armed e-marker spoof answer
   |---|---|---|---|---|
   | 0 | generic 20V 5A | `generic` | 20 V 5 A, no EPR | no (remote only) |
   | 1 | EPR 50V 5A | `epr-50v`, `generic-epr` | 50 V 5 A, EPR | yes (default built-in) |
-  | 2 | CUKTECH 6A | `cuktech-6a`, `cuktech-240w` | 50 V 5 A, EPR | yes |
+  | 2 | Xiaomi 6A | `xiaomi-6a`, `cuktech-6a`, `cuktech-240w` | 50 V 5 A, EPR | yes |
   | 3 | (retired alias of 4) | `oneplus-mag` | as id 4 | no |
   | 4 | OnePlus 100W | `oneplus` | 30 V 5 A | yes |
 

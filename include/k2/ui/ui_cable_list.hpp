@@ -63,7 +63,7 @@ public:
     enum class View : uint8_t { Spoof, CableStep };
     enum class Mark : uint8_t { None, Use, Armed, Next, Curr };   // Armed wins when one row is both the pick and the armed one
     struct Row {
-        StrBuf<emlib::kNameMax + 1> text;   // the short name: "OFF", "EPR", "CUKTECH", "OnePlus", or a clone's name (24 cells at most)
+        StrBuf<emlib::kNameMax + 1> text;   // the short name: "OFF", "EPR", "Xiaomi", "OnePlus", or a clone's name (24 cells at most)
         std::string_view rating;  // dim column ("50V 5A", "no identity"); empty for a clone
         std::string_view note;    // what the identity is for (literal), shown under the focused row
         std::string_view tail;    // dim word at the right end: "saved" for a clone, so a clone named like a built-in reads apart

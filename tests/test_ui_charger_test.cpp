@@ -755,7 +755,7 @@ static void check_review_spoof(std::string_view text, uint16_t color) {
     check_text_at(kSmall, y, "Spoof", kDim, kBg, 6);   // the key of the identity row
     check_text_at(kSmall, y, fit_data(kSmall, text, 18 * kSmall.adv, buf), color, kBg, 72);
 }
-// The face name of a built-in chip ("CUKTECH 6A" -> "CUKTECH"): the rating is the dim second column of its row.
+// The face name of a built-in chip ("Xiaomi 6A" -> "Xiaomi"): the rating is the dim second column of its row.
 static std::string face_name(std::string_view label) { return std::string(label.substr(0, label.find(' '))); }
 static void test_review_shows_the_armed_identity() {
     fixture(); Ui ui; open(ui);
@@ -2841,7 +2841,7 @@ static void test_cable_list_rows_and_default() {
     CHECK_EQ(ui.list_state().count, kSavedRow + 2);      // Off, three built-ins, two saved clones
     CHECK_EQ(ui.charger_test_cursor(), 0);               // the cursor sits on the pick in force
     check_row_text(0, "Off (real cable)", kText, kFocusT, 0, kNoTailRoom); check_radio(0, true, 0, kFocusT);
-    static constexpr const char* kShort[] = {"EPR", "CUKTECH", "OnePlus"};
+    static constexpr const char* kShort[] = {"EPR", "Xiaomi", "OnePlus"};
     for (unsigned r = 0; r < ctcable::kDialogBuiltins; ++r)
         check_row_text(kBuiltinRow + int(r), kShort[r], kText, kBg, 0, kit::kCol2X - 4 - kit::kTextX);
     check_row_text(kSavedRow, "Host identity 1", kText, kBg, 0, kSavedRoom);
@@ -3093,7 +3093,7 @@ static void test_cable_dialog_every_builtin_row() {
         const unsigned id = ctcable::dialog_id(r);       // ids 1, 2, 4: id 3 is retired and has no row
         rd_fixture(); g_stub.lib = {saved(1)};
         Ui ui; open(ui); CHECK_EQ(ui.charger_test_set_units(kPdOnly), true); cable(ui);
-        static constexpr const char* kShort[] = {"EPR", "CUKTECH", "OnePlus"};   // the Cable step's short names
+        static constexpr const char* kShort[] = {"EPR", "Xiaomi", "OnePlus"};   // the Cable step's short names
         const int row = kBuiltinRow + int(r);
         pick_row(ui, row, 1300);                         // a pick selects and goes on to Review
         CHECK_EQ(ui.charger_test_stage(), 4);
@@ -3394,7 +3394,7 @@ static void test_cable_step_next_curr_and_start_takes_over() {
         CHECK_EQ(g_stub.spoof_on, true); CHECK_EQ(g_stub.spoof_arms, 1);
         ui.goto_page(static_cast<uint8_t>(Page::ChargerTest), 1100); settle(ui, 1100);
         cable(ui, 1200); ui.tick(1210); settle(ui, 1210);
-        const Choice cuck{Kind::Builtin, 2};            // CUKTECH, row kBuiltinRow + 1
+        const Choice cuck{Kind::Builtin, 2};            // Xiaomi 6A, row kBuiltinRow + 1
         CHECK_EQ(ui.charger_test_set_cable(cuck), true);
         ui.tick(1300); settle(ui, 1300);
         CHECK_EQ(ui.charger_test_cursor(), kBuiltinRow + 1);

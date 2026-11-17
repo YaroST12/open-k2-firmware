@@ -558,7 +558,7 @@ Ports (operator, 2026-11-10): C1 and C2 are the 120 W ports (20 V 6 A with the X
   0x05C02B01 (DFP power brick, modal operation, USB-C receptacle), SVID 0x2717 and the 9-step Mi chain. Same VID and bcdDevice
   as the Xiaomi 20K bank (`shared-pd-firmware-0xa819`, see that section).
 - Spoofed identities on C1, 2026-11-07 (2c70fa6, K2 top plug directly in C1, fresh mains power per run, `--units pd`;
-  `runs/cuktech-ids/`): the built-in CUKTECH 6A identity unlocks PPS 5-11 V and 5-20 V at 6 A and both Mi rows pass
+  `runs/cuktech-ids/`): the built-in CUKTECH 6A identity (now Xiaomi 6A) unlocks PPS 5-11 V and 5-20 V at 6 A and both Mi rows pass
   (11.00 V and 19.94 V at 6 A) with no real cable. The Kowsi X1 "Mi 6A" clone (VID 0x2717, sniffed identity only) gets
   PPS 5 A and the Mi rows read "not unlocked"; the charger also sends that cable identity Xiaomi-specific SOP' requests the
   clone does not answer. Rule: when a built-in identity and a sniffed clone cover the same vendor, the built-in is listed

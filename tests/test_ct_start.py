@@ -456,7 +456,8 @@ class CableOption(unittest.TestCase):
         self.assertEqual(ct_start.kr.parse_cable("builtin"), (1, 1))
         self.assertEqual(ct_start.kr.parse_cable("builtin:3"), (1, 4))                # the retired id 3 is sent as 4
         self.assertEqual(ct_start.kr.parse_cable("builtin:oneplus-mag"), (1, 4))
-        self.assertEqual(ct_start.kr.parse_cable("Builtin:CUKTECH-6A"), (1, 2))
+        self.assertEqual(ct_start.kr.parse_cable("builtin:xiaomi-6a"), (1, 2))
+        self.assertEqual(ct_start.kr.parse_cable("Builtin:CUKTECH-6A"), (1, 2))       # id 2's name until 2026-11-17, still accepted
         self.assertEqual(ct_start.kr.parse_cable("builtin:oneplus"), (1, 4))
         self.assertEqual(ct_start.kr.parse_cable("builtin:0"), (1, 0))                # remote-only ids: generic and the sniffed Xiaomi cables
         self.assertEqual(ct_start.kr.parse_cable("builtin:mi-2717"), (1, 5))
@@ -530,7 +531,9 @@ class CableDefaultRun(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(sent[0], (0, 0))                 # off is still selectable, and it is sent
         self.assertIn("cable identity: off", text)
-        rc, sent, text = self.run_main(["--wait", "5", "--cable", "builtin:cuktech-6a"])
+        rc, sent, text = self.run_main(["--wait", "5", "--cable", "builtin:xiaomi-6a"])
+        self.assertEqual(sent[0], (1, 2))
+        rc, sent, text = self.run_main(["--wait", "5", "--cable", "builtin:cuktech-6a"])   # the older name of id 2
         self.assertEqual(sent[0], (1, 2))
 
     def test_a_guard_refusal_exits_six_and_points_at_cable_off(self):

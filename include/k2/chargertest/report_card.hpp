@@ -134,7 +134,7 @@ struct Cable {
     uint32_t seq = 0;          // emlib entry number, 0 = none
     uint16_t vid = 0, pid = 0; // e-marker identity
     uint16_t max_mv = 0, max_ma = 0;   // limits the run used (mV, mA)
-    uint8_t kind = 0;          // a built-in cable's emrec::builtin_info id (1 EPR 50V, 2 CUKTECH 6A, 4 OnePlus; 3 was "OnePlus mag", retired and recorded as 4), 0 = saved clone, 0xFF = real cable
+    uint8_t kind = 0;          // a built-in cable's emrec::builtin_info id (1 EPR 50V, 2 Xiaomi 6A, 4 OnePlus; 3 was "OnePlus mag", retired and recorded as 4), 0 = saved clone, 0xFF = real cable
     uint8_t flags = 0;         // bit0 observed, bit1 spoofed, bit2 the run was self-powered (the charger under test powered the K2),
                                // bits 3..5 the Ra guard's reading + 1 (0 = not judged), bit6 started anyway against a refusing reading,
                                // bit7 the run went through the charger test's planned re-attach (that reboot is not a resume)

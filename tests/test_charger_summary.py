@@ -163,7 +163,7 @@ def test_card_header_names_the_spoofed_cable_identity():
     assert "SPOOF" not in charger_summary.summarize_card(card).splitlines()[0]
     card["cable"] = {"seq": 1, "vid": 0x2B01, "pid": 0x1234, "max_mv": 50000, "max_ma": 5000, "kind": 1, "observed": 0, "spoofed": 1}
     assert charger_summary.summarize_card(card).splitlines()[0].endswith(" · SPOOF: EPR 50V 5A")
-    for kind, name in ((2, "CUKTECH 6A"), (3, "OnePlus 100W"), (4, "OnePlus 100W")):   # kind 3 = an older card, the retired mag id
+    for kind, name in ((2, "Xiaomi 6A"), (3, "OnePlus 100W"), (4, "OnePlus 100W")):   # kind 3 = an older card, the retired mag id
         card["cable"]["kind"] = kind
         assert charger_summary.summarize_card(card).splitlines()[0].endswith(f" · SPOOF: {name}")
     card["cable"]["kind"] = 0

@@ -90,7 +90,7 @@ var K2Card = (function () {
   var MOTOROLA_VID = 0x22B8;
   var LENOVO_VID = 0x17EF;
   var GUARDS = ["unknown", "none", "cable", "direct"];
-  var CABLE_KINDS = {0: "saved clone", 1: "EPR 50V 5A (built-in)", 2: "CUKTECH 6A (built-in)", 4: "OnePlus 100W (built-in)",
+  var CABLE_KINDS = {0: "saved clone", 1: "EPR 50V 5A (built-in)", 2: "Xiaomi 6A (built-in)", 4: "OnePlus 100W (built-in)",
     255: "real cable"};
 
   // A reader's error: `code` is stable (tests and the page switch on it), `message` is for the person.

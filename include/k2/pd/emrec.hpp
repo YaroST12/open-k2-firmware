@@ -39,7 +39,8 @@ Record make(std::span<const std::uint32_t> vdos, std::uint8_t spec_rev, std::str
 // from real cables (Discover Identity ACK on SOP', PD 3.x, VDO v0), so every word is byte exact:
 //   1 EPR 50V 5A        0x2B01:0x4051  the hardware-proven set (EPR 28 V on the Baseus 140 W); a generated EPR identity
 //                       made that charger hard-reset in EPR
-//   2 CUKTECH 6A        0x2B01:0x4051  the cable bundled with the CUKTECH 10 / 120 W charger, 50 V 5 A EPR, USB 2.0
+//   2 Xiaomi 6A         0x2B01:0x4051  the cable bundled with the CUKTECH 10 / 120 W charger, 50 V 5 A EPR, USB 2.0
+//                       (shown as "CUKTECH 6A" until 2026-11-17)
 //   4 OnePlus 100W      0x22D9:0x6116  C-to-C, 30 V 5 A, VCONN required, no certification id
 // Id 3 was "OnePlus 100W (mag)" (0x22D9:0x1196), a duplicate of id 4 (same VID, same ratings) and is retired. Ids are on the
 // wire and in stored data (remote spoof / cable choice, report card kind, /cable.cfg), so the numbering stays: id 3 is a

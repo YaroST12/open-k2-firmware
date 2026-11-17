@@ -152,7 +152,7 @@
 //                                    Refuse stage returns to Review, a pending resume is abandoned. rsp what(1): kCtStop*.
 //   0x0D CHARGER_CABLE req - (read) or kind(1) seq(2) (set).  rsp kind(1) seq(2) run_kind(1) run_seq(2) name(24)
 //                                    The cable identity of the "Cable identity" dialog (k2/chargertest/ct_cable.hpp): kind 0 = Off,
-//                                    1 = built-in cable (seq = its id 1, 2 or 4: EPR 50V 5A, CUKTECH 6A,
+//                                    1 = built-in cable (seq = its id 1, 2 or 4: EPR 50V 5A, Xiaomi 6A,
 //                                    OnePlus 100W; seq 0 = id 1, answered back as 1; seq 3 is the retired OnePlus 100W
 //                                    (mag), accepted and answered back as 4; seq 6 and 7, removed sniffed identities, are
 //                                    accepted and answered back as 1), 2 = saved clone (seq =
@@ -793,7 +793,7 @@ inline constexpr size_t kCardsNameMax = 20, kCardsChunks = 6;   // 250 bytes / 4
 //   SPOOF   req [5, 0]              rsp [err, active, requests u16, replies u16, seq u16] (8 bytes)  status
 //           req [5, 1, seq u16]     arm that cable;  req [5, 2]   disarm (same response)
 //           req [5, 3, id]          arm a built-in cable (emrec::builtin_cable ids: 0 generic 5 A/20 V, 1 EPR 50V 5A,
-//                                   2 CUKTECH 6A, 4 OnePlus 100W, 5 the Xiaomi-VID cable; 3 is the retired OnePlus 100W
+//                                   2 Xiaomi 6A, 4 OnePlus 100W, 5 the Xiaomi-VID cable; 3 is the retired OnePlus 100W
 //                                   (mag) and arms 4; 6 and 7, removed sniffed identities, arm 1); an id past 7 is BadArg
 //   LEARN   (blocks: a run takes seconds; refused with kEmErrBusy while a PD tool is active)
 //           req [6, 0]              rsp summary (k2::emk_learn::kSummaryBytes = 20, bytes 13..16 are the answered

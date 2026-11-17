@@ -54,7 +54,8 @@ constexpr std::array<BuiltinInfo, kBuiltinRows> kBuiltins{{
     // Captured 2026-11-06 from the user's cables (reverse-engineered), cable VDO 0x000A2640: 5 A, 50 V, EPR, Type-C plug.
     {"[EPR 50V 5A]", "EPR 50V 5A", "Passive cable, EPR 50V 5A",
      {0xFF00A041u, 0x18002B01u, 0x00000910u, 0x40516910u, 0x000A2640u}, 2},
-    {"[CUKTECH 6A]", "CUKTECH 6A", "CUKTECH 50V 5A EPR",
+    // Shown as "Xiaomi 6A" since 2026-11-17 (was "CUKTECH 6A"); the words are the cable bundled with the CUKTECH 120 W charger.
+    {"[Xiaomi 6A]", "Xiaomi 6A", "Xiaomi 6A, 50V 5A EPR",
      {0xFF00A041u, 0x18602B01u, 0x00000A2Eu, 0x40516910u, 0x000A2640u}, 2},
     // OPPO VID; cable VDO bit 11 = VCONN required, bits 10:9 = 01b = 30 V (the legacy voltage code), no EPR bit.
     {"[OnePlus 100W]", "OnePlus 100W", "OnePlus/OPPO 30V 5A",

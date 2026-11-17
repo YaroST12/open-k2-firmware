@@ -1440,10 +1440,10 @@ CABLE_KINDS = ["off", "builtin", "saved"]   # k2::ctcable::Kind in enum order
 
 # The firmware's built-in cables (k2::emrec::builtin_cable ids): captured from real cables except 0.
 # Id 3 ("OnePlus 100W (mag)") is retired: the firmware reads a 3 as 4 and always answers 4, so 3 has no label of its own.
-BUILTIN_LABELS = {0: "generic 20V 5A", 1: "EPR 50V 5A", 2: "CUKTECH 6A", 3: "OnePlus 100W", 4: "OnePlus 100W",
+BUILTIN_LABELS = {0: "generic 20V 5A", 1: "EPR 50V 5A", 2: "Xiaomi 6A", 3: "OnePlus 100W", 4: "OnePlus 100W",
                   5: "Mi cable 2717"}   # 6 and 7 (mi-2717-epr, kowsi-6a) were removed 2026-11-17; the device reads them as 1
-BUILTIN_NAMES = {"generic": 0, "epr-50v": 1, "generic-epr": 1, "cuktech-6a": 2, "cuktech-240w": 2,
-                 "oneplus-mag": 4, "oneplus": 4, "mi-2717": 5}   # spellings; cuktech-240w and generic-epr are the older names, oneplus-mag the retired one
+BUILTIN_NAMES = {"generic": 0, "epr-50v": 1, "generic-epr": 1, "xiaomi-6a": 2, "cuktech-6a": 2, "cuktech-240w": 2,
+                 "oneplus-mag": 4, "oneplus": 4, "mi-2717": 5}   # spellings; cuktech-6a (id 2's name until 2026-11-17), cuktech-240w and generic-epr are older names, oneplus-mag the retired one
 DIALOG_BUILTINS = (1, 2, 4)                        # the ids the charger-test START dialog lists (3 is a retired alias of 4)
 
 
@@ -5208,7 +5208,7 @@ def build_parser():
     cu = sub.add_parser("charger-units", help="set the test units (and their order) of the NEXT charger run; reset by every START")
     cu.add_argument("units", help="comma list, e.g. qc2,qc3,pd (names: " + ", ".join(TEST_UNITS) + "); 'default' = the default order")
     cc = sub.add_parser("charger-cable", help="cable identity the charger-test START dialog opens on (no argument: read it back)")
-    cc.add_argument("cable", nargs="?", help="off | builtin | builtin:<id 1, 2, 4 | epr-50v | cuktech-6a | oneplus> | "
+    cc.add_argument("cable", nargs="?", help="off | builtin | builtin:<id 1, 2, 4 | epr-50v | xiaomi-6a | oneplus> | "
                     "saved:<library id>; Ra mode + spoof for the run unless off")
     cl = sub.add_parser("charger-level", help="level of the NEXT charger run: light = nothing above 5 V (what is advertised), "
                         "medium = the default run, deep = medium + the PPS and AVS deep sweeps")
@@ -5241,8 +5241,8 @@ def build_parser():
     er.add_argument("id", type=int)
     er.add_argument("name")
     ep = es.add_parser("spoof", help="arm a saved cable as e-marker, or off / status")
-    ep.add_argument("target", help="saved-cable id, a built-in (builtin:0..4, or generic, epr-50v, cuktech-6a, oneplus; "
-                    "older names generic-epr = epr-50v, cuktech-240w = cuktech-6a, oneplus-mag = oneplus, id 3 = id 4), off or status")
+    ep.add_argument("target", help="saved-cable id, a built-in (builtin:0..5, or generic, epr-50v, xiaomi-6a, oneplus, mi-2717; "
+                    "older names generic-epr = epr-50v, cuktech-6a = cuktech-240w = xiaomi-6a, oneplus-mag = oneplus, id 3 = id 4), off or status")
     el = es.add_parser("learn", help="power the cable in the BOTTOM port (no charger) and record what it answers: Discover "
                        "Identity / SVIDs / Modes plus the seeds; --save stores the clone with those replies")
     el.add_argument("--seed", action="append", default=[], metavar="SVID:CMD[:VDO[:VDO]]",

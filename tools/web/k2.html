@@ -696,7 +696,7 @@ var K2Proto = (function () {
   var CT_STOPPED = ["nothing", "run", "wait", "confirmation", "refusal", "resume"];
   var CT_CABLE_KINDS = ["off", "builtin", "saved"];   // ctcable::Kind
   // The built-in cables the START dialog lists (k2_remote.py DIALOG_BUILTINS / BUILTIN_LABELS).
-  var CT_BUILTINS = [{ id: 1, label: "EPR 50V 5A" }, { id: 2, label: "CUKTECH 6A" }, { id: 4, label: "OnePlus 100W" }];
+  var CT_BUILTINS = [{ id: 1, label: "EPR 50V 5A" }, { id: 2, label: "Xiaomi 6A" }, { id: 4, label: "OnePlus 100W" }];
   // raguard::kRefusalText (include/k2/pd/ra_guard.hpp): the Refuse stage after START with a spoofed cable through a cable.
   var CT_GUARD_REFUSAL = "spoof needs the charger plugged into the K2 directly (top plug); through a cable the cable itself answers";
   var CT_START_FOLLOW_MS = 45000, CT_START_POLL_MS = 500;
@@ -1582,7 +1582,7 @@ var K2Proto = (function () {
     }
     return out;
   };
-  // target: "status" | "off" | saved-cable id | "builtin:N" (a built-in cable, N 0..4: generic, EPR 50V, CUKTECH 6A, 3 = retired alias of 4, OnePlus)
+  // target: "status" | "off" | saved-cable id | "builtin:N" (a built-in cable, N 0..4: generic, EPR 50V, Xiaomi 6A, 3 = retired alias of 4, OnePlus)
   K2Remote.prototype.emSpoof = async function (target) {
     var bi = typeof target === "string" ? /^builtin:(\d+)$/.exec(target) : null;
     if (typeof target === "string" && target.indexOf("builtin:") === 0 && !(bi && +bi[1] <= 4))

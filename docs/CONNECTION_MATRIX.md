@@ -71,7 +71,7 @@ caps by 1500 ms = released (Rd, Ra, spoof and the record dropped).
 | `c2a` | C-to-A or A-to-C, legacy Rp 56 kOhm | One line only, no PD traffic, 5 V without negotiation |
 | `usb2` / `usb3` | Data lanes: USB 2 only vs USB 3 | Only the e-marker speed field; no CC behaviour difference |
 | `c6` | The CUKTECH 6 A cable: 6 A only through the source's proprietary chain; no readable e-marker | e-marker read unreliable; the K2 uses its built-in id 2 spoof |
-| `spoof` | The K2's own Ra: PC13 = Ra on CC1, Rd on CC2, answers the charger's SOP' with a built-in identity (id 0 generic 20 V 5 A, 1 EPR 50 V 5 A, 2 CUKTECH 6A, 4 OnePlus 100 W) | `[EMK] spoof ARMED id N requests=N replies=N` |
+| `spoof` | The K2's own Ra: PC13 = Ra on CC1, Rd on CC2, answers the charger's SOP' with a built-in identity (id 0 generic 20 V 5 A, 1 EPR 50 V 5 A, 2 Xiaomi 6A, 4 OnePlus 100 W) | `[EMK] spoof ARMED id N requests=N replies=N` |
 
 ### 1.5 CC orientation and the PLUS coupling
 

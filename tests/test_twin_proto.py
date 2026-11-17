@@ -404,7 +404,7 @@ class Command(unittest.TestCase):
 
     def test_learn_inline_spoof_start_payload(self):
         # --spoof takes what `emarker spoof` takes: a built-in spelling, builtin:<id|name>, or a saved library id
-        for target, kind, ident in (("oneplus", 0, 4), ("builtin:cuktech-6a", 0, 2), ("builtin:1", 0, 1), ("7", 1, 7),
+        for target, kind, ident in (("oneplus", 0, 4), ("builtin:xiaomi-6a", 0, 2), ("builtin:cuktech-6a", 0, 2), ("builtin:1", 0, 1), ("7", 1, 7),
                                     ("300", 1, 300)):
             r, link = run_cli(["twin", "learn", "inline", "--confirm", "--spoof", target, "--name", "X"],
                               [bytes([0, 1, 0]), iq_status(done=1, phase=7)] + [bytes([0, 3, k, 0, 0][:4 + (k > 1)]) for k in range(5)])

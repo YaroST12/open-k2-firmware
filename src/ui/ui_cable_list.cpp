@@ -26,7 +26,7 @@ struct Face {
 };
 constexpr Face kFaces[] = {
     {"EPR", "50V 5A", "Passive EPR cable, 50V 5A"},
-    {"CUKTECH", "6A", "50V 5A EPR, unlocks Mi 6A"},
+    {"Xiaomi", "6A", "50V 5A EPR, unlocks Mi 6A"},
     {"OnePlus", "100W", "OPPO VID, 30V 5A"},
 };
 static_assert(std::size(kFaces) == ctcable::kDialogBuiltins);

@@ -56,7 +56,7 @@ static void test_index_space() {
 }
 
 // Built-ins come before every saved clone, and a clone that shares a built-in's VID (a sniffed copy of the same vendor's cable,
-// CUKTECH C1 2026-11-07: the built-in CUKTECH 6A unlocks 6 A, the sniffed Kowsi clones do not) never moves ahead of it, so the
+// CUKTECH C1 2026-11-07: the built-in Xiaomi 6A, then named CUKTECH 6A, unlocks 6 A, the sniffed Kowsi clones do not) never moves ahead of it, so the
 // first row of a vendor is the built-in. Stored choices keep their ids: a built-in is its builtin id, a clone its library id.
 static uint16_t vid_of(const emrec::Record &r) { return uint16_t(emrec::vdo(r, 1) & 0xFFFF); }
 static void test_builtins_lead_a_vendor_that_a_clone_shares() {
@@ -65,7 +65,7 @@ static void test_builtins_lead_a_vendor_that_a_clone_shares() {
     add_clone(5, "Kowsi-Nubia-6A");
     CableIdentityList l;
     l.sync();
-    const uint16_t vid = vid_of(emrec::builtin_cable(2));   // the CUKTECH 6A chip (builtin id 2)
+    const uint16_t vid = vid_of(emrec::builtin_cable(2));   // the Xiaomi 6A chip (builtin id 2)
     CHECK_EQ(vid_of(g_stub.lib[0].rec), vid);                // the clone is of the same vendor
     int first_of_vendor = -1;
     for (int i = 1; i < l.count() && first_of_vendor < 0; i++) {
@@ -109,7 +109,7 @@ static void test_row_text_and_names() {
     CHECK_EQ(l.row(0).rating.empty(), true);   // the long name takes the whole row: no rating column
     CHECK_STR(text(l, 1).c_str(), "EPR");
     CHECK_STR(std::string(l.row(1).rating).c_str(), "50V 5A");
-    CHECK_STR(text(l, 2).c_str(), "CUKTECH");
+    CHECK_STR(text(l, 2).c_str(), "Xiaomi");
     CHECK_STR(std::string(l.row(2).rating).c_str(), "6A");
     CHECK_STR(text(l, 3).c_str(), "OnePlus");
     CHECK_STR(std::string(l.row(3).rating).c_str(), "100W");
@@ -235,7 +235,7 @@ static void test_cable_step_marks() {
     CHECK_EQ(l.select(Choice{Kind::Builtin, 2}) ? 1 : 0, 1);
     CHECK_EQ(int(l.row(2, V::CableStep).mark), int(CableIdentityList::Mark::Use));
     CHECK_EQ(int(l.row(2).mark), int(CableIdentityList::Mark::Use));
-    // Armed CUKTECH (row 2), pick Off: NEXT on Off, CURR on CUKTECH in the Cable step; the Spoof view keeps ARMED.
+    // Armed Xiaomi 6A (row 2), pick Off: NEXT on Off, CURR on Xiaomi 6A in the Cable step; the Spoof view keeps ARMED.
     CHECK_EQ(int(l.arm(Choice{Kind::Builtin, 2}, f, name)), int(CableIdentityList::ArmErr::Ok));
     CHECK_EQ(l.select(Choice{}) ? 1 : 0, 1);
     CHECK_EQ(int(l.row(0, V::CableStep).mark), int(CableIdentityList::Mark::Next));
@@ -309,7 +309,7 @@ static void test_pill_style() {
 
 static void test_fill_spec() {
     CableIdentityList::Row r;
-    r.text.put("CUKTECH 6A");
+    r.text.put("Xiaomi 6A");
     r.tail = "saved";
     r.mark = CableIdentityList::Mark::Use;
     kit::RowSpec sp;

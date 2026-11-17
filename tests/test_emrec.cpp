@@ -288,7 +288,7 @@ struct Captured {
 };
 static const Captured kCaptured[] = {
     {1, "[EPR 50V 5A]", "EPR 50V 5A", {0xFF00A041u, 0x18002B01u, 0x00000910u, 0x40516910u, 0x000A2640u}, 0x2B01, 0x4051, 5, 50, true, false},
-    {2, "[CUKTECH 6A]", "CUKTECH 6A", {0xFF00A041u, 0x18602B01u, 0x00000A2Eu, 0x40516910u, 0x000A2640u}, 0x2B01, 0x4051, 5, 50, true, false},
+    {2, "[Xiaomi 6A]", "Xiaomi 6A", {0xFF00A041u, 0x18602B01u, 0x00000A2Eu, 0x40516910u, 0x000A2640u}, 0x2B01, 0x4051, 5, 50, true, false},
     {4, "[OnePlus 100W]", "OnePlus 100W", {0xFF00A041u, 0x180022D9u, 0x00000000u, 0x61160000u, 0x80082A40u}, 0x22D9, 0x6116, 5, 30, false, true},
     {5, "[Mi cable 2717]", "Mi cable 2717", {0xFF00A041u, 0x18602717u, 0x00000000u, 0x00000000u, 0x00082040u}, 0x2717, 0x0000, 5, 20, false, false},
 };

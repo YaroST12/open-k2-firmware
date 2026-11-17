@@ -100,7 +100,7 @@ class EmLib(unittest.TestCase):
 
     def test_spoof_a_builtin_by_id_or_name(self):
         st = bytes([0, 1, 3, 0, 2, 0, 0, 0])
-        for target, ident in (("builtin:3", 3), ("builtin:oneplus", 4), ("oneplus-mag", 4), ("oneplus", 4), ("cuktech-6a", 2),
+        for target, ident in (("builtin:3", 3), ("builtin:oneplus", 4), ("oneplus-mag", 4), ("oneplus", 4), ("xiaomi-6a", 2), ("cuktech-6a", 2),
                               ("cuktech-240w", 2), ("generic-epr", 1), ("epr-50v", 1), ("generic", 0), ("builtin:0", 0)):
             r, l = run(["emarker", "spoof", target], [st])
             self.assertEqual(l.sent[0][1], bytes([5, 3, ident]), target)

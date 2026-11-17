@@ -258,7 +258,7 @@ def _group_text(e):
 # A card's cable kind: a built-in cable's id (k2::emrec::builtin_info labels), 0 = a saved clone, 0xFF = a real cable.
 # The dialog lists ids 1, 2 and 4; id 0 (generic 20 V 5 A) is remote-only. Id 3 (the retired "OnePlus 100W (mag)")
 # is the same identity as 4, so an older card with kind 3 reads as OnePlus 100W.
-CARD_BUILTIN_LABELS = {1: "EPR 50V 5A", 2: "CUKTECH 6A", 3: "OnePlus 100W", 4: "OnePlus 100W"}
+CARD_BUILTIN_LABELS = {1: "EPR 50V 5A", 2: "Xiaomi 6A", 3: "OnePlus 100W", 4: "OnePlus 100W"}
 
 
 def _card_spoof(cable):
