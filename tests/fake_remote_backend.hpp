@@ -328,6 +328,15 @@ struct Fake {
         for (; n < out.size() && off + n < pc_blob.size(); n++) out[n] = pc_blob[off + n];
         return n;
     }
+    // The spec rows file (Cmd::ChargerTest req [8, off]), empty = none.
+    std::vector<uint8_t> sr_file;
+    uint16_t spec_rows_len() { calls++; return uint16_t(sr_file.size()); }
+    size_t spec_rows_read(uint16_t off, std::span<uint8_t> out) {
+        calls++;
+        size_t n = 0;
+        for (; n < out.size() && off + n < sr_file.size(); n++) out[n] = sr_file[off + n];
+        return n;
+    }
     // Loop probe (Cmd::LoopProbe): the stored result file, empty = none.
     std::vector<uint8_t> lp_file;
     uint16_t loopprobe_len() { calls++; return uint16_t(lp_file.size()); }

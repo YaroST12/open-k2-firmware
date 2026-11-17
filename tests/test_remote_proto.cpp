@@ -2797,6 +2797,38 @@ static void test_charger_test_spec_wire() {
     check_bytes(r, 6, {4, 3, 2, 1, 0, 0, 0});
 }
 
+// The spec rows file, `0x0B req [8, off_lo, off_hi]`: the journal's file byte for byte in chunks of at most 48 behind
+// run_id(4) total(2) off(2) n(1); total 0 = none; the offset is 16 bit because the file is up to about 4 KB.
+static void test_charger_test_spec_rows_wire() {
+    Fake f; Frame r;
+    f.test_results.run_id = 0x01020304;
+    CHECK_EQ(run(f, request(0x0B, 50, {8, 0, 0}), r), 1);
+    check_header(r, 0x0B, 50, Status::Ok, 9);
+    check_bytes(r, 6, {4, 3, 2, 1, 0, 0, 0, 0, 0});   // run_id, total 0, off 0, n 0
+    for (size_t i = 0; i < 1000; ++i) f.sr_file.push_back(uint8_t(i * 13 + 5));
+    std::vector<uint8_t> got;
+    for (unsigned off = 0; off < f.sr_file.size();) {
+        CHECK_EQ(run(f, request(0x0B, 51, {8, uint8_t(off), uint8_t(off >> 8)}), r), 1);
+        const uint8_t n = r[14];
+        CHECK_EQ(r[5], uint8_t(9 + n));
+        CHECK_EQ(int(r[10] | r[11] << 8), 1000);   // total
+        CHECK_EQ(int(r[12] | r[13] << 8), int(off));
+        CHECK(n > 0 && n <= 48);
+        if (n == 0 || n > 48) break;
+        for (unsigned i = 0; i < n; ++i) got.push_back(r[15 + i]);
+        off += n;
+    }
+    CHECK(got == f.sr_file);
+    CHECK_EQ(run(f, request(0x0B, 52, {8, uint8_t(1000), uint8_t(1000 >> 8)}), r), 1);   // at the end: an empty chunk
+    check_header(r, 0x0B, 52, Status::Ok, 9);
+    CHECK_EQ(run(f, request(0x0B, 53, {8, uint8_t(1001), uint8_t(1001 >> 8)}), r), 1);
+    check_header(r, 0x0B, 53, Status::BadArg, 0);
+    CHECK_EQ(run(f, request(0x0B, 54, {8, 0}), r), 1);      // two bytes: the older request length is no rows request
+    check_header(r, 0x0B, 54, Status::BadLength, 0);
+    CHECK_EQ(run(f, request(0x0B, 55, {6, 0}), r), 1);      // the summary form is untouched
+    check_header(r, 0x0B, 55, Status::Ok, 7);
+}
+
 // QA 2026-11-10 row B item 2 (red): a deep-sweep row goes over the wire with the sweep flag set (row flags bit 5)
 // and its detail byte carrying the recorded point count - the in-RAM marker kDetailSweep (161) stays on the step,
 // but the host must read the 61 points the sweep logged, not the marker 161.
@@ -3351,7 +3383,7 @@ int main() {
     test_charger_avs_sweep();
     test_charger_level();
     test_charger_svooc_cap();
-    test_charger_test_wire(); test_charger_test_view_wire(); test_charger_test_spec_wire(); test_sweep_row_wire_carries_points(); test_sweep_row_that_never_ran_carries_zero_points(); test_folded_pass_reason_over_both_schemas();
+    test_charger_test_wire(); test_charger_test_view_wire(); test_charger_test_spec_wire(); test_charger_test_spec_rows_wire(); test_sweep_row_wire_carries_points(); test_sweep_row_that_never_ran_carries_zero_points(); test_folded_pass_reason_over_both_schemas();
     test_identify_refusal_wire_mapping();
     test_pd_attach_wire();
     test_active_pd_commands();

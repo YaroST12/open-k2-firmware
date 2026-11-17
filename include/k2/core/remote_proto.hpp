@@ -138,6 +138,14 @@
 //                                    whole units, 32767 = not seen; the engine's count; At = a, b); 8 x 27 = 216 bytes; same reply
 //                                    layout and rules. Count 0 = no detail kept (a journal from before it): shown as "-". An older
 //                                    firmware answers BadLength: no detail anywhere.
+//                                    SPEC ROWS, req 8 off_lo(1) off_hi(1): the per-transition rows of the spec checks, the journal's rows
+//                                    file byte for byte (specsec::kRowsHdr = 90 bytes: "SPT1", run_id u32, 27 x u16 counts, 27 x u8
+//                                    worst, 2 pad; then 10 byte rows: check(1) flags(1, bit0 failing, bit1 programmable pass, bits 2..3 step class)
+//                                    a(2) b(2) value(2) margin(2), LE, grouped by the grid's cell order; layout in spec_rows.hpp). rsp run_id(4) total(2 LE)
+//                                    off(2 LE) n(1) data(n), n <= 48. total 0 = no rows (a default image, a run with no
+//                                    transitions, a journal from before they were kept: the cells then show their summary). The file
+//                                    holds at most specsec::kRowsMax (392) rows; past that the last rows of the run are not listed and
+//                                    the counts are the ones listed. off past total is BadArg. An older firmware answers BadLength.
 //                                    CANCEL, req 5 (one byte): the device's own stop (BACK) - a run stops, the wait is
 //                                    cancelled (Rd released), the confirm window (and a pending remote START) closes, the
 //                                    Refuse stage returns to Review, a pending resume is abandoned. rsp what(1): kCtStop*.
@@ -987,8 +995,12 @@ constexpr uint8_t kChargerTestStartReq = 4, kChargerTestCancelReq = 5;
 // chunked read of the detail form (specsec::to_detail_wire, 8 x 27 bytes: limit lo/hi, count, a, b per check): two forms because total
 // and off are one byte each and the two do not fit together. An older firmware answers [7] with BadLength: the cells have no detail.
 constexpr uint8_t kChargerTestSpecReq = 6, kChargerTestSpecDetailReq = 7;
+// `[8, off_lo, off_hi]`: the spec rows file in chunks of 48: rsp run_id(4) total(2) off(2) n(1) data(n) (total and off are 16 bit: the file
+// is up to about 4 KB).
+constexpr uint8_t kChargerTestSpecRowsReq = 8;
+constexpr size_t kCtSpecRowsHeader = 9;
 constexpr size_t kCtSpecChunk = 48, kCtSpecHeader = 7;
-static_assert(kCtSpecHeader + kCtSpecChunk <= kMaxRspPayload);
+static_assert(kCtSpecHeader + kCtSpecChunk <= kMaxRspPayload && kCtSpecRowsHeader + kCtSpecChunk <= kMaxRspPayload);
 static_assert(specsec::kWireBytes <= 255 && specsec::kDetailBytes <= 255, "total and off are one byte");
 size_t charger_test_spec_total(const ChargerTestSnapshot&, uint8_t form);   // 0 = no spec section
 size_t encode_charger_test_spec(std::span<uint8_t> out, const ChargerTestSnapshot&, uint8_t form, uint8_t off);
@@ -1545,6 +1557,8 @@ concept Backend = requires(B &b, uint8_t u8, uint16_t u16, bool on) {
     { b.ufcs_op(u8) } -> std::same_as<Status>;                           // kUfcsReset / kUfcsProbe / kUfcsStop
     { b.ufcs_read(uint16_t{}, std::span<uint8_t>{}) } -> std::same_as<size_t>;   // blob bytes from off, returns how many
     { b.pdstress_info() } -> std::same_as<PdStressInfo>;                  // PD Stress status block
+    { b.spec_rows_len() } -> std::same_as<uint16_t>;                     // bytes of the spec rows file of the run in hand, 0 = none
+    { b.spec_rows_read(uint16_t{}, std::span<uint8_t>{}) } -> std::same_as<size_t>;   // file bytes from off, returns how many
     { b.loopprobe_len() } -> std::same_as<uint16_t>;                      // bytes of the stored loop probe file, 0 = none
     { b.loopprobe_read(uint16_t{}, std::span<uint8_t>{}) } -> std::same_as<size_t>;   // file bytes from off, returns how many
     { b.hostreport_len() } -> std::same_as<uint16_t>;                     // bytes of the stored Host report file, 0 = none
@@ -1612,6 +1626,17 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
             const auto s = backend.charger_test_results();
             if (p[1] > charger_test_spec_total(s, p[0])) return reply(Status::BadArg);
             return reply_n(encode_charger_test_spec(buf, s, p[0], p[1]));
+        }
+        if (p.size() == 3 && p[0] == kChargerTestSpecRowsReq) {
+            const uint16_t off = detail::rd16(&p[1]);
+            const uint16_t total = backend.spec_rows_len();
+            if (off > total) return reply(Status::BadArg);
+            const size_t want = std::min<size_t>(kCtSpecChunk, total - off);
+            const size_t n = want ? std::min(want, backend.spec_rows_read(off, std::span<uint8_t>(buf.data() + kCtSpecRowsHeader, want))) : 0;
+            const uint32_t run = backend.charger_test_results().run_id;
+            buf[0] = uint8_t(run); buf[1] = uint8_t(run >> 8); buf[2] = uint8_t(run >> 16); buf[3] = uint8_t(run >> 24);
+            buf[4] = uint8_t(total); buf[5] = uint8_t(total >> 8); buf[6] = uint8_t(off); buf[7] = uint8_t(off >> 8); buf[8] = uint8_t(n);
+            return reply_n(kCtSpecRowsHeader + n);
         }
         if (!p.empty() && p.size() != 1 && p.size() != 9 && p.size() != 10) return reply(Status::BadLength);
         if (p.size() == 1 && p[0] == kChargerTestViewReq) return reply_n(encode_charger_test_view(buf, backend.charger_test_view()));

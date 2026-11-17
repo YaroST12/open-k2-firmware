@@ -158,6 +158,9 @@ public:
     remote::Status pdspec_start(const remote::PdSpecStart &s);   // Busy when another tool owns the ports; other refusals show in info().start
     void pdspec_stop();                                          // never refused
     size_t pdspec_read(uint16_t off, std::span<uint8_t> out);
+    // Cmd::ChargerTest req [8, off]: the spec rows file of the run in hand (specsec::kRowsHdr + 10 byte rows), 0 = none.
+    uint16_t spec_rows_len();
+    size_t spec_rows_read(uint16_t off, std::span<uint8_t> out);
     // ---- end PD Spec Check ----
     // Cmd::LoopProbe: the last loop probe result file (k2/loopprobe/loop_probe_hw.hpp); read only, the probe starts on the K2.
     uint16_t loopprobe_len();
