@@ -329,8 +329,9 @@ struct Input {
     uint32_t now = 0, session = 0, cap_mv = 0;
     uint16_t cable_mv = 20000, cable_ma = 3000;
     // The cable VDO limits of the identity the K2 itself presents (an armed spoof; 0 = unknown). When nothing physical was read they are
-    // the cable limit the source saw, and what the hunt classifier uses instead of the 3 A default of an unread cable. Diagnostics and
-    // the "not unlocked" cause only: row planning keeps reading cable_mv / cable_ma.
+    // the cable limit the source saw, and what the hunt classifier and the planned row currents (the full-current PPS row) use instead
+    // of the 3 A default of an unread cable, capped at 5 A. Row voltages, the EPR gate and the 1 A sweep points keep reading cable_mv /
+    // cable_ma.
     uint16_t spoof_mv = 0, spoof_ma = 0;
     int vbus_mv = -1, ibus_ma = 0;   // ibus_ma: magnitude; above kLoadAbortMa during a raised row means a load
     uint32_t pd_quiet_ms = UINT32_MAX;   // ms since the last PD frame was received (since the handover began)

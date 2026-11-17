@@ -305,6 +305,20 @@ uint8_t hunt_reset_detail(const Input& in) {
 // A cable that was read and is not 50 V / 5 A: no EPR entry is attempted. An unread cable does not block the attempt (the START
 // skips the SOP' scan while a source's Rp is on the line), the source's own cable check answers it.
 bool epr_cable_unfit(const Input& in) { return in.cable_observed && !epr_cable(in); }
+// The PPS full-current row (plan_unit: the APDO's top voltage at its whole advertised current, clamped to the cable): when a
+// re-announce changes the APDO's word after the plan (the Xiaomi 0x2717 chain lifts PPS 5-11 V 3 A to 5 A), its current is taken
+// again from the word in hand, so the row asks the offer the source makes now. The 1 A rows, the hunts, the step walk, the sweeps
+// and an above-5 A row keep their own current.
+bool full_current_row(const Step& s) {
+    return s.group == Group::Pd && !s.hunt && !s.avs && s.detail == 0 && s.ma > kPlanRowMa && s.ma <= 5000 &&
+           pd::decode_pdo(s.pdo).type == pd::PdoType::Pps;
+}
+// Place row `s` at slot `at` with offer word `raw`; a full-current row's current follows the word (and the cable, used_cable_ma).
+void take_offer(Step& s, int at, uint32_t raw, const Input& in) {
+    if (full_current_row(s) && s.pdo != raw)
+        s.ma = static_cast<uint16_t>(std::min<unsigned>(pd::current_limit_ma(pd::decode_pdo(raw), s.mv), used_cable_ma(in)) / 50 * 50);
+    s.pos = static_cast<uint8_t>(at + 1); s.pdo = raw;
+}
 // FNV-1a over the list (valid, count, raw PDO words): tells "the same offer list" from a list that grew or changed.
 uint32_t caps_sig(const pd::SourceCaps& c) {
     uint32_t h = 2166136261u;
@@ -740,7 +754,7 @@ void plan_unit(Unit unit, const pd::SourceCaps& caps, Options o, const Input& in
             // except the full-current PPS row below, which asks the APDO's whole advertised current).
             auto current = [&](unsigned mv, unsigned ceiling = kPlanRowMa) {
                 return static_cast<uint16_t>(std::min({ceiling, unsigned(pd::current_limit_ma(p, mv)),
-                                                       unsigned(cable_ma(in))}) / 50 * 50);
+                                                       unsigned(used_cable_ma(in))}) / 50 * 50);
             };
             s.ma = current(s.mv);
             if (p.min_mv > cap || (p.type == pd::PdoType::Fixed && p.max_mv > cap)) {
@@ -1205,7 +1219,7 @@ void Runner::follow_list(const pd::SourceCaps& caps, const Input& in) {
             const uint32_t raw = caps.pdos[static_cast<size_t>(at)].raw;
             if (s.pos != at + 1) plan_moved = true;   // only a slot move changes the plan
             if (s.pos != at + 1 || s.pdo != raw) {
-                s.pos = static_cast<uint8_t>(at + 1); s.pdo = raw; moved = true;
+                take_offer(s, at, raw, in); moved = true;
                 flight_restart_ = true;   // rule 2: restart the row in flight at the new slot / current word (not a try)
             }
             ++follow;
@@ -1220,9 +1234,8 @@ void Runner::follow_list(const pd::SourceCaps& caps, const Input& in) {
                 // still offers it, so it is not stale when its own unit starts.
                 if (s.pos < 8) {
                     const int at = find_offer(caps, s);
-                    if (at >= 0 && (s.pos != at + 1 || s.pdo != caps.pdos[static_cast<size_t>(at)].raw)) {
-                        s.pos = static_cast<uint8_t>(at + 1); s.pdo = caps.pdos[static_cast<size_t>(at)].raw;
-                    }
+                    if (at >= 0 && (s.pos != at + 1 || s.pdo != caps.pdos[static_cast<size_t>(at)].raw))
+                        take_offer(s, at, caps.pdos[static_cast<size_t>(at)].raw, in);
                 }
                 continue;
             }
@@ -1244,7 +1257,7 @@ void Runner::follow_list(const pd::SourceCaps& caps, const Input& in) {
             if (at >= 0) {
                 const uint32_t raw = caps.pdos[static_cast<size_t>(at)].raw;
                 if (s.pos != at + 1) plan_moved = true;   // a slot move is a plan change
-                if (s.pos != at + 1 || s.pdo != raw) { s.pos = static_cast<uint8_t>(at + 1); s.pdo = raw; moved = true; }
+                if (s.pos != at + 1 || s.pdo != raw) { take_offer(s, at, raw, in); moved = true; }
                 ++follow;
             } else if (s.pos > caps.num_pdos && tail_wait) {
                 continue;   // the preauth tail: tolerated while the chain re-runs
