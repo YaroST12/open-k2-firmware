@@ -1133,11 +1133,12 @@ std::size_t numbers(std::span<std::uint16_t> out) { return g_cf->store.numbers(o
 std::uint32_t generation() { return g_card_gen; }
 bool find(std::uint32_t fp, Card& c) { return g_cf->store.find(fp, c); }
 bool get(std::uint16_t no, Card& c) { return g_cf->store.get(no, c); }
+std::span<const std::uint8_t> ext(std::uint16_t no) { return g_cf->store.ext(no); }
 // The device's main loop runs the ring maintenance in the idle time between two saves; the stub runs it before each one.
 Err put(Card& c) { while (g_cf->store.maintain(true)) {} const Err e = g_cf->store.put(c); if (e == Err::Ok) ++g_card_gen; return e; }
-Err put(Card& c, Card& prev, bool& had) {
+Err put(Card& c, Card& prev, bool& had, std::span<const std::uint8_t> blk) {
     while (g_cf->store.maintain(true)) {}
-    const Err e = g_cf->store.put(c, prev, had);
+    const Err e = g_cf->store.put(c, prev, had, blk);
     if (e == Err::Ok) ++g_card_gen;
     return e;
 }

@@ -57,7 +57,7 @@ EPR_DETAILS = {136: "EPR: entry refused", 137: "EPR: source rejects cable", 138:
                153: "EPR offered; entry: unable now", 154: "EPR offered; entry: 5V PDO lacks EPR bit",
                155: "not unlocked (no OEM chain)", 156: "not unlocked (chain unfinished)", 157: "not unlocked (3 A cable)",
                158: "not unlocked (vendor not accepted)", 159: "not unlocked (source reset)"}
-FORMAT = 10   # payload byte 33: 0 = first cards (u16 mV max, plain detail), 1 = 9+9 bit 100 mV voltages, 6 bit detail, ... 7 = repeat counter, 8 = + the re-balance count at V8_AT, 9 = + the spread block at V9_AT, 10 = + the deep-sweep summary at V10_AT
+FORMAT = 11   # payload byte 33: 11 = the record is v10's and a Deep run's blob (decode_deep) travels beside it, 0 = first cards (u16 mV max, plain detail), 1 = 9+9 bit 100 mV voltages, 6 bit detail, ... 7 = repeat counter, 8 = + the re-balance count at V8_AT, 9 = + the spread block at V9_AT, 10 = + the deep-sweep summary at V10_AT, 11 = the Deep block beside the record
              # 2 = byte 54 pdp_w and byte 55 flags (bit0 name_auto),
              # 3 = range lo bits 9..15 = APDO max current (50 mA), flags bits 1..7 = highest fixed PDO current (50 mA),
              # 4 = per-EPR-level verdicts (3 entries of 6 bytes: u16 dv + 4-byte group packing),
@@ -72,6 +72,121 @@ BRANDS = {0x05AC: "Apple", 0x04E8: "Samsung", 0x18D1: "Google", 0x2717: "Xiaomi"
 
 class BadCard(ValueError):
     pass
+
+
+# ---- the Deep block (format 11): include/k2/chargertest/report_card_deep.hpp, tests/test_report_card_py.py compares the name tables ----
+DEEP_MAX_BITS = 3273
+DEEP_BUCKETS = 32
+SVOOC_ENDS = ["none", "refused", "no adapter", "aborted", "time cap", "judged", "cancelled", "stopped"]   # svooc_ceiling::End
+SVOOC_ABORTS = ["", "over 12V", "current", "off-script", "host gone", "no monitor", "sink", "PD", "edge storm", "no adapter", "time cap",
+                "stopped", "PD lost", "PD changed"]                                                          # svooc_ceiling::abort_word
+SVOOC_REFUSALS = ["none", "not confirmed", "D+/D- busy", "no host link", "no power monitor", "sink on the bottom port", "inline mode",
+                  "PD contract not own 5 V", "current over 50 mA", "VBUS not 5 V", "no RAM: USB drive enabled",
+                  "USB-A waiver but PD is active"]                                                         # svooc::name(Refusal)
+
+
+class _Bits:
+    """LSB-first bit reader over the blob's stream (the writer is report_card_deep.cpp's BitW)."""
+
+    def __init__(self, b):
+        self.b, self.pos = b, 0
+
+    def left(self):
+        return len(self.b) * 8 - self.pos
+
+    def get(self, n):
+        if n > self.left():
+            raise BadCard("Deep block ends early")
+        v = 0
+        for i in range(n):
+            v |= (self.b[self.pos >> 3] >> (self.pos & 7) & 1) << i
+            self.pos += 1
+        return v
+
+    def sget(self, n):
+        v = self.get(n)
+        return v - (1 << n) if v >> (n - 1) else v
+
+
+def decode_deep(blob, ranges=()):
+    """The Deep block (u16 LE bit count, then the bits) -> {"spec": ..., "svooc": ..., "graphs": [...]} with the keys that were set.
+    spec: the section's end, tally and one cell per check in grid order (the key / label / unit tables come from pdspec_blob.py, which
+    parses the firmware headers); svooc: the ceiling stage; graphs: one per range with a sweep, the error in mV per bucket as
+    {"mean_mv", "min_mv", "max_mv"} (None = nothing recorded there). `ranges` are the card's decoded ranges (their algorithm names the graph)."""
+    blob = bytes(blob)
+    if len(blob) < 3:
+        raise BadCard("Deep block is empty")
+    nbits = blob[0] | blob[1] << 8
+    if not 0 < nbits <= DEEP_MAX_BITS or len(blob) != 2 + (nbits + 7) // 8:
+        raise BadCard("Deep block length does not match its bit count")
+    r = _Bits(blob[2:])
+    has_spec, has_sv, mask = r.get(1), r.get(1), r.get(MAX_RANGES)
+    out = {}
+    if has_sv:
+        end, why, asks, word, vmax, stop = r.get(3), r.get(4), r.get(3), r.get(8), r.get(9), r.get(10)
+        sv = {"end": SVOOC_ENDS[end], "asks": asks, "ceiling_ma": word * 100, "vmax_mv": vmax * 100, "stop_ms": stop * 100}
+        if end == 1:
+            sv["why"] = SVOOC_REFUSALS[why] if why < len(SVOOC_REFUSALS) else f"#{why}"
+        elif end == 3:
+            sv["why"] = SVOOC_ABORTS[why] if why < len(SVOOC_ABORTS) else f"#{why}"
+        out["svooc"] = sv
+    if has_spec:
+        import pdspec_blob as pb   # parses the firmware headers: imported here so a card without a spec section needs none of it
+        s, t = pb.section_tables(), pb.load_tables()
+        end, why, unconfirmed, ncells = r.get(3), r.get(6), r.get(1), r.get(5)
+        if ncells != len(s["cells"]) or end >= len(s["ends"]):
+            raise BadCard("Deep spec section does not match this decoder's check list")
+        end_name = s["ends"][end]
+        cells = []
+        for i, d in enumerate(s["cells"]):
+            vi = r.get(3)
+            if vi >= len(t["verdicts"]):
+                raise BadCard("Deep spec verdict out of range")
+            name = t["verdicts"][vi]
+            cell = {"key": d["key"], "label": d["label"], "unit": d["unit"], "verdict": name}
+            if name == "skip":
+                k = r.get(4)
+                cell["skip"] = t["skips"][k] if k < len(t["skips"]) else f"#{k}"
+            elif name != "pending":
+                raw = r.sget(13)
+                if raw == -4096:
+                    cell["value"], cell["value_text"] = pb.NEVER, "not seen"
+                else:
+                    v = raw * s["steps"][d["unit"]] if d["unit"] in s["steps"] else raw
+                    cell["value"] = v
+                    cell["value_text"] = pb.ps_text(v) if d["key"] == "pps_status" else pb.fmt_value(d["unit"], v)
+                    if abs(raw) >= 4094:
+                        cell["saturated"] = True
+                if name == "fail":
+                    cell["fails"] = r.get(8)
+                    a, b = r.get(8), r.get(8)
+                    k = next(j for j, x in enumerate(t["checks"]) if x["key"] == d["key"])
+                    cell["at_text"] = pb.fmt_at(k, {"key": d["key"], "a": a, "b": b})
+            cells.append(cell)
+        tally = {v: sum(1 for c in cells if c["verdict"] == v) for v in ("pass", "fail", "skip", "unverified", "pending")}
+        why_text = (pb._name(t["stops"], why) if end_name in ("cancelled", "fault") else
+                    pb._name(t["starts"], why) if end_name == "refused" else None)
+        out["spec"] = {"end": end_name, "why": why_text, "unconfirmed": bool(unconfirmed), "tally": tally, "cells": cells}
+    graphs = []
+    for i in range(MAX_RANGES):
+        if not mask >> i & 1:
+            continue
+        lo, n, sc = r.get(9), r.get(10), r.get(3)
+        e = 1 << sc
+        nb = min(DEEP_BUCKETS, n)
+        buckets = []
+        for _ in range(nb):
+            m, dn, up = r.sget(8), r.get(4), r.get(4)
+            buckets.append(None if m == -128 else {"mean_mv": m * e, "min_mv": (m - dn) * e, "max_mv": (m + up) * e})
+        g = {"range": i, "lo_mv": lo * 100, "n": n, "step_mv": 100, "unit_mv": e, "buckets": buckets}
+        if i < len(ranges):
+            g["alg"] = ranges[i]["alg"]
+        graphs.append(g)
+    if graphs:
+        out["graphs"] = graphs
+    if r.left() >= 8:
+        raise BadCard("Deep block has trailing data")
+    return out
 
 
 EPR_LEVELS = ["28V", "36V", "48V"]   # v4: per-EPR-level verdicts, target voltages in 100 mV units (280, 360, 480)

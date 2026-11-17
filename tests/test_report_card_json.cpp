@@ -10,6 +10,7 @@
 #include <sstream>
 #include <string>
 
+#include "k2/chargertest/report_card_deep.hpp"
 #include "k2/chargertest/report_card_json.hpp"
 #include "test_util.h"
 
@@ -316,7 +317,43 @@ static void test_qc3plus_skip_reads_no_qc3plus() {
     CHECK_EQ(j.find("\"why\":\"no QC3+\"") != std::string::npos, true);
 }
 
+// The Deep block rides as "deep": base64url of the blob (u16 bit count + bits), last key; a card without a block renders as before.
+static void test_deep_block_renders() {
+    rc::Card c = sample();
+    c.level = k2::charger_test::Level::Deep;
+    std::array<char, rc::kJsonDeepMax> jb;
+    const std::string plain(jb.data(), rc::render_json(c, jb));
+    CHECK_EQ(plain.find("\"deep\":") == std::string::npos, true);   // ("level":"deep" names the run, not a block)
+    CHECK_EQ(rc::render_json(c, {}, jb), plain.size());
+    CHECK_EQ(std::string(jb.data(), plain.size()) == plain, true);
+
+    // 5 bytes (the bit count 20 and three data bytes) are 7 base64url characters, "_" for 63 where base64 has "/"
+    const std::uint8_t blob[5] = {20, 0, 0xFB, 0xFF, 0x0E};
+    const std::size_t n = rc::render_json(c, blob, jb);
+    const std::string j(jb.data(), n);
+    CHECK_EQ(j.size(), plain.size() + 17);                                   // the "}" becomes ,"deep":"FAD7_w4"}
+    CHECK_EQ(j.substr(0, plain.size() - 1) == plain.substr(0, plain.size() - 1), true);
+    CHECK_EQ(j.substr(plain.size() - 1) == ",\"deep\":\"FAD7_w4\"}", true);
+    CHECK_EQ(jb[n], '\0');
+
+    // not whole (length does not match the bit count): left out, the card as before
+    const std::uint8_t cut[4] = {20, 0, 0xFB, 0xFF};
+    CHECK_EQ(rc::render_json(c, cut, jb), plain.size());
+
+    // the worst blob (412 B, 550 characters) fits the longest card: kJsonDeepMax
+    std::array<std::uint8_t, rc::deep::kMaxBlob> w{};
+    w[0] = std::uint8_t(rc::deep::kMaxBits); w[1] = std::uint8_t(rc::deep::kMaxBits >> 8);
+    for (std::size_t i = 2; i < w.size(); ++i) w[i] = std::uint8_t(i * 7);
+    w.back() &= std::uint8_t((1u << (rc::deep::kMaxBits % 8)) - 1);
+    CHECK_EQ(rc::deep::blob_valid(w), true);
+    const std::size_t nw = rc::render_json(c, w, jb);
+    CHECK_EQ(nw, plain.size() + 560);                                        // 550 characters, the key and the quotes
+    CHECK_EQ(jb[nw - 1], '}');
+    CHECK_EQ(rc::kJsonDeepMax, rc::kJsonMax + 560);
+}
+
 int main() {
+    test_deep_block_renders();
     test_level_renders();
     test_repeat_renders();
     test_qc3plus_skip_reads_no_qc3plus();

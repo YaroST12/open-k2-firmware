@@ -470,7 +470,7 @@ void CardsPage::share_cur() {
     StrBuf<24> title;
     cards_title_text(cur_, title);
     const std::size_t len = qrshare::records::card(cur_, ctx_.ui->share_buffer());
-    ctx_.ui->open_share(qrshare::Type::Card, qrshare::kSchemaCard, title.view(), len, ctx_.now);
+    ctx_.ui->open_share(qrshare::Type::Card, qrshare::kSchemaCard, title.view(), len, ctx_.now, rc::hw::ext(cur_.card_no));
 }
 
 void CardsPage::enter() {

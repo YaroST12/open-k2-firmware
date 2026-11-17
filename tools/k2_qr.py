@@ -313,20 +313,34 @@ def decode_pdcaps(rec):
             "active_cc": ["none", "CC1", "CC2"][cc] if cc < 3 else cc, "header": f"0x{hdr:04X}", "pdos": pdos}
 
 
-def decode_card(rec):
+def _crc16(data):
+    c = 0xFFFF
+    for x in data:   # CRC-16/CCITT-FALSE
+        c ^= x << 8
+        for _ in range(8):
+            c = ((c << 1) ^ 0x1021) & 0xFFFF if c & 0x8000 else (c << 1) & 0xFFFF
+    return c
+
+
+def decode_card(rec, blob=None):
     # A stored card: 0xA6, type, payload length, 0, payload, CRC. The payload grew with the formats (v5 178, v6 190, v7 196); the
-    # length byte says which, and report_card.decode() accepts the lengths of every format.
+    # length byte says which, and report_card.decode() accepts the lengths of every format. `blob` is the Deep block of a v11
+    # link (expand_card_v2 returns it); it is decoded into out["deep"].
     if len(rec) < 6 or rec[0] != 0xA6 or len(rec) != rec[2] + 6:
         raise QrError("report card record is not a stored card (0xA6, length byte, payload, CRC)")
     ln = int.from_bytes(rec[2:3], "little")
     crc = int.from_bytes(rec[-2:], "little")
-    c = 0xFFFF
-    for x in rec[:-2]:   # CRC-16/CCITT-FALSE
-        c ^= x << 8
-        for _ in range(8):
-            c = ((c << 1) ^ 0x1021) & 0xFFFF if c & 0x8000 else (c << 1) & 0xFFFF
+    ok = _crc16(rec[:-2]) == crc
+    if not ok and ln >= 34 and rec[4 + 33] == report_card.FORMAT:
+        # A link packed by a format-10 firmware carries the CRC of its format-10 record; v2 expansion writes the current format
+        # byte, so retry with the one before it.
+        old = bytearray(rec[:-2])
+        old[4 + 33] = report_card.FORMAT - 1
+        ok = _crc16(old) == crc
     out = report_card.decode(rec[4:4 + ln])
-    out["_store_crc_ok"] = c == crc
+    out["_store_crc_ok"] = ok
+    if blob is not None:
+        out["deep"] = report_card.decode_deep(blob, out.get("ranges", ()))
     return out
 
 
@@ -471,10 +485,17 @@ CABLE_KIND_DEC = {0: 0, 1: 1, 2: 2, 3: 4, 4: 0xFF}
 
 
 def expand_card_v2(b: bytes) -> bytes:
-    """A schema v2 card record -> the 256-byte v1 record (format 10), so decode_card() reads it as before.
+    """A schema v2 card record -> the 256-byte v1 record (format 11), so decode_card() reads it as before."""
+    return expand_card_v2_deep(b)[0]
+
+
+def expand_card_v2_deep(b: bytes):
+    """A schema v2 card record -> (the 256-byte v1 record in format 11, the Deep block or None).
     A v2 record packed before the rebalanced varint existed ends at the CRC: the varint is then absent and reads 0;
     likewise the v9 spread presence bit and the v10 sweep presence bit. The run's level byte follows only on a Light or
-    Deep card (Medium writes nothing), read when at least a byte is left before the CRC."""
+    Deep card (Medium writes nothing), read when at least a byte is left before the CRC. A Deep card's level byte is followed
+    (v11) by the Deep block when 24 more bits remain: a presence bit, a u12 bit count, then that many bits (the blob form of
+    report_card.decode_deep: u16 LE count + bytes)."""
     r = BitR(b)
     if r.get(8) != 2:
         raise QrError("not a schema v2 record")
@@ -514,7 +535,7 @@ def expand_card_v2(b: bytes) -> bytes:
     n_ranges = r.get(3)
     rec[p + 31] = n_ranges
     rec[p + 32] = r.get(8)          # ev_flags
-    rec[p + 33] = 10                # format 10 (v2 always expands to the current format; the v8 byte below)
+    rec[p + 33] = report_card.FORMAT   # v2 always expands to the current format
     nl = r.get(5)
     rec[p + 34:p + 34 + nl] = bytes(r.get(7) for _ in range(nl))
     rec[p + 54] = r.get(8)                                   # pdp_w
@@ -577,9 +598,17 @@ def expand_card_v2(b: bytes) -> bytes:
                 rec[p + 214 + i] = r.get(8)
     if len(b) * 8 - r.pos >= 24:   # the run's level (v8 spare byte 197), a whole byte: the CRC's padding is at most 7 bits
         rec[p + 197] = r.get(8)
+    blob = None
+    if len(b) * 8 - r.pos >= 24 and r.get(1):   # v11: the Deep block (Deep cards only; the CRC's padding is at most 7 bits)
+        nbits = r.get(12)
+        raw = [r.get(1) for _ in range(nbits)]
+        data = bytearray((nbits + 7) // 8)
+        for i, bit in enumerate(raw):
+            data[i >> 3] |= bit << (i & 7)
+        blob = bytes([nbits & 0xFF, nbits >> 8]) + bytes(data)
     rec[254] = r.get(8)      # the v1 record's CRC-16, carried so the integrity check is unchanged
     rec[255] = r.get(8)
-    return bytes(rec)
+    return bytes(rec), blob
 
 
 def expand_emk_v2(b: bytes) -> bytes:
@@ -631,7 +660,7 @@ def expand_emk_v2(b: bytes) -> bytes:
 
 
 def decode_card_v2(rec: bytes):
-    return decode_card(expand_card_v2(rec))
+    return decode_card(*expand_card_v2_deep(rec))
 
 
 def decode_emarker_v2(rec: bytes):
@@ -692,8 +721,15 @@ def decode_texts(texts):
             info["record_len"] = len(rec)
         if info["schema"] == 2 and info["type"] in ("CARD", "EMK"):
             # a schema 2 frame carries the bit-packed v2 record: expand it to the v1 record and decode as before
-            rec = expand_card_v2(rec) if info["type"] == "CARD" else expand_emk_v2(rec)
+            blob = None
+            if info["type"] == "CARD":
+                rec, blob = expand_card_v2_deep(rec)
+            else:
+                rec = expand_emk_v2(rec)
             info["v2_expanded"] = True
+            info["record_hex"] = rec.hex()
+            info["record"] = decode_card(rec, blob) if info["type"] == "CARD" else DECODERS[info["type"]](rec)
+            return info, 0
         info["record_hex"] = rec.hex()
         info["record"] = DECODERS[info["type"]](rec)
     except (QrError, ValueError, KeyError, report_card.BadCard) as e:

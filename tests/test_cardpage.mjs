@@ -262,7 +262,7 @@ test("bad fragments say what is wrong", () => {
   flipped[20] ^= 1;
   assert.equal(code(BASE + "1c." + toB64url(flipped)), "bad-crc");
   const newer = payloadOf("fh22");
-  newer[33] = 11;   // one past format 10
+  newer[33] = 12;   // one past format 11
   assert.equal(code(BASE + "1c." + toB64url(recordOf(newer))), "newer-card");
 });
 
@@ -275,9 +275,10 @@ test("the LZ4 reader refuses a back-reference before the start and a run past th
 });
 
 test("the page loads nothing from the network", () => {
-  for (const f of ["index.html", "card.js", "records.js", "view.js"]) {
+  for (const f of ["index.html", "card.js", "deep.js", "records.js", "view.js"]) {
     const src = readFileSync(new URL(`../docs/site/r/${f}`, import.meta.url), "utf8");
-    assert.doesNotMatch(src, /https?:\/\/(?!yarost12\.github\.io|github\.com\/YaroST12)/, f);
+    // the one other address is the SVG namespace name view.js gives createElementNS: a name, nothing is loaded from it
+    assert.doesNotMatch(src, /https?:\/\/(?!yarost12\.github\.io|github\.com\/YaroST12|www\.w3\.org\/2000\/svg)/, f);
     assert.doesNotMatch(src, /\b(fetch|XMLHttpRequest|WebSocket|sendBeacon)\b/, f);
   }
 });
@@ -435,4 +436,88 @@ test("a sweep that tracked worse than 100 mV is a caution, never red", () => {
   delete pps.sweep.fold_mv; delete pps.sweep.fold_from_mv;
   pps.fail_mv = 15000; pps.max_mv = 13000;                     // a failed range keeps its own verdict and no caution row
   assert.ok(!K2Card.sections(base).flatMap((s) => s.groups).flatMap((g) => g.rows).some((r) => r.label === "Caution"));
+});
+
+
+// ---- format 11: the Deep block (docs/site/r/deep.js), after the level byte of a version '2' card -----------------------------------
+const qrshare = Object.fromEntries(readFileSync(new URL("./fixtures/qrshare.tsv", import.meta.url), "utf8")
+  .split("\n").filter((l) => l && !l.startsWith("#")).map((l) => l.split("\t")).map((c) => [c[0], fromHex(c[3])]));
+const deepLink = BASE + "2c." + toB64url(qrshare.card_deep_v2);
+const deepJson = JSON.parse(readFileSync(new URL("./fixtures/deep_decoded.json", import.meta.url), "utf8"));
+const K2Deep = require("../docs/site/r/deep.js");
+
+test("the golden Deep card's block decodes to what tools/k2_qr.py reads from the same link", () => {
+  const card = K2Card.parseLink(deepLink).card;
+  assert.equal(card.level, "Deep");
+  assert.equal(card.deep_error, undefined);
+  assert.deepEqual(JSON.parse(JSON.stringify(card.deep)), deepJson);
+});
+
+test("a card without a block shows no Deep section, and a Deep card is the same card plus the block", () => {
+  const plain = K2Card.parseLink(BASE + "2c." + toB64url(qrshare.card_v2)).card;
+  assert.equal(plain.deep, undefined);
+  assert.equal(K2Card.sections(plain).find((s) => s.title === "Deep run details"), undefined);
+  const deep = K2Card.parseLink(deepLink).card;
+  const { deep: _d, ...rest } = deep;
+  assert.equal(K2Card.sections(deep).filter((s) => s.title === "Deep run details").length, 1);
+  assert.equal(rest.level, "Deep");
+});
+
+test("the Deep section lists the spec summary, the SVOOC ceiling and one error graph per swept range", () => {
+  const s = K2Card.sections(K2Card.parseLink(deepLink).card).find((x) => x.title === "Deep run details");
+  const titles = s.groups.map((g) => g.title);
+  assert.deepEqual(titles, ["PD spec check", "SVOOC ceiling", "PPS sweep error", "AVS sweep error"]);
+  const spec = s.groups[0];
+  assert.equal(spec.tone, "fail");
+  assert.match(spec.rows.map((r) => r.value).join("|"), /1 passed, 1 failed, 1 skipped, 1 unverified, 23 not run/);
+  assert.match(spec.rows.map((r) => r.value).join("|"), /-32\.1 ms worst, 7 fails at PDO 5 to 9/);
+  assert.deepEqual(s.groups[1].rows.map((r) => r.value), ["stopped", "5.5A", "11.2V", "2", "3.3 s"]);
+  for (const g of s.groups.slice(2)) {
+    assert.deepEqual(g.graph.limits, [100, 300]);
+    assert.equal(g.graph.data.buckets.length, 32);
+  }
+  assert.match(s.groups[2].rows.map((r) => r.value).join("|"), /-20 mV to \+60 mV/);
+});
+
+test("the graph geometry keeps the limit lines in view, breaks a run at an empty bucket and stays inside the box", () => {
+  const g = K2Card.parseLink(deepLink).card.deep.graphs[0];
+  const m = { l: 38, t: 6, r: 6, b: 18 };
+  const p = K2Deep.plot(g, 320, 150, m, [100, 300]);
+  assert.ok(p.ymax >= 350);
+  assert.equal(p.lines.length, 4);
+  for (const l of p.lines) assert.ok(l.y >= m.t && l.y <= 150 - m.b);
+  assert.ok(p.y0 > m.t && p.y0 < 150 - m.b);
+  assert.equal(p.runs.length, 1);
+  const holed = JSON.parse(JSON.stringify(g));
+  holed.buckets[10] = null;
+  assert.equal(K2Deep.plot(holed, 320, 150, m, [100, 300]).runs.length, 2);
+  for (const run of p.runs) for (const n of (run.band + " " + run.mean).match(/-?\d+(\.\d+)?/g)) assert.ok(Number.isFinite(+n));
+  const flat = { ...g, buckets: g.buckets.map(() => null) };
+  assert.equal(K2Deep.plot(flat, 320, 150, m, [100, 300]).runs.length, 0);
+  assert.equal(K2Deep.summary(flat), null);
+});
+
+test("a link of a format 10 firmware keeps its own CRC and has no block", () => {
+  const rec = fromHex("024d3c2b1aac0534120302077b12efcdab0f570a10002296e76b90ad760500080022b30000000000e072d4120f0080cd00000000000000000000000108e1c60d00000108214d902500000000000000000100f01603");   // tools/k2_qr.py's test: the golden card at format 10, its CRC over the format 10 record
+  const r = K2Card.parseLink(BASE + "2c." + toB64url(rec));
+  assert.equal(r.card.deep, undefined);
+  assert.equal(r.card.name, "Desk 65W");
+  const bad = Uint8Array.from(rec);
+  bad[bad.length - 1] ^= 1;
+  assert.throws(() => K2Card.parseLink(BASE + "2c." + toB64url(bad)), (e) => e.code === "bad-crc");
+});
+
+test("a Deep block this page cannot read leaves the card and says why", () => {
+  const blob = Uint8Array.from(K2Card.expandCardV2(qrshare.card_deep_v2).deep);
+  const cut = blob.slice(0, blob.length - 20);
+  assert.throws(() => K2Deep.decode(cut, []), (e) => e.code === "bad-deep");
+  const lying = Uint8Array.from(blob);
+  lying[0] = 0xFF; lying[1] = 0x0F;   // 4095 bits: more than the format allows
+  assert.throws(() => K2Deep.decode(lying, []), (e) => e.code === "bad-deep");
+  const card = JSON.parse(JSON.stringify(K2Card.parseLink(deepLink).card));
+  delete card.deep;
+  card.deep_error = "Deep block is cut short";
+  const s = K2Card.sections(card).find((x) => x.title === "Deep run details");
+  assert.equal(s.groups[0].title, "Not shown");
+  assert.equal(s.groups[0].rows[0].value, "Deep block is cut short");
 });
