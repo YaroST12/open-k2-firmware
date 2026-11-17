@@ -1437,17 +1437,21 @@ void ChargerTestPage::on_stage(bool entering) {
 }
 // The spec rows file of the run in hand for the remote: the engine's projection while it holds this run's records, else the journal's
 // file (its header must name this run). 0 = none. Both sources give the same bytes (rows_fill writes what the journal stores).
+// The journal's rows file when its header names `run`: its size and the parsed index. 0 = none.
+static size_t journal_rows_index(uint32_t run, specsec::RowsIndex &ix) {
+    const size_t size = charger_journal::hw::spec_rows_size();
+    uint8_t hdr[specsec::kRowsHdr];
+    if (size < specsec::kRowsHdr || size > 0xFFFFu || !charger_journal::hw::spec_rows_read(0, hdr) || !specsec::rows_parse(hdr, size, run, ix)) return 0;
+    return size;
+}
 uint16_t ChargerTestSession::spec_rows_len() const {
     if (!runner_.evidence().spec.shown()) return 0;
 #if K2_PDSPEC
     if (spec_live_run_ && spec_live_run_ == runner_.run_id())
         if (const pdspec::Engine *e = ctx_.ui->pd_spec().engine_for_test()) return specsec::rows_total(*e) ? static_cast<uint16_t>(specsec::rows_file_size(*e)) : 0;
 #endif
-    const size_t size = charger_journal::hw::spec_rows_size();
-    uint8_t hdr[specsec::kRowsHdr];
     specsec::RowsIndex ix;
-    if (size < specsec::kRowsHdr || size > 0xFFFFu || !charger_journal::hw::spec_rows_read(0, hdr) || !specsec::rows_parse(hdr, size, runner_.run_id(), ix)) return 0;
-    return static_cast<uint16_t>(size);
+    return static_cast<uint16_t>(journal_rows_index(runner_.run_id(), ix));
 }
 size_t ChargerTestSession::spec_rows_read(uint16_t off, std::span<uint8_t> out) const {
     const size_t total = spec_rows_len();
@@ -1480,10 +1484,8 @@ size_t ChargerTestSession::spec_rows_read(uint16_t off, std::span<uint8_t> out) 
     }
 #endif
     if (!spec_list_.live) {
-        const size_t size = charger_journal::hw::spec_rows_size();
-        uint8_t hdr[specsec::kRowsHdr];
         specsec::RowsIndex ix;
-        if (size < specsec::kRowsHdr || !charger_journal::hw::spec_rows_read(0, hdr) || !specsec::rows_parse(hdr, size, s_.runner_.run_id(), ix)) return;
+        if (!journal_rows_index(s_.runner_.run_id(), ix)) return;
         spec_list_.n = static_cast<uint16_t>(ix.count(static_cast<size_t>(k)));
         spec_list_.first = static_cast<uint16_t>(ix.first(static_cast<size_t>(k)));
         spec_list_.worst = static_cast<uint8_t>(ix.worst(static_cast<size_t>(k)));
@@ -2028,22 +2030,13 @@ static FooterTone spec_footer(StrBuf<32>& f, int check, const specsec::Cell& c, 
             spectext::put_row_name(r, name);
             spectext::put_row_value(r, val);
             if (fail) spectext::put_row_tail(r, margin);
-            // "worst 12→15V: 16.1V, 1.1V over" in as much of it as the line holds (27 cells): the word "over" goes first
-            // ("worst 9→12V: 540ms +40ms"), then the margin, then the value
+            // "worst 9→12V: 540ms +40ms" in as much of it as the line holds (27 cells): the margin goes first, then the value
             StrBuf<48> g;
-            for (int part = 3; part >= 0; --part) {
+            for (int part = 2; part >= 0; --part) {
                 g.clear();
                 g.put("worst ").put(name.view());
                 if (part >= 1 && !val.view().empty()) g.put(": ").put(val.view());
-                if (part >= 2 && !margin.view().empty()) {
-                    std::string_view m = margin.view();
-                    if (part == 3 && !(r.flags & specsec::kRowProg)) {
-                        if (m[0] == '+') m.remove_prefix(1);
-                        g.put(", ").put(m).put(" over");
-                    } else {
-                        g.put(m[0] == '+' || m[0] == '-' ? " " : " +").put(m);
-                    }
-                }
+                if (part >= 2 && !margin.view().empty()) g.put_char(' ').put(margin.view());
                 if (text_cells(g.view()) <= kFooterCells) break;
             }
             f.put(g.view());

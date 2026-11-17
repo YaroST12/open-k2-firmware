@@ -254,52 +254,60 @@ inline bool pass_row(sc::Check c, const sc::PassRec& p, Row& r) {
     return true;
 }
 
-// Calls f(row) for the rows of one cell in record order.
-template <class F>
-void for_rows(const pdspec::Engine& e, std::size_t cell, F&& f) {
+// A row's rank for "the worst": failing first, then the larger margin (a never event ranks highest of its kind).
+constexpr std::int32_t rank(const Row& r) { return ((r.flags & kRowFail) ? (1 << 20) : 0) + r.margin; }
+
+// One walk over the rows of one cell in record order: how many there are, the index of the worst, and row k when it exists. One
+// out-of-line body serves row_count, row_at and worst_row (three template walks cost 600 bytes of flash).
+struct Scan {
+    std::size_t n = 0, worst = 0;
+    bool got = false;
+    Row at;
+};
+[[gnu::noinline]] inline void scan(const pdspec::Engine& e, std::size_t cell, std::size_t k, Scan& s) {
+    s = {};
     if (!has_list(cell)) return;
+    std::int32_t best = INT32_MIN;
+    const auto take = [&](const Row& r) {
+        if (s.n == k) { s.at = r; s.got = true; }
+        if (rank(r) > best) { best = rank(r); s.worst = s.n; }
+        ++s.n;
+    };
     const sc::Check c = kOrder[cell];
     if (c < sc::Check::PpsMonotonic) {
         for (const sc::TransRec& t : e.trans()) {
             const std::uint16_t from = e.fixed_mv(t.from), to = e.fixed_mv(t.to);
             Fixed fx;
-            if (fixed_of(c, t, from, to, fx)) f(make_fixed(c, t, from, to, fx));
+            if (fixed_of(c, t, from, to, fx)) take(make_fixed(c, t, from, to, fx));
         }
     } else {
         for (const sc::PassRec& p : e.passes()) {
             Row r;
-            if (pass_row(c, p, r)) f(r);
+            if (pass_row(c, p, r)) take(r);
         }
     }
 }
 
-// A row's rank for "the worst": failing first, then the larger margin (a never event ranks highest of its kind).
-constexpr std::int32_t rank(const Row& r) { return ((r.flags & kRowFail) ? (1 << 20) : 0) + r.margin; }
-
 }  // namespace rows_detail
 
 inline std::size_t row_count(const pdspec::Engine& e, std::size_t cell) {
-    std::size_t n = 0;
-    rows_detail::for_rows(e, cell, [&n](const Row&) { ++n; });
-    return n;
+    rows_detail::Scan s;
+    rows_detail::scan(e, cell, SIZE_MAX, s);
+    return s.n;
 }
 
 inline bool row_at(const pdspec::Engine& e, std::size_t cell, std::size_t k, Row& out) {
-    std::size_t i = 0;
-    bool got = false;
-    rows_detail::for_rows(e, cell, [&](const Row& r) { if (i++ == k) { out = r; got = true; } });
-    return got;
+    rows_detail::Scan s;
+    rows_detail::scan(e, cell, k, s);
+    if (s.got) out = s.at;
+    return s.got;
 }
 
 // The index (within the cell's rows) of the worst one; 0 when the cell lists nothing.
 inline std::size_t worst_row(const pdspec::Engine& e, std::size_t cell) {
-    std::size_t i = 0, best = 0;
-    std::int32_t best_rank = INT32_MIN;
-    rows_detail::for_rows(e, cell, [&](const Row& r) {
-        if (rows_detail::rank(r) > best_rank) { best_rank = rows_detail::rank(r); best = i; }
-        ++i;
-    });
-    return best;
+    rows_detail::Scan s;
+    rows_detail::scan(e, cell, SIZE_MAX, s);
+    return s.worst;
 }
 
 inline std::size_t rows_total(const pdspec::Engine& e) {
@@ -315,10 +323,12 @@ inline void rows_fill(const pdspec::Engine& e, std::uint32_t run_id, std::size_t
     std::array<std::uint8_t, kCells> worst{};
     std::size_t sum = 0;
     for (std::size_t i = 0; i < kCells; ++i) {
-        std::size_t c = row_count(e, i);
+        rows_detail::Scan s;
+        rows_detail::scan(e, i, SIZE_MAX, s);
+        std::size_t c = s.n;
         if (sum + c > kRowsMax) c = kRowsMax - sum;
         counts[i] = static_cast<std::uint16_t>(c);
-        worst[i] = static_cast<std::uint8_t>(c ? worst_row(e, i) : 0);
+        worst[i] = static_cast<std::uint8_t>(c && s.worst < c ? s.worst : 0);
         sum += c;
     }
     for (std::size_t at = 0; at < n;) {
