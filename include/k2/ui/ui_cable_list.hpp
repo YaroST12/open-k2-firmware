@@ -30,6 +30,7 @@
 #include <string_view>
 
 #include "k2/chargertest/ct_cable.hpp"
+#include "k2/core/bss_zero.hpp"
 #include "k2/pd/emlib.hpp"
 #include "k2/pd/emrec.hpp"
 #include "k2/ui/ui_calc.hpp"
@@ -117,24 +118,28 @@ private:
     void persist();   // writes selected_ when it was chosen and is not what the record holds (never per tick; a refused write is retried later)
     Mark mark_of(ctcable::Choice, View) const;
 
-    std::array<uint16_t, emlib::kCapacity> saved_{};
-    int saved_count_ = 0;
+    // The one instance is UiContext::cables in the .bss global Ui (the tests build locals, which keep the zeroing on the
+    // host), so every zero default is elided on ARM.
+    std::array<uint16_t, emlib::kCapacity> saved_ K2_BSS_ZERO;
+    int saved_count_ K2_BSS_ZERO;
     struct NameSlot {
-        uint16_t seq = 0;
-        char name[emlib::kNameMax + 1] = {};
+        uint16_t seq K2_BSS_ZERO;
+        char name[emlib::kNameMax + 1] K2_BSS_ZERO;
     };
-    std::array<NameSlot, kNameSlots> names_{};   // slot = row index % kNameSlots, valid while its seq is the row's clone
-    uint32_t library_gen_ = 0;
-    bool synced_ = false;
-    ctcable::Choice selected_ = ctcable::kDefaultChoice;
+    std::array<NameSlot, kNameSlots> names_ K2_BSS_ZERO;   // slot = row index % kNameSlots, valid while its seq is the row's clone
+    uint32_t library_gen_ K2_BSS_ZERO;
+    bool synced_ K2_BSS_ZERO;
+    // Zero until load() (Ui init) runs: load() sets the default (the EPR spoof, not chosen) or the record, so the default
+    // never costs a non-zero initialiser (that would move the whole .bss Ui into .data).
+    ctcable::Choice selected_{};
     ctcable::Choice persisted_{};   // what /cable.cfg holds, as far as this boot knows (valid while recorded_)
-    bool recorded_ = false;         // /cable.cfg holds a record
-    bool chosen_ = false;           // selected_ was picked (or read from the record), not the default
-    char selected_name_[emlib::kNameMax + 1] = {};
+    bool recorded_ K2_BSS_ZERO;     // /cable.cfg holds a record
+    bool chosen_ K2_BSS_ZERO;       // selected_ was picked (or read from the record), not the default
+    char selected_name_[emlib::kNameMax + 1] K2_BSS_ZERO;
     ctcable::Choice armed_{};
-    char armed_name_[emlib::kNameMax + 1] = {};
-    uint32_t armed_gen_ = 0;
-    bool armed_set_ = false;
+    char armed_name_[emlib::kNameMax + 1] K2_BSS_ZERO;
+    uint32_t armed_gen_ K2_BSS_ZERO;
+    bool armed_set_ K2_BSS_ZERO;
 };
 
 }  // namespace k2

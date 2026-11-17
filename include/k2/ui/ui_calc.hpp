@@ -7,6 +7,7 @@
 #include <span>
 #include <string_view>
 
+#include "k2/core/bss_zero.hpp"
 #include "k2/core/math_opt.hpp"
 
 namespace k2 {
@@ -27,13 +28,14 @@ public:
     uint32_t elapsed_s(uint32_t now_ms) const { return (now_ms - start_ms_) / 1000u; }
 
 private:
-    int64_t uj_ = 0;
-    int64_t uc_ = 0;
-    uint32_t start_ms_ = 0;
-    uint32_t last_ms_ = 0;
-    int32_t last_mw_ = 0;
-    int32_t last_ma_ = 0;
-    bool primed_ = false;
+    // Zero initialisers only on ARM-elided (K2_BSS_ZERO): the one instance is UiContext::meter inside the .bss global Ui.
+    int64_t uj_ K2_BSS_ZERO;
+    int64_t uc_ K2_BSS_ZERO;
+    uint32_t start_ms_ K2_BSS_ZERO;
+    uint32_t last_ms_ K2_BSS_ZERO;
+    int32_t last_mw_ K2_BSS_ZERO;
+    int32_t last_ma_ K2_BSS_ZERO;
+    bool primed_ K2_BSS_ZERO;
 };
 
 // Reboot HoldCard arithmetic: the OK + Back chord held for held_ms of total_ms. The card shows from kHoldCardMs.
@@ -71,8 +73,8 @@ public:
         return Step::Card;
     }
 private:
-    uint32_t since_ms_ = 0;
-    bool both_ = false, active_ = false, fired_ = false;
+    uint32_t since_ms_ K2_BSS_ZERO;   // the one instance is Ui::chord_ in the .bss global Ui
+    bool both_ K2_BSS_ZERO, active_ K2_BSS_ZERO, fired_ K2_BSS_ZERO;
 };
 
 // Home flow rail: one chevron of `count` is bright, and it steps every kChevStepMs toward the sink.
@@ -152,8 +154,8 @@ public:
     uint32_t age_s(uint32_t now_ms) const { return seen_ ? (now_ms - last_ms_) / 1000u : 0u; }
 
 private:
-    bool seen_ = false;
-    uint32_t last_ms_ = 0;
+    bool seen_ K2_BSS_ZERO;   // the one instance is UiContext::live in the .bss global Ui
+    uint32_t last_ms_ K2_BSS_ZERO;
 };
 int fmt_u32(std::span<char> out, uint32_t value, int width);
 // Counter in at most 5 chars: < 10000 exact, < 10 000 000 floor thousands + 'K', else floor millions + 'M'.

@@ -7,6 +7,7 @@
 #include <array>
 #include <cstdint>
 
+#include "k2/core/bss_zero.hpp"
 #include "k2/core/math_opt.hpp"
 #include "k2/fastcharge/fc_engine.hpp"
 #include "k2/fastcharge/fc_scan.hpp"
@@ -241,10 +242,12 @@ private:
     int sel_ = 1;
     int target_ = 9000;
     int ceil_ = kNoCeilingMv;
-    int held_ = 0, armed_target_ = 0, armed_sel_ = 0;
-    Stage stage_ = Stage::Pick;
-    bool armed_ = false, retarget_ = false;
-    uint32_t armed_ms_ = 0, session_ = 0, armed_session_ = 0;
+    // The one instance is UiContext::Remembered::trigger in the .bss global Ui: the zero defaults are elided on ARM,
+    // the three non-zero ones above stay. Stage::Pick is 0.
+    int held_ K2_BSS_ZERO, armed_target_ K2_BSS_ZERO, armed_sel_ K2_BSS_ZERO;
+    Stage stage_ K2_BSS_ZERO;
+    bool armed_ K2_BSS_ZERO, retarget_ K2_BSS_ZERO;
+    uint32_t armed_ms_ K2_BSS_ZERO, session_ K2_BSS_ZERO, armed_session_ K2_BSS_ZERO;
 };
 
 // Panel labels. Minus holds 6 characters, Plus 8, OK 6 (the slot lengths follow the physical buttons).

@@ -18,6 +18,8 @@
 #include <memory>
 #include <type_traits>
 
+#include "k2/core/bss_zero.hpp"
+
 namespace k2::trend {
 
 enum class Window : uint8_t { S10, S60, M10 };
@@ -170,10 +172,10 @@ private:
         SampleBuf s;                 // V, A, W per column
         uint8_t lim[kPoints];        // contract maximum, W
         uint16_t e[kPoints];         // energy points (wrapping, energy_unit_mwh)
-        uint8_t n = 0, head = 0;     // columns held, next column slot
-        uint8_t en = 0, ehead = 0;     // energy points held, next point slot
-        uint32_t due_ms = 0;           // the time the last column was due
-        uint32_t seq = 0;              // columns taken
+        uint8_t n K2_BSS_ZERO, head K2_BSS_ZERO;       // columns held, next column slot
+        uint8_t en K2_BSS_ZERO, ehead K2_BSS_ZERO;     // energy points held, next point slot
+        uint32_t due_ms K2_BSS_ZERO;                   // the time the last column was due
+        uint32_t seq K2_BSS_ZERO;                      // columns taken
     };
     static constexpr uint16_t clamp(uint32_t v) { return v > 0xFFFE ? 0xFFFE : static_cast<uint16_t>(v); }
     static constexpr int at(int head, int back) { return (head - 1 - back + 2 * kPoints) % kPoints; }
@@ -207,8 +209,8 @@ private:
         t.seq++;
     }
     Tier t_[3];
-    uint32_t acc_[3] = {}, acc_n_ = 0;
-    bool started_ = false;
+    uint32_t acc_[3] K2_BSS_ZERO, acc_n_ K2_BSS_ZERO;
+    bool started_ K2_BSS_ZERO;
 };
 
 using Trend = TrendBase<false>;
