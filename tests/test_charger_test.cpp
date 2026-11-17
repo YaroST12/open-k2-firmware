@@ -8268,6 +8268,64 @@ static void test_light_lists_the_epr_levels_as_advertised() {
         CHECK_EQ(f.entry_times.size(), size_t(0));
     }
 }
+// The default cable identity (EPR 50 V / 5 A spoof, owner decision 2026-11-17): the K2 presents the cable, nobody read one. A source
+// whose PDO 1 has the EPR bit gets its EPR fixed levels and EPR AVS tested up to the monitor ceiling, SPR AVS runs, and nothing is
+// skipped as a physical cable limit. Inputs as apply_cable() / confirmed_start produce them: the built-in's own cable VDO limits.
+static Fake epr_spoof_fake() {
+    Fake f = epr_capable_fake();
+    const auto facts = ctcable::facts(emrec::builtin_cable(ctcable::kBuiltinKind));
+    CHECK_EQ(facts.max_mv, 50000); CHECK_EQ(facts.max_ma, 5000);
+    f.in.spoof_on = true; f.in.spoof_mv = facts.max_mv; f.in.spoof_ma = facts.max_ma;
+    f.in.cable_observed = false; f.in.cable_mv = 20000; f.in.cable_ma = 3000;   // nobody read a cable
+    f.in.cap_mv = 36000;
+    f.caps.num_pdos = 2; f.caps.pdos[1] = pd::decode_pdo(0xE0000000 | (50u << 10) | 200);   // SPR AVS
+    f.info_list.pdos[1] = f.caps.pdos[1];
+    f.epr_caps = f.info_list;
+    return f;
+}
+static void test_epr_spoof_identity_tests_epr_and_avs() {
+    Fake f = epr_spoof_fake();
+    ct::Runner r(f);
+    CHECK_EQ(r.start(f.caps, ct::with_level({.selected = ct::bit(A::Epr) | ct::bit(A::EprAvs) | ct::bit(A::SprAvs)}, ct::Level::Deep), f.in, true),
+             ct::Reason::None);
+    f.tick(r, 600000);
+    CHECK_EQ(int(r.state()), int(ct::State::Done));
+    unsigned mv28 = 0, mv36 = 0, mv48 = 0, epr_avs_pass = 0, spr_avs_pass = 0;
+    for (const auto& s : r.steps()) {
+        CHECK_EQ(s.reason == ct::Reason::CableLimit, false);   // the spoof identity's limits allow it: never "physical cable limit"
+        if (s.algorithm == A::Epr && s.mv == 28000) { mv28 += s.verdict == ct::Verdict::Pass; }
+        if (s.algorithm == A::Epr && s.mv == 36000) { mv36 += s.verdict == ct::Verdict::Pass; }
+        if (s.algorithm == A::Epr && s.mv == 48000) { CHECK_EQ(int(s.verdict), int(ct::Verdict::Skip)); CHECK_EQ(int(s.reason), int(ct::Reason::OverCap)); ++mv48; }
+        if (s.algorithm == A::EprAvs && s.verdict == ct::Verdict::Pass) { ++epr_avs_pass; CHECK_EQ(s.mv <= 36000, true); }
+        if (s.algorithm == A::SprAvs && s.verdict == ct::Verdict::Pass) ++spr_avs_pass;
+    }
+    CHECK_EQ(mv28, 1); CHECK_EQ(mv36, 1); CHECK_EQ(mv48, 1);
+    CHECK_EQ(epr_avs_pass >= 1, true);
+    CHECK_EQ(spr_avs_pass >= 1, true);
+    for (const auto& c : f.choices) CHECK_EQ(c.mv <= 36000, true);
+    CHECK_EQ(f.in.pd.epr_mode, false);
+}
+// Light only lists, spoof or not: no EPR entry, no Request above the 5 V row.
+static void test_epr_spoof_identity_at_light_makes_no_requests() {
+    Fake f = epr_spoof_fake();
+    f.info_mode = 1;
+    ct::Runner r(f);
+    CHECK_EQ(r.start(f.caps, ct::with_level({.selected = ct::bit(A::Epr) | ct::bit(A::EprAvs) | ct::bit(A::SprAvs)}, ct::Level::Light), f.in, true),
+             ct::Reason::None);
+    f.tick(r, 90000);
+    CHECK_EQ(int(r.state()), int(ct::State::Done));
+    unsigned levels = 0;
+    for (const auto& s : r.steps()) {
+        CHECK_EQ(s.reason == ct::Reason::CableLimit, false);
+        if (s.algorithm != A::Epr && s.algorithm != A::EprAvs) continue;
+        ++levels;
+        CHECK_EQ(int(s.verdict), int(ct::Verdict::Skip)); CHECK_EQ(int(s.reason), int(ct::Reason::Advertised));
+    }
+    CHECK_EQ(levels >= 3, true);
+    CHECK_EQ(f.entry_times.size(), size_t(0));
+    CHECK_EQ(f.fc_requests, 0);
+    for (const auto& c : f.choices) { CHECK_EQ(c.pos, 1); CHECK_EQ(c.mv, 5000); CHECK_EQ(c.hunt, false); }
+}
 // ---- The PD spec stage (spec_section.hpp) of a Deep run ------------------------------------------------------------------
 // The pdspec engine runs the no-load conformance checks on the Pd unit's link, at the end of the Pd unit, once its contract is back
 // at 5 V and the charger's identity was asked. The Runner starts it through Env::spec_start, waits for Input::spec_running to drop,
@@ -8602,6 +8660,7 @@ int main() {
     test_self_powered_run_sweeps_from_5v();
     test_legacy_row_waits_through_a_source_restart(); test_legacy_restart_wait_is_bounded_and_a_load_still_refuses();
     test_level_maps_to_the_run_switches(); test_level_plans_per_level(); test_light_run_requests_nothing_but_5v(); test_light_lists_the_epr_levels_as_advertised();
+    test_epr_spoof_identity_tests_epr_and_avs(); test_epr_spoof_identity_at_light_makes_no_requests();
     test_a_resumed_light_run_stays_light();
     test_the_page_names_the_run_level();
     test_spec_stage_runs_once_in_a_deep_pd_unit(); test_spec_stage_is_deep_only(); test_spec_refusal_is_recorded_and_the_run_goes_on(); test_spec_cancel_ends_in_order();

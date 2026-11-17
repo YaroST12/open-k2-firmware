@@ -515,8 +515,14 @@ amber "ARMED" pill; on the Cable step the pick wears "NEXT" and the identity ans
 differ, and the shared row keeps "ARMED" when pick and armed are the same (with nothing armed the pick is the radio
 alone). Review shows the choice as the "Spoof" row.
 The selection is remembered across power cycles (`/cable.cfg`, `include/k2/chargertest/cablepref.hpp`): it is written only when it
-changes, read at Ui init before the boot arming, so "pick a cable, then PLUS-boot" arms it on a self-powered boot (a
-saved clone that is gone, or a damaged record, reads as Off; a HID-powered boot restores it but does not arm).
+changes, read at Ui init before the boot arming, so "pick a cable, then PLUS-boot" arms it on a self-powered boot (a HID-powered
+boot restores it but does not arm).
+The default is the built-in EPR 50 V / 5 A cable (`ctcable::kDefaultChoice`, owner decision 2026-11-17: when the EPR and AVS bits
+are set they are tested). It is START's: with no record, a damaged one, or a record naming a saved clone that is gone, `selected()` (the
+dialog, `Cmd::ChargerCable`, `confirmed_start`) answers the default while `chosen()` stays Off, and only `chosen()` feeds the boot
+arming, so a blank volume arms nothing at boot. The default is never written. An explicit pick, `Off (real cable)` included, is a record
+like any other and is honoured (`tools/ct_start.py --cable off` makes it too). A record that names a gone clone is removed
+(`[CABLE] selection cleared`). OK on the Cable step with the cursor on the default row is a pick and records EPR.
 Arming stays explicit: the wizard arms at START, Tools -> Spoof arms on OK (OK on the armed row disarms; OK on Off
 selects "no identity" and disarms). The Ra mode is the charger test's business and is never switched on from Tools.
 
@@ -556,7 +562,8 @@ The resume path never asks for a confirmation. There is no "Ask" chooser anywher
 (Ask) are retired and never entered; they stay reserved so the remote `stage` values do not move (the Custom list is
 the new stage 14; remote and web clients show it as "custom"). Remote `charger-cable` (`ctcable::Choice`) sets the same
 choice; the resume path re-arms the journaled identity. `tools/ct_start.py` picks "All tests" on Tests (OK advances to
-Spoof cable), presses OK on Spoof cable (advances to Review), then OK on "review" (twice), never in "waiting", answers "refuse" with
+Spoof cable), leaves the cable to the K2's own choice (the EPR 50 V / 5 A default, or what was picked) unless `--cable` names one, reads
+the choice back and prints it, presses OK on Spoof cable (advances to Review), then OK on "review" (twice), never in "waiting", answers "refuse" with
 Back, and treats Review after a "waiting" as the K2's refusal. `tools/ui_walk.py` expects a cursor of "whatever the
 device had" after a pick (`None`), since Back lands on the pick in force.
 
@@ -599,7 +606,7 @@ asks the page for it while detached, right before `attach(mode)` with `mode != L
 | `end_legacy` closing Pd attach | no call: the run is over |
 | Self-powered or bus-powered K2 | no call, ever: the pinned Rd cannot be opened between units, so the Ra armed at boot stays for the whole run |
 
-Why: keep the identity scoped to the units it serves (PD). Note: the Baseus 70W evidence first read as `ra-disables-legacy` was really `legacy-off-on-direct-plug` (docs/CHARGER_QUIRKS.md);
+Why: keep the identity scoped to the units it serves (PD). The default EPR identity follows the same rule. Note: the Baseus 70W evidence first read as `ra-disables-legacy` was really `legacy-off-on-direct-plug` (docs/CHARGER_QUIRKS.md);
 the Baseus 70W run with the EPR identity for the whole run went from 27 pass to 1 pass. The card header and the journal keep
 the chosen identity (`run_cable_`) for the whole run; only the electrical state follows the unit.
 

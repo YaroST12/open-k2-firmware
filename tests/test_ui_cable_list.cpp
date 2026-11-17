@@ -141,6 +141,8 @@ static void test_selection() {
     g_stub = StubState();
     add_clone(3, "Anker-USB2-60W");
     CableIdentityList l;
+    g_stub.cable_pref_set = false;   // a blank volume
+    l.load();
     l.sync();
     // Nothing picked yet: the EPR spoof is the START default, but nothing counts as chosen (boot arming stays off).
     CHECK_EQ(l.selected() == ctcable::kDefaultChoice ? 1 : 0, 1);
