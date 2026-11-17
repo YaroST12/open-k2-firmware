@@ -227,14 +227,18 @@ void unit_attach(bool legacy);
 // the sink forgets everything and the session turns PD-silent (Auto-CRC off), the source's D+/D- stay free for the probe.
 void unit_hold(bool legacy);
 
-// Lab listen attach (pd::Listen): Rd on the charger's port with Auto-CRC off and CONTROL1 in the passive profile (SOP, SOP', SOP''
+// Lab listen attach (pd::Listen): the run first forces a real detach - Rd off, both CC lines open, until VBUS is below vSafe0V
+// (pd::kListenVSafe0Mv) or pd::kListenDropMaxMs have passed - because a source in a contract ignores an Rd that only blinks. The wait
+// is a phase advanced from poll() (the VBUS comes from sink_vbus()), never a blocking loop. Then: Rd on the charger's port with Auto-CRC off and CONTROL1 in the passive profile (SOP, SOP', SOP''
 // received) for `secs` (0 = the default, at most pd::kListenMaxSecs), and nothing is ever transmitted - the TX choke point stays
 // shut and the receive path skips the sink engine, so no frame is acknowledged, answered or queued. Every received frame reaches the
 // PD trace and the Black Box as usual. `remote` carries what only the caller knows (a charger test, PD Stress, a twin run, a trigger
 // or an inline link); the driver adds its own facts. Returns pd::ListenRefusal::None when the window opened; a refusal touches nothing.
 // The window ends by timeout, listen_stop(), or another owner taking the unit's Rd (unit_detach / unit_attach / unit_hold /
 // rd_for_run); the end puts Rd off and leaves the K2 in the idle passive state, where the normal sink scan re-attaches.
-pd::ListenRefusal listen_start(std::uint8_t secs, std::uint8_t port, const pd::ListenFacts& remote);
+// `detach` = false skips the detach (Rd on at once) for a source that is already mid-negotiation. The window of `secs` opens when Rd
+// comes on. VBUS at Rd off, at Rd on and at the end is logged.
+pd::ListenRefusal listen_start(std::uint8_t secs, std::uint8_t port, const pd::ListenFacts& remote, bool detach = true);
 void listen_stop();
 bool listen_active();
 const pd::Listen& listen_status();

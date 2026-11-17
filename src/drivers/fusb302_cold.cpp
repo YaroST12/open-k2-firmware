@@ -1471,8 +1471,18 @@ bool rd_for_run_on() { return g_rd_start; }
 namespace {
 bool s_listen_wiring = false;   // listen_start's own unit_detach / unit_attach calls are not "another owner"
 void listen_end_log(const char* how) {
-    K2LOG("[LISTEN] End: %s after %u frames (window %u s, port label %u), Rd off, passive idle\n", how, unsigned(g_listen.frames()),
-          unsigned(g_listen.secs()), unsigned(g_listen.port()));
+    K2LOG("[LISTEN] End: %s after %u frames (window %u s, port label %u, VBUS %d mV), Rd off, passive idle\n", how, unsigned(g_listen.frames()),
+          unsigned(g_listen.secs()), unsigned(g_listen.port()), int(g_vbus_mv));
+}
+// The window opens: Rd on with Auto-CRC off and the passive CONTROL1 (ENSOP1 ENSOP2 RX_FLUSH ENSOP1DB ENSOP2DB; plain SOP has no enable
+// bit and is always received), the TX choke point shut. Called once the detach wait is over, or at once for no_detach.
+void listen_rd_on() {
+    s_listen_wiring = true;
+    unit_attach(true);
+    s_listen_wiring = false;
+    g_crc_on = false;
+    g_tx_allowed = false;
+    write_sw1();
 }
 }  // namespace
 namespace detail {
@@ -1488,6 +1498,16 @@ void listen_tick() {
     // The e-marker spoof, the Ra mode or an inline link came along: Auto-CRC or the Rd would no longer be ours alone.
     const bool foreign = g_sop_prime_hook != nullptr || g_ra || inline_now();
     if (foreign) g_listen.lost();
+    // The detach wait: Rd stays off until the source's VBUS is gone (or 1.5 s), then it comes on and the window opens.
+    if (!foreign && g_listen.dropping()) {
+        const std::int32_t vbus = g_vbus_mv;
+        if (g_listen.settle(systick::millis(), vbus)) {
+            listen_rd_on();
+            K2LOG("[LISTEN] Rd on, VBUS %d mV after %u ms (%s), window %u s, Auto-CRC off, SOP/SOP'/SOP'' received, nothing transmitted\n",
+                  int(vbus), unsigned(g_listen.dropped_ms()), pd::listen_drop_name(g_listen.drop()), unsigned(g_listen.secs()));
+        }
+        return;
+    }
     if (!foreign && g_listen.tick(systick::millis())) return;
     g_tx_allowed = false;
     listen_end_log(pd::listen_end_name(g_listen.end()));
@@ -1497,7 +1517,7 @@ void listen_tick() {
 }
 }  // namespace detail
 
-pd::ListenRefusal listen_start(std::uint8_t secs, std::uint8_t port, const pd::ListenFacts& remote) {
+pd::ListenRefusal listen_start(std::uint8_t secs, std::uint8_t port, const pd::ListenFacts& remote, bool detach) {
     pd::ListenFacts f = remote;
     f.ports_busy = f.ports_busy || g_run_owner || busy_why() != pd::BusyWhy::None || g_rd_start || g_rd_op || g_ident_wait ||
                    g_ident_owns_rd || g_reread_owns_rd || g_reread_made_contract || reread_running() || probe_running() ||
@@ -1509,22 +1529,27 @@ pd::ListenRefusal listen_start(std::uint8_t secs, std::uint8_t port, const pd::L
     f.inline_mode = f.inline_mode || inline_now();
     f.rd_pinned = f.rd_pinned || g_pin_rd != 0;
     f.spoof_armed = f.spoof_armed || g_sop_prime_hook != nullptr || g_ra;
-    const pd::ListenRefusal r = g_listen.start(systick::millis(), secs, port, f);
+    const pd::ListenRefusal r = g_listen.start(systick::millis(), secs, port, f, detach);
     if (r != pd::ListenRefusal::None) {
         K2LOG("[LISTEN] Refused: %s\n", pd::listen_refusal_name(r));
         return r;
     }
-    // A fresh attach with Auto-CRC off: the source sees our Rd come back and starts over; with no GoodCRC for its caps it hard-resets
-    // and queries again, which is what the window is for. The unit's legacy mode keeps the TX choke point shut and the engine quiet.
+    // A real detach first: Rd off (SWITCHES0 pull-downs cleared, both CC lines open) and held off until the source's VBUS has dropped
+    // (poll() -> listen_tick()); a source in a contract keeps it and stays silent when Rd only blinks (hardware 2026-11-18). Then
+    // Rd comes back with Auto-CRC off: the source finds no GoodCRC for its caps, hard-resets and queries its cable again, which is
+    // what the window is for. The unit's legacy mode keeps the TX choke point shut and the engine quiet.
     s_listen_wiring = true;
     unit_detach();
-    unit_attach(true);
     s_listen_wiring = false;
-    g_crc_on = false;
     g_tx_allowed = false;
-    write_sw1();   // SWITCHES1 without Auto-CRC and CONTROL1 passive (SOP, SOP', SOP'' received)
-    K2LOG("[LISTEN] Start: %u s, port label %u, Rd on, Auto-CRC off, SOP/SOP'/SOP'' received, nothing transmitted\n",
-          unsigned(g_listen.secs()), unsigned(g_listen.port()));
+    if (!detach) {
+        listen_rd_on();
+        K2LOG("[LISTEN] Start: %u s, port label %u, no detach: Rd on, VBUS %d mV, Auto-CRC off, SOP/SOP'/SOP'' received, nothing transmitted\n",
+              unsigned(g_listen.secs()), unsigned(g_listen.port()), int(g_vbus_mv));
+        return r;
+    }
+    K2LOG("[LISTEN] Start: %u s, port label %u, detach: Rd off, VBUS %d mV, waiting for vSafe0V (max %u ms), nothing transmitted\n",
+          unsigned(g_listen.secs()), unsigned(g_listen.port()), int(g_vbus_mv), unsigned(pd::kListenDropMaxMs));
     return r;
 }
 void listen_stop() {

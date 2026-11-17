@@ -29,15 +29,15 @@ class FakeLink:
         if args[1] == 1 and self.refuse is not None:
             raise kr.RemoteError(kr.STATUS_BUSY, cmd, bytes([self.refuse]))
         if args[1] == 1:
-            return Reply(bytes([1, 0, args[2], args[2], 0, 0, args[3]]))
+            return Reply(bytes([2 if len(args) == 4 else 1, 0, args[2], args[2], 0, 0, args[3]]))   # a detach start answers "dropping"
         self.polls -= 1
         if self.polls >= 0:
             return Reply(bytes([1, 0, 10, 3, 2, 0, 2]))
         return Reply(bytes([0, 1, 10, 0, 7, 1, 2]))
 
 
-def ns(secs=10, port="auto"):
-    return argparse.Namespace(lab_cmd="listen-attach", secs=secs, port=port)
+def ns(secs=10, port="auto", no_detach=False):
+    return argparse.Namespace(lab_cmd="listen-attach", secs=secs, port=port, no_detach=no_detach)
 
 
 class ListenAttach(unittest.TestCase):
@@ -57,6 +57,23 @@ class ListenAttach(unittest.TestCase):
         self.assertEqual(d["end"], "done")
         self.assertEqual(d["frames"], 7 | 1 << 8)
         self.assertEqual(d["port"], "bottom")
+
+    def test_the_dropping_state_is_polled_through_and_named(self):
+        self.assertEqual(kr.decode_listen(bytes([2, 0, 10, 10, 0, 0, 1]))["state"], "dropping")
+        self.assertEqual(kr.decode_listen(bytes([1, 0, 10, 9, 0, 0, 1]))["state"], "listening")
+        self.assertEqual(kr.decode_listen(bytes([0, 1, 10, 0, 0, 0, 1]))["state"], "idle")
+        link = FakeLink(polls=3)
+        d = kr.cmd_lab(link, ns())
+        self.assertEqual(len(link.calls), 5)          # the start (state dropping) and the polls until idle
+        self.assertEqual(d["state"], "idle")
+
+    def test_no_detach_sends_the_flags_byte(self):
+        link = FakeLink(polls=0)
+        kr.cmd_lab(link, ns(secs=5, port="top", no_detach=True))
+        self.assertEqual(link.calls[0], (kr.CMD_LAB, bytes([2, 1, 5, 1, 1])))
+        link = FakeLink(polls=0)
+        kr.cmd_lab(link, ns(secs=5, port="top"))      # the default detach keeps the four-byte request
+        self.assertEqual(link.calls[0], (kr.CMD_LAB, bytes([2, 1, 5, 1])))
 
     def test_default_port_is_auto(self):
         link = FakeLink(polls=0)

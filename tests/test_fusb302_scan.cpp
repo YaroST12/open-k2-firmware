@@ -4302,6 +4302,9 @@ void test_a_request_is_answered_in_the_service_pass_that_reads_it();
 void test_listen_attach_hears_every_frame_and_transmits_nothing();
 void test_listen_attach_ends_by_timeout_stop_or_another_owner_and_leaves_rd_off();
 void test_listen_attach_refusals_touch_nothing();
+void test_listen_attach_forces_a_detach_before_rd_comes_on();
+void test_listen_attach_detach_times_out_and_no_detach_skips_it();
+void test_listen_attach_dropping_phase_ends_cleanly_and_sends_nothing();
 // ---- Settings > Wake sleeping port (pattern slow-rp-wake, idle path): opt-in, default off ----
 // A sleeping source's port reads ~3.3 V open on one line (CC2 here), nothing on the other, VBUS dark. With the setting off the
 // idle K2 stays exactly what the invariants say (I1/H2: no Rd at idle, a waiting charger stays passive); only with it on does it
@@ -5433,6 +5436,9 @@ int main() {
     test_listen_attach_hears_every_frame_and_transmits_nothing();     // the listen cases: each ends with a detach, Rd off
     test_listen_attach_ends_by_timeout_stop_or_another_owner_and_leaves_rd_off();
     test_listen_attach_refusals_touch_nothing();
+    test_listen_attach_forces_a_detach_before_rd_comes_on();           // hardware 2026-11-18: the blink never detached the OnePlus brick
+    test_listen_attach_detach_times_out_and_no_detach_skips_it();
+    test_listen_attach_dropping_phase_ends_cleanly_and_sends_nothing();
     return test_report("test_fusb302_scan");
 }
 
@@ -5845,10 +5851,10 @@ void listen_end_clean() {
 
 void test_listen_attach_hears_every_frame_and_transmits_nothing() {
     listen_world();
-    CHECK_EQ(int(fusb302::listen_start(10, pd::kListenPortBottom, {})), int(pd::ListenRefusal::None));
+    CHECK_EQ(int(fusb302::listen_start(10, pd::kListenPortBottom, {}, false)), int(pd::ListenRefusal::None));   // no detach: Rd at once
     CHECK_EQ(fusb302::listen_active(), true);
     CHECK_EQ(auto_crc(), false);                                  // Auto-CRC off in SWITCHES1
-    CHECK_EQ(int(g_reg[0x07] & 3), 3);                            // CONTROL1: SOP' and SOP'' enabled (the passive profile)
+    CHECK_EQ(int(g_reg[0x07] & 0x67), 0x67);                      // CONTROL1: SOP' and SOP'' enabled, FIFO flush, debug SOPs; plain SOP has no enable bit and is always received (the first frame below is a plain-SOP Source_Capabilities)
     CHECK_EQ(int(sw0_rd()), 3);                                   // Rd presented (both lines until the scan names the charger's)
     CHECK_EQ(usb_has("[LISTEN] Start"), true);
     listen_attach_on_cc1();
@@ -5897,7 +5903,7 @@ void test_listen_attach_hears_every_frame_and_transmits_nothing() {
 void test_listen_attach_ends_by_timeout_stop_or_another_owner_and_leaves_rd_off() {
     listen_world();
     // the window runs out: Rd off, the passive idle scan owns the chip, nothing was sent, and a new window may start
-    CHECK_EQ(int(fusb302::listen_start(2, pd::kListenPortTop, {})), int(pd::ListenRefusal::None));
+    CHECK_EQ(int(fusb302::listen_start(2, pd::kListenPortTop, {}, false)), int(pd::ListenRefusal::None));
     listen_attach_on_cc1();
     const std::size_t from = g_log.size();
     push_frame(0xC0, hdr(0x0F, 1, true), {0xFF008001u});
@@ -5980,5 +5986,146 @@ void test_listen_attach_refusals_touch_nothing() {
     refused({}, pd::ListenRefusal::Busy);
     fusb302::unit_detach();
     CHECK_EQ(int(fusb302::listen_start(10, pd::kListenPortAuto, {})), int(pd::ListenRefusal::None));   // after all that it still works
+    listen_end_clean();
+}
+
+// The listen starts with a forced detach: Rd off (both CC lines open) until VBUS is below vSafe0V or 1.5 s have passed, then Rd on with
+// Auto-CRC off and the passive CONTROL1. A source in a contract that sees Rd only blink keeps its contract and sends nothing.
+namespace {
+// One 10 ms main-loop tick with the monitor's VBUS reading fed the way the UI does it.
+void listen_tick_ms(std::int32_t vbus_mv) {
+    g_ms += 10;
+    fusb302::sink_vbus(vbus_mv);
+    fusb302::poll();
+    fusb302::service();
+}
+}  // namespace
+
+void test_listen_attach_forces_a_detach_before_rd_comes_on() {
+    listen_world();
+    fusb302::sink_vbus(5270);
+    const std::size_t from = g_log.size();
+    CHECK_EQ(int(fusb302::listen_start(10, pd::kListenPortTop, {})), int(pd::ListenRefusal::None));
+    CHECK_EQ(fusb302::listen_active(), true);
+    CHECK_EQ(fusb302::listen_status().dropping(), true);
+    CHECK_EQ(int(sw0_rd()), 0);                                   // Rd is OFF: no pull-down on either line
+    CHECK_EQ(usb_has("[LISTEN] Start"), true);
+    CHECK_EQ(usb_has("Rd off"), true);
+    CHECK_EQ(usb_has("VBUS 5270 mV"), true);                      // the level at Rd off
+    // 600 ms with the source's VBUS still up: Rd never comes on, the scan does not turn it on either
+    for (int i = 0; i < 60; i++) {
+        listen_tick_ms(5270);
+        if (sw0_rd() != 0) std::fprintf(stderr, "Rd on while VBUS is up (tick %d)\n", i);
+        CHECK_EQ(int(sw0_rd()), 0);
+    }
+    CHECK_EQ(fusb302::listen_status().dropping(), true);
+    CHECK_EQ(int(fusb302::listen_status().left_s(g_ms)), 10);     // the window has not opened
+    // VBUS falls below vSafe0V: Rd comes on in that tick, with Auto-CRC off and the passive CONTROL1
+    listen_tick_ms(1200);
+    CHECK_EQ(fusb302::listen_status().dropping(), true);          // 1.2 V is not yet safe
+    listen_tick_ms(310);
+    CHECK_EQ(fusb302::listen_status().dropping(), false);
+    CHECK_EQ(fusb302::listen_active(), true);
+    CHECK_EQ(int(fusb302::listen_status().drop()), int(pd::ListenDrop::VSafe0));
+    CHECK_EQ(int(sw0_rd()), 3);
+    CHECK_EQ(auto_crc(), false);
+    CHECK_EQ(int(g_reg[0x07] & 0x67), 0x67);                      // ENSOP1 ENSOP2 RX_FLUSH ENSOP1DB ENSOP2DB; plain SOP needs no enable bit
+    CHECK_EQ(usb_has("vSafe0V reached"), true);
+    CHECK_EQ(usb_has("Rd on, VBUS 310 mV"), true);                // the level at Rd on, with the wait that led to it
+    // the window now hears frames, plain SOP first, and still transmits nothing
+    listen_attach_on_cc1();
+    g_txfifo.clear();
+    const std::size_t heard = g_log.size();
+    send_caps_5v3a();                                             // plain SOP
+    service_ms(10);
+    push_frame(0xC0, hdr(0x0F, 1, true), {0xFF008001u});          // SOP'
+    service_ms(10);
+    CHECK_EQ(int(fusb302::listen_status().frames()), 2);
+    CHECK_EQ(fifo_loads(from), 0);
+    CHECK_EQ(tx_started_since(from), false);
+    CHECK_EQ(tx_started_since(heard), false);
+    CHECK_EQ(g_txfifo.empty(), true);
+    CHECK_EQ(auto_crc(), false);
+    listen_end_clean();
+    CHECK_EQ(usb_has("VBUS"), true);
+}
+
+void test_listen_attach_detach_times_out_and_no_detach_skips_it() {
+    listen_world();
+    fusb302::sink_vbus(5270);
+    const std::size_t from = g_log.size();
+    CHECK_EQ(int(fusb302::listen_start(5, pd::kListenPortBottom, {})), int(pd::ListenRefusal::None));
+    int ticks = 0;
+    while (fusb302::listen_status().dropping() && ticks < 400) {
+        CHECK_EQ(int(sw0_rd()), 0);
+        listen_tick_ms(5270);                                      // VBUS never falls (the source ignores the missing Rd)
+        ticks++;
+    }
+    CHECK_EQ(ticks >= 149 && ticks <= 151, true);                  // 1.5 s at 10 ms a tick
+    CHECK_EQ(int(fusb302::listen_status().drop()), int(pd::ListenDrop::Timeout));
+    CHECK_EQ(int(sw0_rd()), 3);                                    // Rd on after the time out, as the brief says
+    CHECK_EQ(auto_crc(), false);
+    CHECK_EQ(usb_has("timeout"), true);
+    CHECK_EQ(usb_has("Rd on, VBUS 5270 mV"), true);
+    CHECK_EQ(fifo_loads(from), 0);
+    CHECK_EQ(tx_started_since(from), false);
+    // the 5 s window counts from the Rd-on moment
+    int open_ticks = 0;
+    while (fusb302::listen_active() && open_ticks < 700) { listen_tick_ms(5270); open_ticks++; }
+    CHECK_EQ(open_ticks >= 480 && open_ticks <= 501, true);        // the stub clock also moves on every millis() call, so a little early
+    CHECK_EQ(int(fusb302::listen_status().end()), int(pd::ListenEnd::Done));
+    CHECK_EQ(usb_has("[LISTEN] End: done"), true);
+    CHECK_EQ(int(sw0_rd()), 0);
+    // an unknown VBUS (monitor offline) takes the time out too
+    CHECK_EQ(int(fusb302::listen_start(5, pd::kListenPortAuto, {})), int(pd::ListenRefusal::None));
+    for (int i = 0; i < 160 && fusb302::listen_status().dropping(); i++) { g_ms += 10; fusb302::poll(); fusb302::service(); }
+    CHECK_EQ(int(fusb302::listen_status().drop()), int(pd::ListenDrop::Timeout));
+    fusb302::listen_stop();
+    // no_detach: Rd is on at once and the detach wait is skipped
+    fusb302::sink_vbus(5270);
+    const std::size_t from2 = g_log.size();
+    CHECK_EQ(int(fusb302::listen_start(5, pd::kListenPortAuto, {}, false)), int(pd::ListenRefusal::None));
+    CHECK_EQ(fusb302::listen_status().dropping(), false);
+    CHECK_EQ(int(fusb302::listen_status().drop()), int(pd::ListenDrop::Skipped));
+    CHECK_EQ(int(sw0_rd()), 3);
+    CHECK_EQ(auto_crc(), false);
+    CHECK_EQ(usb_has("no detach"), true);
+    CHECK_EQ(fifo_loads(from2), 0);
+    CHECK_EQ(tx_started_since(from2), false);
+    listen_end_clean();
+}
+
+void test_listen_attach_dropping_phase_ends_cleanly_and_sends_nothing() {
+    listen_world();
+    fusb302::sink_vbus(5270);
+    const std::size_t from = g_log.size();
+    // stop while dropping: Rd was never on and stays off
+    CHECK_EQ(int(fusb302::listen_start(10, pd::kListenPortAuto, {})), int(pd::ListenRefusal::None));
+    for (int i = 0; i < 20; i++) listen_tick_ms(5270);
+    fusb302::listen_stop();
+    CHECK_EQ(fusb302::listen_active(), false);
+    CHECK_EQ(int(fusb302::listen_status().end()), int(pd::ListenEnd::Stopped));
+    CHECK_EQ(int(fusb302::listen_status().state()), 0);
+    CHECK_EQ(int(sw0_rd()), 0);
+    for (int i = 0; i < 200; i++) listen_tick_ms(100);             // VBUS falling afterwards must not bring the dead run's Rd back
+    CHECK_EQ(int(sw0_rd()), 0);
+    // another owner takes the port while dropping: the run is lost, and its Rd-on never fires later
+    CHECK_EQ(int(fusb302::listen_start(10, pd::kListenPortAuto, {})), int(pd::ListenRefusal::None));
+    for (int i = 0; i < 20; i++) listen_tick_ms(5270);
+    fusb302::unit_detach();                                         // a charger-test unit takes over
+    CHECK_EQ(fusb302::listen_active(), false);
+    CHECK_EQ(int(fusb302::listen_status().end()), int(pd::ListenEnd::Lost));
+    CHECK_EQ(usb_has("[LISTEN] End: lost the port"), true);
+    CHECK_EQ(int(sw0_rd()), 0);
+    for (int i = 0; i < 200; i++) listen_tick_ms(100);
+    CHECK_EQ(int(sw0_rd()), 0);
+    // a refused start while dropping (a second window) changes nothing
+    CHECK_EQ(int(fusb302::listen_start(10, pd::kListenPortAuto, {})), int(pd::ListenRefusal::None));
+    const std::size_t before = g_log.size();
+    CHECK_EQ(int(fusb302::listen_start(10, pd::kListenPortAuto, {})), int(pd::ListenRefusal::Running));
+    CHECK_EQ(g_log.size(), before);
+    CHECK_EQ(fusb302::listen_status().dropping(), true);
+    CHECK_EQ(fifo_loads(from), 0);
+    CHECK_EQ(tx_started_since(from), false);
     listen_end_clean();
 }

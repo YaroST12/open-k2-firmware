@@ -1265,15 +1265,15 @@ bool Remote::lines_locked() { return fctrig::svooc_running(); }
 
 bool Remote::ports_busy() { return ui_.ports_busy() || fusb302::listen_active(); }
 
-// Listen attach (k2::fusb302::listen_start): Rd on, Auto-CRC off, nothing transmitted. The driver adds its own owners
+// Listen attach (k2::fusb302::listen_start): detach first, then Rd on, Auto-CRC off, nothing transmitted. flags bit 0 = no detach. The driver adds its own owners
 // (identify, probe, reread, boot pin, spoof, Ra) to the remote-side facts composed here.
-remote::ListenInfo Remote::lab_listen(uint8_t sub, uint8_t secs, uint8_t port) {
+remote::ListenInfo Remote::lab_listen(uint8_t sub, uint8_t secs, uint8_t port, uint8_t flags) {
     remote::ListenInfo out;
     if (sub == 1) {
         const pd::ListenFacts facts{ui_.ports_busy() || fctrig::status().state != fc::State::Idle || fctrig::scan_running() ||
                                         fctrig::ufcs_exiting() || fctrig::svooc_running() || dpsniff::armed(),
                                     ui_.link().inline_mode() || fusb302::inline_mode(), false, false};
-        const pd::ListenRefusal why = fusb302::listen_start(secs, port, facts);
+        const pd::ListenRefusal why = fusb302::listen_start(secs, port, facts, (flags & 1) == 0);
         if (why != pd::ListenRefusal::None) {
             out.status = static_cast<uint8_t>(remote::Status::Busy);
             out.refusal = static_cast<uint8_t>(why);
@@ -1283,7 +1283,7 @@ remote::ListenInfo Remote::lab_listen(uint8_t sub, uint8_t secs, uint8_t port) {
         fusb302::listen_stop();
     }
     const pd::Listen& l = fusb302::listen_status();
-    out.state = l.running() ? 1 : 0; out.end = static_cast<uint8_t>(l.end());
+    out.state = l.state(); out.end = static_cast<uint8_t>(l.end());
     out.secs = l.secs(); out.left_s = l.left_s(systick::millis()); out.port = l.port(); out.frames = l.frames();
     return out;
 }

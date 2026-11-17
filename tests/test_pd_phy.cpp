@@ -48,5 +48,11 @@ int main() {
     CHECK_EQ(control1(true, true, true), 0x67);
     CHECK_EQ(control1(false, false, true), 0x67);
     CHECK_EQ(control1(true, false, true) & 0x03, 0x03);     // ENSOP1 | ENSOP2
+    // The passive profile (what the lab listen writes): SOP' and SOP'' and both debug SOPs on, FIFO flush on receive; plain SOP has no
+    // enable bit and is always received, so every kind of frame is heard. Bit 3 (BIST mode) and bit 7 are not set.
+    CHECK_EQ(kControl1Passive, 0x67);
+    CHECK_EQ(kControl1Passive & (kEnSop | kEnSopDebug | kRxFlush), 0x67);
+    CHECK_EQ(kControl1Passive & 0x98, 0);
+    CHECK_EQ(control1(false) & 0x03, 0x03);                 // Auto-CRC off hears SOP' and SOP'' as well
     return test_report("test_pd_phy");
 }

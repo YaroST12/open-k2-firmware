@@ -1491,7 +1491,7 @@ namespace detail {
 // that gap looked like a sleeping port to the wake (bench 2026-11-10: every PD row "no PD after re-attach"). A tool that holds
 // the link (identify, probe, re-read, trigger prep) owns it too: a dark moment inside its window is not a dark port.
 bool idle_owner_free() {
-    return g_pin_rd == 0 && !g_rd_start && !g_rd_op && !g_ra && g_force_cc == 0 && !downstream_now() && !g_run_owner &&
+    return g_pin_rd == 0 && !g_rd_start && !g_rd_op && !g_ra && g_force_cc == 0 && !downstream_now() && !g_run_owner && !g_listen.dropping() &&
            !ident_running() && !probe_running() && !reread_running() && !g_prep.active();
 }
 
@@ -1501,7 +1501,8 @@ namespace {
 // The unattached scan, when pd::ScanPace says so; from poll() and, during long redraws, from scan_service().
 K2_HOT void scan_if_due() {
     const std::uint32_t now = systick::millis();
-    if (g_active_cc == 0 && g_scan_pace.due(now) && !g_rd_hold.held(now) && !g_idle_wake.reading(now)) {
+    // No scan while a lab listen holds Rd off for its detach: the wait is the point, and the scan's Rd-less measuring must not find an "attach".
+    if (g_active_cc == 0 && g_scan_pace.due(now) && !g_rd_hold.held(now) && !g_idle_wake.reading(now) && !g_listen.dropping()) {
         detect_cc_orientation();
         g_scan_pace.scanned(systick::millis());
     }

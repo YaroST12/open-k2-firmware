@@ -135,7 +135,7 @@ public:
     remote::CableRInfo cable_r_info();
     remote::LabResult lab_load(uint8_t duty, uint16_t ms);
     remote::SniffInfo lab_sniff(uint8_t sub);
-    remote::ListenInfo lab_listen(uint8_t sub, uint8_t secs, uint8_t port);   // listen attach (k2::fusb302::listen_*)
+    remote::ListenInfo lab_listen(uint8_t sub, uint8_t secs, uint8_t port, uint8_t flags);   // listen attach (k2::fusb302::listen_*)
     // --- vooc-monitor (k2/vooc-detect) ---
     remote::VoocSnapshot vooc_monitor(uint8_t set);           // inline VOOC monitor: 0 off, 1 on, 2 keep; never drives
     svooc::Refusal svooc_start(uint8_t cap_s, bool usb_a, const svooc::Params &params);    // guarded no-load SuperVOOC trigger (FC op 5), remote only; usb_a = far-sink waiver; params = responder knobs

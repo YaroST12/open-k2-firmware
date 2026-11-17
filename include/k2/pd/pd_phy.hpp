@@ -42,6 +42,9 @@ inline constexpr std::uint8_t kMaskPassive = 0xEF;   // only M_CRC_CHK (bit 4) o
 inline constexpr std::uint8_t kMaskAPassive = 0xFC;  // only HARDRST and SOFTRST open
 inline constexpr std::uint8_t kMaskBPassive = 0x01;  // GCRCSENT masked
 inline constexpr std::uint8_t kControl0Passive = 0x00;   // INT_MASK clear: INT_N enabled
+// CONTROL1 passive profile: ENSOP1 | ENSOP2 (SOP' and SOP''), RX_FLUSH, ENSOP1DB | ENSOP2DB (the debug SOPs). Plain SOP has no enable bit
+// and is always received: the active profile (Auto-CRC on, CONTROL1 = RX_FLUSH alone, SOP' and SOP'' off) already receives the
+// source's plain-SOP Source_Capabilities on hardware. So 0x67 hears SOP, SOP', SOP'' and the debug SOPs; the lab listen relies on it.
 inline constexpr std::uint8_t kControl1Passive = kEnSop | kRxFlush | kEnSopDebug;  // 0x67
 
 constexpr std::uint8_t sw0_measure(std::uint8_t cc) { return cc == 1 ? kMeasCc1 : cc == 2 ? kMeasCc2 : 0; }

@@ -248,11 +248,12 @@ struct Fake {
         calls++; sniff_sub = sub; SniffInfo r; r.state = 2; r.reason = 3; r.flags = 2; r.edges = 0x0123;
         r.status = sniff_status; r.refusal = sniff_refusal; return r;
     }
-    uint8_t listen_sub = 0xFF, listen_secs = 0xFF, listen_port = 0xFF;
+    uint8_t listen_sub = 0xFF, listen_secs = 0xFF, listen_port = 0xFF, listen_flags = 0xFF;
     uint8_t listen_status = 0, listen_refusal = 0;   // a refused start: remote::Status and pd::ListenRefusal
-    ListenInfo lab_listen(uint8_t sub, uint8_t secs, uint8_t port) {
-        calls++; listen_sub = sub; listen_secs = secs; listen_port = port;
-        ListenInfo r; r.state = 1; r.end = 2; r.secs = secs; r.left_s = 7; r.port = port; r.frames = 0x0102;
+    uint8_t listen_state = 1;                         // what the status reports: 1 listening, 2 dropping Rd
+    ListenInfo lab_listen(uint8_t sub, uint8_t secs, uint8_t port, uint8_t flags) {
+        calls++; listen_sub = sub; listen_secs = secs; listen_port = port; listen_flags = flags;
+        ListenInfo r; r.state = listen_state; r.end = 2; r.secs = secs; r.left_s = 7; r.port = port; r.frames = 0x0102;
         r.status = listen_status; r.refusal = listen_refusal; return r;
     }
     // --- vooc-monitor (k2/vooc-detect) ---

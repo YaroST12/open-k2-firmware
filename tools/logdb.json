@@ -720,6 +720,10 @@
   "723": "[EMK] Mi cable-auth req=%08X key=%u trail=%08X half=%u reply=%u payload=%u %s\n",
   "724": "[LISTEN] End: %s after %u frames (window %u s, port label %u), Rd off, passive idle\n",
   "725": "[LISTEN] Refused: %s\n",
-  "726": "[LISTEN] Start: %u s, port label %u, Rd on, Auto-CRC off, SOP/SOP'/SOP'' received, nothing transmitted\n"
+  "726": "[LISTEN] Start: %u s, port label %u, Rd on, Auto-CRC off, SOP/SOP'/SOP'' received, nothing transmitted\n",
+  "727": "[LISTEN] End: %s after %u frames (window %u s, port label %u, VBUS %d mV), Rd off, passive idle\n",
+  "728": "[LISTEN] Rd on, VBUS %d mV after %u ms (%s), window %u s, Auto-CRC off, SOP/SOP'/SOP'' received, nothing transmitted\n",
+  "729": "[LISTEN] Start: %u s, port label %u, no detach: Rd on, VBUS %d mV, Auto-CRC off, SOP/SOP'/SOP'' received, nothing transmitted\n",
+  "730": "[LISTEN] Start: %u s, port label %u, detach: Rd off, VBUS %d mV, waiting for vSafe0V (max %u ms), nothing transmitted\n"
  }
 }

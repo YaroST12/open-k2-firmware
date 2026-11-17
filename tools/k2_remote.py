@@ -4146,23 +4146,25 @@ LISTEN_PORTS = {"auto": 0, "top": 1, "bottom": 2}   # a label only: the top plug
 
 def decode_listen(p):
     _need(p, 7, "lab listen-attach")
-    return {"state": "listening" if p[0] else "idle", "end": LISTEN_END.get(p[1], p[1]), "secs": p[2], "left_s": p[3],
+    return {"state": {0: "idle", 1: "listening", 2: "dropping"}.get(p[0], p[0]), "end": LISTEN_END.get(p[1], p[1]), "secs": p[2], "left_s": p[3],
             "frames": p[4] | p[5] << 8, "port": {v: k for k, v in LISTEN_PORTS.items()}.get(p[6], p[6])}
 
 
 def cmd_listen_attach(link, a):
-    """Present Rd with Auto-CRC off and listen for --secs; the K2 never transmits. Frames land in the Black Box (k2_stream timeline)."""
+    """Force a detach (Rd off until VBUS < 0.8 V or 1.5 s), then present Rd with Auto-CRC off and listen for --secs; the K2 never
+    transmits. --no-detach skips the detach. Frames land in the Black Box (k2_stream timeline)."""
     secs = a.secs
     if not 1 <= secs <= 30:
         raise SystemExit("lab listen-attach: --secs must be 1..30")
     try:
-        d = decode_listen(link.call(CMD_LAB, bytes([2, 1, secs, LISTEN_PORTS[a.port]])).payload)
+        req = bytes([2, 1, secs, LISTEN_PORTS[a.port]]) + (bytes([1]) if getattr(a, "no_detach", False) else b"")
+        d = decode_listen(link.call(CMD_LAB, req).payload)
     except RemoteError as e:
         if e.status == STATUS_BUSY and e.payload:
             raise SystemExit(f"lab listen-attach refused: {LISTEN_REFUSALS.get(e.payload[0], e.payload[0])}") from None
         raise
-    deadline = time.monotonic() + secs + 5
-    while d["state"] == "listening" and time.monotonic() < deadline:
+    deadline = time.monotonic() + secs + 7   # the detach wait takes up to 1.5 s before the window opens
+    while d["state"] in ("dropping", "listening") and time.monotonic() < deadline:
         time.sleep(0.5)
         d = decode_listen(link.call(CMD_LAB, bytes([2, 2])).payload)
     return d
@@ -5659,9 +5661,10 @@ def build_parser():
     sll.add_argument("duty", type=int)
     sll.add_argument("ms", type=int)
     sll.add_argument("--confirm", action="store_true", help="required: acknowledges the PA8 pulse")
-    slla = sls.add_parser("listen-attach", help="Rd on, Auto-CRC off, passive receive of SOP/SOP'/SOP'' for --secs; transmits nothing; frames go to the Black Box")
+    slla = sls.add_parser("listen-attach", help="detach first (Rd off until VBUS < 0.8 V or 1.5 s), then Rd on, Auto-CRC off, passive receive of SOP/SOP'/SOP'' for --secs; transmits nothing; frames go to the Black Box")
     slla.add_argument("--secs", type=int, default=10, help="window length, 1..30 (default 10)")
     slla.add_argument("--port", choices=sorted(LISTEN_PORTS), default="auto", help="label only: both ports share the CC nets")
+    slla.add_argument("--no-detach", action="store_true", help="skip the forced detach: Rd on at once (a source that is already mid-negotiation)")
     sln = sls.add_parser("sniff", help="passive D+/D- edge capture into the Black Box (never drives; see tools/vooc_edges.py)")
     slns = sln.add_subparsers(dest="sniff_cmd", required=True)
     for nm, hp in (("arm", "start listening; the capture ends 150 ms after the last edge"), ("status", "state and edge count"),

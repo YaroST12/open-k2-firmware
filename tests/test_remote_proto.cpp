@@ -334,13 +334,25 @@ static void test_lab() {
     check_bytes(r, kRspHeader, {1});
 }
 
-// Lab listen attach: [2, sub] stop 0 / status 2, [2, 1, secs, port] start. Reply state, end, secs, left_s, frames (LE), port.
+// Lab listen attach: [2, sub] stop 0 / status 2, [2, 1, secs, port] start (detach first), [2, 1, secs, port, flags] with flags bit 0 =
+// no detach. Reply state (0 idle, 1 listening, 2 dropping Rd), end, secs, left_s, frames (LE), port.
 static void test_lab_listen() {
     Fake f; Frame r;
     { const auto q = request(0x51, 1, {2, 1, 10, 2}); CHECK_EQ(run(f, q, r), 1); }
     check_header(r, 0x51, 1, Status::Ok, 7);
     check_bytes(r, kRspHeader, {1, 2, 10, 7, 0x02, 0x01, 2});
-    CHECK_EQ(f.listen_sub, 1); CHECK_EQ(f.listen_secs, 10); CHECK_EQ(f.listen_port, 2);
+    CHECK_EQ(f.listen_sub, 1); CHECK_EQ(f.listen_secs, 10); CHECK_EQ(f.listen_port, 2); CHECK_EQ(f.listen_flags, 0);   // the default detaches
+    { const auto q = request(0x51, 11, {2, 1, 5, 1, 1}); CHECK_EQ(run(f, q, r), 1); }         // flags: no detach
+    check_header(r, 0x51, 11, Status::Ok, 7);
+    CHECK_EQ(f.listen_secs, 5); CHECK_EQ(f.listen_port, 1); CHECK_EQ(f.listen_flags, 1);
+    { const auto q = request(0x51, 12, {2, 1, 5, 1, 0}); CHECK_EQ(run(f, q, r), 1); }         // an explicit 0 is the default
+    check_header(r, 0x51, 12, Status::Ok, 7);
+    CHECK_EQ(f.listen_flags, 0);
+    f.listen_state = 2;                                                                        // the backend is still dropping Rd
+    { const auto q = request(0x51, 13, {2, 2}); CHECK_EQ(run(f, q, r), 1); }
+    check_header(r, 0x51, 13, Status::Ok, 7);
+    CHECK_EQ(int(r[kRspHeader]), 2);
+    f.listen_state = 1;
     { const auto q = request(0x51, 2, {2, 2}); CHECK_EQ(run(f, q, r), 1); }                   // status: no start arguments reach the backend
     check_header(r, 0x51, 2, Status::Ok, 7);
     CHECK_EQ(f.listen_sub, 2); CHECK_EQ(f.listen_secs, 0); CHECK_EQ(f.listen_port, 0);
@@ -360,6 +372,12 @@ static void test_lab_listen() {
     check_header(r, 0x51, 8, Status::BadLength, 0);
     { const auto q = request(0x51, 9, {2}); CHECK_EQ(run(f, q, r), 1); }
     check_header(r, 0x51, 9, Status::BadLength, 0);
+    { const auto q = request(0x51, 14, {2, 1, 10, 0, 2}); CHECK_EQ(run(f, q, r), 1); }        // an unknown flag bit
+    check_header(r, 0x51, 14, Status::BadArg, 0);
+    { const auto q = request(0x51, 15, {2, 1, 10, 0, 0, 0}); CHECK_EQ(run(f, q, r), 1); }     // too long
+    check_header(r, 0x51, 15, Status::BadLength, 0);
+    { const auto q = request(0x51, 16, {2, 2, 1}); CHECK_EQ(run(f, q, r), 1); }               // flags belong to a start only
+    check_header(r, 0x51, 16, Status::BadLength, 0);
     CHECK_EQ(f.listen_sub, 0xFF);                                                           // none of the bad frames reached the backend
     // A refused start carries the one-byte reason (pd::ListenRefusal) of the backend.
     f.listen_status = static_cast<uint8_t>(Status::Busy); f.listen_refusal = 3;

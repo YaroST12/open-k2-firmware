@@ -858,9 +858,11 @@ static_assert(kThRspBytes <= kMaxRspPayload);
 // LAB op codes (first payload byte of Cmd::Lab).
 constexpr uint8_t kLabLoad = 0;
 constexpr uint8_t kLabSniff = 1;   // D+/D- edge capture: sub-op cancel 0, arm 1, status 2, selftest 3 (needs confirm)
-// Listen attach (k2::pd::Listen): Rd on, Auto-CRC off, passive receive of SOP/SOP'/SOP'', nothing transmitted. Request
-// [2, sub] with sub stop 0 / status 2, or [2, 1, secs, port] to start (secs 1..30, port 0 auto / 1 top / 2 bottom).
-// Reply: state u8 (0 idle, 1 listening), end u8 (pd::ListenEnd of the last window), secs u8, left_s u8, frames u16, port u8.
+// Listen attach (k2::pd::Listen): a forced detach first (Rd off until VBUS < 0.8 V or 1.5 s), then Rd on, Auto-CRC off, passive
+// receive of SOP/SOP'/SOP'', nothing transmitted. Request [2, sub] with sub stop 0 / status 2, or [2, 1, secs, port] to start
+// (secs 1..30, port 0 auto / 1 top / 2 bottom), optionally with a fifth flags byte: bit 0 = no detach (Rd on at once, for a source that
+// is already mid-negotiation); other bits are refused.
+// Reply: state u8 (0 idle, 1 listening, 2 dropping Rd for the detach), end u8 (pd::ListenEnd of the last window), secs u8, left_s u8, frames u16, port u8.
 // A refused start answers Busy with one byte, a pd::ListenRefusal.
 constexpr uint8_t kLabListen = 2;
 
@@ -1246,7 +1248,7 @@ struct SniffInfo {
 struct ListenInfo {
     uint8_t status = 0;                 // remote::Status the backend reports (0 = Ok)
     uint8_t refusal = 0;                // pd::ListenRefusal of a refused start, sent as the Busy reply's one byte
-    uint8_t state = 0;                  // 0 idle, 1 listening
+    uint8_t state = 0;                  // 0 idle, 1 listening, 2 dropping Rd (the detach wait before the window)
     uint8_t end = 0;                    // pd::ListenEnd of the last window
     uint8_t secs = 0, left_s = 0, port = 0;
     uint16_t frames = 0;                // frames heard in the current or last window
@@ -1577,7 +1579,7 @@ concept Backend = requires(B &b, uint8_t u8, uint16_t u16, bool on) {
     { b.cable_r_info() } -> std::same_as<CableRInfo>;
     { b.lab_load(uint8_t{}, uint16_t{}) } -> std::same_as<LabResult>;   // PA8 load probe
     { b.lab_sniff(uint8_t{}) } -> std::same_as<SniffInfo>;               // D+/D- edge capture
-    { b.lab_listen(uint8_t{}, uint8_t{}, uint8_t{}) } -> std::same_as<ListenInfo>;   // listen attach: sub, secs, port
+    { b.lab_listen(uint8_t{}, uint8_t{}, uint8_t{}, uint8_t{}) } -> std::same_as<ListenInfo>;   // listen attach: sub, secs, port, flags
     { b.ufcs_info() } -> std::same_as<UfcsInfo>;
     { b.ufcs_get(u8) } -> std::same_as<std::uint32_t>;                   // field index (checked by the dispatcher)
     { b.ufcs_set(u8, std::uint32_t{}) } -> std::same_as<Status>;         // field, value (range checked); Busy while a probe runs
@@ -2146,12 +2148,13 @@ template <Backend B>
         if (p[0] == kLabListen) {
             if (p.size() < 2) return reply_bad_len(f);
             if (p[1] != 0 && p[1] != 1 && p[1] != 2) return reply_bad_arg(f);
-            if (p.size() != (p[1] == 1 ? 4u : 2u)) return reply_bad_len(f);
+            if (p[1] == 1 ? (p.size() != 4 && p.size() != 5) : p.size() != 2) return reply_bad_len(f);
+            const uint8_t flags = p[1] == 1 && p.size() == 5 ? p[4] : uint8_t{0};   // bit 0: no detach
             if (p[1] == 1) {
-                if (p[2] > 30 || p[3] > 2) return reply_bad_arg(f);
+                if (p[2] > 30 || p[3] > 2 || (flags & ~uint8_t{1}) != 0) return reply_bad_arg(f);
                 if (backend.lines_locked()) return reply_byte(f, Status::Busy, uint8_t{2});   // pd::ListenRefusal::Busy
             }
-            const ListenInfo r = backend.lab_listen(p[1], p[1] == 1 ? p[2] : uint8_t{0}, p[1] == 1 ? p[3] : uint8_t{0});
+            const ListenInfo r = backend.lab_listen(p[1], p[1] == 1 ? p[2] : uint8_t{0}, p[1] == 1 ? p[3] : uint8_t{0}, flags);
             if (r.status != static_cast<uint8_t>(Status::Ok)) {
                 if (r.refusal == 0) return reply_status(f, static_cast<Status>(r.status));
                 return reply_byte(f, static_cast<Status>(r.status), r.refusal);
