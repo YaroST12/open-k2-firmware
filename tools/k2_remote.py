@@ -1694,6 +1694,7 @@ class ResultsChanged(FrameError):
 
 CT_SPEC_REQ, CT_SPEC_HEADER = 6, 7   # 0x0B req [6, off]: run_id u32, total u8, off u8, n u8, then n bytes (kChargerTestSpecReq)
 CT_SPEC_DETAIL_REQ = 7                # 0x0B req [7, off]: the same chunks of the detail form (kChargerTestSpecDetailReq)
+CT_SPEC_ROWS_REQ, CT_SPEC_ROWS_HEADER = 8, 9   # 0x0B req [8, off_lo, off_hi]: run_id u32, total u16, off u16, n u8, then n bytes (kChargerTestSpecRowsReq)
 
 
 def _read_charger_spec_form(link, run_id, form):
@@ -1721,6 +1722,31 @@ def _read_charger_spec_form(link, run_id, form):
     return bytes(blob)
 
 
+def _read_charger_spec_rows(link, run_id):
+    """The per-transition rows file (0x0B [8, off16], 48-byte chunks) as bytes; None when the run has none (total 0). Offsets are 16 bit:
+    the file is up to about 4 KB."""
+    blob, total = bytearray(), None
+    while total is None or len(blob) < total:
+        p = link.call(CMD_CHARGER_TEST, struct.pack("<BH", CT_SPEC_ROWS_REQ, len(blob))).payload
+        if len(p) < CT_SPEC_ROWS_HEADER:
+            raise FrameError("short charger-test spec rows reply")
+        rid, tot, off, n = struct.unpack_from("<IHHB", p)
+        if len(p) != CT_SPEC_ROWS_HEADER + n:
+            raise FrameError("charger-test spec rows reply length does not match its count")
+        if rid != run_id:
+            raise ResultsChanged("charger-test spec rows belong to another run; retry results")
+        if total is None:
+            total = tot
+            if not total:
+                return None
+        elif tot != total:
+            raise ResultsChanged("charger-test spec rows changed during the read; retry results")
+        if off != len(blob) or not n:
+            raise FrameError("charger-test spec rows chunk did not advance")
+        blob += p[CT_SPEC_ROWS_HEADER:]
+    return bytes(blob)
+
+
 def read_charger_spec(link, run_id):
     """The PD spec section of a Deep run (0x0B [6, off], 48-byte chunks of specsec::to_wire), decoded, with the limit, count and place
     of each check from the detail form (0x0B [7, off]); None when the run has no section (total 0: not a Deep run, or the stage did
@@ -1736,7 +1762,25 @@ def read_charger_spec(link, run_id):
         if e.status not in (STATUS_BAD_LENGTH, STATUS_BAD_ARG):
             raise
         detail = None
-    return pdspec_blob.decode_section(blob, detail)
+    spec = pdspec_blob.decode_section(blob, detail)
+    # The per-transition rows (0x0B [8, off16]): each check that lists them gets "rows" (and "worst_row", the index of the worst one);
+    # firmware without the form (BadLength: every build without K2_SPECROWS=1, the shipping default), a run with none (total 0) or a file this tool cannot read leaves the cells as they were.
+    try:
+        raw = _read_charger_spec_rows(link, run_id)
+        listed = pdspec_blob.decode_rows(raw, run_id)["cells"] if raw else {}
+    except RemoteError as e:
+        if e.status not in (STATUS_BAD_LENGTH, STATUS_BAD_ARG):
+            raise
+        listed = {}
+    except ValueError as e:
+        if isinstance(e, FrameError):
+            raise
+        listed = {}
+    for c in spec["cells"]:
+        got = listed.get(c["key"])
+        if got and got["rows"]:
+            c["rows"], c["worst_row"] = got["rows"], got["worst"]
+    return spec
 
 
 def attach_spec_section(link, result, run_id):

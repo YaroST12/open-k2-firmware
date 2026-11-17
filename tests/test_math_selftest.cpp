@@ -118,8 +118,8 @@ int main() {
         {"readout_fmt", "2E7FF5D7"}, {"blend565", "2B0E04E3"}, {"text_aa", "447FE66E"},    {"text_big", "3C2A04BF"},
         {"gfx_fill", "041E7430"},    {"mem_ops", "8B0882C5"},  {"fmt_line", "0F171019"},   {"pd_codec", "DBF8DC4D"},
         {"pd_sink", "5FEDCFA6"},     {"pdtrace_ring", "D2BDBEB5"}, {"ws_fast", "7B1CE946"}, {"ws_slow", "7B1CE946"},
-        {"qr_encode", "E5CB2E43"},   {"lz_pack", "F2BAA2E3"},  {"sweep_sum", "487AC9D5"},  {"rd_fast", "79D02B1D"},
-        {"rd_slow", "79D02B1D"},
+        {"qr_encode", "E5CB2E43"},   {"lz_pack", "F2BAA2E3"},  {"sweep_sum", "487AC9D5"},  {"rd_fast", "901113A5"},
+        {"rd_slow", "901113A5"},
     };
     for (const Gold& g : kGold) CHECK_COND(sum_of(line_of(report, g.name)) == g.sum);
     {

@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <vector>
 
+#include "k2/chargertest/spec_rows.hpp"
 #include "k2/pd/transcap_calc.hpp"
 #include "k2/pdspec/engine.hpp"
 #include "test_util.h"
@@ -1206,9 +1207,159 @@ void full_20mv_sweep_option() {
     CHECK_COND(verdict(e, Check::PpsMonotonic) == Verdict::Pass);
 }
 
+#if K2_SPECROWS
+// The per-transition rows the Deep result lists (spec_rows.hpp) are the engine's own judgements, one per measurement: a fixed check has
+// a row per transition that measured it, a programmable check one per pass; the failing ones add up to the aggregate's count.
+void rows_follow_the_aggregates_one_run(Sim& m, std::uint8_t families, bool expect_fail) {
+    Engine e(m);
+    CHECK_COND(e.start(0, families) == StartResult::Ok);
+    drive(m, e);
+    check_safe_end(m, e);
+    CHECK_COND(e.stop() == Stop::Done);
+    std::size_t listed = 0, failing_rows = 0;
+    for (std::size_t i = 0; i < specsec::kCells; ++i) {
+        const Check c = specsec::kOrder[i];
+        const Agg& a = e.agg(c);
+        const std::size_t n = specsec::row_count(e, i);
+        if (!specsec::has_list(i)) { CHECK_EQ(int(n), 0); continue; }
+        std::size_t bad = 0, fixed_rows = 0, prog_rows = 0;
+        for (std::size_t k = 0; k < n; ++k) {
+            specsec::Row r;
+            CHECK_COND(specsec::row_at(e, i, k, r));
+            CHECK_EQ(int(r.check), int(c));
+            if (r.flags & specsec::kRowProg) { ++prog_rows; bad += std::size_t(r.margin); }
+            else { ++fixed_rows; if (r.flags & specsec::kRowFail) ++bad; }
+            if (r.flags & specsec::kRowFail) ++failing_rows;
+        }
+        CHECK_COND(fixed_rows == 0 || prog_rows == 0);   // a check lists one kind of row
+        if (c == Check::AcceptTime) {
+            // The aggregate also counts the programmable steps' Accepts: the rows are the fixed transitions'.
+            CHECK_EQ(int(n), int(e.trans().size()));
+            CHECK_COND(bad <= a.fails);
+        } else if (fixed_rows) {
+            CHECK_EQ(int(bad), int(a.fails));
+            CHECK_COND(n <= a.n);   // every row has a measurement behind it
+        } else if (prog_rows) {
+            CHECK_EQ(int(bad), int(a.fails));
+            CHECK_COND(n <= e.passes().size());
+        }
+        listed += n;
+        // The worst row: a failing one when any failed.
+        if (n) {
+            const std::size_t w = specsec::worst_row(e, i);
+            CHECK_COND(w < n);
+            specsec::Row r;
+            CHECK_COND(specsec::row_at(e, i, w, r));
+            if (a.fails) CHECK_COND((r.flags & specsec::kRowFail) != 0);
+        }
+    }
+    CHECK_COND(listed > 0);
+    if (expect_fail) CHECK_COND(failing_rows > 0); else CHECK_EQ(int(failing_rows), 0);
+    // The file the journal writes: the header, then the rows in cell order, read back in 64-byte pieces.
+    const std::size_t size = specsec::rows_file_size(e);
+    CHECK_EQ(int(size), int(specsec::kRowsHdr + listed * specsec::kRowBytes));
+    std::array<std::uint8_t, 6144> file{};
+    CHECK_COND(size <= file.size());
+    for (std::size_t off = 0; off < size; off += 64)
+        specsec::rows_fill(e, 0xC0FFEEu, off, file.data() + off, std::min<std::size_t>(64, size - off));
+    specsec::RowsIndex ix;
+    CHECK_COND(specsec::rows_parse(file.data(), size, 0xC0FFEEu, ix));
+    CHECK_EQ(int(ix.total()), int(listed));
+    for (std::size_t i = 0; i < specsec::kCells; ++i) {
+        CHECK_EQ(int(ix.count(i)), int(specsec::row_count(e, i)));
+        if (ix.count(i)) CHECK_EQ(int(ix.worst(i)), int(specsec::worst_row(e, i)));
+        for (std::size_t k = 0; k < ix.count(i); ++k) {
+            specsec::Row want, got;
+            CHECK_COND(specsec::row_at(e, i, k, want));
+            specsec::row_decode(file.data() + ix.offset(i, k), got);
+            CHECK_COND(got == want);
+        }
+    }
+}
+
+void rows_follow_the_aggregates() {
+    {   // a clean run: every row passes
+        Sim m;
+        typical(m);
+        rows_follow_the_aggregates_one_run(m, 0, false);
+    }
+    {   // an unloaded source: slow falls and a PS_RDY that comes early
+        Sim m;
+        typical(m);
+        m.fall = 10;
+        m.early_psrdy_ms = 100;
+        rows_follow_the_aggregates_one_run(m, bit(Family::Transitions), true);
+    }
+    {   // a PPS source that overshoots the low levels
+        Sim m;
+        m.list({fixed(5000), pps(3300, 11000)});
+        m.pps_overshoot_mv = 300;
+        m.pps_overshoot_ms = 10;
+        rows_follow_the_aggregates_one_run(m, bit(Family::Pps), true);
+    }
+    {   // a PPS source that falls slowly: the band fails
+        Sim m;
+        m.list({fixed(5000), pps(3300, 11000)});
+        m.fall = 20;
+        rows_follow_the_aggregates_one_run(m, bit(Family::Pps), true);
+    }
+    {   // PPS and AVS together
+        Sim m;
+        m.list({fixed(5000), fixed(9000), fixed(15000), fixed(20000), pps(3300, 11000), avs(9000, 20000)});
+        rows_follow_the_aggregates_one_run(m, bit(Family::Pps), false);
+    }
+}
+
+// What a row says: the transition in volts and the value and margin the check judged.
+void rows_name_the_transition() {
+    Sim m;
+    typical(m);
+    m.fall = 10;
+    m.early_psrdy_ms = 100;
+    Engine e(m);
+    CHECK_COND(e.start(0, bit(Family::Transitions)) == StartResult::Ok);
+    drive(m, e);
+    check_safe_end(m, e);
+    std::size_t cell = 0;
+    for (std::size_t i = 0; i < specsec::kCells; ++i) if (specsec::kOrder[i] == Check::PsRdyEarly) cell = i;
+    bool seen_20_5 = false;
+    for (std::size_t k = 0; k < specsec::row_count(e, cell); ++k) {
+        specsec::Row r;
+        CHECK_COND(specsec::row_at(e, cell, k, r));
+        CHECK_COND(r.flags & specsec::kRowFail);                  // every down-step fails the check here
+        CHECK_COND(r.a > r.b);                                    // a down-step: from above to below
+        CHECK_COND(r.margin > 0);                                 // positive = past the limit
+        if (r.a == 20000 && r.b == 5000) {
+            seen_20_5 = true;
+            CHECK_COND(r.value > 1000);                           // VBUS at PS_RDY, in 10 mV
+        }
+    }
+    CHECK_COND(seen_20_5);
+}
+
+// A record the pool refused is only counted: the rows are what the pool kept, never more than the aggregates counted, and the file
+// stays inside its cap.
+void rows_never_outnumber_the_measurements() {
+    Sim m;
+    m.list({fixed(5000), fixed(9000), fixed(12000), fixed(15000), fixed(20000), fixed(28000, true), pps(3300, 11000)});
+    m.cap = 36000;
+    Engine e(m);
+    CHECK_COND(e.start(0) == StartResult::Ok);
+    drive(m, e);
+    check_safe_end(m, e);
+    for (std::size_t i = 0; i < specsec::kCells; ++i) CHECK_COND(specsec::row_count(e, i) <= e.agg(specsec::kOrder[i]).n);
+    CHECK_COND(specsec::rows_file_size(e) <= specsec::kRowsMaxFile);
+}
+#endif
+
 }  // namespace
 
 int main() {
+#if K2_SPECROWS
+    rows_follow_the_aggregates();
+    rows_name_the_transition();
+    rows_never_outnumber_the_measurements();
+#endif
     clean_source_scores_zero();
     unloaded_slow_fall_and_early_ps_rdy();
     pps_offset_and_slow_settle();

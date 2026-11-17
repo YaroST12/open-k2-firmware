@@ -22,13 +22,30 @@ StartResult Engine::start(std::uint32_t now_ms, std::uint8_t families, std::uint
     note_ = pdspec::caps_note(env_->caps());
     hr0_ = s.source_hard_resets;
     caps0_ = s.caps_rx;
-    for (std::uint8_t k = 0; k < L_.n_fixed; ++k) if (pdo(L_.fixed[k]).max_mv > top_mv_) top_mv_ = pdo(L_.fixed[k]).max_mv;
+    for (std::uint8_t k = 0; k < L_.n_fixed; ++k) {
+#if K2_SPECROWS
+        fixed_mv_[k] = static_cast<std::uint16_t>(pdo(L_.fixed[k]).max_mv);   // the rows name the levels after the capabilities are gone
+#endif
+        if (pdo(L_.fixed[k]).max_mv > top_mv_) top_mv_ = pdo(L_.fixed[k]).max_mv;
+    }
     for (std::uint8_t k = 0; k < L_.n_prog; ++k) if (L_.prog[k].hi > top_mv_) top_mv_ = L_.prog[k].hi;
     fam_ = Family::Transitions;
     ph_ = Ph::FamStart;
     mask_ = families ? families : kAllFamilies;
     return StartResult::Ok;
 }
+
+#if K2_SPECROWS
+// A fixed transition's measurement also marks the record in flight (cur_): measured, and failed (the aggregate's own judgement, the
+// bracket counted), so the per-transition rows (chargertest/spec_rows.hpp) agree with the check's cell.
+void Engine::meas(Check c, const Meas& m) {
+    const bool bad = agg_[static_cast<std::size_t>(c)].add(def(c).kind, m);
+    if (const std::uint8_t b = tr_bit(c)) {
+        cur_.seen = static_cast<std::uint8_t>(cur_.seen | b);
+        if (bad) cur_.fails = static_cast<std::uint8_t>(cur_.fails | b);
+    }
+}
+#endif
 
 void Engine::skip_family(Family f, Skip why) {
     for (std::size_t k = 0; k < kChecks; ++k) if (owns(f, Check(k))) skip(Check(k), why);

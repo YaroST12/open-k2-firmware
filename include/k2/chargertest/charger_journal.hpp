@@ -17,8 +17,9 @@
 //   /jr/at.rec      Attempt (which unit lost power how many times)
 //   /jr/sp.rec      Spec    (the PD spec stage's result: end, why, the cells; written once, when the stage ends)
 //   /jr/spd.rec     SpecDetail (the cells' limit, count and place; written right behind sp.rec. A journal without it still loads:
-//                   those cells read n = 0 and the detail page shows "-". The format byte stays 3 for that reason: the record is
-//                   additive and sp.rec is unchanged, so an older firmware reads the newer journal and the other way round)
+//                   those cells read n = 0 and the detail page shows "-". The record is additive and sp.rec is unchanged)
+//   /jr/spt.rec     SpecRows (K2_SPECROWS builds only: the per-transition rows of the spec checks: "SPT1", run id, counts, worst, then the
+//                   10 byte rows; written right behind spd.rec, only read back. No file = the page shows the summary cell)
 //   /jr/fin.rec     Finish  (the run ended: Done, Stopped or abandoned)
 // A section file: 8 bytes (id, row count, layout hash u32, crc16 over the whole file but these two bytes) then 18 bytes per
 // row (the plan row and its result). Rows are addressed by (section, ordinal): the n-th row of the plan that belongs to the
@@ -37,8 +38,9 @@
 // the wrong addresses, and a "last good copy" would need a second copy of every section (flash and a second consistency
 // story). The one window is the gap between a section file replaced and the header that names its new hash and order (one
 // flash write, tens of ms); it is the only way a clean power cut loses a run, and it is reported, never mis-read.
-// Format 4 = format 3 plus the optional /jr/spd.rec (spec cell limit, count, place); the header layout is the same, so a
-// format 3 journal is read as it is. Format 2 (sections, the order re-derived at replay), format 1 (one file per row, header
+// Format 5 = format 4 plus the optional /jr/spt.rec (the spec's per-transition rows, 10 bytes each, read by the detail page and the
+// remote, never replayed; a build without K2_SPECROWS neither writes nor reads it, and the format byte is 5 either way).
+// Format 4 = format 3 plus the optional /jr/spd.rec (spec cell limit, count, place); the header layout is the same, so a format 3 or 4 journal is read as it is (no rows: the detail page shows its summary). Format 2 (sections, the order re-derived at replay), format 1 (one file per row, header
 // payload 30) and any other format byte are Problem::OldFormat: dropped at boot, never read.
 //
 // Order of an arm: header dropped FIRST (a cut during the rest leaves no run at all), stale files swept, every section
@@ -55,6 +57,7 @@
 #include <span>
 
 #include "k2/core/bbstore.hpp"
+#include "k2/core/build_config.h"
 #include "k2/chargertest/charger_test.hpp"
 #include "k2/chargertest/spec_section.hpp"
 #include "k2/core/fs.hpp"
@@ -64,13 +67,23 @@ namespace k2::charger_journal {
 inline constexpr std::uint8_t kMagic = 0xA5;
 inline constexpr const char* kDir = "/jr";
 inline constexpr const char* kHeaderPath = "/jr/h.rec";
-inline constexpr std::uint8_t kFormat = 4;       // 4: the spec cells' limit, count and place ride in /jr/spd.rec
-inline constexpr std::uint8_t kMinFormat = 3;    // a format 3 journal (no spd.rec) still loads: its detail reads "-"
+#if K2_SPECROWS
+inline constexpr const char* kSpecRowsPath = "/jr/spt.rec";
+inline constexpr std::size_t kSpecRowsMax = 4096;   // the rows file's ceiling (specsec::kRowsMaxFile is 4010; ui_charger_test.cpp static_asserts it fits)
+#endif
+inline constexpr std::uint8_t kFormat = 5;       // 5: the spec's per-transition rows ride in /jr/spt.rec (4: cell limit, count, place in /jr/spd.rec)
+inline constexpr std::uint8_t kMinFormat = 3;    // a format 3 or 4 journal (no spt.rec, no spd.rec) still loads: its detail shows the summary
 
 // Type::Step is the format 1 record (one row per file); nothing writes it any more.
 enum class Type : std::uint8_t { Header = 1, Step = 2, Phase = 3, Finish = 4, Resume = 5, Meta = 6, Attempt = 7, Spec = 8, SpecDetail = 9 };
 using Phase = charger_test::Phase;
 enum class Err : std::uint8_t { Ok, TooBig, Flash, Broken };
+
+#if K2_SPECROWS
+// The bytes of the spec rows file (specsec::rows_fill), handed to the pump by whoever still holds the engine: the journal stores them
+// and never interprets them. size 0 = no rows (the file is removed).
+struct SpecRowsSource { std::size_t size = 0; fs::Fs::Fill fill = nullptr; void* ctx = nullptr; };
+#endif
 
 enum class Section : std::uint8_t { Pd, Pps, Qc, Oem, Ext };
 inline constexpr std::size_t kSections = 5;
@@ -477,12 +490,12 @@ public:
         cur_ = 0;
     }
     // Drops what is still to be written (the run is being closed).
-    void cancel() { stage_ = Stage::Idle; dirty_ = plan_dirty_ = 0; }
+    void cancel() { stage_ = Stage::Idle; clear_dirty(); }
     // An arm is in progress (the run is not yet on flash).
     bool working() const { return stage_ != Stage::Idle; }
     // Something is still to be written: an arm in progress, a section to rewrite, or a header that does not name what the
     // section files hold or the order it was written with. The Runner does not start an above-5 V request while this is true.
-    bool pending() const { return !broken_ && (stage_ != Stage::Idle || dirty_ != 0 || header_stale()); }
+    bool pending() const { return !broken_ && (stage_ != Stage::Idle || dirty_ != 0 || rows_pending() || header_stale()); }
     // The same, for the plan's SHAPE only: an arm, a section whose rows or layout changed, the header naming them, the plan's
     // order moved. What the phase marker's address depends on; a section that is only dirty for a verdict does not hold anything back.
     bool plan_pending() const { return !broken_ && (stage_ != Stage::Idle || plan_dirty_ != 0 || header_stale()); }
@@ -506,7 +519,13 @@ public:
             dirty_ |= kOrderBit, plan_dirty_ |= kOrderBit;
     }
     // The PD spec stage ended: Evidence::spec is written by a later pump() (one small record, behind any section or header write).
-    void note_spec() { if (live()) dirty_ |= kSpecBit | kSpecDetailBit; }
+    void note_spec() {
+        if (!live()) return;
+        dirty_ |= kSpecBit | kSpecDetailBit;
+#if K2_SPECROWS
+        rows_dirty_ = true;
+#endif
+    }
     // The journal now mirrors a run read back at boot (its sections are on flash as read): later changes are written as changes.
     void adopt(const Replay& r) {
         forget();
@@ -522,9 +541,17 @@ public:
     void discard_old() { drop(kHeaderPath); }
 
     Err pump(std::uint32_t run_id, const charger_test::Options& o, const charger_test::Evidence& e,
-             std::span<const charger_test::Step> steps) {
-        if (steps.size() > charger_test::kMaxSteps) { stage_ = Stage::Idle; dirty_ = plan_dirty_ = 0; return Err::TooBig; }
+             std::span<const charger_test::Step> steps
+#if K2_SPECROWS
+             , const SpecRowsSource* rows = nullptr
+#endif
+             ) {
+        if (steps.size() > charger_test::kMaxSteps) { stage_ = Stage::Idle; clear_dirty(); return Err::TooBig; }
+#if K2_SPECROWS
+        if (stage_ == Stage::Idle) return flush(run_id, o, e, steps, rows);
+#else
         if (stage_ == Stage::Idle) return flush(run_id, o, e, steps);
+#endif
         char p[fs::kPathMax];
         for (int budget = kLookups; budget > 0; --budget) {
             bool wrote = false;
@@ -608,6 +635,22 @@ public:
         std::array<std::uint8_t, kSpecDetailRecord> buf{};
         return put("/jr/spd.rec", {buf.data(), encode_spec_detail(buf, s)});
     }
+#if K2_SPECROWS
+    // The per-transition rows of the spec result (specsec::rows_fill): their own file, written by the pump right behind spd.rec from the
+    // source the caller hands the pump. No source or no rows (size 0) writes nothing and removes a file left by an earlier run. The file
+    // is read back by the detail page, never replayed (the format stays 5 for a journal without it: the page shows the summary).
+    Err spec_rows(const SpecRowsSource* src) {
+        if (broken_) return Err::Broken;
+        if (!src || !src->size || !src->fill) { bool gone = false; return drop(kSpecRowsPath, &gone) ? Err::Ok : fail(); }
+        if (src->size > kSpecRowsMax) return Err::TooBig;
+        if (const fs::Err m = fs_.mkdir(kDir); m != fs::Err::Ok) return fail(m);
+        const fs::Err w = fs_.write_chunks(kSpecRowsPath, src->size, src->fill, src->ctx);
+        return w == fs::Err::Ok ? Err::Ok : fail(w);
+    }
+    // The size of the rows file on flash (0 = none) and a piece of it.
+    std::size_t spec_rows_size() const { std::size_t n = 0; return fs_.size_of(kSpecRowsPath, n) == fs::Err::Ok ? n : 0; }
+    fs::Err spec_rows_read(std::uint32_t off, std::span<std::uint8_t> out, std::size_t& n) const { return fs_.read_at(kSpecRowsPath, off, out, n); }
+#endif
     // Closes the run: the next boot does not resume it, whatever its rows say. Tried even after an earlier write failed (broken_):
     // a lost record must not keep a run that ended open for ever (it would come back on every boot).
     Err finish(std::uint8_t state, std::uint8_t reason) {
@@ -623,7 +666,7 @@ private:
     static constexpr std::uint8_t kSectionMask = 0x1F, kOrderBit = 0x20, kSpecBit = 0x40, kSpecDetailBit = 0x80;   // dirty_ bits: one per section, "the header's plan order is stale", "the spec result is to be written", "and its detail"
     bool live() const { return armed_ || stage_ != Stage::Idle; }
     void forget() {
-        armed_ = false; dirty_ = plan_dirty_ = 0;
+        armed_ = false; clear_dirty();
         srows_.fill(kUnknown); hrows_.fill(kUnknown); ssig_.fill(0); hsig_.fill(0);
         hord_sig_ = 0; hord_known_ = false;
     }
@@ -638,14 +681,21 @@ private:
 
     // One write at rest: the first section to rewrite, else the header that names what the section files hold.
     Err flush(std::uint32_t run_id, const charger_test::Options& o, const charger_test::Evidence& e,
-              std::span<const charger_test::Step> steps) {
-        if (broken_) { dirty_ = plan_dirty_ = 0; return Err::Broken; }
+              std::span<const charger_test::Step> steps
+#if K2_SPECROWS
+              , const SpecRowsSource* rows
+#endif
+              ) {
+        if (broken_) { clear_dirty(); return Err::Broken; }
         bool did = false;
         Err x = write_dirty(steps, did);
         if (x == Err::Ok && !did && header_stale()) x = write_header(run_id, o, e, steps);
         else if (x == Err::Ok && !did && (dirty_ & kSpecBit)) { dirty_ &= std::uint8_t(~kSpecBit); x = spec(e.spec); }
         else if (x == Err::Ok && !did && (dirty_ & kSpecDetailBit)) { dirty_ &= std::uint8_t(~kSpecDetailBit); x = spec_detail(e.spec); }
-        if (x != Err::Ok) dirty_ = plan_dirty_ = 0;   // nothing more is tried on a failed volume
+#if K2_SPECROWS
+        else if (x == Err::Ok && !did && rows_dirty_) { rows_dirty_ = false; x = spec_rows(rows); }
+#endif
+        if (x != Err::Ok) clear_dirty();   // nothing more is tried on a failed volume
         return x;
     }
     // Writes the first section marked dirty (one file); `did` = a section was handled.
@@ -854,7 +904,13 @@ private:
         });
         return found;
     }
-    Err stop(Err e) { stage_ = Stage::Idle; dirty_ = plan_dirty_ = 0; return e; }
+    Err stop(Err e) { stage_ = Stage::Idle; clear_dirty(); return e; }
+    void clear_dirty() {
+        dirty_ = plan_dirty_ = 0;
+#if K2_SPECROWS
+        rows_dirty_ = false;
+#endif
+    }
     // `removed` = a file was there and is gone now (a commit), as against nothing to remove (a lookup).
     bool drop(const char* path, bool* removed = nullptr) {
         const fs::Err e = fs_.remove(path);
@@ -877,6 +933,12 @@ private:
     Stage stage_ = Stage::Idle;
     std::size_t cur_ = 0;
     std::uint8_t dirty_ = 0;                                // sections whose file is to be rewritten (bit per Section)
+#if K2_SPECROWS
+    bool rows_dirty_ = false;                               // the spec rows (/jr/spt.rec) are to be written, from the source the pump is given
+    bool rows_pending() const { return rows_dirty_; }
+#else
+    static constexpr bool rows_pending() { return false; }
+#endif
     std::uint8_t plan_dirty_ = 0;                           // the subset of dirty_ whose rows or layout changed (not only a verdict)
     std::array<std::uint16_t, kSections> srows_{}, hrows_{};   // row count of each section file / as the header names it
     std::array<std::uint32_t, kSections> ssig_{}, hsig_{};     // layout hash of each section file / as the header names it

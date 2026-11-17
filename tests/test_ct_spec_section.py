@@ -28,6 +28,7 @@ HAVE_GXX = shutil.which("g++") is not None
 DUMP_CPP = r"""
 #include <cstdio>
 #include "k2/chargertest/spec_section.hpp"
+#include "k2/chargertest/spec_rows.hpp"
 using namespace k2; using namespace k2::specsec;
 int main() {
     Result r;
@@ -45,6 +46,21 @@ int main() {
     r.cells[1].n = 300; r.cells[1].a = 4; r.cells[1].b = 2;
     r.cells[3].lo = quantize_limit(unit(3), 0); r.cells[3].hi = quantize_limit(unit(3), 1000);
     r.cells[3].n = 7;
+    // The per-transition rows file: cell 1 (a us check) lists two fixed transitions, cell 20 a programmable pass.
+    {
+        std::array<std::uint16_t, kCells> counts{}; std::array<std::uint8_t, kCells> worst{};
+        counts[1] = 2; worst[1] = 0; counts[20] = 1; worst[20] = 0;
+        const Row rows[3] = {
+            {1, kRowFail, 5000, 9000, 400, 150},                                           // fail: 40 ms, 15 ms past
+            {1, 0, 9000, 15000, 120, -130},                                                // pass: 12 ms, inside
+            {20, static_cast<std::uint8_t>(kRowFail | kRowProg | (2u << 2)), 3300, 11000, 77, 3}};   // pass window class 2, 3 steps over
+        std::array<std::uint8_t, kRowsHdr + 3 * kRowBytes> rf{};
+        rows_put_header(rf.data(), 0x01020304u, counts, worst);
+        for (std::size_t i = 0; i < 3; ++i) row_encode(rows[i], rf.data() + kRowsHdr + i * kRowBytes);
+        std::printf("rows ");
+        for (auto b : rf) std::printf("%02x", b);
+        std::printf("\nrowshdr %zu\n", kRowsHdr);
+    }
     std::array<std::uint8_t, kWireBytes> w{};
     to_wire(r, w);
     std::array<std::uint8_t, kDetailBytes> dw{};
@@ -66,7 +82,7 @@ def build_and_run(src, tag):
         cpp = Path(d) / f"{tag}.cpp"
         exe = Path(d) / tag
         cpp.write_text(src)
-        subprocess.run(["g++", "-std=c++23", "-DK2_PDSPEC=1", "-I", str(ROOT / "include"), str(cpp), "-o", str(exe)], check=True,
+        subprocess.run(["g++", "-std=c++23", "-DK2_PDSPEC=1", "-DK2_SPECROWS=1", "-I", str(ROOT / "include"), str(cpp), "-o", str(exe)], check=True,
                        capture_output=True)
         return subprocess.run([str(exe)], check=True, capture_output=True, text=True).stdout
 
@@ -180,6 +196,16 @@ def wire_chunks(blob, run_id, total=None):
     return out
 
 
+def rows_chunks(blob, run_id, total=None):
+    """The 0x0B [8, off16] replies the firmware gives: run_id u32, total u16, off u16, n u8, data (48 bytes a chunk)."""
+    total = len(blob) if total is None else total
+    out = []
+    for off in range(0, max(total, 1), 48):
+        data = blob[off:off + 48] if total else b""
+        out.append(struct.pack("<IHHB", run_id, total, off, len(data)) + data)
+    return out
+
+
 class Link:
     def __init__(self, payloads):
         self.payloads, self.sent = list(payloads), []
@@ -198,24 +224,63 @@ class Read(unittest.TestCase):
     def setUpClass(cls):
         cls.blob = bytes.fromhex(fw_dump()["wire"][0])
         cls.detail = bytes.fromhex(fw_dump()["detail"][0])
+        cls.rows = bytes.fromhex(fw_dump()["rows"][0])
 
     def test_chunked_read_and_exact_requests(self):
-        link = Link(wire_chunks(self.blob, 0x01020304) + wire_chunks(self.detail, 0x01020304))
+        link = Link(wire_chunks(self.blob, 0x01020304) + wire_chunks(self.detail, 0x01020304) + rows_chunks(self.rows, 0x01020304))
         sec = kr.read_charger_spec(link, 0x01020304)
         self.assertEqual(link.sent, [(0x0B, bytes([6, 0])), (0x0B, bytes([6, 48])), (0x0B, bytes([6, 96])),
                                      (0x0B, bytes([7, 0])), (0x0B, bytes([7, 48])), (0x0B, bytes([7, 96])), (0x0B, bytes([7, 144])),
-                                     (0x0B, bytes([7, 192]))])
-        self.assertEqual(sec, pb.decode_section(self.blob, self.detail))
+                                     (0x0B, bytes([7, 192])),
+                                     (0x0B, bytes([8, 0, 0])), (0x0B, bytes([8, 48, 0])), (0x0B, bytes([8, 96, 0]))])
+        base = pb.decode_section(self.blob, self.detail)
         self.assertEqual(sec["cells"][1]["count"], 300)
+        # the rows ride on the cells that list them, and nothing else changes
+        self.assertEqual([c["key"] for c in sec["cells"] if "rows" in c], [sec["cells"][1]["key"], sec["cells"][20]["key"]])
+        for c, b in zip(sec["cells"], base["cells"]):
+            c = {k: v for k, v in c.items() if k not in ("rows", "worst_row")}
+            self.assertEqual(c, b)
+        self.assertEqual(len(sec["cells"][1]["rows"]), 2)
+        self.assertEqual(sec["cells"][1]["worst_row"], 0)
+
+    def test_the_rows_read_back_what_the_firmware_wrote(self):
+        got = pb.decode_rows(self.rows, 0x01020304)["cells"]
+        keys = [c["key"] for c in pb.section_tables()["cells"]]
+        r = got[keys[1]]["rows"]
+        self.assertEqual((r[0]["from_mv"], r[0]["to_mv"], r[0]["fail"], r[0]["value"], r[0]["value_text"], r[0]["margin"]),
+                         (5000, 9000, True, 40000, "40.0 ms", 15000))
+        self.assertEqual((r[1]["fail"], r[1]["value"], r[1]["margin"]), (False, 12000, -13000))
+        self.assertEqual(pb.row_name(r[0]), "5->9V")
+        p = got[keys[20]]["rows"][0]
+        self.assertEqual((p["min_mv"], p["max_mv"], p["step_class"], p["failing_steps"], p["fail"]), (3300, 11000, 2, 3, True))
+        self.assertEqual(pb.row_name(p), "3.3-11V class 2")
+        self.assertEqual(got[keys[0]], {"worst": None, "rows": []})
+        with self.assertRaises(ValueError):
+            pb.decode_rows(self.rows, 7)                    # another run
+        with self.assertRaises(ValueError):
+            pb.decode_rows(self.rows[:-1], 0x01020304)      # a file its counts do not fill
+        with self.assertRaises(ValueError):
+            pb.decode_rows(b"XXXX" + self.rows[4:], 0x01020304)
+
+    def test_firmware_without_the_rows_form_gives_the_cells_without_them(self):
+        link = Link(wire_chunks(self.blob, 5) + wire_chunks(self.detail, 5) + [kr.RemoteError(kr.STATUS_BAD_LENGTH, 0x0B)])
+        sec = kr.read_charger_spec(link, 5)
+        self.assertEqual(sec, pb.decode_section(self.blob, self.detail))
+
+    def test_a_run_that_moves_during_the_rows_read_is_a_changed_result(self):
+        link = Link(wire_chunks(self.blob, 5) + wire_chunks(self.detail, 5) + rows_chunks(self.rows, 6))
+        with self.assertRaises(kr.ResultsChanged):
+            kr.read_charger_spec(link, 5)
 
     def test_firmware_without_the_detail_form_gives_the_section_alone(self):
-        link = Link(wire_chunks(self.blob, 5) + [kr.RemoteError(kr.STATUS_BAD_LENGTH, 0x0B)])
+        link = Link(wire_chunks(self.blob, 5) + [kr.RemoteError(kr.STATUS_BAD_LENGTH, 0x0B)] + rows_chunks(b"", 5, total=0))
         sec = kr.read_charger_spec(link, 5)
         self.assertEqual(sec, pb.decode_section(self.blob))
-        self.assertEqual(link.sent[-1], (0x0B, bytes([7, 0])))
+        self.assertEqual(link.sent[-2], (0x0B, bytes([7, 0])))
+        self.assertEqual(link.sent[-1], (0x0B, bytes([8, 0, 0])))
 
     def test_a_run_that_moves_during_the_detail_read_is_a_changed_result(self):
-        link = Link(wire_chunks(self.blob, 5) + wire_chunks(self.detail, 6))
+        link = Link(wire_chunks(self.blob, 5) + wire_chunks(self.detail, 6) + rows_chunks(b"", 5, total=0))
         with self.assertRaises(kr.ResultsChanged):
             kr.read_charger_spec(link, 5)
 
@@ -255,14 +320,28 @@ class Export(unittest.TestCase):
     def test_a_deep_export_carries_the_spec_section(self):
         meta = deep_meta()
         run_id = int.from_bytes(meta[1:5], "little")
-        link = Link([meta, page(meta, 0, [ROW0]), meta, *wire_chunks(self.blob, run_id), *wire_chunks(self.detail, run_id)])
+        link = Link([meta, page(meta, 0, [ROW0]), meta, *wire_chunks(self.blob, run_id), *wire_chunks(self.detail, run_id),
+                     *rows_chunks(b"", run_id, total=0)])
         r = kr.cmd_charger_test(link, self.args("results"))
         self.assertEqual(r["selection"]["run_level"], "deep")
         self.assertEqual([p for _, p in link.sent[3:]], [bytes([6, 0]), bytes([6, 48]), bytes([6, 96]), bytes([7, 0]), bytes([7, 48]),
-                                                         bytes([7, 96]), bytes([7, 144]), bytes([7, 192])])
+                                                         bytes([7, 96]), bytes([7, 144]), bytes([7, 192]), bytes([8, 0, 0])])
         self.assertEqual(r["spec"], pb.decode_section(self.blob, self.detail))
         text = kr._render("charger-test", dict(r, _summary=True))
         self.assertIn("PD spec", text)
+
+    def test_a_deep_export_carries_the_rows_and_the_json_stays_plain(self):
+        meta = deep_meta()
+        run_id = int.from_bytes(meta[1:5], "little")
+        rows = fw_dump()["rows"][0]
+        rb = bytearray(bytes.fromhex(rows))
+        rb[4:8] = run_id.to_bytes(4, "little")
+        link = Link([meta, page(meta, 0, [ROW0]), meta, *wire_chunks(self.blob, run_id), *wire_chunks(self.detail, run_id),
+                     *rows_chunks(bytes(rb), run_id)])
+        r = kr.cmd_charger_test(link, self.args("results"))
+        self.assertEqual(len(r["spec"]["cells"][1]["rows"]), 2)
+        json.dumps(r)   # keys only added: the card stays JSON
+        self.assertIn("5->9V", "\n".join(charger_summary._spec_lines(r["spec"])))
 
     def test_a_medium_export_does_not_ask(self):
         meta = bytes(HEADER2[:11]) + bytes([1, 0]) + bytes(HEADER2[13:])

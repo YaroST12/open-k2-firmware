@@ -2,6 +2,9 @@
 // Copyright (C) 2026 Yaraslau Furman
 // Protocol lab grammar, see k2/core/lab.hpp. One table row per command: family, verb, id, the positional
 // kinds and the rule that decides whether the command needs `confirm`.
+#include <array>
+#include <iterator>
+
 #include "k2/core/lab.hpp"
 #include "k2/drivers/lcd_timing.hpp"
 #include "k2/fastcharge/ufcs_tune.hpp"
@@ -20,14 +23,32 @@ enum class Raise : std::uint8_t {
     Levels,    // dpdm: a raw 0.6 V / 3.3 V level
 };
 
-struct Entry {
-    std::string_view fam, verb, name;
+// The rows list the family and the verb apart so they read plainly; the name is always family[.verb], checked below, and the stored
+// entry keeps only the name (12 B a row instead of 36 B, 50 rows).
+struct Row {
+    const char *fam, *verb, *name;
     Id id;
     const char* args;
     Raise raise;
 };
 
-constexpr Entry kTable[] = {
+struct Entry {
+    const char* name;
+    const char* args;
+    Id id;
+    Raise raise;
+    std::string_view family() const {
+        const std::string_view n(name);
+        return n.substr(0, n.find('.'));
+    }
+    std::string_view verb() const {
+        const std::string_view n(name);
+        const std::size_t dot = n.find('.');
+        return dot == std::string_view::npos ? std::string_view{} : n.substr(dot + 1);
+    }
+};
+
+constexpr Row kRows[] = {
     {"accp", "ping", "accp.ping", Id::AccpPing, "", Raise::Never},
     {"accp", "read", "accp.read", Id::AccpRead, "bB", Raise::Never},
     {"accp", "write", "accp.write", Id::AccpWrite, "bb", Raise::Always},
@@ -80,10 +101,30 @@ constexpr Entry kTable[] = {
     {"pdstress", "result", "pdstress.result", Id::PdStressResult, "o", Raise::Never},
     {"pdstress", "stop", "pdstress.stop", Id::PdStressStop, "", Raise::Never},
 };
-static_assert(sizeof(kTable) / sizeof(kTable[0]) == static_cast<std::size_t>(Id::Count));
+static_assert(sizeof(kRows) / sizeof(kRows[0]) == static_cast<std::size_t>(Id::Count));
+
+constexpr bool joined(const Row& r) {
+    const char *f = r.fam, *v = r.verb, *n = r.name;
+    while (*f) if (*f++ != *n++) return false;
+    if (*v && *n++ != '.') return false;
+    while (*v) if (*v++ != *n++) return false;
+    return *n == '\0';
+}
+
+constexpr bool all_joined() {
+    for (const Row& r : kRows) if (!joined(r)) return false;
+    return true;
+}
+static_assert(all_joined(), "a lab row's name must be family[.verb]");
+
+constexpr auto kTable = [] {
+    std::array<Entry, std::size(kRows)> t{};
+    for (std::size_t i = 0; i < t.size(); ++i) t[i] = {kRows[i].name, kRows[i].args, kRows[i].id, kRows[i].raise};
+    return t;
+}();
 
 struct OptDef {
-    std::string_view name;
+    const char* name;
     std::uint32_t Opts::*field;
     std::uint32_t lo, hi;
 };
@@ -155,10 +196,10 @@ const Entry* find(std::string_view fam, std::string_view verb, bool& verbless) {
     const Entry* bare = nullptr;
     bool fam_seen = false;
     for (const Entry& e : kTable) {
-        if (e.fam != fam) continue;
+        if (fam != e.family()) continue;
         fam_seen = true;
-        if (e.verb.empty()) bare = &e;
-        else if (e.verb == verb) return &e;
+        if (e.verb().empty()) bare = &e;
+        else if (verb == e.verb()) return &e;
     }
     if (bare) { verbless = true; return bare; }
     return fam_seen ? nullptr : nullptr;
@@ -167,7 +208,7 @@ const Entry* find(std::string_view fam, std::string_view verb, bool& verbless) {
 }  // namespace
 
 bool is_family(std::string_view w) {
-    for (const Entry& e : kTable) if (e.fam == w) return true;
+    for (const Entry& e : kTable) if (w == e.family()) return true;
     return false;
 }
 

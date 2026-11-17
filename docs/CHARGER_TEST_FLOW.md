@@ -757,15 +757,31 @@ ended hard); a lost link ends it as a fault. The default image has no spec stage
 
 The grid gains a section after the units: 27 VerdictCells (`specsec::kOrder`, labels in `spec_text.hpp`, at most 8 characters in
 the 52 px label strip) in the ordinary rows, a 2 px rule above the PPS block, the AVS block and the observer. A cell shows the worst value (or, for a skipped check, the
-reason, struck out); OK on a cell opens `SpecDetail`: a KvTable of Verdict,
-Worst, Limit, Count, Fails, At and Penalty. A cell keeps its verdict, fail count and worst value plus the detail the page shows
+reason, struck out); OK on a cell opens `SpecDetail`. **The list below is built only with `K2_SPECROWS=1`** (off by default since 2026-11-17: the shipping
+image has no flash for it); without it every check opens the summary KvTable, no `/jr/spt.rec` is written or read and `0x0B [8]` answers BadLength.
+A check that judged more than one transition or pass (`specsec::has_list`: the fixed
+transition checks and the PPS / AVS pass checks, cells 0-15 and 19-24) opens a **per-transition list** (user decision 2026-11-17): a TopBar with the
+check's name, a 36 px verdict band (the verdict word and the count), a RowList with one verdict-marked row per transition (from to volts, the
+value in the check's own unit, the margin past the limit in red when it failed; a programmable pass names its window and step class and the
+steps over) and a footer naming the worst row, toned by the verdict. A fixed row reads `5->9V`; EPR rows (28 V and up) carry the family;
+PLUS / MINUS scroll the five-row window. A check with one measurement or none keeps the single summary: a KvTable of Verdict,
+Worst, Limit, Count, Fails, At and Penalty (also the fallback when a list and its verdict disagree). The rows come from the engine's records
+(`specsec::row_at`, `spec_rows.hpp`; the margin is the signed distance past the nearest limit, positive = outside) while the run is live, and from the
+journal's rows file once it is over. The list is capped at `specsec::kRowsMax` (392 rows, a 4010 byte file); past the cap the later rows are
+not listed (the counts in the file are cut to fit, the summary's count still says how many were judged). Known gaps: an Accept row exists only
+for fixed transitions, a lost-link PS_RDY time failure has no record, a pass past the engine's pass pool has no rows. A cell keeps its verdict, fail count and worst value plus the detail the page shows
 (user decision 2026-11-16): the limit it was judged against (two int16, the value's quantisation, 32767 = the open side), the engine's
 count and the place (a, b). Live and resumed runs read the same stored values; a journal written before the detail record has none
 (count 0) and its cells read a dim "-" with the Worst value and the verdict carrying the page. The journal keeps the section
 (`Type::Spec`, `/jr/sp.rec`) and its detail (`Type::SpecDetail`, `/jr/spd.rec`, written right behind it): a second
-record. The journal format is 4; a format 3 journal still loads (its cells read "-"), a firmware that only knows format 3 drops a format 4 journal. The report card does not carry either.
-Remote `0x0B [6, off]` reads the section and `0x0B [7, off]` its detail (216 bytes, chunks of 48; each form fits the one-byte total);
-`ct_start.py`, `k2_remote` and the web grid (`ctgrid.js`) show it as its own section with the limit and count in the failure lines and titles.
+record. A third file, `/jr/spt.rec` (ten bytes a row after a 90 byte header: magic `SPT1`, run id, a u16 row count and a u8 worst index per cell), keeps the
+rows; it is dropped when the run has none. The journal format is 5; a format 3 or 4 journal still loads (no rows file: its cells read
+the summary, and format 3 cells read "-"), a firmware that only knows an older format drops a format 5 journal. The report card does not carry any of them.
+Remote `0x0B [6, off]` reads the section and `0x0B [7, off]` its detail (216 bytes, chunks of 48; each form fits the one-byte total); `0x0B [8, off_lo, off_hi]`
+reads the rows file (a reply of run id u32, total u16, offset u16, n u8, then up to 48 bytes; 16-bit total and offset because the file is
+up to about 4 KB; total 0 = no rows, BadLength from an older firmware).
+`ct_start.py`, `k2_remote` and the web grid (`ctgrid.js`) show the section as its own section with the limit and count in the failure lines and titles;
+`k2_remote` and `pdspec_blob.decode_rows` add `rows` and `worst_row` to each listed cell of the export (keys only added), and the summary lists the failing transitions under a failed check. The web grid does not read the rows yet.
 `result_layout` turns the run's steps into rows and tokens (`build`; the on-device grid has no header rows, a skip tag
 glued to a token is not drawn), `wrap` fits them to the cell area (`Metrics{adv, pad, gap, avail, mark, max_groups, cells}`:
 the grid sets `cells` (equal-width cells, only the head's volt text counts) and `max_groups = 5` (163 px at 8 px advance);

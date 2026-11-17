@@ -64,6 +64,9 @@
 namespace k2 {
 
 class Ui;
+#if K2_SPECROWS
+namespace specsec { struct Row; }
+#endif
 
 // State every page reads; owned by Ui, filled in its tick().
 struct UiContext {
@@ -499,6 +502,16 @@ private:
     void decide_reattach();
     charger_journal::RunMeta arm_meta_ K2_BSS_ZERO;
     void journal_pump(uint32_t now);        // one file at most per call; there is no drain
+    void pump_journal();                    // hw::pump (K2_SPECROWS: with the spec rows' source, the engine while it is this run's)
+#if K2_SPECROWS
+public:
+    // The spec rows file of the run in hand, as the journal writes it (specsec::kRowsHdr + rows): its size (0 = none, or not this run's)
+    // and a piece of it, from the engine while it holds this run's records, else from the journal. The remote reads it in chunks.
+    uint16_t spec_rows_len() const;
+    size_t spec_rows_read(uint16_t off, std::span<uint8_t> out) const;
+private:
+    uint32_t spec_live_run_ = 0;            // the run whose spec result the PD spec engine still holds (spec_done); 0 = none
+#endif
     void arm_step(uint32_t now);
     void arm_abort();
     ctcable::Choice resume_cable_ K2_BSS_ZERO;     // the journaled identity of that run, re-armed by reapply_cable()
@@ -662,7 +675,18 @@ private:
     [[gnu::noinline]] void paint_running(uint32_t now);
     [[gnu::noinline]] void paint_results();
     [[gnu::noinline]] void paint_detail();
-    [[gnu::noinline]] void paint_spec_detail();    // one PD spec check: its verdict, worst value, limit, count, fails, place, penalty
+    [[gnu::noinline]] void paint_spec_detail();    // one PD spec check: its seven summary rows (K2_SPECROWS: a list of its transitions first)
+#if K2_SPECROWS
+    // The open check's per-transition rows: how many, where they start in the journal's file, the worst one, how many fail. Taken when the
+    // stage opens (on_stage); n < 2 (one measurement, none, or no rows file) keeps the summary table.
+    struct SpecList { uint16_t n = 0, first = 0, fails = 0; uint8_t worst = 0; bool live = false; };
+    SpecList spec_list_{};
+    void spec_list_load(int k);
+    bool spec_list_row(int i, specsec::Row& r) const;   // specsec::Row: chargertest/spec_rows.hpp (included by the .cpp)
+    bool spec_list_on() const { return s_.stage_ == Stage::SpecDetail && spec_list_.n >= 2; }
+#else
+    static constexpr bool spec_list_on() { return false; }
+#endif
     [[gnu::noinline]] void paint_resume();
     [[gnu::noinline]] void paint_hero(bool full, int16_t x, int16_t y, uint8_t chars, int32_t vbus_mv, uint16_t color);
     [[gnu::noinline]] void paint_sweep_hero(int32_t vbus_mv, uint16_t set_mv);   // Running, a sweep row: the signed error and the act / set pair

@@ -152,6 +152,64 @@ def decode_section(b, detail=None):
             "detailed": detail is not None and any(c["count"] for c in cells)}
 
 
+ROWS_MAGIC = b"SPT1"
+ROW_BYTES = 10
+ROW_FAIL, ROW_PROG = 1, 2
+
+
+def rows_header_bytes():
+    """specsec::kRowsHdr: magic, run id, one u16 count and one u8 worst index per cell, one pad byte."""
+    return 8 + 3 * len(section_tables()["cells"]) + 1
+
+
+def decode_rows(b, run_id=None):
+    """The per-transition rows of the spec checks (specsec spec_rows.hpp, the remote read 0x0B [8, off]): the journal's rows file byte
+    for byte. Returns one list per grid cell, in grid order, keyed by the check's key: each row is a dict with from_mv / to_mv (a fixed
+    transition, 5 V to 9 V) or min_mv / max_mv and step_class (a programmable pass), fail, value (in the check's unit, None when the
+    event never came), value_text and margin (a fixed row: the signed distance past the nearest limit in the unit, positive =
+    outside, None when no value; a pass: the failing steps), plus the worst row's index per check. Raises ValueError when the file is
+    not a rows file (magic, size, a count the file does not hold) or names another run."""
+    s = section_tables()
+    n_cells, hdr = len(s["cells"]), rows_header_bytes()
+    b = bytes(b)
+    if len(b) < hdr or b[:4] != ROWS_MAGIC:
+        raise ValueError("not a PD spec rows file")
+    rid = struct.unpack_from("<I", b, 4)[0]
+    if run_id is not None and rid != run_id:
+        raise ValueError("PD spec rows belong to another run")
+    counts = struct.unpack_from(f"<{n_cells}H", b, 8)
+    worst = b[8 + 2 * n_cells: 8 + 3 * n_cells]
+    if len(b) != hdr + sum(counts) * ROW_BYTES:
+        raise ValueError(f"PD spec rows file is {len(b)} bytes, its counts name {hdr + sum(counts) * ROW_BYTES}")
+    cells, at = {}, hdr
+    for i, d in enumerate(s["cells"]):
+        step = s["steps"].get(d["unit"], 1)
+        rows = []
+        for _ in range(counts[i]):
+            check, flags, a, bb, value, margin = struct.unpack_from("<BBHHhh", b, at)
+            at += ROW_BYTES
+            prog = bool(flags & ROW_PROG)
+            v = None if value == s["unseen"] else value * step
+            row = {"fail": bool(flags & ROW_FAIL), "value": v, "value_text": "never" if v is None else fmt_value(d["unit"], v)}
+            if prog:
+                row.update({"min_mv": a, "max_mv": bb, "step_class": (flags >> 2) & 3, "failing_steps": margin & 0xFF, "margin": None})
+            else:
+                row.update({"from_mv": a, "to_mv": bb, "margin": None if margin == s["unseen"] else margin * step})
+            rows.append(row)
+        if counts[i] and worst[i] >= counts[i]:
+            raise ValueError(f"PD spec rows cell {i} names worst row {worst[i]} of {counts[i]}")
+        cells[d["key"]] = {"worst": worst[i] if counts[i] else None, "rows": rows}
+    return {"run_id": rid, "cells": cells}
+
+
+def row_name(r):
+    """A row's transition in volts, as the K2's list names it: 5->9V, 9->9.5V, or a programmable pass's window (3.3-11V, class 1)."""
+    v = lambda mv: f"{mv / 1000:g}"
+    if "min_mv" in r:
+        return f"{v(r['min_mv'])}-{v(r['max_mv'])}V class {r['step_class']}"
+    return f"{v(r['from_mv'])}->{v(r['to_mv'])}V"
+
+
 def _detail_of(s, t, d, measured, detail, i):
     """The limit, count and place of grid cell i from the detail form: the device's own readings, as its detail page shows them.
     A measured cell with count 0 has none kept (a journal from before the detail record); a cell nothing measured has none to show."""

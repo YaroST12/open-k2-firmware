@@ -164,7 +164,7 @@ The level shows in the results and on the running page:
 
 ### PD spec checks in a Deep run
 
-In builds made with `K2_PDSPEC=1` (the default build does not have it) a Deep charger test also runs a no-load conformance pass over the attached PD charger, judged against the limits of the PD specification, as one more section of the results: a cell per check with its verdict, and **OK** opens a check's value, limit and verdict. The score is a penalty: 0 is ideal. It never asks for more than the charger advertises; the keep-alive timeouts and the Hard Reset and detach recovery checks, which make a source reset by design, stay with `tools/pd_spec.py`.
+In builds made with `K2_PDSPEC=1` (the default build does not have it) a Deep charger test also runs a no-load conformance pass over the attached PD charger, judged against the limits of the PD specification, as one more section of the results: a cell per check with its verdict, and **OK** opens a check's value, limit and verdict (the per-transition list on top of that is a further build option, `K2_SPECROWS=1`, see `docs/PD_SPEC_CHECK.md`). The score is a penalty: 0 is ideal. It never asks for more than the charger advertises; the keep-alive timeouts and the Hard Reset and detach recovery checks, which make a source reset by design, stay with `tools/pd_spec.py`.
 
 ### E-marker and cable read
 

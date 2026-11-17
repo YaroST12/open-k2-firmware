@@ -1534,6 +1534,164 @@ static void test_the_spec_detail_shows_the_limit_while_the_engine_holds_the_run(
     check_text_at(kSmall, row_y, lim.view(), kText, kBg, kit::kKvValueX);                                  // Limit: the engine's bound
     check_text_at(kSmall, row_y + kit::kRowH, cnt.view(), kText, kBg, kit::kKvValueX);                    // Count
 }
+#if K2_SPECROWS
+// The rows file the journal keeps for the run (chargertest/spec_rows.hpp): cell k lists per_cell[k] (fixed transitions, 10 bytes each).
+static std::vector<uint8_t> spec_rows_image(uint32_t run_id, const std::vector<std::vector<specsec::Row>>& per_cell) {
+    std::array<uint16_t, specsec::kCells> counts{};
+    std::array<uint8_t, specsec::kCells> worst{};
+    size_t total = 0;
+    for (size_t k = 0; k < per_cell.size() && k < specsec::kCells; ++k) {
+        counts[k] = static_cast<uint16_t>(per_cell[k].size());
+        total += per_cell[k].size();
+        for (size_t i = 0; i < per_cell[k].size(); ++i)
+            if (specsec::rows_detail::rank(per_cell[k][i]) > specsec::rows_detail::rank(per_cell[k][worst[k]])) worst[k] = static_cast<uint8_t>(i);
+    }
+    std::vector<uint8_t> out(specsec::kRowsHdr + total * specsec::kRowBytes, 0);
+    specsec::rows_put_header(out.data(), run_id, counts, worst);
+    size_t at = specsec::kRowsHdr;
+    for (const auto& cell : per_cell)
+        for (const specsec::Row& r : cell) { specsec::row_encode(r, out.data() + at); at += specsec::kRowBytes; }
+    return out;
+}
+static specsec::Row fixed_trans_row(size_t cell, unsigned from_mv, unsigned to_mv, int value, int margin, bool fail) {
+    const pdspec::Unit u = pdspec::kDefs[static_cast<size_t>(specsec::kOrder[cell])].unit;
+    specsec::Row r;
+    r.check = static_cast<uint8_t>(specsec::kOrder[cell]);
+    r.flags = fail ? specsec::kRowFail : 0;
+    r.a = static_cast<uint16_t>(from_mv);
+    r.b = static_cast<uint16_t>(to_mv);
+    r.value = specsec::quantize(u, value);
+    r.margin = specsec::quantize(u, margin);
+    return r;
+}
+// OK on a check opens its detail: a list of its transitions when the journal's rows file has two or more of them and agree with the verdict
+// (the list's rows are the cell's count, PLUS / MINUS move the cursor, the footer names the worst), else the single-measurement summary.
+static void test_the_spec_detail_lists_the_transitions_of_the_journal() {
+    six_pdo_fixture(); Ui ui; uint32_t t;
+    finished_results(ui, t);
+    const auto calm = [&] { for (int i = 0; i < 64 && ui.painting(); ++i) ui.tick(t += 100); CHECK_EQ(ui.painting(), false); };
+    const int units = ui.list_state().count;   // the unit rows: read before the spec result is set
+    const_cast<ct::Evidence&>(ui.charger_test_results().evidence()).spec = spec_fixture();
+    const uint32_t run = ui.charger_test_results().run_id();
+    std::vector<std::vector<specsec::Row>> cells(specsec::kCells);
+    cells[0] = {fixed_trans_row(0, 5000, 9000, 1200, -300, false), fixed_trans_row(0, 9000, 12000, 900, -600, false),
+                fixed_trans_row(0, 12000, 15000, 1500, -100, false), fixed_trans_row(0, 15000, 20000, 1100, -400, false)};   // a pass
+    cells[1] = {fixed_trans_row(1, 5000, 9000, 90000, -10000, false), fixed_trans_row(1, 9000, 12000, 540000, 40000, true),
+                fixed_trans_row(1, 12000, 15000, 120000, -9000, false)};   // a fail: one of three
+    for (unsigned i = 0; i < 20; ++i) cells[6].push_back(fixed_trans_row(6, 5000 + 500 * i, 5500 + 500 * i, 400 + 3 * i, -90 + int(i), false));   // a long list
+    {   // a programmable check: the margin is a count of failed steps, unsigned ("3 bad"), and keeps one space in the footer
+        const uint8_t chk = static_cast<uint8_t>(specsec::kOrder[19]);
+        specsec::Row ok, bad;
+        ok.check = bad.check = chk;
+        ok.flags = specsec::kRowProg;
+        bad.flags = specsec::kRowProg | specsec::kRowFail;
+        ok.a = bad.a = 5000; ok.b = bad.b = 9000;
+        ok.value = bad.value = 0;
+        ok.margin = 0; bad.margin = 3;
+        cells[19] = {ok, bad};
+    }
+    cells[7] = {fixed_trans_row(7, 5000, 9000, 9210, 210, false), fixed_trans_row(7, 9000, 12000, 12040, 40, false)};   // a FAIL verdict with no failing row: the summary
+    cells[4] = {fixed_trans_row(4, 5000, 9000, 4000, -100, false)};   // one row: the summary
+    g_stub.journal_rows = spec_rows_image(run, cells);
+    g_stub.journal_rows_noted = false;   // the run's own note_spec() (if any) must not make the stub pump rewrite the file from the engine
+    top(ui, t); press(ui, Button::Ok, t); ui.tick(t += 100); calm();   // into a unit's Steps and back: the grid is rebuilt
+    press(ui, Button::Back, t); ui.tick(t += 100); calm();
+    const auto open_check = [&](int cell) {
+        top(ui, t);
+        for (int i = 0; i < units + cell; ++i) press(ui, Button::Plus, t);
+        ui.tick(t += 100); calm();
+        press(ui, Button::Ok, t); ui.tick(t += 100); calm();
+        CHECK_EQ(ui.charger_test_stage(), 15);   // SpecDetail
+    };
+    const auto close_check = [&] { press(ui, Button::Back, t); ui.tick(t += 100); calm(); CHECK_EQ(ui.charger_test_stage(), 6); };
+    open_check(0);
+    CHECK_EQ(ui.list_state().count, 4);
+    CHECK_EQ(ui.charger_test_cursor(), 0);
+    dump_screen("spec_transitions_pass");
+    CHECK_EQ(footer_shows("worst 12→15V: 1.5ms", kOk), true);   // the pass: the largest value, no margin
+    press(ui, Button::Plus, t); ui.tick(t += 100); calm();
+    CHECK_EQ(ui.charger_test_cursor(), 1);
+    press(ui, Button::Minus, t); ui.tick(t += 100); calm();
+    CHECK_EQ(ui.charger_test_cursor(), 0);
+    close_check();
+    open_check(1);
+    CHECK_EQ(ui.list_state().count, 3);
+    dump_screen("spec_transitions_fail");
+    CHECK_EQ(footer_shows("worst 9→12V: 540ms +40ms", kError), true);   // the failing transition, the margin in 27 cells
+    close_check();
+    open_check(19);
+    CHECK_EQ(ui.list_state().count, 2);
+    CHECK_EQ(footer_shows("worst 5-9V 100mV: 0mV 3 bad", kError), true);   // an unsigned margin: one space, no "+"
+    close_check();
+    open_check(6);
+    CHECK_EQ(ui.list_state().count, 20);
+    for (int i = 0; i < 16; ++i) press(ui, Button::Plus, t);
+    ui.tick(t += 100); calm();
+    CHECK_EQ(ui.charger_test_cursor(), 16);
+    dump_screen("spec_transitions_long");
+    for (int i = 0; i < 20; ++i) press(ui, Button::Plus, t);
+    ui.tick(t += 100); calm();
+    CHECK_EQ(ui.charger_test_cursor(), 19);   // stops on the last
+    close_check();
+    // A verdict that disagrees with the rows, or one row alone, or no row: the summary table, no list.
+    for (const int cell : {7, 4, 2, 3}) {
+        open_check(cell);
+        CHECK_EQ(ui.list_state().count, 0);
+        close_check();
+    }
+    // Another run's file is not this run's: no list anywhere.
+    g_stub.journal_rows = spec_rows_image(run + 1, cells);
+    open_check(0); CHECK_EQ(ui.list_state().count, 0); close_check();
+    g_stub.journal_rows.clear();
+    open_check(0); CHECK_EQ(ui.list_state().count, 0); close_check();
+}
+#else
+// A build without K2_SPECROWS never lists transitions, whatever the stub journal holds: OK on a check opens the seven-row summary table
+// (no list rows, the Limit row drawn from the cell), for a passing and a failing check alike.
+static void test_the_spec_detail_is_the_summary_table_without_transition_rows() {
+    six_pdo_fixture(); Ui ui; uint32_t t;
+    finished_results(ui, t);
+    const auto calm = [&] { for (int i = 0; i < 64 && ui.painting(); ++i) ui.tick(t += 100); CHECK_EQ(ui.painting(), false); };
+    const int units = ui.list_state().count;   // the unit rows: read before the spec result is set
+    const specsec::Result spec = spec_fixture();
+    const_cast<ct::Evidence&>(ui.charger_test_results().evidence()).spec = spec;
+    g_stub.journal_rows.assign(256, 0x5A);   // a file a K2_SPECROWS build would have written: it is never read
+    top(ui, t); press(ui, Button::Ok, t); ui.tick(t += 100); calm();   // into a unit's Steps and back: the grid is rebuilt
+    press(ui, Button::Back, t); ui.tick(t += 100); calm();
+    for (const int k : {0, 1}) {   // fixture: cell 0 passes, cell 1 fails
+        top(ui, t);
+        for (int i = 0; i < units + k; ++i) press(ui, Button::Plus, t);
+        ui.tick(t += 100); calm();
+        press(ui, Button::Ok, t); ui.tick(t += 100); calm();
+        CHECK_EQ(ui.charger_test_stage(), 15);   // SpecDetail
+        CHECK_EQ(ui.list_state().count, 0);
+        StrBuf<20> v; uint16_t color = kText;
+        spectext::detail_value(2, static_cast<int>(specsec::kOrder[static_cast<size_t>(k)]), spec.cells[static_cast<size_t>(k)], v, color);
+        const int row_y = kit::kBodyY + 2 * kit::kRowH + kit::row_text_y(kit::kRowH, kSmall.height);
+        check_text_at(kSmall, row_y, v.view(), color, kBg, kit::kKvValueX);   // the Limit row
+        press(ui, Button::Back, t); ui.tick(t += 100); calm();
+        CHECK_EQ(ui.charger_test_stage(), 6);
+    }
+}
+#endif
+// A Deep run in the host stub: the PD spec section runs the engine against the stub's source and, when the run ends, the detail pages list
+// the transitions from the engine (no journal file read); the stub's source gives the engine none, so no rows file is written.
+static void test_a_deep_run_lists_its_transitions_from_the_engine() {
+    six_pdo_fixture(); Ui ui; open(ui);
+    CHECK_EQ(ui.charger_test_set_level(2), true);
+    review(ui);
+    start_press(ui, 1300); press(ui, Button::Ok, 1400);
+    uint32_t t = 1500;
+    for (; t <= 3600000 && ui.charger_test_busy(); t += 20) { fusb302::service(); ui.tick(t); }
+    const pdspec::Engine* e = ui.pd_spec().engine_for_test();
+    // The host stub's source gives the engine no transitions, so the run is over, the section is shown and no rows file was asked for.
+    CHECK_EQ(ui.charger_test_stage(), 6);
+    CHECK_EQ(g_stub.journal_rows.empty(), true);
+    CHECK_EQ(e != nullptr, true);
+#if K2_SPECROWS
+    if (e) CHECK_EQ(specsec::rows_total(*e), size_t(0));
+#endif
+}
 // A voltage fold is a caution (user decision 2026-11-16): the sweep row and the APDO's fixed rows on the folded side read amber,
 // neither pass nor fail. The sweep itself is a clean run here; the fold is set on the finished run (the host stub cannot make a
 // converter fold back), then the Results grid is rebuilt. Checks the header's fourth cell, the Steps footer and the Detail page.
@@ -5202,6 +5360,12 @@ int main() {
     test_preflight_wrong_voltage_under_pdo1_contract_is_logged();
     test_the_results_grid_carries_the_pdspec_section();
     test_the_spec_detail_shows_the_limit_while_the_engine_holds_the_run();
+#if K2_SPECROWS
+    test_the_spec_detail_lists_the_transitions_of_the_journal();
+#else
+    test_the_spec_detail_is_the_summary_table_without_transition_rows();
+#endif
+    test_a_deep_run_lists_its_transitions_from_the_engine();
     test_the_running_counter_counts_executed_rows_like_the_bar();
     test_family_steps_scenes();
     test_a_long_family_list_scrolls_under_its_header();

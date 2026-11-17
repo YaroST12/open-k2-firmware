@@ -199,6 +199,7 @@ def _spec_lines(sp):
         kept = f" (limit {c['limit_text']}, {c['count']} measured)" if c.get("limit_text") else ""   # the detail form, when the device kept it
         if c["verdict"] == "fail":
             out.append(f"  - {c['label']}: FAIL, worst {c['value_text']}, {c['fails']} over{kept}")
+            out += _spec_row_lines(c)
         elif c["verdict"] == "unverified":
             out.append(f"  - {c['label']}: unverified (a K2 figure, no spec limit), worst {c['value_text']}{kept}")
     skips = {}
@@ -208,6 +209,20 @@ def _spec_lines(sp):
     out += [f"  - skipped, {why}: {', '.join(names)}" for why, names in skips.items()]
     if sp.get("unconfirmed"):
         out.append("  - WARNING: the end-of-run return to 5 V was not confirmed: unplug the charger")
+    return out
+
+
+def _spec_row_lines(c):
+    """The failing transitions of a failed check (the K2's per-transition list, pdspec_blob.decode_rows), one line each: the transition
+    in volts, the value and how far past the limit. Nothing for a check the device kept no rows for."""
+    import pdspec_blob
+    out = []
+    for r in c.get("rows", []):
+        if not r["fail"]:
+            continue
+        over = f", {r['failing_steps']} steps over" if "failing_steps" in r else (f", {r['margin'] / 1000:+.3f} V past" if c["unit"] == "mv" and r["margin"] is not None
+                                                                                    else f", {r['margin']:+g} past" if r["margin"] is not None else "")
+        out.append(f"      {pdspec_blob.row_name(r)}: {r['value_text']}{over}")
     return out
 
 

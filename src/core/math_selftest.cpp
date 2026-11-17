@@ -1243,11 +1243,12 @@ K2_HOT bool check_sweep_sum(Out& o) {
     return s.points == kN && s.peak_at_mv == 19900 && s.fold_from_mv == 20000 && s.fold_mv == 19420 && n > 0;
 }
 
-// Data-read canary: the same 1 KB table read byte by byte (the way a glyph decode reads a font bitmap) from the zero-wait
-// window (K2_HOT_DATA) and from the far end of flash. Identical sums; the cycle ratio is what a data read from slow flash
-// costs, the question for font tables and other K2_HOT_DATA candidates.
-constexpr std::array<std::uint8_t, 1024> make_rd_table() {
-    std::array<std::uint8_t, 1024> t{};
+// Data-read canary: the same 256 B table read byte by byte (the way a glyph decode reads a font bitmap) from the zero-wait
+// window (K2_HOT_DATA) and from the far end of flash, 16 passes (4096 reads, as the 1 KB table had in 4). Identical sums; the cycle
+// ratio is what a data read from slow flash costs, the question for font tables and other K2_HOT_DATA candidates.
+constexpr std::size_t kRdBytes = 256, kRdPasses = 16;
+constexpr std::array<std::uint8_t, kRdBytes> make_rd_table() {
+    std::array<std::uint8_t, kRdBytes> t{};
     std::uint32_t x = 0x9E3779B9u;
     for (auto& b : t) {
         x = x * 1664525u + 1013904223u;
@@ -1255,26 +1256,26 @@ constexpr std::array<std::uint8_t, 1024> make_rd_table() {
     }
     return t;
 }
-K2_HOT_DATA const std::array<std::uint8_t, 1024> kRdHot = make_rd_table();
-K2_COLD_DATA const std::array<std::uint8_t, 1024> kRdCold = make_rd_table();
+K2_HOT_DATA const std::array<std::uint8_t, kRdBytes> kRdHot = make_rd_table();
+K2_COLD_DATA const std::array<std::uint8_t, kRdBytes> kRdCold = make_rd_table();
 
 [[gnu::noinline]] K2_HOT std::uint32_t rd_sum(const std::uint8_t* t, std::uint32_t passes) {
     std::uint32_t h = kFnvBasis;
     for (std::uint32_t p = 0; p < passes; ++p)
-        for (std::size_t i = 0; i < 1024; ++i) h = (h ^ t[i]) * 16777619u;
+        for (std::size_t i = 0; i < kRdBytes; ++i) h = (h ^ t[i]) * 16777619u;
     return h;
 }
 
 bool data_placed_ok(bool fast, std::uintptr_t addr);
 
 K2_HOT bool check_rd_fast(Out& o) {
-    o.crc = rd_sum(keep(kRdHot.data()), keep(4u));
+    o.crc = rd_sum(keep(kRdHot.data()), keep(std::uint32_t{kRdPasses}));
     touch(o, kRdHot.data());
     return data_placed_ok(true, reinterpret_cast<std::uintptr_t>(kRdHot.data()));
 }
 
 K2_HOT bool check_rd_slow(Out& o) {
-    o.crc = rd_sum(keep(kRdCold.data()), keep(4u));
+    o.crc = rd_sum(keep(kRdCold.data()), keep(std::uint32_t{kRdPasses}));
     touch(o, kRdCold.data());
     return data_placed_ok(false, reinterpret_cast<std::uintptr_t>(kRdCold.data()));
 }
@@ -1358,8 +1359,8 @@ K2_HOT bool run_math(WriteFn write, void* ctx, Summary* out) {
         {"qr_encode", check_qr_encode, 0xE5CB2E43u, false},
         {"lz_pack", check_lz_pack, 0xF2BAA2E3u, false},
         {"sweep_sum", check_sweep_sum, 0x487AC9D5u, false},
-        {"rd_fast", check_rd_fast, 0x79D02B1Du, false},
-        {"rd_slow", check_rd_slow, 0x79D02B1Du, false},
+        {"rd_fast", check_rd_fast, 0x901113A5u, false},
+        {"rd_slow", check_rd_slow, 0x901113A5u, false},
 #if K2_SELFTEST_TUFIFO
         {"tu_fifo", check_tu_fifo, 0x100A6715u, false},   // device only: computed from the pattern, not run on the host
 #endif

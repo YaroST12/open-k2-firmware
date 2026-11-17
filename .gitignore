@@ -1,6 +1,7 @@
 build/
 build-net/
 build-webusb/
+build-specrows/
 *.o
 *.elf
 *.bin
@@ -10,6 +11,7 @@ __pycache__/
 *.pyc
 .claude/
 host-build/
+host-build-rows/
 host-asan/
 runs/
 
