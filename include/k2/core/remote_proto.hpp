@@ -1572,7 +1572,744 @@ concept Backend = requires(B &b, uint8_t u8, uint16_t u16, bool on) {
 namespace detail {
 inline uint16_t rd16(const uint8_t *p) { return static_cast<uint16_t>(p[0] | (p[1] << 8)); }
 inline uint32_t rd32(const uint8_t *p) { return rd16(p) | (static_cast<uint32_t>(rd16(p + 2)) << 16); }
+
+struct FrameCtx {
+    uint8_t *out;
+    uint8_t cmd;
+    uint8_t seq;
+    uint8_t buf[kMaxRspPayload];
+    std::span<uint8_t> span() { return {buf, kMaxRspPayload}; }
+};
+
+[[gnu::noinline]] bool reply_status(FrameCtx &f, Status st);
+[[gnu::noinline]] bool reply_bad_len(FrameCtx &f);
+[[gnu::noinline]] bool reply_bad_arg(FrameCtx &f);
+[[gnu::noinline]] bool reply_need_confirm(FrameCtx &f);
+[[gnu::noinline]] bool reply_byte(FrameCtx &f, Status st, uint8_t v);
+[[gnu::noinline]] bool reply_ok(FrameCtx &f, size_t n);
+[[gnu::noinline]] bool reply_ok_byte(FrameCtx &f, uint8_t v);
+[[gnu::noinline]] bool reply_status_or_byte(FrameCtx &f, Status st, uint8_t v);
+[[gnu::noinline]] bool reply_chunk_hdr(FrameCtx &f, size_t hdr_off, uint16_t off, uint16_t total, size_t n, size_t stride = 1);
+
+[[gnu::noinline]] Status validate_charger_units(std::span<const uint8_t> p);
+[[gnu::noinline]] Status validate_reread(std::span<const uint8_t> p);
+[[gnu::noinline]] Status validate_fc_basic(std::span<const uint8_t> p);
+[[gnu::noinline]] Status validate_svooc_start(std::span<const uint8_t> p, svooc::Params &sp);
+[[gnu::noinline]] Status validate_emlib(std::span<const uint8_t> p, bool &needs_write);
+[[gnu::noinline]] Status validate_cards(std::span<const uint8_t> p, bool &needs_write);
+[[gnu::noinline]] Status validate_twin(std::span<const uint8_t> p, bool &needs_write);
+[[gnu::noinline]] Status validate_blackbox(std::span<const uint8_t> p, uint32_t &arg);
+[[gnu::noinline]] Status validate_transcap(std::span<const uint8_t> p);
+[[gnu::noinline]] Status validate_trace_hid(std::span<const uint8_t> p);
+
+template <Backend B>
+[[gnu::noinline]] bool handle_control(Cmd cmd, std::span<const uint8_t> p, B &backend, FrameCtx &f) {
+    switch (cmd) {
+    case Cmd::Button: {
+        if (p.size() != 3) return reply_bad_len(f);
+        const uint16_t ms = rd16(&p[1]);
+        if (p[0] > 3 || ms < kMinPressMs || ms > kMaxPressMs) return reply_bad_arg(f);
+        const Status st = backend.press(p[0], ms);
+        if (st != Status::Ok) return reply_status(f, st);
+        f.buf[0] = p[0]; f.buf[1] = p[1]; f.buf[2] = p[2];
+        return reply_ok(f, 3);
+    }
+    case Cmd::Action: {
+        if (p.size() != 1 && p.size() != 2) return reply_bad_len(f);
+        const bool confirm = p.size() == 2 && p[1] != 0;
+        if (action_needs_confirm(p[0]) && !confirm) return reply_need_confirm(f);
+        if (p[0] == kActionFcScan && backend.lines_locked()) return reply_status(f, Status::Busy);
+        const Status st = backend.action(p[0], confirm);
+        if (st != Status::Ok) return reply_status(f, st);
+        if (p[0] == kActionFcScan) backend.lease_arm();
+        return reply_ok_byte(f, p[0]);
+    }
+    case Cmd::SetPage:
+        if (p.size() != 1) return reply_bad_len(f);
+        return reply_status_or_byte(f, backend.set_page(p[0]), p[0]);
+    case Cmd::Reboot:
+        if (!p.empty()) return reply_bad_len(f);
+        backend.reboot();
+        return reply_ok(f, 0);
+    case Cmd::DfuEnter:
+        if (p.size() != 4 && p.size() != 5) return reply_bad_len(f);
+        if (rd32(p.data()) != kDfuMagic || (p.size() == 5 && p[4] > 1)) return reply_bad_arg(f);
+        backend.dfu_enter(p.size() == 5 ? p[4] : 0);
+        return reply_ok(f, 0);
+    case Cmd::Log:
+        if (p.size() > 1) return reply_bad_len(f);
+        if (p.size() == 1) backend.set_log(p[0] != 0);
+        return reply_ok_byte(f, backend.log_enabled() ? 1 : 0);
+    default:
+        return reply_status(f, Status::UnknownCmd);
+    }
 }
+
+template <Backend B>
+[[gnu::noinline]] bool handle_state(Cmd cmd, std::span<const uint8_t> p, B &backend, FrameCtx &f) {
+    switch (cmd) {
+    case Cmd::Ping:
+        if (!p.empty()) return reply_bad_len(f);
+        return reply_ok(f, encode_ping(f.span(), backend.ping()));
+    case Cmd::GetState:
+        if (p.size() > 1) return reply_bad_len(f);
+        if (p.empty() || p[0] == 0) return reply_ok(f, encode_state(f.span(), backend.state()));
+        if (p[0] == 1) return reply_ok(f, encode_session(f.span(), backend.session()));
+        if (p[0] == 2) return reply_ok(f, encode_diag(f.span(), backend.diag()));
+        if (p[0] == 3) return reply_ok(f, encode_keys(f.span(), backend.keys()));
+        return reply_bad_arg(f);
+    case Cmd::GetPdos: {
+        if (p.size() > 1) return reply_bad_len(f);
+        const uint8_t index = p.empty() ? 0 : p[0];
+        const PdoSnapshot snap = backend.pdos();
+        if (index >= kMaxPdos || (index > 0 && index >= snap.num_pdos)) return reply_bad_arg(f);
+        return reply_ok(f, encode_pdo(f.span(), snap, index));
+    }
+    case Cmd::GetEmarker: {
+        if (p.size() > 1) return reply_bad_len(f);
+        const uint8_t part = p.empty() ? 0 : p[0];
+        if (part > 2) return reply_bad_arg(f);
+        return reply_ok(f, encode_emarker(f.span(), backend.emarker(), part));
+    }
+    case Cmd::GetIdentity:
+        if (!p.empty()) return reply_bad_len(f);
+        return reply_ok(f, encode_identity(f.span(), backend.identity()));
+    case Cmd::FactoryWipe:
+        if (p.size() != 4 && p.size() != 5) return reply_bad_len(f);
+        if (rd32(p.data()) != kFactoryWipeMagic || (p.size() == 5 && p[4] > 1)) return reply_bad_arg(f);
+        return reply_ok(f, encode_factory_wipe(f.span(), backend.factory_wipe(p.size() == 5 ? p[4] : 0)));
+    case Cmd::FlashDump: {
+        if (p.size() != 5) return reply_bad_len(f);
+        const uint32_t addr = rd32(p.data());
+        const uint8_t n = p[4];
+        if (n == 0 || n > kFlashDumpMax || addr < kFlashDumpBase || addr > kFlashDumpEnd - n)
+            return reply_bad_arg(f);
+        for (size_t i = 0; i < 4; i++) f.buf[i] = p[i];
+        f.buf[4] = n;
+        backend.flash_read(addr, std::span<uint8_t>(f.buf + 5, n));
+        return reply_ok(f, 5 + n);
+    }
+    case Cmd::BootInfo: {
+        if (p.size() != 3) return reply_bad_len(f);
+        const uint8_t part = p[0];
+        const uint16_t off = rd16(&p[1]);
+        if (part == kBootInfoText) {
+            const uint16_t total = backend.boot_text(off == 0);
+            if (off > total) return reply_bad_arg(f);
+            const size_t n = std::min<size_t>(kBootInfoChunk, total - off);
+            f.buf[0] = part;
+            backend.boot_text_read(off, std::span<uint8_t>(f.buf + 6, n));
+            return reply_chunk_hdr(f, 1, off, total, n);
+        }
+        if (part == kBootInfoSamplePart) {
+            const uint16_t total = backend.boot_sample_count();
+            if (off > total) return reply_bad_arg(f);
+            const size_t n = std::min<size_t>(kBootInfoSamples, total - off);
+            f.buf[0] = part;
+            for (size_t i = 0; i < n; i++) {
+                const bootinfo::PowerSample s = backend.boot_sample(uint16_t(off + i));
+                uint8_t *d = &f.buf[6 + i * kBootInfoSampleBytes];
+                const uint16_t v[4] = {s.vbus_mv, s.cc1_mv, s.cc2_mv, s.aux_mv};
+                for (size_t k = 0; k < 4; k++) { d[2 * k] = uint8_t(v[k]); d[2 * k + 1] = uint8_t(v[k] >> 8); }
+                d[8] = s.plus ? 1 : 0;
+            }
+            return reply_chunk_hdr(f, 1, off, total, n, kBootInfoSampleBytes);
+        }
+        return reply_bad_arg(f);
+    }
+    case Cmd::Screenshot: {
+        if (p.size() > 1) return reply_bad_len(f);
+        if constexpr (requires { backend.screenshot_opts(uint8_t{}); }) backend.screenshot_opts(p.empty() ? uint8_t{0} : p[0]);
+        const Status st = backend.screenshot();
+        if (st != Status::Ok) return reply_status(f, st);
+        return reply_ok(f, encode_screen_info(f.span(), backend.screen_info()));
+    }
+    case Cmd::Memory:
+        if (!p.empty()) return reply_bad_len(f);
+        return reply_ok(f, encode_memory(f.span(), backend.memory()));
+    case Cmd::UsbLink:
+        if (!p.empty()) return reply_bad_len(f);
+        return reply_ok(f, encode_usb_link(f.span(), backend.usb_link()));
+    case Cmd::PdMatch:
+        if (!p.empty()) return reply_bad_len(f);
+        return reply_ok(f, encode_match(f.span(), backend.match_info()));
+    default:
+        return reply_status(f, Status::UnknownCmd);
+    }
+}
+
+template <Backend B>
+[[gnu::noinline]] bool handle_charger(Cmd cmd, std::span<const uint8_t> p, B &backend, FrameCtx &f) {
+    switch (cmd) {
+    case Cmd::ChargerTest: {
+        if (!p.empty() && p[0] == kChargerTestStartReq && p.size() <= 2) {
+            if (p.size() < 2 || !(p[1] & kCtStartConfirm)) return reply_need_confirm(f);
+            if (p[1] & ~(kCtStartConfirm | kCtStartAllTests)) return reply_bad_arg(f);
+            const auto s = backend.charger_test_start(p[1]);
+            if (s.status != Status::Ok) return reply_status(f, s.status);
+            f.buf[0] = s.result; f.buf[1] = s.reason;
+            f.buf[2] = static_cast<uint8_t>(s.refusal_mv); f.buf[3] = static_cast<uint8_t>(s.refusal_mv >> 8);
+            return reply_ok(f, kChargerTestStartLen);
+        }
+        if (p.size() == 1 && p[0] == kChargerTestCancelReq) return reply_ok_byte(f, backend.charger_test_cancel());
+        if (p.size() == 2 && (p[0] == kChargerTestSpecReq || p[0] == kChargerTestSpecDetailReq)) {
+            const auto s = backend.charger_test_results();
+            if (p[1] > charger_test_spec_total(s, p[0])) return reply_bad_arg(f);
+            return reply_ok(f, encode_charger_test_spec(f.span(), s, p[0], p[1]));
+        }
+        if (!p.empty() && p.size() != 1 && p.size() != 9 && p.size() != 10) return reply_bad_len(f);
+        if (p.size() == 1 && p[0] == kChargerTestViewReq) return reply_ok(f, encode_charger_test_view(f.span(), backend.charger_test_view()));
+        const bool modern = p.size() == 1 || p.size() == 10;
+        if (modern && p[0] != kChargerTestSchema2) return reply_bad_arg(f);
+        const uint8_t schema = modern ? kChargerTestSchema2 : kChargerTestSchema;
+        const bool rows = p.size() > 1;
+        const auto q = modern ? p.subspan(1) : p;
+        const auto s = backend.charger_test_results();
+        const uint8_t start = rows ? q[0] : 0;
+        if (rows && (rd32(&q[1]) != s.run_id || rd32(&q[5]) != s.revision)) return reply_status(f, Status::Busy);
+        if (start > charger_test_count(s, schema)) return reply_bad_arg(f);
+        return reply_ok(f, encode_charger_test(f.span(), s, start, rows, schema));
+    }
+    case Cmd::ChargerUnits: {
+        const Status vst = validate_charger_units(p);
+        if (vst != Status::Ok) return reply_status(f, vst);
+        return reply_status_or_byte(f, backend.charger_units(p.subspan(1)), p[0]);
+    }
+    case Cmd::ChargerCable: {
+        if (p.size() != 0 && p.size() != 3) return reply_bad_len(f);
+        ctcable::Choice choice;
+        if (!p.empty()) {
+            if (p[0] > static_cast<uint8_t>(ctcable::Kind::Saved)) return reply_bad_arg(f);
+            choice = {static_cast<ctcable::Kind>(p[0]), rd16(&p[1])};
+            if (!ctcable::valid(choice)) return reply_bad_arg(f);
+        }
+        const auto r = backend.charger_cable(p.empty() ? nullptr : &choice);
+        if (r.status != Status::Ok) return reply_status(f, r.status);
+        return reply_ok(f, encode_charger_cable(f.span(), r.info));
+    }
+    case Cmd::ChargerSvoocCap: {
+        if (p.size() > 1) return reply_bad_len(f);
+        if (!p.empty() && p[0] >= svooc_ceiling::kModeCount) return reply_bad_arg(f);
+        const auto r = backend.charger_svooc_cap(p.empty() ? nullptr : &p[0]);
+        if (r.status != Status::Ok) return reply_status(f, r.status);
+        return reply_ok(f, encode_charger_svooc_cap(f.span(), r.info));
+    }
+    case Cmd::ChargerHunt: {
+        if (p.size() != 1) return reply_bad_len(f);
+        if (p[0] >= charger_test::kHuntSlots) return reply_bad_arg(f);
+        const auto r = backend.charger_hunt(p[0]);
+        if (r.status != Status::Ok) return reply_status(f, r.status);
+        return reply_ok(f, encode_charger_hunt(f.span(), r, p[0] < r.count));
+    }
+    case Cmd::ChargerSweep:
+        if (p.size() != 1 || p[0] > 1) return reply_bad_len(f);
+        return reply_status_or_byte(f, backend.charger_sweep(p[0] != 0), p[0]);
+    case Cmd::ChargerAvsSweep:
+        if (p.size() != 1 || p[0] > 1) return reply_bad_len(f);
+        return reply_status_or_byte(f, backend.charger_avs_sweep(p[0] != 0), p[0]);
+    case Cmd::ChargerLevel:
+        if (p.size() != 1) return reply_bad_len(f);
+        if (p[0] >= charger_test::kLevelCount) return reply_bad_arg(f);
+        return reply_status_or_byte(f, backend.charger_level(p[0]), p[0]);
+    default:
+        return reply_status(f, Status::UnknownCmd);
+    }
+}
+
+template <Backend B>
+[[gnu::noinline]] bool handle_pd(Cmd cmd, std::span<const uint8_t> p, B &backend, FrameCtx &f) {
+    switch (cmd) {
+    case Cmd::IdentifyDevice: {
+        if (p.size() != 1) return reply_bad_len(f);
+        if (p[0] > 2) return reply_bad_arg(f);
+        const IdentifyResult res = backend.identify_device(p[0]);
+        if (res.status != Status::Ok) return reply_byte(f, res.status, res.err);
+        return reply_ok(f, encode_identify_progress(f.span(), res.progress));
+    }
+    case Cmd::PdReread: {
+        const Status vst = validate_reread(p);
+        if (vst != Status::Ok) return reply_status(f, vst);
+        const RereadResult res = backend.reread(p[0], p.size() == 2 ? p[1] : uint8_t{0});
+        if (res.status != Status::Ok) return reply_status(f, res.status);
+        return reply_ok(f, encode_reread(f.span(), res.info));
+    }
+    case Cmd::AppleRead: {
+        if (p.empty() || p.size() > 2) return reply_bad_len(f);
+        if (p[0] > 1) return reply_bad_arg(f);
+        if ((p[0] == 1 && p.size() != 1) || (p[0] == 0 && p.size() != 2)) return reply_bad_len(f);
+        const uint8_t part = p[0] == 0 ? p[1] : uint8_t{0};
+        if (part > 6) return reply_bad_arg(f);
+        const AppleReadResult res = backend.apple_read(p[0]);
+        if (res.status != Status::Ok) return reply_byte(f, res.status, res.refusal);
+        return reply_ok(f, encode_apple_read(f.span(), res.info, part));
+    }
+    case Cmd::PdRequest: {
+        if (p.size() != 6) return reply_bad_len(f);
+        const PdOpResult res = backend.pd_request(p[0], rd16(&p[2]), rd16(&p[4]),
+                                                  (p[1] & kPdFlagConfirm) != 0, (p[1] & kPdFlagOverLoad) != 0);
+        if (res.status == Status::Ok && (p[0] != 1 || rd16(&p[2]) > kFcSafeMv)) backend.lease_arm();
+        f.buf[0] = res.err;
+        f.buf[1] = res.why;
+        build_response(std::span<uint8_t, kFrameSize>(f.out, kFrameSize), f.cmd, f.seq, res.status,
+                       std::span<const uint8_t>(f.buf, res.why != 0 ? 2u : 1u));
+        return true;
+    }
+    case Cmd::PdReset: {
+        if (p.size() > 1) return reply_bad_len(f);
+        const uint8_t flags = p.empty() ? uint8_t{0} : p[0];
+        if (flags & ~uint8_t(kPdFlagConfirm | kPdFlagResetInline)) return reply_bad_arg(f);
+        const PdOpResult res = backend.pd_hard_reset(flags);
+        return reply_byte(f, res.status, res.err);
+    }
+    case Cmd::PdRelease: {
+        if (!p.empty()) return reply_bad_len(f);
+        const PdOpResult res = backend.pd_release();
+        return reply_byte(f, res.status, res.err);
+    }
+    case Cmd::Stop:
+        if (!p.empty()) return reply_bad_len(f);
+        return reply_ok(f, encode_stop(f.span(), backend.stop()));
+    case Cmd::Lease: {
+        if (p.empty()) return reply_bad_len(f);
+        if (p[0] > 1) return reply_bad_arg(f);
+        if (p.size() != (p[0] == 0 ? 1u : 3u)) return reply_bad_len(f);
+        const uint16_t secs = p[0] == 1 ? rd16(&p[1]) : uint16_t{0};
+        if (secs > k2::lease::kMaxSeconds) return reply_bad_arg(f);
+        return reply_ok(f, encode_lease(f.span(), backend.lease(p[0], secs)));
+    }
+    case Cmd::PdAttach: {
+        if (p.size() != 2 && p.size() != 4 && p.size() != 5) return reply_bad_len(f);
+        const uint8_t flags = p.size() == 5 ? p[4] : uint8_t{0};
+        if (flags & ~uint8_t(kPdFlagConfirm)) return reply_bad_arg(f);
+        const uint16_t target_mv = rd16(&p[0]);
+        const uint16_t target_ma = p.size() >= 4 ? rd16(&p[2]) : 0;
+        const PdAttachResult res = backend.pd_attach(target_mv, target_ma, (flags & kPdFlagConfirm) != 0);
+        if (res.status != Status::Ok) return reply_byte(f, res.status, res.err);
+        if (res.raised) backend.lease_arm();
+        return reply_ok(f, encode_pd_trigger(f.span(), res.snapshot));
+    }
+    case Cmd::PdHandback: {
+        if (p.size() > 1) return reply_bad_len(f);
+        const uint8_t flags = p.empty() ? uint8_t{0} : p[0];
+        if (flags & ~uint8_t(kPdFlagConfirm)) return reply_bad_arg(f);
+        const HandbackResult res = backend.pd_handback(flags);
+        return reply_byte(f, res.status, res.verdict);
+    }
+    case Cmd::PdTriggerStatus:
+        if (!p.empty()) return reply_bad_len(f);
+        return reply_ok(f, encode_pd_trigger(f.span(), backend.pd_trigger()));
+    default:
+        return reply_status(f, Status::UnknownCmd);
+    }
+}
+
+template <Backend B>
+[[gnu::noinline]] bool handle_fc(Cmd cmd, std::span<const uint8_t> p, B &backend, FrameCtx &f) {
+    if (cmd == Cmd::CableR) {
+        if (p.size() > 1) return reply_bad_len(f);
+        if (p.size() == 1) {
+            if (p[0] > kCableKelvin) return reply_bad_arg(f);
+            if (p[0] == kCableReset) backend.cable_r_reset();
+            if (p[0] >= kCablePassive) backend.cable_r_mode(p[0] == kCableKelvin);
+        }
+        return reply_ok(f, encode_cable_r(f.span(), backend.cable_r_info()));
+    }
+    if (p.empty()) return reply_bad_len(f);
+    if (p[0] == kFcVooc) {
+        if (p.size() != 2 && p.size() != 3) return reply_bad_len(f);
+        if (p[1] >= kVoocPages || (p.size() == 3 && p[2] > 1)) return reply_bad_arg(f);
+        if (p.size() == 3 && backend.lines_locked()) return reply_status(f, Status::Busy);
+        return reply_ok(f, encode_vooc(f.span(), backend.vooc_monitor(p.size() == 3 ? p[2] : 2), p[1]));
+    }
+    if (p[0] == kFcSvooc) {
+        if (p.size() < 2) return reply_bad_len(f);
+        switch (p[1]) {
+        case kSvoocStatus:
+            if (p.size() != 3) return reply_bad_len(f);
+            if (p[2] > 2) return reply_bad_arg(f);
+            if (p[2] == 0) return reply_ok(f, encode_svooc(f.span(), backend.svooc_info()));
+            if (p[2] == 1) return reply_ok(f, encode_svooc_timing(f.span(), backend.svooc_info()));
+            return reply_ok(f, encode_svooc_asks(f.span(), backend.svooc_info()));
+        case kSvoocStart: {
+            svooc::Params sp;
+            const Status vst = validate_svooc_start(p, sp);
+            if (vst != Status::Ok) return reply_status(f, vst);
+            const svooc::Refusal r = backend.svooc_start(p[3], (p[2] & kSvoocUsbA) != 0, sp);
+            const size_t n = encode_svooc(f.span(), backend.svooc_info());
+            if (r != svooc::Refusal::None) {
+                build_response(std::span<uint8_t, kFrameSize>(f.out, kFrameSize), f.cmd, f.seq, Status::Busy,
+                               std::span<const uint8_t>(f.buf, n));
+                return true;
+            }
+            backend.lease_arm();
+            return reply_ok(f, n);
+        }
+        case kSvoocStop:
+            if (p.size() != 2) return reply_bad_len(f);
+            backend.svooc_stop();
+            return reply_ok(f, encode_svooc(f.span(), backend.svooc_info()));
+        case kSvoocLog: {
+            if (p.size() != 4) return reply_bad_len(f);
+            const uint16_t from = rd16(&p[2]);
+            const uint16_t kept = backend.svooc_info().log.n;
+            std::array<svooc::PairRow, kSvoocRowsPerPage> rows{};
+            const size_t want = from < kept ? std::min<size_t>(kSvoocRowsPerPage, kept - from) : 0;
+            const size_t got = want ? std::min(want, backend.svooc_pairs(from, std::span<svooc::PairRow>(rows.data(), want))) : 0;
+            return reply_ok(f, encode_svooc_log(f.span(), kept, from, std::span<const svooc::PairRow>(rows.data(), got)));
+        }
+        default:
+            return reply_bad_arg(f);
+        }
+    }
+    const Status vst = validate_fc_basic(p);
+    if (vst != Status::Ok) return reply_status(f, vst);
+    if ((p[0] == kFcScan || p[0] == kFcTrigger) && backend.lines_locked()) return reply_status(f, Status::Busy);
+    if (p[0] != kFcStatus) {
+        const bool trig = p[0] == kFcTrigger;
+        const Status st = backend.fc_cmd(p[0], trig ? p[1] : 0, trig ? rd16(&p[2]) : 0,
+                                         p[0] == kFcScan ? p[1] : trig ? p[4] : 0);
+        if (st != Status::Ok) return reply_status(f, st);
+        if (p[0] == kFcScan || (trig && rd16(&p[2]) > kFcSafeMv)) backend.lease_arm();
+    }
+    return reply_ok(f, encode_fc(f.span(), backend.fc_info()));
+}
+
+template <Backend B>
+[[gnu::noinline]] bool handle_debug(Cmd cmd, std::span<const uint8_t> p, B &backend, FrameCtx &f) {
+    switch (cmd) {
+    case Cmd::DebugFault:
+        if (p.size() != 5) return reply_bad_len(f);
+        if (rd32(p.data()) != kFaultMagic || p[4] > 2) return reply_bad_arg(f);
+        backend.debug_fault(p[4]);
+        return reply_ok(f, 0);
+    case Cmd::DebugPdos:
+        if (p.size() != 1) return reply_bad_len(f);
+        if (p[0] > kMaxPdos) return reply_bad_arg(f);
+        return reply_status_or_byte(f, backend.debug_fake_pdos(p[0]), p[0]);
+    case Cmd::DebugLink:
+        if (p.size() != 1) return reply_bad_len(f);
+        if (p[0] > 1) return reply_bad_arg(f);
+        return reply_status_or_byte(f, backend.debug_link(p[0] != 0), p[0]);
+    case Cmd::DebugPdMsg: {
+        if (p.size() < 3) return reply_bad_len(f);
+        const uint16_t header = rd16(&p[1]);
+        const size_t body = ((header >> 12) & 7) * 4u;
+        if (p.size() != 3 + body) return reply_bad_len(f);
+        if (p[0] > 2) return reply_bad_arg(f);
+        return reply_status(f, backend.debug_pd_msg(p[0], header, p.subspan(3)));
+    }
+    case Cmd::DebugCcMatrix: {
+        if (p.size() < 1 || p.size() > 3 || p[0] > 7) return reply_bad_arg(f);
+        const uint16_t modes = p.size() == 3 ? rd16(&p[1]) : 0x333u;
+        return reply_status(f, backend.debug_cc_matrix(p[0], modes));
+    }
+    case Cmd::DebugVconn:
+        if (p.size() != 1) return reply_bad_len(f);
+        if (p[0] > 4) return reply_bad_arg(f);
+        return reply_ok(f, encode_vconn(f.span(), backend.debug_vconn(p[0])));
+    case Cmd::DebugEprInfo:
+        if (p.size() != 1) return reply_bad_len(f);
+        if (p[0] > 2) return reply_bad_arg(f);
+        return reply_ok(f, encode_epr_info(f.span(), backend.debug_epr_info(p[0])));
+    case Cmd::DebugLcd:
+        if (p.empty()) return reply_ok(f, encode_lcd(f.span(), backend.debug_lcd()));
+        if (p.size() != 3) return reply_bad_len(f);
+        if (p[0] != 1 || (p[2] & ~1u)) return reply_bad_arg(f);
+        return reply_ok(f, encode_loop(f.span(), backend.debug_loop(p[1], (p[2] & 1) != 0)));
+    case Cmd::DebugCcProbe: {
+        if (p.size() != 4 && p.size() != 6) return reply_bad_len(f);
+        ccprobe::Args a;
+        a.sw0 = p[0]; a.pc = p[1]; a.ms = rd16(&p[2]);
+        if (p.size() == 6) a.modes = rd16(&p[4]);
+        if (ccprobe::check_args(a) != ccprobe::ArgError::None) return reply_bad_arg(f);
+        ccprobe::Result res;
+        const Status st = backend.debug_cc_probe(a, res);
+        if (st != Status::Ok) return reply_status(f, st);
+        return reply_ok(f, encode_cc_probe(f.span(), res));
+    }
+    case Cmd::EmarkerProbe: {
+        if (p.size() > 1) return reply_bad_len(f);
+        raprobe::Args a;
+        if (!p.empty()) a.vconn_pc = p[0];
+        if (const raprobe::ArgError e = raprobe::check_args(a); e != raprobe::ArgError::None)
+            return reply_byte(f, Status::BadArg, static_cast<uint8_t>(e));
+        raprobe::Result res;
+        const Status st = backend.ra_probe(a, res);
+        if (st != Status::Ok) return reply_byte(f, st, res.refusal);
+        return reply_ok(f, encode_ra_probe(f.span(), res));
+    }
+    case Cmd::AdcRaw:
+        if (!p.empty()) return reply_bad_len(f);
+        return reply_ok(f, encode_adc_raw(f.span(), backend.adc_raw()));
+    case Cmd::Ripple: {
+        if (p.size() > 1) return reply_bad_len(f);
+        const uint8_t code = p.empty() ? 0 : p[0];
+        if (code > 7) return reply_bad_arg(f);
+        const Status st = backend.ripple(code);
+        if (st != Status::Ok) return reply_status(f, st);
+        return reply_ok(f, encode_ripple(f.span(), code, backend.ripple_info()));
+    }
+    default:
+        return reply_status(f, Status::UnknownCmd);
+    }
+}
+
+template <Backend B>
+[[gnu::noinline]] bool handle_tools(Cmd cmd, std::span<const uint8_t> p, B &backend, FrameCtx &f) {
+    switch (cmd) {
+    case Cmd::Store:
+        if (p.empty()) return reply_bad_len(f);
+        if (p[0] != kStoreList && p[0] != kStoreSaveEmarker && p[0] != kStoreSaveLog) return reply_bad_arg(f);
+        if (p.size() != 1) return reply_bad_len(f);
+        if (p[0] != kStoreList && backend.ports_busy()) return reply_status(f, Status::Busy);
+        return reply_ok(f, encode_store(f.span(), backend.store_cmd(p[0], 0)));
+    case Cmd::Lab: {
+        if (p.empty()) return reply_bad_len(f);
+        if (p[0] == kLabSniff) {
+            if (p.size() != 2 && p.size() != 3) return reply_bad_len(f);
+            if (p[1] > 3) return reply_bad_arg(f);
+            if (p[1] == 3 && (p.size() != 3 || p[2] != 1)) return reply_need_confirm(f);
+            if (p[1] != 2 && backend.lines_locked())
+                return reply_byte(f, Status::Busy, static_cast<uint8_t>(SniffRefusal::Svooc));
+            const SniffInfo r = backend.lab_sniff(p[1]);
+            if (r.status != static_cast<uint8_t>(Status::Ok)) {
+                if (r.refusal == 0) return reply_status(f, static_cast<Status>(r.status));
+                return reply_byte(f, static_cast<Status>(r.status), r.refusal);
+            }
+            return reply_ok(f, encode_sniff(f.span(), r));
+        }
+        if (p[0] != kLabLoad) return reply_bad_arg(f);
+        if (p.size() != 5) return reply_bad_len(f);
+        if (p[4] != 1) return reply_need_confirm(f);
+        if (backend.lines_locked()) return reply_status(f, Status::Busy);
+        const LabResult r = backend.lab_load(p[1], rd16(&p[2]));
+        if (r.status != static_cast<uint8_t>(Status::Ok)) return reply_status(f, static_cast<Status>(r.status));
+        return reply_ok(f, encode_lab(f.span(), r));
+    }
+    case Cmd::Ufcs: {
+        if (p.empty()) return reply_bad_len(f);
+        switch (p[0]) {
+        case kUfcsStatus: case kUfcsReset: case kUfcsProbe: case kUfcsStop:
+            if (p.size() != 1) return reply_bad_len(f);
+            break;
+        case kUfcsGet:
+            if (p.size() != 2) return reply_bad_len(f);
+            if (p[1] >= ufcs::kFieldCount) return reply_bad_arg(f);
+            return reply_ok(f, encode_ufcs_field(f.span(), p[1], backend.ufcs_get(p[1])));
+        case kUfcsSet: {
+            if (p.size() != 6) return reply_bad_len(f);
+            if (p[1] >= ufcs::kFieldCount) return reply_bad_arg(f);
+            const uint32_t v = rd32(&p[2]);
+            const ufcs::FieldDef &d = ufcs::kFields[p[1]];
+            if (v < d.lo || v > d.hi) return reply_bad_arg(f);
+            const Status st = backend.ufcs_set(p[1], v);
+            if (st != Status::Ok) return reply_status(f, st);
+            return reply_ok(f, encode_ufcs_field(f.span(), p[1], backend.ufcs_get(p[1])));
+        }
+        case kUfcsRead: {
+            if (p.size() != 3) return reply_bad_len(f);
+            const uint16_t off = rd16(&p[1]);
+            const uint16_t total = backend.ufcs_info().blob_len;
+            if (off > total) return reply_bad_arg(f);
+            const size_t want = std::min<size_t>(kUfcsChunk, total - off);
+            const size_t n = std::min(want, backend.ufcs_read(off, std::span<uint8_t>(f.buf + 5, want)));
+            return reply_chunk_hdr(f, 0, off, total, n);
+        }
+        default:
+            return reply_bad_arg(f);
+        }
+        if (p[0] == kUfcsProbe && backend.lines_locked()) return reply_status(f, Status::Busy);
+        if (p[0] != kUfcsStatus) {
+            const Status st = backend.ufcs_op(p[0]);
+            if (st != Status::Ok) return reply_status(f, st);
+        }
+        return reply_ok(f, encode_ufcs(f.span(), backend.ufcs_info()));
+    }
+    case Cmd::LoopProbe: {
+#if !K2_LOOPPROBE
+        return reply_status(f, Status::UnknownCmd);
+#else
+        if (p.size() != 2 && p.size() != 3) return reply_bad_len(f);
+        const uint16_t off = rd16(&p[0]);
+        const uint8_t sel = p.size() == 3 ? p[2] : 0;
+        if (sel > 1) return reply_bad_arg(f);
+        const uint16_t total = sel ? backend.hostreport_len() : backend.loopprobe_len();
+        if (off > total) return reply_bad_arg(f);
+        const size_t want = std::min<size_t>(kLoopProbeChunk, total - off);
+        const std::span<uint8_t> dst(f.buf + 5, want);
+        const size_t n = want ? std::min(want, sel ? backend.hostreport_read(off, dst) : backend.loopprobe_read(off, dst)) : 0;
+        return reply_chunk_hdr(f, 0, off, total, n);
+#endif
+    }
+    case Cmd::PdStress: {
+#if !K2_PDSTRESS
+        return reply_status(f, Status::UnknownCmd);
+#else
+        if (p.empty()) return reply_bad_len(f);
+        switch (p[0]) {
+        case kPdStressStatus:
+            if (p.size() != 1) return reply_bad_len(f);
+            return reply_ok(f, encode_pdstress(f.span(), backend.pdstress_info()));
+        case kPdStressStop:
+            if (p.size() != 1) return reply_bad_len(f);
+            backend.pdstress_stop();
+            return reply_ok(f, encode_pdstress(f.span(), backend.pdstress_info()));
+        case kPdStressStart: {
+            if (p.size() != kPdStressStartArgs) return reply_bad_len(f);
+            PdStressStart s{rd16(&p[1]), rd16(&p[3]), p[5], rd16(&p[6]), rd16(&p[8]), p[10]};
+            if (s.pace > 2 || (s.flags & ~kPdStressFlagMask)) return reply_bad_arg(f);
+            if (!(s.flags & kPdFlagConfirm)) return reply_need_confirm(f);
+            const Status st = backend.pdstress_start(s);
+            if (st != Status::Ok) return reply_status(f, st);
+            return reply_ok(f, encode_pdstress(f.span(), backend.pdstress_info()));
+        }
+        case kPdStressRead: {
+            if (p.size() != 3) return reply_bad_len(f);
+            const uint16_t off = rd16(&p[1]);
+            const uint16_t total = backend.pdstress_info().blob_len;
+            if (off > total) return reply_bad_arg(f);
+            const size_t want = std::min<size_t>(kPdStressChunk, total - off);
+            const size_t n = std::min(want, backend.pdstress_read(off, std::span<uint8_t>(f.buf + 5, want)));
+            return reply_chunk_hdr(f, 0, off, total, n);
+        }
+        default:
+            return reply_bad_arg(f);
+        }
+#endif
+    }
+    case Cmd::PdSpec: {
+#if !K2_PDSPEC
+        return reply_status(f, Status::UnknownCmd);
+#else
+        if (p.empty()) return reply_bad_len(f);
+        switch (p[0]) {
+        case kPdSpecStatus:
+            if (p.size() != 1) return reply_bad_len(f);
+            return reply_ok(f, encode_pdspec(f.span(), backend.pdspec_info()));
+        case kPdSpecStop:
+            if (p.size() != 1) return reply_bad_len(f);
+            backend.pdspec_stop();
+            return reply_ok(f, encode_pdspec(f.span(), backend.pdspec_info()));
+        case kPdSpecStart: {
+            if (p.size() != kPdSpecStartArgs) return reply_bad_len(f);
+            const PdSpecStart s{p[1], p[2]};
+            if ((s.families & ~kPdSpecFamilyMask) || (s.flags & ~kPdSpecFlagMask)) return reply_bad_arg(f);
+            if (!(s.flags & kPdFlagConfirm)) return reply_need_confirm(f);
+            const Status st = backend.pdspec_start(s);
+            if (st != Status::Ok) return reply_status(f, st);
+            return reply_ok(f, encode_pdspec(f.span(), backend.pdspec_info()));
+        }
+        case kPdSpecRead: {
+            if (p.size() != 3) return reply_bad_len(f);
+            const uint16_t off = rd16(&p[1]);
+            const uint16_t total = backend.pdspec_info().blob_len;
+            if (off > total) return reply_bad_arg(f);
+            const size_t want = std::min<size_t>(kPdSpecChunk, total - off);
+            const size_t n = std::min(want, backend.pdspec_read(off, std::span<uint8_t>(f.buf + 5, want)));
+            return reply_chunk_hdr(f, 0, off, total, n);
+        }
+        default:
+            return reply_bad_arg(f);
+        }
+#endif
+    }
+    case Cmd::QRTest: {
+        if (p.empty()) return reply_bad_len(f);
+        switch (p[0]) {
+        case kQrTestList: {
+            if (p.size() != 1 && p.size() != 3) return reply_bad_len(f);
+            const uint16_t off = p.size() == 3 ? rd16(&p[1]) : 0;
+            if (off > qrtest::list_total()) return reply_bad_arg(f);
+            return reply_ok(f, qrtest::list_chunk(off, f.span()));
+        }
+        case kQrTestShow: {
+            if (p.size() != 4) return reply_bad_len(f);
+            char reason[qrtest::kReasonMax];
+            const int rn = qrtest::check_show(p[1], p[2], p[3], reason);
+            if (rn != 0) {
+                build_response(std::span<uint8_t, kFrameSize>(f.out, kFrameSize), f.cmd, f.seq, Status::BadArg,
+                               std::span<const uint8_t>(reinterpret_cast<const uint8_t *>(reason), static_cast<size_t>(rn)));
+                return true;
+            }
+            const Status st = backend.qrtest_show(p[1], p[2], p[3]);
+            if (st != Status::Ok) return reply_status(f, st);
+            f.buf[0] = p[1]; f.buf[1] = p[2]; f.buf[2] = p[3];
+            return reply_ok(f, 3);
+        }
+        case kQrTestStop:
+            if (p.size() != 1) return reply_bad_len(f);
+            return reply_ok_byte(f, backend.qrtest_stop() ? 1 : 0);
+        default:
+            return reply_bad_arg(f);
+        }
+    }
+    default:
+        return reply_status(f, Status::UnknownCmd);
+    }
+}
+
+template <Backend B>
+[[gnu::noinline]] bool handle_records(Cmd cmd, std::span<const uint8_t> p, B &backend, FrameCtx &f) {
+    switch (cmd) {
+    case Cmd::EmLib: {
+        bool writes = false;
+        const Status vst = validate_emlib(p, writes);
+        if (vst != Status::Ok) return reply_status(f, vst);
+        if (writes && backend.ports_busy()) return reply_byte(f, Status::Busy, kEmErrBusy);
+        return reply_ok(f, backend.emlib(p, f.span()));
+    }
+    case Cmd::Cards: {
+        bool writes = false;
+        const Status vst = validate_cards(p, writes);
+        if (vst != Status::Ok) return reply_status(f, vst);
+        if (writes && backend.ports_busy()) return reply_byte(f, Status::Ok, kCardsErrBusy);
+        return reply_ok(f, backend.cards(p, f.span()));
+    }
+    case Cmd::Twin: {
+        bool writes = false;
+        const Status vst = validate_twin(p, writes);
+        if (vst != Status::Ok) return reply_status(f, vst);
+        if (writes && backend.ports_busy()) return reply_byte(f, Status::Busy, kTwErrBusy);
+        const size_t n = backend.twin(p, f.span());
+        if (p[0] == kTwRun && n > 0 && f.buf[0] == 0) backend.lease_arm();
+        return reply_ok(f, n);
+    }
+    case Cmd::BlackBox: {
+        uint32_t arg = 0;
+        const Status vst = validate_blackbox(p, arg);
+        if (vst != Status::Ok) return reply_status(f, vst);
+        return reply_ok(f, backend.blackbox(p[0], arg, f.span()));
+    }
+    case Cmd::TransCap: {
+        const Status vst = validate_transcap(p);
+        if (vst != Status::Ok) return reply_status(f, vst);
+        return reply_ok(f, backend.transcap(p, f.span()));
+    }
+    case Cmd::Diagnose: {
+        if (p.empty()) return reply_bad_len(f);
+        const size_t want = p[0] == 0 ? 1 : p[0] == 1 ? 3 : p[0] == 2 ? 2 : 0;
+        if (want == 0) return reply_bad_arg(f);
+        if (p.size() != want) return reply_bad_len(f);
+        return reply_ok(f, backend.diagnose(p, f.span()));
+    }
+    case Cmd::TraceHid: {
+        const Status vst = validate_trace_hid(p);
+        if (vst != Status::Ok) return reply_status(f, vst);
+        return reply_ok(f, backend.trace_hid(p, f.span()));
+    }
+    case Cmd::Battery: {
+        if (p.empty()) return reply_bad_len(f);
+        const size_t want = k2::battery::wire::req_len(p[0]);
+        if (want == 0) return reply_bad_arg(f);
+        if (p.size() != want) return reply_bad_len(f);
+        return reply_ok(f, backend.battery(p, f.span()));
+    }
+    default:
+        return reply_status(f, Status::UnknownCmd);
+    }
+}
+
+}  // namespace detail
 
 // Parses `raw`, runs the command on `backend` and writes the response into `out`.
 // Returns false when the report is not a request (no response is due); a valid header with a
@@ -1583,1003 +2320,39 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
     if (!r.header_valid) return false;
     backend.lease_touch();   // any request from a live host (malformed ones too) keeps its lease; it arms nothing
 
-    auto reply =[&](Status st, std::span<const uint8_t> payload = {}) {
-        build_response(out, r.cmd, r.seq, st, payload);
-        return true;
-    };
-    if (r.error != ParseError::None) return reply(Status::BadLength);
+    detail::FrameCtx f{out.data(), r.cmd, r.seq, {}};
+    if (r.error != ParseError::None) return detail::reply_bad_len(f);
 
-    std::array<uint8_t, kMaxRspPayload> buf{};
-    const auto p = r.payload;
-    auto reply_n = [&](size_t n) { return reply(Status::Ok, std::span<const uint8_t>(buf.data(), n)); };
-
-    switch (static_cast<Cmd>(r.cmd)) {
-    case Cmd::Ping:
-        if (!p.empty()) return reply(Status::BadLength);
-        return reply_n(encode_ping(buf, backend.ping()));
-    case Cmd::ChargerTest: {
-        if (!p.empty() && p[0] == kChargerTestStartReq && p.size() <= 2) {
-            if (p.size() < 2 || !(p[1] & kCtStartConfirm)) return reply(Status::NeedConfirm);
-            if (p[1] & ~(kCtStartConfirm | kCtStartAllTests)) return reply(Status::BadArg);
-            const auto s = backend.charger_test_start(p[1]);
-            if (s.status != Status::Ok) return reply(s.status);
-            buf[0] = s.result; buf[1] = s.reason;
-            buf[2] = static_cast<uint8_t>(s.refusal_mv); buf[3] = static_cast<uint8_t>(s.refusal_mv >> 8);
-            return reply_n(kChargerTestStartLen);
-        }
-        if (p.size() == 1 && p[0] == kChargerTestCancelReq) { buf[0] = backend.charger_test_cancel(); return reply_n(1); }
-        if (p.size() == 2 && (p[0] == kChargerTestSpecReq || p[0] == kChargerTestSpecDetailReq)) {
-            const auto s = backend.charger_test_results();
-            if (p[1] > charger_test_spec_total(s, p[0])) return reply(Status::BadArg);
-            return reply_n(encode_charger_test_spec(buf, s, p[0], p[1]));
-        }
-        if (!p.empty() && p.size() != 1 && p.size() != 9 && p.size() != 10) return reply(Status::BadLength);
-        if (p.size() == 1 && p[0] == kChargerTestViewReq) return reply_n(encode_charger_test_view(buf, backend.charger_test_view()));
-        const bool modern = p.size() == 1 || p.size() == 10;
-        if (modern && p[0] != kChargerTestSchema2) return reply(Status::BadArg);
-        const uint8_t schema = modern ? kChargerTestSchema2 : kChargerTestSchema;
-        const bool rows = p.size() > 1;
-        const auto q = modern ? p.subspan(1) : p;
-        const auto s = backend.charger_test_results();
-        const uint8_t start = rows ? q[0] : 0;
-        if (rows && (detail::rd32(&q[1]) != s.run_id || detail::rd32(&q[5]) != s.revision))
-            return reply(Status::Busy);
-        if (start > charger_test_count(s, schema)) return reply(Status::BadArg);
-        return reply_n(encode_charger_test(buf, s, start, rows, schema));
+    const Cmd cmd = static_cast<Cmd>(r.cmd);
+    const std::span<const uint8_t> p = r.payload;
+    switch (cmd) {
+    case Cmd::Button: case Cmd::Action: case Cmd::SetPage: case Cmd::Reboot: case Cmd::DfuEnter: case Cmd::Log:
+        return detail::handle_control(cmd, p, backend, f);
+    case Cmd::Ping: case Cmd::GetState: case Cmd::GetPdos: case Cmd::GetEmarker: case Cmd::GetIdentity:
+    case Cmd::FactoryWipe: case Cmd::FlashDump: case Cmd::BootInfo: case Cmd::Screenshot:
+    case Cmd::Memory: case Cmd::UsbLink: case Cmd::PdMatch:
+        return detail::handle_state(cmd, p, backend, f);
+    case Cmd::ChargerTest: case Cmd::ChargerUnits: case Cmd::ChargerCable: case Cmd::ChargerSvoocCap:
+    case Cmd::ChargerHunt: case Cmd::ChargerSweep: case Cmd::ChargerAvsSweep: case Cmd::ChargerLevel:
+        return detail::handle_charger(cmd, p, backend, f);
+    case Cmd::IdentifyDevice: case Cmd::PdReread: case Cmd::AppleRead: case Cmd::PdRequest:
+    case Cmd::PdReset: case Cmd::PdRelease: case Cmd::Stop: case Cmd::Lease:
+    case Cmd::PdAttach: case Cmd::PdHandback: case Cmd::PdTriggerStatus:
+        return detail::handle_pd(cmd, p, backend, f);
+    case Cmd::Fc: case Cmd::CableR:
+        return detail::handle_fc(cmd, p, backend, f);
+    case Cmd::DebugFault: case Cmd::DebugPdos: case Cmd::DebugLink: case Cmd::DebugPdMsg:
+    case Cmd::DebugCcMatrix: case Cmd::DebugVconn: case Cmd::DebugEprInfo: case Cmd::DebugLcd:
+    case Cmd::DebugCcProbe: case Cmd::EmarkerProbe: case Cmd::AdcRaw: case Cmd::Ripple:
+        return detail::handle_debug(cmd, p, backend, f);
+    case Cmd::Store: case Cmd::Lab: case Cmd::Ufcs: case Cmd::LoopProbe:
+    case Cmd::PdStress: case Cmd::PdSpec: case Cmd::QRTest:
+        return detail::handle_tools(cmd, p, backend, f);
+    case Cmd::EmLib: case Cmd::Cards: case Cmd::Twin: case Cmd::BlackBox:
+    case Cmd::TransCap: case Cmd::Diagnose: case Cmd::TraceHid: case Cmd::Battery:
+        return detail::handle_records(cmd, p, backend, f);
     }
-    case Cmd::ChargerUnits: {
-        if (p.empty() || p.size() != size_t(p[0]) + 1) return reply(Status::BadLength);
-        if (p[0] > charger_test::kMaxUnits) return reply(Status::BadArg);
-        uint32_t seen = 0;
-        for (const uint8_t u : p.subspan(1)) {
-            if (u >= static_cast<uint8_t>(charger_test::Unit::Count) || (seen & (1u << u))) return reply(Status::BadArg);
-            seen |= 1u << u;
-        }
-        const Status st = backend.charger_units(p.subspan(1));
-        if (st != Status::Ok) return reply(st);
-        buf[0] = p[0];
-        return reply_n(1);
-    }
-    case Cmd::ChargerCable: {
-        if (p.size() != 0 && p.size() != 3) return reply(Status::BadLength);
-        ctcable::Choice choice;
-        if (!p.empty()) {
-            if (p[0] > static_cast<uint8_t>(ctcable::Kind::Saved)) return reply(Status::BadArg);
-            choice = {static_cast<ctcable::Kind>(p[0]), detail::rd16(&p[1])};
-            if (!ctcable::valid(choice)) return reply(Status::BadArg);
-        }
-        const auto r = backend.charger_cable(p.empty() ? nullptr : &choice);
-        if (r.status != Status::Ok) return reply(r.status);
-        return reply_n(encode_charger_cable(buf, r.info));
-    }
-    case Cmd::ChargerSvoocCap: {
-        if (p.size() > 1) return reply(Status::BadLength);
-        if (!p.empty() && p[0] >= svooc_ceiling::kModeCount) return reply(Status::BadArg);
-        const auto r = backend.charger_svooc_cap(p.empty() ? nullptr : &p[0]);
-        if (r.status != Status::Ok) return reply(r.status);
-        return reply_n(encode_charger_svooc_cap(buf, r.info));
-    }
-    case Cmd::ChargerHunt: {
-        if (p.size() != 1) return reply(Status::BadLength);
-        if (p[0] >= charger_test::kHuntSlots) return reply(Status::BadArg);
-        const auto r = backend.charger_hunt(p[0]);
-        if (r.status != Status::Ok) return reply(r.status);
-        return reply_n(encode_charger_hunt(buf, r, p[0] < r.count));
-    }
-    case Cmd::ChargerSweep: {
-        if (p.size() != 1 || p[0] > 1) return reply(Status::BadLength);
-        const Status st = backend.charger_sweep(p[0] != 0);
-        if (st != Status::Ok) return reply(st);
-        buf[0] = p[0];
-        return reply_n(1);
-    }
-    case Cmd::ChargerAvsSweep: {
-        if (p.size() != 1 || p[0] > 1) return reply(Status::BadLength);
-        const Status st = backend.charger_avs_sweep(p[0] != 0);
-        if (st != Status::Ok) return reply(st);
-        buf[0] = p[0];
-        return reply_n(1);
-    }
-    case Cmd::ChargerLevel: {
-        if (p.size() != 1) return reply(Status::BadLength);
-        if (p[0] >= charger_test::kLevelCount) return reply(Status::BadArg);
-        const Status st = backend.charger_level(p[0]);
-        if (st != Status::Ok) return reply(st);
-        buf[0] = p[0];
-        return reply_n(1);
-    }
-    case Cmd::Button: {
-        if (p.size() != 3) return reply(Status::BadLength);
-        const uint16_t ms = detail::rd16(&p[1]);
-        if (p[0] > 3 || ms < kMinPressMs || ms > kMaxPressMs) return reply(Status::BadArg);
-        const Status st = backend.press(p[0], ms);
-        if (st != Status::Ok) return reply(st);
-        buf[0] = p[0]; buf[1] = p[1]; buf[2] = p[2];
-        return reply_n(3);
-    }
-    case Cmd::GetState:
-        if (p.size() > 1) return reply(Status::BadLength);
-        if (p.empty() || p[0] == 0) return reply_n(encode_state(buf, backend.state()));
-        if (p[0] == 1) return reply_n(encode_session(buf, backend.session()));
-        if (p[0] == 2) return reply_n(encode_diag(buf, backend.diag()));
-        if (p[0] == 3) return reply_n(encode_keys(buf, backend.keys()));
-        return reply(Status::BadArg);
-    case Cmd::GetPdos: {
-        if (p.size() > 1) return reply(Status::BadLength);
-        const uint8_t index = p.empty() ? 0 : p[0];
-        const PdoSnapshot snap = backend.pdos();
-        if (index >= kMaxPdos || (index > 0 && index >= snap.num_pdos)) return reply(Status::BadArg);
-        return reply_n(encode_pdo(buf, snap, index));
-    }
-    case Cmd::GetEmarker: {
-        if (p.size() > 1) return reply(Status::BadLength);
-        const uint8_t part = p.empty() ? 0 : p[0];
-        if (part > 2) return reply(Status::BadArg);
-        return reply_n(encode_emarker(buf, backend.emarker(), part));
-    }
-    case Cmd::GetIdentity: {
-        if (!p.empty()) return reply(Status::BadLength);
-        return reply_n(encode_identity(buf, backend.identity()));
-    }
-    case Cmd::Action: {
-        // payload: action id, optional second byte 1 = confirm (inline: may interrupt charging; FcScan: raises VBUS)
-        if (p.size() != 1 && p.size() != 2) return reply(Status::BadLength);
-        const bool confirm = p.size() == 2 && p[1] != 0;
-        if (action_needs_confirm(p[0]) && !confirm) return reply(Status::NeedConfirm);
-        if (p[0] == kActionFcScan && backend.lines_locked()) return reply(Status::Busy);   // the SuperVOOC trigger drives D-
-        const Status st = backend.action(p[0], confirm);
-        if (st != Status::Ok) return reply(st);
-        if (p[0] == kActionFcScan) backend.lease_arm();   // the scan raises VBUS under host control (accepted, so confirmed)
-        buf[0] = p[0];
-        return reply_n(1);
-    }
-    case Cmd::SetPage: {
-        if (p.size() != 1) return reply(Status::BadLength);
-        const Status st = backend.set_page(p[0]);
-        if (st != Status::Ok) return reply(st);
-        buf[0] = p[0];
-        return reply_n(1);
-    }
-    case Cmd::Reboot:
-        if (!p.empty()) return reply(Status::BadLength);
-        backend.reboot();
-        return reply_n(0);
-    case Cmd::DfuEnter:
-        if (p.size() != 4 && p.size() != 5) return reply(Status::BadLength);
-        if (detail::rd32(p.data()) != kDfuMagic) return reply(Status::BadArg);
-        if (p.size() == 5 && p[4] > 1) return reply(Status::BadArg);
-        backend.dfu_enter(p.size() == 5 ? p[4] : 0);
-        return reply_n(0);
-    case Cmd::FactoryWipe:
-        if (p.size() != 4 && p.size() != 5) return reply(Status::BadLength);
-        if (detail::rd32(p.data()) != kFactoryWipeMagic) return reply(Status::BadArg);
-        if (p.size() == 5 && p[4] > 1) return reply(Status::BadArg);
-        return reply_n(encode_factory_wipe(buf, backend.factory_wipe(p.size() == 5 ? p[4] : 0)));
-    case Cmd::FlashDump: {
-        if (p.size() != 5) return reply(Status::BadLength);
-        const uint32_t addr = detail::rd32(p.data());
-        const uint8_t n = p[4];
-        // 64-bit arithmetic: a window at the top of the address space cannot wrap around
-        if (n == 0 || n > kFlashDumpMax || addr < kFlashDumpBase || uint64_t{addr} + n > kFlashDumpEnd) return reply(Status::BadArg);
-        for (size_t i = 0; i < 4; i++) buf[i] = p[i];
-        buf[4] = n;
-        backend.flash_read(addr, std::span<uint8_t>(buf.data() + 5, n));
-        return reply_n(5 + n);
-    }
-    case Cmd::BootInfo: {
-        if (p.size() != 3) return reply(Status::BadLength);
-        const uint8_t part = p[0];
-        const uint16_t off = detail::rd16(&p[1]);
-        if (part == kBootInfoText) {
-            const uint16_t total = backend.boot_text(off == 0);
-            if (off > total) return reply(Status::BadArg);
-            const size_t n = std::min<size_t>(kBootInfoChunk, total - off);
-            buf[0] = part; buf[1] = uint8_t(off); buf[2] = uint8_t(off >> 8);
-            buf[3] = uint8_t(total); buf[4] = uint8_t(total >> 8); buf[5] = uint8_t(n);
-            backend.boot_text_read(off, std::span<uint8_t>(buf.data() + 6, n));
-            return reply_n(6 + n);
-        }
-        if (part == kBootInfoSamplePart) {
-            const uint16_t total = backend.boot_sample_count();
-            if (off > total) return reply(Status::BadArg);
-            const size_t n = std::min<size_t>(kBootInfoSamples, total - off);
-            buf[0] = part; buf[1] = uint8_t(off); buf[2] = uint8_t(off >> 8);
-            buf[3] = uint8_t(total); buf[4] = uint8_t(total >> 8); buf[5] = uint8_t(n);
-            for (size_t i = 0; i < n; i++) {
-                const bootinfo::PowerSample s = backend.boot_sample(uint16_t(off + i));
-                uint8_t *d = &buf[6 + i * kBootInfoSampleBytes];
-                const uint16_t v[4] = {s.vbus_mv, s.cc1_mv, s.cc2_mv, s.aux_mv};
-                for (size_t k = 0; k < 4; k++) { d[2 * k] = uint8_t(v[k]); d[2 * k + 1] = uint8_t(v[k] >> 8); }
-                d[8] = s.plus ? 1 : 0;
-            }
-            return reply_n(6 + n * kBootInfoSampleBytes);
-        }
-        return reply(Status::BadArg);
-    }
-    case Cmd::DebugFault:
-        if (p.size() != 5) return reply(Status::BadLength);
-        if (detail::rd32(p.data()) != kFaultMagic || p[4] > 2) return reply(Status::BadArg);
-        backend.debug_fault(p[4]);
-        return reply_n(0);
-    case Cmd::Screenshot: {
-        if (p.size() > 1) return reply(Status::BadLength);
-        if constexpr (requires { backend.screenshot_opts(uint8_t{}); }) backend.screenshot_opts(p.empty() ? uint8_t{0} : p[0]);
-        const Status st = backend.screenshot();
-        if (st != Status::Ok) return reply(st);
-        return reply_n(encode_screen_info(buf, backend.screen_info()));
-    }
-    case Cmd::DebugPdos: {
-        if (p.size() != 1) return reply(Status::BadLength);
-        if (p[0] > kMaxPdos) return reply(Status::BadArg);
-        const Status st = backend.debug_fake_pdos(p[0]);
-        if (st != Status::Ok) return reply(st);
-        buf[0] = p[0];
-        return reply_n(1);
-    }
-    case Cmd::DebugLink: {
-        if (p.size() != 1) return reply(Status::BadLength);
-        if (p[0] > 1) return reply(Status::BadArg);
-        const Status st = backend.debug_link(p[0] != 0);
-        if (st != Status::Ok) return reply(st);
-        buf[0] = p[0];
-        return reply_n(1);
-    }
-    case Cmd::DebugPdMsg: {
-        // sop (0 SOP, 1 SOP', 2 SOP''), PD header (LE), then exactly header.num_do data objects.
-        if (p.size() < 3) return reply(Status::BadLength);
-        const uint16_t header = detail::rd16(&p[1]);
-        const size_t body = ((header >> 12) & 7) * 4u;
-        if (p.size() != 3 + body) return reply(Status::BadLength);
-        if (p[0] > 2) return reply(Status::BadArg);
-        const Status st = backend.debug_pd_msg(p[0], header, p.subspan(3));
-        if (st != Status::Ok) return reply(st);
-        return reply_n(0);
-    }
-    case Cmd::DebugCcMatrix: {
-        if (p.size() < 1 || p.size() > 3 || p[0] > 7) return reply(Status::BadArg);
-        const uint16_t modes = p.size() == 3 ? detail::rd16(&p[1]) : 0x333u;   // default: all OutPp50
-        const Status st = backend.debug_cc_matrix(p[0], modes);
-        if (st != Status::Ok) return reply(st);
-        return reply_n(0);
-    }
-    case Cmd::DebugVconn:   // [op]: 0 status, 1 send VCONN_Swap, 2 VCONN off, 3 lab round trip (take the role undriven, hand it back)
-        if (p.size() != 1) return reply(Status::BadLength);
-        if (p[0] > 4) return reply(Status::BadArg);
-        return reply_n(encode_vconn(buf, backend.debug_vconn(p[0])));
-    case Cmd::DebugEprInfo:   // [op]: 0 status, 1 ask (gated), 2 ask regardless of the EPR bit
-        if (p.size() != 1) return reply(Status::BadLength);
-        if (p[0] > 2) return reply(Status::BadArg);
-        return reply_n(encode_epr_info(buf, backend.debug_epr_info(p[0])));
-    case Cmd::DebugLcd:   // no payload: the DMA state; [1, page, flags bit0 reset after the read]: the main-loop stall counters
-        if (p.empty()) return reply_n(encode_lcd(buf, backend.debug_lcd()));
-        if (p.size() != 3) return reply(Status::BadLength);
-        if (p[0] != 1 || (p[2] & ~1u)) return reply(Status::BadArg);
-        return reply_n(encode_loop(buf, backend.debug_loop(p[1], (p[2] & 1) != 0)));
-    case Cmd::DebugCcProbe: {
-        // [sw0, pc, ms u16] or [sw0, pc, ms u16, modes u16]; the rules (ranges, VCONN only with PC13 low) are k2/pd/cc_probe.hpp.
-        if (p.size() != 4 && p.size() != 6) return reply(Status::BadLength);
-        ccprobe::Args a;
-        a.sw0 = p[0]; a.pc = p[1]; a.ms = detail::rd16(&p[2]);
-        if (p.size() == 6) a.modes = detail::rd16(&p[4]);
-        if (ccprobe::check_args(a) != ccprobe::ArgError::None) return reply(Status::BadArg);
-        ccprobe::Result res;
-        const Status st = backend.debug_cc_probe(a, res);
-        if (st != Status::Ok) return reply(st);
-        return reply_n(encode_cc_probe(buf, res));
-    }
-    case Cmd::EmarkerProbe: {
-        // [] or [vconn_pc]: the PC13/14/15 levels of the VCONN phases (default 0). The argument rules are k2/pd/ra_probe.hpp; the
-        // refusals (not passive) come back as Busy with the raprobe::Refusal as the one-byte payload.
-        if (p.size() > 1) return reply(Status::BadLength);
-        raprobe::Args a;
-        if (!p.empty()) a.vconn_pc = p[0];
-        if (const raprobe::ArgError e = raprobe::check_args(a); e != raprobe::ArgError::None) {
-            buf[0] = static_cast<uint8_t>(e);
-            return reply(Status::BadArg, std::span<const uint8_t>(buf.data(), 1));
-        }
-        raprobe::Result res;
-        const Status st = backend.ra_probe(a, res);
-        if (st != Status::Ok) {
-            buf[0] = res.refusal;
-            return reply(st, std::span<const uint8_t>(buf.data(), 1));
-        }
-        return reply_n(encode_ra_probe(buf, res));
-    }
-    case Cmd::AdcRaw:
-        if (!p.empty()) return reply(Status::BadLength);
-        return reply_n(encode_adc_raw(buf, backend.adc_raw()));
-    case Cmd::Ripple: {
-        if (p.size() > 1) return reply(Status::BadLength);
-        const uint8_t code = p.empty() ? 0 : p[0];
-        if (code > 7) return reply(Status::BadArg);
-        const Status st = backend.ripple(code);
-        if (st != Status::Ok) return reply(st);
-        return reply_n(encode_ripple(buf, code, backend.ripple_info()));
-    }
-    case Cmd::IdentifyDevice: {
-        if (p.size() != 1) return reply(Status::BadLength);
-        if (p[0] > 2) return reply(Status::BadArg);
-        const IdentifyResult res = backend.identify_device(p[0]);
-        if (res.status != Status::Ok) {
-            buf[0] = res.err;   // a refusal carries its pd::Err (inline) as the one-byte payload
-            return reply(res.status, std::span<const uint8_t>(buf.data(), 1));
-        }
-        return reply_n(encode_identify_progress(buf, res.progress));
-    }
-    case Cmd::PdReread: {
-        if (p.empty()) return reply(Status::BadLength);
-        if (p[0] > 8) return reply(Status::BadArg);
-        const bool has_arg = p[0] == 1 || p[0] == 3 || p[0] == 4 || p[0] == 5 || p[0] == 6 || p[0] == 8;
-        if (p.size() != (has_arg ? 2u : 1u)) return reply(Status::BadLength);
-        if (p[0] == 1 && (p[1] == 0 || p[1] > kRereadMaxMask)) return reply(Status::BadArg);
-        if (p[0] == 3 && p[1] > kSinkCapExtMaxMode) return reply(Status::BadArg);
-        if (p[0] == 4 && p[1] > 2) return reply(Status::BadArg);
-        if (p[0] == 5 && p[1] > 1) return reply(Status::BadArg);
-        if (p[0] == 6 && p[1] > 2) return reply(Status::BadArg);
-        if (p[0] == 8 && p[1] == 0) return reply(Status::BadArg);   // the Rd gap in 10 ms steps: 0 would be no gap
-        const RereadResult res = backend.reread(p[0], has_arg ? p[1] : uint8_t{0});
-        if (res.status != Status::Ok) return reply(res.status);
-        return reply_n(encode_reread(buf, res.info));
-    }
-    case Cmd::AppleRead: {
-        // Lab-only Apple charger readout: [op, part] - op 1 arms (replies the header); op 0 reads back
-        // part 0 (the header) or part 1..6 (one field each). The backend gates the refusals.
-        if (p.empty() || p.size() > 2) return reply(Status::BadLength);
-        if (p[0] > 1) return reply(Status::BadArg);
-        if (p[0] == 1 && p.size() != 1) return reply(Status::BadLength);
-        if (p[0] == 0 && p.size() != 2) return reply(Status::BadLength);
-        const uint8_t part = p[0] == 0 ? p[1] : uint8_t{0};
-        if (part > 6) return reply(Status::BadArg);
-        const AppleReadResult res = backend.apple_read(p[0]);
-        if (res.status != Status::Ok) {
-            buf[0] = res.refusal;   // the refusal reason (pd::AppleRefusal) as the one-byte payload
-            return reply(res.status, std::span<const uint8_t>(buf.data(), 1));
-        }
-        return reply_n(encode_apple_read(buf, res.info, part));
-    }
-    case Cmd::PdRequest: {
-        if (p.size() != 6) return reply(Status::BadLength);
-        const PdOpResult res = backend.pd_request(p[0], detail::rd16(&p[2]), detail::rd16(&p[4]),
-                                                   (p[1] & kPdFlagConfirm) != 0, (p[1] & kPdFlagOverLoad) != 0);
-        if (res.status == Status::Ok && (p[0] != 1 || detail::rd16(&p[2]) > kFcSafeMv)) backend.lease_arm();   // above 5 V
-        buf[0] = res.err;
-        buf[1] = res.why;   // pd::BusyWhy, sent only when set: older readers look at byte 0
-        return reply(res.status, std::span<const uint8_t>(buf.data(), res.why != 0 ? 2 : 1));
-    }
-    case Cmd::PdReset: {
-        if (p.size() > 1) return reply(Status::BadLength);
-        const uint8_t flags = p.empty() ? uint8_t{0} : p[0];
-        if (flags & ~uint8_t(kPdFlagConfirm | kPdFlagResetInline)) return reply(Status::BadArg);
-        const PdOpResult res = backend.pd_hard_reset(flags);
-        buf[0] = res.err;
-        return reply(res.status, std::span<const uint8_t>(buf.data(), 1));
-    }
-    case Cmd::PdRelease: {
-        if (!p.empty()) return reply(Status::BadLength);
-        const PdOpResult res = backend.pd_release();
-        buf[0] = res.err;
-        return reply(res.status, std::span<const uint8_t>(buf.data(), 1));
-    }
-    case Cmd::Stop: {
-        // No confirm: every action here only moves toward 5 V / idle. The reply says what was active and where VBUS is.
-        if (!p.empty()) return reply(Status::BadLength);
-        return reply_n(encode_stop(buf, backend.stop()));
-    }
-    case Cmd::Lease: {
-        // [0] status, [1, seconds u16 LE] set the length. Reads and sets never arm; the arming commands do (above).
-        if (p.empty()) return reply(Status::BadLength);
-        if (p[0] > 1) return reply(Status::BadArg);
-        if (p.size() != (p[0] == 0 ? 1u : 3u)) return reply(Status::BadLength);
-        const uint16_t secs = p[0] == 1 ? detail::rd16(&p[1]) : uint16_t{0};
-        if (secs > k2::lease::kMaxSeconds) return reply(Status::BadArg);
-        return reply_n(encode_lease(buf, backend.lease(p[0], secs)));
-    }
-    case Cmd::PdAttach: {
-        // pd attach [target_mv [target_ma [flags]]]: attach as PD sink, request the target voltage, hold the contract.
-        // Payload: target_mv (u16), optionally target_ma (u16), optionally flags (bit0 = confirm, the PD_REQUEST bit).
-        // The backend decides (pd::attach_verdict): a refusal answers status + one err byte like PD_REQUEST, with no
-        // snapshot; only an accepted attach replies the PdTriggerSnapshot.
-        if (p.size() != 2 && p.size() != 4 && p.size() != 5) return reply(Status::BadLength);
-        const uint8_t flags = p.size() == 5 ? p[4] : uint8_t{0};
-        if (flags & ~uint8_t(kPdFlagConfirm)) return reply(Status::BadArg);
-        const uint16_t target_mv = detail::rd16(&p[0]);
-        const uint16_t target_ma = p.size() >= 4 ? detail::rd16(&p[2]) : 0;
-        const PdAttachResult res = backend.pd_attach(target_mv, target_ma, (flags & kPdFlagConfirm) != 0);
-        if (res.status != Status::Ok) {
-            buf[0] = res.err;
-            return reply(res.status, std::span<const uint8_t>(buf.data(), 1));
-        }
-        if (res.raised) backend.lease_arm();   // only an attach that started / holds a request above 5 V (not Rd-only, no PDO, a failed request)
-        return reply_n(encode_pd_trigger(buf, res.snapshot));
-    }
-    case Cmd::PdHandback: {
-        // pd handback [--confirm]: phase-1 lab op, the whole Fix sequence (record gone -> Rd dropped -> one Hard
-        // Reset). Optional flags byte, bit0 confirm only; the reply payload is the HandbackVerdict (allowed or the
-        // refusal reason, also logged on the K2).
-        if (p.size() > 1) return reply(Status::BadLength);
-        const uint8_t flags = p.empty() ? uint8_t{0} : p[0];
-        if (flags & ~uint8_t(kPdFlagConfirm)) return reply(Status::BadArg);
-        const HandbackResult res = backend.pd_handback(flags);
-        buf[0] = res.verdict;
-        return reply(res.status, std::span<const uint8_t>(buf.data(), 1));
-    }
-    case Cmd::PdTriggerStatus:
-        if (!p.empty()) return reply(Status::BadLength);
-        return reply_n(encode_pd_trigger(buf, backend.pd_trigger()));
-    case Cmd::Memory:
-        if (!p.empty()) return reply(Status::BadLength);
-        return reply_n(encode_memory(buf, backend.memory()));
-    case Cmd::UsbLink:
-        if (!p.empty()) return reply(Status::BadLength);
-        return reply_n(encode_usb_link(buf, backend.usb_link()));
-    case Cmd::PdMatch:
-        if (!p.empty()) return reply(Status::BadLength);
-        return reply_n(encode_match(buf, backend.match_info()));
-    case Cmd::Fc: {
-        // The confirmation rules are enforced here, before the backend: the scan and any request
-        // above 5 V are refused without the confirm byte.
-        if (p.empty()) return reply(Status::BadLength);
-        // --- vooc-monitor (k2/vooc-detect): passive readout, no confirm, no ports check ---
-        if (p[0] == kFcVooc) {
-            if (p.size() != 2 && p.size() != 3) return reply(Status::BadLength);
-            if (p[1] >= kVoocPages || (p.size() == 3 && p[2] > 1)) return reply(Status::BadArg);
-            if (p.size() == 3 && backend.lines_locked()) return reply(Status::Busy);   // the switch, while the SuperVOOC trigger runs
-            return reply_n(encode_vooc(buf, backend.vooc_monitor(p.size() == 3 ? p[2] : 2), p[1]));
-        }
-        // --- end vooc-monitor ---
-        // --- svooc-trigger: drives D-, so the start needs the confirm flag and arms the lease ---
-        if (p[0] == kFcSvooc) {
-            if (p.size() < 2) return reply(Status::BadLength);
-            switch (p[1]) {
-            case kSvoocStatus:
-                if (p.size() != 3) return reply(Status::BadLength);
-                if (p[2] > 2) return reply(Status::BadArg);
-                if (p[2] == 0) return reply_n(encode_svooc(buf, backend.svooc_info()));
-                if (p[2] == 1) return reply_n(encode_svooc_timing(buf, backend.svooc_info()));
-                return reply_n(encode_svooc_asks(buf, backend.svooc_info()));
-            case kSvoocStart: {
-                // 4 bytes: the original request (every operator parameter at its default); 10: the extended one.
-                if (p.size() != 4 && p.size() != kSvoocStartExtBytes) return reply(Status::BadLength);
-                if ((p[2] & ~kSvoocStartMask) || p[3] > kSvoocCapMaxS) return reply(Status::BadArg);
-                if (!(p[2] & kFcConfirm)) return reply(Status::NeedConfirm);
-                if ((p[2] & kSvoocPhone) && (p[2] & kSvoocProbe)) return reply(Status::BadArg);   // one profile at most
-                svooc::Params sp;
-                sp.profile = (p[2] & kSvoocPhone) ? svooc::Profile::Phone : (p[2] & kSvoocProbe) ? svooc::Profile::Probe : svooc::Profile::Fixed;
-                if (p.size() == kSvoocStartExtBytes) {
-                    sp.i86_first = p[4]; sp.i86_esc = p[5]; sp.r82 = p[6];
-                    sp.vtarget_mv = static_cast<uint16_t>(p[7] | (p[8] << 8)); sp.esc_at_s = p[9];
-                }
-                const svooc::Refusal r = backend.svooc_start(p[3], (p[2] & kSvoocUsbA) != 0, sp);
-                const size_t n = encode_svooc(buf, backend.svooc_info());
-                if (r != svooc::Refusal::None) return reply(Status::Busy, std::span<const uint8_t>(buf.data(), n));
-                backend.lease_arm();   // the adapter may raise VBUS: the dead-man lease holds from now
-                return reply_n(n);
-            }
-            case kSvoocStop:
-                if (p.size() != 2) return reply(Status::BadLength);
-                backend.svooc_stop();
-                return reply_n(encode_svooc(buf, backend.svooc_info()));
-            case kSvoocLog: {
-                if (p.size() != 4) return reply(Status::BadLength);
-                const uint16_t from = static_cast<uint16_t>(p[2] | (p[3] << 8));
-                const uint16_t kept = backend.svooc_info().log.n;
-                std::array<svooc::PairRow, kSvoocRowsPerPage> rows{};
-                const size_t want = from < kept ? std::min<size_t>(kSvoocRowsPerPage, kept - from) : 0;
-                const size_t got = want ? std::min(want, backend.svooc_pairs(from, std::span<svooc::PairRow>(rows.data(), want))) : 0;
-                return reply_n(encode_svooc_log(buf, kept, from, std::span<const svooc::PairRow>(rows.data(), got)));
-            }
-            default:
-                return reply(Status::BadArg);
-            }
-        }
-        // --- end svooc-trigger ---
-        switch (p[0]) {
-        case kFcStatus:
-        case kFcReset:
-            if (p.size() != 1) return reply(Status::BadLength);
-            break;
-        case kFcScan:
-            if (p.size() > 2) return reply(Status::BadLength);
-            if (p.size() < 2 || !(p[1] & kFcConfirm) || (p[1] & ~kFcFlagMask)) return reply(Status::BadArg);
-            break;
-        case kFcTrigger: {
-            if (p.size() != 5) return reply(Status::BadLength);
-            const uint16_t mv = detail::rd16(&p[2]);
-            // Above 5 V needs the confirm bit; so does --allow-inline at any voltage (it drives D+/D- with a
-            // sink possibly attached: both flags, like `pd reset --inline --confirm`).
-            if (p[1] >= kFcProtoCount || (p[4] & ~kFcFlagMask) ||
-                ((mv > kFcSafeMv || (p[4] & kFcAllowInline)) && !(p[4] & kFcConfirm)))
-                return reply(Status::BadArg);
-            break;
-        }
-        default:
-            return reply(Status::BadArg);
-        }
-        if ((p[0] == kFcScan || p[0] == kFcTrigger) && backend.lines_locked()) return reply(Status::Busy);   // the SuperVOOC trigger
-        if (p[0] != kFcStatus) {
-            const bool trig = p[0] == kFcTrigger;
-            const Status st = backend.fc_cmd(p[0], trig ? p[1] : 0, trig ? detail::rd16(&p[2]) : 0,
-                                             p[0] == kFcScan ? p[1] : trig ? p[4] : 0);
-            if (st != Status::Ok) return reply(st);
-            // a scan, or a trigger above 5 V, leaves the output under host control
-            if (p[0] == kFcScan || (trig && detail::rd16(&p[2]) > kFcSafeMv)) backend.lease_arm();
-        }
-        return reply_n(encode_fc(buf, backend.fc_info()));
-    }
-    case Cmd::Store: {
-        if (p.empty()) return reply(Status::BadLength);
-        switch (p[0]) {
-        case kStoreList:
-        case kStoreSaveEmarker:
-        case kStoreSaveLog:
-            if (p.size() != 1) return reply(Status::BadLength);
-            break;
-        default:
-            return reply(Status::BadArg);
-        }
-        // The saves share the flash with a charger test's own card save: Busy while a run or an FC release
-        // owns the link, before the backend sees the call (list stays open).
-        if (p[0] != kStoreList && backend.ports_busy()) return reply(Status::Busy);
-        return reply_n(encode_store(buf, backend.store_cmd(p[0], p.size() > 1 ? p[1] : 0)));
-    }
-    case Cmd::CableR:
-        if (p.size() > 1) return reply(Status::BadLength);
-        if (p.size() == 1) {
-            if (p[0] > kCableKelvin) return reply(Status::BadArg);
-            if (p[0] == kCableReset) backend.cable_r_reset();
-            if (p[0] >= kCablePassive) backend.cable_r_mode(p[0] == kCableKelvin);
-        }
-        return reply_n(encode_cable_r(buf, backend.cable_r_info()));
-    case Cmd::Lab: {
-        if (p.empty()) return reply(Status::BadLength);
-        if (p[0] == kLabSniff) {
-            if (p.size() != 2 && p.size() != 3) return reply(Status::BadLength);
-            if (p[1] > 3) return reply(Status::BadArg);
-            if (p[1] == 3 && (p.size() != 3 || p[2] != 1)) return reply(Status::NeedConfirm);
-            if (p[1] != 2 && backend.lines_locked()) {   // arm, cancel, selftest: the SuperVOOC trigger owns the sniffer
-                buf[0] = static_cast<uint8_t>(SniffRefusal::Svooc);
-                return reply(Status::Busy, std::span<const uint8_t>(buf.data(), 1));
-            }
-            const SniffInfo r = backend.lab_sniff(p[1]);
-            if (r.status != static_cast<uint8_t>(Status::Ok)) {
-                if (r.refusal == 0) return reply(static_cast<Status>(r.status));
-                buf[0] = r.refusal;   // why the arm was refused (SniffRefusal)
-                return reply(static_cast<Status>(r.status), std::span<const uint8_t>(buf.data(), 1));
-            }
-            return reply_n(encode_sniff(buf, r));
-        }
-        if (p[0] != kLabLoad) return reply(Status::BadArg);
-        if (p.size() != 5) return reply(Status::BadLength);
-        if (p[4] != 1) return reply(Status::NeedConfirm);
-        if (backend.lines_locked()) return reply(Status::Busy);   // no load on the output while the SuperVOOC trigger runs
-        const LabResult r = backend.lab_load(p[1], static_cast<uint16_t>(p[2] | p[3] << 8));
-        if (r.status != static_cast<uint8_t>(Status::Ok)) return reply(static_cast<Status>(r.status));
-        return reply_n(encode_lab(buf, r));
-    }
-    case Cmd::Ufcs: {
-        if (p.empty()) return reply(Status::BadLength);
-        switch (p[0]) {
-        case kUfcsStatus: case kUfcsReset: case kUfcsProbe: case kUfcsStop:
-            if (p.size() != 1) return reply(Status::BadLength);
-            break;
-        case kUfcsGet:
-            if (p.size() != 2) return reply(Status::BadLength);
-            if (p[1] >= ufcs::kFieldCount) return reply(Status::BadArg);
-            return reply_n(encode_ufcs_field(buf, p[1], backend.ufcs_get(p[1])));
-        case kUfcsSet: {
-            if (p.size() != 6) return reply(Status::BadLength);
-            if (p[1] >= ufcs::kFieldCount) return reply(Status::BadArg);
-            const uint32_t v = detail::rd32(&p[2]);
-            const ufcs::FieldDef &d = ufcs::kFields[p[1]];
-            if (v < d.lo || v > d.hi) return reply(Status::BadArg);
-            const Status st = backend.ufcs_set(p[1], v);
-            if (st != Status::Ok) return reply(st);
-            return reply_n(encode_ufcs_field(buf, p[1], backend.ufcs_get(p[1])));
-        }
-        case kUfcsRead: {
-            if (p.size() != 3) return reply(Status::BadLength);
-            const uint16_t off = detail::rd16(&p[1]);
-            const uint16_t total = backend.ufcs_info().blob_len;
-            if (off > total) return reply(Status::BadArg);
-            const size_t want = std::min<size_t>(kUfcsChunk, total - off);
-            const size_t n = std::min(want, backend.ufcs_read(off, std::span<uint8_t>(buf.data() + 5, want)));
-            buf[0] = uint8_t(off); buf[1] = uint8_t(off >> 8);
-            buf[2] = uint8_t(total); buf[3] = uint8_t(total >> 8); buf[4] = uint8_t(n);
-            return reply_n(5 + n);
-        }
-        default:
-            return reply(Status::BadArg);
-        }
-        if (p[0] == kUfcsProbe && backend.lines_locked()) return reply(Status::Busy);   // the probe's UART runs on D+/D-
-        if (p[0] != kUfcsStatus) {
-            const Status st = backend.ufcs_op(p[0]);
-            if (st != Status::Ok) return reply(st);
-        }
-        return reply_n(encode_ufcs(buf, backend.ufcs_info()));
-    }
-#if !K2_LOOPPROBE
-    case Cmd::LoopProbe:   // K2_LOOPPROBE=0: not built in, the command is unknown
-        return reply(Status::UnknownCmd);
-#else
-    case Cmd::LoopProbe: {
-        if (p.size() != 2 && p.size() != 3) return reply(Status::BadLength);
-        const uint16_t off = detail::rd16(&p[0]);
-        const uint8_t sel = p.size() == 3 ? p[2] : 0;   // 0 the loop probe's file, 1 the Host report's
-        if (sel > 1) return reply(Status::BadArg);
-        const uint16_t total = sel ? backend.hostreport_len() : backend.loopprobe_len();
-        if (off > total) return reply(Status::BadArg);
-        const size_t want = std::min<size_t>(kLoopProbeChunk, total - off);
-        const std::span<uint8_t> dst(buf.data() + 5, want);
-        const size_t n = want ? std::min(want, sel ? backend.hostreport_read(off, dst) : backend.loopprobe_read(off, dst)) : 0;
-        buf[0] = uint8_t(off); buf[1] = uint8_t(off >> 8);
-        buf[2] = uint8_t(total); buf[3] = uint8_t(total >> 8); buf[4] = uint8_t(n);
-        return reply_n(5 + n);
-    }
-#endif
-    // ---- PD Stress (K2_PDSTRESS=0: not built in, the command is unknown) ----
-#if K2_PDSTRESS
-    case Cmd::PdStress: {
-        if (p.empty()) return reply(Status::BadLength);
-        switch (p[0]) {
-        case kPdStressStatus:
-            if (p.size() != 1) return reply(Status::BadLength);
-            return reply_n(encode_pdstress(buf, backend.pdstress_info()));
-        case kPdStressStop:
-            if (p.size() != 1) return reply(Status::BadLength);
-            backend.pdstress_stop();
-            return reply_n(encode_pdstress(buf, backend.pdstress_info()));
-        case kPdStressStart: {
-            if (p.size() != kPdStressStartArgs) return reply(Status::BadLength);
-            PdStressStart s;
-            s.mask = detail::rd16(&p[1]);
-            s.cycles_pct = detail::rd16(&p[3]);
-            s.pace = p[5];
-            s.max_s = detail::rd16(&p[6]);
-            s.max_trans = detail::rd16(&p[8]);
-            s.flags = p[10];
-            if (s.pace > 2 || (s.flags & ~kPdStressFlagMask)) return reply(Status::BadArg);
-            if (!(s.flags & kPdFlagConfirm)) return reply(Status::NeedConfirm);
-            const Status st = backend.pdstress_start(s);
-            if (st != Status::Ok) return reply(st);
-            return reply_n(encode_pdstress(buf, backend.pdstress_info()));
-        }
-        case kPdStressRead: {
-            if (p.size() != 3) return reply(Status::BadLength);
-            const uint16_t off = detail::rd16(&p[1]);
-            const uint16_t total = backend.pdstress_info().blob_len;
-            if (off > total) return reply(Status::BadArg);
-            const size_t want = std::min<size_t>(kPdStressChunk, total - off);
-            const size_t n = std::min(want, backend.pdstress_read(off, std::span<uint8_t>(buf.data() + 5, want)));
-            buf[0] = uint8_t(off); buf[1] = uint8_t(off >> 8);
-            buf[2] = uint8_t(total); buf[3] = uint8_t(total >> 8); buf[4] = uint8_t(n);
-            return reply_n(5 + n);
-        }
-        default:
-            return reply(Status::BadArg);
-        }
-    }
-#else
-    case Cmd::PdStress:
-        return reply(Status::UnknownCmd);
-#endif
-    // ---- end PD Stress ----
-    // ---- PD Spec Check (K2_PDSPEC=0: not built in, the command is unknown) ----
-#if K2_PDSPEC
-    case Cmd::PdSpec: {
-        if (p.empty()) return reply(Status::BadLength);
-        switch (p[0]) {
-        case kPdSpecStatus:
-            if (p.size() != 1) return reply(Status::BadLength);
-            return reply_n(encode_pdspec(buf, backend.pdspec_info()));
-        case kPdSpecStop:
-            if (p.size() != 1) return reply(Status::BadLength);
-            backend.pdspec_stop();
-            return reply_n(encode_pdspec(buf, backend.pdspec_info()));
-        case kPdSpecStart: {
-            if (p.size() != kPdSpecStartArgs) return reply(Status::BadLength);
-            const PdSpecStart s{p[1], p[2]};
-            if ((s.families & ~kPdSpecFamilyMask) || (s.flags & ~kPdSpecFlagMask)) return reply(Status::BadArg);
-            if (!(s.flags & kPdFlagConfirm)) return reply(Status::NeedConfirm);
-            const Status st = backend.pdspec_start(s);
-            if (st != Status::Ok) return reply(st);
-            return reply_n(encode_pdspec(buf, backend.pdspec_info()));
-        }
-        case kPdSpecRead: {
-            if (p.size() != 3) return reply(Status::BadLength);
-            const uint16_t off = detail::rd16(&p[1]);
-            const uint16_t total = backend.pdspec_info().blob_len;
-            if (off > total) return reply(Status::BadArg);
-            const size_t want = std::min<size_t>(kPdSpecChunk, total - off);
-            const size_t n = std::min(want, backend.pdspec_read(off, std::span<uint8_t>(buf.data() + 5, want)));
-            buf[0] = uint8_t(off); buf[1] = uint8_t(off >> 8);
-            buf[2] = uint8_t(total); buf[3] = uint8_t(total >> 8); buf[4] = uint8_t(n);
-            return reply_n(5 + n);
-        }
-        default:
-            return reply(Status::BadArg);
-        }
-    }
-#else
-    case Cmd::PdSpec:
-        return reply(Status::UnknownCmd);
-#endif
-    // ---- end PD Spec Check ----
-    case Cmd::QRTest: {
-        if (p.empty()) return reply(Status::BadLength);
-        switch (p[0]) {
-        case kQrTestList: {
-            if (p.size() != 1 && p.size() != 3) return reply(Status::BadLength);
-            const uint16_t off = p.size() == 3 ? detail::rd16(&p[1]) : 0;
-            if (off > qrtest::list_total()) return reply(Status::BadArg);
-            return reply_n(qrtest::list_chunk(off, buf));
-        }
-        case kQrTestShow: {
-            if (p.size() != 4) return reply(Status::BadLength);
-            // The argument validation is pure (k2/ui/ui_qrtest.hpp) and runs here, before the backend: a bad
-            // range or a box that does not fit the panel answers BadArg with the reason as the payload text.
-            char reason[qrtest::kReasonMax];
-            const int rn = qrtest::check_show(p[1], p[2], p[3], reason);
-            if (rn != 0)
-                return reply(Status::BadArg,
-                             std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(reason), static_cast<size_t>(rn)));
-            const Status st = backend.qrtest_show(p[1], p[2], p[3]);
-            if (st != Status::Ok) return reply(st);
-            buf[0] = p[1]; buf[1] = p[2]; buf[2] = p[3];
-            return reply_n(3);
-        }
-        case kQrTestStop:
-            if (p.size() != 1) return reply(Status::BadLength);
-            buf[0] = backend.qrtest_stop() ? 1 : 0;
-            return reply_n(1);
-        default:
-            return reply(Status::BadArg);
-        }
-    }
-    case Cmd::EmLib: {
-        if (p.empty()) return reply(Status::BadLength);
-        switch (p[0]) {
-        case kEmList:
-            if (p.size() > 2) return reply(Status::BadLength);
-            break;
-        case kEmSave:
-            if (p.size() != 1) return reply(Status::BadLength);
-            break;
-        case kEmGet:
-            if (p.size() != 3) return reply(Status::BadLength);
-            break;
-        case kEmDelete:
-            if (p.size() != 4) return reply(Status::BadLength);
-            if (p[3] != 1) return reply(Status::BadArg);
-            break;
-        case kEmRename:
-            if (p.size() < 4 || p.size() > 3 + kEmNameMax) return reply(Status::BadLength);
-            break;
-        case kEmSpoof:
-            if (p.size() < 2) return reply(Status::BadLength);
-            if (p[1] > kEmSpoofBuiltin) return reply(Status::BadArg);
-            if (p[1] == kEmSpoofBuiltin && p.size() == 3 && p[2] >= emrec::kBuiltinCount) return reply(Status::BadArg);
-            if (p.size() != (p[1] == kEmSpoofArm ? 4u : p[1] == kEmSpoofBuiltin ? 3u : 2u)) return reply(Status::BadLength);
-            break;
-        case kEmLearn: {
-            if (p.size() < 2) return reply(Status::BadLength);
-            if (p[1] > kEmLearnSave) return reply(Status::BadArg);
-            if (p[1] == kEmLearnRun) {
-                emk_learn::Options o;
-                bool confirm = false;
-                if (!emk_learn::parse_options(p.subspan(2), o, confirm)) return reply(Status::BadArg);
-            } else if (p.size() != (p[1] == kEmLearnEntry ? 3u : 2u)) {
-                return reply(Status::BadLength);
-            }
-            break;
-        }
-        case kEmUnmatched:
-            if (p.size() != 2) return reply(Status::BadLength);
-            if (p[1] != emk_quirk::kSeenTotals && p[1] >= emk_quirk::SeenLog::kDepth) return reply(Status::BadArg);
-            break;
-        default:
-            return reply(Status::BadArg);
-        }
-        // Library writes share the flash with the charger test's own card save: refused while a run or an FC
-        // release owns the link, before the backend sees them (reads, spoof and learn status stay open).
-        if ((p[0] == kEmSave || p[0] == kEmDelete || p[0] == kEmRename || (p[0] == kEmLearn && p[1] == kEmLearnSave)) &&
-            backend.ports_busy()) {
-            buf[0] = kEmErrBusy;
-            return reply(Status::Busy, std::span<const uint8_t>(buf.data(), 1));
-        }
-        return reply_n(backend.emlib(p, buf));
-    }
-    case Cmd::Cards: {
-        if (p.empty()) return reply(Status::BadLength);
-        switch (p[0]) {
-        case kCardsList:
-            if (p.size() != 1 && p.size() != 2) return reply(Status::BadLength);   // [0] or [0, offset]
-            break;
-        case kCardsGet:
-            if (p.size() != 4) return reply(Status::BadLength);
-            if (p[3] >= kCardsChunks) return reply(Status::BadArg);
-            break;
-        case kCardsDelete:
-            if (p.size() != 4) return reply(Status::BadLength);
-            if (p[3] != 1) return reply(Status::BadArg);
-            break;
-        case kCardsRename:
-            if (p.size() < 4 || p.size() > 3 + kCardsNameMax) return reply(Status::BadLength);
-            break;
-        default:
-            return reply(Status::BadArg);
-        }
-        // Rename and delete write the card flash a running charger test saves into at its end: refused while a
-        // run or an FC release owns the link, in the cards' own Ok + [kCardsErrBusy] shape.
-        if ((p[0] == kCardsRename || p[0] == kCardsDelete) && backend.ports_busy()) {
-            buf[0] = kCardsErrBusy;
-            return reply(Status::Ok, std::span<const uint8_t>(buf.data(), 1));
-        }
-        return reply_n(backend.cards(p, buf));
-    }
-    case Cmd::Twin: {
-        if (p.empty()) return reply(Status::BadLength);
-        const auto seq_ok = [&](size_t i) { return p[i] >= 1 && p[i] <= kTwMax; };
-        switch (p[0]) {
-        case kTwList:
-        case kTwStatus:
-        case kTwCancel:
-            if (p.size() != 1) return reply(Status::BadLength);
-            break;
-        case kTwGet:
-            if (p.size() != 3) return reply(Status::BadLength);
-            if (!seq_ok(1) || p[2] >= kTwParts) return reply(Status::BadArg);
-            break;
-        case kTwPredict:
-        case kTwResult:
-            if (p.size() != 2) return reply(Status::BadLength);
-            if (!seq_ok(1)) return reply(Status::BadArg);
-            break;
-        case kTwLearn:
-            if (p.size() < 3 || p.size() > 3 + kTwNameMax) return reply(Status::BadLength);
-            if (p[1] > 1 || (p[2] & ~kTwLearnDry) != 0) return reply(Status::BadArg);
-            break;
-        case kTwRename:
-            if (p.size() < 3 || p.size() > 2 + kTwNameMax) return reply(Status::BadLength);
-            if (!seq_ok(1)) return reply(Status::BadArg);
-            break;
-        case kTwDelete:
-            if (p.size() != 3) return reply(Status::BadLength);
-            if (!seq_ok(1) || p[2] != 1) return reply(Status::BadArg);
-            break;
-        case kTwUsb:
-            if (p.size() != 3) return reply(Status::BadLength);
-            if (!seq_ok(1) || p[2] > 1) return reply(Status::BadArg);
-            break;
-        case kTwRun: {
-            if (p.size() < 3 || p.size() != 3u + p[2]) return reply(Status::BadLength);
-            if ((p[1] & ~kTwRunConfirm) != 0 || p[2] > kTwMax) return reply(Status::BadArg);
-            for (size_t i = 0; i < p[2]; ++i) {
-                if (!seq_ok(3 + i)) return reply(Status::BadArg);
-                for (size_t j = 0; j < i; ++j)
-                    if (p[3 + j] == p[3 + i]) return reply(Status::BadArg);
-            }
-            if ((p[1] & kTwRunConfirm) == 0) return reply(Status::NeedConfirm);   // a run changes the contract
-            break;
-        }
-        case kTwInline:
-            if (p.size() < 2) return reply(Status::BadLength);
-            switch (p[1]) {
-            case kTwIqStatus:
-            case kTwIqAbort:
-                if (p.size() != 2) return reply(Status::BadLength);
-                break;
-            case kTwIqStart:
-                if (p.size() < 3) return reply(Status::BadLength);
-                if ((p[2] & ~(kTwIqDry | kTwIqConfirm | kTwIqSpoof)) != 0) return reply(Status::BadArg);
-                if (p.size() > ((p[2] & kTwIqSpoof) != 0 ? kTwIqSpoofHead : 3) + kTwNameMax ||
-                    ((p[2] & kTwIqSpoof) != 0 && p.size() < kTwIqSpoofHead))
-                    return reply(Status::BadLength);
-                if ((p[2] & kTwIqSpoof) != 0 && p[3] > 1) return reply(Status::BadArg);   // kind: 0 built-in, 1 saved
-                if ((p[2] & kTwIqConfirm) == 0) return reply(Status::NeedConfirm);   // two Hard Resets: VBUS drops
-                break;
-            case kTwIqAnswers:
-                if (p.size() != 3) return reply(Status::BadLength);
-                if (p[2] >= kTwIqParts) return reply(Status::BadArg);
-                break;
-            default:
-                return reply(Status::BadArg);
-            }
-            break;
-        default:
-            return reply(Status::BadArg);
-        }
-        // The writes share the flash and the link with a running test: refused before the backend sees them. An interrogation
-        // owns the link too: it is refused while anything else does (its own run counts, Ui::ports_busy).
-        const bool writes = p[0] == kTwRename || p[0] == kTwDelete || p[0] == kTwRun || (p[0] == kTwLearn && (p[2] & kTwLearnDry) == 0) ||
-                            (p[0] == kTwInline && p[1] == kTwIqStart);
-        if (writes && backend.ports_busy()) {
-            buf[0] = kTwErrBusy;
-            return reply(Status::Busy, std::span<const uint8_t>(buf.data(), 1));
-        }
-        const size_t n = backend.twin(p, buf);
-        if (p[0] == kTwRun && n > 0 && buf[0] == 0) backend.lease_arm();   // started: it holds the output above 5 V
-        return reply_n(n);
-    }
-    case Cmd::BlackBox: {
-        if (p.empty()) return reply(Status::BadLength);
-        uint32_t arg = 0;
-        switch (p[0]) {
-        case kBbRead:
-            if (p.size() != 1 && p.size() != 5) return reply(Status::BadLength);
-            if (p.size() == 5) arg = detail::rd32(&p[1]);
-            break;
-        case kBbFreeze:
-            if (p.size() != 2) return reply(Status::BadLength);
-            arg = p[1];
-            break;
-        case kBbCapRead:
-            if (p.size() != 4) return reply(Status::BadLength);
-            arg = static_cast<uint32_t>(p[1]) << 16 | detail::rd16(&p[2]);
-            break;
-        case kBbClear:
-        case kBbStatus:
-        case kBbCapList:
-        case kBbCapClear:
-            if (p.size() != 1) return reply(Status::BadLength);
-            break;
-        default:
-            return reply(Status::BadArg);
-        }
-        return reply_n(backend.blackbox(p[0], arg, buf));
-    }
-    case Cmd::TransCap: {
-        if (p.empty()) return reply(Status::BadLength);
-        switch (p[0]) {
-        case kTcStatus: case kTcArm: case kTcTrigger: case kTcDisarm: case kTcSave: case kTcList: case kTcClear:
-            if (p.size() != 1) return reply(Status::BadLength);
-            break;
-        case kTcLive:
-            if (p.size() != 5) return reply(Status::BadLength);
-            break;
-        case kTcStored:
-            if (p.size() != 9) return reply(Status::BadLength);
-            break;
-        default:
-            return reply(Status::BadArg);
-        }
-        return reply_n(backend.transcap(p, buf));
-    }
-    case Cmd::Diagnose: {
-        if (p.empty()) return reply(Status::BadLength);
-        const size_t want = p[0] == 0 ? 1 : p[0] == 1 ? 3 : p[0] == 2 ? 2 : 0;
-        if (want == 0) return reply(Status::BadArg);
-        if (p.size() != want) return reply(Status::BadLength);
-        return reply_n(backend.diagnose(p, buf));
-    }
-    case Cmd::TraceHid: {
-        if (p.empty()) return reply(Status::BadLength);
-        switch (p[0]) {
-        case kThStop: case kThKeepalive: case kThStatus:
-            if (p.size() != 1) return reply(Status::BadLength);
-            break;
-        case kThStart:
-            if (p.size() != 4) return reply(Status::BadLength);
-            if ((p[1] & ~kThFlagAll) != 0) return reply(Status::BadArg);
-            break;
-        default:
-            return reply(Status::BadArg);
-        }
-        return reply_n(backend.trace_hid(p, buf));
-    }
-    case Cmd::Battery: {
-        if (p.empty()) return reply(Status::BadLength);
-        const size_t want = k2::battery::wire::req_len(p[0]);
-        if (want == 0) return reply(Status::BadArg);
-        if (p.size() != want) return reply(Status::BadLength);
-        return reply_n(backend.battery(p, buf));
-    }
-    case Cmd::Log:
-        if (p.size() > 1) return reply(Status::BadLength);
-        if (p.size() == 1) backend.set_log(p[0] != 0);
-        buf[0] = backend.log_enabled() ? 1 : 0;
-        return reply_n(1);
-    }
-    return reply(Status::UnknownCmd);
+    return detail::reply_status(f, Status::UnknownCmd);
 }
 
 }  // namespace k2::remote

@@ -689,4 +689,289 @@ size_t encode_apple_read(std::span<uint8_t> out, const AppleReadInfo &i, uint8_t
     return w.size();
 }
 
+namespace detail {
+
+bool reply_status(FrameCtx &f, Status st) {
+    build_response(std::span<uint8_t, kFrameSize>(f.out, kFrameSize), f.cmd, f.seq, st, {});
+    return true;
+}
+
+bool reply_bad_len(FrameCtx &f) { return reply_status(f, Status::BadLength); }
+bool reply_bad_arg(FrameCtx &f) { return reply_status(f, Status::BadArg); }
+bool reply_need_confirm(FrameCtx &f) { return reply_status(f, Status::NeedConfirm); }
+
+bool reply_byte(FrameCtx &f, Status st, uint8_t v) {
+    f.buf[0] = v;
+    build_response(std::span<uint8_t, kFrameSize>(f.out, kFrameSize), f.cmd, f.seq, st,
+                   std::span<const uint8_t>(f.buf, 1));
+    return true;
+}
+
+bool reply_ok(FrameCtx &f, size_t n) {
+    build_response(std::span<uint8_t, kFrameSize>(f.out, kFrameSize), f.cmd, f.seq, Status::Ok,
+                   std::span<const uint8_t>(f.buf, n));
+    return true;
+}
+
+bool reply_ok_byte(FrameCtx &f, uint8_t v) { return reply_byte(f, Status::Ok, v); }
+
+bool reply_status_or_byte(FrameCtx &f, Status st, uint8_t v) {
+    if (st != Status::Ok) return reply_status(f, st);
+    return reply_ok_byte(f, v);
+}
+
+bool reply_chunk_hdr(FrameCtx &f, size_t hdr_off, uint16_t off, uint16_t total, size_t n, size_t stride) {
+    uint8_t *h = f.buf + hdr_off;
+    h[0] = static_cast<uint8_t>(off);
+    h[1] = static_cast<uint8_t>(off >> 8);
+    h[2] = static_cast<uint8_t>(total);
+    h[3] = static_cast<uint8_t>(total >> 8);
+    h[4] = static_cast<uint8_t>(n);
+    return reply_ok(f, hdr_off + 5 + n * stride);
+}
+
+Status validate_charger_units(std::span<const uint8_t> p) {
+    if (p.empty() || p.size() != size_t(p[0]) + 1) return Status::BadLength;
+    if (p[0] > charger_test::kMaxUnits) return Status::BadArg;
+    uint32_t seen = 0;
+    for (const uint8_t u : p.subspan(1)) {
+        if (u >= static_cast<uint8_t>(charger_test::Unit::Count) || (seen & (1u << u))) return Status::BadArg;
+        seen |= 1u << u;
+    }
+    return Status::Ok;
+}
+
+Status validate_reread(std::span<const uint8_t> p) {
+    if (p.empty()) return Status::BadLength;
+    if (p[0] > 8) return Status::BadArg;
+    const bool has_arg = p[0] == 1 || p[0] == 3 || p[0] == 4 || p[0] == 5 || p[0] == 6 || p[0] == 8;
+    if (p.size() != (has_arg ? 2u : 1u)) return Status::BadLength;
+    if (p[0] == 1 && (p[1] == 0 || p[1] > kRereadMaxMask)) return Status::BadArg;
+    if (p[0] == 3 && p[1] > kSinkCapExtMaxMode) return Status::BadArg;
+    if ((p[0] == 4 || p[0] == 6) && p[1] > 2) return Status::BadArg;
+    if (p[0] == 5 && p[1] > 1) return Status::BadArg;
+    if (p[0] == 8 && p[1] == 0) return Status::BadArg;
+    return Status::Ok;
+}
+
+Status validate_fc_basic(std::span<const uint8_t> p) {
+    switch (p[0]) {
+    case kFcStatus:
+    case kFcReset:
+        return p.size() == 1 ? Status::Ok : Status::BadLength;
+    case kFcScan:
+        if (p.size() > 2) return Status::BadLength;
+        if (p.size() < 2 || !(p[1] & kFcConfirm) || (p[1] & ~kFcFlagMask)) return Status::BadArg;
+        return Status::Ok;
+    case kFcTrigger: {
+        if (p.size() != 5) return Status::BadLength;
+        const uint16_t mv = rd16(&p[2]);
+        if (p[1] >= kFcProtoCount || (p[4] & ~kFcFlagMask) ||
+            ((mv > kFcSafeMv || (p[4] & kFcAllowInline)) && !(p[4] & kFcConfirm)))
+            return Status::BadArg;
+        return Status::Ok;
+    }
+    default:
+        return Status::BadArg;
+    }
+}
+
+Status validate_svooc_start(std::span<const uint8_t> p, svooc::Params &sp) {
+    if (p.size() != 4 && p.size() != kSvoocStartExtBytes) return Status::BadLength;
+    if ((p[2] & ~kSvoocStartMask) || p[3] > kSvoocCapMaxS) return Status::BadArg;
+    if (!(p[2] & kFcConfirm)) return Status::NeedConfirm;
+    if ((p[2] & kSvoocPhone) && (p[2] & kSvoocProbe)) return Status::BadArg;
+    sp.profile = (p[2] & kSvoocPhone) ? svooc::Profile::Phone : (p[2] & kSvoocProbe) ? svooc::Profile::Probe : svooc::Profile::Fixed;
+    if (p.size() == kSvoocStartExtBytes) {
+        sp.i86_first = p[4]; sp.i86_esc = p[5]; sp.r82 = p[6];
+        sp.vtarget_mv = rd16(&p[7]); sp.esc_at_s = p[9];
+    }
+    return Status::Ok;
+}
+
+Status validate_emlib(std::span<const uint8_t> p, bool &needs_write) {
+    needs_write = false;
+    if (p.empty()) return Status::BadLength;
+    switch (p[0]) {
+    case kEmList:
+        return p.size() <= 2 ? Status::Ok : Status::BadLength;
+    case kEmSave:
+        needs_write = true;
+        return p.size() == 1 ? Status::Ok : Status::BadLength;
+    case kEmGet:
+        return p.size() == 3 ? Status::Ok : Status::BadLength;
+    case kEmDelete:
+        needs_write = true;
+        if (p.size() != 4) return Status::BadLength;
+        return p[3] == 1 ? Status::Ok : Status::BadArg;
+    case kEmRename:
+        needs_write = true;
+        return (p.size() >= 4 && p.size() <= 3 + kEmNameMax) ? Status::Ok : Status::BadLength;
+    case kEmSpoof:
+        if (p.size() < 2) return Status::BadLength;
+        if (p[1] > kEmSpoofBuiltin) return Status::BadArg;
+        if (p[1] == kEmSpoofBuiltin && p.size() == 3 && p[2] >= emrec::kBuiltinCount) return Status::BadArg;
+        return p.size() == (p[1] == kEmSpoofArm ? 4u : p[1] == kEmSpoofBuiltin ? 3u : 2u) ? Status::Ok : Status::BadLength;
+    case kEmLearn:
+        if (p.size() < 2) return Status::BadLength;
+        if (p[1] > kEmLearnSave) return Status::BadArg;
+        if (p[1] == kEmLearnRun) {
+            emk_learn::Options o;
+            bool confirm = false;
+            return emk_learn::parse_options(p.subspan(2), o, confirm) ? Status::Ok : Status::BadArg;
+        }
+        if (p[1] == kEmLearnSave) needs_write = true;
+        return p.size() == (p[1] == kEmLearnEntry ? 3u : 2u) ? Status::Ok : Status::BadLength;
+    case kEmUnmatched:
+        if (p.size() != 2) return Status::BadLength;
+        return (p[1] == emk_quirk::kSeenTotals || p[1] < emk_quirk::SeenLog::kDepth) ? Status::Ok : Status::BadArg;
+    default:
+        return Status::BadArg;
+    }
+}
+
+Status validate_cards(std::span<const uint8_t> p, bool &needs_write) {
+    needs_write = false;
+    if (p.empty()) return Status::BadLength;
+    switch (p[0]) {
+    case kCardsList:
+        return (p.size() == 1 || p.size() == 2) ? Status::Ok : Status::BadLength;
+    case kCardsGet:
+        if (p.size() != 4) return Status::BadLength;
+        return p[3] < kCardsChunks ? Status::Ok : Status::BadArg;
+    case kCardsDelete:
+        needs_write = true;
+        if (p.size() != 4) return Status::BadLength;
+        return p[3] == 1 ? Status::Ok : Status::BadArg;
+    case kCardsRename:
+        needs_write = true;
+        return (p.size() >= 4 && p.size() <= 3 + kCardsNameMax) ? Status::Ok : Status::BadLength;
+    default:
+        return Status::BadArg;
+    }
+}
+
+Status validate_twin(std::span<const uint8_t> p, bool &needs_write) {
+    needs_write = false;
+    if (p.empty()) return Status::BadLength;
+    auto seq_ok = [&](size_t i) { return p[i] >= 1 && p[i] <= kTwMax; };
+    switch (p[0]) {
+    case kTwList:
+    case kTwStatus:
+    case kTwCancel:
+        return p.size() == 1 ? Status::Ok : Status::BadLength;
+    case kTwGet:
+        if (p.size() != 3) return Status::BadLength;
+        return (seq_ok(1) && p[2] < kTwParts) ? Status::Ok : Status::BadArg;
+    case kTwPredict:
+    case kTwResult:
+        if (p.size() != 2) return Status::BadLength;
+        return seq_ok(1) ? Status::Ok : Status::BadArg;
+    case kTwLearn:
+        if (p.size() < 3 || p.size() > 3 + kTwNameMax) return Status::BadLength;
+        if (p[1] > 1 || (p[2] & ~kTwLearnDry) != 0) return Status::BadArg;
+        needs_write = (p[2] & kTwLearnDry) == 0;
+        return Status::Ok;
+    case kTwRename:
+        needs_write = true;
+        if (p.size() < 3 || p.size() > 2 + kTwNameMax) return Status::BadLength;
+        return seq_ok(1) ? Status::Ok : Status::BadArg;
+    case kTwDelete:
+        needs_write = true;
+        if (p.size() != 3) return Status::BadLength;
+        return (seq_ok(1) && p[2] == 1) ? Status::Ok : Status::BadArg;
+    case kTwUsb:
+        if (p.size() != 3) return Status::BadLength;
+        return (seq_ok(1) && p[2] <= 1) ? Status::Ok : Status::BadArg;
+    case kTwRun:
+        needs_write = true;
+        if (p.size() < 3 || p.size() != 3u + p[2]) return Status::BadLength;
+        if ((p[1] & ~kTwRunConfirm) != 0 || p[2] > kTwMax) return Status::BadArg;
+        for (size_t i = 0; i < p[2]; ++i) {
+            if (!seq_ok(3 + i)) return Status::BadArg;
+            for (size_t j = 0; j < i; ++j)
+                if (p[3 + j] == p[3 + i]) return Status::BadArg;
+        }
+        return (p[1] & kTwRunConfirm) == 0 ? Status::NeedConfirm : Status::Ok;
+    case kTwInline:
+        if (p.size() < 2) return Status::BadLength;
+        switch (p[1]) {
+        case kTwIqStatus:
+        case kTwIqAbort:
+            return p.size() == 2 ? Status::Ok : Status::BadLength;
+        case kTwIqStart:
+            needs_write = true;
+            if (p.size() < 3) return Status::BadLength;
+            if ((p[2] & ~(kTwIqDry | kTwIqConfirm | kTwIqSpoof)) != 0) return Status::BadArg;
+            if (p.size() > ((p[2] & kTwIqSpoof) != 0 ? kTwIqSpoofHead : 3) + kTwNameMax ||
+                ((p[2] & kTwIqSpoof) != 0 && p.size() < kTwIqSpoofHead))
+                return Status::BadLength;
+            if ((p[2] & kTwIqSpoof) != 0 && p[3] > 1) return Status::BadArg;
+            return (p[2] & kTwIqConfirm) == 0 ? Status::NeedConfirm : Status::Ok;
+        case kTwIqAnswers:
+            if (p.size() != 3) return Status::BadLength;
+            return p[2] < kTwIqParts ? Status::Ok : Status::BadArg;
+        default:
+            return Status::BadArg;
+        }
+    default:
+        return Status::BadArg;
+    }
+}
+
+Status validate_blackbox(std::span<const uint8_t> p, uint32_t &arg) {
+    if (p.empty()) return Status::BadLength;
+    arg = 0;
+    switch (p[0]) {
+    case kBbRead:
+        if (p.size() != 1 && p.size() != 5) return Status::BadLength;
+        if (p.size() == 5) arg = rd32(&p[1]);
+        return Status::Ok;
+    case kBbFreeze:
+        if (p.size() != 2) return Status::BadLength;
+        arg = p[1];
+        return Status::Ok;
+    case kBbCapRead:
+        if (p.size() != 4) return Status::BadLength;
+        arg = static_cast<uint32_t>(p[1]) << 16 | rd16(&p[2]);
+        return Status::Ok;
+    case kBbClear:
+    case kBbStatus:
+    case kBbCapList:
+    case kBbCapClear:
+        return p.size() == 1 ? Status::Ok : Status::BadLength;
+    default:
+        return Status::BadArg;
+    }
+}
+
+Status validate_transcap(std::span<const uint8_t> p) {
+    if (p.empty()) return Status::BadLength;
+    switch (p[0]) {
+    case kTcStatus: case kTcArm: case kTcTrigger: case kTcDisarm: case kTcSave: case kTcList: case kTcClear:
+        return p.size() == 1 ? Status::Ok : Status::BadLength;
+    case kTcLive:
+        return p.size() == 5 ? Status::Ok : Status::BadLength;
+    case kTcStored:
+        return p.size() == 9 ? Status::Ok : Status::BadLength;
+    default:
+        return Status::BadArg;
+    }
+}
+
+Status validate_trace_hid(std::span<const uint8_t> p) {
+    if (p.empty()) return Status::BadLength;
+    switch (p[0]) {
+    case kThStop: case kThKeepalive: case kThStatus:
+        return p.size() == 1 ? Status::Ok : Status::BadLength;
+    case kThStart:
+        if (p.size() != 4) return Status::BadLength;
+        return (p[1] & ~kThFlagAll) == 0 ? Status::Ok : Status::BadArg;
+    default:
+        return Status::BadArg;
+    }
+}
+
+}  // namespace detail
+
 }  // namespace k2::remote
