@@ -2259,8 +2259,8 @@ struct Budget {
 // One cached text cell: `chars` cells wide, padded with blanks (left or right) so a shorter text leaves nothing behind. `sig`
 // is the cell's signature (0 = not drawn); `data` marks external text (clipped and counted, not a gate failure). With a
 // budget a changed cell that does not fit waits (its signature stays old, so it is still dirty on the next call).
-void put_line(const Surface &c, const Font &f, int16_t x, int16_t y, std::string_view text, uint16_t color, unsigned chars, uint32_t &sig,
-              bool right = false, bool data = false, Budget *bg = nullptr) {
+[[gnu::noinline]] void put_line(const Surface &c, const Font &f, int16_t x, int16_t y, std::string_view text, uint16_t color, unsigned chars,
+                                uint32_t &sig, bool right = false, bool data = false, Budget *bg = nullptr) {
     uint32_t h = pg::mix_str(mix_init(), text);
     h = mix_u32(mix_u32(h, color), chars * 2u + (right ? 1u : 0u)) | 1u;
     if (h == sig) return;
@@ -2468,24 +2468,27 @@ void ChargerTestPage::paint_waiting(uint32_t now) {
     }
 
     const int cc1 = ctx_.analog ? ctx_.analog->cc1_mv : -1, cc2 = ctx_.analog ? ctx_.analog->cc2_mv : -1;
-    const int cc[2] = {cc1, cc2};
-    for (int i = 0; i < 2; ++i) {
-        const int mv = cc[i];
-        if (ctx_.plus_key && mv >= 0) {   // the + key is down: the raw level the hold pulls the line to (the word would hide a 1.2 V step)
-            s.clear();
-            s.put_u32(static_cast<uint32_t>(mv)).put("mV");
-            put_line(c, kSmall, static_cast<int16_t>(i ? 154 : 42), 92, s.view(), kText, 8, cell_sig_[i], false, false, &bg);
-            continue;
-        }
-        put_line(c, kSmall, static_cast<int16_t>(i ? 154 : 42), 92, cc_word(mv), mv < 0 || cc_open(mv) ? kFaint : kText, 8, cell_sig_[i], false, false, &bg);
-    }
     const bool dv = vbus >= pd::kStartVbusMv && ctx_.analog;
-    const int d[2] = {ctx_.analog ? ctx_.analog->dp_mv : -1, ctx_.analog ? ctx_.analog->dm_mv : -1};
-    for (int i = 0; i < 2; ++i) {
+    const int vals[4] = {cc1, cc2, ctx_.analog ? ctx_.analog->dp_mv : -1, ctx_.analog ? ctx_.analog->dm_mv : -1};
+    for (int i = 0; i < 4; ++i) {
+        std::string_view sv;
+        uint16_t ink = kText;
         s.clear();
-        if (dv) s.put_fixed(std::max(d[i], 0), 2).put_char('V');
-        else s.put("--");
-        put_line(c, kSmall, static_cast<int16_t>(i ? 154 : 42), 118, s.view(), dv ? kText : kFaint, 8, cell_sig_[2 + i], false, false, &bg);
+        if (i < 2) {
+            if (ctx_.plus_key && vals[i] >= 0) {
+                s.put_u32(static_cast<uint32_t>(vals[i])).put("mV");
+                sv = s.view();
+            } else {
+                sv = cc_word(vals[i]);
+                if (vals[i] < 0 || cc_open(vals[i])) ink = kFaint;
+            }
+        } else {
+            if (dv) s.put_fixed(std::max(vals[i], 0), 2).put_char('V');
+            else { s.put("--"); ink = kFaint; }
+            sv = s.view();
+        }
+        put_line(c, kSmall, static_cast<int16_t>((i & 1) ? 154 : 42), static_cast<int16_t>(i < 2 ? 92 : 118), sv, ink, 8, cell_sig_[i], false,
+                 false, &bg);
     }
 
     // The give-up clock: a 2 px bar that drains over the wait (the whole wait of the first attempt; a retry reads empty).

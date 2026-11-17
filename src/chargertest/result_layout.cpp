@@ -86,7 +86,7 @@ struct TokenBuf {
         dst[n] = 0;
         if (n < s.size() && cuts && *cuts < 255) ++(*cuts);
     }
-    Token* token(bool chip, Tone t, bool glue = false) {
+    [[gnu::noinline]] Token* token(bool chip, Tone t, bool glue = false) {
         if (!data || !count || *count >= cap) return nullptr;
         Token& k = data[(*count)++];
         k = {}; k.chip = chip; k.tone = t; k.glue = glue;
@@ -96,7 +96,7 @@ struct TokenBuf {
     // `s` as plain tokens: whole words packed into tokens of at most 15 characters, so a long label wraps onto further grid
     // lines instead of being cut. `split_at_number`: the first word that starts with a digit opens a new token ("via PPS" |
     // "5-20V 5A"), keeping a range and its current together.
-    void phrase(std::string_view s, Tone t, bool split_at_number) {
+    [[gnu::noinline]] void phrase(std::string_view s, Tone t, bool split_at_number) {
         constexpr size_t kMax = sizeof Token::text - 1;
         Token* cur = nullptr;
         size_t len = 0;
@@ -123,9 +123,9 @@ struct TokenBuf {
     }
 };
 
-template <class Emit>
-void wrap_row_tokens(std::span<const Token> toks, const Metrics& m, Emit&& emit) {
-    if (toks.empty()) { emit(0, 0, true); return; }
+[[gnu::noinline]] void wrap_row_tokens(std::span<const Token> toks, const Metrics& m,
+                                      void (*emit)(void*, uint8_t first, uint8_t count, bool head), void* ctx) {
+    if (toks.empty()) { emit(ctx, 0, 0, true); return; }
     uint8_t first = 0, count = 0;
     bool head = true;
     int x = 0, groups = 0, widest = 0;
@@ -138,7 +138,7 @@ void wrap_row_tokens(std::span<const Token> toks, const Metrics& m, Emit&& emit)
         const bool full = m.cells ? (groups + 1) * (std::max(widest, gw) + m.gap) - m.gap > m.avail
                                   : x + m.gap + gw > m.avail;
         if (count && (full || (m.max_groups && groups >= m.max_groups))) {
-            emit(first, count, head);
+            emit(ctx, first, count, head);
             first = static_cast<uint8_t>(i);
             count = 0;
             head = false;
@@ -150,7 +150,7 @@ void wrap_row_tokens(std::span<const Token> toks, const Metrics& m, Emit&& emit)
         count = static_cast<uint8_t>(count + (end - i));
         i = end;
     }
-    emit(first, count, head);
+    emit(ctx, first, count, head);
 }
 
 struct Sink {
@@ -178,7 +178,7 @@ struct Sink {
     size_t line_count() const { return line_n ? *line_n : 0; }
     uint8_t open_tok_count() const { return l ? (lrow ? lrow->count : 0) : (active ? rt->count : 0); }
 
-    void flush() {
+    [[gnu::noinline]] void flush() {
         if (!active) return;
         active = false;
         if (l) {
@@ -214,13 +214,18 @@ struct Sink {
             }
         }
         g->rows[r_idx] = crow;
+        struct Ctx { Sink* s; uint8_t r; };
+        Ctx c{this, r_idx};
         wrap_row_tokens(std::span<const Token>(rt->toks.data(), rt->count), *m,
-                        [&](uint8_t first, uint8_t count, bool head) {
-                            if (*line_n < lines.size()) lines[(*line_n)++] = CompactLine::make(r_idx, first, count, head);
-                        });
+                        [](void* p, uint8_t first, uint8_t count, bool head) {
+                            auto* cx = static_cast<Ctx*>(p);
+                            if (*cx->s->line_n < cx->s->lines.size())
+                                cx->s->lines[(*cx->s->line_n)++] = CompactLine::make(cx->r, first, count, head);
+                        },
+                        &c);
     }
 
-    void begin(CompactKind kind, std::string_view label, Tone label_tone, A a, uint16_t mv = 0) {
+    [[gnu::noinline]] void begin(CompactKind kind, std::string_view label, Tone label_tone, A a, uint16_t mv = 0) {
         flush();
         if (l) {
             if (l->row_count >= l->rows.size()) { lrow = nullptr; return; }
@@ -275,8 +280,8 @@ struct Sink {
         }
     }
 
-    void word(std::string_view s, Tone t) { TokenBuf tb = buf(); tb.word(s, t); }
-    void phrase(std::string_view s, Tone t, bool split_at_number) { TokenBuf tb = buf(); tb.phrase(s, t, split_at_number); }
+    [[gnu::noinline]] void word(std::string_view s, Tone t) { TokenBuf tb = buf(); tb.word(s, t); }
+    [[gnu::noinline]] void phrase(std::string_view s, Tone t, bool split_at_number) { TokenBuf tb = buf(); tb.phrase(s, t, split_at_number); }
 };
 bool is_revision(A a) { return a >= A::Pd30Revision && a <= A::Pd32Revision; }
 bool is_range(A a) { return a == A::Pps || a == A::SprAvs || a == A::EprAvs; }
@@ -621,7 +626,7 @@ namespace {
     if (tn == Tone::Skip) tag(b, *skipped);   // why nothing was swept ("cable", ">36V"), as the range row says it
 }
 
-void emit_facts(Sink& b, const OemNotes& oem, bool any_probe, bool& facts_done,
+[[gnu::noinline]] void emit_facts(Sink& b, const OemNotes& oem, bool any_probe, bool& facts_done,
                 void (*header)(Sink&, const OemNotes&, Section), void (*mi_auth_row)(Sink&, const OemNotes&, bool&),
                 bool& mi_shown) {
     if (facts_done) return;
@@ -979,19 +984,24 @@ char mark(Tone t) {
 }
 
 size_t wrap(const Layout& l, const Metrics& m, std::span<Line> out) {
-    size_t n = 0;
+    struct Ctx { std::span<Line> out; size_t n; uint8_t r; uint8_t rfirst; };
+    Ctx c{out, 0, 0, 0};
     for (size_t r = 0; r < l.row_count; ++r) {
         const Row& row = l.rows[r];
         if (row.header) {
-            if (n < out.size()) out[n++] = {static_cast<uint8_t>(r), row.first, 0, true};
+            if (c.n < out.size()) out[c.n++] = {static_cast<uint8_t>(r), row.first, 0, true};
             continue;
         }
+        c.r = static_cast<uint8_t>(r);
+        c.rfirst = row.first;
         wrap_row_tokens(std::span<const Token>(l.tokens.data() + row.first, row.count), m,
-                        [&](uint8_t first, uint8_t count, bool head) {
-                            if (n < out.size())
-                                out[n++] = {static_cast<uint8_t>(r), static_cast<uint8_t>(row.first + first), count, head};
-                        });
+                        [](void* p, uint8_t first, uint8_t count, bool head) {
+                            auto* cx = static_cast<Ctx*>(p);
+                            if (cx->n < cx->out.size())
+                                cx->out[cx->n++] = {cx->r, static_cast<uint8_t>(cx->rfirst + first), count, head};
+                        },
+                        &c);
     }
-    return n;
+    return c.n;
 }
 }  // namespace k2::result_layout

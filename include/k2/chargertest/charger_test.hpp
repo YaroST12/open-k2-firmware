@@ -700,7 +700,7 @@ class Runner {
 public:
     explicit Runner(Env& env) : env_(env) {}
     static Summary preview(const pd::SourceCaps&, Options, Input);
-    Reason start(const pd::SourceCaps&, Options, Input, bool confirmed);
+    [[gnu::noinline]] Reason start(const pd::SourceCaps&, Options, Input, bool confirmed);
     void poll(Input, const pd::SourceCaps&);
     // A START the preflight refused (no run began; the run id stays where it was): one [TEST] log line with the
     // reason, and the reason + measured VBUS recorded here, so the remote summary (charger-test status) and the
@@ -729,7 +729,7 @@ public:
     // attach as usual. A run resumed kMaxResumes times is not resumable any more.
     // `planned_reattach` = this boot's /rd.rec marker said Reattach (the charger test's planned re-attach rebooted the
     // K2): the resume() this boot performs is that re-attach, not a power loss, and is not counted in resumed_.
-    void restore(const Options&, const Evidence&, uint32_t run_id, std::span<const Step>, Phase, size_t phase_index, uint8_t resumed,
+    [[gnu::noinline]] void restore(const Options&, const Evidence&, uint32_t run_id, std::span<const Step>, Phase, size_t phase_index, uint8_t resumed,
                  size_t attempt_unit = 0, uint8_t attempts = 0, bool planned_reattach = false);
     bool resumable() const;
     // A self-powered run that lost VBUS: Stopped, every unfinished row still Pending (nothing skipped, no verdict), resumable
