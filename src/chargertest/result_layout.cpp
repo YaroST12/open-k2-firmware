@@ -360,7 +360,7 @@ step_label::Text family_footer(const char* label, const FamilyTally& c) {
             char d[12]; unsigned k = 0;
             for (unsigned v = n[i]; v; v /= 10) d[k++] = char('0' + v % 10);
             const bool first = t.len == head;
-            if (t.len + (first ? 0 : 2) + k + std::strlen(kWords[i]) > kFooterChars) { cut = true; break; }   // the first that does not fit ends the line (never a lesser count in its place)
+            if (t.len + (first ? 0 : 2) + k + std::strlen(kWords[i]) > kFooterChars) { cut = i < 3; break; }   // the first that does not fit ends the line (never a lesser count in its place); only a pass, fail or caution count that would be lost sends the label away (a lost skip or listed count is no loss)
             if (!first) put_word(t, ", ");
             while (k) t.s[t.len++] = d[--k];
             t.s[t.len] = 0;
