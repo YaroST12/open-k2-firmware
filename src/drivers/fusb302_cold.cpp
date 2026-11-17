@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
-// Cold setup, self-powered boot/pin, VCONN/SOP' e-marker scan, CC/Ra probes, and lab control paths for FUSB302.
-// Compiled under COLD_SIZE_FLAGS (-Oz) by keeping K2_HOT out of this translation unit; hot/tick/ISR stay in fusb302.cpp.
+// Cold setup, self-powered boot/pin, VCONN/SOP' e-marker scan, CC/Ra probes, logging, and lab/UI control paths for FUSB302.
+// Compiled under COLD_SIZE_FLAGS (-Oz) by keeping hot-section markers out of this translation unit; hot/tick/ISR stay in fusb302.cpp.
 #include "fusb302_internal.hpp"
 
 #include <array>
@@ -1126,5 +1126,535 @@ bool send_sop_prime_frame(std::span<const std::uint8_t> tokens) {
     if (inline_now()) iq().on_sopp_reply(systick::millis());
     return true;
 }
+
+// ---- cold logging & housekeeping (moved from fusb302.cpp for -Oz) ----
+
+namespace {
+
+inline constexpr std::uint32_t kIdentWaitTimeoutMs = 4000;
+inline constexpr std::uint32_t kIdentSettleMs = 200;
+inline constexpr std::uint32_t kIdentGoneMs = 2000;
+std::uint32_t g_ident_gone_since = 0;
+bool g_ident_gone_timing = false;
+pd::Identity g_ident_identity;
+
+void alone_handback() {
+    g_ident_alone = false;
+    g_ident_alone_hold = true;
+    sink().detach();
+    K2LOG("[ID] alone: line released\n");
+}
+
+}  // namespace
+
+namespace detail {
+
+std::uint8_t g_iq_closed = 0;
+
+void log_vdm(std::uint16_t header, std::span<const std::uint8_t> payload) {
+    if (payload.size() < 4) return;
+    const std::uint32_t hdr = payload[0] | (payload[1] << 8) | (payload[2] << 16) | (std::uint32_t(payload[3]) << 24);
+    const unsigned cmd_type = (hdr >> 6) & 3, cmd = hdr & 0x1F;
+    const pd::VdmInfo& v = (header >> 8) & 1 ? g_engine.vdm : g_engine.sink_vdm;
+    K2LOG("[VDM] hdr=0x%08X SVID=0x%04X (%s) type=%u cmd=%u\n", unsigned(hdr), unsigned(hdr >> 16),
+                pd::svid_name(hdr >> 16), cmd_type, cmd);
+    if (cmd_type != 1 || (hdr >> 16) != pd::kSvidPd) return;
+    if (cmd == 1 && v.identity.valid) {
+        K2LOG("[VDM] Identity: VID=0x%04X (%s) PID=0x%04X bcd=0x%04X%s%s\n", v.identity.vid,
+                    v.identity.vendor, v.identity.pid, v.identity.bcd, v.identity.model ? " model=" : "",
+                    v.identity.model ? v.identity.model : "");
+        for (std::size_t i = 4; i + 3 < payload.size(); i += 4) {
+            const std::uint32_t w = payload[i] | (payload[i + 1] << 8) | (payload[i + 2] << 16) |
+                                    (std::uint32_t(payload[i + 3]) << 24);
+            K2LOG("[VDM] Identity VDO%d=0x%08X\n", int(i / 4), unsigned(w));
+        }
+    } else if (cmd == 2) {
+        for (int i = 0; i < v.num_svids; i++)
+            K2LOG("[VDM] SVID %d: 0x%04X (%s)\n", i + 1, v.svids[i], pd::svid_name(v.svids[i]));
+    }
+}
+
+void log_trigger(const pd::Choice& c, pd::Err e) {
+    const pd::Plan& p = sink().plan();
+    if (e == pd::Err::Ok)
+        K2LOG("[PD] t=%u Trigger pos %d (asked %d mV %d mA) -> %d mV %d mA RDO 0x%08X session %u: ok\n",
+                    unsigned(systick::millis()), c.pos, c.mv, c.ma, p.mv, p.ma, unsigned(p.rdo),
+                    unsigned(g_session.id()));
+    else
+        K2LOG("[PD] Trigger pos %d (asked %d mV %d mA): %s\n", c.pos, c.mv, c.ma, pd::err_name(e));
+}
+
+void log_boot_notes() {
+    for (unsigned i = 0; i < g_boot_note_n; i++)
+        K2LOG("[BOOT] t=%u %s=0x%02X\n", unsigned(g_boot_notes[i].ms), g_boot_notes[i].kind == 0 ? "sw0" : "cc", unsigned(g_boot_notes[i].val));
+    for (unsigned i = 0; i < g_readback_n; i++)
+        K2LOG("[BOOT] t=%u sw0 readback=0x%02X\n", unsigned(g_readbacks[i].ms), unsigned(g_readbacks[i].val));
+    K2LOG("[BOOT] cc write trace: %u kept, %u more not kept; Rd pin 0x%X inherited %u\n", g_boot_note_n, g_boot_note_lost,
+          unsigned(g_pin_rd), unsigned(g_rd_inherited));
+}
+
+void iq_report() {
+    if (!g_iq_inited) return;
+    const pd::IqStatus& s = iq().status();
+    if (s.closed != g_iq_closed) {
+        g_iq_closed = s.closed;
+        K2LOG("[IQ] t=%u Q %s id %u try %u: %s (device msgs %u, GoodCRC %u, charger msgs %u)\n", unsigned(systick::millis()),
+              pd::iq_step_name(s.q.step), unsigned(s.q.id), unsigned(s.q.attempt), pd::iq_result_name(s.q.result),
+              unsigned(s.q.dev_msgs), unsigned(s.q.dev_goodcrc), unsigned(s.q.src_msgs));
+    }
+    if (s.phase == g_iq_phase && s.step == g_iq_step) return;
+    g_iq_phase = s.phase;
+    g_iq_step = s.step;
+    pdtrace::mark(pdtrace::kMarkInterrogate,
+                  std::uint16_t(unsigned(s.phase) | unsigned(s.step) << 4 | unsigned(s.why) << 8 | unsigned(s.match) << 12),
+                  std::uint16_t(s.asked_mask | s.ok_mask << 8));
+    K2LOG("[IQ] t=%u %s, step %s\n", unsigned(systick::millis()), pd::iq_phase_name(s.phase), pd::iq_step_name(s.step));
+    if (!pd::iq_finished(s.phase)) return;
+    if (s.why == pd::IqWhy::SourceResets) {
+        K2LOG("[IQ] the charger Hard Resets when it is asked: asking this charger is not possible, stopped after the first reset\n");
+    }
+    if (s.why == pd::IqWhy::SourceRestarts) {
+        K2LOG("[IQ] the charger renegotiates when it is asked: asking this charger is not possible, stopped at the first restart\n");
+    }
+    K2LOG("[IQ] end %s (%s)\n", pd::iq_phase_name(s.phase), pd::iq_why_name(s.why));
+    K2LOG("[IQ] contract %s: asked 0x%02X answered 0x%02X refused 0x%02X silent 0x%02X\n", pd::iq_match_name(s.match),
+          unsigned(s.asked_mask), unsigned(s.ok_mask), unsigned(s.refused_mask), unsigned(s.silent_mask));
+    K2LOG("[IQ] counts: %u sent, %u device GoodCRC, resets %u sent %u seen\n", unsigned(s.sent), unsigned(s.dev_acks),
+          unsigned(s.resets_sent), unsigned(s.resets_seen));
+    K2LOG("[IQ] contracts: first pos %u RDO 0x%08X PDO 0x%08X, second pos %u RDO 0x%08X PDO 0x%08X\n", unsigned(s.first.pos),
+          unsigned(s.first.rdo), unsigned(s.first.src_pdo), unsigned(s.second.pos), unsigned(s.second.rdo), unsigned(s.second.src_pdo));
+    K2LOG("[IQ] answers: id %04X:%04X, %u sink PDOs, ext %u bytes, revision 0x%08X, %u SVIDs, %u modes\n", unsigned(s.id.vid),
+          unsigned(s.id.pid), unsigned(s.num_sink_pdos), unsigned(s.sink_ext_len), unsigned(s.revision), unsigned(s.num_svids),
+          unsigned(s.num_modes));
+    K2LOG("[IQ] late 0x%02X, %u EPR sink PDOs%s\n", unsigned(s.late_mask), unsigned(s.num_epr_pdos), s.epr_partial ? " (first chunk only)" : "");
+    if (s.spoof)
+        K2LOG("[IQ] spoof: SOP' cable queried %u times (charger or device), %u replies, real cable answered %u\n", unsigned(s.sopp_queries),
+              unsigned(s.sopp_replies), unsigned(s.sopp_real));
+}
+
+pd::RereadLink reread_link() {
+    return {.contract = sink().status().state == pd::SinkState::Ready,
+            .pdos = std::uint8_t(g_engine.caps.valid ? g_engine.caps.num_pdos : 0),
+            .rev = std::uint8_t(g_engine.caps.valid ? g_engine.caps.spec_rev : 0),
+            .svids = std::span<const std::uint16_t>(g_engine.vdm.svids.data(), g_engine.vdm.num_svids)};
+}
+
+void reread_housekeeping(std::uint32_t now) {
+    if (!reread_running() && g_reread_log_pending) {
+        g_reread_log_pending = false;
+        const pd::RereadStatus& rs = reread().status();
+        const unsigned held = g_engine.caps.valid ? g_engine.caps.num_pdos : 0;
+        pdtrace::mark(pdtrace::kMarkReread, std::uint16_t(0x8000 | (rs.skipped_mask << 8) | rs.ok_mask),
+                      std::uint16_t((rs.avs_seen ? 0x8000 : 0) | (rs.caps_rx << 8) | rs.pdos_last));
+        K2LOG("[REREAD] %s ok=0x%02X skipped=0x%02X notsup=0x%02X caps_rx=%u pdos %u -> %u (last list %u) avs=%d attach_failed=%d\n",
+              rs.state == pd::RereadState::Aborted ? "aborted" : "done", unsigned(rs.ok_mask), unsigned(rs.skipped_mask),
+              unsigned(rs.notsup_mask), unsigned(rs.caps_rx), unsigned(rs.pdos_before), held, unsigned(rs.pdos_last), int(rs.avs_seen), int(rs.attach_failed));
+        const bool nothing = rs.attach_failed || rs.state == pd::RereadState::Aborted;
+        g_reread_release_at = nothing ? now : now + kRereadLingerMs;
+    }
+    if (g_run_owner && (g_reread_owns_rd || g_reread_made_contract)) {
+        g_reread_release_at = now + kRereadLingerMs;
+        return;
+    }
+    if ((g_reread_owns_rd || g_reread_made_contract) && !reread_running() && !g_reread_log_pending &&
+        std::int32_t(now - g_reread_release_at) >= 0) {
+        const pd::SinkStatus& ss = sink().status();
+        const bool quiet = ss.state == pd::SinkState::Idle || ss.state == pd::SinkState::Ready || ss.state == pd::SinkState::Failed;
+        if (!quiet) return;
+        if (ss.state == pd::SinkState::Ready && ss.pos != 1) {
+            sink().release(now);
+            return;
+        }
+        K2LOG("[REREAD] attach released: contract %d, Rd %d\n", int(g_reread_made_contract), int(g_reread_owns_rd));
+        if (g_reread_owns_rd) set_rd_for_run(false, false);
+        g_reread_owns_rd = false; g_ident_owns_rd = false;
+        g_reread_made_contract = false;
+        g_legacy_only = false;
+        sink().detach();
+    }
+}
+
+void ident_wait_refuse() {
+    if (!g_ident_wait) return;
+    g_ident_wait = false;
+    K2LOG("[ID] alone: no Ready contract within %u ms, Identify not sent (sink state %d)\n",
+          unsigned(systick::millis() - g_ident_wait_at), int(sink().status().state));
+    if (g_ident_alone) alone_handback();
+}
+
+void ident_result_gate(std::uint32_t now) {
+    if (g_wait_kind == raguard::WaitKind::NoSource || g_wait_kind == raguard::WaitKind::ChargerWaiting) {
+        if (!g_ident_gone_timing) { g_ident_gone_timing = true; g_ident_gone_since = now; }
+        if (now - g_ident_gone_since >= kIdentGoneMs) {
+            g_ident_result_valid = false;
+            g_ident_alone_hold = false;
+            g_ident_gone_timing = false;
+        }
+    } else g_ident_gone_timing = false;
+}
+
+void ident_service(std::uint32_t now2) {
+    if (g_ident_wait) {
+        const bool ready = !inline_now()
+                           && sink().status().state == pd::SinkState::Ready && g_session.fresh() && g_active_cc != 0;
+        if (ready && g_ident_ready_at == 0) g_ident_ready_at = now2;
+        if (ready && now2 - g_ident_ready_at >= kIdentSettleMs) {
+            g_ident_wait = false;
+            g_ident_session = g_session.id();
+            g_ident_result_valid = true;
+            g_ident_alone_hold = false;
+            ident().start(g_engine.caps.valid ? g_engine.caps.spec_rev : 2, now2);
+            g_ident_was_running = true;
+            K2LOG("[ID] alone: Ready contract after %u ms, Identify started\n", unsigned(g_ident_ready_at - g_ident_wait_at));
+        } else if (now2 - g_ident_wait_at >= kIdentWaitTimeoutMs) {
+            ident_wait_refuse();
+        }
+    }
+    if (g_ident_was_running && !ident_running()) {
+        g_ident_was_running = false;
+        const pd::IdStatus& st = ident().status();
+        g_ident_identity = g_engine.vdm.identity.valid ? g_engine.vdm.identity : g_engine.sink_vdm.identity;
+        K2LOG("[ID] result: state %d ok 0x%02X skipped 0x%02X retries %u why %d\n", int(st.state), unsigned(st.ok_mask),
+              unsigned(st.skipped_mask), unsigned(st.retries), int(st.why));
+        if (g_ident_alone) alone_handback();
+    }
+    if (g_ident_owns_rd && !ident_running() && !g_ident_wait) {
+        g_ident_owns_rd = false;
+        if (g_rd_start) {
+            set_rd_for_run(false, false);
+            K2LOG("[ID] alone attach released: Rd off\n");
+        }
+    }
+}
+
+pd::Err request_inner(const pd::Choice& c, bool over_load) {
+    if (g_legacy_only) return pd::Err::Busy;
+    if (const pd::TriggerRefusal r = trigger_refusal(); r != pd::TriggerRefusal::None) {
+        if (!over_load || !pd::over_load_allowed(over_load_facts())) {
+            K2LOG("[PD] trigger refused: inline (%s)\n", pd::trigger_refusal_name(r));
+            return pd::Err::Inline;
+        }
+        K2LOG("[PD] trigger over-load: far sink attached, no far PD message this attach (lab only)\n");
+    }
+    if (g_active_cc == 0) return pd::Err::NoCaps;
+    if (sink().hv_lock() && c.pos > 1) {
+        K2LOG("[LOOP] request pos %d %d mV refused: 5V lock\n", c.pos, c.mv);
+        return pd::Err::OverCap;
+    }
+    if (ident_running() || probe_running() || g_prep.active()) return pd::Err::Busy;
+    if (!g_session.fresh()) {
+        K2LOG("[PD] Trigger refused: no Source_Capabilities in this attach (session %u)\n",
+                    unsigned(g_session.id()));
+        return pd::Err::NoCaps;
+    }
+    if (!g_caps_acked && g_engine.caps.valid && c.pos != 0 && c.pos <= g_engine.caps.num_pdos) {
+        g_prep_choice = c;
+        g_prep.start(systick::millis(), g_caps_count, false);
+        K2LOG("[PD] Trigger pos %d %d mV %d mA: preparing (last caps not ACKed)\n", c.pos, c.mv, c.ma);
+        return pd::Err::Ok;
+    }
+    const pd::Err e = sink().trigger(c, systick::millis());
+    log_trigger(c, e);
+    trace_sink();
+    return e;
+}
+
+}  // namespace detail
+
+bool rp_on_line() {
+    if (g_active_cc != 0) return true;
+    std::uint8_t sw0 = 0, mdac = 0;
+    if (!rd(kSwitches0, sw0) || !rd(kMeasure, mdac)) return false;
+    const std::uint8_t pd_bits = std::uint8_t(sw0 & (kPdwn1 | kPdwn2));
+    wr(kMeasure, kMdac210mV);
+    bool seen = false;
+    for (const std::uint8_t meas : {kMeasCc1, kMeasCc2}) {
+        wr(kSwitches0, std::uint8_t(pd_bits | meas));
+        delay_ms(2);
+        std::uint8_t st = 0;
+        if (rd(kStatus0, st) && (st & kComp)) seen = true;
+    }
+    wr(kSwitches0, sw0);
+    wr(kMeasure, mdac);
+    return seen;
+}
+
+void set_inline(bool on) {
+    if (on == g_inline) return;
+    g_inline = on;
+    if (on) ident_wait_refuse();
+    apply_rd();
+    g_cc_sink_mv = -1;
+    g_detach.inline_begin();
+    pdtrace::link(g_inline, false);
+    usb::log(on ? "[PD] Inline: real sink attached, active operations need confirm\n"
+                : "[PD] Inline cleared\n");
+}
+
+void set_wait_kind(raguard::WaitKind kind) {
+    g_wait_kind = kind;
+    ident_result_gate(systick::millis());
+}
+raguard::WaitKind wait_kind() { return g_wait_kind; }
+bool caps_this_attach() { return g_session.fresh(); }
+
+void unit_detach() {
+    g_reread_owns_rd = false; g_ident_owns_rd = false;
+    g_reread_made_contract = false;
+    reread().abort();
+    g_prep.abort();
+    self_power_leave();
+    set_rd_for_run(false, true);
+    g_rd_op = false;
+    g_rd_gate.reset();
+    reset_contract_linger();
+    apply_rd();
+    sink().detach();
+    g_legacy_only = false;
+    g_detach.reset();
+    g_engine.reset_source();
+    g_new_source = true;
+    g_pd_traffic = false;
+    g_last_rx_ms = systick::millis();
+    usb::log("[PD] Unit detach: Rd off, sink forgotten\n");
+}
+void unit_attach(bool legacy) {
+    g_reread_owns_rd = false; g_ident_owns_rd = false;
+    g_reread_made_contract = false;
+    g_legacy_only = legacy;
+    self_power_restore();
+    sink().detach();
+    g_detach.reset();
+    g_engine.reset_source();
+    g_new_source = true;
+    g_pd_traffic = false;
+    g_last_rx_ms = systick::millis();
+    if (legacy && !g_sop_prime_hook) {
+        g_crc.reset();
+        if (g_crc_on) { g_crc_on = false; write_sw1(); }
+    }
+    set_rd_for_run(true, false);
+    usb::log(legacy ? "[PD] Unit attach: PD-silent\n" : "[PD] Unit attach: PD\n");
+}
+void unit_hold(bool legacy) {
+    g_reread_owns_rd = false; g_ident_owns_rd = false;
+    g_reread_made_contract = false;
+    reread().abort();
+    g_prep.abort();
+    g_legacy_only = legacy;
+    sink().detach();
+    if (!legacy) sink().soft_reset(systick::millis());
+    g_detach.reset();
+    g_engine.reset_source();
+    g_new_source = true;
+    g_pd_traffic = false;
+    g_last_rx_ms = systick::millis();
+    usb::log(legacy ? "[PD] Unit hold: PD-silent, Rd kept\n" : "[PD] Unit hold: Soft_Reset, Rd kept\n");
+}
+bool rd_for_run(bool on) {
+    g_reread_owns_rd = false; g_ident_owns_rd = false;
+    g_reread_made_contract = false;
+    if (g_ra) {
+        g_ra_run = on;
+        if (!on) ra_set(false);
+    }
+    return set_rd_for_run(on, false);
+}
+void rd_for_run_pause() { g_reread_owns_rd = false; g_ident_owns_rd = false; g_reread_made_contract = false; set_rd_for_run(false, true); }
+bool rd_for_run_on() { return g_rd_start; }
+std::uint8_t idle_wake_line() { return g_idle_wake.line(); }
+std::int32_t open_cc_mv(std::uint8_t line) { return rdseek().open_mv(line); }
+
+std::uint32_t cable_seq() { return g_engine.cable_acks; }
+std::uint32_t session() { return g_session.id(); }
+const pd::CableLimits& physical_cable() {
+    static constexpr pd::CableLimits unknown;
+    if (g_physical_session == g_session.id()) return g_physical_cable;
+    return g_rd_start && g_scanned_valid ? g_scanned_cable : unknown;
+}
+const pd::Revision& source_revision() { return g_engine.ext.revision; }
+
+std::uint32_t typec_ma() {
+    if (g_active_cc == 0) return 0;
+    return pd::typec_only_ma(systick::millis() - g_attach_ms, g_session.fresh(), g_bc_max, inline_now(), g_pd_traffic);
+}
+bool pd_traffic() { return g_active_cc != 0 && g_pd_traffic; }
+bool pd_seen_attach() { return g_active_cc != 0 && g_pd_seen_attach; }
+
+pd::TriggerRefusal trigger_refusal() {
+    if (g_active_cc == 0) return inline_now() ? pd::TriggerRefusal::Inline : pd::TriggerRefusal::None;
+    return pd::can_trigger({inline_now(), g_detach.sink_was_seen(), far_sink_seen()});
+}
+
+pd::OverLoadFacts over_load_facts() {
+    const bool far_req = far_sink_seen();
+    return {inline_now() || g_detach.sink_was_seen() || far_req,
+            far_req || g_engine.sink_ctl_seen || g_engine.sink.valid || g_engine.sink_vdm.num_svids != 0};
+}
+
+pd::Err sink_request(const pd::Choice& c, bool confirmed, bool over_load) {
+    (void)confirmed;
+    const pd::Err e = request_inner(c, over_load);
+    if (e == pd::Err::Ok) reread_take_over();
+    return e;
+}
+void sink_release() {
+    g_prep.abort();
+    sink().release(systick::millis());
+}
+void sink_keepalive_silence(pd::KaSilence k) { sink().silence_keepalive(k, systick::millis()); }
+bool sink_hard_reset(bool lab_inline) {
+    if ((inline_now() && !lab_inline) || g_active_cc == 0) {
+        K2LOG("[PD] Hard Reset refused (no CC / inline)\n");
+        return false;
+    }
+    g_hr_tool_armed = true;
+    sink().hard_reset(systick::millis());
+    return true;
+}
+void sink_set_cap(std::uint32_t mv) { sink().set_cap_mv(mv); }
+void sink_set_hv_lock(bool on) {
+    if (on == sink().hv_lock()) return;
+    if (on) g_prep.abort();
+    sink().set_hv_lock(on, systick::millis());
+    trace_sink();
+}
+void sink_set_vbus_external(bool on) { sink().set_vbus_external(on, systick::millis()); }
+void sink_cap_override(const std::uint32_t* pdos, std::uint8_t n) { sink().set_sink_cap_override(pdos, n); }
+
+const pd::SinkStatus& sink_status() { return sink().status(); }
+const pd::XiaomiTrace& xiaomi_trace() { return sink().xiaomi_trace(); }
+pd::Err epr_info_request(bool force) { return sink().request_epr_info(systick::millis(), force); }
+const pd::SourceCaps& epr_info_list() { return g_engine.epr_info; }
+pd::Err apple_read_start() { return sink().arm_apple_read(systick::millis()); }
+const pd::AppleInfo& apple_info() { return sink().apple_info(); }
+bool apple_armed() { return sink().apple_armed(); }
+bool answers_sop() { return sink().answers_sop(); }
+const pd::PpsAnswer& pps_answer() { return sink().pps_answer(); }
+std::uint32_t caps_count() { return g_caps_count; }
+bool legacy_only_active() { return g_legacy_only; }
+
+pd::BusyWhy busy_why() {
+    if (g_legacy_only) return pd::BusyWhy::Legacy;
+    if (ident_running()) return pd::BusyWhy::Identify;
+    if (probe_running()) return pd::BusyWhy::Probe;
+    if (g_prep.active()) return pd::BusyWhy::Prepare;
+    switch (sink().status().state) {
+        case pd::SinkState::EprEntering: case pd::SinkState::EprWaitCaps: case pd::SinkState::Requesting:
+        case pd::SinkState::Transition: case pd::SinkState::Aborting:
+            return pd::BusyWhy::Negotiating;
+        default: return pd::BusyWhy::None;
+    }
+}
+
+bool xiaomi_chain_active() { return sink().xiaomi_chain_active(systick::millis()); }
+bool idle_wake() { return g_idle_wake.enabled(); }
+void set_run_owner(bool on) { g_run_owner = on; }
+bool run_owner() { return g_run_owner; }
+bool ra_active() { return g_ra; }
+emkra::Refuse ra_refusal() { return g_ra_refused; }
+void ra_run_own() { if (g_ra) g_ra_run = true; }
+const pd::RereadStatus& reread_status() { return reread().status(); }
+bool reread_own_hold() { return pd::reread_own_hold(sink().status(), g_reread_made_contract); }
+void reread_take_over() {
+    if (!g_reread_owns_rd && !g_reread_made_contract) return;
+    K2LOG("[REREAD] attach taken over: Rd %d, contract %d stay with the new owner\n", int(g_reread_owns_rd), int(g_reread_made_contract));
+    g_reread_owns_rd = false;
+    g_reread_made_contract = false;
+}
+void set_sink_cap_ext_mode(pd::SinkCapExtMode m) {
+    sink().set_sink_cap_ext_mode(m);
+    K2LOG("[PD] Get_Sink_Cap_Extended answer mode %u\n", unsigned(m));
+}
+void set_proactive_discover(bool on) { sink().set_proactive_discover(on); }
+void probe_abort() { probe().abort(); }
+const pd::ProbeStatus& probe_status() { return probe().status(); }
+void identify_abort() { ident().abort(pd::IdWhy::Stopped); }
+const pd::IdStatus& identify_status() { return ident().status(); }
+bool identify_busy() { return g_ident_wait || ident_running(); }
+bool identify_current() {
+    if (g_ident_session == 0 || !g_ident_result_valid) return false;
+    return g_ident_session == g_session.id() || g_ident_alone_hold;
+}
+const pd::Identity& identify_identity() { return g_ident_identity; }
+bool interrogate_running() { return iq_running(); }
+const pd::IqStatus& interrogate_status() { return iq().status(); }
+
+void feed(std::uint8_t sop, std::uint16_t header, std::span<const std::uint8_t> payload) {
+    handle_frame_entry(sop == 1 ? pd::Sop::SopP : sop == 2 ? pd::Sop::SopPP : pd::Sop::Sop, header, payload, false);
+}
+
+const pd::SourceCaps& caps() { return g_engine.caps; }
+const pd::Emarker& emarker() { return g_engine.cable; }
+emk_variant::Answered cable_answered() { return g_engine.cable.valid ? g_answered : emk_variant::Answered{}; }
+emk_attached::ReadInfo last_cable_read() { return g_read_info; }
+raclass::PullDown pull_down() { return g_pull_down; }
+void set_vbus_source(VbusFn vbus_mv) { g_vbus_source = vbus_mv; }
+const pd::VdmInfo& vdm() { return g_engine.vdm; }
+const pd::VdmInfo& sink_vdm() { return g_engine.sink_vdm; }
+usblink::Link usb_link(std::int32_t dp_mv, std::int32_t dm_mv) {
+    usblink::Classifier c = g_engine.usb;
+    c.on_lines(dp_mv, dm_mv);
+    return c.link();
+}
+usblink::Raw usb_raw() { return g_engine.usb.raw(); }
+const pd::ExtInfo& ext() { return g_engine.ext; }
+bool cable_thunderbolt() { return g_engine.cable_thunderbolt(); }
+std::uint32_t rx_count() { return g_engine.caps.rx_count; }
+std::uint8_t device_id() { return g_device_id; }
+const pd::Contract& contract() { return g_engine.contract; }
+std::uint32_t request_period_ms() { return g_req_period_ms; }
+const pd::SinkCapsSeen& sink_caps() { return g_engine.sink; }
+
+void set_sop_prime_hook(SopPrimeHook hook) {
+    g_sop_prime_hook = hook;
+    if (hook != nullptr) g_tx_allowed = true;
+    if (g_active_cc != 0) write_sw1();
+}
+
+void rd_glitch_begin() {
+    wr(kSwitches0, 0);
+    K2LOG("[PD] rd glitch: Rd off (ra=%d)\n", int(g_ra));
+}
+
+void rd_glitch_end() {
+    sink().detach();
+    g_engine.reset_source();
+    g_new_source = true;
+    apply_rd();
+    K2LOG("[PD] rd glitch: Rd back\n");
+}
+
+void vconn_off() { vconn_force_off(pd::VconnWhy::Abort); }
+
+#if K2_HOST_REPORT
+void loop_host_begin(LoopHost* l) {
+    if (l == g_lh) return;
+    g_lh = l;
+    g_lh_dfp = false;
+    g_lh_idle = false;
+    if (g_active_cc != 0) write_sw1();
+    apply_rd();
+    K2LOG("[LPHR] line %s (inline=%d cc=%u)\n", l ? "owned: sole sink, no Rd, no Hard Reset" : "released", g_inline ? 1 : 0,
+          unsigned(g_active_cc));
+}
+bool loop_host_send(const pd::TxMsg& m) {
+    if (!g_lh || m.hard_reset || m.sop != pd::Sop::Sop || g_active_cc == 0) return false;
+    return transmit_msg(m);
+}
+void loop_host_set_dfp(bool dfp) {
+    if (!g_lh || dfp == g_lh_dfp) return;
+    g_lh_dfp = dfp;
+    write_sw1();
+}
+bool loop_host_soft_reset() {
+    if (!g_lh || g_active_cc == 0 || sink().status().state != pd::SinkState::Ready) return false;
+    sink().soft_reset(systick::millis());
+    trace_sink();
+    return true;
+}
+bool loop_host_idle() { return g_lh_idle; }
+std::uint8_t loop_host_rp() { return g_active_cc != 0 ? g_bc_max : std::uint8_t(0); }
+#endif
 
 }  // namespace k2::fusb302
