@@ -1242,6 +1242,28 @@ static void test_the_default_run_is_medium() {
 // Medium -> Deep -> Light -> Medium (next_level), the Tests row's step count follows the level, and the footer says what the
 // level does. PLUS goes back to START, whose OK opens the confirmation as before.
 static void dump_screen(const char* name);
+// The panel's blank columns between the amber chip's label ink and its dim "S" mark (-1: no such chip): the label is drawn with
+// kCaution on the kCautionT fill, the mark with kDim; the rows scanned are the chip body (the Partial bar below it is kCaution too).
+static int amber_chip_sweep_gap() {
+    int y0 = -1, y1 = -1;
+    for (int y = 0; y < LCD_HEIGHT; ++y) {
+        int n = 0;
+        for (int x = 0; x < LCD_WIDTH; ++x) n += g_panel[y * LCD_WIDTH + x] == kCautionT;
+        if (n >= 100) { if (y0 < 0) y0 = y; y1 = y; }
+    }
+    if (y0 < 0) return -1;
+    int fill_x0 = LCD_WIDTH, first_dim = LCD_WIDTH;
+    for (int x = 0; x < LCD_WIDTH; ++x)
+        if (g_panel[y0 * LCD_WIDTH + x] == kCautionT && x < fill_x0) fill_x0 = x;
+    for (int y = y0; y <= y1; ++y)
+        for (int x = fill_x0; x < LCD_WIDTH; ++x)   // inside the chip: the row label ("PPS") is dim too, left of it
+            if (g_panel[y * LCD_WIDTH + x] == kDim && x < first_dim) first_dim = x;
+    int last_ink = -1;
+    for (int y = y0; y <= y1; ++y)
+        for (int x = 0; x < first_dim; ++x)
+            if (g_panel[y * LCD_WIDTH + x] == kCaution && x > last_ink) last_ink = x;
+    return first_dim < LCD_WIDTH && last_ink >= 0 ? first_dim - last_ink - 1 : -1;
+}
 static void test_review_level_row_cycles_and_counts() {
     fixture();
     g_stub.caps.num_pdos = 3;
@@ -2008,15 +2030,18 @@ static void test_a_voltage_fold_reads_as_a_caution() {
     CHECK_EQ(ui.charger_test_stage(), 6);
     top(ui, t); calm();
     dump_screen("fold_results");
-    const auto readme_rot3 = [&](const char* name) {   // the README's picture of the same screen, rotation 3 (the strip at the bottom)
+    CHECK_EQ(amber_chip_sweep_gap() >= 6, true);   // the S mark never hugs the label: at least one font-12 advance in every rotation
+    const auto readme_rot3 = [&](const char* name, bool results = true) {   // the README's picture of the same screen, rotation 3 (the strip at the bottom)
         ui.set_rotation(3, t); calm();
         dump_screen(name);
+        if (results) CHECK_EQ(amber_chip_sweep_gap() >= 6, true);   // the Results grid has the chip; the Detail page does not
         ui.set_rotation(0, t); calm();
     };
     readme_rot3("readme_ct_caution");
     for (const uint8_t rot : {1, 2}) {   // the merged chip with its S mark in the landscape mappings too (every cut would fail the run)
         ui.set_rotation(rot, t); calm();
         dump_screen(rot == 1 ? "fold_results_rot1" : "fold_results_rot2");
+        CHECK_EQ(amber_chip_sweep_gap() >= 6, true);
         ui.set_rotation(0, t); calm();
     }
     // The header: pass / caution / fail / skip; the caution cell is amber (four columns: the number only, behind its amber mark).
@@ -2059,7 +2084,7 @@ static void test_a_voltage_fold_reads_as_a_caution() {
     CHECK_EQ(detail, true);
     if (!detail) return;
     dump_screen("fold_detail");
-    readme_rot3("readme_ct_caution_detail");
+    readme_rot3("readme_ct_caution_detail", false);
     // The long word and the long name ("PPS 7.14->11V") share the band: the word drops to the small font and nothing overlaps.
     check_text_at(kSmall, 32, "CAUTION", kOnPart, kPartFill, 32);
     char want[ctsweep::kFoldTextMax] = {};
