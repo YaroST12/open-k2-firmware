@@ -1764,6 +1764,7 @@ struct FamilyPick {
     int line = -1;
     unsigned count = 0;
     int first_caution = -1;
+    uint8_t algo = 0, pos = 0;   // the row's own APDO (a range row)
     result_layout::FamilyTally tally;
 };
 static FamilyPick pick_family(Ui& ui, const char* label) {
@@ -1779,6 +1780,7 @@ static FamilyPick pick_family(Ui& ui, const char* label) {
         if (std::string_view(layout.rows[ln[k].row].label) == label) pick.line = int(k);
     if (pick.line < 0) return pick;
     const auto& row = layout.rows[ln[size_t(pick.line)].row];
+    pick.algo = uint8_t(row.algorithm); pick.pos = row.pos;
     for (const auto& s : steps) {
         if (!result_layout::row_has(row, s)) continue;
         const bool caution = result_layout::caution(s, view);
@@ -1846,11 +1848,12 @@ static void test_family_steps_scenes() {
             CHECK_EQ(ui.charger_test_stage(), 7);
             if (ui.charger_test_stage() != 7) { press(ui, Button::Back, t); calm(); continue; }
             // Only this row's steps: its own range, level family or sweep, not the whole protocol family.
-            unsigned want = 0;
+            unsigned want = 0, swept = 0, ranged = 0;
             result_layout::FamilyTally tally;
             for (const auto& s : steps) {
                 if (!result_layout::row_has(row, s)) continue;
                 ++want;
+                (ct::is_sweep(s) ? swept : ranged) += 1;
                 const bool caution = result_layout::caution(s, view);
                 tally.caution += caution;
                 tally.pass += s.verdict == ct::Verdict::Pass && !caution;
@@ -1859,6 +1862,12 @@ static void test_family_steps_scenes() {
                 tally.skip += s.verdict == ct::Verdict::Skip && !result_layout::advertised(s);
             }
             CHECK_EQ(want > 0, true);
+            bool marked = false;
+            for (size_t i = row.first; i < size_t(row.first) + row.count; ++i) marked = marked || layout.tokens[i].sweep;
+            if (marked) {
+                CHECK_EQ(swept >= 1, true);   // a chip marked S: its Steps page lists the sweep beside the range steps
+                CHECK_EQ(ranged >= 1, true);
+            }
             CHECK_EQ(unsigned(ui.list_state().count), want);
             if (want < steps.size()) CHECK_EQ(ui.list_state().count < int(steps.size()), true);
             const auto foot = result_layout::family_footer(row.label, tally);
@@ -2018,6 +2027,13 @@ static void test_a_voltage_fold_reads_as_a_caution() {
     CHECK_EQ(pps.first_caution >= 0, true);
     top(ui, t); calm();
     for (int k = 0; k < pps.line; ++k) { press(ui, Button::Plus); ui.tick(t += 100); calm(); }
+    {   // the merged row on the Results screen: its footer carries the sweep's fold words, in the caution tone (the Sweep row's old job)
+        char fold[ctsweep::kFoldTextMax] = {};
+        const auto rw = r.sweep_view().apdo(pps.algo, pps.pos);
+        const size_t fl = rw ? ctsweep::format_fold(rw->sum, fold) : 0;
+        CHECK_EQ(fl > 0, true);
+        CHECK_EQ(footer_shows(std::string_view(fold, fl), kCaution), true);
+    }
     press(ui, Button::Ok); ui.tick(t += 100); calm();
     CHECK_EQ(ui.charger_test_stage(), 7);
     CHECK_EQ(unsigned(ui.list_state().count), pps.count);
@@ -2097,17 +2113,17 @@ static void test_a_sweep_off_by_more_than_100mv_reads_as_a_caution() {
     check_text_at(kSmall, 26, n.view(), kCaution, kBg, 56 + 16);        // the header's caution cell holds the deviating sweeps
     n.clear(); n.put_u32(pass);
     check_text_at(kSmall, 26, n.view(), kOk, kBg, 16);
-    // The sweep row's steps: its page counts the deviating sweeps as cautions ("Sweep: m caution").
-    const auto sw = pick_family(ui, "Sweep");
+    // The PPS row's steps page lists the range steps and the APDO's sweep, and counts its deviating sweep as a caution.
+    const auto sw = pick_family(ui, "PPS");
     CHECK_EQ(sw.line >= 0, true);
     if (sw.line < 0) return;
-    CHECK_EQ(sw.tally.caution >= sweeps, true);
+    CHECK_EQ(sw.tally.caution >= 1, true);
     for (int k = 0; k < sw.line; ++k) { press(ui, Button::Plus); ui.tick(t += 100); calm(); }
     press(ui, Button::Ok); ui.tick(t += 100); calm();
     CHECK_EQ(ui.charger_test_stage(), 7);
     CHECK_EQ(unsigned(ui.list_state().count), sw.count);
     top(ui, t); calm();
-    CHECK_EQ(footer_shows(result_layout::family_footer("Sweep", sw.tally).view(), kCaution), true);
+    CHECK_EQ(footer_shows(result_layout::family_footer("PPS", sw.tally).view(), kCaution), true);
 }
 // Every Steps row reads as a whole step label (step_label::label), never cut with dots: the ink of each visible row's text
 // cell is compared with the ink of every label of the run, and some label must match. The cut would end in "...". The same scan

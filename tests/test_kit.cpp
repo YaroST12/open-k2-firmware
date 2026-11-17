@@ -407,6 +407,40 @@ static void test_verdict_cell() {
 // Skip is the one verdict that strikes its label through (the shape cue; Pending is faint with no strike, None is dim with no
 // strike): a 1 px kDim line across the text at the font's x-height centre, the text width plus 1 px each side, clipped to the cell.
 // The line is painted over the text, so a Skip label costs its width + 2 px more than the cell's area.
+// The sweep mark: a dim "S" on the label's baseline, 2 px right of the text, in a cell the S makes 8 px wider. It is a second hole of
+// the cell's fill (no extra pixels), it takes no tone of its own (kDim; the solid red keeps its black ink), and the label sits
+// where a cell 8 px narrower would put it, so label + gap + mark is the centred group.
+static void test_sweep_mark() {
+    using kit::Verdict;
+    const auto count = [](int x0, int x1, int y0, int y1, uint16_t c) {
+        int n = 0;
+        for (int yy = y0; yy < y1; ++yy)
+            for (int xx = x0; xx < x1; ++xx) n += px(xx, yy) == c;
+        return n;
+    };
+    for (const Verdict v : {Verdict::Pass, Verdict::Pending, Verdict::Partial, Verdict::Fail, Verdict::Running}) {
+        lcd::fill(kBase);
+        g_lcd_pixels = 0;
+        kit::draw_verdict(kSurf, 10, 100, 72, 24, v, "3.3-11V", kBg, true);
+        const int mark = v == Verdict::Fail ? 0 : count(72, 78, 100, 124, kDim);   // the label is 7 x 8 px, centred in 72 - 8: x14..69, the mark at x72..77
+        const int inked = count(72, 78, 100, 124, v == Verdict::Fail ? kit::verdict_style(v).ink : kDim);
+        CHECK_EQ(inked > 0, true);
+        if (v != Verdict::Fail) CHECK_EQ(mark > 0, true);
+        CHECK_EQ(count(78, 82, 100, 124, kDim), 0);   // nothing right of it: the group ends 4 px inside the cell
+        CHECK_EQ(g_lcd_pixels, 72u * 24u + unsigned(kit::mark_px(v, true, 72, 24)));   // no pixel twice (a Running rim is the only overlay)
+        const kit::CellRect cell{10, 100, 72, 24};
+        CHECK_EQ(kit::mark_hits_label(cell, "3.3-11V", true), false);
+    }
+    // the mark is not a verdict: Pass with and without it differ only by the mark and the label's 4 px shift
+    lcd::fill(kBase);
+    kit::draw_verdict(kSurf, 10, 100, 72, 24, Verdict::Pass, "3.3-11V", kBg, false);
+    CHECK_EQ(count(72, 78, 100, 124, kDim), 0);
+    // a 12 px label (a cell under 22 px tall) puts the mark on the same baseline
+    lcd::fill(kBase);
+    kit::draw_verdict(kSurf, 10, 100, 60, 18, Verdict::Pass, "5V", kBg, true);
+    CHECK_EQ(count(10, 70, 100, 118, kDim) > 0, true);
+}
+
 static void test_skip_strike() {
     using kit::Verdict;
     struct Case { int16_t h; int16_t tw; int16_t hole_y; int16_t strike_dy; };
@@ -742,7 +776,7 @@ static void test_result_rows_stream_each_pixel_once() {
                 if (h == 12 && !label.empty()) continue;   // a 12 px cell is the row marker: it never carries a label
                 lcd::fill(kBase);
                 g_lcd_pixels = 0;
-                kit::draw_verdict(kSurf, 70, 100, 34, h, v, label, kBg);
+                kit::draw_verdict(kSurf, 70, 100, 34, h, v, label, kBg, !label.empty() && h == 24);   // the S mark is part of the cell: no extra pixels
                 // A Skip label is struck through: the line (text width 24 + 2 px) is painted twice; a labelled Running cell's
                 // outline is painted over its rim (a label-less one paints its square inside the glyph's hole).
                 CHECK_EQ(g_lcd_pixels, 34u * unsigned(h) + (v == Verdict::Skip && !label.empty() ? 26u : 0u) +
@@ -757,12 +791,13 @@ static void test_result_rows_stream_each_pixel_once() {
     const ResultCell mixed[3] = {{Verdict::Pass, "5V", "3A"}, {Verdict::Pass, "9V", {}}, {Verdict::Pass, "12V", "2.25A"}};
     const ResultCell scp[3] = {{Verdict::Pass, "5V", {}}, {Verdict::Fail, "10V", "2.25A"}, {Verdict::Fail, "4.5V", "5A"}};
     const ResultCell lone[1] = {{Verdict::None, "not offered", {}}};
+    const ResultCell swept[2] = {{Verdict::Pass, "3.3-11V", "5A", true}, {Verdict::Partial, "3.3-21V", "4.75A", true}};   // PPS chips with the S mark
     // strike: the struck "12V" of the row (26 px), 0 = no Skip cell in it; run: a Running cell's outline is in it (its rim,
     // measured as one_rim, is painted over the cell)
     struct Case { const ResultCell *cells; int n; const char *label; unsigned strike; bool run; };
     const Case cases[] = {{volts, 5, "QC2", 26, true}, {volts, 2, "Huawei", 0, false}, {cur, 5, "USB PD", 0, true}, {cur, 3, "PPS", 0, false},
                           {mixed, 3, "SPR AVS", 0, false}, {scp, 3, "SCP", 0, false}, {lone, 1, "Huawei", 0, false}, {volts, 0, "Nothing", 0, false},
-                          {volts, 5, "", 26, true}};
+                          {volts, 5, "", 26, true}, {swept, 2, "PPS", 0, false}};
     for (const Case &c : cases) {
         kit::ResultRowSpec spec;
         spec.n = static_cast<uint8_t>(c.n);
@@ -1318,6 +1353,7 @@ int main() {
     test_tail_and_chevron();
     test_thumb_and_lane();
     test_verdict_cell();
+    test_sweep_mark();
     test_skip_strike();
     test_alert_band();
     test_action_cell();

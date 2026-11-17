@@ -712,10 +712,12 @@ How a PD row is judged and how long it waits. All of it is host-tested; none of 
   failure), `tools/charger_summary.py`, `tools/web/k2proto.js` / `ctgrid.js` / `k2.html` and `docs/site/r/card.js`. Wire
   schema 1 maps `Folded` to a plain pass; schema 2 carries the reason. A card range that also failed (the FH22
   PPS 5-21 V range, whose 21 V rows end Capped) keeps its "caps" text: the card holds no per-step verdicts, so the Capped
-  finding reads instead of the fold note, both amber; the device's sweep row for that APDO still reads CAUTION. The `[SWEEP]`
+  finding reads instead of the fold note, both amber; the device's chip for that APDO (range and sweep merged) still reads CAUTION. The `[SWEEP]`
   and `[TEST]` log lines print the engine words, so a folded sweep logs "pass" followed by the reason "output folds back".
-  **A passing sweep is never red; a deviation is a caution too** (user decision 2026-11-16). The sweep chip of the Results grid
-  follows the step's verdict: red only when the step failed. A passing sweep (`Verdict::Pass`) is green while its worst
+  **A passing sweep is never red; a deviation is a caution too** (user decision 2026-11-16). The sweep of an APDO has no row of its
+  own in the Results grid any more: its verdict folds into the APDO's one chip (the worst of the range steps and the sweep, with a
+  small dim "S" mark; `result_layout::range_row`), and the footer of that row reads the sweep (the fold text, or "peak X V@Y V").
+  The sweep part follows the step's verdict: red only when the step failed. A passing sweep (`Verdict::Pass`) is green while its worst
   |error| (`worst_err`, the larger of the two parts of a split PPS sweep) stays within `result_layout::kSweepPassMv` = 100 mV,
   amber above it and amber at any fold depth, never red at any error. The deviation counts like the fold: `result_layout::deviates` /
   `caution(step, view)` / `verdict_word(step, view)` give the "CAUTION" word and the `capped` tally ("~", "C caution"), the
@@ -724,7 +726,7 @@ How a PD row is judged and how long it waits. All of it is host-tested; none of 
   `deviates`; card row "off >100mV", sheet "Caution" with a Note row "sweep off >100mV"). A fold dominates (already a caution),
   a failed range keeps its own verdict. `worst_err` / `worst_mv` keep the whole record (card, log); `track_err_mv` no longer
   grades a chip. The web wire rows carry no worst error, so `tools/web/ctgrid.js` keeps the verdict grading (plus the fold
-  reason) and cannot show a deviation caution. Tests: `test_a_deviating_sweep_is_a_caution_never_red`,
+  reason) and cannot show a deviation caution; it also still draws the separate Sweep row (the merge is device-side only for now). Tests: `test_a_deviating_sweep_is_a_caution_never_red`,
   `test_a_split_sweep_deviation_reads_the_same_on_both_parts` (`tests/test_result_layout.cpp`),
   `test_a_tracking_deviation_is_a_caution` (`tests/test_card_tone.cpp`), `test_a_sweep_off_by_more_than_100mv_reads_as_a_caution`
   (`tests/test_ui_charger_test.cpp`), `tests/test_cardpage.mjs`; `test_track_err_stops_at_the_fold_onset` (`tests/test_sweep.cpp`) still pins the summary. Further host tests: `test_a_fold_the_sweep_finds_is_a_caution_on_the_apdos_rows`,

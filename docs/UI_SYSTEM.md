@@ -510,12 +510,13 @@ It is drawn by the page today (`paint_detail`). It belongs in the kit beside Ale
 | Row, volts only | 26 px: a 25 px cell |
 | Row with currents | 40 px: a 24 px cell, then one bracket per run of equal current: font 12 `kDim` text at y+25, a line at y+31 with 3 px end ticks |
 | Section | a 2 px `kRule` above the first row of a family; no header text. A Deep run's PD spec section follows the same rule (above the PPS block, the AVS block and the observer; cells carry the worst value, 8-character labels from `spec_text.hpp`) |
+| Range chip with a sweep (PPS, SPR AVS, EPR AVS) | ONE chip per APDO, no separate Sweep row: the chip's verdict is the worst of the APDO's range steps and its sweep (Fail > Partial / Caution / Capped > Pass; Skip or none only when every part is; a sweep part that is pending or running makes the chip Pending, so the running dot sits on it). A small dim `S` (font 12, `kDim`, `kSweepMarkW` = 8 px, the grid's `adv`) after the label says the chip carries a sweep; the bracket under the chip stays. The `S` is a second hole in the fill, so every pixel is still streamed once. Opening the row (Steps) lists the range steps and the sweep entry; the Results footer of the row reads the sweep (fold text, or `peak X V@Y V`) when it has something to say |
 | Lone cell that never ran | spells its reason: `None`, `no reply`, `needs load` |
 | Focus (Results) | the label strip turns `kFocusT` with the 3 px bar; label and bracket text turn `kFocus` |
 | Scroll | by pixels, whole rows only, up to 8 rows on screen |
 | Follow (Running) | the window's bottom sits on the row of the step in flight (`anchor_bottom`). PLUS and MINUS scroll by hand; the follow resumes after 5 s or on the next step |
 | Repaints | a row when its shape changes; single cells when only verdicts change; the running outline alone (`sync_dots`) |
-| Seen in | `flight_step15.png`, `flight_deep_scrolled.png`, `results_end.png`, `results_scrolled2.png` |
+| Seen in | `flight_step15.png`, `flight_deep_scrolled.png`, `results_end.png`, `results_scrolled2.png`, `fold_results.png` (merged PPS chip) |
 
 ### 5.11 ProgressBar: `kit::ProgressBar`
 

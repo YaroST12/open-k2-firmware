@@ -1114,6 +1114,8 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
   badge per volt with a dot that never moved; it is now one range chip ("3.3-21V", current underneath) like the PPS
   row above it, on the Running, Results and Steps views. Validate: `test_result_layout`, `test_ui_sweep_live`; on
   hardware the Sweep row shows one chip that goes green, amber or red when the sweep closes.
+  Superseded (k2/pps-merge, built and host-tested only): the Sweep row is gone; the APDO's range chip and its sweep are ONE chip
+  (worst verdict, small dim "S" mark), on Running and Results; the Steps view lists both. Hardware check pending.
 
 ## Not verified on hardware
 

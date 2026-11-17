@@ -1566,7 +1566,6 @@ void ChargerTestPage::build_grid(bool running_grid, bool note_cuts) {
     if (running_grid) {
         oem.headers = false;   // the rows are the plan's steps, in the order the runner walks them
         oem.fold = false;      // a unit keeps its row when it fails or is skipped: the finished rows stay above the running one
-        oem.monitor_mv = ctx_.cap_mv;
         line_n_ = result_layout::build_compact(layout_, kGridMetrics, lines_, s_.runner_.steps(), oem, s_.runner_.sweep_view());
         return;
     }
@@ -1603,7 +1602,6 @@ void ChargerTestPage::build_grid(bool running_grid, bool note_cuts) {
         oem.qc_label = report_card::qc_label_name(label);
         oem.qc_why = justification;   // build() copies the words into tokens inside this scope
     }
-    oem.monitor_mv = facts.cap_mv;
     line_n_ = result_layout::build_compact(layout_, kGridMetrics, lines_, s_.runner_.steps(), oem, s_.runner_.sweep_view());
     // build_compact() counts a row label or word it had to shorten: the gate fails on it like on any other cut.
     if (note_cuts && layout_.cuts) K2_TRUNC_NOTE_HERE(trunc::Kind::Cut, "results grid label or word", layout_.cuts);
@@ -2032,24 +2030,32 @@ static FooterTone spec_footer(StrBuf<32>& f, int check, const specsec::Cell& c, 
             f.put("see steps");
             return FooterTone::Info;
         }
-        if (row.kind == result_layout::CompactKind::Sweep) {   // the deep sweep's strip row: the footer names the peak (the full summary is the [SWEEP] log line)
-            f.clear();
-            if (const auto rw = s_.runner_.sweep_view().apdo(row.algo, static_cast<uint8_t>(row.mv)); rw && rw->sum.points) {   // both 5 V parts
-                char nb[ctsweep::kFoldTextMax];
-                if (const size_t len = ctsweep::format_fold(rw->sum, nb)) {   // a fold is a caution: it takes the whole footer, "folds to 19.4V above 19.9V"
-                    f.put(std::string_view(nb, len));
-                    return FooterTone::Caution;
-                }
-                char v[12] = {};
-                f.put(lbl).put(": peak ");
-                f.put(std::string_view(v, ctsweep::format_mv(rw->sum.peak_mv, v))).put("V@");
-                f.put(std::string_view(v, ctsweep::format_mv(rw->sum.peak_at_mv, v))).put_char('V');
-            } else f.put(lbl).put(": not run");
-            return FooterTone::Info;
-        }
         const A algo = static_cast<A>(row.algo);
         if (row.kind != result_layout::CompactKind::Probe && (ct::kPpsAlgorithms & ct::bit(algo))) {   // a range says how far the source got, not a count
             const auto rc = result_layout::reach(s_.runner_.steps(), algo, static_cast<int>(row.mv));   // one row per APDO: its own reach
+            // The APDO's deep sweep is part of this row: a fold it found takes the whole footer ("folds to 19.4V above 19.9V"), a lost
+            // source or a clean range with a sweep names the sweep's peak; a range that fell short says how far (the full summary is the [SWEEP] log line).
+            if (const auto rw = s_.runner_.sweep_view().apdo(row.algo, static_cast<uint8_t>(row.mv)); rw && rw->sum.points) {   // both 5 V parts
+                char nb[ctsweep::kFoldTextMax];
+                if (const size_t len = ctsweep::format_fold(rw->sum, nb)) {
+                    f.clear();
+                    f.put(std::string_view(nb, len));
+                    return FooterTone::Caution;
+                }
+                bool lost = false, dev = false;
+                for (const auto &y : s_.runner_.steps())
+                    if (ct::is_sweep(y) && y.algorithm == algo && y.pos == row.mv) {
+                        lost |= y.verdict == ct::Verdict::Fail;
+                        dev |= result_layout::caution(y, s_.runner_.sweep_view());
+                    }
+                if (lost || rc.tone == result_layout::Tone::Pass) {
+                    char v[12] = {};
+                    f.put("peak ");
+                    f.put(std::string_view(v, ctsweep::format_mv(rw->sum.peak_mv, v))).put("V@");
+                    f.put(std::string_view(v, ctsweep::format_mv(rw->sum.peak_at_mv, v))).put_char('V');
+                    return lost || dev ? FooterTone::Caution : FooterTone::Ok;
+                }
+            }
             f.put(result_layout::reach_footer(rc).c_str());
             using result_layout::Tone;
             return rc.tone == Tone::Pass ? FooterTone::Ok : rc.tone == Tone::Partial || rc.tone == Tone::Fail ? FooterTone::Caution
@@ -2886,6 +2892,7 @@ void ChargerTestPage::result_row_fn(void *p, int index, kit::ResultRowSpec &out)
 }
 
 // Row `index` of the verdict grid (a layout line, or the Changes pseudo-row after them). The text lives in the page's cell buffers.
+static_assert(result_layout::kGridMetrics.adv == kit::kSweepMarkW, "the S mark's room in a chip's cell width is the kit's mark width");   // result_layout::cell_width
 void ChargerTestPage::grid_row(int index, kit::ResultRowSpec &out) {
     out = {};
     const bool header = s_.stage_ == Stage::Steps;   // the Steps page's header: the picked row's own lines, never focused, no section rule
@@ -2943,6 +2950,7 @@ void ChargerTestPage::grid_row(int index, kit::ResultRowSpec &out) {
             out.cells[n].current = cell_txt_[n][1];
         }
         out.cells[n].verdict = static_cast<int>(ti) == running ? kit::Verdict::Running : tone_verdict(tk.tone);
+        out.cells[n].sweep = tk.sweep;
         ++n;
     }
     out.n = static_cast<uint8_t>(n);

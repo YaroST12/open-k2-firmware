@@ -725,6 +725,8 @@ void test_reach_words() {
     }
     CHECK_EQ(too_long, 0u);
     CHECK_EQ(shapes > 1000, true);
+    // The merged row's footer names its sweep's peak: "<label>: peak 48.0V@48.0V" (the fold's words take the whole line instead).
+    for (const auto a : kRanges) CHECK_EQ(std::strlen(result_layout::display_name(a)) + 2 + std::strlen("peak 48.0V@48.0V") <= static_cast<size_t>(kFooterCells), true);
     trunc::context("");
 }
 

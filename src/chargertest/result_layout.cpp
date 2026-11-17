@@ -237,10 +237,9 @@ struct Sink {
             lrow->algorithm = a;
             lrow->first = static_cast<uint8_t>(l->token_count);
             lrow->probe = kind == CompactKind::Probe;
-            lrow->sweep = kind == CompactKind::Sweep;
             lrow->header = kind == CompactKind::Header;
             if (kind == CompactKind::Probe) lrow->mv = mv;
-            else if (kind == CompactKind::Sweep || kind == CompactKind::Range) lrow->pos = static_cast<uint8_t>(mv);
+            else if (kind == CompactKind::Range) lrow->pos = static_cast<uint8_t>(mv);
             active = true;
             return;
         }
@@ -355,28 +354,55 @@ void tag(TokenBuf& b, const ct::Step& x) {
         tag(b, *next);
     }
 }
+// The worse of two chip tones, for the merge of an APDO's range steps with its deep sweep: pending while anything is pending,
+// then fail, then partial (a caution is one), then pass; a listing (Noted) and a skip rank last, so a chip is Skip only when
+// every part skipped.
+unsigned tone_rank(Tone t) {
+    switch (t) {
+    case Tone::Pending: return 5;
+    case Tone::Fail: return 4;
+    case Tone::Partial: return 3;
+    case Tone::Pass: return 2;
+    case Tone::Noted: return 1;
+    default: return 0;
+    }
+}
 // One chip for one APDO (`pos`): the row is one advertised range, so a probe the plan runs between two APDOs lands
-// between their rows. Rolled up by the shared tone table (roll_up). PPS / AVS ranges are continuous; the steps only
-// sample them. The chip text stays the advertised range: reach() says how far the source got.
-[[gnu::noinline]] void range_row(TokenBuf& b, std::span<const ct::Step> s, A a, uint8_t pos) {
-    for (const auto& x : s) {
-        if (x.algorithm != a || !x.pdo || x.hunt || ct::is_sweep(x) || x.pos != pos) continue;
-        Tally t;
+// between their rows. The range steps roll up by the shared tone table (roll_up); the APDO's deep sweep steps (PPS / AVS sweeps
+// have no row of their own) roll up the same way, a pass that deviates or folds counting as a caution (caution(step, view)),
+// a skipped part not counting at all; the chip takes the worse of the two and wears the "S" mark (Token::sweep) when a sweep
+// part was planned, ran or runs. PPS / AVS ranges are continuous; the steps only sample them. The chip text stays the advertised
+// range: reach() says how far the source got, the Results footer how the sweep ended.
+[[gnu::noinline]] void range_row(TokenBuf& b, std::span<const ct::Step> s, const ctsweep::View& v, A a, uint8_t pos) {
+    const ct::Step* x = nullptr;   // the APDO's first range step (else its first sweep part): names the range, tags a skip
+    Tally t, w;
+    bool has_range = false;
+    for (const auto& y : s) {
+        if (y.algorithm != a || !y.pdo || y.hunt || y.pos != pos) continue;
+        const bool sw = ct::is_sweep(y);
+        if (!x || (!sw && ct::is_sweep(*x))) x = &y;
+        if (!sw) { count(t, y); has_range = true; }   // probes are rows of their own
+        else if (y.verdict == ct::Verdict::Pass && caution(y, v)) ++w.capped;
+        else if (y.verdict != ct::Verdict::Skip) count(w, y);
+    }
+    if (!x) return;
+    const bool swept = w.pass + w.fail + w.capped + w.pending != 0;
+    Tone tn = has_range ? roll_up(t) : Tone::Skip;
+    if (swept) {
+        const Tone sw = w.fail ? Tone::Fail : roll_up(w);   // one failed part (a lost source) fails the chip, whatever the other part did
+        if (tone_rank(sw) > tone_rank(tn)) tn = sw;
+    }
+    Token* k = b.token(true, tn);   // one row per APDO: this row is that one chip
+    if (!k) return;
+    k->sweep = swept;
+    put_text(*k, step_label::range(x->pdo).c_str());   // "3.3-21V 5A", "15-28V 5A"
+    if (tn == Tone::Skip) tag(b, *x);   // every step was skipped: say why
+    else {   // some levels ran: a "needs load" level (pattern pps-off-at-no-load) still says so next to the range
         for (const auto& y : s)
-            if (y.algorithm == a && y.pos == pos && !y.hunt && !ct::is_sweep(y)) count(t, y);   // probes and sweep rows are rows of their own
-        const Tone tn = roll_up(t);
-        Token* k = b.token(true, tn);
-        if (!k) return;
-        put_text(*k, step_label::range(x.pdo).c_str());   // "3.3-21V 5A", "15-28V 5A"
-        if (tn == Tone::Skip) tag(b, x);   // every step was skipped: say why
-        else {   // some levels ran: a "needs load" level (pattern pps-off-at-no-load) still says so next to the range
-            for (const auto& y : s)
-                if (y.algorithm == a && y.pos == pos && !y.hunt && y.verdict == ct::Verdict::Skip && y.reason == ct::Reason::NeedsLoad) {
-                    tag(b, y);
-                    break;
-                }
-        }
-        return;   // one row per APDO: this row is that one chip
+            if (y.algorithm == a && y.pos == pos && !y.hunt && y.verdict == ct::Verdict::Skip && y.reason == ct::Reason::NeedsLoad) {
+                tag(b, y);
+                break;
+            }
     }
 }
 [[gnu::noinline]] void legacy_row(TokenBuf& b, std::span<const ct::Step> s, A a) {
@@ -607,50 +633,7 @@ const char* display_name(A a) {
     }
 }
 
-// The deep sweep's row: ONE range chip, in the style of the range row above it ("5-21V 3.2A": the swept range, the APDO's
-// current under it in the grid). The range is the sweep's own: the record's row view when the row ran (or runs), else the
-// APDO range capped at the monitor ceiling. The chip has no level (Token::mv 0), so the Running dot sits on it while the
-// sweep is in flight and the live band above shows where the sweep is; the per-point errors are the footer's and the log's.
-// Tone: Pending until the sweep closes (Running included: the dot needs it), Skip when skipped, Fail when a part failed (the
-// source was lost), else a PASSING sweep: green up to 100 mV worst |error| (kSweepPassMv), amber above it or when it carries a
-// fold caution (Reason::Folded). A passing sweep is never red (user decision 2026-11-16: the chip never contradicts the step's
-// verdict; a fold and a tracking deviation are both cautions, counted and worded as such: caution(step, view)). The grid does not
-// grade a fold by how well the output tracked before it: the verdict is Pass, so the chip is amber at any depth.
-// A PPS sweep split at 5 V has two steps (the part from 5 V up in Pd, the part below in PdLow): the strip stays ONE row per
-// APDO. Its range is the planned parts together (the recorded parts once any closed), its tone the two steps together: Pending
-// while either is pending or running, Fail when either failed, Skip when every part skipped, else graded by the worst error.
 namespace {
-[[gnu::noinline]] void sweep_row(TokenBuf& b, std::span<const ct::Step> s, const ctsweep::View& v, A a, uint8_t pos, unsigned cap_mv) {
-    const ct::Step* step = nullptr;   // the first part in plan order (the one the planner places the row by)
-    const ct::Step* skipped = nullptr;
-    unsigned lo = ~0u, hi = 0;
-    bool pending = false, failed = false, passed = false, folded = false;
-    for (const auto& x : s) {
-        if (!ct::is_sweep(x) || x.algorithm != a || x.pos != pos) continue;
-        if (!step) step = &x;
-        folded |= caution(x);
-        const auto part = ct::sweep_range(x, cap_mv);
-        if (!part.empty()) { lo = std::min(lo, part.lo); hi = std::max(hi, part.hi); }
-        pending |= x.verdict == ct::Verdict::Pending || x.verdict == ct::Verdict::Running;
-        failed |= x.verdict == ct::Verdict::Fail;
-        passed |= x.verdict == ct::Verdict::Pass;
-        if (x.verdict == ct::Verdict::Skip && !skipped) skipped = &x;
-    }
-    if (!step) return;
-    const auto p = pd::decode_pdo(step->pdo);
-    const auto rw = v.apdo(uint8_t(a), pos);
-    if (rw) { lo = rw->lo_mv; hi = rw->hi_mv; }
-    if (hi < lo || lo == ~0u) { lo = p.min_mv; hi = p.max_mv; }   // nothing fits under the ceiling: the row still names the advertised range
-    Tone tn = Tone::Pending;
-    if (pending) tn = Tone::Pending;
-    else if (failed) tn = Tone::Fail;
-    else if (passed) tn = folded || sweep_worst_mv(v, uint8_t(a), pos) > kSweepPassMv ? Tone::Partial : Tone::Pass;
-    else if (skipped) tn = Tone::Skip;
-    Token* k = b.token(true, tn);
-    if (!k) return;
-    put_text(*k, step_label::range(lo, hi, p.max_ma, p.max_mw).c_str());
-    if (tn == Tone::Skip) tag(b, *skipped);   // why nothing was swept ("cable", ">36V"), as the range row says it
-}
 
 [[gnu::noinline]] void emit_facts(Sink& b, const OemNotes& oem, bool any_probe, bool& facts_done,
                 void (*header)(Sink&, const OemNotes&, Section), void (*mi_auth_row)(Sink&, const OemNotes&, bool&),
@@ -686,18 +669,18 @@ namespace {
 }
 
 void build_impl(Sink& b, std::span<const ct::Step> steps, const OemNotes& oem, const ctsweep::View& sweep) {
-    struct Key { A a; bool probe; bool sweep; uint16_t mv; };
+    struct Key { A a; bool probe; uint16_t mv; };
     Key keys[unsigned(A::Count) + 2 * pd::kMaxPdos + 4];
     size_t key_n = 0;
     bool absent[unsigned(A::Count)] = {}, skipped[unsigned(A::Count)] = {}, range_none[unsigned(A::Count)] = {};
     bool any_probe = false;
     for (const auto& s : steps) {
         if (is_revision(s.algorithm)) continue;
-        const Key k{s.hunt ? A::Count : s.algorithm, s.hunt, ct::is_sweep(s),
+        const Key k{s.hunt ? A::Count : s.algorithm, s.hunt,   // an APDO's sweep steps share its range key: one row
                     s.hunt ? s.mv : uint16_t(is_range(s.algorithm) ? s.pos : 0)};
         bool seen = false;
         for (size_t i = 0; i < key_n && !seen; ++i)
-            seen = keys[i].a == k.a && keys[i].probe == k.probe && keys[i].sweep == k.sweep && keys[i].mv == k.mv;
+            seen = keys[i].a == k.a && keys[i].probe == k.probe && keys[i].mv == k.mv;
         if (seen || key_n == std::size(keys)) continue;
         keys[key_n++] = k;
         any_probe |= k.probe;
@@ -735,12 +718,6 @@ void build_impl(Sink& b, std::span<const ct::Step> steps, const OemNotes& oem, c
                 probe_row(tb, steps, key.mv);
                 continue;
             }
-            if (key.sweep) {
-                b.begin(CompactKind::Sweep, "Sweep", Tone::Dim, key.a, key.mv);
-                TokenBuf tb = b.buf();
-                sweep_row(tb, steps, sweep, key.a, uint8_t(key.mv), oem.monitor_mv);
-                continue;
-            }
             const A a = key.a;
             const bool legacy = ct::group(a) != ct::Group::Pd;
             if (is_absent(steps, a)) {
@@ -765,7 +742,7 @@ void build_impl(Sink& b, std::span<const ct::Step> steps, const OemNotes& oem, c
             if (is_range(a)) {
                 b.begin(CompactKind::Range, display_name(a), Tone::Dim, a, key.mv);
                 TokenBuf tb = b.buf();
-                range_row(tb, steps, a, uint8_t(key.mv));
+                range_row(tb, steps, sweep, a, uint8_t(key.mv));
             } else if (ct::group(a) == ct::Group::Pd) {
                 b.begin(CompactKind::Fixed, display_name(a), Tone::Dim, a);
                 TokenBuf tb = b.buf();
@@ -822,7 +799,6 @@ size_t build_compact(CompactGrid& g, const Metrics& m, std::span<CompactLine> ou
     g.pool[0] = 0;
     g.pool_used = 1;
     g.collapsed_masks = {};
-    g.monitor_mv = static_cast<uint16_t>(std::min<unsigned>(oem.monitor_mv, 65535u));
     size_t line_n = 0;
     RowTokens rt;
     Sink s;
@@ -838,9 +814,8 @@ size_t build_compact(CompactGrid& g, const Metrics& m, std::span<CompactLine> ou
 bool row_has(const CompactRow& r, const ct::Step& s) {
     if (r.kind == CompactKind::Header || r.kind == CompactKind::Fact || r.kind == CompactKind::Collapsed) return false;
     if (r.kind == CompactKind::Probe) return s.hunt && s.mv == r.mv;
-    if (r.kind == CompactKind::Sweep) return ct::is_sweep(s) && s.pos == r.mv;
-    if (s.hunt || ct::is_sweep(s) || static_cast<A>(r.algo) != s.algorithm) return false;
-    return !is_range(static_cast<A>(r.algo)) || s.pos == r.mv;
+    if (s.hunt || (r.kind != CompactKind::Range && ct::is_sweep(s)) || static_cast<A>(r.algo) != s.algorithm) return false;
+    return !is_range(static_cast<A>(r.algo)) || s.pos == r.mv;   // a range row (one per APDO) owns its slot's steps, the sweep's too
 }
 
 int row_section(const CompactGrid& g, size_t row) {
@@ -858,7 +833,6 @@ const char* row_label(const CompactGrid& g, size_t row) {
     switch (cr.kind) {
     case CompactKind::Header: return section_name(static_cast<Section>(cr.algo));
     case CompactKind::Probe: return "Mi 6A";
-    case CompactKind::Sweep: return "Sweep";
     case CompactKind::Fact: return g.pool.data() + cr.mv;
     case CompactKind::Collapsed: return cr.mv ? "Skipped" : "No reply";
     default: return display_name(static_cast<A>(cr.algo));
@@ -877,8 +851,7 @@ void row_tokens(const CompactGrid& g, size_t row, std::span<const ct::Step> step
     switch (cr.kind) {
     case CompactKind::Header: break;
     case CompactKind::Probe: probe_row(tb, steps, cr.mv); break;
-    case CompactKind::Sweep: sweep_row(tb, steps, sweep, static_cast<A>(cr.algo), static_cast<uint8_t>(cr.mv), g.monitor_mv); break;
-    case CompactKind::Range: range_row(tb, steps, static_cast<A>(cr.algo), static_cast<uint8_t>(cr.mv)); break;
+    case CompactKind::Range: range_row(tb, steps, sweep, static_cast<A>(cr.algo), static_cast<uint8_t>(cr.mv)); break;
     case CompactKind::RangeNone: tb.word("None", Tone::Dim); break;
     case CompactKind::NoQc3Plus: tb.word("no QC3+", Tone::Dim); break;
     case CompactKind::Fixed: fixed_row(tb, steps, static_cast<A>(cr.algo)); break;
@@ -909,9 +882,8 @@ void row_tokens(const CompactGrid& g, size_t row, std::span<const ct::Step> step
 bool row_has(const Row& r, const ct::Step& s) {
     if (r.header) return false;
     if (r.probe) return s.hunt && s.mv == r.mv;
-    if (r.sweep) return ct::is_sweep(s) && s.pos == r.pos;   // the strip row owns its APDO's sweep step
-    if (s.hunt || ct::is_sweep(s) || r.algorithm != s.algorithm) return false;
-    return !is_range(r.algorithm) || s.pos == r.pos;   // one row per APDO: a range row owns only its slot's steps
+    if (s.hunt || (!is_range(r.algorithm) && ct::is_sweep(s)) || r.algorithm != s.algorithm) return false;
+    return !is_range(r.algorithm) || s.pos == r.pos;   // one row per APDO: a range row owns its slot's steps, the sweep's too
 }
 
 void add_note(Layout& l, const char* label, Tone t, std::initializer_list<const char*> words) {
@@ -990,12 +962,12 @@ size_t summarize(std::span<const ct::Step> steps, std::span<SummaryLine> out) {
 }
 
 int token_width(const Token& t, const Metrics& m) {
-    return int(std::strlen(t.text)) * m.adv + (t.chip ? 2 * m.pad + m.mark : 0);
+    return int(std::strlen(t.text)) * m.adv + (t.chip ? 2 * m.pad + m.mark : 0) + (t.sweep ? m.adv : 0);   // the S mark: one glyph cell
 }
 int cell_width(const Token& t, const Metrics& m) {
     int n = 0;
     while (t.text[n] && (!t.chip || t.text[n] != ' ')) ++n;   // a chip's volt text; a word is whole
-    return n * m.adv + 2 * m.pad;
+    return n * m.adv + 2 * m.pad + (t.sweep ? m.adv : 0);
 }
 char mark(Tone t) {
     switch (t) {
