@@ -6,7 +6,7 @@
 // Off          no spoof and no Ra: today's behaviour, a spoof the user armed elsewhere stays as it is.
 // Builtin      a built-in passive cable, `seq` = its emrec::builtin_cable() id (1, 2 or 4, see kDialogIds), answered on SOP'.
 //              Seq 0 is the older spelling of the default built-in (kBuiltinKind), seq 3 the retired "OnePlus 100W (mag)"
-//              (now id 4); canonical() maps both.
+//              (now id 4), seq 6 and 7 removed identities (now the default); canonical() maps them all.
 // Saved        a clone from the e-marker library (`seq` = its library id).
 // Any identity but Off also turns the Ra mode on for the run (PC13 high = an Ra on CC1, Rd on CC2 alone, k2/pd/emk_ra.hpp).
 #pragma once
@@ -44,12 +44,13 @@ struct Choice {
 constexpr Choice kDefaultChoice{Kind::Builtin, static_cast<uint16_t>(kBuiltinKind)};
 
 constexpr bool valid(Choice c) {
-    if (c.kind == Kind::Builtin) return c.seq < emrec::kBuiltinCount;
+    if (c.kind == Kind::Builtin) return emrec::builtin_id_known(c.seq);
     return c.kind == Kind::Off ? c.seq == 0 : c.kind == Kind::Saved && c.seq != 0;
 }
 constexpr Choice canonical(Choice c) {
     if (c.kind == Kind::Builtin && c.seq == 0) c.seq = kBuiltinKind;
-    if (c.kind == Kind::Builtin && c.seq == emrec::kRetiredMagId) c.seq = emrec::kOnePlusId;   // stored / remote 3 = OnePlus 100W
+    // stored / remote 3 = OnePlus 100W; the removed ids 6 and 7 = the default EPR cable (emrec.hpp)
+    if (c.kind == Kind::Builtin) c.seq = static_cast<uint16_t>(emrec::canonical_builtin_id(c.seq));
     return c;
 }
 

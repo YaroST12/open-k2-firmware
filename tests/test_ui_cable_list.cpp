@@ -334,6 +334,30 @@ static void test_fill_spec() {
     CHECK_EQ(sp.state, 1);
 }
 
+// Ids 6 and 7 were sniffed identities on unreleased test builds (removed 2026-11-17). A remembered, picked or armed 6 or 7 falls
+// back to the default EPR spoof (id 1), never to another cable and never to "nothing".
+static void test_removed_xiaomi_ids_fall_back_to_the_epr_spoof() {
+    for (uint16_t id : {uint16_t(6), uint16_t(7)}) {
+        g_stub = StubState();
+        g_stub.cable_pref = Choice{Kind::Builtin, id};
+        g_stub.cable_pref_set = true;   // /cable.cfg written by such a build
+        CableIdentityList l;
+        l.load();
+        l.sync();
+        CHECK_EQ(l.selected() == ctcable::kDefaultChoice ? 1 : 0, 1);
+        CHECK_STR(l.selected_name(), "EPR 50V 5A");
+        CHECK_EQ(l.select(Choice{Kind::Builtin, 2}) ? 1 : 0, 1);
+        CHECK_EQ(l.select(Choice{Kind::Builtin, id}) ? 1 : 0, 1);   // a remote pick of a removed id
+        CHECK_EQ(l.selected() == ctcable::kDefaultChoice ? 1 : 0, 1);
+        ctcable::Facts facts{};
+        char name[emlib::kNameMax + 1] = {};
+        CHECK_EQ(int(l.arm(Choice{Kind::Builtin, id}, facts, name)), int(CableIdentityList::ArmErr::Ok));
+        CHECK_EQ(l.armed_choice() == ctcable::kDefaultChoice ? 1 : 0, 1);
+        CHECK_EQ(facts.max_mv, 50000); CHECK_EQ(facts.max_ma, 5000); CHECK_EQ(facts.vid, 0x2B01);
+        emk_spoof::disarm();
+    }
+}
+
 int main() {
     test_fill_spec();
     test_index_space();
@@ -346,5 +370,6 @@ int main() {
     test_arm_errors();
     test_window();
     test_pill_style();
+    test_removed_xiaomi_ids_fall_back_to_the_epr_spoof();
     return test_report("test_ui_cable_list");
 }

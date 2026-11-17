@@ -44,17 +44,22 @@ Record make(std::span<const std::uint32_t> vdos, std::uint8_t spec_rev, std::str
 // Id 3 was "OnePlus 100W (mag)" (0x22D9:0x1196), a duplicate of id 4 (same VID, same ratings) and is retired. Ids are on the
 // wire and in stored data (remote spoof / cable choice, report card kind, /cable.cfg), so the numbering stays: id 3 is a
 // reserved alias that reads as id 4 (canonical_builtin_id()), and no table row or UI row carries it any more.
-// Ids 5..7 are sniffed Xiaomi-ecosystem cable identities (remote-only, not in the START dialog): 5 a Xiaomi-VID 0x2717
-// 20 V 5 A cable, 6 Xiaomi VID with the EPR 50 V 5 A VDO, 7 the Kowsi "Mi 6A" clone (0x2B01:0x6921). Always valid().
-inline constexpr unsigned kBuiltinCount = 8;        // the id space 0..7 (id 3 is the retired alias)
+// Id 5 is a sniffed Xiaomi-VID 0x2717 20 V 5 A cable identity (remote-only, not in the START dialog).
+// Ids 6 and 7 were sniffed identities too (Xiaomi VID with the EPR 50 V 5 A VDO; the Kowsi "Mi 6A" clone 0x2B01:0x4052), on
+// unreleased test builds; removed 2026-11-17 (they never unlocked a higher offer). They may still sit in stored data or come from
+// an older client, so they stay in the id space (builtin_id_known()) and read as the default EPR 50V 5A (id 1); no row carries them.
+inline constexpr unsigned kBuiltinCount = 6;        // the table's ids 0..5 (id 3 is the retired alias)
+inline constexpr unsigned kBuiltinIdEnd = 8;        // every id ever used: 0..7 (6 and 7 removed, read as id 1)
+inline constexpr unsigned kEprId = 1;
 inline constexpr unsigned kRetiredMagId = 3;
 inline constexpr unsigned kOnePlusId = 4;
 inline constexpr unsigned kMiCableId = 5;
-inline constexpr unsigned kMiEprId = 6;
-inline constexpr unsigned kKowsiId = 7;
 
-// The id a stored or remote `id` stands for: the retired id 3 is OnePlus 100W (4), every other id is itself (an id past the
-// table is the caller's to refuse, builtin_info() reads it as the generic cable).
+// An id the firmware ever used for a built-in (the table's own and the retired ones); anything else is the caller's to refuse.
+constexpr bool builtin_id_known(unsigned id) { return id < kBuiltinIdEnd; }
+
+// The id a stored or remote `id` stands for: the retired id 3 is OnePlus 100W (4), the removed 6 and 7 are the EPR cable (1),
+// every other id is itself (an id past the id space is the caller's to refuse, builtin_info() reads it as the generic cable).
 unsigned canonical_builtin_id(unsigned id);
 
 struct BuiltinInfo {

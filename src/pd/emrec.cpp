@@ -46,7 +46,7 @@ namespace {
 // latency 1 (<10 ns), EPR not capable, plug type 10b (Type-C), VDO version 1.0.
 constexpr std::uint32_t kGenericCableVdo = 2u | (2u << 5) | (1u << 13) | (2u << 18);
 
-// Four rows for the five ids 0..4: id 3 (kRetiredMagId) has no row of its own, canonical_builtin_id() sends it to id 4.
+// Five rows for the six ids 0..5: id 3 (kRetiredMagId) has no row of its own, canonical_builtin_id() sends it to id 4.
 constexpr std::size_t kBuiltinRows = kBuiltinCount - 1;
 constexpr std::array<BuiltinInfo, kBuiltinRows> kBuiltins{{
     {"[generic 5A 20V]", "generic 20V 5A", "Generic passive 20V 5A",
@@ -59,18 +59,16 @@ constexpr std::array<BuiltinInfo, kBuiltinRows> kBuiltins{{
     // OPPO VID; cable VDO bit 11 = VCONN required, bits 10:9 = 01b = 30 V (the legacy voltage code), no EPR bit.
     {"[OnePlus 100W]", "OnePlus 100W", "OnePlus/OPPO 30V 5A",
      {0xFF00A041u, 0x180022D9u, 0x00000000u, 0x61160000u, 0x80082A40u}, 2},
-    // Sniffed Xiaomi-ecosystem cables (runs/kowsi captures, 2026-11-11), remote-only: the Xiaomi-VID cable as sniffed,
-    // the same VID with the EPR 50 V 5 A VDO, and the Kowsi "Mi 6A" clone (0x2B01:0x6921, cert 0xEDF).
+    // A sniffed Xiaomi-VID cable (runs/kowsi captures, 2026-11-11), remote-only.
     {"[Mi cable 2717]", "Mi cable 2717", "Xiaomi VID 20V 5A",
      {0xFF00A041u, 0x18602717u, 0x00000000u, 0x00000000u, 0x00082040u}, 2},
-    {"[Mi 2717 EPR]", "Mi 2717 EPR", "Xiaomi VID EPR 50V 5A",
-     {0xFF00A041u, 0x18602717u, 0x00000000u, 0x00000000u, 0x000A2640u}, 2},
-    {"[Kowsi 6A]", "Kowsi 6A", "Kowsi clone 50V 5A",
-     {0xFF00A041u, 0x18602B01u, 0x00000EDFu, 0x40526921u, 0x000A2640u}, 2},
 }};
 }  // namespace
 
-unsigned canonical_builtin_id(unsigned id) { return id == kRetiredMagId ? kOnePlusId : id; }
+unsigned canonical_builtin_id(unsigned id) {
+    if (id == kRetiredMagId) return kOnePlusId;
+    return id >= kBuiltinCount && builtin_id_known(id) ? kEprId : id;   // the removed ids 6 and 7
+}
 
 const BuiltinInfo& builtin_info(unsigned id) {
     id = canonical_builtin_id(id);

@@ -256,7 +256,7 @@ def parse_args(argv=None):
                          "the part from 5 V up runs in pd, the part below 5 V in pd-low (a list without pd-low skips it)")
     ap.add_argument("--cable", default=None,
                     help="cable identity of the run: off, builtin, builtin:<id|name> (1 epr-50v, 2 cuktech-6a, 4 oneplus, "
-                         "5 mi-2717, 6 mi-2717-epr, 7 kowsi-6a) or saved:<library id>. Default: the device's own choice (the EPR spoof until another one is picked); "
+                         "5 mi-2717) or saved:<library id>. Default: the device's own choice (the EPR spoof until another one is picked); "
                          "it is printed before START. 'off' is remembered by the device like any pick")
     a = ap.parse_args(argv)
     if a.level == "light" and (a.sweep or a.avs_sweep):

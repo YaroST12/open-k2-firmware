@@ -810,7 +810,7 @@ Status validate_emlib(std::span<const uint8_t> p, bool &needs_write) {
     case kEmSpoof:
         if (p.size() < 2) return Status::BadLength;
         if (p[1] > kEmSpoofBuiltin) return Status::BadArg;
-        if (p[1] == kEmSpoofBuiltin && p.size() == 3 && p[2] >= emrec::kBuiltinCount) return Status::BadArg;
+        if (p[1] == kEmSpoofBuiltin && p.size() == 3 && !emrec::builtin_id_known(p[2])) return Status::BadArg;   // 3 arms 4, 5..7 arm 1
         return p.size() == (p[1] == kEmSpoofArm ? 4u : p[1] == kEmSpoofBuiltin ? 3u : 2u) ? Status::Ok : Status::BadLength;
     case kEmLearn:
         if (p.size() < 2) return Status::BadLength;
