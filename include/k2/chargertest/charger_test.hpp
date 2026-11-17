@@ -477,7 +477,7 @@ inline constexpr uint8_t kDetailNoChain = 155, kDetailChainUnfinished = 156, kDe
 enum class HuntCause : uint8_t {
     None,                 // not a refusal (no evidence recorded)
     NoChain,              // the source never listed SVID 0x2717: there was nothing to unlock
-    ChainStalled,         // listed, but the auth chain never reached 0x2717020A (last_step says where it stopped)
+    ChainStalled,         // listed, but the auth chain never reached 0x27170208 (last_step says where it stopped)
     InsideChain,          // our Request left while the chain was still running: that kills the chain
     RequestHeld,          // the chain guard still held our Request when the row ended: it never went out
     FixedPdo,             // the Request referred to a fixed PDO: a fixed PDO never offers 6 A
@@ -501,7 +501,7 @@ struct HuntEvidence {
     uint16_t apdo_ma = 0;       // the current limit that PDO advertised at the asked voltage
     uint16_t req_mv = 0, req_ma = 0;   // what was asked (effective voltage, operating current)
     uint16_t cable_ma = 0;      // the cable limit the run used
-    uint16_t authed_ms = 0;     // ms from 0x2717020A to the refusal (saturates; 0 when not authed)
+    uint16_t authed_ms = 0;     // ms from the auth finish to the refusal (saturates; 0 when not authed)
     uint16_t answer_ms = 0;     // ms from the Request to the source's answer (0 = none, saturates)
     uint8_t step = 0;           // index of the row in Runner::steps()
     uint8_t cause = 0;          // HuntCause

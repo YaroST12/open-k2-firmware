@@ -8,6 +8,7 @@
 #include "k2/pd/pd_ext.hpp"
 #include "k2/pd/pd_link.hpp"
 #include "k2/pd/pd_reply.hpp"
+#include "k2/pd/xiaomi_auth.hpp"
 
 namespace k2::pd {
 
@@ -329,6 +330,8 @@ K2_HOT void Sink::do_hard_reset(SinkResult r, SinkState to, bool forced) {
     st_.xiaomi_svid = false;
     st_.oppo_svid = false;
     xiaomi_cmd_ = 0;
+    source_asked_identity_ = false;
+    xiaomi_adapter_id_ = 0;
     discover_svids_sent_ = false;
     xiaomi_opener_pending_ = false;
     xiaomi_opener_sent_ = false;
@@ -363,6 +366,8 @@ K2_HOT void Sink::on_hard_reset_rx(std::uint32_t) {
     st_.xiaomi_svid = false;
     st_.oppo_svid = false;
     xiaomi_cmd_ = 0;
+    source_asked_identity_ = false;
+    xiaomi_adapter_id_ = 0;
     discover_svids_sent_ = false;
     xiaomi_opener_pending_ = false;
     xiaomi_opener_sent_ = false;
@@ -398,6 +403,8 @@ void Sink::detach() {
     st_.xiaomi_svid = false;
     st_.oppo_svid = false;
     xiaomi_cmd_ = 0;
+    source_asked_identity_ = false;
+    xiaomi_adapter_id_ = 0;
     discover_svids_sent_ = false;
     xiaomi_opener_pending_ = false;
     xiaomi_opener_sent_ = false;
@@ -434,7 +441,7 @@ K2_HOT void Sink::soft_reset(std::uint32_t now) {
 
 bool Sink::xiaomi_chain_active(std::uint32_t now) const {
     if (!source_has_xiaomi_svid_ || !contract_) return false;
-    // After 0x2717020A our Get_Source_Cap is out and the source re-announces: a Request before that answer would be for the old list.
+    // After 0x27170208 our Get_Source_Cap is out and the source re-announces: a Request before that answer would be for the old list.
     if (xiaomi_authed_) return get_cap_sent_ && now - chain_at_ < kXiaomiCapsWaitMs;
     if (now - chain_start_ >= kXiaomiChainBoundMs) return false;
     return xiaomi_opener_pending_ || now - chain_at_ < kXiaomiChainQuietMs;
@@ -1365,6 +1372,7 @@ K2_HOT void Sink::on_vdm(std::uint16_t header, std::span<const std::uint8_t> pay
     // CUKTECH answers our Discover SVIDs with [0x2717] and keeps the auth chain dormant while
     // the sink identity is a foreign VID (0x0716); Mi Turbo Charge targets Xiaomi devices.
     if (svid == 0xFF00 && structured && cmd_type == 0 && cmd == 1) {
+        source_asked_identity_ = true;   // our ACK's product VDO becomes the auth digest's adapter_id
         TxMsg m;
         m.header = make_header(kMsgVendorDefined, 4, rev_);
         m.len = 16;
@@ -1479,20 +1487,51 @@ K2_HOT void Sink::on_vdm(std::uint16_t header, std::span<const std::uint8_t> pay
             break;
         }
         case 3: {
-            // RX 0x27170203 -> TX 5-DO: (captured words removed)
-            constexpr std::array<std::uint32_t, 5> vdos = {0u, 0u, 0u, 0u, 0u};
+            // RX 0x27170203 -> TX 5-DO: 0x27170104 + the active session seed (the key table lives in
+            // the gitignored priv/, referenced here by variable name only)
+            const std::uint32_t* seed = mi::kSessionSeed[mi::kActiveKeyIndex];
+            const std::array<std::uint32_t, 5> vdos = {0x27170104u, seed[0], seed[1], seed[2], seed[3]};
             send_xiaomi_vdm_reply(cmd, std::span<const std::uint32_t>(vdos), now);
             break;
         }
         case 4: {
-            // RX 0x27170204 -> TX 5-DO: (captured words removed)
-            constexpr std::array<std::uint32_t, 5> vdos = {0u, 0u, 0u, 0u, 0u};
+            // RX 0x27170204 -> TX 5-DO: 0x27170105 + the fixed challenge (the digest's nonce)
+            const std::array<std::uint32_t, 5> vdos = {0x27170105u, mi::kChallenge[0], mi::kChallenge[1],
+                                                       mi::kChallenge[2], mi::kChallenge[3]};
             send_xiaomi_vdm_reply(cmd, std::span<const std::uint32_t>(vdos), now);
             break;
         }
         case 5: {
-            // RX 0x27170205 -> TX 2-DO: 0x27170106, 0x00000001
-            constexpr std::array<std::uint32_t, 2> vdos = {0x27170106u, 0x00000001u};
+            // RX 0x27170205 (the charger's HMAC[0..15]) -> TX 0x27170106 VERIFIED.
+            // The digest's adapter_id is our identity ACK's product VDO when the source asked for our
+            // identity, 0 when it did not (a source that never sends Discover Identity REQ computes the
+            // HMAC with adapter_id 0). Pick the candidate whose digest matches the charger's answer.
+            const std::uint32_t ack_id = kXiaomiProductVdo & 0xFFFFu;
+            const std::uint32_t primary = source_asked_identity_ ? ack_id : 0u;
+            const std::uint32_t candidates[3] = {primary, 0u, ack_id};
+            std::uint32_t rx[4] = {0, 0, 0, 0};
+            const bool have_rx = num_do >= 5 && payload.size() >= 20;
+            if (have_rx)
+                for (unsigned w = 0; w < 4; w++)
+                    rx[w] = std::uint32_t(payload[4 + 4 * w]) | (std::uint32_t(payload[4 + 4 * w + 1]) << 8) |
+                            (std::uint32_t(payload[4 + 4 * w + 2]) << 16) | (std::uint32_t(payload[4 + 4 * w + 3]) << 24);
+            std::uint8_t digest[32];
+            std::uint32_t chosen = primary;
+            bool matched = false;
+            for (unsigned c = 0; c < 3 && !matched; c++) {
+                bool dup = false;
+                for (unsigned p = 0; p < c; p++) dup = dup || candidates[c] == candidates[p];
+                if (dup) continue;
+                mi::auth_digest(mi::kActiveKeyIndex, mi::kChallenge, candidates[c], digest);
+                matched = have_rx && mi::digest_word(digest, 0) == rx[0] && mi::digest_word(digest, 1) == rx[1] &&
+                          mi::digest_word(digest, 2) == rx[2] && mi::digest_word(digest, 3) == rx[3];
+                if (matched) chosen = candidates[c];
+            }
+            if (!matched) mi::auth_digest(mi::kActiveKeyIndex, mi::kChallenge, primary, digest);
+            xiaomi_adapter_id_ = chosen;
+            // VERIFIED is 1: the observed chargers gate the unlock on the 0x27170108 half, not on
+            // this word, and the known-good flow always sent 1.
+            const std::array<std::uint32_t, 2> vdos = {0x27170106u, 0x00000001u};
             send_xiaomi_vdm_reply(cmd, std::span<const std::uint32_t>(vdos), now);
             break;
         }
@@ -1503,28 +1542,42 @@ K2_HOT void Sink::on_vdm(std::uint16_t header, std::span<const std::uint8_t> pay
             break;
         }
         case 7: {
-            // RX 0x27170207 -> TX 5-DO: (captured words removed)
-            constexpr std::array<std::uint32_t, 5> vdos = {0u, 0u, 0u, 0u, 0u};
+            // RX 0x27170207 -> TX 5-DO: 0x27170108 + HMAC[16..31] for the adapter_id chosen at
+            // 0x27170205 (the reverse-auth half of the same digest the charger answered with)
+            std::uint8_t digest[32];
+            mi::auth_digest(mi::kActiveKeyIndex, mi::kChallenge, xiaomi_adapter_id_, digest);
+            const std::array<std::uint32_t, 5> vdos = {0x27170108u, mi::digest_word(digest + 16, 0),
+                                                       mi::digest_word(digest + 16, 1), mi::digest_word(digest + 16, 2),
+                                                       mi::digest_word(digest + 16, 3)};
             send_xiaomi_vdm_reply(cmd, std::span<const std::uint32_t>(vdos), now);
             break;
         }
         case 8: {
-            // RX 0x27170208 -> TX 2-DO: 0x2717010A, 0x00000001
-            constexpr std::array<std::uint32_t, 2> vdos = {0x2717010Au, 0x00000001u};
-            send_xiaomi_vdm_reply(cmd, std::span<const std::uint32_t>(vdos), now);
-            break;
-        }
-        case 0x0A: {
-            // RX 0x2717020A -> set authed flag and send Get_Source_Cap
+            // RX 0x27170208: the reverse-auth ACK, the chain's last step - mark authed and fetch the
+            // re-announced caps. No 0x2717010A from us: sources that implement only cmds 1..8 answer
+            // it Not_Supported, and gating on 0x2717020A kept those chargers un-authed forever.
             xiaomi_authed_ = true;
             st_.xiaomi_authed = true;
             xiaomi_cmd_ = cmd;
             xm_.authed = true; xm_.authed_at = now; xm_.reannounced = false; xm_.reannounce_at = 0;
-            // Send Get_Source_Cap to request updated capabilities
             TxMsg m;
             m.header = make_header(kCtlGetSourceCap, 0, rev_);
             queue(m);
             get_cap_sent_ = true;
+            break;
+        }
+        case 0x0A: {
+            // RX 0x2717020A from a source that does send it: same finish as 0x27170208 (idempotent)
+            if (!xiaomi_authed_) {
+                xiaomi_authed_ = true;
+                st_.xiaomi_authed = true;
+                xiaomi_cmd_ = cmd;
+                xm_.authed = true; xm_.authed_at = now; xm_.reannounced = false; xm_.reannounce_at = 0;
+                TxMsg m;
+                m.header = make_header(kCtlGetSourceCap, 0, rev_);
+                queue(m);
+                get_cap_sent_ = true;
+            }
             break;
         }
         default:
