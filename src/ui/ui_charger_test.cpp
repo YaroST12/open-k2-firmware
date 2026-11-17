@@ -727,7 +727,8 @@ bool ChargerTestSession::reapply_cable() {
 void ChargerTestSession::boot_arm_cable() {
     bootra::In in;
     in.self_powered = fusb302::self_powered();
-    const ctcable::Choice c = resume_pending_ ? resume_cable_ : ctx_.cables.selected();
+    // chosen(), not selected(): the default (EPR spoof) is START's, a boot with nothing ever picked arms nothing and stays passive.
+    const ctcable::Choice c = resume_pending_ ? resume_cable_ : ctx_.cables.chosen();
     in.identity = c.kind != ctcable::Kind::Off && ctcable::valid(c);
     in.journaled = resume_pending_ && in.identity;
     in.inline_sink = fusb302::inline_mode();

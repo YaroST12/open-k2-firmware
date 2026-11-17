@@ -142,8 +142,14 @@ static void test_selection() {
     add_clone(3, "Anker-USB2-60W");
     CableIdentityList l;
     l.sync();
-    CHECK_EQ(l.selected().kind == Kind::Off, 1);
-    CHECK_EQ(int(l.row(0).mark), int(CableIdentityList::Mark::Use));   // Off is the use until another one is picked
+    // Nothing picked yet: the EPR spoof is the START default, but nothing counts as chosen (boot arming stays off).
+    CHECK_EQ(l.selected() == ctcable::kDefaultChoice ? 1 : 0, 1);
+    CHECK_EQ(l.chosen().kind == Kind::Off ? 1 : 0, 1);
+    CHECK_EQ(int(l.row(1).mark), int(CableIdentityList::Mark::Use));
+    CHECK_EQ(int(l.row(0).mark), int(CableIdentityList::Mark::None));
+    CHECK_EQ(l.select(Choice{}) ? 1 : 0, 1);                   // an explicit Off is a pick like any other
+    CHECK_EQ(l.chosen().kind == Kind::Off ? 1 : 0, 1);
+    CHECK_EQ(int(l.row(0).mark), int(CableIdentityList::Mark::Use));
     CHECK_EQ(l.select(Choice{Kind::Builtin, 2}) ? 1 : 0, 1);
     CHECK_EQ(int(l.row(2).mark), int(CableIdentityList::Mark::Use));
     CHECK_EQ(int(l.row(0).mark), int(CableIdentityList::Mark::None));
@@ -165,12 +171,13 @@ static void test_selection() {
     CHECK_EQ(l.select(Choice{Kind::Saved, 4}) ? 1 : 0, 0);    // not in the library: refused, the choice stays
     CHECK_EQ(l.selected().seq, 3);
     CHECK_EQ(l.select(Choice{Kind::Off, 5}) ? 1 : 0, 0);      // malformed
-    // The chosen clone is removed from the library: the selection falls back to Off.
+    // The chosen clone is removed from the library: the selection falls back to the default (EPR), nothing chosen.
     g_stub.lib.clear();
     g_stub.lib_removes++;
     l.sync();
-    CHECK_EQ(l.selected().kind == Kind::Off, 1);
-    CHECK_STR(l.selected_name(), "");
+    CHECK_EQ(l.selected() == ctcable::kDefaultChoice ? 1 : 0, 1);
+    CHECK_EQ(l.chosen().kind == Kind::Off ? 1 : 0, 1);
+    CHECK_STR(l.selected_name(), emrec::builtin_info(ctcable::kBuiltinKind).label.data());
     CHECK_EQ(l.select(Choice{}) ? 1 : 0, 1);
     CHECK_EQ(l.selected().kind == Kind::Off, 1);
 }

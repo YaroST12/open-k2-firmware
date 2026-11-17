@@ -16,6 +16,12 @@
 // only (an arm never outlives the boot). Arming stays explicit: Tools -> Spoof arms on OK, the wizard arms at START; picking
 // only selects.
 //
+// The default: with no record (a new volume, or a record gone or damaged) the selection is ctcable::kDefaultChoice, the EPR
+// spoof, so the next charger-test START presents a 50 V / 5 A cable and a source with EPR levels is tested on them. That default is
+// START's alone: selected() answers it, chosen() does not (Off until somebody picked), and only chosen() may arm anything on its own
+// (the self-powered boot arming), so a never-set K2 stays passive until a START or a Spoof OK. The default is never written;
+// the first pick (an explicit Off too) writes the record.
+//
 // The library reads happen in sync() / select() / fill_names() / arm() (called from a page's update() or an event), never
 // while painting: row() reads the name cache only.
 #pragma once
@@ -40,12 +46,13 @@ public:
     static constexpr int kFirstSaved = kFirstBuiltin + kBuiltins;
     static constexpr int kNameSlots = 8;   // more than any page shows at once (the wizard's 7 rows)
 
-    // Once at Ui init, before anything reads selected(): the remembered selection comes back. A clone that is gone (or no
-    // record, or a damaged one) is Off; a stale record naming a gone clone is replaced by Off.
+    // Once at Ui init, before anything reads selected(): the remembered selection comes back. No record (or a damaged one)
+    // is the default (the EPR spoof, not chosen); an explicit Off record is Off; a record naming a clone that is gone falls back to
+    // the default and the stale record is removed (a later clone may reuse the number).
     void load();
 
     // The library changed (or this is the first call): the saved list is read again and the name cache starts empty. A chosen
-    // clone that is gone falls back to Off. True when anything was re-read.
+    // clone that is gone falls back to the default. True when anything was re-read.
     bool sync();
     int count() const { return kFirstSaved + saved_count_; }
     ctcable::Choice choice_at(int index) const;   // Off for index 0 and for anything past the end
@@ -80,9 +87,12 @@ public:
     static Style style(Mark);
 
     // The one selection (what the next START presents). False = refused (malformed, or a clone that is not in the library);
-    // the selection is unchanged then.
+    // the selection is unchanged then. A successful select is a pick: it counts as chosen and is written when it changes.
     bool select(ctcable::Choice);
     ctcable::Choice selected() const { return selected_; }
+    // What somebody picked: selected() once it was picked (or read back from the record), Off while the selection is only the
+    // default. Anything that acts without a START or a Spoof OK in front of it (the boot arming) reads this, never selected().
+    ctcable::Choice chosen() const { return chosen_ ? selected_ : ctcable::Choice{}; }
     const char* selected_name() const { return selected_name_; }
 
     // Arm a choice as the spoof identity: the record and quirks go to emk_spoof. On success `facts` / `name` describe it and the
@@ -101,7 +111,10 @@ public:
 private:
     static void put_label(char (&dst)[emlib::kNameMax + 1], const char* src);
     void refresh();
-    void persist();   // writes selected_ when it is not what the record holds (never per tick; a refused write is retried later)
+    bool apply(ctcable::Choice);   // selected_ + its name, no record write (select() = apply + chosen + persist)
+    void use_default();            // selected_ = the default, not chosen
+    void drop_record();            // remove /cable.cfg (the record names a clone that is gone)
+    void persist();   // writes selected_ when it was chosen and is not what the record holds (never per tick; a refused write is retried later)
     Mark mark_of(ctcable::Choice, View) const;
 
     std::array<uint16_t, emlib::kCapacity> saved_{};
@@ -113,8 +126,10 @@ private:
     std::array<NameSlot, kNameSlots> names_{};   // slot = row index % kNameSlots, valid while its seq is the row's clone
     uint32_t library_gen_ = 0;
     bool synced_ = false;
-    ctcable::Choice selected_{};
-    ctcable::Choice persisted_{};   // what /cable.cfg holds (Off on a blank volume), as far as this boot knows
+    ctcable::Choice selected_ = ctcable::kDefaultChoice;
+    ctcable::Choice persisted_{};   // what /cable.cfg holds, as far as this boot knows (valid while recorded_)
+    bool recorded_ = false;         // /cable.cfg holds a record
+    bool chosen_ = false;           // selected_ was picked (or read from the record), not the default
     char selected_name_[emlib::kNameMax + 1] = {};
     ctcable::Choice armed_{};
     char armed_name_[emlib::kNameMax + 1] = {};

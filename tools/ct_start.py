@@ -25,10 +25,14 @@ deep run, the ceiling stage's words.
 
 --units sends the unit list (names and order) with `charger-units` before START: only those test units run, in that
 order, each one detach -> attach -> rows -> detach. Without it the full default order runs: vendor modes (FCP, SCP, AFC, VOOC...), PD, then QC/UFCS.
---cable picks the Spoof cable step's identity (`charger-cable`): off (the default: no spoof, no Ra), builtin
+--cable picks the Spoof cable step's identity (`charger-cable`): off (no spoof, no Ra), builtin
 (the built-in EPR 50 V / 5 A cable), builtin:<id|name> (1 epr-50v, 2 cuktech-6a, 4 oneplus; 3 is the retired oneplus-mag, read as 4: the list's
 captured-cable rows) or saved:<library id>. Any identity arms that spoof and runs in Ra mode (PC13 high,
-Rd on CC2 alone) until the run ends. The device remembers the last choice, so it is sent before every START.
+Rd on CC2 alone) until the run ends. Without --cable the device's own choice runs: the EPR spoof (builtin) on a K2 where nobody
+picked another, so a charger whose PDO 1 has the EPR bit gets its EPR and AVS levels tested; the choice is read back and printed
+before START, and it is whatever was picked last on the device or by an earlier --cable (the device remembers it, an explicit
+--cable off included: pass --cable off again, or --cable builtin, to change it). With --cable the choice is sent before every START.
+A charger that is not on the plug directly (a cable in between) is refused by the Ra guard (exit 6) for any identity but off.
 """
 import argparse
 import sys
@@ -114,6 +118,12 @@ def preflight(link, sleep=time.sleep):
         if not st["pd_valid"]:
             print("note: no PD source capabilities after a rescan: legacy-only run", file=sys.stderr)
     return None
+
+
+def cable_words(reply):
+    """The device's cable choice as --cable spells it: off, builtin:<id>, saved:<id> (charger_cable's reply)."""
+    kind = reply["choice"]
+    return kind if kind == "off" else f"{kind}:{reply['choice_seq']}"
 
 
 def run_id_of(link, tries=8, sleep=time.sleep):
@@ -244,9 +254,10 @@ def parse_args(argv=None):
                     help="run only these test units, in this order, e.g. qc2,qc3 or pd,qc2 (names: " + ", ".join(kr.TEST_UNITS) +
                          "); default = the full order: vendor modes, PD, QC/UFCS, pd-low. The PPS sweep is split at 5 V: "
                          "the part from 5 V up runs in pd, the part below 5 V in pd-low (a list without pd-low skips it)")
-    ap.add_argument("--cable", default="off",
-                    help="cable identity of the run: off (default), builtin, builtin:<1|2|4|epr-50v|cuktech-6a|oneplus> "
-                         "or saved:<library id>")
+    ap.add_argument("--cable", default=None,
+                    help="cable identity of the run: off, builtin, builtin:<1|2|4|epr-50v|cuktech-6a|oneplus> "
+                         "or saved:<library id>. Default: the device's own choice (the EPR spoof until another one is picked); "
+                         "it is printed before START. 'off' is remembered by the device like any pick")
     a = ap.parse_args(argv)
     if a.level == "light" and (a.sweep or a.avs_sweep):
         ap.error("--level light asks for nothing above 5 V: no deep sweep with it")
@@ -290,7 +301,7 @@ def main(argv=None):
         print(f"bad --units: {e}", file=sys.stderr)
         return 4
     try:
-        cable = kr.parse_cable(a.cable)
+        cable = kr.parse_cable(a.cable) if a.cable is not None else None
     except kr.FrameError as e:
         print(f"bad --cable: {e}", file=sys.stderr)
         return 4
@@ -339,12 +350,13 @@ def main(argv=None):
                 print(f"could not set the unit list: {e}", file=sys.stderr)
                 return 1
             print("units: " + ",".join(kr.TEST_UNITS[u] for u in units), file=sys.stderr)
-        try:    # the device remembers the last choice and the press loop below takes it: set it every time
-            kr.charger_cable(link, cable)
+        try:    # the device remembers the last choice and the press loop below takes it: an explicit --cable is set every time,
+                # without one the device's own choice (the EPR spoof by default) is read back so the run says what it runs with
+            now = kr.charger_cable(link, cable)
         except kr.RemoteError as e:
             print(f"could not set the cable identity: {e}", file=sys.stderr)
             return 1
-        print("cable identity: " + a.cable, file=sys.stderr)
+        print("cable identity: " + (a.cable if a.cable is not None else cable_words(now) + " (the device's choice)"), file=sys.stderr)
         before = run_id_of(link)
         if before is None:
             print("the K2 does not answer charger-test status", file=sys.stderr)
@@ -356,7 +368,9 @@ def main(argv=None):
         finally:
             link.tap = None
         if started == REFUSED:
-            print(f"refusing to start: {REFUSAL_TEXT} (use --cable off, or put the charger on the top plug)", file=sys.stderr)
+            print(f"refusing to start: {REFUSAL_TEXT} (use --cable off, or put the charger on the top plug)"
+                  + ("; the identity was the device's own choice, and --cable off is remembered by it" if a.cable is None else ""),
+                  file=sys.stderr)
             return 6
         if started != STARTED:
             drain_log(link, log_frames)   # the refusal line may still be queued on the K2

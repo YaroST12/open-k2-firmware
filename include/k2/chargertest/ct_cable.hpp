@@ -39,6 +39,10 @@ struct Choice {
     constexpr bool operator==(const Choice&) const = default;
 };
 
+// What the dialog and the Spoof list select while nothing was ever chosen (no /cable.cfg record): the EPR 50 V / 5 A cable, so the
+// charger test of a source whose PDO 1 carries the EPR bit can enter EPR mode and run its EPR and AVS levels (decision 2026-11-17).
+constexpr Choice kDefaultChoice{Kind::Builtin, static_cast<uint16_t>(kBuiltinKind)};
+
 constexpr bool valid(Choice c) {
     if (c.kind == Kind::Builtin) return c.seq < emrec::kBuiltinCount;
     return c.kind == Kind::Off ? c.seq == 0 : c.kind == Kind::Saved && c.seq != 0;

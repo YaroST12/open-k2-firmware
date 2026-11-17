@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
-// Host tests for the remembered cable identity (k2/chargertest/cablepref.hpp): the record format, a blank volume reads as Off, save and
-// reload over a RAM disk, a damaged or impossible record reads as Off.
+// Host tests for the remembered cable identity (k2/chargertest/cablepref.hpp): the record format, a blank volume reads as "no record"
+// (the list then starts on the default, the EPR spoof), save and reload over a RAM disk, a damaged or impossible record reads as
+// "no record" too, and an explicit Off record is the only way to read Off.
 #include <array>
 #include <cstdint>
 
@@ -39,40 +40,55 @@ void test_record_format() {
     const std::array<std::uint8_t, 8> old_mag{'K', '2', 'C', 'B', 1, 3, 0, 0xA7};
     CHECK_EQ(cablepref::decode(old_mag) == kB4, 1);
     CHECK_EQ(cablepref::encode(kB3) == builtin, 1);
-    CHECK_EQ(cablepref::decode(off) == kOff, 1);
+    CHECK_EQ(cablepref::decode(off) == kOff, 1);   // an explicit Off record is a choice, not damage
+}
+
+void test_the_default_is_the_epr_spoof() {
+    CHECK_EQ(cablepref::kDefault == kB1, 1);        // the hardware-proven EPR 50 V / 5 A cable
+    CHECK_EQ(ctcable::valid(cablepref::kDefault), 1);
 }
 
 void test_the_old_builtin_spelling_is_stored_canonical() {
     CHECK_EQ(cablepref::decode(cablepref::encode(kB0)) == kB1, 1);
 }
 
-void test_damage_reads_as_off() {
+void test_damage_reads_as_no_record() {
     const auto r = cablepref::encode(kS9);
     CHECK_EQ(cablepref::decode(r) == kS9, 1);
     auto bad = r; bad[7] ^= 1;                  // check byte
-    CHECK_EQ(cablepref::decode(bad) == kOff, 1);
+    CHECK_EQ(cablepref::decode(bad).has_value(), false);
     bad = r; bad[0] = 'X';                      // magic
-    CHECK_EQ(cablepref::decode(bad) == kOff, 1);
+    CHECK_EQ(cablepref::decode(bad).has_value(), false);
     bad = r; bad[5] ^= 0x40;                    // a flipped payload bit: the check no longer matches
-    CHECK_EQ(cablepref::decode(bad) == kOff, 1);
+    CHECK_EQ(cablepref::decode(bad).has_value(), false);
     // well-formed record, impossible choice: a clone without its id, a built-in past the table, an unknown kind, Off with an id
     constexpr Choice kNoId{Kind::Saved, 0}, kFar{Kind::Builtin, 40}, kKind3{static_cast<Kind>(3), 1}, kOffId{Kind::Off, 5};
-    CHECK_EQ(cablepref::decode(cablepref::encode(kNoId)) == kOff, 1);
-    CHECK_EQ(cablepref::decode(cablepref::encode(kFar)) == kOff, 1);
-    CHECK_EQ(cablepref::decode(cablepref::encode(kKind3)) == kOff, 1);
-    CHECK_EQ(cablepref::decode(cablepref::encode(kOffId)) == kOff, 1);
+    CHECK_EQ(cablepref::decode(cablepref::encode(kNoId)).has_value(), false);
+    CHECK_EQ(cablepref::decode(cablepref::encode(kFar)).has_value(), false);
+    CHECK_EQ(cablepref::decode(cablepref::encode(kKind3)).has_value(), false);
+    CHECK_EQ(cablepref::decode(cablepref::encode(kOffId)).has_value(), false);
 }
 
 void test_save_and_reload() {
     Vol v;
-    CHECK_EQ(cablepref::load(v.f) == kOff, 1);                          // blank volume
+    CHECK_EQ(cablepref::load(v.f).has_value(), false);                  // blank volume: no record, the list starts on the default
     CHECK_EQ(cablepref::save(v.f, kS12), true);
     CHECK_EQ(cablepref::load(v.f) == kS12, 1);
     CHECK_EQ(cablepref::save(v.f, kB2), true);
     CHECK_EQ(cablepref::load(v.f) == kB2, 1);
     CHECK_EQ(cablepref::save(v.f, kOff), true);
+    CHECK_EQ(cablepref::load(v.f).has_value(), true);                   // an explicit Off stays Off (it is not the default)
     CHECK_EQ(cablepref::load(v.f) == kOff, 1);
     CHECK_EQ(v.f.exists(cablepref::kPath), true);
+}
+
+void test_clear_returns_to_no_record() {
+    Vol v;
+    CHECK_EQ(cablepref::clear(v.f), true);                              // nothing to remove is fine
+    CHECK_EQ(cablepref::save(v.f, kS12), true);
+    CHECK_EQ(cablepref::clear(v.f), true);
+    CHECK_EQ(v.f.exists(cablepref::kPath), false);
+    CHECK_EQ(cablepref::load(v.f).has_value(), false);
 }
 
 void test_the_prefs_file_is_untouched() {
@@ -81,25 +97,27 @@ void test_the_prefs_file_is_untouched() {
     CHECK_EQ(v.f.exists("/prefs.cfg"), false);                          // own file: the 8-byte prefs format stays as it is
 }
 
-void test_a_short_or_long_file_reads_as_off() {
+void test_a_short_or_long_file_reads_as_no_record() {
     Vol v;
     const std::array<std::uint8_t, 4> shortf{'K', '2', 'C', 'B'};
     CHECK_EQ(v.f.write_file(cablepref::kPath, shortf) == fs::Err::Ok, true);
-    CHECK_EQ(cablepref::load(v.f) == kOff, 1);
+    CHECK_EQ(cablepref::load(v.f).has_value(), false);
     const auto r = cablepref::encode(kB1);
     std::array<std::uint8_t, 9> longf{};
     for (size_t i = 0; i < r.size(); ++i) longf[i] = r[i];
     CHECK_EQ(v.f.write_file(cablepref::kPath, longf) == fs::Err::Ok, true);
-    CHECK_EQ(cablepref::load(v.f) == kOff, 1);
+    CHECK_EQ(cablepref::load(v.f).has_value(), false);
 }
 }  // namespace
 
 int main() {
     test_record_format();
+    test_the_default_is_the_epr_spoof();
     test_the_old_builtin_spelling_is_stored_canonical();
-    test_damage_reads_as_off();
+    test_damage_reads_as_no_record();
     test_save_and_reload();
+    test_clear_returns_to_no_record();
     test_the_prefs_file_is_untouched();
-    test_a_short_or_long_file_reads_as_off();
+    test_a_short_or_long_file_reads_as_no_record();
     return test_report("test_cablepref");
 }
