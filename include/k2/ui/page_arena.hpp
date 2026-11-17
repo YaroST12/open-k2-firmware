@@ -97,7 +97,7 @@ private:
     }
 
     alignas(std::max_align_t) std::uint8_t buf_[Capacity];
-    Entry e_[Depth] = {};
+    Entry e_[Depth];
     std::size_t used_ = 0;
     std::size_t depth_ = 0;
 };

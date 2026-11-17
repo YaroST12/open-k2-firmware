@@ -19,6 +19,7 @@
 // cleanly when there is none (beyond the reserve the caller keeps for itself). Erasing is the caller's maintenance, at
 // moments it chooses (erase(), tail(), first_dirty()).
 #pragma once
+#include "k2/core/bss_zero.hpp"
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -125,11 +126,11 @@ private:
     unsigned n_;
     std::uint8_t kind_;
     unsigned reserve_;
-    bool scanned_ = false;
-    std::array<Sec, kMaxSectors> sec_{};
-    std::array<std::uint32_t, kMaxSectors> seq_{};
-    std::array<std::uint16_t, kMaxSectors> fill_{};   // offset of the free space in a live sector (kSector = closed)
-    std::uint32_t next_sec_ = 1, last_ = 0;
+    bool scanned_ K2_BSS_INIT(false);
+    std::array<Sec, kMaxSectors> sec_ K2_BSS_ZERO;
+    std::array<std::uint32_t, kMaxSectors> seq_ K2_BSS_ZERO;
+    std::array<std::uint16_t, kMaxSectors> fill_ K2_BSS_ZERO;   // offset of the free space in a live sector (kSector = closed)
+    std::uint32_t next_sec_ = 1, last_ K2_BSS_INIT(0);
     mutable std::uint32_t next_rec_ = 1;   // above every record seq a walk has seen
 
     int index(std::uint32_t addr) const {

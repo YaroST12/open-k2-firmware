@@ -170,11 +170,11 @@ public:
     void invalidate() { valid_ = false; }
 
 private:
-    struct Ent { std::uint32_t fp = 0, stamp = 0, at = 0; std::uint16_t card_no = 0; bool current = false; };   // current: kFormat
-    struct Order { std::array<std::uint8_t, kMaxCards> at{}; unsigned n = 0; };
+    struct Ent { std::uint32_t fp, stamp, at; std::uint16_t card_no; bool current; };   // current: kFormat
+    struct Order { std::array<std::uint8_t, kMaxCards> at; unsigned n = 0; };
 
     ringlog::Ring& ring_;
-    mutable std::array<Ent, kMaxCards> idx_{};
+    mutable std::array<Ent, kMaxCards> idx_;
     mutable unsigned n_ = 0;
     mutable bool valid_ = false;
 

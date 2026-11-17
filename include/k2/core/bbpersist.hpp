@@ -27,6 +27,7 @@
 #include <cstdint>
 
 #include "k2/core/bbstore.hpp"
+#include "k2/core/bss_zero.hpp"
 #include "k2/pd/pdtrace.hpp"
 #include "k2/core/scratch.hpp"
 #include "k2/drivers/systick.hpp"
@@ -186,11 +187,11 @@ public:
 private:
     bbstore::Ring ring_;
     Status st_;
-    std::uint32_t hold_ms_ = 0;
-    bool hold_set_ = false;
-    std::uint32_t erase_ms_ = 0;
-    bool erased_once_ = false;
-    std::uint32_t rare_run_ = 0;   // rare-kind captures written since the hold started
+    std::uint32_t hold_ms_ K2_BSS_INIT(0);
+    bool hold_set_ K2_BSS_INIT(false);
+    std::uint32_t erase_ms_ K2_BSS_INIT(0);
+    bool erased_once_ K2_BSS_INIT(false);
+    std::uint32_t rare_run_ K2_BSS_INIT(0);   // rare-kind captures written since the hold started
     bool holding() const { return hold_set_ && systick::millis() - hold_ms_ < kHoldLapseMs; }
     // What a charger-test row makes by itself: the Contract capture, and the dip and edge captures of its voltage steps.
     static bool held_kind(pdtrace::Trigger t) {
@@ -198,8 +199,8 @@ private:
     }
     // Waits for the end of the run: the per-row kinds always, the rare kinds once the run has used its budget.
     bool waits(pdtrace::Trigger t) const { return held_kind(t) || rare_run_ >= kRareBudget; }
-    std::array<std::uint32_t, pdtrace::kCapSlots> saved_{};
-    std::array<std::uint32_t, pdtrace::kCapSlots> pending_{};   // sequence of the capture each slot holds back (0 = none)
+    std::array<std::uint32_t, pdtrace::kCapSlots> saved_ K2_BSS_ZERO;
+    std::array<std::uint32_t, pdtrace::kCapSlots> pending_ K2_BSS_ZERO;   // sequence of the capture each slot holds back (0 = none)
     // The capture of slot `i` was written or given up: it is not waiting any more and its slot may be reused.
     void settled(std::size_t i, std::uint32_t seq) {
         saved_[i] = seq;

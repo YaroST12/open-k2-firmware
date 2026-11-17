@@ -24,6 +24,7 @@
 // and no Request while attached, or a detach that outlasts kInlineHoldMs. A VBUS cut or a short detach pauses that window
 // (vbus_cut()).
 #pragma once
+#include "k2/core/bss_zero.hpp"
 #include <cstddef>
 #include <cstdint>
 
@@ -152,33 +153,33 @@ public:
 
 private:
     bool attached_ = true;
-    bool waiting_ = false;
-    bool forced_ = false;
-    bool new_source_ = false;
-    bool inline_ = false;
-    InlineCause cause_ = InlineCause::None;
-    std::uint32_t requests_at_attach_ = 0, requests_seen_ = 0, quiet_since_ = 0;
-    std::uint32_t paused_at_ = 0;   // the last tick the quiet window was paused (a cut or a detach, see vbus_cut())
-    bool up_seen_ = false;          // vbus_up_ms_ holds a real sample
-    bool vbus_low_ = false, cc_gone_ = false;
-    std::uint32_t vbus_up_ms_ = 0;   // the last sample at/above vSafe5V (see kDarkSinkMs)
-    bool low_timing_ = false, gone_timing_ = false;
-    std::uint32_t low_since_ = 0, gone_since_ = 0;
-    std::uint32_t detach_at_ = 0, attach_at_ = 0;
-    std::uint32_t rx_at_detach_ = 0, last_rx_ = 0;
-    std::uint32_t rx_attach_ = 0;   // the attach's count baseline: the counter at the last detach (caps since then are this attach's)
-    PdVerdict verdict_ = PdVerdict::Pending;
-    PdNoneWhy none_why_ = PdNoneWhy::None;
-    bool scanned_ = false, cable_dirty_ = false;
-    std::uint32_t scan_at_ = 0;
+    bool waiting_ K2_BSS_INIT(false);
+    bool forced_ K2_BSS_INIT(false);
+    bool new_source_ K2_BSS_INIT(false);
+    bool inline_ K2_BSS_INIT(false);
+    InlineCause cause_ K2_BSS_INIT(InlineCause::None);
+    std::uint32_t requests_at_attach_ K2_BSS_INIT(0), requests_seen_ K2_BSS_INIT(0), quiet_since_ K2_BSS_INIT(0);
+    std::uint32_t paused_at_ K2_BSS_INIT(0);   // the last tick the quiet window was paused (a cut or a detach, see vbus_cut())
+    bool up_seen_ K2_BSS_INIT(false);          // vbus_up_ms_ holds a real sample
+    bool vbus_low_ K2_BSS_INIT(false), cc_gone_ K2_BSS_INIT(false);
+    std::uint32_t vbus_up_ms_ K2_BSS_INIT(0);   // the last sample at/above vSafe5V (see kDarkSinkMs)
+    bool low_timing_ K2_BSS_INIT(false), gone_timing_ K2_BSS_INIT(false);
+    std::uint32_t low_since_ K2_BSS_INIT(0), gone_since_ K2_BSS_INIT(0);
+    std::uint32_t detach_at_ K2_BSS_INIT(0), attach_at_ K2_BSS_INIT(0);
+    std::uint32_t rx_at_detach_ K2_BSS_INIT(0), last_rx_ K2_BSS_INIT(0);
+    std::uint32_t rx_attach_ K2_BSS_INIT(0);   // the attach's count baseline: the counter at the last detach (caps since then are this attach's)
+    PdVerdict verdict_ K2_BSS_INIT(PdVerdict::Pending);
+    PdNoneWhy none_why_ K2_BSS_INIT(PdNoneWhy::None);
+    bool scanned_ K2_BSS_INIT(false), cable_dirty_ K2_BSS_INIT(false);
+    std::uint32_t scan_at_ K2_BSS_INIT(0);
     // The waiting classifier's input: the Rp presence trace over the CC lines (fed only while passive), and the
     // last VBUS reading for its gate.
     raguard::RpTrace wait_trace_;
     raguard::DrpTrace drp_trace_;        // the slow dual-role toggle on the raw levels (same gate; under kRpMinMv)
     raguard::CrossTrace cross_trace_;   // the crossed-CC detector's input (same gate, plus VBUS dark and no inline / contract)
-    std::uint32_t last_now_ = 0;
-    bool vbus_known_ = false;
-    std::int32_t vbus_mv_ = 0;
+    std::uint32_t last_now_ K2_BSS_INIT(0);
+    bool vbus_known_ K2_BSS_INIT(false);
+    std::int32_t vbus_mv_ K2_BSS_INIT(0);
 
     void set_attached(bool on, std::uint32_t at_ms);
 };

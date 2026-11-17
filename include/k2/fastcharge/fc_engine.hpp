@@ -11,6 +11,7 @@
 //  - every poll compares measured VBUS against the ceiling and target + 10 %, and aborts;
 //  - abort and stop() send both data lines to 0 V (charger falls back to 5 V), then the idle state.
 #pragma once
+#include "k2/core/bss_zero.hpp"
 #include <cstdint>
 #include <span>
 
@@ -272,68 +273,68 @@ private:
     int guard_mv() const;
 
     Env& env_;
-    bool busy_ = false;           // poll() or service_hs() is running: the other one (reached through a draw) does nothing
-    State state_ = State::Idle;
-    Proto proto_ = Proto::Qc2;
-    Fail fail_ = Fail::None;
-    Phase phase_ = Phase::Off;
-    std::array<Action, 24> script_{};
-    std::size_t script_n_ = 0, script_i_ = 0;
-    int afc_n_ = 0;               // AFC exchanges of this session (the log's n)
-    bool afc_retried_ = false;    // the one retry of an unanswered first AFC exchange was used
-    bool afc_short_seen_ = false; // the settle has judged D- once (qc::afc_ping_due)
-    int sends_ = 0, ok_sends_ = 0, wake_i_ = 0, keep_fail_ = 0, adapter_mv_ = 0, adapter_ma_ = 0;
+    bool busy_ K2_BSS_INIT(false);           // poll() or service_hs() is running: the other one (reached through a draw) does nothing
+    State state_ K2_BSS_INIT(State::Idle);
+    Proto proto_ K2_BSS_INIT(Proto::Qc2);
+    Fail fail_ K2_BSS_INIT(Fail::None);
+    Phase phase_ K2_BSS_INIT(Phase::Off);
+    std::array<Action, 24> script_ K2_BSS_ZERO;
+    std::size_t script_n_ K2_BSS_INIT(0), script_i_ K2_BSS_INIT(0);
+    int afc_n_ K2_BSS_INIT(0);               // AFC exchanges of this session (the log's n)
+    bool afc_retried_ K2_BSS_INIT(false);    // the one retry of an unanswered first AFC exchange was used
+    bool afc_short_seen_ K2_BSS_INIT(false); // the settle has judged D- once (qc::afc_ping_due)
+    int sends_ K2_BSS_INIT(0), ok_sends_ K2_BSS_INIT(0), wake_i_ K2_BSS_INIT(0), keep_fail_ K2_BSS_INIT(0), adapter_mv_ K2_BSS_INIT(0), adapter_ma_ K2_BSS_INIT(0);
     // AFC / FCP / SCP: the charger answered the protocol itself (a CRC-valid ACCP frame or an AFC byte exchange). Until it has,
     // a failure of the session says "this charger does not speak it" (see abort()), whatever VBUS did: QC-only banks move VBUS
     // on the D+/D- levels alone.
-    bool acked_ = false;
+    bool acked_ K2_BSS_INIT(false);
     bool unacked_handshake() const { return !acked_ && (proto_ == Proto::Afc || proto_ == Proto::Fcp || proto_ == Proto::Scp); }
     int scp_ma_ = accp::kScpInitMa;
-    int ufcs_ma_ = 0;   // UFCS Request current, 0 = ufcs::kNoCableMa
-    int keep_i_ = 0, vooc_tries_ = 0, vooc_frames_ = 0;
-    std::uint8_t vooc_ident_ = 0;   // VOOC: wakes sent, frames heard (not all ones)
-    std::array<std::uint8_t, ufcs::kFrameMax> ux_{};          // UFCS receive accumulator
-    std::uint8_t ux_n_ = 0, ux_drop_ = 0;        // bytes held / bytes to drop (both below ufcs::kFrameMax)
-    Caps caps_{};                                // what the adapter / source said about itself (see caps())
-    std::array<std::uint8_t, 8> scp_lim_{};      // SCP limit registers 0x90..0x97 as read in this session
+    int ufcs_ma_ K2_BSS_INIT(0);   // UFCS Request current, 0 = ufcs::kNoCableMa
+    int keep_i_ K2_BSS_INIT(0), vooc_tries_ K2_BSS_INIT(0), vooc_frames_ K2_BSS_INIT(0);
+    std::uint8_t vooc_ident_ K2_BSS_INIT(0);   // VOOC: wakes sent, frames heard (not all ones)
+    std::array<std::uint8_t, ufcs::kFrameMax> ux_ K2_BSS_ZERO;          // UFCS receive accumulator
+    std::uint8_t ux_n_ K2_BSS_INIT(0), ux_drop_ K2_BSS_INIT(0);        // bytes held / bytes to drop (both below ufcs::kFrameMax)
+    Caps caps_ K2_BSS_ZERO;                                // what the adapter / source said about itself (see caps())
+    std::array<std::uint8_t, 8> scp_lim_ K2_BSS_ZERO;      // SCP limit registers 0x90..0x97 as read in this session
     void patch_scp_current();
-    std::uint8_t uid_ = 0;                       // message number of our next message (0..15); the source's ACK moves it on
-    std::array<std::uint8_t, 14> utx_{};         // the message sent last that is still waiting for its ACK (kept for the retransmit; a Request is the longest, 14 bytes)
-    std::uint8_t utx_n_ = 0;                     // its length, 0 = nothing outstanding
-    UKind utx_kind_ = UKind::Main;
-    std::uint8_t utx_id_ = 0;
-    std::uint32_t utx_ms_ = 0;                   // when it went out (last time)
-    std::uint8_t uretx_ = 0;                     // retransmits of it so far
-    bool uwait_ = false;                         // the main message was ACKed: its answer is due at due_ms_
-    bool usoft_ = false;                         // a Soft_Reset was already spent on this negotiation
-    bool usrst_ = false;                         // the source's Soft_Reset was already answered with a new opening since the last Power_Ready
-    UPend upend_ = UPend::None;
-    std::uint32_t upend_ms_ = 0;
-    ufcs::Pick upk_{};                           // the Request (re)sent by the engine
-    bool uref_ = false;                          // a Refuse is owed to the source (unsupported request)
-    std::uint8_t uref_id_ = 0, uref_type_ = 0, uref_cmd_ = 0, uref_reason_ = 0;
-    std::uint32_t uref_ms_ = 0;
-    bool usrc_valid_ = false, usrc_data_ = false;   // the last source message handled, to tell a retransmission from a new message
-    std::uint8_t usrc_id_ = 0, usrc_cmd_ = 0;
-    std::size_t vi_ = 0;                       // VIVO: next sequence frame
-    int vreq_ = 0;                               // VIVO: voltage in the last command-3 frame
-    bool vheard_ = false;
-    int utries_ = 0;
-    bool ubusy_retried_ = false;                 // this Request was already refused as busy once and sent again
-    bool uart_up_ = false;
-    bool uecho_ = false, uheard_ = false;        // UFCS: our own last frame came back verbatim / a frame addressed to the sink arrived
-    std::uint32_t ulast_rx_ = 0;
+    std::uint8_t uid_ K2_BSS_INIT(0);                       // message number of our next message (0..15); the source's ACK moves it on
+    std::array<std::uint8_t, 14> utx_ K2_BSS_ZERO;         // the message sent last that is still waiting for its ACK (kept for the retransmit; a Request is the longest, 14 bytes)
+    std::uint8_t utx_n_ K2_BSS_INIT(0);                     // its length, 0 = nothing outstanding
+    UKind utx_kind_ K2_BSS_INIT(UKind::Main);
+    std::uint8_t utx_id_ K2_BSS_INIT(0);
+    std::uint32_t utx_ms_ K2_BSS_INIT(0);                   // when it went out (last time)
+    std::uint8_t uretx_ K2_BSS_INIT(0);                     // retransmits of it so far
+    bool uwait_ K2_BSS_INIT(false);                         // the main message was ACKed: its answer is due at due_ms_
+    bool usoft_ K2_BSS_INIT(false);                         // a Soft_Reset was already spent on this negotiation
+    bool usrst_ K2_BSS_INIT(false);                         // the source's Soft_Reset was already answered with a new opening since the last Power_Ready
+    UPend upend_ K2_BSS_INIT(UPend::None);
+    std::uint32_t upend_ms_ K2_BSS_INIT(0);
+    ufcs::Pick upk_ K2_BSS_ZERO;                           // the Request (re)sent by the engine
+    bool uref_ K2_BSS_INIT(false);                          // a Refuse is owed to the source (unsupported request)
+    std::uint8_t uref_id_ K2_BSS_INIT(0), uref_type_ K2_BSS_INIT(0), uref_cmd_ K2_BSS_INIT(0), uref_reason_ K2_BSS_INIT(0);
+    std::uint32_t uref_ms_ K2_BSS_INIT(0);
+    bool usrc_valid_ K2_BSS_INIT(false), usrc_data_ K2_BSS_INIT(false);   // the last source message handled, to tell a retransmission from a new message
+    std::uint8_t usrc_id_ K2_BSS_INIT(0), usrc_cmd_ K2_BSS_INIT(0);
+    std::size_t vi_ K2_BSS_INIT(0);                       // VIVO: next sequence frame
+    int vreq_ K2_BSS_INIT(0);                               // VIVO: voltage in the last command-3 frame
+    bool vheard_ K2_BSS_INIT(false);
+    int utries_ K2_BSS_INIT(0);
+    bool ubusy_retried_ K2_BSS_INIT(false);                 // this Request was already refused as busy once and sent again
+    bool uart_up_ K2_BSS_INIT(false);
+    bool uecho_ K2_BSS_INIT(false), uheard_ K2_BSS_INIT(false);        // UFCS: our own last frame came back verbatim / a frame addressed to the sink arrived
+    std::uint32_t ulast_rx_ K2_BSS_INIT(0);
     void vooc_wake();
-    std::array<std::uint8_t, 4> keep_raw_{};
-    int target_mv_ = 0, applied_mv_ = 5000, prev_mv_ = 5000, entry_mv_ = 0, reached_mv_ = 0, dm0_mv_ = 0, qc3_pending_mv_ = 0, qc3_seen_mv_ = 0, qc3_step_mv_ = 0, qc3_base_mv_ = 0, qc3_cmd_n_ = 0;
-    bool qc3_learned_ = false;
+    std::array<std::uint8_t, 4> keep_raw_ K2_BSS_ZERO;
+    int target_mv_ K2_BSS_INIT(0), applied_mv_ = 5000, prev_mv_ = 5000, entry_mv_ K2_BSS_INIT(0), reached_mv_ K2_BSS_INIT(0), dm0_mv_ K2_BSS_INIT(0), qc3_pending_mv_ K2_BSS_INIT(0), qc3_seen_mv_ K2_BSS_INIT(0), qc3_step_mv_ K2_BSS_INIT(0), qc3_base_mv_ K2_BSS_INIT(0), qc3_cmd_n_ K2_BSS_INIT(0);
+    bool qc3_learned_ K2_BSS_INIT(false);
     qc::Settle qc3_settle_;                      // is VBUS stable since the last batch?
-    int qc3_nomove_ = 0;                         // pulses commanded in a row without VBUS moving (QC3+ "no response")
-    int qc3_dead_ = 0;                           // settled up batches in a row that left VBUS in the 12 V band unmoved (a Class A top)
-    std::uint32_t qc3_sent_ms_ = 0;
-    std::uint32_t reset_ms_ = 0;                 // when the last session released the lines (both at 0 V)
-    bool reset_seen_ = false;
-    std::uint32_t due_ms_ = 0, phase_ms_ = 0, change_ms_ = 0, band_ms_ = 0, lost_ms_ = 0;
+    int qc3_nomove_ K2_BSS_INIT(0);                         // pulses commanded in a row without VBUS moving (QC3+ "no response")
+    int qc3_dead_ K2_BSS_INIT(0);                           // settled up batches in a row that left VBUS in the 12 V band unmoved (a Class A top)
+    std::uint32_t qc3_sent_ms_ K2_BSS_INIT(0);
+    std::uint32_t reset_ms_ K2_BSS_INIT(0);                 // when the last session released the lines (both at 0 V)
+    bool reset_seen_ K2_BSS_INIT(false);
+    std::uint32_t due_ms_ K2_BSS_INIT(0), phase_ms_ K2_BSS_INIT(0), change_ms_ K2_BSS_INIT(0), band_ms_ K2_BSS_INIT(0), lost_ms_ K2_BSS_INIT(0);
 };
 
 }  // namespace k2::fc

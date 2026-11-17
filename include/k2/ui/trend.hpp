@@ -162,15 +162,15 @@ public:
 
 private:
     // Compact mode packs (V @ 30 mV [0..61.41 V], A @ 20 mA [0..20.46 A], W @ 200 mW [0..409.4 W]) into uint32_t.
-    struct ExactSamples { uint16_t v[kPoints][3] = {}; };
-    struct CompactSamples { uint32_t v[kPoints] = {}; };
+    struct ExactSamples { uint16_t v[kPoints][3]; };
+    struct CompactSamples { uint32_t v[kPoints]; };
     using SampleBuf = std::conditional_t<Compact, CompactSamples, ExactSamples>;
 
     struct Tier {
-        SampleBuf s{};                 // V, A, W per column
-        uint8_t lim[kPoints] = {};     // contract maximum, W
-        uint16_t e[kPoints] = {};      // energy points (wrapping, energy_unit_mwh)
-        uint8_t n = 0, head = 0;       // columns held, next column slot
+        SampleBuf s;                 // V, A, W per column
+        uint8_t lim[kPoints];        // contract maximum, W
+        uint16_t e[kPoints];         // energy points (wrapping, energy_unit_mwh)
+        uint8_t n = 0, head = 0;     // columns held, next column slot
         uint8_t en = 0, ehead = 0;     // energy points held, next point slot
         uint32_t due_ms = 0;           // the time the last column was due
         uint32_t seq = 0;              // columns taken

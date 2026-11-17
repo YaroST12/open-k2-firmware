@@ -110,11 +110,11 @@ private:
 
     UiContext& ctx_;
     std::optional<pdspec::Engine> engine_;
-    bool captured_ = false;              // the capture is ours (armed by capture_start, not yet stopped)
-    bool rd_away_ = false;               // the detach gap is open (rd_off(true) without the matching rd_off(false))
-    bool cancel_asked_ = false;
-    bool test_run_ = false;              // the engine's run is the charger test's (start_in_test)
-    std::uint8_t last_start_ = 0;        // pdspec::StartResult of the last start() call
+    bool captured_ K2_BSS_INIT(false);              // the capture is ours (armed by capture_start, not yet stopped)
+    bool rd_away_ K2_BSS_INIT(false);               // the detach gap is open (rd_off(true) without the matching rd_off(false))
+    bool cancel_asked_ K2_BSS_INIT(false);
+    bool test_run_ K2_BSS_INIT(false);              // the engine's run is the charger test's (start_in_test)
+    std::uint8_t last_start_ K2_BSS_INIT(0);        // pdspec::StartResult of the last start() call
     std::uint8_t foot_fam_ = 0xFF, foot_item_ = 0xFF, foot_items_ = 0xFF, foot_kind_ = 0xFF;
     StrBuf<28> foot_;
 };
