@@ -25,3 +25,5 @@ runs/
 
 # Xiaomi 0x2717 auth key material: local only, never published (see priv/README.md)
 /priv/
+build-union/
+runs-xi-test.log
