@@ -470,7 +470,7 @@ private:
     void queue(const TxMsg& m);
     void fail(SinkResult r, SinkState to);
     void do_hard_reset(SinkResult r, SinkState to, bool forced = false);
-    void proceed_after_epr_caps(std::uint32_t now);
+    void proceed_after_epr_caps(std::uint32_t now, bool answer);   // answer: the source's EPR_Source_Capabilities is being answered
     Plan plan_for(Choice c, bool epr_mode) const;   // plan_request with the 5 V lock applied
     void queue_epr_control(std::uint8_t kind);
     void begin_abort(SinkResult why, std::uint32_t now);

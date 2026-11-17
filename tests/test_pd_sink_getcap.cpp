@@ -137,6 +137,8 @@ void test_epr_mode_never_sends_it() {
     chunk[0] = eh & 0xFF; chunk[1] = eh >> 8;
     r.sink.on_message(Sop::Sop, make_header(kExtEprSourceCaps, 6, 2, true) | (1u << 8), chunk, r.now);
     r.pump();
+    r.ctl(kCtlAccept);   // the list was answered with an EPR_Request at once (test_pd_sink): Ready again on its PS_RDY
+    r.ctl(kCtlPsRdy);
     CHECK_EQ(int(r.sink.status().state), int(SinkState::Ready));
     CHECK_EQ(r.sink.status().epr_mode, true);
     const std::size_t n0 = r.sent.size();
