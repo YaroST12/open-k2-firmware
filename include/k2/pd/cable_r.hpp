@@ -17,6 +17,7 @@
 #pragma once
 #include <climits>
 #include <cstdint>
+#include "k2/core/bss_zero.hpp"
 #include "k2/drivers/power_calc.hpp"
 #include <optional>
 #include <span>
@@ -32,8 +33,10 @@ inline constexpr std::int32_t kContractStepMv = 1500;  // a VBUS jump between sa
 inline constexpr std::int32_t kKelvinMinMa = 450;    // minimum bus current for the 8-wire measurement
 
 struct Estimate {
-    std::uint16_t mohm = 0;
-    std::int32_t idle_mv = 0, idle_ma = 0, load_mv = 0, load_ma = 0;   // currents are magnitudes
+    // Only ever aggregate-initialised in full (Meter::sample) or value-initialised (`Estimate{}`), so the zero defaults
+    // are elided on ARM.
+    std::uint16_t mohm K2_BSS_ZERO;
+    std::int32_t idle_mv K2_BSS_ZERO, idle_ma K2_BSS_ZERO, load_mv K2_BSS_ZERO, load_ma K2_BSS_ZERO;   // currents are magnitudes
 };
 
 enum class Grade : std::uint8_t { Waiting, Excellent, Good, Fair, Poor };
@@ -78,9 +81,10 @@ public:
     }
 
 private:
-    bool has_idle_ = false, has_est_ = false, have_last_ = false;
-    std::int32_t idle_mv_ = 0, idle_ma_ = 0, last_mv_ = 0;
-    Estimate est_{};
+    // The one instance is UiContext::cable in the .bss global Ui (cable_row_text and the remote take it by reference).
+    bool has_idle_ K2_BSS_ZERO, has_est_ K2_BSS_ZERO, have_last_ K2_BSS_ZERO;
+    std::int32_t idle_mv_ K2_BSS_ZERO, idle_ma_ K2_BSS_ZERO, last_mv_ K2_BSS_ZERO;
+    Estimate est_ K2_BSS_ZERO;
 };
 
 constexpr Grade grade_mohm(std::int32_t mohm) {

@@ -6,6 +6,7 @@
 #pragma once
 #include <cstdint>
 #include <span>
+#include "k2/core/bss_zero.hpp"
 #include "k2/ui/home_model.hpp"
 
 namespace k2::home {
@@ -46,9 +47,10 @@ public:
     uint32_t sag_bp() const { return sag_bp_; }             // 0.01 % of the level
     uint32_t sag_level_mv() const { return sag_level_mv_; }  // the level the worst dip was measured against
 private:
-    uint32_t peak_mw_ = 0, peak_ma_ = 0;
-    uint32_t sag_bp_ = 0, sag_level_mv_ = 0;
-    bool has_sag_ = false;
+    // The one instance is UiContext::extremes in the .bss global Ui (reset() value-initialises, which zeroes).
+    uint32_t peak_mw_ K2_BSS_ZERO, peak_ma_ K2_BSS_ZERO;
+    uint32_t sag_bp_ K2_BSS_ZERO, sag_level_mv_ K2_BSS_ZERO;
+    bool has_sag_ K2_BSS_ZERO;
 };
 
 // The level fed to Extremes::sample: sag_level_mv's value once it has held kSettleMs, else 0 (no sag counted). A new
@@ -62,7 +64,7 @@ public:
         return level_mv_ != 0 && now_ms - since_ms_ >= kSettleMs ? level_mv_ : 0;
     }
 private:
-    uint32_t level_mv_ = 0, since_ms_ = 0;
+    uint32_t level_mv_ K2_BSS_ZERO, since_ms_ K2_BSS_ZERO;   // the one instance is Ui::sag_settle_ in the .bss global Ui
 };
 
 // The SAG card's value: "1.0% 20V", "12% 9.2V", "9.5% 11V" (the level drops its decimal when the text would pass
@@ -103,8 +105,10 @@ public:
 private:
     void settle(CardMask ok);
     Card top_ = Card::Peak, bot_ = Card::Drop;
-    bool energy_ = true, live_ = false, primed_ = false, forced_ = false;
-    uint32_t act_ms_ = 0, last_ms_ = 0;
+    // The one instance is UiContext::Remembered::cards in the .bss global Ui. The non-zero defaults above stay; the
+    // zero ones are elided on ARM (reset() value-initialises: zero first, then the non-zero defaults).
+    bool energy_ = true, live_ K2_BSS_ZERO, primed_ K2_BSS_ZERO, forced_ K2_BSS_ZERO;
+    uint32_t act_ms_ K2_BSS_ZERO, last_ms_ K2_BSS_ZERO;
 };
 
 // ---- attention ---------------------------------------------------------------------------------
@@ -128,10 +132,11 @@ public:
 private:
     void prime(uint32_t now_ms, int32_t vbus_mv, int32_t cc1_mv, int32_t cc2_mv, uint32_t peak_mw);
     void trigger(uint32_t now_ms, Card c);
-    int32_t avg_v_ = 0, avg_cc_[2] = {};   // x256
-    bool cc_ok_[2] = {};
-    uint32_t peak_ref_mw_ = 0, start_ms_ = 0, last_ms_ = 0, until_ms_ = 0;
-    bool primed_ = false;
+    // The one instance is UiContext::Remembered::attention in the .bss global Ui; card_ = Count (5) is non-zero, kept.
+    int32_t avg_v_ K2_BSS_ZERO, avg_cc_[2] K2_BSS_ZERO;   // x256
+    bool cc_ok_[2] K2_BSS_ZERO;
+    uint32_t peak_ref_mw_ K2_BSS_ZERO, start_ms_ K2_BSS_ZERO, last_ms_ K2_BSS_ZERO, until_ms_ K2_BSS_ZERO;
+    bool primed_ K2_BSS_ZERO;
     Card card_ = Card::Count;
 };
 
