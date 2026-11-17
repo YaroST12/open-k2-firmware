@@ -870,7 +870,12 @@ private:
     void share_cable(uint32_t now_ms);
     void paint_status(uint32_t now_ms);
     bool paint_body(const MatchResult &r, const pd::SourceCaps &caps, std::span<const uint32_t> sink, bool redraw);
-    bool paint_no_pd_body(const MatchResult &r, bool redraw);
+    [[gnu::noinline]] bool paint_body_locked(const void *tab_data, bool dim);
+    [[gnu::noinline]] bool paint_body_tabs(const void *tab_data, bool dim);
+    [[gnu::noinline]] bool paint_no_pd_body(const MatchResult &r, bool redraw);
+    [[gnu::noinline]] bool paint_no_pd_locked(const char *line, uint32_t rp_ma);
+    [[gnu::noinline]] bool paint_no_pd_tabs(const char *line, uint32_t rp_ma);
+    [[gnu::noinline]] bool paint_empty_tabs(const char *title, const char *hint);
     // The no-PD gate (ROADMAP 2026-11-10, Row C): the Sink tab on any no-PD verdict with a device on the line, the Source tab
     // only when the source never offered PD. The Cable tab and the Details page never.
     bool no_pd_body() const {

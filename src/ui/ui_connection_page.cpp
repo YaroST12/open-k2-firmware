@@ -293,9 +293,8 @@ void ConnectionPage::share_caps(uint32_t now_ms) {
 void ConnectionPage::share_cable(uint32_t now_ms) {
     const pd::Emarker &em = fusb302::emarker();
     if (!em.valid || em.num_vdos < 5 || (em.spec_rev != 1 && em.spec_rev != 2)) { set_op("No cable read", now_ms); return; }
-    static const emk_quirk::Quirks kNoQuirks{};
     const emrec::Record rec = emrec::make({em.raw_vdos.data(), 5}, em.spec_rev, "Live cable");
-    const std::size_t len = qrshare::records::emarker(rec, "Live cable", kNoQuirks, ctx_.ui->share_buffer());
+    const std::size_t len = qrshare::records::emarker(rec, "Live cable", nullptr, ctx_.ui->share_buffer());
     ctx_.ui->open_share(qrshare::Type::Emarker, qrshare::kSchemaEmarker, "Live cable", len, now_ms);
 }
 
@@ -1232,12 +1231,12 @@ struct PlaceList {
     uint8_t &n_io;
     ListDrawState &st;
 };
-template <class Build>
-bool paint_place_list(const Surface &c, const std::array<conn::Item, conn::kMaxItems> &items, int n_items, int act_sel, bool full,
-                      bool dim, PlaceList s, Build &&build) {
+using BuildRowsFn = void (*)(Rows &, const void *);
+[[gnu::noinline]] bool paint_place_list(const Surface &c, const std::array<conn::Item, conn::kMaxItems> &items, int n_items,
+                                        int act_sel, bool full, bool dim, PlaceList s, BuildRowsFn build, const void *ctx) {
     Rows R;
     R.reset(Rows::kCountOnly);
-    build(R);
+    build(R, ctx);
     const int results = R.total;
     add_extras(R, items, n_items, act_sel);
     const int total = R.total;
@@ -1245,36 +1244,92 @@ bool paint_place_list(const Surface &c, const std::array<conn::Item, conn::kMaxI
     s.res_n = static_cast<uint8_t>(results);
     s.tot_n = static_cast<uint8_t>(total);
     R.reset(s.first);
-    build(R);
+    build(R, ctx);
     add_extras(R, items, n_items, act_sel);
     int painted = 0;
     if (!paint_list(c, R, kPlaceListY, dim, false, s.sig, s.n_io, s.st, painted, true)) return false;
     return paint_thumb(c, s.first, total, full, s.thumb_sig, s.st.bg);
 }
+
+[[gnu::noinline]] bool paint_ident_dim(const Surface &c, const char *head, const char *line, uint32_t &sig, PaintBudget *bg) {
+    Ident id;
+    id.head.put(head);
+    id.dim = true;
+    id.line.put(line);
+    return paint_identity(c, id, false, sig, bg);
+}
+
+[[gnu::noinline]] bool paint_place_ident(const Surface &c, conn::Tab tab, const TabData &d, bool dim, uint32_t &sig, PaintBudget *bg) {
+    Ident id;
+    place_ident(id, tab, d, dim);
+    return paint_identity(c, id, false, sig, bg);
+}
+
+struct BodyBuildCtx {
+    conn::Tab tab;
+    const TabData *d;
+};
+void build_body_rows(Rows &R, const void *p) {
+    const auto &ctx = *static_cast<const BodyBuildCtx *>(p);
+    switch (ctx.tab) {
+    case conn::Tab::Source: source_rows(R, *ctx.d); if (!ctx.d->waiting) details_rows(R); break;
+    case conn::Tab::Cable: cable_rows(R, *ctx.d); break;
+    case conn::Tab::Sink: sink_rows(R, *ctx.d); break;
+    }
+}
+
+struct NoPdBuildCtx {
+    conn::Tab tab;
+    fastcharge::Protocol fc;
+    int32_t current_ma;
+    int32_t vbus_mv;
+    uint32_t vooc;
+    uint32_t rp_ma;
+};
+void build_no_pd_rows(Rows &R, const void *p) {
+    const auto &ctx = *static_cast<const NoPdBuildCtx *>(p);
+    {
+        StrBuf<28> &v = R.add("Type-C", kText);
+        typec_row_text(ctx.vbus_mv, ctx.rp_ma, v);   // the debounced VBUS (Row D), like the list body
+        if (v.view().empty()) v.put("Unknown");
+    }
+    if (ctx.tab == conn::Tab::Sink) {
+        put_a(R.add("Draw", kAmp), uint32_t(power::abs_sat(ctx.current_ma)));
+        vooc_row(R, ctx.vooc);
+    } else if (legacy_row_protocol(ctx.fc) && ctx.fc != fastcharge::Protocol::Pending) {
+        StrBuf<6> fcn;
+        fc_pill_text(ctx.fc, fcn);
+        if (!fcn.view().empty()) R.add("Legacy", kEnergy).put(fcn.view());
+    }
+}
+
+void noop_build_rows(Rows &, const void *) {}
 }  // namespace
 
 // An empty tab: the band and its one line (the port-aware text of conn::empty_state); a place page: the dim headline and
 // that line in its identity block, then its action rows.
 bool ConnectionPage::paint_empty(bool) {
-    const Surface &c = ctx_.content;
-    PaintBudget *const bg = ctx_.budget;
     const conn::Empty e = conn::empty_state(tab_, facts_);
     if (locked_) {
+        const Surface &c = ctx_.content;
+        PaintBudget *const bg = ctx_.budget;
         const bool full = body_ != Body::Empty || body_tab_ != tab_;
         if (full) {
             body_ = Body::Empty; body_tab_ = tab_;
             row_sig_.fill(0); body_n_ = 0; tail_cleared_ = ctx_.blank; close_done_ = false;
             body_clear_y_ = kFooterY; id_sig_ = thumb_sig_ = 0;
         }
-        Ident id;
-        id.head.put(e.title);
-        id.dim = true;
-        id.line.put(e.hint);
-        if (!paint_identity(c, id, false, id_sig_, bg)) return false;
+        if (!paint_ident_dim(c, e.title, e.hint, id_sig_, bg)) return false;
         ListDrawState st{tail_cleared_, close_done_, body_clear_y_, bg};
         return paint_place_list(c, items_, n_items_, act_sel_, false, false,
-                                {first_, res_n_, tot_n_, thumb_sig_, row_sig_, body_n_, st}, [](Rows &) {});
+                                {first_, res_n_, tot_n_, thumb_sig_, row_sig_, body_n_, st}, noop_build_rows, nullptr);
     }
+    return paint_empty_tabs(e.title, e.hint);
+}
+
+bool ConnectionPage::paint_empty_tabs(const char *title, const char *hint) {
+    const Surface &c = ctx_.content;
+    PaintBudget *const bg = ctx_.budget;
     const bool full = body_ != Body::Empty || body_tab_ != tab_;
     if (full) {
         body_ = Body::Empty; body_tab_ = tab_;
@@ -1286,13 +1341,13 @@ bool ConnectionPage::paint_empty(bool) {
     const int16_t y0 = row_y0(), list_y = static_cast<int16_t>(y0 + kListDy);
     if (!band_done_) {
         if (bg && !bg->admit(static_cast<int>(c.w) * kBandH, true)) return false;
-        paint_band(c, y0, e.title);
+        paint_band(c, y0, title);
         band_done_ = true;
     }
-    const uint32_t hsig = pg::mix_cstr(mix_u32(mix_init(), static_cast<uint32_t>(tab_)), e.hint) | 1u;
+    const uint32_t hsig = pg::mix_cstr(mix_u32(mix_init(), static_cast<uint32_t>(tab_)), hint) | 1u;
     if (hsig != nopd_msg_sig_) {
         if (bg && !bg->admit(static_cast<int>(c.w) * (list_y - y0 - kBandH), true)) return false;
-        const kit::TextRun line{kKeyX, static_cast<int16_t>(y0 + kLineDy), &kSmall, e.hint, kDim};
+        const kit::TextRun line{kKeyX, static_cast<int16_t>(y0 + kLineDy), &kSmall, hint, kDim};
         kit::paint_texts(c, {0, static_cast<int16_t>(y0 + kBandH), c.w, static_cast<int16_t>(list_y - y0 - kBandH)}, &line, 1, kBg);
         nopd_msg_sig_ = hsig;
     }
@@ -1304,8 +1359,12 @@ bool ConnectionPage::paint_empty(bool) {
 
 bool ConnectionPage::paint_body(const MatchResult &r, const pd::SourceCaps &caps, std::span<const uint32_t> sink,
                                 bool redraw) {
-    const Surface &c = ctx_.content;
-    PaintBudget *const bg = ctx_.budget;
+    // The no-PD gate (ROADMAP 2026-11-10, Row C): checked before allocating TabData / Rows on this frame.
+    if (no_pd_body()) {
+        const bool done = paint_no_pd_body(r, redraw);
+        if (done) g_conn_body_passes++;
+        return done;
+    }
     const pd::Link &link = ctx_.ui->link();
     TabData d;
     d.r = &r; d.caps = &caps; d.sink = sink;
@@ -1317,38 +1376,32 @@ bool ConnectionPage::paint_body(const MatchResult &r, const pd::SourceCaps &caps
     d.in_use = link.inline_mode();
     d.vbus_mv = vbus_;
     d.vooc = vooc_;
-    // The no-PD gate (ROADMAP 2026-11-10, Row C): with the settled verdict "no PD" the tab replaces its
-    // placeholder rows with the verdict band and the rows that are actually measured. The Sink tab gates
-    // on any no-PD verdict (a device on the line that never talks PD); the Source tab only when the source
-    // never offered PD at all (an offered-but-unanswered source still shows its caps). The Cable tab and
-    // the Details page are untouched, and the empty states (NO DEVICE) are decided before this.
-    if (no_pd_body()) {
-        const bool done = paint_no_pd_body(r, redraw);
-        if (done) g_conn_body_passes++;
-        return done;
-    }
     const bool dim = tab_ == conn::Tab::Cable && link.cable_stale();
-    if (locked_) {   // a place page: the identity block, then the full fact table (the Source tab's survey rows included)
-        const bool full = body_ != Body::Rows || body_tab_ != tab_;
-        if (full) {
-            body_ = Body::Rows; body_tab_ = tab_;
-            row_sig_.fill(0); body_n_ = 0; tail_cleared_ = ctx_.blank; close_done_ = false;
-            body_clear_y_ = kFooterY; id_sig_ = thumb_sig_ = 0;
-        }
-        Ident id;
-        place_ident(id, tab_, d, dim);
-        if (!paint_identity(c, id, false, id_sig_, bg)) return false;
-        ListDrawState st{tail_cleared_, close_done_, body_clear_y_, bg};
-        return paint_place_list(c, items_, n_items_, act_sel_, false, dim,
-                                {first_, res_n_, tot_n_, thumb_sig_, row_sig_, body_n_, st},
-                                [&](Rows &R) {
-                                    switch (tab_) {
-                                    case conn::Tab::Source: source_rows(R, d); if (!d.waiting) details_rows(R); break;
-                                    case conn::Tab::Cable: cable_rows(R, d); break;
-                                    case conn::Tab::Sink: sink_rows(R, d); break;
-                                    }
-                                });
+    if (locked_) return paint_body_locked(&d, dim);
+    return paint_body_tabs(&d, dim);
+}
+
+bool ConnectionPage::paint_body_locked(const void *tab_data, bool dim) {
+    const auto &d = *static_cast<const TabData *>(tab_data);
+    const Surface &c = ctx_.content;
+    PaintBudget *const bg = ctx_.budget;
+    const bool full = body_ != Body::Rows || body_tab_ != tab_;
+    if (full) {
+        body_ = Body::Rows; body_tab_ = tab_;
+        row_sig_.fill(0); body_n_ = 0; tail_cleared_ = ctx_.blank; close_done_ = false;
+        body_clear_y_ = kFooterY; id_sig_ = thumb_sig_ = 0;
     }
+    if (!paint_place_ident(c, tab_, d, dim, id_sig_, bg)) return false;
+    ListDrawState st{tail_cleared_, close_done_, body_clear_y_, bg};
+    const BodyBuildCtx bctx{tab_, &d};
+    return paint_place_list(c, items_, n_items_, act_sel_, false, dim,
+                            {first_, res_n_, tot_n_, thumb_sig_, row_sig_, body_n_, st}, build_body_rows, &bctx);
+}
+
+bool ConnectionPage::paint_body_tabs(const void *tab_data, bool dim) {
+    const auto &d = *static_cast<const TabData *>(tab_data);
+    const Surface &c = ctx_.content;
+    PaintBudget *const bg = ctx_.budget;
     Rows R;
     switch (tab_) {
     case conn::Tab::Source: if (more_) details_rows(R); else source_rows(R, d); break;
@@ -1379,47 +1432,37 @@ bool ConnectionPage::paint_body(const MatchResult &r, const pd::SourceCaps &caps
 // The no-PD body (ROADMAP 2026-11-10, Row C): the verdict band (NO PD) and the one line of its case, then only the rows
 // that are actually measured - the Type-C advertisement (Rp level + VBUS), the draw on the Sink tab, a legacy fast-charge
 // answer on the Source tab - and a single tool's action rows. paint_body only calls this when the paint signature moved.
-[[gnu::noinline]] bool ConnectionPage::paint_no_pd_body(const MatchResult &r, bool) {
-    const Surface &c = ctx_.content;
-    PaintBudget *const bg = ctx_.budget;
-    const bool sink_tab = tab_ == conn::Tab::Sink;
+bool ConnectionPage::paint_no_pd_body(const MatchResult &r, bool) {
     const char *line = conn::no_pd_line(tab_, none_why_);
     // The measured rows (at most three). The Type-C row uses the match's Rp reading (the active CC line driven into the
     // Rp window counts even before typec_ma()'s 3 s mark).
     const uint32_t rp_ma = r.typec_ma ? r.typec_ma : fusb302::typec_ma();
-    auto build = [&](Rows &R) {
-        {
-            StrBuf<28> &v = R.add("Type-C", kText);
-            typec_row_text(vbus_, rp_ma, v);   // the debounced VBUS (Row D), like the list body
-            if (v.view().empty()) v.put("Unknown");
-        }
-        if (sink_tab) {
-            put_a(R.add("Draw", kAmp), uint32_t(power::abs_sat(ctx_.pm_avg.current_ma)));
-            vooc_row(R, vooc_);
-        } else if (legacy_row_protocol(ctx_.fc) && ctx_.fc != fastcharge::Protocol::Pending) {
-            StrBuf<6> fcn;
-            fc_pill_text(ctx_.fc, fcn);
-            if (!fcn.view().empty()) R.add("Legacy", kEnergy).put(fcn.view());
-        }
-    };
-    if (locked_) {   // a place page: "No PD" as the dim headline, its case on the line, then the measured rows and the actions
-        const bool full = body_ != Body::NoPd || body_tab_ != tab_;
-        if (full) {
-            body_ = Body::NoPd; body_tab_ = tab_;
-            row_sig_.fill(0); body_n_ = 0; tail_cleared_ = ctx_.blank; close_done_ = false;
-            body_clear_y_ = kFooterY; id_sig_ = thumb_sig_ = 0;
-        }
-        Ident id;
-        id.head.put(text::conn::kNoPd);
-        id.dim = true;
-        id.line.put(line);
-        if (!paint_identity(c, id, false, id_sig_, bg)) return false;
-        ListDrawState st{tail_cleared_, close_done_, body_clear_y_, bg};
-        return paint_place_list(c, items_, n_items_, act_sel_, false, false,
-                                {first_, res_n_, tot_n_, thumb_sig_, row_sig_, body_n_, st}, build);
+    if (locked_) return paint_no_pd_locked(line, rp_ma);
+    return paint_no_pd_tabs(line, rp_ma);
+}
+
+bool ConnectionPage::paint_no_pd_locked(const char *line, uint32_t rp_ma) {
+    const Surface &c = ctx_.content;
+    PaintBudget *const bg = ctx_.budget;
+    const bool full = body_ != Body::NoPd || body_tab_ != tab_;
+    if (full) {
+        body_ = Body::NoPd; body_tab_ = tab_;
+        row_sig_.fill(0); body_n_ = 0; tail_cleared_ = ctx_.blank; close_done_ = false;
+        body_clear_y_ = kFooterY; id_sig_ = thumb_sig_ = 0;
     }
+    if (!paint_ident_dim(c, text::conn::kNoPd, line, id_sig_, bg)) return false;
+    ListDrawState st{tail_cleared_, close_done_, body_clear_y_, bg};
+    const NoPdBuildCtx bctx{tab_, static_cast<fastcharge::Protocol>(ctx_.fc), ctx_.pm_avg.current_ma, vbus_, vooc_, rp_ma};
+    return paint_place_list(c, items_, n_items_, act_sel_, false, false,
+                            {first_, res_n_, tot_n_, thumb_sig_, row_sig_, body_n_, st}, build_no_pd_rows, &bctx);
+}
+
+bool ConnectionPage::paint_no_pd_tabs(const char *line, uint32_t rp_ma) {
+    const Surface &c = ctx_.content;
+    PaintBudget *const bg = ctx_.budget;
     Rows R;
-    build(R);
+    const NoPdBuildCtx bctx{tab_, static_cast<fastcharge::Protocol>(ctx_.fc), ctx_.pm_avg.current_ma, vbus_, vooc_, rp_ma};
+    build_no_pd_rows(R, &bctx);
     const int16_t y0 = row_y0(), list_y = static_cast<int16_t>(y0 + kListDy);
     const bool full = body_ != Body::NoPd || body_tab_ != tab_;
     if (full) {
