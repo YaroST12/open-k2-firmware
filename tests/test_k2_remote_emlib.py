@@ -104,7 +104,10 @@ class EmLib(unittest.TestCase):
                               ("cuktech-240w", 2), ("generic-epr", 1), ("epr-50v", 1), ("generic", 0), ("builtin:0", 0)):
             r, l = run(["emarker", "spoof", target], [st])
             self.assertEqual(l.sent[0][1], bytes([5, 3, ident]), target)
-        for bad in ("builtin:5", "builtin:", "builtin:nope"):
+        for target, ident in (("builtin:5", 5), ("mi-2717-epr", 6), ("kowsi-6a", 7)):   # the sniffed Xiaomi cables (remote-only)
+            r, l = run(["emarker", "spoof", target], [st])
+            self.assertEqual(l.sent[0][1], bytes([5, 3, ident]), target)
+        for bad in ("builtin:8", "builtin:", "builtin:nope"):
             with self.assertRaises(kr.FcRefused):
                 run(["emarker", "spoof", bad], [])
 
