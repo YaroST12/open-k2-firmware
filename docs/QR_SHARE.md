@@ -127,8 +127,9 @@ made. The layout is the comment at the top of `include/k2/chargertest/report_car
 - **Size.** Each full range is 534 bits (67 B); the worst blob (every check failing, four full sweeps) is 3273 bits = 412 B with its
   length. The worst packed Deep card is 616 B; `kMaxCardDeepV2` = 653 B (static assert) is the largest the code may carry: 921
   characters, 8 under 929. So 32 buckets per range is the count that fits one code with every check failing, and every Deep
-  card gets the same count. Three int8 per bucket (mean, min, max) would have broken the worst card at 33 buckets or more; hence an
-  int8 mean plus two u4 spreads at an adaptive step. The spreads are coarser than the mean once the scale is above 1 mV.
+  card gets the same count. Three int8 per bucket (mean, min, max) do not fit at 32: four such ranges are about 4297 bits
+  (540 B) with the spec and ceiling blocks, over the cap, and about 21 buckets is the most that would fit; hence an int8 mean plus
+  two u4 spreads at an adaptive step, which keeps 32. The spreads are coarser than the mean once the scale is above 1 mV.
 - **On the K2.** The card store keeps the blob after the 256 B card record in the same ring record (a Deep record is about 672 to
   692 B: two per flash sector against seven for a plain card). The 12 newest blocks are kept; an older card is carried forward without
   its block (`maintain()`), and a save retries without the block when the ring is full, so a block never costs a card. The remote

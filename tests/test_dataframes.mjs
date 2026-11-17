@@ -95,6 +95,7 @@ test("every single-part golden frame gives the firmware's record and the page's 
     const r = K2Records.read(fx.parts[0]);
     assert.equal(r.kind, l.kind, name);
     assert.ok(r.view.header.title, name);
+    if (name === "card_deep_v2") assert.ok(r.view.sections.some((s) => s.title === "Deep run details"), name);
   }
 });
 
