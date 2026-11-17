@@ -566,6 +566,8 @@ private:
     bool xiaomi_authed_ = false;      // auth completed, 20V+ PPS should be available
     bool source_has_xiaomi_svid_ = false;  // the SOURCE is Xiaomi-family: its SVIDs ACK listed 0x2717 or it sent a 0x2717 VDM (never its Discover SVIDs REQUEST)
     std::uint8_t xiaomi_cmd_ = 0;     // current Xiaomi command being processed
+    bool xm_010a_pending_ = false;    // our 0x2717010A is out, the 0x2717020A / Not_Supported answer is still due
+    bool xm_010a_want_ = false;       // after a 0x27170208-payload-1 finish: send 0x2717010A once the step-8 Get_Source_Cap is on the wire
     bool source_asked_identity_ = false;   // the source sent a Discover Identity REQ: our ACK's product VDO feeds the auth digest's adapter_id
     std::uint32_t xiaomi_adapter_id_ = 0;  // adapter_id picked from the charger's 0x27170205 answer (primary until one matches)
     bool discover_svids_sent_ = false;    // we have sent Discover SVIDs REQ in this session

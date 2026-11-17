@@ -331,6 +331,8 @@ K2_HOT void Sink::do_hard_reset(SinkResult r, SinkState to, bool forced) {
     st_.xiaomi_svid = false;
     st_.oppo_svid = false;
     xiaomi_cmd_ = 0;
+    xm_010a_pending_ = false;
+    xm_010a_want_ = false;
     source_asked_identity_ = false;
     xiaomi_adapter_id_ = 0;
     discover_svids_sent_ = false;
@@ -367,6 +369,8 @@ K2_HOT void Sink::on_hard_reset_rx(std::uint32_t) {
     st_.xiaomi_svid = false;
     st_.oppo_svid = false;
     xiaomi_cmd_ = 0;
+    xm_010a_pending_ = false;
+    xm_010a_want_ = false;
     source_asked_identity_ = false;
     xiaomi_adapter_id_ = 0;
     discover_svids_sent_ = false;
@@ -404,6 +408,8 @@ void Sink::detach() {
     st_.xiaomi_svid = false;
     st_.oppo_svid = false;
     xiaomi_cmd_ = 0;
+    xm_010a_pending_ = false;
+    xm_010a_want_ = false;
     source_asked_identity_ = false;
     xiaomi_adapter_id_ = 0;
     discover_svids_sent_ = false;
@@ -1065,6 +1071,13 @@ K2_HOT void Sink::on_message(Sop sop, std::uint16_t header, std::span<const std:
             }
             break;
         case kCtlNotSupported:
+            if (xm_010a_pending_) {
+                // the source does not implement 0x2717010A (Baseus family in the unverified state):
+                // the 0x27170208-payload-1 finish already marked us authed, nothing more to wait for
+                xm_010a_pending_ = false;
+                K2LOG("[MI] 0x2717010A Not_Supported (0208 was verified)\n");
+                break;
+            }
             if (pps_.ask == PpsAsk::Pending) {
                 pps_.rx_us = edge_us;
                 pps_.ask = PpsAsk::NotSupported;
@@ -1160,6 +1173,12 @@ K2_HOT void Sink::on_tx_result(bool ok, std::uint32_t now) {
         tx_retries_ = 0;
         if (!ext && (type == kDataRequest || type == kDataEprRequest)) { st_.req_us = start_us; st_.accept_us = 0; st_.ps_rdy_us = 0; }
         if (!ext && type == kCtlGetPpsStatus && last_tx_.len == 0) pps_.ask_us = start_us;
+        if (!ext && type == kCtlGetSourceCap && xm_010a_want_) {   // the step-8 Get_Source_Cap is on the wire: probe 0x2717010A now
+            xm_010a_want_ = false;
+            xm_010a_pending_ = true;
+            const std::array<std::uint32_t, 2> vdos = {0x2717010Au, 0x00000001u};
+            send_xiaomi_vdm_reply(8, std::span<const std::uint32_t>(vdos), now);
+        }
         return;
     }
     const bool critical = !ext && (type == kDataRequest || type == kDataEprRequest || type == kDataEprMode);
@@ -1557,8 +1576,11 @@ K2_HOT void Sink::on_vdm(std::uint16_t header, std::span<const std::uint8_t> pay
         }
         case 8: {
             // RX 0x27170208, the chain's last step. Two shapes observed on the wire:
-            //  - payload 1 (Baseus FH22 family, cmds 1..8 only): the chain is done here - mark authed
-            //    and fetch the re-announced caps. Sending 0x2717010A to these only earns Not_Supported.
+            //  - payload 1 (Baseus FH22 family): the chain is verified here - mark authed and fetch
+            //    the re-announced caps. We ALSO send 0x2717010A: the CUKTECH re-announces its 6 A
+            //    caps only after the 010A/020A exchange, and whether a verified Baseus accepts
+            //    010A too is exactly what the FH22 2C1A hunt is probing (an answer of Not_Supported
+            //    just clears the pending flag below; the authed finish stands either way).
             //  - payload 0 (CUKTECH 120 W, the hardware-verified 6 A unlock): the charger wants our
             //    0x2717010A and answers 0x2717020A, which then finishes the auth (case 0x0A below).
             std::uint32_t w8 = 0;
@@ -1574,20 +1596,27 @@ K2_HOT void Sink::on_vdm(std::uint16_t header, std::span<const std::uint8_t> pay
                 m.header = make_header(kCtlGetSourceCap, 0, rev_);
                 queue(m);
                 get_cap_sent_ = true;
+                xm_010a_want_ = true;   // the 010A probe goes out right after this Get_Source_Cap (single-slot TX queue)
             } else {
                 const std::array<std::uint32_t, 2> vdos = {0x2717010Au, 0x00000001u};
                 send_xiaomi_vdm_reply(cmd, std::span<const std::uint32_t>(vdos), now);
+                xm_010a_pending_ = true;
             }
             break;
         }
         case 0x0A: {
             // RX 0x2717020A (the CUKTECH-style finish after our 0x2717010A): mark authed and fetch
-            // the re-announced caps. Idempotent with a 0x27170208-payload-1 finish.
+            // the re-announced caps. When the chain already finished on a 0x27170208-payload-1
+            // (Baseus family), this answer is the 010A finish: fetch the caps again, the 6 A
+            // re-announce comes after this one, not after the step-8 Get_Source_Cap.
+            xm_010a_pending_ = false;
             if (!xiaomi_authed_) {
                 xiaomi_authed_ = true;
                 st_.xiaomi_authed = true;
-                xiaomi_cmd_ = cmd;
                 xm_.authed = true; xm_.authed_at = now; xm_.reannounced = false; xm_.reannounce_at = 0;
+            }
+            xiaomi_cmd_ = cmd;
+            {
                 TxMsg m;
                 m.header = make_header(kCtlGetSourceCap, 0, rev_);
                 queue(m);

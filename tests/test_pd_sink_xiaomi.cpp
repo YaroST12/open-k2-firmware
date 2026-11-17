@@ -277,12 +277,14 @@ static void test_xiaomi_cmd_07() {
 }
 
 // Test Xiaomi auth command 0x27170208, two wire shapes:
-//  - payload 1 (Baseus FH22 family, cmds 1..8 only): the chain is done at step 8 - authed goes up,
-//    Get_Source_Cap is queued, no 0x2717010A is sent (those sources answer it Not_Supported).
+//  - payload 1 (Baseus FH22 family): the chain is verified at step 8 - authed goes up and
+//    Get_Source_Cap is queued. We ALSO send 0x2717010A (the CUKTECH re-announces 6 A only after
+//    the 010A/020A exchange); a 0x2717020A answer then triggers a SECOND Get_Source_Cap, a
+//    Not_Supported just clears the pending flag.
 //  - payload 0 (CUKTECH 120 W, the hardware-verified 6 A unlock): we answer 0x2717010A and the
 //    auth finishes on the 0x2717020A reply.
 static void test_xiaomi_cmd_08() {
-    {   // payload 1: finished at step 8
+    {   // payload 1: verified at step 8, 010A still probed
         Rig r;
         constexpr std::array vdos1 = {vdm_header(0xFF00, true, 1, 2), 0x27170000u, 0x00000000u};
         send_vdm(r.sink, vdos1, r.now);
@@ -292,13 +294,42 @@ static void test_xiaomi_cmd_08() {
         send_vdm(r.sink, vdos8, r.now);
         r.pump();
         CHECK_EQ(r.sink.status().xiaomi_authed, true);
-        bool get_cap = false, vdm = false;
+        bool get_cap = false, vdm_010a = false;
         for (const auto& m : r.sent) {
             if ((m.header & 0x1F) == kCtlGetSourceCap) get_cap = true;
-            if ((m.header & 0x1F) == kMsgVendorDefined) vdm = true;
+            if ((m.header & 0x1F) == kMsgVendorDefined && r.last_vdm_header() == 0x2717010Au) vdm_010a = true;
         }
         CHECK_EQ(get_cap, true);
-        CHECK_EQ(vdm, false);
+        CHECK_EQ(vdm_010a, true);
+        CHECK_EQ(r.last_vdm_header(), 0x2717010Au);
+        CHECK_EQ(r.last_vdo(1), 0x00000001u);
+        r.sent.clear();
+        const std::array vdosA = {vdm_header(0x2717, false, 0, 0x0A), 0x00000000u};
+        send_vdm(r.sink, vdosA, r.now);
+        r.pump();
+        CHECK_EQ(r.sink.status().xiaomi_authed, true);   // stays authed
+        bool get_cap2 = false;
+        for (const auto& m : r.sent)
+            if ((m.header & 0x1F) == kCtlGetSourceCap) get_cap2 = true;
+        CHECK_EQ(get_cap2, true);   // the 020A finish fetches the re-announced caps again
+    }
+    {   // payload 1, the source answers Not_Supported to our 0x2717010A: authed finish stands
+        Rig r;
+        constexpr std::array vdos1 = {vdm_header(0xFF00, true, 1, 2), 0x27170000u, 0x00000000u};
+        send_vdm(r.sink, vdos1, r.now);
+        r.pump();
+        r.sent.clear();
+        const std::array vdos8 = {vdm_header(0x2717, false, 0, 8), 0x00000001u};
+        send_vdm(r.sink, vdos8, r.now);
+        r.pump();
+        CHECK_EQ(r.sink.status().xiaomi_authed, true);
+        r.sent.clear();
+        r.ctl(kCtlNotSupported);
+        CHECK_EQ(r.sink.status().xiaomi_authed, true);
+        bool get_cap = false;
+        for (const auto& m : r.sent)
+            if ((m.header & 0x1F) == kCtlGetSourceCap) get_cap = true;
+        CHECK_EQ(get_cap, false);   // no extra fetch after Not_Supported
     }
     {   // payload 0: answer 0x2717010A, authed on 0x2717020A
         Rig r;
@@ -312,12 +343,16 @@ static void test_xiaomi_cmd_08() {
         CHECK_EQ(r.sink.status().xiaomi_authed, false);
         CHECK_EQ(r.last_vdm_header(), 0x2717010Au);
         CHECK_EQ(r.last_vdo(1), 0x00000001u);
+        bool get_cap = false;
+        for (const auto& m : r.sent)
+            if ((m.header & 0x1F) == kCtlGetSourceCap) get_cap = true;
+        CHECK_EQ(get_cap, false);   // no Get_Source_Cap before the 020A answer
         r.sent.clear();
         const std::array vdosA = {vdm_header(0x2717, false, 0, 0x0A), 0x00000000u};
         send_vdm(r.sink, vdosA, r.now);
         r.pump();
         CHECK_EQ(r.sink.status().xiaomi_authed, true);
-        bool get_cap = false;
+        get_cap = false;
         for (const auto& m : r.sent)
             if ((m.header & 0x1F) == kCtlGetSourceCap) get_cap = true;
         CHECK_EQ(get_cap, true);
