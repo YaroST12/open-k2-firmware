@@ -12,6 +12,7 @@
 #include "k2/core/bbpersist.hpp"
 #include "k2/core/bootinfo_hw.hpp"
 #include "k2/core/boottrace_store.hpp"
+#include "k2/core/build_config.h"
 #include "k2/core/fault.hpp"
 #include "k2/core/gap_meter.hpp"
 #include "k2/core/handback.hpp"
@@ -48,32 +49,33 @@
 #include "k2/pd/pdtrace.hpp"
 #include "k2/pd/power_source.hpp"
 #include "k2/pd/transcap.hpp"
-#include "k2/core/build_config.h"
 #include "k2/ui/bootscreen.hpp"
-#include "k2/ui/bootscreen_hw.hpp"
 #if K2_SCREENSHOT
 #include "k2/ui/capture.hpp"
 #endif
 #include "k2/ui/ui.hpp"
 #if K2_NET
 #include "k2/net/http_server.hpp"
-#include "k2/net/net.hpp"
 #endif
 #if K2_HOST_REPORT
 #include "k2/loopprobe/host_report_hw.hpp"
 #endif
 
 extern "C" std::uint32_t k2_stack_free_bytes();
-extern "C" std::uint32_t k2_msp_free_bytes();
 
 namespace k2::mainloop {
+namespace detail {
+Context* g_ctx = nullptr;
+void end_boot_screen(uint32_t now);
+void boot_screen_step(uint32_t now);
+void heartbeat(uint32_t now, uint32_t press_count, uint32_t heartbeats);
+}  // namespace detail
+
 namespace {
 
 constexpr uint32_t kLoopMs = 20;          // service period for the FUSB302 / power monitor / UI tick
 constexpr uint32_t kHeartbeatMs = 2000;
-constexpr uint32_t kIdleLogEvery = 5;       // every 10 s
 
-Context* g_ctx = nullptr;
 ButtonDetector g_det[4];                  // indexed by Button: Back, Minus, Ok, Plus
 ButtonDetector g_vdet[4];                 // the remote's keys (logical, separate from the physical pins)
 struct QueuedButton {
@@ -123,7 +125,7 @@ K2_HOT bool pop_btn(QueuedButton &out) {
 // Sample physical and remote buttons at 1 ms resolution so presses shorter than a UI paint or driver wait
 // are debounced and queued without invoking Ui inside the idle/wait hook (ARCH_REWORK E3).
 K2_HOT bool sample_buttons(uint32_t now) {
-    Context *const c = g_ctx;
+    Context *const c = detail::g_ctx;
     if (!c || now == g_last_btn_ms) return false;
     g_last_btn_ms = now;
     for (int i = 0; i < 4; i++) {
@@ -151,25 +153,29 @@ K2_HOT void wait_hook() {
     sample_buttons(k2::systick::millis());
 }
 
-// The boot-info QR screen (k2/ui/bootscreen.hpp): one frame every 500 ms while the key that chose the boot mode is held, the last
-// frame for 30 s after it is released, then the normal UI is drawn again. While it is up the UI neither ticks nor takes buttons
-// (a BACK short press closes it early), so nothing paints over the code.
-void end_boot_screen(uint32_t now) {
-    g_ctx->bootscreen.dismiss();
-    g_ctx->ui.repaint(now);
-}
-
-[[gnu::noinline]] void boot_screen_step(uint32_t now) {
-    switch (g_ctx->bootscreen.tick(now, k2::bootinfo::boot_key_held())) {
-    case k2::bootscreen::Controller::Action::Redraw: k2::bootscreen::draw_live(g_ctx->bootscreen.frame()); break;
-    case k2::bootscreen::Controller::Action::Exit:   g_ctx->ui.repaint(now); break;
-    case k2::bootscreen::Controller::Action::None:   break;
-    }
-}
-
 // The stage meter (k2/core/stage_meter.hpp): the start of each poll below, so a stall is named and timed.
 using Stage = k2::stage::Id;
 inline void mark(Stage s) { k2::stage::meter.mark(s, k2::dpdm::cycles(), k2::systick::millis()); }
+
+// Stack watermark: one line each time the free application stack reaches a new low below 1 KB (the gate's margin),
+// with the page the UI was on. The painted words stay dirty, so a deep excursion is caught on the next call.
+constexpr uint32_t kStackLowBytes = 1024;
+uint32_t g_stack_lowest = kStackLowBytes;
+
+[[gnu::noinline]] K2_HOT void watch_stack(uint32_t &lowest) {
+#if K2_STACKPROBE
+    // The PSP probe's newest low: the code SysTick interrupted at the deepest sample (addr2line -f -C on pc and lr).
+    k2::stackprobe::Low probe;
+    uint32_t probe_free = 0;
+    if (k2::stackprobe::take(probe, probe_free))
+        K2LOG("[STK] low=%u pc=0x%08X lr=0x%08X\n", static_cast<unsigned>(probe_free), static_cast<unsigned>(probe.pc),
+              static_cast<unsigned>(probe.lr));
+#endif
+    const uint32_t free_bytes = k2_stack_free_bytes();
+    if (free_bytes >= lowest) return;
+    lowest = free_bytes;
+    K2LOG("[STACK] low: free=%u page=%d\n", static_cast<unsigned>(free_bytes), static_cast<int>(detail::g_ctx->ui.page_index()));
+}
 
 // A ring-log erase waits for this long without PD traffic or a VBUS change.
 constexpr uint32_t kEraseQuietMs = 1000;
@@ -177,7 +183,7 @@ constexpr uint32_t kEraseQuietMs = 1000;
 // The periodic bodies of the main loop are their own functions: their locals (power readings, log arguments)
 // are popped before the loop goes on, instead of widening main's frame, which sits under every call.
 [[gnu::noinline]] K2_HOT void slow_tasks(uint32_t now) {
-    Context& c = *g_ctx;
+    Context& c = *detail::g_ctx;
     mark(Stage::Fusb302);
     k2::fusb302::poll();
     mark(Stage::Power);
@@ -237,59 +243,10 @@ constexpr uint32_t kEraseQuietMs = 1000;
         k2::memstat::poll(now, may_erase);       // memory readout cache: stacks at most 1 Hz, the littlefs walk only when quiet
     }
     mark(Stage::BootScreen);
-    if (c.bootscreen.active()) boot_screen_step(now);   // waits for the key's 3 s, then owns the panel
+    if (c.bootscreen.active()) detail::boot_screen_step(now);   // waits for the key's 3 s, then owns the panel
     // The QR screen owns the panel: the UI does not draw meanwhile. The UI's tick ends the OK + Back reboot chord.
     mark(Stage::UiTick);
     if (!c.bootscreen.showing() && c.ui.tick(now) == k2::UiAction::Reboot) c.reboot();
-}
-
-// Stack watermark: one line each time the free application stack reaches a new low below 1 KB (the gate's margin),
-// with the page the UI was on. The painted words stay dirty, so a deep excursion is caught on the next call.
-constexpr uint32_t kStackLowBytes = 1024;
-uint32_t g_stack_lowest = kStackLowBytes;
-
-[[gnu::noinline]] K2_HOT void watch_stack(uint32_t &lowest) {
-#if K2_STACKPROBE
-    // The PSP probe's newest low: the code SysTick interrupted at the deepest sample (addr2line -f -C on pc and lr).
-    k2::stackprobe::Low probe;
-    uint32_t probe_free = 0;
-    if (k2::stackprobe::take(probe, probe_free))
-        K2LOG("[STK] low=%u pc=0x%08X lr=0x%08X\n", static_cast<unsigned>(probe_free), static_cast<unsigned>(probe.pc),
-              static_cast<unsigned>(probe.lr));
-#endif
-    const uint32_t free_bytes = k2_stack_free_bytes();
-    if (free_bytes >= lowest) return;
-    lowest = free_bytes;
-    K2LOG("[STACK] low: free=%u page=%d\n", static_cast<unsigned>(free_bytes), static_cast<int>(g_ctx->ui.page_index()));
-}
-
-[[gnu::noinline]] void heartbeat(uint32_t now, uint32_t press_count, uint32_t heartbeats) {
-    K2LOG("[SYS] Heartbeat: up=%ds presses=%d page=%d stack_free=%u msp_free=%u\n",
-                static_cast<int>(now / 1000), static_cast<int>(press_count),
-                static_cast<int>(g_ctx->ui.page_index()), static_cast<unsigned>(k2_stack_free_bytes()),
-                static_cast<unsigned>(k2_msp_free_bytes()));
-    k2::usb::log_stats();
-#if K2_NET
-    if (k2::usbcfg::current.net) { k2::net::log_stats(); k2::http_server::log_stats(); }
-#endif
-    // The boot-time "[FC] idle" line is gone by the time a log monitor attaches: repeat it.
-    if (heartbeats % kIdleLogEvery == 0) k2::fastcharge::log_idle();
-    const auto pm = k2::power::read().value_or(k2::power::Metrics{});
-    K2LOG("[PWR] chip=%s vbus=%dmV ibus=%dmA p=%dmW dir=%s\n",
-                k2::power::name(k2::power::chip()),
-                static_cast<int>(pm.vbus_mv), static_cast<int>(k2::power::magnitude(pm.current_ma)),
-                static_cast<int>(k2::power::magnitude(pm.power_mw)),
-                pm.flow == k2::power::Flow::Forward ? "up" : pm.flow == k2::power::Flow::Reverse ? "down" : "idle");
-    if (const auto a = k2::adc::read()) {
-        K2LOG("[ADC] dp=%dmV dm=%dmV cc1=%dmV cc2=%dmV aux=%dmV\n", int(a->dp_mv), int(a->dm_mv),
-                         int(a->cc1_mv), int(a->cc2_mv), int(a->aux_mv));
-        const int mcu = a->mcu.deci_c;
-        K2LOG("[ADC] mcu=%s%d.%dC%s board=n/a vref=%d vdd=%dmV\n",
-                         mcu < 0 ? "-" : "", (mcu < 0 ? -mcu : mcu) / 10, (mcu < 0 ? -mcu : mcu) % 10,
-                         a->mcu.valid ? " uncal" : " INVALID",
-                         int(a->vref_raw), int(a->vdd_mv));
-        K2LOG("[FC] %s\n", k2::fastcharge::name(k2::fastcharge::label()));
-    }
 }
 
 }  // namespace
@@ -321,7 +278,7 @@ void install_hooks() {
 }
 
 void begin(Context& ctx) {
-    g_ctx = &ctx;
+    detail::g_ctx = &ctx;
     ctx.ui.set_paint_clock(k2::systick::micros);   // every paint slice also stops on measured time (PaintBudget::kPassUs)
     for (auto &d : g_det) d = {};
     for (auto &d : g_vdet) d = {};
@@ -333,7 +290,7 @@ void begin(Context& ctx) {
 }
 
 [[gnu::noinline]] K2_HOT void pass() {   // noinline: main() would otherwise swallow it into its cold boot-time body
-    Context& c = *g_ctx;
+    Context& c = *detail::g_ctx;
     const uint32_t pass_t0_us = k2::systick::micros();          // instrumentation (k2/core/loop_stats.hpp): this pass's length
     const uint64_t pass_px0 = k2::paint::meter.px_count();      // and the pixels it sent
     k2::loopstat::stats.loop.note(k2::systick::millis());
@@ -354,7 +311,7 @@ void begin(Context& ctx) {
     case k2::RemoteEvent::Screenshot:
 #if K2_SCREENSHOT
         mark(Stage::Capture);
-        if (c.bootscreen.active()) end_boot_screen(k2::systick::millis());   // a capture repaints the UI's fields over the code
+        if (c.bootscreen.active()) detail::end_boot_screen(k2::systick::millis());   // a capture repaints the UI's fields over the code
         k2::capture_screen(c.ui, c.remote.screenshot_seq(), k2::systick::millis(), c.remote.screenshot_transport());
 #endif
         break;
@@ -389,7 +346,7 @@ void begin(Context& ctx) {
         QueuedButton qb;
         while (pop_btn(qb)) {
             if (c.bootscreen.showing()) {   // the QR screen takes no input but the early close
-                if (qb.button == Button::Back && qb.ev == ButtonEvent::Short) end_boot_screen(qb.now);
+                if (qb.button == Button::Back && qb.ev == ButtonEvent::Short) detail::end_boot_screen(qb.now);
                 continue;
             }
             g_press_count++;
@@ -415,7 +372,7 @@ void begin(Context& ctx) {
     if (now - g_last_heartbeat_ms >= kHeartbeatMs) {
         g_last_heartbeat_ms = now;
         mark(Stage::Heartbeat);
-        heartbeat(now, g_press_count, ++g_heartbeats);
+        detail::heartbeat(now, g_press_count, ++g_heartbeats);
     }
     k2::loopstat::stats.note_pass(c.ui.page_index(), k2::systick::micros() - pass_t0_us,
                                   static_cast<uint32_t>(k2::paint::meter.px_count() - pass_px0));
