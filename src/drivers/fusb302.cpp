@@ -830,6 +830,86 @@ K2_HOT void trace_sink() {
     }
 }
 
+// The PD message logs run inside handle_frame (the sink's Request follows within ~25 ms), so they stay in the zero-wait hot block.
+K2_HOT void log_pdo(int n, const pd::Pdo& p) {
+    const int v = p.max_mv, vmin = p.min_mv, a = p.max_ma, w = int(p.max_mw / 1000);
+    using T = pd::PdoType;
+    switch (p.type) {
+        case T::Fixed:
+            K2LOG("[PD]  PDO %d: FIXED %d.%02dV @ %d.%02dA (%dW)\n", n, v / 1000, (v % 1000) / 10,
+                        a / 1000, (a % 1000) / 10, w);
+            break;
+        case T::Battery:
+            K2LOG("[PD]  PDO %d: BATT %d-%dV @ %dW\n", n, vmin / 1000, v / 1000, w);
+            break;
+        case T::Variable:
+            K2LOG("[PD]  PDO %d: VAR %d-%dV @ %d.%02dA\n", n, vmin / 1000, v / 1000, a / 1000,
+                        (a % 1000) / 10);
+            break;
+        case T::Pps:
+            K2LOG("[PD]  PDO %d: PPS %d.%dV-%d.%dV @ %d.%02dA (%dW)\n", n, vmin / 1000,
+                        (vmin % 1000) / 100, v / 1000, (v % 1000) / 100, a / 1000, (a % 1000) / 10, w);
+            break;
+        case T::Avs:
+            K2LOG("[PD]  PDO %d: AVS %d-%dV @ %d.%02dA (%dW)\n", n, vmin / 1000, v / 1000, a / 1000,
+                        (a % 1000) / 10, w);
+            break;
+        default: break;
+    }
+}
+
+K2_HOT void log_epr_info(pd::EprInfo s) {
+    switch (s) {
+        case pd::EprInfo::Got:
+            K2LOG("[PD] EPR caps info: list received (%d PDOs)\n", g_engine.epr_info.num_pdos);
+            for (unsigned i = 0; i < g_engine.epr_info.num_pdos && i < g_engine.epr_info.pdos.size(); i++)
+                K2LOG("[PD] EPR caps info: PDO%u raw=%08X\n", i + 1, unsigned(g_engine.epr_info.pdos[i].raw));
+            break;
+        case pd::EprInfo::Refused: K2LOG("[PD] EPR caps info: refused (Reject / Not_Supported)\n"); break;
+        case pd::EprInfo::Timeout: K2LOG("[PD] EPR caps info: no answer\n"); break;
+        default: break;
+    }
+}
+
+K2_HOT void log_ext(unsigned type) {
+    const pd::ExtInfo& x = g_engine.ext;
+    switch (type) {
+        case pd::kExtSourceCapsExt:
+            K2LOG("[PD] Source_Cap_Ext: VID=0x%04X PID=0x%04X XID=0x%08X FW=%d HW=%d PDP=%dW EPR=%dW\n",
+                        x.caps_ext.vid, x.caps_ext.pid, unsigned(x.caps_ext.xid), x.caps_ext.fw,
+                        x.caps_ext.hw, x.caps_ext.pdp_w, x.caps_ext.epr_pdp_w);
+            break;
+        case pd::kExtStatus:
+            K2LOG("[PD] Status: temp=%dC input=0x%02X events=0x%02X tstat=%d\n", x.status.internal_temp_c,
+                        x.status.present_input, x.status.event_flags, x.status.temp_status);
+            break;
+        case pd::kExtBatteryCaps:
+            K2LOG("[PD] Battery_Cap: design=%d.%dWh last_full=%d.%dWh\n", x.battery.design_dwh / 10,
+                        x.battery.design_dwh % 10, x.battery.last_full_dwh / 10, x.battery.last_full_dwh % 10);
+            break;
+        case pd::kExtManufacturerInfo:
+            K2LOG("[PD] Manufacturer_Info: VID=0x%04X PID=0x%04X \"%s\"\n", x.mfr.vid, x.mfr.pid,
+                        x.mfr.name);
+            break;
+        case pd::kExtPpsStatus:
+            K2LOG("[PD] PPS_Status: %dmV %dmA ptf=%d omf=%d\n", x.pps.out_mv, x.pps.out_ma, x.pps.ptf,
+                        x.pps.omf);
+            break;
+        default: K2LOG("[PD] Extended message 0x%02X\n", type); break;
+    }
+}
+
+K2_HOT void log_cable(const pd::Emarker& e) {
+    K2LOG("[EMARK] SOP%s PD%s, VDO v%d, latency %s, %s%s, EPR=%d\n", e.sop == 1 ? "'" : "''",
+                e.spec_rev == 1 ? "2.0" : "3.x", e.vdo_version, e.latency_str, e.termination_str,
+                e.type_c_plug ? ", Type-C plug" : "", e.epr_capable);
+    if (e.vdo2_valid)
+        K2LOG("[EMARK] Active VDO2: max %dC, shutdown %dC, U3 power %d, USB4=%d, lanes=%d, gen2=%d, optical=%d\n",
+                    e.max_temp_c, e.shutdown_temp_c, e.u3_power, e.usb4_supported, e.usb_lanes, e.usb_gen2,
+                    e.optical_isolated);
+    if (g_engine.cable_thunderbolt()) K2LOG("[EMARK] Cable advertises Thunderbolt SVID 0x8087\n");
+}
+
 }  // namespace detail
 
 namespace {

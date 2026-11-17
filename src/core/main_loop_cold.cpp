@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
-// Cold main-loop paths (20 ms periodic poll bodies, 2 s heartbeat, and boot-screen stepping) compiled under COLD_SIZE_FLAGS (-Oz).
-// Hot per-pass dispatch and 1 ms hooks stay in main_loop.cpp.
+// Cold main-loop paths (2 s heartbeat and boot-screen stepping) compiled under COLD_SIZE_FLAGS (-Oz).
+// Hot per-pass dispatch, the 20 ms periodic poll bodies (slow_tasks) and the 1 ms hooks stay in main_loop.cpp (K2_HOT).
 #include "k2/core/main_loop.hpp"
 
 #include <cstdint>
@@ -56,22 +56,18 @@ namespace k2::mainloop {
 namespace {
 
 constexpr uint32_t kIdleLogEvery = 5;       // every 10 s
-constexpr uint32_t kEraseQuietMs = 1000;    // A ring-log erase waits for this long without PD traffic or a VBUS change.
-
-using Stage = k2::stage::Id;
-inline void mark(Stage s) { k2::stage::meter.mark(s, k2::dpdm::cycles(), k2::systick::millis()); }
-
-[[gnu::noinline]] void boot_screen_step(uint32_t now) {
-    switch (detail::g_ctx->bootscreen.tick(now, k2::bootinfo::boot_key_held())) {
-    case k2::bootscreen::Controller::Action::Redraw: k2::bootscreen::draw_live(detail::g_ctx->bootscreen.frame()); break;
-    case k2::bootscreen::Controller::Action::Exit:   detail::g_ctx->ui.repaint(now); break;
-    case k2::bootscreen::Controller::Action::None:   break;
-    }
-}
 
 }  // namespace
 
 namespace detail {
+
+[[gnu::noinline]] void boot_screen_step(uint32_t now) {
+    switch (g_ctx->bootscreen.tick(now, k2::bootinfo::boot_key_held())) {
+    case k2::bootscreen::Controller::Action::Redraw: k2::bootscreen::draw_live(g_ctx->bootscreen.frame()); break;
+    case k2::bootscreen::Controller::Action::Exit:   g_ctx->ui.repaint(now); break;
+    case k2::bootscreen::Controller::Action::None:   break;
+    }
+}
 
 // The boot-info QR screen (k2/ui/bootscreen.hpp): one frame every 500 ms while the key that chose the boot mode is held, the last
 // frame for 30 s after it is released, then the normal UI is drawn again. While it is up the UI neither ticks nor takes buttons
@@ -79,75 +75,6 @@ namespace detail {
 void end_boot_screen(uint32_t now) {
     g_ctx->bootscreen.dismiss();
     g_ctx->ui.repaint(now);
-}
-
-// The periodic bodies of the main loop are their own functions: their locals (power readings, log arguments)
-// are popped before the loop goes on, instead of widening main's frame, which sits under every call.
-[[gnu::noinline]] void slow_tasks(uint32_t now) {
-    Context& c = *g_ctx;
-    mark(Stage::Fusb302);
-    k2::fusb302::poll();
-    mark(Stage::Power);
-    k2::power::poll();
-    mark(Stage::PowerSource);
-    k2::power_source::poll(now);
-    mark(Stage::Dpsniff);
-    k2::dpsniff::poll(now, k2::power::read().value_or(k2::power::Metrics{}).vbus_mv);
-    mark(Stage::Pdtrace);
-    if (const auto pm = k2::power::read()) k2::pdtrace::vbus_sample(k2::power::vbus_fast_mv().value_or(pm->vbus_mv), pm->current_ma);   // black box, gated 50 ms / 100 mV / 20 mA; VBUS un-averaged so its steps carry their real time
-    mark(Stage::DiagLive);
-    k2::pd::diag::live::poll(now);          // Black Box diagnosis: the fresh sample into its power window, its clock
-    mark(Stage::Adc);
-    k2::adc::poll();
-    mark(Stage::LoopGuard);
-    k2::loopguard::poll(now);              // the HID-cable loop 5 V lock: before the UI tick, so its tools see the lock this pass
-#if K2_HOST_REPORT
-    k2::loopprobe::host::hw::poll(now);    // the loop probe's Host report: the boot journal, the session (prototype)
-#endif
-    mark(Stage::Accel);
-    const bool sensor_was_online = c.accelerometer.online();
-    if (c.accelerometer.poll(now)) {
-        c.ui.feed_gravity(c.accelerometer.read(), now);
-        if (sensor_was_online != c.accelerometer.online())
-            K2LOG("[ACCEL] %s\n", c.accelerometer.online() ? "online" : "unavailable; retrying");
-    }
-    mark(Stage::Fastcharge);
-    k2::fastcharge::poll();
-    mark(Stage::Boottrace);
-    k2::boottrace::flush_log();             // queued [BOOT] trace lines of the first seconds
-    mark(Stage::Session);
-    k2::session::poll();                    // PD session record into the backup registers on change
-    mark(Stage::RdComeback);
-    k2::rdcomeback::poll();                 // the Rd intent marker (/rd.rec) in step with the session, written on a quiet link
-    mark(Stage::Handback);
-    k2::handback::poll(now);                // the phase-1 lab hand-back sequence, if the remote armed one
-    mark(Stage::Rescan);
-    k2::rescan::poll();                     // a Refresh's Get_Source_Cap: the answer, or the CC cycle when the source stays silent
-    mark(Stage::Survey);
-    k2::survey::poll(c.ui.charger_test_busy());   // the rest of the Refresh's survey, one message at a time (nothing runs before a Refresh)
-    if (c.rescan_landing_due && !k2::rdcomeback::pending()) {   // a Refresh's CC cycle took the K2 down: back on Connection -> Source
-        c.rescan_landing_due = false;
-        if (k2::rdcomeback::rescan_landing()) c.ui.land_rescanned(now);
-    }
-    // ring maintenance erases (~35 ms each) only with no charger test, PD Stress run or other port owner and a quiet link.
-    // No flash at all while the SuperVOOC trigger runs: a Black Box save stalls this loop for 95-290 ms (and masks
-    // interrupts for every half-word), so the wire's tick cannot let D- go after a reply's hold. The trigger's own edge
-    // recording (4096 edges) is a finished capture after ~72 pairs, where every hardware run of 2026-11-12 stopped.
-    // Waiting captures go out once the run is over.
-    if (!k2::fctrig::svooc_running()) {
-        const bool may_erase = !c.ui.ports_busy() && k2::pdtrace::since_activity_ms() >= kEraseQuietMs;
-        mark(Stage::Bbpersist);
-        k2::bbpersist::poll(may_erase);     // saves finished captures once the link is quiet
-        mark(Stage::ReportCard);
-        k2::report_card::hw::poll(may_erase);
-        k2::battery::hw::poll(now, may_erase);   // battery recorder: every sample; its record only at a phase boundary
-        k2::memstat::poll(now, may_erase);       // memory readout cache: stacks at most 1 Hz, the littlefs walk only when quiet
-    }
-    mark(Stage::BootScreen);
-    if (c.bootscreen.active()) boot_screen_step(now);   // waits for the key's 3 s, then owns the panel
-    // The QR screen owns the panel: the UI does not draw meanwhile. The UI's tick ends the OK + Back reboot chord.
-    mark(Stage::UiTick);
-    if (!c.bootscreen.showing() && c.ui.tick(now) == k2::UiAction::Reboot) c.reboot();
 }
 
 [[gnu::noinline]] void heartbeat(uint32_t now, uint32_t press_count, uint32_t heartbeats) {
