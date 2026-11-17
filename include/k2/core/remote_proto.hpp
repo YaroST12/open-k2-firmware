@@ -647,6 +647,9 @@ enum class Cmd : uint8_t {
     ChargerLevel = 0x5B,    // [level(1)] the level of the next charger run (charger_test::Level: 0 Medium, 1 Light, 2 Deep; with_level
                          // also sets both deep-sweep flags: on for Deep, off otherwise). rsp [level]. Read back in CHARGER_TEST schema 2,
                          // draft selection bits 28..29. Busy while a run is active, BadArg above 2.
+    MiCableAuth = 0x5C,     // Xiaomi cable-side auth config (k2/pd/emk_spoof.hpp MiAuthCfg): [0] reads, [1, on, key, trailing u32 LE, half]
+                         // sets (on <= 1, key < 10, half <= 1). rsp [on, key, trailing u32 LE, half]. Lab-only: while a spoof is armed,
+                         // an SOP' 0x27170104 is answered with 0x27170105 + a HMAC-SHA256 half of the challenge.
 };
 
 inline constexpr Cmd kCmdIds[] = {
@@ -659,7 +662,7 @@ inline constexpr Cmd kCmdIds[] = {
     Cmd::CableR, Cmd::Lab, Cmd::Ufcs, Cmd::QRTest, Cmd::Store, Cmd::EmLib, Cmd::Cards, Cmd::Twin, Cmd::BlackBox, Cmd::TransCap, Cmd::ChargerTest,
     Cmd::ChargerUnits, Cmd::ChargerCable, Cmd::ChargerHunt, Cmd::ChargerSweep, Cmd::ChargerAvsSweep, Cmd::BootInfo, Cmd::Memory,
     Cmd::PdStress, Cmd::EmarkerProbe, Cmd::LoopProbe, Cmd::Diagnose, Cmd::TraceHid, Cmd::Battery, Cmd::ChargerSvoocCap,
-    Cmd::PdSpec, Cmd::ChargerLevel,
+    Cmd::PdSpec, Cmd::ChargerLevel, Cmd::MiCableAuth,
 };
 
 constexpr bool cmd_ids_unique() {
@@ -1584,6 +1587,7 @@ concept Backend = requires(B &b, uint8_t u8, uint16_t u16, bool on) {
     { b.diagnose(std::span<const uint8_t>{}, std::span<uint8_t>{}) } -> std::same_as<size_t>;   // same shape (Cmd::Diagnose)
     { b.trace_hid(std::span<const uint8_t>{}, std::span<uint8_t>{}) } -> std::same_as<size_t>;   // same shape (Cmd::TraceHid, validated by the dispatcher)
     { b.battery(std::span<const uint8_t>{}, std::span<uint8_t>{}) } -> std::same_as<size_t>;    // same shape (Cmd::Battery)
+    { b.mi_cable_auth(std::span<const uint8_t>{}, std::span<uint8_t>{}) } -> std::same_as<size_t>;   // same shape (Cmd::MiCableAuth, validated by the dispatcher)
 };
 
 namespace detail {
@@ -1841,6 +1845,13 @@ template <Backend B>
         if (p.size() != 1) return reply_bad_len(f);
         if (p[0] >= charger_test::kLevelCount) return reply_bad_arg(f);
         return reply_status_or_byte(f, backend.charger_level(p[0]), p[0]);
+    case Cmd::MiCableAuth:
+        if (p[0] == 0 && p.size() == 1) return reply_ok(f, {backend.mi_cable_auth(p, f.span())});
+        if (p[0] == 1 && p.size() == 8) {
+            if (p[1] > 1 || p[2] >= 10 || p[7] > 1) return reply_bad_arg(f);
+            return reply_ok(f, {backend.mi_cable_auth(p, f.span())});
+        }
+        return reply_bad_len(f);
     default:
         return reply_status(f, Status::UnknownCmd);
     }
@@ -2364,6 +2375,7 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
         return detail::handle_state(cmd, p, backend, f);
     case Cmd::ChargerTest: case Cmd::ChargerUnits: case Cmd::ChargerCable: case Cmd::ChargerSvoocCap:
     case Cmd::ChargerHunt: case Cmd::ChargerSweep: case Cmd::ChargerAvsSweep: case Cmd::ChargerLevel:
+    case Cmd::MiCableAuth:
         return detail::handle_charger(cmd, p, backend, f);
     case Cmd::IdentifyDevice: case Cmd::PdReread: case Cmd::AppleRead: case Cmd::PdRequest:
     case Cmd::PdReset: case Cmd::PdRelease: case Cmd::Stop: case Cmd::Lease:

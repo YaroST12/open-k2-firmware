@@ -713,6 +713,7 @@
   "716": "[TEST] PD spec %s\n",
   "717": "[CT] withdrawn wait rows=%u\n",
   "718": "[CABLE] selection cleared (%s)\n",
-  "719": "[MI] 0205 %s adapter=0x%04X rx=%08X %08X %08X %08X\n"
+  "719": "[MI] 0205 %s adapter=0x%04X rx=%08X %08X %08X %08X\n",
+  "720": "[MI] 0x2717010A Not_Supported (0208 was verified)\n"
  }
 }

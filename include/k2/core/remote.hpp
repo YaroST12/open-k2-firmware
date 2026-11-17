@@ -177,6 +177,7 @@ public:
     size_t blackbox(uint8_t op, uint32_t arg, std::span<uint8_t> out);   // PD black box ring (k2::pdtrace)
     bool ports_busy() { return ui_.ports_busy(); }   // a charger test or an FC release owns the link
     size_t emlib(std::span<const uint8_t> req, std::span<uint8_t> out);   // saved-cable library and spoof (k2::storage, k2::emk_spoof)
+    size_t mi_cable_auth(std::span<const uint8_t> req, std::span<uint8_t> out);   // Xiaomi cable-side auth config (k2::emk_spoof::MiAuthCfg); req [0] reads, [1,on,key,trailing(4),half] sets; out [on,key,trailing(4),half]
     size_t cards(std::span<const uint8_t> req, std::span<uint8_t> out);   // charger report cards (k2::report_card::hw)
     size_t twin(std::span<const uint8_t> req, std::span<uint8_t> out);    // device twins (k2::twin::wire over k2::storage and k2::twin_hw)
     size_t transcap(std::span<const uint8_t> req, std::span<uint8_t> out);   // transition capture (k2::transcap)

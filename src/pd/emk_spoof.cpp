@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Yaraslau Furman
 #include "k2/core/log.hpp"
 #include "k2/pd/emk_spoof.hpp"
+#include "k2/pd/xiaomi_auth.hpp"
 
 #include "k2/drivers/fusb302.hpp"
 #include "k2/drivers/usb.hpp"
@@ -18,10 +19,47 @@ std::uint32_t g_replies = 0;
 std::uint32_t g_requests = 0;
 std::uint32_t g_unmatched = 0;
 std::uint32_t g_generation = 0;
+MiAuthCfg g_mi_auth;
 
 std::uint32_t word(std::span<const std::uint8_t> p, unsigned i) {
     if (p.size() < 4 * (i + 1)) return 0;
     return p[4 * i] | (p[4 * i + 1] << 8) | (p[4 * i + 2] << 16) | (std::uint32_t(p[4 * i + 3]) << 24);
+}
+
+// True for an SOP' unstructured VDM with SVID 0x2717, command 4, carrying 4 challenge words (the cable-auth
+// request some Xiaomi-family sources send to a Xiaomi-VID cable after Discover Identity).
+bool is_mi_cable_challenge(std::uint16_t header, std::span<const std::uint8_t> payload) {
+    if ((header & 0x8000) != 0) return false;                       // extended
+    if ((header & 0x1F) != kMsgVendorDefined || ((header >> 12) & 7) < 5 || payload.size() < 20) return false;
+    const std::uint32_t vdm = word(payload, 0);
+    return (vdm >> 16) == 0x2717u && (vdm & 0x8000u) == 0 && (vdm & 0x1Fu) == 4;
+}
+
+// FIFO tokens of the 0x27170105 answer: sync, PACKSYM, cable header (5 objects), VDM header + 4 digest words.
+Frame mi_auth_frame(std::uint32_t req_vdm, std::span<const std::uint8_t> challenge, std::uint8_t msg_id) {
+    std::uint32_t ch[4];
+    for (unsigned i = 0; i < 4; i++) ch[i] = word(challenge, 1 + i);
+    std::uint8_t digest[32];
+    pd::mi::auth_digest(g_mi_auth.key, ch, g_mi_auth.trailing, digest);
+    const unsigned off = g_mi_auth.half ? 16 : 0;
+    std::array<std::uint32_t, 5> w = {((req_vdm & 0xFFFFFF00u) | 0x05u), pd::mi::digest_word(digest + off, 0),
+                                      pd::mi::digest_word(digest + off, 1), pd::mi::digest_word(digest + off, 2),
+                                      pd::mi::digest_word(digest + off, 3)};
+    Frame f;
+    std::size_t n = 0;
+    for (std::uint8_t b : {0x12, 0x12, 0x1B, 0x1B}) f.t[n++] = b;
+    f.t[n++] = static_cast<std::uint8_t>(0x80 | (2 + 4 * w.size()));
+    const std::uint16_t h = static_cast<std::uint16_t>(kMsgVendorDefined | ((g_rec[0x14] & 3u) << 6) | (1u << 8) |
+                                                       ((msg_id & 7u) << 9) | (5u << 12));
+    f.t[n++] = static_cast<std::uint8_t>(h);
+    f.t[n++] = static_cast<std::uint8_t>(h >> 8);
+    for (std::uint32_t v : w)
+        for (int i = 0; i < 4; i++) f.t[n++] = static_cast<std::uint8_t>(v >> (8 * i));
+    f.t[n++] = 0xFF;   // JAM_CRC
+    f.t[n++] = 0x14;   // EOP
+    f.t[n++] = 0xFE;   // TXOFF
+    f.n = static_cast<std::uint8_t>(n);
+    return f;
 }
 
 // Called by fusb302 for every received SOP' / SOP'' message while armed. Only SOP' is answered: the SOP'' answer
@@ -36,6 +74,22 @@ void on_sop_prime(std::uint8_t sop, std::uint16_t header, std::span<const std::u
         return;
     }
     if (is_discover_identity_req(header, payload)) g_requests++;
+    if (g_mi_auth.on && sop == 1 && is_mi_cable_challenge(header, payload)) {
+        const std::uint32_t req_vdm = word(payload, 0);
+        Frame f = mi_auth_frame(req_vdm, payload, g_msg_id);
+        const bool ok = fusb302::send_sop_prime_frame(f.tokens());
+        const auto fw = [&f](unsigned i) {
+            return std::uint32_t(f.t[7 + 4 * i]) | (std::uint32_t(f.t[8 + 4 * i]) << 8) |
+                   (std::uint32_t(f.t[9 + 4 * i]) << 16) | (std::uint32_t(f.t[10 + 4 * i]) << 24);
+        };
+        K2LOG("[EMK] Mi cable-auth 0105 key=%u trail=%08X half=%u -> %08X %08X %08X %08X %s\n", static_cast<unsigned>(g_mi_auth.key),
+              static_cast<unsigned>(g_mi_auth.trailing), static_cast<unsigned>(g_mi_auth.half), static_cast<unsigned>(fw(1)),
+              static_cast<unsigned>(fw(2)), static_cast<unsigned>(fw(3)), static_cast<unsigned>(fw(4)), ok ? "sent" : "FAILED");
+        if (!ok) return;
+        g_msg_id = (g_msg_id + 1) & 7;
+        g_replies++;
+        return;
+    }
     const Outcome o = respond(g_rec, g_quirks, emk_quirk::kSopP, header, payload, g_msg_id);
     if (o.unmatched) {   // what a source asks beyond what this cable knows: the raw words are the way to learn it
         g_unmatched++;
@@ -96,5 +150,8 @@ std::uint32_t unmatched() { return g_unmatched; }
 const emk_quirk::SeenLog& seen() { return g_seen; }
 emrec::Record& scratch_record() { return g_rec; }
 emk_quirk::Quirks& scratch_quirks() { return g_quirks; }
+
+void set_mi_auth(const MiAuthCfg& c) { g_mi_auth = c; }
+MiAuthCfg mi_auth() { return g_mi_auth; }
 
 }  // namespace k2::emk_spoof

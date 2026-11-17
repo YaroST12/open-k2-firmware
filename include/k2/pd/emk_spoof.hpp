@@ -130,4 +130,18 @@ const emk_quirk::SeenLog& seen();    // the last of them, for the remote
 emrec::Record& scratch_record();
 emk_quirk::Quirks& scratch_quirks();
 
+// Xiaomi cable-side auth (SVID 0x2717 on SOP'): some sources (Baseus FH22 2C1A, CUKTECH C1) send the CABLE an
+// unstructured 0x27170104 + 4 challenge words after its Discover Identity shows a Xiaomi-VID cable, and gate the
+// 6 A re-announce on the answer. While armed and enabled, such a request is answered with 0x27170105 + the first
+// (or second) 16 bytes of HMAC-SHA256(secret[key], BE32(challenge) || BE32(trailing)) - the same digest shape as the
+// sink-side 0x27170108. `trailing` plays the adapter_id role (0 unless learned otherwise).
+struct MiAuthCfg {
+    bool on = false;
+    std::uint8_t key = 7;          // usbpd_secret index (kActiveKeyIndex by default)
+    std::uint32_t trailing = 0;    // the adapter_id-equivalent word appended to the HMAC message
+    std::uint8_t half = 0;         // 0 = digest[0..15], 1 = digest[16..31]
+};
+void set_mi_auth(const MiAuthCfg& c);
+MiAuthCfg mi_auth();
+
 }  // namespace k2::emk_spoof

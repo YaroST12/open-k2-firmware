@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Yaraslau Furman
 // Pure frame logic of k2::emk_spoof: request matching and the SOP' identity reply.
 #include "k2/pd/emk_spoof.hpp"
+#include "k2/pd/xiaomi_auth.hpp"
 #include "k2/drivers/fusb302.hpp"
 #include "k2/drivers/usb.hpp"
 #include "test_util.h"
@@ -286,6 +287,46 @@ static void test_run_scoped_arm() {
     inline_mode = false;
 }
 
+// The Xiaomi cable-side auth: an SOP' unstructured 0x27170104 + 4 challenge words is answered with 0x27170105 +
+// a HMAC-SHA256 half of the challenge, but only while enabled (default off: the request just logs as unmatched).
+static void test_mi_cable_auth_reply() {
+    inline_mode = false; send_ok = true;
+    sent.clear();
+    CHECK_EQ(emk_spoof::arm(sample(2)), emk_spoof::Err::Ok);
+    const std::uint32_t w[5] = {0x27170104u, 0x49DF0F81u, 0x6AC236B8u, 0xEE5DA50Bu, 0x2585882Cu};
+    std::uint8_t ch[20];
+    for (unsigned i = 0; i < 5; i++)
+        for (int b = 0; b < 4; b++) ch[4 * i + b] = std::uint8_t(w[i] >> (8 * b));
+    auto fw = [](const std::vector<std::uint8_t>& f, unsigned i) {
+        return std::uint32_t(f[7 + 4 * i]) | (std::uint32_t(f[8 + 4 * i]) << 8) |
+               (std::uint32_t(f[9 + 4 * i]) << 16) | (std::uint32_t(f[10 + 4 * i]) << 24);
+    };
+    const std::size_t before = sent.size();
+    hook(0x528F, {ch, 20});                                   // disabled: falls through to unmatched, no reply
+    CHECK_EQ(sent.size(), before); CHECK_EQ(emk_spoof::unmatched(), 1);
+    emk_spoof::MiAuthCfg c; c.on = true; c.key = 7; c.trailing = 0; c.half = 0;
+    emk_spoof::set_mi_auth(c);
+    CHECK_EQ(emk_spoof::mi_auth().on, true); CHECK_EQ(emk_spoof::mi_auth().key, 7);
+    hook(0x528F, {ch, 20});
+    CHECK_EQ(sent.size(), before + 1); CHECK_EQ(emk_spoof::replies(), 1); CHECK_EQ(emk_spoof::unmatched(), 1);
+    CHECK_EQ(sent.back()[4], 0x80 | 22);                      // PACKSYM | 22 bytes
+    CHECK_EQ(fw(sent.back(), 0), 0x27170105u);                 // VDM header: SVID kept, cmd 5
+    std::uint8_t digest[32];
+    pd::mi::auth_digest(7, w + 1, 0, digest);
+    for (unsigned i = 0; i < 4; i++) CHECK_EQ(fw(sent.back(), 1 + i), pd::mi::digest_word(digest, i));
+    c.half = 1; c.trailing = 0xA819; emk_spoof::set_mi_auth(c);
+    hook(0x528F, {ch, 20});
+    pd::mi::auth_digest(7, w + 1, 0xA819, digest);
+    CHECK_EQ(fw(sent.back(), 0), 0x27170105u);
+    for (unsigned i = 0; i < 4; i++) CHECK_EQ(fw(sent.back(), 1 + i), pd::mi::digest_word(digest + 16, i));
+    const std::uint8_t other[4] = {0x05, 0x01, 0xB0, 0x2B};    // SVID 0x2BB0, cmd 5: not intercepted
+    const std::size_t n2 = sent.size();
+    hook(0x128F, {other, 4});
+    CHECK_EQ(sent.size(), n2);                                 // unmatched policy may answer; never the Mi auth path
+    emk_spoof::disarm();
+    emk_spoof::set_mi_auth({});
+}
+
 int main() {
     test_match();
     test_reply();
@@ -296,5 +337,6 @@ int main() {
     test_hook_policy_and_msg_id_echo();
     test_sop_pp_is_ignored();
     test_run_scoped_arm();
+    test_mi_cable_auth_reply();
     return test_report("test_emk_spoof");
 }

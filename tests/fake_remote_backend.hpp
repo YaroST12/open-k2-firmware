@@ -393,6 +393,12 @@ struct Fake {
         out[0] = 0xBA; out[1] = req[0];
         return 2;
     }
+    std::vector<uint8_t> mi_auth_req;
+    size_t mi_cable_auth(std::span<const uint8_t> req, std::span<uint8_t> out) {
+        calls++; mi_auth_req.assign(req.begin(), req.end());
+        out[0] = 1; out[1] = 7; out[2] = 0; out[3] = 0; out[4] = 0; out[5] = 0; out[6] = 0;
+        return 7;
+    }
     std::vector<uint8_t> tc_req;
     size_t transcap(std::span<const uint8_t> req, std::span<uint8_t> out) {
         calls++; tc_req.assign(req.begin(), req.end());
