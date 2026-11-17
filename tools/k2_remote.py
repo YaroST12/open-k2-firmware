@@ -1764,7 +1764,7 @@ def read_charger_spec(link, run_id):
         detail = None
     spec = pdspec_blob.decode_section(blob, detail)
     # The per-transition rows (0x0B [8, off16]): each check that lists them gets "rows" (and "worst_row", the index of the worst one);
-    # firmware without the form (BadLength), a run with none (total 0) or a file this tool cannot read leaves the cells as they were.
+    # firmware without the form (BadLength: every build without K2_SPECROWS=1, the shipping default), a run with none (total 0) or a file this tool cannot read leaves the cells as they were.
     try:
         raw = _read_charger_spec_rows(link, run_id)
         listed = pdspec_blob.decode_rows(raw, run_id)["cells"] if raw else {}

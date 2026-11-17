@@ -10,7 +10,7 @@
 #include <iterator>
 #include <string_view>
 
-#include "k2/chargertest/spec_rows.hpp"
+#include "k2/chargertest/spec_rows.hpp"   // empty without K2_SPECROWS
 #include "k2/chargertest/spec_section.hpp"
 #include "k2/pdspec/plan.hpp"
 #include "k2/pdspec/result.hpp"
@@ -174,6 +174,7 @@ inline void detail_value(int row, int check, const specsec::Cell& c, StrBuf<20>&
     }
 }
 
+#if K2_SPECROWS
 // ---- the per-transition rows (specsec::Row): name, value, tail ----------------------------------------------------------------------
 // A row of the spec detail list reads  5->9V      9.21V  -0.29V : the pair (or the programmable window and step) at x28, the value in the
 // check's own unit at x104, the margin right-aligned to x214. Every text keeps its column for any row (a row read back from a journal
@@ -298,5 +299,6 @@ void put_row_tail(const specsec::Row& r, StrBuf<N>& s) {
         case sc::Unit::Count: if (m > 0) s.put_char('+'); put_int(s, m); return;
     }
 }
+#endif  // K2_SPECROWS
 
 }  // namespace k2::spectext

@@ -45,6 +45,12 @@ K2_PDSPEC ?= 0
 # K2_LOOPPROBE=1 builds Tools > Loop probe in (the HID-cable loop probe: its page, session, stored result and the remote command
 # 0x57; docs/LOOP_PROBE.md). Off by default since 2026-11-16 (flash); the host tests always build it (HOST_CXXFLAGS).
 K2_LOOPPROBE ?= 0
+# K2_SPECROWS=1 adds the per-transition list to the PD spec section (needs K2_PDSPEC=1): the engine's row projection, the row
+# texts, the list on a check's detail page, the journal's /jr/spt.rec and the remote read 0x0B [8, off16]. Off by default: the
+# shipping K2_WEBUSB=1 K2_PDSPEC=1 K2_PDSTRESS=1 image does not have the flash for it (a check's detail then shows its summary
+# table). The host tests build both ways: the default pass has it off, test-specrows (a gate step) builds it on in
+# host-build-rows. See include/k2/core/build_config.h.
+K2_SPECROWS ?= 0
 # K2_WHOS_ATTACHED=1 brings the tabbed Who's attached page back behind the three ID tools (include/k2/core/build_config.h).
 K2_WHOS_ATTACHED ?= 0
 # K2_SCREENSHOT=1 builds the RLE565/strip screenshot capture path and Settings > Screenshot row back in
@@ -217,7 +223,7 @@ endif
 # Measured -800 B text under LTO.
 CFLAGS += -fmerge-all-constants
 CFLAGS += -I$(INC_DIR)
-CFLAGS += -DK2_NET=$(K2_NET) -DK2_WEBUSB=$(K2_WEBUSB) -DK2_PDSTRESS=$(K2_PDSTRESS) -DK2_PDSPEC=$(K2_PDSPEC) -DK2_LOOPPROBE=$(K2_LOOPPROBE) -DK2_WHOS_ATTACHED=$(K2_WHOS_ATTACHED) -DK2_SCREENSHOT=$(K2_SCREENSHOT) -DK2_STACKPROBE=$(K2_STACKPROBE)
+CFLAGS += -DK2_NET=$(K2_NET) -DK2_WEBUSB=$(K2_WEBUSB) -DK2_PDSTRESS=$(K2_PDSTRESS) -DK2_PDSPEC=$(K2_PDSPEC) -DK2_LOOPPROBE=$(K2_LOOPPROBE) -DK2_SPECROWS=$(K2_SPECROWS) -DK2_WHOS_ATTACHED=$(K2_WHOS_ATTACHED) -DK2_SCREENSHOT=$(K2_SCREENSHOT) -DK2_STACKPROBE=$(K2_STACKPROBE)
 CFLAGS += -DK2_HOST_REPORT=$(K2_HOST_REPORT)
 CFLAGS += -DK2_HOT_BLOCK=$(K2_HOT_BLOCK)
 CFLAGS += -MMD -MP
@@ -477,7 +483,7 @@ $(CFG_STAMP): | $(BUILD_DIR)
 
 clean:
 	@rm -rf $(HOST_DIR)
-	@rm -rf $(BUILD_DIR) build-net build-webusb
+	@rm -rf $(BUILD_DIR) build-net build-webusb build-specrows
 	@echo "Cleaned build artifacts."
 
 # Host unit tests (pure logic only): each tests/test_*.c is one program, built with the host
@@ -502,9 +508,15 @@ HOST_K2_WEBUSB = 1
 # Screenshot capture is built in for the host tests (K2_SCREENSHOT=1); test_settings_rows0 is the one object built with
 # the firmware default, K2_SCREENSHOT=0.
 HOST_K2_SCREENSHOT = 1
-HOST_CXXFLAGS  = -std=c++23 -Wall -Wextra -O0 -g -I$(INC_DIR) -Itests -I$(LFS_DIR) -I$(QR_DIR) -DK2_NET=$(HOST_K2_NET) -DK2_WEBUSB=$(HOST_K2_WEBUSB) -DK2_PDSTRESS=1 -DK2_PDSPEC=1 -DK2_LOOPPROBE=1 -DK2_WHOS_ATTACHED=1 -DK2_SCREENSHOT=$(HOST_K2_SCREENSHOT) -DK2_TRUNC_LOG=1
+# The per-transition list of the PD spec section (K2_SPECROWS) is off in the default host pass, as in the shipping image: the flag
+# changes struct layouts, so it is a whole-tree choice (a second pass with its own HOST_DIR, test-specrows), never a per-object one.
+HOST_K2_SPECROWS ?= 0
+HOST_CXXFLAGS  = -std=c++23 -Wall -Wextra -O0 -g -I$(INC_DIR) -Itests -I$(LFS_DIR) -I$(QR_DIR) -DK2_NET=$(HOST_K2_NET) -DK2_WEBUSB=$(HOST_K2_WEBUSB) -DK2_PDSTRESS=1 -DK2_PDSPEC=1 -DK2_LOOPPROBE=1 -DK2_SPECROWS=$(HOST_K2_SPECROWS) -DK2_WHOS_ATTACHED=1 -DK2_SCREENSHOT=$(HOST_K2_SCREENSHOT) -DK2_TRUNC_LOG=1
 TEST_CXX_LIB   = $(SRC_DIR)/ui/ui.cpp $(SRC_DIR)/ui/ui_pages.cpp $(SRC_DIR)/ui/ui_detail.cpp $(SRC_DIR)/ui/capture.cpp tests/ui_stubs.cpp $(SRC_DIR)/ui/gfx.cpp $(SRC_DIR)/ui/rle565.cpp tests/fake_lcd.cpp $(SRC_DIR)/core/remote_proto.cpp $(SRC_DIR)/core/fmt.cpp $(SRC_DIR)/pd/pd.cpp $(SRC_DIR)/pd/pd_engine.cpp $(SRC_DIR)/pd/pd_ext.cpp $(SRC_DIR)/pd/pd_vdm.cpp $(SRC_DIR)/pd/usb_link.cpp $(SRC_DIR)/pd/pd_link.cpp $(SRC_DIR)/drivers/power_calc.cpp $(SRC_DIR)/drivers/adc_calc.cpp $(SRC_DIR)/fastcharge/fastcharge_classify.cpp $(SRC_DIR)/ui/ui_calc.cpp $(SRC_DIR)/drivers/buttons.cpp $(SRC_DIR)/ui/ui_layout.cpp $(SRC_DIR)/ui/ui_labels.cpp $(SRC_DIR)/ui/list_view.cpp $(SRC_DIR)/pd/pd_source.cpp $(SRC_DIR)/pd/pd_sink.cpp $(SRC_DIR)/pd/pd_identify.cpp $(SRC_DIR)/pd/pd_probe.cpp $(SRC_DIR)/ui/ui_pdtrig.cpp $(SRC_DIR)/ui/ui_wizard.cpp $(SRC_DIR)/fastcharge/fc_engine.cpp $(SRC_DIR)/fastcharge/fc_scan.cpp $(SRC_DIR)/ui/text.cpp $(SRC_DIR)/pd/emrec.cpp $(SRC_DIR)/pd/emk_quirk.cpp $(SRC_DIR)/pd/emk_respond.cpp $(SRC_DIR)/pd/emk_learn.cpp $(SRC_DIR)/pd/emname.cpp $(SRC_DIR)/pd/emjson.cpp $(SRC_DIR)/drivers/vfat.cpp $(SRC_DIR)/drivers/drive.cpp $(SRC_DIR)/ui/ui_widgets.cpp $(SRC_DIR)/ui/ui_icons.cpp $(SRC_DIR)/ui/ui_match.cpp $(SRC_DIR)/ui/ui_lines.cpp $(SRC_DIR)/ui/ui_tools.cpp $(SRC_DIR)/ui/ui_emarker.cpp $(SRC_DIR)/ui/ui_cabler.cpp $(SRC_DIR)/ui/ui_connection_page.cpp $(SRC_DIR)/ui/ui_blackbox.cpp $(SRC_DIR)/ui/ui_spoof.cpp $(SRC_DIR)/ui/ui_cards.cpp $(SRC_DIR)/pd/pdtrace.cpp $(SRC_DIR)/pd/pdtrace_view.cpp $(SRC_DIR)/pd/pdtrace_link.cpp $(wildcard $(SRC_DIR)/ui/fonts/*.cpp)
 TEST_CXX_SRCS  = $(wildcard tests/test_*.cpp)
+ifneq ($(HOST_K2_SPECROWS),1)
+TEST_CXX_SRCS := $(filter-out tests/test_spec_rows.cpp, $(TEST_CXX_SRCS))   # the per-transition rows' own tests: only the K2_SPECROWS=1 pass
+endif
 TEST_CXX_LIB  += tests/trunc_log.cpp $(SRC_DIR)/ui/orientation.cpp $(SRC_DIR)/core/shell.cpp $(SRC_DIR)/core/lab.cpp
 TEST_CXX_LIB  += $(SRC_DIR)/pd/pd_reread.cpp $(SRC_DIR)/pd/pd_survey.cpp $(SRC_DIR)/pd/apple_readout.cpp
 TEST_CXX_LIB  += $(SRC_DIR)/ui/ui_viewport.cpp $(SRC_DIR)/core/logfmt.cpp $(SRC_DIR)/core/scratch.cpp
@@ -664,6 +676,13 @@ test-py: test-run $(HOST_DIR)/bbdiag
 	else echo "node not found: skipping node tests"; fi
 test: test-py
 
+# The second host pass: the whole tree with the per-transition list of the PD spec section built in (K2_SPECROWS=1), in its own
+# object directory (a flag that changes struct layouts cannot share objects with the default pass). C++ tests only: the Python
+# suites run once, in test-py, and compile what they need themselves.
+.PHONY: test-specrows
+test-specrows:
+	@$(MAKE) test-run HOST_K2_SPECROWS=1 HOST_DIR=host-build-rows
+
 # WebHID dashboard (tools/web/k2.html): WebHID needs a secure context, and http://localhost counts as one.
 WEB_PORT ?= 8765
 web:
@@ -734,7 +753,7 @@ nav-headers:
 	@$(COMPDB)
 
 docker-build: | $(NAV_DIR)/dirs.txt
-	$(DOCKER_RUN) $(DOCKER_IMG) make K2_GIT=$(K2_GIT) K2_FW_VERSION=$(K2_FW_VERSION) K2_WERROR=$(K2_WERROR) K2_64BIT=$(K2_64BIT) K2_NET=$(K2_NET) K2_WEBUSB=$(K2_WEBUSB) K2_PDSTRESS=$(K2_PDSTRESS) K2_PDSPEC=$(K2_PDSPEC) K2_LOOPPROBE=$(K2_LOOPPROBE) K2_WHOS_ATTACHED=$(K2_WHOS_ATTACHED) K2_SCREENSHOT=$(K2_SCREENSHOT) K2_HOST_REPORT=$(K2_HOST_REPORT) K2_HOT_BLOCK=$(K2_HOT_BLOCK) K2_STACKPROBE=$(K2_STACKPROBE) BUILD_DIR=$(BUILD_DIR) K2_HOST_ROOT=$(CURDIR)
+	$(DOCKER_RUN) $(DOCKER_IMG) make K2_GIT=$(K2_GIT) K2_FW_VERSION=$(K2_FW_VERSION) K2_WERROR=$(K2_WERROR) K2_64BIT=$(K2_64BIT) K2_NET=$(K2_NET) K2_WEBUSB=$(K2_WEBUSB) K2_PDSTRESS=$(K2_PDSTRESS) K2_PDSPEC=$(K2_PDSPEC) K2_LOOPPROBE=$(K2_LOOPPROBE) K2_SPECROWS=$(K2_SPECROWS) K2_WHOS_ATTACHED=$(K2_WHOS_ATTACHED) K2_SCREENSHOT=$(K2_SCREENSHOT) K2_HOST_REPORT=$(K2_HOST_REPORT) K2_HOT_BLOCK=$(K2_HOT_BLOCK) K2_STACKPROBE=$(K2_STACKPROBE) BUILD_DIR=$(BUILD_DIR) K2_HOST_ROOT=$(CURDIR)
 
 docker-flash:
 	docker run --rm --privileged -v $(CURDIR):/workspace -v /dev:/dev $(DOCKER_IMG) make flash

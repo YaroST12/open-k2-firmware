@@ -3,6 +3,10 @@
 **Opt-in build: `K2_PDSPEC=1`** (`make docker-build K2_PDSPEC=1`, `make gate K2_PDSPEC=1`; off by default because of the flash
 budget, `include/k2/core/build_config.h`). The host tests always build it.
 
+**Second opt-in: `K2_SPECROWS=1`** (needs `K2_PDSPEC=1`; off by default since 2026-11-17) adds the per-transition list described under
+"Deep run" (the engine's rows, the list detail page, the journal's `/jr/spt.rec`, the remote `0x0B [8]` form). Without it each check's
+detail page is the summary table. The host tests run both ways (`make test`, `make test-specrows`).
+
 PD Spec Check runs a no-load conformance pass over the attached PD charger: it steps the charger through every pair of its fixed levels,
 up and down, sweeps its PPS and SPR AVS outputs (PPS 20 / 100 / 500 mV steps, AVS 100 / 500 / 1000 mV, then the slams from the
 window's minimum to its maximum and back) and asks Get_PPS_Status, lets the PPS and EPR keep-alives lapse, sends a Hard Reset and takes its Rd away, and
@@ -271,8 +275,8 @@ It is a polite, no-load conformance run: nothing in it lies to the charger or as
 - **Record:** the journal keeps it (`Type::Spec`, `/jr/sp.rec`, written once when the stage ends) and the cells' limit, count and place (`Type::SpecDetail`,
   `/jr/spd.rec`, behind it; journal format 5; a format 3 journal still loads, with "-" for those). A third file, `/jr/spt.rec`
   keeps one 10-byte row per judged transition or pass (up to `specsec::kRowsMax` = 392; the later rows are not kept),
-  so the device's detail page lists them (see `docs/CHARGER_TEST_FLOW.md`, "PD spec section"); a format 4 journal has none and shows the summary. The report card
-  does not carry the cells. The remote reads the section with `0x0B [6, off]`, the detail with `[7, off]` and the rows with `[8, off16]` (`encode_charger_test_spec`); `ct_start.py` and the `k2_remote` charger-test
+  so the device's detail page lists them (see `docs/CHARGER_TEST_FLOW.md`, "PD spec section"); **only in `K2_SPECROWS=1` builds**; a format 4 journal has none and shows the summary. The report card
+  does not carry the cells. The remote reads the section with `0x0B [6, off]`, the detail with `[7, off]` and, in `K2_SPECROWS=1` builds, the rows with `[8, off16]` (BadLength otherwise; `encode_charger_test_spec`); `ct_start.py` and the `k2_remote` charger-test
   export carry it in their summary and files; the web charger-test grid draws it (`tools/web/ctgrid.js`).
 - **Owner:** while the stage runs the charger test is the owner (`BusyWhy::TestRunning`, which wins over `BusyWhy::PdSpec`); `PdSpecSession`
   stays out of the way of the standalone owner checks. `BusyWhy::PdSpec` (12) is the standalone run's.

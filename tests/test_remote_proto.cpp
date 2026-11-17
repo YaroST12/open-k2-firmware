@@ -2797,6 +2797,17 @@ static void test_charger_test_spec_wire() {
     check_bytes(r, 6, {4, 3, 2, 1, 0, 0, 0});
 }
 
+#if !K2_SPECROWS
+// A build without K2_SPECROWS has no rows form: `0x0B req [8, off_lo, off_hi]` is the older firmware's answer (BadLength), and the
+// summary form next to it is untouched.
+static void test_charger_test_spec_rows_form_is_absent() {
+    Fake f; Frame r;
+    CHECK_EQ(run(f, request(0x0B, 50, {8, 0, 0}), r), 1);
+    check_header(r, 0x0B, 50, Status::BadLength, 0);
+    CHECK_EQ(run(f, request(0x0B, 51, {6, 0}), r), 1);
+    check_header(r, 0x0B, 51, Status::Ok, 7);
+}
+#else
 // The spec rows file, `0x0B req [8, off_lo, off_hi]`: the journal's file byte for byte in chunks of at most 48 behind
 // run_id(4) total(2) off(2) n(1); total 0 = none; the offset is 16 bit because the file is up to about 4 KB.
 static void test_charger_test_spec_rows_wire() {
@@ -2828,6 +2839,7 @@ static void test_charger_test_spec_rows_wire() {
     CHECK_EQ(run(f, request(0x0B, 55, {6, 0}), r), 1);      // the summary form is untouched
     check_header(r, 0x0B, 55, Status::Ok, 7);
 }
+#endif
 
 // QA 2026-11-10 row B item 2 (red): a deep-sweep row goes over the wire with the sweep flag set (row flags bit 5)
 // and its detail byte carrying the recorded point count - the in-RAM marker kDetailSweep (161) stays on the step,
@@ -3383,7 +3395,13 @@ int main() {
     test_charger_avs_sweep();
     test_charger_level();
     test_charger_svooc_cap();
-    test_charger_test_wire(); test_charger_test_view_wire(); test_charger_test_spec_wire(); test_charger_test_spec_rows_wire(); test_sweep_row_wire_carries_points(); test_sweep_row_that_never_ran_carries_zero_points(); test_folded_pass_reason_over_both_schemas();
+    test_charger_test_wire(); test_charger_test_view_wire(); test_charger_test_spec_wire();
+#if K2_SPECROWS
+    test_charger_test_spec_rows_wire();
+#else
+    test_charger_test_spec_rows_form_is_absent();
+#endif
+     test_sweep_row_wire_carries_points(); test_sweep_row_that_never_ran_carries_zero_points(); test_folded_pass_reason_over_both_schemas();
     test_identify_refusal_wire_mapping();
     test_pd_attach_wire();
     test_active_pd_commands();

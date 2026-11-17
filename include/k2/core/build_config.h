@@ -30,7 +30,17 @@
  * K2_LOOPPROBE  1 = Tools > Loop probe (the HID-cable loop probe, docs/LOOP_PROBE.md): its page, session, stored result and
  *                   the remote command 0x57 (LOOP_PROBE) are built in.
  *               0 = none of it (the default while flash is short): the remote answers UnknownCmd, the Bench has no Loop probe row.
- *                   The host tests pass -DK2_LOOPPROBE=1; `make K2_LOOPPROBE=1` builds the tool in. */
+ *                   The host tests pass -DK2_LOOPPROBE=1; `make K2_LOOPPROBE=1` builds the tool in.
+ *
+ * K2_SPECROWS  1 = the PD spec section keeps and shows its per-transition list (needs K2_PDSPEC=1): the engine marks each fixed
+ *                  transition's measurements (TransRec::seen / fails, 18 -> 20 B each), `specsec` projects them into 10 byte
+ *                  rows (spec_rows.hpp), a check's detail page lists them (a verdict band, one row per transition, PLUS / MINUS
+ *                  scroll), the journal stores them in /jr/spt.rec and the remote reads them with 0x0B [8, off16].
+ *              0 = none of it (the default: the shipping K2_WEBUSB=1 K2_PDSPEC=1 K2_PDSTRESS=1 image has no flash for it): a check's
+ *                  detail is the summary table (Verdict, Worst, Limit, Count, Fails, At, Penalty), no spt.rec is written, the
+ *                  remote [8] answers BadLength (what an older firmware answers; tools/k2_remote.py treats it as "no rows").
+ *                  The journal format byte stays 5 either way (the file is additive). The host tests build it off by default and
+ *                  on in a second pass (`make test-specrows`, host-build-rows/): it changes struct layouts, so never per object. */
 /* K2_WHOS_ATTACHED  1 = Tools > Charger ID / Cable read / Device ID open the old tabbed "Who's attached" page on that tab
  *                     (tab strip, Tab+/Tab-, the action pop-up).
  *                   0 = each opens its own single tool: one tab, no strip, OK runs the tool's action, the other actions are
@@ -62,6 +72,13 @@
 
 #ifndef K2_LOOPPROBE
 #define K2_LOOPPROBE 0
+#endif
+
+#ifndef K2_SPECROWS
+#define K2_SPECROWS 0
+#endif
+#if K2_SPECROWS && !K2_PDSPEC
+#error "K2_SPECROWS=1 needs K2_PDSPEC=1 (the per-transition list belongs to the PD spec section)"
 #endif
 
 #ifndef K2_WHOS_ATTACHED

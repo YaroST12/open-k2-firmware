@@ -588,8 +588,11 @@ static void test_a_format_4_journal_still_loads_and_has_no_rows() {
     v.reboot(); v.j->replay(r);
     CHECK_EQ(r.found, true); CHECK_EQ(int(r.problem), int(cj::Problem::None));
     CHECK_EQ(r.evidence.spec.same(spec_result()), true);
+#if K2_SPECROWS
     CHECK_EQ(v.j->spec_rows_size(), size_t(0));
+#endif
 }
+#if K2_SPECROWS
 // The rows file: a source's bytes land in /jr/spt.rec through write_chunks and read back in pieces; size 0 removes it; a source past
 // kSpecRowsMax is refused (TooBig) and leaves the file as it was.
 struct RowsSrc { std::vector<uint8_t> data; };
@@ -656,6 +659,28 @@ static void test_a_pump_writes_the_rows_behind_the_spec_records() {
         CHECK_EQ(sz == 0 || sz == s.data.size(), true);
     }
 }
+#else
+// A build without K2_SPECROWS: a noted spec result is written as sp.rec and spd.rec only, and no rows file ever appears.
+static void test_a_pump_without_rows_writes_only_the_spec_records() {
+    Vol v; auto p4 = plan(4);
+    arm(v, p4);
+    ct::Evidence ev = evidence();
+    ev.spec = spec_result();
+    v.j->note_spec();
+    int pumps = 0;
+    while (v.j->pending() && pumps < 8) { CHECK_EQ(int(v.j->pump(kRun, kOpt, ev, p4)), 0); ++pumps; }
+    CHECK_EQ(v.j->pending(), false);
+    CHECK_EQ(pumps <= 3, true);                                   // sp.rec, spd.rec: one file per pump
+    std::array<uint8_t, cj::kMaxRecord> b{};
+    std::size_t n = 0;
+    CHECK_EQ(int(v.fs->read_file("/jr/sp.rec", b, n)), 0);
+    std::array<uint8_t, cj::kSpecDetailRecord> d{};
+    n = 0;
+    CHECK_EQ(int(v.fs->read_file("/jr/spd.rec", d, n)), 0);
+    n = 0;
+    CHECK_EQ(v.fs->read_file("/jr/spt.rec", b, n) != fs::Err::Ok, true);
+}
+#endif
 static void test_a_damaged_or_orphaned_detail_record_is_ignored() {
     for (size_t cut = 0; cut < 150; cut += 13) {
         Vol v; cj::Replay r;
@@ -1220,7 +1245,12 @@ int main() {
     test_the_spec_result_rides_in_its_own_record(); test_a_damaged_spec_record_reads_as_not_run(); test_the_spec_record_is_even_and_fits();
     test_a_journal_without_the_detail_record_still_loads(); test_a_damaged_or_orphaned_detail_record_is_ignored();
     test_a_noted_spec_result_is_written_by_a_pump(); test_a_format_3_journal_resumes_with_no_detail();
-    test_a_format_4_journal_still_loads_and_has_no_rows(); test_the_spec_rows_file_is_written_read_dropped_and_bounded();
+    test_a_format_4_journal_still_loads_and_has_no_rows();
+#if K2_SPECROWS
+    test_the_spec_rows_file_is_written_read_dropped_and_bounded();
     test_a_pump_writes_the_rows_behind_the_spec_records();
+#else
+    test_a_pump_without_rows_writes_only_the_spec_records();
+#endif
     return test_report("test_charger_journal");
 }

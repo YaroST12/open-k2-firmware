@@ -98,19 +98,29 @@ void cancel() {
 void note(std::span<const charger_test::Step> steps, std::size_t index) { g_j.note(steps, index); }
 void note_plan(std::span<const charger_test::Step> steps) { g_j.note_plan(steps); }
 void note_spec() { g_j.note_spec(); }
+#if K2_SPECROWS
 std::size_t spec_rows_size() { return g_j.spec_rows_size(); }
 bool spec_rows_read(std::uint32_t off, std::span<std::uint8_t> out) {
     std::size_t n = 0;
     return g_j.spec_rows_read(off, out, n) == fs::Err::Ok && n == out.size();
 }
+#endif
 
 void pump(std::uint32_t run_id, const charger_test::Options& o, const charger_test::Evidence& e,
-          std::span<const charger_test::Step> steps, const SpecRowsSource* rows) {
+          std::span<const charger_test::Step> steps
+#if K2_SPECROWS
+          , const SpecRowsSource* rows
+#endif
+          ) {
     if (!g_j.pending()) return;
     const std::uint32_t t0 = systick::millis();
     if (!g_job.active) g_job = {true, false, t0, 0, 0, 0};
     const char* what = g_job.arm ? "begin" : "replan";
+#if K2_SPECROWS
     const Err r = g_j.pump(run_id, o, e, steps, rows);
+#else
+    const Err r = g_j.pump(run_id, o, e, steps);
+#endif
     const std::uint32_t t1 = systick::millis();
     const std::uint32_t ms = t1 - t0;
     ++g_job.pumps; g_job.busy_ms += ms;

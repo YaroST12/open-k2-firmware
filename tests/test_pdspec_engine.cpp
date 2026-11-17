@@ -1205,6 +1205,7 @@ void full_20mv_sweep_option() {
     CHECK_COND(verdict(e, Check::PpsMonotonic) == Verdict::Pass);
 }
 
+#if K2_SPECROWS
 // The per-transition rows the Deep result lists (spec_rows.hpp) are the engine's own judgements, one per measurement: a fixed check has
 // a row per transition that measured it, a programmable check one per pass; the failing ones add up to the aggregate's count.
 void rows_follow_the_aggregates_one_run(Sim& m, std::uint8_t families, bool expect_fail) {
@@ -1347,13 +1348,16 @@ void rows_never_outnumber_the_measurements() {
     for (std::size_t i = 0; i < specsec::kCells; ++i) CHECK_COND(specsec::row_count(e, i) <= e.agg(specsec::kOrder[i]).n);
     CHECK_COND(specsec::rows_file_size(e) <= specsec::kRowsMaxFile);
 }
+#endif
 
 }  // namespace
 
 int main() {
+#if K2_SPECROWS
     rows_follow_the_aggregates();
     rows_name_the_transition();
     rows_never_outnumber_the_measurements();
+#endif
     clean_source_scores_zero();
     unloaded_slow_fall_and_early_ps_rdy();
     pps_offset_and_slow_settle();

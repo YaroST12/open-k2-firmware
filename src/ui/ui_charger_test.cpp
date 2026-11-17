@@ -385,7 +385,9 @@ void ChargerTestSession::spec_collect(specsec::Result& r) {
 // The stage's result is final: noted for the journal (one small record, written by journal_pump behind the rows and the header, on the
 // same write gate), so a reboot after the stage resumes with the section on the grid.
 void ChargerTestSession::spec_done(const specsec::Result&) {
+#if K2_SPECROWS
     spec_live_run_ = runner_.run_id();   // the engine still holds the records behind the result: the detail page lists them from there
+#endif
     if (journal_active_ && !journal_closed_) charger_journal::hw::note_spec();
 }
 // A row whose verdict stands but whose reason changed afterwards (the sweep closing marks its APDO's fixed rows, Reason::Folded): only
@@ -491,7 +493,7 @@ void ChargerTestSession::journal_pump(uint32_t now) {
     }
     pump_journal();
 }
-#if K2_PDSPEC
+#if K2_PDSPEC && K2_SPECROWS
 namespace {
 struct SpecRowsCtx { const pdspec::Engine* e; uint32_t run; };
 void spec_rows_fill(void* p, size_t off, std::span<uint8_t> out) {
@@ -501,11 +503,11 @@ void spec_rows_fill(void* p, size_t off, std::span<uint8_t> out) {
 static_assert(specsec::kRowsMaxFile <= charger_journal::kSpecRowsMax, "the journal's rows file ceiling holds the engine's cap");
 }
 #endif
-// The journal's pump with the spec rows' source: the engine while it still holds this run's records (a rows file is the engine's
-// projection written once, behind the spec record; nothing is computed unless the journal writes it).
+// The journal's pump (K2_SPECROWS: with the spec rows' source): the engine while it still holds this run's records (a rows file is the
+// engine's projection written once, behind the spec record; nothing is computed unless the journal writes it).
 void ChargerTestSession::pump_journal() {
     namespace cj = charger_journal;
-#if K2_PDSPEC
+#if K2_PDSPEC && K2_SPECROWS
     const pdspec::Engine* e = spec_live_run_ && spec_live_run_ == runner_.run_id() ? ctx_.ui->pd_spec().engine_for_test() : nullptr;
     SpecRowsCtx c{e, runner_.run_id()};
     // No transitions, no file: a header alone would only cost a flash write and a stale-file drop.
@@ -1461,8 +1463,11 @@ void ChargerTestPage::on_stage(bool entering) {
     grid_ = kit::ResultGrid{};
     if (!entering && !ctx_.blank) clear_y_ = kit::kBelowBar;
     if (s_.stage_ == Stage::Results) build_results();
+#if K2_SPECROWS
     if (s_.stage_ == Stage::SpecDetail) spec_list_load(s_.detail_index_);
+#endif
 }
+#if K2_SPECROWS
 // The spec rows file of the run in hand for the remote: the engine's projection while it holds this run's records, else the journal's
 // file (its header must name this run). 0 = none. Both sources give the same bytes (rows_fill writes what the journal stores).
 // The journal's rows file when its header names `run`: its size and the parsed index. 0 = none.
@@ -1540,6 +1545,7 @@ bool ChargerTestPage::spec_list_row(int i, specsec::Row &r) const {
     specsec::row_decode(d, r);
     return true;
 }
+#endif
 void ChargerTestPage::on_confirmation_dropped() { foot_.invalidate(); action_.invalidate(); }
 void ChargerTestPage::on_cable_changed() { update(ctx_.now); }
 void ChargerTestPage::build_grid(bool running_grid, bool note_cuts) {
@@ -1741,7 +1747,11 @@ int ChargerTestPage::row_count() const {
     case Stage::Results: return delta_row() + (s_.delta_n_ ? 1 : 0);
     case Stage::Changes: return static_cast<int>(s_.delta_n_);
     case Stage::Steps: return static_cast<int>(counts(s_.runner_, s_.picked(), s_.result_family_).total);
+#if K2_SPECROWS
     case Stage::SpecDetail: return spec_list_.n >= 2 ? spec_list_.n : 0;   // the open check's transitions; the summary table has no rows
+#else
+    case Stage::SpecDetail:   // the summary table has no rows
+#endif
     case Stage::Detail: return 0;
     case Stage::Resume: return 3;
     case Stage::Identity: case Stage::Ask: return 0;   // retired, never entered
@@ -2033,6 +2043,7 @@ static FooterTone spec_footer(StrBuf<32>& f, int check, const specsec::Cell& c, 
     case Stage::SpecDetail: {
         const int k = s_.detail_index_;
         if (k < 0 || k >= spec_n()) { f.put("No result"); return FooterTone::Info; }
+#if K2_SPECROWS
         if (spec_list_on()) {   // the worst transition, by name, in the verdict's tone
             specsec::Row r;
             if (!spec_list_row(spec_list_.worst, r)) { f.put("worst: no row"); return FooterTone::Info; }
@@ -2053,6 +2064,7 @@ static FooterTone spec_footer(StrBuf<32>& f, int check, const specsec::Cell& c, 
             f.put(g.view());
             return fail ? FooterTone::Error : FooterTone::Ok;
         }
+#endif
         return spec_footer(f, static_cast<int>(specsec::kOrder[static_cast<size_t>(k)]), s_.runner_.evidence().spec.cells[static_cast<size_t>(k)], true);
     }
     case Stage::Steps: {
@@ -2206,6 +2218,7 @@ void ChargerTestPage::list_row(int index, bool focused, kit::RowSpec &out) {
         out.tail = row_tail_.view();
         break;
     }
+#if K2_SPECROWS
     case Stage::SpecDetail: {   // one transition of the open check: marker, the pair, the value, the margin (red when it fails)
         specsec::Row r;
         if (!spec_list_row(index, r)) { out.text = "-"; out.text_color = kDim; break; }
@@ -2223,6 +2236,7 @@ void ChargerTestPage::list_row(int index, bool focused, kit::RowSpec &out) {
         out.tail_color = fail ? kError : kDim;
         break;
     }
+#endif
     case Stage::Steps: {
         const int si = step_index(index);
         if (si < 0) { out.text = "No selected steps"; out.text_color = kDim; break; }
@@ -2262,7 +2276,11 @@ void ChargerTestPage::list_row(int index, bool focused, kit::RowSpec &out) {
 // two lines); any other unit, and every other list, has no header and the list takes the whole body.
 void ChargerTestPage::paint_list() {
     if (!laid_) {
+#if K2_SPECROWS
         int16_t y = s_.stage_ == Stage::Resume ? 56 : s_.stage_ == Stage::Refuse ? 110 : s_.stage_ == Stage::SpecDetail ? 58 : kit::kBodyY;
+#else
+        int16_t y = s_.stage_ == Stage::Resume ? 56 : s_.stage_ == Stage::Refuse ? 110 : kit::kBodyY;
+#endif
         hdr_n_ = 0;
         if (s_.stage_ == Stage::Steps && s_.picked() && results_row_ >= 0 && static_cast<size_t>(results_row_) < line_n_) {
             size_t first = static_cast<size_t>(results_row_);
@@ -3089,10 +3107,12 @@ void ChargerTestPage::paint_detail() {
     }
 }
 
-// One PD spec check's detail: the same seven rows the old Spec page showed (verdict, worst, limit, count, fails, place, penalty) in a
+// One PD spec check's detail: the seven rows the old Spec page showed (verdict, worst, limit, count, fails, place, penalty) in a
 // KvTable from the body top. The limit, the count and the place are what the cell kept (a restored cell from an old journal reads "-").
+// K2_SPECROWS builds list the check's transitions instead when it has two or more (a band, then one row each).
 void ChargerTestPage::paint_spec_detail() {
     const int k = s_.detail_index_;
+#if K2_SPECROWS
     if (spec_list_on() && k >= 0 && k < spec_n()) {   // the check's transitions: the verdict band, then one row each (PLUS / MINUS scroll)
         if (detail_step_ == 0) {
             const Surface &c = ctx_.content;
@@ -3107,6 +3127,7 @@ void ChargerTestPage::paint_spec_detail() {
         paint_list();
         return;
     }
+#endif
     if (laid_) return;
     if (k < 0 || k >= spec_n()) { laid_ = true; return; }
     constexpr kit::KvLayout kSpecDet{kit::kBodyY, kit::kRowH, 6, nullptr, nullptr, kit::kKvValueX, 18, Align::Left};

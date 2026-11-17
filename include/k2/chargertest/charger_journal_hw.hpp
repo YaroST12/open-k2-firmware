@@ -37,6 +37,7 @@ bool pending();
 // not count. The Runner's phase marker depends on this alone.
 bool plan_pending();
 // At most ONE file: the arm's next piece, else the first dirty section, else the header.
+#if K2_SPECROWS
 // `rows` = where the spec's per-transition rows come from (written once, after note_spec(), as /jr/spt.rec; null = none).
 void pump(std::uint32_t run_id, const charger_test::Options&, const charger_test::Evidence&,
           std::span<const charger_test::Step>, const SpecRowsSource* rows = nullptr);
@@ -44,6 +45,9 @@ void pump(std::uint32_t run_id, const charger_test::Options&, const charger_test
 // specsec::rows_fill's image, whatever wrote them.
 std::size_t spec_rows_size();
 bool spec_rows_read(std::uint32_t off, std::span<std::uint8_t> out);
+#else
+void pump(std::uint32_t run_id, const charger_test::Options&, const charger_test::Evidence&, std::span<const charger_test::Step>);
+#endif
 
 void phase(Phase, std::span<const charger_test::Step>, std::size_t index);
 void resumed(std::uint8_t count);

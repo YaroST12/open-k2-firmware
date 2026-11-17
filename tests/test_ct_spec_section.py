@@ -82,7 +82,7 @@ def build_and_run(src, tag):
         cpp = Path(d) / f"{tag}.cpp"
         exe = Path(d) / tag
         cpp.write_text(src)
-        subprocess.run(["g++", "-std=c++23", "-DK2_PDSPEC=1", "-I", str(ROOT / "include"), str(cpp), "-o", str(exe)], check=True,
+        subprocess.run(["g++", "-std=c++23", "-DK2_PDSPEC=1", "-DK2_SPECROWS=1", "-I", str(ROOT / "include"), str(cpp), "-o", str(exe)], check=True,
                        capture_output=True)
         return subprocess.run([str(exe)], check=True, capture_output=True, text=True).stdout
 

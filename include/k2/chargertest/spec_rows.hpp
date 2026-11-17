@@ -16,7 +16,13 @@
 // File: header (kRowsHdr: "SPT1", run id u32, 27 row counts u16, 27 worst-row indices u8, one pad), then the rows of cell 0, of
 // cell 1, ... each in record order. rows_parse refuses a file of another run, of another size or without the magic, and the page then
 // shows the summary.
+//
+// Built only with K2_SPECROWS=1 (build_config.h): without it the header is empty and none of this links.
 #pragma once
+
+#include "k2/core/build_config.h"
+
+#if K2_SPECROWS
 
 #include <array>
 #include <cstddef>
@@ -354,3 +360,5 @@ inline void rows_fill(const pdspec::Engine& e, std::uint32_t run_id, std::size_t
 }
 
 }  // namespace k2::specsec
+
+#endif  // K2_SPECROWS

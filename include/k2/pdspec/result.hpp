@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <span>
 
+#include "k2/core/build_config.h"
 #include "k2/pd/pd_spec_timing.hpp"
 
 namespace k2::pdspec {
@@ -249,7 +250,7 @@ constexpr Verdict verdict(Check c, const Agg& a) {
 // ---- per-item records (the report's detail) ------------------------------------------------------------------------------------
 
 // One fixed transition of the walk. Times in units of 0.1 ms (Accept) or ms; 0xFFFF = not seen.
-// In RAM 20 bytes (the record pool, engine.hpp); on the wire 20 (kTransBytes: flags, a zero byte, ..., gap_ms as a u16 last).
+// In RAM 18 bytes, 20 with K2_SPECROWS (the record pool, engine.hpp); on the wire 20 (kTransBytes: flags, a zero byte, ..., gap_ms as a u16 last).
 struct TransRec {
     std::uint8_t from = 0, to = 0;       // PDO positions
     std::uint8_t flags = 0;              // kTr* below
@@ -261,10 +262,13 @@ struct TransRec {
     std::uint16_t psrdy_mv = 0;          // VBUS at PS_RDY (0 = unknown)
     std::uint16_t peak_mv = 0;           // highest (up) / lowest (down) VBUS after the Accept
     std::uint16_t final_mv = 0;          // settled level (0 = not settled in the capture)
+#if K2_SPECROWS
     std::uint8_t seen = 0, fails = 0;    // per check (kTrBit* below): measured on this transition, and judged failing; RAM only, the per-transition rows
+#endif
 };
-static_assert(sizeof(TransRec) == 20);
+static_assert(sizeof(TransRec) == (K2_SPECROWS ? 20 : 18));
 inline constexpr std::size_t kTransBytes = 20;   // a TransRec on the wire
+#if K2_SPECROWS
 // The per-check bits of TransRec::seen / fails: the checks that measure once per fixed transition.
 inline constexpr std::uint8_t kTrBitAccept = 1, kTrBitPsRdy = 2, kTrBitSrcStart = 4, kTrBitEarly = 8, kTrBitOver = 16, kTrBitSlew = 32, kTrBitAcc = 64;
 constexpr std::uint8_t tr_bit(Check c) {
@@ -279,6 +283,7 @@ constexpr std::uint8_t tr_bit(Check c) {
         default: return 0;
     }
 }
+#endif
 inline constexpr std::uint8_t kTrEpr = 1, kTrLiveBand = 2, kTrRefused = 4, kTrNoCapture = 8, kTrSuspectStamp = 16;
 
 // One pass of the programmable sweep: one window of an APDO (plan.hpp Prog) at one step class (20 / 100 / 500 mV for PPS, 100 / 500 /

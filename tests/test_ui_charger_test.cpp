@@ -1534,6 +1534,7 @@ static void test_the_spec_detail_shows_the_limit_while_the_engine_holds_the_run(
     check_text_at(kSmall, row_y, lim.view(), kText, kBg, kit::kKvValueX);                                  // Limit: the engine's bound
     check_text_at(kSmall, row_y + kit::kRowH, cnt.view(), kText, kBg, kit::kKvValueX);                    // Count
 }
+#if K2_SPECROWS
 // The rows file the journal keeps for the run (chargertest/spec_rows.hpp): cell k lists per_cell[k] (fixed transitions, 10 bytes each).
 static std::vector<uint8_t> spec_rows_image(uint32_t run_id, const std::vector<std::vector<specsec::Row>>& per_cell) {
     std::array<uint16_t, specsec::kCells> counts{};
@@ -1644,6 +1645,35 @@ static void test_the_spec_detail_lists_the_transitions_of_the_journal() {
     g_stub.journal_rows.clear();
     open_check(0); CHECK_EQ(ui.list_state().count, 0); close_check();
 }
+#else
+// A build without K2_SPECROWS never lists transitions, whatever the stub journal holds: OK on a check opens the seven-row summary table
+// (no list rows, the Limit row drawn from the cell), for a passing and a failing check alike.
+static void test_the_spec_detail_is_the_summary_table_without_transition_rows() {
+    six_pdo_fixture(); Ui ui; uint32_t t;
+    finished_results(ui, t);
+    const auto calm = [&] { for (int i = 0; i < 64 && ui.painting(); ++i) ui.tick(t += 100); CHECK_EQ(ui.painting(), false); };
+    const int units = ui.list_state().count;   // the unit rows: read before the spec result is set
+    const specsec::Result spec = spec_fixture();
+    const_cast<ct::Evidence&>(ui.charger_test_results().evidence()).spec = spec;
+    g_stub.journal_rows.assign(256, 0x5A);   // a file a K2_SPECROWS build would have written: it is never read
+    top(ui, t); press(ui, Button::Ok, t); ui.tick(t += 100); calm();   // into a unit's Steps and back: the grid is rebuilt
+    press(ui, Button::Back, t); ui.tick(t += 100); calm();
+    for (const int k : {0, 1}) {   // fixture: cell 0 passes, cell 1 fails
+        top(ui, t);
+        for (int i = 0; i < units + k; ++i) press(ui, Button::Plus, t);
+        ui.tick(t += 100); calm();
+        press(ui, Button::Ok, t); ui.tick(t += 100); calm();
+        CHECK_EQ(ui.charger_test_stage(), 15);   // SpecDetail
+        CHECK_EQ(ui.list_state().count, 0);
+        StrBuf<20> v; uint16_t color = kText;
+        spectext::detail_value(2, static_cast<int>(specsec::kOrder[static_cast<size_t>(k)]), spec.cells[static_cast<size_t>(k)], v, color);
+        const int row_y = kit::kBodyY + 2 * kit::kRowH + kit::row_text_y(kit::kRowH, kSmall.height);
+        check_text_at(kSmall, row_y, v.view(), color, kBg, kit::kKvValueX);   // the Limit row
+        press(ui, Button::Back, t); ui.tick(t += 100); calm();
+        CHECK_EQ(ui.charger_test_stage(), 6);
+    }
+}
+#endif
 // A Deep run in the host stub: the PD spec section runs the engine against the stub's source and, when the run ends, the detail pages list
 // the transitions from the engine (no journal file read); the stub's source gives the engine none, so no rows file is written.
 static void test_a_deep_run_lists_its_transitions_from_the_engine() {
@@ -1658,7 +1688,9 @@ static void test_a_deep_run_lists_its_transitions_from_the_engine() {
     CHECK_EQ(ui.charger_test_stage(), 6);
     CHECK_EQ(g_stub.journal_rows.empty(), true);
     CHECK_EQ(e != nullptr, true);
+#if K2_SPECROWS
     if (e) CHECK_EQ(specsec::rows_total(*e), size_t(0));
+#endif
 }
 // A voltage fold is a caution (user decision 2026-11-16): the sweep row and the APDO's fixed rows on the folded side read amber,
 // neither pass nor fail. The sweep itself is a clean run here; the fold is set on the finished run (the host stub cannot make a
@@ -5328,7 +5360,11 @@ int main() {
     test_preflight_wrong_voltage_under_pdo1_contract_is_logged();
     test_the_results_grid_carries_the_pdspec_section();
     test_the_spec_detail_shows_the_limit_while_the_engine_holds_the_run();
+#if K2_SPECROWS
     test_the_spec_detail_lists_the_transitions_of_the_journal();
+#else
+    test_the_spec_detail_is_the_summary_table_without_transition_rows();
+#endif
     test_a_deep_run_lists_its_transitions_from_the_engine();
     test_the_running_counter_counts_executed_rows_like_the_bar();
     test_family_steps_scenes();

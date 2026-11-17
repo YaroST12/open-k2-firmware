@@ -145,7 +145,8 @@
 //                                    off(2 LE) n(1) data(n), n <= 48. total 0 = no rows (a default image, a run with no
 //                                    transitions, a journal from before they were kept: the cells then show their summary). The file
 //                                    holds at most specsec::kRowsMax (392) rows; past that the last rows of the run are not listed and
-//                                    the counts are the ones listed. off past total is BadArg. An older firmware answers BadLength.
+//                                    the counts are the ones listed. off past total is BadArg. An older firmware, and a build without K2_SPECROWS
+//                                    (the shipping default), answers BadLength.
 //                                    CANCEL, req 5 (one byte): the device's own stop (BACK) - a run stops, the wait is
 //                                    cancelled (Rd released), the confirm window (and a pending remote START) closes, the
 //                                    Refuse stage returns to Review, a pending resume is abandoned. rsp what(1): kCtStop*.
@@ -1557,8 +1558,10 @@ concept Backend = requires(B &b, uint8_t u8, uint16_t u16, bool on) {
     { b.ufcs_op(u8) } -> std::same_as<Status>;                           // kUfcsReset / kUfcsProbe / kUfcsStop
     { b.ufcs_read(uint16_t{}, std::span<uint8_t>{}) } -> std::same_as<size_t>;   // blob bytes from off, returns how many
     { b.pdstress_info() } -> std::same_as<PdStressInfo>;                  // PD Stress status block
+#if K2_SPECROWS
     { b.spec_rows_len() } -> std::same_as<uint16_t>;                     // bytes of the spec rows file of the run in hand, 0 = none
     { b.spec_rows_read(uint16_t{}, std::span<uint8_t>{}) } -> std::same_as<size_t>;   // file bytes from off, returns how many
+#endif
     { b.loopprobe_len() } -> std::same_as<uint16_t>;                      // bytes of the stored loop probe file, 0 = none
     { b.loopprobe_read(uint16_t{}, std::span<uint8_t>{}) } -> std::same_as<size_t>;   // file bytes from off, returns how many
     { b.hostreport_len() } -> std::same_as<uint16_t>;                     // bytes of the stored Host report file, 0 = none
@@ -1627,6 +1630,7 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
             if (p[1] > charger_test_spec_total(s, p[0])) return reply(Status::BadArg);
             return reply_n(encode_charger_test_spec(buf, s, p[0], p[1]));
         }
+#if K2_SPECROWS
         if (p.size() == 3 && p[0] == kChargerTestSpecRowsReq) {
             const uint16_t off = detail::rd16(&p[1]);
             const uint16_t total = backend.spec_rows_len();
@@ -1638,6 +1642,7 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
             buf[4] = uint8_t(total); buf[5] = uint8_t(total >> 8); buf[6] = uint8_t(off); buf[7] = uint8_t(off >> 8); buf[8] = uint8_t(n);
             return reply_n(kCtSpecRowsHeader + n);
         }
+#endif
         if (!p.empty() && p.size() != 1 && p.size() != 9 && p.size() != 10) return reply(Status::BadLength);
         if (p.size() == 1 && p[0] == kChargerTestViewReq) return reply_n(encode_charger_test_view(buf, backend.charger_test_view()));
         const bool modern = p.size() == 1 || p.size() == 10;

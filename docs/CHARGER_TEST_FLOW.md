@@ -757,7 +757,9 @@ ended hard); a lost link ends it as a fault. The default image has no spec stage
 
 The grid gains a section after the units: 27 VerdictCells (`specsec::kOrder`, labels in `spec_text.hpp`, at most 8 characters in
 the 52 px label strip) in the ordinary rows, a 2 px rule above the PPS block, the AVS block and the observer. A cell shows the worst value (or, for a skipped check, the
-reason, struck out); OK on a cell opens `SpecDetail`. A check that judged more than one transition or pass (`specsec::has_list`: the fixed
+reason, struck out); OK on a cell opens `SpecDetail`. **The list below is built only with `K2_SPECROWS=1`** (off by default since 2026-11-17: the shipping
+image has no flash for it); without it every check opens the summary KvTable, no `/jr/spt.rec` is written or read and `0x0B [8]` answers BadLength.
+A check that judged more than one transition or pass (`specsec::has_list`: the fixed
 transition checks and the PPS / AVS pass checks, cells 0-15 and 19-24) opens a **per-transition list** (user decision 2026-11-17): a TopBar with the
 check's name, a 36 px verdict band (the verdict word and the count), a RowList with one verdict-marked row per transition (from to volts, the
 value in the check's own unit, the margin past the limit in red when it failed; a programmable pass names its window and step class and the

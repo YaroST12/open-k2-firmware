@@ -12,7 +12,8 @@
             flash window (below 0x08040000); prints its size and headroom; SKIPPED with K2_HOT_BLOCK=0
   6 ids     remote command ids unique across remote_proto.hpp, k2_remote.py, k2proto.js
   7 64bit   no unallowlisted 64-bit integer types in src/ or include/k2/ (tools/check_64bit.py)
-  8 tests   make test (C++, Python; node only with K2_WEB=1)
+  8 tests   make test (C++, Python; node only with K2_WEB=1), then make test-specrows (the K2_SPECROWS=1 host pass: the
+            per-transition row tests that the default pass compiles out)
   9 sanitizers  tools/static_check.sh sanitize: every host test under ASan + UBSan in the builder image, once with
             g++ and once with clang (extras: float casts, local bounds, sign change); any report from our code or any
             failed test fails; incremental in build/san-gcc and build/san-clang
@@ -27,6 +28,8 @@
   Only with K2_WEB=1 (env or `make K2_WEB=1 gate`), which also puts the node tests back into step 8:
  12 net     the K2_NET=1 variant (off by default) in build-net/: -Werror build, layout invariants, stack budget, map
  13 webusb  the K2_WEBUSB=1 variant (off by default) in build-webusb/: the same checks
+ 14 specrows the K2_PDSPEC=1 K2_SPECROWS=1 variant (off by default: the per-transition list does not fit the shipping
+            image) in build-specrows/: the same checks
 
   --static  (opt-in, appended as the last step) tools/static_check.sh all: clang-tidy, ARM g++ -fanalyzer and
             cppcheck, counts printed (report only, never a failure)
@@ -355,9 +358,10 @@ def step_64bit():
 
 
 def step_tests():
-    r = run(["make", f"-j{os.environ.get('K2_J', '4')}", "-Otarget", "test"])
-    if r.returncode:
-        raise GateError("make test failed:\n" + "\n".join((r.stdout + r.stderr).splitlines()[-25:]))
+    for target in ("test", "test-specrows"):   # the shipping config, then the K2_SPECROWS=1 host pass (its own host-build-rows/)
+        r = run(["make", f"-j{os.environ.get('K2_J', '4')}", "-Otarget", target])
+        if r.returncode:
+            raise GateError(f"make {target} failed:\n" + "\n".join((r.stdout + r.stderr).splitlines()[-25:]))
 
 
 def step_size():
@@ -451,6 +455,21 @@ def step_webusb_variant():
     print(f"  K2_WEBUSB=1 variant ({WEBUSB_BUILD}/open_k2.elf): " + parse_size_line(docker_tool("arm-none-eabi-size", f"{WEBUSB_BUILD}/open_k2.elf")))
 
 
+SPECROWS_BUILD = "build-specrows"  # the K2_SPECROWS=1 variant's own build directory
+
+
+def step_specrows_variant():
+    """K2_SPECROWS=1 (the PD spec per-transition list: engine rows, journal rows file, list detail page, remote form 8)
+    is off by default, so nothing else compiles the firmware with it: build it in its own directory (the flag changes
+    struct layouts, so never share a directory with a K2_SPECROWS=0 build) and hold it to the same checks. Size is
+    reported, not compared."""
+    step_build(SPECROWS_BUILD, "K2_PDSPEC=1", "K2_SPECROWS=1")
+    step_invariants(SPECROWS_BUILD)
+    step_stack(SPECROWS_BUILD)
+    step_map(SPECROWS_BUILD)
+    print(f"  K2_SPECROWS=1 variant ({SPECROWS_BUILD}/open_k2.elf): " + parse_size_line(docker_tool("arm-none-eabi-size", f"{SPECROWS_BUILD}/open_k2.elf")))
+
+
 def parse_size_line(text):
     s = parse_size(text)
     return f"text={s['text']} data={s['data']} bss={s['bss']}"
@@ -480,7 +499,8 @@ STEPS = [("build (-Werror, docker as host uid)", step_build), ("bootloader invar
          ("sanitizers: host tests under ASan/UBSan, g++ and clang (docker)", step_sanitize), ("size report", step_size),
          ("perf (device selftest vs tools/perf_baseline.json; skipped without a matching device)", step_perf)] + (
          [("K2_NET=1 variant (-Werror, layout, stack, map)", step_net_variant),
-          ("K2_WEBUSB=1 variant (-Werror, layout, stack, map)", step_webusb_variant)] if WEB else [])
+          ("K2_WEBUSB=1 variant (-Werror, layout, stack, map)", step_webusb_variant),
+          ("K2_SPECROWS=1 variant (-Werror, layout, stack, map)", step_specrows_variant)] if WEB else [])
 
 
 def main():
