@@ -342,7 +342,7 @@ ifneq ($(CLANG),1)
 # -Oz on cold objects stops GCC LTO from inlining cold callees into -Os hot callers (-124 B .text, -14.8 KB hot block, -56 B stack).
 COLD_SIZE_FLAGS = -Oz -fno-reorder-blocks -fno-caller-saves -fno-if-conversion -fno-tree-dominator-opts -fno-tree-loop-im \
                   -fno-move-loop-invariants -fno-optimize-sibling-calls -fno-inline-functions
-HOT_SRC_FILES = $(shell grep -rl K2_HOT $(SRC_DIR) --include='*.cpp')
+HOT_SRC_FILES = $(shell $(PYTHON) -c "import pathlib,re; print(' '.join(str(p) for p in sorted(pathlib.Path('$(SRC_DIR)').rglob('*.cpp')) if re.search(r'\bK2_HOT(?:_DATA)?\b', re.sub(r'//[^\n]*|/\*.*?\*/', '', p.read_text(errors='replace'), flags=re.S))))")
 COLD_CXX_SRCS = $(filter-out $(HOT_SRC_FILES) $(FONT_SRCS) $(SRC_DIR)/battery/battery.cpp $(SRC_DIR)/fastcharge/dpsniff.cpp \
                 $(SRC_DIR)/drivers/adc_calc.cpp $(SRC_DIR)/drivers/power_calc.cpp $(SRC_DIR)/fastcharge/fastcharge_classify.cpp,$(CXX_SRCS))
 COLD_OBJS = $(patsubst $(SRC_DIR)/%.cpp,$(BUILD_DIR)/%.o,$(COLD_CXX_SRCS))
@@ -581,7 +581,7 @@ $(HOST_DIR)/test_fusb302_scan: $(OBJ_DIR)/tests/test_fusb302_scan.o $(SCAN_OBJS)
 # -DK2_WORLD_STUBS (no clock, FUSB302, power, ADC or Rd-comeback stand-ins). The reboot world boots each life through the real
 # PD half of boot() (src/core/boot_pd.cpp) and the real self-powered comeback (src/core/rd_comeback.cpp); the main loop runs the
 # real HID-cable loop guard (src/core/loop_guard.cpp) on the world's aux rail and VBUS.
-WORLD_SRCS    = tests/test_world_replay.cpp tests/world_sim.cpp tests/ui_stubs.cpp $(SRC_DIR)/core/main_loop.cpp
+WORLD_SRCS    = tests/test_world_replay.cpp tests/world_sim.cpp tests/ui_stubs.cpp $(SRC_DIR)/core/main_loop.cpp $(SRC_DIR)/core/main_loop_cold.cpp
 WORLD_SRCS    += $(SRC_DIR)/core/boot_pd.cpp $(SRC_DIR)/core/rd_comeback.cpp $(SRC_DIR)/core/loop_guard.cpp
 WORLD_OBJS     = $(patsubst %.cpp, $(OBJ_DIR)/world/%.o, $(WORLD_SRCS)) $(OBJ_DIR)/scan/$(SRC_DIR)/drivers/fusb302.o $(OBJ_DIR)/scan/$(SRC_DIR)/drivers/fusb302_cold.o
 WORLD_OBJS    += $(patsubst %.cpp, $(OBJ_DIR)/lib/%.o, $(SRC_DIR)/drivers/power_monitor.cpp $(SRC_DIR)/drivers/accelerometer.cpp)
@@ -594,7 +594,7 @@ $(HOST_DIR)/test_world_replay: $(WORLD_OBJS) $(filter-out $(OBJ_DIR)/lib/tests/u
 # The SuperVOOC world (tests/test_world_svooc.cpp): the same world plus the real trigger glue (src/fastcharge/svooc_trig.cpp)
 # against the adapter, line and interrupt model in tests/world_svooc.cpp. Built with -DK2_WORLD_SVOOC, which drops the world's
 # and ui_stubs' stand-ins for the trigger hooks (fctrig, shell_hw, link) that tests/world_svooc.cpp provides instead.
-WSVOOC_SRCS    = tests/test_world_svooc.cpp tests/world_svooc.cpp tests/world_sim.cpp tests/ui_stubs.cpp $(SRC_DIR)/core/main_loop.cpp
+WSVOOC_SRCS    = tests/test_world_svooc.cpp tests/world_svooc.cpp tests/world_sim.cpp tests/ui_stubs.cpp $(SRC_DIR)/core/main_loop.cpp $(SRC_DIR)/core/main_loop_cold.cpp
 WSVOOC_SRCS   += $(SRC_DIR)/core/boot_pd.cpp $(SRC_DIR)/core/rd_comeback.cpp $(SRC_DIR)/core/loop_guard.cpp
 WSVOOC_SRCS   += $(SRC_DIR)/fastcharge/svooc_trig.cpp
 WSVOOC_OBJS    = $(patsubst %.cpp, $(OBJ_DIR)/wsvooc/%.o, $(WSVOOC_SRCS)) $(OBJ_DIR)/scan/$(SRC_DIR)/drivers/fusb302.o $(OBJ_DIR)/scan/$(SRC_DIR)/drivers/fusb302_cold.o
