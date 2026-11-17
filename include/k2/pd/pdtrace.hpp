@@ -296,11 +296,10 @@ template <std::size_t Slots, std::size_t Bytes>
 class Captures {
 public:
     struct Slot {
-        Trigger trigger = Trigger::None;
         std::uint32_t seq = 0;       // order of capture, 0 = empty
         std::uint32_t at_ms = 0;     // millis() at the trigger
-        std::uint32_t until_ms = 0;  // post-trigger recording ends here
         std::uint16_t len = 0, pre = 0;
+        Trigger trigger = Trigger::None;
         bool filling = false;
         bool stored = false;         // loaded from flash after a boot: at_ms is meaningless
         bool keep = false;           // a finished capture still waiting for its flash write: a new capture takes another slot
@@ -311,14 +310,14 @@ public:
     // the cooldown is ignored (a hard-reset loop would otherwise evict every other capture).
     template <std::size_t N>
     bool start(Trigger t, std::uint32_t now_ms, const Ring<N>& ring, std::size_t pre_max = kCapPre) {
-        auto& cd = cooldown_[std::size_t(t) % 8];
-        if (cd.set && now_ms - cd.at < kTriggerCooldownMs) return false;
-        cd = {true, now_ms};
+        const std::size_t idx = std::size_t(t) % 8;
+        if ((cool_mask_ & (1u << idx)) && now_ms - cool_at_[idx] < kTriggerCooldownMs) return false;
+        cool_mask_ |= std::uint8_t(1u << idx);
+        cool_at_[idx] = now_ms;
         Slot* pick = pick_slot();
         pick->trigger = t;
         pick->seq = ++seq_;
         pick->at_ms = now_ms;
-        pick->until_ms = now_ms + kCapPostMs;
         pick->filling = true;
         pick->stored = false;
         pick->keep = false;
@@ -335,7 +334,7 @@ public:
         Slot* pick = pick_slot();
         pick->trigger = t;
         pick->seq = ++seq_;
-        pick->at_ms = pick->until_ms = now_ms;
+        pick->at_ms = now_ms;
         pick->filling = false;
         pick->stored = false;
         pick->keep = false;
@@ -358,7 +357,7 @@ public:
         Slot* pick = pick_slot();
         pick->trigger = t;
         pick->seq = ++seq_;
-        pick->at_ms = pick->until_ms = 0;
+        pick->at_ms = 0;
         pick->filling = false;
         pick->stored = true;
         pick->keep = false;
@@ -372,14 +371,14 @@ public:
     void feed(std::uint32_t now_ms, std::span<const std::uint8_t> record) {
         for (auto& s : slots_) {
             if (!s.filling) continue;
-            if (std::int32_t(now_ms - s.until_ms) >= 0 || s.len + record.size() > Bytes) { s.filling = false; continue; }
+            if (std::int32_t(now_ms - (s.at_ms + kCapPostMs)) >= 0 || s.len + record.size() > Bytes) { s.filling = false; continue; }
             for (std::uint8_t b : record) s.buf[s.len++] = b;
         }
     }
     void tick(std::uint32_t now_ms) {
-        for (auto& s : slots_) if (s.filling && std::int32_t(now_ms - s.until_ms) >= 0) s.filling = false;
+        for (auto& s : slots_) if (s.filling && std::int32_t(now_ms - (s.at_ms + kCapPostMs)) >= 0) s.filling = false;
     }
-    void clear() { for (auto& s : slots_) { s.seq = 0; s.trigger = Trigger::None; s.len = 0; s.filling = false; s.stored = false; s.keep = false; } cooldown_ = {}; }
+    void clear() { for (auto& s : slots_) { s.seq = 0; s.trigger = Trigger::None; s.len = 0; s.filling = false; s.stored = false; s.keep = false; } cool_mask_ = 0; }
     const Slot& slot(std::size_t i) const { return slots_[i]; }
     static constexpr std::size_t count() { return Slots; }
     // Protects a slot's capture from reuse while a newer capture can take another slot (see Slot::keep).
@@ -398,9 +397,9 @@ private:
         }
         return unkept ? unkept : oldest;
     }
-    struct Cool { bool set = false; std::uint32_t at = 0; };
     std::array<Slot, Slots> slots_{};
-    std::array<Cool, 8> cooldown_{};
+    std::array<std::uint32_t, 8> cool_at_{};
+    std::uint8_t cool_mask_ = 0;
     std::uint32_t seq_ = 0;
 };
 
