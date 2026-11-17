@@ -72,30 +72,27 @@ Tone tone(const ct::Step& x) {   // a chip of one step (a fixed level, a 6 A pro
     count(t, x);
     return roll_up(t);
 }
-struct Builder {
-    Layout& l;
-    Row* row = nullptr;
-    // Copies `s` into a fixed field; a text that does not fit is cut AND counted (Layout::cuts, a gate failure), never silent.
-    void put(char* dst, size_t cap, std::string_view s) {
-        const size_t n = std::min(s.size(), cap - 1);
+// Shared token emitter for Layout (into Layout::tokens), CompactGrid (into a single-row RowTokens before line wrapping),
+// and on-demand row regeneration (row_tokens).
+struct TokenBuf {
+    Token* data = nullptr;
+    uint8_t cap = 0;
+    uint8_t* count = nullptr;
+    uint8_t* cuts = nullptr;
+
+    void put_str(char* dst, size_t dcap, std::string_view s) {
+        const size_t n = std::min(s.size(), dcap - 1);
         std::memcpy(dst, s.data(), n);
         dst[n] = 0;
-        if (n < s.size() && l.cuts < 255) ++l.cuts;
-    }
-    void begin(std::string_view label, Tone label_tone, A a) {
-        if (l.row_count >= l.rows.size()) { row = nullptr; return; }
-        row = &l.rows[l.row_count++];
-        *row = {};
-        put(row->label, sizeof row->label, label);
-        row->label_tone = label_tone; row->algorithm = a; row->first = static_cast<uint8_t>(l.token_count);
+        if (n < s.size() && cuts && *cuts < 255) ++(*cuts);
     }
     Token* token(bool chip, Tone t, bool glue = false) {
-        if (!row || l.token_count >= l.tokens.size()) return nullptr;
-        Token& k = l.tokens[l.token_count++];
-        k = {}; k.chip = chip; k.tone = t; k.glue = glue; ++row->count;
+        if (!data || !count || *count >= cap) return nullptr;
+        Token& k = data[(*count)++];
+        k = {}; k.chip = chip; k.tone = t; k.glue = glue;
         return &k;
     }
-    void word(std::string_view s, Tone t) { if (Token* k = token(false, t)) put(k->text, sizeof k->text, s); }
+    void word(std::string_view s, Tone t) { if (Token* k = token(false, t)) put_str(k->text, sizeof k->text, s); }
     // `s` as plain tokens: whole words packed into tokens of at most 15 characters, so a long label wraps onto further grid
     // lines instead of being cut. `split_at_number`: the first word that starts with a digit opens a new token ("via PPS" |
     // "5-20V 5A"), keeping a range and its current together.
@@ -119,11 +116,167 @@ struct Builder {
             } else {
                 cur = token(false, t);
                 if (!cur) return;
-                put(cur->text, sizeof cur->text, w);
+                put_str(cur->text, sizeof cur->text, w);
                 len = std::min(w.size(), kMax);
             }
         }
     }
+};
+
+template <class Emit>
+void wrap_row_tokens(std::span<const Token> toks, const Metrics& m, Emit&& emit) {
+    if (toks.empty()) { emit(0, 0, true); return; }
+    uint8_t first = 0, count = 0;
+    bool head = true;
+    int x = 0, groups = 0, widest = 0;
+    for (size_t i = 0; i < toks.size();) {
+        size_t end = i + 1;
+        int gw = token_width(toks[i], m);
+        while (end < toks.size() && toks[end].glue) { gw += m.gap + token_width(toks[end], m); ++end; }
+        if (m.cells) gw = cell_width(toks[i], m);   // the verdict grid: equal cells, only the head's volt text counts
+        // A line breaks when the chips no longer fit: side by side (x), or in `groups` equal cells of the widest one's width.
+        const bool full = m.cells ? (groups + 1) * (std::max(widest, gw) + m.gap) - m.gap > m.avail
+                                  : x + m.gap + gw > m.avail;
+        if (count && (full || (m.max_groups && groups >= m.max_groups))) {
+            emit(first, count, head);
+            first = static_cast<uint8_t>(i);
+            count = 0;
+            head = false;
+            x = 0; groups = 0; widest = 0;
+        }
+        ++groups;
+        widest = std::max(widest, gw);
+        x += (count ? m.gap : 0) + gw;
+        count = static_cast<uint8_t>(count + (end - i));
+        i = end;
+    }
+    emit(first, count, head);
+}
+
+struct Sink {
+    Layout* l = nullptr;
+    CompactGrid* g = nullptr;
+    const Metrics* m = nullptr;
+    std::span<CompactLine> lines{};
+    size_t* line_n = nullptr;
+    RowTokens* rt = nullptr;
+    Row* lrow = nullptr;
+    CompactRow crow{};
+    bool active = false;
+    uint8_t ltok_cap = 0;
+
+    TokenBuf buf() {
+        if (l) {
+            const uint8_t rem = lrow && l->token_count < l->tokens.size()
+                                    ? static_cast<uint8_t>(l->tokens.size() - l->token_count) : 0;
+            return {lrow ? l->tokens.data() + l->token_count : nullptr, rem, lrow ? &lrow->count : nullptr, &l->cuts};
+        }
+        return {active ? rt->toks.data() : nullptr, kMaxRowTokens, active ? &rt->count : nullptr, &g->cuts};
+    }
+
+    size_t row_count() const { return l ? l->row_count : g->row_count; }
+    size_t line_count() const { return line_n ? *line_n : 0; }
+    uint8_t open_tok_count() const { return l ? (lrow ? lrow->count : 0) : (active ? rt->count : 0); }
+
+    void flush() {
+        if (!active) return;
+        active = false;
+        if (l) {
+            if (lrow) l->token_count += lrow->count;
+            lrow = nullptr;
+            return;
+        }
+        if (g->row_count >= g->rows.size()) return;
+        const uint8_t r_idx = g->row_count++;
+        if (crow.kind == CompactKind::Fact) {
+            const size_t llen = std::strlen(rt->label) + 1;
+            if (g->pool_used + llen <= g->pool.size()) {
+                crow.mv = g->pool_used;
+                std::memcpy(g->pool.data() + g->pool_used, rt->label, llen);
+                g->pool_used = static_cast<uint8_t>(g->pool_used + llen);
+            } else {
+                crow.mv = 0;
+                if (g->cuts < 255) ++g->cuts;
+            }
+            crow.first = g->fact_count;
+            crow.count = 0;
+            for (uint8_t i = 0; i < rt->count; ++i) {
+                const Token& k = rt->toks[i];
+                const size_t len = std::min<size_t>(std::strlen(k.text), 31);
+                if (g->fact_count >= g->fact_toks.size() || g->pool_used + len > g->pool.size()) {
+                    if (g->cuts < 255) ++g->cuts;
+                    break;
+                }
+                g->fact_toks[g->fact_count++] = {g->pool_used, static_cast<uint8_t>(len | (unsigned(k.tone) << 5))};
+                std::memcpy(g->pool.data() + g->pool_used, k.text, len);
+                g->pool_used = static_cast<uint8_t>(g->pool_used + len);
+                ++crow.count;
+            }
+        }
+        g->rows[r_idx] = crow;
+        wrap_row_tokens(std::span<const Token>(rt->toks.data(), rt->count), *m,
+                        [&](uint8_t first, uint8_t count, bool head) {
+                            if (*line_n < lines.size()) lines[(*line_n)++] = CompactLine::make(r_idx, first, count, head);
+                        });
+    }
+
+    void begin(CompactKind kind, std::string_view label, Tone label_tone, A a, uint16_t mv = 0) {
+        flush();
+        if (l) {
+            if (l->row_count >= l->rows.size()) { lrow = nullptr; return; }
+            lrow = &l->rows[l->row_count++];
+            *lrow = {};
+            TokenBuf tb{nullptr, 0, nullptr, &l->cuts};
+            tb.put_str(lrow->label, sizeof lrow->label, label);
+            lrow->label_tone = label_tone;
+            lrow->algorithm = a;
+            lrow->first = static_cast<uint8_t>(l->token_count);
+            lrow->probe = kind == CompactKind::Probe;
+            lrow->sweep = kind == CompactKind::Sweep;
+            lrow->header = kind == CompactKind::Header;
+            if (kind == CompactKind::Probe) lrow->mv = mv;
+            else if (kind == CompactKind::Sweep || kind == CompactKind::Range) lrow->pos = static_cast<uint8_t>(mv);
+            active = true;
+            return;
+        }
+        if (g->row_count >= g->rows.size()) return;
+        rt->count = 0;
+        rt->label_tone = label_tone;
+        TokenBuf tb{nullptr, 0, nullptr, &g->cuts};
+        tb.put_str(rt->label, sizeof rt->label, label);
+        crow = {};
+        crow.kind = kind;
+        crow.algo = kind == CompactKind::Header ? static_cast<uint8_t>(mv) :
+                    (kind == CompactKind::Fact || kind == CompactKind::Collapsed) ? static_cast<uint8_t>(label_tone) :
+                    static_cast<uint8_t>(a);
+        crow.mv = mv;
+        active = true;
+    }
+
+    void drop_open() {
+        if (!active) return;
+        active = false;
+        if (l) {
+            if (lrow) --l->row_count;
+            lrow = nullptr;
+        } else {
+            rt->count = 0;
+        }
+    }
+
+    void rewind(size_t rc, size_t lc) {
+        flush();
+        if (l) {
+            l->row_count = rc;
+            l->token_count = rc ? l->rows[rc - 1].first + l->rows[rc - 1].count : 0;
+        } else {
+            g->row_count = static_cast<uint8_t>(rc);
+            if (line_n) *line_n = lc;
+        }
+    }
+
+    void word(std::string_view s, Tone t) { TokenBuf tb = buf(); tb.word(s, t); }
+    void phrase(std::string_view s, Tone t, bool split_at_number) { TokenBuf tb = buf(); tb.phrase(s, t, split_at_number); }
 };
 bool is_revision(A a) { return a >= A::Pd30Revision && a <= A::Pd32Revision; }
 bool is_range(A a) { return a == A::Pps || a == A::SprAvs || a == A::EprAvs; }
@@ -171,13 +324,13 @@ const char* skip_tag(const ct::Step& x) {
     default: return nullptr;
     }
 }
-void tag(Builder& b, const ct::Step& x) {
+void tag(TokenBuf& b, const ct::Step& x) {
     if (const char* t = skip_tag(x))
         if (Token* k = b.token(false, Tone::Caution, true)) std::strncpy(k->text, t, sizeof k->text - 1);
 }
 // The plan runs the fixed levels from the top voltage down, the grid reads them left to right ascending: chips go out in
 // (voltage, plan index) order, one selection pass per chip (at most kMaxSteps steps, no scratch array).
-void fixed_row(Builder& b, std::span<const ct::Step> s, A a) {
+[[gnu::noinline]] void fixed_row(TokenBuf& b, std::span<const ct::Step> s, A a) {
     uint32_t done = 0;   // the sort key of the chip emitted last; keys are unique and start above 0
     for (;;) {
         const ct::Step* next = nullptr;
@@ -200,7 +353,7 @@ void fixed_row(Builder& b, std::span<const ct::Step> s, A a) {
 // One chip for one APDO (`pos`): the row is one advertised range, so a probe the plan runs between two APDOs lands
 // between their rows. Rolled up by the shared tone table (roll_up). PPS / AVS ranges are continuous; the steps only
 // sample them. The chip text stays the advertised range: reach() says how far the source got.
-void range_row(Builder& b, std::span<const ct::Step> s, A a, uint8_t pos) {
+[[gnu::noinline]] void range_row(TokenBuf& b, std::span<const ct::Step> s, A a, uint8_t pos) {
     for (const auto& x : s) {
         if (x.algorithm != a || !x.pdo || x.hunt || ct::is_sweep(x) || x.pos != pos) continue;
         Tally t;
@@ -221,7 +374,7 @@ void range_row(Builder& b, std::span<const ct::Step> s, A a, uint8_t pos) {
         return;   // one row per APDO: this row is that one chip
     }
 }
-void legacy_row(Builder& b, std::span<const ct::Step> s, A a) {
+[[gnu::noinline]] void legacy_row(TokenBuf& b, std::span<const ct::Step> s, A a) {
     for (size_t i = 0; i < s.size(); ++i) {
         const auto& x = s[i];
         if (x.algorithm != a || !x.mv) continue;
@@ -249,6 +402,15 @@ void legacy_row(Builder& b, std::span<const ct::Step> s, A a) {
         if (class_a && !t.pass && !fail) {   // a Class A charger: the neutral chip says why the 20 V level shows no verdict
             if (Token* t = b.token(false, Tone::Dim, true)) std::strncpy(t->text, "Class A", sizeof t->text - 1);
         }
+    }
+}
+[[gnu::noinline]] void probe_row(TokenBuf& b, std::span<const ct::Step> steps, uint16_t mv) {
+    for (const auto& x : steps) {
+        if (!x.hunt || x.mv != mv) continue;
+        Token* k = b.token(true, tone(x));
+        if (!k) break;
+        put_text(*k, step_label::params(x).c_str());   // the probed current: "20V 6A", not the advertised max
+        tag(b, x);
     }
 }
 // Reach of one PDO slot's range steps.
@@ -426,7 +588,8 @@ const char* display_name(A a) {
 // A PPS sweep split at 5 V has two steps (the part from 5 V up in Pd, the part below in PdLow): the strip stays ONE row per
 // APDO. Its range is the planned parts together (the recorded parts once any closed), its tone the two steps together: Pending
 // while either is pending or running, Fail when either failed, Skip when every part skipped, else graded by the worst error.
-void sweep_row(Builder& b, std::span<const ct::Step> s, const ctsweep::View& v, A a, uint8_t pos, unsigned cap_mv) {
+namespace {
+[[gnu::noinline]] void sweep_row(TokenBuf& b, std::span<const ct::Step> s, const ctsweep::View& v, A a, uint8_t pos, unsigned cap_mv) {
     const ct::Step* step = nullptr;   // the first part in plan order (the one the planner places the row by)
     const ct::Step* skipped = nullptr;
     unsigned lo = ~0u, hi = 0;
@@ -458,22 +621,42 @@ void sweep_row(Builder& b, std::span<const ct::Step> s, const ctsweep::View& v, 
     if (tn == Tone::Skip) tag(b, *skipped);   // why nothing was swept ("cable", ">36V"), as the range row says it
 }
 
-void build(Layout& l, std::span<const ct::Step> steps, const OemNotes& oem, const ctsweep::View& sweep) {
-    // Reset in place: `l = {}` builds a whole Layout on the stack first (about 2 KB, over the frame limit).
-    for (Token& k : l.tokens) k = {};
-    for (Row& r : l.rows) r = {};
-    l.token_count = l.row_count = 0;
-    l.cuts = 0;
-    Builder b{l};
-    // The rows come from the plan itself: the steps ARE the execution order (the runner walks them by index), so each row is a
-    // group of steps, placed where the plan first runs one of them. A group is a protocol's steps (Revision rows are no grid
-    // rows; a range algorithm groups per APDO slot, so a probe the planner runs between two APDOs lands between their
-    // rows), or the 6 A probes of one level (every hunt step at that voltage): a probe is a row of its own, wherever the
-    // planner put it (between the PPS rows, or after the fixed ones), and it moves with the plan when a re-plan regrows the rows.
-    // Key::mv carries the probed level of a probe key, the PDO slot of a range or sweep key, else 0; sweep marks a
-    // deep-sweep key (one strip row per APDO, next to the APDO's range row).
+void emit_facts(Sink& b, const OemNotes& oem, bool any_probe, bool& facts_done,
+                void (*header)(Sink&, const OemNotes&, Section), void (*mi_auth_row)(Sink&, const OemNotes&, bool&),
+                bool& mi_shown) {
+    if (facts_done) return;
+    facts_done = true;
+    if (oem.mi_auth && !any_probe) { header(b, oem, Section::Xiaomi); mi_auth_row(b, oem, mi_shown); }
+    if (!(oem.qc_label || oem.vendor || oem.oppo_svid || oem.scp_cap || oem.vooc_ident || oem.svooc_cap || oem.rebalanced)) return;
+    header(b, oem, Section::OemPd);
+    if (oem.rebalanced) {
+        b.begin(CompactKind::Fact, "SOURCE", Tone::Caution, A::Count);
+        b.word("rebalanced", Tone::Caution);
+        char nx[5] = {};
+        char rev[3] = {};
+        unsigned v = oem.rebalanced, n = 0;
+        do { rev[n++] = char('0' + v % 10); v /= 10; } while (v && n < sizeof rev);
+        for (unsigned i = 0; i < n; ++i) nx[i] = rev[n - 1 - i];
+        nx[n] = 'x';
+        b.word(nx, Tone::Caution);
+    }
+    if (oem.qc_label) {
+        const std::string_view name = oem.qc_label;
+        const size_t sp = std::min(name.find(' '), name.size());
+        b.begin(CompactKind::Fact, name.substr(0, sp), Tone::Pass, A::Count);
+        b.phrase(name.substr(sp), Tone::Dim, false);
+        if (oem.qc_why) b.phrase(oem.qc_why, Tone::Dim, true);
+    }
+    if (oem.vendor) { b.begin(CompactKind::Fact, "OEM", Tone::Dim, A::Count); b.phrase(oem.vendor, Tone::Dim, false); }
+    if (oem.oppo_svid) { b.begin(CompactKind::Fact, "OPPO", Tone::Dim, A::Count); b.phrase("SVID 0x22D9 (discovery only)", Tone::Dim, false); }
+    if (oem.scp_cap) { b.begin(CompactKind::Fact, "SCP cap", Tone::Dim, A::Count); b.phrase(oem.scp_cap, Tone::Dim, false); }
+    if (oem.vooc_ident) { b.begin(CompactKind::Fact, "VOOC id", Tone::Dim, A::Count); b.phrase(oem.vooc_ident, Tone::Dim, false); }
+    if (oem.svooc_cap) { b.begin(CompactKind::Fact, "SV cap", Tone::Dim, A::Count); b.phrase(oem.svooc_cap, Tone::Dim, false); }
+}
+
+void build_impl(Sink& b, std::span<const ct::Step> steps, const OemNotes& oem, const ctsweep::View& sweep) {
     struct Key { A a; bool probe; bool sweep; uint16_t mv; };
-    Key keys[unsigned(A::Count) + 2 * pd::kMaxPdos + 4];   // worst case: every algorithm, both lists' PDO slots, the hunt levels
+    Key keys[unsigned(A::Count) + 2 * pd::kMaxPdos + 4];
     size_t key_n = 0;
     bool absent[unsigned(A::Count)] = {}, skipped[unsigned(A::Count)] = {}, range_none[unsigned(A::Count)] = {};
     bool any_probe = false;
@@ -489,168 +672,207 @@ void build(Layout& l, std::span<const ct::Step> steps, const OemNotes& oem, cons
         any_probe |= k.probe;
     }
     auto section_of_key = [](const Key& k) { return k.probe ? Section::Xiaomi : section_of(k.a); };
-    auto header = [&](Section s) {
-        if (!oem.headers || l.row_count >= l.rows.size()) { b.row = nullptr; return; }
-        Row* r = &l.rows[l.row_count++];
-        *r = {};
-        std::strncpy(r->label, section_name(s), sizeof r->label - 1);
-        r->label_tone = Tone::Caution;
-        r->algorithm = A::Count;
-        r->header = true;
-        b.row = nullptr;
-    };
-    // A run = consecutive rows of the plan that share a section: the default order has one run per section.
-    using Run = std::span<const Key>;
-    // The 6 A probes of one level (Mi Turbo 20 V 6 A / 11 V 6 A and any other OEM unlocked mode): one chip per probe step, always
-    // labelled with the probed current (6 A), green only when the source accepted it.
-    auto probe_row = [&](uint16_t mv) {
-        b.begin("Mi 6A", Tone::Dim, A::Count);   // Row.label holds 8 chars
-        if (b.row) { b.row->probe = true; b.row->mv = mv; }
-        for (const auto& x : steps) {
-            if (!x.hunt || x.mv != mv) continue;
-            Token* k = b.token(true, tone(x));
-            if (!k) break;
-            put_text(*k, step_label::params(x).c_str());   // the probed current: "20V 6A", not the advertised max
-            tag(b, x);
-        }
+    auto header = [](Sink& s, const OemNotes& o, Section sec) {
+        if (!o.headers) return;
+        s.begin(CompactKind::Header, section_name(sec), Tone::Caution, A::Count, static_cast<uint16_t>(sec));
+        s.flush();
     };
     bool mi_shown = false;
-    auto mi_auth_row = [&] {   // the SVID 0x2717 auth fact, once, in front of the first probe (or alone when no probe is in the plan)
-        if (!oem.mi_auth || mi_shown) return;
-        mi_shown = true;
-        b.begin("Mi Turbo", Tone::Pass, A::Count);
-        b.word("auth ok", Tone::Dim);
+    auto mi_auth_row = [](Sink& s, const OemNotes& o, bool& shown) {
+        if (!o.mi_auth || shown) return;
+        shown = true;
+        s.begin(CompactKind::Fact, "Mi Turbo", Tone::Pass, A::Count);
+        s.word("auth ok", Tone::Dim);
     };
-    auto rows_for = [&](Run run) {
-        for (const Key& key : run) {
-            if (key.probe) { probe_row(key.mv); continue; }
-            if (key.sweep) {   // the deep sweep's strip row, right after its APDO's range row (the plan emits it there)
-                b.begin("Sweep", Tone::Dim, key.a);
-                if (b.row) { b.row->sweep = true; b.row->pos = uint8_t(key.mv); }
-                sweep_row(b, steps, sweep, key.a, uint8_t(key.mv), oem.monitor_mv);
+    bool facts_done = false;
+    for (size_t at = 0; at < key_n;) {
+        size_t end = at + 1;
+        while (end < key_n && section_of_key(keys[end]) == section_of_key(keys[at])) ++end;
+        const Section sec = section_of_key(keys[at]);
+        if (sec == Section::UsbPd || sec == Section::Xiaomi)
+            emit_facts(b, oem, any_probe, facts_done, header, mi_auth_row, mi_shown);
+        const size_t before_row = b.row_count();
+        const size_t before_line = b.line_count();
+        header(b, oem, sec);
+        const size_t after_header = b.row_count();
+        if (sec == Section::Xiaomi) mi_auth_row(b, oem, mi_shown);
+        for (size_t i = at; i < end; ++i) {
+            const Key& key = keys[i];
+            if (key.probe) {
+                b.begin(CompactKind::Probe, "Mi 6A", Tone::Dim, A::Count, key.mv);
+                TokenBuf tb = b.buf();
+                probe_row(tb, steps, key.mv);
+                continue;
+            }
+            if (key.sweep) {
+                b.begin(CompactKind::Sweep, "Sweep", Tone::Dim, key.a, key.mv);
+                TokenBuf tb = b.buf();
+                sweep_row(tb, steps, sweep, key.a, uint8_t(key.mv), oem.monitor_mv);
                 continue;
             }
             const A a = key.a;
             const bool legacy = ct::group(a) != ct::Group::Pd;
             if (is_absent(steps, a)) {
-                // A range the charger does not offer keeps its own row: "PPS None" (once per algorithm, not per APDO slot).
-                // A legacy unit keeps its chips when not folding.
                 if (is_range(a)) {
                     if (range_none[unsigned(a)]) continue;
                     range_none[unsigned(a)] = true;
-                    b.begin(display_name(a), Tone::Dim, a); b.word("None", Tone::Dim); continue;
+                    b.begin(CompactKind::RangeNone, display_name(a), Tone::Dim, a);
+                    b.word("None", Tone::Dim);
+                    continue;
                 }
                 if (oem.fold || !legacy) { absent[unsigned(a)] = true; continue; }
             }
-            if (is_no_qc3plus(steps, a)) { b.begin(display_name(a), Tone::Dim, a); b.word("no QC3+", Tone::Dim); continue; }
-            if (oem.fold && legacy && is_skipped_only(steps, a) && !is_class_a_only(steps, a)) { skipped[unsigned(a)] = true; continue; }
-            b.begin(display_name(a), Tone::Dim, a);
-            if (is_range(a)) {
-                if (b.row) b.row->pos = uint8_t(key.mv);   // one row per APDO: the row carries its PDO slot
-                range_row(b, steps, a, uint8_t(key.mv));
+            if (is_no_qc3plus(steps, a)) {
+                b.begin(CompactKind::NoQc3Plus, display_name(a), Tone::Dim, a);
+                b.word("no QC3+", Tone::Dim);
+                continue;
             }
-            else if (ct::group(a) == ct::Group::Pd) fixed_row(b, steps, a);
-            else legacy_row(b, steps, a);
-            // Skipped before any voltage or PDO was known (an EPR step held back by the cable), or a range key whose slot
-            // has no step of its own: no chip to show, so no row of its own; a bare label under the neighbouring row reads
-            // as a blank line.
-            if (b.row && b.row->count == 0 && (is_skipped_only(steps, a) || is_range(a))) {
-                --l.row_count;
+            if (oem.fold && legacy && is_skipped_only(steps, a) && !is_class_a_only(steps, a)) {
+                skipped[unsigned(a)] = true;
+                continue;
+            }
+            if (is_range(a)) {
+                b.begin(CompactKind::Range, display_name(a), Tone::Dim, a, key.mv);
+                TokenBuf tb = b.buf();
+                range_row(tb, steps, a, uint8_t(key.mv));
+            } else if (ct::group(a) == ct::Group::Pd) {
+                b.begin(CompactKind::Fixed, display_name(a), Tone::Dim, a);
+                TokenBuf tb = b.buf();
+                fixed_row(tb, steps, a);
+            } else {
+                b.begin(CompactKind::Legacy, display_name(a), Tone::Dim, a);
+                TokenBuf tb = b.buf();
+                legacy_row(tb, steps, a);
+            }
+            if (b.open_tok_count() == 0 && (is_skipped_only(steps, a) || is_range(a))) {
+                b.drop_open();
                 if (is_skipped_only(steps, a)) skipped[unsigned(a)] = true;
             }
         }
-    };
-    // A section whose protocols all fold into "No reply" / "Skipped" shows no rows of its own, so its header is dropped
-    // again (a bare header above the next header reads as an empty family).
-    auto section = [&](Run run) {
-        const Section sec = section_of_key(run[0]);
-        const size_t before = l.row_count;
-        header(sec);
-        const size_t after_header = l.row_count;
-        if (sec == Section::Xiaomi) mi_auth_row();
-        rows_for(run);
-        if (after_header > before && l.row_count == after_header) l.row_count = before;
-    };
-    // The sections follow the plan (the default: OEM vendor modes by company, USB PD, QC / UFCS; the Xiaomi probes where the
-    // planner runs them, inside or after the PD rows). A custom unit order moves the rows and their sections with it; a family
-    // the plan splits shows as two runs, so the rows stay in the order they are tested in.
-    Run runs[unsigned(A::Count) + 4];
-    size_t run_n = 0;
-    for (size_t at = 0; at < key_n;) {
-        size_t end = at + 1;
-        while (end < key_n && section_of_key(keys[end]) == section_of_key(keys[at])) ++end;
-        runs[run_n++] = Run{keys + at, end - at};
+        b.flush();
+        if (after_header > before_row && b.row_count() == after_header) b.rewind(before_row, before_line);
         at = end;
     }
-    // Facts of a PD source's identity (the passive QC4+/QC5 label, the VID-driven OEM name, the Mi Turbo auth state when the plan
-    // holds no probe to carry it): in front of the first PD or Xiaomi run, or after the last run. Omitted when nothing was detected.
-    bool facts_done = false;
-    auto facts = [&] {
-        if (facts_done) return;
-        facts_done = true;
-        if (oem.mi_auth && !any_probe) { header(Section::Xiaomi); mi_auth_row(); }
-        if (!(oem.qc_label || oem.vendor || oem.oppo_svid || oem.scp_cap || oem.vooc_ident || oem.svooc_cap || oem.rebalanced)) return;
-        header(Section::OemPd);
-        if (oem.rebalanced) {   // the source re-split its budget mid-run and the PD rows were re-planned per row
-            b.begin("SOURCE", Tone::Caution, A::Count);
-            b.word("rebalanced", Tone::Caution);
-            char nx[5] = {};   // "<n>x"; no stdio on the device (snprintf would drag newlib's stdio into the link)
-            char rev[3] = {};
-            unsigned v = oem.rebalanced, n = 0;
-            do { rev[n++] = char('0' + v % 10); v /= 10; } while (v && n < sizeof rev);
-            for (unsigned i = 0; i < n; ++i) nx[i] = rev[n - 1 - i];
-            nx[n] = 'x';
-            b.word(nx, Tone::Caution);
-        }
-        if (oem.qc_label) {
-            // The label is the full name ("Samsung SFC 2.0", "Moto TurboPower", "QC5"): its first word fits the 8-character
-            // row label, the rest and the justification ("via PPS 5-20V 5A") are tokens, which the grid wraps onto more lines.
-            const std::string_view name = oem.qc_label;
-            const size_t sp = std::min(name.find(' '), name.size());
-            b.begin(name.substr(0, sp), Tone::Pass, A::Count);
-            b.phrase(name.substr(sp), Tone::Dim, false);
-            if (oem.qc_why) b.phrase(oem.qc_why, Tone::Dim, true);
-        }
-        if (oem.vendor) { b.begin("OEM", Tone::Dim, A::Count); b.phrase(oem.vendor, Tone::Dim, false); }
-        if (oem.oppo_svid) {   // the same words as report_card::oppo_note(); discovery only, no VDM is ever sent to it
-            b.begin("OPPO", Tone::Dim, A::Count);
-            b.phrase("SVID 0x22D9 (discovery only)", Tone::Dim, false);
-        }
-        if (oem.scp_cap) {   // what the adapter reported to the SCP session: "20V 6A"
-            b.begin("SCP cap", Tone::Dim, A::Count);
-            b.phrase(oem.scp_cap, Tone::Dim, false);
-        }
-        if (oem.vooc_ident) {   // the VOOC family's ident command the detection heard ("0xAC"); the legacy rows say "detected"
-            b.begin("VOOC id", Tone::Dim, A::Count);
-            b.phrase(oem.vooc_ident, Tone::Dim, false);
-        }
-        if (oem.svooc_cap) {   // the ceiling stage's result: what the charger accepted as an ask, no current drawn
-            b.begin("SV cap", Tone::Dim, A::Count);
-            b.phrase(oem.svooc_cap, Tone::Dim, false);
-        }
-    };
-    // USB PD (compliant USB-C, PD over CC) and QC / UFCS (standard D+/D- protocols; QC runs on USB-C as well, so not "USB-A"),
-    // each where the plan puts it.
-    for (size_t r = 0; r < run_n; ++r) {
-        const Section sec = section_of_key(runs[r][0]);
-        if (sec == Section::UsbPd || sec == Section::Xiaomi) facts();
-        section(runs[r]);
-    }
-    facts();
-    auto collapsed = [&](const bool (&set)[unsigned(A::Count)], const char* label, Tone t) {
-        bool any = false;
-        for (size_t i = 0; i < key_n; ++i) any |= !keys[i].probe && set[unsigned(keys[i].a)];
-        if (!any) return;
-        b.begin(label, t, A::Count);
-        bool said[unsigned(A::Count)] = {};   // one word per protocol: a range has a key per APDO slot, the fold names it once
+    emit_facts(b, oem, any_probe, facts_done, header, mi_auth_row, mi_shown);
+    auto collapsed = [&](const bool (&set)[unsigned(A::Count)], const char* label, Tone t, uint16_t slot) {
+        uint32_t mask = 0;
+        for (size_t i = 0; i < key_n; ++i)
+            if (!keys[i].probe && set[unsigned(keys[i].a)]) mask |= 1u << unsigned(keys[i].a);
+        if (!mask) return;
+        if (b.g) b.g->collapsed_masks[slot] = mask;
+        b.begin(CompactKind::Collapsed, label, t, A::Count, slot);
+        bool said[unsigned(A::Count)] = {};
         for (size_t i = 0; i < key_n; ++i)
             if (!keys[i].probe && set[unsigned(keys[i].a)] && !said[unsigned(keys[i].a)]) {
                 said[unsigned(keys[i].a)] = true;
                 b.word(display_name(keys[i].a), t);
             }
     };
-    collapsed(absent, "No reply", Tone::Dim);
-    collapsed(skipped, "Skipped", Tone::Caution);
+    collapsed(absent, "No reply", Tone::Dim, 0);
+    collapsed(skipped, "Skipped", Tone::Caution, 1);
+    b.flush();
+}
+}  // namespace
+
+void build(Layout& l, std::span<const ct::Step> steps, const OemNotes& oem, const ctsweep::View& sweep) {
+    // Reset in place: `l = {}` builds a whole Layout on the stack first (about 2 KB, over the frame limit).
+    for (Token& k : l.tokens) k = {};
+    for (Row& r : l.rows) r = {};
+    l.token_count = l.row_count = 0;
+    l.cuts = 0;
+    Sink s;
+    s.l = &l;
+    build_impl(s, steps, oem, sweep);
+}
+
+size_t build_compact(CompactGrid& g, const Metrics& m, std::span<CompactLine> out_lines,
+                     std::span<const ct::Step> steps, const OemNotes& oem, const ctsweep::View& sweep) {
+    g.row_count = g.fact_count = g.cuts = 0;
+    g.pool[0] = 0;
+    g.pool_used = 1;
+    g.collapsed_masks = {};
+    g.monitor_mv = static_cast<uint16_t>(std::min<unsigned>(oem.monitor_mv, 65535u));
+    size_t line_n = 0;
+    RowTokens rt;
+    Sink s;
+    s.g = &g;
+    s.m = &m;
+    s.lines = out_lines;
+    s.line_n = &line_n;
+    s.rt = &rt;
+    build_impl(s, steps, oem, sweep);
+    return line_n;
+}
+
+bool row_has(const CompactRow& r, const ct::Step& s) {
+    if (r.kind == CompactKind::Header || r.kind == CompactKind::Fact || r.kind == CompactKind::Collapsed) return false;
+    if (r.kind == CompactKind::Probe) return s.hunt && s.mv == r.mv;
+    if (r.kind == CompactKind::Sweep) return ct::is_sweep(s) && s.pos == r.mv;
+    if (s.hunt || ct::is_sweep(s) || static_cast<A>(r.algo) != s.algorithm) return false;
+    return !is_range(static_cast<A>(r.algo)) || s.pos == r.mv;
+}
+
+int row_section(const CompactGrid& g, size_t row) {
+    for (size_t r = row + 1; r-- > 0;) {
+        const CompactRow& cr = g.rows[r];
+        if (cr.kind == CompactKind::Probe) return static_cast<int>(Section::Xiaomi);
+        if (cr.kind != CompactKind::Header && cr.kind != CompactKind::Fact && cr.kind != CompactKind::Collapsed)
+            return static_cast<int>(section_of(static_cast<A>(cr.algo)));
+    }
+    return -1;
+}
+
+const char* row_label(const CompactGrid& g, size_t row) {
+    const CompactRow& cr = g.rows[row];
+    switch (cr.kind) {
+    case CompactKind::Header: return section_name(static_cast<Section>(cr.algo));
+    case CompactKind::Probe: return "Mi 6A";
+    case CompactKind::Sweep: return "Sweep";
+    case CompactKind::Fact: return g.pool.data() + cr.mv;
+    case CompactKind::Collapsed: return cr.mv ? "Skipped" : "No reply";
+    default: return display_name(static_cast<A>(cr.algo));
+    }
+}
+
+void row_tokens(const CompactGrid& g, size_t row, std::span<const ct::Step> steps, const ctsweep::View& sweep, RowTokens& out) {
+    out.count = 0;
+    const CompactRow& cr = g.rows[row];
+    out.label_tone = (cr.kind == CompactKind::Fact || cr.kind == CompactKind::Collapsed) ? static_cast<Tone>(cr.algo)
+                     : cr.kind == CompactKind::Header ? Tone::Caution : Tone::Dim;
+    const char* lbl = row_label(g, row);
+    uint8_t dummy_cuts = 0;
+    TokenBuf tb{out.toks.data(), kMaxRowTokens, &out.count, &dummy_cuts};
+    tb.put_str(out.label, sizeof out.label, lbl);
+    switch (cr.kind) {
+    case CompactKind::Header: break;
+    case CompactKind::Probe: probe_row(tb, steps, cr.mv); break;
+    case CompactKind::Sweep: sweep_row(tb, steps, sweep, static_cast<A>(cr.algo), static_cast<uint8_t>(cr.mv), g.monitor_mv); break;
+    case CompactKind::Range: range_row(tb, steps, static_cast<A>(cr.algo), static_cast<uint8_t>(cr.mv)); break;
+    case CompactKind::RangeNone: tb.word("None", Tone::Dim); break;
+    case CompactKind::NoQc3Plus: tb.word("no QC3+", Tone::Dim); break;
+    case CompactKind::Fixed: fixed_row(tb, steps, static_cast<A>(cr.algo)); break;
+    case CompactKind::Legacy: legacy_row(tb, steps, static_cast<A>(cr.algo)); break;
+    case CompactKind::Fact:
+        for (uint8_t i = 0; i < cr.count; ++i) {
+            const FactToken& ft = g.fact_toks[cr.first + i];
+            tb.word(std::string_view(g.pool.data() + ft.off, ft.len()), ft.tone());
+        }
+        break;
+    case CompactKind::Collapsed: {
+        const uint32_t mask = g.collapsed_masks[cr.mv];
+        const Tone t = cr.mv ? Tone::Caution : Tone::Dim;
+        bool said[unsigned(A::Count)] = {};
+        for (const auto& s : steps) {
+            if (s.hunt || is_revision(s.algorithm)) continue;
+            const unsigned a = unsigned(s.algorithm);
+            if ((mask & (1u << a)) && !said[a]) {
+                said[a] = true;
+                tb.word(display_name(s.algorithm), t);
+            }
+        }
+        break;
+    }
+    }
 }
 
 bool row_has(const Row& r, const ct::Step& s) {
@@ -662,10 +884,12 @@ bool row_has(const Row& r, const ct::Step& s) {
 }
 
 void add_note(Layout& l, const char* label, Tone t, std::initializer_list<const char*> words) {
-    Builder b{l};
-    b.begin(label, t, A::Count);
-    if (!b.row) return;
+    Sink b;
+    b.l = &l;
+    b.begin(CompactKind::Fact, label, t, A::Count);
+    if (!b.lrow) return;
     for (const char* w : words) b.word(w, Tone::Dim);
+    b.flush();
 }
 
 namespace {
@@ -756,33 +980,17 @@ char mark(Tone t) {
 
 size_t wrap(const Layout& l, const Metrics& m, std::span<Line> out) {
     size_t n = 0;
-    auto emit = [&](const Line& line) { if (n < out.size()) out[n++] = line; };
     for (size_t r = 0; r < l.row_count; ++r) {
         const Row& row = l.rows[r];
-        if (row.header) { emit({static_cast<uint8_t>(r), row.first, 0, true}); continue; }
-        const unsigned stop = unsigned(row.first) + row.count;
-        Line cur{static_cast<uint8_t>(r), row.first, 0, true};
-        int x = 0, groups = 0, widest = 0;
-        for (unsigned i = row.first; i < stop;) {
-            unsigned end = i + 1;
-            int gw = token_width(l.tokens[i], m);
-            while (end < stop && l.tokens[end].glue) { gw += m.gap + token_width(l.tokens[end], m); ++end; }
-            if (m.cells) gw = cell_width(l.tokens[i], m);   // the verdict grid: equal cells, only the head's volt text counts
-            // A line breaks when the chips no longer fit: side by side (x), or in `groups` equal cells of the widest one's width.
-            const bool full = m.cells ? (groups + 1) * (std::max(widest, gw) + m.gap) - m.gap > m.avail
-                                      : x + m.gap + gw > m.avail;
-            if (cur.count && (full || (m.max_groups && groups >= m.max_groups))) {
-                emit(cur);
-                cur = {static_cast<uint8_t>(r), static_cast<uint8_t>(i), 0, false};
-                x = 0; groups = 0; widest = 0;
-            }
-            ++groups;
-            widest = std::max(widest, gw);
-            x += (cur.count ? m.gap : 0) + gw;
-            cur.count = static_cast<uint8_t>(cur.count + (end - i));
-            i = end;
+        if (row.header) {
+            if (n < out.size()) out[n++] = {static_cast<uint8_t>(r), row.first, 0, true};
+            continue;
         }
-        emit(cur);
+        wrap_row_tokens(std::span<const Token>(l.tokens.data() + row.first, row.count), m,
+                        [&](uint8_t first, uint8_t count, bool head) {
+                            if (n < out.size())
+                                out[n++] = {static_cast<uint8_t>(r), static_cast<uint8_t>(row.first + first), count, head};
+                        });
     }
     return n;
 }

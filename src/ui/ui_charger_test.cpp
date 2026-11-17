@@ -1420,8 +1420,7 @@ void ChargerTestPage::build_grid(bool running_grid, bool note_cuts) {
         oem.headers = false;   // the rows are the plan's steps, in the order the runner walks them
         oem.fold = false;      // a unit keeps its row when it fails or is skipped: the finished rows stay above the running one
         oem.monitor_mv = ctx_.cap_mv;
-        result_layout::build(layout_, s_.runner_.steps(), oem, s_.runner_.sweep_view());
-        line_n_ = result_layout::wrap(layout_, kGridMetrics, lines_);
+        line_n_ = result_layout::build_compact(layout_, kGridMetrics, lines_, s_.runner_.steps(), oem, s_.runner_.sweep_view());
         return;
     }
     // The live inputs come from the snapshot taken when the run ended; a page entered with none (a run this boot never saw end)
@@ -1458,10 +1457,9 @@ void ChargerTestPage::build_grid(bool running_grid, bool note_cuts) {
         oem.qc_why = justification;   // build() copies the words into tokens inside this scope
     }
     oem.monitor_mv = facts.cap_mv;
-    result_layout::build(layout_, s_.runner_.steps(), oem, s_.runner_.sweep_view());
-    // build() counts a row label or word it had to shorten: the gate fails on it like on any other cut.
+    line_n_ = result_layout::build_compact(layout_, kGridMetrics, lines_, s_.runner_.steps(), oem, s_.runner_.sweep_view());
+    // build_compact() counts a row label or word it had to shorten: the gate fails on it like on any other cut.
     if (note_cuts && layout_.cuts) K2_TRUNC_NOTE_HERE(trunc::Kind::Cut, "results grid label or word", layout_.cuts);
-    line_n_ = result_layout::wrap(layout_, kGridMetrics, lines_);
 }
 void ChargerTestPage::build_results() {
     build_grid(false, true);
@@ -1740,7 +1738,7 @@ void ChargerTestPage::bar() {
     StrBuf<24> t;
     static_assert(static_cast<unsigned>(Stage::SpecDetail) == 15, "kBar is indexed by Stage: extend it with the enum");
     if (s_.stage_ == Stage::Steps && results_row_ >= 0 && static_cast<size_t>(results_row_) < line_n_)
-        t.put(layout_.rows[lines_[results_row_].row].label).put_char(' ');
+        t.put(result_layout::row_label(layout_, lines_[static_cast<size_t>(results_row_)].row())).put_char(' ');
     if (s_.stage_ == Stage::SpecDetail && s_.detail_index_ >= 0 && s_.detail_index_ < spec_n())
         t.put(pdspec::kDefs[static_cast<size_t>(specsec::kOrder[static_cast<size_t>(s_.detail_index_)])].label);
     else t.put(m.title);
@@ -1878,26 +1876,33 @@ static FooterTone spec_footer(StrBuf<32>& f, int check, const specsec::Cell& c, 
             const int k = s_.selection_ - static_cast<int>(line_n_);
             return spec_footer(f, static_cast<int>(specsec::kOrder[static_cast<size_t>(k)]), s_.runner_.evidence().spec.cells[static_cast<size_t>(k)], false);
         }
-        const auto &row = layout_.rows[lines_[s_.selection_].row];
-        f.put(row.label).put(": ");
-        if (row.algorithm == A::Count && !row.probe) { f.put("see steps"); return FooterTone::Info; }
-        if (row.sweep) {   // the deep sweep's strip row: the footer names the peak (the full summary is the [SWEEP] log line)
+        const size_t r_idx = lines_[static_cast<size_t>(s_.selection_)].row();
+        const auto &row = layout_.rows[r_idx];
+        const char *lbl = result_layout::row_label(layout_, r_idx);
+        f.put(lbl).put(": ");
+        if (row.kind == result_layout::CompactKind::Header || row.kind == result_layout::CompactKind::Fact ||
+            row.kind == result_layout::CompactKind::Collapsed) {
+            f.put("see steps");
+            return FooterTone::Info;
+        }
+        if (row.kind == result_layout::CompactKind::Sweep) {   // the deep sweep's strip row: the footer names the peak (the full summary is the [SWEEP] log line)
             f.clear();
-            if (const auto rw = s_.runner_.sweep_view().apdo(uint8_t(row.algorithm), row.pos); rw && rw->sum.points) {   // both 5 V parts
+            if (const auto rw = s_.runner_.sweep_view().apdo(row.algo, static_cast<uint8_t>(row.mv)); rw && rw->sum.points) {   // both 5 V parts
                 char nb[ctsweep::kFoldTextMax];
                 if (const size_t len = ctsweep::format_fold(rw->sum, nb)) {   // a fold is a caution: it takes the whole footer, "folds to 19.4V above 19.9V"
                     f.put(std::string_view(nb, len));
                     return FooterTone::Caution;
                 }
                 char v[12] = {};
-                f.put(row.label).put(": peak ");
+                f.put(lbl).put(": peak ");
                 f.put(std::string_view(v, ctsweep::format_mv(rw->sum.peak_mv, v))).put("V@");
                 f.put(std::string_view(v, ctsweep::format_mv(rw->sum.peak_at_mv, v))).put_char('V');
-            } else f.put(row.label).put(": not run");
+            } else f.put(lbl).put(": not run");
             return FooterTone::Info;
         }
-        if (!row.probe && (ct::kPpsAlgorithms & ct::bit(row.algorithm))) {   // a range says how far the source got, not a count
-            const auto rc = result_layout::reach(s_.runner_.steps(), row.algorithm, row.pos);   // one row per APDO: its own reach
+        const A algo = static_cast<A>(row.algo);
+        if (row.kind != result_layout::CompactKind::Probe && (ct::kPpsAlgorithms & ct::bit(algo))) {   // a range says how far the source got, not a count
+            const auto rc = result_layout::reach(s_.runner_.steps(), algo, static_cast<int>(row.mv));   // one row per APDO: its own reach
             f.put(result_layout::reach_footer(rc).c_str());
             using result_layout::Tone;
             return rc.tone == Tone::Pass ? FooterTone::Ok : rc.tone == Tone::Partial || rc.tone == Tone::Fail ? FooterTone::Caution
@@ -2187,55 +2192,51 @@ void put_clip(char (&dst)[12], std::string_view s) {
     std::memcpy(dst, s.data(), n);
     dst[n] = 0;
 }
-// The section of the layout row `row`: the section of the last protocol row at or before it (a collapsed row follows its neighbour).
-int row_section(const result_layout::Layout &l, size_t row) {
-    for (size_t r = row + 1; r-- > 0;) {
-        if (l.rows[r].probe) return static_cast<int>(result_layout::Section::Xiaomi);   // a Mi 6A probe, wherever the plan put it
-        if (l.rows[r].algorithm != A::Count) return static_cast<int>(result_layout::section_of(l.rows[r].algorithm));
-    }
-    return -1;
-}
 // The head line of a row whose section differs from the line above opens with a 2 px rule.
-bool section_break(const result_layout::Layout &l, std::span<const result_layout::Line> lines, size_t i) {
-    if (i == 0 || !lines[i].head) return false;
-    return row_section(l, lines[i].row) != row_section(l, lines[i - 1].row);
+bool section_break(const result_layout::CompactGrid &l, std::span<const result_layout::CompactLine> lines, size_t i) {
+    if (i == 0 || !lines[i].head()) return false;
+    return result_layout::row_section(l, lines[i].row()) != result_layout::row_section(l, lines[i - 1].row());
 }
-// The token of layout row `row` that the step in flight (level `mv`) stands for: the still-pending chip of that level, else the
-// first still-pending chip of the row (a range or a probe chip has no level). A legacy chip merges the up and down steps of one
-// level, so it stays pending while a later step of its level is left: "first pending" alone would keep the dot on the 5 V chip
-// while the runner is on 9 V. -1 = none.
-int pending_chip(const result_layout::Layout &l, size_t row, uint32_t mv) {
-    const auto &r = l.rows[row];
+// The row-relative token of `rt` that the step in flight (level `mv`) stands for: the still-pending chip of that level, else
+// the first still-pending chip of the row. -1 = none.
+int pending_chip(const result_layout::RowTokens &rt, uint32_t mv) {
     int first = -1;
-    for (int k = 0; k < r.count; ++k) {
-        const auto &t = l.tokens[static_cast<size_t>(r.first + k)];
+    for (int k = 0; k < rt.count; ++k) {
+        const auto &t = rt.toks[static_cast<size_t>(k)];
         if (!t.chip || t.glue || t.tone != Tone::Pending) continue;
-        if (t.mv && t.mv == mv) return r.first + k;
-        if (first < 0) first = r.first + k;
+        if (t.mv && t.mv == mv) return k;
+        if (first < 0) first = k;
     }
     return first;
 }
-// The step dot's token: the step the runner is on, Pending or Running, so the dot moves in the tick the index does (the gauge's
-// target comes from the same index). A finished step at the index (the run's end) has no dot.
-int running_token(const result_layout::Layout &l, const ct::Runner &runner, size_t row) {
+// The step dot's row-relative token: the step the runner is on, Pending or Running, so the dot moves in the tick the index does.
+int running_token(const result_layout::RowTokens &rt, const result_layout::CompactRow &row, const ct::Runner &runner) {
     const auto &steps = runner.steps();
     if (runner.index() >= steps.size()) return -1;
     const ct::Verdict v = steps[runner.index()].verdict;
     if (v != ct::Verdict::Running && v != ct::Verdict::Pending) return -1;
-    if (!result_layout::row_has(l.rows[row], steps[runner.index()])) return -1;   // a 6 A probe has a row of its own
-    return pending_chip(l, row, steps[runner.index()].mv);
+    if (!result_layout::row_has(row, steps[runner.index()])) return -1;   // a 6 A probe has a row of its own
+    return pending_chip(rt, steps[runner.index()].mv);
 }
-// The grid line the step `index` belongs to, known as soon as the runner moves to it (its verdict need not be Running yet):
-// the line holding the first pending chip of its protocol's row, else the head line of that row, else the top (0).
-int follow_line(const result_layout::Layout &l, std::span<const result_layout::Line> lines, std::span<const ct::Step> steps, size_t index) {
+// The grid line the step `index` belongs to, known as soon as the runner moves to it.
+int follow_line(const result_layout::CompactGrid &l, std::span<const result_layout::CompactLine> lines, const ct::Runner &runner) {
+    const auto &steps = runner.steps();
     if (steps.empty()) return 0;
-    const ct::Step &now = steps[std::min(index, steps.size() - 1)];
+    const ct::Step &now = steps[std::min(runner.index(), steps.size() - 1)];
     int head = 0;
+    result_layout::RowTokens rt;
+    bool built = false;
+    int tk = -1;
     for (size_t i = 0; i < lines.size(); ++i) {
-        if (!result_layout::row_has(l.rows[lines[i].row], now)) continue;
-        const int tk = pending_chip(l, lines[i].row, now.mv);
-        if (tk >= lines[i].first && tk < lines[i].first + lines[i].count) return static_cast<int>(i);
-        if (lines[i].head) head = static_cast<int>(i);
+        const uint8_t r = lines[i].row();
+        if (!result_layout::row_has(l.rows[r], now)) continue;
+        if (!built) {
+            result_layout::row_tokens(l, r, steps, runner.sweep_view(), rt);
+            tk = pending_chip(rt, now.mv);
+            built = true;
+        }
+        if (tk >= lines[i].first() && tk < lines[i].first() + lines[i].count()) return static_cast<int>(i);
+        if (lines[i].head()) head = static_cast<int>(i);
     }
     return head;
 }
@@ -2663,7 +2664,7 @@ void ChargerTestPage::paint_running(uint32_t now) {
     // manual scroll holds kFollowResumeMs, or until the step changes); rows paint top-to-bottom so finished rows above the running
     // row always update before the running row below them. Scroll and repaint may lag the dot.
     if (!s_.follow_ && (now - s_.scroll_ms_ >= kFollowResumeMs || s_.runner_.index() != s_.scroll_step_)) s_.follow_ = true;
-    const int want = s_.follow_ ? follow_line(layout_, std::span<const result_layout::Line>(lines_.data(), line_n_), steps, s_.runner_.index())
+    const int want = s_.follow_ ? follow_line(layout_, std::span<const result_layout::CompactLine>(lines_.data(), line_n_), s_.runner_)
                              : std::clamp(s_.scroll_line_, 0, std::max(0, static_cast<int>(line_n_) - 1));
     if (s_.follow_) grid_.anchor_bottom(want);   // finished rows stay above, the row under test ends the window
     else grid_.set_first(want);
@@ -2710,18 +2711,22 @@ void ChargerTestPage::grid_row(int index, kit::ResultRowSpec &out) {
         out.focus = results && s_.selection_ == index;
         return;
     }
-    const auto &ln = lines_[static_cast<size_t>(index)];
-    const auto &row = layout_.rows[ln.row];
-    if (ln.head) {
+    const auto ln = lines_[static_cast<size_t>(index)];
+    const size_t r_idx = ln.row();
+    const auto &row = layout_.rows[r_idx];
+    if (ln.head()) {
+        const char *lbl = result_layout::row_label(layout_, r_idx);
         std::memset(cell_lbl_, 0, sizeof cell_lbl_);
-        std::memcpy(cell_lbl_, row.label, std::min<size_t>(std::strlen(row.label), sizeof cell_lbl_ - 1));
+        std::memcpy(cell_lbl_, lbl, std::min<size_t>(std::strlen(lbl), sizeof cell_lbl_ - 1));
         out.label = cell_lbl_;
     }
-    const int running = results ? -1 : running_token(layout_, s_.runner_, ln.row);
+    result_layout::RowTokens rt;
+    result_layout::row_tokens(layout_, r_idx, s_.runner_.steps(), s_.runner_.sweep_view(), rt);
+    const int running = results ? -1 : running_token(rt, row, s_.runner_);
     int n = 0;
-    for (int k = 0; k < ln.count && n < kit::kResultMaxCells; ++k) {
-        const size_t ti = static_cast<size_t>(ln.first + k);
-        const auto &tk = layout_.tokens[ti];
+    for (int k = 0; k < ln.count() && n < kit::kResultMaxCells; ++k) {
+        const size_t ti = static_cast<size_t>(ln.first() + k);
+        const auto &tk = rt.toks[ti];
         if (tk.glue) continue;
         std::string_view volts = tk.text, cur;
         if (tk.chip) {
@@ -2738,8 +2743,9 @@ void ChargerTestPage::grid_row(int index, kit::ResultRowSpec &out) {
         ++n;
     }
     out.n = static_cast<uint8_t>(n);
-    out.focus = results && s_.selection_ >= 0 && s_.selection_ < static_cast<int>(line_n_) && lines_[static_cast<size_t>(s_.selection_)].row == ln.row;
-    out.section = section_break(layout_, std::span<const result_layout::Line>(lines_.data(), line_n_), static_cast<size_t>(index));
+    out.focus = results && s_.selection_ >= 0 && s_.selection_ < static_cast<int>(line_n_) &&
+                lines_[static_cast<size_t>(s_.selection_)].row() == r_idx;
+    out.section = section_break(layout_, std::span<const result_layout::CompactLine>(lines_.data(), line_n_), static_cast<size_t>(index));
 }
 
 void ChargerTestPage::paint_results() {
@@ -3090,7 +3096,7 @@ bool ChargerTestPage::on_event(Event e) {
         }
         if (s_.stage_ == Stage::Results) {   // the cursor steps unit by unit: a wrapped row's later lines are skipped
             int i = s_.selection_ + dir;
-            while (i >= 0 && i < static_cast<int>(line_n_) && !lines_[static_cast<size_t>(i)].head) i += dir;
+            while (i >= 0 && i < static_cast<int>(line_n_) && !lines_[static_cast<size_t>(i)].head()) i += dir;
             s_.selection_ = std::clamp(i, 0, last_row());
         } else {
             s_.selection_ = std::clamp(s_.selection_ + dir, 0, last_row());
@@ -3183,9 +3189,11 @@ __attribute__((noinline)) void ChargerTestPage::ok_event() {
             set_stage(Stage::SpecDetail);
         } else {
             int fam = -2;
-            const auto &row = layout_.rows[lines_[static_cast<size_t>(s_.selection_)].row];
-            if (!row.header) {   // section headers are not openable
-                fam = row.algorithm != A::Count ? family(row.algorithm) : row.probe ? kFamXiaomi : -1;   // the Mi 6A probes
+            const auto &row = layout_.rows[lines_[static_cast<size_t>(s_.selection_)].row()];
+            if (row.kind != result_layout::CompactKind::Header) {   // section headers are not openable
+                fam = row.kind == result_layout::CompactKind::Probe ? kFamXiaomi :
+                      (row.kind == result_layout::CompactKind::Fact || row.kind == result_layout::CompactKind::Collapsed) ? -1 :
+                      family(static_cast<A>(row.algo));
             }
             if (fam != -2) {
                 results_row_ = s_.selection_;
