@@ -519,32 +519,25 @@ remote::RereadResult Remote::reread(uint8_t op, uint8_t mask) {
         uint32_t below4 = 0;
         power::poll();
         const int32_t vstart = power::vbus_fast_mv().value_or(-1);
-        auto watch = [&](bool serve) {   // one pass per millisecond
-            power::poll();
-            if (serve) fusb302::service();
-            const int32_t v = power::vbus_fast_mv().value_or(-1);
-            if (v >= 0 && v < vmin) vmin = v;
-            if (v >= 0 && v < 4000) below4++;
-            vend = v;
+        auto watch = [&](uint32_t ms, bool serve) {
+            const uint32_t t0 = systick::millis();
+            uint32_t last = t0;
+            while (systick::millis() - t0 < ms) {
+                const uint32_t t = systick::millis();
+                if (t == last) continue;
+                last = t;
+                power::poll();
+                if (serve) fusb302::service();
+                const int32_t v = power::vbus_fast_mv().value_or(-1);
+                if (v >= 0 && v < vmin) vmin = v;
+                if (v >= 0 && v < 4000) below4++;
+                vend = v;
+            }
         };
         fusb302::rd_glitch_begin();
-        const uint32_t t0 = systick::millis();
-        uint32_t last = t0;
-        while (systick::millis() - t0 < gap) {
-            const uint32_t t = systick::millis();
-            if (t == last) continue;
-            last = t;
-            watch(false);
-        }
+        watch(gap, false);
         fusb302::rd_glitch_end();
-        const uint32_t t1 = systick::millis();
-        last = t1;
-        while (systick::millis() - t1 < 1500) {   // the re-attach too
-            const uint32_t t = systick::millis();
-            if (t == last) continue;
-            last = t;
-            watch(true);
-        }
+        watch(1500, true);   // the re-attach too
         K2LOG("[RMT] rd glitch %u ms: vbus start %d min %d end %d mV, %u ms below 4 V\n", static_cast<unsigned>(gap),
               static_cast<int>(vstart), static_cast<int>(vmin == INT32_MAX ? -1 : vmin), static_cast<int>(vend), static_cast<unsigned>(below4));
     } else if (op == 7) {   // lab: the unit boundary's Soft_Reset (the source re-announces, the Rd is kept)
@@ -1583,6 +1576,13 @@ size_t Remote::emlib(std::span<const uint8_t> p, std::span<uint8_t> out) {
     auto le16 = [](const uint8_t *q) { return static_cast<uint16_t>(q[0] | (q[1] << 8)); };
     auto put16 = [&out](size_t at, uint32_t v) { out[at] = static_cast<uint8_t>(v); out[at + 1] = static_cast<uint8_t>(v >> 8); };
     auto err = [&out](emlib::Err e) { out[0] = static_cast<uint8_t>(e); return size_t{1}; };
+    auto save_rsp = [&](const emlib::Result &r) {
+        out[0] = static_cast<uint8_t>(r.err); put16(1, r.seq); out[3] = r.existed ? 1 : 0;
+        return size_t{4};
+    };
+    auto arm_err = [](emk_spoof::Err a) -> uint8_t {
+        return a == emk_spoof::Err::Ok ? 0 : a == emk_spoof::Err::Inline ? kEmErrInline : static_cast<uint8_t>(emlib::Err::Invalid);
+    };
     switch (p[0]) {
     case remote::kEmList: {
         std::array<uint16_t, emlib::kCapacity> all{};
@@ -1601,11 +1601,7 @@ size_t Remote::emlib(std::span<const uint8_t> p, std::span<uint8_t> out) {
         put16(27, emrec::vdo(e.rec, 1) & 0xFFFF); put16(29, emrec::vdo(e.rec, 3) >> 16);
         return 31;
     }
-    case remote::kEmSave: {
-        const emlib::Result r = storage::lib_save_current();
-        out[0] = static_cast<uint8_t>(r.err); put16(1, r.seq); out[3] = r.existed ? 1 : 0;
-        return 4;
-    }
+    case remote::kEmSave: return save_rsp(storage::lib_save_current());
     case remote::kEmDelete: return err(storage::lib_remove(le16(&p[1])));
     case remote::kEmRename: {
         const uint16_t seq = le16(&p[1]);
@@ -1632,11 +1628,7 @@ size_t Remote::emlib(std::span<const uint8_t> p, std::span<uint8_t> out) {
             if (r == nullptr) { out[0] = static_cast<uint8_t>(emlib::Err::NotFound); return 1; }
             return emk_learn::encode_entry(*r, p[2], out);
         }
-        case remote::kEmLearnSave: {
-            const emlib::Result r = emk_learn_hw::save();
-            out[0] = static_cast<uint8_t>(r.err); put16(1, r.seq); out[3] = r.existed ? 1 : 0;
-            return 4;
-        }
+        case remote::kEmLearnSave: return save_rsp(emk_learn_hw::save());
         default:   // kEmLearnStatus
             return emk_learn::encode_summary(emk_learn_hw::last(), out);
         }
@@ -1653,15 +1645,13 @@ size_t Remote::emlib(std::span<const uint8_t> p, std::span<uint8_t> out) {
                 e = remote::kEmErrBusy;
             } else if (!storage::lib_get(le16(&p[2]), ent, quirks)) e = static_cast<uint8_t>(emlib::Err::NotFound);
             else {
-                const emk_spoof::Err a = emk_spoof::arm(ent.rec, quirks);
-                e = a == emk_spoof::Err::Ok ? 0 : a == emk_spoof::Err::Inline ? kEmErrInline : static_cast<uint8_t>(emlib::Err::Invalid);
+                e = arm_err(emk_spoof::arm(ent.rec, quirks));
                 if (e == 0) spoof_seq_ = ent.seq;
             }
         } else if (p[1] == remote::kEmSpoofBuiltin) {
             if (ui_.spoof_busy()) e = remote::kEmErrBusy;
             else {
-                const emk_spoof::Err a = emk_spoof::arm(emrec::builtin_cable(p[2]), emk_quirk::builtin_quirks(p[2]));
-                e = a == emk_spoof::Err::Ok ? 0 : a == emk_spoof::Err::Inline ? kEmErrInline : static_cast<uint8_t>(emlib::Err::Invalid);
+                e = arm_err(emk_spoof::arm(emrec::builtin_cable(p[2]), emk_quirk::builtin_quirks(p[2])));
                 spoof_seq_ = 0;
             }
         } else if (p[1] == remote::kEmSpoofDisarm) {
