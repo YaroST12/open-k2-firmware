@@ -63,7 +63,7 @@ inline constexpr std::uint8_t kMarkInterrogate = 9;  // inline interrogation pha
 
 inline constexpr std::size_t kHeader = 6;
 inline constexpr std::size_t kMaxRecord = kHeader + 1 + 2 + 7 * 4 + 4;  // 41: a 7-object Rx frame
-inline constexpr std::size_t kRingBytes = 8192;
+inline constexpr std::size_t kRingBytes = 4096;
 inline constexpr std::size_t kReadHeader = 9;  // flags(1) next(4) head(4), then records
 
 // Flags of a read response.
