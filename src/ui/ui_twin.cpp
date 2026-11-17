@@ -175,7 +175,7 @@ void TwinPage::draw_static() {
         det_sig_ = 0;
         draw_next_ = 0;   // sample the live draw at once
         cell_.invalidate();
-        vbus_shown_.clear();
+        vbus_sig_ = 0;
     } else {
         kit::RowList::clear_body_around(ctx_.content);
         ctx_.rows.init(ctx_.content, kit::kBodyY, &TwinPage::row_fn, this);
@@ -245,7 +245,8 @@ void TwinPage::leave() {
     n_ = 0;
     full_ = 0;
     have_caps_ = false;
-    twin::Twin t;
+    twin::Twin t, det_copy;
+    bool have_det = false;
     for (unsigned i = 0; i < found && i < seqs.size(); i++) {
         if (!storage::twin_get(seqs[i], t)) continue;
         Entry &e = list_[static_cast<std::size_t>(n_++)];
@@ -257,7 +258,7 @@ void TwinPage::leave() {
             have_caps_ = true;
             if (present::is_full(e.out)) full_++;
         }
-        if (detail_ && e.seq == det_seq_) det_ = t;
+        if (detail_ && e.seq == det_seq_) { det_copy = t; have_det = true; }
     }
     offer_.clear();
     put_top_offer(offer_, pd::active_caps());
@@ -265,7 +266,11 @@ void TwinPage::leave() {
     stamp_ = twin_hw::predict_stamp();
     loaded_ = true;
     sel_ = std::clamp(sel_, 0, list_last());
-    if (detail_) build_info();
+    if (have_det) {
+        det_pdos_ = det_copy.num_pdos;
+        det_want_mw_ = twin::want_mw(det_copy);
+        build_info(det_copy);
+    }
     det_sig_ = 0;
 }
 
@@ -688,15 +693,18 @@ void TwinPage::run_entry(const Entry &e) {
 
 void TwinPage::open_detail() {
     const Entry &e = list_[static_cast<std::size_t>(sel_)];
-    if (!storage::twin_get(e.seq, det_)) return;
+    twin::Twin det{};
+    if (!storage::twin_get(e.seq, det)) return;
     detail_ = true;
     det_seq_ = e.seq;
+    det_pdos_ = det.num_pdos;
+    det_want_mw_ = twin::want_mw(det);
     act_ = 0;
     first_ = 0;
     arm_ = Arm::None;
     note_.clear();
     note_until_ = 0;
-    build_info();
+    build_info(det);
     repaint();
 }
 
@@ -726,7 +734,7 @@ void TwinPage::delete_twin() {
 // The InfoBlock texts of the open twin, two columns under the Source / device header: the charger's offer on the left (its
 // fixed span, then its PPS range), the device's wants on the right (its fixed levels, then its PPS range), and what the device
 // declared on USB as the last right-hand fact. Rows: fixed levels, PPS ranges (only when either side lists one), USB.
-void TwinPage::build_info() {
+void TwinPage::build_info(const twin::Twin &det) {
     info_n_ = 0;
     auto add = [&](const StrBuf<24> &l, const StrBuf<24> &r) {
         auto &lv = info_l_[static_cast<std::size_t>(info_n_)];
@@ -746,8 +754,8 @@ void TwinPage::build_info() {
     };
     // Right column, wants: the device's sink PDOs.
     StrBuf<24> wfixed, wpps, fixed, pps;
-    for (std::size_t i = 0; i < det_.num_pdos && i < det_.pdos.size(); i++) {
-        const pd::Pdo p = pd::decode_pdo(det_.pdos[i]);
+    for (std::size_t i = 0; i < det.num_pdos && i < det.pdos.size(); i++) {
+        const pd::Pdo p = pd::decode_pdo(det.pdos[i]);
         if (p.type == pd::PdoType::Fixed) {
             if (wfixed.view().size()) wfixed.put_char(' ');
             put_level(wfixed, p.max_mv, 'V');
@@ -798,7 +806,7 @@ void TwinPage::build_info() {
     if (!pps.view().empty() || !wpps.view().empty()) add(pps, wpps);
     // USB, a device fact: what it declared while alone ("USB 2.0 480M").
     char u[40];
-    twin::declared_text(det_.id_hi, det_.decl, u);
+    twin::declared_text(det.id_hi, det.decl, u);
     std::string_view uv(u);
     if (uv.substr(0, 4) == "USB ") uv.remove_prefix(4);
     fixed.clear();
@@ -841,11 +849,12 @@ void TwinPage::paint_line(int i, int16_t y) {
     case 0: {   // "Source" over what the charger gives (left), the device's name over what it wants (right)
         gfx_text(s, kSmall, kLeft, static_cast<int16_t>(y + 2), kSourceWord, kDim, kBg);
         const int16_t room = static_cast<int16_t>(kRight - kLeft - text_width(kSmall, kSourceWord) - kSmallAdvPx);
+        const char *raw_name = e ? e->name.data() : "";
         // A long name drops to font 12 on the same baseline rather than lose its end (24 characters fit at 6 px).
-        const bool small = text_width(kSmall, det_.name.data()) > room;
+        const bool small = text_width(kSmall, raw_name) > room;
         const auto &font = small ? kLabelFont : kSmall;
         const int16_t ny = static_cast<int16_t>(y + 2 + (small ? kSmall.height - kLabelFont.height - 1 : 0));
-        const std::string_view name = fit_data(font, det_.name.data(), room, buf);
+        const std::string_view name = fit_data(font, raw_name, room, buf);
         gfx_text(s, font, static_cast<int16_t>(kRight - text_width(font, name)), ny, name, kText, kBg);
         return;
     }
@@ -855,8 +864,8 @@ void TwinPage::paint_line(int i, int16_t y) {
         // gets is a faint "--" and wants stays neutral. No contract and 5 V only grade red.
         uint16_t ink = kFaint, want_ink = kText;
         if (e && e->have) {
-            ink = grade_ink(e->out, det_.num_pdos ? twin::want_mw(det_) : e->out.want_mw);   // a Request-only twin: against what it asked
-            want_ink = det_.num_pdos ? ink : kText;
+            ink = grade_ink(e->out, det_pdos_ ? det_want_mw_ : e->out.want_mw);   // a Request-only twin: against what it asked
+            want_ink = det_pdos_ ? ink : kText;
         }
         paint_split(s, y, kGetsH);
         // A prediction built from the device's own Request is what it asked for (its contract's power), not what it draws.
@@ -872,8 +881,8 @@ void TwinPage::paint_line(int i, int16_t y) {
         gfx_text(s, kMid, gx, vy, v.view(), ink, kBg);
         v.clear();
         // No sink PDOs learned: what the device wants is unknown, never "0W". Its live draw stands there instead.
-        const bool unknown = det_.num_pdos == 0;
-        if (!unknown) put_w(v, twin::want_mw(det_));
+        const bool unknown = det_pdos_ == 0;
+        if (!unknown) put_w(v, det_want_mw_);
         else if (draw_mw_ == kNoDraw) v.put("--");
         else if (draw_mw_ < 10000) v.put_fixed(static_cast<int32_t>(draw_mw_), 1).put_char('W');
         else put_w(v, draw_mw_);
@@ -886,7 +895,7 @@ void TwinPage::paint_line(int i, int16_t y) {
     case 2: {   // the bar: track = what it wants, fill = what it gets
         const int16_t w = static_cast<int16_t>(kRight - kLeft);
         paint_split(s, y, kBarLineH);   // the bar crosses the hairline
-        const uint32_t want = twin::want_mw(det_);
+        const uint32_t want = det_want_mw_;
         int16_t fill = 0;
         if (have && want) fill = static_cast<int16_t>(std::min<uint32_t>(w, static_cast<uint32_t>(w) * e->out.mw / want));
         if (fill) gfx_fill(s, kLeft, static_cast<int16_t>(y + 1), fill, 3, grade_ink(e->out, want));   // the fill wears the grade
@@ -944,7 +953,7 @@ void TwinPage::paint_detail(uint32_t now_ms) {
         if (e) sig = mix_u32(sig, static_cast<uint32_t>(twin_hw::live().slot(e->seq).verdict) + 1);
         // A twin with no sink PDOs shows the live draw instead of "wants": sampled once a second, in 0.1 W steps, so the body
         // repaints only when the figure moves.
-        if (e && det_.num_pdos == 0) {
+        if (e && det_pdos_ == 0) {
             if (draw_next_ == 0 || static_cast<int32_t>(now_ms - draw_next_) >= 0) {
                 draw_next_ = now_ms + 1000;
                 if (draw_next_ == 0) draw_next_ = 1;
@@ -968,8 +977,8 @@ void TwinPage::paint_detail(uint32_t now_ms) {
         }
         gfx_fill(s, 0, box_y_, s.w, static_cast<int16_t>(kFooterY - box_y_), kBg);
         cell_.init(s, kCellY, kCellH);
-        vbus_shown_.clear();
-        step_shown_.clear();
+        vbus_sig_ = 0;
+        step_sig_ = 0;
         if (arm_ == Arm::None && !run) {
             ctx_.rows.init(s, box_y_, &TwinPage::row_fn, this);
             ctx_.rows.restart();
@@ -982,10 +991,9 @@ void TwinPage::paint_detail(uint32_t now_ms) {
         sub.put("closes in ").put_u32(static_cast<uint32_t>((left + 999) / 1000)).put_char('s');
         cell_.draw_armed("CONFIRM", sub.view(), std::clamp<int>(left * 1000 / static_cast<int32_t>(Ui::kConfirmWindowMs), 0, 1000));
     } else if (run) {
-        if (vbus_shown_.view().empty() || static_cast<int32_t>(now_ms - vbus_next_) >= 0) {
+        if (vbus_sig_ == 0 || static_cast<int32_t>(now_ms - vbus_next_) >= 0) {
             StrBuf<12> v;
-            if (ctx_.pm_online && ctx_.vbus_fast_mv >= 0) v.put_fixed(ctx_.vbus_fast_mv, 2).put_char('V');
-            else v.put("--");
+            pg::put_unit_or_dash(v, ctx_.pm_online && ctx_.vbus_fast_mv >= 0, ctx_.vbus_fast_mv, 2, 'V');
             // "Step: waking the charger" until it lists, then "Asked: 11V3A"; the row repaints only when its text changes.
             const bool waking = twin_hw::live().waking();   // Rd is on, the charger has not listed yet: nothing is asked of it
             StrBuf<24> asked;
@@ -996,15 +1004,15 @@ void TwinPage::paint_detail(uint32_t now_ms) {
                 put_level(asked, e->out.mv, 'V');
                 put_level(asked, e->out.ma, 'A');
             }
-            if (asked.view() != step_shown_.view()) {
-                if (!step_shown_.view().empty()) gfx_fill(s, 0, static_cast<int16_t>(kCellY + 4), s.w, kit::kInfoPitch, kBg);
+            const uint32_t ss = pg::mix_str(2166136261u, asked.view()) | 1u;
+            if (ss != step_sig_) {
+                if (step_sig_ != 0) gfx_fill(s, 0, static_cast<int16_t>(kCellY + 4), s.w, kit::kInfoPitch, kBg);
                 kit::draw_info_row(s, static_cast<int16_t>(kCellY + 4), waking ? "Step" : "Asked", asked.view().substr(1));
-                step_shown_.clear();
-                step_shown_.put(asked.view());
+                step_sig_ = ss;
             }
-            if (v.view() != vbus_shown_.view()) kit::draw_info_row(s, static_cast<int16_t>(kCellY + 24), "VBUS", v.view(), kVolt);
-            vbus_shown_.clear();
-            vbus_shown_.put(v.view());
+            const uint32_t vs = pg::mix_str(2166136261u, v.view()) | 1u;
+            if (vs != vbus_sig_) kit::draw_info_row(s, static_cast<int16_t>(kCellY + 24), "VBUS", v.view(), kVolt);
+            vbus_sig_ = vs;
             vbus_next_ = now_ms + 250;   // at most 4 updates a second
         }
     } else {

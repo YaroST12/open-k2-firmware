@@ -527,6 +527,7 @@ TEST_CXX_LIB  += $(SRC_DIR)/ui/battery_view.cpp $(SRC_DIR)/ui/ui_battery.cpp
 TEST_CXX_LIB  += $(SRC_DIR)/core/math_selftest.cpp $(SRC_DIR)/core/memstat.cpp
 TEST_CXX_LIB  += $(SRC_DIR)/pd/pd_interrogate.cpp
 TEST_CXX_LIB  += $(SRC_DIR)/ui/graphs_model.cpp $(SRC_DIR)/ui/ui_graphs.cpp
+TEST_CXX_LIB  += $(SRC_DIR)/ui/kit_hot.cpp $(SRC_DIR)/ui/ui_graphs_hot.cpp $(SRC_DIR)/ui/ui_bench_hot.cpp
 TEST_CXX_BINS  = $(patsubst tests/%.cpp, $(HOST_DIR)/%, $(TEST_CXX_SRCS))
 
 # Every library source is compiled once into $(HOST_DIR)/obj/<set>/<path>.o (with -MMD -MP

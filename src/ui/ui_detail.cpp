@@ -116,7 +116,18 @@ void lay_row_ground(const Surface &c, int r) {
 void DetailPage::reset_cells() {
     bar_valid_ = false;
     flow_sig_ = 0xFF;
-    pg::invalidate_fields(f_, SCount);
+    for (auto &cell : f_) cell.valid = false;
+}
+
+bool DetailPage::put(int slot, std::string_view sv, uint16_t color) {
+    CellState &cell = f_[slot];
+    const Pos p = pos_of(slot);
+    const Font &font = slot < kFirstCell ? kMid : kSmall;
+    if (ctx_.budget && !cell.valid && !ctx_.budget->admit(static_cast<int>(p.chars) * font.adv * font.height, true))
+        return false;
+    if (cell.fg != color) { cell.fg = color; cell.valid = false; }
+    field_draw_buf(ctx_.content, font, p.x, p.y, p.chars, Align::Right, color, kBg, cell.valid, cell.cur, sv);
+    return true;
 }
 
 void DetailPage::draw_static() {
@@ -125,11 +136,6 @@ void DetailPage::draw_static() {
     if (static_step_ == 0) {
         if (bg && !bg->admit(140 * kBarH, true)) return;
         title_bar();
-        for (int i = 0; i < SCount; i++) {
-            const Pos p = pos_of(i);
-            if (i == SFlow) continue;   // painted whole by paint_flow (its arrow is a multi-byte glyph)
-            f_[i].init(c, i < kFirstCell ? kMid : kSmall, p.x, p.y, p.chars, Align::Right, kText, kBg);
-        }
         reset_cells();
         static_step_ = 1;
     }
@@ -218,9 +224,6 @@ void DetailPage::update(uint32_t now_ms) {
     const bool live = vbus;
     const uint16_t live_col = live ? kText : kFaint;
     StrBuf<16> s;
-    auto put = [&](int slot, std::string_view sv, uint16_t color) {
-        return pg::put_field(f_[slot], bg, sv, color);
-    };
 
     if (online) {
         s.put_fixed(pm.vbus_mv, 2);
@@ -274,8 +277,7 @@ void DetailPage::update(uint32_t now_ms) {
         const int32_t mv[4] = {an ? an->cc1_mv : 0, an ? an->cc2_mv : 0, an ? an->dp_mv : 0, an ? an->dm_mv : 0};
         const int slot[4] = {SCc1, SCc2, SDp, SDm};
         for (int i = 0; i < 4; i++) {
-            s.clear();
-            if (an) s.put_fixed(mv[i] < 0 ? 0 : mv[i], 2).put_char('V'); else s.put("--");
+            pg::put_unit_or_dash(s, an.has_value(), mv[i], 2, 'V');
             if (!put(slot[i], s.view(), an ? kText : kFaint)) return;
         }
     }
@@ -293,10 +295,9 @@ void DetailPage::update(uint32_t now_ms) {
     {   // Energy and charge, each with its unit.
         char whb[16], ahb[16];
         fmt_energy_pair(whb, ahb, ctx_.meter.mwh(), ctx_.meter.mah(), 5);
-        auto trim = [](const char *p) { while (*p == ' ') p++; return std::string_view(p); };
-        s.clear(); s.put(trim(whb)).put("Wh");
+        s.clear(); s.put(pg::trim_left(whb)).put("Wh");
         if (!put(SWh, s.view(), kText)) return;
-        s.clear(); s.put(trim(ahb)).put("Ah");
+        s.clear(); s.put(pg::trim_left(ahb)).put("Ah");
         if (!put(SAh, s.view(), kText)) return;
     }
 
@@ -322,8 +323,7 @@ void DetailPage::update(uint32_t now_ms) {
         if (live && pm.current_ma) {
             char r[16];
             const int n = fmt_ohms(r, pm.vbus_mv, pm.current_ma);
-            std::string_view rv{r, static_cast<size_t>(n)};
-            while (!rv.empty() && rv.front() == ' ') rv.remove_prefix(1);
+            std::string_view rv = pg::trim_left({r, static_cast<size_t>(n)});
             s.clear();
             s.put(rv);
             if (rv != "--") s.put_char('R');

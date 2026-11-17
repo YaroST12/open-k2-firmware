@@ -79,7 +79,7 @@ private:
     void build_action_row(int index, bool focused, kit::RowSpec &out);
     void entry_note(const Entry &e, bool running_this, StrBuf<40> &out) const;
     void reload();                                           // the library and the predictions
-    void compose_footer();
+    [[gnu::noinline]] void compose_footer();
     void say(std::string_view text, uint16_t color);
     void learn();
     void learned(const twin_hw::Learned &r, bool contract_changed);
@@ -97,10 +97,10 @@ private:
     // Detail layout: the body lines (name, gets, bar, contract, rule, InfoBlock) and where the action box starts.
     int line_count() const { return 5 + info_n_; }
     int16_t line_h(int i) const;
-    void paint_line(int i, int16_t y);
+    [[gnu::noinline]] void paint_line(int i, int16_t y);
     void layout_detail();                                    // first_ and the action box for the focused action
-    void paint_detail(uint32_t now_ms);
-    void build_info();                                       // the charger (left) and device (right) fact columns of the open twin
+    [[gnu::noinline]] void paint_detail(uint32_t now_ms);
+    [[gnu::noinline]] void build_info(const twin::Twin &det);                  // the charger (left) and device (right) fact columns of the open twin
     int rows() const { return detail_ ? kActions : n_ + 1 + (renego_ok_ ? 1 : 0); }   // twins + the Learn row (+ "Ask charger again")
     int list_last() const { return n_ + (renego_ok_ ? 1 : 0); }                         // the last list row
     bool running() const;
@@ -137,7 +137,8 @@ private:
     // ---- detail ----
     bool detail_ = false;
     uint8_t det_seq_ = 0;
-    twin::Twin det_{};                                       // the open twin, read once
+    uint8_t det_pdos_ = 0;                                   // sink PDO count of open twin
+    uint32_t det_want_mw_ = 0;                               // what the open twin wants (0 if no sink PDOs)
     int act_ = 0;                                            // focused action row
     int first_ = 0;                                          // body lines scrolled off the top
     int16_t box_y_ = kit::kListBottom;                       // top of the action box (rows, the armed cell, the proof)
@@ -146,11 +147,11 @@ private:
     std::array<StrBuf<24>, 3> info_l_{};                     // the charger's facts, left column
     std::array<StrBuf<24>, 3> info_r_{};                     // the device's facts, right column
     kit::ActionCell cell_;
-    StrBuf<12> vbus_shown_;                                  // the proof box's VBUS text as painted
+    uint32_t vbus_sig_ = 0;                                  // proof box VBUS signature (0 = unpainted)
     uint32_t vbus_next_ = 0;
     uint32_t draw_mw_ = 0;                                   // the live draw of a twin with no sink PDOs, as last painted (milliwatts)
     uint32_t draw_next_ = 0;                                 // next time the draw is sampled for the body's repaint signature
-    StrBuf<24> step_shown_;                                  // the proof box's Step / Asked row as painted (kind char + text)
+    uint32_t step_sig_ = 0;                                  // proof box Step/Asked signature (0 = unpainted)
 };
 
 }  // namespace k2

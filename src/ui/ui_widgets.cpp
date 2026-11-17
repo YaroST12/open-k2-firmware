@@ -236,53 +236,8 @@ K2_HOT void frame_round(const Surface &s, int16_t x, int16_t y, int16_t w, int16
     gfx_fill(s, static_cast<int16_t>(x + w - t), static_cast<int16_t>(y + t), static_cast<int16_t>(t), static_cast<int16_t>(h - 2 * t), color);
 }
 
-void draw_bar_label(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, int fill_px, uint16_t track,
-                    uint16_t fill, std::string_view text, uint16_t fg) {
-    gfx_fill(s, x, y, w, h, track);
-    if (fill_px > 0) gfx_fill(s, x, y, static_cast<int16_t>(fill_px), h, fill);
-    const int16_t ty = static_cast<int16_t>(y + (h - kLabelFont.height) / 2);
-    // Whole label on the track, then the part over the fill again through a surface clipped to it.
-    gfx_text(s, kLabelFont, static_cast<int16_t>(x + 4), ty, text, fg, track);
-    if (fill_px > 4) {
-        K2_TRUNC_PAUSE;   // clipped to the fill on purpose: the whole label was drawn (and checked) on the track above
-        const Surface clip{static_cast<int16_t>(s.x + x), static_cast<int16_t>(s.y + y), static_cast<int16_t>(fill_px), h};
-        gfx_text(clip, kLabelFont, 4, static_cast<int16_t>(ty - y), text, fg, fill);
-    }
-}
-
 K2_HOT void draw_icon(const Surface &s, int16_t x, int16_t y, Icon icon, uint16_t fg, uint16_t bg) {
     stream_mono(s, x, y, kIconSize, kIconSize, kIconBits[static_cast<int>(icon)], kIconSize - 1, fg, bg);
-}
-
-namespace {
-// Art rows, '#' = ink; converted at compile time so the flash holds only the 14 x 16-bit rows.
-constexpr uint16_t art_row(const char *r) {
-    uint16_t v = 0;
-    for (int i = 0; i < 14; i++) v = static_cast<uint16_t>((v << 1) | (r[i] == '#'));
-    return v;
-}
-template <size_t N>
-constexpr std::array<uint16_t, 14> art(const char *const (&a)[N]) {
-    static_assert(N == 14);
-    std::array<uint16_t, 14> o{};
-    for (size_t i = 0; i < N; i++) o[i] = art_row(a[i]);
-    return o;
-}
-constexpr const char *kChargerArt[14] = {
-    "...##....##...", "...##....##...", "...##....##...", "..##########..",
-    ".############.", ".######..####.", ".#####..#####.", ".####....####.",
-    ".####..######.", ".###..#######.", ".############.", "..##########..",
-    "......##......", "......##......"};
-constexpr const char *kPlugArt[14] = {
-    "....######....", "...########...", "...##....##...", "...##....##...",
-    "...########...", "...########...", "..##########..", "..##########..",
-    "..##########..", "..##########..", "....######....", ".....####.....",
-    "......##......", "......##......"};
-}  // namespace
-
-K2_HOT void draw_icon14(const Surface &s, int16_t x, int16_t y, Icon14 icon, uint16_t fg, uint16_t bg) {
-    static constexpr std::array<uint16_t, 14> kBits[2] = {art(kChargerArt), art(kPlugArt)};
-    stream_mono(s, x, y, 14, 14, kBits[static_cast<int>(icon)].data(), 13, fg, bg);
 }
 
 void draw_mark(const Surface &s, int16_t x, int16_t y, int size, bool check, uint16_t fg, uint16_t bg) {
@@ -614,30 +569,6 @@ std::string_view fit_text_mid(const Font &f, std::string_view text, int max_px, 
     const std::string_view out = cut_mid(f, text, max_px, buf);
     if (out.data() != text.data()) K2_TRUNC_NOTE(trunc::Kind::Data, text, max_px);
     return out;
-}
-
-void draw_last_pill(const Surface &s, std::string_view text) {
-    const int16_t w = static_cast<int16_t>(badge_text_bounds(kLabelFont, text).w + 8);
-    draw_label_box(s, static_cast<int16_t>(222 - w), 2, w, 14, text, kBg, kStale);
-}
-
-void draw_party_glyph(const Surface &s, int16_t x, int16_t y, int party, uint16_t color) {
-    static constexpr uint8_t kBits[kPartyGlyphs][kPartySize] = {
-        {0x06, 0x0C, 0x18, 0x3E, 0x0C, 0x18, 0x30, 0x20},   // bolt
-        {0x3C, 0x42, 0x85, 0x89, 0x91, 0xA1, 0x42, 0x3C},   // ring with a slash
-        {0x3C, 0x24, 0x24, 0x24, 0x24, 0x24, 0x24, 0x3C},   // upright rectangle
-    };
-    if (party < 0 || party >= kPartyGlyphs) return;
-    for (int r = 0; r < kPartySize; r++) {
-        const uint8_t bits = kBits[party][r];
-        for (int c = 0; c < kPartySize;) {
-            if (!(bits & (0x80 >> c))) { c++; continue; }
-            int run = 1;
-            while (c + run < kPartySize && (bits & (0x80 >> (c + run)))) run++;
-            gfx_fill(s, static_cast<int16_t>(x + c), static_cast<int16_t>(y + r), static_cast<int16_t>(run), 1, color);
-            c += run;
-        }
-    }
 }
 
 void draw_flow_diagram(const Surface &s, int16_t x, int16_t y, int16_t h, const FlowSpec &f) {

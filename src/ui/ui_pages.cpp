@@ -52,10 +52,10 @@ void put_volts(StrBufBase &s, uint32_t mv) {
 }  // namespace
 
 namespace pg {
-bool put_field(Field &f, PaintBudget *bg, std::string_view s, uint16_t fg, uint16_t bg_col) {
+bool put_field_buf(FieldBase &f, char *cur, PaintBudget *bg, std::string_view s, uint16_t fg, uint16_t bg_col) {
     if (bg && !f.valid() && !bg->admit(f.box_px(), true)) return false;
     f.set_colors(fg, bg_col);
-    f.draw(s);
+    f.draw_buf(cur, s);
     return true;
 }
 
@@ -94,6 +94,26 @@ std::string_view stash_str(char *dst, std::size_t cap, std::string_view s) {
     if (milli % 1000 == 0) out.put_u32(milli / 1000);
     else out.put_fixed(static_cast<int32_t>(milli), milli % 100 == 0 ? 1 : milli % 10 == 0 ? 2 : 3);
     if (unit) out.put_char(unit);
+}
+
+[[gnu::noinline]] void put_unit_or_dash(StrBufBase &out, bool ok, int32_t val, int dec, char unit, bool abs_val) {
+    out.clear();
+    if (!ok) { out.put("--"); return; }
+    if (abs_val) out.put_abs_fixed(val, dec);
+    else out.put_fixed(val < 0 ? 0 : val, dec);
+    if (unit) out.put_char(unit);
+}
+
+[[gnu::noinline]] std::string_view trim_left(std::string_view s) {
+    while (!s.empty() && s.front() == ' ') s.remove_prefix(1);
+    return s;
+}
+
+[[gnu::noinline]] void paint_footer_sig(const Surface &c, FooterTone tone, std::string_view text, uint32_t &sig) {
+    const uint32_t sg = mix_str(2166136261u, text) * 31u + static_cast<uint32_t>(tone) + 1u;
+    if (sg == sig) return;
+    sig = sg;
+    draw_footer(c, tone, text);
 }
 }  // namespace pg
 
@@ -452,11 +472,11 @@ void EmarkerPage::draw_static() {
     ctx_.rows.invalidate();
 }
 
-// The saved cable's name for list row `i`, from the slot cache (a window is at most 7 rows, so i % 8 never collides).
+// The saved cable's name for list row `i`, from the slot cache (a window is at most 7 rows, so i % 7 never collides).
 std::string_view EmarkerPage::name_of(int i) {
-    const int slot = i & (kNameSlots - 1);
+    const int slot = i % kNameSlots;
     if (name_idx_[slot] != i) {
-        name_idx_[slot] = static_cast<int16_t>(i);
+        name_idx_[slot] = static_cast<uint8_t>(i);
         names_[slot][0] = 0;
         cur_seq_ = 0;   // cur_ is the read buffer: the detail reloads it
         if (i >= 0 && i < n_seqs_ && storage::lib_get(seqs_[i], cur_)) {
@@ -483,7 +503,7 @@ void EmarkerPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
 
 void EmarkerPage::update(uint32_t now_ms) {
     title_badge(false);
-    if (note_until_ && static_cast<int32_t>(now_ms - note_until_) >= 0) { note_until_ = 0; note_ = StrBuf<24>(); }
+    if (note_until_ && static_cast<int32_t>(now_ms - note_until_) >= 0) { note_until_ = 0; note_.clear(); }
     const Surface &c = ctx_.content;
     const int n = n_seqs_;
     const int idx = menu_.idx;
@@ -564,7 +584,7 @@ void EmarkerPage::refresh_lib() {
     n_seqs_ = static_cast<int>(storage::lib_list(std::span<std::uint16_t>(seqs_)));
     menu_.set_count(n_seqs_);
     cur_seq_ = 0;
-    for (int16_t &i : name_idx_) i = -1;
+    for (uint8_t &i : name_idx_) i = 0xFF;
 }
 
 // What the Detail table shows on row `i` (0 = the name): the saved cable's own record, decoded.
@@ -591,7 +611,7 @@ void EmarkerPage::run_cmd(EmCmd cmd) {
     const int i = menu_.idx;
     if (i >= 0 && i < n_seqs_) {
         const bool ok = storage::lib_remove(seqs_[i]) == emlib::Err::Ok;
-        note_ = StrBuf<24>();
+        note_.clear();
         note_.put(ok ? "Deleted" : "Flash error");
         note_caution_ = !ok;
         note_until_ = ctx_.now + 2500;
@@ -603,7 +623,7 @@ void EmarkerPage::run_cmd(EmCmd cmd) {
 // Pushed from Connection's "Saved cables": the list view, a fresh library read, the first cable selected.
 void EmarkerPage::enter() {
     menu_ = EmMenu();
-    note_ = StrBuf<24>();
+    note_.clear();
     note_until_ = 0;
     refresh_lib();
 }
@@ -644,7 +664,7 @@ Strip EmarkerPage::labels() const {
 // BACK or the remote's set-page: the next visit starts on the list again.
 void EmarkerPage::leave() {
     menu_ = EmMenu();
-    note_ = StrBuf<24>();
+    note_.clear();
     note_until_ = 0;
 }
 
@@ -1053,8 +1073,7 @@ void LinesPage::update(uint32_t now_ms) {
     const int32_t mv[4] = {r ? r->dp_mv : 0, r ? r->dm_mv : 0, r ? r->cc1_mv : 0, r ? r->cc2_mv : 0};
     StrBuf<8> s;
     for (int i = 0; i < 4; i++) {
-        s.clear();
-        if (r) s.put_fixed(mv[i] < 0 ? 0 : mv[i], 2).put_char('V'); else s.put("--");
+        pg::put_unit_or_dash(s, r.has_value(), mv[i], 2, 'V');
         if (!pg::put_field(v_[i], bg, s.view(), r && mv[i] >= kLnFaintMv ? kText : kFaint)) return;   // a line with nothing on it reads faint
         paint_bar(i, mv[i], r.has_value());
         if (bg && bg->more) return;
@@ -1261,15 +1280,14 @@ void PdTriggerPage::paint_value() {
         static const char *const kAmpKeys[] = {"Offer", "Voltage", "Power"};
         kit::kv_static(c, kPtKv, volt ? kVoltKeys : kAmpKeys, 3);
         pdo_line(d, line_);
-        gfx_text(c, kSmall, kPtKv.value_x, pt_text_y(kPtKv, 0), line_.text.view(), kText, kBg);
+        kit::kv_draw_text(c, kPtKv, 0, line_.text.view());
         pg::put_exact_unit(s, volt ? d.max_ma : mw_v, volt ? 'A' : 'V');
-        gfx_text(c, kSmall, kPtKv.value_x, pt_text_y(kPtKv, 1), s.view(), col == kVolt ? kAmp : kVolt, kBg);
+        kit::kv_draw_text(c, kPtKv, 1, s.view(), col == kVolt ? kAmp : kVolt);
         f_[0].init(c, kSmall, kPtKv.value_x, pt_text_y(kPtKv, 2), 8, Align::Left, kWatt, kBg);   // power_mw
         constexpr uint8_t kNumChars = 5;
         const int16_t x0 = static_cast<int16_t>((c.w - (kNumChars * kBig.adv + 2 + kMid.adv)) / 2);
         f_[1].init(c, kBig, x0, kPtBigY, kNumChars, Align::Right, col, kBg);
-        gfx_text(c, kMid, static_cast<int16_t>(x0 + kNumChars * kBig.adv + 2), static_cast<int16_t>(kPtBigY + kBig.ascent - kMid.ascent),
-                 volt ? "V" : "A", col, kBg);
+        kit::draw_big_unit(c, x0, kPtBigY, kNumChars, volt ? "V" : "A", col);
         range_.init(c, kPtRangeX, kPtRangeY, kPtRangeW);
         const char u = volt ? 'V' : 'A';
         s.clear();
@@ -1310,10 +1328,10 @@ void PdTriggerPage::paint_confirm(uint32_t now_ms) {
             static const char *const kKeys[] = {"Offer", "Voltage", "Current", "Power"};
             kit::kv_static(c, kPtKv, kKeys, 4);
             pdo_line(caps_->pdos[wiz_.cursor], line_);
-            gfx_text(c, kSmall, kPtKv.value_x, pt_text_y(kPtKv, 0), line_.text.view(), kText, kBg);
-            gfx_text(c, kSmall, kPtKv.value_x, pt_text_y(kPtKv, 1), s.volts.view(), kVolt, kBg);
-            gfx_text(c, kSmall, kPtKv.value_x, pt_text_y(kPtKv, 2), s.amps.view(), kAmp, kBg);
-            gfx_text(c, kSmall, kPtKv.value_x, pt_text_y(kPtKv, 3), s.watts.view(), kWatt, kBg);   // power_mw
+            kit::kv_draw_text(c, kPtKv, 0, line_.text.view());
+            kit::kv_draw_text(c, kPtKv, 1, s.volts.view(), kVolt);
+            kit::kv_draw_text(c, kPtKv, 2, s.amps.view(), kAmp);
+            kit::kv_draw_text(c, kPtKv, 3, s.watts.view(), kWatt);   // power_mw
             StrBuf<12> of;
             of.put(" of ").put(s.offer_w.view());
             gfx_text(c, kSmall, static_cast<int16_t>(kPtKv.value_x + static_cast<int>(s.watts.view().size()) * kSmall.adv),
@@ -1350,8 +1368,8 @@ void PdTriggerPage::paint_live() {
         pg::clear_body(c, kit::kBodyY);
         static const char *const kKeys[] = {"Requested V", "Measured V", "Requested A", "Measured A", "Resets"};
         kit::kv_static(c, kPtLiveKv, kKeys, 5);
-        gfx_text(c, kSmall, kPtLiveKv.value_x, pt_text_y(kPtLiveKv, 0), s.volts.view(), kVolt, kBg);
-        gfx_text(c, kSmall, kPtLiveKv.value_x, pt_text_y(kPtLiveKv, 2), s.amps.view(), kAmp, kBg);
+        kit::kv_draw_text(c, kPtLiveKv, 0, s.volts.view(), kVolt);
+        kit::kv_draw_text(c, kPtLiveKv, 2, s.amps.view(), kAmp);
         f_[0].init(c, kSmall, kPtLiveKv.value_x, pt_text_y(kPtLiveKv, 1), 12, Align::Left, kVolt, kBg);
         f_[1].init(c, kSmall, kPtLiveKv.value_x, pt_text_y(kPtLiveKv, 3), 12, Align::Left, kAmp, kBg);
     }
@@ -1362,21 +1380,16 @@ void PdTriggerPage::paint_live() {
         kit::draw_verdict(c, 0, kit::kBodyY, c.w, kit::kAlertH, v, live_name(ls), kBg);
     }
     StrBuf<12> buf;
-    const auto fmt = [&](int32_t mv_or_ma, char unit) {
-        buf.clear();
-        if (on) buf.put_abs_fixed(mv_or_ma, 2).put_char(unit);
-        else buf.put("--");
-    };
-    fmt(ctx_.pm.vbus_mv, 'V');
+    pg::put_unit_or_dash(buf, on, ctx_.pm.vbus_mv, 2, 'V', true);
     pg::put_field(f_[0], nullptr, buf.view(), on ? kVolt : kDim);
-    fmt(ctx_.pm.current_ma, 'A');
+    pg::put_unit_or_dash(buf, on, ctx_.pm.current_ma, 2, 'A', true);
     pg::put_field(f_[1], nullptr, buf.view(), on ? kAmp : kDim);
     const uint32_t rs = 1u + st.hard_resets;
     if (rs != tsig_) {
         tsig_ = rs;
         buf.clear();
         buf.put_u32(st.hard_resets);
-        gfx_text(c, kSmall, kPtLiveKv.value_x, pt_text_y(kPtLiveKv, 4), buf.view(), st.hard_resets ? kCaution : kDim, kBg);
+        kit::kv_draw_text(c, kPtLiveKv, 4, buf.view(), st.hard_resets ? kCaution : kDim);
     }
 }
 
@@ -1411,10 +1424,7 @@ void PdTriggerPage::paint_footer() {
             tone = FooterTone::Caution;
         }
     }
-    const uint32_t sig = pg::mix_str(2166136261u, msg.view()) * 7u + static_cast<uint32_t>(tone) + 1u;
-    if (sig == fsig_) return;
-    fsig_ = sig;
-    draw_footer(c, tone, msg.view());
+    pg::paint_footer_sig(c, tone, msg.view(), fsig_);
 }
 
 void PdTriggerPage::paint_refusal() {
@@ -1555,8 +1565,7 @@ void CableRPage::paint_table(const CrView &v) {
     kit::kv_static(c, kCrKv, keys, kCrRows);
     // The ports are fixed by the hardware: the load plugs into the top port (the charger into the bottom one), whatever the
     // screen rotation.
-    gfx_text(c, kSmall, kCrKv.value_x, static_cast<int16_t>(kit::kv_row_y(kCrKv, 2) + kit::row_text_y(kit::kRowH, kSmall.height)),
-             "load on top", kDim, kBg);
+    kit::kv_draw_text(c, kCrKv, 2, "load on top", kDim);
     kit::kv_cells(c, kCrKv, val_, 2);
 }
 
@@ -1749,13 +1758,6 @@ void TriggerPage::draw_trace() {
     draw_sparkline(ctx_.content, kFcSparkX, kFcSparkY, kFcSparkW, kFcSparkH, px, kVolt, kVoltT, kBg);   // VBUS history
 }
 
-void TriggerPage::paint_footer(FooterTone tone, std::string_view text) {
-    const uint32_t sg = mix(2166136261u, text) * 31 + static_cast<uint32_t>(tone) + 1u;
-    if (sg == fsig_) return;
-    fsig_ = sg;
-    draw_footer(ctx_.content, tone, text);
-}
-
 // The protocol list: kit RowList rows (focus fill and bar), the name and what the entry takes at the right. Picking a row
 // sends nothing; the list repaints only the rows that changed.
 void TriggerPage::row_fn(void *self, int index, bool, kit::RowSpec &out) {
@@ -1795,11 +1797,11 @@ void TriggerPage::paint_release(bool fresh) {
         static const char *const labels[] = {"Target", "Measured"};
         kit::kv_static(c, kFcRelKv, labels, 2);
         const int16_t y0 = static_cast<int16_t>(kFcRelKv.y0 + kit::row_text_y(kFcRelKv.pitch, 16));
-        gfx_text(c, kSmall, kFcRelKv.value_x, y0, "5V", kVolt, kBg);
+        kit::kv_draw_text(c, kFcRelKv, 0, "5V", kVolt);
         vbus_v_.init(c, kSmall, kFcRelKv.value_x, static_cast<int16_t>(y0 + kFcRelKv.pitch), 8, Align::Left, kVolt, kBg);
     }
     StrBuf<12> s;
-    if (ctx_.pm_online) s.put_fixed(ctx_.pm.vbus_mv, 2).put_char('V'); else s.put("--");
+    pg::put_unit_or_dash(s, ctx_.pm_online, ctx_.pm.vbus_mv, 2, 'V');
     vbus_v_.draw(s.view());
 }
 
@@ -1849,21 +1851,21 @@ void TriggerPage::paint_main(uint32_t now_ms) {
         static const char *const kCapKeys[] = {"Protocol", "Offered", "Measured", "Cap"};
         if (fresh) {
             kit::kv_static(c, kFcKv, live ? kLiveKeys : retarget ? kHeldKeys : kCapKeys, 4);
-            gfx_text(c, kSmall, kFcKv.value_x, fc_row_text_y(live ? 1 : 0), e.name, kText, kBg);
+            kit::kv_draw_text(c, kFcKv, live ? 1 : 0, e.name);
             if (live) {
                 state_v_.init(c, kSmall, kFcKv.value_x, fc_row_text_y(0), 12, Align::Left, kOk, kBg);
                 target_v_.init(c, kSmall, kFcKv.value_x, fc_row_text_y(2), 8, Align::Left, kVolt, kBg);
                 vbus_v_.init(c, kSmall, kFcKv.value_x, fc_row_text_y(3), 8, Align::Left, kVolt, kBg);
             } else {
                 fc_offered_text(e, s);
-                gfx_text(c, kSmall, kFcKv.value_x, fc_row_text_y(1), s.view(), e.kind == trig::Kind::Scan ? kText : kVolt, kBg);
+                kit::kv_draw_text(c, kFcKv, 1, s.view(), e.kind == trig::Kind::Scan ? kText : kVolt);
                 vbus_v_.init(c, kSmall, kFcKv.value_x, fc_row_text_y(2), 8, Align::Left, kVolt, kBg);
                 if (retarget) {
                     held_v_.init(c, kSmall, kFcKv.value_x, fc_row_text_y(3), 8, Align::Left, kVolt, kBg);
                 } else {
                     s.clear();
                     s.put_fixed(power::max_vbus_mv(), 1).put_char('V');
-                    gfx_text(c, kSmall, kFcKv.value_x, fc_row_text_y(3), s.view(), kVolt, kBg);
+                    kit::kv_draw_text(c, kFcKv, 3, s.view(), kVolt);
                 }
                 // The draft: the big number with its unit, or the sweep word.
                 const int16_t unit_y = static_cast<int16_t>(kFcBigY + kBig.ascent - kMid.ascent);
@@ -1872,7 +1874,7 @@ void TriggerPage::paint_main(uint32_t now_ms) {
                 } else {
                     constexpr uint8_t kNumChars = 5;
                     target_v_.init(c, kBig, 6, kFcBigY, kNumChars, Align::Right, kVolt, kBg);
-                    gfx_text(c, kMid, static_cast<int16_t>(6 + kNumChars * kBig.adv + 2), unit_y, "V", kVolt, kBg);
+                    kit::draw_big_unit(c, 6, kFcBigY, kNumChars, "V", kVolt);
                 }
                 if (stage == trig::Stage::Review) send_.init(c, kFcSendY, kFcSendH);
             }
@@ -1887,8 +1889,7 @@ void TriggerPage::paint_main(uint32_t now_ms) {
             s.put_fixed(model_.target_mv(), 2);
             target_v_.draw(s.view());
         }
-        s.clear();
-        if (ctx_.pm_online) s.put_fixed(ctx_.pm.vbus_mv, 2).put_char('V'); else s.put("--");
+        pg::put_unit_or_dash(s, ctx_.pm_online, ctx_.pm.vbus_mv, 2, 'V');
         vbus_v_.draw(s.view());
         if (retarget) {
             s.clear();
@@ -1934,7 +1935,8 @@ void TriggerPage::paint_main(uint32_t now_ms) {
     const bool unsafe = cleanup && release == trig::Release::State::Unsafe;
     const bool error = unsafe || refused_ != fc::Fail::None || !model_.available();
     const bool caution = cleanup || (model_.needs_confirm() && (stage == trig::Stage::Review || live));
-    paint_footer(error ? FooterTone::Error : caution ? FooterTone::Caution : FooterTone::Info, footer);
+    pg::paint_footer_sig(ctx_.content, error ? FooterTone::Error : caution ? FooterTone::Caution : FooterTone::Info,
+                         footer, fsig_);
 }
 
 void TriggerPage::paint_scan() {
@@ -1988,10 +1990,14 @@ void TriggerPage::paint_scan() {
         }
         kit::draw_verdict(c, 0, kFcSumY, c.w, kFcSumH, sv, label.view(), kBg);
     }
-    if (ctx_.ui->fc_release().busy()) paint_footer(FooterTone::Caution, "Releasing; measuring VBUS");
-    else if (scanning_) paint_footer(FooterTone::Info, "Scanning...");
-    else if (acc > 0) paint_footer(FooterTone::Info, "Scan done");
-    else paint_footer(FooterTone::Caution, "Scan done: none answered");
+    const FooterTone ft = ctx_.ui->fc_release().busy() ? FooterTone::Caution
+                        : (!scanning_ && acc <= 0)     ? FooterTone::Caution
+                                                       : FooterTone::Info;
+    const char *fm = ctx_.ui->fc_release().busy() ? "Releasing; measuring VBUS"
+                   : scanning_                    ? "Scanning..."
+                   : acc > 0                      ? "Scan done"
+                                                  : "Scan done: none answered";
+    pg::paint_footer_sig(c, ft, fm, fsig_);
 }
 
 void TriggerPage::update(uint32_t now_ms) {

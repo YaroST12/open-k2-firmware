@@ -184,7 +184,12 @@ void fc_pill_text(fastcharge::Protocol p, StrBuf<6> &out);
 
 // Shared out-of-line page helpers (implemented in src/ui/ui_pages.cpp) to avoid per-TU duplication.
 namespace pg {
-[[gnu::noinline]] bool put_field(Field &f, PaintBudget *bg, std::string_view s, uint16_t fg = kText, uint16_t bg_col = kBg);
+[[gnu::noinline]] bool put_field_buf(FieldBase &f, char *cur, PaintBudget *bg, std::string_view s,
+                                     uint16_t fg = kText, uint16_t bg_col = kBg);
+template <uint8_t N>
+inline bool put_field(SmallField<N> &f, PaintBudget *bg, std::string_view s, uint16_t fg = kText, uint16_t bg_col = kBg) {
+    return put_field_buf(f, f.cur_data(), bg, s, fg, bg_col);
+}
 [[gnu::noinline]] void invalidate_fields(Field *f, int n);
 [[gnu::noinline]] void clear_body(const Surface &c, int16_t y0 = kBarH);
 [[gnu::noinline]] std::string_view stash_str(char *dst, std::size_t cap, std::string_view s);
@@ -192,6 +197,9 @@ namespace pg {
 [[gnu::noinline]] uint32_t mix_cstr(uint32_t h, const char *s, std::size_t max_len = ~std::size_t(0));
 [[gnu::noinline]] uint32_t mix_u32s(uint32_t h, const uint32_t *w, std::size_t n);
 [[gnu::noinline]] void put_exact_unit(StrBufBase &out, uint32_t milli, char unit = 0);
+[[gnu::noinline]] void put_unit_or_dash(StrBufBase &out, bool ok, int32_t val, int dec, char unit, bool abs_val = false);
+[[gnu::noinline]] std::string_view trim_left(std::string_view s);
+[[gnu::noinline]] void paint_footer_sig(const Surface &c, FooterTone tone, std::string_view text, uint32_t &sig);
 inline void put_dv(StrBufBase &out, unsigned dv) { put_exact_unit(out, dv * 100u, 'V'); }
 inline void put_volts_trim(StrBufBase &out, int32_t mv) { put_exact_unit(out, mv < 0 ? 0u : static_cast<uint32_t>(mv), 0); }
 }  // namespace pg
@@ -735,6 +743,7 @@ public:
     bool on_event(Event e) override;
     Strip labels() const override;
     void invalidate() override;
+    struct ZoneRect { int16_t x0, y0, x1, y1; };
 private:
     struct Frame;   // everything one update decides before it draws (ui_home.cpp)
     void sample_values(Frame &f, uint32_t now_ms);
@@ -746,10 +755,18 @@ private:
     // `it` at `n`; returns the head's signature. Kept out of paint_qty so its text helpers' locals are not on the
     // stack while the cell paints.
     [[gnu::noinline]] uint32_t qty_head(int slot, home::Qty q, const Frame &f, QtyHead &h, home::Item *it, int &n);
-    void paint_card(int cell, const Frame &f);   // 0 upper, 1 lower right-column card
-    void paint_info(const Frame &f);      // the info block: one compositor cell, three repaint zones
-    bool paint_cell_sliced(int slot_id, uint32_t base_sig, const home::Cell &cell,
-                           int16_t x0, int16_t y0, int16_t x1, int16_t y1);
+    [[gnu::noinline]] void paint_card(int cell, const Frame &f);   // 0 upper, 1 lower right-column card
+    [[gnu::noinline]] void paint_info(const Frame &f);      // the info block: one compositor cell, three repaint zones
+    [[gnu::noinline]] bool paint_cell_sliced(int slot_id, uint32_t base_sig, const home::Cell &cell,
+                                             int16_t x0, int16_t y0, int16_t x1, int16_t y1);
+    [[gnu::noinline]] bool commit_zoned_cell(int slot_id, uint32_t base, uint32_t zone_seed,
+                                             const home::Cell &cell, const int *zone_start,
+                                             const ZoneRect *zones, int nz,
+                                             bool &valid, uint32_t *old_sig, uint32_t *slice_zones,
+                                             int16_t cx0, int16_t cy0, int16_t cx1, int16_t cy1,
+                                             uint32_t *saved_base = nullptr);
+    struct QtyCommit;
+    [[gnu::noinline]] void commit_qty_cell(int si, const QtyCommit &q, const home::Cell &cell);
     // Display filter: V, A, W digits and the card values change at most 4 times a second (one throttle, one set).
     Throttle thr_{250};
     int32_t v_mv_ = 0, a_ma_ = 0, w_mw_ = 0;         // |values| as shown
@@ -802,10 +819,12 @@ public:
     Strip labels() const override { return base_labels(); }
     void invalidate() override;
 private:
+    struct CellState { uint16_t fg = kText; bool valid = false; char cur[10] = {}; };
     void reset_cells();
+    [[gnu::noinline]] bool put(int slot, std::string_view sv, uint16_t color);
     void paint_flow(bool live, power::Flow flow);
     static constexpr int kFields = 19;   // V, A, W, then 8 rows x 2 receipt cells (Flow paints itself)
-    Field f_[kFields];
+    CellState f_[kFields];
     uint8_t flow_sig_ = 0xFF;
     uint8_t static_step_ = 0;
 };
@@ -983,7 +1002,7 @@ public:
     void leave() override;
     ListState list_state() const { return menu_.view == EmView::List && n_seqs_ > 0 ? ctx_.rows.state() : ListState{}; }
 private:
-    static constexpr int kNameSlots = 8;   // names cached for the visible window (7 rows at most): index & 7
+    static constexpr int kNameSlots = 7;   // names cached for the visible window (7 rows at most): index % 7
     static void row_fn(void *ctx, int index, bool focused, kit::RowSpec &out);
     std::string_view name_of(int index);
     void run_cmd(EmCmd cmd);
@@ -998,8 +1017,8 @@ private:
     std::uint16_t cur_seq_ = 0;            // seq of cur_, 0 = none loaded
     bool have_cur_ = false;
     std::array<std::array<char, emlib::kNameMax + 1>, kNameSlots> names_{};
-    std::array<int16_t, kNameSlots> name_idx_{-1, -1, -1, -1, -1, -1, -1, -1};
-    StrBuf<24> note_;                      // what a delete answered, shown in the footer until note_until_
+    std::array<std::uint8_t, kNameSlots> name_idx_{0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+    StrBuf<12> note_;                      // what a delete answered, shown in the footer until note_until_
     bool note_caution_ = false;
     uint32_t note_until_ = 0;              // 0 = none
     uint32_t view_sig_ = ~0u;              // the view painted: a change wipes the body once
@@ -1068,8 +1087,8 @@ public:
     void invalidate() override;
     ListState list_state() const { return ListState{}; }   // fixed layout: nothing scrolls
 private:
-    void paint_bar(int i, int32_t mv, bool have);
-    bool paint_verdict(const std::optional<adc::Reading> &r, uint32_t now_ms);
+    [[gnu::noinline]] void paint_bar(int i, int32_t mv, bool have);
+    [[gnu::noinline]] bool paint_verdict(const std::optional<adc::Reading> &r, uint32_t now_ms);
     Field v_[4];
     int px_[4] = {-1, -1, -1, -1};
     Field pv_[1];                // the Rp value
@@ -1142,17 +1161,17 @@ public:
 private:
     trig::Run run() const;
     bool scan_view() const;               // the scan results are showing (not while the release monitor runs)
-    void paint_bar();                   // top bar: title, "n/3" step and the progress rule
-    void paint_main(uint32_t now_ms);
-    void paint_release(bool fresh);       // the release monitor: an AlertBand and the measured VBUS
-    void paint_scan();                    // one verdict row per scan step and the summary
-    void paint_footer(FooterTone tone, std::string_view text);
+    [[gnu::noinline]] void paint_bar();                   // top bar: title, "n/3" step and the progress rule
+    [[gnu::noinline]] void paint_main(uint32_t now_ms);
+    [[gnu::noinline]] void paint_release(bool fresh);       // the release monitor: an AlertBand and the measured VBUS
+    [[gnu::noinline]] void paint_scan();                    // one verdict row per scan step and the summary
     void push_trace(uint32_t now_ms);
     void draw_trace();
     static void row_fn(void *self, int index, bool focused, kit::RowSpec &out);   // the protocol list
 
     static constexpr int kTraceLen = 40;  // 10 s at 4 samples per second
-    Field target_v_, vbus_v_, held_v_, state_v_;
+    SmallField<8> target_v_, vbus_v_, held_v_;
+    SmallField<12> state_v_;
     kit::ActionCell send_;                // Review: SEND, then CONFIRM with the draining bar
     uint8_t kind_ = 255;                  // body painted: 0 main, 1 scan
     uint32_t bsig_ = 0, barsig_ = 0, fsig_ = 0, tsig_ = 0, ysig_ = 0;
@@ -1191,13 +1210,13 @@ public:
 private:
     enum class Refusal : uint8_t { None, Inline, NoCaps };
     SetupState refusal_state() const;
-    void paint_bar();             // top bar: "n/3 PD <step>" and the progress rule
-    void paint_refusal();         // flow diagram, requirement checklist and the reason footer
-    void paint_offer(uint32_t now_ms);   // OFFER: the PDOs as kit RowList rows
-    void paint_value();           // VOLTAGE / CURRENT: key/value table, the big value, the range bar
-    void paint_confirm(uint32_t now_ms);   // CONFIRM: the request table and the SEND / CONFIRM action cell
-    void paint_live();            // LIVE: a verdict cell for the contract, requested vs measured
-    void paint_footer();
+    [[gnu::noinline]] void paint_bar();             // top bar: "n/3 PD <step>" and the progress rule
+    [[gnu::noinline]] void paint_refusal();         // flow diagram, requirement checklist and the reason footer
+    [[gnu::noinline]] void paint_offer(uint32_t now_ms);   // OFFER: the PDOs as kit RowList rows
+    [[gnu::noinline]] void paint_value();           // VOLTAGE / CURRENT: key/value table, the big value, the range bar
+    [[gnu::noinline]] void paint_confirm(uint32_t now_ms);   // CONFIRM: the request table and the SEND / CONFIRM action cell
+    [[gnu::noinline]] void paint_live();            // LIVE: a verdict cell for the contract, requested vs measured
+    [[gnu::noinline]] void paint_footer();
     void reset_paint();           // forget every signature: the next update repaints
     static void row_fn(void *self, int index, bool focused, kit::RowSpec &out);   // the OFFER list
 
@@ -1211,7 +1230,7 @@ private:
     uint32_t armed_at_ = 0;       // when the second-OK window opened (0 = not armed): drains the CONFIRM bar
     uint32_t rsig_ = 0;           // refusal view signature (0 = not painted)
     uint32_t bsig_ = 0, fsig_ = 0, barsig_ = 0, tsig_ = 0, vsig_ = 0;   // body, footer, top bar, edge marks / resets, verdict
-    Field f_[2];                  // the live cells of the step: power + big value, or measured V + A
+    SmallField<12> f_[2];         // the live cells of the step: power + big value, or measured V + A
     kit::ProgressBar range_;      // VOLTAGE / CURRENT: where the value sits in its range
     kit::ActionCell send_;        // CONFIRM: SEND, then CONFIRM with the draining bar
     PdoLine line_;                // the row being built by row_fn (strings stay valid until the next call)
@@ -1230,8 +1249,8 @@ public:
     Strip labels() const override;
     void invalidate() override;
 private:
-    void paint_table(const CrView &v);
-    void paint_result(const CrView &v);
+    [[gnu::noinline]] void paint_table(const CrView &v);
+    [[gnu::noinline]] void paint_result(const CrView &v);
 
     Field val_[2];                 // the two step values (key/value rows 1 and 2)
     uint32_t csig_ = 0, rsig_ = 0;
