@@ -2378,6 +2378,31 @@ static void test_transition_capture_hooks() {
         CHECK_EQ(g_stub.tc_keep_run, r.run_id());
         CHECK_EQ(int(r.steps()[g_stub.tc_keep_step].verdict), int(ct::Verdict::Fail));
     }
+    { // a passing step whose capture froze on its own (a detach of the cut, never kept) gives the recorder back: it would hold the
+      // overlay, and the PD spec section's own capture, for the rest of the run (hardware 2026-11-17)
+        fixture(); two_pdos(); g_stub.tc_freeze_on_arm = true; g_stub.vbus_ceiling_mv = 20000;   // the converter follows the Request
+        Ui ui; open(ui);
+        CHECK_EQ(ui.charger_test_set_units(kPdOnly), true);
+        review(ui);
+        start_press(ui, 1300); press(ui, Button::Ok, 1400);
+        for (uint32_t t = 1500; t <= 900000 && ui.charger_test_busy(); t += 100) ui.tick(t);
+        CHECK_EQ(g_stub.tc_arms >= 1, true); CHECK_EQ(g_stub.tc_keeps, 0);
+        CHECK_EQ(int(g_stub.tc_state), int(transcap::State::Off));
+    }
+    { // a retried request does NOT re-arm over a capture that froze on its own: it is the row's evidence (the cut's trace) until the row
+      // ends, and the failed step then keeps it (the existing case above); a re-arm here would record an empty window
+        fixture(); two_pdos(); g_stub.request_err = pd::Err::Busy; g_stub.tc_freeze_on_arm = true;
+        Ui ui; open(ui); run_to_end(ui);
+        CHECK_EQ(g_stub.tc_arms, 1);
+        CHECK_EQ(g_stub.tc_keeps, 1);
+    }
+    { // a kept capture waits for its write: nothing drops it (the stub marks it kept until arm / disarm)
+        fixture(); two_pdos(); g_stub.request_err = pd::Err::BadPos;
+        Ui ui; open(ui); run_to_end(ui);
+        CHECK_EQ(g_stub.tc_keeps, 1);
+        CHECK_EQ(g_stub.tc_keep_pending, true);
+        CHECK_EQ(int(g_stub.tc_state), int(transcap::State::Post));   // a run end leaves a kept capture to the main loop
+    }
     { // another tool owns the overlay: the run goes on without a capture
         fixture(); two_pdos(); g_stub.request_err = pd::Err::Busy; g_stub.tc_arm_result = transcap::ArmResult::Busy;
         Ui ui; open(ui); run_to_end(ui);

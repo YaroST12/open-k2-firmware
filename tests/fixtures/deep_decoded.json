@@ -1,0 +1,536 @@
+{
+ "graphs": [
+  {
+   "alg": "PPS (PD3.x)",
+   "buckets": [
+    {
+     "max_mv": 12,
+     "mean_mv": -4,
+     "min_mv": -20
+    },
+    {
+     "max_mv": 52,
+     "mean_mv": 36,
+     "min_mv": 20
+    },
+    {
+     "max_mv": 60,
+     "mean_mv": 8,
+     "min_mv": -20
+    },
+    {
+     "max_mv": 40,
+     "mean_mv": 24,
+     "min_mv": 8
+    },
+    {
+     "max_mv": 60,
+     "mean_mv": 20,
+     "min_mv": -20
+    },
+    {
+     "max_mv": 32,
+     "mean_mv": 16,
+     "min_mv": 0
+    },
+    {
+     "max_mv": 60,
+     "mean_mv": 32,
+     "min_mv": -20
+    },
+    {
+     "max_mv": 20,
+     "mean_mv": 4,
+     "min_mv": -12
+    },
+    {
+     "max_mv": 60,
+     "mean_mv": 44,
+     "min_mv": 28
+    },
+    {
+     "max_mv": 12,
+     "mean_mv": -4,
+     "min_mv": -20
+    },
+    {
+     "max_mv": 52,
+     "mean_mv": 36,
+     "min_mv": 20
+    },
+    {
+     "max_mv": 60,
+     "mean_mv": 8,
+     "min_mv": -20
+    },
+    {
+     "max_mv": 40,
+     "mean_mv": 24,
+     "min_mv": 8
+    },
+    {
+     "max_mv": 60,
+     "mean_mv": 20,
+     "min_mv": -20
+    },
+    {
+     "max_mv": 32,
+     "mean_mv": 16,
+     "min_mv": 0
+    },
+    {
+     "max_mv": 60,
+     "mean_mv": 32,
+     "min_mv": -20
+    },
+    {
+     "max_mv": 20,
+     "mean_mv": 4,
+     "min_mv": -12
+    },
+    {
+     "max_mv": 60,
+     "mean_mv": 44,
+     "min_mv": 28
+    },
+    {
+     "max_mv": 12,
+     "mean_mv": -4,
+     "min_mv": -20
+    },
+    {
+     "max_mv": 52,
+     "mean_mv": 36,
+     "min_mv": 20
+    },
+    {
+     "max_mv": 60,
+     "mean_mv": 8,
+     "min_mv": -20
+    },
+    {
+     "max_mv": 40,
+     "mean_mv": 24,
+     "min_mv": 8
+    },
+    {
+     "max_mv": 60,
+     "mean_mv": 20,
+     "min_mv": -20
+    },
+    {
+     "max_mv": 32,
+     "mean_mv": 16,
+     "min_mv": 0
+    },
+    {
+     "max_mv": 60,
+     "mean_mv": 32,
+     "min_mv": -20
+    },
+    {
+     "max_mv": 20,
+     "mean_mv": 4,
+     "min_mv": -12
+    },
+    {
+     "max_mv": 60,
+     "mean_mv": 44,
+     "min_mv": 28
+    },
+    {
+     "max_mv": 12,
+     "mean_mv": -4,
+     "min_mv": -20
+    },
+    {
+     "max_mv": 52,
+     "mean_mv": 36,
+     "min_mv": 20
+    },
+    {
+     "max_mv": 60,
+     "mean_mv": 8,
+     "min_mv": -20
+    },
+    {
+     "max_mv": 40,
+     "mean_mv": 24,
+     "min_mv": 8
+    },
+    {
+     "max_mv": 60,
+     "mean_mv": 20,
+     "min_mv": -20
+    }
+   ],
+   "lo_mv": 3300,
+   "n": 128,
+   "range": 0,
+   "step_mv": 100,
+   "unit_mv": 4
+  },
+  {
+   "alg": "PD3.2+ SPR AVS",
+   "buckets": [
+    {
+     "max_mv": 35,
+     "mean_mv": 35,
+     "min_mv": 35
+    },
+    {
+     "max_mv": 35,
+     "mean_mv": 35,
+     "min_mv": 35
+    },
+    {
+     "max_mv": 35,
+     "mean_mv": 35,
+     "min_mv": 35
+    },
+    {
+     "max_mv": 35,
+     "mean_mv": 35,
+     "min_mv": 35
+    },
+    {
+     "max_mv": 35,
+     "mean_mv": 35,
+     "min_mv": 35
+    },
+    {
+     "max_mv": 35,
+     "mean_mv": 35,
+     "min_mv": 35
+    },
+    {
+     "max_mv": 35,
+     "mean_mv": 35,
+     "min_mv": 35
+    },
+    {
+     "max_mv": 35,
+     "mean_mv": 35,
+     "min_mv": 35
+    },
+    {
+     "max_mv": 35,
+     "mean_mv": 35,
+     "min_mv": 35
+    },
+    {
+     "max_mv": 35,
+     "mean_mv": 35,
+     "min_mv": 35
+    },
+    {
+     "max_mv": 35,
+     "mean_mv": 35,
+     "min_mv": 35
+    },
+    {
+     "max_mv": 35,
+     "mean_mv": 35,
+     "min_mv": 35
+    },
+    {
+     "max_mv": 35,
+     "mean_mv": 35,
+     "min_mv": 35
+    },
+    {
+     "max_mv": 35,
+     "mean_mv": 35,
+     "min_mv": 35
+    },
+    {
+     "max_mv": 35,
+     "mean_mv": 35,
+     "min_mv": 35
+    },
+    {
+     "max_mv": 35,
+     "mean_mv": 35,
+     "min_mv": 35
+    },
+    {
+     "max_mv": 35,
+     "mean_mv": 35,
+     "min_mv": 35
+    },
+    {
+     "max_mv": 35,
+     "mean_mv": 35,
+     "min_mv": 35
+    },
+    {
+     "max_mv": 35,
+     "mean_mv": 35,
+     "min_mv": 35
+    },
+    {
+     "max_mv": 35,
+     "mean_mv": 35,
+     "min_mv": 35
+    },
+    {
+     "max_mv": 35,
+     "mean_mv": 35,
+     "min_mv": 35
+    },
+    {
+     "max_mv": 35,
+     "mean_mv": 35,
+     "min_mv": 35
+    },
+    {
+     "max_mv": 35,
+     "mean_mv": 35,
+     "min_mv": 35
+    },
+    {
+     "max_mv": 35,
+     "mean_mv": 35,
+     "min_mv": 35
+    },
+    {
+     "max_mv": 35,
+     "mean_mv": 35,
+     "min_mv": 35
+    },
+    {
+     "max_mv": 35,
+     "mean_mv": 35,
+     "min_mv": 35
+    },
+    {
+     "max_mv": 35,
+     "mean_mv": 35,
+     "min_mv": 35
+    },
+    {
+     "max_mv": 35,
+     "mean_mv": 35,
+     "min_mv": 35
+    },
+    {
+     "max_mv": 35,
+     "mean_mv": 35,
+     "min_mv": 35
+    },
+    {
+     "max_mv": 35,
+     "mean_mv": 35,
+     "min_mv": 35
+    },
+    {
+     "max_mv": 35,
+     "mean_mv": 35,
+     "min_mv": 35
+    },
+    {
+     "max_mv": 35,
+     "mean_mv": 35,
+     "min_mv": 35
+    }
+   ],
+   "lo_mv": 15000,
+   "n": 131,
+   "range": 1,
+   "step_mv": 100,
+   "unit_mv": 1
+  }
+ ],
+ "spec": {
+  "cells": [
+   {
+    "key": "accept_time",
+    "label": "Accept",
+    "unit": "us",
+    "value": 123400,
+    "value_text": "123.4 ms",
+    "verdict": "pass"
+   },
+   {
+    "at_text": "PDO 5 to 9",
+    "fails": 7,
+    "key": "ps_rdy_time",
+    "label": "PS_RDY time",
+    "unit": "us",
+    "value": -32100,
+    "value_text": "-32.1 ms",
+    "verdict": "fail"
+   },
+   {
+    "key": "src_start",
+    "label": "VBUS start",
+    "skip": "no AVS",
+    "unit": "us",
+    "verdict": "skip"
+   },
+   {
+    "key": "ps_rdy_early",
+    "label": "PS_RDY early",
+    "unit": "mv",
+    "value": 99999999,
+    "value_text": "not seen",
+    "verdict": "unverified"
+   },
+   {
+    "key": "ps_rdy_low",
+    "label": "PS_RDY low",
+    "unit": "mv",
+    "verdict": "pending"
+   },
+   {
+    "key": "rise_time",
+    "label": "Rise time",
+    "unit": "us",
+    "verdict": "pending"
+   },
+   {
+    "key": "fall_time",
+    "label": "Fall time",
+    "unit": "us",
+    "verdict": "pending"
+   },
+   {
+    "key": "overshoot",
+    "label": "Overshoot",
+    "unit": "mv",
+    "verdict": "pending"
+   },
+   {
+    "key": "accuracy",
+    "label": "Accuracy",
+    "unit": "mv",
+    "verdict": "pending"
+   },
+   {
+    "key": "pps_monotonic",
+    "label": "PPS monotonic",
+    "unit": "mv",
+    "verdict": "pending"
+   },
+   {
+    "key": "pps_accuracy",
+    "label": "PPS accuracy",
+    "unit": "mv",
+    "verdict": "pending"
+   },
+   {
+    "key": "pps_settle",
+    "label": "PPS settle",
+    "unit": "us",
+    "verdict": "pending"
+   },
+   {
+    "key": "pps_band",
+    "label": "PPS in band",
+    "unit": "us",
+    "verdict": "pending"
+   },
+   {
+    "key": "pps_ps_rdy",
+    "label": "PPS PS_RDY",
+    "unit": "us",
+    "verdict": "pending"
+   },
+   {
+    "key": "pps_overshoot",
+    "label": "PPS overshoot",
+    "unit": "mv",
+    "verdict": "pending"
+   },
+   {
+    "key": "pps_transient",
+    "label": "PPS transient",
+    "unit": "us",
+    "verdict": "pending"
+   },
+   {
+    "key": "pps_status",
+    "label": "PPS_Status",
+    "unit": "count",
+    "verdict": "pending"
+   },
+   {
+    "key": "pps_status_time",
+    "label": "PPS_Status t",
+    "unit": "us",
+    "verdict": "pending"
+   },
+   {
+    "key": "pps_track",
+    "label": "PPS tracking",
+    "unit": "mv",
+    "verdict": "pending"
+   },
+   {
+    "key": "avs_monotonic",
+    "label": "AVS monotonic",
+    "unit": "mv",
+    "verdict": "pending"
+   },
+   {
+    "key": "avs_accuracy",
+    "label": "AVS accuracy",
+    "unit": "mv",
+    "verdict": "pending"
+   },
+   {
+    "key": "avs_band",
+    "label": "AVS in band",
+    "unit": "us",
+    "verdict": "pending"
+   },
+   {
+    "key": "avs_ps_rdy",
+    "label": "AVS PS_RDY",
+    "unit": "us",
+    "verdict": "pending"
+   },
+   {
+    "key": "avs_overshoot",
+    "label": "AVS overshoot",
+    "unit": "mv",
+    "verdict": "pending"
+   },
+   {
+    "key": "avs_transient",
+    "label": "AVS transient",
+    "unit": "us",
+    "verdict": "pending"
+   },
+   {
+    "key": "avs_track",
+    "label": "AVS tracking",
+    "unit": "mv",
+    "verdict": "pending"
+   },
+   {
+    "key": "source_reset",
+    "label": "Source reset",
+    "unit": "count",
+    "verdict": "pending"
+   }
+  ],
+  "end": "done",
+  "tally": {
+   "fail": 1,
+   "pass": 1,
+   "pending": 23,
+   "skip": 1,
+   "unverified": 1
+  },
+  "unconfirmed": false,
+  "why": null
+ },
+ "svooc": {
+  "asks": 2,
+  "ceiling_ma": 5500,
+  "end": "stopped",
+  "stop_ms": 3300,
+  "vmax_mv": 11200
+ }
+}

@@ -706,8 +706,8 @@ bool Ui::push_menu(Menu m, uint32_t now_ms) {
     return true;
 }
 
-bool Ui::open_share(qrshare::Type type, std::uint8_t schema, std::string_view title, std::size_t len, uint32_t now_ms) {
-    if (!share_rec_.begin(type, schema, title, len)) {
+bool Ui::open_share(qrshare::Type type, std::uint8_t schema, std::string_view title, std::size_t len, uint32_t now_ms, std::span<const std::uint8_t> ext) {
+    if (!share_rec_.begin(type, schema, title, len, ext)) {
         K2LOG("[SHARE] nothing to share (%u bytes)\n", unsigned(len));
         return false;
     }

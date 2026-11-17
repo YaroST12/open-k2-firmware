@@ -22,10 +22,13 @@
 // firmware's CARDS.JSON write, and (2) a view model: the badges (one per capability, what was achieved) and the full
 // results. Tables and rules mirror tools/report_card.py, tools/k2_qr.py and include/k2/chargertest/report_card.hpp;
 // tests/test_cardpage.mjs checks the three against each other on golden cards (tests/fixtures/qrlink.tsv).
-// Loaded by the page as a script (window.K2Card) and by Node as a module (module.exports).
+// A Deep run's format 11 card carries the Deep block after the record (deep.js decodes it): splitLink() gives it as `deep`, parseLink() puts
+// its decoded form on the card (card.deep, or card.deep_error when the block cannot be read) and sections() lists it.
+// Loaded by the page as a script (window.K2Card, after deep.js) and by Node as a module (module.exports).
 var K2Card = (function () {
+  var D = typeof K2Deep !== "undefined" ? K2Deep : require("./deep.js");
   var LINK_VERSION = "1";
-  var PAYLOAD = 250;      // card format 10; formats 3..9 are 144, 162, 178, 190, 196, 198, 214 bytes
+  var PAYLOAD = 250;      // card formats 10 and 11 (11 = the same payload, the Deep block travels beside it); formats 3..9 are 144, 162, 178, 190, 196, 198, 214 bytes
   var V8_PAYLOAD = 198;   // format 8 payload; format 9 adds the 16-byte spread block after it
   var V7_PAYLOAD = 196;   // format 7 ends with the repeat block; format 8 adds the re-balance count after it
   var V6_PAYLOAD = 190;   // format 6 ends with the UFCS modes; format 7 adds the repeat block after them
@@ -38,7 +41,7 @@ var K2Card = (function () {
   var V10_PAYLOAD = 250;  // format 10 payload
   var UFCS_AT = 178;      // format 6: 4 modes of u24 (lo 100 mV 8 bits, hi 100 mV 9 bits, current in 50 mA 7 bits); hi 0 = unused
   var MAX_UFCS = 4;
-  var FORMAT = 10;        // the newest card format this file reads
+  var FORMAT = 11;        // the newest card format this file reads
   var MAX_RANGES = 4;
   var RECORD_MAGIC = 0xA6;
   var MAX_UNPACKED = 4096;
@@ -199,7 +202,9 @@ var K2Card = (function () {
   var CABLE_KIND_V2 = {0: 0, 1: 1, 2: 2, 3: 4, 4: 255};    // the 3-bit cable kind code -> the v1 kind byte
   var SVDM_MASK = 0xFFFF8000 | (3 << 6) | 0x1F;            // the standard SVDM header mask, when a v2 row omits it
 
-  // A schema v2 card record -> the 256-byte version "1" record (format 10), so decodeRecord() reads it as before.
+  // A schema v2 card record -> the 256-byte version "1" record (format 11), so decodeRecord() reads it as before. A Deep run's
+  // block (a presence bit after the level byte, then u12 bit count and the bits) comes out as the array's `deep` property: the
+  // blob in deep.js form (u16 LE bit count, then the bytes), absent when the record has none.
   function expandCardV2(b) {
     var r = new BitReader(b);
     if (r.get(8) !== 2) throw CardError("bad-record", "This is not a version 2 card record.");
@@ -294,7 +299,16 @@ var K2Card = (function () {
     if (b.length * 8 - r.pos > 16 && r.get(1)) {          // v10: the sweep presence bit + 4 x 9 bytes (absent before it)
       for (var si = 0; si < 36; si++) rec[p + 214 + si] = r.get(8);
     }
-    if (b.length * 8 - r.pos >= 24) rec[p + 197] = r.get(8);   // the run's level (Light/Deep only), a whole byte before the CRC
+    if (b.length * 8 - r.pos >= 24) {
+      rec[p + 197] = r.get(8);                            // the run's level (Light/Deep only), a whole byte before the CRC
+      if (b.length * 8 - r.pos >= 24 && r.get(1)) {       // the Deep block: u12 bit count, then the bits (a Deep card only)
+        var nbits = r.get(12), nbytes = (nbits + 7) >> 3;
+        var blob = new Uint8Array(2 + nbytes);
+        blob[0] = nbits & 0xFF; blob[1] = nbits >> 8;
+        for (var bi = 0; bi < nbits; bi++) blob[2 + (bi >> 3)] |= r.get(1) << (bi & 7);
+        rec.deep = blob;
+      }
+    }
     rec[4 + PAYLOAD] = r.get(8);                          // the v1 record's CRC-16, carried so the integrity check is unchanged
     rec[4 + PAYLOAD + 1] = r.get(8);
     return rec;
@@ -700,14 +714,25 @@ var K2Card = (function () {
     return "00000000".slice(s.length) + s;
   }
 
-  // The record the K2 stores (and the link carries): 0xA6, type, payload length, 0, payload, CRC-16 -> the card.
+  // The record the K2 stores (and the link carries): 0xA6, type, payload length, 0, payload, CRC-16 -> the card. A record that
+  // has a `deep` property (a v2 link's Deep block, see expandCardV2) gives card.deep.
   function decodeRecord(rec) {
     if (rec.length < 6 || rec[0] !== RECORD_MAGIC) throw CardError("bad-record", "This is not a K2 report card.");
     var ln = rec[2];
     if (rec.length !== 4 + ln + 2) throw CardError("bad-record", "The card is the wrong length; the link may be cut short.");
     var crc = rec[rec.length - 2] | (rec[rec.length - 1] << 8);
-    if (crc16(rec, rec.length - 2) !== crc) throw CardError("bad-crc", "The card's check value does not match: the link was changed or cut.");
-    return decodePayload(rec.subarray(4, 4 + ln));
+    var ok = crc16(rec, rec.length - 2) === crc;
+    if (!ok && ln >= 34 && rec[4 + 33] === FORMAT) {   // a link a format 10 K2 packed carries the CRC of its format 10 record
+      var old = Uint8Array.from(rec.subarray(0, rec.length - 2));
+      old[4 + 33] = FORMAT - 1;
+      ok = crc16(old, old.length) === crc;
+    }
+    if (!ok) throw CardError("bad-crc", "The card's check value does not match: the link was changed or cut.");
+    var card = decodePayload(rec.subarray(4, 4 + ln));
+    if (rec.deep) {   // a Deep run's block rode beside the record (expandCardV2); one this page cannot read leaves the card as the record says
+      try { card.deep = D.decode(rec.deep, card.ranges); } catch (e) { card.deep_error = e.message; }
+    }
+    return card;
   }
 
   // The kind letters of a link: lowercase = the record as built, uppercase (and the card's "z") = the LZ4 block of it.
@@ -1012,6 +1037,72 @@ var K2Card = (function () {
     return rows;
   }
 
+  // ---- the Deep block: the PD spec summary, the SVOOC ceiling and the sweep error graphs (deep.js) --------------------------------
+
+  var ERR_OK_MV = 100, ERR_CAUTION_MV = 300;   // sweep.hpp kErrOkMv / kErrCautionMv: the Running view's green and amber limits
+  var SVOOC_TONE = {judged: "pass", refused: "skip", "no adapter": "skip", none: "skip", aborted: "partial"};
+
+  function signed(mv) { return (mv > 0 ? "+" : "") + mv + " mV"; }
+
+  function deepSpec(sp) {
+    var t = sp.tally, rows = [];
+    var tone = t.fail ? "fail" : t.pass || t.unverified ? "pass" : "skip";
+    rows.push(row("Result", sp.end === "done" ? (t.fail ? "failed" : "passed") : sp.end + (sp.why ? " (" + sp.why + ")" : ""), sp.end === "done" ? tone : "partial"));
+    var counts = [t.pass + " passed", t.fail + " failed", t.skip + " skipped"];
+    if (t.unverified) counts.push(t.unverified + " unverified");
+    if (t.pending) counts.push(t.pending + " not run");
+    rows.push(row("Checks", counts.join(", ")));
+    sp.cells.forEach(function (c) {
+      if (c.verdict !== "fail") return;
+      rows.push(row(c.label, c.value_text + " worst, " + c.fails + (c.fails === 1 ? " fail" : " fails") + " at " + c.at_text, "fail"));
+    });
+    var unv = sp.cells.filter(function (c) { return c.verdict === "unverified"; });
+    if (unv.length) rows.push(row("Unverified", unv.map(function (c) { return c.label + " " + c.value_text; }).join(", ")));
+    var skips = {}, order = [];
+    sp.cells.forEach(function (c) {
+      if (c.verdict !== "skip") return;
+      if (!skips[c.skip]) { skips[c.skip] = 0; order.push(c.skip); }
+      skips[c.skip]++;
+    });
+    if (order.length) rows.push(row("Skipped", order.map(function (k) { return k + " (" + skips[k] + ")"; }).join(", ")));
+    if (sp.unconfirmed) rows.push(row("Return to 5V", "not confirmed", "partial"));
+    return {title: "PD spec check", tone: tone, rows: rows};
+  }
+
+  function deepSvooc(sv) {
+    var tone = SVOOC_TONE[sv.end] || "noted";
+    var rows = [row("Result", sv.end + (sv.why ? " (" + sv.why + ")" : ""), tone === "noted" ? "" : tone)];
+    rows.push(row("Ceiling reached", sv.ceiling_ma ? amps(sv.ceiling_ma) : "none"));
+    if (sv.vmax_mv) rows.push(row("Highest voltage", volts(sv.vmax_mv)));
+    rows.push(row("Asks", String(sv.asks)), row("Stopped after", (sv.stop_ms / 1000).toFixed(1) + " s"));
+    return {title: "SVOOC ceiling", tone: tone, rows: rows};
+  }
+
+  function deepGraph(g) {
+    var s = D.summary(g), hi = g.lo_mv + (g.n - 1) * g.step_mv;
+    var rows = [row("Setpoints", span(g.lo_mv, hi) + ", " + g.n + " points")];
+    var tone = "skip";
+    if (s) {
+      var worst = Math.max(Math.abs(s.min_mv), Math.abs(s.max_mv));
+      tone = worst <= ERR_OK_MV ? "pass" : worst <= ERR_CAUTION_MV ? "partial" : "fail";
+      rows.push(row("Error band", signed(s.min_mv) + " to " + signed(s.max_mv), tone),
+        row("Largest mean", signed(s.worst_mv) + " near " + volts(s.worst_at_mv)));
+    } else rows.push(row("Error band", "no data"));
+    rows.push(row("Resolution", g.buckets.length + " buckets, error to " + g.unit_mv + " mV"));
+    return {title: rangeName(g.alg || "range " + (g.range + 1)) + " sweep error", tone: tone, rows: rows,
+      graph: {data: g, limits: [ERR_OK_MV, ERR_CAUTION_MV]}};
+  }
+
+  function deepSection(card) {
+    var d = card.deep;
+    if (!d) return card.deep_error ? {title: "Deep run details", groups: [{title: "Not shown", tone: "partial", rows: [row("Why", card.deep_error)]}]} : null;
+    var groups = [];
+    if (d.spec) groups.push(deepSpec(d.spec));
+    if (d.svooc) groups.push(deepSvooc(d.svooc));
+    (d.graphs || []).forEach(function (g) { groups.push(deepGraph(g)); });
+    return groups.length ? {title: "Deep run details", groups: groups} : null;
+  }
+
   function sections(card) {
     var out = [];
     var capped = !!card.groups.PD && card.groups.PD.reason === CAPPED;
@@ -1061,6 +1152,9 @@ var K2Card = (function () {
       legacy.push({title: GROUP_NAMES[n] || n, tone: b.tone, rows: groupRows(n, lg, true, modeRows, card)});
     });
     out.push({title: "Other fast-charge protocols", groups: legacy, empty: "None were tested."});
+
+    var dp = deepSection(card);
+    if (dp) out.push(dp);
 
     var c = card.cable;
     if (c && (c.vid || c.pid || c.max_mv || c.max_ma || c.kind || c.observed || c.spoofed || c.seq)) {

@@ -461,7 +461,7 @@ private:
     void abandon_run();
     void capture_identity();   // charger fingerprint, VID/PID and rated power, taken while the source caps are live
     void save_card();          // report card of a Done run; delta against the charger's earlier card
-    [[gnu::noinline]] void save_card_store();   // save_card's tail: the previous card, the write and the delta, on its own frame
+    [[gnu::noinline]] void save_card_store(std::span<const uint8_t> blk);   // save_card's tail: the previous card, the write (with the Deep block) and the delta, on its own frame
     UiContext& ctx_;
     ChargerTestPage* view_ = nullptr;   // the painted half while it exists
     const char* fc_words_ = nullptr;    // the footer words of the handshake the last start() opened (null: that protocol has none)

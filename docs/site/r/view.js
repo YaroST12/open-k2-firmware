@@ -36,9 +36,41 @@
     return dl;
   }
 
+  var SVGNS = "http://www.w3.org/2000/svg";
+  function svg(tag, attrs, text) {
+    var e = document.createElementNS(SVGNS, tag);
+    Object.keys(attrs || {}).forEach(function (k) { e.setAttribute(k, attrs[k]); });
+    if (text !== undefined) e.textContent = text;
+    return e;
+  }
+  function volts(mv) { return (Math.round(mv / 100) / 10) + "V"; }
+
+  // The error-band graph of one sweep: mean curve, min..max band, dashed limit lines. Geometry comes from K2Deep.plot; every
+  // element is made here with attributes and textContent, so nothing from the record is ever parsed as markup.
+  function graph(gr, label) {
+    var W = 320, H = 150, p = K2Deep.plot(gr.data, W, H, {l: 38, t: 6, r: 6, b: 18}, gr.limits);
+    var s = svg("svg", {"class": "graph", viewBox: "0 0 " + W + " " + H, role: "img",
+      "aria-label": label + ": error against voltage, mean with min and max band, limits +-" + gr.limits[0] + " and +-" + gr.limits[1] + " mV"});
+    p.lines.forEach(function (l) {
+      s.appendChild(svg("line", {"class": l.cls === "ok" ? "g-ok" : "g-caut", x1: p.x0, x2: p.x1, y1: l.y, y2: l.y}));
+      if (l.mv > 0) s.appendChild(svg("text", {"class": "g-end", x: 34, y: l.y + 3}, "+" + l.mv));
+      else s.appendChild(svg("text", {"class": "g-end", x: 34, y: l.y + 3}, String(l.mv)));
+    });
+    s.appendChild(svg("line", {"class": "g-axis", x1: p.x0, x2: p.x1, y1: p.y0, y2: p.y0}));
+    s.appendChild(svg("text", {"class": "g-end", x: 34, y: p.y0 + 3}, "0 mV"));
+    p.runs.forEach(function (r) {
+      s.appendChild(svg("path", {"class": "g-band", d: r.band}));
+      s.appendChild(svg("path", {"class": "g-mean", d: r.mean}));
+    });
+    s.appendChild(svg("text", {"class": "g-start", x: p.x0, y: H - 4}, volts(p.lo_mv)));
+    s.appendChild(svg("text", {"class": "g-end", x: p.x1, y: H - 4}, volts(p.hi_mv)));
+    return s;
+  }
+
   function group(g) {
     var box = el("div", "group " + (g.tone || ""));
     box.appendChild(el("h4", "", g.title));
+    if (g.graph) box.appendChild(graph(g.graph, g.title));
     box.appendChild(rowsTable(g.rows));
     return box;
   }

@@ -365,10 +365,10 @@ static void test_v6_file_loads_unchanged_and_takes_a_repeat() {
     CHECK_EQ(stored_format(v, 0x6161), unsigned(rc::kFormat));
 }
 
-// Every card format a firmware ever framed loads from a ring record: v3 (144 byte payload) up to v10 (250).
+// Every card format a firmware ever framed loads from a ring record: v3 (144 byte payload) up to v11 (250).
 static void test_every_older_file_size_loads() {
     struct Old { unsigned payload, format, file; };
-    constexpr Old olds[] = {{144, 3, 158}, {162, 4, 176}, {178, 5, 192}, {190, 6, 204}, {196, 7, 210}, {198, 8, 212}, {214, 9, 228}, {250, 10, 264}};
+    constexpr Old olds[] = {{144, 3, 158}, {162, 4, 176}, {178, 5, 192}, {190, 6, 204}, {196, 7, 210}, {198, 8, 212}, {214, 9, 228}, {250, 10, 264}, {250, 11, 264}};
     Vol v;
     std::uint32_t stamp = 1;
     for (const Old& o : olds) {
@@ -388,7 +388,7 @@ static void test_every_older_file_size_loads() {
         CHECK_EQ(g.card_no, o.format); CHECK_EQ(g.runs, 2); CHECK_STR(g.name, "Old card");
         CHECK_EQ(g.group[0].max_mv, 15000u);
     }
-    CHECK_EQ(got.front().id.fp, 0xA000u + 10);   // stamp order: the newest file first
+    CHECK_EQ(got.front().id.fp, 0xA000u + 11);   // stamp order: the newest file first
     CHECK_EQ(got.back().id.fp, 0xA000u + 3);
 }
 
@@ -538,17 +538,17 @@ static void test_duplicate_numbers_newer_keeps_it() {
 }
 
 // The case that made the duplicates on hardware: a v8 card file an older build could not read kept its number 5 while
-// the number went to a new v10 card. The invisible card's stamp can sit above the v10 card's (stamps were handed out
-// from the cards the build could see), so the stamp alone would move the number the user has seen away from the v10
+// the number went to a new v11 card. The invisible card's stamp can sit above the v11 card's (stamps were handed out
+// from the cards the build could see), so the stamp alone would move the number the user has seen away from the v11
 // card. A current-format file keeps its number over an older-format one; the stamp decides only between equals.
 static void test_duplicate_number_stays_with_the_current_format() {
     Vol v;
     rc::Card old8 = card(0xA1, 1); old8.card_no = 5; old8.runs = 1; rc::set_name(old8, "Invisible v8");
-    rc::Card cur = card(0xB2, 2); cur.card_no = 5; cur.runs = 1; rc::set_name(cur, "Current v10");
+    rc::Card cur = card(0xB2, 2); cur.card_no = 5; cur.runs = 1; rc::set_name(cur, "Current v11");
     rc::Card c = card(0xC3, 3); c.card_no = 7; c.runs = 1;
     write_old_card(v, old8, 198, 8, 30);                    // the higher stamp
-    write_old_card(v, cur, 250, 10, 20);
-    write_old_card(v, c, 250, 10, 15);
+    write_old_card(v, cur, 250, 11, 20);
+    write_old_card(v, c, 250, 11, 15);
     v.reboot();
     const int ops0 = v.disk.ops();
     rc::Card g;
@@ -762,6 +762,132 @@ static void test_tombstone_carried_out_of_a_middle_sector() {
     CHECK_EQ(middle > 0, 1);
 }
 
+// ---- Deep blocks beside the card ----
+
+// A structurally valid Deep block (blob_valid) of `bits` bits, every byte `seed`-derived so two blocks differ.
+static std::vector<std::uint8_t> blk(unsigned seed, unsigned bits = 200) {
+    std::vector<std::uint8_t> b(2 + (bits + 7) / 8);
+    b[0] = std::uint8_t(bits & 0xFF); b[1] = std::uint8_t(bits >> 8);
+    for (std::size_t i = 2; i < b.size(); ++i) b[i] = std::uint8_t(seed * 31 + i);
+    return b;
+}
+static bool same(std::span<const std::uint8_t> a, const std::vector<std::uint8_t>& b) {
+    return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin());
+}
+static rc::Err put_deep(Vol& v, rc::Card& c, const std::vector<std::uint8_t>& b) {
+    v.idle();
+    rc::Card prev;
+    bool had = false;
+    return v.s->put(c, prev, had, b);
+}
+
+static void test_deep_block_round_trip() {
+    Vol v;
+    rc::Card c = card(0x7001, 3);
+    const auto b = blk(1);
+    CHECK_EQ(int(put_deep(v, c, b)), int(rc::Err::Ok));
+    CHECK_EQ(same(v.s->ext(c.card_no), b), 1);
+    rc::Card g;
+    CHECK_EQ(v.s->find(0x7001, g), 1);                    // the card reads as it always did
+    CHECK_EQ(g == c, 1);
+    CHECK_EQ(all(*v.s).size(), 1u);
+    v.reboot();                                           // the block is on flash, the index finds it again
+    CHECK_EQ(same(v.s->ext(c.card_no), b), 1);
+    CHECK_EQ(v.s->ext(99).size(), 0u);                    // no such card
+    rc::Card plain = card(0x7002);
+    CHECK_EQ(int(v.put(plain)), int(rc::Err::Ok));        // a card without a block has none
+    CHECK_EQ(v.s->ext(plain.card_no).size(), 0u);
+    // a block that is not whole is never stored
+    rc::Card c3 = card(0x7003);
+    auto bad = blk(3);
+    bad.pop_back();
+    CHECK_EQ(int(put_deep(v, c3, bad)), int(rc::Err::Ok));
+    CHECK_EQ(v.s->ext(c3.card_no).size(), 0u);
+    CHECK_EQ(all(*v.s).size(), 3u);
+}
+
+static void test_deep_block_follows_rename_and_repeat() {
+    Vol v;
+    rc::Card c = card(0x7001, 3);
+    const auto b = blk(1);
+    put_deep(v, c, b);
+    CHECK_EQ(int(v.s->rename(c.card_no, "Desk")), int(rc::Err::Ok));
+    CHECK_EQ(same(v.s->ext(c.card_no), b), 1);            // a rename carries the block
+    // the same results again without a block: counted as a repeat, the block stays
+    rc::Card r1 = card(0x7001, 3);
+    CHECK_EQ(int(v.put(r1)), int(rc::Err::Ok));
+    CHECK_EQ(r1.times, 2);
+    CHECK_EQ(same(v.s->ext(r1.card_no), b), 1);
+    // a repeat that brings a block replaces it
+    const auto b2 = blk(2, 333);
+    rc::Card r2 = card(0x7001, 3);
+    CHECK_EQ(int(put_deep(v, r2, b2)), int(rc::Err::Ok));
+    CHECK_EQ(r2.times, 3);
+    CHECK_EQ(same(v.s->ext(r2.card_no), b2), 1);
+    // a different run without a block drops it
+    rc::Card r3 = card(0x7001, 5, 1);
+    CHECK_EQ(int(v.put(r3)), int(rc::Err::Ok));
+    CHECK_EQ(r3.times, 1);
+    CHECK_EQ(v.s->ext(r3.card_no).size(), 0u);
+    v.reboot();
+    CHECK_EQ(v.s->ext(r3.card_no).size(), 0u);
+    CHECK_EQ(all(*v.s).size(), 1u);
+}
+
+// 64 Deep cards one after the other (maintenance between them, as the main loop runs it): every card stays listed, no save
+// is refused, the newest kMaxDeep keep their block and older ones lose it when maintenance carries them forward.
+static void test_deep_blocks_are_capped_by_maintenance() {
+    Vol v;
+    for (unsigned i = 1; i <= rc::kMaxCards; ++i) {
+        rc::Card c = card(0x8000 + i, 1 + i % 4);
+        CHECK_EQ(int(put_deep(v, c, blk(i, rc::deep::kMaxBits))), int(rc::Err::Ok));
+    }
+    v.idle();
+    v.reboot();
+    CHECK_EQ(all(*v.s).size(), size_t(rc::kMaxCards));
+    std::array<uint16_t, rc::kMaxCards> nums{};
+    const size_t n = v.s->numbers(nums);                    // newest first
+    CHECK_EQ(n, size_t(rc::kMaxCards));
+    unsigned with = 0;
+    for (size_t i = 0; i < n; ++i) {
+        const bool has = v.s->ext(nums[i]).size() > 0;
+        with += has;
+        if (i < rc::kMaxDeep) CHECK_EQ(has, 1);             // the newest keep it, whole and byte for byte
+        if (i < rc::kMaxDeep) CHECK_EQ(same(v.s->ext(nums[i]), blk(rc::kMaxCards - unsigned(i), rc::deep::kMaxBits)), 1);
+    }
+    CHECK_EQ(with < rc::kMaxCards, 1);                      // the ring ran out of room for 64 worst-case blocks: older ones lost theirs
+    CHECK_EQ(with >= rc::kMaxDeep, 1);                      // the trim is lazy (maintenance sheds blocks only for room): the newest 12 are sure
+    // rounds of saves and maintenance: the ring keeps going
+    for (unsigned k = 0; k < 150; ++k) {
+        rc::Card c = card(0x8000 + 1 + (k * 7) % 80, 1 + k % 5, k % 2);
+        CHECK_EQ(int(put_deep(v, c, blk(100 + k, rc::deep::kMaxBits))), int(rc::Err::Ok));
+    }
+    v.idle();
+    v.reboot();
+    CHECK_EQ(all(*v.s).size() <= size_t(rc::kMaxCards), 1);
+    CHECK_EQ(all(*v.s).size() >= 60u, 1);
+}
+
+// No room for the block: the card is saved without it. Plain cards fill the ring up to its reserve; then the head sector holds a
+// card but not a card with the worst block.
+static void test_deep_block_dropped_when_full() {
+    Vol v;
+    const auto b = blk(5, rc::deep::kMaxBits);
+    const std::uint32_t need = ringlog::record_bytes(std::uint32_t(rc::kRecBytes + b.size()));
+    unsigned k = 0;
+    for (; k < 400; ++k) {
+        if (v.ring->blank() <= rc::kRingReserve && v.ring->head_free() >= ringlog::record_bytes(rc::kRecBytes) && v.ring->head_free() < need) break;
+        rc::Card c = card(0x4000 + k % 6, 1 + k % 5);
+        CHECK_EQ(int(v.s->put(c)), int(rc::Err::Ok));
+    }
+    CHECK_EQ(k < 400, 1);
+    rc::Card d = card(0x4100, 2);
+    rc::Card prev; bool had = false;
+    CHECK_EQ(int(v.s->put(d, prev, had, b)), int(rc::Err::Ok));   // saved, without the block
+    CHECK_EQ(v.s->ext(d.card_no).size(), 0u);
+    CHECK_EQ(all(*v.s)[0].id.fp, d.id.fp);
+}
+
 int main() {
     test_empty_and_first_put();
     test_retest_replaces_and_keeps_name();
@@ -790,5 +916,9 @@ int main() {
     test_power_cut_during_maintenance();
     test_random_ops_match_a_model();
     test_tombstone_carried_out_of_a_middle_sector();
+    test_deep_block_round_trip();
+    test_deep_block_follows_rename_and_repeat();
+    test_deep_blocks_are_capped_by_maintenance();
+    test_deep_block_dropped_when_full();
     return test_report("test_report_card_store");
 }

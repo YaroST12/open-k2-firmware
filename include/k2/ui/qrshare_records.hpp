@@ -35,6 +35,9 @@
 //             varint times [+ last_boots u16, last_uptime_s u24 when times > 1]; varint rebalanced (v8: the source's mid-run
 //             re-balance count, 0 on a v7 record); [v9 spread, v10 sweep blocks]; level u8 only on a Light or Deep card (the v8
 //             spare byte; a reader takes it when 24 or more bits are left, so the CRC's padding never reads as one);
+//             [format 11, Deep cards: the Deep block (k2/chargertest/report_card_deep.hpp), only after a level byte and only
+//             when 24 or more bits are left after it: present u1 = 1, nbits u12, then that many bits of the block's stream
+//             (its own u16 length prefix is dropped); the CRC's padding is at most 7 bits, so it never reads as a block];
 //             crc16 u16 of the v1 record.
 //   Emarker v2: schema u8 = 2; name_len u5 (<= 24), the name as u7 chars; flags u8; the emrec: name_len u5 (<= 20), the name as
 //             u7 chars, spec_rev u2, five VDOs u32, checksum u8; has_quirks u1 [+ flags u2, unmatched u2, count u4, then count
@@ -51,6 +54,7 @@
 #include "k2/pd/emrec.hpp"
 #include "k2/pd/pd.hpp"
 #include "k2/chargertest/report_card.hpp"
+#include "k2/chargertest/report_card_deep.hpp"
 #include "k2/ui/qrshare.hpp"
 
 namespace k2::qrshare::records {
@@ -94,8 +98,12 @@ bool valid_v1(Type type, std::span<const std::uint8_t> rec);
 // Packs the v1 record `in` into the v2 record in `out` (LSB-first bit stream, see the header). Returns the v2 length, or 0 when
 // `in` is not a valid v1 record of a v2 kind or `out` is too small. `out` may alias `in` (in-place packing; a local copy makes
 // that safe), and the v2 record is never longer than the v1 one.
-std::size_t pack_v2(Type type, std::span<const std::uint8_t> in, std::span<std::uint8_t> out);
+// `ext` (a card only) is the Deep block of the card (report_card::deep::build / the store's ext view, length prefix included):
+// appended to the stream when the card carries a level byte and the block is whole; anything else is left out. It must not alias
+// `out` (the v2 record of a Deep card is longer than its v1 record).
+std::size_t pack_v2(Type type, std::span<const std::uint8_t> in, std::span<std::uint8_t> out, std::span<const std::uint8_t> ext = {});
 // The same, packing `rec` into its own front: the share record buffer holds the v2 record afterwards. Returns the new length.
+// (No block: a Deep card with one packs with pack_v2 into a buffer longer than the v1 record.)
 std::size_t pack_v2_in_place(Type type, std::span<std::uint8_t> rec);
 
 // Worst-case v2 sizes (every field at its widest), for the one-code asserts in qrshare_link.hpp.
@@ -126,5 +134,9 @@ consteval std::size_t emk_v2_worst_bits() {
 inline constexpr std::size_t kMaxCardV2 = (card_v2_worst_bits() + 7) / 8;   // 242 B
 inline constexpr std::size_t kMaxEmkV2 = (emk_v2_worst_bits() + 7) / 8;     // 459 B
 static_assert(kMaxCardV2 == 242 && kMaxEmkV2 == 459);
+// The worst Deep card: the card's worst case plus the block's presence bit, its u12 length and its worst-case stream.
+inline constexpr std::size_t kDeepExtHead = 1 + 12;
+inline constexpr std::size_t kMaxCardDeepV2 = (card_v2_worst_bits() + kDeepExtHead + report_card::deep::kMaxBits + 7) / 8;   // 653 B
+static_assert(kMaxCardDeepV2 == 653);
 
 }  // namespace k2::qrshare::records

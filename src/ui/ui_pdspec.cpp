@@ -105,9 +105,14 @@ pd::Err PdSpecSession::ask_pps_status() {
 }
 
 // The capture: a fresh recording, triggered at once with the step's own post window, so it freezes on its own once the window is
-// over. Refused (no capture: the engine falls back to the sink's stamps and live polling) while anyone else holds the recorder.
+// over. A capture nobody waits for (frozen and never kept, or already stored) is taken over, and inside the charger test so is the
+// recording an earlier row left armed: both would hold the recorder for the whole run (hardware 2026-11-17: every Deep-run
+// transition lost its capture). Refused (no capture: the engine falls back to the sink's stamps and live polling) while a kept
+// capture waits for its write or another tool records.
 bool PdSpecSession::capture_start(std::uint32_t post_us) {
     capture_stop();
+    transcap::release_unkept();
+    if (test_run_) transcap::disarm_if_armed();
     if (transcap::active()) return false;
     if (transcap::arm() != transcap::ArmResult::Ok) return false;
     captured_ = true;

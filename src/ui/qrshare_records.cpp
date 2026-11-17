@@ -99,7 +99,7 @@ bool valid_v1(Type type, std::span<const std::uint8_t> rec) {
 // The card record (204 B with v8, 202 B with v7) -> the v2 record. The payload is copied to a local first, so `out` may
 // alias `in` (the varints can run the write pointer a few bytes ahead of the read pointer); an older, shorter record is
 // zero-padded, so its v8 byte reads 0.
-static std::size_t pack_card_v2(std::span<const std::uint8_t> rec, std::span<std::uint8_t> out) {
+static std::size_t pack_card_v2(std::span<const std::uint8_t> rec, std::span<std::uint8_t> out, std::span<const std::uint8_t> ext) {
     std::array<std::uint8_t, rc::kPayload> pl{};
     std::memcpy(pl.data(), rec.data() + 4, std::min<std::size_t>(rc::kPayload, rec.size() > 4 ? rec.size() - 4 : 0));
     const std::uint16_t crc16 = rc::detail::get16(rec.data() + rc::kMaxRecord - 2);
@@ -213,7 +213,15 @@ static std::size_t pack_card_v2(std::span<const std::uint8_t> rec, std::span<std
                 w.put(p[rc::off::kV10 + rc::kSweepBytes * i + k], 8);
     // the run's level (v8 spare byte, 1 Light, 2 Deep): a whole byte, only when not Medium, so a Medium card packs as before
     // and a reader tells it from the CRC's padding (at most 7 bits) by needing 8 bits more than the CRC
-    if (p[33] >= 8 && p[rc::off::kV8 + 1] != 0) w.put(p[rc::off::kV8 + 1], 8);
+    const bool has_level = p[33] >= 8 && p[rc::off::kV8 + 1] != 0;
+    if (has_level) w.put(p[rc::off::kV8 + 1], 8);
+    // format 11: the Deep block after the level byte (a block is whole, or it is left out): presence bit, u12 bit count, the bits
+    if (has_level && p[rc::off::kV8 + 1] == 2 && rc::deep::blob_valid(ext)) {
+        const unsigned nbits = rc::deep::blob_bits(ext);
+        w.put(1, 1);
+        w.put(nbits, 12);
+        for (unsigned i = 0; i < nbits; i += 8) w.put(ext[2 + i / 8], std::min(8u, nbits - i));
+    }
     w.put(crc16, 16);                           // the v1 record's CRC-16: the integrity check is unchanged
     return w.finish();
 }
@@ -270,9 +278,9 @@ static std::size_t pack_emk_v2(std::span<const std::uint8_t> rec, std::span<std:
     return w.finish();
 }
 
-std::size_t pack_v2(Type type, std::span<const std::uint8_t> in, std::span<std::uint8_t> out) {
+std::size_t pack_v2(Type type, std::span<const std::uint8_t> in, std::span<std::uint8_t> out, std::span<const std::uint8_t> ext) {
     if (!valid_v1(type, in)) return 0;
-    if (type == Type::Card) return pack_card_v2(in, out);
+    if (type == Type::Card) return pack_card_v2(in, out, ext);
     return pack_emk_v2(in, out);
 }
 

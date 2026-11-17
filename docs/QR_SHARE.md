@@ -100,6 +100,48 @@ page). Summary:
 Measured on the golden vectors and the captured cards: a format-8 card is 68 to 109 B as schema 2 (the synthetic all-limits worst
 case 188 B) against 204 B as schema 1; the 8-row quirk cable is 189 B as schema 2 against 510 B raw and 239 B LZ4 as schema 1.
 
+### Card format 11: the Deep block
+
+A Deep run knows more than the 250 B card holds: which of the 27 PD spec checks passed, failed or were skipped and why, how far the
+SVOOC ceiling stage got, and how every PPS / AVS sweep's error ran across its range. Format 11 carries that as one more
+bit-packed blob, only on a Deep card (level byte 2), behind presence bits so a card without it is byte for byte what format 10
+made. The layout is the comment at the top of `include/k2/chargertest/report_card_deep.hpp` (pure, host-tested by
+`tests/test_report_card_deep.cpp`); twins: `decode_deep` in `tools/report_card.py` and `docs/site/r/deep.js`.
+
+- **In the link.** The schema 2 stream gets, after the level byte and only when the level byte is 2: a presence bit, then the block
+  length in bits (u12) and that many bits. The CRC-16 and the padding follow as before. A reader takes the block when at least 24
+  bits remain after the level byte (a CRC and its padding are at most 23). The block is written only if the whole blob fits, so a
+  link never carries half of it.
+- **The CRC.** It is the v1 record's CRC, which covers the format byte (33). A format-10 firmware's links carry a CRC over format
+  10 while the readers write format 11, so a reader that fails the check retries with the format byte 10 in the CRC; a flipped bit
+  fails both. (`tools/k2_qr.py`, `docs/site/r/card.js`.) Older formats, and every schema 1 record, decode as before.
+- **The blob.** `u16 nbits` then the bits, LSB first. Header 6 bits (has spec, has SVOOC, one bit per range slot). SVOOC, 37 bits:
+  end u3, abort reason u4, asks u3, ceiling current u8 (100 mA), highest voltage u9 (100 mV), stopped-after u10 (100 ms). Spec: end u3,
+  reason u6, unconfirmed u1, cell count u5 (= 27), then per check a verdict u3; a skip adds its reason u4; a pass, fail or unverified
+  adds the worst value s13 (quantised, saturating at +-4094, -4096 = never seen); a fail adds the fail count u8 and the two bytes
+  of the "At" transition. Each set range: first setpoint u9 (100 mV), points u10 (100 mV apart), scale u3, then 32 buckets (fewer
+  when the range has fewer points) of 16 bits: mean s8 (-128 = no point there), down u4 and up u4, the distances of the bucket's
+  minimum and maximum from the mean, in units of E = 2^scale mV (rounded outward, so the band always covers the data). The scale is the
+  smallest that keeps every bucket in range, so a clean sweep reads to 1 mV and a wild one to a coarser step; the page shows it
+  ("error to 4 mV"). A PPS sweep split at 5 V is stitched in setpoint order.
+- **Size.** Each full range is 534 bits (67 B); the worst blob (every check failing, four full sweeps) is 3273 bits = 412 B with its
+  length. The worst packed Deep card is 616 B; `kMaxCardDeepV2` = 653 B (static assert) is the largest the code may carry: 921
+  characters, 8 under 929. So 32 buckets per range is the count that fits one code with every check failing, and every Deep
+  card gets the same count. Three int8 per bucket (mean, min, max) do not fit at 32: four such ranges are about 4297 bits
+  (540 B) with the spec and ceiling blocks, over the cap, and about 21 buckets is the most that would fit; hence an int8 mean plus
+  two u4 spreads at an adaptive step, which keeps 32. The spreads are coarser than the mean once the scale is above 1 mV.
+- **On the K2.** The card store keeps the blob after the 256 B card record in the same ring record (a Deep record is about 672 to
+  692 B: two per flash sector against seven for a plain card). The 12 newest blocks are kept; an older card is carried forward without
+  its block (`maintain()`), and a save retries without the block when the ring is full, so a block never costs a card. The remote
+  card read (`GET`) stays the 250 B payload. The sweep data is taken at run end, while it is still in RAM. `render_json(card, deep, out)`
+  (`report_card_json.hpp`) appends `"deep":"<base64url of the blob>"` for the export path that holds the block; the one-argument overload is unchanged.
+- **The page** (`docs/site/r/`) adds a "Deep run details" section after the protocol sections: the spec summary (pass / fail / skip
+  counts, each failing check with its worst value and where, the unverified checks, the skip reasons), the SVOOC ceiling, and per swept
+  range a graph of the mean error with its min..max band and the two limit lines (+-100 mV green, +-300 mV amber, the Running view's
+  limits), with the setpoint span, the error band, the bucket with the largest mean, and the resolution as rows. A block it cannot read
+  gives "Not shown" with the reason and leaves the rest of the card as it was. The graph is drawn as SVG built through the DOM (the
+  page's content security policy has no inline script).
+
 ### Log record
 
 Every `K2LOG` call (`include/k2/core/log.hpp`) is already an id plus arguments: the message ids are append-only in `tools/logdb.json`,
@@ -281,7 +323,7 @@ the BI record.
 
   | Letter (as built / packed) | Record | Frame type |
   |---|---|---|
-  | `c` / `z` | charger report card: as the store keeps it (`0xA6`, type, length, 0, payload (card format 3 to 7), CRC-16/CCITT-FALSE (little endian); the page checks the CRC and the length) on version '1'; its schema 2 record on version '2' | CARD |
+  | `c` / `z` | charger report card: as the store keeps it (`0xA6`, type, length, 0, payload (card format 3 to 11), CRC-16/CCITT-FALSE (little endian); the page checks the CRC and the length) on version '1'; its schema 2 record on version '2' | CARD |
   | `e` / `E` | cable: the EMK record (name, e-marker record, quirk block when present) on version '1'; its schema 2 record on version '2' | EMK |
   | `p` / `P` | the source's PDOs | PDC |
   | `i` / `I` | firmware identity | ID |
@@ -302,7 +344,7 @@ the BI record.
   4 quirk rows is 261 characters packed). The log has no link form. The text is built at paint time in the share view's
   scratch text buffer: no new resident buffer.
 - The page (`docs/site/r/`) reads the fragment and shows, for every kind, a header, a row of tiles and a full view in sections:
-  - card (version '1' or '2' — both give the same view): one badge per capability (what the charger achieved, with a glyph and a word besides the colour) above the full results;
+  - card (version '1' or '2' — both give the same view): one badge per capability (what the charger achieved, with a glyph and a word besides the colour) above the full results; a Deep card (format 11) adds the "Deep run details" section (see "Card format 11");
   - cable (version '1' or '2'): name, type, maker, current, voltage, USB speed, EPR, whether the record check value matches, the five identity words, and
     the quirk policy and rows when the cable has them;
   - source: one tile per PDO (voltage, current, power), the full PDO table, EPR, the PD revision;
@@ -336,7 +378,7 @@ the BI record.
   kinds, the 't' text) are the JavaScript
   twins of `tools/k2_qr.py`, key for key. Golden vectors: `tests/fixtures/qrlink.tsv` (written by `tests/test_qrshare_link.cpp`
   from the firmware's own encoder; a card row also holds the card as the firmware's JSON renderer writes it), read by
-  `tests/test_qrlink.py` (Python, via `tools/k2_qr.py`) and `tests/test_cardpage.mjs` (the card), and
+  `tests/test_qrlink.py` (Python, via `tools/k2_qr.py`) and `tests/test_cardpage.mjs` (the card, and format 11's block against `tests/fixtures/deep_decoded.json`, what `tools/k2_qr.py` reads from the golden Deep card; `K2_QRLINK_WRITE=1` rewrites it), and
   `tests/fixtures/qrlink_decoded.json`, what the Python decoders give for every other kind (`K2_QRLINK_WRITE=1` rewrites it),
   which `tests/test_recordspage.mjs` requires the page's decoders to give too.
 

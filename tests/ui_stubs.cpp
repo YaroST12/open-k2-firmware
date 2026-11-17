@@ -646,12 +646,13 @@ void restart_average() {}
 namespace transcap {
 ArmResult arm(std::uint8_t step, std::uint16_t arg) {
     if (g_stub.tc_arm_result != ArmResult::Ok) return g_stub.tc_arm_result;
-    g_stub.tc_arms++; g_stub.tc_arm_pos = step; g_stub.tc_arm_mv = arg;
+    g_stub.tc_arms++; g_stub.tc_arm_pos = step; g_stub.tc_arm_mv = arg; g_stub.tc_keep_pending = false;
     g_stub.tc_state = g_stub.tc_freeze_on_arm ? State::Frozen : State::Armed;
     return ArmResult::Ok;
 }
-void disarm() { g_stub.tc_disarms++; g_stub.tc_state = State::Off; }
+void disarm() { g_stub.tc_disarms++; g_stub.tc_state = State::Off; g_stub.tc_keep_pending = false; }
 void disarm_if_armed() { if (g_stub.tc_state == State::Armed) disarm(); }
+void release_unkept() { if (unkept_frozen(g_stub.tc_state, g_stub.tc_keep_pending, 0)) disarm(); }
 bool trigger(Reason r) {
     if (g_stub.tc_state != State::Armed) return false;
     g_stub.tc_triggers++; g_stub.tc_reason = r; g_stub.tc_state = State::Post;
@@ -661,8 +662,8 @@ bool trigger(Reason r, std::uint32_t) { return trigger(r); }   // the PD Spec Ch
 bool triggered() { return g_stub.tc_state == State::Post || g_stub.tc_state == State::Frozen; }
 bool active() { return g_stub.tc_state != State::Off; }
 const Rec* frozen() { return nullptr; }   // no ring on the host: the PD Spec Check falls back to the sink's stamps
-void keep(std::uint32_t run_id, std::uint16_t step) { g_stub.tc_keeps++; g_stub.tc_keep_run = run_id; g_stub.tc_keep_step = step; }
-Status status() { Status s; s.state = g_stub.tc_state; return s; }
+void keep(std::uint32_t run_id, std::uint16_t step) { g_stub.tc_keeps++; g_stub.tc_keep_run = run_id; g_stub.tc_keep_step = step; g_stub.tc_keep_pending = true; }
+Status status() { Status s; s.state = g_stub.tc_state; s.keep = g_stub.tc_keep_pending; return s; }
 bool find_stored(std::uint32_t run_id, std::uint16_t step, Meta& m) {
     if (!g_stub.tc_has_meta || g_stub.tc_meta.run_id != run_id ||
         (g_stub.tc_meta.step != step && g_stub.tc_meta.step != 0xFFFF)) return false;   // 0xFFFF: any step
@@ -1132,11 +1133,12 @@ std::size_t numbers(std::span<std::uint16_t> out) { return g_cf->store.numbers(o
 std::uint32_t generation() { return g_card_gen; }
 bool find(std::uint32_t fp, Card& c) { return g_cf->store.find(fp, c); }
 bool get(std::uint16_t no, Card& c) { return g_cf->store.get(no, c); }
+std::span<const std::uint8_t> ext(std::uint16_t no) { return g_cf->store.ext(no); }
 // The device's main loop runs the ring maintenance in the idle time between two saves; the stub runs it before each one.
 Err put(Card& c) { while (g_cf->store.maintain(true)) {} const Err e = g_cf->store.put(c); if (e == Err::Ok) ++g_card_gen; return e; }
-Err put(Card& c, Card& prev, bool& had) {
+Err put(Card& c, Card& prev, bool& had, std::span<const std::uint8_t> blk) {
     while (g_cf->store.maintain(true)) {}
-    const Err e = g_cf->store.put(c, prev, had);
+    const Err e = g_cf->store.put(c, prev, had, blk);
     if (e == Err::Ok) ++g_card_gen;
     return e;
 }

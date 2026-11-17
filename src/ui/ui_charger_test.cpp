@@ -30,6 +30,7 @@
 #include "k2/pd/transcap_reason.hpp"
 #include "k2/pd/pd_source.hpp"
 #include "k2/pd/pdtrace.hpp"
+#include "k2/chargertest/report_card_deep.hpp"
 #include "k2/chargertest/report_card_delta.hpp"
 #include "k2/chargertest/report_card_hw.hpp"
 #include "k2/chargertest/run_events.hpp"
@@ -263,7 +264,8 @@ charger_test::Input ChargerTestSession::input(uint32_t now) const {
 pd::Err ChargerTestSession::request_pd(pd::Choice c) {
     if (c.pos > 1 || c.mv > 5000) {
         const auto st = transcap::status().state;
-        if (st == transcap::State::Off || st == transcap::State::Armed) {   // not over a capture still being written
+        // Not over a capture still being written, nor over one an event of this row froze (its evidence: the step's verdict keeps it).
+        if (st == transcap::State::Off || st == transcap::State::Armed) {
             if (transcap::arm(c.pos, c.mv) == transcap::ArmResult::Ok) capture_kept_ = false;   // a new recording: its row may keep it
         }
     }
@@ -589,10 +591,12 @@ void ChargerTestSession::closing(ct::Reason r) {
 // A failed step freezes the capture and asks for it to be stored with the run; a passed step just ends the
 // recording (it is overwritten by the next arm). Skip rows (the followers of a failure) change nothing.
 void ChargerTestSession::note_transition(const ct::Step& s) {
-    if (s.verdict == ct::Verdict::Pass) { transcap::disarm_if_armed(); return; }
+    // The recorder goes back to free for whatever step follows (the PD spec section's captures included): an armed or frozen
+    // capture that no row keeps would hold it for the rest of the run (hardware 2026-11-17).
+    if (s.verdict == ct::Verdict::Pass) { transcap::disarm_if_armed(); transcap::release_unkept(); return; }
     if (s.verdict != ct::Verdict::Fail) return;
     const transcap::Reason r = ct::capture_reason(s.reason);
-    if (r == transcap::Reason::None) return;
+    if (r == transcap::Reason::None) { transcap::disarm_if_armed(); transcap::release_unkept(); return; }
     const auto idx = static_cast<size_t>(&s - runner_.steps().data());
     if (idx >= runner_.steps().size()) return;
     // The units no longer end on the PD rows: a Legacy row that fails after a PD failure finds that failure's frozen capture still
@@ -825,16 +829,19 @@ void ChargerTestSession::capture_identity() {
                             runner_.sweep_view());
     card_.level = runner_.level();             // the card names a Light / Deep run (v8 spare byte)
     report_card::set_auto_name(card_, mfr_);   // "<Brand> <PDP>W"; hw::put keeps a name the user gave
-    save_card_store();
+    // A Deep run's block (spec summary, SVOOC ceiling, sweep graphs) is built now, while the sweep is in RAM, into the share
+    // buffer (no share view is open under a finishing run); it is stored beside the card and the share link carries it.
+    const std::size_t blk = report_card::deep::build(card_, runner_.evidence(), runner_.sweep_view(), ctx_.ui->share_buffer());
+    save_card_store(std::span<const uint8_t>(ctx_.ui->share_buffer()).first(blk));
 }
 // save_card's tail, on its own frame: it holds the charger's previous Card (292 B) that save_card used to keep
 // beside the new one — with both on save_card's stack the frame was stack-gated (tools/stack_depth.py). The one
 // previous Card is filled by the store's own read before the write (after put the file holds the new card) and
 // handed back, so the store keeps none of its own; the delta is taken after the write.
-[[gnu::noinline]] void ChargerTestSession::save_card_store() {
+[[gnu::noinline]] void ChargerTestSession::save_card_store(std::span<const uint8_t> blk) {
     report_card::Card prev;
     bool had = false;
-    const auto err = report_card::hw::put(card_, prev, had);
+    const auto err = report_card::hw::put(card_, prev, had, blk);
     if (err != report_card::Err::Ok) { K2LOG("[CARD] save failed %d\n", int(err)); return; }
     card_no_ = card_.card_no;
     std::memcpy(card_name_, card_.name, std::min(sizeof card_name_ - 1, sizeof card_.name)); card_name_[sizeof card_name_ - 1] = 0;
@@ -1047,7 +1054,7 @@ void ChargerTestSession::poll(uint32_t now) {
         if (runner_.state() == ct::State::Done || runner_.state() == ct::State::Stopped) {
             emit_end(now);
             release_run();   // the run is over: passive again (Ra mode and the dialog's spoof end with it)
-            transcap::disarm_if_armed();
+            transcap::disarm_if_armed(); transcap::release_unkept();
             freeze_facts();   // the Results grid is the run's, whatever the source does after this
             set_stage(Stage::Results);
         }
@@ -1092,7 +1099,7 @@ void ChargerTestSession::cancel() {
     runner_.cancel(input(ctx_.now)); invalidate_confirmation();
     if (runner_.state() != before && (runner_.state() == ct::State::Done || runner_.state() == ct::State::Stopped)) emit_end(ctx_.now);
     release_run();
-    transcap::disarm_if_armed();
+    transcap::disarm_if_armed(); transcap::release_unkept();
 }
 // The run is over (Done or Stopped): how it ended and how many rows got a verdict, for the live stream.
 void ChargerTestSession::emit_end(uint32_t now) {
@@ -3023,7 +3030,8 @@ void ChargerTestPage::share_card() {
     report_card::Card card;
     if (!report_card::hw::get(s_.card_no_, card)) return;
     const std::size_t len = qrshare::records::card(card, ctx_.ui->share_buffer());
-    ctx_.ui->open_share(qrshare::Type::Card, qrshare::kSchemaCard, s_.card_name_[0] ? s_.card_name_ : "Card", len, ctx_.now);
+    ctx_.ui->open_share(qrshare::Type::Card, qrshare::kSchemaCard, s_.card_name_[0] ? s_.card_name_ : "Card", len, ctx_.now,
+                        report_card::hw::ext(s_.card_no_));
 }
 
 void ChargerTestPage::draw_static() {

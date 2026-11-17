@@ -23,6 +23,7 @@
 // under the code when that holds a line; a long OK shows the text view (what the code is, the wide-camera hint, the keys)
 // and back. A code of version 18 or more says "Preparing code..." first and polls USB through the encode.
 #pragma once
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -42,15 +43,17 @@ namespace k2 {
 // so it lives in Ui, not in the page: the one resident piece of the share feature.
 class ShareRecord {
 public:
-    // The record buffer: the largest record any opener builds (a saved cable with its quirk rows, two parts).
-    static constexpr std::size_t kBuffer = qrshare::records::kMaxEmarker;
+    // The record buffer: the largest record any opener builds (a saved cable with its quirk rows, two parts) or packs (a Deep card
+    // with its block, schema v2: one code).
+    static constexpr std::size_t kBuffer = std::max(qrshare::records::kMaxEmarker, qrshare::records::kMaxCardDeepV2);
     static constexpr std::size_t kTitleMax = 24;
 
     std::span<std::uint8_t> buffer() { return rec_; }
     // The record in buffer() (`len` bytes) becomes the one shown; false when it has no part (empty or over kMaxRecord).
     // A card or cable record is re-packed to schema v2 in place (the bit-packed link form, always at most the v1 record);
     // any other record is LZ4-packed in place when that saves a quarter, as before.
-    bool begin(qrshare::Type type, std::uint8_t schema, std::string_view title, std::size_t len);
+    // `ext` is the Deep card's block (report_card::deep, length prefix included; outside the buffer): the v2 card carries it.
+    bool begin(qrshare::Type type, std::uint8_t schema, std::string_view title, std::size_t len, std::span<const std::uint8_t> ext = {});
 
     qrshare::Type type() const { return type_; }
     std::uint8_t schema() const { return schema_; }

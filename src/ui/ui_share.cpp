@@ -54,7 +54,7 @@ struct PackWork {
 
 }  // namespace
 
-bool ShareRecord::begin(qrshare::Type type, std::uint8_t schema, std::string_view title, std::size_t len) {
+bool ShareRecord::begin(qrshare::Type type, std::uint8_t schema, std::string_view title, std::size_t len, std::span<const std::uint8_t> ext) {
     type_ = type;
     schema_ = schema;
     title_len_ = std::min(title.size(), kTitleMax);
@@ -66,7 +66,7 @@ bool ShareRecord::begin(qrshare::Type type, std::uint8_t schema, std::string_vie
     if (len_ != 0 && qrshare::records::has_v2(type)) {
         // the card and the cable re-pack to schema v2 in place, in the one share record buffer (never longer than the v1
         // record, and smaller than any LZ4 block of it): the link form comes out as the smaller code
-        const std::size_t n = qrshare::records::pack_v2_in_place(type, {rec_.data(), len_});
+        const std::size_t n = qrshare::records::pack_v2(type, {rec_.data(), len_}, rec_, ext);
         if (n != 0) {
             len_ = n;
             schema_ = qrshare::records::kSchemaV2;
