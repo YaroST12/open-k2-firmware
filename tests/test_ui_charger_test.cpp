@@ -5436,6 +5436,76 @@ static void test_remote_start_is_the_devices_start() {
     }
 }
 
+// The Xiaomi (SVID 0x2717) unit on the three hardware cases and a source without the SVID: a PD-only run on the list the source
+// re-announced after the chain (the sink's trace keeps the list from before it). K2_DUMP=dir writes dir/k2_mi_<case>_rot<r>.panel
+// (the Results grid, scrolled to the Xiaomi row) and k2_mi_<case>_steps / _detail (the row's Steps and its first mode's Detail).
+struct MiCase { const char* name; std::array<uint32_t, 7> before, after; uint8_t n; bool svid, authed; uint8_t finish; };
+static const MiCase kMiCases[] = {
+    {"bank", {0x0201912C, 0x0002D12C, 0x0003C12C, 0x0004B12C, 0x000640C8, 0xC0DC323C, 0xC1903228},
+             {0x0001912C, 0x0002D12C, 0x0003C12C, 0x0004B12C, 0x000640C8, 0xC0DC3264, 0xC1903228}, 7, true, true, 8},
+    {"fh22", {0x0A81912C, 0x0002D12C, 0x0004B12C, 0x000641F4, 0xC8DC3264, 0xC9A43264, 0},
+             {0x0A81912C, 0x0002D12C, 0x0004B12C, 0x000641F4, 0xC8DC3264, 0xC9A43264, 0}, 6, true, true, 8},
+    {"cuk", {0x0A01912C, 0x0002D12C, 0x0003C12C, 0x0004B12C, 0x000641F4, 0xC8DC3264, 0xC9903264},
+            {0x0A01912C, 0x0002D12C, 0x0003C12C, 0x0004B12C, 0x000641F4, 0xC8DC3278, 0xC9903278}, 7, true, true, 0x0A},
+    {"nosvid", {0x0A01912C, 0x0002D12C, 0x0004B12C, 0x000641F4, 0xC8DC3264, 0, 0},
+               {0x0A01912C, 0x0002D12C, 0x0004B12C, 0x000641F4, 0xC8DC3264, 0, 0}, 5, false, false, 0},
+};
+static void mi_case_fixture(const MiCase& c) {
+    fixture();
+    g_stub.caps.num_pdos = c.n;
+    for (uint8_t i = 0; i < c.n; ++i) g_stub.caps.pdos[i] = pd::decode_pdo(c.after[i]);
+    g_stub.cable_limits.max_mv = 20000; g_stub.cable_limits.max_ma = 5000; g_stub.cable_limits.observed = true;   // a read 5 A cable
+    g_stub.vbus_ceiling_mv = 21000;   // every PD level the source offers comes (a clean run)
+    g_stub.sink.xiaomi_svid = g_stub.mi_svid = c.svid; g_stub.sink.xiaomi_authed = g_stub.mi_authed = c.authed;
+    if (c.authed) {
+        auto& x = g_stub.mi_xm;
+        x.authed = true; x.reannounced = true; x.last_step = c.finish; x.finish = c.finish;
+        x.n_pre = c.n;
+        for (uint8_t i = 0; i < c.n; ++i) x.pre[i] = c.before[i];
+    }
+    g_stub.xm = g_stub.mi_xm;
+}
+static void run_mi_case(Ui& ui, const MiCase& c, uint32_t& t) {
+    mi_case_fixture(c);
+    ui.init(0); ui.set_rotation(0, 0); ui.tick(1000); ui.goto_page(static_cast<uint8_t>(Page::ChargerTest), 1100);
+    settle(ui, 1100);
+    top(ui); move(ui, kPdRow); press(ui, Button::Ok); settle(ui);    // PD only
+    press(ui, Button::Ok); settle(ui);                                // the cable in force
+    start_press(ui, 1300); press(ui, Button::Ok, 1400);
+    for (t = 1500; t <= 900000 && ui.charger_test_busy(); t += 100) ui.tick(t);
+    for (int i = 0; i < 64 && ui.painting(); ++i) ui.tick(t += 100);
+}
+static void test_xiaomi_unit_scenes() {
+    for (const MiCase& c : kMiCases) {
+        Ui ui; uint32_t t = 0;
+        run_mi_case(ui, c, t);
+        CHECK_EQ(ui.charger_test_stage(), 6);
+        const auto calm = [&] { for (int i = 0; i < 64 && ui.painting(); ++i) ui.tick(t += 100); };
+        for (const uint8_t rot : {0, 1, 2, 3}) {
+            ui.set_rotation(rot, t); calm();
+            top(ui, t); calm();
+            const char* labels[] = {"Xiaomi", "Mi 6A"};
+            int line = -1;
+            for (const char* l : labels) if (line < 0) line = pick_family(ui, l).line;
+            for (int k = 0; k < line; ++k) { press(ui, Button::Plus); ui.tick(t += 100); calm(); }
+            char name[48]; std::snprintf(name, sizeof name, "mi_%s_rot%u", c.name, unsigned(rot));
+            dump_screen(name);
+            if (rot == 3 && line >= 0) {
+                press(ui, Button::Ok); ui.tick(t += 100); calm();
+                std::snprintf(name, sizeof name, "mi_%s_steps", c.name); dump_screen(name);
+                if (ui.charger_test_stage() == 7) {
+                    if (ui.list_state().count > 1) { press(ui, Button::Plus); ui.tick(t += 100); calm(); }
+                    press(ui, Button::Ok); ui.tick(t += 100); calm();
+                    std::snprintf(name, sizeof name, "mi_%s_detail", c.name); dump_screen(name);
+                    press(ui, Button::Back); ui.tick(t += 100); calm();
+                }
+                press(ui, Button::Back); ui.tick(t += 100); calm();
+            }
+        }
+        ui.set_rotation(0, t);
+    }
+}
+
 int main() {
     test_view_says_what_the_wizard_shows();
     test_view_carries_the_wait_and_the_run();
@@ -5568,5 +5638,6 @@ int main() {
     test_start_waits_for_the_caps();
     test_decisions_use_the_unaveraged_vbus();
     test_remote_start_is_the_devices_start();
+    test_xiaomi_unit_scenes();
     return test_report("test_ui_charger_test");
 }
