@@ -1085,6 +1085,24 @@ static void test_self_powered_run_is_on_the_card() {
         CHECK_EQ((c.cable.flags & report_card::kCableSelfPowered) != 0, self != 0);
     }
 }
+// The driver's cable reading is per session (every unit attach and source Hard Reset drops it); the run keeps what it read, so the
+// card names the cable the charger's own SOP' query was answered by even when the run ends in a session that never read one.
+static void test_a_cable_read_once_stays_with_the_run() {
+    fixture(); stub_cards_reset();
+    g_stub.cable_limits.max_mv = 50000; g_stub.cable_limits.max_ma = 5000; g_stub.cable_limits.observed = true;
+    Ui ui; open(ui); only_vivo_review(ui);
+    start_press(ui, 1300); press(ui, Button::Ok, 1400);
+    g_stub.cable_limits = {};   // the next session read nothing
+    for (uint32_t t = 1500; t <= 600000 && ui.charger_test_busy(); t += 100) ui.tick(t);
+    CHECK_EQ(ui.charger_test_stage(), 6);
+    std::array<uint16_t, 8> nums{};
+    const size_t n = report_card::hw::numbers(nums);
+    report_card::Card c;
+    CHECK_EQ(n &&  report_card::hw::get(nums[0], c), true);
+    CHECK_EQ((c.cable.flags & report_card::kCableObserved) != 0, true);
+    CHECK_EQ(c.cable.max_mv, 50000);
+    CHECK_EQ(c.cable.max_ma, 5000);
+}
 static void test_vsafe5_review() {
     {
         fixture(); g_stub.pm.vbus_mv = 5269;
@@ -5432,7 +5450,7 @@ int main() {
     test_the_default_run_is_medium();
     test_review_level_row_cycles_and_counts();
     test_an_old_journal_resumes_without_the_default_sweep();
-    test_self_powered_review_note(); test_review_carries_the_other_port_warning(); test_phantom_evidence_does_not_refuse_a_run_but_a_load_does(); test_self_powered_run_is_on_the_card();
+    test_self_powered_review_note(); test_review_carries_the_other_port_warning(); test_phantom_evidence_does_not_refuse_a_run_but_a_load_does(); test_self_powered_run_is_on_the_card(); test_a_cable_read_once_stays_with_the_run();
     test_pps_wire_headroom_note();
     test_first_menu_and_pd_bundles();
     test_tests_step_presets();

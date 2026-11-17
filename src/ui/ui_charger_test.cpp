@@ -230,10 +230,18 @@ FooterTone put_counts(StrBuf<32>& f, const char* label, const Counts& c) {
 // The K2 lives on the measured port: a pinned Rd (boot keys) or no host and VBUS at boot (a charger's A port through an A-to-C cable).
 static bool self_supplied() { return fusb302::self_powered() || power_source::bus_powered(); }
 
+pd::CableLimits ChargerTestSession::physical_cable() const {
+    const auto& now = fusb302::physical_cable();
+    if (now.observed) { seen_cable_mv_ = now.max_mv; seen_cable_ma_ = now.max_ma; seen_cable_ = true; return now; }
+    if (!seen_cable_) return now;
+    pd::CableLimits kept; kept.max_mv = seen_cable_mv_; kept.max_ma = seen_cable_ma_; kept.observed = true;
+    return kept;
+}
+
 charger_test::Input ChargerTestSession::input(uint32_t now) const {
     charger_test::Input in;
     in.now = now; in.session = fusb302::session(); in.cap_mv = ctx_.cap_mv;
-    const auto& physical = fusb302::physical_cable();
+    const auto physical = physical_cable();
     in.cable_mv = physical.max_mv; in.cable_ma = physical.max_ma; in.cable_observed = physical.observed;
     in.reported = fusb302::source_revision(); in.pd_traffic = fusb302::pd_traffic(); in.pd_seen_attach = fusb302::pd_seen_attach();
     in.spoof_on = emk_spoof::active();
@@ -842,7 +850,7 @@ void ChargerTestSession::capture_identity() {
     // spoofed library identity when one was armed (its limits are what the run actually used).
     report_card::Cable cable;
     const auto& em = fusb302::emarker();
-    const auto& pc = fusb302::physical_cable();
+    const auto pc = physical_cable();
     if (em.valid) {
         cable.flags |= report_card::kCableObserved;
         cable.vid = em.vid; cable.pid = em.pid;
@@ -1376,6 +1384,7 @@ void ChargerTestSession::begin_run() {
 #if K2_PDSPEC
     ctx_.ui->pd_spec().yield_record();
 #endif
+    seen_cable_ = false;   // a new run reads its own cable
     const auto in = input(ctx_.now);
     journal_active_ = false; capture_kept_ = false; reattach_plan_ = false; reattach_ask_ = false; reattach_ = 0;
     capture_identity();

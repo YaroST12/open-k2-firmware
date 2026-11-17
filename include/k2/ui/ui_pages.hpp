@@ -432,6 +432,7 @@ private:
     charger_test::Algorithm algorithm_at(int row) const;
     Proposal proposal(charger_test::Input) const;
     charger_test::Input input(uint32_t) const;
+    pd::CableLimits physical_cable() const;   // the driver's reading, else what this run read earlier
     pd::Err request_pd(pd::Choice) override;
     fc::Fail request_fc(fc::Proto, int, bool, int) override;
     void release(bool) override;
@@ -563,6 +564,11 @@ private:
     // re-attach's marker and Rd gap (one more write), 4 = the source's own claim is awaited before the blink is decided (no flash
     // write, bounded by kClaimWaitMs), 0 = done.
     uint8_t arm_ K2_BSS_INIT(0);
+    // The physical cable limits the run has read: the driver forgets them at every attach (a new session per unit, one per source Hard
+    // Reset), the run keeps them (the charger's own SOP' query answered by the real cable is read once, in one unit).
+    mutable uint16_t seen_cable_mv_ K2_BSS_INIT(0);
+    mutable uint16_t seen_cable_ma_ K2_BSS_INIT(0);
+    mutable bool seen_cable_ K2_BSS_INIT(false);
     uint8_t run_guard_ K2_BSS_INIT(0);                // the Ra guard's reading of the run in flight, journal / card encoding (RunMeta::guard)
     uint8_t reattach_ K2_BSS_INIT(0);
     bool journal_active_ K2_BSS_INIT(false), resume_pending_ K2_BSS_INIT(false);
