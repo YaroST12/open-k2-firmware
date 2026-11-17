@@ -1015,25 +1015,42 @@ var K2Proto = (function () {
     if (p.length > 4) { need(p, 8 + 4 * p[5], "emarker unmatched"); o.sop = p[4] === 1 ? "SOP'" : p[4] === 2 ? "SOP''" : String(p[4]); o.header = u16(p, 6); o.words = words(p, 8, p[5]); }
     return o;
   }
-  // seeds: [{svid, cmd, vdos: [..]}], at most 4. The K2 blocks for seconds while it runs.
+  // seeds: [{svid, cmd, vdos: [..]}] or, for an exact VDM header word, [{hdr: 0x22D9A11F, vdos: [..]}]; at most 4, up to 6
+  // VDOs each, and the options of all of them must fit one request frame (57 bytes). The K2 blocks for seconds while it runs.
   K2Remote.prototype.emLearn = async function (seeds, sweep, confirm) {
     seeds = seeds || [];
     if (seeds.length > 4) throw new RangeError("at most 4 seeds");
     var b = [6, 1, (sweep ? 1 : 0) | (confirm ? 2 : 0), seeds.length];
     seeds.forEach(function (s) {
-      var v = s.vdos || [];
-      if (!(s.svid >= 0 && s.svid <= 0xFFFF && s.cmd >= 0 && s.cmd <= 31 && v.length <= 2)) throw new RangeError("seed: SVID 16 bit, cmd 0..31, at most two VDOs");
-      b.push(s.svid & 255, s.svid >> 8, s.cmd, v.length);
+      var v = s.vdos || [], raw = s.hdr !== undefined;
+      if (raw ? !(s.hdr >= 0 && s.hdr <= 0xFFFFFFFF && v.length <= 6) : !(s.svid >= 0 && s.svid <= 0xFFFF && s.cmd >= 0 && s.cmd <= 31 && v.length <= 6)) throw new RangeError("seed: SVID 16 bit, cmd 0..31 (or a 32-bit header), at most six VDOs");
+      if (raw) b.push((s.hdr >>> 16) & 255, (s.hdr >>> 24) & 255, 255, v.length, s.hdr & 255, (s.hdr >>> 8) & 255);
+      else b.push(s.svid & 255, s.svid >> 8, s.cmd, v.length);
       v.forEach(function (w) { b.push(w & 255, (w >>> 8) & 255, (w >>> 16) & 255, (w >>> 24) & 255); });
     });
+    if (b.length - 4 > 57) throw new RangeError("the seeds take " + (b.length - 4) + " bytes, one request frame carries 57");
     var summary = decodeLearnSummary((await this.link.call(CMD.EM_LIB, b, { timeoutMs: 10000 })).payload);
     return this.emLearned(summary);
   };
   K2Remote.prototype.emLearned = async function (summary) {
     summary = summary || decodeLearnSummary((await this.link.call(CMD.EM_LIB, [6, 0])).payload);
     var entries = [];
-    for (var i = 0; i < summary.entries; i++) entries.push(decodeLearnEntry((await this.link.call(CMD.EM_LIB, [6, 2, i])).payload));
+    for (var i = 0; i < summary.entries; i++) entries.push(await this.emLearnEntry(i));
     return { summary: summary, entries: entries };
+  };
+  // A 7-word request plus a 7-word reply does not fit one response frame: the K2 sends the header with the words that fit,
+  // and the rest from the word index in [6, 2, i, first].
+  K2Remote.prototype.emLearnEntry = async function (i) {
+    var p = (await this.link.call(CMD.EM_LIB, [6, 2, i])).payload;
+    emOk(p, "emarker learn entry"); need(p, 9, "emarker learn entry");
+    var total = p[4] + p[6], head = Array.prototype.slice.call(p, 0, 9), body = Array.prototype.slice.call(p, 9);
+    while (body.length < 4 * total) {
+      var more = (await this.link.call(CMD.EM_LIB, [6, 2, i, body.length >> 2])).payload;
+      emOk(more, "emarker learn entry");
+      if (more.length < 13) throw new Error("emarker learn entry " + i + ": the K2 sent " + (body.length >> 2) + " of " + total + " words");
+      body = body.concat(Array.prototype.slice.call(more, 9));
+    }
+    return decodeLearnEntry(head.concat(body.slice(0, 4 * total)));
   };
   K2Remote.prototype.emLearnSave = async function () {
     var p = emOk((await this.link.call(CMD.EM_LIB, [6, 3])).payload, "emarker learn save"); need(p, 4, "emarker learn save");

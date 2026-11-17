@@ -107,6 +107,7 @@ pd::AutoCrcGate g_rd_gate;
 bool g_legacy_only = false;
 bool g_crc_on = false;
 bool g_tx_allowed = false;
+pd::Listen g_listen;
 bool g_cable_read = false;
 bool g_hr_tool_armed = false;
 pd::Choice g_prep_choice;
@@ -1549,6 +1550,7 @@ K2_HOT void poll() {
     // Paced by pd::ScanPace: every kScanPeriodMs, or soon after a detach, a VBUS rise or a new Rd-window line (a source's
     // offers follow its Rp within a few hundred ms; the plain 2 Hz scan missed them, pd_scanpace.hpp).
     scan_if_due();
+    if (g_listen.running()) listen_tick();
 
     // Detach rule: VBUS below 3.0 V for 1 s, or no Rp on the active line for 500 ms. BMC
     // bursts pull the line low for microseconds, which the 500 ms hold rides out.
@@ -1682,6 +1684,13 @@ K2_HOT void service() {
             // A Hard Reset caught by that read: this frame is the old link's (the Baseus sent it after a caps nobody
             // answered in time). Drop it; the next pass resets the engine and the FIFO.
             if (g_hr_latched) break;
+            // Lab listen attach: the frame is in the trace; nothing acknowledges, answers or queues it (a PD frame still counts as the
+            // source's traffic, so the Rd seek and the dark-attach rule leave the line alone).
+            if (g_listen.running()) {
+                g_listen.frame();
+                g_pd_traffic = true;
+                continue;
+            }
 
             sink().set_stamp_us(edge_us);   // consumed by the sink's on_message if this frame reaches it
             handle_frame(sop_from_token(pre[0]), header, {body.data(), num_do * 4});
@@ -1689,7 +1698,8 @@ K2_HOT void service() {
         }
         if (!g_irq && !g_rx_nonempty) break;
     }
-    if (g_active_cc != 0) active_tick();
+    if (g_listen.running()) g_tx_allowed = false;   // the choke point stays shut: no sink engine runs, nothing is sent
+    else if (g_active_cc != 0) active_tick();
     else if (reread_running()) reread().tick(systick::millis(), false, reread_link());   // an attach whose source has not shown yet: its wait still ends
     if (g_iq_inited) iq_report();   // also after a detach ended a run
     if (g_reread_log_pending || g_reread_owns_rd || g_reread_made_contract) reread_housekeeping(systick::millis());

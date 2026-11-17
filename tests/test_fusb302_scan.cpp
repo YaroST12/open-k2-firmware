@@ -17,6 +17,7 @@
 #include "k2/drivers/usb.hpp"
 #include "k2/drivers/i2c.hpp"
 #include "k2/drivers/adc.hpp"
+#include "k2/pd/pdtrace.hpp"
 #include <cstdarg>
 #include <cstdio>
 #include <deque>
@@ -4298,6 +4299,9 @@ void test_inline_interrogation_spoof_answers_the_devices_cable_query();
 void test_stress_soft_reset_goes_out_and_keeps_rd_when_the_source_answers();
 void test_stress_soft_reset_to_a_silent_source_asks_for_the_caps_with_rd_kept();
 void test_a_request_is_answered_in_the_service_pass_that_reads_it();
+void test_listen_attach_hears_every_frame_and_transmits_nothing();
+void test_listen_attach_ends_by_timeout_stop_or_another_owner_and_leaves_rd_off();
+void test_listen_attach_refusals_touch_nothing();
 // ---- Settings > Wake sleeping port (pattern slow-rp-wake, idle path): opt-in, default off ----
 // A sleeping source's port reads ~3.3 V open on one line (CC2 here), nothing on the other, VBUS dark. With the setting off the
 // idle K2 stays exactly what the invariants say (I1/H2: no Rd at idle, a waiting charger stays passive); only with it on does it
@@ -5426,6 +5430,9 @@ int main() {
     test_stress_soft_reset_goes_out_and_keeps_rd_when_the_source_answers();   // each ends with a detach
     test_stress_soft_reset_to_a_silent_source_asks_for_the_caps_with_rd_kept();
     test_a_request_is_answered_in_the_service_pass_that_reads_it();   // ends with a detach
+    test_listen_attach_hears_every_frame_and_transmits_nothing();     // the listen cases: each ends with a detach, Rd off
+    test_listen_attach_ends_by_timeout_stop_or_another_owner_and_leaves_rd_off();
+    test_listen_attach_refusals_touch_nothing();
     return test_report("test_fusb302_scan");
 }
 
@@ -5798,4 +5805,180 @@ void test_a_request_is_answered_in_the_service_pass_that_reads_it() {
     CHECK_EQ(sent_ctl(16), true);                             // Not_Supported, same pass
     CHECK_EQ(usb_has("TX refused"), false);
     stress_end();
+}
+
+// ---- Lab listen attach (k2/pd/pd_listen.hpp): the OnePlus 120 W brick queries its own cable with SOP' Discover Identity and the vendor
+// command 31 challenge; a normal sink never hears the cable (Auto-CRC on, SOP' off), so the window presents Rd with Auto-CRC off and the
+// passive CONTROL1 and transmits nothing at all. The proof is on the wire: no TX FIFO load, no TX_START, Auto-CRC off in SWITCHES1.
+namespace {
+unsigned g_listen_rx = 0;
+std::vector<std::pair<unsigned, unsigned>> g_listen_seen;   // (header, first object) of every frame the PD trace was given
+void listen_sink(std::uint8_t kind, std::uint16_t a, std::uint32_t b) {
+    if (kind != pdtrace::kEvRx) return;
+    g_listen_rx++;
+    g_listen_seen.push_back({a, b});
+}
+void listen_world() {
+    fusb302::set_inline(false);
+    reset_world();
+    fusb302::init();
+    g_reg[0x40] = 0x00;
+    for (int i = 0; i < 40; i++) { g_ms += 20; fusb302::poll(); fusb302::service(); }
+    g_listen_rx = 0;
+    g_listen_seen.clear();
+    pdtrace::set_event_sink(listen_sink);
+}
+void listen_attach_on_cc1() {
+    g_reg[0x40] = 0x20;   // the charger's Rp on CC1 over our Rd
+    for (int i = 0; i < 100 && !usb_has("Active CC detected"); i++) { g_ms += 20; fusb302::poll(); }
+    CHECK_EQ(usb_has("Active CC detected"), true);
+}
+bool tx_started_since(std::size_t from) { return find_from("W 06=01", from) != -1; }
+void listen_end_clean() {
+    pdtrace::set_event_sink(nullptr);
+    fusb302::listen_stop();
+    g_reg[0x40] = 0x00;
+    for (int i = 0; i < 60; i++) { g_ms += 20; fusb302::poll(); fusb302::service(); }
+    fusb302::unit_detach();
+}
+}  // namespace
+
+void test_listen_attach_hears_every_frame_and_transmits_nothing() {
+    listen_world();
+    CHECK_EQ(int(fusb302::listen_start(10, pd::kListenPortBottom, {})), int(pd::ListenRefusal::None));
+    CHECK_EQ(fusb302::listen_active(), true);
+    CHECK_EQ(auto_crc(), false);                                  // Auto-CRC off in SWITCHES1
+    CHECK_EQ(int(g_reg[0x07] & 3), 3);                            // CONTROL1: SOP' and SOP'' enabled (the passive profile)
+    CHECK_EQ(int(sw0_rd()), 3);                                   // Rd presented (both lines until the scan names the charger's)
+    CHECK_EQ(usb_has("[LISTEN] Start"), true);
+    listen_attach_on_cc1();
+    CHECK_EQ(auto_crc(), false);
+    CHECK_EQ(int(g_reg[0x07] & 3), 3);
+    g_txfifo.clear();
+    const std::size_t from = g_log.size();
+    // What the brick does on each cycle: caps nobody acknowledges, the cable query, the vendor challenge (header 0x22D9A11F + 6 VDOs),
+    // the cable's answer (SOP' from the cable, no source bit), a SOP'' frame.
+    send_caps_5v3a();
+    service_ms(10);
+    push_frame(0xC0, hdr(0x0F, 1, true), {0xFF008001u});                                   // SOP' Discover Identity request
+    service_ms(10);
+    push_frame(0xC0, hdr(0x0F, 7, true, 1), {0x22D9A11Fu, 0x0E4AD139u, 0x2F2DF86Fu, 0x50111FA6u, 0x70F446DCu, 0, 0});
+    service_ms(10);
+    push_frame(0xC0, hdr(0x0F, 3, false, 1), {0xFF008041u, 0x18D1A011u, 0});               // the cable's answer
+    service_ms(10);
+    push_frame(0xA0, hdr(0x0F, 1, true, 2), {0xFF008001u});                                // SOP''
+    service_ms(10);
+    CHECK_EQ(int(fusb302::listen_status().frames()), 5);
+    CHECK_EQ(g_listen_rx, 5u);                                                             // every frame reached the PD trace
+    CHECK_EQ(g_listen_seen.size(), 5u);
+    if (g_listen_seen.size() == 5) {
+        CHECK_EQ(int(g_listen_seen[0].second), 0x0801912C);                                // the caps, first object
+        CHECK_EQ(int(g_listen_seen[2].second), 0x22D9A11F);                                // the challenge, whole header word
+        CHECK_EQ(int((g_listen_seen[2].first >> 12) & 7), 7);                              // seven objects
+        CHECK_EQ(int(g_listen_seen[3].second), int(0xFF008041u));                          // the cable's answer
+    }
+    // A Hard Reset from the brick (its answer to the missing GoodCRC) is traced and still answered with nothing.
+    g_ia_script = {0x01};
+    service_ms(5);
+    send_caps_5v3a();
+    service_ms(20);
+    for (int i = 0; i < 20; i++) { g_ms += 20; fusb302::poll(); fusb302::service(); }
+    CHECK_EQ(fusb302::listen_active(), true);
+    // The wire: no TX FIFO load, no TX_START, Auto-CRC never turned on, nothing in the FIFO model.
+    CHECK_EQ(fifo_loads(from), 0);
+    CHECK_EQ(tx_started_since(from), false);
+    CHECK_EQ(g_txfifo.empty(), true);
+    CHECK_EQ(find_from("W 03=24", from) == -1 && find_from("W 03=26", from) == -1, true);   // no SWITCHES1 write with the Auto-CRC bit
+    CHECK_EQ(auto_crc(), false);
+    CHECK_EQ(int(g_reg[0x07] & 3), 3);
+    listen_end_clean();
+}
+
+void test_listen_attach_ends_by_timeout_stop_or_another_owner_and_leaves_rd_off() {
+    listen_world();
+    // the window runs out: Rd off, the passive idle scan owns the chip, nothing was sent, and a new window may start
+    CHECK_EQ(int(fusb302::listen_start(2, pd::kListenPortTop, {})), int(pd::ListenRefusal::None));
+    listen_attach_on_cc1();
+    const std::size_t from = g_log.size();
+    push_frame(0xC0, hdr(0x0F, 1, true), {0xFF008001u});
+    for (int i = 0; i < 80 && fusb302::listen_active(); i++) { g_ms += 50; fusb302::poll(); fusb302::service(); }
+    CHECK_EQ(fusb302::listen_active(), false);
+    CHECK_EQ(int(fusb302::listen_status().end()), int(pd::ListenEnd::Done));
+    CHECK_EQ(int(fusb302::listen_status().frames()), 1);
+    CHECK_EQ(usb_has("[LISTEN] End: done"), true);
+    g_reg[0x40] = 0x00;
+    for (int i = 0; i < 60; i++) { g_ms += 20; fusb302::poll(); fusb302::service(); }
+    CHECK_EQ(int(sw0_rd()), 0);                                  // Rd off, passive idle
+    CHECK_EQ(fusb302::legacy_only_active(), false);
+    CHECK_EQ(fifo_loads(from), 0);
+    CHECK_EQ(tx_started_since(from), false);
+    // the operator stops it early
+    CHECK_EQ(int(fusb302::listen_start(30, pd::kListenPortAuto, {})), int(pd::ListenRefusal::None));
+    CHECK_EQ(int(fusb302::listen_start(30, pd::kListenPortAuto, {})), int(pd::ListenRefusal::Running));
+    fusb302::listen_stop();
+    CHECK_EQ(int(fusb302::listen_status().end()), int(pd::ListenEnd::Stopped));
+    CHECK_EQ(int(sw0_rd()), 0);
+    CHECK_EQ(usb_has("[LISTEN] End: stopped"), true);
+    // another owner takes the unit's Rd: the window is over and nothing of ours touches the wire after it
+    const char* names[] = {"unit_detach", "unit_attach", "unit_hold", "rd_for_run", "rd_for_run_pause"};
+    for (int k = 0; k < 5; k++) {
+        CHECK_EQ(int(fusb302::listen_start(30, pd::kListenPortAuto, {})), int(pd::ListenRefusal::None));
+        switch (k) {
+            case 0: fusb302::unit_detach(); break;
+            case 1: fusb302::unit_attach(false); break;
+            case 2: fusb302::unit_hold(true); break;
+            case 3: fusb302::rd_for_run(true); break;
+            default: fusb302::rd_for_run_pause(); break;
+        }
+        if (fusb302::listen_active() || fusb302::listen_status().end() != pd::ListenEnd::Lost) std::fprintf(stderr, "listen not lost by %s\n", names[k]);
+        CHECK_EQ(fusb302::listen_active(), false);
+        CHECK_EQ(int(fusb302::listen_status().end()), int(pd::ListenEnd::Lost));
+        CHECK_EQ(usb_has("[LISTEN] End: lost the port"), true);
+        fusb302::rd_for_run(false);
+        fusb302::unit_detach();
+    }
+    // the spoof arrives mid-window (its Auto-CRC would answer the cable): the window ends and Rd goes off
+    CHECK_EQ(int(fusb302::listen_start(30, pd::kListenPortAuto, {})), int(pd::ListenRefusal::None));
+    spoof_hook_on();
+    for (int i = 0; i < 5; i++) { g_ms += 20; fusb302::poll(); fusb302::service(); }
+    CHECK_EQ(fusb302::listen_active(), false);
+    CHECK_EQ(int(fusb302::listen_status().end()), int(pd::ListenEnd::Lost));
+    CHECK_EQ(int(sw0_rd()), 0);
+    fusb302::set_sop_prime_hook(nullptr);
+    listen_end_clean();
+}
+
+void test_listen_attach_refusals_touch_nothing() {
+    listen_world();
+    auto refused = [](pd::ListenFacts f, pd::ListenRefusal want) {
+        const std::size_t from = g_log.size();
+        CHECK_EQ(int(fusb302::listen_start(10, pd::kListenPortAuto, f)), int(want));
+        CHECK_EQ(fusb302::listen_active(), false);
+        CHECK_EQ(g_log.size(), from);                              // not one register write, GPIO change or FIFO load
+        CHECK_EQ(usb_has("[LISTEN] Refused"), true);
+    };
+    refused({.ports_busy = true}, pd::ListenRefusal::Busy);        // a charger test / PD Stress / twin run (the caller's facts)
+    refused({.inline_mode = true}, pd::ListenRefusal::Inline);
+    refused({.rd_pinned = true}, pd::ListenRefusal::Pinned);
+    refused({.spoof_armed = true}, pd::ListenRefusal::Spoof);
+    CHECK_EQ(int(fusb302::listen_start(31, pd::kListenPortAuto, {})), int(pd::ListenRefusal::BadArg));
+    CHECK_EQ(int(fusb302::listen_start(5, 3, {})), int(pd::ListenRefusal::BadArg));
+    // the driver's own facts
+    fusb302::set_inline(true);
+    refused({}, pd::ListenRefusal::Inline);
+    fusb302::set_inline(false);
+    spoof_hook_on();
+    refused({}, pd::ListenRefusal::Spoof);
+    fusb302::set_sop_prime_hook(nullptr);
+    CHECK_EQ(fusb302::ra_set(true), true);
+    refused({}, pd::ListenRefusal::Spoof);
+    CHECK_EQ(fusb302::ra_set(false), true);
+    CHECK_EQ(fusb302::rd_for_run(true), true);                     // a charger-test START owns Rd
+    refused({}, pd::ListenRefusal::Busy);
+    fusb302::rd_for_run(false);
+    fusb302::unit_attach(true);                                    // a charger-test unit is running
+    refused({}, pd::ListenRefusal::Busy);
+    fusb302::unit_detach();
+    CHECK_EQ(int(fusb302::listen_start(10, pd::kListenPortAuto, {})), int(pd::ListenRefusal::None));   // after all that it still works
+    listen_end_clean();
 }

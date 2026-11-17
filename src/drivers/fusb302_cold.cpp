@@ -1399,6 +1399,7 @@ raguard::WaitKind wait_kind() { return g_wait_kind; }
 bool caps_this_attach() { return g_session.fresh(); }
 
 void unit_detach() {
+    listen_lost();
     g_reread_owns_rd = false; g_ident_owns_rd = false;
     g_reread_made_contract = false;
     reread().abort();
@@ -1419,6 +1420,7 @@ void unit_detach() {
     usb::log("[PD] Unit detach: Rd off, sink forgotten\n");
 }
 void unit_attach(bool legacy) {
+    listen_lost();
     g_reread_owns_rd = false; g_ident_owns_rd = false;
     g_reread_made_contract = false;
     g_legacy_only = legacy;
@@ -1437,6 +1439,7 @@ void unit_attach(bool legacy) {
     usb::log(legacy ? "[PD] Unit attach: PD-silent\n" : "[PD] Unit attach: PD\n");
 }
 void unit_hold(bool legacy) {
+    listen_lost();
     g_reread_owns_rd = false; g_ident_owns_rd = false;
     g_reread_made_contract = false;
     reread().abort();
@@ -1452,6 +1455,7 @@ void unit_hold(bool legacy) {
     usb::log(legacy ? "[PD] Unit hold: PD-silent, Rd kept\n" : "[PD] Unit hold: Soft_Reset, Rd kept\n");
 }
 bool rd_for_run(bool on) {
+    listen_lost();
     g_reread_owns_rd = false; g_ident_owns_rd = false;
     g_reread_made_contract = false;
     if (g_ra) {
@@ -1460,8 +1464,80 @@ bool rd_for_run(bool on) {
     }
     return set_rd_for_run(on, false);
 }
-void rd_for_run_pause() { g_reread_owns_rd = false; g_ident_owns_rd = false; g_reread_made_contract = false; set_rd_for_run(false, true); }
+void rd_for_run_pause() { listen_lost(); g_reread_owns_rd = false; g_ident_owns_rd = false; g_reread_made_contract = false; set_rd_for_run(false, true); }
 bool rd_for_run_on() { return g_rd_start; }
+
+// ---- lab listen attach (pd::Listen, include/k2/pd/pd_listen.hpp) ----
+namespace {
+bool s_listen_wiring = false;   // listen_start's own unit_detach / unit_attach calls are not "another owner"
+void listen_end_log(const char* how) {
+    K2LOG("[LISTEN] End: %s after %u frames (window %u s, port label %u), Rd off, passive idle\n", how, unsigned(g_listen.frames()),
+          unsigned(g_listen.secs()), unsigned(g_listen.port()));
+}
+}  // namespace
+namespace detail {
+// Another owner took the unit's Rd (a charger-test START, an attach, a hold): the window is over and the wire is theirs.
+void listen_lost() {
+    if (s_listen_wiring || !g_listen.running()) return;
+    g_listen.lost();
+    g_tx_allowed = false;
+    listen_end_log(pd::listen_end_name(g_listen.end()));
+}
+// poll(): the window runs out; the Rd goes off and the idle passive scan takes over (it re-attaches whatever is plugged in).
+void listen_tick() {
+    // The e-marker spoof, the Ra mode or an inline link came along: Auto-CRC or the Rd would no longer be ours alone.
+    const bool foreign = g_sop_prime_hook != nullptr || g_ra || inline_now();
+    if (foreign) g_listen.lost();
+    if (!foreign && g_listen.tick(systick::millis())) return;
+    g_tx_allowed = false;
+    listen_end_log(pd::listen_end_name(g_listen.end()));
+    s_listen_wiring = true;
+    unit_detach();
+    s_listen_wiring = false;
+}
+}  // namespace detail
+
+pd::ListenRefusal listen_start(std::uint8_t secs, std::uint8_t port, const pd::ListenFacts& remote) {
+    pd::ListenFacts f = remote;
+    f.ports_busy = f.ports_busy || g_run_owner || busy_why() != pd::BusyWhy::None || g_rd_start || g_rd_op || g_ident_wait ||
+                   g_ident_owns_rd || g_reread_owns_rd || g_reread_made_contract || reread_running() || probe_running() ||
+                   g_prep.active() || g_hr_tool_armed || g_cable_read
+#if K2_HOST_REPORT
+                   || g_lh != nullptr
+#endif
+        ;
+    f.inline_mode = f.inline_mode || inline_now();
+    f.rd_pinned = f.rd_pinned || g_pin_rd != 0;
+    f.spoof_armed = f.spoof_armed || g_sop_prime_hook != nullptr || g_ra;
+    const pd::ListenRefusal r = g_listen.start(systick::millis(), secs, port, f);
+    if (r != pd::ListenRefusal::None) {
+        K2LOG("[LISTEN] Refused: %s\n", pd::listen_refusal_name(r));
+        return r;
+    }
+    // A fresh attach with Auto-CRC off: the source sees our Rd come back and starts over; with no GoodCRC for its caps it hard-resets
+    // and queries again, which is what the window is for. The unit's legacy mode keeps the TX choke point shut and the engine quiet.
+    s_listen_wiring = true;
+    unit_detach();
+    unit_attach(true);
+    s_listen_wiring = false;
+    g_crc_on = false;
+    g_tx_allowed = false;
+    write_sw1();   // SWITCHES1 without Auto-CRC and CONTROL1 passive (SOP, SOP', SOP'' received)
+    K2LOG("[LISTEN] Start: %u s, port label %u, Rd on, Auto-CRC off, SOP/SOP'/SOP'' received, nothing transmitted\n",
+          unsigned(g_listen.secs()), unsigned(g_listen.port()));
+    return r;
+}
+void listen_stop() {
+    if (!g_listen.running()) return;
+    g_listen.stop();
+    g_tx_allowed = false;
+    listen_end_log(pd::listen_end_name(g_listen.end()));
+    s_listen_wiring = true;
+    unit_detach();
+    s_listen_wiring = false;
+}
+bool listen_active() { return g_listen.running(); }
+const pd::Listen& listen_status() { return g_listen; }
 std::uint8_t idle_wake_line() { return g_idle_wake.line(); }
 std::int32_t open_cc_mv(std::uint8_t line) { return rdseek().open_mv(line); }
 

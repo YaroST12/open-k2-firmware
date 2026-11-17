@@ -20,6 +20,7 @@
 #include "k2/pd/pd_engine.hpp"
 #include "k2/pd/pd_identify.hpp"
 #include "k2/pd/pd_interrogate.hpp"
+#include "k2/pd/pd_listen.hpp"
 #include "k2/pd/ra_guard.hpp"
 #include "k2/pd/pd_probe.hpp"
 #include "k2/pd/pd_reread.hpp"
@@ -225,6 +226,18 @@ void unit_attach(bool legacy);
 // its contract, a Soft_Reset goes out (answered with fresh caps, which the acked-caps path requests PDO 1 from at 5 V); legacy=true:
 // the sink forgets everything and the session turns PD-silent (Auto-CRC off), the source's D+/D- stay free for the probe.
 void unit_hold(bool legacy);
+
+// Lab listen attach (pd::Listen): Rd on the charger's port with Auto-CRC off and CONTROL1 in the passive profile (SOP, SOP', SOP''
+// received) for `secs` (0 = the default, at most pd::kListenMaxSecs), and nothing is ever transmitted - the TX choke point stays
+// shut and the receive path skips the sink engine, so no frame is acknowledged, answered or queued. Every received frame reaches the
+// PD trace and the Black Box as usual. `remote` carries what only the caller knows (a charger test, PD Stress, a twin run, a trigger
+// or an inline link); the driver adds its own facts. Returns pd::ListenRefusal::None when the window opened; a refusal touches nothing.
+// The window ends by timeout, listen_stop(), or another owner taking the unit's Rd (unit_detach / unit_attach / unit_hold /
+// rd_for_run); the end puts Rd off and leaves the K2 in the idle passive state, where the normal sink scan re-attaches.
+pd::ListenRefusal listen_start(std::uint8_t secs, std::uint8_t port, const pd::ListenFacts& remote);
+void listen_stop();
+bool listen_active();
+const pd::Listen& listen_status();
 
 // INT_N (PB12, EXTI12 falling edge): the ISR only calls this; service() does the work.
 void on_int_n();

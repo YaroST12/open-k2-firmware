@@ -127,9 +127,9 @@ struct Run {
     bool seeds(const Options& opt) {
         for (unsigned i = 0; i < opt.nseeds && i < kMaxSeeds; i++) {
             const Seed& s = opt.seeds[i];
-            std::array<std::uint32_t, 3> w{};
-            w[0] = vdm_request(s.svid, s.cmd, var);
-            const unsigned nv = s.nvdo > 2 ? 2 : s.nvdo;
+            std::array<std::uint32_t, kMaxObjs> w{};
+            w[0] = s.raw ? s.hdr : vdm_request(s.svid, s.cmd, var);
+            const unsigned nv = s.nvdo > kMaxVdos ? kMaxVdos : s.nvdo;
             for (unsigned k = 0; k < nv; k++) w[1 + k] = s.vdo[k];
             Reply rep;
             if (!probe(Step::Seed, {w.data(), 1 + nv}, rep)) return false;
@@ -208,7 +208,7 @@ void put16(std::uint8_t* p, unsigned v) {
 }  // namespace
 
 bool parse_options(std::span<const std::uint8_t> p, Options& out, bool& confirm) {
-    if (p.size() < 2 || (p[0] & ~(kFlagSweep | kFlagConfirm)) != 0 || p[1] > kMaxSeeds) return false;
+    if (p.size() < 2 || p.size() > 2 + kOptionsMax || (p[0] & ~(kFlagSweep | kFlagConfirm)) != 0 || p[1] > kMaxSeeds) return false;
     Options o;
     o.sweep = (p[0] & kFlagSweep) != 0;
     o.nseeds = p[1];
@@ -220,7 +220,14 @@ bool parse_options(std::span<const std::uint8_t> p, Options& out, bool& confirm)
         s.cmd = p[at + 2];
         s.nvdo = p[at + 3];
         at += 4;
-        if (s.cmd > 31 || s.nvdo > 2 || p.size() < at + 4u * s.nvdo) return false;
+        if (s.cmd == kRawCmd) {
+            if (p.size() < at + 2) return false;
+            s.raw = true;
+            s.hdr = (static_cast<std::uint32_t>(s.svid) << 16) | p[at] | (p[at + 1] << 8);
+            s.cmd = static_cast<std::uint8_t>(s.hdr & 0x1Fu);
+            at += 2;
+        }
+        if (s.cmd > 31 || s.nvdo > kMaxVdos || p.size() < at + 4u * s.nvdo) return false;
         for (unsigned k = 0; k < s.nvdo; k++, at += 4) s.vdo[k] = get32(&p[at]);
     }
     if (at != p.size()) return false;
@@ -296,15 +303,19 @@ Xchg Result::entry(unsigned i) const {
     return x;
 }
 
-std::size_t encode_entry(const Result& r, unsigned i, std::span<std::uint8_t> out) {
+std::size_t encode_entry(const Result& r, unsigned i, std::span<std::uint8_t> out, unsigned first) {
     if (out.empty()) return 0;
     if (i >= r.nlog) {
         out[0] = kErrNotFound;
         return 1;
     }
+    if (out.size() < 9) return 0;
     const Xchg x = r.entry(i);
-    const std::size_t len = 9 + 4u * x.req.n + 4u * x.rep.n;
-    if (out.size() < len) return 0;
+    const unsigned total = x.req.n + x.rep.n;
+    if (first > total) first = total;
+    unsigned take = total - first;
+    if (take > (out.size() - 9) / 4) take = static_cast<unsigned>((out.size() - 9) / 4);
+    const std::size_t len = 9 + 4u * take;
     out[0] = 0;
     out[1] = static_cast<std::uint8_t>(i);
     out[2] = static_cast<std::uint8_t>(x.step);
@@ -314,8 +325,7 @@ std::size_t encode_entry(const Result& r, unsigned i, std::span<std::uint8_t> ou
     out[6] = x.rep.n;
     put16(&out[7], x.rep.header);
     std::size_t at = 9;
-    for (unsigned k = 0; k < x.req.n; k++, at += 4) put32(&out[at], x.req.w[k]);
-    for (unsigned k = 0; k < x.rep.n; k++, at += 4) put32(&out[at], x.rep.w[k]);
+    for (unsigned k = first; k < first + take; k++, at += 4) put32(&out[at], k < x.req.n ? x.req.w[k] : x.rep.w[k - x.req.n]);
     return len;
 }
 

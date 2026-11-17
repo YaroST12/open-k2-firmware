@@ -800,15 +800,21 @@ inline constexpr size_t kCardsNameMax = 20, kCardsChunks = 6;   // 250 bytes / 4
 //                                   tail, 17..18 the read tail, 19 the pull-down verdict; absent on older firmware): the last run, outcome 0 = none yet
 //           req [6, 1, options]     run: powers the cable in the bottom port (VCONN) and replays Discover Identity /
 //                                   SVIDs / Modes and the seeds; options = [flags (bit0 sweep, bit1 confirm inline),
-//                                   nseeds <= 4, seed * nseeds], a seed = svid u16, cmd 0..31, nvdo 0..2, vdo u32 * nvdo;
+//                                   nseeds <= 4, seed * nseeds], a seed = svid u16, cmd 0..31, nvdo 0..6, vdo u32 * nvdo,
+//                                   or a raw seed = header hi u16, 0xFF, nvdo 0..6, header lo u16, vdo u32 * nvdo (the VDM
+//                                   header word is sent exactly); the options are at most k2::emk_learn::kOptionsMax = 57 bytes
 //                                   rsp summary (outcome 1 learned, 2 no identity, 3 aborted)
-//           req [6, 2, i]           transcript entry i of the last run, rsp k2::emk_learn::encode_entry ([3] past the end)
+//           req [6, 2, i]           transcript entry i of the last run, rsp k2::emk_learn::encode_entry ([3] past the end);
+//                                   req [6, 2, i, first] the same from word `first` of its request-then-reply word list: an
+//                                   entry can be bigger than a response (up to 65 bytes), so the host asks again from the words it has
 //           req [6, 3]              save the last learned clone with its extra replies, rsp [err, seq u16, existed]
 //   UNMATCHED req [7, i]            the messages an armed fake cable received and nothing answered, newest first:
 //           i 255 -> [err, total u16, held]; i 0..3 -> that plus sop (1 SOP', 2 SOP''), n, header u16, words (u32 LE);
 //           an i past the held entries -> [3]
 constexpr uint8_t kEmList = 0, kEmGet = 1, kEmSave = 2, kEmDelete = 3, kEmRename = 4, kEmSpoof = 5, kEmLearn = 6, kEmUnmatched = 7;
 constexpr uint8_t kEmLearnStatus = 0, kEmLearnRun = 1, kEmLearnEntry = 2, kEmLearnSave = 3;
+static_assert(2 + k2::emk_learn::kOptionsMax <= kMaxReqPayload);                          // [op, sub-op, options] is one request frame
+static_assert(2 * ((kMaxRspPayload - 9) / 4) >= 2 * k2::emk_learn::kMaxObjs);              // any entry comes in at most two responses
 constexpr uint8_t kEmSpoofStatus = 0, kEmSpoofArm = 1, kEmSpoofDisarm = 2, kEmSpoofBuiltin = 3;
 constexpr uint8_t kEmErrInline = 6;
 constexpr uint8_t kEmErrBusy = 7;  // active negotiation/scan/test refuses an arm, disarm remains explicit
@@ -852,6 +858,11 @@ static_assert(kThRspBytes <= kMaxRspPayload);
 // LAB op codes (first payload byte of Cmd::Lab).
 constexpr uint8_t kLabLoad = 0;
 constexpr uint8_t kLabSniff = 1;   // D+/D- edge capture: sub-op cancel 0, arm 1, status 2, selftest 3 (needs confirm)
+// Listen attach (k2::pd::Listen): Rd on, Auto-CRC off, passive receive of SOP/SOP'/SOP'', nothing transmitted. Request
+// [2, sub] with sub stop 0 / status 2, or [2, 1, secs, port] to start (secs 1..30, port 0 auto / 1 top / 2 bottom).
+// Reply: state u8 (0 idle, 1 listening), end u8 (pd::ListenEnd of the last window), secs u8, left_s u8, frames u16, port u8.
+// A refused start answers Busy with one byte, a pd::ListenRefusal.
+constexpr uint8_t kLabListen = 2;
 
 constexpr uint8_t kCableStatus = 0, kCableReset = 1, kCablePassive = 2, kCableKelvin = 3;
 // UFCS op codes (first payload byte of Cmd::Ufcs); the read reply header is off(2) total(2) n(1).
@@ -1232,6 +1243,14 @@ struct SniffInfo {
     uint8_t flags = 0;                  // bit0 buffer overflowed, bit1 a Black Box capture was stored
     uint16_t edges = 0;
 };
+struct ListenInfo {
+    uint8_t status = 0;                 // remote::Status the backend reports (0 = Ok)
+    uint8_t refusal = 0;                // pd::ListenRefusal of a refused start, sent as the Busy reply's one byte
+    uint8_t state = 0;                  // 0 idle, 1 listening
+    uint8_t end = 0;                    // pd::ListenEnd of the last window
+    uint8_t secs = 0, left_s = 0, port = 0;
+    uint16_t frames = 0;                // frames heard in the current or last window
+};
 struct PdoRec {
     uint8_t type = 0;
     uint32_t raw = 0;
@@ -1422,6 +1441,7 @@ size_t encode_factory_wipe(std::span<uint8_t> out, const FactoryWipeInfo &i);
 size_t encode_cable_r(std::span<uint8_t> out, const CableRInfo &i);
 size_t encode_lab(std::span<uint8_t> out, const LabResult &r);
 size_t encode_sniff(std::span<uint8_t> out, const SniffInfo &r);
+size_t encode_listen(std::span<uint8_t> out, const ListenInfo &r);
 size_t encode_vooc(std::span<uint8_t> out, const VoocSnapshot &v, uint8_t page);   // vooc-monitor: FC op 4, one page
 size_t encode_svooc(std::span<uint8_t> out, const SvoocSnapshot &v);   // svooc-trigger: FC op 5, the summary
 size_t encode_svooc_timing(std::span<uint8_t> out, const SvoocSnapshot &v);   // op 5 / 0 page 1: stall and D- release counts
@@ -1557,6 +1577,7 @@ concept Backend = requires(B &b, uint8_t u8, uint16_t u16, bool on) {
     { b.cable_r_info() } -> std::same_as<CableRInfo>;
     { b.lab_load(uint8_t{}, uint16_t{}) } -> std::same_as<LabResult>;   // PA8 load probe
     { b.lab_sniff(uint8_t{}) } -> std::same_as<SniffInfo>;               // D+/D- edge capture
+    { b.lab_listen(uint8_t{}, uint8_t{}, uint8_t{}) } -> std::same_as<ListenInfo>;   // listen attach: sub, secs, port
     { b.ufcs_info() } -> std::same_as<UfcsInfo>;
     { b.ufcs_get(u8) } -> std::same_as<std::uint32_t>;                   // field index (checked by the dispatcher)
     { b.ufcs_set(u8, std::uint32_t{}) } -> std::same_as<Status>;         // field, value (range checked); Busy while a probe runs
@@ -2121,6 +2142,21 @@ template <Backend B>
                 return reply_byte(f, static_cast<Status>(r.status), r.refusal);
             }
             return reply_ok(f, encode_sniff(f.span(), r));
+        }
+        if (p[0] == kLabListen) {
+            if (p.size() < 2) return reply_bad_len(f);
+            if (p[1] != 0 && p[1] != 1 && p[1] != 2) return reply_bad_arg(f);
+            if (p.size() != (p[1] == 1 ? 4u : 2u)) return reply_bad_len(f);
+            if (p[1] == 1) {
+                if (p[2] > 30 || p[3] > 2) return reply_bad_arg(f);
+                if (backend.lines_locked()) return reply_byte(f, Status::Busy, uint8_t{2});   // pd::ListenRefusal::Busy
+            }
+            const ListenInfo r = backend.lab_listen(p[1], p[1] == 1 ? p[2] : uint8_t{0}, p[1] == 1 ? p[3] : uint8_t{0});
+            if (r.status != static_cast<uint8_t>(Status::Ok)) {
+                if (r.refusal == 0) return reply_status(f, static_cast<Status>(r.status));
+                return reply_byte(f, static_cast<Status>(r.status), r.refusal);
+            }
+            return reply_ok(f, encode_listen(f.span(), r));
         }
         if (p[0] != kLabLoad) return reply_bad_arg(f);
         if (p.size() != 5) return reply_bad_len(f);

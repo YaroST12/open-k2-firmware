@@ -2096,6 +2096,21 @@ UNMATCHED_POLICIES = ["ignore", "nak", "not-supported"]
 VDM_TYPES = ["REQ", "ACK", "NAK", "BUSY"]
 
 
+RAW_CMD = 0xFF            # the cmd byte that marks a raw seed on the wire (k2/pd/emk_learn.hpp kRawCmd)
+LEARN_MAX_SEEDS = 4
+LEARN_MAX_VDOS = 6        # a PD message carries 7 data objects: the VDM header plus 6
+LEARN_OPTIONS_MAX = 57    # one request frame: 59 payload bytes less the op and the sub-op
+
+
+class _SeedAction(argparse.Action):
+    """--seed / --seed-raw share one list so the run sends the seeds in the order they were typed."""
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        items = list(getattr(namespace, self.dest, None) or [])
+        items.append(("raw:" if self.const == "raw" else "") + values)
+        setattr(namespace, self.dest, items)
+
+
 def parse_seed(text):
     """'22D9:31' or '22D9:31:0x12345678[:0x...]' -> (svid, cmd, [vdo, ...]). SVID and VDOs are hex, the command decimal."""
     parts = text.split(":")
@@ -2103,21 +2118,47 @@ def parse_seed(text):
         svid, cmd = int(parts[0], 16), int(parts[1], 10)
         vdos = [int(v, 16) for v in parts[2:]]
     except (ValueError, IndexError):
-        raise FcRefused(f"seed {text!r}: expected SVID:CMD[:VDO[:VDO]] (SVID and VDOs in hex, CMD 0..31)") from None
-    if not (0 <= svid <= 0xFFFF and 0 <= cmd <= 31 and len(vdos) <= 2 and all(0 <= v <= 0xFFFFFFFF for v in vdos)):
-        raise FcRefused(f"seed {text!r}: SVID 16 bit, CMD 0..31, at most two 32-bit VDOs")
+        raise FcRefused(f"seed {text!r}: expected SVID:CMD[:VDO...] (SVID and VDOs in hex, CMD 0..31)") from None
+    if not (0 <= svid <= 0xFFFF and 0 <= cmd <= 31 and len(vdos) <= LEARN_MAX_VDOS and all(0 <= v <= 0xFFFFFFFF for v in vdos)):
+        raise FcRefused(f"seed {text!r}: SVID 16 bit, CMD 0..31, at most {LEARN_MAX_VDOS} 32-bit VDOs")
     return svid, cmd, vdos
 
 
+def parse_seed_raw(text):
+    """'22D9A11F[:VDO...]' -> (hdr >> 16, RAW_CMD, [vdo, ...], hdr & 0xFFFF): the exact 32-bit VDM header word, then up to
+    six data objects, all hex."""
+    parts = text.split(":")
+    try:
+        hdr = int(parts[0], 16)
+        vdos = [int(v, 16) for v in parts[1:]]
+    except ValueError:
+        raise FcRefused(f"raw seed {text!r}: expected HEADER[:VDO...] (32-bit hex words)") from None
+    if not (0 <= hdr <= 0xFFFFFFFF and len(vdos) <= LEARN_MAX_VDOS and all(0 <= v <= 0xFFFFFFFF for v in vdos)):
+        raise FcRefused(f"raw seed {text!r}: a 32-bit header and at most {LEARN_MAX_VDOS} 32-bit VDOs")
+    return hdr >> 16, RAW_CMD, vdos, hdr & 0xFFFF
+
+
+def parse_any_seed(text):
+    """A --seed value as typed, or one --seed-raw value stored with the 'raw:' prefix."""
+    return parse_seed_raw(text[4:]) if text.startswith("raw:") else parse_seed(text)
+
+
 def encode_learn_options(seeds, sweep=False, confirm=False):
-    """Options bytes of the learn run request: [flags, nseeds, (svid u16, cmd, nvdo, vdo u32 * nvdo) * nseeds]."""
-    if len(seeds) > 4:
-        raise FcRefused("at most 4 seeds")
+    """Options bytes of the learn run request: [flags, nseeds, seed * nseeds]. A structured seed is
+    (svid u16, cmd, nvdo, vdo u32 * nvdo); a raw one (parse_seed_raw) is (hdr hi u16, 0xFF, nvdo, hdr lo u16, vdos)."""
+    if len(seeds) > LEARN_MAX_SEEDS:
+        raise FcRefused(f"at most {LEARN_MAX_SEEDS} seeds")
     out = bytearray([(1 if sweep else 0) | (2 if confirm else 0), len(seeds)])
-    for svid, cmd, vdos in seeds:
+    for seed in seeds:
+        svid, cmd, vdos = seed[:3]
         out += struct.pack("<HBB", svid, cmd, len(vdos))
+        if cmd == RAW_CMD:
+            out += struct.pack("<H", seed[3])
         for v in vdos:
             out += struct.pack("<I", v)
+    if len(out) - 2 > LEARN_OPTIONS_MAX:
+        raise FcRefused(f"the seeds take {len(out) - 2} bytes, one request frame carries {LEARN_OPTIONS_MAX} "
+                        "(one full raw seed fits; run the others separately)")
     return bytes(out)
 
 
@@ -2163,8 +2204,22 @@ def _learn_call(link, payload, what):
     return p
 
 
+def _learn_entry(link, i):
+    """One transcript entry. A request of 7 words plus a reply of 7 does not fit one response frame, so the K2 sends the
+    header with as many words as fit and the rest from the word index asked for in [6, 2, i, first]."""
+    p = _learn_call(link, [6, EM_LEARN_ENTRY, i], "learn entry")
+    _need(p, 9, "emarker learn entry")
+    total, head, words = p[4] + p[6], p[:9], p[9:]
+    while len(words) < 4 * total:
+        more = _learn_call(link, [6, EM_LEARN_ENTRY, i, len(words) // 4], "learn entry")[9:]
+        if len(more) < 4:
+            raise EmLibFailed(f"emarker learn entry {i}: the K2 sent {len(words) // 4} of {total} words")
+        words += more
+    return decode_learn_entry(head + words[:4 * total])
+
+
 def _learn_entries(link, summary):
-    return [decode_learn_entry(_learn_call(link, [6, EM_LEARN_ENTRY, i], "learn entry")) for i in range(summary["entries"])]
+    return [_learn_entry(link, i) for i in range(summary["entries"])]
 
 
 def cmd_emlearn(link, a):
@@ -2172,7 +2227,7 @@ def cmd_emlearn(link, a):
     if a.em_cmd == "learned":
         s = decode_learn_summary(_learn_call(link, [6, EM_LEARN_STATUS], "learn status"))
         return {"emlib": "learn", "ran": False, "summary": s, "entries": _learn_entries(link, s)}
-    seeds = [parse_seed(t) for t in a.seed]
+    seeds = [parse_any_seed(t) for t in a.seed]
     opts = encode_learn_options(seeds, a.sweep, a.confirm)
     saved, link.timeout_s = getattr(link, "timeout_s", None), max(getattr(link, "timeout_s", 0) or 0, LEARN_TIMEOUT_S)
     try:
@@ -4082,7 +4137,40 @@ SNIFF_END = {0: "none", 1: "full", 2: "idle", 3: "detach", 4: "timeout", 5: "can
              6: "storm"}   # vooc-monitor: the edge-storm guard ended it (data traffic on D+/D-)
 
 
+LISTEN_END = {0: "none", 1: "done", 2: "stopped", 3: "lost the port"}   # pd::ListenEnd
+LISTEN_REFUSALS = {1: "bad argument", 2: "busy: a charger test, PD Stress, a trigger or another tool owns the link",
+                   3: "inline: a sink or host is attached behind the K2", 4: "Rd is pinned at boot (self-powered)",
+                   5: "the e-marker spoof or Ra mode is armed", 6: "a listen window is already running"}   # pd::ListenRefusal
+LISTEN_PORTS = {"auto": 0, "top": 1, "bottom": 2}   # a label only: the top plug and the bottom receptacle share the CC nets
+
+
+def decode_listen(p):
+    _need(p, 7, "lab listen-attach")
+    return {"state": "listening" if p[0] else "idle", "end": LISTEN_END.get(p[1], p[1]), "secs": p[2], "left_s": p[3],
+            "frames": p[4] | p[5] << 8, "port": {v: k for k, v in LISTEN_PORTS.items()}.get(p[6], p[6])}
+
+
+def cmd_listen_attach(link, a):
+    """Present Rd with Auto-CRC off and listen for --secs; the K2 never transmits. Frames land in the Black Box (k2_stream timeline)."""
+    secs = a.secs
+    if not 1 <= secs <= 30:
+        raise SystemExit("lab listen-attach: --secs must be 1..30")
+    try:
+        d = decode_listen(link.call(CMD_LAB, bytes([2, 1, secs, LISTEN_PORTS[a.port]])).payload)
+    except RemoteError as e:
+        if e.status == STATUS_BUSY and e.payload:
+            raise SystemExit(f"lab listen-attach refused: {LISTEN_REFUSALS.get(e.payload[0], e.payload[0])}") from None
+        raise
+    deadline = time.monotonic() + secs + 5
+    while d["state"] == "listening" and time.monotonic() < deadline:
+        time.sleep(0.5)
+        d = decode_listen(link.call(CMD_LAB, bytes([2, 2])).payload)
+    return d
+
+
 def cmd_lab(link, a):
+    if a.lab_cmd == "listen-attach":
+        return cmd_listen_attach(link, a)
     if a.lab_cmd == "load":
         args = bytes([0, a.duty]) + a.ms.to_bytes(2, "little") + bytes([1 if a.confirm else 0])
         return decode_lab(link.call(CMD_LAB, args).payload)
@@ -5247,9 +5335,13 @@ def build_parser():
                     "older names generic-epr = epr-50v, cuktech-6a = cuktech-240w = xiaomi-6a, oneplus-mag = oneplus, id 3 = id 4), off or status")
     el = es.add_parser("learn", help="power the cable in the BOTTOM port (no charger) and record what it answers: Discover "
                        "Identity / SVIDs / Modes plus the seeds; --save stores the clone with those replies")
-    el.add_argument("--seed", action="append", default=[], metavar="SVID:CMD[:VDO[:VDO]]",
-                    help="also send this structured request (SVID and VDOs hex, CMD 0..31), e.g. 22D9:31 for the OPPO "
-                    "vendor command; repeatable, at most 4")
+    el.add_argument("--seed", action=_SeedAction, const="plain", dest="seed", default=[], metavar="SVID:CMD[:VDO...]",
+                    help="also send this structured request (SVID and up to 6 VDOs hex, CMD 0..31), e.g. 22D9:31 for the OPPO "
+                    "vendor command; repeatable, at most 4 per run")
+    el.add_argument("--seed-raw", action=_SeedAction, const="raw", dest="seed", metavar="HEADER[:VDO...]",
+                    help="also send this request with the exact 32-bit VDM header word and up to 6 VDOs (hex), e.g. "
+                    "22D9A11F:0:0:0E4AD139:2F2DF86F:50111FA6:70F446DC for the OnePlus brick's cable command; mixes with "
+                    "--seed in the order typed; one request frame holds 57 option bytes, so a full 6-VDO raw seed goes alone")
     el.add_argument("--sweep", action="store_true", help="also try vendor commands 16..31 on the cable's SVIDs and the seeds' SVIDs")
     el.add_argument("--confirm", action="store_true", help="allow the scan while a sink is attached inline (may interrupt charging)")
     el.add_argument("--save", action="store_true", help="save the learned clone into the cable library")
@@ -5567,6 +5659,9 @@ def build_parser():
     sll.add_argument("duty", type=int)
     sll.add_argument("ms", type=int)
     sll.add_argument("--confirm", action="store_true", help="required: acknowledges the PA8 pulse")
+    slla = sls.add_parser("listen-attach", help="Rd on, Auto-CRC off, passive receive of SOP/SOP'/SOP'' for --secs; transmits nothing; frames go to the Black Box")
+    slla.add_argument("--secs", type=int, default=10, help="window length, 1..30 (default 10)")
+    slla.add_argument("--port", choices=sorted(LISTEN_PORTS), default="auto", help="label only: both ports share the CC nets")
     sln = sls.add_parser("sniff", help="passive D+/D- edge capture into the Black Box (never drives; see tools/vooc_edges.py)")
     slns = sln.add_subparsers(dest="sniff_cmd", required=True)
     for nm, hp in (("arm", "start listening; the capture ends 150 ms after the last edge"), ("status", "state and edge count"),

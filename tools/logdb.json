@@ -717,6 +717,9 @@
   "720": "[MI] 0x2717010A Not_Supported (0208 was verified)\n",
   "721": "[EMK] Mi cable-auth 0105 key=%u trail=%08X half=%u -> %08X %08X %08X %08X %s\n",
   "722": "[EMK] Mi cable-auth req=%08X key=%u trail=%08X half=%u reply=%u -> %08X %08X %08X %08X %s\n",
-  "723": "[EMK] Mi cable-auth req=%08X key=%u trail=%08X half=%u reply=%u payload=%u %s\n"
+  "723": "[EMK] Mi cable-auth req=%08X key=%u trail=%08X half=%u reply=%u payload=%u %s\n",
+  "724": "[LISTEN] End: %s after %u frames (window %u s, port label %u), Rd off, passive idle\n",
+  "725": "[LISTEN] Refused: %s\n",
+  "726": "[LISTEN] Start: %u s, port label %u, Rd on, Auto-CRC off, SOP/SOP'/SOP'' received, nothing transmitted\n"
  }
 }

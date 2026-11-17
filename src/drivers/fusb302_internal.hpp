@@ -15,6 +15,7 @@
 #include "k2/pd/pd_identify.hpp"
 #include "k2/pd/pd_interrogate.hpp"
 #include "k2/pd/pd_link.hpp"
+#include "k2/pd/pd_listen.hpp"
 #include "k2/pd/pd_passive.hpp"
 #include "k2/pd/pd_phy.hpp"
 #include "k2/pd/pd_probe.hpp"
@@ -78,6 +79,7 @@ extern pd::AutoCrcGate g_rd_gate;
 extern bool g_legacy_only;
 extern bool g_crc_on;
 extern bool g_tx_allowed;
+extern pd::Listen g_listen;
 extern bool g_cable_read;
 extern bool g_hr_tool_armed;
 extern pd::Choice g_prep_choice;
@@ -144,6 +146,10 @@ bool ident_running();
 bool probe_running();
 bool reread_running();
 bool iq_running();
+
+// The lab listen attach (fusb302_cold.cpp): the poll tick that ends the window, and the hook the other Rd owners call.
+void listen_tick();
+void listen_lost();
 
 void boot_note(std::uint8_t kind, std::uint8_t val);
 bool wr(Reg r, std::uint8_t v);

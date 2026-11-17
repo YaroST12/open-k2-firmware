@@ -458,6 +458,12 @@ size_t encode_sniff(std::span<uint8_t> out, const SniffInfo &r) {
     return w.size();
 }
 
+size_t encode_listen(std::span<uint8_t> out, const ListenInfo &r) {
+    Writer w(out);
+    w.u8(r.state); w.u8(r.end); w.u8(r.secs); w.u8(r.left_s); w.u16(r.frames); w.u8(r.port);
+    return w.size();
+}
+
 // --- vooc-monitor (k2/vooc-detect): FC op 4 pages, layout in remote_proto.hpp ---
 size_t encode_vooc(std::span<uint8_t> out, const VoocSnapshot &v, uint8_t page) {
     Writer w(out);
@@ -821,7 +827,8 @@ Status validate_emlib(std::span<const uint8_t> p, bool &needs_write) {
             return emk_learn::parse_options(p.subspan(2), o, confirm) ? Status::Ok : Status::BadArg;
         }
         if (p[1] == kEmLearnSave) needs_write = true;
-        return p.size() == (p[1] == kEmLearnEntry ? 3u : 2u) ? Status::Ok : Status::BadLength;
+        if (p[1] == kEmLearnEntry) return p.size() == 3 || p.size() == 4 ? Status::Ok : Status::BadLength;   // [6, 2, i] or [6, 2, i, first word]
+        return p.size() == 2 ? Status::Ok : Status::BadLength;
     case kEmUnmatched:
         if (p.size() != 2) return Status::BadLength;
         return (p[1] == emk_quirk::kSeenTotals || p[1] < emk_quirk::SeenLog::kDepth) ? Status::Ok : Status::BadArg;
