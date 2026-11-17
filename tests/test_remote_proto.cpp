@@ -3386,6 +3386,41 @@ static void test_lease_arms_only_for_what_was_raised() {
     f.rq_result = {};
 }
 
+// Cmd::MiCableAuth (0x5C): [0] reads, [1, on, key, trailing u32 LE, half, reply, payload] sets; rsp the 9 config bytes. Every other
+// length (the empty payload included: no byte of it may be read before its size is known) is BadLength, an out-of-range field BadArg,
+// and neither reaches the backend.
+static void test_mi_cable_auth() {
+    Fake f; Frame r;
+    const auto req = [](uint8_t seq, const std::vector<uint8_t>& p) {
+        std::vector<uint8_t> v = {kReqMagic0, kReqMagic1, 0x5C, seq, static_cast<uint8_t>(p.size())};
+        v.insert(v.end(), p.begin(), p.end());
+        v.resize(kFrameSize, 0);
+        return v;
+    };
+    const int calls = f.calls;
+    CHECK_EQ(run(f, request(0x5C, 1, {}), r), 1); check_header(r, 0x5C, 1, Status::BadLength, 0);
+    CHECK_EQ(run(f, request(0x5C, 2, {0, 0}), r), 1); check_header(r, 0x5C, 2, Status::BadLength, 0);
+    CHECK_EQ(run(f, request(0x5C, 3, {2}), r), 1); check_header(r, 0x5C, 3, Status::BadLength, 0);
+    for (uint8_t n = 1; n <= 11; ++n) {
+        if (n == 10) continue;
+        std::vector<uint8_t> p(n, 0); p[0] = 1;
+        CHECK_EQ(run(f, req(uint8_t(10 + n), p), r), 1); check_header(r, 0x5C, uint8_t(10 + n), Status::BadLength, 0);
+    }
+    const std::vector<uint8_t> good = {1, 1, 9, 0x78, 0x56, 0x34, 0x12, 1, 1, 1};
+    for (unsigned i : {1u, 2u, 7u, 8u, 9u}) {
+        std::vector<uint8_t> p = good; p[i] = i == 2 ? 10 : 2;
+        CHECK_EQ(run(f, req(uint8_t(30 + i), p), r), 1); check_header(r, 0x5C, uint8_t(30 + i), Status::BadArg, 0);
+    }
+    CHECK_EQ(f.calls, calls);
+    CHECK_EQ(run(f, request(0x5C, 40, {0}), r), 1);
+    check_header(r, 0x5C, 40, Status::Ok, 9); check_bytes(r, kRspHeader, {1, 7, 0, 0, 0, 0, 0, 0, 0});
+    CHECK_EQ(f.mi_auth_req == std::vector<uint8_t>{0}, true);
+    CHECK_EQ(run(f, req(41, good), r), 1);
+    check_header(r, 0x5C, 41, Status::Ok, 9);
+    CHECK_EQ(f.mi_auth_req == good, true);
+    CHECK_EQ(f.calls, calls + 2);
+}
+
 int main() {
     test_lease_arms_only_for_what_was_raised();
     test_lease_wire();
@@ -3469,5 +3504,6 @@ int main() {
     test_qrtest();
     test_debug_fault();
     test_build_response_pads_and_cuts();
+    test_mi_cable_auth();
     return test_report("test_remote_proto");
 }

@@ -1847,6 +1847,7 @@ template <Backend B>
         if (p[0] >= charger_test::kLevelCount) return reply_bad_arg(f);
         return reply_status_or_byte(f, backend.charger_level(p[0]), p[0]);
     case Cmd::MiCableAuth:
+        if (p.empty()) return reply_bad_len(f);   // p[0] below: nothing may be read before the size is known
         if (p[0] == 0 && p.size() == 1) return reply_ok(f, {backend.mi_cable_auth(p, f.span())});
         if (p[0] == 1 && p.size() == 10) {
             if (p[1] > 1 || p[2] >= 10 || p[7] > 1 || p[8] > 1 || p[9] > 1) return reply_bad_arg(f);
