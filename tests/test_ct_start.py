@@ -445,7 +445,12 @@ class CableOption(unittest.TestCase):
         self.assertEqual(ct_start.main(["--cable", "builtin:5"]), 4)
         self.assertEqual(ct_start.main(["--cable", "builtin:nope"]), 4)
 
-    def test_default_is_off_and_names_parse(self):
+    def test_default_follows_the_device_and_names_parse(self):
+        self.assertIsNone(ct_start.parse_args([]).cable)          # no --cable: the device's own choice (the EPR spoof by default)
+        self.assertEqual(ct_start.parse_args(["--cable", "off"]).cable, "off")
+        self.assertEqual(ct_start.cable_words({"choice": "off", "choice_seq": 0}), "off")
+        self.assertEqual(ct_start.cable_words({"choice": "builtin", "choice_seq": 1}), "builtin:1")
+        self.assertEqual(ct_start.cable_words({"choice": "saved", "choice_seq": 7}), "saved:7")
         self.assertEqual(ct_start.kr.parse_cable("off"), (0, 0))
         self.assertEqual(ct_start.kr.parse_cable(""), (0, 0))
         self.assertEqual(ct_start.kr.parse_cable("builtin"), (1, 1))
@@ -455,6 +460,85 @@ class CableOption(unittest.TestCase):
         self.assertEqual(ct_start.kr.parse_cable("builtin:oneplus"), (1, 4))
         self.assertEqual(ct_start.kr.parse_cable("saved:3"), (2, 3))
         self.assertEqual(ct_start.kr.parse_cable("Clone:65535"), (2, 65535))
+
+
+class CableDefaultRun(unittest.TestCase):
+    """Without --cable ct_start sends no identity (the device's own choice, the EPR spoof, runs) and prints it; with --cable it
+    sends that choice. A START the Ra guard refuses exits 6 and says how to run without the identity."""
+
+    def run_main(self, argv, started=None, device_choice=("builtin", 1)):
+        sent = []          # the choices passed to charger_cable (None = a read)
+        started = ct_start.STARTED if started is None else started
+
+        class FakeLink:
+            def __init__(self, *a):
+                self.tap = None
+
+            def call(self, cmd, payload=b""):
+                return ct_start.kr.Response(cmd, 1, 0, b"")
+
+        class FakeWalk:
+            def __init__(self, link):
+                self.log = []
+
+            def where(self):
+                return ("home", 0)
+
+            def to_algorithms(self):
+                return True
+
+            def pick_all(self):
+                return True
+
+            def press(self, *a):
+                return True
+
+        def cable(link, choice=None):
+            sent.append(choice)
+            return {"choice": device_choice[0], "choice_seq": device_choice[1], "run": "off", "run_seq": 0, "run_name": ""}
+
+        err = io.StringIO()
+        with patch.dict(os.environ, {"K2_TRANSPORT": "hid"}), \
+             patch.object(ct_start.k2_lock, "hold", contextlib.nullcontext), \
+             patch.object(ct_start.k2_lock, "release", lambda: None), \
+             patch.object(ct_start.kr, "RemoteLink", FakeLink), \
+             patch.object(ct_start.kr, "open_transport", lambda path=None: object()), \
+             patch.object(ct_start, "Walk", FakeWalk), \
+             patch.object(ct_start, "preflight", lambda link: None), \
+             patch.object(ct_start, "run_id_of", lambda link: 5), \
+             patch.object(ct_start, "start_run", lambda *a, **k: started), \
+             patch.object(ct_start.kr, "cmd_charger_test",
+                          lambda link, a: {"state": "done", "run_id": 6, "steps": []}), \
+             patch.object(ct_start.kr, "charger_cable", cable), \
+             patch.object(ct_start.kr, "charger_level", lambda link, level: level), \
+             patch.object(ct_start.charger_summary, "summarize", lambda r: "SUMMARY"), \
+             contextlib.redirect_stderr(err):
+            rc = ct_start.main(argv)
+        return rc, sent, err.getvalue()
+
+    def test_no_cable_flag_sends_nothing_and_prints_the_devices_choice(self):
+        rc, sent, text = self.run_main(["--wait", "5"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(sent[0], None)                   # the first call is a read: no identity was forced (not off)
+        self.assertNotIn((0, 0), sent)
+        self.assertIn("cable identity: builtin:1 (the device's choice)", text)
+
+    def test_an_explicit_cable_is_sent_before_start(self):
+        rc, sent, text = self.run_main(["--wait", "5", "--cable", "off"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(sent[0], (0, 0))                 # off is still selectable, and it is sent
+        self.assertIn("cable identity: off", text)
+        rc, sent, text = self.run_main(["--wait", "5", "--cable", "builtin:cuktech-6a"])
+        self.assertEqual(sent[0], (1, 2))
+
+    def test_a_guard_refusal_exits_six_and_points_at_cable_off(self):
+        rc, sent, text = self.run_main(["--wait", "5"], started=ct_start.REFUSED)
+        self.assertEqual(rc, 6)
+        self.assertIn("--cable off", text)
+        self.assertIn("the identity was the device's own choice", text)
+        rc, sent, text = self.run_main(["--wait", "5", "--cable", "builtin"], started=ct_start.REFUSED)
+        self.assertEqual(rc, 6)
+        self.assertNotIn("the device's own choice", text)
 
 
 class LockReleaseAfterStart(unittest.TestCase):
@@ -528,7 +612,8 @@ class LockReleaseAfterStart(unittest.TestCase):
              patch.object(ct_start, "start_run",
                           lambda *a, **k: events.append(("start", depth)) or ct_start.STARTED), \
              patch.object(ct_start.kr, "cmd_charger_test", fake_ct), \
-             patch.object(ct_start.kr, "charger_cable", lambda link, choice=None: {"run": "off"}), \
+             patch.object(ct_start.kr, "charger_cable",
+                          lambda link, choice=None: {"choice": "builtin", "choice_seq": 1, "run": "off"}), \
              patch.object(ct_start.kr, "charger_sweep", lambda link, on: sweeps.append(on) or on), \
              patch.object(ct_start.kr, "charger_level", lambda link, level: levels.append(level) or level), \
              patch.object(ct_start.charger_summary, "summarize", lambda r: "SUMMARY"), \

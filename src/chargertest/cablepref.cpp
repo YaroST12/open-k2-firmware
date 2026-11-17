@@ -8,11 +8,17 @@
 
 namespace k2::cablepref {
 
-ctcable::Choice stored() { return load(fs::instance()); }
+std::optional<ctcable::Choice> stored() { return load(fs::instance()); }
 
 bool set(ctcable::Choice c) {
     const bool ok = save(fs::instance(), c);
     K2LOG("[CABLE] selection kind=%u seq=%u (%s)\n", unsigned(c.kind), unsigned(c.seq), ok ? "saved" : "FLASH ERROR");
+    return ok;
+}
+
+bool clear() {
+    const bool ok = clear(fs::instance());
+    K2LOG("[CABLE] selection cleared (%s)\n", ok ? "default again" : "FLASH ERROR");
     return ok;
 }
 

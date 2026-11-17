@@ -49,16 +49,40 @@ void CableIdentityList::put_label(char (&dst)[emlib::kNameMax + 1], const char* 
 }
 
 void CableIdentityList::load() {
-    persisted_ = cablepref::stored();
-    selected_ = {};
+    const auto s = cablepref::stored();
+    recorded_ = s.has_value();
+    persisted_ = s.value_or(ctcable::Choice{});
     selected_name_[0] = 0;
-    if (persisted_.kind == ctcable::Kind::Off) return;
-    if (!select(persisted_)) persist();   // the clone is gone: the stale record becomes Off (a later clone may reuse the number)
+    if (s && apply(*s)) { chosen_ = true; return; }
+    use_default();
+    if (s) drop_record();   // the clone is gone: the stale record goes (a later clone may reuse the number)
+}
+
+bool CableIdentityList::apply(ctcable::Choice c) {
+    if (!ctcable::valid(c)) return false;
+    c = ctcable::canonical(c);
+    char name[emlib::kNameMax + 1] = {};
+    if (c.kind == ctcable::Kind::Saved && !load_name(c.seq, name)) return false;
+    if (c.kind == ctcable::Kind::Builtin) put_label(name, emrec::builtin_info(c.seq).label.data());   // table literals: NUL terminated
+    selected_ = c;
+    std::memcpy(selected_name_, name, sizeof name);
+    return true;
+}
+
+void CableIdentityList::use_default() {
+    apply(ctcable::kDefaultChoice);   // a built-in: always valid
+    chosen_ = false;
+}
+
+void CableIdentityList::drop_record() {
+    if (!cablepref::clear()) return;
+    recorded_ = false;
+    persisted_ = {};
 }
 
 void CableIdentityList::persist() {
-    if (selected_ == persisted_) return;
-    if (cablepref::set(selected_)) persisted_ = selected_;
+    if (!chosen_ || (recorded_ && selected_ == persisted_)) return;
+    if (cablepref::set(selected_)) { persisted_ = selected_; recorded_ = true; }
 }
 
 bool CableIdentityList::sync() {
@@ -71,7 +95,7 @@ __attribute__((noinline)) void CableIdentityList::refresh() {
     saved_count_ = static_cast<int>(storage::lib_list(saved_));
     names_ = {};
     if (selected_.kind == ctcable::Kind::Saved) {
-        if (index_of(selected_) == kOff) { selected_ = {}; selected_name_[0] = 0; persist(); }   // the clone is gone
+        if (index_of(selected_) == kOff) { use_default(); drop_record(); }   // the clone is gone: back to the default, the stale record removed
         else if (!load_name(selected_.seq, selected_name_)) selected_name_[0] = 0;       // renamed or unreadable
     }
     library_gen_ = storage::generation();
@@ -182,13 +206,8 @@ CableIdentityList::Style CableIdentityList::style(Mark m) {
 }
 
 bool CableIdentityList::select(ctcable::Choice c) {
-    if (!ctcable::valid(c)) return false;
-    c = ctcable::canonical(c);
-    char name[emlib::kNameMax + 1] = {};
-    if (c.kind == ctcable::Kind::Saved && !load_name(c.seq, name)) return false;
-    if (c.kind == ctcable::Kind::Builtin) put_label(name, emrec::builtin_info(c.seq).label.data());   // table literals: NUL terminated
-    selected_ = c;
-    std::memcpy(selected_name_, name, sizeof name);
+    if (!apply(c)) return false;
+    chosen_ = true;
     persist();
     return true;
 }

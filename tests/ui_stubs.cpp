@@ -960,10 +960,18 @@ bool set(Prefs p) { g_stub.prefs_sets++; g_stub.prefs = p; return true; }
 }  // namespace k2::uiprefs
 
 namespace k2::cablepref {
-ctcable::Choice stored() { return g_stub.cable_pref; }
+std::optional<ctcable::Choice> stored() {
+    if (!g_stub.cable_pref_set) return std::nullopt;
+    return g_stub.cable_pref;
+}
 bool set(ctcable::Choice c) {
     g_stub.cable_pref_sets++;
-    if (g_stub.cable_pref_ok) g_stub.cable_pref = c;
+    if (g_stub.cable_pref_ok) { g_stub.cable_pref = c; g_stub.cable_pref_set = true; }
+    return g_stub.cable_pref_ok;
+}
+bool clear() {
+    g_stub.cable_pref_clears++;
+    if (g_stub.cable_pref_ok) g_stub.cable_pref_set = false;
     return g_stub.cable_pref_ok;
 }
 }  // namespace k2::cablepref

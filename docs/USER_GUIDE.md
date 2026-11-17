@@ -293,7 +293,7 @@ Steps of the wizard:
 
    **Custom**: six families (Huawei/Honor, Samsung, OPPO/OnePlus/vivo, Xiaomi/Redmi, USB PD, QC/UFCS) with counts as ON, OFF or PART. Short OK toggles a family, long OK opens its group (inside, short OK sets one test, long OK toggles the whole group). The Xiaomi family cannot be toggled on its own because it rides on PD. The last row is Next.
 
-2. **Spoof cable (2 of 3)**: the cable identity the K2 presents to the charger (it answers the charger's cable query). The list is the shared one: **Off (real cable)** (no identity), built-ins (for example EPR 50 V 5 A, CUKTECH 6A, OnePlus 100W) and your saved cables. OK picks one and goes to Review. The choice is remembered. It applies to the PD units only.
+2. **Spoof cable (2 of 3)**: the cable identity the K2 presents to the charger (it answers the charger's cable query). The list is the shared one: **Off (real cable)** (no identity), built-ins (for example EPR 50 V 5 A, CUKTECH 6A, OnePlus 100W) and your saved cables. The dialog opens on **EPR 50 V 5 A**: with nothing picked yet, the K2 presents that cable, so a charger that advertises EPR gets its EPR levels and EPR AVS tested instead of being skipped for an unread cable. OK picks the row under the cursor and goes to Review; the choice is remembered, **Off (real cable)** included (an explicit Off stays Off). The default itself is never written to flash, and a boot that has nothing remembered arms nothing. It applies to the PD units only.
 
 3. **Review (3 of 3)**: an amber warning (**OTHER PORT FREE**: a device on the other port can be damaged, unplug it first), a short summary (Tests, Spoof), the **Level** bar (three segments: **Light**, **Medium**, **Deep**; the picked one is filled) and START. START has the focus; its own arm and CONFIRM are the acknowledgement, so make sure the other port is empty before the first press.
    - MINUS or PLUS moves the cursor between START and the Level bar; on the bar OK steps the pick **Light**, **Medium**, **Deep** and back to Light (see [Test levels](#test-levels)) and the Tests row's step count follows. The level of each new run starts at Settings > Test level.
@@ -330,7 +330,7 @@ Notes:
 - A Light run never shows a green pass for something it did not measure. On the K2, the 5 V levels it did measure (PDO 1, each legacy protocol's 5 V handshake) pass as usual. A level the charger lists but was not asked for reads **LISTED** in its Detail, a legacy level above 5 V reads **NOT RUN**; both cells have no fill and a grey bar on their left edge. The Results counters count them with the skips; a grid row's footer counts them apart ("PD3.x: 1 pass, 3 listed"), and a listed PPS or AVS range reads "advertised". EPR levels come from the EPR list the charger sends on request; the K2 does not enter EPR mode.
 - The run summary (`charger_summary.py`) says "advertised" for a listed level and "not asked" for a legacy level above 5 V.
 - A Light card says "Light run" in its header, and its rows read "detected" and "advertised", never a tick. A Deep card says "Deep run".
-- From the computer: `python3 tools/ct_start.py --level light|medium|deep` (default medium). `--avs-sweep` alone means deep. `--sweep` / `--no-sweep` turn the PPS deep sweep on or off on top of the level. `k2_remote.py charger-level light|medium|deep` sets the level of the next run without starting it.
+- From the computer: `python3 tools/ct_start.py --level light|medium|deep` (default medium). `--cable` follows the K2's own choice (EPR 50 V 5 A until somebody picks another, `--cable off` or a pick on the K2 is remembered); the script prints which cable the run will present. `--avs-sweep` alone means deep. `--sweep` / `--no-sweep` turn the PPS deep sweep on or off on top of the level. `k2_remote.py charger-level light|medium|deep` sets the level of the next run without starting it.
 
 ### Settings
 
@@ -689,7 +689,7 @@ The bootloader area (0x08000000 to 0x080037FF) is never written by this firmware
 | :--- | :--- | :--- |
 | USB link choice | flash, `/usb.cfg` | off by default, applies after replug |
 | Screenshot on/off, Smoothing, Rotate buttons, Autorotate, Wake sleeping port, Test level | flash, `/prefs.cfg` | remembered |
-| Cable identity for the charger test | flash, `/cable.cfg` | remembered |
+| Cable identity for the charger test | flash, `/cable.cfg` | remembered once picked (Off included); never written while the EPR 50 V 5 A default is in force |
 | Saved cables (up to 140) | flash | also shown on the drive as JSON |
 | Report cards (up to 64) | flash | also on the drive as `CARDS.JSON` |
 | Black Box captures (32) | flash | survive power-off; the live ring does not |

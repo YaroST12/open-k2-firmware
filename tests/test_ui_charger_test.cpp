@@ -1085,6 +1085,24 @@ static void test_self_powered_run_is_on_the_card() {
         CHECK_EQ((c.cable.flags & report_card::kCableSelfPowered) != 0, self != 0);
     }
 }
+// The driver's cable reading is per session (every unit attach and source Hard Reset drops it); the run keeps what it read, so the
+// card names the cable the charger's own SOP' query was answered by even when the run ends in a session that never read one.
+static void test_a_cable_read_once_stays_with_the_run() {
+    fixture(); stub_cards_reset();
+    g_stub.cable_limits.max_mv = 50000; g_stub.cable_limits.max_ma = 5000; g_stub.cable_limits.observed = true;
+    Ui ui; open(ui); only_vivo_review(ui);
+    start_press(ui, 1300); press(ui, Button::Ok, 1400);
+    g_stub.cable_limits = {};   // the next session read nothing
+    for (uint32_t t = 1500; t <= 600000 && ui.charger_test_busy(); t += 100) ui.tick(t);
+    CHECK_EQ(ui.charger_test_stage(), 6);
+    std::array<uint16_t, 8> nums{};
+    const size_t n = report_card::hw::numbers(nums);
+    report_card::Card c;
+    CHECK_EQ(n &&  report_card::hw::get(nums[0], c), true);
+    CHECK_EQ((c.cable.flags & report_card::kCableObserved) != 0, true);
+    CHECK_EQ(c.cable.max_mv, 50000);
+    CHECK_EQ(c.cable.max_ma, 5000);
+}
 static void test_vsafe5_review() {
     {
         fixture(); g_stub.pm.vbus_mv = 5269;
@@ -3448,8 +3466,9 @@ static void test_hid_powered_boot_restores_the_selection_without_arming() {
     CHECK_EQ(g_stub.spoof_arms + g_stub.ra_ons, 0);
     CHECK_EQ(int(bootra::last()), int(bootra::Verdict::NotSelfPowered));
 }
-// A saved clone is remembered by its library id; one that is gone by the next boot reads as Off (and the stale record is
-// replaced, so a later clone that takes the number is not picked up by accident).
+// A saved clone is remembered by its library id; one that is gone by the next boot reads as the default (the EPR spoof, not
+// chosen: nothing arms at that boot) and the stale record is removed, so a later clone that takes the number is not picked up
+// by accident.
 static void test_saved_clone_selection_and_a_clone_that_is_gone() {
     fixture(); g_stub.lib = {saved(1), saved(2)};
     { Ui ui; open(ui); CHECK_EQ(ui.charger_test_set_cable(kSaved2), true); }
@@ -3464,24 +3483,74 @@ static void test_saved_clone_selection_and_a_clone_that_is_gone() {
     reboot_with(true);
     const int sets = g_stub.cable_pref_sets;
     Ui ui; boot_ui(ui);
-    CHECK_EQ(ui.charger_test_cable_info().choice == kOff, true);
-    CHECK_EQ(g_stub.spoof_arms + g_stub.ra_ons, 0);
+    CHECK_EQ(ui.charger_test_cable_info().choice == ctcable::kDefaultChoice, true);
+    CHECK_EQ(g_stub.spoof_arms + g_stub.ra_ons, 0);                     // the default is START's: a boot arms nothing for it
     CHECK_EQ(int(bootra::last()), int(bootra::Verdict::NoIdentity));
-    CHECK_EQ(g_stub.cable_pref == kOff, true);
-    CHECK_EQ(g_stub.cable_pref_sets, sets + 1);
+    CHECK_EQ(g_stub.cable_pref_set, false);                             // the stale record is gone
+    CHECK_EQ(g_stub.cable_pref_clears, 1);
+    CHECK_EQ(g_stub.cable_pref_sets, sets);                             // and the default is never written
     reboot_with(true);
     Ui again; boot_ui(again);
-    CHECK_EQ(g_stub.cable_pref_sets, sets + 1);                         // Off is stable: no write at the next boot
+    CHECK_EQ(g_stub.cable_pref_clears, 1);                              // a blank volume is stable: no write at the next boot
+    CHECK_EQ(g_stub.cable_pref_sets, sets);
+    CHECK_EQ(g_stub.spoof_arms + g_stub.ra_ons, 0);
 }
-// A clone deleted while the K2 runs drops the selection to Off in the list; the record follows.
+// A clone deleted while the K2 runs drops the selection to the default in the list; the record is removed.
 static void test_a_clone_deleted_while_running_clears_the_record() {
     fixture(); g_stub.lib = {saved(1)};
     Ui ui; open(ui); CHECK_EQ(ui.charger_test_set_cable(kSaved1), true);
     CHECK_EQ(g_stub.cable_pref == kSaved1, true);
     g_stub.lib.clear(); g_stub.lib_removes++;
     cable(ui);                                                          // the Cable step re-reads the library
+    CHECK_EQ(ui.charger_test_cable_info().choice == ctcable::kDefaultChoice, true);
+    CHECK_EQ(g_stub.cable_pref_set, false);
+    CHECK_EQ(g_stub.cable_pref_clears, 1);
+}
+// A blank volume (nothing ever picked): the dialog, the remote read and START use the EPR spoof, the flash is not written,
+// and a self-powered boot arms nothing (the default is START's, only a pick arms at boot).
+static void test_blank_volume_defaults_to_the_epr_spoof() {
+    fixture(); g_stub.cable_pref_set = false;
+    {
+        Ui ui; open(ui);
+        CHECK_EQ(ui.charger_test_cable_info().choice == ctcable::kDefaultChoice, true);
+        CHECK_EQ(ui.charger_test_cable_info().choice == kBuiltin, true);
+        cable(ui);
+        CHECK_EQ(ui.charger_test_cursor(), kBuiltinRow);                // the dialog opens on the EPR row
+        CHECK_EQ(g_stub.cable_pref_sets + g_stub.cable_pref_clears, 0);  // looking never writes
+        CHECK_EQ(g_stub.spoof_arms + g_stub.ra_ons, 0);
+    }
+    reboot_with(true);
+    Ui ui; boot_ui(ui);
+    CHECK_EQ(ui.charger_test_cable_info().choice == kBuiltin, true);
+    CHECK_EQ(g_stub.spoof_arms + g_stub.ra_ons, 0);
+    CHECK_EQ(int(bootra::last()), int(bootra::Verdict::NoIdentity));
+    CHECK_EQ(g_stub.cable_pref_sets + g_stub.cable_pref_clears, 0);
+}
+// An explicit Off pick is a record like any other: it survives a reboot as Off and is not replaced by the default.
+static void test_an_explicit_off_pick_stays_off() {
+    fixture(); g_stub.cable_pref_set = false;
+    { Ui ui; open(ui); cable(ui); pick_row(ui, kOffRow); CHECK_EQ(ui.charger_test_cable_info().choice == kOff, true); }
+    CHECK_EQ(g_stub.cable_pref_set, true); CHECK_EQ(g_stub.cable_pref == kOff, true);
+    CHECK_EQ(g_stub.cable_pref_sets, 1);
+    reboot_with(true);
+    Ui ui; boot_ui(ui);
     CHECK_EQ(ui.charger_test_cable_info().choice == kOff, true);
-    CHECK_EQ(g_stub.cable_pref == kOff, true);
+    CHECK_EQ(g_stub.spoof_arms + g_stub.ra_ons, 0);
+    CHECK_EQ(g_stub.cable_pref_sets, 1); CHECK_EQ(g_stub.cable_pref_clears, 0);
+    CHECK_EQ(ui.charger_test_set_cable(kBuiltin), true);                // and it can be changed by hand
+    CHECK_EQ(g_stub.cable_pref == kBuiltin, true);
+}
+// START on a blank volume arms the EPR spoof (the Ra guard, the arming and the Ra mode are the ordinary ones for any identity).
+static void test_start_on_a_blank_volume_arms_the_epr_spoof() {
+    rd_fixture(); g_stub.cable_pref_set = false;
+    Ui ui; open(ui); CHECK_EQ(ui.charger_test_set_units(kPdOnly), true); review(ui);
+    CHECK_EQ(g_stub.spoof_arms + g_stub.ra_ons, 0);
+    CHECK_EQ(g_stub.cable_pref_sets, 1);   // OK on the Cable step is a pick, also on the default row: it is remembered (reported as a decision)
+    start_press(ui, 1400);
+    CHECK_EQ(g_stub.spoof_arms + g_stub.ra_ons, 0);
+    confirm_press_nowait(ui, 1400);
+    CHECK_EQ(g_stub.spoof_on, true); CHECK_EQ(g_stub.spoof_record == emrec::builtin_cable(ctcable::kBuiltinKind), true);
+    CHECK_EQ(g_stub.ra_on, true);
 }
 // Id 3 ("OnePlus 100W (mag)") is retired but stays reserved: a remote or resumed 3 is OnePlus 100W (id 4, the last built-in row),
 // never Off and never another cable, and what the run records (card kind, remote reply) is the canonical 4.
@@ -5296,6 +5365,9 @@ int main() {
     test_hid_powered_boot_restores_the_selection_without_arming();
     test_saved_clone_selection_and_a_clone_that_is_gone();
     test_a_clone_deleted_while_running_clears_the_record();
+    test_blank_volume_defaults_to_the_epr_spoof();
+    test_an_explicit_off_pick_stays_off();
+    test_start_on_a_blank_volume_arms_the_epr_spoof();
     test_the_retired_builtin_id_reads_as_oneplus_100w();
     test_the_record_is_written_only_when_the_selection_changes();
     test_a_failed_write_is_retried();
@@ -5378,7 +5450,7 @@ int main() {
     test_the_default_run_is_medium();
     test_review_level_row_cycles_and_counts();
     test_an_old_journal_resumes_without_the_default_sweep();
-    test_self_powered_review_note(); test_review_carries_the_other_port_warning(); test_phantom_evidence_does_not_refuse_a_run_but_a_load_does(); test_self_powered_run_is_on_the_card();
+    test_self_powered_review_note(); test_review_carries_the_other_port_warning(); test_phantom_evidence_does_not_refuse_a_run_but_a_load_does(); test_self_powered_run_is_on_the_card(); test_a_cable_read_once_stays_with_the_run();
     test_pps_wire_headroom_note();
     test_first_menu_and_pd_bundles();
     test_tests_step_presets();

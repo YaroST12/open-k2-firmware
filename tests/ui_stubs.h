@@ -213,7 +213,10 @@ struct StubState {
     k2::uiprefs::Prefs prefs{};           // uiprefs::stored() / set()
     int prefs_sets = 0;
     k2::ctcable::Choice cable_pref{};     // cablepref::stored() / set(): the remembered cable selection, kept across a stub "reboot"
-    int cable_pref_sets = 0;
+    // true = /cable.cfg holds cable_pref (an explicit one: the stub's default is an explicit Off, so the tests that are not about the
+    // default keep running on Off); false = no record, the list starts on cablepref::kDefault (the EPR spoof). clear() sets it false.
+    bool cable_pref_set = true;
+    int cable_pref_sets = 0, cable_pref_clears = 0;
     bool cable_pref_ok = true;            // false = flash refuses the write
     k2::smoothing::Preset smoothing_applied = k2::smoothing::kDefault;   // power::set_smoothing()
     bool usb_set_ok = true;

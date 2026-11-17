@@ -817,7 +817,7 @@ private:
     // the new offer (adopt_list: rows it still offers follow it, rows it dropped are skipped as not offered).
     bool hunt_own_reject(const Input&) const;
     void adopt_list(const pd::SourceCaps&);
-    void record_pd_skips();
+    void record_pd_skips(bool final = false);
     void epr_skips(Reason, uint8_t detail = 0);   // detail: the source's Enter_Failed code for EprRefused
     bool info_ready(const Input&) const;                 // the EPR list the charger answered is usable
     bool ask_info(const Input&);                         // false while the informational EPR list is still being asked, true when done
@@ -1020,6 +1020,7 @@ private:
     bool plan_frozen_ K2_BSS_INIT(false);    // a restored run: the journaled rows are the plan, a later list does not replan them
     uint8_t fc_replanned_ K2_BSS_INIT(0);    // bit 0: the SCP rows follow the adapter's limits already, bit 1: the UFCS rows follow its modes
     bool pd_skips_recorded_ = true, probe_asked_ K2_BSS_INIT(false);
+    bool pd_skips_held_ K2_BSS_INIT(false);   // record_pd_skips kept provisional EPR "not offered" rows back (the entry has not decided them yet)
     uint8_t attach_try_ K2_BSS_INIT(0);
     uint32_t unit_ms_ K2_BSS_INIT(0), att_ms_ K2_BSS_INIT(0);   // the unit's detach began; this attach phase began
     uint32_t pre_ms_ K2_BSS_INIT(0);                 // extra quiet before the unit's first handshake, on top of the 500 ms baseline settle

@@ -992,9 +992,19 @@ void Runner::epr_info_rows(const pd::SourceCaps& caps, const Input& in) {
     info_rows_ = true;
     replan_pd(caps, in, false);
 }
-void Runner::record_pd_skips() {
-    for (size_t n = 0; n < count_; ++n)
-        if (steps_[n].verdict == Verdict::Skip && mode(unit_of(steps_[n])) == Mode::Pd) env_.record(steps_[n]);
+// An EPR row of an SPR list whose PDO 1 carries the EPR bit is skipped NoOffer by the plan only as a placeholder: the entry (or the
+// informational list, or a refusal) rewrites it. The journal gets it only when the run ends with it still standing (final), never
+// while the entry is open: a card read after a power loss would otherwise say "EPR: not offered" about a charger that offers EPR
+// (Baseus 140 W on its own cable, 2026-11-17).
+void Runner::record_pd_skips(bool final) {
+    pd_skips_held_ = false;
+    for (size_t n = 0; n < count_; ++n) {
+        const Step& s = steps_[n];
+        if (s.verdict != Verdict::Skip || mode(unit_of(s)) != Mode::Pd) continue;
+        if (!final && s.reason == Reason::NoOffer && (s.algorithm == Algorithm::Epr || s.algorithm == Algorithm::EprAvs) &&
+            (evidence_.flags & EprCapable) && !(evidence_.flags & EprTable)) { pd_skips_held_ = true; continue; }
+        env_.record(s);
+    }
     pd_skips_recorded_ = true;
 }
 void Runner::build(const pd::SourceCaps& caps, Options o, Input in) {
@@ -1150,7 +1160,10 @@ void Runner::follow_list(const pd::SourceCaps& caps, const Input& in) {
         if (mode(unit_of(s)) != Mode::Pd) continue;
         if (s.verdict != Verdict::Pending && s.verdict != Verdict::Skip) started = true;
     }
-    if (!started && !plan_frozen_ && epr_stage_ == 0) {
+    // An SPR list that still offers EPR, after the K2 entered EPR and heard the EPR list (epr_proof_), is the source's re-announce
+    // after a Hard Reset that dropped EPR mode (Baseus 140 W on its own cable, 2026-11-17: no EPR_Request in time, the row went back to
+    // pending): the plan built from the EPR list stays - planned from this list it would lose every EPR row as "not offered".
+    if (!started && !plan_frozen_ && epr_stage_ == 0 && !(epr_proof_ && !caps.epr && epr_capable_caps(caps))) {
         if (caps_sig(caps) != plan_sig_) replan_pd(caps, in, true);   // no PD row has run yet: plan again from the new list
         return;
     }
@@ -1323,7 +1336,7 @@ Reason Runner::start(const pd::SourceCaps& caps, Options o, Input in, bool confi
     // The Pd attach decides between the entry (a cable that can carry it) and the informational list only (a cable that cannot).
     epr_stage_ = (o.selected & (bit(Algorithm::Epr) | bit(Algorithm::EprAvs))) && late_pd_ &&
                  (!caps.valid || (!caps.epr && epr_capable_caps(caps))) ? 3 : 0;
-    pd_skips_recorded_ = !late_pd_;
+    pd_skips_recorded_ = !late_pd_; pd_skips_held_ = false;
     for (size_t n = 0; n < count_; ++n) if (steps_[n].verdict == Verdict::Skip && (mode(unit_of(steps_[n])) != Mode::Pd || pd_skips_recorded_)) env_.record(steps_[n]);
     resumed_ = 0; reattach_ = 0; reattach_planned_ = false; loaded_ = false; plan_frozen_ = false;
     selfpwr_ = in.self_powered; suspended_ = adopt_ = held_ = false; jwait_ms_ = 0;
@@ -1971,7 +1984,7 @@ void Runner::skip_pending(Reason r) {
         if (s.verdict != Verdict::Pending) continue;
         s.verdict = Verdict::Skip; s.reason = r; env_.record(s);
     }
-    if (!pd_skips_recorded_) record_pd_skips();
+    if (!pd_skips_recorded_ || pd_skips_held_) record_pd_skips(true);
 }
 // The rest of the running unit is over (its charger never fell back, the offers changed, PD showed up): the run goes on.
 void Runner::skip_unit(Reason r) {
@@ -2097,7 +2110,7 @@ void Runner::end_legacy() {
     else if (legacy_active_) { env_.legacy_only(false); env_.pd_rescan(); }
     legacy_active_ = false; ending_ = false;
 }
-void Runner::end_run(const Input&) { end_legacy(); if (!pd_skips_recorded_) record_pd_skips(); state_ = State::Done; }
+void Runner::end_run(const Input&) { end_legacy(); if (!pd_skips_recorded_ || pd_skips_held_) record_pd_skips(true); state_ = State::Done; }
 void Runner::begin_unit(Unit u, const Input& in) {
     if (selfpwr_ && self_path(u) == SelfPath::NeedsExternalPower) {   // a row that can cut the output cannot run on the output itself
         unit_ = u; skip_unit(Reason::NeedsExternalPower); next(in); return;
@@ -2393,7 +2406,7 @@ void Runner::restore(const Options& o, const Evidence& e, uint32_t run_id, std::
     // A resumed run re-sweeps a pending sweep row from its first point: the record starts empty, the journaled row is the plan.
     sweep_used_ = 0; n_sweep_rows_ = 0; sweep_n_ = 0; sweep_mv_ = sweep_lo_ = sweep_hi_ = 0;
     handover_ = {}; unit_ = Unit::Count; mode_ = Mode::Pd; epr_stage_ = 0; info_ = 0; info_rows_ = false; n_hunt_ = 0; hunt_seq_ = 0;
-    attached_ = detached_ = ending_ = silent_ = legacy_active_ = dark_ = false; pd_skips_recorded_ = true;
+    attached_ = detached_ = ending_ = silent_ = legacy_active_ = dark_ = false; pd_skips_recorded_ = true; pd_skips_held_ = false;
     pd_owned_ = fc_owned_ = stopping_ = stable_ = recover_ = hot_ = false; probe_ = Probe::Off; pd_retry_ = cut_index_ = SIZE_MAX;
     cut_wait_ = cut_dark_ = false; cut_start_ms_ = cut_back_ms_ = 0; cut_retry_idx_ = SIZE_MAX; cut_tries_ = 0; cut_last_mv_ = -1; n_cut_onsets_ = 0;
     selfpwr_ = suspended_ = adopt_ = false;
