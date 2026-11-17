@@ -6,6 +6,7 @@
 #include "k2/drivers/fusb302.hpp"
 #include "k2/drivers/usb.hpp"
 #include "test_util.h"
+#include <algorithm>
 #include <vector>
 
 using namespace k2;
@@ -328,6 +329,22 @@ static void test_mi_cable_auth_reply() {
     hook(0x528F, {ch, 20});
     CHECK_EQ(fw(sent.back(), 0), 0x27170105u);
     for (unsigned i = 0; i < 4; i++) CHECK_EQ(fw(sent.back(), 1 + i), pd::mi::kSessionSeed[7][i]);
+    // Only the exact header 0x27170104 is the cable-auth challenge: other commands, the structured bit and the answer
+    // header itself are never intercepted (no 0x27170105 digest frame goes out for them).
+    c.payload = 0; emk_spoof::set_mi_auth(c);
+    for (std::uint32_t bad : {0x27170204u, 0x27170124u, 0x27170105u}) {
+        std::uint8_t b[20];
+        std::copy(ch, ch + 20, b);
+        for (int i = 0; i < 4; i++) b[i] = std::uint8_t(bad >> (8 * i));
+        const std::size_t nb = sent.size();
+        hook(0x528F, {b, 20});
+        if (sent.size() > nb) CHECK_COND(fw(sent.back(), 0) != 0x27170105u);
+    }
+    {
+        const std::size_t nb = sent.size();
+        hook(0x528F, {ch, 20});                                // the exact header still answers
+        CHECK_EQ(sent.size(), nb + 1); CHECK_EQ(fw(sent.back(), 0), 0x27170105u);
+    }
     const std::uint8_t other[4] = {0x05, 0x01, 0xB0, 0x2B};    // SVID 0x2BB0, cmd 5: not intercepted
     const std::size_t n2 = sent.size();
     hook(0x128F, {other, 4});

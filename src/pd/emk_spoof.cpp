@@ -26,13 +26,12 @@ std::uint32_t word(std::span<const std::uint8_t> p, unsigned i) {
     return p[4 * i] | (p[4 * i + 1] << 8) | (p[4 * i + 2] << 16) | (std::uint32_t(p[4 * i + 3]) << 24);
 }
 
-// True for an SOP' unstructured VDM with SVID 0x2717, command 4, carrying 4 challenge words (the cable-auth
-// request some Xiaomi-family sources send to a Xiaomi-VID cable after Discover Identity).
+// True for an SOP' VDM whose header is exactly 0x27170104 (SVID 0x2717, unstructured, command 0x0104) carrying 4
+// challenge words (the cable-auth request some Xiaomi-family sources send to a Xiaomi-VID cable after Discover Identity).
 bool is_mi_cable_challenge(std::uint16_t header, std::span<const std::uint8_t> payload) {
     if ((header & 0x8000) != 0) return false;                       // extended
     if ((header & 0x1F) != kMsgVendorDefined || ((header >> 12) & 7) < 5 || payload.size() < 20) return false;
-    const std::uint32_t vdm = word(payload, 0);
-    return (vdm >> 16) == 0x2717u && (vdm & 0x8000u) == 0 && (vdm & 0x1Fu) == 4;
+    return word(payload, 0) == 0x27170104u;
 }
 
 // FIFO tokens of the 0x27170105 answer: sync, PACKSYM, cable header (5 objects), VDM header + 4 digest words.
