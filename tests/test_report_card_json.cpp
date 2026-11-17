@@ -272,15 +272,20 @@ static void test_level_renders() {
     CHECK_EQ(j.find("\"level\":\"light\",") != std::string::npos, true);
     const size_t m = rc::render_summary(c, std::span<char>(sb.data(), sb.size() - 1));
     CHECK_EQ(std::string(sb.data(), m).find("Light run") != std::string::npos, true);
-    {   // A Light card measured 5 V only: a passing group reads "detected", a listed range "advertised", never a tick.
+    {   // A Light card measured 5 V only: what PD advertises (the group, a listed range) reads "✓ advertised"; a legacy group that
+        // answered at 5 V reads "detected", never a tick.
+        // (QC2 below carries the legacy case.)
         rc::Card l = c;
         l.group[0] = {rc::GV::Pass, 5000, 0, 0};
         l.range[0].max_dv = 0; l.range[0].fail_dv = 0;
         const std::string s(sb.data(), rc::render_summary(l, std::span<char>(sb.data(), sb.size() - 1)));
         CHECK_EQ(s.find("1 detected, 2 fail, 1 skip of " + std::to_string(rc::kGroups) + " groups") != std::string::npos, true);
-        CHECK_EQ(s.find("- PD: detected\n") != std::string::npos, true);
-        CHECK_EQ(s.find("- PPS 3.3-11V: advertised\n") != std::string::npos, true);
-        CHECK_EQ(s.find("- PD: \xE2\x9C\x93") == std::string::npos, true);
+        CHECK_EQ(s.find("- PD: \xE2\x9C\x93 advertised\n") != std::string::npos, true);
+        CHECK_EQ(s.find("- PPS 3.3-11V: \xE2\x9C\x93 advertised\n") != std::string::npos, true);
+        l.group[1] = {rc::GV::Pass, 5000, 0, 0};
+        const std::string s2(sb.data(), rc::render_summary(l, std::span<char>(sb.data(), sb.size() - 1)));
+        CHECK_EQ(s2.find("- QC2: detected\n") != std::string::npos, true);
+        CHECK_EQ(s2.find("- QC2: \xE2\x9C\x93") == std::string::npos, true);
     }
     c.level = ct::Level::Deep;
     j.assign(jb.data(), rc::render_json(c, jb));

@@ -153,7 +153,8 @@ std::size_t render_summary(const Card& c, std::span<char> out) {
     if (c.id.pdp_w) t.put(" \xC2\xB7 %u W", unsigned(c.id.pdp_w));
     t.put(" \xC2\xB7 fw %08x\n", unsigned(c.fw));
     // counts() counts group verdicts, not steps: say so, or the header reads "1 pass" next to a run summary's "25 pass".
-    // A Light run measured 5 V only: its passing groups are "detected" (card_tone.hpp: the noted tone), never a tick.
+    // A Light run measured 5 V only: the PD group is "advertised" (a tick: card_tone.hpp reads it green), a legacy group that answered is
+    // "detected" (the noted tone), never a tick.
     const bool light = c.level == ct::Level::Light;
     t.put("%u %s, %u fail, %u skip of %u groups \xC2\xB7 %s", unsigned(n.pass), light ? "detected" : "pass", unsigned(n.fail),
           unsigned(n.skip), unsigned(kGroups), ct::name(c.state));
@@ -179,7 +180,7 @@ std::size_t render_summary(const Card& c, std::span<char> out) {
         t.put("- %s: ", ct::name(ct::Group(g)));
         const bool handshake = r.max_mv && r.max_mv <= kHandshakeMv;
         if (light && r.verdict == GV::Pass) {
-            t.put("detected");
+            t.put(g == 0 ? "\xE2\x9C\x93 advertised" : "detected");
         } else if (group_handshake_ok(r)) {
             t.put("\xE2\x9C\x93 handshake ok");
         } else if (group_detected(r)) {
@@ -223,7 +224,7 @@ std::size_t render_summary(const Card& c, std::span<char> out) {
         } else if (r.max_dv) {
             t.put("reached "); volts(t, unsigned(r.max_dv) * 100u); t.put(" V");
         } else {
-            t.put(light ? "advertised" : "no step measured");
+            t.put(light ? "\xE2\x9C\x93 advertised" : "no step measured");
         }
         t.put("\n");
     }

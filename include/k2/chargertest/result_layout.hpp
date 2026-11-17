@@ -23,8 +23,9 @@
 
 namespace k2::result_layout {
 
-// Partial = some steps of the range passed, some did not; Skip = nothing ran (every step skipped); Noted = only listed: the
-// source advertises it (or a Light run did not ask for it), so nothing was measured there and nothing failed.
+// Partial = some steps of the range passed, some did not; Skip = nothing ran (every step skipped); Noted = only listed: a Light run
+// did not ask for it (a legacy level, a UFCS mode, an SCP level), so nothing was measured there and nothing failed. A PD offer the
+// source advertises (advertised()) wears the pass look instead: the source has it, and a Light run only says so.
 enum class Tone : uint8_t { Pass, Fail, Partial, Pending, Dim, Caution, Skip, Noted };
 // The shape that says the verdict without the colour: check (pass), cross (fail), tilde (mixed), dash (skip), dot (pending).
 // '\x01' / '\x02' are the in-text check / cross markers of k2::draw_marked_text (include/k2/ui/text.hpp); a plain token has none (' ').
@@ -33,19 +34,24 @@ char mark(Tone);
 // more steps: a fixed level is one, a PPS / AVS range is all the steps sampling it, a legacy level is its up and down steps.
 //   a step still to run                  -> Pending   dim
 //   nothing sampled (every step skipped) -> Skip      grey, the glued tag says why
-//   only listed (Light: advertised or not asked) -> Noted  framed, neither green nor struck; beside a measured or
+//   only listed (Light: not asked)       -> Noted     framed, neither green nor struck; beside a measured or
 //                                           skipped step it adds nothing (5 V passed + 9 V listed = Pass)
+//   a PD offer the source advertises     -> Pass      green, counted as `adv` (a pass for the tone only, never in a count's words)
 //   every step passed                    -> Pass      green
 //   some passed, or the source capped    -> Partial   amber ("~")
 //   none passed                          -> Fail      red
 // A Capped step (ct::Reason::Capped: the source plateaued below the target) counts as `capped`, not as `fail`.
 // A caution step (a Pass that carries ct::Reason::Folded: the output folded back inside a sweep) counts as `capped` too, never as
 // `pass` and never as `fail`: the source delivered every level, and one of them is worth a second look (amber, "CAUTION").
-// A Skip step whose reason is Advertised or LightLevel (a Light run's listing) counts as `noted`, not as `skip`.
-struct Tally { unsigned pass = 0, fail = 0, capped = 0, skip = 0, noted = 0, pending = 0; };
+// A Skip step whose reason is Advertised or LightLevel (a Light run's listing) counts as `noted`, not as `skip`; an advertised PD
+// offer (advertised()) is also counted in `adv`, which roll_up reads as a pass.
+struct Tally { unsigned pass = 0, fail = 0, capped = 0, skip = 0, noted = 0, pending = 0, adv = 0; };
 Tone roll_up(const Tally&);
 // A Light run's listing: a Skip whose reason is Advertised or LightLevel (counted as `noted`, drawn as kit::Verdict::Noted).
 bool noted(const charger_test::Step& s);
+// A PD offer a Light run lists without asking for it (a fixed PDO, a PPS / AVS APDO, an EPR level the source listed): the source
+// advertises it, so it is drawn with the pass look (kit::Verdict::Pass) while its band word stays LISTED. Not UFCS, SCP or a legacy level.
+bool advertised(const charger_test::Step& s);
 // A voltage fold the deep sweep found: a Pass that carries Reason::Folded (the sweep row, and the fixed rows of the same APDO
 // that sit on the folded side). A caution, drawn kit::Verdict::Partial.
 bool caution(const charger_test::Step& s);
@@ -176,6 +182,7 @@ struct Reach {
     bool floored = false;
     uint16_t floor_mv = 0;   // the level a Floored low row measured (the source's floor)
     bool needs_load = false;
+    bool listed = false;     // the range was only advertised (a Light run): nothing measured, the source has it
     Tone tone = Tone::Skip;
 };
 Reach reach(std::span<const charger_test::Step>, charger_test::Algorithm, int pos = -1);

@@ -423,8 +423,8 @@ static void test_light_run_chips_read_noted() {
     rl::Layout l; rl::build(l, s);
     const auto& pd = l.rows[row_of(l, "PD3.x")];
     CHECK_EQ(int(l.tokens[pd.first].tone), int(rl::Tone::Pass));        // 5 V was asked and measured
-    CHECK_EQ(int(l.tokens[pd.first + 1].tone), int(rl::Tone::Noted));   // 9 V only listed
-    CHECK_EQ(int(l.tokens[l.rows[row_of(l, "PPS")].first].tone), int(rl::Tone::Noted));   // never a whole-range verdict
+    CHECK_EQ(int(l.tokens[pd.first + 1].tone), int(rl::Tone::Pass));    // 9 V is advertised by the source: the pass look, no request went out
+    CHECK_EQ(int(l.tokens[l.rows[row_of(l, "PPS")].first].tone), int(rl::Tone::Pass));    // an advertised range reads green too
     const auto& qc = l.rows[row_of(l, "QC2")];
     CHECK_STR(chips(l, row_of(l, "QC2")).c_str(), "5V 9V 12V");
     CHECK_EQ(int(l.tokens[qc.first].tone), int(rl::Tone::Pass));
@@ -439,6 +439,14 @@ static void test_light_run_chips_read_noted() {
     CHECK_STR(rl::verdict_word(step(A::Pps, 11000, V::Fail, 6, 3235656292u, ct::Reason::Capped)), "CAPPED");
     CHECK_STR(rl::verdict_word(step(A::Pps, 11000, V::Fail, 6, 3235656292u, ct::Reason::Timeout)), "FAIL");
     CHECK_EQ(rl::noted(s[1]) && rl::noted(s[4]) && !rl::noted(s[0]), true);
+    // A PD offer the source advertises is green (advertised()); a legacy level nothing advertises, and a non-PD listing (a UFCS mode,
+    // an SCP level), stay Noted: the green is the PD family's "we have it", never a measured pass.
+    CHECK_EQ(rl::advertised(s[1]) && rl::advertised(s[2]) && !rl::advertised(s[0]) && !rl::advertised(s[4]), true);
+    const auto ufcs = step(A::Ufcs, 9000, V::Skip, 0, 0, ct::Reason::Advertised);
+    CHECK_EQ(rl::advertised(ufcs), false);
+    CHECK_EQ(rl::noted(ufcs), true);
+    rl::Layout lu; rl::build(lu, std::vector<ct::Step>{step(A::Ufcs, 5000, V::Pass), ufcs});
+    CHECK_EQ(int(lu.tokens[lu.rows[row_of(lu, "UFCS")].first + 1].tone), int(rl::Tone::Noted));
     // a step the port's own 5 V cut spoiled twice is a plain skip: no verdict, but never "listed" and never a pass or fail
     const auto cut = step(A::Qc2, 5000, V::Skip, 0, 0, ct::Reason::PortCuts);
     CHECK_STR(rl::verdict_word(cut), "SKIP");
@@ -548,13 +556,15 @@ static void test_reach_footer_names_the_floor() {
     CHECK_EQ(9 + rl::reach_footer(manual).len <= 27, true);
 }
 // A Light run lists a range without asking for it (Reason::Advertised): the footer says "advertised", never a shortfall
-// such as "none reached", and the range's tone is Noted (an Info footer, never amber).
+// such as "none reached", and the range's tone is Pass (the source has it: a green footer, never amber).
 static void test_reach_footer_of_a_listed_range_says_advertised() {
     const uint32_t pdo = 3248763456u;   // PPS 5-21V, slot 7
     for (const A a : {A::Pps, A::SprAvs, A::EprAvs}) {
         std::vector<ct::Step> all{step(a, 5000, V::Skip, 7, pdo, ct::Reason::Advertised), step(a, 21000, V::Skip, 7, pdo, ct::Reason::Advertised)};
         const auto r = rl::reach(all, a);
-        CHECK_EQ(int(r.tone), int(rl::Tone::Noted));
+        CHECK_EQ(int(r.tone), int(rl::Tone::Pass));
+        CHECK_EQ(r.listed, true);
+        CHECK_EQ(r.lo_mv, 0);   // nothing was measured: no "reached" span
         CHECK_STR(text_of(r, true).c_str(), "advertised");
         CHECK_EQ(9 + rl::reach_footer(r).len <= 27, true);
     }

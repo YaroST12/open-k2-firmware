@@ -8244,6 +8244,30 @@ static void test_light_run_requests_nothing_but_5v() {
         (void)scaps;
     }
 }
+// Light answers "we have EPR": the EPR levels the source lists in its informational EPR list (asked once, no EPR entry) are one
+// Advertised row each, never the cable-limit skip a Medium run gives them when the cable cannot carry EPR, never a Request.
+static void test_light_lists_the_epr_levels_as_advertised() {
+    for (const bool epr_cable : {false, true}) {
+        Fake f = epr_capable_fake();
+        f.info_mode = 1;
+        if (epr_cable) { f.in.cable_mv = 50000; f.in.cable_ma = 5000; f.in.cable_observed = true; }
+        ct::Runner r(f);
+        CHECK_EQ(r.start(f.caps, ct::with_level({.selected = ct::bit(A::Epr) | ct::bit(A::EprAvs)}, ct::Level::Light), f.in, true), ct::Reason::None);
+        f.tick(r, 90000);
+        CHECK_EQ(int(r.state()), int(ct::State::Done));
+        unsigned levels = 0;
+        for (const auto& s : r.steps()) {
+            if (s.algorithm != A::Epr && s.algorithm != A::EprAvs) continue;
+            ++levels;
+            CHECK_EQ(int(s.verdict), int(ct::Verdict::Skip));
+            CHECK_EQ(int(s.reason), int(ct::Reason::Advertised));
+        }
+        CHECK_EQ(levels >= 3, true);   // 28 V, 36 V, 48 V and the EPR AVS range of the fake's list
+        CHECK_EQ(f.info_asks, 1);
+        for (const auto& c : f.choices) { CHECK_EQ(c.pos, 1); CHECK_EQ(c.mv, 5000); CHECK_EQ(c.hunt, false); }
+        CHECK_EQ(f.entry_times.size(), size_t(0));
+    }
+}
 // ---- The PD spec stage (spec_section.hpp) of a Deep run ------------------------------------------------------------------
 // The pdspec engine runs the no-load conformance checks on the Pd unit's link, at the end of the Pd unit, once its contract is back
 // at 5 V and the charger's identity was asked. The Runner starts it through Env::spec_start, waits for Input::spec_running to drop,
@@ -8577,7 +8601,7 @@ int main() {
     test_default_sweep_on_a_low_latch_source();
     test_self_powered_run_sweeps_from_5v();
     test_legacy_row_waits_through_a_source_restart(); test_legacy_restart_wait_is_bounded_and_a_load_still_refuses();
-    test_level_maps_to_the_run_switches(); test_level_plans_per_level(); test_light_run_requests_nothing_but_5v();
+    test_level_maps_to_the_run_switches(); test_level_plans_per_level(); test_light_run_requests_nothing_but_5v(); test_light_lists_the_epr_levels_as_advertised();
     test_a_resumed_light_run_stays_light();
     test_the_page_names_the_run_level();
     test_spec_stage_runs_once_in_a_deep_pd_unit(); test_spec_stage_is_deep_only(); test_spec_refusal_is_recorded_and_the_run_goes_on(); test_spec_cancel_ends_in_order();

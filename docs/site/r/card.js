@@ -764,18 +764,28 @@ var K2Card = (function () {
   var GLYPH = {pass: "✓", partial: "~", fail: "✕", skip: "–", noted: "i"};
   var TONE_WORD = {pass: "achieved", partial: "partly", fail: "failed", skip: "not offered", noted: "detected"};
 
-  // A Light run (card.level) measured 5 V only (include/k2/chargertest/card_tone.hpp): what passed is "detected" and a range it
-  // only listed is "advertised", both in the noted tone (no fill, never green). Medium and Deep cards keep their tones.
-  function lightTone(card, tone, isRange, r) {
+  // A Light run (card.level) measured 5 V only and requested nothing else (include/k2/chargertest/card_tone.hpp). What the PD family
+  // advertises reads green ("we have it": the PD group, a range it only listed, an EPR level it listed) and says "advertised"; a
+  // legacy group that answered at 5 V stays "detected" in the noted tone (no fill, never green). Medium and Deep cards keep their tones.
+  // kind: "range" (r = the range), "pd", "epr", "group" (a legacy protocol).
+  function lightTone(card, tone, kind, r) {
     if (card.level !== "Light") return tone;
-    if (isRange) return !r.fail_mv && !r.max_mv ? "noted" : tone;
+    if (kind === "range") return !r.fail_mv && !r.max_mv ? "pass" : tone;
+    if (kind === "pd" || kind === "epr") return tone;
     return tone === "pass" ? "noted" : tone;
   }
+  // An EPR level a Light run only listed: a skip whose reason is "advertised".
+  function lightListed(card, e) { return card.level === "Light" && e.verdict === "skip" && e.reason === "advertised"; }
+  // A Light card's advertised item says so in its status; Medium and Deep keep their words.
   function lighten(card, b) {
-    var t = lightTone(card, b.tone, b.kind === "range", b.range);
-    if (t === "noted" && b.tone !== "noted") {
-      b.tone = "noted";
+    var t = lightTone(card, b.tone, b.kind, b.range);
+    if (card.level === "Light" && t === "pass" && b.kind !== "group") {
+      b.advertised = true;
+      b.tone = "pass";
       if (b.kind === "range") b.status = "advertised";
+      else if (b.kind === "pd") b.status = b.status.replace(/^levels /, "advertised ");
+    } else if (t === "noted" && b.tone !== "noted") {
+      b.tone = "noted";
     }
     delete b.range;
     return b;
@@ -902,6 +912,11 @@ var K2Card = (function () {
         status: bad ? bad + " fails" : "up to " + top};
     }
     if (failed.length) return {id: "epr", kind: "epr", tone: "fail", label: "EPR", status: failed[0] + " fails: " + (lv[failed[0]].why || lv[failed[0]].reason || "failed")};
+    var listed = names.filter(function (n) { return lightListed(card, lv[n]); });
+    if (listed.length) {   // a Light run: the source advertises EPR, nothing was requested
+      var high = listed[listed.length - 1];
+      return {id: "epr", kind: "epr", tone: "pass", label: "EPR " + high, status: "advertised up to " + high};
+    }
     var first = lv[names[0]];
     return {id: "epr", kind: "epr", tone: "skip", label: "EPR", status: first.why || first.reason || "skipped"};
   }
@@ -942,7 +957,8 @@ var K2Card = (function () {
     var rank = {pass: 0, partial: 1, fail: 2, noted: 3, skip: 4};
     out.forEach(function (b, i) {
       b.order = i; b.glyph = GLYPH[b.tone];
-      b.word = b.tone === "noted" && b.kind === "range" ? "advertised" : TONE_WORD[b.tone];
+      b.word = b.advertised ? "advertised" : TONE_WORD[b.tone];
+      delete b.advertised;
     });
     out.sort(function (a, b) { return rank[a.tone] - rank[b.tone] || a.order - b.order; });
     return out;
@@ -981,8 +997,9 @@ var K2Card = (function () {
   function row(label, value, tone) { return {label: label, value: value, tone: tone || ""}; }
 
   function groupRows(name, g, detailRow, extra, card) {
-    var tone = card ? lightTone(card, groupTone(name, g), false) : groupTone(name, g);
-    var rows = [row("Result", TONE_WORD[tone], tone)];
+    var kind = name === "PD" ? "pd" : "group";
+    var tone = card ? lightTone(card, groupTone(name, g), kind) : groupTone(name, g);
+    var rows = [row("Result", card && card.level === "Light" && kind === "pd" && tone === "pass" ? "advertised" : TONE_WORD[tone], tone)];
     var okDetail = g.detail === 14 || g.detail === 15;
     if (okDetail) rows.push(row("Max reached", g.why || "handshake ok"));
     else rows.push(row("Max reached", g.max_mv ? volts(g.max_mv) : "none"));
@@ -1004,7 +1021,7 @@ var K2Card = (function () {
       var fixed = groupRows("PD", g, true, null, card);
       if (g.verdict === "fail" && fixedPdOk(g, card.ranges)) {
         // the group's max, reason and detail describe the range that stopped early (shown under its own heading)
-        fixed = [row("Result", "fixed levels passed; a range stopped early", lightTone(card, "pass", false))];
+        fixed = [row("Result", "fixed levels passed; a range stopped early", lightTone(card, "pass", "pd"))];
         if (g.max_ma) fixed.push(row("Max current", amps(g.max_ma)));
       }
       pd.push({title: "PD fixed levels", tone: lighten(card, pdBadge(card)).tone, rows: fixed});
@@ -1024,8 +1041,10 @@ var K2Card = (function () {
       EPR_LEVELS.forEach(function (n) {
         var e = card.epr_levels[n];
         if (!e) return;
-        var tone = lightTone(card, e.verdict === "pass" ? "pass" : e.verdict === "fail" ? (e.max_mv ? "partial" : "fail") : "skip", false);
-        var rows = [row("Result", TONE_WORD[tone], tone), row("Max reached", e.max_mv ? volts(e.max_mv) : "none")];
+        var listed = lightListed(card, e);
+        var tone = listed ? "pass" : lightTone(card, e.verdict === "pass" ? "pass" : e.verdict === "fail" ? (e.max_mv ? "partial" : "fail") : "skip", "epr");
+        var rows = [row("Result", listed ? "advertised" : TONE_WORD[tone], tone)];
+        if (!listed) rows.push(row("Max reached", e.max_mv ? volts(e.max_mv) : "none"));
         if (e.fail_mv) rows.push(row("Failed at", volts(e.fail_mv), "fail"));
         if (e.why) rows.push(row("Why", e.why, tone === "pass" ? "" : "partial"));
         pd.push({title: "EPR " + n, tone: tone, rows: rows});

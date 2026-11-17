@@ -14,8 +14,9 @@
 // capped), never green and never red. The card keeps no per-step verdicts, so the fold itself is the mark; an older card that
 // stored the fold reads the same. A sweep that tracked worse than 100 mV (the block's worst_err, stored clamped to +/-127 mV) is a
 // caution too (deviates): the device's chip is amber on a passing sweep above the pass window, never red, so the card says the same.
-// A Light card (Card::level) measured 5 V only: a passing group reads Noted ("detected" / "advertised"), a range it never
-// asked for reads Noted, and the card head is Noted when nothing failed; never green.
+// A Light card (Card::level) measured 5 V only. What the PD family advertises reads green ("we have it"; nothing was requested): the PD
+// group and every range it never asked for. A legacy group that answered at 5 V reads Noted ("detected"). The card head is green
+// when PD is listed and nothing failed, Noted when only legacy groups answered.
 // The page (docs/site/r/card.js) carries the same table; tests/test_card_tone.cpp and tests/test_cardpage.mjs pin both to the
 // FH22 card.
 #pragma once
@@ -49,7 +50,7 @@ inline bool caution(const Card& c, const Range& r) { return folded(c, r) || devi
 
 inline Tone range(const Card& c, const Range& r) {
     Tally t;
-    if (c.level == ct::Level::Light && !r.fail_dv && !r.max_dv) return Tone::Noted;   // a Light run only lists the range
+    if (c.level == ct::Level::Light && !r.fail_dv && !r.max_dv) return Tone::Pass;   // a Light run only lists the range: the source advertises it
     if (r.fail_dv) {
         if (!r.max_dv) t.fail = 1;
         else if (capped(c)) t.capped = 1;
@@ -77,7 +78,7 @@ inline Tone group(const Card& c, unsigned gi) {
     const GroupResult& g = c.group[gi];
     Tally t;
     switch (g.verdict) {
-    case GV::Pass: (c.level == ct::Level::Light ? t.noted : t.pass) = 1; break;   // Light: answered at 5 V, levels not asked
+    case GV::Pass: (c.level == ct::Level::Light && gi ? t.noted : t.pass) = 1; break;   // Light: PD is advertised (green); a legacy group answered at 5 V, levels not asked
     case GV::Skip: t.skip = 1; break;
     case GV::Fail:
         if (gi == 0) {

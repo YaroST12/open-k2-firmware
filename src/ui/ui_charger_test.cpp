@@ -1683,9 +1683,11 @@ kit::Verdict vmap(ct::Verdict v) {
 // A step held a plateau below its target: amber (Partial), the same tone its chip wears (result_layout::tone). A caution (a voltage fold) is
 // amber too: vmap(Step) below.
 bool is_capped(const ct::Step& s) { return s.verdict == ct::Verdict::Fail && s.reason == ct::Reason::Capped; }
-// A Light run's listing (Advertised / LightLevel skip) is Noted, never a skip mark: the same tone its chip wears.
+// A Light run's listing is never a skip mark: a PD offer the source advertises wears the pass look, any other listing (LightLevel,
+// UFCS, SCP) is Noted: the same tones its chip wears.
 kit::Verdict vmap(const ct::Step& s, const ctsweep::View& view) {
-    return is_capped(s) || result_layout::caution(s, view) ? kit::Verdict::Partial : result_layout::noted(s) ? kit::Verdict::Noted : vmap(s.verdict);
+    return is_capped(s) || result_layout::caution(s, view) ? kit::Verdict::Partial : result_layout::advertised(s) ? kit::Verdict::Pass :
+           result_layout::noted(s) ? kit::Verdict::Noted : vmap(s.verdict);
 }
 // A CC line's reading as the Waiting page words it (the Rp ladder of a source's pull-up; "open" = no pull-up or above it).
 const char *cc_word(int mv) {
@@ -1898,10 +1900,11 @@ static FooterTone spec_footer(StrBuf<32>& f, int check, const specsec::Cell& c, 
             return rc.tone == Tone::Pass ? FooterTone::Ok : rc.tone == Tone::Partial || rc.tone == Tone::Fail ? FooterTone::Caution
                                                                                                                 : FooterTone::Info;
         }
-        unsigned pass = 0, fail = 0, listed = 0, other = 0;
+        unsigned pass = 0, fail = 0, listed = 0, other = 0, adv = 0;
         for (const auto &s : s_.runner_.steps()) {
             if (!result_layout::row_has(row, s)) continue;
             const bool noted = result_layout::noted(s);   // a Light run's listing: neither a result nor a skip
+            adv += result_layout::advertised(s);
             pass += s.verdict == ct::Verdict::Pass;
             fail += s.verdict == ct::Verdict::Fail;
             listed += noted;
@@ -1913,7 +1916,7 @@ static FooterTone spec_footer(StrBuf<32>& f, int check, const specsec::Cell& c, 
         put_part(f, listed, "listed", first);
         put_part(f, other, "other", first);
         if (first) f.put("no result");
-        return fail ? FooterTone::Caution : pass ? FooterTone::Ok : FooterTone::Info;
+        return fail ? FooterTone::Caution : pass || adv ? FooterTone::Ok : FooterTone::Info;   // advertised PD offers read green, worded "listed"
     }
     case Stage::SpecDetail: {
         const int k = s_.detail_index_;

@@ -1840,13 +1840,13 @@ static void test_step_label_gallery() {
         CHECK_EQ(ui.charger_test_stage(), 6);
         for (int i = 0; i < 60 && ui.painting(); ++i) ui.tick(t += 20);
         dump_panel("labels_rot3_results_light");
-        // A grid row's footer counts the listing apart from the results; a listed range reads "advertised" in the Info
-        // tone, never a shortfall in amber.
+        // A grid row's footer counts the listing apart from the results; a listed range reads "advertised" in the Ok
+        // tone (the source has it, nothing was asked), never a shortfall in amber.
         ui.set_rotation(0, t); top(ui, t); settle(ui, t);   // the text checks read rotation 0's panel
         CHECK_EQ(footer_shows("PD3.x: 1 pass, 3 listed", kOk), true);
         bool avs = false;
         for (int n = 0; n < 12 && !avs; ++n) {
-            avs = footer_shows("SPR AVS: advertised", kText);
+            avs = footer_shows("SPR AVS: advertised", kOk);
             if (!avs) { press(ui, Button::Plus); ui.tick(t += 100); settle(ui, t); }
         }
         CHECK_EQ(avs, true);

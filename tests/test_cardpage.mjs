@@ -357,21 +357,31 @@ test("the SCP current limit (src_flags bits 1..7, 50 mA units) decodes as scp_ma
   assert.equal(K2Card.decodePayload(p).oppo_svid, 1);
 });
 
-// include/k2/chargertest/card_tone.hpp: a Light run measured 5 V only, so a passing group reads "detected" and a range it only
-// listed reads "advertised", in the noted tone (no fill, never green); the same card at Medium keeps its greens.
-test("a Light card is noted, never green: a group reads detected, a listed range advertised", () => {
+// include/k2/chargertest/card_tone.hpp: a Light run measured 5 V only and requested nothing else, so what the PD family advertises
+// (the PD group, a listed range, a listed EPR level) reads green with the word "advertised"; a legacy group that answered at 5 V
+// stays noted ("detected", no fill); the same card at Medium keeps its words.
+test("a Light card: PD and listed ranges advertised in green, legacy groups detected and noted", () => {
   const base = K2Card.parseLink(golden.allpass.link).card;
   const card = { ...base, level: "Light", ranges: base.ranges.map((r) => ({ ...r, max_mv: 0, fail_mv: 0 })) };
   const b = K2Card.badges(card);
-  assert.ok(!b.some((x) => x.tone === "pass"));
+  const green = b.filter((x) => x.tone === "pass");
+  assert.ok(green.some((x) => x.kind === "pd") && green.some((x) => x.kind === "range"));
+  for (const x of green) assert.equal(x.word, "advertised");
+  for (const x of green.filter((x) => x.kind === "range")) assert.equal(x.status, "advertised");
   const noted = b.filter((x) => x.tone === "noted");
-  assert.ok(noted.some((x) => x.kind === "range") && noted.some((x) => x.kind !== "range"));
-  for (const x of noted) assert.equal(x.word, x.kind === "range" ? "advertised" : "detected");
-  for (const x of noted.filter((x) => x.kind === "range")) assert.equal(x.status, "advertised");
+  assert.ok(noted.length && noted.every((x) => x.kind === "group" && x.word === "detected"));
   const groups = K2Card.sections(card).flatMap((s) => s.groups);
-  assert.ok(!groups.some((g) => g.tone === "pass"));
-  assert.ok(!groups.flatMap((g) => g.rows).some((r) => r.tone === "pass"));
+  const pdRows = groups.find((g) => g.title === "PD fixed levels");
+  assert.equal(pdRows.tone, "pass");
+  assert.equal(pdRows.rows[0].value, "advertised");
+  assert.ok(groups.filter((g) => g.title !== "PD fixed levels" && /^(PPS|AVS)/.test(g.title)).every((g) => g.tone === "pass" && g.rows[0].value === "advertised"));
+  assert.ok(groups.filter((g) => noted.some((x) => x.label.startsWith(g.title))).every((g) => g.tone === "noted" && g.rows[0].value === "detected"));
   assert.ok(K2Card.badges(base).every((x) => x.tone === "pass"));   // Medium: unchanged
+  assert.ok(K2Card.badges(base).every((x) => x.word === "achieved"));
+  // an EPR level the Light run only listed (a skip with the reason "advertised") reads green too
+  const epr = { ...card, epr_levels: { "28V": { verdict: "skip", reason: "advertised", max_mv: 0, fail_mv: 0 } } };
+  const eb = K2Card.badges(epr).find((x) => x.kind === "epr");
+  assert.ok(eb && eb.tone === "pass" && eb.word === "advertised" && eb.label === "EPR 28V");
 });
 
 // A voltage fold the deep sweep found on a range that failed nothing is a caution: amber, with the note in the words of the
