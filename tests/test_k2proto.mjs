@@ -1605,6 +1605,31 @@ test("e-marker learn: run sends the options, then reads every transcript entry",
   await assert.rejects(() => k.emLearn([{ svid: 1, cmd: 32 }]), RangeError);
 });
 
+test("e-marker learn: a raw seed sends the exact header and up to six VDOs; a big entry arrives in chunks", async () => {
+  const sum = [0, 1, 1, 4, 0, 0, 1, 2, 0, 0xD9, 0x22, 0x16, 0x61];
+  const w = (x) => [x & 255, (x >>> 8) & 255, (x >>> 16) & 255, (x >>> 24) & 255];
+  const req = [0x22D9A11F, 0, 0, 0x0E4AD139, 0x2F2DF86F, 0x50111FA6, 0x70F446DC];
+  const rep = [0x22D9A15F, 0xA0000001, 0xA0000002, 0xA0000003, 0xA0000004, 0xA0000005, 0xA0000006];
+  const words = [...req, ...rep];
+  const head = [0, 0, 3, 2, 7, 1, 7, 0x5F, 0xA1];
+  const { link, sent } = rig((f) => {
+    if (f[6] === 1) return [rsp(0x61, f[3], 0, sum)];
+    const first = f[8];   // [6, 2, i] or [6, 2, i, first]: the frame is zero padded, so no first word reads 0
+    return [rsp(0x61, f[3], 0, [...head, ...words.slice(first, first + 12).flatMap(w)])];
+  });
+  const k = new P.K2Remote(link);
+  const r = await k.emLearn([{ hdr: 0x22D9A11F, vdos: req.slice(1, 7) }], false, false);
+  assert.deepEqual(Array.from(sent[0].slice(5, 13)), [6, 1, 0, 1, 0xD9, 0x22, 0xFF, 6]);
+  assert.deepEqual(Array.from(sent[0].slice(13, 15)), [0x1F, 0xA1]);
+  assert.deepEqual(Array.from(sent[0].slice(15, 19)), [0, 0, 0, 0]);   // VDO 1
+  assert.deepEqual(Array.from(sent[0].slice(23, 27)), [0x39, 0xD1, 0x4A, 0x0E]);   // VDO 3
+  assert.deepEqual(r.entries[0].request, req);
+  assert.deepEqual(r.entries[0].reply, rep);
+  assert.deepEqual(Array.from(sent[2].slice(5, 9)), [6, 2, 0, 12]);   // the second chunk asks from word 12
+  await assert.rejects(() => k.emLearn([{ hdr: 0x22D9A11F, vdos: [1, 2, 3, 4, 5, 6, 7] }]), RangeError);
+  await assert.rejects(() => k.emLearn([0, 1].map(() => ({ hdr: 0x22D9A11F, vdos: req.slice(1, 7) }))), RangeError);
+});
+
 test("e-marker learn: the summary carries the answered combination when the firmware sends it", async () => {
   const sum = [0, 1, 1, 4, 0, 0, 0, 2, 0, 0xD9, 0x22, 0x16, 0x61];
   let { link } = rig((f) => [rsp(0x61, f[3], 0, [...sum, 2, 2, 1, 2])]);

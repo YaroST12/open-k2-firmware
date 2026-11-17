@@ -136,9 +136,42 @@ class Learn(unittest.TestCase):
     def test_seed_text(self):
         self.assertEqual(kr.parse_seed("22D9:31"), (0x22D9, 31, []))
         self.assertEqual(kr.parse_seed("1234:17:0xAABBCCDD:1"), (0x1234, 17, [0xAABBCCDD, 1]))
-        for bad in ("22D9", "22D9:32", "zz:1", "22D9:1:1:2:3", "10000:1"):
+        self.assertEqual(kr.parse_seed("22D9:31:1:2:3:4:5:6")[2], [1, 2, 3, 4, 5, 6])   # up to six objects after the header
+        for bad in ("22D9", "22D9:32", "zz:1", "22D9:1:1:2:3:4:5:6:7", "10000:1"):
             with self.assertRaises(kr.FcRefused):
                 kr.parse_seed(bad)
+
+    def test_raw_seed_text(self):
+        # The OnePlus 120W brick's cable command: header 0x22D9A11F, position 1, then six VDOs.
+        s = kr.parse_seed_raw("22D9A11F:0:0:0E4AD139:2F2DF86F:50111FA6:70F446DC")
+        self.assertEqual(s, (0x22D9, kr.RAW_CMD, [0, 0, 0x0E4AD139, 0x2F2DF86F, 0x50111FA6, 0x70F446DC], 0xA11F))
+        self.assertEqual(kr.parse_seed_raw("0x22D9A11F"), (0x22D9, kr.RAW_CMD, [], 0xA11F))
+        for bad in ("", "22D9A11F:", "22D9A11F:zz", "122D9A11F", "-1", "22D9A11F:0:0:0:0:0:0:0", "22D9A11F:100000000", "xyz"):
+            with self.assertRaises(kr.FcRefused):
+                kr.parse_seed_raw(bad)
+
+    def test_raw_seed_options_bytes(self):
+        raw = kr.parse_seed_raw("22D9A11F:0:0:0E4AD139:2F2DF86F:50111FA6:70F446DC")
+        wire = bytes([0, 1, 0xD9, 0x22, 0xFF, 6, 0x1F, 0xA1,
+                      0, 0, 0, 0, 0, 0, 0, 0, 0x39, 0xD1, 0x4A, 0x0E, 0x6F, 0xF8, 0x2D, 0x2F,
+                      0xA6, 0x1F, 0x11, 0x50, 0xDC, 0x46, 0xF4, 0x70])   # the same bytes tests/test_emk_learn.cpp parses
+        self.assertEqual(kr.encode_learn_options([raw]), wire)
+        self.assertEqual(len(wire) - 2, 30)
+        # A raw seed with no objects, in order with a structured one.
+        self.assertEqual(kr.encode_learn_options([(0x1234, 17, [1]), kr.parse_seed_raw("12345678")], False, True),
+                         bytes([2, 2, 0x34, 0x12, 17, 1, 1, 0, 0, 0, 0x34, 0x12, 0xFF, 0, 0x78, 0x56]))
+        # The request is one frame: 57 option bytes. Two full raw seeds do not fit; one plus a four-object one does.
+        with self.assertRaises(kr.FcRefused):
+            kr.encode_learn_options([raw, raw])
+        self.assertEqual(len(kr.encode_learn_options([raw, kr.parse_seed_raw("22D9A11F:1:2:3:4")])) - 2, 30 + 22)
+        self.assertEqual(len(kr.encode_learn_options([raw, kr.parse_seed_raw("22D9A11F:1:2:3:4:5")])) - 2, 30 + 26)   # 56 of 57
+        with self.assertRaises(kr.FcRefused):
+            kr.encode_learn_options([raw, kr.parse_seed_raw("22D9A11F:1:2:3:4:5:6")])
+        # Four small raw seeds are fine, a fifth is refused.
+        small = kr.parse_seed_raw("22D9A11F")
+        self.assertEqual(len(kr.encode_learn_options([small] * 4)), 2 + 4 * 6)
+        with self.assertRaises(kr.FcRefused):
+            kr.encode_learn_options([small] * 5)
 
     def test_options_bytes(self):
         self.assertEqual(kr.encode_learn_options([], False, False), bytes([0, 0]))
@@ -166,6 +199,29 @@ class Learn(unittest.TestCase):
         self.assertIn("ACK", text)
         self.assertIn("0xAB01CD02", text)
         self.assertIn("saved as id 4", text)
+
+    def test_cli_mixes_seed_and_seed_raw_in_order(self):
+        a = kr.build_parser().parse_args(["emarker", "learn", "--seed", "22D9:31", "--seed-raw", "22D9A11F:1", "--seed", "1234:17"])
+        self.assertEqual([kr.parse_any_seed(t) for t in a.seed],
+                         [(0x22D9, 31, []), (0x22D9, kr.RAW_CMD, [1], 0xA11F), (0x1234, 17, [])])
+
+    def test_a_big_entry_is_fetched_in_chunks(self):
+        # Seven request words and a seven-word answer: 65 bytes, more than a 58-byte response. The K2 sends the entry
+        # header with up to 12 words, then the rest from the word index the tool asks for.
+        req = [0x22D9A11F, 0, 0, 0x0E4AD139, 0x2F2DF86F, 0x50111FA6, 0x70F446DC]
+        rep = [0x22D9A15F] + [0xA0000000 + i for i in range(1, 7)]
+        full = entry(1, 3, req, rep)
+        chunk0 = full[:9 + 4 * 12]
+        chunk1 = full[:9] + full[9 + 4 * 12:]
+        r, l = run(["emarker", "learned"], [summary(entries=2), entry(0, 0, [0xFF00A001], [0xFF00A041]), chunk0, chunk1])
+        self.assertEqual([s[1] for s in l.sent[1:]], [bytes([6, 2, 0]), bytes([6, 2, 1]), bytes([6, 2, 1, 12])])
+        self.assertEqual(r["entries"][1]["request"], req)
+        self.assertEqual(r["entries"][1]["reply"], rep)
+        self.assertIn("0x70F446DC", kr.render("emarker", r))
+        self.assertEqual(r["entries"][0]["request"], [0xFF00A001])
+        # A chunk that brings no words is an error, not a loop.
+        with self.assertRaises(kr.EmLibFailed):
+            run(["emarker", "learned"], [summary(entries=1), chunk0, full[:9]])
 
     def test_busy_and_nothing_to_save(self):
         with self.assertRaises(kr.EmLibFailed):
