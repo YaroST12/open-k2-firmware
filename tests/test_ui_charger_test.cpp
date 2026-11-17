@@ -888,7 +888,7 @@ static void test_tools_spoof_survives_a_runs_end() {
         start_press(ui, 1600); confirm_press(ui, 1700);
         CHECK_EQ(ui.charger_test_busy(), true);
         uint32_t now = 1800;
-        const auto passes = [&] { unsigned n = 0; for (const auto& s : ui.charger_test_results().steps()) n += s.verdict == ct::Verdict::Pass; return n; };
+        const auto passes = [&] { unsigned n = 0; for (const auto& s : ui.charger_test_results().steps()) n += s.verdict == ct::Verdict::Pass || s.verdict == ct::Verdict::Fail; return n; };
         for (; now <= 60000 && passes() < 1; now += 100) ui.tick(now);
         g_stub.pm.vbus_mv = 0;
         for (const uint32_t end = now + 1000; now < end; now += 100) ui.tick(now);
@@ -1850,12 +1850,12 @@ static void test_step_label_gallery() {
             if (!avs) { press(ui, Button::Plus); ui.tick(t += 100); settle(ui, t); }
         }
         CHECK_EQ(avs, true);
-        ui.set_rotation(3, t); top(ui, t); settle(ui, t); press(ui, Button::Ok, t);   // the PD line's Steps, then its second row (9 V: Advertised)
+        ui.set_rotation(3, t); top(ui, t); settle(ui, t); press(ui, Button::Ok, t);   // the PD line's Steps, then its third row (top-down order: 20 V, 15 V, 9 V: Advertised)
         if (ui.charger_test_stage() == 7) {
             for (int i = 0; i < 60 && ui.painting(); ++i) ui.tick(t += 20);
             dump_panel("labels_rot3_steps_light");
-            ui.set_rotation(0, t); move(ui, 1, t); settle(ui, t);
-            check_row_note(1, "LISTED PDO #2");   // the focused note: the band word, no skip cause
+            ui.set_rotation(0, t); move(ui, 2, t); settle(ui, t);
+            check_row_note(2, "LISTED PDO #2");   // the focused note: the band word, no skip cause
             ui.set_rotation(3, t); settle(ui, t); press(ui, Button::Ok, t);
             for (int i = 0; i < 60 && ui.painting(); ++i) ui.tick(t += 20);
             dump_panel("labels_rot3_detail_light");
@@ -2620,7 +2620,7 @@ static void test_abandoned_resume_releases_the_runs_identity() {
         CHECK_EQ(g_stub.spoof_on, true);
         const auto count_pass = [&] {
             unsigned n = 0;
-            for (const auto& s : ui.charger_test_results().steps()) n += s.verdict == ct::Verdict::Pass;
+            for (const auto& s : ui.charger_test_results().steps()) n += s.verdict == ct::Verdict::Pass || s.verdict == ct::Verdict::Fail;   // decided (top-down: the stub holds 5 V, the high rows fail first)
             return n;
         };
         for (; now <= 60000 && count_pass() < 1; now += 100) ui.tick(now);
@@ -2788,7 +2788,7 @@ static void interrupted_run(bool unattended) {
         CHECK_EQ(g_stub.journal_meta.units.n, 2);
         const auto count_pass = [&] {
             unsigned n = 0;
-            for (const auto& s : ui.charger_test_results().steps()) n += s.verdict == ct::Verdict::Pass;
+            for (const auto& s : ui.charger_test_results().steps()) n += s.verdict == ct::Verdict::Pass || s.verdict == ct::Verdict::Fail;   // decided (top-down: the stub holds 5 V, the high rows fail first)
             return n;
         };
         uint32_t now = 1500;
@@ -3143,7 +3143,7 @@ static void test_self_powered_vbus_loss_keeps_the_journal_open() {
     CHECK_EQ(ui.charger_test_busy(), true);
     const auto count_pass = [&] {
         unsigned n = 0;
-        for (const auto& s : ui.charger_test_results().steps()) n += s.verdict == ct::Verdict::Pass;
+        for (const auto& s : ui.charger_test_results().steps()) n += s.verdict == ct::Verdict::Pass || s.verdict == ct::Verdict::Fail;   // decided (top-down: the stub holds 5 V, the high rows fail first)
         return n;
     };
     uint32_t now = 1500;
@@ -3186,7 +3186,7 @@ static void test_bus_powered_run_behaves_like_self_powered() {
     CHECK_EQ(g_stub.journal_meta.unattended, true);
     const auto count_pass = [&] {
         unsigned n = 0;
-        for (const auto& s : ui.charger_test_results().steps()) n += s.verdict == ct::Verdict::Pass;
+        for (const auto& s : ui.charger_test_results().steps()) n += s.verdict == ct::Verdict::Pass || s.verdict == ct::Verdict::Fail;   // decided (top-down: the stub holds 5 V, the high rows fail first)
         return n;
     };
     uint32_t now = 1500;

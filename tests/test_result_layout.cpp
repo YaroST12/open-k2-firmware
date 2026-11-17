@@ -64,6 +64,24 @@ static void test_failed_and_skipped_fixed_chips() {
     CHECK_EQ(int(l.tokens[r.first + 1].tone), int(rl::Tone::Fail));
     CHECK_EQ(int(l.tokens[r.first + 2].tone), int(rl::Tone::Skip));   // a skip is its own tone (grey dash), not "some passed"
 }
+// The plan runs the fixed rows from the top voltage down (2026-11-17); the grid still reads left to right, ascending, with a chip's
+// reason tag glued behind it, and each chip keeps its own level (the Running view finds the step in flight by it).
+static void test_fixed_chips_read_ascending_whatever_the_plan_order() {
+    std::vector<ct::Step> s;
+    const uint32_t fixed[] = {167874860u, 184620u, 246060u, 307500u, 409935u};
+    const unsigned mv[] = {5000, 9000, 12000, 15000, 20000};
+    for (int i = 4; i >= 0; --i) s.push_back(step(A::Pd3Fixed, mv[i], V::Pass, uint8_t(i + 1), fixed[i]));   // 20 V first, 5 V last
+    s[0] = step(A::Pd3Fixed, 20000, V::Skip, 5, fixed[4], ct::Reason::CableLimit);   // a tagged chip travels with its voltage
+    s[4].verdict = V::Running;
+    rl::Layout l; rl::build(l, s);
+    const size_t r = row_of(l, "PD3.x");
+    CHECK_STR(chips(l, r).c_str(), "5V 3A 9V 3A 12V 3A 15V 3A 20V 3.35A cable");
+    CHECK_EQ(int(l.tokens[l.rows[r].first].mv), 5000);
+    CHECK_EQ(int(l.tokens[l.rows[r].first].tone), int(rl::Tone::Pending));   // the 5 V row in flight is the first chip
+    CHECK_EQ(int(l.tokens[l.rows[r].first + 4].mv), 20000);
+    CHECK_EQ(int(l.tokens[l.rows[r].first + 4].tone), int(rl::Tone::Skip));
+    CHECK_EQ(l.tokens[l.rows[r].first + 5].glue, true);
+}
 static void test_marks_give_each_verdict_its_own_shape() {
     CHECK_EQ(int(rl::mark(rl::Tone::Pass)), 1);   // check
     CHECK_EQ(int(rl::mark(rl::Tone::Fail)), 2);   // cross
@@ -1326,6 +1344,7 @@ int main() {
     test_headers_can_be_left_out();
     test_fixed_pd_chips_carry_advertised_current();
     test_failed_and_skipped_fixed_chips();
+    test_fixed_chips_read_ascending_whatever_the_plan_order();
     test_marks_give_each_verdict_its_own_shape();
     test_chip_width_includes_the_mark_cell();
     test_pps_one_coloured_chip_per_range();

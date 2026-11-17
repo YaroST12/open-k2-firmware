@@ -165,14 +165,26 @@ void tag(Builder& b, const ct::Step& x) {
     if (const char* t = skip_tag(x))
         if (Token* k = b.token(false, Tone::Caution, true)) std::strncpy(k->text, t, sizeof k->text - 1);
 }
+// The plan runs the fixed levels from the top voltage down, the grid reads them left to right ascending: chips go out in
+// (voltage, plan index) order, one selection pass per chip (at most kMaxSteps steps, no scratch array).
 void fixed_row(Builder& b, std::span<const ct::Step> s, A a) {
-    for (const auto& x : s) {
-        if (x.algorithm != a || !x.mv || x.hunt) continue;   // a 6 A probe is a row of its own (probe_row)
-        Token* k = b.token(true, tone(x));
+    uint32_t done = 0;   // the sort key of the chip emitted last; keys are unique and start above 0
+    for (;;) {
+        const ct::Step* next = nullptr;
+        uint32_t best = UINT32_MAX;
+        for (size_t i = 0; i < s.size(); ++i) {
+            const auto& x = s[i];
+            if (x.algorithm != a || !x.mv || x.hunt) continue;   // a 6 A probe is a row of its own (probe_row)
+            const uint32_t key = (uint32_t(x.mv) << 10) | uint32_t(i);
+            if (key > done && key < best) { best = key; next = &x; }
+        }
+        if (!next) return;
+        done = best;
+        Token* k = b.token(true, tone(*next));
         if (!k) return;
-        k->mv = x.mv;
-        put_text(*k, step_label::params(x).c_str());   // "9V 3A", "20V 3.35A", "28V 5A"
-        tag(b, x);
+        k->mv = next->mv;
+        put_text(*k, step_label::params(*next).c_str());   // "9V 3A", "20V 3.35A", "28V 5A"
+        tag(b, *next);
     }
 }
 // One chip for one APDO (`pos`): the row is one advertised range, so a probe the plan runs between two APDOs lands

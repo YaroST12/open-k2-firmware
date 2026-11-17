@@ -83,6 +83,15 @@ another. The runner does this:
   wait, not the reading at the timeout. A source-side Rp drop during the wait (caps gone, no active CC) restarts the
   wait once (`slow-rp-wake`: the standby pull-up answers ~1.1-1.7 s after a steady Rd) instead of letting the timer
   run on.
+- **PD fixed rows run from the top voltage down** (2026-11-17). SPR fixed rows, and the EPR fixed rows inside their own section,
+  are planned highest PDO first and the 5 V row last; every row still starts from a 5 V return (the rows are not continuous),
+  so each Request is an up-step from 5 V. Reason: a two-port splitter (Anker, pattern `budget-reannounce-mid-run`) re-splits its budget about 4-4.5 s
+  after announcing and withdraws the high rows; asking them first catches them while the offer stands (the withdrawn wait,
+  `kWithdrawnWaitMs`, runs from the last row of the unit and the re-plan matches rows by voltage as before). PPS / AVS sweeps,
+  the Mi 6A hunt and the EPR entry keep their order. The result layout is not touched: `result_layout::fixed_row` draws the chips
+  ascending by voltage whatever the plan order, so the Running view still finds its running chip by `Token::mv` and the grid reads 5 V first.
+  The Steps list stays in execution order. Host tests: `test_fixed_pd_rows_are_requested_from_the_top_voltage_down` (`test_charger_test`),
+  `test_fixed_chips_read_ascending_whatever_the_plan_order` (`test_result_layout`).
 - A **programmable row dropped at no load** is a skip, not a failure (pattern `pps-off-at-no-load`, suspected, in
   `docs/CHARGER_QUIRKS.md`). The runner latches per Request: the sink was Accepted (it waited in Transition), PS_RDY
   was never seen for the row's own PDO and level, and the highest current the port drew. A PPS / SPR AVS / EPR AVS row
