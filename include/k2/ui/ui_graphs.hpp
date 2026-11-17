@@ -36,6 +36,13 @@ private:
     bool paint_head(int k, const Shown &s, bool digits);
     bool paint_info(const Shown &s, bool digits);
     bool paint_graph(int k);
+    static constexpr uint16_t band_color(int k) {
+        return k == 0 ? kWatt : k == 1 ? kVolt : k == 2 ? kAmp : kEnergy;
+    }
+    static constexpr uint16_t tone(home::Mode m, uint16_t live) {
+        return m == home::Mode::Live ? live : m == home::Mode::Stale ? kStale : kFaint;
+    }
+    static bool admit(PaintBudget *bg, int px) { return !bg || bg->admit(px, true); }
     void want(int k, Col (&out)[graphs::kCols]) const;
     void paint_col(int k, int c, const Col &now, int r0, int r1) const;
     // Left x of the newest point's 3 x 3 dot: one pixel before the right-most column, kept inside the graph.
