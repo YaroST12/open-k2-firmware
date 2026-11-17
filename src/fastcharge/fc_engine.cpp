@@ -47,30 +47,17 @@ constexpr std::uint32_t kAfcRetryLowMs = 100; // D- low before the one retry of 
 }  // namespace
 
 const char* name(Proto p) {
-    switch (p) {
-    case Proto::Qc2: return "QC2";
-    case Proto::Qc3: return "QC3";
-    case Proto::Qc3Plus: return "QC3+";
-    case Proto::Afc: return "AFC";
-    case Proto::Fcp: return "FCP";
-    case Proto::Scp: return "SCP";
-    case Proto::Vooc: return "VOOC";
-    case Proto::SuperVooc: return "SVOOC";
-    case Proto::SuperVooc65: return "SVOOC65";
-    case Proto::Ufcs: return "UFCS";
-    case Proto::Vivo: return "VIVO";
-    default: return "?";
-    }
+    static constexpr const char* const kNames[] = {
+        "QC2", "QC3", "QC3+", "AFC", "FCP", "SCP", "VOOC", "SVOOC", "SVOOC65", "UFCS", "VIVO",
+    };
+    const auto i = static_cast<std::size_t>(p);
+    return i < std::size(kNames) ? kNames[i] : "?";
 }
 
 const char* name(State s) {
-    switch (s) {
-    case State::Idle: return "idle";
-    case State::Negotiating: return "negotiating";
-    case State::Active: return "active";
-    case State::Failed: return "failed";
-    }
-    return "?";
+    static constexpr const char* const kNames[] = {"idle", "negotiating", "active", "failed"};
+    const auto i = static_cast<std::size_t>(s);
+    return i < std::size(kNames) ? kNames[i] : "?";
 }
 
 const char* log_name(State s, Fail f) {
@@ -78,25 +65,13 @@ const char* log_name(State s, Fail f) {
 }
 
 const char* name(Fail f) {
-    switch (f) {
-    case Fail::None: return "none";
-    case Fail::NeedConfirm: return "need confirm";
-    case Fail::OverLimit: return "over limit";
-    case Fail::NoMonitor: return "no power monitor";
-    case Fail::Busy: return "busy";
-    case Fail::Unsupported: return "unsupported";
-    case Fail::NoHandshake: return "no handshake";
-    case Fail::NoResponse: return "no response";
-    case Fail::NoBand: return "voltage not reached";
-    case Fail::Overvoltage: return "overvoltage";
-    case Fail::SourceLost: return "source lost";
-    case Fail::Aborted: return "aborted";
-    case Fail::Inline: return "PD or load active";
-    case Fail::NeedsLoad: return "needs load";
-    case Fail::NoVoltage: return "handshake ok";
-    case Fail::Detected: return "detected";
-    }
-    return "?";
+    static constexpr const char* const kNames[] = {
+        "none", "need confirm", "over limit", "no power monitor", "busy", "unsupported",
+        "no handshake", "no response", "voltage not reached", "overvoltage", "source lost", "aborted",
+        "PD or load active", "needs load", "handshake ok", "detected",
+    };
+    const auto i = static_cast<std::size_t>(f);
+    return i < std::size(kNames) ? kNames[i] : "?";
 }
 
 Fail Engine::validate(Proto p, int& target_mv, bool confirmed) const {
@@ -346,13 +321,16 @@ void Engine::ufcs_implicit_ack() {
     }
 }
 
+void Engine::rx_shift(std::size_t n) {
+    if (n == 0) return;
+    for (std::size_t i = n; i < ux_n_; ++i) ux_[i - n] = ux_[i];
+    ux_n_ -= n;
+}
+
 // Next complete frame from the receive accumulator (valid until the next call), false when none yet.
 bool Engine::ufcs_take(ufcs::Frame& f) {
-    if (ux_drop_ > 0) {
-        std::copy(ux_.begin() + static_cast<std::ptrdiff_t>(ux_drop_), ux_.begin() + static_cast<std::ptrdiff_t>(ux_n_), ux_.begin());
-        ux_n_ -= ux_drop_;
-        ux_drop_ = 0;
-    }
+    rx_shift(ux_drop_);
+    ux_drop_ = 0;
     if (ux_n_ < ux_.size()) ux_n_ += env_.ufcs_recv(std::span(ux_).subspan(ux_n_));
     for (;;) {
         std::size_t used = 0;
@@ -367,8 +345,7 @@ bool Engine::ufcs_take(ufcs::Frame& f) {
         if (used == 0 && ux_n_ == ux_.size()) { used = ux_n_; why = ufcs::Why::Overflow; }   // a full buffer without a frame is garbage
         if (used > 0) {
             env_.log_ufcs_drop({ux_.data(), ux_n_}, used, why);
-            std::copy(ux_.begin() + static_cast<std::ptrdiff_t>(used), ux_.begin() + static_cast<std::ptrdiff_t>(ux_n_), ux_.begin());
-            ux_n_ -= used;
+            rx_shift(used);
         }
         if (r == ufcs::Parse::Need) return false;
     }
@@ -642,21 +619,15 @@ void Engine::ufcs_poll(std::uint32_t now) {
 
 // Next complete VIVO frame from the receive accumulator, false when none yet.
 bool Engine::vivo_take(vivo::Reply& r) {
-    if (ux_drop_ > 0) {
-        std::copy(ux_.begin() + static_cast<std::ptrdiff_t>(ux_drop_), ux_.begin() + static_cast<std::ptrdiff_t>(ux_n_), ux_.begin());
-        ux_n_ -= ux_drop_;
-        ux_drop_ = 0;
-    }
+    rx_shift(ux_drop_);
+    ux_drop_ = 0;
     if (ux_n_ < ux_.size()) ux_n_ += env_.ufcs_recv(std::span(ux_).subspan(ux_n_));
     for (;;) {
         std::size_t used = 0;
         const auto p = vivo::decode({ux_.data(), ux_n_}, r, used);
         if (p == vivo::Parse::Ok) { ux_drop_ = used; return true; }
         if (used == 0 && ux_n_ == ux_.size()) used = ux_n_;
-        if (used > 0) {
-            std::copy(ux_.begin() + static_cast<std::ptrdiff_t>(used), ux_.begin() + static_cast<std::ptrdiff_t>(ux_n_), ux_.begin());
-            ux_n_ -= used;
-        }
+        if (used > 0) rx_shift(used);
         if (p == vivo::Parse::Need) return false;
     }
 }
@@ -756,6 +727,14 @@ void Engine::vivo_poll(std::uint32_t now) {
     }
 }
 
+namespace {
+constexpr std::array<Step, kVoocBurstSteps> kVoocBurst = [] {
+    std::array<Step, kVoocBurstSteps> w{};
+    for (std::size_t i = 0; i < w.size(); ++i) w[i] = {i % 2 == 0 ? Drive::V3p3 : Drive::V0, Drive::HiZ, 300};
+    return w;
+}();
+}  // namespace
+
 // VOOC wake, D- released (HiZ) so the adapter's D+/D- short carries it, then D+ / D- listen (inputs only). Odd tries play
 // the phone's burst of the 2026-11-11 capture (reverse-engineered): D+ 40 x (3.3 V 300 us, 0 V 300 us), 24 ms, ending low;
 // the adapter clocked its first ident 539 ms after it. Even tries play the 13-period train of the 2026-11-02 work: 13 x
@@ -765,10 +744,8 @@ void Engine::vooc_wake() {
     ++vooc_tries_;
     env_.set_dm(Drive::HiZ);
     if (vooc_tries_ % 2 == 1) {
-        std::array<Step, kVoocBurstSteps> w{};
-        for (std::size_t i = 0; i < w.size(); ++i) w[i] = {i % 2 == 0 ? Drive::V3p3 : Drive::V0, Drive::HiZ, 300};
-        env_.play(w);
-    } else {
+        env_.play(kVoocBurst);
+    } else {   // built at run time: as a constexpr table it costs more flash (440 B) than the code that fills it
         std::array<Step, kVoocTrainSteps> w{};
         std::size_t n = 0;
         for (int i = 0; i < 13; ++i) {
@@ -1076,52 +1053,8 @@ void Engine::poll() {
     busy_ = false;
 }
 
-void Engine::poll_step() {
-    if (state_ != State::Negotiating && state_ != State::Active) return;
-    const std::uint32_t now = env_.now_ms();
-    const int vbus = env_.vbus_mv();
-    if (vbus < 0) return abort(Fail::NoMonitor);
-    reached_mv_ = vbus;
-    // A down-target below where VBUS started, with VBUS not risen above that start level, is a target that was never
-    // reached (the row ends as "voltage not reached"), not an overvoltage.
-    const bool unmoved = entry_mv_ > 0 && target_mv_ < entry_mv_ && vbus <= entry_mv_ * 103 / 100;
-    if (vbus > env_.ceiling_mv()) return abort(Fail::Overvoltage);   // the monitor's own limit: an overvoltage whoever answered
-    if (env_.hv_locked() && (target_mv_ > kLockMv || vbus > kLockVbusMv)) return abort(Fail::OverLimit);   // HID-cable loop
-    // Past the target's guard band. Before the charger has answered AFC / FCP / SCP itself this is a QC-only source following the
-    // D+/D- levels: the bus is dropped all the same, but the finding is "not supported", not an overvoltage.
-    // VIVO is the same case while no frame of the charger has been heard (vheard_); its NoResponse stays as it is, that is a result of its own.
-    if (over_guard(guard_mv(), vbus) && !unmoved)
-        return abort(unacked_handshake() || (proto_ == Proto::Vivo && !vheard_) ? Fail::Unsupported : Fail::Overvoltage);
-    if (phase_ == Phase::Qc3Loop && state_ == State::Negotiating && now - band_ms_ >= kQc3TransitionMs)
-        return abort(Fail::NoBand);
-    // Open-loop bound (inferred): once the pulse size is known, the pulses sent explain a highest level; above it
-    // the charger moved on its own, which the 110 % guard alone would let through.
-    if (phase_ == Phase::Qc3Loop && qc3_learned_ && vbus > qc::open_loop_limit_mv(entry_mv_, target_mv_, qc3_step_mv_))
-        return abort(Fail::Overvoltage);
-    if (vooc_family(proto_) && env_.inline_reason() != link::Reason::None) return abort(Fail::Inline);
-
+[[gnu::noinline]] void Engine::hsb_poll(std::uint32_t now) {
     switch (phase_) {
-    case Phase::RedetectHold:
-        if (now < due_ms_) return;
-        return begin_protocol();
-    case Phase::HsDischarge: case Phase::HsFloatDp: case Phase::HsBias: case Phase::HsWaitDrop: {
-        const Fail f = hs_step(now);
-        if (f != Fail::None) return abort(f);
-        return;
-    }
-    case Phase::Qc3Enter:
-        if (now < due_ms_) return;
-        env_.set_dp(Drive::V0p6);          // continuous mode baseline
-        env_.set_dm(Drive::V3p3);
-        qc3_pending_mv_ = 0;
-        qc3_sent_ms_ = now;
-        qc3_seen_mv_ = qc3_base_mv_ = env_.vbus_mv();
-        qc3_cmd_n_ = 0;
-        qc3_learned_ = false;
-        qc3_nomove_ = qc3_dead_ = 0;
-        qc3_settle_.reset();
-        qc3_step_mv_ = qc::step_mv(proto_ == Proto::Qc3 ? qc::Mode::Qc3 : qc::Mode::Qc3Plus);
-        return go(Phase::Qc3Loop, kQc3BaselineMs);
     case Phase::HsbReset:
         if (now < due_ms_) return;
         env_.set_dm(Drive::HiZ);
@@ -1150,46 +1083,33 @@ void Engine::poll_step() {
         applied_mv_ = target_mv_;
         build_script();
         return begin_script();
-    case Phase::Script:
-        if (now < due_ms_) return;
-        return run_script();
-    case Phase::ScpKeep:
-        if (now < due_ms_) return;
-        keep_alive();
-        if (state_ == State::Failed) return;
-        break;
-    case Phase::VoocListen: {
-        // Listen only. The first ident ends the session in this poll (abort releases both lines: 0 V for 500 ms, then
-        // passive idle); every other frame is counted and left unanswered. Nothing here drives D-.
-        const int f = env_.vooc_rx(kVoocRxTimeoutUs);
-        if (vooc::heard(f)) {
-            ++vooc_frames_;
-            const std::uint8_t cmd = vooc::frame_cmd(static_cast<std::uint16_t>(f));
-            if (vooc::is_ident(cmd)) { vooc_ident_ = cmd; return abort(Fail::Detected); }
-        }
-        if (now - band_ms_ >= kVoocWakeListenMs) {
-            if (vooc_tries_ >= kVoocTries) return abort(vooc_frames_ > 0 ? Fail::NoResponse : Fail::NeedsLoad);
-            env_.set_dp(Drive::HiZ);        // rest: both lines idle, then another wake
-            env_.set_dm(Drive::HiZ);
-            return go(Phase::VoocRest, kVoocRestMs);
-        }
+    default: return;
+    }
+}
+
+[[gnu::noinline]] void Engine::vooc_poll(std::uint32_t now) {
+    if (phase_ == Phase::VoocRest) {
+        if (now >= due_ms_) vooc_wake();
         return;
     }
-    case Phase::VoocRest:
-        if (now < due_ms_) return;
-        return vooc_wake();
-    case Phase::UfcsOpen:
-    case Phase::UfcsPing:
-    case Phase::UfcsCaps:
-    case Phase::UfcsRequest:
-    case Phase::UfcsPower:
-    case Phase::UfcsKeep:
-        return ufcs_poll(now);
-    case Phase::VivoOpen:
-    case Phase::VivoSeq:
-    case Phase::VivoRun:
-        return vivo_poll(now);
-    case Phase::AfcSettle: {
+    // Listen only. The first ident ends the session in this poll (abort releases both lines: 0 V for 500 ms, then
+    // passive idle); every other frame is counted and left unanswered. Nothing here drives D-.
+    const int f = env_.vooc_rx(kVoocRxTimeoutUs);
+    if (vooc::heard(f)) {
+        ++vooc_frames_;
+        const std::uint8_t cmd = vooc::frame_cmd(static_cast<std::uint16_t>(f));
+        if (vooc::is_ident(cmd)) { vooc_ident_ = cmd; return abort(Fail::Detected); }
+    }
+    if (now - band_ms_ >= kVoocWakeListenMs) {
+        if (vooc_tries_ >= kVoocTries) return abort(vooc_frames_ > 0 ? Fail::NoResponse : Fail::NeedsLoad);
+        env_.set_dp(Drive::HiZ);        // rest: both lines idle, then another wake
+        env_.set_dm(Drive::HiZ);
+        go(Phase::VoocRest, kVoocRestMs);
+    }
+}
+
+[[gnu::noinline]] void Engine::afc_poll(std::uint32_t now) {
+    if (phase_ == Phase::AfcSettle) {
         // D+ at 0.6 V first; a BC1.2 short that is still closed (D- follows D+) has to open before the ping (qc::afc_ping_due)
         if (now < due_ms_) return;
         const int dm = env_.dm_mv();
@@ -1206,142 +1126,204 @@ void Engine::poll_step() {
         env_.set_dm(Drive::V0);   // the UART idle level
         go(Phase::AfcSend, 0);
     }
-        [[fallthrough]];
-    case Phase::AfcSend: {
-        if (now < due_ms_) return;
-        const std::uint8_t byte = *afc::afc_byte(target_mv_);
-        std::uint8_t rx[1] = {0};
-        if (sends_ == 0 && !afc_retried_) {
-            prev_mv_ = std::max(prev_mv_, applied_mv_);
-            applied_mv_ = target_mv_;
-            change_ms_ = now;
-        }
-        const bool ok = env_.xfer_once({&byte, 1}, rx);
-        env_.log_afc(++afc_n_, byte, ok ? int(rx[0]) : -1, env_.vbus_mv());
-        if (ok) {
-            ok_sends_++;
-            acked_ = true;
-        } else if (ok_sends_ == 0) {
-            // No slave ping to the first exchange: one retry once D- has sat low for a while, then the source is not answering
-            // (a QC front end follows the ping level on its own, see docs/CHARGER_QUIRKS.md qc-follows-ping-level).
-            if (afc_retried_) return abort(Fail::NoResponse);
-            afc_retried_ = true;
-            due_ms_ = env_.now_ms() + kAfcRetryLowMs;
-            return;
-        }
-        if (++sends_ < afc::kSends) {
-            due_ms_ = env_.now_ms() + afc::kSendGapMs;
-            return;
-        }
-        if (ok_sends_ == 0) return abort(Fail::NoResponse);
-        band_ms_ = env_.now_ms();
-        return go(Phase::Band, 0);
+    if (now < due_ms_) return;
+    const std::uint8_t byte = *afc::afc_byte(target_mv_);
+    std::uint8_t rx[1] = {0};
+    if (sends_ == 0 && !afc_retried_) {
+        prev_mv_ = std::max(prev_mv_, applied_mv_);
+        applied_mv_ = target_mv_;
+        change_ms_ = now;
     }
+    const bool ok = env_.xfer_once({&byte, 1}, rx);
+    env_.log_afc(++afc_n_, byte, ok ? int(rx[0]) : -1, env_.vbus_mv());
+    if (ok) {
+        ok_sends_++;
+        acked_ = true;
+    } else if (ok_sends_ == 0) {
+        // No slave ping to the first exchange: one retry once D- has sat low for a while, then the source is not answering
+        // (a QC front end follows the ping level on its own, see docs/CHARGER_QUIRKS.md qc-follows-ping-level).
+        if (afc_retried_) return abort(Fail::NoResponse);
+        afc_retried_ = true;
+        due_ms_ = env_.now_ms() + kAfcRetryLowMs;
+        return;
+    }
+    if (++sends_ < afc::kSends) {
+        due_ms_ = env_.now_ms() + afc::kSendGapMs;
+        return;
+    }
+    if (ok_sends_ == 0) return abort(Fail::NoResponse);
+    band_ms_ = env_.now_ms();
+    go(Phase::Band, 0);
+}
+
+[[gnu::noinline]] void Engine::qc3_send_pulses(qc::Mode m, int total, int cap, int vbus) {
+    const int sent = std::min(qc::batch_pulses(m, total, cap), cap);
+    const int signed_sent = total < 0 ? -sent : sent;
+    env_.log_qc3(vbus, qc3_pending_mv_, qc3_step_mv_, signed_sent);
+    if (qc3_cmd_n_ == 0 && qc3_pending_mv_ == 0) qc3_base_mv_ = vbus;
+    const qc::Dir dir = total < 0 ? qc::Dir::Down : qc::Dir::Up;
+    StepList<2 * kQc3PlusBatchPulses> list;
+    qc::pulse_train(list, m, dir, sent);
+    env_.play(list.span());
+    qc3_sent_ms_ = env_.now_ms();
+    qc3_settle_.reset();
+    qc3_pending_mv_ += signed_sent * qc3_step_mv_;
+    qc3_cmd_n_ += signed_sent;
+    due_ms_ = env_.now_ms() + kQc3GapMs;
+    state_ = State::Negotiating;
+}
+
+[[gnu::noinline]] bool Engine::qc3_poll(std::uint32_t now, int vbus, bool& rests_at_5v) {
+    if (phase_ == Phase::Qc3Enter) {
+        if (now >= due_ms_) {
+            env_.set_dp(Drive::V0p6);          // continuous mode baseline
+            env_.set_dm(Drive::V3p3);
+            qc3_pending_mv_ = 0;
+            qc3_sent_ms_ = now;
+            qc3_seen_mv_ = qc3_base_mv_ = env_.vbus_mv();
+            qc3_cmd_n_ = 0;
+            qc3_learned_ = false;
+            qc3_nomove_ = qc3_dead_ = 0;
+            qc3_settle_.reset();
+            qc3_step_mv_ = qc::step_mv(proto_ == Proto::Qc3 ? qc::Mode::Qc3 : qc::Mode::Qc3Plus);
+            go(Phase::Qc3Loop, kQc3BaselineMs);
+        }
+        return true;
+    }
+    if (now < due_ms_) return true;
+    const qc::Mode m = proto_ == Proto::Qc3 ? qc::Mode::Qc3 : qc::Mode::Qc3Plus;
+    qc3_settle_.feed(now, vbus);
+    const int moved = vbus - qc3_seen_mv_;
+    if (moved <= -kQc3MoveMv || moved >= kQc3MoveMv) {
+        qc3_seen_mv_ = vbus;
+        qc3_sent_ms_ = now;
+        if (qc3_pending_mv_ > 0) qc3_pending_mv_ = std::max(0, qc3_pending_mv_ - moved);
+        else if (qc3_pending_mv_ < 0) qc3_pending_mv_ = std::min(0, qc3_pending_mv_ - moved);
+    }
+    if (qc3_cmd_n_ != 0) {
+        const int dv = vbus - qc3_base_mv_;
+        const int adv = dv < 0 ? -dv : dv;
+        const int n = qc3_cmd_n_ < 0 ? -qc3_cmd_n_ : qc3_cmd_n_;
+        const bool shown = (dv > 0) == (qc3_cmd_n_ > 0) && adv >= n * qc3_step_mv_ / 2;
+        const bool quiet = now - qc3_sent_ms_ >= kQc3StillMs;
+        const bool stable = shown && qc3_settle_.stable() && now - qc3_sent_ms_ >= kQc3StableQuietMs;
+        if (quiet || stable) {
+            qc3_pending_mv_ = 0;
+            if ((dv > 0) == (qc3_cmd_n_ > 0) && adv >= 4 * kQc3MoveMv) {
+                const int nom = qc::step_mv(m);
+                if (m == qc::Mode::Qc3Plus && qc3_cmd_n_ >= kQc3CoarseMinPulses && adv / n > qc::kPlusCoarseStepMv) {
+                    env_.log_qc3_coarse(adv / n);
+                    abort(Fail::NoResponse);
+                    return true;
+                }
+                qc3_step_mv_ = std::clamp(adv / n, nom / 4, nom * 4);
+                qc3_learned_ = true;
+            } else if (n >= kQc3ProbePulses) {
+                qc3_learned_ = true;
+            }
+            qc3_nomove_ = adv < 2 * kQc3MoveMv ? qc3_nomove_ + n : 0;
+            if (m == qc::Mode::Qc3Plus && qc3_nomove_ >= kQc3NoResponsePulses && vbus - entry_mv_ < 150) {
+                abort(Fail::NoResponse);
+                return true;
+            }
+            qc3_dead_ = qc3_cmd_n_ > 0 && adv < 2 * kQc3MoveMv && vbus >= kQc3ClassABandMv ? qc3_dead_ + 1 : 0;
+            if (target_mv_ > kQc3ClassAMaxMv && qc3_dead_ >= kQc3DeadBatches) {
+                abort(Fail::NoBand);
+                return true;
+            }
+            qc3_base_mv_ = vbus;
+            qc3_seen_mv_ = vbus;
+            qc3_cmd_n_ = 0;
+        }
+    }
+    rests_at_5v = target_mv_ == 5000 && qc3_cmd_n_ == 0 && qc3_nomove_ > 0 && pd::is_vsafe5(vbus);
+    const int cap = m == qc::Mode::Qc3 ? kQc3BatchPulses : kQc3PlusBatchPulses;
+    int total = rests_at_5v ? 0 : qc::plan_pulses(m, vbus + qc3_pending_mv_, target_mv_, qc3_step_mv_);
+    const int mag_total = total < 0 ? -total : total;
+    if (total != 0 && !qc3_learned_) {
+        if (qc3_cmd_n_ != 0) total = 0;
+        else total = total < 0 ? -std::min(mag_total, kQc3ProbePulses) : std::min(mag_total, kQc3ProbePulses);
+    }
+    if (total != 0 && qc3_cmd_n_ != 0 && (mag_total <= cap || (total < 0) != (qc3_cmd_n_ < 0))) total = 0;
+    if (total != 0) {
+        qc3_send_pulses(m, total, cap, vbus);
+        return true;
+    }
+    due_ms_ = now + kQc3GapMs;
+    return false;
+}
+
+void Engine::poll_step() {
+    if (state_ != State::Negotiating && state_ != State::Active) return;
+    const std::uint32_t now = env_.now_ms();
+    const int vbus = env_.vbus_mv();
+    if (vbus < 0) return abort(Fail::NoMonitor);
+    reached_mv_ = vbus;
+    // A down-target below where VBUS started, with VBUS not risen above that start level, is a target that was never
+    // reached (the row ends as "voltage not reached"), not an overvoltage.
+    const bool unmoved = entry_mv_ > 0 && target_mv_ < entry_mv_ && vbus <= entry_mv_ * 103 / 100;
+    if (vbus > env_.ceiling_mv()) return abort(Fail::Overvoltage);   // the monitor's own limit: an overvoltage whoever answered
+    if (env_.hv_locked() && (target_mv_ > kLockMv || vbus > kLockVbusMv)) return abort(Fail::OverLimit);   // HID-cable loop
+    // Past the target's guard band. Before the charger has answered AFC / FCP / SCP itself this is a QC-only source following the
+    // D+/D- levels: the bus is dropped all the same, but the finding is "not supported", not an overvoltage.
+    // VIVO is the same case while no frame of the charger has been heard (vheard_); its NoResponse stays as it is, that is a result of its own.
+    if (over_guard(guard_mv(), vbus) && !unmoved)
+        return abort(unacked_handshake() || (proto_ == Proto::Vivo && !vheard_) ? Fail::Unsupported : Fail::Overvoltage);
+    if (phase_ == Phase::Qc3Loop && state_ == State::Negotiating && now - band_ms_ >= kQc3TransitionMs)
+        return abort(Fail::NoBand);
+    // Open-loop bound (inferred): once the pulse size is known, the pulses sent explain a highest level; above it
+    // the charger moved on its own, which the 110 % guard alone would let through.
+    if (phase_ == Phase::Qc3Loop && qc3_learned_ && vbus > qc::open_loop_limit_mv(entry_mv_, target_mv_, qc3_step_mv_))
+        return abort(Fail::Overvoltage);
+    if (vooc_family(proto_) && env_.inline_reason() != link::Reason::None) return abort(Fail::Inline);
+
+    bool rests_at_5v = false;
+    switch (phase_) {
+    case Phase::RedetectHold:
+        if (now >= due_ms_) begin_protocol();
+        return;
+    case Phase::HsDischarge: case Phase::HsFloatDp: case Phase::HsBias: case Phase::HsWaitDrop: {
+        const Fail f = hs_step(now);
+        if (f != Fail::None) abort(f);
+        return;
+    }
+    case Phase::Qc3Enter:
+    case Phase::Qc3Loop:
+        if (qc3_poll(now, vbus, rests_at_5v)) return;
+        break;
+    case Phase::HsbReset: case Phase::HsbBias: case Phase::HsbWake: case Phase::HsbWaitLow: case Phase::HsbFinish:
+        return hsb_poll(now);
+    case Phase::Script:
+        if (now >= due_ms_) run_script();
+        return;
+    case Phase::ScpKeep:
+        if (now < due_ms_) return;
+        keep_alive();
+        if (state_ == State::Failed) return;
+        break;
+    case Phase::VoocListen:
+    case Phase::VoocRest:
+        return vooc_poll(now);
+    case Phase::UfcsOpen: case Phase::UfcsPing: case Phase::UfcsCaps: case Phase::UfcsRequest:
+    case Phase::UfcsPower: case Phase::UfcsKeep:
+        return ufcs_poll(now);
+    case Phase::VivoOpen: case Phase::VivoSeq: case Phase::VivoRun:
+        return vivo_poll(now);
+    case Phase::AfcSettle:
+    case Phase::AfcSend:
+        return afc_poll(now);
     case Phase::Qc2Settle:
     case Phase::Band:
-    case Phase::Qc3Loop:
         break;
     default:
         return;
     }
 
-    // Continuous QC3: Active means inside the suite's pass band (-300 / +150 mV of the target, settled: no pulse still
-    // on its way), not the wide 85..110 % band; a settled miss (e.g. 9.35 V for 9 V) gets a correction, not a timeout.
-    bool band = in_band(target_mv_, vbus);
-    bool rests_at_5v = false;
-    if (phase_ == Phase::Qc3Loop) {
-        if (now < due_ms_) return;
-        const qc::Mode m = proto_ == Proto::Qc3 ? qc::Mode::Qc3 : qc::Mode::Qc3Plus;
-        qc3_settle_.feed(now, vbus);
-        // The charger slews behind the pulses (and its real step may differ from the nominal one): count what was
-        // commanded but has not shown on VBUS yet, in the step size measured on this charger.
-        // Movement is accumulated against the last consumed level, so a slow ramp (a few mV per poll) is not
-        // mistaken for an idle charger; pending is only forgotten after kQc3StillMs without any movement.
-        const int moved = vbus - qc3_seen_mv_;
-        if (moved <= -kQc3MoveMv || moved >= kQc3MoveMv) {
-            qc3_seen_mv_ = vbus;
-            qc3_sent_ms_ = now;                          // still slewing: the quiet time restarts
-            if (qc3_pending_mv_ > 0) qc3_pending_mv_ = std::max(0, qc3_pending_mv_ - moved);
-            else if (qc3_pending_mv_ < 0) qc3_pending_mv_ = std::min(0, qc3_pending_mv_ - moved);
-        }
-        // Settled = the pulses have shown on VBUS and it has stopped moving (a stable run of samples), or nothing
-        // has moved for kQc3StillMs, or the wait ran out. Until then nothing near the target is sent on top of it.
-        if (qc3_cmd_n_ != 0) {
-            const int dv = vbus - qc3_base_mv_;
-            const int adv = dv < 0 ? -dv : dv;
-            const int n = qc3_cmd_n_ < 0 ? -qc3_cmd_n_ : qc3_cmd_n_;
-            const bool shown = (dv > 0) == (qc3_cmd_n_ > 0) && adv >= n * qc3_step_mv_ / 2;
-            const bool quiet = now - qc3_sent_ms_ >= kQc3StillMs;
-            // A slow slew can pass the sample window (0.7 V/s moves 42 mV in two sample gaps), so "stable" also needs
-            // a quiet stretch with no step of kQc3MoveMv or more since the level was last consumed.
-            const bool stable = shown && qc3_settle_.stable() && now - qc3_sent_ms_ >= kQc3StableQuietMs;
-            // The wait is bounded: kQc3StillMs without movement settles it whatever the samples say, and the
-            // kQc3TransitionMs limit ends the row.
-            if (quiet || stable) {
-                qc3_pending_mv_ = 0;                     // the rest is not coming: forget it
-                if ((dv > 0) == (qc3_cmd_n_ > 0) && adv >= 4 * kQc3MoveMv) {   // measure the step it really made
-                    const int nom = qc::step_mv(m);
-                    // QC3+ pulses that move VBUS by QC3-sized steps (hardware 2026-11-08: ~180 mV per 40 us pulse, a QC3 charger
-                    // that reads the pulses as its own): that is not QC3+. Ending here, on the first measured up batch (the
-                    // probe, at most kQc3ProbePulses pulses), keeps the ramp from ever commanding volts of pulses at the
-                    // learned (clamped) step. Reported as "no response": the runner maps it to the neutral "no QC3+".
-                    if (m == qc::Mode::Qc3Plus && qc3_cmd_n_ >= kQc3CoarseMinPulses && adv / n > qc::kPlusCoarseStepMv) {
-                        env_.log_qc3_coarse(adv / n);
-                        return abort(Fail::NoResponse);
-                    }
-                    qc3_step_mv_ = std::clamp(adv / n, nom / 4, nom * 4);
-                    qc3_learned_ = true;
-                } else if (n >= kQc3ProbePulses) {
-                    qc3_learned_ = true;                 // it did not move: keep the nominal step, the band timeout decides
-                }
-                // QC3+ pulses that leave VBUS at its start level, again and again: the adapter does not do QC3+.
-                qc3_nomove_ = adv < 2 * kQc3MoveMv ? qc3_nomove_ + n : 0;
-                if (m == qc::Mode::Qc3Plus && qc3_nomove_ >= kQc3NoResponsePulses && vbus - entry_mv_ < 150)
-                    return abort(Fail::NoResponse);
-                qc3_dead_ = qc3_cmd_n_ > 0 && adv < 2 * kQc3MoveMv && vbus >= kQc3ClassABandMv ? qc3_dead_ + 1 : 0;
-                if (target_mv_ > kQc3ClassAMaxMv && qc3_dead_ >= kQc3DeadBatches) return abort(Fail::NoBand);
-                qc3_base_mv_ = vbus;
-                qc3_seen_mv_ = vbus;
-                qc3_cmd_n_ = 0;
-            }
-        }
-        // The 5 V row of a bank that rests above the pass band (hardware 2026-11-08: 5.176 V unloaded, 5.15 V is the band's
-        // top) and ignores the down pulse: pulses that moved nothing, with VBUS inside vSafe5V, mean the charger is at its
-        // 5 V output. That is done, not a reason to resend the pulse every 500 ms until the 12 s timeout. A bank that does
-        // answer the pulse moves VBUS, which clears qc3_nomove_ and keeps the normal correction; VBUS outside vSafe5V is
-        // never accepted here.
-        rests_at_5v = target_mv_ == 5000 && qc3_cmd_n_ == 0 && qc3_nomove_ > 0 && pd::is_vsafe5(vbus);
-        const int cap = m == qc::Mode::Qc3 ? kQc3BatchPulses : kQc3PlusBatchPulses;
-        int total = rests_at_5v ? 0 : qc::plan_pulses(m, vbus + qc3_pending_mv_, target_mv_, qc3_step_mv_);
-        const int mag_total = total < 0 ? -total : total;
-        if (total != 0 && !qc3_learned_) {
-            // First batch: a small probe, then wait until it has settled to learn the real step before the bulk.
-            if (qc3_cmd_n_ != 0) total = 0;
-            else total = total < 0 ? -std::min(mag_total, kQc3ProbePulses) : std::min(mag_total, kQc3ProbePulses);
-        }
-        // Within the last batch worth of the target, or when the direction flips, the next batch waits for the settle.
-        if (total != 0 && qc3_cmd_n_ != 0 && (mag_total <= cap || (total < 0) != (qc3_cmd_n_ < 0))) total = 0;
-        if (total != 0) {
-            StepList<2 * kQc3PlusBatchPulses> list;
-            const int sent = std::min(qc::batch_pulses(m, total, cap), cap);
-            const int signed_sent = total < 0 ? -sent : sent;
-            env_.log_qc3(vbus, qc3_pending_mv_, qc3_step_mv_, signed_sent);
-            if (qc3_cmd_n_ == 0 && qc3_pending_mv_ == 0) qc3_base_mv_ = vbus;
-            qc::pulse_train(list, m, total < 0 ? qc::Dir::Down : qc::Dir::Up, sent);
-            env_.play(list.span());
-            qc3_sent_ms_ = env_.now_ms();
-            qc3_settle_.reset();
-            qc3_pending_mv_ += signed_sent * qc3_step_mv_;
-            qc3_cmd_n_ += signed_sent;
-            due_ms_ = env_.now_ms() + kQc3GapMs;
-            state_ = State::Negotiating;
-            return;
-        }
-        due_ms_ = now + kQc3GapMs;
-    }
-    if (phase_ == Phase::Qc3Loop)
-        band = qc3_cmd_n_ == 0 && (qc::in_pass_band(vbus, target_mv_) || rests_at_5v);
-
+    const bool band = phase_ == Phase::Qc3Loop
+                          ? (qc3_cmd_n_ == 0 && (qc::in_pass_band(vbus, target_mv_) || rests_at_5v))
+                          : in_band(target_mv_, vbus);
+    // Phases that get here: Qc2Settle / Qc3Loop / ScpKeep wait kQc2TransitionMs (12 s) for the band, Band waits kBandTimeoutMs.
+    static_assert(kQc2TransitionMs == 12000);
     if (band) {
         state_ = State::Active;
         lost_ms_ = 0;
@@ -1349,10 +1331,7 @@ void Engine::poll_step() {
     } else if (state_ == State::Active) {
         if (lost_ms_ == 0) lost_ms_ = now;
         else if (now - lost_ms_ >= kLostMs) abort(Fail::SourceLost);
-    } else if (now - band_ms_ >= (phase_ == Phase::Qc2Settle ? kQc2TransitionMs : kBandTimeoutMs) &&
-               (phase_ == Phase::Qc2Settle || phase_ == Phase::Band || phase_ == Phase::Script)) {
-        abort(Fail::NoBand);
-    } else if (now - band_ms_ >= 12000) {
+    } else if (now - band_ms_ >= (phase_ == Phase::Band ? kBandTimeoutMs : kQc2TransitionMs)) {
         abort(Fail::NoBand);
     }
 }
