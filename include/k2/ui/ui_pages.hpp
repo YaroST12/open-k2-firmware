@@ -500,10 +500,10 @@ private:
     uint32_t run_t0_ = 0;                  // when the run entered Running (the m:ss on screen)
     StrBuf<32> message_;
     int selection_ = 0, family_ = 0, result_family_ = -1, detail_index_ = 0, detail_row_ = 0;
-    // The Steps page opened from a PD Results row lists that row's steps only (row_pick_: result_layout::row_has on this copy of
-    // the row, its range or fixed levels); any other row lists its protocol family (result_family_, -1 = all).
+    // The Steps page opened from a PD Results row lists that row's steps only (picked(): result_layout::row_has on this copy of the
+    // row, its range or fixed levels); any other row lists its protocol family (result_family_, -1 = all).
     result_layout::Row result_row_{};
-    bool row_pick_ = false;
+    const result_layout::Row* picked() const;   // result_row_ while the Steps page lists a PD row, else nullptr
     bool shows(const charger_test::Step&) const;
     // The identity the next START presents lives in ctx_.cables (the list Tools -> Spoof shares), not here.
     ctcable::Choice run_cable_{};        // the identity of the current / last run
@@ -649,7 +649,6 @@ private:
     [[gnu::noinline]] void paint_waiting(uint32_t now);
     [[gnu::noinline]] void paint_running(uint32_t now);
     [[gnu::noinline]] void paint_results();
-    [[gnu::noinline]] void paint_steps();           // the Steps list, under the grid header of the picked row's own lines
     [[gnu::noinline]] void paint_detail();
     [[gnu::noinline]] void paint_spec_detail();    // one PD spec check: its verdict, worst value, limit, count, fails, place, penalty
     [[gnu::noinline]] void paint_resume();

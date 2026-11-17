@@ -347,25 +347,28 @@ step_label::Text reach_footer(const Reach& r) {
 }
 
 step_label::Text family_footer(const char* label, const FamilyTally& c) {
-    struct Part { unsigned n; const char* word; };
-    const Part parts[] = {{c.pass, " pass"}, {c.fail, " fail"}, {c.caution, " caution"}, {c.listed, " listed"}, {c.skip, " skip"}};
-    const auto body = [&](step_label::Text& t) {
-        unsigned shown = 0;
-        for (const auto& p : parts) {
-            if (!p.n || shown == 2) continue;
-            if (shown++) put_word(t, ", ");
-            char d[12]; unsigned k = 0;
-            for (unsigned v = p.n; v; v /= 10) d[k++] = char('0' + v % 10);
-            while (k && t.len + 1 < step_label::kMax) t.s[t.len++] = d[--k];
-            t.s[t.len] = 0;
-            put_word(t, p.word);
-        }
-        if (!shown) put_word(t, "no steps");
-    };
+    static constexpr const char* kWords[5] = {" pass", " fail", " caution", " listed", " skip"};
+    const unsigned n[5] = {c.pass, c.fail, c.caution, c.listed, c.skip};
     step_label::Text t;
     put_word(t, label); put_word(t, ": ");
-    body(t);
-    if (t.len > kFooterChars) { t = {}; body(t); }   // too long beside the label: the counts alone
+    size_t head = t.len;
+    for (int pass = 0; pass < 2; ++pass) {   // the second pass, when a count did not fit beside the label: the counts alone
+        if (pass) t.len = head = 0;
+        bool cut = false;
+        for (unsigned i = 0; i < 5; ++i) {   // every non-zero count, in order, while it fits the band
+            if (!n[i]) continue;
+            char d[12]; unsigned k = 0;
+            for (unsigned v = n[i]; v; v /= 10) d[k++] = char('0' + v % 10);
+            const bool first = t.len == head;
+            if (t.len + (first ? 0 : 2) + k + std::strlen(kWords[i]) > kFooterChars) { cut = true; break; }   // the first that does not fit ends the line (never a lesser count in its place)
+            if (!first) put_word(t, ", ");
+            while (k) t.s[t.len++] = d[--k];
+            t.s[t.len] = 0;
+            put_word(t, kWords[i]);
+        }
+        if (!cut) break;
+    }
+    if (t.len == head) put_word(t, "no steps");
     return t;
 }
 

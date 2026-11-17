@@ -542,8 +542,8 @@ static void test_reach_footer_says_needs_load_not_not_run() {
 }
 // ROADMAP "PPS coverage" item 1: a low edge the source cannot reach (it advertises 3.3 V, regulates at 5 V) is a
 // Floored fail, and the Results footer names the floor ("floor at 5V"), like "caps 19.4V" names a ceiling.
-// The family Steps page's footer: "<row label>: n pass, m caution". At most two counts, in the order pass, fail, caution, listed,
-// skip (a fail takes the caution's place); a Light run's advertised rows read "listed". The label goes when the line is too long.
+// A row's footer (Results and its Steps page): "<row label>: n pass, m caution". The non-zero counts in the order pass, fail, caution,
+// listed, skip; a Light run's listing reads "listed". The label goes when a count would not fit beside it.
 static void test_family_footer_words() {
     rl::FamilyTally t;
     t.pass = 3; t.caution = 1;
@@ -551,7 +551,11 @@ static void test_family_footer_words() {
     t = {}; t.pass = 4;
     CHECK_STR(rl::family_footer("PPS", t).c_str(), "PPS: 4 pass");
     t = {}; t.pass = 2; t.fail = 1; t.caution = 1;
-    CHECK_STR(rl::family_footer("PPS", t).c_str(), "PPS: 2 pass, 1 fail");
+    CHECK_STR(rl::family_footer("PPS", t).c_str(), "2 pass, 1 fail, 1 caution");   // 30 cells with the label: the label goes
+    t = {}; t.pass = 20; t.fail = 3; t.caution = 4; t.skip = 5;
+    CHECK_STR(rl::family_footer("QC3", t).c_str(), "20 pass, 3 fail, 4 caution");   // the skip count would pass the band: the line ends there
+    t = {}; t.pass = 2; t.fail = 3; t.skip = 5;
+    CHECK_STR(rl::family_footer("QC3", t).c_str(), "QC3: 2 pass, 3 fail, 5 skip");
     t = {}; t.fail = 2; t.caution = 1;
     CHECK_STR(rl::family_footer("SPR AVS", t).c_str(), "SPR AVS: 2 fail, 1 caution");
     t = {}; t.listed = 5;
