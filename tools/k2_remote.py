@@ -131,7 +131,7 @@ PDS_STOPS = ["running", "done", "cancelled", "run time cap", "transition cap", "
 # ---- PD Spec Check (docs/PD_SPEC_CHECK.md): constants ----
 CMD_PD_SPEC = 0x5A        # PD Spec Check: status / start / result (chunked) / stop (k2/core/remote_proto.hpp, tools/pd_spec.py)
 CMD_CHARGER_LEVEL = 0x5B  # [level(1)] the level of the next charger run (0 medium, 1 light, 2 deep); Deep sets both deep sweeps
-CMD_MI_CABLE_AUTH = 0x5C  # Xiaomi cable-side auth (emk_spoof::MiAuthCfg): [0] read, [1, on, key, trailing u32 LE, half] set; rsp [on, key, trailing(4), half]
+CMD_MI_CABLE_AUTH = 0x5C  # Xiaomi cable-side auth (emk_spoof::MiAuthCfg): [0] read, [1, on, key, trailing u32 LE, half, reply, payload] set; rsp [on, key, trailing(4), half, reply, payload]
 PSC_STATUS, PSC_START, PSC_READ, PSC_STOP = 0, 1, 2, 3
 PSC_CHUNK = 48
 PSC_FLAG_CONFIRM = 1 << 0
@@ -1639,6 +1639,9 @@ def cmd_charger_level(link, a):
 
 
 def cmd_mi_cable_auth(link, a):
+    if a.set and (len(a.set) != 6 or a.set[0] not in ("on", "off")):   # refused before anything goes to the K2
+        raise FrameError("mi-cable-auth: no argument reads back; a set is 'on|off KEY TRAILING HALF REPLY PAYLOAD' "
+                         f"(6 arguments, got {len(a.set)}: {' '.join(a.set)})")
     if not a.set:
         on, key, trailing, half, reply, payload = mi_cable_auth(link)
     else:
