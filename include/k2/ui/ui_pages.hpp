@@ -513,8 +513,9 @@ private:
     int selection_ K2_BSS_INIT(0), family_ K2_BSS_INIT(0), result_family_ = -1, detail_index_ K2_BSS_INIT(0), detail_row_ K2_BSS_INIT(0);
     // The Steps page opened from a PD Results row lists that row's steps only (picked(): result_layout::row_has on this copy of the
     // row, its range or fixed levels); any other row lists its protocol family (result_family_, -1 = all).
-    result_layout::Row result_row_ K2_BSS_ZERO;
-    const result_layout::Row* picked() const;   // result_row_ while the Steps page lists a PD row, else nullptr
+    result_layout::CompactRow result_row_ K2_BSS_ZERO;
+    char result_label_[10] K2_BSS_ZERO;
+    const result_layout::CompactRow* picked() const;   // result_row_ while the Steps page lists a PD row, else nullptr
     bool shows(const charger_test::Step&) const;
     // The identity the next START presents lives in ctx_.cables (the list Tools -> Spoof shares), not here.
     ctcable::Choice run_cable_ K2_BSS_ZERO;        // the identity of the current / last run
@@ -681,10 +682,10 @@ private:
     void build_results();      // chips layout of the stored run (k2/chargertest/result_layout.hpp), wrapped into display lines
     // The summary line of Results: the best passing mode per protocol family of the stored run ("PD 20V 3A  QC3 12V").
     void compose_best();
-    // The verdict grid's layout and its display lines live in the page, never in scratch: painting streams to the LCD, whose idle
-    // hook runs other work, and a scratch lease must not span that (src/core/scratch.hpp). The page arena is sized for it.
-    result_layout::Layout layout_;
-    std::array<result_layout::Line, result_layout::kMaxLines> lines_{};
+    // The verdict grid's compact descriptors and display lines live in the page, never in scratch: painting streams to the LCD,
+    // whose idle hook runs other work, and a scratch lease must not span that. Step-backed rows regenerate tokens on demand.
+    result_layout::CompactGrid layout_;
+    std::array<result_layout::CompactLine, result_layout::kMaxLines> lines_{};
     StrBuf<32> best_;
     size_t line_n_ = 0;
     int results_row_ = 0;      // selected line to restore when BACK leaves the step list

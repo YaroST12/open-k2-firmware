@@ -104,22 +104,22 @@ uint16_t tone_color(tone::Tone t) { return tone_meta(t).color; }
 // scans this file for any other). `max_px` is the box the text must fit: x to the next thing on the row. On the host a text that
 // does not fit is a gate failure (K2_TRUNC_LOG); on the device fit_text is the last-resort cut. Names the user typed use
 // fit_data / fit_text_mid in paint_head and paint_confirm only.
-void put_line(const Surface &c, const Font &f, int16_t x, int16_t y, int max_px, std::string_view s, uint16_t fg, uint16_t bg K2_TRUNC_DECL) {
+[[gnu::noinline]] void put_line(const Surface &c, const Font &f, int16_t x, int16_t y, int max_px, std::string_view s, uint16_t fg, uint16_t bg K2_TRUNC_DECL) {
     char buf[kFitBuf];
     gfx_text(c, f, x, y, fit_text(f, s, max_px, buf K2_TRUNC_ARG), fg, bg);
 }
 // Text with check / cross marks (draw_marked_text): the width is the marked width, a longer text is reported and not drawn past the box.
-void put_marked(const Surface &c, const Font &f, int16_t x, int16_t y, int max_px, std::string_view s, uint16_t fg, uint16_t bg K2_TRUNC_DECL) {
+[[gnu::noinline]] void put_marked(const Surface &c, const Font &f, int16_t x, int16_t y, int max_px, std::string_view s, uint16_t fg, uint16_t bg K2_TRUNC_DECL) {
     if (marked_width(f, s) > max_px) K2_TRUNC_NOTE(trunc::Kind::Cut, s, max_px);
     draw_marked_text(c, f, x, y, s, fg, bg);
 }
 // Same, right-aligned so that it ends at `right`; `left` is the end of whatever is to its left (the box is right - left).
-void put_marked_right(const Surface &c, const Font &f, int16_t right, int16_t left, int16_t y, std::string_view s, uint16_t fg, uint16_t bg K2_TRUNC_DECL) {
+[[gnu::noinline]] void put_marked_right(const Surface &c, const Font &f, int16_t right, int16_t left, int16_t y, std::string_view s, uint16_t fg, uint16_t bg K2_TRUNC_DECL) {
     put_marked(c, f, int16_t(right - marked_width(f, s)), y, right - left, s, fg, bg K2_TRUNC_ARG);
 }
 // The name of a card row. Struck through (the Results grid's skip look, dim ink) only for a unit that was really skipped; a unit
 // that never answered (a protocol the charger does not carry) is plain dim, like its dash glyph. A tested row is plain text.
-void card_name(const Surface &c, int16_t x, int16_t y, int max_px, std::string_view name, tone::Tone t, bool struck, uint16_t bg) {
+[[gnu::noinline]] void card_name(const Surface &c, int16_t x, int16_t y, int max_px, std::string_view name, tone::Tone t, bool struck, uint16_t bg) {
     if (struck) {
         if (marked_width(kLabelFont, name) > max_px) K2_TRUNC_NOTE_HERE(trunc::Kind::Cut, name, max_px);
         kit::draw_struck_text(c, kLabelFont, x, y, name, kDim, bg);
@@ -382,7 +382,7 @@ void sheet_verdict(CardSheet &s, tone::Tone t, const char *word) {
 
 }  // namespace
 
-void cards_sheet(const rc::Card &c, bool range, unsigned idx, CardSheet &out) {
+[[gnu::noinline]] void cards_sheet(const rc::Card &c, bool range, unsigned idx, CardSheet &out) {
     out.n = 0;
     if (range) {
         const rc::Range &r = c.range[idx];
@@ -680,6 +680,12 @@ void CardsPage::paint_head(kit::Verdict v, std::string_view title, std::string_v
     else put_line(c, kLabelFont, 8, 44, c.w - 16, sub, kDim, kBg);
 }
 
+[[gnu::noinline]] static void draw_cell_head(const Surface &c, int16_t vx, int16_t vy, int16_t nx, int16_t ty, int max_px,
+                                             std::string_view name, tone::Tone t, bool struck, uint16_t bg) {
+    kit::draw_verdict(c, vx, vy, 12, 12, to_kit(t), "", bg);
+    card_name(c, nx, ty, max_px, name, t, struck, bg);
+}
+
 // One row of the open card, repainted in place: the interior of its 14 px, the focus fill and bar, the verdict cell, the text.
 void CardsPage::paint_cell(int row, bool focused) {
     const Surface &c = ctx_.content;
@@ -692,8 +698,7 @@ void CardsPage::paint_cell(int row, bool focused) {
     if (row == 0) {   // PD fixed
         const rc::GroupResult &r = cd.group[0];
         const tone::Tone pt = tone::group(cd, 0);
-        kit::draw_verdict(c, 8, int16_t(g.y + 1), 12, 12, to_kit(pt), "", bg);
-        card_name(c, kit::kTextX, ty, 84 - 4 - kit::kTextX, "PD fixed", pt, r.verdict == rc::GV::Skip, bg);
+        draw_cell_head(c, 8, int16_t(g.y + 1), kit::kTextX, ty, 84 - 4 - kit::kTextX, "PD fixed", pt, r.verdict == rc::GV::Skip, bg);
         StrBuf<16> a, b;
         cards_group_max_text(r, a);
         cards_group_fail_text(r, b);
@@ -709,8 +714,8 @@ void CardsPage::paint_cell(int row, bool focused) {
         const rc::Range &r = cd.range[row - 1];
         const tone::Tone rt = tone::range(cd, r);
         constexpr int16_t kRangeX = 58;
-        kit::draw_verdict(c, 8, int16_t(g.y + 1), 12, 12, to_kit(rt), "", bg);
-        card_name(c, kit::kTextX, ty, kRangeX - 4 - kit::kTextX, rc::detail::alg_label(r.alg), rt, rt == tone::Tone::Skip, bg);
+        draw_cell_head(c, 8, int16_t(g.y + 1), kit::kTextX, ty, kRangeX - 4 - kit::kTextX, rc::detail::alg_label(r.alg), rt,
+                       rt == tone::Tone::Skip, bg);
         StrBuf<32> rg;
         cards_range_text(r, rg);
         put_line(c, kLabelFont, kRangeX, ty, kRightEdge - kRangeX, rg.view(), kVolt, bg);
@@ -729,7 +734,6 @@ void CardsPage::paint_cell(int row, bool focused) {
         const unsigned gi = sel_at(cd, row).idx;
         const rc::GroupResult &r = cd.group[gi];
         const tone::Tone gt = tone::group(cd, gi);
-        kit::draw_verdict(c, int16_t(g.x + 4), int16_t(g.y + 1), 12, 12, to_kit(gt), "", bg);
         StrBuf<16> v;
         cards_group_cell_text(r, v);
         // The verdict cell already says pass or fail: drop the leading mark and a lone trailing cross.
@@ -744,7 +748,7 @@ void CardsPage::paint_cell(int row, bool focused) {
         const int16_t nx = int16_t(g.x + 17), vr = int16_t(g.x + g.w - 2);
         const int vw = marked_width(kLabelFont, s);
         const std::string_view name = charger_test::name(static_cast<charger_test::Group>(gi));
-        card_name(c, nx, ty, vr - vw - 2 - nx, name, gt, r.verdict == rc::GV::Skip, bg);
+        draw_cell_head(c, int16_t(g.x + 4), int16_t(g.y + 1), nx, ty, vr - vw - 2 - nx, name, gt, r.verdict == rc::GV::Skip, bg);
         put_marked_right(c, kLabelFont, vr, int16_t(nx + int(name.size()) * kLabelFont.adv), ty, s, vc, bg);
     }
 }
@@ -818,31 +822,7 @@ void CardsPage::paint_detail() {
     draw_footer_cached(c, FooterTone::Info, st.view(), foot_);
 }
 
-// Sub-screen of the focused row: every value the card stores for that protocol group or range.
-void CardsPage::paint_group() {
-    const Surface &c = ctx_.content;
-    load_cur();
-    const rc::Card &cd = cur_;
-    row_ = std::clamp(row_, 0, rows() - 1);
-    const Sel sel = sel_at(cd, row_);
-    StrBuf<24> head;
-    cards_title_text(cd, head);
-    StrBuf<32> title;
-    kit::Verdict glyph;
-    if (sel.range) {
-        const rc::Range &r = cd.range[sel.idx];
-        StrBuf<32> rg;
-        cards_range_text(r, rg);
-        title.put(rc::detail::alg_label(r.alg)).put_char(' ').put(rg.view());
-        glyph = to_kit(tone::range(cd, r));
-    } else {
-        title.put(sel.idx == 0 ? "PD fixed" : charger_test::name(static_cast<charger_test::Group>(sel.idx)));
-        glyph = to_kit(tone::group(cd, sel.idx));
-    }
-    paint_head(glyph, title.view(), head.view(), false, true);
-
-    CardSheet sh;
-    cards_sheet(cd, sel.range, sel.idx, sh);
+[[gnu::noinline]] static void paint_group_rows(const Surface &c, const CardSheet &sh) {
     int16_t y = kDY;
     for (unsigned i = 0; i < sh.n; ++i) {
         const SheetRow &r = sh.row[i];
@@ -865,9 +845,38 @@ void CardsPage::paint_group() {
     }
     gfx_fill(c, 0, y, c.w, 1, kRule);
     if (y + 14 <= kFooterY) put_line(c, kLabelFont, 8, int16_t(y + 4), c.w - 16, "Per-step results are not stored", kFaint, kBg);
-    StrBuf<24> pos;
-    pos.put_u32(uint32_t(row_ + 1)).put_char('/').put_u32(uint32_t(rows())).put(" rows");
-    draw_footer_cached(c, FooterTone::Info, pos.view(), foot_);
+}
+
+// Sub-screen of the focused row: every value the card stores for that protocol group or range.
+void CardsPage::paint_group() {
+    const Surface &c = ctx_.content;
+    load_cur();
+    const rc::Card &cd = cur_;
+    row_ = std::clamp(row_, 0, rows() - 1);
+    const Sel sel = sel_at(cd, row_);
+    StrBuf<24> head;
+    cards_title_text(cd, head);
+    StrBuf<32> title;
+    kit::Verdict glyph;
+    if (sel.range) {
+        const rc::Range &r = cd.range[sel.idx];
+        title.put(rc::detail::alg_label(r.alg)).put_char(' ');
+        cards_range_text(r, title);
+        glyph = to_kit(tone::range(cd, r));
+    } else {
+        title.put(sel.idx == 0 ? "PD fixed" : charger_test::name(static_cast<charger_test::Group>(sel.idx)));
+        glyph = to_kit(tone::group(cd, sel.idx));
+    }
+    paint_head(glyph, title.view(), head.view(), false, true);
+
+    {
+        CardSheet sh;
+        cards_sheet(cd, sel.range, sel.idx, sh);
+        paint_group_rows(c, sh);
+    }
+    head.clear();
+    head.put_u32(uint32_t(row_ + 1)).put_char('/').put_u32(uint32_t(rows())).put(" rows");
+    draw_footer_cached(c, FooterTone::Info, head.view(), foot_);
 }
 
 void CardsPage::paint_confirm() {

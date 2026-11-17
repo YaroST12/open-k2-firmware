@@ -366,6 +366,7 @@ public:
 #else
     bool pdspec_active() const { return false; }     // K2_PDSPEC=0: the tool is not built in
 #endif
+    std::span<int16_t> charger_test_record() { return charger_test_.claim_record(); }
     // Why PD Stress may not start now: another tool owns the ports. The holds, the contract and the sink state a run
     // causes itself are not counted (busy_reason() would refuse the run for its own doing).
     const char *foreign_busy() const;

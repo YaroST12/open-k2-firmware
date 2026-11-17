@@ -190,6 +190,12 @@ sc::StartResult PdSpecSession::start_run(std::uint8_t families, std::uint32_t no
     if (s.inline_link) return sc::StartResult::Inline;
     if (s.self_powered) return sc::StartResult::SelfPowered;
     if (!s.attached || !fusb302::caps().valid) return sc::StartResult::NoCaps;
+    std::span<std::uint8_t> pool;
+    if (!in_test) {
+        const auto rec = ctx_.ui->charger_test_record();
+        if (!rec.empty()) pool = {reinterpret_cast<std::uint8_t*>(rec.data()), std::min(rec.size_bytes(), sc::kPoolBytes)};
+    }
+    pool_ = pool;
     engine_.emplace(static_cast<sc::Env&>(*this));
     test_run_ = in_test;
     cancel_asked_ = false;
@@ -199,6 +205,7 @@ sc::StartResult PdSpecSession::start_run(std::uint8_t families, std::uint32_t no
     if (r != sc::StartResult::Ok) {
         K2LOG("[PDSPEC] start refused: %s\n", sc::start_name(r));
         engine_.reset();
+        pool_ = {};
         test_run_ = false;
     } else {
         const sc::Levels& L = engine_->levels();
@@ -228,7 +235,15 @@ void PdSpecSession::cancel() {
     update_footer();
 }
 
+void PdSpecSession::yield_record() {
+    if (engine_ && !test_run_ && !engine_->running()) {
+        engine_.reset();
+        pool_ = {};
+    }
+}
+
 void PdSpecSession::poll(std::uint32_t now_ms) {
+    if (engine_ && !test_run_ && !engine_->running() && (ctx_.ui->charger_test_busy() || ctx_.ui->pdstress_active())) yield_record();
     if (running()) {
         if (!ctx_.pm_online || loopguard::locked()) cancel();   // no VBUS to judge by / the HID-cable loop 5 V lock
         fusb302::set_run_owner(true);   // after ChargerTestSession::poll, which clears it when no test runs

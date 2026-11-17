@@ -701,7 +701,7 @@ class Runner {
 public:
     explicit Runner(Env& env) : env_(env) {}
     static Summary preview(const pd::SourceCaps&, Options, Input);
-    Reason start(const pd::SourceCaps&, Options, Input, bool confirmed);
+    [[gnu::noinline]] Reason start(const pd::SourceCaps&, Options, Input, bool confirmed);
     void poll(Input, const pd::SourceCaps&);
     // A START the preflight refused (no run began; the run id stays where it was): one [TEST] log line with the
     // reason, and the reason + measured VBUS recorded here, so the remote summary (charger-test status) and the
@@ -730,7 +730,7 @@ public:
     // attach as usual. A run resumed kMaxResumes times is not resumable any more.
     // `planned_reattach` = this boot's /rd.rec marker said Reattach (the charger test's planned re-attach rebooted the
     // K2): the resume() this boot performs is that re-attach, not a power loss, and is not counted in resumed_.
-    void restore(const Options&, const Evidence&, uint32_t run_id, std::span<const Step>, Phase, size_t phase_index, uint8_t resumed,
+    [[gnu::noinline]] void restore(const Options&, const Evidence&, uint32_t run_id, std::span<const Step>, Phase, size_t phase_index, uint8_t resumed,
                  size_t attempt_unit = 0, uint8_t attempts = 0, bool planned_reattach = false);
     bool resumable() const;
     // A self-powered run that lost VBUS: Stopped, every unfinished row still Pending (nothing skipped, no verdict), resumable
@@ -930,7 +930,7 @@ private:
     void walk_step(const Input&, const Step& eff);   // one granted level of the walk: record it, ask for the next or judge the walk
     // The deep-sweep row in flight (is_sweep). The record: one int16 error (measured - setpoint) per point, no heap;
     // sweep_rows_ holds one RowView per APDO part (ctsweep::part_range), filled when the row closes (sweep_close in finish()).
-    std::array<int16_t, ctsweep::kMaxPoints> sweep_err_;
+    alignas(4) std::array<int16_t, ctsweep::kMaxPoints> sweep_err_;
     std::array<ctsweep::RowView, ctsweep::kMaxRows> sweep_rows_ K2_BSS_ZERO;
     uint8_t n_sweep_rows_ K2_BSS_INIT(0);
     uint16_t sweep_used_ K2_BSS_INIT(0);                 // points recorded so far, all sweep rows together

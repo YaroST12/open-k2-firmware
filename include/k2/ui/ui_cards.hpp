@@ -100,13 +100,13 @@ private:
     void refresh();                 // re-reads the store
     void paint_list(bool rebuild);  // rebuild: bind and repaint every row; else select + draw (only the changed rows write)
     void paint_empty();
-    void paint_detail();
-    void paint_cell(int row, bool focused);   // one row of the open card (full width, or half of a legacy pair)
+    [[gnu::noinline]] void paint_detail();
+    [[gnu::noinline]] void paint_cell(int row, bool focused);   // one row of the open card (full width, or half of a legacy pair)
     void move_focus();              // Detail +/-: repaint the old and the new focused cell
     void paint_confirm();
-    void paint_group();             // every stored value of the focused row
+    [[gnu::noinline]] void paint_group();             // every stored value of the focused row
     // title_data / sub_data: the text is a name the user typed (cut by design, counted by the gate); else it is ours and must fit.
-    void paint_head(kit::Verdict v, std::string_view title, std::string_view sub, bool title_data, bool sub_data);
+    [[gnu::noinline]] void paint_head(kit::Verdict v, std::string_view title, std::string_view sub, bool title_data, bool sub_data);
     int rows() const;               // selectable rows of cur_
     void clear_body();
     static void row_fn(void *self, int index, bool focused, kit::RowSpec &out);   // the kit RowList: one saved charger

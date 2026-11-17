@@ -209,4 +209,58 @@ int cell_width(const Token&, const Metrics&);   // the grid cell a token needs (
 size_t wrap(const Layout&, const Metrics&, std::span<Line> out);
 const char* display_name(charger_test::Algorithm);
 
+// Compact persistent representation for ChargerTestPage: step-backed rows store only their key (6 B) and regenerate their
+// tokens on demand from Runner::steps(), avoiding a 2.2 KB persistent Layout inside the page arena.
+inline constexpr size_t kMaxRowTokens = 20;
+inline constexpr size_t kCompactPoolBytes = 200;
+inline constexpr size_t kMaxFactTokens = 24;
+
+enum class CompactKind : uint8_t {
+    Header, Probe, Sweep, Range, RangeNone, NoQc3Plus, Fixed, Legacy, Fact, Collapsed
+};
+struct CompactRow {
+    CompactKind kind = CompactKind::Header;
+    uint8_t algo = 0;      // charger_test::Algorithm, Section (Header), or Tone (Fact / Collapsed label tone)
+    uint16_t mv = 0;       // Probe mv, Range/Sweep pos, Fact label pool offset, or Collapsed (0=absent, 1=skipped)
+    uint8_t first = 0;     // Fact: first fact_tok index
+    uint8_t count = 0;     // Fact: fact_tok count
+};
+struct FactToken {
+    uint8_t off = 0;       // byte offset in CompactGrid::pool (not null-terminated)
+    uint8_t len_tone = 0;  // bits 0..4 length (0..17), bits 5..7 Tone
+    uint8_t len() const { return len_tone & 31u; }
+    Tone tone() const { return static_cast<Tone>(len_tone >> 5); }
+};
+struct CompactLine {
+    uint16_t raw = 0;      // bits 0..4 row, bits 5..9 row-relative first token, bits 10..14 token count, bit 15 head
+    static constexpr CompactLine make(uint8_t row, uint8_t first, uint8_t count, bool head) {
+        return {uint16_t((row & 31u) | ((first & 31u) << 5) | ((count & 31u) << 10) | (head ? 0x8000u : 0u))};
+    }
+    uint8_t row() const { return raw & 31u; }
+    uint8_t first() const { return (raw >> 5) & 31u; }
+    uint8_t count() const { return (raw >> 10) & 31u; }
+    bool head() const { return (raw & 0x8000u) != 0; }
+};
+struct CompactGrid {
+    std::array<CompactRow, kMaxRows> rows{};
+    std::array<FactToken, kMaxFactTokens> fact_toks{};
+    std::array<char, kCompactPoolBytes> pool{};
+    std::array<uint32_t, 2> collapsed_masks{};   // [0]=absent, [1]=skipped
+    uint16_t monitor_mv = 36000;
+    uint8_t row_count = 0, fact_count = 0, pool_used = 0, cuts = 0;
+};
+struct RowTokens {
+    char label[10] = {};
+    Tone label_tone = Tone::Dim;
+    uint8_t count = 0;
+    std::array<Token, kMaxRowTokens> toks{};
+};
+
+size_t build_compact(CompactGrid&, const Metrics&, std::span<CompactLine> out_lines,
+                     std::span<const charger_test::Step>, const OemNotes& = {}, const ctsweep::View& sweep = {});
+bool row_has(const CompactRow&, const charger_test::Step&);
+int row_section(const CompactGrid&, size_t row);
+const char* row_label(const CompactGrid&, size_t row);
+void row_tokens(const CompactGrid&, size_t row, std::span<const charger_test::Step>, const ctsweep::View&, RowTokens& out);
+
 }  // namespace k2::result_layout
