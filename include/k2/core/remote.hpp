@@ -6,6 +6,7 @@
 #include <array>
 #include <cstdint>
 #include <span>
+#include "k2/core/bss_zero.hpp"
 #include "k2/drivers/adc.hpp"
 #include "k2/drivers/usb.hpp"
 #include "k2/core/remote_proto.hpp"
@@ -182,31 +183,31 @@ public:
     void set_log(bool on);
 
 private:
-    uint16_t spoof_seq_ = 0;   // library number armed through the remote, for the status reply
-    uint8_t ufcs_start_ = 0;   // ufcs::ProbeStart of the last probe op, for the UFCS status block
+    uint16_t spoof_seq_ K2_BSS_INIT(0);   // library number armed through the remote, for the status reply
+    uint8_t ufcs_start_ K2_BSS_INIT(0);   // ufcs::ProbeStart of the last probe op, for the UFCS status block
     static constexpr unsigned kQueueDepth = 4;
     struct Slot { uint8_t data[remote::kFrameSize]; uint16_t len; usb::Route route; };
 
     Ui &ui_;
-    Slot queue_[kQueueDepth] = {};
-    unsigned head_ = 0, tail_ = 0;
-    uint32_t dropped_ = 0, dropped_reported_ = 0;
-    VirtualButton virt_[4] = {};
-    bool reboot_pending_ = false;
-    bool dfu_pending_ = false;
-    uint8_t dfu_mode_ = 0;
-    bool fault_pending_ = false;
-    uint8_t fault_kind_ = 0;
-    bool shot_pending_ = false;
-    bool shot_want_cdc_ = false, shot_want_packed_ = false;
+    Slot queue_[kQueueDepth];
+    unsigned head_ K2_BSS_INIT(0), tail_ K2_BSS_INIT(0);
+    uint32_t dropped_ K2_BSS_INIT(0), dropped_reported_ K2_BSS_INIT(0);
+    VirtualButton virt_[4] K2_BSS_ZERO;
+    bool reboot_pending_ K2_BSS_INIT(false);
+    bool dfu_pending_ K2_BSS_INIT(false);
+    uint8_t dfu_mode_ K2_BSS_INIT(0);
+    bool fault_pending_ K2_BSS_INIT(false);
+    uint8_t fault_kind_ K2_BSS_INIT(0);
+    bool shot_pending_ K2_BSS_INIT(false);
+    bool shot_want_cdc_ K2_BSS_INIT(false), shot_want_packed_ K2_BSS_INIT(false);
     uint8_t shot_transport_ = remote::kShotViaHid;
     uint8_t shot_strip_rows_ = 4;
     // A capture holds the scratch arena (k2/core/scratch.hpp) from ripple() to the end of its stream in poll(): the 1 KB of
     // samples are live only inside the one poll() call that runs the command.
-    bool ripple_pending_ = false;
-    remote::RippleInfo ripple_info_{};
+    bool ripple_pending_ K2_BSS_INIT(false);
+    remote::RippleInfo ripple_info_ K2_BSS_ZERO;
     void stream_ripple(uint8_t seq);
-    uint8_t shot_seq_ = 0;
+    uint8_t shot_seq_ K2_BSS_INIT(0);
     lease::Lease lease_;
     void lease_tick();
 };

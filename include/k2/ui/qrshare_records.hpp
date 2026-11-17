@@ -75,7 +75,10 @@ inline constexpr std::size_t kLogGit = 39;
 inline constexpr std::size_t kLogHeadMax = 1 + kLogGit + 1 + 4 + 4;                 // 49
 inline constexpr std::uint8_t kLogOlder = 1;                                        // flags bit0
 
-std::size_t emarker(const emrec::Record& rec, std::string_view name, const emk_quirk::Quirks& quirks, std::span<std::uint8_t> out);
+std::size_t emarker(const emrec::Record& rec, std::string_view name, const emk_quirk::Quirks* quirks, std::span<std::uint8_t> out);
+inline std::size_t emarker(const emrec::Record& rec, std::string_view name, const emk_quirk::Quirks& quirks, std::span<std::uint8_t> out) {
+    return emarker(rec, name, &quirks, out);
+}
 std::size_t pdcaps(const pd::SourceCaps& caps, std::span<std::uint8_t> out);        // 0 when caps.valid is false
 std::size_t card(const report_card::Card& c, std::span<std::uint8_t> out);
 std::size_t identity(std::string_view fw, std::string_view git, unsigned proto, std::span<std::uint8_t> out);

@@ -42,7 +42,8 @@ public:
     void add(std::uint32_t now_ms, std::int32_t cc1_mv, std::int32_t cc2_mv) {
         if (cc1_mv < 0 || cc2_mv < 0) return;   // no ADC reading
         if (n_ == 0) first_ms_ = now_ms;
-        s_[head_] = {now_ms, cc1_mv, cc2_mv};
+        auto clamp16 = [](std::int32_t v) { return static_cast<std::int16_t>(v > 32767 ? 32767 : v); };
+        s_[head_] = {now_ms, clamp16(cc1_mv), clamp16(cc2_mv)};
         head_ = (head_ + 1) % kSamples;
         if (n_ < kSamples) ++n_;
     }
@@ -68,7 +69,7 @@ public:
     }
 
 private:
-    struct S { std::uint32_t t; std::int32_t cc1, cc2; };
+    struct S { std::uint32_t t; std::int16_t cc1, cc2; };
     // One line's statistics over the window.
     struct Line {
         std::int32_t lo = INT32_MAX, hi = INT32_MIN;

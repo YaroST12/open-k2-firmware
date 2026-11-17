@@ -128,17 +128,17 @@ private:
     UiContext& ctx_;
     ChargerTestSession& ct_;
     std::optional<pdstress::Engine> engine_;
-    pdstress::journal::Image img_{};     // the saved record: written at boundaries, read back by a restore
+    pdstress::journal::Image img_ K2_BSS_ZERO;     // the saved record: written at boundaries, read back by a restore
     charger_journal::ResumeGate gate_;
     Restore restore_ = Restore::None;
-    std::uint32_t restore_t0_ = 0;
-    bool journal_on_ = false;            // this run writes a journal (self-supplied K2, the store worked)
-    bool cancel_asked_ = false;
-    std::uint8_t last_start_ = 0;        // pdstress::StartResult of the last start() call
-    bool frozen_ = false;               // the run ended: elapsed_ms is fixed
-    std::uint32_t frozen_ms_ = 0;
-    std::uint32_t last_now_ = 0;
-    std::uint16_t run_no_ = 0;           // run_no()
+    std::uint32_t restore_t0_ K2_BSS_INIT(0);
+    bool journal_on_ K2_BSS_INIT(false);            // this run writes a journal (self-supplied K2, the store worked)
+    bool cancel_asked_ K2_BSS_INIT(false);
+    std::uint8_t last_start_ K2_BSS_INIT(0);        // pdstress::StartResult of the last start() call
+    bool frozen_ K2_BSS_INIT(false);               // the run ended: elapsed_ms is fixed
+    std::uint32_t frozen_ms_ K2_BSS_INIT(0);
+    std::uint32_t last_now_ K2_BSS_INIT(0);
+    std::uint16_t run_no_ K2_BSS_INIT(0);           // run_no()
     std::uint8_t footer_seq_ = 0xFF, footer_total_ = 0xFF, footer_kind_ = 0xFF;
     StrBuf<28> foot_;
 };

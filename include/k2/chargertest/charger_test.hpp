@@ -6,6 +6,7 @@
 #include <span>
 #include "k2/chargertest/spec_section.hpp"
 #include "k2/chargertest/svooc_ceiling.hpp"
+#include "k2/core/bss_zero.hpp"
 #include "k2/core/math_opt.hpp"
 #include "k2/chargertest/sweep.hpp"
 #include "k2/fastcharge/fc_engine.hpp"
@@ -863,30 +864,30 @@ private:
     void end_ceiling(const Input&, svooc_ceiling::End);
     void note_ceiling(const Input&, svooc_ceiling::End);
     svooc_ceiling::End ceil_end_ = svooc_ceiling::End::None;
-    bool ceiling_pending_ = false, ceiling_done_ = false, ceil_stopping_ = false;
+    bool ceiling_pending_ K2_BSS_INIT(false), ceiling_done_ K2_BSS_INIT(false), ceil_stopping_ K2_BSS_INIT(false);
     // ceil_recover_: the release after the stage watches for the adapter dropping VBUS (an Rd cycle brings it back);
     // ceil_low_ms_: when VBUS went under vSafe5V in that release (0 = it is not).
-    bool ceil_recover_ = false;
-    bool ceil_cycled_ = false;   // that Rd cycle ran: an attach after it that never sees VBUS is a lost source (poll_attach)
-    uint8_t ceil_why_ = 0;   // the Runner's own guard that stopped the trigger, as a svooc::Abort (0 = the trigger's own end)
-    uint32_t ceil_ms_ = 0, ceil_stop_ms_ = 0, ceil_low_ms_ = 0;
+    bool ceil_recover_ K2_BSS_INIT(false);
+    bool ceil_cycled_ K2_BSS_INIT(false);   // that Rd cycle ran: an attach after it that never sees VBUS is a lost source (poll_attach)
+    uint8_t ceil_why_ K2_BSS_INIT(0);   // the Runner's own guard that stopped the trigger, as a svooc::Abort (0 = the trigger's own end)
+    uint32_t ceil_ms_ K2_BSS_INIT(0), ceil_stop_ms_ K2_BSS_INIT(0), ceil_low_ms_ K2_BSS_INIT(0);
     // The PD spec stage: begun by next() at the end of the Pd unit (after its contract is released, at a settled 5 V), ended by
     // poll_spec(). One stage per run; a resumed run never repeats it (its result is journaled).
     bool spec_wanted() const;
     bool begin_spec(const Input&);   // false = the stage did not start (refused): the run goes on
     void poll_spec(const Input&);
     void end_spec(const Input&, specsec::End);
-    bool spec_pending_ = false, spec_done_ = false, spec_stopping_ = false, spec_fault_ = false;
-    uint32_t spec_ms_ = 0, spec_stop_ms_ = 0;
+    bool spec_pending_ K2_BSS_INIT(false), spec_done_ K2_BSS_INIT(false), spec_stopping_ K2_BSS_INIT(false), spec_fault_ K2_BSS_INIT(false);
+    uint32_t spec_ms_ K2_BSS_INIT(0), spec_stop_ms_ K2_BSS_INIT(0);
     Env& env_;
     Evidence evidence_;
-    std::array<Step, kMaxSteps> steps_{};
-    size_t count_ = 0, index_ = 0, pd_retry_ = SIZE_MAX;
-    uint8_t retries_ = 0;         // retries the row pd_retry_ has had (a source Hard Reset or loss in the row)
-    uint8_t epr_tries_ = 0;       // retries of the baseline EPR entry (a source Hard Reset in the entry)
-    uint32_t settle_ms_ = 0;      // extra steady 5 V a retry waits for in Releasing (kEprSettleMs + backoff)
-    uint32_t settle_until_ = 0;   // an EPR entry request waits for this time (after a Reject: kRejectSettleMs)
-    uint32_t hunt_reject_until_ = 0;   // a hunt row was Rejected: until then (kCapsReturnMs) a list announced again is the answer to it; cleared by the next row
+    std::array<Step, kMaxSteps> steps_ K2_BSS_ZERO;
+    size_t count_ K2_BSS_INIT(0), index_ K2_BSS_INIT(0), pd_retry_ = SIZE_MAX;
+    uint8_t retries_ K2_BSS_INIT(0);         // retries the row pd_retry_ has had (a source Hard Reset or loss in the row)
+    uint8_t epr_tries_ K2_BSS_INIT(0);       // retries of the baseline EPR entry (a source Hard Reset in the entry)
+    uint32_t settle_ms_ K2_BSS_INIT(0);      // extra steady 5 V a retry waits for in Releasing (kEprSettleMs + backoff)
+    uint32_t settle_until_ K2_BSS_INIT(0);   // an EPR entry request waits for this time (after a Reject: kRejectSettleMs)
+    uint32_t hunt_reject_until_ K2_BSS_INIT(0);   // a hunt row was Rejected: until then (kCapsReturnMs) a list announced again is the answer to it; cleared by the next row
     bool can_retry(const Step&) const;
     // A 6 A hunt row waits for the Xiaomi auth chain (Input::pd.xiaomi_svid && !xiaomi_authed), at most kXiaomiAuthWaitMs per
     // attach: auth_key_ = session + Hard Reset count the budget was opened for, auth_at_ = when. A row the list in hand does not
@@ -896,7 +897,7 @@ private:
     // never listed SVID 0x2717 drops the row from the plan (nothing to report), any other one skips it as "not unlocked".
     void skip_unadvertised_hunt(Input in);
     void drop_row(size_t i);
-    bool auth_open_ = false; uint32_t auth_key_ = 0, auth_at_ = 0;
+    bool auth_open_ K2_BSS_INIT(false); uint32_t auth_key_ K2_BSS_INIT(0), auth_at_ K2_BSS_INIT(0);
     // pattern preauth-list-after-reset: a Xiaomi-chain source that Hard Reset announces its fixed PDOs alone until its chain has run
     // again. xiaomi_seen_ = the run saw SVID 0x2717 (the sink forgets it on a Hard Reset); xiaomi_reset_ = a Hard Reset hit this
     // run after that, cleared when the chain is done again; tail_at_ = when the cut-short list was first seen (0 = not seen).
@@ -908,79 +909,79 @@ private:
     bool capped(const Step&, const Input&, bool ready) const;   // a programmable row's timeout is a ceiling (see kPlateauMs)
     bool floored(const Step&, const Input&, bool ready) const;  // ... or a floor: a low row whose output sits steady above the band ceiling
     void track_plateau(const Input&, bool ready, bool renewing, uint32_t gap);
-    int from_mv_ = 0;          // VBUS when the Requesting row's level was asked (0 = unknown): a programmable row going up gets the tight band
-    uint16_t plat_mv_ = 0;     // the level a Requesting programmable row's samples have stayed within 1 % of (0 = none yet)
-    uint16_t plat_nr_ms_ = 0;  // how long the sink's keep-alive Request has been unanswered inside that plateau (kPlateauRenewMs)
-    uint32_t plat_ms_ = 0;     // since when
+    int from_mv_ K2_BSS_INIT(0);          // VBUS when the Requesting row's level was asked (0 = unknown): a programmable row going up gets the tight band
+    uint16_t plat_mv_ K2_BSS_INIT(0);     // the level a Requesting programmable row's samples have stayed within 1 % of (0 = none yet)
+    uint16_t plat_nr_ms_ K2_BSS_INIT(0);  // how long the sink's keep-alive Request has been unanswered inside that plateau (kPlateauRenewMs)
+    uint32_t plat_ms_ K2_BSS_INIT(0);     // since when
     // The lowest / highest VBUS a Requesting QC Class B 20 V row has seen (kClassAStuck*); reset by request().
-    uint16_t peak_lo_mv_ = 0xFFFF, peak_hi_mv_ = 0;
+    uint16_t peak_lo_mv_ = 0xFFFF, peak_hi_mv_ K2_BSS_INIT(0);
     // The step-walk row in flight (is_step_walk): walk_mv_ = the target of the Request out now (s.mv at the first one,
     // +kStepMv per granted step), walk_n_ = levels granted after the base, walk_prev_mv_ = VBUS at the previous granted level.
-    uint16_t walk_mv_ = 0;
-    uint8_t walk_n_ = 0;
+    uint16_t walk_mv_ K2_BSS_INIT(0);
+    uint8_t walk_n_ K2_BSS_INIT(0);
     int walk_prev_mv_ = -1;
     int walk_base_mv_ = -1;   // VBUS at the walk's base level (the sum check)
-    bool walk_rebased_ = false;   // the base was an overshoot plateau and was replaced once by the first step's level (walk_step)
-    std::array<int, kStepWalkCount + 1> walk_lv_{};   // VBUS recorded at each granted level, base first (the trend check)
+    bool walk_rebased_ K2_BSS_INIT(false);   // the base was an overshoot plateau and was replaced once by the first step's level (walk_step)
+    std::array<int, kStepWalkCount + 1> walk_lv_;   // VBUS recorded at each granted level, base first (the trend check)
     // walk-settle: before a granted level is recorded, VBUS must be steady (walk_steady_) or the wait timed out
     // (walk_grant_ms_ + kWalkSteadyTimeoutMs); both reset when the walk starts and when it advances to the next level.
     WalkSteady walk_steady_;
-    uint32_t walk_grant_ms_ = 0;   // first walk_step call at the current granted level (0 = none yet)
+    uint32_t walk_grant_ms_ K2_BSS_INIT(0);   // first walk_step call at the current granted level (0 = none yet)
     void walk_step(const Input&, const Step& eff);   // one granted level of the walk: record it, ask for the next or judge the walk
     // The deep-sweep row in flight (is_sweep). The record: one int16 error (measured - setpoint) per point, no heap;
     // sweep_rows_ holds one RowView per APDO part (ctsweep::part_range), filled when the row closes (sweep_close in finish()).
-    std::array<int16_t, ctsweep::kMaxPoints> sweep_err_{};
-    std::array<ctsweep::RowView, ctsweep::kMaxRows> sweep_rows_{};
-    uint8_t n_sweep_rows_ = 0;
-    uint16_t sweep_used_ = 0;                 // points recorded so far, all sweep rows together
-    uint16_t sweep_first_ = 0, sweep_n_ = 0;   // the row in flight: first slot in sweep_err_, points so far
-    uint16_t sweep_mv_ = 0, sweep_lo_ = 0, sweep_hi_ = 0;   // the point whose Request is out / the row's point range
+    std::array<int16_t, ctsweep::kMaxPoints> sweep_err_;
+    std::array<ctsweep::RowView, ctsweep::kMaxRows> sweep_rows_ K2_BSS_ZERO;
+    uint8_t n_sweep_rows_ K2_BSS_INIT(0);
+    uint16_t sweep_used_ K2_BSS_INIT(0);                 // points recorded so far, all sweep rows together
+    uint16_t sweep_first_ K2_BSS_INIT(0), sweep_n_ K2_BSS_INIT(0);   // the row in flight: first slot in sweep_err_, points so far
+    uint16_t sweep_mv_ K2_BSS_INIT(0), sweep_lo_ K2_BSS_INIT(0), sweep_hi_ K2_BSS_INIT(0);   // the point whose Request is out / the row's point range
     void sweep_begin(const Step&, const Input&);   // request(): the point range from the row's PDO word, the row's record reset
     void sweep_point(const Input&, const Step&);   // one granted point: record it, ask the next or finish the row
     void sweep_close(Step&);                // finish(): summarize the row's points into sweep_rows_ (and mark a fold, fold_caution)
     void fold_caution(Step& sweep, const ctsweep::Summary&);   // a fold: the sweep row and the APDO's fixed rows above it read Reason::Folded
-    bool xiaomi_seen_ = false, xiaomi_reset_ = false, x_svid_ = false, x_authed_ = false; uint32_t tail_at_ = 0, hr_count_ = 0;
-    std::array<HuntEvidence, kHuntSlots> hunt_{};   // refused hunt rows; n_hunt_ in use (a full table overwrites the last slot)
-    uint8_t n_hunt_ = 0;
-    uint8_t hunt_seq_ = 0;   // XiaomiTrace::req_n when the running hunt row asked: a different number later = a Request of this row went out
+    bool xiaomi_seen_ K2_BSS_INIT(false), xiaomi_reset_ K2_BSS_INIT(false), x_svid_ K2_BSS_INIT(false), x_authed_ K2_BSS_INIT(false); uint32_t tail_at_ K2_BSS_INIT(0), hr_count_ K2_BSS_INIT(0);
+    std::array<HuntEvidence, kHuntSlots> hunt_ K2_BSS_ZERO;   // refused hunt rows; n_hunt_ in use (a full table overwrites the last slot)
+    uint8_t n_hunt_ K2_BSS_INIT(0);
+    uint8_t hunt_seq_ K2_BSS_INIT(0);   // XiaomiTrace::req_n when the running hunt row asked: a different number later = a Request of this row went out
     size_t cut_index_ = SIZE_MAX;   // a low programmable row whose source went dark: Releasing decides replug-or-carry-on
     State state_ = State::Idle;
     Reason reason_ = Reason::None;
-    uint16_t refusal_mv_ = 0;   // the measured VBUS of the last preflight refusal (note_preflight_refusal)
-    uint32_t release_ms_ = 0, phase_ms_ = 0, stable_ms_ = 0, last_ms_ = 0, session_ = 0, resets_ = 0;
-    uint32_t run_id_ = 0, revision_ = 0;
-    uint8_t resumed_ = 0;
-    uint8_t reattach_ = 0;        // planned re-attaches this run went through (not counted in resumed_)
-    bool reattach_planned_ = false;   // latched from restore(): this boot came back from the planned re-attach
-    bool loaded_ = false;
-    bool selfpwr_ = false;     // latched from Input::self_powered at start()/resume(): fusb302::self_powered() flips with a detach
-    bool suspended_ = false;   // a self-powered VBUS loss ended the run without a verdict (see suspended())
-    bool adopt_ = false;       // a resumed Baseline: the page arms the spoof/cable after resume(), a new session there is not a loss
-    bool held_ = false;        // hold(): a fresh run waits in its first Baseline (the page is writing the journal's plan)
-    uint32_t jwait_ms_ = 0;    // request() parked since this time (now | 1) because the journal was not ready; 0 = not waiting
+    uint16_t refusal_mv_ K2_BSS_INIT(0);   // the measured VBUS of the last preflight refusal (note_preflight_refusal)
+    uint32_t release_ms_ K2_BSS_INIT(0), phase_ms_ K2_BSS_INIT(0), stable_ms_ K2_BSS_INIT(0), last_ms_ K2_BSS_INIT(0), session_ K2_BSS_INIT(0), resets_ K2_BSS_INIT(0);
+    uint32_t run_id_ K2_BSS_INIT(0), revision_ K2_BSS_INIT(0);
+    uint8_t resumed_ K2_BSS_INIT(0);
+    uint8_t reattach_ K2_BSS_INIT(0);        // planned re-attaches this run went through (not counted in resumed_)
+    bool reattach_planned_ K2_BSS_INIT(false);   // latched from restore(): this boot came back from the planned re-attach
+    bool loaded_ K2_BSS_INIT(false);
+    bool selfpwr_ K2_BSS_INIT(false);     // latched from Input::self_powered at start()/resume(): fusb302::self_powered() flips with a detach
+    bool suspended_ K2_BSS_INIT(false);   // a self-powered VBUS loss ended the run without a verdict (see suspended())
+    bool adopt_ K2_BSS_INIT(false);       // a resumed Baseline: the page arms the spoof/cable after resume(), a new session there is not a loss
+    bool held_ K2_BSS_INIT(false);        // hold(): a fresh run waits in its first Baseline (the page is writing the journal's plan)
+    uint32_t jwait_ms_ K2_BSS_INIT(0);    // request() parked since this time (now | 1) because the journal was not ready; 0 = not waiting
     // pattern usb-a-cuts-on-low-dpdm (see kSagAdoptMs): sag_cut_ = a legacy row failed as Lost and its recovery is running;
     // sag_open_ = that recovery ended at sag_ms_ and a new attach session within kSagAdoptMs is adopted.
     // gone_ = Unsafe is timing the unplug (VBUS under 1 V since stable_ms_, see kUnsafeGoneMs); fits the padding before sag_ms_.
     // own_cut_ = the window above was opened by the running unit's Baseline finding VBUS under vSafe5V before any row of the unit ran
     // (the source cut its own output); cleared at every unit start. VBUS then dark past the window ends that unit, not the run.
-    bool sag_cut_ = false, sag_open_ = false, gone_ = false, own_cut_ = false; uint32_t sag_ms_ = 0;
-    bool recover_ = false, hot_ = false, stable_ = false, stopping_ = false, pd_owned_ = false, fc_owned_ = false;
-    bool restart_dark_ = false, restart_wait_ = false;   // a silent Legacy release: the source's output went dark / came back
-    uint32_t restart_ms_ = 0;                             // when it came back (restart_wait_)
+    bool sag_cut_ K2_BSS_INIT(false), sag_open_ K2_BSS_INIT(false), gone_ K2_BSS_INIT(false), own_cut_ K2_BSS_INIT(false); uint32_t sag_ms_ K2_BSS_INIT(0);
+    bool recover_ K2_BSS_INIT(false), hot_ K2_BSS_INIT(false), stable_ K2_BSS_INIT(false), stopping_ K2_BSS_INIT(false), pd_owned_ K2_BSS_INIT(false), fc_owned_ K2_BSS_INIT(false);
+    bool restart_dark_ K2_BSS_INIT(false), restart_wait_ K2_BSS_INIT(false);   // a silent Legacy release: the source's output went dark / came back
+    uint32_t restart_ms_ K2_BSS_INIT(0);                             // when it came back (restart_wait_)
     // pattern usb-a-no-load-auto-off (kCutMv): the cut clocks of the legacy attach. cut_start_ms_ = the first sample under kCutMv of the
     // last completed fall, cut_back_ms_ = the first vSafe5V sample after it, both 0 = none since the row's request, row_hi_ = the highest VBUS since the row's request.
     // cut_onsets_ = the onsets of the cuts that came back inside kCutWindowMs (the period is read from them), cut_retry_idx_ = the row
     // asked again after a cut (up to kCutRetries per row).
     // cut_dark_ / cut_dark_ms_ / cut_last_mv_ = a fall under kCutMv in progress, its first sample, the sample before it.
-    uint32_t cut_start_ms_ = 0, cut_back_ms_ = 0, cut_dark_ms_ = 0; int row_hi_ = 0, cut_last_mv_ = -1; bool cut_dark_ = false;
-    std::array<uint32_t, kCutOnsets> cut_onsets_{}; uint8_t n_cut_onsets_ = 0;
-    size_t cut_retry_idx_ = SIZE_MAX; uint8_t cut_tries_ = 0;   // the row asked again, and how many times (kCutRetries at most)
+    uint32_t cut_start_ms_ K2_BSS_INIT(0), cut_back_ms_ K2_BSS_INIT(0), cut_dark_ms_ K2_BSS_INIT(0); int row_hi_ K2_BSS_INIT(0), cut_last_mv_ = -1; bool cut_dark_ K2_BSS_INIT(false);
+    std::array<uint32_t, kCutOnsets> cut_onsets_ K2_BSS_ZERO; uint8_t n_cut_onsets_ K2_BSS_INIT(0);
+    size_t cut_retry_idx_ = SIZE_MAX; uint8_t cut_tries_ K2_BSS_INIT(0);   // the row asked again, and how many times (kCutRetries at most)
     // kDipMinMv: dip_open_ = VBUS has been in the dip range since dip_ms_; dip_back_ = it came back to vSafe5V at dip_back_ms_ (its tail
     // session is adopted for kDipTailMs); dips_ = the dips that came back since the last row ran (kCutRetries are waited for).
-    uint32_t dip_ms_ = 0, dip_back_ms_ = 0; bool dip_open_ = false, dip_back_ = false; uint8_t dips_ = 0;
+    uint32_t dip_ms_ K2_BSS_INIT(0), dip_back_ms_ K2_BSS_INIT(0); bool dip_open_ K2_BSS_INIT(false), dip_back_ K2_BSS_INIT(false); uint8_t dips_ K2_BSS_INIT(0);
     // A casualty whose cut is still in progress waits in Releasing (cut_wait_) for VBUS to come back: the row is Pending, the verdict it
     // would have had is kept here (cut_v_ / cut_why_ / cut_detail_ / cut_mv_ = the VBUS of that moment), cut_final_ = the retries of this row are used up.
-    bool cut_wait_ = false, cut_final_ = false; Verdict cut_v_ = Verdict::Fail; Reason cut_why_ = Reason::None; uint8_t cut_detail_ = 0; int cut_mv_ = 0;
+    bool cut_wait_ K2_BSS_INIT(false), cut_final_ K2_BSS_INIT(false); Verdict cut_v_ = Verdict::Fail; Reason cut_why_ = Reason::None; uint8_t cut_detail_ K2_BSS_INIT(0); int cut_mv_ K2_BSS_INIT(0);
     void track_cut(const Input&);
     void track_dip(const Input&);                            // the dip clocks above (every poll)
     bool dip_wait(const Input&) const;                       // VBUS is in a dip that may still come back: the 5 V check waits
@@ -989,67 +990,67 @@ private:
     void cut_resolve(Input);                                 // Releasing: the held casualty's cut came back (retry or skip) or the window ran out (it fails)
     // Sink Hard Resets sent when the release started: a later one is the sink's own last resort for a release that did not
     // bring VBUS down (pattern budget-reannounce-mid-run), a recovery and not a lost source.
-    uint32_t rel_hr_ = 0;
-    uint32_t busy_retry_at_ = 0;   // a PD request refused Busy (identify/probe/prep running) is retried, not failed
-    HandoverInfo handover_{};
+    uint32_t rel_hr_ K2_BSS_INIT(0);
+    uint32_t busy_retry_at_ K2_BSS_INIT(0);   // a PD request refused Busy (identify/probe/prep running) is retried, not failed
+    HandoverInfo handover_ K2_BSS_ZERO;
     // The units of the run in execution order (the rows are laid out in the same order) and the one running.
-    std::array<Unit, kMaxUnits> order_{};
-    uint8_t n_order_ = 0;
+    std::array<Unit, kMaxUnits> order_ K2_BSS_ZERO;
+    uint8_t n_order_ K2_BSS_INIT(0);
     Unit unit_ = Unit::Count;
     Mode mode_ = Mode::Pd;
-    bool attached_ = false;       // the unit's attach is done: its rows may run
-    bool detached_ = false;       // the last act was a detach (Rd off): the next unit attaches without detaching again
-    bool ending_ = false;         // the running detach ends the unit (not a Legacy retry)
-    bool silent_ = false;         // a Legacy attach was verified PD-quiet (a resumed run has no such proof)
-    bool legacy_active_ = false;  // the last attach was Legacy: legacy_only(false) + pd_rescan() restore the sink at the end
-    bool never_dark_ = false;     // a detach that left VBUS up (a USB-A port has no CC): later detaches do not wait long
-    bool dipped_ = false;         // VBUS fell during this detach
-    bool late_pd_ = false;        // no source caps at START: the PD rows are planned from the first list heard
-    uint32_t plan_sig_ = 0;       // caps_sig() of the list the PD rows were last planned from
+    bool attached_ K2_BSS_INIT(false);       // the unit's attach is done: its rows may run
+    bool detached_ K2_BSS_INIT(false);       // the last act was a detach (Rd off): the next unit attaches without detaching again
+    bool ending_ K2_BSS_INIT(false);         // the running detach ends the unit (not a Legacy retry)
+    bool silent_ K2_BSS_INIT(false);         // a Legacy attach was verified PD-quiet (a resumed run has no such proof)
+    bool legacy_active_ K2_BSS_INIT(false);  // the last attach was Legacy: legacy_only(false) + pd_rescan() restore the sink at the end
+    bool never_dark_ K2_BSS_INIT(false);     // a detach that left VBUS up (a USB-A port has no CC): later detaches do not wait long
+    bool dipped_ K2_BSS_INIT(false);         // VBUS fell during this detach
+    bool late_pd_ K2_BSS_INIT(false);        // no source caps at START: the PD rows are planned from the first list heard
+    uint32_t plan_sig_ K2_BSS_INIT(0);       // caps_sig() of the list the PD rows were last planned from
     // Restart rules for a mid-run re-announce (2026-11-09): every new list opens a settle window (list_ms_ = when the
     // list in hand first arrived, list_sig_ = its caps_sig; an invalid->valid transition is a new list too). No Request
     // is sent while the window is open (list_settled()). The window is tracked only in the run states - Attach/Detach
     // settle the list on their own - and is seeded (not opened) by the first run-state poll after start()/restore().
-    uint32_t list_ms_ = 0, list_sig_ = 0;
-    bool list_valid_ = false, list_tracking_ = false;
-    bool flight_restart_ = false;   // the row in flight was re-placed by follow_list: re-ask at the new slot/word once the list settles
-    pd::SourceCaps caps_now_{};     // the list of the last poll (the end-of-unit sweep re-checks the Withdrawn rows against it)
-    bool wd_wait_ = false;          // the unit is held open for a withdrawn offer to return (next(), kWithdrawnWaitMs from wd_wait_ms_)
-    uint32_t wd_wait_ms_ = 0;
-    bool plan_frozen_ = false;    // a restored run: the journaled rows are the plan, a later list does not replan them
-    uint8_t fc_replanned_ = 0;    // bit 0: the SCP rows follow the adapter's limits already, bit 1: the UFCS rows follow its modes
-    bool pd_skips_recorded_ = true, probe_asked_ = false;
-    uint8_t attach_try_ = 0;
-    uint32_t unit_ms_ = 0, att_ms_ = 0;   // the unit's detach began; this attach phase began
-    uint32_t pre_ms_ = 0;                 // extra quiet before the unit's first handshake, on top of the 500 ms baseline settle
+    uint32_t list_ms_ K2_BSS_INIT(0), list_sig_ K2_BSS_INIT(0);
+    bool list_valid_ K2_BSS_INIT(false), list_tracking_ K2_BSS_INIT(false);
+    bool flight_restart_ K2_BSS_INIT(false);   // the row in flight was re-placed by follow_list: re-ask at the new slot/word once the list settles
+    pd::SourceCaps caps_now_ K2_BSS_ZERO;     // the list of the last poll (the end-of-unit sweep re-checks the Withdrawn rows against it)
+    bool wd_wait_ K2_BSS_INIT(false);          // the unit is held open for a withdrawn offer to return (next(), kWithdrawnWaitMs from wd_wait_ms_)
+    uint32_t wd_wait_ms_ K2_BSS_INIT(0);
+    bool plan_frozen_ K2_BSS_INIT(false);    // a restored run: the journaled rows are the plan, a later list does not replan them
+    uint8_t fc_replanned_ K2_BSS_INIT(0);    // bit 0: the SCP rows follow the adapter's limits already, bit 1: the UFCS rows follow its modes
+    bool pd_skips_recorded_ = true, probe_asked_ K2_BSS_INIT(false);
+    uint8_t attach_try_ K2_BSS_INIT(0);
+    uint32_t unit_ms_ K2_BSS_INIT(0), att_ms_ K2_BSS_INIT(0);   // the unit's detach began; this attach phase began
+    uint32_t pre_ms_ K2_BSS_INIT(0);                 // extra quiet before the unit's first handshake, on top of the 500 ms baseline settle
     enum class Att : uint8_t { Caps, Contract } att_ = Att::Caps;
-    bool rp_restart_ = false;   // the attach wait was restarted once after a source-side Rp drop (pattern slow-rp-wake)
-    bool contract_wrong_ = false;   // latched in poll_attach: PS_RDY at PDO 1 was seen during this attach wait with VBUS outside vSafe5V
+    bool rp_restart_ K2_BSS_INIT(false);   // the attach wait was restarted once after a source-side Rp drop (pattern slow-rp-wake)
+    bool contract_wrong_ K2_BSS_INIT(false);   // latched in poll_attach: PS_RDY at PDO 1 was seen during this attach wait with VBUS outside vSafe5V
                                     // (pattern shared-bus-split). The source may tear the port down before the timeout, so the
                                     // fail sites cannot re-ask the sink state - they read this latch.
-    int attach_max_mv_ = 0;     // the highest VBUS seen during the current attach wait (WrongVoltage records this, not the timeout reading)
+    int attach_max_mv_ K2_BSS_INIT(0);     // the highest VBUS seen during the current attach wait (WrongVoltage records this, not the timeout reading)
     // Latched per PD row (reset in request()), read where a lost programmable row ends: pattern pps-off-at-no-load = accepted (the
     // sink waited in Transition), never PS_RDY (Ready with this row's PDO), the port drew under kNeedsLoadMaxMa the whole row.
-    bool row_accepted_ = false, row_ps_rdy_ = false; int row_max_ma_ = 0;
+    bool row_accepted_ K2_BSS_INIT(false), row_ps_rdy_ K2_BSS_INIT(false); int row_max_ma_ K2_BSS_INIT(0);
     // The timing quirks of this row (TimingFlag bits, over its walk levels / sweep points) and its worst Accept -> PS_RDY time. They are
     // reset in request(); the accepted / PS_RDY latches above restart at every walk level and sweep point (level_mv_).
-    uint8_t row_timing_ = 0; uint16_t row_ps_rdy_ms_ = 0;
+    uint8_t row_timing_ K2_BSS_INIT(0); uint16_t row_ps_rdy_ms_ K2_BSS_INIT(0);
     int level_mv(const Step&) const;   // the voltage the Request out now asks (the row's, a walk level's, a sweep point's)
     void latch_row(const Input&);
     void note_ps_rdy(const Input&, const Step&);
     bool needs_load(const Input&) const;
     enum class Probe : uint8_t { Off, Pending, Closing, Running } probe_ = Probe::Off;
-    uint32_t probe_ms_ = 0;
+    uint32_t probe_ms_ K2_BSS_INIT(0);
     Options opts_{};
-    uint32_t caps_gone_ms_ = 0;   // when the source caps went invalid (a hard reset re-announces them); 0 = valid
-    uint8_t epr_stage_ = 0;   // 0 none, 1 enter EPR when the Pd unit's 5 V contract is live, 2 waiting for EnterSucceeded + EPR caps, 3 wanted (decided at the Pd attach), 4 cable unfit: ask the EPR list only
-    uint32_t epr_ms_ = 0;
-    uint8_t info_ = 0;        // the informational EPR list (SPR-mode EPR_Get_Source_Cap): 0 not started, 1 asking (line busy), 2 asked / waiting, 3 done (once per Pd attach)
-    uint32_t info_ms_ = 0;
-    bool info_rows_ = false;  // the EPR rows are laid out from Input::epr_info (the levels the charger offers) instead of one row per algorithm
-    bool epr_proof_ = false;   // the source accepted EPR entry in this run: it checked the cable (50 V / 5 A) itself
+    uint32_t caps_gone_ms_ K2_BSS_INIT(0);   // when the source caps went invalid (a hard reset re-announces them); 0 = valid
+    uint8_t epr_stage_ K2_BSS_INIT(0);   // 0 none, 1 enter EPR when the Pd unit's 5 V contract is live, 2 waiting for EnterSucceeded + EPR caps, 3 wanted (decided at the Pd attach), 4 cable unfit: ask the EPR list only
+    uint32_t epr_ms_ K2_BSS_INIT(0);
+    uint8_t info_ K2_BSS_INIT(0);        // the informational EPR list (SPR-mode EPR_Get_Source_Cap): 0 not started, 1 asking (line busy), 2 asked / waiting, 3 done (once per Pd attach)
+    uint32_t info_ms_ K2_BSS_INIT(0);
+    bool info_rows_ K2_BSS_INIT(false);  // the EPR rows are laid out from Input::epr_info (the levels the charger offers) instead of one row per algorithm
+    bool epr_proof_ K2_BSS_INIT(false);   // the source accepted EPR entry in this run: it checked the cable (50 V / 5 A) itself
     pd::VbusWait wait_;
-    uint32_t dark_ms_ = 0;   // VBUS below vSafe0V since
-    bool dark_ = false;
+    uint32_t dark_ms_ K2_BSS_INIT(0);   // VBUS below vSafe0V since
+    bool dark_ K2_BSS_INIT(false);
 };
 }  // namespace k2::charger_test

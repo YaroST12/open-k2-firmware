@@ -42,6 +42,7 @@
 #include "k2/pd/ra_guard.hpp"
 #include "k2/chargertest/resume_text.hpp"
 #include "k2/pd/emlib.hpp"
+#include "k2/core/bss_zero.hpp"
 #include "k2/pdstress/plan.hpp"
 #include "k2/pd/emrec.hpp"
 #include "k2/fastcharge/fastcharge.hpp"
@@ -66,27 +67,25 @@ class Ui;
 
 // State every page reads; owned by Ui, filled in its tick().
 struct UiContext {
-    Ui *ui = nullptr;
-    Surface content{};
-    Surface screen{};            // the same content area in panel pixels (224 x 240 or 240 x 224 by rotation): what a page draws on unscaled
-    uint32_t now = 0;            // time of the event being dispatched
-    PaintBudget *budget = nullptr;   // active per-pass slice budget; nullptr during atomic screenshots/boot
-    power::Metrics pm{};             // what the screen shows: One Euro smoothed (Settings > Smoothing)
-    power::Metrics pm_avg{};         // the 128-sample average: the charger test's current, link detection, cable resistance
-    std::int32_t vbus_fast_mv = 0;   // VBUS without the 2.5 s average: every judgement of a VBUS transition reads this, pm is display
+    Ui *ui K2_BSS_INIT(nullptr);
+    Surface content K2_BSS_ZERO;
+    Surface screen K2_BSS_ZERO;            // the same content area in panel pixels (224 x 240 or 240 x 224 by rotation): what a page draws on unscaled
+    uint32_t now K2_BSS_INIT(0);            // time of the event being dispatched
+    PaintBudget *budget K2_BSS_INIT(nullptr);   // active per-pass slice budget; nullptr during atomic screenshots/boot
+    power::Metrics pm K2_BSS_ZERO;             // what the screen shows: One Euro smoothed (Settings > Smoothing)
+    power::Metrics pm_avg K2_BSS_ZERO;         // the 128-sample average: the charger test's current, link detection, cable resistance
+    std::int32_t vbus_fast_mv K2_BSS_INIT(0);   // VBUS without the 2.5 s average: every judgement of a VBUS transition reads this, pm is display
     EnergyMeter meter;
-    WattHistory watts;           // Big sparklines, one sample per second: forward power (mW)
-    trend::Trend trend;          // Home v3 strips: V / A / W at 100 ms, 1 s and 10 s resolution
-    WattHistory volts, amps;     // ... VBUS (mV) and |current| (mA)
-    uint32_t em_listen_until = 0;   // passive listen window after a sniff that heard nothing (0 = none)
+    trend::CompactTrend trend;   // Home v3 strips & Graphs: V / A / W at 100 ms, 1 s and 10 s resolution
+    uint32_t em_listen_until K2_BSS_INIT(0);   // passive listen window after a sniff that heard nothing (0 = none)
     std::optional<adc::Reading> analog;                          // averaged ADC sweep, once available
-    vooc::Live vooc{};           // inline VOOC monitor: a proven session now + the last raw 0x82 reply (fastcharge::vooc_live)
+    vooc::Live vooc K2_BSS_ZERO;           // inline VOOC monitor: a proven session now + the last raw 0x82 reply (fastcharge::vooc_live)
     uint32_t cap_mv = 5000;      // highest voltage a request may ask for (power monitor limits)
     cable_r::Meter cable;                                        // passive two-point cable resistance
     // Home's PEAK and SAG cards: peaks and the worst dip since attach (or the last long OK on Home), fed from the raw sample
     // in Ui::tick against `sag_level_mv`, the level in force (home::sag_level_mv, refreshed every 100 ms while live).
     home::Extremes extremes;
-    uint32_t sag_level_mv = 0;
+    uint32_t sag_level_mv K2_BSS_INIT(0);
     std::optional<cable_r::Kelvin> kelvin;                       // Kelvin mode: latest valid sense reading
     // Stale lifecycle (design 6.6): when VBUS goes away the screens keep the last live reading.
     LiveTracker live;                                            // when VBUS was last present
@@ -120,33 +119,33 @@ struct UiContext {
             std::uint8_t pace = 0;                        // pdstress::Options::pace
             std::uint8_t sel = 0;                         // the Setup list's cursor
         } pdstress;
-        std::array<uint8_t, bench::kPlaces> place_sel{};  // each place's last action: repeating a job is OK, OK, OK
-        uint8_t face = 0;                                 // Meter: the face last shown (0 Flow, 1 Graphs, 2 Numbers, 3 Lines)
+        std::array<uint8_t, bench::kPlaces> place_sel K2_BSS_ZERO;  // each place's last action: repeating a job is OK, OK, OK
+        uint8_t face K2_BSS_INIT(0);                                 // Meter: the face last shown (0 Flow, 1 Graphs, 2 Numbers, 3 Lines)
     } keep;
     // The pending QR scan-test request (remote Cmd::QrTest op 1, k2/ui/ui_qrtest.hpp): the (version, px, quiet) of
     // the next show, consumed by QrTestPage::enter(). The page itself lives in the page arena.
-    struct QrTestReq { std::uint8_t version = 0, px = 0, quiet = 0; } qrtest;
-    uint8_t rotation = 0;        // physical LCD rotation, supplied by Ui
+    struct QrTestReq { std::uint8_t version K2_BSS_INIT(0), px K2_BSS_INIT(0), quiet K2_BSS_INIT(0); } qrtest;
+    uint8_t rotation K2_BSS_INIT(0);        // physical LCD rotation, supplied by Ui
     // The contract's power ceiling in whole watts while live (graphs::limit_mw: under PPS the requested level), refreshed every
     // 100 ms with the sag level; the trend records it per column for the Graphs page's dotted limit. 0 = none known.
-    uint32_t limit_w = 0;
-    bool pm_online = false;
+    uint32_t limit_w K2_BSS_INIT(0);
+    bool pm_online K2_BSS_INIT(false);
     // True while the Ui paints a whole page onto a screen it knows is kBg everywhere (after the full clear or the erase pass:
     // Ui::paint_incoming, render_for_capture). A page's first paint may then skip a body wipe, since the pixels are already
     // kBg. Never true in the erase replay, a resync or a refresh: those paint over live ink.
     // False while an OPAQUE page paints (Ui::page_opaque / menu_opaque): the switch skipped the erase pass, the old page's ink
     // is still there, and the page must write every pixel of the content itself, the gaps between its cells included
     // (kit::fill_except / kv_ground lay the ground in the same pass, so no pixel is streamed twice).
-    bool blank = false;
-    bool em_scanned = false;
-    bool em_scanning = false;
-    bool em_quiet = false;          // the last listen window ended without a cable reply
-    bool inline_mode = false;    // a live sink is attached: active operations are gated (refused, no confirm)
-    bool plus_key = false;       // the physical + key is down right now (Waiting watches it: it is wired to the CC pins)
+    bool blank K2_BSS_INIT(false);
+    bool em_scanned K2_BSS_INIT(false);
+    bool em_scanning K2_BSS_INIT(false);
+    bool em_quiet K2_BSS_INIT(false);          // the last listen window ended without a cable reply
+    bool inline_mode K2_BSS_INIT(false);    // a live sink is attached: active operations are gated (refused, no confirm)
+    bool plus_key K2_BSS_INIT(false);       // the physical + key is down right now (Waiting watches it: it is wired to the CC pins)
     fastcharge::Protocol fc = fastcharge::Protocol::Pending;     // passive D+/D- verdict
-    bool trig_armed = false;     // trigger above 5 V: first OK given, waiting for the second
+    bool trig_armed K2_BSS_INIT(false);     // trigger above 5 V: first OK given, waiting for the second
     cable_r::Mode cable_mode = cable_r::Mode::Passive;           // Cable R submenu: passive meter or Kelvin 8-wire
-    bool id_no_device = false;   // Identify was refused: nothing on CC, VBUS low (clears itself once something appears)
+    bool id_no_device K2_BSS_INIT(false);   // Identify was refused: nothing on CC, VBUS low (clears itself once something appears)
     // The pure precheck over the live readings (unknown = -1): is there a device to ask at all?
     bool no_device() const {
         return pd::identify_no_device(analog ? analog->cc1_mv : -1, analog ? analog->cc2_mv : -1,
@@ -297,7 +296,11 @@ public:
     // BACK or OK cancels it.
     enum class Stage : uint8_t { Algorithms, Group, Cable, Identity, Review, Running, Results, Steps, Detail, Resume, Changes, Ask, Refuse, Waiting, Custom, SpecDetail };
     using Proposal = std::array<uint32_t, pd::kMaxPdos + 24>;
-    explicit ChargerTestSession(UiContext& c) : ctx_(c), runner_(*this) {}
+    explicit ChargerTestSession(UiContext& c) : ctx_(c), runner_(*this) {
+        card_name_[0] = '\0';
+        mfr_[0] = '\0';
+        run_cable_name_[0] = '\0';
+    }
     void enter();                  // the page is (re)entered: the wizard starts at Algorithms, or at Resume for a journaled run
     // The page's paint writes every content pixel (Ui::page_opaque): only the Algorithms list (rows from kBodyY, the empty
     // tail slots wiped, bar and footer whole) is proven so (tests/test_ui_capture.cpp walk). `entering` = enter() runs
@@ -482,90 +485,90 @@ private:
     // Journal writes a row in flight must not do (Runner::quiet()): the section files that hold a decided row or a replanned
     // plan are noted dirty in the journal itself. A write holds the main loop (and the PD engine) for 5 to 250 ms, so none is done
     // in one go: journal_pump() does ONE file per tick behind the row, and only while the PD link has been quiet (see record()).
-    uint32_t jr_wait_ms_ = 0;               // when the pending records began to wait for a quiet link (0 = nothing waiting)
-    uint32_t arm_t0_ = 0;
+    uint32_t jr_wait_ms_ K2_BSS_INIT(0);               // when the pending records began to wait for a quiet link (0 = nothing waiting)
+    uint32_t arm_t0_ K2_BSS_INIT(0);
     void claim_step(uint32_t now);
     void decide_reattach();
-    charger_journal::RunMeta arm_meta_{};
+    charger_journal::RunMeta arm_meta_ K2_BSS_ZERO;
     void journal_pump(uint32_t now);        // one file at most per call; there is no drain
     void arm_step(uint32_t now);
     void arm_abort();
-    ctcable::Choice resume_cable_{};     // the journaled identity of that run, re-armed by reapply_cable()
-    uint32_t resume_judged_ = 0;         // when the guard last judged (and logged) for the resume
+    ctcable::Choice resume_cable_ K2_BSS_ZERO;     // the journaled identity of that run, re-armed by reapply_cable()
+    uint32_t resume_judged_ K2_BSS_INIT(0);         // when the guard last judged (and logged) for the resume
     // The draft starts at Medium (no deep sweeps); boot applies the stored Settings > Test level (Ui::charger_test_set_level),
     // Review's Level row and the remote (Cmd 0x5B) change it, and Deep turns both deep sweeps on (with_level). The Tests list
     // lines and the remote knob (charger-sweep, Cmd 0x0F) still toggle each sweep on its own after that.
     charger_test::Options options_{};
     charger_test::Summary summary_;
-    uint32_t run_t0_ = 0;                  // when the run entered Running (the m:ss on screen)
+    uint32_t run_t0_ K2_BSS_INIT(0);                  // when the run entered Running (the m:ss on screen)
     StrBuf<32> message_;
-    int selection_ = 0, family_ = 0, result_family_ = -1, detail_index_ = 0, detail_row_ = 0;
+    int selection_ K2_BSS_INIT(0), family_ K2_BSS_INIT(0), result_family_ = -1, detail_index_ K2_BSS_INIT(0), detail_row_ K2_BSS_INIT(0);
     // The Steps page opened from a PD Results row lists that row's steps only (picked(): result_layout::row_has on this copy of the
     // row, its range or fixed levels); any other row lists its protocol family (result_family_, -1 = all).
-    result_layout::Row result_row_{};
+    result_layout::Row result_row_ K2_BSS_ZERO;
     const result_layout::Row* picked() const;   // result_row_ while the Steps page lists a PD row, else nullptr
     bool shows(const charger_test::Step&) const;
     // The identity the next START presents lives in ctx_.cables (the list Tools -> Spoof shares), not here.
-    ctcable::Choice run_cable_{};        // the identity of the current / last run
-    ctcable::Facts run_facts_{};         // its VID / PID / limits, for the report card
+    ctcable::Choice run_cable_ K2_BSS_ZERO;        // the identity of the current / last run
+    ctcable::Facts run_facts_ K2_BSS_ZERO;         // its VID / PID / limits, for the report card
     // Running: the verdict grid follows the step under test (follow_), anchored to the bottom: the running row ends the window
     // (ResultGrid::anchor_bottom), the finished rows stay above. PLUS / MINUS scroll it by hand (follow_ = false, the
     // line the user chose in scroll_line_); the follow resumes kFollowResumeMs after the last press or when the step changes.
-    int scroll_line_ = 0;
-    uint32_t scroll_ms_ = 0;
-    size_t scroll_step_ = 0;
+    int scroll_line_ K2_BSS_INIT(0);
+    uint32_t scroll_ms_ K2_BSS_INIT(0);
+    size_t scroll_step_ K2_BSS_INIT(0);
     pd::VbusWait wait_;              // Waiting: the VBUS / caps judgement
-    uint32_t wait_t0_ = 0;               // when the press began the wait (the elapsed time on screen and in the log)
-    uint32_t wait_slow_ = 0;             // the last attach scan (every pd::kStartWaitSlowMs)
+    uint32_t wait_t0_ K2_BSS_INIT(0);               // when the press began the wait (the elapsed time on screen and in the log)
+    uint32_t wait_slow_ K2_BSS_INIT(0);             // the last attach scan (every pd::kStartWaitSlowMs)
     waitplus::PlusWatch plus_watch_;     // paces the [WAKE] lines while + is held in Waiting (and 2 s after)
-    uint32_t wait_pause_until_ = 0;      // the 1 s Rd-off between the two attempts ends here
+    uint32_t wait_pause_until_ K2_BSS_INIT(0);      // the 1 s Rd-off between the two attempts ends here
     raguard::PeakWindow guard_;          // CC peaks over the last ~0.8 s while Cable / Review is open (a PLUS press sags CC2)
-    uint32_t guard_t_ = 0;               // when the last sample went into guard_
-    uint32_t reattach_t0_ = 0;
+    uint32_t guard_t_ K2_BSS_INIT(0);               // when the last sample went into guard_
+    uint32_t reattach_t0_ K2_BSS_INIT(0);
     void reattach_begin(uint32_t now);
     void reattach_step(uint32_t now);
     void reattach_drop();
-    uint32_t confirm_until_ = 0;
-    Proposal confirm_proposal_{};
-    uint16_t card_no_ = 0, delta_runs_ = 0;   // saved card number (0 = none), runs before this one
-    char card_name_[24] = {};  // saved card name of this run, the Results heading
-    char mfr_[13] = {};   // Manufacturer_Info name from the source probe, only used to name the card
-    char run_cable_name_[ctcable::kNameLen] = {};
+    uint32_t confirm_until_ K2_BSS_INIT(0);
+    Proposal confirm_proposal_;
+    uint16_t card_no_ K2_BSS_INIT(0), delta_runs_ K2_BSS_INIT(0);   // saved card number (0 = none), runs before this one
+    char card_name_[24];       // saved card name of this run, the Results heading
+    char mfr_[13];             // Manufacturer_Info name from the source probe, only used to name the card
+    char run_cable_name_[ctcable::kNameLen];
     Stage stage_ = Stage::Algorithms;
     raguard::Topology topology_ = raguard::Topology::Unknown;   // the guard's last reading (the Warning screen, the run's journal)
     // The run's journal is armed (its whole plan written, header last) in pieces too, one write per tick on a quiet link, while the
     // Runner is held in its first Baseline: arm_ 1 = rows and header, 2 = the run's meta record (one more write), 3 = the planned
     // re-attach's marker and Rd gap (one more write), 4 = the source's own claim is awaited before the blink is decided (no flash
     // write, bounded by kClaimWaitMs), 0 = done.
-    uint8_t arm_ = 0;
-    uint8_t run_guard_ = 0;                // the Ra guard's reading of the run in flight, journal / card encoding (RunMeta::guard)
-    uint8_t reattach_ = 0;
-    bool journal_active_ = false, resume_pending_ = false;
-    bool journal_closed_ = false;   // closing() already wrote this run's Finish (poll() need not write it again)
-    bool capture_kept_ = false;          // the frozen transition capture already belongs to a failed row: a later failure (another unit) must not take it over
-    bool reattach_ask_ = false;             // the run's static conditions hold: the source's claim decides the blink (arm_ 4)
-    bool claim_asked_ = false;              // the claim wait started its probe (Get_Source_Cap_Extended and the rest of the quick probe)
-    bool self_run_ = false;              // the charger under test powers this K2 (a key-mode boot): the run keeps VBUS up, its card says so
-    bool auto_resume_ = false;          // the journaled run was unattended (charger-powered K2): resume without the OK press
-    bool resume_rd_ = false;             // the resume presented the Rd (host-powered K2): wait_ carries the wait for the charger
-    bool resume_hold_ = false;           // BACK, or the identity could not be armed: no Rd is presented until OK asks again
-    bool resume_refused_ = false;        // the Ra guard says the charger is behind a cable: the journaled identity cannot be armed
-    bool dialog_spoof_ = false;          // the run presents the spoof (release_run lets go of it)
-    bool spoof_user_ = false;            // ... but the user had armed that very identity in Tools first: release_run leaves it armed
-    bool dialog_ra_ = false;             // the dialog turned the Ra mode on (release_run turns it off)
-    bool follow_ = true, confirming_ = false;
-    bool wait_retry_ = false, wait_paused_ = false;   // the second attempt is running / the Rd is off between the two
-    bool guard_bypass_ = false;           // "Start anyway": the guard's reading is recorded, the spoof runs regardless
-    bool skip_spoof_run_ = false;         // "Start, skip spoof" on the Refuse stage: this run carries no identity, the stored pick stays
+    uint8_t arm_ K2_BSS_INIT(0);
+    uint8_t run_guard_ K2_BSS_INIT(0);                // the Ra guard's reading of the run in flight, journal / card encoding (RunMeta::guard)
+    uint8_t reattach_ K2_BSS_INIT(0);
+    bool journal_active_ K2_BSS_INIT(false), resume_pending_ K2_BSS_INIT(false);
+    bool journal_closed_ K2_BSS_INIT(false);   // closing() already wrote this run's Finish (poll() need not write it again)
+    bool capture_kept_ K2_BSS_INIT(false);          // the frozen transition capture already belongs to a failed row: a later failure (another unit) must not take it over
+    bool reattach_ask_ K2_BSS_INIT(false);             // the run's static conditions hold: the source's claim decides the blink (arm_ 4)
+    bool claim_asked_ K2_BSS_INIT(false);              // the claim wait started its probe (Get_Source_Cap_Extended and the rest of the quick probe)
+    bool self_run_ K2_BSS_INIT(false);              // the charger under test powers this K2 (a key-mode boot): the run keeps VBUS up, its card says so
+    bool auto_resume_ K2_BSS_INIT(false);          // the journaled run was unattended (charger-powered K2): resume without the OK press
+    bool resume_rd_ K2_BSS_INIT(false);             // the resume presented the Rd (host-powered K2): wait_ carries the wait for the charger
+    bool resume_hold_ K2_BSS_INIT(false);           // BACK, or the identity could not be armed: no Rd is presented until OK asks again
+    bool resume_refused_ K2_BSS_INIT(false);        // the Ra guard says the charger is behind a cable: the journaled identity cannot be armed
+    bool dialog_spoof_ K2_BSS_INIT(false);          // the run presents the spoof (release_run lets go of it)
+    bool spoof_user_ K2_BSS_INIT(false);            // ... but the user had armed that very identity in Tools first: release_run leaves it armed
+    bool dialog_ra_ K2_BSS_INIT(false);             // the dialog turned the Ra mode on (release_run turns it off)
+    bool follow_ = true, confirming_ K2_BSS_INIT(false);
+    bool wait_retry_ K2_BSS_INIT(false), wait_paused_ K2_BSS_INIT(false);   // the second attempt is running / the Rd is off between the two
+    bool guard_bypass_ K2_BSS_INIT(false);           // "Start anyway": the guard's reading is recorded, the spoof runs regardless
+    bool skip_spoof_run_ K2_BSS_INIT(false);         // "Start, skip spoof" on the Refuse stage: this run carries no identity, the stored pick stays
     // The planned re-attach (rdintent::plan_reattach): a self-powered START with a 6 A identity against a source whose offer the
     // cable holds down (rdintent::offer_held_by_cable: below its own claim, nothing above 3 A) makes the K2 blink off once, so the
     // charger reads the cable at a real attach. confirm_reattach_ = the confirmation on screen announces it (only when the
     // source's claim is already in hand); reattach_plan_ = this run does it (decided in the arm, claim_step); reattach_ 1 = the Rd is off for the gap, 2 = the Rd is
     // back and the charger's new contract is awaited (the Runner stays held in its Baseline until then or until the K2 died).
-    bool confirm_reattach_ = false;
-    bool reattach_plan_ = false;
-    bool remote_confirm_ = false;   // a remote START's confirm window: poll() confirms it once the Ra guard's window is full
-    bool entering_ = false;       // enter() is switching the stage: nothing of this page is on screen yet
+    bool confirm_reattach_ K2_BSS_INIT(false);
+    bool reattach_plan_ K2_BSS_INIT(false);
+    bool remote_confirm_ K2_BSS_INIT(false);   // a remote START's confirm window: poll() confirms it once the Ra guard's window is full
+    bool entering_ K2_BSS_INIT(false);       // enter() is switching the stage: nothing of this page is on screen yet
 };
 
 // The charger test, painted half: built when the page comes on screen, destroyed when it leaves. Everything here is a repaint
@@ -878,7 +881,12 @@ private:
     void share_cable(uint32_t now_ms);
     void paint_status(uint32_t now_ms);
     bool paint_body(const MatchResult &r, const pd::SourceCaps &caps, std::span<const uint32_t> sink, bool redraw);
-    bool paint_no_pd_body(const MatchResult &r, bool redraw);
+    [[gnu::noinline]] bool paint_body_locked(const void *tab_data, bool dim);
+    [[gnu::noinline]] bool paint_body_tabs(const void *tab_data, bool dim);
+    [[gnu::noinline]] bool paint_no_pd_body(const MatchResult &r, bool redraw);
+    [[gnu::noinline]] bool paint_no_pd_locked(const char *line, uint32_t rp_ma);
+    [[gnu::noinline]] bool paint_no_pd_tabs(const char *line, uint32_t rp_ma);
+    [[gnu::noinline]] bool paint_empty_tabs(const char *title, const char *hint);
     // The no-PD gate (ROADMAP 2026-11-10, Row C): the Sink tab on any no-PD verdict with a device on the line, the Source tab
     // only when the source never offered PD. The Cable tab and the Details page never.
     bool no_pd_body() const {

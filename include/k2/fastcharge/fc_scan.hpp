@@ -5,6 +5,7 @@
 // Pure state machine over the Engine; it never asks for more than 9 V (SCP and VOOC stay at 5 V,
 // QC3/QC3+ stop at 6 V). The PD step belongs to the PD reader and is not part of this scan.
 #pragma once
+#include "k2/core/bss_zero.hpp"
 #include <array>
 #include <cstdint>
 #include <span>
@@ -55,13 +56,13 @@ private:
 
     Engine& eng_;
     Env& env_;
-    Phase phase_ = Phase::Off;
-    bool done_ = false;
-    bool allow_inline_ = false;
-    Fail fail_ = Fail::None;
-    std::size_t step_ = 0, done_n_ = 0;
-    std::array<ScanResult, kScanSteps> res_{};
-    std::uint32_t t_ms_ = 0, step_ms_ = 0;
+    Phase phase_ K2_BSS_INIT(Phase::Off);
+    bool done_ K2_BSS_INIT(false);
+    bool allow_inline_ K2_BSS_INIT(false);
+    Fail fail_ K2_BSS_INIT(Fail::None);
+    std::size_t step_ K2_BSS_INIT(0), done_n_ K2_BSS_INIT(0);
+    std::array<ScanResult, kScanSteps> res_ K2_BSS_ZERO;
+    std::uint32_t t_ms_ K2_BSS_INIT(0), step_ms_ K2_BSS_INIT(0);
 };
 
 }  // namespace k2::fc

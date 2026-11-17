@@ -30,6 +30,7 @@
 #include <span>
 #include <string_view>
 
+#include "k2/core/bss_zero.hpp"
 #include "k2/ui/qr.hpp"
 #include "k2/ui/qrshare.hpp"
 #include "k2/ui/qrshare_link.hpp"
@@ -64,15 +65,15 @@ public:
     unsigned parts() const { return parts_; }
 
 private:
-    std::size_t len_ = 0;
-    std::size_t title_len_ = 0;
-    unsigned parts_ = 0;
-    std::array<std::uint8_t, kBuffer> rec_{};
-    std::array<char, kTitleMax + 1> title_buf_{};
+    std::size_t len_ K2_BSS_INIT(0);
+    std::size_t title_len_ K2_BSS_INIT(0);
+    unsigned parts_ K2_BSS_INIT(0);
+    std::array<std::uint8_t, kBuffer> rec_;
+    std::array<char, kTitleMax + 1> title_buf_;
     qrshare::Type type_ = qrshare::Type::Emarker;
     std::uint8_t schema_ = 1;
-    bool packed_ = false;
-    bool v2_ = false;
+    bool packed_ K2_BSS_INIT(false);
+    bool v2_ K2_BSS_INIT(false);
 };
 
 class SharePage final : public PageBase {

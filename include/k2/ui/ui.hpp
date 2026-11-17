@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include "k2/core/bss_zero.hpp"
 #include "k2/drivers/buttons.hpp"
 #include "k2/ui/gfx.hpp"
 #include "k2/ui/ui_calc.hpp"
@@ -428,36 +429,36 @@ private:
     static constexpr int16_t kBattDot = 5, kBattDotX = 224 - kBattDot;
     void sync_panel();   // redraws the slots whose label changed since they were drawn
     uint32_t slot_sig(unsigned slot);
-    uint32_t slot_sig_[4] = {};
+    uint32_t slot_sig_[4] K2_BSS_ZERO;
     void draw_slot(unsigned slot);
     void log_timing(uint32_t now_ms);
 
     orientation::Tracker gravity_;
-    uint32_t rotation_notice_until_ = 0;
-    const char *notice_ = nullptr;   // a literal shown on the notice strip instead of the rotation text (refuse_menu)
+    uint32_t rotation_notice_until_ K2_BSS_INIT(0);
+    const char *notice_ K2_BSS_INIT(nullptr);   // a literal shown on the notice strip instead of the rotation text (refuse_menu)
     void refuse_menu(Menu m, const char *why, uint32_t now_ms);
     void rotation_gesture(uint32_t now_ms);
     void suppress_flipped_arrows();
     void store_orientation(uint8_t rotation);   // writes the orientation fields into /prefs.cfg when they changed
     void draw_rotation_notice(uint32_t now_ms);
-    Layout layout_{};
-    Surface panel_{};
+    Layout layout_ K2_BSS_ZERO;
+    Surface panel_ K2_BSS_ZERO;
     void refresh_action_views(uint32_t now_ms);
-    unsigned depth_ = 0;
+    unsigned depth_ K2_BSS_INIT(0);
     void update_lit(int k, bool was_held, uint32_t now_ms);
     bool held(int k) const { return down_[k] || remote_down_[k]; }
     UiAction finish_button(UiAction action, uint32_t now_ms);
-    uint32_t lit_since_[4] = {};
+    uint32_t lit_since_[4] K2_BSS_ZERO;
     // The reboot gesture (OK + Back, ui_calc.hpp RebootChord): fed on every key edge, physical or remote. While it is
     // active the single-key OK / Back events are dropped, each until that key is pressed afresh.
     RebootChord chord_;
     void feed_chord(uint32_t now_ms);
     int hold_px_ = -1;              // progress fill drawn so far
     int hold_left_ = -1;            // countdown drawn so far
-    uint32_t hold_ms_ = 0;          // chord held time at the last card draw
+    uint32_t hold_ms_ K2_BSS_INIT(0);          // chord held time at the last card draw
     UiContext::Frozen snap_prev_{}; // the live reading one snapshot window ago (note_last compares the next one with it)
-    uint32_t snap_ms_ = 0;          // when snap_prev_ was taken
-    uint32_t sag_level_ms_ = 0;     // last refresh of ctx_.sag_level_mv
+    uint32_t snap_ms_ K2_BSS_INIT(0);          // when snap_prev_ was taken
+    uint32_t sag_level_ms_ K2_BSS_INIT(0);     // last refresh of ctx_.sag_level_mv
     home::SettledLevel sag_settle_; // the contract level counts for the sag once it has held 1 s
     void update_hold_card(uint32_t now_ms, RebootChord::Step step);
     void draw_hold_card(uint32_t held_ms);
@@ -477,15 +478,15 @@ private:
     ShareRecord share_rec_;         // the record the Share view shows: filled by the opener before the page exists
     StackArena<PageIf, kPageArenaBytes, kPageArenaDepth> pages_;
 
-    uint32_t last_update_ms_ = 0;
-    uint32_t cable_seq_seen_ = 0;   // fusb302::cable_seq() last folded into the link state
+    uint32_t last_update_ms_ K2_BSS_INIT(0);
+    uint32_t cable_seq_seen_ K2_BSS_INIT(0);   // fusb302::cable_seq() last folded into the link state
     pd::Link link_;
-    uint32_t trig_until_ = 0;
-    pd::Choice trig_choice_{};
+    uint32_t trig_until_ K2_BSS_INIT(0);
+    pd::Choice trig_choice_ K2_BSS_ZERO;
 
     // Timing for the [UI] log: static draw time and the slowest update after a page change.
-    uint32_t full_us_ = 0, field_max_us_ = 0, page_since_ms_ = 0;
-    uint32_t full_px_ = 0;   // pixels the current page's last full paint sent: what replaying it to erase it would cost
+    uint32_t full_us_ K2_BSS_INIT(0), field_max_us_ K2_BSS_INIT(0), page_since_ms_ K2_BSS_INIT(0);
+    uint32_t full_px_ K2_BSS_INIT(0);   // pixels the current page's last full paint sent: what replaying it to erase it would cost
 
     // Progressive slice-paint state (keeps each call under the 20 ms pass ceiling).
     struct BudgetScope {
@@ -513,46 +514,46 @@ private:
     void start_full_clear();
     void reset_paint_pipeline();
     void pump_paint(uint32_t now_ms);
-    uint32_t (*paint_clock_)() = nullptr;
-    uint32_t paint_t0_us_ = 0;
+    uint32_t (*paint_clock_)() K2_BSS_INIT(nullptr);
+    uint32_t paint_t0_us_ K2_BSS_INIT(0);
     uint64_t paint_px0_ = 0;
-    int16_t clear_y_ = 0;
-    int16_t clear_y1_ = 0;
+    int16_t clear_y_ K2_BSS_INIT(0);
+    int16_t clear_y1_ K2_BSS_INIT(0);
     Orientation orient_ = kDefaultOrientation;
     Page page_ = Page::Home;
     Menu stack_[3] = {Menu::Count, Menu::Count, Menu::Count};
     raguard::CrossKind cross_seen_ = raguard::CrossKind::None;   // the crossed-CC verdict last logged ([LINK] cc cross=...)
     pd::PdVerdict pd_verdict_seen_ = pd::PdVerdict::Pending;     // the PD verdict last logged ([LINK] pd verdict=...)
-    bool rotation_lock_ = false;
-    bool rotation_chord_ = false;
-    bool rotate_buttons_ = false;
-    bool suppress_rotated_press_[4] = {};
-    uint8_t rotation_steps_ = 0;
+    bool rotation_lock_ K2_BSS_INIT(false);
+    bool rotation_chord_ K2_BSS_INIT(false);
+    bool rotate_buttons_ K2_BSS_INIT(false);
+    bool suppress_rotated_press_[4] K2_BSS_ZERO;
+    uint8_t rotation_steps_ K2_BSS_INIT(0);
     uint8_t requested_rotation_ = 0xFF;
-    bool rotation_notice_drawn_ = false;
+    bool rotation_notice_drawn_ K2_BSS_INIT(false);
     bool single_tools_ = !K2_WHOS_ATTACHED;
     int8_t conn_lock_ = -1;   // open_connection -> build_menu: the tab a single tool locks to, -1 = the tabbed page
-    bool place_next_ = false; // open_place -> build_menu: the PD diagnosis opens as the Log place
-    bool pressed_[4] = {};          // lit, indexed by Button
-    bool down_[4] = {};             // physically down
-    bool remote_down_[4] = {};      // a remote +/- is held, indexed by the physical key it lights
+    bool place_next_ K2_BSS_INIT(false); // open_place -> build_menu: the PD diagnosis opens as the Log place
+    bool pressed_[4] K2_BSS_ZERO;          // lit, indexed by Button
+    bool down_[4] K2_BSS_ZERO;             // physically down
+    bool remote_down_[4] K2_BSS_ZERO;      // a remote +/- is held, indexed by the physical key it lights
     uint8_t remote_key_[4] = {0xFF, 0xFF, 0xFF, 0xFF};   // by logical button: the physical key lit at press
-    bool suppress_chord_[4] = {};
-    bool hold_shown_ = false;       // the reboot HoldCard is on screen
-    bool extremes_live_ = false;    // VBUS was live at the last tick: a rising edge resets the Home peaks and cards
-    bool pdstress_note_ = false;    // a footer note (the PD Stress run's line or the loop lock) was on screen last tick
-    bool batt_dot_ = false;         // a battery run was in progress last tick (its dot on screen, draw_release_notice)
-    bool timing_pending_ = false;
-    bool booting_ = false;
-    bool paint_pending_ = false;
-    bool paint_blank_ = false;
-    bool clear_pending_ = false;
-    bool clear_full_lcd_ = false;
-    bool chrome_gaps_pending_ = false;
-    bool static_pending_ = false;
-    bool panel_pending_ = false;
-    bool timing_in_flight_ = false;
-    uint8_t panel_mask_ = 0;
+    bool suppress_chord_[4] K2_BSS_ZERO;
+    bool hold_shown_ K2_BSS_INIT(false);       // the reboot HoldCard is on screen
+    bool extremes_live_ K2_BSS_INIT(false);    // VBUS was live at the last tick: a rising edge resets the Home peaks and cards
+    bool pdstress_note_ K2_BSS_INIT(false);    // a footer note (the PD Stress run's line or the loop lock) was on screen last tick
+    bool batt_dot_ K2_BSS_INIT(false);         // a battery run was in progress last tick (its dot on screen, draw_release_notice)
+    bool timing_pending_ K2_BSS_INIT(false);
+    bool booting_ K2_BSS_INIT(false);
+    bool paint_pending_ K2_BSS_INIT(false);
+    bool paint_blank_ K2_BSS_INIT(false);
+    bool clear_pending_ K2_BSS_INIT(false);
+    bool clear_full_lcd_ K2_BSS_INIT(false);
+    bool chrome_gaps_pending_ K2_BSS_INIT(false);
+    bool static_pending_ K2_BSS_INIT(false);
+    bool panel_pending_ K2_BSS_INIT(false);
+    bool timing_in_flight_ K2_BSS_INIT(false);
+    uint8_t panel_mask_ K2_BSS_INIT(0);
 };
 
 }  // namespace k2

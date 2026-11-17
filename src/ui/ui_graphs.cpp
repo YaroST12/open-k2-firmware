@@ -226,7 +226,7 @@ bool GraphsPage::paint_info(const Shown &s, bool digits) {
 // limit row (dotted: odd columns only, anchored to the screen, so a flat limit never repaints), and the newest point's
 // 3 x 3 dot on the columns it covers.
 void GraphsPage::want(int k, Col (&out)[kCols]) const {
-    const trend::Trend &t = ctx_.trend;
+    const auto &t = ctx_.trend;
     const trend::Window w = window_;
     const int gh = g_.graph_rows();
     uint16_t v[kCols];

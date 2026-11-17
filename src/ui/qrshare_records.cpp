@@ -286,15 +286,15 @@ std::size_t pack_v2(Type type, std::span<const std::uint8_t> in, std::span<std::
 
 std::size_t pack_v2_in_place(Type type, std::span<std::uint8_t> rec) { return pack_v2(type, rec, rec); }
 
-std::size_t emarker(const emrec::Record& rec, std::string_view name, const emk_quirk::Quirks& quirks, std::span<std::uint8_t> out) {
-    const std::size_t qlen = quirks.empty() ? 0 : emk_quirk::block_size(quirks.count);
+std::size_t emarker(const emrec::Record& rec, std::string_view name, const emk_quirk::Quirks* quirks, std::span<std::uint8_t> out) {
+    const std::size_t qlen = !quirks || quirks->empty() ? 0 : emk_quirk::block_size(quirks->count);
     if (out.size() < kEmarkerHead + qlen) return 0;
     out[0] = qlen ? kEmarkerQuirks : 0;
     const std::size_t n = std::min(name.size(), kEmarkerName);
     std::memset(out.data() + 1, 0, kEmarkerName);
     std::memcpy(out.data() + 1, name.data(), n);
     std::memcpy(out.data() + 1 + kEmarkerName, rec.data(), rec.size());
-    if (qlen && emk_quirk::encode(quirks, out.subspan(kEmarkerHead, qlen)) != qlen) return 0;
+    if (qlen && emk_quirk::encode(*quirks, out.subspan(kEmarkerHead, qlen)) != qlen) return 0;
     return kEmarkerHead + qlen;
 }
 

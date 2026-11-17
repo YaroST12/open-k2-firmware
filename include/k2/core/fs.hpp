@@ -10,6 +10,7 @@
 // littlefs commits metadata with a checksum and a file is replaced only by its rename, so a power cut
 // leaves the old content or the new one, never a mix. Main loop only, never from an ISR.
 #pragma once
+#include "k2/core/bss_zero.hpp"
 #include "k2/core/lfs_cfg.h"
 
 #include <cstddef>
@@ -141,17 +142,17 @@ private:
     std::uint32_t blocks_;
     std::uint32_t grown_;
     std::uint32_t wide_;
-    std::uint32_t fence_ = 0;
-    bool mounted_ = false;
-    bool used_known_ = false;
-    std::uint32_t used_ = 0;
-    lfs_t lfs_{};
-    lfs_config cfg_{};
-    lfs_file_config fcfg_{};
-    alignas(4) std::uint8_t rcache_[kCache]{};
-    alignas(4) std::uint8_t pcache_[kCache]{};
-    alignas(4) std::uint8_t fcache_[kCache]{};
-    alignas(4) std::uint8_t look_[kLookahead]{};
+    std::uint32_t fence_ K2_BSS_INIT(0);
+    bool mounted_ K2_BSS_INIT(false);
+    bool used_known_ K2_BSS_INIT(false);
+    std::uint32_t used_ K2_BSS_INIT(0);
+    lfs_t lfs_ K2_BSS_ZERO;
+    lfs_config cfg_ K2_BSS_ZERO;
+    lfs_file_config fcfg_ K2_BSS_ZERO;
+    alignas(4) std::uint8_t rcache_[kCache] K2_BSS_ZERO;
+    alignas(4) std::uint8_t pcache_[kCache] K2_BSS_ZERO;
+    alignas(4) std::uint8_t fcache_[kCache] K2_BSS_ZERO;
+    alignas(4) std::uint8_t look_[kLookahead] K2_BSS_ZERO;
 };
 
 }  // namespace k2::fs

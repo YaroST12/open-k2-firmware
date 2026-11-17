@@ -16,6 +16,7 @@
 // What it records (read back through blob()): handshake timings and class, every TX frame and every raw
 // RX byte run with its time since the first frame, the UART error counts, VBUS start / min / max.
 #pragma once
+#include "k2/core/bss_zero.hpp"
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -304,13 +305,13 @@ private:
     Tuner tuner_{};
     Tuner used_tuner_{};
     ProbeResult res_{};
-    bool running_ = false, opened_ = false, done_ = false;
-    std::uint32_t t0_ = 0, due_ms_ = 0, last_rx_ms_ = 0;
-    int tries_ = 0;
-    std::array<std::uint8_t, kFrameMax> acc_{};
-    std::size_t acc_n_ = 0;
-    std::array<std::uint8_t, kProbeBlobMax> blob_{};
-    std::size_t log_n_ = 0;
+    bool running_ K2_BSS_INIT(false), opened_ K2_BSS_INIT(false), done_ K2_BSS_INIT(false);
+    std::uint32_t t0_ K2_BSS_INIT(0), due_ms_ K2_BSS_INIT(0), last_rx_ms_ K2_BSS_INIT(0);
+    int tries_ K2_BSS_INIT(0);
+    std::array<std::uint8_t, kFrameMax> acc_ K2_BSS_ZERO;
+    std::size_t acc_n_ K2_BSS_INIT(0);
+    std::array<std::uint8_t, kProbeBlobMax> blob_ K2_BSS_ZERO;
+    std::size_t log_n_ K2_BSS_INIT(0);
 };
 
 }  // namespace k2::ufcs

@@ -98,7 +98,7 @@ public:
 
 private:
     Backend& b_;
-    std::array<char, kLineMax> buf_{};
+    std::array<char, kLineMax> buf_;
     std::size_t len_ = 0;
     bool overflow_ = false;
     bool last_cr_ = false;
