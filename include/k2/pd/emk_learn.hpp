@@ -24,8 +24,9 @@ namespace k2::emk_learn {
 
 inline constexpr unsigned kMaxSeeds = 4;
 inline constexpr unsigned kMaxSvids = 3;     // SVIDs whose modes (and sweep) are explored
-inline constexpr unsigned kLogBytes = 256;   // packed transcript bytes kept
+inline constexpr unsigned kLogBytes = 320;   // packed transcript bytes kept (a seed with 6 VDOs and a 7-object answer is 63)
 inline constexpr unsigned kMaxObjs = 7;      // data objects of a PD message
+inline constexpr unsigned kMaxVdos = kMaxObjs - 1;   // objects after the VDM header in a seed
 
 // One request: `n` data objects (the VDM header first), sent as SOP' with this PD specification revision field
 // (1 = PD 2.0, 2 = PD 3.x).
@@ -48,11 +49,16 @@ struct Reply {
 // gone) and the run stops; true: `rep.got` tells whether an answer followed.
 using ExchangeFn = bool (*)(void* ctx, const Request& req, Reply& rep);
 
+// A seed is one request. Structured (raw false): the VDM header is built from svid and cmd (object position 0, the
+// answered variant's SVDM version). Raw: `hdr` goes out exactly as given (any position, version and reserved bits),
+// and svid / cmd are its upper half and low five bits (the sweep and the seed table use them).
 struct Seed {
     std::uint16_t svid = 0;
     std::uint8_t cmd = 0;                         // structured command 0..31
-    std::uint8_t nvdo = 0;                        // data objects after the VDM header (0..2)
-    std::array<std::uint32_t, 2> vdo{};
+    std::uint8_t nvdo = 0;                        // data objects after the VDM header (0..kMaxVdos)
+    std::array<std::uint32_t, kMaxVdos> vdo{};
+    bool raw = false;
+    std::uint32_t hdr = 0;                        // the exact VDM header word when raw
 };
 
 struct Options {
@@ -121,9 +127,14 @@ bool learn(ExchangeFn fn, void* ctx, const Options& opt, Result& out);
 
 // ---- remote wire forms (Cmd::EmLib learn ops; tools/k2_remote.py and tools/web/k2proto.js mirror them) ----
 // Options, after the op byte and the run sub-op: [flags, nseeds, seed * nseeds]. Flags bit0 = also sweep the vendor
-// commands, bit1 = the scan may run inline (confirmation, like the e-marker scan). A seed is svid u16, cmd (0..31),
-// nvdo (0..2), vdo u32 * nvdo, all little endian. Exact length, anything else is false.
-inline constexpr std::size_t kOptionsMax = 2 + kMaxSeeds * (4 + 4 * 2);
+// commands, bit1 = the scan may run inline (confirmation, like the e-marker scan). A structured seed is svid u16, cmd
+// (0..31), nvdo (0..6), vdo u32 * nvdo. A raw seed is the header's upper half u16 (its SVID), kRawCmd, nvdo (0..6),
+// the header's lower half u16, vdo u32 * nvdo: 6 + 4 * nvdo bytes. All little endian. Exact length, anything else is
+// false. The whole request payload is one frame (op byte and sub-op, then at most kOptionsMax bytes), so four seeds
+// are the parser's limit and the frame is the real one: a full raw seed (30 bytes) leaves room for one of at most
+// four VDOs besides.
+inline constexpr std::uint8_t kRawCmd = 0xFF;
+inline constexpr std::size_t kOptionsMax = 57;
 bool parse_options(std::span<const std::uint8_t> p, Options& out, bool& confirm);
 
 // Summary (the status and run response): [err, outcome (0 nothing yet, 1 learned, 2 no identity, 3 aborted, 4 acked no answer), svids,
@@ -137,10 +148,13 @@ bool parse_options(std::span<const std::uint8_t> p, Options& out, bool& confirm)
 inline constexpr std::size_t kSummaryBytes = 20;
 std::size_t encode_summary(const Result* last, std::span<std::uint8_t> out);
 
-// One transcript entry: [err, i, step, spec_rev, req_n, got, rep_n, reply PD header u16, request words, reply words]
-// (words u32 little endian, VDM header first, rep_n counts it). Past the log: the one byte [3].
-inline constexpr std::size_t kEntryMax = 9 + 4 * 3 + 4 * kMaxObjs;
-std::size_t encode_entry(const Result& r, unsigned i, std::span<std::uint8_t> out);
+// One transcript entry: [err, i, step, spec_rev, req_n, got, rep_n, reply PD header u16, words] (words u32 little
+// endian: the request words, then the reply words, VDM header first; req_n and rep_n are the whole entry's). The
+// words start at word `first` of that list and end where `out` is full, so a big entry (up to kEntryMax bytes, more
+// than a 58-byte response) comes in several requests: the host asks again from the word it has. Past the log: the
+// one byte [3]; `out` under 9 bytes: 0.
+inline constexpr std::size_t kEntryMax = 9 + 4 * 2 * kMaxObjs;
+std::size_t encode_entry(const Result& r, unsigned i, std::span<std::uint8_t> out, unsigned first = 0);
 
 // Structured VDM request header: SVID, structured, SVDM version of the variant (2.0: major 1; 1.0: 0), command,
 // object position 0. The PD header revision of the same variant goes in Request::spec_rev.

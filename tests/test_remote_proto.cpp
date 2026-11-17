@@ -740,6 +740,11 @@ static void test_emlib() {
     CHECK_EQ(int(f.em_req.size()), 3); CHECK_EQ(int(f.em_req[2]), 5);
     CHECK_EQ(run(f, request(0x61, 43, {6, 2}), r), 1);                  // entry needs its index
     check_header(r, 0x61, 43, Status::BadLength, 0);
+    CHECK_EQ(run(f, request(0x61, 49, {6, 2, 5, 12}), r), 1);          // entry from word 12 (the chunked fetch of a 14-word entry)
+    check_header(r, 0x61, 49, Status::Ok, 3);
+    CHECK_EQ(int(f.em_req.size()), 4); CHECK_EQ(int(f.em_req[3]), 12);
+    CHECK_EQ(run(f, request(0x61, 50, {6, 2, 5, 12, 0}), r), 1);        // but no more than that
+    check_header(r, 0x61, 50, Status::BadLength, 0);
     CHECK_EQ(run(f, request(0x61, 44, {6, 0, 0}), r), 1);               // status takes nothing more
     check_header(r, 0x61, 44, Status::BadLength, 0);
     CHECK_EQ(run(f, request(0x61, 45, {6}), r), 1);

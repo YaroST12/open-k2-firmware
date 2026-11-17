@@ -821,7 +821,8 @@ Status validate_emlib(std::span<const uint8_t> p, bool &needs_write) {
             return emk_learn::parse_options(p.subspan(2), o, confirm) ? Status::Ok : Status::BadArg;
         }
         if (p[1] == kEmLearnSave) needs_write = true;
-        return p.size() == (p[1] == kEmLearnEntry ? 3u : 2u) ? Status::Ok : Status::BadLength;
+        if (p[1] == kEmLearnEntry) return p.size() == 3 || p.size() == 4 ? Status::Ok : Status::BadLength;   // [6, 2, i] or [6, 2, i, first word]
+        return p.size() == 2 ? Status::Ok : Status::BadLength;
     case kEmUnmatched:
         if (p.size() != 2) return Status::BadLength;
         return (p[1] == emk_quirk::kSeenTotals || p[1] < emk_quirk::SeenLog::kDepth) ? Status::Ok : Status::BadArg;

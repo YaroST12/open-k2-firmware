@@ -1626,7 +1626,7 @@ size_t Remote::emlib(std::span<const uint8_t> p, std::span<uint8_t> out) {
         case remote::kEmLearnEntry: {
             const auto *r = emk_learn_hw::last();
             if (r == nullptr) { out[0] = static_cast<uint8_t>(emlib::Err::NotFound); return 1; }
-            return emk_learn::encode_entry(*r, p[2], out);
+            return emk_learn::encode_entry(*r, p[2], out, p.size() > 3 ? p[3] : 0);
         }
         case remote::kEmLearnSave: return save_rsp(emk_learn_hw::save());
         default:   // kEmLearnStatus

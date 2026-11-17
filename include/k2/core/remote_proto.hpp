@@ -795,15 +795,21 @@ inline constexpr size_t kCardsNameMax = 20, kCardsChunks = 6;   // 250 bytes / 4
 //                                   tail, 17..18 the read tail, 19 the pull-down verdict; absent on older firmware): the last run, outcome 0 = none yet
 //           req [6, 1, options]     run: powers the cable in the bottom port (VCONN) and replays Discover Identity /
 //                                   SVIDs / Modes and the seeds; options = [flags (bit0 sweep, bit1 confirm inline),
-//                                   nseeds <= 4, seed * nseeds], a seed = svid u16, cmd 0..31, nvdo 0..2, vdo u32 * nvdo;
+//                                   nseeds <= 4, seed * nseeds], a seed = svid u16, cmd 0..31, nvdo 0..6, vdo u32 * nvdo,
+//                                   or a raw seed = header hi u16, 0xFF, nvdo 0..6, header lo u16, vdo u32 * nvdo (the VDM
+//                                   header word is sent exactly); the options are at most k2::emk_learn::kOptionsMax = 57 bytes
 //                                   rsp summary (outcome 1 learned, 2 no identity, 3 aborted)
-//           req [6, 2, i]           transcript entry i of the last run, rsp k2::emk_learn::encode_entry ([3] past the end)
+//           req [6, 2, i]           transcript entry i of the last run, rsp k2::emk_learn::encode_entry ([3] past the end);
+//                                   req [6, 2, i, first] the same from word `first` of its request-then-reply word list: an
+//                                   entry can be bigger than a response (up to 65 bytes), so the host asks again from the words it has
 //           req [6, 3]              save the last learned clone with its extra replies, rsp [err, seq u16, existed]
 //   UNMATCHED req [7, i]            the messages an armed fake cable received and nothing answered, newest first:
 //           i 255 -> [err, total u16, held]; i 0..3 -> that plus sop (1 SOP', 2 SOP''), n, header u16, words (u32 LE);
 //           an i past the held entries -> [3]
 constexpr uint8_t kEmList = 0, kEmGet = 1, kEmSave = 2, kEmDelete = 3, kEmRename = 4, kEmSpoof = 5, kEmLearn = 6, kEmUnmatched = 7;
 constexpr uint8_t kEmLearnStatus = 0, kEmLearnRun = 1, kEmLearnEntry = 2, kEmLearnSave = 3;
+static_assert(2 + k2::emk_learn::kOptionsMax <= kMaxReqPayload);                          // [op, sub-op, options] is one request frame
+static_assert(2 * ((kMaxRspPayload - 9) / 4) >= 2 * k2::emk_learn::kMaxObjs);              // any entry comes in at most two responses
 constexpr uint8_t kEmSpoofStatus = 0, kEmSpoofArm = 1, kEmSpoofDisarm = 2, kEmSpoofBuiltin = 3;
 constexpr uint8_t kEmErrInline = 6;
 constexpr uint8_t kEmErrBusy = 7;  // active negotiation/scan/test refuses an arm, disarm remains explicit

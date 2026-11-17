@@ -16,7 +16,7 @@ namespace q = emk_quirk;
 
 // The firmware keeps one Result in static RAM next to the stack: it borrows the record and the quirk table (from
 // the spoof) and holds only a packed transcript, so it stays small (docs/ARCHITECTURE.md, RAM).
-static_assert(sizeof(emk_learn::Result) <= 300, "emk_learn::Result must stay small");
+static_assert(sizeof(emk_learn::Result) <= 380, "emk_learn::Result must stay small");
 
 enum class How { Ack, Nak, Busy, NotSupported };
 
@@ -387,11 +387,224 @@ static void test_parse_options() {
     std::vector<std::uint8_t> five = {0, 5};
     for (int i = 0; i < 5; i++) for (std::uint8_t b : {0xD9, 0x22, 31, 0}) five.push_back(b);
     CHECK_EQ(emk_learn::parse_options(five, o, confirm), false);
-    CHECK_EQ(emk_learn::parse_options(std::vector<std::uint8_t>{0, 1, 0xD9, 0x22, 31, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, o, confirm), false);
+    {   // up to six objects after the header now; seven is a fault
+        std::vector<std::uint8_t> six = {0, 1, 0xD9, 0x22, 31, 6};
+        six.resize(six.size() + 24, 0x11);
+        CHECK_EQ(emk_learn::parse_options(six, o, confirm), true);
+        CHECK_EQ(o.seeds[0].nvdo, 6);
+        CHECK_EQ(o.seeds[0].vdo[5], 0x11111111u);
+        CHECK_EQ(o.seeds[0].raw, false);
+        std::vector<std::uint8_t> seven = {0, 1, 0xD9, 0x22, 31, 7};
+        seven.resize(seven.size() + 28, 0x11);
+        CHECK_EQ(emk_learn::parse_options(seven, o, confirm), false);
+    }
     CHECK_EQ(emk_learn::parse_options(std::vector<std::uint8_t>{0, 1, 0xD9, 0x22, 32, 0}, o, confirm), false);
     CHECK_EQ(emk_learn::parse_options(std::vector<std::uint8_t>{4, 0}, o, confirm), false);
     // The longest valid request fits one request frame.
     CHECK_EQ(emk_learn::kOptionsMax <= 57, true);
+}
+
+// The brick's cable command, as the K2 saw it: header 0x22D9A11F (position 1), then 0, 0 and four random words.
+static const std::uint32_t kBrickHdr = 0x22D9A11Fu;
+static const std::array<std::uint32_t, 6> kBrickVdos = {0x00000000u, 0x00000000u, 0x0E4AD139u, 0x2F2DF86Fu, 0x50111FA6u, 0x70F446DCu};
+
+static void push_le32(std::vector<std::uint8_t>& v, std::uint32_t w) {
+    for (int k = 0; k < 4; k++) v.push_back(static_cast<std::uint8_t>(w >> (8 * k)));
+}
+
+// A raw seed on the wire: [header hi u16, 0xFF, nvdo, header lo u16, vdo u32 * nvdo].
+static std::vector<std::uint8_t> raw_seed_bytes(std::uint32_t hdr, const std::vector<std::uint32_t>& vdos) {
+    std::vector<std::uint8_t> v = {static_cast<std::uint8_t>(hdr >> 16), static_cast<std::uint8_t>(hdr >> 24), 0xFF,
+                                   static_cast<std::uint8_t>(vdos.size()), static_cast<std::uint8_t>(hdr),
+                                   static_cast<std::uint8_t>(hdr >> 8)};
+    for (std::uint32_t w : vdos) push_le32(v, w);
+    return v;
+}
+
+static void test_parse_raw_seed() {
+    emk_learn::Options o;
+    bool confirm = false;
+    // The documented seed, byte for byte (tools/k2_remote.py --seed-raw 22D9A11F:0:0:0E4AD139:2F2DF86F:50111FA6:70F446DC).
+    const std::vector<std::uint8_t> wire = {0, 1, 0xD9, 0x22, 0xFF, 6, 0x1F, 0xA1,
+                                            0, 0, 0, 0, 0, 0, 0, 0, 0x39, 0xD1, 0x4A, 0x0E, 0x6F, 0xF8, 0x2D, 0x2F,
+                                            0xA6, 0x1F, 0x11, 0x50, 0xDC, 0x46, 0xF4, 0x70};
+    CHECK_EQ(emk_learn::parse_options(wire, o, confirm), true);
+    CHECK_EQ(o.nseeds, 1);
+    CHECK_EQ(o.seeds[0].raw, true);
+    CHECK_EQ(o.seeds[0].hdr, kBrickHdr);
+    CHECK_EQ(o.seeds[0].svid, 0x22D9);   // derived from the header: the sweep and the seed table use them
+    CHECK_EQ(o.seeds[0].cmd, 31);
+    CHECK_EQ(o.seeds[0].nvdo, 6);
+    for (unsigned i = 0; i < 6; i++) CHECK_EQ(o.seeds[0].vdo[i], kBrickVdos[i]);
+    CHECK_EQ(raw_seed_bytes(kBrickHdr, {kBrickVdos.begin(), kBrickVdos.end()}).size(), 30u);
+    // The header is exact: reserved and type bits survive, the command comes from its low five bits.
+    auto w2 = raw_seed_bytes(0x12345678u, {});
+    w2.insert(w2.begin(), {0, 1});
+    CHECK_EQ(emk_learn::parse_options(w2, o, confirm), true);
+    CHECK_EQ(o.seeds[0].hdr, 0x12345678u);
+    CHECK_EQ(o.seeds[0].cmd, 0x78 & 0x1F);
+    CHECK_EQ(o.seeds[0].nvdo, 0);
+    // A structured seed and a raw one in one request, in order.
+    std::vector<std::uint8_t> mix = {2, 2, 0x34, 0x12, 17, 1, 0x78, 0x56, 0x34, 0x12};
+    const auto rs = raw_seed_bytes(kBrickHdr, {1, 2});
+    mix.insert(mix.end(), rs.begin(), rs.end());
+    mix[0] = 2;   // confirm
+    CHECK_EQ(emk_learn::parse_options(mix, o, confirm), true);
+    CHECK_EQ(o.nseeds, 2);
+    CHECK_EQ(o.seeds[0].raw, false);
+    CHECK_EQ(o.seeds[0].vdo[0], 0x12345678u);
+    CHECK_EQ(o.seeds[1].raw, true);
+    CHECK_EQ(o.seeds[1].nvdo, 2);
+    CHECK_EQ(o.seeds[1].vdo[1], 2u);
+    // Bounds: seven objects, a cut-off header, cut-off objects, trailing bytes.
+    auto bad = raw_seed_bytes(kBrickHdr, {1, 2, 3, 4, 5, 6, 7});
+    bad.insert(bad.begin(), {0, 1});
+    CHECK_EQ(emk_learn::parse_options(bad, o, confirm), false);
+    std::vector<std::uint8_t> cut = {0, 1, 0xD9, 0x22, 0xFF, 0, 0x1F};   // the header's low half is one byte short
+    CHECK_EQ(emk_learn::parse_options(cut, o, confirm), false);
+    auto cut2 = raw_seed_bytes(kBrickHdr, {1, 2});
+    cut2.insert(cut2.begin(), {0, 1});
+    cut2.pop_back();
+    CHECK_EQ(emk_learn::parse_options(cut2, o, confirm), false);
+    auto extra = raw_seed_bytes(kBrickHdr, {1});
+    extra.insert(extra.begin(), {0, 1});
+    extra.push_back(0);
+    CHECK_EQ(emk_learn::parse_options(extra, o, confirm), false);
+    // 0xFF is the only marker: 32..254 stay refused.
+    CHECK_EQ(emk_learn::parse_options(std::vector<std::uint8_t>{0, 1, 0xD9, 0x22, 0x80, 0}, o, confirm), false);
+    // Four seeds of any kind parse; the request is capped by the frame (57 option bytes), not by the parser.
+    std::vector<std::uint8_t> four = {0, 4};
+    for (int i = 0; i < 4; i++) {
+        const auto s = raw_seed_bytes(kBrickHdr, {});
+        four.insert(four.end(), s.begin(), s.end());
+    }
+    CHECK_EQ(emk_learn::parse_options(four, o, confirm), true);
+    CHECK_EQ(o.nseeds, 4);
+    // One full-size raw seed is the largest request that is meant to fit one frame; the limit is documented.
+    CHECK_EQ(emk_learn::kOptionsMax, 57u);
+    std::vector<std::uint8_t> frame = {0, 1};
+    frame.insert(frame.end(), wire.begin() + 2, wire.end());
+    CHECK_EQ(frame.size() <= emk_learn::kOptionsMax, true);
+    std::vector<std::uint8_t> toolong = {0, 2};
+    for (int i = 0; i < 2; i++) {
+        const auto s = raw_seed_bytes(kBrickHdr, {kBrickVdos.begin(), kBrickVdos.end()});
+        toolong.insert(toolong.end(), s.begin(), s.end());
+    }
+    CHECK_EQ(toolong.size() > emk_learn::kOptionsMax, true);
+    CHECK_EQ(emk_learn::parse_options(toolong, o, confirm), false);   // two full raw seeds do not fit one frame
+}
+
+// The brick's command with a full-size answer: a header with position 1 and 6 VDOs out, a 7-object answer back.
+static emk_learn::Seed brick_seed() {
+    emk_learn::Seed s;
+    s.raw = true;
+    s.hdr = kBrickHdr;
+    s.svid = 0x22D9;
+    s.cmd = 31;
+    s.nvdo = 6;
+    for (unsigned i = 0; i < 6; i++) s.vdo[i] = kBrickVdos[i];
+    return s;
+}
+static const Behaviour kBrickAnswer{0x22D9, 31, How::Ack, {0xA0000001u, 0xA0000002u, 0xA0000003u, 0xA0000004u, 0xA0000005u, 0xA0000006u}};
+
+static void test_raw_seed_goes_out_exact_and_the_full_reply_is_kept() {
+    FakeCable c;
+    c.table = {kBrickAnswer};
+    emk_learn::Options o;
+    o.seeds[0] = brick_seed();
+    o.nseeds = 1;
+    emk_learn::Standalone r;
+    CHECK_EQ(emk_learn::learn(&fake_exchange, &c, o, r), true);
+    // Identity, SVIDs (silent), then the seed: 7 objects exactly as given, the header untouched (position 1).
+    CHECK_EQ(c.seen.size(), 3u);
+    const Request& s = c.seen[2];
+    CHECK_EQ(s.n, 7);
+    CHECK_EQ(s.w[0], kBrickHdr);
+    for (unsigned i = 0; i < 6; i++) CHECK_EQ(s.w[1 + i], kBrickVdos[i]);
+    CHECK_EQ(s.spec_rev, 2);
+    // The answer comes back whole: header word plus six VDOs, in the transcript and as a row.
+    CHECK_EQ(r.nlog, 3);
+    CHECK_EQ(r.log_full, false);
+    const auto x = r.entry(2);
+    CHECK_EQ(int(x.step), int(Step::Seed));
+    CHECK_EQ(x.req.n, 7);
+    CHECK_EQ(x.rep.got, true);
+    CHECK_EQ(x.rep.n, 7);
+    CHECK_EQ(x.req.w[6], 0x70F446DCu);
+    CHECK_EQ(x.rep.w[0] >> 16, 0x22D9u);
+    for (unsigned i = 0; i < 6; i++) CHECK_EQ(x.rep.w[1 + i], 0xA0000001u + i);
+    CHECK_EQ(r.quirks.count, 1);
+    CHECK_EQ(r.quirks.rows[0].nrep, 6);
+    CHECK_EQ(r.quirks.rows[0].rep[5], 0xA0000006u);
+    // A silent answer is a kept entry too (the request words, no reply).
+    FakeCable d;
+    emk_learn::Standalone r2;
+    CHECK_EQ(emk_learn::learn(&fake_exchange, &d, o, r2), true);
+    CHECK_EQ(r2.entry(2).rep.got, false);
+    CHECK_EQ(r2.entry(2).req.n, 7);
+    // The sweep leaves the seed's own command alone, as for a structured seed.
+    FakeCable e;
+    emk_learn::Options os = o;
+    os.sweep = true;
+    emk_learn::Standalone r3;
+    CHECK_EQ(emk_learn::learn(&fake_exchange, &e, os, r3), true);
+    for (const Request& q : e.seen) CHECK_EQ(q.n == 7 || q.w[0] != 0x22D9A01Fu, true);
+}
+
+static void test_four_full_size_seeds_fit_the_transcript() {
+    FakeCable c;
+    c.table = {kBrickAnswer};
+    emk_learn::Options o;
+    for (unsigned i = 0; i < 4; i++) o.seeds[i] = brick_seed();
+    o.nseeds = 4;
+    emk_learn::Standalone r;
+    CHECK_EQ(emk_learn::learn(&fake_exchange, &c, o, r), true);
+    CHECK_EQ(r.log_full, false);
+    CHECK_EQ(r.nlog, 6);   // identity, SVIDs, four seeds
+    for (unsigned i = 2; i < 6; i++) CHECK_EQ(r.entry(i).rep.n, 7);
+    CHECK_EQ(r.log_len <= emk_learn::kLogBytes, true);
+}
+
+static void test_encode_entry_chunks() {
+    FakeCable c;
+    c.table = {kBrickAnswer};
+    emk_learn::Options o;
+    o.seeds[0] = brick_seed();
+    o.nseeds = 1;
+    emk_learn::Standalone r;
+    CHECK_EQ(emk_learn::learn(&fake_exchange, &c, o, r), true);
+    const auto x = r.entry(2);
+    std::vector<std::uint32_t> all;   // request words, then reply words
+    for (unsigned i = 0; i < x.req.n; i++) all.push_back(x.req.w[i]);
+    for (unsigned i = 0; i < x.rep.n; i++) all.push_back(x.rep.w[i]);
+    CHECK_EQ(all.size(), 14u);
+    // A response frame carries 58 bytes: 9 of header and 12 words. The whole entry is 65 bytes.
+    CHECK_EQ(emk_learn::kEntryMax, 65u);
+    std::array<std::uint8_t, 58> out{};
+    std::size_t n = emk_learn::encode_entry(r, 2, out);
+    CHECK_EQ(n, 9u + 4 * 12);
+    CHECK_EQ(out[4], 7);   // req_n and rep_n are the whole entry's, not the chunk's
+    CHECK_EQ(out[6], 7);
+    std::vector<std::uint32_t> got;
+    for (std::size_t at = 9; at < n; at += 4) got.push_back(le32(&out[at]));
+    // The second chunk starts at the first word the first one did not carry.
+    n = emk_learn::encode_entry(r, 2, out, got.size());
+    CHECK_EQ(n, 9u + 4 * 2);
+    CHECK_EQ(out[4], 7);
+    CHECK_EQ(out[6], 7);
+    for (std::size_t at = 9; at < n; at += 4) got.push_back(le32(&out[at]));
+    CHECK_EQ(got == all, true);
+    // Past the last word: the header alone. A bigger buffer takes everything in one go.
+    CHECK_EQ(emk_learn::encode_entry(r, 2, out, 14), 9u);
+    CHECK_EQ(emk_learn::encode_entry(r, 2, out, 200), 9u);
+    std::array<std::uint8_t, emk_learn::kEntryMax> big{};
+    CHECK_EQ(emk_learn::encode_entry(r, 2, big), 9u + 4 * 14);
+    // Too small even for the header: nothing.
+    std::array<std::uint8_t, 8> tiny{};
+    CHECK_EQ(emk_learn::encode_entry(r, 2, tiny), 0u);
+    // Past the log is still "not found".
+    CHECK_EQ(emk_learn::encode_entry(r, 9, out, 0), 1u);
+    CHECK_EQ(out[0], 3);
 }
 
 static void test_summary_and_entry_encoding() {
@@ -456,8 +669,8 @@ static void test_summary_and_entry_encoding() {
     n = emk_learn::encode_entry(r, 4, out);
     CHECK_EQ(n, 1u);
     CHECK_EQ(out[0], 3);
-    // The longest entry fits a response.
-    CHECK_EQ(emk_learn::kEntryMax <= 58, true);
+    // The longest whole entry (65 bytes) is more than a response frame: it comes in chunks (test_encode_entry_chunks).
+    CHECK_EQ(emk_learn::kEntryMax, 9u + 4 * 14);
 }
 
 static void test_seen_encoding() {
@@ -514,6 +727,10 @@ static void test_acked_no_answer_outcome_goes_on_the_wire() {
 
 int main() {
     test_parse_options();
+    test_parse_raw_seed();
+    test_raw_seed_goes_out_exact_and_the_full_reply_is_kept();
+    test_four_full_size_seeds_fit_the_transcript();
+    test_encode_entry_chunks();
     test_summary_and_entry_encoding();
     test_acked_no_answer_outcome_goes_on_the_wire();
     test_seen_encoding();
