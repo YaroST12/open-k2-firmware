@@ -9,15 +9,18 @@
 // ListState is the pure part (offset arithmetic, thumb geometry); ListView adds the drawing.
 #pragma once
 #include <cstdint>
+#include "k2/core/bss_zero.hpp"
 #include "k2/ui/gfx.hpp"
 #include "k2/ui/ui_types.hpp"
 
 namespace k2 {
 
 struct ListState {
-    int count = 0;
+    // count / offset: zero defaults elided on ARM (the only default-initialised instance is ListView::st_ inside the .bss
+    // global Ui; every other ListState is a value (`ListState{}`, `{n, v, o}`) or a host test local).
+    int count K2_BSS_ZERO;
     int visible = 1;     // rows that fit in the list rect
-    int offset = 0;      // index of the first shown row
+    int offset K2_BSS_ZERO;      // index of the first shown row
 
     bool overflows() const { return count > visible; }
     int max_offset() const { return overflows() ? count - visible : 0; }
@@ -124,10 +127,12 @@ public:
 private:
     void draw_bar(uint32_t now_ms, PaintBudget *bg);
 
-    Surface surf_{};
-    int16_t x_ = 0, y_ = 0, row_h_ = 0;
-    DrawRow fn_ = nullptr;
-    void *ctx_ = nullptr;
+    // The one firmware instance is RowList::list_ (UiContext::rows in the .bss global Ui; the host tests build locals,
+    // which keep the zeroing), so the zero defaults are elided on ARM. The non-zero defaults (-1 = unknown) stay.
+    Surface surf_ K2_BSS_ZERO;
+    int16_t x_ K2_BSS_ZERO, y_ K2_BSS_ZERO, row_h_ K2_BSS_ZERO;
+    DrawRow fn_ K2_BSS_ZERO;
+    void *ctx_ K2_BSS_ZERO;
     int highlight_ = -1;
     ListState st_;
     Field row_[kMaxRows];
@@ -135,29 +140,29 @@ private:
     // (-1 = never), last_index_ = row index the slot last showed. A slot whose (index, hi)
     // pair is unchanged is not repainted at all; the base row fill (kBg) happens only when
     // the highlight state changes.
-    int8_t state_[kMaxRows] = {};
-    int last_index_[kMaxRows] = {};
-    uint32_t sig_[kMaxRows] = {};     // row signature each slot was last painted with
-    RowSig sig_fn_ = nullptr;
-    void *sig_ctx_ = nullptr;
-    bool opaque_ = false;
-    uint16_t bg_ = 0, hi_bg_ = 0;
+    int8_t state_[kMaxRows] K2_BSS_ZERO;
+    int last_index_[kMaxRows] K2_BSS_ZERO;
+    uint32_t sig_[kMaxRows] K2_BSS_ZERO;     // row signature each slot was last painted with
+    RowSig sig_fn_ K2_BSS_ZERO;
+    void *sig_ctx_ K2_BSS_ZERO;
+    bool opaque_ K2_BSS_ZERO;
+    uint16_t bg_ K2_BSS_ZERO, hi_bg_ K2_BSS_ZERO;
     int32_t rule_ = -1;
-    int16_t extra_ = 0;               // focus expansion (set_focus_extra)
-    bool full_lane_ = false;
-    bool self_ground_ = false;
-    int16_t slot_y_[kMaxRows] = {};   // y each slot was last painted at (-1 = never): a shift repaints
+    int16_t extra_ K2_BSS_ZERO;               // focus expansion (set_focus_extra)
+    bool full_lane_ K2_BSS_ZERO;
+    bool self_ground_ K2_BSS_ZERO;
+    int16_t slot_y_[kMaxRows] K2_BSS_ZERO;   // y each slot was last painted at (-1 = never): a shift repaints
     int16_t tail_used_ = -1;          // list height the rows covered at the last draw (-1 = unknown)
     // What the scrollbar currently shows, to redraw it only when it changes.
-    bool bar_drawn_ = false;
+    bool bar_drawn_ K2_BSS_ZERO;
     int bar_count_ = -1, bar_offset_ = -1;
     // Thumb easing: displayed position animates towards the target over kThumbAnimMs.
-    int bar_pos_ = -1, bar_target_ = -1, bar_drawn_pos_ = -1, bar_anim_from_ = 0;
-    uint32_t bar_anim_start_ = 0;
+    int bar_pos_ = -1, bar_target_ = -1, bar_drawn_pos_ = -1, bar_anim_from_ K2_BSS_ZERO;
+    uint32_t bar_anim_start_ K2_BSS_ZERO;
     static constexpr uint32_t kThumbAnimMs = 160;
-    PaintBudget *budget_ = nullptr;
-    uint8_t chars_ = 0;
-    int16_t text_dy_ = 0;
+    PaintBudget *budget_ K2_BSS_ZERO;
+    uint8_t chars_ K2_BSS_ZERO;
+    int16_t text_dy_ K2_BSS_ZERO;
 };
 
 }  // namespace k2

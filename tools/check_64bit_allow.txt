@@ -143,8 +143,8 @@ include/k2/ui/readout_fmt.hpp   constexpr std::size_t formula(std::span<char> ou
 include/k2/ui/ui.hpp            uint64_t paint_px0_ = 0;
 include/k2/ui/ui_calc.hpp       int64_t microcoulombs() const { return uc_; }
 include/k2/ui/ui_calc.hpp       int64_t microjoules() const { return uj_; }
-include/k2/ui/ui_calc.hpp       int64_t uj_ = 0;
-include/k2/ui/ui_calc.hpp       int64_t uc_ = 0;
+include/k2/ui/ui_calc.hpp       int64_t uj_ K2_BSS_ZERO;
+include/k2/ui/ui_calc.hpp       int64_t uc_ K2_BSS_ZERO;
 src/ui/battery_view.cpp         uint32_t milli(uint64_t micro) {
 src/ui/battery_view.cpp         const uint64_t m = math::div_u64_u32(micro, 1000u);
 src/ui/battery_view.cpp         Num wh(uint64_t uwh) {

@@ -107,20 +107,20 @@ struct UiContext {
     // What a page remembers after it is left. Pages are built when entered and destroyed when left (page_arena.hpp), so
     // anything that must survive a page switch lives here, not in the page; the page holds a reference under its old name.
     struct Remembered {
-        trend::Window home_window = trend::Window::S10;   // Home: the trend window OK short cycles
-        home::Qty home_hero = home::Qty::W;               // Home: the hero quantity Long Back cycles (uiprefs, restored at boot)
+        trend::Window home_window K2_BSS_INIT(trend::Window::S10);   // Home: the trend window OK short cycles (S10 = 0)
+        home::Qty home_hero K2_BSS_INIT(home::Qty::W);               // Home: the hero quantity Long Back cycles (uiprefs, restored at boot; W = 0)
         home::CardCycler cards;                           // Home: the right-column cards (reset on attach and long OK)
         home::Attention attention;                        // Home: what is changing now, for the upper card and its dot
         home::DiagDwell diag_dwell;                       // Home: when row 1 first showed each event finding
         int bench_sel = 1;                               // Bench: the focused place (Charger first: the Meter row only goes back)
-        int settings_sel = 0;                             // Settings: the highlighted row
+        int settings_sel K2_BSS_INIT(0);                  // Settings: the highlighted row
         trig::Model trigger;                              // FC trigger: the draft (protocol, target) survives cancel()
         struct PdStress {                                 // Tools > PD Stress: the setup the next START uses
             std::uint16_t mask = pdstress::kDefaultSeqMask;   // picked sequences (bit = pdstress::Seq)
-            std::uint16_t closed_run = 0;                 // PdStressSession::run_no() of the result last saved or discarded
+            std::uint16_t closed_run K2_BSS_INIT(0);      // PdStressSession::run_no() of the result last saved or discarded
             std::uint8_t cycles = 2;                      // index into PdStressPage::kCyclesPct (25 / 50 / 100 / 200 %)
-            std::uint8_t pace = 0;                        // pdstress::Options::pace
-            std::uint8_t sel = 0;                         // the Setup list's cursor
+            std::uint8_t pace K2_BSS_INIT(0);             // pdstress::Options::pace
+            std::uint8_t sel K2_BSS_INIT(0);              // the Setup list's cursor
         } pdstress;
         std::array<uint8_t, bench::kPlaces> place_sel K2_BSS_ZERO;  // each place's last action: repeating a job is OK, OK, OK
         uint8_t face K2_BSS_INIT(0);                                 // Meter: the face last shown (0 Flow, 1 Graphs, 2 Numbers, 3 Lines)
@@ -477,21 +477,21 @@ private:
     void save_card();          // report card of a Done run; delta against the charger's earlier card
     [[gnu::noinline]] void save_card_store(std::span<const uint8_t> blk);   // save_card's tail: the previous card, the write (with the Deep block) and the delta, on its own frame
     UiContext& ctx_;
-    ChargerTestPage* view_ = nullptr;   // the painted half while it exists
-    const char* fc_words_ = nullptr;    // the footer words of the handshake the last start() opened (null: that protocol has none)
+    ChargerTestPage* view_ K2_BSS_INIT(nullptr);   // the painted half while it exists
+    const char* fc_words_ K2_BSS_INIT(nullptr);    // the footer words of the handshake the last start() opened (null: that protocol has none)
     charger_test::Runner runner_;
     report_card::Identity card_id_{};
     // The live inputs of the Results grid that are not part of the runner's stored result: the Xiaomi SVID seen on the wire, the
     // Mi auth state and the monitor ceiling. Frozen when the run ends (freeze_facts), so the grid built on every later entry of
     // Results is the one of the run, whatever the charger does afterwards (an unplugged source must not change its rows).
     struct ResultFacts {
-        unsigned cap_mv = 0;
-        bool xiaomi_seen = false, mi_auth = false, frozen = false;
-    } facts_;
+        unsigned cap_mv K2_BSS_INIT(0);
+        bool xiaomi_seen K2_BSS_INIT(false), mi_auth K2_BSS_INIT(false), frozen K2_BSS_INIT(false);
+    } facts_;   // the one instance (`facts_ = {}` value-initialises, so a new run still clears it)
     void freeze_facts();       // snapshot the live inputs; a run's start clears it (capture_identity)
     report_card::Card card_{};   // the run's card while save_card builds and stores it; a member, not a stack copy (the save path is stack-gated, tools/stack_depth.py)
     std::array<report_card::DeltaLine, 8> delta_{};
-    size_t delta_n_ = 0;
+    size_t delta_n_ K2_BSS_INIT(0);
     charger_journal::ResumeGate gate_;
     // Journal writes a row in flight must not do (Runner::quiet()): the section files that hold a decided row or a replanned
     // plan are noted dirty in the journal itself. A write holds the main loop (and the PD engine) for 5 to 250 ms, so none is done
@@ -556,8 +556,8 @@ private:
     char card_name_[24];       // saved card name of this run, the Results heading
     char mfr_[13];             // Manufacturer_Info name from the source probe, only used to name the card
     char run_cable_name_[ctcable::kNameLen];
-    Stage stage_ = Stage::Algorithms;
-    raguard::Topology topology_ = raguard::Topology::Unknown;   // the guard's last reading (the Warning screen, the run's journal)
+    Stage stage_ K2_BSS_INIT(Stage::Algorithms);   // 0
+    raguard::Topology topology_ K2_BSS_INIT(raguard::Topology::Unknown);   // 0   // the guard's last reading (the Warning screen, the run's journal)
     // The run's journal is armed (its whole plan written, header last) in pieces too, one write per tick on a quiet link, while the
     // Runner is held in its first Baseline: arm_ 1 = rows and header, 2 = the run's meta record (one more write), 3 = the planned
     // re-attach's marker and Rd gap (one more write), 4 = the source's own claim is awaited before the blink is decided (no flash

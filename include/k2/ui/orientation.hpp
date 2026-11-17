@@ -4,6 +4,8 @@
 #include <cstdint>
 #include <optional>
 
+#include "k2/core/bss_zero.hpp"
+
 namespace k2::orientation {
 
 // Screen axes in the physical upright posture: x right, y down, z out of the screen.
@@ -19,11 +21,12 @@ public:
     uint8_t rotation() const { return rotation_; }
 
 private:
-    uint8_t rotation_ = 0;
-    uint8_t candidate_ = 0;
-    bool pending_ = false;
-    uint32_t since_ms_ = 0;
-    uint32_t last_ms_ = 0;
+    // The one instance is Ui::gravity_ in the .bss global Ui.
+    uint8_t rotation_ K2_BSS_ZERO;
+    uint8_t candidate_ K2_BSS_ZERO;
+    bool pending_ K2_BSS_ZERO;
+    uint32_t since_ms_ K2_BSS_ZERO;
+    uint32_t last_ms_ K2_BSS_ZERO;
 };
 
 }  // namespace k2::orientation

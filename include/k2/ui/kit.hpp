@@ -207,12 +207,13 @@ private:
     static void draw_row_cb(void *ctx, int index, const Rect &r, bool highlighted, Field &f);
     static uint32_t row_sig_cb(void *ctx, int index);
 
+    // The one firmware instance is UiContext::rows in the .bss global Ui (host tests build locals: zeroing kept there).
     ListView list_;
-    Surface surf_{};
+    Surface surf_ K2_BSS_ZERO;
     int16_t y_ = kBodyY;
-    RowFn fn_ = nullptr;
-    void *ctx_ = nullptr;
-    int count_ = 0, sel_ = 0;
+    RowFn fn_ K2_BSS_ZERO;
+    void *ctx_ K2_BSS_ZERO;
+    int count_ K2_BSS_ZERO, sel_ K2_BSS_ZERO;
     int16_t extra_ = -1;          // the focus expansion last applied (-1 = unknown)
 };
 
