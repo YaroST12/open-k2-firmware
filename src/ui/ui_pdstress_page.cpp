@@ -162,13 +162,29 @@ struct Budget {
     }
 };
 
+[[gnu::noinline]] void put_cell_raw(const Surface &c, const Font &f, int16_t x, int16_t y, uint8_t chars, Align align,
+                                   std::string_view text, uint16_t color K2_TRUNC_DECL) {
+    const int16_t bw = static_cast<int16_t>(chars * f.adv);
+    if (text.size() > chars) K2_TRUNC_NOTE(trunc::Kind::Cut, text, bw);
+    const std::size_t len = text.size() < chars ? text.size() : chars;
+    const int16_t tw = static_cast<int16_t>(len * f.adv);
+    const std::string_view shown = text.substr(0, len);
+    if (align == Align::Right) {
+        if (tw < bw) gfx_fill(c, x, y, static_cast<int16_t>(bw - tw), f.height, kBg);
+        gfx_text(c, f, static_cast<int16_t>(x + bw - tw), y, shown, color, kBg, 0 K2_TRUNC_ARG);
+    } else {
+        gfx_text(c, f, x, y, shown, color, kBg, 0 K2_TRUNC_ARG);
+        if (tw < bw) gfx_fill(c, static_cast<int16_t>(x + tw), y, static_cast<int16_t>(bw - tw), f.height, kBg);
+    }
+}
+
 // A cached text cell under a paint budget: it repaints only when its text or colour changed and the budget admits its box.
-void draw_cell(Field &f, uint32_t &sig, std::string_view text, uint16_t color, int box_px, Budget &b) {
+[[gnu::noinline]] void put_cell(const Surface &c, const Font &f, int16_t x, int16_t y, uint8_t chars, Align align, uint32_t &sig,
+                                std::string_view text, uint16_t color, int box_px, Budget &b K2_TRUNC_DECL) {
     const uint32_t h = mix_u32(mix(mix_init(), text), color) | 1u;
     if (h == sig || !b.admit(box_px)) return;
-    if ((sig >> 16) != (h >> 16) || sig == 0) f.set_colors(color, kBg);
     sig = h;
-    f.draw(text);
+    put_cell_raw(c, f, x, y, chars, align, text, color K2_TRUNC_ARG);
 }
 
 std::size_t live_reader(void *ctx, std::size_t off, std::span<std::uint8_t> out) {
@@ -213,6 +229,16 @@ void put_charger(StrBuf<N> &s, const pd::SourceCaps &caps) {
 
 PdStressPage::PdStressPage(UiContext &c) : PageBase(c, Page::Count, "PD Stress", Icon::Wave) {}
 
+void PdStressPage::put_kv(const kit::KvLayout &l, int row, int sig_idx, std::string_view text, uint16_t color, int box_px, int &spent,
+                          int cap K2_TRUNC_DEF) {
+    Budget b{cap, spent};
+    const Font &f = l.value_font ? *l.value_font : kSmall;
+    const int16_t y = static_cast<int16_t>(kit::kv_row_y(l, row) + kit::row_text_y(l.pitch, f.height));
+    put_cell(ctx_.content, f, l.value_x, y, l.value_chars, l.align, sig_[static_cast<std::size_t>(sig_idx)], text, color, box_px, b
+             K2_TRUNC_ARG);
+    spent = b.spent;
+}
+
 PdStressSession &PdStressPage::session() const { return ctx_.ui->pd_stress(); }
 
 // ---- lifecycle ----------------------------------------------------------------------------------------------------------------------
@@ -238,7 +264,8 @@ void PdStressPage::draw_static() {
 
 void PdStressPage::invalidate() {
     laid_ = false;
-    for (Field &f : cell_) f.invalidate();
+    hero_.invalidate();
+    for (uint32_t &s : sig_) s = 0;
     action_.invalidate();
     prog_.invalidate();
     grid_.invalidate();
@@ -534,36 +561,35 @@ void PdStressPage::paint_setup() {
 
 void PdStressPage::paint_review(uint32_t now_ms) {
     const Surface &c = ctx_.content;
-    Field *v = cell_.data();
     if (!laid_) {
         if (!ctx_.blank) gfx_fill(c, 0, kit::kBelowBar, c.w, static_cast<int16_t>(kFooterY - kit::kBelowBar), kBg);
         kit::kv_static(c, kReviewKv, kReviewKeys, kReviewRows);
-        kit::kv_cells(c, kReviewKv, v, kReviewRows);
         gfx_fill(c, 0, kReviewRuleY, c.w, 2, kRule);
         action_.init(c, kActionY, kActionH);
         for (uint32_t &s : sig_) s = 0;
         laid_ = true;
     }
     const auto &k = ctx_.keep.pdstress;
-    Budget b{1 << 30};
+    int spent = 0;
+    constexpr int kUnbounded = 1 << 30;
     StrBuf<24> t;
     const unsigned n = static_cast<unsigned>(std::popcount(static_cast<unsigned>(k.mask & ps::kAllSeqMask)));
     t.put_u32(n).put(n == 1 ? " sequence" : " sequences");
-    draw_cell(v[0], sig_[0], t.view(), kText, 0, b);
+    put_kv(kReviewKv, 0, 0, t.view(), kText, 0, spent, kUnbounded);
     t.clear();
     t.put_u32(kCyclesPct[std::min<std::size_t>(k.cycles, kCyclesPct.size() - 1)]).put(" %");
-    draw_cell(v[1], sig_[1], t.view(), kText, 0, b);
-    draw_cell(v[2], sig_[2], kPaceNames[std::min<unsigned>(k.pace, 2)], kText, 0, b);
+    put_kv(kReviewKv, 1, 1, t.view(), kText, 0, spent, kUnbounded);
+    put_kv(kReviewKv, 2, 2, kPaceNames[std::min<unsigned>(k.pace, 2)], kText, 0, spent, kUnbounded);
     t.clear();
     const pd::SourceCaps &caps = fusb302::caps();
     if (caps.valid) put_charger(t, caps);
-    if (t.view().empty()) draw_cell(v[3], sig_[3], kFooters[kNoCaps], kDim, 0, b);
-    else draw_cell(v[3], sig_[3], t.view(), kText, 0, b);
+    put_kv(kReviewKv, 3, 3, t.view().empty() ? std::string_view{kFooters[kNoCaps]} : t.view(), t.view().empty() ? kDim : kText, 0, spent,
+           kUnbounded);
     t.clear();
     const int32_t ma = ctx_.pm_online ? std::abs(ctx_.pm.current_ma) : 0;
     if (ctx_.pm_online) t.put_fixed(ma, 2).put_char('A');
     else t.put(kFooters[kNoMeter]);
-    draw_cell(v[4], sig_[4], t.view(), !ctx_.pm_online ? kDim : ma > ps::kLoadAbortMa ? kCaution : kAmp, 0, b);
+    put_kv(kReviewKv, 4, 4, t.view(), !ctx_.pm_online ? kDim : ma > ps::kLoadAbortMa ? kCaution : kAmp, 0, spent, kUnbounded);
 
     if (confirm_until_ != 0) {
         const int32_t left = std::max<int32_t>(0, static_cast<int32_t>(confirm_until_ - now_ms));
@@ -578,13 +604,9 @@ void PdStressPage::paint_review(uint32_t now_ms) {
 
 void PdStressPage::paint_running(uint32_t now_ms) {
     const Surface &c = ctx_.content;
-    Field *v = cell_.data();   // 0 seq, 1 clock, 2 name, 3..8 the counts
     if (!laid_) {
         if (!ctx_.blank) gfx_fill(c, 0, kit::kBelowBar, c.w, static_cast<int16_t>(kFooterY - kit::kBelowBar), kBg);
-        v[0].init(c, kSmall, 6, kSeqY, 12, Align::Left, kText, kBg);
-        v[1].init(c, kSmall, kClockX, kSeqY, 6, Align::Right, kText, kBg);
         prog_.init(c, 6, kProgY, static_cast<int16_t>(c.w - 12));
-        v[2].init(c, kSmall, 6, kNameY, 26, Align::Left, kText, kBg);
         gfx_text(c, kLabelFont, 6, kVbusLabelY, "VBUS", kDim, kBg);
         gfx_fill(c, 0, kCountRuleY, c.w, 2, kRule);
         kit::kv_static(c, kCountsL, kCountKeysL, kCountRows);
@@ -592,10 +614,8 @@ void PdStressPage::paint_running(uint32_t now_ms) {
             gfx_text(c, kLabelFont, kCountsR.label_x, static_cast<int16_t>(kit::kv_row_y(kCountsR, i) + kit::row_text_y(kit::kRowH, kLabelFont.height)),
                      kCountKeysR[i], kDim, kBg);
         gfx_fill(c, kSplitX, static_cast<int16_t>(kCountsL.y0 + 1), 1, static_cast<int16_t>(kCountRows * kit::kRowH - 1), kRule);
-        kit::kv_cells(c, kCountsL, v + 3, kCountRows);
-        kit::kv_cells(c, kCountsR, v + 3 + kCountRows, kCountRows);
         for (uint32_t &s : sig_) s = 0;
-        v[kHeroCell].invalidate();
+        hero_.invalidate();
         hero_ms_ = 0;
         clock_s_ = 0xFFFFFFFF;
         bar_done_ = -1;
@@ -615,7 +635,7 @@ void PdStressPage::paint_running(uint32_t now_ms) {
         else t.put_fixed(mv, 1);
         const bool full = hero_ms_ == 0;
         if (b.admit(full ? 4 * kBig.adv * kBig.height + kMid.adv * kMid.height : 4 * kBig.adv * kBig.height)) {
-            kit::draw_hero(c, v[kHeroCell], kit::HeroSpec{&kBig, kHeroX, kHeroY, 4, ctx_.pm_online ? kVolt : kFaint, "V"}, t.view(), full);
+            kit::draw_hero(c, hero_, kit::HeroSpec{&kBig, kHeroX, kHeroY, 4, ctx_.pm_online ? kVolt : kFaint, "V"}, t.view(), full);
             hero_ms_ = now_ms ? now_ms : 1;
         }
     }
@@ -627,7 +647,7 @@ void PdStressPage::paint_running(uint32_t now_ms) {
         if (secs % 60u < 10u) t.put_char('0');
         t.put_u32(secs % 60u);
         if (b.admit(6 * cell16)) {
-            v[1].draw(t.view());
+            put_cell_raw(c, kSmall, kClockX, kSeqY, 6, Align::Right, t.view(), kText);
             clock_s_ = secs;
         }
     }
@@ -648,15 +668,16 @@ void PdStressPage::paint_running(uint32_t now_ms) {
     } else {
         t.put("seq");
     }
-    draw_cell(v[0], sig_[0], t.view(), kText, 12 * cell16, b);
-    draw_cell(v[2], sig_[2], e && e->seq_total() ? kSeqNames[static_cast<std::size_t>(e->seq())] : "", kText, 26 * cell16, b);
+    put_cell(c, kSmall, 6, kSeqY, 12, Align::Left, sig_[0], t.view(), kText, 12 * cell16, b);
+    put_cell(c, kSmall, 6, kNameY, 26, Align::Left, sig_[2], e && e->seq_total() ? kSeqNames[static_cast<std::size_t>(e->seq())] : "",
+             kText, 26 * cell16, b);
     // The counts.
     for (int i = 0; i < kCountCells; i++) {
         const uint32_t n = count_value(i);
         StrBuf<8> s;
         s.put_u32(capped(n));
         const uint16_t col = i == 0 || n == 0 ? kText : kCaution;
-        draw_cell(v[3 + i], sig_[static_cast<std::size_t>(3 + i)], s.view(), col, 4 * cell16, b);
+        put_kv(i < kCountRows ? kCountsL : kCountsR, i < kCountRows ? i : i - kCountRows, 3 + i, s.view(), col, 4 * cell16, b.spent, b.cap);
     }
 }
 
@@ -685,14 +706,12 @@ uint32_t PdStressPage::detail_value(int row) const {
 
 void PdStressPage::paint_results() {
     const Surface &c = ctx_.content;
-    Field &score = cell_[0];
     if (!laid_) {
         if (!ctx_.blank) gfx_fill(c, 0, kit::kBelowBar, c.w, static_cast<int16_t>(kFooterY - kit::kBelowBar), kBg);
         gfx_text(c, kSmall, 6, 30, "Score", kDim, kBg);
-        score.init(c, kMid, kScoreX, kScoreY, 6, Align::Right, kText, kBg);
         StrBuf<8> s;
         put_score(s, res_score_cp_);
-        score.draw(res_valid_ ? s.view() : std::string_view{"--"});
+        put_cell_raw(c, kMid, kScoreX, kScoreY, 6, Align::Right, res_valid_ ? s.view() : std::string_view{"--"}, kText);
         gfx_text(c, kLabelFont, kScoreNoteX, kScoreY, "provisional,", kDim, kBg);
         gfx_text(c, kLabelFont, kScoreNoteX, static_cast<int16_t>(kScoreY + 13), "0 = ideal", kDim, kBg);
         gfx_fill(c, 0, kBandRuleY, c.w, 2, kRule);
@@ -718,23 +737,21 @@ void PdStressPage::paint_results() {
 
 void PdStressPage::paint_detail() {
     const Surface &c = ctx_.content;
-    Field *v = cell_.data();
     const int pg = std::clamp(detail_page_, 0, kDetailPages - 1);
     if (!laid_) {
         if (!ctx_.blank) gfx_fill(c, 0, kit::kBelowBar, c.w, static_cast<int16_t>(kFooterY - kit::kBelowBar), kBg);
         kit::kv_static(c, kDetail, kDetailKeys[pg], kDetailRows);
-        kit::kv_cells(c, kDetail, v, kDetailRows);
         for (uint32_t &s : sig_) s = 0;
         laid_ = true;
     }
-    Budget b{1 << 30};
+    int spent = 0;
     for (int i = 0; i < kDetailRows; i++) {
         StrBuf<8> s;
         const uint32_t n = detail_value(i);
         const bool event = kDetailEvents[pg][i] != ps::Event::Count;
         if (event || pg == 0) s.put_u32(capped(n));
         else put_score(s, n);                // the sequence's score
-        draw_cell(v[i], sig_[static_cast<std::size_t>(i)], s.view(), event && n ? kCaution : kText, 0, b);
+        put_kv(kDetail, i, i, s.view(), event && n ? kCaution : kText, 0, spent, 1 << 30);
     }
 }
 

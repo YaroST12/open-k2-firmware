@@ -20,8 +20,9 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <optional>
+#include <memory>
 #include <span>
+#include <utility>
 
 #include "k2/pdstress/engine.hpp"
 #include "k2/pdstress/journal.hpp"
@@ -49,6 +50,9 @@ public:
     static constexpr std::uint32_t kQuietMs = 300;
 
     PdStressSession(UiContext& c, ChargerTestSession& ct) : ctx_(c), ct_(ct) {}
+    ~PdStressSession() { clear_slot(); }
+    PdStressSession(const PdStressSession&) = delete;
+    PdStressSession& operator=(const PdStressSession&) = delete;
 
     // Starts a run (the caller has done any confirming). Ok = running. NoMonitor / NoStore / Busy ... = refused, nothing changed.
     pdstress::StartResult start(const pdstress::Options& o, std::uint32_t now_ms);
@@ -60,11 +64,11 @@ public:
     // the journal is dropped. True = a restore is pending.
     bool boot_restore(bool cancel, std::uint32_t now_ms);
 
-    bool running() const { return engine_ && engine_->running(); }
+    bool running() const { return engine_ptr() && engine_ptr()->running(); }
     bool restoring() const { return restore_ != Restore::None; }
     bool active() const { return running() || restoring(); }
-    bool has_result() const { return engine_.has_value(); }
-    const pdstress::Engine* engine() const { return engine_ ? &*engine_ : nullptr; }
+    bool has_result() const { return slot_kind_ == SlotKind::Engine; }
+    const pdstress::Engine* engine() const { return engine_ptr(); }
     // Which result has_result() holds: a new number (never 0) each time a run starts or resumes into a new engine. The page keeps
     // the number of the result the user saved or discarded, so it opens on the results only for one not dealt with yet.
     std::uint16_t run_no() const { return run_no_; }
@@ -125,10 +129,38 @@ private:
     void update_footer();
     void next_run_no() { run_no_ = static_cast<std::uint16_t>(run_no_ + 1 ? run_no_ + 1 : 1); }
 
+    enum class SlotKind : std::uint8_t { Empty, Engine, Image };
+    union Slot {
+        pdstress::Engine eng;
+        pdstress::journal::Image img;
+        Slot() {}
+        ~Slot() {}
+    };
+    void clear_slot() {
+        if (slot_kind_ == SlotKind::Engine) std::destroy_at(&slot_.eng);
+        else if (slot_kind_ == SlotKind::Image) std::destroy_at(&slot_.img);
+        slot_kind_ = SlotKind::Empty;
+    }
+    template <class... Args>
+    pdstress::Engine& emplace_engine(Args&&... args) {
+        clear_slot();
+        std::construct_at(&slot_.eng, std::forward<Args>(args)...);
+        slot_kind_ = SlotKind::Engine;
+        return slot_.eng;
+    }
+    pdstress::journal::Image& emplace_img() {
+        clear_slot();
+        std::construct_at(&slot_.img);
+        slot_kind_ = SlotKind::Image;
+        return slot_.img;
+    }
+    pdstress::Engine* engine_ptr() { return slot_kind_ == SlotKind::Engine ? &slot_.eng : nullptr; }
+    const pdstress::Engine* engine_ptr() const { return slot_kind_ == SlotKind::Engine ? &slot_.eng : nullptr; }
+
     UiContext& ctx_;
     ChargerTestSession& ct_;
-    std::optional<pdstress::Engine> engine_;
-    pdstress::journal::Image img_{};     // the saved record: written at boundaries, read back by a restore
+    Slot slot_;                          // Engine and pending boot-restore Image never coexist
+    SlotKind slot_kind_ = SlotKind::Empty;
     charger_journal::ResumeGate gate_;
     Restore restore_ = Restore::None;
     std::uint32_t restore_t0_ = 0;

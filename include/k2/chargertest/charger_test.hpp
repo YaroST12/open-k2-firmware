@@ -929,7 +929,7 @@ private:
     void walk_step(const Input&, const Step& eff);   // one granted level of the walk: record it, ask for the next or judge the walk
     // The deep-sweep row in flight (is_sweep). The record: one int16 error (measured - setpoint) per point, no heap;
     // sweep_rows_ holds one RowView per APDO part (ctsweep::part_range), filled when the row closes (sweep_close in finish()).
-    std::array<int16_t, ctsweep::kMaxPoints> sweep_err_{};
+    alignas(4) std::array<int16_t, ctsweep::kMaxPoints> sweep_err_{};
     std::array<ctsweep::RowView, ctsweep::kMaxRows> sweep_rows_{};
     uint8_t n_sweep_rows_ = 0;
     uint16_t sweep_used_ = 0;                 // points recorded so far, all sweep rows together

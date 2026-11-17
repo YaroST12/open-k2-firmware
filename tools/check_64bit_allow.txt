@@ -98,14 +98,14 @@ include/k2/net/http_api.hpp  void field(std::string_view k, std::int64_t v) { ke
 include/k2/net/http_api.hpp  j.num(static_cast<std::int64_t>(content_length));
 
 # PD diagnostics & PD stress timing/energy math (using math_opt / shift-subtract udiv64)
-include/k2/pdstress/engine.hpp  std::int64_t acc_us = -1, rdy_us = -1;
-include/k2/pdstress/engine.hpp  if (acc_us >= 0 && acc_us < std::int64_t(kSuspectAcceptUs)) { ++suspect_; acc_us = -1; }
-include/k2/pdstress/engine.hpp  if (acc_us < 0 && s.accept_at && s.accept_at >= issue_ms_) acc_us = std::int64_t(s.accept_at - issue_ms_) * 1000;
-include/k2/pdstress/engine.hpp  if (rdy_us < 0 && s.accept_at && s.ps_rdy_at && s.ps_rdy_at >= s.accept_at) rdy_us = std::int64_t(s.ps_rdy_at - s.accept_at) * 1000;
-include/k2/pdstress/engine.hpp  const std::uint32_t acc_t = math::div_u64_to_u32(static_cast<std::uint64_t>(acc_us), 100u);
-include/k2/pdstress/engine.hpp  if (acc_us > std::int64_t(pd::spec::kAcceptLimitMs) * 1000) event(Event::AcceptLate, acc_t);
-include/k2/pdstress/engine.hpp  const std::uint32_t rdy_t = math::div_u64_to_u32(static_cast<std::uint64_t>(rdy_us), 100u);
-include/k2/pdstress/engine.hpp  if (rdy_us > std::int64_t(lim) * 1000) event(Event::PsRdyLate, rdy_t);
+src/pdstress/engine.cpp         std::int64_t acc_us = -1, rdy_us = -1;
+src/pdstress/engine.cpp         if (acc_us >= 0 && acc_us < std::int64_t(kSuspectAcceptUs)) { ++suspect_; acc_us = -1; }
+src/pdstress/engine.cpp         if (acc_us < 0 && s.accept_at && s.accept_at >= issue_ms_) acc_us = std::int64_t(s.accept_at - issue_ms_) * 1000;
+src/pdstress/engine.cpp         if (rdy_us < 0 && s.accept_at && s.ps_rdy_at && s.ps_rdy_at >= s.accept_at) rdy_us = std::int64_t(s.ps_rdy_at - s.accept_at) * 1000;
+src/pdstress/engine.cpp         const std::uint32_t acc_t = math::div_u64_to_u32(static_cast<std::uint64_t>(acc_us), 100u);
+src/pdstress/engine.cpp         if (acc_us > std::int64_t(pd::spec::kAcceptLimitMs) * 1000) event(Event::AcceptLate, acc_t);
+src/pdstress/engine.cpp         const std::uint32_t rdy_t = math::div_u64_to_u32(static_cast<std::uint64_t>(rdy_us), 100u);
+src/pdstress/engine.cpp         if (rdy_us > std::int64_t(lim) * 1000) event(Event::PsRdyLate, rdy_t);
 include/k2/pdstress/score.hpp   const std::uint64_t cp = math::div_u64_u32(std::uint64_t(penalty_points(c)) * 10000u, t);
 src/pd/diag.cpp                 std::uint64_t udivmod64_by_1000(std::uint64_t x, std::uint16_t& rem_out) {
 src/pd/diag.cpp                 return (std::uint64_t(q_hi) << 32) | (std::uint64_t(q2) << 16) | q1;

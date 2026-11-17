@@ -105,6 +105,8 @@ struct Sim final : Env {
     std::int32_t max_req_mv = 0;
     bool finished = false;
     Stop stop = Stop::None;
+    alignas(4) std::array<std::uint8_t, kPoolBytes> pool_{};
+    std::span<std::uint8_t> record_pool() override { return pool_; }
 
     Sim() {
         s.attached = true;

@@ -99,11 +99,13 @@ private:
     void close_result(bool saved, uint16_t id);
     int setup_count() const { return kSavedRow0 + nsaved_; }
 
-    void paint_setup();
-    void paint_review(uint32_t now_ms);
-    void paint_running(uint32_t now_ms);
-    void paint_results();
-    void paint_detail();
+    [[gnu::noinline]] void paint_setup();
+    [[gnu::noinline]] void paint_review(uint32_t now_ms);
+    [[gnu::noinline]] void paint_running(uint32_t now_ms);
+    [[gnu::noinline]] void paint_results();
+    [[gnu::noinline]] void paint_detail();
+    void put_kv(const kit::KvLayout &l, int row, int sig_idx, std::string_view text, uint16_t color, int box_px, int &spent, int cap
+                K2_TRUNC_DECL);
 
     bool on_setup(Event e);
     bool on_review(Event e);
@@ -147,11 +149,10 @@ private:
     StrBuf<32> row_note_;
     StrBuf<12> cell_text_;
 
-    // The stage's value cells, re-initialised per stage: Review 5, Running 10 (seq, clock, name, 6 counts, the VBUS hero last),
-    // Results 1, Detail 7.
-    static constexpr std::size_t kHeroCell = 9;
-    std::array<Field, 10> cell_;
-    std::array<uint32_t, 10> sig_{};      // what each cell last painted (text and colour), 0 = repaint
+    // Value cells: Running keeps one Field for the 4 Hz VBUS hero (per-digit redraw); all other slots track their last
+    // (text, colour) via sig_ and redraw directly with put_cell.
+    Field hero_;
+    std::array<uint32_t, 9> sig_{};       // Review 0..4, Running 0..8 (seq, clock, name, 6 counts), Detail 0..6
     kit::ActionCell action_;
     kit::ProgressBar prog_;
     kit::ResultGrid grid_;

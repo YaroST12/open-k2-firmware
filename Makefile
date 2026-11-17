@@ -121,7 +121,7 @@ PDSTRESS_CXX_SRCS = $(wildcard $(SRC_DIR)/pdstress/*.cpp) $(SRC_DIR)/ui/ui_pdstr
 ifneq ($(K2_PDSTRESS),1)
 CXX_SRCS := $(filter-out $(PDSTRESS_CXX_SRCS),$(CXX_SRCS))
 endif
-PDSPEC_CXX_SRCS = $(SRC_DIR)/ui/ui_pdspec.cpp   # K2_PDSPEC=1 only
+PDSPEC_CXX_SRCS = $(wildcard $(SRC_DIR)/pdspec/*.cpp) $(SRC_DIR)/ui/ui_pdspec.cpp   # K2_PDSPEC=1 only
 ifneq ($(K2_PDSPEC),1)
 CXX_SRCS := $(filter-out $(PDSPEC_CXX_SRCS),$(CXX_SRCS))
 endif
@@ -527,6 +527,7 @@ TEST_CXX_LIB  += $(SRC_DIR)/ui/battery_view.cpp $(SRC_DIR)/ui/ui_battery.cpp
 TEST_CXX_LIB  += $(SRC_DIR)/core/math_selftest.cpp $(SRC_DIR)/core/memstat.cpp
 TEST_CXX_LIB  += $(SRC_DIR)/pd/pd_interrogate.cpp
 TEST_CXX_LIB  += $(SRC_DIR)/ui/graphs_model.cpp $(SRC_DIR)/ui/ui_graphs.cpp
+TEST_CXX_LIB  += $(SRC_DIR)/pdspec/engine.cpp $(SRC_DIR)/pdstress/engine.cpp
 TEST_CXX_BINS  = $(patsubst tests/%.cpp, $(HOST_DIR)/%, $(TEST_CXX_SRCS))
 
 # Every library source is compiled once into $(HOST_DIR)/obj/<set>/<path>.o (with -MMD -MP

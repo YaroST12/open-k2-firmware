@@ -1317,6 +1317,9 @@ void ChargerTestSession::launch() {
     begin_run();
 }
 void ChargerTestSession::begin_run() {
+#if K2_PDSPEC
+    ctx_.ui->pd_spec().yield_record();
+#endif
     const auto in = input(ctx_.now);
     journal_active_ = false; capture_kept_ = false; reattach_plan_ = false; reattach_ask_ = false; reattach_ = 0;
     capture_identity();

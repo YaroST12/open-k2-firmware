@@ -59,6 +59,8 @@ public:
     bool running() const { return engine_ && engine_->running(); }
     bool active() const { return running(); }
     const pdspec::Engine* engine() const { return engine_ ? &*engine_ : nullptr; }
+    // A charger test or PD Stress took the borrowed point buffer: a finished standalone result is dropped.
+    void yield_record();
     // The result blob (pdspec/result.hpp) from byte `off`; 0 when there is no result or `off` is past the end.
     std::size_t result_read(std::size_t off, std::span<std::uint8_t> out) const;
     std::uint16_t blob_len() const;
@@ -84,6 +86,7 @@ public:
 
 private:
     // pdspec::Env
+    std::span<std::uint8_t> record_pool() override { return pool_; }
     pdspec::Snapshot snapshot() override;
     const pd::SourceCaps& caps() override;
     std::uint32_t cap_mv() override { return ctx_.cap_mv; }
@@ -109,6 +112,7 @@ private:
     void update_footer();
 
     UiContext& ctx_;
+    std::span<std::uint8_t> pool_{};     // borrowed from ChargerTestSession when standalone (!test_run_)
     std::optional<pdspec::Engine> engine_;
     bool captured_ = false;              // the capture is ours (armed by capture_start, not yet stopped)
     bool rd_away_ = false;               // the detach gap is open (rd_off(true) without the matching rd_off(false))
