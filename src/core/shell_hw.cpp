@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdarg>
 #include <optional>
 #include <string_view>
 
@@ -94,6 +95,15 @@ void put_impl(std::string_view s) {
 
 inline void put(std::string_view s) { detail::put(s); }
 
+[[gnu::noinline]] void tput(const char* f, ...) {
+    char b[192];
+    va_list ap;
+    va_start(ap, f);
+    const std::size_t n = fmt::vformat(std::span<char>(b, sizeof b), f, ap);
+    va_end(ap);
+    put({b, n});
+}
+
 // usb::log tap: one chip log line to the terminal; dropped when the FIFO has no room.
 void tap(std::string_view line) {
     if (!g_log_on || !g_session || usb::cdc_hold() || g_putting) return;   // a screenshot owns the pipe; or a put() is mid-text
@@ -135,11 +145,8 @@ using detail::silent_end;
 void sniff_stop() {
     dpsniff::cancel();
     const dpsniff::StreamStats st = dpsniff::stream_stats();
-    char b[96];
-    const std::size_t n = fmt::format(std::span<char>(b, sizeof b), "sniff stats edges=%u overruns=%u bytes=%u\r\n",
-                                      static_cast<unsigned>(st.edges), static_cast<unsigned>(st.overruns),
-                                      static_cast<unsigned>(st.bytes));
-    put({b, n});
+    tput("sniff stats edges=%u overruns=%u bytes=%u\r\n", static_cast<unsigned>(st.edges),
+         static_cast<unsigned>(st.overruns), static_cast<unsigned>(st.bytes));
 }
 
 // End the debug stream and print its counters: the `trace stats` line is what tools/pd_trace.py checks, the `stream stats`
@@ -147,20 +154,15 @@ void sniff_stop() {
 void stream_stop() {
     const std::uint8_t mask = dbg_hw::stream_mask();
     const dbg::Stats s = dbg_hw::stop();
-    char b[192];
-    std::size_t n;
     if (mask & dbg::kTrace) {
-        n = fmt::format(std::span<char>(b, sizeof b), "trace stats records=%u lost=%u\r\n", static_cast<unsigned>(s.trace_records),
-                        static_cast<unsigned>(s.trace_lost));
-        put({b, n});
+        tput("trace stats records=%u lost=%u\r\n", static_cast<unsigned>(s.trace_records),
+             static_cast<unsigned>(s.trace_lost));
     }
-    n = fmt::format(std::span<char>(b, sizeof b),
-                    "stream stats frames=%u trace=%u/%u log=%u/%u run=%u/%u power=%u folded=%u same=%u stalls=%u\r\n",
-                    static_cast<unsigned>(s.frames), static_cast<unsigned>(s.trace_records), static_cast<unsigned>(s.trace_lost),
-                    static_cast<unsigned>(s.log_entries), static_cast<unsigned>(s.log_lost), static_cast<unsigned>(s.run_events),
-                    static_cast<unsigned>(s.run_lost), static_cast<unsigned>(s.power_frames), static_cast<unsigned>(s.power_folded),
-                    static_cast<unsigned>(s.power_same), static_cast<unsigned>(s.stalls));
-    put({b, n});
+    tput("stream stats frames=%u trace=%u/%u log=%u/%u run=%u/%u power=%u folded=%u same=%u stalls=%u\r\n",
+         static_cast<unsigned>(s.frames), static_cast<unsigned>(s.trace_records), static_cast<unsigned>(s.trace_lost),
+         static_cast<unsigned>(s.log_entries), static_cast<unsigned>(s.log_lost), static_cast<unsigned>(s.run_events),
+         static_cast<unsigned>(s.run_lost), static_cast<unsigned>(s.power_frames), static_cast<unsigned>(s.power_folded),
+         static_cast<unsigned>(s.power_same), static_cast<unsigned>(s.stalls));
 }
 
 // ---- protocol lab (k2/core/lab.hpp): the table is parsed and confirm-checked by the shell; this runs it ----
@@ -177,33 +179,61 @@ void service() {   // let the CDC FIFO drain during a long command
 struct Line {
     char b[200];
     std::size_t n = 0;
-    bool json;
-    explicit Line(const lab::Cmd& c, std::string_view name) : json(c.o.json) {
-        if (json) add("{\"cmd\":\"%s\"", name.data());
-        else add("%s", name.data());
-    }
-    template <class... A>
-    void add(const char* f, A... a) {
-        if (n < sizeof b) n += fmt::format(std::span<char>(b + n, sizeof b - n), f, a...);
-    }
-    void u(const char* k, std::uint32_t v) { add(json ? ",\"%s\":%u" : " %s=%u", k, static_cast<unsigned>(v)); }
-    void i(const char* k, int v) { add(json ? ",\"%s\":%d" : " %s=%d", k, v); }
-    void x(const char* k, unsigned v) { add(json ? ",\"%s\":%u" : " %s=0x%02X", k, v); }   // JSON: plain number
-    void t(const char* k, bool v) { add(json ? (v ? ",\"%s\":true" : ",\"%s\":false") : " %s=%d", k, v ? 1 : 0); }
-    void s(const char* k, const char* v) { add(json ? ",\"%s\":\"%s\"" : " %s=%s", k, v); }
-    void hex(const char* k, std::span<const std::uint8_t> d) {
-        char h[2 * lab::kMaxBytes + 1];
-        std::size_t m = 0;
-        for (std::uint8_t v : d) {
-            h[m++] = "0123456789ABCDEF"[v >> 4];
-            h[m++] = "0123456789ABCDEF"[v & 15];
+    bool json = false;
+    explicit Line(const lab::Cmd& c, std::string_view name) { reset(c, name); }
+    [[gnu::noinline]] void reset(const lab::Cmd& c, std::string_view name) {
+        n = 0;
+        json = c.o.json;
+        if (json) {
+            append("{\"cmd\":\"");
+            append(name);
+            append("\"");
+        } else {
+            append(name);
         }
-        h[m] = 0;
-        s(k, h);
     }
-    void send() {
-        if (json) add("}");
-        add("\r\n");
+    [[gnu::noinline]] void append(std::string_view sv) {
+        const std::size_t avail = n < sizeof b ? sizeof b - 1 - n : 0;   // the same cut as fmt::format: 199 characters at most
+        const std::size_t take = sv.size() < avail ? sv.size() : avail;
+        for (std::size_t i = 0; i < take; i++) b[n++] = sv[i];
+    }
+    [[gnu::noinline]] void key(const char* k) {
+        append(json ? ",\"" : " ");
+        append(k);
+        append(json ? "\":" : "=");
+    }
+    [[gnu::noinline]] void add(const char* f, ...) {
+        if (n >= sizeof b) return;
+        va_list ap;
+        va_start(ap, f);
+        n += fmt::vformat(std::span<char>(b + n, sizeof b - n), f, ap);
+        va_end(ap);
+    }
+    [[gnu::noinline]] void u(const char* k, std::uint32_t v) { key(k); add("%u", static_cast<unsigned>(v)); }
+    [[gnu::noinline]] void i(const char* k, int v) { key(k); add("%d", v); }
+    [[gnu::noinline]] void x(const char* k, unsigned v) { key(k); add(json ? "%u" : "0x%02X", v); }
+    [[gnu::noinline]] void t(const char* k, bool v) {
+        key(k);
+        append(json ? (v ? "true" : "false") : (v ? "1" : "0"));
+    }
+    [[gnu::noinline]] void s(const char* k, const char* v) {
+        key(k);
+        if (json) append("\"");
+        append(v ? v : "(null)");
+        if (json) append("\"");
+    }
+    [[gnu::noinline]] void hex(const char* k, std::span<const std::uint8_t> d) {
+        key(k);
+        if (json) append("\"");
+        for (std::uint8_t v : d) {
+            const char h[2] = {"0123456789ABCDEF"[v >> 4], "0123456789ABCDEF"[v & 15]};
+            append({h, 2});
+        }
+        if (json) append("\"");
+    }
+    [[gnu::noinline]] void send() {
+        if (json) append("}");
+        append("\r\n");
         put({b, n});
         service();
     }
@@ -211,9 +241,9 @@ struct Line {
 
 // Which numeric options / flags a command honours. The grammar accepts all of them; an option a command
 // does not use is refused instead of being silently ignored.
-enum : unsigned { kRetries = 1, kTimeout = 2, kPulse = 4, kHold = 8, kWatch = 16, kSop = 32, kKeep = 64 };
+enum : std::uint8_t { kRetries = 1, kTimeout = 2, kPulse = 4, kHold = 8, kWatch = 16, kKeep = 64 };
 
-unsigned allowed_opts(lab::Id id) {
+constexpr std::uint8_t allowed_opts(lab::Id id) {
     using I = lab::Id;
     switch (id) {
     case I::AccpPing: case I::AccpRead: case I::AccpWrite: case I::AccpDump: return kRetries | kKeep;
@@ -226,17 +256,27 @@ unsigned allowed_opts(lab::Id id) {
     }
 }
 
-const char* check_opts(const lab::Cmd& c) {
-    const unsigned ok = allowed_opts(c.id);
+constexpr auto kAllowedOpts = []() {
+    std::array<std::uint8_t, static_cast<std::size_t>(lab::Id::Count)> a{};
+    for (std::size_t i = 0; i < a.size(); i++) a[i] = allowed_opts(static_cast<lab::Id>(i));
+    return a;
+}();
+
+[[gnu::noinline]] const char* check_opts(const lab::Cmd& c) {
+    const unsigned ok = kAllowedOpts[static_cast<std::size_t>(c.id)];
     const lab::Opts& o = c.o;
-    if (o.retries && !(ok & kRetries)) return "--retries is not used by this command";
-    if (o.timeout_ms && !(ok & kTimeout)) return "--timeout-ms is not used by this command";
-    if ((o.pulse_us || o.gap_us) && !(ok & kPulse)) return "--pulse-us/--gap-us are not used by this command";
-    if (o.hold_ms && !(ok & kHold)) return "--hold-ms is not used by this command";
-    if (o.watch_ms && !(ok & kWatch)) return "--watch is not used by this command";
-    if (o.sop) return "--sop: PD message injection is not implemented in this firmware";
-    if (o.hs_ms || o.frame_gap_us) return "--hs-ms/--frame-gap-us are reserved (engine timing hooks not added)";
-    if ((o.hold || o.release) && !(ok & kKeep)) return "--hold/--release are not used by this command";
+    struct Rule { bool set; unsigned bit; const char* msg; };
+    const Rule rules[] = {
+        {o.retries != 0, kRetries, "--retries is not used by this command"},
+        {o.timeout_ms != 0, kTimeout, "--timeout-ms is not used by this command"},
+        {(o.pulse_us | o.gap_us) != 0, kPulse, "--pulse-us/--gap-us are not used by this command"},
+        {o.hold_ms != 0, kHold, "--hold-ms is not used by this command"},
+        {o.watch_ms != 0, kWatch, "--watch is not used by this command"},
+        {o.sop != 0, 0, "--sop: PD message injection is not implemented in this firmware"},
+        {(o.hs_ms | o.frame_gap_us) != 0, 0, "--hs-ms/--frame-gap-us are reserved (engine timing hooks not added)"},
+        {o.hold || o.release, kKeep, "--hold/--release are not used by this command"},
+    };
+    for (const Rule& r : rules) if (r.set && !(ok & r.bit)) return r.msg;
     if ((o.mask || o.cycles || o.pace || o.max_s || o.max_trans) && c.id != lab::Id::PdStressStart)
         return "--mask/--cycles/--pace/--max-s/--max-trans are used by pdstress start only";
     return nullptr;
@@ -480,27 +520,40 @@ const char* lab_vbus(const lab::Cmd& c) {
     return nullptr;
 }
 
-const char* lab_pd_caps(const lab::Cmd& c) {
+[[gnu::noinline]] const char* lab_pd_caps(const lab::Cmd& c) {
     const pd::SourceCaps& caps = fusb302::caps();
     Line l(c, lab::name(c.id));
     l.t("valid", caps.valid);
     l.u("pdos", caps.valid ? caps.num_pdos : 0);
     l.send();
     for (unsigned i = 0; caps.valid && i < caps.num_pdos && i < pd::kMaxPdos; i++) {
-        Line p(c, "pd.pdo");
-        p.u("pos", i + 1);
-        p.u("raw", caps.pdos[i].raw);
-        p.u("min_mv", caps.pdos[i].min_mv);
-        p.u("max_mv", caps.pdos[i].max_mv);
-        p.u("max_ma", caps.pdos[i].max_ma);
-        p.send();
+        l.reset(c, "pd.pdo");
+        l.u("pos", i + 1);
+        l.u("raw", caps.pdos[i].raw);
+        l.u("min_mv", caps.pdos[i].min_mv);
+        l.u("max_mv", caps.pdos[i].max_mv);
+        l.u("max_ma", caps.pdos[i].max_ma);
+        l.send();
     }
     return nullptr;
 }
 
+[[gnu::noinline]] void lab_ufcs_caps(const lab::Cmd& c, Line& l, std::span<const std::uint8_t> payload) {
+    std::array<ufcs::Cap, ufcs::kMaxCaps> caps{};
+    const std::size_t k = ufcs::decode_caps(payload, caps);
+    for (std::size_t i = 0; i < k; i++) {
+        l.reset(c, "ufcs.cap");
+        l.u("pos", static_cast<std::uint32_t>(caps[i].pos));
+        l.u("min_mv", static_cast<std::uint32_t>(caps[i].min_mv));
+        l.u("max_mv", static_cast<std::uint32_t>(caps[i].max_mv));
+        l.u("max_ma", static_cast<std::uint32_t>(caps[i].max_ma));
+        l.send();
+    }
+}
+
 // UFCS bus access (USART2, 115200 8N1): claims the port for the command and always releases it.
 // No D+/D- handshake here; a source that needs it is driven by `ufcs request`.
-const char* lab_ufcs(const lab::Cmd& c) {
+[[gnu::noinline]] const char* lab_ufcs(const lab::Cmd& c) {
     using I = lab::Id;
     if (const char* why = lab_guard(true)) return why;
     if (fctrig::status().state != fc::State::Idle) return "busy";
@@ -539,25 +592,14 @@ const char* lab_ufcs(const lab::Cmd& c) {
         l.t("data", f.data);
     }
     l.send();
-    if (frame && f.data && c.id == I::UfcsCaps) {
-        std::array<ufcs::Cap, ufcs::kMaxCaps> caps{};
-        const std::size_t k = ufcs::decode_caps(f.payload, caps);
-        for (std::size_t i = 0; i < k; i++) {
-            Line p(c, "ufcs.cap");
-            p.u("pos", static_cast<std::uint32_t>(caps[i].pos));
-            p.u("min_mv", static_cast<std::uint32_t>(caps[i].min_mv));
-            p.u("max_mv", static_cast<std::uint32_t>(caps[i].max_mv));
-            p.u("max_ma", static_cast<std::uint32_t>(caps[i].max_ma));
-            p.send();
-        }
-    }
+    if (frame && f.data && c.id == I::UfcsCaps) lab_ufcs_caps(c, l, f.payload);
     return nullptr;
 }
 
 // UFCS tuner (RAM only) and the 5 V probe. `set` / `reset` / `probe` need an idle bus (no test, scan, sniff or
 // trigger); `show` and `result` only read. The probe is asynchronous: `ufcs probe` starts it, `ufcs result`
 // (or the [UFCS] probe done log line) tells when it ended. It never leaves 5 V and never sends a Request.
-void ufcs_tune_line(const lab::Cmd& c, ufcs::Field f) {
+[[gnu::noinline]] void ufcs_tune_line(const lab::Cmd& c, ufcs::Field f) {
     const ufcs::FieldDef& d = ufcs::kFields[static_cast<std::size_t>(f)];
     Line l(c, "ufcs.tune");
     l.s("field", d.name);
@@ -568,32 +610,33 @@ void ufcs_tune_line(const lab::Cmd& c, ufcs::Field f) {
     l.send();
 }
 
-void ufcs_result_lines(const lab::Cmd& c) {
+[[gnu::noinline]] void ufcs_result_lines(const lab::Cmd& c) {
     const ufcs::ProbeResult& r = fctrig::ufcs_probe_result();
     Line l(c, "ufcs.result");
     l.s("state", fctrig::ufcs_probe_running() ? "running" : fctrig::ufcs_probe_done() ? "done" : "idle");
     l.s("verdict", ufcs::name(r.verdict));
     l.s("class", ufcs::name(r.hs_class));
-    l.u("tx", static_cast<std::uint32_t>(r.tx_frames));
-    l.u("rx", static_cast<std::uint32_t>(r.rx_frames));
-    l.u("bytes", static_cast<std::uint32_t>(r.rx_bytes));
-    l.u("framing", r.err.framing);
-    l.u("noise", r.err.noise);
-    l.u("overrun", r.err.overrun);
-    l.u("parity", r.err.parity);
-    l.u("ms", static_cast<std::uint32_t>(r.total_ms));
+    struct UField { const char* k; std::uint32_t v; };
+    const UField res_u[] = {
+        {"tx", static_cast<std::uint32_t>(r.tx_frames)},
+        {"rx", static_cast<std::uint32_t>(r.rx_frames)},
+        {"bytes", static_cast<std::uint32_t>(r.rx_bytes)},
+        {"framing", r.err.framing}, {"noise", r.err.noise}, {"overrun", r.err.overrun},
+        {"parity", r.err.parity}, {"ms", static_cast<std::uint32_t>(r.total_ms)},
+    };
+    for (const UField& f : res_u) l.u(f.k, f.v);
     l.t("truncated", r.truncated);
     l.send();
-    Line h(c, "ufcs.hs");
-    h.i("rise1_us", r.hs.rise_us[0]);
-    h.i("fall1_us", r.hs.fall_us[0]);
-    h.i("rise2_us", r.hs.rise_us[1]);
-    h.i("fall2_us", r.hs.fall_us[1]);
-    h.i("final_us", r.hs.final_us);
-    h.i("vbus_start", r.vbus_start);
-    h.i("vbus_min", r.vbus_min);
-    h.i("vbus_max", r.vbus_max);
-    h.send();
+    l.reset(c, "ufcs.hs");
+    struct IField { const char* k; int v; };
+    const IField hs_i[] = {
+        {"rise1_us", r.hs.rise_us[0]}, {"fall1_us", r.hs.fall_us[0]},
+        {"rise2_us", r.hs.rise_us[1]}, {"fall2_us", r.hs.fall_us[1]},
+        {"final_us", r.hs.final_us}, {"vbus_start", r.vbus_start},
+        {"vbus_min", r.vbus_min}, {"vbus_max", r.vbus_max},
+    };
+    for (const IField& f : hs_i) l.i(f.k, f.v);
+    l.send();
     // The timeline: events { u16 ms, u8 kind, u8 n, n bytes }; a long event goes out in 32-byte lines.
     const std::span<const std::uint8_t> b = fctrig::ufcs_probe_blob();
     std::size_t off = ufcs::kProbeHeader;
@@ -603,11 +646,11 @@ void ufcs_result_lines(const lab::Cmd& c) {
         const std::size_t len = b[off + 3];
         if (off + 4 + len > b.size()) break;
         for (std::size_t k = 0; k < len || (len == 0 && k == 0); k += lab::kMaxBytes) {
-            Line e(c, "ufcs.ev");
-            e.u("ms", ms);
-            e.s("dir", tx ? "tx" : "rx");
-            e.hex("hex", b.subspan(off + 4 + k, std::min<std::size_t>(len - k, lab::kMaxBytes)));
-            e.send();
+            l.reset(c, "ufcs.ev");
+            l.u("ms", ms);
+            l.s("dir", tx ? "tx" : "rx");
+            l.hex("hex", b.subspan(off + 4 + k, std::min<std::size_t>(len - k, lab::kMaxBytes)));
+            l.send();
             if (len == 0) break;
         }
         off += 4 + len;
@@ -793,17 +836,11 @@ static_assert(shell::kTwinMax == twin::kCapacity && shell::kTwinNameMax == twin:
 
 bool g_twin_started = false;   // this shell started a live proof: closing the port ends it (5 V back), like an FC trigger
 
-template <class... A>
-void tput(const char* f, A... a) {
-    char b[128];
-    put({b, fmt::format(std::span<char>(b, sizeof b), f, a...)});
-}
-
 // The numbers in the library, ascending.
 unsigned twin_numbers(std::array<std::uint8_t, twin::kCapacity>& seqs) { return storage::twin_list(seqs); }
 
 // `#2 Pixel 9  27W PPS  full  pos 6 9000mV 3000mA`, or the plain identity when `predict_it` is off.
-void twin_print(std::uint8_t seq, const twin::Twin& t, bool predict_it) {
+[[gnu::noinline]] void twin_print(std::uint8_t seq, const twin::Twin& t, bool predict_it) {
     if (!predict_it) {
         tput("#%u %s  vid=%04X pid=%04X pdos=%u\r\n", unsigned(seq), t.name.data(), unsigned(t.vid), unsigned(t.pid),
              unsigned(t.num_pdos));
@@ -825,7 +862,7 @@ void twin_print(std::uint8_t seq, const twin::Twin& t, bool predict_it) {
          unsigned(o.mv), unsigned(o.ma), o.mismatch ? " mismatch" : "");
 }
 
-const char* twin_status() {
+[[gnu::noinline]] const char* twin_status() {
     const twin::live::Runner& r = twin_hw::live();
     tput("twin %s %u/%u current=%u reason=%s%s%s\r\n", twin_hw::live_running() ? "running" : "idle", unsigned(r.done_count()),
          unsigned(r.count()), unsigned(r.current()), twin::live::name(r.reason()), r.restoring() ? " restoring" : "",
@@ -868,23 +905,37 @@ const char* twin_status() {
     return nullptr;
 }
 
-const char* twin_command(const shell::TwinCmd& c) {
-    using shell::TwinOp;
+[[gnu::noinline]] const char* twin_list_predict(const shell::TwinCmd& c) {
     std::array<std::uint8_t, twin::kCapacity> seqs{};
+    const bool pr = c.op == shell::TwinOp::Predict;
+    const unsigned n = twin_numbers(seqs);
+    if (n == 0) { put("no twins saved\r\n"); return nullptr; }
+    bool shown = false;
     twin::Twin t;
+    for (unsigned i = 0; i < n; i++) {
+        if (pr && !c.all && seqs[i] != c.seq) continue;
+        if (storage::twin_get(seqs[i], t)) { twin_print(seqs[i], t, pr); shown = true; }
+    }
+    return shown ? nullptr : twin::err_name(twin::Err::NotFound);
+}
+
+[[gnu::noinline]] const char* twin_learn_cmd(const shell::TwinCmd& c) {
+    if (!c.dry && g_ui->ports_busy()) return "busy";
+    const twin_hw::Learned l = c.op == shell::TwinOp::Learn ? twin_hw::learn_from_identify(c.name, !c.dry)
+                                                            : twin_hw::learn_from_sniff(c.name, !c.dry);
+    if (l.how == twin_hw::Learn::Store) return twin::err_name(l.store.err);
+    if (l.how != twin_hw::Learn::Ok) return twin_hw::name(l.how);
+    tput("twin %s #%u %s vid=%04X pid=%04X pdos=%u%s%s\r\n", c.dry ? "learned (dry, not saved)" : "saved",
+         unsigned(l.store.seq), l.twin.name.data(), unsigned(l.twin.vid), unsigned(l.twin.pid), unsigned(l.twin.num_pdos),
+         l.store.existed ? " updated" : "", l.store.unchanged ? " unchanged" : "");
+    return nullptr;
+}
+
+[[gnu::noinline]] const char* twin_command(const shell::TwinCmd& c) {
+    using shell::TwinOp;
     switch (c.op) {
     case TwinOp::List:
-    case TwinOp::Predict: {
-        const bool pr = c.op == TwinOp::Predict;
-        const unsigned n = twin_numbers(seqs);
-        if (n == 0) { put("no twins saved\r\n"); return nullptr; }
-        bool shown = false;
-        for (unsigned i = 0; i < n; i++) {
-            if (pr && !c.all && seqs[i] != c.seq) continue;
-            if (storage::twin_get(seqs[i], t)) { twin_print(seqs[i], t, pr); shown = true; }
-        }
-        return shown ? nullptr : twin::err_name(twin::Err::NotFound);
-    }
+    case TwinOp::Predict: return twin_list_predict(c);
     case TwinOp::Status: return twin_status();
     case TwinOp::Cancel: {
         const bool was = twin_hw::live_running() || twin_hw::inline_running();
@@ -893,10 +944,14 @@ const char* twin_command(const shell::TwinCmd& c) {
         return nullptr;
     }
     case TwinOp::Run: {
+        std::array<std::uint8_t, twin::kCapacity> seqs{};
         unsigned n = 0;
         if (c.all) n = twin_numbers(seqs);
-        else if (storage::twin_get(c.seq, t)) seqs[n++] = c.seq;
-        else return twin::err_name(twin::Err::NotFound);
+        else {
+            twin::Twin t;
+            if (!storage::twin_get(c.seq, t)) return twin::err_name(twin::Err::NotFound);
+            seqs[n++] = c.seq;
+        }
         const twin::live::Refusal r =
             twin_hw::live_start(std::span<const std::uint8_t>(seqs.data(), n), c.confirm, g_ui->twin_ctx(systick::millis()));
         if (r != twin::live::Refusal::None) return twin::live::name(r);
@@ -905,17 +960,7 @@ const char* twin_command(const shell::TwinCmd& c) {
         return nullptr;
     }
     case TwinOp::Learn:
-    case TwinOp::LearnSniff: {
-        if (!c.dry && g_ui->ports_busy()) return "busy";
-        const twin_hw::Learned l = c.op == TwinOp::Learn ? twin_hw::learn_from_identify(c.name, !c.dry)
-                                                         : twin_hw::learn_from_sniff(c.name, !c.dry);
-        if (l.how == twin_hw::Learn::Store) return twin::err_name(l.store.err);
-        if (l.how != twin_hw::Learn::Ok) return twin_hw::name(l.how);
-        tput("twin %s #%u %s vid=%04X pid=%04X pdos=%u%s%s\r\n", c.dry ? "learned (dry, not saved)" : "saved",
-             unsigned(l.store.seq), l.twin.name.data(), unsigned(l.twin.vid), unsigned(l.twin.pid), unsigned(l.twin.num_pdos),
-             l.store.existed ? " updated" : "", l.store.unchanged ? " unchanged" : "");
-        return nullptr;
-    }
+    case TwinOp::LearnSniff: return twin_learn_cmd(c);
     case TwinOp::LearnInline: {
         const twin_hw::LiveCtx ctx = g_ui->twin_ctx(systick::millis());
         const pd::IqRefusal r = c.spoof ? twin_hw::inline_start_cable(c.name, !c.dry, c.confirm, ctx, c.spoof_kind == 1, c.spoof_id)
@@ -925,14 +970,10 @@ const char* twin_command(const shell::TwinCmd& c) {
              c.spoof ? " with a cable spoof" : "");
         return nullptr;
     }
-    case TwinOp::Rename: {
-        if (g_ui->ports_busy()) return "busy";
-        const twin::Err e = storage::twin_rename(c.seq, c.name);
-        return e == twin::Err::Ok ? nullptr : twin::err_name(e);
-    }
+    case TwinOp::Rename:
     case TwinOp::Delete: {
         if (g_ui->ports_busy()) return "busy";
-        const twin::Err e = storage::twin_remove(c.seq);
+        const twin::Err e = c.op == TwinOp::Rename ? storage::twin_rename(c.seq, c.name) : storage::twin_remove(c.seq);
         return e == twin::Err::Ok ? nullptr : twin::err_name(e);
     }
     }
@@ -1065,11 +1106,8 @@ struct Hw final : shell::Backend {
         g_fc_started = false;
         const bool raw = g_raw_dp || g_raw_dm;
         if (raw) raw_to_hiz();
-        char b[96];
-        const std::size_t n = fmt::format(std::span<char>(b, sizeof b), "stop active=%u vbus=%d fc_release_busy=%u raw=%u\r\n",
-                                          static_cast<unsigned>(s.active), static_cast<int>(s.vbus_mv),
-                                          s.fc_release_busy ? 1u : 0u, raw ? 1u : 0u);
-        put({b, n});
+        tput("stop active=%u vbus=%d fc_release_busy=%u raw=%u\r\n", static_cast<unsigned>(s.active),
+             static_cast<int>(s.vbus_mv), s.fc_release_busy ? 1u : 0u, raw ? 1u : 0u);
         return nullptr;
     }
 
@@ -1110,38 +1148,24 @@ struct Hw final : shell::Backend {
         if (mode == 0 || mode == 1) dpsniff::monitor_enable(mode == 1);
         const dpsniff::MonitorInfo m = dpsniff::monitor_info();
         const vooc::Summary& s = m.s;
-        char b[120];
-        std::size_t n = fmt::format(std::span<char>(b, sizeof b),
-                                    "vooc %s %s sessions=%u active=%u wakes=%u partials=%u edges=%u frames=%u\r\n",
-                                    m.enabled ? "on" : "off", m.running ? "running" : "idle", unsigned(s.sessions),
-                                    unsigned(s.active), unsigned(s.wakes), unsigned(s.partials), unsigned(s.edges),
-                                    unsigned(s.frames));
-        put({b, n});
-        n = fmt::format(std::span<char>(b, sizeof b),
-                        "vooc hs=%u/%u ident=0x%02X/0x%03X pairs=%u r82=0x%03X min=0x%03X max=0x%03X n=%u p82_us=%u/%u n=%u\r\n",
-                        unsigned(s.handshake), unsigned(s.hs_pairs), unsigned(s.ident), unsigned(s.ident_reply),
-                        unsigned(s.pairs), unsigned(s.r82_last), unsigned(s.r82_min), unsigned(s.r82_max),
-                        unsigned(s.r82_n), unsigned(s.p82_last_us), unsigned(s.p82_mean_us()), unsigned(s.p82_n));
-        put({b, n});
+        tput("vooc %s %s sessions=%u active=%u wakes=%u partials=%u edges=%u frames=%u\r\n",
+             m.enabled ? "on" : "off", m.running ? "running" : "idle", unsigned(s.sessions),
+             unsigned(s.active), unsigned(s.wakes), unsigned(s.partials), unsigned(s.edges),
+             unsigned(s.frames));
+        tput("vooc hs=%u/%u ident=0x%02X/0x%03X pairs=%u r82=0x%03X min=0x%03X max=0x%03X n=%u p82_us=%u/%u n=%u\r\n",
+             unsigned(s.handshake), unsigned(s.hs_pairs), unsigned(s.ident), unsigned(s.ident_reply),
+             unsigned(s.pairs), unsigned(s.r82_last), unsigned(s.r82_min), unsigned(s.r82_max),
+             unsigned(s.r82_n), unsigned(s.p82_last_us), unsigned(s.p82_mean_us()), unsigned(s.p82_n));
         // The edge-storm guard: paused = data traffic on D+/D-, the lines stay floating until the probe.
-        n = fmt::format(std::span<char>(b, sizeof b), "vooc guard %s storms=%u last=%u/%ums retry_ms=%u\r\n",
-                        m.guard.paused ? "paused" : "ok", unsigned(m.guard.storms), unsigned(m.guard.edges),
-                        unsigned(m.guard.ms), unsigned(m.guard.retry_ms));
-        put({b, n});
+        tput("vooc guard %s storms=%u last=%u/%ums retry_ms=%u\r\n",
+             m.guard.paused ? "paused" : "ok", unsigned(m.guard.storms), unsigned(m.guard.edges),
+             unsigned(m.guard.ms), unsigned(m.guard.retry_ms));
         for (std::size_t i = 0; i < s.ncmds && i < s.cmds.size(); i++) {
-            n = fmt::format(std::span<char>(b, sizeof b), "vooc cmd 0x%02X n=%u last=0x%03X\r\n", unsigned(s.cmds[i].cmd),
-                            unsigned(s.cmds[i].count), unsigned(s.cmds[i].last));
-            put({b, n});
+            tput("vooc cmd 0x%02X n=%u last=0x%03X\r\n", unsigned(s.cmds[i].cmd),
+                 unsigned(s.cmds[i].count), unsigned(s.cmds[i].last));
         }
-        if (s.other) {
-            n = fmt::format(std::span<char>(b, sizeof b), "vooc other=%u (table full)\r\n", unsigned(s.other));
-            put({b, n});
-        }
-        if (s.stalled()) {   // raw facts: the polled command and how many replies in a row stayed silent
-            n = fmt::format(std::span<char>(b, sizeof b), "vooc stalled on 0x%02X, %u silent replies\r\n",
-                            unsigned(s.stall_cmd), unsigned(s.stall_n));
-            put({b, n});
-        }
+        if (s.other) tput("vooc other=%u (table full)\r\n", unsigned(s.other));
+        if (s.stalled()) tput("vooc stalled on 0x%02X, %u silent replies\r\n", unsigned(s.stall_cmd), unsigned(s.stall_n));
         return nullptr;
     }
 };
