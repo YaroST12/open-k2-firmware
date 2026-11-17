@@ -27,7 +27,7 @@ or has to be read after it. "Stream" is the kind that now carries it.
 | K2LOG text lines (HID report, `usb::log*`) | 64 B reports, 16-slot queue, hundreds of lines per run | `k2_flasher.py monitor` or a HID reader (needs the HID endpoint), `k2_remote log` | Queue full drops the oldest (`[USB] drop=`); the monitor needs the lock | No (HID) | `log` (binary form, below) |
 | Text log ring (`LogRing<2048>`, LOG.TXT 3072 B on the drive) | 2 KB, about 30 lines | USB drive file, `store save-log` | Wraps in seconds on a busy run; gone on reset | No (the drive link needs a replug) | not streamed (section 5) |
 | Binary K2LOG ring (`BinLog<1024>`, QR "LOG" record) | 1 KB, about 150 entries of 5-12 B | QR share on the device, `k2_qr.py` | Whole oldest entries dropped (counted); gone on reset | No (QR is photographed) | `log` |
-| Black Box live ring (`pdtrace`, 8192 B) | PD messages, events, VBUS samples; a few KB/s on a chatty source | `pd_trace.py live` / `dump` (cmd 0x70, HID) | Wraps in seconds; counted since the stream work (`records_dropped`) | No (HID) | `trace` |
+| Black Box live ring (`pdtrace`, 4096 B) | PD messages, events, VBUS samples; a few KB/s on a chatty source | `pd_trace.py live` / `dump` (cmd 0x70, HID) | Wraps in seconds; counted since the stream work (`records_dropped`) | No (HID) | `trace` |
 | Black Box captures (3 slots x 2048 B, 32 LZ4 files in /bb) | Trigger-frozen windows | `pd_trace.py captures` / `capture N` | Slots evicted oldest first; files survive power-off | After the run only | batch only (`k2_qr.py`, `pd_trace.py`) |
 | Transition capture (`transcap`, 1920 samples at 1 kHz) | 1.92 s ring, trigger plus post window | `pd_trace.py transition list|dump` | Overwritten by the next trigger | After the run only | batch only |
 | Boot trace and bootinfo (50 ms for 3 s, backup registers) | 60 samples, once per boot | `k2_remote bootinfo`, `[BOOT]` lines, boot QR | Only the last seven samples survive a reset | Needs HID | `Hello` + boot `Text` header |
@@ -174,7 +174,7 @@ reading) the End report is skipped and the mode ends anyway, so a dead reader ca
 **Throughput (estimate, not measured on hardware).** The HID IN endpoint polls every 1 ms, so the ceiling is one 64 byte
 report per millisecond: up to 56 KB/s of ring bytes, against about 16 KB/s on the 16 B CDC bulk pipe. The real figure is
 lower because whole-record packing wastes the tail of a report (a 41 byte record leaves 15 bytes unused), and the K2 queues
-at most 8 reports per main-loop pass and keeps three queue slots free for command responses. The ring itself (8 KB, a
+at most 8 reports per main-loop pass and keeps three queue slots free for command responses. The ring itself (4 KB, a
 chatty source fills it in seconds) is the limit that matters: the mode exists so the reader can keep up, and when it cannot,
 the Lost report says by how much. The summary line prints the payload rate achieved.
 
