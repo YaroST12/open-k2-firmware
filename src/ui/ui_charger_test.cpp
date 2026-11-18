@@ -3181,7 +3181,7 @@ void ChargerTestPage::paint_detail() {
             const bool deviates = result_layout::deviates(s, s_.runner_.sweep_view());
             char pk[16] = {};
             if (deviates) { put_off(val, s_.runner_.sweep_view(), s); sv = val.view(); }
-            else if (s.reason == ct::Reason::ProgCheck && ct::caution_text(s, pk)) sv = pk;   // "overshoot +1": the first flag and how many more (<= 12 cells)
+            else if (s.reason == ct::Reason::ProgCheck && ct::caution_text(s, pk)) { val.put(pk); sv = val.view(); }   // "overshoot +1": the first flag and how many more (<= 12 cells)
             else sv = detail_name(s);
             if (s.verdict == ct::Verdict::Fail || deviates || result_layout::caution(s)) col = kCaution;
             break;
