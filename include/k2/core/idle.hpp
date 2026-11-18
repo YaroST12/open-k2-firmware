@@ -43,8 +43,13 @@ inline constexpr std::int32_t kVbusStepMv = 250;       // a VBUS move above max(
 inline constexpr std::int32_t kVbusStepPermille = 25;  // 2.5 % of the reference
 inline constexpr std::int32_t kVbusPresentMv = 1000;   // VBUS at or above this = something is attached (the UI's Live level)
 inline constexpr std::int32_t kBusActiveMa = 50;       // |IBUS| above this is activity
+inline constexpr std::uint32_t kPdQuietMs = 2000;       // PD traffic this recent keeps the clock up (a contract is being set up or changed)
 inline constexpr std::uint8_t kMaxPct = 100;
 inline constexpr std::uint8_t kMinSavedPct = 10;       // a saved or Settings level never goes below this (0 % is a black screen at boot)
+
+// Inputs::pd_negotiating: the sink engine is mid-negotiation (not Idle, Ready or Failed), or a PD message / VBUS record is younger
+// than kPdQuietMs. A settled quiet contract, a PD-silent source and passive inline are not negotiating.
+constexpr bool pd_settling(bool sink_in_flight, std::uint32_t since_pd_ms) { return sink_in_flight || since_pd_ms < kPdQuietMs; }
 
 struct Config {
     std::uint16_t dim_after_s = 60;        // 0 = never
@@ -58,7 +63,7 @@ struct Inputs {
     std::uint32_t now_ms = 0;
     bool busy = false;
     bool alarm = false;
-    bool pd_negotiating = false;           // a contract is being negotiated: the core clock stays up
+    bool pd_negotiating = false;           // a contract is being set up or changed (pd_settling): the core clock stays up
     bool pd_event = false;                 // a PD message or attach / detach since the last tick
     bool vbus_known = false;
     std::int32_t vbus_mv = 0;

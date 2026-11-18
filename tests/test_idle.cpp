@@ -469,6 +469,25 @@ static void test_low_clock_gate() {
     CHECK_EQ(m.tick(in).low_clock_ok, false);        // never in Active
 }
 
+// pd_negotiating is fed by idle::pd_settling: a contract being set up or changed, or PD traffic in the last 2 s. A settled quiet
+// contract, a PD-silent source and passive inline all let Dim run at the low clock.
+static void test_pd_settling_holds_the_clock_only_while_the_contract_moves() {
+    CHECK_EQ(idle::pd_settling(false, 2000), false);          // settled: Ready or no engine session, 2 s of silence
+    CHECK_EQ(idle::pd_settling(false, 1999), true);           // a PD message in the last 2 s
+    CHECK_EQ(idle::pd_settling(false, 0), true);
+    CHECK_EQ(idle::pd_settling(true, 600000), true);          // Request / Transition / EPR entry / Abort in progress
+    CHECK_EQ(idle::pd_settling(false, 0xFFFFFFFFu), false);
+    idle::Machine m;
+    m.tick(attached(0));
+    idle::Inputs in = attached(60000);
+    in.pd_negotiating = idle::pd_settling(false, 61000);      // quiet contract
+    CHECK_EQ(m.tick(in).low_clock_ok, true);
+    in.now_ms = 60020;
+    in.pd_negotiating = idle::pd_settling(false, 100);        // a message 100 ms ago
+    CHECK_EQ(m.tick(in).low_clock_ok, false);
+    CHECK_EQ(m.state() == idle::State::Dim, true);            // the screen stays dim, only the clock is held up
+}
+
 static void test_dim_low_clock_ends_with_any_activity_in_the_same_tick() {
     idle::Machine m;
     m.tick(attached(0));
@@ -579,6 +598,7 @@ int main() {
     test_attached_force_off_and_off_before_dim();
     test_low_clock_gate();
     test_low_clock_is_off_during_a_forced_off_with_a_negotiation();
+    test_pd_settling_holds_the_clock_only_while_the_contract_moves();
     test_dim_low_clock_ends_with_any_activity_in_the_same_tick();
     test_zero_brightness_is_honoured_at_runtime();
     test_idle_seconds_and_config_change();

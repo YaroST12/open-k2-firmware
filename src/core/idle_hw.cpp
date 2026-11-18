@@ -67,6 +67,12 @@ void full_clock() {
     if (g_force_div == 0) apply_div(1);
 }
 
+// The sink engine is mid-negotiation: Requesting, Transition, an EPR entry or an Abort (Idle, Ready and Failed are quiet).
+bool sink_in_flight() {
+    const pd::SinkState s = fusb302::sink_status().state;
+    return s != pd::SinkState::Idle && s != pd::SinkState::Ready && s != pd::SinkState::Failed;
+}
+
 }  // namespace
 
 void init() {}
@@ -122,7 +128,7 @@ void request(bool state_changing, std::uint32_t now) {
 
 void pass_guard() {
     if (crm::hclk_div() <= 1 || g_force_div != 0) return;
-    if (pdtrace::since_activity_ms() < kPassGuardMs || fusb302::active_cc() != 0) full_clock();
+    if (pdtrace::since_activity_ms() < kPassGuardMs || sink_in_flight()) full_clock();
 }
 
 Status status() {
@@ -144,9 +150,9 @@ void service(Ui& ui, bool boot_screen, std::uint32_t now) {
     in.now_ms = now;
     in.busy = boot_screen || ui.ports_busy();
     in.alarm = ui.alert_active();
-    in.pd_negotiating = fusb302::active_cc() != 0;
     // A PD message or VBUS move after the last tick: its age is shorter than the time since that tick.
     const std::uint32_t since = pdtrace::since_activity_ms();
+    in.pd_negotiating = idle::pd_settling(sink_in_flight(), since);
     in.pd_event = g_tick_seen && since < now - g_last_tick_ms;
     g_last_tick_ms = now;
     g_tick_seen = true;
