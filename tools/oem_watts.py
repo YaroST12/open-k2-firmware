@@ -19,7 +19,9 @@ LEVELS = [
     ("vooc", "SVOOC", 11000, 11000, 120, True),
 ]
 CLAIMED, NOT_REACHED, NOT_TESTED = "claimed", "not reached", "not tested"
-_RAN_ITS_COURSE = ("judged", "stopped", "cap")   # svooc_ceiling::End names; anything else above the claim is "not tested"
+# svooc_ceiling::End names ("cap" in k2_remote's readout, "time cap" in a card's Deep block); anything else above the claim is
+# "not tested"
+_RAN_ITS_COURSE = ("judged", "stopped", "cap", "time cap")
 
 
 def watts(mw):
@@ -59,6 +61,8 @@ def vooc_levels(sv):
     end, vmax_mv, word or ceiling_ma); every level 'not tested' without one."""
     sv = sv or {}
     word = sv.get("word")
+    if word is None and isinstance(sv.get("ceiling"), dict):   # k2_remote.charger_svooc_cap: {"ceiling": {"word": ...}}
+        word = sv["ceiling"].get("word")
     if word is None:
         word = (sv.get("ceiling_ma") or 0) // 100
     end, vmax = sv.get("end") or "none", sv.get("vmax_mv") or 0

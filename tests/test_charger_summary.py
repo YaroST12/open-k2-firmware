@@ -35,7 +35,7 @@ def _skip_run(protocols, reason="PD active: use QC port"):
 def test_vendor_protocols_have_friendly_names():
     protos = ["vooc-5v-handshake", "svooc-5v-handshake", "svooc65-5v-handshake", "ufcs", "vivo"]
     text = charger_summary.summarize(_skip_run(protos))
-    assert "- VOOC 5V, SVOOC, SVOOC 65W, UFCS, VIVO: skipped, PD active: use QC port" in text
+    assert "- VOOC, UFCS, VIVO: skipped, PD active: use QC port" in text   # the VOOC family is one word, never three versions
     for raw in protos:
         assert raw not in text
 
@@ -63,6 +63,54 @@ def test_svooc_ident_and_ceiling_lines():
     assert "VOOC" not in charger_summary.summarize(run)
     run.pop("svooc")
     assert "VOOC" not in charger_summary.summarize(run)
+
+
+def _vooc_run(detail="detected", svooc=None):
+    steps = [{"protocol": p, "pos": 0, "result": "pass", "reason": "none", "detail_reason": detail, "target_mv": 5000,
+              "measured_mv": 5000, "continuous": False, "raw_pdo": 0}
+             for p in ("vooc-5v-handshake", "svooc-5v-handshake", "svooc65-5v-handshake")]
+    run = {"run_id": 3, "state": "done", "reason": "none", "evidence": {}, "steps": steps}
+    if svooc:
+        run["svooc"] = svooc
+    return run
+
+
+def test_the_vooc_family_reads_as_watts_levels():
+    # Medium: the detection alone, every level not tested; never "SVOOC 65W" for a unit that only answered at 5 V
+    text = charger_summary.summarize(_vooc_run())
+    assert "- VOOC: ✓ detected" in text
+    assert ("- VOOC levels: VOOC 20W not tested, SVOOC 50W not tested, SVOOC 65W not tested, SVOOC 100W not tested, "
+            "SVOOC 120W not tested (claimed = the protocol's ask, no load)") in text
+    assert "SVOOC65" not in text and "- SVOOC" not in text
+    # Deep, the hardware ceiling (k2_remote.charger_svooc_cap's dict): every SuperVOOC level claimed
+    sv = {"mode": "on", "end": "stopped", "ceiling": {"word": 0x06D, "ma": 10900}, "vmax_mv": 11020,
+          "text": "stopped at 3.3s, <=11.0V, 10.9A 120W claimed", "ident": 0xAC}
+    text = charger_summary.summarize(_vooc_run(svooc=sv))
+    assert "SVOOC 65W claimed, SVOOC 100W claimed, SVOOC 120W claimed" in text
+    assert "VOOC 20W not tested" in text
+    # A ladder that stood at 6.3 A (69 W): the levels above it not reached
+    sv = dict(sv, end="judged", ceiling={"word": 0x03F, "ma": 6300}, vmax_mv=11000)
+    assert "SVOOC 65W claimed, SVOOC 100W not reached, SVOOC 120W not reached" in charger_summary.summarize(_vooc_run(svooc=sv))
+
+
+def test_scp_and_ufcs_rows_read_watts():
+    steps = [{"protocol": "scp", "pos": 0, "result": "pass", "reason": "none", "detail_reason": "none", "target_mv": mv,
+              "measured_mv": mv, "continuous": False, "raw_pdo": 0, "request_ma": ma} for mv, ma in ((5000, 0), (10000, 2250))]
+    text = charger_summary.summarize({"run_id": 4, "state": "done", "reason": "none", "evidence": {}, "steps": steps})
+    assert "- SCP: 5V, 10V 22.5W, all pass" in text
+
+
+def test_card_summary_folds_the_vooc_family_into_one_line_and_its_levels():
+    card = _card({"VOOC": {"verdict": "pass", "max_mv": 5000, "why": "detected"},
+                  "SVOOC": {"verdict": "pass", "max_mv": 5000, "why": "detected"},
+                  "SVOOC65": {"verdict": "pass", "max_mv": 5000, "why": "detected"}})
+    card["deep"] = {"svooc": {"end": "time cap", "asks": 4, "ceiling_ma": 10900, "vmax_mv": 11000, "stop_ms": 3300}}
+    text = charger_summary.summarize_card(card)
+    assert "- VOOC: ✓ detected" in text
+    assert "SVOOC 120W claimed" in text
+    assert "SVOOC65" not in text
+    silent = _card({n: {"verdict": "skip", "reason": "PD active: use QC port"} for n in ("VOOC", "SVOOC", "SVOOC65")})
+    assert "- VOOC: skipped, PD active: use QC port" in charger_summary.summarize_card(silent)
 
 
 def test_card_summary():
