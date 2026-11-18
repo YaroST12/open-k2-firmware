@@ -581,14 +581,18 @@ TEST_CXX_BINS  = $(patsubst tests/%.cpp, $(HOST_DIR)/%, $(TEST_CXX_SRCS))
 # objects, not an archive, so every member is linked exactly as the old source-list link did.
 # Object sets stay separate where the flags differ: lib (default), scan (-DK2_HOST_PINS).
 OBJ_DIR        = $(HOST_DIR)/obj
-LIB_OBJS       = $(patsubst %.cpp, $(OBJ_DIR)/lib/%.o, $(TEST_CXX_LIB)) $(patsubst %.c, $(OBJ_DIR)/lfs/%.o, $(LFS_SRCS)) $(patsubst %.c, $(OBJ_DIR)/lfs/%.o, $(QR_SRCS))
+LIB_OBJS       = $(patsubst %.cpp, $(OBJ_DIR)/lib/%.o, $(TEST_CXX_LIB)) $(patsubst %.c, $(OBJ_DIR)/ext/%.o, $(LFS_SRCS)) $(patsubst %.c, $(OBJ_DIR)/ext/%.o, $(QR_SRCS))
 # The QR generator is C as well, built the same way (its asserts off, as on the device).
 HOST_QR_CMD    = $(HOST_CC) -c -O0 -g -w -DNDEBUG -MMD -MP -I$(QR_DIR) $< -o $@
-HOST_LFS_CMD   = $(HOST_CC) -c -O0 -g -w -MMD -MP -I$(INC_DIR) -I$(LFS_DIR) -include k2/core/lfs_cfg.h $< -o $@
-$(OBJ_DIR)/lfs/$(QR_DIR)/%.o: $(QR_DIR)/%.c
+# littlefs is third-party and the tests' slowest code (test_emlib lists and reads whole directories at capacity): -O2 there
+# (49 s instead of 90 s for test_fill_to_capacity before its churn cut); the firmware's own code stays -O0 for the sanitizers and debuggers.
+# make does not see a change of flags, so the third-party C objects live in their own set, ext (formerly lfs, built at -O0): an
+# existing object directory rebuilds them instead of keeping the old ones.
+HOST_LFS_CMD   = $(HOST_CC) -c -O2 -g -w -MMD -MP -I$(INC_DIR) -I$(LFS_DIR) -include k2/core/lfs_cfg.h $< -o $@
+$(OBJ_DIR)/ext/$(QR_DIR)/%.o: $(QR_DIR)/%.c
 	@$(call RUN,HOST_QR_CMD)
 # littlefs is C: compiled with the host cc and linked into every test (a few unused functions are dropped).
-$(OBJ_DIR)/lfs/%.o: %.c include/k2/core/lfs_cfg.h
+$(OBJ_DIR)/ext/%.o: %.c include/k2/core/lfs_cfg.h
 	@$(call RUN,HOST_LFS_CMD)
 SCAN_TEST_LIB  = $(SRC_DIR)/drivers/fusb302.cpp $(SRC_DIR)/drivers/fusb302_cold.cpp $(SRC_DIR)/pd/pdtrace.cpp $(SRC_DIR)/pd/pdtrace_link.cpp $(SRC_DIR)/pd/pd.cpp $(SRC_DIR)/pd/pd_engine.cpp $(SRC_DIR)/pd/pd_ext.cpp $(SRC_DIR)/pd/pd_vdm.cpp $(SRC_DIR)/pd/usb_link.cpp $(SRC_DIR)/pd/pd_sink.cpp $(SRC_DIR)/pd/xiaomi_auth.cpp $(SRC_DIR)/pd/pd_identify.cpp $(SRC_DIR)/pd/pd_probe.cpp $(SRC_DIR)/pd/pd_source.cpp $(SRC_DIR)/pd/apple_readout.cpp
 SCAN_TEST_LIB += $(SRC_DIR)/pd/pd_reread.cpp $(SRC_DIR)/pd/diag.cpp
