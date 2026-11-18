@@ -1023,14 +1023,9 @@ K2_HOT void Sink::on_message(Sop sop, std::uint16_t header, std::span<const std:
             sr_wait_ = false;   // the caps after our Soft_Reset arrived
             if (xiaomi_authed_ && !xm_.reannounced) { xm_.reannounced = true; xm_.reannounce_at = now; }
             const bool solicited = get_cap_sent_;
-            if (op_.wants_caps()) {   // the lab probe's closing Get_Source_Cap: keep the list it brought (SPR words)
-                std::array<std::uint32_t, 7> w{};
-                const std::size_t n = std::min({std::size_t(num_do), w.size(), payload.size() / 4});
-                for (std::size_t i = 0; i < n; i++)
-                    w[i] = std::uint32_t(payload[4 * i]) | std::uint32_t(payload[4 * i + 1]) << 8 | std::uint32_t(payload[4 * i + 2]) << 16 |
-                           std::uint32_t(payload[4 * i + 3]) << 24;
-                op_.on_caps({w.data(), n});
-            }
+            // A source that restarts with its caps has ended our DR_Swap AMS: the Accept to come is the Request's.
+            if (swap_ == DrSwap::Pending) end_swap(DrSwap::Timeout, now);
+            if (op_.wants_caps()) oppo_caps_rx(payload, num_do);   // the lab probe's closing Get_Source_Cap: keep its list
             if (contract_ && !solicited && !asked_sr) bump(st_.caps_unsolicited);   // a re-announce inside a contract nobody asked for
             get_cap_sent_ = false;
             refresh_pending_ = false;   // an answer to our Refresh (request_source_caps) ends its wait window
@@ -1419,12 +1414,7 @@ K2_HOT void Sink::on_vdm(std::uint16_t header, std::span<const std::uint8_t> pay
     // The lab OPPO probe's answers (SVID 0x22D9, structured ACK / NAK / BUSY or unstructured): recorded, never refused - also a late
     // one after its step timed out (an unstructured VDM nobody owns would get Not_Supported below).
     if (svid == oppo::kSvid && op_.engaged()) {
-        std::array<std::uint32_t, 7> w{};
-        const std::size_t n = std::min({std::size_t(num_do), w.size(), payload.size() / 4});
-        for (std::size_t i = 0; i < n; i++)
-            w[i] = std::uint32_t(payload[4 * i]) | std::uint32_t(payload[4 * i + 1]) << 8 | std::uint32_t(payload[4 * i + 2]) << 16 |
-                   std::uint32_t(payload[4 * i + 3]) << 24;
-        op_.on_vdm({w.data(), n}, now);
+        oppo_vdm_rx(payload, num_do, now);
         return;
     }
 
@@ -1686,6 +1676,29 @@ void Sink::send_xiaomi_vdm_reply(std::uint8_t cmd, std::span<const std::uint32_t
 
 // ---- Sink-initiated DR_Swap and the OPPO (SVID 0x22D9) lab probe ----
 
+namespace {
+// A received message's data objects as words, at most 7.
+std::size_t objs_to_words(std::span<const std::uint8_t> payload, unsigned num_do, std::array<std::uint32_t, 7>& w) {
+    const std::size_t n = std::min({std::size_t(num_do), w.size(), payload.size() / 4});
+    for (std::size_t i = 0; i < n; i++)
+        w[i] = std::uint32_t(payload[4 * i]) | std::uint32_t(payload[4 * i + 1]) << 8 | std::uint32_t(payload[4 * i + 2]) << 16 |
+               std::uint32_t(payload[4 * i + 3]) << 24;
+    return n;
+}
+}  // namespace
+
+[[gnu::noinline]] void Sink::oppo_caps_rx(std::span<const std::uint8_t> payload, unsigned num_do) {
+    std::array<std::uint32_t, 7> w{};
+    op_.on_caps({w.data(), objs_to_words(payload, num_do, w)});
+}
+
+// The probe's answers (SVID 0x22D9, structured ACK / NAK / BUSY or unstructured): recorded, never refused - also a late one after
+// its step timed out (an unstructured VDM nobody owns would get Not_Supported).
+[[gnu::noinline]] void Sink::oppo_vdm_rx(std::span<const std::uint8_t> payload, unsigned num_do, std::uint32_t now) {
+    std::array<std::uint32_t, 7> w{};
+    op_.on_vdm({w.data(), objs_to_words(payload, num_do, w)}, now);
+}
+
 Err Sink::request_dr_swap(bool to_dfp, std::uint32_t now) {
     if (!answers_requests()) return Err::Inline;   // never transmit for another sink's link
     if (!caps_ || !contract_) return Err::NoCaps;
@@ -1710,9 +1723,10 @@ void Sink::queue_dr_swap(bool to_dfp, std::uint32_t now) {
     swap_deadline_ = now + kDrSwapMs;
 }
 
-// The DR_Swap AMS is over. An Accept takes the asked role at once (USB PD 8.3.3.19: the initiator changes its role on the Accept;
-// the chip already sent that Accept's GoodCRC in the old role, the driver writes the new one before the next frame).
-void Sink::end_swap(DrSwap r, std::uint32_t now) {
+// The DR_Swap AMS is over. An Accept takes the asked role at once (the initiator changes its role on the Accept; the chip already
+// sent that Accept's GoodCRC in the old role, the driver writes the new one before the next frame). Cold, never inlined into the
+// hot receive path (as the other probe helpers below).
+[[gnu::noinline]] void Sink::end_swap(DrSwap r, std::uint32_t now) {
     swap_ = r;
     if (r == DrSwap::Accepted) dfp_ = swap_to_;
     K2LOG("[PD] DR_Swap answer=%u dfp=%u\n", unsigned(r), unsigned(dfp_));
@@ -1731,7 +1745,7 @@ void Sink::end_swap(DrSwap r, std::uint32_t now) {
 
 // A Hard Reset (either way) or a detach puts both ends back in their default roles (UFP for a sink); a Soft_Reset keeps them.
 // to_ufp is false for our own Hard Reset that never reached the wire (self-powered K2): the partner still holds the roles.
-void Sink::link_reset(oppo::End why, bool to_ufp) {
+[[gnu::noinline]] void Sink::link_reset(oppo::End why, bool to_ufp) {
     swap_ = DrSwap::None;
     if (to_ufp) dfp_ = false;
     op_.stop(why, dfp_);
@@ -1764,7 +1778,7 @@ bool Sink::oppo_line_idle(std::uint32_t now) const {
            !xiaomi_chain_active(now) && now - last_io_ >= oppo::kGapMs;
 }
 
-bool Sink::oppo_tick(std::uint32_t now) {
+[[gnu::noinline]] bool Sink::oppo_tick(std::uint32_t now) {
     // SinkTxNG is asked only when the probe really has a message due (txok_.hold counts an episode per ask).
     const bool idle = op_.ready_to_send(now) && oppo_line_idle(now) && !txok_.hold(rev_, now);
     const oppo::Action a = op_.next(now, idle);

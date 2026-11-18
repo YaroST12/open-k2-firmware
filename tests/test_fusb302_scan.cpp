@@ -4305,6 +4305,7 @@ void test_listen_attach_refusals_touch_nothing();
 void test_listen_attach_forces_a_detach_before_rd_comes_on();
 void test_listen_attach_detach_times_out_and_no_detach_skips_it();
 void test_listen_attach_dropping_phase_ends_cleanly_and_sends_nothing();
+void test_oppo_dr_swap_mirrors_the_data_role_into_switches1();
 // ---- Settings > Wake sleeping port (pattern slow-rp-wake, idle path): opt-in, default off ----
 // A sleeping source's port reads ~3.3 V open on one line (CC2 here), nothing on the other, VBUS dark. With the setting off the
 // idle K2 stays exactly what the invariants say (I1/H2: no Rd at idle, a waiting charger stays passive); only with it on does it
@@ -5439,6 +5440,7 @@ int main() {
     test_listen_attach_forces_a_detach_before_rd_comes_on();           // hardware 2026-11-18: the blink never detached the OnePlus brick
     test_listen_attach_detach_times_out_and_no_detach_skips_it();
     test_listen_attach_dropping_phase_ends_cleanly_and_sends_nothing();
+    test_oppo_dr_swap_mirrors_the_data_role_into_switches1();          // ends with a detach
     return test_report("test_fusb302_scan");
 }
 
@@ -6128,4 +6130,51 @@ void test_listen_attach_dropping_phase_ends_cleanly_and_sends_nothing() {
     CHECK_EQ(fifo_loads(from), 0);
     CHECK_EQ(tx_started_since(from), false);
     listen_end_clean();
+}
+
+// The lab OPPO probe's DR_Swap: once the source Accepts, SWITCHES1 carries the DFP data role (bit 4) so the chip's GoodCRCs match
+// our headers; a Hard Reset from the source puts both ends back to UFP and ends the probe. Ends with a detach.
+static bool dr_swap_on_the_wire() {
+    for (std::size_t i = 0; i + 6 < g_txfifo.size(); i++)
+        if (g_txfifo[i] == 0x12 && g_txfifo[i + 1] == 0x12 && g_txfifo[i + 2] == 0x12 && g_txfifo[i + 3] == 0x13 &&
+            (g_txfifo[i + 5] & 0x1F) == pd::kCtlDrSwap && (g_txfifo[i + 6] & 0x70) == 0)
+            return true;
+    return false;
+}
+
+void test_oppo_dr_swap_mirrors_the_data_role_into_switches1() {
+    reset_world();
+    fusb302::init();
+    g_auto_txsent = true;
+    CHECK_EQ(fusb302::rd_for_run(true), true);
+    g_reg[0x40] = 0x20;
+    for (int i = 0; i < 100 && !usb_has("Active CC detected"); i++) { g_ms += 20; fusb302::poll(); }
+    g_txfifo.clear();
+    send_caps_5v3a();
+    for (int i = 0; i < 10; i++) { g_ms += 1; fusb302::service(); }
+    CHECK_EQ(request_on_the_wire(), true);
+    push_frame(0xE0, std::uint16_t(0x0103 | (2u << 6)), {});               // Accept
+    push_frame(0xE0, std::uint16_t(0x0106 | (2u << 6) | (1u << 9)), {});   // PS_RDY
+    for (int i = 0; i < 30; i++) { g_ms += 1; fusb302::service(); }
+    CHECK_EQ(int(fusb302::sink_status().state), int(pd::SinkState::Ready));
+    CHECK_EQ(int(g_reg[0x03] & pd::phy::kSw1DataRole), 0);
+    pd::oppo::Config c;
+    c.steps = pd::oppo::kStepPower;
+    CHECK_EQ(int(fusb302::oppo_start(c, {})), int(pd::oppo::Refusal::None));
+    g_txfifo.clear();
+    for (int i = 0; i < 300 && !dr_swap_on_the_wire(); i++) { g_ms += 1; fusb302::service(); }
+    CHECK_EQ(dr_swap_on_the_wire(), true);
+    CHECK_EQ(int(g_reg[0x03] & pd::phy::kSw1DataRole), 0);              // asked as UFP
+    push_frame(0xE0, std::uint16_t(0x0103 | (2u << 6) | (2u << 9)), {});   // Accept: we are DFP
+    for (int i = 0; i < 3; i++) { g_ms += 1; fusb302::service(); }
+    CHECK_EQ(int(g_reg[0x03] & pd::phy::kSw1DataRole), int(pd::phy::kSw1DataRole));
+    g_reg[0x3E] = 0x01;                                                     // I_HARDRST from the source
+    g_ms += 1; fusb302::service();
+    g_reg[0x3E] = 0x00;
+    CHECK_EQ(int(g_reg[0x03] & pd::phy::kSw1DataRole), 0);
+    CHECK_EQ(fusb302::oppo_running(), false);
+    CHECK_EQ(int(fusb302::oppo_result().end), int(pd::oppo::End::HardReset));
+    CHECK_EQ(fusb302::oppo_result().dfp, false);
+    g_auto_txsent = false;
+    end_start_test();
 }

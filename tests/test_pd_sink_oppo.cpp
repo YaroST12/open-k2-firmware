@@ -440,6 +440,48 @@ void test_probe_caps_step_times_out() {
 
 }  // namespace
 
+// A source that sends its caps while our DR_Swap waits ended that AMS: the Accept that follows is the Request's, never the swap's.
+void test_dr_swap_ends_when_the_source_restarts() {
+    Rig r;
+    r.ready_at(1);
+    CHECK_EQ(int(r.sink.request_dr_swap(true, r.now)), int(Err::Ok));
+    r.pump();
+    const std::uint32_t raw[] = {0x00019145, 0x0002D145, 0xC1A43241};
+    r.data(kDataSourceCap, raw);
+    CHECK_EQ(int(r.sink.dr_swap()), int(DrSwap::Timeout));
+    CHECK_EQ(type_of(r.sent.back()), kDataRequest);
+    r.ctl(kCtlAccept);
+    CHECK_COND(!r.sink.dfp());
+    r.ctl(kCtlPsRdy);
+    CHECK_EQ(int(r.sink.status().state), int(SinkState::Ready));
+}
+
+// pd oppo-power: the advertised point pick_power finds goes into the Request as asked (current never raised).
+void test_oppo_power_pick_goes_into_the_rdo() {
+    Rig r;
+    r.ready_at(1);
+    const oppo::Pick f = oppo::pick_power(r.caps, 9000, 2000);
+    CHECK_EQ(f.pos, 2);
+    CHECK_EQ(int(r.sink.trigger({f.pos, f.mv, f.ma}, r.now)), int(Err::Ok));
+    r.pump();
+    CHECK_EQ(type_of(r.sent.back()), kDataRequest);
+    std::uint32_t rdo = word(r.sent.back(), 0);
+    CHECK_EQ(rdo >> 28, 2u);
+    CHECK_EQ((rdo >> 10) & 0x3FF, 200u);   // operating 2 A in 10 mA units
+    CHECK_EQ(rdo & 0x3FF, 200u);           // maximum the same
+    r.ctl(kCtlAccept);
+    r.ctl(kCtlPsRdy);
+    const oppo::Pick p = oppo::pick_power(r.caps, 7000, 3000);
+    CHECK_EQ(p.pos, 3);
+    CHECK_EQ(int(r.sink.trigger({p.pos, p.mv, p.ma}, r.now)), int(Err::Ok));
+    r.pump();
+    rdo = word(r.sent.back(), 0);
+    CHECK_EQ(rdo >> 28, 3u);
+    CHECK_EQ((rdo >> 9) & 0xFFF, 350u);    // 7 V in 20 mV units
+    CHECK_EQ(rdo & 0x7F, 60u);             // 3 A in 50 mA units
+    CHECK_EQ(oppo::pick_power(r.caps, 7000, 4000).pos, 0);   // above the offer: nothing is asked
+}
+
 int main() {
     test_dr_swap_accept_makes_us_dfp();
     test_dr_swap_refusals_keep_ufp();
@@ -455,5 +497,7 @@ int main() {
     test_probe_stop_and_soft_reset();
     test_probe_start_refusals();
     test_probe_caps_step_times_out();
+    test_dr_swap_ends_when_the_source_restarts();
+    test_oppo_power_pick_goes_into_the_rdo();
     return test_report("test_pd_sink_oppo");
 }

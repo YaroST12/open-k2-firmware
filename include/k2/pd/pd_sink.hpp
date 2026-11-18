@@ -522,6 +522,8 @@ private:
     bool oppo_line_idle(std::uint32_t now) const;           // no AMS open, nothing queued, the line quiet for oppo::kGapMs
     bool oppo_tick(std::uint32_t now);                      // true = the probe queued a message
     void link_reset(oppo::End why, bool to_ufp);            // a Hard Reset / detach / Soft_Reset: the swap and the probe end
+    void oppo_caps_rx(std::span<const std::uint8_t> payload, unsigned num_do);                 // the caps step's list
+    void oppo_vdm_rx(std::span<const std::uint8_t> payload, unsigned num_do, std::uint32_t now);   // a 0x22D9 answer
     void on_unhandled_ext(std::uint16_t header, std::span<const std::uint8_t> payload);
 
     bool never_hard_reset_ = false;
