@@ -156,7 +156,7 @@ def load_tsv(p):
 def docker(*args):
     uid = subprocess.run(["id", "-u"], capture_output=True, text=True).stdout.strip()
     gid = subprocess.run(["id", "-g"], capture_output=True, text=True).stdout.strip()
-    r = subprocess.run(["docker", "run", "--rm", "--user", f"{uid}:{gid}", "-v", f"{ROOT}:/workspace", "-w", "/workspace",
+    r = subprocess.run(["docker", "run", "--rm", "--init", "--user", f"{uid}:{gid}", "-v", f"{ROOT}:/workspace", "-w", "/workspace",
                         IMAGE, *args], capture_output=True, text=True, errors="replace")
     if r.returncode:
         sys.exit(f"{args[0]} failed: {r.stderr.strip()[:400]}")

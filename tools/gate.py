@@ -39,6 +39,7 @@ The printed `== gate i/N` lines are the numbering above (N = 11 by default).
 `python3 tools/gate.py --update-baseline` rewrites the baseline from the current build."""
 import os
 import re
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -217,12 +218,32 @@ def size_report(now, base):
 # ---- steps ---------------------------------------------------------------------------------------
 
 def run(cmd, **kw):
-    return subprocess.run(cmd, cwd=ROOT, text=True, capture_output=True, **kw)
+    """subprocess.run in its own process group: when the gate is stopped (Ctrl-C, SIGTERM, SIGHUP) the whole group gets
+    SIGTERM, then SIGKILL after 10 s, so no make, static_check.sh or docker client is left running behind it (the
+    containers stop with their client: every docker run here uses --init)."""
+    with subprocess.Popen(cmd, cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                          start_new_session=True, **kw) as p:
+        try:
+            out, err = p.communicate()
+        except BaseException:
+            for sig, wait_s in ((signal.SIGTERM, 10), (signal.SIGKILL, 5)):
+                try:
+                    os.killpg(p.pid, sig)
+                    p.wait(wait_s)
+                    break
+                except (ProcessLookupError, subprocess.TimeoutExpired):
+                    continue
+            raise
+    return subprocess.CompletedProcess(cmd, p.returncode, out, err)
+
+
+def _stop(signum, _frame):
+    raise KeyboardInterrupt(f"signal {signum}")
 
 
 def docker_tool(*args):
     uid = run(["id", "-u"]).stdout.strip(), run(["id", "-g"]).stdout.strip()
-    r = run(["docker", "run", "--rm", "--user", f"{uid[0]}:{uid[1]}", "-v", f"{ROOT}:/workspace",
+    r = run(["docker", "run", "--rm", "--init", "--user", f"{uid[0]}:{uid[1]}", "-v", f"{ROOT}:/workspace",
              "-w", "/workspace", IMAGE, *args])
     if r.returncode:
         raise GateError(f"{' '.join(args[:2])} failed: {r.stderr.strip()}")
@@ -245,7 +266,7 @@ def foreign_owned(build, uid):
 
 
 def _docker_chown(build):
-    r = run(["docker", "run", "--rm", "-v", f"{ROOT}:/workspace", "-w", "/workspace", IMAGE,
+    r = run(["docker", "run", "--rm", "--init", "-v", f"{ROOT}:/workspace", "-w", "/workspace", IMAGE,
              "chown", "-R", f"{os.getuid()}:{os.getgid()}", f"/workspace/{build.relative_to(ROOT)}"])
     if r.returncode:
         raise GateError(f"could not take ownership of build/ ({r.stderr.strip()}); run: "
@@ -527,4 +548,6 @@ def main():
 
 
 if __name__ == "__main__":
+    for s in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(s, _stop)
     sys.exit(main())
