@@ -1,5 +1,5 @@
-# Golden PD versions, shared by tests/test_pd_version.cpp (include/k2/chargertest/pd_version.hpp), tests/test_charger_summary.py
-# (tools/charger_summary.py) and tests/test_ctgrid.mjs (tools/web/ctgrid.js).
+# Golden PD versions, shared by tests/test_pd_version.cpp (include/k2/chargertest/pd_version.hpp), tests/test_pd_version.py
+# (tools/pd_version.py) and tests/test_ctgrid.mjs (tools/web/ctgrid.js).
 # Fields, separated by '|': header spec rev (0 none, 1 PD2.0, 2 PD3.x) | Revision answer ('-' none, else major.minor) | the offer
 #   (p = PPS APDO, e = EPR, s = SPR AVS APDO, '-' none) | the version shown ('-' none) | what the summary says when an answer
 #   is under the proof ('-' when it is not)

@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
 // The PD version a charger-test run shows ("PD3.0") and the Results headline that leads with it. Pure values, no hardware:
-// tools/charger_summary.py and tools/web/ctgrid.js mirror derive() and the golden cases are tests/fixtures/pd_versions.txt.
+// tools/pd_version.py (used by tools/charger_summary.py) and tools/web/ctgrid.js mirror derive(); the golden cases are
+// tests/fixtures/pd_versions.txt.
 //
 // What the offer proves: an SPR AVS APDO is PD 3.2, any EPR (the EPR table, or EPR AVS) is PD 3.1, a PPS APDO is PD 3.0, a
 // header of spec revision 3.x with none of those is PD 3.0, a 2.0 header is PD 2.0, and no PD at all shows nothing. A
