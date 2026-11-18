@@ -12,6 +12,8 @@ __pycache__/
 .claude/
 host-build/
 host-build-rows/
+host-build-oppo/
+host-build-rows-oppo/
 host-asan/
 runs/
 
