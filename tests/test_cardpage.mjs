@@ -121,8 +121,7 @@ test("FH22 #18: the AVS pass stays green and shows the offered range", () => {
 
 test("FH22 #18: a protocol the charger never answered is grey with its reason, never red", () => {
   const b = K2Card.badges(K2Card.parseLink(golden.fh22_full.link).card);
-  const want = { AFC: "unsupported", FCP: "unsupported", SCP: "unsupported", VOOC: "needs load", SVOOC: "needs load",
-    SVOOC65: "needs load", VIVO: "no response" };
+  const want = { AFC: "unsupported", FCP: "unsupported", SCP: "unsupported", VOOC: "needs load", VIVO: "no response" };
   for (const [n, why] of Object.entries(want)) {
     const x = b.find((y) => y.id === "grp:" + n);
     assert.equal(x.tone, "skip", n);
@@ -130,6 +129,7 @@ test("FH22 #18: a protocol the charger never answered is grey with its reason, n
     assert.ok(x.word && x.glyph, n);
   }
   assert.equal(b.filter((x) => x.tone === "fail").length, 0);
+  assert.ok(!b.some((x) => x.id === "grp:SVOOC" || x.id === "grp:SVOOC65"));   // the VOOC family is one badge
   const sec = K2Card.sections(K2Card.parseLink(golden.fh22_full.link).card);
   const afc = sec.flatMap((s) => s.groups).find((g) => g.title === "AFC");
   assert.equal(afc.tone, "skip");
@@ -520,4 +520,49 @@ test("a Deep block this page cannot read leaves the card and says why", () => {
   const s = K2Card.sections(card).find((x) => x.title === "Deep run details");
   assert.equal(s.groups[0].title, "Not shown");
   assert.equal(s.groups[0].rows[0].value, "Deep block is cut short");
+});
+
+test("the VOOC family is one group; its levels read in watts, claimed only from the Deep ceiling", () => {
+  const card = JSON.parse(JSON.stringify(K2Card.parseLink(deepLink).card));
+  card.groups.VOOC = { verdict: "fail", max_mv: 0, reason: "needs load" };
+  card.groups.SVOOC = { verdict: "pass", max_mv: 5000, detail: 15 };
+  card.groups.SVOOC65 = { verdict: "fail", max_mv: 0, reason: "needs load" };
+  // the golden's ceiling: stopped, 5.5 A at 11.2 V = 61.6 W
+  assert.deepEqual(K2Card.voocLevels(card.deep.svooc).map((l) => l.label + ":" + l.state),
+    ["VOOC 20W:not tested", "SVOOC 50W:claimed", "SVOOC 65W:not reached", "SVOOC 100W:not reached", "SVOOC 120W:not reached"]);
+  const b = K2Card.badges(card);
+  const fam = b.filter((x) => /^grp:(VOOC|SVOOC|SVOOC65)$/.test(x.id));
+  assert.equal(fam.length, 1);
+  assert.equal(fam[0].label, "VOOC");
+  assert.equal(fam[0].tone, "pass");
+  const lv = b.filter((x) => x.id.startsWith("lvl:"));
+  assert.deepEqual(lv.map((x) => x.label), ["SVOOC 50W"]);
+  assert.equal(lv[0].tone, "noted");   // framed, never green: no current was drawn
+  assert.equal(lv[0].word, "claimed");
+  const g = K2Card.sections(card).flatMap((s) => s.groups).filter((x) => /VOOC/.test(x.title) && x.title !== "SVOOC ceiling");   // the Deep block keeps its ceiling group
+  assert.deepEqual(g.map((x) => x.title), ["VOOC"]);
+  const rows = Object.fromEntries(g[0].rows.map((r) => [r.label, r.value]));
+  assert.equal(rows["SVOOC 50W"], "claimed");
+  assert.equal(rows["SVOOC 120W"], "not reached");
+  assert.equal(rows["VOOC 20W"], "not tested");
+  // without a ceiling run nothing is claimed and nothing is "not reached"
+  delete card.deep.svooc;
+  assert.ok(K2Card.voocLevels(undefined).every((l) => l.state === "not tested"));
+  assert.equal(K2Card.badges(card).filter((x) => x.id.startsWith("lvl:")).length, 0);
+});
+
+test("the card page's OEM watts match tests/fixtures/oem_watts.txt and the firmware's level table", () => {
+  let labels = 0, claims = 0;
+  for (const line of readFileSync(new URL("./fixtures/oem_watts.txt", import.meta.url), "utf8").split("\n")) {
+    if (!line.trim() || line.trim().startsWith("#")) continue;
+    const f = line.split("|").map((x) => x.trim());
+    if (f[0] === "label") { assert.equal(K2Card.oemLabel(f[1], +f[2]), f[3], line); labels++; }
+    if (f[0] === "claim") {
+      assert.equal(K2Card.oemClaim({ w: +f[4], ceiling: f[5] === "y" }, { end: f[1], vmax_mv: +f[2], word: parseInt(f[3], 16) }), f[6], line);
+      claims++;
+    }
+  }
+  assert.ok(labels >= 10 && claims >= 12);
+  const src = readFileSync(new URL("../include/k2/chargertest/oem_watts.hpp", import.meta.url), "utf8");
+  for (const l of K2Card.OEM_LEVELS) assert.ok(src.includes(`{Family::Vooc, "${l.word}", ${l.mv}, ${l.ma}, ${l.w}, ${l.ceiling}},`), l.word + l.w);
 });

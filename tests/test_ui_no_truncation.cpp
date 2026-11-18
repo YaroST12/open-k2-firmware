@@ -23,6 +23,8 @@
 #include "k2/chargertest/resume_text.hpp"
 #include "k2/chargertest/result_layout.hpp"
 #include "k2/chargertest/svooc_ceiling.hpp"
+#include "k2/chargertest/oem_watts.hpp"
+#include "k2/fastcharge/fc_engine.hpp"
 #include "k2/pd/emrec.hpp"
 #include <string>
 #include <cstdio>
@@ -635,6 +637,8 @@ void test_card_screens() {
     // The VOOC family's fact rows (ChargerTestPage::build_results): "VOOC id" with the ident at every level, and the Deep
     // ceiling stage's words for every end and every abort cause at the widest numbers (10.9A 131W claimed, <=12.0V, 12.0s), built
     // through the real formatters and checked like the rows above: the label against the strip, each grid line against its width.
+    // The family is detected (a "handshake ok" or a "detected" chip), so its level rows ("VOOC" detection + 20W, "SVOOC" 50..120W)
+    // carry every claim state, and each level row's Results footer fits the band.
     {
         namespace rl = result_layout;
         namespace sc = svooc_ceiling;
@@ -649,8 +653,32 @@ void test_card_screens() {
                 oem.headers = false;
                 oem.vooc_ident = id;
                 if (end) oem.svooc_cap = cap;   // End::None: a Light / Medium run, the ident alone
+                oem.vooc_watts = true;
+                oem.vooc_claims = oem_watts::claims(oem_watts::Family::Vooc, {uint16_t(why & 1 ? 0x03F : 0x06D), sc::End(end), 11999, 12000, uint8_t(why)});
+                std::array<charger_test::Step, 3> vs{};
+                const charger_test::Algorithm fam[3] = {charger_test::Algorithm::Vooc, charger_test::Algorithm::SuperVooc,
+                                                        charger_test::Algorithm::SuperVooc65};
+                for (unsigned i = 0; i < 3; ++i) {
+                    vs[i].algorithm = fam[i];
+                    vs[i].group = charger_test::group(fam[i]);
+                    vs[i].mv = 5000;
+                    vs[i].verdict = charger_test::Verdict::Pass;
+                    vs[i].detail = uint8_t(end & 1 ? fc::Fail::NoVoltage : fc::Fail::Detected);   // "handshake ok" / "detected"
+                }
+                {
+                    rl::CompactGrid g;
+                    std::array<rl::CompactLine, rl::kMaxLines> cl{};
+                    rl::build_compact(g, rl::kGridMetrics, cl, vs, oem);
+                    int level_rows = 0;
+                    for (size_t r = 0; r < g.row_count; ++r) {
+                        if (g.rows[r].kind != rl::CompactKind::Levels) continue;
+                        ++level_rows;
+                        CHECK_EQ(rl::levels_footer(g.rows[r], rl::row_label(g, r)).len <= rl::kFooterChars, true);
+                    }
+                    CHECK_EQ(level_rows, 2);
+                }
                 rl::Layout l;
-                rl::build(l, {}, oem);
+                rl::build(l, vs, oem);
                 ++built;
                 CHECK_EQ(int(l.cuts), 0);
                 for (size_t r = 0; r < l.row_count; ++r) CHECK_EQ(text_width(kLabelFont, l.rows[r].label) <= kit::kResultLabelW - 8, true);
@@ -665,7 +693,11 @@ void test_card_screens() {
                         if (tk.glue) continue;
                         ++cells;
                         widest = std::max(widest, rl::cell_width(tk, rl::kGridMetrics));
-                        CHECK_EQ(text_width(kSmall, tk.text) + 2 * rl::kGridMetrics.pad <= rl::cell_width(tk, rl::kGridMetrics), true);
+                        // a chip "X Y" draws X in its cell and Y in the bracket under it (grid_row): "handshake ok", "10V 22.5W"
+                        const std::string_view whole(tk.text);
+                        const size_t sp = tk.chip ? whole.find(' ') : std::string_view::npos;
+                        const std::string cell(whole.substr(0, sp));
+                        CHECK_EQ(text_width(kSmall, cell.c_str()) + 2 * rl::kGridMetrics.pad <= rl::cell_width(tk, rl::kGridMetrics), true);
                     }
                     CHECK_EQ(int(cells) * widest + (int(cells) - 1) * rl::kGridMetrics.gap <= rl::kGridMetrics.avail, true);
                 }

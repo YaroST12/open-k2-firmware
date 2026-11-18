@@ -70,6 +70,7 @@
 
 #include "k2/core/bbstore.hpp"
 #include "k2/chargertest/charger_test.hpp"
+#include "k2/chargertest/oem_watts.hpp"
 #include "k2/pd/emlib.hpp"
 #include "k2/fastcharge/fc_engine.hpp"
 #include "k2/pd/pd_sink.hpp"
@@ -235,6 +236,27 @@ constexpr unsigned ufcs_modes(const Card& c) {
     unsigned n = 0;
     if (c.format >= 6) while (n < kMaxUfcs && c.ufcs[n].hi_dv != 0) ++n;
     return n;
+}
+
+// The VOOC family's three groups (VOOC, SVOOC, SVOOC65: one shared detection) read as ONE group wherever a card is shown
+// (oem_watts.hpp). Its lead speaks for it: the first group that passed, else the first that failed, else the first the card holds
+// (kGroups when it holds none). Display only: the card keeps all three groups, so no encoding changes.
+constexpr bool vooc_group(unsigned g) { return g < kGroups && oem_watts::in_family(oem_watts::Family::Vooc, charger_test::Group(g)); }
+constexpr unsigned vooc_lead(const Card& c) {
+    unsigned fail = kGroups, any = kGroups;
+    for (unsigned g = 0; g < kGroups; ++g) {
+        if (!vooc_group(g) || c.group[g].verdict == GV::None) continue;
+        if (c.group[g].verdict == GV::Pass) return g;
+        if (c.group[g].verdict == GV::Fail && fail == kGroups) fail = g;
+        if (any == kGroups) any = g;
+    }
+    return fail != kGroups ? fail : any;
+}
+// A group the card's views skip: a VOOC-family group other than the lead.
+constexpr bool folded(const Card& c, unsigned g) { return vooc_group(g) && g != vooc_lead(c); }
+// The group's name as a card view shows it: "VOOC" for the whole family, else the group's own name.
+inline const char* group_word(unsigned g) {
+    return vooc_group(g) ? oem_watts::family_word(oem_watts::Family::Vooc) : charger_test::name(charger_test::Group(g));
 }
 
 // The passive note for a source that listed OPPO's SVID (nothing is sent to it); nullptr when it did not.

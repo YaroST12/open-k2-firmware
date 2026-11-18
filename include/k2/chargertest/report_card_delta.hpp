@@ -51,7 +51,13 @@ struct Out {
 inline size_t delta(const Card& was, const Card& now, std::span<DeltaLine> out) {
     size_t n = 0;
     for (unsigned g = 0; g < kGroups && n < out.size(); ++g) {
-        const GV a = was.group[g].verdict, b = now.group[g].verdict;
+        GV a = was.group[g].verdict, b = now.group[g].verdict;
+        if (vooc_group(g)) {   // the VOOC family once, as "VOOC": its lead's verdict on each card (report_card::vooc_lead)
+            if (g != unsigned(ct::Group::Vooc)) continue;
+            const unsigned lw = vooc_lead(was), ln = vooc_lead(now);
+            a = lw < kGroups ? was.group[lw].verdict : GV::None;
+            b = ln < kGroups ? now.group[ln].verdict : GV::None;
+        }
         if (a == GV::None || b == GV::None || a == b) continue;
         out[n++] = {DeltaLine::Group, uint8_t(g), a, b, 0, 0};
     }

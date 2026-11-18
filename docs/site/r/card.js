@@ -825,7 +825,37 @@ var K2Card = (function () {
   function span(lo, hi) { return volts2(lo) + "-" + volts(hi); }
 
   var GROUP_NAMES = {PD: "PD", QC2: "QC 2.0", QC3: "QC 3.0", "QC3+": "QC 3+", AFC: "AFC", FCP: "FCP", SCP: "SCP",
-    VOOC: "VOOC", SVOOC: "SVOOC", SVOOC65: "SVOOC 65W", UFCS: "UFCS", VIVO: "VIVO"};
+    VOOC: "VOOC", SVOOC: "VOOC", SVOOC65: "VOOC", UFCS: "UFCS", VIVO: "VIVO"};   // the VOOC family: one word, never a version
+
+  // ---- OEM levels by their watts (include/k2/chargertest/oem_watts.hpp, tools/oem_watts.py, tools/web/ctgrid.js; golden:
+  // tests/fixtures/oem_watts.txt). The K2 draws no current in a charger test: a level's watts are only ever claimed. The VOOC family's
+  // three groups (VOOC, SVOOC, SVOOC65) share one detection, so the page shows them as one "VOOC" group plus its levels; the Deep
+  // block's SVOOC ceiling claims each level or leaves it not reached / not tested.
+  var OEM_LEVELS = [{word: "VOOC", mv: 5000, ma: 4000, w: 20, ceiling: false}, {word: "SVOOC", mv: 10000, ma: 5000, w: 50, ceiling: true},
+    {word: "SVOOC", mv: 10000, ma: 6500, w: 65, ceiling: true}, {word: "SVOOC", mv: 10000, ma: 10000, w: 100, ceiling: true},
+    {word: "SVOOC", mv: 11000, ma: 11000, w: 120, ceiling: true}];
+  var VOOC_GROUPS = ["VOOC", "SVOOC", "SVOOC65"];
+  var RAN_ITS_COURSE = {judged: 1, stopped: 1, cap: 1, "time cap": 1};
+  function oemWatts(mw) {
+    if (!mw) return "";
+    var dw = Math.floor((mw + 50) / 100);
+    if (dw >= 1000) return Math.floor((mw + 500) / 1000) + "W";
+    return Math.floor(dw / 10) + (dw % 10 ? "." + (dw % 10) : "") + "W";
+  }
+  function oemLabel(word, mw) { var w = oemWatts(mw); return w ? word + " " + w : word; }
+  function oemClaim(level, sv) {
+    if (!level.ceiling) return "not tested";
+    var word = sv ? (sv.word !== undefined ? sv.word : Math.floor((sv.ceiling_ma || 0) / 100)) : 0, vmax = (sv && sv.vmax_mv) || 0;
+    if (word && vmax && Math.floor((vmax * Math.min(word, 0x1FF) * 100 + 500000) / 1000000) >= level.w) return "claimed";
+    return sv && RAN_ITS_COURSE[sv.end] ? "not reached" : "not tested";
+  }
+  function voocLevels(sv) { return OEM_LEVELS.map(function (l) { return {label: oemLabel(l.word, l.w * 1000), state: oemClaim(l, sv)}; }); }
+  // The family's one group: the first that passed, else the first that failed, else the first the card holds (null: none).
+  function voocGroup(card) {
+    var have = VOOC_GROUPS.filter(function (n) { return card.groups[n]; }).map(function (n) { return card.groups[n]; });
+    return have.filter(function (g) { return g.verdict === "pass"; })[0] || have.filter(function (g) { return g.verdict === "fail"; })[0] || have[0] || null;
+  }
+  var CLAIM_TONE = {claimed: "noted", "not reached": "", "not tested": "skip"};
   var RANGE_NAMES = {"PPS (PD3.x)": "PPS", "PD3.2+ SPR AVS": "AVS", "EPR AVS": "EPR AVS"};
 
   function rangeName(alg) { return RANGE_NAMES[alg] || alg; }
@@ -977,13 +1007,23 @@ var K2Card = (function () {
     var epr = eprBadge(card);
     if (epr) out.push(epr);
     card.ranges.forEach(function (r) { out.push(rangeBadge(r, capped)); });
-    GROUPS.slice(1).forEach(function (n) { if (card.groups[n]) out.push(groupBadge(n, card.groups[n], card)); });
+    GROUPS.slice(1).forEach(function (n) {
+      if (!card.groups[n]) return;
+      if (VOOC_GROUPS.indexOf(n) < 0) { out.push(groupBadge(n, card.groups[n], card)); return; }
+      if (n !== VOOC_GROUPS.filter(function (x) { return card.groups[x]; })[0]) return;   // the family once
+      var vg = voocGroup(card);
+      out.push(groupBadge("VOOC", vg, card));
+      if (vg.verdict === "pass")   // each level the Deep ceiling claimed: framed, never green (no current was drawn)
+        voocLevels(card.deep && card.deep.svooc).forEach(function (l) {
+          if (l.state === "claimed") out.push({id: "lvl:" + l.label, kind: "group", tone: "noted", label: l.label, status: "claimed, no load", claimed: true});
+        });
+    });
     out.forEach(function (b) { lighten(card, b); });
     var rank = {pass: 0, partial: 1, fail: 2, noted: 3, skip: 4};
     out.forEach(function (b, i) {
       b.order = i; b.glyph = GLYPH[b.tone];
-      b.word = b.advertised ? "advertised" : TONE_WORD[b.tone];
-      delete b.advertised;
+      b.word = b.advertised ? "advertised" : b.claimed ? "claimed" : TONE_WORD[b.tone];
+      delete b.advertised; delete b.claimed;
     });
     out.sort(function (a, b) { return rank[a.tone] - rank[b.tone] || a.order - b.order; });
     return out;
@@ -1147,6 +1187,15 @@ var K2Card = (function () {
     GROUPS.slice(1).forEach(function (n) {
       var lg = card.groups[n];
       if (!lg) return;
+      var vooc = VOOC_GROUPS.indexOf(n) >= 0;
+      if (vooc) {   // the family once, its levels by their watts below the group's rows
+        if (n !== VOOC_GROUPS.filter(function (x) { return card.groups[x]; })[0]) return;
+        lg = voocGroup(card);
+        var vb = lighten(card, groupBadge("VOOC", lg, card));
+        var lv = lg.verdict === "pass" ? voocLevels(card.deep && card.deep.svooc).map(function (l) { return row(l.label, l.state, CLAIM_TONE[l.state]); }) : null;
+        legacy.push({title: "VOOC", tone: vb.tone, rows: groupRows("VOOC", lg, true, lv, card)});
+        return;
+      }
       var b = lighten(card, groupBadge(n, lg, card));
       var modeRows = n === "UFCS" && card.ufcs ? card.ufcs.map(function (m, i) { return row("Mode " + (i + 1), ufcsModeText(m)); }) : null;
       legacy.push({title: GROUP_NAMES[n] || n, tone: b.tone, rows: groupRows(n, lg, true, modeRows, card)});
@@ -1188,7 +1237,7 @@ var K2Card = (function () {
     base64urlDecode: base64urlDecode, lz4Inflate: lz4Inflate, crc16: crc16,
     expandCardV2: expandCardV2, expandEmkV2: expandEmkV2, BitReader: BitReader,
     decodePayload: decodePayload, decodeRecord: decodeRecord, parseLink: parseLink, splitLink: splitLink,
-    badges: badges, sections: sections, header: header, view: view,
+    badges: badges, sections: sections, header: header, view: view, OEM_LEVELS: OEM_LEVELS, oemLabel: oemLabel, oemClaim: oemClaim, voocLevels: voocLevels,
     rangeVerdict: rangeVerdict, volts: volts, BRANDS: BRANDS
   };
 })();

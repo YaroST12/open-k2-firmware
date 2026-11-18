@@ -58,7 +58,7 @@ int legacy_cap(const rc::Card &c) {
     int per_col = 0;
     while (legacy_y(c) + kDP * per_col + kDP < kFooterY) per_col++;
     int n = 0;
-    for (unsigned g = 1; g < rc::kGroups; g++) n += c.group[g].verdict != rc::GV::None;
+    for (unsigned g = 1; g < rc::kGroups; g++) n += c.group[g].verdict != rc::GV::None && !rc::folded(c, g);   // the VOOC family once
     return std::min(n, 2 * per_col);
 }
 Sel sel_at(const rc::Card &c, int row) {
@@ -66,7 +66,7 @@ Sel sel_at(const rc::Card &c, int row) {
     if (row <= int(c.n_ranges)) return {true, unsigned(row - 1)};
     int k = row - 1 - int(c.n_ranges);
     for (unsigned g = 1; g < rc::kGroups; g++) {
-        if (c.group[g].verdict == rc::GV::None) continue;
+        if (c.group[g].verdict == rc::GV::None || rc::folded(c, g)) continue;
         if (k-- == 0) return {false, g};
     }
     return {false, 0};
@@ -747,7 +747,7 @@ void CardsPage::paint_cell(int row, bool focused) {
         // The name's box ends 2 px before the value starts; the value's right edge is 2 px inside the cell.
         const int16_t nx = int16_t(g.x + 17), vr = int16_t(g.x + g.w - 2);
         const int vw = marked_width(kLabelFont, s);
-        const std::string_view name = charger_test::name(static_cast<charger_test::Group>(gi));
+        const std::string_view name = rc::group_word(gi);   // "VOOC" for the whole family
         draw_cell_head(c, int16_t(g.x + 4), int16_t(g.y + 1), nx, ty, vr - vw - 2 - nx, name, gt, r.verdict == rc::GV::Skip, bg);
         put_marked_right(c, kLabelFont, vr, int16_t(nx + int(name.size()) * kLabelFont.adv), ty, s, vc, bg);
     }
@@ -864,7 +864,7 @@ void CardsPage::paint_group() {
         cards_range_text(r, title);
         glyph = to_kit(tone::range(cd, r));
     } else {
-        title.put(sel.idx == 0 ? "PD fixed" : charger_test::name(static_cast<charger_test::Group>(sel.idx)));
+        title.put(sel.idx == 0 ? "PD fixed" : rc::group_word(sel.idx));
         glyph = to_kit(tone::group(cd, sel.idx));
     }
     paint_head(glyph, title.view(), head.view(), false, true);

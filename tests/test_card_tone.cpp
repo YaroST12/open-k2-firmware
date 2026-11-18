@@ -30,7 +30,7 @@ static void test_fh22() {
     CHECK_EQ(int(n.pass), 2);
     CHECK_EQ(int(n.partial), 1);
     CHECK_EQ(int(n.fail), 0);
-    CHECK_EQ(int(n.grey), 8);          // QC2 not advertised + AFC FCP SCP VOOC SVOOC SVOOC65 VIVO
+    CHECK_EQ(int(n.grey), 6);          // QC2 not advertised + AFC FCP SCP VOOC (one family) VIVO
     CHECK_EQ(int(tn::card(c)), int(Tone::Partial));
 }
 
@@ -159,11 +159,34 @@ static void test_a_tracking_deviation_is_a_caution() {
     CHECK_EQ(int(tn::range(c, r)), int(Tone::Fail));
 }
 
+// The VOOC family's three groups (one shared detection) count as one: its lead, the first pass, else the first fail.
+static void test_the_vooc_family_counts_once() {
+    rc::Card c = cardfx::fh22_full();
+    using G = charger_test::Group;
+    c.group[unsigned(G::Vooc)] = {rc::GV::Skip, 0, 0, uint8_t(charger_test::Reason::NeedsLoad)};
+    c.group[unsigned(G::SuperVooc)] = {rc::GV::Pass, 5000, uint8_t(fc::Fail::Detected), 0};
+    c.group[unsigned(G::SuperVooc65)] = {rc::GV::Pass, 5000, uint8_t(fc::Fail::Detected), 0};
+    CHECK_EQ(rc::vooc_lead(c), unsigned(G::SuperVooc));
+    CHECK_EQ(rc::folded(c, unsigned(G::Vooc)), true);
+    CHECK_EQ(rc::folded(c, unsigned(G::SuperVooc)), false);
+    CHECK_EQ(rc::folded(c, unsigned(G::SuperVooc65)), true);
+    CHECK_EQ(rc::folded(c, unsigned(G::Ufcs)), false);
+    CHECK_EQ(std::string_view(rc::group_word(unsigned(G::SuperVooc65))) == "VOOC", true);
+    CHECK_EQ(std::string_view(rc::group_word(unsigned(G::Ufcs))) == "UFCS", true);
+    const tn::Counts n = tn::counts(c);
+    CHECK_EQ(int(n.pass), 3);          // PD fixed, AVS, the VOOC family once
+    // A card that holds no VOOC group has no lead and folds nothing.
+    rc::Card e;
+    CHECK_EQ(rc::vooc_lead(e), rc::kGroups);
+    CHECK_EQ(rc::folded(e, unsigned(G::Vooc)), true);   // nothing to show anyway: a None group is never listed
+}
+
 int main() {
     test_a_tracking_deviation_is_a_caution();
     test_a_fold_is_a_caution();
     test_fh22();
     test_rules();
     test_light_card_pd_is_green_legacy_is_noted();
+    test_the_vooc_family_counts_once();
     return test_report("card_tone");
 }

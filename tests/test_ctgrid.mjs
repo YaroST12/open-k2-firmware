@@ -167,7 +167,7 @@ test("legacy levels roll the up and down steps into one cell; a ramp that stops 
   const v = [S("vooc", 5000, "pass", { detail: 14 })];
   assert.deepEqual(lines(v, { fold: false }), ["VOOC: handshake ok:pass"]);
   const u = [S("ufcs", 9000, "pass", { pdo: (3000 / 50 << 25) | (3000 / 50 << 18) | (200 << 9) | 50 })];
-  assert.deepEqual(lines(u, { fold: false }), ["UFCS: 9V/3A:pass"]);
+  assert.deepEqual(lines(u, { fold: false }), ["UFCS: 9V/27W:pass"]);   // OEM watts: the volts x the mode's 3 A, claimed
 });
 
 test("more than five cells wrap onto a continuation line without a label", () => {
@@ -289,4 +289,57 @@ test("the spec section is one wide cell per check, with rules above the family b
   // no section, a section that did not begin: no rows
   assert.deepEqual(CtGrid.layout([], {}), []);
   assert.deepEqual(CtGrid.specLines({ end: "not run", cells: [] }), []);
+});
+
+// ---- OEM levels by their watts: the golden vectors shared with the firmware and tools/oem_watts.py ----------------------
+test("OEM watts match tests/fixtures/oem_watts.txt", () => {
+  let labels = 0, claims = 0;
+  for (const line of readFileSync(path.join(root, "tests/fixtures/oem_watts.txt"), "utf8").split("\n")) {
+    if (!line.trim() || line.trim().startsWith("#")) continue;
+    const f = line.split("|").map((x) => x.trim());
+    if (f[0] === "label") { assert.equal(CtGrid.oemLabel(f[1], +f[2]), f[3], line); labels++; }
+    if (f[0] === "claim") {
+      const level = { word: "X", w: +f[4], ceiling: f[5] === "y" };
+      assert.equal(CtGrid.oemClaim(level, { end: f[1], vmax_mv: +f[2], word: parseInt(f[3], 16) }), f[6], line);
+      claims++;
+    }
+  }
+  assert.ok(labels >= 10 && claims >= 12);
+});
+
+test("the level table matches the firmware's", () => {
+  const src = readFileSync(path.join(root, "include/k2/chargertest/oem_watts.hpp"), "utf8");
+  for (const l of CtGrid.OEM_LEVELS) assert.ok(src.includes(`{Family::Vooc, "${l.word}", ${l.mv}, ${l.ma}, ${l.w}, ${l.ceiling}},`), l.word + l.w);
+});
+
+test("the finished grid reads the VOOC family as watts levels", () => {
+  const fam = ["vooc", "svooc", "svooc65"].map((p) => S(p, 5000, "pass", { detail: 15 }));
+  // Medium: the detection alone, every level not tested (struck)
+  assert.deepEqual(lines(fam, { fold: true, oemWatts: true }),
+    ["VOOC: detected:pass 20W:skip", "SVOOC: 50W:skip 65W:skip 100W:skip 120W:skip"]);
+  // Deep, the hardware ceiling: 0x06D under 11.02 V = 120 W claimed
+  const sv = { end: "stopped", word: 0x06D, vmax_mv: 11020 };
+  assert.deepEqual(lines(fam, { fold: true, oemWatts: true, svooc: sv }),
+    ["VOOC: detected:pass 20W:skip", "SVOOC: 50W:unverified 65W:unverified 100W:unverified 120W:unverified"]);
+  // 69 W: the levels above it not reached
+  assert.deepEqual(lines(fam, { fold: true, oemWatts: true, svooc: { end: "judged", word: 0x03F, vmax_mv: 11000 } })[1],
+    "SVOOC: 50W:unverified 65W:unverified 100W:none 120W:none");
+  const cell = CtGrid.layout(fam, { fold: true, oemWatts: true, svooc: sv })[1].cells[3];
+  assert.equal(cell.title, "SVOOC 120W: claimed (no load)");
+  // without the option (the Running grid): the plan's unit rows
+  assert.equal(lines(fam, { fold: false }).length, 3);
+});
+
+test("a VOOC family that never answered folds as one word", () => {
+  const fam = [S("vooc", 5000, "fail", { detail: 13 }), S("svooc", 5000, "skip", { reason: "request failed" }),
+               S("svooc65", 5000, "skip", { reason: "request failed" }), S("fcp", 5000, "fail")];
+  const got = lines(fam, { fold: true, oemWatts: true });
+  assert.ok(got.some((l) => l === "No reply: VOOC:none FCP:none"), got.join(" | "));
+  assert.ok(!got.some((l) => l.includes("SVOOC")), got.join(" | "));
+});
+
+test("SCP and UFCS chips read the level's claimed watts", () => {
+  const s = [S("scp", 5000, "pass"), S("scp", 10000, "pass", { ma: 2250 })];
+  assert.deepEqual(lines(s, { fold: false }), ["SCP: 5V:pass 10V/22.5W:pass"]);
+  assert.equal(CtGrid.oemWatts(110250), "110W");
 });

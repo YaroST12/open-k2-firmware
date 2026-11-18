@@ -97,6 +97,7 @@ struct Row {
     bool probe = false;             // a Mi 6A probe row (algorithm Count): the 6 A hunt steps at `mv`
     uint8_t pos = 0;                // the PDO slot of a range row; 0: not one
     uint16_t mv = 0;                // the probed level of a probe row
+    bool levels = false;            // an OEM level row (CompactKind::Levels): owns every step of the level family's units
     uint8_t first = 0, count = 0;   // tokens
 };
 inline constexpr size_t kMaxTokens = 80, kMaxRows = 24, kMaxLines = 48;
@@ -149,6 +150,12 @@ struct OemNotes {
     // every level. One ident proves the family, not the variant. nullptr = none heard.
     const char* vooc_ident = nullptr;
     unsigned rebalanced = 0;   // how often the source re-announced its list mid-run (budget-reannounce-mid-run): a passive "SOURCE rebalanced Nx" row
+    // OEM levels by their watts (oem_watts.hpp): the VOOC family's units (VOOC, SVOOC, SVOOC65; one shared detection) read as
+    // level rows, "VOOC" [detection, 20W] and "SVOOC" [50W 65W 100W 120W], each level chip claimed (Noted), not reached (Dim) or
+    // not tested (Skip) by vooc_claims (oem_watts::claims of the ceiling stage; 0 = every level not tested). A family that never
+    // answered folds as one word. Off (the Running grid): the plan's unit rows.
+    bool vooc_watts = false;
+    uint16_t vooc_claims = 0;
 };
 // Vendor-VID label for the OEM section; nullptr when the VID has no PD-derived OEM protocol to name.
 const char* vendor_oem_name(uint16_t vid);
@@ -169,10 +176,10 @@ void add_note(Layout&, const char* label, Tone, std::initializer_list<const char
 // The Results summary card: the best passing mode of each protocol family, as words with volts and amps.
 //   PD (fixed and PPS: amps = the advertised PDO current, or the requested one on the full-current PPS row; AVS: volts only,
 //   ranked by the offer's limit), Mi (the 6 A hunt,
-//   amps = the probed current), QC / AFC / Huawei / OPPO / UFCS (D+/D- modes: volts only, SCP adds its limit; a UFCS grid
-//   chip, not this line, carries its mode's current: step_label::ufcs_level).
+//   amps = the probed current), QC / AFC / Huawei / OPPO / UFCS (D+/D- modes: volts only; SCP and UFCS read the claimed watts of
+//   the level, oem_watts::step_mw: "SCP 22.5W", "UFCS 60W", never ranked as watts: the K2 drew none).
 // Ranked by watts where both are known, then the volts-only families by voltage. A handshake without a voltage proof
-// reads "VOOC ok" / "SVOOC seen". `mw` is 0 when no current is known. Returns the lines written (at most out.size()).
+// reads "VOOC ok" / "VOOC seen" (the VOOC family's word, never a unit's version). `mw` is 0 when no current is known. Returns the lines written (at most out.size()).
 struct SummaryLine { char text[20] = {}; unsigned mw = 0; unsigned mv = 0; };
 size_t summarize(std::span<const charger_test::Step>, std::span<SummaryLine> out);
 // What a PPS / AVS range delivered, from its steps. The chip keeps the advertised range; this says how far the source got:
@@ -217,14 +224,15 @@ inline constexpr size_t kCompactPoolBytes = 200;
 inline constexpr size_t kMaxFactTokens = 24;
 
 enum class CompactKind : uint8_t {
-    Header, Probe, Range, RangeNone, NoQc3Plus, Fixed, Legacy, Fact, Collapsed
+    Header, Probe, Range, RangeNone, NoQc3Plus, Fixed, Legacy, Fact, Collapsed,
+    Levels   // OEM level row (OemNotes::vooc_watts): algo = the family's lead unit, mv = packed claims, first/count = oem_watts::kLevels slice
 };
 struct CompactRow {
     CompactKind kind = CompactKind::Header;
     uint8_t algo = 0;      // charger_test::Algorithm, Section (Header), or Tone (Fact / Collapsed label tone)
     uint16_t mv = 0;       // Probe mv, Range pos, Fact label pool offset, or Collapsed (0=absent, 1=skipped)
-    uint8_t first = 0;     // Fact: first fact_tok index
-    uint8_t count = 0;     // Fact: fact_tok count
+    uint8_t first = 0;     // Fact: first fact_tok index; Levels: first oem_watts::kLevels index
+    uint8_t count = 0;     // Fact: fact_tok count; Levels: level count
 };
 struct FactToken {
     uint8_t off = 0;       // byte offset in CompactGrid::pool (not null-terminated)
@@ -262,5 +270,9 @@ bool row_has(const CompactRow&, const charger_test::Step&);
 int row_section(const CompactGrid&, size_t row);
 const char* row_label(const CompactGrid&, size_t row);
 void row_tokens(const CompactGrid&, size_t row, std::span<const charger_test::Step>, const ctsweep::View&, RowTokens& out);
+// A level row's Results footer (at most kFooterChars): "<label>: up to 120W claimed" (the top claimed level; "20W claimed" for a
+// one-level row), "<label>: 50-120W not reached" (the ladder ran, no level claimed), "<label>: 50-120W not tested". The label
+// goes when the words would not fit beside it. Empty for any other row kind.
+step_label::Text levels_footer(const CompactRow&, const char* label);
 
 }  // namespace k2::result_layout

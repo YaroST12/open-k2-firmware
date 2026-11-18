@@ -192,6 +192,37 @@ Host tests: `test_charger_test` (`test_vooc_family_shares_one_session`,
 `vooc_other_commands_are_never_answered`, `vooc_all_ones_frame_is_nothing_heard`, `vooc_never_inline`,
 `vooc_stop_releases`, `vooc_wake_forms_alternate`).
 
+### OEM power levels by their watts (2026-11-18, host-tested)
+
+OEM protocols are read by the power levels they name, never by a protocol version. The one table is
+`include/k2/chargertest/oem_watts.hpp` (`kLevels`, provenance in its header; Python twin `tools/oem_watts.py`, web
+twins in `tools/web/ctgrid.js` and `docs/site/r/card.js`, all checked against `tests/fixtures/oem_watts.txt`).
+
+- **VOOC family.** Once a run has ended, Results shows the family as one group: the detection chip (the "detected" row) and then
+  one chip per level, `VOOC 20W`, `SVOOC 50W`, `SVOOC 65W`, `SVOOC 100W`, `SVOOC 120W`. The Running grid keeps
+  the unit rows. A family that never answered folds into the "No reply" row as the one word `VOOC`.
+- **What a level can say.** The K2 draws no current, so no level ever passes:
+  - *claimed*: the Deep ceiling stage kept the session going under an ask of at least the level's watts
+    (claim = `vmax_mv x word x 100 mA`, rounded to whole watts). It is framed (`Noted`), never green.
+  - *not reached*: the ceiling run ran its course (judged, stopped, time cap) below the level. Dim.
+  - *not tested*: anything else, including every level on a Medium run (detection only, at 5 V) and VOOC 20W
+    (the ceiling stage only asks SuperVOOC words). Struck, like a skip.
+  The Results footer of the level row reads `up to 120W claimed`, `50-120W not reached` or `50-120W not tested`.
+- **SCP and UFCS** chips carry the watts the protocol names: SCP from its current write (`10V 22.5W`), UFCS from the
+  mode's current (`11V 44W`). Within a family the run summary ranks by those claimed watts (`SCP 22.5W`).
+- **AFC and FCP** name no current in the exchange the K2 makes, so they keep volts only. QC keeps its versions.
+- Same text in `charger_summary.py` (a `VOOC levels` line), the web grid and the report-card page. A saved card keeps
+  all three VOOC groups (no card or QR encoding changed); every view of it folds them into ONE `VOOC` group, its lead
+  (`report_card::vooc_lead`: the first pass, else the first fail, else the first held): the device's Report cards page
+  (one cell, the counts), the drive's SUMMARY.md, `charger_summary.py` and the card page, which also lists the levels
+  from the Deep block's ceiling. The device page has no level rows: the card record holds no ceiling (the Deep block lives
+  beside it). CARDS.JSON keeps the three group keys.
+
+Host tests: `test_oem_watts` (C++ and Python, one golden), `test_result_layout` (`vooc_family_reads_as_watts_levels`,
+`levels_footer_names_the_top_claim`), `test_ui_charger_test`, `test_ui_no_truncation`, `test_charger_summary`,
+`test_card_tone` (`test_the_vooc_family_counts_once`), `test_report_card_json`
+(`test_summary_folds_the_vooc_family`), `test_ui_capture` (`cards_vooc_rot0..3`), `test_ctgrid.mjs`, `test_cardpage.mjs`.
+
 ## A port that cuts its own 5 V rail: retry within a window (2026-11-15, host-tested, hardware check pending)
 
 Pattern `usb-a-no-load-auto-off` (`docs/CHARGER_QUIRKS.md`): a USB-A port with no load cuts VBUS every ~7.0 s at 5 V (to ~2 V for about
