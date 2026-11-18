@@ -6,6 +6,7 @@
 #include <cstring>
 
 #include "k2/chargertest/card_tone.hpp"
+#include "k2/chargertest/mi_unlock.hpp"
 #include "k2/chargertest/report_card_delta.hpp"
 #include "k2/chargertest/report_card_hw.hpp"
 #include "k2/chargertest/step_label.hpp"
@@ -49,14 +50,14 @@ int qc_fact_lines(const rc::Card &c) {
     return text_width(kLabelFont, t) <= 224 - 16 ? 1 : 2;
 }
 
-// Top of the first legacy row (its hairline).
-int16_t legacy_y(const rc::Card &c) {
+// Top of the first legacy row (its hairline). `mi`: the card has the Xiaomi fact line (CardsPage::mi_, from its stored block).
+int16_t legacy_y(const rc::Card &c, bool mi) {
     return int16_t(kDY + kDP * (1 + c.n_ranges) + kDP + kDP * qc_fact_lines(c) +
-                     (rc::oppo_note(c) ? kDP : 0) + (rc::scp_cap_ma(c) ? kDP : 0));
+                     (rc::oppo_note(c) ? kDP : 0) + (rc::scp_cap_ma(c) ? kDP : 0) + (mi ? kDP : 0));
 }
-int legacy_cap(const rc::Card &c) {
+int legacy_cap(const rc::Card &c, bool mi) {
     int per_col = 0;
-    while (legacy_y(c) + kDP * per_col + kDP < kFooterY) per_col++;
+    while (legacy_y(c, mi) + kDP * per_col + kDP < kFooterY) per_col++;
     int n = 0;
     for (unsigned g = 1; g < rc::kGroups; g++) n += c.group[g].verdict != rc::GV::None;
     return std::min(n, 2 * per_col);
@@ -73,13 +74,14 @@ Sel sel_at(const rc::Card &c, int row) {
 }
 
 struct Slot { int16_t x, y, w; };
-Slot cell_at(const rc::Card &c, int row) {
+Slot cell_at(const rc::Card &c, int row, bool mi) {
     if (row <= int(c.n_ranges)) return {0, int16_t(kDY + kDP * row), 224};
     const int k = row - 1 - int(c.n_ranges);
-    return {int16_t((k & 1) ? kColX1 : 0), int16_t(legacy_y(c) + kDP * (k / 2)), int16_t((k & 1) ? 112 : kColW0)};
+    return {int16_t((k & 1) ? kColX1 : 0), int16_t(legacy_y(c, mi) + kDP * (k / 2)), int16_t((k & 1) ? 112 : kColW0)};
 }
 
 constexpr kit::KvLayout kHandover = {kDY, kDP, 8, &kLabelFont, &kLabelFont, 80, 24, Align::Left};
+constexpr int16_t kMiValueX = 80;   // the Xiaomi fact's value, in the Handover row's value column
 
 // Every verdict marker of a card is the Results grid's tone (report_card::tone, result_layout::roll_up): green all passed, amber
 // some or capped, red none passed, grey nothing offered or nothing ran.
@@ -144,6 +146,26 @@ const char *verdict_word(tone::Tone t, bool skipped, bool range, bool listed = f
 }  // namespace
 
 // ---- text ---------------------------------------------------------------------------------------
+
+void cards_mi_text(const rc::deep::MiSection &m, StrBuf<32> &out) {
+    out.clear();
+    if (!m.chain) return;
+    if (m.chain != mi_unlock::kCodeVerified && m.chain != mi_unlock::kCodeFinished) { out.put(mi_unlock::chain_text(m.chain).view()); return; }
+    if (!m.n) { out.put("done, no new modes"); return; }
+    constexpr int kBoxPx = kRightEdge - kMiValueX;   // the value's box on the fact line, beside the "Xiaomi" key
+    for (int pass = 0; pass < 2; ++pass) {   // the words for a mode not tested, then the dash when they do not fit
+        out.clear();
+        for (unsigned i = 0; i < m.n; ++i) {
+            if (i) out.put_char(' ');
+            out.put_u32(rc::deep::mi_watts(m.mode[i])).put_char('W');
+            const auto v = static_cast<charger_test::Verdict>(m.mode[i].verdict);
+            if (v == charger_test::Verdict::Pass) out.put_char(kMarkCheck);
+            else if (v == charger_test::Verdict::Fail) out.put_char(kMarkCross);
+            else out.put(pass ? "-" : " skip");
+        }
+        if (marked_width(kLabelFont, out.view()) <= kBoxPx) return;
+    }
+}
 
 void cards_title_text(const rc::Card &c, StrBuf<24> &out) {
     if (c.name[0]) { out.put(c.name); return; }
@@ -457,11 +479,12 @@ void CardsPage::refresh() {
     if (idx_ >= n_) idx_ = n_ > 0 ? n_ - 1 : 0;
 }
 
-int CardsPage::rows() const { return 1 + int(cur_.n_ranges) + legacy_cap(cur_); }
+int CardsPage::rows() const { return 1 + int(cur_.n_ranges) + legacy_cap(cur_, !mi_.view().empty()); }
 
 void CardsPage::load_cur() {
     cur_ = rc::Card{};
-    if (n_ > 0) rc::hw::get(nums_[idx_], cur_);
+    mi_.clear();
+    if (n_ > 0 && rc::hw::get(nums_[idx_], cur_)) cards_mi_text(rc::deep::read_mi(rc::hw::ext(cur_.card_no)), mi_);
 }
 
 // The shown card as a share record, then the share view.
@@ -690,7 +713,7 @@ void CardsPage::paint_head(kit::Verdict v, std::string_view title, std::string_v
 void CardsPage::paint_cell(int row, bool focused) {
     const Surface &c = ctx_.content;
     const rc::Card &cd = cur_;
-    const Slot g = cell_at(cd, row);
+    const Slot g = cell_at(cd, row, !mi_.view().empty());
     const uint16_t bg = focused ? kFocusT : kBg;
     const int16_t ty = int16_t(g.y + kit::row_text_y(kDP, kLabelFont.height));
     gfx_fill(c, g.x, int16_t(g.y + 1), g.w, int16_t(kDP - 1), bg);
@@ -774,7 +797,7 @@ void CardsPage::paint_detail() {
 
     // PD fixed, then the PPS / AVS ranges.
     for (int r = 0; r <= int(cd.n_ranges); r++) {
-        gfx_fill(c, 0, cell_at(cd, r).y, c.w, 1, kRule);
+        gfx_fill(c, 0, cell_at(cd, r, !mi_.view().empty()).y, c.w, 1, kRule);
         paint_cell(r, r == row_);
     }
     // Handover: a fact row.
@@ -804,6 +827,13 @@ void CardsPage::paint_detail() {
         if (const char *note = rc::oppo_note(cd)) fact(note, kFaint);   // passive: the source listed OPPO's SVID, nothing was sent
         char scp[24];
         if (rc::scp_note(cd, scp, sizeof scp)) fact(scp, kFaint);      // passive: what the adapter's SCP readout reported
+        if (!mi_.view().empty()) {   // the Xiaomi section of the card's block: the modes the 0x2717 chain unlocked, or how it stopped
+            gfx_fill(c, 0, ly, c.w, 1, kRule);
+            const int16_t ty = int16_t(ly + kit::row_text_y(kDP, kLabelFont.height));
+            put_line(c, kLabelFont, 8, ty, 40, "Xiaomi", kDim, kBg);
+            put_marked(c, kLabelFont, kMiValueX, ty, kRightEdge - kMiValueX, mi_.view(), kText, kBg);   // the Handover row's value column
+            ly = int16_t(ly + kDP);
+        }
     }
     // Legacy fast-charge protocols: two columns under a divider.
     const int first = 1 + int(cd.n_ranges), cells = rows() - first;

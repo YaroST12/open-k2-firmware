@@ -9,7 +9,7 @@
 //   /jr/pd.sec      PD fixed, EPR fixed, the EPR levels, PD revision rows
 //   /jr/pps.sec     PPS, SPR AVS, EPR AVS
 //   /jr/qc.sec      QC2, QC3, QC3+, AFC, FCP, SCP (and their Class B rows)
-//   /jr/oem.sec     vendor modes (VOOC, SuperVOOC, vivo) and every 6 A hunt row
+//   /jr/oem.sec     vendor modes (VOOC, SuperVOOC, vivo) and every Xiaomi row (the 0x2717 chain and its modes)
 //   /jr/ext.sec     UFCS and anything else
 //   /jr/ph.rec      Phase   (written BEFORE an above 5 V request and before the handover)
 //   /jr/rs.rec      Resume  (a resumed run, counted; the planned re-attach's reboot is not written as a resume)
@@ -112,8 +112,8 @@ static_assert(kSecHeader + kRowBytes * charger_test::kMaxSteps <= fs::kBlockSize
 const char* section_path(Section s);
 const char* section_name(Section s);
 
-// The unit-to-section map (docs/CHARGER_TEST_FLOW.md): a row belongs to the section of its algorithm; a 6 A hunt row is a vendor
-// mode wherever it sits in the plan, so it goes to oem.
+// The unit-to-section map (docs/CHARGER_TEST_FLOW.md): a row belongs to the section of its algorithm; a Xiaomi row (Step::hunt:
+// the 0x2717 chain row and its mode rows) is a vendor mode wherever it sits in the plan, so it goes to oem.
 Section section_of(const charger_test::Step& s);
 
 std::size_t section_rows(std::span<const charger_test::Step> steps, Section sec);

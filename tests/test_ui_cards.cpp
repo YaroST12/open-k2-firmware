@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <vector>
 
 #include "card_fixtures.h"
 #include "fake_lcd.h"
@@ -470,6 +471,35 @@ static void test_cards_source_draws_firmware_text_through_checked_helpers() {
     std::fclose(f);
 }
 
+// The Xiaomi fact line of the open card, from the Xiaomi section of the card's stored block.
+static void test_mi_fact_text() {
+    namespace dp = rc::deep;
+    StrBuf<32> s;
+    dp::MiSection m;
+    cards_mi_text(m, s);
+    CHECK_STR(s.view().data(), "");                                   // no section: no line
+    m.chain = mi_unlock::kCodeNoAnswer;
+    cards_mi_text(m, s);
+    CHECK_STR(s.view().data(), "no answer");
+    m.chain = 8;                                                      // stalled at step 5
+    cards_mi_text(m, s);
+    CHECK_STR(s.view().data(), "failed at step 5");
+    m.chain = mi_unlock::kCodeVerified;                               // b) FH22: done, nothing raised
+    cards_mi_text(m, s);
+    CHECK_STR(s.view().data(), "done, no new modes");
+    m.n = 2;                                                          // a) 55 W passed, c) 66 W skipped by the cable
+    m.mode[0] = {0xC0DC323Cu, 0xC0DC3264u, 110, 100, uint8_t(ct::Verdict::Pass), 0};
+    m.mode[1] = {0, 0xC8DC3278u, 110, 120, uint8_t(ct::Verdict::Skip), uint8_t(ct::Reason::CableLimit)};
+    cards_mi_text(m, s);
+    CHECK_STR(s.view().data(), "55W\x01 66W skip");
+    m.n = 4;                                                          // four modes: the skip words no longer fit, a dash
+    m.mode[2] = {0, 0xC8DC3278u, 200, 100, uint8_t(ct::Verdict::Skip), 0};
+    m.mode[3] = {0, 0xC8DC3278u, 200, 60, uint8_t(ct::Verdict::Fail), 0};
+    cards_mi_text(m, s);
+    CHECK_STR(s.view().data(), "55W\x01 66W- 100W- 60W\x02");
+    CHECK_EQ(marked_width(kLabelFont, s.view()) <= 214 - 80, 1);
+}
+
 static void test_dump_renders() {
     const char *dir = std::getenv("K2_DUMP");
     if (!dir) return;
@@ -543,6 +573,32 @@ static void test_dump_renders() {
     shot3("fold_row");
     press3(Button::Ok);
     shot3("fold_detail");
+    // The 20K bank's card (a Medium run): the Xiaomi fact line from the block stored with it, 55 W unlocked and passed.
+    stub_cards_reset();
+    {
+        rc::Card mc = cardfx::fh22_full();
+        mc.id.fp = 0x20202020; mc.name[0] = 0;
+        std::vector<ct::Step> steps(2);
+        steps[0].group = ct::Group::Pd; steps[0].hunt = true; steps[0].verdict = ct::Verdict::Pass; steps[0].detail = mi_unlock::kCodeVerified;
+        steps[1].group = ct::Group::Pd; steps[1].algorithm = ct::Algorithm::Pps; steps[1].hunt = true; steps[1].pos = 6;
+        steps[1].pdo = 0xC0DC3264u; steps[1].mv = 11000; steps[1].ma = 5000; steps[1].verdict = ct::Verdict::Pass;
+        ct::Evidence ev{};
+        ev.mi_n = 1; ev.mi[0] = {0xC0DC323Cu, 0xC0DC3264u, 6};
+        std::array<uint8_t, rc::deep::kMaxBlob> blk{};
+        const std::size_t n = rc::deep::build(mc, steps, ev, {}, blk);
+        rc::Card prev;
+        bool had = false;
+        CHECK_EQ(int(rc::hw::put(mc, prev, had, std::span<const uint8_t>(blk.data(), n))), int(rc::Err::Ok));
+    }
+    Ui &ui4 = open_cards(90000);
+    ui4.set_rotation(3, 90100);
+    ui4.push_menu(Menu::Cards, 90200);
+    ui4.on_button(Button::Ok, ButtonEvent::Short, 90400); ui4.tick(90450);
+    ui4.tick(90700); ui4.tick(90900);
+    if (FILE *f = std::fopen((std::string(dir) + "/k2_cards_xiaomi.panel").c_str(), "wb")) {
+        std::fwrite(g_panel, 2, LCD_WIDTH * LCD_HEIGHT, f);
+        std::fclose(f);
+    }
     stub_cards_reset();
 }
 
@@ -555,6 +611,7 @@ int main() {
     test_sheet_ufcs_modes();
     test_sheet_light_words();
     test_cards_source_draws_firmware_text_through_checked_helpers();
+    test_mi_fact_text();
     test_dump_renders();
     return test_report("test_ui_cards");
 }

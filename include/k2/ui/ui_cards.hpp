@@ -8,6 +8,7 @@
 #include <cstdint>
 
 #include "k2/chargertest/report_card.hpp"
+#include "k2/chargertest/report_card_deep.hpp"
 #include "k2/chargertest/report_card_store.hpp"
 #include "k2/ui/kit.hpp"
 #include "k2/ui/ui_calc.hpp"
@@ -47,6 +48,11 @@ void cards_handover_text(const report_card::Card &c, StrBuf<32> &out);
 void cards_stats_text(const report_card::Card &c, StrBuf<32> &out);
 // "0B05:1234  fp 1A2B3C4D", the id line under the title (at most 32 characters).
 void cards_id_text(const report_card::Card &c, StrBuf<32> &out);
+// The Xiaomi fact of a card, from the Xiaomi section of its stored block (the value beside the "Xiaomi" key, at most 134 px of
+// S12, from x80): each unlocked mode by its watts with a check or cross ("55W✓ 66W✗", a mode not tested reads "66W skip", or "66W-" when
+// the words do not fit), "done, no new modes", or how the chain stopped ("no answer", "failed at step 5"). Empty
+// for a card without a section (chain 0: the source never listed 0x2717).
+void cards_mi_text(const report_card::deep::MiSection &m, StrBuf<32> &out);
 
 // ---- the detail sheet of a group or range (host-tested) ------------------------------------------------------------------
 // OK on a card row opens its sheet: a key (S12, dim) and a value per row, and only rows that carry information (no "none", no
@@ -114,6 +120,7 @@ private:
     // The list holds only the card numbers (newest first); a card is read from the store when it is drawn.
     std::array<std::uint16_t, report_card::kMaxCards> nums_{};
     report_card::Card cur_{};       // the card at idx_ (see load_cur); in List mode the row being built (row_fn)
+    StrBuf<32> mi_;                 // the open card's Xiaomi fact (cards_mi_text), empty when its block has no Xiaomi section
     void load_cur();
     void share_cur();
     int n_ = 0;

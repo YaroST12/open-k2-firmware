@@ -179,6 +179,7 @@ const char* explanation(const Step& s) {
         return epr_detail_name(s.detail) && (s.detail == kDetailEprOffered || s.detail == kDetailEprWithheld || s.detail >= kDetailEprOfferedRefused)
                    ? epr_detail_name(s.detail) : "EPR: cable not 50V 5A";
     if (epr_row && s.reason == Reason::NoOffer) return "EPR: not offered";
+    if (s.reason == Reason::CableLimit) return "cable limit";   // a mode over the cable's current (a Xiaomi 6 A mode); 16-cell column
     if (s.reason == Reason::EprRefused) return epr_detail_name(s.detail) ? epr_detail_name(s.detail) : "EPR: entry refused";
     if (s.reason == Reason::Capped) return "output capped";   // the Detail value column is 16 cells; name() is the long form
     if (s.reason == Reason::Floored) return "output floored";   // the reached floor is the row's measured_mv

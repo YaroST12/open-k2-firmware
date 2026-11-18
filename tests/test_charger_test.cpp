@@ -1147,7 +1147,10 @@ static void test_mi_mode_above_the_cable_is_a_cable_limit_skip() {
     for (const ct::Runner* x : {&r, &rg}) {
         const auto m = mi_mode_rows(*x);
         CHECK_EQ(m.size(), 2u);
-        for (const auto& s : m) { CHECK_EQ(s.verdict, ct::Verdict::Skip); CHECK_EQ(s.reason, ct::Reason::CableLimit); }
+        for (const auto& s : m) {
+            CHECK_EQ(s.verdict, ct::Verdict::Skip); CHECK_EQ(s.reason, ct::Reason::CableLimit);
+            CHECK_STR(ct::explanation(s), "cable limit");   // the Detail page's 16-cell Reason value (name() is "physical cable limit")
+        }
         CHECK_EQ(x->mi_modes().size(), 2u);
     }
     for (const auto& ch : f.choices) CHECK_EQ(ch.ma <= 5000, true);

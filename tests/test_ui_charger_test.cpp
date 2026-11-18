@@ -5439,7 +5439,7 @@ static void test_remote_start_is_the_devices_start() {
 // The Xiaomi (SVID 0x2717) unit on the three hardware cases and a source without the SVID: a PD-only run on the list the source
 // re-announced after the chain (the sink's trace keeps the list from before it). K2_DUMP=dir writes dir/k2_mi_<case>_rot<r>.panel
 // (the Results grid, scrolled to the Xiaomi row) and k2_mi_<case>_steps / _detail (the row's Steps and its first mode's Detail).
-struct MiCase { const char* name; std::array<uint32_t, 7> before, after; uint8_t n; bool svid, authed; uint8_t finish, modes; };
+struct MiCase { const char* name; std::array<uint32_t, 7> before, after; uint8_t n; bool svid, authed; uint8_t finish, modes; uint16_t cable_ma = 5000; };
 static const MiCase kMiCases[] = {
     {"bank", {0x0201912C, 0x0002D12C, 0x0003C12C, 0x0004B12C, 0x000640C8, 0xC0DC323C, 0xC1903228},
              {0x0001912C, 0x0002D12C, 0x0003C12C, 0x0004B12C, 0x000640C8, 0xC0DC3264, 0xC1903228}, 7, true, true, 8, 1},
@@ -5447,6 +5447,9 @@ static const MiCase kMiCases[] = {
              {0x0A81912C, 0x0002D12C, 0x0004B12C, 0x000641F4, 0xC8DC3264, 0xC9A43264, 0}, 6, true, true, 8, 0},
     {"cuk", {0x0A01912C, 0x0002D12C, 0x0003C12C, 0x0004B12C, 0x000641F4, 0xC8DC3264, 0xC9903264},
             {0x0A01912C, 0x0002D12C, 0x0003C12C, 0x0004B12C, 0x000641F4, 0xC8DC3278, 0xC9903278}, 7, true, true, 0x0A, 2},
+    // c) on a 6 A cable (the Xiaomi 6A cable): the two 6 A modes are tested ("Mi 66W" at 11 V 6 A), not skipped for the cable
+    {"cuk6a", {0x0A01912C, 0x0002D12C, 0x0003C12C, 0x0004B12C, 0x000641F4, 0xC8DC3264, 0xC9903264},
+              {0x0A01912C, 0x0002D12C, 0x0003C12C, 0x0004B12C, 0x000641F4, 0xC8DC3278, 0xC9903278}, 7, true, true, 0x0A, 2, 6000},
     {"nosvid", {0x0A01912C, 0x0002D12C, 0x0004B12C, 0x000641F4, 0xC8DC3264, 0, 0},
                {0x0A01912C, 0x0002D12C, 0x0004B12C, 0x000641F4, 0xC8DC3264, 0, 0}, 5, false, false, 0, 0},
 };
@@ -5454,7 +5457,7 @@ static void mi_case_fixture(const MiCase& c) {
     fixture();
     g_stub.caps.num_pdos = c.n;
     for (uint8_t i = 0; i < c.n; ++i) g_stub.caps.pdos[i] = pd::decode_pdo(c.after[i]);
-    g_stub.cable_limits.max_mv = 20000; g_stub.cable_limits.max_ma = 5000; g_stub.cable_limits.observed = true;   // a read 5 A cable
+    g_stub.cable_limits.max_mv = 20000; g_stub.cable_limits.max_ma = c.cable_ma; g_stub.cable_limits.observed = true;   // a read cable
     g_stub.vbus_ceiling_mv = 21000;   // every PD level the source offers comes (a clean run)
     g_stub.sink.xiaomi_svid = g_stub.mi_svid = c.svid; g_stub.sink.xiaomi_authed = g_stub.mi_authed = c.authed;
     if (c.authed) {
@@ -5485,9 +5488,17 @@ static void test_xiaomi_unit_scenes() {
         const FamilyPick mi = pick_family(ui, "Xiaomi");
         CHECK_EQ(mi.line >= 0, true);
         CHECK_EQ(mi.count, unsigned(c.modes) + 1);
-        unsigned modes = 0;
-        for (const auto& s : ui.charger_test_results().steps()) modes += ct::is_mi_mode(s);
+        unsigned modes = 0, cable_skips = 0, tested = 0;
+        for (const auto& s : ui.charger_test_results().steps()) {
+            if (!ct::is_mi_mode(s)) continue;
+            modes++;
+            cable_skips += s.verdict == ct::Verdict::Skip && s.reason == ct::Reason::CableLimit;
+            tested += s.verdict == ct::Verdict::Pass || s.verdict == ct::Verdict::Fail;
+        }
         CHECK_EQ(modes, unsigned(c.modes));
+        // a mode over the cable is skipped "cable limit" (cuk on a 5 A cable); on a 6 A cable it is tested (never above the offer)
+        if (c.modes && c.cable_ma > 5000) { CHECK_EQ(cable_skips, 0u); CHECK_EQ(tested, unsigned(c.modes)); }
+        if (c.modes == 2 && c.cable_ma == 5000) CHECK_EQ(cable_skips, 2u);
         const auto calm = [&] { for (int i = 0; i < 64 && ui.painting(); ++i) ui.tick(t += 100); };
         for (const uint8_t rot : {0, 1, 2, 3}) {
             ui.set_rotation(rot, t); calm();
