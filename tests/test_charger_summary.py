@@ -82,6 +82,9 @@ def test_the_vooc_family_reads_as_watts_levels():
     assert ("- VOOC levels: VOOC 20W not tested, SVOOC 50W not tested, SVOOC 65W not tested, SVOOC 100W not tested, "
             "SVOOC 120W not tested (claimed = the protocol's ask, no load)") in text
     assert "SVOOC65" not in text and "- SVOOC" not in text
+    # A level's watts only ever come from the levels line, never as a unit's name
+    assert all(ln.startswith("- VOOC levels: ") for ln in text.splitlines() if "65W" in ln)
+    assert set(charger_summary.PROTO_NAMES[p] for p in charger_summary.VOOC_FAMILY) == {"VOOC"}
     # Deep, the hardware ceiling (k2_remote.charger_svooc_cap's dict): every SuperVOOC level claimed
     sv = {"mode": "on", "end": "stopped", "ceiling": {"word": 0x06D, "ma": 10900}, "vmax_mv": 11020,
           "text": "stopped at 3.3s, <=11.0V, 10.9A 120W claimed", "ident": 0xAC}

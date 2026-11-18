@@ -16,8 +16,8 @@ import step_label
 
 PROTO_NAMES = {"pd2-fixed": "PD2 fixed", "pd3x-fixed": "PD fixed", "epr-fixed": "EPR fixed", "spr-avs": "SPR AVS",
                "epr-avs": "EPR AVS", "pps": "PPS", "qc2": "QC2", "qc3": "QC3", "qc3+": "QC3+", "afc": "AFC",
-               "fcp": "FCP", "scp": "SCP", "vooc-5v-handshake": "VOOC 5V", "svooc-5v-handshake": "SVOOC",
-               "svooc65-5v-handshake": "SVOOC 65W", "ufcs": "UFCS", "vivo": "VIVO",
+               "fcp": "FCP", "scp": "SCP", "vooc-5v-handshake": "VOOC", "svooc-5v-handshake": "VOOC",
+               "svooc65-5v-handshake": "VOOC", "ufcs": "UFCS", "vivo": "VIVO",
                "qc2b": "QC2 Class B", "qc3b": "QC3 Class B"}
 
 
