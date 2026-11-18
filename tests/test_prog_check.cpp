@@ -164,6 +164,14 @@ void no_accept_or_a_short_window_is_not_measured() {
     CHECK_COND(!measure(transcap::View{s, m}, pps(5000, 9000)).measured);
 }
 
+void the_old_level_is_read_from_the_capture() {
+    // from 0: the 20 ms before the Accept say 9 V, the request is 5 V: a down-step, so its undershoot (4600 mV) counts.
+    Trace t([](int ms) { return ms >= 80 && ms < 83 ? 4600 : ramp(9000, 5000, 100)(ms); });
+    const Out o = measure(t.view(), pps(0, 5000));
+    CHECK_EQ(o.over_mv, 150);
+    CHECK_EQ(unsigned(o.flags & kOver), unsigned(kOver));
+}
+
 void flags_name_themselves() {
     CHECK_STR(flag_text(kOver), "overshoot");
     CHECK_STR(flag_text(kLate), "late");
@@ -186,6 +194,7 @@ int main() {
     psrdy_lag_is_signed();
     slew_is_the_steepest_sample_step();
     no_accept_or_a_short_window_is_not_measured();
+    the_old_level_is_read_from_the_capture();
     flags_name_themselves();
     return test_report("prog_check");
 }

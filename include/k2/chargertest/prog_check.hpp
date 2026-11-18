@@ -24,10 +24,17 @@ enum Flag : std::uint8_t {
     kOff = 8,         // the final level more than vPpsNew / vAvsNew (5 %) from the request
 };
 
+// The capture is frozen as the runner's hold begins (the band has been stable for kStableMs): kPostMs later it ends, so the window
+// holds the ramp, the 500 ms of stability and kPostMs of the hold. The creep is read over kSpanMs of it (50 ms after the band was
+// stable, to the end). The runner's hold (1000 ms from the band's entry) is 50 ms longer than kStableMs + kPostMs.
+inline constexpr std::uint32_t kStableMs = 500;
+inline constexpr std::uint32_t kPostMs = 450;
+inline constexpr std::uint32_t kSpanMs = 900;
+
 struct In {
     bool avs = false;
-    std::int32_t from_mv = 0, to_mv = 0;   // the previous and the requested set point
-    std::uint32_t hold_us = 0;             // the hold the capture ends after (the creep's span)
+    std::int32_t from_mv = 0, to_mv = 0;   // the previous and the requested set point (from 0 = read it from the capture: the 20 ms before the Accept)
+    std::uint32_t hold_us = kSpanMs * 1000;   // the span the creep is read over, back from the capture's end
 };
 
 struct Out {
@@ -84,8 +91,17 @@ Out measure(const Rec& r, const In& in) {
     if (n < 2) return {};
     const pdspec::Edges e = pdspec::find_edges(r, r.sample(0).t_us);
     if (!e.accept) return {};
-    const pdspec::StepOut s = pdspec::analyze_step(r, {e.accept_us, in.from_mv, in.to_mv});
-    Out o = judge(s, e, in);
+    In x = in;
+    if (!x.from_mv) {   // the old level as it stood just before the Accept (the new one when the window holds none: an up-step)
+        std::uint32_t sum = 0, cnt = 0;
+        for (std::size_t i = 0; i < n; ++i) {
+            const transcap::Sample p = r.sample(i);
+            if (pdspec::detail::after(p.t_us, e.accept_us - pdspec::kPreUs) && !pdspec::detail::after(p.t_us, e.accept_us)) { sum += p.vbus_mv; ++cnt; }
+        }
+        x.from_mv = cnt ? std::int32_t(sum / cnt) : in.to_mv;
+    }
+    const pdspec::StepOut s = pdspec::analyze_step(r, {e.accept_us, x.from_mv, x.to_mv});
+    Out o = judge(s, e, x);
     if (!o.measured) return o;
     const std::uint32_t t_end = r.sample(n - 1).t_us;
     const std::uint32_t head_from = t_end - in.hold_us;
