@@ -92,7 +92,7 @@ const char* group_why(unsigned group, const GroupResult& r) {
                 return pd::err_name(pd::Err(r.detail - 128));
             if (r.detail <= unsigned(pd::SinkResult::BadChoice))
                 return pd::result_name(pd::SinkResult(r.detail));
-        } else if (r.detail <= unsigned(fc::Fail::Detected)) {
+        } else if (r.detail <= unsigned(fc::Fail::NoChange)) {
             return fc::name(fc::Fail(r.detail));
         }
     }

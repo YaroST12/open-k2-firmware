@@ -289,6 +289,7 @@ inline const char *fail_short(fc::Fail f) {
     case fc::Fail::NeedsLoad: return "needs load";
     case fc::Fail::NoVoltage: return "handshake ok";
     case fc::Fail::Detected: return "detected";
+    case fc::Fail::NoChange: return "no move";
     }
     return "?";
 }
@@ -343,6 +344,7 @@ inline const char *fail_long(fc::Fail f) {
     case fc::Fail::NeedsLoad: return "Needs a load to wake";
     case fc::Fail::NoVoltage: return "Handshake ok (no voltage)";
     case fc::Fail::Detected: return "Adapter detected (no load)";
+    case fc::Fail::NoChange: return "Acked, voltage did not move";
     default: return "Refused";
     }
 }
