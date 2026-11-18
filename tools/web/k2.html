@@ -1602,7 +1602,7 @@ var K2Proto = (function () {
   // Charger report cards (command 0x62), read-only here; rename and delete live in k2_remote.py cards. A card's
   // payload grew with the formats (162 bytes in v4, 214 in v9, 250 in v10) and is read as 48 byte chunks
   // (include/k2/chargertest/report_card.hpp; tools/report_card.py and docs/site/r/card.js decode all of it).
-  var CARD_STATES = ["Setup", "Verify 5V", "Negotiating", "Hold", "Return to 5V", "Complete", "Stopped", "UNSAFE: unplug source", "Detach charger", "Initializing..."];
+  var CARD_STATES = ["Setup", "Verify 5V", "Negotiating", "Hold", "Return to 5V", "Complete", "Stopped", "UNSAFE: unplug source", "Detach charger", "Initializing...", "SVOOC ceiling", "PD spec"];
   var CARD_ERRS = ["ok", "invalid", "not found", "flash error", "full", "a charger test is running"];
   var CARD_CHUNKS = 6;   // v10: 250 bytes / 48 = 5.2 -> 6 chunks (the summary below only reads the header, older firmwares send fewer)
   function cardsOk(p, what) {

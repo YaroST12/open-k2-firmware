@@ -108,12 +108,23 @@ def test_v9_spread_decodes_per_level():
     assert "err_mv" not in c8["ranges"][0]
     assert report_card.PAYLOAD_V9 == 214
 
+def _brand_table(src, hdr):
+    consts = dict(re.findall(r'inline constexpr uint16_t (k\w+) = 0x([0-9A-Fa-f]{4});', hdr))
+    row = re.search(r"kBrands\[\]\s*=\s*\{(.*?)\};", src, re.S)
+    assert row is not None, "could not parse report_card.cpp kBrands[]"
+    entries = re.findall(r'\{(0x[0-9A-Fa-f]{4}|k\w+),\s*"([^"]+)"\}', row.group(1))
+    assert entries, "report_card.cpp kBrands[] parsed no entries"
+    fw = {int(consts.get(v, v[2:] if v.startswith("0x") else v), 16): n for v, n in entries}
+    assert len(fw) == len(entries), "report_card.cpp kBrands[] contains duplicate vendor ids"
+    return fw
+
+
 def test_brand_table_matches_the_firmware():
+    if not (ROOT / "priv").is_dir():
+        pytest.skip("priv/ is absent; the brand guard runs in the key-enabled checkout")
     hdr = (ROOT / "include" / "k2" / "chargertest" / "report_card.hpp").read_text()
-    consts = dict(re.findall(r'inline constexpr uint16_t (k\w+) = 0x([0-9A-Fa-f]{4});', hdr))   # case kSamsungVid: ...
-    fw = {int(consts.get(v, v[2:] if v.startswith("0x") else v), 16): n
-          for v, n in re.findall(r'case (0x[0-9A-F]{4}|k\w+): return "([^"]+)"', hdr)}
-    assert fw == report_card.BRANDS
+    src = (ROOT / "src" / "chargertest" / "report_card.cpp").read_text()
+    assert _brand_table(src, hdr) == report_card.BRANDS
 
 
 def test_group_record_packs_voltages_and_detail():
@@ -155,11 +166,37 @@ def test_handover_table_covers_the_enum():
     assert re.findall(r'"([^"]*)"', row) == report_card.HANDOVER
 
 
+def _function_body(src, marker):
+    start = src.find(marker)
+    assert start >= 0, f"could not find C++ function {marker}"
+    start = src.find("{", start)
+    assert start >= 0, f"could not find body of C++ function {marker}"
+    depth = 0
+    for i in range(start, len(src)):
+        if src[i] == "{":
+            depth += 1
+        elif src[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return src[start + 1:i]
+    raise AssertionError(f"could not find end of C++ function {marker}")
+
+
+def _cpp_string_names(src, marker):
+    body = _function_body(src, marker)
+    table = re.search(r"\b(?:kNames|names)\[\]\s*=\s*\{(.*?)\};", body, re.S)
+    if table is not None:
+        names = re.findall(r'"((?:[^"\\]|\\.)*)"', table.group(1))
+        assert names, f"{marker} parsed an empty C++ string table"
+        return names
+    names = [name for name in re.findall(r'return\s+"((?:[^"\\]|\\.)*)";', body) if name != "?"]
+    assert names, f"{marker} parsed neither a C++ string table nor name-returning switch"
+    return names
+
+
 def _cpp_table(fn_marker):
     src = (ROOT / "src" / "chargertest" / "charger_test.cpp").read_text()
-    body = src[src.index(fn_marker):]
-    m = re.search(r"names\[\]\s*=\s*\{(.*?)\};", body, re.S)
-    return re.findall(r'"((?:[^"\\]|\\.)*)"', m.group(1))
+    return _cpp_string_names(src, fn_marker)
 
 
 @pytest.mark.parametrize("marker,table", [
@@ -180,9 +217,7 @@ def _enum_names(header, name):
 
 def _switch_names(path, fn):
     src = (ROOT / "src" / path).read_text()
-    body = src[src.index(fn):]
-    body = body[:body.index("return \"?\";")]
-    return re.findall(r'return "((?:[^"\\]|\\.)*)";', body)
+    return _cpp_string_names(src, fn)
 
 
 @pytest.mark.parametrize("header,enum,cpp,fn,table", [
@@ -244,6 +279,13 @@ def _js_fc_fails(path):
 def test_every_fc_fail_table_names_every_enum_value(table):
     # fc::Fail grew NeedsLoad/NoVoltage without names once: the decoders printed "unknown (13)".
     assert _switch_names("fastcharge/fc_engine.cpp", "const char* name(Fail f)") == table()
+
+
+def test_source_table_parsers_fail_loudly_on_empty_matches():
+    with pytest.raises(AssertionError, match="parsed neither"):
+        _cpp_string_names('const char* name(X x) { return "?"; }', "const char* name(X x)")
+    with pytest.raises(AssertionError, match="could not parse"):
+        _brand_table('const char* brand() { return nullptr; }', "")
 
 
 def test_full_20_char_name_does_not_pick_up_the_pdp_byte():
