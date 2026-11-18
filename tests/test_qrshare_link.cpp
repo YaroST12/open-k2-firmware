@@ -263,25 +263,37 @@ static void test_worst_card_fits_one_code() {
     CHECK(d.ok);
     CHECK(d.text == std::string(out, n2));
 
-    // format 11: the same worst card at Deep with the worst Deep block (3273 bits, 412 B) is one code: 921 characters of 929
+    // format 11: the same worst card at Deep with the worst Deep block (3274 bits, 412 B) is one code: 921 characters of 929.
+    // Format 12's worst block (the Xiaomi section on top, kMaxBits) would not fit one code: pack_v2 leaves it out whole.
     c.level = ct::Level::Deep;
     const Bytes drec = card_record(c);
-    Bytes blob(rc::deep::kMaxBlob);
-    blob[0] = std::uint8_t(rc::deep::kMaxBits); blob[1] = std::uint8_t(rc::deep::kMaxBits >> 8);
-    for (std::size_t i = 2; i < blob.size(); i++) blob[i] = std::uint8_t(0xA7 ^ (i * 29));
-    blob.back() &= std::uint8_t((1u << (rc::deep::kMaxBits % 8)) - 1);
+    const auto worst_blob = [](unsigned nbits) {
+        Bytes b(2 + (nbits + 7) / 8);
+        b[0] = std::uint8_t(nbits); b[1] = std::uint8_t(nbits >> 8);
+        for (std::size_t i = 2; i < b.size(); i++) b[i] = std::uint8_t(0xA7 ^ (i * 29));
+        if (nbits % 8) b.back() &= std::uint8_t((1u << (nbits % 8)) - 1);
+        return b;
+    };
+    const unsigned v11_bits = rc::deep::kMaxBits - unsigned(qs::records::kMiWorstBits);
+    CHECK_EQ(v11_bits, 3274u);
+    const Bytes blob = worst_blob(v11_bits);
     CHECK(rc::deep::blob_valid(blob));
     Bytes dv2(qs::records::kMaxCardDeepV2);
     const std::size_t dn = qs::records::pack_v2(qs::Type::Card, drec, dv2, blob);
-    CHECK(dn != 0 && dn <= qs::records::kMaxCardDeepV2 && dn <= lk::kMaxRecord);
-    CHECK_EQ(dn, 204u + 1 + (1 + 12 + rc::deep::kMaxBits + 7) / 8);   // the packed worst card, the level byte, the block (the 653 B bound has slack)
+    CHECK(dn != 0 && dn <= qs::records::kMaxCardDeepV11 && dn <= lk::kMaxRecord);
+    CHECK_EQ(dn, 204u + 1 + (1 + 12 + v11_bits + 7) / 8);   // the packed worst card, the level byte, the block (the 653 B bound has slack)
+    {
+        Bytes over(qs::records::kMaxCardDeepV2);
+        CHECK_EQ(qs::records::pack_v2(qs::Type::Card, drec, over, worst_blob(rc::deep::kMaxBits)), 205u);   // the card alone
+    }
     dv2.resize(dn);
     char dout[lk::kMaxText + 1];
     const std::size_t dl = lk::encode_v2(qs::Type::Card, dv2, dout);
     CHECK_EQ(dl, lk::kHead + lk::b64_len(dn));
     CHECK(dl != 0 && dl <= lk::kQrBytes);
-    CHECK_EQ(qs::records::kMaxCardDeepV2, 653u);
-    CHECK_EQ(lk::kHead + lk::b64_len(qs::records::kMaxCardDeepV2), 921u);
+    CHECK_EQ(qs::records::kMaxCardDeepV11, 653u);
+    CHECK_EQ(lk::kHead + lk::b64_len(qs::records::kMaxCardDeepV11), 921u);
+    CHECK_EQ(qs::records::kMaxCardDeepV2, lk::kMaxRecord);   // the cap pack_v2 holds a block to: one code
     static std::uint8_t dcode[qr::buf_len_for(lk::kMaxVersion)], dtemp[qr::buf_len_for(lk::kMaxVersion)];
     std::memcpy(dtemp, dout, dl);
     const int dm = qr::encode_placed(dcode, dtemp, dl, lk::kMaxVersion);

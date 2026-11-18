@@ -29,7 +29,7 @@ bool is_programmable(const ct::Step& s) { return s.algorithm == A::Pps || is_avs
 Text protocol(const ct::Step& s) {
     Text t;
     Out o{t};
-    if (s.hunt) { o.put("Mi"); return t; }
+    if (s.hunt) { o.put(s.mv ? "Mi" : "Xiaomi"); return t; }   // a mode the Xiaomi chain unlocked; the chain row itself
     switch (s.algorithm) {
     case A::Pd2Fixed: o.put(s.mv ? "PD" : "PD2.0"); break;
     case A::Pd3Fixed: o.put(s.mv ? "PD" : "PD3.x"); break;
@@ -46,8 +46,10 @@ Text protocol(const ct::Step& s) {
     return t;
 }
 
+unsigned mi_watts(const ct::Step& s) { return s.hunt ? (s.mv * s.ma + 500000u) / 1000000u : 0u; }
+
 unsigned amps_ma(const ct::Step& s) {
-    if (s.hunt) return s.ma;
+    if (s.hunt) return 0;   // a Xiaomi mode is named by its watts (mi_watts)
     // The full-current PPS row asks the APDO's whole current (cable-clamped, so it can be below the advertised one): the label
     // says what was requested. The other PPS rows request at most 1 A and show the advertised current.
     if (s.algorithm == A::Pps && s.ma > ct::kPlanRowMa) return s.ma;
@@ -102,6 +104,7 @@ Text params(const ct::Step& s, const ct::Step* prev) {
         o.milli(prev->mv); o.put("\xE2\x86\x92"); o.milli(s.mv); o.put('V');   // U+2192
         return t;
     }
+    if (s.hunt) { o.num(mi_watts(s)); o.put('W'); return t; }   // a Xiaomi mode: its power level ("55W")
     o.milli(s.mv); o.put('V');
     if (const unsigned ma = amps_ma(s)) { o.put(' '); o.milli(ma); o.put('A'); }
     return t;

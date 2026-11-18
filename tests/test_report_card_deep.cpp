@@ -34,8 +34,12 @@ struct Rd {
 struct DBucket { int mean; unsigned down, up; };
 struct DRange { unsigned lo_dv, n, scale; std::vector<DBucket> b; };
 struct DCell { unsigned verdict = 0, skip = 0; int value = 0; unsigned fails = 0, a = 0, b = 0; };
+struct DMode { std::uint32_t before = 0, after = 0; unsigned mv = 0, ma = 0, verdict = 0, reason = 0; };
 struct Decoded {
     unsigned bits = 0, used = 0;
+    bool has_mi = false;
+    unsigned mi_chain = 0;
+    std::vector<DMode> modes;
     bool has_spec = false, has_svooc = false;
     unsigned sweep_mask = 0;
     unsigned sv_end = 0, sv_why = 0, sv_asks = 0, sv_word = 0, sv_vmax = 0, sv_stop = 0;
@@ -77,6 +81,18 @@ static Decoded decode(const Bytes& blob) {
         }
         d.ranges.push_back(g);
     }
+    if (d.bits - r.pos >= 8) {   // v12: the Xiaomi section after the sweeps
+        d.has_mi = true;
+        d.mi_chain = r.get(5);
+        const unsigned n = r.get(3);
+        for (unsigned k = 0; k < n; ++k) {
+            DMode m;
+            m.before = r.get(16); m.before |= r.get(16) << 16;
+            m.after = r.get(16); m.after |= r.get(16) << 16;
+            m.mv = r.get(9); m.ma = r.get(7); m.verdict = r.get(3); m.reason = r.get(6);
+            d.modes.push_back(m);
+        }
+    }
     d.used = r.pos;
     return d;
 }
@@ -103,13 +119,25 @@ static rc::Card deep_card(unsigned ranges) {
     for (unsigned i = 0; i < ranges; ++i) c.range[i] = {std::uint8_t(ct::Algorithm::Pps), std::uint8_t(i + 1), 33, 210, 210, 0, 100};
     return c;
 }
-static Bytes run_build(const rc::Card& c, const ct::Evidence& ev, const Sweep& s) {
+static Bytes run_build(const rc::Card& c, const ct::Evidence& ev, const Sweep& s, std::span<const ct::Step> steps = {}) {
     Bytes out(dp::kMaxBlob, 0xEE);
-    const std::size_t n = dp::build(c, ev, s.view(), out);
+    const std::size_t n = dp::build(c, steps, ev, s.view(), out);
     out.resize(n);
     return out;
 }
 static const ct::Evidence& no_ev() { static const ct::Evidence e{}; return e; }
+static ct::Step mi_chain_row(std::uint8_t code) {
+    ct::Step s; s.group = ct::Group::Pd; s.algorithm = ct::Algorithm::Pd3Fixed; s.hunt = true; s.pos = 0;
+    s.verdict = k2::mi_unlock::chain_done(code) ? ct::Verdict::Pass : ct::Verdict::Skip;
+    s.reason = k2::mi_unlock::chain_done(code) ? ct::Reason::None : ct::Reason::MiChain;
+    s.detail = code;
+    return s;
+}
+static ct::Step mi_mode_row(std::uint8_t pos, std::uint32_t after, std::uint16_t mv, std::uint16_t ma, ct::Verdict v) {
+    ct::Step s; s.group = ct::Group::Pd; s.algorithm = ct::Algorithm::Pps; s.hunt = true; s.pos = pos; s.pdo = after;
+    s.mv = mv; s.ma = ma; s.verdict = v;
+    return s;
+}
 
 // ---- the reducer ----
 
@@ -291,8 +319,14 @@ static void test_worst_case_is_the_budget() {
     ev.spec.end = specsec::End::Done;
     for (auto& cell : ev.spec.cells) { cell = specsec::make_cell(sc::Verdict::Fail, sc::Skip::None, 255, -4000); cell.a = 255; cell.b = 255; }
     ev.svooc_end = 7; ev.svooc_word = 255; ev.svooc_vmax_mv = 51100; ev.svooc_stop_ms = 60000;
-    const Bytes b = run_build(c, ev, s);
+    // and the Xiaomi section at its worst: four modes
+    std::vector<ct::Step> steps{mi_chain_row(k2::mi_unlock::kCodeFinished)};
+    for (unsigned k = 0; k < k2::mi_unlock::kMaxModes; ++k) steps.push_back(mi_mode_row(std::uint8_t(6 + k), 0xC8DC3278u, 21000, 6000, ct::Verdict::Pass));
+    const Bytes b = run_build(c, ev, s, steps);
     const Decoded d = decode(b);
+    CHECK_EQ(d.modes.size(), std::size_t(k2::mi_unlock::kMaxModes));
+    CHECK_EQ(dp::kMaxBits, 3638u);
+    CHECK_EQ(dp::kMaxBlob, std::size_t(457));
     CHECK_EQ(d.bits, dp::kMaxBits);
     CHECK_EQ(d.used, dp::kMaxBits);
     CHECK_EQ(b.size(), dp::kMaxBlob);
@@ -300,6 +334,68 @@ static void test_worst_case_is_the_budget() {
     CHECK_EQ(d.ranges.size(), 4u);
     CHECK_EQ(d.sv_vmax, 511u); CHECK_EQ(d.sv_stop, 600u); CHECK_EQ(d.sv_word, 255u);
     CHECK_EQ(d.cells[26].fails, 255u);
+}
+
+// The Xiaomi section (v12): the chain row's outcome and each mode row, read back by the independent reader and by read_mi.
+static void test_xiaomi_section() {
+    const Sweep none;
+    rc::Card c = deep_card(0);
+    c.level = ct::Level::Medium;
+    // a) the bank: PPS 5-11V 3A -> 5A, tested at 11 V 5 A
+    ct::Evidence ev{};
+    ev.mi_chain = k2::mi_unlock::kCodeVerified; ev.mi_n = 1; ev.mi[0] = {0xC0DC323Cu, 0xC0DC3264u, 6};
+    const std::vector<ct::Step> bank{mi_chain_row(k2::mi_unlock::kCodeVerified), mi_mode_row(6, 0xC0DC3264u, 11000, 5000, ct::Verdict::Pass)};
+    const Bytes b = run_build(c, ev, none, bank);
+    CHECK_COND(b.size() > 0);                                      // a Medium card carries the block for its Xiaomi section
+    const Decoded d = decode(b);
+    CHECK_EQ(d.has_spec || d.has_svooc || d.sweep_mask, false);
+    CHECK_EQ(d.used, d.bits);
+    CHECK_EQ(d.mi_chain, unsigned(k2::mi_unlock::kCodeVerified));
+    CHECK_EQ(d.modes.size(), 1u);
+    CHECK_EQ(d.modes[0].before, 0xC0DC323Cu); CHECK_EQ(d.modes[0].after, 0xC0DC3264u);
+    CHECK_EQ(d.modes[0].mv, 110u); CHECK_EQ(d.modes[0].ma, 100u);
+    CHECK_EQ(d.modes[0].verdict, unsigned(ct::Verdict::Pass));
+    const dp::MiSection m = dp::read_mi(b);
+    CHECK_EQ(m == dp::mi_of(bank, ev), true);
+    CHECK_EQ(dp::mi_watts(m.mode[0]), 55u);
+    // b) FH22: done, nothing raised
+    const std::vector<ct::Step> fh22{mi_chain_row(k2::mi_unlock::kCodeVerified)};
+    const Decoded e = decode(run_build(c, no_ev(), none, fh22));
+    CHECK_EQ(e.mi_chain, unsigned(k2::mi_unlock::kCodeVerified)); CHECK_EQ(e.modes.size(), 0u);
+    // no SVID: a source that never listed 0x2717 is no Xiaomi charger; its card carries no section (no block on a Medium card)
+    ct::Step skip = mi_chain_row(k2::mi_unlock::kCodeNoSvid); skip.verdict = ct::Verdict::Skip;
+    const std::vector<ct::Step> nosvid{skip};
+    CHECK_EQ(run_build(c, no_ev(), none, nosvid).size(), 0u);
+    CHECK_EQ(dp::mi_of(nosvid, no_ev()).chain, 0u);
+    // no answer: the source listed the SVID and the chain got nothing back; carried, the source is a Xiaomi one
+    ct::Step mute = mi_chain_row(k2::mi_unlock::kCodeNoAnswer); mute.verdict = ct::Verdict::Skip;
+    const std::vector<ct::Step> noanswer{mute};
+    CHECK_EQ(decode(run_build(c, no_ev(), none, noanswer)).mi_chain, unsigned(k2::mi_unlock::kCodeNoAnswer));
+    // the chain row has not run: nothing to carry
+    ct::Step pending = mi_chain_row(0); pending.verdict = ct::Verdict::Pending;
+    const std::vector<ct::Step> early{pending};
+    CHECK_EQ(run_build(c, no_ev(), none, early).size(), 0u);
+    // c) a resumed run lost the PDO before the chain (Evidence::mi is not journaled): kBeforeLost, never "new"
+    const std::vector<ct::Step> cuk{mi_chain_row(k2::mi_unlock::kCodeFinished), mi_mode_row(6, 0xC8DC3278u, 11000, 6000, ct::Verdict::Pass)};
+    const dp::MiSection lost = dp::read_mi(run_build(c, no_ev(), none, cuk));
+    CHECK_EQ(lost.n, 1u); CHECK_EQ(lost.mode[0].before, dp::kBeforeLost); CHECK_EQ(dp::mi_watts(lost.mode[0]), 66u);
+    // behind the Deep parts: read_mi walks the spec cells and the sweeps to find it
+    rc::Card dc = deep_card(1);
+    Sweep s;
+    s.row(1, 3300, 21000, 60, [](unsigned i) { return int(i % 5) - 2; });
+    ct::Evidence dev = ev;
+    dev.svooc_end = 2;
+    dev.spec.end = specsec::End::Done;
+    for (auto& cell : dev.spec.cells) cell = specsec::make_cell(sc::Verdict::Fail, sc::Skip::None, 3, -40);
+    const Bytes db = run_build(dc, dev, s, bank);
+    const Decoded dd = decode(db);
+    CHECK_EQ(dd.has_spec && dd.has_svooc && dd.sweep_mask == 1u && dd.has_mi, true);
+    CHECK_EQ(dd.used, dd.bits);
+    CHECK_EQ(dp::read_mi(db) == m, true);
+    // a v11 block (no section) and a broken one read as none
+    CHECK_EQ(dp::read_mi(run_build(dc, dev, s)).chain, 0u);
+    Bytes cut = db; cut.pop_back();
+    CHECK_EQ(dp::read_mi(cut).chain, 0u);
 }
 
 static void test_blob_valid_checks() {
@@ -325,6 +421,7 @@ int main() {
     test_spec_and_svooc_blocks();
     test_nothing_to_carry();
     test_worst_case_is_the_budget();
+    test_xiaomi_section();
     test_blob_valid_checks();
     return test_report("test_report_card_deep");
 }

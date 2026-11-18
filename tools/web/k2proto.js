@@ -107,8 +107,15 @@ var K2Proto = (function () {
                       "timeout", "voltage outside band", "hard reset", "source lost", "cancelled", "5V release failed",
                       "offers changed", "PD active: use QC port", "revision cannot be forced", "select at least one test",
                       "physical cable limit", "unsupported PDO layout",
-                      "charger stayed in PD", "rebooted during request", "rebooted during handover", "EPR entry refused", "no contract", "source shut off (needs replug)", "no PD after re-attach", "VBUS cut, source recovered", "blocked by PD", "no QC3+ response", "rebooted 3x", "needs external power", "PD gave up before START", "Class A only (12 V max)", "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target", "withdrawn by source", "wrong voltage on 5V contract", "needs load", "floored above target", "step resolution", "HID-cable loop: 5V lock", "advertised", "light run: not asked", "port cuts without load", "output folds back"];
+                      "charger stayed in PD", "rebooted during request", "rebooted during handover", "EPR entry refused", "no contract", "source shut off (needs replug)", "no PD after re-attach", "VBUS cut, source recovered", "blocked by PD", "no QC3+ response", "rebooted 3x", "needs external power", "PD gave up before START", "Class A only (12 V max)", "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target", "withdrawn by source", "wrong voltage on 5V contract", "needs load", "floored above target", "step resolution", "HID-cable loop: 5V lock", "advertised", "light run: not asked", "port cuts without load", "output folds back", "Xiaomi chain"];
   var TEST_ALL = (1 << TEST_ALGORITHMS.length) - 1;
+  // How the Xiaomi 0x2717 auth chain ended, from its row's detail (mi_unlock::chain_text; tools/step_label.py mi_chain_text).
+  function miChainText(code) {
+    if (code === 1) return "no 0x2717 SVID";
+    if (code === 2) return "no answer";
+    if (code >= 4 && code <= 13) return "failed at step " + (code - 3);
+    return code === 20 ? "done, verified" : code === 21 ? "done via 020A" : "unknown (" + code + ")";
+  }
   var TEST_LEVELS = ["medium", "light", "deep"];   // charger_test::Level order: Medium 0 (the default), Light 1, Deep 2
   var LATENCY = ["n/a", "<10 ns (~1 m)", "10-20 ns (~2 m)", "20-30 ns (~3 m)", "30-40 ns (~4 m)",
                  "40-50 ns (~5 m)", "50-60 ns (~6 m)", "60-70 ns (~7 m)", ">70 ns"];
@@ -252,7 +259,7 @@ var K2Proto = (function () {
       var at = header + i * 16, code = p[at], pos = p[at + 1], flags = p[at + 2],
           verdict = p[at + 9], why = p[at + 10], detail = p[at + 11], raw = v.getUint32(at + 12, true);
       if (code >= (modern ? TEST_ALGORITHMS.length : 10) || pos > 11 || verdict >= TEST_RESULTS.length ||
-          why >= reasons || flags & ~63 || (verdict === 4 && why === 0))   // bits 0-4 + bit 5: a deep-sweep row
+          why >= reasons || flags & ~127 || (verdict === 4 && why === 0))   // bits 0-4, bit 5 a deep-sweep row, bit 6 Xiaomi
         throw new FrameError("invalid charger-test row");
       var group = modern ? TEST_ALGORITHM_GROUPS[code] : code, protocol = TEST_GROUPS[group];
       if (modern) {
@@ -279,6 +286,8 @@ var K2Proto = (function () {
                     detail ? (names[detailCode] || "unknown (" + detail + ")") : "none",
                   raw_pdo: raw, continuous: !!(flags & 1), avs: !!(flags & 2), sweep: !!(flags & 32),
                   attempts: (flags >> 2) & 7 };
+      if (flags & 64) row.mi = true;   // the Xiaomi unit: its chain row (detail = how the 0x2717 chain ended) and the modes it unlocked
+      if (row.mi && why === TEST_REASONS.indexOf("Xiaomi chain")) row.detail_reason = miChainText(detail);
       if (modern) {
         row.algorithm = TEST_ALGORITHMS[code];
         row.explanation = code >= 16 && code <= 18 ? "No independent PD3." + (code - 16) + " test" :

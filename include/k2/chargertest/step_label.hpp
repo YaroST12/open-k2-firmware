@@ -4,7 +4,9 @@
 // summary lines and the report card text all call these, so a row reads the same on the K2 and on the host
 // (tools/step_label.py mirrors it; the golden vectors are tests/fixtures/step_labels.txt).
 //
-//   "<protocol> <V> <A>"   PD 9V 3A   PPS 20V 5A   EPR 28V 5A   Mi 20V 6A   SCP 10V 2.25A
+//   "<protocol> <V> <A>"   PD 9V 3A   PPS 20V 5A   EPR 28V 5A   SCP 10V 2.25A
+//   "Mi <W>"               Mi 55W     Mi 66W        a Xiaomi mode by its power level (mi_watts); the PDO before and after the
+//                          chain is the Detail page's and the report's (mi_unlock::mode_text)
 //   "<protocol> <V>"       AVS 15V    QC3 12V       VOOC 5V      (no current the step is known to carry: none is invented)
 //   "PPS 11→8V"            a ramp row: the previous target of the same offer, then this one (the arrow is U+2192, in the
 //                          12 px font; one glyph cell, three bytes)
@@ -13,8 +15,8 @@
 //
 // Amps: a PD fixed or PPS row shows the offer's advertised current (the row itself requests at most 1 A), except the
 // full-current PPS row (top voltage at the APDO's whole current), which shows what it requests, cable-clamped ("PPS 11V 3A"
-// on an unread cable); a hunt row the probe current it requests (6 A), SCP the limit it writes; AVS offers and the other
-// D+/D- modes show volts only.
+// on an unread cable); SCP the limit it writes; AVS offers and the other D+/D- modes show volts only. A Xiaomi mode row (a level the
+// 0x2717 chain unlocked) shows no volts or amps: its watts.
 #pragma once
 #include <cstddef>
 #include <cstdint>
@@ -36,7 +38,7 @@ struct Text {
     std::string_view view() const { return {s, len}; }
 };
 
-// The protocol word: "PD", "PPS", "EPR", "AVS", "Mi", "QC3+", "SVOOC", "PD3.1 rev"; "PD3.x" / "PD2.0" / "EPR" / "AVS" for a
+// The protocol word: "PD", "PPS", "EPR", "AVS", "Mi" (a Xiaomi mode), "Xiaomi" (the chain row), "QC3+", "SVOOC", "PD3.1 rev"; "PD3.x" / "PD2.0" / "EPR" / "AVS" for a
 // plan row that holds no offer.
 Text protocol(const charger_test::Step&);
 // The numbers: "20V 5A", "12V", "11→8V", "10V 2.25A"; empty when the step has no voltage. `prev` = the plan row before this one
@@ -44,8 +46,11 @@ Text protocol(const charger_test::Step&);
 Text params(const charger_test::Step&, const charger_test::Step* prev = nullptr);
 // protocol + ' ' + params ("PPS 20V 5A"), or the bare protocol when there are no params.
 Text label(const charger_test::Step&, const charger_test::Step* prev = nullptr);
-// The current the label shows, in mA (0 = none).
+// The current the label shows, in mA (0 = none; a Xiaomi mode shows watts instead).
 unsigned amps_ma(const charger_test::Step&);
+// The power level a Xiaomi mode row is named by: the volts it asks times the current it asks, rounded to whole watts (11 V 5 A ->
+// 55, 11 V 6 A -> 66); 0 for any other row. The one place the Mi watts are worded (the OEM watts labels may join it).
+unsigned mi_watts(const charger_test::Step&);
 // A UFCS step planned from the charger's Output_Capabilities names its mode (charger_test.hpp pack_ufcs_mode). ufcs_amps_ma is the
 // mode's top current in mA (the Results chip words it: "9V 3A"; 0 = no mode), ufcs_range the whole mode for the Detail page:
 // "5-20V 0.5-3A" ("3.4-11V 3A" when the mode has one current); empty without a mode. label() / params() / amps_ma() stay

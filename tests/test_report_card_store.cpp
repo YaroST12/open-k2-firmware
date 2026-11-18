@@ -547,8 +547,8 @@ static void test_duplicate_number_stays_with_the_current_format() {
     rc::Card cur = card(0xB2, 2); cur.card_no = 5; cur.runs = 1; rc::set_name(cur, "Current v11");
     rc::Card c = card(0xC3, 3); c.card_no = 7; c.runs = 1;
     write_old_card(v, old8, 198, 8, 30);                    // the higher stamp
-    write_old_card(v, cur, 250, 11, 20);
-    write_old_card(v, c, 250, 11, 15);
+    write_old_card(v, cur, 250, rc::kFormat, 20);
+    write_old_card(v, c, 250, rc::kFormat, 15);
     v.reboot();
     const int ops0 = v.disk.ops();
     rc::Card g;
@@ -834,6 +834,48 @@ static void test_deep_block_follows_rename_and_repeat() {
     CHECK_EQ(all(*v.s).size(), 1u);
 }
 
+// A repeat needs the same Xiaomi section too: the chain outcome and the modes live in the block, not in the card's rows, so a run
+// whose chain got no answer and one where it finished with nothing raised are two runs, never "tested 2 times".
+static std::vector<std::uint8_t> mi_blk(std::uint8_t code, unsigned modes) {
+    namespace mu = k2::mi_unlock;
+    namespace ct = k2::charger_test;
+    std::vector<ct::Step> steps;
+    ct::Step ch; ch.group = ct::Group::Pd; ch.algorithm = ct::Algorithm::Pd3Fixed; ch.hunt = true; ch.detail = code;
+    ch.verdict = mu::chain_done(code) ? ct::Verdict::Pass : ct::Verdict::Skip;
+    steps.push_back(ch);
+    for (unsigned k = 0; k < modes; ++k) {
+        ct::Step m; m.group = ct::Group::Pd; m.algorithm = ct::Algorithm::Pps; m.hunt = true; m.pos = std::uint8_t(6 + k);
+        m.pdo = 0xC0DC3264u; m.mv = 11000; m.ma = 5000; m.verdict = ct::Verdict::Pass;
+        steps.push_back(m);
+    }
+    rc::Card c;   // a Medium card: the block holds the Xiaomi section alone
+    std::vector<std::uint8_t> b(rc::deep::kMaxBlob);
+    b.resize(rc::deep::build(c, steps, ct::Evidence{}, {}, b));
+    return b;
+}
+static void test_xiaomi_section_joins_the_repeat_check() {
+    namespace mu = k2::mi_unlock;
+    Vol v;
+    rc::Card a = card(0x7101, 3);
+    const auto none_new = mi_blk(mu::kCodeVerified, 0);
+    CHECK_COND(!none_new.empty());
+    CHECK_EQ(int(put_deep(v, a, none_new)), int(rc::Err::Ok));
+    rc::Card b = card(0x7101, 3);                        // the same rows, the same section: a repeat
+    CHECK_EQ(int(put_deep(v, b, mi_blk(mu::kCodeVerified, 0))), int(rc::Err::Ok));
+    CHECK_EQ(b.times, 2);
+    rc::Card c = card(0x7101, 3);                        // the same rows, the chain got no answer this time: a new run
+    const auto silent = mi_blk(mu::kCodeNoAnswer, 0);
+    CHECK_EQ(int(put_deep(v, c, silent)), int(rc::Err::Ok));
+    CHECK_EQ(c.times, 1);
+    CHECK_EQ(same(v.s->ext(c.card_no), silent), 1);
+    rc::Card d = card(0x7101, 3);                        // a mode unlocked: a new run again
+    CHECK_EQ(int(put_deep(v, d, mi_blk(mu::kCodeVerified, 1))), int(rc::Err::Ok));
+    CHECK_EQ(d.times, 1);
+    rc::Card e = card(0x7101, 3);                        // a block without a section against one with it: a new run
+    CHECK_EQ(int(put_deep(v, e, blk(4))), int(rc::Err::Ok));
+    CHECK_EQ(e.times, 1);
+}
+
 // 64 Deep cards one after the other (maintenance between them, as the main loop runs it): every card stays listed, no save
 // is refused, the newest kMaxDeep keep their block and older ones lose it when maintenance carries them forward.
 static void test_deep_blocks_are_capped_by_maintenance() {
@@ -920,5 +962,6 @@ int main() {
     test_deep_block_follows_rename_and_repeat();
     test_deep_blocks_are_capped_by_maintenance();
     test_deep_block_dropped_when_full();
+    test_xiaomi_section_joins_the_repeat_check();
     return test_report("test_report_card_store");
 }

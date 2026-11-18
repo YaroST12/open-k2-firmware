@@ -262,7 +262,7 @@ test("bad fragments say what is wrong", () => {
   flipped[20] ^= 1;
   assert.equal(code(BASE + "1c." + toB64url(flipped)), "bad-crc");
   const newer = payloadOf("fh22");
-  newer[33] = 12;   // one past format 11
+  newer[33] = 13;   // one past format 12
   assert.equal(code(BASE + "1c." + toB64url(recordOf(newer))), "newer-card");
 });
 
@@ -495,6 +495,35 @@ test("the graph geometry keeps the limit lines in view, breaks a run at an empty
   const flat = { ...g, buckets: g.buckets.map(() => null) };
   assert.equal(K2Deep.plot(flat, 320, 150, m, [100, 300]).runs.length, 0);
   assert.equal(K2Deep.summary(flat), null);
+});
+
+test("a format 11 Deep link (tests/fixtures/qrshare_v11.tsv) keeps its CRC and its block, with no Xiaomi section", () => {
+  const row = readFileSync(new URL("./fixtures/qrshare_v11.tsv", import.meta.url), "utf8").split("\n")
+    .filter((l) => l && !l.startsWith("#")).map((l) => l.split("\t")).find((c) => c[0] === "card_deep_v11");
+  const card = K2Card.parseLink(BASE + "2c." + toB64url(fromHex(row[3]))).card;
+  assert.equal(card.level, "Deep");
+  assert.equal(card.deep_error, undefined);
+  assert.equal(card.deep.xiaomi, undefined);
+  assert.deepEqual(JSON.parse(JSON.stringify(card.deep)), deepJson);
+  assert.equal(K2Card.sections(card).find((s) => s.title === "Xiaomi"), undefined);
+});
+
+test("format 12: a Medium card's block carries only the Xiaomi section, read as tools/k2_qr.py reads it", () => {
+  const card = K2Card.parseLink(BASE + "2c." + toB64url(qrshare.card_mi_v2)).card;
+  assert.equal(card.level, undefined);
+  assert.equal(card.deep_error, undefined);
+  assert.deepEqual(Object.keys(card.deep), ["xiaomi"]);
+  assert.deepEqual(JSON.parse(JSON.stringify(card.deep.xiaomi)), {chain: 20, chain_text: "done, verified", done: true, modes: [
+    {label: "Mi 55W", watts: 55, mv: 11000, ma: 5000, before_pdo: 0xC0DC323C, after_pdo: 0xC0DC3264, before: "PPS 5-11V 3A",
+      after: "PPS 5-11V 5A", verdict: "pass", reason: ""}]});
+  const s = K2Card.sections(card);
+  assert.equal(s.find((x) => x.title === "Deep run details"), undefined);
+  const mi = s.find((x) => x.title === "Xiaomi");
+  assert.deepEqual(mi.groups.map((g) => [g.title, g.tone]), [["Xiaomi auth", "pass"], ["Mi 55W", "pass"]]);
+  assert.deepEqual(mi.groups[0].rows.map((r) => r.value), ["done, 1 new mode", "done, verified"]);
+  assert.deepEqual(mi.groups[1].rows.map((r) => r.value), ["achieved", "PPS 5-11V 3A", "PPS 5-11V 5A", "11V 5A"]);
+  assert.equal(K2Deep.pdoText(0x0001912C), "PD 5V 3A");
+  assert.equal(K2Deep.pdoText(0x0008C1F4), "EPR 28V 5A");
 });
 
 test("a link of a format 10 firmware keeps its own CRC and has no block", () => {

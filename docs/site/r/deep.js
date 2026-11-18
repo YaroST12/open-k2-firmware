@@ -1,15 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
 "use strict";
-// The Deep block of a format 11 charger test card (include/k2/chargertest/report_card_deep.hpp): the PD spec summary, the SVOOC
-// ceiling stage and the per-range error-band graphs of the Deep PPS / AVS sweeps. The JavaScript twin of
+// The extension block of a charger test card (include/k2/chargertest/report_card_deep.hpp): format 11 carries the Deep run's PD spec
+// summary, SVOOC ceiling stage and per-range error-band graphs of the PPS / AVS sweeps; format 12 adds the Xiaomi section at its
+// tail (the 0x2717 chain outcome and each mode it unlocked, before and after). The JavaScript twin of
 // tools/report_card.py decode_deep(), key for key: tests/fixtures/deep_decoded.json is what the Python decoder gives for the
 // golden Deep link and tests/test_cardpage.mjs requires this file to give the same. The tables below are the firmware's own
 // (check list and labels from include/k2/pdspec/result.hpp and chargertest/spec_section.hpp, skip / stop / refusal texts from the
 // same headers); tests/test_k2_qr.py runs this file and compares them with what tools/pdspec_blob.py parses from the headers.
 // Logic only, no DOM: view.js draws plot(). Loaded by the page as a script (window.K2Deep, before card.js) and by Node.
 var K2Deep = (function () {
-  var MAX_BITS = 3273;        // report_card::deep::kMaxBits
+  var MAX_BITS = 3638;        // report_card::deep::kMaxBits (3274 before the Xiaomi section)
   var MAX_RANGES = 4;
   var BUCKETS = 32;           // report_card::deep::kBuckets
   var NEVER = 99999999;       // pdspec::kNever: an event that never came
@@ -58,6 +59,8 @@ var K2Deep = (function () {
   var SVOOC_ENDS = ["none", "refused", "no adapter", "aborted", "time cap", "judged", "cancelled", "stopped"];
   var SVOOC_ABORTS = ["", "over 12V", "current", "off-script", "host gone", "no monitor", "sink", "PD", "edge storm", "no adapter", "time cap",
     "stopped", "PD lost", "PD changed"];
+  var CT_VERDICTS = ["pending", "running", "pass", "fail", "skip"];   // charger_test::Verdict, the Xiaomi section's verdict field
+  var BEFORE_LOST = 0xFFFFFFFF;   // deep::kBeforeLost: the PDO before the chain is not known (the run resumed)
   var SVOOC_REFUSALS = ["none", "not confirmed", "D+/D- busy", "no host link", "no power monitor", "sink on the bottom port", "inline mode",
     "PD contract not own 5 V", "current over 50 mA", "VBUS not 5 V", "no RAM: USB drive enabled", "USB-A waiver but PD is active"];
 
@@ -86,6 +89,57 @@ var K2Deep = (function () {
     return v >= Math.pow(2, n - 1) ? v - Math.pow(2, n) : v;
   };
 
+  // 5000 -> "5", 3300 -> "3.3", 12140 -> "12.14": volts or amps from milli-units, two decimals at most, truncated (step_label.py milli).
+  function milli(v) {
+    var frac = Math.floor((v % 1000) / 10);
+    return Math.floor(v / 1000) + (frac ? "." + String(frac).padStart(2, "0").replace(/0+$/, "") : "");
+  }
+  function rangeText(lo, hi, ma, mw) {
+    return milli(lo) + "-" + milli(hi) + "V" + (ma ? " " + milli(ma) + "A" : mw ? " " + Math.floor(mw / 1000) + "W" : "");
+  }
+  // One PDO in the words of the Xiaomi section (report_card.py pdo_text): "PD 20V 3A", "EPR 28V 5A", "PPS 5-11V 3A", "AVS 15-28V 5A".
+  function pdoText(raw) {
+    var kind = Math.floor(raw / 0x40000000), sub = Math.floor(raw / 0x10000000) & 3;
+    if (kind === 0) {
+      var mv = ((raw >>> 10) & 0x3FF) * 50, ma = (raw & 0x3FF) * 10;
+      return (mv > 20000 ? "EPR " : "PD ") + milli(mv) + "V " + milli(ma) + "A";
+    }
+    if (kind === 3) {
+      var r = "";
+      if (sub === 0) r = rangeText(((raw >>> 8) & 0xFF) * 100, ((raw >>> 17) & 0xFF) * 100, (raw & 0x7F) * 50);
+      else if (sub === 1) {
+        var hi = ((raw >>> 17) & 0x1FF) * 100;
+        r = rangeText(((raw >>> 8) & 0xFF) * 100, hi, hi ? Math.floor((raw & 0xFF) * 1000 * 1000 / hi) : 0);
+      } else if (sub === 2) {
+        var v20 = raw & 0x3FF;
+        r = rangeText(9000, v20 ? 20000 : 15000, (v20 ? v20 : (raw >>> 10) & 0x3FF) * 10);
+      }
+      return (sub === 0 ? "PPS " : "AVS ") + r;
+    }
+    return "PDO 0x" + (raw >>> 0).toString(16).toUpperCase().padStart(8, "0");
+  }
+  // How the 0x2717 chain ended (step_label.py mi_chain_text).
+  function chainText(code) {
+    if (code === 1) return "no 0x2717 SVID";
+    if (code === 2) return "no answer";
+    if (code >= 4 && code <= 13) return "failed at step " + (code - 3);
+    return code === 20 ? "done, verified" : code === 21 ? "done via 020A" : "unknown (" + code + ")";
+  }
+  // The Xiaomi section (report_card.py _decode_mi, key for key); reasons = the card's reason table (card.js REASONS).
+  function decodeMi(r, reasons) {
+    var chain = r.get(5), n = r.get(3);
+    var out = {chain: chain, chain_text: chainText(chain), done: chain === 20 || chain === 21, modes: []};
+    for (var i = 0; i < n; i++) {
+      var before = r.get(32), after = r.get(32), mv = r.get(9) * 100, ma = r.get(7) * 50, verdict = r.get(3), reason = r.get(6);
+      if (verdict >= CT_VERDICTS.length || (reasons && reason >= reasons.length)) throw fail("Xiaomi mode verdict or reason out of range");
+      var w = Math.floor((mv * ma + 500000) / 1000000);
+      out.modes.push({label: "Mi " + w + "W", watts: w, mv: mv, ma: ma, before_pdo: before, after_pdo: after,
+        before: before === BEFORE_LOST ? "not kept" : before === 0 ? "not listed" : pdoText(before),
+        after: pdoText(after), verdict: CT_VERDICTS[verdict], reason: reasons ? reasons[reason] : "#" + reason});
+    }
+    return out;
+  }
+
   function nameOf(list, i) { return i >= 0 && i < list.length ? list[i] : "#" + i; }
 
   function psText(bits) {
@@ -112,9 +166,10 @@ var K2Deep = (function () {
     return "APDO " + (a & 15) + " " + (c >= 3 ? "slams" : PLAN[kind][c] + " mV") + " " + (a & 0x80 ? "down" : "up") + " to " + (b / 10).toFixed(1) + " V";
   }
 
-  // The block (u16 LE bit count, then the bits) -> {svooc?, spec?, graphs?}; ranges are the card's decoded ranges (their algorithm
-  // names the graph). Throws an Error with code "bad-deep" for a block this file cannot read.
-  function decode(blob, ranges) {
+  // The block (u16 LE bit count, then the bits) -> {svooc?, spec?, graphs?, xiaomi?}; ranges are the card's decoded ranges (their
+  // algorithm names the graph), reasons the card's reason table (a Xiaomi mode's reason). Throws an Error with code "bad-deep" for a
+  // block this file cannot read.
+  function decode(blob, ranges, reasons) {
     if (blob.length < 3) throw fail("Deep block is empty");
     var nbits = blob[0] | (blob[1] << 8);
     if (!(nbits > 0 && nbits <= MAX_BITS) || blob.length !== 2 + ((nbits + 7) >> 3)) throw fail("Deep block length does not match its bit count");
@@ -176,6 +231,7 @@ var K2Deep = (function () {
       graphs.push(g);
     }
     if (graphs.length) out.graphs = graphs;
+    if (r.left() >= 8) out.xiaomi = decodeMi(r, reasons);   // format 12: the Xiaomi section is the block's tail
     if (r.left() >= 8) throw fail("Deep block has trailing data");
     return out;
   }
@@ -236,9 +292,9 @@ var K2Deep = (function () {
       worst_at_mv: g.lo_mv + Math.round((worst + 0.5) * per - 0.5) * g.step_mv};
   }
 
-  return {decode: decode, plot: plot, summary: summary, fmtValue: fmtValue, fmtAt: fmtAt, psText: psText, NEVER: NEVER,
+  return {decode: decode, plot: plot, summary: summary, fmtValue: fmtValue, fmtAt: fmtAt, psText: psText, pdoText: pdoText, NEVER: NEVER,
     tables: {CELLS: CELLS, ENDS: ENDS, VERDICTS: VERDICTS, SKIPS: SKIPS, STOPS: STOPS, STARTS: STARTS, STEPS: STEPS, PLAN: PLAN,
-      SVOOC_ENDS: SVOOC_ENDS, SVOOC_ABORTS: SVOOC_ABORTS, SVOOC_REFUSALS: SVOOC_REFUSALS, MAX_BITS: MAX_BITS, BUCKETS: BUCKETS}};
+      SVOOC_ENDS: SVOOC_ENDS, SVOOC_ABORTS: SVOOC_ABORTS, SVOOC_REFUSALS: SVOOC_REFUSALS, MAX_BITS: MAX_BITS, BUCKETS: BUCKETS, CT_VERDICTS: CT_VERDICTS}};
 })();
 
 if (typeof module !== "undefined" && module.exports) module.exports = K2Deep;

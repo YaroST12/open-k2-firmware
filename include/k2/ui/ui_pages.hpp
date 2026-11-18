@@ -455,7 +455,6 @@ private:
     void amend(const charger_test::Step&) override;   // a row's reason changed after it ended (a fold marks its APDO's fixed rows)
     void log_row_gap(size_t idx, uint32_t now);   // the row's `[CT] gap` line: loop / ui gaps, paint cost, blocked-paint window
     void replan(unsigned follow, unsigned withdrawn, unsigned back) override;   // [TEST] re-plan: a mid-run re-announce was re-planned per row
-    void hunt_evidence(const charger_test::Step&, const charger_test::HuntEvidence&) override;
     void plan_changed() override;
     bool journal_ready() override;     // no replan's section files are still to be written (an above-5 V request waits for it)
     void journal_waited(uint32_t) override;   // [CJRN] wait-for-replan ms=

@@ -278,28 +278,29 @@ def _mi_run(*rows):
 def test_6a_rows_the_source_did_not_offer_read_not_unlocked():
     locked = ("skip", "not unlocked", "not unlocked (no OEM chain)")
     text = charger_summary.summarize(_mi_run(locked + (11000,), locked + (20000,)))
-    assert "- Mi 11V 6A, Mi 20V 6A: skipped, not unlocked (no OEM chain)" in text
+    # an older firmware's 6 A probe rows (no "mi" key, no chain row): one Xiaomi line, each row with its cause
+    assert "- Xiaomi: Mi 66W skipped: not unlocked (no OEM chain), Mi 120W skipped: not unlocked (no OEM chain)" in text
     assert "PPS" not in text
 
 
 def test_a_mixed_mi_group_names_each_row_and_the_cause():
     text = charger_summary.summarize(_mi_run(("pass", "none", "none", 11000),
                                              ("skip", "not unlocked", "not unlocked (3 A cable)", 20000)))
-    assert "- Mi 11V 6A ✓, Mi 20V 6A skipped: not unlocked (3 A cable)" in text
+    assert "- Xiaomi: Mi 66W ✓, Mi 120W skipped: not unlocked (3 A cable)" in text
 
 
 def test_a_spoofed_5a_identity_is_not_reported_as_a_3a_cable():
     # Spoofed Kowsi 5 A clone on a CUKTECH C1 (2026-11-07): the cause is the vendor not accepting the identity, never the cable.
     locked = ("skip", "not unlocked", "not unlocked (vendor not accepted)")
     text = charger_summary.summarize(_mi_run(locked + (11000,), locked + (20000,)))
-    assert "- Mi 11V 6A, Mi 20V 6A: skipped, not unlocked (vendor not accepted)" in text
+    assert "- Xiaomi: Mi 66W skipped: not unlocked (vendor not accepted), Mi 120W skipped: not unlocked (vendor not accepted)" in text
     assert "3 A cable" not in text
 
 
 def test_a_refused_6a_row_shows_the_cause_the_firmware_classified():
     run = _mi_run(("fail", "request failed", "rejected", 20000))
     run["steps"][0]["hunt"] = {"cause": "apdo-stale", "explanation": "no caps after the auth"}
-    assert "Mi 20V 6A ✗ rejected [apdo-stale: no caps after the auth]" in charger_summary.summarize(run)
+    assert "Mi 120W ✗ rejected [apdo-stale: no caps after the auth]" in charger_summary.summarize(run)
     del run["steps"][0]["hunt"]
     assert "[apdo-stale" not in charger_summary.summarize(run)
 
@@ -432,3 +433,28 @@ def test_a_light_card_reads_detected_and_advertised_never_a_tick():
     assert "- QC2: ✓" not in text
     card.pop("level")   # the same card at Medium keeps its ticks
     assert "- QC2: ✓ 5 V only" in charger_summary.summarize_card(card)
+
+
+def _xiaomi_run(code, *modes):
+    """A run of the unified Xiaomi unit: the chain row (detail = the chain code) and its modes, each (result, reason, mv, ma, raw)."""
+    base = {"detail_reason": "none", "attempts": 1, "continuous": False, "mi": True, "pos": 0}
+    chain = dict(base, result="pass" if code in (20, 21) else "skip", reason="none" if code in (20, 21) else "Xiaomi chain",
+                 protocol="pd3x-fixed", target_mv=0, request_ma=0, measured_mv=0, raw_pdo=0, detail=code)
+    steps = [chain] + [dict(base, result=res, reason=why, protocol="pps", pos=6, target_mv=mv, request_ma=ma, raw_pdo=raw,
+                            measured_mv=mv if res == "pass" else 0, detail=0) for res, why, mv, ma, raw in modes]
+    return {"run_id": 1, "state": "done", "reason": "none", "evidence": {}, "steps": steps}
+
+
+def test_the_xiaomi_unit_is_one_line_with_the_chain_outcome():
+    # a) the 20K bank: PPS 5-11V 3A -> 5A, tested at its new level
+    text = charger_summary.summarize(_xiaomi_run(20, ("pass", "none", 11000, 5000, 0xC0DC3264)))
+    assert "- Xiaomi: auth done, verified; Mi 55W ✓" in text
+    # b) FH22: the chain completes and nothing changes
+    assert "- Xiaomi auth: done, no new modes" in charger_summary.summarize(_xiaomi_run(20))
+    # c) CUKTECH 120 W on a 5 A cable: the 6 A mode is skipped by the cable
+    text = charger_summary.summarize(_xiaomi_run(21, ("skip", "physical cable limit", 11000, 6000, 0xC8DC3278)))
+    assert "- Xiaomi: auth done via 020A; Mi 66W skipped: physical cable limit" in text
+    # no SVID, a silent source, a chain that stopped
+    assert "- Xiaomi: no 0x2717 SVID" in charger_summary.summarize(_xiaomi_run(1))
+    assert "- Xiaomi auth: no answer" in charger_summary.summarize(_xiaomi_run(2))
+    assert "- Xiaomi auth: failed at step 3" in charger_summary.summarize(_xiaomi_run(6))

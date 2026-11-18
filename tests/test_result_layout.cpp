@@ -1017,7 +1017,7 @@ static void test_results_split_into_sections() {
     CHECK_EQ(row_of(l, "PD3.x") < qc, true);
     CHECK_EQ(qc < row_of(l, "QC2"), true);
     CHECK_EQ(find(l, "OEM / PD") == nullptr, true);       // no notes -> no OEM / PD section
-    CHECK_EQ(find(l, "Xiaomi") == nullptr, true);         // no Mi auth and no 6 A probe -> no Xiaomi section
+    CHECK_EQ(find(l, "Xiaomi") == nullptr, true);         // no Mi auth and no Xiaomi row -> no Xiaomi section
 }
 static void test_oem_notes_get_their_own_section_between_xiaomi_and_usb_pd() {
     rl::Layout l; rl::build(l, baseus(), {"QC5", "VID 05C6", "Lenovo", true});
@@ -1231,8 +1231,13 @@ static void test_headers_can_be_left_out() {
     const size_t n = rl::wrap(without, {}, lines);
     for (size_t i = 0; i < n; ++i) CHECK_EQ(lines[i].count > 0, true);
 }
-static ct::Step hunt_step(A a, unsigned mv, V v, unsigned pos, uint32_t pdo) {
-    ct::Step h = step(a, mv, v, pos, pdo); h.hunt = true; h.ma = 6000;
+// The Xiaomi unit's steps: its chain row (no level; Step::detail = how the chain ended) and a mode it unlocked, at its new level.
+static ct::Step mi_chain(V v, uint8_t code) {
+    ct::Step c = step(A::Pd3Fixed, 0, v); c.hunt = true; c.reason = ct::Reason::MiChain; c.detail = code;
+    return c;
+}
+static ct::Step mi_mode(A a, unsigned mv, unsigned ma, V v, unsigned pos, uint32_t pdo) {
+    ct::Step h = step(a, mv, v, pos, pdo); h.hunt = true; h.ma = uint16_t(ma);
     return h;
 }
 // Row labels in layout order, "*" for a section header ("Xiaomi" -> "*Xiaomi"), to compare whole layouts at once.
@@ -1241,107 +1246,67 @@ static std::string row_order(const rl::Layout& l) {
     for (size_t i = 0; i < l.row_count; ++i) { if (i) out += ","; if (l.rows[i].header) out += "*"; out += l.rows[i].label; }
     return out;
 }
-// The 6 A hunt probes are rows of their own ("Mi 6A", one per probed level) in the Xiaomi section, always labelled with the probed
-// 6 A (never the advertised PDO max), and stay out of the USB PD fixed/PPS chips.
-static void test_hunt_rows_live_in_the_xiaomi_section() {
+// The Xiaomi unit is one row ("Xiaomi", Row::probe) in the Xiaomi section: the chain's "auth" chip, then one chip per mode it
+// unlocked by the watts of the level the row asked ("55W", never the advertised list of the PD rows), which stay out of the USB PD chips.
+static void test_the_xiaomi_unit_is_one_row_in_its_section() {
     auto s = baseus();
-    s.push_back(hunt_step(A::Pd3Fixed, 20000, V::Fail, 5, 409935u));
-    s.push_back(hunt_step(A::Pps, 11000, V::Pass, 6, 3235656292u));
+    s.push_back(mi_chain(V::Pass, k2::mi_unlock::kCodeVerified));
+    s.push_back(mi_mode(A::Pps, 11000, 5000, V::Pass, 6, 3235656292u));
+    s.push_back(mi_mode(A::Pd3Fixed, 20000, 5000, V::Fail, 5, 409935u));
     rl::Layout l; rl::build(l, s);
-    const size_t xiaomi = row_of(l, "Xiaomi");
-    CHECK_EQ(l.rows[xiaomi].header, true);
-    const size_t r20 = row_of(l, "Mi 6A"), r11 = r20 + 1;
-    CHECK_EQ(r20 > xiaomi, true);
-    CHECK_EQ(r20 > row_of(l, "PPS"), true);   // the probes stand where the plan runs them: after the PD rows they follow
-    CHECK_STR(l.rows[r11].label, "Mi 6A");
-    CHECK_EQ(l.rows[r20].probe && l.rows[r11].probe, true);
-    CHECK_EQ(l.rows[r20].mv, 20000); CHECK_EQ(l.rows[r11].mv, 11000);
-    CHECK_STR(chips(l, r20).c_str(), "20V 6A");
-    CHECK_STR(chips(l, r11).c_str(), "11V 6A");
-    CHECK_EQ(int(l.tokens[l.rows[r20].first].tone), int(rl::Tone::Fail));
-    CHECK_EQ(int(l.tokens[l.rows[r11].first].tone), int(rl::Tone::Pass));
-    // The PD chips keep the advertised currents and pass counts, untouched by the hunt rows.
+    const size_t header = row_of(l, "Xiaomi"), mi = header + 1;
+    CHECK_EQ(l.rows[header].header, true);
+    CHECK_STR(l.rows[mi].label, "Xiaomi");
+    CHECK_EQ(l.rows[mi].probe, true);
+    CHECK_EQ(mi > row_of(l, "PPS"), true);   // the row stands where the plan runs it: after the PD rows
+    CHECK_STR(chips(l, mi).c_str(), "auth 55W 100W");   // each mode by its watts
+    CHECK_EQ(int(l.tokens[l.rows[mi].first].tone), int(rl::Tone::Pass));
+    CHECK_EQ(int(l.tokens[l.rows[mi].first + 1].tone), int(rl::Tone::Pass));
+    CHECK_EQ(int(l.tokens[l.rows[mi].first + 2].tone), int(rl::Tone::Fail));
+    for (const auto& x : s) CHECK_EQ(rl::row_has(l.rows[mi], x), x.hunt);   // the row owns every Xiaomi step and nothing else
+    // The PD chips keep the advertised currents and pass counts, untouched by the Xiaomi rows.
     CHECK_STR(chips(l, row_of(l, "PD3.x")).c_str(), "5V 3A 9V 3A 12V 3A 15V 3A 20V 3.35A");
     const size_t pps = row_of(l, "PPS");   // one row per APDO: slot 6, then slot 7
     CHECK_STR(chips(l, pps).c_str(), "5-11V 5A");
     CHECK_STR(chips(l, pps + 1).c_str(), "5-21V 3.2A");
 }
-// The rows follow the step list: a probe the planner runs between two PD rows stands between them, and a section header repeats
-// where the family changes (no hand-kept order puts the Xiaomi block ahead of the PD rows).
-static void test_mi_probe_rows_stand_where_the_plan_runs_them() {
-    std::vector<ct::Step> s;
-    s.push_back(step(A::Pd3Fixed, 5000, V::Pass, 1, 167874860u));
-    s.push_back(hunt_step(A::Pd3Fixed, 20000, V::Pass, 5, 409935u));
-    s.push_back(step(A::Pps, 11000, V::Pass, 6, 3235656292u));
-    s.push_back(hunt_step(A::Pps, 11000, V::Pass, 6, 3235656292u));
-    s.push_back(step(A::Qc2, 9000, V::Pass));
-    rl::Layout l; rl::build(l, s);
-    CHECK_STR(row_order(l).c_str(), "*USB PD,PD3.x,*Xiaomi,Mi 6A,*USB PD,PPS,*Xiaomi,Mi 6A,*QC/UFCS,QC2");
-    // the dense Results / Running grids leave the headers out: the rows alone are the plan's order
-    rl::OemNotes dense; dense.headers = false;
-    rl::build(l, s, dense);
-    CHECK_STR(row_order(l).c_str(), "PD3.x,Mi 6A,PPS,Mi 6A,QC2");
-    CHECK_EQ(l.rows[1].mv, 20000); CHECK_EQ(l.rows[3].mv, 11000);
-    // The usual plan (the probes after the PD rows): one Xiaomi section, the auth fact in front of the probes.
+// The rows follow the step list: the chain row closes the Pd unit, so the Xiaomi row stands after the PD rows and before the next
+// unit. With the row in hand the "Mi Turbo" auth fact is not repeated (the "auth" chip says it).
+static void test_the_xiaomi_row_stands_where_the_plan_runs_it() {
     std::vector<ct::Step> t{step(A::Pd3Fixed, 5000, V::Pass, 1, 167874860u), step(A::Pps, 11000, V::Pass, 6, 3235656292u),
-                            hunt_step(A::Pps, 11000, V::Pass, 6, 3235656292u), hunt_step(A::Pps, 20000, V::Fail, 7, 3235656292u),
+                            mi_chain(V::Pass, k2::mi_unlock::kCodeVerified), mi_mode(A::Pps, 11000, 5000, V::Pass, 6, 3235656292u),
                             step(A::Qc2, 9000, V::Pass)};
     rl::OemNotes notes; notes.mi_auth = true;
-    rl::build(l, t, notes);
-    CHECK_STR(row_order(l).c_str(), "*USB PD,PD3.x,PPS,*Xiaomi,Mi Turbo,Mi 6A,Mi 6A,*QC/UFCS,QC2");
+    rl::Layout l; rl::build(l, t, notes);
+    CHECK_STR(row_order(l).c_str(), "*USB PD,PD3.x,PPS,*Xiaomi,Xiaomi,*QC/UFCS,QC2");
+    rl::OemNotes dense; dense.headers = false; dense.mi_auth = true;
+    rl::build(l, t, dense);
+    CHECK_STR(row_order(l).c_str(), "PD3.x,PPS,Xiaomi,QC2");
+    // A run with no Xiaomi row (the Pd unit not selected) keeps the passive auth fact.
+    std::vector<ct::Step> u{step(A::Qc2, 9000, V::Pass)};
+    rl::build(l, u, notes);
+    CHECK_STR(row_order(l).c_str(), "*QC/UFCS,QC2,*Xiaomi,Mi Turbo");
 }
-// The grid order is the executed order, APDO by APDO: the planner emits a 6 A hunt right after the sample steps of the
-// APDO that covers the probed level, so with two PPS APDOs the 11 V probe runs between APDO 1 and APDO 2. One grid row
-// per APDO puts the probe row between the two PPS rows; a single PPS row holding every APDO's chip would read the probe
-// after the whole row. (ROADMAP 2026-11-09, "a PPS row shows a probe after all its APDOs".)
-static void test_probe_between_two_apdos_stands_between_their_rows() {
-    const uint32_t pdo6 = 3235656292u;   // PPS 3.3-11V 5A, slot 6
-    const uint32_t pdo7 = 3248763456u;   // PPS 5-21V 3.2A, slot 7
-    std::vector<ct::Step> s;
-    for (unsigned t : {5000u, 8000u, 11000u}) s.push_back(step(A::Pps, t, V::Pass, 6, pdo6));
-    s.push_back(hunt_step(A::Pps, 11000, V::Pass, 6, pdo6));   // the plan's order: after APDO 1's steps, before APDO 2's
-    for (unsigned t : {5000u, 13000u, 21000u}) s.push_back(step(A::Pps, t, V::Pass, 7, pdo7));
-    rl::Layout l; rl::build(l, s);
-    CHECK_STR(row_order(l).c_str(), "*USB PD,PPS,*Xiaomi,Mi 6A,*USB PD,PPS");
-    // the dense Results / Running grids leave the headers out: the rows alone are the plan's order
-    rl::OemNotes dense; dense.headers = false;
-    rl::build(l, s, dense);
-    CHECK_STR(row_order(l).c_str(), "PPS,Mi 6A,PPS");
-    CHECK_EQ(l.rows[1].probe && l.rows[1].mv == 11000, true);
-    // Every step's row sits at or after the previous step's row: the grid never reorders the run it shows.
-    auto row_of_step = [&](const ct::Step& x) {
-        for (size_t r = 0; r < l.row_count; ++r) if (rl::row_has(l.rows[r], x)) return int(r);
-        return -1;
-    };
-    int prev = -1;
-    bool mono = true;
-    for (const auto& x : s) {
-        const int r = row_of_step(x);
-        if (r < 0 || (prev >= 0 && r < prev)) mono = false;
-        prev = r;
-    }
-    CHECK_EQ(mono, true);
-    // The APDO rows keep their own chips: "5-11V 5A" before the probe, "5-21V 3.2A" after it.
-    CHECK_STR(chips(l, 0).c_str(), "5-11V 5A");
-    CHECK_STR(chips(l, 1).c_str(), "11V 6A");
-    CHECK_STR(chips(l, 2).c_str(), "5-21V 3.2A");
+// How the chain ended, on the row: a chain that could not run is a word, never a chip (nothing was tested); a finished chain with
+// nothing raised says "none new"; a mode the cable cannot carry is a neutral skip with its word, never a red fail.
+static void test_the_xiaomi_row_says_how_the_chain_ended() {
+    rl::Layout l;
+    const auto only = [&](std::vector<ct::Step> s) { rl::build(l, s); return chips(l, row_of(l, "Xiaomi") + 1); };
+    CHECK_STR(only({mi_chain(V::Skip, k2::mi_unlock::kCodeNoSvid)}).c_str(), "no SVID");
+    CHECK_EQ(l.tokens[l.rows[row_of(l, "Xiaomi") + 1].first].chip, false);
+    CHECK_STR(only({mi_chain(V::Skip, k2::mi_unlock::kCodeNoAnswer)}).c_str(), "no answer");
+    CHECK_STR(only({mi_chain(V::Skip, k2::mi_unlock::chain_code(true, false, 5, 0))}).c_str(), "stalled");
+    CHECK_STR(only({mi_chain(V::Pass, k2::mi_unlock::kCodeFinished)}).c_str(), "auth none new");
+    CHECK_STR(only({mi_chain(V::Pending, 0)}).c_str(), "auth");   // the Running grid, before the chain row's turn
+    ct::Step cut = mi_mode(A::Pps, 11000, 6000, V::Skip, 6, 0xC0DC3278u); cut.reason = ct::Reason::CableLimit;
+    CHECK_STR(only({mi_chain(V::Pass, k2::mi_unlock::kCodeVerified), cut}).c_str(), "auth 66W cable");
+    CHECK_EQ(int(l.tokens[l.rows[row_of(l, "Xiaomi") + 1].first + 1].tone) != int(rl::Tone::Fail), true);
 }
 
 // ---- summarize(): the best passing mode per protocol family, as words with volts and amps ---------------------------
-static ct::Step hunt(unsigned mv, unsigned ma, V v) {
+static ct::Step hunt(unsigned mv, unsigned ma, V v) {   // a Xiaomi mode row at its new level
     ct::Step s = step(A::Pd3Fixed, mv, v); s.hunt = true; s.ma = uint16_t(ma);
     return s;
-}
-// A 6 A row the source never unlocked is a neutral skip with a word next to its chip, never a red fail.
-static void test_hunt_rows_the_source_did_not_unlock_read_locked() {
-    ct::Step a = hunt(20000, 6000, V::Skip); a.reason = ct::Reason::NotUnlocked; a.detail = ct::kDetailNoChain;
-    ct::Step b = hunt(11000, 6000, V::Skip); b.reason = ct::Reason::NotUnlocked; b.detail = ct::kDetailCableCap;
-    rl::Layout l; rl::build(l, std::vector<ct::Step>{a, b});
-    const size_t r20 = row_of(l, "Mi 6A");
-    CHECK_STR(chips(l, r20).c_str(), "20V 6A locked");
-    CHECK_STR(chips(l, r20 + 1).c_str(), "11V 6A cable");
-    CHECK_EQ(int(l.tokens[l.rows[r20].first].tone) != int(rl::Tone::Fail), true);
-    CHECK_EQ(int(l.tokens[l.rows[r20 + 1].first].tone) != int(rl::Tone::Fail), true);
 }
 static std::string line_text(const std::vector<rl::SummaryLine>& v, size_t i) { return v[i].text; }
 static std::vector<rl::SummaryLine> summary_of(const std::vector<ct::Step>& s, size_t max = 3) {
@@ -1377,7 +1342,7 @@ static void test_summary_one_line_per_family_ranked_by_watts() {
     s.push_back(step(A::Fcp, 9000, V::Fail));
     const auto v = summary_of(s);
     CHECK_EQ(v.size(), 3u);
-    CHECK_STR(v[0].text, "Mi 20V 6A");
+    CHECK_STR(v[0].text, "Mi 120W");
     CHECK_STR(v[1].text, "PD 20V 3.35A");
     CHECK_STR(v[2].text, "QC3 12V");        // no amps in the data model for a D+/D- mode: volts only, never invented
     CHECK_EQ(v[2].mw, 0u);
@@ -1729,9 +1694,8 @@ int main() {
     test_class_b_pass_reads_as_a_normal_pass();
     test_results_split_into_sections();
     test_oem_notes_get_their_own_section_between_xiaomi_and_usb_pd();
-    test_hunt_rows_live_in_the_xiaomi_section(); test_mi_probe_rows_stand_where_the_plan_runs_them();
-    test_probe_between_two_apdos_stands_between_their_rows();
-    test_hunt_rows_the_source_did_not_unlock_read_locked();
+    test_the_xiaomi_unit_is_one_row_in_its_section(); test_the_xiaomi_row_stands_where_the_plan_runs_it();
+    test_the_xiaomi_row_says_how_the_chain_ended();
     test_empty_sections_are_omitted();
     test_a_section_that_folds_away_loses_its_header();
     test_section_of_and_vendor_names();

@@ -1701,6 +1701,7 @@ K2_HOT void Sink::on_vdm(std::uint16_t header, std::span<const std::uint8_t> pay
                 st_.xiaomi_authed = true;
                 xiaomi_cmd_ = cmd;
                 xm_.authed = true; xm_.authed_at = now; xm_.reannounced = false; xm_.reannounce_at = 0;
+                note_xiaomi_finish(0x08);
                 TxMsg m;
                 m.header = make_header(kCtlGetSourceCap, 0, rev_);
                 queue(m);
@@ -1720,6 +1721,7 @@ K2_HOT void Sink::on_vdm(std::uint16_t header, std::span<const std::uint8_t> pay
                 st_.xiaomi_authed = true;
                 xiaomi_cmd_ = cmd;
                 xm_.authed = true; xm_.authed_at = now; xm_.reannounced = false; xm_.reannounce_at = 0;
+                note_xiaomi_finish(0x0A);
                 TxMsg m;
                 m.header = make_header(kCtlGetSourceCap, 0, rev_);
                 queue(m);
@@ -1730,6 +1732,18 @@ K2_HOT void Sink::on_vdm(std::uint16_t header, std::span<const std::uint8_t> pay
         default:
             break;
     }
+}
+
+// The chain finished at `step`: keep the SPR list in force now, the offer before the source's re-announce (diagnostics and the
+// charger test's unlock diff only; nothing in the sink reads it back).
+void Sink::note_xiaomi_finish(std::uint8_t step) {
+    xm_.finish = step;
+    xm_.pre = {};
+    xm_.n_pre = 0;
+    if (!caps_ || !caps_->valid) return;
+    const std::size_t n = std::min<std::size_t>(std::min<std::size_t>(caps_->num_pdos, caps_->pdos.size()), xm_.pre.size());
+    for (std::size_t i = 0; i < n; ++i) xm_.pre[i] = caps_->pdos[i].raw;
+    xm_.n_pre = std::uint8_t(n);
 }
 
 void Sink::send_xiaomi_vdm_reply(std::uint8_t cmd, std::span<const std::uint32_t> vdos, std::uint32_t now) {

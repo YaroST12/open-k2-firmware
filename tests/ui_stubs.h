@@ -81,6 +81,10 @@ struct StubState {
     std::uint32_t req_period_ms = 0;      // what fusb302::request_period_ms() returns
     k2::pd::SinkCapsSeen sink_seen{};
     k2::pd::XiaomiTrace xm{};             // the sink's Request / Xiaomi chain record (fusb302::xiaomi_trace)
+    // A source that lists SVID 0x2717 (model_units): a unit detach clears the sink's chain state as the real sink does, a PD attach
+    // runs the chain again (mi_authed) and leaves mi_xm as the trace (the list before the chain in mi_xm.pre).
+    bool mi_svid = false, mi_authed = false;
+    k2::pd::XiaomiTrace mi_xm{};
     k2::pd::SourceCaps epr_info_caps{};   // the list an informational EPR_Get_Source_Cap returned
     int epr_info_asks = 0; bool epr_info_forced = false; k2::pd::Err epr_info_err = k2::pd::Err::Ok;
     bool link_inline = false, inl = false, scan_confirmed = false, self_powered = false;

@@ -326,6 +326,11 @@ struct XiaomiTrace {
     bool reannounced = false;         // a Source_Capabilities arrived after the auth
     bool req_in_chain = false;        // the last Request left while the chain guard said the chain was running
     bool req_held = false;            // a Request is waiting behind the chain guard (never sent yet)
+    // The SPR list in force when the chain finished (the source's offer before its re-announce), zero-padded: the charger test's
+    // Xiaomi unit diffs the re-announced list against it (k2/chargertest/mi_unlock.hpp). n_pre = 0: no list was bound then.
+    std::array<std::uint32_t, 7> pre{};
+    std::uint8_t n_pre = 0;
+    std::uint8_t finish = 0;          // the step that finished the chain: 8 (0x27170208 payload 1) or 0x0A (0x2717020A); 0 = not
 };
 
 class Sink {
@@ -513,6 +518,7 @@ private:
     void answer_reannounce(std::uint32_t now);
     void update_rev();
     void on_vdm(std::uint16_t header, std::span<const std::uint8_t> payload, std::uint32_t now);
+    void note_xiaomi_finish(std::uint8_t step);
     void send_xiaomi_vdm_reply(std::uint8_t cmd, std::span<const std::uint32_t> vdos, std::uint32_t now);
     // Requests are answered only by a live Pd-mode sink that is the line's only sink (gives_sink_cap_ implies answers_sop_).
     bool answers_requests() const { return gives_sink_cap_ && answers_sop_; }

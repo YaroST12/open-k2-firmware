@@ -31,7 +31,7 @@ REASONS = ["", "disabled", "not advertised", "over voltage cap", "not implemente
            "request failed", "timeout", "voltage outside band", "hard reset", "source lost",
            "cancelled", "5V release failed", "offers changed", "PD active: use QC port",
            "revision cannot be forced", "select at least one test", "physical cable limit", "unsupported PDO layout",
-           "charger stayed in PD", "rebooted during request", "rebooted during handover", "EPR entry refused", "no contract", "source shut off (needs replug)", "no PD after re-attach", "VBUS cut, source recovered", "blocked by PD", "no QC3+ response", "rebooted 3x", "needs external power", "PD gave up before START", "Class A only (12 V max)", "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target", "withdrawn by source", "wrong voltage on 5V contract", "needs load", "floored above target", "step resolution", "HID-cable loop: 5V lock", "advertised", "light run: not asked", "port cuts without load", "output folds back"]
+           "charger stayed in PD", "rebooted during request", "rebooted during handover", "EPR entry refused", "no contract", "source shut off (needs replug)", "no PD after re-attach", "VBUS cut, source recovered", "blocked by PD", "no QC3+ response", "rebooted 3x", "needs external power", "PD gave up before START", "Class A only (12 V max)", "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target", "withdrawn by source", "wrong voltage on 5V contract", "needs load", "floored above target", "step resolution", "HID-cable loop: 5V lock", "advertised", "light run: not asked", "port cuts without load", "output folds back", "Xiaomi chain"]
 STATES = ["Setup", "Verify 5V", "Negotiating", "Hold", "Return to 5V", "Complete", "Stopped",
           "UNSAFE: unplug source", "Detach charger", "Initializing..."]
 HANDOVER = ["not tried", "fell back", "stayed PD", "fault", "reboot", "in PD contract"]
@@ -57,7 +57,7 @@ EPR_DETAILS = {136: "EPR: entry refused", 137: "EPR: source rejects cable", 138:
                153: "EPR offered; entry: unable now", 154: "EPR offered; entry: 5V PDO lacks EPR bit",
                155: "not unlocked (no OEM chain)", 156: "not unlocked (chain unfinished)", 157: "not unlocked (3 A cable)",
                158: "not unlocked (vendor not accepted)", 159: "not unlocked (source reset)"}
-FORMAT = 11   # payload byte 33: 11 = the record is v10's and a Deep run's blob (decode_deep) travels beside it, 0 = first cards (u16 mV max, plain detail), 1 = 9+9 bit 100 mV voltages, 6 bit detail, ... 7 = repeat counter, 8 = + the re-balance count at V8_AT, 9 = + the spread block at V9_AT, 10 = + the deep-sweep summary at V10_AT, 11 = the Deep block beside the record
+FORMAT = 12   # payload byte 33: 12 = the block may carry the Xiaomi section, on a card of any level (no payload change), 11 = the record is v10's and a Deep run's blob (decode_deep) travels beside it, 0 = first cards (u16 mV max, plain detail), 1 = 9+9 bit 100 mV voltages, 6 bit detail, ... 7 = repeat counter, 8 = + the re-balance count at V8_AT, 9 = + the spread block at V9_AT, 10 = + the deep-sweep summary at V10_AT, 11 = the Deep block beside the record
              # 2 = byte 54 pdp_w and byte 55 flags (bit0 name_auto),
              # 3 = range lo bits 9..15 = APDO max current (50 mA), flags bits 1..7 = highest fixed PDO current (50 mA),
              # 4 = per-EPR-level verdicts (3 entries of 6 bytes: u16 dv + 4-byte group packing),
@@ -75,7 +75,9 @@ class BadCard(ValueError):
 
 
 # ---- the Deep block (format 11): include/k2/chargertest/report_card_deep.hpp, tests/test_report_card_py.py compares the name tables ----
-DEEP_MAX_BITS = 3273
+DEEP_MAX_BITS = 3638   # report_card::deep::kMaxBits (3274 without the format 12 Xiaomi section)
+VERDICTS = ["pending", "running", "pass", "fail", "skip"]   # charger_test::Verdict, the Xiaomi section's verdict field
+MI_BEFORE_LOST = 0xFFFFFFFF   # deep::kBeforeLost: the PDO before the chain is not known (the run resumed)
 DEEP_BUCKETS = 32
 SVOOC_ENDS = ["none", "refused", "no adapter", "aborted", "time cap", "judged", "cancelled", "stopped"]   # svooc_ceiling::End
 SVOOC_ABORTS = ["", "over 12V", "current", "off-script", "host gone", "no monitor", "sink", "PD", "edge storm", "no adapter", "time cap",
@@ -184,8 +186,40 @@ def decode_deep(blob, ranges=()):
         graphs.append(g)
     if graphs:
         out["graphs"] = graphs
+    if r.left() >= 8:   # format 12: the Xiaomi section is the block's tail
+        out["xiaomi"] = _decode_mi(r)
     if r.left() >= 8:
         raise BadCard("Deep block has trailing data")
+    return out
+
+
+def pdo_text(raw):
+    """One PDO in the words of the Xiaomi section: 'PD 20V 3A', 'EPR 28V 5A', 'PPS 5-11V 3A', 'AVS 15-28V 5A'."""
+    import step_label
+    if raw >> 30 == 0:
+        mv, ma = (raw >> 10 & 0x3FF) * 50, (raw & 0x3FF) * 10
+        return f"{'EPR' if mv > 20000 else 'PD'} {step_label.milli(mv)}V {step_label.milli(ma)}A"
+    if raw >> 30 == 3:
+        return ("PPS " if (raw >> 28) & 3 == 0 else "AVS ") + step_label.pdo_range(raw)
+    return f"PDO 0x{raw:08X}"
+
+
+def _decode_mi(r):
+    """The Xiaomi section (report_card_deep.hpp): how the 0x2717 chain ended and each mode it unlocked, before and after, the level
+    the row asked, its watts ("Mi 55W") and verdict."""
+    import step_label
+    chain, n = r.get(5), r.get(3)
+    out = {"chain": chain, "chain_text": step_label.mi_chain_text(chain), "done": step_label.mi_chain_done(chain), "modes": []}
+    for _ in range(n):
+        before, after = r.get(32), r.get(32)
+        mv, ma, verdict, reason = r.get(9) * 100, r.get(7) * 50, r.get(3), r.get(6)
+        if verdict >= len(VERDICTS) or reason >= len(REASONS):
+            raise BadCard("Xiaomi mode verdict or reason out of range")
+        w = (mv * ma + 500000) // 1000000
+        out["modes"].append({
+            "label": f"Mi {w}W", "watts": w, "mv": mv, "ma": ma, "before_pdo": before, "after_pdo": after,
+            "before": "not kept" if before == MI_BEFORE_LOST else "not listed" if before == 0 else pdo_text(before),
+            "after": pdo_text(after), "verdict": VERDICTS[verdict], "reason": REASONS[reason]})
     return out
 
 

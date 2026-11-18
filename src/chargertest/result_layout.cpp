@@ -6,6 +6,7 @@
 #include "k2/fastcharge/fc_engine.hpp"
 #include "k2/chargertest/step_label.hpp"
 #include "k2/chargertest/oem_watts.hpp"
+#include "k2/chargertest/mi_unlock.hpp"
 #include <algorithm>
 #include <cstring>
 #include <string_view>
@@ -68,7 +69,7 @@ void count(Tally& t, const ct::Step& y) {
     default: ++t.pending; break;
     }
 }
-Tone tone(const ct::Step& x) {   // a chip of one step (a fixed level, a 6 A probe)
+Tone tone(const ct::Step& x) {   // a chip of one step (a fixed level, a Xiaomi mode)
     Tally t;
     count(t, x);
     return roll_up(t);
@@ -330,7 +331,6 @@ const char* skip_tag(const ct::Step& x) {
     case ct::Reason::EprRefused: return "refused";
     case ct::Reason::NoContract: return "no PD";
     case ct::Reason::ClassAOnly: return "Class A";   // neutral: the charger tops out at 12 V, the 20 V level was never expected
-    case ct::Reason::NotUnlocked: return x.detail == ct::kDetailCableCap ? "cable" : "locked";   // a 6 A hunt the source did not offer
     case ct::Reason::NeedsLoad: return "needs load";   // pattern pps-off-at-no-load: a skip, never a fail (10 chars: fits a token)
     default: return nullptr;
     }
@@ -348,7 +348,7 @@ void tag(TokenBuf& b, const ct::Step& x) {
         uint32_t best = UINT32_MAX;
         for (size_t i = 0; i < s.size(); ++i) {
             const auto& x = s[i];
-            if (x.algorithm != a || !x.mv || x.hunt) continue;   // a 6 A probe is a row of its own (probe_row)
+            if (x.algorithm != a || !x.mv || x.hunt) continue;   // a Xiaomi row step is a row of its own (probe_row)
             const uint32_t key = (uint32_t(x.mv) << 10) | uint32_t(i);
             if (key > done && key < best) { best = key; next = &x; }
         }
@@ -467,14 +467,32 @@ Tone level_tone(oem_watts::Claim c) {
         put_text(*k, oem_watts::watts(uint32_t(oem_watts::kLevels[i].w) * 1000u).c_str());
     }
 }
-[[gnu::noinline]] void probe_row(TokenBuf& b, std::span<const ct::Step> steps, uint16_t mv) {
+// The Xiaomi row: the chain row first (a chip "auth" while it waits or once the chain finished; a word when it could not run:
+// "no SVID", "no answer", "stalled"), then one chip per mode the chain unlocked, by the watts of its new level ("55W", "66W"); a chain that
+// finished with nothing raised says "none new" beside its chip.
+[[gnu::noinline]] void probe_row(TokenBuf& b, std::span<const ct::Step> steps) {
+    bool done = false, modes = false;
     for (const auto& x : steps) {
-        if (!x.hunt || x.mv != mv) continue;
+        if (!x.hunt) continue;
+        if (ct::is_mi_chain(x)) {
+            if (x.verdict == ct::Verdict::Skip && x.reason == ct::Reason::MiChain) {
+                const mi_unlock::Chain c = mi_unlock::chain_of(x.detail);
+                b.word(c == mi_unlock::Chain::NoSvid ? "no SVID" : c == mi_unlock::Chain::Stalled ? "stalled" : "no answer", Tone::Dim);
+                continue;
+            }
+            Token* k = b.token(true, tone(x));
+            if (!k) break;
+            put_text(*k, "auth");
+            done |= x.verdict == ct::Verdict::Pass;
+            continue;
+        }
+        modes = true;
         Token* k = b.token(true, tone(x));
         if (!k) break;
-        put_text(*k, step_label::params(x).c_str());   // the probed current: "20V 6A", not the advertised max
+        put_text(*k, step_label::params(x).c_str());   // the mode's new level by its watts: "55W", "66W"
         tag(b, x);
     }
+    if (done && !modes) b.word("none new", Tone::Dim);
 }
 // Reach of one PDO slot's range steps.
 Reach reach_of(std::span<const ct::Step> s, A a, uint8_t pos) {
@@ -734,8 +752,8 @@ void build_impl(Sink& b, std::span<const ct::Step> steps, const OemNotes& oem, c
     bool any_probe = false;
     for (const auto& s : steps) {
         if (is_revision(s.algorithm)) continue;
-        const Key k{s.hunt ? A::Count : s.algorithm, s.hunt,   // an APDO's sweep steps share its range key: one row
-                    s.hunt ? s.mv : uint16_t(is_range(s.algorithm) ? s.pos : 0)};
+        const Key k{s.hunt ? A::Count : s.algorithm, s.hunt,   // an APDO's sweep steps share its range key: one row; the Xiaomi unit is one row
+                    s.hunt ? uint16_t(0) : uint16_t(is_range(s.algorithm) ? s.pos : 0)};
         bool seen = false;
         for (size_t i = 0; i < key_n && !seen; ++i)
             seen = keys[i].a == k.a && keys[i].probe == k.probe && keys[i].mv == k.mv;
@@ -767,13 +785,12 @@ void build_impl(Sink& b, std::span<const ct::Step> steps, const OemNotes& oem, c
         const size_t before_line = b.line_count();
         header(b, oem, sec);
         const size_t after_header = b.row_count();
-        if (sec == Section::Xiaomi) mi_auth_row(b, oem, mi_shown);
         for (size_t i = at; i < end; ++i) {
             const Key& key = keys[i];
             if (key.probe) {
-                b.begin(CompactKind::Probe, "Mi 6A", Tone::Dim, A::Count, key.mv);
+                b.begin(CompactKind::Probe, "Xiaomi", Tone::Dim, A::Count, 0);
                 TokenBuf tb = b.buf();
-                probe_row(tb, steps, key.mv);
+                probe_row(tb, steps);
                 continue;
             }
             const A a = key.a;
@@ -877,7 +894,7 @@ size_t build_compact(CompactGrid& g, const Metrics& m, std::span<CompactLine> ou
 
 bool row_has(const CompactRow& r, const ct::Step& s) {
     if (r.kind == CompactKind::Header || r.kind == CompactKind::Fact || r.kind == CompactKind::Collapsed) return false;
-    if (r.kind == CompactKind::Probe) return s.hunt && s.mv == r.mv;
+    if (r.kind == CompactKind::Probe) return s.hunt;
     if (r.kind == CompactKind::Levels)   // every level row of a family lists the family's shared detection
         return !s.hunt && oem_watts::in_family(oem_watts::kLevels[r.first].family, s.algorithm);
     if (s.hunt || (r.kind != CompactKind::Range && ct::is_sweep(s)) || static_cast<A>(r.algo) != s.algorithm) return false;
@@ -898,7 +915,7 @@ const char* row_label(const CompactGrid& g, size_t row) {
     const CompactRow& cr = g.rows[row];
     switch (cr.kind) {
     case CompactKind::Header: return section_name(static_cast<Section>(cr.algo));
-    case CompactKind::Probe: return "Mi 6A";
+    case CompactKind::Probe: return "Xiaomi";
     case CompactKind::Fact: return g.pool.data() + cr.mv;
     case CompactKind::Collapsed: return cr.mv ? "Skipped" : "No reply";
     case CompactKind::Levels: return oem_watts::kLevels[cr.first].word;
@@ -917,7 +934,7 @@ void row_tokens(const CompactGrid& g, size_t row, std::span<const ct::Step> step
     tb.put_str(out.label, sizeof out.label, lbl);
     switch (cr.kind) {
     case CompactKind::Header: break;
-    case CompactKind::Probe: probe_row(tb, steps, cr.mv); break;
+    case CompactKind::Probe: probe_row(tb, steps); break;
     case CompactKind::Range: range_row(tb, steps, sweep, static_cast<A>(cr.algo), static_cast<uint8_t>(cr.mv)); break;
     case CompactKind::RangeNone: tb.word("None", Tone::Dim); break;
     case CompactKind::NoQc3Plus: tb.word("no QC3+", Tone::Dim); break;
@@ -950,7 +967,7 @@ void row_tokens(const CompactGrid& g, size_t row, std::span<const ct::Step> step
 
 bool row_has(const Row& r, const ct::Step& s) {
     if (r.header) return false;
-    if (r.probe) return s.hunt && s.mv == r.mv;
+    if (r.probe) return s.hunt;
     if (r.levels) return !s.hunt && oem_watts::in_family(oem_watts::kLevels[r.pos].family, s.algorithm);   // pos: its first level
     if (s.hunt || (!is_range(r.algorithm) && ct::is_sweep(s)) || r.algorithm != s.algorithm) return false;
     return !is_range(r.algorithm) || s.pos == r.pos;   // one row per APDO: a range row owns its slot's steps, the sweep's too
@@ -1008,6 +1025,7 @@ Fam family_of(const ct::Step& x) {
 // The current a step is ranked by: what its label shows, or for an AVS offer (no amps in the words) the offer's limit at the
 // step's voltage, so a 28 V AVS offer is not outranked by a 20 V fixed one.
 unsigned rank_ma(const ct::Step& x) {
+    if (x.hunt) return x.ma;   // a Xiaomi mode: the current it asks (its label words the watts)
     if (const unsigned ma = step_label::amps_ma(x)) return ma;
     return x.avs && x.pdo ? pd::current_limit_ma(pd::decode_pdo(x.pdo), x.mv) : 0u;
 }

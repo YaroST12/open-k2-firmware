@@ -5,10 +5,10 @@
 //   Fixed PD:  one chip per offered PDO, "5V 3A" (the advertised current, from the PDO in the run evidence).
 //   PPS / AVS: one row per advertised range (APDO), one chip in it, "3.3-11V 3A", coloured by the worst of its range
 //              steps and its deep sweep; a small "S" beside the volts says a sweep ran on that APDO (Token::sweep). A
-//              range the charger does not offer reads "None". One row per APDO keeps a Mi 6A probe the plan runs
-//              between two APDOs between their rows, where it executes. The sweep has no row of its own.
+//              range the charger does not offer reads "None". The sweep has no row of its own.
 //   Legacy:    one chip per distinct target voltage ("9V"), so QC3 up and down steps collapse; SCP adds its limit ("10V 2.25A").
-//   Mi 6 A:    one row "Mi 6A" per probed level, a chip per probe step, "20V 6A", where the plan runs it.
+//   Xiaomi:    one row "Xiaomi" for the unit (the hunt steps): the chain's "auth" chip (or why it could not run: "no SVID"), then
+//              a chip per mode it unlocked at its new level ("11V 5A"); "none new" when the chain finished and nothing went up.
 //   The words are k2/chargertest/step_label.hpp's, the same as the Running / Steps rows and the report card.
 //   Protocols with nothing to show (not advertised, or no answer at 5 V) fold into one "No reply" row of words;
 //   protocols that were only skipped (PD active, over the cap, ...) fold into one "Skipped" row.
@@ -94,9 +94,9 @@ struct Row {
     Tone label_tone = Tone::Dim;
     charger_test::Algorithm algorithm = charger_test::Algorithm::Count;   // Count: a collapsed row or a header
     bool header = false;            // section header row: no tokens, not openable
-    bool probe = false;             // a Mi 6A probe row (algorithm Count): the 6 A hunt steps at `mv`
+    bool probe = false;             // the Xiaomi row (algorithm Count): every hunt step (the chain row and its modes)
     uint8_t pos = 0;                // the PDO slot of a range row; 0: not one
-    uint16_t mv = 0;                // the probed level of a probe row
+    uint16_t mv = 0;                // Levels: the claim bits, else 0
     bool levels = false;            // an OEM level row (CompactKind::Levels): owns every step of the level family's units
     uint8_t first = 0, count = 0;   // tokens
 };
@@ -123,14 +123,14 @@ inline constexpr Metrics kGridMetrics{.adv = 8, .pad = 2, .gap = 1, .avail = 163
 
 // Results-tab sections, in the default run order (docs/CHARGER_TEST_FLOW.md): the OEM vendor modes by company
 // (Huawei / Honor, Samsung, OPPO / OnePlus / vivo), the identity facts of a PD source (QC4+/QC5, Lenovo, HP), USB PD (CC) with
-// Xiaomi / Redmi (the Mi 6A probes, PD-based) where the planner runs them, then QC / UFCS. Row labels hold 8 characters, so the
+// Xiaomi (the SVID 0x2717 unit, PD-based) where the planner runs it, then QC / UFCS. Row labels hold 8 characters, so the
 // headers are the short forms of the wizard's family names.
 enum class Section : uint8_t { Huawei = 0, Samsung, Oppo, Xiaomi, OemPd, UsbPd, Qc, Count };
 const char* section_name(Section);
 Section section_of(charger_test::Algorithm);
 // Optional facts about the source (labels from the source identity, never behaviour):
 // qc_label/qc_why = the passive QC4+/QC5 label, vendor = VID-driven OEM name (Lenovo/HP/...), mi_auth =
-// the SVID 0x2717 auth completed this session (shown in the Xiaomi section with the 6 A probes).
+// the SVID 0x2717 auth completed this session (a "Mi Turbo auth ok" fact when the run has no Xiaomi row).
 struct OemNotes {
     const char* qc_label = nullptr;
     const char* qc_why = nullptr;
@@ -162,12 +162,12 @@ const char* vendor_oem_name(uint16_t vid);
 
 // The rows come from the steps alone: they are the plan, in the order the runner executes them, so a row stands where the plan first
 // runs one of its steps. A row is a protocol's steps (a fixed PD row: one per algorithm; a PPS / AVS row: one per APDO, Row::pos),
-// or (a probe row, Row::probe) the 6 A hunt steps at one level, wherever the planner put them. A PPS / AVS APDO's deep sweep
+// or (the Xiaomi row, Row::probe) the hunt steps, wherever the planner put them. A PPS / AVS APDO's deep sweep
 // steps belong to its range row: the chip is the worst of the range steps and the sweep (the sweep's tracking error and fold come
 // from `sweep`, the runner's record) and wears the "S" mark. The Running grid, the Results page and the Steps page read the
 // same step list, so none keeps an order of its own.
 void build(Layout&, std::span<const charger_test::Step>, const OemNotes& = {}, const ctsweep::View& sweep = {});
-// Does step `s` belong to layout row `r`? A probe row owns the hunt steps at its level; a range row (one per APDO) owns its
+// Does step `s` belong to layout row `r`? The Xiaomi row owns the hunt steps; a range row (one per APDO) owns its
 // slot's steps, the sweep steps included; any other protocol row the protocol's steps except sweeps (they only exist on APDOs).
 bool row_has(const Row& r, const charger_test::Step& s);
 // Appends a fact row of plain words after the protocol rows (a collapsed row: its OK opens the whole step list).
@@ -175,8 +175,8 @@ bool row_has(const Row& r, const charger_test::Step& s);
 void add_note(Layout&, const char* label, Tone, std::initializer_list<const char*> words);
 // The Results summary card: the best passing mode of each protocol family, as words with volts and amps.
 //   PD (fixed and PPS: amps = the advertised PDO current, or the requested one on the full-current PPS row; AVS: volts only,
-//   ranked by the offer's limit), Mi (the 6 A hunt,
-//   amps = the probed current), QC / AFC / Huawei / OPPO / UFCS (D+/D- modes: volts only; SCP and UFCS read the claimed watts of
+//   ranked by the offer's limit), Mi (a mode the Xiaomi chain unlocked,
+//   amps = its new current), QC / AFC / Huawei / OPPO / UFCS (D+/D- modes: volts only; SCP and UFCS read the claimed watts of
 //   the level, oem_watts::step_mw: "SCP 22.5W", "UFCS 60W", never ranked as watts: the K2 drew none).
 // Ranked by watts where both are known, then the volts-only families by voltage. A handshake without a voltage proof
 // reads "VOOC ok" / "VOOC seen" (the VOOC family's word, never a unit's version). `mw` is 0 when no current is known. Returns the lines written (at most out.size()).
@@ -230,7 +230,7 @@ enum class CompactKind : uint8_t {
 struct CompactRow {
     CompactKind kind = CompactKind::Header;
     uint8_t algo = 0;      // charger_test::Algorithm, Section (Header), or Tone (Fact / Collapsed label tone)
-    uint16_t mv = 0;       // Probe mv, Range pos, Fact label pool offset, or Collapsed (0=absent, 1=skipped)
+    uint16_t mv = 0;       // Range pos, Fact label pool offset, or Collapsed (0=absent, 1=skipped)
     uint8_t first = 0;     // Fact: first fact_tok index; Levels: first oem_watts::kLevels index
     uint8_t count = 0;     // Fact: fact_tok count; Levels: level count
 };

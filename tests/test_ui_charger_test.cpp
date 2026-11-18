@@ -620,7 +620,7 @@ static bool footer_shows(std::string_view text, uint16_t color = kText);
 static void test_full_help_text() {
     // Each stage's copy: the focused row opens a 12 px dim note under its text; the footer says what is picked.
     fixture(); Ui ui; open(ui); ui.tick(1200);
-    static constexpr const char* kPresetNote[] = {"Everything, QC Class B 20V too", "PD fixed, PPS, EPR, Mi 6A",
+    static constexpr const char* kPresetNote[] = {"Everything, QC Class B 20V too", "PD fixed, PPS, EPR, Xiaomi",
                                                   "D+/D-: vendor modes, QC, UFCS", "Huawei, Samsung, OPPO, vivo"};
     for (int r = 0; r < 4; ++r) {
         top(ui, 1210); move(ui, r, 1210); ui.tick(1210 + r); settle(ui, 1210 + r);
@@ -634,7 +634,7 @@ static void test_full_help_text() {
     check_row_note(kFamHuawei, "Entries inside this family");
     CHECK_EQ(footer_says("6 of 6 families on", kText), true);
     top(ui, 1240); move(ui, kFamXiaomi, 1240); ui.tick(1240); settle(ui, 1240);
-    check_row_note(kFamXiaomi, "Mi 6A probes run in PD");   // Xiaomi / Redmi rides the PD unit
+    check_row_note(kFamXiaomi, "SVID 0x2717 auth, runs in PD");   // Xiaomi / Redmi rides the PD unit
     move(ui, 1, 1250); long_ok(ui, 1250); ui.tick(1250); settle(ui, 1250);    // USB PD's entries
     CHECK_EQ(ui.charger_test_stage(), 1);
     check_row_note(0, "Fixed offers: SPR + EPR");
@@ -2294,7 +2294,7 @@ static void test_step_label_gallery() {
         for (unsigned i = 0; i < 8; ++i) g_stub.caps.pdos[i] = pd::decode_pdo(kOffer[i]);
         Ui ui;
         open(ui); ui.set_rotation(rot, 1100);
-        move(ui, kPdRow); press(ui, Button::Ok);   // "PD only": the PD fixed / PPS / Mi 6A rows; a preset pick goes on to the cable
+        move(ui, kPdRow); press(ui, Button::Ok);   // "PD only": the PD fixed / PPS / Xiaomi rows; a preset pick goes on to the cable
         CHECK_EQ(ui.charger_test_stage(), 2);
         press(ui, Button::Ok);                     // the cable pick keeps "Off" and goes on to Review
         CHECK_EQ(ui.charger_test_stage(), 4);
@@ -5511,6 +5511,93 @@ static void test_vooc_family_results_read_watts_levels() {
         }
 }
 
+// The Xiaomi (SVID 0x2717) unit on the three hardware cases and a source without the SVID: a PD-only run on the list the source
+// re-announced after the chain (the sink's trace keeps the list from before it). K2_DUMP=dir writes dir/k2_mi_<case>_rot<r>.panel
+// (the Results grid, scrolled to the Xiaomi row) and k2_mi_<case>_steps / _detail (the row's Steps and its first mode's Detail).
+struct MiCase { const char* name; std::array<uint32_t, 7> before, after; uint8_t n; bool svid, authed; uint8_t finish, modes; uint16_t cable_ma = 5000; };
+static const MiCase kMiCases[] = {
+    {"bank", {0x0201912C, 0x0002D12C, 0x0003C12C, 0x0004B12C, 0x000640C8, 0xC0DC323C, 0xC1903228},
+             {0x0001912C, 0x0002D12C, 0x0003C12C, 0x0004B12C, 0x000640C8, 0xC0DC3264, 0xC1903228}, 7, true, true, 8, 1},
+    {"fh22", {0x0A81912C, 0x0002D12C, 0x0004B12C, 0x000641F4, 0xC8DC3264, 0xC9A43264, 0},
+             {0x0A81912C, 0x0002D12C, 0x0004B12C, 0x000641F4, 0xC8DC3264, 0xC9A43264, 0}, 6, true, true, 8, 0},
+    {"cuk", {0x0A01912C, 0x0002D12C, 0x0003C12C, 0x0004B12C, 0x000641F4, 0xC8DC3264, 0xC9903264},
+            {0x0A01912C, 0x0002D12C, 0x0003C12C, 0x0004B12C, 0x000641F4, 0xC8DC3278, 0xC9903278}, 7, true, true, 0x0A, 2},
+    // c) on a 6 A cable (the Xiaomi 6A cable): the two 6 A modes are tested ("Mi 66W" at 11 V 6 A), not skipped for the cable
+    {"cuk6a", {0x0A01912C, 0x0002D12C, 0x0003C12C, 0x0004B12C, 0x000641F4, 0xC8DC3264, 0xC9903264},
+              {0x0A01912C, 0x0002D12C, 0x0003C12C, 0x0004B12C, 0x000641F4, 0xC8DC3278, 0xC9903278}, 7, true, true, 0x0A, 2, 6000},
+    {"nosvid", {0x0A01912C, 0x0002D12C, 0x0004B12C, 0x000641F4, 0xC8DC3264, 0, 0},
+               {0x0A01912C, 0x0002D12C, 0x0004B12C, 0x000641F4, 0xC8DC3264, 0, 0}, 5, false, false, 0, 0},
+};
+static void mi_case_fixture(const MiCase& c) {
+    fixture();
+    g_stub.caps.num_pdos = c.n;
+    for (uint8_t i = 0; i < c.n; ++i) g_stub.caps.pdos[i] = pd::decode_pdo(c.after[i]);
+    g_stub.cable_limits.max_mv = 20000; g_stub.cable_limits.max_ma = c.cable_ma; g_stub.cable_limits.observed = true;   // a read cable
+    g_stub.vbus_ceiling_mv = 21000;   // every PD level the source offers comes (a clean run)
+    g_stub.sink.xiaomi_svid = g_stub.mi_svid = c.svid; g_stub.sink.xiaomi_authed = g_stub.mi_authed = c.authed;
+    if (c.authed) {
+        auto& x = g_stub.mi_xm;
+        x.authed = true; x.reannounced = true; x.last_step = c.finish; x.finish = c.finish;
+        x.n_pre = c.n;
+        for (uint8_t i = 0; i < c.n; ++i) x.pre[i] = c.before[i];
+    }
+    g_stub.xm = g_stub.mi_xm;
+}
+static void run_mi_case(Ui& ui, const MiCase& c, uint32_t& t) {
+    mi_case_fixture(c);
+    ui.init(0); ui.set_rotation(0, 0); ui.tick(1000); ui.goto_page(static_cast<uint8_t>(Page::ChargerTest), 1100);
+    settle(ui, 1100);
+    top(ui); move(ui, kPdRow); press(ui, Button::Ok); settle(ui);    // PD only
+    press(ui, Button::Ok); settle(ui);                                // the cable in force
+    start_press(ui, 1300); press(ui, Button::Ok, 1400);
+    for (t = 1500; t <= 900000 && ui.charger_test_busy(); t += 100) ui.tick(t);
+    for (int i = 0; i < 64 && ui.painting(); ++i) ui.tick(t += 100);
+}
+static void test_xiaomi_unit_scenes() {
+    for (const MiCase& c : kMiCases) {
+        Ui ui; uint32_t t = 0;
+        run_mi_case(ui, c, t);
+        CHECK_EQ(ui.charger_test_stage(), 6);
+        // one Xiaomi row on every case: the chain row plus each mode the diff found (bank: PPS 11V 3A->5A; fh22: none; cuk: both
+        // PPS APDOs 5A->6A; nosvid: the chain row alone, skipped)
+        const FamilyPick mi = pick_family(ui, "Xiaomi");
+        CHECK_EQ(mi.line >= 0, true);
+        CHECK_EQ(mi.count, unsigned(c.modes) + 1);
+        unsigned modes = 0, cable_skips = 0, tested = 0;
+        for (const auto& s : ui.charger_test_results().steps()) {
+            if (!ct::is_mi_mode(s)) continue;
+            modes++;
+            cable_skips += s.verdict == ct::Verdict::Skip && s.reason == ct::Reason::CableLimit;
+            tested += s.verdict == ct::Verdict::Pass || s.verdict == ct::Verdict::Fail;
+        }
+        CHECK_EQ(modes, unsigned(c.modes));
+        // a mode over the cable is skipped "cable limit" (cuk on a 5 A cable); on a 6 A cable it is tested (never above the offer)
+        if (c.modes && c.cable_ma > 5000) { CHECK_EQ(cable_skips, 0u); CHECK_EQ(tested, unsigned(c.modes)); }
+        if (c.modes == 2 && c.cable_ma == 5000) CHECK_EQ(cable_skips, 2u);
+        const auto calm = [&] { for (int i = 0; i < 64 && ui.painting(); ++i) ui.tick(t += 100); };
+        for (const uint8_t rot : {0, 1, 2, 3}) {
+            ui.set_rotation(rot, t); calm();
+            top(ui, t); calm();
+            const int line = pick_family(ui, "Xiaomi").line;
+            for (int k = 0; k < line; ++k) { press(ui, Button::Plus); ui.tick(t += 100); calm(); }
+            char name[48]; std::snprintf(name, sizeof name, "mi_%s_rot%u", c.name, unsigned(rot));
+            dump_screen(name);
+            if (rot == 3 && line >= 0) {
+                press(ui, Button::Ok); ui.tick(t += 100); calm();
+                std::snprintf(name, sizeof name, "mi_%s_steps", c.name); dump_screen(name);
+                if (ui.charger_test_stage() == 7) {
+                    if (ui.list_state().count > 1) { press(ui, Button::Plus); ui.tick(t += 100); calm(); }
+                    press(ui, Button::Ok); ui.tick(t += 100); calm();
+                    std::snprintf(name, sizeof name, "mi_%s_detail", c.name); dump_screen(name);
+                    press(ui, Button::Back); ui.tick(t += 100); calm();
+                }
+                press(ui, Button::Back); ui.tick(t += 100); calm();
+            }
+        }
+        ui.set_rotation(0, t);
+    }
+}
+
 int main() {
     test_view_says_what_the_wizard_shows();
     test_view_carries_the_wait_and_the_run();
@@ -5644,5 +5731,6 @@ int main() {
     test_decisions_use_the_unaveraged_vbus();
     test_remote_start_is_the_devices_start();
     test_vooc_family_results_read_watts_levels();
+    test_xiaomi_unit_scenes();
     return test_report("test_ui_charger_test");
 }

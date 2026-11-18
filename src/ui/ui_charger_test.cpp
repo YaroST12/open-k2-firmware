@@ -57,8 +57,8 @@ constexpr uint16_t kNoRow = 0xFFFF;
 uint16_t g_ev_row = kNoRow;
 uint8_t ev8(size_t v) { return static_cast<uint8_t>(std::min<size_t>(v, 255)); }
 // The families, in the default run order (docs/CHARGER_TEST_FLOW.md): OEM vendor modes by company, then USB PD, then the
-// legacy / standard D+/D- protocols. Xiaomi / Redmi (Mi 6A) has no algorithm bit of its own: its probe rows are planned
-// inside the PD unit, so its row follows the PD selection and cannot be toggled alone.
+// legacy / standard D+/D- protocols. Xiaomi / Redmi has no algorithm bit of its own: its rows (the SVID 0x2717 chain row and the
+// modes it unlocks) are planned inside the PD unit, so its row follows the PD selection and cannot be toggled alone.
 constexpr int kFamHuawei = 0, kFamSamsung = 1, kFamOppo = 2, kFamXiaomi = 3, kFamPd = 4, kFamQc = 5;
 constexpr uint32_t kFamilies[] = {
     ct::bit(A::Fcp) | ct::bit(A::Scp),
@@ -76,11 +76,11 @@ static_assert(all_fit(kFamilyNames, kSmallAdvPx, 112), "a family name is wider t
 constexpr int kFamilyCount = 6, kPresets = 4, kCustomRow = 4, kViewRow = 5;
 // Review: the Level row above START (index order = screen order); START is where the stage opens and where the remote lands.
 constexpr int kLevelRow = 0, kStartRow = 1;
-// The presets are subsets of "All tests" (the default set, Class B included): PD = the PD family (its Mi 6A probes ride
+// The presets are subsets of "All tests" (the default set, Class B included): PD = the PD family (its Xiaomi rows ride
 // along), Legacy = every D+/D- family (OEM vendor modes + QC / UFCS), Vendor modes = the OEM D+/D- families only.
 constexpr const char* kPresetNames[kPresets] = {"All tests", "PD only", "Legacy only", "Vendor modes"};
 // The 12 px note under the focused row (x28 .. 218).
-constexpr const char* kPresetNotes[kPresets] = {"Everything, QC Class B 20V too", "PD fixed, PPS, EPR, Mi 6A",
+constexpr const char* kPresetNotes[kPresets] = {"Everything, QC Class B 20V too", "PD fixed, PPS, EPR, Xiaomi",
                                                 "D+/D-: vendor modes, QC, UFCS", "Huawei, Samsung, OPPO, vivo"};
 static_assert(all_fit(kPresetNotes, kLabelAdv, kit::kNoteMaxPx), "a preset note is wider than the row note");
 static_assert(all_fit(kPresetNames, kSmallAdvPx, 150), "a preset name is wider than its row");
@@ -138,7 +138,7 @@ int family(A a) {
     for (int n = 0; n < kFamilyCount; ++n) if (kFamilies[n] & ct::bit(a)) return n;
     return -1;
 }
-// The family a result step belongs to: the Mi 6A probe rows are PD requests but read under Xiaomi / Redmi.
+// The family a result step belongs to: the Xiaomi rows are PD requests but read under Xiaomi / Redmi.
 int family(const ct::Step& s) { return s.hunt ? kFamXiaomi : family(s.algorithm); }
 // The Ra guard reads the lines while the identity can still be picked and START pressed, with the K2 passive.
 bool guard_stage(ChargerTestPage::Stage s) { return s == ChargerTestPage::Stage::Cable || s == ChargerTestPage::Stage::Review; }
@@ -167,23 +167,6 @@ const char* detail_name(const ct::Step& s) {
 // A caution by tracking (a passing sweep whose worst error passes the pass window, result_layout::deviates): the reason words, "off 450mV".
 void put_off(StrBufBase& b, const ctsweep::View& v, const ct::Step& s) {
     b.put("off ").put_u32(result_layout::sweep_worst_mv(v, static_cast<uint8_t>(s.algorithm), s.pos)).put("mV");
-}
-// One line (n = 0..3) of a refused hunt row's evidence, each at most about 32 characters (the detail page's width).
-void put_hunt_line(StrBuf<64>& s, const ct::HuntEvidence& h, int n) {
-    const auto yn = [&](ct::HuntFlag f) { return h.flags & f ? 'Y' : 'n'; };
-    if (n == 0) s.put("Why: ").put(ct::explanation(static_cast<ct::HuntCause>(h.cause)));
-    else if (n == 1) {
-        s.put("Chain svid:").put_char(yn(ct::HfSvid)).put(" open:").put_char(yn(ct::HfOpener)).put(" auth:").put_char(yn(ct::HfAuthed))
-         .put(" re:").put_char(yn(ct::HfReannounced));
-    } else if (n == 2) {
-        s.put("Caps ").put_u32(h.caps).put(" APDO ").put_u32(h.apdo_ma).put("mA cable ").put_u32(h.cable_ma).put("mA");
-    } else {
-        static constexpr const char* kAnswers[] = {"no answer", "Accept", "Reject", "Wait"};
-        if (!(h.flags & ct::HfSent)) { s.put(h.flags & ct::HfHeld ? "Request held, never sent" : "No Request went out"); return; }
-        s.put("Ask #").put_u32(h.pos).put_char(' ').put_fixed(h.req_mv, 2).put("V ").put_u32(h.req_ma).put("mA ")
-         .put(kAnswers[h.answer & 3]);
-        if (h.answer) s.put_char(' ').put_u32(h.answer_ms).put("ms");
-    }
 }
 // pass / fail / skip by verdict; a caution (a Pass that carries Reason::Folded, a voltage fold the sweep found, or a passing sweep
 // whose worst error passes 100 mV, result_layout::deviates) is its own count: neither a pass nor a fail. A Capped step stays a fail
@@ -453,15 +436,6 @@ void ChargerTestSession::log_row_gap(size_t idx, uint32_t now) {
 // flight finished or was withdrawn, the still-offered rows follow the new list, the dropped ones read "withdrawn by source").
 void ChargerTestSession::replan(unsigned follow, unsigned withdrawn, unsigned back) {
     K2LOG("[TEST] re-plan: %u rows follow, %u withdrawn, %u back\n", follow, withdrawn, back);
-}
-// A 6 A hunt row the source refused: one tagged line with the whole evidence, a Black Box mark and a frozen capture (the ring wraps in
-// seconds on a chatty source). Reads and logs only; the row's verdict is written by the Runner right after this returns.
-void ChargerTestSession::hunt_evidence(const ct::Step&, const ct::HuntEvidence& e) {
-    K2LOG("[HUNT] step=%u cause=%s answer=%u after=%ums last=%X flags=%X caps=%u pos=%u apdo=%X rdo=%X limit=%umA cable=%umA authed=%ums\n",
-        unsigned(e.step), ct::name(static_cast<ct::HuntCause>(e.cause)), unsigned(e.answer), unsigned(e.answer_ms), unsigned(e.last_step),
-        unsigned(e.flags), unsigned(e.caps), unsigned(e.pos), unsigned(e.apdo), unsigned(e.rdo), unsigned(e.apdo_ma), unsigned(e.cable_ma),
-        unsigned(e.authed_ms));
-    pdtrace::refusal(uint16_t(e.cause | (e.answer & 15) << 8 | (e.flags & ct::HfTimeout ? 0x1000 : 0)), e.apdo_ma);
 }
 // The PD rows were planned again from a list heard later and the rows behind them moved: the section files that now hold other
 // rows (count or layout) are rewritten, and the header that names them. Only noted here (a hash pass, no flash); journal_pump()
@@ -882,9 +856,10 @@ void ChargerTestSession::capture_identity() {
                             runner_.sweep_view());
     card_.level = runner_.level();             // the card names a Light / Deep run (v8 spare byte)
     report_card::set_auto_name(card_, mfr_);   // "<Brand> <PDP>W"; hw::put keeps a name the user gave
-    // A Deep run's block (spec summary, SVOOC ceiling, sweep graphs) is built now, while the sweep is in RAM, into the share
-    // buffer (no share view is open under a finishing run); it is stored beside the card and the share link carries it.
-    const std::size_t blk = report_card::deep::build(card_, runner_.evidence(), runner_.sweep_view(), ctx_.ui->share_buffer());
+    // The run's block (a Deep run's spec summary, SVOOC ceiling and sweep graphs; the Xiaomi section of any run whose chain row ran) is
+    // built now, while the sweep is in RAM, into the share buffer (no share view is open under a finishing run); it is stored beside
+    // the card and the share link carries it.
+    const std::size_t blk = report_card::deep::build(card_, runner_.steps(), runner_.evidence(), runner_.sweep_view(), ctx_.ui->share_buffer());
     save_card_store(std::span<const uint8_t>(ctx_.ui->share_buffer()).first(blk));
 }
 // save_card's tail, on its own frame: it holds the charger's previous Card (292 B) that save_card used to keep
@@ -1643,7 +1618,10 @@ A ChargerTestSession::algorithm_at(int row) const {
     }
     return A::Count;
 }
-const result_layout::CompactRow* ChargerTestSession::picked() const { return result_family_ == kFamPd ? &result_row_ : nullptr; }
+// A PD row and the Xiaomi row open their own steps under their grid line; any other family opens its whole step list.
+const result_layout::CompactRow* ChargerTestSession::picked() const {
+    return result_family_ == kFamPd || result_family_ == kFamXiaomi ? &result_row_ : nullptr;
+}
 bool ChargerTestSession::shows(const ct::Step& s) const {
     const auto* row = picked();
     return row ? result_layout::row_has(*row, s) : result_family_ < 0 || family(s) == result_family_;
@@ -1800,7 +1778,7 @@ ChargerTestSession::Proposal ChargerTestSession::proposal(ct::Input in) const {
 namespace {
 // ---- copy that is not a preset (every 12 px note fits the kit's 190 px note box; the assert below pins it)
 constexpr const char *kNoteCustom = "Choose families one by one", *kNoteLast = "The run kept from last time",
-                     *kNoteFamily = "Entries inside this family", *kNoteXiaomi = "Mi 6A probes run in PD",
+                     *kNoteFamily = "Entries inside this family", *kNoteXiaomi = "SVID 0x2717 auth, runs in PD",
                      *kNotePdFixed = "Fixed offers: SPR + EPR", *kNotePps = "PPS + SPR/EPR AVS offers",
                      *kNoteClassB = "20 V; Class A shows a skip", *kNoteUfcs = "UART 5/9/12V; needs UFCS source",
                      *kNoteVivo = "UART 5/9/11V, unproven", *kNoteHs = "5V handshake, not power",
@@ -1826,7 +1804,7 @@ const char *group_note(int fam, int row, A a) {
     default: return kNoteEntry;
     }
 }
-// A Custom family row's box: 0 off, 1 part, 2 on. Xiaomi / Redmi follows the PD mask (its probes run in PD).
+// A Custom family row's box: 0 off, 1 part, 2 on. Xiaomi / Redmi follows the PD mask (its rows run in PD).
 uint8_t family_state(uint32_t sel, int f) {
     const uint32_t m = kFamilies[f == kFamXiaomi ? kFamPd : f];
     const uint32_t on = sel & m;
@@ -2282,6 +2260,7 @@ void ChargerTestPage::list_row(int index, bool focused, kit::RowSpec &out) {
         out.marker = kit::Marker::Verdict;
         const auto view = s_.runner_.sweep_view();
         out.state = static_cast<uint8_t>(vmap(s, view));
+        // The step's label; a mode the Xiaomi chain unlocked reads by its watts ("Mi 55W"), its before -> after is the Detail page's.
         row_text_.put(step_label::label(s, si > 0 ? &steps[static_cast<size_t>(si) - 1] : nullptr).view());
         out.text = row_text_.view();
         out.data = true;
@@ -2432,7 +2411,7 @@ int running_token(const result_layout::RowTokens &rt, const result_layout::Compa
     if (runner.index() >= steps.size()) return -1;
     const ct::Verdict v = steps[runner.index()].verdict;
     if (v != ct::Verdict::Running && v != ct::Verdict::Pending) return -1;
-    if (!result_layout::row_has(row, steps[runner.index()])) return -1;   // a 6 A probe has a row of its own
+    if (!result_layout::row_has(row, steps[runner.index()])) return -1;   // a Xiaomi step has a row of its own
     return pending_chip(rt, steps[runner.index()].mv);
 }
 // The grid line the step `index` belongs to, known as soon as the runner moves to it.
@@ -3039,7 +3018,7 @@ static void draw_band(const Surface &c, kit::Verdict v, std::string_view word, b
 }
 
 // One step's detail: a verdict band, then a fixed table (no scroll). A step with a stored capture gives its last two rows to the
-// VBUS trace; a refused 6 A hunt row shows its evidence where the header rows would be.
+// VBUS trace; the Xiaomi chain row shows the chain and the modes it unlocked where the header rows would be.
 void ChargerTestPage::paint_detail() {
     if (laid_) return;
     const auto &steps = s_.runner_.steps();
@@ -3050,7 +3029,7 @@ void ChargerTestPage::paint_detail() {
     const auto &e = s_.runner_.evidence();
     transcap::Meta cap;
     const bool has_cap = transcap::find_stored(s_.runner_.run_id(), static_cast<uint16_t>(s_.detail_index_), cap);
-    const ct::HuntEvidence *hunt = s_.runner_.hunt_evidence_for(static_cast<size_t>(s_.detail_index_));
+    const bool mi_chain = ct::is_mi_chain(s);
 
     StrBuf<32> val;
     if (detail_step_ == 0) {
@@ -3067,14 +3046,18 @@ void ChargerTestPage::paint_detail() {
         detail_step_ = 1;
     }
     while (detail_step_ >= 1 && detail_step_ <= 6) {
-        if (detail_step_ == 3 && hunt) {
+        if (detail_step_ == 3 && mi_chain) {
             if (pbg && !pbg->admit(3600, true)) return;
+            const auto modes = s_.runner_.mi_modes();
             for (int n = 0; n < 4; ++n) {
-                StrBuf<64> line;
-                put_hunt_line(line, *hunt, n);
-                char fitted[kFitBuf];
-                gfx_text(c, kLabelFont, 6, static_cast<int16_t>(116 + n * 18), fit_text(kLabelFont, line.view(), c.w - 12, fitted),
-                         n == 0 ? kCaution : kDim, kBg);
+                StrBuf<40> line;
+                if (n == 0) line.put("Auth ").put(mi_unlock::chain_text(s.detail).view());
+                else if (n == 1 && mi_unlock::chain_done(s.detail)) {
+                    if (modes.empty()) line.put("No new modes");
+                    else line.put_u32(static_cast<uint32_t>(modes.size())).put(modes.size() == 1 ? " mode unlocked" : " modes unlocked");
+                } else if (n >= 2 && static_cast<size_t>(n - 2) < modes.size()) line.put(mi_unlock::mode_text(modes[static_cast<size_t>(n - 2)]).view());
+                if (line.view().empty()) continue;
+                gfx_text(c, kLabelFont, 6, static_cast<int16_t>(116 + n * 18), line.view(), n == 0 ? kText : kDim, kBg);
             }
             detail_step_ = 7;
             laid_ = true;
@@ -3126,7 +3109,12 @@ void ChargerTestPage::paint_detail() {
             break;
         }
         case 5:
-            if (const auto mode = step_label::ufcs_range(s); mode.len) {
+            if (ct::is_mi_mode(s)) {   // the offer before the chain ("not listed": a new PDO; "not kept": a resumed run lost it)
+                key = "Before";
+                const auto* m = s_.runner_.mi_mode(s);
+                if (m && m->before) val.put(mi_unlock::mode_text({0, m->before, m->pos}, false, kDet.value_chars).view());
+                else { val.put(m ? "not listed" : "not kept"); col = kDim; }
+            } else if (const auto mode = step_label::ufcs_range(s); mode.len) {
                 key = "Mode";
                 val.put(mode.view());
             } else {
@@ -3137,6 +3125,12 @@ void ChargerTestPage::paint_detail() {
             sv = val.view();
             break;
         default:
+            if (ct::is_mi_mode(s)) {   // the offer the chain unlocked (the row's own PDO)
+                key = "After";
+                val.put(mi_unlock::mode_text({0, s.pdo, s.pos}, false, kDet.value_chars).view());
+                sv = val.view();
+                break;
+            }
             key = "Scope";
             sv = "Voltage hold";
             break;
@@ -3377,7 +3371,7 @@ __attribute__((noinline)) void ChargerTestPage::ok_event() {
     case Stage::Custom:
         if (s_.selection_ >= kFamilyCount) {   // Done
             set_stage(Stage::Cable, ctx_.cables.index_of(ctx_.cables.selected()));
-        } else if (s_.selection_ != kFamXiaomi) {   // Mi 6A rides the PD unit: nothing to toggle
+        } else if (s_.selection_ != kFamXiaomi) {   // Xiaomi rides the PD unit: nothing to toggle
             const uint32_t mask = kFamilies[s_.selection_];
             s_.options_.selected = (s_.options_.selected & mask) == mask ? s_.options_.selected & ~mask : s_.options_.selected | mask;
             invalidate_confirmation();

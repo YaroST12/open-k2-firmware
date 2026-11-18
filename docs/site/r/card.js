@@ -23,7 +23,8 @@
 // results. Tables and rules mirror tools/report_card.py, tools/k2_qr.py and include/k2/chargertest/report_card.hpp;
 // tests/test_cardpage.mjs checks the three against each other on golden cards (tests/fixtures/qrlink.tsv).
 // A Deep run's format 11 card carries the Deep block after the record (deep.js decodes it): splitLink() gives it as `deep`, parseLink() puts
-// its decoded form on the card (card.deep, or card.deep_error when the block cannot be read) and sections() lists it.
+// its decoded form on the card (card.deep, or card.deep_error when the block cannot be read) and sections() lists it. Format 12 lets a card
+// of any level carry a block whose tail is the Xiaomi section (card.deep.xiaomi, its own "Xiaomi" section).
 // Loaded by the page as a script (window.K2Card, after deep.js) and by Node as a module (module.exports).
 var K2Card = (function () {
   var D = typeof K2Deep !== "undefined" ? K2Deep : require("./deep.js");
@@ -41,7 +42,7 @@ var K2Card = (function () {
   var V10_PAYLOAD = 250;  // format 10 payload
   var UFCS_AT = 178;      // format 6: 4 modes of u24 (lo 100 mV 8 bits, hi 100 mV 9 bits, current in 50 mA 7 bits); hi 0 = unused
   var MAX_UFCS = 4;
-  var FORMAT = 11;        // the newest card format this file reads
+  var FORMAT = 12;        // the newest card format this file reads (12 = the block may carry the Xiaomi section; payload as 11)
   var MAX_RANGES = 4;
   var RECORD_MAGIC = 0xA6;
   var MAX_UNPACKED = 4096;
@@ -59,7 +60,7 @@ var K2Card = (function () {
     "charger stayed in PD", "rebooted during request", "rebooted during handover", "EPR entry refused", "no contract",
     "source shut off (needs replug)", "no PD after re-attach", "VBUS cut, source recovered", "blocked by PD",
     "no QC3+ response", "rebooted 3x", "needs external power", "PD gave up before START", "Class A only (12 V max)",
-    "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target", "withdrawn by source", "wrong voltage on 5V contract", "needs load", "floored above target", "step resolution", "HID-cable loop: 5V lock", "advertised", "light run: not asked", "port cuts without load", "output folds back"];
+    "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target", "withdrawn by source", "wrong voltage on 5V contract", "needs load", "floored above target", "step resolution", "HID-cable loop: 5V lock", "advertised", "light run: not asked", "port cuts without load", "output folds back", "Xiaomi chain"];
   var CAPPED = "capped below target";
   var STATES = ["Setup", "Verify 5V", "Negotiating", "Hold", "Return to 5V", "Complete", "Stopped",
     "UNSAFE: unplug source", "Detach charger", "Initializing..."];
@@ -202,7 +203,7 @@ var K2Card = (function () {
   var CABLE_KIND_V2 = {0: 0, 1: 1, 2: 2, 3: 4, 4: 255};    // the 3-bit cable kind code -> the v1 kind byte
   var SVDM_MASK = 0xFFFF8000 | (3 << 6) | 0x1F;            // the standard SVDM header mask, when a v2 row omits it
 
-  // A schema v2 card record -> the 256-byte version "1" record (format 11), so decodeRecord() reads it as before. A Deep run's
+  // A schema v2 card record -> the 256-byte version "1" record (the current format), so decodeRecord() reads it as before. A Deep run's
   // block (a presence bit after the level byte, then u12 bit count and the bits) comes out as the array's `deep` property: the
   // blob in deep.js form (u16 LE bit count, then the bytes), absent when the record has none.
   function expandCardV2(b) {
@@ -722,15 +723,17 @@ var K2Card = (function () {
     if (rec.length !== 4 + ln + 2) throw CardError("bad-record", "The card is the wrong length; the link may be cut short.");
     var crc = rec[rec.length - 2] | (rec[rec.length - 1] << 8);
     var ok = crc16(rec, rec.length - 2) === crc;
-    if (!ok && ln >= 34 && rec[4 + 33] === FORMAT) {   // a link a format 10 K2 packed carries the CRC of its format 10 record
+    if (!ok && ln >= 34 && rec[4 + 33] === FORMAT) {   // a link an older K2 (format 10 or 11) packed carries the CRC of its own record
       var old = Uint8Array.from(rec.subarray(0, rec.length - 2));
-      old[4 + 33] = FORMAT - 1;
-      ok = crc16(old, old.length) === crc;
+      for (var fmt = 10; fmt < FORMAT && !ok; fmt++) {
+        old[4 + 33] = fmt;
+        ok = crc16(old, old.length) === crc;
+      }
     }
     if (!ok) throw CardError("bad-crc", "The card's check value does not match: the link was changed or cut.");
     var card = decodePayload(rec.subarray(4, 4 + ln));
     if (rec.deep) {   // a Deep run's block rode beside the record (expandCardV2); one this page cannot read leaves the card as the record says
-      try { card.deep = D.decode(rec.deep, card.ranges); } catch (e) { card.deep_error = e.message; }
+      try { card.deep = D.decode(rec.deep, card.ranges, REASONS); } catch (e) { card.deep_error = e.message; }
     }
     return card;
   }
@@ -1143,6 +1146,24 @@ var K2Card = (function () {
     return groups.length ? {title: "Deep run details", groups: groups} : null;
   }
 
+  // The Xiaomi section (format 12, from the extension block): how the 0x2717 chain ended, then each mode it unlocked by its watts with
+  // the PDO before and after the chain and the row's verdict. Absent when the run's chain row never ran.
+  var MI_TONE = {pass: "pass", fail: "fail", skip: "skip"};
+  function xiaomiSection(card) {
+    var x = card.deep && card.deep.xiaomi;
+    if (!x) return null;
+    var auth = x.done ? (x.modes.length ? "done, " + x.modes.length + " new mode" + (x.modes.length > 1 ? "s" : "") : "done, no new modes") : x.chain_text;
+    var groups = [{title: "Xiaomi auth", tone: x.done ? "pass" : x.chain === 1 ? "skip" : "partial", rows: [row("Result", auth), row("Chain", x.chain_text)]}];
+    x.modes.forEach(function (m) {
+      var tone = MI_TONE[m.verdict] || "";
+      var rows = [row("Result", m.verdict === "skip" && m.reason ? m.reason : TONE_WORD[tone] || m.verdict, tone),
+        row("Before", m.before), row("After", m.after), row("Tested at", volts(m.mv) + " " + amps(m.ma))];
+      if (m.reason && m.verdict !== "skip") rows.push(row("Why", m.reason, tone === "pass" ? "" : "partial"));
+      groups.push({title: m.label, tone: tone, rows: rows});
+    });
+    return {title: "Xiaomi", groups: groups};
+  }
+
   function sections(card) {
     var out = [];
     var capped = !!card.groups.PD && card.groups.PD.reason === CAPPED;
@@ -1182,6 +1203,8 @@ var K2Card = (function () {
       });
     }
     if (pd.length) out.push({title: "Power Delivery", groups: pd});
+    var mi = xiaomiSection(card);
+    if (mi) out.push(mi);
 
     var legacy = [];
     GROUPS.slice(1).forEach(function (n) {

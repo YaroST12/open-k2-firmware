@@ -340,16 +340,16 @@ static void test_deep_block_renders() {
     const std::uint8_t cut[4] = {20, 0, 0xFB, 0xFF};
     CHECK_EQ(rc::render_json(c, cut, jb), plain.size());
 
-    // the worst blob (412 B, 550 characters) fits the longest card: kJsonDeepMax
+    // the worst blob (457 B, 610 characters) fits the longest card: kJsonDeepMax
     std::array<std::uint8_t, rc::deep::kMaxBlob> w{};
     w[0] = std::uint8_t(rc::deep::kMaxBits); w[1] = std::uint8_t(rc::deep::kMaxBits >> 8);
     for (std::size_t i = 2; i < w.size(); ++i) w[i] = std::uint8_t(i * 7);
     w.back() &= std::uint8_t((1u << (rc::deep::kMaxBits % 8)) - 1);
     CHECK_EQ(rc::deep::blob_valid(w), true);
     const std::size_t nw = rc::render_json(c, w, jb);
-    CHECK_EQ(nw, plain.size() + 560);                                        // 550 characters, the key and the quotes
+    CHECK_EQ(nw, plain.size() + 620);                                        // 610 characters, the key and the quotes
     CHECK_EQ(jb[nw - 1], '}');
-    CHECK_EQ(rc::kJsonDeepMax, rc::kJsonMax + 560);
+    CHECK_EQ(rc::kJsonDeepMax, rc::kJsonMax + 620);
 }
 
 // SUMMARY.md reads the VOOC family as one line by its family word, never "SVOOC" / "SVOOC65" (the JSON keeps all three groups).

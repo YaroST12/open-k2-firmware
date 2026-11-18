@@ -158,6 +158,7 @@ void unit_detach() {
     if (g_stub.model_units) {
         if (g_stub.pm.vbus_mv > 0) g_stub.unit_vbus_mv = g_stub.pm.vbus_mv;
         g_stub.pm.vbus_mv = 0; g_stub.sink = {};
+        if (g_stub.mi_svid) g_stub.xm = {};
     }
 }
 void unit_attach(bool legacy) {
@@ -166,6 +167,7 @@ void unit_attach(bool legacy) {
     if (g_stub.model_units) {
         g_stub.pm.vbus_mv = g_stub.unit_vbus_mv;
         if (!legacy) { g_stub.sink.state = k2::pd::SinkState::Ready; g_stub.sink.result = k2::pd::SinkResult::Ok; g_stub.sink.mv = 5000; g_stub.sink.pos = 1; }
+        if (!legacy && g_stub.mi_svid) { g_stub.sink.xiaomi_svid = true; g_stub.sink.xiaomi_authed = g_stub.mi_authed; g_stub.xm = g_stub.mi_xm; }
     }
 }
 // A self-powered unit boundary: Rd and VBUS untouched; a Pd hold brings the 5 V contract back at once.

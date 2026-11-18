@@ -48,6 +48,9 @@
 //  v11 changes no payload byte: a Deep card may travel with the Deep block (k2/chargertest/report_card_deep.hpp: the PD spec
 //      summary, the SVOOC ceiling stage and the per-range sweep error graphs). The block lives beside the card, not in it: the store
 //      keeps it in the card's own ring record, the share link appends it to the schema v2 stream. The format byte says so.
+//  v12 changes no payload byte either: the block gains the Xiaomi section (the 0x2717 chain outcome and each mode it unlocked, before and
+//      after), and any card whose run's chain row ran carries a block, a Medium or Light one too. The Xiaomi rows never count in the
+//      card's own rows (the PD group, ranges, spread, EPR levels), and a repeat needs the same Xiaomi section as well (Store::put).
 //
 // A re-run that gives the same results is counted, not stored (same_results, fold_repeat; the store applies them): the card keeps its
 // rows, runs goes up (the charger was tested again), times goes up and last_* name the newest run. Two runs are "the same" when
@@ -84,10 +87,10 @@ inline constexpr unsigned kMaxRanges = 4;
 inline constexpr unsigned kSpreadLevels = 4;   // v9: the setpoint errors kept per APDO (the plan has at most 4 distinct levels)
 inline constexpr int8_t kSpreadNone = -128;     // an empty spread slot
 inline constexpr unsigned kNameMax = 20;
-inline constexpr unsigned kReasonCount = unsigned(ct::Reason::Folded) + 1;   // 52 values fit the card's 6-bit reason field
+inline constexpr unsigned kReasonCount = unsigned(ct::Reason::MiChain) + 1;   // 53 values fit the card's 6-bit reason field
 static_assert(kReasonCount <= 64, "the card stores a reason in 6 bits");
 inline constexpr uint8_t kMagic = 0xA6, kTypeCard = 1, kTypeDelete = 2;
-inline constexpr uint8_t kFormat = 11;  // payload byte 33: v4 adds per-EPR-level verdicts, v5 the cable block (Card carries it), v6 the UFCS modes, v7 the repeat counter, v8 the source's mid-run re-balance count, v9 the per-level setpoint-error spread, v10 the deep-sweep summary per range, v11 the Deep block beside a Deep card (no payload change)
+inline constexpr uint8_t kFormat = 12;  // payload byte 33: v4 adds per-EPR-level verdicts, v5 the cable block (Card carries it), v6 the UFCS modes, v7 the repeat counter, v8 the source's mid-run re-balance count, v9 the per-level setpoint-error spread, v10 the deep-sweep summary per range, v11 the Deep block beside a Deep card (no payload change), v12 the Xiaomi section in that block (any level; no payload change)
 inline constexpr unsigned kMaxUfcs = 4;
 
 // Card verdict of one protocol group: None = the group was not part of the run.
