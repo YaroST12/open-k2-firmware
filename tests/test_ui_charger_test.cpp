@@ -2163,18 +2163,20 @@ static void caution_scene(const char* label, ct::Algorithm algo, ct::Reason reas
     press(ui, Button::Back); ui.tick(t += 100); calm();
     CHECK_EQ(ui.charger_test_stage(), 6);
     top(ui, t); calm();
+    char scene[40];
     const auto fam = pick_family(ui, label);
     CHECK_EQ(fam.line >= 0, true);
     if (fam.line < 0) return;
     CHECK_EQ(fam.tally.caution >= 1, true);
     CHECK_EQ(fam.first_caution >= 0, true);
     for (int k = 0; k < fam.line; ++k) { press(ui, Button::Plus); ui.tick(t += 100); calm(); }
+    std::snprintf(scene, sizeof scene, "%s_results", tag);
+    all_rotations(scene);   // the amber range chip on the Results grid, its line focused
     press(ui, Button::Ok); ui.tick(t += 100); calm();
     CHECK_EQ(ui.charger_test_stage(), 7);
     top(ui, t); calm();
     CHECK_EQ(footer_shows(result_layout::family_footer("PD", fam.tally).view(), kCaution), true);
     for (int k = 0; k < fam.first_caution; ++k) { press(ui, Button::Plus); ui.tick(t += 100); calm(); }   // the focused row opens its note
-    char scene[40];
     std::snprintf(scene, sizeof scene, "%s_steps", tag);
     all_rotations(scene);
     press(ui, Button::Ok); ui.tick(t += 100); calm();
