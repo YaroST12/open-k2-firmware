@@ -505,6 +505,17 @@ def decode_ping(p):
             "git": _cstr(p[5:29]), "version": _cstr(p[29:])}
 
 
+def decode_ping_hw(p):
+    _need(p, 4, "hardware info")
+    accel_id, monitor_chip, minor_raw, flags = p[:4]
+    accelerometer = {0: "none", 0x11: "SC7A20", 0x33: "LIS2DH12"}.get(accel_id, f"0x{accel_id:02X}")
+    monitor = CHIPS.get(monitor_chip, f"0x{monitor_chip:02X}")
+    digit = {1: "8", 2: "6", 3: "7"}.get(monitor_chip, "?")
+    minor = f"{minor_raw:02d}" if flags & 1 else "--"
+    return {"hw": ("Q" if accel_id == 0x11 else "N") + digit + "." + minor,
+            "accel": accelerometer, "monitor": monitor, "minor": minor}
+
+
 def direction_of(current_ma):
     """The firmware zeroes |I| < 10 mA, so the sign is the whole answer. Positive current = power flowing bottom port -> top port ("up")."""
     return "up" if current_ma > 0 else "down" if current_ma < 0 else "idle"
@@ -1452,7 +1463,13 @@ def decode_emarker(p0, p1=b"", p2=None):
 # --- commands -------------------------------------------------------------------------------
 
 def cmd_ping(link, a):
-    return decode_ping(link.call(CMD_PING).payload)
+    info = decode_ping(link.call(CMD_PING).payload)
+    try:
+        info.update(decode_ping_hw(link.call(CMD_PING, bytes([1])).payload))
+    except RemoteError as e:
+        if e.status not in (STATUS_BAD_ARG, STATUS_BAD_LENGTH):
+            raise
+    return info
 
 def decode_charger_test(p):
     if len(p) < 15:
@@ -5288,8 +5305,11 @@ def _render(name, r):
             lines.append(f"  revision 0x{p['revision']:08X}")
         return "\n".join(lines)
     if name == "ping":
-        return (f"K2 firmware {r['version']} git {r['git']} proto {r['proto']} "
+        return (f"K2 firmware {r['version']}" + (f" HW {r['hw']}" if "hw" in r else "") +
+                f" git {r['git']} proto {r['proto']} "
                 f"uptime {r['uptime_ms'] / 1000:.1f} s")
+    if name == "info":
+        return render("ping", r)
     if name == "state":
         return "\n".join(f"{k}: {v}" for k, v in r.items())
     if name == "pdos":
@@ -5466,7 +5486,7 @@ def _render(name, r):
     return "ok " + " ".join(f"{k}={v}" for k, v in r.items())
 
 
-COMMANDS = {"ping": cmd_ping, "press": cmd_press, "state": cmd_state, "pdos": cmd_pdos,
+COMMANDS = {"ping": cmd_ping, "info": cmd_ping, "press": cmd_press, "state": cmd_state, "pdos": cmd_pdos,
             "emarker": cmd_emarker, "identity": cmd_identity, "match": cmd_match, "usblink": cmd_usblink, "memory": cmd_memory,
             "sink": cmd_sink, "action": cmd_action, "page": cmd_page,
             "reboot": cmd_reboot, "dfu": cmd_dfu, "factory-wipe": cmd_factory_wipe, "flash-dump": cmd_flash_dump, "bootinfo": cmd_bootinfo, "fault": cmd_fault, "log": cmd_log, "watch": cmd_watch,
@@ -5496,7 +5516,8 @@ def build_parser():
     p.add_argument("--path", help="hidraw path (default: auto-detect)")
     p.add_argument("--timeout", type=float, default=1.0, help="response timeout in seconds")
     sub = p.add_subparsers(dest="command", required=True)
-    sub.add_parser("ping", help="firmware version, git hash, uptime")
+    sub.add_parser("ping", help="firmware version, hardware revision, git hash, uptime")
+    sub.add_parser("info", help="firmware and hardware information")
     sp = sub.add_parser("press", help="inject a button press (a logical key: plus = next/down, minus = previous/up, whatever the rotation)")
     sp.add_argument("button", choices=sorted(BUTTONS))
     g = sp.add_mutually_exclusive_group()

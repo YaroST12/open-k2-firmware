@@ -5,6 +5,7 @@
 #include <cstring>
 #include <string_view>
 #include "k2/battery/battery_hw.hpp"
+#include "k2/core/hw_revision.hpp"
 #include "k2/core/version.hpp"
 #include "k2/drivers/fusb302.hpp"
 #include "k2/drivers/lcd.hpp"
@@ -94,6 +95,7 @@ bench::Facts ToolsPage::facts() const {
     for (std::size_t i = 0; i < pdtrace::kCapSlots; i++)
         f.captures = static_cast<uint8_t>(f.captures + (pdtrace::capture_info(i).trigger != pdtrace::Trigger::None));
     f.version = kFwVersion;
+    f.hw_revision = hw_revision::text().data();
     f.hid = usbcfg::current.hid;
     f.webusb = usbcfg::current.webusb;
     const battery::Recorder &rec = battery::hw::service().rec();

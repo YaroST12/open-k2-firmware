@@ -22,11 +22,13 @@ int16_t mg(uint8_t lo, uint8_t hi) {
 bool Driver::init(uint32_t now_ms) {
     last_ms_ = now_ms;
     online_ = false;
+    identity_ = 0;
     sample_.reset();
     uint8_t identity = 0, ctrl1 = 0, ctrl4 = 0;
     // Never configure a responding but unrelated part on the shared power-monitor bus.
     if (!i2c::read_reg(kBus, kAddress, kWhoAmI, identity) ||
         (identity != kLis2dh12Identity && identity != kSc7a20Identity)) return false;
+    identity_ = identity;
     // CTRL1 0x27 (10 Hz, all axes), CTRL4 0x10 (+-4 g); BDU holds all six output bytes coherent.
     if (!i2c::write_reg(kBus, kAddress, kCtrl4, kBduRange) ||
         !i2c::write_reg(kBus, kAddress, kCtrl1, kRateAxes) ||

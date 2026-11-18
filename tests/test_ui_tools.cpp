@@ -217,6 +217,7 @@ static void test_bench_rows() {
     using namespace bench;
     Facts f;
     f.version = "1.0.1-6-e67edd0e-dirty";
+    f.hw_revision = "Q6.03";
     CHECK_EQ(brow(Place::Meter, f) == "No VBUS", true);
     CHECK_EQ(row(Place::Meter, f).known, false);
     CHECK_EQ(brow(Place::Charger, f) == "None on either port", true);
@@ -228,7 +229,7 @@ static void test_bench_rows() {
     f.captures = 3;
     CHECK_EQ(brow(Place::Log, f) == "No session, 3 captures", true);
     f.captures = 0;
-    CHECK_EQ(brow(Place::K2, f) == "1.0.1-6, HID off", true);
+    CHECK_EQ(brow(Place::K2, f) == "HW Q6.03  1.0.1-6", true);
     StrBuf<28> fl;
     fact(f, fl);
     CHECK_EQ(std::string(fl.view()) == "Nothing attached", true);
@@ -245,9 +246,9 @@ static void test_bench_rows() {
     CHECK_EQ(brow(Place::Cable, f) == "5A 20V, 100W", true);
     CHECK_EQ(brow(Place::Device, f) == "Asks 20V 3A, gets 37W", true);
     CHECK_EQ(brow(Place::Log, f) == "Healthy, 1 capture", true);
-    CHECK_EQ(brow(Place::K2, f) == "1.0.1-6, HID on", true);
+    CHECK_EQ(brow(Place::K2, f) == "HW Q6.03  1.0.1-6", true);
     f.hid = false; f.webusb = true;
-    CHECK_EQ(brow(Place::K2, f) == "1.0.1-6, WebUSB on", true);
+    CHECK_EQ(brow(Place::K2, f) == "HW Q6.03  1.0.1-6", true);
     f.hid = true; f.webusb = false;
     f.ctr_mv = 9000; f.ctr_ma = 2220;
     CHECK_EQ(brow(Place::Device, f) == "Asks 9V 2.22A, gets 37W", true);

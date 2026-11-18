@@ -126,6 +126,7 @@ For QC, AFC, FCP, SCP and VOOC chargers use **Fast charge** in the same place (t
 ### Check the system
 
 1. Open the **K2** place on the Bench, then **System state** (Diag): the link, PD chip, power meter, uptime and model.
+   The K2 identity line and the Bench row show the detected hardware revision (for example `HW Q6.03`) beside the firmware version.
 2. Long OK shares the log as a QR code. The **Log** place holds the PD diagnosis and the Black Box.
 
 ## Safety in one place
@@ -641,7 +642,7 @@ With HID on, from a computer:
 
 | Tool | What |
 | :--- | :--- |
-| `python3 tools/k2_remote.py ping` | firmware version, git hash, uptime |
+| `python3 tools/k2_remote.py ping` / `info` | firmware version, hardware revision and parts, git hash, uptime |
 | `... state`, `... pdos`, `... emarker list`, `... cards list` | read data |
 | `... press ok`, `... press --long plus` | press buttons |
 | `... page home`, `... page tools` | switch page (`home detail chargertest lines tools settings graphs`, or 0..6; `detail` is the Numbers face and `tools` the Bench; submenu names such as `diag` or `connection` open that page) |

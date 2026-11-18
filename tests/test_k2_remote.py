@@ -166,9 +166,19 @@ class Decoders(unittest.TestCase):
         r = kr.decode_ping(payload)
         self.assertEqual((r["version"], r["git"]), ("1.0", "26b245ac"))
 
+    def test_ping_hardware_parts(self):
+        self.assertEqual(kr.decode_ping_hw(bytes([0x11, 2, 3, 1])),
+                         {"hw": "Q6.03", "accel": "SC7A20", "monitor": "INA226", "minor": "03"})
+        self.assertEqual(kr.decode_ping_hw(bytes([0x33, 3, 0xFF, 0]))["hw"], "N7.--")
+
     def test_ping_text_shows_the_full_version(self):
         r = {"proto": 1, "uptime_ms": 2000, "git": "v1.0-435-g26b245ac", "version": "1.0.0-435-26b245ac"}
         self.assertEqual(kr.render("ping", r), "K2 firmware 1.0.0-435-26b245ac git v1.0-435-g26b245ac proto 1 uptime 2.0 s")
+
+    def test_ping_text_shows_hardware_revision(self):
+        r = {"proto": 1, "uptime_ms": 0, "git": "abc", "version": "1.0", "hw": "Q6.03",
+             "accel": "SC7A20", "monitor": "INA226", "minor": "03"}
+        self.assertEqual(kr.render("info", r), "K2 firmware 1.0 HW Q6.03 git abc proto 1 uptime 0.0 s")
 
     def test_ping_keeps_a_dirty_hash(self):
         payload = bytes([1, 0, 0, 0, 0]) + b"cef22c4-dirty".ljust(24, b"\x00") + b"1.0"

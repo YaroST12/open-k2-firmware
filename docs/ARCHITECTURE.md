@@ -180,6 +180,13 @@ Read-only access to the pre-existing device storage: `tools/k2_flasher.py backup
 command FLASH_DUMP 0x34 (`tools/k2_remote.py flash-dump DIR`, 48 bytes per request); first-contact
 procedure in `README.md`, section "Recovery".
 
+**Hardware revision.** `k2::hw_revision` builds the unit label from read-only hardware facts: the gravity sensor's
+WHO_AM_I result at I2C address 0x18 selects `Q` for 0x11 and `N` otherwise; the detected power monitor selects `6`
+(INA226), `7` (INA237), `8` (INA228), or `?`; and the read-only info page at 0x08003000 supplies a zero-padded minor
+after substitution through the 256-byte table at 0x08000C00. The serial field is used only to validate and select the
+minor: it is never stored, displayed, logged or returned by the remote. The capture happens once after boot-time
+sensor detection. The pure decoder takes synthetic table/page spans so host tests need no unit data.
+
 ### 2.4 RAM map
 
 RAM is 96 KB at 0x20000000 (`link.ld`); never touch SRAM above it. Layout, low to high:

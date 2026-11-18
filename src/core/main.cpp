@@ -36,6 +36,7 @@
 #include "k2/core/bootinfo_hw.hpp"
 #include "k2/core/bootmode.hpp"
 #include "k2/core/handback.hpp"
+#include "k2/core/hw_revision.hpp"
 #include "k2/core/boot_pd.hpp"
 #include "k2/core/rd_comeback.hpp"
 #include "k2/core/rescan.hpp"
@@ -209,8 +210,10 @@ k2::mainloop::Context g_loop{g_ui, g_remote, g_bootscreen, g_accelerometer, rebo
         g_loop.boot_key_swallow = true;
         g_loop.boot_key = keys_mode == k2::bootmode::Mode::OkRdCc1 ? Button::Ok : Button::Plus;
     }
+    const bool accel_online = g_accelerometer.init(k2::systick::millis());
+    k2::hw_revision::init(g_accelerometer.identity(), k2::power::chip());
     K2LOG("[ACCEL] compatible gravity sensor %s at INA bus 0x18\n",
-                    g_accelerometer.init(k2::systick::millis()) ? "online" : "unavailable");
+                    accel_online ? "online" : "unavailable");
 
     k2::mainloop::install_hooks();   // the delay_ms() wait hook and the LCD idle hook (PD served during long draws)
     // USB connects LAST. TinyUSB answers control requests only from tud_task(), so the D+ pull-up

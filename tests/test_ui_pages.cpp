@@ -1167,11 +1167,8 @@ static void test_trigger_scan() {
 
 static void test_diag_model_row() {
     StrBuf<24> s;
-    model_row_text(power::Chip::Ina226, s);
-    CHECK_STR(s.c_str(), "N6.55");
-    StrBuf<24> t;
-    model_row_text(power::Chip::None, t);
-    CHECK_STR(t.c_str(), "--");
+    model_row_text(s);
+    CHECK_STR(s.c_str(), "HW Q6.03");
 }
 
 static void test_inline_gates_emarker_scan() {

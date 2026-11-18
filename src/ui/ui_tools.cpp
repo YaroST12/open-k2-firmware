@@ -201,7 +201,8 @@ Row row(Place p, const Facts &f) {
         break;
     case Place::K2:
         r.known = true;
-        s.put(short_version(f.version)).put(f.hid ? ", HID on" : f.webusb ? ", WebUSB on" : ", HID off");
+        s.put("HW ").put(f.hw_revision ? f.hw_revision : "N?.--")
+           .put("  ").put(short_version(f.version));
         break;
     }
     return r;

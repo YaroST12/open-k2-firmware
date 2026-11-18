@@ -78,6 +78,15 @@ size_t encode_ping(std::span<uint8_t> out, const PingInfo &p) {
     return w.size();
 }
 
+size_t encode_ping_hw(std::span<uint8_t> out, const PingInfo &p) {
+    Writer w(out);
+    w.u8(p.accelerometer_id);
+    w.u8(p.monitor_chip);
+    w.u8(p.minor);
+    w.u8(p.minor_valid ? 1 : 0);
+    return w.size();
+}
+
 namespace {
 bool legacy_step(const charger_test::Step& s) {
     return s.group <= charger_test::Group::SuperVooc65 && s.algorithm < charger_test::Algorithm::Pd30Revision;

@@ -21,7 +21,7 @@ struct Fake {
     PdoSnapshot snap{};
     EmarkerSnapshot em{};
 
-    PingInfo ping() { calls++; return {0x01020304, "abc1234", "1.0"}; }
+    PingInfo ping() { calls++; return {0x01020304, "abc1234", "1.0", 0x11, 2, true, 3}; }
     ChargerTestSnapshot test_results{};
     ChargerTestSnapshot charger_test_results() { calls++; return test_results; }
     ChargerTestView view{};

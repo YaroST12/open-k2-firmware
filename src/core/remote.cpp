@@ -35,6 +35,7 @@
 #include "k2/core/bootinfo_hw.hpp"
 #include "k2/core/boottrace_store.hpp"
 #include "k2/core/handback.hpp"
+#include "k2/core/hw_revision.hpp"
 #include "k2/fastcharge/fctrig.hpp"
 #include "k2/fastcharge/svooc_trig.hpp"
 #include "k2/drivers/fusb302.hpp"
@@ -159,7 +160,9 @@ bool Remote::button_down(Button b, uint32_t now_ms) {
 }
 
 remote::PingInfo Remote::ping() {
-    return {systick::millis(), sv(kGitHash), sv(kFwVersion)};
+    const hw_revision::Info hw = hw_revision::current();
+    return {systick::millis(), sv(kGitHash), sv(kFwVersion), hw.accelerometer_id,
+            static_cast<std::uint8_t>(hw.monitor), hw.minor_valid, hw.minor};
 }
 
 remote::Status Remote::press(uint8_t button, uint16_t ms) {

@@ -38,10 +38,16 @@
 #include "k2/loopprobe/loop_probe_hw.hpp"
 #include "k2/battery/battery_hw.hpp"
 #include "k2/core/memstat.hpp"
+#include "k2/core/hw_revision.hpp"
 
 StubState g_stub;
 
 namespace k2 {
+
+namespace hw_revision {
+Info current() { return {0x11, power::Chip::Ina226, true, 3}; }
+std::string_view text() { return "Q6.03"; }
+}  // namespace hw_revision
 
 extern const char kGitHash[] = "v1-test-3-gabc1234";
 
