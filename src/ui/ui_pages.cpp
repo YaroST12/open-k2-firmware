@@ -2169,20 +2169,24 @@ void SettingsPage::draw_static() {
     }
 }
 
-// The K2's identity: the firmware version in font 16, then the hardware revision and USB mode in font 12
-// (the mode is usbcfg::describe of this boot's setting),
+// The K2's identity: the version in font 16, then "up 1h05m  USB HID+WebUSB" in font 12 (minutes, so it repaints once a
+// minute; the mode is usbcfg::describe of this boot's setting),
 // and the dashed line the place pages close their identity with. y22..65, each pixel once.
 void SettingsPage::paint_identity() {
+    const uint32_t up_min = ctx_.now / 60000u;
     const usbcfg::Setting usb = usbcfg::current;
     const uint32_t usb_mode = usb.hid + 2u * usb.drive + 4u * usb.net + 8u * usb.webusb;
-    const hw_revision::Info hw = hw_revision::current();
-    const std::uint32_t hw_sig = hw.accelerometer_id | static_cast<std::uint32_t>(hw.monitor) << 8 |
-                                 static_cast<std::uint32_t>(hw.minor_valid ? hw.minor : 0xFFu) << 16;
-    id_.paint_budgeted(mix_u32(mix_u32(mix_init(), usb_mode), hw_sig), ctx_.budget,
+    id_.paint_budgeted(mix_u32(mix_u32(mix_init(), up_min), usb_mode), ctx_.budget,
                         static_cast<int>(ctx_.content.w) * (kListY - kit::kBelowBar), [&] {
         const Surface &c = ctx_.content;
         StrBuf<32> line;
-        line.put("HW ").put(hw_revision::text()).put("  USB ").put(usbcfg::describe(usb));
+        line.put("up ");
+        if (up_min >= 60) {
+            line.put_u32(up_min / 60).put_char('h');
+            if (up_min % 60 < 10) line.put_char('0');
+        }
+        line.put_u32(up_min % 60).put_char('m');
+        line.put("  USB ").put(usbcfg::describe(usb));   // this boot's mode, the words the USB Link note uses
         const kit::TextRun runs[2] = {{8, kIdHeadY, &kSmall, std::string_view(kFwVersion), kText},
                                       {8, kIdLineY, &kLabelFont, line.view(), kDim}};
         kit::paint_texts(c, {0, kit::kBelowBar, c.w, static_cast<int16_t>(kIdDashY - kit::kBelowBar)}, runs, 2, kBg);
