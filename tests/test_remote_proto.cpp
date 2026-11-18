@@ -2605,6 +2605,87 @@ static void test_active_pd_commands() {
     CHECK_EQ(f.ar_calls, 0);
 }
 
+// OPPO_PROBE (0x4D), lab-only, chunked like APPLE_READ: [1, flags, steps, 4 x u32] starts -> part 0, [0, part] reads back,
+// [2] stops; [3, flags, mv, ma] asks an advertised point -> [err, why, pos, mv, ma] and arms the lease above 5 V.
+static void test_oppo_probe_wire() {
+    Fake f;
+    Frame r;
+    f.op_res.out = {k2::pd::oppo::Outcome::Accept, k2::pd::oppo::Outcome::Ack, k2::pd::oppo::Outcome::Reply, k2::pd::oppo::Outcome::Reply,
+                    k2::pd::oppo::Outcome::Accept, k2::pd::oppo::Outcome::Reply};
+    f.op_res.end = k2::pd::oppo::End::Done;
+    f.op_res.steps = 0x0F;
+    f.op_res.diff = 0x04;
+    f.op_res.swap_waits = 1;
+    const uint32_t power[2] = {0x22D90001, 0x0BB8003C};
+    f.op_res.vdm[1] = k2::pd::oppo::words_of(power);
+    f.op_running = true;
+    run(f, request(0x4D, 1, {1, 1, 0x0F, 1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 0x78, 0x56, 0x34, 0x12}), r);
+    check_header(r, 0x4D, 1, Status::Ok, 14);
+    check_bytes(r, kRspHeader, {0, 1, 1, 0x0F, 0, 0, 1, 0x04, 5, 1, 4, 4, 5, 4});
+    CHECK_EQ(f.op_op, 1);
+    CHECK(f.op_cfg.skip_swap);
+    CHECK_EQ(f.op_cfg.steps, 0x0F);
+    CHECK_EQ(f.op_cfg.challenge[0], 1u);
+    CHECK_EQ(f.op_cfg.challenge[3], 0x12345678u);
+    run(f, request(0x4D, 2, {0, 2}), r);                     // part 2 = the POWER answer
+    check_header(r, 0x4D, 2, Status::Ok, 2 + 8);
+    check_bytes(r, kRspHeader, {2, 2, 0x01, 0x00, 0xD9, 0x22, 0x3C, 0x00, 0xB8, 0x0B});
+    CHECK_EQ(f.op_op, 0);
+    run(f, request(0x4D, 3, {0, 5}), r);                     // part 5 = the caps after (none came)
+    check_header(r, 0x4D, 3, Status::Ok, 2);
+    run(f, request(0x4D, 4, {2}), r);
+    check_header(r, 0x4D, 4, Status::Ok, 14);
+    CHECK_EQ(f.op_op, 2);
+    f.op_status = Status::BadArg; f.op_refusal = 5;          // refused (not at 5 V): the reason is the one-byte payload
+    run(f, request(0x4D, 5, {1, 0, 0x0F, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}), r);
+    check_header(r, 0x4D, 5, Status::BadArg, 1);
+    check_bytes(r, kRspHeader, {5});
+    f.op_status = Status::Ok; f.op_refusal = 0;
+    f.op_calls = 0;
+    run(f, request(0x4D, 6, {4}), r);                        // unknown op
+    check_header(r, 0x4D, 6, Status::BadArg, 0);
+    run(f, request(0x4D, 7, {}), r);
+    check_header(r, 0x4D, 7, Status::BadLength, 0);
+    run(f, request(0x4D, 8, {0}), r);                        // status needs its part
+    check_header(r, 0x4D, 8, Status::BadLength, 0);
+    run(f, request(0x4D, 9, {0, 6}), r);                     // six parts
+    check_header(r, 0x4D, 9, Status::BadArg, 0);
+    run(f, request(0x4D, 10, {1, 0, 0x0F}), r);              // start needs the challenge
+    check_header(r, 0x4D, 10, Status::BadLength, 0);
+    run(f, request(0x4D, 11, {1, 2, 0x0F, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}), r);   // unknown flag
+    check_header(r, 0x4D, 11, Status::BadArg, 0);
+    run(f, request(0x4D, 12, {1, 0, 0x10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}), r);   // unknown step
+    check_header(r, 0x4D, 12, Status::BadArg, 0);
+    run(f, request(0x4D, 13, {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}), r);      // no step at all
+    check_header(r, 0x4D, 13, Status::BadArg, 0);
+    run(f, request(0x4D, 14, {2, 0}), r);
+    check_header(r, 0x4D, 14, Status::BadLength, 0);
+    CHECK_EQ(f.op_calls, 0);                                 // the backend is never reached by a bad request
+
+    // oppo-power: 9 V 3 A on PDO 2, confirmed -> the lease arms; 5 V does not; a refusal arms nothing
+    const int arms = f.lease_arms;
+    f.opw_result = {Status::Ok, 0, 0, 2, 9000, 3000};
+    run(f, request(0x4D, 20, {3, 1, 0x28, 0x23, 0xB8, 0x0B}), r);
+    check_header(r, 0x4D, 20, Status::Ok, 7);
+    check_bytes(r, kRspHeader, {0, 0, 2, 0x28, 0x23, 0xB8, 0x0B});
+    CHECK_EQ(f.opw_mv, 9000);
+    CHECK_EQ(f.opw_ma, 3000);
+    CHECK(f.opw_confirm);
+    CHECK_EQ(f.lease_arms, arms + 1);
+    f.opw_result = {Status::Ok, 0, 0, 1, 5000, 3000};
+    run(f, request(0x4D, 21, {3, 0, 0x88, 0x13, 0, 0}), r);
+    CHECK_EQ(f.lease_arms, arms + 1);
+    f.opw_result = {Status::BadArg, 0, 7, 0, 0, 0};          // nothing advertised serves the point
+    run(f, request(0x4D, 22, {3, 1, 0x10, 0x27, 0, 0}), r);
+    check_header(r, 0x4D, 22, Status::BadArg, 7);
+    check_bytes(r, kRspHeader, {0, 7, 0});
+    CHECK_EQ(f.lease_arms, arms + 1);
+    run(f, request(0x4D, 23, {3, 2, 0x88, 0x13, 0, 0}), r);  // unknown flag
+    check_header(r, 0x4D, 23, Status::BadArg, 0);
+    run(f, request(0x4D, 24, {3, 1, 0x88, 0x13}), r);
+    check_header(r, 0x4D, 24, Status::BadLength, 0);
+}
+
 static void test_store() {
     Fake f; Frame r;
     // list, save-emarker, save-log: bare op byte
@@ -3565,5 +3646,6 @@ int main() {
     test_debug_fault();
     test_build_response_pads_and_cuts();
     test_mi_cable_auth();
+    test_oppo_probe_wire();
     return test_report("test_remote_proto");
 }

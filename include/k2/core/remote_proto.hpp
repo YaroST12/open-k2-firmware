@@ -547,6 +547,7 @@
 #include "k2/chargertest/ct_cable.hpp"
 #include "k2/pd/emk_learn.hpp"
 #include "k2/pd/emk_quirk.hpp"
+#include "k2/pd/oppo_probe.hpp"
 #include "k2/core/stage_meter.hpp"
 #include "k2/fastcharge/edge_guard.hpp"
 #include "k2/fastcharge/svooc_run.hpp"
@@ -606,6 +607,7 @@ enum class Cmd : uint8_t {
     PdHandback = 0x49,      // optional [flags]: bit0 confirm (kPdFlagConfirm) -> [HandbackVerdict]; phase-1 lab hand-back (see k2/core/handback.hpp)
     AppleRead = 0x4A,       // lab-only Apple charger readout (SVID 0x05AC, k2/pd/apple_readout.hpp): [op] 0 status, 1 arm + re-request the current contract -> AppleReadInfo; a refusal carries its pd::AppleRefusal as the one-byte payload
     Stop = 0x4B,            // no payload, no confirm (the safe direction): cancel a charger test, stop FC with the measured 5 V release, release PD, disarm a spoof -> [active mask (k2/core/stop.hpp), vbus_mv i32 LE, fc_release_busy]
+    OppoProbe = 0x4D,       // lab-only OPPO / OnePlus probe (SVID 0x22D9, k2/pd/oppo_probe.hpp): [0, part] status, [1, flags, steps, 4 x u32 challenge] start, [2] stop -> encode_oppo part; [3, flags, mv u16, ma u16] request an advertised point -> [err, why, pos, mv u16, ma u16]; a refusal carries its pd::oppo::Refusal
     Lease = 0x4C,           // [0] status, or [1, seconds u16 LE] set the length (0 = default 30 s, max 600) -> [armed, left_s u16 LE, length_s u16 LE, ended] (k2/core/lease.hpp)
     DebugFault = 0x31,  // debug: provoke a CPU fault, needs kFaultMagic + kind
     Fc = 0x32,          // active fast-charge trigger, see the layout above
@@ -660,7 +662,7 @@ inline constexpr Cmd kCmdIds[] = {
     Cmd::Ripple, Cmd::DfuEnter, Cmd::FactoryWipe, Cmd::FlashDump, Cmd::DebugFault, Cmd::Fc, Cmd::DebugLink, Cmd::DebugPdMsg, Cmd::DebugCcMatrix, Cmd::DebugVconn,
     Cmd::DebugEprInfo, Cmd::DebugLcd, Cmd::DebugCcProbe,
     Cmd::GetIdentity, Cmd::IdentifyDevice, Cmd::PdRequest, Cmd::PdReset, Cmd::PdTriggerStatus, Cmd::PdRelease, Cmd::PdMatch, Cmd::UsbLink, Cmd::PdReread,
-    Cmd::PdAttach, Cmd::PdHandback, Cmd::AppleRead, Cmd::Stop, Cmd::Lease,
+    Cmd::PdAttach, Cmd::PdHandback, Cmd::AppleRead, Cmd::Stop, Cmd::Lease, Cmd::OppoProbe,
     Cmd::CableR, Cmd::Lab, Cmd::Ufcs, Cmd::QRTest, Cmd::Store, Cmd::EmLib, Cmd::Cards, Cmd::Twin, Cmd::BlackBox, Cmd::TransCap, Cmd::ChargerTest,
     Cmd::ChargerUnits, Cmd::ChargerCable, Cmd::ChargerHunt, Cmd::ChargerSweep, Cmd::ChargerAvsSweep, Cmd::BootInfo, Cmd::Memory,
     Cmd::PdStress, Cmd::EmarkerProbe, Cmd::LoopProbe, Cmd::Diagnose, Cmd::TraceHid, Cmd::Battery, Cmd::ChargerSvoocCap,
@@ -1372,6 +1374,14 @@ struct AppleReadInfo {
 };
 struct AppleReadResult { Status status = Status::Ok; uint8_t refusal = 0; AppleReadInfo info{}; };   // refusal: pd::AppleRefusal as the one-byte payload
 
+// Lab-only OPPO / OnePlus probe (Cmd::OppoProbe). The result is the sink's own record (never copied: `r` points at it).
+constexpr uint8_t kOppoStatus = 0, kOppoStart = 1, kOppoStop = 2, kOppoPower = 3;
+constexpr uint8_t kOppoFlagSkipSwap = 1;   // start flags
+constexpr uint8_t kOppoParts = 6;          // part 0 the header, 1..3 the Auth / Power / Exapdo answers, 4 caps before, 5 caps after
+struct OppoView { Status status = Status::Ok; uint8_t refusal = 0; bool running = false; const pd::oppo::Result* r = nullptr; };
+// `pd oppo-power`: err = pd::Err of the trigger, why = pd::oppo::Refusal, pos / mv / ma = the advertised point asked for.
+struct OppoPowerResult { Status status = Status::Ok; uint8_t err = 0, why = 0, pos = 0; uint16_t mv = 0, ma = 0; };
+
 // STOP reply: what was active before (stop::kTest | kFc | kPd | kSpoof), the latest VBUS sample after the actions, and
 // whether the measured FC release window is still open (the VBUS then may not have settled yet).
 using StopInfo = k2::stop::Report;
@@ -1423,6 +1433,7 @@ size_t encode_memory(std::span<uint8_t> out, const MemorySnapshot &s);
 size_t encode_identify_progress(std::span<uint8_t> out, const IdentifyProgress &p);
 size_t encode_reread(std::span<uint8_t> out, const RereadInfo &i);
 size_t encode_apple_read(std::span<uint8_t> out, const AppleReadInfo &i, uint8_t part);   // part 0 header, 1..6 one field each
+size_t encode_oppo(std::span<uint8_t> out, const OppoView &v, uint8_t part);   // part 0 header, 1..5 one word list each
 size_t encode_stop(std::span<uint8_t> out, const StopInfo &s);   // 6 bytes: active, vbus_mv i32 LE, fc_release_busy
 size_t encode_lease(std::span<uint8_t> out, const LeaseInfo &l);   // 6 bytes: armed, left_s u16 LE, length_s u16 LE, ended
 size_t encode_adc_raw(std::span<uint8_t> out, const AdcRawSnapshot &a);
@@ -1549,6 +1560,8 @@ concept Backend = requires(B &b, uint8_t u8, uint16_t u16, bool on) {
     { b.identify_device(u8) } -> std::same_as<IdentifyResult>;
     { b.reread(u8, u8) } -> std::same_as<RereadResult>;   // op (0 status, 1 start, 2 abort), step mask
     { b.apple_read(u8) } -> std::same_as<AppleReadResult>;   // lab-only: op 0 status, 1 arm + re-request the current contract
+    { b.oppo_probe(u8, std::declval<const pd::oppo::Config &>()) } -> std::same_as<OppoView>;   // lab-only: op 0 status, 1 start, 2 stop
+    { b.oppo_power(u16, u16, on) } -> std::same_as<OppoPowerResult>;   // lab-only: mv, ma (0 = the slot's maximum), confirm
     { b.pd_request(u8, u16, u16, on, on) } -> std::same_as<PdOpResult>;   // pos, mv, ma, confirm, over_load (lab only)
     { b.pd_release() } -> std::same_as<PdOpResult>;
     { b.stop() } -> std::same_as<StopInfo>;   // the one-call stop (k2/core/stop.hpp)
@@ -1909,6 +1922,34 @@ template <Backend B>
         const AppleReadResult res = backend.apple_read(p[0]);
         if (res.status != Status::Ok) return reply_byte(f, res.status, res.refusal);
         return reply_ok(f, encode_apple_read(f.span(), res.info, part));
+    }
+    case Cmd::OppoProbe: {
+        if (p.empty()) return reply_bad_len(f);
+        const uint8_t op = p[0];
+        if (op == kOppoPower) {
+            if (p.size() != 6) return reply_bad_len(f);
+            if (p[1] & ~kPdFlagConfirm) return reply_bad_arg(f);
+            const OppoPowerResult res = backend.oppo_power(rd16(&p[2]), rd16(&p[4]), (p[1] & kPdFlagConfirm) != 0);
+            if (res.status == Status::Ok && res.mv > kFcSafeMv) backend.lease_arm();
+            const uint8_t out[7] = {res.err, res.why, res.pos, uint8_t(res.mv), uint8_t(res.mv >> 8), uint8_t(res.ma), uint8_t(res.ma >> 8)};
+            build_response(std::span<uint8_t, kFrameSize>(f.out, kFrameSize), f.cmd, f.seq, res.status, std::span<const uint8_t>(out));
+            return true;
+        }
+        if (op > kOppoStop) return reply_bad_arg(f);
+        if ((op == kOppoStatus && p.size() != 2) || (op == kOppoStart && p.size() != 19) || (op == kOppoStop && p.size() != 1))
+            return reply_bad_len(f);
+        const uint8_t part = op == kOppoStatus ? p[1] : uint8_t{0};
+        if (part >= kOppoParts) return reply_bad_arg(f);
+        pd::oppo::Config cfg;
+        if (op == kOppoStart) {
+            if ((p[1] & ~kOppoFlagSkipSwap) || p[2] == 0 || (p[2] & ~pd::oppo::kStepsAll)) return reply_bad_arg(f);
+            cfg.skip_swap = (p[1] & kOppoFlagSkipSwap) != 0;
+            cfg.steps = p[2];
+            for (size_t i = 0; i < cfg.challenge.size(); i++) cfg.challenge[i] = rd32(&p[3 + 4 * i]);
+        }
+        const OppoView v = backend.oppo_probe(op, cfg);
+        if (v.status != Status::Ok) return reply_byte(f, v.status, v.refusal);
+        return reply_ok(f, encode_oppo(f.span(), v, part));
     }
     case Cmd::PdRequest: {
         if (p.size() != 6) return reply_bad_len(f);
@@ -2419,7 +2460,7 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
     case Cmd::ChargerHunt: case Cmd::ChargerSweep: case Cmd::ChargerAvsSweep: case Cmd::ChargerLevel:
     case Cmd::MiCableAuth:
         return detail::handle_charger(cmd, p, backend, f);
-    case Cmd::IdentifyDevice: case Cmd::PdReread: case Cmd::AppleRead: case Cmd::PdRequest:
+    case Cmd::IdentifyDevice: case Cmd::PdReread: case Cmd::AppleRead: case Cmd::OppoProbe: case Cmd::PdRequest:
     case Cmd::PdReset: case Cmd::PdRelease: case Cmd::Stop: case Cmd::Lease:
     case Cmd::PdAttach: case Cmd::PdHandback: case Cmd::PdTriggerStatus:
         return detail::handle_pd(cmd, p, backend, f);

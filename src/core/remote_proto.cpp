@@ -695,6 +695,25 @@ size_t encode_apple_read(std::span<uint8_t> out, const AppleReadInfo &i, uint8_t
     return w.size();
 }
 
+// Chunked like the Apple readout: part 0 = [0, running, end, steps, skip_swap, dfp, swap_waits, diff, outcome x 6]; part k in
+// 1..5 = [k, n, n x u32 LE]: the Auth, Power and Exapdo answers as received, then the SPR caps before and after.
+size_t encode_oppo(std::span<uint8_t> out, const OppoView &v, uint8_t part) {
+    Writer w(out);
+    w.u8(part);
+    if (v.r == nullptr) return w.size();
+    const pd::oppo::Result &r = *v.r;
+    if (part == 0) {
+        w.u8(v.running ? 1 : 0); w.u8(static_cast<uint8_t>(r.end)); w.u8(r.steps); w.u8(r.skip_swap ? 1 : 0);
+        w.u8(r.dfp ? 1 : 0); w.u8(r.swap_waits); w.u8(r.diff);
+        for (const pd::oppo::Outcome o : r.out) w.u8(static_cast<uint8_t>(o));
+        return w.size();
+    }
+    const pd::oppo::Words &l = part <= 3 ? r.vdm[part - 1u] : part == 4 ? r.before : r.after;
+    w.u8(l.n);
+    for (const uint32_t x : l.view()) w.u32(x);
+    return w.size();
+}
+
 namespace detail {
 
 bool reply_status(FrameCtx &f, Status st) {

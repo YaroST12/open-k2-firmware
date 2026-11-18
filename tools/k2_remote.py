@@ -62,6 +62,7 @@ CMD_PD_ATTACH = 0x48       # [target_mv u16] [target_ma u16] [flags: bit0 confir
 CMD_PD_HANDBACK = 0x49     # optional [flags]: bit0 confirm -> [HandbackVerdict]; phase-1 lab hand-back
 CMD_APPLE_READ = 0x4A      # lab-only Apple charger readout (SVID 0x05AC): [1] arm + re-request the current contract, [0, part] header (part 0) or one field (1..6)
 CMD_STOP = 0x4B            # no payload, no confirm: cancel a charger test, stop FC (measured 5 V release), release PD, disarm a spoof -> [active mask, vbus_mv i32, fc_release_busy]
+CMD_OPPO_PROBE = 0x4D      # lab-only OPPO / OnePlus probe (SVID 0x22D9): [0, part] status, [1, flags, steps, 4 x u32] start, [2] stop, [3, flags, mv u16, ma u16] request an advertised point
 CMD_LEASE = 0x4C           # host dead-man lease: [0] status, [1, seconds u16] set the length (0 = default 30 s, max 600) -> [armed, left_s u16, length_s u16, ended]
 CMD_DFU_ENTER = 0x30      # clear the app marker and reset into the bootloader
 CMD_DEBUG_FAULT = 0x31    # debug: provoke a CPU fault to exercise the [FAULT] handler
@@ -349,6 +350,12 @@ class RemoteError(RuntimeError):
             text = f"command {cmd} failed: refused: inline - the Sink tab shows the sniffed identity"
         if cmd == CMD_PD_HANDBACK and payload and payload[0] < len(HANDBACK_VERDICTS):
             text += f" ({HANDBACK_VERDICTS[payload[0]]})"
+        if cmd == CMD_OPPO_PROBE and len(payload) == 1 and payload[0] < len(OPPO_REFUSALS):
+            text += f" ({OPPO_REFUSALS[payload[0]]})"   # the start refusal (pd::oppo::Refusal)
+        elif cmd == CMD_OPPO_PROBE and len(payload) >= 2 and payload[1] != 0 and payload[1] < len(OPPO_REFUSALS):
+            text += f" ({OPPO_REFUSALS[payload[1]]}{': nothing advertised serves that point' if payload[1] == 7 else ''})"
+        elif cmd == CMD_OPPO_PROBE and len(payload) >= 1 and payload[0] < len(PD_ERRS) and payload[0] != 0:
+            text += f" ({PD_ERRS[payload[0]]})"
         if cmd == CMD_APPLE_READ and payload and payload[0] < len(APPLE_REFUSALS):
             text += f" ({APPLE_REFUSALS[payload[0]]})"   # the arm refusal reason (pd::AppleRefusal)
         if cmd == CMD_LAB and status == STATUS_BUSY and payload and payload[0] == SNIFF_REFUSED_NO_RAM:
@@ -1219,6 +1226,193 @@ def cmd_apple_read(link, a, sleep=time.sleep, clock=time.monotonic):
         sleep(0.2)
         head = decode_apple_read_head(link.call(CMD_APPLE_READ, bytes([0, 0])).payload)
     return _apple_read_all(link)
+
+
+# ---- lab-only OPPO / OnePlus probe (SVID 0x22D9, k2/pd/oppo_probe.hpp) ----
+# Every table mirrors a C++ enum in order (append only there).
+OPPO_STEPS = ["swap", "auth", "power", "exapdo", "swap_back", "caps"]
+OPPO_OUTCOMES = ["not_run", "ack", "nak", "busy", "reply", "accept", "reject", "wait", "not_supported", "timeout", "tx_fail",
+                 "skipped", "already", "lost"]
+OPPO_ENDS = ["none", "done", "stopped", "hard_reset", "detach", "soft_reset", "stalled"]
+OPPO_REFUSALS = ["ok", "busy", "inline", "not partner", "no contract", "not at 5 V", "running", "bad argument"]
+OPPO_REFUSAL_NO_CONTRACT = OPPO_REFUSALS.index("no contract")
+OPPO_LISTS = ["auth", "power", "exapdo", "caps_before", "caps_after"]   # parts 1..5
+OPPO_STEP_BITS = {"auth": 1, "power": 2, "exapdo": 4, "caps": 8}
+OPPO_POLL_S = 15.0   # the firmware ends a run by itself after 10 s at most (pd::oppo::kTotalMs)
+OPPO_ATTACH_S = 3.0  # how long a fresh 5 V attach may take before the start is retried for the last time
+
+
+def oppo_decode_power(w):
+    """POWER answer, its last word: the brick's current and voltage ceiling (pd::oppo::decode_power)."""
+    return {"imax_ma": (w & 0xFF) * 50, "vmax_mv": ((w >> 16) & 0xFFFF) * 10}
+
+
+def oppo_decode_exapdo(w):
+    """EXAPDO answer, its last word: the phone enables the extra PPS current only for num 1, bit 7."""
+    num, bit = (w >> 30) & 3, (w >> 24) & 0x1F
+    return {"num": num, "bit": bit, "extra_pps": num == 1 and bit == 7}
+
+
+def decode_oppo_head(p):
+    """OPPO_PROBE part 0: [0, running, end, steps, skip_swap, dfp, swap_waits, diff, outcome x 6] (encode_oppo)."""
+    _need(p, 14, "oppo-probe")
+    if p[0] != 0:
+        raise FrameError(f"oppo-probe header part {p[0]} != 0")
+    return {"running": bool(p[1]), "end": _name_of(dict(enumerate(OPPO_ENDS)), p[2]), "steps": p[3],
+            "skip_swap": bool(p[4]), "dfp": bool(p[5]), "swap_waits": p[6], "diff": p[7],
+            "outcomes": {s: _name_of(dict(enumerate(OPPO_OUTCOMES)), p[8 + i]) for i, s in enumerate(OPPO_STEPS)}}
+
+
+def decode_oppo_words(p, part):
+    """OPPO_PROBE part 1..5: [part, n, n x u32 LE]."""
+    _need(p, 2, "oppo-probe")
+    if p[0] != part:
+        raise FrameError(f"oppo-probe part {p[0]} != asked {part}")
+    n = p[1]
+    _need(p, 2 + 4 * n, "oppo-probe")
+    return [int.from_bytes(p[2 + 4 * i:6 + 4 * i], "little") for i in range(n)]
+
+
+def _oppo_read_all(link):
+    """The whole result: the header, the three answers, the caps before and after, and what they decode to."""
+    out = decode_oppo_head(link.call(CMD_OPPO_PROBE, bytes([0, 0])).payload)
+    for part, key in enumerate(OPPO_LISTS, start=1):
+        out[key] = decode_oppo_words(link.call(CMD_OPPO_PROBE, bytes([0, part])).payload, part)
+    # The phone reads the answer's last word (vdos[cnt - 1]); decoded only when a reply came with data.
+    if len(out["power"]) >= 2:
+        out["power_decoded"] = oppo_decode_power(out["power"][-1])
+    if len(out["exapdo"]) >= 2:
+        out["exapdo_decoded"] = oppo_decode_exapdo(out["exapdo"][-1])
+    before, after = out["caps_before"], out["caps_after"]
+    out["caps_changed"] = [{"slot": i + 1, "before": before[i] if i < len(before) else None,
+                            "after": after[i] if i < len(after) else None}
+                           for i in range(7) if out["diff"] >> i & 1] if after else []
+    return out
+
+
+def _oppo_challenge(a, rand):
+    words = getattr(a, "auth_words", None)
+    if words:
+        return [int(w, 16) & 0xFFFFFFFF for w in words]
+    raw = rand(16)
+    return [int.from_bytes(raw[4 * i:4 * i + 4], "little") for i in range(4)]
+
+
+def _oppo_steps(text):
+    try:
+        v = int(text, 0)
+    except ValueError:
+        v = 0
+        for name in str(text).split(","):
+            if name.strip() not in OPPO_STEP_BITS:
+                raise argparse.ArgumentTypeError(f"steps: a mask 1..15 or names from {','.join(OPPO_STEP_BITS)}, got {text!r}")
+            v |= OPPO_STEP_BITS[name.strip()]
+    if not 1 <= v <= 15:
+        raise argparse.ArgumentTypeError("steps mask is 1..15: 1 auth, 2 power, 4 exapdo, 8 caps")
+    return v
+
+
+def _oppo_hex_word(text):
+    try:
+        v = int(text, 16)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"auth word must be hex, got {text!r}")
+    if not 0 <= v <= 0xFFFFFFFF:
+        raise argparse.ArgumentTypeError(f"auth word is 32 bits, got {text!r}")
+    return text
+
+
+def _oppo_start(link, payload, a, sleep, clock):
+    """Starts one run. Without a contract it attaches at 5 V first (unless --no-attach) and retries while the contract forms."""
+    attached = False
+    deadline = None
+    while True:
+        try:
+            return decode_oppo_head(link.call(CMD_OPPO_PROBE, payload).payload), attached
+        except RemoteError as e:
+            no_contract = e.cmd == CMD_OPPO_PROBE and e.payload[:1] == bytes([OPPO_REFUSAL_NO_CONTRACT])
+            if not no_contract or getattr(a, "no_attach", False):
+                raise
+            if not attached:
+                link.call(CMD_PD_ATTACH, (5000).to_bytes(2, "little"))
+                attached, deadline = True, clock() + OPPO_ATTACH_S
+            elif clock() >= deadline:
+                raise
+            sleep(0.2)
+
+
+def cmd_pd_oppo_probe(link, a, sleep=time.sleep, clock=time.monotonic, rand=os.urandom):
+    """Lab-only: DR_Swap to DFP, AUTH (4 random words, never verified), POWER, EXAPDO, DR_Swap back, Get_Source_Cap - the
+    flow a OnePlus phone runs on its brick. The K2 records every answer; --repeat runs it again with fresh words."""
+    flags = 1 if getattr(a, "skip_swap", False) else 0
+    steps = getattr(a, "steps", None) or 0x0F
+    runs = []
+    attached = False
+    for _ in range(max(1, getattr(a, "repeat", 1) or 1)):
+        challenge = _oppo_challenge(a, rand)
+        payload = bytes([1, flags, steps]) + b"".join(w.to_bytes(4, "little") for w in challenge)
+        head, att = _oppo_start(link, payload, a, sleep, clock)
+        attached = attached or att
+        deadline = clock() + getattr(a, "wait", OPPO_POLL_S)
+        while head["running"] and clock() < deadline:
+            sleep(0.2)
+            head = decode_oppo_head(link.call(CMD_OPPO_PROBE, bytes([0, 0])).payload)
+        run = _oppo_read_all(link)
+        run["challenge"] = challenge
+        runs.append(run)
+    return {"pd_cmd": "oppo-probe", "attached": attached, "runs": runs}
+
+
+def cmd_pd_oppo_power(link, a):
+    """Lab-only: request one point the source advertises NOW (pd::oppo::pick_power); above 5 V needs --confirm."""
+    flags = 1 if getattr(a, "confirm", False) else 0
+    payload = bytes([3, flags]) + int(a.mv).to_bytes(2, "little") + int(getattr(a, "ma", 0) or 0).to_bytes(2, "little")
+    p = link.call(CMD_OPPO_PROBE, payload).payload   # a refusal raises RemoteError: its text names the reason
+    _need(p, 7, "oppo-power")
+    out = {"pd_cmd": "oppo-power", "err": _name_of(dict(enumerate(PD_ERRS)), p[0]), "pos": p[2],
+           "mv": int.from_bytes(p[3:5], "little"), "ma": int.from_bytes(p[5:7], "little")}
+    out["trigger"] = decode_pd_trigger(link.call(CMD_PD_TRIGGER_STATUS).payload)
+    return out
+
+
+def _oppo_words_text(ws):
+    return " ".join(f"{w:08X}" for w in ws) if ws else "-"
+
+
+def render_oppo(r):
+    """Human text for `pd oppo-probe`: one block per run."""
+    lines = []
+    if r.get("attached"):
+        lines.append("attached at 5 V first (no contract)")
+    for i, run in enumerate(r["runs"], start=1):
+        role = "DFP" if run["dfp"] else "UFP"
+        lines.append(f"oppo-probe run {i}/{len(r['runs'])}: {run['end']}{' (still running)' if run['running'] else ''}, "
+                     f"K2 ended {role}, swap waits {run['swap_waits']}, steps 0x{run['steps']:X}"
+                     + (" --skip-swap" if run["skip_swap"] else ""))
+        lines.append(f"  challenge  {_oppo_words_text(run['challenge'])}")
+        oc = run["outcomes"]
+        lines.append(f"  swap       {oc['swap']}")
+        lines.append(f"  auth       {oc['auth']:<14}{_oppo_words_text(run['auth'])}")
+        pw = run.get("power_decoded")
+        lines.append(f"  power      {oc['power']:<14}{_oppo_words_text(run['power'])}"
+                     + (f"  -> imax {pw['imax_ma'] / 1000:g} A, vmax {pw['vmax_mv'] / 1000:g} V" if pw else ""))
+        ex = run.get("exapdo_decoded")
+        lines.append(f"  exapdo     {oc['exapdo']:<14}{_oppo_words_text(run['exapdo'])}"
+                     + (f"  -> num {ex['num']} bit {ex['bit']}: extra PPS current {'yes' if ex['extra_pps'] else 'no'}" if ex else ""))
+        lines.append(f"  swap_back  {oc['swap_back']}")
+        lines.append(f"  caps       {oc['caps']}")
+        for key in ("caps_before", "caps_after"):
+            ws = run[key]
+            lines.append(f"  {key.replace('_', ' '):<11}" + ("  ".join(f"{n}:{_raw_pdo_summary(w)}" for n, w in enumerate(ws, 1)) or "-"))
+        if run["caps_after"]:
+            if run["caps_changed"]:
+                for c in run["caps_changed"]:
+                    b = f"0x{c['before']:08X} ({_raw_pdo_summary(c['before'])})" if c["before"] is not None else "none"
+                    n = f"0x{c['after']:08X} ({_raw_pdo_summary(c['after'])})" if c["after"] is not None else "none"
+                    lines.append(f"  changed    slot {c['slot']}: {b} -> {n}")
+            else:
+                lines.append("  changed    nothing")
+    return "\n".join(lines)
 
 
 def _reread_mask(text):
@@ -4375,6 +4569,10 @@ def cmd_pd(link, a):
     (--over-load lifts the refusal only while the far sink is a passive load, lab only;
     the other exception is the lab-only `pd reset --inline --confirm`)."""
     sub = a.pd_cmd
+    if sub == "oppo-probe":
+        return cmd_pd_oppo_probe(link, a)
+    if sub == "oppo-power":
+        return cmd_pd_oppo_power(link, a)
     if sub == "interrogate":
         # The lab face of `twin learn inline`: the same run on the K2 (Cmd::Twin INLINE), dry unless --save.
         if not getattr(a, "inline", False):
@@ -5023,6 +5221,12 @@ def _render(name, r):
     if name == "pd":
         if r.get("twin") == "learn":
             return _render_learn_inline(r)   # pd interrogate --inline
+        if r.get("pd_cmd") == "oppo-probe":
+            return render_oppo(r)
+        if r.get("pd_cmd") == "oppo-power":
+            t = r["trigger"]
+            return (f"oppo-power pdo={r['pos']} {r['mv'] / 1000:g} V {r['ma'] / 1000:g} A: {r['err']}; "
+                    f"trigger {t['state']} result={t['result']} pdo={t['pos']} {t['mv'] / 1000:g} V {t['ma'] / 1000:g} A")
         if r.get("pd_cmd") == "handback":
             return f"handback {r['verdict']}"   # the phase-1 lab op's verdict: allowed, or why it was refused
         return (f"trigger {r['state']} result={r['result']} held={r['held']}{'(auto)' if r.get('held') and r.get('auto_hold') else ''} epr={r['epr']} "
@@ -5457,6 +5661,25 @@ def build_parser():
     sa.add_argument("ma", type=int, nargs="?", default=0, help="target current in mA (default 0 = PDO max)")
     sa.add_argument("--confirm", action="store_true", help="allow a voltage above 5 V (the same flag as `pd request`)")
     _add_lease_args(sa)
+    so = spds.add_parser("oppo-probe", help="lab only: the OnePlus brick handshake (SVID 0x22D9) as a phone runs it - DR_Swap to "
+                                            "host, AUTH with 4 random words (the reply is recorded, never checked), POWER, EXAPDO, "
+                                            "DR_Swap back, Get_Source_Cap - and the caps before / after. Needs a contract at 5 V "
+                                            "(attached at 5 V first when there is none, unless --no-attach); refused inline, during "
+                                            "a charger test, PD Stress, PD Spec or a twin run")
+    so.add_argument("--skip-swap", action="store_true", help="stay UFP: no DR_Swap either way (the VDMs go out as device)")
+    so.add_argument("--steps", type=_oppo_steps, default=None,
+                    help="what to send: a mask (1 auth, 2 power, 4 exapdo, 8 caps; default 15) or names, e.g. power,exapdo")
+    so.add_argument("--auth-words", nargs=4, type=_oppo_hex_word, metavar="HEX", help="the 4 AUTH challenge words (default random)")
+    so.add_argument("--repeat", type=int, default=1, help="runs in a row, each with fresh challenge words (default 1)")
+    so.add_argument("--no-attach", action="store_true", help="refuse instead of attaching at 5 V when there is no contract")
+    so.add_argument("--wait", type=float, default=OPPO_POLL_S, help=f"seconds to follow each run (default {OPPO_POLL_S:g})")
+    sp = spds.add_parser("oppo-power", help="lab only: request a point the source advertises NOW (fixed PDO at its voltage, "
+                                            "PPS / AVS inside its range, current up to what the slot offers); nothing else is "
+                                            "asked. Above 5 V needs --confirm. Same refusals as oppo-probe. No load on the output")
+    sp.add_argument("mv", type=int, help="voltage in mV")
+    sp.add_argument("ma", type=int, nargs="?", default=0, help="current in mA (default 0 = what the slot offers)")
+    sp.add_argument("--confirm", action="store_true", help="allow a voltage above 5 V")
+    _add_lease_args(sp)
     spds.add_parser("status", help="trigger engine state")
     si = sub.add_parser("identify-device", help="ask the attached device for its identity (idle CC only)")
     si.add_argument("--confirm", action="store_true",

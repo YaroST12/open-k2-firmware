@@ -161,6 +161,16 @@ struct Fake {
     RereadResult reread(uint8_t op, uint8_t mask) { calls++; rr_calls++; rr_op = op; rr_mask = mask; return rr_result; }
     uint8_t ar_op = 0xFF; int ar_calls = 0; AppleReadResult ar_result{};
     AppleReadResult apple_read(uint8_t op) { calls++; ar_calls++; ar_op = op; return ar_result; }
+    uint8_t op_op = 0xFF; int op_calls = 0; k2::pd::oppo::Config op_cfg{}; k2::pd::oppo::Result op_res{};
+    Status op_status = Status::Ok; uint8_t op_refusal = 0; bool op_running = false;
+    OppoView oppo_probe(uint8_t op, const k2::pd::oppo::Config &c) {
+        calls++; op_calls++; op_op = op; op_cfg = c;
+        return {op_status, op_refusal, op_running, op_status == Status::Ok ? &op_res : nullptr};
+    }
+    uint16_t opw_mv = 0, opw_ma = 0; bool opw_confirm = false; OppoPowerResult opw_result{};
+    OppoPowerResult oppo_power(uint16_t mv, uint16_t ma, bool confirm) {
+        calls++; opw_mv = mv; opw_ma = ma; opw_confirm = confirm; return opw_result;
+    }
     uint8_t id_op = 0xFF; IdentifyResult id_result{};
     IdentifyResult identify_device(uint8_t op) { calls++; id_op = op; return id_result; }
     uint8_t rq_pos = 0xFF; uint16_t rq_mv = 0, rq_ma = 0; bool rq_confirm = false, rq_over_load = false; PdOpResult rq_result{};

@@ -621,6 +621,61 @@ remote::AppleReadResult Remote::apple_read(uint8_t op) {
     return r;
 }
 
+// Lab-only OPPO / OnePlus probe (k2/pd/oppo_probe.hpp). The remote's half of the gate: a port owner (charger test, PD Stress, PD
+// Spec, a twin run, a loop probe, a listen window, an FC session or sniff) and the UI's inline latch; the driver adds the rest.
+static pd::oppo::Facts oppo_facts(Ui &ui) {
+    pd::oppo::Facts f;
+    f.ports_busy = ui.ports_busy() || fusb302::listen_active() || fctrig::status().state != fc::State::Idle ||
+                   fctrig::scan_running() || fctrig::ufcs_exiting() || fctrig::svooc_running() || dpsniff::armed();
+    f.inline_mode = ui.link().inline_mode();
+    return f;
+}
+
+static remote::Status oppo_status(pd::oppo::Refusal why) {
+    return why == pd::oppo::Refusal::Busy || why == pd::oppo::Refusal::Running ? remote::Status::Busy : remote::Status::BadArg;
+}
+
+remote::OppoView Remote::oppo_probe(uint8_t op, const pd::oppo::Config &cfg) {
+    remote::OppoView v;
+    if (op == remote::kOppoStart) {
+        const pd::oppo::Refusal why = fusb302::oppo_start(cfg, oppo_facts(ui_));
+        if (why != pd::oppo::Refusal::None) {
+            v.status = oppo_status(why);
+            v.refusal = static_cast<uint8_t>(why);
+            return v;
+        }
+    } else if (op == remote::kOppoStop) {
+        fusb302::oppo_stop();
+    }
+    v.running = fusb302::oppo_running();
+    v.r = &fusb302::oppo_result();
+    return v;
+}
+
+// `pd oppo-power`: one advertised point of the list in force now (pd::oppo::pick_power), through the UI's own trigger (its confirm
+// and load rules); nothing is asked that the source does not offer.
+remote::OppoPowerResult Remote::oppo_power(uint16_t mv, uint16_t ma, bool confirm) {
+    remote::OppoPowerResult r;
+    pd::oppo::Refusal why = fusb302::oppo_gate(oppo_facts(ui_), false);
+    pd::oppo::Pick pick;
+    if (why == pd::oppo::Refusal::None) {
+        pick = pd::oppo::pick_power(fusb302::caps(), mv, ma);
+        if (pick.pos == 0) why = pd::oppo::Refusal::BadArg;
+    }
+    K2LOG("[OPPO] power mv=%u ma=%u pos=%u why=%u\n", unsigned(mv), unsigned(ma), unsigned(pick.pos), unsigned(why));
+    if (why != pd::oppo::Refusal::None) {
+        r.status = oppo_status(why);
+        r.why = static_cast<uint8_t>(why);
+        return r;
+    }
+    r.pos = pick.pos; r.mv = pick.mv; r.ma = pick.ma;
+    const Ui::TriggerOutcome o = ui_.trigger({pick.pos, pick.mv, pick.ma}, systick::millis(), confirm, false);
+    if (o.need_confirm) { r.status = remote::Status::NeedConfirm; return r; }
+    r.err = static_cast<uint8_t>(o.err);
+    r.status = o.err == pd::Err::Ok ? remote::Status::Ok : o.err == pd::Err::Busy ? remote::Status::Busy : remote::Status::BadArg;
+    return r;
+}
+
 static remote::PdOpResult pd_result(pd::Err e) {
     remote::PdOpResult r;
     r.err = static_cast<uint8_t>(e);
@@ -1263,7 +1318,7 @@ void Remote::svooc_stop() { svooc_trig::stop(); }
 
 bool Remote::lines_locked() { return fctrig::svooc_running(); }
 
-bool Remote::ports_busy() { return ui_.ports_busy() || fusb302::listen_active(); }
+bool Remote::ports_busy() { return ui_.ports_busy() || fusb302::listen_active() || fusb302::oppo_running(); }
 
 // Listen attach (k2::fusb302::listen_start): detach first, then Rd on, Auto-CRC off, nothing transmitted. flags bit 0 = no detach. The driver adds its own owners
 // (identify, probe, reread, boot pin, spoof, Ra) to the remote-side facts composed here.
