@@ -89,7 +89,7 @@ const idle::Config& config() { return g_m.config(); }
 
 void set_config(const idle::Config& c) {
     g_m.set_config(c);
-    g_dirty = !idle_cfg::same(g_m.config(), g_saved);
+    g_dirty = !idle_cfg::same(idle_cfg::persisted(g_m.config(), g_saved), g_saved);
     if (g_dirty) g_dirty_ms = systick::millis();
 }
 
@@ -200,7 +200,7 @@ void service(Ui& ui, bool boot_screen, std::uint32_t now) {
 
     // Deferred save: one flash write per burst, never while a test owns the ports.
     if (g_dirty && !in.busy && now - g_dirty_ms >= kSaveDelayMs) {
-        const idle::Config c = g_m.config();
+        const idle::Config c = idle_cfg::persisted(g_m.config(), g_saved);
         const bool ok = idle_cfg::save(fs::instance(), c);
         g_dirty = false;
         if (ok) g_saved = c;

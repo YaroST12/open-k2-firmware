@@ -44,12 +44,13 @@ inline constexpr std::int32_t kVbusStepPermille = 25;  // 2.5 % of the reference
 inline constexpr std::int32_t kVbusPresentMv = 1000;   // VBUS at or above this = something is attached (the UI's Live level)
 inline constexpr std::int32_t kBusActiveMa = 50;       // |IBUS| above this is activity
 inline constexpr std::uint8_t kMaxPct = 100;
+inline constexpr std::uint8_t kMinSavedPct = 10;       // a saved or Settings level never goes below this (0 % is a black screen at boot)
 
 struct Config {
     std::uint16_t dim_after_s = 60;        // 0 = never
     std::uint16_t off_after_s = 300;       // 0 = never
-    std::uint8_t brightness = 100;         // percent, 0..100
-    std::uint8_t dim_brightness = 30;      // percent, 0..100
+    std::uint8_t brightness = 100;         // percent, 0..100 live; a remote 0 lasts until reboot (idle_cfg::persisted)
+    std::uint8_t dim_brightness = 30;      // percent, 0..100 live, saved 10..100
     bool wake_on_remote = true;            // a state-changing remote command counts as activity (RAM only)
 };
 

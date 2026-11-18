@@ -67,6 +67,7 @@ void pass_guard();
 Status status();
 const idle::Config& config();
 // Takes the whole config (clamped). Brightness and timeout changes are saved once kSaveDelayMs passes quiet and nothing runs on the ports.
+// A level below idle::kMinSavedPct (a remote 0 %) applies live only; the saved level stays (idle_cfg::persisted).
 void set_config(const idle::Config& c);
 void force(idle::Force f);
 void force_div(std::uint8_t n);   // 0 = automatic, else 1 / 2 / 4 / 8; refused values are ignored

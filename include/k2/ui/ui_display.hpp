@@ -13,7 +13,7 @@
 
 namespace k2::uidisp {
 
-inline constexpr int kStepPct = 10, kMinPct = 10;
+inline constexpr int kStepPct = 10, kMinPct = idle::kMinSavedPct;
 inline constexpr int kMaxPct = idle::kMaxPct;
 
 // The pick lists (0 = never). A value set from the remote that is not listed shows as text and leaves every radio off.

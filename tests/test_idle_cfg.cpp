@@ -66,6 +66,43 @@ void test_damaged_falls_back() {
     CHECK_COND(v.f.write_file(idle_cfg::kPath, shortrec) == fs::Err::Ok);
     CHECK_EQ(int(idle_cfg::load(v.f).dim_after_s), 60);
 }
+
+// A saved level below 10 % would boot to a black screen: it never reaches the file and never comes back from one.
+void test_saved_levels_stay_visible() {
+    idle::Config c;
+    c.brightness = 0; c.dim_brightness = 3;
+    const auto r = idle_cfg::encode(c);
+    CHECK_EQ(int(r[4]), 10); CHECK_EQ(int(r[5]), 10);
+    auto z = idle_cfg::encode(idle::Config{});   // a file an older build wrote with 0 %
+    z[4] = 0; z[5] = 0;
+    z[10] = idle_cfg::check(z);
+    CHECK_EQ(int(idle_cfg::decode(z).brightness), 10);
+    CHECK_EQ(int(idle_cfg::decode(z).dim_brightness), 10);
+    c.brightness = 10; c.dim_brightness = 10;
+    CHECK_EQ(int(idle_cfg::encode(c)[4]), 10);
+}
+
+// A remote level below the minimum is live only: what gets saved (and compared with what is saved) keeps the stored level.
+void test_low_level_is_never_persisted() {
+    idle::Config saved;                  // 100 / 30
+    idle::Config live = saved;
+    live.brightness = 0;
+    idle::Config p = idle_cfg::persisted(live, saved);
+    CHECK_EQ(int(p.brightness), 100);
+    CHECK_COND(idle_cfg::same(p, saved));
+    live.dim_brightness = 9;
+    live.off_after_s = 600;              // another field changed in the same burst is saved, the brightness is not
+    p = idle_cfg::persisted(live, saved);
+    CHECK_EQ(int(p.brightness), 100);
+    CHECK_EQ(int(p.dim_brightness), 30);
+    CHECK_EQ(int(p.off_after_s), 600);
+    CHECK_COND(!idle_cfg::same(p, saved));
+    live.brightness = 10;                // the minimum itself is a real setting
+    live.dim_brightness = 10;
+    p = idle_cfg::persisted(live, saved);
+    CHECK_EQ(int(p.brightness), 10);
+    CHECK_EQ(int(p.dim_brightness), 10);
+}
 }  // namespace
 
 int main() {
@@ -73,5 +110,7 @@ int main() {
     test_record_format();
     test_save_and_reload();
     test_damaged_falls_back();
+    test_saved_levels_stay_visible();
+    test_low_level_is_never_persisted();
     return test_report("test_idle_cfg");
 }
