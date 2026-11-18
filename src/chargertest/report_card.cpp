@@ -404,15 +404,16 @@ void fold_repeat(const Card& prev, Card& c) {
         if (g >= kGroups || s.hunt) continue;
         GroupAcc& acc = ga[g];
         const bool range_step = (ct::kPpsAlgorithms & ct::bit(s.algorithm)) != 0;
-        const uint8_t det = s.reason == ct::Reason::StepResolution ? uint8_t(0) : s.detail;
+        // A caution's detail is a measurement or flag bits, not a fast-charge code (flag 15 would read as "detected"): the card keeps none of it.
+        const uint8_t det = s.reason == ct::Reason::StepResolution || s.reason == ct::Reason::ProgCheck ? uint8_t(0) : s.detail;
         const uint16_t target_dv_mv = uint16_t(detail::dv_round(s.mv) * 100u);
         const GroupResult why{GV::None, 0, det, uint8_t(s.reason), range_step ? uint16_t(0) : target_dv_mv};
 
         if (s.verdict == ct::Verdict::Pass) {
             if (acc.passes < 255) ++acc.passes;
-            if (s.detail != uint8_t(fc::Fail::Detected) && s.detail != uint8_t(fc::Fail::NoVoltage)) acc.proven = true;
-            else if (s.detail == uint8_t(fc::Fail::NoVoltage)) acc.pass_detail = s.detail;
-            else if (acc.pass_detail == 0) acc.pass_detail = s.detail;
+            if (det != uint8_t(fc::Fail::Detected) && det != uint8_t(fc::Fail::NoVoltage)) acc.proven = true;
+            else if (det == uint8_t(fc::Fail::NoVoltage)) acc.pass_detail = det;
+            else if (acc.pass_detail == 0) acc.pass_detail = det;
             const uint16_t meas_dv_mv = uint16_t(detail::dv_round(s.measured_mv) * 100u);
             if (!range_step && meas_dv_mv > c.group[g].max_mv) c.group[g].max_mv = meas_dv_mv;
         } else if (s.verdict == ct::Verdict::Fail) {

@@ -765,7 +765,7 @@ and the hardware check). A row leaves this list when its fix is merged and the h
   500 ms stable hold + the steady window) lands inside the plateau, so the base is 80 mV high and the five +20 mV steps add
   up to ~0 (the later levels dwelled 2.54 s, 2.54 s, 0.98 s, 0.58 s, 0.58 s: the steady window exits early whenever the
   output is flat, that is by design). No dwell fits every plateau (row 35's held the same level over 1.1 s), so
-  `Runner::walk_step` re-bases once on the signature: the first step's level at least `kStepWalkTolMv` below the base
+  `Runner::walk_step` re-bases once on the signature: the first step's level a full quantum below the base
   makes that level the base (`walk_rebased_`, one extra step). Host tests: plateaus of 300, 540, 900 and 1400 ms pass,
   a source that ignores the steps still fails "steps ignored".
 - ~~**Wake sleeping port ON breaks the charger test's unit re-attach**~~ completed: 1b0c62f (run-owner flag in the wake gate, Wake OFF releases the wake's Rd); UGREEN with Wake ON 23 pass / 0 fail and Wake OFF dropped VBUS to 0 on hardware 72c2e28. Open: the boot scan can still latch a dark CC2 first (released after 3 s).

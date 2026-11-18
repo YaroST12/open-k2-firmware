@@ -18,10 +18,13 @@ bool noted(const ct::Step& s) {
     return s.verdict == ct::Verdict::Skip && (s.reason == ct::Reason::Advertised || s.reason == ct::Reason::LightLevel);
 }
 bool advertised(const ct::Step& s) { return s.verdict == ct::Verdict::Skip && s.reason == ct::Reason::Advertised && s.group == ct::Group::Pd; }
-bool caution(const ct::Step& s) { return s.verdict == ct::Verdict::Pass && s.reason == ct::Reason::Folded; }
+bool caution(const ct::Step& s) {
+    return s.verdict == ct::Verdict::Pass &&
+           (s.reason == ct::Reason::Folded || s.reason == ct::Reason::StepResolution || s.reason == ct::Reason::ProgCheck);
+}
 const char* verdict_word(const ct::Step& s) {
     switch (s.verdict) {
-    case ct::Verdict::Pass: return s.reason == ct::Reason::Folded ? "CAUTION" : "PASS";
+    case ct::Verdict::Pass: return caution(s) ? "CAUTION" : "PASS";
     case ct::Verdict::Fail: return s.reason == ct::Reason::Capped ? "CAPPED" : "FAIL";
     case ct::Verdict::Skip: return s.reason == ct::Reason::Advertised ? "LISTED" : s.reason == ct::Reason::LightLevel ? "NOT RUN" : "SKIP";
     case ct::Verdict::Running: return "RUNNING";
@@ -39,6 +42,15 @@ bool deviates(const ct::Step& s, const ctsweep::View& v) {
            sweep_worst_mv(v, uint8_t(s.algorithm), s.pos) > kSweepPassMv;
 }
 bool caution(const ct::Step& s, const ctsweep::View& v) { return caution(s) || deviates(s, v); }
+const ct::Step* step_caution(std::span<const ct::Step> steps, ct::Algorithm a, uint8_t pos) {
+    const ct::Step* prog = nullptr;
+    for (const auto& y : steps) {
+        if (y.algorithm != a || y.pos != pos || y.hunt || y.verdict != ct::Verdict::Pass) continue;
+        if (y.reason == ct::Reason::StepResolution) return &y;   // the walk's words name the whole range; a transition flag only one level
+        if (y.reason == ct::Reason::ProgCheck && !prog) prog = &y;
+    }
+    return prog;
+}
 const char* verdict_word(const ct::Step& s, const ctsweep::View& v) { return deviates(s, v) ? "CAUTION" : verdict_word(s); }
 Progress run_progress(std::span<const ct::Step> steps) {
     Progress p;
@@ -63,7 +75,7 @@ void put_text(Token& k, const char* s) { Out o{k.text, sizeof k.text}; o.put(s);
 // ceiling, so the tone table reads it as "reached something" (amber), never as "none passed" (red).
 void count(Tally& t, const ct::Step& y) {
     switch (y.verdict) {
-    case ct::Verdict::Pass: caution(y) ? ++t.capped : ++t.pass; break;   // a fold is a caution: neither a pass nor a fail
+    case ct::Verdict::Pass: caution(y) ? ++t.capped : ++t.pass; break;   // a fold, a step-walk miss or a transition flag is a caution: neither a pass nor a fail
     case ct::Verdict::Fail: y.reason == ct::Reason::Capped ? ++t.capped : ++t.fail; break;
     case ct::Verdict::Skip: noted(y) ? ++t.noted : ++t.skip; t.adv += advertised(y); break;
     default: ++t.pending; break;
@@ -528,7 +540,7 @@ Reach reach_of(std::span<const ct::Step> s, A a, uint8_t pos) {
         if (y.verdict == ct::Verdict::Pass) {
             if (!r.lo_mv || y.mv < r.lo_mv) r.lo_mv = y.mv;
             r.hi_mv = std::max(r.hi_mv, y.mv);
-            if (caution(y)) {
+            if (y.reason == ct::Reason::Folded) {   // the other cautions (walk, transition) do not fold the range
                 r.folded = true;
                 if (!r.fold_mv || y.measured_mv < r.fold_mv) r.fold_mv = y.measured_mv;
             }

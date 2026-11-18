@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
 #include "k2/chargertest/charger_test.hpp"
+#include "k2/chargertest/prog_check.hpp"
 #include "k2/core/fmt.hpp"
 #include "k2/core/log.hpp"
 #include "k2/fastcharge/accp.hpp"
 #include "k2/pd/pd_link.hpp"
 #include "k2/fastcharge/qc.hpp"
 #include <algorithm>
+#include <bit>
 #include <cstdlib>
 #include <cstring>
 #include <type_traits>
@@ -56,9 +58,9 @@ const char* name(Reason r) {
         "Class A only (12 V max)", "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target",
         "withdrawn by source", "wrong voltage on 5V contract", "needs load", "floored above target", "step resolution",
         "HID-cable loop: 5V lock", "advertised", "light run: not asked", "port cuts without load",
-        "output folds back", "Xiaomi chain"
+        "output folds back", "Xiaomi chain", "transition check"
     };
-    static_assert(std::size(names) == unsigned(Reason::MiChain) + 1);
+    static_assert(std::size(names) == unsigned(Reason::ProgCheck) + 1);
     return names[static_cast<unsigned>(r)];
 }
 const char* refusal_words(Reason r) {
@@ -185,6 +187,7 @@ const char* explanation(const Step& s) {
     if (s.reason == Reason::Floored) return "output floored";   // the reached floor is the row's measured_mv
     if (s.reason == Reason::Folded) return "folds back";   // the fold note itself ("folds to 19.4V above 19.9V") is the row's note line
     if (s.reason == Reason::StepResolution) return s.detail ? "step resolution" : "steps ignored";
+    if (s.reason == Reason::ProgCheck && s.detail) return progcheck::flag_text(s.detail);   // the first finding; caution_text counts the rest
     if (s.reason == Reason::NoContract) return "EPR: no PD contract";
     if (s.reason == Reason::NotUnlocked) return epr_detail_name(s.detail) ? epr_detail_name(s.detail) : name(s.reason);
     if (s.reason == Reason::MiChain) {   // the 16-cell value column; the Xiaomi detail page spells the step out (mi_unlock::chain_text)
@@ -203,6 +206,33 @@ const char* explanation(const Step& s) {
     if (s.reason == Reason::UnsupportedOffer && s.avs)
         return s.pos < 8 ? "EPR AVS in an SPR slot" : "SPR APDO in an EPR slot";
     return name(s.reason);
+}
+size_t caution_text(const Step& s, std::span<char> out) {
+    if (out.empty()) return 0;
+    size_t n = 0;
+    const auto put = [&](char c) { if (n + 1 < out.size()) out[n++] = c; };
+    const auto word = [&](const char* t) { while (*t) put(*t++); };
+    if (s.reason == Reason::StepResolution) {
+        if (!s.detail) word("steps ignored");
+        else {
+            const unsigned mv = s.detail >= 50 ? (s.detail + 5u) / 10u * 10u : s.detail;
+            char d[4]; unsigned k = 0, v = mv;
+            word("steps ");
+            do { d[k++] = char('0' + v % 10); v /= 10; } while (v);
+            while (k) put(d[--k]);
+            word("mV, not ");
+            v = walk_step_mv(s.algorithm);
+            do { d[k++] = char('0' + v % 10); v /= 10; } while (v);
+            while (k) put(d[--k]);
+            word("mV");
+        }
+    } else if (s.reason == Reason::ProgCheck && s.detail) {
+        word(progcheck::flag_text(s.detail));
+        const unsigned more = unsigned(std::popcount(unsigned(s.detail))) - 1;
+        if (more) { word(" +"); put(char('0' + more)); }
+    }
+    out[n] = 0;
+    return n;
 }
 const char* name(HuntCause c) {
     switch (c) {
@@ -223,6 +253,14 @@ const char* name(HuntCause c) {
 }
 namespace {
 constexpr uint32_t kHoldMs = 1000;
+// The walk's move in the detail byte, nudged 1 mV off the two row markers (kDetailStepWalk, kDetailSweep) so a finished row never reads as a sweep.
+constexpr uint8_t step_walk_detail(int mv) {
+    const int v = std::clamp(mv, 0, 255);
+    return uint8_t(v == kDetailStepWalk ? v - 1 : v == kDetailSweep ? v + 1 : v);
+}
+// The transition capture (Env::prog_begin) is triggered where the hold starts, kStableMs after the band's stable start, and freezes its
+// post window later; the hold ends kHoldMs after that stable start, with one 50 ms tick of slack at each end (hold_ms() is the one tick).
+static_assert(progcheck::kStableMs + progcheck::kPostMs + 100 <= kHoldMs, "the capture freezes before the hold ends");
 // "A Hard Reset happened on the link", whoever sent it: the sink counts the ones the K2 sent (hard_resets) and the ones the source
 // sent (source_hard_resets) apart, and the runner only ever compares this sum with a value it took from the same sum.
 uint32_t link_resets(const pd::SinkStatus& s) { return s.hard_resets + s.source_hard_resets; }
@@ -719,6 +757,18 @@ void plan_unit(Unit unit, const pd::SourceCaps& caps, Options o, const Input& in
             const unsigned mid0 = ((lo + hi) / 2) / quantum * quantum;
             const unsigned mid = std::max(mid0, std::min<unsigned>(5000 / quantum * quantum, hi));
             const unsigned low_mid = std::max(lo, ((lo + mid) / 2) / quantum * quantum);
+            // Step-resolution row (ROADMAP "PPS coverage" item 2; a Deep check since 2026-11-18, next to the sweeps: pps_sweep for a PPS
+            // APDO, avs_sweep for an AVS one): one row per APDO, from the mid level, five Requests of one quantum (20 mV PPS, 100 mV
+            // AVS; the runner walks them). Emitted after the APDO's own rows so a plan that would overflow kMaxSteps drops it first.
+            // Only above the 5 V contract and when the walk fits inside the offer: a low walk could cut the output.
+            const auto walk_row = [&] {
+                if (mid <= 5000 || mid + kStepWalkCount * quantum > hi) return;
+                Step w = s; w.mv = static_cast<uint16_t>(mid); w.ma = current(mid); w.continuous = false;
+                w.verdict = w.ma ? Verdict::Pending : Verdict::Skip;
+                w.reason = w.ma ? Reason::None : Reason::NoOffer;
+                w.detail = kDetailStepWalk;   // the runner's marker while the row is in flight
+                emit(w);
+            };
             const unsigned targets[] = {mid, hi, mid, low_mid, lo};
             for (unsigned n = 0; n < 5; ++n) {
                 s.mv = static_cast<uint16_t>(targets[n]); s.ma = current(s.mv); s.continuous = n != 0;
@@ -760,17 +810,7 @@ void plan_unit(Unit unit, const pd::SourceCaps& caps, Options o, const Input& in
                     s.mv = static_cast<uint16_t>(hi); s.ma = static_cast<uint16_t>(advertised); s.hunt = false; s.continuous = false;
                     skip(Reason::CableLimit);
                 }
-                // Step-resolution row (ROADMAP "PPS coverage" item 2), emitted last of the APDO's rows so a plan that
-                // would overflow kMaxSteps drops it first: one row per PPS APDO, from the mid level, five +20 mV
-                // Requests (the runner walks them). Only above the 5 V contract and when the walk fits inside the
-                // offer: a low walk could cut the output, so it stays out of PdLow.
-                if (p.type == pd::PdoType::Pps && mid > 5000 && mid + kStepWalkCount * kStepMv <= hi) {
-                    Step w = s; w.mv = static_cast<uint16_t>(mid); w.ma = current(mid); w.continuous = false;
-                    w.verdict = w.ma ? Verdict::Pending : Verdict::Skip;
-                    w.reason = w.ma ? Reason::None : Reason::NoOffer;
-                    w.detail = kDetailStepWalk;   // the runner's marker while the row is in flight
-                    emit(w);
-                }
+                if (o.pps_sweep) walk_row();
                 // Deep sweep (ROADMAP "PPS deep sweep", Options::pps_sweep, on at Level::Deep or by the Tests list line):
                 // emitted last of the APDO's rows (a plan that would overflow kMaxSteps drops it first), split at
                 // ctsweep::kSplitMv (user decision 2026-11-14). The part from 5 V up is a Pd row right after the APDO's own
@@ -801,6 +841,7 @@ void plan_unit(Unit unit, const pd::SourceCaps& caps, Options o, const Input& in
             // the ceiling reads "above the K2's monitor"), at 1 A never above the APDO's PDP-derived current or the
             // cable. EPR AVS APDOs (pos >= 8) reach here only with an EPR identity: the epr_cable check above skipped
             // the whole APDO with the existing EPR skip reasons otherwise.
+            if (s.avs && o.avs_sweep) walk_row();
             if (s.avs && o.avs_sweep && sweep_budget) {
                 const auto pr = ctsweep::point_range(p.min_mv, p.max_mv, cap);
                 const unsigned n = ctsweep::point_count(pr);
@@ -1471,6 +1512,11 @@ const mi_unlock::Mode* Runner::mi_mode(const Step& s) const {
 uint32_t Runner::hold_ms() const {
     return kHoldMs;
 }
+// The Deep checks' switches (the Tests list line sets the two apart); the step-walk and sweep rows have their own judgments.
+bool Runner::prog_wanted(const Step& s) const {
+    if (s.group != Group::Pd || s.hunt || s.detail == kDetailStepWalk || s.detail == kDetailSweep) return false;
+    return s.algorithm == Algorithm::Pps ? opts_.pps_sweep : (s.algorithm == Algorithm::SprAvs || s.algorithm == Algorithm::EprAvs) && opts_.avs_sweep;
+}
 uint32_t Runner::hold_left_ms(uint32_t now) const {
     return state_ == State::Holding ? hold_ms() - std::min(hold_ms(), now - phase_ms_) : 0;
 }
@@ -1588,6 +1634,7 @@ void Runner::cut_resolve(Input in) {
 }
 void Runner::finish_row(const Input& in, Verdict v, Reason r, uint8_t detail) {
     auto& s = steps_[index_];
+    prog_on_ = false;
     const bool sweep_row = is_sweep(s);   // read before detail is overwritten: the marker survives on sweep rows
     s.verdict = v; s.reason = r; s.detail = detail;
     if (sweep_row) { s.detail = kDetailSweep; sweep_close(s); }
@@ -1672,15 +1719,16 @@ void Runner::finish_row(const Input& in, Verdict v, Reason r, uint8_t detail) {
         release(in, false);
     }
 }
-// One granted level of the step-walk row (is_step_walk): every level records VBUS; a later level's move of 2 x kStepMv or
-// more fails at once (rounded to a coarser quantum), otherwise the walk asks for the next +kStepMv through the sink's
-// single Request gate; after kStepWalkCount moves the total must be kStepWalkCount x kStepMv +- kStepWalkTolMv and the
-// slope over all levels inside kStepWalkSlopeMinMv..kStepWalkSlopeMaxMv. A jump fails "step resolution N mV" with detail
-// = the observed move in mV; a total or trend that misses fails the same way with detail = the mean move (0 = "steps
-// ignored"). A single move is not judged for direction: the output creeps after each PS_RDY.
+// One granted level of the step-walk row (is_step_walk): every level records VBUS; a later level's move of 2 quanta or more
+// (walk_step_mv: 20 mV PPS, 100 mV AVS) ends the walk at once (rounded to a coarser quantum), otherwise the walk asks for the
+// next quantum through the sink's single Request gate; after kStepWalkCount moves the total must be kStepWalkCount quanta +- one
+// and the slope over all levels inside half a quantum .. one and a half. A jump is a CAUTION (Pass + StepResolution) with detail
+// = the observed move in mV ; a total or trend that misses is the same with detail = the mean move (0 = "steps ignored"). A single
+// move is not judged for direction: the output creeps after each PS_RDY.
 void Runner::walk_step(const Input& in, const Step& eff) {
     (void)eff;
     auto& s = steps_[index_];
+    const int q = int(walk_step_mv(s.algorithm));
     // walk-settle (ROADMAP "The PPS step walk fails a good source..."): the granted level is recorded only once VBUS is
     // steady (kWalkSteadySamples samples inside kWalkSteadyWindowMs within kWalkSteadyMv), or kWalkSteadyTimeoutMs after
     // the level was first seen granted, whichever comes first - the wait is bounded. A source that overshoots and settles
@@ -1697,20 +1745,20 @@ void Runner::walk_step(const Input& in, const Step& eff) {
     if (walk_n_ == 0) {
         walk_prev_mv_ = walk_base_mv_ = level;   // the base level is granted, in band and steady
     } else {
-        // Only a jump fails a single step: the output creeps for ~2 s after each PS_RDY, so one move reads from <= 0 to
+        // Only a jump ends the walk at one step: the output creeps for ~2 s after each PS_RDY, so one move reads from <= 0 to
         // ~+36 mV on a good source; the total and the trend below judge the rest.
         const int move = level - walk_prev_mv_;
-        if (walk_n_ == 1 && !walk_rebased_ && move <= -kStepWalkTolMv) {
+        if (walk_n_ == 1 && !walk_rebased_ && move <= -q) {
             // walk-rebase (qa-fixes item 1, ROADMAP "The PPS step walk's base can be an overshoot plateau"): +kStepMv was asked
-            // and the output stands kStepWalkTolMv or more BELOW the base - the base was a plateau the source holds for a while
+            // and the output stands one quantum or more BELOW the base - the base was a plateau the source holds for a while
             // and then drops from (the UGREEN holds its 13.09 V overshoot for 0.5 to 1.1 s), not the settled level. Take this
             // level as the base once and walk on from it (walk_n_ restarts, the Request for the next +kStepMv goes out below);
             // a second drop is judged by the total and the trend like any other level.
             walk_rebased_ = true;
             walk_n_ = 0;
             walk_lv_[0] = walk_prev_mv_ = walk_base_mv_ = level;
-        } else if (move >= int(2 * kStepMv)) {
-            finish(in, Verdict::Fail, Reason::StepResolution, uint8_t(std::clamp(move, 0, 255)));
+        } else if (move >= 2 * q) {
+            finish(in, Verdict::Pass, Reason::StepResolution, step_walk_detail(move));
             return;
         } else {
             walk_prev_mv_ = level;
@@ -1723,15 +1771,15 @@ void Runner::walk_step(const Input& in, const Step& eff) {
         constexpr int n = int(kStepWalkCount), den = n * (n + 1) * (n + 2) / 6;
         int num = 0;
         for (int i = 0; i <= n; ++i) num += (2 * i - n) * (walk_lv_[i] - walk_base_mv_);
-        const bool trend_ok = num >= kStepWalkSlopeMinMv * den && num <= kStepWalkSlopeMaxMv * den;
-        if (std::abs(total - int(kStepWalkCount * kStepMv)) > kStepWalkTolMv || !trend_ok)
-            finish(in, Verdict::Fail, Reason::StepResolution, uint8_t(std::clamp(total / int(kStepWalkCount), 0, 255)));
+        const bool trend_ok = 2 * num >= q * den && 2 * num <= 3 * q * den;
+        if (std::abs(total - int(kStepWalkCount) * q) > q || !trend_ok)
+            finish(in, Verdict::Pass, Reason::StepResolution, step_walk_detail(total / int(kStepWalkCount)));
         else
             finish(in, Verdict::Pass, Reason::None);
         return;
     }
     ++walk_n_;
-    walk_mv_ = uint16_t(walk_mv_ + kStepMv);
+    walk_mv_ = uint16_t(walk_mv_ + q);
     stable_ = false;
     walk_steady_.clear(); walk_grant_ms_ = 0;   // the next granted level waits for its own steady VBUS
     from_mv_ = std::max(in.vbus_mv, 0);         // a level up from where VBUS stands now
@@ -2954,6 +3002,7 @@ void Runner::poll_impl(Input& in, const pd::SourceCaps& caps) {
                 if (is_step_walk(s)) { walk_step(in, eff); return; }   // the walk advances or finishes instead of holding
                 if (is_sweep(s)) { sweep_point(in, eff); return; }   // the sweep records the point and asks the next one
                 state_ = State::Holding; phase_ms_ = stable_ms_;
+                prog_on_ = prog_wanted(s) && env_.prog_begin(s);
             }
         } else stable_ = false;
         track_plateau(in, ready, s.group == Group::Pd && in.pd.held && in.pd.pos == s.pos && in.pd.mv == eff.mv &&
@@ -2986,7 +3035,10 @@ void Runner::poll_impl(Input& in, const pd::SourceCaps& caps) {
             (in.pd.state == pd::SinkState::Requesting || in.pd.state == pd::SinkState::Transition);
         if ((!ready && !renewing) || !banded) { finish(in, Verdict::Fail, Reason::Voltage); return; }
         if (gap > 250) phase_ms_ = in.now;  // Missing samples cannot establish a continuous hold.
-        if (in.now - phase_ms_ >= hold_ms()) finish(in, Verdict::Pass, Reason::None);
+        if (in.now - phase_ms_ >= hold_ms()) {
+            const uint8_t found = prog_on_ ? env_.prog_take(s) : uint8_t(0);   // before finish(): the page's record() ends the capture
+            finish(in, Verdict::Pass, found ? Reason::ProgCheck : Reason::None, found);
+        }
     }
 }
 }  // namespace k2::charger_test

@@ -326,7 +326,7 @@ Notes:
 | :--- | :--- | :--- |
 | **Light** | Records what the charger advertises: Source_Capabilities, extended capabilities, EPR info, identity, every PDO and APDO as listed. Legacy protocols only to the point they are detectable at 5 V | stays at 5 V: nothing above 5 V is asked |
 | **Medium** (default) | Every selected test at every level, no deep sweeps | each level the tests ask for |
-| **Deep** | Medium plus the PPS deep sweep and the AVS deep sweep over every APDO (every 100 mV at 1 A), and the SuperVOOC ceiling step on a SuperVOOC charger | the whole range of each APDO |
+| **Deep** | Medium plus the PPS deep sweep and the AVS deep sweep over every APDO (every 100 mV at 1 A), a step walk on every PPS and AVS APDO (five small requests; a source that moves in bigger steps turns the range amber, never red), and the SuperVOOC ceiling step on a SuperVOOC charger | the whole range of each APDO |
 
 - A Light run never shows a green pass for something it did not measure. On the K2, the 5 V levels it did measure (PDO 1, each legacy protocol's 5 V handshake) pass as usual. A level the charger lists but was not asked for reads **LISTED** in its Detail, a legacy level above 5 V reads **NOT RUN**; both cells have no fill and a grey bar on their left edge. The Results counters count them with the skips; a grid row's footer counts them apart ("PD3.x: 1 pass, 3 listed"), and a listed PPS or AVS range reads "advertised". EPR levels come from the EPR list the charger sends on request; the K2 does not enter EPR mode.
 - The run summary (`charger_summary.py`) says "advertised" for a listed level and "not asked" for a legacy level above 5 V.

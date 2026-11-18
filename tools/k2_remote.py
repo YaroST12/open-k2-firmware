@@ -292,7 +292,7 @@ TEST_REASONS = ["none", "disabled", "not advertised", "over voltage cap", "not i
                 "rebooted during request", "rebooted during handover", "EPR entry refused", "no contract",
                 "source shut off (needs replug)", "no PD after re-attach", "VBUS cut, source recovered", "blocked by PD",
                 "no QC3+ response", "rebooted 3x", "needs external power", "PD gave up before START", "Class A only (12 V max)",
-                "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target", "withdrawn by source", "wrong voltage on 5V contract", "needs load", "floored above target", "step resolution", "HID-cable loop: 5V lock", "advertised", "light run: not asked", "port cuts without load", "output folds back", "Xiaomi chain"]
+                "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target", "withdrawn by source", "wrong voltage on 5V contract", "needs load", "floored above target", "step resolution", "HID-cable loop: 5V lock", "advertised", "light run: not asked", "port cuts without load", "output folds back", "Xiaomi chain", "transition check"]
 TEST_MAX_STEPS = 112  # Runner's bounded storage: pd::kMaxPdos * 6 + 46
 # fastcharge::Protocol in enum order (include/k2/fastcharge/fastcharge_classify.hpp)
 FC_NAMES = ["...", "NO INPUT", "NO QUICK", "DCP 5V", "QC3.0", "QC2.0 5V", "QC2.0 9V", "QC2.0 12V",
@@ -1636,6 +1636,8 @@ def decode_charger_test(p):
         if flags & 0x20 and group == 0:
             # a deep-sweep row: the detail byte is the recorded point count, not a code (remote_proto.hpp)
             detail_reason = f"deep sweep ({detail} points)"
+        elif why == TEST_REASONS.index("transition check") and group == 0:   # the detail is the flag bits, not a code
+            detail_reason = step_label.prog_check_text(detail) or "none"
         elif detail in EPR_DETAILS and group == 0:
             detail_reason = EPR_DETAILS[detail]
         elif detail == 161 and group == 0:   # older firmware: kDetailSweep marker, no flag bit, points not on the wire
@@ -1677,6 +1679,7 @@ def decode_charger_test(p):
                 "EPR: no PD contract" if why == 28 else
                 EPR_DETAILS.get(detail, TEST_REASONS[why]) if why == 38 else
                 f"step resolution {detail}mV" if why == 46 and detail else "steps ignored" if why == 46 else
+                step_label.prog_check_text(detail).split(",")[0] or TEST_REASONS[why] if why == 53 else
                 "SCP 5A modes need an observed 5A cable" if why == 22 and code == 10 else TEST_REASONS[why])
         rows.append(row)
     out["steps"] = rows

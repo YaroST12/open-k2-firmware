@@ -442,6 +442,8 @@ private:
     void spec_stop() override;
     void spec_collect(specsec::Result&) override;
     void spec_done(const specsec::Result&) override;   // the journal keeps the result (noted here, written by journal_pump)
+    bool prog_begin(const charger_test::Step&) override;       // a Deep PPS / AVS hold starts: freeze the row's transition capture 400 ms on
+    uint8_t prog_take(const charger_test::Step&) override;     // the frozen capture judged (progcheck::measure): the flag bits, 0 = clean or not measured
     void legacy_only(bool) override;
     void pd_rescan() override;
     void detach() override;

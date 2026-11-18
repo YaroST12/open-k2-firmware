@@ -105,6 +105,7 @@ uint8_t legacy_reason(charger_test::Reason r, const charger_test::Step* step = n
     case R::PdOnly: return static_cast<uint8_t>(R::PdActive);              // schema 1 has no "PD only": the same family as "PD active"
     case R::Capped: return static_cast<uint8_t>(R::Timeout);                // schema 1 has no "capped": the level never came (what it was before)
     case R::Folded: return static_cast<uint8_t>(R::None);                     // schema 1 has no "output folds back": a plain pass (the step passed)
+    case R::ProgCheck: return static_cast<uint8_t>(R::None);                  // schema 1 has no "transition check": a plain pass (the step passed)
     case R::MiChain: return static_cast<uint8_t>(R::NoOffer);                 // schema 1 has no "Xiaomi chain": the chain row is "not advertised"
     case R::NoContract: return static_cast<uint8_t>(R::NoSource);
     case R::EprRefused: return static_cast<uint8_t>(R::Request);

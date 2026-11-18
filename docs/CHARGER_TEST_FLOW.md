@@ -392,11 +392,30 @@ then PdLow); the unit and wire IDs did not change, only the order.
 4. **Risky units last**: PPS/AVS rows below 5 V (`latch-off-low-pps` / cut-and-recover), after their own detach and Pd
    attach (the `PdLow` unit; it never runs before `Pd`).
 
+**Step walk (Deep only, user decision 2026-11-18).** A PPS APDO is walked at its 20 mV quantum and an AVS APDO at 100 mV: the
+mid level, then five steps up, one row per APDO planned next to its sweep (`pps_sweep` / `avs_sweep`, so only the Deep level
+plans it; Light and Medium plan none). It never fails the source: a step the source rounded to a coarser quantum, ignored, or
+a total off by more than one quantum is a **caution** (a Pass that carries `Reason::StepResolution`, `detail` = the mean move), amber
+on the APDO's range chip, never a chip of its own. The note reads "steps 100mV, not 20mV" or "steps ignored"
+(`charger_test::caution_text`). Journals and cards from before hold the same reason on a Fail and keep it. Host tests:
+`test_step_walk_is_planned_only_in_deep`, `test_pps_step_walk_cautions_*`, `test_avs_step_walk_*`,
+`test_a_step_walk_miss_is_an_amber_caution_on_the_range_chip`.
+
+**Transition check (Deep only, user decision 2026-11-18).** Each PPS / AVS level row of a Deep run records its own request at 1 kHz
+(the transition recorder, triggered as the hold begins) and judges the capture against the PD spec's limits
+(`include/k2/chargertest/prog_check.hpp`, `docs/PD_PPS_AVS_SPEC_REFERENCE.md`): overshoot past the new level's valid band, a band entry later than
+the source transition time, a transient out of the band again, a final level more than 5 % off the request. A finding is a caution, never a
+fail: the row stays a Pass with `Reason::ProgCheck` (the 54th reason, "transition check") and `detail` = the flag bits (1 overshoot,
+2 slow rise, 4 transient, 8 level off), amber on the APDO's range chip with the first finding in the footer ("overshoot +1"). The numbers go
+to the `[PCHK]` log line. Not judged: the slew (the spec's 30 mV/us is 30 V per sample at 1 kHz, unprovable) and the creep over the hold
+(the docs name no limit); both are logged. The hold is unchanged (1000 ms after the stable start). Remote export, summary, web grid and journal
+carry the reason and its flags; the report card stores the reason but not the flag bits (its detail byte is zeroed: the fast-charge codes share the values).
+
 **PPS deep sweep in the default run** (user decisions 2026-11-14). The session starts with `Options::pps_sweep` on, so
 every PPS APDO is swept every 100 mV at 1 A (ROADMAP "PPS deep sweep"). The sweep is split at 5 V (`ctsweep::kSplitMv`) into
 two rows:
 - **From 5 V up**, a Pd row right after the APDO's own checks (the range rows with the min and the max, the
-  full-current row, the 20 mV step walk), before the next APDO's rows. It runs with any unit list that has `pd`, on a
+  full-current row, then the step walk when the sweep is on), before the next APDO's rows. It runs with any unit list that has `pd`, on a
   self-powered K2, and before any step below 5 V can cut the source.
 - **Below 5 V**, a low programmable row of `PdLow` (external power only, last of the run), after the APDO's low min rows.
   A unit list without `pd-low` or a self-powered run leaves it out. On a `latch-off-low-pps` source (C135) the APDO's own
@@ -713,7 +732,7 @@ How a PD row is judged and how long it waits. All of it is host-tested; none of 
   5 V step holds; fixed targets and small steps keep 3 s (`descent_window_ms`).
 - **Step walk and deep sweep record a mean.** Each walk level and sweep point is the mean of the VBUS samples of the last
   `kWalkSteadyWindowMs` (`WalkSteady::mean`), not the one sample that closes the wait: a burst-mode swing of tens of mV no
-  longer reads as "step resolution" between neighbouring levels or as sweep error.
+  longer reads as a resolution caution between neighbouring levels or as sweep error.
 - **A capped row ends on its plateau.** A PPS / AVS row whose output stands steady below the band with the contract live
   (ready, not a sweep row, plateau held `kCappedPlateauMs` = 5 s, `capped()` true) ends `Capped` there instead of at the 12 s
   row timeout; the timeout path keeps the old rule.
