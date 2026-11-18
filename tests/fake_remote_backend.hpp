@@ -152,6 +152,12 @@ struct Fake {
         for (size_t i = 0; i < expected.size(); i++) cal_expect[i] = expected[i];
         return cal_res;
     }
+    // DebugEeprom op 3: records the page and both byte sets, answers page_res.
+    k2::eeprom::PageResult page_res{}; int page_off = -1; k2::eeprom::Page page_exp{}, page_next{};
+    k2::eeprom::PageResult eeprom_page_cas(uint16_t off, const k2::eeprom::Page &expected, const k2::eeprom::Page &next) {
+        calls++; page_off = off; page_exp = expected; page_next = next;
+        return page_res;
+    }
     k2::raprobe::Result ra_res{}; Status ra_status = Status::Ok; int ra_pc = -1;
     Status ra_probe(const k2::raprobe::Args &a, k2::raprobe::Result &out) {
         calls++; ra_pc = a.vconn_pc;

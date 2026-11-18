@@ -107,6 +107,9 @@ public:
     eeprom::Err eeprom_probe(uint8_t bus, eeprom::Probe &out);   // lab-only, read-only 24Cxx probe (k2/drivers/eeprom.hpp); Busy while a charger test runs
     eeprom::Err eeprom_read(uint8_t bus, const eeprom::Addr &a, std::span<uint8_t> out);
 #endif
+#if K2_EEPROM_WRITE
+    eeprom::PageResult eeprom_page_cas(uint16_t off, const eeprom::Page &expected, const eeprom::Page &next);   // the restore's page write; PageErr::Busy while a charger test runs
+#endif
 #if K2_EEPROM_CAL_CLEAR
     eeprom::CalResult eeprom_cal_clear(std::span<const uint8_t, eeprom::kCalLen> expected);   // the one write (compare-and-swap); CalErr::Busy while a charger test runs
 #endif

@@ -11,6 +11,7 @@
 #include <array>
 #include <span>
 #include <string_view>
+#include "k2/core/eekeep.hpp"
 #include "k2/core/log.hpp"
 #include "k2/core/loop_guard.hpp"
 #include "k2/core/gap_meter.hpp"
@@ -1121,6 +1122,21 @@ eeprom::Err Remote::eeprom_read(uint8_t bus, const eeprom::Addr &a, std::span<ui
 }
 #endif
 
+#if K2_EEPROM_WRITE
+// The backup restore's page write (k2/drivers/eeprom_calc.hpp: page_put with an expectation). The write cycle wait keeps the
+// FUSB302 serviced.
+eeprom::PageResult Remote::eeprom_page_cas(uint16_t off, const eeprom::Page &expected, const eeprom::Page &next) {
+    if (ui_.charger_test_busy()) {
+        eeprom::PageResult r;
+        r.err = eeprom::PageErr::Busy;
+        return r;
+    }
+    const eeprom::PageResult r = eeprom::page_cas(off, expected, next, [] { fusb302::service(); });
+    K2LOG("[EEPROM] page %03x err %u\n", static_cast<unsigned>(off), static_cast<unsigned>(r.err));
+    return r;
+}
+#endif
+
 #if K2_EEPROM_CAL_CLEAR
 // The calibration repair (k2/drivers/eeprom_calc.hpp: cal_clear). The write cycle wait keeps the FUSB302 serviced.
 eeprom::CalResult Remote::eeprom_cal_clear(std::span<const uint8_t, eeprom::kCalLen> expected) {
@@ -1797,13 +1813,14 @@ size_t Remote::emlib(std::span<const uint8_t> p, std::span<uint8_t> out) {
             } else if (!storage::lib_get(le16(&p[2]), ent, quirks)) e = static_cast<uint8_t>(emlib::Err::NotFound);
             else {
                 e = arm_err(emk_spoof::arm(ent.rec, quirks));
-                if (e == 0) spoof_seq_ = ent.seq;
+                if (e == 0) { spoof_seq_ = ent.seq; eekeep::spoof_user_armed({ctcable::Kind::Saved, ent.seq}); }
             }
         } else if (p[1] == remote::kEmSpoofBuiltin) {
             if (ui_.spoof_busy()) e = remote::kEmErrBusy;
             else {
                 e = arm_err(emk_spoof::arm(emrec::builtin_cable(p[2]), emk_quirk::builtin_quirks(p[2])));
                 spoof_seq_ = 0;
+                if (e == 0 && ctcable::valid({ctcable::Kind::Builtin, uint16_t(p[2])})) eekeep::spoof_user_armed({ctcable::Kind::Builtin, uint16_t(p[2])});
             }
         } else if (p[1] == remote::kEmSpoofDisarm) {
             emk_spoof::disarm();

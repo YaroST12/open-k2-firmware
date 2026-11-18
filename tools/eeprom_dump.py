@@ -7,9 +7,9 @@ The firmware only probes (address-only writes to 0x50..0x57, then four 1-byte-ad
   - classify(): one-byte or two-byte word address, from whether the four read windows repeat;
   - dump(): the chunked read loop;
   - hexdump(): the printed view.
-The only write is cal_clear() (op 2, firmware K2_EEPROM_CAL_CLEAR=1): it clears the 12 calibration trim bytes 0x04..0x0F of the
-24C16 on the INA bus, and only when they read back equal to the bytes given with --expect. The firmware takes no address, length
-or value from the host; there is no other write."""
+Two writes: cal_clear() (op 2, firmware K2_EEPROM_CAL_CLEAR=1) clears the 12 calibration trim bytes 0x04..0x0F of the 24C16 on
+the INA bus, only when they read back equal to the bytes given with --expect; restore() (op 3, firmware K2_EEPROM_WRITE=1) writes
+a saved 2 KB dump back, page by page, each a compare-and-swap against what was read just before, then verifies the whole chip."""
 import zlib
 
 BASE7 = 0x50
@@ -157,6 +157,101 @@ def cal_clear(call, expect, yes):
     return out
 
 
+# ---- Restore (op 3, firmware K2_EEPROM_WRITE=1): a compare-and-swap page write per differing 16-byte page ----
+
+PAGE, SIZE_24C16, RESTORE_BUS = 16, 0x800, BUSES["ina"]
+PAGE_ERR = {0: "ok", 1: "already equal", 2: "mismatch: the page changed since it was read, nothing written",
+            3: "the read failed, nothing written", 4: "the write was NACKed", 5: "the write cycle did not end in time",
+            6: "the readback differs from the new bytes", 7: "refused (not an aligned page)", 8: "busy"}
+# A healthy unit's calibration trims (int32 LE at 0x04 voltage gain, 0x08 current zero, 0x0C current gain) are 0 or small. These
+# bounds are 10 % of the smallest full-scale count of the three monitor chips (INA228 V 204800, I 307200) and 1 % for the zero.
+CAL_BOUNDS = ((0x04, "voltage gain", 20480), (0x08, "current zero", 3072), (0x0C, "current gain", 30720))
+
+
+def cal_trims(data):
+    return {name: int.from_bytes(data[off:off + 4], "little", signed=True) for off, name, _ in CAL_BOUNDS}
+
+
+def cal_suspect(data):
+    """The trims that are out of the healthy bounds, as text; empty when all are fine (or blank 0xFF: never written)."""
+    if data[0x04:0x10] == b"\xff" * 12:
+        return []
+    return [f"{name} {int.from_bytes(data[off:off + 4], 'little', signed=True)}" for off, name, lim in CAL_BOUNDS
+            if abs(int.from_bytes(data[off:off + 4], "little", signed=True)) > lim]
+
+
+def decode_page(p):
+    """Op 3 reply: [err, flags, before[16], after[16]]."""
+    if len(p) != 2 + 2 * PAGE:
+        raise ValueError(f"eeprom page reply has {len(p)} bytes, expected {2 + 2 * PAGE}")
+    return {"err": p[0], "before": bytes(p[2:2 + PAGE]) if p[1] & 1 else None, "after": bytes(p[2 + PAGE:]) if p[1] & 2 else None}
+
+
+def read_all(call, progress=None):
+    data, stopped = dump(call, RESTORE_BUS, 1, 0, SIZE_24C16, progress)
+    if stopped is not None:
+        raise ValueError(f"the 24C16 on the INA bus stopped answering at 0x{stopped:X}: nothing written")
+    return data
+
+
+def diff_pages(old, new):
+    return [o for o in range(0, SIZE_24C16, PAGE) if old[o:o + PAGE] != new[o:o + PAGE]]
+
+
+def restore(call, path, yes, allow_bad_cal=False, backup=None, progress=None):
+    """Writes the 2 KB image in the file 'path' back to the 24C16 on the INA bus. Reads the chip first (saved to 'backup' when
+    given), writes only the pages that differ, each as a compare-and-swap against what was just read, then reads the whole chip
+    again and compares. Without yes it only reports the plan. ValueError for every refusal or failure (nothing or part written,
+    the message says which)."""
+    with open(path, "rb") as f:
+        new = f.read()
+    if len(new) != SIZE_24C16:
+        raise ValueError(f"{path} has {len(new)} bytes; a 24C16 image is {SIZE_24C16}")
+    bad = cal_suspect(new)
+    if bad and not allow_bad_cal:
+        raise ValueError(f"refused, nothing written: {path} carries calibration trims out of the healthy range ({', '.join(bad)}); "
+                         "the original firmware would misread V/A with them. --allow-bad-cal writes them anyway")
+    old = read_all(call, progress)
+    if backup:
+        with open(backup, "wb") as f:
+            f.write(old)
+    pages = diff_pages(old, new)
+    out = {"mode": "restore", "in": path, "in_crc32": f"{zlib.crc32(new):08X}", "before_crc32": f"{zlib.crc32(old):08X}",
+           "backup": backup, "pages": [f"0x{o:03X}" for o in pages], "written": [], "dry_run": not yes, "trims": cal_trims(new)}
+    if not pages or not yes:
+        out["verified"] = not pages
+        return out
+    for o in pages:
+        r = decode_page(call(bytes([3]) + o.to_bytes(2, "little") + old[o:o + PAGE] + new[o:o + PAGE]))
+        if r["err"] not in (0, 1):
+            raise ValueError(f"page 0x{o:03X}: {PAGE_ERR.get(r['err'], 'error ' + str(r['err']))}; written before it: "
+                             f"{', '.join(out['written']) or 'none'} (backup of the chip before the restore: {backup})")
+        out["written"].append(f"0x{o:03X}")
+    after = read_all(call, progress)
+    left = diff_pages(after, new)
+    out["after_crc32"] = f"{zlib.crc32(after):08X}"
+    out["verified"] = not left
+    if left:
+        raise ValueError(f"the readback differs from {path} in pages {', '.join(f'0x{o:03X}' for o in left)} "
+                         f"(backup of the chip before the restore: {backup})")
+    return out
+
+
+def render_restore(r):
+    t = r["trims"]
+    lines = [f"EEPROM restore from {r['in']} (crc32 {r['in_crc32']}); the chip before: crc32 {r['before_crc32']}"
+             + (f", saved to {r['backup']}" if r["backup"] else ""),
+             f"  calibration trims in the image: voltage gain {t['voltage gain']}, current zero {t['current zero']}, "
+             f"current gain {t['current gain']}"]
+    if not r["pages"]:
+        lines.append("  the chip already holds the image: nothing to write")
+    elif r["dry_run"]:
+        lines.append(f"  {len(r['pages'])} page(s) differ: {' '.join(r['pages'])}; pass --yes to write them")
+    else:
+        lines.append(f"  wrote {len(r['written'])} page(s): {' '.join(r['written'])}; readback crc32 {r['after_crc32']} matches the image")
+    return "\n".join(lines)
+
+
 def hexdump(data, base=0):
     lines = []
     for i in range(0, len(data), 16):
@@ -183,6 +278,8 @@ def run(call, a, progress=None):
     Returns the result dict (printable, JSON-safe) and writes the raw bin for a dump."""
     if a.eeprom_cmd == "cal-clear":
         return cal_clear(call, a.expect, a.yes)
+    if a.eeprom_cmd == "restore":
+        return restore(call, a.input, a.yes, a.allow_bad_cal, a.backup, progress)
     buses = [BUSES[a.bus]] if a.bus else sorted(BUS_NAMES)
     probes = probe_buses(call, buses)
     if a.eeprom_cmd == "probe":
@@ -209,6 +306,8 @@ def run(call, a, progress=None):
 
 
 def render(r):
+    if r["mode"] == "restore":
+        return render_restore(r)
     if r["mode"] == "cal-clear":
         return "\n".join(["EEPROM 0x50 on ina, calibration area 0x04..0x0F cleared (compare-and-swap):",
                           f"  expected  {r['expect']}",

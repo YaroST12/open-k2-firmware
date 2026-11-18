@@ -50,6 +50,12 @@
  *                   else can be written. The Makefile default is 0 (a one-unit repair, not for the shipping image); the host
  *                   tests pass -DK2_EEPROM_CAL_CLEAR=1. 0 = op 2 answers BadArg and the write code is not linked.
  *
+ * K2_EEPROM_WRITE 1 = the backup restore's page write: DEBUG_EEPROM op 3 writes one aligned 16-byte page of the 24C16 on the INA bus,
+ *                   only when the page reads back equal to the old bytes the host sends (compare-and-swap), then reads it back.
+ *                   The Makefile default is 1; the host tests pass -DK2_EEPROM_WRITE=1. 0 = op 3 answers BadArg.
+ *                   The settings store (Settings USB link, the armed spoof; k2/core/eekeep.hpp) is always built and writes only
+ *                   its own pages 0x500..0x7DF.
+ *
  * K2_SPECROWS  1 = the PD spec section keeps and shows its per-transition list (needs K2_PDSPEC=1): the engine marks each fixed
  *                  transition's measurements (TransRec::seen / fails, 18 -> 20 B each), `specsec` projects them into 10 byte
  *                  rows (spec_rows.hpp), a check's detail page lists them (a verdict band, one row per transition, PLUS / MINUS
@@ -98,6 +104,10 @@
 
 #ifndef K2_EEPROM_CAL_CLEAR
 #define K2_EEPROM_CAL_CLEAR 0
+#endif
+
+#ifndef K2_EEPROM_WRITE
+#define K2_EEPROM_WRITE 0
 #endif
 
 #ifndef K2_OPPO_PROBE

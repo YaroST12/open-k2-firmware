@@ -595,7 +595,7 @@ enum class Cmd : uint8_t {
     DebugEprInfo = 0x28,  // debug: [op] 0 status, 1 ask EPR_Get_Source_Cap (gated on the EPR bit), 2 ask regardless -> EprInfoSnapshot
     DebugLcd = 0x29,      // debug: LCD DMA state, no payload -> LcdSnapshot; [1, page, flags] -> LoopSnapshot (main-loop stalls)
     DebugCcProbe = 0x2A,  // debug: [sw0, pc, ms u16 (, modes u16)] hold a SWITCHES0 value on a waiting charger, sample CC -> see encode_cc_probe
-    DebugEeprom = 0x2B,   // lab-only 24Cxx dump (K2_EEPROM_READ): [0, bus] probe -> [bus, ack_mask, dev7, 4 x 4 sample bytes]; [1, bus, abytes, sel, off u16, len <= 32] read -> [err, off u16, n, n bytes]; (K2_EEPROM_CAL_CLEAR) [2, 12 expected bytes] compare-and-swap clear of the calibration trims -> [err, flags, before[12], after[12]] (k2/drivers/eeprom_calc.hpp)
+    DebugEeprom = 0x2B,   // lab-only 24Cxx dump (K2_EEPROM_READ): [0, bus] probe -> [bus, ack_mask, dev7, 4 x 4 sample bytes]; [1, bus, abytes, sel, off u16, len <= 32] read -> [err, off u16, n, n bytes]; (K2_EEPROM_CAL_CLEAR) [2, 12 expected bytes] compare-and-swap clear of the calibration trims -> [err, flags, before[12], after[12]]; (K2_EEPROM_WRITE) [3, off u16, expected[16], next[16]] compare-and-swap of one aligned page -> [err, flags, before[16], after[16]] (k2/drivers/eeprom_calc.hpp)
     GetIdentity = 0x24, // source identity: VID/PID/bcd, SVIDs, vendor and Apple model
     DfuEnter = 0x30,    // needs kDfuMagic as payload
     FactoryWipe = 0x33, // erase the file system and our own legacy pages, then DFU; needs kFactoryWipeMagic, see above
@@ -1586,6 +1586,9 @@ concept Backend = requires(B &b, uint8_t u8, uint16_t u16, bool on) {
     { b.eeprom_probe(u8, std::declval<eeprom::Probe &>()) } -> std::same_as<eeprom::Err>;   // lab-only: address-only probes of 0x50..0x57 + sample reads, read-only
     { b.eeprom_read(u8, std::declval<const eeprom::Addr &>(), std::span<uint8_t>{}) } -> std::same_as<eeprom::Err>;   // random-address read, never a write
 #endif
+#if K2_EEPROM_WRITE
+    { b.eeprom_page_cas(uint16_t{}, std::declval<const eeprom::Page &>(), std::declval<const eeprom::Page &>()) } -> std::same_as<eeprom::PageResult>;   // the restore's page write (compare-and-swap)
+#endif
 #if K2_EEPROM_CAL_CLEAR
     { b.eeprom_cal_clear(std::declval<std::span<const uint8_t, eeprom::kCalLen>>()) } -> std::same_as<eeprom::CalResult>;   // the one write: compare-and-swap of 12 fixed bytes
 #endif
@@ -2184,6 +2187,22 @@ template <Backend B>
         return reply_ok(f, encode_cc_probe(f.span(), res));
     }
     case Cmd::DebugEeprom: {
+#if K2_EEPROM_WRITE
+        if (!p.empty() && p[0] == 3) {   // [3, off u16, expected[16], next[16]] -> [err, flags, before[16], after[16]]; flags bit0 before read, bit1 readback read
+            if (p.size() != 3 + 2 * eeprom::kPage) return reply_bad_len(f);
+            const uint16_t off = rd16(&p[1]);
+            if (!eeprom::page_ok(off)) return reply_bad_arg(f);
+            eeprom::Page exp, next;
+            __builtin_memcpy(exp.data(), p.data() + 3, eeprom::kPage);
+            __builtin_memcpy(next.data(), p.data() + 3 + eeprom::kPage, eeprom::kPage);
+            const eeprom::PageResult pr = backend.eeprom_page_cas(off, exp, next);
+            if (pr.err == eeprom::PageErr::Busy) return reply_status(f, Status::Busy);
+            f.buf[0] = uint8_t(pr.err); f.buf[1] = uint8_t((pr.before_valid ? 1 : 0) | (pr.after_valid ? 2 : 0));
+            __builtin_memcpy(f.buf + 2, pr.before.data(), eeprom::kPage);
+            __builtin_memcpy(f.buf + 2 + eeprom::kPage, pr.after.data(), eeprom::kPage);
+            return reply_ok(f, 2 + 2 * eeprom::kPage);
+        }
+#endif
 #if K2_EEPROM_CAL_CLEAR
         if (!p.empty() && p[0] == 2) {   // the one write [2, 12 expected old bytes] -> [err, flags, before[12], after[12]]; flags bit0 before read, bit1 readback read
             if (p.size() != 1 + eeprom::kCalLen) return reply_bad_len(f);

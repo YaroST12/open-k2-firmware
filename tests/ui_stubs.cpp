@@ -11,6 +11,7 @@
 #include "k2/core/fs.hpp"
 #include "ui_stubs.h"
 #include "k2/core/bbpersist.hpp"
+#include "k2/core/eekeep.hpp"
 #include "k2/core/loop_guard.hpp"
 #include "k2/chargertest/charger_journal_hw.hpp"
 #include "k2/fastcharge/fctrig.hpp"
@@ -950,6 +951,12 @@ bool set(Setting s) {
     return g_stub.usb_set_ok;
 }
 }  // namespace k2::usbcfg
+
+namespace k2::eekeep {   // the settings EEPROM's spoof slot: nothing kept on the host
+void spoof_user_armed(ctcable::Choice) {}
+ctcable::Choice spoof_user() { return {}; }
+void poll(std::uint32_t, bool) {}
+}  // namespace k2::eekeep
 
 #ifndef K2_WORLD_STUBS   // the world links the real src/core/loop_guard.cpp (its HID-loop variants assert the lock)
 namespace k2::loopguard {

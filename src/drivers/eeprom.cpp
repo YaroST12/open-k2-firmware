@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
-// Lab access to a 24Cxx EEPROM, see k2/drivers/eeprom.hpp. Compiled with K2_EEPROM_READ=1 and/or K2_EEPROM_CAL_CLEAR=1.
+// The 24C16 settings EEPROM, see k2/drivers/eeprom.hpp. The store is always built; the lab parts follow their switches.
 #include "k2/drivers/eeprom.hpp"
 
 #include <bit>
@@ -56,17 +56,20 @@ void check_calibration(power::Chip chip) {
 CalInfo calibration() { return g_calibration; }
 #endif  // K2_EEPROM_READ
 
-#if K2_EEPROM_CAL_CLEAR
 namespace {
-// The chip of the repair: the INA bus, device kCalDev7, one-byte word address. Nothing here takes an address, a length or a
-// value from outside; write() is the only place a data byte leaves for an EEPROM, and cal_clear() hands it kCalWord and kCalZero.
-struct CalChip {
+// The chip of every write: the INA bus, select 0, one-byte word address, linear offsets 0x000..0x7FF (locate() gives the device
+// address and word). Callers are page_put() and cal_clear() (pure, eeprom_calc.hpp), so a write is always inside one page.
+struct InaChip {
     void (*service)();
-    bool read(std::uint8_t word, std::span<std::uint8_t> out) {
-        return i2c::read_word(i2c::Bus::Ina, kCalDev7, {&word, 1}, out);
+    bool read(std::uint16_t off, std::span<std::uint8_t> out) {
+        Addr a;
+        if (!locate(1, 0, off, out.size(), a)) return false;
+        return i2c::read_word(i2c::Bus::Ina, a.dev7, {a.word, 1}, out);
     }
-    bool write(std::uint8_t word, std::span<const std::uint8_t> data) {
-        return i2c::write(i2c::Bus::Ina, kCalDev7, word, data);   // [S dev+W word data... P]: one page write inside the 16-byte page
+    bool write(std::uint16_t off, std::span<const std::uint8_t> data) {
+        Addr a;
+        if (!locate(1, 0, off, data.size(), a) || (off % kPage) + data.size() > kPage) return false;
+        return i2c::write(i2c::Bus::Ina, a.dev7, a.word[0], data);   // [S dev+W word data... P]: one page write
     }
     // Acknowledge polling: the part NACKs its address until the internal write cycle ends. millis() counts whole ms, so a
     // difference above kCalWriteMs means more than kCalWriteMs really elapsed, and the last probe came right before the test.
@@ -82,8 +85,30 @@ struct CalChip {
 };
 }  // namespace
 
+int store_read(Slot s, std::span<std::uint8_t> out) {
+    InaChip c{nullptr};
+    Page p{};
+    if (!c.read(slot_off(s), std::span<std::uint8_t>(p))) return -1;
+    return slot_decode(s, p, out);
+}
+
+PageErr store_write(Slot s, std::span<const std::uint8_t> payload, void (*service)()) {
+    const std::uint16_t off = slot_off(s);
+    if (!in_store(off)) return PageErr::Refused;
+    InaChip c{service};
+    return page_put(c, off, nullptr, slot_encode(s, payload)).err;
+}
+
+#if K2_EEPROM_WRITE
+PageResult page_cas(std::uint16_t off, const Page &expected, const Page &next, void (*service)()) {
+    InaChip c{service};
+    return page_put(c, off, &expected, next);
+}
+#endif
+
+#if K2_EEPROM_CAL_CLEAR
 CalResult cal_clear_ina(std::span<const std::uint8_t, kCalLen> expected, void (*service)()) {
-    CalChip c{service};
+    InaChip c{service};
     return cal_clear(c, expected);
 }
 #endif  // K2_EEPROM_CAL_CLEAR

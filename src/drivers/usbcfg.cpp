@@ -6,6 +6,7 @@
 
 #include <cstring>
 
+#include "k2/core/eekeep.hpp"
 #include "k2/drivers/flash.hpp"
 #include "k2/drivers/fs_flash.hpp"
 #include "k2/drivers/usb.hpp"
@@ -57,6 +58,16 @@ void init() {
     note_webusb_dropped(f);
 #endif
     g_stored = load(f);
+    if (f.exists(kPath)) {
+        eekeep::usb_want(encode(g_stored)[4]);   // the EEPROM copy follows the file (written once the loop is quiet)
+    } else if (const auto flags = eekeep::usb_flags()) {
+        // No /usb.cfg (a clean flash or a wiped volume): the copy in the settings EEPROM, kept through both.
+        std::array<std::uint8_t, 8> r = encode({});
+        r[4] = *flags;
+        r[5] = static_cast<std::uint8_t>(~*flags);
+        g_stored = decode(r);
+        K2LOG("[USBCFG] no /usb.cfg: %s from the settings EEPROM\n", describe(g_stored));
+    }
     current = with_shell(g_stored);
 }
 
@@ -65,6 +76,7 @@ Setting stored() { return g_stored; }
 bool set(Setting s) {
     const bool ok = save(fs::instance(), s);
     if (ok) g_stored = s;
+    eekeep::usb_want(encode(s)[4]);
     K2LOG("[USBCFG] next boot: %s (%s)\n", describe(s), ok ? "saved" : "FLASH ERROR");
     return ok;
 }

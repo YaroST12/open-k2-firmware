@@ -733,6 +733,12 @@
   "736": "[OPPO] refused why=%s\n",
   "737": "[OPPO] power mv=%u ma=%u pos=%u why=%u\n",
   "738": "[EEPROM] cal-clear err %u\n",
-  "739": "[USB] off: core down, no pull-up, bus held SE0 cfg=%x\n"
+  "739": "[USB] off: core down, no pull-up, bus held SE0 cfg=%x\n",
+  "740": "[EEKEEP] slot %u written: err %u\n",
+  "741": "[EEKEEP] usb %s %x, spoof %u/%u\n",
+  "742": "[EEKEEP] spoof %u/%u not restored: another identity is armed\n",
+  "743": "[EEKEEP] spoof %u/%u %s\n",
+  "744": "[EEPROM] page %03x err %u\n",
+  "745": "[USBCFG] no /usb.cfg: %s from the settings EEPROM\n"
  }
 }
