@@ -5669,16 +5669,22 @@ static void test_remote_start_is_the_devices_start() {
     }
 }
 
-// OEM levels by their watts (oem_watts.hpp): a VOOC-family charger detected at 5 V (ident 0xAC). Medium: the ident alone, every
+// OEM levels by their watts (oem_watts.hpp): a VOOC-family charger detected at 5 V (opener 0xA8). Medium: the ident alone, every
 // level not tested. Deep: the ceiling stage stood at 0x06D under 11.02 V (120 W claimed): every SuperVOOC level claimed. The Results
 // grid reads "VOOC" [detected, 20W] and "SVOOC" [50W 65W 100W 120W]; the renders (K2_DUMP) cover all four rotations.
-static void vooc_detects(int proto) {   // the adapter clocked the ident (0xAC): a VOOC-family session ends Detected, no voltage proof
+static void vooc_detects(int proto) {   // the adapter clocked the ident (0xA8): a VOOC-family session ends Detected, no voltage proof
     const auto p = static_cast<k2::fc::Proto>(proto);
     const bool vooc = p == k2::fc::Proto::Vooc || p == k2::fc::Proto::SuperVooc || p == k2::fc::Proto::SuperVooc65;
     g_stub.fc_status_fail = vooc ? int(k2::fc::Fail::Detected) : 0;
-    g_stub.fc_status_ident = vooc ? 0xAC : 0;
+    g_stub.fc_status_ident = vooc ? 0xA8 : 0;
 }
-static void vooc_watts_run(Ui& ui, uint32_t& t, ct::Level level, uint8_t rot, uint16_t ceiling = 0x06D, int32_t vmax_mv = 11020) {
+static void vooc_silent(int proto) {   // no opener after either wake: the family ends NoAnswer
+    const auto p = static_cast<k2::fc::Proto>(proto);
+    const bool vooc = p == k2::fc::Proto::Vooc || p == k2::fc::Proto::SuperVooc || p == k2::fc::Proto::SuperVooc65;
+    g_stub.fc_status_fail = vooc ? int(k2::fc::Fail::NoAnswer) : 0;
+    g_stub.fc_status_ident = 0;
+}
+static void vooc_watts_run(Ui& ui, uint32_t& t, ct::Level level, uint8_t rot, uint16_t ceiling = 0x06D, int32_t vmax_mv = 11020, bool silent = false) {
     six_pdo_fixture();
     if (level == ct::Level::Deep) {   // the ladder went on under every ask up to `ceiling`
         g_stub.svooc_n_asks = 4;
@@ -5694,13 +5700,42 @@ static void vooc_watts_run(Ui& ui, uint32_t& t, ct::Level level, uint8_t rot, ui
     CHECK_EQ(ui.charger_test_set_level(uint8_t(level)), true);
     review(ui);
     start_press(ui, 1300); press(ui, Button::Ok, 1400);
-    g_stub.fc_start_hook = vooc_detects;
+    g_stub.fc_start_hook = silent ? vooc_silent : vooc_detects;
     for (t = 1500; t <= 900000 && ui.charger_test_busy(); t += 100) ui.tick(t);
     g_stub.fc_start_hook = nullptr;
     g_stub.fc_status_fail = g_stub.fc_status_ident = 0;
     CHECK_EQ(ui.charger_test_stage(), 6);
     ui.tick(t); t += 200; ui.tick(t); t += 200;
     settle(ui, t);
+}
+// A charger that never clocked after either wake: the family rows are skips ("no answer"), not fails; the grid folds them into
+// "No reply" and the Detail footer reads the phrase. The renders cover all four rotations.
+static void test_vooc_family_silent_reads_no_answer() {
+    for (uint8_t rot = 0; rot < 4; ++rot) {
+        Ui ui; uint32_t t;
+        vooc_watts_run(ui, t, ct::Level::Medium, rot, 0, 0, true);
+        const auto& r = ui.charger_test_results();
+        unsigned fam = 0;
+        for (const auto& s : r.steps()) {
+            const bool f = s.algorithm == A::Vooc || s.algorithm == A::SuperVooc || s.algorithm == A::SuperVooc65;
+            if (!f) continue;
+            ++fam;
+            CHECK_EQ(s.verdict == ct::Verdict::Skip, true);
+            CHECK_EQ(s.detail, uint8_t(k2::fc::Fail::NoAnswer));
+            CHECK_EQ(result_layout::is_no_answer(s), true);
+        }
+        CHECK_EQ(fam >= 3, true);
+        char name[64];
+        std::snprintf(name, sizeof name, "vooc_silent_rot%u", unsigned(rot)); dump_panel(name);
+        for (int k = 0; k < 3; ++k) { press(ui, Button::Plus, t); settle(ui, t); t += 200; }   // PPS, Xiaomi, then the no-reply group
+        std::snprintf(name, sizeof name, "vooc_silent_rot%u_row2", unsigned(rot)); dump_panel(name);
+        press(ui, Button::Ok, t); ui.tick(t); settle(ui, t); t += 200;
+        CHECK_EQ(ui.charger_test_stage(), 7);
+        std::snprintf(name, sizeof name, "vooc_silent_rot%u_steps", unsigned(rot)); dump_panel(name);
+        press(ui, Button::Ok, t); ui.tick(t); settle(ui, t); t += 200;
+        CHECK_EQ(ui.charger_test_stage(), 8);
+        std::snprintf(name, sizeof name, "vooc_silent_rot%u_detail", unsigned(rot)); dump_panel(name);
+    }
 }
 static void test_vooc_family_results_read_watts_levels() {
     struct Scene { const char* name; ct::Level level; uint16_t ceiling; int32_t vmax_mv; };
@@ -5979,6 +6014,7 @@ int main() {
     test_decisions_use_the_unaveraged_vbus();
     test_remote_start_is_the_devices_start();
     test_vooc_family_results_read_watts_levels();
+    test_vooc_family_silent_reads_no_answer();
     test_xiaomi_unit_scenes();
     return test_report("test_ui_charger_test");
 }
