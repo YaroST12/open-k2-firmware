@@ -1,13 +1,15 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 Yaraslau Furman
-"""Host side of the read-only 24Cxx EEPROM lab dump (remote command DEBUG_EEPROM 0x2B, firmware K2_EEPROM_READ=1).
+"""Host side of the 24Cxx EEPROM lab access (remote command DEBUG_EEPROM 0x2B, firmware K2_EEPROM_READ=1).
 
 The firmware only probes (address-only writes to 0x50..0x57, then four 1-byte-address reads at word address 0) and reads at
 (bus, addressing, select, offset, length). Everything that interprets those is here, so it costs no firmware flash:
   - classify(): one-byte or two-byte word address, from whether the four read windows repeat;
   - dump(): the chunked read loop;
   - hexdump(): the printed view.
-There is no write path in the firmware or here."""
+The only write is cal_clear() (op 2, firmware K2_EEPROM_CAL_CLEAR=1): it clears the 12 calibration trim bytes 0x04..0x0F of the
+24C16 on the INA bus, and only when they read back equal to the bytes given with --expect. The firmware takes no address, length
+or value from the host; there is no other write."""
 import zlib
 
 BASE7 = 0x50
@@ -97,6 +99,64 @@ def dump(call, bus, abytes, sel, size, progress=None):
     return bytes(data), None
 
 
+CAL_WORD, CAL_LEN, CAL_BUS = 0x04, 12, BUSES["ina"]    # firmware kCalWord / kCalLen, the INA bus
+CAL_ERR = {0: "ok", 1: "mismatch: the chip holds other bytes than --expect, nothing written",
+           2: "the first read failed, nothing written",
+           3: "the write was NACKed: the area may hold anything, read it again",
+           4: "the write cycle did not end in time: the area may hold anything, read it again",
+           5: "the readback is not all zero (or could not be read): read it again"}
+
+
+def expect_bytes(text):
+    """--expect: exactly the 12 bytes (24 hex digits, spaces and a 0x prefix allowed) the area is expected to hold. ValueError."""
+    t = "".join(text.split())
+    if t[:2].lower() == "0x":
+        t = t[2:]
+    if len(t) != 2 * CAL_LEN:
+        raise ValueError(f"--expect needs exactly {CAL_LEN} bytes = {2 * CAL_LEN} hex digits, got {len(t)}")
+    try:
+        return bytes.fromhex(t)
+    except ValueError:
+        raise ValueError("--expect is not hex") from None
+
+
+def decode_cal(p):
+    """Op 2 reply: [err, flags, before[12], after[12]]; flags bit0 = before was read, bit1 = the readback was read."""
+    if len(p) != 2 + 2 * CAL_LEN:
+        raise ValueError(f"eeprom cal-clear reply has {len(p)} bytes, expected {2 + 2 * CAL_LEN}")
+    return {"err": p[0], "before": bytes(p[2:2 + CAL_LEN]) if p[1] & 1 else None,
+            "after": bytes(p[2 + CAL_LEN:]) if p[1] & 2 else None}
+
+
+def cal_clear(call, expect, yes):
+    """The repair, with the host's own checks first: --yes, a read of 0x00..0x0F that already matches --expect (nothing is sent
+    to the write op otherwise), then the firmware's compare-and-swap, then a read of 0x00..0x0F that must show the bytes below
+    0x04 unchanged and 0x04..0x0F zero. Returns the result dict; ValueError for every other outcome (it carries the bytes)."""
+    if not yes:
+        raise ValueError("cal-clear writes the EEPROM: pass --yes")
+    expect = bytes(expect)
+    if len(expect) != CAL_LEN:
+        raise ValueError(f"expected bytes must be {CAL_LEN} long")
+    head = read_chunk(call, CAL_BUS, 1, 0, 0, 16)
+    if head is None:
+        raise ValueError("the EEPROM at 0x50 on the INA bus did not answer: nothing written")
+    if head[CAL_WORD:] != expect:
+        raise ValueError(f"refused on the host, nothing written: 0x04..0x0F hold {head[CAL_WORD:].hex().upper()}, "
+                         f"--expect is {expect.hex().upper()}")
+    fw = decode_cal(call(bytes([2]) + expect))
+    out = {"mode": "cal-clear", "expect": expect.hex().upper(), "head_before": head.hex().upper(),
+           "fw_err": fw["err"], "fw_before": fw["before"].hex().upper() if fw["before"] else None,
+           "fw_after": fw["after"].hex().upper() if fw["after"] else None}
+    if fw["err"] != 0:
+        raise ValueError(f"{CAL_ERR.get(fw['err'], 'unknown error ' + str(fw['err']))} (firmware saw "
+                         f"{out['fw_before']}, readback {out['fw_after']})")
+    tail = read_chunk(call, CAL_BUS, 1, 0, 0, 16)
+    out["head_after"] = tail.hex().upper() if tail else None
+    if tail is None or tail[:CAL_WORD] != head[:CAL_WORD] or tail[CAL_WORD:] != bytes(CAL_LEN):
+        raise ValueError(f"the readback of 0x00..0x0F is not the expected result: {out['head_after']} (was {out['head_before']})")
+    return out
+
+
 def hexdump(data, base=0):
     lines = []
     for i in range(0, len(data), 16):
@@ -121,6 +181,8 @@ def probe_buses(call, buses):
 def run(call, a, progress=None):
     """`a`: .eeprom_cmd ('probe' | 'dump'), .bus (name or None = both), and for dump .out, .size, .sel, .addr_bytes.
     Returns the result dict (printable, JSON-safe) and writes the raw bin for a dump."""
+    if a.eeprom_cmd == "cal-clear":
+        return cal_clear(call, a.expect, a.yes)
     buses = [BUSES[a.bus]] if a.bus else sorted(BUS_NAMES)
     probes = probe_buses(call, buses)
     if a.eeprom_cmd == "probe":
@@ -147,6 +209,12 @@ def run(call, a, progress=None):
 
 
 def render(r):
+    if r["mode"] == "cal-clear":
+        return "\n".join(["EEPROM 0x50 on ina, calibration area 0x04..0x0F cleared (compare-and-swap):",
+                          f"  expected  {r['expect']}",
+                          f"  before    0x00..0x0F {r['head_before']}",
+                          f"  firmware  saw {r['fw_before']}, readback {r['fw_after']}",
+                          f"  after     0x00..0x0F {r['head_after']}"])
     if r["mode"] == "probe":
         lines = []
         for p in r["probes"]:

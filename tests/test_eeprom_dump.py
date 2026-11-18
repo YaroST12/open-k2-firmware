@@ -172,5 +172,119 @@ class Views(unittest.TestCase):
             self.assertEqual((a.eeprom_cmd, a.size, a.bus), ("dump", 0x400, "ina"))
 
 
+BAD = bytes.fromhex("0060F0FFCFFEFFFFA24EFBFF")
+
+
+class CalChip(Chip):
+    """A 24C16 on the INA bus plus the firmware's op 2: compare-and-swap of 0x04..0x0F with zeros. err/after_override make
+    the firmware report a failed write; the chip content is only changed when the compare passes and fail is None."""
+
+    def __init__(self, data, fail=None):
+        super().__init__(data, 1, bus=1)
+        self.fail, self.cal_calls, self.cal_payloads = fail, 0, []
+
+    def call(self, payload):
+        if payload[0] != 2:
+            return super().call(payload)
+        self.cal_calls += 1
+        self.cal_payloads.append(bytes(payload))
+        assert len(payload) == 13
+        before = self.data[4:16]
+        if before != payload[1:]:
+            return bytes([1, 1]) + before + bytes(12)
+        if self.fail == "nack":
+            return bytes([3, 3]) + before + before
+        if self.fail == "verify":
+            self.data = self.data[:4] + b"\x01" + self.data[5:]
+        else:
+            self.data = self.data[:4] + bytes(12) + self.data[16:]
+        err = 5 if self.fail == "verify" else 0
+        return bytes([err, 3]) + before + self.data[4:16]
+
+
+def cal_args(expect=BAD, yes=True):
+    return SimpleNamespace(eeprom_cmd="cal-clear", expect=expect, yes=yes)
+
+
+class CalClear(unittest.TestCase):
+    def chip(self, **kw):
+        return CalChip(bytes(range(1, 5)) + BAD + bytes(range(0x20, 0x30)) + bytes(0x700), **kw)
+
+    def test_expect_parsing(self):
+        self.assertEqual(e.expect_bytes("0060F0FFCFFEFFFFA24EFBFF"), BAD)
+        self.assertEqual(e.expect_bytes("0x00 60 f0 ff cf fe ff ff a2 4e fb ff"), BAD)
+        for bad in ("", "00", BAD.hex()[:-2], BAD.hex() + "00", "zz" + BAD.hex()[2:]):
+            with self.assertRaises(ValueError):
+                e.expect_bytes(bad)
+
+    def test_needs_yes_and_sends_nothing(self):
+        c = self.chip()
+        with self.assertRaises(ValueError):
+            e.run(c.call, cal_args(yes=False))
+        self.assertEqual(c.cal_calls, 0)
+        self.assertEqual(c.data[4:16], BAD)
+
+    def test_repair_clears_only_the_trims(self):
+        c = self.chip()
+        before = bytes(c.data)
+        r = e.run(c.call, cal_args())
+        self.assertEqual(c.cal_calls, 1)
+        self.assertEqual(c.cal_payloads[0], bytes([2]) + BAD)
+        self.assertEqual(c.data[4:16], bytes(12))
+        self.assertEqual(c.data[:4] + c.data[16:], before[:4] + before[16:])
+        self.assertEqual((r["head_before"][8:], r["head_after"][8:]), (BAD.hex().upper(), "00" * 12))
+        txt = e.render(r)
+        self.assertIn(BAD.hex().upper(), txt)
+        self.assertIn("after", txt)
+
+    def test_host_refuses_a_mismatch_without_calling_the_write_op(self):
+        c = self.chip()
+        other = bytes(12)
+        with self.assertRaises(ValueError) as cm:
+            e.run(c.call, cal_args(expect=other))
+        self.assertIn("nothing written", str(cm.exception))
+        self.assertEqual(c.cal_calls, 0)
+
+    def test_firmware_refusal_is_an_error_with_what_it_saw(self):
+        c = self.chip()
+        # the chip changes between the host read and the write op: only the firmware compare can notice
+        orig = c.call
+
+        def racy(p):
+            if p[0] == 2:
+                c.data = c.data[:4] + b"\x55" + c.data[5:]
+            return orig(p)
+        with self.assertRaises(ValueError) as cm:
+            e.run(racy, cal_args())
+        self.assertIn("mismatch", str(cm.exception))
+        self.assertEqual(c.data[4], 0x55)
+
+    def test_firmware_write_failures_are_errors(self):
+        for fail, word in (("nack", "NACK"), ("verify", "not all zero")):
+            c = self.chip(fail=fail)
+            with self.assertRaises(ValueError) as cm:
+                e.run(c.call, cal_args())
+            self.assertIn(word, str(cm.exception))
+
+    def test_no_chip_is_an_error(self):
+        c = Chip(bytes(16), 1, bus=0)
+        with self.assertRaises(ValueError):
+            e.run(c.call, cal_args())
+
+    def test_reply_length_is_checked(self):
+        with self.assertRaises(ValueError):
+            e.decode_cal(bytes(5))
+
+    def test_cli_wiring(self):
+        if not hasattr(kr, "build_parser"):
+            self.skipTest("no build_parser")
+        p = kr.build_parser()
+        a = p.parse_args(["debug", "eeprom", "cal-clear", "--expect", BAD.hex(), "--yes"])
+        self.assertEqual((a.eeprom_cmd, a.expect, a.yes), ("cal-clear", BAD, True))
+        with self.assertRaises(SystemExit):
+            p.parse_args(["debug", "eeprom", "cal-clear", "--yes"])           # --expect is required
+        self.assertFalse(p.parse_args(["debug", "eeprom", "cal-clear", "--expect", BAD.hex()]).yes)
+
+
 if __name__ == "__main__":
     unittest.main()
