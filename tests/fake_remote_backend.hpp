@@ -127,6 +127,21 @@ struct Fake {
         out = probe_res;
         return Status::Ok;
     }
+    // DebugEeprom (0x2B): the probe answers ee_probe, a read answers 0x10 + i bytes; ee_err overrides both (Nack / Busy).
+    k2::eeprom::Err ee_err = k2::eeprom::Err::Ok; k2::eeprom::Probe ee_probe{};
+    int ee_bus = -1; k2::eeprom::Addr ee_addr{}; size_t ee_len = 0;
+    k2::eeprom::Err eeprom_probe(uint8_t bus, k2::eeprom::Probe &out) {
+        calls++; ee_bus = bus;
+        if (ee_err != k2::eeprom::Err::Ok) return ee_err;
+        out = ee_probe;
+        return k2::eeprom::Err::Ok;
+    }
+    k2::eeprom::Err eeprom_read(uint8_t bus, const k2::eeprom::Addr &a, std::span<uint8_t> out) {
+        calls++; ee_bus = bus; ee_addr = a; ee_len = out.size();
+        if (ee_err != k2::eeprom::Err::Ok) return ee_err;
+        for (size_t i = 0; i < out.size(); i++) out[i] = uint8_t(0x10 + i);
+        return k2::eeprom::Err::Ok;
+    }
     k2::raprobe::Result ra_res{}; Status ra_status = Status::Ok; int ra_pc = -1;
     Status ra_probe(const k2::raprobe::Args &a, k2::raprobe::Result &out) {
         calls++; ra_pc = a.vconn_pc;

@@ -2227,6 +2227,70 @@ static void test_debug_cc_probe() {
     check_header(r, 0x2A, 11, Status::Busy, 0);
 }
 
+// DebugEeprom (0x2B), read-only 24Cxx dump. Probe [0, bus] -> [bus, ack_mask, dev7, 16 sample bytes]; read
+// [1, bus, abytes, sel, off u16, len] -> [err, off u16, n, n bytes] (err 1 = NACK: n 0, no data). The pure rules refuse first.
+static void test_debug_eeprom() {
+    Fake f; Frame r;
+    f.ee_probe.ack_mask = 0x03; f.ee_probe.dev7 = 0x50;
+    for (size_t i = 0; i < sizeof f.ee_probe.sample; i++) f.ee_probe.sample[i] = uint8_t(0xA0 + i);
+    CHECK_EQ(run(f, request(0x2B, 1, {0, 1}), r), 1);
+    check_header(r, 0x2B, 1, Status::Ok, 19);
+    check_bytes(r, kRspHeader, {1, 0x03, 0x50, 0xA0, 0xA1, 0xA2, 0xA3, 0xA4});
+    check_bytes(r, kRspHeader + 15, {0xAC, 0xAD, 0xAE, 0xAF});
+    CHECK_EQ(f.ee_bus, 1);
+    // One-byte addressing: offset 0x0420 is block 4 (device 0x54), word address 0x20.
+    CHECK_EQ(run(f, request(0x2B, 2, {1, 0, 1, 0, 0x20, 0x04, 32}), r), 1);
+    check_header(r, 0x2B, 2, Status::Ok, 4 + 32);
+    check_bytes(r, kRspHeader, {0, 0x20, 0x04, 32, 0x10, 0x11, 0x12});
+    check_bytes(r, kRspHeader + 4 + 29, {0x2D, 0x2E, 0x2F});
+    CHECK_EQ(f.ee_bus, 0); CHECK_EQ(f.ee_addr.dev7, 0x54); CHECK_EQ(f.ee_addr.nword, 1); CHECK_EQ(f.ee_addr.word[0], 0x20);
+    CHECK_EQ(int(f.ee_len), 32);
+    // Two-byte addressing with the chip's A0 pin high: device 0x51, word address 0x12 0x34.
+    CHECK_EQ(run(f, request(0x2B, 3, {1, 1, 2, 1, 0x34, 0x12, 8}), r), 1);
+    check_header(r, 0x2B, 3, Status::Ok, 4 + 8);
+    check_bytes(r, kRspHeader, {0, 0x34, 0x12, 8, 0x10});
+    CHECK_EQ(f.ee_bus, 1); CHECK_EQ(f.ee_addr.dev7, 0x51); CHECK_EQ(f.ee_addr.nword, 2);
+    CHECK_EQ(f.ee_addr.word[0], 0x12); CHECK_EQ(f.ee_addr.word[1], 0x34);
+    // A device that does not answer: err 1, no data.
+    f.ee_err = k2::eeprom::Err::Nack;
+    CHECK_EQ(run(f, request(0x2B, 4, {1, 0, 1, 0, 0, 0, 16}), r), 1);
+    check_header(r, 0x2B, 4, Status::Ok, 4);
+    check_bytes(r, kRspHeader, {1, 0, 0, 0});
+    // A busy K2 (charger test running) is the Busy status for both ops.
+    f.ee_err = k2::eeprom::Err::Busy;
+    CHECK_EQ(run(f, request(0x2B, 5, {1, 0, 1, 0, 0, 0, 16}), r), 1);
+    check_header(r, 0x2B, 5, Status::Busy, 0);
+    CHECK_EQ(run(f, request(0x2B, 6, {0, 0}), r), 1);
+    check_header(r, 0x2B, 6, Status::Busy, 0);
+    f.ee_err = k2::eeprom::Err::Ok;
+    // Refusals never reach the backend.
+    const int calls = f.calls;
+    CHECK_EQ(run(f, request(0x2B, 7, {2, 0}), r), 1);                       // unknown op
+    check_header(r, 0x2B, 7, Status::BadArg, 0);
+    CHECK_EQ(run(f, request(0x2B, 8, {0, 2}), r), 1);                       // bus 2
+    check_header(r, 0x2B, 8, Status::BadArg, 0);
+    CHECK_EQ(run(f, request(0x2B, 9, {1, 0, 3, 0, 0, 0, 8}), r), 1);        // 3 address bytes
+    check_header(r, 0x2B, 9, Status::BadArg, 0);
+    CHECK_EQ(run(f, request(0x2B, 10, {1, 0, 1, 0, 0, 0, 0}), r), 1);       // length 0
+    check_header(r, 0x2B, 10, Status::BadArg, 0);
+    CHECK_EQ(run(f, request(0x2B, 11, {1, 0, 1, 0, 0, 0, 33}), r), 1);      // longer than a chunk
+    check_header(r, 0x2B, 11, Status::BadArg, 0);
+    CHECK_EQ(run(f, request(0x2B, 12, {1, 0, 1, 0, 0xF0, 0x00, 32}), r), 1);   // crosses a 256 byte block
+    check_header(r, 0x2B, 12, Status::BadArg, 0);
+    CHECK_EQ(run(f, request(0x2B, 13, {1, 0, 1, 0, 0x00, 0x08, 8}), r), 1);    // past 2 KB
+    check_header(r, 0x2B, 13, Status::BadArg, 0);
+    CHECK_EQ(run(f, request(0x2B, 14, {1, 0, 2, 0, 0xE1, 0xFF, 32}), r), 1);   // past 64 KB
+    check_header(r, 0x2B, 14, Status::BadArg, 0);
+    CHECK_EQ(f.calls, calls);
+    CHECK_EQ(run(f, request(0x2B, 15, {0}), r), 1);                         // lengths: probe 2, read 7
+    check_header(r, 0x2B, 15, Status::BadLength, 0);
+    CHECK_EQ(run(f, request(0x2B, 16, {1, 0, 1, 0, 0, 0}), r), 1);
+    check_header(r, 0x2B, 16, Status::BadLength, 0);
+    CHECK_EQ(run(f, request(0x2B, 17, {}), r), 1);
+    check_header(r, 0x2B, 17, Status::BadLength, 0);
+    CHECK_EQ(f.calls, calls);
+}
+
 static void test_emarker_probe() {
     Fake f; Frame r;
     // The probe: no payload = the default VCONN levels (PC13/14/15 low); three raw samples are enough to show the layout.
@@ -3619,6 +3683,7 @@ int main() {
     test_debug_lcd();
     test_debug_loop();
     test_debug_cc_probe();
+    test_debug_eeprom();
     test_emarker_probe();
     test_debug_pd_msg();
     test_screenshot();

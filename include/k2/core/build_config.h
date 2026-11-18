@@ -40,6 +40,10 @@
  *                   sends a DR_Swap and the image is the one without the branch. The host tests of it run only with
  *                   `make test K2_OPPO_PROBE=1` (the flag is a whole-tree choice: its own host object directory).
  *
+ * K2_EEPROM_READ 1 = the read-only 24Cxx EEPROM lab dump: src/drivers/eeprom.cpp and the remote command 0x2B (DEBUG_EEPROM; `k2_remote
+ *                   debug eeprom probe|dump`). There is no write path anywhere. 0 = none of it: the remote answers UnknownCmd.
+ *                   The Makefile default is 1 (about 620 B); the host tests pass -DK2_EEPROM_READ=1.
+ *
  * K2_SPECROWS  1 = the PD spec section keeps and shows its per-transition list (needs K2_PDSPEC=1): the engine marks each fixed
  *                  transition's measurements (TransRec::seen / fails, 18 -> 20 B each), `specsec` projects them into 10 byte
  *                  rows (spec_rows.hpp), a check's detail page lists them (a verdict band, one row per transition, PLUS / MINUS
@@ -80,6 +84,10 @@
 
 #ifndef K2_LOOPPROBE
 #define K2_LOOPPROBE 0
+#endif
+
+#ifndef K2_EEPROM_READ
+#define K2_EEPROM_READ 0
 #endif
 
 #ifndef K2_OPPO_PROBE

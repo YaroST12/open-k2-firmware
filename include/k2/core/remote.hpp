@@ -102,6 +102,10 @@ public:
     remote::Status debug_cc_matrix(uint8_t v, uint16_t modes);
     remote::Status debug_cc_probe(const ccprobe::Args &a, ccprobe::Result &out);   // passive only, blocks a.ms; Busy for any other state
     remote::Status ra_probe(const raprobe::Args &a, raprobe::Result &out);   // the silent-cable-chip probe (~330 ms); passive only, Busy + out.refusal otherwise
+#if K2_EEPROM_READ
+    eeprom::Err eeprom_probe(uint8_t bus, eeprom::Probe &out);   // lab-only, read-only 24Cxx probe (k2/drivers/eeprom.hpp); Busy while a charger test runs
+    eeprom::Err eeprom_read(uint8_t bus, const eeprom::Addr &a, std::span<uint8_t> out);
+#endif
     remote::VconnSnapshot debug_vconn(uint8_t op);   // 0 status, 1 send VCONN_Swap, 2 VCONN off
     remote::EprInfoSnapshot debug_epr_info(uint8_t op);   // 0 status, 1 ask (gated on the EPR bit), 2 ask regardless
     remote::LcdSnapshot debug_lcd();

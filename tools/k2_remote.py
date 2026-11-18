@@ -20,6 +20,7 @@ import k2_flasher  # noqa: E402
 import k2_lock  # noqa: E402
 import k2_usb  # noqa: E402
 import charger_summary  # noqa: E402
+import eeprom_dump  # noqa: E402
 import step_label  # noqa: E402
 import report_card  # noqa: E402
 import twin_proto  # noqa: E402
@@ -48,6 +49,7 @@ CMD_DEBUG_VCONN = 0x27      # debug: VCONN_Swap experiment [op] 0 status, 1 swap
 CMD_DEBUG_EPR_INFO = 0x28   # debug: [op] 0 status, 1 ask EPR_Get_Source_Cap (gated), 2 ask regardless of the EPR bit
 CMD_DEBUG_LCD = 0x29        # debug: LCD DMA state -> [flags, transfers u32, stalls u32]
 CMD_DEBUG_CC_PROBE = 0x2A   # debug: [sw0, pc, ms u16 (, modes u16)] hold a SWITCHES0 value on a waiting charger, sample CC
+CMD_DEBUG_EEPROM = 0x2B     # lab-only read-only 24Cxx dump (firmware K2_EEPROM_READ=1): [0, bus] probe, [1, bus, abytes, sel, off u16, len] read; tools/eeprom_dump.py
 CMD_DEBUG_PDOS = 0x20    # debug: load N synthetic PDOs into the PD state (0 = clear)
 CMD_ADC_RAW = 0x21        # raw ADC dump (10 channels + the 7 scan slots)
 CMD_IDENTIFY_DEVICE = 0x40  # [op] 0 status, 1 start, 2 start + confirm
@@ -326,6 +328,12 @@ class RemoteError(RuntimeError):
             text += " (the K2 is not passive: a charger test, a contract, Rd, VBUS at 1 V or more; the [CCPROBE] log line names the reason)"
         if cmd == CMD_DEBUG_CC_PROBE and status == STATUS_BAD_ARG:
             text += " (sw0 with a pull-up bit, a VCONN bit with PC13 high or with PDWN on the same line; ms 10..5000; pc 0..7)"
+        if cmd == CMD_DEBUG_EEPROM and status == STATUS_UNKNOWN_CMD:
+            text += " (not in this build: the EEPROM dump is compiled in only with K2_EEPROM_READ=1)"
+        if cmd == CMD_DEBUG_EEPROM and status == STATUS_BUSY:
+            text += " (a charger test owns the port; nothing touched the bus)"
+        if cmd == CMD_DEBUG_EEPROM and status == STATUS_BAD_ARG:
+            text += " (refused before the bus was touched: bus 0/1, word address 1 or 2 bytes, select 0..7, 1..32 bytes inside the array and, for one byte, inside a 256-byte block)"
         if cmd == CMD_EMARKER_PROBE and status == STATUS_BUSY:
             text += (f" (refused, nothing was driven: {RA_PROBE_REFUSALS[payload[0]]})" if payload and 0 < payload[0] < len(RA_PROBE_REFUSALS)
                      else " (the K2 is not passive: a charger test is running, or the port is not idle)")
@@ -4720,6 +4728,8 @@ def cmd_debug(link, a):
         finally:
             link.timeout_s = saved
         return {"cc_probe": decode_cc_probe(p), "cc_probe_args": {"sw0": a.sw0, "pc": a.pc, "ms": a.ms, "modes": a.modes}}
+    if a.debug_cmd == "eeprom":
+        return {"eeprom": eeprom_dump.run(lambda payload: link.call(CMD_DEBUG_EEPROM, payload).payload, a)}
     raise ValueError(a.debug_cmd)
 
 
@@ -5431,6 +5441,8 @@ def _render(name, r):
             return f"cc-matrix set to {r['cc_matrix']}"
         if "cc_probe" in r:
             return render_cc_probe(r)
+        if "eeprom" in r:
+            return eeprom_dump.render(r["eeprom"])
         if "vconn" in r:
             return "vconn " + " ".join(f"{k}={v}" for k, v in r["vconn"].items())
         if "epr_info" in r:
@@ -5847,6 +5859,22 @@ def build_parser():
     scp.add_argument("--ms", type=hold_ms, required=True, metavar="10-5000", help="hold time in ms")
     scp.add_argument("--modes", type=lambda x: int(x, 16), default=None, metavar="HEX",
                      help="CRH mode nibbles for PC13/14/15 (bits 0-3/4-7/8-11); default: leave them")
+    see = sds.add_parser("eeprom", help="lab: read-only dump of the external 24Cxx I2C EEPROM at 0x50..0x57 "
+                                        "(firmware built with K2_EEPROM_READ=1; there is no write path)")
+    seesub = see.add_subparsers(dest="eeprom_cmd", required=True)
+    for nm, hp in (("probe", "address-only probe of 0x50..0x57 on both I2C buses and a guess at the word-address width"),
+                   ("dump", "read the whole array to a raw .bin and print 0x000..0x0FF and 0x400..0x40F")):
+        sp = seesub.add_parser(nm, help=hp)
+        sp.add_argument("--bus", choices=sorted(eeprom_dump.BUSES), default=None,
+                        help="fusb = the FUSB302 bus (PB10/PB11), ina = the power-monitor bus (PB8/PB9); default: both")
+        if nm == "dump":
+            sp.add_argument("--out", required=True, metavar="FILE", help="raw binary dump")
+            sp.add_argument("--size", type=lambda x: int(x, 0), default=0, metavar="N",
+                            help="bytes to read (default: one 256-byte block per answering address, or 0x1000 for a two-byte chip)")
+            sp.add_argument("--addr-bytes", type=int, choices=(1, 2), default=None,
+                            help="word-address width; default: detected by the probe")
+            sp.add_argument("--sel", type=int, choices=range(8), default=None, metavar="0-7",
+                            help="A2..A0 pin levels, i.e. the device address 0x50+SEL; default: the lowest address that answered")
     svc = sds.add_parser("vconn", help="debug: VCONN_Swap experiment (swap = ask the source for the VCONN role, off = drop it)")
     svc.add_argument("op", choices=["status", "swap", "off", "roundtrip", "data-reset"])
     sde = sds.add_parser("epr-info", help="debug: informational EPR_Get_Source_Cap (ask = only when PDO 1 has the EPR bit, "

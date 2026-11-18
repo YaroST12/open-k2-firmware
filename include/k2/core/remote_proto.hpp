@@ -543,6 +543,7 @@
 #include "k2/core/stop.hpp"
 #include "k2/pd/cc_probe.hpp"
 #include "k2/pd/ra_probe.hpp"
+#include "k2/drivers/eeprom_calc.hpp"
 #include "k2/chargertest/charger_test.hpp"
 #include "k2/chargertest/ct_cable.hpp"
 #include "k2/pd/emk_learn.hpp"
@@ -589,6 +590,7 @@ enum class Cmd : uint8_t {
     DebugEprInfo = 0x28,  // debug: [op] 0 status, 1 ask EPR_Get_Source_Cap (gated on the EPR bit), 2 ask regardless -> EprInfoSnapshot
     DebugLcd = 0x29,      // debug: LCD DMA state, no payload -> LcdSnapshot; [1, page, flags] -> LoopSnapshot (main-loop stalls)
     DebugCcProbe = 0x2A,  // debug: [sw0, pc, ms u16 (, modes u16)] hold a SWITCHES0 value on a waiting charger, sample CC -> see encode_cc_probe
+    DebugEeprom = 0x2B,   // lab-only read-only 24Cxx dump (K2_EEPROM_READ): [0, bus] probe -> [bus, ack_mask, dev7, 4 x 4 sample bytes]; [1, bus, abytes, sel, off u16, len <= 32] read -> [err, off u16, n, n bytes] (k2/drivers/eeprom_calc.hpp)
     GetIdentity = 0x24, // source identity: VID/PID/bcd, SVIDs, vendor and Apple model
     DfuEnter = 0x30,    // needs kDfuMagic as payload
     FactoryWipe = 0x33, // erase the file system and our own legacy pages, then DFU; needs kFactoryWipeMagic, see above
@@ -662,7 +664,7 @@ inline constexpr Cmd kCmdIds[] = {
     Cmd::Ping, Cmd::Button, Cmd::GetState, Cmd::GetPdos, Cmd::GetEmarker, Cmd::Action,
     Cmd::SetPage, Cmd::Reboot, Cmd::Log, Cmd::Screenshot, Cmd::DebugPdos, Cmd::AdcRaw,
     Cmd::Ripple, Cmd::DfuEnter, Cmd::FactoryWipe, Cmd::FlashDump, Cmd::DebugFault, Cmd::Fc, Cmd::DebugLink, Cmd::DebugPdMsg, Cmd::DebugCcMatrix, Cmd::DebugVconn,
-    Cmd::DebugEprInfo, Cmd::DebugLcd, Cmd::DebugCcProbe,
+    Cmd::DebugEprInfo, Cmd::DebugLcd, Cmd::DebugCcProbe, Cmd::DebugEeprom,
     Cmd::GetIdentity, Cmd::IdentifyDevice, Cmd::PdRequest, Cmd::PdReset, Cmd::PdTriggerStatus, Cmd::PdRelease, Cmd::PdMatch, Cmd::UsbLink, Cmd::PdReread,
     Cmd::PdAttach, Cmd::PdHandback, Cmd::AppleRead, Cmd::Stop, Cmd::Lease, Cmd::OppoProbe,
     Cmd::CableR, Cmd::Lab, Cmd::Ufcs, Cmd::QRTest, Cmd::Store, Cmd::EmLib, Cmd::Cards, Cmd::Twin, Cmd::BlackBox, Cmd::TransCap, Cmd::ChargerTest,
@@ -1557,6 +1559,10 @@ concept Backend = requires(B &b, uint8_t u8, uint16_t u16, bool on) {
     { b.debug_loop(u8, on) } -> std::same_as<LoopSnapshot>;   // page whose longest pass to report, reset after the read
     { b.debug_cc_probe(std::declval<const ccprobe::Args &>(), std::declval<ccprobe::Result &>()) } -> std::same_as<Status>;
     { b.ra_probe(std::declval<const raprobe::Args &>(), std::declval<raprobe::Result &>()) } -> std::same_as<Status>;
+#if K2_EEPROM_READ
+    { b.eeprom_probe(u8, std::declval<eeprom::Probe &>()) } -> std::same_as<eeprom::Err>;   // lab-only: address-only probes of 0x50..0x57 + sample reads, read-only
+    { b.eeprom_read(u8, std::declval<const eeprom::Addr &>(), std::span<uint8_t>{}) } -> std::same_as<eeprom::Err>;   // random-address read, never a write
+#endif
     { b.debug_link(on) } -> std::same_as<Status>;
     { b.log_enabled() } -> std::same_as<bool>;
     { b.set_log(on) } -> std::same_as<void>;
@@ -2147,6 +2153,32 @@ template <Backend B>
         if (st != Status::Ok) return reply_status(f, st);
         return reply_ok(f, encode_cc_probe(f.span(), res));
     }
+    case Cmd::DebugEeprom: {
+#if K2_EEPROM_READ
+        if (p.empty() || p[0] > 1) return p.empty() ? reply_bad_len(f) : reply_bad_arg(f);
+        if (p.size() != (p[0] ? 7u : 2u)) return reply_bad_len(f);
+        if (p[1] > 1) return reply_bad_arg(f);
+        eeprom::Err err;
+        if (p[0] == 0) {
+            eeprom::Probe pr;
+            err = backend.eeprom_probe(p[1], pr);
+            if (err != eeprom::Err::Ok) return reply_status(f, Status::Busy);
+            f.buf[0] = p[1]; f.buf[1] = pr.ack_mask; f.buf[2] = pr.dev7;
+            __builtin_memcpy(f.buf + 3, pr.sample, sizeof pr.sample);
+            return reply_ok(f, 3 + sizeof pr.sample);
+        }
+        eeprom::Addr a;
+        const uint16_t off = rd16(&p[4]);
+        const size_t n = p[6];
+        if (!eeprom::locate(p[2], p[3], off, n, a)) return reply_bad_arg(f);
+        err = backend.eeprom_read(p[1], a, std::span<uint8_t>(f.buf + 4, n));
+        if (err == eeprom::Err::Busy) return reply_status(f, Status::Busy);
+        f.buf[0] = uint8_t(err); f.buf[1] = p[4]; f.buf[2] = p[5]; f.buf[3] = err == eeprom::Err::Ok ? uint8_t(n) : 0;
+        return reply_ok(f, 4 + (err == eeprom::Err::Ok ? n : 0));
+#else
+        return reply_status(f, Status::UnknownCmd);
+#endif
+    }
     case Cmd::EmarkerProbe: {
         if (p.size() > 1) return reply_bad_len(f);
         raprobe::Args a;
@@ -2480,7 +2512,7 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
         return detail::handle_fc(cmd, p, backend, f);
     case Cmd::DebugFault: case Cmd::DebugPdos: case Cmd::DebugLink: case Cmd::DebugPdMsg:
     case Cmd::DebugCcMatrix: case Cmd::DebugVconn: case Cmd::DebugEprInfo: case Cmd::DebugLcd:
-    case Cmd::DebugCcProbe: case Cmd::EmarkerProbe: case Cmd::AdcRaw: case Cmd::Ripple:
+    case Cmd::DebugCcProbe: case Cmd::EmarkerProbe: case Cmd::AdcRaw: case Cmd::Ripple: case Cmd::DebugEeprom:
         return detail::handle_debug(cmd, p, backend, f);
     case Cmd::Store: case Cmd::Lab: case Cmd::Ufcs: case Cmd::LoopProbe:
     case Cmd::PdStress: case Cmd::PdSpec: case Cmd::QRTest:

@@ -23,6 +23,14 @@ bool write(Bus bus, std::uint8_t dev, std::uint8_t reg, std::span<const std::uin
 // or register byte; the last byte is NACKed as the protocol requires.
 bool read(Bus bus, std::uint8_t dev, std::uint8_t reg, std::span<std::uint8_t> out);
 
+// Address-only probe [S dev+W P]: true when `dev` (7-bit) ACKs its address. No data byte follows, so nothing is written.
+bool probe(Bus bus, std::uint8_t dev);
+
+// Random-address read of a device with an n-byte word address (a 24Cxx EEPROM): [S dev+W word... Sr dev+R out... P]. The word
+// address bytes go out in the write phase that precedes the repeated start; there is no data byte and no way to send one.
+// False on a NACK of the address or of a word byte.
+bool read_word(Bus bus, std::uint8_t dev, std::span<const std::uint8_t> word, std::span<std::uint8_t> out);
+
 inline bool write_reg(Bus bus, std::uint8_t dev, std::uint8_t reg, std::uint8_t val) {
     return write(bus, dev, reg, {&val, 1});
 }
