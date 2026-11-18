@@ -206,6 +206,9 @@ def test_group_why_prefers_the_engine_code_and_falls_back_to_the_reason():
     assert f("PD", 144, "over voltage cap") == "EPR: above K2's 36V monitor"
     assert f("PD", 139, "EPR entry refused") == "EPR: refused (RDO)"
     assert f("QC3", 144, "timeout") == "timeout"      # only the PD group carries EPR details
+    for g in ("VOOC", "SVOOC", "SVOOC65"):             # a silent family: the long form (report_card.cpp group_why)
+        assert f(g, 13, "request failed") == "no answer to either wake, unloaded"
+    assert f("QC3", 13, "request failed") == "no answer"
 
 
 def test_epr_detail_names_match_the_firmware_and_the_tools():
