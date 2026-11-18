@@ -403,8 +403,8 @@ rows and their evidence side table). Detection is by the SVID in the source's Di
   At its turn the sink's 0x2717 auth chain has run (unchanged wire behaviour, `pd::Sink`), and the row records how it ended in
   `detail` (`mi_unlock::chain_code`: 1 no SVID, 2 no answer, 4..13 stalled at step 1..10, 20 verified, 21 done via 020A) with
   `Reason::MiChain`. A finished chain is a Pass, anything else a neutral Skip ("no 0x2717 SVID", "chain: no answer", ...).
-- **The diff** (`mi_unlock::diff`, pure, `tests/test_mi_unlock.cpp`): the list the sink kept when the chain started
-  (`XiaomiTrace::pre`) against the list in hand after the re-announce, PDO by PDO. A PDO that is new, or whose current, power
+- **The diff** (`mi_unlock::diff`, pure, `tests/test_mi_unlock.cpp`): the list in force when the chain finished, before
+  the source's re-announce (`XiaomiTrace::pre`) against the list in hand after the re-announce, PDO by PDO. A PDO that is new, or whose current, power
   or voltage range went up, is an unlocked mode. Each mode becomes a row right behind the chain row (`pos` = its PDO
   position; `ct::is_mi_mode`), asked at its new level (`mi_unlock::test_point`: a PPS / AVS mode at its top voltage and new
   current), never above what is advertised.
@@ -442,7 +442,7 @@ the pick that was made.
    note on the focused row: `All tests` = "Everything, QC Class B 20V too", `PD only` = "PD fixed, PPS, EPR, Xiaomi", `Legacy only` =
    "D+/D-: vendor modes + QC/UFCS" (all the D+/D- families), `Vendor modes` = "Huawei, Samsung, OPPO, vivo"). Steps are
    named by one label, `<protocol> <V> <A>` (`PPS 20V 5A`,
-   `PPS 11→8V`, `QC3 12V`, `Mi 20V 6A`), the same on rows, details, chips, summary and report card text. `Custom...` opens the per-family list (stage 14,
+   `PPS 11→8V`, `QC3 12V`, `Mi 55W`), the same on rows, details, chips, summary and report card text. `Custom...` opens the per-family list (stage 14,
    "Custom tests": the six families in run order with `ON` / `OFF` / `PART` counts: `Huawei / Honor` (FCP, SCP),
    `Samsung` (AFC), `OPPO / OnePlus / vivo` (VOOC, SVOOC, SVOOC65, VIVO), `Xiaomi / Redmi` (the 0x2717 chain and its modes; it mirrors `USB PD`, the
    probes run inside the PD unit, so the row is not toggleable), `USB PD`, `QC / UFCS` (QC2, QC3, QC3+, Class B, UFCS);

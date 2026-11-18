@@ -1302,7 +1302,8 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
 | Test units: legacy first in one PD-silent attach, then PD, then the low programmable rows (CHARGER_TEST_FLOW) | done | verified | `chargertest`, `ui_charger_test` |
 | Report cards, Results view, QR readout (card format versions in QR_SHARE.md) | done | verified (cards); QR phone scan not verified | `chargertest`, `qrshare_records`, `ui_share` |
 | Reboot-resume journal (`/jr`) | done | partial: see Not verified | `session_store` |
-| The 6 A hunt rows report "not unlocked" instead of failing when the source never offered 6 A | done | not verified on the CUKTECH 120 W | `chargertest` |
+| ~~The 6 A hunt rows report "not unlocked" instead of failing when the source never offered 6 A~~ replaced 2026-11-18 by the Xiaomi unit (next row) | retired | - | `chargertest` |
+| Xiaomi unit: the 0x2717 chain row, the before/after list diff, one row per unlocked mode named by watts ("Mi 55W"), "cable limit" skips, a Xiaomi section in the card block (format 12) and on the device card (CHARGER_TEST_FLOW "Xiaomi unit") | done | not verified (host-tested on the 20K, FH22 and CUKTECH 120 W lists) | `chargertest`, `mi_unlock`, `report_card_deep`, `ui_cards` |
 | Test levels: Light (what is advertised, VBUS stays at 5 V), Medium (default, no deep sweeps), Deep (+ PPS and AVS deep sweeps); Review Level row, Settings > Test level, `charger-level` (0x5B), `ct_start.py --level`, level on the card and in the QR record; the Noted verdict for what a Light run did not measure | done | not verified | `chargertest`, `ui_charger_test`, `kit` |
 | A Legacy row waits through a source output restart (up to 10 s) instead of failing it | done | not verified | `chargertest` |
 
