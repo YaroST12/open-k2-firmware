@@ -1630,6 +1630,39 @@ const pd::SourceCaps& epr_info_list() { return g_engine.epr_info; }
 pd::Err apple_read_start() { return sink().arm_apple_read(systick::millis()); }
 const pd::AppleInfo& apple_info() { return sink().apple_info(); }
 bool apple_armed() { return sink().apple_armed(); }
+
+pd::oppo::Refusal oppo_gate(pd::oppo::Facts f, bool need_5v) {
+    // The driver's own owners join the caller's facts: another PD engine, a listen window, the Apple readout, an inline link.
+    const pd::SinkStatus& s = sink().status();
+    f.engine_busy = f.engine_busy || ident_running() || g_ident_wait || probe_running() || reread_running() || g_prep.active() ||
+                    sink().apple_armed();
+    f.ports_busy = f.ports_busy || listen_active();
+    f.inline_mode = f.inline_mode || inline_now() || g_legacy_only;
+    f.trigger_refusal = f.trigger_refusal || trigger_refusal() != pd::TriggerRefusal::None;
+    f.answers_sop = f.answers_sop && sink().answers_sop();
+    f.contract = s.state == pd::SinkState::Ready;
+    f.five_v = !need_5v || (!s.epr_mode && s.mv != 0 && s.mv <= pd::kVsafe5vMv);
+    f.running = sink().oppo_running();
+    return pd::oppo::refusal(f);
+}
+
+pd::oppo::Refusal oppo_start(const pd::oppo::Config& c, const pd::oppo::Facts& f) {
+    pd::oppo::Refusal why = oppo_gate(f, true);
+    if (why == pd::oppo::Refusal::None) {
+        switch (sink().oppo_start(c, systick::millis())) {
+            case pd::Err::Ok: break;
+            case pd::Err::Inline: why = pd::oppo::Refusal::Inline; break;
+            case pd::Err::NoCaps: why = pd::oppo::Refusal::NoContract; break;
+            case pd::Err::BadVoltage: why = pd::oppo::Refusal::NotFiveV; break;
+            default: why = pd::oppo::Refusal::Busy; break;
+        }
+    }
+    if (why != pd::oppo::Refusal::None) K2LOG("[OPPO] refused why=%s\n", pd::oppo::refusal_name(why));
+    return why;
+}
+void oppo_stop() { sink().oppo_stop(systick::millis()); }
+bool oppo_running() { return sink().oppo_running(); }
+const pd::oppo::Result& oppo_result() { return sink().oppo_result(); }
 bool answers_sop() { return sink().answers_sop(); }
 const pd::PpsAnswer& pps_answer() { return sink().pps_answer(); }
 std::uint32_t caps_count() { return g_caps_count; }

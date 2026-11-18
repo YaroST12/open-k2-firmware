@@ -53,6 +53,12 @@ constexpr std::uint32_t kXiaomiOpenerMs = 200;  // pacing between sends
 // charger's own discovery runs first and the REQ cannot desync it (H4, trace5).
 constexpr std::uint32_t kProactiveDiscoverMs = 220;
 
+// Header bit 5 of a SOP message is the Port Data Role (1 = DFP); a cable message (SOP') uses it as Cable Plug, a Hard Reset has none.
+K2_HOT void with_role(TxMsg& m, bool dfp) {
+    if (m.hard_reset || m.sop != Sop::Sop) return;
+    m.header = std::uint16_t((m.header & ~0x20u) | (dfp ? 0x20u : 0u));
+}
+
 }  // namespace
 
 const char* epr_fail_name(std::uint8_t code) {
@@ -233,6 +239,7 @@ void Sink::update_rev() {
 K2_HOT void Sink::queue(const TxMsg& m) {
     tx_ = m;
     tx_pending_ = true;
+    tx_owner_ = TxOwner::Sink;   // the probe / DR_Swap paths name themselves after queueing
 }
 
 K2_HOT bool Sink::take_tx(TxMsg& out) {
@@ -246,7 +253,9 @@ K2_HOT bool Sink::take_tx(TxMsg& out) {
         out.len = std::uint8_t(4 * nw);
         for (int w = 0; w < nw; w++)
             for (int i = 0; i < 4; i++) out.data[4 * w + i] = std::uint8_t(words[w] >> (8 * i));
+        with_role(out, dfp_);
         last_tx_ = out;
+        last_owner_ = TxOwner::Sink;
         return true;
     }
     if (sink_cap_ext_pending_ && !(tx_pending_ && tx_.hard_reset)) {
@@ -263,18 +272,24 @@ K2_HOT bool Sink::take_tx(TxMsg& out) {
         } else {
             out.header = make_header(kCtlNotSupported, 0, rev_);
         }
+        with_role(out, dfp_);
         last_tx_ = out;
+        last_owner_ = TxOwner::Sink;
         return true;
     }
     if (ans_pending_ && !(tx_pending_ && tx_.hard_reset)) {   // the answer to a request: also tSenderResponse
         out = ans_;
         ans_pending_ = false;
+        with_role(out, dfp_);
         last_tx_ = out;
+        last_owner_ = TxOwner::Sink;
         return true;
     }
     if (!tx_pending_) return false;
     out = tx_;
-    last_tx_ = tx_;
+    with_role(out, dfp_);
+    last_tx_ = out;
+    last_owner_ = tx_owner_;
     tx_pending_ = false;
     return true;
 }
@@ -339,6 +354,7 @@ K2_HOT void Sink::do_hard_reset(SinkResult r, SinkState to, bool forced) {
     discover_svids_pending_ = false;
     xm_ = {};
     ap_.reset();   // the lab-only Apple readout belongs to the attach that just ended
+    link_reset(oppo::End::HardReset, wire);   // nothing on the wire (self-powered): the partner still has the roles we swapped
     fail(r, to);
 }
 
@@ -375,6 +391,7 @@ K2_HOT void Sink::on_hard_reset_rx(std::uint32_t) {
     discover_svids_pending_ = false;
     xm_ = {};
     ap_.reset();
+    link_reset(oppo::End::HardReset, true);   // both ends are back to their default roles
     resume_ = resume_ || owned;   // a second Hard Reset right behind the first finds the sink already idle: keep the flag
     get_cap_sent_ = false;
     refresh_pending_ = false;
@@ -413,6 +430,7 @@ void Sink::detach() {
     xm_ = {};
     ap_.reset();
     txok_.reset();   // a new source: it has not shown SinkTxOK yet
+    link_reset(oppo::End::Detach, true);
     fail(SinkResult::None, SinkState::Idle);
 }
 
@@ -437,6 +455,7 @@ K2_HOT void Sink::soft_reset(std::uint32_t now) {
     sr_wait_ = true;
     sr_at_ = now + 400;
     ap_.reset();
+    link_reset(oppo::End::SoftReset, false);   // a Soft Reset keeps the data role
     fail(SinkResult::SoftReset, SinkState::Idle);
 }
 
@@ -522,7 +541,9 @@ void Sink::queue_epr_control(std::uint8_t kind) {  // Extended_Control: ext head
 Err Sink::request_epr_info(std::uint32_t now, bool force) {
     if (!caps_ || !info_) return Err::NoCaps;
     if (!force && !source_offers_epr(*caps_)) return Err::BadChoice;
-    if (st_.epr_info != EprInfo::None || st_.epr_mode || st_.state != SinkState::Ready || tx_pending_ || xiaomi_chain_active(now)) return Err::Busy;
+    if (st_.epr_info != EprInfo::None || st_.epr_mode || st_.state != SinkState::Ready || tx_pending_ || xiaomi_chain_active(now) ||
+        ams_open())
+        return Err::Busy;
     queue_epr_control(kEprGetSourceCap);
     st_.epr_info = EprInfo::Pending;
     info_deadline_ = now + kEprInfoMs;
@@ -535,24 +556,29 @@ K2_HOT Err Sink::request_source_caps(std::uint32_t now) {
     // retransmitted, no release / abort / VBUS check hanging on a Request, no Xiaomi chain (it holds our own Request back too), and
     // not still inside the last ask's answer window. EPR mode: an unsolicited Source_Capabilities there is a Hard Reset.
     if (st_.state != SinkState::Ready || st_.epr_mode || !contract_ || tx_pending_ || retx_pending_ || release_pending_ || verify_ ||
-        deferred_ != Deferred::None || sr_wait_ || get_cap_sent_ || st_.epr_info == EprInfo::Pending || xiaomi_chain_active(now))
+        deferred_ != Deferred::None || sr_wait_ || get_cap_sent_ || st_.epr_info == EprInfo::Pending || xiaomi_chain_active(now) ||
+        ams_open())
         return Err::Busy;
     if (txok_.hold(rev_, now)) return Err::Busy;   // a sink-initiated message: SinkTxNG (1.5 A) means the source asks us to wait
     txok_.sent();
+    queue_get_caps(now);
+    return Err::Ok;
+}
+
+void Sink::queue_get_caps(std::uint32_t now) {
     TxMsg m;
     m.header = make_header(kCtlGetSourceCap, 0, rev_);
     queue(m);
     get_cap_sent_ = true;
     refresh_pending_ = true;
     refresh_deadline_ = now + kGetCapAnswerMs;
-    return Err::Ok;
 }
 
 Err Sink::request_pps_status(std::uint32_t now) {
     if (!caps_) return Err::NoCaps;
     if (st_.state != SinkState::Ready || !contract_ || tx_pending_ || retx_pending_ || release_pending_ || verify_ ||
         deferred_ != Deferred::None || sr_wait_ || get_cap_sent_ || st_.epr_info == EprInfo::Pending || pps_.ask == PpsAsk::Pending ||
-        xiaomi_chain_active(now))
+        xiaomi_chain_active(now) || ams_open())
         return Err::Busy;
     if (txok_.hold(rev_, now)) return Err::Busy;
     txok_.sent();
@@ -586,6 +612,7 @@ Err Sink::arm_apple_read(std::uint32_t now) {
 
 Err Sink::trigger(Choice c, std::uint32_t now) {
     if (!caps_) return Err::NoCaps;
+    if (op_.running() || swap_ == DrSwap::Pending) return Err::Busy;   // the lab probe owns the contract until it ends
     switch (st_.state) {
         case SinkState::EprEntering: case SinkState::EprWaitCaps: case SinkState::Requesting:
         case SinkState::Transition: case SinkState::Aborting:
@@ -803,6 +830,7 @@ K2_HOT void Sink::after_ps_rdy(std::uint32_t now) {
     next_keepalive_ = now + kPpsKeepAliveMs;
     if (st_.epr_mode) { next_epr_ka_ = now + kEprKeepAliveMs; st_.epr_ka_at = now; }
     settle_release(now);   // a release that waited behind this Request goes out now (not for the abort's own PS_RDY)
+    if (op_.running()) op_.on_ready(now);   // the probe's closing Get_Source_Cap: its re-request is done
 }
 
 // The Chunk Request for the next chunk of the chunked extended message `header` / `payload` (its own type); false when that
@@ -944,6 +972,7 @@ K2_HOT void Sink::on_message(Sop sop, std::uint16_t header, std::span<const std:
     const std::uint32_t edge_us = stamp_us_;   // this frame's RX edge, if the driver had one
     stamp_us_ = 0;
     if (sop != Sop::Sop) return;
+    last_io_ = now;   // the line was busy: the lab probe keeps its quiet gap from here
     const std::uint8_t type = header & 0x1F;
     const unsigned num_do = (header >> 12) & 7;
     const bool ext = (header >> 15) & 1;
@@ -994,6 +1023,14 @@ K2_HOT void Sink::on_message(Sop sop, std::uint16_t header, std::span<const std:
             sr_wait_ = false;   // the caps after our Soft_Reset arrived
             if (xiaomi_authed_ && !xm_.reannounced) { xm_.reannounced = true; xm_.reannounce_at = now; }
             const bool solicited = get_cap_sent_;
+            if (op_.wants_caps()) {   // the lab probe's closing Get_Source_Cap: keep the list it brought (SPR words)
+                std::array<std::uint32_t, 7> w{};
+                const std::size_t n = std::min({std::size_t(num_do), w.size(), payload.size() / 4});
+                for (std::size_t i = 0; i < n; i++)
+                    w[i] = std::uint32_t(payload[4 * i]) | std::uint32_t(payload[4 * i + 1]) << 8 | std::uint32_t(payload[4 * i + 2]) << 16 |
+                           std::uint32_t(payload[4 * i + 3]) << 24;
+                op_.on_caps({w.data(), n});
+            }
             if (contract_ && !solicited && !asked_sr) bump(st_.caps_unsolicited);   // a re-announce inside a contract nobody asked for
             get_cap_sent_ = false;
             refresh_pending_ = false;   // an answer to our Refresh (request_source_caps) ends its wait window
@@ -1032,6 +1069,7 @@ K2_HOT void Sink::on_message(Sop sop, std::uint16_t header, std::span<const std:
 
     switch (type) {
         case kCtlAccept:
+            if (swap_ == DrSwap::Pending) { end_swap(DrSwap::Accepted, now); break; }   // our DR_Swap's answer (one AMS at a time)
             if (st_.state == SinkState::Requesting) {
                 xm_.answer = ReqAnswer::Accept; xm_.answer_at = now;
                 st_.accept_at = now; st_.ps_rdy_at = 0; st_.ps_rdy_inferred = false;
@@ -1065,6 +1103,8 @@ K2_HOT void Sink::on_message(Sop sop, std::uint16_t header, std::span<const std:
             }
             break;
         case kCtlNotSupported:
+            if (swap_ == DrSwap::Pending) { end_swap(DrSwap::NotSupported, now); break; }
+            if (op_.on_not_supported(now)) break;   // the answer to the lab probe's VDM
             if (pps_.ask == PpsAsk::Pending) {
                 pps_.rx_us = edge_us;
                 pps_.ask = PpsAsk::NotSupported;
@@ -1074,6 +1114,7 @@ K2_HOT void Sink::on_message(Sop sop, std::uint16_t header, std::span<const std:
             if (st_.epr_info == EprInfo::Pending && st_.state == SinkState::Ready) st_.epr_info = EprInfo::Refused;
             break;
         case kCtlReject:
+            if (swap_ == DrSwap::Pending) { end_swap(DrSwap::Rejected, now); break; }   // no Request was refused: not counted
             bump(st_.rejects_rx);
             if (st_.epr_info == EprInfo::Pending && st_.state == SinkState::Ready) {
                 st_.epr_info = EprInfo::Refused;
@@ -1085,6 +1126,7 @@ K2_HOT void Sink::on_message(Sop sop, std::uint16_t header, std::span<const std:
             }
             break;
         case kCtlWait:
+            if (swap_ == DrSwap::Pending) { end_swap(DrSwap::Wait, now); break; }
             bump(st_.waits_rx);
             if (st_.state == SinkState::Requesting) {
                 xm_.answer = ReqAnswer::Wait; xm_.answer_at = now;
@@ -1137,6 +1179,7 @@ K2_HOT void Sink::on_message(Sop sop, std::uint16_t header, std::span<const std:
             xiaomi_opener_pending_ = false;
             xiaomi_opener_sent_ = false;
             discover_svids_pending_ = false;
+            link_reset(oppo::End::SoftReset, false);   // the data role stays (USB PD: a Soft Reset changes no role)
             fail(SinkResult::SoftReset, SinkState::Idle);
             break;
         }
@@ -1154,6 +1197,14 @@ K2_HOT void Sink::on_tx_result(bool ok, std::uint32_t now) {
     const std::uint32_t start_us = stamp_us_;   // TX_START of the message this result is for
     stamp_us_ = 0;
     if (last_tx_.hard_reset) return;
+    last_io_ = now;
+    const TxOwner owner = last_owner_;
+    last_owner_ = TxOwner::Sink;
+    if (owner == TxOwner::Swap) {   // our DR_Swap: no GoodCRC ends it at once, a GoodCRC leaves it waiting for the answer
+        if (!ok && swap_ == DrSwap::Pending) end_swap(DrSwap::TxFail, now);
+        return;
+    }
+    if (owner == TxOwner::Probe) { op_.on_tx(ok, now); return; }
     const std::uint8_t type = last_tx_.header & 0x1F;
     const bool ext = (last_tx_.header >> 15) & 1;
     if (ok) {
@@ -1239,9 +1290,11 @@ K2_HOT void Sink::tick(std::uint32_t now) {
         queue(last_tx_);
         return;
     }
+    if (swap_ == DrSwap::Pending && std::int32_t(now - swap_deadline_) >= 0) end_swap(DrSwap::Timeout, now);   // a silent partner
+    if (op_.running() && oppo_tick(now)) return;
     // Sink-initiated Xiaomi chain opener: fire after the pacing delay once the SVIDs exchange
     // showed 0x2717 and a contract is live (the VDM conversation dies with the contract).
-    if (xiaomi_opener_pending_ && !tx_pending_ && contract_ && std::int32_t(now - xiaomi_opener_at_) >= 0) {
+    if (xiaomi_opener_pending_ && !tx_pending_ && contract_ && !ams_open() && std::int32_t(now - xiaomi_opener_at_) >= 0) {
         xiaomi_opener_pending_ = false;
         xiaomi_opener_sent_ = true;
         xm_.opener_sent = true;
@@ -1252,7 +1305,7 @@ K2_HOT void Sink::tick(std::uint32_t now) {
     }
     // The paced proactive Discover-SVIDs REQ (on SOP, like every sink TX). Only in Ready: between a Request's Accept and its
     // PS_RDY the source is in its power transition and answers any message with a Hard Reset (Anker IQ4, hardware 2026-11-14).
-    if (discover_svids_pending_ && !tx_pending_ && st_.state == SinkState::Ready && contract_ &&
+    if (discover_svids_pending_ && !tx_pending_ && st_.state == SinkState::Ready && contract_ && !ams_open() &&
         std::int32_t(now - discover_svids_at_) >= 0) {
         discover_svids_pending_ = false;
         TxMsg m;
@@ -1264,7 +1317,7 @@ K2_HOT void Sink::tick(std::uint32_t now) {
         return;
     }
     // Lab-only Apple readout: its paced reads / retries go through the same single tx gate as everything else.
-    if (ap_.armed()) {
+    if (ap_.armed() && !ams_open()) {
         const AppleVdm tx = ap_.tick(now);
         if (tx.n && !tx_pending_) {
             queue(vdm_txmsg(tx, rev_));
@@ -1330,7 +1383,7 @@ K2_HOT void Sink::tick(std::uint32_t now) {
             if (!retx_pending_ && !tx_pending_ && due(deadline_)) do_hard_reset(abort_result_, SinkState::Failed);
             break;
         case SinkState::Ready:
-            if (tx_pending_ || vbus_external_) break;   // an external VBUS owner: no verify, no keep-alive, nothing of our own
+            if (tx_pending_ || vbus_external_ || ams_open()) break;   // an external VBUS owner / a lab AMS: nothing of our own
             if (verify_) { verify_vbus(now); break; }
             if (ka_silence_ != KaSilence::Off && due(ka_silence_until_)) ka_silence_ = KaSilence::Off;   // the bound
             if (st_.held && contract_ && (plan_.type == PdoType::Pps || plan_.type == PdoType::Avs) &&
@@ -1362,6 +1415,18 @@ K2_HOT void Sink::on_vdm(std::uint16_t header, std::span<const std::uint8_t> pay
     const bool structured = (vdm_hdr >> 15) & 1;
     const std::uint8_t cmd_type = (vdm_hdr >> 6) & 3;
     const std::uint8_t cmd = vdm_hdr & 0x1F;
+
+    // The lab OPPO probe's answers (SVID 0x22D9, structured ACK / NAK / BUSY or unstructured): recorded, never refused - also a late
+    // one after its step timed out (an unstructured VDM nobody owns would get Not_Supported below).
+    if (svid == oppo::kSvid && op_.engaged()) {
+        std::array<std::uint32_t, 7> w{};
+        const std::size_t n = std::min({std::size_t(num_do), w.size(), payload.size() / 4});
+        for (std::size_t i = 0; i < n; i++)
+            w[i] = std::uint32_t(payload[4 * i]) | std::uint32_t(payload[4 * i + 1]) << 8 | std::uint32_t(payload[4 * i + 2]) << 16 |
+                   std::uint32_t(payload[4 * i + 3]) << 24;
+        op_.on_vdm({w.data(), n}, now);
+        return;
+    }
 
     // Only handle SOP VDMs (SOP' and SOP'' are for cables)
 
@@ -1617,6 +1682,114 @@ void Sink::send_xiaomi_vdm_reply(std::uint8_t cmd, std::span<const std::uint32_t
         m.data[i * 4 + 3] = std::uint8_t(v >> 24);
     }
     queue(m);
+}
+
+// ---- Sink-initiated DR_Swap and the OPPO (SVID 0x22D9) lab probe ----
+
+Err Sink::request_dr_swap(bool to_dfp, std::uint32_t now) {
+    if (!answers_requests()) return Err::Inline;   // never transmit for another sink's link
+    if (!caps_ || !contract_) return Err::NoCaps;
+    if (to_dfp == dfp_) return Err::BadChoice;
+    if (st_.state != SinkState::Ready || tx_pending_ || retx_pending_ || ams_open() || deferred_ != Deferred::None || sr_wait_ ||
+        get_cap_sent_ || release_pending_ || verify_ || st_.epr_info == EprInfo::Pending || pps_.ask == PpsAsk::Pending ||
+        xiaomi_chain_active(now))
+        return Err::Busy;
+    if (txok_.hold(rev_, now)) return Err::Busy;
+    txok_.sent();
+    queue_dr_swap(to_dfp, now);
+    return Err::Ok;
+}
+
+void Sink::queue_dr_swap(bool to_dfp, std::uint32_t now) {
+    TxMsg m;
+    m.header = make_header(kCtlDrSwap, 0, rev_);
+    queue(m);
+    tx_owner_ = TxOwner::Swap;
+    swap_ = DrSwap::Pending;
+    swap_to_ = to_dfp;
+    swap_deadline_ = now + kDrSwapMs;
+}
+
+// The DR_Swap AMS is over. An Accept takes the asked role at once (USB PD 8.3.3.19: the initiator changes its role on the Accept;
+// the chip already sent that Accept's GoodCRC in the old role, the driver writes the new one before the next frame).
+void Sink::end_swap(DrSwap r, std::uint32_t now) {
+    swap_ = r;
+    if (r == DrSwap::Accepted) dfp_ = swap_to_;
+    K2LOG("[PD] DR_Swap answer=%u dfp=%u\n", unsigned(r), unsigned(dfp_));
+    if (!op_.running()) return;
+    oppo::Outcome o = oppo::Outcome::Timeout;
+    switch (r) {
+        case DrSwap::Accepted: o = oppo::Outcome::Accept; break;
+        case DrSwap::Rejected: o = oppo::Outcome::Reject; break;
+        case DrSwap::Wait: o = oppo::Outcome::Wait; break;
+        case DrSwap::NotSupported: o = oppo::Outcome::NotSupported; break;
+        case DrSwap::TxFail: o = oppo::Outcome::TxFail; break;
+        default: break;
+    }
+    op_.on_swap(o, dfp_, now);
+}
+
+// A Hard Reset (either way) or a detach puts both ends back in their default roles (UFP for a sink); a Soft_Reset keeps them.
+// to_ufp is false for our own Hard Reset that never reached the wire (self-powered K2): the partner still holds the roles.
+void Sink::link_reset(oppo::End why, bool to_ufp) {
+    swap_ = DrSwap::None;
+    if (to_ufp) dfp_ = false;
+    op_.stop(why, dfp_);
+}
+
+Err Sink::oppo_start(const oppo::Config& c, std::uint32_t now) {
+    if (!answers_requests()) return Err::Inline;
+    if (op_.running() || ap_.armed() || swap_ == DrSwap::Pending) return Err::Busy;
+    if (!caps_ || !contract_ || st_.state != SinkState::Ready) return Err::NoCaps;
+    if (st_.epr_mode || st_.mv > kVsafe5vMv) return Err::BadVoltage;
+    std::array<std::uint32_t, 7> w{};
+    const std::size_t n = std::min<std::size_t>(caps_->num_pdos, w.size());
+    for (std::size_t i = 0; i < n; i++) w[i] = caps_->pdos[i].raw;
+    op_.start(c, {w.data(), n}, dfp_, now);
+    K2LOG("[OPPO] start steps=0x%X skip_swap=%u dfp=%u\n", unsigned(c.steps), unsigned(c.skip_swap), unsigned(dfp_));
+    return Err::Ok;
+}
+
+void Sink::oppo_stop(std::uint32_t) {
+    if (op_.running()) op_.stop(oppo::End::Stopped, dfp_);
+}
+
+// No AMS of anybody open and nothing of ours queued: the conditions request_source_caps() waits for, plus the answer slots, the paced
+// sink messages, a DR_Swap, and the quiet gap since the last frame either way.
+bool Sink::oppo_line_idle(std::uint32_t now) const {
+    return st_.state == SinkState::Ready && contract_ && !st_.epr_mode && !tx_pending_ && !retx_pending_ && !ans_pending_ &&
+           !sink_cap_pending_ && !sink_cap_ext_pending_ && deferred_ == Deferred::None && !sr_wait_ && !get_cap_sent_ &&
+           !refresh_pending_ && !release_pending_ && !verify_ && !discover_svids_pending_ && !xiaomi_opener_pending_ &&
+           st_.epr_info != EprInfo::Pending && pps_.ask != PpsAsk::Pending && swap_ != DrSwap::Pending &&
+           !xiaomi_chain_active(now) && now - last_io_ >= oppo::kGapMs;
+}
+
+bool Sink::oppo_tick(std::uint32_t now) {
+    // SinkTxNG is asked only when the probe really has a message due (txok_.hold counts an episode per ask).
+    const bool idle = op_.ready_to_send(now) && oppo_line_idle(now) && !txok_.hold(rev_, now);
+    const oppo::Action a = op_.next(now, idle);
+    switch (a.want) {
+        case oppo::Want::None: return false;
+        case oppo::Want::SwapToDfp: case oppo::Want::SwapToUfp:
+            queue_dr_swap(a.want == oppo::Want::SwapToDfp, now);
+            break;
+        case oppo::Want::Vdm: {
+            TxMsg m;
+            m.header = make_header(kMsgVendorDefined, a.vdm.n, rev_);
+            m.len = std::uint8_t(4 * a.vdm.n);
+            for (unsigned i = 0; i < a.vdm.n; i++)
+                for (int b = 0; b < 4; b++) m.data[4 * i + b] = std::uint8_t(a.vdm.w[i] >> (8 * b));
+            queue(m);
+            tx_owner_ = TxOwner::Probe;
+            break;
+        }
+        case oppo::Want::GetCaps:
+            queue_get_caps(now);
+            tx_owner_ = TxOwner::Probe;
+            break;
+    }
+    txok_.sent();
+    return true;
 }
 
 }  // namespace k2::pd

@@ -519,6 +519,7 @@ TEST_CXX_SRCS := $(filter-out tests/test_spec_rows.cpp, $(TEST_CXX_SRCS))   # th
 endif
 TEST_CXX_LIB  += tests/trunc_log.cpp $(SRC_DIR)/ui/orientation.cpp $(SRC_DIR)/core/shell.cpp $(SRC_DIR)/core/lab.cpp
 TEST_CXX_LIB  += $(SRC_DIR)/pd/pd_reread.cpp $(SRC_DIR)/pd/pd_survey.cpp $(SRC_DIR)/pd/apple_readout.cpp
+TEST_CXX_LIB  += $(SRC_DIR)/pd/oppo_probe.cpp
 TEST_CXX_LIB  += $(SRC_DIR)/ui/ui_viewport.cpp $(SRC_DIR)/core/logfmt.cpp $(SRC_DIR)/core/scratch.cpp
 TEST_CXX_LIB  += $(SRC_DIR)/ui/ui_orientation.cpp $(SRC_DIR)/ui/kit.cpp
 TEST_CXX_LIB  += $(SRC_DIR)/ui/home_model.cpp $(SRC_DIR)/ui/home_cell.cpp $(SRC_DIR)/ui/home_proto.cpp $(SRC_DIR)/ui/home_cards.cpp $(SRC_DIR)/ui/ui_home.cpp
@@ -561,6 +562,7 @@ $(OBJ_DIR)/lfs/%.o: %.c include/k2/core/lfs_cfg.h
 SCAN_TEST_LIB  = $(SRC_DIR)/drivers/fusb302.cpp $(SRC_DIR)/drivers/fusb302_cold.cpp $(SRC_DIR)/pd/pdtrace.cpp $(SRC_DIR)/pd/pdtrace_link.cpp $(SRC_DIR)/pd/pd.cpp $(SRC_DIR)/pd/pd_engine.cpp $(SRC_DIR)/pd/pd_ext.cpp $(SRC_DIR)/pd/pd_vdm.cpp $(SRC_DIR)/pd/usb_link.cpp $(SRC_DIR)/pd/pd_sink.cpp $(SRC_DIR)/pd/xiaomi_auth.cpp $(SRC_DIR)/pd/pd_identify.cpp $(SRC_DIR)/pd/pd_probe.cpp $(SRC_DIR)/pd/pd_source.cpp $(SRC_DIR)/pd/apple_readout.cpp
 SCAN_TEST_LIB += $(SRC_DIR)/pd/pd_reread.cpp $(SRC_DIR)/pd/diag.cpp
 SCAN_TEST_LIB += $(SRC_DIR)/pd/pd_interrogate.cpp
+SCAN_TEST_LIB += $(SRC_DIR)/pd/oppo_probe.cpp
 SCAN_OBJS      = $(patsubst %.cpp, $(OBJ_DIR)/scan/%.o, $(SCAN_TEST_LIB))
 
 HOST_CXX_CMD   = $(HOST_CXX) $(HOST_CXXFLAGS) -MMD -MP -c $< -o $@
