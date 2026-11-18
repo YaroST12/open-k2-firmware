@@ -124,7 +124,7 @@ What an active engine needs (not done, needs an unplugged-phone test):
 ### Phone-side slave on hardware (k2/vooc-slave, 2026-11-02, charger on the bottom port, top port empty)
 
 - The adapter clocks D+ on **PA7** without any load (PB0 never sees a fall). It does not start every time: some
-  attempts hear no frame ("needs load"), the next attempt after a 10 s rest usually does.
+  attempts hear no frame ("no answer"), the next attempt after a 10 s rest usually does.
 - The slave answers the init script A8, 98, 98, 9E, 80, 94, 98, 8A, 98, 8E, 9A, 82 with the golden words (about 11
   commands, 12 s). The session then ends: the next frame reads 0xFF (D- not driven) and the engine reports "no
   response". 0x88 (cable check, 0x04D) is never reached, VBUS stays at 5.2 V.
@@ -177,8 +177,8 @@ ten more times and the steady `0x82` poll.
 VBUS to about twice it. VBUS/current through the entry: 5.34 V 0.88 A -> 8.65 V 2.0 A -> 9.0 V 3.6 A in a few seconds.
 
 **Guessed, not proven:** every command name (`ident` aside, which is the first command of every session), the meaning
-of every reply word, the `0x07F` sentinel, and which ident (0xA8, 0xAC, 0xA6 in `vooc::is_ident`) belongs to which
-adapter generation. 0xA8 opens the session on this 120 W brick, so one ident does not tell VOOC, SVOOC and SVOOC 65 W
+of every reply word, the `0x07F` sentinel, and which ident belongs to which adapter generation (`vooc::is_ident`, 0xA8 and the handshake's own opener, is
+unchanged; the detection listen takes the wider `vooc::is_detect_opener`, below). 0xA8 opens the session on this 120 W brick, so one ident does not tell VOOC, SVOOC and SVOOC 65 W
 apart.
 
 ### Detection by ident, no trigger (k2/vooc-detect, 2026-11-11)
@@ -189,17 +189,20 @@ the scan, the fast-charge engine and the UI. The one exception (operator, 2026-1
 below, reachable from the HID remote only.
 
 - Wake: odd tries play the phone's entry burst (80 steps of 300 us, D+ 3.3 V / 0 V, D- Hi-Z so the closed short carries
-  it, ending low; reverse-engineered from the capture above); even tries the older 13-period train. 2 tries (kVoocTries), 1.0 s
-  listen after each (the ident came 0.54 s after the burst, so 0.46 s to spare), 3 s rest between them: a silent adapter ends
-  the session after 5.0 s, inside one clean window of a port that cuts VBUS at 5 V (was 3 tries and 1.5 s listen, 10.5 s;
-  changed 2026-11-15, the third wake repeated the first).
+  it, ending low; reverse-engineered from the capture above); even tries the older 13-period train. 2 tries (kVoocTries), 1.6 s
+  listen after each (the ident came 0.54 s after the burst), 2.0 s rest between them: an adapter silent after both
+  shapes ends the session after 5.2 s (plus about 70 ms of wake plays), inside one clean window of a port that cuts VBUS
+  at 5 V (kCutStepBudgetMs, 5.5 s). Was 3 tries, 1.5 s listen, 10.5 s, then 1.0 s listen and 3 s rest, 5.0 s.
 - Listen: frames start on either D+ edge after D+ held one level for 2 ms (`vooc::FrameStart`). An all-ones word
   (0x1FF, command 0xFF) is the idle-high line, nothing heard (`vooc::heard`).
-- The first ident ends the session at once as `Fail::Detected` and releases the lines (both 0 V for 500 ms, then the
+- The first opener ends the session at once as `Fail::Detected` and releases the lines (both 0 V for 500 ms, then the
   passive idle). Any other command is counted, never answered. VBUS above 5.5 V aborts (`Overvoltage`) and releases.
   The engine refuses VOOC inline even with `allow_inline` and aborts if inline appears mid-session.
-- Outcomes: ident -> "detected"; only idle or no frames after 2 wakes -> `NeedsLoad` ("needs load", the old wording
-  for "never clocked"); frames but no ident -> `NoResponse`. Rules for the charger-test rows:
+- Openers (detection listen only): 0xA8, 0x68, 0x88 and their one-bit-shifted forms 0x54/0xD4, 0x34/0xB4, 0x44/0xC4
+  (`vooc::is_detect_opener`). 0xAC and 0xA6 are no longer taken for one. The handshake open (`vooc_decode.hpp`) is unchanged.
+- Outcomes: opener -> "detected"; only idle or no frames after both wakes -> `NoAnswer` ("no answer", a skip in the
+  charger test, not a fail: it reads "no answer to either wake, unloaded" in the summaries; wire value 13, once "needs
+  load"); frames but no opener -> `NoResponse`. Rules for the charger-test rows:
   `docs/CHARGER_TEST_FLOW.md`.
 - Not done: telling VOOC from SVOOC from SVOOC 65 W (needs answers), any voltage step.
 
