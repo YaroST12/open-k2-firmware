@@ -620,7 +620,7 @@ static bool footer_shows(std::string_view text, uint16_t color = kText);
 static void test_full_help_text() {
     // Each stage's copy: the focused row opens a 12 px dim note under its text; the footer says what is picked.
     fixture(); Ui ui; open(ui); ui.tick(1200);
-    static constexpr const char* kPresetNote[] = {"Everything, QC Class B 20V too", "PD fixed, PPS, EPR, Mi 6A",
+    static constexpr const char* kPresetNote[] = {"Everything, QC Class B 20V too", "PD fixed, PPS, EPR, Xiaomi",
                                                   "D+/D-: vendor modes, QC, UFCS", "Huawei, Samsung, OPPO, vivo"};
     for (int r = 0; r < 4; ++r) {
         top(ui, 1210); move(ui, r, 1210); ui.tick(1210 + r); settle(ui, 1210 + r);
@@ -634,7 +634,7 @@ static void test_full_help_text() {
     check_row_note(kFamHuawei, "Entries inside this family");
     CHECK_EQ(footer_says("6 of 6 families on", kText), true);
     top(ui, 1240); move(ui, kFamXiaomi, 1240); ui.tick(1240); settle(ui, 1240);
-    check_row_note(kFamXiaomi, "Mi 6A probes run in PD");   // Xiaomi / Redmi rides the PD unit
+    check_row_note(kFamXiaomi, "SVID 0x2717 auth, runs in PD");   // Xiaomi / Redmi rides the PD unit
     move(ui, 1, 1250); long_ok(ui, 1250); ui.tick(1250); settle(ui, 1250);    // USB PD's entries
     CHECK_EQ(ui.charger_test_stage(), 1);
     check_row_note(0, "Fixed offers: SPR + EPR");
@@ -2294,7 +2294,7 @@ static void test_step_label_gallery() {
         for (unsigned i = 0; i < 8; ++i) g_stub.caps.pdos[i] = pd::decode_pdo(kOffer[i]);
         Ui ui;
         open(ui); ui.set_rotation(rot, 1100);
-        move(ui, kPdRow); press(ui, Button::Ok);   // "PD only": the PD fixed / PPS / Mi 6A rows; a preset pick goes on to the cable
+        move(ui, kPdRow); press(ui, Button::Ok);   // "PD only": the PD fixed / PPS / Xiaomi rows; a preset pick goes on to the cable
         CHECK_EQ(ui.charger_test_stage(), 2);
         press(ui, Button::Ok);                     // the cable pick keeps "Off" and goes on to Review
         CHECK_EQ(ui.charger_test_stage(), 4);
@@ -5439,16 +5439,16 @@ static void test_remote_start_is_the_devices_start() {
 // The Xiaomi (SVID 0x2717) unit on the three hardware cases and a source without the SVID: a PD-only run on the list the source
 // re-announced after the chain (the sink's trace keeps the list from before it). K2_DUMP=dir writes dir/k2_mi_<case>_rot<r>.panel
 // (the Results grid, scrolled to the Xiaomi row) and k2_mi_<case>_steps / _detail (the row's Steps and its first mode's Detail).
-struct MiCase { const char* name; std::array<uint32_t, 7> before, after; uint8_t n; bool svid, authed; uint8_t finish; };
+struct MiCase { const char* name; std::array<uint32_t, 7> before, after; uint8_t n; bool svid, authed; uint8_t finish, modes; };
 static const MiCase kMiCases[] = {
     {"bank", {0x0201912C, 0x0002D12C, 0x0003C12C, 0x0004B12C, 0x000640C8, 0xC0DC323C, 0xC1903228},
-             {0x0001912C, 0x0002D12C, 0x0003C12C, 0x0004B12C, 0x000640C8, 0xC0DC3264, 0xC1903228}, 7, true, true, 8},
+             {0x0001912C, 0x0002D12C, 0x0003C12C, 0x0004B12C, 0x000640C8, 0xC0DC3264, 0xC1903228}, 7, true, true, 8, 1},
     {"fh22", {0x0A81912C, 0x0002D12C, 0x0004B12C, 0x000641F4, 0xC8DC3264, 0xC9A43264, 0},
-             {0x0A81912C, 0x0002D12C, 0x0004B12C, 0x000641F4, 0xC8DC3264, 0xC9A43264, 0}, 6, true, true, 8},
+             {0x0A81912C, 0x0002D12C, 0x0004B12C, 0x000641F4, 0xC8DC3264, 0xC9A43264, 0}, 6, true, true, 8, 0},
     {"cuk", {0x0A01912C, 0x0002D12C, 0x0003C12C, 0x0004B12C, 0x000641F4, 0xC8DC3264, 0xC9903264},
-            {0x0A01912C, 0x0002D12C, 0x0003C12C, 0x0004B12C, 0x000641F4, 0xC8DC3278, 0xC9903278}, 7, true, true, 0x0A},
+            {0x0A01912C, 0x0002D12C, 0x0003C12C, 0x0004B12C, 0x000641F4, 0xC8DC3278, 0xC9903278}, 7, true, true, 0x0A, 2},
     {"nosvid", {0x0A01912C, 0x0002D12C, 0x0004B12C, 0x000641F4, 0xC8DC3264, 0, 0},
-               {0x0A01912C, 0x0002D12C, 0x0004B12C, 0x000641F4, 0xC8DC3264, 0, 0}, 5, false, false, 0},
+               {0x0A01912C, 0x0002D12C, 0x0004B12C, 0x000641F4, 0xC8DC3264, 0, 0}, 5, false, false, 0, 0},
 };
 static void mi_case_fixture(const MiCase& c) {
     fixture();
@@ -5480,13 +5480,19 @@ static void test_xiaomi_unit_scenes() {
         Ui ui; uint32_t t = 0;
         run_mi_case(ui, c, t);
         CHECK_EQ(ui.charger_test_stage(), 6);
+        // one Xiaomi row on every case: the chain row plus each mode the diff found (bank: PPS 11V 3A->5A; fh22: none; cuk: both
+        // PPS APDOs 5A->6A; nosvid: the chain row alone, skipped)
+        const FamilyPick mi = pick_family(ui, "Xiaomi");
+        CHECK_EQ(mi.line >= 0, true);
+        CHECK_EQ(mi.count, unsigned(c.modes) + 1);
+        unsigned modes = 0;
+        for (const auto& s : ui.charger_test_results().steps()) modes += ct::is_mi_mode(s);
+        CHECK_EQ(modes, unsigned(c.modes));
         const auto calm = [&] { for (int i = 0; i < 64 && ui.painting(); ++i) ui.tick(t += 100); };
         for (const uint8_t rot : {0, 1, 2, 3}) {
             ui.set_rotation(rot, t); calm();
             top(ui, t); calm();
-            const char* labels[] = {"Xiaomi", "Mi 6A"};
-            int line = -1;
-            for (const char* l : labels) if (line < 0) line = pick_family(ui, l).line;
+            const int line = pick_family(ui, "Xiaomi").line;
             for (int k = 0; k < line; ++k) { press(ui, Button::Plus); ui.tick(t += 100); calm(); }
             char name[48]; std::snprintf(name, sizeof name, "mi_%s_rot%u", c.name, unsigned(rot));
             dump_screen(name);

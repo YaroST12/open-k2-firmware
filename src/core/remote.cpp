@@ -324,13 +324,12 @@ remote::ChargerCableReply Remote::charger_cable(const ctcable::Choice* set) {
     return r;
 }
 
+// Retired with the 6 A hunt rows (the Xiaomi unit asks only what the list advertises): the command keeps its id and layout and
+// answers that the run holds no refused hunt row.
 remote::ChargerHuntReply Remote::charger_hunt(uint8_t slot) const {
-    const auto& runner = ui_.charger_test_results();
-    const auto held = runner.hunt_evidence();
+    (void)slot;
     remote::ChargerHuntReply r;
-    r.run_id = runner.run_id();
-    r.count = static_cast<uint8_t>(held.size());
-    if (slot < held.size()) r.slot = held[slot];
+    r.run_id = ui_.charger_test_results().run_id();
     return r;
 }
 

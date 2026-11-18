@@ -34,7 +34,10 @@ def _v(mv):
 
 
 def _group_key(s):
-    # PPS/AVS rows are one sequence per APDO position, the Mi 6 A probe rows their own group; others group by protocol.
+    # PPS/AVS rows are one sequence per APDO position; the Xiaomi unit (its chain row and the modes the chain unlocked, or an
+    # older firmware's 6 A probe rows) is one group; others group by protocol.
+    if step_label.is_hunt(s):
+        return ("xiaomi", 0, True)
     pos = s["pos"] if s["protocol"] in ("pps", "spr-avs", "epr-avs") and s["pos"] else 0
     return (s["protocol"], pos, step_label.is_hunt(s))
 
@@ -58,7 +61,7 @@ def _retry(s):
 
 def _step_text(s, prev, amps=True):
     """One row of a group line: its step_label numbers ("5V 3A", "11→8V") and the verdict. `prev` = the plan row before it."""
-    # A Mi 6 A probe row carries its protocol word ("Mi 20V 6A"): the group has no heading of its own.
+    # A Xiaomi mode row carries its protocol word ("Mi 11V 5A"): the group has no heading of its own.
     label = step_label.label(s, prev) if step_label.is_hunt(s) else step_label.params(s, prev, amps=amps)
     if _caution(s):   # a fixed row measured the folded level; a sweep row has no single level of its own
         at = "" if s.get("sweep") else f" to {report_card.dv_text(s['measured_mv'])}"
@@ -70,14 +73,31 @@ def _step_text(s, prev, amps=True):
     if s["result"] == "fail":
         why = s["detail_reason"] if s["detail_reason"] != "none" else s["reason"]
         at = f" at {s['measured_mv'] / 1000:.2f} V" if s["measured_mv"] else ""
-        # A refused 6 A row: the firmware's classifier names the cause (k2_remote.attach_hunt_evidence).
+        # An older firmware's refused 6 A row: its classifier names the cause (k2_remote.attach_hunt_evidence).
         hunt = f" [{s['hunt']['cause']}: {s['hunt']['explanation']}]" if "hunt" in s else ""
         return f"{label} ✗ {why}{at}{hunt}"
     if s["reason"] in NOTED:
         return f"{label} advertised" if s["reason"] == ADVERTISED else f"{label} not asked"
-    # A 6 A row the source did not offer: the firmware's "not unlocked" skip says which link of the OEM chain was missing.
+    # An older firmware's 6 A row the source did not offer: its "not unlocked" skip says which link of the OEM chain was missing.
+    # A Xiaomi mode skips for a reason worth naming (the cable limit, a light run).
     return f"{label} skipped: {_not_unlocked(s)}" if s["reason"] == "not unlocked" else \
-        f"{label} skipped: {s['reason']}" if s["reason"] == PORT_CUTS else f"{label} skipped"
+        f"{label} skipped: {s['reason']}" if s["reason"] == PORT_CUTS or (step_label.is_hunt(s) and s["reason"] != "none") \
+        else f"{label} skipped"
+
+
+def _xiaomi_line(rows, prev_of):
+    """The Xiaomi unit in one line: how the 0x2717 auth chain ended, then each mode it unlocked with its verdict
+    ("- Xiaomi: auth done, verified; Mi 11V 5A ✓"). Nothing raised reads "- Xiaomi auth: done, no new modes"."""
+    chain = next((s for s in rows if not s.get("target_mv")), None)
+    modes = ", ".join(_step_text(s, prev_of[id(s)]) for s in rows if s.get("target_mv"))
+    if chain is None:   # an older firmware: its 6 A probe rows, no chain row
+        return f"- Xiaomi: {modes}"
+    code = chain.get("detail", 0)
+    if not step_label.mi_chain_done(code):
+        return f"- Xiaomi: {step_label.mi_chain_text(code)}" if code == 1 else f"- Xiaomi auth: {step_label.mi_chain_text(code)}"
+    if not modes:
+        return "- Xiaomi auth: done, no new modes"
+    return f"- Xiaomi: auth {step_label.mi_chain_text(code)}; {modes}"
 
 
 def _not_unlocked(s):
@@ -128,11 +148,8 @@ def summarize(r):
     for k in order:
         rows = groups[k]
         name = PROTO_NAMES.get(k[0], k[0])
-        if k[2] and all(s["result"] == "skip" for s in rows):
-            # Mi 6 A rows skipped: each by its own cause, named like the rows of a run ("Mi 20V 6A").
-            for s in rows:
-                skipped.setdefault(_not_unlocked(s) if s["reason"] == "not unlocked" else s["reason"], []).append(
-                    step_label.label(s, prev_of[id(s)]))
+        if k[2]:
+            out.append(_xiaomi_line(rows, prev_of))
             continue
         if any(s["result"] == "skip" and s["reason"] == NO_QC3PLUS for s in rows):
             # The charger does not do QC3+ (no movement, or QC3-sized steps): one neutral line; the 5 V baseline that
@@ -154,16 +171,12 @@ def summarize(r):
             continue
         # The heading is the step_label protocol word; a PPS / AVS offer adds its range and current, so its rows drop the amps.
         name = step_label.protocol(rows[0])
-        # A Mi 6 A probe group shows its own request, not the APDO it rides on (whose advertised current it exceeds):
-        # every row reads "Mi 20V 6A", with no heading.
-        hunt = k[2]
-        rng = step_label.pdo_range(rows[0]["raw_pdo"]) if k[1] and not hunt else ""
+        rng = step_label.pdo_range(rows[0]["raw_pdo"]) if k[1] else ""
         if rng:
             name += f" {rng}"
         amps = not rng
-        head = "" if hunt else f"{name}: "
-        text = (lambda s, prev=None, amps=True: step_label.label(s, prev)) if hunt else \
-            (lambda s, prev=None, amps=True: step_label.params(s, prev, amps=amps))
+        head = f"{name}: "
+        text = (lambda s, prev=None, amps=True: step_label.params(s, prev, amps=amps))
         if all(s["result"] == "pass" for s in rows) and not any(s["continuous"] or _caution(s) for s in rows):
             lo, hi = min(s["measured_mv"] for s in rows), max(s["measured_mv"] for s in rows)
             retried = "".join(f"; {text(s, amps=amps)} {_retry(s)}" for s in rows if _retry(s))

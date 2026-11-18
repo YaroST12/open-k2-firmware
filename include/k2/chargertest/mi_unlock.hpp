@@ -19,7 +19,9 @@
 #include <cstdint>
 #include <span>
 
-#include "k2/chargertest/step_label.hpp"
+// charger_test.hpp carries a mode table (Evidence::mi), so this header must not pull charger_test.hpp in through step_label.hpp:
+// the two text functions return a step_label::Text, declared here and defined there (callers include step_label.hpp).
+namespace k2::step_label { struct Text; }
 
 namespace k2::mi_unlock {
 

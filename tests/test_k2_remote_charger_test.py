@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
 import k2_remote as kr
+import step_label  # noqa: E402
 
 HEADER = bytes([1, 4, 3, 2, 1, 8, 7, 6, 5, 3, 0, 3, 1, 0, 0])
 HEADER2 = bytes([2, 4, 3, 2, 1, 8, 7, 6, 5, 3, 0, 3, 1, 0, 0,
@@ -326,8 +327,8 @@ class ChargerTest(unittest.TestCase):
         # the full flag byte is legal: bits 0-4 plus the sweep bit
         row = struct.pack("<BBBHHHBBBI", 4, 6, 0x3F, 5000, 5000, 20978, 2, 0, 61, 0xC0DC3240)
         self.assertTrue(kr.decode_charger_test(page(HEADER2, 0, [row]))["steps"][0]["sweep"])
-        # bit 6 and up are still rejected
-        row = struct.pack("<BBBHHHBBBI", 4, 6, 0x40, 5000, 5000, 20978, 2, 0, 61, 0xC0DC3240)
+        # bit 7 is still rejected (bit 6 is the Xiaomi flag)
+        row = struct.pack("<BBBHHHBBBI", 4, 6, 0x80, 5000, 5000, 20978, 2, 0, 61, 0xC0DC3240)
         with self.assertRaises(kr.FrameError):
             kr.decode_charger_test(page(HEADER2, 0, [row]))
         # older firmware: no bit 5, the kDetailSweep marker in the detail byte
@@ -391,13 +392,13 @@ class ChargerTest(unittest.TestCase):
     def test_reason_42_withdrawn_by_source_decodes(self):
         # Hardware-run item 8 (2026-11-09, runs/2026-11-09-splitter): the re-plan row's new Reason::Withdrawn (#42)
         # must decode, not raise FrameError("invalid charger-test row") - ct_start.py crashed at the summary with it.
-        self.assertEqual(len(kr.TEST_REASONS), 52)   # 43 reasons + WrongVoltage (#43) + NeedsLoad (#44) + Floored (#45) + StepResolution (#46) + Loop (#47) + Advertised (#48) + LightLevel (#49) + PortCuts (#50) + Folded (#51)
+        self.assertEqual(len(kr.TEST_REASONS), 53)   # 43 reasons + WrongVoltage (#43) + NeedsLoad (#44) + Floored (#45) + StepResolution (#46) + Loop (#47) + Advertised (#48) + LightLevel (#49) + PortCuts (#50) + Folded (#51) + MiChain (#52)
         self.assertEqual(kr.TEST_REASONS[42], "withdrawn by source")
         row = struct.pack("<BBBHHHBBBI", 2, 4, 0, 20000, 0, 0, 4, 42, 0, 0)   # a pd3-fixed 20 V row, skip, why 42
         step = kr.decode_charger_test(page(HEADER2, 0, [row]))["steps"][0]
         self.assertEqual((step["result"], step["reason"]), ("skip", "withdrawn by source"))
         self.assertEqual(step["explanation"], "withdrawn by source")
-        bad = bytearray(row); bad[10] = 52   # the why byte, one past the last reason, still fails the row check
+        bad = bytearray(row); bad[10] = 53   # the why byte, one past the last reason, still fails the row check
         with self.assertRaises(kr.FrameError):
             kr.decode_charger_test(page(HEADER2, 0, [bytes(bad)]))
 
@@ -411,7 +412,7 @@ class ChargerTest(unittest.TestCase):
         self.assertEqual((step["result"], step["reason"]), ("fail", "wrong voltage on 5V contract"))
         self.assertEqual(step["explanation"], "wrong voltage on 5V contract")
         self.assertEqual(step["measured_mv"], 7600)
-        bad = bytearray(row); bad[10] = 52   # the why byte, one past the last reason, still fails the row check
+        bad = bytearray(row); bad[10] = 53   # the why byte, one past the last reason, still fails the row check
         with self.assertRaises(kr.FrameError):
             kr.decode_charger_test(page(HEADER2, 0, [bytes(bad)]))
 
@@ -424,7 +425,7 @@ class ChargerTest(unittest.TestCase):
         self.assertEqual((step["result"], step["reason"]), ("skip", "needs load"))
         self.assertEqual(step["explanation"], "needs load")
         self.assertEqual(step["measured_mv"], 1800)
-        bad = bytearray(row); bad[10] = 52   # one past the last reason
+        bad = bytearray(row); bad[10] = 53   # one past the last reason
         with self.assertRaises(kr.FrameError):
             kr.decode_charger_test(page(HEADER2, 0, [bytes(bad)]))
 
@@ -441,7 +442,7 @@ class ChargerTest(unittest.TestCase):
         step = kr.decode_charger_test(page(HEADER2, 0, [row]))["steps"][0]
         self.assertEqual((step["result"], step["reason"], step["detail"]), ("fail", "step resolution", 100))
         self.assertEqual(step["explanation"], "step resolution 100mV")
-        bad = bytearray(row); bad[10] = 52   # one past the last reason
+        bad = bytearray(row); bad[10] = 53   # one past the last reason
         with self.assertRaises(kr.FrameError):
             kr.decode_charger_test(page(HEADER2, 0, [bytes(bad)]))
 
@@ -463,7 +464,7 @@ class ChargerTest(unittest.TestCase):
         row = struct.pack("<BBBHHHBBBI", 5, 0, 0, 5000, 0, 1970, 4, 50, 0, 0)   # a QC2 5 V row, skip, why 50
         step = kr.decode_charger_test(page(HEADER2, 0, [row]))["steps"][0]
         self.assertEqual((step["result"], step["reason"]), ("skip", "port cuts without load"))
-        past = struct.pack("<BBBHHHBBBI", 5, 0, 0, 5000, 0, 0, 4, 52, 0, 0)    # one past the last reason
+        past = struct.pack("<BBBHHHBBBI", 5, 0, 0, 5000, 0, 0, 4, 53, 0, 0)    # one past the last reason
         with self.assertRaises(kr.FrameError):
             kr.decode_charger_test(page(HEADER2, 0, [past]))
 
@@ -473,6 +474,22 @@ class ChargerTest(unittest.TestCase):
         row = struct.pack("<BBBHHHBBBI", 5, 0, 0, 20000, 0, 19428, 2, 51, 0, 0)   # a pass, why 51
         step = kr.decode_charger_test(page(HEADER2, 0, [row]))["steps"][0]
         self.assertEqual((step["result"], step["reason"]), ("pass", "output folds back"))
+
+    def test_reason_52_xiaomi_chain_and_the_mi_flag_decode(self):
+        # the Xiaomi unit: its chain row (no level; the detail byte is how the 0x2717 chain ended) and a mode the chain unlocked,
+        # both with flags bit 6; the labels are the firmware's ("Xiaomi", "Mi 11V 5A")
+        self.assertEqual(kr.TEST_REASONS[52], "Xiaomi chain")
+        chain = struct.pack("<BBBHHHBBBI", 1, 0, 0x40, 0, 0, 0, 2, 52, 20, 0)   # pd3x-fixed, pass, why 52, chain verified
+        pps = kr.TEST_ALGORITHMS.index("pps")
+        mode = struct.pack("<BBBHHHBBBI", pps, 6, 0x40, 11000, 5000, 11020, 2, 0, 0, 0xC0DC3264)
+        plain = struct.pack("<BBBHHHBBBI", pps, 6, 0, 11000, 5000, 11020, 2, 0, 0, 0xC0DC3264)   # the full-current row
+        steps = kr.decode_charger_test(page(HEADER2, 0, [chain]))["steps"]
+        steps += kr.decode_charger_test(page(HEADER2, 1, [mode]))["steps"]
+        steps += kr.decode_charger_test(page(HEADER2, 2, [plain]))["steps"]
+        self.assertEqual((steps[0]["reason"], steps[0]["detail_reason"], steps[0]["mi"]), ("Xiaomi chain", "done, verified", True))
+        self.assertEqual([step_label.label(s) for s in steps], ["Xiaomi", "Mi 11V 5A", "PPS 11V 5A"])
+        self.assertEqual(step_label.mi_chain_text(1), "no 0x2717 SVID")
+        self.assertEqual(step_label.mi_chain_text(4 + 4), "failed at step 5")
 
     def test_schema2_epr_avs_is_a_programmable_test(self):
         meta = bytearray(HEADER2)
@@ -724,15 +741,16 @@ class ChargerHunt(unittest.TestCase):
         self.assertNotIn("hunt", rows[0])
 
     def test_the_hunt_threshold_follows_the_firmware_plan(self):
-        # Drift guard for tools/step_label.py: the probe asks kHuntMa, no plan row asks more than the cable ceiling.
+        # Drift guard for tools/step_label.py: the wire flags a Xiaomi row (flags bit 6, the "mi" key); a row without the flag (an
+        # older firmware) is a hunt row when it asks more than the cable ceiling, the most a plan row can ask.
         import re
-        import step_label
         root = Path(__file__).resolve().parent.parent
         src = (root / "src" / "chargertest" / "charger_test.cpp").read_text()
         hdr = (root / "include" / "k2" / "chargertest" / "charger_test.hpp").read_text()
-        probes = set(re.findall(r"h\.ma = (\d+);", src))
-        self.assertEqual(probes, {"6000"})                      # every hunt row asks 6 A
-        self.assertGreater(6000, step_label.HUNT_MA)
+        self.assertIn("(step.hunt ? 0x40 : 0)", (root / "src" / "core" / "remote_proto.cpp").read_text())
+        self.assertTrue(step_label.is_hunt({"protocol": "pps", "request_ma": 6000}))                 # older firmware: inferred
+        self.assertFalse(step_label.is_hunt({"protocol": "pps", "request_ma": 5000}))
+        self.assertTrue(step_label.is_hunt({"protocol": "pps", "request_ma": 5000, "mi": True}))     # the flag decides
         cable = re.search(r"uint16_t cable_ma\((?:const Input& |Input )in\) \{.*?: std::min<unsigned>\(in\.cable_ma, in\.cable_observed \? (\d+) : (\d+)\)", src)
         self.assertEqual(int(cable.group(1)), step_label.HUNT_MA)   # the most a plan row can ask: the 5 A cable
         self.assertEqual(int(re.search(r"kPlanRowMa = (\d+);", hdr).group(1)), step_label.PLAN_ROW_MA)

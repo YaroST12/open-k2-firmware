@@ -21,7 +21,7 @@ def _vectors():
             continue
         alg, pos, mv, ma, pdo, flags, prev_mv, want = (f.strip() for f in line.split("|"))
         row = {"protocol": WIRE.get(alg, alg), "pos": int(pos), "target_mv": int(mv), "request_ma": int(ma),
-               "raw_pdo": int(pdo, 16), "continuous": "c" in flags, "avs": "a" in flags}
+               "raw_pdo": int(pdo, 16), "continuous": "c" in flags, "avs": "a" in flags, "mi": "h" in flags}
         prev = None if not int(prev_mv) else {"protocol": row["protocol"], "pos": row["pos"], "target_mv": int(prev_mv),
                                               "request_ma": 1000, "raw_pdo": row["raw_pdo"], "continuous": False}
         yield line, row, prev, want
@@ -110,7 +110,7 @@ class StepLabelTest(unittest.TestCase):
                       continuous=True, avs=True)]
         text = charger_summary.summarize({"run_id": 1, "state": "done", "reason": "none", "evidence": {}, "steps": steps})
         self.assertIn("- PD: 20V 5A, all pass", text)
-        self.assertIn("- Mi 20V 6A, all pass", text)
+        self.assertIn("- Xiaomi: Mi 20V 6A ✓", text)   # an older firmware's 6 A probe row: no "mi" key, inferred
         self.assertIn("- AVS 9-15V 3A: 15V ✓, 15→9V ✓", text)
         # A PPS offer: the full-current row is last of its group and reads "11V 5A" (the heading carries the range and current).
         pps = dict(row, protocol="pps", pos=6, raw_pdo=0xC0DC3264, avs=False)
@@ -120,7 +120,16 @@ class StepLabelTest(unittest.TestCase):
                  dict(pps, target_mv=11000, request_ma=5000, continuous=False, measured_mv=11000)]
         text = charger_summary.summarize({"run_id": 1, "state": "done", "reason": "none", "evidence": {}, "steps": steps})
         self.assertIn("- PPS 5-11V 5A: 8V ✓, 8→11V ✓, 11V 5A ✓", text)
-        self.assertIn("- Mi 11V 6A, all pass", text)
+        self.assertIn("- Xiaomi: Mi 11V 6A ✓", text)
+        # the unified Xiaomi unit (the wire's "mi" flag): its chain row says how the 0x2717 chain ended, then its modes
+        chain = dict(row, protocol="pd3x-fixed", pos=0, target_mv=0, request_ma=0, raw_pdo=0, continuous=False, mi=True, detail=20)
+        mode = dict(pps, target_mv=11000, request_ma=5000, continuous=False, measured_mv=11000, mi=True)
+        run = {"run_id": 1, "state": "done", "reason": "none", "evidence": {}, "steps": [chain, mode]}
+        self.assertIn("- Xiaomi: auth done, verified; Mi 11V 5A ✓", charger_summary.summarize(run))
+        run["steps"] = [chain]
+        self.assertIn("- Xiaomi auth: done, no new modes", charger_summary.summarize(run))
+        run["steps"] = [dict(chain, result="skip", reason="Xiaomi chain", detail=1)]
+        self.assertIn("- Xiaomi: no 0x2717 SVID", charger_summary.summarize(run))
         card = {"no": 1, "name": "", "pdos": 7, "runs": 1, "vid": 1, "pid": 2, "fw": "0", "state": "Complete", "reason": "",
                 "fp": "1", "boots": 1, "uptime_s": 1, "handover": "not tried", "handover_ms": 0, "groups": {},
                 "ranges": [{"alg": "PD3.2+ SPR AVS", "lo_mv": 15000, "hi_mv": 28000, "max_mv": 20000, "fail_mv": 0, "max_ma": 3000}]}

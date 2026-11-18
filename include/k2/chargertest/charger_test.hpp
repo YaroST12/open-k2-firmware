@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <span>
+#include "k2/chargertest/mi_unlock.hpp"
 #include "k2/chargertest/spec_section.hpp"
 #include "k2/chargertest/svooc_ceiling.hpp"
 #include "k2/core/bss_zero.hpp"
@@ -24,8 +25,8 @@ static_assert(unsigned(Algorithm::Count) < 32);
 inline constexpr uint32_t kAllAlgorithms = (1u << unsigned(Algorithm::Count)) - 1;
 inline constexpr size_t kMaxSteps = pd::kMaxPdos * 6 + 46;   // 40 + the six default Class B rows (Qc2ClassB 1, Qc3ClassB 5); the journal's one-block section assert caps this
 // The current a PD plan row requests: 1 A (clamped to the offer and the cable). The one exception is the full-current PPS row, the
-// last row of each PPS APDO: top voltage at the APDO's whole current, so it is the only non-hunt row above this. The 6 A hunt
-// rows request 6 A. Host tools tell a hunt from a full row by that gap (tools/step_label.py HUNT_MA = 5000, the cable ceiling).
+// last row of each PPS APDO: top voltage at the APDO's whole current, so it is the only plain row above this. The Xiaomi unit's mode
+// rows (Step::hunt) ask an unlocked PDO at its new level, never above what it advertises.
 inline constexpr unsigned kPlanRowMa = 1000;
 constexpr uint32_t bit(Algorithm a) { return a < Algorithm::Count ? 1u << unsigned(a) : 0; }
 inline constexpr uint32_t kPdFixedAlgorithms = bit(Algorithm::Pd2Fixed) | bit(Algorithm::Pd3Fixed) | bit(Algorithm::Epr);
@@ -46,7 +47,7 @@ enum class Reason : uint8_t {
     NeedsExternalPower,  // a self-powered K2 (running on the source's own VBUS) skips a row that can cut the output (the low PPS/AVS edge)
     PdGaveUp,            // a self-powered K2 heard PD earlier in this attach, but the source's list is gone at START (it stopped answering)
     ClassAOnly,          // a QC Class B (20 V) row the charger did not follow: a Class A charger (12 V max), a neutral skip, not a failure (QC2 Class B: only unless every QC2 Class A row failed its handshake)
-    NotUnlocked,         // a 6 A hunt row the source did not offer: the OEM mode is not unlocked (detail: why), a skip, not a failure
+    NotUnlocked,         // retired 2026-11-18 (older cards and journals): a 6 A hunt row the source did not offer (detail 155..159: why)
     Qc3Only20V,          // QC2 Class B 20 V did not come although QC3 Class B reached 20 V in the same run (pattern qc3-20v-without-qc2-20v): a fail
     PdOnly,              // the source switched its output off on a PD-silent attach and stays off (pattern silent-sink-output-off): a skip, not a failure
     Capped,              // a PPS/AVS level the source accepted but whose output stopped at a steady ceiling below it (pattern output-capped-below-advertised): a fail
@@ -71,9 +72,11 @@ enum class Reason : uint8_t {
                          // apart above 5 V (AFC, QC3+, QC Class B): not asked at this level, a Medium run asks it
     PortCuts,            // pattern usb-a-no-load-auto-off: the row met a cut of the port's output (VBUS under kCutMv for a moment, back within
                          // kCutWindowMs) and its one retry met another: a skip, never a failure (the port cuts without load)
-    Folded               // user decision 2026-11-16: the deep sweep of the row's PDO found a voltage fold (pd::TrackScan: the settled level fell
+    Folded,              // user decision 2026-11-16: the deep sweep of the row's PDO found a voltage fold (pd::TrackScan: the settled level fell
                          // by more than 50 mV while the request rose). A CAUTION on a Pass verdict - the sweep row, and the fixed rows of the
                          // same APDO at or above the first folded setpoint that read below the peak - never a fail (Summary::fold_mv)
+    MiChain              // the Xiaomi unit's chain row (is_mi_chain): detail = mi_unlock::chain_code. Pass = the 0x2717 chain finished
+                         // (with or without new modes), Skip = no SVID 0x2717, no answer or a stall; nothing is requested on this row
 };
 // Step.detail of a PPS step-walk row while it is Pending/Running (finish() overwrites it with the result); sits above every
 // engine code and the EPR skip codes so the card and the tools never mistake it for one.
@@ -292,7 +295,7 @@ struct Step {
     uint8_t detail = 0;  // pd::Err, pd::SinkResult or fc::Fail according to reason/group.
     bool continuous = false;
     bool avs = false;
-    bool hunt = false;   // OEM-mode probe (Xiaomi 6 A): request ma above the advertised limit, pass on the reply voltage
+    bool hunt = false;   // a Xiaomi unit row: pos 0 = the chain row (is_mi_chain), else a mode the chain unlocked (is_mi_mode)
     uint32_t pdo = 0;
 };
 static_assert(sizeof(Step) == 20, "Step must stay free of padding holes: kMaxSteps copies live in the Runner");
@@ -305,6 +308,11 @@ constexpr bool is_step_walk(const Step& s) {
 constexpr bool is_sweep(const Step& s) {
     return s.group == Group::Pd && (kPpsAlgorithms & bit(s.algorithm)) && s.detail == kDetailSweep;
 }
+// The Xiaomi unit (SVID 0x2717): one chain row, planned last of the Pd unit, that waits for the sink's auth chain and diffs the list
+// re-announced after it against the list before it (mi_unlock::diff); each raised or new PDO then gets a mode row right behind it,
+// asking that PDO at its new level (mi_unlock::test_point) like any PD row. Both ride Step::hunt (journal bit 4, Step stays 20 B).
+constexpr bool is_mi_chain(const Step& s) { return s.group == Group::Pd && s.hunt && s.pos == 0; }
+constexpr bool is_mi_mode(const Step& s) { return s.group == Group::Pd && s.hunt && s.pos != 0; }
 // Which part of its APDO a sweep row covers: below ctsweep::kSplitMv (the PdLow row) or from it up. The row's mv is its first
 // setpoint until it closes and the setpoint of its peak after; both stay on the row's side of the split.
 constexpr bool sweep_low(const Step& s) { return s.mv && s.mv < ctsweep::kSplitMv; }
@@ -393,11 +401,11 @@ inline constexpr uint32_t kEprReadyMs = 8000;   // how long EPR entry waits for 
 // kEprSettleStepMs longer. Pattern reject-then-reset: the step after a Reject waits kRejectSettleMs before an EPR entry.
 inline constexpr unsigned kEprEntryRetries = 2;
 inline constexpr uint32_t kEprSettleMs = 2000, kEprSettleStepMs = 2000, kRejectSettleMs = 1500;
-// The Xiaomi / CUKTECH auth chain (SVID 0x2717) finishes ~0.7 s after the contract and then the APDO limits rise to 6 A (hardware
-// 2026-11-06): a 6 A hunt row waits for it, bounded, so a chain that never finishes costs the run this long once per attach.
+// The Xiaomi / CUKTECH auth chain (SVID 0x2717) finishes ~0.7 s after the contract and then the source re-announces raised limits
+// (hardware 2026-11-06): the Xiaomi chain row waits for it, bounded, so a chain that never finishes costs the run this long once.
 inline constexpr uint32_t kXiaomiAuthWaitMs = 2000;
-// A 6 A hunt row goes out only when the list in hand advertises 6 A for it. The source re-announces its list right after the chain
-// (the sink stamps it, XiaomiTrace::reannounced): a row whose chain just finished waits this long for that list before it ends.
+// The source re-announces its list right after the chain (the sink stamps it, XiaomiTrace::reannounced): the chain row waits this
+// long for that list after the chain finished before it diffs the list in hand.
 inline constexpr uint32_t kXiaomiReannounceMs = 400;
 inline constexpr int kLoadAbortMa = 100;
 // Pattern pps-off-at-no-load: the port drew less than this (a reading at the power monitor's noise floor) in the whole row.
@@ -441,6 +449,10 @@ struct Evidence {
     // is exported (timing byte bits 3..7, saturating at 31: the 42-byte page header is full); the period is a [CT] cut period log line.
     uint8_t cut_retries = 0, cut_period_ds = 0;
     pd::Revision reported{};
+    // The Xiaomi unit (Runner::mi_latch): the chain outcome (mi_unlock::chain_code, 0 = not run) and the unlocked modes, before and
+    // after word and slot. Not journaled; the card carries it in its extension block (report_card_deep.hpp).
+    uint8_t mi_chain = 0, mi_n = 0;
+    std::array<mi_unlock::Mode, mi_unlock::kMaxModes> mi{};
 };
 struct Summary {
     uint8_t total = 0, runnable = 0, skipped = 0;
@@ -460,21 +472,16 @@ const char* explanation(const Step&);
 //   entry was then refused (the entry's answer is added to the listed level, never replaces it; 149..154 fit the card's 159)
 inline constexpr uint8_t kDetailEprFail = 136, kDetailMonitor36 = 144, kDetailMonitor48 = 145, kDetailMonitorOther = 146, kDetailEprOffered = 147,
                          kDetailEprWithheld = 148, kDetailEprOfferedRefused = 149;   // 149..154 are the EPR entry answers
-// NotUnlocked (a 6 A hunt row the source refused or ignored): why it counts as "not unlocked" and not as a refusal. NoChain = the source
-// never listed SVID 0x2717, ChainUnfinished = it listed it but the auth chain did not finish inside kXiaomiAuthWaitMs, CableCap = the
-// chain finished and the cable is not known to carry more than 3 A (a far-end K2 never reads it; a refusal with a read 5 A cable stays
-// a FAIL). VendorRefused = the chain finished and the K2 presented a spoofed identity whose cable VDO claims 5 A, so the cable is not what
-// the source held back: it did not accept the identity as the vendor's own (sniffed Kowsi clones on a CUKTECH 120 W C1, 2026-11-07).
-// SourceReset = the source answered the Request with a Hard Reset (pattern hard-reset-on-6a-over-offer): the chain and the cable
-// leave no better reason (the cable was not read, or it is proven 5 A and the chain finished), so the row says what happened.
-// 155..159 fit the card's five detail bits (up to 159) and sit above every pd::Err and sink result.
+// Retired with the 6 A hunt rows (2026-11-18, the Xiaomi unit replaced them): the NotUnlocked details of older cards, journals and
+// share links, kept so they still decode. NoChain = no SVID 0x2717, ChainUnfinished = the chain did not finish, CableCap = a 3 A
+// cable, VendorRefused = a spoofed 5 A identity the source did not take, SourceReset = answered with a Hard Reset. Nothing new
+// writes them.
 inline constexpr uint8_t kDetailNoChain = 155, kDetailChainUnfinished = 156, kDetailCableCap = 157, kDetailVendorRefused = 158,
                          kDetailSourceReset = 159;
-// ---- Hunt evidence ----------------------------------------------------------------------------------------------------------------
-// A 6 A hunt row the source refused (Reject / Wait / no answer) leaves a compact snapshot of what the sink saw: the Xiaomi chain, the
-// list the Request referred to, the cable limit the run used and the source's answer. classify_hunt() names the cause where the
-// evidence decides it. Diagnostics only: nothing in the run reads it back and no verdict depends on it. It lives in a small side
-// table (Runner::hunt_evidence), not in Step.detail: a Fail/Request row's detail already carries the sink result.
+// ---- Hunt evidence (retired wire format) ------------------------------------------------------------------------------------------
+// The refusal snapshot of a 6 A hunt row. The rows are gone (the Xiaomi unit asks only what the list advertises), so nothing records
+// one any more; the layout stays because CMD 0x0E (remote_proto.hpp, answers count 0 now) and the Black Box refusal mark of older
+// captures (pdtrace kMarkRefusal, tools/pd_trace.py) carry it.
 enum class HuntCause : uint8_t {
     None,                 // not a refusal (no evidence recorded)
     NoChain,              // the source never listed SVID 0x2717: there was nothing to unlock
@@ -489,8 +496,7 @@ enum class HuntCause : uint8_t {
     Unexplained,          // refused, but the evidence is incomplete (no trace, or no Request of this row found)
     Count
 };
-const char* name(HuntCause);          // short word for logs and the wire ("apdo-stale")
-const char* explanation(HuntCause);   // the detail page / summary wording (fits 26 chars)
+const char* name(HuntCause);          // short word for logs and the wire ("apdo-stale"): decodes older captures
 enum HuntFlag : uint16_t {
     HfSvid = 1, HfOpener = 2, HfAuthed = 4, HfReannounced = 8, HfInChain = 16, HfHeld = 32, HfSent = 64,
     HfCableRead = 128, HfCableInferred = 256, HfTimeout = 512, HfHardReset = 1024   // HfHardReset: answered by a source Hard Reset
@@ -512,9 +518,7 @@ struct HuntEvidence {
     uint8_t pos = 0;            // object position asked
     uint8_t type = 0;           // pd::PdoType of the PDO asked
 };
-// The cause the evidence decides; pure, in the order the table in docs/CHARGER_TEST_FLOW.md lists them.
-HuntCause classify_hunt(const HuntEvidence&);
-inline constexpr size_t kHuntSlots = 4;   // a plan has at most three hunt rows (11 V, 20 V, the fixed 20 V); one spare
+inline constexpr size_t kHuntSlots = 4;   // the slots CMD 0x0E accepts (the old plan had at most three hunt rows)
 
 constexpr uint8_t monitor_detail(uint32_t cap_mv) { return cap_mv == 36000 ? kDetailMonitor36 : cap_mv == 48000 ? kDetailMonitor48 : kDetailMonitorOther; }
 // The EPR wording of a detail value above, nullptr for any other value.
@@ -593,9 +597,6 @@ struct Env {
     // slot and PDO word, `withdrawn` rows have no offer any more (Reason::Withdrawn), `back` rows a PDO came back for. Called once
     // per re-plan; the page logs it and the count is noted on the results card (Evidence::rebalanced).
     virtual void replan(unsigned follow, unsigned withdrawn, unsigned back) { (void)follow; (void)withdrawn; (void)back; }
-    // A hunt row the source refused: the evidence snapshot is final (called once per row, right before record()). The page logs it,
-    // marks the Black Box and freezes a capture; nothing here changes the row's verdict.
-    virtual void hunt_evidence(const Step&, const HuntEvidence&) {}
     // The SVOOC ceiling stage (svooc_ceiling.hpp). ceiling_start starts the guarded trigger with the Probe profile and the
     // stage's cap: 0 = started, else the trigger's svooc::Refusal (never 0 for a refusal), 255 = no trigger on this build.
     // ceiling_stop ends it (idempotent, the exit watch follows). The stage reads the rest from Input::svooc.
@@ -773,9 +774,11 @@ public:
     size_t index() const { return index_; }
     std::span<const Step> steps() const { return {steps_.data(), count_}; }
     uint32_t hold_left_ms(uint32_t now) const;
-    // The refusal evidence of this run's hunt rows (a few rows at most), in the order they were refused.
-    std::span<const HuntEvidence> hunt_evidence() const { return {hunt_.data(), n_hunt_}; }
-    const HuntEvidence* hunt_evidence_for(size_t step) const;
+    // The Xiaomi unit: the chain outcome (mi_unlock::chain_code; 0 = the chain row has not run) and the modes it unlocked (before
+    // and after PDO word, slot), latched by the chain row. mi_mode: the mode a mode row tests (by its slot), null for any other row.
+    uint8_t mi_chain() const { return evidence_.mi_chain; }
+    std::span<const mi_unlock::Mode> mi_modes() const { return {evidence_.mi.data(), evidence_.mi_n}; }
+    const mi_unlock::Mode* mi_mode(const Step&) const;
     // The deep sweep (ROADMAP "PPS deep sweep"): the finished rows (one per APDO part: a PPS sweep is split at 5 V) and the whole point record
     // (one int16 error per point). The results strip, the card and the remote read it through this view.
     ctsweep::View sweep_view() const { return {{sweep_rows_.data(), n_sweep_rows_}, {sweep_err_.data(), sweep_used_}}; }
@@ -798,7 +801,6 @@ public:
         return l;
     }
 private:
-    void note_hunt_refusal(const Input&, bool timeout, uint16_t extra_flags = 0);
     void add(Step);
     void build(const pd::SourceCaps&, Options, Input);
     void caps_evidence(const pd::SourceCaps&);
@@ -813,11 +815,6 @@ private:
     // only a partial chunk stays excluded. When the row in flight was re-placed (new slot / word) it is restarted there once the list
     // has settled - the restart is not a try (flight_restart_).
     bool list_settled(uint32_t now) const { return list_ms_ == 0 || now - list_ms_ >= kListSettleMs; }   // rule 1: no Request until the list in hand is kListSettleMs unchanged
-    // pattern reject-then-reduced-list: the running hunt row's own Request was Rejected (hunt_own_reject), or the hunt row that was
-    // Rejected is still being released (hunt_reject_until_): the list announced again is the source's answer to that probe, taken as
-    // the new offer (adopt_list: rows it still offers follow it, rows it dropped are skipped as not offered).
-    bool hunt_own_reject(const Input&) const;
-    void adopt_list(const pd::SourceCaps&);
     void record_pd_skips(bool final = false);
     void epr_skips(Reason, uint8_t detail = 0);   // detail: the source's Enter_Failed code for EprRefused
     bool info_ready(const Input&) const;                 // the EPR list the charger answered is usable
@@ -855,7 +852,6 @@ private:
     // noinline: LTO folded poll_impl into the single Runner::poll call site (ChargerTestSession::runner_tick), next to the
     // caller's Input copies: 1048 B of frame against FRAME_MAX 1024.
     [[gnu::noinline]] void poll_impl(Input&, const pd::SourceCaps&);
-    [[gnu::noinline]] uint8_t hunt_reset_note(const Input&);   // poll_impl's hunt row lost to a Hard Reset: evidence + detail
     uint32_t hold_ms() const;
     // The SVOOC ceiling stage: queued by finish() when the VOOC family was detected and the options asked for it, begun by next()
     // once the family session is released (D+/D- free, 5 V), ended by poll_ceiling(). One stage per run.
@@ -888,15 +884,15 @@ private:
     uint8_t epr_tries_ K2_BSS_INIT(0);       // retries of the baseline EPR entry (a source Hard Reset in the entry)
     uint32_t settle_ms_ K2_BSS_INIT(0);      // extra steady 5 V a retry waits for in Releasing (kEprSettleMs + backoff)
     uint32_t settle_until_ K2_BSS_INIT(0);   // an EPR entry request waits for this time (after a Reject: kRejectSettleMs)
-    uint32_t hunt_reject_until_ K2_BSS_INIT(0);   // a hunt row was Rejected: until then (kCapsReturnMs) a list announced again is the answer to it; cleared by the next row
     bool can_retry(const Step&) const;
-    // A 6 A hunt row waits for the Xiaomi auth chain (Input::pd.xiaomi_svid && !xiaomi_authed), at most kXiaomiAuthWaitMs per
-    // attach: auth_key_ = session + Hard Reset count the budget was opened for, auth_at_ = when. A row the list in hand does not
-    // advertise also gives the re-announced list kXiaomiReannounceMs after the chain.
-    bool hunt_auth_wait(const Input&, const Step& row);
-    // A 6 A hunt row that cannot go out (the list in hand does not advertise its 6 A) ends here without any Request: a source that
-    // never listed SVID 0x2717 drops the row from the plan (nothing to report), any other one skips it as "not unlocked".
-    void skip_unadvertised_hunt(Input in);
+    // The Xiaomi chain row waits for the sink's auth chain (Input::pd.xiaomi_svid && !xiaomi_authed), at most kXiaomiAuthWaitMs per
+    // attach: auth_key_ = session + Hard Reset count the budget was opened for, auth_at_ = when. A finished chain also gives the
+    // re-announced list kXiaomiReannounceMs.
+    bool mi_chain_wait(const Input&);
+    // The chain row's turn: the chain outcome, the diff of the list in hand against XiaomiTrace::pre, and one mode row per unlocked
+    // PDO inserted right behind the chain row (skipped "cable limit" / over the monitor / Light where they cannot go out). No Request.
+    void mi_latch(const Input&);
+    bool insert_row(size_t at, const Step&);   // the rows from `at` move down; false when the plan is full
     void drop_row(size_t i);
     bool auth_open_ K2_BSS_INIT(false); uint32_t auth_key_ K2_BSS_INIT(0), auth_at_ K2_BSS_INIT(0);
     // pattern preauth-list-after-reset: a Xiaomi-chain source that Hard Reset announces its fixed PDOs alone until its chain has run
@@ -942,9 +938,6 @@ private:
     void sweep_close(Step&);                // finish(): summarize the row's points into sweep_rows_ (and mark a fold, fold_caution)
     void fold_caution(Step& sweep, const ctsweep::Summary&);   // a fold: the sweep row and the APDO's fixed rows above it read Reason::Folded
     bool xiaomi_seen_ K2_BSS_INIT(false), xiaomi_reset_ K2_BSS_INIT(false), x_svid_ K2_BSS_INIT(false), x_authed_ K2_BSS_INIT(false); uint32_t tail_at_ K2_BSS_INIT(0), hr_count_ K2_BSS_INIT(0);
-    std::array<HuntEvidence, kHuntSlots> hunt_ K2_BSS_ZERO;   // refused hunt rows; n_hunt_ in use (a full table overwrites the last slot)
-    uint8_t n_hunt_ K2_BSS_INIT(0);
-    uint8_t hunt_seq_ K2_BSS_INIT(0);   // XiaomiTrace::req_n when the running hunt row asked: a different number later = a Request of this row went out
     size_t cut_index_ = SIZE_MAX;   // a low programmable row whose source went dark: Releasing decides replug-or-carry-on
     State state_ = State::Idle;
     Reason reason_ = Reason::None;

@@ -1,17 +1,19 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 Yaraslau Furman
-"""The words for one charger-test step: "PD 9V 3A", "PPS 11→8V", "AVS 15V", "Mi 20V 6A", "QC3 12V".
+"""The words for one charger-test step: "PD 9V 3A", "PPS 11→8V", "AVS 15V", "Mi 11V 5A", "QC3 12V".
 
 Mirrors include/k2/chargertest/step_label.hpp (the firmware's Running / Steps rows, Results chips and card text); the golden
 vectors tests/fixtures/step_labels.txt are checked against both, so the device, the host tools and the screenshots
 word a step the same. A row here is the dict k2_remote.parse_charger_test_results() returns: protocol, pos,
-target_mv, request_ma, continuous, avs, raw_pdo. The wire has no hunt flag: a PD-family row that requests more than
-5 A is the OEM 6 A probe. A plan row requests at most 1 A, except the full-current PPS row (the last row of each PPS
-APDO: top voltage at the APDO's whole current, clamped to the cable, so 5 A at most), which shows what it requests.
+target_mv, request_ma, continuous, avs, raw_pdo, mi. "mi" is the wire's Xiaomi-unit flag (the chain row and the modes
+the 0x2717 chain unlocked), present only when set; a row without it (an older firmware, a saved export) falls back to the
+old rule: a PD-family row that requests more than 5 A is a hunt row (the retired 6 A probe). A plan row requests at most
+1 A, except the full-current PPS row (the last row of each PPS APDO: top voltage at the APDO's whole current, clamped to
+the cable, so 5 A at most), which shows what it requests.
 """
 
 PLAN_ROW_MA = 1000   # a plan row requests at most this, except the full-current PPS row (include/k2/chargertest/charger_test.hpp kPlanRowMa)
-HUNT_MA = 5000       # above it the row is a hunt (Mi) probe: the cable ceiling, the most a plan row can ask
+HUNT_MA = 5000       # without the wire flag (older firmware): above it the row is a hunt (Mi) row: the cable ceiling, the most a plan row can ask
 SWEEP_DETAIL = 161   # Step.detail of a deep-sweep row (kDetailSweep): one row per APDO part, the points live in the sweep record
 SWEEP_SPLIT_MV = 5000   # ctsweep::kSplitMv: a PPS sweep's part below it is the PdLow row, the part from it up the Pd row
 _PD_FAMILY = ("pd2-fixed", "pd3x-fixed", "pps")
@@ -30,6 +32,8 @@ def milli(v):
 
 
 def is_hunt(s):
+    if "mi" in s:
+        return bool(s["mi"])
     return s["protocol"] in _PD_FAMILY and s.get("request_ma", 0) > HUNT_MA
 
 
@@ -40,7 +44,7 @@ def is_sweep(s):
 
 def is_full_current(s):
     """The full-current PPS row: not a hunt, asks more than a plan row's 1 A (the APDO's whole current, cable-clamped)."""
-    return s["protocol"] == "pps" and PLAN_ROW_MA < s.get("request_ma", 0) <= HUNT_MA
+    return s["protocol"] == "pps" and PLAN_ROW_MA < s.get("request_ma", 0) <= HUNT_MA and not is_hunt(s)
 
 
 def _is_avs(s):
@@ -48,10 +52,11 @@ def _is_avs(s):
 
 
 def protocol(s):
-    """The protocol word: PD, PPS, EPR, AVS, Mi, QC3+, SVOOC, 'PD3.1 rev'; 'PD3.x' / 'PD2.0' for a plan row with no offer."""
+    """The protocol word: PD, PPS, EPR, AVS, Mi (a Xiaomi mode), Xiaomi (the chain row), QC3+, SVOOC, 'PD3.1 rev'; 'PD3.x' /
+    'PD2.0' for a plan row with no offer."""
     p, has_v = s["protocol"], bool(s.get("target_mv"))
     if is_hunt(s):
-        return "Mi"
+        return "Mi" if has_v else "Xiaomi"
     if p == "pd2-fixed":
         return "PD" if has_v else "PD2.0"
     if p == "pd3x-fixed":
@@ -80,7 +85,7 @@ def pdo_ma(raw):
 
 
 def amps_ma(s):
-    """The current the label shows, in mA (0 = none): the offer's for a PD fixed / PPS row, the probe's for a hunt row, SCP's
+    """The current the label shows, in mA (0 = none): the offer's for a PD fixed / PPS row, the requested one for a Xiaomi mode row, SCP's
     limit, and the requested one for the full-current PPS row."""
     if is_hunt(s) or is_full_current(s):
         return s.get("request_ma", 0)
@@ -121,6 +126,21 @@ def label(s, prev=None):
         return protocol(s) + (" " + span if span else "")
     p = params(s, prev)
     return protocol(s) + (" " + p if p else "")
+
+
+def mi_chain_text(code):
+    """How the Xiaomi 0x2717 auth chain ended, from the chain row's detail (mi_unlock::chain_text in the firmware)."""
+    if code == 1:
+        return "no 0x2717 SVID"
+    if code == 2:
+        return "no answer"
+    if 4 <= code <= 13:
+        return f"failed at step {code - 3}"
+    return {20: "done, verified", 21: "done via 020A"}.get(code, f"unknown ({code})")
+
+
+def mi_chain_done(code):
+    return code in (20, 21)
 
 
 def labels(steps):

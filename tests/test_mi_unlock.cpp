@@ -6,6 +6,7 @@
 #include <string_view>
 
 #include "k2/chargertest/mi_unlock.hpp"
+#include "k2/chargertest/step_label.hpp"
 #include "test_util.h"
 
 namespace mu = k2::mi_unlock;
@@ -90,7 +91,7 @@ static void test_a_grown_range_is_a_raise() {
     const mu::Diff d = mu::diff(before, after);
     CHECK_EQ(int(d.n), 1);
     CHECK_EQ(d.modes[0].before, 0xC0DC323Cu);
-    CHECK_EQ(text_is(mu::mode_text(d.modes[0]), "PPS 5-11V\xE2\x86\x92" "5-20V 3A"), true);
+    CHECK_EQ(text_is(mu::mode_text(d.modes[0]), "PPS 5-11\xE2\x86\x92" "20V 3A"), true);
     CHECK_EQ(int(mu::test_point(d.modes[0].after).mv), 20000);
 }
 
@@ -127,7 +128,25 @@ static void test_chain_codes() {
     CHECK_EQ(text_is(mu::chain_text(mu::kCodeNoSvid), "no 0x2717 SVID"), true);
 }
 
+// Every mode text fits a Steps row (step_label::kRowCells glyph cells, the arrow one cell): a wide range with a fractional current
+// drops its minimum ("PPS 21V 3.25A→5A"); a range and size that both grew name the new offer ("PPS →5-20V 5A").
+static unsigned cells(const k2::step_label::Text& t) {
+    unsigned n = 0;
+    for (size_t i = 0; i < t.len; ++i) n += (static_cast<unsigned char>(t.s[i]) & 0xC0) != 0x80;
+    return n;
+}
+static void test_mode_texts_fit_a_steps_row() {
+    const uint32_t wide = 0xC0000000u | (210u << 17) | (33u << 8) | 65u;   // PPS 3.3-21 V 3.25 A
+    const mu::Mode m{wide, (wide & ~0x7Fu) | 100u, 2};                     // ... 5 A
+    CHECK_EQ(text_is(mu::mode_text(m), "PPS 21V 3.25A\xE2\x86\x92" "5A"), true);
+    const mu::Mode both{0xC0DC323C, 0xC1903264, 3};                         // PPS 5-11 V 3 A -> 5-20 V 5 A
+    CHECK_EQ(text_is(mu::mode_text(both), "PPS \xE2\x86\x92" "5-20V 5A"), true);
+    for (const mu::Mode& x : {m, both, mu::Mode{0x0002D12C, 0x0002D1F4, 2}, mu::Mode{0, 0xC1903278, 7}})
+        CHECK_EQ(cells(mu::mode_text(x)) <= k2::step_label::kRowCells, true);
+}
+
 int main() {
+    test_mode_texts_fit_a_steps_row();
     test_bank_pps_3a_to_5a_is_one_mode();
     test_fh22_unchanged_list_has_no_mode();
     test_cuktech_both_apdos_5a_to_6a();

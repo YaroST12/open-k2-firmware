@@ -4,6 +4,7 @@
 
 #include <algorithm>
 
+#include "k2/chargertest/step_label.hpp"
 #include "k2/pd/pd.hpp"
 
 namespace k2::mi_unlock {
@@ -20,8 +21,9 @@ struct Out {
         if (const unsigned frac = v % 1000 / 10) { put('.'); put(char('0' + frac / 10)); if (frac % 10) put(char('0' + frac % 10)); }
     }
     void arrow() { put("\xE2\x86\x92"); }   // U+2192, one glyph cell
+    bool top = false;   // the short form: a range by its top voltage alone
     void volts(const pd::Pdo& p) {
-        if (p.type == PdoType::Fixed) { milli(p.max_mv); put('V'); return; }
+        if (p.type == PdoType::Fixed || top) { milli(p.max_mv); put('V'); return; }
         milli(p.min_mv); put('-'); milli(p.max_mv); put('V');
     }
     // The size of the offer: amps, or watts for an AVS APDO (its limit is a power).
@@ -30,6 +32,12 @@ struct Out {
         milli(p.max_ma); put('A');
     }
 };
+// Glyph cells of a text: a UTF-8 sequence (the arrow) is one cell.
+unsigned cells(const step_label::Text& t) {
+    unsigned n = 0;
+    for (size_t i = 0; i < t.len; ++i) n += (static_cast<unsigned char>(t.s[i]) & 0xC0) != 0x80;
+    return n;
+}
 bool known(const pd::Pdo& p) { return p.type == PdoType::Fixed || p.type == PdoType::Pps || p.type == PdoType::Avs; }
 const char* proto(PdoType t) { return t == PdoType::Fixed ? "PD" : t == PdoType::Pps ? "PPS" : "AVS"; }
 bool same_range(const pd::Pdo& a, const pd::Pdo& b) { return a.min_mv == b.min_mv && a.max_mv == b.max_mv; }
@@ -84,9 +92,10 @@ unsigned point_w(uint32_t after) {
     return unsigned(p.mv) * p.ma / 1000000u;
 }
 
-step_label::Text mode_text(const Mode& m, bool fresh) {
+namespace {
+step_label::Text mode_form(const Mode& m, bool fresh, bool top) {
     step_label::Text t;
-    Out o{t};
+    Out o{t, top};
     const pd::Pdo a = pd::decode_pdo(m.after);
     if (!known(a)) return t;
     o.put(proto(a.type)); o.put(' ');
@@ -97,9 +106,20 @@ step_label::Text mode_text(const Mode& m, bool fresh) {
     }
     const pd::Pdo b = pd::decode_pdo(m.before);
     if (same_range(a, b)) { o.volts(a); o.put(' '); o.size(b); o.arrow(); o.size(a); return t; }
-    if (same_size(a, b)) { o.volts(b); o.arrow(); o.volts(a); o.put(' '); o.size(a); return t; }
-    o.volts(b); o.put(' '); o.size(b); o.arrow(); o.volts(a); o.put(' '); o.size(a);
+    if (same_size(a, b)) {   // the range grew: "PPS 5-11→20V 3A" when the minimum stayed
+        if (a.min_mv == b.min_mv && !top) { o.milli(a.min_mv); o.put('-'); o.milli(b.max_mv); }
+        else o.milli(b.max_mv);
+        o.arrow(); o.milli(a.max_mv); o.put("V "); o.size(a);
+        return t;
+    }
+    o.arrow(); o.volts(a); o.put(' '); o.size(a);   // range and size both changed: the new offer ("PPS →5-20V 5A")
     return t;
+}
+}  // namespace
+
+step_label::Text mode_text(const Mode& m, bool fresh) {
+    const step_label::Text t = mode_form(m, fresh, false);
+    return cells(t) <= step_label::kRowCells ? t : mode_form(m, fresh, true);   // too wide for a Steps row: the range by its top
 }
 
 uint8_t chain_code(bool svid, bool authed, uint8_t last_step, uint8_t finish) {

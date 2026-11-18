@@ -29,7 +29,7 @@ bool is_programmable(const ct::Step& s) { return s.algorithm == A::Pps || is_avs
 Text protocol(const ct::Step& s) {
     Text t;
     Out o{t};
-    if (s.hunt) { o.put("Mi"); return t; }
+    if (s.hunt) { o.put(s.mv ? "Mi" : "Xiaomi"); return t; }   // a mode the Xiaomi chain unlocked; the chain row itself
     switch (s.algorithm) {
     case A::Pd2Fixed: o.put(s.mv ? "PD" : "PD2.0"); break;
     case A::Pd3Fixed: o.put(s.mv ? "PD" : "PD3.x"); break;

@@ -123,7 +123,7 @@ static void test_a_ramp_needs_the_previous_row_of_the_same_offer() {
     ct::Step other = prev; other.pos = 7;
     CHECK_STR(stl::label(s, &other).c_str(), "PPS 8V 5A");            // another APDO's row is not where this one ramps from
     ct::Step hunt = prev; hunt.hunt = true;
-    CHECK_STR(stl::label(s, &hunt).c_str(), "PPS 8V 5A");             // nor is a 6 A probe
+    CHECK_STR(stl::label(s, &hunt).c_str(), "PPS 8V 5A");             // nor is a Xiaomi mode row
     s.continuous = false;
     CHECK_STR(stl::label(s, &prev).c_str(), "PPS 8V 5A");             // a row that starts its own sequence
     ct::Step none = prev; none.mv = 0; s.continuous = true;

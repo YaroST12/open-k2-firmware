@@ -4,7 +4,7 @@
 // summary lines and the report card text all call these, so a row reads the same on the K2 and on the host
 // (tools/step_label.py mirrors it; the golden vectors are tests/fixtures/step_labels.txt).
 //
-//   "<protocol> <V> <A>"   PD 9V 3A   PPS 20V 5A   EPR 28V 5A   Mi 20V 6A   SCP 10V 2.25A
+//   "<protocol> <V> <A>"   PD 9V 3A   PPS 20V 5A   EPR 28V 5A   Mi 11V 5A   SCP 10V 2.25A
 //   "<protocol> <V>"       AVS 15V    QC3 12V       VOOC 5V      (no current the step is known to carry: none is invented)
 //   "PPS 11→8V"            a ramp row: the previous target of the same offer, then this one (the arrow is U+2192, in the
 //                          12 px font; one glyph cell, three bytes)
@@ -13,7 +13,7 @@
 //
 // Amps: a PD fixed or PPS row shows the offer's advertised current (the row itself requests at most 1 A), except the
 // full-current PPS row (top voltage at the APDO's whole current), which shows what it requests, cable-clamped ("PPS 11V 3A"
-// on an unread cable); a hunt row the probe current it requests (6 A), SCP the limit it writes; AVS offers and the other
+// on an unread cable); a Xiaomi mode row ("Mi 11V 5A", a level the 0x2717 chain unlocked) the current it requests, SCP the limit it writes; AVS offers and the other
 // D+/D- modes show volts only.
 #pragma once
 #include <cstddef>
@@ -36,7 +36,7 @@ struct Text {
     std::string_view view() const { return {s, len}; }
 };
 
-// The protocol word: "PD", "PPS", "EPR", "AVS", "Mi", "QC3+", "SVOOC", "PD3.1 rev"; "PD3.x" / "PD2.0" / "EPR" / "AVS" for a
+// The protocol word: "PD", "PPS", "EPR", "AVS", "Mi" (a Xiaomi mode), "Xiaomi" (the chain row), "QC3+", "SVOOC", "PD3.1 rev"; "PD3.x" / "PD2.0" / "EPR" / "AVS" for a
 // plan row that holds no offer.
 Text protocol(const charger_test::Step&);
 // The numbers: "20V 5A", "12V", "11→8V", "10V 2.25A"; empty when the step has no voltage. `prev` = the plan row before this one
