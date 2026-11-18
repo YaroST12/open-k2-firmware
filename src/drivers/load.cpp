@@ -4,6 +4,7 @@
 #include "k2/drivers/power_calc.hpp"
 
 #include "k2/drivers/adc.hpp"
+#include "k2/drivers/crm.hpp"
 #include "k2/drivers/pins.hpp"
 #include "k2/drivers/power_monitor.hpp"
 #include "k2/drivers/regs.hpp"
@@ -24,10 +25,16 @@ static_assert(offsetof(Tim, C1DT) == 0x34 && offsetof(Tim, BRK) == 0x44);
 inline Tim &tim1() { return at<Tim>(0x40012C00); }
 
 constexpr uint32_t kApb2Tim1 = 1u << 11;
-constexpr uint32_t kTimerHz = 240'000'000;   // APB2 120 MHz with a prescaler != 1 doubles the timer clock
 constexpr uint32_t kPwmHz = 80'000;           // 80 kHz switching
 constexpr uint32_t kPeriod = 100;             // ARR 99
-constexpr uint32_t kDiv = kTimerHz / (kPwmHz * kPeriod);   // 30
+// The timer clock is crm::timer_hz() (APB2 /2 with a prescaler != 1 doubles it: 240 MHz at the full core clock, less with the
+// AHB divider raised). The prescaler is the nearest whole divider, 30 at full speed; at /4 it rounds to 75 kHz, at /8 as well.
+uint32_t div_for_pwm() {
+    const uint32_t step = kPwmHz * kPeriod;
+    const uint32_t d = (crm::timer_hz() + step / 2) / step;
+    return d == 0 ? 1 : d;
+}
+void on_clock_change() { tim1().DIV = div_for_pwm() - 1; }
 
 Pulse g_pulse;
 volatile bool g_active;
@@ -65,10 +72,11 @@ Inputs inputs() {
 }  // namespace
 
 void init() {
-    crm().APB2EN |= Crm::APB2EN_GPIOA | kApb2Tim1;
+    reg::crm().APB2EN |= Crm::APB2EN_GPIOA | kApb2Tim1;
     Tim &t = tim1();
     t.CTRL1 = 0;
-    t.DIV = kDiv - 1;
+    t.DIV = div_for_pwm() - 1;
+    crm::on_hclk_change(on_clock_change);
     t.PR = kPeriod - 1;
     t.C1DT = 0;
     t.CM1 = (t.CM1 & ~0xFFu) | (6u << 4) | (1u << 3);   // CH1 PWM mode 1, output compare preload

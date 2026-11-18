@@ -8,6 +8,7 @@
 #include <array>
 
 #include "k2/drivers/adc.hpp"
+#include "k2/drivers/crm.hpp"
 #include "k2/drivers/pins.hpp"
 #include "k2/drivers/regs.hpp"
 #include "k2/drivers/systick.hpp"
@@ -38,8 +39,10 @@ inline UsartRegs& usart() { return reg::at<UsartRegs>(0x40004400); }
 inline DmaRegs& dma1() { return reg::at<DmaRegs>(0x40020000); }
 
 constexpr std::uint32_t kApb1enUsart2 = 1u << 17, kAhbenDma1 = 1u << 0;
-constexpr std::uint32_t kApb1Hz = 120'000'000;   // APB1 runs at /2 (crm.cpp); a 60 MHz divider doubled every baud
-constexpr std::uint32_t kBaudDiv = kApb1Hz / kBaud;   // 1041: 0.03 % fast
+// APB1 runs at /2 of HCLK (crm.cpp; a 60 MHz divider once doubled every baud): 120 MHz at the full core clock, crm::apb1_hz()
+// with the AHB divider raised. The baud divisor is derived from it at claim and re-derived on a clock change.
+std::uint32_t g_baud = kBaud;   // the rate of the claim in force
+std::uint32_t baud_div(std::uint32_t baud) { return baud >= 1200 && baud <= 230400 ? crm::apb1_hz() / baud : crm::apb1_hz() / kBaud; }
 
 alignas(4) std::array<std::uint8_t, kRingBytes> g_ring;
 std::size_t g_tail;
@@ -54,6 +57,12 @@ std::size_t head() { return kRingBytes - dma1().ch[5].DTCNT; }
 
 bool claimed() { return g_claimed; }
 
+namespace {
+void on_clock_change() {
+    if (g_claimed) usart().BAUDR = baud_div(g_baud);   // a frame in flight is garbled: the idle glue holds the clock while one runs
+}
+}  // namespace
+
 bool claim(const Config& cfg) {
     if (g_claimed) return false;
     adc::release_dpdm_pins();   // scan off, PA2/PA3 no longer analog
@@ -67,7 +76,9 @@ bool claim(const Config& cfg) {
 
     UsartRegs& u = usart();
     u.CTRL1 = 0;
-    u.BAUDR = cfg.baud >= 1200 && cfg.baud <= 230400 ? kApb1Hz / cfg.baud : kBaudDiv;
+    g_baud = cfg.baud;
+    u.BAUDR = baud_div(g_baud);
+    crm::on_hclk_change(on_clock_change);
     u.CTRL2 = (cfg.stop_bits == 1 ? 0u : 2u) << 12;   // default 2 stop bits (STOP field 0x2000)
     u.CTRL3 = UsartRegs::CTRL3_DMAR;
     DmaChannel& d = dma1().ch[5];

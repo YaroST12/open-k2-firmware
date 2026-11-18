@@ -7,6 +7,7 @@
 
 #include "k2/core/critical.hpp"
 #include "k2/core/hot.h"
+#include "k2/drivers/crm.hpp"
 #include "k2/drivers/regs.hpp"
 
 namespace k2::oneshot {
@@ -34,18 +35,27 @@ inline Tmr& tmr7() { return reg::at<Tmr>(0x40001400); }
 
 constexpr std::uint32_t kApb1EnTmr7 = 1u << 5;
 constexpr unsigned kIrq = 55;                  // TMR7 global
-constexpr std::uint32_t kTimerHz = 240'000'000;   // APB1 /2 = 120 MHz, timer clock x2 (src/drivers/crm.cpp)
+// The timer clock is crm::timer_hz(): APB1 /2 = 120 MHz, timer clock x2 = 240 MHz at the full core clock, and it follows the
+// AHB divider (crm::set_hclk_div), so the 1 us prescaler is derived from it and re-derived on a change.
+std::uint32_t div_for_1mhz() { return crm::timer_hz() / 1'000'000 - 1; }
 
 bool g_ready;
 Handler volatile g_handler;
 volatile std::uint32_t g_fired;
+
+// A shot already running keeps the old prescaler until it ends (DIV is buffered; arm_us() reloads it): the idle glue does not
+// change the clock while a shot is armed.
+void on_clock_change() {
+    if (g_ready) tmr7().DIV = div_for_1mhz();
+}
 
 void setup() {
     reg::crm().APB1EN |= kApb1EnTmr7;
     (void)reg::crm().APB1EN;   // the clock is on before the first register write
     Tmr& t = tmr7();
     t.CTRL1 = Tmr::CTRL1_OVFS | Tmr::CTRL1_OCMEN;
-    t.DIV = kTimerHz / 1'000'000 - 1;   // 1 us per count
+    t.DIV = div_for_1mhz();   // 1 us per count
+    crm::on_hclk_change(on_clock_change);
     t.IDEN = Tmr::IDEN_OVFIEN;
     t.ISTS = 0;
     reg::nvic().ISER[kIrq / 32] = 1u << (kIrq % 32);

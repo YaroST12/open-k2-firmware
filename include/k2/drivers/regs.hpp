@@ -70,6 +70,7 @@ struct Crm {
     static constexpr uint32_t CTRL_PLLEN = 1u << 24, CTRL_PLLSTBL = 1u << 25;
 
     static constexpr uint32_t CFG_SCLKSEL_MASK = 0x3, CFG_SCLKSEL_PLL = 0x2, CFG_SCLKSTS_SHIFT = 2;
+    static constexpr uint32_t CFG_AHBDIV_MASK = 0x00F0, CFG_AHBDIV_SHIFT = 4;   // 0xxx = /1, 1000 = /2, 1001 = /4, 1010 = /8
     static constexpr uint32_t CFG_APB1DIV_MASK = 0x0700, CFG_APB1DIV_2 = 0x0400;   // field 100b = /2 (same code as APB2DIV_2)
     static constexpr uint32_t CFG_APB2DIV_MASK = 0x3800, CFG_APB2DIV_2 = 0x2000;
 

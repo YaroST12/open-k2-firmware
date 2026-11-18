@@ -19,10 +19,24 @@ struct Sample {
     std::uint32_t ms, val;
     bool pending;
 };
-constexpr std::uint32_t ticks_of(Sample s) { return (s.ms + (s.pending ? 1u : 0u)) * kReload + (kReload - 1 - s.val); }
-constexpr std::uint32_t micros_of(Sample s) {
-    return (s.ms + (s.pending ? 1u : 0u)) * 1000u + (kReload - 1 - s.val) / (kSysclkHz / 1'000'000);
+// SysTick counts the core clock, which the AHB divider (crm::set_hclk_div) can lower to 240 MHz / div: the reload then
+// shrinks to kReload / div counts per millisecond. ticks() and micros() stay in nominal 240 MHz units whatever the divider
+// (one count is `div` nominal ticks), so every caller's arithmetic and every elapsed-time measurement keeps its meaning.
+constexpr std::uint32_t reload_for(std::uint32_t div) { return kReload / div; }
+constexpr std::uint32_t ticks_of(Sample s, std::uint32_t div = 1) {
+    return (s.ms + (s.pending ? 1u : 0u)) * kReload + (reload_for(div) - 1 - s.val) * div;
 }
+constexpr std::uint32_t micros_of(Sample s, std::uint32_t div = 1) {
+    return (s.ms + (s.pending ? 1u : 0u)) * 1000u + (reload_for(div) - 1 - s.val) * div / (kSysclkHz / 1'000'000);
+}
+
+// The AHB divider switch, called only by crm::set_hclk_div: wait_reload() spins (bounded) until SysTick has just reloaded,
+// so the switch lands within microseconds of a millisecond edge; set_div() then reloads SysTick for the new core clock.
+// Both run with the divider the clock tree already has; ticks()/micros() may step back by the few microseconds the
+// switch took, once.
+void wait_reload();
+void set_div(std::uint32_t div);
+std::uint32_t div();
 
 // Called from SysTick_Handler once per millisecond.
 void tick();
@@ -37,7 +51,7 @@ std::uint32_t micros();
 // wrap is seamless: subtract two readings to time an interval shorter than ~17 s.
 std::uint32_t ticks();
 
-// Busy-wait. delay_ms() also calls usb::service() every millisecond so that long waits
+// Busy-wait (the iteration count scales with the AHB divider, so the time stays real). delay_ms() also calls usb::service() every millisecond so that long waits
 // (LCD init, e-marker scan) do not starve the USB device.
 // A hook (set_delay_hook) runs once per millisecond of delay_ms() too: the boot power trace samples
 // through it while the slow init steps (LCD, USB) wait. It must not call delay_ms() itself.
