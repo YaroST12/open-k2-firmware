@@ -10,6 +10,7 @@
 
 #include "k2/core/dbg_stream_hw.hpp"
 #include "k2/core/hot.h"
+#include "k2/core/idle_hw.hpp"
 #include "k2/core/loop_guard.hpp"
 #include "k2/drivers/power_monitor.hpp"
 #include "k2/drivers/systick.hpp"
@@ -38,8 +39,10 @@ K2_HOT void poll() {
     }
     if (g_silent_until && static_cast<std::int32_t>(systick::millis() - g_silent_until) >= 0) silent_end();
     std::array<char, 32> buf;
-    for (std::uint32_t n; (n = tud_cdc_read(buf.data(), buf.size())) > 0;)
+    for (std::uint32_t n; (n = tud_cdc_read(buf.data(), buf.size())) > 0;) {
+        idle_hw::request(true, systick::millis());   // typed input is a command: wake the screen, full clock for the lab timing
         for (std::uint32_t i = 0; i < n; i++) g_shell_ptr->feed(buf[i]);
+    }
     if (!usb::cdc_hold()) {
         // Edge stream: whole frames while the FIFO has room, a few per call, never waiting.
         if (dpsniff::streaming()) {

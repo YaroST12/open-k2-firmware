@@ -18,6 +18,7 @@
 #include "k2/core/gap_meter.hpp"
 #include "k2/core/handback.hpp"
 #include "k2/core/hot.h"
+#include "k2/core/idle_hw.hpp"
 #include "k2/core/log.hpp"
 #include "k2/core/loop_guard.hpp"
 #include "k2/core/loop_stats.hpp"
@@ -90,6 +91,8 @@ QueuedButton g_btn_q[kBtnQueueCap]{};
 uint8_t g_btn_head = 0;
 uint8_t g_btn_tail = 0;
 uint8_t g_btn_count = 0;
+bool g_swallow[4]{};                      // a physical press that only woke the screen: its events are dropped until it is up
+bool g_was_down[4]{};
 uint32_t g_press_count = 0;
 uint32_t g_last_ms = 0;
 uint32_t g_last_btn_ms = 0;
@@ -144,7 +147,18 @@ K2_HOT bool sample_buttons(uint32_t now) {
             if (!down && !g_det[i].pressed()) c->boot_key_swallow = false;
             continue;
         }
-        if (ev != ButtonEvent::None) push_btn(b, ev, now, false);
+        // Idle power: a press while the screen is dim or off only wakes it (the whole press is dropped); any other press is activity.
+        const bool pr = g_det[i].pressed();
+        if (pr && !g_was_down[i] && !idle_hw::press(now)) g_swallow[i] = true;
+        g_was_down[i] = pr;
+        if (g_swallow[i]) {
+            if (!pr) g_swallow[i] = false;
+            continue;
+        }
+        if (ev != ButtonEvent::None) {
+            idle_hw::touch(now);
+            push_btn(b, ev, now, false);
+        }
     }
     return true;
 }
@@ -248,6 +262,7 @@ constexpr uint32_t kEraseQuietMs = 1000;
     if (c.bootscreen.active()) detail::boot_screen_step(now);   // waits for the key's 3 s, then owns the panel
     // The QR screen owns the panel: the UI does not draw meanwhile. The UI's tick ends the OK + Back reboot chord.
     mark(Stage::UiTick);
+    idle_hw::service(c.ui, c.bootscreen.active(), now);   // dim / off / low clock, before the UI paints
     if (!c.bootscreen.showing() && c.ui.tick(now) == k2::UiAction::Reboot) c.reboot();
 }
 
@@ -284,6 +299,8 @@ void begin(Context& ctx) {
     ctx.ui.set_paint_clock(k2::systick::micros);   // every paint slice also stops on measured time (PaintBudget::kPassUs)
     for (auto &d : g_det) d = {};
     for (auto &d : g_vdet) d = {};
+    for (auto &s : g_swallow) s = false;
+    for (auto &w : g_was_down) w = false;
     g_btn_head = g_btn_tail = g_btn_count = 0;
     g_last_ms = k2::systick::millis();
     g_last_btn_ms = g_last_ms;
@@ -308,6 +325,7 @@ void begin(Context& ctx) {
     if (k2::usbcfg::current.net) k2::http_server::service();
 #endif
     mark(Stage::Remote);
+    idle_hw::pass_guard();   // a low clock goes back to full speed at the first PD message or VBUS move
     switch (c.remote.poll()) {
     case k2::RemoteEvent::Reboot:     c.reboot(); break;
     case k2::RemoteEvent::Screenshot:
@@ -342,7 +360,7 @@ void begin(Context& ctx) {
             for (int i = 0; i < 4; i++) {
                 const Button b = static_cast<Button>(i);
                 c.ui.set_remote_pressed(b, g_vdet[i].pressed(), now);
-                if (!c.boot_key_swallow || b != c.boot_key) c.ui.set_pressed(b, g_det[i].pressed(), now);
+                if (!c.boot_key_swallow || b != c.boot_key) c.ui.set_pressed(b, g_det[i].pressed() && !g_swallow[i], now);
             }
         }
         QueuedButton qb;

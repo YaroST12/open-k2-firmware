@@ -26,6 +26,7 @@
 #include "ui_stubs.h"
 #include "k2/chargertest/session_store.hpp"
 #include "k2/core/fs.hpp"
+#include "k2/core/idle_hw.hpp"
 #include "k2/core/log.hpp"
 #include "k2/drivers/adc.hpp"
 #include "k2/drivers/fs_flash.hpp"
@@ -1156,6 +1157,14 @@ bool latest_dpdm(std::int32_t& dp, std::int32_t& dm) {
 // record, black box, boot trace) have no flash here; the D+/D- side (fastcharge, dpsniff, fctrig) is not modelled yet
 // (docs/TESTING.md "World replay", sink and QC); the transition capture's poll is the delay_ms() wait hook and records nothing.
 namespace usb { void log_stats() {} }
+// The idle glue (src/core/idle_hw.cpp drives the real backlight, panel and clock): the world keeps the screen awake. A test that
+// wants to see the main loop's swallow of a wake press sets world::idle_swallow_next; the touch / press counts show the calls.
+namespace idle_hw {
+void service(Ui&, bool, std::uint32_t) {}
+bool press(std::uint32_t) { return !std::exchange(world::idle_swallow_next, false); }
+void touch(std::uint32_t) { world::idle_touches++; }
+void pass_guard() {}
+}  // namespace idle_hw
 #ifndef K2_WORLD_SVOOC   // the SuperVOOC world's stall injection rides this poll (tests/world_svooc.cpp)
 namespace shell_hw { void poll() {} }
 #endif

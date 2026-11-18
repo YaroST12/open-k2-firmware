@@ -20,6 +20,9 @@
 
 namespace world {
 
+inline bool idle_swallow_next = false;   // the next physical press-down reports "only woke the screen" (the idle glue stub)
+inline unsigned idle_touches = 0;        // physical button events the main loop reported to the idle glue
+
 struct VbusPoint { double t; double mv; };
 struct RpStep { double t; int cc1, cc2; };            // the level the measure block sees on each line (mV)
 struct AdcStep { double t; int cc1, cc2, dp, dm; };   // what the ADC reads on the nets (mV)
