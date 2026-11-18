@@ -184,4 +184,25 @@ K2_HOT bool read(Bus bus, std::uint8_t dev, std::uint8_t reg, std::span<std::uin
     return ok;
 }
 
+// Cold: the EEPROM lab access only (K2_EEPROM_READ, and the acknowledge polling of K2_EEPROM_CAL_CLEAR). Unused, the linker drops them.
+bool probe(Bus bus, std::uint8_t dev) {
+    start(bus);
+    const bool ack = write_byte(bus, dev << 1);
+    stop(bus);
+    return ack;
+}
+
+bool read_word(Bus bus, std::uint8_t dev, std::span<const std::uint8_t> word, std::span<std::uint8_t> out) {
+    start(bus);
+    bool ok = write_byte(bus, dev << 1);
+    for (std::size_t i = 0; ok && i < word.size(); i++) ok = write_byte(bus, word[i]);
+    if (ok) {
+        start(bus);  // repeated start
+        ok = write_byte(bus, (dev << 1) | 1);
+    }
+    for (std::size_t i = 0; ok && i < out.size(); i++) out[i] = read_byte(bus, i + 1 < out.size());
+    stop(bus);
+    return ok;
+}
+
 }  // namespace k2::i2c
