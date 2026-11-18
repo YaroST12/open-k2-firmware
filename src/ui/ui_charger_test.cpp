@@ -92,7 +92,7 @@ static_assert(fits_px(kSmallAdvPx, kReattachConfirm, 216), "the re-attach confir
 // Review's footer while the cursor is on the Level row: what the level does (charger_test::Level order: Medium, Light, Deep).
 // A build with the PD spec stage (K2_PDSPEC) says so on Deep; the default image has no such stage and keeps the old words.
 constexpr const char *kLevelNotes[ct::kLevelCount] = {"Medium: levels, no sweeps", "Light: lists offers at 5V",
-                                                       specsec::kBuilt ? "Deep: + sweeps, PD spec" : "Deep: + PPS and AVS sweeps"};
+                                                       specsec::kBuilt ? "Deep: + sweeps, steps, spec" : "Deep: + sweeps and steps"};
 static_assert(all_fit(kLevelNotes, kSmallAdvPx, 216), "a level note is wider than the footer");
 const char *level_note(ct::Level l) { return kLevelNotes[unsigned(l) < ct::kLevelCount ? unsigned(l) : 0]; }
 // A row whose engine times its own pulses stops the screen for the length of the handshake (the engine window the LCD idle hook
@@ -2060,6 +2060,9 @@ static FooterTone spec_footer(StrBuf<32>& f, int check, const specsec::Cell& c, 
                     lost |= y.verdict == ct::Verdict::Fail;
                     dev |= result_layout::caution(y, s_.runner_.sweep_view());
                 }
+            char wk[28] = {};
+            const auto* walk = result_layout::walk_caution(s_.runner_.steps(), algo, pos);   // a step walk the source did not follow at its quantum
+            const size_t wl = walk ? ct::walk_text(*walk, wk) : 0;
             if (const auto rw = s_.runner_.sweep_view().apdo(static_cast<uint8_t>(algo), pos); rw && rw->sum.points) {   // both 5 V parts
                 char nb[ctsweep::kFoldTextMax];
                 if (const size_t len = ctsweep::format_fold(rw->sum, nb)) {
@@ -2067,6 +2070,7 @@ static FooterTone spec_footer(StrBuf<32>& f, int check, const specsec::Cell& c, 
                     f.put(std::string_view(nb, len));
                     return FooterTone::Caution;
                 }
+                if (wl) { f.put(std::string_view(wk, wl)); return FooterTone::Caution; }
                 if (lost || rc.tone == result_layout::Tone::Pass) {
                     char v[12] = {};
                     f.put("peak ");
@@ -2077,7 +2081,7 @@ static FooterTone spec_footer(StrBuf<32>& f, int check, const specsec::Cell& c, 
             } else if (lost) {   // no recorded point at all: say so rather than let the range's reach read as the whole story
                 f.put("sweep failed");
                 return FooterTone::Caution;
-            }
+            } else if (wl) { f.put(std::string_view(wk, wl)); return FooterTone::Caution; }
             f.put(result_layout::reach_footer(rc).c_str());
             using result_layout::Tone;
             return rc.tone == Tone::Pass ? FooterTone::Ok : rc.tone == Tone::Partial || rc.tone == Tone::Fail ? FooterTone::Caution
@@ -2123,6 +2127,11 @@ static FooterTone spec_footer(StrBuf<32>& f, int check, const specsec::Cell& c, 
     }
     case Stage::Detail: {
         const auto steps = s_.runner_.steps();
+        if (s_.detail_index_ >= 0 && static_cast<size_t>(s_.detail_index_) < steps.size() && steps[static_cast<size_t>(s_.detail_index_)].reason == ct::Reason::StepResolution) {
+            char wk[28] = {};   // the walk's own words: "steps 100mV, not 20mV"
+            const auto& st = steps[static_cast<size_t>(s_.detail_index_)];
+            if (const size_t len = ct::walk_text(st, wk)) { f.put(std::string_view(wk, len)); return st.verdict == ct::Verdict::Pass ? FooterTone::Caution : FooterTone::Error; }
+        }
         if (s_.detail_index_ >= 0 && static_cast<size_t>(s_.detail_index_) < steps.size() && steps[static_cast<size_t>(s_.detail_index_)].reason == ct::Reason::Folded) {
             const auto& st = steps[static_cast<size_t>(s_.detail_index_)];   // a caution says what folded, from the APDO's sweep: "folds to 19.4V above 19.9V"
             char nb[ctsweep::kFoldTextMax] = {};
@@ -2307,9 +2316,12 @@ void ChargerTestPage::list_row(int index, bool focused, kit::RowSpec &out) {
             const bool listing = result_layout::noted(s);   // a Light run's listing: LISTED / NOT RUN, no skip cause
             const bool caution = result_layout::caution(s, view);   // a voltage fold (CAUTION: folds back) or a tracking deviation (off 450mV)
             row_note_.put(listing || caution ? result_layout::verdict_word(s, view) : ct::name(s.verdict));
+            char wk[28] = {};
+            const bool walk = ct::walk_text(s, wk) != 0;   // "CAUTION: steps 100mV, not 20mV": the whole note, so no PDO suffix behind it
             if (result_layout::deviates(s, view)) { StrBuf<16> off; put_off(off, view, s); row_note_.put(": ").put(off.view()); }
+            else if (walk) row_note_.put(": ").put(wk);
             else if (caution || (!listing && (s.verdict == ct::Verdict::Fail || s.verdict == ct::Verdict::Skip))) row_note_.put(": ").put(detail_name(s));
-            if (s.pos) row_note_.put(" PDO #").put_u32(s.pos);
+            if (s.pos && !walk) row_note_.put(" PDO #").put_u32(s.pos);
             out.note = row_note_.view().substr(0, kit::kNoteMaxPx / kLabelAdv);
         }
         break;

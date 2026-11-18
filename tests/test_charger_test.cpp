@@ -4796,6 +4796,25 @@ static void test_avs_step_walk_cautions_a_coarse_or_ignored_step() {
         CHECK_EQ(n, 1u);
     }
 }
+// The step-walk caution's note: the mean move rounded to 10 mV from 50 up (96 and 101 both read 100), the nominal step it should have been.
+static void test_walk_text_names_the_step_that_was_measured() {
+    auto text = [](A a, uint8_t detail, ct::Reason r = ct::Reason::StepResolution) {
+        ct::Step s; s.algorithm = a; s.reason = r; s.detail = detail;
+        char b[40] = {}; const size_t n = ct::walk_text(s, b);
+        CHECK_EQ(n, strlen(b));
+        return std::string(b);
+    };
+    CHECK_STR(text(A::Pps, 100).c_str(), "steps 100mV, not 20mV");
+    CHECK_STR(text(A::Pps, 96).c_str(), "steps 100mV, not 20mV");
+    CHECK_STR(text(A::Pps, 101).c_str(), "steps 100mV, not 20mV");
+    CHECK_STR(text(A::Pps, 15).c_str(), "steps 15mV, not 20mV");   // a short sum: exact below 50
+    CHECK_STR(text(A::Pps, 0).c_str(), "steps ignored");
+    CHECK_STR(text(A::SprAvs, 200).c_str(), "steps 200mV, not 100mV");
+    CHECK_STR(text(A::EprAvs, 0).c_str(), "steps ignored");
+    CHECK_STR(text(A::Pps, 100, ct::Reason::None).c_str(), "");       // any other reason: nothing
+    ct::Step s; s.reason = ct::Reason::StepResolution; s.detail = 100;
+    char tiny[8]; CHECK_EQ(ct::walk_text(s, tiny) < sizeof tiny, true);   // never past the buffer
+}
 // A PD source that goes dark mid-row (its output collapsed or we Hard Reset it): VBUS 0, the offer list gone, no
 // session. Lenovo C135, hardware 2026-11-03: VBUS drained 20 V -> 0 in 9 s, then every later row said "offers changed".
 static void run_to_pd_row(Fake& f, ct::Runner& r, size_t row) {
@@ -8533,7 +8552,7 @@ int main() {
     test_ps_rdy_late_is_noted_and_never_judged(); test_ps_rdy_inferred_is_noted_and_never_judged();
     test_ps_rdy_out_of_band_is_noted_and_never_judged(); test_ps_rdy_timing_is_noted_per_walk_level();
     test_pps_step_walk_cautions_a_flat_source_as_steps_ignored(); test_pps_step_walk_cautions_a_source_that_rounds_to_100mv_on_the_jump();
-    test_avs_step_walk_passes_on_100mv_steps(); test_avs_step_walk_cautions_a_coarse_or_ignored_step();
+    test_avs_step_walk_passes_on_100mv_steps(); test_avs_step_walk_cautions_a_coarse_or_ignored_step(); test_walk_text_names_the_step_that_was_measured();
     test_an_inline_refusal_names_what_latched_it();
     test_default_run_sweeps_each_pps_apdo_after_its_checks();
     test_pps_sweep_splits_at_5v_by_unit();

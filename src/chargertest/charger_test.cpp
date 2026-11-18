@@ -204,6 +204,29 @@ const char* explanation(const Step& s) {
         return s.pos < 8 ? "EPR AVS in an SPR slot" : "SPR APDO in an EPR slot";
     return name(s.reason);
 }
+size_t walk_text(const Step& s, std::span<char> out) {
+    if (out.empty()) return 0;
+    size_t n = 0;
+    const auto put = [&](char c) { if (n + 1 < out.size()) out[n++] = c; };
+    const auto word = [&](const char* t) { while (*t) put(*t++); };
+    if (s.reason == Reason::StepResolution) {
+        if (!s.detail) word("steps ignored");
+        else {
+            const unsigned mv = s.detail >= 50 ? (s.detail + 5u) / 10u * 10u : s.detail;
+            char d[4]; unsigned k = 0, v = mv;
+            word("steps ");
+            do { d[k++] = char('0' + v % 10); v /= 10; } while (v);
+            while (k) put(d[--k]);
+            word("mV, not ");
+            v = walk_step_mv(s.algorithm);
+            do { d[k++] = char('0' + v % 10); v /= 10; } while (v);
+            while (k) put(d[--k]);
+            word("mV");
+        }
+    }
+    out[n] = 0;
+    return n;
+}
 const char* name(HuntCause c) {
     switch (c) {
     case HuntCause::None: return "none";

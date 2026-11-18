@@ -464,6 +464,9 @@ struct Summary {
     uint16_t refusal_mv = 0;   // the measured VBUS (mV) behind a Release / WrongVoltage refusal (0 = none)
 };
 const char* explanation(const Step&);
+// The step-walk caution's note, "steps 100mV, not 20mV" (the mean move, rounded to 10 mV from 50 up, then the nominal step) or
+// "steps ignored"; 0 characters unless the step's reason is StepResolution. NUL-terminated within `out`, 24 characters at most.
+size_t walk_text(const Step&, std::span<char> out);
 // Step.detail of an EPR skip. The PD group's detail space is 128 + pd::Err (below 136) and pd::SinkResult (below 12); these sit
 // above it so the card (five code bits behind the 128 flag) and the tools never mistake them for an engine code.
 //   EprRefused: kDetailEprFail + the source's Enter_Failed data (0..5)      OverCap on an EPR row: the monitor's ceiling

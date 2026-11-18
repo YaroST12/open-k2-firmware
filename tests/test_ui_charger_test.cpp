@@ -1295,7 +1295,7 @@ static void test_review_level_row_cycles_and_counts() {
     CHECK_EQ(picked(), 2);
     // Deep also runs the PD spec stage (specsec): the footer names it, the preview counts its checks, Light and Medium have none.
     v = ui.charger_test_view();
-    CHECK_STR(std::string(v.message, v.message_len).c_str(), "Deep: + sweeps, PD spec");
+    CHECK_STR(std::string(v.message, v.message_len).c_str(), "Deep: + sweeps, steps, spec");
     dump_screen("spec_review_deep");   // K2_DUMP: the Level page with Deep picked
     CHECK_EQ(unsigned(v.preview.spec_checks), unsigned(specsec::kCells));
     CHECK_EQ(unsigned(ui.charger_test_view().preview.total) >= deep, true);
@@ -2110,6 +2110,68 @@ static void test_a_voltage_fold_reads_as_a_caution() {
     CHECK_STR(want, "folds to 9.2V above 10.5V");   // the last five points fall 200 mV each from 10 V: the lowest is 9.2 V
     CHECK_EQ(footer_shows(std::string_view(want, wl), kCaution), true);   // the fold's own words, from the APDO's sweep
     check_text_at(kSmall, ty_reason(), "folds back", kCaution, kBg, 92);
+}
+// A step walk the source answered at a coarse quantum (a bank landing 100 mV for a +20 mV ask) is a caution on its range chip, never a
+// chip of its own and never red: the footer and the Detail footer carry "steps 100mV, not 20mV". The walk is set on a finished PPS row.
+static void test_a_step_walk_miss_reads_as_a_caution() {
+    six_pdo_fixture();
+    g_stub.vbus_ceiling_mv = 36000;
+    Ui ui; open(ui);
+    CHECK_EQ(ui.charger_test_set_units(kPdOnly), true);
+    ui.charger_test_set_sweep(true);
+    review(ui);
+    start_press(ui, 1300); press(ui, Button::Ok, 1400);
+    uint32_t t = 1500;
+    for (; t <= 900000 && ui.charger_test_busy(); t += 100) ui.tick(t);
+    CHECK_EQ(ui.charger_test_stage(), 6);
+    const auto calm = [&] {
+        for (int i = 0; i < 64 && ui.painting(); ++i) ui.tick(t += 100);
+        CHECK_EQ(ui.painting(), false);
+    };
+    ui.tick(t += 200); ui.tick(t += 200);
+    calm();
+    const auto& r = ui.charger_test_results();
+    unsigned before = 0;
+    for (const auto& s : r.steps()) before += result_layout::caution(s, r.sweep_view());
+    ct::Step* walk = nullptr;
+    for (size_t i = 0; i < r.steps().size() && !walk; ++i) {
+        auto& s = const_cast<ct::Step&>(r.steps()[i]);
+        if (s.group == ct::Group::Pd && (ct::kPpsAlgorithms & ct::bit(s.algorithm)) && !ct::is_sweep(s) && s.verdict == ct::Verdict::Pass &&
+            !result_layout::caution(s, r.sweep_view()))
+            walk = &s;
+    }
+    CHECK_EQ(walk != nullptr, true);
+    if (!walk) return;
+    walk->reason = ct::Reason::StepResolution; walk->detail = 100;
+    unsigned after = 0;
+    for (const auto& s : r.steps()) after += result_layout::caution(s, r.sweep_view());
+    CHECK_EQ(after, before + 1);
+    CHECK_EQ(int(walk->verdict), int(ct::Verdict::Pass));   // a caution, the levels passed
+    top(ui, t); calm();
+    press(ui, Button::Ok); ui.tick(t += 100); calm();   // into a row and back: the Results grid is built again from the marked run
+    press(ui, Button::Back); ui.tick(t += 100); calm();
+    CHECK_EQ(ui.charger_test_stage(), 6);
+    top(ui, t); calm();
+    const auto pps = pick_family(ui, "PPS");
+    CHECK_EQ(pps.line >= 0, true);
+    if (pps.line < 0) return;
+    CHECK_EQ(pps.tally.caution >= 1, true);
+    CHECK_EQ(pps.first_caution >= 0, true);
+    for (int k = 0; k < pps.line; ++k) { press(ui, Button::Plus); ui.tick(t += 100); calm(); }
+    press(ui, Button::Ok); ui.tick(t += 100); calm();
+    CHECK_EQ(ui.charger_test_stage(), 7);
+    top(ui, t); calm();
+    CHECK_EQ(footer_shows(result_layout::family_footer("PD", pps.tally).view(), kCaution), true);
+    for (int k = 0; k < pps.first_caution; ++k) { press(ui, Button::Plus); ui.tick(t += 100); calm(); }   // the focused row opens its note: "CAUTION: steps 100mV, not 20mV"
+    dump_screen("walk_steps");
+    press(ui, Button::Ok); ui.tick(t += 100); calm();
+    CHECK_EQ(ui.charger_test_stage(), 8);
+    CHECK_EQ(footer_shows("steps 100mV, not 20mV", kCaution), true);
+    dump_screen("walk_detail");
+    for (const uint8_t rot : {1, 2, 3}) {   // the note and the footer fit in every mapping (a cut fails the run)
+        ui.set_rotation(rot, t); calm();
+        ui.set_rotation(0, t); calm();
+    }
 }
 // A passing sweep that tracked worse than 100 mV is a caution as well (result_layout::deviates, user decision 2026-11-16): the header's
 // fourth cell, the Steps footer and the focused row's note count it, and the chip is amber, never red, so "0 fail" never sits over a
@@ -5864,6 +5926,7 @@ int main() {
     test_family_steps_scenes();
     test_a_long_family_list_scrolls_under_its_header();
     test_a_voltage_fold_reads_as_a_caution();
+    test_a_step_walk_miss_reads_as_a_caution();
     test_a_failed_sweep_footer_never_reads_as_reached();
     test_a_sweep_off_by_more_than_100mv_reads_as_a_caution();
     test_sweep_log_line_has_no_literal_format_bug();

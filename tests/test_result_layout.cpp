@@ -321,6 +321,33 @@ static void test_a_fold_only_sweep_is_amber_at_any_depth() {
     CHECK_EQ(t.fail, 0u);
     CHECK_EQ(t.capped, 1u);
 }
+// User decision 2026-11-18: a step-walk miss (a Pass that carries Reason::StepResolution) is a caution on the APDO's range chip, never a
+// chip of its own and never red. A journal from before (the same reason on a Fail) keeps its verdict's colour.
+static void test_a_step_walk_miss_is_an_amber_caution_on_the_range_chip() {
+    auto clean = baseus();
+    rl::Layout l0; rl::build(l0, clean);
+    const rl::Row* r0 = sweep_row_of(l0, 7);
+    CHECK_EQ(r0 != nullptr, true);
+    if (!r0) return;
+    CHECK_EQ(int(l0.tokens[r0->first].tone), int(rl::Tone::Pass));
+    auto s = clean;
+    ct::Step w = step(A::Pps, 13000, V::Pass, 7, 3248763456u, ct::Reason::StepResolution);   // the walk row: a range step of slot 7
+    w.detail = 100;
+    s.push_back(w);
+    CHECK_EQ(rl::caution(w), true);
+    CHECK_STR(rl::verdict_word(w), "CAUTION");
+    rl::Layout l; rl::build(l, s);
+    const rl::Row* r = sweep_row_of(l, 7);
+    CHECK_EQ(r != nullptr, true);
+    if (!r) return;
+    CHECK_EQ(int(l.tokens[r->first].tone), int(rl::Tone::Partial));      // amber: the range chip carries it
+    CHECK_EQ(l.token_count, l0.token_count);                             // no chip of its own
+    ct::Step old = w; old.verdict = V::Fail;                              // an older journal: the Fail keeps its words
+    CHECK_EQ(rl::caution(old), false);
+    CHECK_STR(rl::verdict_word(old), "FAIL");
+    rl::Tally t; for (const auto& y : s) if (y.pos == 7 && y.algorithm == A::Pps) (rl::caution(y) ? ++t.capped : y.verdict == V::Fail ? ++t.fail : ++t.pass);
+    CHECK_EQ(t.capped, 1u); CHECK_EQ(t.fail, 0u);
+}
 // A voltage fold the sweep found is a CAUTION: neither a pass nor a fail (User decision 2026-11-16, FH22). The sweep row and the fixed rows
 // of the APDO that sit on the folded side keep their Pass verdict and carry Reason::Folded; every surface reads them amber, the
 // band says CAUTION, and the tally counts them in its own (capped) column - never pass, never fail.
@@ -1881,7 +1908,7 @@ int main() {
     test_the_sweep_mark_widens_the_chip_by_its_gap_and_glyph();
     test_a_sweep_chip_takes_its_tone_from_the_sweep();
     test_a_fold_only_sweep_is_amber_at_any_depth();
-    test_a_fold_is_a_caution_not_a_pass_and_not_a_fail();
+    test_a_fold_is_a_caution_not_a_pass_and_not_a_fail(); test_a_step_walk_miss_is_an_amber_caution_on_the_range_chip();
     test_a_deviating_sweep_is_a_caution_never_red();
     test_a_split_sweep_deviation_reads_the_same_on_both_parts();
     test_roll_up_is_one_table();
