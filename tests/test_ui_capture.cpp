@@ -594,7 +594,8 @@ static void test_cards_scenes() {
         const rc::GV v = i % 3 == 0 ? rc::GV::Pass : i % 3 == 1 ? rc::GV::Fail : rc::GV::Skip;
         w.group[i] = {v, uint16_t(v == rc::GV::Pass ? 20000 : 0), 0, uint8_t(v == rc::GV::Pass ? 0 : int(ct::Reason::Timeout))};
     }
-    w.group[9] = {rc::GV::Fail, 12000, 0, uint8_t(ct::Reason::Timeout), 20000};   // SVOOC65: the widest cell, "12V" cross "20V"
+    // UFCS: the widest cell, "12V" cross "20V" (it was SVOOC65 until the VOOC family read as one "VOOC" cell)
+    w.group[unsigned(ct::Group::Ufcs)] = {rc::GV::Fail, 12000, 0, uint8_t(ct::Reason::Timeout), 20000};
     w.n_ranges = 4;
     w.range[2] = {uint8_t(ct::Algorithm::Pps), 0, 33, 110, 110, 90};
     w.range[3] = {uint8_t(ct::Algorithm::EprAvs), 0, 150, 480, 480, 0};
