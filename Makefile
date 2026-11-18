@@ -697,10 +697,13 @@ TEST_ALL_BINS  = $(TEST_BINS) $(TEST_CXX_BINS)
 ifneq ($(K2_WEB),1)
 TEST_ALL_BINS := $(filter-out $(HOST_DIR)/test_net_dhcp $(HOST_DIR)/test_usb_desc_net, $(TEST_ALL_BINS))
 endif
+# Hang guard per test binary: a test that runs longer is killed and named (exit 124). The slowest one, test_emlib under the
+# sanitizers with three gates sharing the CPU, took about 6 min on 2026-11-18.
+K2_TEST_TIMEOUT ?= 1200
 TEST_STAMPS    = $(patsubst $(HOST_DIR)/%, $(HOST_DIR)/run/%.ok, $(TEST_ALL_BINS))
 $(HOST_DIR)/run/%.ok: $(HOST_DIR)/%
 	@mkdir -p $(dir $@)
-	@K2_DUMP=$(HOST_DIR) $< && touch $@
+	@K2_DUMP=$(HOST_DIR) timeout -k 10 $(K2_TEST_TIMEOUT) $< && touch $@ || { rc=$$?; [ $$rc -eq 124 ] && echo "*** $< hung: killed after $(K2_TEST_TIMEOUT) s (K2_TEST_TIMEOUT)"; exit $$rc; }
 test-run: $(TEST_STAMPS)
 	@$(COMPDB)
 test-py: test-run $(HOST_DIR)/bbdiag
@@ -772,7 +775,9 @@ docker-image:
 	docker build -t $(DOCKER_IMG) .
 
 # Runs as the host uid so build/ stays owned by the caller (a root-owned build/ breaks later host runs).
-DOCKER_RUN = docker run --rm --cpus=$(K2_J) --user $(shell id -u):$(shell id -g) -v $(CURDIR):/workspace -w /workspace
+# --init: tini is PID 1 and forwards SIGTERM/SIGINT, so stopping the host side stops the container. Without it make runs as
+# PID 1, which ignores SIGTERM, and a cancelled build or gate kept running in the background until it finished on its own.
+DOCKER_RUN = docker run --rm --init --cpus=$(K2_J) --user $(shell id -u):$(shell id -g) -v $(CURDIR):/workspace -w /workspace
 
 # Code navigation: the ARM compiler's system include directories, copied out of the build image into
 # $(NAV_DIR)/root (dirs.txt lists them, as paths inside the image) so clangd on the host finds <cstdint> and the
@@ -793,7 +798,7 @@ docker-build: | $(NAV_DIR)/dirs.txt
 	$(DOCKER_RUN) $(DOCKER_IMG) make K2_GIT=$(K2_GIT) K2_FW_VERSION=$(K2_FW_VERSION) K2_WERROR=$(K2_WERROR) K2_64BIT=$(K2_64BIT) K2_NET=$(K2_NET) K2_WEBUSB=$(K2_WEBUSB) K2_PDSTRESS=$(K2_PDSTRESS) K2_PDSPEC=$(K2_PDSPEC) K2_LOOPPROBE=$(K2_LOOPPROBE) K2_OPPO_PROBE=$(K2_OPPO_PROBE) K2_EEPROM_READ=$(K2_EEPROM_READ) K2_EEPROM_CAL_CLEAR=$(K2_EEPROM_CAL_CLEAR) K2_EEPROM_WRITE=$(K2_EEPROM_WRITE) K2_SPECROWS=$(K2_SPECROWS) K2_WHOS_ATTACHED=$(K2_WHOS_ATTACHED) K2_SCREENSHOT=$(K2_SCREENSHOT) K2_HOST_REPORT=$(K2_HOST_REPORT) K2_HOT_BLOCK=$(K2_HOT_BLOCK) K2_STACKPROBE=$(K2_STACKPROBE) BUILD_DIR=$(BUILD_DIR) K2_HOST_ROOT=$(CURDIR)
 
 docker-flash:
-	docker run --rm --privileged -v $(CURDIR):/workspace -v /dev:/dev $(DOCKER_IMG) make flash
+	docker run --rm --init --privileged -v $(CURDIR):/workspace -v /dev:/dev $(DOCKER_IMG) make flash
 
 # Pre-commit gate: -Werror build, invariants, map check, command ids, tests, size report.
 gate:

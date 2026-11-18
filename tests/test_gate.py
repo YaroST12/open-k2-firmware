@@ -2,6 +2,7 @@
 # Copyright (C) 2026 Yaraslau Furman
 """Tests for the pure checks in tools/gate.py (no docker, no device)."""
 import os
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -307,7 +308,11 @@ class SanitizeStep(unittest.TestCase):
 
     def test_script_runs_both_compilers_in_docker_and_all_leaves_sanitizers_out(self):
         text = (Path(g.__file__).resolve().parent / "static_check.sh").read_text()
-        self.assertIn("docker run --rm --user", text)
+        self.assertIn('docker run --rm --init --name "k2-san-$1-$$" --user', text)   # stops with its client, killable by name
+        self.assertIn('timeout -k 30 "${K2_SAN_TIMEOUT:-3600}" make', text)          # hang guard inside the container
+        self.assertIn("trap stop_sanitize INT TERM HUP", text)
+        self.assertIn('docker kill "k2-san-gcc-$$" "k2-san-clang-$$"', text)
+        self.assertNotRegex(text, r"docker run --rm (?!--init)")                     # every container gets an init
         self.assertIn("sanitize_pass gcc g++ gcc", text)
         self.assertIn("sanitize_pass clang clang++ clang", text)
         self.assertIn("-fsanitize-ignorelist=tools/sanitize_ignorelist.txt", text)
@@ -317,6 +322,23 @@ class SanitizeStep(unittest.TestCase):
         self.assertIn(" tests passed\" >>", text)
         all_line = next(l for l in text.splitlines() if l.strip().startswith("all)"))
         self.assertNotIn("sanitize", all_line)
+
+
+class StopRun(unittest.TestCase):
+    def test_a_stopped_gate_takes_its_whole_process_group_down(self):
+        """run() is what every step calls: a signal while it waits must leave no child (or grandchild) behind."""
+        import signal as sg
+        import threading
+        import time
+        marker = f"k2gate-stop-{os.getpid()}"
+        old = sg.signal(sg.SIGTERM, g._stop)
+        self.addCleanup(sg.signal, sg.SIGTERM, old)
+        threading.Timer(0.5, lambda: os.kill(os.getpid(), sg.SIGTERM)).start()
+        with self.assertRaises(KeyboardInterrupt):
+            g.run(["bash", "-c", f"exec -a {marker} sleep 60 & bash -c 'exec -a {marker} sleep 60'; wait"])
+        time.sleep(0.3)
+        left = subprocess.run(["ps", "-eo", "args"], capture_output=True, text=True).stdout.split("\n")
+        self.assertEqual([l for l in left if l.startswith(marker)], [])
 
 
 NM_HOT = """08003800 R g_pfnVectors

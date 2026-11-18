@@ -41,13 +41,13 @@ run_gcc() {
     flags+=" -fno-exceptions -fno-rtti -fno-threadsafe-statics -fno-use-cxa-atexit -Wno-volatile"
     flags+=" -Wall -Wextra -Wshadow -Wconversion -Wnull-dereference -Wduplicated-cond -Wlogical-op"
     flags+=" -Wcast-align -fanalyzer ${inc[*]}"
-    docker run --rm -v "$root":/workspace -w /workspace "$img" sh -c \
+    docker run --rm --init -v "$root":/workspace -w /workspace "$img" sh -c \
         "find src -name '*.cpp' | sort | xargs -P ${K2_J:-4} -I{} sh -c 'arm-none-eabi-g++ $flags -c {} -o /dev/null 2>&1'" \
         >"$out/gcc.log" 2>&1
 }
 
 run_cppcheck() {
-    docker run --rm -v "$root":/workspace -w /workspace "$img" sh -c \
+    docker run --rm --init -v "$root":/workspace -w /workspace "$img" sh -c \
         "(apt-get update -qq && apt-get install -y -qq cppcheck) >/dev/null 2>&1;
          cppcheck --enable=all --std=c++20 --language=c++ -j ${K2_J:-4} --inline-suppr \
            --suppressions-list=tools/cppcheck.supp --template='{file}:{line}: {severity}: {message} [{id}]' \
@@ -65,8 +65,11 @@ sanitize_pass() {
     stamp="$2 $3 $flags oppo=$oppo $(docker image inspect -f '{{.Id}}' "$img" 2>/dev/null)"
     [ "$(cat "$dir/.stamp" 2>/dev/null)" = "$stamp" ] || rm -rf "$dir"
     mkdir -p "$dir" && printf '%s' "$stamp" >"$dir/.stamp"
-    docker run --rm --user "$(id -u):$(id -g)" -e UBSAN_OPTIONS=print_stacktrace=1 -v "$root":/workspace -w /workspace "$img" \
-        make -k -j"${K2_J:-4}" test-run K2_OPPO_PROBE="$oppo" HOST_DIR="build/san-$1" HOST_CXX="$2 $flags" HOST_CC="$3 $flags" \
+    # --init so the container stops with this script (see the trap below); timeout: the whole pass's hang guard, which also
+    # ends a container whose docker client was SIGKILLed (no signal reaches it then).
+    docker run --rm --init --name "k2-san-$1-$$" --user "$(id -u):$(id -g)" -e UBSAN_OPTIONS=print_stacktrace=1 \
+        -v "$root":/workspace -w /workspace "$img" \
+        timeout -k 30 "${K2_SAN_TIMEOUT:-3600}" make -k -j"${K2_J:-4}" test-run K2_OPPO_PROBE="$oppo" HOST_DIR="build/san-$1" HOST_CXX="$2 $flags" HOST_CC="$3 $flags" \
         >"$out/sanitize-$1.log" 2>&1
     local rc=$?
     # The closing line the gate reads: an incremental run re-runs only the changed tests, so the log alone cannot say that
@@ -74,7 +77,17 @@ sanitize_pass() {
     echo "[sanitize] $1: docker exit $rc, $(find "$dir/run" -name '*.ok' 2>/dev/null | wc -l) tests passed" >>"$out/sanitize-$1.log"
 }
 
+# Stopping this script (the gate cancelled, a shell timeout) stops both sanitizer containers too; docker kill reaches a
+# container even when its client was already gone.
+stop_sanitize() {
+    trap - INT TERM HUP
+    docker kill "k2-san-gcc-$$" "k2-san-clang-$$" >/dev/null 2>&1
+    kill $(jobs -p) 2>/dev/null
+    exit 130
+}
+
 run_sanitize() {
+    trap stop_sanitize INT TERM HUP
     local base="-fsanitize=address,undefined,float-divide-by-zero,float-cast-overflow"
     sanitize_pass gcc g++ gcc "$base" &
     sanitize_pass clang clang++ clang \
