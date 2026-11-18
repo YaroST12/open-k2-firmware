@@ -716,6 +716,7 @@ private:
     result_layout::CompactGrid layout_;
     std::array<result_layout::CompactLine, result_layout::kMaxLines> lines_{};
     StrBuf<32> best_;
+    bool best_none_ = false;   // no mode passed: best_ is the PD version and "No passing mode", drawn dim
     size_t line_n_ = 0;
     int results_row_ = 0;      // selected line to restore when BACK leaves the step list
     uint8_t hdr_first_ = 0, hdr_n_ = 0;   // Steps: the picked row's lines shown as the header (its first line, at most two)

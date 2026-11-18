@@ -35,6 +35,7 @@
 #include "k2/chargertest/report_card_hw.hpp"
 #include "k2/chargertest/run_events.hpp"
 #include "k2/core/scratch.hpp"
+#include "k2/chargertest/pd_version.hpp"
 #include "k2/chargertest/step_label.hpp"
 #include "k2/chargertest/oem_watts.hpp"
 #include "k2/core/storage.hpp"
@@ -1592,16 +1593,30 @@ void ChargerTestPage::build_results() {
 }
 // The best passing mode per protocol family as one line. Families are dropped from the end (lowest watts first) when the
 // strip is full. Empty when nothing passed.
+static pd_version::Version run_version(const ct::Evidence& e) {
+    pd_version::Inputs in;
+    in.wire_rev = e.wire_rev;
+    in.rmdo = e.reported.valid; in.rmdo_major = e.reported.rev_major; in.rmdo_minor = e.reported.rev_minor;
+    in.pps = (e.flags & ct::PpsOffer) != 0;
+    in.epr = (e.flags & ct::EprTable) != 0;
+    in.spr_avs = (e.flags & ct::SprAvsOffer) != 0;
+    return pd_version::derive(in);
+}
+// The PD version leads the line ("PD3.0  PPS 11V 5A  Mi 55W", two spaces: the font has no middle dot); the trailing items go first
+// when it is full, never the version (pd_version::headline).
 __attribute__((noinline)) void ChargerTestPage::compose_best() {
     best_.clear();
     std::array<result_layout::SummaryLine, 3> best{};
     const size_t n = result_layout::summarize(s_.runner_.steps(), best);
-    for (size_t i = 0; i < n; ++i) {
-        const size_t len = std::strlen(best[i].text);
-        if (best_.view().size() + (i ? 2 : 0) + len > size_t(kBestChars)) break;
-        if (i) best_.put("  ");
-        best_.put(best[i].text);
-    }
+    best_none_ = n == 0;
+    std::array<std::string_view, 3> items{};
+    for (size_t i = 0; i < n; ++i) items[i] = best[i].text;
+    if (best_none_) { items[0] = "No passing mode"; }
+    static_assert(pd_version::kMaxLabel + 2 + 15 <= kBestChars, "the version and \"No passing mode\" fit one line");
+    char line[40];
+    pd_version::headline(line, sizeof line, pd_version::label(run_version(s_.runner_.evidence())).view(), items.data(),
+                         best_none_ ? 1 : n, size_t(kBestChars));
+    best_.put(line);
 }
 void ChargerTestSession::message(const char* s) {
     message_.clear(); message_.put(s); invalidate_confirmation();
@@ -3012,7 +3027,7 @@ void ChargerTestPage::paint_results() {
         if (!all.caution && t.view().size() + 1 + std::strlen(kWords4[k]) <= size_t(chars)) t.put_char(' ').put(kWords4[k]);
         put_line(c, kSmall, static_cast<int16_t>(i * pitch + 16), 26, t.view(), ink4[k], chars, cell_sig_[i], false, false, &bg);
     }
-    put_line(c, kSmall, 6, 51, best_.view().empty() ? std::string_view("No passing mode") : best_.view(), best_.view().empty() ? kDim : kText,
+    put_line(c, kSmall, 6, 51, best_.view(), best_none_ ? kDim : kText,
              kBestChars, cell_sig_[4], false, true, &bg);   // [0..3] are the header's cells (four with a caution)
     if (pbg && pbg->more) return;
     grid_.set_count(delta_row() + (s_.delta_n_ ? 1 : 0));
@@ -3149,8 +3164,13 @@ void ChargerTestPage::paint_detail() {
                 val.put(mode.view());
             } else {
                 key = "Header";
-                val.put(pd::wire_revision_name(e.wire_rev));
-                if (e.reported.valid) val.put("  RMDO ").put_u32(e.reported.rev_major).put_char('.').put_u32(e.reported.rev_minor);
+                // An answer under what the offer proves says both (pd_version::conflict); the PD version itself is the Results line.
+                const auto clash = pd_version::conflict(run_version(e));
+                if (clash.len) { key = "Revision"; val.put(clash.view()); col = kCaution; }
+                else {
+                    val.put(pd::wire_revision_name(e.wire_rev));
+                    if (e.reported.valid) val.put("  RMDO ").put_u32(e.reported.rev_major).put_char('.').put_u32(e.reported.rev_minor);
+                }
             }
             sv = val.view();
             break;

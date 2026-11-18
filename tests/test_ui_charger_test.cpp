@@ -2398,12 +2398,14 @@ static void test_step_label_gallery() {
 // the first window, the last window and the block's Steps page. K2_DUMP=dir writes dir/k2_pdb_<source>_rot<r>_<scene>.panel
 // (tools/panel2png.py makes the PNGs); without K2_DUMP it only walks the scenes.
 static void test_pd_block_scenes() {
-    struct Source { const char* name; uint8_t rev; bool epr; unsigned ceil_mv; std::initializer_list<uint32_t> pdos; };
+    // ver: the PD version the Results headline leads with (a PPS offer is 3.0, the EPR table 3.1, an SPR AVS APDO 3.2, a 2.0 header 2.0)
+    struct Source { const char* name; uint8_t rev; bool epr; unsigned ceil_mv; std::initializer_list<uint32_t> pdos; const char* ver; };
     const Source sources[] = {
-        {"bank", 2, false, 0, {0x0001912C, 0x0002D12C, 0x0003C12C, 0x0004B12C, 0x000641F4, 0xC0DC3264, 0xC1903228}},
-        {"epr", 2, true, 0, {0x0001912C, 0x0002D12C, 0x0004B12C, 0x000641F4, 0xC0DC213C, 0xC1A42164, 0xE004B000, 0x0008C1F4, 0xD230968C}},
-        {"eprok", 2, true, 36000, {0x0001912C, 0x0002D12C, 0x0004B12C, 0x000641F4, 0xC0DC213C, 0xC1A42164, 0xE004B000, 0x0008C1F4, 0xD230968C}},   // a 5 A EPR cable and a monitor that reaches 28 V: the EPR level and the EPR AVS range run
-        {"pd2", 1, false, 0, {0x0001912C, 0x0002D12C, 0x0003C12C, 0x0004B12C, 0x000641F4}},
+        {"bank", 2, false, 0, {0x0001912C, 0x0002D12C, 0x0003C12C, 0x0004B12C, 0x000641F4, 0xC0DC3264, 0xC1903228}, "PD3.0"},
+        {"epr", 2, true, 0, {0x0001912C, 0x0002D12C, 0x0004B12C, 0x000641F4, 0xC0DC213C, 0xC1A42164, 0xE004B000, 0x0008C1F4, 0xD230968C}, "PD3.2"},
+        {"eprok", 2, true, 36000, {0x0001912C, 0x0002D12C, 0x0004B12C, 0x000641F4, 0xC0DC213C, 0xC1A42164, 0xE004B000, 0x0008C1F4, 0xD230968C}, "PD3.2"},   // a 5 A EPR cable and a monitor that reaches 28 V: the EPR level and the EPR AVS range run
+        {"epr31", 2, true, 0, {0x0001912C, 0x0002D12C, 0x0004B12C, 0x000641F4, 0xC0DC213C, 0x0008C1F4, 0xD230968C}, "PD3.1"},   // EPR and PPS, no SPR AVS: 3.1
+        {"pd2", 1, false, 0, {0x0001912C, 0x0002D12C, 0x0003C12C, 0x0004B12C, 0x000641F4}, "PD2.0"},
     };
     for (const Source& s : sources) for (uint8_t rot : {uint8_t(0), uint8_t(3)}) {
         fixture();
@@ -2428,6 +2430,14 @@ static void test_pd_block_scenes() {
             dump_panel(name);
         };
         top(ui, t); shot("top");
+        if (rot == 0) {   // the headline leads with the version, then as many modes as fit (the trailing ones go first)
+            std::array<result_layout::SummaryLine, 3> lines;
+            const size_t n = result_layout::summarize(ui.charger_test_results().steps(), lines);
+            std::string want = s.ver;
+            for (size_t i = 0; i < n && want.size() + 2 + std::strlen(lines[i].text) <= 26; ++i) want += std::string("  ") + lines[i].text;
+            CHECK_EQ(want.size() > std::strlen(s.ver), true);
+            check_text_at(kSmall, 51, want, kText, kBg, 6);
+        }
         move(ui, 40, t); shot("end");
         top(ui, t); settle(ui, t);
         for (unsigned k = 0; k < 10; ++k) {   // the first PD row's Steps page
@@ -2451,6 +2461,53 @@ static void test_pd_block_scenes() {
         CHECK_EQ(ui.charger_test_stage(), 6);
         top(ui, t); settle(ui, t);   // the cursor on a label-less line of the block
         for (unsigned k = 1; k < 4; ++k) { top(ui, t); move(ui, k, t); shot(k == 1 ? "cont1" : k == 2 ? "cont2" : "cont3"); }
+    }
+}
+// An answer under what the offer proves (Revision 3.1 beside an SPR AVS APDO, which is 3.2): the headline leads with the offer's version
+// marked "PD3.2*" and the first PD step's Detail says both in its Revision row; an equal answer shows the answer, unmarked, and
+// the Detail keeps its Header row. K2_DUMP writes dir/k2_pdv_<case>_rot<r>_{results,detail}.panel.
+static void test_pd_version_answer_against_the_offer() {
+    struct Case { const char* name; uint8_t major, minor; const char* head; const char* row_key; const char* row; };
+    const Case cases[] = {
+        {"under", 3, 1, "PD3.2*", "Revision", "3.1 < AVS 3.2"},
+        {"equal", 3, 2, "PD3.2", "Header", "PD3.x  RMDO 3.2"},
+        {"below31", 3, 0, "PD3.2*", "Revision", "3.0 < AVS 3.2"},
+    };
+    for (const Case& c : cases) for (uint8_t rot : {uint8_t(0), uint8_t(3)}) {
+        fixture();
+        g_stub.caps.spec_rev = 2;
+        constexpr uint32_t kOffer[] = {0x0001912C, 0x0002D12C, 0x0004B12C, 0x000641F4, 0xC0DC213C, 0xE004B000};
+        g_stub.caps.num_pdos = 6;
+        for (unsigned i = 0; i < 6; ++i) g_stub.caps.pdos[i] = pd::decode_pdo(kOffer[i]);
+        g_stub.source_revision = {true, c.major, c.minor, 1, 0};
+        Ui ui;
+        open(ui); ui.set_rotation(rot, 1100);
+        move(ui, kPdRow); press(ui, Button::Ok); press(ui, Button::Ok);
+        start_press(ui, 1300); press(ui, Button::Ok, 1400);
+        uint32_t t = 1500;
+        for (; t <= 900000 && ui.charger_test_busy(); t += 100) ui.tick(t);
+        CHECK_EQ(ui.charger_test_stage(), 6);
+        for (int k = 0; k < 60 && ui.painting(); ++k) ui.tick(t += 20);
+        top(ui, t); settle(ui, t);
+        char name[64];
+        std::snprintf(name, sizeof name, "pdv_%s_rot%u_results", c.name, unsigned(rot)); dump_panel(name);
+        if (rot == 0) {
+            std::array<result_layout::SummaryLine, 3> lines;
+            const size_t n = result_layout::summarize(ui.charger_test_results().steps(), lines);
+            std::string want = c.head;
+            for (size_t i = 0; i < n && want.size() + 2 + std::strlen(lines[i].text) <= 26; ++i) want += std::string("  ") + lines[i].text;
+            check_text_at(kSmall, 51, want, kText, kBg, 6);
+        }
+        top(ui, t); press(ui, Button::Ok, t); ui.tick(t); t += 200;
+        CHECK_EQ(ui.charger_test_stage(), 7);
+        press(ui, Button::Ok, t); ui.tick(t); settle(ui, t); t += 200;
+        CHECK_EQ(ui.charger_test_stage(), 8);
+        std::snprintf(name, sizeof name, "pdv_%s_rot%u_detail", c.name, unsigned(rot)); dump_panel(name);
+        if (rot == 0) {
+            constexpr kit::KvLayout kDetail{60, kit::kRowH, 6, nullptr, nullptr, 92, 16, Align::Left};   // as ChargerTestPage::paint_detail
+            const int y = kit::kv_row_y(kDetail, 4) + kit::row_text_y(kit::kRowH, kSmall.height);
+            check_text_at(kSmall, y, c.row, c.row[0] == '3' && c.row_key[0] == 'R' && c.row_key[1] == 'e' && c.row_key[2] == 'v' ? kCaution : kText, kBg, 92);
+        }
     }
 }
 // The README's charger-test pictures (docs/img/ui/ct-*.png), rotation 3 (the button strip at the bottom): an EPR-capable charger
@@ -2601,9 +2658,13 @@ static void test_results_best_line_names_the_best_modes() {
     CHECK_EQ(n >= 1, true);
     CHECK_EQ(std::string_view(lines[0].text).substr(0, 2) == "PD", true);
     CHECK_EQ(std::strlen(lines[0].text) <= 26, true);
-    check_text_at(kSmall, 51, lines[0].text, kText, kBg, 6);
+    // The charger's PD version leads it (this source lists a PPS range under a 3.x header: PD3.0), two spaces before the modes.
+    std::string want = "PD3.0";
+    for (size_t i = 0; i < n && want.size() + 2 + std::strlen(lines[i].text) <= 26; ++i) want += std::string("  ") + lines[i].text;
+    CHECK_EQ(want.size() > 7, true);
+    check_text_at(kSmall, 51, want, kText, kBg, 6);
     move(ui, 2); ui.tick(t + 100);
-    check_text_at(kSmall, 51, lines[0].text, kText, kBg, 6);
+    check_text_at(kSmall, 51, want, kText, kBg, 6);
 }
 static void test_start_presents_rd() {
     { // charger alone, no VBUS: the first OK touches nothing; the confirming OK presents Rd, VBUS comes up, the run starts
@@ -5785,6 +5846,7 @@ int main() {
     test_readme_frames();
     test_ufcs_results_and_detail_show_the_mode_current();
     test_results_best_line_names_the_best_modes();
+    test_pd_version_answer_against_the_offer();
     test_results_grid_is_frozen_at_run_end();
     test_review_start_is_only_row();
     test_vsafe5_review();
