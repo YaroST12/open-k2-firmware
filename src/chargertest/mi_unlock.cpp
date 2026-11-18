@@ -117,9 +117,9 @@ step_label::Text mode_form(const Mode& m, bool fresh, bool top) {
 }
 }  // namespace
 
-step_label::Text mode_text(const Mode& m, bool fresh) {
+step_label::Text mode_text(const Mode& m, bool fresh, unsigned max_cells) {
     const step_label::Text t = mode_form(m, fresh, false);
-    return cells(t) <= step_label::kRowCells ? t : mode_form(m, fresh, true);   // too wide for a Steps row: the range by its top
+    return cells(t) <= (max_cells ? max_cells : step_label::kRowCells) ? t : mode_form(m, fresh, true);   // too wide: the range by its top
 }
 
 uint8_t chain_code(bool svid, bool authed, uint8_t last_step, uint8_t finish) {

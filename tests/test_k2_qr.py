@@ -20,9 +20,9 @@ import report_card  # noqa: E402
 import loop_probe_rec as lp  # noqa: E402
 
 
-def load():
+def load(path=os.path.join(HERE, "fixtures", "qrshare.tsv")):
     out = {}
-    with open(os.path.join(HERE, "fixtures", "qrshare.tsv")) as f:
+    with open(path) as f:
         for ln in f:
             if ln.startswith("#") or not ln.strip():
                 continue
@@ -134,6 +134,18 @@ class SchemaV2(unittest.TestCase):
         self.assertEqual(set(rec["deep"]), {"xiaomi"})   # no Deep parts on a Medium card
         text = charger_summary.summarize_card(rec)
         self.assertIn("- Xiaomi: auth done, verified\n  - Mi 55W: PPS 5-11V 3A → PPS 5-11V 5A ✓", text)
+
+    def test_format_11_deep_link_still_decodes(self):
+        # tests/fixtures/qrshare_v11.tsv: a Deep card link a format 11 firmware wrote. The reader expands it to format 12 and falls
+        # back to the format 11 CRC; its block reads as before, with no Xiaomi section.
+        old = load(os.path.join(HERE, "fixtures", "qrshare_v11.tsv"))["card_deep_v11"]
+        res, code = q.decode_texts(old["parts"])
+        rec = res["record"]
+        self.assertTrue(rec["_store_crc_ok"])
+        self.assertEqual(rec["level"], "deep")
+        self.assertNotIn("xiaomi", rec["deep"])
+        with open(os.path.join(HERE, "fixtures", "deep_decoded.json")) as f:
+            self.assertEqual(rec["deep"], json.load(f))   # the same Deep block the format 12 golden carries
 
     def test_v10_links_keep_their_crc_and_have_no_deep_block(self):
         # A format-10 firmware's link carries the CRC of its format-10 record; the reader writes format 11 and falls back to the

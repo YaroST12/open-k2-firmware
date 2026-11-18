@@ -165,6 +165,18 @@ void cards_mi_text(const rc::deep::MiSection &m, StrBuf<32> &out) {
         }
         if (marked_width(kLabelFont, out.view()) <= kBoxPx) return;
     }
+    // Still too wide (four tested modes at three-digit watts): the counts, "4 modes: 3✓ 1✗ 1 skip" (zero counts left out).
+    unsigned pass = 0, fail = 0;
+    for (unsigned i = 0; i < m.n; ++i) {
+        const auto v = static_cast<charger_test::Verdict>(m.mode[i].verdict);
+        pass += v == charger_test::Verdict::Pass;
+        fail += v == charger_test::Verdict::Fail;
+    }
+    out.clear();
+    out.put_u32(m.n).put(" modes:");
+    if (pass) out.put_char(' ').put_u32(pass).put_char(kMarkCheck);
+    if (fail) out.put_char(' ').put_u32(fail).put_char(kMarkCross);
+    if (m.n - pass - fail) out.put_char(' ').put_u32(m.n - pass - fail).put(" skip");
 }
 
 void cards_title_text(const rc::Card &c, StrBuf<24> &out) {

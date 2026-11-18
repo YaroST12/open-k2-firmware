@@ -3102,7 +3102,7 @@ void ChargerTestPage::paint_detail() {
             if (ct::is_mi_mode(s)) {   // the offer before the chain ("not listed": a new PDO; "not kept": a resumed run lost it)
                 key = "Before";
                 const auto* m = s_.runner_.mi_mode(s);
-                if (m && m->before) val.put(mi_unlock::mode_text({0, m->before, m->pos}, false).view());
+                if (m && m->before) val.put(mi_unlock::mode_text({0, m->before, m->pos}, false, kDet.value_chars).view());
                 else { val.put(m ? "not listed" : "not kept"); col = kDim; }
             } else if (const auto mode = step_label::ufcs_range(s); mode.len) {
                 key = "Mode";
@@ -3117,7 +3117,7 @@ void ChargerTestPage::paint_detail() {
         default:
             if (ct::is_mi_mode(s)) {   // the offer the chain unlocked (the row's own PDO)
                 key = "After";
-                val.put(mi_unlock::mode_text({0, s.pdo, s.pos}, false).view());
+                val.put(mi_unlock::mode_text({0, s.pdo, s.pos}, false, kDet.value_chars).view());
                 sv = val.view();
                 break;
             }

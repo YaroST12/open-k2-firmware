@@ -497,6 +497,17 @@ test("the graph geometry keeps the limit lines in view, breaks a run at an empty
   assert.equal(K2Deep.summary(flat), null);
 });
 
+test("a format 11 Deep link (tests/fixtures/qrshare_v11.tsv) keeps its CRC and its block, with no Xiaomi section", () => {
+  const row = readFileSync(new URL("./fixtures/qrshare_v11.tsv", import.meta.url), "utf8").split("\n")
+    .filter((l) => l && !l.startsWith("#")).map((l) => l.split("\t")).find((c) => c[0] === "card_deep_v11");
+  const card = K2Card.parseLink(BASE + "2c." + toB64url(fromHex(row[3]))).card;
+  assert.equal(card.level, "Deep");
+  assert.equal(card.deep_error, undefined);
+  assert.equal(card.deep.xiaomi, undefined);
+  assert.deepEqual(JSON.parse(JSON.stringify(card.deep)), deepJson);
+  assert.equal(K2Card.sections(card).find((s) => s.title === "Xiaomi"), undefined);
+});
+
 test("format 12: a Medium card's block carries only the Xiaomi section, read as tools/k2_qr.py reads it", () => {
   const card = K2Card.parseLink(BASE + "2c." + toB64url(qrshare.card_mi_v2)).card;
   assert.equal(card.level, undefined);

@@ -143,6 +143,13 @@ static void test_mode_texts_fit_a_steps_row() {
     CHECK_EQ(text_is(mu::mode_text(both), "PPS \xE2\x86\x92" "5-20V 5A"), true);
     for (const mu::Mode& x : {m, both, mu::Mode{0x0002D12C, 0x0002D1F4, 2}, mu::Mode{0, 0xC1903278, 7}})
         CHECK_EQ(cells(mu::mode_text(x)) <= k2::step_label::kRowCells, true);
+    // The Detail page's Before / After value column holds 16 cells: one PDO alone (fresh = false), the widest PPS range at a
+    // two-decimal current ("PPS 3.3-21V 6.25A" is 17) falls back to the range by its top.
+    const uint32_t widest = 0xC0000000u | (210u << 17) | (33u << 8) | 125u;   // PPS 3.3-21 V 6.25 A
+    CHECK_EQ(text_is(mu::mode_text({0, widest, 6}, false), "PPS 3.3-21V 6.25A"), true);
+    CHECK_EQ(text_is(mu::mode_text({0, widest, 6}, false, 16), "PPS 21V 6.25A"), true);
+    for (const uint32_t w : {widest, 0xC0DC3264u, 0xC9903278u, 0x0008C1F4u, 0xC0000000u | (200u << 17) | (33u << 8) | 127u})
+        CHECK_EQ(cells(mu::mode_text({0, w, 6}, false, 16)) <= 16u, true);
 }
 
 int main() {

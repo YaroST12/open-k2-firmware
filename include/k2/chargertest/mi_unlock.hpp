@@ -53,8 +53,9 @@ unsigned point_w(std::uint32_t after);
 
 // "PPS 5-11V 3A→5A", "PD 20V 3A→5A", "AVS 15-20V 60W→100W", "PPS 5-11V→5-20V 3A" (range grew), "PPS 5-20V 6A new";
 // the arrow is U+2192 (one glyph cell). The after mode alone ("PPS 5-11V 5A") when before is 0 and `fresh` is false: a mode
-// whose before was not kept (a run resumed from the journal).
-step_label::Text mode_text(const Mode&, bool fresh = true);
+// whose before was not kept (a run resumed from the journal). Wider than `max_cells` (0 = a Steps row, step_label::kRowCells; the
+// Detail page's value column is 16), a range is named by its top ("PPS 21V 6.25A").
+step_label::Text mode_text(const Mode&, bool fresh = true, unsigned max_cells = 0);
 
 // How the chain ended, as the chain row's Step::detail (fits the card's five detail bits): no SVID, the SVID was listed but no
 // 0x2717 step came, failed at step N (the last 0x2717020x the source sent), or done: verified at 0x27170208 (payload 1) or

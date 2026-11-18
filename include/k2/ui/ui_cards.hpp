@@ -49,9 +49,9 @@ void cards_stats_text(const report_card::Card &c, StrBuf<32> &out);
 // "0B05:1234  fp 1A2B3C4D", the id line under the title (at most 32 characters).
 void cards_id_text(const report_card::Card &c, StrBuf<32> &out);
 // The Xiaomi fact of a card, from the Xiaomi section of its stored block (the value beside the "Xiaomi" key, at most 134 px of
-// S12, from x80): each unlocked mode by its watts with a check or cross ("55W✓ 66W✗", a mode not tested reads "66W skip", or "66W-" when
-// the words do not fit), "done, no new modes", or how the chain stopped ("no answer", "failed at step 5"). Empty
-// for a card without a section (chain 0: the source never listed 0x2717).
+// S12, from x80): each unlocked mode by its watts with a check or cross ("55W✓ 66W✗"; a mode not tested reads "66W skip", or
+// "66W-" when the words do not fit; the counts "4 modes: 3✓ 1✗" when even that is too wide), "done, no new modes", or how the
+// chain stopped ("no answer", "failed at step 5"). Empty for a card without a section (chain 0: the source never listed 0x2717).
 void cards_mi_text(const report_card::deep::MiSection &m, StrBuf<32> &out);
 
 // ---- the detail sheet of a group or range (host-tested) ------------------------------------------------------------------

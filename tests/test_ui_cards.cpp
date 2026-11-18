@@ -498,6 +498,15 @@ static void test_mi_fact_text() {
     cards_mi_text(m, s);
     CHECK_STR(s.view().data(), "55W\x01 66W- 100W- 60W\x02");
     CHECK_EQ(marked_width(kLabelFont, s.view()) <= 214 - 80, 1);
+    // the worst case: four tested modes at three-digit watts, every one a mark; the watts no longer fit, the counts do
+    for (unsigned i = 0; i < 4; ++i) m.mode[i] = {0, 0xC9903278u, 200, 120, uint8_t(i == 3 ? ct::Verdict::Fail : ct::Verdict::Pass), 0};
+    cards_mi_text(m, s);
+    CHECK_STR(s.view().data(), "4 modes: 3\x01 1\x02");
+    CHECK_EQ(marked_width(kLabelFont, s.view()) <= 214 - 80, 1);
+    m.mode[2].verdict = uint8_t(ct::Verdict::Skip);
+    cards_mi_text(m, s);
+    CHECK_STR(s.view().data(), "4 modes: 2\x01 1\x02 1 skip");
+    CHECK_EQ(marked_width(kLabelFont, s.view()) <= 214 - 80, 1);
 }
 
 static void test_dump_renders() {
