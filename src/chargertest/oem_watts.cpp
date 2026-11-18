@@ -19,8 +19,12 @@ Text watts(std::uint32_t mw) {
     if (!mw) return t;
     Out o{t};
     const std::uint32_t dw = (mw + 50u) / 100u;   // tenths of a watt
-    o.num(dw / 10u);
-    if (dw % 10u) { o.put('.'); o.put(char('0' + dw % 10u)); }
+    if (dw >= 1000u) {   // from 100 W whole watts: at most 5 characters, the width of the "3.25A" a grid bracket already carries
+        o.num((mw + 500u) / 1000u);
+    } else {
+        o.num(dw / 10u);
+        if (dw % 10u) { o.put('.'); o.put(char('0' + dw % 10u)); }
+    }
     o.put('W');
     return t;
 }

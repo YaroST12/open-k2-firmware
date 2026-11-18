@@ -5448,15 +5448,15 @@ static void vooc_detects(int proto) {   // the adapter clocked the ident (0xAC):
     g_stub.fc_status_fail = vooc ? int(k2::fc::Fail::Detected) : 0;
     g_stub.fc_status_ident = vooc ? 0xAC : 0;
 }
-static void vooc_watts_run(Ui& ui, uint32_t& t, ct::Level level, uint8_t rot) {
+static void vooc_watts_run(Ui& ui, uint32_t& t, ct::Level level, uint8_t rot, uint16_t ceiling = 0x06D, int32_t vmax_mv = 11020) {
     six_pdo_fixture();
-    if (level == ct::Level::Deep) {
+    if (level == ct::Level::Deep) {   // the ladder went on under every ask up to `ceiling`
         g_stub.svooc_n_asks = 4;
         const uint16_t asks[4] = {0x032, 0x041, 0x064, 0x06D};
-        for (unsigned i = 0; i < 4; ++i) g_stub.svooc_asks[i] = asks[i];
-        g_stub.svooc_ceiling = 0x06D;
+        for (unsigned i = 0; i < 4; ++i) g_stub.svooc_asks[i] = std::min(asks[i], ceiling);
+        g_stub.svooc_ceiling = ceiling;
         g_stub.svooc_after = uint8_t(svooc::kAcceptPolls);
-        g_stub.svooc_vmax_mv = 11020;
+        g_stub.svooc_vmax_mv = vmax_mv;
     }
     constexpr uint8_t kUnits[] = {uint8_t(ct::Unit::Vooc), uint8_t(ct::Unit::SuperVooc), uint8_t(ct::Unit::SuperVooc65), uint8_t(ct::Unit::Pd)};
     open(ui); ui.set_rotation(rot, 1050); settle(ui, 1050);
@@ -5473,10 +5473,15 @@ static void vooc_watts_run(Ui& ui, uint32_t& t, ct::Level level, uint8_t rot) {
     settle(ui, t);
 }
 static void test_vooc_family_results_read_watts_levels() {
-    for (const ct::Level level : {ct::Level::Medium, ct::Level::Deep})
+    struct Scene { const char* name; ct::Level level; uint16_t ceiling; int32_t vmax_mv; };
+    // deep69: the ladder stood at 6.3 A under 11.0 V (69 W): 50 and 65 W claimed, 100 and 120 W not reached
+    constexpr Scene kScenes[] = {{"medium", ct::Level::Medium, 0, 0}, {"deep", ct::Level::Deep, 0x06D, 11020},
+                                 {"deep69", ct::Level::Deep, 0x03F, 11000}};
+    for (const Scene& sc : kScenes)
         for (uint8_t rot = 0; rot < 4; ++rot) {
+            const ct::Level level = sc.level;
             Ui ui; uint32_t t;
-            vooc_watts_run(ui, t, level, rot);
+            vooc_watts_run(ui, t, level, rot, sc.ceiling, sc.vmax_mv);
             const auto& r = ui.charger_test_results();
             unsigned detected = 0;
             for (const auto& s : r.steps())
@@ -5490,11 +5495,19 @@ static void test_vooc_family_results_read_watts_levels() {
             if (level == ct::Level::Deep && rot == 0)
                 std::printf("[oem-watts] deep: svooc_end %u word 0x%03X vmax %u\n", unsigned(r.evidence().svooc_end),
                             unsigned(r.evidence().svooc_word), unsigned(r.evidence().svooc_vmax_mv));
-            const char* lv = level == ct::Level::Deep ? "deep" : "medium";
+            const char* lv = sc.name;
             char name[64];
             std::snprintf(name, sizeof name, "oem_watts_%s_rot%u", lv, unsigned(rot)); dump_panel(name);
             press(ui, Button::Plus, t); settle(ui, t); t += 200;   // the second row: SVOOC, its footer
             std::snprintf(name, sizeof name, "oem_watts_%s_rot%u_row2", lv, unsigned(rot)); dump_panel(name);
+            if (rot != 0 && rot != 3) continue;
+            press(ui, Button::Ok, t); ui.tick(t); settle(ui, t); t += 200;   // the level row opens the family's steps
+            CHECK_EQ(ui.charger_test_stage(), 7);
+            CHECK_EQ(ui.list_state().count >= 3, true);   // the three detection steps (VOOC, SVOOC, SVOOC65)
+            std::snprintf(name, sizeof name, "oem_watts_%s_rot%u_steps", lv, unsigned(rot)); dump_panel(name);
+            press(ui, Button::Ok, t); ui.tick(t); settle(ui, t); t += 200;
+            CHECK_EQ(ui.charger_test_stage(), 8);
+            std::snprintf(name, sizeof name, "oem_watts_%s_rot%u_detail", lv, unsigned(rot)); dump_panel(name);
         }
 }
 

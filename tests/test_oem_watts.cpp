@@ -6,6 +6,7 @@
 #include "test_util.h"
 #include "k2/chargertest/oem_watts.hpp"
 #include "k2/chargertest/step_label.hpp"
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -125,11 +126,28 @@ static void test_step_watts() {
     CHECK_EQ(ow::step_mw(pd), 0u);                                 // PD keeps its volts and amps
 }
 
+// Every level the grid can show reads in at most 5 characters (a bracket under a cell holds "3.25A"): any volts the K2 asks
+// (3.3-22 V) at any current a UFCS mode can name (50 mA steps up to 6.35 A) or an SCP limit (up to 6 A).
+static void test_watts_fit_a_bracket() {
+    unsigned worst = 0;
+    for (uint32_t mv = 3300; mv <= 22000; mv += 100)
+        for (uint32_t ma = 50; ma <= 6350; ma += 50) worst = std::max<unsigned>(worst, unsigned(ow::watts(mv * ma / 1000u).len));
+    CHECK_EQ(worst, 5u);
+}
+static void test_in_family() {
+    CHECK_EQ(ow::in_family(ow::Family::Vooc, A::Vooc), true);
+    CHECK_EQ(ow::in_family(ow::Family::Vooc, A::SuperVooc65), true);
+    CHECK_EQ(ow::in_family(ow::Family::Vooc, A::Vivo), false);
+    CHECK_EQ(ow::in_family(ow::Family::Vooc, A::Scp), false);
+}
+
 int main() {
     test_the_golden_labels();
     test_the_golden_claims();
     test_the_level_table();
     test_family_claims_pack();
     test_step_watts();
+    test_watts_fit_a_bracket();
+    test_in_family();
     return test_report("test_oem_watts");
 }

@@ -1580,6 +1580,11 @@ static void test_vooc_family_reads_as_watts_levels() {
     CHECK_STR(tones(l, row_of(l, "SVOOC")).c_str(), "NNNN");
     CHECK_EQ(row_of(l, "OPPO") < row_of(l, "VOOC") && row_of(l, "VOOC") < row_of(l, "SVOOC"), true);
     CHECK_EQ(l.cuts, 0u);
+    for (size_t r = 0; r < l.row_count; ++r) {   // the Layout rows own the same steps as the compact rows below
+        if (!l.rows[r].levels) continue;
+        const auto st = vooc_detected();
+        CHECK_EQ(rl::row_has(l.rows[r], st[0]) && rl::row_has(l.rows[r], st[2]) && !rl::row_has(l.rows[r], st[3]), true);
+    }
     // Every family step stays reachable from both rows (the Steps drill-in lists the detection).
     rl::CompactGrid g; std::array<rl::CompactLine, rl::kMaxLines> lines;
     const auto steps = vooc_detected();
@@ -1639,6 +1644,18 @@ static void test_a_silent_vooc_family_folds_as_one_word() {
     rl::Layout l;
     rl::build(l, s, n);
     CHECK_STR(chips(l, row_of(l, "No reply")).c_str(), "VOOC FCP");
+    {   // only SVOOC65 planned: the family's word all the same
+        std::vector<ct::Step> o = {s[2], s[3]};
+        o[0].verdict = V::Fail;
+        rl::Layout v;
+        rl::build(v, o, n);
+        CHECK_STR(chips(v, row_of(v, "No reply")).c_str(), "VOOC FCP");
+    }
+    {   // the plain grid (no level notes) folds the family as one word too
+        rl::Layout v;
+        rl::build(v, s);
+        CHECK_EQ(chips(v, row_of(v, "No reply")).find("SVOOC") == std::string::npos, true);
+    }
     CHECK_EQ(find(l, "Skipped") == nullptr, true);
     CHECK_EQ(find(l, "SVOOC") == nullptr, true);
     rl::CompactGrid g; std::array<rl::CompactLine, rl::kMaxLines> lines;
@@ -1663,6 +1680,14 @@ static void test_scp_chips_and_summary_read_watts() {
     CHECK_EQ(v.size(), 1u);
     CHECK_STR(v[0].text, "SCP 22.5W");
     CHECK_EQ(v[0].mw, 0u);   // a claimed figure ranks below every measured PD level, as before
+    // The top volts are not the top watts: 9 V x 2 A (18 W) under 5 V x 4.5 A (22.5 W); the line names the higher claim.
+    std::vector<ct::Step> w = {step(A::Scp, 9000, V::Pass), step(A::Scp, 5000, V::Pass)};
+    w[0].ma = 2000; w[1].ma = 4500;
+    CHECK_STR(summary_of(w)[0].text, "SCP 22.5W");
+    // FCP 12 V names no current: an SCP claim of the same family leads it
+    std::vector<ct::Step> h = {step(A::Fcp, 12000, V::Pass), step(A::Scp, 10000, V::Pass)};
+    h[1].ma = 2250;
+    CHECK_STR(summary_of(h)[0].text, "SCP 22.5W");
 }
 // A level row's footer: the top claimed level, else the span not reached (the ladder ran) or not tested; at most 27 characters.
 static void test_levels_footer_names_the_top_claim() {

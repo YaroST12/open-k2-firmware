@@ -23,10 +23,13 @@ _RAN_ITS_COURSE = ("judged", "stopped", "cap")   # svooc_ceiling::End names; any
 
 
 def watts(mw):
-    """'120W', '22.5W' (rounded to 0.1 W, the tenth only when it is not 0); '' for 0 mW."""
+    """'120W', '22.5W' (rounded to 0.1 W, the tenth only when it is not 0; whole watts from 100 W, so at most 5 characters);
+    '' for 0 mW."""
     if not mw:
         return ""
     dw = (mw + 50) // 100
+    if dw >= 1000:
+        return f"{(mw + 500) // 1000}W"
     return f"{dw // 10}" + (f".{dw % 10}" if dw % 10 else "") + "W"
 
 

@@ -259,7 +259,10 @@ struct Sink {
         active = true;
     }
 
-    void levels(uint8_t first, uint8_t count) { if (!l) { crow.first = first; crow.count = count; } }
+    void levels(uint8_t first, uint8_t count) {
+        if (l) { if (lrow) lrow->pos = first; }
+        else { crow.first = first; crow.count = count; }
+    }
 
     void drop_open() {
         if (!active) return;
@@ -442,6 +445,13 @@ unsigned tone_rank(Tone t) {
 }
 // The VOOC family's units (one shared detection) as OEM level rows (OemNotes::vooc_watts, oem_watts.hpp).
 bool is_vooc(A a) { return a == A::Vooc || a == A::SuperVooc || a == A::SuperVooc65; }
+// A unit's word in a "No reply" / "Skipped" row: the VOOC family's units read once, as "VOOC" (`vooc`: already said); nullptr = said.
+const char* fold_word(A a, bool& vooc) {
+    if (!is_vooc(a)) return display_name(a);
+    if (vooc) return nullptr;
+    vooc = true;
+    return "VOOC";
+}
 // A level the K2 never draws is never a pass: claimed reads framed (Noted), not reached plain dim, not tested struck (Skip).
 Tone level_tone(oem_watts::Claim c) {
     return c == oem_watts::Claim::Claimed ? Tone::Noted : c == oem_watts::Claim::NotReached ? Tone::Dim : Tone::Skip;
@@ -823,10 +833,11 @@ void build_impl(Sink& b, std::span<const ct::Step> steps, const OemNotes& oem, c
         if (b.g) b.g->collapsed_masks[slot] = mask;
         b.begin(CompactKind::Collapsed, label, t, A::Count, slot);
         bool said[unsigned(A::Count)] = {};
+        bool vooc = false;   // the VOOC family folds as one word, its family's ("VOOC"), never three versions
         for (size_t i = 0; i < key_n; ++i)
             if (!keys[i].probe && set[unsigned(keys[i].a)] && !said[unsigned(keys[i].a)]) {
                 said[unsigned(keys[i].a)] = true;
-                b.word(display_name(keys[i].a), t);
+                if (const char* w = fold_word(keys[i].a, vooc)) b.word(w, t);
             }
     };
     collapsed(absent, "No reply", Tone::Dim, 0);
@@ -867,7 +878,8 @@ size_t build_compact(CompactGrid& g, const Metrics& m, std::span<CompactLine> ou
 bool row_has(const CompactRow& r, const ct::Step& s) {
     if (r.kind == CompactKind::Header || r.kind == CompactKind::Fact || r.kind == CompactKind::Collapsed) return false;
     if (r.kind == CompactKind::Probe) return s.hunt && s.mv == r.mv;
-    if (r.kind == CompactKind::Levels) return !s.hunt && is_vooc(s.algorithm);   // every level row lists the shared detection
+    if (r.kind == CompactKind::Levels)   // every level row of a family lists the family's shared detection
+        return !s.hunt && oem_watts::in_family(oem_watts::kLevels[r.first].family, s.algorithm);
     if (s.hunt || (r.kind != CompactKind::Range && ct::is_sweep(s)) || static_cast<A>(r.algo) != s.algorithm) return false;
     return !is_range(static_cast<A>(r.algo)) || s.pos == r.mv;   // a range row (one per APDO) owns its slot's steps, the sweep's too
 }
@@ -922,12 +934,13 @@ void row_tokens(const CompactGrid& g, size_t row, std::span<const ct::Step> step
         const uint32_t mask = g.collapsed_masks[cr.mv];
         const Tone t = cr.mv ? Tone::Caution : Tone::Dim;
         bool said[unsigned(A::Count)] = {};
+        bool vooc = false;
         for (const auto& s : steps) {
             if (s.hunt || is_revision(s.algorithm)) continue;
             const unsigned a = unsigned(s.algorithm);
             if ((mask & (1u << a)) && !said[a]) {
                 said[a] = true;
-                tb.word(display_name(s.algorithm), t);
+                if (const char* w = fold_word(s.algorithm, vooc)) tb.word(w, t);
             }
         }
         break;
@@ -938,7 +951,7 @@ void row_tokens(const CompactGrid& g, size_t row, std::span<const ct::Step> step
 bool row_has(const Row& r, const ct::Step& s) {
     if (r.header) return false;
     if (r.probe) return s.hunt && s.mv == r.mv;
-    if (r.levels) return !s.hunt && is_vooc(s.algorithm);
+    if (r.levels) return !s.hunt && oem_watts::in_family(oem_watts::kLevels[r.pos].family, s.algorithm);   // pos: its first level
     if (s.hunt || (!is_range(r.algorithm) && ct::is_sweep(s)) || r.algorithm != s.algorithm) return false;
     return !is_range(r.algorithm) || s.pos == r.pos;   // one row per APDO: a range row owns its slot's steps, the sweep's too
 }
@@ -998,7 +1011,7 @@ unsigned rank_ma(const ct::Step& x) {
     if (const unsigned ma = step_label::amps_ma(x)) return ma;
     return x.avs && x.pdo ? pd::current_limit_ma(pd::decode_pdo(x.pdo), x.mv) : 0u;
 }
-struct Best { bool have = false; const ct::Step* step = nullptr; unsigned mw = 0, mv = 0, ma = 0; bool hs = false; };
+struct Best { bool have = false; const ct::Step* step = nullptr; unsigned mw = 0, mv = 0, ma = 0; bool hs = false; unsigned cw = 0; };
 }  // namespace
 
 size_t summarize(std::span<const ct::Step> steps, std::span<SummaryLine> out) {
@@ -1014,10 +1027,12 @@ size_t summarize(std::span<const ct::Step> steps, std::span<SummaryLine> out) {
         const unsigned mv = unproven ? 0 : x.mv;
         if (!unproven && !mv) continue;
         const unsigned mw = math::mw_of(mv, ma);
+        const unsigned cw = oem_watts::step_mw(x);   // SCP / UFCS: the level's claimed watts, its line's words; never ranked across families
         Best& b = best[unsigned(f)];
-        // On a tie the later (more capable) protocol of the family wins.
-        if (!b.have || mw > b.mw || (mw == b.mw && mv > b.mv) || (mw == b.mw && mv == b.mv && x.algorithm >= b.step->algorithm))
-            b = {true, &x, mw, mv, ma, unproven && x.detail == uint8_t(fc::Fail::NoVoltage)};
+        // Within the family the claimed watts lead the volts (the line names them); on a tie the later (more capable) protocol wins.
+        if (!b.have || mw > b.mw || (mw == b.mw && cw > b.cw) || (mw == b.mw && cw == b.cw && mv > b.mv) ||
+            (mw == b.mw && cw == b.cw && mv == b.mv && x.algorithm >= b.step->algorithm))
+            b = {true, &x, mw, mv, ma, unproven && x.detail == uint8_t(fc::Fail::NoVoltage), cw};
     }
     Fam order[unsigned(Fam::Count)];
     size_t n = 0;
@@ -1038,7 +1053,7 @@ size_t summarize(std::span<const ct::Step> steps, std::span<SummaryLine> out) {
         Out o{line.text, sizeof line.text};
         o.put(order[i] == Fam::Oppo ? "VOOC" : step_label::protocol(*b.step).c_str());   // the family's word, never a version
         o.put(' ');
-        if (const unsigned w = oem_watts::step_mw(*b.step)) o.put(oem_watts::watts(w).c_str());   // "SCP 22.5W", "UFCS 60W": claimed, unranked
+        if (b.cw) o.put(oem_watts::watts(b.cw).c_str());   // "SCP 22.5W", "UFCS 60W": claimed, unranked
         else if (b.mv) o.put(step_label::params(*b.step).c_str());   // "20V 3.35A", "12V"
         else o.put(b.hs ? "ok" : "seen");
         line.mw = b.mw; line.mv = b.mv;

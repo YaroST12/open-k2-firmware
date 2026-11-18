@@ -2,7 +2,8 @@
 # tests/test_oem_watts.py (tools/oem_watts.py), so the device, the host tools and the web pages word a power level the same.
 #
 # label | protocol word | mW | text
-#   The watts of a level, rounded to 0.1 W, with the tenth only when it is not 0; 0 mW reads the bare word.
+#   The watts of a level, rounded to 0.1 W, with the tenth only when it is not 0; whole watts from 100 W (at most 5 characters);
+#   0 mW reads the bare word.
 label | SVOOC |  120000 | SVOOC 120W
 label | SVOOC |   65000 | SVOOC 65W
 label | VOOC  |   20000 | VOOC 20W
@@ -14,6 +15,10 @@ label | SCP   |   15030 | SCP 15W
 label | SCP   |    4950 | SCP 5W
 label | SCP   |    4940 | SCP 4.9W
 label | PD    |  240000 | PD 240W
+label | UFCS  |  110250 | UFCS 110W
+label | UFCS  |   99940 | UFCS 99.9W
+label | UFCS  |   99950 | UFCS 100W
+label | UFCS  |  105500 | UFCS 106W
 label | VOOC  |       0 | VOOC
 #
 # claim | ceiling end | top VBUS mV | 0x86 word (hex) | level watts | stage can claim it (y/n) | state

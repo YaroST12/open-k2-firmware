@@ -68,6 +68,15 @@ constexpr Span span(Family f) {
 inline constexpr std::size_t kMaxFamilyLevels = 8;   // two bits per level in a uint16_t
 static_assert(span(Family::Vooc).count <= kMaxFamilyLevels);
 
+// Does a charger-test unit belong to a family? The units whose steps a family's level rows own (one shared detection).
+constexpr bool in_family(Family f, charger_test::Algorithm a) {
+    using A = charger_test::Algorithm;
+    switch (f) {
+    case Family::Vooc: return a == A::Vooc || a == A::SuperVooc || a == A::SuperVooc65;
+    default: return false;
+    }
+}
+
 // What the run proves of one level. NotTested = 0, so an all-zero word is "nothing tested".
 enum class Claim : std::uint8_t { NotTested = 0, NotReached, Claimed };
 
@@ -89,7 +98,8 @@ constexpr std::uint16_t claims(Family f, const svooc_ceiling::Outcome& o) {
 }
 constexpr Claim unpack(std::uint16_t packed, unsigned i) { return static_cast<Claim>((packed >> (2 * i)) & 3u); }
 
-// The watts of a level as a cell reads them: "120W", "22.5W" (rounded to 0.1 W, the tenth only when it is not 0); "" for 0 mW.
+// The watts of a level as a cell reads them: "120W", "22.5W" (rounded to 0.1 W, the tenth only when it is not 0; whole watts from
+// 100 W, "110W", so the text never passes 5 characters, the width of the "3.25A" a grid bracket already carries); "" for 0 mW.
 Text watts(std::uint32_t mw);
 // The label of a level: "SVOOC 120W", "SCP 22.5W", "Mi 55W"; the bare word for 0 mW. The one wording of every OEM level on the K2,
 // in the host tools and on the web pages (the Xiaomi rows use it too).
