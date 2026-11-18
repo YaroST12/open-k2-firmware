@@ -54,6 +54,10 @@
 //                                    before the loop guard answers the first 26
 //                                    part 3, 57 bytes: flags(1: bit i button i dim, bit4 strip covered), then
 //                                    Back Minus Ok Plus x (short(7) long(7)), NUL padded ASCII
+//                                    part 4, 13 bytes: settings EEPROM calibration status(1: 0 absent,
+//                                    1 ok, 2 corrupt), voltage_gain, current_zero, current_gain (i32 LE).
+//                                    `k2_remote.py info --json` reads this as `cal`; an absent classification
+//                                    also covers an unknown power-monitor chip, for which no warning is raised
 //   0x04 GET_PDOS    req [index(1)]   rsp valid spec_rev num_pdos index (4 x u8) and, when
 //                                    index < num_pdos: type(1) raw(4) min_mv(2) max_mv(2)
 //                                    max_ma(2) max_mw(4)
@@ -1089,6 +1093,18 @@ struct DiagInfo {
     uint16_t loop_events = 0;   // locks since boot (wraps)
 };
 size_t encode_diag(std::span<uint8_t> out, const DiagInfo&);
+// GET_STATE part 4 (calibration): the boot-time status of the settings EEPROM calibration trims, followed by the three
+// little-endian signed values as stored. Unknown monitor chips and a missing EEPROM both report Absent: no warning is
+// raised without a complete per-chip classification.
+enum class CalibrationStatus : std::uint8_t { Absent = 0, Ok = 1, Corrupt = 2 };
+constexpr std::size_t kCalibrationLen = 13;
+struct CalibrationInfo {
+    CalibrationStatus status = CalibrationStatus::Absent;
+    std::int32_t voltage_gain = 0;
+    std::int32_t current_zero = 0;
+    std::int32_t current_gain = 0;
+};
+size_t encode_calibration(std::span<uint8_t> out, const CalibrationInfo&);
 // GET_STATE part 3 (keys): what the four buttons do on the page on screen (Ui::labels(), Button order Back Minus Ok Plus).
 // Per button a short-press and a long-press word, NUL padded, at most kKeyChars (7) characters: the strip's own widest
 // words are 7 ("Charger"), a longer one is cut. The words are the semantic labels, not the drawn text (the slot
@@ -1534,6 +1550,7 @@ concept Backend = requires(B &b, uint8_t u8, uint16_t u16, bool on) {
     { b.session() } -> std::same_as<SessionInfo>;   // 0x03 req [1]: the session chrome (a read, never moves anything)
     { b.diag() } -> std::same_as<DiagInfo>;         // 0x03 req [2]: the Diag page counters (a read)
     { b.keys() } -> std::same_as<KeysInfo>;         // 0x03 req [3]: the strip labels (a read)
+    { b.calibration_info() } -> std::same_as<CalibrationInfo>; // 0x03 req [4]: boot-time settings EEPROM trims
     { b.pdos() } -> std::same_as<PdoSnapshot>;
     { b.emarker() } -> std::same_as<EmarkerSnapshot>;
     { b.identity() } -> std::same_as<IdentitySnapshot>;
@@ -1733,6 +1750,7 @@ template <Backend B>
         if (p[0] == 1) return reply_ok(f, encode_session(f.span(), backend.session()));
         if (p[0] == 2) return reply_ok(f, encode_diag(f.span(), backend.diag()));
         if (p[0] == 3) return reply_ok(f, encode_keys(f.span(), backend.keys()));
+        if (p[0] == 4) return reply_ok(f, encode_calibration(f.span(), backend.calibration_info()));
         return reply_bad_arg(f);
     case Cmd::GetPdos: {
         if (p.size() > 1) return reply_bad_len(f);

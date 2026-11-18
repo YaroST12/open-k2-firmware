@@ -72,6 +72,8 @@ struct Fake {
     SessionInfo session() { calls++; return sess; }
     DiagInfo dg{};
     DiagInfo diag() { calls++; return dg; }
+    CalibrationInfo cal{};
+    CalibrationInfo calibration_info() { calls++; return cal; }
     KeysInfo ky{};
     KeysInfo keys() { calls++; return ky; }
     PdoSnapshot pdos() { calls++; return snap; }

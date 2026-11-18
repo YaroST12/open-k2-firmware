@@ -247,6 +247,15 @@ size_t encode_diag(std::span<uint8_t> out, const DiagInfo &s) {
     return w.size();
 }
 
+size_t encode_calibration(std::span<uint8_t> out, const CalibrationInfo &s) {
+    Writer w(out);
+    w.u8(static_cast<uint8_t>(s.status));
+    w.i32(s.voltage_gain);
+    w.i32(s.current_zero);
+    w.i32(s.current_gain);
+    return w.size();
+}
+
 size_t encode_keys(std::span<uint8_t> out, const KeysInfo &s) {
     Writer w(out);
     w.u8(s.flags);

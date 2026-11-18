@@ -6,9 +6,12 @@
 // take two word-address bytes (high first). `sel` adds the chip's A2..A0 pin levels to the device address.
 #pragma once
 #include <array>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <span>
+
+#include "k2/drivers/power_calc.hpp"
 
 namespace k2::eeprom {
 
@@ -72,6 +75,59 @@ inline constexpr std::uint8_t kCalPage = 16;                     // 24C16 page s
 static_assert(kCalWord % kCalPage + kCalLen <= kCalPage, "the repair must stay inside one page");
 inline constexpr std::uint32_t kCalWriteMs = 10;                 // longest wait for the write cycle (the part needs about 5 ms)
 inline constexpr std::array<std::uint8_t, kCalLen> kCalZero = {};
+
+// Read-only classification of the three little-endian settings EEPROM calibration trims. Unknown is a monitor chip
+// outside the set whose reference scales are known; Absent is a read that did not reach the EEPROM. The trims are never
+// applied to this firmware's measurements: they are reported so a user can notice a settings-store inconsistency.
+enum class CalState : std::uint8_t { Unknown = 0, Absent = 1, Ok = 2, Corrupt = 3 };
+
+struct CalInfo {
+    CalState state = CalState::Unknown;
+    std::int32_t voltage_gain = 0;
+    std::int32_t current_zero = 0;
+    std::int32_t current_gain = 0;
+};
+
+[[gnu::always_inline]] constexpr std::int32_t cal_i32(std::span<const std::uint8_t, kCalLen> bytes,
+                                                        std::size_t off) {
+    const std::uint32_t u = std::uint32_t(bytes[off]) | (std::uint32_t(bytes[off + 1]) << 8) |
+                            (std::uint32_t(bytes[off + 2]) << 16) | (std::uint32_t(bytes[off + 3]) << 24);
+    return std::bit_cast<std::int32_t>(u);
+}
+
+constexpr bool cal_scales(power::Chip chip, std::int32_t &voltage, std::int32_t &current) {
+    switch (chip) {
+    case power::Chip::Ina228: voltage = 204'800; current = 307'200; return true;
+    case power::Chip::Ina226: voltage = 1'024'000; current = 307'200; return true;
+    case power::Chip::Ina237: voltage = 409'600; current = 614'400; return true;
+    case power::Chip::None: return false;
+    }
+    return false;
+}
+
+constexpr bool outside_symmetric(std::int32_t value, std::int32_t limit) {
+    return value > limit || value < -limit;   // no abs(INT32_MIN)
+}
+
+constexpr CalInfo classify_cal(power::Chip chip, bool present, std::span<const std::uint8_t, kCalLen> bytes) {
+    if (!present) return {CalState::Absent, 0, 0, 0};
+    CalInfo out;
+    out.voltage_gain = cal_i32(bytes, 0);
+    out.current_zero = cal_i32(bytes, 4);
+    out.current_gain = cal_i32(bytes, 8);
+    std::int32_t voltage = 0, current = 0;
+    if (!cal_scales(chip, voltage, current)) {
+        out.state = CalState::Unknown;
+        return out;
+    }
+    // A gain denominator at or below zero is included by the 10% test. The symmetric bound avoids signed overflow for
+    // malformed input such as INT32_MIN, so this path never has to form full_scale + trim.
+    out.state = outside_symmetric(out.voltage_gain, voltage / 10) ||
+                outside_symmetric(out.current_zero, current / 100) ||
+                outside_symmetric(out.current_gain, current / 10)
+                    ? CalState::Corrupt : CalState::Ok;
+    return out;
+}
 
 // Untouched = Mismatch, ReadFail, Busy (nothing was written). WriteFail, Timeout and Verify mean a write was issued: the area
 // may hold anything, read it again.

@@ -112,6 +112,7 @@ public:
     Ui();
     // `cancel_resume` = BACK was held at power-up: an interrupted charger test is dropped, not resumed.
     void init(uint32_t now_ms, bool cancel_resume = false);
+    void note_calibration(bool corrupt) { if (corrupt) notice_ = kCalibrationNotice; }
     void set_rotation(uint8_t rotation, uint32_t now_ms);
     uint8_t rotation() const { return orient_.rotation; }
     bool rotation_locked() const { return rotation_lock_; }
@@ -440,6 +441,7 @@ private:
 
     orientation::Tracker gravity_;
     uint32_t rotation_notice_until_ K2_BSS_INIT(0);
+    static constexpr char kCalibrationNotice[] = "Trim issue; readouts OK";
     const char *notice_ K2_BSS_INIT(nullptr);   // a literal shown on the notice strip instead of the rotation text (refuse_menu)
     void refuse_menu(Menu m, const char *why, uint32_t now_ms);
     void rotation_gesture(uint32_t now_ms);
