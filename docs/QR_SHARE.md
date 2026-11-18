@@ -113,8 +113,8 @@ made. The layout is the comment at the top of `include/k2/chargertest/report_car
   bits remain after the level byte (a CRC and its padding are at most 23). The block is written only if the whole blob fits, so a
   link never carries half of it.
 - **The CRC.** It is the v1 record's CRC, which covers the format byte (33). A format-10 firmware's links carry a CRC over format
-  10 while the readers write format 11, so a reader that fails the check retries with the format byte 10 in the CRC; a flipped bit
-  fails both. (`tools/k2_qr.py`, `docs/site/r/card.js`.) Older formats, and every schema 1 record, decode as before.
+  10 (or 11) while the readers write the current format, so a reader that fails the check retries with each older format byte
+  from 10 up in the CRC; a flipped bit fails them all. (`tools/k2_qr.py`, `docs/site/r/card.js`.) Older formats, and every schema 1 record, decode as before.
 - **The blob.** `u16 nbits` then the bits, LSB first. Header 6 bits (has spec, has SVOOC, one bit per range slot). SVOOC, 37 bits:
   end u3, abort reason u4, asks u3, ceiling current u8 (100 mA), highest voltage u9 (100 mV), stopped-after u10 (100 ms). Spec: end u3,
   reason u6, unconfirmed u1, cell count u5 (= 27), then per check a verdict u3; a skip adds its reason u4; a pass, fail or unverified
@@ -124,12 +124,26 @@ made. The layout is the comment at the top of `include/k2/chargertest/report_car
   minimum and maximum from the mean, in units of E = 2^scale mV (rounded outward, so the band always covers the data). The scale is the
   smallest that keeps every bucket in range, so a clean sweep reads to 1 mV and a wild one to a coarser step; the page shows it
   ("error to 4 mV"). A PPS sweep split at 5 V is stitched in setpoint order.
-- **Size.** Each full range is 534 bits (67 B); the worst blob (every check failing, four full sweeps) is 3273 bits = 412 B with its
-  length. The worst packed Deep card is 616 B; `kMaxCardDeepV2` = 653 B (static assert) is the largest the code may carry: 921
+- **Size.** Each full range is 534 bits (67 B); the worst format 11 blob (every check failing, four full sweeps) is 3274 bits =
+  412 B with its length (the docs said 3273 before; the tables now use the true count). The worst packed Deep card is 616 B; `kMaxCardDeepV11` = 653 B (static assert) is the largest a format 11 block needed: 921
   characters, 8 under 929. So 32 buckets per range is the count that fits one code with every check failing, and every Deep
   card gets the same count. Three int8 per bucket (mean, min, max) do not fit at 32: four such ranges are about 4297 bits
   (540 B) with the spec and ceiling blocks, over the cap, and about 21 buckets is the most that would fit; hence an int8 mean plus
   two u4 spreads at an adaptive step, which keeps 32. The spreads are coarser than the mean once the scale is above 1 mV.
+### Card format 12: the Xiaomi section
+
+Format 12 lets a card of any level carry a block, and adds the **Xiaomi section** at the block's tail: present when bits are left
+after the sweeps (a format 11 block ends there). Chain u5 (`mi_unlock` chain code: 2 no answer, 4..13 stalled, 20 verified, 21
+done via 020A), modes u3 (at most 4), then per mode in plan order: the PDO before the chain u32 (0 = a new PDO, 0xFFFFFFFF = not
+known, a resumed run), the PDO after u32, the level asked mv u9 (100 mV) and ma u7 (50 mA), the row's verdict u3 and reason u6
+(89 bits a mode). A source that never listed SVID 0x2717 gets no section, so an ordinary Medium card carries no block. A Medium or
+Light card with a block writes its level byte as 0 so the block has its place behind it. The worst blob (format 11's worst plus
+four modes) is 3638 bits = 457 B; a block that would push the packed record past `kMaxCardDeepV2` (659 B, one code) is left out
+whole (a worst Deep card with four Xiaomi modes sheds its block in the link; the K2 keeps it). The card record itself carries no
+Xiaomi row. Readers: `tools/report_card.py` (`deep.xiaomi`), `tools/charger_summary.py` (a Xiaomi line with each mode
+"Mi 55W: before → after ✓"), `docs/site/r/deep.js` / `card.js` (a "Xiaomi" section). The store's repeat check also compares the
+Xiaomi sections, so a re-run with other modes is a new save.
+
 - **On the K2.** The card store keeps the blob after the 256 B card record in the same ring record (a Deep record is about 672 to
   692 B: two per flash sector against seven for a plain card). The 12 newest blocks are kept; an older card is carried forward without
   its block (`maintain()`), and a save retries without the block when the ring is full, so a block never costs a card. The remote

@@ -616,7 +616,7 @@ class Timeline:
                 s, w = a & 15, (a >> 4) & 15
                 return [f"MARK      {nm}: state={st[s] if s < len(st) else s} why={why[w] if w < len(why) else w} "
                         f"vconn_pin={'ON' if a & 0x100 else 'off'} active_cc={(a >> 12) & 3} other_net={b} mV"]
-            if code == 8:   # a refused 6 A hunt row: a = HuntCause | answer << 8 | timeout << 12, b = targeted APDO limit (mA)
+            if code == 8:   # a refused 6 A hunt row (firmware before 2026-11-18; the Xiaomi unit sends no mark 8): a = HuntCause | answer << 8 | timeout << 12, b = targeted APDO limit (mA)
                 cause, ans = a & 0xFF, (a >> 8) & 15
                 cn = HUNT_CAUSES[cause] if cause < len(HUNT_CAUSES) else str(cause)
                 an = HUNT_ANSWERS[ans] if ans < len(HUNT_ANSWERS) else str(ans)
