@@ -47,8 +47,8 @@ char mark(Tone);
 //   some passed, or the source capped    -> Partial   amber ("~")
 //   none passed                          -> Fail      red
 // A Capped step (ct::Reason::Capped: the source plateaued below the target) counts as `capped`, not as `fail`.
-// A caution step (a Pass that carries ct::Reason::Folded: the output folded back inside a sweep, or ct::Reason::StepResolution: a step
-// walk the source did not follow at its quantum) counts as `capped` too, never as
+// A caution step (a Pass that carries ct::Reason::Folded: the output folded back inside a sweep, ct::Reason::StepResolution: a step
+// walk the source did not follow at its quantum, or ct::Reason::ProgCheck: a transition that broke a spec limit) counts as `capped` too, never as
 // `pass` and never as `fail`: the source delivered every level, and one of them is worth a second look (amber, "CAUTION").
 // A Skip step whose reason is Advertised or LightLevel (a Light run's listing) counts as `noted`, not as `skip`; an advertised PD
 // offer (advertised()) is also counted in `adv`, which roll_up reads as a pass.
@@ -60,8 +60,8 @@ bool noted(const charger_test::Step& s);
 // advertises it, so it is drawn with the pass look (kit::Verdict::Pass) while its band word stays LISTED. Not UFCS, SCP or a legacy level.
 bool advertised(const charger_test::Step& s);
 // A voltage fold the deep sweep found: a Pass that carries Reason::Folded (the sweep row, and the fixed rows of the same APDO
-// that sit on the folded side), or a step-walk miss (a Pass that carries Reason::StepResolution; an older journal holds it on a Fail,
-// which stays a fail). A caution, drawn kit::Verdict::Partial.
+// that sit on the folded side), a step-walk miss (a Pass that carries Reason::StepResolution; an older journal holds it on a Fail,
+// which stays a fail) or a transition flag (Reason::ProgCheck on a level row). A caution, drawn kit::Verdict::Partial.
 bool caution(const charger_test::Step& s);
 // The deep sweep's pass window: a passing sweep whose worst recorded |error| stays within it is a plain pass (green), beyond it a
 // caution (amber). A passing sweep is never red: red is a failed step, so the chip, the header, the Steps footer and the report
@@ -72,9 +72,9 @@ unsigned sweep_worst_mv(const ctsweep::View&, uint8_t alg, uint8_t pos);
 // A passing sweep step (no fold caution of its own) whose APDO's worst error passes kSweepPassMv: a caution by deviation. The two
 // parts of a split PPS sweep share one APDO summary, so both read the same.
 bool deviates(const charger_test::Step& s, const ctsweep::View&);
-// The APDO's step-walk caution (the Pass + StepResolution row of one range), null when the walk was followed or never ran. Its note is
-// charger_test::walk_text.
-const charger_test::Step* walk_caution(std::span<const charger_test::Step>, charger_test::Algorithm, uint8_t pos);
+// The APDO's non-fold caution row: the step-walk miss (Pass + StepResolution) first, else the first level row that carries a transition
+// flag (Pass + ProgCheck); null when there is none. Its note is charger_test::caution_text.
+const charger_test::Step* step_caution(std::span<const charger_test::Step>, charger_test::Algorithm, uint8_t pos);
 // A caution of either kind: the fold (Reason::Folded on the step) or a tracking deviation (the sweep view). Counts, notes and tones
 // read this; the one-argument form above sees only the fold.
 bool caution(const charger_test::Step& s, const ctsweep::View&);

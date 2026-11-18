@@ -76,8 +76,10 @@ enum class Reason : uint8_t {
     Folded,              // user decision 2026-11-16: the deep sweep of the row's PDO found a voltage fold (pd::TrackScan: the settled level fell
                          // by more than 50 mV while the request rose). A CAUTION on a Pass verdict - the sweep row, and the fixed rows of the
                          // same APDO at or above the first folded setpoint that read below the peak - never a fail (Summary::fold_mv)
-    MiChain              // the Xiaomi unit's chain row (is_mi_chain): detail = mi_unlock::chain_code. Pass = the 0x2717 chain finished
+    MiChain,             // the Xiaomi unit's chain row (is_mi_chain): detail = mi_unlock::chain_code. Pass = the 0x2717 chain finished
                          // (with or without new modes), Skip = no SVID 0x2717, no answer or a stall; nothing is requested on this row
+    ProgCheck            // a Deep PPS / AVS row whose transition capture broke a spec limit (progcheck::Flag bits in detail: overshoot, slow rise,
+                         // transient, level off): a CAUTION on a Pass, never a fail - the level was delivered
 };
 // Step.detail of a PPS step-walk row while it is Pending/Running (finish() overwrites it with the result); sits above every
 // engine code and the EPR skip codes so the card and the tools never mistake it for one.
@@ -465,8 +467,9 @@ struct Summary {
 };
 const char* explanation(const Step&);
 // The step-walk caution's note, "steps 100mV, not 20mV" (the mean move, rounded to 10 mV from 50 up, then the nominal step) or
-// "steps ignored"; 0 characters unless the step's reason is StepResolution. NUL-terminated within `out`, 24 characters at most.
-size_t walk_text(const Step&, std::span<char> out);
+// "steps ignored"; or a transition check's finding, "overshoot +1" (the first flag, then how many more); 0 characters for any other reason.
+// NUL-terminated within `out`, 24 characters at most.
+size_t caution_text(const Step&, std::span<char> out);
 // Step.detail of an EPR skip. The PD group's detail space is 128 + pd::Err (below 136) and pd::SinkResult (below 12); these sit
 // above it so the card (five code bits behind the 128 flag) and the tools never mistake them for an engine code.
 //   EprRefused: kDetailEprFail + the source's Enter_Failed data (0..5)      OverCap on an EPR row: the monitor's ceiling
@@ -616,6 +619,12 @@ struct Env {
     virtual void spec_collect(specsec::Result& r) { (void)r; }
     // The stage's result is final (called once, before the source is released to 5 V): the journal keeps it.
     virtual void spec_done(const specsec::Result& r) { (void)r; }
+    // The Deep PPS / AVS transition check (prog_check.hpp). prog_begin: the hold of a fixed programmable row begins; the page freezes the
+    // capture of the row's own Request (false = none: not recording, or another tool owns it). prog_take: the hold ended, the capture
+    // is read and its findings come back as progcheck::Flag bits (0 = clean, or nothing could be measured). Only a begin that said
+    // true is followed by a take; both before the row is recorded, so the page can still release the capture with the row.
+    virtual bool prog_begin(const Step&) { return false; }
+    virtual uint8_t prog_take(const Step&) { return 0; }
 protected:
     ~Env() = default;
 };
@@ -1038,6 +1047,8 @@ private:
     void latch_row(const Input&);
     void note_ps_rdy(const Input&, const Step&);
     bool needs_load(const Input&) const;
+    bool prog_wanted(const Step&) const;       // a fixed PPS / AVS row of a run with the Deep checks on (Options::pps_sweep / avs_sweep)
+    bool prog_on_ K2_BSS_INIT(false);          // the row in flight asked for a transition capture at its hold's start (Env::prog_begin said yes)
     enum class Probe : uint8_t { Off, Pending, Closing, Running } probe_ = Probe::Off;
     uint32_t probe_ms_ K2_BSS_INIT(0);
     Options opts_{};

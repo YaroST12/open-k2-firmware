@@ -24,12 +24,12 @@ enum Flag : std::uint8_t {
     kOff = 8,         // the final level more than vPpsNew / vAvsNew (5 %) from the request
 };
 
-// The capture is frozen as the runner's hold begins (the band has been stable for kStableMs): kPostMs later it ends, so the window
-// holds the ramp, the 500 ms of stability and kPostMs of the hold. The creep is read over kSpanMs of it (50 ms after the band was
-// stable, to the end). The runner's hold (1000 ms from the band's entry) is 50 ms longer than kStableMs + kPostMs.
+// The capture is triggered as the runner's hold begins (the band has been stable for kStableMs): the recorder's own post window
+// (kPostMs) later it ends, so it holds the ramp, the stability and kPostMs of the hold; the runner's hold ends kStableMs + kPostMs
+// + 100 ms after the stable start (one 50 ms tick of slack at each end). The creep is read over the last kSpanMs of it.
 inline constexpr std::uint32_t kStableMs = 500;
-inline constexpr std::uint32_t kPostMs = 450;
-inline constexpr std::uint32_t kSpanMs = 900;
+inline constexpr std::uint32_t kPostMs = 400;
+inline constexpr std::uint32_t kSpanMs = 800;
 
 struct In {
     bool avs = false;
@@ -52,7 +52,7 @@ struct Out {
 };
 
 constexpr const char* flag_text(std::uint8_t f) {
-    return f & kOver ? "overshoot" : f & kLate ? "late" : f & kTransient ? "transient" : f & kOff ? "level off" : "";
+    return f & kOver ? "overshoot" : f & kLate ? "slow rise" : f & kTransient ? "transient" : f & kOff ? "level off" : "";
 }
 
 // The judgment over a measured step (analyze_step) and its PD edges.

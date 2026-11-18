@@ -36,6 +36,7 @@
 #include "k2/chargertest/run_events.hpp"
 #include "k2/core/scratch.hpp"
 #include "k2/chargertest/pd_version.hpp"
+#include "k2/chargertest/prog_check.hpp"
 #include "k2/chargertest/step_label.hpp"
 #include "k2/chargertest/oem_watts.hpp"
 #include "k2/core/storage.hpp"
@@ -382,6 +383,24 @@ void ChargerTestSession::spec_done(const specsec::Result&) {
     spec_live_run_ = runner_.run_id();   // the engine still holds the records behind the result: the detail page lists them from there
 #endif
     if (journal_active_ && !journal_closed_) charger_journal::hw::note_spec();
+}
+// The Deep transition check: the row's own request armed the recorder (request_pd); the hold's start freezes it kPostMs on, so it
+// holds the Accept, the ramp and the first of the hold. Not over a capture an earlier event of this row already froze.
+static_assert(transcap::kPostUs == ct::progcheck::kPostMs * 1000, "the runner's hold timing assumes the recorder's post window");
+bool ChargerTestSession::prog_begin(const ct::Step&) {
+    if (transcap::status().state != transcap::State::Armed) return false;
+    transcap::trigger(transcap::Reason::Voltage);   // a hold that then fails keeps this capture as its evidence
+    return transcap::triggered();
+}
+uint8_t ChargerTestSession::prog_take(const ct::Step& s) {
+    const auto* rec = transcap::frozen();
+    if (!rec) return 0;
+    const bool avs = s.algorithm != ct::Algorithm::Pps;
+    const auto o = ct::progcheck::measure(*rec, {avs, 0, int32_t(s.mv)});
+    if (!o.measured) return 0;
+    K2LOG("[PCHK] PDO%u %umV flags=%u over=%d band=%d lag=%d out=%d err=%d creep=%d slew=%d\n", unsigned(s.pos), unsigned(s.mv), unsigned(o.flags),
+          int(o.over_mv), int(o.band_us), o.lag_known ? int(o.lag_us) : 0, int(o.out_us), int(o.err_mv), o.creep_known ? int(o.creep_mv) : 0, int(o.slew_mv_ms));
+    return o.flags;
 }
 // A row whose verdict stands but whose reason changed afterwards (the sweep closing marks its APDO's fixed rows, Reason::Folded): only
 // the journal follows (the row's section is dirty, no flash here); the row's own events and log line went out when it ended.
@@ -2061,8 +2080,8 @@ static FooterTone spec_footer(StrBuf<32>& f, int check, const specsec::Cell& c, 
                     dev |= result_layout::caution(y, s_.runner_.sweep_view());
                 }
             char wk[28] = {};
-            const auto* walk = result_layout::walk_caution(s_.runner_.steps(), algo, pos);   // a step walk the source did not follow at its quantum
-            const size_t wl = walk ? ct::walk_text(*walk, wk) : 0;
+            const auto* walk = result_layout::step_caution(s_.runner_.steps(), algo, pos);   // a step walk the source did not follow at its quantum
+            const size_t wl = walk ? ct::caution_text(*walk, wk) : 0;
             if (const auto rw = s_.runner_.sweep_view().apdo(static_cast<uint8_t>(algo), pos); rw && rw->sum.points) {   // both 5 V parts
                 char nb[ctsweep::kFoldTextMax];
                 if (const size_t len = ctsweep::format_fold(rw->sum, nb)) {
@@ -2127,10 +2146,10 @@ static FooterTone spec_footer(StrBuf<32>& f, int check, const specsec::Cell& c, 
     }
     case Stage::Detail: {
         const auto steps = s_.runner_.steps();
-        if (s_.detail_index_ >= 0 && static_cast<size_t>(s_.detail_index_) < steps.size() && steps[static_cast<size_t>(s_.detail_index_)].reason == ct::Reason::StepResolution) {
-            char wk[28] = {};   // the walk's own words: "steps 100mV, not 20mV"
+        if (s_.detail_index_ >= 0 && static_cast<size_t>(s_.detail_index_) < steps.size() && (steps[static_cast<size_t>(s_.detail_index_)].reason == ct::Reason::StepResolution || steps[static_cast<size_t>(s_.detail_index_)].reason == ct::Reason::ProgCheck)) {
+            char wk[28] = {};   // the walk's own words ("steps 100mV, not 20mV") or the transition flags ("overshoot +1")
             const auto& st = steps[static_cast<size_t>(s_.detail_index_)];
-            if (const size_t len = ct::walk_text(st, wk)) { f.put(std::string_view(wk, len)); return st.verdict == ct::Verdict::Pass ? FooterTone::Caution : FooterTone::Error; }
+            if (const size_t len = ct::caution_text(st, wk)) { f.put(std::string_view(wk, len)); return st.verdict == ct::Verdict::Pass ? FooterTone::Caution : FooterTone::Error; }
         }
         if (s_.detail_index_ >= 0 && static_cast<size_t>(s_.detail_index_) < steps.size() && steps[static_cast<size_t>(s_.detail_index_)].reason == ct::Reason::Folded) {
             const auto& st = steps[static_cast<size_t>(s_.detail_index_)];   // a caution says what folded, from the APDO's sweep: "folds to 19.4V above 19.9V"
@@ -2317,11 +2336,11 @@ void ChargerTestPage::list_row(int index, bool focused, kit::RowSpec &out) {
             const bool caution = result_layout::caution(s, view);   // a voltage fold (CAUTION: folds back) or a tracking deviation (off 450mV)
             row_note_.put(listing || caution ? result_layout::verdict_word(s, view) : ct::name(s.verdict));
             char wk[28] = {};
-            const bool walk = ct::walk_text(s, wk) != 0;   // "CAUTION: steps 100mV, not 20mV": the whole note, so no PDO suffix behind it
+            const bool walk = ct::caution_text(s, wk) != 0;   // "CAUTION: steps 100mV, not 20mV": the whole note, so no PDO suffix behind it
             if (result_layout::deviates(s, view)) { StrBuf<16> off; put_off(off, view, s); row_note_.put(": ").put(off.view()); }
             else if (walk) row_note_.put(": ").put(wk);
             else if (caution || (!listing && (s.verdict == ct::Verdict::Fail || s.verdict == ct::Verdict::Skip))) row_note_.put(": ").put(detail_name(s));
-            if (s.pos && !walk) row_note_.put(" PDO #").put_u32(s.pos);
+            if (s.pos && !(walk && s.reason == ct::Reason::StepResolution)) row_note_.put(" PDO #").put_u32(s.pos);
             out.note = row_note_.view().substr(0, kit::kNoteMaxPx / kLabelAdv);
         }
         break;
@@ -3160,7 +3179,9 @@ void ChargerTestPage::paint_detail() {
         case 4: {
             key = "Reason";
             const bool deviates = result_layout::deviates(s, s_.runner_.sweep_view());
+            char pk[16] = {};
             if (deviates) { put_off(val, s_.runner_.sweep_view(), s); sv = val.view(); }
+            else if (s.reason == ct::Reason::ProgCheck && ct::caution_text(s, pk)) sv = pk;   // "overshoot +1": the first flag and how many more (<= 12 cells)
             else sv = detail_name(s);
             if (s.verdict == ct::Verdict::Fail || deviates || result_layout::caution(s)) col = kCaution;
             break;

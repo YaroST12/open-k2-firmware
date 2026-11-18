@@ -407,6 +407,11 @@ struct Fake final : ct::Env {
     }
     void spec_stop() override { ++spec_stops; if (spec_on && !spec_stop_t) spec_stop_t = in.now; }
     void spec_collect(specsec::Result& r) override { ++spec_collects; r = spec_result; }
+    // The Deep PPS / AVS transition check (prog_check.hpp): prog_arm = a capture is available; prog_flags = what the take finds.
+    bool prog_arm = false; uint8_t prog_flags = 0; int prog_begins = 0, prog_takes = 0;
+    std::vector<ct::Step> prog_rows;   // the row of each begin
+    bool prog_begin(const ct::Step& s) override { ++prog_begins; prog_rows.push_back(s); return prog_arm; }
+    uint8_t prog_take(const ct::Step&) override { ++prog_takes; return prog_flags; }
     void spec_tick() {
         if (!spec_on) return;
         if ((spec_stop_t && in.now - spec_stop_t >= spec_exit_ms) || (spec_run_ms && in.now - spec_t0 >= spec_run_ms)) {
@@ -4797,10 +4802,10 @@ static void test_avs_step_walk_cautions_a_coarse_or_ignored_step() {
     }
 }
 // The step-walk caution's note: the mean move rounded to 10 mV from 50 up (96 and 101 both read 100), the nominal step it should have been.
-static void test_walk_text_names_the_step_that_was_measured() {
+static void test_caution_text_names_the_step_that_was_measured() {
     auto text = [](A a, uint8_t detail, ct::Reason r = ct::Reason::StepResolution) {
         ct::Step s; s.algorithm = a; s.reason = r; s.detail = detail;
-        char b[40] = {}; const size_t n = ct::walk_text(s, b);
+        char b[40] = {}; const size_t n = ct::caution_text(s, b);
         CHECK_EQ(n, strlen(b));
         return std::string(b);
     };
@@ -4812,8 +4817,15 @@ static void test_walk_text_names_the_step_that_was_measured() {
     CHECK_STR(text(A::SprAvs, 200).c_str(), "steps 200mV, not 100mV");
     CHECK_STR(text(A::EprAvs, 0).c_str(), "steps ignored");
     CHECK_STR(text(A::Pps, 100, ct::Reason::None).c_str(), "");       // any other reason: nothing
+    // the transition check: the first finding, then how many more (flag bits 1 overshoot, 2 slow rise, 4 transient, 8 level off)
+    CHECK_STR(text(A::Pps, 1, ct::Reason::ProgCheck).c_str(), "overshoot");
+    CHECK_STR(text(A::Pps, 5, ct::Reason::ProgCheck).c_str(), "overshoot +1");
+    CHECK_STR(text(A::SprAvs, 14, ct::Reason::ProgCheck).c_str(), "slow rise +2");
+    CHECK_STR(text(A::Pps, 8, ct::Reason::ProgCheck).c_str(), "level off");
+    CHECK_STR(text(A::Pps, 0, ct::Reason::ProgCheck).c_str(), "");
+    { ct::Step p; p.reason = ct::Reason::ProgCheck; p.detail = 6; CHECK_STR(ct::explanation(p), "slow rise"); CHECK_STR(ct::name(ct::Reason::ProgCheck), "transition check"); }
     ct::Step s; s.reason = ct::Reason::StepResolution; s.detail = 100;
-    char tiny[8]; CHECK_EQ(ct::walk_text(s, tiny) < sizeof tiny, true);   // never past the buffer
+    char tiny[8]; CHECK_EQ(ct::caution_text(s, tiny) < sizeof tiny, true);   // never past the buffer
 }
 // A PD source that goes dark mid-row (its output collapsed or we Hard Reset it): VBUS 0, the offer list gone, no
 // session. Lenovo C135, hardware 2026-11-03: VBUS drained 20 V -> 0 in 9 s, then every later row said "offers changed".
@@ -7956,6 +7968,64 @@ static void test_step_walk_is_planned_only_in_deep() {
         CHECK_EQ(s.mv > 5000, true);
     }
 }
+// The Deep transition check: every fixed PPS / AVS row of a Deep run asks for a capture as its hold begins and takes the findings at
+// its end; a finding is an amber caution on the row's Pass (Reason::ProgCheck, detail = the flag bits), never a fail.
+static void run_prog(Fake& f, ct::Runner& r, ct::Options o) {
+    CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+    f.tick(r, 900000);
+    CHECK_EQ(r.state(), ct::State::Done);
+}
+static void test_prog_check_flags_a_passing_programmable_row() {
+    Fake f; f.caps = level_caps(); f.prog_arm = true; f.prog_flags = 1;
+    ct::Runner r(f);
+    run_prog(f, r, ct::with_level({}, ct::Level::Deep));
+    unsigned flagged = 0, fixed_pps = 0;
+    for (const auto& s : r.steps()) {
+        const bool prog = (ct::kPpsAlgorithms & ct::bit(s.algorithm)) && s.group == ct::Group::Pd;
+        const bool plain = prog && s.detail != ct::kDetailSweep && s.verdict == ct::Verdict::Pass && s.reason != ct::Reason::StepResolution &&
+                           s.reason != ct::Reason::Folded;
+        if (s.reason == ct::Reason::ProgCheck) {
+            ++flagged;
+            CHECK_EQ(int(s.verdict), int(ct::Verdict::Pass));
+            CHECK_EQ(s.detail, 1);
+            CHECK_COND(prog);
+        }
+        fixed_pps += plain || s.reason == ct::Reason::ProgCheck;
+        if (s.group == ct::Group::Pd && !prog) CHECK_COND(s.reason != ct::Reason::ProgCheck);   // a fixed PD row is never judged
+        if (ct::is_sweep(s) || s.detail == ct::kDetailSweep) CHECK_COND(s.reason != ct::Reason::ProgCheck);
+    }
+    CHECK_COND(flagged >= 3);
+    CHECK_EQ(f.prog_begins, f.prog_takes);
+    CHECK_EQ(unsigned(f.prog_begins), flagged);
+    for (const auto& s : f.prog_rows) CHECK_COND(s.detail != ct::kDetailSweep && s.detail != ct::kDetailStepWalk);
+    (void)fixed_pps;
+}
+static void test_prog_check_clean_capture_changes_nothing() {
+    Fake f; f.caps = level_caps(); f.prog_arm = true; f.prog_flags = 0;
+    ct::Runner r(f);
+    run_prog(f, r, ct::with_level({}, ct::Level::Deep));
+    CHECK_EQ(count_reason_all(r, ct::Reason::ProgCheck), 0u);
+    CHECK_COND(f.prog_takes >= 3);
+    Fake g; g.caps = level_caps(); g.prog_arm = true; ct::Runner q(g);
+    run_prog(g, q, ct::with_level({}, ct::Level::Medium));   // the check is a Deep one
+    CHECK_EQ(g.prog_begins, 0);
+}
+static void test_prog_check_without_a_capture_asks_nothing_more() {
+    Fake f; f.caps = level_caps(); f.prog_arm = false; f.prog_flags = 1;
+    ct::Runner r(f);
+    run_prog(f, r, ct::with_level({}, ct::Level::Deep));
+    CHECK_COND(f.prog_begins >= 3);
+    CHECK_EQ(f.prog_takes, 0);
+    CHECK_EQ(count_reason_all(r, ct::Reason::ProgCheck), 0u);
+}
+static void test_prog_check_follows_the_sweep_switches() {
+    Fake f; f.caps = level_caps(); f.prog_arm = true;
+    ct::Runner r(f);
+    ct::Options o = ct::with_level({}, ct::Level::Medium); o.avs_sweep = true;   // the Tests list line: AVS only
+    run_prog(f, r, o);
+    CHECK_COND(f.prog_begins >= 1);
+    for (const auto& s : f.prog_rows) CHECK_COND(s.algorithm == A::SprAvs || s.algorithm == A::EprAvs);
+}
 static void test_level_maps_to_the_run_switches() {
     CHECK_EQ(int(ct::Options{}.level), int(ct::Level::Medium));
     CHECK_EQ(int(ct::Level::Medium), 0);   // 0 on every wire: data from before the level reads Medium
@@ -8552,14 +8622,15 @@ int main() {
     test_ps_rdy_late_is_noted_and_never_judged(); test_ps_rdy_inferred_is_noted_and_never_judged();
     test_ps_rdy_out_of_band_is_noted_and_never_judged(); test_ps_rdy_timing_is_noted_per_walk_level();
     test_pps_step_walk_cautions_a_flat_source_as_steps_ignored(); test_pps_step_walk_cautions_a_source_that_rounds_to_100mv_on_the_jump();
-    test_avs_step_walk_passes_on_100mv_steps(); test_avs_step_walk_cautions_a_coarse_or_ignored_step(); test_walk_text_names_the_step_that_was_measured();
+    test_avs_step_walk_passes_on_100mv_steps(); test_avs_step_walk_cautions_a_coarse_or_ignored_step(); test_caution_text_names_the_step_that_was_measured();
     test_an_inline_refusal_names_what_latched_it();
     test_default_run_sweeps_each_pps_apdo_after_its_checks();
     test_pps_sweep_splits_at_5v_by_unit();
     test_default_sweep_on_a_low_latch_source();
     test_self_powered_run_sweeps_from_5v();
     test_legacy_row_waits_through_a_source_restart(); test_legacy_restart_wait_is_bounded_and_a_load_still_refuses();
-    test_level_maps_to_the_run_switches(); test_level_plans_per_level(); test_step_walk_is_planned_only_in_deep(); test_light_run_requests_nothing_but_5v(); test_light_lists_the_epr_levels_as_advertised();
+    test_level_maps_to_the_run_switches(); test_level_plans_per_level(); test_step_walk_is_planned_only_in_deep(); test_prog_check_flags_a_passing_programmable_row(); test_prog_check_clean_capture_changes_nothing();
+    test_prog_check_without_a_capture_asks_nothing_more(); test_prog_check_follows_the_sweep_switches(); test_light_run_requests_nothing_but_5v(); test_light_lists_the_epr_levels_as_advertised();
     test_epr_spoof_identity_tests_epr_and_avs(); test_epr_capable_list_never_gives_epr_rows_not_offered(); test_epr_spoof_identity_at_light_makes_no_requests();
     test_a_resumed_light_run_stays_light();
     test_the_page_names_the_run_level();

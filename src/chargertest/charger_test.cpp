@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
 #include "k2/chargertest/charger_test.hpp"
+#include "k2/chargertest/prog_check.hpp"
 #include "k2/core/fmt.hpp"
 #include "k2/core/log.hpp"
 #include "k2/fastcharge/accp.hpp"
 #include "k2/pd/pd_link.hpp"
 #include "k2/fastcharge/qc.hpp"
 #include <algorithm>
+#include <bit>
 #include <cstdlib>
 #include <cstring>
 #include <type_traits>
@@ -56,9 +58,9 @@ const char* name(Reason r) {
         "Class A only (12 V max)", "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target",
         "withdrawn by source", "wrong voltage on 5V contract", "needs load", "floored above target", "step resolution",
         "HID-cable loop: 5V lock", "advertised", "light run: not asked", "port cuts without load",
-        "output folds back", "Xiaomi chain"
+        "output folds back", "Xiaomi chain", "transition check"
     };
-    static_assert(std::size(names) == unsigned(Reason::MiChain) + 1);
+    static_assert(std::size(names) == unsigned(Reason::ProgCheck) + 1);
     return names[static_cast<unsigned>(r)];
 }
 const char* refusal_words(Reason r) {
@@ -185,6 +187,7 @@ const char* explanation(const Step& s) {
     if (s.reason == Reason::Floored) return "output floored";   // the reached floor is the row's measured_mv
     if (s.reason == Reason::Folded) return "folds back";   // the fold note itself ("folds to 19.4V above 19.9V") is the row's note line
     if (s.reason == Reason::StepResolution) return s.detail ? "step resolution" : "steps ignored";
+    if (s.reason == Reason::ProgCheck && s.detail) return progcheck::flag_text(s.detail);   // the first finding; caution_text counts the rest
     if (s.reason == Reason::NoContract) return "EPR: no PD contract";
     if (s.reason == Reason::NotUnlocked) return epr_detail_name(s.detail) ? epr_detail_name(s.detail) : name(s.reason);
     if (s.reason == Reason::MiChain) {   // the 16-cell value column; the Xiaomi detail page spells the step out (mi_unlock::chain_text)
@@ -204,7 +207,7 @@ const char* explanation(const Step& s) {
         return s.pos < 8 ? "EPR AVS in an SPR slot" : "SPR APDO in an EPR slot";
     return name(s.reason);
 }
-size_t walk_text(const Step& s, std::span<char> out) {
+size_t caution_text(const Step& s, std::span<char> out) {
     if (out.empty()) return 0;
     size_t n = 0;
     const auto put = [&](char c) { if (n + 1 < out.size()) out[n++] = c; };
@@ -223,6 +226,10 @@ size_t walk_text(const Step& s, std::span<char> out) {
             while (k) put(d[--k]);
             word("mV");
         }
+    } else if (s.reason == Reason::ProgCheck && s.detail) {
+        word(progcheck::flag_text(s.detail));
+        const unsigned more = unsigned(std::popcount(unsigned(s.detail))) - 1;
+        if (more) { word(" +"); put(char('0' + more)); }
     }
     out[n] = 0;
     return n;
@@ -246,6 +253,9 @@ const char* name(HuntCause c) {
 }
 namespace {
 constexpr uint32_t kHoldMs = 1000;
+// The transition capture (Env::prog_begin) is triggered where the hold starts, kStableMs after the band's stable start, and freezes its
+// post window later; the hold ends kHoldMs after that stable start, with one 50 ms tick of slack at each end (hold_ms() is the one tick).
+static_assert(progcheck::kStableMs + progcheck::kPostMs + 100 <= kHoldMs, "the capture freezes before the hold ends");
 // "A Hard Reset happened on the link", whoever sent it: the sink counts the ones the K2 sent (hard_resets) and the ones the source
 // sent (source_hard_resets) apart, and the runner only ever compares this sum with a value it took from the same sum.
 uint32_t link_resets(const pd::SinkStatus& s) { return s.hard_resets + s.source_hard_resets; }
@@ -1497,6 +1507,11 @@ const mi_unlock::Mode* Runner::mi_mode(const Step& s) const {
 uint32_t Runner::hold_ms() const {
     return kHoldMs;
 }
+// The Deep checks' switches (the Tests list line sets the two apart); the step-walk and sweep rows have their own judgments.
+bool Runner::prog_wanted(const Step& s) const {
+    if (s.group != Group::Pd || s.hunt || s.detail == kDetailStepWalk || s.detail == kDetailSweep) return false;
+    return s.algorithm == Algorithm::Pps ? opts_.pps_sweep : (s.algorithm == Algorithm::SprAvs || s.algorithm == Algorithm::EprAvs) && opts_.avs_sweep;
+}
 uint32_t Runner::hold_left_ms(uint32_t now) const {
     return state_ == State::Holding ? hold_ms() - std::min(hold_ms(), now - phase_ms_) : 0;
 }
@@ -1614,6 +1629,7 @@ void Runner::cut_resolve(Input in) {
 }
 void Runner::finish_row(const Input& in, Verdict v, Reason r, uint8_t detail) {
     auto& s = steps_[index_];
+    prog_on_ = false;
     const bool sweep_row = is_sweep(s);   // read before detail is overwritten: the marker survives on sweep rows
     s.verdict = v; s.reason = r; s.detail = detail;
     if (sweep_row) { s.detail = kDetailSweep; sweep_close(s); }
@@ -2981,6 +2997,7 @@ void Runner::poll_impl(Input& in, const pd::SourceCaps& caps) {
                 if (is_step_walk(s)) { walk_step(in, eff); return; }   // the walk advances or finishes instead of holding
                 if (is_sweep(s)) { sweep_point(in, eff); return; }   // the sweep records the point and asks the next one
                 state_ = State::Holding; phase_ms_ = stable_ms_;
+                prog_on_ = prog_wanted(s) && env_.prog_begin(s);
             }
         } else stable_ = false;
         track_plateau(in, ready, s.group == Group::Pd && in.pd.held && in.pd.pos == s.pos && in.pd.mv == eff.mv &&
@@ -3013,7 +3030,10 @@ void Runner::poll_impl(Input& in, const pd::SourceCaps& caps) {
             (in.pd.state == pd::SinkState::Requesting || in.pd.state == pd::SinkState::Transition);
         if ((!ready && !renewing) || !banded) { finish(in, Verdict::Fail, Reason::Voltage); return; }
         if (gap > 250) phase_ms_ = in.now;  // Missing samples cannot establish a continuous hold.
-        if (in.now - phase_ms_ >= hold_ms()) finish(in, Verdict::Pass, Reason::None);
+        if (in.now - phase_ms_ >= hold_ms()) {
+            const uint8_t found = prog_on_ ? env_.prog_take(s) : uint8_t(0);   // before finish(): the page's record() ends the capture
+            finish(in, Verdict::Pass, found ? Reason::ProgCheck : Reason::None, found);
+        }
     }
 }
 }  // namespace k2::charger_test

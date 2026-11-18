@@ -174,7 +174,7 @@ void the_old_level_is_read_from_the_capture() {
 
 void flags_name_themselves() {
     CHECK_STR(flag_text(kOver), "overshoot");
-    CHECK_STR(flag_text(kLate), "late");
+    CHECK_STR(flag_text(kLate), "slow rise");
     CHECK_STR(flag_text(kTransient), "transient");
     CHECK_STR(flag_text(kOff), "level off");
     CHECK_STR(flag_text(kOver | kLate), "overshoot");   // the first one set names the row; the rest are in the detail

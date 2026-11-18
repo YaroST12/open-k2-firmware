@@ -743,6 +743,7 @@
   "746": "[CAL] stored trims corrupt v=%d iz=%d ig=%d\n",
   "747": "[RMT] power mask=%d\n",
   "748": "[IDLE] settings bright=%u dim=%u dim_after=%u off_after=%u\n",
-  "749": "[IDLE] saved bright=%u dim=%u dim_after=%u off_after=%u (%s)\n"
+  "749": "[IDLE] saved bright=%u dim=%u dim_after=%u off_after=%u (%s)\n",
+  "750": "[PCHK] PDO%u %umV flags=%u over=%d band=%d lag=%d out=%d err=%d creep=%d slew=%d\n"
  }
 }
