@@ -1311,6 +1311,7 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
 | Reboot-resume journal (`/jr`) | done | partial: see Not verified | `session_store` |
 | The 6 A hunt rows report "not unlocked" instead of failing when the source never offered 6 A | done | not verified on the CUKTECH 120 W | `chargertest` |
 | Test levels: Light (what is advertised, VBUS stays at 5 V), Medium (default, no deep sweeps), Deep (+ PPS and AVS deep sweeps); Review Level row, Settings > Test level, `charger-level` (0x5B), `ct_start.py --level`, level on the card and in the QR record; the Noted verdict for what a Light run did not measure | done | not verified | `chargertest`, `ui_charger_test`, `kit` |
+| Idle power: backlight PWM (PB7), Active -> Dim -> Off with VBUS stopping at Dim, panel sleep, low AHB clock in Off, Settings > Display, remote 0x37 (`k2_remote.py power`) | done, host-tested (`test_idle`, `test_idle_cfg`, `test_ui_display`) | not verified. Validate: a brightness step changes the K2's own draw on the meter (PB7 timer mapping is inferred); Off with nothing attached falls well under the warm 0.52 W; USB and `k2_remote` still answer after the low clock; the wake press does nothing else | `idle`, `idle_cfg`, `idle_hw`, `lcd`, `crm`, `ui_display` |
 | A Legacy row waits through a source output restart (up to 10 s) instead of failing it | done | not verified | `chargertest` |
 
 ## USB-PD

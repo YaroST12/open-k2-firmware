@@ -222,7 +222,8 @@ void walk_pages(Ui &ui, int rot, const Scenario &sc) {
     // Display: the Settings row with the longest summaries, the list, the adjust mode and both pick lists on each option.
     {
         const idle::Config saved = idle_hw::config();
-        const struct { std::uint8_t pct; std::uint16_t dim_s, off_s; } cfgs[] = {{100, 30, 1800}, {10, 0, 0}, {30, 120, 600}};
+        const struct { std::uint8_t pct; std::uint16_t dim_s, off_s; } cfgs[] = {{100, 30, 1800}, {10, 0, 0}, {30, 120, 600},
+                                                                                {55, 119, 65535}, {100, 65535, 65535}, {7, 1, 59999}};   // the last three: what 0x37 can store
         for (const auto &c : cfgs) {
             idle::Config cfg = saved;
             cfg.brightness = c.pct; cfg.dim_after_s = c.dim_s; cfg.off_after_s = c.off_s;

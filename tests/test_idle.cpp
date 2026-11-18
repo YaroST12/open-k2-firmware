@@ -67,6 +67,16 @@ static void test_dim_never_brighter_than_the_brightness() {
     CHECK_EQ(m.tick(quiet(60000)).brightness, 20);
 }
 
+// The Display page changes the brightness while Active: the very next tick carries it (the glue applies it each pass).
+static void test_brightness_change_applies_at_once() {
+    idle::Machine m;
+    CHECK_EQ(m.tick(quiet(0)).brightness, 100);
+    idle::Config c = m.config();
+    c.brightness = 40;
+    m.set_config(c);
+    CHECK_EQ(m.tick(quiet(1000)).brightness, 40);
+}
+
 static void test_zero_means_never() {
     idle::Machine m;
     idle::Config c = m.config();
@@ -495,6 +505,7 @@ int main() {
     test_defaults_dim_then_off();
     test_outputs_per_state();
     test_dim_never_brighter_than_the_brightness();
+    test_brightness_change_applies_at_once();
     test_zero_means_never();
     test_off_before_dim_goes_straight_to_off();
     test_press_in_active_is_delivered_and_restarts_the_timer();
