@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
-// The idle machine: when the K2 sits unattended the screen dims, then turns off, and (while off) the core clock may drop.
+// The idle machine: when the K2 sits unattended the screen dims, then turns off, and (while dim or off) the core clock may drop.
 // Pure timing and activity rules, no hardware; the glue that applies the outputs (backlight, panel, HCLK divider) and feeds the
 // inputs is src/core/idle_hw.cpp, the persisted settings are in src/ui/uiprefs.cpp.
 //
@@ -25,7 +25,8 @@
 // force() pins the state for the bench (the remote "power" command): Active holds the screen awake, Dim and Off pin it down
 // until a press (which wakes and releases the pin) or force(Auto). Auto restarts the idle time.
 //
-// low_clock_ok tells the glue the HCLK divider may be raised: only in Off, with no PD contract being negotiated and nothing busy.
+// low_clock_ok tells the glue the HCLK divider may be raised: in Dim or Off, with no PD contract being negotiated and nothing
+// busy. Any activity above returns to Active in the same tick, so the clock is full again before the work is handled.
 //
 // All times are the 32-bit millisecond clock. The machine adds each tick's elapsed time to a saturating idle counter, so the
 // clock wrap is harmless and an idle period longer than the wrap never reads as activity.

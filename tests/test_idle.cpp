@@ -49,7 +49,7 @@ static void test_outputs_per_state() {
     CHECK_EQ(o.brightness, 30);        // dim: the content stays, only the backlight drops
     CHECK_EQ(o.panel_on, true);
     CHECK_EQ(o.paint, true);
-    CHECK_EQ(o.low_clock_ok, false);
+    CHECK_EQ(o.low_clock_ok, true);    // and nobody is looking: the core runs at the low clock, as in Off
     o = m.tick(quiet(300000));
     CHECK_EQ(o.brightness, 0);
     CHECK_EQ(o.panel_on, false);
@@ -374,7 +374,7 @@ static void test_attached_stops_at_dim() {
     CHECK_EQ(o.state == idle::State::Dim, true);     // the off timeout passed: still Dim with a source attached
     CHECK_EQ(o.panel_on, true);
     CHECK_EQ(o.paint, true);
-    CHECK_EQ(o.low_clock_ok, false);
+    CHECK_EQ(o.low_clock_ok, true);
     CHECK_EQ(m.tick(attached(3600000)).state == idle::State::Dim, true);
     CHECK_EQ(m.tick(attached(86400000)).state == idle::State::Dim, true);
 }
@@ -459,7 +459,53 @@ static void test_low_clock_gate() {
     m.force(idle::Force::Dim);
     in.busy = false;
     in.now_ms = 300080;
-    CHECK_EQ(m.tick(in).low_clock_ok, false);        // never below Off
+    CHECK_EQ(m.tick(in).low_clock_ok, true);         // Dim takes the same low clock
+    in.pd_negotiating = true;
+    in.now_ms = 300100;
+    CHECK_EQ(m.tick(in).low_clock_ok, false);        // with the same blocker
+    m.force(idle::Force::Active);
+    in.pd_negotiating = false;
+    in.now_ms = 300120;
+    CHECK_EQ(m.tick(in).low_clock_ok, false);        // never in Active
+}
+
+static void test_dim_low_clock_ends_with_any_activity_in_the_same_tick() {
+    idle::Machine m;
+    m.tick(attached(0));
+    CHECK_EQ(m.tick(attached(60000)).low_clock_ok, true);
+    idle::Inputs in = attached(60020);
+    in.pd_event = true;
+    idle::Output o = m.tick(in);
+    CHECK_EQ(o.state == idle::State::Active, true);
+    CHECK_EQ(o.low_clock_ok, false);                 // full clock before the PD work is handled
+    CHECK_EQ(m.tick(attached(120020)).low_clock_ok, true);
+    in = attached(120040);
+    in.ibus_ma = 60;
+    CHECK_EQ(m.tick(in).low_clock_ok, false);
+    CHECK_EQ(m.tick(attached(180040)).low_clock_ok, true);
+    in = attached(180060);
+    in.vbus_mv = 9000;
+    o = m.tick(in);
+    CHECK_EQ(o.state == idle::State::Active, true);
+    CHECK_EQ(o.low_clock_ok, false);
+    m.tick(attached(240060));
+    CHECK_EQ(m.tick(attached(300060)).low_clock_ok, true);
+    CHECK_EQ(m.press(300080), false);                // the wake press
+    CHECK_EQ(m.tick(attached(300100)).low_clock_ok, false);
+}
+
+// A remote 0 % is a runtime level: the machine honours it (the saved copy is idle_cfg's business, tests/test_idle_cfg.cpp).
+static void test_zero_brightness_is_honoured_at_runtime() {
+    idle::Machine m;
+    idle::Config c = m.config();
+    c.brightness = 0;
+    m.set_config(c);
+    CHECK_EQ(m.tick(quiet(0)).brightness, 0);
+    CHECK_EQ(m.tick(quiet(60000)).brightness, 0);    // dim never above the brightness
+    c.brightness = 50;
+    c.dim_brightness = 0;
+    m.set_config(c);
+    CHECK_EQ(m.tick(quiet(60020)).brightness, 0);
 }
 
 static void test_low_clock_is_off_during_a_forced_off_with_a_negotiation() {
@@ -533,6 +579,8 @@ int main() {
     test_attached_force_off_and_off_before_dim();
     test_low_clock_gate();
     test_low_clock_is_off_during_a_forced_off_with_a_negotiation();
+    test_dim_low_clock_ends_with_any_activity_in_the_same_tick();
+    test_zero_brightness_is_honoured_at_runtime();
     test_idle_seconds_and_config_change();
     test_clock_wrap_and_long_gaps();
     return test_report("test_idle");

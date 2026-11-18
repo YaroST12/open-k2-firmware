@@ -100,9 +100,17 @@ void force_div(std::uint8_t n) {
     g_force_div = n;
 }
 
-bool press(std::uint32_t now) { return g_m.press(now); }
+// A button wakes the machine and the clock goes up here, not at the next 20 ms service pass.
+bool press(std::uint32_t now) {
+    const bool deliver = g_m.press(now);
+    full_clock();
+    return deliver;
+}
 
-void touch(std::uint32_t now) { g_m.touch(now); }
+void touch(std::uint32_t now) {
+    g_m.touch(now);
+    full_clock();
+}
 
 void request(bool state_changing, std::uint32_t now) {
     if (!state_changing) return;
@@ -181,10 +189,12 @@ void service(Ui& ui, bool boot_screen, std::uint32_t now) {
     if (!g_asleep && !g_waking && !g_wait_paint && !ui.loop_probe_busy() && lcd::brightness() != o.brightness)
         lcd::set_brightness(o.brightness);
 
-    // The clock: the forced divider wins, else the low clock while the machine allows it and nothing needs timing.
+    // The clock: the forced divider wins, else the low clock while the machine allows it and nothing needs timing. Off waits for
+    // the panel to be asleep; Dim waits for the wake repaint to finish.
     std::uint8_t want = 1;
     if (g_force_div != 0) want = g_force_div;
-    else if (o.low_clock_ok && g_asleep && !g_waking && blocked == 0) want = kLowClockDiv;
+    else if (o.low_clock_ok && !g_waking && !g_wait_paint && (o.state != idle::State::Off || g_asleep) && blocked == 0)
+        want = kLowClockDiv;
     if (want > 1 && (blocked & ~kBlockHold) != 0) want = 1;   // a DWT user runs: never low, even forced
     apply_div(want);
 

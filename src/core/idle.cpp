@@ -113,7 +113,7 @@ Output Machine::tick(const Inputs& in) {
     case State::Dim: o.brightness = cfg_.dim_brightness < cfg_.brightness ? cfg_.dim_brightness : cfg_.brightness; break;
     case State::Off: o.brightness = 0; break;
     }
-    o.low_clock_ok = state_ == State::Off && !in.busy && !in.pd_negotiating;
+    o.low_clock_ok = state_ != State::Active && !in.busy && !in.pd_negotiating;
     return o;
 }
 

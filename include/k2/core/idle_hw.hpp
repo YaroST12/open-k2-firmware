@@ -5,10 +5,11 @@
 // 20 ms before the UI tick; the button path calls press() / touch(); the remote dispatcher calls request() before each
 // command runs. The settings are idle::Config; the bench levers (force, forced divider, wake-on-remote) are RAM only.
 //
-// Low clock: while the machine reports Off with nothing attached, no contract and nothing busy, the core drops to
-// 240 MHz / kLowClockDiv. It goes back to full speed on the first sign of life: a PD message or VBUS move (checked every
-// pass by pass_guard()), any state-changing remote command or shell input, a button, or the machine leaving Off. It is also
-// refused (and reverted) while a DWT-cycle user runs (the D+/D- engines hardcode 240 cycles per microsecond), see Block.
+// Low clock: while the machine reports Dim or Off with no contract being negotiated and nothing busy, the core drops to
+// 240 MHz / kLowClockDiv (Off only once the panel sleeps, Dim only once the wake repaint is done). It goes back to full speed
+// on the first sign of life: a PD message or VBUS move (checked every pass by pass_guard()), any state-changing remote command
+// or shell input, a button (press() and touch() raise it at once), or the machine returning to Active. It is also refused (and
+// reverted) while a DWT-cycle user runs (the D+/D- engines hardcode 240 cycles per microsecond), see Block.
 #pragma once
 
 #include <cstdint>
