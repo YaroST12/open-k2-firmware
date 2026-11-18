@@ -518,7 +518,7 @@ It is drawn by the page today (`paint_detail`). It belongs in the kit beside Ale
 | Scroll | by pixels, whole rows only, up to 8 rows on screen |
 | Follow (Running) | the window's bottom sits on the row of the step in flight (`anchor_bottom`). PLUS and MINUS scroll by hand; the follow resumes after 5 s or on the next step |
 | Repaints | a row when its shape changes; single cells when only verdicts change; the running outline alone (`sync_dots`) |
-| Seen in | `flight_step15.png`, `flight_deep_scrolled.png`, `results_end.png`, `results_scrolled2.png`, `fold_results.png` (merged PPS chip), `runs/pd-block/png` (the PD block, before / after) |
+| Seen in | `flight_step15.png`, `flight_deep_scrolled.png`, `results_end.png`, `results_scrolled2.png`, `fold_results.png` (merged PPS chip) |
 
 ### 5.11 ProgressBar: `kit::ProgressBar`
 
