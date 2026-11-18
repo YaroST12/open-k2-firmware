@@ -11,6 +11,7 @@ import json
 import sys
 
 import oem_watts
+import pd_version
 import report_card
 import step_label
 
@@ -158,7 +159,9 @@ def summarize(r):
     ident = r.get("cable_identity") or {}
     spoof = f" · SPOOF: {ident.get('run_name') or ident['run']}" if ident.get("run") not in (None, "off") else \
         " · SPOOF ON" if ev.get("spoof_on") else ""
-    out = [f"Run {r['run_id']} · {ev.get('wire_revision', '?')} · {ev.get('pdo_count', '?')} PDOs · cable {cable_txt}" + spoof,
+    ver = pd_version.from_evidence(ev)   # the offer's version, or the Revision answer when it is as high (see pd_version.py)
+    ver_txt = pd_version.label(ver) + (f" ({pd_version.conflict_text(ver)})" if ver and ver[3] else "")
+    out = [f"Run {r['run_id']} · " + (f"{ver_txt} · " if ver else "") + f"{ev.get('pdo_count', '?')} PDOs · cable {cable_txt}" + spoof,
            f"{n['pass']} pass" + (f", {caution} caution" if caution else "") + f", {n['fail']} fail, {n['skip']} skip"
            + (f", {noted} not asked (Light run)" if noted else "")
            + f" · {r['state']}"
