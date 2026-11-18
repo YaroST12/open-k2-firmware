@@ -25,6 +25,30 @@ function fmt(rows) {
 }
 const lines = (steps, opts) => fmt(CtGrid.layout(steps, opts));
 
+// ---- the PD version: the golden vectors shared with the firmware and tools/pd_version.py -----------------------------------
+test("PD versions match tests/fixtures/pd_versions.txt", () => {
+  let n = 0;
+  for (const line of readFileSync(path.join(root, "tests/fixtures/pd_versions.txt"), "utf8").split("\n")) {
+    if (!line.trim() || line.trim().startsWith("#")) continue;
+    const [wire, rmdo, offer, want, long] = line.split("|").map((f) => f.trim());
+    const ev = { wire_revision_code: +wire, source_rmdo: rmdo === "-" ? null : { revision: rmdo },
+                 advertised: { pps: offer.includes("p"), epr_table: offer.includes("e"), spr_avs: offer.includes("s") } };
+    const v = CtGrid.pdVersion(ev);
+    assert.equal(v.label || "-", want, line);
+    assert.equal(v.conflict || "-", long, line);
+    n++;
+  }
+  assert.ok(n >= 20);
+});
+test("PD version line: the answer, the marked proof with both said, nothing without PD", () => {
+  const ev = (rmdo, adv) => ({ wire_revision_code: 2, source_rmdo: rmdo ? { revision: rmdo } : null, advertised: adv });
+  assert.equal(CtGrid.pdVersionText(ev(null, { pps: true })), "PD3.0");
+  assert.equal(CtGrid.pdVersionText(ev("3.1", { spr_avs: true })), "PD3.2* (reports Revision 3.1, offers SPR AVS (3.2))");
+  assert.equal(CtGrid.pdVersionText(ev("3.2", { spr_avs: true })), "PD3.2");
+  assert.equal(CtGrid.pdVersionText({ wire_revision_code: 0, source_rmdo: null, advertised: {} }), "");
+  assert.equal(CtGrid.pdVersionText(null), "");
+});
+
 // ---- step labels: the golden vectors shared with the firmware ----------------------------------------------------------
 test("step labels match tests/fixtures/step_labels.txt", () => {
   const WIRE = { pd2: "pd2-fixed", pd3: "pd3x-fixed", epr: "epr-fixed", pd30rev: "pd3.0-revision", pd31rev: "pd3.1-revision",

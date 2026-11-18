@@ -550,7 +550,31 @@ var CtGrid = (function () {
     });
   }
 
-  return { milli: milli, isHunt: isHunt, isSweep: isSweep, isFullCurrent: isFullCurrent, protocolWord: protocolWord, pdoMa: pdoMa,
+  // ---- the PD version of a run (tools/pd_version.py, include/k2/chargertest/pd_version.hpp; golden: tests/fixtures/pd_versions.txt) ----
+  // The offer proves a version (SPR AVS 3.2, EPR 3.1, PPS 3.0, a 3.x header 3.0, a 2.0 header 2.0); a Revision answer wins when it is as
+  // high, and Revision is a 3.1 message itself. An answer under the proof shows the proof marked "*" and the conflict says both.
+  function pdVersion(ev) {
+    var adv = (ev && ev.advertised) || {}, wire = (ev && ev.wire_revision_code) || 0;
+    var code = function (m, n) { return m * 16 + (n & 15); };
+    var proof = 0, basis = "";
+    if (adv.spr_avs) { proof = code(3, 2); basis = "offers SPR AVS"; }
+    else if (adv.epr_table) { proof = code(3, 1); basis = "offers EPR"; }
+    else if (adv.pps) proof = code(3, 0);
+    else if (wire === 2) proof = code(3, 0);
+    else if (wire === 1) proof = code(2, 0);
+    var ans = ev && ev.source_rmdo ? ev.source_rmdo.revision.split(".").map(Number) : null;
+    if (ans && proof < code(3, 1)) { proof = code(3, 1); basis = ""; }
+    if (ans && code(ans[0], ans[1]) >= proof) return { major: ans[0], minor: ans[1], mark: false, label: "PD" + ans[0] + "." + ans[1], conflict: "" };
+    if (!proof) return { major: 0, minor: 0, mark: false, label: "", conflict: "" };
+    var v = { major: proof >> 4, minor: proof & 15, mark: !!ans };
+    v.label = "PD" + v.major + "." + v.minor + (v.mark ? "*" : "");
+    v.conflict = ans ? "reports Revision " + ans[0] + "." + ans[1] + ", " + (basis ? basis + " (" + v.major + "." + v.minor + ")" : "Revision is a PD 3.1 message") : "";
+    return v;
+  }
+  // The run's version line: "PD3.0", or "PD3.2* (reports Revision 3.1, offers SPR AVS (3.2))"; empty without PD.
+  function pdVersionText(ev) { var v = pdVersion(ev); return v.label + (v.conflict ? " (" + v.conflict + ")" : ""); }
+
+  return { milli: milli, pdVersion: pdVersion, pdVersionText: pdVersionText, isHunt: isHunt, isSweep: isSweep, isFullCurrent: isFullCurrent, protocolWord: protocolWord, pdoMa: pdoMa,
            ampsMa: ampsMa, params: params, label: label, stepLabel: label, pdoRange: pdoRange, rangeText: rangeText,
            ufcsLevel: ufcsLevel, skipTag: skipTag, layout: layout, specLines: specLines, NAMES: NAMES,
            OEM_LEVELS: OEM_LEVELS, oemWatts: oemWatts, oemLabel: oemLabel, oemClaim: oemClaim, voocLevels: voocLevels, stepMw: stepMw,
