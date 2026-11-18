@@ -81,6 +81,7 @@ struct Crm {
                               CTRLSTS_IWDGRSTF = 1u << 29, CTRLSTS_WWDGRSTF = 1u << 30,
                               CTRLSTS_LPWRRSTF = 1u << 31;
     static constexpr uint32_t APB1EN_SPI3 = 1u << 15, APB1EN_USB = 1u << 23;
+    static constexpr uint32_t APB1RST_USB = 1u << 23;   // same position as the USB clock-enable bit
 };
 static_assert(offsetof(Crm, MISC1) == 0x30 && offsetof(Crm, MISC2) == 0x54);
 inline Crm& crm() { return at<Crm>(0x40021000); }
@@ -226,5 +227,8 @@ constexpr uint16_t kUsbFnrFrame = 0x7FF, kUsbFnrRxdm = 1u << 14, kUsbFnrRxdp = 1
 // The core's configuration word: bit 1 set = the internal D+ 1.5k pull-up off (TinyUSB's connect / disconnect write it).
 inline R32& usb_cfg() { return at<R32>(0x40005C00 + 0x60); }
 constexpr uint32_t kUsbCfgPullupOff = 1u << 1;
+// Control register: FRES (bit 0) holds the core in reset, PDWN (bit 1) powers the analog PHY down; both set is its reset value.
+inline R16& usb_cntr() { return at<R16>(0x40005C00 + 0x40); }
+constexpr uint16_t kUsbCntrFres = 1u << 0, kUsbCntrPdwn = 1u << 1;
 
 }  // namespace k2::reg

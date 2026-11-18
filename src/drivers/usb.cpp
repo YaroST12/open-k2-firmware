@@ -72,38 +72,42 @@ K2_HOT void flush() {
 #endif
 }
 
-namespace {
-// PA11/PA12 as the bootloader handed them over (mode nibble and output latch), for release_detached().
-struct LinesFound {
-    bool held = false;
-    std::uint32_t dm_mode = 0, dp_mode = 0;
-    bool dm_odr = false, dp_odr = false;
-};
-LinesFound g_found;
-
-std::uint32_t pin_mode(reg::Pin p) {
-    const auto& g = reg::gpio(p.port);
-    return ((p.n < 8 ? g.CRL : g.CRH) >> ((p.n & 7u) * 4u)) & 0xFu;
-}
-bool pin_odr(reg::Pin p) { return (reg::gpio(p.port).ODR & p.mask()) != 0; }
-}  // namespace
-
 void hold_detached() {
     reg::crm().APB2EN |= reg::Crm::APB2EN_GPIOA;
-    g_found = {true, pin_mode(pins::usb_dm), pin_mode(pins::usb_dp), pin_odr(pins::usb_dm), pin_odr(pins::usb_dp)};
     pins::usb_dm.clear();   // latch low first: the pins never drive high on the way to push-pull
     pins::usb_dp.clear();
     pins::usb_dm.mode(reg::Mode::OutPp50);
     pins::usb_dp.mode(reg::Mode::OutPp50);
 }
 
-void release_detached() {
-    if (!g_found.held || g_started) return;
-    pins::usb_dm.write(g_found.dm_odr);
-    pins::usb_dp.write(g_found.dp_odr);
-    pins::usb_dm.mode(reg::Mode(g_found.dm_mode));
-    pins::usb_dp.mode(reg::Mode(g_found.dp_mode));
-    g_found.held = false;
+void park() {
+    using namespace reg;
+    if (g_started) return;
+    Crm& c = crm();
+
+    // 1. NVIC: no USB interrupt may fire into a stack that was never started (USB_HP / USB_LP_CAN1_RX0).
+    nvic().ICER[0] = (1u << 19) | (1u << 20);
+    nvic().ICPR[0] = (1u << 19) | (1u << 20);
+
+    // 2. Core: with its clock on, pulse the peripheral reset (whatever the bootloader left running), then write the
+    //    pull-up off bit and power the PHY down while the clock still lets the writes land; only then gate the clock.
+    c.APB1EN |= Crm::APB1EN_USB;
+    c.APB1RST |= Crm::APB1RST_USB;
+    c.APB1RST &= ~Crm::APB1RST_USB;
+    usb_cfg() |= kUsbCfgPullupOff;
+    usb_cntr() = kUsbCntrFres | kUsbCntrPdwn;
+    usb_istr() = 0;
+    const std::uint32_t cfg = usb_cfg();
+    c.APB1EN &= ~Crm::APB1EN_USB;
+
+    // 3. Pins: D+ and D- stay driven low (SE0), as hold_detached() has had them since boot entry. The line reads high when
+    //    left undriven (a pull-up outside the MCU, hardware 2026-11-12), and a host that sees D+ high attaches to a device
+    //    with nothing behind it: its descriptor reads fail and it power-cycles the port in a loop. SE0 is what an empty port looks like.
+    pins::usb_dm.clear();
+    pins::usb_dp.clear();
+    pins::usb_dm.mode(Mode::OutPp50);
+    pins::usb_dp.mode(Mode::OutPp50);
+    K2LOG("[USB] off: core down, no pull-up, bus held SE0 cfg=%x\n", unsigned(cfg));
 }
 
 // SE0 before the pull-up appears: long enough for any host to register a clean disconnect, so the

@@ -63,8 +63,8 @@ checked against the code or hardware when this was written.
    `systick::init`, `i2c::init`, optional `fusb302::self_power_early`, `boottrace::init`, `lcd::init`,
    buttons, `dpdm::init`, `load::init`, `fault::init`, `board::init`, `fs::init` (mount or format the
    littlefs volume; a 145-block volume moves into the ring layout here, once), `usbcfg::init`, `usb::init` only when a link mode is enabled (USB is off by
-   default; it runs last, just before the loop, and with the link off `usb::release_detached` returns PA11/PA12
-   as the bootloader left them), `msc::init` (drive), `shell_hw::init`, `http_server::init` (Net, K2_NET=1 builds), a 50 ms delay, the `[BOOT]` /
+   default; it runs last, just before the loop, and with the link off `usb::park` resets and gates the core the
+   bootloader left, powers its PHY down and keeps PA11/PA12 driven low: the host sees an empty port), `msc::init` (drive), `shell_hw::init`, `http_server::init` (Net, K2_NET=1 builds), a 50 ms delay, the `[BOOT]` /
    `[RST]` lines, `fusb302::init`, `boottrace::report_previous`, `session::init`,
    `uiprefs::stored` + `fs::wipe_legacy` + `fs::grow` (scans the rings), `bbpersist::init`, `adc::log_raw`, `fastcharge::init`, `Ui::init`,
    accelerometer init, then the LCD idle hook and the loop. The PD half of this (the Rd decision of a reset, the
