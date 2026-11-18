@@ -35,6 +35,11 @@ struct BitR {
         return v;
     }
     std::uint32_t get32() { const std::uint32_t lo = get(16); return lo | get(16) << 16; }
+    // Steps over a field of any width (get() holds at most 32 bits; the SVOOC part is 37).
+    void skip(unsigned n) {
+        if (pos + n > nbits) { bad = true; pos = nbits; return; }
+        pos += n;
+    }
 };
 
 // The recorded error at setpoint index `s` of the span (false = no point there: an early stop or a gap).
@@ -124,24 +129,24 @@ MiSection read_mi(std::span<const std::uint8_t> blob) {
     BitR r{blob.data() + 2, blob_bits(blob)};
     const bool has_spec = r.get(1), has_sv = r.get(1);
     const unsigned mask = r.get(kMaxRanges);
-    if (has_sv) r.get(kSvoocBits);
+    if (has_sv) r.skip(kSvoocBits);
     if (has_spec) {
-        r.get(3 + 6 + 1);
+        r.skip(3 + 6 + 1);
         const unsigned cells = r.get(5);
         for (unsigned i = 0; i < cells && !r.bad; ++i) {
             const unsigned v = r.get(3);
-            if (v == static_cast<unsigned>(pdspec::Verdict::Skip)) { r.get(4); continue; }
+            if (v == static_cast<unsigned>(pdspec::Verdict::Skip)) { r.skip(4); continue; }
             if (v == static_cast<unsigned>(pdspec::Verdict::Pending)) continue;
-            r.get(13);
-            if (v == static_cast<unsigned>(pdspec::Verdict::Fail)) r.get(24);
+            r.skip(13);
+            if (v == static_cast<unsigned>(pdspec::Verdict::Fail)) r.skip(24);
         }
     }
     for (unsigned i = 0; i < kMaxRanges && !r.bad; ++i) {
         if (!(mask >> i & 1u)) continue;
-        r.get(9);
+        r.skip(9);
         const unsigned n = r.get(kSpanBits);
-        r.get(3);
-        for (unsigned k = 0, nb = bucket_count(n); k < nb && !r.bad; ++k) r.get(kBucketBits);
+        r.skip(3);
+        r.skip(bucket_count(n) * kBucketBits);
     }
     if (r.bad || r.nbits - r.pos < kMiHeadBits) return {};
     m.chain = std::uint8_t(r.get(5));
