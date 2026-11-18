@@ -2209,6 +2209,21 @@ test("dashboard: the Charger test page starts only from its confirmation, throug
   assert.match(cancel, /k2\.chargerTestCancel\(\)/);
 });
 
+// ---- power (CMD_POWER 0x37) -----------------------------------------------------------------
+
+// The same 18-byte vector as tests/test_remote_proto.cpp test_power and tests/test_k2_remote_power.py.
+test("power: decode the 18-byte payload and build the set request", () => {
+  const r = P.decodePower(Uint8Array.from([1, 2, 30, 100, 30, 0x3C, 0x00, 0x2C, 0x01, 4, 0, 0x21, 1, 1, 0x04, 0x03, 0x02, 0x01]));
+  assert.deepEqual([r.state, r.force, r.panel], ["dim", "dim", "asleep"]);
+  assert.deepEqual([r.brightness_now, r.brightness, r.dim_brightness, r.dim_after_s, r.off_after_s], [30, 100, 30, 60, 300]);
+  assert.deepEqual([r.hclk_div, r.hclk_mhz, r.force_div, r.idle_s], [4, 60, 0, 0x01020304]);
+  assert.deepEqual(r.blocked_by, ["load", "hold"]);
+  assert.deepEqual(P.powerSetBytes({}), []);
+  assert.deepEqual(P.powerSetBytes({ brightness: 70, off_after: 0x0E10, force: "off", hclk: 8 }), [0x39, 70, 0x10, 0x0E, 3, 8]);
+  assert.deepEqual(P.powerSetBytes({ brightness: 10, dim_brightness: 20, dim_after: 30, off_after: 600, force: "auto", hclk: "auto", wake: false }),
+                   [0x7F, 10, 20, 0x1E, 0x00, 0x58, 0x02, 0, 0, 0]);
+});
+
 // ---- memory (CMD_MEMORY 0x36) ---------------------------------------------------------------
 
 // The same 47-byte vector as tests/test_remote_proto.cpp test_memory and tests/test_k2_remote_memory.py.

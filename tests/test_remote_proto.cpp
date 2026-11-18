@@ -1917,6 +1917,62 @@ static void test_memory() {
     check_header(r, 0x36, 2, Status::BadLength, 0);
 }
 
+// POWER (0x37): no payload reads the 18-byte state; a mask byte plus its fields changes it and replies with the state after.
+static void test_power() {
+    Fake f; Frame r;
+    CHECK_EQ(run(f, request(0x37, 1, {}), r), 1);
+    check_header(r, 0x37, 1, Status::Ok, 18);
+    check_bytes(r, kRspHeader, {
+        1, 2, 30, 100, 30,            // state dim, force dim, bright_now 30, bright 100, dim_bright 30
+        0x3C, 0x00, 0x2C, 0x01,       // dim_after 60, off_after 300
+        4, 0, 0x21, 1, 1,             // hclk_div 4, force_div 0, blocked 0x21, panel asleep, wake_remote
+        0x04, 0x03, 0x02, 0x01});     // idle_s
+    CHECK_EQ(f.power_sets, 0);
+    // set: brightness + off_after + force + force_div, fields in mask order
+    CHECK_EQ(run(f, request(0x37, 2, {0x01 | 0x08 | 0x10 | 0x20, 70, 0x10, 0x0E, 3, 8}), r), 1);
+    check_header(r, 0x37, 2, Status::Ok, 18);
+    CHECK_EQ(f.power_sets, 1);
+    CHECK_EQ(int(f.last_power_set.mask), 0x39);
+    CHECK_EQ(int(f.last_power_set.bright), 70);
+    CHECK_EQ(int(f.last_power_set.off_after_s), 0x0E10);
+    CHECK_EQ(int(f.last_power_set.force), 3);
+    CHECK_EQ(int(f.last_power_set.force_div), 8);
+    // all fields at once
+    CHECK_EQ(run(f, request(0x37, 3, {0x7F, 10, 20, 0x1E, 0x00, 0x58, 0x02, 0, 0, 0}), r), 1);
+    check_header(r, 0x37, 3, Status::Ok, 18);
+    CHECK_EQ(int(f.last_power_set.dim_bright), 20);
+    CHECK_EQ(int(f.last_power_set.dim_after_s), 30);
+    CHECK_EQ(int(f.last_power_set.off_after_s), 600);
+    CHECK_EQ(int(f.last_power_set.wake_remote), 0);
+    // refused: length does not match the mask, unknown mask bit, value out of range
+    const int before = f.power_sets;
+    CHECK_EQ(run(f, request(0x37, 4, {0x01}), r), 1);
+    check_header(r, 0x37, 4, Status::BadLength, 0);
+    CHECK_EQ(run(f, request(0x37, 5, {0x01, 70, 70}), r), 1);
+    check_header(r, 0x37, 5, Status::BadLength, 0);
+    CHECK_EQ(run(f, request(0x37, 6, {0x80}), r), 1);
+    check_header(r, 0x37, 6, Status::BadLength, 0);
+    CHECK_EQ(run(f, request(0x37, 7, {0x01, 101}), r), 1);
+    check_header(r, 0x37, 7, Status::BadArg, 0);
+    CHECK_EQ(run(f, request(0x37, 8, {0x10, 4}), r), 1);
+    check_header(r, 0x37, 8, Status::BadArg, 0);
+    CHECK_EQ(run(f, request(0x37, 9, {0x20, 3}), r), 1);
+    check_header(r, 0x37, 9, Status::BadArg, 0);
+    CHECK_EQ(run(f, request(0x37, 10, {0x40, 2}), r), 1);
+    check_header(r, 0x37, 10, Status::BadArg, 0);
+    CHECK_EQ(f.power_sets, before);
+    // the idle machine hears about every request: reads are quiet, changes and unlisted commands wake
+    Fake g;
+    CHECK_EQ(run(g, request(0x37, 1, {}), r), 1);
+    CHECK_EQ(run(g, request(0x36, 2, {}), r), 1);
+    CHECK_EQ(g.seen_quiet, 2); CHECK_EQ(g.seen_wake, 0);
+    CHECK_EQ(run(g, request(0x37, 3, {0x01, 50}), r), 1);
+    CHECK_EQ(run(g, request(0x02, 4, {2}), r), 1);   // a button press
+    CHECK_EQ(g.seen_quiet, 2); CHECK_EQ(g.seen_wake, 2);
+    CHECK(!wakes_screen(Cmd::Power, 0)); CHECK(wakes_screen(Cmd::Power, 2));
+    CHECK(!wakes_screen(Cmd::Ping, 0)); CHECK(wakes_screen(Cmd::Screenshot, 0)); CHECK(wakes_screen(Cmd::Button, 1));
+}
+
 static void test_boot_info() {
     Fake f; Frame r;
     f.boot_line.assign(100, 'x');
@@ -3819,6 +3875,7 @@ int main() {
     test_factory_wipe();
     test_flash_dump();
     test_memory();
+    test_power();
     test_boot_info();
     test_ufcs();
     test_pd_stress();

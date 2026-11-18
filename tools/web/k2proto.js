@@ -12,7 +12,7 @@ var K2Proto = (function () {
   var FACTORY_WIPE_MAGIC = [0x57, 0x49, 0x50, 0x45];   // "WIPE", u32 0x45504957 little endian (kFactoryWipeMagic)
   var CMD = { PING: 1, BUTTON: 2, GET_STATE: 3, GET_PDOS: 4, GET_EMARKER: 5, ACTION: 6, SET_PAGE: 7,
               REBOOT: 8, LOG: 9, SCREENSHOT: 10, CHARGER_TEST: 0x0B, CHARGER_UNITS: 0x0C, CHARGER_CABLE: 0x0D, CHARGER_SWEEP: 0x0F, DEBUG_PDOS: 0x20, ADC_RAW: 0x21, RIPPLE: 0x22, DEBUG_PD_MSG: 0x23,
-              GET_IDENTITY: 0x24, DEBUG_LINK: 0x25, DEBUG_CC_PROBE: 0x2A, DFU_ENTER: 0x30, DEBUG_FAULT: 0x31, FC: 0x32, FACTORY_WIPE: 0x33, BOOT_INFO: 0x35, MEMORY: 0x36, CABLE_R: 0x50, LAB: 0x51, UFCS: 0x52, QRTEST: 0x53, CHARGER_AVS_SWEEP: 0x54, PD_STRESS: 0x55, LOOP_PROBE: 0x57, PD_SPEC: 0x5A, CHARGER_LEVEL: 0x5B, BATTERY: 0x58, CHARGER_SVOOC_CAP: 0x59, EM_LIB: 0x61, CARDS: 0x62, TWIN: 0x63, BLACK_BOX: 0x70, TRANS_CAP: 0x71, DIAGNOSE: 0x72,
+              GET_IDENTITY: 0x24, DEBUG_LINK: 0x25, DEBUG_CC_PROBE: 0x2A, DFU_ENTER: 0x30, DEBUG_FAULT: 0x31, FC: 0x32, FACTORY_WIPE: 0x33, BOOT_INFO: 0x35, MEMORY: 0x36, POWER: 0x37, CABLE_R: 0x50, LAB: 0x51, UFCS: 0x52, QRTEST: 0x53, CHARGER_AVS_SWEEP: 0x54, PD_STRESS: 0x55, LOOP_PROBE: 0x57, PD_SPEC: 0x5A, CHARGER_LEVEL: 0x5B, BATTERY: 0x58, CHARGER_SVOOC_CAP: 0x59, EM_LIB: 0x61, CARDS: 0x62, TWIN: 0x63, BLACK_BOX: 0x70, TRANS_CAP: 0x71, DIAGNOSE: 0x72,
               IDENTIFY_DEVICE: 0x40, PD_REQUEST: 0x41, PD_RESET: 0x42, PD_TRIGGER_STATUS: 0x43, PD_RELEASE: 0x44, PD_MATCH: 0x45, PD_ATTACH: 0x48, PD_HANDBACK: 0x49, APPLE_READ: 0x4A, STOP: 0x4B, LEASE: 0x4C, OPPO_PROBE: 0x4D,
               SCREEN_DATA: 0x8A, RIPPLE_DATA: 0x8B };
   var STATUS = { OK: 0, UNKNOWN_CMD: 1, BAD_LENGTH: 2, BAD_ARG: 3, BUSY: 4, NEED_CONFIRM: 5 };
@@ -597,6 +597,31 @@ var K2Proto = (function () {
     m.level = memoryLevel(m);
     return m;
   }
+  // POWER (0x37): state, force, bright_now, bright, dim_bright (u8), dim_after_s, off_after_s (u16), hclk_div, force_div, blocked, panel,
+  // wake_remote (u8), idle_s (u32), little endian. A set request is a mask byte plus the present fields in mask order (see powerSetBytes).
+  var POWER_STATES = ["active", "dim", "off"], POWER_FORCES = ["auto", "active", "dim", "off"], POWER_PANELS = ["awake", "asleep", "waking"];
+  var POWER_BLOCKS = [["load", 1], ["uart2", 2], ["sniff", 4], ["monitor", 8], ["fc", 16], ["hold", 32]];   // k2::idle_hw::Block bits
+  function decodePower(p) {
+    need(p, 18, "power");
+    var v = dv(p);
+    return { state: name(POWER_STATES, p[0]), force: name(POWER_FORCES, p[1]), brightness_now: p[2], brightness: p[3], dim_brightness: p[4],
+             dim_after_s: v.getUint16(5, true), off_after_s: v.getUint16(7, true),
+             hclk_div: p[9], hclk_mhz: p[9] ? Math.floor(240 / p[9]) : 0, force_div: p[10], blocked: p[11],
+             blocked_by: POWER_BLOCKS.filter(function (b) { return p[11] & b[1]; }).map(function (b) { return b[0]; }),
+             panel: name(POWER_PANELS, p[12]), wake_on_remote: !!p[13], idle_s: v.getUint32(14, true) };
+  }
+  // o: { brightness, dim_brightness, dim_after, off_after, force ("auto|active|dim|off"), hclk ("auto" or 1/2/4/8), wake (bool) }; empty = a read.
+  function powerSetBytes(o) {
+    var mask = 0, body = [];
+    if (o.brightness !== undefined) { mask |= 1; body.push(o.brightness); }
+    if (o.dim_brightness !== undefined) { mask |= 2; body.push(o.dim_brightness); }
+    if (o.dim_after !== undefined) { mask |= 4; body.push(o.dim_after & 255, o.dim_after >> 8); }
+    if (o.off_after !== undefined) { mask |= 8; body.push(o.off_after & 255, o.off_after >> 8); }
+    if (o.force !== undefined) { mask |= 16; body.push(POWER_FORCES.indexOf(o.force)); }
+    if (o.hclk !== undefined) { mask |= 32; body.push(o.hclk === "auto" ? 0 : Number(o.hclk)); }
+    if (o.wake !== undefined) { mask |= 64; body.push(o.wake ? 1 : 0); }
+    return mask ? [mask].concat(body) : [];
+  }
   // The rows the K2's Memory page shows, with the same labels, units and levels (k2/core/memstat.hpp row_text / row_level).
   function kb1(b) { var t = Math.floor((b * 10 + 512) / 1024); return Math.floor(t / 10) + "." + (t % 10); }
   function memoryView(m) {
@@ -1144,6 +1169,7 @@ var K2Proto = (function () {
     return decodePdTrigger((await this.link.call(CMD.PD_ATTACH, payload)).payload);
   };
   K2Remote.prototype.memory = async function () { return decodeMemory((await this.link.call(CMD.MEMORY)).payload); };
+  K2Remote.prototype.power = async function (o) { return decodePower((await this.link.call(CMD.POWER, powerSetBytes(o || {}))).payload); };
   K2Remote.prototype.match = async function () { return decodeMatch((await this.link.call(CMD.PD_MATCH)).payload); };
   K2Remote.prototype.pdStatus = async function () { return decodePdTrigger((await this.link.call(CMD.PD_TRIGGER_STATUS)).payload); };
   // op 0 = status, 1 = start, 2 = start with confirmation (a live sink is attached).
@@ -2234,7 +2260,7 @@ var K2Proto = (function () {
     CT_START_FOLLOW_MS: CT_START_FOLLOW_MS, CT_START_POLL_MS: CT_START_POLL_MS,
     decodeChargerCable: decodeChargerCable, decodeChargerSvoocCap: decodeChargerSvoocCap, svoocLines: svoocLines, decodeChargerTestStart: decodeChargerTestStart, ctStartStep: ctStartStep,
     decodeEmarker: decodeEmarker, decodeEmarkerDetail: decodeEmarkerDetail, decodeAdcRaw: decodeAdcRaw,
-    decodeRippleInfo: decodeRippleInfo, decodeIdentity: decodeIdentity, decodePdTrigger: decodePdTrigger, decodeMatch: decodeMatch, decodeMemory: decodeMemory, memoryView: memoryView, MEM_FS_CAUTION_PCT: MEM_FS_CAUTION_PCT, MEM_FS_ERROR_PCT: MEM_FS_ERROR_PCT, decodeStop: decodeStop, decodeLease: decodeLease, decodeIdentifyProgress: decodeIdentifyProgress, PD_ERRS: PD_ERRS,
+    decodeRippleInfo: decodeRippleInfo, decodeIdentity: decodeIdentity, decodePdTrigger: decodePdTrigger, decodeMatch: decodeMatch, decodeMemory: decodeMemory, memoryView: memoryView, decodePower: decodePower, powerSetBytes: powerSetBytes, MEM_FS_CAUTION_PCT: MEM_FS_CAUTION_PCT, MEM_FS_ERROR_PCT: MEM_FS_ERROR_PCT, decodeStop: decodeStop, decodeLease: decodeLease, decodeIdentifyProgress: decodeIdentifyProgress, PD_ERRS: PD_ERRS,
     decodeFc: decodeFc, decodeVoocSummary: decodeVoocSummary, decodeVoocRows: decodeVoocRows, decodeCableR: decodeCableR, parseLogStats: parseLogStats,
     formatAgo: formatAgo, formatUptime: formatUptime, isUnknownCmd: isUnknownCmd, FC_PROTOS: FC_PROTOS, FC_LEVELS: FC_LEVELS, FC_NAMES: FC_NAMES,
     ADC_CHANNELS: ADC_CHANNELS, ADC_SCAN: ADC_SCAN, RIPPLE_SAMPLES: RIPPLE_SAMPLES, RIPPLE_FULL_SCALE: RIPPLE_FULL_SCALE,

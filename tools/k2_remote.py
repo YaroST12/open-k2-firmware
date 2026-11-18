@@ -77,6 +77,7 @@ WIPE_TIMEOUT_S = 30.0     # the sector erases block the firmware for several sec
 CMD_FLASH_DUMP = 0x34     # read-only window into the native device storage
 FLASH_DUMP_BASE, FLASH_DUMP_END, FLASH_DUMP_CHUNK = 0x080E0000, 0x08100000, 48
 CMD_MEMORY = 0x36         # stacks, RAM budget, littlefs and flash image figures (cached by the firmware, ~1 Hz)
+CMD_POWER = 0x37          # idle power: backlight, dim / off timeouts, forced state and AHB divider (the get is read-only)
 MEM_FS_CAUTION_PCT, MEM_FS_ERROR_PCT = 20, 10   # file storage free share, k2::memstat kFsCautionPct / kFsErrorPct (the only warning)
 CMD_BOOT_INFO = 0x35      # how this boot decided its mode: the K2B1 text line and the first-seconds power samples (RAM only)
 BOOT_INFO_TEXT, BOOT_INFO_SAMPLES = 0, 1
@@ -991,6 +992,66 @@ def decode_memory(p):
 
 def cmd_memory(link, a):
     return decode_memory(link.call(CMD_MEMORY).payload)
+
+
+POWER_PAYLOAD = 18
+POWER_STATES = ("active", "dim", "off")
+POWER_FORCES = ("auto", "active", "dim", "off")
+POWER_PANELS = ("awake", "asleep", "waking")
+POWER_BLOCKS = (("load", 1), ("uart2", 2), ("sniff", 4), ("monitor", 8), ("fc", 16), ("hold", 32))   # k2::idle_hw::Block bits
+
+
+def decode_power(p):
+    """CMD_POWER: state, force, bright_now, bright, dim_bright (u8), dim_after_s, off_after_s (u16), hclk_div, force_div,
+    blocked, panel, wake_remote (u8), idle_s (u32), all little endian. The AHB clock is 240 MHz / hclk_div."""
+    _need(p, POWER_PAYLOAD, "power")
+    r = {"state": _name_of(POWER_STATES, p[0]), "force": _name_of(POWER_FORCES, p[1]),
+         "brightness_now": p[2], "brightness": p[3], "dim_brightness": p[4],
+         "dim_after_s": int.from_bytes(p[5:7], "little"), "off_after_s": int.from_bytes(p[7:9], "little"),
+         "hclk_div": p[9], "hclk_mhz": 240 // p[9] if p[9] else 0, "force_div": p[10], "blocked": p[11],
+         "blocked_by": [n for n, bit in POWER_BLOCKS if p[11] & bit],
+         "panel": _name_of(POWER_PANELS, p[12]), "wake_on_remote": bool(p[13]),
+         "idle_s": int.from_bytes(p[14:18], "little")}
+    return r
+
+
+def encode_power_set(brightness=None, dim_brightness=None, dim_after=None, off_after=None, force=None, hclk=None, wake=None):
+    """The set request of CMD_POWER: a mask byte, then the present fields in mask order. Empty bytes = a plain read."""
+    mask, body = 0, bytearray()
+    if brightness is not None:
+        mask |= 1; body.append(brightness)
+    if dim_brightness is not None:
+        mask |= 2; body.append(dim_brightness)
+    if dim_after is not None:
+        mask |= 4; body += dim_after.to_bytes(2, "little")
+    if off_after is not None:
+        mask |= 8; body += off_after.to_bytes(2, "little")
+    if force is not None:
+        mask |= 16; body.append(POWER_FORCES.index(force))
+    if hclk is not None:
+        mask |= 32; body.append(0 if hclk == "auto" else int(hclk))
+    if wake is not None:
+        mask |= 64; body.append(1 if wake else 0)
+    return bytes([mask]) + bytes(body) if mask else b""
+
+
+def cmd_power(link, a):
+    req = encode_power_set(a.brightness, a.dim_brightness, a.dim_after, a.off_after, a.force, a.hclk,
+                           None if a.wake_on_remote is None else a.wake_on_remote == "on")
+    return decode_power(link.call(CMD_POWER, req).payload)
+
+
+def render_power(r):
+    never = lambda s: "never" if s == 0 else f"{s} s"
+    lines = [f"state          {r['state']}" + (f" (forced {r['force']})" if r["force"] != "auto" else "") + f", idle {r['idle_s']} s",
+             f"backlight      {r['brightness_now']} % now, {r['brightness']} % set, {r['dim_brightness']} % when dim",
+             f"dim after      {never(r['dim_after_s'])}",
+             f"screen off     {never(r['off_after_s'])} (only with nothing attached)",
+             f"panel          {r['panel']}",
+             f"core clock     {r['hclk_mhz']} MHz (divider {r['hclk_div']}" + (f", forced {r['force_div']}" if r["force_div"] else "") + ")",
+             f"low clock held by  {', '.join(r['blocked_by']) or 'nothing'}",
+             f"wake on remote {'yes' if r['wake_on_remote'] else 'no'}"]
+    return "\n".join(lines)
 
 
 def render_memory(r):
@@ -5425,6 +5486,8 @@ def _render(name, r):
         return render_bootinfo(r)
     if name == "memory":
         return render_memory(r)
+    if name == "power":
+        return render_power(r)
     if name == "factory-wipe":
         return (f"factory wipe done: {r['sectors']} sectors erased and verified blank "
                 f"({r['verified']} verified; the volume plus any pages carrying our own old signature, "
@@ -5512,7 +5575,7 @@ def _render(name, r):
 
 
 COMMANDS = {"ping": cmd_ping, "info": cmd_info, "press": cmd_press, "state": cmd_state, "pdos": cmd_pdos,
-            "emarker": cmd_emarker, "identity": cmd_identity, "match": cmd_match, "usblink": cmd_usblink, "memory": cmd_memory,
+            "emarker": cmd_emarker, "identity": cmd_identity, "match": cmd_match, "usblink": cmd_usblink, "memory": cmd_memory, "power": cmd_power,
             "sink": cmd_sink, "action": cmd_action, "page": cmd_page,
             "reboot": cmd_reboot, "dfu": cmd_dfu, "factory-wipe": cmd_factory_wipe, "flash-dump": cmd_flash_dump, "bootinfo": cmd_bootinfo, "fault": cmd_fault, "log": cmd_log, "watch": cmd_watch,
             "screenshot": cmd_screenshot, "debug": cmd_debug,
@@ -5678,6 +5741,14 @@ def build_parser():
     sub.add_parser("identity", help="source identity: VID/PID, SVIDs, Apple model")
     sub.add_parser("usblink", help="USB / Thunderbolt link seen in sniffed PD traffic (passive, see k2/pd/usb_link.hpp)")
     sub.add_parser("memory", help="stack headroom (now / low-water), interrupt stack, static RAM, files and flash image use; read-only, cached 1 Hz figures (--json for tools)")
+    sp = sub.add_parser("power", help="idle power: with no option read the state (never wakes the screen); options set the levers, the reply is the state after")
+    sp.add_argument("--brightness", type=int, choices=range(0, 101), metavar="PCT", help="active backlight level, 0..100 %% (saved)")
+    sp.add_argument("--dim-brightness", type=int, choices=range(0, 101), metavar="PCT", help="dim backlight level, 0..100 %% (saved)")
+    sp.add_argument("--dim-after", type=int, choices=range(0, 65536), metavar="S", help="seconds idle before Dim, 0 = never (saved)")
+    sp.add_argument("--off-after", type=int, choices=range(0, 65536), metavar="S", help="seconds idle before Off, 0 = never (saved)")
+    sp.add_argument("--force", choices=POWER_FORCES, help="hold a state for measuring (RAM only); auto = the timers decide")
+    sp.add_argument("--hclk", choices=("auto", "1", "2", "4", "8"), help="hold the AHB divider (240 MHz / n, RAM only); refused while a cycle-timed lab runs")
+    sp.add_argument("--wake-on-remote", choices=("on", "off"), help="whether a state-changing remote command counts as activity (RAM only)")
     sub.add_parser("match", help="wants vs offers: the request against the charger caps (passive)")
     sub.add_parser("sink", help="Connection page Sink tab, field for field (read-only; Identify status only, never starts a run)")
     sa = sub.add_parser("action", help="run a page action (fc-scan raises VBUS above 5 V and needs --confirm)")

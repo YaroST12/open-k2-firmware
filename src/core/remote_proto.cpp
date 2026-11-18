@@ -676,6 +676,15 @@ size_t encode_memory(std::span<uint8_t> out, const MemorySnapshot &s) {
     return w.size();
 }
 
+size_t encode_power(std::span<uint8_t> out, const PowerSnapshot &s) {
+    Writer w(out);
+    w.u8(s.state); w.u8(s.force); w.u8(s.bright_now); w.u8(s.bright); w.u8(s.dim_bright);
+    w.u16(s.dim_after_s); w.u16(s.off_after_s);
+    w.u8(s.hclk_div); w.u8(s.force_div); w.u8(s.blocked); w.u8(s.panel); w.u8(s.wake_remote);
+    w.u32(s.idle_s);
+    return w.size();
+}
+
 size_t encode_identify_progress(std::span<uint8_t> out, const IdentifyProgress &p) {
     Writer w(out);
     const size_t n = std::min<size_t>(p.num_sink_pdos, p.sink_pdos.size());

@@ -37,6 +37,7 @@
 #include "k2/core/boottrace_store.hpp"
 #include "k2/core/handback.hpp"
 #include "k2/core/hw_revision.hpp"
+#include "k2/core/idle_hw.hpp"
 #include "k2/fastcharge/fctrig.hpp"
 #include "k2/fastcharge/svooc_trig.hpp"
 #include "k2/drivers/fusb302.hpp"
@@ -939,6 +940,41 @@ remote::UsbLinkSnapshot Remote::usb_link() {
 }
 
 remote::MemorySnapshot Remote::memory() { return memstat::snapshot(); }
+
+void Remote::request_seen(bool state_changing) { idle_hw::request(state_changing, systick::millis()); }
+
+remote::PowerSnapshot Remote::power() {
+    const idle_hw::Status st = idle_hw::status();
+    remote::PowerSnapshot s;
+    s.state = static_cast<uint8_t>(st.state);
+    s.force = static_cast<uint8_t>(st.force);
+    s.bright_now = st.brightness_now;
+    s.bright = st.cfg.brightness;
+    s.dim_bright = st.cfg.dim_brightness;
+    s.dim_after_s = st.cfg.dim_after_s;
+    s.off_after_s = st.cfg.off_after_s;
+    s.hclk_div = st.hclk_div;
+    s.force_div = st.force_div;
+    s.blocked = st.blocked;
+    s.panel = st.panel;
+    s.wake_remote = st.cfg.wake_on_remote ? 1 : 0;
+    s.idle_s = st.idle_s;
+    return s;
+}
+
+void Remote::power_set(const remote::PowerSet& s) {
+    idle::Config c = idle_hw::config();
+    if (s.mask & remote::kPowerBright) c.brightness = s.bright;
+    if (s.mask & remote::kPowerDimBright) c.dim_brightness = s.dim_bright;
+    if (s.mask & remote::kPowerDimAfter) c.dim_after_s = s.dim_after_s;
+    if (s.mask & remote::kPowerOffAfter) c.off_after_s = s.off_after_s;
+    if (s.mask & remote::kPowerWake) c.wake_on_remote = s.wake_remote != 0;
+    if (s.mask & (remote::kPowerBright | remote::kPowerDimBright | remote::kPowerDimAfter | remote::kPowerOffAfter | remote::kPowerWake))
+        idle_hw::set_config(c);
+    if (s.mask & remote::kPowerForce) idle_hw::force(static_cast<idle::Force>(s.force));
+    if (s.mask & remote::kPowerForceDiv) idle_hw::force_div(s.force_div);
+    K2LOG("[RMT] power mask=%d\n", static_cast<int>(s.mask));
+}
 
 remote::Status Remote::set_page(uint8_t page) {
     if (!ui_.goto_page(page, systick::millis())) return remote::Status::BadArg;

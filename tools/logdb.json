@@ -740,6 +740,7 @@
   "743": "[EEKEEP] spoof %u/%u %s\n",
   "744": "[EEPROM] page %03x err %u\n",
   "745": "[USBCFG] no /usb.cfg: %s from the settings EEPROM\n",
-  "746": "[CAL] stored trims corrupt v=%d iz=%d ig=%d\n"
+  "746": "[CAL] stored trims corrupt v=%d iz=%d ig=%d\n",
+  "747": "[RMT] power mask=%d\n"
  }
 }

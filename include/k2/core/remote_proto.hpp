@@ -224,6 +224,20 @@
 //                                    flags bit0 = fs_used valid, bit1 = the poll has run once (else every field is 0). Every figure comes
 //                                    from the cache refreshed by the main loop (stacks at most 1 Hz): the command scans and walks nothing.
 //                                    Exactly 0 bytes of payload (BadLength otherwise).
+//   0x37 POWER       req [mask(1) fields...]   rsp state(1) force(1) bright_now(1) bright(1) dim_bright(1) dim_after(2) off_after(2)
+//                                    hclk_div(1) force_div(1) blocked(1) panel(1) wake_remote(1) idle_s(4), 18 bytes, all LE
+//                                    The idle-power levers (k2/core/idle_hw.hpp). No payload = read the state only (never counts as
+//                                    activity). With a payload the first byte is a field mask and the fields follow in this order,
+//                                    each present only when its bit is set: bit0 bright (0..100 %), bit1 dim_bright (0..100 %),
+//                                    bit2 dim_after seconds u16 (0 = never), bit3 off_after seconds u16 (0 = never), bit4 force
+//                                    (0 auto, 1 active, 2 dim, 3 off), bit5 force_div (0 auto, 1, 2, 4, 8), bit6 wake_remote (0 or 1).
+//                                    bright / dim_bright / dim_after / off_after are the saved settings; force, force_div and
+//                                    wake_remote are RAM only. The reply is the state after the change. state 0 active, 1 dim, 2 off;
+//                                    bright_now = the level the backlight is asked for now; panel 0 awake, 1 asleep, 2 waking;
+//                                    hclk_div = the AHB divider in force (1 = 240 MHz); blocked = why the low clock is refused (idle_hw
+//                                    Block bits); idle_s = seconds since the last activity. BadLength for a payload that does not match
+//                                    its mask (or a mask above 0x7F), BadArg for a value out of range. Any request other than the
+//                                    read-only ones counts as activity while wake_remote is 1 (remote::wakes_screen).
 //   0x46 USB_LINK    req -            rsp family(1) tbt(1) conf(1) source(1) flags(1) mbps(4) text(rest)
 //                                    USB / Thunderbolt link classified from sniffed PD (k2/pd/usb_link.hpp); see UsbLinkSnapshot.
 //   0x47 PD_REREAD   req op(1) [mask]  rsp state(1) step(1) mask(1) ok(1) skipped(1) pdos_before(1) pdos_last(1) caps_rx(1) flags(1)
@@ -602,6 +616,7 @@ enum class Cmd : uint8_t {
     FlashDump = 0x34,   // read-only window into 0x080E0000..0x08100000, see above
     BootInfo = 0x35,    // how this boot decided its mode: K2B1 text and first-seconds samples, see above
     Memory = 0x36,      // memory readout: stacks, static RAM, littlefs volume, firmware image -> memstat::Snapshot (see encode_memory)
+    Power = 0x37,       // idle power: backlight, dim / off timeouts, forced state and AHB divider -> PowerSnapshot (see the 0x37 block)
     // Active PD (wave 2C). Every one of them is refused inline; a request above 5 V needs the
     // confirm flag (Status::NeedConfirm without it). Ids 0x31/0x32 belong to DebugFault/Fc.
     IdentifyDevice = 0x40,  // [op] 0 status, 1 start, 2 start (same as 1; the inline refusal has no confirm) -> IdentifySnapshot
@@ -673,7 +688,7 @@ inline constexpr Cmd kCmdIds[] = {
     Cmd::GetIdentity, Cmd::IdentifyDevice, Cmd::PdRequest, Cmd::PdReset, Cmd::PdTriggerStatus, Cmd::PdRelease, Cmd::PdMatch, Cmd::UsbLink, Cmd::PdReread,
     Cmd::PdAttach, Cmd::PdHandback, Cmd::AppleRead, Cmd::Stop, Cmd::Lease, Cmd::OppoProbe,
     Cmd::CableR, Cmd::Lab, Cmd::Ufcs, Cmd::QRTest, Cmd::Store, Cmd::EmLib, Cmd::Cards, Cmd::Twin, Cmd::BlackBox, Cmd::TransCap, Cmd::ChargerTest,
-    Cmd::ChargerUnits, Cmd::ChargerCable, Cmd::ChargerHunt, Cmd::ChargerSweep, Cmd::ChargerAvsSweep, Cmd::BootInfo, Cmd::Memory,
+    Cmd::ChargerUnits, Cmd::ChargerCable, Cmd::ChargerHunt, Cmd::ChargerSweep, Cmd::ChargerAvsSweep, Cmd::BootInfo, Cmd::Memory, Cmd::Power,
     Cmd::PdStress, Cmd::EmarkerProbe, Cmd::LoopProbe, Cmd::Diagnose, Cmd::TraceHid, Cmd::Battery, Cmd::ChargerSvoocCap,
     Cmd::PdSpec, Cmd::ChargerLevel, Cmd::MiCableAuth,
 };
@@ -1371,6 +1386,48 @@ struct UsbLinkSnapshot {
 using MemorySnapshot = memstat::Snapshot;
 constexpr size_t kMemoryPayload = 11 * 4 + 2 + 1;
 static_assert(kMemoryPayload <= kMaxRspPayload);
+// POWER (0x37): the idle state on the wire and the set request (see the 0x37 block above).
+struct PowerSnapshot {
+    uint8_t state = 0, force = 0, bright_now = 100, bright = 100, dim_bright = 30;
+    uint16_t dim_after_s = 0, off_after_s = 0;
+    uint8_t hclk_div = 1, force_div = 0, blocked = 0, panel = 0, wake_remote = 1;
+    uint32_t idle_s = 0;
+};
+constexpr size_t kPowerPayload = 5 + 4 + 5 + 4;
+static_assert(kPowerPayload <= kMaxRspPayload);
+constexpr uint8_t kPowerBright = 1 << 0, kPowerDimBright = 1 << 1, kPowerDimAfter = 1 << 2, kPowerOffAfter = 1 << 3,
+                  kPowerForce = 1 << 4, kPowerForceDiv = 1 << 5, kPowerWake = 1 << 6, kPowerMaskAll = 0x7F;
+// The decoded set request: every field is applied only when its mask bit is set. Values are already range checked.
+struct PowerSet {
+    uint8_t mask = 0, bright = 0, dim_bright = 0, force = 0, force_div = 0, wake_remote = 0;
+    uint16_t dim_after_s = 0, off_after_s = 0;
+};
+// The payload length a mask asks for (mask byte included).
+constexpr size_t power_set_len(uint8_t mask) {
+    size_t n = 1;
+    if (mask & kPowerBright) n += 1;
+    if (mask & kPowerDimBright) n += 1;
+    if (mask & kPowerDimAfter) n += 2;
+    if (mask & kPowerOffAfter) n += 2;
+    if (mask & kPowerForce) n += 1;
+    if (mask & kPowerForceDiv) n += 1;
+    if (mask & kPowerWake) n += 1;
+    return n;
+}
+// Whether a request counts as activity for the idle machine (wakes the screen, holds the full clock). The read-only
+// queries do not: a monitoring script polling the K2 must not keep its screen lit. Everything not listed does count,
+// so a new command is conservative by default. POWER with no payload is a read; any POWER with a payload is a change.
+constexpr bool wakes_screen(Cmd cmd, size_t payload_len) {
+    switch (cmd) {
+    case Cmd::Ping: case Cmd::GetState: case Cmd::GetPdos: case Cmd::GetEmarker: case Cmd::GetIdentity:
+    case Cmd::FlashDump: case Cmd::BootInfo: case Cmd::Memory: case Cmd::UsbLink: case Cmd::PdMatch: case Cmd::Log:
+        return false;
+    case Cmd::Power:
+        return payload_len != 0;
+    default:
+        return true;
+    }
+}
 struct MatchSnapshot {
     uint8_t caps_seen = 0, request_seen = 0, sink_ok = 0, flags = 0, verdict = 0, rows = 0, want_pos = 0;
     uint16_t want_mv = 0, want_ma = 0, need_ma = 0, have_ma = 0, src_max_mv = 0, src_max_w = 0;
@@ -1458,6 +1515,7 @@ size_t encode_pd_trigger(std::span<uint8_t> out, const PdTriggerSnapshot &s);
 size_t encode_match(std::span<uint8_t> out, const MatchSnapshot &s);
 size_t encode_usb_link(std::span<uint8_t> out, const UsbLinkSnapshot &s);
 size_t encode_memory(std::span<uint8_t> out, const MemorySnapshot &s);
+size_t encode_power(std::span<uint8_t> out, const PowerSnapshot &s);
 size_t encode_identify_progress(std::span<uint8_t> out, const IdentifyProgress &p);
 size_t encode_reread(std::span<uint8_t> out, const RereadInfo &i);
 size_t encode_apple_read(std::span<uint8_t> out, const AppleReadInfo &i, uint8_t part);   // part 0 header, 1..6 one field each
@@ -1618,6 +1676,8 @@ concept Backend = requires(B &b, uint8_t u8, uint16_t u16, bool on) {
     { b.match_info() } -> std::same_as<MatchSnapshot>;
     { b.usb_link() } -> std::same_as<UsbLinkSnapshot>;
     { b.memory() } -> std::same_as<MemorySnapshot>;   // the cached memstat figures, no scan
+    { b.power() } -> std::same_as<PowerSnapshot>;   // the idle machine and its settings, nothing changes
+    { b.power_set(std::declval<const PowerSet &>()) } -> std::same_as<void>;   // apply the masked fields (range checked by the dispatcher)
     { b.fc_cmd(u8, u8, u16, u8) } -> std::same_as<Status>;   // op, proto, mV, flags (kFcConfirm | kFcAllowInline)
     { b.fc_info() } -> std::same_as<FcInfo>;
     { b.vooc_monitor(u8) } -> std::same_as<VoocSnapshot>;   // vooc-monitor: 0 off, 1 on, 2 keep; then the summary
@@ -1833,6 +1893,26 @@ template <Backend B>
     case Cmd::Memory:
         if (!p.empty()) return reply_bad_len(f);
         return reply_ok(f, encode_memory(f.span(), backend.memory()));
+    case Cmd::Power: {
+        if (!p.empty()) {
+            const uint8_t mask = p[0];
+            if ((mask & ~kPowerMaskAll) != 0 || p.size() != power_set_len(mask)) return reply_bad_len(f);
+            PowerSet s;
+            s.mask = mask;
+            size_t i = 1;
+            if (mask & kPowerBright) s.bright = p[i++];
+            if (mask & kPowerDimBright) s.dim_bright = p[i++];
+            if (mask & kPowerDimAfter) { s.dim_after_s = static_cast<uint16_t>(p[i] | (p[i + 1] << 8)); i += 2; }
+            if (mask & kPowerOffAfter) { s.off_after_s = static_cast<uint16_t>(p[i] | (p[i + 1] << 8)); i += 2; }
+            if (mask & kPowerForce) s.force = p[i++];
+            if (mask & kPowerForceDiv) s.force_div = p[i++];
+            if (mask & kPowerWake) s.wake_remote = p[i++];
+            const bool div_ok = s.force_div == 0 || s.force_div == 1 || s.force_div == 2 || s.force_div == 4 || s.force_div == 8;
+            if (s.bright > 100 || s.dim_bright > 100 || s.force > 3 || !div_ok || s.wake_remote > 1) return reply_status(f, Status::BadArg);
+            backend.power_set(s);
+        }
+        return reply_ok(f, encode_power(f.span(), backend.power()));
+    }
     case Cmd::UsbLink:
         if (!p.empty()) return reply_bad_len(f);
         return reply_ok(f, encode_usb_link(f.span(), backend.usb_link()));
@@ -2553,12 +2633,14 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
 
     const Cmd cmd = static_cast<Cmd>(r.cmd);
     const std::span<const uint8_t> p = r.payload;
+    // The idle machine wants to know before the command runs (a wake repaints, the full clock is back for the lab timing).
+    if constexpr (requires { backend.request_seen(true); }) backend.request_seen(wakes_screen(cmd, p.size()));
     switch (cmd) {
     case Cmd::Button: case Cmd::Action: case Cmd::SetPage: case Cmd::Reboot: case Cmd::DfuEnter: case Cmd::Log:
         return detail::handle_control(cmd, p, backend, f);
     case Cmd::Ping: case Cmd::GetState: case Cmd::GetPdos: case Cmd::GetEmarker: case Cmd::GetIdentity:
     case Cmd::FactoryWipe: case Cmd::FlashDump: case Cmd::BootInfo: case Cmd::Screenshot:
-    case Cmd::Memory: case Cmd::UsbLink: case Cmd::PdMatch:
+    case Cmd::Memory: case Cmd::Power: case Cmd::UsbLink: case Cmd::PdMatch:
         return detail::handle_state(cmd, p, backend, f);
     case Cmd::ChargerTest: case Cmd::ChargerUnits: case Cmd::ChargerCable: case Cmd::ChargerSvoocCap:
     case Cmd::ChargerHunt: case Cmd::ChargerSweep: case Cmd::ChargerAvsSweep: case Cmd::ChargerLevel:

@@ -271,6 +271,12 @@ struct Fake {
         s.flash_bytes = 0xB0000 + 0x1234; s.fs_block_bytes = 2048; s.fs_valid = true; s.ok = true;
         return s;
     }
+    PowerSnapshot power_state = [] { PowerSnapshot s; s.state = 1; s.force = 2; s.bright_now = 30; s.bright = 100; s.dim_bright = 30;
+        s.dim_after_s = 60; s.off_after_s = 300; s.hclk_div = 4; s.force_div = 0; s.blocked = 0x21; s.panel = 1; s.wake_remote = 1; s.idle_s = 0x01020304; return s; }();
+    PowerSet last_power_set{}; int power_sets = 0; int seen_wake = 0, seen_quiet = 0;
+    PowerSnapshot power() { calls++; return power_state; }
+    void power_set(const PowerSet& s) { calls++; power_sets++; last_power_set = s; }
+    void request_seen(bool state_changing) { (state_changing ? seen_wake : seen_quiet)++; }
     UsbLinkSnapshot usb_link() {
         UsbLinkSnapshot s; s.family = 5; s.tbt = 2; s.conf = 3; s.source = 4; s.flags = 1; s.mbps = 40000;
         const char t[] = "USB4 40G TBT4 (neg)"; for (unsigned i = 0; i + 1 < sizeof t; i++) s.text[i] = t[i];
