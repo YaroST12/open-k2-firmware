@@ -194,7 +194,7 @@ var CtGrid = (function () {
   }
   function toneOf(s) { var t = tally(); count(t, s); return rollUp(t); }
   // A skipped VOOC sibling carries its first row's failure as the engine's words ("needs load (2 tries)") under the bare reason
-  // "request failed": the reason a reader should see is the words (the device's detail line and the summary say them too).
+  // "request failed": a cell's title says the words (the device's detail line and the summary say them too; its chip tag stays).
   function engineWhy(s) {
     var dr = s.raw && s.raw.detail_reason;
     return s.result === "skip" && s.reason === "request failed" && dr && dr !== "none" ? dr : "";
@@ -202,7 +202,6 @@ var CtGrid = (function () {
   // Why a skipped step did not run, in a word that sits next to its cell (only a skip has one).
   function skipTag(s) {
     if (s.result !== "skip") return "";
-    if (engineWhy(s).indexOf("needs load") === 0) return "needs load";
     switch (s.reason) {
       case "over voltage cap": return s.detail === 144 ? ">36V" : s.detail === 145 ? ">48V" : ">cap";
       case "physical cable limit": return "cable";
