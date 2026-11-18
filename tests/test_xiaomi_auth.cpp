@@ -72,7 +72,11 @@ static void test_auth_digest_wiring() {
     }
     CHECK_EQ(same, true);
     CHECK_EQ(diff_adapter, true);
-    CHECK_EQ(diff_idx, true);
+    // the zero stubs (no priv/) make every key entry equal, so only real keys must give a different digest
+    const unsigned other = (mi::kActiveKeyIndex + 1) % mi::kKeyCount;
+    const bool keys_differ = memcmp(mi::kSecret[mi::kActiveKeyIndex], mi::kSecret[other], 32) != 0 ||
+                             memcmp(mi::kSessionSeed[mi::kActiveKeyIndex], mi::kSessionSeed[other], 16) != 0;
+    CHECK_EQ(diff_idx, keys_differ);
     CHECK_EQ(halves_differ, true);
     // the digest words are big-endian slices: word 0 of a half is bytes 0..3 of it
     CHECK_EQ(mi::digest_word(a, 0),

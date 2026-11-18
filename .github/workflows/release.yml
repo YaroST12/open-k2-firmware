@@ -41,6 +41,21 @@ jobs:
           fi
           echo "version=$v" >> "$GITHUB_OUTPUT"
 
+      # The release image carries the Xiaomi 0x2717 key table. It is never in the repository: the header comes from
+      # the XIAOMI_KEYS_PRIV secret (and the host-test digests from XIAOMI_VECTORS_PRIV, so test_xiaomi_auth proves
+      # the table arrived intact). Without the secret the release fails rather than ship the zero stubs.
+      # ci.yml has no secrets and builds the stubs (include/k2/pd/xiaomi_keys.hpp).
+      - name: Private key tables
+        env:
+          XIAOMI_KEYS_PRIV: ${{ secrets.XIAOMI_KEYS_PRIV }}
+          XIAOMI_VECTORS_PRIV: ${{ secrets.XIAOMI_VECTORS_PRIV }}
+        shell: bash
+        run: |
+          if [ -z "$XIAOMI_KEYS_PRIV" ]; then echo "::error::secret XIAOMI_KEYS_PRIV is not set"; exit 1; fi
+          mkdir -p priv
+          printf '%s\n' "$XIAOMI_KEYS_PRIV" > priv/xiaomi_keys_priv.h
+          if [ -n "$XIAOMI_VECTORS_PRIV" ]; then printf '%s\n' "$XIAOMI_VECTORS_PRIV" > priv/xiaomi_vectors_priv.h; fi
+
       - uses: ./.github/actions/build-firmware
         with:
           gate: "true"                  # the version string is derived from the tag checked out (fetch-depth 0)
