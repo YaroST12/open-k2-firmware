@@ -217,9 +217,10 @@ k2::mainloop::Context g_loop{g_ui, g_remote, g_bootscreen, g_accelerometer, rebo
     // must not appear while boot still blocks (fs remount, legacy erase with interrupts off, first
     // screen draw): the host's descriptor reads then time out (-71) and it resets the port again
     // and again (seen 2026-11-06 in the host's kernel log, 3 failed reads per boot). Until here
-    // hold_detached() keeps the bus in SE0: D+ reads high without it, so the host would attach anyway.
+    // hold_detached() keeps the bus in SE0: D+ reads high without it, so the host would attach anyway. With the link off,
+    // park() shuts the core the bootloader left behind and keeps that SE0 for the whole session: an empty port to the host.
     if (k2::usbcfg::any(k2::usbcfg::current)) k2::usb::init();
-    else k2::usb::release_detached();
+    else k2::usb::park();
     if (k2::usbcfg::current.drive) k2::msc::init();
     k2::shell_hw::init(g_remote, g_ui);
 #if K2_NET

@@ -731,6 +731,7 @@
   "734": "[PD] DR_Swap answer=%u dfp=%u\n",
   "735": "[OPPO] start steps=0x%X skip_swap=%u dfp=%u\n",
   "736": "[OPPO] refused why=%s\n",
-  "737": "[OPPO] power mv=%u ma=%u pos=%u why=%u\n"
+  "737": "[OPPO] power mv=%u ma=%u pos=%u why=%u\n",
+  "738": "[USB] off: core down, no pull-up, bus held SE0 cfg=%x\n"
  }
 }

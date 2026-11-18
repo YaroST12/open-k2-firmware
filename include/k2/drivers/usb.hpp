@@ -46,8 +46,11 @@ StatsSnapshot stats_snapshot();
 // (2026-11-12). Left undriven through the ~1.5 s of boot, the host sees an attached device that never answers: its
 // 64-byte descriptor reads fail with -71 and it power-cycles the port before the core is up.
 void hold_detached();
-// The USB link stays off this boot (no init()): give PA11/PA12 back in the mode hold_detached() found them in.
-void release_detached();
+// The USB link stays off this boot (no init()): shut the core down (peripheral reset, pull-up off, PHY powered down,
+// clock gated, NVIC lines 19/20 off) and keep D+/D- driven low. The host then sees SE0, an empty port, and makes no
+// enumeration attempt. The pins are not released: undriven, D+ reads high (see hold_detached) and the host would attach
+// to a device that cannot answer. Does nothing after init(). Logs one [USB] off line.
+void park();
 
 // Detach for 150 ms, start the 48 MHz USB clock, enable the core and connect. Call once.
 void init();
