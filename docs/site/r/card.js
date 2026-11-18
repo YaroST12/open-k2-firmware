@@ -831,8 +831,9 @@ var K2Card = (function () {
   // tests/fixtures/oem_watts.txt). The K2 draws no current in a charger test: a level's watts are only ever claimed. The VOOC family's
   // three groups (VOOC, SVOOC, SVOOC65) share one detection, so the page shows them as one "VOOC" group plus its levels; the Deep
   // block's SVOOC ceiling claims each level or leaves it not reached / not tested.
-  var OEM_LEVELS = [{word: "VOOC", w: 20, ceiling: false}, {word: "SVOOC", w: 50, ceiling: true}, {word: "SVOOC", w: 65, ceiling: true},
-    {word: "SVOOC", w: 100, ceiling: true}, {word: "SVOOC", w: 120, ceiling: true}];
+  var OEM_LEVELS = [{word: "VOOC", mv: 5000, ma: 4000, w: 20, ceiling: false}, {word: "SVOOC", mv: 10000, ma: 5000, w: 50, ceiling: true},
+    {word: "SVOOC", mv: 10000, ma: 6500, w: 65, ceiling: true}, {word: "SVOOC", mv: 10000, ma: 10000, w: 100, ceiling: true},
+    {word: "SVOOC", mv: 11000, ma: 11000, w: 120, ceiling: true}];
   var VOOC_GROUPS = ["VOOC", "SVOOC", "SVOOC65"];
   var RAN_ITS_COURSE = {judged: 1, stopped: 1, cap: 1, "time cap": 1};
   function oemWatts(mw) {
@@ -1236,7 +1237,7 @@ var K2Card = (function () {
     base64urlDecode: base64urlDecode, lz4Inflate: lz4Inflate, crc16: crc16,
     expandCardV2: expandCardV2, expandEmkV2: expandEmkV2, BitReader: BitReader,
     decodePayload: decodePayload, decodeRecord: decodeRecord, parseLink: parseLink, splitLink: splitLink,
-    badges: badges, sections: sections, header: header, view: view, oemLabel: oemLabel, oemClaim: oemClaim, voocLevels: voocLevels,
+    badges: badges, sections: sections, header: header, view: view, OEM_LEVELS: OEM_LEVELS, oemLabel: oemLabel, oemClaim: oemClaim, voocLevels: voocLevels,
     rangeVerdict: rangeVerdict, volts: volts, BRANDS: BRANDS
   };
 })();

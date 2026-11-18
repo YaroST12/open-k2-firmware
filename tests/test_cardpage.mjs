@@ -550,3 +550,19 @@ test("the VOOC family is one group; its levels read in watts, claimed only from 
   assert.ok(K2Card.voocLevels(undefined).every((l) => l.state === "not tested"));
   assert.equal(K2Card.badges(card).filter((x) => x.id.startsWith("lvl:")).length, 0);
 });
+
+test("the card page's OEM watts match tests/fixtures/oem_watts.txt and the firmware's level table", () => {
+  let labels = 0, claims = 0;
+  for (const line of readFileSync(new URL("./fixtures/oem_watts.txt", import.meta.url), "utf8").split("\n")) {
+    if (!line.trim() || line.trim().startsWith("#")) continue;
+    const f = line.split("|").map((x) => x.trim());
+    if (f[0] === "label") { assert.equal(K2Card.oemLabel(f[1], +f[2]), f[3], line); labels++; }
+    if (f[0] === "claim") {
+      assert.equal(K2Card.oemClaim({ w: +f[4], ceiling: f[5] === "y" }, { end: f[1], vmax_mv: +f[2], word: parseInt(f[3], 16) }), f[6], line);
+      claims++;
+    }
+  }
+  assert.ok(labels >= 10 && claims >= 12);
+  const src = readFileSync(new URL("../include/k2/chargertest/oem_watts.hpp", import.meta.url), "utf8");
+  for (const l of K2Card.OEM_LEVELS) assert.ok(src.includes(`{Family::Vooc, "${l.word}", ${l.mv}, ${l.ma}, ${l.w}, ${l.ceiling}},`), l.word + l.w);
+});
