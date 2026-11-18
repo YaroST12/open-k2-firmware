@@ -2398,15 +2398,17 @@ static void test_step_label_gallery() {
 // the first window, the last window and the block's Steps page. K2_DUMP=dir writes dir/k2_pdb_<source>_rot<r>_<scene>.panel
 // (tools/panel2png.py makes the PNGs); without K2_DUMP it only walks the scenes.
 static void test_pd_block_scenes() {
-    struct Source { const char* name; uint8_t rev; bool epr; std::initializer_list<uint32_t> pdos; };
+    struct Source { const char* name; uint8_t rev; bool epr; unsigned ceil_mv; std::initializer_list<uint32_t> pdos; };
     const Source sources[] = {
-        {"bank", 2, false, {0x0001912C, 0x0002D12C, 0x0003C12C, 0x0004B12C, 0x000641F4, 0xC0DC3264, 0xC1903228}},
-        {"epr", 2, true, {0x0001912C, 0x0002D12C, 0x0004B12C, 0x000641F4, 0xC0DC213C, 0xC1A42164, 0xE004B000, 0x0008C1F4, 0xD230968C}},
-        {"pd2", 1, false, {0x0001912C, 0x0002D12C, 0x0003C12C, 0x0004B12C, 0x000641F4}},
+        {"bank", 2, false, 0, {0x0001912C, 0x0002D12C, 0x0003C12C, 0x0004B12C, 0x000641F4, 0xC0DC3264, 0xC1903228}},
+        {"epr", 2, true, 0, {0x0001912C, 0x0002D12C, 0x0004B12C, 0x000641F4, 0xC0DC213C, 0xC1A42164, 0xE004B000, 0x0008C1F4, 0xD230968C}},
+        {"eprok", 2, true, 36000, {0x0001912C, 0x0002D12C, 0x0004B12C, 0x000641F4, 0xC0DC213C, 0xC1A42164, 0xE004B000, 0x0008C1F4, 0xD230968C}},   // a 5 A EPR cable and a monitor that reaches 28 V: the EPR level and the EPR AVS range run
+        {"pd2", 1, false, 0, {0x0001912C, 0x0002D12C, 0x0003C12C, 0x0004B12C, 0x000641F4}},
     };
     for (const Source& s : sources) for (uint8_t rot : {uint8_t(0), uint8_t(3)}) {
         fixture();
         g_stub.caps.spec_rev = s.rev; g_stub.caps.epr = s.epr;
+        if (s.ceil_mv) { g_stub.vbus_ceiling_mv = s.ceil_mv; g_stub.cable_limits = {.max_mv = 50000, .max_ma = 5000, .observed = true}; }
         g_stub.caps.num_pdos = uint8_t(s.pdos.size());
         unsigned i = 0;
         for (uint32_t w : s.pdos) g_stub.caps.pdos[i++] = pd::decode_pdo(w);
@@ -2434,8 +2436,21 @@ static void test_pd_block_scenes() {
             const auto& steps = ui.charger_test_results().steps();
             if (steps.empty() || steps[0].group != ct::Group::Pd) { press(ui, Button::Back, t); continue; }
             shot("steps");
+            unsigned at = 0;   // the EPR entry: where the reason for a skipped or refused level reads
+            for (size_t j = 0; j < steps.size() && steps[j].group == ct::Group::Pd; ++j)
+                if (steps[j].algorithm == ct::Algorithm::Epr) { at = unsigned(j); break; }
+            if (at) {
+                top(ui, t); move(ui, at, t); shot("eprstep");
+                press(ui, Button::Ok, t);
+                CHECK_EQ(ui.charger_test_stage(), 8);
+                shot("eprdetail");
+            }
             break;
         }
+        for (int k = 0; k < 3 && ui.charger_test_stage() > 6; ++k) press(ui, Button::Back, t);
+        CHECK_EQ(ui.charger_test_stage(), 6);
+        top(ui, t); settle(ui, t);   // the cursor on a label-less line of the block
+        for (unsigned k = 1; k < 4; ++k) { top(ui, t); move(ui, k, t); shot(k == 1 ? "cont1" : k == 2 ? "cont2" : "cont3"); }
     }
 }
 // The README's charger-test pictures (docs/img/ui/ct-*.png), rotation 3 (the button strip at the bottom): an EPR-capable charger
