@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 Yaraslau Furman
-"""The words for one charger-test step: "PD 9V 3A", "PPS 11→8V", "AVS 15V", "Mi 11V 5A", "QC3 12V".
+"""The words for one charger-test step: "PD 9V 3A", "PPS 11→8V", "AVS 15V", "Mi 55W", "QC3 12V".
 
 Mirrors include/k2/chargertest/step_label.hpp (the firmware's Running / Steps rows, Results chips and card text); the golden
 vectors tests/fixtures/step_labels.txt are checked against both, so the device, the host tools and the screenshots
@@ -35,6 +35,12 @@ def is_hunt(s):
     if "mi" in s:
         return bool(s["mi"])
     return s["protocol"] in _PD_FAMILY and s.get("request_ma", 0) > HUNT_MA
+
+
+def mi_watts(s):
+    """The power level a Xiaomi mode row is named by ("Mi 55W"): volts asked times current asked, whole watts; 0 for any other
+    row (step_label.hpp mi_watts)."""
+    return (s.get("target_mv", 0) * s.get("request_ma", 0) + 500000) // 1000000 if is_hunt(s) else 0
 
 
 def is_sweep(s):
@@ -85,9 +91,11 @@ def pdo_ma(raw):
 
 
 def amps_ma(s):
-    """The current the label shows, in mA (0 = none): the offer's for a PD fixed / PPS row, the requested one for a Xiaomi mode row, SCP's
+    """The current the label shows, in mA (0 = none): the offer's for a PD fixed / PPS row (none for a Xiaomi mode row: its watts), SCP's
     limit, and the requested one for the full-current PPS row."""
-    if is_hunt(s) or is_full_current(s):
+    if is_hunt(s):
+        return 0   # a Xiaomi mode is named by its watts (mi_watts)
+    if is_full_current(s):
         return s.get("request_ma", 0)
     if s["protocol"] in ("pd2-fixed", "pd3x-fixed", "pps", "epr-fixed"):
         return 0 if _is_avs(s) else pdo_ma(s.get("raw_pdo", 0))
@@ -105,6 +113,8 @@ def params(s, prev=None, amps=True):
             and prev.get("pos") == s.get("pos") and not is_hunt(prev) and not is_hunt(s)
             and prev.get("target_mv") and prev["target_mv"] != mv):
         return f"{milli(prev['target_mv'])}→{milli(mv)}V"
+    if is_hunt(s):
+        return f"{mi_watts(s)}W"
     out = milli(mv) + "V"
     ma = amps_ma(s) if amps or is_full_current(s) else 0
     return out + (f" {milli(ma)}A" if ma else "")

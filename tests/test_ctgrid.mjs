@@ -34,7 +34,7 @@ test("step labels match tests/fixtures/step_labels.txt", () => {
     if (!line.trim() || line.trim().startsWith("#")) continue;
     const [alg, pos, mv, ma, pdo, flags, prevMv, want] = line.split("|").map((f) => f.trim());
     const row = { protocol: WIRE[alg] || alg, pos: +pos, target_mv: +mv, request_ma: +ma, raw_pdo: parseInt(pdo, 16),
-                  continuous: flags.includes("c"), avs: flags.includes("a") };
+                  continuous: flags.includes("c"), avs: flags.includes("a"), mi: flags.includes("h") };
     const prev = +prevMv ? { protocol: row.protocol, pos: row.pos, target_mv: +prevMv, request_ma: 1000, raw_pdo: row.raw_pdo, continuous: false } : null;
     assert.equal(CtGrid.stepLabel(row, prev), want, line);
     n++;
@@ -108,12 +108,29 @@ test("a lone cell that never ran spells its reason", () => {
   assert.deepEqual(lines(s, { fold: false }), ["PPS: needs load:none", "-- QC3+: no QC3+:none", "QC2: n/a:none"]);
 });
 
-test("a 6 A probe is a Mi 6A row of its own, the current under the volts", () => {
+test("an older firmware's 6 A probes are chips of the one Xiaomi row, by their watts", () => {
   const s = [S("pd3x-fixed", 5000, "pass", { pos: 1, pdo: 0x1912c }),
              S("pd3x-fixed", 20000, "pass", { pos: 5, pdo: 0x6412c, ma: 6000 }),
              S("pd3x-fixed", 20000, "skip", { pos: 5, pdo: 0x6412c, ma: 6000, reason: "not unlocked", detail: 157 })];
   const got = lines(s, { fold: false });
-  assert.deepEqual(got, ["PD3.x: 5V/3A:pass", "-- Mi 6A: 20V/6A:pass 20V/6A:skip"].map((l) => l));
+  assert.deepEqual(got, ["PD3.x: 5V/3A:pass", "-- Xiaomi: 120W:pass 120W:skip"]);
+});
+
+test("the Xiaomi unit is one row: the chain outcome, then each unlocked mode by its watts", () => {
+  const pd = S("pd3x-fixed", 5000, "pass", { pos: 1, pdo: 0x1912c });
+  const chain = (result, detail, reason) => S("pd3x-fixed", 0, result, { pos: 0, detail, reason: reason || "none", mi: true });
+  const mode = (result, ma, extra) => S("pps", 11000, result, Object.assign({ pos: 6, pdo: 0xC0DC3264, ma, mi: true }, extra || {}));
+  // a) the 20K bank: PPS 5-11V 3A -> 5A
+  assert.deepEqual(lines([pd, chain("pass", 20), mode("pass", 5000)], { fold: false }), ["PD3.x: 5V/3A:pass", "-- Xiaomi: auth:pass 55W:pass"]);
+  // b) FH22: done, nothing raised
+  assert.deepEqual(lines([pd, chain("pass", 20)], { fold: false })[1], "-- Xiaomi: auth:pass none new:skip");
+  // c) CUKTECH on a 6 A cable: the 66 W mode tested
+  assert.deepEqual(lines([pd, chain("pass", 21), mode("pass", 6000)], { fold: false })[1], "-- Xiaomi: auth:pass 66W:pass");
+  // no SVID: the chain row skipped, a word
+  assert.deepEqual(lines([pd, chain("skip", 1, "Xiaomi chain")], { fold: false })[1], "-- Xiaomi: no SVID:skip");
+  // the flag decides: a plain full-current row that asks 6 A (an over-5 A cable) stays a PPS row
+  const plain = S("pps", 11000, "pass", { pos: 6, pdo: 0xC0DC3278, ma: 6000, mi: false });
+  assert.equal(CtGrid.stepLabel(plain, null), "PPS 11V 6A");
 });
 
 test("a deep sweep is one range cell under its own Sweep label", () => {
@@ -198,7 +215,7 @@ test("the running dot sits on the pending cell of the step under test; stopped r
   const p = s.concat([S("pd3x-fixed", 20000, "pending", { pos: 5, pdo: 0x6412c, ma: 6000 })]);
   const got = lines(p, { fold: false, live: true, current: 3 });
   assert.equal(got[0], "PD3.x: 5V/3A:pass 9V/3A:pending 12V/3A:pending");
-  assert.equal(got[1], "-- Mi 6A: 20V/6A:running");
+  assert.equal(got[1], "-- Xiaomi: 120W:running");
 });
 
 test("revision rows are no grid rows", () => {

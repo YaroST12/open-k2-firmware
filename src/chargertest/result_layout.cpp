@@ -436,7 +436,7 @@ unsigned tone_rank(Tone t) {
     }
 }
 // The Xiaomi row: the chain row first (a chip "auth" while it waits or once the chain finished; a word when it could not run:
-// "no SVID", "no answer", "stalled"), then one chip per mode the chain unlocked at its new level ("11V 5A", "20V 6A"); a chain that
+// "no SVID", "no answer", "stalled"), then one chip per mode the chain unlocked, by the watts of its new level ("55W", "66W"); a chain that
 // finished with nothing raised says "none new" beside its chip.
 [[gnu::noinline]] void probe_row(TokenBuf& b, std::span<const ct::Step> steps) {
     bool done = false, modes = false;
@@ -457,7 +457,7 @@ unsigned tone_rank(Tone t) {
         modes = true;
         Token* k = b.token(true, tone(x));
         if (!k) break;
-        put_text(*k, step_label::params(x).c_str());   // the mode's new level: "11V 5A", "20V 6A"
+        put_text(*k, step_label::params(x).c_str());   // the mode's new level by its watts: "55W", "66W"
         tag(b, x);
     }
     if (done && !modes) b.word("none new", Tone::Dim);
@@ -928,6 +928,7 @@ Fam family_of(const ct::Step& x) {
 // The current a step is ranked by: what its label shows, or for an AVS offer (no amps in the words) the offer's limit at the
 // step's voltage, so a 28 V AVS offer is not outranked by a 20 V fixed one.
 unsigned rank_ma(const ct::Step& x) {
+    if (x.hunt) return x.ma;   // a Xiaomi mode: the current it asks (its label words the watts)
     if (const unsigned ma = step_label::amps_ma(x)) return ma;
     return x.avs && x.pdo ? pd::current_limit_ma(pd::decode_pdo(x.pdo), x.mv) : 0u;
 }

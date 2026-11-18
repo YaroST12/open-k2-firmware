@@ -706,8 +706,15 @@ var K2Proto = (function () {
                       "timeout", "voltage outside band", "hard reset", "source lost", "cancelled", "5V release failed",
                       "offers changed", "PD active: use QC port", "revision cannot be forced", "select at least one test",
                       "physical cable limit", "unsupported PDO layout",
-                      "charger stayed in PD", "rebooted during request", "rebooted during handover", "EPR entry refused", "no contract", "source shut off (needs replug)", "no PD after re-attach", "VBUS cut, source recovered", "blocked by PD", "no QC3+ response", "rebooted 3x", "needs external power", "PD gave up before START", "Class A only (12 V max)", "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target", "withdrawn by source", "wrong voltage on 5V contract", "needs load", "floored above target", "step resolution", "HID-cable loop: 5V lock", "advertised", "light run: not asked", "port cuts without load", "output folds back"];
+                      "charger stayed in PD", "rebooted during request", "rebooted during handover", "EPR entry refused", "no contract", "source shut off (needs replug)", "no PD after re-attach", "VBUS cut, source recovered", "blocked by PD", "no QC3+ response", "rebooted 3x", "needs external power", "PD gave up before START", "Class A only (12 V max)", "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target", "withdrawn by source", "wrong voltage on 5V contract", "needs load", "floored above target", "step resolution", "HID-cable loop: 5V lock", "advertised", "light run: not asked", "port cuts without load", "output folds back", "Xiaomi chain"];
   var TEST_ALL = (1 << TEST_ALGORITHMS.length) - 1;
+  // How the Xiaomi 0x2717 auth chain ended, from its row's detail (mi_unlock::chain_text; tools/step_label.py mi_chain_text).
+  function miChainText(code) {
+    if (code === 1) return "no 0x2717 SVID";
+    if (code === 2) return "no answer";
+    if (code >= 4 && code <= 13) return "failed at step " + (code - 3);
+    return code === 20 ? "done, verified" : code === 21 ? "done via 020A" : "unknown (" + code + ")";
+  }
   var TEST_LEVELS = ["medium", "light", "deep"];   // charger_test::Level order: Medium 0 (the default), Light 1, Deep 2
   var LATENCY = ["n/a", "<10 ns (~1 m)", "10-20 ns (~2 m)", "20-30 ns (~3 m)", "30-40 ns (~4 m)",
                  "40-50 ns (~5 m)", "50-60 ns (~6 m)", "60-70 ns (~7 m)", ">70 ns"];
@@ -841,7 +848,7 @@ var K2Proto = (function () {
       var at = header + i * 16, code = p[at], pos = p[at + 1], flags = p[at + 2],
           verdict = p[at + 9], why = p[at + 10], detail = p[at + 11], raw = v.getUint32(at + 12, true);
       if (code >= (modern ? TEST_ALGORITHMS.length : 10) || pos > 11 || verdict >= TEST_RESULTS.length ||
-          why >= reasons || flags & ~63 || (verdict === 4 && why === 0))   // bits 0-4 + bit 5: a deep-sweep row
+          why >= reasons || flags & ~127 || (verdict === 4 && why === 0))   // bits 0-4, bit 5 a deep-sweep row, bit 6 Xiaomi
         throw new FrameError("invalid charger-test row");
       var group = modern ? TEST_ALGORITHM_GROUPS[code] : code, protocol = TEST_GROUPS[group];
       if (modern) {
@@ -868,6 +875,8 @@ var K2Proto = (function () {
                     detail ? (names[detailCode] || "unknown (" + detail + ")") : "none",
                   raw_pdo: raw, continuous: !!(flags & 1), avs: !!(flags & 2), sweep: !!(flags & 32),
                   attempts: (flags >> 2) & 7 };
+      if (flags & 64) row.mi = true;   // the Xiaomi unit: its chain row (detail = how the 0x2717 chain ended) and the modes it unlocked
+      if (row.mi && why === TEST_REASONS.indexOf("Xiaomi chain")) row.detail_reason = miChainText(detail);
       if (modern) {
         row.algorithm = TEST_ALGORITHMS[code];
         row.explanation = code >= 16 && code <= 18 ? "No independent PD3." + (code - 16) + " test" :
@@ -3349,14 +3358,18 @@ var CtGrid = (function () {
     return s + "." + (frac < 10 ? "0" + frac : String(frac)).replace(/0+$/, "");
   }
   function has(list, x) { return list.indexOf(x) >= 0; }
-  function isHunt(s) { return has(PD_FAMILY, s.protocol) && (s.request_ma || 0) > HUNT_MA; }
+  // The wire's Xiaomi flag ("mi": the chain row and the modes it unlocked) decides; an older firmware's row (no key) that asks more
+  // than the cable ceiling was its 6 A probe.
+  function isHunt(s) { return s.mi !== undefined ? !!s.mi : has(PD_FAMILY, s.protocol) && (s.request_ma || 0) > HUNT_MA; }
+  // A Xiaomi mode is named by its power level: volts asked times current asked, whole watts ("Mi 55W"; step_label.hpp mi_watts).
+  function miWatts(s) { return isHunt(s) ? Math.floor(((s.target_mv || 0) * (s.request_ma || 0) + 500000) / 1000000) : 0; }
   function isSweep(s) { return has(PROGRAMMABLE, s.protocol) && (s.detail === SWEEP_DETAIL || s.sweep === true); }
-  function isFullCurrent(s) { return s.protocol === "pps" && (s.request_ma || 0) > PLAN_ROW_MA && s.request_ma <= HUNT_MA; }
+  function isFullCurrent(s) { return s.protocol === "pps" && (s.request_ma || 0) > PLAN_ROW_MA && s.request_ma <= HUNT_MA && !isHunt(s); }
   function isAvs(s) { return s.protocol === "spr-avs" || s.protocol === "epr-avs" || (s.protocol === "epr-fixed" && !!s.avs); }
 
   function protocolWord(s) {
     var p = s.protocol, hasV = !!s.target_mv;
-    if (isHunt(s)) return "Mi";
+    if (isHunt(s)) return hasV ? "Mi" : "Xiaomi";
     if (p === "pd2-fixed") return hasV ? "PD" : "PD2.0";
     if (p === "pd3x-fixed") return hasV ? "PD" : "PD3.x";
     if (p === "epr-fixed") return s.avs ? "AVS" : "EPR";
@@ -3376,7 +3389,8 @@ var CtGrid = (function () {
     return 0;
   }
   function ampsMa(s) {
-    if (isHunt(s) || isFullCurrent(s)) return s.request_ma || 0;
+    if (isHunt(s)) return 0;   // a Xiaomi mode: its watts (miWatts)
+    if (isFullCurrent(s)) return s.request_ma || 0;
     if (s.protocol === "pd2-fixed" || s.protocol === "pd3x-fixed" || s.protocol === "pps" || s.protocol === "epr-fixed")
       return isAvs(s) ? 0 : pdoMa(s.raw_pdo || 0);
     return s.protocol === "scp" ? (s.request_ma || 0) : 0;
@@ -3388,6 +3402,7 @@ var CtGrid = (function () {
     if (s.continuous && prev && has(PROGRAMMABLE, s.protocol) && prev.protocol === s.protocol && prev.pos === s.pos &&
         !isHunt(prev) && !isHunt(s) && prev.target_mv && prev.target_mv !== mv)
       return milli(prev.target_mv) + "→" + milli(mv) + "V";
+    if (isHunt(s)) return miWatts(s) + "W";
     var out = milli(mv) + "V", ma = (amps !== false || isFullCurrent(s)) ? ampsMa(s) : 0;
     return out + (ma ? " " + milli(ma) + "A" : "");
   }
@@ -3507,7 +3522,7 @@ var CtGrid = (function () {
     var keys = [];
     steps.forEach(function (s) {
       if (REVISIONS[s.alg]) return;
-      var k = s.hunt ? { alg: "", probe: true, sweep: false, mv: s.mv }
+      var k = s.hunt ? { alg: "", probe: true, sweep: false, mv: 0 }   // the Xiaomi unit: one row
                      : { alg: s.alg, probe: false, sweep: s.sweep, mv: isRange(s.alg) ? s.pos : 0 };
       if (!keys.some(function (o) { return o.alg === k.alg && o.probe === k.probe && o.sweep === k.sweep && o.mv === k.mv; })) keys.push(k);
     });
@@ -3587,8 +3602,18 @@ var CtGrid = (function () {
     keys.forEach(function (key) {
       var row, a = key.alg;
       if (key.probe) {
-        row = begin("Mi 6A", key);
-        steps.forEach(function (s) { if (s.hunt && s.mv === key.mv) chip(row, params(s.raw), toneOf(s), [s], s.mv); });
+        // The Xiaomi row (result_layout probe_row): the chain row says how the 0x2717 chain ended ("auth", or a word when it did not
+        // finish), then one chip per mode it unlocked by its watts; an older firmware's 6 A probes are chips of their own.
+        row = begin("Xiaomi", key);
+        var modes = steps.filter(function (s) { return s.hunt && s.mv; });
+        steps.forEach(function (s) {
+          if (!s.hunt || s.mv) return;
+          var d = s.detail, done = d === 20 || d === 21;
+          if (s.result === "skip" && !done) word(row, d === 1 ? "no SVID" : d === 2 ? "no answer" : "stalled", "skip");
+          else chip(row, "auth", toneOf(s), [s], 0);
+          if (done && !modes.length) word(row, "none new", "skip");
+        });
+        modes.forEach(function (s) { chip(row, params(s.raw), toneOf(s), [s], s.mv); });
         return;
       }
       if (key.sweep) {
@@ -3659,7 +3684,7 @@ var CtGrid = (function () {
       var cur = steps.filter(function (s) { return s.i === opts.current; })[0];
       if (cur && (cur.result === "running" || cur.result === "pending")) {
         for (var ri = 0; ri < rows.length && !dot; ri++) {
-          var r = rows[ri], owns = r.probe ? cur.hunt && cur.mv === r.mv :
+          var r = rows[ri], owns = r.probe ? cur.hunt :
                                    r.sweep ? cur.sweep && cur.pos === r.pos && cur.alg === r.alg :
                                    !!r.alg && !cur.hunt && !cur.sweep && r.alg === cur.alg && (!isRange(r.alg) || cur.pos === r.pos);
           if (!owns) continue;

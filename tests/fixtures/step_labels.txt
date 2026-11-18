@@ -39,9 +39,9 @@ epr     | 0 |     0 |    0 |       0 | - |     0 | EPR
 # Xiaomi unit: the chain row (no level), then the modes the chain unlocked at their new level (a fixed or a PPS offer; the
 # current is the requested one, also at or below 5 A)
 pd3     | 0 |     0 |    0 |       0 | h |     0 | Xiaomi
-pd3     | 5 | 20000 | 5000 | 0x641f4 | h |     0 | Mi 20V 5A
-pps     | 6 | 11000 | 5000 | 0xc0dc3264 | h | 0 | Mi 11V 5A
-pps     | 6 | 11000 | 6000 | 0xc0dc3278 | h | 0 | Mi 11V 6A
+pd3     | 5 | 20000 | 5000 | 0x641f4 | h |     0 | Mi 100W
+pps     | 6 | 11000 | 5000 | 0xc0dc3264 | h | 0 | Mi 55W
+pps     | 6 | 11000 | 6000 | 0xc0dc3278 | h | 0 | Mi 66W
 # PD revision rows
 pd30rev | 0 |     0 |    0 |       0 | - |     0 | PD3.0 rev
 pd31rev | 0 |     0 |    0 |       0 | - |     0 | PD3.1 rev

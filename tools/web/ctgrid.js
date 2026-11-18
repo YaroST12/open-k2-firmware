@@ -34,14 +34,18 @@ var CtGrid = (function () {
     return s + "." + (frac < 10 ? "0" + frac : String(frac)).replace(/0+$/, "");
   }
   function has(list, x) { return list.indexOf(x) >= 0; }
-  function isHunt(s) { return has(PD_FAMILY, s.protocol) && (s.request_ma || 0) > HUNT_MA; }
+  // The wire's Xiaomi flag ("mi": the chain row and the modes it unlocked) decides; an older firmware's row (no key) that asks more
+  // than the cable ceiling was its 6 A probe.
+  function isHunt(s) { return s.mi !== undefined ? !!s.mi : has(PD_FAMILY, s.protocol) && (s.request_ma || 0) > HUNT_MA; }
+  // A Xiaomi mode is named by its power level: volts asked times current asked, whole watts ("Mi 55W"; step_label.hpp mi_watts).
+  function miWatts(s) { return isHunt(s) ? Math.floor(((s.target_mv || 0) * (s.request_ma || 0) + 500000) / 1000000) : 0; }
   function isSweep(s) { return has(PROGRAMMABLE, s.protocol) && (s.detail === SWEEP_DETAIL || s.sweep === true); }
-  function isFullCurrent(s) { return s.protocol === "pps" && (s.request_ma || 0) > PLAN_ROW_MA && s.request_ma <= HUNT_MA; }
+  function isFullCurrent(s) { return s.protocol === "pps" && (s.request_ma || 0) > PLAN_ROW_MA && s.request_ma <= HUNT_MA && !isHunt(s); }
   function isAvs(s) { return s.protocol === "spr-avs" || s.protocol === "epr-avs" || (s.protocol === "epr-fixed" && !!s.avs); }
 
   function protocolWord(s) {
     var p = s.protocol, hasV = !!s.target_mv;
-    if (isHunt(s)) return "Mi";
+    if (isHunt(s)) return hasV ? "Mi" : "Xiaomi";
     if (p === "pd2-fixed") return hasV ? "PD" : "PD2.0";
     if (p === "pd3x-fixed") return hasV ? "PD" : "PD3.x";
     if (p === "epr-fixed") return s.avs ? "AVS" : "EPR";
@@ -61,7 +65,8 @@ var CtGrid = (function () {
     return 0;
   }
   function ampsMa(s) {
-    if (isHunt(s) || isFullCurrent(s)) return s.request_ma || 0;
+    if (isHunt(s)) return 0;   // a Xiaomi mode: its watts (miWatts)
+    if (isFullCurrent(s)) return s.request_ma || 0;
     if (s.protocol === "pd2-fixed" || s.protocol === "pd3x-fixed" || s.protocol === "pps" || s.protocol === "epr-fixed")
       return isAvs(s) ? 0 : pdoMa(s.raw_pdo || 0);
     return s.protocol === "scp" ? (s.request_ma || 0) : 0;
@@ -73,6 +78,7 @@ var CtGrid = (function () {
     if (s.continuous && prev && has(PROGRAMMABLE, s.protocol) && prev.protocol === s.protocol && prev.pos === s.pos &&
         !isHunt(prev) && !isHunt(s) && prev.target_mv && prev.target_mv !== mv)
       return milli(prev.target_mv) + "→" + milli(mv) + "V";
+    if (isHunt(s)) return miWatts(s) + "W";
     var out = milli(mv) + "V", ma = (amps !== false || isFullCurrent(s)) ? ampsMa(s) : 0;
     return out + (ma ? " " + milli(ma) + "A" : "");
   }
@@ -192,7 +198,7 @@ var CtGrid = (function () {
     var keys = [];
     steps.forEach(function (s) {
       if (REVISIONS[s.alg]) return;
-      var k = s.hunt ? { alg: "", probe: true, sweep: false, mv: s.mv }
+      var k = s.hunt ? { alg: "", probe: true, sweep: false, mv: 0 }   // the Xiaomi unit: one row
                      : { alg: s.alg, probe: false, sweep: s.sweep, mv: isRange(s.alg) ? s.pos : 0 };
       if (!keys.some(function (o) { return o.alg === k.alg && o.probe === k.probe && o.sweep === k.sweep && o.mv === k.mv; })) keys.push(k);
     });
@@ -272,8 +278,18 @@ var CtGrid = (function () {
     keys.forEach(function (key) {
       var row, a = key.alg;
       if (key.probe) {
-        row = begin("Mi 6A", key);
-        steps.forEach(function (s) { if (s.hunt && s.mv === key.mv) chip(row, params(s.raw), toneOf(s), [s], s.mv); });
+        // The Xiaomi row (result_layout probe_row): the chain row says how the 0x2717 chain ended ("auth", or a word when it did not
+        // finish), then one chip per mode it unlocked by its watts; an older firmware's 6 A probes are chips of their own.
+        row = begin("Xiaomi", key);
+        var modes = steps.filter(function (s) { return s.hunt && s.mv; });
+        steps.forEach(function (s) {
+          if (!s.hunt || s.mv) return;
+          var d = s.detail, done = d === 20 || d === 21;
+          if (s.result === "skip" && !done) word(row, d === 1 ? "no SVID" : d === 2 ? "no answer" : "stalled", "skip");
+          else chip(row, "auth", toneOf(s), [s], 0);
+          if (done && !modes.length) word(row, "none new", "skip");
+        });
+        modes.forEach(function (s) { chip(row, params(s.raw), toneOf(s), [s], s.mv); });
         return;
       }
       if (key.sweep) {
@@ -344,7 +360,7 @@ var CtGrid = (function () {
       var cur = steps.filter(function (s) { return s.i === opts.current; })[0];
       if (cur && (cur.result === "running" || cur.result === "pending")) {
         for (var ri = 0; ri < rows.length && !dot; ri++) {
-          var r = rows[ri], owns = r.probe ? cur.hunt && cur.mv === r.mv :
+          var r = rows[ri], owns = r.probe ? cur.hunt :
                                    r.sweep ? cur.sweep && cur.pos === r.pos && cur.alg === r.alg :
                                    !!r.alg && !cur.hunt && !cur.sweep && r.alg === cur.alg && (!isRange(r.alg) || cur.pos === r.pos);
           if (!owns) continue;

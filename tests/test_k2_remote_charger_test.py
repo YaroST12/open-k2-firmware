@@ -477,7 +477,7 @@ class ChargerTest(unittest.TestCase):
 
     def test_reason_52_xiaomi_chain_and_the_mi_flag_decode(self):
         # the Xiaomi unit: its chain row (no level; the detail byte is how the 0x2717 chain ended) and a mode the chain unlocked,
-        # both with flags bit 6; the labels are the firmware's ("Xiaomi", "Mi 11V 5A")
+        # both with flags bit 6; the labels are the firmware's ("Xiaomi", "Mi 55W": a mode by its watts)
         self.assertEqual(kr.TEST_REASONS[52], "Xiaomi chain")
         chain = struct.pack("<BBBHHHBBBI", 1, 0, 0x40, 0, 0, 0, 2, 52, 20, 0)   # pd3x-fixed, pass, why 52, chain verified
         pps = kr.TEST_ALGORITHMS.index("pps")
@@ -487,7 +487,13 @@ class ChargerTest(unittest.TestCase):
         steps += kr.decode_charger_test(page(HEADER2, 1, [mode]))["steps"]
         steps += kr.decode_charger_test(page(HEADER2, 2, [plain]))["steps"]
         self.assertEqual((steps[0]["reason"], steps[0]["detail_reason"], steps[0]["mi"]), ("Xiaomi chain", "done, verified", True))
-        self.assertEqual([step_label.label(s) for s in steps], ["Xiaomi", "Mi 11V 5A", "PPS 11V 5A"])
+        self.assertEqual([step_label.label(s) for s in steps], ["Xiaomi", "Mi 55W", "PPS 11V 5A"])
+        # an over-5 A cable: the plain full-current row asks 6 A; once a row of the run carries the flag, the flag decides
+        over = struct.pack("<BBBHHHBBBI", pps, 6, 0, 11000, 6000, 11020, 2, 0, 0, 0xC0DC3278)
+        lone = kr.decode_charger_test(page(HEADER2, 0, [over]))["steps"]
+        self.assertEqual(step_label.label(lone[0]), "Mi 66W")             # alone (an older firmware): the > 5 A inference
+        joined = kr.mark_mi_flags(steps[:1] + lone)
+        self.assertEqual([step_label.label(s) for s in joined], ["Xiaomi", "PPS 11V 6A"])
         self.assertEqual(step_label.mi_chain_text(1), "no 0x2717 SVID")
         self.assertEqual(step_label.mi_chain_text(4 + 4), "failed at step 5")
 

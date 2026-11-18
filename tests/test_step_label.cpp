@@ -113,7 +113,14 @@ static void test_amps_only_when_the_step_has_a_current() {
     ct::Step avs; avs.algorithm = A::SprAvs; avs.avs = true; avs.mv = 15000; avs.ma = 1000; avs.pdo = 0xE004B000u;
     CHECK_EQ(stl::amps_ma(avs), 0u);
     ct::Step hunt; hunt.algorithm = A::Pd3Fixed; hunt.hunt = true; hunt.mv = 20000; hunt.ma = 6000; hunt.pdo = 409935u;
-    CHECK_EQ(stl::amps_ma(hunt), 6000u);
+    CHECK_EQ(stl::amps_ma(hunt), 0u);         // a Xiaomi mode is named by its watts
+    CHECK_EQ(stl::mi_watts(hunt), 120u);
+    CHECK_STR(stl::label(hunt).c_str(), "Mi 120W");
+    hunt.mv = 11000; hunt.ma = 5000; CHECK_STR(stl::label(hunt).c_str(), "Mi 55W");   // PPS 5-11V 5A
+    hunt.ma = 6000; CHECK_STR(stl::label(hunt).c_str(), "Mi 66W");                    // 11V 6A
+    hunt.mv = 20000; hunt.ma = 3250; CHECK_STR(stl::label(hunt).c_str(), "Mi 65W");   // 20V 3.25A
+    hunt.mv = 0; CHECK_STR(stl::label(hunt).c_str(), "Xiaomi");                       // the chain row
+    ct::Step plain = hunt; plain.hunt = false; plain.mv = 20000; CHECK_EQ(stl::mi_watts(plain), 0u);
 }
 static void test_a_ramp_needs_the_previous_row_of_the_same_offer() {
     ct::Step prev; prev.algorithm = A::Pps; prev.pos = 6; prev.mv = 11000; prev.pdo = 0xC1A42164u;

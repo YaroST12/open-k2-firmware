@@ -1246,7 +1246,7 @@ static std::string row_order(const rl::Layout& l) {
     return out;
 }
 // The Xiaomi unit is one row ("Xiaomi", Row::probe) in the Xiaomi section: the chain's "auth" chip, then one chip per mode it
-// unlocked at the level the row asked ("11V 5A", never the advertised list of the PD rows), which stay out of the USB PD chips.
+// unlocked by the watts of the level the row asked ("55W", never the advertised list of the PD rows), which stay out of the USB PD chips.
 static void test_the_xiaomi_unit_is_one_row_in_its_section() {
     auto s = baseus();
     s.push_back(mi_chain(V::Pass, k2::mi_unlock::kCodeVerified));
@@ -1258,7 +1258,7 @@ static void test_the_xiaomi_unit_is_one_row_in_its_section() {
     CHECK_STR(l.rows[mi].label, "Xiaomi");
     CHECK_EQ(l.rows[mi].probe, true);
     CHECK_EQ(mi > row_of(l, "PPS"), true);   // the row stands where the plan runs it: after the PD rows
-    CHECK_STR(chips(l, mi).c_str(), "auth 11V 5A 20V 5A");
+    CHECK_STR(chips(l, mi).c_str(), "auth 55W 100W");   // each mode by its watts
     CHECK_EQ(int(l.tokens[l.rows[mi].first].tone), int(rl::Tone::Pass));
     CHECK_EQ(int(l.tokens[l.rows[mi].first + 1].tone), int(rl::Tone::Pass));
     CHECK_EQ(int(l.tokens[l.rows[mi].first + 2].tone), int(rl::Tone::Fail));
@@ -1298,7 +1298,7 @@ static void test_the_xiaomi_row_says_how_the_chain_ended() {
     CHECK_STR(only({mi_chain(V::Pass, k2::mi_unlock::kCodeFinished)}).c_str(), "auth none new");
     CHECK_STR(only({mi_chain(V::Pending, 0)}).c_str(), "auth");   // the Running grid, before the chain row's turn
     ct::Step cut = mi_mode(A::Pps, 11000, 6000, V::Skip, 6, 0xC0DC3278u); cut.reason = ct::Reason::CableLimit;
-    CHECK_STR(only({mi_chain(V::Pass, k2::mi_unlock::kCodeVerified), cut}).c_str(), "auth 11V 6A cable");
+    CHECK_STR(only({mi_chain(V::Pass, k2::mi_unlock::kCodeVerified), cut}).c_str(), "auth 66W cable");
     CHECK_EQ(int(l.tokens[l.rows[row_of(l, "Xiaomi") + 1].first + 1].tone) != int(rl::Tone::Fail), true);
 }
 
@@ -1341,7 +1341,7 @@ static void test_summary_one_line_per_family_ranked_by_watts() {
     s.push_back(step(A::Fcp, 9000, V::Fail));
     const auto v = summary_of(s);
     CHECK_EQ(v.size(), 3u);
-    CHECK_STR(v[0].text, "Mi 20V 6A");
+    CHECK_STR(v[0].text, "Mi 120W");
     CHECK_STR(v[1].text, "PD 20V 3.35A");
     CHECK_STR(v[2].text, "QC3 12V");        // no amps in the data model for a D+/D- mode: volts only, never invented
     CHECK_EQ(v[2].mw, 0u);

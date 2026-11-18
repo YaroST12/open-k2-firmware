@@ -2249,9 +2249,8 @@ void ChargerTestPage::list_row(int index, bool focused, kit::RowSpec &out) {
         out.marker = kit::Marker::Verdict;
         const auto view = s_.runner_.sweep_view();
         out.state = static_cast<uint8_t>(vmap(s, view));
-        // A mode the Xiaomi chain unlocked reads before -> after ("PPS 5-11V 3A→5A", at most kRowCells); any other step its label.
-        if (const auto* m = ct::is_mi_mode(s) ? s_.runner_.mi_mode(s) : nullptr) row_text_.put(mi_unlock::mode_text(*m).view());
-        else row_text_.put(step_label::label(s, si > 0 ? &steps[static_cast<size_t>(si) - 1] : nullptr).view());
+        // The step's label; a mode the Xiaomi chain unlocked reads by its watts ("Mi 55W"), its before -> after is the Detail page's.
+        row_text_.put(step_label::label(s, si > 0 ? &steps[static_cast<size_t>(si) - 1] : nullptr).view());
         out.text = row_text_.view();
         out.data = true;
         if (s.measured_mv) {

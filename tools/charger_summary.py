@@ -61,7 +61,7 @@ def _retry(s):
 
 def _step_text(s, prev, amps=True):
     """One row of a group line: its step_label numbers ("5V 3A", "11→8V") and the verdict. `prev` = the plan row before it."""
-    # A Xiaomi mode row carries its protocol word ("Mi 11V 5A"): the group has no heading of its own.
+    # A Xiaomi mode row carries its protocol word and watts ("Mi 55W"): the group has no heading of its own.
     label = step_label.label(s, prev) if step_label.is_hunt(s) else step_label.params(s, prev, amps=amps)
     if _caution(s):   # a fixed row measured the folded level; a sweep row has no single level of its own
         at = "" if s.get("sweep") else f" to {report_card.dv_text(s['measured_mv'])}"
@@ -87,7 +87,7 @@ def _step_text(s, prev, amps=True):
 
 def _xiaomi_line(rows, prev_of):
     """The Xiaomi unit in one line: how the 0x2717 auth chain ended, then each mode it unlocked with its verdict
-    ("- Xiaomi: auth done, verified; Mi 11V 5A ✓"). Nothing raised reads "- Xiaomi auth: done, no new modes"."""
+    ("- Xiaomi: auth done, verified; Mi 55W ✓"). Nothing raised reads "- Xiaomi auth: done, no new modes"."""
     chain = next((s for s in rows if not s.get("target_mv")), None)
     modes = ", ".join(_step_text(s, prev_of[id(s)]) for s in rows if s.get("target_mv"))
     if chain is None:   # an older firmware: its 6 A probe rows, no chain row

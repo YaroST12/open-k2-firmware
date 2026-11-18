@@ -8,7 +8,8 @@ export const PD = ["pd2-fixed", "pd3x-fixed", "epr", "spr-avs", "pps", "epr-avs"
 export function S(alg, mv, result, o = {}) {
   return { algorithm: alg, protocol: PROTOCOL[alg] || alg, target_mv: mv, request_ma: o.ma ?? (PD.includes(alg) ? 1000 : 0),
            raw_pdo: o.pdo || 0, pos: o.pos || 0, result, reason: o.reason || "none", detail: o.detail || 0,
-           continuous: !!o.cont, avs: !!o.avs, sweep: !!o.sweep, measured_mv: o.measured || 0 };
+           continuous: !!o.cont, avs: !!o.avs, sweep: !!o.sweep, measured_mv: o.measured || 0,
+           ...(o.mi !== undefined ? { mi: o.mi } : {}) };   // the Xiaomi flag (bit 6): only a firmware that sets it sends it
 }
 
 export const REQ = "request failed", NOOFFER = "not advertised", PDACTIVE = "PD active: use QC port";
