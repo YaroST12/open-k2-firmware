@@ -4,7 +4,10 @@
 // the panel, the UI paint gate and the AHB divider.
 #include "k2/core/idle_hw.hpp"
 
+#include "k2/core/idle_cfg.hpp"
+#include "k2/core/log.hpp"
 #include "k2/core/stage_meter.hpp"
+#include "k2/drivers/fs_flash.hpp"
 #include "k2/drivers/crm.hpp"
 #include "k2/drivers/dpdm.hpp"
 #include "k2/drivers/fusb302.hpp"
@@ -34,6 +37,9 @@ std::uint32_t g_hold_until_ms;
 bool g_hold;
 std::uint32_t g_last_tick_ms;
 bool g_tick_seen;
+idle::Config g_saved;      // what /idle.cfg holds (or the defaults when it was missing)
+bool g_dirty;              // the persisted part changed since g_saved
+std::uint32_t g_dirty_ms;  // when it last changed
 
 bool before(std::uint32_t t, std::uint32_t now) { return static_cast<std::int32_t>(now - t) < 0; }
 
@@ -65,9 +71,27 @@ void full_clock() {
 
 void init() {}
 
+void load_config() {
+    idle::Config c = g_m.config();
+    const idle::Config s = idle_cfg::load(fs::instance());
+    c.brightness = s.brightness;
+    c.dim_brightness = s.dim_brightness;
+    c.dim_after_s = s.dim_after_s;
+    c.off_after_s = s.off_after_s;
+    g_m.set_config(c);
+    g_saved = g_m.config();
+    g_dirty = false;
+    K2LOG("[IDLE] settings bright=%u dim=%u dim_after=%u off_after=%u\n", unsigned(g_saved.brightness), unsigned(g_saved.dim_brightness),
+          unsigned(g_saved.dim_after_s), unsigned(g_saved.off_after_s));
+}
+
 const idle::Config& config() { return g_m.config(); }
 
-void set_config(const idle::Config& c) { g_m.set_config(c); }
+void set_config(const idle::Config& c) {
+    g_m.set_config(c);
+    g_dirty = !idle_cfg::same(g_m.config(), g_saved);
+    if (g_dirty) g_dirty_ms = systick::millis();
+}
 
 void force(idle::Force f) { g_m.force(f); }
 
@@ -163,6 +187,16 @@ void service(Ui& ui, bool boot_screen, std::uint32_t now) {
     else if (o.low_clock_ok && g_asleep && !g_waking && blocked == 0) want = kLowClockDiv;
     if (want > 1 && (blocked & ~kBlockHold) != 0) want = 1;   // a DWT user runs: never low, even forced
     apply_div(want);
+
+    // Deferred save: one flash write per burst, never while a test owns the ports.
+    if (g_dirty && !in.busy && now - g_dirty_ms >= kSaveDelayMs) {
+        const idle::Config c = g_m.config();
+        const bool ok = idle_cfg::save(fs::instance(), c);
+        g_dirty = false;
+        if (ok) g_saved = c;
+        K2LOG("[IDLE] saved bright=%u dim=%u dim_after=%u off_after=%u (%s)\n", unsigned(c.brightness), unsigned(c.dim_brightness),
+              unsigned(c.dim_after_s), unsigned(c.off_after_s), ok ? "ok" : "FLASH ERROR");
+    }
 }
 
 }  // namespace k2::idle_hw

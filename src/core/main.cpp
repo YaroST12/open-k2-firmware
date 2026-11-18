@@ -10,6 +10,7 @@
 #endif
 #include "k2/core/eekeep.hpp"
 #include "k2/core/gap_meter.hpp"
+#include "k2/core/idle_hw.hpp"
 #include "k2/core/log.hpp"
 #include "k2/core/main_loop.hpp"
 #include "k2/drivers/adc.hpp"
@@ -165,6 +166,7 @@ k2::mainloop::Context g_loop{g_ui, g_remote, g_bootscreen, g_accelerometer, rebo
         bool formatted = false;
         k2::fs::init(formatted);
     }
+    k2::idle_hw::load_config();   // saved backlight levels and idle timeouts (/idle.cfg)
     k2::eekeep::init();   // the settings EEPROM's slots (USB link copy, the user's spoof), before usbcfg reads its copy
     k2::usbcfg::init();   // the USB link itself is connected last, just before the main loop (see there)
     k2::systick::delay_ms(50);

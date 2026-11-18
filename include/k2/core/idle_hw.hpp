@@ -22,6 +22,7 @@ class Ui;
 namespace k2::idle_hw {
 
 inline constexpr std::uint8_t kLowClockDiv = 4;       // 60 MHz; /16 would put APB under the USB register interface's minimum
+inline constexpr std::uint32_t kSaveDelayMs = 2000;    // one flash write per burst of PLUS/MINUS steps
 inline constexpr std::uint32_t kClockHoldMs = 10000;   // after a state-changing remote command the clock stays full this long
 
 // Why the low clock is refused right now (Status::blocked): a running user of DWT cycle timing or of a shared timer.
@@ -48,6 +49,8 @@ struct Status {
 
 // Boot: nothing to start yet (the saved settings are loaded by load_config() once the file system is up).
 void init();
+// Boot, after the file system is mounted: the saved levels and timeouts (defaults when none).
+void load_config();
 // Every 20 ms from the slow tasks, before the UI tick. boot_screen = the QR screen owns the panel.
 void service(Ui& ui, bool boot_screen, std::uint32_t now);
 // A physical button went down. Returns whether it is delivered to the UI: false = it only woke the screen, drop the whole press.
@@ -62,7 +65,7 @@ void pass_guard();
 
 Status status();
 const idle::Config& config();
-// Takes the whole config (clamped by the machine); the persisted part (the two brightness levels and the two timeouts) is saved.
+// Takes the whole config (clamped). Brightness and timeout changes are saved once kSaveDelayMs passes quiet and nothing runs on the ports.
 void set_config(const idle::Config& c);
 void force(idle::Force f);
 void force_div(std::uint8_t n);   // 0 = automatic, else 1 / 2 / 4 / 8; refused values are ignored
