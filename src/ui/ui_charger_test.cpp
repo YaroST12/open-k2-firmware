@@ -36,6 +36,7 @@
 #include "k2/chargertest/run_events.hpp"
 #include "k2/core/scratch.hpp"
 #include "k2/chargertest/step_label.hpp"
+#include "k2/chargertest/oem_watts.hpp"
 #include "k2/core/storage.hpp"
 #include "k2/ui/uiprefs.hpp"
 #include "k2/drivers/usb.hpp"
@@ -1596,6 +1597,10 @@ void ChargerTestPage::build_grid(bool running_grid, bool note_cuts) {
                                   svooc_note);
         oem.svooc_cap = svooc_note;
     }
+    // The VOOC family by its levels' watts: what the ceiling stage claimed of each (every level not tested without one)
+    oem.vooc_watts = true;
+    oem.vooc_claims = oem_watts::claims(oem_watts::Family::Vooc, {ev.svooc_word, static_cast<svooc_ceiling::End>(ev.svooc_end),
+                                                                  ev.svooc_vmax_mv, ev.svooc_stop_ms, ev.svooc_why});
     char justification[48] = {};
     if (const auto label = report_card::qc_label(card); label != report_card::QcLabel::None) {
         report_card::qc_label_justification(card, justification, sizeof justification);
@@ -2028,6 +2033,11 @@ static FooterTone spec_footer(StrBuf<32>& f, int check, const specsec::Cell& c, 
         if (row.kind == result_layout::CompactKind::Header || row.kind == result_layout::CompactKind::Fact ||
             row.kind == result_layout::CompactKind::Collapsed) {
             f.put("see steps");
+            return FooterTone::Info;
+        }
+        if (row.kind == result_layout::CompactKind::Levels) {   // "SVOOC: up to 120W claimed": claimed, never a pass
+            f.clear();
+            f.put(result_layout::levels_footer(row, lbl).c_str());
             return FooterTone::Info;
         }
         const A algo = static_cast<A>(row.algo);

@@ -172,6 +172,7 @@ struct StubState {
     bool svooc_run = false;           // running()
     uint8_t svooc_n_asks = 0;         // the snapshot's asks (100 mA words below) and ceiling word
     uint16_t svooc_ceiling = 0;
+    int32_t svooc_vmax_mv = 0;        // the snapshot's report.vbus_max_mv (the top VBUS the trigger saw)
     uint16_t svooc_asks[8] = {};
     uint8_t svooc_after = 0;          // polls the last ask stood for
     int fc_starts = 0, fc_inline_ok = 0;   // fctrig::start calls, and those carrying the override
@@ -181,6 +182,7 @@ struct StubState {
     int fc_retargets = 0, fc_retarget_mv = 0, fc_retarget_fail = 0;   // fctrig::set_target calls
     int max_vbus_mv = 36000;     // power::max_vbus_mv() of the stub (INA226)
     int fc_state = 0;            // k2::fc::State returned by the fctrig stub
+    int fc_status_fail = 0, fc_status_ident = 0;   // the status()'s fail (k2::fc::Fail; non-zero: a started session reads Failed) and VOOC ident (0xAC)
     k2::fc::Caps fc_caps;        // fctrig::caps() of the stub: what the SCP / UFCS sessions read
     bool fc_critical = false;    // fctrig::paint_critical(): an engine window the idle hook does not service
     bool fc_open_on_start = false;   // fctrig::start opens an engine window (fc_critical) at once for a protocol Engine::blocks_paint names (FCP, SCP, VOOC, UFCS, VIVO; not the QC handshake)

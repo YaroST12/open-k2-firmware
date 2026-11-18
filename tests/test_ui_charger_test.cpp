@@ -2501,9 +2501,12 @@ static void test_ufcs_results_and_detail_show_the_mode_current() {
         for (const auto& s : steps) if (s.group == ct::Group::Ufcs && s.mv) tagged += step_label::ufcs_amps_ma(s) == 3000;
         CHECK_EQ(tagged > 3, true);
         result_layout::Layout l; result_layout::build(l, steps);
-        unsigned with_amps = 0;
-        for (const auto& tk : l.tokens) if (std::string_view(tk.text).find("3A") != std::string_view::npos) ++with_amps;
-        CHECK_EQ(with_amps >= 3, true);
+        unsigned with_watts = 0;   // OEM watts (oem_watts::chip): each level's volts x its mode's 3 A, "9V 27W"
+        for (const auto& tk : l.tokens) {
+            const std::string_view x(tk.text);
+            with_watts += x.size() > 1 && x.back() == 'W' && x.find("V ") != std::string_view::npos;
+        }
+        CHECK_EQ(with_watts >= 3, true);
         dump_panel("ufcs_cuktech_results");
         check_ufcs_detail(ui, t, "5-20V 1-3A", "cuktech");   // the 5 V baseline is judged in the last mode that reaches 5 V
     }
@@ -2512,7 +2515,7 @@ static void test_ufcs_results_and_detail_show_the_mode_current() {
         Ui ui; uint32_t t; ufcs_run(ui, t, "fh22");
         result_layout::Layout l; result_layout::build(l, ui.charger_test_results().steps());
         bool found = false;
-        for (const auto& tk : l.tokens) found |= std::string_view(tk.text).find("11V 4A") != std::string_view::npos;
+        for (const auto& tk : l.tokens) found |= std::string_view(tk.text).find("11V 44W") != std::string_view::npos;
         CHECK_EQ(found, true);
         dump_panel("ufcs_fh22_results");
         check_ufcs_detail(ui, t, "5.5-11V 1-4A", "fh22");
@@ -5436,6 +5439,65 @@ static void test_remote_start_is_the_devices_start() {
     }
 }
 
+// OEM levels by their watts (oem_watts.hpp): a VOOC-family charger detected at 5 V (ident 0xAC). Medium: the ident alone, every
+// level not tested. Deep: the ceiling stage stood at 0x06D under 11.02 V (120 W claimed): every SuperVOOC level claimed. The Results
+// grid reads "VOOC" [detected, 20W] and "SVOOC" [50W 65W 100W 120W]; the renders (K2_DUMP) cover all four rotations.
+static void vooc_detects(int proto) {   // the adapter clocked the ident (0xAC): a VOOC-family session ends Detected, no voltage proof
+    const auto p = static_cast<k2::fc::Proto>(proto);
+    const bool vooc = p == k2::fc::Proto::Vooc || p == k2::fc::Proto::SuperVooc || p == k2::fc::Proto::SuperVooc65;
+    g_stub.fc_status_fail = vooc ? int(k2::fc::Fail::Detected) : 0;
+    g_stub.fc_status_ident = vooc ? 0xAC : 0;
+}
+static void vooc_watts_run(Ui& ui, uint32_t& t, ct::Level level, uint8_t rot) {
+    six_pdo_fixture();
+    if (level == ct::Level::Deep) {
+        g_stub.svooc_n_asks = 4;
+        const uint16_t asks[4] = {0x032, 0x041, 0x064, 0x06D};
+        for (unsigned i = 0; i < 4; ++i) g_stub.svooc_asks[i] = asks[i];
+        g_stub.svooc_ceiling = 0x06D;
+        g_stub.svooc_after = uint8_t(svooc::kAcceptPolls);
+        g_stub.svooc_vmax_mv = 11020;
+    }
+    constexpr uint8_t kUnits[] = {uint8_t(ct::Unit::Vooc), uint8_t(ct::Unit::SuperVooc), uint8_t(ct::Unit::SuperVooc65), uint8_t(ct::Unit::Pd)};
+    open(ui); ui.set_rotation(rot, 1050); settle(ui, 1050);
+    CHECK_EQ(ui.charger_test_set_units(kUnits), true);
+    CHECK_EQ(ui.charger_test_set_level(uint8_t(level)), true);
+    review(ui);
+    start_press(ui, 1300); press(ui, Button::Ok, 1400);
+    g_stub.fc_start_hook = vooc_detects;
+    for (t = 1500; t <= 900000 && ui.charger_test_busy(); t += 100) ui.tick(t);
+    g_stub.fc_start_hook = nullptr;
+    g_stub.fc_status_fail = g_stub.fc_status_ident = 0;
+    CHECK_EQ(ui.charger_test_stage(), 6);
+    ui.tick(t); t += 200; ui.tick(t); t += 200;
+    settle(ui, t);
+}
+static void test_vooc_family_results_read_watts_levels() {
+    for (const ct::Level level : {ct::Level::Medium, ct::Level::Deep})
+        for (uint8_t rot = 0; rot < 4; ++rot) {
+            Ui ui; uint32_t t;
+            vooc_watts_run(ui, t, level, rot);
+            const auto& r = ui.charger_test_results();
+            unsigned detected = 0;
+            for (const auto& s : r.steps())
+                detected += (s.algorithm == A::Vooc || s.algorithm == A::SuperVooc || s.algorithm == A::SuperVooc65) &&
+                            s.verdict == ct::Verdict::Pass && s.detail == uint8_t(k2::fc::Fail::Detected);
+            CHECK_EQ(detected >= 1, true);
+            if (!detected && rot == 0)
+                for (const auto& s : r.steps())
+                    std::printf("[oem-watts] step alg %u mv %u verdict %u reason %u detail %u\n", unsigned(s.algorithm), unsigned(s.mv),
+                                unsigned(s.verdict), unsigned(s.reason), unsigned(s.detail));
+            if (level == ct::Level::Deep && rot == 0)
+                std::printf("[oem-watts] deep: svooc_end %u word 0x%03X vmax %u\n", unsigned(r.evidence().svooc_end),
+                            unsigned(r.evidence().svooc_word), unsigned(r.evidence().svooc_vmax_mv));
+            const char* lv = level == ct::Level::Deep ? "deep" : "medium";
+            char name[64];
+            std::snprintf(name, sizeof name, "oem_watts_%s_rot%u", lv, unsigned(rot)); dump_panel(name);
+            press(ui, Button::Plus, t); settle(ui, t); t += 200;   // the second row: SVOOC, its footer
+            std::snprintf(name, sizeof name, "oem_watts_%s_rot%u_row2", lv, unsigned(rot)); dump_panel(name);
+        }
+}
+
 int main() {
     test_view_says_what_the_wizard_shows();
     test_view_carries_the_wait_and_the_run();
@@ -5568,5 +5630,6 @@ int main() {
     test_start_waits_for_the_caps();
     test_decisions_use_the_unaveraged_vbus();
     test_remote_start_is_the_devices_start();
+    test_vooc_family_results_read_watts_levels();
     return test_report("test_ui_charger_test");
 }
