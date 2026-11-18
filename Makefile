@@ -577,8 +577,13 @@ TEST_CXX_LIB  += $(SRC_DIR)/pdspec/engine.cpp $(SRC_DIR)/pdstress/engine.cpp
 TEST_CXX_BINS  = $(patsubst tests/%.cpp, $(HOST_DIR)/%, $(TEST_CXX_SRCS))
 
 # Every library source is compiled once into $(HOST_DIR)/obj/<set>/<path>.o (with -MMD -MP
-# dependency files) and each test only compiles its own .cpp and links the objects. Plain
-# objects, not an archive, so every member is linked exactly as the old source-list link did.
+# dependency files) and each test only compiles its own .cpp and links the library. The library is a static
+# archive of those objects (LIB_A): a test links only the members it references, so a link takes ~80 ms
+# instead of ~300 ms and a binary 3-4 MB instead of 13 MB (289 binaries per object directory, three directories).
+# Three objects stay plain on every link line: tests/ui_stubs.cpp (driver stand-ins with static constructors; the world
+# tests link their own build of it instead), tests/trunc_log.cpp (defines k2_trunc_failures, which test_util.h only
+# references weakly, and a weak reference never pulls an archive member) and tests/fake_lcd.cpp (the LCD seam of the UI
+# tests). No archive member has a static constructor or overrides a weak symbol today; one that does must join them.
 # Object sets stay separate where the flags differ: lib (default), scan (-DK2_HOST_PINS).
 OBJ_DIR        = $(HOST_DIR)/obj
 LIB_OBJS       = $(patsubst %.cpp, $(OBJ_DIR)/lib/%.o, $(TEST_CXX_LIB)) $(patsubst %.c, $(OBJ_DIR)/ext/%.o, $(LFS_SRCS)) $(patsubst %.c, $(OBJ_DIR)/ext/%.o, $(QR_SRCS))
@@ -618,7 +623,16 @@ $(OBJ_DIR)/tests/test_usb_desc_nonet.o: HOST_K2_NET = 0
 $(OBJ_DIR)/tests/test_usb_desc_nowebusb.o: HOST_K2_WEBUSB = 0
 $(OBJ_DIR)/tests/test_settings_rows0.o: HOST_K2_SCREENSHOT = 0
 
-$(HOST_DIR)/%: $(OBJ_DIR)/tests/%.o $(LIB_OBJS)
+# The archive is rebuilt from scratch (ar rcs would keep a member whose source left TEST_CXX_LIB).
+HOST_AR        ?= ar
+LIB_PLAIN_OBJS = $(OBJ_DIR)/lib/tests/ui_stubs.o $(OBJ_DIR)/lib/tests/trunc_log.o $(OBJ_DIR)/lib/tests/fake_lcd.o
+LIB_A          = $(OBJ_DIR)/libk2host.a
+# The guard fails the build when a member gains a static constructor: nothing references such a member, so the linker would drop it.
+# It looks for the _GLOBAL__sub_I_ initialiser, not .init_array: the sanitizers add their own module constructor to every object.
+$(LIB_A): $(filter-out $(LIB_PLAIN_OBJS), $(LIB_OBJS))
+	@for o in $^; do if nm $$o | grep -q _GLOBAL__sub_I_; then echo "$$o has a static constructor: add it to LIB_PLAIN_OBJS"; exit 1; fi; done
+	@rm -f $@ && $(HOST_AR) rcs $@ $^
+$(HOST_DIR)/%: $(OBJ_DIR)/tests/%.o $(LIB_PLAIN_OBJS) $(LIB_A)
 	@$(HOST_CXX) $(HOST_CXXFLAGS) $^ -o $@
 
 # The e-marker scan test runs the real src/drivers/fusb302.cpp against a fake chip, so it cannot share
@@ -640,7 +654,7 @@ WORLD_OBJS    += $(patsubst %.cpp, $(OBJ_DIR)/lib/%.o, $(SRC_DIR)/drivers/power_
 HOST_WORLD_CMD = $(HOST_CXX) $(HOST_CXXFLAGS) -DK2_HOST_PINS -DK2_WORLD_STUBS -MMD -MP -c $< -o $@
 $(OBJ_DIR)/world/%.o: %.cpp
 	@$(call RUN,HOST_WORLD_CMD)
-$(HOST_DIR)/test_world_replay: $(WORLD_OBJS) $(filter-out $(OBJ_DIR)/lib/tests/ui_stubs.o, $(LIB_OBJS))
+$(HOST_DIR)/test_world_replay: $(WORLD_OBJS) $(filter-out $(OBJ_DIR)/lib/tests/ui_stubs.o, $(LIB_PLAIN_OBJS)) $(LIB_A)
 	@$(HOST_CXX) $(HOST_CXXFLAGS) $^ -o $@
 
 # The SuperVOOC world (tests/test_world_svooc.cpp): the same world plus the real trigger glue (src/fastcharge/svooc_trig.cpp)
@@ -654,7 +668,7 @@ WSVOOC_OBJS   += $(patsubst %.cpp, $(OBJ_DIR)/lib/%.o, $(SRC_DIR)/drivers/power_
 HOST_WSVOOC_CMD = $(HOST_CXX) $(HOST_CXXFLAGS) -DK2_HOST_PINS -DK2_WORLD_STUBS -DK2_WORLD_SVOOC -MMD -MP -c $< -o $@
 $(OBJ_DIR)/wsvooc/%.o: %.cpp
 	@$(call RUN,HOST_WSVOOC_CMD)
-$(HOST_DIR)/test_world_svooc: $(WSVOOC_OBJS) $(filter-out $(OBJ_DIR)/lib/tests/ui_stubs.o, $(LIB_OBJS))
+$(HOST_DIR)/test_world_svooc: $(WSVOOC_OBJS) $(filter-out $(OBJ_DIR)/lib/tests/ui_stubs.o, $(LIB_PLAIN_OBJS)) $(LIB_A)
 	@$(HOST_CXX) $(HOST_CXXFLAGS) $^ -o $@
 
 # The spoof state test uses its fake receive/transmit hook, not the UI driver's stand-ins.
