@@ -61,8 +61,9 @@ enum class Reason : uint8_t {
                          // (measured_mv = the collapsed VBUS); the levels after it still run (no chain skip)
     Floored,             // a low programmable row (PdLow) whose output stopped at a steady floor ABOVE the target: the source advertises 3.3 V
                          // but regulates at 5 V. A fail, measured_mv = the floor (the mirror of Capped's ceiling logic)
-    StepResolution,      // a PPS step-walk row whose +20 mV step the source did not follow (rounded to a coarser quantum or ignored):
-                         // a fail, detail = the measured move in mV (0 = no move)
+    StepResolution,      // a step-walk row (PPS 20 mV, AVS 100 mV quanta) whose step the source did not follow (rounded to a coarser quantum
+                         // or ignored): a CAUTION on a Pass since 2026-11-18, detail = the measured move in mV (0 = no move). Older cards and
+                         // journals hold it on a Fail: a consumer keys the tone on the verdict
     Loop,                // the HID-cable loop 5 V lock (k2/core/loop_guard.hpp, Input::loop_lock): no run starts; a lock mid-run fails the
                          // row in flight and ends the run back at 5 V
     Advertised,          // a Light run (Level::Light): a level the source's own list offers (a PD PDO / APDO, an EPR level, a UFCS mode, an
@@ -88,20 +89,20 @@ inline constexpr uint8_t kDetailStepWalk = 160;
 // Unlike the walk's marker it SURVIVES finish() (finish keeps it), so a finished run's results strip and the card can
 // still tell the row apart; the verdict's result code rides in Reason alone, as for StepResolution.
 inline constexpr uint8_t kDetailSweep = 161;
-// ROADMAP "PPS coverage" item 2: one step-walk row per PPS APDO, from the mid level, kStepWalkCount Requests of +kStepMv
-// each. Every step needs Accept + PS_RDY; the walk is judged by (1) a jump: a single measured move of 2 x kStepMv or more
-// fails at once (a source that rounds to a 40/50/100 mV quantum shows it), (2) the total: the last level minus the base
-// must be kStepWalkCount x kStepMv +- kStepWalkTolMv, and (3) the trend: the least-squares slope over all
-// kStepWalkCount + 1 recorded levels must lie in kStepWalkSlopeMinMv..kStepWalkSlopeMaxMv per step. A single step is NOT
+// ROADMAP "PPS coverage" item 2: one step-walk row per PPS / AVS APDO in a Deep run, from the mid level, kStepWalkCount Requests of
+// one quantum (walk_step_mv) each. Every step needs Accept + PS_RDY; the walk is judged by (1) a jump: a single measured move of
+// 2 quanta or more ends it at once (a source that rounds to a coarser quantum shows it), (2) the total: the last level minus the
+// base must be kStepWalkCount quanta +- one quantum, and (3) the trend: the least-squares slope over all kStepWalkCount + 1
+// recorded levels must lie in half a quantum .. one and a half per step. A miss is a CAUTION on a Pass (Reason::StepResolution,
+// detail = the measured move, 0 = steps ignored), never a fail: the levels the walk asked for were granted. A single step is NOT
 // judged for direction or size below the jump: the output creeps up 20-36 mV for ~2 s after each PS_RDY (hardware
 // 2026-11-10, 13.00 -> 13.10 V: one level held 13039..13075), so one +20 mV step reads anywhere from <= 0 to ~+36 mV
-// while the total is right (~95 mV); the old per-step "move <= 0" rule failed a good charger "steps ignored".
-// Slope band 10..30 mV/step = the ideal 20 +- 50 %: it passes the measured creep (about 20 mV/step) and a slow-but-
-// correct source (+15 +25 +18 +22 +20 reads 20.4), and fails a source that ignores the steps (slope 0) or follows only
-// about half of them; the band is wide enough that one noisy level cannot tip it.
-inline constexpr unsigned kStepMv = 20, kStepWalkCount = 5;
-inline constexpr int kStepWalkTolMv = 20;
-inline constexpr int kStepWalkSlopeMinMv = 10, kStepWalkSlopeMaxMv = 30;
+// while the total is right (~95 mV). The slope band (PPS 10..30 mV/step) passes that creep and a slow-but-correct source
+// (+15 +25 +18 +22 +20 reads 20.4), and flags a source that ignores the steps (slope 0) or follows only about half of them.
+inline constexpr unsigned kStepMv = 20, kAvsStepMv = 100, kStepWalkCount = 5;
+// The walk's quantum: PPS Requests move in 20 mV, AVS in 100 mV. The judging scales with it: the total is kStepWalkCount x step
+// +- one step (also the rebase drop), the least-squares slope per step lies in half a step .. one and a half steps.
+constexpr unsigned walk_step_mv(Algorithm a) { return a == Algorithm::Pps ? kStepMv : kAvsStepMv; }
 // walk-settle (ROADMAP "The PPS step walk fails a good source: its base level is read before the output settles"): a granted
 // walk level is recorded only once VBUS is steady - at least kWalkSteadySamples samples inside the last kWalkSteadyWindowMs
 // all within kWalkSteadyMv of each other (3 samples within 3 mV at the 100 ms host-test cadence; at the 20 ms UI tick the
@@ -301,7 +302,7 @@ struct Step {
 static_assert(sizeof(Step) == 20, "Step must stay free of padding holes: kMaxSteps copies live in the Runner");
 // True while `s` is the step-walk row of its APDO and still in flight (the planner marks it with kDetailStepWalk).
 constexpr bool is_step_walk(const Step& s) {
-    return s.group == Group::Pd && s.algorithm == Algorithm::Pps && s.detail == kDetailStepWalk &&
+    return s.group == Group::Pd && (kPpsAlgorithms & bit(s.algorithm)) && s.detail == kDetailStepWalk &&
            (s.verdict == Verdict::Pending || s.verdict == Verdict::Running);
 }
 // True when `s` is a deep-sweep row (one per APDO part, ctsweep::part_range; the points live in the Runner's sweep record, not as rows).

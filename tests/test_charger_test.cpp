@@ -19,6 +19,8 @@ namespace ct = k2::charger_test;
 namespace cj = k2::charger_journal;
 using A = ct::Algorithm;
 static constexpr ct::Options kPd{.selected = ct::bit(A::Pd3Fixed) | ct::bit(A::Pps)};
+// kPd plus the Deep checks: the step walk is planned only with pps_sweep / avs_sweep.
+static constexpr ct::Options kPdWalk = [] { ct::Options o = kPd; o.pps_sweep = true; return o; }();
 struct Fake final : ct::Env {
     ct::Input in;
     pd::SourceCaps caps;
@@ -260,20 +262,23 @@ struct Fake final : ct::Env {
         {   // the output level of a PD request; pd_small_step_mv scripts a PPS request exactly +20 mV above the
             // previous one (the step-walk row's steps): the output moves by that many mV instead of 20 (-1 = follow)
             const bool pps_req = c.pos >= 1 && c.pos <= caps.num_pdos && caps.pdos[c.pos - 1].type == pd::PdoType::Pps;
+            // An AVS range walks at its own 100 mV quantum, scripted through the same walk_deltas / pd_small_step_mv.
+            const bool avs_req = c.pos >= 1 && c.pos <= caps.num_pdos && caps.pdos[c.pos - 1].type == pd::PdoType::Avs;
+            const int q = avs_req ? 100 : 20;
             if (pps_req && walk_settle_mv >= 0 && int(c.mv) == walk_settle_mv) { settle_on = true; settle_t0 = in.now; }
             if (settle_on) {
                 const uint32_t t = in.now - settle_t0;
                 if (t >= walk_settle_hold_ms + walk_settle_ms) settle_on = false;
                 in.vbus_mv = settle_v(t);
-            } else if (pps_req && last_pps_mv && int(c.mv) - last_pps_mv == 20 && !walk_deltas.empty()) {
+            } else if ((pps_req || avs_req) && last_pps_mv && int(c.mv) - last_pps_mv == q && !walk_deltas.empty()) {
                 in.vbus_mv = last_pd_vbus + walk_deltas[std::min<size_t>(walk_step_i, walk_deltas.size() - 1)];
                 ++walk_step_i;
-            } else if (pps_req && last_pps_mv && int(c.mv) - last_pps_mv == 20 && pd_small_step_mv >= 0)
+            } else if ((pps_req || avs_req) && last_pps_mv && int(c.mv) - last_pps_mv == q && pd_small_step_mv >= 0)
                 in.vbus_mv = last_pd_vbus + pd_small_step_mv;
             else
                 in.vbus_mv = low_mv_for_3v3 && c.mv == 3300 ? low_mv_for_3v3 : int(c.mv);
-            if (pps_req && !(last_pps_mv && int(c.mv) - last_pps_mv == 20)) walk_step_i = 0;   // a base level: the walk restarts
-            if (pps_req) { last_pps_mv = int(c.mv); last_pd_vbus = settle_on && walk_settle_hold_ms ? walk_settle_to_mv : in.vbus_mv; }
+            if ((pps_req || avs_req) && !(last_pps_mv && int(c.mv) - last_pps_mv == q)) walk_step_i = 0;   // a base level: the walk restarts
+            if (pps_req || avs_req) { last_pps_mv = int(c.mv); last_pd_vbus = settle_on && walk_settle_hold_ms ? walk_settle_to_mv : in.vbus_mv; }
         }
         if (c.mv >= 5000) {   // the scripted output shape of the sweep tests
             if (pd_fold_from_mv && unsigned(c.mv) >= pd_fold_from_mv) in.vbus_mv = int(pd_fold_to_mv);
@@ -757,14 +762,13 @@ static void test_plan_and_run() {
             CHECK_EQ(s.mv >= 5000 && s.mv <= (s.pos == 6 ? 11000 : 21000), true);
         }
     }
-    CHECK_EQ(fixed, 5); CHECK_EQ(pps, 14); CHECK_EQ(skips, 3); CHECK_EQ(r.steps().size(), 64);   // 40 legacy rows (Class B included) and the vendor rows, the PD rows + 2 full-current rows (11V 3.2A, 20V 3.2A) + 2 step-walk rows (one per APDO) + the Xiaomi chain row (the 6 A hunt rows retired 2026-11-18)
+    CHECK_EQ(fixed, 5); CHECK_EQ(pps, 12); CHECK_EQ(skips, 3); CHECK_EQ(r.steps().size(), 62);   // 40 legacy rows (Class B included) and the vendor rows, the PD rows + 2 full-current rows (11V 3.2A, 20V 3.2A) + the Xiaomi chain row (the 6 A hunt rows retired 2026-11-18; no step-walk rows: Deep only)
     f.tick(r, 200000);
     CHECK_EQ(r.state(), ct::State::Done);
     read_only(r, f);
     // Every 5 V row of a legacy unit asks the engine (the attach's own 5 V proves nothing): QC3 / QC3+ ramps retarget four times each.
     // 17 = 19 - the 2 hunt rows: this source advertises its APDOs at 3.2 A, so no 6 A Request goes out (decision 2026-11-07).
-    // + 12 for the two step-walk rows (six Requests each: the mid level, then +20 mV x 5): 29.
-    CHECK_EQ(f.pd_requests, 29); CHECK_EQ(f.fc_requests, 41); CHECK_EQ(f.retargets, 24);   // + the six Class B rows (QC2B 20 V, the QC3B ramp); retargets: QC2 9/12/20 V, QC3 x4, QC3B x5 (all five go on in the QC3 session), QC3+ x4, UFCS 9/11/5/12/20 V, AFC 12 V, FCP 9/12 V
+    CHECK_EQ(f.pd_requests, 17); CHECK_EQ(f.fc_requests, 41); CHECK_EQ(f.retargets, 24);   // + the six Class B rows (QC2B 20 V, the QC3B ramp); retargets: QC2 9/12/20 V, QC3 x4, QC3B x5 (all five go on in the QC3 session), QC3+ x4, UFCS 9/11/5/12/20 V, AFC 12 V, FCP 9/12 V
     // Seven vendor units share ONE PD-silent attach (a session boundary only where the session mode changes), then the Pd unit
     // (detach, Pd attach), then the standard protocols (QC2, QC3, QC3+, UFCS) in a second PD-silent attach; the run ends detached
     // and re-attaches in Pd.
@@ -1063,9 +1067,10 @@ static void test_pps_full_current_rows_never_overflow_the_plan() {
     for (unsigned i = 1; i < 7; ++i)
         many.caps.pdos[i] = pd::decode_pdo(0xc0000000 | ((3000u + 3000u * i) / 100 << 17) | (50u << 8) | 100);
     for (unsigned i = 7; i < 11; ++i) many.caps.pdos[i] = pd::decode_pdo(0xD0000000 | (480u << 17) | (150u << 8) | 140);
-    ct::Runner mr(many); const auto preview = ct::Runner::preview(many.caps, {}, many.in);
-    mr.start(many.caps, {}, many.in, true);
-    CHECK_EQ(mr.steps().size(), preview.total); CHECK_EQ(mr.steps().size(), ct::kMaxSteps);   // 113 planned: the last step-walk row is the one kMaxSteps drops (walk rows are emitted last per APDO)
+    ct::Options deep; deep.pps_sweep = true;   // the sweep and walk rows (emitted last per APDO) are the ones kMaxSteps drops
+    ct::Runner mr(many); const auto preview = ct::Runner::preview(many.caps, deep, many.in);
+    mr.start(many.caps, deep, many.in, true);
+    CHECK_EQ(mr.steps().size(), preview.total); CHECK_EQ(mr.steps().size(), ct::kMaxSteps);
     CHECK_EQ(mr.steps().size() <= ct::kMaxSteps, true);
     size_t full = 0;
     for (const auto& s : mr.steps()) full += s.algorithm == A::Pps && !s.hunt && s.ma > 1000 && s.verdict != ct::Verdict::Skip;
@@ -3994,8 +3999,8 @@ static bool walk_requests_at(const Fake& f, size_t i, unsigned pos, unsigned bas
 }
 static void test_pps_step_walk_passes_on_20mv_steps() {
     Fake f;   // default APDOs 5-11 V (pos 6, mid 8000) and 5-21 V (pos 7, mid 13000)
-    ct::Runner r(f); r.start(f.caps, kPd, f.in, true);
-    f.tick(r, 400000);
+    ct::Runner r(f); r.start(f.caps, kPdWalk, f.in, true);
+    f.tick(r, 900000);
     CHECK_EQ(r.state(), ct::State::Done);
     bool walk6 = false, walk7 = false;
     for (size_t i = 0; i + 5 < f.choices.size(); ++i) {
@@ -4048,8 +4053,8 @@ static void test_ps_rdy_out_of_band_is_noted_and_never_judged() {
 // The latches restart at every step-walk level: a level that is late is seen although the base level had its PS_RDY long before.
 static void test_ps_rdy_timing_is_noted_per_walk_level() {
     Fake f; f.ps_rdy_delay_ms = 800; f.ps_rdy_delay_mv = 8060;   // only the walk's fourth level (8000 + 3 x 20 mV) is late
-    ct::Runner r(f); r.start(f.caps, kPd, f.in, true);
-    f.tick(r, 400000);
+    ct::Runner r(f); r.start(f.caps, kPdWalk, f.in, true);
+    f.tick(r, 900000);
     CHECK_EQ(r.state(), ct::State::Done);
     CHECK_EQ((r.evidence().timing & ct::PsRdyLate) != 0, true);
     CHECK_EQ(r.evidence().ps_rdy_max, 40);
@@ -4525,18 +4530,18 @@ static void test_avs_deep_sweep_epr_capped_at_the_monitor_ceiling() {
     for (const auto& s : rg.steps()) CHECK_EQ(ct::is_sweep(s), false);   // no EPR cable: no EPR AVS sweep row
     CHECK_EQ(g.pd_requests, 0);                                          // nothing was requested (informational list only)
 }
-static void test_pps_step_walk_fails_when_steps_round_to_100mv() {
+static void test_pps_step_walk_cautions_when_steps_round_to_100mv() {
     Fake f; f.pd_small_step_mv = 100;   // every +20 mV request moves the output by 100 mV
-    ct::Runner r(f); r.start(f.caps, kPd, f.in, true);
-    f.tick(r, 400000);
+    ct::Runner r(f); r.start(f.caps, kPdWalk, f.in, true);
+    f.tick(r, 900000);
     CHECK_EQ(r.state(), ct::State::Done);
     CHECK_EQ(count_reason_all(r, ct::Reason::StepResolution) >= 1u, true);
     bool checked = false;
     for (const auto& s : r.steps()) {
         if (s.reason != ct::Reason::StepResolution) continue;
         checked = true;
-        CHECK_EQ(int(s.verdict), int(ct::Verdict::Fail));
-        CHECK_EQ(s.detail, 100);   // "step resolution 100 mV"
+        CHECK_EQ(int(s.verdict), int(ct::Verdict::Pass));   // a caution, not a fail: the levels themselves held
+        CHECK_EQ(s.detail, 100);   // "steps 100 mV, not 20 mV"
     }
     CHECK_EQ(checked, true);
     CHECK_STR(ct::name(ct::Reason::StepResolution), "step resolution");
@@ -4544,15 +4549,15 @@ static void test_pps_step_walk_fails_when_steps_round_to_100mv() {
 static void test_pps_step_walk_passes_a_noisy_step_and_fails_a_short_sum() {
     {   // 16 mV a step: inside one step's band, the sum 80 mV is the edge of 100 +- 20 -> pass
         Fake f; f.pd_small_step_mv = 16;
-        ct::Runner r(f); r.start(f.caps, kPd, f.in, true);
-        f.tick(r, 400000);
+        ct::Runner r(f); r.start(f.caps, kPdWalk, f.in, true);
+        f.tick(r, 900000);
         CHECK_EQ(r.state(), ct::State::Done);
         CHECK_EQ(count_reason_all(r, ct::Reason::StepResolution), 0u);
     }
     {   // 15 mV a step every time: no single step is wrong, but the walk adds up to 75 mV -> fail, detail = the mean
         Fake f; f.pd_small_step_mv = 15;
-        ct::Runner r(f); r.start(f.caps, kPd, f.in, true);
-        f.tick(r, 400000);
+        ct::Runner r(f); r.start(f.caps, kPdWalk, f.in, true);
+        f.tick(r, 900000);
         CHECK_EQ(r.state(), ct::State::Done);
         bool checked = false;
         for (const auto& s : r.steps()) {
@@ -4563,17 +4568,17 @@ static void test_pps_step_walk_passes_a_noisy_step_and_fails_a_short_sum() {
         CHECK_EQ(checked, true);
     }
 }
-static void test_pps_step_walk_fails_when_steps_are_ignored() {
+static void test_pps_step_walk_cautions_when_steps_are_ignored() {
     Fake f; f.pd_small_step_mv = 0;   // the +20 mV requests move the output not at all
-    ct::Runner r(f); r.start(f.caps, kPd, f.in, true);
-    f.tick(r, 400000);
+    ct::Runner r(f); r.start(f.caps, kPdWalk, f.in, true);
+    f.tick(r, 900000);
     CHECK_EQ(r.state(), ct::State::Done);
     CHECK_EQ(count_reason_all(r, ct::Reason::StepResolution) >= 1u, true);
     bool checked = false;
     for (const auto& s : r.steps()) {
         if (s.reason != ct::Reason::StepResolution) continue;
         checked = true;
-        CHECK_EQ(int(s.verdict), int(ct::Verdict::Fail));
+        CHECK_EQ(int(s.verdict), int(ct::Verdict::Pass));
         CHECK_EQ(s.detail, 0);   // "steps ignored"
     }
     CHECK_EQ(checked, true);
@@ -4587,8 +4592,8 @@ static void test_pps_step_walk_fails_when_steps_are_ignored() {
 static void test_pps_step_walk_waits_for_the_base_to_settle() {
     Fake f;
     f.walk_settle_mv = 13000; f.walk_settle_from_mv = 13007; f.walk_settle_to_mv = 12990; f.walk_settle_ms = 900;
-    ct::Runner r(f); r.start(f.caps, kPd, f.in, true);
-    f.tick(r, 400000);
+    ct::Runner r(f); r.start(f.caps, kPdWalk, f.in, true);
+    f.tick(r, 900000);
     CHECK_EQ(r.state(), ct::State::Done);
     bool walk7 = false;
     for (size_t i = 0; i + 5 < f.choices.size(); ++i)
@@ -4602,32 +4607,32 @@ static void test_pps_step_walk_waits_for_the_base_to_settle() {
 // hold plus the steady window) lands inside that plateau, so the base was recorded 80 mV high and the +20 mV steps that followed
 // read a total of ~0: "FAIL StepResolution / steps ignored" on a source that follows every step. No dwell is long enough for
 // every plateau (the row 35 base held the same 13091 for over 1.1 s), so the walk recognises it by its signature: the first
-// step's level is at least kStepWalkTolMv BELOW the base although +20 mV was asked, so the base was not the settled level and
+// step's level is at least one quantum BELOW the base although +20 mV was asked, so the base was not the settled level and
 // the walk takes that level as the base once (the plateau lengths vary, the verdict must not).
 static void test_pps_step_walk_survives_an_overshoot_plateau_on_the_base() {
     for (const unsigned hold : {300u, 540u, 900u, 1400u}) {
         Fake f;
         f.walk_settle_mv = 13000; f.walk_settle_from_mv = 13091; f.walk_settle_to_mv = 13010;
         f.walk_settle_hold_ms = hold; f.walk_settle_ms = 100; f.pd_small_step_mv = 20;
-        ct::Runner r(f); r.start(f.caps, kPd, f.in, true);
-        f.tick(r, 400000);
+        ct::Runner r(f); r.start(f.caps, kPdWalk, f.in, true);
+        f.tick(r, 900000);
         CHECK_EQ(r.state(), ct::State::Done);
         CHECK_EQ(count_reason_all(r, ct::Reason::StepResolution), 0u);
     }
 }
 // The re-base is not a free pass: a source that really ignores the steps (and a base that never settles twice) still fails.
-static void test_pps_step_walk_overshoot_rebase_still_fails_ignored_steps() {
+static void test_pps_step_walk_overshoot_rebase_still_cautions_ignored_steps() {
     Fake f;
     f.walk_settle_mv = 13000; f.walk_settle_from_mv = 13091; f.walk_settle_to_mv = 13010;
     f.walk_settle_hold_ms = 540; f.walk_settle_ms = 100; f.pd_small_step_mv = 0;   // the +20 mV steps move the output not at all
-    ct::Runner r(f); r.start(f.caps, kPd, f.in, true);
-    f.tick(r, 400000);
+    ct::Runner r(f); r.start(f.caps, kPdWalk, f.in, true);
+    f.tick(r, 900000);
     CHECK_EQ(r.state(), ct::State::Done);
     bool checked = false;
     for (const auto& s : r.steps()) {
         if (s.reason != ct::Reason::StepResolution) continue;
         checked = true;
-        CHECK_EQ(int(s.verdict), int(ct::Verdict::Fail));
+        CHECK_EQ(int(s.verdict), int(ct::Verdict::Pass));
         CHECK_EQ(s.detail, 0);   // "steps ignored"
     }
     CHECK_EQ(checked, true);
@@ -4664,8 +4669,8 @@ static void test_walk_steady_mean() {
 // still has each level recorded after kWalkSteadyTimeoutMs, and the walk completes and passes.
 static void test_pps_step_walk_steady_wait_is_bounded_by_the_timeout() {
     Fake f; f.walk_ripple_mv = 5;
-    ct::Runner r(f); r.start(f.caps, kPd, f.in, true);
-    f.tick(r, 400000);
+    ct::Runner r(f); r.start(f.caps, kPdWalk, f.in, true);
+    f.tick(r, 900000);
     CHECK_EQ(r.state(), ct::State::Done);
     CHECK_EQ(count_reason_all(r, ct::Reason::StepResolution), 0u);
     bool walk7 = false;
@@ -4679,8 +4684,8 @@ static void test_pps_step_walk_steady_wait_is_bounded_by_the_timeout() {
 // kWalkSteadyWindowMs. noise_flip puts two neighbouring levels on opposite sides of the swing: one sample each read 100 mV apart.
 static void test_pps_step_walk_records_the_mean_of_a_noisy_level() {
     Fake f; f.noise_mv = 40; f.noise_flip = true;
-    ct::Runner r(f); r.start(f.caps, kPd, f.in, true);
-    f.tick(r, 400000);
+    ct::Runner r(f); r.start(f.caps, kPdWalk, f.in, true);
+    f.tick(r, 900000);
     CHECK_EQ(r.state(), ct::State::Done);
     CHECK_EQ(count_reason_all(r, ct::Reason::StepResolution), 0u);
     bool walk7 = false;
@@ -4707,15 +4712,15 @@ static void test_pps_deep_sweep_records_the_mean_of_a_noisy_point() {
 // output keeps creeping up 20-36 mV for ~2 s after each PS_RDY, so one 20 mV step reads anywhere from <= 0 to ~+36 mV
 // while the 5-step total is right (~95 mV). The walk is judged by the total and the upward trend of all six levels; only
 // a jump of 2 x kStepMv or more (coarse rounding) fails a single step.
-static unsigned walk_fail_rows(const ct::Runner& r, int detail) {   // step-resolution rows with this detail
+static unsigned walk_fail_rows(const ct::Runner& r, int detail) {   // step-resolution caution rows with this detail
     unsigned n = 0;
     for (const auto& s : r.steps())
-        if (s.reason == ct::Reason::StepResolution && int(s.verdict) == int(ct::Verdict::Fail) && s.detail == detail) ++n;
+        if (s.reason == ct::Reason::StepResolution && int(s.verdict) == int(ct::Verdict::Pass) && s.detail == detail) ++n;
     return n;
 }
 static void run_walk_script(Fake& f, ct::Runner& r) {
-    r.start(f.caps, kPd, f.in, true);
-    f.tick(r, 400000);
+    r.start(f.caps, kPdWalk, f.in, true);
+    f.tick(r, 900000);
     CHECK_EQ(r.state(), ct::State::Done);
 }
 static void test_pps_step_walk_passes_a_drifting_source() {
@@ -4737,7 +4742,7 @@ static void test_pps_step_walk_passes_a_slow_but_correct_source() {
     ct::Runner r(f); run_walk_script(f, r);
     CHECK_EQ(count_reason_all(r, ct::Reason::StepResolution), 0u);
 }
-static void test_pps_step_walk_fails_a_flat_source_as_steps_ignored() {
+static void test_pps_step_walk_cautions_a_flat_source_as_steps_ignored() {
     Fake f; f.walk_deltas = {0, 0, 0, 0, 0};
     ct::Runner r(f); run_walk_script(f, r);
     CHECK_EQ(walk_fail_rows(r, 0) >= 1u, true);   // detail 0 = the mean move: "steps ignored"
@@ -4745,11 +4750,51 @@ static void test_pps_step_walk_fails_a_flat_source_as_steps_ignored() {
     ct::Step s{}; s.reason = ct::Reason::StepResolution; s.detail = 0;
     CHECK_STR(ct::explanation(s), "steps ignored");
 }
-static void test_pps_step_walk_fails_a_source_that_rounds_to_100mv_on_the_jump() {
+static void test_pps_step_walk_cautions_a_source_that_rounds_to_100mv_on_the_jump() {
     Fake f; f.walk_deltas = {0, 0, 0, 0, 100};   // a 100 mV quantum: nothing, nothing, nothing, nothing, +100
     ct::Runner r(f); run_walk_script(f, r);
-    CHECK_EQ(walk_fail_rows(r, 100) >= 1u, true);   // the jump fails the step, detail = the move (the total alone passes)
+    CHECK_EQ(walk_fail_rows(r, 100) >= 1u, true);   // the jump cautions the step, detail = the move (the total alone passes)
     CHECK_EQ(count_reason_all(r, ct::Reason::StepResolution), walk_fail_rows(r, 100));
+}
+// AVS ranges walk at their own 100 mV quantum (Deep, next to the AVS sweep): six Requests, the mid level then +100 mV x 5.
+static Fake avs_fake() {
+    Fake f; f.caps.num_pdos = 7;
+    for (unsigned n = 0; n < 5; ++n) f.caps.pdos[n] = pd::decode_pdo(((5000 + 4000 * n) / 50 << 10) | 325);
+    f.caps.pdos[5] = pd::decode_pdo(0xc0000000 | (210u << 17) | (50u << 8) | 100);   // PDO6: PPS 5-21 V 5 A
+    f.caps.pdos[6] = pd::decode_pdo(0xE004B145);                                       // PDO7: SPR AVS 9-20 V
+    return f;
+}
+static bool avs_walk_requested(const Fake& f) {
+    for (size_t i = 0; i + 5 < f.choices.size(); ++i) {
+        bool ok = true;
+        for (unsigned k = 0; k < 6; ++k)
+            ok = ok && f.choices[i + k].pos == 7 && int(f.choices[i + k].mv) == int(f.choices[i].mv + 100 * k);
+        if (ok) return true;
+    }
+    return false;
+}
+static const ct::Options kAvsWalk = [] { ct::Options o{.selected = ct::bit(A::SprAvs)}; o.avs_sweep = true; return o; }();
+static void test_avs_step_walk_passes_on_100mv_steps() {
+    Fake f = avs_fake();
+    ct::Runner r(f); r.start(f.caps, kAvsWalk, f.in, true);
+    f.tick(r, 900000);
+    CHECK_EQ(r.state(), ct::State::Done);
+    CHECK_EQ(avs_walk_requested(f), true);
+    CHECK_EQ(count_reason_all(r, ct::Reason::StepResolution), 0u);
+}
+static void test_avs_step_walk_cautions_a_coarse_or_ignored_step() {
+    for (const int move : {0, 200}) {
+        Fake f = avs_fake(); f.walk_deltas = {0, 0, 0, 0, move};   // a 200 mV jump, or nothing at all
+        ct::Runner r(f); r.start(f.caps, kAvsWalk, f.in, true);
+        f.tick(r, 900000);
+        CHECK_EQ(r.state(), ct::State::Done);
+        unsigned n = 0;
+        for (const auto& s : r.steps()) {
+            if (s.reason != ct::Reason::StepResolution) continue;
+            ++n; CHECK_EQ(int(s.algorithm), int(A::SprAvs)); CHECK_EQ(int(s.verdict), int(ct::Verdict::Pass)); CHECK_EQ(s.detail, move);
+        }
+        CHECK_EQ(n, 1u);
+    }
 }
 // A PD source that goes dark mid-row (its output collapsed or we Hard Reset it): VBUS 0, the offer list gone, no
 // session. Lenovo C135, hardware 2026-11-03: VBUS drained 20 V -> 0 in 9 s, then every later row said "offers changed".
@@ -7861,6 +7906,37 @@ static pd::SourceCaps level_caps(bool epr = false) {
     if (epr) c.pdos[0] = pd::decode_pdo(c.pdos[0].raw | (1u << 23));
     return c;
 }
+// User decision 2026-11-18: the step walk is a Deep check, planned next to the sweeps (pps_sweep for a PPS APDO, avs_sweep for an
+// AVS one, which steps 100 mV); a Medium or Light run plans none.
+static unsigned walk_rows(const Fake& f, ct::Options o, A a) {
+    ct::Runner r(const_cast<Fake&>(f));
+    CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+    unsigned n = 0;
+    for (const auto& s : r.steps()) n += s.algorithm == a && s.detail == ct::kDetailStepWalk;
+    return n;
+}
+static void test_step_walk_is_planned_only_in_deep() {
+    Fake f; f.caps = level_caps();   // two PPS APDOs (pos 5, 6) and one SPR AVS APDO (pos 7)
+    const auto med = ct::with_level({}, ct::Level::Medium), light = ct::with_level({}, ct::Level::Light), deep = ct::with_level({}, ct::Level::Deep);
+    for (const A a : {A::Pps, A::SprAvs}) {
+        CHECK_EQ(walk_rows(f, med, a), 0u);
+        CHECK_EQ(walk_rows(f, light, a), 0u);
+    }
+    CHECK_EQ(walk_rows(f, deep, A::Pps), 2u);
+    CHECK_EQ(walk_rows(f, deep, A::SprAvs), 1u);
+    ct::Options only_pps = med; only_pps.pps_sweep = true;   // the Tests list line sets the two sweeps apart
+    CHECK_EQ(walk_rows(f, only_pps, A::Pps), 2u); CHECK_EQ(walk_rows(f, only_pps, A::SprAvs), 0u);
+    ct::Options only_avs = med; only_avs.avs_sweep = true;
+    CHECK_EQ(walk_rows(f, only_avs, A::Pps), 0u); CHECK_EQ(walk_rows(f, only_avs, A::SprAvs), 1u);
+    ct::Runner r(f);
+    CHECK_EQ(r.start(f.caps, deep, f.in, true), ct::Reason::None);
+    for (const auto& s : r.steps()) {
+        if (s.detail != ct::kDetailStepWalk) continue;
+        const unsigned q = s.algorithm == A::Pps ? 20u : 100u;
+        CHECK_EQ(s.mv % q, 0u);
+        CHECK_EQ(s.mv > 5000, true);
+    }
+}
 static void test_level_maps_to_the_run_switches() {
     CHECK_EQ(int(ct::Options{}.level), int(ct::Level::Medium));
     CHECK_EQ(int(ct::Level::Medium), 0);   // 0 on every wire: data from before the level reads Medium
@@ -8441,7 +8517,7 @@ int main() {
     test_pps_accepted_then_dropped_at_no_load_is_needs_load(); test_pps_collapse_with_current_drawn_stays_lost();
     test_fixed_row_collapse_stays_lost(); test_pps_collapse_after_ps_rdy_stays_lost();
     test_low_edge_that_regulates_at_5v_is_a_floored_fail();
-    test_pps_step_walk_passes_on_20mv_steps(); test_pps_step_walk_fails_when_steps_round_to_100mv(); test_pps_step_walk_fails_when_steps_are_ignored();
+    test_pps_step_walk_passes_on_20mv_steps(); test_pps_step_walk_cautions_when_steps_round_to_100mv(); test_pps_step_walk_cautions_when_steps_are_ignored();
     test_a_fold_the_sweep_finds_is_a_caution_on_the_apdos_rows(); test_a_fold_never_softens_a_capped_row(); test_an_avs_fold_marks_the_fixed_row_inside_the_band(); test_the_fh22_list_cautions_pdo6_and_pdo7(); test_pps_deep_sweep_records_every_point_and_the_fold_back(); test_pps_deep_sweep_stops_at_the_first_lost_source(); test_pps_deep_sweep_is_opt_in();
     test_sweep_live_follows_the_row_in_flight(); test_sweep_live_is_idle_without_a_sweep_row();
     test_claim_sweep_record_lends_the_point_buffer();
@@ -8449,21 +8525,22 @@ int main() {
     test_pps_step_walk_passes_a_noisy_step_and_fails_a_short_sum();
     test_pps_step_walk_waits_for_the_base_to_settle();
     test_pps_step_walk_survives_an_overshoot_plateau_on_the_base();
-    test_pps_step_walk_overshoot_rebase_still_fails_ignored_steps();
+    test_pps_step_walk_overshoot_rebase_still_cautions_ignored_steps();
     test_walk_steady_window();
     test_pps_step_walk_steady_wait_is_bounded_by_the_timeout();
     test_walk_steady_mean(); test_pps_step_walk_records_the_mean_of_a_noisy_level(); test_a_capped_row_does_not_wait_the_full_timeout(); test_keep_alive_windows_do_not_restart_the_capped_plateau(); test_a_ledge_shorter_than_the_capped_plateau_still_passes_through_keep_alive(); test_a_long_unanswered_keep_alive_restarts_the_plateau(); test_pps_deep_sweep_records_the_mean_of_a_noisy_point();
     test_pps_step_walk_passes_a_drifting_source(); test_pps_step_walk_passes_a_slow_but_correct_source();
     test_ps_rdy_late_is_noted_and_never_judged(); test_ps_rdy_inferred_is_noted_and_never_judged();
     test_ps_rdy_out_of_band_is_noted_and_never_judged(); test_ps_rdy_timing_is_noted_per_walk_level();
-    test_pps_step_walk_fails_a_flat_source_as_steps_ignored(); test_pps_step_walk_fails_a_source_that_rounds_to_100mv_on_the_jump();
+    test_pps_step_walk_cautions_a_flat_source_as_steps_ignored(); test_pps_step_walk_cautions_a_source_that_rounds_to_100mv_on_the_jump();
+    test_avs_step_walk_passes_on_100mv_steps(); test_avs_step_walk_cautions_a_coarse_or_ignored_step();
     test_an_inline_refusal_names_what_latched_it();
     test_default_run_sweeps_each_pps_apdo_after_its_checks();
     test_pps_sweep_splits_at_5v_by_unit();
     test_default_sweep_on_a_low_latch_source();
     test_self_powered_run_sweeps_from_5v();
     test_legacy_row_waits_through_a_source_restart(); test_legacy_restart_wait_is_bounded_and_a_load_still_refuses();
-    test_level_maps_to_the_run_switches(); test_level_plans_per_level(); test_light_run_requests_nothing_but_5v(); test_light_lists_the_epr_levels_as_advertised();
+    test_level_maps_to_the_run_switches(); test_level_plans_per_level(); test_step_walk_is_planned_only_in_deep(); test_light_run_requests_nothing_but_5v(); test_light_lists_the_epr_levels_as_advertised();
     test_epr_spoof_identity_tests_epr_and_avs(); test_epr_capable_list_never_gives_epr_rows_not_offered(); test_epr_spoof_identity_at_light_makes_no_requests();
     test_a_resumed_light_run_stays_light();
     test_the_page_names_the_run_level();
