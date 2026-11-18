@@ -417,6 +417,20 @@ test("a VOOC family that never answered folds as one word", () => {
   assert.ok(!got.some((l) => l.includes("SVOOC")), got.join(" | "));
 });
 
+// The engine's own words ride a skipped sibling too (the family shares the first row's detail): the title says "needs load",
+// never the bare reason "request failed" the unit never produced itself.
+test("a skipped VOOC sibling reads the first row's detail, not 'request failed'", () => {
+  const nl = { detail_reason: "needs load (2 tries)" };
+  const row = (alg, res) => ({ ...S(alg, 5000, res, { reason: REQ, detail: 13 }), detail_reason: nl.detail_reason });
+  const fam = [row("vooc", "fail"), row("svooc", "skip"), row("svooc65", "skip")];
+  const cells = CtGrid.layout(fam, { fold: false }).flatMap((r) => r.cells);
+  assert.equal(cells.length, 3);
+  for (const c of cells) assert.ok(c.title.includes("needs load") && !c.title.includes("request failed"), c.title);
+  // a plain skip with no engine detail keeps its reason
+  const plain = CtGrid.layout([S("pps", 8000, "skip", { pos: 6, pdo: 3235656292, reason: REQ })], { fold: false })[0].cells[0];
+  assert.match(plain.title, /request failed/);
+});
+
 test("SCP and UFCS chips read the level's claimed watts", () => {
   const s = [S("scp", 5000, "pass"), S("scp", 10000, "pass", { ma: 2250 })];
   assert.deepEqual(lines(s, { fold: false }), ["SCP: 5V:pass 10V/22.5W:pass"]);

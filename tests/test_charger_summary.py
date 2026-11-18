@@ -96,6 +96,25 @@ def test_the_vooc_family_reads_as_watts_levels():
     assert "SVOOC 65W claimed, SVOOC 100W not reached, SVOOC 120W not reached" in charger_summary.summarize(_vooc_run(svooc=sv))
 
 
+def test_a_skipped_sibling_says_the_engine_words_not_request_failed():
+    # The Baseus Deep run: VOOC failed as "needs load", its siblings were skipped with the same detail under the bare reason.
+    def row(p, res):
+        return {"protocol": p, "pos": 0, "result": res, "reason": "request failed", "detail": 13,
+                "detail_reason": "needs load (2 tries)", "target_mv": 5000, "measured_mv": 5000, "continuous": False, "raw_pdo": 0}
+    run = {"run_id": 1, "state": "done", "reason": "none", "evidence": {}, "steps": [
+        row("vooc-5v-handshake", "fail"), row("svooc-5v-handshake", "skip"), row("svooc65-5v-handshake", "skip")]}
+    text = charger_summary.summarize(run)
+    assert "request failed" not in text and "needs load" in text
+    # the siblings alone (the family's first row not in the run): the skip list names the engine's words
+    run["steps"] = run["steps"][1:]
+    text = charger_summary.summarize(run)
+    assert "request failed" not in text and "VOOC: skipped, needs load (2 tries)" in text
+    # the same for a unit that is not in the family
+    run["steps"] = [dict(row("scp", "skip"), detail_reason="acked, no change", detail=16)]
+    text = charger_summary.summarize(run)
+    assert "request failed" not in text and "SCP: skipped, acked, no change" in text
+
+
 def test_scp_and_ufcs_rows_read_watts():
     steps = [{"protocol": "scp", "pos": 0, "result": "pass", "reason": "none", "detail_reason": "none", "target_mv": mv,
               "measured_mv": mv, "continuous": False, "raw_pdo": 0, "request_ma": ma} for mv, ma in ((5000, 0), (10000, 2250))]

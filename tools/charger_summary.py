@@ -123,13 +123,21 @@ def _vooc_family_lines(rows, sv, skipped, not_adv):
     folds into the skip / not-advertised lists as one word."""
     if not any(s["result"] == "pass" for s in rows):
         if all(s["result"] == "skip" for s in rows):
-            why = rows[0]["reason"]
+            why = _skip_why(rows[0])
             (not_adv if why == "not advertised" else skipped.setdefault(why, [])).append("VOOC")
             return []
         return ["- VOOC: " + _step_text(next(s for s in rows if s["result"] != "skip"), None)]
     hit = next(s for s in rows if s["result"] == "pass")
     word = "handshake ok" if hit["detail_reason"] == "handshake ok" else "detected"
     return [f"- VOOC: ✓ {word}", _vooc_levels_line(sv)]
+
+
+def _skip_why(s):
+    """Why a skipped row did not run: the engine's words when the bare reason is "request failed" (a sibling skipped after
+    its unit's first row failed carries that row's detail), else the reason."""
+    if s["reason"] == "request failed" and s.get("detail_reason", "none") != "none":
+        return s["detail_reason"]
+    return s["reason"]
 
 
 def _not_unlocked(s):
@@ -197,7 +205,7 @@ def summarize(r):
             out.append(f"- {name}: no QC3+{base}")
             continue
         if all(s["result"] == "skip" for s in rows):
-            why = rows[0]["reason"]
+            why = _skip_why(rows[0])
             if all(s["reason"] in NOTED for s in rows):   # a Light run's listing, not a skip
                 rng = step_label.pdo_range(rows[0]["raw_pdo"]) if k[1] else ""
                 head = step_label.protocol(rows[0]) + (f" {rng}" if rng else "")
