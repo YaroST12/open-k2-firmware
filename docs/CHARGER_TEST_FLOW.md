@@ -184,6 +184,16 @@ aborts with `Overvoltage` and releases the lines), and the card and Results show
   (`test_svooc_ceiling_note_row`), `test_remote_proto` (`test_charger_svooc_cap`), `tests/test_k2_remote.py`
   (`ChargerSvoocCapCli`).
 - **AFC, FCP, SCP:** an unacknowledged first exchange (`Unsupported`) skips the unit's other rows.
+- **SCP, setpoint acked but VBUS flat:** the row fails "acked, no change" (`fc::Fail::NoChange`) `fc::kScpNoChangeMs` (2 s) after the
+  script's last write when the step is at least 300 mV and VBUS has moved under 100 mV toward it (either direction; the 5 V detect
+  row has no step). A charger that follows does so within about 150 ms of the Vset ack (4.5 V trace: ~500 mV), so 2 s is a 10x margin; a
+  charger that starts later keeps the old path (the 12 s band wait). The unit's other pending raise rows (above 5 V) are then skipped
+  as `request failed` with the same detail; the 4.5 V and 5 V rows still run. Host tests: `test_fc_engine`
+  (`scp_acked_write_with_flat_vbus_ends_early`), `test_charger_test` (`test_scp_ack_without_voltage_ends_early_and_skips_the_raises`).
+  FCP and AFC need no such rule: FCP's Band phase times out in 3 s, AFC's phases already tolerate a late rise.
+- **A skipped sibling's words:** a unit's skipped rows carry `Reason::Request` and the first row's `Fail` in the detail (the VOOC
+  family: "needs load (2 tries)"). Readers say the detail's words, never the bare "request failed" (device detail line, run summary,
+  web grid title).
 - **UFCS:** no answer to the opening exchange (`NoResponse`) skips the unit's other rows.
 - **VIVO:** a first VIVO row with no frame in its entry window (`NoResponse`) skips the other VIVO rows.
 
@@ -255,8 +265,9 @@ legacy row that was in flight at a cut reads "source lost" (SCP 5 V, VOOC, SVOOC
   (`fc::kVoocDetectMaxMs`, tests `tests/test_fc_engine.cpp`, `tests/test_charger_test.cpp`). The exception is a class: any raised-target row the
   adapter never answers sits at 5 V until the row timeout (12 s, QC2 15 s), longer than one clean window. The SCP 10 V row is the one seen
   (a cut hit it at 46.4 s and the retry waited out the 12 s without a cut), and a VIVO source that sends its entry notice but acknowledges
-  nothing ends NoBand after 5.7 s (`test_fc_vivo`). The SCP timeout is not measured against an SCP rise time, so it is left as it is
-  (open decision). The SCP 4.5 V 5 A and 5 V 4.5 A rows were never measured at 5 V on hardware. Open decision: a start
+  nothing ends NoBand after 5.7 s (`test_fc_vivo`). An SCP setpoint that is acked while VBUS stays flat now ends after 2 s instead of the 12 s
+  (see the legacy skip rules); the 10 s that follows each unanswered raise is the charger's own output reset and PD
+  re-announcement (`output-reset-after-unanswered-scp`), waited out on purpose, so the saving is in the rows not asked. The SCP 4.5 V 5 A and 5 V 4.5 A rows were never measured at 5 V on hardware. Open decision: a start
   schedule (begin a 5 V-held step right after a cut once the period is learned). Waiting for the comeback costs the same time as being
   cut and retried (the span lost is identical), so a schedule would save no time, only spend fewer retries; the retry already is a
   start right after a clean comeback.
