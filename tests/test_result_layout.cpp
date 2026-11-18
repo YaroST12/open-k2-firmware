@@ -1813,12 +1813,12 @@ static void test_vooc_family_reads_as_watts_levels() {
 // A family that never answered folds as one word, never three ("VOOC SVOOC SVOOC65").
 static void test_a_silent_vooc_family_folds_as_one_word() {
     std::vector<ct::Step> s;
-    auto lead = step(A::Vooc, 5000, V::Fail, 0, 0, ct::Reason::Request);
-    lead.detail = uint8_t(fc::Fail::NeedsLoad);
+    auto lead = step(A::Vooc, 5000, V::Skip, 0, 0, ct::Reason::Request);   // a silent family is skipped, not failed
+    lead.detail = uint8_t(fc::Fail::NoAnswer);
     s.push_back(lead);
     for (A a : {A::SuperVooc, A::SuperVooc65}) {
         auto x = step(a, 5000, V::Skip, 0, 0, ct::Reason::Request);
-        x.detail = uint8_t(fc::Fail::NeedsLoad);
+        x.detail = uint8_t(fc::Fail::NoAnswer);
         s.push_back(x);
     }
     s.push_back(step(A::Fcp, 5000, V::Fail));
@@ -1829,7 +1829,6 @@ static void test_a_silent_vooc_family_folds_as_one_word() {
     CHECK_STR(chips(l, row_of(l, "No reply")).c_str(), "VOOC FCP");
     {   // only SVOOC65 planned: the family's word all the same
         std::vector<ct::Step> o = {s[2], s[3]};
-        o[0].verdict = V::Fail;
         rl::Layout v;
         rl::build(v, o, n);
         CHECK_STR(chips(v, row_of(v, "No reply")).c_str(), "VOOC FCP");
@@ -1841,6 +1840,15 @@ static void test_a_silent_vooc_family_folds_as_one_word() {
     }
     CHECK_EQ(find(l, "Skipped") == nullptr, true);
     CHECK_EQ(find(l, "SVOOC") == nullptr, true);
+    // is_no_answer: only a family skip that carries the engine's word (a plain skip, a fail and a non-family step are not)
+    CHECK_EQ(rl::is_no_answer(s[0]), true);
+    CHECK_EQ(rl::is_no_answer(s[2]), true);
+    auto fl = s[0]; fl.verdict = V::Fail;
+    CHECK_EQ(rl::is_no_answer(fl), false);
+    auto pl = s[0]; pl.detail = 0;
+    CHECK_EQ(rl::is_no_answer(pl), false);
+    auto ot = step(A::Fcp, 5000, V::Skip, 0, 0, ct::Reason::Request); ot.detail = uint8_t(fc::Fail::NoAnswer);
+    CHECK_EQ(rl::is_no_answer(ot), false);
     rl::CompactGrid g; std::array<rl::CompactLine, rl::kMaxLines> lines;
     rl::build_compact(g, rl::kGridMetrics, lines, s, n);
     for (size_t r = 0; r < g.row_count; ++r) {

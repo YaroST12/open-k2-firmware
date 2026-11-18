@@ -93,6 +93,7 @@ const char* group_why(unsigned group, const GroupResult& r) {
             if (r.detail <= unsigned(pd::SinkResult::BadChoice))
                 return pd::result_name(pd::SinkResult(r.detail));
         } else if (r.detail <= unsigned(fc::Fail::NoChange)) {
+            if (r.detail == unsigned(fc::Fail::NoAnswer) && vooc_group(group)) return "no answer to either wake, unloaded";   // the card has the room
             return fc::name(fc::Fail(r.detail));
         }
     }

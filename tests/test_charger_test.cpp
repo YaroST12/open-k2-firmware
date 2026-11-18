@@ -32,7 +32,7 @@ struct Fake final : ct::Env {
     // AFTER the output is back at 5 V. late_session_ms = that delay after the end of the drop (0 = no second session).
     uint32_t late_session_ms = 0, late_session_at = 0;
     // A VOOC-family adapter that never clocks: the session stays Negotiating for silent_session_ms (the engine's own detection time,
-    // fc::kVoocDetectMaxMs plus the wake plays), then ends NeedsLoad after kVoocTries wakes. A cut in between kills it (the existing cut code).
+    // fc::kVoocDetectMaxMs plus the wake plays), then ends NoAnswer after kVoocTries wakes. A cut in between kills it (the existing cut code).
     uint32_t silent_session_ms = 0, silent_end_at = 0;
     int low_mv_for_3v3 = 0;   // a source whose output lands here (not at the target) on a 3.3 V programmable step
     int pd_small_step_mv = -1;   // see request_pd: the output move of a +20 mV PPS request (-1 = follow the target)
@@ -672,7 +672,7 @@ struct Fake final : ct::Env {
             }
             if (silent_end_at && in.now >= silent_end_at) {
                 silent_end_at = 0;
-                if (in.fc_state == fc::State::Negotiating) { in.fc_state = fc::State::Failed; in.fc_fail = fc::Fail::NeedsLoad; in.fc_tries = uint8_t(fc::kVoocTries); in.vbus_mv = 5000; }
+                if (in.fc_state == fc::State::Negotiating) { in.fc_state = fc::State::Failed; in.fc_fail = fc::Fail::NoAnswer; in.fc_tries = uint8_t(fc::kVoocTries); in.vbus_mv = 5000; }
             }
             if (cut_on) {
                 // cut_fall_mv: the first sample of the fall lands part-way down (CUKTECH USB-A, 4.65 V), before the dark level
@@ -1932,7 +1932,7 @@ static void test_answered_handshake_passes_the_5v_row() {
     }
 }
 // An SVOOC adapter that accepted the cable check and ramped passes at the raised voltage; one that handshook but
-// never ramped ("handshake ok") passes too, with that code; one that never clocked ("needs load") fails.
+// never ramped ("handshake ok") passes too, with that code; one that never clocked ("no answer") is skipped, not failed.
 static void test_svooc_row_follows_the_adapter_ramp() {
     {
         Fake f; f.caps = {};
@@ -1943,14 +1943,15 @@ static void test_svooc_row_follows_the_adapter_ramp() {
         f.tick(r, 1100);
         CHECK_EQ(r.steps()[0].verdict, ct::Verdict::Pass);
     }
-    for (auto why : {fc::Fail::NoVoltage, fc::Fail::NeedsLoad}) {
+    for (auto why : {fc::Fail::NoVoltage, fc::Fail::NoAnswer}) {
         Fake f; f.caps = {};
         ct::Runner r(f);
         r.start(f.caps, {.selected = ct::bit(A::SuperVooc65)}, f.in, true);
         run_until(f, r, [&] { return f.fc_requests >= 1; });
         f.in.fc_state = fc::State::Failed; f.in.fc_fail = why; f.in.fc_tries = 3; f.in.vbus_mv = 5000;
         f.tick(r, 1100);
-        CHECK_EQ(r.steps()[0].verdict, why == fc::Fail::NoVoltage ? ct::Verdict::Pass : ct::Verdict::Fail);
+        CHECK_EQ(r.steps()[0].verdict, why == fc::Fail::NoVoltage ? ct::Verdict::Pass : ct::Verdict::Skip);
+        CHECK_EQ(r.steps()[0].reason, why == fc::Fail::NoVoltage ? ct::Reason::None : ct::Reason::Request);
         CHECK_EQ(int(r.steps()[0].detail), int(why));
         CHECK_EQ(int(r.steps()[0].tries), 3);   // the row keeps how many wake trains it took
     }
@@ -1968,10 +1969,10 @@ static void test_svooc_detected_is_a_pass() {
 }
 // pattern vooc-family-same-wake: the VOOC, SVOOC and SVOOC65 units open with the same wake and end on the same ident (the K2
 // answers nothing, so nothing after the ident can tell the variants apart). One session decides all three rows: a detected
-// family passes all three as "detected", a session that heard nothing (needs load) or no ident (no response) skips the other
-// two with the first row's reason. The rows keep their names; only the first unit of the family runs an engine session.
+// family passes all three as "detected", a session that heard nothing (no answer: all three skip, no fail) or no ident (no response:
+// the first row fails) skips the other two with the first row's reason. The rows keep their names; only the first unit of the family runs an engine session.
 static void test_vooc_family_shares_one_session() {
-    for (const auto why : {fc::Fail::NeedsLoad, fc::Fail::NoResponse, fc::Fail::Detected}) {
+    for (const auto why : {fc::Fail::NoAnswer, fc::Fail::NoResponse, fc::Fail::Detected}) {
         Fake f; f.caps = {};
         ct::Runner r(f);
         r.start(f.caps, {.selected = ct::bit(A::Vooc) | ct::bit(A::SuperVooc) | ct::bit(A::SuperVooc65)}, f.in, true);
@@ -1981,11 +1982,12 @@ static void test_vooc_family_shares_one_session() {
         CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 120000), true);
         CHECK_EQ(f.fc_requests, 1);
         const bool pass = why == fc::Fail::Detected;
+        const auto first = pass ? ct::Verdict::Pass : why == fc::Fail::NoAnswer ? ct::Verdict::Skip : ct::Verdict::Fail;
         unsigned vooc_rows = 0, svooc_rows = 0;
         for (const auto& s : r.steps()) {
             if (s.group == ct::Group::Vooc) {
                 ++vooc_rows;
-                CHECK_EQ(s.verdict, pass ? ct::Verdict::Pass : ct::Verdict::Fail); CHECK_EQ(int(s.detail), int(why));
+                CHECK_EQ(s.verdict, first); CHECK_EQ(int(s.detail), int(why));
             }
             if (s.group != ct::Group::SuperVooc && s.group != ct::Group::SuperVooc65) continue;
             ++svooc_rows;
@@ -2013,7 +2015,7 @@ static ct::Reason ceiling_run(Fake& f, ct::Runner& r, sc::Mode mode, bool detect
     const ct::Reason started = r.start(f.caps, {.selected = ct::bit(A::SuperVooc), .svooc_cap = mode, .level = ct::Level::Deep}, f.in, true);
     if (started != ct::Reason::None) return started;
     run_until(f, r, [&] { return f.fc_requests >= 1; });
-    f.in.fc_state = fc::State::Failed; f.in.fc_fail = detected ? fc::Fail::Detected : fc::Fail::NeedsLoad; f.in.fc_tries = 1; f.in.vbus_mv = 5000;
+    f.in.fc_state = fc::State::Failed; f.in.fc_fail = detected ? fc::Fail::Detected : fc::Fail::NoAnswer; f.in.fc_tries = 1; f.in.vbus_mv = 5000;
     return started;
 }
 static void test_ceiling_off_runs_no_stage() {
@@ -2035,19 +2037,19 @@ static void test_ceiling_is_deep_only_and_the_ident_is_kept() {
         run_until(f, r, [&] { return f.fc_requests >= 1; });
         // fc_tries 0 at Light: the ident does not hang on the wake count
         f.in.fc_state = fc::State::Failed; f.in.fc_fail = fc::Fail::Detected; f.in.fc_tries = lv == ct::Level::Light ? 0 : 1;
-        f.in.fc_ident = 0xAC; f.in.vbus_mv = 5000;
+        f.in.fc_ident = 0x68; f.in.vbus_mv = 5000;
         CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 120000), true);
         const bool deep = lv == ct::Level::Deep;
         CHECK_EQ(f.ceil_starts, deep ? 1 : 0);
         CHECK_EQ(int(r.evidence().svooc_end), int(deep ? sc::End::Judged : sc::End::None));
-        CHECK_EQ(int(r.evidence().vooc_ident), 0xAC);
+        CHECK_EQ(int(r.evidence().vooc_ident), 0x68);
         CHECK_EQ(r.steps()[0].verdict, ct::Verdict::Pass);
     }
     // No ident heard (a failed row, or an engine that did not say): nothing recorded.
     Fake f; f.caps = {};
     ct::Runner r(f);
     ceiling_run(f, r, sc::Mode::Off, false);
-    f.in.fc_ident = 0xA8;   // a stale ident beside a NeedsLoad fail is not evidence
+    f.in.fc_ident = 0xA8;   // a stale ident beside a NoAnswer skip is not evidence
     CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 120000), true);
     CHECK_EQ(int(r.evidence().vooc_ident), 0);
 }
@@ -5495,11 +5497,11 @@ static void test_a_retried_first_vooc_family_row_ends_like_an_unretried_one() {
         CHECK_EQ(r.start(f.caps, {.selected = ct::bit(A::Vooc) | ct::bit(A::SuperVooc) | ct::bit(A::SuperVooc65), .svooc_cap = sc::Mode::On, .level = ct::Level::Deep}, f.in, true), ct::Reason::None);
         const int want = cut_it ? 2 : 1;   // the request whose session hears the ident
         CHECK_EQ(run_until(f, r, [&] { return f.fc_requests >= want; }, 60000), true);
-        f.in.fc_state = fc::State::Failed; f.in.fc_fail = fc::Fail::Detected; f.in.fc_tries = 1; f.in.fc_ident = 0xAC; f.in.vbus_mv = 5000;
+        f.in.fc_state = fc::State::Failed; f.in.fc_fail = fc::Fail::Detected; f.in.fc_tries = 1; f.in.fc_ident = 0x68; f.in.vbus_mv = 5000;
         CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 180000), true);
         CHECK_EQ(f.cuts_seen, cut_it ? 1 : 0);
         CHECK_EQ(r.evidence().cut_retries, cut_it ? 1 : 0);
-        CHECK_EQ(int(r.evidence().vooc_ident), 0xAC);
+        CHECK_EQ(int(r.evidence().vooc_ident), 0x68);
         CHECK_EQ(f.ceil_starts, 1);   // the ceiling stage follows the detected family once
         CHECK_EQ(int(r.evidence().svooc_end), int(sc::End::Judged));
         unsigned n = 0;
@@ -5623,19 +5625,19 @@ static void test_a_cut_that_reads_no_response_does_not_skip_the_family() {
 }
 // The CUKTECH port cuts every 7.04 s and is dark about 1 s. A VOOC-family adapter that never clocks keeps its session open for the engine's
 // whole detection (kVoocDetectMaxMs): it has to fit one clean window, from whatever phase the unit starts in, so the family ends exactly as
-// on a port that never cuts (the control run: Fail / Request / needs load on the first row, the rest skipped the same way) and never
+// on a port that never cuts (the control run: Skip / Request / no answer on every family row) and never
 // "port cuts without load". With the old 10.5 s detection no retry could fit and the same port read PortCuts.
 // The cuts begin once the first engine session has opened; a cut inside the run's first Baseline is swept by
 // test_a_cut_in_the_first_baseline_waits_for_the_comeback.
-static void test_a_silent_vooc_family_on_a_7s_cut_port_ends_needs_load() {
+static void test_a_silent_vooc_family_on_a_7s_cut_port_ends_no_answer() {
     constexpr uint32_t kFamily = ct::bit(A::Vooc) | ct::bit(A::SuperVooc) | ct::bit(A::SuperVooc65);
     Fake clean; clean.caps = {}; clean.silent_session_ms = uint32_t(fc::kVoocDetectMaxMs) + 50u; ct::Runner rc(clean);
     CHECK_EQ(rc.start(clean.caps, {.selected = kFamily}, clean.in, true), ct::Reason::None);
     for (unsigned t = 0; rc.state() != ct::State::Done && t < 240000; t += 100) clean.tick(rc, 100);
     CHECK_EQ(rc.state(), ct::State::Done);
-    CHECK_EQ(int(rc.steps()[0].verdict), int(ct::Verdict::Fail));   // the family's own result on a port that does not cut
+    CHECK_EQ(int(rc.steps()[0].verdict), int(ct::Verdict::Skip));   // the family's own result on a port that does not cut: no answer, not a fail
     CHECK_EQ(int(rc.steps()[0].reason), int(ct::Reason::Request));
-    CHECK_EQ(int(rc.steps()[0].detail), int(fc::Fail::NeedsLoad));
+    CHECK_EQ(int(rc.steps()[0].detail), int(fc::Fail::NoAnswer));
     unsigned max_retries = 0;
     for (const uint32_t session : {uint32_t(fc::kVoocDetectMaxMs) + 50u, 10550u}) {
         for (uint32_t off = 0; off < 7040; off += 250) {   // where in the port's period the first session opens
@@ -5647,7 +5649,7 @@ static void test_a_silent_vooc_family_on_a_7s_cut_port_ends_needs_load() {
             CHECK_EQ(r.state(), ct::State::Done);
             if (session < 6000) {
                 expect_same_plan(all_rows(rc), all_rows(r));   // no row differs from the port that never cuts: no Fail, no PortCuts
-                CHECK_EQ(int(r.steps()[0].detail), int(fc::Fail::NeedsLoad));
+                CHECK_EQ(int(r.steps()[0].detail), int(fc::Fail::NoAnswer));
                 max_retries = std::max<unsigned>(max_retries, r.evidence().cut_retries);
             } else {
                 bool port_cuts = false;
@@ -5688,8 +5690,7 @@ static void test_the_7s_cut_sequence_over_the_5v_steps_of_the_cuktech_run() {
 }
 // The whole 10-unit run of the CUKTECH port, with a silent VOOC family (the port's real answer), the first cut swept over the whole
 // period (every 200 ms) once the first engine session has opened: whatever unit or row it lands in (a row, the Baseline or the detach
-// between two units), the run ends as the same run on a port that never cuts: one Fail (the VOOC family's needs-load row) and its two
-// skips, no PortCuts. A cut inside the run's very first Baseline is swept by test_a_cut_in_the_first_baseline_waits_for_the_comeback.
+// between two units), the run ends as the same run on a port that never cuts: no Fail, the VOOC family's three no-answer skips, no PortCuts. A cut inside the run's very first Baseline is swept by test_a_cut_in_the_first_baseline_waits_for_the_comeback.
 static void test_the_10_unit_run_over_every_cut_phase_ends_as_without_cuts() {
     constexpr uint32_t kUnits = ct::bit(A::Fcp) | ct::bit(A::Scp) | ct::bit(A::Vooc) | ct::bit(A::SuperVooc) | ct::bit(A::SuperVooc65) |
                             ct::bit(A::Vivo) | ct::bit(A::Qc2) | ct::bit(A::Qc3) | ct::bit(A::Afc) | ct::bit(A::Ufcs);
@@ -5697,8 +5698,8 @@ static void test_the_10_unit_run_over_every_cut_phase_ends_as_without_cuts() {
     CHECK_EQ(rc.start(clean.caps, {.selected = kUnits}, clean.in, true), ct::Reason::None);
     for (unsigned t = 0; rc.state() != ct::State::Done && t < 400000; t += 100) clean.tick(rc, 100);
     CHECK_EQ(rc.state(), ct::State::Done);
-    CHECK_EQ(count_verdict_any(rc, ct::Verdict::Fail), 1u);
-    CHECK_EQ(count_verdict_any(rc, ct::Verdict::Skip), 2u);
+    CHECK_EQ(count_verdict_any(rc, ct::Verdict::Fail), 0u);
+    CHECK_EQ(count_verdict_any(rc, ct::Verdict::Skip), 3u);
     // 0: the port drops straight to the dark; 4650 / 3500: the first sample of the fall lands part-way down (the CUKTECH USB-A shape,
     // under and over the cut threshold), which every 5 V gate between the rows, the final release and the rescan has to wait out too
     for (const uint16_t fall : {uint16_t(0), uint16_t(4650), uint16_t(3500)}) for (uint32_t off = 0; off < 7040; off += 200) {
@@ -8664,7 +8665,7 @@ int main() {
     test_measured_dwell_and_plan_capacity();
     test_usb_a_sag_tail_session_is_not_source_lost(); test_usb_a_sag_tail_waits_for_vbus_to_climb(); test_usb_a_sag_tail_with_dead_or_low_vbus_is_still_lost(); test_session_change_in_baseline_without_a_sag_is_still_lost(); test_usb_a_midrow_session_opens_the_adopt_window(); test_usb_a_sag_dip_under_1v_inside_the_window_waits();
     test_cut_in_the_row_then_a_clean_retry_passes(); test_a_retried_first_scp_row_replans_like_an_unretried_one(); test_a_retried_first_scp_row_keeps_the_rows_a_wide_list_offers(); test_a_retried_first_ufcs_row_replans_like_an_unretried_one(); test_a_retried_first_vooc_family_row_ends_like_an_unretried_one(); test_several_cuts_in_a_row_then_a_clean_retry_passes(); test_every_retry_cut_is_a_skip_not_a_fail(); test_the_retries_are_counted_per_row(); test_a_cut_that_reads_no_response_does_not_skip_the_family(); test_a_loss_that_does_not_come_back_in_the_window_is_a_fail();
-    test_a_dip_shorter_than_the_minimum_is_no_cut(); test_a_protocol_failure_after_a_clean_comeback_is_a_fail(); test_the_7s_cut_sequence_over_the_5v_steps_of_the_cuktech_run(); test_a_fall_in_a_raised_row_is_no_cut_casualty(); test_a_silent_vooc_family_on_a_7s_cut_port_ends_needs_load(); test_the_10_unit_run_over_every_cut_phase_ends_as_without_cuts();
+    test_a_dip_shorter_than_the_minimum_is_no_cut(); test_a_protocol_failure_after_a_clean_comeback_is_a_fail(); test_the_7s_cut_sequence_over_the_5v_steps_of_the_cuktech_run(); test_a_fall_in_a_raised_row_is_no_cut_casualty(); test_a_silent_vooc_family_on_a_7s_cut_port_ends_no_answer(); test_the_10_unit_run_over_every_cut_phase_ends_as_without_cuts();
     test_a_cut_in_the_first_baseline_waits_for_the_comeback(); test_a_baseline_dip_that_does_not_come_back_still_stops();
     test_custom_unit_list_runs_in_order(); test_pd_unit_attaches_with_a_contract(); test_a_failed_unit_does_not_stop_the_run();
     test_default_unit_order_is_vendor_modes_then_pd_then_legacy(); test_default_order_runs_vendor_modes_before_pd_before_legacy(); test_pd_between_vendor_and_legacy_units(); test_pd_replan_in_the_middle_keeps_the_rows_in_order(); test_consecutive_legacy_units_share_one_attach(); test_legacy_session_that_sees_pd_traffic_is_renewed(); test_silent_ufcs_source_reports_no_response_not_pd_active(); test_legacy_waits_between_units();

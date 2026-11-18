@@ -41,7 +41,7 @@ enum class Fail : std::uint8_t {
     None, NeedConfirm, OverLimit, NoMonitor, Busy, Unsupported,
     NoHandshake, NoResponse, NoBand, Overvoltage, SourceLost, Aborted,
     Inline,     // a PD contract or a load is attached behind the K2 and nothing overrode the guard
-    NeedsLoad,  // VOOC: no frame heard after any wake (an all-ones frame counts as none)
+    NoAnswer,   // VOOC: no frame heard after either wake (an all-ones frame counts as none). Wire value 13, once "needs load"
     NoVoltage,  // SVOOC "handshake ok": no longer produced (the K2 answers no VOOC command); kept for stored results
     Detected,   // SCP: every identifying read answered; VOOC family: the adapter clocked its ident and nothing was answered.
                 // Not a failure: the row passes as "detected"
@@ -54,15 +54,15 @@ inline constexpr std::size_t kVoocBurstSteps = 80, kVoocTrainSteps = 13 * 4 + 3;
 
 // The VOOC family's detection session (one session answers VOOC, SVOOC and SVOOC65): wake, listen, and when nothing was
 // heard rest and wake again with the other wake list (burst, then train). The adapter clocked its first ident 539 ms
-// after a wake in both captures (reverse-engineered, 2026-11-11 phone burst and no-phone train), so a listen of 1.0 s has
-// the ident in with 0.46 s to spare; two tries cover both wake lists. A silent adapter ends the session after
-// 2 x 1.0 s listen + 3.0 s rest = 5.0 s (plus the two wake plays, 24 ms and 48 ms, played before each listen), so the
-// whole session fits one clean window of a port that cuts VBUS at 5 V (charger test kCutStepBudgetMs). The older 1.5 s listen,
-// 3 s rest and 3 tries took 10.5 s: never a fit. The rest stays 3 s, the lines idle between the two wakes (inferred).
-inline constexpr std::uint32_t kVoocWakeListenMs = 1000;   // no ident this long after a wake: rest and try again
-inline constexpr std::uint32_t kVoocRestMs = 3000;         // lines idle between wakes
-inline constexpr int kVoocTries = 2;                       // wakes before the adapter is called silent ("needs load")
-inline constexpr std::uint32_t kVoocDetectMaxMs = kVoocTries * kVoocWakeListenMs + (kVoocTries - 1) * kVoocRestMs;   // 5000
+// after a wake in both captures (2026-11-11 phone burst and no-phone train), so a listen of 1.6 s has the ident in with
+// over a second to spare; two tries cover both wake lists. A silent adapter ends the session after
+// 2 x 1.6 s listen + 2.0 s rest = 5.2 s (plus the two wake plays, 24 ms and 48 ms, played before each listen), so the
+// whole session still fits one clean window of a port that cuts VBUS at 5 V (charger test kCutStepBudgetMs, 5.5 s): a
+// 2.0 s listen would not.
+inline constexpr std::uint32_t kVoocWakeListenMs = 1600;   // no ident this long after a wake: rest and try again
+inline constexpr std::uint32_t kVoocRestMs = 2000;         // lines idle between wakes
+inline constexpr int kVoocTries = 2;                       // wakes before the adapter is called silent ("no answer")
+inline constexpr std::uint32_t kVoocDetectMaxMs = kVoocTries * kVoocWakeListenMs + (kVoocTries - 1) * kVoocRestMs;   // 5200
 
 // The HID-cable loop 5 V lock (Env::hv_locked): the highest target, and the highest VBUS a running session may show.
 inline constexpr int kLockMv = 5000, kLockVbusMv = 5500;
@@ -207,8 +207,7 @@ public:
     Proto proto() const { return proto_; }
     Fail fail() const { return fail_; }
     int vooc_tries() const { return vooc_tries_; }   // VOOC/SVOOC wakes sent (1..3); 0 for other protocols
-    // The ident command the VOOC-family adapter clocked (0xA8 / 0xAC / 0xA6, vooc::is_ident) when the session ended Detected;
-    // 0 otherwise. One ident proves the family, never the variant.
+    // The opener the VOOC-family adapter clocked (vooc::is_detect_opener) when the session ended Detected; 0 otherwise. One ident proves the family, never the variant.
     std::uint8_t vooc_ident() const { return vooc_ident_; }
     int target_mv() const { return target_mv_; }
     int reached_mv() const { return reached_mv_; }   // VBUS at the last poll while running

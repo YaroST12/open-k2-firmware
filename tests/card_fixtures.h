@@ -24,7 +24,7 @@ inline ct::Step step(A a, ct::Group g, std::uint8_t pos, unsigned mv, V v, unsig
 
 // Baseus FH22 100 W as the hardware run of 2026-11-08 (card #18) read: the five fixed levels pass (20 V measured 19.4 V, inside
 // the PD tolerance), the SPR AVS 9-20 V range passes, the PPS 5-21 V range stops at 19.4 V (Capped), and the D+/D- protocols the
-// charger does not carry never answer: AFC / FCP / SCP "unsupported", VOOC / SVOOC / SVOOC 65W "needs load", VIVO "no response".
+// charger does not carry never answer: AFC / FCP / SCP "unsupported", VOOC / SVOOC / SVOOC 65W "no answer", VIVO "no response".
 inline rc::Card fh22_full() {
     using F = k2::fc::Fail;
     constexpr std::uint32_t kPps = (3u << 30) | (210u << 17) | (50u << 8) | 100;   // PPS 5-21 V 5 A
@@ -46,9 +46,9 @@ inline rc::Card fh22_full() {
         dead(A::Afc, ct::Group::Afc, F::Unsupported),
         dead(A::Fcp, ct::Group::Fcp, F::Unsupported),
         dead(A::Scp, ct::Group::Scp, F::Unsupported),
-        dead(A::Vooc, ct::Group::Vooc, F::NeedsLoad),
-        dead(A::SuperVooc, ct::Group::SuperVooc, F::NeedsLoad),
-        dead(A::SuperVooc65, ct::Group::SuperVooc65, F::NeedsLoad),
+        dead(A::Vooc, ct::Group::Vooc, F::NoAnswer),
+        dead(A::SuperVooc, ct::Group::SuperVooc, F::NoAnswer),
+        dead(A::SuperVooc65, ct::Group::SuperVooc65, F::NoAnswer),
         dead(A::Vivo, ct::Group::Vivo, F::NoResponse),
     };
     ct::Evidence ev;

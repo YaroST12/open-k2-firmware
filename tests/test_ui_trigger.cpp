@@ -237,6 +237,8 @@ static void test_widgets() {
                          {fc::Proto::Qc3, fc::Outcome::Accepted, 5960}};
     CHECK_EQ(scan_accepted(r, 2), 2); CHECK_EQ(scan_max_mv(r, 2), 9000);
     CHECK_STR(fail_long(fc::Fail::Inline), "Load/PD active: refused");
+    CHECK_STR(fail_short(fc::Fail::NoAnswer), "no answer");
+    CHECK_STR(fail_long(fc::Fail::NoAnswer), "No answer to either wake");   // the footer's 27 cells: the card adds ", unloaded"
 }
 int main() {
     test_pick_edit(); test_levels_fixed(); test_confirmation(); test_retarget_stop();

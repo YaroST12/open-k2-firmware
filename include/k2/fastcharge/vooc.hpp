@@ -29,6 +29,17 @@ constexpr bool heard(int frame) { return frame >= 0 && frame != kAllOnes; }
 // 0xAC / 0xA6 (VOOC; inferred, never captured). One ident proves the family, not the variant.
 constexpr bool is_ident(std::uint8_t cmd) { return cmd == 0xA8 || cmd == 0xAC || cmd == 0xA6; }
 
+// What the detection listen accepts as the first frame after a wake: the three openers seen across the VOOC family and each
+// one read a bit early or late (>> 1 / << 1, 8 bit). Only the listen uses it: the handshake open (is_ident above) is stricter,
+// since 0x88 recurs mid-session.
+constexpr bool is_detect_opener(std::uint8_t cmd) {
+    switch (cmd) {
+        case 0xA8: case 0x68: case 0x88:
+        case 0x54: case 0xD4: case 0x34: case 0xB4: case 0x44: case 0xC4: return true;
+        default: return false;
+    }
+}
+
 // Frame start over D+ samples: an edge after D+ held one level for at least `gap` (in the caller's time unit) since
 // listening began. A fall after a long high is pulse 1 of a frame in the idle protocol; a rise after a long low is pulse 1
 // of the first ident after the wake (cap1 2026-11-11: D+ stays low 539 ms after the phone's burst, then the adapter raises

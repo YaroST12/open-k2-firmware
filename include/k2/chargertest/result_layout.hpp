@@ -56,6 +56,8 @@ struct Tally { unsigned pass = 0, fail = 0, capped = 0, skip = 0, noted = 0, pen
 Tone roll_up(const Tally&);
 // A Light run's listing: a Skip whose reason is Advertised or LightLevel (counted as `noted`, drawn as kit::Verdict::Noted).
 bool noted(const charger_test::Step& s);
+// A VOOC family row skipped because no wake clocked an opener (Skip, Request, fc::Fail::NoAnswer): folds as "No reply", not "Skipped".
+bool is_no_answer(const charger_test::Step& s);
 // A PD offer a Light run lists without asking for it (a fixed PDO, a PPS / AVS APDO, an EPR level the source listed): the source
 // advertises it, so it is drawn with the pass look (kit::Verdict::Pass) while its band word stays LISTED. Not UFCS, SCP or a legacy level.
 bool advertised(const charger_test::Step& s);
