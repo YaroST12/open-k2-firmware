@@ -32,6 +32,6 @@ std::size_t render_summary(const Card& c, std::span<char> out);
 
 inline constexpr std::size_t kSummaryMax = 1536;   // the longest card fits
 inline constexpr std::size_t kJsonMax = 2560;   // the longest card (every group failed, four ranges) fits
-inline constexpr std::size_t kJsonDeepMax = kJsonMax + 560;   // + ,"deep":"<550 characters>" for the worst 412-byte block, minus the "}" it replaces
+inline constexpr std::size_t kJsonDeepMax = kJsonMax + 620;   // + ,"deep":"<610 characters>" for the worst 457-byte block, minus the "}" it replaces
 
 }  // namespace k2::report_card

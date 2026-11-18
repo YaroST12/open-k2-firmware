@@ -315,6 +315,7 @@ def summarize_card(c):
             skipped.setdefault(e.get("reason", ""), []).append(name)
     for why, names in skipped.items():
         out.append(f"- {', '.join(names)}: skipped" + (f", {why}" if why else ""))
+    out += _xiaomi_card_lines((c.get("deep") or {}).get("xiaomi"))
     for r in c["ranges"]:
         rng = f"- {step_label.range_protocol(r['alg'])} {step_label.range_text(r['lo_mv'], r['hi_mv'], r.get('max_ma', 0))}: "
         spread = _spread_text(r)   # v9 card: the setpoint error per passed level, e.g. ", err +10 / +20 / +8 / -12 mV"
@@ -331,6 +332,23 @@ def summarize_card(c):
             out.append(rng + (f"reached {_v(r['max_mv'])} V" if r["max_mv"] else "✓ advertised" if light else "no step measured")
                        + spread + sweep)
     return "\n".join(out)
+
+
+def _xiaomi_card_lines(x):
+    """The card's Xiaomi section (format 12 block): the chain outcome, then one line per mode it unlocked, named by its watts with the
+    offer before and after the chain and its verdict ("  - Mi 55W: PPS 5-11V 3A → PPS 5-11V 5A ✓")."""
+    if not x:
+        return []
+    if not x["done"]:
+        return [f"- Xiaomi: {x['chain_text']}" if x["chain"] == 1 else f"- Xiaomi auth: {x['chain_text']}"]
+    if not x["modes"]:
+        return ["- Xiaomi auth: done, no new modes"]
+    out = [f"- Xiaomi: auth {x['chain_text']}"]
+    for m in x["modes"]:
+        v = ("✓" if m["verdict"] == "pass" else f"✗ {m['reason']}" if m["verdict"] == "fail" else
+             f"skipped: {m['reason']}" if m["verdict"] == "skip" and m["reason"] != "none" else m["verdict"])
+        out.append(f"  - {m['label']}: {m['before']} → {m['after']} {v}")
+    return out
 
 
 def _spread_text(r):

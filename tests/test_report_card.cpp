@@ -176,7 +176,7 @@ static void test_v9_spread_records_setpoint_error_per_level() {
     rc::encode_card(rec, c);
     CHECK_EQ(rec[2], rc::kPayload);                       // the payload grew for the sweep block
     CHECK_EQ(rc::kPayload, 250);
-    CHECK_EQ(rec[4 + 33], 11);                            // format v11
+    CHECK_EQ(rec[4 + 33], 12);                            // format v12
     CHECK_EQ(rc::decode_card({rec + 4, rc::kPayload}, d), 1);
     CHECK_EQ(d == c, 1);
     CHECK_EQ(d.spread[0][0], 88); CHECK_EQ(d.spread[0][3], -24);
@@ -829,7 +829,7 @@ static void test_v8_rebalanced_roundtrip() {
     CHECK_EQ(d.rebalanced, 2u);
     CHECK_EQ(d == c, 1);
     // an older card (format byte below 8) decodes with the count at 0
-    buf[4 + 33] = rc::kFormat - 4;   // below 8: the count byte is not read
+    buf[4 + 33] = 7;   // below 8: the count byte is not read
     CHECK_EQ(rc::decode_card({buf.data() + 4, rc::kPayload}, d), 1);
     CHECK_EQ(d.rebalanced, 0u);
 }
@@ -1050,7 +1050,7 @@ static ct::Step ufcs_step(unsigned mv, int lo_mv, int hi_mv, int ma) {
 }
 static void test_v6_ufcs_modes() {
     static_assert(rc::kMaxUfcs == 4);
-    CHECK_EQ(rc::kFormat, 11u);
+    CHECK_EQ(rc::kFormat, 12u);
     CHECK_EQ(unsigned(rc::off::kUfcs), 178u);
     CHECK_EQ(unsigned(rc::off::kRepeat), 190u);
     CHECK_EQ(unsigned(rc::off::kV9), 198u);
@@ -1063,7 +1063,7 @@ static void test_v6_ufcs_modes() {
         ufcs_step(20000, 5000, 20000, 5000),
     };
     rc::Card c = rc::build(steps, evidence(), {}, rc::Identity{.fp = 0x30000001u}, {}, ct::State::Done, ct::Reason::None);
-    CHECK_EQ(c.format, 11u);
+    CHECK_EQ(c.format, 12u);
     CHECK_EQ(rc::ufcs_modes(c), 3u);
     CHECK_EQ(c.ufcs[0].lo_dv, 34u); CHECK_EQ(c.ufcs[0].hi_dv, 55u); CHECK_EQ(c.ufcs[0].ma, 3000u);
     CHECK_EQ(c.ufcs[1].lo_dv, 50u); CHECK_EQ(c.ufcs[1].hi_dv, 110u); CHECK_EQ(c.ufcs[1].ma, 3000u);
@@ -1071,10 +1071,10 @@ static void test_v6_ufcs_modes() {
     CHECK_EQ(c.ufcs[3].hi_dv, 0u);
     uint8_t rec[rc::kMaxRecord]; rc::Card d;
     CHECK_EQ(rc::encode_card(rec, c), size_t(rc::kMaxRecord));
-    CHECK_EQ(rec[4 + 33], 11u);
+    CHECK_EQ(rec[4 + 33], 12u);
     CHECK_EQ(rc::decode_card({rec + 4, rc::kPayload}, d), 1);
     CHECK_EQ(d == c, 1);
-    CHECK_EQ(d.format, 11u);
+    CHECK_EQ(d.format, 12u);
     // u24 per mode, little endian: bits 0..7 lo, 8..16 hi, 17..23 current.
     const uint32_t m2 = rec[4 + 178 + 6] | uint32_t(rec[4 + 178 + 7]) << 8 | uint32_t(rec[4 + 178 + 8]) << 16;
     CHECK_EQ(m2, 50u | 200u << 8 | 100u << 17);
@@ -1110,7 +1110,7 @@ static void test_v5_payload_has_no_ufcs_modes() {
     CHECK_EQ(rc::ufcs_modes(d), 0u);
     CHECK_EQ(d.group[0].max_mv, 20000u);
     rc::migrate_to_current(d);
-    CHECK_EQ(d.format, 11u);
+    CHECK_EQ(d.format, 12u);
     CHECK_EQ(rc::ufcs_modes(d), 0u);
 }
 
@@ -1149,7 +1149,7 @@ static void test_v7_repeat_block() {
     CHECK_EQ(d.times, 1u); CHECK_EQ(d.last_boots, 0u); CHECK_EQ(d.last_uptime_s, 0u);
     CHECK_EQ(d.group[0].max_mv, 20000u);
     rc::migrate_to_current(d);
-    CHECK_EQ(d.format, 11u);
+    CHECK_EQ(d.format, 12u);
     CHECK_EQ(d.times, 1u);
 }
 
@@ -1220,7 +1220,30 @@ static void test_same_results_tolerates_one_stored_step_of_noise() {
 }
 
 
+// The Xiaomi rows (the chain row, a skipped no-SVID chain, the modes it unlocked: fixed, PPS, a failing one) are the block's section,
+// never the card's rows: the same run with and without them encodes to the same record.
+static void test_xiaomi_rows_stay_off_the_card() {
+    std::vector<ct::Step> with = run_a();
+    ct::Step chain = step(A::Pd3Fixed, ct::Group::Pd, 0, 0, V::Skip, 0, ct::Reason::MiChain, 0, false, false, 1);
+    chain.hunt = true;
+    with.push_back(chain);
+    ct::Step fixed = step(A::Pd3Fixed, ct::Group::Pd, 5, 20000, V::Pass, 19980, ct::Reason::None, 0x000641F4u);
+    ct::Step pps = step(A::Pps, ct::Group::Pd, 6, 11000, V::Pass, 11010, ct::Reason::None, 0xC0DC3264u, false);
+    ct::Step bad = step(A::Pps, ct::Group::Pd, 7, 21000, V::Fail, 9000, ct::Reason::Request, 0xC1A43264u);
+    for (ct::Step* s : {&fixed, &pps, &bad}) { s->hunt = true; s->ma = 5000; with.push_back(*s); }
+    pps.continuous = true; pps.hunt = true; with.push_back(pps);   // even a continuous one never opens a range
+    const auto card_of = [](const std::vector<ct::Step>& steps) {
+        return rc::build(steps, evidence(), {ct::HandoverOutcome::FellBack, 1200}, {.fp = 0xAABBCCDDu}, {}, ct::State::Done, ct::Reason::None);
+    };
+    const rc::Card a = card_of(run_a()), b = card_of(with);
+    std::array<uint8_t, rc::kMaxRecord> ra{}, rb{};
+    rc::encode_card(ra, a); rc::encode_card(rb, b);
+    CHECK_EQ(ra == rb, true);
+    CHECK_EQ(a == b, true);
+}
+
 int main() {
+    test_xiaomi_rows_stay_off_the_card();
     test_v8_level_roundtrip();
     test_spr_avs_range_limits();
     test_late_reasons_and_states_roundtrip();

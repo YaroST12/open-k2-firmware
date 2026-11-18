@@ -332,11 +332,14 @@ def decode_card(rec, blob=None):
     crc = int.from_bytes(rec[-2:], "little")
     ok = _crc16(rec[:-2]) == crc
     if not ok and ln >= 34 and rec[4 + 33] == report_card.FORMAT:
-        # A link packed by a format-10 firmware carries the CRC of its format-10 record; v2 expansion writes the current format
-        # byte, so retry with the one before it.
+        # A link packed by an older firmware (format 10 or 11) carries the CRC of its own record; v2 expansion writes the current
+        # format byte, so retry with each format the v2 stream had before it.
         old = bytearray(rec[:-2])
-        old[4 + 33] = report_card.FORMAT - 1
-        ok = _crc16(old) == crc
+        for fmt in range(10, report_card.FORMAT):
+            old[4 + 33] = fmt
+            if _crc16(old) == crc:
+                ok = True
+                break
     out = report_card.decode(rec[4:4 + ln])
     out["_store_crc_ok"] = ok
     if blob is not None:

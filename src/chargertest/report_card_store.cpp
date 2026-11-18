@@ -58,7 +58,8 @@ Err Store::put(Card& c, Card& prev, bool& had, std::span<const std::uint8_t> blk
     c.times = 1; c.last_boots = 0; c.last_uptime_s = 0;
     std::uint32_t top_stamp = 0;
     for (unsigned i = 0; i < n_; ++i) if (idx_[i].stamp > top_stamp) top_stamp = idx_[i].stamp;
-    if (had && same_results(prev, c)) {
+    // A repeat also needs the same Xiaomi section (the chain outcome and each mode's verdict live in the block, not the card rows).
+    if (had && same_results(prev, c) && deep::read_mi(ext_of(idx_[unsigned(by_fp(c.id.fp))])) == deep::read_mi(blk)) {
         fold_repeat(prev, c);
         return write(c, top_stamp + 1, blk.empty() ? ext_of(idx_[unsigned(by_fp(c.id.fp))]) : blk);
     }

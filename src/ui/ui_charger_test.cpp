@@ -855,9 +855,10 @@ void ChargerTestSession::capture_identity() {
                             runner_.sweep_view());
     card_.level = runner_.level();             // the card names a Light / Deep run (v8 spare byte)
     report_card::set_auto_name(card_, mfr_);   // "<Brand> <PDP>W"; hw::put keeps a name the user gave
-    // A Deep run's block (spec summary, SVOOC ceiling, sweep graphs) is built now, while the sweep is in RAM, into the share
-    // buffer (no share view is open under a finishing run); it is stored beside the card and the share link carries it.
-    const std::size_t blk = report_card::deep::build(card_, runner_.evidence(), runner_.sweep_view(), ctx_.ui->share_buffer());
+    // The run's block (a Deep run's spec summary, SVOOC ceiling and sweep graphs; the Xiaomi section of any run whose chain row ran) is
+    // built now, while the sweep is in RAM, into the share buffer (no share view is open under a finishing run); it is stored beside
+    // the card and the share link carries it.
+    const std::size_t blk = report_card::deep::build(card_, runner_.steps(), runner_.evidence(), runner_.sweep_view(), ctx_.ui->share_buffer());
     save_card_store(std::span<const uint8_t>(ctx_.ui->share_buffer()).first(blk));
 }
 // save_card's tail, on its own frame: it holds the charger's previous Card (292 B) that save_card used to keep
@@ -3098,10 +3099,11 @@ void ChargerTestPage::paint_detail() {
             break;
         }
         case 5:
-            if (const auto* m = ct::is_mi_mode(s) ? s_.runner_.mi_mode(s) : nullptr) {   // the offer before the chain ("new": not listed)
+            if (ct::is_mi_mode(s)) {   // the offer before the chain ("not listed": a new PDO; "not kept": a resumed run lost it)
                 key = "Before";
-                if (m->before) val.put(mi_unlock::mode_text({0, m->before, m->pos}, false).view());
-                else { val.put("not listed"); col = kDim; }
+                const auto* m = s_.runner_.mi_mode(s);
+                if (m && m->before) val.put(mi_unlock::mode_text({0, m->before, m->pos}, false).view());
+                else { val.put(m ? "not listed" : "not kept"); col = kDim; }
             } else if (const auto mode = step_label::ufcs_range(s); mode.len) {
                 key = "Mode";
                 val.put(mode.view());
@@ -3113,9 +3115,9 @@ void ChargerTestPage::paint_detail() {
             sv = val.view();
             break;
         default:
-            if (const auto* m = ct::is_mi_mode(s) ? s_.runner_.mi_mode(s) : nullptr) {   // the offer the chain unlocked
+            if (ct::is_mi_mode(s)) {   // the offer the chain unlocked (the row's own PDO)
                 key = "After";
-                val.put(mi_unlock::mode_text({0, m->after, m->pos}, false).view());
+                val.put(mi_unlock::mode_text({0, s.pdo, s.pos}, false).view());
                 sv = val.view();
                 break;
             }

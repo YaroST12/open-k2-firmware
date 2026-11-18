@@ -124,7 +124,7 @@ static Bytes deep_blob() {
     ev.spec.cells[3] = specsec::make_cell(sc::Verdict::Unverified, sc::Skip::None, 0, specsec::kUnseen);
     ev.svooc_end = 7; ev.svooc_why = 0; ev.svooc_asks = 2; ev.svooc_word = 55; ev.svooc_vmax_mv = 11250; ev.svooc_stop_ms = 3300;
     Bytes out(dp::kMaxBlob);
-    out.resize(dp::build(c, ev, {{rows.data(), rows.size()}, {pts.data(), pts.size()}}, out));
+    out.resize(dp::build(c, {}, ev, {{rows.data(), rows.size()}, {pts.data(), pts.size()}}, out));
     return out;
 }
 
@@ -281,6 +281,27 @@ static std::vector<Fixture> fixtures() {
             f.push_back({"card_deep_v2", qs::Type::Card, r::kSchemaV2, v2});
         }
     }
+    // The format 12 Medium card with a block holding only the Xiaomi section (the 20K bank: the 0x2717 chain verified, PPS 5-11V
+    // 3A -> 5A tested at 11 V 5 A, a pass): the level byte 0 is written so the block has its place behind it.
+    {
+        rc::Card c = card_v5();
+        const Bytes rec = build([&](auto o) { return r::card(c, o); }, r::kMaxCard);
+        std::vector<ct::Step> steps(2);
+        steps[0].group = ct::Group::Pd; steps[0].algorithm = ct::Algorithm::Pd3Fixed; steps[0].hunt = true;
+        steps[0].verdict = ct::Verdict::Pass; steps[0].detail = k2::mi_unlock::kCodeVerified;
+        steps[1].group = ct::Group::Pd; steps[1].algorithm = ct::Algorithm::Pps; steps[1].hunt = true; steps[1].pos = 6;
+        steps[1].pdo = 0xC0DC3264u; steps[1].mv = 11000; steps[1].ma = 5000; steps[1].verdict = ct::Verdict::Pass;
+        ct::Evidence ev{};
+        ev.mi_chain = k2::mi_unlock::kCodeVerified; ev.mi_n = 1; ev.mi[0] = {0xC0DC323Cu, 0xC0DC3264u, 6};
+        Bytes blob(rc::deep::kMaxBlob);
+        blob.resize(rc::deep::build(c, steps, ev, {}, blob));
+        Bytes v2(r::kMaxCardDeepV2);
+        const std::size_t n = r::pack_v2(qs::Type::Card, rec, v2, blob);
+        if (n != 0) {
+            v2.resize(n);
+            f.push_back({"card_mi_v2", qs::Type::Card, r::kSchemaV2, v2});
+        }
+    }
     return f;
 }
 
@@ -395,8 +416,9 @@ static void test_pack_v2() {
         Bytes lv2(r::kMaxEmarker);
         CHECK_EQ(r::pack_v2(qs::Type::Card, rec, lv2), n + 1);
     }
-    // format 11: the Deep block rides after the level byte. A Deep card without it packs as before, Medium and Light cards ignore
-    // it, the worst block fills exactly kMaxCardDeepV2, and a block that is not whole is left out.
+    // format 11: the Deep block rides after the level byte. A Deep card without it packs as before, a block that is not whole is
+    // left out. Format 12: a Medium or Light card carries a block too (the Xiaomi section; a Medium card then writes its level
+    // byte 0), and a block that would push the record past one code (kMaxCardDeepV2 = 659) is left out whole.
     {
         rc::Card c = card_v5(); c.level = ct::Level::Deep;
         const Bytes rec = build([&](auto o) { return r::card(c, o); }, r::kMaxCard);
@@ -422,14 +444,25 @@ static void test_pack_v2() {
         CHECK_EQ(worst.size(), rc::deep::kMaxBlob);
         const std::size_t nw = r::pack_v2(qs::Type::Card, rec, with, worst);
         CHECK(nw != 0 && nw <= r::kMaxCardDeepV2);
-        CHECK_EQ(r::kMaxCardDeepV2, 653u);
-        for (const ct::Level lv : {ct::Level::Light, ct::Level::Medium}) {   // only a Deep card carries the block
+        CHECK_EQ(r::kMaxCardDeepV2, 659u);
+        CHECK_EQ(r::kMaxCardDeepV11, 653u);
+        for (const ct::Level lv : {ct::Level::Light, ct::Level::Medium}) {   // format 12: any card carries its block
             rc::Card m = card_v5(); m.level = lv;
             const Bytes mrec = build([&](auto o) { return r::card(m, o); }, r::kMaxCard);
             Bytes a(r::kMaxCardDeepV2), b(r::kMaxCardDeepV2);
-            const std::size_t na = r::pack_v2(qs::Type::Card, mrec, a), nb = r::pack_v2(qs::Type::Card, mrec, b, worst);
-            CHECK_EQ(na, nb);
-            CHECK(std::equal(a.begin(), a.begin() + na, b.begin()));
+            const std::size_t na = r::pack_v2(qs::Type::Card, mrec, a), nb = r::pack_v2(qs::Type::Card, mrec, b, small_blob);
+            CHECK(nb > na && nb <= na + 1 + (1 + 12 + 100 + 7) / 8 + 1);   // the block (and a Medium card's level byte 0)
+            Bytes old = mrec; old[4 + 33] = 11;                                                   // a format 11 card: Deep only
+            CHECK_EQ(r::pack_v2(qs::Type::Card, old, b, small_blob), r::pack_v2(qs::Type::Card, old, a));
+        }
+        // the worst Deep card with a block at its worst (the Xiaomi section on top of the worst Deep parts): left out whole
+        {
+            rc::Card w = card_v5(); w.level = ct::Level::Deep;
+            const Bytes wrec = build([&](auto o) { return r::card(w, o); }, r::kMaxCard);
+            Bytes a(r::kMaxCardDeepV2), b(r::kMaxCardDeepV2);
+            const std::size_t na = r::pack_v2(qs::Type::Card, wrec, a);
+            const std::size_t nb = r::pack_v2(qs::Type::Card, wrec, b, worst);
+            CHECK(nb == na || nb <= r::kMaxCardDeepV2);   // either whole (fits) or left out
         }
     }
     // the other kinds and the malformed records refuse

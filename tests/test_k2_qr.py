@@ -38,7 +38,7 @@ class Golden(unittest.TestCase):
     def test_every_fixture_present(self):
         self.assertEqual(set(FIX), {"boot", "identity", "emk_plain", "emk_rows", "pdcaps_spr", "pdcaps_epr", "card",
                                     "log", "loop", "battery", "emk_rows_lz", "card_lz", "emk_rows_v2", "card_v2",
-                                    "card_deep_v2"})
+                                    "card_deep_v2", "card_mi_v2"})
 
     def test_decode_joins_the_golden_record(self):
         for name, fx in FIX.items():
@@ -118,6 +118,22 @@ class SchemaV2(unittest.TestCase):
                 self.assertTrue(d["_store_crc_ok"])
                 self.assertEqual(d["level"], ["medium", "light", "deep"][level])
         self.assertEqual(q.expand_card_v2(medium), bytes(v1))   # Medium: no byte, still reads back whole
+
+    def test_xiaomi_card_golden(self):
+        # Format 12: a Medium card (the 20K bank) whose block holds only the Xiaomi section; the level byte 0 is written so the block
+        # has its place. The chain verified and PPS 5-11V 3A became 5A, tested at 11 V 5 A ("Mi 55W").
+        import charger_summary
+        res, code = q.decode_texts(FIX["card_mi_v2"]["parts"])
+        rec = res["record"]
+        self.assertTrue(rec["_store_crc_ok"])
+        self.assertNotIn("level", rec)
+        x = rec["deep"]["xiaomi"]
+        self.assertEqual((x["chain"], x["chain_text"], x["done"]), (20, "done, verified", True))
+        self.assertEqual([(m["label"], m["before"], m["after"], m["mv"], m["ma"], m["verdict"]) for m in x["modes"]],
+                         [("Mi 55W", "PPS 5-11V 3A", "PPS 5-11V 5A", 11000, 5000, "pass")])
+        self.assertEqual(set(rec["deep"]), {"xiaomi"})   # no Deep parts on a Medium card
+        text = charger_summary.summarize_card(rec)
+        self.assertIn("- Xiaomi: auth done, verified\n  - Mi 55W: PPS 5-11V 3A → PPS 5-11V 5A ✓", text)
 
     def test_v10_links_keep_their_crc_and_have_no_deep_block(self):
         # A format-10 firmware's link carries the CRC of its format-10 record; the reader writes format 11 and falls back to the
