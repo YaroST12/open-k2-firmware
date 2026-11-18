@@ -147,6 +147,34 @@ class OppoProbe(unittest.TestCase):
                 kr._oppo_steps(bad)
 
 
+class OppoAbsentFromTheBuild(unittest.TestCase):
+    """A build without K2_OPPO_PROBE=1 answers 0x4D with UnknownCmd: a clear message, and no attach is ever sent."""
+
+    class Absent:
+        def __init__(self):
+            self.calls = []
+
+        def call(self, cmd, args=b""):
+            self.calls.append((cmd, bytes(args)))
+            raise kr.RemoteError(kr.STATUS_UNKNOWN_CMD, cmd)
+
+    def test_probe_says_so_and_does_not_attach(self):
+        link, clk = self.Absent(), Clock()
+        with self.assertRaises(kr.RemoteError) as e:
+            kr.cmd_pd_oppo_probe(link, ns(repeat=3), sleep=clk.sleep, clock=clk, rand=lambda n: bytes(n))
+        self.assertIn("K2_OPPO_PROBE=1", str(e.exception))
+        self.assertIn("not in this build", str(e.exception))
+        self.assertEqual(len(link.calls), 1)   # one start, no retry, no attach
+        self.assertFalse(any(c[0] == kr.CMD_PD_ATTACH for c in link.calls))
+
+    def test_power_says_so(self):
+        link = self.Absent()
+        with self.assertRaises(kr.RemoteError) as e:
+            kr.cmd_pd_oppo_power(link, argparse.Namespace(mv=9000, ma=3000, confirm=True))
+        self.assertIn("K2_OPPO_PROBE=1", str(e.exception))
+        self.assertEqual(len(link.calls), 1)
+
+
 class OppoPower(unittest.TestCase):
     def test_request_bytes_and_result(self):
         link = FakeLink()

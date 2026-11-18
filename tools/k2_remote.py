@@ -350,6 +350,8 @@ class RemoteError(RuntimeError):
             text = f"command {cmd} failed: refused: inline - the Sink tab shows the sniffed identity"
         if cmd == CMD_PD_HANDBACK and payload and payload[0] < len(HANDBACK_VERDICTS):
             text += f" ({HANDBACK_VERDICTS[payload[0]]})"
+        if cmd == CMD_OPPO_PROBE and status == STATUS_UNKNOWN_CMD:
+            text += " (not in this build: the OPPO probe is compiled in only with K2_OPPO_PROBE=1)"
         if cmd == CMD_OPPO_PROBE and len(payload) == 1 and payload[0] < len(OPPO_REFUSALS):
             text += f" ({OPPO_REFUSALS[payload[0]]})"   # the start refusal (pd::oppo::Refusal)
         elif cmd == CMD_OPPO_PROBE and len(payload) >= 2 and payload[1] != 0 and payload[1] < len(OPPO_REFUSALS):
