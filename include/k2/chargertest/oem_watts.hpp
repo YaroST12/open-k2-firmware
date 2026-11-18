@@ -76,6 +76,16 @@ constexpr bool in_family(Family f, charger_test::Algorithm a) {
     default: return false;
     }
 }
+// The same by report-card group (one group per unit), and the one word a family reads as wherever its groups fold into one
+// (the card's cells, its summary text): never a protocol version such as "SVOOC65".
+constexpr bool in_family(Family f, charger_test::Group g) {
+    using G = charger_test::Group;
+    switch (f) {
+    case Family::Vooc: return g == G::Vooc || g == G::SuperVooc || g == G::SuperVooc65;
+    default: return false;
+    }
+}
+constexpr const char* family_word(Family f) { return f == Family::Vooc ? "VOOC" : "?"; }
 
 // What the run proves of one level. NotTested = 0, so an all-zero word is "nothing tested".
 enum class Claim : std::uint8_t { NotTested = 0, NotReached, Claimed };

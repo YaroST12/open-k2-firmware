@@ -211,12 +211,17 @@ twins in `tools/web/ctgrid.js` and `docs/site/r/card.js`, all checked against `t
 - **SCP and UFCS** chips carry the watts the protocol names: SCP from its current write (`10V 22.5W`), UFCS from the
   mode's current (`11V 44W`). Within a family the run summary ranks by those claimed watts (`SCP 22.5W`).
 - **AFC and FCP** name no current in the exchange the K2 makes, so they keep volts only. QC keeps its versions.
-- Same text in `charger_summary.py` (a `VOOC levels` line), the web grid and the report-card page. No card or QR
-  encoding changed.
+- Same text in `charger_summary.py` (a `VOOC levels` line), the web grid and the report-card page. A saved card keeps
+  all three VOOC groups (no card or QR encoding changed); every view of it folds them into ONE `VOOC` group, its lead
+  (`report_card::vooc_lead`: the first pass, else the first fail, else the first held): the device's Report cards page
+  (one cell, the counts), the drive's SUMMARY.md, `charger_summary.py` and the card page, which also lists the levels
+  from the Deep block's ceiling. The device page has no level rows: the card record holds no ceiling (the Deep block lives
+  beside it). CARDS.JSON keeps the three group keys.
 
 Host tests: `test_oem_watts` (C++ and Python, one golden), `test_result_layout` (`vooc_family_reads_as_watts_levels`,
 `levels_footer_names_the_top_claim`), `test_ui_charger_test`, `test_ui_no_truncation`, `test_charger_summary`,
-`test_ctgrid.mjs`, `test_cardpage.mjs`.
+`test_card_tone` (`test_the_vooc_family_counts_once`), `test_report_card_json`
+(`test_summary_folds_the_vooc_family`), `test_ui_capture` (`cards_vooc_rot0..3`), `test_ctgrid.mjs`, `test_cardpage.mjs`.
 
 ## A port that cuts its own 5 V rail: retry within a window (2026-11-15, host-tested, hardware check pending)
 

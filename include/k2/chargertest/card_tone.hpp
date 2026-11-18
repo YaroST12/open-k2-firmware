@@ -109,7 +109,7 @@ inline Counts counts(const Card& c) {
     if (c.group[0].verdict != GV::None) add(group(c, 0));
     for (unsigned i = 0; i < c.n_ranges; ++i) add(range(c, c.range[i]));
     for (unsigned g = 1; g < kGroups; ++g)
-        if (c.group[g].verdict != GV::None) add(group(c, g));
+        if (c.group[g].verdict != GV::None && !folded(c, g)) add(group(c, g));   // the VOOC family once (report_card::vooc_lead)
     return n;
 }
 

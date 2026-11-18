@@ -352,6 +352,30 @@ static void test_deep_block_renders() {
     CHECK_EQ(rc::kJsonDeepMax, rc::kJsonMax + 560);
 }
 
+// SUMMARY.md reads the VOOC family as one line by its family word, never "SVOOC" / "SVOOC65" (the JSON keeps all three groups).
+static void test_summary_folds_the_vooc_family() {
+    rc::Card c = sample();
+    using G = ct::Group;
+    c.group[unsigned(G::Vooc)] = {rc::GV::Skip, 0, 0, uint8_t(ct::Reason::NeedsLoad)};
+    c.group[unsigned(G::SuperVooc)] = {rc::GV::Pass, 5000, uint8_t(k2::fc::Fail::Detected), 0};
+    c.group[unsigned(G::SuperVooc65)] = {rc::GV::Skip, 0, 0, uint8_t(ct::Reason::NeedsLoad)};
+    std::array<char, rc::kSummaryMax> sb;
+    const std::string t(sb.data(), rc::render_summary(c, std::span<char>(sb.data(), sb.size() - 1)));
+    CHECK_EQ(t.find("- VOOC: \xE2\x9C\x93 detected\n") != std::string::npos, true);
+    CHECK_EQ(t.find("SVOOC") == std::string::npos, true);
+    CHECK_EQ(t.find("VOOC, ") == std::string::npos && t.find(", VOOC") == std::string::npos, true);   // not in the skipped list too
+    // A family that never answered is one word in the skipped list.
+    c.group[unsigned(G::SuperVooc)] = {rc::GV::Skip, 0, 0, uint8_t(ct::Reason::NeedsLoad)};
+    const std::string s(sb.data(), rc::render_summary(c, std::span<char>(sb.data(), sb.size() - 1)));
+    CHECK_EQ(s.find("SVOOC") == std::string::npos, true);
+    size_t at = s.find("VOOC"), n = 0;
+    while (at != std::string::npos) { ++n; at = s.find("VOOC", at + 1); }
+    CHECK_EQ(int(n), 1);
+    std::array<char, rc::kJsonMax> jb;
+    const std::string j(jb.data(), rc::render_json(c, jb));
+    CHECK_EQ(j.find("\"SVOOC65\":") != std::string::npos, true);   // the export keeps every group
+}
+
 int main() {
     test_deep_block_renders();
     test_level_renders();
@@ -367,5 +391,6 @@ int main() {
     test_legacy_fixture_hex_decodes();
     test_worst_case_fits();
     test_summary_text();
+    test_summary_folds_the_vooc_family();
     return test_report(__FILE__);
 }
