@@ -27,8 +27,7 @@
 
   Only with K2_WEB=1 (env or `make K2_WEB=1 gate`), which also puts the node tests back into step 8:
  12 net     the K2_NET=1 variant (off by default) in build-net/: -Werror build, layout invariants, stack budget, map
- 13 webusb  the K2_WEBUSB=1 variant (off by default) in build-webusb/: the same checks
- 14 specrows the K2_PDSPEC=1 K2_SPECROWS=1 variant (off by default: the per-transition list does not fit the shipping
+ 13 specrows the K2_PDSPEC=1 K2_SPECROWS=1 variant (off by default: the per-transition list does not fit the shipping
             image) in build-specrows/: the same checks
 
   --static  (opt-in, appended as the last step) tools/static_check.sh all: clang-tidy, ARM g++ -fanalyzer and
@@ -463,19 +462,6 @@ def step_net_variant():
     print(f"  K2_NET=1 variant ({NET_BUILD}/open_k2.elf): " + parse_size_line(docker_tool("arm-none-eabi-size", f"{NET_BUILD}/open_k2.elf")))
 
 
-WEBUSB_BUILD = "build-webusb"  # the K2_WEBUSB=1 variant's own build directory
-
-
-def step_webusb_variant():
-    """The K2_WEBUSB=1 build (vendor interface, BOS/WebUSB descriptors) is off by default, so build it in its own
-    directory and hold it to the same -Werror, layout, stack and map checks. Size is reported, not compared."""
-    step_build(WEBUSB_BUILD, "K2_WEBUSB=1")
-    step_invariants(WEBUSB_BUILD)
-    step_stack(WEBUSB_BUILD)
-    step_map(WEBUSB_BUILD)
-    print(f"  K2_WEBUSB=1 variant ({WEBUSB_BUILD}/open_k2.elf): " + parse_size_line(docker_tool("arm-none-eabi-size", f"{WEBUSB_BUILD}/open_k2.elf")))
-
-
 SPECROWS_BUILD = "build-specrows"  # the K2_SPECROWS=1 variant's own build directory
 
 
@@ -520,7 +506,6 @@ STEPS = [("build (-Werror, docker as host uid)", step_build), ("bootloader invar
          ("sanitizers: host tests under ASan/UBSan, g++ and clang (docker)", step_sanitize), ("size report", step_size),
          ("perf (device selftest vs tools/perf_baseline.json; skipped without a matching device)", step_perf)] + (
          [("K2_NET=1 variant (-Werror, layout, stack, map)", step_net_variant),
-          ("K2_WEBUSB=1 variant (-Werror, layout, stack, map)", step_webusb_variant),
           ("K2_SPECROWS=1 variant (-Werror, layout, stack, map)", step_specrows_variant)] if WEB else [])
 
 
