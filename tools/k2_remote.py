@@ -646,6 +646,18 @@ def decode_keys(p):
     out["hidden"] = bool(p[0] >> 4 & 1)
     return out
 
+CALIBRATION_STATES = ("absent", "ok", "corrupt")
+
+
+def decode_calibration(p):
+    """GET_STATE [4]: the settings EEPROM trim status and the three signed values read at boot."""
+    _need(p, 13, "state calibration")
+    if p[0] >= len(CALIBRATION_STATES):
+        raise FrameError(f"unknown calibration status {p[0]}")
+    i32 = lambda o: int.from_bytes(p[o:o + 4], "little", signed=True)
+    return {"status": CALIBRATION_STATES[p[0]], "voltage_gain": i32(1),
+            "current_zero": i32(5), "current_gain": i32(9)}
+
 STOP_ACTIVE = ((1, "test"), (2, "fc"), (4, "pd"), (8, "spoof"))   # k2/core/stop.hpp: what the stop found active
 
 
@@ -2243,7 +2255,15 @@ def cmd_state(link, a):
         keys = _state_part(link, 3, decode_keys)
         if keys is not None:
             out["keys"] = keys
+        cal = _state_part(link, 4, decode_calibration)
+        if cal is not None:
+            out["cal"] = cal
     return out
+
+
+def cmd_info(link, a):
+    """Firmware and hardware information (ping), plus the boot-time settings EEPROM calibration status."""
+    return {**cmd_ping(link, a), "cal": decode_calibration(link.call(CMD_GET_STATE, bytes([4])).payload)}
 
 
 def _state_part(link, part, decode):
@@ -5309,7 +5329,12 @@ def _render(name, r):
                 f" git {r['git']} proto {r['proto']} "
                 f"uptime {r['uptime_ms'] / 1000:.1f} s")
     if name == "info":
-        return render("ping", r)
+        head = render("ping", r)
+        c = r.get("cal")
+        if not c:
+            return head
+        return (head + f"\ncal {c['status']} voltage_gain {c['voltage_gain']} "
+                f"current_zero {c['current_zero']} current_gain {c['current_gain']}")
     if name == "state":
         return "\n".join(f"{k}: {v}" for k, v in r.items())
     if name == "pdos":
@@ -5486,7 +5511,7 @@ def _render(name, r):
     return "ok " + " ".join(f"{k}={v}" for k, v in r.items())
 
 
-COMMANDS = {"ping": cmd_ping, "info": cmd_ping, "press": cmd_press, "state": cmd_state, "pdos": cmd_pdos,
+COMMANDS = {"ping": cmd_ping, "info": cmd_info, "press": cmd_press, "state": cmd_state, "pdos": cmd_pdos,
             "emarker": cmd_emarker, "identity": cmd_identity, "match": cmd_match, "usblink": cmd_usblink, "memory": cmd_memory,
             "sink": cmd_sink, "action": cmd_action, "page": cmd_page,
             "reboot": cmd_reboot, "dfu": cmd_dfu, "factory-wipe": cmd_factory_wipe, "flash-dump": cmd_flash_dump, "bootinfo": cmd_bootinfo, "fault": cmd_fault, "log": cmd_log, "watch": cmd_watch,
@@ -5517,7 +5542,7 @@ def build_parser():
     p.add_argument("--timeout", type=float, default=1.0, help="response timeout in seconds")
     sub = p.add_subparsers(dest="command", required=True)
     sub.add_parser("ping", help="firmware version, hardware revision, git hash, uptime")
-    sub.add_parser("info", help="firmware and hardware information")
+    sub.add_parser("info", help="firmware and hardware information, settings EEPROM calibration status and trims")
     sp = sub.add_parser("press", help="inject a button press (a logical key: plus = next/down, minus = previous/up, whatever the rotation)")
     sp.add_argument("button", choices=sorted(BUTTONS))
     g = sp.add_mutually_exclusive_group()

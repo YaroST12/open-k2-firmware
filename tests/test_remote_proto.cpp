@@ -282,7 +282,21 @@ static void test_state_keys_part() {
     CHECK_EQ(kKeysLen, 57);
     CHECK_EQ(kKeysLen <= kMaxRspPayload, 1);
     CHECK_EQ(run(f, request(0x03, 61, {4}), r), 1);
-    check_header(r, 0x03, 61, Status::BadArg, 0);
+    check_header(r, 0x03, 61, Status::Ok, kCalibrationLen);
+}
+
+static void test_state_calibration_part() {
+    Fake f;
+    f.cal = {CalibrationStatus::Corrupt, -1'024'000, -305, -307'550};
+    std::array<uint8_t, kFrameSize> r{};
+    CHECK_EQ(run(f, request(0x03, 62, {4}), r), 1);
+    check_header(r, 0x03, 62, Status::Ok, kCalibrationLen);
+    check_bytes(r, kRspHeader, {2,
+                                0x00, 0x60, 0xF0, 0xFF,
+                                0xCF, 0xFE, 0xFF, 0xFF,
+                                0xA2, 0x4E, 0xFB, 0xFF});
+    CHECK_EQ(run(f, request(0x03, 63, {5}), r), 1);
+    check_header(r, 0x03, 63, Status::BadArg, 0);
 }
 
 static void test_adc_raw() {
@@ -3751,6 +3765,7 @@ int main() {
     test_state_session_part();
     test_state_diag_part();
     test_state_keys_part();
+    test_state_calibration_part();
     test_adc_raw();
     test_ripple();
     test_fc();

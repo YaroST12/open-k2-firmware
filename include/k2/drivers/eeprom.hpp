@@ -21,6 +21,16 @@ Err probe(std::uint8_t bus, Probe &out);
 // Random-address read of out.size() bytes at the address `a` (from eeprom::locate). Err::Nack = the chip did not answer.
 Err read(std::uint8_t bus, const Addr &a, std::span<std::uint8_t> out);
 
+#if K2_EEPROM_READ
+// One bounded boot read of the 12 settings EEPROM calibration trims on the INA bus. The result stays in RAM for the
+// remote-info command and UI notice; the values never change this firmware's power-monitor readings.
+void check_calibration(power::Chip chip);
+CalInfo calibration();
+#else
+inline void check_calibration(power::Chip) {}
+inline constexpr CalInfo calibration() { return {}; }
+#endif
+
 #if K2_EEPROM_CAL_CLEAR
 // The calibration repair (see cal_clear in eeprom_calc.hpp): on the INA bus, device 0x50, writes zeros to word 0x04..0x0F only
 // when those 12 bytes read back equal to `expected`. Blocks up to kCalWriteMs while the part's write cycle ends, calling

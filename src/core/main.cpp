@@ -15,6 +15,7 @@
 #include "k2/drivers/accelerometer.hpp"
 #include "k2/drivers/board.hpp"
 #include "k2/drivers/dpdm.hpp"
+#include "k2/drivers/eeprom.hpp"
 #include "k2/fastcharge/fastcharge.hpp"
 #include "k2/fastcharge/fctrig.hpp"
 #include "k2/drivers/crm.hpp"
@@ -150,6 +151,7 @@ k2::mainloop::Context g_loop{g_ui, g_remote, g_bootscreen, g_accelerometer, rebo
     const k2::bootpd::Early pd_boot = k2::bootpd::early(keys_mode, warm_reset);
     const k2::bootmode::Mode boot_mode = pd_boot.mode;
     k2::boottrace::init(boot_mode);        // ADC + power monitor up, 50 ms power trace for the first 3 s
+    k2::eeprom::check_calibration(k2::power::chip());   // one bounded read of the settings EEPROM trims
     k2::lcd::init();
     buttons_init();
     k2::dpdm::init();
@@ -200,6 +202,7 @@ k2::mainloop::Context g_loop{g_ui, g_remote, g_bootscreen, g_accelerometer, rebo
     k2::adc::log_raw();
     k2::fastcharge::init();
 
+    g_ui.note_calibration(k2::eeprom::calibration().state == k2::eeprom::CalState::Corrupt);
     g_ui.init(k2::systick::millis(), g_boot_back_held);
     g_loop.rescan_landing_due = k2::rdcomeback::found().kind == k2::rdintent::IntentKind::Rescan;   // the verdict lands in the slow tasks
     // A key-mode boot whose key stays down for 3 s from the plug-in shows what it decided as a QR code (the first frame is drawn by the

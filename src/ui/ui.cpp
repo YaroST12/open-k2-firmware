@@ -267,7 +267,9 @@ void Ui::draw_rotation_notice(uint32_t now_ms) {
     if (notice_) notice.put(notice_);   // a refusal note (refuse_menu) shares the strip and its timer
     else if (rotation_lock_) notice.put("Manual ").put_u32(rotation() * 90).put(" deg");
     else notice.put("Autorotate: Auto");
-    draw_footer(ctx_.content, notice_ ? FooterTone::Error : FooterTone::Info, notice.view());
+    if (notice_ == kCalibrationNotice && page_ == Page::Home) return;
+    draw_footer(ctx_.content, notice_ == kCalibrationNotice ? FooterTone::Caution
+                         : notice_ ? FooterTone::Error : FooterTone::Info, notice.view());
     rotation_notice_drawn_ = true;
 }
 
@@ -311,6 +313,8 @@ void Ui::set_page(Page p, uint32_t now_ms) {
     const bool changed = p != page_;
     if (changed) pages_.at(0)->leave();
     page_ = p;
+    if (p != Page::Home && notice_ == kCalibrationNotice && rotation_notice_until_ == 0)
+        rotation_notice_until_ = now_ms + 5000;   // one boot warning, deferred until a page with a footer is visible
     if (const int f = face_of(p); f >= 0) ctx_.keep.face = static_cast<uint8_t>(f);   // the Bench returns to the face last shown
     const bool blank = clear_for_incoming(now_ms, *outgoing, page_opaque(p, true));   // the outgoing pages are still alive for a replay
     pages_.pop_to(changed ? 0 : 1);        // the menus go; so does the rotation page unless it is the one asked for

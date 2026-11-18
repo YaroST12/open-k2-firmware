@@ -179,12 +179,71 @@ static void test_cal_write_failures_still_read_back() {
     CHECK_COND(r.after_valid); CHECK_EQ(int(r.after[1]), 0x60);
 }
 
+static std::array<std::uint8_t, kCalLen> trim_bytes(std::int32_t voltage_gain, std::int32_t current_zero,
+                                                     std::int32_t current_gain) {
+    std::array<std::uint8_t, kCalLen> b{};
+    auto put = [&b](std::size_t off, std::int32_t v) {
+        const auto u = static_cast<std::uint32_t>(v);
+        for (std::size_t i = 0; i < 4; i++) b[off + i] = static_cast<std::uint8_t>(u >> (8 * i));
+    };
+    put(0, voltage_gain);
+    put(4, current_zero);
+    put(8, current_gain);
+    return b;
+}
+
+static void check_trim(k2::power::Chip chip, const std::array<std::uint8_t, kCalLen> &b, CalState state,
+                       std::int32_t voltage_gain, std::int32_t current_zero, std::int32_t current_gain) {
+    const CalInfo c = classify_cal(chip, true, b);
+    CHECK_EQ(int(c.state), int(state));
+    CHECK_EQ(c.voltage_gain, voltage_gain);
+    CHECK_EQ(c.current_zero, current_zero);
+    CHECK_EQ(c.current_gain, current_gain);
+}
+
+static void test_cal_classifier_healthy() {
+    const auto zero = trim_bytes(0, 0, 0);
+    check_trim(k2::power::Chip::Ina228, zero, CalState::Ok, 0, 0, 0);
+    check_trim(k2::power::Chip::Ina226, zero, CalState::Ok, 0, 0, 0);
+    check_trim(k2::power::Chip::Ina237, zero, CalState::Ok, 0, 0, 0);
+
+    const auto small = trim_bytes(-37, 21, 94);
+    for (const k2::power::Chip chip : {k2::power::Chip::Ina228, k2::power::Chip::Ina226, k2::power::Chip::Ina237})
+        check_trim(chip, small, CalState::Ok, -37, 21, 94);
+
+    check_trim(k2::power::Chip::Ina228, trim_bytes(20'480, 3'072, -30'720), CalState::Ok,
+               20'480, 3'072, -30'720);   // exactly 10% gain and 1% zero are allowed
+}
+
+static void test_cal_classifier_corrupt_examples() {
+    const auto unit = trim_bytes(-1'024'000, -305, -307'550);
+    check_trim(k2::power::Chip::Ina226, unit, CalState::Corrupt, -1'024'000, -305, -307'550);
+    check_trim(k2::power::Chip::Ina228, trim_bytes(20'481, 0, 0), CalState::Corrupt, 20'481, 0, 0);
+    check_trim(k2::power::Chip::Ina226, trim_bytes(0, 3'073, 0), CalState::Corrupt, 0, 3'073, 0);
+    check_trim(k2::power::Chip::Ina237, trim_bytes(0, 0, -61'441), CalState::Corrupt, 0, 0, -61'441);
+    check_trim(k2::power::Chip::Ina226, trim_bytes(INT32_MAX, 0, 0), CalState::Corrupt, INT32_MAX, 0, 0);
+    check_trim(k2::power::Chip::Ina226, trim_bytes(INT32_MIN, 0, 0), CalState::Corrupt, INT32_MIN, 0, 0);
+}
+
+static void test_cal_classifier_absent_and_unknown() {
+    const auto values = trim_bytes(1, -2, 3);
+    check_trim(k2::power::Chip::None, values, CalState::Unknown, 1, -2, 3);
+    const CalInfo absent = classify_cal(k2::power::Chip::Ina226, false, values);
+    CHECK_EQ(int(absent.state), int(CalState::Absent));
+    CHECK_EQ(absent.voltage_gain, 0);
+    CHECK_EQ(absent.current_zero, 0);
+    CHECK_EQ(absent.current_gain, 0);
+}
+
 int main() {
     test_cal_constants();
     test_cal_match_writes_zeros_once();
     test_cal_mismatch_never_writes();
     test_cal_failed_read_never_compares_or_writes();
     test_cal_write_failures_still_read_back();
+    test_cal_classifier_healthy();
+    test_cal_classifier_corrupt_examples();
+    test_cal_classifier_absent_and_unknown();
     test_one_byte_blocks();
     test_one_byte_refusals();
     test_one_byte_end_of_array();

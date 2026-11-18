@@ -5,6 +5,7 @@
 
 #include <bit>
 
+#include "k2/core/log.hpp"
 #include "k2/drivers/i2c.hpp"
 #include "k2/drivers/systick.hpp"
 
@@ -12,6 +13,8 @@ namespace k2::eeprom {
 
 #if K2_EEPROM_READ
 namespace {
+CalInfo g_calibration;
+
 bool bus_of(std::uint8_t bus, i2c::Bus &out) {
     if (bus > 1) return false;
     out = bus ? i2c::Bus::Ina : i2c::Bus::Fusb;
@@ -38,6 +41,19 @@ Err read(std::uint8_t bus, const Addr &a, std::span<std::uint8_t> out) {
     if (!bus_of(bus, b)) return Err::Nack;
     return i2c::read_word(b, a.dev7, {a.word, a.nword}, out) ? Err::Ok : Err::Nack;
 }
+
+void check_calibration(power::Chip chip) {
+    std::uint8_t bytes[kCalLen] = {};
+    const Addr a{kCalDev7, 1, {kCalWord, 0}};
+    const bool present = read(1, a, bytes) == Err::Ok;       // one fixed 12-byte read, a bounded number of I2C bits
+    g_calibration = classify_cal(chip, present, std::span<const std::uint8_t, kCalLen>(bytes));
+    if (g_calibration.state == CalState::Corrupt)
+        K2LOG("[CAL] stored trims corrupt v=%d iz=%d ig=%d\n",
+              static_cast<int>(g_calibration.voltage_gain), static_cast<int>(g_calibration.current_zero),
+              static_cast<int>(g_calibration.current_gain));
+}
+
+CalInfo calibration() { return g_calibration; }
 #endif  // K2_EEPROM_READ
 
 #if K2_EEPROM_CAL_CLEAR

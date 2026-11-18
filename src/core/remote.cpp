@@ -165,6 +165,14 @@ remote::PingInfo Remote::ping() {
             static_cast<std::uint8_t>(hw.monitor), hw.minor_valid, hw.minor};
 }
 
+remote::CalibrationInfo Remote::calibration_info() {
+    const eeprom::CalInfo c = eeprom::calibration();
+    remote::CalibrationStatus status = remote::CalibrationStatus::Absent;
+    if (c.state == eeprom::CalState::Ok) status = remote::CalibrationStatus::Ok;
+    else if (c.state == eeprom::CalState::Corrupt) status = remote::CalibrationStatus::Corrupt;
+    return {status, c.voltage_gain, c.current_zero, c.current_gain};
+}
+
 remote::Status Remote::press(uint8_t button, uint16_t ms) {
     if (!virt_[button].press(systick::millis(), ms)) return remote::Status::Busy;
     K2LOG("[RMT] button=%s down for %dms\n", kButtonNames[button], static_cast<int>(ms));

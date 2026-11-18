@@ -40,6 +40,11 @@ KEYS = bytes([0x12,
               82, 101, 115, 99, 97, 110, 0, 67, 104, 97, 114, 103, 101, 114,
               43, 0, 0, 0, 0, 0, 0,       78, 101, 120, 116, 0, 0, 0])
 
+CALIBRATION = bytes([2,
+                     0x00, 0x60, 0xF0, 0xFF,
+                     0xCF, 0xFE, 0xFF, 0xFF,
+                     0xA2, 0x4E, 0xFB, 0xFF])
+
 
 def frame_ok(payload):
     return kr.Response(kr.CMD_GET_STATE, 1, 0, payload)
@@ -174,12 +179,29 @@ class KeysDecode(unittest.TestCase):
             kr.decode_keys(KEYS[:56])
 
 
+class CalibrationDecode(unittest.TestCase):
+    def test_fields(self):
+        self.assertEqual(kr.decode_calibration(CALIBRATION),
+                         {"status": "corrupt", "voltage_gain": -1_024_000,
+                          "current_zero": -305, "current_gain": -307_550})
+
+    def test_status_and_truncation(self):
+        self.assertEqual(kr.decode_calibration(b"\x00" + b"\x00" * 12)["status"], "absent")
+        self.assertEqual(kr.decode_calibration(b"\x01" + b"\x00" * 12)["status"], "ok")
+        with self.assertRaises(kr.FrameError):
+            kr.decode_calibration(CALIBRATION[:-1])
+        with self.assertRaises(kr.FrameError):
+            kr.decode_calibration(b"\x03" + b"\x00" * 12)
+
+
 class StateJson(unittest.TestCase):
     def test_json_state_carries_the_keys_block(self):
-        out, link = state_json({0: BASE, 1: SESSION, 2: DIAG, 3: KEYS})
+        out, link = state_json({0: BASE, 1: SESSION, 2: DIAG, 3: KEYS, 4: CALIBRATION})
         self.assertEqual(out["keys"]["ok"]["long"], "Charger")
         self.assertEqual(out["diag"]["fusb_id"], 0x91)        # the earlier parts are still merged in
         self.assertIn((kr.CMD_GET_STATE, b"\x03"), link.sent)
+        self.assertEqual(out["cal"]["status"], "corrupt")
+        self.assertIn((kr.CMD_GET_STATE, b"\x04"), link.sent)
 
     def test_firmware_without_part_3_has_no_keys(self):
         out, _ = state_json({0: BASE, 1: SESSION, 2: DIAG})
@@ -226,6 +248,20 @@ class StateJson(unittest.TestCase):
         out = kr.COMMANDS["state"](link, a)
         self.assertEqual(link.sent, [(kr.CMD_GET_STATE, b"")])
         self.assertNotIn("mah", out)
+
+    def test_info_is_ping_plus_the_calibration_object(self):
+        a = kr.build_parser().parse_args(["--json", "info"])
+        link = FakeLink({4: CALIBRATION})
+        ping = {"proto": 1, "uptime_ms": 0, "git": "abc", "version": "1.0", "hw": "Q6.03"}
+        orig = kr.cmd_ping
+        kr.cmd_ping = lambda _link, _a: dict(ping)
+        try:
+            out = kr.COMMANDS["info"](link, a)
+        finally:
+            kr.cmd_ping = orig
+        self.assertEqual(out, {**ping, "cal": kr.decode_calibration(CALIBRATION)})
+        self.assertEqual(link.sent, [(kr.CMD_GET_STATE, b"\x04")])
+        self.assertIn("\ncal ", kr.render("info", out))
 
 
 if __name__ == "__main__":
