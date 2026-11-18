@@ -446,8 +446,9 @@ rows and their evidence side table). Detection is by the SVID in the source's Di
   (PPS 5-11 V 5 A at 11 V), "Mi 66W" (11 V 6 A), "Mi 120W" (20 V 6 A). The before -> after detail is the row's Detail page
   ("Before" / "After") and the report text. The same rule lives in `tools/step_label.py` (`mi_watts`) and the web grid
   (`miWatts`).
-- **Results grid.** One "Xiaomi" row: the chain chip ("auth", or the words "no SVID" / "no answer" / "stalled"), then one chip
-  per mode ("none new" when the chain finished and nothing changed).
+- **Results grid.** One "Xiaomi" row: one chip per unlocked mode ("55W"), no auth chip. With no mode, one "auth"
+  chip: passed (the chain finished, nothing changed) or struck as a skip (no SVID, no answer, stalled; the reason is on the Steps
+  and Detail pages and in the report text). While the chain waits, the pending "auth" chip.
 - **Report card** (format 12): the card record carries no Xiaomi row; the card's extension block carries a **Xiaomi section** at
   its tail (`report_card_deep.hpp`: chain u5, n u3, then per mode before / after PDO, level, verdict, reason), on a card of any
   level, when the source listed the SVID (no section for "no SVID"). The device card shows it as a "Xiaomi" fact line

@@ -125,15 +125,15 @@ class StepLabelTest(unittest.TestCase):
         text = charger_summary.summarize({"run_id": 1, "state": "done", "reason": "none", "evidence": {}, "steps": steps})
         self.assertIn("- PPS 5-11V 5A: 8V ✓, 8→11V ✓, 11V 5A ✓", text)
         self.assertIn("- Xiaomi: Mi 66W ✓", text)
-        # the unified Xiaomi unit (the wire's "mi" flag): its chain row says how the 0x2717 chain ended, then its modes
+        # the unified Xiaomi unit (the wire's "mi" flag): the grid rule: its modes alone, else one auth verdict
         chain = dict(row, protocol="pd3x-fixed", pos=0, target_mv=0, request_ma=0, raw_pdo=0, continuous=False, mi=True, detail=20)
         mode = dict(pps, target_mv=11000, request_ma=5000, continuous=False, measured_mv=11000, mi=True)
         run = {"run_id": 1, "state": "done", "reason": "none", "evidence": {}, "steps": [chain, mode]}
-        self.assertIn("- Xiaomi: auth done, verified; Mi 55W ✓", charger_summary.summarize(run))
+        self.assertIn("- Xiaomi: Mi 55W ✓", charger_summary.summarize(run))
         run["steps"] = [chain]
-        self.assertIn("- Xiaomi auth: done, no new modes", charger_summary.summarize(run))
+        self.assertIn("- Xiaomi: auth ✓", charger_summary.summarize(run))
         run["steps"] = [dict(chain, result="skip", reason="Xiaomi chain", detail=1)]
-        self.assertIn("- Xiaomi: no 0x2717 SVID", charger_summary.summarize(run))
+        self.assertIn("- Xiaomi: auth skipped (no 0x2717 SVID)", charger_summary.summarize(run))
         card = {"no": 1, "name": "", "pdos": 7, "runs": 1, "vid": 1, "pid": 2, "fw": "0", "state": "Complete", "reason": "",
                 "fp": "1", "boots": 1, "uptime_s": 1, "handover": "not tried", "handover_ms": 0, "groups": {},
                 "ranges": [{"alg": "PD3.2+ SPR AVS", "lo_mv": 15000, "hi_mv": 28000, "max_mv": 20000, "fail_mv": 0, "max_ma": 3000}]}

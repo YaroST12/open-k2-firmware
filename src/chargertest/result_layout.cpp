@@ -467,32 +467,24 @@ Tone level_tone(oem_watts::Claim c) {
         put_text(*k, oem_watts::watts(uint32_t(oem_watts::kLevels[i].w) * 1000u).c_str());
     }
 }
-// The Xiaomi row: the chain row first (a chip "auth" while it waits or once the chain finished; a word when it could not run:
-// "no SVID", "no answer", "stalled"), then one chip per mode the chain unlocked, by the watts of its new level ("55W", "66W"); a chain that
-// finished with nothing raised says "none new" beside its chip.
+// The Xiaomi row: one chip per mode the chain unlocked, by the watts of its new level ("55W", "66W"). With no mode, one "auth" chip:
+// passed (the chain finished, nothing raised), skipped (it did not run or failed; the reason stays on the steps page), or as it
+// stands while it waits. The chain row's own chip shows only then.
 [[gnu::noinline]] void probe_row(TokenBuf& b, std::span<const ct::Step> steps) {
-    bool done = false, modes = false;
+    const ct::Step* chain = nullptr;
+    bool modes = false;
     for (const auto& x : steps) {
         if (!x.hunt) continue;
-        if (ct::is_mi_chain(x)) {
-            if (x.verdict == ct::Verdict::Skip && x.reason == ct::Reason::MiChain) {
-                const mi_unlock::Chain c = mi_unlock::chain_of(x.detail);
-                b.word(c == mi_unlock::Chain::NoSvid ? "no SVID" : c == mi_unlock::Chain::Stalled ? "stalled" : "no answer", Tone::Dim);
-                continue;
-            }
-            Token* k = b.token(true, tone(x));
-            if (!k) break;
-            put_text(*k, "auth");
-            done |= x.verdict == ct::Verdict::Pass;
-            continue;
-        }
+        if (ct::is_mi_chain(x)) { chain = &x; continue; }
         modes = true;
         Token* k = b.token(true, tone(x));
         if (!k) break;
         put_text(*k, step_label::params(x).c_str());   // the mode's new level by its watts: "55W", "66W"
         tag(b, x);
     }
-    if (done && !modes) b.word("none new", Tone::Dim);
+    if (modes || !chain) return;
+    Token* k = b.token(true, chain->verdict == ct::Verdict::Skip ? Tone::Skip : tone(*chain));
+    if (k) put_text(*k, "auth");
 }
 // Reach of one PDO slot's range steps.
 Reach reach_of(std::span<const ct::Step> s, A a, uint8_t pos) {

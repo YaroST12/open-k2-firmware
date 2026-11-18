@@ -7,8 +7,9 @@
 //              steps and its deep sweep; a small "S" beside the volts says a sweep ran on that APDO (Token::sweep). A
 //              range the charger does not offer reads "None". The sweep has no row of its own.
 //   Legacy:    one chip per distinct target voltage ("9V"), so QC3 up and down steps collapse; SCP adds its limit ("10V 2.25A").
-//   Xiaomi:    one row "Xiaomi" for the unit (the hunt steps): the chain's "auth" chip (or why it could not run: "no SVID"), then
-//              a chip per mode it unlocked at its new level ("11V 5A"); "none new" when the chain finished and nothing went up.
+//   Xiaomi:    one row "Xiaomi" for the unit (the hunt steps): a chip per mode the chain unlocked, by the watts of
+//              its new level ("55W"), no auth chip; with none, one "auth" chip: passed (finished, nothing went up) or skipped
+//              (no SVID, no answer, stalled: the reason stays on the Steps page).
 //   The words are k2/chargertest/step_label.hpp's, the same as the Running / Steps rows and the report card.
 //   Protocols with nothing to show (not advertised, or no answer at 5 V) fold into one "No reply" row of words;
 //   protocols that were only skipped (PD active, over the cap, ...) fold into one "Skipped" row.

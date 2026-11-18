@@ -1246,8 +1246,7 @@ static std::string row_order(const rl::Layout& l) {
     for (size_t i = 0; i < l.row_count; ++i) { if (i) out += ","; if (l.rows[i].header) out += "*"; out += l.rows[i].label; }
     return out;
 }
-// The Xiaomi unit is one row ("Xiaomi", Row::probe) in the Xiaomi section: the chain's "auth" chip, then one chip per mode it
-// unlocked by the watts of the level the row asked ("55W", never the advertised list of the PD rows), which stay out of the USB PD chips.
+// The Xiaomi unit is one row ("Xiaomi", Row::probe) in the Xiaomi section: one chip per mode the chain unlocked by the watts of the level the row asked ("55W", never the advertised list of the PD rows), which stay out of the USB PD chips.
 static void test_the_xiaomi_unit_is_one_row_in_its_section() {
     auto s = baseus();
     s.push_back(mi_chain(V::Pass, k2::mi_unlock::kCodeVerified));
@@ -1259,10 +1258,9 @@ static void test_the_xiaomi_unit_is_one_row_in_its_section() {
     CHECK_STR(l.rows[mi].label, "Xiaomi");
     CHECK_EQ(l.rows[mi].probe, true);
     CHECK_EQ(mi > row_of(l, "PPS"), true);   // the row stands where the plan runs it: after the PD rows
-    CHECK_STR(chips(l, mi).c_str(), "auth 55W 100W");   // each mode by its watts
+    CHECK_STR(chips(l, mi).c_str(), "55W 100W");   // each mode by its watts, no auth chip
     CHECK_EQ(int(l.tokens[l.rows[mi].first].tone), int(rl::Tone::Pass));
-    CHECK_EQ(int(l.tokens[l.rows[mi].first + 1].tone), int(rl::Tone::Pass));
-    CHECK_EQ(int(l.tokens[l.rows[mi].first + 2].tone), int(rl::Tone::Fail));
+    CHECK_EQ(int(l.tokens[l.rows[mi].first + 1].tone), int(rl::Tone::Fail));
     for (const auto& x : s) CHECK_EQ(rl::row_has(l.rows[mi], x), x.hunt);   // the row owns every Xiaomi step and nothing else
     // The PD chips keep the advertised currents and pass counts, untouched by the Xiaomi rows.
     CHECK_STR(chips(l, row_of(l, "PD3.x")).c_str(), "5V 3A 9V 3A 12V 3A 15V 3A 20V 3.35A");
@@ -1287,20 +1285,23 @@ static void test_the_xiaomi_row_stands_where_the_plan_runs_it() {
     rl::build(l, u, notes);
     CHECK_STR(row_order(l).c_str(), "*QC/UFCS,QC2,*Xiaomi,Mi Turbo");
 }
-// How the chain ended, on the row: a chain that could not run is a word, never a chip (nothing was tested); a finished chain with
-// nothing raised says "none new"; a mode the cable cannot carry is a neutral skip with its word, never a red fail.
+// The chain on the row: unlocked modes alone (no auth chip); a finished chain with nothing raised is one passed "auth" chip; a chain
+// that could not run is one skipped "auth" chip (its reason stays on the steps page); a mode the cable cannot carry is a neutral skip.
 static void test_the_xiaomi_row_says_how_the_chain_ended() {
     rl::Layout l;
     const auto only = [&](std::vector<ct::Step> s) { rl::build(l, s); return chips(l, row_of(l, "Xiaomi") + 1); };
-    CHECK_STR(only({mi_chain(V::Skip, k2::mi_unlock::kCodeNoSvid)}).c_str(), "no SVID");
-    CHECK_EQ(l.tokens[l.rows[row_of(l, "Xiaomi") + 1].first].chip, false);
-    CHECK_STR(only({mi_chain(V::Skip, k2::mi_unlock::kCodeNoAnswer)}).c_str(), "no answer");
-    CHECK_STR(only({mi_chain(V::Skip, k2::mi_unlock::chain_code(true, false, 5, 0))}).c_str(), "stalled");
-    CHECK_STR(only({mi_chain(V::Pass, k2::mi_unlock::kCodeFinished)}).c_str(), "auth none new");
+    const auto first = [&](rl::Tone t) { const rl::Token& k = l.tokens[l.rows[row_of(l, "Xiaomi") + 1].first]; return k.chip && k.tone == t; };
+    for (const uint8_t code : {k2::mi_unlock::kCodeNoSvid, k2::mi_unlock::kCodeNoAnswer, k2::mi_unlock::chain_code(true, false, 5, 0)}) {
+        CHECK_STR(only({mi_chain(V::Skip, code)}).c_str(), "auth");
+        CHECK_EQ(first(rl::Tone::Skip), true);
+    }
+    CHECK_STR(only({mi_chain(V::Pass, k2::mi_unlock::kCodeFinished)}).c_str(), "auth");
+    CHECK_EQ(first(rl::Tone::Pass), true);
     CHECK_STR(only({mi_chain(V::Pending, 0)}).c_str(), "auth");   // the Running grid, before the chain row's turn
+    CHECK_EQ(first(rl::Tone::Pending), true);
     ct::Step cut = mi_mode(A::Pps, 11000, 6000, V::Skip, 6, 0xC0DC3278u); cut.reason = ct::Reason::CableLimit;
-    CHECK_STR(only({mi_chain(V::Pass, k2::mi_unlock::kCodeVerified), cut}).c_str(), "auth 66W cable");
-    CHECK_EQ(int(l.tokens[l.rows[row_of(l, "Xiaomi") + 1].first + 1].tone) != int(rl::Tone::Fail), true);
+    CHECK_STR(only({mi_chain(V::Pass, k2::mi_unlock::kCodeVerified), cut}).c_str(), "66W cable");
+    CHECK_EQ(int(l.tokens[l.rows[row_of(l, "Xiaomi") + 1].first].tone) != int(rl::Tone::Fail), true);
 }
 
 // ---- summarize(): the best passing mode per protocol family, as words with volts and amps ---------------------------

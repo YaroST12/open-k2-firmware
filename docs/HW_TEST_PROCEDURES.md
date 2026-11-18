@@ -707,9 +707,9 @@ Pass: legacy rows get a verdict on a charger that falls back; no step requests a
 Use with a source that lists SVID 0x2717 (`docs/CHARGER_TEST_FLOW.md`, "Xiaomi unit"). No load; PD unit only is enough
 (`python3 tools/ct_start.py --units pd --wait 560`). Three cases:
 
-1. Xiaomi 20K bank on a 5 A cable (or the EPR 50V 5A spoof): the Xiaomi row reads `auth` then `55W` (PPS 5-11 V 3 A -> 5 A,
+1. Xiaomi 20K bank on a 5 A cable (or the EPR 50V 5A spoof): the Xiaomi row reads `55W` alone (PPS 5-11 V 3 A -> 5 A,
    asked at 11 V 5 A). The mode's Detail page shows Before `PPS 5-11V 3A`, After `PPS 5-11V 5A`.
-2. FH22: the chain finishes and nothing changes: `auth`, `none new`; the chain row's Detail reads "Auth done, verified / No new
+2. FH22: the chain finishes and nothing changes: the row is one passed `auth` chip; the chain row's Detail reads "Auth done, verified / No new
    modes".
 3. CUKTECH 120 W on the 6 A cable (the built-in "Xiaomi 6A" identity or the real cable): `66W` and `120W` (PPS 5-11 V and 5-20 V
    at 6 A) are tested; on a 5 A cable they are skipped "cable limit", never asked.
