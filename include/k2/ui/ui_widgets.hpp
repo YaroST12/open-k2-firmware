@@ -183,6 +183,11 @@ inline FooterTone footer_tone_of(uint16_t color) {
 struct PaintBudget;
 
 void draw_footer(const Surface &s, FooterTone tone, std::string_view text K2_TRUNC_DECL);
+// Whether the footer drawn last (draw_footer, whichever variant reached it) was an Error one. The idle power logic reads it
+// so a screen showing an error is never switched off; Ui clears it with every page switch or full clear, the incoming
+// page's own footer then sets it again.
+bool footer_error_shown();
+void footer_error_clear();
 // Same as draw_footer, but paints through the element's cache: skips the repaint when the
 // (tone, text) signature is unchanged since the last call with this `e` slot.
 // e.invalidate() forces a repaint.

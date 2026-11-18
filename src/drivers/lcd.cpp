@@ -194,6 +194,7 @@ std::uint8_t g_pct = 100;       // the brightness asked for
 std::uint8_t g_applied = 0;     // what the compare register carries now
 bool g_pwm_on;
 PanelSeq g_seq;
+bool g_drop;                    // the stream now open was begun while the panel was not awake: its pixels go nowhere
 
 void pwm_apply(std::uint8_t pct) {
     Tmr4& t = tmr4();
@@ -543,6 +544,10 @@ private:
 
 K2_HOT void stream_begin(std::uint16_t x0, std::uint16_t y0, std::uint16_t x1, std::uint16_t y1) {
     if (g_sink) return g_sink->begin(x0, y0, x1, y1);
+    // A panel in sleep (or waking) shows nothing and its RAM write would only wake the wire: drop the stream. The wake repaints
+    // everything. Latched at begin, so a window never changes sides half-way.
+    g_drop = !g_seq.awake();
+    if (g_drop) return;
     // Recorded only: the first pixels or fill send it (open_window), so the previous stream's last transfer keeps the wire
     // while the caller composes this one's first run.
     g_win[0] = x0; g_win[1] = y0; g_win[2] = x1; g_win[3] = y1;
@@ -552,6 +557,7 @@ K2_HOT void stream_begin(std::uint16_t x0, std::uint16_t y0, std::uint16_t x1, s
 
 K2_HOT void stream_pixels(std::span<const std::uint16_t> px) {
     if (g_sink) return g_sink->pixels(px.data(), px.size());
+    if (g_drop) return;
     const PaintTimer timer(static_cast<std::uint32_t>(px.size()));
     if (g_erase) return stream_fill(0, static_cast<std::uint32_t>(px.size()));
     if (px.empty()) return;
@@ -567,6 +573,7 @@ K2_HOT void stream_pixels(std::span<const std::uint16_t> px) {
 
 K2_HOT void stream_fill(std::uint16_t color, std::uint32_t count) {
     if (g_sink) return g_sink->fill(color, count);
+    if (g_drop) return;
     const PaintTimer timer(count);
     if (g_erase) color = 0;
     if (count == 0) return;
@@ -588,6 +595,7 @@ K2_HOT void stream_fill(std::uint16_t color, std::uint32_t count) {
 
 K2_HOT void stream_end() {
     if (g_sink) return;  // the panel CS was never asserted
+    if (g_drop) { g_drop = false; return; }
     // A window that got no pixels never went on the wire; otherwise the frame stays open, its last transfer running, until
     // the next window or command closes it (close_frame).
     g_win_pending = false;

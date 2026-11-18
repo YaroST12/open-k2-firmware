@@ -2,6 +2,8 @@
 // Copyright (C) 2026 Yaraslau Furman
 // Hot per-tick and slice-paint Ui methods (kept in the zero-wait flash window; cold Ui methods live in ui.cpp).
 #include "k2/ui/ui.hpp"
+#include "k2/ui/home_cards.hpp"
+#include "k2/ui/home_model.hpp"
 
 #include <algorithm>
 
@@ -39,6 +41,7 @@ uint32_t now_us() { return systick::micros(); }
 }  // namespace
 
 K2_HOT void Ui::pump_paint(uint32_t now_ms) {
+    if (paint_off_) return;   // the screen is off: the pending state stays, set_paint_enabled(true) repaints from scratch
     PaintBudget *const bg = ctx_.budget;
     if (clear_pending_) {
         if (clear_full_lcd_) {
@@ -146,6 +149,17 @@ K2_HOT void Ui::repaint(uint32_t now_ms) {
     redraw(now_ms);
 }
 
+void Ui::set_paint_enabled(bool on, uint32_t now_ms) {
+    if (paint_off_ != on) return;   // already in that state
+    paint_off_ = !on;
+    if (on) repaint(now_ms);
+}
+
+bool Ui::alert_active() const {
+    return alert_over_ || fc_release_.state() == trig::Release::State::Unsafe ||
+           charger_test_.results().state() == charger_test::State::Unsafe || footer_error_shown();
+}
+
 K2_HOT UiAction Ui::tick(uint32_t now_ms) {
     BudgetScope scope(*this);
     gap::ui.note(now_ms);
@@ -229,9 +243,13 @@ K2_HOT UiAction Ui::tick(uint32_t now_ms) {
             const uint32_t level = home::sag_level_mv(proto, qc3 && fst.target_mv > 0 ? static_cast<uint32_t>(fst.target_mv) : 0u);
             ctx_.sag_level_mv = sag_settle_.update(now_ms, level);
             ctx_.limit_w = (graphs::limit_mw(proto) + 500u) / 1000u;   // the Graphs page's dotted limit, per trend column
+            // The alarm the idle logic holds the screen for: Home's OVER on W or A (the same rule, home::alarm_of).
+            alert_over_ = home::alarm_of(static_cast<uint32_t>(power::magnitude(ctx_.pm.power_mw)), home::contract_mw(proto)) == home::Alarm::Over ||
+                          home::alarm_of(static_cast<uint32_t>(power::magnitude(ctx_.pm.current_ma)), proto.ma) == home::Alarm::Over;
         } else if (!live) {
             ctx_.sag_level_mv = 0;
             ctx_.limit_w = 0;
+            alert_over_ = false;
         }
     }
     // Kelvin mode: the far-end sense wires of the fixture arrive on CC1, CC2 and D-.

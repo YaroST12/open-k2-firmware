@@ -249,7 +249,17 @@ public:
     // (the boot-info QR screen) and now hands it back.
     void repaint(uint32_t now_ms);
     // True while a multi-pass page switch, clear, or sliced field repaint still has slices queued for subsequent ticks.
-    bool painting() const { return paint_pending_; }
+    bool painting() const { return paint_pending_ && !paint_off_; }
+    // Idle power (k2/core/idle.hpp): with painting off, tick() keeps every model and sample running but draws nothing, and
+    // pump_paint() returns at once (the panel is asleep or about to be). Switching it back on repaints the whole screen
+    // from the current data, so nothing stale survives a sleep. Off draws still land in lcd's drop gate if anything paints
+    // around the Ui (a press flash, a notice).
+    void set_paint_enabled(bool on, uint32_t now_ms);
+    bool paint_enabled() const { return !paint_off_; }
+    // An alarm the screen must not be switched off over: the Home W or A limit exceeded on a live meter, an unsafe release
+    // (fast-charge or charger test, "unplug source"), or an Error footer on the page now showing. Model-level, so it is
+    // true while painting is off for the first two (the footer one only updates while the screen paints).
+    bool alert_active() const;
     // Runs the next slice of a pending paint (the main loop calls it on every pass that is not the 20 ms tick, so slices follow
     // each other at the pass rate instead of waiting for the next tick). Does only the paint: no sampling, no polls. False and
     // untouched when nothing is pending, or while the OK + Back hold card owns the panel (tick() sequences that one).
@@ -553,6 +563,8 @@ private:
     bool timing_pending_ K2_BSS_INIT(false);
     bool booting_ K2_BSS_INIT(false);
     bool paint_pending_ K2_BSS_INIT(false);
+    bool paint_off_ K2_BSS_INIT(false);        // idle power: the screen is off, pump_paint() draws nothing
+    bool alert_over_ K2_BSS_INIT(false);       // the live W or A is over the contract (set in tick, ~100 ms cadence)
     bool paint_blank_ K2_BSS_INIT(false);
     bool clear_pending_ K2_BSS_INIT(false);
     bool clear_full_lcd_ K2_BSS_INIT(false);

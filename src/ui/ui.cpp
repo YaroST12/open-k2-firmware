@@ -522,6 +522,7 @@ void Ui::reset_paint_pipeline() {
     // Only invalidate the row cache here: set_rotation/repaint call start_full_clear() on the
     // same live page and must keep ctx_.rows's ctx_ binding and scroll offset intact.
     ctx_.rows.invalidate();
+    footer_error_clear();   // a page switch or full clear: the incoming page's footer says again whether an error is showing
     paint_pending_ = false;
     paint_blank_ = false;
     clear_pending_ = false;
@@ -569,7 +570,7 @@ bool Ui::clear_for_incoming(uint32_t now_ms, PageIf &outgoing, bool incoming_opa
 }
 
 bool Ui::paint_more(uint32_t now_ms) {
-    if (!paint_pending_ || hold_shown_) return false;
+    if (!paint_pending_ || hold_shown_ || paint_off_) return false;
     BudgetScope scope(*this);
     const uint32_t t0 = now_us();
     ctx_.now = now_ms;

@@ -395,7 +395,12 @@ K2_HOT void draw_range_trace(const Surface &s, int16_t x, int16_t y, int cols, i
     lcd::stream_end();
 }
 
+namespace { bool g_footer_error; }
+bool footer_error_shown() { return g_footer_error; }
+void footer_error_clear() { g_footer_error = false; }
+
 K2_HOT void draw_footer(const Surface &s, FooterTone tone, std::string_view text K2_TRUNC_DEF) {
+    g_footer_error = tone == FooterTone::Error;
     const int16_t fy = static_cast<int16_t>(s.h - 18);   // the footer hugs the content bottom (kFooterY on a full-height surface)
     const FooterStyle st = footer_style(tone);
     char buf[kFitBuf];                                  // a footer that would run off the surface ends in "..."
