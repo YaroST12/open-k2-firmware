@@ -2383,6 +2383,50 @@ static void test_step_label_gallery() {
             CHECK_EQ(s.verdict == ct::Verdict::Pass || s.verdict == ct::Verdict::Fail ? s.mv <= 5000u : true, true);
     }
 }
+// The Results grid's PD block for three sources (a bank-like one, an EPR one with AVS, a PD 2.0 fixed-only one) at rotations 0 and 3:
+// the first window, the last window and the block's Steps page. K2_DUMP=dir writes dir/k2_pdb_<source>_rot<r>_<scene>.panel
+// (tools/panel2png.py makes the PNGs); without K2_DUMP it only walks the scenes.
+static void test_pd_block_scenes() {
+    struct Source { const char* name; uint8_t rev; bool epr; std::initializer_list<uint32_t> pdos; };
+    const Source sources[] = {
+        {"bank", 2, false, {0x0001912C, 0x0002D12C, 0x0003C12C, 0x0004B12C, 0x000641F4, 0xC0DC3264, 0xC1903228}},
+        {"epr", 2, true, {0x0001912C, 0x0002D12C, 0x0004B12C, 0x000641F4, 0xC0DC213C, 0xC1A42164, 0xE004B000, 0x0008C1F4, 0xD230968C}},
+        {"pd2", 1, false, {0x0001912C, 0x0002D12C, 0x0003C12C, 0x0004B12C, 0x000641F4}},
+    };
+    for (const Source& s : sources) for (uint8_t rot : {uint8_t(0), uint8_t(3)}) {
+        fixture();
+        g_stub.caps.spec_rev = s.rev; g_stub.caps.epr = s.epr;
+        g_stub.caps.num_pdos = uint8_t(s.pdos.size());
+        unsigned i = 0;
+        for (uint32_t w : s.pdos) g_stub.caps.pdos[i++] = pd::decode_pdo(w);
+        Ui ui;
+        open(ui); ui.set_rotation(rot, 1100);
+        move(ui, kPdRow); press(ui, Button::Ok); press(ui, Button::Ok);
+        CHECK_EQ(ui.charger_test_stage(), 4);
+        start_press(ui, 1300); press(ui, Button::Ok, 1400);
+        uint32_t t = 1500;
+        for (; t <= 900000 && ui.charger_test_busy(); t += 100) ui.tick(t);
+        CHECK_EQ(ui.charger_test_stage(), 6);
+        for (int k = 0; k < 60 && ui.painting(); ++k) ui.tick(t += 20);
+        char name[64];
+        const auto shot = [&](const char* scene) {
+            for (int k = 0; k < 60 && ui.painting(); ++k) ui.tick(t += 20);
+            std::snprintf(name, sizeof name, "pdb_%s_rot%u_%s", s.name, unsigned(rot), scene);
+            dump_panel(name);
+        };
+        top(ui, t); shot("top");
+        move(ui, 40, t); shot("end");
+        top(ui, t); settle(ui, t);
+        for (unsigned k = 0; k < 10; ++k) {   // the first PD row's Steps page
+            top(ui, t); move(ui, k, t); press(ui, Button::Ok, t);
+            if (ui.charger_test_stage() != 7) { CHECK_EQ(ui.charger_test_stage(), 6); continue; }
+            const auto& steps = ui.charger_test_results().steps();
+            if (steps.empty() || steps[0].group != ct::Group::Pd) { press(ui, Button::Back, t); continue; }
+            shot("steps");
+            break;
+        }
+    }
+}
 // The README's charger-test pictures (docs/img/ui/ct-*.png), rotation 3 (the button strip at the bottom): an EPR-capable charger
 // (fixed 5/9/15/20 V, two PPS ranges, SPR AVS, EPR 28 V) behind a converter that follows every request up to the monitor's 36 V
 // ceiling, so a PD-only run is a clean pass. Writes $K2_DUMP/k2_readme_ct_<scene>.panel; without K2_DUMP it only walks the scenes.
@@ -5698,6 +5742,7 @@ int main() {
     test_a_capped_range_reads_amber_and_says_how_far_it_got();
     test_steps_rows_show_whole_labels();
     test_step_label_gallery();
+    test_pd_block_scenes();
     test_readme_frames();
     test_ufcs_results_and_detail_show_the_mode_current();
     test_results_best_line_names_the_best_modes();
