@@ -29,6 +29,9 @@ ADVERTISED, NOT_ASKED = "advertised", "light run: not asked"
 NOTED = (ADVERTISED, NOT_ASKED)
 PORT_CUTS = "port cuts without load"   # Reason::PortCuts: the step lost VBUS to the port's own cut twice, so it is no verdict
 FOLDED = "output folds back"   # Reason::Folded: a pass on the folded side of a voltage fold; a caution, neither pass nor fail
+STEP_RESOLUTION, PROG_CHECK = "step resolution", "transition check"   # Reason::StepResolution / ProgCheck: more cautions on a pass
+CAUTIONS = (FOLDED, STEP_RESOLUTION, PROG_CHECK)
+WALK_STEP_MV = {"pps": 20}   # charger_test::walk_step_mv: a PPS walk moves in 20 mV, an AVS walk in 100 mV
 # The VOOC family's units: one shared detection, so the summary reads them as one "VOOC" line and the family's levels in watts
 # (oem_watts.LEVELS), never as three protocol versions. The card names its groups VOOC / SVOOC / SVOOC65 (report_card.GROUPS).
 VOOC_FAMILY = ("vooc-5v-handshake", "svooc-5v-handshake", "svooc65-5v-handshake")
@@ -54,8 +57,17 @@ def _run_level(r):
 
 
 def _caution(s):
-    """True for a step the run marked a voltage-fold caution (Reason::Folded on a pass)."""
-    return s["result"] == "pass" and s["reason"] == FOLDED
+    """True for a step the run marked a caution: a pass whose reason is a fold, a step walk off its quantum or a transition flag."""
+    return s["result"] == "pass" and s["reason"] in CAUTIONS
+
+
+def _caution_words(s):
+    """What the caution says, as charger_test::caution_text does on the device ("steps 100mV, not 20mV", "overshoot, slow rise")."""
+    if s["reason"] == STEP_RESOLUTION:
+        mv = s["detail"]
+        mv = (mv + 5) // 10 * 10 if mv >= 50 else mv
+        return f"steps {mv}mV, not {WALK_STEP_MV.get(s['protocol'], 100)}mV" if mv else "steps ignored"
+    return s["detail_reason"] if s["detail_reason"] != "none" else s["reason"]
 
 
 def _retry(s):
@@ -69,6 +81,8 @@ def _step_text(s, prev, amps=True):
     """One row of a group line: its step_label numbers ("5V 3A", "11→8V") and the verdict. `prev` = the plan row before it."""
     # A Xiaomi mode row carries its protocol word and watts ("Mi 55W"): the group has no heading of its own.
     label = step_label.label(s, prev) if step_label.is_hunt(s) else _params(s, prev, amps)
+    if _caution(s) and s["reason"] != FOLDED:
+        return f"{label} ⚠ {_caution_words(s)}"
     if _caution(s):   # a fixed row measured the folded level; a sweep row has no single level of its own
         at = "" if s.get("sweep") else f" to {report_card.dv_text(s['measured_mv'])}"
         return f"{label} ⚠ folds{at}" if at else f"{label} ⚠ folds back"

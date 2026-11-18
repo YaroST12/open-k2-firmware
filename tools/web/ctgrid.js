@@ -179,8 +179,25 @@ var CtGrid = (function () {
     return { i: r.index !== undefined ? r.index : i, alg: algOf(r), mv: r.target_mv || 0, pdo: (r.raw_pdo || 0) >>> 0, pos: r.pos || 0,
              result: r.result, reason: r.reason || "none", detail: r.detail || 0, hunt: isHunt(r), sweep: isSweep(r), raw: r };
   }
+  // A pass the run marked a caution (result_layout caution): a voltage fold, a step walk the source did not follow at its quantum
+  // (the detail is the measured move in mV, 0 = ignored) or a transition that broke a spec limit (the detail is progcheck's flag bits).
+  var CAUTIONS = { "output folds back": 1, "step resolution": 1, "transition check": 1 };
+  var PROG_FLAGS = ["overshoot", "slow rise", "transient", "level off"];
+  function isCaution(s) { return s.result === "pass" && CAUTIONS[s.reason] === 1; }
+  // The caution's words, as charger_test::caution_text says them on the device.
+  function cautionText(s) {
+    if (s.reason === "step resolution") {
+      if (!s.detail) return "steps ignored";
+      return "steps " + (s.detail >= 50 ? Math.round(s.detail / 10) * 10 : s.detail) + "mV, not " + (s.alg === "pps" ? 20 : 100) + "mV";
+    }
+    if (s.reason === "transition check") {
+      var f = PROG_FLAGS.filter(function (_, i) { return (s.detail >> i) & 1; });   // progcheck::Flag bits, lowest first
+      return (f[0] || s.reason) + (f.length > 1 ? " +" + (f.length - 1) : "");
+    }
+    return s.reason;
+  }
   function count(t, s) {
-    if (s.result === "pass") { if (s.reason === "output folds back") t.capped++; else t.pass++; }   // a voltage fold is a caution: counted with the capped rows, never a pass
+    if (s.result === "pass") { if (isCaution(s)) t.capped++; else t.pass++; }   // a caution is counted with the capped rows, never a pass
     else if (s.result === "fail") { if (s.reason === "capped below target") t.capped++; else t.fail++; }
     else if (s.result === "skip") t.skip++;
     else t.pending++;
@@ -484,10 +501,10 @@ var CtGrid = (function () {
     var WORD = { pass: "pass", fail: "fail", skip: "skipped", pending: "pending", running: "running", stopped: "stopped", partial: "partial", none: "" };
     function whyOf(c) {
       var f = c.steps.filter(function (s) { return s.result === "fail"; })[0] || c.steps.filter(function (s) { return s.result === "skip"; })[0]
-              || c.steps.filter(function (s) { return s.result === "pass" && s.reason === "output folds back"; })[0];   // a caution says why too
+              || c.steps.filter(isCaution)[0];   // a caution says why too
       if (!f) return "";
       var dr = f.raw.detail_reason;
-      var w = f.result === "fail" && dr && dr !== "none" ? dr : f.reason !== "none" ? f.reason : "";
+      var w = isCaution(f) ? cautionText(f) : f.result === "fail" && dr && dr !== "none" ? dr : f.reason !== "none" ? f.reason : "";
       return c.note ? (w ? w + ", " : "") + c.note : w;
     }
     function cellOf(c) {

@@ -267,6 +267,22 @@ def test_a_folded_row_is_a_caution_not_a_pass():
     assert "caution" not in charger_summary.summarize(_epr_rows(0))   # a clean run keeps the old header
 
 
+def test_a_step_walk_miss_and_a_transition_flag_are_cautions():
+    # Reason::StepResolution (detail = the measured move) and Reason::ProgCheck (detail = flag bits, words in detail_reason): a pass the
+    # run counts apart, worded as the device's caution_text does
+    run = _epr_rows(0)
+    run["steps"][0].update(reason="step resolution", detail=98, protocol="pps", target_mv=5000, measured_mv=5100)
+    run["steps"][1].update(reason="transition check", detail=3, detail_reason="overshoot, slow rise", protocol="pps")
+    text = charger_summary.summarize(run)
+    assert text.splitlines()[1].startswith("0 pass, 2 caution, 0 fail, 0 skip")
+    assert "⚠ steps 100mV, not 20mV" in text
+    assert "⚠ overshoot, slow rise" in text
+    run["steps"][0].update(detail=0, protocol="spr-avs")
+    assert "⚠ steps ignored" in charger_summary.summarize(run)
+    run["steps"][0].update(detail=60)
+    assert "⚠ steps 60mV, not 100mV" in charger_summary.summarize(run)
+
+
 def _mi_run(*rows):
     """Mi 6 A rows, each (result, reason, detail_reason, target_mv)."""
     steps = [{"result": res, "reason": why, "detail_reason": detail, "measured_mv": mv if res == "pass" else 0, "attempts": 1,

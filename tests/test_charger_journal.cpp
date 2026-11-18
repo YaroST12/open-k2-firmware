@@ -1194,6 +1194,23 @@ static void test_a_resume_mid_pd_keeps_the_planners_step_order() {
     CHECK_EQ(r.steps[r.phase_index].hunt, true); CHECK_EQ(r.steps[r.phase_index].mv, 20000u);
     CHECK_EQ(int(r.steps[chain].reason), int(ct::Reason::MiChain)); CHECK_EQ(r.steps[chain].detail, k2::mi_unlock::kCodeVerified);
 }
+// A transition flag is a Pass + Reason::ProgCheck whose detail holds the flag bits: it survives a reboot with its row.
+static void test_a_transition_flag_survives_a_reboot() {
+    Vol v;
+    auto live = fh22(false);
+    arm(v, live);
+    size_t at = 0;
+    while (at < live.size() && live[at].algorithm != A::Pps) ++at;
+    CHECK_EQ(at < live.size(), true);
+    live[at].verdict = ct::Verdict::Pass; live[at].measured_mv = live[at].mv;
+    live[at].reason = ct::Reason::ProgCheck; live[at].detail = 5;
+    CHECK_EQ(int(v.commit(live, at)), 0);
+    v.reboot();
+    cj::Replay r; v.j->replay(r);
+    CHECK_EQ(r.found, true);
+    CHECK_EQ(int(r.steps[at].reason), int(ct::Reason::ProgCheck)); CHECK_EQ(r.steps[at].detail, 5u);
+    CHECK_EQ(int(r.steps[at].verdict), int(ct::Verdict::Pass));
+}
 // plan_pending() is what the Runner waits for before an above-5 V request: only a change of the plan itself counts.
 static void test_plan_pending_ignores_verdicts() {
     Vol v;
@@ -1234,7 +1251,7 @@ static void test_the_write_gate_keeps_writes_out_of_the_post_contract_window() {
 int main() {
     test_the_write_gate_keeps_writes_out_of_the_post_contract_window();
     test_a_resume_mid_pd_keeps_the_planners_step_order();
-    test_the_header_carries_the_plan_order(); test_plan_pending_ignores_verdicts();
+    test_the_header_carries_the_plan_order(); test_plan_pending_ignores_verdicts(); test_a_transition_flag_survives_a_reboot();
     test_section_mapping();
     test_a_late_avs_list_rewrites_only_the_pps_section(); test_dropping_the_xiaomi_rows_rewrites_only_the_oem_section();
     test_a_verdict_rewrites_only_its_section_and_not_the_header(); test_a_pump_writes_one_file_and_its_cost_is_bounded();

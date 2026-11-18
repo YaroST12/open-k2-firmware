@@ -162,6 +162,27 @@ test("a deep sweep is one range cell under its own Sweep label", () => {
   assert.deepEqual(lines(s, { fold: false, monitorMv: 36000 }), ["PD: PPS 5-21V/3.2A:pass", "Sweep: 5-21V/3.2A:pending"]);
 });
 
+// Deep checks fold into the range chip as a caution (result_layout caution / step_caution): a walk the source did not follow at its
+// quantum (Reason::StepResolution, detail = the measured move) or a transition that broke a limit (Reason::ProgCheck, detail = flag bits).
+test("a step-walk miss or a transition flag turns the range chip amber and says why", () => {
+  const pdo = 3248763456;
+  const level = (mv, extra) => S("pps", mv, "pass", { pos: 7, pdo, ...extra });
+  const clean = [level(5000), level(21000)];
+  const chip = (steps) => CtGrid.layout(steps, { fold: false })[0].cells.find((c) => c.label.startsWith("PPS"));
+  assert.equal(chip(clean).verdict, "pass");
+  const walk = chip([...clean, level(11000, { reason: "step resolution", detail: 98 })]);
+  assert.equal(walk.verdict, "partial");
+  assert.match(walk.title, /partial \(steps 100mV, not 20mV\)/);
+  assert.match(chip([...clean, level(11000, { reason: "step resolution", detail: 0 })]).title, /\(steps ignored\)/);
+  const avs = S("spr-avs", 15000, "pass", { pos: 2, pdo: 3248763456, reason: "step resolution", detail: 100 });
+  assert.match(CtGrid.layout([avs], { fold: false })[0].cells[0].title, /steps 100mV, not 100mV/);
+  const flagged = chip([level(5000), level(21000, { reason: "transition check", detail: 3 })]);
+  assert.equal(flagged.verdict, "partial");
+  assert.match(flagged.title, /\(overshoot \+1\)/);
+  // a failed level beside a caution: the chip is amber (some reached) with the fail's own reason, as the roll-up says for any mix
+  assert.equal(chip([level(5000, { reason: "transition check", detail: 1 }), S("pps", 21000, "fail", { pos: 7, pdo, reason: "request failed" })]).verdict, "partial");
+});
+
 // The firmware's sweep chip (src/chargertest/result_layout.cpp sweep_row, 33ecb488): a sweep carrying the fold caution is amber at any depth.
 // The wire rows carry no per-point error (no track_err), so the web grades by the fold flag alone: amber, never green, never red for the fold.
 test("a deep sweep that folds back is an amber chip, not a green one", () => {

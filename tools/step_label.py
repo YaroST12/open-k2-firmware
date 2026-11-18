@@ -149,6 +149,14 @@ def mi_chain_text(code):
     return {20: "done, verified", 21: "done via 020A"}.get(code, f"unknown ({code})")
 
 
+PROG_FLAGS = ("overshoot", "slow rise", "transient", "level off")   # progcheck::Flag bits, lowest first
+
+
+def prog_check_text(flags):
+    """The flags of a transition-check row (Reason::ProgCheck; Step.detail holds the bits), joined."""
+    return ", ".join(n for i, n in enumerate(PROG_FLAGS) if flags >> i & 1)
+
+
 def mi_chain_done(code):
     return code in (20, 21)
 

@@ -446,6 +446,12 @@ test("charger-test sweep row: flags bit 5, the detail byte is the recorded point
   const mi = u8(4, 6, 0x40, 0x88, 0x13, 0x88, 0x13, 0xC2, 0x51, 2, 0, 0, 0x64, 0x32, 0xDC, 0xC0);
   assert.equal(P.decodeChargerTest(testPage(TEST_HEADER2, 0, [mi])).steps[0].mi, true);
   assert.equal("mi" in step, false);
+  // Reason::ProgCheck (53): the detail byte is progcheck's flag bits, never a sink code
+  const prog = u8(4, 6, 0x00, 0x88, 0x13, 0x88, 0x13, 0xC2, 0x51, 2, 53, 10, 0x40, 0x32, 0xDC, 0xC0);
+  const pc = P.decodeChargerTest(testPage(TEST_HEADER2, 0, [prog])).steps[0];
+  assert.equal(pc.reason, "transition check");
+  assert.equal(pc.detail_reason, "slow rise, level off");
+  assert.equal(pc.explanation, "slow rise");
   // older firmware: no bit 5, the kDetailSweep marker 161 in the detail byte
   const oldRow = u8(0, 6, 0x00, 0x88, 0x13, 0x88, 0x13, 0xC2, 0x51, 2, 0, 161, 0x40, 0x32, 0xDC, 0xC0);
   const legacy = P.decodeChargerTest(testPage(TEST_HEADER, 0, [oldRow])).steps[0];
@@ -456,7 +462,7 @@ test("charger-test sweep row: flags bit 5, the detail byte is the recorded point
 test("charger-test schema2 rejects malformed shapes, unknown masks and unselected rows", () => {
   const good = testPage(TEST_HEADER2, 0, [TEST_ROWS[0]]);
   for (const [at, value] of [[0, 3], [11, 107], [23, 0x42], [39, 12], [18, 0x80], [22, 0x30], [22, 0x08],
-                            [42, 20], [43, 12], [44, 0x80], [51, 5], [52, 53]]) {   // 53 = one past the last reason (52 = MiChain); [22, 0x30] = draft bits 28..29 = 3, no level; [22, 0x08] = draft bit 27, below the level
+                            [42, 20], [43, 12], [44, 0x80], [51, 5], [52, 54]]) {   // 54 = one past the last reason (53 = ProgCheck); [22, 0x30] = draft bits 28..29 = 3, no level; [22, 0x08] = draft bit 27, below the level
     const bad = new Uint8Array(good); bad[at] = value;
     assert.throws(() => P.decodeChargerTest(bad), P.FrameError, "offset " + at);
   }

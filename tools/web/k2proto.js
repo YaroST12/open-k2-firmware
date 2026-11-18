@@ -107,7 +107,7 @@ var K2Proto = (function () {
                       "timeout", "voltage outside band", "hard reset", "source lost", "cancelled", "5V release failed",
                       "offers changed", "PD active: use QC port", "revision cannot be forced", "select at least one test",
                       "physical cable limit", "unsupported PDO layout",
-                      "charger stayed in PD", "rebooted during request", "rebooted during handover", "EPR entry refused", "no contract", "source shut off (needs replug)", "no PD after re-attach", "VBUS cut, source recovered", "blocked by PD", "no QC3+ response", "rebooted 3x", "needs external power", "PD gave up before START", "Class A only (12 V max)", "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target", "withdrawn by source", "wrong voltage on 5V contract", "needs load", "floored above target", "step resolution", "HID-cable loop: 5V lock", "advertised", "light run: not asked", "port cuts without load", "output folds back", "Xiaomi chain"];
+                      "charger stayed in PD", "rebooted during request", "rebooted during handover", "EPR entry refused", "no contract", "source shut off (needs replug)", "no PD after re-attach", "VBUS cut, source recovered", "blocked by PD", "no QC3+ response", "rebooted 3x", "needs external power", "PD gave up before START", "Class A only (12 V max)", "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target", "withdrawn by source", "wrong voltage on 5V contract", "needs load", "floored above target", "step resolution", "HID-cable loop: 5V lock", "advertised", "light run: not asked", "port cuts without load", "output folds back", "Xiaomi chain", "transition check"];
   var TEST_ALL = (1 << TEST_ALGORITHMS.length) - 1;
   // How the Xiaomi 0x2717 auth chain ended, from its row's detail (mi_unlock::chain_text; tools/step_label.py mi_chain_text).
   function miChainText(code) {
@@ -115,6 +115,13 @@ var K2Proto = (function () {
     if (code === 2) return "no answer";
     if (code >= 4 && code <= 13) return "failed at step " + (code - 3);
     return code === 20 ? "done, verified" : code === 21 ? "done via 020A" : "unknown (" + code + ")";
+  }
+  // The flags of a transition-check row (Reason::ProgCheck, Step.detail holds the bits; tools/step_label.py prog_check_text).
+  var PROG_FLAGS = ["overshoot", "slow rise", "transient", "level off"];
+  function progCheckText(flags) {
+    var o = [];
+    for (var i = 0; i < PROG_FLAGS.length; i++) if ((flags >> i) & 1) o.push(PROG_FLAGS[i]);
+    return o.join(", ");
   }
   var TEST_LEVELS = ["medium", "light", "deep"];   // charger_test::Level order: Medium 0 (the default), Light 1, Deep 2
   var LATENCY = ["n/a", "<10 ns (~1 m)", "10-20 ns (~2 m)", "20-30 ns (~3 m)", "30-40 ns (~4 m)",
@@ -281,6 +288,7 @@ var K2Proto = (function () {
                   target_mv: v.getUint16(at + 3, true), request_ma: v.getUint16(at + 5, true),
                   measured_mv: v.getUint16(at + 7, true), result: TEST_RESULTS[verdict], reason: TEST_REASONS[why],
                   detail: detail, detail_reason: flags & 32 && group === 0 ? "deep sweep (" + detail + " points)" :
+                    group === 0 && why === TEST_REASONS.indexOf("transition check") ? (progCheckText(detail) || "none") :
                     group === 0 && EPR_DETAILS[detail] ? EPR_DETAILS[detail] :
                     group === 0 && detail === 161 ? "deep sweep" :   // older firmware: kDetailSweep marker, no flag bit
                     detail ? (names[detailCode] || "unknown (" + detail + ")") : "none",
@@ -301,6 +309,7 @@ var K2Proto = (function () {
           why === 28 ? "EPR: no PD contract" :
           why === 38 ? (EPR_DETAILS[detail] || TEST_REASONS[why]) :
           why === 46 ? (detail ? "step resolution " + detail + "mV" : "steps ignored") :
+          why === 53 ? (progCheckText(detail).split(",")[0] || TEST_REASONS[why]) :
           why === 22 && code === 10 ? "SCP 5A modes need an observed 5A cable" : TEST_REASONS[why];
       }
       out.steps.push(row);
