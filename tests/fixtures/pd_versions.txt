@@ -1,0 +1,32 @@
+# Golden PD versions, shared by tests/test_pd_version.cpp (include/k2/chargertest/pd_version.hpp), tests/test_pd_version.py
+# (tools/pd_version.py) and tests/test_ctgrid.mjs (tools/web/ctgrid.js).
+# Fields, separated by '|': header spec rev (0 none, 1 PD2.0, 2 PD3.x) | Revision answer ('-' none, else major.minor) | the offer
+#   (p = PPS APDO, e = EPR, s = SPR AVS APDO, '-' none) | the version shown ('-' none) | what the summary says when an answer
+#   is under the proof ('-' when it is not)
+# No PD
+0 | - | -  | -      | -
+# The offer alone
+1 | - | -  | PD2.0  | -
+2 | - | -  | PD3.0  | -
+2 | - | p  | PD3.0  | -
+2 | - | e  | PD3.1  | -
+2 | - | pe | PD3.1  | -
+2 | - | s  | PD3.2  | -
+2 | - | pes| PD3.2  | -
+# An EPR AVS offer is EPR, not SPR AVS
+2 | - | e  | PD3.1  | -
+# A Revision answer wins when it is as high as the proof
+2 | 3.0 | -  | PD3.1* | reports Revision 3.0, Revision is a PD 3.1 message
+2 | 3.1 | -  | PD3.1  | -
+2 | 3.1 | p  | PD3.1  | -
+2 | 3.1 | e  | PD3.1  | -
+2 | 3.2 | s  | PD3.2  | -
+2 | 3.2 | -  | PD3.2  | -
+2 | 3.2 | e  | PD3.2  | -
+# An answer under the proof: the proof, marked
+2 | 3.1 | s  | PD3.2* | reports Revision 3.1, offers SPR AVS (3.2)
+2 | 3.0 | s  | PD3.2* | reports Revision 3.0, offers SPR AVS (3.2)
+2 | 3.0 | e  | PD3.1* | reports Revision 3.0, offers EPR (3.1)
+2 | 3.0 | p  | PD3.1* | reports Revision 3.0, Revision is a PD 3.1 message
+1 | 2.0 | -  | PD3.1* | reports Revision 2.0, Revision is a PD 3.1 message
+1 | 2.0 | s  | PD3.2* | reports Revision 2.0, offers SPR AVS (3.2)

@@ -672,7 +672,7 @@ them should move them into the kit first.
 |---|---|
 | 22..45 | three counter cells, 75 px pitch, rules at x74 and x149: 12 x 12 glyph at x+2, y28; `N pass`, `N fail`, `N skip` font 16 at x+16, y26 in `kOk`, `kError`, `kDim` |
 | 46 | 1 px rule |
-| 51 | best line, font 16, x6, 26 characters (`PD 5V 3A  QC3B 5V`, or `No passing mode` in `kDim`) |
+| 51 | best line, font 16, x6, 26 characters: the PD version first, then the best modes, two spaces apart, trailing modes dropped before the version (`PD3.0  PPS 11V 5A  Mi 55W`; `PD3.2*` when the charger's Revision answer is under its offer; `PD3.0  No passing mode` in `kDim`; no version without PD) |
 | 70..71 | 2 px rule |
 | 72..221 | ResultGrid with a unit focus |
 
@@ -965,8 +965,8 @@ Scope: every interactive page takes the unified design; the read-only instrument
 | Review keys | Tests, **Spoof**, then the **Level** SegmentedControl (2026-11-15: Level took Header's place; Peak and Power dropped for the other-port warning; 2026-11-16: a segment bar) | the skill said Cable |
 | Step 2 title | `2/3 Spoof cable` | the skill said Cable |
 | Cable warning | band `Cable connected`; choices `Start anyway`, `Start, skip spoof`; BACK cancels | the skill said `Cable on plug` and a `Cancel` row |
-| Step detail rows | Target, Measured, Window or Reached, Reason, Header or Mode, Scope | the skill listed a `Settled` row |
-| Results best line | no prefix: `PD 5V 3A  QC3B 5V` | the skill said `Best: ...` |
+| Step detail rows | Target, Measured, Window or Reached, Reason, Header or Mode (a `Revision` row, caution ink, `3.1 < AVS 3.2`, when the answer is under the offer), Scope | the skill listed a `Settled` row |
+| Results best line | no `Best:` word; the PD version leads: `PD3.0  PPS 11V 5A  Mi 55W` | the skill said `Best: ...` |
 | VerdictCell lead | 12 x 12 marker; 14 x 14 and 20 x 20 in two places | the skill said 22 x 22 |
 | AlertBand | 36 px | the skill said about 34..40 |
 | Stop while running | BACK reads `Stop` everywhere (decision 7.13.1; the charger test changes) | the code had OK reads `Stop` on the charger test |
