@@ -512,6 +512,7 @@ It is drawn by the page today (`paint_detail`). It belongs in the kit beside Ale
 | Section | a 2 px `kRule` above the first row of a family; no header text. A Deep run's PD spec section follows the same rule (above the PPS block, the AVS block and the observer; cells carry the worst value, 8-character labels from `spec_text.hpp`) |
 | Range chip with a sweep (PPS, SPR AVS, EPR AVS) | ONE chip per APDO, no separate Sweep row: the chip's verdict is the worst of the APDO's range steps and its sweep (Fail > Partial / Caution / Capped > Pass; Skip or none only when every part is; a sweep part that is pending or running makes the chip Pending, so the running dot sits on it). A small dim `S` (font 12, `kDim`, `kSweepGap` = 6 px, `kSweepMarkW` = 12 px = gap + glyph, the grid's `Metrics::sweep`; measured in the fold scene's four rotations: 7 px in the portrait ones, 12 in the landscape ones, because the landscape mapping scales positions by 240/224 but not glyph widths, so a gap only ever grows there; `test_ui_charger_test` asserts at least 6 px in all four) a fixed 6 px (one font-12 advance) after the label says the chip carries a sweep; the bracket under the chip stays. The `S` is a second hole in the fill, so every pixel is still streamed once. Opening the row (Steps) lists the range steps and the sweep entry; the Results footer of the row reads the sweep (fold text, `peak X V@Y V`, or `sweep failed` when a failed sweep recorded no point) when it has something to say |
 | Lone cell that never ran | spells its reason: `None`, `no reply`, `needs load` |
+| OEM level row (Results, VOOC family) | the detection chip, then one chip per power level by its watts (`SVOOC 65W`, cell `SVOOC` over the bracket `65W`). A level is never a pass: `claimed` is `Noted` (framed), `not reached` is none (dim), `not tested` is skip (struck). Footer: `up to 120W claimed` (`docs/CHARGER_TEST_FLOW.md`, OEM power levels) |
 | Focus (Results) | the label strip turns `kFocusT` with the 3 px bar; label and bracket text turn `kFocus` |
 | Scroll | by pixels, whole rows only, up to 8 rows on screen |
 | Follow (Running) | the window's bottom sits on the row of the step in flight (`anchor_bottom`). PLUS and MINUS scroll by hand; the follow resumes after 5 s or on the next step |
@@ -742,6 +743,7 @@ Charger-test verbs: `Pick`, `Open`, `Toggle`, `Set`, `Next`, `Start`, `Confirm`,
 | Amps, a level | trimmed | `3A`, `2.25A` |
 | Milliamps | whole | `0mA` |
 | Watts | whole | `100W` |
+| Watts, an OEM level or chip | 0.1 W below 100 W, whole from 100 W, at most 5 characters | `22.5W`, `65W`, `120W` |
 | Range | hyphen, no spaces, one unit | `4.75-5.25V`, `3.3-21V` |
 | Elapsed | `m:ss` | `0:04` |
 | Duration | 1 decimal | `1.5s` |
