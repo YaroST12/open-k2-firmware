@@ -219,7 +219,7 @@ void detail_cable_text(const pd::Emarker &em, StrBuf<28> &out);
 void detail_offer_text(const pd::SourceCaps &caps, StrBuf<28> &out);
 // "CC1 1.62V"; "CC1 -.--V" while the ADC has no reading (mv < 0).
 void home_cc_text(int cc, int32_t mv, StrBuf<10> &out);
-void model_row_text(power::Chip chip, StrBuf<24> &out);                        // "N6.55", "--" without a meter
+void model_row_text(StrBuf<24> &out);                                           // "HW Q6.03"
 
 // What the Home info row says in place of the protocol tag and value while there is no source:
 // "No source" (mode 1), empty (mode 0), nullptr when live or stale. Mode: 0 no meter, 1 idle, 2 live, 3 stale.

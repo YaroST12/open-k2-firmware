@@ -136,7 +136,12 @@ static void test_ping() {
                                 'a', 'b', 'c', '1', '2', '3', '4', 0, 0, 0, 0, 0,
                                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
                                 '1', '.', '0'});
-    CHECK_EQ(run(f, request(0x01, 5, {1}), r), 1);      // PING takes no payload
+    CHECK_EQ(run(f, request(0x01, 5, {1}), r), 1);      // PING part 1: hardware facts
+    check_header(r, 0x01, 5, Status::Ok, 4);
+    check_bytes(r, kRspHeader, {0x11, 2, 3, 1});
+    CHECK_EQ(run(f, request(0x01, 5, {2}), r), 1);
+    check_header(r, 0x01, 5, Status::BadArg, 0);
+    CHECK_EQ(run(f, request(0x01, 5, {1, 0}), r), 1);
     check_header(r, 0x01, 5, Status::BadLength, 0);
 }
 

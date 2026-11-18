@@ -15,10 +15,12 @@ public:
     // True only when a sample or failed attempt is available; false between bounded polls.
     bool poll(uint32_t now_ms);
     bool online() const { return online_; }
+    std::uint8_t identity() const { return identity_; }
     std::optional<orientation::Gravity> read() const { return sample_; }
 
 private:
     bool online_ = false;
+    std::uint8_t identity_ = 0;
     uint32_t last_ms_ = 0;
     std::optional<orientation::Gravity> sample_;
 };

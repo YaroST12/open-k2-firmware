@@ -192,6 +192,16 @@ var K2Proto = (function () {
     need(p, 29, "ping");
     return { proto: p[0], uptime_ms: dv(p).getUint32(1, true), git: cstr(p.subarray(5, 29)), version: cstr(p.subarray(29)) };
   }
+  function decodePingHw(p) {
+    need(p, 4, "hardware info");
+    var accelNames = { 0: "none", 17: "SC7A20", 51: "LIS2DH12" };
+    var chipNames = { 0: "none", 1: "INA228", 2: "INA226", 3: "INA237" };
+    var digit = { 1: "8", 2: "6", 3: "7" }[p[1]] || "?";
+    var minor = (p[3] & 1) ? String(p[2]).padStart(2, "0") : "--";
+    return { hw: (p[0] === 0x11 ? "Q" : "N") + digit + "." + minor,
+      accel: accelNames[p[0]] || "0x" + p[0].toString(16).padStart(2, "0").toUpperCase(),
+      monitor: chipNames[p[1]] || "0x" + p[1].toString(16).padStart(2, "0").toUpperCase(), minor: minor };
+  }
 
   function decodeChargerTest(p) {
     need(p, 15, "charger-test");
@@ -858,7 +868,12 @@ var K2Proto = (function () {
 
   function K2Remote(link) { this.link = link; }
 
-  K2Remote.prototype.ping = async function () { return decodePing((await this.link.call(CMD.PING)).payload); };
+  K2Remote.prototype.ping = async function () {
+    var info = decodePing((await this.link.call(CMD.PING)).payload);
+    try { Object.assign(info, decodePingHw((await this.link.call(CMD.PING, new Uint8Array([1]))).payload)); }
+    catch (e) { /* Older firmware has no hardware part. */ }
+    return info;
+  };
   K2Remote.prototype.state = async function () { return decodeState((await this.link.call(CMD.GET_STATE)).payload); };
   // GET_STATE parts: firmware older than the shell-parity build answers BadLength / BadArg to a part byte, which reads as null.
   K2Remote.prototype.statePart = async function (part, decode) {
@@ -2211,7 +2226,7 @@ var K2Proto = (function () {
     FrameError: FrameError, RemoteError: RemoteError, RemoteTimeout: RemoteTimeout, BootloaderDetected: BootloaderDetected,
     packRequest: packRequest, parseResponse: parseResponse, isResponse: isResponse,
     isBootloaderFrame: isBootloaderFrame, classify: classify, logText: logText,
-    directionOf: directionOf, decodePing: decodePing, decodeState: decodeState, decodeSession: decodeSession, decodeDiag: decodeDiag, decodeKeys: decodeKeys, decodePdo: decodePdo,
+    directionOf: directionOf, decodePing: decodePing, decodePingHw: decodePingHw, decodeState: decodeState, decodeSession: decodeSession, decodeDiag: decodeDiag, decodeKeys: decodeKeys, decodePdo: decodePdo,
     decodeChargerTest: decodeChargerTest, decodeChargerTestView: decodeChargerTestView, TEST_ALGORITHMS: TEST_ALGORITHMS, TEST_REASONS: TEST_REASONS, TEST_STAGES: TEST_STAGES, TEST_LEVELS: TEST_LEVELS,
     TEST_STATES: TEST_STATES, CARD_STATES: CARD_STATES, TEST_UNITS: TEST_UNITS, TEST_UNIT_LABELS: TEST_UNIT_LABELS, TEST_DEFAULT_UNITS: TEST_DEFAULT_UNITS,
     CT_START_REQ: CT_START_REQ, CT_CANCEL_REQ: CT_CANCEL_REQ, CT_START_CONFIRM: CT_START_CONFIRM, CT_START_ALL_TESTS: CT_START_ALL_TESTS,

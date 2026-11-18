@@ -26,6 +26,7 @@
 //
 // Commands (payload layouts; sizes in bytes):
 //   0x01 PING        req -            rsp proto(1) uptime_ms(4) git(24, NUL padded) version(rest)
+//                    req [1]          rsp accelerometer_id(1) monitor_chip(1) minor(1) flags(1, bit0 valid)
 //   0x02 BUTTON      req btn(1) ms(2) rsp btn(1) ms(2)      btn: 0 Back 1 Minus 2 Ok 3 Plus
 //   0x03 GET_STATE   req -            rsp 40: page cc spec_rev num_pdos pd_valid chip pm_online
 //                                    log_on (8 x u8), vbus_mv(i32: the latest VBUS sample, no lag) current_ma(i32)
@@ -945,6 +946,10 @@ struct PingInfo {
     uint32_t uptime_ms = 0;
     std::string_view git{};
     std::string_view version{};
+    std::uint8_t accelerometer_id = 0;
+    std::uint8_t monitor_chip = 0;
+    bool minor_valid = false;
+    std::uint8_t minor = 0;
 };
 
 struct ChargerTestSnapshot {
@@ -1423,6 +1428,7 @@ size_t build_ripple_frame(std::span<uint8_t, kFrameSize> out, uint8_t seq, uint1
 
 // Payload encoders: return the number of bytes written (never more than out.size()).
 size_t encode_ping(std::span<uint8_t> out, const PingInfo &p);
+size_t encode_ping_hw(std::span<uint8_t> out, const PingInfo &p);
 size_t encode_charger_test(std::span<uint8_t> out, const ChargerTestSnapshot&, uint8_t start, bool rows,
                            uint8_t schema = kChargerTestSchema);
 size_t encode_state(std::span<uint8_t> out, const StateInfo &s);
@@ -1715,9 +1721,12 @@ template <Backend B>
 template <Backend B>
 [[gnu::noinline]] bool handle_state(Cmd cmd, std::span<const uint8_t> p, B &backend, FrameCtx &f) {
     switch (cmd) {
-    case Cmd::Ping:
-        if (!p.empty()) return reply_bad_len(f);
-        return reply_ok(f, encode_ping(f.span(), backend.ping()));
+    case Cmd::Ping: {
+        if (p.size() > 1) return reply_bad_len(f);
+        if (!p.empty() && p[0] != 1) return reply_bad_arg(f);
+        const PingInfo info = backend.ping();
+        return reply_ok(f, p.empty() ? encode_ping(f.span(), info) : encode_ping_hw(f.span(), info));
+    }
     case Cmd::GetState:
         if (p.size() > 1) return reply_bad_len(f);
         if (p.empty() || p[0] == 0) return reply_ok(f, encode_state(f.span(), backend.state()));

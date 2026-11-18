@@ -88,6 +88,7 @@ struct Facts {
     StrBuf<17> diag;                    // the PD diagnosis word (home::format_diag); empty without a session
     uint8_t captures = 0;               // Black Box captures held
     const char *version = "";           // kFwVersion
+    const char *hw_revision = "N?.--";   // cached, NUL-terminated read-only hardware identity
     bool hid = false;                   // the HID function enumerates
     bool webusb = false;                // the WebUSB vendor function enumerates (K2_WEBUSB builds)
     bool batt = false;                  // the battery recorder has a run since boot (running or done)
