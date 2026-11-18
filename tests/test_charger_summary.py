@@ -448,13 +448,13 @@ def _xiaomi_run(code, *modes):
 def test_the_xiaomi_unit_is_one_line_with_the_chain_outcome():
     # a) the 20K bank: PPS 5-11V 3A -> 5A, tested at its new level
     text = charger_summary.summarize(_xiaomi_run(20, ("pass", "none", 11000, 5000, 0xC0DC3264)))
-    assert "- Xiaomi: auth done, verified; Mi 55W ✓" in text
+    assert "- Xiaomi: Mi 55W ✓" in text and "auth" not in text.split("- Xiaomi:")[1].split("\n")[0]
     # b) FH22: the chain completes and nothing changes
-    assert "- Xiaomi auth: done, no new modes" in charger_summary.summarize(_xiaomi_run(20))
+    assert "- Xiaomi: auth ✓" in charger_summary.summarize(_xiaomi_run(20))
     # c) CUKTECH 120 W on a 5 A cable: the 6 A mode is skipped by the cable
     text = charger_summary.summarize(_xiaomi_run(21, ("skip", "physical cable limit", 11000, 6000, 0xC8DC3278)))
-    assert "- Xiaomi: auth done via 020A; Mi 66W skipped: physical cable limit" in text
+    assert "- Xiaomi: Mi 66W skipped: physical cable limit" in text
     # no SVID, a silent source, a chain that stopped
-    assert "- Xiaomi: no 0x2717 SVID" in charger_summary.summarize(_xiaomi_run(1))
-    assert "- Xiaomi auth: no answer" in charger_summary.summarize(_xiaomi_run(2))
-    assert "- Xiaomi auth: failed at step 3" in charger_summary.summarize(_xiaomi_run(6))
+    assert "- Xiaomi: auth skipped (no 0x2717 SVID)" in charger_summary.summarize(_xiaomi_run(1))
+    assert "- Xiaomi: auth skipped (no answer)" in charger_summary.summarize(_xiaomi_run(2))
+    assert "- Xiaomi: auth skipped (failed at step 3)" in charger_summary.summarize(_xiaomi_run(6))

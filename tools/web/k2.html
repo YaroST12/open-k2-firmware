@@ -3715,18 +3715,14 @@ var CtGrid = (function () {
         return;
       }
       if (key.probe) {
-        // The Xiaomi row (result_layout probe_row): the chain row says how the 0x2717 chain ended ("auth", or a word when it did not
-        // finish), then one chip per mode it unlocked by its watts; an older firmware's 6 A probes are chips of their own.
+        // The Xiaomi row (result_layout probe_row): one chip per mode the chain unlocked, by its watts (an older firmware's 6 A probes
+        // are chips of their own). With none, one "auth" chip: pass (nothing raised), skip (did not run or failed), else as it stands.
         row = begin("Xiaomi", key);
         var modes = steps.filter(function (s) { return s.hunt && s.mv; });
-        steps.forEach(function (s) {
-          if (!s.hunt || s.mv) return;
-          var d = s.detail, done = d === 20 || d === 21;
-          if (s.result === "skip" && !done) word(row, d === 1 ? "no SVID" : d === 2 ? "no answer" : "stalled", "skip");
-          else chip(row, "auth", toneOf(s), [s], 0);
-          if (done && !modes.length) word(row, "none new", "skip");
-        });
         modes.forEach(function (s) { chip(row, params(s.raw), toneOf(s), [s], s.mv); });
+        if (!modes.length) steps.forEach(function (s) {
+          if (s.hunt && !s.mv) chip(row, "auth", s.result === "skip" ? "skip" : toneOf(s), [s], 0);
+        });
         return;
       }
       if (key.sweep) {
@@ -3788,7 +3784,7 @@ var CtGrid = (function () {
 
     // A lone cell that never ran says why in words (never a bare strike through "5V"); a unit that never answered is dim, not red.
     rows.forEach(function (r) {
-      if (r.chips.length !== 1 || r.chips[0].word || r.chips[0].tone !== "skip") return;
+      if (r.chips.length !== 1 || r.chips[0].word || r.chips[0].tone !== "skip" || (r.probe && r.chips[0].text === "auth")) return;   // the Xiaomi auth chip stays struck
       var c = r.chips[0], why = c.tag, st = c.steps[0] || {};
       if (!why) why = st.reason === "not advertised" ? "no reply" : st.reason === "PD active: use QC port" ? "PD active" :
                       st.reason === "not implemented" ? "n/a" : "skipped";

@@ -5563,6 +5563,20 @@ static void test_xiaomi_unit_scenes() {
         const FamilyPick mi = pick_family(ui, "Xiaomi");
         CHECK_EQ(mi.line >= 0, true);
         CHECK_EQ(mi.count, unsigned(c.modes) + 1);
+        {   // the grid row: the unlocked modes alone; "auth" passed when nothing unlocked, skipped when the chain did not run
+            result_layout::Layout l; result_layout::build(l, ui.charger_test_results().steps());
+            std::string g;
+            result_layout::Tone first = result_layout::Tone::Dim;
+            for (size_t i = 0; i < l.rows.size(); ++i) {
+                if (l.rows[i].header || std::string_view(l.rows[i].label) != "Xiaomi") continue;
+                first = l.tokens[l.rows[i].first].tone;
+                for (unsigned k = l.rows[i].first; k < unsigned(l.rows[i].first) + l.rows[i].count; ++k) { if (!g.empty()) g += ' '; g += l.tokens[k].text; }
+            }
+            const std::string_view n = c.name;
+            CHECK_STR(g.c_str(), n == "bank" ? "55W" : n == "fh22" ? "auth" : n == "nosvid" ? "auth" : n == "cuk" ? "66W cable 120W cable" : "66W 120W");
+            if (n == "fh22") CHECK_EQ(int(first), int(result_layout::Tone::Pass));
+            if (n == "nosvid") CHECK_EQ(int(first), int(result_layout::Tone::Skip));
+        }
         unsigned modes = 0, cable_skips = 0, tested = 0;
         for (const auto& s : ui.charger_test_results().steps()) {
             if (!ct::is_mi_mode(s)) continue;

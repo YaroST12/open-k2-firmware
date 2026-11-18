@@ -121,13 +121,15 @@ test("the Xiaomi unit is one row: the chain outcome, then each unlocked mode by 
   const chain = (result, detail, reason) => S("pd3x-fixed", 0, result, { pos: 0, detail, reason: reason || "none", mi: true });
   const mode = (result, ma, extra) => S("pps", 11000, result, Object.assign({ pos: 6, pdo: 0xC0DC3264, ma, mi: true }, extra || {}));
   // a) the 20K bank: PPS 5-11V 3A -> 5A
-  assert.deepEqual(lines([pd, chain("pass", 20), mode("pass", 5000)], { fold: false }), ["PD3.x: 5V/3A:pass", "-- Xiaomi: auth:pass 55W:pass"]);
-  // b) FH22: done, nothing raised
-  assert.deepEqual(lines([pd, chain("pass", 20)], { fold: false })[1], "-- Xiaomi: auth:pass none new:skip");
+  assert.deepEqual(lines([pd, chain("pass", 20), mode("pass", 5000)], { fold: false }), ["PD3.x: 5V/3A:pass", "-- Xiaomi: 55W:pass"]);
+  // b) FH22: done, nothing raised: one passed auth chip
+  assert.deepEqual(lines([pd, chain("pass", 20)], { fold: false })[1], "-- Xiaomi: auth:pass");
   // c) CUKTECH on a 6 A cable: the 66 W mode tested
-  assert.deepEqual(lines([pd, chain("pass", 21), mode("pass", 6000)], { fold: false })[1], "-- Xiaomi: auth:pass 66W:pass");
-  // no SVID: the chain row skipped, a word
-  assert.deepEqual(lines([pd, chain("skip", 1, "Xiaomi chain")], { fold: false })[1], "-- Xiaomi: no SVID:skip");
+  assert.deepEqual(lines([pd, chain("pass", 21), mode("pass", 6000)], { fold: false })[1], "-- Xiaomi: 66W:pass");
+  // no SVID, no answer, stalled: one skipped auth chip (the reason stays on the steps page)
+  for (const code of [1, 2, 5]) assert.deepEqual(lines([pd, chain("skip", code, "Xiaomi chain")], { fold: false })[1], "-- Xiaomi: auth:skip");
+  // still waiting during a run: the pending chip
+  assert.deepEqual(lines([pd, chain("pending", 0)], { fold: false })[1], "-- Xiaomi: auth:pending");
   // the flag decides: a plain full-current row that asks 6 A (an over-5 A cable) stays a PPS row
   const plain = S("pps", 11000, "pass", { pos: 6, pdo: 0xC0DC3278, ma: 6000, mi: false });
   assert.equal(CtGrid.stepLabel(plain, null), "PPS 11V 6A");

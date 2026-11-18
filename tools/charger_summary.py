@@ -91,18 +91,18 @@ def _step_text(s, prev, amps=True):
 
 
 def _xiaomi_line(rows, prev_of):
-    """The Xiaomi unit in one line: how the 0x2717 auth chain ended, then each mode it unlocked with its verdict
-    ("- Xiaomi: auth done, verified; Mi 55W ✓"). Nothing raised reads "- Xiaomi auth: done, no new modes"."""
+    """The Xiaomi unit in one line, as the grid shows it: the modes the auth chain unlocked with their verdicts ("- Xiaomi: Mi 55W ✓");
+    none unlocked: "- Xiaomi: auth ✓"; the chain did not run or failed: "- Xiaomi: auth skipped (no answer)"."""
     chain = next((s for s in rows if not s.get("target_mv")), None)
     modes = ", ".join(_step_text(s, prev_of[id(s)]) for s in rows if s.get("target_mv"))
     if chain is None:   # an older firmware: its 6 A probe rows, no chain row
         return f"- Xiaomi: {modes}"
     code = chain.get("detail", 0)
-    if not step_label.mi_chain_done(code):
-        return f"- Xiaomi: {step_label.mi_chain_text(code)}" if code == 1 else f"- Xiaomi auth: {step_label.mi_chain_text(code)}"
-    if not modes:
-        return "- Xiaomi auth: done, no new modes"
-    return f"- Xiaomi: auth {step_label.mi_chain_text(code)}; {modes}"
+    if modes:
+        return f"- Xiaomi: {modes}"
+    if step_label.mi_chain_done(code):
+        return "- Xiaomi: auth ✓"
+    return f"- Xiaomi: auth skipped ({step_label.mi_chain_text(code)})"
 
 
 def _params(s, prev=None, amps=True):
