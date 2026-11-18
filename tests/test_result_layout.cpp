@@ -6,6 +6,7 @@
 #include "k2/chargertest/result_layout.hpp"
 #include "k2/chargertest/oem_watts.hpp"
 #include "k2/fastcharge/fc_engine.hpp"
+#include <algorithm>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -50,18 +51,62 @@ static const rl::Row* find(const rl::Layout& l, const char* label) {
     return nullptr;
 }
 static size_t row_of(const rl::Layout& l, const char* label) { return size_t(find(l, label) - l.rows.data()); }
+// The PD block (one label "PD" on its first row; continuation rows have none): fixed chips first (kind 0), then range chips.
+static const rl::Row* pd_row(const rl::Layout& l) { return find(l, "PD"); }
+static std::string fixed_chips(const rl::Layout& l) {
+    std::string out;
+    for (size_t i = 0; i < l.row_count; ++i) {
+        if (!l.rows[i].pd) continue;
+        for (unsigned k = l.rows[i].first; k < unsigned(l.rows[i].first) + l.rows[i].count; ++k) {
+            if (l.tokens[k].kind != 0) break;
+            if (!out.empty()) out += ' ';
+            out += l.tokens[k].text;
+        }
+    }
+    return out;
+}
 
+// The grid row of one PPS / AVS APDO (the sweep's chip lives there), and its words.
+// A range chip lives in the PD block now: a Row-shaped view of it (first = token index, count = chip plus its glued tags).
+static const rl::Row* sweep_row_of(const rl::Layout& l, uint8_t pos, A a = A::Pps) {
+    static rl::Row pool[16];
+    static unsigned next = 0;
+    for (size_t i = 0; i < l.row_count; ++i) {
+        if (!l.rows[i].pd) continue;
+        for (unsigned k = l.rows[i].first; k < unsigned(l.rows[i].first) + l.rows[i].count; ++k) {
+            const rl::Token& t = l.tokens[k];
+            if (t.kind != rl::kind_of(a) || t.mv != pos || t.glue) continue;
+            rl::Row& r = pool[next++ % 16];
+            r = l.rows[i]; r.first = uint16_t(k); r.pos = pos; r.algorithm = a; r.count = 1;
+            while (k + r.count < unsigned(l.rows[i].first) + l.rows[i].count && l.tokens[k + r.count].glue) ++r.count;
+            return &r;
+        }
+    }
+    return nullptr;
+}
+static std::string sweep_chips(const rl::Layout& l, uint8_t pos, A a = A::Pps) {
+    const rl::Row* r = sweep_row_of(l, pos, a);
+    if (!r) return "(no row)";
+    std::string out;
+    for (unsigned k = r->first; k < unsigned(r->first) + r->count; ++k) { if (!out.empty()) out += ' '; out += l.tokens[k].text; }
+    return out;
+}
+static size_t rows_labelled(const rl::Layout& l, const char* label) {
+    size_t n = 0;
+    for (size_t i = 0; i < l.row_count; ++i) n += std::string(l.rows[i].label) == label;
+    return n;
+}
 static void test_fixed_pd_chips_carry_advertised_current() {
     rl::Layout l; auto s = baseus(); rl::build(l, s);
-    const size_t r = row_of(l, "PD3.x");
-    CHECK_STR(chips(l, r).c_str(), "5V 3A 9V 3A 12V 3A 15V 3A 20V 3.35A");
+    const size_t r = row_of(l, "PD");
+    CHECK_STR(fixed_chips(l).c_str(), "5V 3A 9V 3A 12V 3A 15V 3A 20V 3.35A");
     CHECK_EQ(int(l.tokens[l.rows[r].first].tone), int(rl::Tone::Pass));
     CHECK_EQ(l.tokens[l.rows[r].first].chip, true);
 }
 static void test_failed_and_skipped_fixed_chips() {
     auto s = baseus(); s[1].verdict = V::Fail; s[2].verdict = V::Skip;
     rl::Layout l; rl::build(l, s);
-    const auto& r = l.rows[row_of(l, "PD3.x")];
+    const auto& r = l.rows[row_of(l, "PD")];
     CHECK_EQ(int(l.tokens[r.first + 1].tone), int(rl::Tone::Fail));
     CHECK_EQ(int(l.tokens[r.first + 2].tone), int(rl::Tone::Skip));   // a skip is its own tone (grey dash), not "some passed"
 }
@@ -75,8 +120,8 @@ static void test_fixed_chips_read_ascending_whatever_the_plan_order() {
     s[0] = step(A::Pd3Fixed, 20000, V::Skip, 5, fixed[4], ct::Reason::CableLimit);   // a tagged chip travels with its voltage
     s[4].verdict = V::Running;
     rl::Layout l; rl::build(l, s);
-    const size_t r = row_of(l, "PD3.x");
-    CHECK_STR(chips(l, r).c_str(), "5V 3A 9V 3A 12V 3A 15V 3A 20V 3.35A cable");
+    const size_t r = row_of(l, "PD");
+    CHECK_STR(fixed_chips(l).c_str(), "5V 3A 9V 3A 12V 3A 15V 3A 20V 3.35A cable");
     CHECK_EQ(int(l.tokens[l.rows[r].first].mv), 5000);
     CHECK_EQ(int(l.tokens[l.rows[r].first].tone), int(rl::Tone::Pending));   // the 5 V row in flight is the first chip
     CHECK_EQ(int(l.tokens[l.rows[r].first + 4].mv), 20000);
@@ -103,18 +148,19 @@ static void test_chip_width_includes_the_mark_cell() {
 }
 static void test_pps_one_coloured_chip_per_range() {
     rl::Layout l; auto s = baseus(); rl::build(l, s);
-    const size_t r = row_of(l, "PPS");                    // one row per APDO: slot 6 first, slot 7 right after
-    CHECK_STR(chips(l, r).c_str(), "5-11V 5A");
-    const auto& row = l.rows[r];
-    CHECK_EQ(row.count, 1);
-    CHECK_EQ(row.pos, 6);
-    CHECK_EQ(l.tokens[row.first].chip, true);
-    CHECK_EQ(int(l.tokens[row.first].tone), int(rl::Tone::Partial));       // a step failed and one skipped
-    const size_t r2 = r + 1;
-    CHECK_STR(l.rows[r2].label, "PPS");
-    CHECK_EQ(l.rows[r2].pos, 7);
-    CHECK_STR(chips(l, r2).c_str(), "5-21V 3.2A");
-    CHECK_EQ(int(l.tokens[l.rows[r2].first].tone), int(rl::Tone::Pass));    // every step of the second PDO passed
+    const rl::Row* r6 = sweep_row_of(l, 6);               // one chip per APDO, slot 6 first, slot 7 right after
+    const rl::Row* r7 = sweep_row_of(l, 7);
+    CHECK_EQ(r6 != nullptr && r7 != nullptr, true);
+    if (!r6 || !r7) return;
+    CHECK_STR(sweep_chips(l, 6).c_str(), "5-11V 5A");
+    CHECK_EQ(r6->count, 1);
+    CHECK_EQ(l.tokens[r6->first].chip, true);
+    CHECK_EQ(l.tokens[r6->first].kind, rl::kKindPps);
+    CHECK_EQ(l.tokens[r6->first].mv, 6);                                    // a range chip's mv is its PDO slot
+    CHECK_EQ(int(l.tokens[r6->first].tone), int(rl::Tone::Partial));        // a step failed and one skipped
+    CHECK_STR(sweep_chips(l, 7).c_str(), "5-21V 3.2A");
+    CHECK_EQ(int(l.tokens[r7->first].tone), int(rl::Tone::Pass));           // every step of the second PDO passed
+    CHECK_EQ(r6->first < r7->first, true);
 }
 // ---- A deep sweep has no row of its own: its APDO's range chip carries it (an "S" mark, the worst of steps and sweep) ------
 static ct::Step sweep_step(A a, uint8_t pos, uint32_t pdo, V v) {
@@ -123,20 +169,6 @@ static ct::Step sweep_step(A a, uint8_t pos, uint32_t pdo, V v) {
     s.avs = a == A::SprAvs || a == A::EprAvs;
     return s;
 }
-// The grid row of one PPS / AVS APDO (the sweep's chip lives there), and its words.
-static const rl::Row* sweep_row_of(const rl::Layout& l, uint8_t pos, A a = A::Pps) {
-    for (size_t i = 0; i < l.row_count; ++i) if (!l.rows[i].header && !l.rows[i].probe && l.rows[i].algorithm == a && l.rows[i].pos == pos) return &l.rows[i];
-    return nullptr;
-}
-static std::string sweep_chips(const rl::Layout& l, uint8_t pos, A a = A::Pps) {
-    const rl::Row* r = sweep_row_of(l, pos, a);
-    return r ? chips(l, size_t(r - l.rows.data())) : "(no row)";
-}
-static size_t rows_labelled(const rl::Layout& l, const char* label) {
-    size_t n = 0;
-    for (size_t i = 0; i < l.row_count; ++i) n += std::string(l.rows[i].label) == label;
-    return n;
-}
 // The PPS sweep is no row of its own: its APDO's range chip ("5-21V 3.2A", the advertised range, as before) carries a small "S"
 // (Token::sweep) and the worst verdict of the range steps and the sweep. Slot 6 ran no sweep: no S.
 static void test_a_pps_sweep_merges_into_its_apdos_range_chip() {
@@ -144,17 +176,17 @@ static void test_a_pps_sweep_merges_into_its_apdos_range_chip() {
     s.push_back(sweep_step(A::Pps, 7, 3248763456u, V::Pending));
     rl::Layout l; rl::build(l, s);
     CHECK_EQ(rows_labelled(l, "Sweep"), 0u);                                        // no Sweep row
-    CHECK_EQ(rows_labelled(l, "PPS"), 2u);                                          // one row per APDO, as before the sweep
+    CHECK_EQ(rows_labelled(l, "PPS"), 0u);                                          // the block's label is "PD"; the kind lives in the chip
+    CHECK_EQ(rows_labelled(l, "PD"), 1u);
     const rl::Row* r = sweep_row_of(l, 7);
     CHECK_EQ(r != nullptr, true);
     if (!r) return;
     CHECK_EQ(r->count, 1);                                                          // one chip, not one per volt
     CHECK_STR(sweep_chips(l, 7).c_str(), "5-21V 3.2A");
-    CHECK_STR(sweep_chips(l, 7).c_str(), chips(l, row_of(l, "PPS") + 1).c_str());
     const rl::Token& k = l.tokens[r->first];
     CHECK_EQ(k.chip, true);
     CHECK_EQ(k.sweep, true);                                                        // the S mark
-    CHECK_EQ(k.mv, 0);                                                              // a range has no level: no per-level dot
+    CHECK_EQ(k.mv, 7);                                                              // a range chip's mv is its PDO slot (no per-level dot)
     CHECK_EQ(int(k.tone), int(rl::Tone::Pending));                                  // the sweep has not run: the Running dot sits here
     CHECK_EQ(l.tokens[sweep_row_of(l, 6)->first].sweep, false);                     // slot 6 ran none
 }
@@ -170,8 +202,9 @@ static void test_an_avs_sweep_merges_into_its_apdos_range_chip() {
     s.push_back(sweep_step(A::EprAvs, 9, 0xE004B145u, V::Fail));
     rl::Layout l; rl::build(l, s);
     CHECK_EQ(rows_labelled(l, "Sweep"), 0u);
-    CHECK_EQ(rows_labelled(l, "SPR AVS"), 1u);
-    CHECK_EQ(rows_labelled(l, "EPR AVS"), 1u);
+    CHECK_EQ(rows_labelled(l, "SPR AVS"), 0u);                                      // the kind word is in the chip, not the label
+    CHECK_EQ(rows_labelled(l, "EPR AVS"), 0u);
+    CHECK_EQ(rows_labelled(l, "PD"), 1u);
     const rl::Row* sp = sweep_row_of(l, 3, A::SprAvs);
     const rl::Row* ep = sweep_row_of(l, 9, A::EprAvs);
     CHECK_EQ(sp != nullptr && ep != nullptr, true);
@@ -307,8 +340,8 @@ static void test_a_fold_is_a_caution_not_a_pass_and_not_a_fail() {
     CHECK_EQ(int(l.tokens[r->first].tone), int(rl::Tone::Partial));                   // amber (tilde), not green and not red
     CHECK_EQ(int(rl::mark(l.tokens[r->first].tone)), int(rl::mark(rl::Tone::Partial)));
     // the APDO's range row (slot 7): some levels passed, one is a caution -> amber; slot 6 has no fold
-    CHECK_EQ(int(l.tokens[l.rows[row_of(l, "PPS")].first + 1].tone), int(rl::Tone::Partial));
-    CHECK_EQ(l.tokens[l.rows[row_of(l, "PPS")].first + 1].sweep, true);
+    CHECK_EQ(int(l.tokens[r->first].tone), int(rl::Tone::Partial));
+    CHECK_EQ(l.tokens[r->first].sweep, true);
     // the tally never calls a caution a pass or a fail
     auto reach = rl::reach(s, A::Pps, 7);
     CHECK_EQ(reach.folded, true);
@@ -462,31 +495,30 @@ static void test_a_skipped_sweep_leaves_no_mark_and_no_verdict() {
     if (!r) return;
     CHECK_EQ(int(l.tokens[r->first].tone), int(rl::Tone::Skip));
     CHECK_EQ(l.tokens[r->first].sweep, false);
-    CHECK_STR(chips(l, size_t(r - l.rows.data())).c_str(), "5-21V 3.2A cable");
+    CHECK_STR(sweep_chips(l, 7).c_str(), "5-21V 3.2A cable");
     CHECK_EQ(l.cuts, 0);
 }
-// Opening the merged row lists the range steps AND the sweep steps of its APDO (and only its APDO's); a fixed row and the other
-// slot's row own none of them.
-static void test_the_merged_row_owns_the_sweep_steps_of_its_apdo() {
+// Opening the PD block lists every PD step: fixed levels, both APDOs' range steps and their sweep parts, in ONE Steps page; no other
+// row owns a PD step, and the block owns no step of another family.
+static void test_the_pd_block_owns_every_pd_step_and_the_sweeps() {
     auto s = baseus();
     s.push_back(sweep_step(A::Pps, 7, 3248763456u, V::Pass)); s.back().mv = 5000;
     s.push_back(sweep_step(A::Pps, 7, 3248763456u, V::Pass)); s.back().mv = 3300;
     const ct::Step& hi = s[s.size() - 2];
     const ct::Step& lo = s.back();
     rl::Layout l; rl::build(l, s);
-    const rl::Row& r7 = *sweep_row_of(l, 7);
-    const rl::Row& r6 = *sweep_row_of(l, 6);
-    CHECK_EQ(rl::row_has(r7, hi), true);
-    CHECK_EQ(rl::row_has(r7, lo), true);
-    CHECK_EQ(rl::row_has(r6, hi), false);
-    CHECK_EQ(rl::row_has(r7, step(A::Pps, 13000, V::Pass, 7)), true);              // its range steps, as before
-    CHECK_EQ(rl::row_has(l.rows[row_of(l, "PD3.x")], hi), false);                  // a fixed row never owns a sweep
+    const rl::Row& blk = l.rows[row_of(l, "PD")];
+    CHECK_EQ(rl::row_has(blk, hi), true);
+    CHECK_EQ(rl::row_has(blk, lo), true);
+    CHECK_EQ(rl::row_has(blk, step(A::Pps, 13000, V::Pass, 7)), true);
+    CHECK_EQ(rl::row_has(blk, s[0]), true);                                         // a fixed step too
+    CHECK_EQ(rl::row_has(blk, step(A::Qc2, 5000, V::Pass)), false);
     size_t owners = 0;
     for (size_t i = 0; i < l.row_count; ++i) owners += rl::row_has(l.rows[i], hi);
     CHECK_EQ(owners, 1u);                                                           // exactly one row per sweep step
     size_t listed = 0;
-    for (const auto& x : s) listed += rl::row_has(r7, x);
-    CHECK_EQ(listed, 5u);                                                           // 3 range steps + the 2 sweep parts
+    for (const auto& x : s) listed += rl::row_has(blk, x);
+    CHECK_EQ(listed, size_t(std::count_if(s.begin(), s.end(), [](const ct::Step& x) { return x.group == ct::Group::Pd; })));
     // the same through the compact grid the page keeps
     rl::CompactGrid g; std::array<rl::CompactLine, rl::kMaxLines> lines;
     rl::build_compact(g, rl::kGridMetrics, lines, s);
@@ -507,14 +539,16 @@ static void test_a_compact_row_regenerates_the_merged_chip_with_its_mark() {
     int found = 0;
     for (size_t r = 0; r < g.row_count; ++r) {
         CHECK_EQ(std::string(rl::row_label(g, r)) == "Sweep", false);
-        if (g.rows[r].kind != rl::CompactKind::Range || g.rows[r].mv != 7) continue;
-        ++found;
+        if (g.rows[r].kind != rl::CompactKind::Pd) continue;
         rl::RowTokens rt;
         rl::row_tokens(g, r, s, {}, rt);
-        CHECK_EQ(rt.count, 1);
-        CHECK_STR(rt.toks[0].text, "5-21V 3.2A");
-        CHECK_EQ(rt.toks[0].sweep, true);
-        CHECK_EQ(int(rt.toks[0].tone), int(rl::Tone::Partial));
+        for (unsigned i = 0; i < rt.count; ++i) {
+            if (rt.toks[i].kind != rl::kKindPps || rt.toks[i].mv != 7) continue;
+            ++found;
+            CHECK_STR(rt.toks[i].text, "5-21V 3.2A");
+            CHECK_EQ(rt.toks[i].sweep, true);
+            CHECK_EQ(int(rt.toks[i].tone), int(rl::Tone::Partial));
+        }
     }
     CHECK_EQ(found, 1);
     CHECK_EQ(g.cuts, 0);
@@ -574,10 +608,10 @@ static void test_light_run_chips_read_noted() {
     s.push_back(step(A::Qc2, 5000, V::Pass));
     for (unsigned mv : {9000u, 12000u}) s.push_back(step(A::Qc2, mv, V::Skip, 0, 0, ct::Reason::LightLevel));
     rl::Layout l; rl::build(l, s);
-    const auto& pd = l.rows[row_of(l, "PD3.x")];
+    const auto& pd = l.rows[row_of(l, "PD")];
     CHECK_EQ(int(l.tokens[pd.first].tone), int(rl::Tone::Pass));        // 5 V was asked and measured
     CHECK_EQ(int(l.tokens[pd.first + 1].tone), int(rl::Tone::Pass));    // 9 V is advertised by the source: the pass look, no request went out
-    CHECK_EQ(int(l.tokens[l.rows[row_of(l, "PPS")].first].tone), int(rl::Tone::Pass));    // an advertised range reads green too
+    CHECK_EQ(int(l.tokens[sweep_row_of(l, 6)->first].tone), int(rl::Tone::Pass));    // an advertised range reads green too
     const auto& qc = l.rows[row_of(l, "QC2")];
     CHECK_STR(chips(l, row_of(l, "QC2")).c_str(), "5V 9V 12V");
     CHECK_EQ(int(l.tokens[qc.first].tone), int(rl::Tone::Pass));
@@ -608,27 +642,26 @@ static void test_light_run_chips_read_noted() {
 static void test_a_capped_range_chip_is_amber_and_keeps_the_advertised_range() {
     auto s = fh22();
     rl::Layout l; rl::build(l, s);
-    const size_t r = row_of(l, "PPS");
-    CHECK_STR(chips(l, r).c_str(), "5-21V 3.2A");
-    CHECK_EQ(int(l.tokens[l.rows[r].first].tone), int(rl::Tone::Partial));
+    CHECK_STR(sweep_chips(l, 7).c_str(), "5-21V 3.2A");
+    CHECK_EQ(int(l.tokens[sweep_row_of(l, 7)->first].tone), int(rl::Tone::Partial));
     // the same chip without the cap reads green
     s[1].verdict = V::Pass; s[1].reason = ct::Reason::None;
     rl::build(l, s);
-    CHECK_EQ(int(l.tokens[l.rows[row_of(l, "PPS")].first].tone), int(rl::Tone::Pass));
+    CHECK_EQ(int(l.tokens[sweep_row_of(l, 7)->first].tone), int(rl::Tone::Pass));
 }
 static void test_a_range_with_nothing_passed_stays_red_and_all_skipped_grey() {
     auto s = fh22();
     for (auto& x : s) { x.verdict = V::Fail; x.reason = ct::Reason::Timeout; x.measured_mv = 0; }
     rl::Layout l; rl::build(l, s);
-    CHECK_EQ(int(l.tokens[l.rows[row_of(l, "PPS")].first].tone), int(rl::Tone::Fail));
+    CHECK_EQ(int(l.tokens[sweep_row_of(l, 7)->first].tone), int(rl::Tone::Fail));
     for (auto& x : s) { x.verdict = V::Skip; x.reason = ct::Reason::Request; }
     rl::build(l, s);
-    CHECK_EQ(int(l.tokens[l.rows[row_of(l, "PPS")].first].tone), int(rl::Tone::Skip));
+    CHECK_EQ(int(l.tokens[sweep_row_of(l, 7)->first].tone), int(rl::Tone::Skip));
     // a capped step with nothing else passed is still amber: the source delivered something below the target
     s = fh22();
     for (auto& x : s) if (x.reason != ct::Reason::Capped) { x.verdict = V::Fail; x.reason = ct::Reason::Timeout; }
     rl::build(l, s);
-    CHECK_EQ(int(l.tokens[l.rows[row_of(l, "PPS")].first].tone), int(rl::Tone::Partial));
+    CHECK_EQ(int(l.tokens[sweep_row_of(l, 7)->first].tone), int(rl::Tone::Partial));
 }
 static void test_a_legacy_chip_with_a_pass_and_a_fail_is_amber() {
     std::vector<ct::Step> s;
@@ -783,10 +816,130 @@ static void test_reach_words_fit_the_footer_next_to_a_label() {
     r.tone = rl::Tone::Partial; r.lo_mv = 3300; r.hi_mv = 20100; r.adv_mv = 20100;
     CHECK_EQ(9 + rl::reach_footer(r).len <= 27, true);
 }
-static void test_a_range_not_offered_reads_none() {
+// ---- The PD block: one label, fixed levels first, then each PPS range, then each AVS range -------------------------------------
+static std::vector<ct::Step> mixed_pd() {   // the plan lists the AVS kinds first on purpose: the block orders by kind, not by plan
+    const uint32_t v28 = (560u << 10) | 500;
+    std::vector<ct::Step> s;
+    ct::Step er = step(A::EprAvs, 15000, V::Pass, 9, 0xE004B145u); er.avs = true;
+    ct::Step sr = step(A::SprAvs, 9000, V::Pass, 5, 0xE004B145u); sr.avs = true;
+    s.push_back(er); s.push_back(sr);
+    s.push_back(step(A::Epr, 28000, V::Pass, 8, v28));
+    for (unsigned t : {5000u, 11000u}) s.push_back(step(A::Pps, t, V::Pass, 6, 3235656292u));
+    const uint32_t fixed[] = {167874860u, 184620u, 307500u, 409935u};
+    const unsigned mv[] = {5000, 9000, 15000, 20000};
+    for (int i = 3; i >= 0; --i) s.push_back(step(A::Pd3Fixed, mv[i], V::Pass, uint8_t(i + 1), fixed[i]));
+    return s;
+}
+static void test_the_pd_block_is_one_row_fixed_then_pps_then_avs() {
+    rl::Layout l; rl::build(l, mixed_pd());
+    CHECK_EQ(rows_labelled(l, "PD"), 1u);
+    for (const char* w : {"PPS", "SPR AVS", "EPR AVS", "EPR", "PD3.x"}) CHECK_EQ(find(l, w) == nullptr, true);
+    size_t blocks = 0;
+    for (size_t i = 0; i < l.row_count; ++i) blocks += l.rows[i].pd;
+    CHECK_EQ(blocks, 1u);                                                           // every chip sits in the one row
+    CHECK_STR(fixed_chips(l).c_str(), "5V 3A 9V 3A 15V 3A 20V 3.35A 28V 5A");      // EPR levels that ran are volt chips in the run
+    const rl::Row& b = *pd_row(l);
+    unsigned kinds[16] = {}, n = 0;
+    for (unsigned k = b.first; k < unsigned(b.first) + b.count; ++k) if (!l.tokens[k].glue) kinds[n++] = l.tokens[k].kind;
+    CHECK_EQ(n, 8u);
+    const unsigned want[] = {0, 0, 0, 0, 0, rl::kKindPps, rl::kKindSprAvs, rl::kKindEprAvs};
+    for (unsigned i = 0; i < 8 && i < n; ++i) CHECK_EQ(kinds[i], want[i]);
+    CHECK_EQ(sweep_row_of(l, 6) != nullptr && sweep_row_of(l, 5, A::SprAvs) != nullptr && sweep_row_of(l, 9, A::EprAvs) != nullptr, true);
+    CHECK_STR(sweep_chips(l, 5, A::SprAvs).c_str(), "9-20V 3.25A");
+    CHECK_STR(rl::kind_word(rl::kKindPps), "PPS");
+    CHECK_STR(rl::kind_word(rl::kKindSprAvs), "AVS");
+    CHECK_STR(rl::kind_word(rl::kKindEprAvs), "AVS");
+    CHECK_STR(rl::kind_word(0), "");
+    CHECK_EQ(l.cuts, 0u);
+    // the wrap: the label sits on the first line only, a range chip never shares a line, the fixed run wraps by itself
+    std::array<rl::Line, rl::kMaxLines> lines;
+    const size_t nl = rl::wrap(l, rl::kGridMetrics, lines);
+    size_t heads = 0, range_lines = 0;
+    for (size_t i = 0; i < nl; ++i) {
+        if (!l.rows[lines[i].row].pd) continue;
+        heads += lines[i].head;
+        unsigned ranges = 0, fixed = 0;
+        for (unsigned k = lines[i].first; k < unsigned(lines[i].first) + lines[i].count; ++k) if (!l.tokens[k].glue) (l.tokens[k].kind ? ranges : fixed)++;
+        CHECK_EQ(ranges <= 1 && (ranges == 0 || fixed == 0), true);
+        range_lines += ranges;
+    }
+    CHECK_EQ(heads, 1u);
+    CHECK_EQ(range_lines, 3u);
+}
+// A source with no PD at all: every PD step is "not advertised", the block has no chip, and the word "PD" folds into "No reply".
+static void test_a_source_without_pd_reads_pd_under_no_reply() {
+    std::vector<ct::Step> s;
+    s.push_back(step(A::Pd3Fixed, 0, V::Skip, 0, 0, ct::Reason::NoOffer));
+    s.push_back(step(A::Epr, 0, V::Skip, 0, 0, ct::Reason::NoOffer));
+    s.push_back(step(A::Pps, 0, V::Skip, 0, 0, ct::Reason::NoOffer));
+    s.push_back(step(A::Qc2, 5000, V::Pass));
+    rl::Layout l; rl::build(l, s);
+    CHECK_EQ(pd_row(l) == nullptr, true);
+    CHECK_STR(chips(l, row_of(l, "No reply")).c_str(), "PD");
+    rl::CompactGrid g; std::array<rl::CompactLine, rl::kMaxLines> lines;
+    rl::build_compact(g, rl::kGridMetrics, lines, s);
+    bool found = false;
+    for (size_t r = 0; r < g.row_count; ++r) {
+        if (std::string(rl::row_label(g, r)) != "No reply") continue;
+        rl::RowTokens rt; rl::row_tokens(g, r, s, {}, rt);
+        found = rt.count == 1 && std::string(rt.toks[0].text) == "PD";
+    }
+    CHECK_EQ(found, true);
+}
+// Every PD step of a Custom all-on plan (both fixed kinds, EPR, PPS, both AVS kinds, their sweeps) is owned by exactly one row, in
+// the Layout and in the compact grid: OK on the block opens them all, none is orphaned.
+static void test_no_pd_step_is_left_without_an_owner() {
+    auto s = mixed_pd();
+    s.push_back(step(A::Pd2Fixed, 5000, V::Pass, 1, 167874860u));
+    s.push_back(sweep_step(A::Pps, 6, 3235656292u, V::Pass));
+    s.push_back(sweep_step(A::SprAvs, 5, 0xE004B145u, V::Pass));
+    s.push_back(sweep_step(A::EprAvs, 9, 0xE004B145u, V::Fail));
+    s.push_back(step(A::Epr, 36000, V::Skip, 9, (720u << 10) | 500, ct::Reason::OverCap));   // dropped from the chips, still owned
+    s.push_back(step(A::Qc2, 5000, V::Pass));
+    rl::Layout l; rl::build(l, s);
+    rl::CompactGrid g; std::array<rl::CompactLine, rl::kMaxLines> lines;
+    rl::build_compact(g, rl::kGridMetrics, lines, s);
+    for (const auto& x : s) {
+        size_t owners = 0, cowners = 0;
+        for (size_t i = 0; i < l.row_count; ++i) owners += rl::row_has(l.rows[i], x);
+        for (size_t i = 0; i < g.row_count; ++i) cowners += rl::row_has(g.rows[i], x);
+        CHECK_EQ(owners, 1u);
+        CHECK_EQ(cowners, 1u);
+    }
+}
+// The widest block the Running grid holds (no folding: every tag stays): five SPR levels, three EPR levels, two PPS ranges and an
+// SPR AVS range, all skipped and tagged: 11 chips with 11 tags, the size kMaxRowTokens is made for. Not a token is cut.
+static void test_the_widest_pd_block_has_no_cuts() {
+    std::vector<ct::Step> s;
+    const unsigned mv[] = {5000, 9000, 12000, 15000, 20000};
+    for (int i = 0; i < 5; ++i) s.push_back(step(A::Pd3Fixed, mv[i], V::Skip, uint8_t(i + 1), 167874860u, ct::Reason::CableLimit));
+    for (unsigned v : {28000u, 36000u, 48000u}) s.push_back(step(A::Epr, v, V::Skip, 8, (v / 50u << 10) | 500, ct::Reason::OverCap));
+    for (uint8_t p : {5, 6}) s.push_back(step(A::Pps, 0, V::Skip, p, 3235656292u, ct::Reason::CableLimit));
+    s.push_back(step(A::SprAvs, 0, V::Skip, 4, 0xE004B145u, ct::Reason::CableLimit));
+    for (auto& x : s) if (x.algorithm == A::SprAvs) x.avs = true;
+    rl::OemNotes run; run.fold = false;
+    rl::Layout l; rl::build(l, s, run);
+    CHECK_EQ(l.cuts, 0u);
+    const rl::Row& b = *pd_row(l);
+    CHECK_EQ(unsigned(b.count), 22u);
+    std::array<rl::Line, rl::kMaxLines> lines;
+    rl::wrap(l, rl::kGridMetrics, lines);
+    rl::CompactGrid g; std::array<rl::CompactLine, rl::kMaxLines> cl;
+    rl::build_compact(g, rl::kGridMetrics, cl, s, run);
+    CHECK_EQ(g.cuts, 0u);
+    for (size_t r = 0; r < g.row_count; ++r) {
+        if (g.rows[r].kind != rl::CompactKind::Pd) continue;
+        rl::RowTokens rt; rl::row_tokens(g, r, s, {}, rt);
+        CHECK_EQ(unsigned(rt.count), 22u);   // the same 22 tokens, none dropped by the row buffer
+    }
+}
+// A kind the source never offered is dropped from the block: no "SPR AVS" / "EPR AVS" row, no "None" word, no chip of that kind.
+static void test_a_range_not_offered_is_dropped() {
     rl::Layout l; auto s = baseus(); rl::build(l, s);
-    CHECK_STR(chips(l, row_of(l, "SPR AVS")).c_str(), "None");
-    CHECK_STR(chips(l, row_of(l, "EPR AVS")).c_str(), "None");
+    CHECK_EQ(find(l, "SPR AVS") == nullptr && find(l, "EPR AVS") == nullptr && find(l, "EPR") == nullptr, true);
+    for (size_t i = 0; i < l.row_count; ++i) CHECK_EQ(chips(l, i).find("None") == std::string::npos, true);
+    for (size_t i = 0; i < l.token_count; ++i) CHECK_EQ(l.tokens[i].kind == rl::kKindSprAvs || l.tokens[i].kind == rl::kKindEprAvs, false);
+    CHECK_EQ(find(l, "No reply") != nullptr && chips(l, row_of(l, "No reply")).find("EPR") == std::string::npos, true);
 }
 // An EPR-capable charger on a plain cable: the EPR / EPR AVS steps are skipped for the cable limit and carry no voltage
 // and no PDO, so a row of their own would be a bare label (a blank-looking line next to PPS). They fold into "Skipped".
@@ -797,7 +950,7 @@ static void test_cable_limited_epr_rows_fold_instead_of_showing_a_bare_label() {
     rl::Layout l; rl::build(l, s);
     CHECK_EQ(find(l, "EPR") == nullptr, true);
     CHECK_EQ(find(l, "EPR AVS") == nullptr, true);
-    CHECK_STR(chips(l, row_of(l, "Skipped")).c_str(), "EPR EPR AVS QC2 QC3");
+    CHECK_STR(chips(l, row_of(l, "Skipped")).c_str(), "QC2 QC3");   // the EPR check lives on the PD block's Steps page
     for (size_t r = 0; r < l.row_count; ++r) if (!l.rows[r].header) CHECK_EQ(l.rows[r].count > 0, true);   // no row is a label alone
     std::array<rl::Line, rl::kMaxLines> lines;
     const size_t n = rl::wrap(l, rl::Metrics{}, lines);
@@ -812,9 +965,11 @@ static void test_epr_levels_are_chips_with_the_skip_reason() {
                             step(A::Epr, 48000, V::Skip, 10, v48, ct::Reason::OverCap)};
     s[1].detail = s[2].detail = ct::kDetailMonitor36;
     rl::Layout l; rl::build(l, s);
-    const size_t r = row_of(l, "EPR");
-    CHECK_STR(chips(l, r).c_str(), "28V 5A 36V 5A >36V 48V 5A >36V");
-    const auto& row = l.rows[r];
+    CHECK_STR(fixed_chips(l).c_str(), "28V 5A");   // the Results grid keeps the level that ran; skipped ones live on the Steps page
+    rl::OemNotes run; run.fold = false;             // the Running grid keeps its structure and the tags
+    rl::build(l, s, run);
+    CHECK_STR(fixed_chips(l).c_str(), "28V 5A 36V 5A >36V 48V 5A >36V");
+    const auto& row = *pd_row(l);
     CHECK_EQ(l.tokens[row.first + 2].chip, false);
     CHECK_EQ(l.tokens[row.first + 2].glue, true);
     CHECK_EQ(int(l.tokens[row.first + 2].tone), int(rl::Tone::Caution));
@@ -822,13 +977,18 @@ static void test_epr_levels_are_chips_with_the_skip_reason() {
     s = {step(A::Epr, 28000, V::Skip, 8, v28, ct::Reason::EprRefused), step(A::Epr, 36000, V::Skip, 9, v36, ct::Reason::CableLimit),
          step(A::Epr, 48000, V::Skip, 10, v48, ct::Reason::OverCap)};
     s[2].detail = ct::kDetailMonitor48;
+    rl::build(l, s, run);
+    CHECK_STR(fixed_chips(l).c_str(), "28V 5A refused 36V 5A cable 48V 5A >48V");
     rl::build(l, s);
-    CHECK_STR(chips(l, row_of(l, "EPR")).c_str(), "28V 5A refused 36V 5A cable 48V 5A >48V");
+    CHECK_EQ(pd_row(l) == nullptr, true);   // nothing ran: no block, the word "PD" reads under Skipped
+    CHECK_STR(chips(l, row_of(l, "Skipped")).c_str(), "PD");
     // an EPR AVS range that was skipped carries its tag too
     s = {step(A::EprAvs, 15000, V::Skip, 11, 0xD0000000u | (480u << 17) | (150u << 8) | 140, ct::Reason::EprRefused)};
     s[0].detail = ct::kDetailEprFail + 3;
+    rl::build(l, s, run);
+    CHECK_STR(sweep_chips(l, 11, A::EprAvs).c_str(), "15-48V 2.91A refused");   // the old 12-byte chip cut this to "15-48V 2.91"
     rl::build(l, s);
-    CHECK_STR(chips(l, row_of(l, "EPR AVS")).c_str(), "15-48V 2.91A refused");   // the old 12-byte chip cut this to "15-48V 2.91"
+    CHECK_EQ(sweep_row_of(l, 11, A::EprAvs) == nullptr, true);
 }
 static void test_legacy_chips_collapse_distinct_voltages() {
     std::vector<ct::Step> s;
@@ -853,14 +1013,13 @@ static void test_chips_carry_their_level() {
     CHECK_EQ(int(l.tokens[l.rows[r].first + 2].mv), 12000);
     CHECK_EQ(int(l.tokens[l.rows[r].first].tone), int(rl::Tone::Pending));   // 5 V: its down step is still to come
     rl::Layout p; auto b = baseus(); rl::build(p, b);
-    const size_t pr = row_of(p, "PD3.x");
+    const size_t pr = row_of(p, "PD");
     CHECK_EQ(int(p.tokens[p.rows[pr].first + 1].mv), 9000);
-    const size_t pps = row_of(p, "PPS");
-    CHECK_EQ(int(p.tokens[p.rows[pps].first].mv), 0);
+    CHECK_EQ(int(p.tokens[sweep_row_of(p, 6)->first].mv), 6);   // a range chip names its slot, not a level
 }
 static void test_absent_protocols_fold_into_one_row() {
     rl::Layout l; auto s = baseus(); rl::build(l, s);
-    CHECK_STR(chips(l, row_of(l, "No reply")).c_str(), "EPR FCP UFCS");   // the words follow the plan's order (here: the fixture's)
+    CHECK_STR(chips(l, row_of(l, "No reply")).c_str(), "FCP UFCS");   // the words follow the plan's order (here: the fixture's)
     CHECK_EQ(int(find(l, "No reply")->label_tone), int(rl::Tone::Dim));
     CHECK_STR(chips(l, row_of(l, "Skipped")).c_str(), "QC2 QC3");
     CHECK_EQ(int(find(l, "Skipped")->label_tone), int(rl::Tone::Caution));
@@ -877,10 +1036,9 @@ static void test_a_legacy_unit_keeps_its_row_when_folding_is_off() {
     CHECK_EQ(int(l.tokens[l.rows[row_of(l, "FCP")].first].tone), int(rl::Tone::Fail));
     CHECK_EQ(find(l, "QC2") != nullptr, true);          // skipped-only units keep their rows too
     CHECK_EQ(find(l, "UFCS") != nullptr, true);
-    CHECK_EQ(find(l, "EPR") == nullptr, true);          // a PD protocol the source does not offer still folds
+    CHECK_EQ(find(l, "EPR") == nullptr, true);          // a PD kind the source does not offer is dropped from the block
     CHECK_EQ(find(l, "QC2") < find(l, "FCP"), true);    // plan order (the fixture runs QC2 first), not "failed units last"
-    CHECK_EQ(find(l, "No reply") != nullptr, true);     // ...into the trailing words row
-    CHECK_STR(chips(l, row_of(l, "No reply")).c_str(), "EPR");
+    CHECK_EQ(find(l, "No reply") == nullptr, true);     // and no word is left to fold
 }
 static void test_a_protocol_with_a_pass_is_never_folded() {
     std::vector<ct::Step> s{step(A::Afc, 9000, V::Pass), step(A::Afc, 12000, V::Fail)};
@@ -909,12 +1067,14 @@ static void test_wrap_breaks_between_chips_and_keeps_range_with_its_chip() {
     CHECK_EQ(lines[0].head, true); CHECK_EQ(lines[0].count, 0); CHECK_EQ(l.rows[lines[0].row].header, true);
     CHECK_EQ(lines[1].head, true); CHECK_EQ(lines[1].count, 3);
     CHECK_EQ(lines[2].head, false); CHECK_EQ(lines[2].count, 2); CHECK_EQ(lines[2].row, 1);
-    // SPR AVS "None" (row 2), then PPS slot 6 "5-11V 5A"(63) on its own line (row 3), then PPS slot 7 "5-21V 3.2A"(75)
-    // (row 4): one row per APDO, each chip on its row's line.
-    CHECK_EQ(lines[3].row, 2); CHECK_EQ(lines[3].count, 1);
-    CHECK_EQ(lines[4].row, 3); CHECK_EQ(lines[4].count, 1); CHECK_EQ(lines[4].head, true);
-    CHECK_EQ(lines[5].row, 4); CHECK_EQ(lines[5].count, 1); CHECK_EQ(lines[5].head, true);
-    CHECK_EQ(n, 9);   // header, PD3.x 2, SPR AVS 1, PPS 1+1, EPR AVS 1, No reply 1 (FCP EPR UFCS), Skipped 1
+    // Then the block's PPS slot 6 "PPS 5-11V 5A" on a line of its own and slot 7 "PPS 5-21V 3.2A" on the next: a range chip
+    // never shares a line, and the continuation lines carry no label (head false).
+    CHECK_EQ(lines[3].row, 1); CHECK_EQ(lines[3].count, 1); CHECK_EQ(lines[3].head, false);
+    CHECK_EQ(lines[4].row, 1); CHECK_EQ(lines[4].count, 1); CHECK_EQ(lines[4].head, false);
+    CHECK_EQ(l.tokens[lines[3].first].kind, rl::kKindPps); CHECK_EQ(l.tokens[lines[3].first].mv, 6);
+    CHECK_EQ(l.tokens[lines[4].first].mv, 7);
+    CHECK_EQ(lines[5].row, 2); CHECK_EQ(lines[5].count, 2); CHECK_EQ(lines[5].head, true);   // No reply: FCP UFCS
+    CHECK_EQ(n, 7);   // header, PD 2 + 1 + 1, No reply 1, Skipped 1
 }
 static void test_wrap_never_splits_a_glued_pair() {
     rl::Layout l; auto s = baseus(); rl::build(l, s);
@@ -1013,8 +1173,8 @@ static void test_results_split_into_sections() {
     CHECK_EQ(row_of(l, "AFC") < oppo, true);
     CHECK_EQ(oppo < row_of(l, "VOOC"), true);
     CHECK_EQ(row_of(l, "VOOC") < pd, true);
-    CHECK_EQ(pd < row_of(l, "PD3.x"), true);
-    CHECK_EQ(row_of(l, "PD3.x") < qc, true);
+    CHECK_EQ(pd < row_of(l, "PD"), true);
+    CHECK_EQ(row_of(l, "PD") < qc, true);
     CHECK_EQ(qc < row_of(l, "QC2"), true);
     CHECK_EQ(find(l, "OEM / PD") == nullptr, true);       // no notes -> no OEM / PD section
     CHECK_EQ(find(l, "Xiaomi") == nullptr, true);         // no Mi auth and no Xiaomi row -> no Xiaomi section
@@ -1257,16 +1417,15 @@ static void test_the_xiaomi_unit_is_one_row_in_its_section() {
     CHECK_EQ(l.rows[header].header, true);
     CHECK_STR(l.rows[mi].label, "Xiaomi");
     CHECK_EQ(l.rows[mi].probe, true);
-    CHECK_EQ(mi > row_of(l, "PPS"), true);   // the row stands where the plan runs it: after the PD rows
+    CHECK_EQ(mi > row_of(l, "PD"), true);   // the row stands where the plan runs it: after the PD block
     CHECK_STR(chips(l, mi).c_str(), "55W 100W");   // each mode by its watts, no auth chip
     CHECK_EQ(int(l.tokens[l.rows[mi].first].tone), int(rl::Tone::Pass));
     CHECK_EQ(int(l.tokens[l.rows[mi].first + 1].tone), int(rl::Tone::Fail));
     for (const auto& x : s) CHECK_EQ(rl::row_has(l.rows[mi], x), x.hunt);   // the row owns every Xiaomi step and nothing else
     // The PD chips keep the advertised currents and pass counts, untouched by the Xiaomi rows.
-    CHECK_STR(chips(l, row_of(l, "PD3.x")).c_str(), "5V 3A 9V 3A 12V 3A 15V 3A 20V 3.35A");
-    const size_t pps = row_of(l, "PPS");   // one row per APDO: slot 6, then slot 7
-    CHECK_STR(chips(l, pps).c_str(), "5-11V 5A");
-    CHECK_STR(chips(l, pps + 1).c_str(), "5-21V 3.2A");
+    CHECK_STR(fixed_chips(l).c_str(), "5V 3A 9V 3A 12V 3A 15V 3A 20V 3.35A");
+    CHECK_STR(sweep_chips(l, 6).c_str(), "5-11V 5A");
+    CHECK_STR(sweep_chips(l, 7).c_str(), "5-21V 3.2A");
 }
 // The rows follow the step list: the chain row closes the Pd unit, so the Xiaomi row stands after the PD rows and before the next
 // unit. With the row in hand the "Mi Turbo" auth fact is not repeated (the "auth" chip says it).
@@ -1276,10 +1435,10 @@ static void test_the_xiaomi_row_stands_where_the_plan_runs_it() {
                             step(A::Qc2, 9000, V::Pass)};
     rl::OemNotes notes; notes.mi_auth = true;
     rl::Layout l; rl::build(l, t, notes);
-    CHECK_STR(row_order(l).c_str(), "*USB PD,PD3.x,PPS,*Xiaomi,Xiaomi,*QC/UFCS,QC2");
+    CHECK_STR(row_order(l).c_str(), "*USB PD,PD,*Xiaomi,Xiaomi,*QC/UFCS,QC2");
     rl::OemNotes dense; dense.headers = false; dense.mi_auth = true;
     rl::build(l, t, dense);
-    CHECK_STR(row_order(l).c_str(), "PD3.x,PPS,Xiaomi,QC2");
+    CHECK_STR(row_order(l).c_str(), "PD,Xiaomi,QC2");
     // A run with no Xiaomi row (the Pd unit not selected) keeps the passive auth fact.
     std::vector<ct::Step> u{step(A::Qc2, 9000, V::Pass)};
     rl::build(l, u, notes);
@@ -1478,15 +1637,15 @@ static void test_pps_needs_load_reads_as_a_skip_not_a_fail() {
     std::vector<ct::Step> s{step(A::Pps, 5000, V::Pass, 7, pdo), step(A::Pps, 13000, V::Skip, 7, pdo, ct::Reason::NeedsLoad),
                             step(A::Pps, 21000, V::Skip, 7, pdo, ct::Reason::NeedsLoad)};
     rl::Layout l; rl::build(l, s);
-    const rl::Row* r = find(l, "PPS");
+    const rl::Row* r = pd_row(l);
     CHECK_EQ(r != nullptr, true);
-    CHECK_EQ(chips(l, row_of(l, "PPS")).find("needs load") != std::string::npos, true);
+    CHECK_EQ(chips(l, row_of(l, "PD")).find("needs load") != std::string::npos, true);
     for (unsigned i = r->first; i < unsigned(r->first) + r->count; ++i) CHECK_EQ(int(l.tokens[i].tone) != int(rl::Tone::Fail), true);
     CHECK_EQ(l.cuts, 0u);
     std::vector<ct::Step> all_skipped{step(A::Pps, 13000, V::Skip, 7, pdo, ct::Reason::NeedsLoad)};
     rl::Layout m; rl::build(m, all_skipped);
-    CHECK_EQ(chips(m, row_of(m, "PPS")).find("needs load") != std::string::npos, true);
-    CHECK_EQ(int(m.tokens[find(m, "PPS")->first].tone), int(rl::Tone::Skip));
+    CHECK_EQ(chips(m, row_of(m, "PD")).find("needs load") != std::string::npos, true);
+    CHECK_EQ(int(m.tokens[pd_row(m)->first].tone), int(rl::Tone::Skip));
 }
 // The Running view's progress bar counts rows the run executes: plan-time skips (a Light run's advertised PD rows, a protocol the
 // charger never offered) are not part of the work, so a fresh run starts at 0 and the bar never starts half full.
@@ -1717,7 +1876,7 @@ int main() {
     test_an_avs_sweep_merges_into_its_apdos_range_chip();
     test_the_merged_chip_is_the_worst_of_its_steps_and_its_sweep();
     test_a_skipped_sweep_leaves_no_mark_and_no_verdict();
-    test_the_merged_row_owns_the_sweep_steps_of_its_apdo();
+    test_the_pd_block_owns_every_pd_step_and_the_sweeps();
     test_a_compact_row_regenerates_the_merged_chip_with_its_mark();
     test_the_sweep_mark_widens_the_chip_by_its_gap_and_glyph();
     test_a_sweep_chip_takes_its_tone_from_the_sweep();
@@ -1737,7 +1896,11 @@ int main() {
     test_reach_footer_of_a_listed_range_says_advertised();
     test_row_reach_picks_the_range_that_is_not_clean();
     test_reach_words_fit_the_footer_next_to_a_label();
-    test_a_range_not_offered_reads_none();
+    test_the_pd_block_is_one_row_fixed_then_pps_then_avs();
+    test_a_source_without_pd_reads_pd_under_no_reply();
+    test_no_pd_step_is_left_without_an_owner();
+    test_the_widest_pd_block_has_no_cuts();
+    test_a_range_not_offered_is_dropped();
     test_cable_limited_epr_rows_fold_instead_of_showing_a_bare_label();
     test_epr_levels_are_chips_with_the_skip_reason();
     test_legacy_chips_collapse_distinct_voltages();

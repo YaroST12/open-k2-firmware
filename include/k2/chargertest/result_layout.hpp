@@ -2,10 +2,14 @@
 // Copyright (C) 2026 Yaraslau Furman
 // Charger-test Results screen, pure layout: the run's steps become one row per protocol (a label plus
 // chips), then the rows wrap into display lines. No drawing here; host-tested in tests/test_result_layout.cpp.
-//   Fixed PD:  one chip per offered PDO, "5V 3A" (the advertised current, from the PDO in the run evidence).
-//   PPS / AVS: one row per advertised range (APDO), one chip in it, "3.3-11V 3A", coloured by the worst of its range
-//              steps and its deep sweep; a small "S" beside the volts says a sweep ran on that APDO (Token::sweep). A
-//              range the charger does not offer reads "None". The sweep has no row of its own.
+//   PD:        ONE block, labelled "PD" on its first line only (later lines have no label). In order: a chip per offered fixed
+//              level ("5V 3A": the advertised current, from the PDO in the run evidence; PD2.0, PD3.x and EPR levels together,
+//              ascending), then a chip per advertised PPS range ("PPS 3.3-11V" over its "3A"), then one per AVS range (SPR and
+//              EPR, "AVS 15-28V"), coloured by the worst of the range's steps and its deep sweep; a small "S" beside the volts
+//              says a sweep ran on that APDO (Token::sweep). Each range chip has a line to itself (Token::kind says PPS / AVS;
+//              the word is drawn, never stored in the text). A kind the source never offered has no chip: no "None" rows.
+//              Skipped EPR levels (cable, refused, over the monitor cap) have no chip in the Results grid (OemNotes::fold): the
+//              reasons live on the block's Steps page. The sweep has no chip of its own.
 //   Legacy:    one chip per distinct target voltage ("9V"), so QC3 up and down steps collapse; SCP adds its limit ("10V 2.25A").
 //   Xiaomi:    one row "Xiaomi" for the unit (the hunt steps): a chip per mode the chain unlocked, by the watts of
 //              its new level ("55W"), no auth chip; with none, one "auth" chip: passed (finished, nothing went up) or skipped
@@ -86,17 +90,25 @@ struct Token {
     Tone tone = Tone::Dim;
     bool chip = false;   // boxed (verdict chip) or plain text (range / collapsed protocol name)
     bool glue = false;   // stays on the line of the previous token
-    uint16_t mv = 0;     // the level a fixed or legacy chip stands for (0: a range, a word, or a probe): the Running grid finds the
-                         // chip of the step in flight by it (a legacy chip merges the up and down steps of one level)
+    uint8_t kind = 0;    // a PD range chip: kKindPps / kKindSprAvs / kKindEprAvs (0: any other token). The grid draws kind_word(kind) +
+                         // ' ' before the volts, so it is in the cell width but not in `text`
+    uint16_t mv = 0;     // the level a fixed or legacy chip stands for (0: a word or a probe); a range chip (kind != 0): its PDO slot.
+                         // The Running grid finds the chip of the step in flight by it (a legacy chip merges the up and down steps)
     bool sweep = false;  // a range chip whose APDO ran (or runs) a deep sweep: the grid draws a small dim "S" after the volts
 };
+static_assert(sizeof(Token) == 24, "RowTokens and the Layout are sized by it");
+inline constexpr uint8_t kKindPps = 1, kKindSprAvs = 2, kKindEprAvs = 3;
+uint8_t kind_of(charger_test::Algorithm);   // the chip kind of a range algorithm; 0 for any other
+charger_test::Algorithm kind_algorithm(uint8_t kind);   // back: Count for 0
+const char* kind_word(uint8_t kind);   // "PPS" for kKindPps, "AVS" for both AVS kinds, "" for 0
 struct Row {
     char label[9] = {};
     Tone label_tone = Tone::Dim;
     charger_test::Algorithm algorithm = charger_test::Algorithm::Count;   // Count: a collapsed row or a header
     bool header = false;            // section header row: no tokens, not openable
     bool probe = false;             // the Xiaomi row (algorithm Count): every hunt step (the chain row and its modes)
-    uint8_t pos = 0;                // the PDO slot of a range row; 0: not one
+    bool pd = false;                // the PD block (algorithm = its lead PD algorithm): owns every PD step
+    uint8_t pos = 0;                // Levels: the family's first level index, else 0
     uint16_t mv = 0;                // Levels: the claim bits, else 0
     bool levels = false;            // an OEM level row (CompactKind::Levels): owns every step of the level family's units
     uint8_t first = 0, count = 0;   // tokens
@@ -162,14 +174,13 @@ struct OemNotes {
 const char* vendor_oem_name(uint16_t vid);
 
 // The rows come from the steps alone: they are the plan, in the order the runner executes them, so a row stands where the plan first
-// runs one of its steps. A row is a protocol's steps (a fixed PD row: one per algorithm; a PPS / AVS row: one per APDO, Row::pos),
-// or (the Xiaomi row, Row::probe) the hunt steps, wherever the planner put them. A PPS / AVS APDO's deep sweep
-// steps belong to its range row: the chip is the worst of the range steps and the sweep (the sweep's tracking error and fold come
-// from `sweep`, the runner's record) and wears the "S" mark. The Running grid, the Results page and the Steps page read the
-// same step list, so none keeps an order of its own.
+// runs one of its steps. A row is a protocol's steps (the PD block: every PD algorithm, Row::pd), or (the Xiaomi row, Row::probe)
+// the hunt steps, wherever the planner put them. A PPS / AVS APDO's deep sweep steps belong to its range chip: the chip is the
+// worst of the range steps and the sweep (the sweep's tracking error and fold come from `sweep`, the runner's record) and wears the
+// "S" mark. The Running grid, the Results page and the Steps page read the same step list, so none keeps an order of its own.
 void build(Layout&, std::span<const charger_test::Step>, const OemNotes& = {}, const ctsweep::View& sweep = {});
-// Does step `s` belong to layout row `r`? The Xiaomi row owns the hunt steps; a range row (one per APDO) owns its
-// slot's steps, the sweep steps included; any other protocol row the protocol's steps except sweeps (they only exist on APDOs).
+// Does step `s` belong to layout row `r`? The Xiaomi row owns the hunt steps; the PD block every PD step (fixed, PPS, AVS, sweeps,
+// the revision rows of a Custom run); any other protocol row the protocol's steps.
 bool row_has(const Row& r, const charger_test::Step& s);
 // Appends a fact row of plain words after the protocol rows (a collapsed row: its OK opens the whole step list).
 // Dropped when the layout is full.
@@ -220,18 +231,18 @@ const char* display_name(charger_test::Algorithm);
 
 // Compact persistent representation for ChargerTestPage: step-backed rows store only their key (6 B) and regenerate their
 // tokens on demand from Runner::steps(), avoiding a 2.2 KB persistent Layout inside the page arena.
-inline constexpr size_t kMaxRowTokens = 20;
+inline constexpr size_t kMaxRowTokens = 24;   // the PD block: up to 11 PDO chips, each with a glued tag
 inline constexpr size_t kCompactPoolBytes = 200;
 inline constexpr size_t kMaxFactTokens = 24;
 
 enum class CompactKind : uint8_t {
-    Header, Probe, Range, RangeNone, NoQc3Plus, Fixed, Legacy, Fact, Collapsed,
+    Header, Probe, Pd, NoQc3Plus, Legacy, Fact, Collapsed,
     Levels   // OEM level row (OemNotes::vooc_watts): algo = the family's lead unit, mv = packed claims, first/count = oem_watts::kLevels slice
 };
 struct CompactRow {
     CompactKind kind = CompactKind::Header;
     uint8_t algo = 0;      // charger_test::Algorithm, Section (Header), or Tone (Fact / Collapsed label tone)
-    uint16_t mv = 0;       // Range pos, Fact label pool offset, or Collapsed (0=absent, 1=skipped)
+    uint16_t mv = 0;       // Pd: bit 0 = fold (skipped EPR levels get no chip), Fact label pool offset, or Collapsed (0=absent, 1=skipped)
     uint8_t first = 0;     // Fact: first fact_tok index; Levels: first oem_watts::kLevels index
     uint8_t count = 0;     // Fact: fact_tok count; Levels: level count
 };

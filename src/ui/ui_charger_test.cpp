@@ -2018,18 +2018,34 @@ static FooterTone spec_footer(StrBuf<32>& f, int check, const specsec::Cell& c, 
             f.put(result_layout::levels_footer(row, lbl).c_str());
             return FooterTone::Info;
         }
-        const A algo = static_cast<A>(row.algo);
-        if (row.kind != result_layout::CompactKind::Probe && (ct::kPpsAlgorithms & ct::bit(algo))) {   // a range says how far the source got, not a count
-            const auto rc = result_layout::reach(s_.runner_.steps(), algo, static_cast<int>(row.mv));   // one row per APDO: its own reach
+        A algo = static_cast<A>(row.algo);
+        uint8_t pos = 0;
+        bool range = false;
+        if (row.kind == result_layout::CompactKind::Pd) {   // the PD block: a range line is its chip's APDO, a fixed line the block's counts
+            result_layout::RowTokens rt;
+            result_layout::row_tokens(layout_, r_idx, s_.runner_.steps(), s_.runner_.sweep_view(), rt);
+            const auto ln = lines_[static_cast<size_t>(s_.selection_)];
+            for (int k = ln.first(); k < ln.first() + ln.count() && !range; ++k) {
+                const auto &tk = rt.toks[static_cast<size_t>(k)];
+                if (!tk.kind) continue;
+                range = true;
+                f.clear();
+                f.put(result_layout::kind_word(tk.kind)).put(": ");   // the footer names the line's kind: "PPS: caps 19.4V of 21V"
+                algo = static_cast<A>(result_layout::kind_algorithm(tk.kind));
+                pos = static_cast<uint8_t>(tk.mv);
+            }
+        }
+        if (range) {   // a range says how far the source got, not a count
+            const auto rc = result_layout::reach(s_.runner_.steps(), algo, pos);   // one line per APDO: its own reach
             // The APDO's deep sweep is part of this row: a fold it found takes the whole footer ("folds to 19.4V above 19.9V"), a lost
             // source or a clean range with a sweep names the sweep's peak; a range that fell short says how far (the full summary is the [SWEEP] log line).
             bool lost = false, dev = false;   // a failed sweep part (the source was lost) colours the chip red: the footer must not read "reached"
             for (const auto &y : s_.runner_.steps())
-                if (ct::is_sweep(y) && y.algorithm == algo && y.pos == row.mv) {
+                if (ct::is_sweep(y) && y.algorithm == algo && y.pos == pos) {
                     lost |= y.verdict == ct::Verdict::Fail;
                     dev |= result_layout::caution(y, s_.runner_.sweep_view());
                 }
-            if (const auto rw = s_.runner_.sweep_view().apdo(row.algo, static_cast<uint8_t>(row.mv)); rw && rw->sum.points) {   // both 5 V parts
+            if (const auto rw = s_.runner_.sweep_view().apdo(static_cast<uint8_t>(algo), pos); rw && rw->sum.points) {   // both 5 V parts
                 char nb[ctsweep::kFoldTextMax];
                 if (const size_t len = ctsweep::format_fold(rw->sum, nb)) {
                     f.clear();
@@ -2289,7 +2305,7 @@ void ChargerTestPage::list_row(int index, bool focused, kit::RowSpec &out) {
 
 // RowList stages: bind the list on first paint after an invalidate, then apply count and selection (the window follows).
 // The Steps stage of a PD row has the row's own grid lines on top (a range or level chips as the Results grid shows them, at most
-// two lines); any other unit, and every other list, has no header and the list takes the whole body.
+// two lines; the PD block shows the line that was opened); any other unit, and every other list, has no header and the list takes the whole body.
 void ChargerTestPage::paint_list() {
     if (!laid_) {
 #if K2_SPECROWS
@@ -2300,9 +2316,10 @@ void ChargerTestPage::paint_list() {
         hdr_n_ = 0;
         if (s_.stage_ == Stage::Steps && s_.picked() && results_row_ >= 0 && static_cast<size_t>(results_row_) < line_n_) {
             size_t first = static_cast<size_t>(results_row_);
-            while (first > 0 && !lines_[first].head()) --first;
+            const bool block = layout_.rows[lines_[first].row()].kind == result_layout::CompactKind::Pd;   // the PD block: the opened line alone
+            while (!block && first > 0 && !lines_[first].head()) --first;
             hdr_first_ = static_cast<uint8_t>(first);
-            while (hdr_n_ < 2 && first + hdr_n_ < line_n_ && lines_[first + hdr_n_].row() == lines_[first].row()) {   // a row's lines
+            while (hdr_n_ < (block ? 1 : 2) && first + hdr_n_ < line_n_ && lines_[first + hdr_n_].row() == lines_[first].row()) {   // a row's lines
                 kit::ResultRowSpec spec;
                 grid_row(hdr_n_, spec);
                 y = static_cast<int16_t>(y + kit::result_row_h(spec));
@@ -2383,7 +2400,7 @@ kit::Verdict tone_verdict(Tone t) {
     default: return kit::Verdict::None;
     }
 }
-void put_clip(char (&dst)[12], std::string_view s) {
+void put_clip(char (&dst)[14], std::string_view s) {
     const size_t n = std::min<size_t>(s.size(), sizeof dst - 1);
     std::memcpy(dst, s.data(), n);
     dst[n] = 0;
@@ -2393,14 +2410,21 @@ bool section_break(const result_layout::CompactGrid &l, std::span<const result_l
     if (i == 0 || !lines[i].head()) return false;
     return result_layout::row_section(l, lines[i].row()) != result_layout::row_section(l, lines[i - 1].row());
 }
-// The row-relative token of `rt` that the step in flight (level `mv`) stands for: the still-pending chip of that level, else
-// the first still-pending chip of the row. -1 = none.
-int pending_chip(const result_layout::RowTokens &rt, uint32_t mv) {
+// The row-relative token of `rt` that the step in flight stands for: a range or sweep step, the still-pending chip of its
+// (kind, PDO slot), none when that chip is not there; any other step, the still-pending chip of its level, else the first
+// still-pending chip of the row. -1 = none.
+int pending_chip(const result_layout::RowTokens &rt, const ct::Step &st) {
+    const uint8_t kind = result_layout::kind_of(st.algorithm);
     int first = -1;
     for (int k = 0; k < rt.count; ++k) {
         const auto &t = rt.toks[static_cast<size_t>(k)];
         if (!t.chip || t.glue || t.tone != Tone::Pending) continue;
-        if (t.mv && t.mv == mv) return k;
+        if (kind) {
+            if (t.kind == kind && t.mv == st.pos) return k;
+            continue;
+        }
+        if (t.kind) continue;
+        if (t.mv && t.mv == st.mv) return k;
         if (first < 0) first = k;
     }
     return first;
@@ -2412,7 +2436,7 @@ int running_token(const result_layout::RowTokens &rt, const result_layout::Compa
     const ct::Verdict v = steps[runner.index()].verdict;
     if (v != ct::Verdict::Running && v != ct::Verdict::Pending) return -1;
     if (!result_layout::row_has(row, steps[runner.index()])) return -1;   // a Xiaomi step has a row of its own
-    return pending_chip(rt, steps[runner.index()].mv);
+    return pending_chip(rt, steps[runner.index()]);
 }
 // The grid line the step `index` belongs to, known as soon as the runner moves to it.
 int follow_line(const result_layout::CompactGrid &l, std::span<const result_layout::CompactLine> lines, const ct::Runner &runner) {
@@ -2428,7 +2452,7 @@ int follow_line(const result_layout::CompactGrid &l, std::span<const result_layo
         if (!result_layout::row_has(l.rows[r], now)) continue;
         if (!built) {
             result_layout::row_tokens(l, r, steps, runner.sweep_view(), rt);
-            tk = pending_chip(rt, now.mv);
+            tk = pending_chip(rt, now);
             built = true;
         }
         if (tk >= lines[i].first() && tk < lines[i].first() + lines[i].count()) return static_cast<int>(i);
@@ -2916,7 +2940,7 @@ void ChargerTestPage::grid_row(int index, kit::ResultRowSpec &out) {
     const auto ln = lines_[static_cast<size_t>(index)];
     const size_t r_idx = ln.row();
     const auto &row = layout_.rows[r_idx];
-    if (ln.head()) {
+    if (ln.head() || header) {   // the Steps header repeats the label on a block's continuation line
         const char *lbl = result_layout::row_label(layout_, r_idx);
         std::memset(cell_lbl_, 0, sizeof cell_lbl_);
         std::memcpy(cell_lbl_, lbl, std::min<size_t>(std::strlen(lbl), sizeof cell_lbl_ - 1));
@@ -2935,7 +2959,13 @@ void ChargerTestPage::grid_row(int index, kit::ResultRowSpec &out) {
             const size_t sp = volts.find(' ');
             if (sp != std::string_view::npos) { cur = volts.substr(sp + 1); volts = volts.substr(0, sp); }
         }
-        put_clip(cell_txt_[n][0], volts);
+        if (tk.kind) {   // a PD range chip: "PPS 5-11V", "AVS 15-28V"
+            StrBuf<14> w;
+            w.put(result_layout::kind_word(tk.kind)).put_char(' ').put(volts);
+            put_clip(cell_txt_[n][0], w.view());
+        } else {
+            put_clip(cell_txt_[n][0], volts);
+        }
         out.cells[n].label = cell_txt_[n][0];
         if (!cur.empty()) {
             put_clip(cell_txt_[n][1], cur);
@@ -2947,7 +2977,7 @@ void ChargerTestPage::grid_row(int index, kit::ResultRowSpec &out) {
     }
     out.n = static_cast<uint8_t>(n);
     out.focus = results && s_.selection_ >= 0 && s_.selection_ < static_cast<int>(line_n_) &&
-                lines_[static_cast<size_t>(s_.selection_)].row() == r_idx;
+                (row.kind == result_layout::CompactKind::Pd ? s_.selection_ == index : lines_[static_cast<size_t>(s_.selection_)].row() == r_idx);
     out.section = !header && section_break(layout_, std::span<const result_layout::CompactLine>(lines_.data(), line_n_), static_cast<size_t>(index));
 }
 
@@ -3330,9 +3360,13 @@ bool ChargerTestPage::on_event(Event e) {
             update(ctx_.now);
             return true;
         }
-        if (s_.stage_ == Stage::Results) {   // the cursor steps unit by unit: a wrapped row's later lines are skipped
+        if (s_.stage_ == Stage::Results) {   // the cursor steps unit by unit: a wrapped row's later lines are skipped (the PD block's lines are not)
             int i = s_.selection_ + dir;
-            while (i >= 0 && i < static_cast<int>(line_n_) && !lines_[static_cast<size_t>(i)].head()) i += dir;
+            const auto stops = [&](int k) {   // the PD block stops at each of its lines (its range chips have a line each)
+                const auto ln = lines_[static_cast<size_t>(k)];
+                return ln.head() || layout_.rows[ln.row()].kind == result_layout::CompactKind::Pd;
+            };
+            while (i >= 0 && i < static_cast<int>(line_n_) && !stops(i)) i += dir;
             s_.selection_ = std::clamp(i, 0, last_row());
         } else {
             s_.selection_ = std::clamp(s_.selection_ + dir, 0, last_row());

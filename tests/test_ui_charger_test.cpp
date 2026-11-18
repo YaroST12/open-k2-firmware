@@ -1246,10 +1246,11 @@ static void dump_screen(const char* name);
 // kCaution on the kCautionT fill, the mark with kDim; the rows scanned are the chip body (the Partial bar below it is kCaution too).
 static int amber_chip_sweep_gap() {
     int y0 = -1, y1 = -1;
-    for (int y = 0; y < LCD_HEIGHT; ++y) {
+    for (int y = 0; y < LCD_HEIGHT; ++y) {   // the first run of chip rows; the footer's own tone (a caution count) is a later run
         int n = 0;
         for (int x = 0; x < LCD_WIDTH; ++x) n += g_panel[y * LCD_WIDTH + x] == kCautionT;
         if (n >= 100) { if (y0 < 0) y0 = y; y1 = y; }
+        else if (y0 >= 0) break;
     }
     if (y0 < 0) return -1;
     int fill_x0 = LCD_WIDTH, first_dim = LCD_WIDTH;
@@ -1436,11 +1437,11 @@ static void test_a_capped_range_reads_amber_and_says_how_far_it_got() {
     CHECK_EQ(int(r.steps()[static_cast<size_t>(capped)].measured_mv / 100), 194);
     result_layout::Layout l; result_layout::build(l, r.steps());
     int pps = -1;
-    for (size_t i = 0; i < l.rows.size(); ++i) if (!l.rows[i].header && l.rows[i].algorithm == ct::Algorithm::Pps) { pps = static_cast<int>(i); break; }
-    CHECK_EQ(pps >= 0, true);
+    for (size_t i = 0; i < l.rows.size(); ++i) if (!l.rows[i].header && l.rows[i].pd) { pps = static_cast<int>(i); break; }
+    CHECK_EQ(pps >= 0, true);   // the PD block: a range line's footer names its kind
     // Focus the PPS row: its footer says how far the converter got, in the caution tone (the chip's own words stay "5-21V 3.2A").
     StrBuf<32> want;
-    want.put(l.rows[static_cast<size_t>(pps)].label).put(": caps 19.4V of 21V");
+    want.put("PPS: caps 19.4V of 21V");
     bool found = false;
     top(ui, t); settle(ui, t);
     for (int n = 0; n < 24 && !found; ++n) {
@@ -1462,7 +1463,7 @@ static void test_a_capped_range_reads_amber_and_says_how_far_it_got() {
     press(ui, Button::Ok); ui.tick(t += 100); settle(ui, t);
     CHECK_EQ(ui.charger_test_stage(), 7);   // Steps
     bool detail = false;
-    for (int n = 0; n < 12 && !detail; ++n) {
+    for (int n = 0; n < 40 && !detail; ++n) {   // the PD block's Steps page lists every PD step
         press(ui, Button::Ok); ui.tick(t += 100); settle(ui, t);
         if (ui.charger_test_stage() == 8 && g_panel[24 * LCD_WIDTH + 100] == kPartFill) detail = true;
         else { press(ui, Button::Back); ui.tick(t += 100); settle(ui, t); press(ui, Button::Plus); ui.tick(t += 100); settle(ui, t); }
@@ -1798,11 +1799,20 @@ static FamilyPick pick_family(Ui& ui, const char* label) {
     result_layout::build(layout, steps, oem, view);
     std::array<result_layout::Line, result_layout::kMaxLines> ln;
     const size_t line_n = result_layout::wrap(layout, result_layout::kGridMetrics, ln);
-    for (size_t k = 0; k < line_n && pick.line < 0; ++k)
+    // A kind word ("PPS", "AVS") picks the first line of the PD block that holds a chip of that kind: its APDO is algo / pos.
+    for (size_t k = 0; k < line_n && pick.line < 0; ++k) {
         if (std::string_view(layout.rows[ln[k].row].label) == label) pick.line = int(k);
+        for (size_t i = ln[k].first; pick.line < 0 && i < size_t(ln[k].first) + ln[k].count; ++i) {
+            const auto& t = layout.tokens[i];
+            if (t.kind && std::string_view(result_layout::kind_word(t.kind)) == label) {
+                pick.line = int(k);
+                pick.algo = uint8_t(result_layout::kind_algorithm(t.kind)); pick.pos = uint8_t(t.mv);
+            }
+        }
+    }
     if (pick.line < 0) return pick;
     const auto& row = layout.rows[ln[size_t(pick.line)].row];
-    pick.algo = uint8_t(row.algorithm); pick.pos = row.pos;
+    if (!pick.algo) { pick.algo = uint8_t(row.algorithm); pick.pos = row.pos; }
     for (const auto& s : steps) {
         if (!result_layout::row_has(row, s)) continue;
         const bool caution = result_layout::caution(s, view);
@@ -1902,6 +1912,7 @@ static void test_family_steps_scenes() {
                 int first = k;
                 while (first > 0 && !ln[size_t(first)].head) --first;
                 int h = 0, n = 0;
+                if (row.pd) { first = k; h = line_h(ln[size_t(k)]); n = 2; }   // the PD block's header is the opened line alone
                 while (n < 2 && first + n < int(line_n) && ln[size_t(first + n)].row == ln[size_t(first)].row && (n == 0 || !ln[size_t(first + n)].head)) h += line_h(ln[size_t(first + n++)]);
                 int y = 24;
                 while (y < 240 && g_panel[y * LCD_WIDTH + 1] != kFocus) ++y;
@@ -2068,7 +2079,7 @@ static void test_a_voltage_fold_reads_as_a_caution() {
     CHECK_EQ(ui.charger_test_stage(), 7);
     CHECK_EQ(unsigned(ui.list_state().count), pps.count);
     top(ui, t); calm();
-    CHECK_EQ(footer_shows(result_layout::family_footer("PPS", pps.tally).view(), kCaution), true);
+    CHECK_EQ(footer_shows(result_layout::family_footer("PD", pps.tally).view(), kCaution), true);
     {   // scroll to the first caution row of the list and keep that screen for the design review
         for (int k = 0; k < pps.first_caution; ++k) { press(ui, Button::Plus); ui.tick(t += 100); calm(); }
         dump_screen("fold_steps");
@@ -2153,7 +2164,7 @@ static void test_a_sweep_off_by_more_than_100mv_reads_as_a_caution() {
     CHECK_EQ(ui.charger_test_stage(), 7);
     CHECK_EQ(unsigned(ui.list_state().count), sw.count);
     top(ui, t); calm();
-    CHECK_EQ(footer_shows(result_layout::family_footer("PPS", sw.tally).view(), kCaution), true);
+    CHECK_EQ(footer_shows(result_layout::family_footer("PD", sw.tally).view(), kCaution), true);
 }
 // A sweep part that failed (the source was lost mid-sweep) paints the merged chip red; the Results footer of that row must then speak
 // of the sweep in the caution tone, never of the range's reach alone ("PPS: 3.3-11V reached" in green under a red chip): the
@@ -2360,10 +2371,10 @@ static void test_step_label_gallery() {
         // A grid row's footer counts the listing apart from the results; a listed range reads "advertised" in the Ok
         // tone (the source has it, nothing was asked), never a shortfall in amber.
         ui.set_rotation(0, t); top(ui, t); settle(ui, t);   // the text checks read rotation 0's panel
-        CHECK_EQ(footer_shows("PD3.x: 1 pass, 3 listed", kOk), true);
+        CHECK_EQ(footer_shows("PD: 1 pass, 6 listed", kOk), true);   // one PD block: the fixed chips and both PPS ranges count together
         bool avs = false;
         for (int n = 0; n < 12 && !avs; ++n) {
-            avs = footer_shows("SPR AVS: advertised", kOk);
+            avs = footer_shows("AVS: advertised", kOk);
             if (!avs) { press(ui, Button::Plus); ui.tick(t += 100); settle(ui, t); }
         }
         CHECK_EQ(avs, true);
@@ -4078,11 +4089,24 @@ static unsigned run_bar_px() {
     for (int x = 6; x < 218; ++x) n += g_panel[45 * LCD_WIDTH + x] == kFocus;
     return n;
 }
-// How many pixels above `y` in the grid wear the Pending ink (a chip that has not run yet).
+// How many pixels above `y` in the grid wear the Pending ink (a chip that has not run yet). The current brackets are drawn in
+// the same ink: their 1 px lines (12 px or longer) and the 3 px ticks above the line ends are not a chip's, so they do not count.
 static unsigned pending_ink_above(int y) {
     unsigned n = 0;
+    auto faint = [](int x, int yy) { return x >= 0 && x < LCD_WIDTH && yy < LCD_HEIGHT && g_panel[yy * LCD_WIDTH + x] == kFaint; };
+    auto in_line = [&](int x, int yy) {
+        int a = x, b = x;
+        while (faint(a - 1, yy)) --a;
+        while (faint(b + 1, yy)) ++b;
+        return faint(x, yy) && b - a >= 11;
+    };
     for (int yy = kGridTop; yy < y && yy < kGridBottom; ++yy)
-        for (int x = kGridCellsX; x < 224; ++x) n += g_panel[yy * LCD_WIDTH + x] == kFaint;
+        for (int x = kGridCellsX; x < 224; ++x) {
+            if (!faint(x, yy) || in_line(x, yy)) continue;
+            bool tick = false;
+            for (int k = 1; k <= 3 && faint(x, yy + k - 1) && !tick; ++k) tick = in_line(x, yy + k);
+            n += !tick;
+        }
     return n;
 }
 static std::string_view handshake_words(int proto);   // below: the footer line a handshake row announces
@@ -4340,7 +4364,7 @@ static void test_the_running_grid_follows_the_step() {
             // Anchored to the bottom: the row under test ends at or above the window's bottom edge, and the rows above it are
             // finished ones (no Pending chip). Early on the window sits at the top, so the rows below may still be pending.
             CHECK_EQ(bottom <= kGridBottom, true);
-            const unsigned pend = pending_ink_above(top);            if (pend) ++pending_above;
+            if (pending_ink_above(top)) ++pending_above;
             const unsigned total = static_cast<unsigned>(r.steps().size());
             if (!early_done) { CHECK_EQ(run_bar_px(), 0u); dump_screen("follow_early"); early_done = true; }   // the first executed row: the bar starts empty
             if (!mid_done && r.index() >= total / 2) { dump_screen("follow_mid"); mid_done = true; }

@@ -5093,7 +5093,13 @@ static std::vector<int> grid_keys(const ct::Runner& r) {
     for (size_t i = 0; i < l.row_count; ++i) {
         const auto& row = l.rows[i];
         if (row.probe) out.push_back(row_key(A::Count, true, row.mv));
-        else if (row.algorithm != A::Count) out.push_back(row_key(row.algorithm, false, 0, row.pos));
+        else if (row.pd) {   // the PD block: its lead algorithm's key, then one key per range chip in the block's order
+            out.push_back(row_key(row.algorithm, false, 0, row.pos));
+            for (size_t k = row.first; k < size_t(row.first) + row.count; ++k) {
+                const auto& t = l.tokens[k];
+                if (t.kind) out.push_back(row_key(k2::result_layout::kind_algorithm(t.kind), false, 0, t.mv));
+            }
+        } else if (row.algorithm != A::Count) out.push_back(row_key(row.algorithm, false, 0, row.pos));
     }
     return out;
 }
@@ -5108,6 +5114,12 @@ static bool grid_follows(const std::vector<int>& grid, const std::vector<int>& r
     }
     return true;
 }
+// The PD block lists every fixed level in one row: the run's fixed-algorithm keys past the first have no grid row of their own.
+static size_t folded_fixed(const std::vector<int>& run) {
+    size_t n = 0;
+    for (const int k : run) n += k >= 0 && k < int(A::Count) && (ct::kPdFixedAlgorithms & ct::bit(A(k)));
+    return n ? n - 1 : 0;
+}
 static long key_at(const std::vector<int>& v, int k) { return std::find(v.begin(), v.end(), k) - v.begin(); }
 // User report 2026-11-09: the grid listed QC2, QC3, QC3+, QC2B, QC3B, UFCS while the run went QC2, QC2B, QC3, QC3B, QC3+, UFCS
 // (hardware journal, steps 23-48): the grid kept its own copy of the order, with the Class B rows after the Class A ones.
@@ -5117,7 +5129,7 @@ static void test_running_grid_lists_the_algorithms_in_the_order_the_plan_runs_th
     const auto run = executed_keys(r), grid = grid_keys(r);
     CHECK_EQ(run.size() > 12, true);
     CHECK_EQ(grid_follows(grid, run), true);
-    CHECK_EQ(grid.size() + 3 > run.size(), true);   // at most a few rows with nothing to show (a cable-limited EPR) are left out
+    CHECK_EQ(grid.size() + 3 + folded_fixed(run) > run.size(), true);   // at most a few rows with nothing to show (a cable-limited EPR) are left out
     // the hardware order of the Class B rows, spelled out
     const auto at = [&](A a) { return key_at(run, int(a)); };
     CHECK_EQ(at(A::Qc2) + 1 == at(A::Qc2ClassB) && at(A::Qc2ClassB) < at(A::Qc3), true);
@@ -5134,7 +5146,7 @@ static void test_running_grid_follows_the_users_unit_order() {
         const auto run = executed_keys(r), grid = grid_keys(r);
         CHECK_EQ(run.size() > 5, true);
         CHECK_EQ(grid_follows(grid, run), true);
-        CHECK_EQ(grid.size() + 3 > run.size(), true);
+        CHECK_EQ(grid.size() + 3 + folded_fixed(run) > run.size(), true);
     }
 }
 // The Xiaomi unit is one grid row, at the place the planner runs it: its chain row closes the Pd unit, so the row stands after

@@ -743,7 +743,7 @@ private:
     uint32_t sign_sig_ = 0;                // ... and what it shows (sign + colour)
     bool hero_volts_ = false;              // a sweep row's error hero reads in V, not mV
     int16_t clear_y_ = kFooterY;           // progressive stage-transition wipe cursor (< kFooterY = clearing)
-    char cell_txt_[kit::kResultMaxCells][2][12] = {};   // the verdict grid's cells: volts and current text
+    char cell_txt_[kit::kResultMaxCells][2][14] = {};   // the verdict grid's cells: volts and current text
     char cell_lbl_[10] = {};               // ... and the unit label of the row
     StrBuf<24> spec_txt_;                  // ... and a PD spec row's wide cell ("-327.66V, 255 fail")
     uint8_t bar_key_ = 0;                  // the top bar drawn for this stage + 1 (0 = not drawn)

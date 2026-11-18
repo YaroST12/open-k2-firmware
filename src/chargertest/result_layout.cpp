@@ -129,7 +129,7 @@ struct TokenBuf {
                                       void (*emit)(void*, uint8_t first, uint8_t count, bool head), void* ctx) {
     if (toks.empty()) { emit(ctx, 0, 0, true); return; }
     uint8_t first = 0, count = 0;
-    bool head = true;
+    bool head = true, after_range = false;
     int x = 0, groups = 0, widest = 0;
     for (size_t i = 0; i < toks.size();) {
         size_t end = i + 1;
@@ -139,7 +139,9 @@ struct TokenBuf {
         // A line breaks when the chips no longer fit: side by side (x), or in `groups` equal cells of the widest one's width.
         const bool full = m.cells ? (groups + 1) * (std::max(widest, gw) + m.gap) - m.gap > m.avail
                                   : x + m.gap + gw > m.avail;
-        if (count && (full || (m.max_groups && groups >= m.max_groups))) {
+        // A PD range chip has a line to itself: its wide cell must not widen the equal cells of the volt chips, and a line is one APDO.
+        const bool range = toks[i].kind != 0;
+        if (count && (full || range || after_range || (m.max_groups && groups >= m.max_groups))) {
             emit(ctx, first, count, head);
             first = static_cast<uint8_t>(i);
             count = 0;
@@ -147,6 +149,7 @@ struct TokenBuf {
             x = 0; groups = 0; widest = 0;
         }
         ++groups;
+        after_range = range;
         widest = std::max(widest, gw);
         x += (count ? m.gap : 0) + gw;
         count = static_cast<uint8_t>(count + (end - i));
@@ -241,8 +244,8 @@ struct Sink {
             lrow->probe = kind == CompactKind::Probe;
             lrow->header = kind == CompactKind::Header;
             lrow->levels = kind == CompactKind::Levels;
+            lrow->pd = kind == CompactKind::Pd;
             if (kind == CompactKind::Probe) lrow->mv = mv;
-            else if (kind == CompactKind::Range) lrow->pos = static_cast<uint8_t>(mv);
             active = true;
             return;
         }
@@ -291,7 +294,6 @@ struct Sink {
     [[gnu::noinline]] void phrase(std::string_view s, Tone t, bool split_at_number) { TokenBuf tb = buf(); tb.phrase(s, t, split_at_number); }
 };
 bool is_revision(A a) { return a >= A::Pd30Revision && a <= A::Pd32Revision; }
-bool is_range(A a) { return a == A::Pps || a == A::SprAvs || a == A::EprAvs; }
 // Nothing to show for this protocol: every step is "not advertised", or a legacy protocol never answered at 5 V.
 bool is_absent(std::span<const ct::Step> s, A a) {
     bool pass = false, all_none = true;
@@ -302,9 +304,16 @@ bool is_absent(std::span<const ct::Step> s, A a) {
     }
     if (pass) return false;
     if (all_none) return true;
-    if (ct::group(a) == ct::Group::Pd) return false;
     for (const auto& x : s) if (x.algorithm == a) return x.verdict == ct::Verdict::Fail;   // the first (5 V) step failed
     return false;
+}
+// The source offered no PD at all: every PD step is "not advertised" (a block with no chip that is not this was skipped).
+bool pd_absent(std::span<const ct::Step> s) {
+    for (const auto& x : s)
+        if (!x.hunt && !is_revision(x.algorithm) && ct::group(x.algorithm) == ct::Group::Pd &&
+            !(x.verdict == ct::Verdict::Skip && x.reason == ct::Reason::NoOffer))
+            return false;
+    return true;
 }
 bool is_skipped_only(std::span<const ct::Step> s, A a) {
     for (const auto& x : s) if (x.algorithm == a && x.verdict != ct::Verdict::Skip) return false;
@@ -340,15 +349,18 @@ void tag(TokenBuf& b, const ct::Step& x) {
         if (Token* k = b.token(false, Tone::Caution, true)) std::strncpy(k->text, t, sizeof k->text - 1);
 }
 // The plan runs the fixed levels from the top voltage down, the grid reads them left to right ascending: chips go out in
-// (voltage, plan index) order, one selection pass per chip (at most kMaxSteps steps, no scratch array).
-[[gnu::noinline]] void fixed_row(TokenBuf& b, std::span<const ct::Step> s, A a) {
+// (voltage, plan index) order, one selection pass per chip (at most kMaxSteps steps, no scratch array). `algs` = the algorithms
+// whose levels share the run (ct::kPdFixedAlgorithms). `fold`: an EPR level that was skipped (cable, refused, over the monitor
+// cap) has no chip; a listed one (a Light run) keeps its pass look. The reasons stay on the block's Steps page.
+[[gnu::noinline]] void fixed_row(TokenBuf& b, std::span<const ct::Step> s, uint32_t algs, bool fold) {
     uint32_t done = 0;   // the sort key of the chip emitted last; keys are unique and start above 0
     for (;;) {
         const ct::Step* next = nullptr;
         uint32_t best = UINT32_MAX;
         for (size_t i = 0; i < s.size(); ++i) {
             const auto& x = s[i];
-            if (x.algorithm != a || !x.mv || x.hunt) continue;   // a Xiaomi row step is a row of its own (probe_row)
+            if (!(algs >> unsigned(x.algorithm) & 1) || !x.mv || x.hunt) continue;   // a Xiaomi row step is a row of its own (probe_row)
+            if (fold && x.algorithm == A::Epr && x.verdict == ct::Verdict::Skip && !noted(x)) continue;
             const uint32_t key = (uint32_t(x.mv) << 10) | uint32_t(i);
             if (key > done && key < best) { best = key; next = &x; }
         }
@@ -374,13 +386,13 @@ unsigned tone_rank(Tone t) {
     default: return 0;
     }
 }
-// One chip for one APDO (`pos`): the row is one advertised range, so a probe the plan runs between two APDOs lands
-// between their rows. The range steps roll up by the shared tone table (roll_up); the APDO's deep sweep steps (PPS / AVS sweeps
+// One chip for one APDO (`pos`), Token::kind and mv = its slot. The range steps roll up by the shared tone table (roll_up); the APDO's deep sweep steps (PPS / AVS sweeps
 // have no row of their own) roll up the same way, a pass that deviates or folds counting as a caution (caution(step, view)),
 // a skipped part not counting at all; the chip takes the worse of the two and wears the "S" mark (Token::sweep) when a sweep
 // part was planned, ran or runs. PPS / AVS ranges are continuous; the steps only sample them. The chip text stays the advertised
-// range: reach() says how far the source got, the Results footer how the sweep ended.
-[[gnu::noinline]] void range_row(TokenBuf& b, std::span<const ct::Step> s, const ctsweep::View& v, A a, uint8_t pos) {
+// range: reach() says how far the source got, the Results footer how the sweep ended. `fold`: an EPR AVS range that was only skipped
+// (no EPR cable, entry refused, over the cap) has no chip, like the skipped EPR levels (fixed_row).
+[[gnu::noinline]] void range_row(TokenBuf& b, std::span<const ct::Step> s, const ctsweep::View& v, A a, uint8_t pos, bool fold) {
     const ct::Step* x = nullptr;   // the APDO's first range step (else its first sweep part): names the range, tags a skip
     Tally t, w;
     bool has_range = false;
@@ -399,10 +411,13 @@ unsigned tone_rank(Tone t) {
         const Tone sw = w.fail ? Tone::Fail : roll_up(w);   // one failed part (a lost source) fails the chip, whatever the other part did
         if (tone_rank(sw) > tone_rank(tn)) tn = sw;
     }
-    Token* k = b.token(true, tn);   // one row per APDO: this row is that one chip
+    if (fold && a == A::EprAvs && tn == Tone::Skip) return;
+    Token* k = b.token(true, tn);   // one chip per APDO
     if (!k) return;
+    k->kind = kind_of(a);
+    k->mv = pos;
     k->sweep = swept;
-    put_text(*k, step_label::range(x->pdo).c_str());   // "3.3-21V 5A", "15-28V 5A"
+    put_text(*k, step_label::range(x->pdo).c_str());   // "3.3-21V 5A", "15-28V 5A": the PPS / AVS word is drawn from `kind`
     if (tn == Tone::Skip) tag(b, *x);   // every step was skipped: say why
     else {   // some levels ran: a "needs load" level (pattern pps-off-at-no-load) still says so next to the range
         for (const auto& y : s)
@@ -410,6 +425,19 @@ unsigned tone_rank(Tone t) {
                 tag(b, y);
                 break;
             }
+    }
+}
+// The PD block: the fixed levels of every PD algorithm ascending, then the PPS ranges, the SPR AVS ranges and the EPR AVS ranges, one chip
+// per APDO in plan order. A kind the source never offered has no chip (its steps carry no PDO).
+[[gnu::noinline]] void pd_row(TokenBuf& b, std::span<const ct::Step> s, const ctsweep::View& v, bool fold) {
+    fixed_row(b, s, ct::kPdFixedAlgorithms, fold);
+    for (const A a : {A::Pps, A::SprAvs, A::EprAvs}) {
+        uint32_t seen = 0;   // PDO slots already looked at
+        for (const auto& x : s) {
+            if (x.algorithm != a || !x.pdo || x.hunt || x.pos >= 32 || (seen >> x.pos & 1)) continue;
+            seen |= 1u << x.pos;
+            range_row(b, s, v, a, x.pos, fold);
+        }
     }
 }
 [[gnu::noinline]] void legacy_row(TokenBuf& b, std::span<const ct::Step> s, A a) {
@@ -447,6 +475,7 @@ unsigned tone_rank(Tone t) {
 bool is_vooc(A a) { return a == A::Vooc || a == A::SuperVooc || a == A::SuperVooc65; }
 // A unit's word in a "No reply" / "Skipped" row: the VOOC family's units read once, as "VOOC" (`vooc`: already said); nullptr = said.
 const char* fold_word(A a, bool& vooc) {
+    if (ct::group(a) == ct::Group::Pd) return "PD";   // the PD block is one word, never its algorithms
     if (!is_vooc(a)) return display_name(a);
     if (vooc) return nullptr;
     vooc = true;
@@ -737,18 +766,18 @@ namespace {
 }
 
 void build_impl(Sink& b, std::span<const ct::Step> steps, const OemNotes& oem, const ctsweep::View& sweep) {
-    struct Key { A a; bool probe; uint16_t mv; };
-    Key keys[unsigned(A::Count) + 2 * pd::kMaxPdos + 4];
+    struct Key { A a; bool probe, pd; };   // a: the protocol, or the PD block's lead (the first PD algorithm the plan runs)
+    Key keys[unsigned(A::Count) + 2];
     size_t key_n = 0;
-    bool absent[unsigned(A::Count)] = {}, skipped[unsigned(A::Count)] = {}, range_none[unsigned(A::Count)] = {};
+    bool absent[unsigned(A::Count)] = {}, skipped[unsigned(A::Count)] = {};
     bool any_probe = false;
     for (const auto& s : steps) {
         if (is_revision(s.algorithm)) continue;
-        const Key k{s.hunt ? A::Count : s.algorithm, s.hunt,   // an APDO's sweep steps share its range key: one row; the Xiaomi unit is one row
-                    s.hunt ? uint16_t(0) : uint16_t(is_range(s.algorithm) ? s.pos : 0)};
+        const bool pd = !s.hunt && ct::group(s.algorithm) == ct::Group::Pd;
+        const Key k{s.hunt ? A::Count : s.algorithm, s.hunt, pd};   // every PD step shares one key (the block); the Xiaomi unit is one row
         bool seen = false;
         for (size_t i = 0; i < key_n && !seen; ++i)
-            seen = keys[i].a == k.a && keys[i].probe == k.probe && keys[i].mv == k.mv;
+            seen = pd ? keys[i].pd : (!keys[i].pd && keys[i].a == k.a && keys[i].probe == k.probe);
         if (seen || key_n == std::size(keys)) continue;
         keys[key_n++] = k;
         any_probe |= k.probe;
@@ -791,42 +820,32 @@ void build_impl(Sink& b, std::span<const ct::Step> steps, const OemNotes& oem, c
                 vooc_done = true;
                 continue;
             }
-            const bool legacy = ct::group(a) != ct::Group::Pd;
-            if (is_absent(steps, a)) {
-                if (is_range(a)) {
-                    if (range_none[unsigned(a)]) continue;
-                    range_none[unsigned(a)] = true;
-                    b.begin(CompactKind::RangeNone, display_name(a), Tone::Dim, a);
-                    b.word("None", Tone::Dim);
-                    continue;
+            if (key.pd) {   // one block for every PD algorithm; a source that offered none of it folds as the one word "PD"
+                b.begin(CompactKind::Pd, "PD", Tone::Dim, a, oem.fold ? 1 : 0);
+                TokenBuf tb = b.buf();
+                pd_row(tb, steps, sweep, oem.fold);
+                if (b.open_tok_count() == 0) {
+                    b.drop_open();
+                    (pd_absent(steps) ? absent : skipped)[unsigned(a)] = true;
                 }
-                if (oem.fold || !legacy) { absent[unsigned(a)] = true; continue; }
+                continue;
             }
+            if (oem.fold && is_absent(steps, a)) { absent[unsigned(a)] = true; continue; }
             if (is_no_qc3plus(steps, a)) {
                 b.begin(CompactKind::NoQc3Plus, display_name(a), Tone::Dim, a);
                 b.word("no QC3+", Tone::Dim);
                 continue;
             }
-            if (oem.fold && legacy && is_skipped_only(steps, a) && !is_class_a_only(steps, a)) {
+            if (oem.fold && is_skipped_only(steps, a) && !is_class_a_only(steps, a)) {
                 skipped[unsigned(a)] = true;
                 continue;
             }
-            if (is_range(a)) {
-                b.begin(CompactKind::Range, display_name(a), Tone::Dim, a, key.mv);
-                TokenBuf tb = b.buf();
-                range_row(tb, steps, sweep, a, uint8_t(key.mv));
-            } else if (ct::group(a) == ct::Group::Pd) {
-                b.begin(CompactKind::Fixed, display_name(a), Tone::Dim, a);
-                TokenBuf tb = b.buf();
-                fixed_row(tb, steps, a);
-            } else {
-                b.begin(CompactKind::Legacy, display_name(a), Tone::Dim, a);
-                TokenBuf tb = b.buf();
-                legacy_row(tb, steps, a);
-            }
-            if (b.open_tok_count() == 0 && (is_skipped_only(steps, a) || is_range(a))) {
+            b.begin(CompactKind::Legacy, display_name(a), Tone::Dim, a);
+            TokenBuf tb = b.buf();
+            legacy_row(tb, steps, a);
+            if (b.open_tok_count() == 0 && is_skipped_only(steps, a)) {
                 b.drop_open();
-                if (is_skipped_only(steps, a)) skipped[unsigned(a)] = true;
+                skipped[unsigned(a)] = true;
             }
         }
         b.flush();
@@ -889,8 +908,9 @@ bool row_has(const CompactRow& r, const ct::Step& s) {
     if (r.kind == CompactKind::Probe) return s.hunt;
     if (r.kind == CompactKind::Levels)   // every level row of a family lists the family's shared detection
         return !s.hunt && oem_watts::in_family(oem_watts::kLevels[r.first].family, s.algorithm);
-    if (s.hunt || (r.kind != CompactKind::Range && ct::is_sweep(s)) || static_cast<A>(r.algo) != s.algorithm) return false;
-    return !is_range(static_cast<A>(r.algo)) || s.pos == r.mv;   // a range row (one per APDO) owns its slot's steps, the sweep's too
+    if (s.hunt) return false;
+    if (r.kind == CompactKind::Pd) return ct::group(s.algorithm) == ct::Group::Pd;   // every PD step: fixed, PPS, AVS, sweeps, revisions
+    return !ct::is_sweep(s) && static_cast<A>(r.algo) == s.algorithm;
 }
 
 int row_section(const CompactGrid& g, size_t row) {
@@ -911,6 +931,7 @@ const char* row_label(const CompactGrid& g, size_t row) {
     case CompactKind::Fact: return g.pool.data() + cr.mv;
     case CompactKind::Collapsed: return cr.mv ? "Skipped" : "No reply";
     case CompactKind::Levels: return oem_watts::kLevels[cr.first].word;
+    case CompactKind::Pd: return "PD";
     default: return display_name(static_cast<A>(cr.algo));
     }
 }
@@ -927,10 +948,8 @@ void row_tokens(const CompactGrid& g, size_t row, std::span<const ct::Step> step
     switch (cr.kind) {
     case CompactKind::Header: break;
     case CompactKind::Probe: probe_row(tb, steps); break;
-    case CompactKind::Range: range_row(tb, steps, sweep, static_cast<A>(cr.algo), static_cast<uint8_t>(cr.mv)); break;
-    case CompactKind::RangeNone: tb.word("None", Tone::Dim); break;
+    case CompactKind::Pd: pd_row(tb, steps, sweep, cr.mv & 1u); break;
     case CompactKind::NoQc3Plus: tb.word("no QC3+", Tone::Dim); break;
-    case CompactKind::Fixed: fixed_row(tb, steps, static_cast<A>(cr.algo)); break;
     case CompactKind::Legacy: legacy_row(tb, steps, static_cast<A>(cr.algo)); break;
     case CompactKind::Levels: levels_row(tb, steps, static_cast<A>(cr.algo), cr.mv, cr.first, cr.count); break;
     case CompactKind::Fact:
@@ -961,8 +980,9 @@ bool row_has(const Row& r, const ct::Step& s) {
     if (r.header) return false;
     if (r.probe) return s.hunt;
     if (r.levels) return !s.hunt && oem_watts::in_family(oem_watts::kLevels[r.pos].family, s.algorithm);   // pos: its first level
-    if (s.hunt || (!is_range(r.algorithm) && ct::is_sweep(s)) || r.algorithm != s.algorithm) return false;
-    return !is_range(r.algorithm) || s.pos == r.pos;   // one row per APDO: a range row owns its slot's steps, the sweep's too
+    if (s.hunt) return false;
+    if (r.pd) return ct::group(s.algorithm) == ct::Group::Pd;
+    return !ct::is_sweep(s) && r.algorithm == s.algorithm;
 }
 
 step_label::Text levels_footer(const CompactRow& r, const char* label) {
@@ -1071,12 +1091,16 @@ size_t summarize(std::span<const ct::Step> steps, std::span<SummaryLine> out) {
     return written;
 }
 
+uint8_t kind_of(A a) { return a == A::Pps ? kKindPps : a == A::SprAvs ? kKindSprAvs : a == A::EprAvs ? kKindEprAvs : uint8_t(0); }
+A kind_algorithm(uint8_t kind) { return kind == kKindPps ? A::Pps : kind == kKindSprAvs ? A::SprAvs : kind == kKindEprAvs ? A::EprAvs : A::Count; }
+const char* kind_word(uint8_t kind) { return kind == kKindPps ? "PPS" : kind ? "AVS" : ""; }
 int token_width(const Token& t, const Metrics& m) {
-    return int(std::strlen(t.text)) * m.adv + (t.chip ? 2 * m.pad + m.mark : 0) + (t.sweep ? m.sweep : 0);   // the S mark: its fixed gap + one glyph
+    const int word = t.kind ? int(std::strlen(kind_word(t.kind)) + 1) : 0;   // "PPS " is drawn before a range chip's volts
+    return (int(std::strlen(t.text)) + word) * m.adv + (t.chip ? 2 * m.pad + m.mark : 0) + (t.sweep ? m.sweep : 0);   // the S mark: its fixed gap + one glyph
 }
 int cell_width(const Token& t, const Metrics& m) {
-    int n = 0;
-    while (t.text[n] && (!t.chip || t.text[n] != ' ')) ++n;   // a chip's volt text; a word is whole
+    int n = t.kind ? int(std::strlen(kind_word(t.kind)) + 1) : 0;
+    for (int i = 0; t.text[i] && (!t.chip || t.text[i] != ' '); ++i) ++n;   // a chip's volt text; a word is whole
     return n * m.adv + 2 * m.pad + (t.sweep ? m.sweep : 0);
 }
 char mark(Tone t) {
