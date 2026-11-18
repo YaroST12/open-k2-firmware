@@ -253,6 +253,11 @@ const char* name(HuntCause c) {
 }
 namespace {
 constexpr uint32_t kHoldMs = 1000;
+// The walk's move in the detail byte, nudged 1 mV off the two row markers (kDetailStepWalk, kDetailSweep) so a finished row never reads as a sweep.
+constexpr uint8_t step_walk_detail(int mv) {
+    const int v = std::clamp(mv, 0, 255);
+    return uint8_t(v == kDetailStepWalk ? v - 1 : v == kDetailSweep ? v + 1 : v);
+}
 // The transition capture (Env::prog_begin) is triggered where the hold starts, kStableMs after the band's stable start, and freezes its
 // post window later; the hold ends kHoldMs after that stable start, with one 50 ms tick of slack at each end (hold_ms() is the one tick).
 static_assert(progcheck::kStableMs + progcheck::kPostMs + 100 <= kHoldMs, "the capture freezes before the hold ends");
@@ -1718,7 +1723,7 @@ void Runner::finish_row(const Input& in, Verdict v, Reason r, uint8_t detail) {
 // (walk_step_mv: 20 mV PPS, 100 mV AVS) ends the walk at once (rounded to a coarser quantum), otherwise the walk asks for the
 // next quantum through the sink's single Request gate; after kStepWalkCount moves the total must be kStepWalkCount quanta +- one
 // and the slope over all levels inside half a quantum .. one and a half. A jump is a CAUTION (Pass + StepResolution) with detail
-// = the observed move in mV; a total or trend that misses is the same with detail = the mean move (0 = "steps ignored"). A single
+// = the observed move in mV ; a total or trend that misses is the same with detail = the mean move (0 = "steps ignored"). A single
 // move is not judged for direction: the output creeps after each PS_RDY.
 void Runner::walk_step(const Input& in, const Step& eff) {
     (void)eff;
@@ -1753,7 +1758,7 @@ void Runner::walk_step(const Input& in, const Step& eff) {
             walk_n_ = 0;
             walk_lv_[0] = walk_prev_mv_ = walk_base_mv_ = level;
         } else if (move >= 2 * q) {
-            finish(in, Verdict::Pass, Reason::StepResolution, uint8_t(std::clamp(move, 0, 255)));
+            finish(in, Verdict::Pass, Reason::StepResolution, step_walk_detail(move));
             return;
         } else {
             walk_prev_mv_ = level;
@@ -1768,7 +1773,7 @@ void Runner::walk_step(const Input& in, const Step& eff) {
         for (int i = 0; i <= n; ++i) num += (2 * i - n) * (walk_lv_[i] - walk_base_mv_);
         const bool trend_ok = 2 * num >= q * den && 2 * num <= 3 * q * den;
         if (std::abs(total - int(kStepWalkCount) * q) > q || !trend_ok)
-            finish(in, Verdict::Pass, Reason::StepResolution, uint8_t(std::clamp(total / int(kStepWalkCount), 0, 255)));
+            finish(in, Verdict::Pass, Reason::StepResolution, step_walk_detail(total / int(kStepWalkCount)));
         else
             finish(in, Verdict::Pass, Reason::None);
         return;

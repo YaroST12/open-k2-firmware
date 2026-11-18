@@ -4573,6 +4573,23 @@ static void test_pps_step_walk_passes_a_noisy_step_and_fails_a_short_sum() {
         CHECK_EQ(checked, true);
     }
 }
+// A walk landing 160 or 161 mV a step must not store a detail equal to the step-walk or sweep marker: the finished row would read as a sweep row.
+static void test_a_step_walk_miss_never_stores_a_row_marker() {
+    for (const int landing : {160, 161, 250}) {
+        Fake f; f.pd_small_step_mv = landing;
+        ct::Runner r(f); r.start(f.caps, kPdWalk, f.in, true);
+        f.tick(r, 900000);
+        CHECK_EQ(r.state(), ct::State::Done);
+        bool checked = false;
+        for (const auto& s : r.steps()) {
+            if (s.reason != ct::Reason::StepResolution) continue;
+            checked = true;
+            CHECK_EQ(s.detail != ct::kDetailStepWalk && s.detail != ct::kDetailSweep, true);
+            CHECK_EQ(ct::is_sweep(s), false);
+        }
+        CHECK_EQ(checked, true);
+    }
+}
 static void test_pps_step_walk_cautions_when_steps_are_ignored() {
     Fake f; f.pd_small_step_mv = 0;   // the +20 mV requests move the output not at all
     ct::Runner r(f); r.start(f.caps, kPdWalk, f.in, true);
@@ -8607,6 +8624,7 @@ int main() {
     test_fixed_row_collapse_stays_lost(); test_pps_collapse_after_ps_rdy_stays_lost();
     test_low_edge_that_regulates_at_5v_is_a_floored_fail();
     test_pps_step_walk_passes_on_20mv_steps(); test_pps_step_walk_cautions_when_steps_round_to_100mv(); test_pps_step_walk_cautions_when_steps_are_ignored();
+    test_a_step_walk_miss_never_stores_a_row_marker();
     test_a_fold_the_sweep_finds_is_a_caution_on_the_apdos_rows(); test_a_fold_never_softens_a_capped_row(); test_an_avs_fold_marks_the_fixed_row_inside_the_band(); test_the_fh22_list_cautions_pdo6_and_pdo7(); test_pps_deep_sweep_records_every_point_and_the_fold_back(); test_pps_deep_sweep_stops_at_the_first_lost_source(); test_pps_deep_sweep_is_opt_in();
     test_sweep_live_follows_the_row_in_flight(); test_sweep_live_is_idle_without_a_sweep_row();
     test_claim_sweep_record_lends_the_point_buffer();
