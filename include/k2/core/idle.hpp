@@ -7,6 +7,9 @@
 // States: Active -> Dim (after dim_after_s of no activity) -> Off (after off_after_s). A timeout of 0 means never; an off
 // timeout at or below the dim timeout skips the dim step. Dim keeps painting the full content and only lowers the backlight
 // (to the smaller of dim_brightness and brightness); Off turns the panel off and stops painting.
+// Off is only for a K2 with nothing attached: while VBUS is present on the measured port (at or above kVbusPresentMv, the
+// level the UI calls Live) the idle time stops at Dim however long it grows. VBUS crossing that level either way is activity.
+// An explicit force(Off) from the bench still holds the screen off.
 //
 // Activity restarts the idle time (the machine never goes back from Off on its own):
 //   - a button press (press()): in Active it is delivered and restarts the timer; in Dim or Off it only wakes the screen and is
@@ -37,6 +40,7 @@ enum class Force : std::uint8_t { Auto, Active, Dim, Off };
 
 inline constexpr std::int32_t kVbusStepMv = 250;       // a VBUS move above max(this, kVbusStepPermille) is activity
 inline constexpr std::int32_t kVbusStepPermille = 25;  // 2.5 % of the reference
+inline constexpr std::int32_t kVbusPresentMv = 1000;   // VBUS at or above this = something is attached (the UI's Live level)
 inline constexpr std::int32_t kBusActiveMa = 50;       // |IBUS| above this is activity
 inline constexpr std::uint8_t kMaxPct = 100;
 
@@ -101,6 +105,7 @@ private:
     std::uint32_t last_ms_ = 0;
     std::uint32_t idle_ms_ = 0;
     std::int32_t vref_mv_ = 0;
+    bool present_ = true;   // VBUS present on the measured port; true until a reading says otherwise (never Off on a guess)
 };
 
 }  // namespace k2::idle

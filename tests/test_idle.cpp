@@ -9,12 +9,18 @@
 
 using namespace k2;
 
-static idle::Inputs quiet(uint32_t now) {
+static idle::Inputs quiet(uint32_t now) {   // nothing attached: VBUS 0
     idle::Inputs in;
     in.now_ms = now;
     in.vbus_known = true;
-    in.vbus_mv = 5000;
+    in.vbus_mv = 0;
     in.ibus_ma = 0;
+    return in;
+}
+
+static idle::Inputs attached(uint32_t now) {   // a source on the measured port, nothing flowing
+    idle::Inputs in = quiet(now);
+    in.vbus_mv = 5000;
     return in;
 }
 
@@ -147,7 +153,7 @@ static void test_wake_flag_is_reported_once_when_leaving_off() {
 
 static void test_vbus_step_counts_as_activity() {
     idle::Machine m;
-    m.tick(quiet(0));                                // the first sample only sets the reference
+    m.tick(attached(0));                             // the first sample only sets the reference
     idle::Inputs in = quiet(30000);
     in.vbus_mv = 5200;                               // 200 mV: below max(250 mV, 2.5 %)
     m.tick(in);
@@ -188,7 +194,7 @@ static void test_vbus_appearing_and_disappearing_wake() {
     in.vbus_mv = 5000;                               // a charger arrives
     CHECK_EQ(m.tick(in).state == idle::State::Active, true);
     in.now_ms = 360020;
-    CHECK_EQ(m.tick(in).state == idle::State::Off, true);
+    CHECK_EQ(m.tick(in).state == idle::State::Dim, true);   // attached: Dim, never Off
     in.now_ms = 360040;
     in.vbus_mv = 0;                                  // and leaves
     CHECK_EQ(m.tick(in).state == idle::State::Active, true);
@@ -347,6 +353,82 @@ static void test_force_active_delivers_the_press() {
     CHECK_EQ(m.force_mode() == idle::Force::Active, true);
 }
 
+static void test_attached_stops_at_dim() {
+    idle::Machine m;
+    m.tick(attached(0));
+    CHECK_EQ(m.tick(attached(59999)).state == idle::State::Active, true);
+    idle::Output o = m.tick(attached(60000));
+    CHECK_EQ(o.state == idle::State::Dim, true);
+    CHECK_EQ(o.brightness, 30);
+    o = m.tick(attached(300000));
+    CHECK_EQ(o.state == idle::State::Dim, true);     // the off timeout passed: still Dim with a source attached
+    CHECK_EQ(o.panel_on, true);
+    CHECK_EQ(o.paint, true);
+    CHECK_EQ(o.low_clock_ok, false);
+    CHECK_EQ(m.tick(attached(3600000)).state == idle::State::Dim, true);
+    CHECK_EQ(m.tick(attached(86400000)).state == idle::State::Dim, true);
+}
+
+static void test_detach_wakes_then_goes_off() {
+    idle::Machine m;
+    m.tick(attached(0));
+    CHECK_EQ(m.tick(attached(400000)).state == idle::State::Dim, true);
+    CHECK_EQ(m.tick(quiet(400020)).state == idle::State::Active, true);   // unplugging is activity
+    CHECK_EQ(m.tick(quiet(459999)).state == idle::State::Active, true);
+    CHECK_EQ(m.tick(quiet(460020)).state == idle::State::Dim, true);
+    idle::Output o = m.tick(quiet(700020));
+    CHECK_EQ(o.state == idle::State::Off, true);
+    CHECK_EQ(o.low_clock_ok, true);
+    CHECK_EQ(m.tick(attached(700040)).state == idle::State::Active, true);   // plugging in wakes, and the timer restarts
+    CHECK_EQ(m.tick(attached(1100040)).state == idle::State::Dim, true);
+}
+
+static void test_presence_level_is_the_ui_live_level() {
+    idle::Machine m;
+    idle::Inputs in = quiet(0);
+    in.vbus_mv = 900;                                // under 1 V: a leak or a sagging dead source, not attached
+    m.tick(in);
+    in.now_ms = 300000;
+    CHECK_EQ(m.tick(in).state == idle::State::Off, true);
+    in.now_ms = 300020;
+    in.vbus_mv = 1000;                               // 1 V and up counts as attached (a step below the 250 mV rule: the
+    CHECK_EQ(m.tick(in).state == idle::State::Active, true);   // crossing itself is the activity)
+    in.now_ms = 700000;
+    CHECK_EQ(m.tick(in).state == idle::State::Dim, true);
+}
+
+static void test_unknown_vbus_never_goes_off() {
+    idle::Machine m;
+    idle::Inputs in;                                 // no power monitor reading at all
+    in.now_ms = 0;
+    m.tick(in);
+    in.now_ms = 400000;
+    CHECK_EQ(m.tick(in).state == idle::State::Dim, true);
+}
+
+static void test_unknown_after_a_reading_keeps_the_last_presence() {
+    idle::Machine m;
+    m.tick(quiet(0));                                // known: nothing attached
+    idle::Inputs in;
+    in.now_ms = 400000;                              // the meter drops out
+    CHECK_EQ(m.tick(in).state == idle::State::Off, true);
+}
+
+static void test_attached_force_off_and_off_before_dim() {
+    idle::Machine m;
+    m.tick(attached(0));
+    m.force(idle::Force::Off);                       // an explicit bench pin still blanks the panel
+    CHECK_EQ(m.tick(attached(20)).state == idle::State::Off, true);
+    m.force(idle::Force::Auto);
+    idle::Config c = m.config();
+    c.dim_after_s = 120;
+    c.off_after_s = 100;                             // the off step comes first: attached, it lands on Dim
+    m.set_config(c);
+    m.tick(attached(100));
+    CHECK_EQ(m.tick(attached(100100)).state == idle::State::Dim, true);
+    CHECK_EQ(m.tick(attached(200000)).state == idle::State::Dim, true);
+}
+
 static void test_low_clock_gate() {
     idle::Machine m;
     m.tick(quiet(0));
@@ -432,6 +514,12 @@ int main() {
     test_force_overrides();
     test_force_off_survives_activity_but_a_press_clears_it();
     test_force_active_delivers_the_press();
+    test_attached_stops_at_dim();
+    test_detach_wakes_then_goes_off();
+    test_presence_level_is_the_ui_live_level();
+    test_unknown_vbus_never_goes_off();
+    test_unknown_after_a_reading_keeps_the_last_presence();
+    test_attached_force_off_and_off_before_dim();
     test_low_clock_gate();
     test_low_clock_is_off_during_a_forced_off_with_a_negotiation();
     test_idle_seconds_and_config_change();

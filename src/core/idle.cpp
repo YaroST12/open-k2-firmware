@@ -40,7 +40,7 @@ State Machine::effective() const {
     }
     const std::uint32_t off_ms = static_cast<std::uint32_t>(cfg_.off_after_s) * 1000u;
     const std::uint32_t dim_ms = static_cast<std::uint32_t>(cfg_.dim_after_s) * 1000u;
-    if (off_ms != 0 && idle_ms_ >= off_ms) return State::Off;
+    if (off_ms != 0 && idle_ms_ >= off_ms) return present_ ? State::Dim : State::Off;   // attached: never past Dim
     if (dim_ms != 0 && idle_ms_ >= dim_ms) return State::Dim;
     return State::Active;
 }
@@ -84,12 +84,18 @@ Output Machine::tick(const Inputs& in) {
         if (!vref_valid_) {
             vref_valid_ = true;
             vref_mv_ = in.vbus_mv;
+            present_ = in.vbus_mv >= kVbusPresentMv;
         } else {
             std::int32_t thr = absi(vref_mv_) * kVbusStepPermille / 1000;
             if (thr < kVbusStepMv) thr = kVbusStepMv;
             if (absi(in.vbus_mv - vref_mv_) > thr) {
                 activity = true;
                 vref_mv_ = in.vbus_mv;
+            }
+            const bool present = in.vbus_mv >= kVbusPresentMv;
+            if (present != present_) {   // attach or detach: the user is probably there
+                present_ = present;
+                activity = true;
             }
         }
     }
