@@ -32,6 +32,14 @@
  *               0 = none of it (the default while flash is short): the remote answers UnknownCmd, the Bench has no Loop probe row.
  *                   The host tests pass -DK2_LOOPPROBE=1; `make K2_LOOPPROBE=1` builds the tool in.
  *
+ * K2_OPPO_PROBE 1 = the OPPO charger-protocol lab probe (docs/ROADMAP.md, lab docs): the probe sequencer (pd/oppo_probe), the
+ *                   shell commands `pd oppo-probe` / `pd oppo-power`, the remote command 0x4D (OPPO_PROBE), the [OPPO] log lines,
+ *                   the sink-initiated DR_Swap and the data-role plumbing it needs (the FUSB302 data-role bit in the transmit
+ *                   header and the SWITCHES1 sync) are built in.
+ *               0 = none of it (the default: a lab tool, it costs flash): the remote answers UnknownCmd, the PD sink never
+ *                   sends a DR_Swap and the image is the one without the branch. The host tests of it run only with
+ *                   `make test K2_OPPO_PROBE=1` (the flag is a whole-tree choice: its own host object directory).
+ *
  * K2_SPECROWS  1 = the PD spec section keeps and shows its per-transition list (needs K2_PDSPEC=1): the engine marks each fixed
  *                  transition's measurements (TransRec::seen / fails, 18 -> 20 B each), `specsec` projects them into 10 byte
  *                  rows (spec_rows.hpp), a check's detail page lists them (a verdict band, one row per transition, PLUS / MINUS
@@ -72,6 +80,10 @@
 
 #ifndef K2_LOOPPROBE
 #define K2_LOOPPROBE 0
+#endif
+
+#ifndef K2_OPPO_PROBE
+#define K2_OPPO_PROBE 0
 #endif
 
 #ifndef K2_SPECROWS

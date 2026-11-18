@@ -724,6 +724,13 @@
   "727": "[LISTEN] End: %s after %u frames (window %u s, port label %u, VBUS %d mV), Rd off, passive idle\n",
   "728": "[LISTEN] Rd on, VBUS %d mV after %u ms (%s), window %u s, Auto-CRC off, SOP/SOP'/SOP'' received, nothing transmitted\n",
   "729": "[LISTEN] Start: %u s, port label %u, no detach: Rd on, VBUS %d mV, Auto-CRC off, SOP/SOP'/SOP'' received, nothing transmitted\n",
-  "730": "[LISTEN] Start: %u s, port label %u, detach: Rd off, VBUS %d mV, waiting for vSafe0V (max %u ms), nothing transmitted\n"
+  "730": "[LISTEN] Start: %u s, port label %u, detach: Rd off, VBUS %d mV, waiting for vSafe0V (max %u ms), nothing transmitted\n",
+  "731": "[OPPO] end=%u dfp=%u diff=0x%X\n",
+  "732": "[OPPO] step=%u res=%u n=%u %X %X %X %X\n",
+  "733": "[OPPO] step=%u more %X %X %X\n",
+  "734": "[PD] DR_Swap answer=%u dfp=%u\n",
+  "735": "[OPPO] start steps=0x%X skip_swap=%u dfp=%u\n",
+  "736": "[OPPO] refused why=%s\n",
+  "737": "[OPPO] power mv=%u ma=%u pos=%u why=%u\n"
  }
 }
