@@ -142,6 +142,14 @@ struct Fake {
         for (size_t i = 0; i < out.size(); i++) out[i] = uint8_t(0x10 + i);
         return k2::eeprom::Err::Ok;
     }
+    // DebugEeprom op 2: records the expected bytes it was handed and answers cal_res (the compare-and-swap itself is tested on the
+    // pure cal_clear in test_eeprom_calc.cpp).
+    k2::eeprom::CalResult cal_res{}; uint8_t cal_expect[k2::eeprom::kCalLen] = {};
+    k2::eeprom::CalResult eeprom_cal_clear(std::span<const uint8_t, k2::eeprom::kCalLen> expected) {
+        calls++;
+        for (size_t i = 0; i < expected.size(); i++) cal_expect[i] = expected[i];
+        return cal_res;
+    }
     k2::raprobe::Result ra_res{}; Status ra_status = Status::Ok; int ra_pc = -1;
     Status ra_probe(const k2::raprobe::Args &a, k2::raprobe::Result &out) {
         calls++; ra_pc = a.vconn_pc;

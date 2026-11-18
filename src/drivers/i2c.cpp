@@ -184,7 +184,7 @@ K2_HOT bool read(Bus bus, std::uint8_t dev, std::uint8_t reg, std::span<std::uin
     return ok;
 }
 
-// Cold: the read-only EEPROM lab dump only (K2_EEPROM_READ). Unused, the linker drops them.
+// Cold: the EEPROM lab access only (K2_EEPROM_READ, and the acknowledge polling of K2_EEPROM_CAL_CLEAR). Unused, the linker drops them.
 bool probe(Bus bus, std::uint8_t dev) {
     start(bus);
     const bool ack = write_byte(bus, dev << 1);

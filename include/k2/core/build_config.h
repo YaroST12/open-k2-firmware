@@ -41,8 +41,14 @@
  *                   `make test K2_OPPO_PROBE=1` (the flag is a whole-tree choice: its own host object directory).
  *
  * K2_EEPROM_READ 1 = the read-only 24Cxx EEPROM lab dump: src/drivers/eeprom.cpp and the remote command 0x2B (DEBUG_EEPROM; `k2_remote
- *                   debug eeprom probe|dump`). There is no write path anywhere. 0 = none of it: the remote answers UnknownCmd.
+ *                   debug eeprom probe|dump`). Read only. 0 = none of it: the remote answers UnknownCmd.
  *                   The Makefile default is 1 (about 620 B); the host tests pass -DK2_EEPROM_READ=1.
+ *
+ * K2_EEPROM_CAL_CLEAR 1 = the one EEPROM write: DEBUG_EEPROM op 2 (`k2_remote debug eeprom cal-clear --expect HEX --yes`) clears the
+ *                   12 calibration trim bytes 0x04..0x0F of the 24C16 on the INA bus to zero, only when they read back equal to the
+ *                   bytes the host expects (compare-and-swap). Address, length and value are constants (eeprom_calc.hpp); nothing
+ *                   else can be written. The Makefile default is 0 (a one-unit repair, not for the shipping image); the host
+ *                   tests pass -DK2_EEPROM_CAL_CLEAR=1. 0 = op 2 answers BadArg and the write code is not linked.
  *
  * K2_SPECROWS  1 = the PD spec section keeps and shows its per-transition list (needs K2_PDSPEC=1): the engine marks each fixed
  *                  transition's measurements (TransRec::seen / fails, 18 -> 20 B each), `specsec` projects them into 10 byte
@@ -88,6 +94,10 @@
 
 #ifndef K2_EEPROM_READ
 #define K2_EEPROM_READ 0
+#endif
+
+#ifndef K2_EEPROM_CAL_CLEAR
+#define K2_EEPROM_CAL_CLEAR 0
 #endif
 
 #ifndef K2_OPPO_PROBE

@@ -54,6 +54,11 @@ K2_OPPO_PROBE ?= 0
 # command 0x2B, `k2_remote debug eeprom probe|dump`; there is no write path). 0 = the remote answers UnknownCmd and the image is
 # the one without it. The host tests always build the command (HOST_CXXFLAGS).
 K2_EEPROM_READ ?= 1
+# K2_EEPROM_CAL_CLEAR=1 adds the ONE EEPROM write, for repairing one unit's corrupt calibration trims: the remote command 0x2B op 2
+# (`k2_remote debug eeprom cal-clear --expect HEX --yes`) zeroes bytes 0x04..0x0F of the 24C16 on the INA bus, only when they read
+# back equal to HEX (compare-and-swap; address, length and value are constants in include/k2/drivers/eeprom_calc.hpp). Off by
+# default: the shipping image has no EEPROM write. The host tests always build it (HOST_CXXFLAGS).
+K2_EEPROM_CAL_CLEAR ?= 0
 # K2_SPECROWS=1 adds the per-transition list to the PD spec section (needs K2_PDSPEC=1): the engine's row projection, the row
 # texts, the list on a check's detail page, the journal's /jr/spt.rec and the remote read 0x0B [8, off16]. Off by default: the
 # shipping K2_WEBUSB=1 K2_PDSPEC=1 K2_PDSTRESS=1 image does not have the flash for it (a check's detail then shows its summary
@@ -144,8 +149,8 @@ LOOPPROBE_CXX_SRCS = $(wildcard $(SRC_DIR)/loopprobe/*.cpp) $(SRC_DIR)/ui/ui_loo
 ifneq ($(K2_LOOPPROBE),1)
 CXX_SRCS := $(filter-out $(LOOPPROBE_CXX_SRCS),$(CXX_SRCS))
 endif
-EEPROM_CXX_SRCS = $(SRC_DIR)/drivers/eeprom.cpp   # K2_EEPROM_READ=1 only
-ifneq ($(K2_EEPROM_READ),1)
+EEPROM_CXX_SRCS = $(SRC_DIR)/drivers/eeprom.cpp   # K2_EEPROM_READ=1 or K2_EEPROM_CAL_CLEAR=1 only
+ifeq ($(filter 1,$(K2_EEPROM_READ) $(K2_EEPROM_CAL_CLEAR)),)
 CXX_SRCS := $(filter-out $(EEPROM_CXX_SRCS),$(CXX_SRCS))
 endif
 OPPO_PROBE_CXX_SRCS = $(SRC_DIR)/pd/oppo_probe.cpp   # K2_OPPO_PROBE=1 only
@@ -240,7 +245,7 @@ endif
 # Measured -800 B text under LTO.
 CFLAGS += -fmerge-all-constants
 CFLAGS += -I$(INC_DIR)
-CFLAGS += -DK2_NET=$(K2_NET) -DK2_WEBUSB=$(K2_WEBUSB) -DK2_PDSTRESS=$(K2_PDSTRESS) -DK2_PDSPEC=$(K2_PDSPEC) -DK2_LOOPPROBE=$(K2_LOOPPROBE) -DK2_OPPO_PROBE=$(K2_OPPO_PROBE) -DK2_EEPROM_READ=$(K2_EEPROM_READ) -DK2_SPECROWS=$(K2_SPECROWS) -DK2_WHOS_ATTACHED=$(K2_WHOS_ATTACHED) -DK2_SCREENSHOT=$(K2_SCREENSHOT) -DK2_STACKPROBE=$(K2_STACKPROBE)
+CFLAGS += -DK2_NET=$(K2_NET) -DK2_WEBUSB=$(K2_WEBUSB) -DK2_PDSTRESS=$(K2_PDSTRESS) -DK2_PDSPEC=$(K2_PDSPEC) -DK2_LOOPPROBE=$(K2_LOOPPROBE) -DK2_OPPO_PROBE=$(K2_OPPO_PROBE) -DK2_EEPROM_READ=$(K2_EEPROM_READ) -DK2_EEPROM_CAL_CLEAR=$(K2_EEPROM_CAL_CLEAR) -DK2_SPECROWS=$(K2_SPECROWS) -DK2_WHOS_ATTACHED=$(K2_WHOS_ATTACHED) -DK2_SCREENSHOT=$(K2_SCREENSHOT) -DK2_STACKPROBE=$(K2_STACKPROBE)
 CFLAGS += -DK2_HOST_REPORT=$(K2_HOST_REPORT)
 CFLAGS += -DK2_HOT_BLOCK=$(K2_HOT_BLOCK)
 CFLAGS += -MMD -MP
@@ -532,7 +537,7 @@ HOST_K2_SPECROWS ?= 0
 # DR_Swap, the FUSB302 data-role bit and the command 0x4D run only with `make test K2_OPPO_PROBE=1`. The flag changes the Sink
 # layout, so it is a whole-tree choice with its own object directory (host-build-oppo, host-build-rows-oppo), never a per-object one.
 HOST_K2_OPPO_PROBE ?= $(K2_OPPO_PROBE)
-HOST_CXXFLAGS  = -std=c++23 -Wall -Wextra -O0 -g -I$(INC_DIR) -Itests -I$(LFS_DIR) -I$(QR_DIR) -DK2_NET=$(HOST_K2_NET) -DK2_WEBUSB=$(HOST_K2_WEBUSB) -DK2_PDSTRESS=1 -DK2_PDSPEC=1 -DK2_LOOPPROBE=1 -DK2_OPPO_PROBE=$(HOST_K2_OPPO_PROBE) -DK2_EEPROM_READ=1 -DK2_SPECROWS=$(HOST_K2_SPECROWS) -DK2_WHOS_ATTACHED=1 -DK2_SCREENSHOT=$(HOST_K2_SCREENSHOT) -DK2_TRUNC_LOG=1
+HOST_CXXFLAGS  = -std=c++23 -Wall -Wextra -O0 -g -I$(INC_DIR) -Itests -I$(LFS_DIR) -I$(QR_DIR) -DK2_NET=$(HOST_K2_NET) -DK2_WEBUSB=$(HOST_K2_WEBUSB) -DK2_PDSTRESS=1 -DK2_PDSPEC=1 -DK2_LOOPPROBE=1 -DK2_OPPO_PROBE=$(HOST_K2_OPPO_PROBE) -DK2_EEPROM_READ=1 -DK2_EEPROM_CAL_CLEAR=1 -DK2_SPECROWS=$(HOST_K2_SPECROWS) -DK2_WHOS_ATTACHED=1 -DK2_SCREENSHOT=$(HOST_K2_SCREENSHOT) -DK2_TRUNC_LOG=1
 TEST_CXX_LIB   = $(SRC_DIR)/ui/ui.cpp $(SRC_DIR)/ui/ui_hot.cpp $(SRC_DIR)/ui/ui_pages.cpp $(SRC_DIR)/ui/ui_detail.cpp $(SRC_DIR)/ui/capture.cpp tests/ui_stubs.cpp $(SRC_DIR)/ui/gfx.cpp $(SRC_DIR)/ui/rle565.cpp tests/fake_lcd.cpp $(SRC_DIR)/core/remote_proto.cpp $(SRC_DIR)/core/fmt.cpp $(SRC_DIR)/pd/pd.cpp $(SRC_DIR)/pd/pd_engine.cpp $(SRC_DIR)/pd/pd_ext.cpp $(SRC_DIR)/pd/pd_vdm.cpp $(SRC_DIR)/pd/usb_link.cpp $(SRC_DIR)/pd/pd_link.cpp $(SRC_DIR)/drivers/power_calc.cpp $(SRC_DIR)/drivers/adc_calc.cpp $(SRC_DIR)/fastcharge/fastcharge_classify.cpp $(SRC_DIR)/ui/ui_calc.cpp $(SRC_DIR)/drivers/buttons.cpp $(SRC_DIR)/ui/ui_layout.cpp $(SRC_DIR)/ui/ui_labels.cpp $(SRC_DIR)/ui/list_view.cpp $(SRC_DIR)/pd/pd_source.cpp $(SRC_DIR)/pd/pd_sink.cpp $(SRC_DIR)/pd/xiaomi_auth.cpp $(SRC_DIR)/pd/pd_identify.cpp $(SRC_DIR)/pd/pd_probe.cpp $(SRC_DIR)/ui/ui_pdtrig.cpp $(SRC_DIR)/ui/ui_wizard.cpp $(SRC_DIR)/fastcharge/fc_engine.cpp $(SRC_DIR)/fastcharge/fc_scan.cpp $(SRC_DIR)/ui/text.cpp $(SRC_DIR)/pd/emrec.cpp $(SRC_DIR)/pd/emk_quirk.cpp $(SRC_DIR)/pd/emk_respond.cpp $(SRC_DIR)/pd/emk_learn.cpp $(SRC_DIR)/pd/emname.cpp $(SRC_DIR)/pd/emjson.cpp $(SRC_DIR)/drivers/vfat.cpp $(SRC_DIR)/drivers/drive.cpp $(SRC_DIR)/ui/ui_widgets.cpp $(SRC_DIR)/ui/ui_icons.cpp $(SRC_DIR)/ui/ui_match.cpp $(SRC_DIR)/ui/ui_lines.cpp $(SRC_DIR)/ui/ui_tools.cpp $(SRC_DIR)/ui/ui_emarker.cpp $(SRC_DIR)/ui/ui_cabler.cpp $(SRC_DIR)/ui/ui_connection_page.cpp $(SRC_DIR)/ui/ui_blackbox.cpp $(SRC_DIR)/ui/ui_spoof.cpp $(SRC_DIR)/ui/ui_cards.cpp $(SRC_DIR)/pd/pdtrace.cpp $(SRC_DIR)/pd/pdtrace_view.cpp $(SRC_DIR)/pd/pdtrace_link.cpp $(wildcard $(SRC_DIR)/ui/fonts/*.cpp)
 TEST_CXX_SRCS  = $(wildcard tests/test_*.cpp)
 ifneq ($(HOST_K2_SPECROWS),1)
@@ -786,7 +791,7 @@ nav-headers:
 	@$(COMPDB)
 
 docker-build: | $(NAV_DIR)/dirs.txt
-	$(DOCKER_RUN) $(DOCKER_IMG) make K2_GIT=$(K2_GIT) K2_FW_VERSION=$(K2_FW_VERSION) K2_WERROR=$(K2_WERROR) K2_64BIT=$(K2_64BIT) K2_NET=$(K2_NET) K2_WEBUSB=$(K2_WEBUSB) K2_PDSTRESS=$(K2_PDSTRESS) K2_PDSPEC=$(K2_PDSPEC) K2_LOOPPROBE=$(K2_LOOPPROBE) K2_OPPO_PROBE=$(K2_OPPO_PROBE) K2_EEPROM_READ=$(K2_EEPROM_READ) K2_SPECROWS=$(K2_SPECROWS) K2_WHOS_ATTACHED=$(K2_WHOS_ATTACHED) K2_SCREENSHOT=$(K2_SCREENSHOT) K2_HOST_REPORT=$(K2_HOST_REPORT) K2_HOT_BLOCK=$(K2_HOT_BLOCK) K2_STACKPROBE=$(K2_STACKPROBE) BUILD_DIR=$(BUILD_DIR) K2_HOST_ROOT=$(CURDIR)
+	$(DOCKER_RUN) $(DOCKER_IMG) make K2_GIT=$(K2_GIT) K2_FW_VERSION=$(K2_FW_VERSION) K2_WERROR=$(K2_WERROR) K2_64BIT=$(K2_64BIT) K2_NET=$(K2_NET) K2_WEBUSB=$(K2_WEBUSB) K2_PDSTRESS=$(K2_PDSTRESS) K2_PDSPEC=$(K2_PDSPEC) K2_LOOPPROBE=$(K2_LOOPPROBE) K2_OPPO_PROBE=$(K2_OPPO_PROBE) K2_EEPROM_READ=$(K2_EEPROM_READ) K2_EEPROM_CAL_CLEAR=$(K2_EEPROM_CAL_CLEAR) K2_SPECROWS=$(K2_SPECROWS) K2_WHOS_ATTACHED=$(K2_WHOS_ATTACHED) K2_SCREENSHOT=$(K2_SCREENSHOT) K2_HOST_REPORT=$(K2_HOST_REPORT) K2_HOT_BLOCK=$(K2_HOT_BLOCK) K2_STACKPROBE=$(K2_STACKPROBE) BUILD_DIR=$(BUILD_DIR) K2_HOST_ROOT=$(CURDIR)
 
 docker-flash:
 	docker run --rm --privileged -v $(CURDIR):/workspace -v /dev:/dev $(DOCKER_IMG) make flash

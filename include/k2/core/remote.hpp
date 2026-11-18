@@ -106,6 +106,9 @@ public:
     eeprom::Err eeprom_probe(uint8_t bus, eeprom::Probe &out);   // lab-only, read-only 24Cxx probe (k2/drivers/eeprom.hpp); Busy while a charger test runs
     eeprom::Err eeprom_read(uint8_t bus, const eeprom::Addr &a, std::span<uint8_t> out);
 #endif
+#if K2_EEPROM_CAL_CLEAR
+    eeprom::CalResult eeprom_cal_clear(std::span<const uint8_t, eeprom::kCalLen> expected);   // the one write (compare-and-swap); CalErr::Busy while a charger test runs
+#endif
     remote::VconnSnapshot debug_vconn(uint8_t op);   // 0 status, 1 send VCONN_Swap, 2 VCONN off
     remote::EprInfoSnapshot debug_epr_info(uint8_t op);   // 0 status, 1 ask (gated on the EPR bit), 2 ask regardless
     remote::LcdSnapshot debug_lcd();

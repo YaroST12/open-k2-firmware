@@ -1110,6 +1110,20 @@ eeprom::Err Remote::eeprom_read(uint8_t bus, const eeprom::Addr &a, std::span<ui
 }
 #endif
 
+#if K2_EEPROM_CAL_CLEAR
+// The calibration repair (k2/drivers/eeprom_calc.hpp: cal_clear). The write cycle wait keeps the FUSB302 serviced.
+eeprom::CalResult Remote::eeprom_cal_clear(std::span<const uint8_t, eeprom::kCalLen> expected) {
+    if (ui_.charger_test_busy()) {
+        eeprom::CalResult r;
+        r.err = eeprom::CalErr::Busy;
+        return r;
+    }
+    const eeprom::CalResult r = eeprom::cal_clear_ina(expected, [] { fusb302::service(); });
+    K2LOG("[EEPROM] cal-clear err %u\n", static_cast<unsigned>(r.err));
+    return r;
+}
+#endif
+
 remote::VconnSnapshot Remote::debug_vconn(uint8_t op) {
     remote::VconnSnapshot s;
     s.ok = 1;

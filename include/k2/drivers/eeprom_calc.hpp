@@ -5,8 +5,10 @@
 // carry address bits 8..10 in the low bits of the device address (a 24C16 answers at all of 0x50..0x57); the 24C32 and larger
 // take two word-address bytes (high first). `sel` adds the chip's A2..A0 pin levels to the device address.
 #pragma once
+#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 
 namespace k2::eeprom {
 
@@ -56,6 +58,56 @@ constexpr bool locate(std::uint8_t abytes, std::uint8_t sel, std::uint16_t off, 
         return true;
     }
     return false;
+}
+
+// ---- The one write: clearing a corrupt calibration area (K2_EEPROM_CAL_CLEAR) ----
+// Bytes 0x04..0x0F of the first 24C16 block (device 0x50, select 0, one-byte word address) hold three int32 trims. This is not
+// a write API: the address, the length and the value written are the constants below, and the only thing a caller supplies is
+// the 12 bytes it expects to find there (compare-and-swap). Everything else, including the bus (the INA bus, in eeprom.cpp), is
+// fixed at build time. cal_clear() is pure over a Chip so a host test can count what it does on the wire.
+inline constexpr std::uint8_t kCalDev7 = kBase7;                 // select 0, block 0
+inline constexpr std::uint8_t kCalWord = 0x04;
+inline constexpr std::size_t kCalLen = 12;
+inline constexpr std::uint8_t kCalPage = 16;                     // 24C16 page size: a page write wraps inside its 16 bytes
+static_assert(kCalWord % kCalPage + kCalLen <= kCalPage, "the repair must stay inside one page");
+inline constexpr std::uint32_t kCalWriteMs = 10;                 // longest wait for the write cycle (the part needs about 5 ms)
+inline constexpr std::array<std::uint8_t, kCalLen> kCalZero = {};
+
+// Untouched = Mismatch, ReadFail, Busy (nothing was written). WriteFail, Timeout and Verify mean a write was issued: the area
+// may hold anything, read it again.
+enum class CalErr : std::uint8_t {
+    Ok = 0,         // read back all zero
+    Mismatch = 1,   // the area differs from the expected bytes: refused, nothing written (before[] says what is there)
+    ReadFail = 2,   // the first read NACKed: nothing compared, nothing written
+    WriteFail = 3,  // the write was NACKed (maybe part way)
+    Timeout = 4,    // the write cycle did not end within kCalWriteMs
+    Verify = 5,     // the readback is not all zero, or could not be read (after_valid says which)
+    Busy = 6,       // a charger test owns the port: nothing touched the bus
+};
+
+struct CalResult {
+    CalErr err = CalErr::ReadFail;
+    bool before_valid = false, after_valid = false;
+    std::uint8_t before[kCalLen] = {};
+    std::uint8_t after[kCalLen] = {};
+};
+
+// Chip: bool read(word, span<u8>), bool write(word, span<const u8>) (one page write, STOP at the end), bool wait_ready() (true
+// when the write cycle ended, bounded by kCalWriteMs). A failed read never reaches the compare.
+template <class Chip>
+CalResult cal_clear(Chip &c, std::span<const std::uint8_t, kCalLen> expected) {
+    CalResult r;
+    r.before_valid = c.read(kCalWord, std::span<std::uint8_t>(r.before));
+    if (!r.before_valid) return r;                                // err stays ReadFail
+    for (std::size_t i = 0; i < kCalLen; i++)
+        if (r.before[i] != expected[i]) { r.err = CalErr::Mismatch; return r; }
+    const bool wrote = c.write(kCalWord, std::span<const std::uint8_t>(kCalZero));
+    const bool ready = c.wait_ready();                            // always look again after a write was attempted
+    r.after_valid = c.read(kCalWord, std::span<std::uint8_t>(r.after));
+    bool zero = r.after_valid;
+    for (std::size_t i = 0; zero && i < kCalLen; i++) zero = r.after[i] == 0;
+    r.err = !wrote ? CalErr::WriteFail : !ready ? CalErr::Timeout : zero ? CalErr::Ok : CalErr::Verify;
+    return r;
 }
 
 }  // namespace k2::eeprom

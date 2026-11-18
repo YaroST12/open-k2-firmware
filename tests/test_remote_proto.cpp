@@ -2265,7 +2265,7 @@ static void test_debug_eeprom() {
     f.ee_err = k2::eeprom::Err::Ok;
     // Refusals never reach the backend.
     const int calls = f.calls;
-    CHECK_EQ(run(f, request(0x2B, 7, {2, 0}), r), 1);                       // unknown op
+    CHECK_EQ(run(f, request(0x2B, 7, {3, 0}), r), 1);                       // unknown op
     check_header(r, 0x2B, 7, Status::BadArg, 0);
     CHECK_EQ(run(f, request(0x2B, 8, {0, 2}), r), 1);                       // bus 2
     check_header(r, 0x2B, 8, Status::BadArg, 0);
@@ -2288,6 +2288,49 @@ static void test_debug_eeprom() {
     check_header(r, 0x2B, 16, Status::BadLength, 0);
     CHECK_EQ(run(f, request(0x2B, 17, {}), r), 1);
     check_header(r, 0x2B, 17, Status::BadLength, 0);
+    CHECK_EQ(f.calls, calls);
+}
+
+// DebugEeprom op 2, the one write: [2, 12 expected old bytes] -> [err, flags, before[12], after[12]]. The payload carries nothing
+// but the expected bytes (no bus, address, length or value); any other length is refused before the backend is called.
+static std::vector<uint8_t> request_v(uint8_t cmd, uint8_t seq, const std::vector<uint8_t> &payload) {
+    std::vector<uint8_t> v = {kReqMagic0, kReqMagic1, cmd, seq, static_cast<uint8_t>(payload.size())};
+    v.insert(v.end(), payload.begin(), payload.end());
+    v.resize(kFrameSize, 0);
+    return v;
+}
+
+static void test_debug_eeprom_cal_clear() {
+    Fake f; Frame r;
+    const uint8_t exp[12] = {0x00, 0x60, 0xF0, 0xFF, 0xCF, 0xFE, 0xFF, 0xFF, 0xA2, 0x4E, 0xFB, 0xFF};
+    std::vector<uint8_t> pl = {2};
+    pl.insert(pl.end(), exp, exp + 12);
+    f.cal_res.err = k2::eeprom::CalErr::Ok; f.cal_res.before_valid = true; f.cal_res.after_valid = true;
+    for (int i = 0; i < 12; i++) f.cal_res.before[i] = exp[i];
+    CHECK_EQ(run(f, request_v(0x2B, 1, pl), r), 1);
+    check_header(r, 0x2B, 1, Status::Ok, 26);
+    check_bytes(r, kRspHeader, {0, 3, 0x00, 0x60, 0xF0, 0xFF, 0xCF});             // err, flags, before[]
+    check_bytes(r, kRspHeader + 2 + 11, {0xFF, 0, 0, 0});                          // last before byte, first after bytes
+    for (int i = 0; i < 12; i++) CHECK_EQ(int(f.cal_expect[i]), int(exp[i]));      // handed over unchanged
+    CHECK_EQ(f.calls, 1);
+    // A refusal by the firmware (the chip holds something else) is still an OK reply carrying err 1 and what was read.
+    f.cal_res.err = k2::eeprom::CalErr::Mismatch; f.cal_res.after_valid = false;
+    CHECK_EQ(run(f, request_v(0x2B, 2, pl), r), 1);
+    check_header(r, 0x2B, 2, Status::Ok, 26);
+    check_bytes(r, kRspHeader, {1, 1, 0x00, 0x60});
+    // Busy (a charger test runs) is the Busy status.
+    f.cal_res.err = k2::eeprom::CalErr::Busy;
+    CHECK_EQ(run(f, request_v(0x2B, 3, pl), r), 1);
+    check_header(r, 0x2B, 3, Status::Busy, 0);
+    // Wrong lengths never reach the backend: no expectation, a short one, a long one, one extra byte (a would-be offset or length).
+    const int calls = f.calls;
+    CHECK_EQ(run(f, request(0x2B, 4, {2}), r), 1);
+    check_header(r, 0x2B, 4, Status::BadLength, 0);
+    for (size_t n : {size_t(1), size_t(11), size_t(13), size_t(14), size_t(32)}) {
+        std::vector<uint8_t> bad(1 + n, 0xAA); bad[0] = 2;
+        CHECK_EQ(run(f, request_v(0x2B, 5, bad), r), 1);
+        check_header(r, 0x2B, 5, Status::BadLength, 0);
+    }
     CHECK_EQ(f.calls, calls);
 }
 
@@ -3684,6 +3727,7 @@ int main() {
     test_debug_loop();
     test_debug_cc_probe();
     test_debug_eeprom();
+    test_debug_eeprom_cal_clear();
     test_emarker_probe();
     test_debug_pd_msg();
     test_screenshot();
