@@ -292,6 +292,8 @@ static void test_group_why_names() {
     CHECK_STR(rc::group_why(unsigned(ct::Group::Vooc), r), "handshake ok");
     r.detail = uint8_t(k2::fc::Fail::Detected);
     CHECK_STR(rc::group_why(unsigned(ct::Group::SuperVooc), r), "detected");
+    r.detail = uint8_t(k2::fc::Fail::NoChange);                    // an SCP row that was acked and never moved VBUS
+    CHECK_STR(rc::group_why(unsigned(ct::Group::Scp), r), "acked, no change");
     r.detail = 77;                                                 // not a known code: fall back to the reason
     CHECK_STR(rc::group_why(unsigned(ct::Group::Qc3), r), ct::name(ct::Reason::Request));
     // An EPR skip's detail sits above 128 + pd::Err: the PD group names it, it is never taken for an engine code

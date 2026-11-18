@@ -76,6 +76,12 @@ struct Fake final : ct::Env {
     int serve_caps_from = 1;   // the first fc request that reads the limits: the engine clears them at a session start, so a first attempt that a cut ends before the read leaves none
     std::vector<fc::Proto> protocols;
     fc::Proto no_response_proto = fc::Proto::Count;   // a protocol whose engine fails with NoResponse on the first raised request
+    // A unit that acks every setpoint and never moves VBUS (Baseus 140W SCP, runs/newcharger-2026-11-17/deep1): a request at least
+    // 300 mV off 5 V stays Negotiating at 5 V; with no_change_early the engine ends it as NoChange kScpNoChangeMs later (without,
+    // the old engine: the Runner's row timeout decides). restart_after_flat: that session's release is followed by the source's
+    // own output restart (restart_*), as that charger's was after every write session.
+    fc::Proto no_change_proto = fc::Proto::Count; bool no_change_early = true, restart_after_flat = false, flat_session = false;
+    uint32_t no_change_end_at = 0;
     // A QC-only bank asked for a protocol it does not speak: the engine ends every request of it as Unsupported (it never got an
     // answer, whatever VBUS did) and the abort puts the lines back to 0 V, so the output is back at 5 V.
     fc::Proto unsupported_proto = fc::Proto::Count;
@@ -311,6 +317,11 @@ struct Fake final : ct::Env {
         }
         if (no_handshake_proto == p) { in.fc_state = fc::State::Failed; in.fc_fail = fc::Fail::NoHandshake; in.vbus_mv = 5000; return fc::Fail::None; }
         if (unsupported_proto == p) { in.fc_state = fc::State::Failed; in.fc_fail = fc::Fail::Unsupported; in.vbus_mv = 5000; return fc::Fail::None; }
+        if (no_change_proto == p && (mv >= 5300 || mv <= 4700)) {
+            in.fc_state = fc::State::Negotiating; in.fc_fail = fc::Fail::None; in.vbus_mv = 5000; flat_session = true;
+            if (no_change_early) no_change_end_at = in.now + fc::kScpNoChangeMs;
+            return fc::Fail::None;
+        }
         if (drop_at == fc_requests) { ++in.session; low_until = in.now + (gone ? 1000000 : 4000); in.vbus_mv = gone ? 0 : 4450; return fc::Fail::None; }
         if (!request_ok) return fc::Fail::NoHandshake;
         if (silent_session_ms && (p == fc::Proto::Vooc || p == fc::Proto::SuperVooc || p == fc::Proto::SuperVooc65)) {
@@ -329,8 +340,9 @@ struct Fake final : ct::Env {
     void release(bool pd) override {
         if (!alive()) return;
         ++releases; fc_releases += !pd;
-        collapse_t0 = 0; in.ibus_ma = 0; out_on = false; ka_at = ka_end = 0; silent_end_at = 0;
-        if (!pd) { fc_released = true; fc_released_at = in.now; }
+        collapse_t0 = 0; in.ibus_ma = 0; out_on = false; ka_at = ka_end = 0; silent_end_at = 0; no_change_end_at = 0;
+        if (!pd && restart_after_flat && flat_session) restart_at = in.now + restart_delay_ms;
+        if (!pd) { flat_session = false; fc_released = true; fc_released_at = in.now; }
         if (!pd && restart_on_release && fc_releases == restart_on_release) restart_at = in.now + restart_delay_ms;
         if (!release_ok || latched) return;
         in.vbus_mv = 5000;
@@ -653,6 +665,10 @@ struct Fake final : ct::Env {
                     if (in.fc_state != fc::State::Idle) { in.fc_state = fc::State::Failed; in.fc_fail = fc::Fail::NoHandshake; }   // the engine's session died with the output
                     silent_end_at = 0;
                 }
+            }
+            if (no_change_end_at && in.now >= no_change_end_at) {
+                no_change_end_at = 0;
+                if (in.fc_state == fc::State::Negotiating) { in.fc_state = fc::State::Failed; in.fc_fail = fc::Fail::NoChange; in.vbus_mv = 5000; }
             }
             if (silent_end_at && in.now >= silent_end_at) {
                 silent_end_at = 0;
@@ -7890,6 +7906,60 @@ static void test_an_inline_refusal_names_what_latched_it() {
     CHECK_EQ(g_stub.log_text.find("[TEST] preflight refused: load attached (5100 mV)") != std::string::npos, true);
 }
 
+// Legacy early end (Baseus 140W deep run, runs/newcharger-2026-11-17/deep1): the unit acked the setpoints of its SCP raise rows and VBUS
+// never left 5 V; each row cost the 12 s row timeout and the source's own restart after it. The engine's NoChange ends the first raise row,
+// the unit's other raise rows are skipped with the same reason, and the 4.5 V / 5 V rows still run.
+struct FlatScp { uint32_t total_ms = 0; int requests = 0; std::vector<int> mvs; std::vector<ct::Step> steps; };
+static FlatScp run_flat_scp(bool early) {
+    Fake f; ct::Runner r(f);
+    const fc::Caps caps = scp_caps_of(3300, 12000, 1000, 2500);
+    f.caps = {}; f.serve_caps = &caps; f.no_change_proto = fc::Proto::Scp; f.no_change_early = early;
+    f.link_guard = true; f.restart_after_flat = true; f.restart_chatter_ms = 6000;   // the unit re-announces PD for about 6 s after its restart
+    const auto o = with_units(ct::bit(A::Scp), {ct::Unit::Scp});
+    CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+    const uint32_t t0 = f.in.now;
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 600000), true);
+    return {f.in.now - t0, f.fc_requests, f.fc_mvs, {r.steps().begin(), r.steps().end()}};
+}
+static void test_scp_ack_without_voltage_ends_early_and_skips_the_raises() {
+    const FlatScp now_ = run_flat_scp(true);
+    size_t n = 0;
+    for (const auto& s : now_.steps) {
+        if (s.algorithm != A::Scp) continue;
+        switch (n++) {
+        case 0: CHECK_EQ(s.verdict, ct::Verdict::Pass); break;                                  // the 5 V detect row stays
+        case 1: CHECK_EQ(s.verdict, ct::Verdict::Fail); CHECK_EQ(s.reason, ct::Reason::Request);
+                CHECK_EQ(s.detail, uint8_t(fc::Fail::NoChange)); break;
+        case 2: CHECK_EQ(s.mv, 12000); CHECK_EQ(s.verdict, ct::Verdict::Skip); CHECK_EQ(s.reason, ct::Reason::Request);
+                CHECK_EQ(s.detail, uint8_t(fc::Fail::NoChange)); break;
+        case 3: CHECK_EQ(s.mv, 4500); CHECK_EQ(s.verdict, ct::Verdict::Fail); CHECK_EQ(s.detail, uint8_t(fc::Fail::NoChange)); break;
+        case 4: CHECK_EQ(s.mv, 5000); CHECK_EQ(s.verdict, ct::Verdict::Pass); break;            // the 5 V row still runs
+        }
+    }
+    CHECK_EQ(n, 5u);
+    CHECK_EQ(now_.mvs == std::vector<int>({5000, 10000, 4500, 5000}), true);   // the 12 V level is never asked
+    // The same unit under the old engine (no early end): every raise row waits out the row timeout and the restart after it.
+    const FlatScp then_ = run_flat_scp(false);
+    CHECK_EQ(then_.requests, 5);
+    std::printf("legacy early end: unit %u ms -> %u ms (requests %d -> %d)\n", then_.total_ms, now_.total_ms, then_.requests, now_.requests);
+    CHECK_EQ(then_.total_ms > now_.total_ms + 30000, true);
+}
+// A row that left 5 V's neighbourhood alone and a charger that does not restart: the next row follows the release without the
+// restart wait (nothing to wait for), so a no-change row costs its own window and no more.
+static void test_scp_no_change_without_restart_does_not_wait() {
+    Fake f; ct::Runner r(f);
+    const fc::Caps caps = scp_caps_of(3300, 12000, 1000, 2500);
+    f.caps = {}; f.serve_caps = &caps; f.no_change_proto = fc::Proto::Scp; f.link_guard = true;
+    const auto o = with_units(ct::bit(A::Scp), {ct::Unit::Scp});
+    CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 600000), true);
+    CHECK_EQ(f.fc_times.size(), size_t(4));
+    if (f.fc_times.size() == 4) {
+        CHECK_EQ(f.fc_times[2] - f.fc_times[1] <= fc::kScpNoChangeMs + 2000, true);   // 10 V row: its window, the release, the next request
+        CHECK_EQ(f.fc_times[3] - f.fc_times[2] <= fc::kScpNoChangeMs + 2000, true);
+    }
+}
+
 // pattern output-reset-after-unanswered-scp (UGREEN X865, runs/ugreen-qa/r1a-stream, 2026-11-15; user decision 2026-11-15: the row
 // waits): 27 ms after a Legacy row's reset to 5 V the source cut its output (0.1 V for ~1 s) and announced Source_Capabilities to the
 // PD-silent sink ~300 ms after VBUS was back. The next row went out ~100 ms after the return and the fc engine's link guard refused it
@@ -8647,6 +8717,7 @@ int main() {
     test_default_sweep_on_a_low_latch_source();
     test_self_powered_run_sweeps_from_5v();
     test_legacy_row_waits_through_a_source_restart(); test_legacy_restart_wait_is_bounded_and_a_load_still_refuses();
+    test_scp_ack_without_voltage_ends_early_and_skips_the_raises(); test_scp_no_change_without_restart_does_not_wait();
     test_level_maps_to_the_run_switches(); test_level_plans_per_level(); test_step_walk_is_planned_only_in_deep(); test_prog_check_flags_a_passing_programmable_row(); test_prog_check_clean_capture_changes_nothing();
     test_prog_check_without_a_capture_asks_nothing_more(); test_prog_check_follows_the_sweep_switches(); test_light_run_requests_nothing_but_5v(); test_light_lists_the_epr_levels_as_advertised();
     test_epr_spoof_identity_tests_epr_and_avs(); test_epr_capable_list_never_gives_epr_rows_not_offered(); test_epr_spoof_identity_at_light_makes_no_requests();

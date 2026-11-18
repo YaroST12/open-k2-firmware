@@ -7,6 +7,8 @@
 #include "k2/fastcharge/afc.hpp"
 #include "k2/pd/pd_link.hpp"
 
+#include <cstdlib>
+
 namespace k2::fc {
 
 namespace {
@@ -68,7 +70,7 @@ const char* name(Fail f) {
     static constexpr const char* const kNames[] = {
         "none", "need confirm", "over limit", "no power monitor", "busy", "unsupported",
         "no handshake", "no response", "voltage not reached", "overvoltage", "source lost", "aborted",
-        "PD or load active", "needs load", "handshake ok", "detected",
+        "PD or load active", "needs load", "handshake ok", "detected", "acked, no change",
     };
     const auto i = static_cast<std::size_t>(f);
     return i < std::size(kNames) ? kNames[i] : "?";
@@ -1253,6 +1255,13 @@ void Engine::poll() {
     return false;
 }
 
+// The step this level asks for was acked and VBUS has not followed it (either direction); a step below the noise is not asked.
+bool Engine::scp_unmoved(int vbus) const {
+    const int step = target_mv_ - entry_mv_;
+    if (std::abs(step) < kScpNoChangeStepMv) return false;
+    return (step > 0 ? vbus - entry_mv_ : entry_mv_ - vbus) < kScpNoChangeMv;
+}
+
 void Engine::poll_step() {
     if (state_ != State::Negotiating && state_ != State::Active) return;
     const std::uint32_t now = env_.now_ms();
@@ -1300,6 +1309,7 @@ void Engine::poll_step() {
         if (now < due_ms_) return;
         keep_alive();
         if (state_ == State::Failed) return;
+        if (state_ == State::Negotiating && now - band_ms_ >= kScpNoChangeMs && scp_unmoved(vbus)) return abort(Fail::NoChange);
         break;
     case Phase::VoocListen:
     case Phase::VoocRest:

@@ -2974,10 +2974,13 @@ void Runner::poll_impl(Input& in, const pd::SourceCaps& caps) {
         // The VOOC family shares its first session's result in finish().
         const bool never_answered = ((group == Group::Afc || group == Group::Fcp || group == Group::Scp) && in.fc_fail == fc::Fail::Unsupported) ||
             ((group == Group::Ufcs || group == Group::Vivo) && in.fc_fail == fc::Fail::NoResponse);
-        if (never_answered)
+        // SCP acked a raise's setpoints and VBUS stayed put (the engine's NoChange): the unit takes writes and ignores them, so its
+        // other raise rows would only repeat the 12 s wait and the output reset after it. The 4.5 V and 5 V rows still run.
+        const bool scp_ignores_raise = group == Group::Scp && in.fc_fail == fc::Fail::NoChange && s.mv > 5000;
+        if (never_answered || scp_ignores_raise)
             for (size_t n = 0; n < count_; ++n) {
                 auto& o = steps_[n];
-                if (o.verdict != Verdict::Pending || o.group != group) continue;
+                if (o.verdict != Verdict::Pending || o.group != group || (!never_answered && o.mv <= 5000)) continue;
                 o.verdict = Verdict::Skip; o.reason = Reason::Request; o.detail = static_cast<uint8_t>(in.fc_fail); env_.record(o);
             }
         return;

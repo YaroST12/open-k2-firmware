@@ -71,7 +71,7 @@ var K2Proto = (function () {
   var FC_STATES = ["idle", "negotiating", "active", "failed"];
   var FC_FAILS = ["none", "need confirm", "over limit", "no power monitor", "busy", "unsupported", "no handshake",
                   "no response", "voltage not reached", "overvoltage", "source lost", "aborted", "PD or load active",
-            "needs load", "handshake ok", "detected"];
+            "needs load", "handshake ok", "detected", "acked, no change"];
   var FC_OUTCOMES = ["-", "accepted", "rejected", "skipped"];
   var FC_OP = { status: 0, reset: 1, scan: 2, trigger: 3 };
   var FC_OP_VOOC = 4;   // vooc-monitor: inline VOOC monitor pages (k2_remote.py fc vooc), read by K2Remote.voocMonitor

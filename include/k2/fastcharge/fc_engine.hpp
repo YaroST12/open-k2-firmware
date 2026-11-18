@@ -29,6 +29,11 @@
 namespace k2::fc {
 
 inline constexpr std::uint32_t kQc2TransitionMs = 12000;
+// SCP early end: every setpoint write acked, yet VBUS has not moved toward a target at least kScpNoChangeStepMv away by
+// kScpNoChangeMs after the last write. A passing 4.5 V row moved 0.5 V within 150 ms of the Vset ack (2026-11 capture), so 2 s is
+// over ten times the slowest observed answer; the 100 mV is above the monitor's noise and below any slew that counts as following.
+inline constexpr std::uint32_t kScpNoChangeMs = 2000;
+inline constexpr int kScpNoChangeMv = 100, kScpNoChangeStepMv = 300;
 
 enum class Proto : std::uint8_t { Qc2, Qc3, Qc3Plus, Afc, Fcp, Scp, Vooc, SuperVooc, SuperVooc65, Ufcs, Vivo, Count };
 enum class State : std::uint8_t { Idle, Negotiating, Active, Failed };
@@ -40,6 +45,7 @@ enum class Fail : std::uint8_t {
     NoVoltage,  // SVOOC "handshake ok": no longer produced (the K2 answers no VOOC command); kept for stored results
     Detected,   // SCP: every identifying read answered; VOOC family: the adapter clocked its ident and nothing was answered.
                 // Not a failure: the row passes as "detected"
+    NoChange,   // SCP: every setpoint write acked, VBUS did not move toward the target within kScpNoChangeMs
 };
 
 // VOOC wake lists (the fake chargers count wakes by these lengths): the phone's burst of the 2026-11-11 capture, D+ 40 x
@@ -241,6 +247,7 @@ private:
     void build_script();
     void run_script();
     void keep_alive();
+    bool scp_unmoved(int vbus) const;
     void ufcs_poll(std::uint32_t now);
     void ufcs_track(std::size_t n, UKind kind, std::uint32_t now);
     void ufcs_send_ctl(std::uint8_t cmd, UKind kind);

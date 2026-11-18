@@ -957,7 +957,7 @@ static void scp_down_target_with_unchanged_vbus_is_not_overvoltage() {
     Engine e(c);
     CHECK(e.start(Proto::Scp, 4500, true, false, 5000) == Fail::None);
     for (int n = 0; n < 1500 && e.state() == State::Negotiating; ++n) { c.vbus = c.vbus_pending = 5110; c.run(e, 10); }
-    CHECK(e.state() == State::Failed && e.fail() == Fail::NoBand);   // "voltage not reached"
+    CHECK(e.state() == State::Failed && e.fail() == Fail::NoChange);   // acked, VBUS never moved
     // A real rise above the start level is still caught once the adapter has answered (before its first answer the same rise is
     // a QC-only source following the lines: unacked_rise_is_unsupported_*).
     FakeCharger d;
@@ -973,6 +973,53 @@ static void scp_down_target_with_unchanged_vbus_is_not_overvoltage() {
     d.vbus = d.vbus_pending = 6500;
     d.run(g, 100);
     CHECK(g.fail() == Fail::Overvoltage);
+}
+
+// Every SCP write acked but VBUS never leaves the start level (an adapter that takes the setpoint and ignores it): the row ends
+// kScpNoChangeMs after the last write, not after the 12 s band wait. Writes done, VBUS flat for `flat_ms`, then it follows.
+static Fail scp_flat_run(int target_mv, std::uint32_t flat_ms, std::uint32_t* ended_after_ms, State* st) {
+    FakeCharger c;
+    fcp_charger(c);
+    c.scp_charger = true;
+    c.regs[accp::kRegScpType0] = 0x10;
+    Engine e(c);
+    e.start(Proto::Scp, target_mv, true, false, 2250);
+    std::uint32_t last_write = 0;
+    size_t writes = 0;
+    for (int n = 0; n < 1500 && e.state() == State::Negotiating; ++n) {
+        c.run(e, 10);
+        if (c.writes.size() != writes) { writes = c.writes.size(); last_write = c.now; }
+        if (last_write != 0 && c.now < last_write + flat_ms) c.apply_at = last_write + flat_ms;   // the setpoint is acked and pends
+    }
+    *ended_after_ms = c.now - last_write;
+    *st = e.state();
+    return e.fail();
+}
+static void scp_acked_write_with_flat_vbus_ends_early() {
+    for (const int target : {9000, 12000, 4500}) {
+        std::uint32_t after = 0;
+        State st = State::Idle;
+        CHECK(scp_flat_run(target, 60000, &after, &st) == Fail::NoChange);
+        CHECK(st == State::Failed);
+        CHECK(after >= kScpNoChangeMs - 300 && after <= kScpNoChangeMs + 300);
+    }
+}
+// A slow charger that starts moving within the window is not cut; neither is a target that is the level VBUS already rests at.
+static void scp_slow_start_and_small_steps_are_not_cut() {
+    std::uint32_t after = 0;
+    State st = State::Idle;
+    CHECK(scp_flat_run(9000, 1500, &after, &st) == Fail::None);
+    CHECK(st == State::Active);
+    {
+        FakeCharger c;
+        fcp_charger(c);
+        c.scp_charger = true;
+        c.regs[accp::kRegScpType0] = 0x10;
+        Engine e(c);
+        e.start(Proto::Scp, 5000, true, false, 2250);   // the 5 V row of the plan: no step to wait for
+        c.run(e, 6000);
+        CHECK(e.state() == State::Active);
+    }
 }
 
 static void scp_not_supported() {
@@ -1633,6 +1680,7 @@ int main() {
     scp_without_caps_keeps_the_old_cap_and_current();
     scp_session_rereads_caps_and_refuses_above_them();
     scp_not_supported(); scp_down_target_with_unchanged_vbus_is_not_overvoltage();
+    scp_acked_write_with_flat_vbus_ends_early(); scp_slow_start_and_small_steps_are_not_cut();
     unacked_rise_is_unsupported_afc();
     unacked_rise_is_unsupported_fcp();
     unacked_rise_is_unsupported_scp();
