@@ -1149,7 +1149,7 @@ static bool dm_never_driven(const FakeCharger& c) {
 // covers the family, so the three protocols behave the same.
 static void vooc_ident_is_detected_and_nothing_is_answered() {
     for (auto p : {Proto::Vooc, Proto::SuperVooc, Proto::SuperVooc65}) {
-        for (std::uint8_t ident : {0xA8, 0xAC, 0xA6}) {
+        for (std::uint8_t ident : {0xA8, 0x68, 0x88, 0x54, 0xD4, 0x34, 0xB4, 0x44, 0xC4}) {   // vooc::is_detect_opener
             FakeCharger c;
             Engine e(c);
             CHECK(e.start(p, 9000, false) == Fail::None);   // the request is forced to 5 V
@@ -1197,14 +1197,14 @@ static void vooc_wake_forms_alternate() {
 }
 
 // An all-ones frame (D- floating high under a clock nobody answers, the no-phone run of 2026-11-11) is nothing heard:
-// the session ends as "needs load" like a charger that never clocks.
+// the session ends as "no answer" like a charger that never clocks.
 static void vooc_all_ones_frame_is_nothing_heard() {
     FakeCharger c;
     Engine e(c);
     CHECK(e.start(Proto::SuperVooc, 5000, false) == Fail::None);
     c.vooc_raw = {0x1FF, 0x1FF, 0x1FF, 0x1FF};
     c.run(e, 30000);
-    CHECK(e.state() == State::Failed && e.fail() == Fail::NeedsLoad);
+    CHECK(e.state() == State::Failed && e.fail() == Fail::NoAnswer);
     CHECK(c.vooc_raw_i == 4 && c.wakes == kVoocTries);
 }
 
@@ -1213,7 +1213,7 @@ static void vooc_other_commands_are_never_answered() {
     FakeCharger c;
     Engine e(c);
     CHECK(e.start(Proto::SuperVooc, 5000, false) == Fail::None);
-    c.vooc_cmds = {0x55, 0x12, 0x98, 0x82, 0x88, 0x88, 0x88};
+    c.vooc_cmds = {0x55, 0x12, 0x98, 0x82, 0xAC, 0xA6, 0xAC};   // the retired idents (0xAC, 0xA6) are no opener either
     c.run(e, 30000);
     CHECK(e.state() == State::Failed && e.fail() == Fail::NoResponse);
     CHECK(dm_never_driven(c) && c.resets == 1 && c.vbus_mv() == 5000);
@@ -1288,7 +1288,7 @@ static void vooc_wake_gives_up_after_the_last_try() {
         Engine e(c);
         CHECK(e.start(p, 5000, false) == Fail::None);
         c.run(e, 30000);
-        CHECK(e.state() == State::Failed && e.fail() == Fail::NeedsLoad);
+        CHECK(e.state() == State::Failed && e.fail() == Fail::NoAnswer);
         CHECK(c.wakes == kVoocTries && e.vooc_tries() == kVoocTries);
     }
 }
@@ -1296,14 +1296,14 @@ static void vooc_wake_gives_up_after_the_last_try() {
 // A silent adapter is called silent inside kVoocDetectMaxMs (plus the two wake plays and one poll): the session is one step of the
 // charger test and must fit the clean window of a port that cuts VBUS at 5 V (charger_test.hpp kCutStepBudgetMs, tested there).
 static void vooc_silent_session_fits_the_derived_budget() {
-    CHECK(kVoocDetectMaxMs == 5000);
+    CHECK(kVoocDetectMaxMs == 5200);
     for (auto p : {Proto::Vooc, Proto::SuperVooc, Proto::SuperVooc65}) {
         FakeCharger c;
         Engine e(c);
         const std::uint32_t t0 = c.now;
         CHECK(e.start(p, 5000, false) == Fail::None);
         for (int n = 0; n < 20000 && e.state() == State::Negotiating; ++n) c.run(e, 1);
-        CHECK(e.state() == State::Failed && e.fail() == Fail::NeedsLoad);
+        CHECK(e.state() == State::Failed && e.fail() == Fail::NoAnswer);
         CHECK(c.now - t0 <= kVoocDetectMaxMs + 150);
         CHECK(c.now - t0 <= k2::charger_test::kCutStepBudgetMs);
     }
@@ -1360,19 +1360,19 @@ static void vooc_silent_charger() {
     FakeCharger c;
     Engine e(c);
     CHECK(e.start(Proto::Vooc, 5000, false) == Fail::None);
-    c.run(e, 2900);
+    c.run(e, 5000);   // 2 listens and the rest between them: silent is called only after both wakes
     CHECK(e.state() == State::Negotiating);
     c.run(e, 30000);
-    CHECK(e.state() == State::Failed && e.fail() == Fail::NeedsLoad);
+    CHECK(e.state() == State::Failed && e.fail() == Fail::NoAnswer);
     CHECK(c.resets == 1);
 }
 
-static void svooc_silent_needs_load() {
+static void svooc_silent_no_answer() {
     FakeCharger c;
     Engine e(c);
     CHECK(e.start(Proto::SuperVooc, 5000, false) == Fail::None);
     c.run(e, 30000);
-    CHECK(e.state() == State::Failed && e.fail() == Fail::NeedsLoad);
+    CHECK(e.state() == State::Failed && e.fail() == Fail::NoAnswer);
 }
 
 static void vooc_overvoltage_aborts() {
@@ -1701,7 +1701,7 @@ int main() {
     vooc_wake_retries_until_the_adapter_clocks();
     vooc_wake_gives_up_after_the_last_try();
     vooc_silent_session_fits_the_derived_budget();
-    svooc_silent_needs_load();
+    svooc_silent_no_answer();
     vooc_overvoltage_aborts();
     std::printf("test_fc_engine: %d checks, %d failed\n", g_checks, g_failed);
     return g_failed ? 1 : 0;

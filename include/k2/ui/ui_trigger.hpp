@@ -286,7 +286,7 @@ inline const char *fail_short(fc::Fail f) {
     case fc::Fail::SourceLost: return "lost";
     case fc::Fail::Aborted: return "abort";
     case fc::Fail::Inline: return "load";
-    case fc::Fail::NeedsLoad: return "needs load";
+    case fc::Fail::NoAnswer: return "no answer";
     case fc::Fail::NoVoltage: return "handshake ok";
     case fc::Fail::Detected: return "detected";
     case fc::Fail::NoChange: return "no move";
@@ -311,7 +311,7 @@ inline void state_text(fc::State st, fc::Proto p, fc::Fail f, int target_mv, boo
     switch (st) {
     case fc::State::Negotiating: s.put(" WAIT "); put_volts(s, target_mv); break;
     case fc::State::Active:      s.put(" ACTIVE "); put_volts(s, target_mv); break;
-    default:                     s.put((f == fc::Fail::Detected || f == fc::Fail::NoVoltage) ? " " : " FAIL ").put(fail_short(f)); break;
+    default:                     s.put((f == fc::Fail::Detected || f == fc::Fail::NoVoltage || f == fc::Fail::NoAnswer) ? " " : " FAIL ").put(fail_short(f)); break;
     }
 }
 
@@ -341,7 +341,7 @@ inline const char *fail_long(fc::Fail f) {
     case fc::Fail::Overvoltage: return "VBUS too high: aborted";
     case fc::Fail::SourceLost: return "Charger lost";
     case fc::Fail::Aborted: return "Aborted";
-    case fc::Fail::NeedsLoad: return "Needs a load to wake";
+    case fc::Fail::NoAnswer: return "No answer to either wake";
     case fc::Fail::NoVoltage: return "Handshake ok (no voltage)";
     case fc::Fail::Detected: return "Adapter detected (no load)";
     case fc::Fail::NoChange: return "Acked, voltage did not move";

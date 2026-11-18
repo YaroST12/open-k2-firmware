@@ -1582,7 +1582,7 @@ void ChargerTestPage::build_grid(bool running_grid, bool note_cuts) {
     char scp_note[24] = {};   // "SCP cap 20V 6A": the row's label is the first two words
     if (report_card::scp_note(card, scp_note, sizeof scp_note)) oem.scp_cap = scp_note + 8;
     // "<=11.1V, 10.9A 121W claimed" / "stopped at 3.3s, ...": the SuperVOOC ceiling stage's result (Deep only; nothing when it did not
-    // run), and the VOOC family's ident the detection heard ("0xAC", every level)
+    // run), and the VOOC family's ident the detection heard ("0xA8", every level)
     char svooc_note[svooc_ceiling::kCapChars] = {};
     char ident_note[6] = {};
     const auto& ev = s_.runner_.evidence();
@@ -2157,6 +2157,10 @@ static FooterTone spec_footer(StrBuf<32>& f, int check, const specsec::Cell& c, 
             size_t len = 0;
             if (const auto rw = s_.runner_.sweep_view().apdo(uint8_t(st.algorithm), st.pos)) len = ctsweep::format_fold(rw->sum, nb);
             if (len) { f.put(std::string_view(nb, len)); return FooterTone::Caution; }
+        }
+        if (s_.detail_index_ >= 0 && static_cast<size_t>(s_.detail_index_) < steps.size()) {
+            const auto& st = steps[static_cast<size_t>(s_.detail_index_)];
+            if (result_layout::is_no_answer(st)) { f.put(trig::fail_long(fc::Fail::NoAnswer)); return FooterTone::Info; }   // 27 cells: the card carries ", unloaded"
         }
         f.put("Kept until the next start");
         return FooterTone::Info;

@@ -171,7 +171,8 @@ static void test_frame_start_detector() {
 }
 
 // What the engine counts: an all-ones frame is D- floating high under an adapter clock nobody answers, i.e. nothing heard;
-// the idents are 0xA8 (shared by VOOC / SVOOC / SVOOC65) and 0xAC / 0xA6 (VOOC).
+// the idents are 0xA8 (shared by VOOC / SVOOC / SVOOC65) and 0xAC / 0xA6 (VOOC); the detection listen takes the three openers
+// 0xA8 / 0x68 / 0x88 and their one-bit-shifted reads (a frame sampled one bit early or late).
 static void test_heard_and_ident() {
     CHECK(!vooc::heard(-1));
     CHECK(!vooc::heard(0x1FF));
@@ -179,6 +180,8 @@ static void test_heard_and_ident() {
     CHECK(vooc::heard(0x000));
     CHECK(vooc::is_ident(0xA8) && vooc::is_ident(0xAC) && vooc::is_ident(0xA6));
     CHECK(!vooc::is_ident(0x98) && !vooc::is_ident(0xFF) && !vooc::is_ident(0x82));
+    for (std::uint8_t op : {0xA8, 0x68, 0x88, 0x54, 0xD4, 0x34, 0xB4, 0x44, 0xC4}) CHECK(vooc::is_detect_opener(op));
+    for (std::uint8_t op : {0xAC, 0xA6, 0x98, 0x82, 0xFF, 0x00, 0x14}) CHECK(!vooc::is_detect_opener(op));
 }
 
 static void test_rx_samples_before_the_next_fall() {

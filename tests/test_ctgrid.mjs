@@ -430,6 +430,13 @@ test("the finished grid reads the VOOC family as watts levels", () => {
   assert.equal(lines(fam, { fold: false }).length, 3);
 });
 
+test("a VOOC family that was skipped as 'no answer' folds as No reply, not Skipped", () => {
+  const row = (alg) => ({ ...S(alg, 5000, "skip", { reason: "request failed", detail: 13 }), detail_reason: "no answer" });
+  const got = lines([row("vooc"), row("svooc"), row("svooc65"), S("fcp", 5000, "fail")], { fold: true, oemWatts: true });
+  assert.ok(got.some((l) => l === "No reply: VOOC:none FCP:none"), got.join(" | "));
+  assert.ok(!got.some((l) => /^Skipped/.test(l)), got.join(" | "));
+});
+
 test("a VOOC family that never answered folds as one word", () => {
   const fam = [S("vooc", 5000, "fail", { detail: 13 }), S("svooc", 5000, "skip", { reason: "request failed" }),
                S("svooc65", 5000, "skip", { reason: "request failed" }), S("fcp", 5000, "fail")];
@@ -438,15 +445,15 @@ test("a VOOC family that never answered folds as one word", () => {
   assert.ok(!got.some((l) => l.includes("SVOOC")), got.join(" | "));
 });
 
-// The engine's own words ride a skipped sibling too (the family shares the first row's detail): the title says "needs load",
+// The engine's own words ride a skipped sibling too (the family shares the first row's detail): the title says "no answer",
 // never the bare reason "request failed" the unit never produced itself.
 test("a skipped VOOC sibling reads the first row's detail, not 'request failed'", () => {
-  const nl = { detail_reason: "needs load (2 tries)" };
+  const nl = { detail_reason: "no answer" };
   const row = (alg, res) => ({ ...S(alg, 5000, res, { reason: REQ, detail: 13 }), detail_reason: nl.detail_reason });
   const fam = [row("vooc", "fail"), row("svooc", "skip"), row("svooc65", "skip")];
   const cells = CtGrid.layout(fam, { fold: false }).flatMap((r) => r.cells);
   assert.equal(cells.length, 3);
-  for (const c of cells) assert.ok(c.title.includes("needs load") && !c.title.includes("request failed"), c.title);
+  for (const c of cells) assert.ok(c.title.includes("no answer") && !c.title.includes("request failed"), c.title);
   // a plain skip with no engine detail keeps its reason
   const plain = CtGrid.layout([S("pps", 8000, "skip", { pos: 6, pdo: 3235656292, reason: REQ })], { fold: false })[0].cells[0];
   assert.match(plain.title, /request failed/);

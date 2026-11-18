@@ -181,6 +181,19 @@ static void test_the_vooc_family_counts_once() {
     CHECK_EQ(rc::folded(e, unsigned(G::Vooc)), true);   // nothing to show anyway: a None group is never listed
 }
 
+// A family that never clocked after either wake is a skip (grey), not a fail: it reads "no answer", never red.
+static void test_a_silent_vooc_family_is_grey_not_a_fail() {
+    rc::Card c;
+    using G = charger_test::Group;
+    for (G g : {G::Vooc, G::SuperVooc, G::SuperVooc65})
+        c.group[unsigned(g)] = {rc::GV::Skip, 0, uint8_t(fc::Fail::NoAnswer), uint8_t(charger_test::Reason::Request)};
+    CHECK_EQ(int(tn::group(c, unsigned(G::Vooc))), int(Tone::Skip));
+    const tn::Counts n = tn::counts(c);
+    CHECK_EQ(int(n.fail), 0);
+    CHECK_EQ(int(n.grey), 1);   // one family, one chip
+    CHECK_STR(rc::group_why(unsigned(G::SuperVooc), c.group[unsigned(G::SuperVooc)]), "no answer to either wake, unloaded");
+}
+
 int main() {
     test_a_tracking_deviation_is_a_caution();
     test_a_fold_is_a_caution();
@@ -188,5 +201,6 @@ int main() {
     test_rules();
     test_light_card_pd_is_green_legacy_is_noted();
     test_the_vooc_family_counts_once();
+    test_a_silent_vooc_family_is_grey_not_a_fail();
     return test_report("card_tone");
 }

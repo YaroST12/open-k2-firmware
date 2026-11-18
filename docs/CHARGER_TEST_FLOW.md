@@ -114,7 +114,7 @@ and the card (`result_layout`, `is_absent`), not as a full unit.
 | FCP, SCP | the ACCP register exchange was answered (an unanswered read or write aborts the row; SCP at 5 V ends as "detected" once every identifying read answered) | Fail, no handshake / no response |
 | AFC | the ping byte was answered | Fail, no response |
 | UFCS | the charger acknowledged our frames and sent its output capabilities | Fail, no handshake / no response |
-| VOOC, SVOOC, SVOOC65 | the adapter clocked its identification command (0xA8, 0xAC or 0xA6) after our wake: Pass "detected", the session ends at once and nothing is ever answered (no trigger, no level change). One session decides all three rows (below) | Fail, needs load (never clocked) or no response (frames, no ident); the other two family rows skip with the same reason |
+| VOOC, SVOOC, SVOOC65 | the adapter clocked its identification command (0xA8, 0x68 or 0x88, or the same byte shifted one bit) after our wake: Pass "detected", the session ends at once and nothing is ever answered (no trigger, no level change). One session decides all three rows (below) | Skip "no answer" (never clocked after either wake, not a fail) or Fail no response (frames, no opener); the other two family rows skip with the same words |
 | VIVO | the charger sent a reply frame (cmd 0x08) or its entry notice (cmd 0x55); any other frame, including the K2's own request echoed back through a D+/D- short, is ignored | Fail, no response |
 
 QC2 detection reads the D+/D- state, not the voltage: a DCP or BC1.2 charger keeps the lines shorted and D- stays at
@@ -138,13 +138,17 @@ aborts with `Overvoltage` and releases the lines), and the card and Results show
 
 - **One session for the family** (pattern `vooc-family-same-wake`): VOOC, SVOOC and SVOOC65 open with the same wake and
   the same ident (0xA8 on the 120 W brick), so one ident cannot tell the variants apart. The first family row that runs
-  decides the others: "detected" passes them, "needs load" (never clocked, 2 wakes) or "no response" (frames, no ident)
-  skips them with that reason. They keep their names and run no session. Cost on a charger that does not speak VOOC:
-  one session of 2 wakes (about 5.0 s plus the 500 ms hold, was 3 wakes and 10.5 s until 2026-11-15), instead of three.
+  decides the others: "detected" passes them, "no answer" (never clocked after both wakes) or "no response" (frames, no
+  opener) skips them with that reason. They keep their names and run no session. A charger that never clocked is silent
+  only after both wake shapes (the 80-step burst, then the 13-period train): each is listened to for 1.6 s with a 2.0 s
+  rest between, 5.2 s plus the wake plays and the 500 ms hold, once for the family. "No answer" is a skip, not a fail:
+  the grid folds the family into "No reply", the card tone and the summary count no fail. The device footer reads
+  "No answer to either wake"; the card, web and summary read "no answer to either wake, unloaded" (a charger that
+  speaks VOOC only with a load behind it looks the same, so the run cannot tell the two apart).
 - **VOOC family ident (every level, `Evidence::vooc_ident`).** The family detection listens only and ends at the first
-  ident command it hears (0xA8 / 0xAC / 0xA6, `fc::Engine::vooc_ident()` -> `fctrig::Status::ident` -> `Input::fc_ident`).
-  The Runner keeps it for a VOOC-family row that passes `detected`; Results shows it as a `VOOC id` row ("0xAC") beside
-  the rows' "detected", the run summary as "VOOC family ident 0xAC". One ident proves the family, not the variant. Not
+  opener it hears (0xA8, 0x68, 0x88 or their one-bit-shifted forms; the detection listen only, the handshake open is unchanged; `fc::Engine::vooc_ident()` -> `fctrig::Status::ident` -> `Input::fc_ident`).
+  The Runner keeps it for a VOOC-family row that passes `detected`; Results shows it as a `VOOC id` row ("0xA8") beside
+  the rows' "detected", the run summary as "VOOC family ident 0xA8". One ident proves the family, not the variant. Not
   journaled, not on the card. Behind the Link's inline latch (a drawn load or a sink's own Request: the only causes since 2026-11-15)
   the engine refuses the family, so neither the ident nor the Deep stage is reachable there (`test_fc_engine`
   `vooc_never_inline`).
@@ -192,7 +196,7 @@ aborts with `Overvoltage` and releases the lines), and the card and Results show
   (`scp_acked_write_with_flat_vbus_ends_early`), `test_charger_test` (`test_scp_ack_without_voltage_ends_early_and_skips_the_raises`).
   FCP and AFC need no such rule: FCP's Band phase times out in 3 s, AFC's phases already tolerate a late rise.
 - **A skipped sibling's words:** a unit's skipped rows carry `Reason::Request` and the first row's `Fail` in the detail (the VOOC
-  family: "needs load (2 tries)"). Readers say the detail's words, never the bare "request failed" (device detail line, run summary,
+  family: "no answer"). Readers say the detail's words, never the bare "request failed" (device detail line, run summary,
   web grid title).
 - **UFCS:** no answer to the opening exchange (`NoResponse`) skips the unit's other rows.
 - **VIVO:** a first VIVO row with no frame in its entry window (`NoResponse`) skips the other VIVO rows.
@@ -200,7 +204,7 @@ aborts with `Overvoltage` and releases the lines), and the card and Results show
 Host tests: `test_charger_test` (`test_vooc_family_shares_one_session`,
 `test_vivo_no_response_skips_the_other_vivo_rows`), `test_fc_engine` (`vooc_ident_is_detected_and_nothing_is_answered`,
 `vooc_other_commands_are_never_answered`, `vooc_all_ones_frame_is_nothing_heard`, `vooc_never_inline`,
-`vooc_stop_releases`, `vooc_wake_forms_alternate`).
+`vooc_stop_releases`, `vooc_wake_forms_alternate`, the opener set in `test_vooc`).
 
 ### OEM power levels by their watts (2026-11-18, host-tested)
 
@@ -261,7 +265,7 @@ legacy row that was in flight at a cut reads "source lost" (SCP 5 V, VOOC, SVOOC
   to the verdict): FCP 2.55 s, SCP 5 V 3.3 s, AFC 0.6 s (a raised level), VIVO 2.0 s, QC2 5 V 2.4 s, QC3 and QC3+ 5 V 3.6 s,
   UFCS 5 V 1.2 s: all fit; the silent worst cases (no handshake, handshake but no answer, no UFCS / VIVO reply, no Power_Ready) are
   held to the same budget by `test_fc_engine`, `test_fc_vivo` and `test_fc_ufcs`. The VOOC family (VOOC, SVOOC, SVOOC65) was the only one that did not (a silent session ran 10.5 s,
-  5.8 to 6.4 s per attempt before a cut hit it): its detection is now 2 wakes, 1.0 s listen, 3 s rest = 5.0 s
+  5.8 to 6.4 s per attempt before a cut hit it): its detection is now 2 tries, 1.6 s listen, 2.0 s rest = 5.2 s
   (`fc::kVoocDetectMaxMs`, tests `tests/test_fc_engine.cpp`, `tests/test_charger_test.cpp`). The exception is a class: any raised-target row the
   adapter never answers sits at 5 V until the row timeout (12 s, QC2 15 s), longer than one clean window. The SCP 10 V row is the one seen
   (a cut hit it at 46.4 s and the retry waited out the 12 s without a cut), and a VIVO source that sends its entry notice but acknowledges
@@ -289,7 +293,7 @@ itself reads a dip as a cut under way (`start()`, `restore()`: the 5 V gate is t
 engine failure lands on the poll of the fall's first sample. Still a stop: VBUS above the release level, VBUS under 1 V (no source), a dip
 that does not come back inside the window, or the same dip repeating more than the retry count. `Runner::preview` (one reading, used by
 the confirmation page and `tools/ct_start.py` preflight) refuses a dip like any other non-5 V reading; the UI and the script re-read before
-refusing. Host tests: `test_charger_test` (`test_cut_in_the_row_then_a_clean_retry_passes`, `test_several_cuts_in_a_row_then_a_clean_retry_passes`, `test_every_retry_cut_is_a_skip_not_a_fail`, `test_a_loss_that_does_not_come_back_in_the_window_is_a_fail`, `test_the_7s_cut_sequence_over_the_5v_steps_of_the_cuktech_run` `test_a_protocol_failure_after_a_clean_comeback_is_a_fail`, `test_a_silent_vooc_family_on_a_7s_cut_port_ends_needs_load`, `test_the_10_unit_run_over_every_cut_phase_ends_as_without_cuts`, `test_a_cut_in_the_first_baseline_waits_for_the_comeback` (the first cut in every 100 ms of the first 2 s, START inside the dark, the fall's first sample at 4.65 V), `test_a_baseline_dip_that_does_not_come_back_still_stops`; engine step times in `test_fc_engine`, `test_fc_vivo`, `test_fc_ufcs`).
+refusing. Host tests: `test_charger_test` (`test_cut_in_the_row_then_a_clean_retry_passes`, `test_several_cuts_in_a_row_then_a_clean_retry_passes`, `test_every_retry_cut_is_a_skip_not_a_fail`, `test_a_loss_that_does_not_come_back_in_the_window_is_a_fail`, `test_the_7s_cut_sequence_over_the_5v_steps_of_the_cuktech_run` `test_a_protocol_failure_after_a_clean_comeback_is_a_fail`, `test_a_silent_vooc_family_on_a_7s_cut_port_ends_no_answer`, `test_the_10_unit_run_over_every_cut_phase_ends_as_without_cuts`, `test_a_cut_in_the_first_baseline_waits_for_the_comeback` (the first cut in every 100 ms of the first 2 s, START inside the dark, the fall's first sample at 4.65 V), `test_a_baseline_dip_that_does_not_come_back_still_stops`; engine step times in `test_fc_engine`, `test_fc_vivo`, `test_fc_ufcs`).
 
 ## SCP and UFCS rows follow what the charger reported (2026-11-08)
 

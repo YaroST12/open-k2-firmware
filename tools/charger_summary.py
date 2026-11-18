@@ -138,6 +138,8 @@ def _vooc_family_lines(rows, sv, skipped, not_adv):
     if not any(s["result"] == "pass" for s in rows):
         if all(s["result"] == "skip" for s in rows):
             why = _skip_why(rows[0])
+            if why.startswith("no answer"):   # the engine's detail, not the bare reason (device words: report_card group_why)
+                why = "no answer to either wake, unloaded"
             (not_adv if why == "not advertised" else skipped.setdefault(why, [])).append("VOOC")
             return []
         return ["- VOOC: " + _step_text(next(s for s in rows if s["result"] != "skip"), None)]
@@ -384,7 +386,8 @@ def summarize_card(c):
         elif e.get("reason") == NO_QC3PLUS:
             out.append(f"- {name}: no QC3+")   # not folded into the "skipped" list; same words as the firmware's card text
         else:
-            skipped.setdefault(e.get("reason", ""), []).append(name)
+            no_answer = e.get("why", "").startswith("no answer")   # a silent VOOC family: the engine's words, not "request failed"
+            skipped.setdefault(e["why"] if no_answer else e.get("reason", ""), []).append(name)
     for why, names in skipped.items():
         out.append(f"- {', '.join(names)}: skipped" + (f", {why}" if why else ""))
     out += _xiaomi_card_lines((c.get("deep") or {}).get("xiaomi"))

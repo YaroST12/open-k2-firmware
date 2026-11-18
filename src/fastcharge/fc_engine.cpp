@@ -70,7 +70,7 @@ const char* name(Fail f) {
     static constexpr const char* const kNames[] = {
         "none", "need confirm", "over limit", "no power monitor", "busy", "unsupported",
         "no handshake", "no response", "voltage not reached", "overvoltage", "source lost", "aborted",
-        "PD or load active", "needs load", "handshake ok", "detected", "acked, no change",
+        "PD or load active", "no answer", "handshake ok", "detected", "acked, no change",
     };
     const auto i = static_cast<std::size_t>(f);
     return i < std::size(kNames) ? kNames[i] : "?";
@@ -1100,10 +1100,10 @@ void Engine::poll() {
     if (vooc::heard(f)) {
         ++vooc_frames_;
         const std::uint8_t cmd = vooc::frame_cmd(static_cast<std::uint16_t>(f));
-        if (vooc::is_ident(cmd)) { vooc_ident_ = cmd; return abort(Fail::Detected); }
+        if (vooc::is_detect_opener(cmd)) { vooc_ident_ = cmd; return abort(Fail::Detected); }
     }
     if (now - band_ms_ >= kVoocWakeListenMs) {
-        if (vooc_tries_ >= kVoocTries) return abort(vooc_frames_ > 0 ? Fail::NoResponse : Fail::NeedsLoad);
+        if (vooc_tries_ >= kVoocTries) return abort(vooc_frames_ > 0 ? Fail::NoResponse : Fail::NoAnswer);
         env_.set_dp(Drive::HiZ);        // rest: both lines idle, then another wake
         env_.set_dm(Drive::HiZ);
         go(Phase::VoocRest, kVoocRestMs);

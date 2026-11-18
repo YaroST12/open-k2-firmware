@@ -68,7 +68,7 @@ var K2Card = (function () {
   var VERDICT = ["none", "pass", "fail", "skip"];
   var FC_FAILS = ["none", "need confirm", "over limit", "no power monitor", "busy", "unsupported", "no handshake",
     "no response", "voltage not reached", "overvoltage", "source lost", "aborted", "PD or load active",
-    "needs load", "handshake ok", "detected", "acked, no change"];
+    "no answer", "handshake ok", "detected", "acked, no change"];
   var PD_ERRS = ["ok", "no source capabilities", "bad PDO position", "above the voltage cap", "bad voltage",
     "live sink attached", "busy", "PDO advertises no current"];
   var SINK_RESULTS = ["none", "ok", "rejected", "source busy", "timeout", "no GoodCRC", "hard reset", "soft reset",
@@ -530,6 +530,8 @@ var K2Card = (function () {
         if (detail >= 128 && detail - 128 < PD_ERRS.length) return PD_ERRS[detail - 128];
         if (detail < SINK_RESULTS.length) return SINK_RESULTS[detail];
       } else if (detail < FC_FAILS.length) {
+        if (FC_FAILS[detail] === "no answer" && (group === "VOOC" || group === "SVOOC" || group === "SVOOC65"))
+          return "no answer to either wake, unloaded";   // report_card.cpp group_why
         return FC_FAILS[detail];
       }
     }

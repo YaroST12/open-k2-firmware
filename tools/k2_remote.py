@@ -256,7 +256,7 @@ FC_PROTOS = ["qc2", "qc3", "qc3+", "afc", "fcp", "scp", "vooc", "svooc", "svooc6
 FC_STATES = ["idle", "negotiating", "active", "failed"]
 FC_FAILS = ["none", "need confirm", "over limit", "no power monitor", "busy", "unsupported", "no handshake",
             "no response", "voltage not reached", "overvoltage", "source lost", "aborted", "PD or load active",
-            "needs load", "handshake ok", "detected", "acked, no change"]
+            "no answer", "handshake ok", "detected", "acked, no change"]
 FC_OUTCOMES = ["-", "accepted", "rejected", "skipped"]
 FC_OP_STATUS, FC_OP_RESET, FC_OP_SCAN, FC_OP_TRIGGER = 0, 1, 2, 3
 FC_OP_VOOC = 4             # vooc-monitor: the passive inline VOOC monitor readout (see decode_vooc_summary)

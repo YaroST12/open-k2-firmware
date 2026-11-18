@@ -286,8 +286,9 @@ static void test_group_why_names() {
     CHECK_STR(rc::group_why(unsigned(ct::Group::Pd), r), k2::pd::result_name(k2::pd::SinkResult::Rejected));
     r.detail = uint8_t(k2::fc::Fail::Inline);
     CHECK_STR(rc::group_why(unsigned(ct::Group::Qc3), r), k2::fc::name(k2::fc::Fail::Inline));
-    r.detail = uint8_t(k2::fc::Fail::NeedsLoad);                   // the last enum values are named too
-    CHECK_STR(rc::group_why(unsigned(ct::Group::Vooc), r), "needs load");
+    r.detail = uint8_t(k2::fc::Fail::NoAnswer);                   // the last enum values are named too
+    CHECK_STR(rc::group_why(unsigned(ct::Group::Vooc), r), "no answer to either wake, unloaded");   // the family's long form
+    CHECK_STR(rc::group_why(unsigned(ct::Group::Qc3), r), "no answer");
     r.detail = uint8_t(k2::fc::Fail::NoVoltage);
     CHECK_STR(rc::group_why(unsigned(ct::Group::Vooc), r), "handshake ok");
     r.detail = uint8_t(k2::fc::Fail::Detected);

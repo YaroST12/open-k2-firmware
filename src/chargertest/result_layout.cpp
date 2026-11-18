@@ -17,6 +17,11 @@ namespace ct = charger_test;
 bool noted(const ct::Step& s) {
     return s.verdict == ct::Verdict::Skip && (s.reason == ct::Reason::Advertised || s.reason == ct::Reason::LightLevel);
 }
+// A VOOC family row skipped because no wake clocked an opener (the row carries fc::Fail::NoAnswer): it reads as "No reply".
+bool is_no_answer(const ct::Step& x) {
+    return x.verdict == ct::Verdict::Skip && x.reason == ct::Reason::Request && x.detail == uint8_t(fc::Fail::NoAnswer) &&
+           x.group >= ct::Group::Vooc && x.group <= ct::Group::SuperVooc65;
+}
 bool advertised(const ct::Step& s) { return s.verdict == ct::Verdict::Skip && s.reason == ct::Reason::Advertised && s.group == ct::Group::Pd; }
 bool caution(const ct::Step& s) {
     return s.verdict == ct::Verdict::Pass &&
@@ -312,7 +317,7 @@ bool is_absent(std::span<const ct::Step> s, A a) {
     for (const auto& x : s) {
         if (x.algorithm != a) continue;
         pass |= x.verdict == ct::Verdict::Pass;
-        all_none &= x.verdict == ct::Verdict::Skip && x.reason == ct::Reason::NoOffer;
+        all_none &= (x.verdict == ct::Verdict::Skip && x.reason == ct::Reason::NoOffer) || is_no_answer(x);
     }
     if (pass) return false;
     if (all_none) return true;

@@ -210,7 +210,7 @@ var CtGrid = (function () {
     return (t.pass || t.capped) ? "partial" : "fail";
   }
   function toneOf(s) { var t = tally(); count(t, s); return rollUp(t); }
-  // A skipped VOOC sibling carries its first row's failure as the engine's words ("needs load (2 tries)") under the bare reason
+  // A skipped VOOC sibling carries its first row's failure as the engine's words ("no answer") under the bare reason
   // "request failed": a cell's title says the words (the device's detail line and the summary say them too; its chip tag stays).
   function engineWhy(s) {
     var dr = s.raw && s.raw.detail_reason;
@@ -261,6 +261,8 @@ var CtGrid = (function () {
       var xs = of(a);
       if (!xs.length || xs.some(function (s) { return s.result === "pass"; })) return false;
       if (xs.every(function (s) { return s.result === "skip" && s.reason === "not advertised"; })) return true;
+      // a VOOC family row skipped because no wake clocked an opener reads "no reply" (result_layout.cpp is_no_answer)
+      if (has(VOOC_ALGS, a) && xs.every(function (s) { return s.result === "skip" && s.raw && /^no answer/.test(s.raw.detail_reason || ""); })) return true;
       return xs[0].result === "fail";
     }
     // The source offered no PD at all: every PD step is "not advertised" (a block with no chip that is not this was skipped).

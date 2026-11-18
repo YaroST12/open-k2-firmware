@@ -121,7 +121,7 @@ test("FH22 #18: the AVS pass stays green and shows the offered range", () => {
 
 test("FH22 #18: a protocol the charger never answered is grey with its reason, never red", () => {
   const b = K2Card.badges(K2Card.parseLink(golden.fh22_full.link).card);
-  const want = { AFC: "unsupported", FCP: "unsupported", SCP: "unsupported", VOOC: "needs load", VIVO: "no response" };
+  const want = { AFC: "unsupported", FCP: "unsupported", SCP: "unsupported", VOOC: "no answer to either wake, unloaded", VIVO: "no response" };
   for (const [n, why] of Object.entries(want)) {
     const x = b.find((y) => y.id === "grp:" + n);
     assert.equal(x.tone, "skip", n);
@@ -553,9 +553,9 @@ test("a Deep block this page cannot read leaves the card and says why", () => {
 
 test("the VOOC family is one group; its levels read in watts, claimed only from the Deep ceiling", () => {
   const card = JSON.parse(JSON.stringify(K2Card.parseLink(deepLink).card));
-  card.groups.VOOC = { verdict: "fail", max_mv: 0, reason: "needs load" };
+  card.groups.VOOC = { verdict: "fail", max_mv: 0, reason: "no answer to either wake, unloaded" };
   card.groups.SVOOC = { verdict: "pass", max_mv: 5000, detail: 15 };
-  card.groups.SVOOC65 = { verdict: "fail", max_mv: 0, reason: "needs load" };
+  card.groups.SVOOC65 = { verdict: "fail", max_mv: 0, reason: "no answer to either wake, unloaded" };
   // the golden's ceiling: stopped, 5.5 A at 11.2 V = 61.6 W
   assert.deepEqual(K2Card.voocLevels(card.deep.svooc).map((l) => l.label + ":" + l.state),
     ["VOOC 20W:not tested", "SVOOC 50W:claimed", "SVOOC 65W:not reached", "SVOOC 100W:not reached", "SVOOC 120W:not reached"]);

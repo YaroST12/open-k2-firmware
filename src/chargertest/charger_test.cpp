@@ -1599,7 +1599,10 @@ void Runner::track_cut(const Input& in) {
 // progress or has come back since the row's request: the verdict is kept, the row goes back to Pending and waits in Releasing for
 // the output (cut_resolve decides). A Lost always waits: its fall may not have shown in VBUS yet.
 bool Runner::cut_hold(const Input& in, Verdict v, Reason r, uint8_t detail) {
-    if (v != Verdict::Fail || cut_wait_ || index_ >= count_ || mode_ != Mode::Legacy || pd_owned_ || steps_[index_].group == Group::Pd) return false;
+    // A silent VOOC family is a skip, but a port that cut its output mid-session explains the silence the same way a failure's does.
+    const bool silent_family = v == Verdict::Skip && r == Reason::Request && detail == uint8_t(fc::Fail::NoAnswer) && index_ < count_ &&
+                               steps_[index_].group >= Group::Vooc && steps_[index_].group <= Group::SuperVooc65;
+    if ((v != Verdict::Fail && !silent_family) || cut_wait_ || index_ >= count_ || mode_ != Mode::Legacy || pd_owned_ || steps_[index_].group == Group::Pd) return false;
     if (r != Reason::Lost && r != Reason::Timeout && r != Reason::Request && r != Reason::Voltage) return false;
     if (std::max(row_hi_, in.vbus_mv) > kCutNoAboveMv) return false;
     // The engine's failure may land on the very poll that reads the fall's first sample (4.65 V, not yet under kCutMv): a dip that has
@@ -1673,13 +1676,13 @@ void Runner::finish_row(const Input& in, Verdict v, Reason r, uint8_t detail) {
         }
     env_.record(s);
     // pattern vooc-family-same-wake: VOOC, SVOOC and SVOOC65 open with the same wake and the K2 stops at the shared ident
-    // (it answers nothing), so the first family session that ended on the ident ("detected"), on nothing heard ("needs
-    // load") or on frames without an ident ("no response") decides the family's other rows: a pass for "detected", a skip
+    // (it answers nothing), so the first family session that ended on the ident ("detected"), on nothing heard ("no
+    // answer") or on frames without an ident ("no response") decides the family's other rows: a pass for "detected", a skip
     // with that reason otherwise. They keep their names and run no session of their own.
     const auto family = [](Group g) { return g >= Group::Vooc && g <= Group::SuperVooc65; };
     const auto why = static_cast<fc::Fail>(detail);
     if (family(s.group) && (r == Reason::Request || (v == Verdict::Pass && r == Reason::None)) &&
-        (why == fc::Fail::Detected || why == fc::Fail::NeedsLoad || why == fc::Fail::NoResponse))
+        (why == fc::Fail::Detected || why == fc::Fail::NoAnswer || why == fc::Fail::NoResponse))
         for (size_t n = 0; n < count_; ++n) {
             auto& o = steps_[n];
             if (o.verdict != Verdict::Pending || !family(o.group) || o.group == s.group) continue;
@@ -2965,7 +2968,9 @@ void Runner::poll_impl(Input& in, const pd::SourceCaps& caps) {
             return;
         }
         const auto group = s.group;
-        finish(in, Verdict::Fail, Reason::Request, group == Group::Pd ? static_cast<uint8_t>(in.pd.result) : static_cast<uint8_t>(in.fc_fail));
+        // A VOOC family that never clocked after either wake is "no answer": a skip, since an unloaded adapter may stay silent.
+        const bool no_answer = group >= Group::Vooc && group <= Group::SuperVooc65 && in.fc_fail == fc::Fail::NoAnswer;
+        finish(in, no_answer ? Verdict::Skip : Verdict::Fail, Reason::Request, group == Group::Pd ? static_cast<uint8_t>(in.pd.result) : static_cast<uint8_t>(in.fc_fail));
         if (cut_wait_) return;   // held as a port cut's casualty: its retry decides, so the family is not judged "never answered" yet
         // AFC / FCP / SCP the charger never answered (pattern qc-only-unacked-rise): the protocol is not spoken, so none of its
         // other levels can prove anything and none of them needs an engine session of its own.
