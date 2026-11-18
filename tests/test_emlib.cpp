@@ -221,7 +221,8 @@ static void test_fill_to_capacity() {
     CHECK_EQ(emrec::vdo(e.rec, 3), 0x40510000u + 41);
     CHECK_EQ(l.get(r.seq, e) ? 1 : 0, 1);
     CHECK_EQ(emrec::vdo(e.rec, 3), 0x40510000u + 5000);
-    for (int round = 0; round < 200; round++) {            // churn at capacity stays consistent
+    // 20 rounds, not 200: every round lists and reads all 140 files through littlefs, and (round * 37) % size already walks 20 spread-out slots.
+    for (int round = 0; round < 20; round++) {             // churn at capacity stays consistent
         const auto s = seqs(l);
         CHECK_EQ(int(l.remove(s[(round * 37) % s.size()])), int(emlib::Err::Ok));
         CHECK_EQ(int(l.save(cable(6000 + round)).err), int(emlib::Err::Ok));
