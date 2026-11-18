@@ -40,6 +40,7 @@
 #include "k2/battery/battery_hw.hpp"
 #include "k2/core/memstat.hpp"
 #include "k2/core/hw_revision.hpp"
+#include "k2/core/idle_hw.hpp"
 
 StubState g_stub;
 
@@ -277,6 +278,13 @@ bool begin_rescan() { g_stub.rdc_rescan_begins++; return g_stub.rdc_rescan_ok; }
 bool rescan_landing() { return g_stub.rdc_rescan_landing; }
 }  // namespace rdcomeback
 #endif
+
+namespace idle_hw {
+// The Display page reads and writes the idle settings; the real glue (src/core/idle_hw.cpp) also drives the hardware.
+static idle::Machine g_idle;
+const idle::Config &config() { return g_idle.config(); }
+void set_config(const idle::Config &c) { g_idle.set_config(c); }
+}  // namespace idle_hw
 
 namespace rescan {
 // The page's Refresh goes through here; the stub answers what the test set and counts the asks (the real one decides on the

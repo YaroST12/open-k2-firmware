@@ -5,6 +5,8 @@
 #include "k2/ui/readout_fmt.hpp"
 #include "k2/ui/trend.hpp"
 #include "k2/ui/uiprefs.hpp"
+#include "k2/ui/ui_display.hpp"
+#include "k2/core/idle_hw.hpp"
 #include "k2/ui/ui_lines.hpp"
 #include "k2/ui/ui_tools.hpp"
 #include "k2/ui/text/tools.hpp"
@@ -2123,6 +2125,7 @@ enum class SettingRow : uint8_t {
     Smoothing,
     IdleWake,
     TestLevel,
+    Display,
     SystemState,
     Memory,
     BootInfo,
@@ -2131,6 +2134,7 @@ enum class SettingRow : uint8_t {
 constexpr int kSettingsRows = static_cast<int>(SettingRow::Count);
 // Checked in both builds (K2_SCREENSHOT 0 and 1): the page's public constants must follow the enum.
 static_assert(kSettingsRows == SettingsPage::kRows);
+static_assert(static_cast<int>(SettingRow::Display) == SettingsPage::kDisplayRow);
 static_assert(static_cast<int>(SettingRow::SystemState) == SettingsPage::kSystemRow);
 static_assert(static_cast<int>(SettingRow::Memory) == SettingsPage::kMemoryRow);
 static_assert(static_cast<int>(SettingRow::BootInfo) == SettingsPage::kBootRow);
@@ -2214,13 +2218,13 @@ void SettingsPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
 #if K2_SCREENSHOT
         "Screenshot",
 #endif
-        "Smoothing", "Wake sleeping port", "Test level", "System state", "Memory", "Boot info"};
+        "Smoothing", "Wake sleeping port", "Test level", "Display", "System state", "Memory", "Boot info"};
     static constexpr Icon kIcons[kSettingsRows] = {
         Icon::Usb, Icon::Rotate, Icon::Keys,
 #if K2_SCREENSHOT
         Icon::Camera,
 #endif
-        Icon::Wave, Icon::Plug, Icon::Bolt, Icon::Chip, Icon::Chip, Icon::Report};
+        Icon::Wave, Icon::Plug, Icon::Bolt, Icon::Meter, Icon::Chip, Icon::Chip, Icon::Report};
     static constexpr const char *kPresets[smoothing::kPresetCount] = {"Off", "Low", "Medium", "High"};
     static constexpr const char *kPresetNotes[smoothing::kPresetCount] = {"Raw readings", "Light calming", "Balanced", "Steady, slower"};
     // charger_test::Level order (Medium 0, Light 1, Deep 2): the charger test's default level and what it runs.
@@ -2270,6 +2274,10 @@ void SettingsPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
         out.note = kLevelNotes[l];
         break;
     }
+    case SettingRow::Display:
+        out.tail = {self->display_tail_, uidisp::format_summary(self->display_tail_, idle_hw::config())};
+        out.note = "Brightness, dim, screen off";
+        break;
     case SettingRow::SystemState:
         out.chevron = true;
         out.note = "meter, USB, FUSB302, MCU";
@@ -2299,6 +2307,7 @@ void SettingsPage::update(uint32_t) {
                          row == SettingRow::SystemState      ? "Checks of every subsystem"
                          : row == SettingRow::Memory         ? "Stack headroom, RAM, flash"
                          : row == SettingRow::BootInfo       ? "Shared as QR codes"
+                         : row == SettingRow::Display        ? "Opens a settings page"
                          : row >= SettingRow::RotateButtons  ? "Remembered across boots"
                                                              : "Opens a settings page",
                          foot_, bg);
@@ -2351,6 +2360,9 @@ bool SettingsPage::on_event(Event e) {
             break;
         }
 #endif
+        case SettingRow::Display:
+            ctx_.ui->push_menu(Menu::Display, ctx_.now);
+            break;
         case SettingRow::SystemState:
             ctx_.ui->push_menu(Menu::Diag, ctx_.now);
             break;
@@ -2373,7 +2385,7 @@ bool SettingsPage::on_event(Event e) {
 
 Strip SettingsPage::labels() const {
     const auto row = static_cast<SettingRow>(sel_);
-    const bool opens = row < SettingRow::RotateButtons || row >= SettingRow::SystemState;
+    const bool opens = row < SettingRow::RotateButtons || row >= SettingRow::Display;
     const bool cycles = row == SettingRow::Smoothing || row == SettingRow::TestLevel;
     return setting_labels(base_labels(), opens ? sl::Open : cycles ? sl::Cycle : sl::Toggle);
 }
@@ -2423,6 +2435,135 @@ bool AutorotatePage::on_event(Event e) {
 }
 
 Strip AutorotatePage::labels() const { return setting_labels(base_labels(), sl::Apply); }
+
+// ---------------------------------------------------------------------------------------
+// Display submenu (backlight level, dim and screen-off timeouts)
+// ---------------------------------------------------------------------------------------
+
+void DisplayPage::enter() {
+    view_ = View::List;
+    sel_ = 0;
+}
+
+// A view change repaints the body: the row count and the title differ between the list and the pick lists.
+void DisplayPage::show(View v) {
+    view_ = v;
+    if (v == View::PickDim || v == View::PickOff) {
+        const idle::Config &c = idle_hw::config();
+        const int at = v == View::PickDim ? uidisp::index_of(uidisp::kDimAfter, c.dim_after_s) : uidisp::index_of(uidisp::kOffAfter, c.off_after_s);
+        pick_ = at < 0 ? 0 : at;   // a value set from the remote and not in the list starts on the first option
+        title_ = v == View::PickDim ? "Dim after" : "Screen off";
+    } else {
+        title_ = "Display";
+    }
+    if (!ctx_.blank) pg::clear_body(ctx_.content, kit::kBelowBar);
+    title_bar();
+    ctx_.rows.set_count(count());
+    ctx_.rows.select(cur());
+    invalidate();
+    update(ctx_.now);
+}
+
+void DisplayPage::draw_static() {
+    title_bar();
+    ctx_.rows.init(ctx_.content, kit::kBodyY, row_fn, this);
+    ctx_.rows.set_count(count());
+    ctx_.rows.select(cur());
+    foot_.invalidate();
+}
+
+void DisplayPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
+    static constexpr const char *kTitles[3] = {"Brightness", "Dim after", "Screen off after"};
+    static constexpr Icon kIcons[3] = {Icon::Meter, Icon::Clock, Icon::Clock};
+    const auto *self = static_cast<const DisplayPage *>(ctx);
+    const idle::Config &c = idle_hw::config();
+    if (self->view_ >= View::PickDim) {   // a pick list: the radio sits on the stored value
+        const bool dim = self->view_ == View::PickDim;
+        out.marker = kit::Marker::Radio;
+        out.state = (dim ? c.dim_after_s == uidisp::kDimAfter[static_cast<std::size_t>(i)]
+                         : c.off_after_s == uidisp::kOffAfter[static_cast<std::size_t>(i)]) ? 1 : 0;
+        out.text = dim ? uidisp::kDimNames[static_cast<std::size_t>(i)] : uidisp::kOffNames[static_cast<std::size_t>(i)];
+        return;
+    }
+    char *t = self->tail_[i];
+    const std::span<char> buf(t, sizeof self->tail_[i]);
+    out.marker = kit::Marker::Icon;
+    out.icon = kIcons[i];
+    out.text = kTitles[i];
+    if (i == 0) {
+        out.tail = {t, uidisp::format_percent(buf, c.brightness)};
+        out.tail_color = self->view_ == View::Adjust ? kFocus : kDim;
+        out.note = self->view_ == View::Adjust ? "Changes live" : "Backlight level";
+    } else {
+        out.tail = {t, uidisp::format_span(buf, i == 1 ? c.dim_after_s : c.off_after_s, false)};
+        out.note = i == 1 ? "Dims the backlight" : "Only with nothing plugged in";
+    }
+}
+
+void DisplayPage::update(uint32_t) {
+    title_badge(false);
+    ctx_.rows.select(cur());
+    ctx_.rows.draw(ctx_.now, ctx_.budget);
+    draw_footer_cached(ctx_.content, FooterTone::Info,
+                       view_ == View::Adjust ? "Applies at once" : "Remembered across boots", foot_);
+}
+
+bool DisplayPage::on_event(Event e) {
+    if (e.press != Press::Short) return false;
+    if (view_ == View::Adjust) {
+        if (e.button == Button::Plus || e.button == Button::Minus) {
+            idle::Config c = idle_hw::config();
+            c.brightness = uidisp::step_brightness(c.brightness, e.button == Button::Plus ? 1 : -1);
+            idle_hw::set_config(c);
+            update(ctx_.now);
+            return true;
+        }
+        if (e.button == Button::Ok || e.button == Button::Back) {
+            show(View::List);
+            return true;
+        }
+        return false;
+    }
+    if (e.button == Button::Plus || e.button == Button::Minus) {
+        cur() = std::clamp(cur() + (e.button == Button::Plus ? 1 : -1), 0, count() - 1);
+        update(ctx_.now);
+        return true;
+    }
+    if (e.button == Button::Ok) {
+        if (view_ == View::List) {
+            show(sel_ == 0 ? View::Adjust : sel_ == 1 ? View::PickDim : View::PickOff);
+            return true;
+        }
+        idle::Config c = idle_hw::config();
+        if (view_ == View::PickDim) c.dim_after_s = uidisp::kDimAfter[static_cast<std::size_t>(pick_)];
+        else c.off_after_s = uidisp::kOffAfter[static_cast<std::size_t>(pick_)];
+        idle_hw::set_config(c);
+        show(View::List);
+        return true;
+    }
+    if (e.button == Button::Back && view_ != View::List) {   // out of a pick list, not out of the page
+        show(View::List);
+        return true;
+    }
+    return false;
+}
+
+Strip DisplayPage::labels() const {
+    Strip l = base_labels();
+    if (view_ == View::Adjust) {
+        const uint8_t b = idle_hw::config().brightness;
+        l[Button::Minus] = uidisp::can_step(b, -1) ? sl::Dec : sl::DecDim;
+        l[Button::Plus] = uidisp::can_step(b, 1) ? sl::Inc : sl::IncDim;
+        l[Button::Ok] = sl::Done;
+        return l;
+    }
+    l = list_strip(l);
+    const int at = view_ >= View::PickDim ? pick_ : sel_;
+    if (at == 0) l[Button::Minus] = sl::UpDim;
+    if (at == count() - 1) l[Button::Plus] = sl::DnDim;
+    l[Button::Ok] = view_ == View::List ? (sel_ == 0 ? sl::Set : sl::Pick) : sl::Select;
+    return l;
+}
 
 // ---------------------------------------------------------------------------------------
 // USB link submenu (what enumerates at the next boot)

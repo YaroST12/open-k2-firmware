@@ -1579,8 +1579,8 @@ static void test_settings_test_level_row() {
     CHECK_EQ(g_stub.prefs.ct_level, 0);   // default Medium
     ui.context().keep.settings_sel = 0;
     ui.open_place(bench::Place::K2, kT0);
-    for (int i = 0; i < SettingsPage::kSystemRow - 1; i++) press(ui, Button::Plus, ButtonEvent::Short, kT0 + 10 + i);
-    CHECK_EQ(ui.context().keep.settings_sel, SettingsPage::kSystemRow - 1);
+    for (int i = 0; i < SettingsPage::kDisplayRow - 1; i++) press(ui, Button::Plus, ButtonEvent::Short, kT0 + 10 + i);   // Test level sits above Display
+    CHECK_EQ(ui.context().keep.settings_sel, SettingsPage::kDisplayRow - 1);
     CHECK_STR(label(ui, Button::Ok), "Cycle");
     const int sets = g_stub.prefs_sets;
     static constexpr uint8_t kNext[3] = {2, 1, 0};   // Deep, Light, Medium

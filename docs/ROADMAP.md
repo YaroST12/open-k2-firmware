@@ -993,12 +993,19 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
     "Brightness" slider with 5-10 steps, stored in prefs, applied live; full = today's level.
   - Validate: host tests for the setting; hardware: each step visibly different, no flicker on a phone camera, no
     audible whine; meter shows draw falling with brightness.
+  - Status 2026-11-18 (k2/idle-power, built only): PB7 is TMR4_CH2 PWM (inferred from the F1-family pin map; check that a
+    brightness step changes the K2's own draw), Settings > Display > Brightness in 10 % steps, `k2_remote.py power` (0x37).
 - **Screen timeout (powersave)**.
   - Do: Settings "Screen timeout" Off / 15 s / 30 s / 1 min / 5 min. After it, dim to a low level, then backlight off
     after a further period (document the choice). Any button wakes the screen and that press does nothing else. A running
     charger test only dims, never turns off.
   - Validate: host tests of the timeout state machine (dim, off, wake, the wake press swallowed, a running test never
     off); hardware: each timeout value observed, START is never pressed by a wake press.
+  - Status 2026-11-18 (k2/idle-power, built only): `k2::idle` machine Active -> Dim (30 %, 60 s) -> Off (300 s), host-tested.
+    With VBUS present it stops at Dim. Off = panel sleep, painting stopped, AHB /4 (60 MHz; /16 is excluded, APB would fall
+    under the inferred USB minimum). Settings > Display sets brightness, Dim after and Screen off after; the dim level is
+    remote-only. Remote 0x37: `k2_remote.py power [--brightness N] [--dim-brightness N] [--dim-after S] [--off-after S]
+    [--force auto|active|dim|off] [--hclk auto|1|2|4|8] [--wake-on-remote on|off]`.
 - **Low-power level API and lab op** (from the experiment's ladder).
   - Do: a `k2::lowpower` module with `enter(Level)` / `leave()` that restores clocks, peripheral clocks, FUSB302 POWER,
     INA226 config, LCD and USB; `k2_remote power-level N [--hold S]` and `--steps` (the old 6 x 6 s ladder for a meter).

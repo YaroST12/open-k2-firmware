@@ -99,6 +99,7 @@ PageIf *Ui::build_menu(Menu m) {
     }
     case Menu::Battery: return pages_.push<BatteryPage>(ctx_);
     case Menu::Memory: return pages_.push<MemoryPage>(ctx_);
+    case Menu::Display: return pages_.push<DisplayPage>(ctx_);
     default: return pages_.push<PdTriggerPage>(ctx_);
     }
 }
@@ -118,6 +119,7 @@ ListState Ui::list_state() {
         case Menu::Diagnosis: return top_as<DiagnosisPage>().list_state();
         case Menu::Battery: return top_as<BatteryPage>().list_state();
         case Menu::Memory: return top_as<MemoryPage>().list_state();
+        case Menu::Display: return top_as<DisplayPage>().list_state();
         default: return ListState{};
         }
     }
@@ -444,7 +446,7 @@ Ui::Session Ui::session() {
         case Menu::Battery:
             rows = list_state().count > 0;
             break;
-        case Menu::Spoof: case Menu::UsbLink: case Menu::Autorotate: case Menu::BlackBox: rows = true; break;
+        case Menu::Spoof: case Menu::UsbLink: case Menu::Autorotate: case Menu::BlackBox: case Menu::Display: rows = true; break;
         case Menu::Connection: {
             const ConnectionPage &cp = connection_page();
             s.sub = static_cast<uint8_t>((static_cast<uint8_t>(cp.tab()) & kSubTabMask) | (cp.popup_open() ? kSubPopup : 0) |

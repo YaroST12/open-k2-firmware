@@ -73,6 +73,8 @@ namespace sl {
     X(DnDim, "Dn", "", "", true)                                                                                       \
     X(Inc, "+", "", "", false)                                                                                         \
     X(Dec, "-", "", "", false)                                                                                         \
+    X(IncDim, "+", "", "", true)                                                                                       \
+    X(DecDim, "-", "", "", true)                                                                                       \
     X(IncBig, "+", "Big*", "", false)                                                                                  \
     X(DecBig, "-", "Big*", "", false)                                                                                  \
     X(Inc1V, "+", "1V", "", false)                                                                                     \
@@ -124,6 +126,7 @@ namespace sl {
     X(Off, "Off", "", "", false)                                                                                       \
     X(Cancel, "Cancel", "", "", false)                                                                                 \
     X(Host, "Host", "", "", false)                                                                                     \
+    X(Done, "Done", "", "", false)                                                                                     \
     X(NextDim, "Next", "", "", true)                                                                                   \
     X(SendDim, "Send", "", "", true)                                                                                   \
     /* OK verb with a long press */                                                                                    \

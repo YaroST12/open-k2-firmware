@@ -1305,8 +1305,9 @@ public:
     // The row count follows the build: the Screenshot row exists only with K2_SCREENSHOT=1 (the default is 0). ui_pages.cpp
     // static_asserts these against its SettingRow enum, and test_settings_rows0 pins the K2_SCREENSHOT=0 values.
     static constexpr int kScreenshotRows = K2_SCREENSHOT ? 1 : 0;
-    static constexpr int kRows = 9 + kScreenshotRows;
-    static constexpr int kSystemRow = 6 + kScreenshotRows, kMemoryRow = 7 + kScreenshotRows, kBootRow = 8 + kScreenshotRows;
+    static constexpr int kRows = 10 + kScreenshotRows;
+    static constexpr int kDisplayRow = 6 + kScreenshotRows;
+    static constexpr int kSystemRow = 7 + kScreenshotRows, kMemoryRow = 8 + kScreenshotRows, kBootRow = 9 + kScreenshotRows;
     static constexpr int16_t kIdHeadY = 25, kIdLineY = 46, kIdDashY = 63, kListY = 66;   // identity y22..65, the list under it
 private:
     static void row_fn(void *ctx, int index, bool focused, kit::RowSpec &out);   // reads the live settings: no value cache
@@ -1317,6 +1318,32 @@ private:
     uint8_t static_step_ = 0;
     uint8_t ct_level_ = 0;                // Test level: the stored default (uiprefs::Prefs::ct_level), read once in enter()
     mutable usbcfg::LinkNote usb_note_;   // the USB Link row's note, filled by row_fn and drawn at once
+    mutable char display_tail_[16];       // the Display row's summary ("100%, 60s/5m")
+};
+
+// Settings > Display: the backlight level and the two idle timeouts (k2/core/idle_hw.hpp, remembered in flash). OK on
+// Brightness opens an adjust mode where [+] / [-] step 10 % live; the other two rows open a pick-one list.
+class DisplayPage final : public PageBase {
+public:
+    explicit DisplayPage(UiContext &c) : PageBase(c, Page::Count, "Display", Icon::Meter) {}
+    enum class View : uint8_t { List, Adjust, PickDim, PickOff };   // zero = List
+    void enter() override;
+    void draw_static() override;
+    void update(uint32_t now_ms) override;
+    bool on_event(Event e) override;
+    Strip labels() const override;
+    void invalidate() override { ctx_.rows.invalidate(); foot_.invalidate(); }
+    ListState list_state() const { return ctx_.rows.state(); }
+    View view() const { return view_; }
+private:
+    static void row_fn(void *ctx, int index, bool focused, kit::RowSpec &out);
+    void show(View v);
+    int count() const { return view_ >= View::PickDim ? 5 : 3; }
+    int &cur() { return view_ >= View::PickDim ? pick_ : sel_; }
+    View view_ = View::List;
+    int sel_ = 0, pick_ = 0;
+    Elem foot_;
+    mutable char tail_[3][8];   // the three value texts
 };
 
 class AutorotatePage final : public PageBase {

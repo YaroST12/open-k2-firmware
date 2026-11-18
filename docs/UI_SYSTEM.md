@@ -889,6 +889,11 @@ walk-by screen with its own grid.
 
 Settings is the K2 place since Fieldbook (0.4): identity block on top, System state and Boot info rows at the end.
 
+Display (Settings row, tail `100%, 60s/5m`) opens a page of three rows: Brightness (OK enters an adjust mode where [+] / [-]
+step 10 % live, dim at a limit, OK or BACK leaves it), Dim after and Screen off after (pick lists; BACK keeps the old value).
+Renders: `mock_settings_display.png`, `mock_display.png`, `mock_display_adjust.png`, `mock_display_dim_pick.png`,
+`mock_display_off_pick.png`.
+
 Renders: `mock_settings.png`, `mock_settings_end.png`, `mock_usblink.png`, `mock_autorotate.png`, `mock_place_k2.png`.
 
 | diverges | proposal |
