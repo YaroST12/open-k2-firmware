@@ -38,8 +38,8 @@ static ct::Step row(G g, A a, unsigned pos, unsigned mv, unsigned ma = 1000, boo
     return s;
 }
 // A plan shaped like the Baseus FH22 run, in the order the planner lays it out with the default unit order: Fcp, Afc, Vooc,
-// SuperVooc, then the PD rows (a fixed 20 V hunt, the SPR AVS APDO when the late list brought it, one PPS APDO with its levels,
-// the 11 V / 20 V hunts and the full-current row), Qc2, Qc3, UFCS, and the low PPS level of PdLow last.
+// SuperVooc, then the PD rows (the SPR AVS APDO when the late list brought it, one PPS APDO with its levels and the full-current
+// row, then the Xiaomi unit: its chain row and the two modes the chain unlocked), Qc2, Qc3, UFCS, and the low PPS level of PdLow last.
 static std::vector<ct::Step> fh22(bool avs) {
     std::vector<ct::Step> v;
     for (unsigned i = 0; i < 3; ++i) v.push_back(row(G::Fcp, A::Fcp, 0, 5000 + 4000 * i, 0));
@@ -48,14 +48,14 @@ static std::vector<ct::Step> fh22(bool avs) {
     v.push_back(row(G::SuperVooc, A::SuperVooc, 0, 5000)); v.push_back(row(G::SuperVooc, A::SuperVooc, 0, 10000));
     const unsigned fixed[] = {5000, 9000, 12000, 15000, 20000};
     for (unsigned i = 0; i < 5; ++i) v.push_back(row(G::Pd, A::Pd3Fixed, i + 1, fixed[i]));
-    v.push_back(row(G::Pd, A::Pd3Fixed, 5, 20000, 6000, false, true));            // the fixed 20 V 6 A hunt
     if (avs)
         for (unsigned i = 0; i < 5; ++i) v.push_back(row(G::Pd, A::SprAvs, 7, 9000 + 3000 * i, 1000, i != 0, false, true));
     const unsigned lv[] = {11000, 21000, 11000, 8000};
     for (unsigned i = 0; i < 4; ++i) v.push_back(row(G::Pd, A::Pps, 6, lv[i], 1000, i != 0));
-    v.push_back(row(G::Pd, A::Pps, 6, 11000, 6000, false, true));                 // PPS 11 V 6 A hunt (Turbo 6A)
-    v.push_back(row(G::Pd, A::Pps, 6, 20000, 6000, false, true));                 // PPS 20 V 6 A hunt
     v.push_back(row(G::Pd, A::Pps, 6, 21000, 5000));                              // the full-current row
+    v.push_back(row(G::Pd, A::Pd3Fixed, 0, 0, 0, false, true));                   // the Xiaomi chain row
+    v.push_back(row(G::Pd, A::Pps, 6, 11000, 5000, false, true));                 // a mode it unlocked: PPS 11 V 5 A
+    v.push_back(row(G::Pd, A::Pps, 6, 20000, 5000, false, true));                 // and PPS 20 V 5 A
     for (unsigned i = 0; i < 3; ++i) v.push_back(row(G::Qc2, A::Qc2, 0, 5000 + 3500 * i, 0, i != 0));
     for (unsigned i = 0; i < 5; ++i) v.push_back(row(G::Qc3, A::Qc3, 0, 5000 + 700 * i, 0, i != 0));
     const unsigned uf[] = {5000, 9000, 11000, 5000, 12000, 20000};
@@ -116,8 +116,8 @@ static void arm(Vol& v, const std::vector<ct::Step>& steps, std::uint32_t run = 
     CHECK_EQ(int(v.j->begin(run, kOpt, evidence(), steps)), int(cj::Err::Ok));
 }
 
-// A fresh plan made by the real planner (the same step list the grid reads since 98e2f39): a Xiaomi-style source list with two
-// PPS APDOs, so the plan carries the two Mi 6 A hunt rows (11 V 6 A on the first APDO, 20 V 6 A on the 5-21 V one).
+// A fresh plan made by the real planner (the same step list the grid reads since 98e2f39): a source list with two PPS APDOs; the
+// Pd unit ends with the Xiaomi chain row.
 struct PlanEnv final : ct::Env {
     pd::Err request_pd(pd::Choice) override { return pd::Err::NoCaps; }
     fc::Fail request_fc(fc::Proto, int, bool, int) override { return fc::Fail::None; }
@@ -180,8 +180,8 @@ static void test_section_mapping() {
         CHECK_EQ(int(cj::section_of(row(ct::group(g), g, 0, 5000))), int(S::Qc));
     for (const auto g : {A::Vooc, A::SuperVooc, A::SuperVooc65, A::Vivo})
         CHECK_EQ(int(cj::section_of(row(ct::group(g), g, 0, 5000))), int(S::Oem));
-    CHECK_EQ(int(cj::section_of(row(G::Pd, A::Pd3Fixed, 5, 20000, 6000, false, true))), int(S::Oem));   // a 6 A hunt row is a vendor mode
-    CHECK_EQ(int(cj::section_of(row(G::Pd, A::Pps, 6, 11000, 6000, false, true))), int(S::Oem));
+    CHECK_EQ(int(cj::section_of(row(G::Pd, A::Pd3Fixed, 0, 0, 0, false, true))), int(S::Oem));   // the Xiaomi unit is a vendor mode
+    CHECK_EQ(int(cj::section_of(row(G::Pd, A::Pps, 6, 11000, 5000, false, true))), int(S::Oem));
     CHECK_EQ(int(cj::section_of(row(G::Ufcs, A::Ufcs, 0, 5000))), int(S::Ext));
     // The layout hash is the plan's shape, not how a row went: a verdict leaves it, a moved level changes it, the seed is the section.
     auto v = fh22(true);
@@ -192,7 +192,7 @@ static void test_section_mapping() {
     v[pps].mv = uint16_t(v[pps].mv + 20);
     CHECK_EQ(cj::layout_sig(S::Pps, v) != h, true);
     CHECK_EQ(cj::section_rows(fh22(true), S::Pps), 11u); CHECK_EQ(cj::section_rows(fh22(false), S::Pps), 6u);
-    CHECK_EQ(cj::section_rows(fh22(true), S::Oem), 3u + 3u);                     // vooc, two super vooc, three hunts
+    CHECK_EQ(cj::section_rows(fh22(true), S::Oem), 3u + 3u);                     // vooc, two super vooc, the Xiaomi chain row and two modes
 }
 
 static void test_roundtrip() {
@@ -256,12 +256,12 @@ static void test_a_late_avs_list_rewrites_only_the_pps_section() {
     v.j->note_plan(steps);
     CHECK_EQ(v.j->pending(), false);
 }
-static void test_dropping_the_turbo_rows_rewrites_only_the_oem_section() {
+static void test_dropping_the_xiaomi_rows_rewrites_only_the_oem_section() {
     Vol v;
     auto steps = fh22(true);
     arm(v, steps);
     const Snap a = snap(v);
-    steps = without_hunts(steps);                                 // Turbo 6A not offered: the hunt rows drop out of the plan
+    steps = without_hunts(steps);                                 // the Xiaomi rows drop out of the plan
     v.j->note_plan(steps);
     CHECK_EQ(int(v.settle(steps)), 0);
     CHECK_EQ(changed(a, snap(v)) == "h.rec,oem.sec", true);
@@ -271,7 +271,7 @@ static void test_dropping_the_turbo_rows_rewrites_only_the_oem_section() {
     v.j->adopt(r);                                                // the resumed run goes on writing what it changes
     // Rows addressed by index inside a section: the rows after the dropped ones in the other sections did not move.
     CHECK_EQ(cj::section_rows(steps, S::Oem), 3u); CHECK_EQ(cj::section_rows(steps, S::Pps), 11u);
-    // Every hunt row gone and a plan with none at all: the section file goes, the header says zero rows.
+    // Every vendor row gone and a plan with none at all: the section file goes, the header says zero rows.
     steps.erase(std::remove_if(steps.begin(), steps.end(), [](const ct::Step& s) { return cj::section_of(s) == S::Oem; }), steps.end());
     v.j->note_plan(steps);
     CHECK_EQ(int(v.settle(steps)), 0);
@@ -1079,7 +1079,7 @@ static void test_phase_marker_maps_through_sections() {
     CHECK_EQ(int(r.phase), int(cj::Phase::Request));
     CHECK_EQ(r.steps[r.phase_index].hunt, true); CHECK_EQ(r.steps[r.phase_index].mv, 20000); CHECK_EQ(int(r.steps[r.phase_index].algorithm), int(A::Pps));
     // A final result for the row voids it.
-    steps[hunt].verdict = ct::Verdict::Skip; steps[hunt].reason = ct::Reason::NotUnlocked;
+    steps[hunt].verdict = ct::Verdict::Skip; steps[hunt].reason = ct::Reason::CableLimit;
     v.commit(steps, hunt);
     v.j->replay(r); CHECK_EQ(int(r.phase), int(cj::Phase::None));
     // A marker for a row still pending stands even when a later row of its section has a result: the units run in the user's
@@ -1122,7 +1122,7 @@ static void test_the_header_carries_the_plan_order() {
     CHECK_EQ(total, steps.size());
     for (size_t k = 0; k < total; ++k) CHECK_EQ(b[4 + cj::kHeaderBase + k], order[k]);
     for (size_t k = total; k < cj::kOrderBytes; ++k) CHECK_EQ(b[4 + cj::kHeaderBase + k], 0xFF);
-    // Replay puts the rows back in exactly that order (the FH22 plan: the 6 A hunts land before their APDO's full-current row).
+    // Replay puts the rows back in exactly that order (the FH22 plan: the Xiaomi rows sit between the PD rows and the QC rows, apart from their section).
     v.reboot();
     cj::Replay r; v.j->replay(r);
     CHECK_EQ(r.found, true); CHECK_EQ(rows_are(r, steps), true);
@@ -1152,42 +1152,47 @@ static void test_the_header_carries_the_plan_order() {
     x.reboot(); x.j->replay(rr);
     CHECK_EQ(rr.found, true); CHECK_EQ(rows_are(rr, moved), true);   // the moved order is what comes back
 }
-// ROADMAP 2026-11-09 "Charger-test journal keeps its own row order": a resume mid-PD (Mi 6 A rows in the plan) must rebuild the
-// steps in the planner's step-list order - the order the run executes and the grid shows - not an order re-derived from the
-// rows. Mid-PD the runner can mark a hunt row "gone" in place (adopt_list: the re-announced list dropped the 6 A offer, so the
-// row keeps its place with pos=0/pdo=0, Skip NoOffer); the journal must put it back exactly there.
+// ROADMAP 2026-11-09 "Charger-test journal keeps its own row order": a resume mid-PD must rebuild the steps in the planner's
+// step-list order - the order the run executes and the grid shows - not an order re-derived from the rows. The Xiaomi chain row
+// inserts its mode rows behind itself at run time (Runner::insert_row, a plan change); the journal must put them back exactly there.
 static void test_a_resume_mid_pd_keeps_the_planners_step_order() {
-    // Guard: an untouched fresh plan round-trips in its own order.
+    // Guard: an untouched fresh plan round-trips in its own order; it carries the chain row and no mode row yet.
     {
         Vol v;
         const auto fresh = planner_plan();
-        CHECK_EQ(hunt_at(fresh, 11000) < fresh.size(), true);
-        CHECK_EQ(hunt_at(fresh, 20000) < fresh.size(), true);
+        CHECK_EQ(hunt_at(fresh, 0) < fresh.size(), true);
+        CHECK_EQ(hunt_at(fresh, 11000), fresh.size());
         arm(v, fresh);
         v.reboot();
         cj::Replay r; v.j->replay(r);
         CHECK_EQ(r.found, true); CHECK_EQ(rows_are(r, fresh), true);
     }
-    // Mid-PD: the fixed rows passed, the 20 V 6 A hunt was answered by a list without its offer and marked gone in place,
-    // and a phase marker sits at the 11 V 6 A hunt before its above-5 V request.
+    // Mid-PD: the fixed rows passed, the chain finished and put two mode rows behind its row (PPS 11 V 5 A on the first APDO,
+    // 20 V 5 A on the 5-21 V one); the first passed, and a phase marker sits at the second before its above-5 V request.
     Vol v;
     auto live = planner_plan();
     arm(v, live);
     for (size_t n = 0; n < 5; ++n) { live[n].verdict = ct::Verdict::Pass; live[n].measured_mv = live[n].mv; }
     CHECK_EQ(int(v.commit(live, 0)), 0);
-    const size_t gone = hunt_at(live, 20000);
-    CHECK_EQ(gone < live.size(), true);
-    live[gone].pos = 0; live[gone].pdo = 0; live[gone].verdict = ct::Verdict::Skip; live[gone].reason = ct::Reason::NoOffer;
-    CHECK_EQ(int(v.commit(live, gone)), 0);
-    const size_t hunt11 = hunt_at(live, 11000);
-    CHECK_EQ(hunt11 < live.size(), true);
-    CHECK_EQ(int(v.j->phase(cj::Phase::Request, live, hunt11)), 0);
+    const size_t chain = hunt_at(live, 0);
+    CHECK_EQ(chain < live.size(), true);
+    live[chain].verdict = ct::Verdict::Pass; live[chain].reason = ct::Reason::MiChain; live[chain].detail = k2::mi_unlock::kCodeVerified;
+    ct::Step m11 = row(G::Pd, A::Pps, 6, 11000, 5000, false, true), m20 = row(G::Pd, A::Pps, 7, 20000, 5000, false, true);
+    live.insert(live.begin() + long(chain) + 1, {m11, m20});
+    v.j->note_plan(live);
+    CHECK_EQ(int(v.settle(live)), 0);
+    const size_t hunt11 = hunt_at(live, 11000), hunt20 = hunt_at(live, 20000);
+    CHECK_EQ(hunt11, chain + 1); CHECK_EQ(hunt20, chain + 2);
+    live[hunt11].verdict = ct::Verdict::Pass; live[hunt11].measured_mv = 11000;
+    CHECK_EQ(int(v.commit(live, hunt11)), 0);
+    CHECK_EQ(int(v.j->phase(cj::Phase::Request, live, hunt20)), 0);
     v.reboot();
     cj::Replay r; v.j->replay(r);
     CHECK_EQ(r.found, true);
-    CHECK_EQ(rows_are(r, live), true);   // the resumed step order equals the fresh plan's order
+    CHECK_EQ(rows_are(r, live), true);   // the resumed step order equals the live plan's order, the inserted rows included
     CHECK_EQ(int(r.phase), int(cj::Phase::Request));
-    CHECK_EQ(r.steps[r.phase_index].hunt, true); CHECK_EQ(r.steps[r.phase_index].mv, 11000u);
+    CHECK_EQ(r.steps[r.phase_index].hunt, true); CHECK_EQ(r.steps[r.phase_index].mv, 20000u);
+    CHECK_EQ(int(r.steps[chain].reason), int(ct::Reason::MiChain)); CHECK_EQ(r.steps[chain].detail, k2::mi_unlock::kCodeVerified);
 }
 // plan_pending() is what the Runner waits for before an above-5 V request: only a change of the plan itself counts.
 static void test_plan_pending_ignores_verdicts() {
@@ -1231,7 +1236,7 @@ int main() {
     test_a_resume_mid_pd_keeps_the_planners_step_order();
     test_the_header_carries_the_plan_order(); test_plan_pending_ignores_verdicts();
     test_section_mapping();
-    test_a_late_avs_list_rewrites_only_the_pps_section(); test_dropping_the_turbo_rows_rewrites_only_the_oem_section();
+    test_a_late_avs_list_rewrites_only_the_pps_section(); test_dropping_the_xiaomi_rows_rewrites_only_the_oem_section();
     test_a_verdict_rewrites_only_its_section_and_not_the_header(); test_a_pump_writes_one_file_and_its_cost_is_bounded();
     test_power_cut_mid_section_rewrite(); test_an_old_layout_is_discarded_not_read(); test_a_bad_section_makes_the_run_not_resumable();
     test_a_resumed_run_keeps_writing_only_what_changed(); test_phase_marker_maps_through_sections(); test_note_plan_finds_changed_sections();

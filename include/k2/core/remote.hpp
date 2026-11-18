@@ -61,7 +61,7 @@ public:
     remote::Status charger_level(uint8_t level); // the level of the next charger run (charger_test::Level, below kLevelCount)
     remote::ChargerCableReply charger_cable(const ctcable::Choice* set);   // cable identity of the START dialog (null = read)
     remote::ChargerSvoocCapReply charger_svooc_cap(const uint8_t* set);    // SVOOC ceiling stage: mode of the next run (null = read) and the latest result
-    remote::ChargerHuntReply charger_hunt(uint8_t slot) const;   // evidence of a refused 6 A hunt row (read-only)
+    remote::ChargerHuntReply charger_hunt(uint8_t slot) const;   // retired: always count 0 (the 6 A hunt rows are gone)
     remote::Status press(uint8_t button, uint16_t ms);
     remote::StateInfo state();
     [[gnu::noinline]] remote::SessionInfo session();   // GET_STATE part 1: Ui::session() on the wire (a read)

@@ -292,7 +292,7 @@ TEST_REASONS = ["none", "disabled", "not advertised", "over voltage cap", "not i
                 "rebooted during request", "rebooted during handover", "EPR entry refused", "no contract",
                 "source shut off (needs replug)", "no PD after re-attach", "VBUS cut, source recovered", "blocked by PD",
                 "no QC3+ response", "rebooted 3x", "needs external power", "PD gave up before START", "Class A only (12 V max)",
-                "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target", "withdrawn by source", "wrong voltage on 5V contract", "needs load", "floored above target", "step resolution", "HID-cable loop: 5V lock", "advertised", "light run: not asked", "port cuts without load", "output folds back"]
+                "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target", "withdrawn by source", "wrong voltage on 5V contract", "needs load", "floored above target", "step resolution", "HID-cable loop: 5V lock", "advertised", "light run: not asked", "port cuts without load", "output folds back", "Xiaomi chain"]
 TEST_MAX_STEPS = 112  # Runner's bounded storage: pd::kMaxPdos * 6 + 46
 # fastcharge::Protocol in enum order (include/k2/fastcharge/fastcharge_classify.hpp)
 FC_NAMES = ["...", "NO INPUT", "NO QUICK", "DCP 5V", "QC3.0", "QC2.0 5V", "QC2.0 9V", "QC2.0 12V",
@@ -1544,6 +1544,16 @@ def cmd_ping(link, a):
             raise
     return info
 
+def mark_mi_flags(rows):
+    """A firmware that flags its Xiaomi rows (flags bit 6) flags its chain row whenever a PD unit runs: when any row of the run
+    carries the flag, the flag decides for every row ("mi": False on the others), so a plain full-current PPS row that asks 6 A
+    (an over-5 A cable) is never read as an older firmware's 6 A probe (step_label.is_hunt)."""
+    if any(r.get("mi") for r in rows):
+        for r in rows:
+            r.setdefault("mi", False)
+    return rows
+
+
 def decode_charger_test(p):
     if len(p) < 15:
         raise FrameError("short charger-test metadata")
@@ -1601,7 +1611,7 @@ def decode_charger_test(p):
     for i in range(n):
         code, pos, flags, mv, ma, measured, result, why, detail, pdo = struct.unpack_from("<BBBHHHBBBI", p, header + 16 * i)
         if (code >= (len(TEST_ALGORITHMS) if modern else 10) or pos > 11 or result >= len(TEST_RESULTS) or
-                why >= reasons or flags & ~0x3F or (result == 4 and why == 0)):   # bits 0-4 + bit 5: a deep-sweep row
+                why >= reasons or flags & ~0x7F or (result == 4 and why == 0)):   # bits 0-4, bit 5 a deep-sweep row, bit 6 Xiaomi
             raise FrameError("invalid charger-test row")
         group = TEST_ALGORITHM_GROUPS[code] if modern else code
         protocol = TEST_GROUPS[group]
@@ -1630,6 +1640,8 @@ def decode_charger_test(p):
             detail_reason = EPR_DETAILS[detail]
         elif detail == 161 and group == 0:   # older firmware: kDetailSweep marker, no flag bit, points not on the wire
             detail_reason = "deep sweep"
+        elif why == TEST_REASONS.index("Xiaomi chain") and group == 0:   # the chain row: the detail is how the 0x2717 chain ended
+            detail_reason = step_label.mi_chain_text(detail)
         elif detail and why == 46:   # StepResolution: the detail is the measured move in mV, not a code
             detail_reason = f"{detail} mV move"
         elif detail:
@@ -1647,6 +1659,8 @@ def decode_charger_test(p):
                "result": TEST_RESULTS[result], "reason": TEST_REASONS[why],
                "detail": detail, "detail_reason": detail_reason, "raw_pdo": pdo,
                "continuous": bool(flags & 1), "avs": bool(flags & 2), "sweep": bool(flags & 0x20)}
+        if flags & 0x40:
+            row["mi"] = True   # the Xiaomi unit (step_label.is_hunt); an older firmware never sets the bit (its 6 A rows are inferred)
         if (flags >> 2) & 7:
             row["attempts"] = (flags >> 2) & 7
         if modern:
@@ -2262,6 +2276,7 @@ def _charger_test_export(link, a):
                 page["start"] != len(rows) or page["count"] != min(1 if query else 2, meta["total"] - len(rows))):
             raise ResultsChanged("charger-test results changed or page did not advance; retry results")
         rows.extend(page["steps"])
+    mark_mi_flags(rows)
     end = decode_charger_test(link.call(CMD_CHARGER_TEST, query).payload)
     if end != meta:
         raise ResultsChanged("charger-test results changed during export; retry results")

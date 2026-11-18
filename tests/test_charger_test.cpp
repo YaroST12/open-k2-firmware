@@ -152,36 +152,20 @@ struct Fake final : ct::Env {
     std::vector<uint32_t> entry_times;   // `now` of every EPR entry attempt
     int reject_mv = 0; std::vector<uint32_t> reject_times;   // a SPR request at reject_mv is Rejected (the 6 A over-offer probe)
     // A Xiaomi-style source (SVID 0x2717 listed): the auth chain completes at auth_at (0 = never); until then the sink reports
-    // xiaomi_svid without xiaomi_authed. Every hunt request notes its time and whether the chain was done when it went out.
+    // xiaomi_svid without xiaomi_authed.
     bool xiaomi_svid = false; uint32_t auth_at = 0;
-    std::vector<uint32_t> hunt_times; std::vector<bool> hunt_authed;
-    std::vector<unsigned> hunt_apdo_ma;   // the advertised limit of the slot each hunt Request referred to (the list in force at that moment)
-    // CUKTECH-style unlock: the moment the chain finishes (auth_at) the source announces auth_caps (PPS APDOs at 6 A) as its new list.
+    // CUKTECH-style unlock: the moment the chain finishes (auth_at) the source announces auth_caps (raised limits) as its new list.
     bool auth_caps_on = false; pd::SourceCaps auth_caps; uint32_t auth_caps_delay_ms = 0;   // ... that long after the chain finished
-    // A source that does not offer the 6 A of a hunt row: it Rejects the request (reject_hunts) or never answers it (silent_hunts).
-    bool reject_hunts = false, silent_hunts = false;
-    // pattern reject-then-reduced-list: reannounce_ms after the source Rejected a hunt Request it announces reannounce_caps (the
-    // same list or a shorter one). 100 = before the runner has looked at the Reject, 600 = while the hunt row is being released.
-    uint32_t reannounce_ms = 0, reannounce_at = 0; pd::SourceCaps reannounce_caps;
-    // A Xiaomi bank that answers the 6 A hunt Request with a Hard Reset (Xiaomi 20K, 2026-11-07): the Hard Reset comes 100 ms after
-    // the Request, the list is dark for reset_dark_ms, then comes back as the fixed PDOs only (hr_short_ms long, the chain re-runs
-    // meanwhile: listed, not authed) and then in full again, authed.
+    // A Xiaomi bank that answers a Request with a Hard Reset (pattern preauth-list-after-reset, Xiaomi 20K 2026-11-07): the first
+    // hr_left Requests at hr_mv on slot hr_pos are taken, then the source resets 100 ms later; the list is dark for reset_dark_ms, then comes back
+    // as the fixed PDOs only (hr_short_ms long, the chain re-runs meanwhile: listed, not authed) and then in full again, authed.
     // The sink forgets the SVID on a Hard Reset and learns it again with the list (svid_back_at).
-    bool hunt_hr = false; uint32_t hr_short_ms = 0, hr_full_at = 0, svid_back_at = 0; pd::SourceCaps hr_full;
-    // The sink's trace of the chain and of the last Request, as a scripted source and sink would leave it (in.xm points here; a test
-    // sets in.xm = nullptr for a page that has no trace). A hunt Request is recorded like the real sink does at queue time.
+    bool hunt_hr = false; int hr_mv = 20000, hr_pos = 7, hr_left = 1; uint32_t hr_short_ms = 0, hr_full_at = 0, svid_back_at = 0; pd::SourceCaps hr_full;
+    // The sink's trace of the chain, as a scripted source and sink would leave it (in.xm points here; a test sets in.xm = nullptr
+    // for a page that has no trace): the list in force when the chain finished (pre) and the finishing step (8 or 0x0A).
     pd::XiaomiTrace xm;
-    bool xm_reannounce = false, xm_in_chain = false, hold_hunts = false;   // caps re-announced after the auth / Request left inside the chain / the chain guard never lets it go
-    uint8_t xm_last_step = 0;
-    std::vector<ct::HuntEvidence> evidence_seen;   // what hunt_evidence() was called with, in call order
-    void hunt_evidence(const ct::Step&, const ct::HuntEvidence& e) override { evidence_seen.push_back(e); }
-    void trace_hunt_request(const pd::Choice& c) {
-        if (hold_hunts) { xm.req_held = true; return; }
-        const pd::Pdo& d = caps.pdos[c.pos - 1];
-        ++xm.req_n; xm.req_held = false; xm.req_pos = c.pos; xm.req_pdo = d.raw; xm.req_type = d.type; xm.req_mv = c.mv; xm.req_ma = c.ma;
-        xm.req_caps = caps.num_pdos; xm.req_at = in.now; xm.req_in_chain = xm_in_chain;
-        xm.answer = reject_hunts ? pd::ReqAnswer::Reject : pd::ReqAnswer::None; xm.answer_at = reject_hunts ? in.now + 30 : 0;
-    }
+    bool xm_reannounce = false;   // caps re-announced after the auth
+    uint8_t xm_last_step = 0, xm_finish = 8;
     void begin_cut_entry() {
         spr_caps = caps; caps = epr_caps; caps.epr_partial = true; caps.num_pdos = 6;
         for (unsigned n = 6; n < 11; ++n) caps.pdos[n] = {};
@@ -218,8 +202,6 @@ struct Fake final : ct::Env {
         if (!alive()) return pd::Err::Busy;
         ++pd_requests; choices.push_back(c); req_times.push_back(in.now);
         out_on = false; ka_at = ka_end = 0;   // a new Request ends the scripted output and the keep-alive of the old one
-        if (c.hunt) { hunt_times.push_back(in.now); hunt_authed.push_back(in.pd.xiaomi_authed);
-                      hunt_apdo_ma.push_back(c.pos >= 1 && c.pos <= caps.num_pdos ? caps.pdos[c.pos - 1].max_ma : 0u); if (c.pos >= 1 && c.pos <= caps.num_pdos) trace_hunt_request(c); }
         if (c.pos == 0 || (c.pos >= 8 && !in.pd.epr_mode && epr_caps.valid)) {
             entry_times.push_back(in.now);
             int& resets = c.pos == 0 ? entry_resets_base : entry_resets_row;
@@ -240,14 +222,8 @@ struct Fake final : ct::Env {
             --epr_row_hr; reset_at = in.now + 30; in.pd.state = pd::SinkState::Requesting; in.pd.result = pd::SinkResult::None; in.pd.held = true;
             return pd::Err::Ok;
         }
-        if (hunt_hr && c.hunt) {   // the Request is taken, then the source resets
-            reset_at = in.now + 100; in.pd.state = pd::SinkState::Requesting; in.pd.result = pd::SinkResult::None; in.pd.held = true;
-            return pd::Err::Ok;
-        }
-        if (silent_hunts && c.hunt) { in.pd.state = pd::SinkState::Requesting; in.pd.result = pd::SinkResult::None; in.pd.held = true; return pd::Err::Ok; }
-        if (reject_hunts && c.hunt) {
-            reject_times.push_back(in.now); in.pd.state = pd::SinkState::Ready; in.pd.result = pd::SinkResult::Rejected;
-            if (reannounce_ms) reannounce_at = in.now + reannounce_ms;
+        if (hunt_hr && hr_left > 0 && int(c.mv) == hr_mv && int(c.pos) == hr_pos) {   // the Request is taken, then the source resets
+            --hr_left; reset_at = in.now + 100; in.pd.state = pd::SinkState::Requesting; in.pd.result = pd::SinkResult::None; in.pd.held = true;
             return pd::Err::Ok;
         }
         if (reject_mv && int(c.mv) == reject_mv && c.pos < 8) {   // the source Rejects the request and keeps the old contract
@@ -466,9 +442,11 @@ struct Fake final : ct::Env {
     std::vector<std::array<unsigned, 3>> replans;
     void replan(unsigned follow, unsigned withdrawn, unsigned back) override { replans.push_back({follow, withdrawn, back}); }
     std::vector<bool> record_quiet;   // Runner::quiet() at the moment of each record() (a row's verdict is decided while it is in flight)
+    uint32_t mi_chain_at = 0;   // when the Xiaomi chain row was recorded
     void record(const ct::Step& s) override {
         if (!alive()) return;
         records.push_back(s);
+        if (s.reason == ct::Reason::MiChain && !mi_chain_at) mi_chain_at = in.now;
         if (rn) record_quiet.push_back(rn->quiet());
         if (jr && rn) {
             jr->note(rn->steps(), size_t(&s - rn->steps().data()));
@@ -581,6 +559,12 @@ struct Fake final : ct::Env {
             in.now += step_ms;
             in.lines_free = lines_free_now();
             in.pd.xiaomi_svid = xiaomi_svid && in.now >= svid_back_at; in.pd.xiaomi_authed = in.pd.xiaomi_svid && auth_at && in.now >= auth_at;
+            if (in.pd.xiaomi_authed && !xm.n_pre && caps.valid) {   // the sink keeps the list in force when the chain finished
+                xm.n_pre = uint8_t(std::min<size_t>(caps.num_pdos, xm.pre.size()));
+                for (size_t n = 0; n < xm.n_pre; ++n) xm.pre[n] = caps.pdos[n].raw;
+                xm.finish = xm_finish;
+            }
+            if (!in.pd.xiaomi_authed) { xm.n_pre = 0; xm.finish = 0; }   // a Hard Reset cleared the chain: the next finish records again
             if (auth_caps_on && in.pd.xiaomi_authed && in.now >= auth_at + auth_caps_delay_ms) { auth_caps_on = false; caps = auth_caps; xm_reannounce = true; }
             xm.authed = in.pd.xiaomi_authed; xm.authed_at = xm.authed ? auth_at : 0; xm.reannounced = xm.authed && xm_reannounce;
             xm.last_step = xm_last_step; xm.opener_sent = xiaomi_svid;
@@ -686,7 +670,6 @@ struct Fake final : ct::Env {
             }
             if (reset_at && in.now >= reset_at) { reset_at = 0; source_hard_reset(); }
             if (hr_full_at && in.now >= hr_full_at) { hr_full_at = 0; caps = hr_full; }
-            if (reannounce_at && in.now >= reannounce_at) { reannounce_at = 0; caps = reannounce_caps; }
             if (dip_until) { if (in.now < dip_until) in.vbus_mv = 3000; else { dip_until = 0; in.vbus_mv = 5000; } }
             if (latched) { in.vbus_mv = 0; caps.valid = false; in.pd.state = pd::SinkState::Idle; in.pd.held = false; in.pd.mv = 5000; }
             if (low_until) { if (in.now < low_until) in.vbus_mv = gone ? 0 : 4450; else { low_until = 0; in.vbus_mv = 5000; if (late_session_ms) late_session_at = in.now + late_session_ms; } }
@@ -765,15 +748,16 @@ static void test_plan_and_run() {
     read_only(r, f);
     unsigned fixed = 0, pps = 0, skips = 0;
     for (const auto& s : r.steps()) {
+        if (ct::is_mi_chain(s)) { CHECK_EQ(s.algorithm, A::Pd3Fixed); continue; }
         fixed += s.algorithm == A::Pd3Fixed;
         skips += s.verdict == ct::Verdict::Skip;
         if (s.algorithm == A::Pps) {
-            // The 6 A hunt probes carry ma = 6000; the full-current row of each APDO asks its advertised 3.2 A.
-            ++pps; if (!s.hunt) CHECK_EQ(s.ma == 1000 || s.ma == 3200, true);
+            // The full-current row of each APDO asks its advertised 3.2 A.
+            ++pps; CHECK_EQ(s.ma == 1000 || s.ma == 3200, true);
             CHECK_EQ(s.mv >= 5000 && s.mv <= (s.pos == 6 ? 11000 : 21000), true);
         }
     }
-    CHECK_EQ(fixed, 5); CHECK_EQ(pps, 16); CHECK_EQ(skips, 3); CHECK_EQ(r.steps().size(), 65);   // 40 legacy rows (Class B included) and the vendor rows, the PD rows + 2 hunt rows (11V6 on the first APDO, 20V6 on the 5-21 V one) + 2 full-current rows (11V 3.2A, 20V 3.2A) + 2 step-walk rows (one per APDO)
+    CHECK_EQ(fixed, 5); CHECK_EQ(pps, 14); CHECK_EQ(skips, 3); CHECK_EQ(r.steps().size(), 64);   // 40 legacy rows (Class B included) and the vendor rows, the PD rows + 2 full-current rows (11V 3.2A, 20V 3.2A) + 2 step-walk rows (one per APDO) + the Xiaomi chain row (the 6 A hunt rows retired 2026-11-18)
     f.tick(r, 200000);
     CHECK_EQ(r.state(), ct::State::Done);
     read_only(r, f);
@@ -873,11 +857,20 @@ static void test_paint_blocked_needs_flight_and_an_engine_window() {
     CHECK_EQ(flight > 0, true); CHECK_EQ(gap_ticks > 0, true);
     CHECK_EQ(r.paint_blocked(true), false);           // a finished run
 }
-// The 6 A hunt rows of a plan, in plan order.
-static std::vector<ct::Step> hunt_rows(const ct::Runner& r) {
+// The Xiaomi unit's rows of a plan, in plan order: the chain row (pos 0) and the mode rows the chain row put behind it.
+static std::vector<ct::Step> mi_rows(const ct::Runner& r) {
     std::vector<ct::Step> out;
     for (const auto& s : r.steps()) if (s.hunt) out.push_back(s);
     return out;
+}
+static std::vector<ct::Step> mi_mode_rows(const ct::Runner& r) {
+    std::vector<ct::Step> out;
+    for (const auto& s : r.steps()) if (ct::is_mi_mode(s)) out.push_back(s);
+    return out;
+}
+static const ct::Step* mi_chain_row(const ct::Runner& r) {
+    for (const auto& s : r.steps()) if (ct::is_mi_chain(s)) return &s;
+    return nullptr;
 }
 // A CUKTECH-like list (hardware 2026-11-06, before the Xiaomi auth chain): 5/9/12/15 V 3 A, 20 V 5 A, PPS 5-11 V 5 A, PPS 5-20 V 5 A.
 // `apdo_ma` = the PPS APDOs' advertised current: 5000 before the unlock, 6000 after it (the source re-announces them at 6 A). A 6 A
@@ -890,74 +883,43 @@ static pd::SourceCaps cuktech_caps(unsigned apdo_ma = 5000) {
     c.pdos[6] = pd::decode_pdo(0xc0000000 | (200u << 17) | (50u << 8) | (apdo_ma / 50));
     return c;
 }
-static void test_hunt_runs_on_the_pps_apdo_that_covers_the_voltage() {
+// Every SPR plan ends its Pd unit with one Xiaomi chain row: nothing requested, no 6 A row, no fixed hunt rows (2026-11-18).
+static void test_mi_chain_row_is_planned_once_last_of_the_pd_unit() {
     Fake f; f.caps = cuktech_caps(); ct::Runner r(f);
     CHECK_EQ(r.start(f.caps, kPd, f.in, true), ct::Reason::None);
-    const auto h = hunt_rows(r);
-    // 11 V 6 A on the first APDO that covers it (pos 6), 20 V 6 A on the 5-20 V APDO (pos 7); the fixed 20 V PDO gets no 6 A row:
-    // the fixed PDO never offers 6 A (the charger answers Reject) and the card would carry that as noise.
-    CHECK_EQ(h.size(), 2);
-    if (h.size() == 2) {
-        CHECK_EQ(h[0].algorithm, A::Pps); CHECK_EQ(h[0].pos, 6); CHECK_EQ(h[0].mv, 11000); CHECK_EQ(h[0].ma, 6000);
-        CHECK_EQ(h[1].algorithm, A::Pps); CHECK_EQ(h[1].pos, 7); CHECK_EQ(h[1].mv, 20000); CHECK_EQ(h[1].ma, 6000);
-        CHECK_EQ(h[0].verdict, ct::Verdict::Pending); CHECK_EQ(h[1].verdict, ct::Verdict::Pending);
+    const auto m = mi_rows(r);
+    CHECK_EQ(m.size(), 1u);
+    if (m.size() == 1) {
+        CHECK_EQ(ct::is_mi_chain(m[0]), true); CHECK_EQ(m[0].verdict, ct::Verdict::Pending);
+        CHECK_EQ(m[0].mv, 0); CHECK_EQ(m[0].ma, 0); CHECK_EQ(m[0].pdo, 0u);
     }
-    for (const auto& s : r.steps()) if (s.algorithm == A::Pd3Fixed) CHECK_EQ(s.ma != 6000, true);
+    size_t last_pd = 0, chain = SIZE_MAX;
+    const auto st = r.steps();
+    for (size_t i = 0; i < st.size(); ++i) {
+        if (ct::unit_of(st[i]) == ct::Unit::Pd) last_pd = i;
+        if (ct::is_mi_chain(st[i])) chain = i;
+        CHECK_EQ(st[i].ma <= 5000, true);   // no over-ask is planned anywhere
+    }
+    CHECK_EQ(chain, last_pd);
+    // The fixed rows alone still carry it; a plan without PD rows does not.
+    Fake g; g.caps = cuktech_caps(); ct::Runner rg(g);
+    CHECK_EQ(rg.start(g.caps, {.selected = ct::bit(A::Pd3Fixed)}, g.in, true), ct::Reason::None);
+    CHECK_EQ(mi_rows(rg).size(), 1u);
+    Fake q; q.caps = cuktech_caps(); ct::Runner rq(q);
+    rq.start(q.caps, {.selected = ct::bit(A::Qc2)}, q.in, true);
+    CHECK_EQ(mi_rows(rq).size(), 0u);
 }
-// The preview (rows, runnable, estimate) counts what the run will do: a 6 A hunt row the list does not advertise is dropped at request
-// time on a source that never showed the Xiaomi chain, so it is no row and no estimated time; with the chain seen it ends as a
-// "not unlocked" skip (a row, but no time); a list that advertises 6 A keeps it runnable.
-static void test_preview_does_not_count_hunt_rows_the_run_drops() {
-    Fake f; f.caps = cuktech_caps(5000);
-    ct::Runner r(f);
+// The preview counts the chain row as a test only on a source that lists SVID 0x2717 (the modes are found at run time).
+static void test_preview_counts_the_chain_row_with_the_svid() {
+    Fake f; f.caps = cuktech_caps(); ct::Runner r(f);
     CHECK_EQ(r.start(f.caps, kPd, f.in, true), ct::Reason::None);
-    const auto planned = r.steps().size(), hunts = hunt_rows(r).size();
-    CHECK_EQ(hunts, 2);
     const auto pv = ct::Runner::preview(f.caps, kPd, f.in);
-    CHECK_EQ(pv.total, planned - hunts);   // the two dropped rows are not counted
-    {   // the same list with 6 A advertised: the hunt rows run
-        Fake g; g.caps = cuktech_caps(6000);
-        ct::Runner rg(g);
-        CHECK_EQ(rg.start(g.caps, kPd, g.in, true), ct::Reason::None);
-        const auto pvg = ct::Runner::preview(g.caps, kPd, g.in);
-        CHECK_EQ(pvg.total, rg.steps().size());
-        CHECK_EQ(pvg.runnable > pv.runnable, true);
-        CHECK_EQ(pvg.estimate_ms > pv.estimate_ms, true);
-    }
-    {   // the chain was seen: the unadvertised rows stay as skips, with no estimated time
-        Fake x; x.caps = cuktech_caps(5000); x.in.pd.xiaomi_svid = true;
-        const auto pvx = ct::Runner::preview(x.caps, kPd, x.in);
-        CHECK_EQ(pvx.total, planned);
-        CHECK_EQ(pvx.skipped, pv.skipped + hunts);
-        CHECK_EQ(pvx.runnable, pv.runnable);
-        CHECK_EQ(pvx.estimate_ms, pv.estimate_ms);
-    }
-}
-static void test_fixed_only_source_keeps_the_fixed_20v_hunt() {
-    Fake f; f.caps = cuktech_caps(); f.caps.num_pdos = 5; f.caps.pdos[5] = f.caps.pdos[6] = {};
-    ct::Runner r(f);
-    CHECK_EQ(r.start(f.caps, kPd, f.in, true), ct::Reason::None);
-    const auto h = hunt_rows(r);
-    CHECK_EQ(h.size(), 1);
-    if (h.size() == 1) { CHECK_EQ(h[0].algorithm, A::Pd3Fixed); CHECK_EQ(h[0].pos, 5); CHECK_EQ(h[0].mv, 20000); CHECK_EQ(h[0].ma, 6000); }
-}
-static void test_fixed_20v_hunt_stays_when_no_apdo_reaches_20v() {
-    Fake f; f.caps = cuktech_caps(); f.caps.num_pdos = 6; f.caps.pdos[6] = {};   // only the 5-11 V APDO
-    ct::Runner r(f);
-    CHECK_EQ(r.start(f.caps, kPd, f.in, true), ct::Reason::None);
-    const auto h = hunt_rows(r);
-    CHECK_EQ(h.size(), 2);
-    if (h.size() == 2) {
-        CHECK_EQ(h[0].algorithm, A::Pd3Fixed); CHECK_EQ(h[0].mv, 20000);
-        CHECK_EQ(h[1].algorithm, A::Pps); CHECK_EQ(h[1].mv, 11000);
-    }
-}
-static void test_fixed_20v_hunt_stays_when_the_pps_rows_are_not_selected() {
-    Fake f; f.caps = cuktech_caps(); ct::Runner r(f);
-    CHECK_EQ(r.start(f.caps, {.selected = ct::bit(A::Pd3Fixed)}, f.in, true), ct::Reason::None);
-    const auto h = hunt_rows(r);
-    CHECK_EQ(h.size(), 1);
-    if (h.size() == 1) { CHECK_EQ(h[0].algorithm, A::Pd3Fixed); CHECK_EQ(h[0].mv, 20000); }
+    CHECK_EQ(pv.total, r.steps().size());
+    Fake x; x.caps = cuktech_caps(); x.in.pd.xiaomi_svid = true;
+    const auto pvx = ct::Runner::preview(x.caps, kPd, x.in);
+    CHECK_EQ(pvx.total, pv.total);
+    CHECK_EQ(pvx.runnable, pv.runnable + 1);
+    CHECK_EQ(pvx.skipped + 1, pv.skipped);
 }
 // The full-current PPS row: the APDO's top voltage at its whole advertised current (clamped to the cable), after the APDO's
 // other rows. A non-hunt row: it asks what the APDO offers, not the OEM 6 A.
@@ -1054,11 +1016,11 @@ static void test_pps_full_current_row_of_a_2a_apdo() {
     CHECK_EQ(rows.size(), 1);
     if (rows.size() == 1) { CHECK_EQ(rows[0].mv, 20000); CHECK_EQ(rows[0].ma, 2000); }
 }
-static void test_pps_full_current_row_follows_the_apdos_rows_and_hunt() {
+static void test_pps_full_current_row_follows_the_apdos_rows() {
     Fake f; f.caps = cuktech_caps(); f.in.cable_mv = 20000; f.in.cable_ma = 5000; f.in.cable_observed = true;
     ct::Runner r(f);
     CHECK_EQ(r.start(f.caps, kPd, f.in, true), ct::Reason::None);
-    // Per APDO: the five 1 A targets, the 6 A hunt where it covers 11 / 20 V, then the full-current row last.
+    // Per APDO: the five 1 A targets, then the full-current row last (no 6 A hunt rows: the Xiaomi unit tests what the chain unlocks).
     const auto& st = r.steps();
     for (unsigned pos : {6u, 7u}) {
         int last = -1, hunt = -1, full = -1, top = -1;
@@ -1068,7 +1030,7 @@ static void test_pps_full_current_row_follows_the_apdos_rows_and_hunt() {
             last = int(i);
             if (st[i].hunt) hunt = int(i); else if (st[i].ma > 1000) full = int(i); else top = int(i);
         }
-        CHECK_EQ(full >= 0, true); CHECK_EQ(full, last); CHECK_EQ(hunt >= 0 && hunt < full, true); CHECK_EQ(top < full, true);
+        CHECK_EQ(full >= 0, true); CHECK_EQ(full, last); CHECK_EQ(hunt, -1); CHECK_EQ(top < full, true);
         if (full >= 0) { CHECK_EQ(st[full].mv, pos == 6 ? 11000 : 20000); CHECK_EQ(st[full].ma, 5000); }
     }
 }
@@ -1109,205 +1071,155 @@ static void test_pps_full_current_rows_never_overflow_the_plan() {
     for (const auto& s : mr.steps()) full += s.algorithm == A::Pps && !s.hunt && s.ma > 1000 && s.verdict != ct::Verdict::Skip;
     CHECK_EQ(full, 6);
 }
-// One run of the CUKTECH-like source with the Xiaomi flags given; returns the Fake after the run ended.
-// `apdo_ma`: what the PPS APDOs advertise (6000 = the source already offers the 6 A the hunt rows ask for).
-static Fake* xiaomi_run(Fake& f, ct::Runner& r, bool svid, uint32_t auth_at, unsigned apdo_ma = 6000) {
-    f.caps = cuktech_caps(apdo_ma); f.xiaomi_svid = svid; f.auth_at = auth_at;
+// ---- the Xiaomi unit at run time (SVID 0x2717 chain, the list before against the list re-announced after it) ----
+// A list from raw PDO words (positions 1..n).
+static pd::SourceCaps caps_of(std::initializer_list<uint32_t> words) {
+    pd::SourceCaps c; c.valid = true; c.spec_rev = 2; c.active_cc = 1; c.raw_header = 0x7181;
+    size_t n = 0;
+    for (const uint32_t w : words) c.pdos[n++] = pd::decode_pdo(w);
+    c.num_pdos = uint8_t(n);
+    return c;
+}
+// One run of `before` with the chain as given: svid listed, the chain finishing at auth_at (0 = never), and `after` announced
+// the moment it finishes (nullptr = the list stays as it is).
+static Fake* mi_run(Fake& f, ct::Runner& r, const pd::SourceCaps& before, bool svid, uint32_t auth_at, const pd::SourceCaps* after = nullptr) {
+    f.caps = before; f.xiaomi_svid = svid; f.auth_at = auth_at;
+    if (after) { f.auth_caps_on = true; f.auth_caps = *after; }
     r.start(f.caps, kPd, f.in, true);
     f.tick(r, 200000);
     CHECK_EQ(r.state(), ct::State::Done);
     return &f;
 }
-static void test_hunt_waits_for_the_xiaomi_auth_chain() {
-    // Reference: no SVID 0x2717, the hunt rows go out as soon as their turn comes.
-    Fake base; ct::Runner rb(base); xiaomi_run(base, rb, false, 0);
-    CHECK_EQ(base.hunt_times.size(), 2);
-    const uint32_t t0 = base.hunt_times[0];
-    // The chain completes 1 s after the first hunt row's turn: the row waits and then goes out with the chain done.
-    Fake a; ct::Runner ra(a); xiaomi_run(a, ra, true, t0 + 1000);
-    CHECK_EQ(a.hunt_times.size(), 2);
-    CHECK_EQ(a.hunt_authed[0], true); CHECK_EQ(a.hunt_authed[1], true);
-    CHECK_EQ(a.hunt_times[0] >= t0 + 1000, true); CHECK_EQ(a.hunt_times[0] <= t0 + 1000 + 600, true);
-    // Chain already done: no delay at all.
-    Fake d; ct::Runner rd(d); xiaomi_run(d, rd, true, 1);
-    CHECK_EQ(d.hunt_times.size(), 2); CHECK_EQ(d.hunt_times[0], t0);
-    // A source that lists the SVID but never finishes the chain: the wait is bounded, the row still runs (a Reject is its verdict).
-    Fake n; ct::Runner rn(n); xiaomi_run(n, rn, true, 0);
-    CHECK_EQ(n.hunt_times.size(), 2); CHECK_EQ(n.hunt_authed[0], false);
-    // The budget runs from the moment the row is next (its predecessor's release, ~0.5 s of steady 5 V before the row).
-    CHECK_EQ(n.hunt_times[0] >= t0 + ct::kXiaomiAuthWaitMs - 1000, true); CHECK_EQ(n.hunt_times[0] <= t0 + ct::kXiaomiAuthWaitMs + 600, true);
-    // The budget is per attach, not per hunt row: the second row follows its predecessors at the unwaited pace.
-    CHECK_EQ(n.hunt_times[1] - n.hunt_times[0], base.hunt_times[1] - base.hunt_times[0]);
-    for (const auto& s : rn.steps()) CHECK_EQ(s.verdict == ct::Verdict::Pass || s.verdict == ct::Verdict::Skip, true);
-}
-// A CUKTECH-like run whose 6 A hunt rows meet a source that does not offer 6 A. svid / auth_at: the Xiaomi chain; cable_ma_seen:
-// the cable's current when it was read (0 = nobody read it, the run assumes 3 A); `silent`: no answer at all instead of a Reject.
-// `apdo_ma` 6000 (default): the source advertises the 6 A, so the rows ask and are refused; 5000: it does not, the rows end unasked.
-static Fake* locked_run(Fake& f, ct::Runner& r, bool svid, uint32_t auth_at, unsigned cable_ma_seen, bool silent = false,
-                        unsigned apdo_ma = 6000) {
-    f.reject_hunts = !silent; f.silent_hunts = silent;
-    f.in.cable_observed = cable_ma_seen != 0; f.in.cable_ma = cable_ma_seen ? cable_ma_seen : 3000; f.in.cable_mv = 20000;
-    return xiaomi_run(f, r, svid, auth_at, apdo_ma);
-}
-static void expect_not_unlocked(const ct::Runner& r, uint8_t detail, const char* words) {
-    const auto h = hunt_rows(r);
-    CHECK_EQ(h.size(), 2);
-    for (const auto& s : h) {
-        CHECK_EQ(s.verdict, ct::Verdict::Skip); CHECK_EQ(s.reason, ct::Reason::NotUnlocked); CHECK_EQ(s.detail, detail);
-        CHECK_STR(ct::explanation(s), words);
-    }
-}
-static void test_hunt_the_source_does_not_offer_reads_not_unlocked() {
-    // A charger with no SVID 0x2717 never had a chain: there is nothing to unlock.
-    Fake a; ct::Runner ra(a); locked_run(a, ra, false, 0, 5000);
-    expect_not_unlocked(ra, ct::kDetailNoChain, "not unlocked (no OEM chain)");
-    // The chain was listed but never finished inside the wait.
-    Fake b; ct::Runner rb(b); locked_run(b, rb, true, 0, 5000);
-    expect_not_unlocked(rb, ct::kDetailChainUnfinished, "not unlocked (chain unfinished)");
-    // The chain finished, the 6 A is still refused and the cable is not known to carry more than 3 A.
-    Fake c; ct::Runner rc(c); locked_run(c, rc, true, 1, 0);
-    expect_not_unlocked(rc, ct::kDetailCableCap, "not unlocked (3 A cable)");
-    Fake d; ct::Runner rd(d); locked_run(d, rd, true, 1, 3000);
-    expect_not_unlocked(rd, ct::kDetailCableCap, "not unlocked (3 A cable)");
-    // No answer at all reads the same as a Reject.
-    Fake e; ct::Runner re(e); locked_run(e, re, true, 1, 0, true);
-    expect_not_unlocked(re, ct::kDetailCableCap, "not unlocked (3 A cable)");
-    // The run is not a failure: every other row is untouched and the whole run completes.
-    for (const auto& s : ra.steps()) CHECK_EQ(s.verdict == ct::Verdict::Pass || s.verdict == ct::Verdict::Skip, true);
-}
-// A source that only ASKS our SVIDs (a Discover SVIDs REQUEST, as the Lenovo 65 W laptop brick does) is not Xiaomi-family: the real sink
-// leaves xiaomi_svid down, so the 6 A hunt rows are dropped from the card instead of reading "not unlocked (chain unfinished)"
-// (hardware 2026-11-08). The sink's flag feeds the run the way the app does it.
-static void test_source_that_only_asks_our_svids_drops_the_hunt_rows() {
-    pd::SourceCaps caps = cuktech_caps(5000);
-    pd::Sink sink; sink.bind(&caps); sink.set_cap_mv(36000);
-    uint32_t now = 1000;
-    auto pump = [&] { pd::TxMsg m; while (sink.take_tx(m)) sink.on_tx_result(true, now); };
-    CHECK_EQ(sink.trigger({1, 5000, 1000}, now), pd::Err::Ok); pump();
-    sink.on_message(pd::Sop::Sop, pd::make_header(pd::kCtlAccept, 0, 2) | (1u << 8), {}, now); pump();
-    sink.on_message(pd::Sop::Sop, pd::make_header(pd::kCtlPsRdy, 0, 2) | (1u << 8), {}, now); pump();
-    const uint8_t req[4] = {0x02, 0x80, 0x00, 0xFF};   // 0xFF008002 little-endian: structured REQ, cmd 2
-    sink.on_message(pd::Sop::Sop, pd::make_header(pd::kMsgVendorDefined, 1, 2), req, now); pump();
-    for (int i = 0; i < 100; ++i) { now += 10; sink.tick(now); pump(); }
-    CHECK_EQ(sink.status().xiaomi_svid, false);
-    Fake a; ct::Runner ra(a);
-    locked_run(a, ra, sink.status().xiaomi_svid, 0, 5000, false, 5000);   // the list stays at 5 A: the rows end unasked
-    CHECK_EQ(hunt_rows(ra).size(), 0);
-    for (const auto& s : ra.steps()) CHECK_EQ(s.reason == ct::Reason::NotUnlocked, false);
-}
-// The K2 itself presented the cable (an armed spoof, the identity's cable VDO limits in Input::spoof_mv / spoof_ma): the cable limit
-// the run used is that identity's, not the 3 A of a cable nobody read (CUKTECH C1, spoofed Kowsi 5 A clones, hardware 2026-11-07).
-static Fake* spoofed_locked_run(Fake& f, ct::Runner& r, bool svid, uint32_t auth_at, unsigned spoof_ma, unsigned spoof_mv = 20000) {
-    f.in.spoof_on = true; f.in.spoof_ma = uint16_t(spoof_ma); f.in.spoof_mv = uint16_t(spoof_mv);
-    return locked_run(f, r, svid, auth_at, 0);   // nothing physical was read
-}
-static void test_hunt_with_a_spoofed_identity_uses_its_cable_limits() {
-    // A spoofed 5 A identity, chain finished, 6 A still refused: the cable is not the cause, the charger did not accept the identity.
-    Fake a; ct::Runner ra(a); spoofed_locked_run(a, ra, true, 1, 5000);
-    expect_not_unlocked(ra, ct::kDetailVendorRefused, "not unlocked (vendor not accepted)");
-    // The evidence names the identity's limits as the cable limit used.
-    for (const auto& e : ra.hunt_evidence()) { CHECK_EQ(e.cable_ma, 5000); CHECK_EQ(e.flags & ct::HfCableRead, 0); }
-    CHECK_EQ(ra.evidence().cable_ma, 5000); CHECK_EQ(ra.evidence().cable_mv, 20000);
-    CHECK_EQ(ra.evidence().flags & ct::SpoofOn, ct::SpoofOn);
-    // No answer at all reads the same.
-    Fake b; ct::Runner rb(b); b.in.spoof_on = true; b.in.spoof_ma = 5000; b.in.spoof_mv = 20000;
-    locked_run(b, rb, true, 1, 0, true);
-    expect_not_unlocked(rb, ct::kDetailVendorRefused, "not unlocked (vendor not accepted)");
-    // The chain links still come first: a spoofed 5 A identity with no chain, or a chain that did not finish.
-    Fake c; ct::Runner rc(c); spoofed_locked_run(c, rc, false, 0, 5000);
-    expect_not_unlocked(rc, ct::kDetailNoChain, "not unlocked (no OEM chain)");
-    Fake d; ct::Runner rd(d); spoofed_locked_run(d, rd, true, 0, 5000);
-    expect_not_unlocked(rd, ct::kDetailChainUnfinished, "not unlocked (chain unfinished)");
-    // A spoofed 3 A identity really is a 3 A cable.
-    Fake e; ct::Runner re(e); spoofed_locked_run(e, re, true, 1, 3000);
-    expect_not_unlocked(re, ct::kDetailCableCap, "not unlocked (3 A cable)");
-    for (const auto& ev : re.hunt_evidence()) CHECK_EQ(ev.cable_ma, 3000);
-    // The voltage limit is the identity's too (a 50 V identity reads 50 V in the evidence).
-    Fake g; ct::Runner rg(g); spoofed_locked_run(g, rg, true, 1, 5000, 50000);
-    CHECK_EQ(rg.evidence().cable_mv, 50000);
-    // A cable the K2 read wins over a spoof's limits (nothing presented it, the spoof cannot be what the source saw).
-    Fake h; ct::Runner rh(h); h.in.spoof_on = true; h.in.spoof_ma = 5000; h.in.spoof_mv = 20000;
-    locked_run(h, rh, true, 1, 3000);
-    expect_not_unlocked(rh, ct::kDetailCableCap, "not unlocked (3 A cable)");
-}
-static void test_hunt_refused_with_a_proven_cable_and_chain_stays_a_failure() {
-    // Chain done and a 5 A cable read: nothing explains the refusal, so it is the charger's refusal and a real FAIL.
-    Fake f; ct::Runner r(f); locked_run(f, r, true, 1, 5000);
-    const auto h = hunt_rows(r);
-    CHECK_EQ(h.size(), 2);
-    for (const auto& s : h) { CHECK_EQ(s.verdict, ct::Verdict::Fail); CHECK_EQ(s.reason, ct::Reason::Request); }
-}
-static void test_hunt_accepted_after_the_chain_passes() {
-    Fake f; ct::Runner r(f); xiaomi_run(f, r, true, 1);   // chain done, the source offers the 6 A: both rows pass
-    const auto h = hunt_rows(r);
-    CHECK_EQ(h.size(), 2);
-    for (const auto& s : h) { CHECK_EQ(s.verdict, ct::Verdict::Pass); CHECK_EQ(s.reason, ct::Reason::None); }
-}
-// ---- a 6 A hunt row goes out only against a list that advertises 6 A (decision 2026-11-07) ----
-// Hardware never produced a grant without an advertised 6 A: Reject, a shorter list or a Hard Reset. The one unlock is CUKTECH's
-// SVID 0x2717 chain, after which the source re-announces its PPS APDOs at 6 A. So: (1) the source lists 0x2717: the chain runs and
-// the row waits for it; (2) the list in hand advertises 6 A for the row: it asks; (3) otherwise it ends WITHOUT a Request.
-static bool any_6a_request(const Fake& f) {
-    for (const auto& c : f.choices) if (c.ma >= 6000) return true;
+static bool asked(const Fake& f, unsigned pos, unsigned mv, unsigned ma) {
+    for (const auto& c : f.choices) if (c.pos == pos && c.mv == mv && c.ma == ma) return true;
     return false;
 }
-static void test_hunt_without_the_chain_and_without_6a_sends_no_request_and_leaves_no_row() {   // test 1
-    Fake f; ct::Runner r(f); xiaomi_run(f, r, false, 0, 5000);   // no SVID 0x2717, PPS APDOs at 5 A
-    CHECK_EQ(any_6a_request(f), false);
-    CHECK_EQ(f.hunt_times.size(), 0);
-    CHECK_EQ(f.pd_requests > 0, true);   // the ordinary rows did run
-    // Nothing to unlock here: the rows leave the plan quietly (no skip on the card, nothing in the counts), the rest passed.
-    CHECK_EQ(hunt_rows(r).size(), 0);
-    CHECK_EQ(r.hunt_evidence().size(), 0);
-    for (const auto& s : r.steps()) CHECK_EQ(s.verdict, ct::Verdict::Pass);
-    // The fixed-only source: its 20 V 6 A row (a fixed PDO never offers 6 A) leaves the same way.
-    Fake g; g.caps = cuktech_caps(); g.caps.num_pdos = 5; g.caps.pdos[5] = g.caps.pdos[6] = {};
-    ct::Runner rg(g); rg.start(g.caps, kPd, g.in, true); g.tick(rg, 200000);
-    CHECK_EQ(rg.state(), ct::State::Done);
-    CHECK_EQ(any_6a_request(g), false); CHECK_EQ(hunt_rows(rg).size(), 0);
+static void read_cable(Fake& f, unsigned ma) { f.in.cable_observed = true; f.in.cable_ma = uint16_t(ma); f.in.cable_mv = 20000; }
+static bool text_is(const k2::step_label::Text& t, std::string_view s) { return t.view() == s; }
+static void expect_rest_ran(const ct::Runner& r) {
+    for (const auto& s : r.steps()) {
+        if (s.hunt || over5_cable_skip(s)) continue;
+        CHECK_EQ(s.verdict, ct::Verdict::Pass);
+    }
 }
-static void test_hunt_after_the_chain_with_the_list_still_at_5a_is_a_neutral_skip() {   // test 2
-    // Chain listed and done, the APDOs still advertise 5 A, the cable is not known to carry more than 3 A: nothing asked,
-    // the row says why ("3 A cable"), no failure and no refusal evidence.
-    Fake a; ct::Runner ra(a); locked_run(a, ra, true, 1, 0, false, 5000);
-    CHECK_EQ(any_6a_request(a), false); CHECK_EQ(a.hunt_times.size(), 0);
-    expect_not_unlocked(ra, ct::kDetailCableCap, "not unlocked (3 A cable)");
-    CHECK_EQ(ra.hunt_evidence().size(), 0);
-    // A 5 A cable the K2 read: nothing else explains it, the plain "not unlocked" (the card's detail space is full).
-    Fake b; ct::Runner rb(b); locked_run(b, rb, true, 1, 5000, false, 5000);
-    CHECK_EQ(any_6a_request(b), false);
-    expect_not_unlocked(rb, 0, "not unlocked");
-    // The chain listed but never finished: the wait is bounded, then the row ends without a Request.
-    Fake c; ct::Runner rc(c); locked_run(c, rc, true, 0, 5000, false, 5000);
-    CHECK_EQ(any_6a_request(c), false);
-    expect_not_unlocked(rc, ct::kDetailChainUnfinished, "not unlocked (chain unfinished)");
-    for (const auto& s : rb.steps()) CHECK_EQ(s.verdict == ct::Verdict::Pass || s.verdict == ct::Verdict::Skip, true);
+// No SVID 0x2717: the chain row reads "no 0x2717 SVID" (a skip, not offered), no mode rows, no 6 A Request, the rest untouched.
+static void test_mi_without_the_svid_reads_no_svid() {
+    Fake f; ct::Runner r(f); mi_run(f, r, cuktech_caps(), false, 0);
+    const ct::Step* c = mi_chain_row(r);
+    CHECK_EQ(c != nullptr, true);
+    if (c) {
+        CHECK_EQ(c->verdict, ct::Verdict::Skip); CHECK_EQ(c->reason, ct::Reason::MiChain); CHECK_EQ(c->detail, k2::mi_unlock::kCodeNoSvid);
+        CHECK_STR(ct::explanation(*c), "no 0x2717 SVID");
+    }
+    CHECK_EQ(mi_mode_rows(r).size(), 0u); CHECK_EQ(r.mi_modes().size(), 0u); CHECK_EQ(r.mi_chain(), k2::mi_unlock::kCodeNoSvid);
+    for (const auto& ch : f.choices) { CHECK_EQ(ch.hunt, false); CHECK_EQ(ch.ma <= 5000, true); }
+    expect_rest_ran(r);
 }
-static void test_hunt_after_the_chain_with_the_list_re_announced_at_6a_asks_for_6a() {   // test 3
-    Fake base; ct::Runner rb(base); xiaomi_run(base, rb, false, 0, 6000);   // reference: when a row's turn comes
-    const uint32_t t0 = base.hunt_times[0];
-    // The chain completes 1 s after the first row's turn and the source then announces its PPS APDOs at 6 A.
-    Fake f; f.auth_caps_on = true; f.auth_caps = cuktech_caps(6000);
-    ct::Runner r(f); xiaomi_run(f, r, true, t0 + 1000, 5000);
-    CHECK_EQ(f.hunt_times.size(), 2);
-    for (unsigned n = 0; n < f.hunt_apdo_ma.size(); ++n) { CHECK_EQ(f.hunt_apdo_ma[n] >= 6000, true); CHECK_EQ(f.hunt_authed[n], true); }
-    const auto h = hunt_rows(r);
-    CHECK_EQ(h.size(), 2);
-    for (const auto& s : h) { CHECK_EQ(s.verdict, ct::Verdict::Pass); CHECK_EQ(s.reason, ct::Reason::None); }
-    // The re-announced list may arrive a moment after the chain: the row gives it kXiaomiReannounceMs before it ends.
-    Fake g; g.auth_caps_on = true; g.auth_caps = cuktech_caps(6000); g.auth_caps_delay_ms = 200;
-    ct::Runner rg(g); xiaomi_run(g, rg, true, t0 + 1000, 5000);
-    CHECK_EQ(g.hunt_times.size(), 2);
-    for (const auto& s : hunt_rows(rg)) CHECK_EQ(s.verdict, ct::Verdict::Pass);
-    // Later than that it is too late for the row: it ended without a Request (the list is the one in hand when its turn comes).
-    Fake e; e.auth_caps_on = true; e.auth_caps = cuktech_caps(6000); e.auth_caps_delay_ms = ct::kXiaomiReannounceMs + 15000;
-    ct::Runner re(e); xiaomi_run(e, re, true, t0 + 1000, 5000);
-    CHECK_EQ(e.hunt_times.size(), 0);
-    for (const auto& s : hunt_rows(re)) { CHECK_EQ(s.verdict, ct::Verdict::Skip); CHECK_EQ(s.reason, ct::Reason::NotUnlocked); }
+// Case c (CUKTECH 120 W): PPS 5-11 V and 5-20 V re-announced at 6 A. With a cable vouched above 5 A both modes are asked at their
+// top voltage and new current and pass; the chain row passes with the chain's outcome.
+static void test_mi_cuktech_6a_modes_are_tested() {
+    const auto before = cuktech_caps(5000), after = cuktech_caps(6000);
+    Fake f; read_cable(f, 6000); ct::Runner r(f); mi_run(f, r, before, true, 1, &after);
+    const ct::Step* c = mi_chain_row(r);
+    CHECK_EQ(c && c->verdict == ct::Verdict::Pass && c->detail == k2::mi_unlock::kCodeVerified, true);
+    const auto m = mi_mode_rows(r);
+    CHECK_EQ(m.size(), 2u);
+    for (const auto& s : m) { CHECK_EQ(s.verdict, ct::Verdict::Pass); CHECK_EQ(s.ma, 6000); CHECK_EQ(s.algorithm, A::Pps); }
+    CHECK_EQ(asked(f, 6, 11000, 6000), true); CHECK_EQ(asked(f, 7, 20000, 6000), true);
+    const auto modes = r.mi_modes();
+    CHECK_EQ(modes.size(), 2u);
+    if (modes.size() == 2) {
+        CHECK_EQ(text_is(k2::mi_unlock::mode_text(modes[0]), "PPS 5-11V 5A\xE2\x86\x92" "6A"), true);
+        CHECK_EQ(text_is(k2::mi_unlock::mode_text(modes[1]), "PPS 5-20V 5A\xE2\x86\x92" "6A"), true);
+        CHECK_EQ(r.mi_mode(m[0]) == &modes[0], true);
+    }
+    for (const auto& ch : f.choices) CHECK_EQ(ch.hunt, false);   // asked as the advertised offer it is, never an over-ask
+    // The mode rows sit right behind the chain row.
+    const auto st = r.steps();
+    for (size_t i = 0; i < st.size(); ++i) if (ct::is_mi_chain(st[i])) { CHECK_EQ(ct::is_mi_mode(st[i + 1]), true); CHECK_EQ(ct::is_mi_mode(st[i + 2]), true); }
 }
-// ---- a hunt row answered by a source Hard Reset (Xiaomi 20K, hardware 2026-11-07) ----
-// The bank takes the 6 A over-offer as a Hard Reset, re-announces its fixed PDOs alone (the chain has not run again) and brings the
-// full list 640 ms later. Cable not read, chain finished before the row.
+// The cable decides as for the full-current rows (rule of e3cffbe3): a 5 A cable, read or a spoofed identity, cannot carry 6 A,
+// so the modes are skipped "cable limit" (never "not unlocked") and no 6 A Request goes out.
+static void test_mi_mode_above_the_cable_is_a_cable_limit_skip() {
+    const auto before = cuktech_caps(5000), after = cuktech_caps(6000);
+    Fake f; read_cable(f, 5000); ct::Runner r(f); mi_run(f, r, before, true, 1, &after);
+    Fake g; g.in.spoof_on = true; g.in.spoof_ma = 5000; g.in.spoof_mv = 20000; ct::Runner rg(g); mi_run(g, rg, before, true, 1, &after);
+    for (const ct::Runner* x : {&r, &rg}) {
+        const auto m = mi_mode_rows(*x);
+        CHECK_EQ(m.size(), 2u);
+        for (const auto& s : m) {
+            CHECK_EQ(s.verdict, ct::Verdict::Skip); CHECK_EQ(s.reason, ct::Reason::CableLimit);
+            CHECK_STR(ct::explanation(s), "cable limit");   // the Detail page's 16-cell Reason value (name() is "physical cable limit")
+        }
+        CHECK_EQ(x->mi_modes().size(), 2u);
+    }
+    for (const auto& ch : f.choices) CHECK_EQ(ch.ma <= 5000, true);
+    for (const auto& ch : g.choices) CHECK_EQ(ch.ma <= 5000, true);
+}
+// Case a (Xiaomi 20K bank): PPS 5-11 V 3 A re-announced at 5 A (PDO 1 changes only flag bits). One mode, asked at 11 V 5 A.
+static void test_mi_bank_pps_3a_to_5a() {
+    const auto before = caps_of({0x0201912C, 0x0002D12C, 0x0003C12C, 0x0004B12C, 0x000640C8, 0xC0DC323C, 0xC1903228});
+    const auto after = caps_of({0x0001912C, 0x0002D12C, 0x0003C12C, 0x0004B12C, 0x000640C8, 0xC0DC3264, 0xC1903228});
+    Fake f; read_cable(f, 5000); ct::Runner r(f); mi_run(f, r, before, true, 1, &after);
+    const auto m = mi_mode_rows(r);
+    CHECK_EQ(m.size(), 1u);
+    if (m.size() == 1) { CHECK_EQ(m[0].pos, 6); CHECK_EQ(m[0].mv, 11000); CHECK_EQ(m[0].ma, 5000); CHECK_EQ(m[0].verdict, ct::Verdict::Pass); }
+    CHECK_EQ(asked(f, 6, 11000, 5000), true);
+    CHECK_EQ(r.mi_modes().size() == 1 && text_is(k2::mi_unlock::mode_text(r.mi_modes()[0]), "PPS 5-11V 3A\xE2\x86\x92" "5A"), true);
+    // Behind a 3 A cable the bank keeps its list (no 5 A identity): done, no new modes.
+    Fake g; ct::Runner rg(g); mi_run(g, rg, before, true, 1);
+    CHECK_EQ(mi_mode_rows(rg).size(), 0u);
+    const ct::Step* c = mi_chain_row(rg);
+    CHECK_EQ(c && c->verdict == ct::Verdict::Pass && k2::mi_unlock::chain_done(c->detail), true);
+}
+// Case b (Baseus FH22): the chain completes and nothing changes: "done, no new modes", no mode row, no 6 A row of any kind.
+// The chain's finishing step names the payload shape: verified at 0x27170208, or finished through 0x2717020A.
+static void test_mi_fh22_done_no_new_modes() {
+    const auto fh22 = caps_of({0x0A81912C, 0x0002D12C, 0x0004B12C, 0x000641F4, 0xC8DC3264, 0xC9A43264});
+    Fake f; ct::Runner r(f); mi_run(f, r, fh22, true, 1);
+    CHECK_EQ(r.mi_chain(), k2::mi_unlock::kCodeVerified);
+    CHECK_EQ(mi_mode_rows(r).size(), 0u); CHECK_EQ(r.mi_modes().size(), 0u);
+    const ct::Step* c = mi_chain_row(r);
+    CHECK_EQ(c && c->verdict == ct::Verdict::Pass, true);
+    Fake g; g.xm_finish = 0x0A; ct::Runner rg(g); mi_run(g, rg, fh22, true, 1);
+    CHECK_EQ(rg.mi_chain(), k2::mi_unlock::kCodeFinished);
+    expect_rest_ran(r);
+}
+// The chain row waits for a chain still running (bounded, kXiaomiAuthWaitMs once per attach); one that never finishes ends as "no
+// answer" or "failed at step N" (a skip), and nothing is diffed.
+static void test_mi_chain_waits_then_reads_how_it_ended() {
+    // Reference: when the chain row's turn comes on a source with no SVID.
+    Fake b; ct::Runner rb(b); mi_run(b, rb, cuktech_caps(), false, 0);
+    const uint32_t t0 = b.mi_chain_at;
+    CHECK_EQ(t0 > 0, true);
+    // The chain finishes 1 s after that turn and raises the APDOs: the row waits, then finds the modes.
+    const auto after = cuktech_caps(6000);
+    Fake a; read_cable(a, 6000); ct::Runner ra(a); mi_run(a, ra, cuktech_caps(), true, t0 + 1000, &after);
+    CHECK_EQ(a.mi_chain_at >= t0 + 1000, true);
+    CHECK_EQ(mi_mode_rows(ra).size(), 2u);
+    // Never finished: no answer at all, or a stall at step 4.
+    Fake n; ct::Runner rn(n); mi_run(n, rn, cuktech_caps(), true, 0);
+    CHECK_EQ(rn.mi_chain(), k2::mi_unlock::kCodeNoAnswer);
+    CHECK_EQ(n.mi_chain_at <= t0 + ct::kXiaomiAuthWaitMs + 600, true);
+    const ct::Step* c = mi_chain_row(rn);
+    CHECK_EQ(c && c->verdict == ct::Verdict::Skip, true);
+    Fake s; s.xm_last_step = 4; ct::Runner rs(s); mi_run(s, rs, cuktech_caps(), true, 0);
+    CHECK_EQ(k2::mi_unlock::chain_step(rs.mi_chain()), 4u);
+    CHECK_EQ(mi_mode_rows(rs).size(), 0u);
+}
+// A Light run asks nothing above 5 V: the unlocked modes are listed (Advertised), the chain outcome is read all the same.
+static void test_mi_light_run_lists_the_modes() {
+    const auto before = cuktech_caps(5000), after = cuktech_caps(6000);
+    Fake f; read_cable(f, 6000); f.caps = before; f.xiaomi_svid = true; f.auth_at = 1; f.auth_caps_on = true; f.auth_caps = after;
+    ct::Runner r(f);
+    r.start(f.caps, ct::with_level(kPd, ct::Level::Light), f.in, true);
+    f.tick(r, 200000);
+    CHECK_EQ(r.mi_chain(), k2::mi_unlock::kCodeVerified);
+    const auto m = mi_mode_rows(r);
+    CHECK_EQ(m.size(), 2u);
+    for (const auto& s : m) { CHECK_EQ(s.verdict, ct::Verdict::Skip); CHECK_EQ(s.reason, ct::Reason::Advertised); }
+    for (const auto& ch : f.choices) CHECK_EQ(ch.mv, 5000);
+}
 static Fake* hunt_reset_run(Fake& f, ct::Runner& r, bool svid = true, unsigned short_ms = 640, unsigned dark_ms = 1000,
                             uint32_t auth_at = 1, unsigned cable_seen = 0) {
     f.caps = cuktech_caps(6000); f.xiaomi_svid = svid; f.auth_at = svid ? auth_at : 0;   // 6 A advertised: the rows go out (they would not at 5 A)
@@ -1333,50 +1245,6 @@ static void test_preauth_list_after_a_hunt_reset_is_not_offers_changed() {
     }
     CHECK_EQ(pps >= 1, true);
 }
-// The hunt rows' verdicts after a run in which the source answered each 6 A over-offer with a Hard Reset.
-static void expect_reset_hunts(const ct::Runner& r, const Fake& f, uint8_t detail, const char* words) {
-    const auto h = hunt_rows(r);
-    CHECK_EQ(h.size(), 2);
-    for (const auto& s : h) {
-        CHECK_EQ(s.verdict, ct::Verdict::Skip); CHECK_EQ(s.reason, ct::Reason::NotUnlocked); CHECK_EQ(s.detail, detail);
-        CHECK_STR(ct::explanation(s), words);
-    }
-    CHECK_EQ(f.hunt_times.size(), 2);   // each row's Request went out once: a reset is an answer, not a reason to ask again
-    const auto ev = r.hunt_evidence();
-    CHECK_EQ(ev.size(), 2);
-    for (const auto& e : ev) CHECK_EQ((e.flags & ct::HfHardReset) != 0, true);
-    for (const auto& s : r.steps()) {
-        if (s.hunt || over5_cable_skip(s)) continue;
-        CHECK_EQ(s.verdict, ct::Verdict::Pass);   // the ordinary rows are untouched by the reset
-    }
-}
-static void test_hunt_answered_by_a_hard_reset_reads_not_unlocked() {
-    // Xiaomi 20K: chain finished, cable never read (assumed 3 A), the over-offer is answered by a source Hard Reset.
-    Fake f; ct::Runner r(f); hunt_reset_run(f, r);
-    expect_reset_hunts(r, f, ct::kDetailSourceReset, "not unlocked (source reset)");
-    // A cable the K2 read as 5 A with the chain finished: nothing else explains it, same wording.
-    Fake g; ct::Runner rg(g); hunt_reset_run(g, rg, true, 640, 1000, 1, 5000);
-    expect_reset_hunts(rg, g, ct::kDetailSourceReset, "not unlocked (source reset)");
-}
-static void test_hunt_hard_reset_keeps_the_chain_and_cable_reasons() {
-    Fake a; ct::Runner ra(a); hunt_reset_run(a, ra, false, 0);   // no SVID 0x2717, the list comes back whole
-    expect_reset_hunts(ra, a, ct::kDetailNoChain, "not unlocked (no OEM chain)");
-    // SVID listed, chain not finished when the first row asked. The reset restarts the chain, which then finishes before the second
-    // row: that one says what happened.
-    Fake b; ct::Runner rb(b); hunt_reset_run(b, rb, true, 640, 1000, 0);
-    const auto hb = hunt_rows(rb);
-    CHECK_EQ(hb.size(), 2);
-    if (hb.size() == 2) {
-        CHECK_EQ(hb[0].verdict, ct::Verdict::Skip); CHECK_EQ(hb[0].reason, ct::Reason::NotUnlocked);
-        CHECK_EQ(hb[0].detail, ct::kDetailChainUnfinished); CHECK_STR(ct::explanation(hb[0]), "not unlocked (chain unfinished)");
-        CHECK_EQ(hb[1].verdict, ct::Verdict::Skip); CHECK_EQ(hb[1].detail, ct::kDetailSourceReset);
-    }
-    Fake c; ct::Runner rc(c); hunt_reset_run(c, rc, true, 640, 1000, 1, 3000);   // a 3 A cable the K2 read
-    expect_reset_hunts(rc, c, ct::kDetailCableCap, "not unlocked (3 A cable)");
-    Fake d; ct::Runner rd(d); d.in.spoof_on = true; d.in.spoof_ma = 5000; d.in.spoof_mv = 20000;   // a spoofed 5 A identity
-    hunt_reset_run(d, rd);
-    expect_reset_hunts(rd, d, ct::kDetailVendorRefused, "not unlocked (vendor not accepted)");
-}
 static bool any_caps_changed(const ct::Runner& r) {
     for (const auto& s : r.steps()) if (s.reason == ct::Reason::CapsChanged) return true;
     return false;
@@ -1399,7 +1267,7 @@ static void test_a_cut_short_list_that_never_grows_is_still_offers_changed() {
     CHECK_EQ(r.evidence().rebalanced > 0, true);   // the cut-short list was a re-split
     CHECK_EQ(count_reason_all(r, ct::Reason::Withdrawn), 0u);   // ... and the full list brought every row back
     // The rows below the cut are untouched.
-    for (const auto& s : r.steps()) if (s.pos <= 5) CHECK_EQ(s.verdict, ct::Verdict::Pass);
+    for (const auto& s : r.steps()) if (s.pos <= 5 && !ct::is_mi_chain(s)) CHECK_EQ(s.verdict, ct::Verdict::Pass);
 }
 static void test_a_cut_short_list_without_a_xiaomi_chain_is_still_offers_changed() {
     // The pattern belongs to a source that listed SVID 0x2717: any other source that comes back with fewer PDOs withdrew the rows
@@ -1407,55 +1275,8 @@ static void test_a_cut_short_list_without_a_xiaomi_chain_is_still_offers_changed
     Fake f; ct::Runner r(f); hunt_reset_run(f, r, false);
     CHECK_EQ(any_caps_changed(r), false);
     CHECK_EQ(count_reason_all(r, ct::Reason::Withdrawn), 0u);
-}// ---- pattern reject-then-reduced-list: the list announced again after the hunt row's own Reject ----
-// A CUKTECH-like source without SVID 0x2717 (a Rejected hunt row reads "not unlocked (no OEM chain)") announces `again` reannounce_ms
-// after its first Reject. 100 ms is before the runner has looked at the Reject (row Requesting), 600 ms while the row is released.
-static void rejected_hunt_run(Fake& f, ct::Runner& r, const pd::SourceCaps& again, uint32_t reannounce_ms) {
-    // 6 A advertised: the hunt rows go out and are refused
-    f.caps = cuktech_caps(6000); f.reject_hunts = true; f.reannounce_caps = again; f.reannounce_ms = reannounce_ms;
-    r.start(f.caps, kPd, f.in, true);
-    f.tick(r, 200000);
-    CHECK_EQ(r.state(), ct::State::Done);
 }
 static pd::SourceCaps without_pps(pd::SourceCaps c) { c.num_pdos = 5; c.pdos[5] = c.pdos[6] = {}; return c; }
-static void test_hunt_reject_then_the_same_list_again_keeps_the_rows() {
-    for (const uint32_t ms : {100u, 600u}) {
-        Fake f; ct::Runner r(f); rejected_hunt_run(f, r, cuktech_caps(6000), ms);
-        CHECK_EQ(any_caps_changed(r), false);
-        unsigned pps = 0;
-        for (const auto& s : r.steps()) {
-            if (s.hunt) { CHECK_EQ(s.verdict, ct::Verdict::Skip); CHECK_EQ(s.reason, ct::Reason::NotUnlocked); continue; }
-            if (over5_cable_skip(s)) continue;   // the 6 A APDO's full-current row: no cable vouched for above 5 A
-            CHECK_EQ(s.verdict, ct::Verdict::Pass);   // the fixed rows and the clamped full-current PPS rows run against the re-announced list
-            pps += s.algorithm == A::Pps;
-        }
-        CHECK_EQ(pps >= 2, true);
-        CHECK_EQ(f.hunt_times.size(), 2);
-    }
-}
-static void test_hunt_reject_then_a_list_without_the_pps_apdos_skips_only_those_rows() {
-    for (const uint32_t ms : {100u, 600u}) {
-        Fake f; ct::Runner r(f); rejected_hunt_run(f, r, without_pps(cuktech_caps(6000)), ms);
-        CHECK_EQ(any_caps_changed(r), false);
-        const auto h = hunt_rows(r);
-        CHECK_EQ(h.size(), 2);
-        if (h.size() == 2) {   // the row that was refused: not unlocked; the other one asks for an APDO that is gone
-            CHECK_EQ(h[0].verdict, ct::Verdict::Skip); CHECK_EQ(h[0].reason, ct::Reason::NotUnlocked);
-            CHECK_EQ(h[1].verdict, ct::Verdict::Skip); CHECK_EQ(h[1].reason, ct::Reason::NoOffer);
-            CHECK_STR(ct::explanation(h[1]), "PPS not advertised");
-        }
-        CHECK_EQ(f.hunt_times.size(), 1);
-        unsigned fixed = 0, gone = 0;
-        for (const auto& s : r.steps()) {
-            if (s.hunt || over5_cable_skip(s)) continue;
-            if (s.algorithm == A::Pd3Fixed) { CHECK_EQ(s.verdict, ct::Verdict::Pass); ++fixed; }
-            else if (s.verdict == ct::Verdict::Skip) { CHECK_EQ(s.reason, ct::Reason::NoOffer); ++gone; }   // PPS rows the list no longer offers
-            else CHECK_EQ(s.verdict, ct::Verdict::Pass);   // a PPS row that ran before the Reject
-        }
-        CHECK_EQ(fixed, 5);
-        CHECK_EQ(gone >= 1, true);
-    }
-}
 static void test_an_unsolicited_list_change_during_a_normal_row_replans_per_row() {
     Fake f; f.caps = cuktech_caps(); ct::Runner r(f); r.start(f.caps, kPd, f.in, true);
     CHECK_EQ(run_until(f, r, [&] { return f.pd_requests == 1; }), true);
@@ -1471,9 +1292,9 @@ static void test_an_unsolicited_list_change_during_a_normal_row_replans_per_row(
     CHECK_EQ(f.replans.empty(), false);   // the re-plan was logged once, with its counts
     // A later unsolicited change is re-planned the same way - also when no pending PD row can be placed at all (here only APDO
     // rows are left and the APDOs are gone): a re-split since 2026-11-17, the rows are withdrawn, not "offers changed".
-    // (6 A advertised so a hunt row is sent and Rejected)
-    Fake g; g.caps = cuktech_caps(6000); g.reject_hunts = true; ct::Runner rg(g); rg.start(g.caps, kPd, g.in, true);
-    CHECK_EQ(run_until(g, rg, [&] { return g.hunt_times.size() == 1 && rg.state() == ct::State::Requesting && !rg.steps()[rg.index()].hunt; }), true);
+    // (the change lands while the first PPS row is asking)
+    Fake g; g.caps = cuktech_caps(); ct::Runner rg(g); rg.start(g.caps, kPd, g.in, true);
+    CHECK_EQ(run_until(g, rg, [&] { return rg.state() == ct::State::Requesting && rg.steps()[rg.index()].algorithm == A::Pps; }), true);
     g.caps = without_pps(g.caps);
     g.tick(rg, 3000);
     CHECK_EQ(any_caps_changed(rg), false);
@@ -1485,137 +1306,6 @@ static void test_an_unsolicited_list_change_during_a_normal_row_replans_per_row(
 // `cable` the cable's current when read (0 = unread), `apdo_ma` the limit of the PPS APDOs in force, `fixed_only` a list with no APDO
 // (the fixed 20 V hunt row), `mode` how the source meets the Request (Reject / never answers / the chain guard holds it back).
 enum class Meet { Reject, Silent, Held };
-struct HuntScen {
-    bool svid = true; uint32_t auth_at = 1; bool reannounce = false, in_chain = false, fixed_only = false;
-    unsigned cable = 5000, apdo_ma = 6000, last_step = 0x0A; Meet mode = Meet::Reject;   // 6000: only a 6 A list gets a hunt Request
-};
-static Fake* hunt_scenario(Fake& f, ct::Runner& r, const HuntScen& s) {
-    f.caps = cuktech_caps();
-    if (s.fixed_only) { f.caps.num_pdos = 5; f.caps.pdos[5] = f.caps.pdos[6] = {}; }
-    else for (unsigned n : {5u, 6u}) f.caps.pdos[n] = pd::decode_pdo(0xc0000000 | ((n == 5 ? 110u : 200u) << 17) | (50u << 8) | (s.apdo_ma / 50));
-    f.xm_reannounce = s.reannounce; f.xm_in_chain = s.in_chain; f.xm_last_step = uint8_t(s.last_step);
-    f.reject_hunts = s.mode == Meet::Reject; f.silent_hunts = s.mode != Meet::Reject; f.hold_hunts = s.mode == Meet::Held;
-    f.in.cable_observed = s.cable != 0; f.in.cable_ma = s.cable ? s.cable : 3000; f.in.cable_mv = s.cable ? 50000 : 20000;
-    f.xiaomi_svid = s.svid; f.auth_at = s.auth_at;
-    r.start(f.caps, kPd, f.in, true);
-    f.tick(r, 200000);
-    CHECK_EQ(r.state(), ct::State::Done);
-    return &f;
-}
-static void expect_cause(const ct::Runner& r, ct::HuntCause cause, size_t rows = 2) {
-    const auto ev = r.hunt_evidence();
-    CHECK_EQ(ev.size(), rows);
-    for (const auto& e : ev) CHECK_EQ(int(e.cause), int(cause));
-    for (const auto& e : ev) CHECK_EQ(int(ct::classify_hunt(e)), int(cause));   // the stored cause is the pure classifier's answer
-}
-static void test_hunt_evidence_names_each_refusal_cause() {
-    // The source never listed SVID 0x2717.
-    { Fake f; ct::Runner r(f); hunt_scenario(f, r, {.svid = false, .auth_at = 0}); expect_cause(r, ct::HuntCause::NoChain); }
-    // Listed, the chain stopped after step 4: the last step seen says where.
-    { Fake f; ct::Runner r(f); hunt_scenario(f, r, {.auth_at = 0, .last_step = 4}); expect_cause(r, ct::HuntCause::ChainStalled);
-      for (const auto& e : r.hunt_evidence()) { CHECK_EQ(e.last_step, 4); CHECK_EQ(e.flags & ct::HfAuthed, 0); CHECK_EQ(e.authed_ms, 0); } }
-    // Our Request left while the chain was running.
-    { Fake f; ct::Runner r(f); hunt_scenario(f, r, {.in_chain = true}); expect_cause(r, ct::HuntCause::InsideChain); }
-    // The chain guard still held the Request when the row ran out of time: nothing was asked.
-    { Fake f; ct::Runner r(f); hunt_scenario(f, r, {.mode = Meet::Held}); expect_cause(r, ct::HuntCause::RequestHeld);
-      for (const auto& e : r.hunt_evidence()) { CHECK_EQ(e.apdo, 0); CHECK_EQ(e.flags & ct::HfSent, 0); CHECK_EQ(e.flags & ct::HfHeld, ct::HfHeld); } }
-    // Authed, no Source_Capabilities after it, the APDO in force advertises 6 A and the source still refuses: the only cause left is the
-    // source. A real FAIL.
-    { Fake f; ct::Runner r(f); hunt_scenario(f, r, {}); expect_cause(r, ct::HuntCause::RefusedDespiteOffer);
-      for (const auto& e : r.hunt_evidence()) { CHECK_EQ(e.apdo_ma, 6000); CHECK_EQ(e.req_ma, 6000); CHECK_EQ(e.flags & ct::HfReannounced, 0); }
-      for (const auto& s : hunt_rows(r)) { CHECK_EQ(s.verdict, ct::Verdict::Fail); CHECK_EQ(s.reason, ct::Reason::Request); } }
-    // The same after a re-announced list.
-    { Fake f; ct::Runner r(f); hunt_scenario(f, r, {.reannounce = true}); expect_cause(r, ct::HuntCause::RefusedDespiteOffer);
-      for (const auto& e : r.hunt_evidence()) CHECK_EQ(e.flags & ct::HfReannounced, ct::HfReannounced);
-      for (const auto& s : hunt_rows(r)) CHECK_EQ(s.verdict, ct::Verdict::Fail); }
-    // ApdoStale, CableCapped5A, CableCap and FixedPdo describe a Request sent against a list that does not advertise 6 A. Since
-    // 2026-11-07 the runner never sends one, so no scenario reaches them (classify_hunt keeps them for the pure-classifier test):
-    // a 5 A list (stale, re-announced, unread cable) and a list with no APDO (the fixed 20 V row) send nothing and record nothing.
-    for (const HuntScen& sc : {HuntScen{.apdo_ma = 5000}, HuntScen{.reannounce = true, .apdo_ma = 5000},
-                               HuntScen{.reannounce = true, .cable = 0, .apdo_ma = 5000}, HuntScen{.reannounce = true, .fixed_only = true}}) {
-        Fake f; ct::Runner r(f); hunt_scenario(f, r, sc);
-        CHECK_EQ(r.hunt_evidence().size(), 0); CHECK_EQ(f.hunt_times.size(), 0); CHECK_EQ(any_6a_request(f), false);
-        for (const auto& s : hunt_rows(r)) { CHECK_EQ(s.verdict, ct::Verdict::Skip); CHECK_EQ(s.reason, ct::Reason::NotUnlocked); }
-    }
-}
-static void test_hunt_evidence_records_what_the_sink_saw() {
-    Fake f; ct::Runner r(f); hunt_scenario(f, r, {.reannounce = true});
-    const auto ev = r.hunt_evidence();
-    CHECK_EQ(ev.size(), 2);
-    if (ev.size() != 2) return;
-    // The 11 V row asks APDO 6, the 20 V row APDO 7; both ask 6 A of an APDO that advertises 6 A (the only
-    // list a hunt row goes out against, 2026-11-07) and are answered with a Reject 30 ms later.
-    CHECK_EQ(ev[0].pos, 6); CHECK_EQ(ev[0].req_mv, 11000); CHECK_EQ(ev[1].pos, 7); CHECK_EQ(ev[1].req_mv, 20000);
-    for (const auto& e : ev) {
-        CHECK_EQ(e.req_ma, 6000); CHECK_EQ(e.apdo_ma, 6000); CHECK_EQ(e.caps, 7); CHECK_EQ(e.answer, int(pd::ReqAnswer::Reject));
-        CHECK_EQ(e.answer_ms, 30); CHECK_EQ(e.last_step, 0x0A); CHECK_EQ(e.type, int(pd::PdoType::Pps));
-        CHECK_EQ(e.flags & ~unsigned(ct::HfCableRead), ct::HfSvid | ct::HfOpener | ct::HfAuthed | ct::HfReannounced | ct::HfSent);
-        CHECK_EQ(e.cable_ma, 5000); CHECK_EQ(e.authed_ms > 0, true);
-        CHECK_EQ(e.apdo, f.caps.pdos[e.pos - 1].raw);
-    }
-    // Each row ties to its step, and the hook saw the same snapshots once each, in order.
-    for (const auto& e : ev) { CHECK_EQ(r.steps()[e.step].hunt, true); CHECK_EQ(r.hunt_evidence_for(e.step), &e); }
-    CHECK_EQ(r.hunt_evidence_for(0), nullptr);
-    CHECK_EQ(f.evidence_seen.size(), 2);
-    if (f.evidence_seen.size() == 2) { CHECK_EQ(f.evidence_seen[0].step, ev[0].step); CHECK_EQ(f.evidence_seen[1].step, ev[1].step); }
-}
-static void test_hunt_evidence_marks_a_silent_source_as_a_timeout() {
-    Fake f; ct::Runner r(f); hunt_scenario(f, r, {.reannounce = true, .mode = Meet::Silent});
-    expect_cause(r, ct::HuntCause::RefusedDespiteOffer);   // 6 A advertised (the only list a row is sent against): the silence is the source's
-    for (const auto& e : r.hunt_evidence()) {
-        CHECK_EQ(e.answer, int(pd::ReqAnswer::None)); CHECK_EQ(e.answer_ms, 0);
-        CHECK_EQ(e.flags & ct::HfTimeout, ct::HfTimeout); CHECK_EQ(e.flags & ct::HfSent, ct::HfSent);
-    }
-}
-static void test_hunt_evidence_without_a_trace_is_unexplained() {
-    // A chain that finished but no sink trace to say more: the refusal is recorded and says so, never guessed.
-    Fake f; ct::Runner r(f); f.in.xm = nullptr; hunt_scenario(f, r, {.reannounce = true});
-    expect_cause(r, ct::HuntCause::Unexplained);
-    for (const auto& e : r.hunt_evidence()) { CHECK_EQ(e.apdo, 0); CHECK_EQ(e.flags & ct::HfSent, 0); }
-    // The chain half still comes from the sink status: a source with no SVID is a NoChain refusal with or without a trace.
-    Fake g; ct::Runner s(g); g.in.xm = nullptr; hunt_scenario(g, s, {.svid = false, .auth_at = 0});
-    expect_cause(s, ct::HuntCause::NoChain);
-}
-static void test_hunt_evidence_only_for_refused_rows() {
-    // A source that offers the 6 A: both rows pass, nothing is recorded and the hook never fires.
-    Fake f; ct::Runner r(f); xiaomi_run(f, r, true, 1);
-    CHECK_EQ(r.hunt_evidence().size(), 0); CHECK_EQ(f.evidence_seen.size(), 0);
-    // A new run starts with an empty table.
-    Fake g; ct::Runner s(g); hunt_scenario(g, s, {});
-    CHECK_EQ(s.hunt_evidence().size(), 2);
-    s.start(g.caps, kPd, g.in, true);
-    CHECK_EQ(s.hunt_evidence().size(), 0);
-}
-static void test_classify_hunt_precedence() {
-    // The order of the cause table: each cause beats every one below it.
-    ct::HuntEvidence e; e.flags = ct::HfSvid | ct::HfAuthed | ct::HfReannounced | ct::HfSent; e.type = uint8_t(pd::PdoType::Pps);
-    e.req_ma = 6000; e.apdo_ma = 5000; e.cable_ma = 5000; e.apdo = 1;
-    CHECK_EQ(int(ct::classify_hunt(e)), int(ct::HuntCause::CableCapped5A));
-    ct::HuntEvidence f = e; f.apdo_ma = 6000;
-    CHECK_EQ(int(ct::classify_hunt(f)), int(ct::HuntCause::RefusedDespiteOffer));
-    f = e; f.cable_ma = 3000;
-    CHECK_EQ(int(ct::classify_hunt(f)), int(ct::HuntCause::CableCap));
-    f = e; f.flags &= ~ct::HfReannounced; f.cable_ma = 3000;
-    CHECK_EQ(int(ct::classify_hunt(f)), int(ct::HuntCause::ApdoStale));   // the stale list is the sharper cause than the unread cable
-    f = e; f.type = uint8_t(pd::PdoType::Fixed); f.apdo_ma = 6000;
-    CHECK_EQ(int(ct::classify_hunt(f)), int(ct::HuntCause::FixedPdo));    // a fixed PDO is refused whatever it advertises
-    f = e; f.flags |= ct::HfInChain;
-    CHECK_EQ(int(ct::classify_hunt(f)), int(ct::HuntCause::InsideChain));
-    f.flags |= ct::HfHeld; f.flags &= ~ct::HfSent;
-    CHECK_EQ(int(ct::classify_hunt(f)), int(ct::HuntCause::RequestHeld));
-    f = e; f.flags &= ~ct::HfAuthed;
-    CHECK_EQ(int(ct::classify_hunt(f)), int(ct::HuntCause::ChainStalled));
-    f.flags &= ~ct::HfSvid;
-    CHECK_EQ(int(ct::classify_hunt(f)), int(ct::HuntCause::NoChain));
-    f = e; f.apdo = 0; f.flags &= ~ct::HfSent;
-    CHECK_EQ(int(ct::classify_hunt(f)), int(ct::HuntCause::Unexplained));
-    // Every cause has a name and wording; the wording fits the detail page.
-    for (unsigned n = 0; n < unsigned(ct::HuntCause::Count); ++n) {
-        const auto c = ct::HuntCause(n);
-        CHECK_EQ(std::string(ct::name(c)).empty(), false); CHECK_EQ(std::string(ct::explanation(c)).size() <= 26, true);
-        for (unsigned m = 0; m < n; ++m) CHECK_EQ(std::string(ct::name(c)) == ct::name(ct::HuntCause(m)), false);
-    }
-}
 static void test_unread_cable_limit_follows_the_source_offers() {
     // A far-end sink never reads the cable. A source that offers more than 3 A has seen a 5 A e-marker (USB PD caps a 3 A cable at
     // 3 A), so the run's cable current limit is 5 A, not the 3 A default; the voltage default stays 20 V.
@@ -1742,7 +1432,7 @@ static void test_source_probe_only_in_a_pd_contract_and_once() {
     CHECK_EQ(rg.start(g.caps, kPd, g.in, true), ct::Reason::None);
     for (unsigned n = 0; n < 4000 && g.probe_starts == 0; ++n) g.tick(rg, 100);
     CHECK_EQ(g.probe_starts, 1);                                // started only after the last row
-    for (const auto& st : rg.steps()) CHECK_EQ(st.verdict, ct::Verdict::Pass);
+    for (const auto& st : rg.steps()) if (!ct::is_mi_chain(st)) CHECK_EQ(st.verdict, ct::Verdict::Pass);
     rg.cancel(g.in);                                            // cancel while probing stops the probe
     g.tick(rg, 3000);
     CHECK_EQ(g.probe_stops >= 1, true);
@@ -2665,7 +2355,7 @@ static void test_capped_pps_top_is_recorded_and_the_chain_goes_on() {
     CHECK_EQ(r.state(), ct::State::Done);
     unsigned capped = 0, ran_after = 0, skipped = 0; bool seen_capped = false;
     for (const auto& s : r.steps()) {
-        if (s.algorithm != A::Pps) continue;
+        if (s.algorithm != A::Pps || ct::is_mi_chain(s)) continue;
         if (s.verdict == ct::Verdict::Skip) ++skipped;
         if (s.reason == ct::Reason::Capped) {
             ++capped; seen_capped = true;
@@ -2931,6 +2621,7 @@ static void test_wire_classes_and_feature_evidence() {
         f.tick(r, 50000);
         unsigned passed = 0;
         for (const auto& s : r.steps()) {
+            if (ct::is_mi_chain(s)) continue;   // no SVID 0x2717 here: the chain row reads so
             passed += s.verdict == ct::Verdict::Pass;
             if (s.verdict == ct::Verdict::Pass) CHECK_EQ(s.algorithm, wire == 1 ? A::Pd2Fixed : A::Pd3Fixed);
             else { CHECK_EQ(s.verdict, ct::Verdict::Skip); CHECK_EQ(s.reason, ct::Reason::RevisionUntestable); }
@@ -3483,7 +3174,7 @@ static void test_fixed_pd_rows_are_requested_from_the_top_voltage_down() {
         // The plan: the fixed rows' volts strictly fall, the 5 V row is the last fixed row of the section.
         unsigned prev = 1000000, n = 0;
         for (const auto& s : r.steps()) {
-            if (s.algorithm != (epr ? A::Epr : A::Pd3Fixed)) continue;
+            if (s.algorithm != (epr ? A::Epr : A::Pd3Fixed) || ct::is_mi_chain(s)) continue;
             CHECK_EQ(s.mv < prev, true); prev = s.mv; ++n;
         }
         CHECK_EQ(n >= 2, true);
@@ -3974,7 +3665,7 @@ static void test_pd_plan_follows_a_list_that_grows_during_the_attach() {
     unsigned avs_pass = 0;
     for (const auto& s : r.steps()) avs_pass += s.algorithm == A::SprAvs && s.verdict == ct::Verdict::Pass;
     CHECK_EQ(avs_pass, 5u);
-    for (const auto& s : r.steps()) CHECK_EQ(s.verdict == ct::Verdict::Pass, true);
+    for (const auto& s : r.steps()) if (!ct::is_mi_chain(s)) CHECK_EQ(s.verdict == ct::Verdict::Pass, true);
 }
 static void test_reannounced_identical_caps_are_not_a_change() {
     for (unsigned gone_ms : {2000u, 12000u}) {
@@ -4015,7 +3706,7 @@ static void test_measured_dwell_and_plan_capacity() {
         0xD0000000 | (480u << 17) | (150u << 8) | 140);
     ct::Runner mr(many); const auto preview = ct::Runner::preview(many.caps, {}, many.in);
     mr.start(many.caps, {}, many.in, true);
-    CHECK_EQ(preview.total, 110); CHECK_EQ(mr.steps().size(), preview.total);
+    CHECK_EQ(preview.total, 111); CHECK_EQ(mr.steps().size(), preview.total);   // + the Xiaomi chain row
     CHECK_EQ(mr.steps().size() <= ct::kMaxSteps, true);
     // Rows are laid out in the unit order: the vendor modes first (FCP first), the PD rows in the middle (Vivo before them), the
     // standard protocols behind them: the plan's tail is the last UFCS row, the last PD row sits before the QC rows.
@@ -4023,7 +3714,7 @@ static void test_measured_dwell_and_plan_capacity() {
     CHECK_EQ(mr.steps().front().group, ct::Group::Fcp);
     size_t last_pd = 0, first_qc = mr.steps().size();
     for (size_t n = 0; n < mr.steps().size(); ++n) {
-        if (mr.steps()[n].group == ct::Group::Pd) last_pd = n;
+        if (mr.steps()[n].group == ct::Group::Pd && !ct::is_mi_chain(mr.steps()[n])) last_pd = n;
         if (mr.steps()[n].group == ct::Group::Qc2 && first_qc == mr.steps().size()) first_qc = n;
     }
     CHECK_EQ(mr.steps()[last_pd].algorithm, A::EprAvs); CHECK_EQ(mr.steps()[last_pd].verdict, ct::Verdict::Skip);
@@ -4056,7 +3747,7 @@ static void test_pd_bundles() {
         for (const auto& s : r.steps()) {
             CHECK_EQ(bool(mask & ct::bit(s.algorithm)), true);
             CHECK_EQ(s.algorithm >= A::Pd30Revision && s.algorithm <= A::Pd32Revision, false);
-            if (s.verdict != ct::Verdict::Skip)
+            if (s.verdict != ct::Verdict::Skip && !ct::is_mi_chain(s))
                 CHECK_EQ(pd::decode_pdo(s.pdo).type == pd::PdoType::Fixed, mask == ct::kPdFixedAlgorithms);
             epr += s.algorithm == A::Epr || s.algorithm == A::EprAvs;
         }
@@ -4234,7 +3925,7 @@ static void test_pps_accepted_then_dropped_at_no_load_is_needs_load() {
         CHECK_STR(ct::name(ct::Reason::NeedsLoad), "needs load");
         for (const auto& s : r.steps()) {
             if (s.reason == ct::Reason::NeedsLoad) CHECK_EQ(s.verdict, ct::Verdict::Skip);
-            if (s.algorithm == A::Pd3Fixed) CHECK_EQ(s.verdict, ct::Verdict::Pass);   // the fixed rows of the same source are untouched
+            if (s.algorithm == A::Pd3Fixed && !ct::is_mi_chain(s)) CHECK_EQ(s.verdict, ct::Verdict::Pass);   // the fixed rows of the same source are untouched
             CHECK_EQ(s.verdict == ct::Verdict::Running || s.verdict == ct::Verdict::Pending, false);
         }
     }
@@ -5083,7 +4774,7 @@ static void test_dark_source_that_returns_is_not_a_change() {
         come_back(f);
         f.tick(r, 150000);
         CHECK_EQ(r.state(), ct::State::Done);
-        for (const auto& st : r.steps()) { CHECK_EQ(st.reason == ct::Reason::CapsChanged, false); CHECK_EQ(st.verdict == ct::Verdict::Skip, false); }
+        for (const auto& st : r.steps()) { CHECK_EQ(st.reason == ct::Reason::CapsChanged, false); CHECK_EQ(st.verdict == ct::Verdict::Skip && !ct::is_mi_chain(st), false); }
         unsigned pass = 0;
         for (const auto& st : r.steps()) pass += st.group == ct::Group::Pd && st.verdict == ct::Verdict::Pass;
         CHECK_EQ(pass >= 6, true);   // the row that was cut is asked again, the rows behind it still run
@@ -5198,9 +4889,9 @@ static void test_low_programmable_rows_are_planned_last() {
         CHECK_EQ(last_other < first, true);
         CHECK_EQ(st[first].continuous, false);   // starts from a released 5 V contract, not from the previous row
         for (size_t i = first + 1; i < st.size() && low_pps(st[i]); ++i) CHECK_EQ(st[i].continuous, true);
-        // the preview lists the same rows, less the 6 A hunt rows this list does not advertise (the run drops them at request time)
+        // the preview lists the same rows
         const auto pv = ct::Runner::preview(f.caps, o, f.in);
-        CHECK_EQ(pv.total, unsigned(st.size() - hunt_rows(r).size()));
+        CHECK_EQ(pv.total, unsigned(st.size()));
     }
 }
 static void test_latch_off_at_the_low_step_ends_done_with_a_reason() {
@@ -5374,9 +5065,10 @@ static ct::Options with_units(uint32_t selected, std::initializer_list<ct::Unit>
 }
 // ---- Running grid order: the rows list the algorithms in the order the plan executes them ------
 // A grid row's identity: a protocol row is its algorithm, a PPS / AVS row its algorithm and PDO slot (one row per APDO),
-// a Mi 6A probe row 1000 + its level in mV (a hunt step belongs to no protocol row).
+// the Xiaomi row 1000 (a hunt step belongs to no protocol row).
 static int row_key(A a, bool hunt, unsigned mv, unsigned pos = 0) {
-    if (hunt) return 1000 + int(mv);
+    (void)mv;
+    if (hunt) return 1000;   // the Xiaomi unit is one grid row (the chain row and its modes)
     if (ct::kPpsAlgorithms & ct::bit(a)) return 100000 + int(a) * 32 + int(pos);
     return int(a);
 }
@@ -5445,33 +5137,31 @@ static void test_running_grid_follows_the_users_unit_order() {
         CHECK_EQ(grid.size() + 3 > run.size(), true);
     }
 }
-// Mi 6A probes are grid rows of their own, at the place the planner runs them: the hunt step follows its own APDO's steps, so with
-// two APDOs the 11 V probe stands between the two PPS rows and the 20 V probe after the second one, before the next unit, in plan
-// order; the grid holds no other order than the step list's.
-static void test_running_grid_places_the_mi_probes_where_the_plan_runs_them() {
+// The Xiaomi unit is one grid row, at the place the planner runs it: its chain row closes the Pd unit, so the row stands after
+// the PD rows (the PPS rows included) and before the next unit, in plan order; the grid holds no other order than the step list's.
+static void test_running_grid_places_the_xiaomi_row_where_the_plan_runs_it() {
     Fake f; f.caps = cuktech_caps(); ct::Runner r(f);
     CHECK_EQ(r.start(f.caps, ct::Options{}, f.in, true), ct::Reason::None);
     const auto run = executed_keys(r), grid = grid_keys(r);
-    const int mi11 = row_key(A::Count, true, 11000), mi20 = row_key(A::Count, true, 20000);
+    const int mi = row_key(A::Count, true, 0);
     const int pps6 = row_key(A::Pps, false, 0, 6), pps7 = row_key(A::Pps, false, 0, 7);   // 3.3-11V, then 5-20V
-    CHECK_EQ(key_at(run, mi11) < long(run.size()) && key_at(run, mi20) < long(run.size()), true);
-    CHECK_EQ(key_at(grid, mi11) < long(grid.size()) && key_at(grid, mi20) < long(grid.size()), true);
-    CHECK_EQ(key_at(grid, pps6) < key_at(grid, mi11) && key_at(grid, mi11) < key_at(grid, pps7) && key_at(grid, pps7) < key_at(grid, mi20), true);
-    // the probes come before the legacy units
-    CHECK_EQ(key_at(grid, mi20) < key_at(grid, int(A::Qc2)), true);
+    CHECK_EQ(key_at(run, mi) < long(run.size()), true);
+    CHECK_EQ(key_at(grid, mi) < long(grid.size()), true);
+    CHECK_EQ(key_at(grid, pps6) < key_at(grid, pps7) && key_at(grid, pps7) < key_at(grid, mi), true);
+    // the Xiaomi row comes before the legacy units
+    CHECK_EQ(key_at(grid, mi) < key_at(grid, int(A::Qc2)), true);
     // the same positions in the step list itself
-    CHECK_EQ(key_at(run, pps6) < key_at(run, mi11) && key_at(run, mi11) < key_at(run, pps7) && key_at(run, pps7) < key_at(run, mi20)
-             && key_at(run, mi20) < key_at(run, int(A::Qc2)), true);
+    CHECK_EQ(key_at(run, pps7) < key_at(run, mi) && key_at(run, mi) < key_at(run, int(A::Qc2)), true);
     // the grid has no "Turbo" block ahead of PD: the first row is whatever the plan starts with
     CHECK_EQ(grid.front(), run.front());
-    // a custom unit order moves the probes with their unit (the legacy unit first, PD last)
+    // a custom unit order moves the Xiaomi row with its unit (the legacy unit first, PD last)
     Fake g; g.caps = cuktech_caps(); ct::Runner q(g);
     ct::Options o = with_units(ct::kDefaultAlgorithms, {ct::Unit::Qc2, ct::Unit::Pd});
     CHECK_EQ(q.start(g.caps, o, g.in, true), ct::Reason::None);
     const auto run2 = executed_keys(q), grid2 = grid_keys(q);
     CHECK_EQ(grid_follows(grid2, run2), true);
-    CHECK_EQ(key_at(grid2, int(A::Qc2)) < key_at(grid2, mi11), true);
-    CHECK_EQ(key_at(grid2, mi11) < long(grid2.size()), true);
+    CHECK_EQ(key_at(grid2, int(A::Qc2)) < key_at(grid2, mi), true);
+    CHECK_EQ(key_at(grid2, mi) < long(grid2.size()), true);
 }
 // The independent oracle: drive the run and record which step is in flight. The index never goes backwards, so the order in which
 // the rows were first worked on is the plan's order, and the grid built from the finished plan lists the rows in that order.
@@ -5494,32 +5184,28 @@ static void test_running_grid_matches_the_order_the_run_worked_through() {
     CHECK_EQ(backwards, false);
     CHECK_EQ(worked.size() > 8, true);
     CHECK_EQ(grid_follows(worked, grid_keys(r)), true);   // every row the run worked on is a grid row, in the grid's order
-    CHECK_EQ(key_at(worked, row_key(A::Count, true, 11000)) < long(worked.size()), true);   // the Mi probes were worked on, among the PD rows
 }
 // A plan that grows at run time (the source's list arrives late, a re-announced list): the grid is read from the plan as it stands,
 // so it still lists the rows in the order of the step list, probes included.
 static void test_running_grid_follows_a_plan_that_is_rebuilt_during_the_run() {
-    Fake f; f.caps = cuktech_caps(); f.caps.num_pdos = 6;   // the first list has no 5-20 V APDO: one probe row, the second comes with the list
+    Fake f; f.caps = cuktech_caps(); f.caps.num_pdos = 6;   // the first list has no 5-20 V APDO: its row comes with the list
     f.grown = cuktech_caps(6000); f.grow_after_ms = 400; f.contract_delay_ms = 100;
     ct::Runner r(f); f.rn = &r;
     CHECK_EQ(r.start(f.caps, with_units(kPd.selected, {ct::Unit::Pd}), f.in, true), ct::Reason::None);
-    const int mi20 = row_key(A::Count, true, 20000);
-    const auto hunt20 = [&] { for (const auto& s : r.steps()) if (s.hunt && s.mv == 20000) return s.algorithm; return A::Count; };
-    const A before = hunt20();
+    const int mi = row_key(A::Count, true, 0);
     const auto before_run = executed_keys(r), before_grid = grid_keys(r);
-    CHECK_EQ(before, A::Pd3Fixed);                             // planned against the short list: the 20 V probe rides the fixed 20 V PDO
-    CHECK_EQ(key_at(before_grid, mi20) < long(before_grid.size()), true);
-    CHECK_EQ(key_at(before_grid, mi20) < key_at(before_grid, row_key(A::Pps, false, 0, 6)), true);   // its row stands among the fixed rows, before the PPS row
+    CHECK_EQ(key_at(before_grid, mi) < long(before_grid.size()), true);
+    CHECK_EQ(key_at(before_grid, row_key(A::Pps, false, 0, 6)) < key_at(before_grid, mi), true);   // the Xiaomi row closes the PD rows
+    CHECK_EQ(key_at(before_grid, row_key(A::Pps, false, 0, 7)) < long(before_grid.size()), false);
     CHECK_EQ(grid_follows(before_grid, before_run), true);
     for (unsigned n = 0; n < 6000 && r.state() != ct::State::Done; ++n) {
         f.tick(r, 100);
         CHECK_EQ(grid_follows(grid_keys(r), executed_keys(r)), true);
     }
     CHECK_EQ(r.state(), ct::State::Done);
-    CHECK_EQ(hunt20(), A::Pps);                                // the rebuilt plan moved it onto the 5-20 V APDO
     const auto grid = grid_keys(r);
-    CHECK_EQ(key_at(grid, mi20) < long(grid.size()), true);    // the rebuilt plan brought it, and the grid shows it after its APDO's row
-    CHECK_EQ(key_at(grid, row_key(A::Pps, false, 0, 7)) < key_at(grid, mi20), true);
+    CHECK_EQ(key_at(grid, mi) < long(grid.size()), true);      // the rebuilt plan kept it, after the 5-20 V APDO's row it brought
+    CHECK_EQ(key_at(grid, row_key(A::Pps, false, 0, 7)) < key_at(grid, mi), true);
     CHECK_EQ(grid_follows(grid, executed_keys(r)), true);
 }
 
@@ -6045,7 +5731,7 @@ static bool rows_in_unit_order(const ct::Runner& r) {
     return true;
 }
 // The default order (user decision 2026-11-06): the OEM vendor fast modes by company (Huawei, Samsung, OPPO / OnePlus / vivo),
-// then USB PD (its rows end with the Xiaomi Mi 6A hunts), then the legacy / standard D+/D- protocols (QC, UFCS), the risky low
+// then USB PD (its rows end with the Xiaomi chain row), then the legacy / standard D+/D- protocols (QC, UFCS), the risky low
 // PPS/AVS rows last of all. The rows of a run are laid out in the same order.
 static void test_default_unit_order_is_vendor_modes_then_pd_then_legacy() {
     Fake f; ct::Runner r(f);
@@ -6829,7 +6515,7 @@ static void test_resumed_baseline_adopts_a_session_change() {
     b.f.tick(b.r, 300000);
     CHECK_EQ(int(b.r.state()), int(ct::State::Done));
     CHECK_EQ(count_reason(b.r, ct::Group::Pd, ct::Reason::Lost), 0u);
-    for (const auto& s : b.r.steps()) CHECK_EQ(int(s.verdict) != int(ct::Verdict::Pending) && int(s.verdict) != int(ct::Verdict::Skip), true);
+    for (const auto& s : b.r.steps()) if (!ct::is_mi_chain(s)) CHECK_EQ(int(s.verdict) != int(ct::Verdict::Pending) && int(s.verdict) != int(ct::Verdict::Skip), true);
 }
 // A self-powered K2 that loses VBUS is dying: the run is not finalized. Nothing is skipped, the rows stay Pending, the state is
 // Stopped + suspended (resumable), and the journal still holds the phase marker so the next boot resumes it.
@@ -7134,13 +6820,10 @@ static void test_resume_replans_the_late_pd_rows_with_epr() {
     const unsigned n = power_loss_sweep(make, o);
     CHECK_EQ(n > 10u, true);
 }
-// A Reject (a refused 6 A hunt row) leaves the source settling: an EPR entry right after it waits kRejectSettleMs.
-// The hunt rows only go out against a list that advertises 6 A (decision 2026-11-07), so the 20 V fixed PDO here (the row that sits
-// right before the EPR rows) says 6 A (SPR and EPR list alike) and the source refuses the hunt row anyway; before that rule the
-// default 3.25 A PDO was enough.
+// A Reject leaves the source settling: an EPR entry right after it waits kRejectSettleMs. The source here Rejects the 20 V fixed row
+// (the row that sits right before the EPR rows).
 static void test_epr_entry_waits_after_a_rejected_row() {
-    Fake f = epr_run_fake(); f.reject_hunts = true;
-    f.caps.pdos[4] = f.epr_caps.pdos[4] = pd::decode_pdo((400u << 10) | 600);
+    Fake f = epr_run_fake(); f.reject_mv = 20000;
     ct::Runner r(f);
     r.start(f.caps, {.selected = ct::bit(A::Pd3Fixed) | ct::bit(A::Epr)}, f.in, true);
     f.tick(r, 240000);
@@ -7492,12 +7175,6 @@ static pd::SourceCaps splitter_reannounced() {   // 20 V withdrawn, 9 V and 15 V
     for (unsigned n = 0; n < 3; ++n) c.pdos[n] = pd::decode_pdo(((volts[n] / 50) << 10) | mas[n]);
     return c;
 }
-static pd::SourceCaps splitter_rebalanced_back() {   // the re-announced list with the 20 V PDO back at 2.5 A
-    pd::SourceCaps c = splitter_reannounced();
-    c.num_pdos = 4;
-    c.pdos[3] = pd::decode_pdo((400u << 10) | 250);
-    return c;
-}
 static pd::SourceCaps splitter_without_9v() {   // the first list with the 9 V PDO gone: 5/15/20 V
     pd::SourceCaps c = splitter_caps();
     c.num_pdos = 3; c.pdos[1] = c.pdos[2]; c.pdos[2] = c.pdos[3]; c.pdos[3] = {};
@@ -7505,10 +7182,9 @@ static pd::SourceCaps splitter_without_9v() {   // the first list with the 9 V P
 }
 static const ct::Options kSplitterPd = with_units(ct::bit(A::Pd2Fixed) | ct::bit(A::Pd3Fixed), {ct::Unit::Pd});
 // The re-announce lands between rows (while the 9 V row is in flight) or while the 15 V row is in flight: the 15 V row follows
-// the new list and passes at the new 3 A word, both 20 V rows (the ordinary one and the 6 A hunt) are withdrawn by the source,
-// the unit is not ended, one re-plan ran.
-// The rows run from the top voltage down (20 V, its 6 A hunt, 15 V, 9 V, 5 V), so the splitter's re-split lands on the 20 V row in
-// flight (when 0): it is withdrawn with its hunt, 15 V and 9 V follow the new list at the new 3 A word, 5 V runs last. When it lands
+// the new list and passes at the new 3 A word, the 20 V row is withdrawn by the source, the unit is not ended, one re-plan ran.
+// The rows run from the top voltage down (20 V, 15 V, 9 V, 5 V), so the splitter's re-split lands on the 20 V row in
+// flight (when 0): it is withdrawn, 15 V and 9 V follow the new list at the new 3 A word, 5 V runs last. When it lands
 // later, with the 15 V row in flight (when 1), the 20 V rows have already passed and nothing is withdrawn.
 static void test_midrun_reannounce_dropping_one_offer_replans_per_row() {
     for (const unsigned when : {0u, 1u}) {
@@ -7526,11 +7202,11 @@ static void test_midrun_reannounce_dropping_one_offer_replans_per_row() {
             if (s.mv == 15000) { CHECK_EQ(s.verdict, ct::Verdict::Pass); CHECK_EQ(pd::decode_pdo(s.pdo).max_ma, 3000u); ++v15; }
             if (s.mv == 20000) {
                 if (when == 0) { CHECK_EQ(s.verdict, ct::Verdict::Skip); CHECK_EQ(s.reason, ct::Reason::Withdrawn); }
-                else CHECK_EQ(s.verdict == ct::Verdict::Pass || s.verdict == ct::Verdict::Skip, true);   // already run (the hunt is dropped, not offered)
+                else CHECK_EQ(s.verdict, ct::Verdict::Pass);   // already run
                 ++v20;
             }
         }
-        CHECK_EQ(v15, 1u); CHECK_EQ(v20, when == 0 ? 2u : 1u);   // the 20 V row and its 6 A hunt (a hunt that already ran left no row)
+        CHECK_EQ(v15, 1u); CHECK_EQ(v20, 1u);
         // The 15 V request went to the new slot (PDO 3) in the re-planned case, one Request per row, never two in flight.
         unsigned at15 = 0;
         for (const auto& c : f.choices) if (c.pos == 3 && c.mv == 15000) ++at15;
@@ -7538,7 +7214,7 @@ static void test_midrun_reannounce_dropping_one_offer_replans_per_row() {
         if (when == 0) {
             CHECK_EQ(f.pd_requests, 4u);   // 20 V (in flight when the list changed), 15 V, 9 V, 5 V: the re-plan sent no Request of its own
             CHECK_EQ(f.replans.size(), 1u);
-            CHECK_EQ(f.replans[0][1] >= 2u, true);   // both 20 V rows withdrawn in the one re-plan
+            CHECK_EQ(f.replans[0][1] >= 1u, true);   // the 20 V row withdrawn in the one re-plan
             CHECK_EQ(r.evidence().rebalanced, 1u);
             CHECK_EQ(f.plan_changes >= 1, true);
         }
@@ -7564,7 +7240,7 @@ static void test_midrun_reannounce_withdrawing_the_row_in_flight_ends_it_and_rel
     for (const auto& s : r.steps()) {
         if (s.mv == 15000) { CHECK_EQ(s.verdict, ct::Verdict::Skip); CHECK_EQ(s.reason, ct::Reason::Withdrawn); }
         if (s.mv == 20000 && !s.hunt) { CHECK_EQ(s.verdict, ct::Verdict::Pass); CHECK_EQ(s.pos, 4u); }   // it ran first, before the list changed
-        if (s.mv < 15000) CHECK_EQ(s.verdict, ct::Verdict::Pass);   // 9 V and 5 V run after it, on the new list
+        if (s.mv && s.mv < 15000) CHECK_EQ(s.verdict, ct::Verdict::Pass);   // 9 V and 5 V run after it, on the new list
     }
     CHECK_EQ(f.releases > releases_before, true);   // the withdrawn row was released to 5 V
     CHECK_EQ(f.in.vbus_mv, 5000);
@@ -7616,7 +7292,7 @@ static void test_a_reannounce_that_places_no_row_is_a_resplit_not_offers_changed
 
 // ---- k2/resplit-all (2026-11-17): the Anker 2-way splitter trace, runs/splitter-offers/r1/old/timeline.txt ----
 // Caps 5/9/12/15/20 V at 1.5 A. The rows run top-down; after the 20 V row passed the splitter re-announced 5 V 1.5 A + 9 V 3 A (the
-// other port took the budget): the 6 A hunt row behind the 20 V row, 15 V and 12 V were gone. That is a re-split like any other:
+// other port took the budget): 15 V and 12 V were gone. That is a re-split like any other:
 // those rows are Withdrawn, the 9 V and 5 V rows run on the new list, then the unit stays open for kWithdrawnWaitMs for the offer to
 // come back, then closes.
 static pd::SourceCaps anker_caps() {
@@ -7644,7 +7320,7 @@ static uint32_t anker_to_resplit(Fake& f, ct::Runner& r) {
     f.caps = anker_resplit();
     return at;
 }
-static unsigned anker_pending_rows(const ct::Runner& r) {   // the rows the re-split drops: the 20 V 6 A hunt, 15 V, 12 V
+static unsigned anker_pending_rows(const ct::Runner& r) {   // the rows the re-split drops: 15 V, 12 V
     unsigned n = 0;
     for (const auto& s : r.steps()) if (s.mv >= 12000 && s.group == ct::Group::Pd && s.verdict == ct::Verdict::Pending) ++n;
     return n;
@@ -7655,7 +7331,7 @@ static unsigned anker_pending_rows(const ct::Runner& r) {   // the rows the re-s
 static void test_resplit_dropping_the_pending_top_rows_waits_then_ends_withdrawn() {
     Fake f; ct::Runner r(f);
     anker_to_resplit(f, r);
-    CHECK_EQ(anker_pending_rows(r), 3u);
+    CHECK_EQ(anker_pending_rows(r), 2u);
     uint32_t closed_at = 0, last_row_at = 0;
     for (unsigned n = 0; n < 120000 && r.state() != ct::State::Done; n += 100) {
         f.tick(r, 100);
@@ -7664,12 +7340,12 @@ static void test_resplit_dropping_the_pending_top_rows_waits_then_ends_withdrawn
     }
     CHECK_EQ(r.state(), ct::State::Done);
     CHECK_EQ(count_reason_all(r, ct::Reason::CapsChanged), 0u);
-    CHECK_EQ(count_reason_all(r, ct::Reason::Withdrawn), 3u);
+    CHECK_EQ(count_reason_all(r, ct::Reason::Withdrawn), 2u);
     CHECK_EQ(anker_pending_rows(r), 0u);
     CHECK_EQ(row_passed(r, 5000), true); CHECK_EQ(row_passed(r, 9000), true); CHECK_EQ(row_passed(r, 20000), true);
     CHECK_EQ(r.evidence().rebalanced, 1u);
     CHECK_EQ(f.replans.size(), 1u);
-    if (!f.replans.empty()) CHECK_EQ(f.replans[0][1], 3u);   // the three dropped rows withdrawn in the one re-plan
+    if (!f.replans.empty()) CHECK_EQ(f.replans[0][1], 2u);   // the two dropped rows withdrawn in the one re-plan
     CHECK_EQ(last_row_at != 0 && closed_at != 0 && closed_at - last_row_at >= ct::kWithdrawnWaitMs, true);   // the unit waited for the offer
     CHECK_EQ(closed_at - last_row_at < ct::kWithdrawnWaitMs + 10000, true);                                  // ... and not much longer than the bound
 }
@@ -7711,7 +7387,7 @@ static void test_resplit_with_the_offer_back_after_the_unit_closed_stays_withdra
     f.caps = anker_caps();
     f.tick(r, 60000);
     CHECK_EQ(r.state(), ct::State::Done);
-    CHECK_EQ(count_reason_all(r, ct::Reason::Withdrawn), 3u);
+    CHECK_EQ(count_reason_all(r, ct::Reason::Withdrawn), 2u);
     CHECK_EQ(count_reason_all(r, ct::Reason::CapsChanged), 0u);
     CHECK_EQ(anker_pending_rows(r), 0u);
     CHECK_EQ(r.evidence().rebalanced, 1u);
@@ -7728,7 +7404,7 @@ static void test_resplit_with_another_spec_revision_is_still_caps_changed() {
         if (!closed_at && (r.state() == ct::State::Detach || r.state() == ct::State::Done)) closed_at = f.in.now;
     }
     CHECK_EQ(r.state(), ct::State::Done);
-    CHECK_EQ(count_reason_all(r, ct::Reason::CapsChanged), 5u);   // the hunt, 15 V, 12 V, 9 V, 5 V: everything still pending
+    CHECK_EQ(count_reason_all(r, ct::Reason::CapsChanged), 5u);   // 15 V, 12 V, 9 V, 5 V and the Xiaomi chain row: everything still pending
     CHECK_EQ(count_reason_all(r, ct::Reason::Withdrawn), 0u);
     CHECK_EQ(r.evidence().rebalanced, 0u);
     CHECK_EQ(f.replans.empty(), true);
@@ -7836,13 +7512,13 @@ static void test_a_pps_change_keeps_the_rows_whose_target_still_fits() {
         unsigned full_withdrawn = 0, pps_pass = 0;
         for (const auto& s : r.steps()) {
             if (s.algorithm != A::Pps) continue;
-            if (s.ma > 3000 && s.reason == ct::Reason::Withdrawn) ++full_withdrawn;   // the full-current row (5 A) and the 6 A hunt: 3 A no longer fits
+            if (s.ma > 3000 && s.reason == ct::Reason::Withdrawn) ++full_withdrawn;   // the full-current row (5 A): 3 A no longer fits
             if (s.verdict == ct::Verdict::Pass && s.ma <= 1000) {
                 ++pps_pass;
                 CHECK_EQ(pd::decode_pdo(s.pdo).max_ma, 3000u);   // kept, at the new lower word
             }
         }
-        CHECK_EQ(full_withdrawn, 2u);
+        CHECK_EQ(full_withdrawn, 1u);
         CHECK_EQ(pps_pass >= 3u, true);
     }
     {   // APDO 3.3-11 V -> 7-11 V: the 5.2 V row's target is outside the new range, the higher ones run
@@ -7914,7 +7590,9 @@ static void test_a_reannounce_between_rows_replans_with_the_counts_exact() {
         CHECK_EQ(r.start(f.caps, kSplitterPd, f.in, true), ct::Reason::None);
         CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Releasing && f.pd_requests >= 1; }), true);
         const int pc = f.plan_changes;
-        f.caps = splitter_reannounced();   // 20 V withdrawn, 9/15 V raised to 3 A
+        pd::SourceCaps no15 = splitter_caps();   // 15 V withdrawn (a row still to run), 20 V moves to slot 3
+        no15.num_pdos = 3; no15.pdos[2] = no15.pdos[3]; no15.pdos[3] = {};
+        f.caps = no15;
         f.tick(r, 100);
         CHECK_EQ(f.replans.size(), 1u);
         CHECK_EQ(f.plan_changes, pc + 1);   // == : exactly one re-plan
@@ -7924,11 +7602,10 @@ static void test_a_reannounce_between_rows_replans_with_the_counts_exact() {
         CHECK_EQ(count_reason_all(r, ct::Reason::CapsChanged), 0u);
         unsigned v20 = 0, v15 = 0;
         for (const auto& s : r.steps()) {
-            if (s.mv == 20000 && s.hunt) { CHECK_EQ(s.verdict, ct::Verdict::Skip); CHECK_EQ(s.reason, ct::Reason::Withdrawn); ++v20; }
-            if (s.mv == 20000 && !s.hunt) { CHECK_EQ(s.verdict, ct::Verdict::Pass); ++v20; }   // it ran before the list changed
-            if (s.mv == 15000) { CHECK_EQ(s.verdict, ct::Verdict::Pass); ++v15; }
+            if (s.mv == 20000) { CHECK_EQ(s.verdict, ct::Verdict::Pass); ++v20; }   // it ran before the list changed
+            if (s.mv == 15000) { CHECK_EQ(s.verdict, ct::Verdict::Skip); CHECK_EQ(s.reason, ct::Reason::Withdrawn); ++v15; }
         }
-        CHECK_EQ(v20, 2u); CHECK_EQ(v15, 1u);
+        CHECK_EQ(v20, 1u); CHECK_EQ(v15, 1u);
     }
     {   // a tick in the first Baseline (no PD row has started): the plan is rebuilt from the new list, no re-plan count
         Fake f; f.caps = splitter_caps();
@@ -7985,11 +7662,11 @@ static void test_two_lists_300ms_apart_send_one_request_after_the_second_settles
     ct::Runner r(f);
     CHECK_EQ(r.start(f.caps, kSplitterPd, f.in, true), ct::Reason::None);
     CHECK_EQ(run_until(f, r, [&] { return f.pd_requests >= 1 && r.steps()[r.index()].verdict == ct::Verdict::Pass; }), true);   // the 20 V row passed
-    f.caps = splitter_reannounced();   // list 1: 20 V withdrawn, 9/15 V raised to 3 A
+    f.caps = splitter_without_9v();   // list 1: 9 V withdrawn (a row still to run), 15 V moves to slot 2
     f.tick(r, 300);
     const uint32_t t1 = f.in.now;
-    pd::SourceCaps again = splitter_reannounced();
-    again.pdos[2] = pd::decode_pdo((300u << 10) | 250);   // list 2, 300 ms after list 1: a word-only change on 15 V
+    pd::SourceCaps again = splitter_without_9v();
+    again.pdos[1] = pd::decode_pdo((300u << 10) | 250);   // list 2, 300 ms after list 1: a word-only change on 15 V
     f.caps = again;
     f.tick(r, 30000);
     unsigned at15 = 0; uint32_t t15 = 0;
@@ -8000,12 +7677,13 @@ static void test_two_lists_300ms_apart_send_one_request_after_the_second_settles
     f.tick(r, 200000);
     CHECK_EQ(r.state(), ct::State::Done);
     CHECK_EQ(count_reason_all(r, ct::Reason::CapsChanged), 0u);
-    CHECK_EQ(f.replans.size(), 1u);   // only list 1 (20 V withdrawn) was a re-plan; the word-only list 2 was not logged
-    unsigned v20 = 0;
-    for (const auto& s : r.steps())
-        if (s.mv == 20000 && s.hunt) { CHECK_EQ(s.verdict, ct::Verdict::Skip); CHECK_EQ(s.reason, ct::Reason::Withdrawn); ++v20; }
-        else if (s.mv == 20000) { CHECK_EQ(s.verdict, ct::Verdict::Pass); ++v20; }
-    CHECK_EQ(v20, 2u);
+    CHECK_EQ(f.replans.size(), 1u);   // only list 1 (9 V withdrawn) was a re-plan; the word-only list 2 was not logged
+    unsigned v20 = 0, v9 = 0;
+    for (const auto& s : r.steps()) {
+        if (s.mv == 20000) { CHECK_EQ(s.verdict, ct::Verdict::Pass); ++v20; }
+        if (s.mv == 9000) { CHECK_EQ(s.verdict, ct::Verdict::Skip); CHECK_EQ(s.reason, ct::Reason::Withdrawn); ++v9; }
+    }
+    CHECK_EQ(v20, 1u); CHECK_EQ(v9, 1u);
 }
 // Item 7 + rule 2: a re-split during row 0 (the 20 V row, top-down) delivered as a COMPLETE EPR_Source_Capabilities (outside the
 // K2's own EPR entry/exit - Epr is not selected, epr_stage_ == 0) is a re-announce like any other and goes through the per-row
@@ -8207,6 +7885,7 @@ static void test_level_plans_per_level() {
     unsigned pending = 0, advertised[8] = {};
     for (const auto& s : r.steps()) {
         CHECK_EQ(int(ct::unit_of(s)), int(ct::Unit::Pd));   // Light plans no PdLow rows
+        if (ct::is_mi_chain(s)) continue;                    // the Xiaomi chain row: Light keeps it (it sends nothing)
         if (s.verdict == ct::Verdict::Pending) { ++pending; CHECK_EQ(s.pos, 1); CHECK_EQ(s.mv, 5000); }
         if (s.reason == ct::Reason::Advertised && s.pos < 8) ++advertised[s.pos];
         CHECK_EQ(s.hunt, false);
@@ -8692,32 +8371,19 @@ int main() {
     test_vivo_plan_runs_the_engine();
     test_pd_bundles();
     test_source_probe_costs_at_most_a_second(); test_source_probe_only_in_a_pd_contract_and_once(); test_source_probe_skipped_without_a_contract();
-    test_hunt_runs_on_the_pps_apdo_that_covers_the_voltage(); test_preview_does_not_count_hunt_rows_the_run_drops();
-    test_fixed_only_source_keeps_the_fixed_20v_hunt();
-    test_fixed_20v_hunt_stays_when_no_apdo_reaches_20v(); test_fixed_20v_hunt_stays_when_the_pps_rows_are_not_selected();
+    test_mi_chain_row_is_planned_once_last_of_the_pd_unit(); test_preview_counts_the_chain_row_with_the_svid();
     test_pps_full_current_row_with_a_5a_cable(); test_pps_full_current_row_clamps_to_an_unread_cable();
     test_pps_over_5a_apdo_with_a_5a_cable_is_a_cable_limit_skip(); test_pps_over_5a_apdo_with_an_unread_cable_is_a_cable_limit_skip();
     test_pps_over_5a_apdo_with_a_spoofed_6a_cable_asks_the_advertised_current();
-    test_pps_full_current_row_of_a_2a_apdo(); test_pps_full_current_row_follows_the_apdos_rows_and_hunt();
+    test_pps_full_current_row_of_a_2a_apdo(); test_pps_full_current_row_follows_the_apdos_rows();
     test_pps_full_current_row_is_not_a_duplicate_of_the_1a_row(); test_pps_full_current_row_off_when_pps_is_not_selected();
     test_pps_full_current_rows_fit_the_plan_of_a_legal_list(); test_pps_full_current_rows_never_overflow_the_plan();
-    test_hunt_waits_for_the_xiaomi_auth_chain(); test_unread_cable_limit_follows_the_source_offers();
-    test_hunt_the_source_does_not_offer_reads_not_unlocked(); test_source_that_only_asks_our_svids_drops_the_hunt_rows();
-    test_hunt_with_a_spoofed_identity_uses_its_cable_limits();
-    test_hunt_refused_with_a_proven_cable_and_chain_stays_a_failure();
-    test_hunt_accepted_after_the_chain_passes();
-    test_hunt_without_the_chain_and_without_6a_sends_no_request_and_leaves_no_row();
-    test_hunt_after_the_chain_with_the_list_still_at_5a_is_a_neutral_skip();
-    test_hunt_after_the_chain_with_the_list_re_announced_at_6a_asks_for_6a();
+    test_unread_cable_limit_follows_the_source_offers();
+    test_mi_without_the_svid_reads_no_svid(); test_mi_cuktech_6a_modes_are_tested(); test_mi_mode_above_the_cable_is_a_cable_limit_skip();
+    test_mi_bank_pps_3a_to_5a(); test_mi_fh22_done_no_new_modes(); test_mi_chain_waits_then_reads_how_it_ended(); test_mi_light_run_lists_the_modes();
     test_preauth_list_after_a_hunt_reset_is_not_offers_changed(); test_a_cut_short_list_that_never_grows_is_still_offers_changed();
     test_a_cut_short_list_without_a_xiaomi_chain_is_still_offers_changed();
-    test_hunt_reject_then_the_same_list_again_keeps_the_rows();
-    test_hunt_reject_then_a_list_without_the_pps_apdos_skips_only_those_rows();
     test_an_unsolicited_list_change_during_a_normal_row_replans_per_row();
-    test_hunt_answered_by_a_hard_reset_reads_not_unlocked(); test_hunt_hard_reset_keeps_the_chain_and_cable_reasons();
-    test_hunt_evidence_names_each_refusal_cause(); test_hunt_evidence_records_what_the_sink_saw();
-    test_hunt_evidence_marks_a_silent_source_as_a_timeout(); test_hunt_evidence_without_a_trace_is_unexplained();
-    test_hunt_evidence_only_for_refused_rows(); test_classify_hunt_precedence();
     test_plan_and_run(); test_an_auto_hold_counts_as_released(); test_quiet_is_exactly_the_row_in_flight(); test_paint_blocked_needs_flight_and_an_engine_window(); test_refusals(); test_hold_keeps_the_baseline_until_released(); test_safe5_baseline();test_cancel_and_failed_release(); test_release_waits_for_the_sink_verification_and_its_hard_reset();
     test_faults(); test_loop_lock_refuses_and_aborts(); test_timeouts_and_skips(); test_one_second_holds(); test_qc2_settles_within_two_percent(); test_qc2_5v_accepts_vsafe5_reading(); test_legacy_5v_accepts_vsafe5_reading(); test_qc3_rows_use_an_asymmetric_band(); test_legacy_rows_use_a_five_percent_band(); test_legacy_5v_row_uses_the_vsafe5_window(); test_scp_4v5_row_judges_the_adapter_readback(); test_qc3plus_without_response_is_a_distinct_skip(); test_unsupported_protocol_skips_its_other_rows(); test_silent_source_fails_every_handshake_row(); test_answered_handshake_passes_the_5v_row(); test_svooc_row_follows_the_adapter_ramp(); test_svooc_detected_is_a_pass(); test_vooc_family_shares_one_session(); test_ceiling_off_runs_no_stage(); test_ceiling_is_deep_only_and_the_ident_is_kept(); test_ceiling_judged_ladder_is_the_result(); test_ceiling_refusal_is_recorded_and_the_run_goes_on(); test_ceiling_no_adapter_and_early_abort(); test_ceiling_cap_stops_a_session_that_is_never_judged(); test_ceiling_cancel_stops_the_trigger(); test_ceiling_needs_a_detected_svooc_family(); test_ceiling_waits_for_the_lines_after_the_family_release(); test_ceiling_lines_never_free_is_a_recorded_refusal(); test_ceiling_usb_a_mode_is_the_plain_on(); test_ceiling_quiet_adapter_is_stopped_at(); test_ceiling_runner_guard_names_its_cause(); test_ceiling_vbus_lost_after_the_stage_is_recovered_by_an_rd_cycle(); test_ceiling_vbus_that_never_returns_ends_the_run(); test_ceiling_adapter_ramp_is_part_of_the_stage(); test_ceiling_vbus_stuck_high_after_the_stage_is_unsafe(); test_vivo_no_response_skips_the_other_vivo_rows(); test_pps_min_step_accepts_unloaded_floor(); test_pps_up_step_uses_the_tight_band();
     test_missing_samples_and_wrap();
@@ -8758,7 +8424,7 @@ int main() {
     test_power_loss_at_every_event_matches_an_uninterrupted_run();
     test_a_final_stop_closes_before_it_skips();
     test_running_grid_lists_the_algorithms_in_the_order_the_plan_runs_them(); test_running_grid_follows_the_users_unit_order();
-    test_running_grid_places_the_mi_probes_where_the_plan_runs_them(); test_running_grid_matches_the_order_the_run_worked_through();
+    test_running_grid_places_the_xiaomi_row_where_the_plan_runs_it(); test_running_grid_matches_the_order_the_run_worked_through();
     test_running_grid_follows_a_plan_that_is_rebuilt_during_the_run();
     test_pps_accepted_then_dropped_at_no_load_is_needs_load(); test_pps_collapse_with_current_drawn_stays_lost();
     test_fixed_row_collapse_stays_lost(); test_pps_collapse_after_ps_rdy_stays_lost();

@@ -121,8 +121,7 @@ test("FH22 #18: the AVS pass stays green and shows the offered range", () => {
 
 test("FH22 #18: a protocol the charger never answered is grey with its reason, never red", () => {
   const b = K2Card.badges(K2Card.parseLink(golden.fh22_full.link).card);
-  const want = { AFC: "unsupported", FCP: "unsupported", SCP: "unsupported", VOOC: "needs load", SVOOC: "needs load",
-    SVOOC65: "needs load", VIVO: "no response" };
+  const want = { AFC: "unsupported", FCP: "unsupported", SCP: "unsupported", VOOC: "needs load", VIVO: "no response" };
   for (const [n, why] of Object.entries(want)) {
     const x = b.find((y) => y.id === "grp:" + n);
     assert.equal(x.tone, "skip", n);
@@ -130,6 +129,7 @@ test("FH22 #18: a protocol the charger never answered is grey with its reason, n
     assert.ok(x.word && x.glyph, n);
   }
   assert.equal(b.filter((x) => x.tone === "fail").length, 0);
+  assert.ok(!b.some((x) => x.id === "grp:SVOOC" || x.id === "grp:SVOOC65"));   // the VOOC family is one badge
   const sec = K2Card.sections(K2Card.parseLink(golden.fh22_full.link).card);
   const afc = sec.flatMap((s) => s.groups).find((g) => g.title === "AFC");
   assert.equal(afc.tone, "skip");
@@ -262,7 +262,7 @@ test("bad fragments say what is wrong", () => {
   flipped[20] ^= 1;
   assert.equal(code(BASE + "1c." + toB64url(flipped)), "bad-crc");
   const newer = payloadOf("fh22");
-  newer[33] = 12;   // one past format 11
+  newer[33] = 13;   // one past format 12
   assert.equal(code(BASE + "1c." + toB64url(recordOf(newer))), "newer-card");
 });
 
@@ -497,6 +497,35 @@ test("the graph geometry keeps the limit lines in view, breaks a run at an empty
   assert.equal(K2Deep.summary(flat), null);
 });
 
+test("a format 11 Deep link (tests/fixtures/qrshare_v11.tsv) keeps its CRC and its block, with no Xiaomi section", () => {
+  const row = readFileSync(new URL("./fixtures/qrshare_v11.tsv", import.meta.url), "utf8").split("\n")
+    .filter((l) => l && !l.startsWith("#")).map((l) => l.split("\t")).find((c) => c[0] === "card_deep_v11");
+  const card = K2Card.parseLink(BASE + "2c." + toB64url(fromHex(row[3]))).card;
+  assert.equal(card.level, "Deep");
+  assert.equal(card.deep_error, undefined);
+  assert.equal(card.deep.xiaomi, undefined);
+  assert.deepEqual(JSON.parse(JSON.stringify(card.deep)), deepJson);
+  assert.equal(K2Card.sections(card).find((s) => s.title === "Xiaomi"), undefined);
+});
+
+test("format 12: a Medium card's block carries only the Xiaomi section, read as tools/k2_qr.py reads it", () => {
+  const card = K2Card.parseLink(BASE + "2c." + toB64url(qrshare.card_mi_v2)).card;
+  assert.equal(card.level, undefined);
+  assert.equal(card.deep_error, undefined);
+  assert.deepEqual(Object.keys(card.deep), ["xiaomi"]);
+  assert.deepEqual(JSON.parse(JSON.stringify(card.deep.xiaomi)), {chain: 20, chain_text: "done, verified", done: true, modes: [
+    {label: "Mi 55W", watts: 55, mv: 11000, ma: 5000, before_pdo: 0xC0DC323C, after_pdo: 0xC0DC3264, before: "PPS 5-11V 3A",
+      after: "PPS 5-11V 5A", verdict: "pass", reason: ""}]});
+  const s = K2Card.sections(card);
+  assert.equal(s.find((x) => x.title === "Deep run details"), undefined);
+  const mi = s.find((x) => x.title === "Xiaomi");
+  assert.deepEqual(mi.groups.map((g) => [g.title, g.tone]), [["Xiaomi auth", "pass"], ["Mi 55W", "pass"]]);
+  assert.deepEqual(mi.groups[0].rows.map((r) => r.value), ["done, 1 new mode", "done, verified"]);
+  assert.deepEqual(mi.groups[1].rows.map((r) => r.value), ["achieved", "PPS 5-11V 3A", "PPS 5-11V 5A", "11V 5A"]);
+  assert.equal(K2Deep.pdoText(0x0001912C), "PD 5V 3A");
+  assert.equal(K2Deep.pdoText(0x0008C1F4), "EPR 28V 5A");
+});
+
 test("a link of a format 10 firmware keeps its own CRC and has no block", () => {
   const rec = fromHex("024d3c2b1aac0534120302077b12efcdab0f570a10002296e76b90ad760500080022b30000000000e072d4120f0080cd00000000000000000000000108e1c60d00000108214d902500000000000000000100f01603");   // tools/k2_qr.py's test: the golden card at format 10, its CRC over the format 10 record
   const r = K2Card.parseLink(BASE + "2c." + toB64url(rec));
@@ -520,4 +549,49 @@ test("a Deep block this page cannot read leaves the card and says why", () => {
   const s = K2Card.sections(card).find((x) => x.title === "Deep run details");
   assert.equal(s.groups[0].title, "Not shown");
   assert.equal(s.groups[0].rows[0].value, "Deep block is cut short");
+});
+
+test("the VOOC family is one group; its levels read in watts, claimed only from the Deep ceiling", () => {
+  const card = JSON.parse(JSON.stringify(K2Card.parseLink(deepLink).card));
+  card.groups.VOOC = { verdict: "fail", max_mv: 0, reason: "needs load" };
+  card.groups.SVOOC = { verdict: "pass", max_mv: 5000, detail: 15 };
+  card.groups.SVOOC65 = { verdict: "fail", max_mv: 0, reason: "needs load" };
+  // the golden's ceiling: stopped, 5.5 A at 11.2 V = 61.6 W
+  assert.deepEqual(K2Card.voocLevels(card.deep.svooc).map((l) => l.label + ":" + l.state),
+    ["VOOC 20W:not tested", "SVOOC 50W:claimed", "SVOOC 65W:not reached", "SVOOC 100W:not reached", "SVOOC 120W:not reached"]);
+  const b = K2Card.badges(card);
+  const fam = b.filter((x) => /^grp:(VOOC|SVOOC|SVOOC65)$/.test(x.id));
+  assert.equal(fam.length, 1);
+  assert.equal(fam[0].label, "VOOC");
+  assert.equal(fam[0].tone, "pass");
+  const lv = b.filter((x) => x.id.startsWith("lvl:"));
+  assert.deepEqual(lv.map((x) => x.label), ["SVOOC 50W"]);
+  assert.equal(lv[0].tone, "noted");   // framed, never green: no current was drawn
+  assert.equal(lv[0].word, "claimed");
+  const g = K2Card.sections(card).flatMap((s) => s.groups).filter((x) => /VOOC/.test(x.title) && x.title !== "SVOOC ceiling");   // the Deep block keeps its ceiling group
+  assert.deepEqual(g.map((x) => x.title), ["VOOC"]);
+  const rows = Object.fromEntries(g[0].rows.map((r) => [r.label, r.value]));
+  assert.equal(rows["SVOOC 50W"], "claimed");
+  assert.equal(rows["SVOOC 120W"], "not reached");
+  assert.equal(rows["VOOC 20W"], "not tested");
+  // without a ceiling run nothing is claimed and nothing is "not reached"
+  delete card.deep.svooc;
+  assert.ok(K2Card.voocLevels(undefined).every((l) => l.state === "not tested"));
+  assert.equal(K2Card.badges(card).filter((x) => x.id.startsWith("lvl:")).length, 0);
+});
+
+test("the card page's OEM watts match tests/fixtures/oem_watts.txt and the firmware's level table", () => {
+  let labels = 0, claims = 0;
+  for (const line of readFileSync(new URL("./fixtures/oem_watts.txt", import.meta.url), "utf8").split("\n")) {
+    if (!line.trim() || line.trim().startsWith("#")) continue;
+    const f = line.split("|").map((x) => x.trim());
+    if (f[0] === "label") { assert.equal(K2Card.oemLabel(f[1], +f[2]), f[3], line); labels++; }
+    if (f[0] === "claim") {
+      assert.equal(K2Card.oemClaim({ w: +f[4], ceiling: f[5] === "y" }, { end: f[1], vmax_mv: +f[2], word: parseInt(f[3], 16) }), f[6], line);
+      claims++;
+    }
+  }
+  assert.ok(labels >= 10 && claims >= 12);
+  const src = readFileSync(new URL("../include/k2/chargertest/oem_watts.hpp", import.meta.url), "utf8");
+  for (const l of K2Card.OEM_LEVELS) assert.ok(src.includes(`{Family::Vooc, "${l.word}", ${l.mv}, ${l.ma}, ${l.w}, ${l.ceiling}},`), l.word + l.w);
 });

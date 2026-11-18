@@ -88,7 +88,7 @@ another. The runner does this:
   so each Request is an up-step from 5 V. Reason: a two-port splitter (Anker, pattern `budget-reannounce-mid-run`) re-splits its budget about 4-4.5 s
   after announcing and withdraws the high rows; asking them first catches them while the offer stands (the withdrawn wait,
   `kWithdrawnWaitMs`, runs from the last row of the unit and the re-plan matches rows by voltage as before). PPS / AVS sweeps,
-  the Mi 6A hunt and the EPR entry keep their order. The result layout is not touched: `result_layout::fixed_row` draws the chips
+  the Xiaomi unit and the EPR entry keep their order. The result layout is not touched: `result_layout::fixed_row` draws the chips
   ascending by voltage whatever the plan order, so the Running view still finds its running chip by `Token::mv` and the grid reads 5 V first.
   The Steps list stays in execution order. Host tests: `test_fixed_pd_rows_are_requested_from_the_top_voltage_down` (`test_charger_test`),
   `test_fixed_chips_read_ascending_whatever_the_plan_order` (`test_result_layout`).
@@ -191,6 +191,37 @@ Host tests: `test_charger_test` (`test_vooc_family_shares_one_session`,
 `test_vivo_no_response_skips_the_other_vivo_rows`), `test_fc_engine` (`vooc_ident_is_detected_and_nothing_is_answered`,
 `vooc_other_commands_are_never_answered`, `vooc_all_ones_frame_is_nothing_heard`, `vooc_never_inline`,
 `vooc_stop_releases`, `vooc_wake_forms_alternate`).
+
+### OEM power levels by their watts (2026-11-18, host-tested)
+
+OEM protocols are read by the power levels they name, never by a protocol version. The one table is
+`include/k2/chargertest/oem_watts.hpp` (`kLevels`, provenance in its header; Python twin `tools/oem_watts.py`, web
+twins in `tools/web/ctgrid.js` and `docs/site/r/card.js`, all checked against `tests/fixtures/oem_watts.txt`).
+
+- **VOOC family.** Once a run has ended, Results shows the family as one group: the detection chip (the "detected" row) and then
+  one chip per level, `VOOC 20W`, `SVOOC 50W`, `SVOOC 65W`, `SVOOC 100W`, `SVOOC 120W`. The Running grid keeps
+  the unit rows. A family that never answered folds into the "No reply" row as the one word `VOOC`.
+- **What a level can say.** The K2 draws no current, so no level ever passes:
+  - *claimed*: the Deep ceiling stage kept the session going under an ask of at least the level's watts
+    (claim = `vmax_mv x word x 100 mA`, rounded to whole watts). It is framed (`Noted`), never green.
+  - *not reached*: the ceiling run ran its course (judged, stopped, time cap) below the level. Dim.
+  - *not tested*: anything else, including every level on a Medium run (detection only, at 5 V) and VOOC 20W
+    (the ceiling stage only asks SuperVOOC words). Struck, like a skip.
+  The Results footer of the level row reads `up to 120W claimed`, `50-120W not reached` or `50-120W not tested`.
+- **SCP and UFCS** chips carry the watts the protocol names: SCP from its current write (`10V 22.5W`), UFCS from the
+  mode's current (`11V 44W`). Within a family the run summary ranks by those claimed watts (`SCP 22.5W`).
+- **AFC and FCP** name no current in the exchange the K2 makes, so they keep volts only. QC keeps its versions.
+- Same text in `charger_summary.py` (a `VOOC levels` line), the web grid and the report-card page. A saved card keeps
+  all three VOOC groups (no card or QR encoding changed); every view of it folds them into ONE `VOOC` group, its lead
+  (`report_card::vooc_lead`: the first pass, else the first fail, else the first held): the device's Report cards page
+  (one cell, the counts), the drive's SUMMARY.md, `charger_summary.py` and the card page, which also lists the levels
+  from the Deep block's ceiling. The device page has no level rows: the card record holds no ceiling (the Deep block lives
+  beside it). CARDS.JSON keeps the three group keys.
+
+Host tests: `test_oem_watts` (C++ and Python, one golden), `test_result_layout` (`vooc_family_reads_as_watts_levels`,
+`levels_footer_names_the_top_claim`), `test_ui_charger_test`, `test_ui_no_truncation`, `test_charger_summary`,
+`test_card_tone` (`test_the_vooc_family_counts_once`), `test_report_card_json`
+(`test_summary_folds_the_vooc_family`), `test_ui_capture` (`cards_vooc_rot0..3`), `test_ctgrid.mjs`, `test_cardpage.mjs`.
 
 ## A port that cuts its own 5 V rail: retry within a window (2026-11-15, host-tested, hardware check pending)
 
@@ -345,29 +376,18 @@ then PdLow); the unit and wire IDs did not change, only the order.
 1. **Vendor fast modes by company**, all Legacy (PD-silent) units sharing one attach: Huawei / Honor (FCP, SCP),
    Samsung (AFC), OPPO / OnePlus / vivo (VOOC, SVOOC, SVOOC65, VIVO). The probe order inside each
    family is fixed.
-2. **USB PD**: fixed, EPR, AVS, PPS safe rows and the revision rows. The Xiaomi / Redmi Mi 6A probe rows run at the end
-   of this unit (they need the PD session) and are presented under the Xiaomi family; they have no algorithm of their
-   own and follow the PD selection. A probe is only sent against a list that advertises its 6 A (2026-11-07): a source that
-   listed SVID 0x2717 gets the chain and the probe waits for the re-announced 6 A list; a source that never listed it and
-   advertises no 6 A drops the rows from the plan at run time (nothing on the card or in the counts); one that listed it
-   but stays at its own limit gets the skip below with no Request sent ("not unlocked", detail 155 to 158 as far as
-   known, plain when the chain ran and the cable fits). A probe the source refused or never answered is a neutral skip, "not unlocked",
-   with the missing link as its detail: no OEM chain (the source never listed SVID 0x2717), chain unfinished (listed,
-   but the auth did not finish within 2 s), or 3 A cable (chain done, cable not proven above 3 A; a far-end K2 cannot
-   read the cable). A probe the source answers with a Hard Reset (Xiaomi 20K) is the same neutral skip, sent once and
-   not retried; the cable and chain reasons above stay, otherwise it reads "source reset". When the K2 itself presents a spoofed identity and nothing physical was read, that identity's cable
-   VDO limits are the cable limit used: a 3 A identity is a 3 A cable, a 5 A identity makes the cause "vendor not
-   accepted" (chain done, 5 A cable presented, 6 A still not offered). Only a refusal with a finished chain and a read
-   5 A cable stays a FAIL. The run summary words a probe row like every other row ("Mi 20V 6A").
-   **Full-current PPS row**: the PPS rows of an APDO request 1 A. The last row of each PPS APDO, after its Mi probe rows,
+2. **USB PD**: fixed, EPR, AVS, PPS safe rows and the revision rows, then the **Xiaomi unit** (its chain row is the last row of
+   the PD unit, so the modes it finds run in the same attach; see "Xiaomi unit (SVID 0x2717)" below). It has no algorithm of
+   its own: it rides the fixed or the PPS selection.
+   **Full-current PPS row**: the PPS rows of an APDO request 1 A. The last row of each PPS APDO
    requests the APDO's top voltage at its whole advertised current (11 V 5 A on a 5-11 V 5 A APDO, 20 V 2 A on a 5-20 V
    2 A one), clamped to the cable limit the planner uses for every row (`cable_ma`: 3 A when the cable was not read, 5 A
    read or EPR-proven; a spoofed identity does not change it). The row is an ordinary PPS row: same pass band, not
    continuous, not a probe. It is left out when it would repeat the 1 A row (an APDO of 1 A or less). Its label states
    the requested current ("PPS 11V 3A" on an unread cable, "11V 5A ✓" in the summary's PPS group); the other PPS rows
    keep showing the advertised one. A failing full row marks the PD group failed on the report card (it is not a
-   continuous row, so the PPS range entries are unaffected). Host tools tell it from a probe by the request: a plan row
-   asks 5 A at most, a probe 6 A (`tools/step_label.py` `HUNT_MA`); no wire field changed.
+   continuous row, so the PPS range entries are unaffected). Host tools tell it from a Xiaomi mode row by the row flag
+   (bit 6, `mi`); without the flag (an older firmware) by the request: a plan row asks 5 A at most (`tools/step_label.py` `HUNT_MA`).
 3. **Legacy / standard D+/D-**: QC2, QC3, QC3+ (with their Class B 20 V rows) and UFCS, a second PD-silent attach.
 4. **Risky units last**: PPS/AVS rows below 5 V (`latch-off-low-pps` / cut-and-recover), after their own detach and Pd
    attach (the `PdLow` unit; it never runs before `Pd`).
@@ -375,7 +395,7 @@ then PdLow); the unit and wire IDs did not change, only the order.
 **PPS deep sweep in the default run** (user decisions 2026-11-14). The session starts with `Options::pps_sweep` on, so
 every PPS APDO is swept every 100 mV at 1 A (ROADMAP "PPS deep sweep"). The sweep is split at 5 V (`ctsweep::kSplitMv`) into
 two rows:
-- **From 5 V up**, a Pd row right after the APDO's own checks (the range rows with the min and the max, the 6 A hunts, the
+- **From 5 V up**, a Pd row right after the APDO's own checks (the range rows with the min and the max, the
   full-current row, the 20 mV step walk), before the next APDO's rows. It runs with any unit list that has `pd`, on a
   self-powered K2, and before any step below 5 V can cut the source.
 - **Below 5 V**, a low programmable row of `PdLow` (external power only, last of the run), after the APDO's low min rows.
@@ -405,41 +425,41 @@ QC Class B (the 20 V rows of QC2 / QC3) is part of the default selection and of 
 charger (12 V max) that does not reach 20 V gets a neutral `Class A only (12 V max)` skip, not a failure; the K2's own
 voltage-ceiling check stays in front of the 20 V request.
 
-## Refused Mi 6 A rows: hunt evidence and cause
+## Xiaomi unit (SVID 0x2717)
 
-A Mi 6 A row that stays a FAIL (the source finished the Xiaomi chain, the cable is known to be 5 A or more, and it still answers
-Reject / Wait or nothing to the 6 A Request) is the one case that needs hardware to explain. The Runner keeps a compact snapshot
-of what the sink saw (`charger_test::HuntEvidence`, a side table of four slots; diagnostics only: nothing reads it back and no
-verdict depends on it) and `classify_hunt()` names the cause where the evidence decides it. The snapshot is taken for every
-refused hunt row, the FAIL and the "not unlocked" skips alike (a skip's cause is the missing link), from the sink's Xiaomi trace (`pd::XiaomiTrace`) and the Request that row sent. It does not survive a reboot
-resume (the journal does not hold it).
+One label ("Xiaomi") and one logic path for everything Xiaomi in the charger test (2026-11-18; it replaces the fixed Mi 6 A hunt
+rows and their evidence side table). Detection is by the SVID in the source's Discover SVIDs answer, never by vendor.
 
-Evidence fields: the chain flags (SVID 0x2717 listed, opener seen, authed = 0x2717020A seen, re-announced = Source_Capabilities
-after the auth, still inside the chain when the Request left, Request held by the chain guard, sent, cable read / inferred,
-timeout), the last 0x2717020x word the source sent, the number of PDOs in force at the Request, the PDO asked (position, type,
-the word and the current it advertised at the asked voltage), the Request word as sent, the cable limit the run used, the time
-from the auth to the refusal and from the Request to the source's answer (Accept / Reject / Wait / none).
+- **The chain row** (`Step::hunt`, `pos` 0; `ct::is_mi_chain`) is planned last in the PD unit whenever fixed or PPS is selected.
+  At its turn the sink's 0x2717 auth chain has run (unchanged wire behaviour, `pd::Sink`), and the row records how it ended in
+  `detail` (`mi_unlock::chain_code`: 1 no SVID, 2 no answer, 4..13 stalled at step 1..10, 20 verified, 21 done via 020A) with
+  `Reason::MiChain`. A finished chain is a Pass, anything else a neutral Skip ("no 0x2717 SVID", "chain: no answer", ...).
+- **The diff** (`mi_unlock::diff`, pure, `tests/test_mi_unlock.cpp`): the list in force when the chain finished, before
+  the source's re-announce (`XiaomiTrace::pre`) against the list in hand after the re-announce, PDO by PDO. A PDO that is new, or whose current, power
+  or voltage range went up, is an unlocked mode. Each mode becomes a row right behind the chain row (`pos` = its PDO
+  position; `ct::is_mi_mode`), asked at its new level (`mi_unlock::test_point`: a PPS / AVS mode at its top voltage and new
+  current), never above what is advertised.
+- **Limits.** A mode row passes the same gates as the full-current rows: the voltage limits, and the cable rule of e3cffbe3
+  (`used_cable_ma`, a spoofed identity counts; above 5 A `over5_cable_ma`). A mode the cable cannot carry is a Skip, "cable
+  limit" (`Reason::CableLimit`). A Light run lists the modes as "advertised" and asks none.
+- **Labels.** A mode is named by its power level, `step_label::mi_watts` (volts asked x current asked, whole watts): "Mi 55W"
+  (PPS 5-11 V 5 A at 11 V), "Mi 66W" (11 V 6 A), "Mi 120W" (20 V 6 A). The before -> after detail is the row's Detail page
+  ("Before" / "After") and the report text. The same rule lives in `tools/step_label.py` (`mi_watts`) and the web grid
+  (`miWatts`).
+- **Results grid.** One "Xiaomi" row: the chain chip ("auth", or the words "no SVID" / "no answer" / "stalled"), then one chip
+  per mode ("none new" when the chain finished and nothing changed).
+- **Report card** (format 12): the card record carries no Xiaomi row; the card's extension block carries a **Xiaomi section** at
+  its tail (`report_card_deep.hpp`: chain u5, n u3, then per mode before / after PDO, level, verdict, reason), on a card of any
+  level, when the source listed the SVID (no section for "no SVID"). The device card shows it as a "Xiaomi" fact line
+  (`cards_mi_text`: "55W✓ 66W skip", "done, no new modes", "no answer"); the QR link, `tools/report_card.py`,
+  `tools/charger_summary.py` and the web viewer (`docs/site/r/deep.js`, `card.js`) decode it. A block that does not fit the
+  QR record is left out whole.
+- **Not journaled:** the "before" PDOs (`Evidence::mi`) do not survive a reboot resume; a resumed run's mode reads "not kept".
 
-Causes, in the order `classify_hunt()` tests them (each is only reached when every one above it is ruled out):
-
-| Cause (wire word) | What it means | Evidence that decides it |
-|---|---|---|
-| `no-chain` | The source never listed SVID 0x2717: nothing to unlock. | svid flag clear. |
-| `inside-chain` | Our Request left while the chain was still running; that kills the chain. | sent and in-chain flags. |
-| `request-held` | The chain guard still held our Request when the row ended: it never went out. | held set, sent clear. |
-| `chain-stalled` | Listed, but the auth never reached 0x2717020A. | authed clear; `last_step` says where it stopped. |
-| `unexplained` | Authed, but no Request of this row was found (evidence incomplete). | sent clear after the above. |
-| `fixed-pdo` | The Request referred to a fixed PDO; a fixed PDO never offers 6 A. | PDO type fixed. |
-| `refused-offer` | The APDO in force offered the asked current and the source still refused. The real FAIL to chase. | advertised current at or above the asked current. |
-| `apdo-stale` | Authed, but no Source_Capabilities after the auth: the APDO in force was still the pre-auth 5 A. | re-announced clear. |
-| `capped-5a` | Re-announced, the APDO is still 5 A and the cable is 5 A: the source capped it. | re-announced set, cable at or above 5 A. |
-| `cable-cap` | The cable limit the run used (unread or 3 A) is below 5 A. | cable under 5 A. The row is the "not unlocked (3 A cable)" skip; it only reaches a FAIL here if the limit changed during the row. |
-
-Where it shows: the Steps detail page of the row (lines `Why:`, `Chain svid:... open:... auth:... re:...`, `Caps N APDO mA cable
-mA`, `Ask #pos V mA <answer> ms`; with a transition-capture thumbnail only `Why` and `Chain` fit), the `[HUNT]` log line, the
-Black Box (mark 8 `hunt-refusal`, and a frozen capture, trigger `6 A refused`), `k2_remote charger-test results` (a `hunt:` line
-under the row and a `hunt` object in the JSON) and the run summary (`Mi 20V 6A ✗ rejected [cause: why]`). Remote command 0x0E
-(`ChargerHunt`, read only) carries the snapshot; the reading steps are in `docs/HW_TEST_PROCEDURES.md` (T20).
+Hardware cases this was built against (host-tested only so far): Xiaomi 20K, PPS 5-11 V 3 A -> 5 A with a 5 A cable ("Mi 55W");
+FH22, the chain finishes and nothing changes ("done, no new modes"); CUKTECH 120 W, PPS 5-11 V and 5-20 V at 6 A ("Mi 66W",
+"Mi 120W", tested on a 6 A cable, "cable limit" on a 5 A one). Remote command 0x0E (`ChargerHunt`) is retired: it always answers
+count 0.
 
 ## Wizard steps and the cable identity
 
@@ -450,20 +470,20 @@ the pick that was made.
 1. **Tests** (stage 0). Four presets (`All tests`, `PD only`, `Legacy only`, `Vendor modes`), then `Custom...`, then
    `Last results` once a run exists (six rows). The solid square (hollow when not picked) marks the preset matching the mask (on `Custom...` when the
    mask matches no preset). OK on a preset selects it and goes to Cable; each preset carries a
-   note on the focused row: `All tests` = "Everything, QC Class B 20V too", `PD only` = "PD fixed, PPS, Mi 6A (Xiaomi)", `Legacy only` =
+   note on the focused row: `All tests` = "Everything, QC Class B 20V too", `PD only` = "PD fixed, PPS, EPR, Xiaomi", `Legacy only` =
    "D+/D-: vendor modes + QC/UFCS" (all the D+/D- families), `Vendor modes` = "Huawei, Samsung, OPPO, vivo"). Steps are
    named by one label, `<protocol> <V> <A>` (`PPS 20V 5A`,
-   `PPS 11→8V`, `QC3 12V`, `Mi 20V 6A`), the same on rows, details, chips, summary and report card text. `Custom...` opens the per-family list (stage 14,
+   `PPS 11→8V`, `QC3 12V`, `Mi 55W`), the same on rows, details, chips, summary and report card text. `Custom...` opens the per-family list (stage 14,
    "Custom tests": the six families in run order with `ON` / `OFF` / `PART` counts: `Huawei / Honor` (FCP, SCP),
-   `Samsung` (AFC), `OPPO / OnePlus / vivo` (VOOC, SVOOC, SVOOC65, VIVO), `Xiaomi / Redmi` (Mi 6A; it mirrors `USB PD`, the
+   `Samsung` (AFC), `OPPO / OnePlus / vivo` (VOOC, SVOOC, SVOOC65, VIVO), `Xiaomi / Redmi` (the 0x2717 chain and its modes; it mirrors `USB PD`, the
    probes run inside the PD unit, so the row is not toggleable), `USB PD`, `QC / UFCS` (QC2, QC3, QC3+, Class B, UFCS);
    the "select / clear all" row is gone); a short OK on a family toggles the whole family, a long OK
    opens its Group page (stage 1: `PD fixed`, `PPS`, or one row per algorithm; a short OK toggles a row there).
    The result rows follow the same family order. The rows (Running grid, Results, Steps filter) come from the step list
    alone (`result_layout::build`): the runner walks that list by index, so the list is the execution order, and a row
    stands where the plan first runs one of its steps. No copy of the order exists: QC2 is followed by QC2 Class B, QC3
-   by QC3 Class B, a custom unit order (`charger-units`) moves the rows with it, and each Mi 6A probe level is a row of
-   its own ("Mi 6A", the 6 A hunt steps at that voltage) at the place the planner runs it, after the PPS row it rides on
+   by QC3 Class B, a custom unit order (`charger-units`) moves the rows with it, and the Xiaomi unit is one row
+   ("Xiaomi": the chain chip, then one chip per unlocked mode) at the place the planner runs it, the end of the PD unit
    (a re-plan that regrows the rows moves it with the plan). The text layouts (report card, `charger_summary.py`) separate them with
    short section headers (`Huawei`, `Samsung`, `OPPO`, `Xiaomi`, `USB PD`, `QC/UFCS`, plus `OEM / PD` for the
    vendor-label facts of a PD source; `Row.label` holds 8 characters); a section whose rows all fold into the `No reply` /
@@ -662,7 +682,7 @@ Restart rules for a mid-run re-announce (user decision 2026-11-09):
   passed row is never run again, a row whose voltage came back at another current runs at the new word). Then the unit
   closes with the rows `Withdrawn`; an offer that returns only after that stays unseen. The bound is two of the Anker
   splitter's ~6.6 s re-announce periods (13.3 s) plus the 1.5 s settle window, rounded up; a revival re-arms the wait for
-  the next re-split. The Mi 20 V 6 A hunt row is an ordinary row of the PD unit and follows the same rule.
+  the next re-split. A Xiaomi mode row is an ordinary row of the PD unit and follows the same rule.
 - Flapping is not a failure: no counter gives up; keep settling and re-planning.
 
 Limits: a `spec_rev` change and no list back within `kCapsReturnMs` are a genuinely different list and stay
@@ -742,10 +762,8 @@ How a PD row is judged and how long it waits. All of it is host-tested; none of 
   in the card record plus a note slot.
 - **Resume.** The EPR proof and the late PD plan (a list first heard after START) are rebuilt from the journal on a resume, so
   a run that reboots between the cable read and the EPR rows plans and runs as the uninterrupted one would.
-- **6 A hunt rows and the preview.** The hunt rows are planned for every source but only send a Request when the list in hand
-  advertises 6 A (`hunt_advertised`); otherwise the row is dropped at request time, or ends as a "not unlocked" skip when the
-  Xiaomi chain was seen. `Runner::preview` counts the same: an unadvertised hunt row is no row and no estimated time without the
-  chain, a skip with no time with it.
+- **The Xiaomi unit and the preview.** The chain row is planned whenever fixed or PPS is selected; its mode rows only exist
+  once the chain has run (they are inserted behind it from the diff), so `Runner::preview` counts the chain row alone.
 - **Overvoltage abort = monitor ceiling + 5 %.** What the run may REQUEST stays the nominal monitor ceiling (`fits_monitor`,
   `request_cap_mv`: 36 V INA226, 48 V INA228/237; a 48 V level on a 36 V monitor is still a skip). The abort that ends the run
   with `OverCap` (the runner's per-sample check and `Sink::on_vbus`) sits at `pd::overcap_abort_mv` = ceiling + 5 %, 37.8 V on an
@@ -966,7 +984,7 @@ row), and the small records `ph.rec` (phase marker), `rs.rec` (resume), `mt.rec`
 | `pd` | PD fixed (2.0 and 3.x), EPR fixed and the EPR levels, the PD revision rows |
 | `pps` | PPS, SPR AVS and EPR AVS rows |
 | `qc` | QC2, QC3, QC3+ (and the Class B rows), AFC, FCP, SCP |
-| `oem` | VOOC and SuperVOOC (both), vivo, and every 6 A hunt row (Xiaomi 6 A, the "Mi 6A" rows, the fixed 20 V hunt) |
+| `oem` | VOOC and SuperVOOC (both), vivo, and the Xiaomi unit (its chain row and every mode row) |
 | `ext` | UFCS and anything else |
 
 Rows are addressed by (section, ordinal). Dropping or inserting a row in `oem` rewrites `oem` only; the late AVS rows of the FH22
@@ -977,7 +995,7 @@ last, and only when a section's count or hash changed.
 **Replay.** The sections hold the rows section by section. The header (format 3) also carries the plan's order - one byte per
 row, `order[k]` = where the plan's k-th row sits in the section-by-section array - written from the planner's step list
 (`Runner::steps()`, the same structure the grid uses since 98e2f39) when the plan is journaled or re-planned. Replay applies it
-verbatim, so a resumed run executes exactly in the order it was planned in; no order (where the 6 A hunt rows sit) is re-derived
+verbatim, so a resumed run executes exactly in the order it was planned in; no order (where the Xiaomi rows sit) is re-derived
 from the rows. An order that is not a permutation of the rows is a bad header: the run is not resumable. The phase marker
 (section, ordinal, group, algorithm, position, voltage) is checked against the row it names; a marker for a row the plan moved
 from under it is void.

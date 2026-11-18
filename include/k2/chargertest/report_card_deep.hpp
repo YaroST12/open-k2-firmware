@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
-// The Deep extension of the report card (card format v11): what a Deep run knows that the 250-byte card record has no room for,
-// carried as one bit-packed blob that travels with the card (the store keeps it in the card's own ring record, the share link
-// appends it to the schema v2 stream). Pure: values and buffers, no flash, no UI (host-tested by tests/test_report_card_deep.cpp).
+// The extension block of the report card (card format v11: the Deep block; v12 adds the Xiaomi section): what a run knows that the
+// 250-byte card record has no room for, carried as one bit-packed blob that travels with the card (the store keeps it in the card's
+// own ring record, the share link appends it to the schema v2 stream). A Deep run fills the spec, SVOOC and sweep parts; any run whose
+// Xiaomi chain row ran on a source listing the 0x2717 SVID adds the Xiaomi section, so a Medium or Light card can carry a block too (header bits all 0, then the section).
+// Pure: values and buffers, no flash, no UI (host-tested by tests/test_report_card_deep.cpp).
 //
 // The blob is `u16 nbits` (little endian) and then ceil(nbits / 8) bytes of an LSB-first bit stream:
 //   header   has_spec u1 | has_svooc u1 | has_sweep[range 0..3] u1 each                               6 bits
@@ -13,6 +15,10 @@
 //              fails u8, then the place bytes a u8 and b u8 (pdspec::Agg a / b: "At" transition of the worst measurement)
 //   sweep    per range i set in has_sweep, card order: lo u9 (100 mV, setpoint of point 0) | n u10 (points of the planned span,
 //            100 mV apart) | scale u3 | then buckets = min(kBuckets, n) of 16 bits: mean s8 | down u4 | up u4
+//   xiaomi   (v12) present when bits are left after the sweeps (a v11 block ends there): chain u5 (mi_unlock chain code: 1 no SVID,
+//            2 no answer, 4..13 stalled, 20 / 21 done) | n u3 (modes, at most mi_unlock::kMaxModes) | per mode in plan order:
+//            before u32 (the PDO before the chain; 0 = a new PDO, kBeforeLost = a resumed run lost it) | after u32 (the PDO the chain
+//            unlocked) | mv u9 (100 mV) | ma u7 (50 mA): the level the row asked | verdict u3 (ct::Verdict) | reason u6 (ct::Reason)
 //
 // A sweep bucket covers the setpoint indices [b * n / buckets, (b + 1) * n / buckets) of the planned span. Its mean error is
 // the mean of the recorded points in it, in units of E = 2^scale mV (the smallest scale at which no bucket saturates, kMaxScale
@@ -25,6 +31,7 @@
 #include <cstdint>
 #include <span>
 
+#include "k2/chargertest/mi_unlock.hpp"
 #include "k2/chargertest/report_card.hpp"
 #include "k2/chargertest/spec_section.hpp"
 #include "k2/chargertest/sweep.hpp"
@@ -47,12 +54,16 @@ inline constexpr unsigned kCellFailBits = 3 + 13 + 8 + 8 + 8;
 inline constexpr unsigned kRangeHeadBits = 9 + kSpanBits + 3;
 inline constexpr unsigned kRangeBits = kRangeHeadBits + kBuckets * kBucketBits;
 inline constexpr std::int16_t kValueMax = 4094, kValueNever = -4096;   // the s13 value: saturation and the "never seen" mark
+inline constexpr unsigned kMiHeadBits = 5 + 3;
+inline constexpr unsigned kMiModeBits = 32 + 32 + 9 + 7 + 3 + 6;
+inline constexpr std::uint32_t kBeforeLost = 0xFFFFFFFFu;   // a mode's PDO before the chain is not known (the run resumed; never a PDO)
 
 consteval unsigned worst_bits() {
-    return kHdrBits + kSvoocBits + kSpecHeadBits + unsigned(specsec::kCells) * kCellFailBits + kMaxRanges * kRangeBits;
+    return kHdrBits + kSvoocBits + kSpecHeadBits + unsigned(specsec::kCells) * kCellFailBits + kMaxRanges * kRangeBits +
+           kMiHeadBits + unsigned(mi_unlock::kMaxModes) * kMiModeBits;
 }
-inline constexpr unsigned kMaxBits = worst_bits();                       // every cell failing, four full sweeps: 3273
-inline constexpr std::size_t kMaxBlob = 2 + (kMaxBits + 7) / 8;           // the blob with its length: 412 B
+inline constexpr unsigned kMaxBits = worst_bits();                       // every cell failing, four full sweeps, four Xiaomi modes: 3638 (3274 without the Xiaomi section)
+inline constexpr std::size_t kMaxBlob = 2 + (kMaxBits + 7) / 8;           // the blob with its length: 457 B
 static_assert(kMaxBits < (1u << 12), "the link stream carries the block length in 12 bits");
 
 // The blob's bit count (its first two bytes), 0 for anything shorter.
@@ -86,9 +97,34 @@ unsigned choose_scale(const Seg& a, const Seg& b, unsigned lo_mv, unsigned n);
 
 // ---- the blob ----
 
-// Builds the Deep blob of a finished Deep run: the spec section, the SVOOC ceiling stage and the error graph of each range of
-// `c` that has a sweep, from the runner's evidence and sweep record. Returns the blob's length (0 when `c` is not a Deep card or
-// there is nothing to carry; then `out` is untouched). `out` needs kMaxBlob bytes.
-std::size_t build(const Card& c, const ct::Evidence& ev, ctsweep::View sweep, std::span<std::uint8_t> out);
+// ---- the Xiaomi section ----
+
+struct MiMode {
+    std::uint32_t before = 0, after = 0;   // the PDO before the chain (0 = new, kBeforeLost = not known) and the one it unlocked
+    std::uint16_t mv = 0, ma = 0;          // the level the row asked, in the block's steps (100 mV, 50 mA)
+    std::uint8_t verdict = 0, reason = 0;  // ct::Verdict, ct::Reason of the row
+    bool operator==(const MiMode&) const = default;
+};
+struct MiSection {
+    std::uint8_t chain = 0;   // mi_unlock chain code; 0 = no section (the chain row never ran)
+    std::uint8_t n = 0;
+    std::array<MiMode, mi_unlock::kMaxModes> mode{};
+    bool operator==(const MiSection&) const = default;
+};
+// The section of a run: the chain row's outcome (its detail) and each mode row in plan order with its verdict; the PDO before the chain
+// comes from the evidence (Evidence::mi, kBeforeLost when a resumed run no longer holds it). chain 0 when the chain row has not run
+// or the source never listed the SVID (kCodeNoSvid: no section).
+MiSection mi_of(std::span<const ct::Step> steps, const ct::Evidence& ev);
+// The section a block carries (chain 0 for a block without one, a v11 block, or one that does not parse).
+MiSection read_mi(std::span<const std::uint8_t> blob);
+// The watts a mode is named by ("Mi 55W": step_label::mi_watts of the level it asked).
+unsigned mi_watts(const MiMode& m);
+
+// ---- the blob ----
+
+// Builds the block of a finished run: for a Deep card the spec section, the SVOOC ceiling stage and the error graph of each range of
+// `c` that has a sweep, from the runner's evidence and sweep record; for any card the Xiaomi section when the run's chain row ran.
+// Returns the blob's length (0 when there is nothing to carry; then `out` is untouched). `out` needs kMaxBlob bytes.
+std::size_t build(const Card& c, std::span<const ct::Step> steps, const ct::Evidence& ev, ctsweep::View sweep, std::span<std::uint8_t> out);
 
 }  // namespace k2::report_card::deep

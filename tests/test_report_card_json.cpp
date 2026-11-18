@@ -340,16 +340,40 @@ static void test_deep_block_renders() {
     const std::uint8_t cut[4] = {20, 0, 0xFB, 0xFF};
     CHECK_EQ(rc::render_json(c, cut, jb), plain.size());
 
-    // the worst blob (412 B, 550 characters) fits the longest card: kJsonDeepMax
+    // the worst blob (457 B, 610 characters) fits the longest card: kJsonDeepMax
     std::array<std::uint8_t, rc::deep::kMaxBlob> w{};
     w[0] = std::uint8_t(rc::deep::kMaxBits); w[1] = std::uint8_t(rc::deep::kMaxBits >> 8);
     for (std::size_t i = 2; i < w.size(); ++i) w[i] = std::uint8_t(i * 7);
     w.back() &= std::uint8_t((1u << (rc::deep::kMaxBits % 8)) - 1);
     CHECK_EQ(rc::deep::blob_valid(w), true);
     const std::size_t nw = rc::render_json(c, w, jb);
-    CHECK_EQ(nw, plain.size() + 560);                                        // 550 characters, the key and the quotes
+    CHECK_EQ(nw, plain.size() + 620);                                        // 610 characters, the key and the quotes
     CHECK_EQ(jb[nw - 1], '}');
-    CHECK_EQ(rc::kJsonDeepMax, rc::kJsonMax + 560);
+    CHECK_EQ(rc::kJsonDeepMax, rc::kJsonMax + 620);
+}
+
+// SUMMARY.md reads the VOOC family as one line by its family word, never "SVOOC" / "SVOOC65" (the JSON keeps all three groups).
+static void test_summary_folds_the_vooc_family() {
+    rc::Card c = sample();
+    using G = ct::Group;
+    c.group[unsigned(G::Vooc)] = {rc::GV::Skip, 0, 0, uint8_t(ct::Reason::NeedsLoad)};
+    c.group[unsigned(G::SuperVooc)] = {rc::GV::Pass, 5000, uint8_t(k2::fc::Fail::Detected), 0};
+    c.group[unsigned(G::SuperVooc65)] = {rc::GV::Skip, 0, 0, uint8_t(ct::Reason::NeedsLoad)};
+    std::array<char, rc::kSummaryMax> sb;
+    const std::string t(sb.data(), rc::render_summary(c, std::span<char>(sb.data(), sb.size() - 1)));
+    CHECK_EQ(t.find("- VOOC: \xE2\x9C\x93 detected\n") != std::string::npos, true);
+    CHECK_EQ(t.find("SVOOC") == std::string::npos, true);
+    CHECK_EQ(t.find("VOOC, ") == std::string::npos && t.find(", VOOC") == std::string::npos, true);   // not in the skipped list too
+    // A family that never answered is one word in the skipped list.
+    c.group[unsigned(G::SuperVooc)] = {rc::GV::Skip, 0, 0, uint8_t(ct::Reason::NeedsLoad)};
+    const std::string s(sb.data(), rc::render_summary(c, std::span<char>(sb.data(), sb.size() - 1)));
+    CHECK_EQ(s.find("SVOOC") == std::string::npos, true);
+    size_t at = s.find("VOOC"), n = 0;
+    while (at != std::string::npos) { ++n; at = s.find("VOOC", at + 1); }
+    CHECK_EQ(int(n), 1);
+    std::array<char, rc::kJsonMax> jb;
+    const std::string j(jb.data(), rc::render_json(c, jb));
+    CHECK_EQ(j.find("\"SVOOC65\":") != std::string::npos, true);   // the export keeps every group
 }
 
 int main() {
@@ -367,5 +391,6 @@ int main() {
     test_legacy_fixture_hex_decodes();
     test_worst_case_fits();
     test_summary_text();
+    test_summary_folds_the_vooc_family();
     return test_report(__FILE__);
 }

@@ -48,6 +48,9 @@
 //  v11 changes no payload byte: a Deep card may travel with the Deep block (k2/chargertest/report_card_deep.hpp: the PD spec
 //      summary, the SVOOC ceiling stage and the per-range sweep error graphs). The block lives beside the card, not in it: the store
 //      keeps it in the card's own ring record, the share link appends it to the schema v2 stream. The format byte says so.
+//  v12 changes no payload byte either: the block gains the Xiaomi section (the 0x2717 chain outcome and each mode it unlocked, before and
+//      after), and any card whose run's chain row ran carries a block, a Medium or Light one too. The Xiaomi rows never count in the
+//      card's own rows (the PD group, ranges, spread, EPR levels), and a repeat needs the same Xiaomi section as well (Store::put).
 //
 // A re-run that gives the same results is counted, not stored (same_results, fold_repeat; the store applies them): the card keeps its
 // rows, runs goes up (the charger was tested again), times goes up and last_* name the newest run. Two runs are "the same" when
@@ -70,6 +73,7 @@
 
 #include "k2/core/bbstore.hpp"
 #include "k2/chargertest/charger_test.hpp"
+#include "k2/chargertest/oem_watts.hpp"
 #include "k2/pd/emlib.hpp"
 #include "k2/fastcharge/fc_engine.hpp"
 #include "k2/pd/pd_sink.hpp"
@@ -83,10 +87,10 @@ inline constexpr unsigned kMaxRanges = 4;
 inline constexpr unsigned kSpreadLevels = 4;   // v9: the setpoint errors kept per APDO (the plan has at most 4 distinct levels)
 inline constexpr int8_t kSpreadNone = -128;     // an empty spread slot
 inline constexpr unsigned kNameMax = 20;
-inline constexpr unsigned kReasonCount = unsigned(ct::Reason::Folded) + 1;   // 52 values fit the card's 6-bit reason field
+inline constexpr unsigned kReasonCount = unsigned(ct::Reason::MiChain) + 1;   // 53 values fit the card's 6-bit reason field
 static_assert(kReasonCount <= 64, "the card stores a reason in 6 bits");
 inline constexpr uint8_t kMagic = 0xA6, kTypeCard = 1, kTypeDelete = 2;
-inline constexpr uint8_t kFormat = 11;  // payload byte 33: v4 adds per-EPR-level verdicts, v5 the cable block (Card carries it), v6 the UFCS modes, v7 the repeat counter, v8 the source's mid-run re-balance count, v9 the per-level setpoint-error spread, v10 the deep-sweep summary per range, v11 the Deep block beside a Deep card (no payload change)
+inline constexpr uint8_t kFormat = 12;  // payload byte 33: v4 adds per-EPR-level verdicts, v5 the cable block (Card carries it), v6 the UFCS modes, v7 the repeat counter, v8 the source's mid-run re-balance count, v9 the per-level setpoint-error spread, v10 the deep-sweep summary per range, v11 the Deep block beside a Deep card (no payload change), v12 the Xiaomi section in that block (any level; no payload change)
 inline constexpr unsigned kMaxUfcs = 4;
 
 // Card verdict of one protocol group: None = the group was not part of the run.
@@ -235,6 +239,27 @@ constexpr unsigned ufcs_modes(const Card& c) {
     unsigned n = 0;
     if (c.format >= 6) while (n < kMaxUfcs && c.ufcs[n].hi_dv != 0) ++n;
     return n;
+}
+
+// The VOOC family's three groups (VOOC, SVOOC, SVOOC65: one shared detection) read as ONE group wherever a card is shown
+// (oem_watts.hpp). Its lead speaks for it: the first group that passed, else the first that failed, else the first the card holds
+// (kGroups when it holds none). Display only: the card keeps all three groups, so no encoding changes.
+constexpr bool vooc_group(unsigned g) { return g < kGroups && oem_watts::in_family(oem_watts::Family::Vooc, charger_test::Group(g)); }
+constexpr unsigned vooc_lead(const Card& c) {
+    unsigned fail = kGroups, any = kGroups;
+    for (unsigned g = 0; g < kGroups; ++g) {
+        if (!vooc_group(g) || c.group[g].verdict == GV::None) continue;
+        if (c.group[g].verdict == GV::Pass) return g;
+        if (c.group[g].verdict == GV::Fail && fail == kGroups) fail = g;
+        if (any == kGroups) any = g;
+    }
+    return fail != kGroups ? fail : any;
+}
+// A group the card's views skip: a VOOC-family group other than the lead.
+constexpr bool folded(const Card& c, unsigned g) { return vooc_group(g) && g != vooc_lead(c); }
+// The group's name as a card view shows it: "VOOC" for the whole family, else the group's own name.
+inline const char* group_word(unsigned g) {
+    return vooc_group(g) ? oem_watts::family_word(oem_watts::Family::Vooc) : charger_test::name(charger_test::Group(g));
 }
 
 // The passive note for a source that listed OPPO's SVID (nothing is sent to it); nullptr when it did not.

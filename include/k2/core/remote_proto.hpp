@@ -85,7 +85,8 @@
 //                                    Enums match k2/chargertest/charger_test.hpp; flags bit0 continuous, bit1 AVS,
 //                                    bit5 a deep-sweep row (its detail byte is then the recorded point count, not
 //                                    the in-RAM kDetailSweep marker; the row's target_mv/measured_mv are the peak's
-//                                    setpoint and the peak).
+//                                    setpoint and the peak), bit6 the Xiaomi unit (its chain row, or a mode the
+//                                    0x2717 chain unlocked; an older firmware never sets it).
 //                                    Metadata has start=n=0. current==total means no current step.
 //                                    start<=total; start==total is an empty end page. BadArg otherwise;
 //                                    mismatched run/revision is Busy (retry metadata, no partial export).

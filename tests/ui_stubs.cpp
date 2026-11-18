@@ -159,6 +159,7 @@ void unit_detach() {
     if (g_stub.model_units) {
         if (g_stub.pm.vbus_mv > 0) g_stub.unit_vbus_mv = g_stub.pm.vbus_mv;
         g_stub.pm.vbus_mv = 0; g_stub.sink = {};
+        if (g_stub.mi_svid) g_stub.xm = {};
     }
 }
 void unit_attach(bool legacy) {
@@ -167,6 +168,7 @@ void unit_attach(bool legacy) {
     if (g_stub.model_units) {
         g_stub.pm.vbus_mv = g_stub.unit_vbus_mv;
         if (!legacy) { g_stub.sink.state = k2::pd::SinkState::Ready; g_stub.sink.result = k2::pd::SinkResult::Ok; g_stub.sink.mv = 5000; g_stub.sink.pos = 1; }
+        if (!legacy && g_stub.mi_svid) { g_stub.sink.xiaomi_svid = true; g_stub.sink.xiaomi_authed = g_stub.mi_authed; g_stub.xm = g_stub.mi_xm; }
     }
 }
 // A self-powered unit boundary: Rd and VBUS untouched; a Pd hold brings the 5 V contract back at once.
@@ -916,8 +918,11 @@ Fail scan_fail() { return g_stub.reader_scanner ? g_stub.reader_scanner->fail() 
 std::span<const fc::ScanResult> scan_results() { return g_stub.reader_scanner ? g_stub.reader_scanner->results() : std::span<const fc::ScanResult>(g_stub.fc_scan_res); }
 Status status() {
     g_status.state = static_cast<State>(g_stub.fc_state);
+    if (g_stub.fc_status_fail && g_status.state != State::Idle) g_status.state = State::Failed;   // a session that ended on that fail
     g_status.proto = static_cast<Proto>(g_stub.fc_proto);
     g_status.target_mv = g_stub.fc_target_mv;
+    g_status.fail = static_cast<Fail>(g_stub.fc_status_fail);   // 0: Fail::None, as before the knob
+    g_status.ident = g_stub.fc_status_ident;
     return g_status;
 }
 const fc::Caps& caps() { return g_stub.fc_caps; }
@@ -940,6 +945,7 @@ bool lines_free() { return !g_stub.svooc_run; }
 Snapshot snapshot() {
     Snapshot s;
     s.n_asks = g_stub.svooc_n_asks; s.ceiling_word = g_stub.svooc_ceiling;
+    s.report.vbus_max_mv = g_stub.svooc_vmax_mv;
     for (unsigned i = 0; i < g_stub.svooc_n_asks && i < s.asks.size(); i++) {
         s.asks[i].word = g_stub.svooc_asks[i];
         s.asks[i].after = i + 1 == g_stub.svooc_n_asks ? g_stub.svooc_after : svooc::kAcceptPolls;

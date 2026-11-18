@@ -23,7 +23,8 @@
 // results. Tables and rules mirror tools/report_card.py, tools/k2_qr.py and include/k2/chargertest/report_card.hpp;
 // tests/test_cardpage.mjs checks the three against each other on golden cards (tests/fixtures/qrlink.tsv).
 // A Deep run's format 11 card carries the Deep block after the record (deep.js decodes it): splitLink() gives it as `deep`, parseLink() puts
-// its decoded form on the card (card.deep, or card.deep_error when the block cannot be read) and sections() lists it.
+// its decoded form on the card (card.deep, or card.deep_error when the block cannot be read) and sections() lists it. Format 12 lets a card
+// of any level carry a block whose tail is the Xiaomi section (card.deep.xiaomi, its own "Xiaomi" section).
 // Loaded by the page as a script (window.K2Card, after deep.js) and by Node as a module (module.exports).
 var K2Card = (function () {
   var D = typeof K2Deep !== "undefined" ? K2Deep : require("./deep.js");
@@ -41,7 +42,7 @@ var K2Card = (function () {
   var V10_PAYLOAD = 250;  // format 10 payload
   var UFCS_AT = 178;      // format 6: 4 modes of u24 (lo 100 mV 8 bits, hi 100 mV 9 bits, current in 50 mA 7 bits); hi 0 = unused
   var MAX_UFCS = 4;
-  var FORMAT = 11;        // the newest card format this file reads
+  var FORMAT = 12;        // the newest card format this file reads (12 = the block may carry the Xiaomi section; payload as 11)
   var MAX_RANGES = 4;
   var RECORD_MAGIC = 0xA6;
   var MAX_UNPACKED = 4096;
@@ -59,7 +60,7 @@ var K2Card = (function () {
     "charger stayed in PD", "rebooted during request", "rebooted during handover", "EPR entry refused", "no contract",
     "source shut off (needs replug)", "no PD after re-attach", "VBUS cut, source recovered", "blocked by PD",
     "no QC3+ response", "rebooted 3x", "needs external power", "PD gave up before START", "Class A only (12 V max)",
-    "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target", "withdrawn by source", "wrong voltage on 5V contract", "needs load", "floored above target", "step resolution", "HID-cable loop: 5V lock", "advertised", "light run: not asked", "port cuts without load", "output folds back"];
+    "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target", "withdrawn by source", "wrong voltage on 5V contract", "needs load", "floored above target", "step resolution", "HID-cable loop: 5V lock", "advertised", "light run: not asked", "port cuts without load", "output folds back", "Xiaomi chain"];
   var CAPPED = "capped below target";
   var STATES = ["Setup", "Verify 5V", "Negotiating", "Hold", "Return to 5V", "Complete", "Stopped",
     "UNSAFE: unplug source", "Detach charger", "Initializing..."];
@@ -202,7 +203,7 @@ var K2Card = (function () {
   var CABLE_KIND_V2 = {0: 0, 1: 1, 2: 2, 3: 4, 4: 255};    // the 3-bit cable kind code -> the v1 kind byte
   var SVDM_MASK = 0xFFFF8000 | (3 << 6) | 0x1F;            // the standard SVDM header mask, when a v2 row omits it
 
-  // A schema v2 card record -> the 256-byte version "1" record (format 11), so decodeRecord() reads it as before. A Deep run's
+  // A schema v2 card record -> the 256-byte version "1" record (the current format), so decodeRecord() reads it as before. A Deep run's
   // block (a presence bit after the level byte, then u12 bit count and the bits) comes out as the array's `deep` property: the
   // blob in deep.js form (u16 LE bit count, then the bytes), absent when the record has none.
   function expandCardV2(b) {
@@ -722,15 +723,17 @@ var K2Card = (function () {
     if (rec.length !== 4 + ln + 2) throw CardError("bad-record", "The card is the wrong length; the link may be cut short.");
     var crc = rec[rec.length - 2] | (rec[rec.length - 1] << 8);
     var ok = crc16(rec, rec.length - 2) === crc;
-    if (!ok && ln >= 34 && rec[4 + 33] === FORMAT) {   // a link a format 10 K2 packed carries the CRC of its format 10 record
+    if (!ok && ln >= 34 && rec[4 + 33] === FORMAT) {   // a link an older K2 (format 10 or 11) packed carries the CRC of its own record
       var old = Uint8Array.from(rec.subarray(0, rec.length - 2));
-      old[4 + 33] = FORMAT - 1;
-      ok = crc16(old, old.length) === crc;
+      for (var fmt = 10; fmt < FORMAT && !ok; fmt++) {
+        old[4 + 33] = fmt;
+        ok = crc16(old, old.length) === crc;
+      }
     }
     if (!ok) throw CardError("bad-crc", "The card's check value does not match: the link was changed or cut.");
     var card = decodePayload(rec.subarray(4, 4 + ln));
     if (rec.deep) {   // a Deep run's block rode beside the record (expandCardV2); one this page cannot read leaves the card as the record says
-      try { card.deep = D.decode(rec.deep, card.ranges); } catch (e) { card.deep_error = e.message; }
+      try { card.deep = D.decode(rec.deep, card.ranges, REASONS); } catch (e) { card.deep_error = e.message; }
     }
     return card;
   }
@@ -825,7 +828,37 @@ var K2Card = (function () {
   function span(lo, hi) { return volts2(lo) + "-" + volts(hi); }
 
   var GROUP_NAMES = {PD: "PD", QC2: "QC 2.0", QC3: "QC 3.0", "QC3+": "QC 3+", AFC: "AFC", FCP: "FCP", SCP: "SCP",
-    VOOC: "VOOC", SVOOC: "SVOOC", SVOOC65: "SVOOC 65W", UFCS: "UFCS", VIVO: "VIVO"};
+    VOOC: "VOOC", SVOOC: "VOOC", SVOOC65: "VOOC", UFCS: "UFCS", VIVO: "VIVO"};   // the VOOC family: one word, never a version
+
+  // ---- OEM levels by their watts (include/k2/chargertest/oem_watts.hpp, tools/oem_watts.py, tools/web/ctgrid.js; golden:
+  // tests/fixtures/oem_watts.txt). The K2 draws no current in a charger test: a level's watts are only ever claimed. The VOOC family's
+  // three groups (VOOC, SVOOC, SVOOC65) share one detection, so the page shows them as one "VOOC" group plus its levels; the Deep
+  // block's SVOOC ceiling claims each level or leaves it not reached / not tested.
+  var OEM_LEVELS = [{word: "VOOC", mv: 5000, ma: 4000, w: 20, ceiling: false}, {word: "SVOOC", mv: 10000, ma: 5000, w: 50, ceiling: true},
+    {word: "SVOOC", mv: 10000, ma: 6500, w: 65, ceiling: true}, {word: "SVOOC", mv: 10000, ma: 10000, w: 100, ceiling: true},
+    {word: "SVOOC", mv: 11000, ma: 11000, w: 120, ceiling: true}];
+  var VOOC_GROUPS = ["VOOC", "SVOOC", "SVOOC65"];
+  var RAN_ITS_COURSE = {judged: 1, stopped: 1, cap: 1, "time cap": 1};
+  function oemWatts(mw) {
+    if (!mw) return "";
+    var dw = Math.floor((mw + 50) / 100);
+    if (dw >= 1000) return Math.floor((mw + 500) / 1000) + "W";
+    return Math.floor(dw / 10) + (dw % 10 ? "." + (dw % 10) : "") + "W";
+  }
+  function oemLabel(word, mw) { var w = oemWatts(mw); return w ? word + " " + w : word; }
+  function oemClaim(level, sv) {
+    if (!level.ceiling) return "not tested";
+    var word = sv ? (sv.word !== undefined ? sv.word : Math.floor((sv.ceiling_ma || 0) / 100)) : 0, vmax = (sv && sv.vmax_mv) || 0;
+    if (word && vmax && Math.floor((vmax * Math.min(word, 0x1FF) * 100 + 500000) / 1000000) >= level.w) return "claimed";
+    return sv && RAN_ITS_COURSE[sv.end] ? "not reached" : "not tested";
+  }
+  function voocLevels(sv) { return OEM_LEVELS.map(function (l) { return {label: oemLabel(l.word, l.w * 1000), state: oemClaim(l, sv)}; }); }
+  // The family's one group: the first that passed, else the first that failed, else the first the card holds (null: none).
+  function voocGroup(card) {
+    var have = VOOC_GROUPS.filter(function (n) { return card.groups[n]; }).map(function (n) { return card.groups[n]; });
+    return have.filter(function (g) { return g.verdict === "pass"; })[0] || have.filter(function (g) { return g.verdict === "fail"; })[0] || have[0] || null;
+  }
+  var CLAIM_TONE = {claimed: "noted", "not reached": "", "not tested": "skip"};
   var RANGE_NAMES = {"PPS (PD3.x)": "PPS", "PD3.2+ SPR AVS": "AVS", "EPR AVS": "EPR AVS"};
 
   function rangeName(alg) { return RANGE_NAMES[alg] || alg; }
@@ -977,13 +1010,23 @@ var K2Card = (function () {
     var epr = eprBadge(card);
     if (epr) out.push(epr);
     card.ranges.forEach(function (r) { out.push(rangeBadge(r, capped)); });
-    GROUPS.slice(1).forEach(function (n) { if (card.groups[n]) out.push(groupBadge(n, card.groups[n], card)); });
+    GROUPS.slice(1).forEach(function (n) {
+      if (!card.groups[n]) return;
+      if (VOOC_GROUPS.indexOf(n) < 0) { out.push(groupBadge(n, card.groups[n], card)); return; }
+      if (n !== VOOC_GROUPS.filter(function (x) { return card.groups[x]; })[0]) return;   // the family once
+      var vg = voocGroup(card);
+      out.push(groupBadge("VOOC", vg, card));
+      if (vg.verdict === "pass")   // each level the Deep ceiling claimed: framed, never green (no current was drawn)
+        voocLevels(card.deep && card.deep.svooc).forEach(function (l) {
+          if (l.state === "claimed") out.push({id: "lvl:" + l.label, kind: "group", tone: "noted", label: l.label, status: "claimed, no load", claimed: true});
+        });
+    });
     out.forEach(function (b) { lighten(card, b); });
     var rank = {pass: 0, partial: 1, fail: 2, noted: 3, skip: 4};
     out.forEach(function (b, i) {
       b.order = i; b.glyph = GLYPH[b.tone];
-      b.word = b.advertised ? "advertised" : TONE_WORD[b.tone];
-      delete b.advertised;
+      b.word = b.advertised ? "advertised" : b.claimed ? "claimed" : TONE_WORD[b.tone];
+      delete b.advertised; delete b.claimed;
     });
     out.sort(function (a, b) { return rank[a.tone] - rank[b.tone] || a.order - b.order; });
     return out;
@@ -1103,6 +1146,24 @@ var K2Card = (function () {
     return groups.length ? {title: "Deep run details", groups: groups} : null;
   }
 
+  // The Xiaomi section (format 12, from the extension block): how the 0x2717 chain ended, then each mode it unlocked by its watts with
+  // the PDO before and after the chain and the row's verdict. Absent when the run's chain row never ran.
+  var MI_TONE = {pass: "pass", fail: "fail", skip: "skip"};
+  function xiaomiSection(card) {
+    var x = card.deep && card.deep.xiaomi;
+    if (!x) return null;
+    var auth = x.done ? (x.modes.length ? "done, " + x.modes.length + " new mode" + (x.modes.length > 1 ? "s" : "") : "done, no new modes") : x.chain_text;
+    var groups = [{title: "Xiaomi auth", tone: x.done ? "pass" : x.chain === 1 ? "skip" : "partial", rows: [row("Result", auth), row("Chain", x.chain_text)]}];
+    x.modes.forEach(function (m) {
+      var tone = MI_TONE[m.verdict] || "";
+      var rows = [row("Result", m.verdict === "skip" && m.reason ? m.reason : TONE_WORD[tone] || m.verdict, tone),
+        row("Before", m.before), row("After", m.after), row("Tested at", volts(m.mv) + " " + amps(m.ma))];
+      if (m.reason && m.verdict !== "skip") rows.push(row("Why", m.reason, tone === "pass" ? "" : "partial"));
+      groups.push({title: m.label, tone: tone, rows: rows});
+    });
+    return {title: "Xiaomi", groups: groups};
+  }
+
   function sections(card) {
     var out = [];
     var capped = !!card.groups.PD && card.groups.PD.reason === CAPPED;
@@ -1142,11 +1203,22 @@ var K2Card = (function () {
       });
     }
     if (pd.length) out.push({title: "Power Delivery", groups: pd});
+    var mi = xiaomiSection(card);
+    if (mi) out.push(mi);
 
     var legacy = [];
     GROUPS.slice(1).forEach(function (n) {
       var lg = card.groups[n];
       if (!lg) return;
+      var vooc = VOOC_GROUPS.indexOf(n) >= 0;
+      if (vooc) {   // the family once, its levels by their watts below the group's rows
+        if (n !== VOOC_GROUPS.filter(function (x) { return card.groups[x]; })[0]) return;
+        lg = voocGroup(card);
+        var vb = lighten(card, groupBadge("VOOC", lg, card));
+        var lv = lg.verdict === "pass" ? voocLevels(card.deep && card.deep.svooc).map(function (l) { return row(l.label, l.state, CLAIM_TONE[l.state]); }) : null;
+        legacy.push({title: "VOOC", tone: vb.tone, rows: groupRows("VOOC", lg, true, lv, card)});
+        return;
+      }
       var b = lighten(card, groupBadge(n, lg, card));
       var modeRows = n === "UFCS" && card.ufcs ? card.ufcs.map(function (m, i) { return row("Mode " + (i + 1), ufcsModeText(m)); }) : null;
       legacy.push({title: GROUP_NAMES[n] || n, tone: b.tone, rows: groupRows(n, lg, true, modeRows, card)});
@@ -1188,7 +1260,7 @@ var K2Card = (function () {
     base64urlDecode: base64urlDecode, lz4Inflate: lz4Inflate, crc16: crc16,
     expandCardV2: expandCardV2, expandEmkV2: expandEmkV2, BitReader: BitReader,
     decodePayload: decodePayload, decodeRecord: decodeRecord, parseLink: parseLink, splitLink: splitLink,
-    badges: badges, sections: sections, header: header, view: view,
+    badges: badges, sections: sections, header: header, view: view, OEM_LEVELS: OEM_LEVELS, oemLabel: oemLabel, oemClaim: oemClaim, voocLevels: voocLevels,
     rangeVerdict: rangeVerdict, volts: volts, BRANDS: BRANDS
   };
 })();

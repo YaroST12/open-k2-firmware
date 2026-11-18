@@ -81,6 +81,10 @@ struct StubState {
     std::uint32_t req_period_ms = 0;      // what fusb302::request_period_ms() returns
     k2::pd::SinkCapsSeen sink_seen{};
     k2::pd::XiaomiTrace xm{};             // the sink's Request / Xiaomi chain record (fusb302::xiaomi_trace)
+    // A source that lists SVID 0x2717 (model_units): a unit detach clears the sink's chain state as the real sink does, a PD attach
+    // runs the chain again (mi_authed) and leaves mi_xm as the trace (the list before the chain in mi_xm.pre).
+    bool mi_svid = false, mi_authed = false;
+    k2::pd::XiaomiTrace mi_xm{};
     k2::pd::SourceCaps epr_info_caps{};   // the list an informational EPR_Get_Source_Cap returned
     int epr_info_asks = 0; bool epr_info_forced = false; k2::pd::Err epr_info_err = k2::pd::Err::Ok;
     bool link_inline = false, inl = false, scan_confirmed = false, self_powered = false;
@@ -172,6 +176,7 @@ struct StubState {
     bool svooc_run = false;           // running()
     uint8_t svooc_n_asks = 0;         // the snapshot's asks (100 mA words below) and ceiling word
     uint16_t svooc_ceiling = 0;
+    int32_t svooc_vmax_mv = 0;        // the snapshot's report.vbus_max_mv (the top VBUS the trigger saw)
     uint16_t svooc_asks[8] = {};
     uint8_t svooc_after = 0;          // polls the last ask stood for
     int fc_starts = 0, fc_inline_ok = 0;   // fctrig::start calls, and those carrying the override
@@ -181,6 +186,7 @@ struct StubState {
     int fc_retargets = 0, fc_retarget_mv = 0, fc_retarget_fail = 0;   // fctrig::set_target calls
     int max_vbus_mv = 36000;     // power::max_vbus_mv() of the stub (INA226)
     int fc_state = 0;            // k2::fc::State returned by the fctrig stub
+    int fc_status_fail = 0, fc_status_ident = 0;   // the status()'s fail (k2::fc::Fail; non-zero: a started session reads Failed) and VOOC ident (0xAC)
     k2::fc::Caps fc_caps;        // fctrig::caps() of the stub: what the SCP / UFCS sessions read
     bool fc_critical = false;    // fctrig::paint_critical(): an engine window the idle hook does not service
     bool fc_open_on_start = false;   // fctrig::start opens an engine window (fc_critical) at once for a protocol Engine::blocks_paint names (FCP, SCP, VOOC, UFCS, VIVO; not the QC handshake)

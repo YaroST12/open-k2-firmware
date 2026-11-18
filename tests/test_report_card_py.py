@@ -89,7 +89,7 @@ def test_qc_label_needs_the_samsung_vid():
 def test_v9_spread_decodes_per_level():
     # ROADMAP "PPS coverage" item 3: format 9 adds the setpoint error in mV per level of each APDO (block at 198:
     # 4 ranges x 4 levels, int8, -128 = none). A v8-length payload of the same card decodes with no spread.
-    assert report_card.PAYLOAD == 198 and report_card.FORMAT == 11  # v9 added the spread block at 198; v10 the deep-sweep summary; v11 the Deep block beside the record
+    assert report_card.PAYLOAD == 198 and report_card.FORMAT == 12  # v9 added the spread block at 198; v10 the deep-sweep summary; v11 the Deep block beside the record; v12 the Xiaomi section in it
     rec = bytearray(214)
     rec[31] = 1                                   # one range
     rec[33] = 9                                   # format v9
@@ -102,7 +102,7 @@ def test_v9_spread_decodes_per_level():
         rec[198 + k] = e & 0xFF
     c = report_card.decode(bytes(rec))
     assert c["ranges"][0]["err_mv"] == [88, 30, -17, -24]
-    assert len(report_card.REASONS) == 52 and report_card.REASONS[45:] == ["floored above target", "step resolution", "HID-cable loop: 5V lock", "advertised", "light run: not asked", "port cuts without load", "output folds back"]
+    assert len(report_card.REASONS) == 53 and report_card.REASONS[45:] == ["floored above target", "step resolution", "HID-cable loop: 5V lock", "advertised", "light run: not asked", "port cuts without load", "output folds back", "Xiaomi chain"]
     rec[33] = 8                                   # the same bytes as a v8 payload (198): no spread is read
     c8 = report_card.decode(bytes(rec[:198]))
     assert "err_mv" not in c8["ranges"][0]

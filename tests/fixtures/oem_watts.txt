@@ -1,0 +1,43 @@
+# Golden OEM watts vectors, shared by tests/test_oem_watts.cpp (the firmware's include/k2/chargertest/oem_watts.hpp) and
+# tests/test_oem_watts.py (tools/oem_watts.py), so the device, the host tools and the web pages word a power level the same.
+#
+# label | protocol word | mW | text
+#   The watts of a level, rounded to 0.1 W, with the tenth only when it is not 0; whole watts from 100 W (at most 5 characters);
+#   0 mW reads the bare word.
+label | SVOOC |  120000 | SVOOC 120W
+label | SVOOC |   65000 | SVOOC 65W
+label | VOOC  |   20000 | VOOC 20W
+label | SCP   |   22500 | SCP 22.5W
+label | UFCS  |   27000 | UFCS 27W
+label | UFCS  |   59960 | UFCS 60W
+label | Mi    |   55000 | Mi 55W
+label | SCP   |   15030 | SCP 15W
+label | SCP   |    4950 | SCP 5W
+label | SCP   |    4940 | SCP 4.9W
+label | PD    |  240000 | PD 240W
+label | UFCS  |  110250 | UFCS 110W
+label | UFCS  |   99940 | UFCS 99.9W
+label | UFCS  |   99950 | UFCS 100W
+label | UFCS  |  105500 | UFCS 106W
+label | VOOC  |       0 | VOOC
+#
+# claim | ceiling end | top VBUS mV | 0x86 word (hex) | level watts | stage can claim it (y/n) | state
+#   The SuperVOOC ceiling stage claims a level when the top VBUS x the ask it went on under (svooc_ceiling::claim_w) reaches the
+#   level's watts; a level above that is "not reached" when the stage ran its course (judged, stopped, cap) and "not tested"
+#   otherwise (not run, refused, no adapter, aborted by a guard, cancelled). A 5 V level the stage never asks is always "not tested".
+# Hardware 2026-11-15, OnePlus 120 W, no load: 11.02 V, 0x06D (10.9 A), stopped at 3.3 s = 120 W claimed.
+claim | stopped    | 11020 | 0x06D | 120 | y | claimed
+claim | stopped    | 11020 | 0x06D | 100 | y | claimed
+claim | stopped    | 11020 | 0x06D |  50 | y | claimed
+claim | stopped    | 11020 | 0x06D |  20 | n | not tested
+claim | stopped    | 10950 | 0x06D | 120 | y | not reached
+claim | judged     | 11000 | 0x03F |  65 | y | claimed
+claim | judged     | 11000 | 0x03F | 100 | y | not reached
+claim | cap        | 11000 | 0x028 |  50 | y | not reached
+claim | stopped    | 11000 | 0x000 |  50 | y | not reached
+claim | aborted    |  8000 | 0x028 |  50 | y | not tested
+claim | aborted    | 11000 | 0x03F |  65 | y | claimed
+claim | cancelled  | 11000 | 0x00F |  50 | y | not tested
+claim | none       |     0 | 0x000 |  65 | y | not tested
+claim | refused    |     0 | 0x000 |  65 | y | not tested
+claim | no adapter |     0 | 0x000 | 120 | y | not tested

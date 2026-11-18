@@ -34,14 +34,18 @@ var CtGrid = (function () {
     return s + "." + (frac < 10 ? "0" + frac : String(frac)).replace(/0+$/, "");
   }
   function has(list, x) { return list.indexOf(x) >= 0; }
-  function isHunt(s) { return has(PD_FAMILY, s.protocol) && (s.request_ma || 0) > HUNT_MA; }
+  // The wire's Xiaomi flag ("mi": the chain row and the modes it unlocked) decides; an older firmware's row (no key) that asks more
+  // than the cable ceiling was its 6 A probe.
+  function isHunt(s) { return s.mi !== undefined ? !!s.mi : has(PD_FAMILY, s.protocol) && (s.request_ma || 0) > HUNT_MA; }
+  // A Xiaomi mode is named by its power level: volts asked times current asked, whole watts ("Mi 55W"; step_label.hpp mi_watts).
+  function miWatts(s) { return isHunt(s) ? Math.floor(((s.target_mv || 0) * (s.request_ma || 0) + 500000) / 1000000) : 0; }
   function isSweep(s) { return has(PROGRAMMABLE, s.protocol) && (s.detail === SWEEP_DETAIL || s.sweep === true); }
-  function isFullCurrent(s) { return s.protocol === "pps" && (s.request_ma || 0) > PLAN_ROW_MA && s.request_ma <= HUNT_MA; }
+  function isFullCurrent(s) { return s.protocol === "pps" && (s.request_ma || 0) > PLAN_ROW_MA && s.request_ma <= HUNT_MA && !isHunt(s); }
   function isAvs(s) { return s.protocol === "spr-avs" || s.protocol === "epr-avs" || (s.protocol === "epr-fixed" && !!s.avs); }
 
   function protocolWord(s) {
     var p = s.protocol, hasV = !!s.target_mv;
-    if (isHunt(s)) return "Mi";
+    if (isHunt(s)) return hasV ? "Mi" : "Xiaomi";
     if (p === "pd2-fixed") return hasV ? "PD" : "PD2.0";
     if (p === "pd3x-fixed") return hasV ? "PD" : "PD3.x";
     if (p === "epr-fixed") return s.avs ? "AVS" : "EPR";
@@ -61,11 +65,59 @@ var CtGrid = (function () {
     return 0;
   }
   function ampsMa(s) {
-    if (isHunt(s) || isFullCurrent(s)) return s.request_ma || 0;
+    if (isHunt(s)) return 0;   // a Xiaomi mode: its watts (miWatts)
+    if (isFullCurrent(s)) return s.request_ma || 0;
     if (s.protocol === "pd2-fixed" || s.protocol === "pd3x-fixed" || s.protocol === "pps" || s.protocol === "epr-fixed")
       return isAvs(s) ? 0 : pdoMa(s.raw_pdo || 0);
     return s.protocol === "scp" ? (s.request_ma || 0) : 0;
   }
+  // ---- OEM levels by their watts (include/k2/chargertest/oem_watts.hpp, tools/oem_watts.py; golden: tests/fixtures/oem_watts.txt) ----
+  // The K2 draws no current in a charger test: a level's watts are its volts x the current the protocol names (the SCP limit the K2
+  // writes, the UFCS mode's advertised current, the SuperVOOC ask the adapter went on under), so they are only ever claimed.
+  var OEM_LEVELS = [
+    { word: "VOOC", mv: 5000, ma: 4000, w: 20, ceiling: false },
+    { word: "SVOOC", mv: 10000, ma: 5000, w: 50, ceiling: true },
+    { word: "SVOOC", mv: 10000, ma: 6500, w: 65, ceiling: true },
+    { word: "SVOOC", mv: 10000, ma: 10000, w: 100, ceiling: true },
+    { word: "SVOOC", mv: 11000, ma: 11000, w: 120, ceiling: true }
+  ];
+  var VOOC_ALGS = ["vooc", "svooc", "svooc65"];   // one shared detection: the finished grid reads them as the levels above
+  var RAN_ITS_COURSE = { judged: 1, stopped: 1, cap: 1, "time cap": 1 };   // svooc_ceiling::End names (readout, card)
+  // "120W", "22.5W" (0.1 W, the tenth only when not 0; whole watts from 100 W, so at most 5 characters); "" for 0 mW.
+  function oemWatts(mw) {
+    if (!mw) return "";
+    var dw = Math.floor((mw + 50) / 100);
+    if (dw >= 1000) return Math.floor((mw + 500) / 1000) + "W";
+    return Math.floor(dw / 10) + (dw % 10 ? "." + (dw % 10) : "") + "W";
+  }
+  function oemLabel(word, mw) { var w = oemWatts(mw); return w ? word + " " + w : word; }
+  function claimW(vmaxMv, word) { return Math.floor((vmaxMv * Math.min(word, 0x1FF) * 100 + 500000) / 1000000); }
+  // The ceiling readout's ask word: k2proto decodeChargerSvoocCap (word), k2_remote ({ceiling: {word}}), a card's Deep block (ceiling_ma).
+  function svoocWord(sv) {
+    if (!sv) return 0;
+    if (sv.word !== undefined && sv.word !== null) return sv.word;
+    if (sv.ceiling && sv.ceiling.word !== undefined) return sv.ceiling.word;
+    return Math.floor((sv.ceiling_ma || 0) / 100);
+  }
+  // "claimed" / "not reached" / "not tested": what the Deep ceiling stage proves of one level (oem_watts::claim).
+  function oemClaim(level, sv) {
+    if (!level.ceiling) return "not tested";
+    var word = svoocWord(sv), vmax = (sv && sv.vmax_mv) || 0;
+    if (word && vmax && claimW(vmax, word) >= level.w) return "claimed";
+    return sv && RAN_ITS_COURSE[sv.end] ? "not reached" : "not tested";
+  }
+  function voocLevels(sv) {
+    return OEM_LEVELS.map(function (l) { return { word: l.word, w: l.w, label: oemLabel(l.word, l.w * 1000), state: oemClaim(l, sv) }; });
+  }
+  // A step's own watts: SCP the limit the K2 writes, UFCS its mode's advertised current; 0 for any other step.
+  function stepMw(s) {
+    var mv = s.target_mv || 0, pdo = (s.raw_pdo || 0) >>> 0;
+    var ma = s.protocol === "scp" ? (s.request_ma || 0) : s.protocol === "ufcs" && pdo ? ((pdo >>> 25) & 127) * 50 : 0;
+    return ma && mv ? Math.floor(mv * ma / 1000) : 0;
+  }
+  // "10V 22.5W", "9V 27W": the step's volts and its claimed watts; "" when stepMw() is 0.
+  function oemChip(s) { var mw = stepMw(s); return mw ? milli(s.target_mv) + "V " + oemWatts(mw) : ""; }
+
   // "20V 5A", "12V", "11→8V" ("" with no voltage). prev = the row before: a continuous row of the same protocol and slot reads from→to.
   function params(s, prev, amps) {
     var mv = s.target_mv || 0;
@@ -73,6 +125,7 @@ var CtGrid = (function () {
     if (s.continuous && prev && has(PROGRAMMABLE, s.protocol) && prev.protocol === s.protocol && prev.pos === s.pos &&
         !isHunt(prev) && !isHunt(s) && prev.target_mv && prev.target_mv !== mv)
       return milli(prev.target_mv) + "→" + milli(mv) + "V";
+    if (isHunt(s)) return miWatts(s) + "W";
     var out = milli(mv) + "V", ma = (amps !== false || isFullCurrent(s)) ? ampsMa(s) : 0;
     return out + (ma ? " " + milli(ma) + "A" : "");
   }
@@ -170,6 +223,8 @@ var CtGrid = (function () {
   //   stopped     a step that never ran reads stopped (no fill, dim), not pending
   //   monitorMv   the meter's ceiling: a deep sweep's range stops there
   //   spec        the Deep run's PD spec section (k2proto decodeChargerSpecSection): its checks follow the unit lines
+  //   oemWatts    the finished grid's VOOC family: two level rows ("VOOC" detection + 20W, "SVOOC" 50W..120W), each level claimed
+  //               ("unverified" look), not reached ("none") or not tested (struck); svooc = the ceiling readout (decodeChargerSvoocCap)
   // Returns lines: [{label, section, cells: [{verdict, label, current, title}]}], the K2Kit row spec.
   function layout(wire, opts) {
     opts = opts || {};
@@ -192,7 +247,7 @@ var CtGrid = (function () {
     var keys = [];
     steps.forEach(function (s) {
       if (REVISIONS[s.alg]) return;
-      var k = s.hunt ? { alg: "", probe: true, sweep: false, mv: s.mv }
+      var k = s.hunt ? { alg: "", probe: true, sweep: false, mv: 0 }   // the Xiaomi unit: one row
                      : { alg: s.alg, probe: false, sweep: s.sweep, mv: isRange(s.alg) ? s.pos : 0 };
       if (!keys.some(function (o) { return o.alg === k.alg && o.probe === k.probe && o.sweep === k.sweep && o.mv === k.mv; })) keys.push(k);
     });
@@ -248,7 +303,7 @@ var CtGrid = (function () {
         var tone = rollUp(t), failed = t.fail !== 0, c;
         if (hsOk && !failed) { c = chip(row, "handshake ok", tone, at, x.mv); c.word = true; }
         else if (detected && !failed) { c = chip(row, "detected", tone, at, x.mv); c.word = true; }
-        else c = chip(row, a === "ufcs" ? ufcsLevel(x.raw) : params(x.raw), tone, at, x.mv);
+        else c = chip(row, oemChip(x.raw) || (a === "ufcs" ? ufcsLevel(x.raw) : params(x.raw)), tone, at, x.mv);   // SCP / UFCS: watts
         if (classA && !t.pass && !failed) c.note = "Class A";
       });
     }
@@ -268,12 +323,45 @@ var CtGrid = (function () {
       return hi < Math.ceil(apdo.lo / 20) * 20 ? apdo.hi : hi;
     }
 
+    // The VOOC family as level rows (opts.oemWatts): a family that never answered folds as one word, never three versions.
+    var voocDone = false, LEVEL_TONE = { claimed: "unverified", "not reached": "dim", "not tested": "skip" };
+    function voocRows(key, a) {
+      var fam = steps.filter(function (s) { return has(VOOC_ALGS, s.alg); });
+      var pass = fam.some(function (s) { return s.result === "pass"; });
+      var gone = VOOC_ALGS.some(function (x) { return of(x).length && isAbsent(x); });
+      var skipOnly = VOOC_ALGS.every(function (x) { return !of(x).length || skippedOnly(x); });
+      if (!pass && opts.fold && (gone || skipOnly)) { (gone ? absent : skipped)[a] = true; return; }
+      var levels = voocLevels(opts.svooc), row = null;
+      levels.forEach(function (l, i) {
+        if (!row || levels[i - 1].word !== l.word) {
+          row = begin(l.word, key); row.levels = true;
+          if (i === 0) legacyRow(row, a);   // the shared detection leads the family's first row
+        }
+        chip(row, oemWatts(l.w * 1000), LEVEL_TONE[l.state], [], 0, { levelTitle: l.label + ": " + l.state + (l.state === "claimed" ? " (no load)" : "") });
+      });
+    }
+
     var absent = {}, skipped = {}, rangeNone = {};
     keys.forEach(function (key) {
       var row, a = key.alg;
+      if (opts.oemWatts && has(VOOC_ALGS, a)) {   // the family's rows stand where the plan first runs one of its units
+        if (!voocDone) voocRows(key, a);
+        voocDone = true;
+        return;
+      }
       if (key.probe) {
-        row = begin("Mi 6A", key);
-        steps.forEach(function (s) { if (s.hunt && s.mv === key.mv) chip(row, params(s.raw), toneOf(s), [s], s.mv); });
+        // The Xiaomi row (result_layout probe_row): the chain row says how the 0x2717 chain ended ("auth", or a word when it did not
+        // finish), then one chip per mode it unlocked by its watts; an older firmware's 6 A probes are chips of their own.
+        row = begin("Xiaomi", key);
+        var modes = steps.filter(function (s) { return s.hunt && s.mv; });
+        steps.forEach(function (s) {
+          if (!s.hunt || s.mv) return;
+          var d = s.detail, done = d === 20 || d === 21;
+          if (s.result === "skip" && !done) word(row, d === 1 ? "no SVID" : d === 2 ? "no answer" : "stalled", "skip");
+          else chip(row, "auth", toneOf(s), [s], 0);
+          if (done && !modes.length) word(row, "none new", "skip");
+        });
+        modes.forEach(function (s) { chip(row, params(s.raw), toneOf(s), [s], s.mv); });
         return;
       }
       if (key.sweep) {
@@ -324,7 +412,11 @@ var CtGrid = (function () {
       var any = keys.some(function (k) { return !k.probe && set[k.alg]; });
       if (!any) return;
       var row = begin(text, null), said = {};
-      keys.forEach(function (k) { if (!k.probe && set[k.alg] && !said[k.alg]) { said[k.alg] = true; word(row, NAMES[k.alg] || k.alg, tone); } });
+      keys.forEach(function (k) {
+        if (k.probe || !set[k.alg]) return;
+        var name = has(VOOC_ALGS, k.alg) ? "VOOC" : NAMES[k.alg] || k.alg;   // the VOOC family folds as one word
+        if (!said[name]) { said[name] = true; word(row, name, tone); }
+      });
     }
     collapsed(absent, "No reply", "dim");
     collapsed(skipped, "Skipped", "caution");
@@ -344,7 +436,7 @@ var CtGrid = (function () {
       var cur = steps.filter(function (s) { return s.i === opts.current; })[0];
       if (cur && (cur.result === "running" || cur.result === "pending")) {
         for (var ri = 0; ri < rows.length && !dot; ri++) {
-          var r = rows[ri], owns = r.probe ? cur.hunt && cur.mv === r.mv :
+          var r = rows[ri], owns = r.probe ? cur.hunt :
                                    r.sweep ? cur.sweep && cur.pos === r.pos && cur.alg === r.alg :
                                    !!r.alg && !cur.hunt && !cur.sweep && r.alg === cur.alg && (!isRange(r.alg) || cur.pos === r.pos);
           if (!owns) continue;
@@ -357,6 +449,7 @@ var CtGrid = (function () {
 
     function verdictOf(c) {
       if (c === dot) return "running";
+      if (c.tone === "unverified") return "unverified";   // a claimed level: a number with no pass or fail look
       if (c.tone === "dim" || c.tone === "caution") return "none";
       if (c.tone === "pending" && opts.stopped) return "stopped";
       return c.tone;
@@ -374,7 +467,7 @@ var CtGrid = (function () {
       var v = verdictOf(c), lab = c.text, cur = "";
       if (!c.word) { var sp = lab.indexOf(" "); if (sp >= 0) { cur = lab.slice(sp + 1); lab = lab.slice(0, sp); } }
       var w = whyOf(c), vw = WORD[v];
-      return { verdict: v, label: lab, current: cur, title: c.text + (vw ? ": " + vw : "") + (w ? " (" + w + ")" : "") };
+      return { verdict: v, label: lab, current: cur, title: c.levelTitle || c.text + (vw ? ": " + vw : "") + (w ? " (" + w + ")" : "") };
     }
     // The cell width rule: a chip counts its volt text, a word its whole text; a line breaks at 5 cells or where they stop fitting.
     function cellWidth(c) {
@@ -431,6 +524,8 @@ var CtGrid = (function () {
 
   return { milli: milli, isHunt: isHunt, isSweep: isSweep, isFullCurrent: isFullCurrent, protocolWord: protocolWord, pdoMa: pdoMa,
            ampsMa: ampsMa, params: params, label: label, stepLabel: label, pdoRange: pdoRange, rangeText: rangeText,
-           ufcsLevel: ufcsLevel, skipTag: skipTag, layout: layout, specLines: specLines, NAMES: NAMES };
+           ufcsLevel: ufcsLevel, skipTag: skipTag, layout: layout, specLines: specLines, NAMES: NAMES,
+           OEM_LEVELS: OEM_LEVELS, oemWatts: oemWatts, oemLabel: oemLabel, oemClaim: oemClaim, voocLevels: voocLevels, stepMw: stepMw,
+           oemChip: oemChip };
 })();
 if (typeof module !== "undefined" && module.exports) module.exports = CtGrid;

@@ -37,6 +37,7 @@ public:
         put(v, 7);
         put(0, 1);
     }
+    std::size_t bits() const { return bytes_ * 8 + nbits_; }   // written so far
     std::size_t finish() {
         if (!overflow_ && nbits_ != 0) flush();
         return overflow_ ? 0 : bytes_;
@@ -213,10 +214,17 @@ static std::size_t pack_card_v2(std::span<const std::uint8_t> rec, std::span<std
                 w.put(p[rc::off::kV10 + rc::kSweepBytes * i + k], 8);
     // the run's level (v8 spare byte, 1 Light, 2 Deep): a whole byte, only when not Medium, so a Medium card packs as before
     // and a reader tells it from the CRC's padding (at most 7 bits) by needing 8 bits more than the CRC
-    const bool has_level = p[33] >= 8 && p[rc::off::kV8 + 1] != 0;
+    // format 12: a Medium card with a block (its Xiaomi section) writes the level byte too (0), so the block has its place behind it
+    // A block that would push the record past one code (kMaxCardDeepV2: the v11 worst Deep card fits; a block that also carries the
+    // Xiaomi section at its worst may not) is left out whole: the card alone, as for a block that is not whole.
+    const bool fits = rc::deep::blob_valid(ext) &&
+                      w.bits() + 8 + kDeepExtHead + rc::deep::blob_bits(ext) + 16 <= std::min(out.size(), kMaxCardDeepV2) * 8;
+    const bool has_block = p[33] >= 12 && fits;
+    const bool has_level = p[33] >= 8 && (p[rc::off::kV8 + 1] != 0 || has_block);
     if (has_level) w.put(p[rc::off::kV8 + 1], 8);
-    // format 11: the Deep block after the level byte (a block is whole, or it is left out): presence bit, u12 bit count, the bits
-    if (has_level && p[rc::off::kV8 + 1] == 2 && rc::deep::blob_valid(ext)) {
+    // format 11: the Deep block after the level byte (a block is whole, or it is left out): presence bit, u12 bit count, the bits.
+    // Format 12: any card's block (a Deep card's parts and / or the Xiaomi section)
+    if (has_level && (p[rc::off::kV8 + 1] == 2 || has_block) && fits) {
         const unsigned nbits = rc::deep::blob_bits(ext);
         w.put(1, 1);
         w.put(nbits, 12);

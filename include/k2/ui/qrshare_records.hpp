@@ -137,9 +137,13 @@ consteval std::size_t emk_v2_worst_bits() {
 inline constexpr std::size_t kMaxCardV2 = (card_v2_worst_bits() + 7) / 8;   // 242 B
 inline constexpr std::size_t kMaxEmkV2 = (emk_v2_worst_bits() + 7) / 8;     // 459 B
 static_assert(kMaxCardV2 == 242 && kMaxEmkV2 == 459);
-// The worst Deep card: the card's worst case plus the block's presence bit, its u12 length and its worst-case stream.
+// The worst Deep card: the card's worst case plus the block's presence bit, its u12 length and its worst-case stream. Format 11
+// (the Deep parts at their worst, no Xiaomi section) is 653 B; the record is capped at one code's 659 B (qrshare_link kMaxRecord),
+// so a format 12 block that would pass it (the Xiaomi section on top of a near-worst Deep block) is left out by pack_v2.
 inline constexpr std::size_t kDeepExtHead = 1 + 12;
-inline constexpr std::size_t kMaxCardDeepV2 = (card_v2_worst_bits() + kDeepExtHead + report_card::deep::kMaxBits + 7) / 8;   // 653 B
-static_assert(kMaxCardDeepV2 == 653);
+inline constexpr std::size_t kMiWorstBits = report_card::deep::kMiHeadBits + report_card::deep::kMiModeBits * k2::mi_unlock::kMaxModes;
+inline constexpr std::size_t kMaxCardDeepV11 = (card_v2_worst_bits() + kDeepExtHead + report_card::deep::kMaxBits - kMiWorstBits + 7) / 8;
+static_assert(kMaxCardDeepV11 == 653);
+inline constexpr std::size_t kMaxCardDeepV2 = 659;
 
 }  // namespace k2::qrshare::records

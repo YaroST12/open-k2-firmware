@@ -399,7 +399,9 @@ void fold_repeat(const Card& prev, Card& c) {
     for (auto& a : c.spread) a.fill(kSpreadNone);
     for (const auto& s : steps) {
         const unsigned g = unsigned(s.group);
-        if (g >= kGroups) continue;
+        // The Xiaomi unit (its chain row and the modes it unlocked) is the extension block's section (report_card_deep.hpp), never
+        // part of the PD group, its ranges, spread or EPR levels: a card reads the same with or without it.
+        if (g >= kGroups || s.hunt) continue;
         GroupAcc& acc = ga[g];
         const bool range_step = (ct::kPpsAlgorithms & ct::bit(s.algorithm)) != 0;
         const uint8_t det = s.reason == ct::Reason::StepResolution ? uint8_t(0) : s.detail;

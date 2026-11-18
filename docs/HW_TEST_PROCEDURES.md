@@ -702,17 +702,24 @@ No load attached. A session never mixes PD and D+/D- in one attach, so the sessi
 5. Cancel during a Detach / Attach ends the run and leaves the sink PD-active (Rd as before). Replug or Rescan if the Who's attached page shows no caps.
 Pass: legacy rows get a verdict on a charger that falls back; no step requests above 5 V before the Pd unit; exactly one Request goes out at START (Black Box: one Request id 0, no second one while it is pending).
 
-#### T20b Reading a refused Mi 6 A row (hunt evidence)
+#### T20b The Xiaomi unit (SVID 0x2717)
 
-Use when a Xiaomi / Redmi source leaves a Mi 6 A row FAIL (finished chain, 5 A cable, 6 A refused) or "not unlocked" and the cause is in question. Read only; it starts nothing and needs no extra run. Causes and what decides each: `docs/CHARGER_TEST_FLOW.md`, "Refused Mi 6 A rows". Evidence belongs to the run in RAM: read it before the next START, and not across a reboot (a resumed run keeps its rows but not the evidence).
+Use with a source that lists SVID 0x2717 (`docs/CHARGER_TEST_FLOW.md`, "Xiaomi unit"). No load; PD unit only is enough
+(`python3 tools/ct_start.py --units pd --wait 560`). Three cases:
 
-1. On the device: Steps list, open the refused row (OK). The detail page shows `Why:` (the cause), `Chain svid/open/auth/re` (Y/n), `Caps N APDO mA cable mA` and `Ask #pos V mA <answer> ms`. A stored transition capture shrinks the page to `Why` and `Chain`.
-2. Host, results with the evidence attached: `python3 tools/k2_remote.py charger-test results` (a `hunt:` line under the row; `--json` / `--out file.json` carry a `hunt` object per row), or `charger-test summary` (`Mi 20V 6A ✗ rejected [cause: why]`). An older firmware without command 0x0E just shows no `hunt` line.
-3. The exchange itself: the refusal froze a Black Box capture (trigger `6 A refused`, mark 8 `hunt-refusal` with the cause, answer and the APDO limit). `python3 tools/pd_trace.py captures` lists it, `python3 tools/pd_trace.py capture N` dumps it (chain REQs, the re-announced Source_Capabilities, our Request, the answer). Save it before `clear-captures`.
-4. Log: the `[HUNT]` line has the same fields (cause, answer and latency, last chain step, flags, caps, PDO and Request words, limit, cable, auth time).
-5. Decide: `refused-offer` is the real FAIL: compare the Request word against the 6 A APDO in the capture (voltage, position, operating current). Any other cause says which link is missing; fix that first (e.g. `apdo-stale`: no Source_Capabilities after the auth, so the Request used the old 5 A list).
+1. Xiaomi 20K bank on a 5 A cable (or the EPR 50V 5A spoof): the Xiaomi row reads `auth` then `55W` (PPS 5-11 V 3 A -> 5 A,
+   asked at 11 V 5 A). The mode's Detail page shows Before `PPS 5-11V 3A`, After `PPS 5-11V 5A`.
+2. FH22: the chain finishes and nothing changes: `auth`, `none new`; the chain row's Detail reads "Auth done, verified / No new
+   modes".
+3. CUKTECH 120 W on the 6 A cable (the built-in "Xiaomi 6A" identity or the real cable): `66W` and `120W` (PPS 5-11 V and 5-20 V
+   at 6 A) are tested; on a 5 A cable they are skipped "cable limit", never asked.
 
-Pass: every refused hunt row has a cause other than `none`, and the capture holds the Request and the answer. Fail: a refused row with no evidence on a firmware that has command 0x0E, or `unexplained` on a run with a clean trace.
+Host: `python3 tools/k2_remote.py charger-test summary` ("- Xiaomi: auth done, verified; Mi 55W ✓"), the card's QR link
+(`tools/k2_qr.py`, the web viewer) carries the Xiaomi section with each mode before -> after, and Tools -> Report cards shows
+the "Xiaomi" fact line.
+
+Pass: each case as above, no Request above the advertised current (Black Box), no reboot (uptime vs run time). Fail: a mode
+listed that the before / after lists do not show, or a "cable limit" skip on a cable that carries the current.
 
 ### T21 Charger test: reboot-resume journal
 

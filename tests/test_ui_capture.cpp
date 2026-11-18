@@ -14,6 +14,7 @@
 #include "k2/drivers/usb.hpp"
 #include "k2/pd/pdtrace.hpp"
 #include "k2/chargertest/report_card_hw.hpp"
+#include "k2/chargertest/card_tone.hpp"
 #include "card_fixtures.h"
 #include "k2/core/remote_proto.hpp"
 #include "k2/ui/rle565.hpp"
@@ -593,7 +594,8 @@ static void test_cards_scenes() {
         const rc::GV v = i % 3 == 0 ? rc::GV::Pass : i % 3 == 1 ? rc::GV::Fail : rc::GV::Skip;
         w.group[i] = {v, uint16_t(v == rc::GV::Pass ? 20000 : 0), 0, uint8_t(v == rc::GV::Pass ? 0 : int(ct::Reason::Timeout))};
     }
-    w.group[9] = {rc::GV::Fail, 12000, 0, uint8_t(ct::Reason::Timeout), 20000};   // SVOOC65: the widest cell, "12V" cross "20V"
+    // UFCS: the widest cell, "12V" cross "20V" (it was SVOOC65 until the VOOC family read as one "VOOC" cell)
+    w.group[unsigned(ct::Group::Ufcs)] = {rc::GV::Fail, 12000, 0, uint8_t(ct::Reason::Timeout), 20000};
     w.n_ranges = 4;
     w.range[2] = {uint8_t(ct::Algorithm::Pps), 0, 33, 110, 110, 90};
     w.range[3] = {uint8_t(ct::Algorithm::EprAvs), 0, 150, 480, 480, 0};
@@ -665,6 +667,34 @@ static void test_cards_fh22_scenes() {
     ui.on_button(Button::Back, ButtonEvent::Short, 1730);
     ui.on_button(Button::Back, ButtonEvent::Short, 1740);
     ui.on_button(Button::Back, ButtonEvent::Short, 1750);
+    stub_cards_reset();
+    g_stub = old;
+}
+
+// Tools > Report cards, a card whose VOOC family was detected by its SVOOC row: the family is ONE cell, "VOOC" (its lead,
+// report_card::vooc_lead), never three protocol versions; in all four rotations (K2_DUMP=dir: k2_cards_vooc_rot<N>.raw).
+static void test_cards_vooc_fold_scenes() {
+    const auto old = g_stub;
+    g_stub = {};
+    stub_cards_reset();
+    report_card::Card fh = cardfx::fh22_full();
+    using G = charger_test::Group;
+    fh.group[unsigned(G::SuperVooc)] = {report_card::GV::Pass, 5000, uint8_t(fc::Fail::Detected), 0};
+    report_card::hw::put(fh);
+    for (uint8_t rot = 0; rot < 4; ++rot) {
+        static Ui ui;
+        const uint32_t t = 1000u + 1000u * rot;
+        ui.init(t); ui.set_rotation(rot, t); ui.tick(t); ui.goto_page(static_cast<uint8_t>(Page::Tools), t + 100);
+        ui.push_menu(Menu::Cards, t + 200);
+        ui.tick(t + 300);
+        ui.on_button(Button::Ok, ButtonEvent::Short, t + 400);
+        char name[32];
+        std::snprintf(name, sizeof name, "cards_vooc_rot%u", unsigned(rot));
+        test_screen(ui, name, t + 500);
+        for (int b = 0; b < 3; ++b) ui.on_button(Button::Back, ButtonEvent::Short, t + 600 + b);
+    }
+    // The family is one cell: grey are QC2 (not advertised), AFC, FCP, SCP and VIVO; VOOC and SVOOC65 fold into the SVOOC pass.
+    CHECK_EQ(int(report_card::tone::counts(fh).grey), 5);
     stub_cards_reset();
     g_stub = old;
 }
@@ -1691,6 +1721,7 @@ int main() {
     test_emarker_menu_scenes();
     test_cards_scenes();
     test_cards_fh22_scenes();
+    test_cards_vooc_fold_scenes();
     // Scratch-leasing page falls back cleanly to 1-row stack strips without conflicting with its own paint Lease.
     {
         ui.goto_page(static_cast<uint8_t>(Page::Tools), 8500);

@@ -20,9 +20,9 @@ import report_card  # noqa: E402
 import loop_probe_rec as lp  # noqa: E402
 
 
-def load():
+def load(path=os.path.join(HERE, "fixtures", "qrshare.tsv")):
     out = {}
-    with open(os.path.join(HERE, "fixtures", "qrshare.tsv")) as f:
+    with open(path) as f:
         for ln in f:
             if ln.startswith("#") or not ln.strip():
                 continue
@@ -38,7 +38,7 @@ class Golden(unittest.TestCase):
     def test_every_fixture_present(self):
         self.assertEqual(set(FIX), {"boot", "identity", "emk_plain", "emk_rows", "pdcaps_spr", "pdcaps_epr", "card",
                                     "log", "loop", "battery", "emk_rows_lz", "card_lz", "emk_rows_v2", "card_v2",
-                                    "card_deep_v2"})
+                                    "card_deep_v2", "card_mi_v2"})
 
     def test_decode_joins_the_golden_record(self):
         for name, fx in FIX.items():
@@ -118,6 +118,34 @@ class SchemaV2(unittest.TestCase):
                 self.assertTrue(d["_store_crc_ok"])
                 self.assertEqual(d["level"], ["medium", "light", "deep"][level])
         self.assertEqual(q.expand_card_v2(medium), bytes(v1))   # Medium: no byte, still reads back whole
+
+    def test_xiaomi_card_golden(self):
+        # Format 12: a Medium card (the 20K bank) whose block holds only the Xiaomi section; the level byte 0 is written so the block
+        # has its place. The chain verified and PPS 5-11V 3A became 5A, tested at 11 V 5 A ("Mi 55W").
+        import charger_summary
+        res, code = q.decode_texts(FIX["card_mi_v2"]["parts"])
+        rec = res["record"]
+        self.assertTrue(rec["_store_crc_ok"])
+        self.assertNotIn("level", rec)
+        x = rec["deep"]["xiaomi"]
+        self.assertEqual((x["chain"], x["chain_text"], x["done"]), (20, "done, verified", True))
+        self.assertEqual([(m["label"], m["before"], m["after"], m["mv"], m["ma"], m["verdict"]) for m in x["modes"]],
+                         [("Mi 55W", "PPS 5-11V 3A", "PPS 5-11V 5A", 11000, 5000, "pass")])
+        self.assertEqual(set(rec["deep"]), {"xiaomi"})   # no Deep parts on a Medium card
+        text = charger_summary.summarize_card(rec)
+        self.assertIn("- Xiaomi: auth done, verified\n  - Mi 55W: PPS 5-11V 3A → PPS 5-11V 5A ✓", text)
+
+    def test_format_11_deep_link_still_decodes(self):
+        # tests/fixtures/qrshare_v11.tsv: a Deep card link a format 11 firmware wrote. The reader expands it to format 12 and falls
+        # back to the format 11 CRC; its block reads as before, with no Xiaomi section.
+        old = load(os.path.join(HERE, "fixtures", "qrshare_v11.tsv"))["card_deep_v11"]
+        res, code = q.decode_texts(old["parts"])
+        rec = res["record"]
+        self.assertTrue(rec["_store_crc_ok"])
+        self.assertEqual(rec["level"], "deep")
+        self.assertNotIn("xiaomi", rec["deep"])
+        with open(os.path.join(HERE, "fixtures", "deep_decoded.json")) as f:
+            self.assertEqual(rec["deep"], json.load(f))   # the same Deep block the format 12 golden carries
 
     def test_v10_links_keep_their_crc_and_have_no_deep_block(self):
         # A format-10 firmware's link carries the CRC of its format-10 record; the reader writes format 11 and falls back to the

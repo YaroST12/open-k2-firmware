@@ -2,10 +2,10 @@
 # tests/test_step_label.py (tools/step_label.py), so the device, the host tools and the screenshots word a step the same.
 # Fields, separated by '|': algorithm | pos | target mV | requested mA | PDO (hex, 0 = none) | flags | previous row's mV | label
 #   algorithm: the wire name of the protocol (tools/k2_remote.py TEST_ALGORITHMS, with the PD rows as pd2 / pd3 / epr / epr-avs)
-#   flags: h = hunt (OEM 6 A probe), a = AVS offer, c = continuous (a ramp step), - = none
+#   flags: h = hunt (the Xiaomi unit: its chain row, or a mode the chain unlocked), a = AVS offer, c = continuous (a ramp step), - = none
 #   previous row's mV: the preceding row of the same protocol and PDO position (0 = none), what a ramp row reads "from"
 # Amps are shown only where the step has a meaningful current: a PD fixed / PPS row shows the PDO's advertised current (the
-# row itself requests at most 1 A), a hunt row its probe current, SCP its limit; AVS and the D+/D- modes show volts only.
+# row itself requests at most 1 A), a Xiaomi mode row the current it requests, SCP its limit; AVS and the D+/D- modes show volts only.
 # The one exception is the full-current PPS row (top voltage at the APDO's whole current): it shows what it requests.
 #
 # PD fixed
@@ -36,10 +36,12 @@ spr-avs | 0 |     0 |    0 |          0 | - |     0 | AVS
 # EPR fixed
 epr     | 8 | 28000 | 1000 | 0x8c1f4 | - |     0 | EPR 28V 5A
 epr     | 0 |     0 |    0 |       0 | - |     0 | EPR
-# Mi 6 A hunt rows (a fixed or a PPS offer; the probe current is the requested one)
-pd3     | 5 | 20000 | 6000 | 0x6412c | h |     0 | Mi 20V 6A
-pps     | 6 | 11000 | 6000 | 0xc1a42164 | h | 0 | Mi 11V 6A
-pps     | 6 | 20000 | 6000 | 0xc1a42164 | h | 0 | Mi 20V 6A
+# Xiaomi unit: the chain row (no level), then the modes the chain unlocked at their new level (a fixed or a PPS offer; the
+# current is the requested one, also at or below 5 A)
+pd3     | 0 |     0 |    0 |       0 | h |     0 | Xiaomi
+pd3     | 5 | 20000 | 5000 | 0x641f4 | h |     0 | Mi 100W
+pps     | 6 | 11000 | 5000 | 0xc0dc3264 | h | 0 | Mi 55W
+pps     | 6 | 11000 | 6000 | 0xc0dc3278 | h | 0 | Mi 66W
 # PD revision rows
 pd30rev | 0 |     0 |    0 |       0 | - |     0 | PD3.0 rev
 pd31rev | 0 |     0 |    0 |       0 | - |     0 | PD3.1 rev

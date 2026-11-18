@@ -195,10 +195,11 @@ std::size_t render_summary(const Card& c, std::span<char> out) {
     bool any_skip = false;
     for (unsigned g = 0; g < kGroups; ++g) {
         const GroupResult& r = c.group[g];
-        if (r.verdict == GV::Skip && r.reason == uint8_t(ct::Reason::NoQc3Plus)) { t.put("- %s: no QC3+\n", ct::name(ct::Group(g))); continue; }   // not folded into "skipped"
+        if (folded(c, g)) continue;   // the VOOC family is one line, its lead's (group_word)
+        if (r.verdict == GV::Skip && r.reason == uint8_t(ct::Reason::NoQc3Plus)) { t.put("- %s: no QC3+\n", group_word(g)); continue; }   // not folded into "skipped"
         if (r.verdict == GV::Skip) { any_skip = true; continue; }
         if (r.verdict != GV::Pass && r.verdict != GV::Fail) continue;
-        t.put("- %s: ", ct::name(ct::Group(g)));
+        t.put("- %s: ", group_word(g));
         const bool handshake = r.max_mv && r.max_mv <= kHandshakeMv;
         if (light && r.verdict == GV::Pass) {
             t.put(g == 0 ? "\xE2\x9C\x93 advertised" : "detected");
@@ -224,8 +225,8 @@ std::size_t render_summary(const Card& c, std::span<char> out) {
         t.put("- ");
         bool first = true;
         for (unsigned g = 0; g < kGroups; ++g) {
-            if (c.group[g].verdict != GV::Skip || c.group[g].reason == uint8_t(ct::Reason::NoQc3Plus)) continue;
-            t.put("%s%s", first ? "" : ", ", ct::name(ct::Group(g)));
+            if (c.group[g].verdict != GV::Skip || c.group[g].reason == uint8_t(ct::Reason::NoQc3Plus) || folded(c, g)) continue;
+            t.put("%s%s", first ? "" : ", ", group_word(g));
             first = false;
         }
         t.put(": skipped\n");

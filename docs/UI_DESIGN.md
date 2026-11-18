@@ -553,12 +553,12 @@ RAM: the page lives in the page arena (1184 B on the target, below `LoopProbePag
   short OK toggles the family, a long OK opens its Group page (a short OK there toggles a row).
   Back retreats one level (Group -> Custom -> Tests, Spoof cable -> Tests on the preset in force, Review -> Spoof cable on the identity
   in force).
-  The preset rows carry a one-line note: `PD only` reads "PD fixed, PPS, Mi 6A (Xiaomi)", `Legacy only` reads
-  "D+/D-: vendor modes + QC/UFCS" (the Mi 6A hunt rows belong to the PD set; every D+/D- family belongs to the legacy
+  The preset rows carry a one-line note: `PD only` reads "PD fixed, PPS, EPR, Xiaomi", `Legacy only` reads
+  "D+/D-: vendor modes + QC/UFCS" (the Xiaomi rows belong to the PD set; every D+/D- family belongs to the legacy
   set), `Vendor modes` reads "Huawei, Samsung, OPPO, vivo" and `All tests` "Everything, QC Class B 20V too".
   **Step labels.** Every place that names a step uses one label from `step_label::label` (include/k2/chargertest/step_label.hpp, host
   golden vectors in tests/fixtures/step_labels.txt, mirrored by tools/step_label.py): `<protocol> <V> <A>`, e.g. `PD 9V 3A`,
-  `PPS 20V 5A`, `PPS 11→8V` (a ramp row), `EPR 28V 5A`, `AVS 15V`, `Mi 20V 6A`, `QC3 12V`, `SCP 10V 2.25A`, `VOOC 5V`,
+  `PPS 20V 5A`, `PPS 11→8V` (a ramp row), `EPR 28V 5A`, `AVS 15V`, `Mi 55W` (a Xiaomi mode, named by the watts it asks), `QC3 12V`, `SCP 10V 2.25A`, `VOOC 5V`,
   `PD3.1 rev`. Amps appear only when the step has a meaningful one, never invented; the PDO position is not in the row
   text (it stays on the detail page). A Running/Steps row is the label (`data=true` text, shortened to fit), the measured
   voltage as the tail and the verdict marker. Gallery: `docs/ui_review_2026-11-06/labels/`.
@@ -580,9 +580,9 @@ RAM: the page lives in the page arena (1184 B on the target, below `LoopProbePag
   offered. The strike is the one pixel row painted over text (the cell's cost is its area plus the label width + 2 px,
   `kit::strike_px`, charged by the budgeted `draw_some` on both its paths). A label-less skip cell (the 12 px glyph of the
   report card) keeps the dash, so the card strikes the unit's name instead. Legacy D+/D- modes have volts only (the data model keeps
-  no current for them, none is invented) and a Mi hunt shows the probed current. The footer explains the focused unit
+  no current for them, none is invented) and a Xiaomi mode chip shows its watts (`55W`, the chain chip `auth`). The footer explains the focused unit
   (`PPS: 2 pass 1 fail`), OK opens its steps. The strip holds the best passing mode of up to three protocol families by
-  watts (`PD 20V 3A  Mi 20V 6A`), families that do not fit are dropped from the end. The grid has no section header
+  watts (`PD 20V 3A  Mi 55W`), families that do not fit are dropped from the end. The grid has no section header
   rows. A protocol with nothing to show yet (EPR held back by the cable) folds into the "Skipped" row instead
   of leaving a bare label. The long [+]/[-]
   page switch is global, so scrolling cannot use a long press. Remote `cursor` is the setup row (0-based).

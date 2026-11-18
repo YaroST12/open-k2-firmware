@@ -35,7 +35,7 @@ def _skip_run(protocols, reason="PD active: use QC port"):
 def test_vendor_protocols_have_friendly_names():
     protos = ["vooc-5v-handshake", "svooc-5v-handshake", "svooc65-5v-handshake", "ufcs", "vivo"]
     text = charger_summary.summarize(_skip_run(protos))
-    assert "- VOOC 5V, SVOOC, SVOOC 65W, UFCS, VIVO: skipped, PD active: use QC port" in text
+    assert "- VOOC, UFCS, VIVO: skipped, PD active: use QC port" in text   # the VOOC family is one word, never three versions
     for raw in protos:
         assert raw not in text
 
@@ -63,6 +63,57 @@ def test_svooc_ident_and_ceiling_lines():
     assert "VOOC" not in charger_summary.summarize(run)
     run.pop("svooc")
     assert "VOOC" not in charger_summary.summarize(run)
+
+
+def _vooc_run(detail="detected", svooc=None):
+    steps = [{"protocol": p, "pos": 0, "result": "pass", "reason": "none", "detail_reason": detail, "target_mv": 5000,
+              "measured_mv": 5000, "continuous": False, "raw_pdo": 0}
+             for p in ("vooc-5v-handshake", "svooc-5v-handshake", "svooc65-5v-handshake")]
+    run = {"run_id": 3, "state": "done", "reason": "none", "evidence": {}, "steps": steps}
+    if svooc:
+        run["svooc"] = svooc
+    return run
+
+
+def test_the_vooc_family_reads_as_watts_levels():
+    # Medium: the detection alone, every level not tested; never "SVOOC 65W" for a unit that only answered at 5 V
+    text = charger_summary.summarize(_vooc_run())
+    assert "- VOOC: ✓ detected" in text
+    assert ("- VOOC levels: VOOC 20W not tested, SVOOC 50W not tested, SVOOC 65W not tested, SVOOC 100W not tested, "
+            "SVOOC 120W not tested (claimed = the protocol's ask, no load)") in text
+    assert "SVOOC65" not in text and "- SVOOC" not in text
+    # A level's watts only ever come from the levels line, never as a unit's name
+    assert all(ln.startswith("- VOOC levels: ") for ln in text.splitlines() if "65W" in ln)
+    assert set(charger_summary.PROTO_NAMES[p] for p in charger_summary.VOOC_FAMILY) == {"VOOC"}
+    # Deep, the hardware ceiling (k2_remote.charger_svooc_cap's dict): every SuperVOOC level claimed
+    sv = {"mode": "on", "end": "stopped", "ceiling": {"word": 0x06D, "ma": 10900}, "vmax_mv": 11020,
+          "text": "stopped at 3.3s, <=11.0V, 10.9A 120W claimed", "ident": 0xAC}
+    text = charger_summary.summarize(_vooc_run(svooc=sv))
+    assert "SVOOC 65W claimed, SVOOC 100W claimed, SVOOC 120W claimed" in text
+    assert "VOOC 20W not tested" in text
+    # A ladder that stood at 6.3 A (69 W): the levels above it not reached
+    sv = dict(sv, end="judged", ceiling={"word": 0x03F, "ma": 6300}, vmax_mv=11000)
+    assert "SVOOC 65W claimed, SVOOC 100W not reached, SVOOC 120W not reached" in charger_summary.summarize(_vooc_run(svooc=sv))
+
+
+def test_scp_and_ufcs_rows_read_watts():
+    steps = [{"protocol": "scp", "pos": 0, "result": "pass", "reason": "none", "detail_reason": "none", "target_mv": mv,
+              "measured_mv": mv, "continuous": False, "raw_pdo": 0, "request_ma": ma} for mv, ma in ((5000, 0), (10000, 2250))]
+    text = charger_summary.summarize({"run_id": 4, "state": "done", "reason": "none", "evidence": {}, "steps": steps})
+    assert "- SCP: 5V, 10V 22.5W, all pass" in text
+
+
+def test_card_summary_folds_the_vooc_family_into_one_line_and_its_levels():
+    card = _card({"VOOC": {"verdict": "pass", "max_mv": 5000, "why": "detected"},
+                  "SVOOC": {"verdict": "pass", "max_mv": 5000, "why": "detected"},
+                  "SVOOC65": {"verdict": "pass", "max_mv": 5000, "why": "detected"}})
+    card["deep"] = {"svooc": {"end": "time cap", "asks": 4, "ceiling_ma": 10900, "vmax_mv": 11000, "stop_ms": 3300}}
+    text = charger_summary.summarize_card(card)
+    assert "- VOOC: ✓ detected" in text
+    assert "SVOOC 120W claimed" in text
+    assert "SVOOC65" not in text
+    silent = _card({n: {"verdict": "skip", "reason": "PD active: use QC port"} for n in ("VOOC", "SVOOC", "SVOOC65")})
+    assert "- VOOC: skipped, PD active: use QC port" in charger_summary.summarize_card(silent)
 
 
 def test_card_summary():
@@ -227,28 +278,29 @@ def _mi_run(*rows):
 def test_6a_rows_the_source_did_not_offer_read_not_unlocked():
     locked = ("skip", "not unlocked", "not unlocked (no OEM chain)")
     text = charger_summary.summarize(_mi_run(locked + (11000,), locked + (20000,)))
-    assert "- Mi 11V 6A, Mi 20V 6A: skipped, not unlocked (no OEM chain)" in text
+    # an older firmware's 6 A probe rows (no "mi" key, no chain row): one Xiaomi line, each row with its cause
+    assert "- Xiaomi: Mi 66W skipped: not unlocked (no OEM chain), Mi 120W skipped: not unlocked (no OEM chain)" in text
     assert "PPS" not in text
 
 
 def test_a_mixed_mi_group_names_each_row_and_the_cause():
     text = charger_summary.summarize(_mi_run(("pass", "none", "none", 11000),
                                              ("skip", "not unlocked", "not unlocked (3 A cable)", 20000)))
-    assert "- Mi 11V 6A ✓, Mi 20V 6A skipped: not unlocked (3 A cable)" in text
+    assert "- Xiaomi: Mi 66W ✓, Mi 120W skipped: not unlocked (3 A cable)" in text
 
 
 def test_a_spoofed_5a_identity_is_not_reported_as_a_3a_cable():
     # Spoofed Kowsi 5 A clone on a CUKTECH C1 (2026-11-07): the cause is the vendor not accepting the identity, never the cable.
     locked = ("skip", "not unlocked", "not unlocked (vendor not accepted)")
     text = charger_summary.summarize(_mi_run(locked + (11000,), locked + (20000,)))
-    assert "- Mi 11V 6A, Mi 20V 6A: skipped, not unlocked (vendor not accepted)" in text
+    assert "- Xiaomi: Mi 66W skipped: not unlocked (vendor not accepted), Mi 120W skipped: not unlocked (vendor not accepted)" in text
     assert "3 A cable" not in text
 
 
 def test_a_refused_6a_row_shows_the_cause_the_firmware_classified():
     run = _mi_run(("fail", "request failed", "rejected", 20000))
     run["steps"][0]["hunt"] = {"cause": "apdo-stale", "explanation": "no caps after the auth"}
-    assert "Mi 20V 6A ✗ rejected [apdo-stale: no caps after the auth]" in charger_summary.summarize(run)
+    assert "Mi 120W ✗ rejected [apdo-stale: no caps after the auth]" in charger_summary.summarize(run)
     del run["steps"][0]["hunt"]
     assert "[apdo-stale" not in charger_summary.summarize(run)
 
@@ -381,3 +433,28 @@ def test_a_light_card_reads_detected_and_advertised_never_a_tick():
     assert "- QC2: ✓" not in text
     card.pop("level")   # the same card at Medium keeps its ticks
     assert "- QC2: ✓ 5 V only" in charger_summary.summarize_card(card)
+
+
+def _xiaomi_run(code, *modes):
+    """A run of the unified Xiaomi unit: the chain row (detail = the chain code) and its modes, each (result, reason, mv, ma, raw)."""
+    base = {"detail_reason": "none", "attempts": 1, "continuous": False, "mi": True, "pos": 0}
+    chain = dict(base, result="pass" if code in (20, 21) else "skip", reason="none" if code in (20, 21) else "Xiaomi chain",
+                 protocol="pd3x-fixed", target_mv=0, request_ma=0, measured_mv=0, raw_pdo=0, detail=code)
+    steps = [chain] + [dict(base, result=res, reason=why, protocol="pps", pos=6, target_mv=mv, request_ma=ma, raw_pdo=raw,
+                            measured_mv=mv if res == "pass" else 0, detail=0) for res, why, mv, ma, raw in modes]
+    return {"run_id": 1, "state": "done", "reason": "none", "evidence": {}, "steps": steps}
+
+
+def test_the_xiaomi_unit_is_one_line_with_the_chain_outcome():
+    # a) the 20K bank: PPS 5-11V 3A -> 5A, tested at its new level
+    text = charger_summary.summarize(_xiaomi_run(20, ("pass", "none", 11000, 5000, 0xC0DC3264)))
+    assert "- Xiaomi: auth done, verified; Mi 55W ✓" in text
+    # b) FH22: the chain completes and nothing changes
+    assert "- Xiaomi auth: done, no new modes" in charger_summary.summarize(_xiaomi_run(20))
+    # c) CUKTECH 120 W on a 5 A cable: the 6 A mode is skipped by the cable
+    text = charger_summary.summarize(_xiaomi_run(21, ("skip", "physical cable limit", 11000, 6000, 0xC8DC3278)))
+    assert "- Xiaomi: auth done via 020A; Mi 66W skipped: physical cable limit" in text
+    # no SVID, a silent source, a chain that stopped
+    assert "- Xiaomi: no 0x2717 SVID" in charger_summary.summarize(_xiaomi_run(1))
+    assert "- Xiaomi auth: no answer" in charger_summary.summarize(_xiaomi_run(2))
+    assert "- Xiaomi auth: failed at step 3" in charger_summary.summarize(_xiaomi_run(6))

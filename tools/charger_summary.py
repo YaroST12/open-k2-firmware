@@ -10,13 +10,14 @@ tools/report_card.py) in the same style, for `k2_remote.py cards show`.
 import json
 import sys
 
+import oem_watts
 import report_card
 import step_label
 
 PROTO_NAMES = {"pd2-fixed": "PD2 fixed", "pd3x-fixed": "PD fixed", "epr-fixed": "EPR fixed", "spr-avs": "SPR AVS",
                "epr-avs": "EPR AVS", "pps": "PPS", "qc2": "QC2", "qc3": "QC3", "qc3+": "QC3+", "afc": "AFC",
-               "fcp": "FCP", "scp": "SCP", "vooc-5v-handshake": "VOOC 5V", "svooc-5v-handshake": "SVOOC",
-               "svooc65-5v-handshake": "SVOOC 65W", "ufcs": "UFCS", "vivo": "VIVO",
+               "fcp": "FCP", "scp": "SCP", "vooc-5v-handshake": "VOOC", "svooc-5v-handshake": "VOOC",
+               "svooc65-5v-handshake": "VOOC", "ufcs": "UFCS", "vivo": "VIVO",
                "qc2b": "QC2 Class B", "qc3b": "QC3 Class B"}
 
 
@@ -27,6 +28,10 @@ ADVERTISED, NOT_ASKED = "advertised", "light run: not asked"
 NOTED = (ADVERTISED, NOT_ASKED)
 PORT_CUTS = "port cuts without load"   # Reason::PortCuts: the step lost VBUS to the port's own cut twice, so it is no verdict
 FOLDED = "output folds back"   # Reason::Folded: a pass on the folded side of a voltage fold; a caution, neither pass nor fail
+# The VOOC family's units: one shared detection, so the summary reads them as one "VOOC" line and the family's levels in watts
+# (oem_watts.LEVELS), never as three protocol versions. The card names its groups VOOC / SVOOC / SVOOC65 (report_card.GROUPS).
+VOOC_FAMILY = ("vooc-5v-handshake", "svooc-5v-handshake", "svooc65-5v-handshake")
+VOOC_CARD_GROUPS = ("VOOC", "SVOOC", "SVOOC65")
 
 
 def _v(mv):
@@ -34,7 +39,10 @@ def _v(mv):
 
 
 def _group_key(s):
-    # PPS/AVS rows are one sequence per APDO position, the Mi 6 A probe rows their own group; others group by protocol.
+    # PPS/AVS rows are one sequence per APDO position; the Xiaomi unit (its chain row and the modes the chain unlocked, or an
+    # older firmware's 6 A probe rows) is one group; others group by protocol.
+    if step_label.is_hunt(s):
+        return ("xiaomi", 0, True)
     pos = s["pos"] if s["protocol"] in ("pps", "spr-avs", "epr-avs") and s["pos"] else 0
     return (s["protocol"], pos, step_label.is_hunt(s))
 
@@ -58,8 +66,8 @@ def _retry(s):
 
 def _step_text(s, prev, amps=True):
     """One row of a group line: its step_label numbers ("5V 3A", "11→8V") and the verdict. `prev` = the plan row before it."""
-    # A Mi 6 A probe row carries its protocol word ("Mi 20V 6A"): the group has no heading of its own.
-    label = step_label.label(s, prev) if step_label.is_hunt(s) else step_label.params(s, prev, amps=amps)
+    # A Xiaomi mode row carries its protocol word and watts ("Mi 55W"): the group has no heading of its own.
+    label = step_label.label(s, prev) if step_label.is_hunt(s) else _params(s, prev, amps)
     if _caution(s):   # a fixed row measured the folded level; a sweep row has no single level of its own
         at = "" if s.get("sweep") else f" to {report_card.dv_text(s['measured_mv'])}"
         return f"{label} ⚠ folds{at}" if at else f"{label} ⚠ folds back"
@@ -70,14 +78,57 @@ def _step_text(s, prev, amps=True):
     if s["result"] == "fail":
         why = s["detail_reason"] if s["detail_reason"] != "none" else s["reason"]
         at = f" at {s['measured_mv'] / 1000:.2f} V" if s["measured_mv"] else ""
-        # A refused 6 A row: the firmware's classifier names the cause (k2_remote.attach_hunt_evidence).
+        # An older firmware's refused 6 A row: its classifier names the cause (k2_remote.attach_hunt_evidence).
         hunt = f" [{s['hunt']['cause']}: {s['hunt']['explanation']}]" if "hunt" in s else ""
         return f"{label} ✗ {why}{at}{hunt}"
     if s["reason"] in NOTED:
         return f"{label} advertised" if s["reason"] == ADVERTISED else f"{label} not asked"
-    # A 6 A row the source did not offer: the firmware's "not unlocked" skip says which link of the OEM chain was missing.
+    # An older firmware's 6 A row the source did not offer: its "not unlocked" skip says which link of the OEM chain was missing.
+    # A Xiaomi mode skips for a reason worth naming (the cable limit, a light run).
     return f"{label} skipped: {_not_unlocked(s)}" if s["reason"] == "not unlocked" else \
-        f"{label} skipped: {s['reason']}" if s["reason"] == PORT_CUTS else f"{label} skipped"
+        f"{label} skipped: {s['reason']}" if s["reason"] == PORT_CUTS or (step_label.is_hunt(s) and s["reason"] != "none") \
+        else f"{label} skipped"
+
+
+def _xiaomi_line(rows, prev_of):
+    """The Xiaomi unit in one line: how the 0x2717 auth chain ended, then each mode it unlocked with its verdict
+    ("- Xiaomi: auth done, verified; Mi 55W ✓"). Nothing raised reads "- Xiaomi auth: done, no new modes"."""
+    chain = next((s for s in rows if not s.get("target_mv")), None)
+    modes = ", ".join(_step_text(s, prev_of[id(s)]) for s in rows if s.get("target_mv"))
+    if chain is None:   # an older firmware: its 6 A probe rows, no chain row
+        return f"- Xiaomi: {modes}"
+    code = chain.get("detail", 0)
+    if not step_label.mi_chain_done(code):
+        return f"- Xiaomi: {step_label.mi_chain_text(code)}" if code == 1 else f"- Xiaomi auth: {step_label.mi_chain_text(code)}"
+    if not modes:
+        return "- Xiaomi auth: done, no new modes"
+    return f"- Xiaomi: auth {step_label.mi_chain_text(code)}; {modes}"
+
+
+def _params(s, prev=None, amps=True):
+    """A row's numbers: SCP / UFCS the level's volts and claimed watts ("10V 22.5W", oem_watts.chip), else step_label's."""
+    return oem_watts.chip(s) or step_label.params(s, prev, amps=amps)
+
+
+def _vooc_levels_line(sv):
+    """The VOOC family's levels by their watts, each claimed / not reached / not tested by the Deep ceiling stage (sv: the
+    k2_remote.charger_svooc_cap readout or a card's Deep block; None = every level not tested)."""
+    return ("- VOOC levels: " + ", ".join(f"{lbl} {state}" for lbl, state in oem_watts.vooc_levels(sv))
+            + " (claimed = the protocol's ask, no load)")
+
+
+def _vooc_family_lines(rows, sv, skipped, not_adv):
+    """The VOOC family's step rows as one "VOOC" line plus its levels line when it answered; a family that never answered
+    folds into the skip / not-advertised lists as one word."""
+    if not any(s["result"] == "pass" for s in rows):
+        if all(s["result"] == "skip" for s in rows):
+            why = rows[0]["reason"]
+            (not_adv if why == "not advertised" else skipped.setdefault(why, [])).append("VOOC")
+            return []
+        return ["- VOOC: " + _step_text(next(s for s in rows if s["result"] != "skip"), None)]
+    hit = next(s for s in rows if s["result"] == "pass")
+    word = "handshake ok" if hit["detail_reason"] == "handshake ok" else "detected"
+    return [f"- VOOC: ✓ {word}", _vooc_levels_line(sv)]
 
 
 def _not_unlocked(s):
@@ -125,14 +176,16 @@ def summarize(r):
         groups[k].append(s)
 
     not_adv, skipped = [], {}
+    vooc_keys = [k for k in order if k[0] in VOOC_FAMILY]
     for k in order:
         rows = groups[k]
+        if k[0] in VOOC_FAMILY:   # the family's block stands where the plan first runs one of its units
+            if k == vooc_keys[0]:
+                out += _vooc_family_lines([s for fk in vooc_keys for s in groups[fk]], r.get("svooc"), skipped, not_adv)
+            continue
         name = PROTO_NAMES.get(k[0], k[0])
-        if k[2] and all(s["result"] == "skip" for s in rows):
-            # Mi 6 A rows skipped: each by its own cause, named like the rows of a run ("Mi 20V 6A").
-            for s in rows:
-                skipped.setdefault(_not_unlocked(s) if s["reason"] == "not unlocked" else s["reason"], []).append(
-                    step_label.label(s, prev_of[id(s)]))
+        if k[2]:
+            out.append(_xiaomi_line(rows, prev_of))
             continue
         if any(s["result"] == "skip" and s["reason"] == NO_QC3PLUS for s in rows):
             # The charger does not do QC3+ (no movement, or QC3-sized steps): one neutral line; the 5 V baseline that
@@ -154,16 +207,12 @@ def summarize(r):
             continue
         # The heading is the step_label protocol word; a PPS / AVS offer adds its range and current, so its rows drop the amps.
         name = step_label.protocol(rows[0])
-        # A Mi 6 A probe group shows its own request, not the APDO it rides on (whose advertised current it exceeds):
-        # every row reads "Mi 20V 6A", with no heading.
-        hunt = k[2]
-        rng = step_label.pdo_range(rows[0]["raw_pdo"]) if k[1] and not hunt else ""
+        rng = step_label.pdo_range(rows[0]["raw_pdo"]) if k[1] else ""
         if rng:
             name += f" {rng}"
         amps = not rng
-        head = "" if hunt else f"{name}: "
-        text = (lambda s, prev=None, amps=True: step_label.label(s, prev)) if hunt else \
-            (lambda s, prev=None, amps=True: step_label.params(s, prev, amps=amps))
+        head = f"{name}: "
+        text = (lambda s, prev=None, amps=True: _params(s, prev, amps))
         if all(s["result"] == "pass" for s in rows) and not any(s["continuous"] or _caution(s) for s in rows):
             lo, hi = min(s["measured_mv"] for s in rows), max(s["measured_mv"] for s in rows)
             retried = "".join(f"; {text(s, amps=amps)} {_retry(s)}" for s in rows if _retry(s))
@@ -291,7 +340,18 @@ def summarize_card(c):
         out.append(f"Handover: {c['handover']} after {c['handover_ms'] / 1000:g} s")
     out.append("")
     skipped = {}
+    fam = [n for n in VOOC_CARD_GROUPS if n in g]
     for name, e in g.items():
+        if name in VOOC_CARD_GROUPS:   # one line for the family (one shared detection), then its levels in watts
+            if name != fam[0]:
+                continue
+            hit = next((g[n] for n in fam if g[n]["verdict"] == "pass"), None)
+            if hit:
+                out.append("- VOOC: " + ("detected" if light else _group_text(hit)))
+                out.append(_vooc_levels_line((c.get("deep") or {}).get("svooc")))
+                continue
+            e = next((g[n] for n in fam if g[n]["verdict"] == "fail"), e)
+            name = "VOOC"
         if light and e["verdict"] == "pass":
             out.append(f"- {name}: " + ("✓ advertised" if name == "PD" else "detected"))   # PD is listed by the source (green); a legacy group only answered
         elif e["verdict"] in ("pass", "fail"):
@@ -302,6 +362,7 @@ def summarize_card(c):
             skipped.setdefault(e.get("reason", ""), []).append(name)
     for why, names in skipped.items():
         out.append(f"- {', '.join(names)}: skipped" + (f", {why}" if why else ""))
+    out += _xiaomi_card_lines((c.get("deep") or {}).get("xiaomi"))
     for r in c["ranges"]:
         rng = f"- {step_label.range_protocol(r['alg'])} {step_label.range_text(r['lo_mv'], r['hi_mv'], r.get('max_ma', 0))}: "
         spread = _spread_text(r)   # v9 card: the setpoint error per passed level, e.g. ", err +10 / +20 / +8 / -12 mV"
@@ -318,6 +379,23 @@ def summarize_card(c):
             out.append(rng + (f"reached {_v(r['max_mv'])} V" if r["max_mv"] else "✓ advertised" if light else "no step measured")
                        + spread + sweep)
     return "\n".join(out)
+
+
+def _xiaomi_card_lines(x):
+    """The card's Xiaomi section (format 12 block): the chain outcome, then one line per mode it unlocked, named by its watts with the
+    offer before and after the chain and its verdict ("  - Mi 55W: PPS 5-11V 3A → PPS 5-11V 5A ✓")."""
+    if not x:
+        return []
+    if not x["done"]:
+        return [f"- Xiaomi: {x['chain_text']}" if x["chain"] == 1 else f"- Xiaomi auth: {x['chain_text']}"]
+    if not x["modes"]:
+        return ["- Xiaomi auth: done, no new modes"]
+    out = [f"- Xiaomi: auth {x['chain_text']}"]
+    for m in x["modes"]:
+        v = ("✓" if m["verdict"] == "pass" else f"✗ {m['reason']}" if m["verdict"] == "fail" else
+             f"skipped: {m['reason']}" if m["verdict"] == "skip" and m["reason"] != "none" else m["verdict"])
+        out.append(f"  - {m['label']}: {m['before']} → {m['after']} {v}")
+    return out
 
 
 def _spread_text(r):

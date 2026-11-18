@@ -59,9 +59,29 @@ static void test_range_change_and_bounds() {
     CHECK_EQ(rc::delta(was, other, e), 0u);
 }
 
+// The VOOC family (one shared detection) changes as ONE line, "VOOC", from its lead on each card: never three lines under
+// version names ("SVOOC65: was PASS, now SKIP").
+static void test_the_vooc_family_changes_as_one_line() {
+    using G = ct::Group;
+    rc::Card was = base(), now = base();
+    for (const G g : {G::Vooc, G::SuperVooc, G::SuperVooc65}) {
+        was.group[unsigned(g)] = {rc::GV::Pass, 5000, uint8_t(k2::fc::Fail::Detected), 0};
+        now.group[unsigned(g)] = {rc::GV::Skip, 0, 0, uint8_t(ct::Reason::NeedsLoad)};
+    }
+    rc::DeltaLine d[8];
+    CHECK_EQ(rc::delta(was, now, d), 1u);
+    char buf[48];
+    rc::format_delta(d[0], buf, sizeof buf);
+    CHECK_EQ(std::strcmp(buf, "VOOC: was PASS, now SKIP"), 0);
+    // Detected by another unit of the family this time: the family's verdict is unchanged, so no line.
+    now.group[unsigned(G::SuperVooc65)] = {rc::GV::Pass, 5000, uint8_t(k2::fc::Fail::Detected), 0};
+    CHECK_EQ(rc::delta(was, now, d), 0u);
+}
+
 int main() {
     test_no_change();
     test_changes();
+    test_the_vooc_family_changes_as_one_line();
     test_range_change_and_bounds();
     return test_report("test_report_card_delta");
 }
