@@ -102,6 +102,7 @@ public:
     enum class ArmErr : uint8_t { Ok, Gone, Invalid, Inline };
     ArmErr arm(ctcable::Choice, ctcable::Facts& facts, char (&name)[emlib::kNameMax + 1]);
     void disarm();   // emk_spoof::disarm(); the marker follows the generation
+    void adopt(ctcable::Choice c);   // an arm made elsewhere (boot re-arm, remote; k2/core/eekeep.hpp) becomes the armed row
     bool armed() const;
     ctcable::Choice armed_choice() const { return armed() ? armed_ : ctcable::Choice{}; }
     const char* armed_name() const { return armed() ? armed_name_ : ""; }

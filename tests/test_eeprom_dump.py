@@ -286,5 +286,119 @@ class CalClear(unittest.TestCase):
         self.assertFalse(p.parse_args(["debug", "eeprom", "cal-clear", "--expect", BAD.hex()]).yes)
 
 
+class PageChip(Chip):
+    """A 24C16 on the INA bus that also takes op 3 (compare-and-swap of one page), like the firmware's page_put."""
+
+    def __init__(self, data, **kw):
+        super().__init__(data, 1, bus=1, **kw)
+        self.data = bytearray(self.data)
+        self.page_calls, self.meddle = [], None
+
+    def call(self, payload):
+        if payload[0] != 3:
+            return super().call(payload)
+        off = payload[1] | payload[2] << 8
+        exp, new = bytes(payload[3:19]), bytes(payload[19:35])
+        self.page_calls.append(off)
+        if self.meddle is not None and off == self.meddle:      # someone wrote the page after the host read it
+            self.data[off] ^= 0xFF
+        before = bytes(self.data[off:off + 16])
+        if before != exp:
+            return bytes([2, 1]) + before + bytes(16)
+        if before == new:
+            return bytes([1, 3]) + before + before
+        self.data[off:off + 16] = new
+        return bytes([0, 3]) + before + new
+
+
+def restore_args(path, **kw):
+    a = dict(eeprom_cmd="restore", input=path, yes=True, allow_bad_cal=False, backup=None, bus=None)
+    a.update(kw)
+    return SimpleNamespace(**a)
+
+
+class Restore(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+    def image(self, data, name="img.bin"):
+        p = os.path.join(self.tmp.name, name)
+        with open(p, "wb") as f:
+            f.write(bytes(data))
+        return p
+
+    def healthy(self):
+        d = bytearray(pattern(0x800))
+        d[4:16] = bytes(12)
+        return d
+
+    def test_writes_only_differing_pages_and_verifies(self):
+        img = self.healthy()
+        chip_data = bytearray(img)
+        chip_data[0x512] ^= 0x55                                # two pages differ: 0x510 and 0x7F0
+        chip_data[0x7FF] = 0xA5 if img[0x7FF] != 0xA5 else 0x00
+        c = PageChip(chip_data)
+        backup = os.path.join(self.tmp.name, "before.bin")
+        r = e.run(c.call, restore_args(self.image(img), backup=backup))
+        self.assertEqual(c.page_calls, [0x510, 0x7F0])
+        self.assertEqual(bytes(c.data), bytes(img))
+        self.assertTrue(r["verified"])
+        self.assertEqual(pathlib.Path(backup).read_bytes(), bytes(chip_data))
+        self.assertIn("wrote 2 page(s)", e.render(r))
+        r = e.run(c.call, restore_args(self.image(img)))           # again: nothing to write
+        self.assertEqual(c.page_calls, [0x510, 0x7F0])
+        self.assertEqual(r["pages"], [])
+
+    def test_dry_run_writes_nothing(self):
+        img = self.healthy()
+        chip_data = bytearray(img)
+        chip_data[0x100] ^= 1
+        c = PageChip(chip_data)
+        r = e.run(c.call, restore_args(self.image(img), yes=False))
+        self.assertEqual(c.page_calls, [])
+        self.assertEqual(r["pages"], ["0x100"])
+        self.assertIn("--yes", e.render(r))
+
+    def test_bad_calibration_is_refused_unless_allowed(self):
+        img = self.healthy()
+        img[4:16] = BAD
+        c = PageChip(self.healthy())
+        with self.assertRaises(ValueError) as cm:
+            e.run(c.call, restore_args(self.image(img)))
+        self.assertIn("calibration", str(cm.exception))
+        self.assertEqual(c.page_calls, [])
+        e.run(c.call, restore_args(self.image(img), allow_bad_cal=True))
+        self.assertEqual(bytes(c.data[4:16]), BAD)
+
+    def test_blank_trims_are_not_suspect(self):
+        self.assertEqual(e.cal_suspect(b"\xff" * 0x800), [])
+        self.assertEqual(len(e.cal_suspect(bytes(4) + BAD + bytes(0x7F0))), 2)   # voltage gain and current gain, not the zero
+
+    def test_a_page_that_changed_stops_the_restore(self):
+        img = self.healthy()
+        chip_data = bytearray(img)
+        chip_data[0x200] ^= 1; chip_data[0x300] ^= 1
+        c = PageChip(chip_data)
+        c.meddle = 0x300
+        with self.assertRaises(ValueError) as cm:
+            e.run(c.call, restore_args(self.image(img)))
+        self.assertIn("0x300", str(cm.exception))
+        self.assertIn("0x200", str(cm.exception))             # what was written before it
+
+    def test_wrong_size_image(self):
+        c = PageChip(self.healthy())
+        with self.assertRaises(ValueError):
+            e.run(c.call, restore_args(self.image(bytes(0x400))))
+        self.assertEqual(c.page_calls, [])
+
+    def test_parser(self):
+        p = kr.build_parser() if hasattr(kr, "build_parser") else None
+        if p is None:
+            self.skipTest("k2_remote has no build_parser")
+        a = p.parse_args(["debug", "eeprom", "restore", "--in", "x.bin"])
+        self.assertEqual((a.input, a.yes, a.allow_bad_cal, a.backup), ("x.bin", False, False, None))
+
+
 if __name__ == "__main__":
     unittest.main()

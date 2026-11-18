@@ -179,7 +179,109 @@ static void test_cal_write_failures_still_read_back() {
     CHECK_COND(r.after_valid); CHECK_EQ(int(r.after[1]), 0x60);
 }
 
+// ---- page_put: the page write of the store and the restore ----
+
+// A 2 KB 24C16 with linear offsets; a page write wraps inside its 16-byte page as the part does.
+struct FakeArray {
+    std::array<std::uint8_t, 0x800> mem{};
+    bool read_ok = true, write_ok = true, ready = true, ignore_write = false;
+    int reads = 0, writes = 0, waits = 0;
+    std::uint16_t last_off = 0xFFFF;
+    FakeArray() { mem.fill(0xFF); }
+    bool read(std::uint16_t off, std::span<std::uint8_t> out) {
+        reads++;
+        if (!read_ok) return false;
+        for (std::size_t i = 0; i < out.size(); i++) out[i] = mem[off + i];
+        return true;
+    }
+    bool write(std::uint16_t off, std::span<const std::uint8_t> d) {
+        writes++; last_off = off;
+        if (!write_ok) return false;
+        if (!ignore_write)
+            for (std::size_t i = 0; i < d.size(); i++) mem[(off & ~0xFu) + ((off + i) & 0xFu)] = d[i];
+        return true;
+    }
+    bool wait_ready() { waits++; return ready; }
+};
+
+static Page pat(std::uint8_t seed) { Page p{}; for (std::size_t i = 0; i < kPage; i++) p[i] = std::uint8_t(seed + i * 7); return p; }
+
+static void test_page_put_store_and_same() {
+    FakeArray c;
+    const Page n = pat(3);
+    PageResult r = page_put(c, 0x510, nullptr, n);
+    CHECK_EQ(int(r.err), int(PageErr::Ok));
+    CHECK_EQ(c.writes, 1); CHECK_EQ(c.reads, 2); CHECK_EQ(int(c.last_off), 0x510);
+    for (std::size_t i = 0; i < kPage; i++) CHECK_EQ(int(c.mem[0x510 + i]), int(n[i]));
+    CHECK_EQ(int(c.mem[0x50F]), 0xFF); CHECK_EQ(int(c.mem[0x520]), 0xFF);   // neighbours untouched
+    r = page_put(c, 0x510, nullptr, n);                                       // unchanged: no write, no wear
+    CHECK_EQ(int(r.err), int(PageErr::Same));
+    CHECK_EQ(c.writes, 1); CHECK_EQ(c.reads, 3);
+}
+
+static void test_page_put_cas() {
+    FakeArray c;
+    const Page blank = [] { Page p{}; p.fill(0xFF); return p; }();
+    Page wrong = blank; wrong[9] = 0xFE;
+    PageResult r = page_put(c, 0x000, &wrong, pat(1));
+    CHECK_EQ(int(r.err), int(PageErr::Mismatch));
+    CHECK_EQ(c.writes, 0); CHECK_COND(r.before_valid); CHECK_COND(!r.after_valid);
+    r = page_put(c, 0x000, &blank, pat(1));
+    CHECK_EQ(int(r.err), int(PageErr::Ok));
+    CHECK_EQ(int(c.mem[0]), int(pat(1)[0]));
+}
+
+static void test_page_put_refusals_and_failures() {
+    FakeArray c;
+    CHECK_EQ(int(page_put(c, 0x508, nullptr, pat(0)).err), int(PageErr::Refused));   // not aligned
+    CHECK_EQ(int(page_put(c, 0x800, nullptr, pat(0)).err), int(PageErr::Refused));   // past the array
+    CHECK_EQ(c.reads + c.writes, 0);
+    c.read_ok = false;
+    CHECK_EQ(int(page_put(c, 0x500, nullptr, pat(0)).err), int(PageErr::ReadFail));
+    CHECK_EQ(c.writes, 0);
+    FakeArray w; w.write_ok = false;
+    PageResult r = page_put(w, 0x500, nullptr, pat(0));
+    CHECK_EQ(int(r.err), int(PageErr::WriteFail)); CHECK_EQ(w.reads, 2);
+    FakeArray t; t.ready = false;
+    CHECK_EQ(int(page_put(t, 0x500, nullptr, pat(0)).err), int(PageErr::Timeout));
+    FakeArray v; v.ignore_write = true;
+    r = page_put(v, 0x500, nullptr, pat(0));
+    CHECK_EQ(int(r.err), int(PageErr::Verify)); CHECK_COND(r.after_valid);
+}
+
+static void test_store_bounds() {
+    CHECK_COND(in_store(0x500)); CHECK_COND(in_store(0x7D0));
+    CHECK_COND(!in_store(0x4F0)); CHECK_COND(!in_store(0x7E0)); CHECK_COND(!in_store(0x7F0)); CHECK_COND(!in_store(0x501));
+    CHECK_EQ(int(slot_off(Slot::UsbLink)), 0x500);
+    CHECK_EQ(int(slot_off(Slot::Spoof)), 0x510);
+}
+
+static void test_slot_codec() {
+    CHECK_EQ(int(crc8(std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t *>("123456789"), 9))), 0xF4);   // CRC-8/SMBUS check value
+    const std::uint8_t pl[3] = {2, 0x34, 0x12};
+    const Page p = slot_encode(Slot::Spoof, pl);
+    CHECK_EQ(int(p[0]), 'K'); CHECK_EQ(int(p[1]), '2'); CHECK_EQ(int(p[2]), 2); CHECK_EQ(int(p[3]), 3);
+    CHECK_EQ(int(p[7]), 0xFF);                                                // unused payload stays erased
+    std::uint8_t out[kSlotPayload] = {};
+    CHECK_EQ(slot_decode(Slot::Spoof, p, out), 3);
+    CHECK_EQ(int(out[0]), 2); CHECK_EQ(int(out[1]), 0x34); CHECK_EQ(int(out[2]), 0x12);
+    CHECK_EQ(slot_decode(Slot::UsbLink, p, out), -1);                         // another slot's page
+    Page blank{}; blank.fill(0xFF);
+    CHECK_EQ(slot_decode(Slot::Spoof, blank, out), -1);
+    for (std::size_t i = 0; i < kPage; i++) {                                 // any single flipped bit is caught
+        Page b = p; b[i] ^= 0x10;
+        CHECK_EQ(slot_decode(Slot::Spoof, b, out), -1);
+    }
+    const Page e = slot_encode(Slot::UsbLink, {});
+    CHECK_EQ(slot_decode(Slot::UsbLink, e, out), 0);
+}
+
 int main() {
+    test_page_put_store_and_same();
+    test_page_put_cas();
+    test_page_put_refusals_and_failures();
+    test_store_bounds();
+    test_slot_codec();
     test_cal_constants();
     test_cal_match_writes_zeros_once();
     test_cal_mismatch_never_writes();

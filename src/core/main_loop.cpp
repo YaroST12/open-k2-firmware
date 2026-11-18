@@ -11,6 +11,7 @@
 #include "k2/chargertest/session_store.hpp"
 #include "k2/core/bbpersist.hpp"
 #include "k2/core/bootinfo_hw.hpp"
+#include "k2/core/eekeep.hpp"
 #include "k2/core/boottrace_store.hpp"
 #include "k2/core/build_config.h"
 #include "k2/core/fault.hpp"
@@ -241,6 +242,7 @@ constexpr uint32_t kEraseQuietMs = 1000;
         k2::report_card::hw::poll(may_erase);
         k2::battery::hw::poll(now, may_erase);   // battery recorder: every sample; its record only at a phase boundary
         k2::memstat::poll(now, may_erase);       // memory readout cache: stacks at most 1 Hz, the littlefs walk only when quiet
+        k2::eekeep::poll(now, may_erase);        // settings EEPROM slots (USB link copy, the user's spoof): a ~5 ms page write when quiet
     }
     mark(Stage::BootScreen);
     if (c.bootscreen.active()) detail::boot_screen_step(now);   // waits for the key's 3 s, then owns the panel

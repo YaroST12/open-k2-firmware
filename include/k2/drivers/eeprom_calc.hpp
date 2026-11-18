@@ -110,4 +110,88 @@ CalResult cal_clear(Chip &c, std::span<const std::uint8_t, kCalLen> expected) {
     return r;
 }
 
+// ---- Page writes: the settings store and the restore (k2/drivers/eeprom.hpp) ----
+// A 24C16 page is 16 bytes; a page write wraps inside its page, so every write here is one whole, aligned page. Linear offsets
+// 0x000..0x7FF on the INA bus (one-byte word address, select 0): locate(1, 0, off, kPage) gives the wire address.
+inline constexpr std::size_t kPage = 16;
+using Page = std::array<std::uint8_t, kPage>;
+constexpr bool page_ok(std::uint16_t off) { return off % kPage == 0 && off < kSpan1; }
+
+// The settings store owns 0x500..0x7DF: an area of the 24C16 that holds 0xFF on every unit read so far (two dumps of a 36 V unit,
+// before and after a calibration repair) and that nothing else on the part writes. store_write() refuses any other page.
+inline constexpr std::uint16_t kStoreBegin = 0x500;
+inline constexpr std::uint16_t kStoreEnd = 0x7E0;
+constexpr bool in_store(std::uint16_t off) { return page_ok(off) && off >= kStoreBegin && off + kPage <= kStoreEnd; }
+
+// Untouched = Same, Mismatch, ReadFail, Refused, Busy (nothing was written). WriteFail, Timeout and Verify mean a write was issued.
+enum class PageErr : std::uint8_t {
+    Ok = 0,         // written and read back equal to the new bytes
+    Same = 1,       // the page already holds the new bytes: nothing written
+    Mismatch = 2,   // compare-and-swap: the page differs from the expected bytes (before[] says what is there)
+    ReadFail = 3,
+    WriteFail = 4,
+    Timeout = 5,
+    Verify = 6,     // the readback differs from the new bytes, or could not be read (after_valid says which)
+    Refused = 7,    // the offset is not an aligned page (or not in the store): the bus was not touched
+    Busy = 8,       // a test owns the port: the bus was not touched
+};
+
+struct PageResult {
+    PageErr err = PageErr::ReadFail;
+    bool before_valid = false, after_valid = false;
+    Page before{}, after{};
+};
+
+// Chip as for cal_clear, with linear offsets: read(off, span), write(off, span) (one page write), wait_ready(). expected == nullptr:
+// no compare (the store's own write: the page is read, and written only when it differs).
+template <class Chip>
+PageResult page_put(Chip &c, std::uint16_t off, const Page *expected, const Page &next) {
+    PageResult r;
+    if (!page_ok(off)) { r.err = PageErr::Refused; return r; }
+    r.before_valid = c.read(off, std::span<std::uint8_t>(r.before));
+    if (!r.before_valid) return r;
+    if (expected != nullptr && r.before != *expected) { r.err = PageErr::Mismatch; return r; }
+    if (r.before == next) { r.err = PageErr::Same; r.after = r.before; r.after_valid = true; return r; }
+    const bool wrote = c.write(off, std::span<const std::uint8_t>(next));
+    const bool ready = c.wait_ready();
+    r.after_valid = c.read(off, std::span<std::uint8_t>(r.after));
+    r.err = !wrote ? PageErr::WriteFail : !ready ? PageErr::Timeout : r.after_valid && r.after == next ? PageErr::Ok : PageErr::Verify;
+    return r;
+}
+
+// ---- Store slots ----
+// One slot = one page: 'K' '2' id len payload[kSlotPayload] crc8. len <= kSlotPayload, unused payload bytes 0xFF, crc8 (poly 0x07,
+// init 0) over bytes 0..14. A blank page (0xFF) or any damage decodes as absent. Slot n lives at kStoreBegin + 16 * (n - 1).
+inline constexpr std::size_t kSlotPayload = 11;
+enum class Slot : std::uint8_t { UsbLink = 1, Spoof = 2 };
+constexpr std::uint16_t slot_off(Slot s) { return std::uint16_t(kStoreBegin + kPage * (std::uint8_t(s) - 1)); }
+static_assert(in_store(slot_off(Slot::Spoof)));
+
+constexpr std::uint8_t crc8(std::span<const std::uint8_t> d) {
+    std::uint8_t c = 0;
+    for (std::uint8_t b : d) {
+        c ^= b;
+        for (int i = 0; i < 8; i++) c = std::uint8_t(c & 0x80 ? (c << 1) ^ 0x07 : c << 1);
+    }
+    return c;
+}
+
+constexpr Page slot_encode(Slot s, std::span<const std::uint8_t> payload) {
+    Page p{};
+    for (auto &b : p) b = 0xFF;
+    const std::size_t n = payload.size() < kSlotPayload ? payload.size() : kSlotPayload;
+    p[0] = 'K'; p[1] = '2'; p[2] = std::uint8_t(s); p[3] = std::uint8_t(n);
+    for (std::size_t i = 0; i < n; i++) p[4 + i] = payload[i];
+    p[kPage - 1] = crc8(std::span<const std::uint8_t>(p.data(), kPage - 1));
+    return p;
+}
+
+// The payload length, or -1 when the page is not a valid slot s. out receives the payload (at most out.size() bytes).
+constexpr int slot_decode(Slot s, const Page &p, std::span<std::uint8_t> out) {
+    if (p[0] != 'K' || p[1] != '2' || p[2] != std::uint8_t(s) || p[3] > kSlotPayload) return -1;
+    if (crc8(std::span<const std::uint8_t>(p.data(), kPage - 1)) != p[kPage - 1]) return -1;
+    for (std::size_t i = 0; i < p[3] && i < out.size(); i++) out[i] = p[4 + i];
+    return p[3];
+}
+
 }  // namespace k2::eeprom

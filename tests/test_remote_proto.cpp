@@ -2265,7 +2265,7 @@ static void test_debug_eeprom() {
     f.ee_err = k2::eeprom::Err::Ok;
     // Refusals never reach the backend.
     const int calls = f.calls;
-    CHECK_EQ(run(f, request(0x2B, 7, {3, 0}), r), 1);                       // unknown op
+    CHECK_EQ(run(f, request(0x2B, 7, {4, 0}), r), 1);                       // unknown op
     check_header(r, 0x2B, 7, Status::BadArg, 0);
     CHECK_EQ(run(f, request(0x2B, 8, {0, 2}), r), 1);                       // bus 2
     check_header(r, 0x2B, 8, Status::BadArg, 0);
@@ -2298,6 +2298,42 @@ static std::vector<uint8_t> request_v(uint8_t cmd, uint8_t seq, const std::vecto
     v.insert(v.end(), payload.begin(), payload.end());
     v.resize(kFrameSize, 0);
     return v;
+}
+
+static void test_debug_eeprom_page_cas() {
+    Fake f; Frame r;
+    std::vector<uint8_t> pl = {3, 0x10, 0x05};                                      // op 3, offset 0x510 LE
+    for (int i = 0; i < 16; i++) pl.push_back(0xFF);                               // expected: blank
+    for (int i = 0; i < 16; i++) pl.push_back(uint8_t(i));                         // new bytes
+    f.page_res.err = k2::eeprom::PageErr::Ok; f.page_res.before_valid = true; f.page_res.after_valid = true;
+    f.page_res.before.fill(0xFF);
+    for (int i = 0; i < 16; i++) f.page_res.after[i] = uint8_t(i);
+    CHECK_EQ(run(f, request_v(0x2B, 1, pl), r), 1);
+    check_header(r, 0x2B, 1, Status::Ok, 34);
+    check_bytes(r, kRspHeader, {0, 3, 0xFF, 0xFF});                                // err, flags, before[]
+    check_bytes(r, kRspHeader + 2 + 16, {0, 1, 2, 3});                             // after[]
+    CHECK_EQ(f.page_off, 0x510);
+    CHECK_EQ(int(f.page_exp[15]), 0xFF); CHECK_EQ(int(f.page_next[15]), 15);
+    // Busy is the Busy status; a mismatch is an OK reply carrying err 2.
+    f.page_res.err = k2::eeprom::PageErr::Busy;
+    CHECK_EQ(run(f, request_v(0x2B, 2, pl), r), 1);
+    check_header(r, 0x2B, 2, Status::Busy, 0);
+    f.page_res.err = k2::eeprom::PageErr::Mismatch; f.page_res.after_valid = false;
+    CHECK_EQ(run(f, request_v(0x2B, 3, pl), r), 1);
+    check_header(r, 0x2B, 3, Status::Ok, 34);
+    check_bytes(r, kRspHeader, {2, 1});
+    // Never reaches the backend: an unaligned page, an offset past the 24C16, a wrong length.
+    const int calls = f.calls;
+    auto bad = pl; bad[1] = 0x18;
+    CHECK_EQ(run(f, request_v(0x2B, 4, bad), r), 1);
+    check_header(r, 0x2B, 4, Status::BadArg, 0);
+    bad = pl; bad[1] = 0x00; bad[2] = 0x08;
+    CHECK_EQ(run(f, request_v(0x2B, 5, bad), r), 1);
+    check_header(r, 0x2B, 5, Status::BadArg, 0);
+    bad = pl; bad.pop_back();
+    CHECK_EQ(run(f, request_v(0x2B, 6, bad), r), 1);
+    check_header(r, 0x2B, 6, Status::BadLength, 0);
+    CHECK_EQ(f.calls, calls);
 }
 
 static void test_debug_eeprom_cal_clear() {
@@ -3728,6 +3764,7 @@ int main() {
     test_debug_cc_probe();
     test_debug_eeprom();
     test_debug_eeprom_cal_clear();
+    test_debug_eeprom_page_cas();
     test_emarker_probe();
     test_debug_pd_msg();
     test_screenshot();

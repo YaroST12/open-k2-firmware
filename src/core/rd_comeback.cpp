@@ -4,9 +4,9 @@
 #include "k2/core/rd_comeback.hpp"
 
 #include "k2/chargertest/session_store.hpp"
+#include "k2/core/storage.hpp"
 #include "k2/core/log.hpp"
 #include "k2/core/rescan_bridge.hpp"
-#include "k2/core/storage.hpp"
 #include "k2/drivers/adc.hpp"
 #include "k2/drivers/fs_flash.hpp"
 #include "k2/drivers/fusb302.hpp"
@@ -59,18 +59,6 @@ const char* kind_name(IntentKind k) {
     return k == IntentKind::Session ? "session" : k == IntentKind::Reattach ? "reattach" : k == IntentKind::Rescan ? "rescan" : "none";
 }
 
-// A recorded identity, armed like the cable dialog arms it (k2/ui/ui_cable_list.cpp arm()) but without the page.
-[[gnu::noinline]] bool arm_identity(ctcable::Choice c) {
-    c = ctcable::canonical(c);
-    emlib::Entry e;
-    emk_quirk::Quirks quirks;
-    if (c.kind == ctcable::Kind::Builtin) {
-        e.rec = emrec::builtin_cable(c.seq);
-        quirks = emk_quirk::builtin_quirks(c.seq);
-    } else if (!storage::lib_get(c.seq, e, quirks)) return false;
-    return emk_spoof::arm(e.rec, quirks) == emk_spoof::Err::Ok;
-}
-
 // The aux rail, once, before the Rd is decided: a USB host feeds it ~5 V, a comeback boot (powered through the charger's Rp by our own
 // Rd) has it dead. Only called when a record exists. The ADC starts here (its init is idempotent) and the first full ring takes ~15 ms;
 // no reading in 40 ms = unknown = not a host (the comeback is kept, as before).
@@ -94,6 +82,18 @@ void release() {
 }
 
 }  // namespace
+
+// A recorded identity, armed like the cable dialog arms it (k2/ui/ui_cable_list.cpp arm()) but without the page.
+[[gnu::noinline]] bool arm_identity(ctcable::Choice c) {
+    c = ctcable::canonical(c);
+    emlib::Entry e;
+    emk_quirk::Quirks quirks;
+    if (c.kind == ctcable::Kind::Builtin) {
+        e.rec = emrec::builtin_cable(c.seq);
+        quirks = emk_quirk::builtin_quirks(c.seq);
+    } else if (!storage::lib_get(c.seq, e, quirks)) return false;
+    return emk_spoof::arm(e.rec, quirks) == emk_spoof::Err::Ok;
+}
 
 bootmode::Mode begin(bootmode::Mode keys, bool warm) {
     g_look.sram_words = probe_take();

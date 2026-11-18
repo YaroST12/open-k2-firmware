@@ -8,6 +8,7 @@
 #if K2_SCREENSHOT
 #include "k2/ui/capture.hpp"
 #endif
+#include "k2/core/eekeep.hpp"
 #include "k2/core/gap_meter.hpp"
 #include "k2/core/log.hpp"
 #include "k2/core/main_loop.hpp"
@@ -161,6 +162,7 @@ k2::mainloop::Context g_loop{g_ui, g_remote, g_bootscreen, g_accelerometer, rebo
         bool formatted = false;
         k2::fs::init(formatted);
     }
+    k2::eekeep::init();   // the settings EEPROM's slots (USB link copy, the user's spoof), before usbcfg reads its copy
     k2::usbcfg::init();   // the USB link itself is connected last, just before the main loop (see there)
     k2::systick::delay_ms(50);
     K2LOG("[BOOT] Open-K2 Firmware Starting...\n");
@@ -193,6 +195,7 @@ k2::mainloop::Context g_loop{g_ui, g_remote, g_bootscreen, g_accelerometer, rebo
     }
     k2::fs::wipe_legacy();                  // ... then the pre-littlefs raw pages are erased, once (marker /.legacy)
     k2::fs::grow();                         // ... and only then may the volume grow into the run they lived in (blank proof); scans the rings
+    k2::eekeep::spoof_restore();            // the spoof the user armed before this boot (a comeback's run identity wins)
     k2::bbpersist::init();                  // black box: its ring is scanned now; reload the newest captures
     k2::battery::hw::init(warm_reset);      // battery recorder: a warm reset resumes its run, a cold boot closes a cut one
     k2::systick::delay_ms(20);   // let the DMA ring fill before the raw one-shot sweep

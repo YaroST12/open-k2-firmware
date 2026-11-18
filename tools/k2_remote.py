@@ -49,7 +49,7 @@ CMD_DEBUG_VCONN = 0x27      # debug: VCONN_Swap experiment [op] 0 status, 1 swap
 CMD_DEBUG_EPR_INFO = 0x28   # debug: [op] 0 status, 1 ask EPR_Get_Source_Cap (gated), 2 ask regardless of the EPR bit
 CMD_DEBUG_LCD = 0x29        # debug: LCD DMA state -> [flags, transfers u32, stalls u32]
 CMD_DEBUG_CC_PROBE = 0x2A   # debug: [sw0, pc, ms u16 (, modes u16)] hold a SWITCHES0 value on a waiting charger, sample CC
-CMD_DEBUG_EEPROM = 0x2B     # lab-only 24Cxx dump (firmware K2_EEPROM_READ=1): [0, bus] probe, [1, bus, abytes, sel, off u16, len] read; [2, 12 expected bytes] the one write (K2_EEPROM_CAL_CLEAR=1); tools/eeprom_dump.py
+CMD_DEBUG_EEPROM = 0x2B     # lab-only 24Cxx dump (firmware K2_EEPROM_READ=1): [0, bus] probe, [1, bus, abytes, sel, off u16, len] read; [2, 12 expected bytes] cal-clear (K2_EEPROM_CAL_CLEAR=1); [3, off u16, old[16], new[16]] page compare-and-swap (K2_EEPROM_WRITE=1); tools/eeprom_dump.py
 CMD_DEBUG_PDOS = 0x20    # debug: load N synthetic PDOs into the PD state (0 = clear)
 CMD_ADC_RAW = 0x21        # raw ADC dump (10 channels + the 7 scan slots)
 CMD_IDENTIFY_DEVICE = 0x40  # [op] 0 status, 1 start, 2 start + confirm
@@ -333,7 +333,7 @@ class RemoteError(RuntimeError):
         if cmd == CMD_DEBUG_EEPROM and status == STATUS_BUSY:
             text += " (a charger test owns the port; nothing touched the bus)"
         if cmd == CMD_DEBUG_EEPROM and status == STATUS_BAD_ARG:
-            text += " (refused before the bus was touched: bus 0/1, word address 1 or 2 bytes, select 0..7, 1..32 bytes inside the array and, for one byte, inside a 256-byte block; cal-clear needs a firmware built with K2_EEPROM_CAL_CLEAR=1)"
+            text += " (refused before the bus was touched: bus 0/1, word address 1 or 2 bytes, select 0..7, 1..32 bytes inside the array and, for one byte, inside a 256-byte block; cal-clear needs a firmware built with K2_EEPROM_CAL_CLEAR=1, restore one with K2_EEPROM_WRITE=1)"
         if cmd == CMD_EMARKER_PROBE and status == STATUS_BUSY:
             text += (f" (refused, nothing was driven: {RA_PROBE_REFUSALS[payload[0]]})" if payload and 0 < payload[0] < len(RA_PROBE_REFUSALS)
                      else " (the K2 is not passive: a charger test is running, or the port is not idle)")
@@ -5889,6 +5889,13 @@ def build_parser():
                      type=eeprom_dump.expect_bytes,
                      help="the 12 bytes 0x04..0x0F must hold now, 24 hex digits, e.g. 0060F0FFCFFEFFFFA24EFBFF")
     scc.add_argument("--yes", action="store_true", help="required: confirms that this writes the EEPROM")
+    srs = seesub.add_parser("restore", help="write a saved 2 KB dump of the 24C16 on the INA bus back: only the 16-byte pages that "
+                                            "differ, each a compare-and-swap, then a full readback compare (K2_EEPROM_WRITE=1 firmware)")
+    srs.add_argument("--in", dest="input", required=True, metavar="FILE", help="the 2048-byte image (from debug eeprom dump)")
+    srs.add_argument("--backup", metavar="FILE", default=None, help="save the chip's content before the restore here")
+    srs.add_argument("--allow-bad-cal", action="store_true",
+                     help="write an image whose calibration trims are out of the healthy range (refused by default)")
+    srs.add_argument("--yes", action="store_true", help="write; without it only the differing pages are listed")
     svc = sds.add_parser("vconn", help="debug: VCONN_Swap experiment (swap = ask the source for the VCONN role, off = drop it)")
     svc.add_argument("op", choices=["status", "swap", "off", "roundtrip", "data-reset"])
     sde = sds.add_parser("epr-info", help="debug: informational EPR_Get_Source_Cap (ask = only when PDO 1 has the EPR bit, "

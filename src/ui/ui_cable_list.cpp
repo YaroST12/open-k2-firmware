@@ -8,6 +8,7 @@
 #include <string_view>
 
 #include "k2/chargertest/cablepref.hpp"
+#include "k2/core/eekeep.hpp"
 #include "k2/pd/emk_quirk.hpp"
 #include "k2/pd/emk_spoof.hpp"
 #include "k2/core/storage.hpp"
@@ -86,7 +87,10 @@ void CableIdentityList::persist() {
 }
 
 bool CableIdentityList::sync() {
-    if (synced_ && library_gen_ == storage::generation()) return false;
+    const ctcable::Choice kept = eekeep::spoof_user();   // a boot's re-armed spoof or a remote arm: the page shows it as ARMED
+    const bool adopted = kept.kind != ctcable::Kind::Off && !armed();
+    if (adopted) adopt(kept);
+    if (synced_ && library_gen_ == storage::generation()) return adopted;
     refresh();
     return true;
 }
@@ -236,6 +240,13 @@ void CableIdentityList::note_armed(ctcable::Choice c, const char* name) {
     put_label(armed_name_, name);
     armed_gen_ = emk_spoof::generation();
     armed_set_ = true;
+}
+
+__attribute__((noinline)) void CableIdentityList::adopt(ctcable::Choice c) {
+    char name[emlib::kNameMax + 1] = {};
+    if (c.kind == ctcable::Kind::Builtin) put_label(name, emrec::builtin_info(c.seq).label.data());
+    else if (!load_name(c.seq, name)) name[0] = 0;
+    note_armed(c, name);
 }
 
 void CableIdentityList::disarm() {

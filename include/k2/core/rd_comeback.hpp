@@ -16,6 +16,10 @@
 
 namespace k2::rdcomeback {
 
+// Arms a recorded identity the way the Spoof page does (built-in table or library clone), without a page: false when a clone is
+// gone or emk_spoof refuses. The settings EEPROM's spoof slot re-arms through it too (k2/core/eekeep.cpp).
+bool arm_identity(ctcable::Choice c);
+
 // Before self_power_early(): the boot mode the Rd decision runs on (rdintent::boot_mode). Cold plain boots read the record.
 bootmode::Mode begin(bootmode::Mode keys, bool warm);
 

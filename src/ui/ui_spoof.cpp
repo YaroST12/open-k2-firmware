@@ -4,6 +4,7 @@
 
 #include <algorithm>
 
+#include "k2/core/eekeep.hpp"
 #include "k2/pd/emk_spoof.hpp"
 #include "k2/ui/ui.hpp"
 #include "k2/ui/ui_elem.hpp"
@@ -69,7 +70,7 @@ void SpoofPage::activate() {
     ctcable::Facts facts{};
     char name[emlib::kNameMax + 1] = {};
     switch (cl.arm(c, facts, name)) {
-    case CableIdentityList::ArmErr::Ok: say("Spoof on", kOk); break;
+    case CableIdentityList::ArmErr::Ok: eekeep::spoof_user_armed(c); say("Spoof on", kOk); break;
     case CableIdentityList::ArmErr::Gone: say("Saved cable gone", kCaution); break;
     case CableIdentityList::ArmErr::Inline: say("Live sink: unplug load", kCaution); break;
     case CableIdentityList::ArmErr::Invalid: say("Bad saved record", kCaution); break;
