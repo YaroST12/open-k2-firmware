@@ -547,6 +547,7 @@ TEST_CXX_SRCS := $(filter-out tests/test_oppo_probe.cpp tests/test_pd_sink_oppo.
 endif
 TEST_CXX_LIB  += tests/trunc_log.cpp $(SRC_DIR)/ui/orientation.cpp $(SRC_DIR)/core/shell.cpp $(SRC_DIR)/core/lab.cpp
 TEST_CXX_LIB  += $(SRC_DIR)/pd/pd_reread.cpp $(SRC_DIR)/pd/pd_survey.cpp $(SRC_DIR)/pd/apple_readout.cpp
+TEST_CXX_LIB  += $(SRC_DIR)/core/idle.cpp
 ifeq ($(HOST_K2_OPPO_PROBE),1)
 TEST_CXX_LIB  += $(SRC_DIR)/pd/oppo_probe.cpp
 endif
