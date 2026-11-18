@@ -17,6 +17,7 @@
 #include "k2/core/loop_stats.hpp"
 #include "k2/core/paint_meter.hpp"
 #include "k2/drivers/adc.hpp"
+#include "k2/drivers/eeprom.hpp"
 #include "k2/pd/attach_pick.hpp"
 #include "k2/pd/cable_r.hpp"
 #include "k2/fastcharge/dpsniff.hpp"
@@ -1094,6 +1095,34 @@ remote::Status Remote::ra_probe(const raprobe::Args &a, raprobe::Result &out) {
     for (unsigned i = 0; i < out.n && i < out.s.size(); i++) K2LOG("[RAPROBE] #%u cc1=%u cc2=%u\n", i, out.s[i].cc1_raw, out.s[i].cc2_raw);
     return why == raprobe::Refusal::None ? remote::Status::Ok : remote::Status::Busy;
 }
+
+#if K2_EEPROM_READ
+// The read-only 24Cxx lab dump (k2/drivers/eeprom.hpp). A bus transaction of a few ms on the main loop; refused (Busy) while a
+// charger test owns the port, like the other lab probes.
+eeprom::Err Remote::eeprom_probe(uint8_t bus, eeprom::Probe &out) {
+    if (ui_.charger_test_busy()) return eeprom::Err::Busy;
+    return eeprom::probe(bus, out);
+}
+
+eeprom::Err Remote::eeprom_read(uint8_t bus, const eeprom::Addr &a, std::span<uint8_t> out) {
+    if (ui_.charger_test_busy()) return eeprom::Err::Busy;
+    return eeprom::read(bus, a, out);
+}
+#endif
+
+#if K2_EEPROM_CAL_CLEAR
+// The calibration repair (k2/drivers/eeprom_calc.hpp: cal_clear). The write cycle wait keeps the FUSB302 serviced.
+eeprom::CalResult Remote::eeprom_cal_clear(std::span<const uint8_t, eeprom::kCalLen> expected) {
+    if (ui_.charger_test_busy()) {
+        eeprom::CalResult r;
+        r.err = eeprom::CalErr::Busy;
+        return r;
+    }
+    const eeprom::CalResult r = eeprom::cal_clear_ina(expected, [] { fusb302::service(); });
+    K2LOG("[EEPROM] cal-clear err %u\n", static_cast<unsigned>(r.err));
+    return r;
+}
+#endif
 
 remote::VconnSnapshot Remote::debug_vconn(uint8_t op) {
     remote::VconnSnapshot s;
