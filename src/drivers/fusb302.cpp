@@ -230,10 +230,16 @@ K2_HOT pd::Sink& sink() {
     }
     return *std::launder(reinterpret_cast<pd::Sink*>(g_sink_raw));
 }
+#if K2_OPPO_PROBE
 // The K2's data role on SOP: DFP while the host report runs, or after a DR_Swap the sink started (lab OPPO probe; the sink
 // drops it on any hard reset, soft reset or detach). SWITCHES1 carries it, so the chip's GoodCRCs match our own headers.
 bool g_sw1_dfp = false;   // the role last written to SWITCHES1
 K2_HOT bool dfp_now() { return g_lh_dfp || (g_sink_inited && sink().dfp()); }
+K2_HOT bool oppo_active() { return sink().oppo_running(); }
+#else
+// Without the OPPO lab probe the data role is the host report's alone (g_lh_dfp), and no probe ever runs.
+constexpr bool oppo_active() { return false; }
+#endif
 pd::Identify& ident() {
     if (!g_ident_inited) {
         new (g_ident_raw) pd::Identify();
@@ -447,7 +453,11 @@ K2_HOT bool transmit(const pd::TxMsg& m) {
     if (m.inline_tx) return transmit_inline(m);
     if (m.restart_id) g_msg_id = 0;
     std::uint16_t header = pd::with_msg_id(m.header, g_msg_id);
+#if K2_OPPO_PROBE
     if (dfp_now() && m.sop == pd::Sop::Sop) header = std::uint16_t(header | 0x20);   // Host report or a DR_Swap: the K2 is DFP
+#else
+    if (g_lh_dfp && m.sop == pd::Sop::Sop) header = std::uint16_t(header | 0x20);   // Host report: the K2 is DFP
+#endif
     TxFrame buf;
     const unsigned n = tx_frame(header, m, buf);
     clear_irqs();
@@ -498,13 +508,21 @@ std::uint8_t ctl1() { return phy::control1(g_crc_on, g_sop_prime_hook != nullptr
 
 // SWITCHES1 for the active line, Auto-CRC on or off (`g_crc_on`).
 void write_sw1() {
+#if K2_OPPO_PROBE
     g_sw1_dfp = dfp_now();
     wr(kSwitches1, std::uint8_t(phy::sw1(g_active_cc, g_crc_on) | (g_sw1_dfp ? phy::kSw1DataRole : 0)));
+#else
+    wr(kSwitches1, std::uint8_t(phy::sw1(g_active_cc, g_crc_on) | (g_lh_dfp ? phy::kSw1DataRole : 0)));
+#endif
     wr(kControl1, ctl1());   // SOP' receive follows Auto-CRC (except while the spoof is armed)
 }
 K2_HOT void flush_rx() { wr(kControl1, ctl1()); g_rx_held.valid = false; }
 // After anything that may have moved the sink's data role (a DR_Swap answer, its timeout, a reset): SWITCHES1 follows at once.
+#if K2_OPPO_PROBE
 K2_HOT void sync_role() { if (g_active_cc != 0 && dfp_now() != g_sw1_dfp) write_sw1(); }
+#else
+inline void sync_role() {}
+#endif
 
 void configure_passive() {
     g_crc_on = false;
@@ -1286,7 +1304,7 @@ K2_HOT void active_tick() {
                                sink().soft_reset_pending();
         pd::CrcDemand d{.sink_active = false,
                         .sink_held = ss0.held,
-                        .ident = ident_running() || g_ident_wait || probe_running() || reread_running() || sink().oppo_running(),
+                        .ident = ident_running() || g_ident_wait || probe_running() || reread_running() || oppo_active(),
                         .getcap = g_getcap_armed || g_vconn.state() != pd::VconnState::Off,   // a VCONN swap needs our GoodCRC
                         .prep = g_prep.crc_wanted(),
                         .run_start = g_rd_start && !inline_now() && !g_legacy_only,   // legacy-only: no GoodCRC for the source's caps

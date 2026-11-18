@@ -1631,6 +1631,7 @@ pd::Err apple_read_start() { return sink().arm_apple_read(systick::millis()); }
 const pd::AppleInfo& apple_info() { return sink().apple_info(); }
 bool apple_armed() { return sink().apple_armed(); }
 
+#if K2_OPPO_PROBE
 pd::oppo::Refusal oppo_gate(pd::oppo::Facts f, bool need_5v) {
     // The driver's own owners join the caller's facts: another PD engine, a listen window, the Apple readout, an inline link.
     const pd::SinkStatus& s = sink().status();
@@ -1663,6 +1664,7 @@ pd::oppo::Refusal oppo_start(const pd::oppo::Config& c, const pd::oppo::Facts& f
 void oppo_stop() { sink().oppo_stop(systick::millis()); }
 bool oppo_running() { return sink().oppo_running(); }
 const pd::oppo::Result& oppo_result() { return sink().oppo_result(); }
+#endif   // K2_OPPO_PROBE
 bool answers_sop() { return sink().answers_sop(); }
 const pd::PpsAnswer& pps_answer() { return sink().pps_answer(); }
 std::uint32_t caps_count() { return g_caps_count; }

@@ -621,6 +621,7 @@ remote::AppleReadResult Remote::apple_read(uint8_t op) {
     return r;
 }
 
+#if K2_OPPO_PROBE
 // Lab-only OPPO / OnePlus probe (k2/pd/oppo_probe.hpp). The remote's half of the gate: a port owner (charger test, PD Stress, PD
 // Spec, a twin run, a loop probe, a listen window, an FC session or sniff) and the UI's inline latch; the driver adds the rest.
 static pd::oppo::Facts oppo_facts(Ui &ui) {
@@ -675,6 +676,7 @@ remote::OppoPowerResult Remote::oppo_power(uint16_t mv, uint16_t ma, bool confir
     r.status = o.err == pd::Err::Ok ? remote::Status::Ok : o.err == pd::Err::Busy ? remote::Status::Busy : remote::Status::BadArg;
     return r;
 }
+#endif   // K2_OPPO_PROBE
 
 static remote::PdOpResult pd_result(pd::Err e) {
     remote::PdOpResult r;
@@ -1318,7 +1320,11 @@ void Remote::svooc_stop() { svooc_trig::stop(); }
 
 bool Remote::lines_locked() { return fctrig::svooc_running(); }
 
+#if K2_OPPO_PROBE
 bool Remote::ports_busy() { return ui_.ports_busy() || fusb302::listen_active() || fusb302::oppo_running(); }
+#else
+bool Remote::ports_busy() { return ui_.ports_busy() || fusb302::listen_active(); }
+#endif
 
 // Listen attach (k2::fusb302::listen_start): detach first, then Rd on, Auto-CRC off, nothing transmitted. flags bit 0 = no detach. The driver adds its own owners
 // (identify, probe, reread, boot pin, spoof, Ra) to the remote-side facts composed here.

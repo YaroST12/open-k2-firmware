@@ -547,7 +547,9 @@
 #include "k2/chargertest/ct_cable.hpp"
 #include "k2/pd/emk_learn.hpp"
 #include "k2/pd/emk_quirk.hpp"
+#if K2_OPPO_PROBE
 #include "k2/pd/oppo_probe.hpp"
+#endif
 #include "k2/core/stage_meter.hpp"
 #include "k2/fastcharge/edge_guard.hpp"
 #include "k2/fastcharge/svooc_run.hpp"
@@ -1374,6 +1376,7 @@ struct AppleReadInfo {
 };
 struct AppleReadResult { Status status = Status::Ok; uint8_t refusal = 0; AppleReadInfo info{}; };   // refusal: pd::AppleRefusal as the one-byte payload
 
+#if K2_OPPO_PROBE
 // Lab-only OPPO / OnePlus probe (Cmd::OppoProbe). The result is the sink's own record (never copied: `r` points at it).
 constexpr uint8_t kOppoStatus = 0, kOppoStart = 1, kOppoStop = 2, kOppoPower = 3;
 constexpr uint8_t kOppoFlagSkipSwap = 1;   // start flags
@@ -1381,6 +1384,7 @@ constexpr uint8_t kOppoParts = 6;          // part 0 the header, 1..3 the Auth /
 struct OppoView { Status status = Status::Ok; uint8_t refusal = 0; bool running = false; const pd::oppo::Result* r = nullptr; };
 // `pd oppo-power`: err = pd::Err of the trigger, why = pd::oppo::Refusal, pos / mv / ma = the advertised point asked for.
 struct OppoPowerResult { Status status = Status::Ok; uint8_t err = 0, why = 0, pos = 0; uint16_t mv = 0, ma = 0; };
+#endif   // K2_OPPO_PROBE
 
 // STOP reply: what was active before (stop::kTest | kFc | kPd | kSpoof), the latest VBUS sample after the actions, and
 // whether the measured FC release window is still open (the VBUS then may not have settled yet).
@@ -1433,7 +1437,9 @@ size_t encode_memory(std::span<uint8_t> out, const MemorySnapshot &s);
 size_t encode_identify_progress(std::span<uint8_t> out, const IdentifyProgress &p);
 size_t encode_reread(std::span<uint8_t> out, const RereadInfo &i);
 size_t encode_apple_read(std::span<uint8_t> out, const AppleReadInfo &i, uint8_t part);   // part 0 header, 1..6 one field each
+#if K2_OPPO_PROBE
 size_t encode_oppo(std::span<uint8_t> out, const OppoView &v, uint8_t part);   // part 0 header, 1..5 one word list each
+#endif
 size_t encode_stop(std::span<uint8_t> out, const StopInfo &s);   // 6 bytes: active, vbus_mv i32 LE, fc_release_busy
 size_t encode_lease(std::span<uint8_t> out, const LeaseInfo &l);   // 6 bytes: armed, left_s u16 LE, length_s u16 LE, ended
 size_t encode_adc_raw(std::span<uint8_t> out, const AdcRawSnapshot &a);
@@ -1560,8 +1566,10 @@ concept Backend = requires(B &b, uint8_t u8, uint16_t u16, bool on) {
     { b.identify_device(u8) } -> std::same_as<IdentifyResult>;
     { b.reread(u8, u8) } -> std::same_as<RereadResult>;   // op (0 status, 1 start, 2 abort), step mask
     { b.apple_read(u8) } -> std::same_as<AppleReadResult>;   // lab-only: op 0 status, 1 arm + re-request the current contract
+#if K2_OPPO_PROBE
     { b.oppo_probe(u8, std::declval<const pd::oppo::Config &>()) } -> std::same_as<OppoView>;   // lab-only: op 0 status, 1 start, 2 stop
     { b.oppo_power(u16, u16, on) } -> std::same_as<OppoPowerResult>;   // lab-only: mv, ma (0 = the slot's maximum), confirm
+#endif
     { b.pd_request(u8, u16, u16, on, on) } -> std::same_as<PdOpResult>;   // pos, mv, ma, confirm, over_load (lab only)
     { b.pd_release() } -> std::same_as<PdOpResult>;
     { b.stop() } -> std::same_as<StopInfo>;   // the one-call stop (k2/core/stop.hpp)
@@ -1924,6 +1932,9 @@ template <Backend B>
         return reply_ok(f, encode_apple_read(f.span(), res.info, part));
     }
     case Cmd::OppoProbe: {
+#if !K2_OPPO_PROBE
+        return reply_status(f, Status::UnknownCmd);
+#else
         if (p.empty()) return reply_bad_len(f);
         const uint8_t op = p[0];
         if (op == kOppoPower) {
@@ -1950,6 +1961,7 @@ template <Backend B>
         const OppoView v = backend.oppo_probe(op, cfg);
         if (v.status != Status::Ok) return reply_byte(f, v.status, v.refusal);
         return reply_ok(f, encode_oppo(f.span(), v, part));
+#endif
     }
     case Cmd::PdRequest: {
         if (p.size() != 6) return reply_bad_len(f);

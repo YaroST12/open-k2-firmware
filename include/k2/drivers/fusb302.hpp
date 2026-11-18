@@ -346,6 +346,7 @@ pd::Err apple_read_start();
 const pd::AppleInfo& apple_info();
 bool apple_armed();
 
+#if K2_OPPO_PROBE
 // Lab-only OPPO / OnePlus probe (SVID 0x22D9, k2/pd/oppo_probe.hpp): DR_Swap to DFP, AUTH, POWER, EXAPDO, DR_Swap back,
 // Get_Source_Cap; records every answer, verifies nothing. Refused (the reason returned) while another owner has the port or the
 // PD engine, inline, without a Ready contract at 5 V, or while a probe runs. The facts the remote knows come in `f`; the driver
@@ -356,6 +357,7 @@ pd::oppo::Refusal oppo_gate(pd::oppo::Facts f, bool need_5v);
 void oppo_stop();
 bool oppo_running();
 const pd::oppo::Result& oppo_result();
+#endif   // K2_OPPO_PROBE
 bool answers_sop();   // the sink answers SOP messages: the source is the K2's own partner
 
 // Ask the source for its capabilities now. Inline it refuses, confirmed or not (an inline K2 never

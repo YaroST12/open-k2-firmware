@@ -4305,7 +4305,9 @@ void test_listen_attach_refusals_touch_nothing();
 void test_listen_attach_forces_a_detach_before_rd_comes_on();
 void test_listen_attach_detach_times_out_and_no_detach_skips_it();
 void test_listen_attach_dropping_phase_ends_cleanly_and_sends_nothing();
+#if K2_OPPO_PROBE
 void test_oppo_dr_swap_mirrors_the_data_role_into_switches1();
+#endif
 // ---- Settings > Wake sleeping port (pattern slow-rp-wake, idle path): opt-in, default off ----
 // A sleeping source's port reads ~3.3 V open on one line (CC2 here), nothing on the other, VBUS dark. With the setting off the
 // idle K2 stays exactly what the invariants say (I1/H2: no Rd at idle, a waiting charger stays passive); only with it on does it
@@ -5440,7 +5442,9 @@ int main() {
     test_listen_attach_forces_a_detach_before_rd_comes_on();           // hardware 2026-11-18: the blink never detached the OnePlus brick
     test_listen_attach_detach_times_out_and_no_detach_skips_it();
     test_listen_attach_dropping_phase_ends_cleanly_and_sends_nothing();
+#if K2_OPPO_PROBE
     test_oppo_dr_swap_mirrors_the_data_role_into_switches1();          // ends with a detach
+#endif
     return test_report("test_fusb302_scan");
 }
 
@@ -6132,6 +6136,7 @@ void test_listen_attach_dropping_phase_ends_cleanly_and_sends_nothing() {
     listen_end_clean();
 }
 
+#if K2_OPPO_PROBE
 // The lab OPPO probe's DR_Swap: once the source Accepts, SWITCHES1 carries the DFP data role (bit 4) so the chip's GoodCRCs match
 // our headers; a Hard Reset from the source puts both ends back to UFP and ends the probe. Ends with a detach.
 static bool dr_swap_on_the_wire() {
@@ -6178,3 +6183,4 @@ void test_oppo_dr_swap_mirrors_the_data_role_into_switches1() {
     g_auto_txsent = false;
     end_start_test();
 }
+#endif

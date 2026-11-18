@@ -60,11 +60,13 @@ sanitize_pass() {
     local flags="$4 -fno-sanitize-recover=all -fno-omit-frame-pointer"
     # make does not see a change of flags or of compiler: stamp both in the build directory and start clean on a change.
     local dir="$root/build/san-$1" stamp
-    stamp="$2 $3 $flags $(docker image inspect -f '{{.Id}}' "$img" 2>/dev/null)"
+    # K2_OPPO_PROBE (the OPPO lab probe, off by default) changes the Sink layout: it is part of the stamp, so a flip starts clean.
+    local oppo="${K2_OPPO_PROBE:-0}"
+    stamp="$2 $3 $flags oppo=$oppo $(docker image inspect -f '{{.Id}}' "$img" 2>/dev/null)"
     [ "$(cat "$dir/.stamp" 2>/dev/null)" = "$stamp" ] || rm -rf "$dir"
     mkdir -p "$dir" && printf '%s' "$stamp" >"$dir/.stamp"
     docker run --rm --user "$(id -u):$(id -g)" -e UBSAN_OPTIONS=print_stacktrace=1 -v "$root":/workspace -w /workspace "$img" \
-        make -k -j"${K2_J:-4}" test-run HOST_DIR="build/san-$1" HOST_CXX="$2 $flags" HOST_CC="$3 $flags" \
+        make -k -j"${K2_J:-4}" test-run K2_OPPO_PROBE="$oppo" HOST_DIR="build/san-$1" HOST_CXX="$2 $flags" HOST_CC="$3 $flags" \
         >"$out/sanitize-$1.log" 2>&1
     local rc=$?
     # The closing line the gate reads: an incremental run re-runs only the changed tests, so the log alone cannot say that

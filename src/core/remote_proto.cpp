@@ -695,6 +695,7 @@ size_t encode_apple_read(std::span<uint8_t> out, const AppleReadInfo &i, uint8_t
     return w.size();
 }
 
+#if K2_OPPO_PROBE
 // Chunked like the Apple readout: part 0 = [0, running, end, steps, skip_swap, dfp, swap_waits, diff, outcome x 6]; part k in
 // 1..5 = [k, n, n x u32 LE]: the Auth, Power and Exapdo answers as received, then the SPR caps before and after.
 size_t encode_oppo(std::span<uint8_t> out, const OppoView &v, uint8_t part) {
@@ -713,6 +714,7 @@ size_t encode_oppo(std::span<uint8_t> out, const OppoView &v, uint8_t part) {
     for (const uint32_t x : l.view()) w.u32(x);
     return w.size();
 }
+#endif   // K2_OPPO_PROBE
 
 namespace detail {
 

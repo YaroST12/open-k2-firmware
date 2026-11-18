@@ -2605,6 +2605,7 @@ static void test_active_pd_commands() {
     CHECK_EQ(f.ar_calls, 0);
 }
 
+#if K2_OPPO_PROBE
 // OPPO_PROBE (0x4D), lab-only, chunked like APPLE_READ: [1, flags, steps, 4 x u32] starts -> part 0, [0, part] reads back,
 // [2] stops; [3, flags, mv, ma] asks an advertised point -> [err, why, pos, mv, ma] and arms the lease above 5 V.
 static void test_oppo_probe_wire() {
@@ -2685,6 +2686,21 @@ static void test_oppo_probe_wire() {
     run(f, request(0x4D, 24, {3, 1, 0x88, 0x13}), r);
     check_header(r, 0x4D, 24, Status::BadLength, 0);
 }
+#else
+// Without K2_OPPO_PROBE the id stays reserved (command-id uniqueness) but every request answers UnknownCmd and never reaches the
+// backend, whatever the payload looks like.
+static void test_oppo_probe_absent() {
+    Fake f;
+    Frame r;
+    run(f, request(0x4D, 1, {1, 1, 0x0F, 1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 0x78, 0x56, 0x34, 0x12}), r);
+    check_header(r, 0x4D, 1, Status::UnknownCmd, 0);
+    run(f, request(0x4D, 2, {3, 1, 0x28, 0x23, 0xB8, 0x0B}), r);
+    check_header(r, 0x4D, 2, Status::UnknownCmd, 0);
+    run(f, request(0x4D, 3, {}), r);
+    check_header(r, 0x4D, 3, Status::UnknownCmd, 0);
+    CHECK_EQ(f.calls, 0);
+}
+#endif
 
 static void test_store() {
     Fake f; Frame r;
@@ -3646,6 +3662,10 @@ int main() {
     test_debug_fault();
     test_build_response_pads_and_cuts();
     test_mi_cable_auth();
+#if K2_OPPO_PROBE
     test_oppo_probe_wire();
+#else
+    test_oppo_probe_absent();
+#endif
     return test_report("test_remote_proto");
 }

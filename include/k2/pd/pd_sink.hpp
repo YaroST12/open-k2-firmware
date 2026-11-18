@@ -21,7 +21,10 @@
 #include "k2/pd/pd_engine.hpp"
 #include "k2/pd/pd_txok.hpp"
 #include "k2/pd/apple_readout.hpp"
+#include "k2/core/build_config.h"
+#if K2_OPPO_PROBE
 #include "k2/pd/oppo_probe.hpp"
+#endif
 
 namespace k2::pd {
 
@@ -35,11 +38,13 @@ inline constexpr std::uint8_t kCtlGoodCrc = 1, kCtlAccept = 3, kCtlReject = 4, k
 inline constexpr std::uint8_t kExtPpsStatusMsg = 0x0C;   // PPS_Status (pd_ext.hpp kExtPpsStatus)
 // Role-swap requests a partner can send (control messages, no data objects; type 9 with objects is EPR_Request).
 enum class SwapKind : std::uint8_t { Dr, Pr, Fr };
+#if K2_OPPO_PROBE
 // The sink's own DR_Swap (Sink::request_dr_swap): the answer the last one got. Pending = sent, its answer is outstanding (one AMS:
 // nothing else of ours goes out meanwhile); Timeout = no answer within kDrSwapMs; TxFail = no GoodCRC.
 enum class DrSwap : std::uint8_t { None, Pending, Accepted, Rejected, Wait, NotSupported, Timeout, TxFail };
 // DR_Swap -> its answer: the K2's give-up time (the partner owes it within tSenderResponse), as kAcceptMs gives a Request's.
 inline constexpr std::uint32_t kDrSwapMs = 200;
+#endif   // K2_OPPO_PROBE
 inline constexpr std::uint8_t kDataSourceCap = 1, kDataRequest = 2, kDataSinkCap = 4,
                               kDataEprRequest = 9, kDataEprMode = 10;  // kDataRevision: pd_ext.hpp
 inline constexpr std::uint8_t kExtStatusMsg = 2, kExtSinkCapsExt = 15, kExtControl = 0x10;  // kExtEprSourceCaps: pd_engine.hpp
@@ -351,6 +356,7 @@ public:
     Err arm_apple_read(std::uint32_t now);
     const AppleInfo& apple_info() const { return ap_.info(); }
     bool apple_armed() const { return ap_.armed(); }
+#if K2_OPPO_PROBE   // the OPPO lab probe: the sink-initiated DR_Swap, the data role and the probe itself (off by default)
     // Sink-initiated DR_Swap (lab: the OPPO probe asks for the host role the way a OnePlus phone does). Ok = queued; the answer lands
     // in dr_swap(): Accept flips the data role (dfp()), Reject / Wait / Not_Supported / silence leave it. BadChoice = already in that
     // role; Busy = not Ready at a contract, in EPR mode, or another message or answer of ours is outstanding; NoCaps = no contract;
@@ -367,6 +373,7 @@ public:
     void oppo_stop(std::uint32_t now);
     bool oppo_running() const { return op_.running(); }
     const oppo::Result& oppo_result() const { return op_.result(); }
+#endif   // K2_OPPO_PROBE
     void set_cap_mv(std::uint32_t mv) { cap_mv_ = mv < kVsafe5vMv ? kVsafe5vMv : mv; }
     std::uint32_t cap_mv() const { return cap_mv_; }
     // HID-cable loop 5 V lock (k2/core/loop_guard.hpp). While on, every plan above 5 V (above_hv_lock) and every EPR entry is
@@ -514,6 +521,7 @@ private:
     void answer_vdm(std::uint32_t word);    // a one-object VDM (a NAK)
     void answer_epr_sink_caps();
     void answer_revision();
+#if K2_OPPO_PROBE
     // DR_Swap and the OPPO probe (request_dr_swap, oppo_start)
     void queue_dr_swap(bool to_dfp, std::uint32_t now);
     void end_swap(DrSwap r, std::uint32_t now);
@@ -524,6 +532,9 @@ private:
     void link_reset(oppo::End why, bool to_ufp);            // a Hard Reset / detach / Soft_Reset: the swap and the probe end
     void oppo_caps_rx(std::span<const std::uint8_t> payload, unsigned num_do);                 // the caps step's list
     void oppo_vdm_rx(std::span<const std::uint8_t> payload, unsigned num_do, std::uint32_t now);   // a 0x22D9 answer
+#else
+    static constexpr bool ams_open() { return false; }   // no lab AMS exists: the conditions that wait for one compile away
+#endif
     void on_unhandled_ext(std::uint16_t header, std::span<const std::uint8_t> payload);
 
     bool never_hard_reset_ = false;
@@ -623,6 +634,7 @@ private:
     // Lab-only Apple charger readout (0x05AC), off by default; reset with the rest of the attach state.
     AppleReadout ap_;
 
+#if K2_OPPO_PROBE
     // Sink-initiated DR_Swap and the data role (request_dr_swap), and the OPPO lab probe that drives it (oppo_start).
     bool dfp_ = false;
     bool swap_to_ = false;                 // the role the outstanding DR_Swap asks for
@@ -633,6 +645,7 @@ private:
     enum class TxOwner : std::uint8_t { Sink, Probe, Swap };
     TxOwner tx_owner_ = TxOwner::Sink, last_owner_ = TxOwner::Sink;
     oppo::Probe op_;
+#endif   // K2_OPPO_PROBE
 };
 
 // What this sink advertises: fixed 5 V 100 mA and PPS 3.3-11 V 3 A. No AVS, no EPR.
