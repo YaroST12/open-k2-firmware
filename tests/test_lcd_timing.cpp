@@ -110,6 +110,70 @@ static void test_lab_divider() {   // the runtime switch offers 2, 4 and 8
     CHECK_EQ(d, SpiDiv::Div8);            // a refusal leaves the value alone
 }
 
+static void test_backlight_pwm() {
+    // 24 kHz off the timer clock: 240 MHz -> 10000 counts, and it follows the AHB divider (60 MHz -> 2500).
+    CHECK_EQ(backlight_period(240'000'000), 10000u);
+    CHECK_EQ(backlight_period(120'000'000), 5000u);
+    CHECK_EQ(backlight_period(60'000'000), 2500u);
+    CHECK_EQ(backlight_period(30'000'000), 1250u);
+    CHECK_EQ(backlight_period(1'000), 1u);          // never zero
+    CHECK_EQ(backlight_period(4'000'000'000u), 65536u);   // the 16-bit counter's limit
+    // Duty: pct of the period, 100 = never low (compare value above the top), 0 = never high.
+    CHECK_EQ(backlight_ccr(0, 10000), 0u);
+    CHECK_EQ(backlight_ccr(30, 10000), 3000u);
+    CHECK_EQ(backlight_ccr(50, 10000), 5000u);
+    CHECK_EQ(backlight_ccr(99, 10000), 9900u);
+    CHECK_EQ(backlight_ccr(100, 10000), 10000u);
+    CHECK_EQ(backlight_ccr(250, 10000), 10000u);    // a request above 100 is 100
+    CHECK_EQ(backlight_ccr(1, 2500), 25u);
+    CHECK_EQ(backlight_ccr(30, 65536), 19660u);     // no 32-bit overflow at the top of the range
+    CHECK_EQ(backlight_arr(10000), 9999u);
+    CHECK_EQ(backlight_arr(1), 0u);
+}
+
+static void test_panel_sequence() {
+    PanelSeq s;
+    CHECK_EQ(s.state(), PanelSeq::State::Awake);
+    CHECK_EQ(s.poll(0), PanelSeq::Action::None);
+    // Sleep: DISPOFF + SLPIN go out at once.
+    s.request(false);
+    CHECK_EQ(s.poll(1000), PanelSeq::Action::Sleep);
+    CHECK_EQ(s.state(), PanelSeq::State::Asleep);
+    CHECK_EQ(s.poll(1001), PanelSeq::Action::None);
+    // Wake: SLPOUT only 120 ms after SLPIN, DISPON 120 ms after SLPOUT.
+    s.request(true);
+    CHECK_EQ(s.poll(1050), PanelSeq::Action::None);
+    CHECK_EQ(s.poll(1119), PanelSeq::Action::None);
+    CHECK_EQ(s.poll(1120), PanelSeq::Action::SlpOut);
+    CHECK_EQ(s.state(), PanelSeq::State::Waking);
+    CHECK_EQ(s.poll(1239), PanelSeq::Action::None);
+    CHECK_EQ(s.awake(), false);
+    CHECK_EQ(s.poll(1240), PanelSeq::Action::DispOn);
+    CHECK_EQ(s.awake(), true);
+    CHECK_EQ(s.poll(1241), PanelSeq::Action::None);
+    // A sleep request while waking waits for the 120 ms after SLPOUT, then puts the panel back to sleep.
+    s.request(false);
+    CHECK_EQ(s.poll(2000), PanelSeq::Action::Sleep);
+    s.request(true);
+    CHECK_EQ(s.poll(2120), PanelSeq::Action::SlpOut);
+    s.request(false);
+    CHECK_EQ(s.poll(2200), PanelSeq::Action::None);
+    CHECK_EQ(s.poll(2240), PanelSeq::Action::Sleep);
+    CHECK_EQ(s.state(), PanelSeq::State::Asleep);
+    // The millisecond counter wraps: the gaps are unsigned differences.
+    PanelSeq w;
+    w.request(false);
+    CHECK_EQ(w.poll(0xFFFFFFF0u), PanelSeq::Action::Sleep);
+    w.request(true);
+    CHECK_EQ(w.poll(0xFFFFFFF0u + 100), PanelSeq::Action::None);
+    CHECK_EQ(w.poll(0xFFFFFFF0u + 120), PanelSeq::Action::SlpOut);
+    // A request that changes nothing does nothing.
+    PanelSeq a;
+    a.request(true);
+    CHECK_EQ(a.poll(5), PanelSeq::Action::None);
+    CHECK_EQ(a.awake(), true);
+}
+
 static void test_boot_divider() {   // /4 (30 MHz) at every boot since 2026-11-12
     CHECK_EQ(kBootSpiDiv, SpiDiv::Div4);
 }
@@ -118,6 +182,8 @@ int main() {
     test_service_pacer();
     test_lab_divider();
     test_boot_divider();
+    test_backlight_pwm();
+    test_panel_sequence();
     test_wire_time();
     test_divider_field();
     test_dma_chunks();

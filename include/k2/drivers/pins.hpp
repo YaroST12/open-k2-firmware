@@ -16,7 +16,7 @@ inline constexpr Pin lcd_sck   {Port::B, 3};   // SPI3 SCK (AF push-pull)
 inline constexpr Pin lcd_dc    {Port::B, 4};   // data (1) / command (0)
 inline constexpr Pin lcd_mosi  {Port::B, 5};   // SPI3 MOSI (AF push-pull)
 inline constexpr Pin lcd_reset {Port::B, 6};   // panel reset, active low
-inline constexpr Pin lcd_bl    {Port::B, 7};   // backlight, plain GPIO driven high (no PWM)
+inline constexpr Pin lcd_bl    {Port::B, 7};   // backlight: TMR4 channel 2 PWM (lcd.cpp), plain GPIO low while parked
 
 // ---- Buttons on the right edge, top to bottom: BACK, MINUS, OK, PLUS (active low) ----
 inline constexpr Pin key_back  {Port::B, 14};  // back / menu / reset

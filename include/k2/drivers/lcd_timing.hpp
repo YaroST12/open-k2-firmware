@@ -91,4 +91,66 @@ constexpr std::uint32_t dma_chunk(std::uint32_t remaining) {
 inline constexpr std::uint32_t kDmaMinPixels = 32;
 constexpr bool use_dma(std::uint32_t px) { return px >= kDmaMinPixels; }
 
+// ---- Backlight PWM -----------------------------------------------------------------------------------------------------
+// The backlight pin runs off a general timer at 24 kHz (above hearing, far below anything the driver chip cares about);
+// the period is counts of the timer clock, so it follows the AHB divider (240 MHz: 10000 counts, 60 MHz: 2500). The
+// 16-bit counter limits it to 65536 counts.
+inline constexpr std::uint32_t kBacklightHz = 24'000;
+constexpr std::uint32_t backlight_period(std::uint32_t timer_hz) {
+    const std::uint32_t n = timer_hz / kBacklightHz;
+    return n == 0 ? 1u : (n > 65536u ? 65536u : n);
+}
+// The auto-reload value for a period of that many counts.
+constexpr std::uint32_t backlight_arr(std::uint32_t period) { return period - 1; }
+// The compare value for a brightness of pct percent (0..100, more is 100): 0 never high, 100 = the whole period, which
+// the PWM mode 1 output holds high all the time (the compare value is above the auto-reload value). 32-bit: the period
+// is at most 65536 and pct below 100.
+constexpr std::uint32_t backlight_ccr(unsigned pct, std::uint32_t period) {
+    return pct >= 100 ? period : period * pct / 100u;
+}
+
+// ---- Panel sleep and wake ----------------------------------------------------------------------------------------------
+// Sleep In and Sleep Out may not follow each other (or the other way round) within 120 ms, and Display On waits out the
+// 120 ms after Sleep Out. The sequencer turns "should the panel be awake" into the next command to send, polled with the
+// millisecond clock, so a wake never blocks the main loop. It holds the state only; lcd.cpp sends the commands.
+class PanelSeq {
+public:
+    enum class State : std::uint8_t { Awake, Asleep, Waking };   // Waking: Sleep Out sent, Display On still to come
+    enum class Action : std::uint8_t { None, Sleep, SlpOut, DispOn };   // Sleep = Display Off + Sleep In
+    static constexpr std::uint32_t kGapMs = 120;
+
+    constexpr void request(bool awake) { want_ = awake; }
+    constexpr Action poll(std::uint32_t now_ms) {
+        switch (state_) {
+        case State::Awake:
+            if (want_) return Action::None;
+            state_ = State::Asleep;
+            since_ = now_ms;
+            return Action::Sleep;
+        case State::Asleep:
+            if (!want_ || now_ms - since_ < kGapMs) return Action::None;
+            state_ = State::Waking;
+            since_ = now_ms;
+            return Action::SlpOut;
+        case State::Waking:
+            if (now_ms - since_ < kGapMs) return Action::None;
+            if (want_) {
+                state_ = State::Awake;
+                return Action::DispOn;
+            }
+            state_ = State::Asleep;
+            since_ = now_ms;
+            return Action::Sleep;
+        }
+        return Action::None;
+    }
+    constexpr State state() const { return state_; }
+    constexpr bool awake() const { return state_ == State::Awake; }
+
+private:
+    State state_ = State::Awake;
+    bool want_ = true;
+    std::uint32_t since_ = 0;
+};
+
 }  // namespace k2::lcd

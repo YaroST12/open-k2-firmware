@@ -18,9 +18,26 @@ void init();
 // The driver is unusable until init() runs again.
 void park();
 
-// Backlight on or off (a plain GPIO: there is no brightness level in between). The panel keeps its content; the
-// loop probe (k2/loopprobe/loop_probe_hw.hpp) steps the K2's own draw with it. init() turns it on.
+// Backlight brightness in percent, 0..100 (more is 100): PB7 is a 24 kHz PWM output of TMR4 channel 2 (inferred from the
+// STM32F1-family pin map, to be confirmed by a measurement), linear in duty. init() starts it at 100. While the panel is
+// asleep or waking (panel_sleep) the call is remembered but the backlight stays off; after the wake completes the caller
+// repaints and then calls set_brightness again.
+void set_brightness(std::uint8_t pct);
+// The level last asked for (what set_brightness was given, clamped), whether or not the panel shows it now.
+std::uint8_t brightness();
+
+// Backlight on or off: set_brightness(100) / set_brightness(0). The panel keeps its content; the loop probe
+// (k2/loopprobe/loop_probe_hw.hpp) steps the K2's own draw with it.
 void set_backlight(bool on);
+
+// Panel sleep without a reset. panel_sleep(true) darkens the backlight, then sends Display Off and Sleep In (the panel
+// keeps its settings and, being in sleep, draws almost nothing). panel_sleep(false) starts the wake: Sleep Out, 120 ms,
+// Display On, spread over panel_poll() calls (the main loop pass) so nothing blocks; Sleep In and Sleep Out keep 120 ms
+// apart. panel_awake() is true once Display On went out (also before any sleep): paint then, and only then raise the
+// backlight with set_brightness. Nothing may be drawn while the panel is not awake.
+void panel_sleep(bool sleep);
+void panel_poll();
+bool panel_awake();
 
 // ST7789 rotation 0..3 (MADCTL 0x00/0x60/0xC0/0xA0). The 240x240 panel sits in a 240x320
 // RAM, so the flipped modes shift the window origin by 80; only rotation 0 is verified.

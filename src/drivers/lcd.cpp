@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cstddef>
 
+#include "k2/drivers/crm.hpp"
 #include "k2/drivers/pins.hpp"
 #include "k2/drivers/regs.hpp"
 #include "k2/drivers/systick.hpp"
@@ -174,6 +175,67 @@ K2_HOT void set_window(std::uint16_t x0, std::uint16_t y0, std::uint16_t x1, std
 
 void (*g_idle_hook)() = nullptr;  // set_idle_hook(): time-critical work during long draws
 
+// ---- Backlight PWM: TMR4 channel 2 on PB7 (STM32F1-style general timer, APB1) -----------------------------------------
+// PB7 as TMR4_CH2 is inferred from the STM32F1-family pin map (no remap bit is set); the first hardware check is that the
+// brightness steps change the K2's own draw. The timer clock is crm::timer_hz() (240 MHz at the full core clock): no
+// prescaler, 24 kHz, 10000 steps at full speed, fewer with the AHB divider raised (a listener re-programs it).
+struct Tmr4 {
+    R32 CTRL1, CTRL2, STCTRL, IDEN, ISTS, SWEVT, CM1, CM2, CCTRL, CVAL, DIV, PR, RPR, C1DT, C2DT;
+    static constexpr std::uint32_t CTRL1_TMREN = 1u << 0, CTRL1_PRBEN = 1u << 7;   // counter enable, auto-reload buffered
+    static constexpr std::uint32_t CM1_C2OCTRL_PWM1 = 6u << 12, CM1_C2OBEN = 1u << 11;   // channel 2: PWM mode 1, compare buffered
+    static constexpr std::uint32_t CCTRL_C2EN = 1u << 4;   // channel 2 output on, active high
+    static constexpr std::uint32_t SWEVT_OVFSWTR = 1u << 0;   // load the buffered values, counter to 0
+};
+static_assert(offsetof(Tmr4, C2DT) == 0x38 && offsetof(Tmr4, PR) == 0x2C);
+inline Tmr4& tmr4() { return at<Tmr4>(0x40000800); }
+constexpr std::uint32_t kApb1EnTmr4 = 1u << 2;
+
+std::uint8_t g_pct = 100;       // the brightness asked for
+std::uint8_t g_applied = 0;     // what the compare register carries now
+bool g_pwm_on;
+PanelSeq g_seq;
+
+void pwm_apply(std::uint8_t pct) {
+    Tmr4& t = tmr4();
+    const std::uint32_t period = backlight_period(crm::timer_hz());
+    t.PR = backlight_arr(period);
+    t.C2DT = backlight_ccr(pct, period);
+    t.SWEVT = Tmr4::SWEVT_OVFSWTR;   // the counter may sit above a smaller reload value after a clock change: restart it
+    g_applied = pct;
+}
+
+void pwm_clock_change() {
+    if (g_pwm_on) pwm_apply(g_applied);
+}
+
+void pwm_start(std::uint8_t pct) {
+    reg::crm().APB1EN |= kApb1EnTmr4;
+    (void)reg::crm().APB1EN;   // the clock is on before the first register write
+    Tmr4& t = tmr4();
+    t.CTRL1 = 0;
+    t.DIV = 0;
+    t.CM1 = (t.CM1 & ~0xFF00u) | Tmr4::CM1_C2OCTRL_PWM1 | Tmr4::CM1_C2OBEN;
+    t.CCTRL = Tmr4::CCTRL_C2EN;
+    pwm_apply(pct);
+    t.CTRL1 = Tmr4::CTRL1_PRBEN | Tmr4::CTRL1_TMREN;
+    p::lcd_bl.mode(Mode::AfPp50);
+    crm::on_hclk_change(pwm_clock_change);
+    g_pwm_on = true;
+}
+
+void pwm_stop() {
+    if (g_pwm_on) {
+        Tmr4& t = tmr4();
+        t.C2DT = 0;
+        t.CCTRL = 0;
+        t.CTRL1 = 0;
+        g_pwm_on = false;
+    }
+    p::lcd_bl.mode(Mode::OutPp50);   // plain GPIO, low
+    p::lcd_bl.clear();
+    g_applied = 0;
+}
+
 // The service cadence (lcd_timing.hpp kServiceUs, docs/ARCH_REWORK.md E1) on the core-cycle clock. systick::ticks() is
 // SysTick VAL plus the millisecond count, so it is correct with IRQs enabled (the pending bit covers a wrap not yet counted).
 constexpr std::uint32_t kServiceTicks = kServiceUs * (systick::kSysclkHz / 1'000'000u);
@@ -329,7 +391,7 @@ K2_HOT void open_window() {
 }  // namespace
 
 void init() {
-    Crm& c = crm();
+    Crm& c = reg::crm();
     // Only the ports of the LCD pins (A15, B3..B7) and AFIO for the SWJ release below.
     c.APB2EN |= Crm::APB2EN_AFIO | Crm::APB2EN_GPIOA | Crm::APB2EN_GPIOB;
     c.APB1EN |= Crm::APB1EN_SPI3;
@@ -345,7 +407,8 @@ void init() {
     p::lcd_dc.mode(Mode::OutPp50);
     p::lcd_mosi.mode(Mode::AfPp50);
     p::lcd_reset.mode(Mode::OutPp50);
-    p::lcd_bl.mode(Mode::OutPp50);  // plain GPIO, driven high below: full brightness, no PWM
+    p::lcd_bl.mode(Mode::OutPp50);  // plain GPIO low until the backlight PWM starts below
+    p::lcd_bl.clear();
     p::lcd_dc.set();
     p::lcd_reset.set();
 
@@ -356,7 +419,9 @@ void init() {
     p::lcd_reset.set();
     systick::delay_ms(120);         // controller needs 120 ms before accepting commands
 
-    p::lcd_bl.set();
+    g_pct = 100;
+    g_seq = PanelSeq{};
+    pwm_start(g_pct);               // full brightness from here on, as the plain GPIO was
 
     command(Cmd::SLPOUT);
     systick::delay_ms(120);
@@ -372,11 +437,43 @@ void init() {
 void park() {
     command(Cmd::DISPOFF);
     command(Cmd::SLPIN);
-    p::lcd_bl.clear();
+    pwm_stop();
     systick::delay_ms(5);   // SLPIN needs 5 ms before the next command
 }
 
-void set_backlight(bool on) { p::lcd_bl.write(on); }
+void set_brightness(std::uint8_t pct) {
+    g_pct = pct > 100 ? 100 : pct;
+    // A sleeping or waking panel keeps the backlight off; an unchanged level is not rewritten (it restarts the counter).
+    if (g_pwm_on && g_seq.awake() && g_pct != g_applied) pwm_apply(g_pct);
+}
+
+std::uint8_t brightness() { return g_pct; }
+
+void set_backlight(bool on) { set_brightness(on ? 100 : 0); }
+
+namespace {
+void panel_act(PanelSeq::Action a) {
+    switch (a) {
+    case PanelSeq::Action::Sleep:
+        command(Cmd::DISPOFF);
+        command(Cmd::SLPIN);
+        break;
+    case PanelSeq::Action::SlpOut: command(Cmd::SLPOUT); break;
+    case PanelSeq::Action::DispOn: command(Cmd::DISPON); break;
+    case PanelSeq::Action::None: break;
+    }
+}
+}  // namespace
+
+void panel_poll() { panel_act(g_seq.poll(systick::millis())); }
+
+void panel_sleep(bool sleep) {
+    g_seq.request(!sleep);
+    if (sleep && g_pwm_on) pwm_apply(0);   // dark first, then the controller sleeps
+    panel_poll();
+}
+
+bool panel_awake() { return g_seq.awake(); }
 
 void set_rotation(std::uint8_t rotation) {
     rotation &= 3;
