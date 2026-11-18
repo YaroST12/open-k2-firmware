@@ -53,12 +53,10 @@ test("an APDO decodes with unsigned shifts (the kind bits are the top two)", () 
 // ---- the layout: the Baseus run, as the device's finished Results grid (fold) --------------------------------------------
 test("the finished grid folds the silent and the skipped units into word rows", () => {
   assert.deepEqual(lines(baseus(), { fold: true }), [
-    "PD3.x: 5V/3A:pass 9V/3A:pass 12V/3A:pass 15V/3A:pass 20V/3.35A:pass",
-    "SPR AVS: None:none",
-    "PPS: 5-11V/5A:partial",
-    "PPS: 5-21V/3.2A:pass",
-    "EPR AVS: None:none",
-    "No reply: EPR:none FCP:none UFCS:none",
+    "PD: 5V/3A:pass 9V/3A:pass 12V/3A:pass 15V/3A:pass 20V/3.35A:pass",   // one PD block: the fixed levels, then a range chip per line
+    ": PPS 5-11V/5A:partial",                                             // (the continuation lines carry no label)
+    ": PPS 5-21V/3.2A:pass",
+    "No reply: FCP:none UFCS:none",                                        // the kinds the source never offered are dropped, no "None" row
     "Skipped: QC2:none QC3:none",
   ]);
 });
@@ -89,9 +87,8 @@ test("sections: a 2 px rule where the unit's section changes, never on the first
 
 test("running grid keeps every unit in its place; an unoffered mode never shows red", () => {
   const got = lines(baseus(), { fold: false, absentCell: true });
-  assert.ok(got.includes("EPR AVS: None:none"));
-  assert.ok(!got.some((l) => /^(-- )?EPR:/.test(l)), "an unoffered PD unit has no row of its own");
-  assert.ok(got.includes("No reply: EPR:none"));
+  assert.ok(!got.some((l) => /None|EPR/.test(l)), "an unoffered PD kind has no row, no chip and no word");
+  assert.equal(got.filter((l) => /^PD:/.test(l)).length, 1);   // PD is one block: its label on the first line only
   assert.ok(got.some((l) => /^QC2: PD active:none$/.test(l.replace("-- ", ""))));
   assert.ok(got.some((l) => /^FCP: no reply:none$/.test(l.replace("-- ", ""))));    // failed at 5 V: the charger does not speak it
   assert.ok(got.some((l) => /^UFCS: no reply:none$/.test(l.replace("-- ", ""))));
@@ -105,7 +102,7 @@ test("a lone cell that never ran spells its reason", () => {
              S("pps", 21000, "skip", { pos: 6, pdo: 3248763456, reason: "needs load" }),
              S("qc3+", 5000, "pass"), S("qc3+", 9000, "skip", { reason: "no QC3+ response" }),
              S("qc2", 5000, "skip", { reason: "not implemented" })];
-  assert.deepEqual(lines(s, { fold: false }), ["PPS: needs load:none", "-- QC3+: no QC3+:none", "QC2: n/a:none"]);
+  assert.deepEqual(lines(s, { fold: false }), ["PD: PPS needs load:none", "-- QC3+: no QC3+:none", "QC2: n/a:none"]);
 });
 
 test("an older firmware's 6 A probes are chips of the one Xiaomi row, by their watts", () => {
@@ -113,7 +110,7 @@ test("an older firmware's 6 A probes are chips of the one Xiaomi row, by their w
              S("pd3x-fixed", 20000, "pass", { pos: 5, pdo: 0x6412c, ma: 6000 }),
              S("pd3x-fixed", 20000, "skip", { pos: 5, pdo: 0x6412c, ma: 6000, reason: "not unlocked", detail: 157 })];
   const got = lines(s, { fold: false });
-  assert.deepEqual(got, ["PD3.x: 5V/3A:pass", "-- Xiaomi: 120W:pass 120W:skip"]);
+  assert.deepEqual(got, ["PD: 5V/3A:pass", "-- Xiaomi: 120W:pass 120W:skip"]);
 });
 
 test("the Xiaomi unit is one row: the chain outcome, then each unlocked mode by its watts", () => {
@@ -121,7 +118,7 @@ test("the Xiaomi unit is one row: the chain outcome, then each unlocked mode by 
   const chain = (result, detail, reason) => S("pd3x-fixed", 0, result, { pos: 0, detail, reason: reason || "none", mi: true });
   const mode = (result, ma, extra) => S("pps", 11000, result, Object.assign({ pos: 6, pdo: 0xC0DC3264, ma, mi: true }, extra || {}));
   // a) the 20K bank: PPS 5-11V 3A -> 5A
-  assert.deepEqual(lines([pd, chain("pass", 20), mode("pass", 5000)], { fold: false }), ["PD3.x: 5V/3A:pass", "-- Xiaomi: 55W:pass"]);
+  assert.deepEqual(lines([pd, chain("pass", 20), mode("pass", 5000)], { fold: false }), ["PD: 5V/3A:pass", "-- Xiaomi: 55W:pass"]);
   // b) FH22: done, nothing raised: one passed auth chip
   assert.deepEqual(lines([pd, chain("pass", 20)], { fold: false })[1], "-- Xiaomi: auth:pass");
   // c) CUKTECH on a 6 A cable: the 66 W mode tested
@@ -138,7 +135,7 @@ test("the Xiaomi unit is one row: the chain outcome, then each unlocked mode by 
 test("a deep sweep is one range cell under its own Sweep label", () => {
   const s = [S("pps", 5000, "pass", { pos: 7, pdo: 3248763456 }), S("pps", 21000, "pass", { pos: 7, pdo: 3248763456 }),
              S("pps", 5000, "pending", { pos: 7, pdo: 3248763456, detail: 161, sweep: true })];
-  assert.deepEqual(lines(s, { fold: false, monitorMv: 36000 }), ["PPS: 5-21V/3.2A:pass", "Sweep: 5-21V/3.2A:pending"]);
+  assert.deepEqual(lines(s, { fold: false, monitorMv: 36000 }), ["PD: PPS 5-21V/3.2A:pass", "Sweep: 5-21V/3.2A:pending"]);
 });
 
 // The firmware's sweep chip (src/chargertest/result_layout.cpp sweep_row, 33ecb488): a sweep carrying the fold caution is amber at any depth.
@@ -147,13 +144,13 @@ test("a deep sweep that folds back is an amber chip, not a green one", () => {
   const swp = (extra) => S("pps", 5000, "pass", { pos: 7, pdo: 3248763456, detail: 161, sweep: true, ...extra });
   const base = [S("pps", 5000, "pass", { pos: 7, pdo: 3248763456 }), S("pps", 21000, "pass", { pos: 7, pdo: 3248763456 })];
   const opts = { fold: false, monitorMv: 36000 };
-  assert.deepEqual(lines([...base, swp({ reason: "output folds back" })], opts), ["PPS: 5-21V/3.2A:pass", "Sweep: 5-21V/3.2A:partial"]);
+  assert.deepEqual(lines([...base, swp({ reason: "output folds back" })], opts), ["PD: PPS 5-21V/3.2A:pass", "Sweep: 5-21V/3.2A:partial"]);
   // The caution on any part of a split sweep (the part from 5 V up, the part below) colours the one chip.
   const low = S("pps", 5000, "pass", { pos: 7, pdo: 3248763456, detail: 161, sweep: true, reason: "output folds back" });
-  assert.deepEqual(lines([...base, swp({}), low], opts), ["PPS: 5-21V/3.2A:pass", "Sweep: 5-21V/3.2A:partial"]);
+  assert.deepEqual(lines([...base, swp({}), low], opts), ["PD: PPS 5-21V/3.2A:pass", "Sweep: 5-21V/3.2A:partial"]);
   // No caution keeps the plain grade; a failed sweep stays red and a fold does not hide it.
-  assert.deepEqual(lines([...base, swp({})], opts), ["PPS: 5-21V/3.2A:pass", "Sweep: 5-21V/3.2A:pass"]);
-  assert.deepEqual(lines([...base, S("pps", 5000, "fail", { pos: 7, pdo: 3248763456, detail: 161, sweep: true, reason: "output folds back" })], opts), ["PPS: 5-21V/3.2A:pass", "Sweep: 5-21V/3.2A:fail"]);
+  assert.deepEqual(lines([...base, swp({})], opts), ["PD: PPS 5-21V/3.2A:pass", "Sweep: 5-21V/3.2A:pass"]);
+  assert.deepEqual(lines([...base, S("pps", 5000, "fail", { pos: 7, pdo: 3248763456, detail: 161, sweep: true, reason: "output folds back" })], opts), ["PD: PPS 5-21V/3.2A:pass", "Sweep: 5-21V/3.2A:fail"]);
 });
 
 // A PPS sweep split at 5 V is two steps (the part from 5 V up, the part below it, PdLow) in ONE strip row. The firmware reads the
@@ -197,8 +194,11 @@ test("more than five cells wrap onto a continuation line without a label", () =>
 test("a long label takes a wider cell, so fewer fit on a line (the device's width rule)", () => {
   const s = [S("pps", 5000, "pass", { pos: 6, pdo: 3235656292 }), S("pps", 5000, "pass", { pos: 7, pdo: 3248763456 }),
              S("pps", 5000, "pass", { pos: 8, pdo: 0xc1a42164 })];
-  // one range per APDO slot, each its own row: never joined onto one line
-  assert.equal(CtGrid.layout(s, { fold: false }).length, 3);
+  // one range chip per APDO slot, each on a line of its own (one PD block: the label on the first line only)
+  const blk = CtGrid.layout(s, { fold: false });
+  assert.equal(blk.length, 3);
+  assert.deepEqual(blk.map((l) => l.label), ["PD", "", ""]);
+  assert.ok(blk.every((l) => l.cells.length === 1 && l.cells[0].label.startsWith("PPS ")));
   const many = [3, 4, 5, 6].map((v) => S("scp", v * 1000, "pass", { ma: 2250 }));
   // "4.5V" style labels stay narrow: the width rule only bites past 5 characters
   assert.equal(CtGrid.layout(many, { fold: false }).length, 1);
@@ -210,25 +210,61 @@ test("a long label takes a wider cell, so fewer fit on a line (the device's widt
 test("the running dot sits on the pending cell of the step under test; stopped runs lose it", () => {
   const s = [S("pd3x-fixed", 5000, "pass", { pos: 1, pdo: 0x1912c }), S("pd3x-fixed", 9000, "pending", { pos: 2, pdo: 0x2d12c }),
              S("pd3x-fixed", 12000, "pending", { pos: 3, pdo: 0x3c12c })];
-  assert.deepEqual(lines(s, { fold: false, live: true, current: 1 }), ["PD3.x: 5V/3A:pass 9V/3A:running 12V/3A:pending"]);
-  assert.deepEqual(lines(s, { fold: false, live: false, current: 1 }), ["PD3.x: 5V/3A:pass 9V/3A:pending 12V/3A:pending"]);
-  assert.deepEqual(lines(s, { fold: false, stopped: true }), ["PD3.x: 5V/3A:pass 9V/3A:stopped 12V/3A:stopped"]);
+  assert.deepEqual(lines(s, { fold: false, live: true, current: 1 }), ["PD: 5V/3A:pass 9V/3A:running 12V/3A:pending"]);
+  assert.deepEqual(lines(s, { fold: false, live: false, current: 1 }), ["PD: 5V/3A:pass 9V/3A:pending 12V/3A:pending"]);
+  assert.deepEqual(lines(s, { fold: false, stopped: true }), ["PD: 5V/3A:pass 9V/3A:stopped 12V/3A:stopped"]);
   // a probe step has a row of its own: the dot never lands on the fixed row
   const p = s.concat([S("pd3x-fixed", 20000, "pending", { pos: 5, pdo: 0x6412c, ma: 6000 })]);
   const got = lines(p, { fold: false, live: true, current: 3 });
-  assert.equal(got[0], "PD3.x: 5V/3A:pass 9V/3A:pending 12V/3A:pending");
+  assert.equal(got[0], "PD: 5V/3A:pass 9V/3A:pending 12V/3A:pending");
   assert.equal(got[1], "-- Xiaomi: 120W:running");
 });
 
 test("revision rows are no grid rows", () => {
   const s = [S("pd3.1-revision", 0, "pass"), S("pd3x-fixed", 5000, "pass", { pos: 1, pdo: 0x1912c })];
-  assert.deepEqual(lines(s, { fold: false }), ["PD3.x: 5V/3A:pass"]);
+  assert.deepEqual(lines(s, { fold: false }), ["PD: 5V/3A:pass"]);
 });
 
 test("a row's tooltip says why: the skip reason or the measured voltage", () => {
   const rows = CtGrid.layout(baseus(), { fold: false });
-  const pps = rows.find((r) => r.label === "PPS");
-  assert.match(pps.cells[0].title, /5-11V 5A/);
+  const pps = rows.find((r) => r.cells[0].label === "PPS 5-11V");
+  assert.match(pps.cells[0].title, /PPS 5-11V 5A/);
+});
+
+// ---- the PD block: one label, fixed levels first, then a chip per PPS / AVS range ----------------------------------------------
+test("an EPR source: levels that ran stay volt chips, a skipped EPR level or AVS range is dropped, AVS is a range chip", () => {
+  const apdo = 0xd230968c;
+  const s = [S("pd3x-fixed", 5000, "pass", { pos: 1, pdo: 0x1912c }), S("pd3x-fixed", 20000, "pass", { pos: 5, pdo: 0x6412c }),
+             S("epr", 28000, "pass", { pos: 6, pdo: 573940 }), S("epr", 36000, "skip", { pos: 7, pdo: 573940, reason: "over voltage cap", detail: 144 }),
+             S("epr-avs", 15000, "pass", { pos: 8, pdo: apdo }), S("epr-avs", 28000, "pass", { pos: 8, pdo: apdo })];
+  assert.deepEqual(lines(s, { fold: true }), ["PD: 5V/3A:pass 20V/3A:pass 28V/5A:pass", ": AVS 15-28V/5A:pass"]);
+  // the running grid keeps the skipped level (its reason is a tag, the steps page says it)
+  assert.deepEqual(lines(s, { fold: false }), ["PD: 5V/3A:pass 20V/3A:pass 28V/5A:pass 36V/5A:skip", ": AVS 15-28V/5A:pass"]);
+  // an EPR AVS range that was only skipped has no chip at all
+  const refused = s.slice(0, 4).concat([S("epr-avs", 15000, "skip", { pos: 8, pdo: apdo, reason: "EPR entry refused" })]);
+  assert.deepEqual(lines(refused, { fold: true }), ["PD: 5V/3A:pass 20V/3A:pass 28V/5A:pass"]);
+  // the tooltip names the kind
+  assert.match(CtGrid.layout(s, { fold: true })[1].cells[0].title, /^AVS 15-28V 5A: pass/);
+});
+
+test("a source with no PD says it once: No reply (offered nothing) or Skipped (never ran)", () => {
+  const none = [S("pd2-fixed", 0, "skip", { reason: NOOFFER }), S("epr", 0, "skip", { reason: NOOFFER }), S("pps", 0, "skip", { reason: NOOFFER })];
+  assert.deepEqual(lines(none, { fold: true }), ["No reply: PD:none"]);
+  const idle = [S("pd3x-fixed", 0, "skip", { reason: "no contract" }), S("pps", 0, "skip", { reason: "no contract" })];
+  assert.deepEqual(lines(idle, { fold: true }), ["Skipped: PD:none"]);
+});
+
+test("a PD2.0 fixed-only source is one row of volt chips", () => {
+  const s = [5, 9, 12].map((v, i) => S("pd2-fixed", v * 1000, "pass", { pos: i + 1, pdo: (v * 20 << 10) | 150 })).concat([S("epr", 0, "skip", { reason: NOOFFER })]);
+  assert.deepEqual(lines(s, { fold: true }), ["PD: 5V/1.5A:pass 9V/1.5A:pass 12V/1.5A:pass"]);
+});
+
+test("the running dot lands on the range chip of the step under test", () => {
+  const s = [S("pd3x-fixed", 5000, "pass", { pos: 1, pdo: 0x1912c }),
+             S("pps", 5000, "pending", { pos: 6, pdo: 3235656292 }), S("pps", 11000, "pending", { pos: 6, pdo: 3235656292 }),
+             S("pps", 5000, "pending", { pos: 7, pdo: 3248763456 })];
+  assert.deepEqual(lines(s, { fold: false, live: true, current: 3 }), ["PD: 5V/3A:pass", ": PPS 5-11V/5A:pending", ": PPS 5-21V/3.2A:running"]);
+  assert.deepEqual(lines(s, { fold: false, live: true, current: 1 })[1], ": PPS 5-11V/5A:running");
 });
 
 // ---- the kit ---------------------------------------------------------------------------------------------------------------

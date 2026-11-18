@@ -3387,6 +3387,8 @@ var CtGrid = (function () {
                 vooc: "VOOC", svooc: "SVOOC", svooc65: "SVOOC65", ufcs: "UFCS", vivo: "VIVO" };
   var PD_GROUP = ["pd2-fixed", "pd3x-fixed", "epr", "spr-avs", "pps", "epr-avs"];
   var RANGE_ALGS = ["pps", "spr-avs", "epr-avs"];
+  var PD_FIXED = ["pd2-fixed", "pd3x-fixed", "epr"];                   // the fixed levels that share the PD block's first run
+  var KIND_WORD = { pps: "PPS", "spr-avs": "AVS", "epr-avs": "AVS" };   // a range chip's word (result_layout kind_word), drawn before its volts
   // Sections (the device's order of families); a rule separates two runs of different sections.
   var SEC_HUAWEI = 0, SEC_SAMSUNG = 1, SEC_OPPO = 2, SEC_XIAOMI = 3, SEC_PD = 5, SEC_QC = 6;
   // The grid's metrics, from the device's Results grid: 8 px glyphs, 2 px padding, 1 px gap, 163 px of cells, 5 cells at most.
@@ -3601,26 +3603,31 @@ var CtGrid = (function () {
       var xs = of(a);
       if (!xs.length || xs.some(function (s) { return s.result === "pass"; })) return false;
       if (xs.every(function (s) { return s.result === "skip" && s.reason === "not advertised"; })) return true;
-      if (isPd(a)) return false;
       return xs[0].result === "fail";
+    }
+    // The source offered no PD at all: every PD step is "not advertised" (a block with no chip that is not this was skipped).
+    function pdAbsent() {
+      return steps.every(function (s) { return s.hunt || s.sweep || !isPd(s.alg) || REVISIONS[s.alg] || (s.result === "skip" && s.reason === "not advertised"); });
     }
     var skippedOnly = function (a) { var xs = of(a); return xs.length > 0 && xs.every(function (s) { return s.result === "skip"; }); };
     var classAOnly = function (a) { return of(a).some(function (s) { return s.result === "skip" && s.reason === "Class A only (12 V max)"; }); };
     var noQc3Plus = function (a) { return of(a).some(function (s) { return s.result === "skip" && s.reason === "no QC3+ response"; }); };
 
-    // keys: one per row of the plan, in plan order
+    // keys: one per row of the plan, in plan order. Every PD step (fixed, PPS, AVS) shares the one PD block key; a deep sweep keeps its own.
     var keys = [];
     steps.forEach(function (s) {
       if (REVISIONS[s.alg]) return;
-      var k = s.hunt ? { alg: "", probe: true, sweep: false, mv: 0 }   // the Xiaomi unit: one row
-                     : { alg: s.alg, probe: false, sweep: s.sweep, mv: isRange(s.alg) ? s.pos : 0 };
-      if (!keys.some(function (o) { return o.alg === k.alg && o.probe === k.probe && o.sweep === k.sweep && o.mv === k.mv; })) keys.push(k);
+      var pd = !s.hunt && !s.sweep && isPd(s.alg);
+      var k = s.hunt ? { alg: "", probe: true, sweep: false, mv: 0, pd: false }   // the Xiaomi unit: one row
+            : pd ? { alg: s.alg, probe: false, sweep: false, mv: 0, pd: true }
+            : { alg: s.alg, probe: false, sweep: s.sweep, mv: isRange(s.alg) ? s.pos : 0, pd: false };
+      if (!keys.some(function (o) { return pd ? o.pd : (!o.pd && o.alg === k.alg && o.probe === k.probe && o.sweep === k.sweep && o.mv === k.mv); })) keys.push(k);
     });
 
     var rows = [];
     function begin(text, key) {
       var r = { label: text, sec: key ? sectionOf(key) : null, chips: [], alg: key ? key.alg : "", probe: !!(key && key.probe),
-                sweep: !!(key && key.sweep), mv: key ? key.mv : 0, pos: 0 };
+                sweep: !!(key && key.sweep), pd: !!(key && key.pd), mv: key ? key.mv : 0, pos: 0 };
       rows.push(r);
       return r;
     }
@@ -3632,24 +3639,51 @@ var CtGrid = (function () {
     }
     function word(row, text, tone) { row.chips.push({ text: text, tone: tone, word: true, mv: 0, tag: "", steps: [], note: "" }); }
 
-    function fixedRow(row, a) {
-      steps.forEach(function (s) {
-        if (s.alg !== a || !s.mv || s.hunt) return;
-        chip(row, params(s.raw), toneOf(s), [s], s.mv);
-      });
+    // The fixed levels of every PD algorithm, ascending (volts, then plan order). A skipped EPR level that is no listing (cable, refused,
+    // over the cap) has no chip under the finished grid's fold: its reason lives on the block's steps.
+    function fixedRun(row) {
+      var done = -1;
+      for (;;) {
+        var next = null, best = Infinity;
+        steps.forEach(function (s, i) {
+          if (!has(PD_FIXED, s.alg) || !s.mv || s.hunt) return;
+          if (opts.fold && s.alg === "epr" && s.result === "skip" && s.reason !== "advertised" && s.reason !== "light run: not asked") return;
+          var key = s.mv * 1024 + i;
+          if (key > done && key < best) { best = key; next = s; }
+        });
+        if (!next) return;
+        done = best;
+        chip(row, params(next.raw), toneOf(next), [next], next.mv);
+      }
     }
-    function rangeRow(row, a, pos) {
+    // One chip for one APDO: its advertised window, the kind word drawn before the volts (kind), mv = its PDO slot.
+    function rangeChip(row, a, pos) {
       var xs = steps.filter(function (s) { return s.alg === a && s.pos === pos && !s.hunt && !s.sweep; });
       var first = xs.filter(function (s) { return s.pdo; })[0];
       if (!first) return;
       var t = tally();
       xs.forEach(function (s) { count(t, s); });
-      var tone = rollUp(t), c = chip(row, pdoRange(first.pdo) || params(first.raw), tone, xs, first.mv);
+      var tone = rollUp(t);
+      if (opts.fold && a === "epr-avs" && tone === "skip") return;   // an EPR AVS range that was only skipped: no chip, like the EPR levels
+      var c = chip(row, pdoRange(first.pdo) || params(first.raw), tone, xs, pos, { kind: KIND_WORD[a], alg: a });
       if (tone === "skip") c.tag = skipTag(first);
       else {
         var nl = xs.filter(function (s) { return s.result === "skip" && s.reason === "needs load"; })[0];
         c.tag = nl ? "needs load" : "";
       }
+    }
+    // The PD block: the fixed levels, then the PPS ranges, the SPR AVS ranges and the EPR AVS ranges, one chip per APDO in plan order.
+    // A kind the source never offered has no chip (its steps carry no PDO).
+    function pdRow(row) {
+      fixedRun(row);
+      RANGE_ALGS.forEach(function (a) {
+        var seen = {};
+        steps.forEach(function (s) {
+          if (s.alg !== a || !s.pdo || s.hunt || s.sweep || seen[s.pos]) return;
+          seen[s.pos] = true;
+          rangeChip(row, a, s.pos);
+        });
+      });
     }
     function legacyRow(row, a) {
       var seen = {};
@@ -3706,7 +3740,7 @@ var CtGrid = (function () {
       });
     }
 
-    var absent = {}, skipped = {}, rangeNone = {};
+    var absent = {}, skipped = {};
     keys.forEach(function (key) {
       var row, a = key.alg;
       if (opts.oemWatts && has(VOOC_ALGS, a)) {   // the family's rows stand where the plan first runs one of its units
@@ -3747,27 +3781,23 @@ var CtGrid = (function () {
         if (skipPart && tone === "skip") row.chips[0].tag = skipTag(skipPart);
         return;
       }
-      var legacy = !isPd(a);
+      if (key.pd) {
+        // The PD block (result_layout pd_row): one row labelled "PD", every PD kind in it. Without a chip the whole block folds.
+        row = begin("PD", key);
+        pdRow(row);
+        if (!row.chips.length) { rows.pop(); (pdAbsent() ? absent : skipped)[a] = true; }
+        return;
+      }
+      var legacy = true;
       if (isAbsent(a)) {
-        if (isRange(a)) {
-          if (rangeNone[a]) return;
-          rangeNone[a] = true;
-          word(begin(NAMES[a] || a, key), "None", "dim");
-          return;
-        }
         if (opts.fold || !legacy) { absent[a] = true; return; }
         if (opts.absentCell) { row = begin(NAMES[a] || a, key); word(row, "no reply", "dim"); row.chips[0].steps = of(a); return; }
       }
       if (noQc3Plus(a)) { word(begin(NAMES[a] || a, key), "no QC3+", "dim"); return; }
       if (opts.fold && legacy && skippedOnly(a) && !classAOnly(a)) { skipped[a] = true; return; }
       row = begin(NAMES[a] || a, key);
-      if (isRange(a)) { row.pos = key.mv; rangeRow(row, a, key.mv); }
-      else if (isPd(a)) fixedRow(row, a);
-      else legacyRow(row, a);
-      if (!row.chips.length && (skippedOnly(a) || isRange(a))) {
-        rows.pop();
-        if (skippedOnly(a)) skipped[a] = true;
-      }
+      legacyRow(row, a);
+      if (!row.chips.length && skippedOnly(a)) { rows.pop(); skipped[a] = true; }
     });
     function collapsed(set, text, tone) {
       var any = keys.some(function (k) { return !k.probe && set[k.alg]; });
@@ -3775,7 +3805,7 @@ var CtGrid = (function () {
       var row = begin(text, null), said = {};
       keys.forEach(function (k) {
         if (k.probe || !set[k.alg]) return;
-        var name = has(VOOC_ALGS, k.alg) ? "VOOC" : NAMES[k.alg] || k.alg;   // the VOOC family folds as one word
+        var name = k.pd ? "PD" : has(VOOC_ALGS, k.alg) ? "VOOC" : NAMES[k.alg] || k.alg;   // the VOOC family folds as one word, PD as one
         if (!said[name]) { said[name] = true; word(row, name, tone); }
       });
     }
@@ -3788,7 +3818,7 @@ var CtGrid = (function () {
       var c = r.chips[0], why = c.tag, st = c.steps[0] || {};
       if (!why) why = st.reason === "not advertised" ? "no reply" : st.reason === "PD active: use QC port" ? "PD active" :
                       st.reason === "not implemented" ? "n/a" : "skipped";
-      c.text = why; c.word = true; c.tone = "dim";
+      c.text = (c.kind ? c.kind + " " : "") + why; c.word = true; c.tone = "dim";   // a range chip keeps its kind word: the row is labelled "PD"
     });
 
     // The step under test lights one pending cell: the one of its level in the row that owns the step.
@@ -3799,10 +3829,11 @@ var CtGrid = (function () {
         for (var ri = 0; ri < rows.length && !dot; ri++) {
           var r = rows[ri], owns = r.probe ? cur.hunt :
                                    r.sweep ? cur.sweep && cur.pos === r.pos && cur.alg === r.alg :
-                                   !!r.alg && !cur.hunt && !cur.sweep && r.alg === cur.alg && (!isRange(r.alg) || cur.pos === r.pos);
+                                   r.pd ? !cur.hunt && !cur.sweep && isPd(cur.alg) && !REVISIONS[cur.alg] :
+                                   !!r.alg && !cur.hunt && !cur.sweep && r.alg === cur.alg;
           if (!owns) continue;
           var pend = r.chips.filter(function (c) { return !c.word && c.tone === "pending"; });
-          var pick = pend.filter(function (c) { return c.mv === cur.mv; })[0] || pend[0];
+          var pick = pend.filter(function (c) { return r.pd && isRange(cur.alg) ? c.alg === cur.alg && c.mv === cur.pos : !c.alg && c.mv === cur.mv; })[0] || pend[0];
           if (pick) dot = pick;
         }
       }
@@ -3825,14 +3856,15 @@ var CtGrid = (function () {
       return c.note ? (w ? w + ", " : "") + c.note : w;
     }
     function cellOf(c) {
-      var v = verdictOf(c), lab = c.text, cur = "";
+      var v = verdictOf(c), lab = c.text, cur = "", kind = c.kind && !c.word ? c.kind + " " : "";   // a range chip's kind word leads its volts
       if (!c.word) { var sp = lab.indexOf(" "); if (sp >= 0) { cur = lab.slice(sp + 1); lab = lab.slice(0, sp); } }
       var w = whyOf(c), vw = WORD[v];
-      return { verdict: v, label: lab, current: cur, title: c.levelTitle || c.text + (vw ? ": " + vw : "") + (w ? " (" + w + ")" : "") };
+      return { verdict: v, label: kind + lab, current: cur, title: c.levelTitle || kind + c.text + (vw ? ": " + vw : "") + (w ? " (" + w + ")" : "") };
     }
     // The cell width rule: a chip counts its volt text, a word its whole text; a line breaks at 5 cells or where they stop fitting.
     function cellWidth(c) {
       var n = c.word ? c.text.length : (c.text.indexOf(" ") >= 0 ? c.text.indexOf(" ") : c.text.length);
+      if (c.kind && !c.word) n += c.kind.length + 1;
       return n * ADV + 2 * PAD;
     }
 
@@ -3841,15 +3873,15 @@ var CtGrid = (function () {
       var sec = r.sec !== null ? r.sec : lastSec;    // a collapsed row sits in the section of the row before it
       var brk = !first && sec !== prevSec;
       var cur = [], widest = 0;
-      var head = true, pendingLines = [];
+      var head = true, pendingLines = [], solo = false;
       r.chips.forEach(function (c) {
         var gw = cellWidth(c);
         var full = (cur.length + 1) * (Math.max(widest, gw) + GAP) - GAP > AVAIL;
-        if (cur.length && (full || cur.length >= MAX_CELLS)) {
+        if (cur.length && (full || cur.length >= MAX_CELLS || c.kind || solo)) {   // a range chip has its line to itself
           pendingLines.push({ head: head, cells: cur });
           head = false; cur = []; widest = 0;
         }
-        cur.push(c); widest = Math.max(widest, gw);
+        cur.push(c); widest = Math.max(widest, gw); solo = !!c.kind;
       });
       pendingLines.push({ head: head, cells: cur });
       pendingLines.forEach(function (pl) {
