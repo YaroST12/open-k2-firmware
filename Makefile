@@ -31,17 +31,17 @@ INC_DIR = include
 # compiling and linking. See include/k2/core/build_config.h.
 K2_NET ?= 0
 # K2_WEBUSB=1 adds the WebUSB transport: a vendor-class interface with the remote protocol, the BOS/WebUSB and Microsoft OS 2.0
-# descriptors, and the "WebUSB" row of Settings > USB Link (include/k2/core/build_config.h). Off by default while it is a
-# prototype; the host tests always build it, and the gate builds it in build-webusb/ so it keeps compiling.
-K2_WEBUSB ?= 0
+# descriptors, and the "WebUSB" row of Settings > USB Link (include/k2/core/build_config.h). On by default since
+# 2026-11-19; the host tests always build it.
+K2_WEBUSB ?= 1
 # K2_PDSTRESS=1 builds Tools > PD Stress back in (its page, session, journal and store, the remote command 0x55 and the
 # `pdstress` shell commands). Off by default since 2026-11-12: it found no charger fault. The host tests always build it
 # (HOST_CXXFLAGS) so its logic keeps compiling. See include/k2/core/build_config.h.
 K2_PDSTRESS ?= 0
 # K2_PDSPEC=1 builds the no-load PD conformance check in (the charger test's Deep PD spec section, the remote command 0x5A
-# and the [6, off] read of the section; docs/PD_SPEC_CHECK.md). No Tools page since 2026-11-16. Off by default while flash is
-# short; the host tests always build it (HOST_CXXFLAGS).
-K2_PDSPEC ?= 0
+# and the [6, off] read of the section; docs/PD_SPEC_CHECK.md). No Tools page since 2026-11-16. On by default since
+# 2026-11-19 (20.4 KB); the host tests always build it (HOST_CXXFLAGS).
+K2_PDSPEC ?= 1
 # K2_LOOPPROBE=1 builds Tools > Loop probe in (the HID-cable loop probe: its page, session, stored result and the remote command
 # 0x57; docs/LOOP_PROBE.md). Off by default since 2026-11-16 (flash); the host tests always build it (HOST_CXXFLAGS).
 K2_LOOPPROBE ?= 0
@@ -71,8 +71,8 @@ K2_SPECROWS ?= 0
 # K2_WHOS_ATTACHED=1 brings the tabbed Who's attached page back behind the three ID tools (include/k2/core/build_config.h).
 K2_WHOS_ATTACHED ?= 0
 # K2_SCREENSHOT=1 builds the RLE565/strip screenshot capture path and Settings > Screenshot row back in
-# (include/k2/core/build_config.h). Off by default; host tests enable it via HOST_CXXFLAGS.
-K2_SCREENSHOT ?= 0
+# (include/k2/core/build_config.h). On by default since 2026-11-19 (2.1 KB); host tests enable it via HOST_CXXFLAGS.
+K2_SCREENSHOT ?= 1
 # K2_STACKPROBE=1 builds the PSP probe in (include/k2/core/stack_probe.hpp): SysTick samples the thread stack pointer and the
 # interrupted PC / LR at each new low, the main loop logs "[STK] low=<free> pc=0x.. lr=0x..". Off by default (diagnosis builds
 # only; give one its own BUILD_DIR).
