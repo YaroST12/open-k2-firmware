@@ -2111,10 +2111,11 @@ static void test_a_voltage_fold_reads_as_a_caution() {
     CHECK_EQ(footer_shows(std::string_view(want, wl), kCaution), true);   // the fold's own words, from the APDO's sweep
     check_text_at(kSmall, ty_reason(), "folds back", kCaution, kBg, 92);
 }
-// A step walk the source answered at a coarse quantum (a bank landing 100 mV for a +20 mV ask) is a caution on its range chip, never a
-// chip of its own and never red: the footer and the Detail footer carry "steps 100mV, not 20mV". The walk is set on a finished PPS row.
-static void test_a_step_walk_miss_reads_as_a_caution() {
-    six_pdo_fixture();
+// A finished PPS or AVS level row given a caution reason is a caution on its range chip, never a chip of its own and never red: the family
+// count, the focused row's note and the Detail footer carry the words. `label` picks the range family, `algo` the row the reason is set on; the
+// Steps page and the Detail page are dumped in all four rotations (every cut fails the run), K2_DUMP names <tag>_steps[_rot<r>] / <tag>_detail[_rot<r>].
+static void caution_scene(const char* label, ct::Algorithm algo, ct::Reason reason, uint16_t detail, const char* tag, const char* footer_words) {
+    if (algo == ct::Algorithm::SprAvs) family_offer(); else six_pdo_fixture();   // the six-PDO fixture has a PPS range only
     g_stub.vbus_ceiling_mv = 36000;
     Ui ui; open(ui);
     CHECK_EQ(ui.charger_test_set_units(kPdOnly), true);
@@ -2128,112 +2129,71 @@ static void test_a_step_walk_miss_reads_as_a_caution() {
         for (int i = 0; i < 64 && ui.painting(); ++i) ui.tick(t += 100);
         CHECK_EQ(ui.painting(), false);
     };
+    const auto all_rotations = [&](const char* scene) {
+        char name[48];
+        dump_screen(scene);
+        for (const uint8_t rot : {1, 2, 3}) {
+            ui.set_rotation(rot, t); calm();
+            std::snprintf(name, sizeof name, "%s_rot%u", scene, unsigned(rot));
+            dump_screen(name);
+        }
+        ui.set_rotation(0, t); calm();
+    };
     ui.tick(t += 200); ui.tick(t += 200);
     calm();
     const auto& r = ui.charger_test_results();
     unsigned before = 0;
     for (const auto& s : r.steps()) before += result_layout::caution(s, r.sweep_view());
-    ct::Step* walk = nullptr;
-    for (size_t i = 0; i < r.steps().size() && !walk; ++i) {
+    ct::Step* row = nullptr;
+    for (size_t i = 0; i < r.steps().size() && !row; ++i) {
         auto& s = const_cast<ct::Step&>(r.steps()[i]);
-        if (s.group == ct::Group::Pd && (ct::kPpsAlgorithms & ct::bit(s.algorithm)) && !ct::is_sweep(s) && s.verdict == ct::Verdict::Pass &&
+        if (s.group == ct::Group::Pd && s.algorithm == algo && !ct::is_sweep(s) && s.verdict == ct::Verdict::Pass &&
             !result_layout::caution(s, r.sweep_view()))
-            walk = &s;
+            row = &s;
     }
-    CHECK_EQ(walk != nullptr, true);
-    if (!walk) return;
-    walk->reason = ct::Reason::StepResolution; walk->detail = 100;
+    CHECK_EQ(row != nullptr, true);
+    if (!row) return;
+    row->reason = reason; row->detail = detail;
     unsigned after = 0;
     for (const auto& s : r.steps()) after += result_layout::caution(s, r.sweep_view());
     CHECK_EQ(after, before + 1);
-    CHECK_EQ(int(walk->verdict), int(ct::Verdict::Pass));   // a caution, the levels passed
+    CHECK_EQ(int(row->verdict), int(ct::Verdict::Pass));   // a caution, the levels passed
     top(ui, t); calm();
     press(ui, Button::Ok); ui.tick(t += 100); calm();   // into a row and back: the Results grid is built again from the marked run
     press(ui, Button::Back); ui.tick(t += 100); calm();
     CHECK_EQ(ui.charger_test_stage(), 6);
     top(ui, t); calm();
-    const auto pps = pick_family(ui, "PPS");
-    CHECK_EQ(pps.line >= 0, true);
-    if (pps.line < 0) return;
-    CHECK_EQ(pps.tally.caution >= 1, true);
-    CHECK_EQ(pps.first_caution >= 0, true);
-    for (int k = 0; k < pps.line; ++k) { press(ui, Button::Plus); ui.tick(t += 100); calm(); }
+    const auto fam = pick_family(ui, label);
+    CHECK_EQ(fam.line >= 0, true);
+    if (fam.line < 0) return;
+    CHECK_EQ(fam.tally.caution >= 1, true);
+    CHECK_EQ(fam.first_caution >= 0, true);
+    for (int k = 0; k < fam.line; ++k) { press(ui, Button::Plus); ui.tick(t += 100); calm(); }
     press(ui, Button::Ok); ui.tick(t += 100); calm();
     CHECK_EQ(ui.charger_test_stage(), 7);
     top(ui, t); calm();
-    CHECK_EQ(footer_shows(result_layout::family_footer("PD", pps.tally).view(), kCaution), true);
-    for (int k = 0; k < pps.first_caution; ++k) { press(ui, Button::Plus); ui.tick(t += 100); calm(); }   // the focused row opens its note: "CAUTION: steps 100mV, not 20mV"
-    dump_screen("walk_steps");
+    CHECK_EQ(footer_shows(result_layout::family_footer("PD", fam.tally).view(), kCaution), true);
+    for (int k = 0; k < fam.first_caution; ++k) { press(ui, Button::Plus); ui.tick(t += 100); calm(); }   // the focused row opens its note
+    char scene[40];
+    std::snprintf(scene, sizeof scene, "%s_steps", tag);
+    all_rotations(scene);
     press(ui, Button::Ok); ui.tick(t += 100); calm();
     CHECK_EQ(ui.charger_test_stage(), 8);
-    CHECK_EQ(footer_shows("steps 100mV, not 20mV", kCaution), true);
-    dump_screen("walk_detail");
-    for (const uint8_t rot : {1, 2, 3}) {   // the note and the footer fit in every mapping (a cut fails the run)
-        ui.set_rotation(rot, t); calm();
-        ui.set_rotation(0, t); calm();
-    }
+    CHECK_EQ(footer_shows(footer_words, kCaution), true);
+    std::snprintf(scene, sizeof scene, "%s_detail", tag);
+    all_rotations(scene);
 }
-// A Deep transition check that found a spec limit broken (Reason::ProgCheck, flag bits in detail) is a caution on a finished PPS level
-// row: the family count, the focused row's note ("CAUTION: overshoot +1 PDO #n") and the Detail footer say it; never red, never a chip.
+// A step walk the source answered at a coarse quantum (a bank landing 100 mV for a +20 mV ask) is a caution on its range chip, never a
+// chip of its own and never red: the footer and the Detail footer carry "steps 100mV, not 20mV". An AVS row steps 100 mV, so 200 mV misses.
+static void test_a_step_walk_miss_reads_as_a_caution() {
+    caution_scene("PPS", ct::Algorithm::Pps, ct::Reason::StepResolution, 100, "walk", "steps 100mV, not 20mV");
+    caution_scene("AVS", ct::Algorithm::SprAvs, ct::Reason::StepResolution, 200, "avs_walk", "steps 200mV, not 100mV");
+}
+// A Deep transition check that found a spec limit broken (Reason::ProgCheck, flag bits in detail) is a caution on a finished PPS or AVS
+// level row: the family count, the focused row's note ("CAUTION: overshoot +1 PDO #n") and the Detail footer say it; never red, never a chip.
 static void test_a_transition_flag_reads_as_a_caution() {
-    six_pdo_fixture();
-    g_stub.vbus_ceiling_mv = 36000;
-    Ui ui; open(ui);
-    CHECK_EQ(ui.charger_test_set_units(kPdOnly), true);
-    ui.charger_test_set_sweep(true);
-    review(ui);
-    start_press(ui, 1300); press(ui, Button::Ok, 1400);
-    uint32_t t = 1500;
-    for (; t <= 900000 && ui.charger_test_busy(); t += 100) ui.tick(t);
-    CHECK_EQ(ui.charger_test_stage(), 6);
-    const auto calm = [&] {
-        for (int i = 0; i < 64 && ui.painting(); ++i) ui.tick(t += 100);
-        CHECK_EQ(ui.painting(), false);
-    };
-    ui.tick(t += 200); ui.tick(t += 200);
-    calm();
-    const auto& r = ui.charger_test_results();
-    unsigned before = 0;
-    for (const auto& s : r.steps()) before += result_layout::caution(s, r.sweep_view());
-    ct::Step* walk = nullptr;
-    for (size_t i = 0; i < r.steps().size() && !walk; ++i) {
-        auto& s = const_cast<ct::Step&>(r.steps()[i]);
-        if (s.group == ct::Group::Pd && (ct::kPpsAlgorithms & ct::bit(s.algorithm)) && !ct::is_sweep(s) && s.verdict == ct::Verdict::Pass &&
-            !result_layout::caution(s, r.sweep_view()))
-            walk = &s;
-    }
-    CHECK_EQ(walk != nullptr, true);
-    if (!walk) return;
-    walk->reason = ct::Reason::ProgCheck; walk->detail = 3;   // overshoot + slow rise
-    unsigned after = 0;
-    for (const auto& s : r.steps()) after += result_layout::caution(s, r.sweep_view());
-    CHECK_EQ(after, before + 1);
-    CHECK_EQ(int(walk->verdict), int(ct::Verdict::Pass));   // a caution, the levels passed
-    top(ui, t); calm();
-    press(ui, Button::Ok); ui.tick(t += 100); calm();   // into a row and back: the Results grid is built again from the marked run
-    press(ui, Button::Back); ui.tick(t += 100); calm();
-    CHECK_EQ(ui.charger_test_stage(), 6);
-    top(ui, t); calm();
-    const auto pps = pick_family(ui, "PPS");
-    CHECK_EQ(pps.line >= 0, true);
-    if (pps.line < 0) return;
-    CHECK_EQ(pps.tally.caution >= 1, true);
-    CHECK_EQ(pps.first_caution >= 0, true);
-    for (int k = 0; k < pps.line; ++k) { press(ui, Button::Plus); ui.tick(t += 100); calm(); }
-    press(ui, Button::Ok); ui.tick(t += 100); calm();
-    CHECK_EQ(ui.charger_test_stage(), 7);
-    top(ui, t); calm();
-    CHECK_EQ(footer_shows(result_layout::family_footer("PD", pps.tally).view(), kCaution), true);
-    for (int k = 0; k < pps.first_caution; ++k) { press(ui, Button::Plus); ui.tick(t += 100); calm(); }   // the focused row opens its note: "CAUTION: overshoot +1 PDO #n"
-    dump_screen("prog_steps");
-    press(ui, Button::Ok); ui.tick(t += 100); calm();
-    CHECK_EQ(ui.charger_test_stage(), 8);
-    CHECK_EQ(footer_shows("overshoot +1", kCaution), true);
-    dump_screen("prog_detail");
-    for (const uint8_t rot : {1, 2, 3}) {   // the note and the footer fit in every mapping (a cut fails the run)
-        ui.set_rotation(rot, t); calm();
-        ui.set_rotation(0, t); calm();
-    }
+    caution_scene("PPS", ct::Algorithm::Pps, ct::Reason::ProgCheck, 3, "prog", "overshoot +1");   // overshoot + slow rise
+    caution_scene("AVS", ct::Algorithm::SprAvs, ct::Reason::ProgCheck, 3, "avs_prog", "overshoot +1");
 }
 // A passing sweep that tracked worse than 100 mV is a caution as well (result_layout::deviates, user decision 2026-11-16): the header's
 // fourth cell, the Steps footer and the focused row's note count it, and the chip is amber, never red, so "0 fail" never sits over a
