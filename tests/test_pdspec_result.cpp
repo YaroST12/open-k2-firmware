@@ -45,6 +45,22 @@ void aggregate_keeps_the_worst() {
     CHECK_EQ(a.hi, 325000);
 }
 
+// An Accept from the ms fallback, 20 ms with a 5 ms bracket against 17 ms, passes on its bracket: it is kept at the limit, so the
+// worst never reads over a limit the verdict passed (hardware 2026-11-19); a clean 16 ms later is not worse than it.
+void a_pass_on_its_bracket_is_kept_at_its_limit() {
+    Agg a;
+    a.add(Kind::Max, {12000, 0, 0, 17000, 1, 1});
+    a.add(Kind::Max, {20000, 5000, 0, 17000, 2, 2});
+    CHECK_COND(a.verdict() == Verdict::Pass);
+    CHECK_EQ(a.worst, 17000);
+    CHECK_EQ(int(a.a), 2);
+    a.add(Kind::Max, {16000, 0, 0, 17000, 3, 3});
+    CHECK_EQ(int(a.a), 2);
+    a.add(Kind::Max, {23000, 5000, 0, 17000, 4, 4});   // over even at its low end
+    CHECK_COND(a.verdict() == Verdict::Fail);
+    CHECK_EQ(a.worst, 23000);
+}
+
 void score_is_weight_times_fails() {
     std::array<Agg, kChecks> agg{};
     CHECK_EQ(int(score(agg)), 0);
@@ -154,6 +170,7 @@ void blob_layout() {
 int main() {
     bracket_counts_in_the_measurements_favour();
     aggregate_keeps_the_worst();
+    a_pass_on_its_bracket_is_kept_at_its_limit();
     score_is_weight_times_fails();
     inferred_limits_are_unverified();
     defs_are_complete();

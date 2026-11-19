@@ -1643,22 +1643,26 @@ void epr_avs_stage_on_the_real_list() {
 }
 
 // The sink's edge stamps are lost now and then (another frame's interrupt took them) and the capture is busy: a PS_RDY that came is
-// timed from the sink's ms stamps, never read as "not seen".
+// timed from the sink's ms stamps, never read as "not seen"; an Accept timed by the ms fallback that passes only on its bracket is not
+// shown over its limit.
 void stamps_lost_without_a_capture() {
-    Sim m;
-    baseus140(m);
-    m.cap_busy = true;
-    m.no_psrdy_stamp = true;
-    Engine e(m);
-    CHECK_COND(e.start(0, bit(Family::Pps), kOptEprAvs) == StartResult::Ok);
-    drive(m, e, 3600000, [](std::uint32_t) {});
-    check_safe_end(m, e);
-    CHECK_COND(e.stop() == Stop::Done);
-    for (const Check c : {Check::AvsPsRdy, Check::PpsPsRdy}) {
-        const Agg& a = e.agg(c);
-        CHECK_COND(a.n > 0);
-        CHECK_EQ(int(a.fails), 0);
-        CHECK_COND(a.worst <= a.hi);
+    for (int k = 0; k < 2; ++k) {
+        Sim m;
+        baseus140(m);
+        m.cap_busy = true;
+        if (k == 0) m.no_psrdy_stamp = true;
+        else { m.no_accept_stamp = true; m.accept_ms = 20; }
+        Engine e(m);
+        CHECK_COND(e.start(0, bit(Family::Pps), kOptEprAvs) == StartResult::Ok);
+        drive(m, e, 3600000, [](std::uint32_t) {});
+        check_safe_end(m, e);
+        CHECK_COND(e.stop() == Stop::Done);
+        for (const Check c : {Check::AvsPsRdy, Check::PpsPsRdy, Check::AcceptTime}) {
+            const Agg& a = e.agg(c);
+            CHECK_COND(a.n > 0);
+            CHECK_EQ(int(a.fails), 0);
+            CHECK_COND(a.worst <= a.hi);
+        }
     }
 }
 

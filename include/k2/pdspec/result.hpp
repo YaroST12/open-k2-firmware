@@ -206,6 +206,13 @@ constexpr std::int32_t excess(Kind k, const Meas& m) {
     return over;
 }
 constexpr bool passes(Kind k, const Meas& m) { return excess(k, m) == 0; }
+// The value a measurement is kept as: one over its limit that passes on its bracket alone is kept at the limit, so a shown worst never
+// reads over a limit its verdict passed.
+constexpr Meas kept(Kind k, const Meas& m) {
+    Meas r = m;
+    if (k != Kind::Min && m.value > m.hi && excess(k, m) == 0) r.value = m.hi;
+    return r;
+}
 
 struct Agg {
     std::uint16_t n = 0, fails = 0;
@@ -216,8 +223,9 @@ struct Agg {
     bool worst_failed = false;       // the kept measurement failed (its rank is redone from worst/lo/hi: 20 bytes, RAM)
 
     // True when the measurement failed (the engine marks the transition's record with it).
-    bool add(Kind k, const Meas& m) {
-        const std::int32_t ex = excess(k, m);
+    bool add(Kind k, const Meas& in) {
+        const std::int32_t ex = excess(k, in);
+        const Meas m = kept(k, in);
         if (ex > 0) ++fails;
         // Among passing measurements the worst is the one closest to its limit. The kept one is ranked again from its stored value
         // without its sample bracket (not kept): a kept failure can only rank higher by less than its bracket, a kept pass ranks exactly.
