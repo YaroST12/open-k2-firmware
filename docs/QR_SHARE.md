@@ -152,8 +152,8 @@ K2's Results grid left to the range lines), then per range its APDO position u4,
 (level, timing, shape) and 11 slot verdicts u3 (`specsec::kApdoPps` / `kApdoAvs`; an AVS range's 3 unused slots read pending): 42 bits a
 range. A run with no range measured keeps form 27, the format 12 layout. The worst blob is 3811 bits = 479 B. Readers:
 `tools/report_card.py` (`spec.split`, `spec.ranges` with pos, kind, tone, word and cells), `docs/site/r/deep.js` (the same keys) and
-`card.js` (one "PPS PDO #5" row per range in "PD spec check", the split block's failures moved to it); a format 12 reader refuses the card
-as newer. Golden block: `tests/fixtures/deep_form28.hex` (`test_report_card_deep`).
+`card.js` (one "PPS PDO #5" row per range in "PD spec check", the split block's failures moved to it); a format 12 reader cannot read the card
+(a version '2' link fails its CRC there, a version '1' record reads as newer). Golden block: `tests/fixtures/deep_form28.hex` (`test_report_card_deep`).
  in the same ring record (a Deep record is about 672 to
   692 B: two per flash sector against seven for a plain card). The 12 newest blocks are kept; an older card is carried forward without
   its block (`maintain()`), and a save retries without the block when the ring is full, so a block never costs a card. The remote
