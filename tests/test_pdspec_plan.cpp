@@ -217,6 +217,28 @@ void avs_steps() {
     CHECK_EQ(int(measured_moves(make_sweep(window(9000, 20000, ProgKind::Avs), 2, false))), 22);
 }
 
+// prog_unify-b: a window the charger test swept gets a short cover in the stage: a few large steps up from the minimum and back (500 mV
+// PPS, 1 V AVS), then the resolution step at both ends (down onto the minimum, up onto the maximum), then the slams as before.
+std::vector<std::int32_t> mvs(const std::vector<Move>& v, bool measured) {
+    std::vector<std::int32_t> o;
+    for (const Move& m : v) o.push_back(m.measured == measured ? m.mv : -m.mv);
+    return o;
+}
+void cover_passes() {
+    using V = std::vector<std::int32_t>;
+    CHECK_COND(mvs(moves(make_cover_sweep(window(3300, 11000), 2)), true) == V({3800, 4300, 4800, 4300, 3800, 3300}));
+    CHECK_COND(mvs(moves(make_cover_sweep(window(3300, 11000), 0)), true) ==
+               V({-3400, 3380, 3360, 3340, 3320, 3300, -10900, 10920, 10940, 10960, 10980, 11000, -3300}));
+    CHECK_COND(mvs(moves(make_cover_sweep(window(9000, 20000, ProgKind::Avs), 2)), true) == V({10000, 11000, 12000, 11000, 10000, 9000}));
+    CHECK_COND(mvs(moves(make_cover_sweep(window(9000, 20000, ProgKind::Avs), 0)), true) ==
+               V({-9500, 9400, 9300, 9200, 9100, 9000, -19500, 19600, 19700, 19800, 19900, 20000, -9000}));
+    // A narrow window: the large steps stop at its maximum.
+    CHECK_COND(mvs(moves(make_cover_sweep(window(3300, 4300), 2)), true) == V({3800, 4300, 3800, 3300}));
+    CHECK_COND(mvs(moves(make_cover_sweep(window(3300, 11000), 3)), true) == V({11000, 3300}));
+    CHECK_EQ(int(moves(make_cover_sweep(window(3300, 11000), 1)).size()), 0);   // no middle step class in a cover
+    CHECK_EQ(int(cover_moves(window(3300, 11000))), 6 + 10 + 2);
+}
+
 // The family's measured moves: the time budget of a run is about this many capture windows.
 void family_moves() {
     const Levels L = scan(caps({fixed(5000), fixed(9000), fixed(12000), fixed(15000), fixed(20000), pps(3300, 11000)}), 36000, false);
@@ -239,5 +261,6 @@ int main() {
     twenty_mv_windows();
     avs_steps();
     family_moves();
+    cover_passes();
     return test_report("test_pdspec_plan");
 }

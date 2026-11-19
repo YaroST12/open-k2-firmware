@@ -307,16 +307,18 @@ constexpr RangeSpec range_spec(const Apdo& p) {
 constexpr const char* range_word(const RangeSpec& rs) { return rs.tone == RangeTone::Pass ? "spec" : rs.tone == RangeTone::None ? "-" : group_word(rs.group); }
 
 // The time the stage adds to a run's estimate, from the list (hardware, Anker IQ4: 12 transitions in 32 s, 248 programmable moves in
-// 80 s): the fixed walk, then per programmable window either its slams and status asks (the run's own sweep covered it) or the
+// 80 s): the fixed walk, then per programmable window either its cover, slams and status asks (the run's own sweep covered it) or the
 // engine's full passes (the engine runs at most pdspec::kMaxRunMs).
 inline constexpr std::uint32_t kTransitionMs = 2700, kProgMoveMs = 320, kCoveredWindowMs = 4000;
+// kCoveredWindowMs holds the two slams and the asks; the cover's other moves are kProgMoveMs each.
+inline std::uint32_t covered_window_ms(const sc::Prog& p) { return kCoveredWindowMs + (sc::cover_moves(p) - 2) * kProgMoveMs; }
 inline std::uint32_t estimate_ms(const sc::Levels& L, bool pps_swept, bool avs_swept) {
     std::uint32_t ms = std::uint32_t(L.n_fixed > 1 ? L.n_fixed * (L.n_fixed - 1) : 0) * kTransitionMs;
     for (std::size_t w = 0; w < L.n_prog; ++w) {
         const bool swept = L.prog[w].kind == sc::ProgKind::Avs ? avs_swept : pps_swept;
         std::uint32_t moves = 0;
         for (std::uint8_t c = 0; c < sc::kClasses && !swept; ++c) moves += sc::measured_moves(sc::make_sweep(L.prog[w], c, false));
-        ms += swept ? kCoveredWindowMs : moves * kProgMoveMs;
+        ms += swept ? covered_window_ms(L.prog[w]) : moves * kProgMoveMs;
     }
     return ms;
 }

@@ -1412,8 +1412,9 @@ void test_moves_land_in_the_aggregates() {
     CHECK_EQ(int(e.passes().size()), 0);
 }
 
-// A window the charger test swept (covered) runs only the slams and its Get_PPS_Status asks: the step classes are already judged.
-void covered_window_runs_the_slams_only() {
+// A window the charger test swept (covered) runs a short cover (the ends at 20 mV, three 500 mV steps up and back) and the slams, with
+// their Get_PPS_Status asks: the sweep's own steps are judged already, down-steps and the ends again here.
+void covered_window_runs_a_cover_and_the_slams() {
     Sim m;
     typical(m);
     Engine e(m);
@@ -1421,16 +1422,18 @@ void covered_window_runs_the_slams_only() {
     CHECK_COND(e.start(0, bit(Family::Pps), 0, std::uint8_t(1u << 5)) == StartResult::Ok);
     int items = 0;
     drive(m, e, 3600000, [&](std::uint32_t) { if (e.family() == Family::Pps) items = e.items(); });
-    CHECK_EQ(items, 1);
+    CHECK_EQ(items, int(kCoverPasses));
     check_safe_end(m, e);
     CHECK_COND(e.stop() == Stop::Done);
     CHECK_EQ(int(e.score()), 0);
-    CHECK_EQ(int(e.passes().size()), 1);
-    CHECK_EQ(int(e.passes()[0].cls), int(kSlam));
-    CHECK_EQ(int(e.agg(Check::PpsAccuracy).n), 1 + 2);
-    CHECK_EQ(int(e.agg(Check::PpsSettle).n), 0);
-    CHECK_COND(e.agg(Check::PpsSettle).skip == Skip::NoData);   // no walk handed over: the end of the run says so (finish)
-    CHECK_EQ(m.pps_asks, 2);
+    CHECK_EQ(int(e.passes().size()), 3);
+    CHECK_EQ(int(e.passes()[0].cls), 0);
+    CHECK_EQ(int(e.passes()[1].cls), 2);
+    CHECK_EQ(int(e.passes()[2].cls), int(kSlam));
+    CHECK_EQ(int(e.agg(Check::PpsAccuracy).n), 1 + 10 + 6 + 2);
+    CHECK_EQ(int(e.agg(Check::PpsSettle).n), 10);
+    CHECK_EQ(int(e.agg(Check::PpsBand).n), 1 + 6 + 2);
+    CHECK_EQ(m.pps_asks, 1 + 2 + 2);   // the ends pass has no top (it goes down first)
     CHECK_COND(verdict(e, Check::PpsStatus) == Verdict::Pass);
     // An uncovered window next to a covered one keeps its full passes.
     Sim m2;
@@ -1439,10 +1442,10 @@ void covered_window_runs_the_slams_only() {
     CHECK_COND(e2.start(0, bit(Family::Pps), 0, std::uint8_t(1u << 5)) == StartResult::Ok);
     int items2 = 0;
     drive(m2, e2, 3600000, [&](std::uint32_t) { if (e2.family() == Family::Pps) items2 = e2.items(); });
-    CHECK_EQ(items2, 1 + int(kClasses));
+    CHECK_EQ(items2, int(kCoverPasses) + int(kClasses));
     CHECK_COND(e2.stop() == Stop::Done);
     CHECK_EQ(int(e2.agg(Check::AvsAccuracy).n), 220 + 44 + 22 + 2);
-    CHECK_EQ(int(e2.agg(Check::PpsAccuracy).n), 2);
+    CHECK_EQ(int(e2.agg(Check::PpsAccuracy).n), 10 + 6 + 2);
 }
 
 // Env::on_apdo: every measurement of a programmable move (its Accept and the Get_PPS_Status asks included) is reported with its APDO
@@ -1544,7 +1547,7 @@ int main() {
     full_20mv_sweep_option();
     pps_ps_rdy_wire_allowance();
     test_moves_land_in_the_aggregates();
-    covered_window_runs_the_slams_only();
+    covered_window_runs_a_cover_and_the_slams();
     apdo_hook_reports_every_programmable_measurement();
     covered_run_time();
     return test_report("test_pdspec_engine");

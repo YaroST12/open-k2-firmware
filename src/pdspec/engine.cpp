@@ -191,9 +191,9 @@ void Engine::begin_family(std::uint32_t now) {
                 }
             if (L_.n_prog == 0) { next_family(); return; }
             items_ = 0;
-            for (w_ = 0; w_ < L_.n_prog; ++w_) items_ = static_cast<std::uint8_t>(items_ + (first_class() == kSlam ? 1 : kClasses));
+            for (w_ = 0; w_ < L_.n_prog; ++w_) items_ = static_cast<std::uint8_t>(items_ + (cover() ? kCoverPasses : kClasses));
             w_ = 0;
-            cls_ = first_class();
+            cls_ = 0;
             env_->on_item(fam_, 0, items_);
             go(prog().pos, static_cast<std::uint16_t>(prog().lo), After::PpsSteps, now);
             return;
@@ -471,7 +471,7 @@ const Prog& Engine::prog() const { return L_.prog[w_]; }
 
 void Engine::pass_begin(std::uint32_t now) {
     const Prog& p = prog();
-    sw_ = make_sweep(p, cls_, full20_);
+    sw_ = cover() ? make_cover_sweep(p, cls_) : make_sweep(p, cls_, full20_);
     have_pend_ = false;
     dir_ = 0;
     asked_top_ = false;
@@ -527,9 +527,10 @@ void Engine::pass_end(std::uint32_t now) {
     if (pass_raw()) ++n_pass_;
     ++item_;
     if (item_ < items_) env_->on_item(fam_, item_, items_);   // the next pass's number; none after the last
-    if (++cls_ < kClasses) { pass_begin(now); return; }   // the pass ended at the window's minimum: the next class starts there
+    if (++cls_ == 1 && cover()) ++cls_;                  // a cover has no middle class
+    if (cls_ < kClasses) { pass_begin(now); return; }    // the pass ended at the window's minimum: the next class starts there
     cls_ = 0;
-    if (++w_ < L_.n_prog) { cls_ = first_class(); go(prog().pos, static_cast<std::uint16_t>(prog().lo), After::PpsSteps, now); return; }
+    if (++w_ < L_.n_prog) { go(prog().pos, static_cast<std::uint16_t>(prog().lo), After::PpsSteps, now); return; }
     restore(now);
 }
 

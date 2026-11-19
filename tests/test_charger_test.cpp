@@ -8548,12 +8548,19 @@ static void test_spec_preview_counts_the_stage() {
     const pdspec::Levels L = pdspec::scan(f.caps, f.in.cap_mv, false);
     CHECK_EQ(unsigned(L.n_prog), 3u);
     const uint32_t swept = specsec::estimate_ms(L, true, true);
-    CHECK_EQ(swept, uint32_t(L.n_fixed * (L.n_fixed - 1)) * specsec::kTransitionMs + 3 * specsec::kCoveredWindowMs);
+    // prog_unify-b: a swept window adds its cover's moves (the slams and asks stay in kCoveredWindowMs).
+    CHECK_EQ(specsec::covered_window_ms(L.prog[0]), specsec::kCoveredWindowMs + (pdspec::cover_moves(L.prog[0]) - 2) * specsec::kProgMoveMs);
+    uint32_t covers = 0, pps_covers = 0;
+    for (size_t w = 0; w < L.n_prog; ++w) {
+        covers += specsec::covered_window_ms(L.prog[w]);
+        if (L.prog[w].kind == pdspec::ProgKind::Pps) pps_covers += specsec::covered_window_ms(L.prog[w]);
+    }
+    CHECK_EQ(swept, uint32_t(L.n_fixed * (L.n_fixed - 1)) * specsec::kTransitionMs + covers);
     pdspec::Levels pps = L;   // the two PPS windows alone
     pps.n_prog = 0;
     for (size_t w = 0; w < L.n_prog; ++w) if (L.prog[w].kind == pdspec::ProgKind::Pps) pps.prog[pps.n_prog++] = L.prog[w];
     CHECK_EQ(unsigned(pps.n_prog), 2u);
-    CHECK_EQ(specsec::estimate_ms(L, false, true), swept - 2 * specsec::kCoveredWindowMs + pdspec::family_moves(pps, false) * specsec::kProgMoveMs);
+    CHECK_EQ(specsec::estimate_ms(L, false, true), swept - pps_covers + pdspec::family_moves(pps, false) * specsec::kProgMoveMs);
     CHECK_EQ(pv(ct::Level::Deep).estimate_ms, plain.estimate_ms + (specsec::kBuilt ? swept : 0));
 }
 // A Light run resumed after a power loss is replanned Light (the level rides in the journal meta) and still asks only 5 V.

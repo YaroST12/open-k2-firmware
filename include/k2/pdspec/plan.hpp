@@ -26,6 +26,8 @@ inline constexpr std::size_t kMaxProg = 4;                        // programmabl
 inline constexpr std::size_t kClasses = 4;                        // per window: three step sizes, then the slams
 inline constexpr std::uint8_t kSlam = 3;                          // the class of the slams
 inline constexpr std::uint8_t kWindowSteps = 10;                  // a 20 mV window: this many steps up, as many down
+inline constexpr std::uint8_t kCoverSteps = 3;                    // a covered window's cover: large steps up from the minimum, then back
+inline constexpr std::uint8_t kCoverEndSteps = 5;                 // ... and resolution steps onto each end
 inline constexpr std::int32_t kMinSpanMv = 1000;                  // a window narrower than this is not swept
 // The floor of a window: none on a K2 powered from the computer (the run refuses a K2 powered by the charger under test, and the
 // passive detach rule only fires under 3.0 V, under every SPR PPS minimum). A caller that has to keep its own rail passes 5000.
@@ -179,6 +181,13 @@ public:
     Sweep() = default;
     Sweep(std::int32_t lo, std::int32_t hi, std::int32_t step, bool windows)
         : lo_(lo), hi_(hi), step_(step), cur_(lo), windows_(windows), half_(0) {}
+    // The cover's resolution pass (make_cover_sweep): kCoverEndSteps down onto the minimum, as many up onto the maximum, then back to
+    // the minimum (the moves onto each start are not measured).
+    static Sweep ends(std::int32_t lo, std::int32_t hi, std::int32_t step) {
+        Sweep s(lo, hi, step, false);
+        s.ends_ = true;
+        return s;
+    }
     // half(): 0 while the moves go up, 1 once they come down, 2 when the pass is over.
     std::uint8_t half() const { return half_; }
     bool next(Move& m) {
@@ -186,6 +195,22 @@ public:
             if (half_ >= 2) return false;
             m = {half_ == 0 ? hi_ : lo_, true};
             ++half_;
+            return true;
+        }
+        if (ends_) {
+            while (half_ < 2) {
+                const std::int32_t start = half_ == 0 ? lo_ + kCoverEndSteps * step_ : hi_ - kCoverEndSteps * step_;
+                if (k_ == 0) {
+                    ++k_;
+                    if (cur_ != start) { cur_ = start; m = {cur_, false}; return true; }
+                }
+                if (k_ <= kCoverEndSteps) { ++k_; cur_ += half_ == 0 ? -step_ : step_; m = {cur_, true}; return true; }
+                half_ = static_cast<std::uint8_t>(half_ + 1);
+                k_ = 0;
+            }
+            if (cur_ == lo_) return false;
+            cur_ = lo_;
+            m = {cur_, false};
             return true;
         }
         if (!windows_) {
@@ -213,7 +238,7 @@ public:
 
 private:
     std::int32_t lo_ = 0, hi_ = 0, step_ = 0, cur_ = 0;
-    bool windows_ = false;
+    bool windows_ = false, ends_ = false;
     std::uint8_t half_ = 2, win_ = 0, k_ = 0;
 };
 
@@ -225,11 +250,28 @@ inline Sweep make_sweep(const Prog& p, std::uint8_t cls, bool full20) {
     return Sweep(p.lo, p.hi, step, windows);
 }
 
+// The passes of a window the charger test swept already (its moves judged into the engine): class 2 = kCoverSteps large steps up from
+// the minimum and back, class 0 = the ends, class 1 = nothing, the slams as in make_sweep. Down-steps and the ends are judged again.
+static_assert(2 * kCoverEndSteps * 100 <= kMinSpanMv, "the AVS ends fit in the narrowest window");
+inline constexpr std::uint8_t kCoverPasses = 3;   // classes 0, 2 and the slams
+inline Sweep make_cover_sweep(const Prog& p, std::uint8_t cls) {
+    const std::int32_t step = step_mv(p.kind, cls);
+    if (cls == 0) return Sweep::ends(p.lo, p.hi, step);
+    if (cls == 1) return Sweep{};
+    if (cls == 2) return Sweep(p.lo, p.lo + kCoverSteps * step < p.hi ? p.lo + kCoverSteps * step : p.hi, step, false);
+    return make_sweep(p, cls, false);
+}
+
 // How many measured moves a pass / the whole family makes: a run's time budget is about this many capture windows.
 inline std::uint32_t measured_moves(Sweep s) {
     std::uint32_t n = 0;
     Move m;
     while (s.next(m)) n += m.measured;
+    return n;
+}
+inline std::uint32_t cover_moves(const Prog& p) {
+    std::uint32_t n = 0;
+    for (std::uint8_t c = 0; c < kClasses; ++c) n += measured_moves(make_cover_sweep(p, c));
     return n;
 }
 inline std::uint32_t family_moves(const Levels& L, bool full20) {

@@ -12,7 +12,8 @@
 //   Pps          the programmable sweep (PPS APDOs, then the SPR AVS APDO; plan.hpp Sweep): per window steps of 20 / 100 / 500 mV
 //                (AVS 100 / 500 / 1000 mV) up to the maximum and back, then the two slams. Monotonic, accuracy, in band and
 //                PS_RDY within tPpsSrcTrans* / tAvsSrcTrans*, overshoot (vPpsValid / vAvsValid), transient; Get_PPS_Status at the
-//                top and the end of every PPS pass.
+//                top and the end of every PPS pass. A window the Deep charger test swept itself runs a short cover instead
+//                (plan.hpp make_cover_sweep: three large steps up and back, the resolution steps onto both ends), then the slams.
 //   PpsKeepAlive a PPS contract with the sink's keep-alive silenced: when does the source Hard Reset.
 //   EprKeepAlive the same in EPR mode (needs EPR and the cable proof).
 //   HardReset    the K2 Hard Resets the top fixed level: VBUS to vSafe0V, off time, turn-on, first capabilities.
@@ -210,7 +211,7 @@ public:
 
     // families: a bit per Family (1 << Family), 0 = all of them. The ones left out read "not selected". opts: kOptFull20 sweeps the
     // whole window at 20 mV (else three 10-step windows). covered: a bit per APDO position whose steps the charger test already handed
-    // in (judge_test_move): such a window runs only its slams and status asks.
+    // in (judge_test_move): such a window runs a short cover (plan.hpp make_cover_sweep) and its slams, with their status asks.
     StartResult start(std::uint32_t now_ms, std::uint8_t families = 0, std::uint8_t opts = 0, std::uint8_t covered = 0);
     // One programmable move of a Deep charger-test run, captured and analyzed by the caller, judged into the aggregates before start().
     // chain: the move followed a judged move of the same walk, whose level is its monotonic reference.
@@ -293,7 +294,7 @@ private:
     void detach_gap(const Snapshot& s, std::uint32_t now);
     void recover(const Snapshot& s, std::uint32_t now);
     const Prog& prog() const;
-    std::uint8_t first_class() const { return covered_ >> prog().pos & 1 ? kSlam : 0; }
+    bool cover() const { return covered_ >> prog().pos & 1; }
     void pass_begin(std::uint32_t now);
     void prog_next(std::uint32_t now);
     void pass_end(std::uint32_t now);
