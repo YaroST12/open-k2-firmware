@@ -67,6 +67,7 @@ Hook volatile g_hook;
 volatile bool g_hook_storm;
 bool g_hook_owned;
 bool g_hook_recorded;         // the recorder was armed for this claim
+std::uint32_t g_buf_gen;      // bumped whenever arm* takes g_buf (invalidates hook_tail)
 
 constexpr std::uint32_t kLines = (1u << 7) | (1u << 2);   // EXTI7 = PA7 (D+), EXTI2 = PB2 (D-)
 
@@ -167,6 +168,7 @@ ArmResult arm() {
         K2LOG("[SNIFF] refused: the shared RAM belongs to the USB drive or net function; switch the drive off in Tools > USB link and replug\n");
         return ArmResult::NoRam;
     }
+    g_buf_gen++;
     g_rec.init(g_buf, kCapacity);
     g_sess.arm(systick::millis());
     dpdm::set_dp(dpdm::Drive::Sniff);
@@ -186,6 +188,7 @@ ArmResult arm_stream() {
         K2LOG("[SNIFF] refused: the shared RAM belongs to the USB drive or net function\n");
         return ArmResult::NoRam;
     }
+    g_buf_gen++;
     g_ring.init(g_buf, kCapacity);
     g_stream_idx = 0;
     g_stream_bytes = 0;
@@ -206,6 +209,7 @@ ArmResult arm_stream() {
 ArmResult arm_synth(std::uint32_t rate) {
     if (g_hook_owned || g_status.state != State::Idle) return ArmResult::Busy;
     if (!mode_ram::claim(mode_ram::Tenant::Sniff)) return ArmResult::NoRam;
+    g_buf_gen++;
     g_ring.init(g_buf, kCapacity);
     g_stream_idx = 0;
     g_stream_bytes = 0;
@@ -308,7 +312,7 @@ void hook_listen(Hook h) {
     dpdm::set_dm(dpdm::Drive::Sniff);
     if (!g_hook_recorded) {   // the first listen of the claim records the session (the wake burst stays out of it)
         g_hook_recorded = true;
-        g_rec.init(g_buf, kCapacity);
+        g_rec.init(g_buf, kHookCapacity);
         g_sess.arm(systick::millis());
         g_arm_us = systick::micros();
         g_arm_cycles = dpdm::cycles();
@@ -345,6 +349,11 @@ void hook_end() {
 bool hooked() { return g_hook_owned; }
 bool hook_storm() { return g_hook_storm; }
 std::uint32_t line_word() { return edges::pack(dpdm::cycles(), pins::dp_dm_sw2.read(), pins::sw_pa7.read()); }
+std::span<std::uint8_t> hook_tail(std::uint32_t& gen) {
+    gen = g_buf_gen;
+    return {reinterpret_cast<std::uint8_t*>(g_buf + kHookCapacity), kHookTailBytes};
+}
+std::uint32_t hook_buf_gen() { return g_buf_gen; }
 
 // ---- inline VOOC monitor ----
 

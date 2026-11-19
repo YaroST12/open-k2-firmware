@@ -106,6 +106,9 @@ vooc::Live monitor_live();        // the screen's view (vooc::live_of), interrup
 //   hook_end()    hook off, the recording ends and is stored, EXTI off. The lines are the caller's to put back.
 //   hook_storm()  the edge-storm guard tripped since the last hook_listen() (the ISR masked the lines).
 //   line_word()   the current levels as an edge word (edges::pack of now, D-, D+).
+inline constexpr std::size_t kHookTailBytes = 4352;
+inline constexpr std::size_t kHookCapacity = kCapacity - kHookTailBytes / sizeof(std::uint32_t);
+
 using Hook = void (*)(std::uint32_t word);
 ArmResult hook_claim();
 void hook_listen(Hook h);
@@ -114,5 +117,9 @@ void hook_end();
 bool hooked();
 bool hook_storm();
 std::uint32_t line_word();
+// Tail of the sniffer edge buffer reserved for the hook owner while hook_claim() holds, valid until the next
+// arm() / arm_stream() / arm_synth() (which bumps hook_buf_gen()).
+std::span<std::uint8_t> hook_tail(std::uint32_t& gen);
+std::uint32_t hook_buf_gen();
 
 }  // namespace k2::dpsniff

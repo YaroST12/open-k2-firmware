@@ -30,7 +30,19 @@ using svooc::Next;
 
 alignas(svooc::Run) std::uint8_t g_run_raw[sizeof(svooc::Run)];
 bool g_run_inited;
-alignas(svooc::Wire) std::uint8_t g_wire_raw[sizeof(svooc::Wire)];   // fed by the ISR; main loop reaches it with interrupts masked
+#ifdef K2_WORLD_SVOOC
+alignas(svooc::Wire) std::uint8_t g_wire_raw[sizeof(svooc::Wire)];
+std::array<std::uint16_t, svooc::kLogPairs> g_pair_vbus{};
+std::uint8_t* g_wire_base = g_wire_raw;
+std::uint16_t* g_vbus_base = g_pair_vbus.data();
+#else
+static_assert(alignof(svooc::Wire) <= sizeof(std::uint32_t));
+static_assert(sizeof(svooc::Wire) % sizeof(std::uint16_t) == 0);
+static_assert(sizeof(svooc::Wire) + svooc::kLogPairs * sizeof(std::uint16_t) <= dpsniff::kHookTailBytes);
+std::uint8_t* g_wire_base;
+std::uint16_t* g_vbus_base;
+std::uint32_t g_wire_gen;
+#endif
 bool g_wire_inited;
 bool g_exit_pending;
 std::uint32_t g_wake_ms;   // systick ms of the latest wake (the wire's log clock starts there)
@@ -44,12 +56,22 @@ svooc::Run& run_obj() {
     return *std::launder(reinterpret_cast<svooc::Run*>(g_run_raw));
 }
 
+bool wire_valid() {
+#ifdef K2_WORLD_SVOOC
+    return g_wire_inited;
+#else
+    return g_wire_inited && g_wire_gen == dpsniff::hook_buf_gen();
+#endif
+}
+
 svooc::Wire& wire() {
+#ifdef K2_WORLD_SVOOC
     if (!g_wire_inited) {
         new (g_wire_raw) svooc::Wire();
         g_wire_inited = true;
     }
-    return *std::launder(reinterpret_cast<svooc::Wire*>(g_wire_raw));
+#endif
+    return *std::launder(reinterpret_cast<svooc::Wire*>(g_wire_base));
 }
 
 // The run owns VBUS: the adapter raises it outside PD while the K2 keeps its own 5 V contract silent, as a phone does. The sink
@@ -141,11 +163,10 @@ unsigned lines_owners() {
 
 // VBUS (monitor sample) when each logged pair closed, parallel to the wire's pair list; 0 = no sample. The wire counts
 // pairs in the ISR, so the main loop stamps the new ones on its next pass (poll, and once more at the release).
-std::array<std::uint16_t, svooc::kLogPairs> g_pair_vbus{};
 std::size_t g_pair_vbus_n = 0;
 
 void stamp_pair_vbus() {
-    if (!g_wire_inited) return;
+    if (!wire_valid()) return;
     std::size_t n;
     {
         Critical cs;
@@ -154,7 +175,7 @@ void stamp_pair_vbus() {
     if (g_pair_vbus_n >= n) return;
     const auto v = power::vbus_fast_mv();
     const std::uint16_t mv = v && *v > 0 ? std::uint16_t(*v > 0xFFFF ? 0xFFFF : *v) : std::uint16_t(0);
-    while (g_pair_vbus_n < n && g_pair_vbus_n < g_pair_vbus.size()) g_pair_vbus[g_pair_vbus_n++] = mv;
+    while (g_pair_vbus_n < n && g_pair_vbus_n < svooc::kLogPairs) g_vbus_base[g_pair_vbus_n++] = mv;
 }
 
 struct Live {
@@ -206,7 +227,9 @@ void wake() {
         wire().begin(dpsniff::line_word());
         g_pair_vbus_n = 0;   // the list restarts with the wire
         g_timer_live = true;
-        g_rel_timer = g_rel_loop = g_rel_edge = 0;
+        g_rel_timer = 0;
+        g_rel_loop = 0;
+        g_rel_edge = 0;
         stage::meter.reset(dpdm::cycles(), systick::millis());   // the stall diag counts from the wake
         g_wake_ms = systick::millis();
     }
@@ -298,6 +321,13 @@ svooc::Refusal start(bool confirmed, bool ports_busy, std::uint32_t cap_s, bool 
     own_vbus(true);
     {
         Critical cs;
+#ifndef K2_WORLD_SVOOC
+        const auto tail = dpsniff::hook_tail(g_wire_gen);
+        g_wire_base = tail.data();
+        g_vbus_base = reinterpret_cast<std::uint16_t*>(g_wire_base + sizeof(svooc::Wire));
+        new (g_wire_base) svooc::Wire();
+        g_wire_inited = true;
+#endif
         // The last run's wire is stopped (release() stops it) and holds its log: a fresh one now, so the status shows
         // nothing of it before the wake re-begins the wire (svooc::Run ignores the wire's facts until then too).
         wire().begin(dpsniff::line_word());
@@ -379,8 +409,11 @@ bool lines_held() { return g_run_inited && run_obj().lines_held(); }
 
 Snapshot snapshot() {
     Snapshot s;
-    s.stage = run_obj().stage();
-    s.report = run_obj().report();
+    if (g_run_inited) {
+        s.stage = run_obj().stage();
+        s.report = run_obj().report();
+    }
+    if (!wire_valid()) return s;
     Critical cs;
     s.phase = wire().responder().phase();
     s.off_run = wire().responder().off_run();
@@ -408,13 +441,13 @@ Snapshot snapshot() {
 }
 
 std::size_t read_pairs(std::uint16_t from, std::span<svooc::PairRow> out) {
-    if (!g_wire_inited) return 0;
+    if (!wire_valid()) return 0;
     Critical cs;
     const std::size_t n = wire().log().n;
     std::size_t k = 0;
     for (; k < out.size() && from + k < n; ++k) {
         const svooc::LogPair& p = wire().pair(from + k);
-        out[k] = {p.cmd, p.word, p.t_ms, from + k < g_pair_vbus_n ? g_pair_vbus[from + k] : std::uint16_t(0)};
+        out[k] = {p.cmd, p.word, p.t_ms, from + k < g_pair_vbus_n ? g_vbus_base[from + k] : std::uint16_t(0)};
     }
     return k;
 }
