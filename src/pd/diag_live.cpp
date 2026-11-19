@@ -8,11 +8,14 @@
 #include <cstring>
 #include <new>
 
+#include "k2/core/build_config.h"
 #include "k2/core/storage.hpp"
 #include "k2/drivers/power_monitor.hpp"
 #include "k2/drivers/systick.hpp"
 #include "k2/pd/pdtrace.hpp"
+#if K2_TWIN
 #include "k2/twin/twin.hpp"
+#endif
 
 namespace k2::pd::diag::live {
 
@@ -33,12 +36,14 @@ Analyzer& an() {
     return *std::launder(reinterpret_cast<Analyzer*>(g_an_raw));
 }
 
+#if K2_TWIN
 // The device twin matched to the shown session's sink identity, looked up once per (session, identity).
 twin::Twin g_twin;
 TwinHint g_hint;
 bool g_hint_ok;
 bool g_twin_key_valid;
 std::uint16_t g_twin_key_n, g_twin_vid, g_twin_pid;
+#endif
 
 std::uint32_t g_cursor;
 bool g_have_cursor;
@@ -61,6 +66,10 @@ std::uint16_t clamp16(std::int32_t v) { return std::uint16_t(std::clamp<std::int
 std::int16_t clamp_s16(std::int32_t v) { return std::int16_t(std::clamp<std::int32_t>(v, -32768, 32767)); }
 
 const TwinHint* match_twin(const Session& s) {
+#if !K2_TWIN
+    (void)s;
+    return nullptr;
+#else
     if (s.snk_vid == 0) return nullptr;
     const std::uint16_t finished = an().finished();
     if (g_twin_key_valid && g_twin_key_n == finished && g_twin_vid == s.snk_vid && g_twin_pid == s.snk_pid)
@@ -84,6 +93,7 @@ const TwinHint* match_twin(const Session& s) {
         g_hint_ok = true;
     }
     return g_hint_ok ? &g_hint : nullptr;
+#endif
 }
 
 }  // namespace

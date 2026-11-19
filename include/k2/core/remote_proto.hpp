@@ -2600,7 +2600,7 @@ template <Backend B>
     }
     case Cmd::Twin: {
 #if !K2_TWIN
-        return reply_err(f, Status::UnknownCmd);
+        return reply_status(f, Status::UnknownCmd);
 #else
         bool writes = false;
         const Status vst = validate_twin(p, writes);
