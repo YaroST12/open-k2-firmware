@@ -1275,20 +1275,20 @@ static void test_depth_row_cycles_and_shows_on_review() {
     press(ui, Button::Minus); settle(ui);
     CHECK_EQ(ui.charger_test_cursor(), kDepthRow);
     check_row_text(kDepthRow, "Depth", kText, kFocusT, kDepthRow, 150);
-    check_row_note(kDepthRow, "Medium: levels, no sweeps");
+    check_row_note(kDepthRow, "Tests each advertised voltage");
     const unsigned medium = ui.charger_test_view().preview.runnable;
     CHECK_EQ(ui.charger_test_selection() >> 28, 0u);
     // OK on Depth cycles Medium -> Deep -> Light -> Medium (stays on Tests).
     press(ui, Button::Ok); settle(ui);
     CHECK_EQ(ui.charger_test_stage(), 0); CHECK_EQ(ui.charger_test_cursor(), kDepthRow);
     CHECK_EQ(ui.charger_test_selection() >> 28, 0xEu);                             // Deep: both sweeps, level 2
-    check_row_note(kDepthRow, "Deep: + sweeps, steps, spec");
+    check_row_note(kDepthRow, "Sweeps, accuracy & PD spec");
     const unsigned deep = ui.charger_test_view().preview.runnable;
     CHECK_EQ(unsigned(ui.charger_test_view().preview.spec_checks), unsigned(specsec::kCells));
     CHECK_EQ(unsigned(ui.charger_test_view().preview.total) >= deep, true);
     press(ui, Button::Ok); settle(ui);
     CHECK_EQ(ui.charger_test_selection() >> 28, 0x1u);                             // Light
-    check_row_note(kDepthRow, "Light: lists offers at 5V");
+    check_row_note(kDepthRow, "Checks charger offers at 5V");
     const unsigned light = ui.charger_test_view().preview.runnable;
     CHECK_EQ(unsigned(ui.charger_test_view().preview.spec_checks), 0u);
     std::printf("[tests-depth] runnable: Light %u, Medium %u, Deep %u\n", light, medium, deep);

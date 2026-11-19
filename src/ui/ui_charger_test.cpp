@@ -97,8 +97,8 @@ constexpr int level_segment(ct::Level l) { return l == ct::Level::Light ? 0 : l 
 static_assert(level_segment(ct::next_level(ct::Level::Light)) == 1 && level_segment(ct::next_level(ct::Level::Medium)) == 2 &&
               level_segment(ct::next_level(ct::Level::Deep)) == 0, "OK steps the level to the right and wraps");
 static_assert(all_fit(kLevelItems, kSmallAdvPx, 18 * kSmallAdvPx), "a Level word is wider than its value cell");
-constexpr const char *kLevelNotes[ct::kLevelCount] = {"Medium: levels, no sweeps", "Light: lists offers at 5V",
-                                                       specsec::kBuilt ? "Deep: + sweeps, steps, spec" : "Deep: + sweeps and steps"};
+constexpr const char *kLevelNotes[ct::kLevelCount] = {"Tests each advertised voltage", "Checks charger offers at 5V",
+                                                       specsec::kBuilt ? "Sweeps, accuracy & PD spec" : "Sweeps & voltage accuracy"};
 static_assert(all_fit(kLevelNotes, kLabelAdv, kit::kNoteMaxPx), "a level note is wider than the row note");
 const char *level_note(ct::Level l) { return kLevelNotes[unsigned(l) < ct::kLevelCount ? unsigned(l) : 0]; }
 // A row whose engine times its own pulses stops the screen for the length of the handshake (the engine window the LCD idle hook
