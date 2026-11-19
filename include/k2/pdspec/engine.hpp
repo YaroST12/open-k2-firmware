@@ -222,6 +222,7 @@ public:
     Family family() const { return fam_; }
     std::uint8_t item() const { return item_; }
     std::uint8_t items() const { return items_; }
+    std::uint8_t covered() const { return covered_; }
     std::uint32_t elapsed_ms(std::uint32_t now_ms) const { return running_ ? now_ms - t0_ : end_ms_ - t0_; }
     const std::array<Agg, kChecks>& agg() const { return agg_; }
     const Agg& agg(Check c) const { return agg_[static_cast<std::size_t>(c)]; }

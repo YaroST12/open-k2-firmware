@@ -174,11 +174,75 @@ sc::StartResult PdSpecSession::start(std::uint8_t families, std::uint32_t now_ms
     return r;
 }
 
-sc::StartResult PdSpecSession::start_in_test(std::uint32_t now_ms) {
-    return start_run(specsec::kFamilyMask, now_ms, 0, true);
+sc::StartResult PdSpecSession::start_in_test(std::uint32_t now_ms, std::uint32_t run_id) {
+    const bool fed = run_id && run_id == fed_run_ && engine_ && test_run_ && !started();
+    return start_run(specsec::kFamilyMask, now_ms, 0, true, fed ? covered_ : 0, fed);
 }
 
-sc::StartResult PdSpecSession::start_run(std::uint8_t families, std::uint32_t now_ms, std::uint8_t opts, bool in_test) {
+// ---- the Deep run's own moves (prog_unify) ---------------------------------------------------------------------------------------------
+
+namespace {
+constexpr std::uint32_t kFeedWaitMs = 200;           // a freeze is one recorder sample away
+constexpr std::uint32_t kStampMatchUs = 20000;       // the sink's stamps are this capture's exchange (a keep-alive is seconds off)
+}  // namespace
+
+bool PdSpecSession::test_move(std::uint32_t run_id, const sc::ProgMove& mv, std::uint8_t flags, std::uint32_t now_ms) {
+    if (running() || feed_.pending || mv.pos >= sw_off_.size()) return false;
+    if (!engine_ || !test_run_ || fed_run_ != run_id || started()) {
+        pool_ = {};
+        engine_.emplace(static_cast<sc::Env&>(*this));
+        test_run_ = true;
+        fed_run_ = run_id;
+        covered_ = 0;
+        sw_off_ = {};
+        sw_ok_ = {};
+        feed_ = {};
+    }
+    feed_.mv = mv;
+    feed_.flags = flags;
+    feed_.t = now_ms;
+    // A range row's capture froze in its hold and stays the row's (it may keep it); a sweep or walk step's is still recording.
+    const transcap::State st = transcap::status().state;
+    if (mv.cls == sc::kSlam && st == transcap::State::Frozen) feed_.release = false;
+    else if (mv.cls != sc::kSlam && st == transcap::State::Armed && transcap::trigger(transcap::Reason::Manual, 1)) feed_.release = true;
+    else { feed_note(false); return false; }
+    feed_.pending = true;
+    return true;
+}
+
+void PdSpecSession::feed_take(std::uint32_t now_ms) {
+    const transcap::Rec* r = transcap::frozen();
+    if (!r) {
+        if (now_ms - feed_.t >= kFeedWaitMs) feed_note(false);
+        return;
+    }
+    bool judged = false;
+    const sc::Edges e = r->sample_count() > 1 ? sc::find_edges(*r, r->sample(0).t_us) : sc::Edges{};
+    if (e.accept) {
+        const sc::StepOut o = sc::analyze_step(*r, {e.accept_us, feed_.mv.from_mv, feed_.mv.to_mv});
+        sc::Snapshot s = snapshot();
+        if (!(s.accept_us & 1) || s.accept_us - e.accept_us + kStampMatchUs > 2 * kStampMatchUs) s.req_us = s.accept_us = s.ps_rdy_us = 0;
+        engine_->judge_test_move(feed_.mv, (feed_.flags & sc::kMoveChain) && feed_.last_ok, e, o, s);
+        judged = o.valid;
+    }
+    if (feed_.release) transcap::release_unkept();
+    feed_note(judged);
+}
+
+// The move is over (judged or not): the chain and the sweep's coverage follow it.
+void PdSpecSession::feed_note(bool judged) {
+    feed_.pending = false;
+    feed_.last_ok = judged;
+    const std::uint8_t p = feed_.mv.pos;
+    if (!(feed_.flags & sc::kMoveSweep)) return;
+    if (sw_off_[p] < 0xFF) { ++sw_off_[p]; if (judged) ++sw_ok_[p]; }
+    if (!(feed_.flags & sc::kMoveLast)) return;
+    if (sw_ok_[p] * 4u >= sw_off_[p] * 3u) covered_ = static_cast<std::uint8_t>(covered_ | 1u << p);
+    sw_off_[p] = sw_ok_[p] = 0;
+}
+
+sc::StartResult PdSpecSession::start_run(std::uint8_t families, std::uint32_t now_ms, std::uint8_t opts, bool in_test, std::uint8_t covered,
+                                         bool keep) {
     if (running()) return sc::StartResult::Running;
     if (!ctx_.pm_online) return sc::StartResult::NoMonitor;
     // Refuse before the previous result is replaced: the engine's own checks come after the emplace.
@@ -196,12 +260,14 @@ sc::StartResult PdSpecSession::start_run(std::uint8_t families, std::uint32_t no
         if (!rec.empty()) pool = {reinterpret_cast<std::uint8_t*>(rec.data()), std::min(rec.size_bytes(), sc::kPoolBytes)};
     }
     pool_ = pool;
-    engine_.emplace(static_cast<sc::Env&>(*this));
+    if (!keep) engine_.emplace(static_cast<sc::Env&>(*this));
     test_run_ = in_test;
+    fed_run_ = 0;
+    feed_.pending = false;
     cancel_asked_ = false;
     captured_ = false;
     rd_away_ = false;
-    const sc::StartResult r = engine_->start(now_ms, families, opts);
+    const sc::StartResult r = engine_->start(now_ms, families, opts, covered);
     if (r != sc::StartResult::Ok) {
         K2LOG("[PDSPEC] start refused: %s\n", sc::start_name(r));
         engine_.reset();
@@ -243,6 +309,7 @@ void PdSpecSession::yield_record() {
 }
 
 void PdSpecSession::poll(std::uint32_t now_ms) {
+    if (feed_.pending) feed_take(now_ms);
     if (engine_ && !test_run_ && !engine_->running() && (ctx_.ui->charger_test_busy() || ctx_.ui->pdstress_active())) yield_record();
     if (running()) {
         if (!ctx_.pm_online || loopguard::locked()) cancel();   // no VBUS to judge by / the HID-cable loop 5 V lock
@@ -255,13 +322,13 @@ void PdSpecSession::poll(std::uint32_t now_ms) {
 // ---- result --------------------------------------------------------------------------------------------------------------------------
 
 std::uint16_t PdSpecSession::blob_len() const {
-    return engine_ ? static_cast<std::uint16_t>(sc::blob_len(engine_->trans().size(), engine_->passes().size())) : 0;
+    return started() ? static_cast<std::uint16_t>(sc::blob_len(engine_->trans().size(), engine_->passes().size())) : 0;
 }
 
 PdSpecSession::Status PdSpecSession::status(std::uint32_t now_ms) const {
     Status s;
     s.start = last_start_;
-    if (!engine_) return s;
+    if (!started()) return s;   // none, or a Deep run's moves before its stage
     const sc::Engine& e = *engine_;
     s.state = e.running() ? State::Running : State::Finished;
     s.stop = static_cast<std::uint8_t>(e.stop());
@@ -286,7 +353,7 @@ PdSpecSession::Status PdSpecSession::status(std::uint32_t now_ms) const {
 }
 
 std::size_t PdSpecSession::result_read(std::size_t off, std::span<std::uint8_t> out) const {
-    if (!engine_) return 0;
+    if (!started()) return 0;
     const sc::Engine& e = *engine_;
     sc::BlobHead h;
     h.state = static_cast<std::uint8_t>(e.running() ? State::Running : State::Finished);

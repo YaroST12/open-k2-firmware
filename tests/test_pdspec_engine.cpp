@@ -1427,6 +1427,7 @@ void covered_window_runs_the_slams_only() {
     CHECK_EQ(int(e.passes()[0].cls), int(kSlam));
     CHECK_EQ(int(e.agg(Check::PpsAccuracy).n), 1 + 2);
     CHECK_EQ(int(e.agg(Check::PpsSettle).n), 0);
+    CHECK_COND(e.agg(Check::PpsSettle).skip == Skip::NoData);   // no walk handed over: the end of the run says so (finish)
     CHECK_EQ(m.pps_asks, 2);
     CHECK_COND(verdict(e, Check::PpsStatus) == Verdict::Pass);
     // An uncovered window next to a covered one keeps its full passes.

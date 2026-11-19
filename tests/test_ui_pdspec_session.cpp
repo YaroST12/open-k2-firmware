@@ -180,11 +180,87 @@ void test_capture_takes_over_only_what_nobody_waits_for() {
     CHECK_EQ(arms_with_recorder_held({State::Post, false}, true), 0);
 }
 
+
+// A capture of one programmable step, from_mv -> to_mv at 1 kHz: the Request at 20 ms, the Accept at 25 ms, a 5 ms ramp, PS_RDY at
+// 40 ms, then the new level; frozen on a 1 us post window as the session's own freeze does.
+void build_step(transcap::Rec &r, uint16_t from_mv, uint16_t to_mv) {
+    r.clear();
+    r.arm();
+    uint32_t t = 1000;
+    for (int i = 0; i < 300; i++, t += 1000) {
+        const int k = int(t / 1000) - 26;   // the ramp's samples after the Accept
+        const int v = k < 0 ? from_mv : k >= 5 ? to_mv : from_mv + (to_mv - from_mv) * (k + 1) / 5;
+        r.push({t, uint16_t(v), 0, 0});
+        if (t == 20000) r.mark(t + 100, transcap::Mark::TxRequest);
+        if (t == 25000) r.mark(t + 100, transcap::Mark::Accept);
+        if (t == 40000) r.mark(t + 100, transcap::Mark::PsRdy);
+    }
+    r.trigger(t, transcap::Reason::Manual, 1);
+    r.push({t, to_mv, 0, 0});
+}
+
+// prog_unify: a Deep run's PPS moves, handed over before its stage, are judged into the stage's engine on the session's next poll and
+// the recorder is released for the next Request; an APDO whose sweep was handed over whole runs only its slams in the stage.
+void test_moves_fed_before_the_stage() {
+    fixture();
+    g_stub.caps.num_pdos = 5;
+    g_stub.caps.pdos[4] = pd::decode_pdo(0xC0000000u | (110u << 17) | (33u << 8) | 60);   // PPS 3.3-11 V 3 A
+    std::unique_ptr<Ui> h; Ui &ui = boot(h);
+    PdSpecSession &s = ui.pd_spec();
+    static transcap::Rec rec;
+    build_step(rec, 5000, 5100);
+    g_stub.tc_rec = &rec; g_stub.tc_freeze_on_trigger = true;
+    g_stub.tc_state = transcap::State::Armed;
+    CHECK_EQ(s.test_move(7, {5, false, 1, 5000, 5100}, sc::kMoveSweep, g_now), true);
+    CHECK_EQ(s.feeding(), true);
+    run(ui, 10);
+    CHECK_EQ(s.feeding(), false);
+    CHECK_EQ(int(g_stub.tc_state), int(transcap::State::Off));   // released: the next Request arms a fresh recording
+    CHECK_EQ(s.engine() != nullptr, true);
+    CHECK_EQ(int(s.engine()->agg(sc::Check::PpsBand).n), 1);
+    CHECK_EQ(int(s.engine()->agg(sc::Check::PpsAccuracy).fails), 0);
+    CHECK_EQ(int(s.status(g_now).state), int(PdSpecSession::State::Idle));   // no stage yet: nothing for the remote
+    CHECK_EQ(int(s.blob_len()), 0);
+    // The last point of the sweep, chained; then a range row's own capture (frozen already: left for the row).
+    g_stub.tc_state = transcap::State::Armed;
+    CHECK_EQ(s.test_move(7, {5, false, 1, 5000, 5100}, sc::kMoveSweep | sc::kMoveChain | sc::kMoveLast, g_now), true);
+    run(ui, 10);
+    CHECK_EQ(int(s.engine()->agg(sc::Check::PpsMonotonic).n), 1);
+    g_stub.tc_state = transcap::State::Frozen;
+    CHECK_EQ(s.test_move(7, {5, false, sc::kSlam, 5000, 5100}, 0, g_now), true);
+    run(ui, 10);
+    CHECK_EQ(s.feeding(), false);
+    CHECK_EQ(int(g_stub.tc_state), int(transcap::State::Frozen));
+    CHECK_EQ(int(s.engine()->agg(sc::Check::PpsBand).n), 3);
+    // Not recording: nothing to take, no wait.
+    g_stub.tc_state = transcap::State::Off;
+    CHECK_EQ(s.test_move(7, {5, false, 1, 5100, 5200}, sc::kMoveSweep, g_now), false);
+    CHECK_EQ(s.feeding(), false);
+    // The stage of the same run keeps the moves and the APDO the sweep covered (its slams only); another run's starts from nothing.
+    g_stub.tc_rec = nullptr; g_stub.tc_freeze_on_trigger = false;
+    CHECK_EQ(int(s.start_in_test(g_now, 7)), int(sc::StartResult::Ok));
+    CHECK_EQ(int(s.engine()->covered()), 1 << 5);
+    CHECK_EQ(int(s.engine()->agg(sc::Check::PpsBand).n), 3);
+    s.cancel();
+    finish(ui);
+    g_stub.tc_state = transcap::State::Armed; g_stub.tc_rec = &rec; g_stub.tc_freeze_on_trigger = true;
+    CHECK_EQ(s.test_move(8, {5, false, 1, 5000, 5100}, sc::kMoveSweep | sc::kMoveLast, g_now), true);
+    run(ui, 10);
+    CHECK_EQ(int(s.engine()->agg(sc::Check::PpsBand).n), 1);   // a fresh engine for the new run
+    g_stub.tc_rec = nullptr; g_stub.tc_freeze_on_trigger = false; g_stub.tc_state = transcap::State::Off;
+    CHECK_EQ(int(s.start_in_test(g_now, 9)), int(sc::StartResult::Ok));
+    CHECK_EQ(int(s.engine()->covered()), 0);
+    CHECK_EQ(int(s.engine()->agg(sc::Check::PpsBand).n), 0);
+    s.cancel();
+    finish(ui);
+}
+
 }  // namespace
 
 int main() {
     test_start_in_test();
     test_start_alone();
     test_capture_takes_over_only_what_nobody_waits_for();
+    test_moves_fed_before_the_stage();
     return test_report("test_ui_pdspec_session");
 }

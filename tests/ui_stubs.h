@@ -238,6 +238,8 @@ struct StubState {
     int tc_keep_step = -1;
     bool tc_has_meta = false;             // find_stored() answers with tc_meta (run / step must match)
     k2::transcap::Meta tc_meta{};
+    const k2::transcap::Rec* tc_rec = nullptr;   // frozen() answers with it once the state is Frozen (a test-built ring)
+    bool tc_freeze_on_trigger = false;           // the stub has no clock: a trigger freezes at once
     std::vector<std::vector<uint8_t>> reports;
     void (*on_report)() = nullptr;
     void (*on_log)(const char* line) = nullptr;   // every formatted K2LOG line, uncapped (the world-replay test keeps them timed)
