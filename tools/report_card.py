@@ -57,7 +57,7 @@ EPR_DETAILS = {136: "EPR: entry refused", 137: "EPR: source rejects cable", 138:
                153: "EPR offered; entry: unable now", 154: "EPR offered; entry: 5V PDO lacks EPR bit",
                155: "not unlocked (no OEM chain)", 156: "not unlocked (chain unfinished)", 157: "not unlocked (3 A cable)",
                158: "not unlocked (vendor not accepted)", 159: "not unlocked (source reset)"}
-FORMAT = 12   # payload byte 33: 12 = the block may carry the Xiaomi section, on a card of any level (no payload change), 11 = the record is v10's and a Deep run's blob (decode_deep) travels beside it, 0 = first cards (u16 mV max, plain detail), 1 = 9+9 bit 100 mV voltages, 6 bit detail, ... 7 = repeat counter, 8 = + the re-balance count at V8_AT, 9 = + the spread block at V9_AT, 10 = + the deep-sweep summary at V10_AT, 11 = the Deep block beside the record
+FORMAT = 13   # payload byte 33: 13 = the block's spec part may carry each range's word (form 28), 12 = the block may carry the Xiaomi section, on a card of any level (no payload change), 11 = the record is v10's and a Deep run's blob (decode_deep) travels beside it, 0 = first cards (u16 mV max, plain detail), 1 = 9+9 bit 100 mV voltages, 6 bit detail, ... 7 = repeat counter, 8 = + the re-balance count at V8_AT, 9 = + the spread block at V9_AT, 10 = + the deep-sweep summary at V10_AT, 11 = the Deep block beside the record
              # 2 = byte 54 pdp_w and byte 55 flags (bit0 name_auto),
              # 3 = range lo bits 9..15 = APDO max current (50 mA), flags bits 1..7 = highest fixed PDO current (50 mA),
              # 4 = per-EPR-level verdicts (3 entries of 6 bytes: u16 dv + 4-byte group packing),
@@ -75,7 +75,7 @@ class BadCard(ValueError):
 
 
 # ---- the Deep block (format 11): include/k2/chargertest/report_card_deep.hpp, tests/test_report_card_py.py compares the name tables ----
-DEEP_MAX_BITS = 3638   # report_card::deep::kMaxBits (3274 without the format 12 Xiaomi section)
+DEEP_MAX_BITS = 3811   # report_card::deep::kMaxBits (3638 before the format 13 ranges, 3274 without the format 12 Xiaomi section)
 VERDICTS = ["pending", "running", "pass", "fail", "skip"]   # charger_test::Verdict, the Xiaomi section's verdict field
 MI_BEFORE_LOST = 0xFFFFFFFF   # deep::kBeforeLost: the PDO before the chain is not known (the run resumed)
 DEEP_BUCKETS = 32
@@ -136,6 +136,9 @@ def decode_deep(blob, ranges=()):
         import pdspec_blob as pb   # parses the firmware headers: imported here so a card without a spec section needs none of it
         s, t = pb.section_tables(), pb.load_tables()
         end, why, unconfirmed, ncells = r.get(3), r.get(6), r.get(1), r.get(5)
+        with_ranges = ncells == len(s["cells"]) + 1   # form 28 (format 13): each range's word follows the cells
+        if with_ranges:
+            ncells -= 1
         if ncells != len(s["cells"]) or end >= len(s["ends"]):
             raise BadCard("Deep spec section does not match this decoder's check list")
         end_name = s["ends"][end]
@@ -169,6 +172,8 @@ def decode_deep(blob, ranges=()):
         why_text = (pb._name(t["stops"], why) if end_name in ("cancelled", "fault") else
                     pb._name(t["starts"], why) if end_name == "refused" else None)
         out["spec"] = {"end": end_name, "why": why_text, "unconfirmed": bool(unconfirmed), "tally": tally, "cells": cells}
+        if with_ranges:
+            out["spec"].update(_decode_spec_ranges(r, s, t))
     graphs = []
     for i in range(MAX_RANGES):
         if not mask >> i & 1:
@@ -191,6 +196,27 @@ def decode_deep(blob, ranges=()):
     if r.left() >= 8:
         raise BadCard("Deep block has trailing data")
     return out
+
+
+def _decode_spec_ranges(r, s, t):
+    """Format 13's ranges (report_card_deep.cpp): the count, which merged blocks the K2 grid left to the range lines, then per range
+    its APDO position, kind, word and one verdict per check of its kind (pdspec_blob's kApdoPps / kApdoAvs slot tables)."""
+    import pdspec_blob as pb
+    n, split = r.get(3), {"pps": bool(r.get(1)), "avs": bool(r.get(1))}
+    ranges = []
+    for _ in range(n):
+        pos, avs, tone, group = r.get(4), r.get(1), r.get(2), r.get(2)
+        slots = []
+        for d in s["apdo"]["avs" if avs else "pps"]:
+            vi = r.get(3)
+            if d is None:
+                continue
+            if vi >= len(t["verdicts"]):
+                raise BadCard("Deep spec range verdict out of range")
+            slots.append({"key": d["key"], "label": d["label"], "verdict": t["verdicts"][vi]})
+        ranges.append({"pos": pos, "kind": "avs" if avs else "pps", "tone": pb._name(s["range_tones"], tone),
+                       "word": pb.range_word(tone, group), "cells": slots})
+    return {"split": split, "ranges": ranges}
 
 
 def pdo_text(raw):

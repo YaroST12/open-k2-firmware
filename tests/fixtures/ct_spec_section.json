@@ -687,5 +687,286 @@
    }
   ],
   "detailed": true
+ },
+ "ranges": "12050e01009603700398030100155c0000000000000000000000000000000000000000000000000000000000000000000000008201b80b0000be0a0100153200000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000009030100f005be05fa0501002996000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+ "decoded_ranges": {
+  "split": {
+   "pps": true,
+   "avs": false
+  },
+  "ranges": [
+   {
+    "pos": 5,
+    "kind": "pps",
+    "tone": "fail",
+    "word": "timing",
+    "cells": [
+     {
+      "key": "pps_accuracy",
+      "label": "PPS accuracy",
+      "unit": "mv",
+      "verdict": "pass",
+      "fails": 0,
+      "value": 9180,
+      "value_text": "9.180 V",
+      "count": 1,
+      "limit": [
+       8800,
+       9200
+      ],
+      "limit_text": "8.800 V .. 9.200 V",
+      "at_text": "APDO 5 100 mV up to 9.2 V"
+     },
+     {
+      "key": "pps_monotonic",
+      "label": "PPS monotonic",
+      "unit": "mv",
+      "verdict": "pending",
+      "fails": 0,
+      "value": null,
+      "value_text": "-",
+      "count": 0,
+      "limit": null,
+      "limit_text": null,
+      "at_text": null
+     },
+     {
+      "key": "pps_track",
+      "label": "PPS tracking",
+      "unit": "mv",
+      "verdict": "pending",
+      "fails": 0,
+      "value": null,
+      "value_text": "-",
+      "count": 0,
+      "limit": null,
+      "limit_text": null,
+      "at_text": null
+     },
+     {
+      "key": "pps_status",
+      "label": "PPS_Status",
+      "unit": "count",
+      "verdict": "pending",
+      "fails": 0,
+      "value": null,
+      "value_text": "-",
+      "count": 0,
+      "limit": null,
+      "limit_text": null,
+      "at_text": null
+     },
+     {
+      "key": "pps_band",
+      "label": "PPS in band",
+      "unit": "us",
+      "verdict": "fail",
+      "fails": 1,
+      "value": 300000,
+      "value_text": "300.0 ms",
+      "count": 1,
+      "limit": [
+       0,
+       275000
+      ],
+      "limit_text": "<= 275.0 ms",
+      "at_text": "APDO 5 100 mV up to 5.0 V"
+     },
+     {
+      "key": "pps_settle",
+      "label": "PPS settle",
+      "unit": "us",
+      "verdict": "pending",
+      "fails": 0,
+      "value": null,
+      "value_text": "-",
+      "count": 0,
+      "limit": null,
+      "limit_text": null,
+      "at_text": null
+     },
+     {
+      "key": "pps_ps_rdy",
+      "label": "PPS PS_RDY",
+      "unit": "us",
+      "verdict": "pending",
+      "fails": 0,
+      "value": null,
+      "value_text": "-",
+      "count": 0,
+      "limit": null,
+      "limit_text": null,
+      "at_text": null
+     },
+     {
+      "key": "accept_time",
+      "label": "Accept",
+      "unit": "us",
+      "verdict": "pending",
+      "fails": 0,
+      "value": null,
+      "value_text": "-",
+      "count": 0,
+      "limit": null,
+      "limit_text": null,
+      "at_text": null
+     },
+     {
+      "key": "pps_status_time",
+      "label": "PPS_Status t",
+      "unit": "us",
+      "verdict": "pending",
+      "fails": 0,
+      "value": null,
+      "value_text": "-",
+      "count": 0,
+      "limit": null,
+      "limit_text": null,
+      "at_text": null
+     },
+     {
+      "key": "pps_overshoot",
+      "label": "PPS overshoot",
+      "unit": "mv",
+      "verdict": "pending",
+      "fails": 0,
+      "value": null,
+      "value_text": "-",
+      "count": 0,
+      "limit": null,
+      "limit_text": null,
+      "at_text": null
+     },
+     {
+      "key": "pps_transient",
+      "label": "PPS transient",
+      "unit": "us",
+      "verdict": "pending",
+      "fails": 0,
+      "value": null,
+      "value_text": "-",
+      "count": 0,
+      "limit": null,
+      "limit_text": null,
+      "at_text": null
+     }
+    ]
+   },
+   {
+    "pos": 9,
+    "kind": "avs",
+    "tone": "pass",
+    "word": "spec",
+    "cells": [
+     {
+      "key": "avs_accuracy",
+      "label": "AVS accuracy",
+      "unit": "mv",
+      "verdict": "pass",
+      "fails": 0,
+      "value": 15200,
+      "value_text": "15.200 V",
+      "count": 1,
+      "limit": [
+       14700,
+       15300
+      ],
+      "limit_text": "14.700 V .. 15.300 V",
+      "at_text": "APDO 9 1000 mV up to 15.0 V"
+     },
+     {
+      "key": "avs_monotonic",
+      "label": "AVS monotonic",
+      "unit": "mv",
+      "verdict": "pending",
+      "fails": 0,
+      "value": null,
+      "value_text": "-",
+      "count": 0,
+      "limit": null,
+      "limit_text": null,
+      "at_text": null
+     },
+     {
+      "key": "avs_track",
+      "label": "AVS tracking",
+      "unit": "mv",
+      "verdict": "pending",
+      "fails": 0,
+      "value": null,
+      "value_text": "-",
+      "count": 0,
+      "limit": null,
+      "limit_text": null,
+      "at_text": null
+     },
+     {
+      "key": "avs_band",
+      "label": "AVS in band",
+      "unit": "us",
+      "verdict": "pending",
+      "fails": 0,
+      "value": null,
+      "value_text": "-",
+      "count": 0,
+      "limit": null,
+      "limit_text": null,
+      "at_text": null
+     },
+     {
+      "key": "avs_ps_rdy",
+      "label": "AVS PS_RDY",
+      "unit": "us",
+      "verdict": "pending",
+      "fails": 0,
+      "value": null,
+      "value_text": "-",
+      "count": 0,
+      "limit": null,
+      "limit_text": null,
+      "at_text": null
+     },
+     {
+      "key": "accept_time",
+      "label": "Accept",
+      "unit": "us",
+      "verdict": "pending",
+      "fails": 0,
+      "value": null,
+      "value_text": "-",
+      "count": 0,
+      "limit": null,
+      "limit_text": null,
+      "at_text": null
+     },
+     {
+      "key": "avs_overshoot",
+      "label": "AVS overshoot",
+      "unit": "mv",
+      "verdict": "pending",
+      "fails": 0,
+      "value": null,
+      "value_text": "-",
+      "count": 0,
+      "limit": null,
+      "limit_text": null,
+      "at_text": null
+     },
+     {
+      "key": "avs_transient",
+      "label": "AVS transient",
+      "unit": "us",
+      "verdict": "pending",
+      "fails": 0,
+      "value": null,
+      "value_text": "-",
+      "count": 0,
+      "limit": null,
+      "limit_text": null,
+      "at_text": null
+     }
+    ]
+   }
+  ]
  }
 }

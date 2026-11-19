@@ -61,6 +61,15 @@ int main() {
         for (auto b : rf) std::printf("%02x", b);
         std::printf("\nrowshdr %zu\n", kRowsHdr);
     }
+    {   // Each range's own cells, the remote stream 0x0B [9]: PPS 5 (a band failure), EPR AVS 9 (passes); the grid split PPS only.
+        Apdos a;
+        a.add(sc::Check::PpsBand, {300000, 0, 0, 275000, std::uint8_t(5 | 1u << 4), 50});
+        a.add(sc::Check::PpsAccuracy, {9180, 0, 8800, 9200, std::uint8_t(5 | 1u << 4), 92});
+        a.add(sc::Check::AvsAccuracy, {15200, 0, 14700, 15300, std::uint8_t(9 | 2u << 4), 150});
+        std::printf("ranges ");
+        for (std::size_t i = 0; i < apdo_stream_size(a); ++i) std::printf("%02x", apdo_stream_byte(a, i, split_bits({true, false})));
+        std::printf("\n");
+    }
     std::array<std::uint8_t, kWireBytes> w{};
     to_wire(r, w);
     std::array<std::uint8_t, kDetailBytes> dw{};
@@ -117,6 +126,23 @@ class Decode(unittest.TestCase):
         self.assertEqual((t["steps"]["us"], t["steps"]["mv"], t["steps"]["ms"]), tuple(int(x) for x in self.fw["steps"][0].split()))
         self.assertEqual(t["unseen"], int(self.fw["unseen"][0]))
 
+    def test_the_ranges_read_back_what_the_firmware_wrote(self):
+        raw = bytes.fromhex(self.fw["ranges"][0])
+        g = pb.decode_ranges(raw)
+        self.assertEqual(g["split"], {"pps": True, "avs": False})
+        p, a = g["ranges"]
+        self.assertEqual((p["pos"], p["kind"], p["tone"], p["word"]), (5, "pps", "fail", "timing"))
+        self.assertEqual((a["pos"], a["kind"], a["tone"], a["word"]), (9, "avs", "pass", "spec"))
+        self.assertEqual((len(p["cells"]), len(a["cells"])), (11, 8))   # the AVS kind has no status checks and no settle
+        band = next(c for c in p["cells"] if c["key"] == "pps_band")
+        self.assertEqual((band["verdict"], band["fails"], band["value"], band["count"], band["limit"]), ("fail", 1, 300000, 1, [0, 275000]))
+        idle = next(c for c in p["cells"] if c["key"] == "pps_status")
+        self.assertEqual((idle["verdict"], idle["value"], idle["count"]), ("pending", None, 0))
+        self.assertEqual(pb.decode_ranges(b""), {"split": {"pps": False, "avs": False}, "ranges": []})
+        for bad in (raw[:-1], bytes([raw[0] | 0x40]) + raw[1:]):
+            with self.assertRaises(ValueError):
+                pb.decode_ranges(bad)
+
     def test_header(self):
         s = self.sec
         self.assertEqual((s["end"], s["unconfirmed"], len(s["cells"])), ("done", True, 27))
@@ -146,6 +172,8 @@ class Decode(unittest.TestCase):
         self.assertEqual(fx["decoded"], self.sec)
         self.assertEqual(fx["detail"], self.fw["detail"][0])
         self.assertEqual(fx["decoded_detail"], self.full)
+        self.assertEqual(fx["ranges"], self.fw["ranges"][0])                    # the remote stream 0x0B [9] (each range's cells)
+        self.assertEqual(fx["decoded_ranges"], pb.decode_ranges(bytes.fromhex(self.fw["ranges"][0])))
 
     def test_the_detail_form_gives_limit_count_and_place(self):
         c = self.full["cells"]
@@ -225,14 +253,17 @@ class Read(unittest.TestCase):
         cls.blob = bytes.fromhex(fw_dump()["wire"][0])
         cls.detail = bytes.fromhex(fw_dump()["detail"][0])
         cls.rows = bytes.fromhex(fw_dump()["rows"][0])
+        cls.ranges = bytes.fromhex(fw_dump()["ranges"][0])
 
     def test_chunked_read_and_exact_requests(self):
-        link = Link(wire_chunks(self.blob, 0x01020304) + wire_chunks(self.detail, 0x01020304) + rows_chunks(self.rows, 0x01020304))
+        link = Link(wire_chunks(self.blob, 0x01020304) + wire_chunks(self.detail, 0x01020304) + rows_chunks(self.rows, 0x01020304) +
+                    rows_chunks(b"", 0x01020304, total=0))
         sec = kr.read_charger_spec(link, 0x01020304)
         self.assertEqual(link.sent, [(0x0B, bytes([6, 0])), (0x0B, bytes([6, 48])), (0x0B, bytes([6, 96])),
                                      (0x0B, bytes([7, 0])), (0x0B, bytes([7, 48])), (0x0B, bytes([7, 96])), (0x0B, bytes([7, 144])),
                                      (0x0B, bytes([7, 192])),
-                                     (0x0B, bytes([8, 0, 0])), (0x0B, bytes([8, 48, 0])), (0x0B, bytes([8, 96, 0]))])
+                                     (0x0B, bytes([8, 0, 0])), (0x0B, bytes([8, 48, 0])), (0x0B, bytes([8, 96, 0])),
+                                     (0x0B, bytes([9, 0, 0]))])
         base = pb.decode_section(self.blob, self.detail)
         self.assertEqual(sec["cells"][1]["count"], 300)
         # the rows ride on the cells that list them, and nothing else changes
@@ -262,8 +293,19 @@ class Read(unittest.TestCase):
         with self.assertRaises(ValueError):
             pb.decode_rows(b"XXXX" + self.rows[4:], 0x01020304)
 
+    def test_each_range_rides_on_the_section_with_the_grid_split(self):
+        link = Link(wire_chunks(self.blob, 5) + wire_chunks(self.detail, 5) + rows_chunks(b"", 5, total=0) + rows_chunks(self.ranges, 5))
+        sec = kr.read_charger_spec(link, 5)
+        self.assertEqual([p for _, p in link.sent if p[0] == 9], [struct.pack("<BH", 9, off) for off in range(0, len(self.ranges), 48)])
+        self.assertEqual(sec["split"], {"pps": True, "avs": False})
+        self.assertEqual([r["pos"] for r in sec["ranges"]], [5, 9])
+        self.assertEqual({k: v for k, v in sec.items() if k not in ("ranges", "split")}, pb.decode_section(self.blob, self.detail))
+        link = Link(wire_chunks(self.blob, 5) + wire_chunks(self.detail, 5) + rows_chunks(b"", 5, total=0) + rows_chunks(self.ranges, 6))
+        with self.assertRaises(kr.ResultsChanged):
+            kr.read_charger_spec(link, 5)
+
     def test_firmware_without_the_rows_form_gives_the_cells_without_them(self):
-        link = Link(wire_chunks(self.blob, 5) + wire_chunks(self.detail, 5) + [kr.RemoteError(kr.STATUS_BAD_LENGTH, 0x0B)])
+        link = Link(wire_chunks(self.blob, 5) + wire_chunks(self.detail, 5) + [kr.RemoteError(kr.STATUS_BAD_LENGTH, 0x0B)] * 2)
         sec = kr.read_charger_spec(link, 5)
         self.assertEqual(sec, pb.decode_section(self.blob, self.detail))
 
@@ -273,11 +315,13 @@ class Read(unittest.TestCase):
             kr.read_charger_spec(link, 5)
 
     def test_firmware_without_the_detail_form_gives_the_section_alone(self):
-        link = Link(wire_chunks(self.blob, 5) + [kr.RemoteError(kr.STATUS_BAD_LENGTH, 0x0B)] + rows_chunks(b"", 5, total=0))
+        link = Link(wire_chunks(self.blob, 5) + [kr.RemoteError(kr.STATUS_BAD_LENGTH, 0x0B)] + rows_chunks(b"", 5, total=0) +
+                    [kr.RemoteError(kr.STATUS_BAD_LENGTH, 0x0B)])
         sec = kr.read_charger_spec(link, 5)
         self.assertEqual(sec, pb.decode_section(self.blob))
-        self.assertEqual(link.sent[-2], (0x0B, bytes([7, 0])))
-        self.assertEqual(link.sent[-1], (0x0B, bytes([8, 0, 0])))
+        self.assertEqual(link.sent[-3], (0x0B, bytes([7, 0])))
+        self.assertEqual(link.sent[-2], (0x0B, bytes([8, 0, 0])))
+        self.assertEqual(link.sent[-1], (0x0B, bytes([9, 0, 0])))   # firmware before the ranges: the merged section alone
 
     def test_a_run_that_moves_during_the_detail_read_is_a_changed_result(self):
         link = Link(wire_chunks(self.blob, 5) + wire_chunks(self.detail, 6) + rows_chunks(b"", 5, total=0))
@@ -321,11 +365,12 @@ class Export(unittest.TestCase):
         meta = deep_meta()
         run_id = int.from_bytes(meta[1:5], "little")
         link = Link([meta, page(meta, 0, [ROW0]), meta, *wire_chunks(self.blob, run_id), *wire_chunks(self.detail, run_id),
-                     *rows_chunks(b"", run_id, total=0)])
+                     *rows_chunks(b"", run_id, total=0), *rows_chunks(b"", run_id, total=0)])
         r = kr.cmd_charger_test(link, self.args("results"))
         self.assertEqual(r["selection"]["run_level"], "deep")
         self.assertEqual([p for _, p in link.sent[3:]], [bytes([6, 0]), bytes([6, 48]), bytes([6, 96]), bytes([7, 0]), bytes([7, 48]),
-                                                         bytes([7, 96]), bytes([7, 144]), bytes([7, 192]), bytes([8, 0, 0])])
+                                                         bytes([7, 96]), bytes([7, 144]), bytes([7, 192]), bytes([8, 0, 0]),
+                                                         bytes([9, 0, 0])])
         self.assertEqual(r["spec"], pb.decode_section(self.blob, self.detail))
         text = kr._render("charger-test", dict(r, _summary=True))
         self.assertIn("PD spec", text)
@@ -337,7 +382,7 @@ class Export(unittest.TestCase):
         rb = bytearray(bytes.fromhex(rows))
         rb[4:8] = run_id.to_bytes(4, "little")
         link = Link([meta, page(meta, 0, [ROW0]), meta, *wire_chunks(self.blob, run_id), *wire_chunks(self.detail, run_id),
-                     *rows_chunks(bytes(rb), run_id)])
+                     *rows_chunks(bytes(rb), run_id), *rows_chunks(b"", run_id, total=0)])
         r = kr.cmd_charger_test(link, self.args("results"))
         self.assertEqual(len(r["spec"]["cells"][1]["rows"]), 2)
         json.dumps(r)   # keys only added: the card stays JSON
@@ -384,6 +429,21 @@ class Summary(unittest.TestCase):
         fail = pb.section_tables()["cells"][1]["label"]
         self.assertIn(f"{fail}: FAIL, worst 40.0 ms, 3 over (limit <= 25.0 ms, 300 measured)", text)
         self.assertNotIn("(limit", "\n".join(self.lines(self.sec)))   # a journal from before the detail: the line as it was
+
+    def test_each_range_has_its_word_and_the_split_blocks_leave(self):
+        rg = pb.decode_ranges(bytes.fromhex(fw_dump()["ranges"][0]))
+        pps_keys = pb.split_keys({"pps": True})
+        cells = [dict(c) for c in self.full["cells"]]
+        k = next(i for i, c in enumerate(cells) if c["key"] in pps_keys)
+        cells[k].update(verdict="fail", fails=2, value_text="1.00 V")   # a merged PPS failure: the range lines carry it now
+        sec = dict(self.full, cells=cells, ranges=rg["ranges"], split=rg["split"])
+        text = "\n".join(self.lines(sec))
+        self.assertNotIn(f"{cells[k]['label']}: FAIL, worst 1.00 V", text)
+        self.assertIn(f"{cells[k]['label']}: FAIL, worst 1.00 V", "\n".join(self.lines(dict(sec, split={"pps": False, "avs": False}))))
+        self.assertIn("PPS range, PDO #5: timing", text)
+        self.assertIn("AVS range, PDO #9: spec", text)
+        band = next(c for c in rg["ranges"][0]["cells"] if c["key"] == "pps_band")
+        self.assertIn(f"    - {band['label']}: FAIL, worst {band['value_text']}, 1 over (limit {band['limit_text']}, 1 measured)", text)
 
     def test_an_ended_early_stage_says_why(self):
         sec = dict(self.sec, end="cancelled", why="user stop")
