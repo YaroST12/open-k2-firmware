@@ -392,6 +392,7 @@ bool identify_busy();      // an Identify is in flight: running, or an alone-Ide
 const pd::IdStatus& identify_status();
 bool identify_current();   // the latest Identify's answers are this partner's (after an alone-Identify's release too, until the port is really gone)
 const pd::Identity& identify_identity();   // the identity the latest Identify collected (kept for the release window)
+const pd::ExtInfo& identify_ext();         // the extended info (battery, mfr, rev) the latest Identify collected (kept for the release window)
 
 // Inline interrogation (k2/pd/pd_interrogate.hpp): the one exception to "an inline K2 never transmits", for learning a device
 // twin. A Hard Reset when no fresh contract was sniffed, the device asked as its source/DFP (Discover Identity, Get_Sink_Cap,

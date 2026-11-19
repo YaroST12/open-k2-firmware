@@ -1137,6 +1137,7 @@ inline constexpr std::uint32_t kIdentGoneMs = 2000;
 std::uint32_t g_ident_gone_since = 0;
 bool g_ident_gone_timing = false;
 pd::Identity g_ident_identity;
+pd::ExtInfo g_ident_ext;
 
 void alone_handback() {
     g_ident_alone = false;
@@ -1314,6 +1315,7 @@ void ident_service(std::uint32_t now2) {
         g_ident_was_running = false;
         const pd::IdStatus& st = ident().status();
         g_ident_identity = g_engine.vdm.identity.valid ? g_engine.vdm.identity : g_engine.sink_vdm.identity;
+        g_ident_ext = g_engine.ext;
         K2LOG("[ID] result: state %d ok 0x%02X skipped 0x%02X retries %u why %d\n", int(st.state), unsigned(st.ok_mask),
               unsigned(st.skipped_mask), unsigned(st.retries), int(st.why));
         if (g_ident_alone) alone_handback();
@@ -1713,6 +1715,7 @@ bool identify_current() {
     return g_ident_session == g_session.id() || g_ident_alone_hold;
 }
 const pd::Identity& identify_identity() { return g_ident_identity; }
+const pd::ExtInfo& identify_ext() { return g_ident_ext; }
 bool interrogate_running() { return iq_running(); }
 const pd::IqStatus& interrogate_status() { return iq().status(); }
 

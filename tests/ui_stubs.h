@@ -171,6 +171,8 @@ struct StubState {
     std::uint32_t typec_ma_val = 0;     // fusb302::typec_ma(): the source's advertised Rp current
     bool ident_wait = false;      // identify_busy(): an alone-Identify still waiting for its contract
     bool ident_current = false;   // identify_current(): the stored Identify answers belong to this attach
+    k2::pd::Identity ident_identity{};
+    k2::pd::ExtInfo ident_ext{};
     int fc_stops = 0, fc_scans = 0;
     // The SuperVOOC trigger glue (svooc_trig, stubbed outside the SuperVOOC world): what the charger test's ceiling stage asked.
     int svooc_starts = 0, svooc_stops = 0;

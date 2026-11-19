@@ -766,9 +766,12 @@ void put_dwh(StrBuf<28> &v, uint16_t dwh) {
     const pd::IqStatus &iq = fusb302::interrogate_status();
     const pd::ExtInfo &ext = fusb302::ext();
     const bool id_cur = fusb302::identify_current();
+    const pd::ExtInfo &id_ext = fusb302::identify_ext();
 
-    // Manufacturer_Info (MIDB): from inline interrogation, or engine ext (Identify / passive).
-    const pd::ManufacturerInfo &mfr = (iq_ok && iq.mfr.valid) ? iq.mfr : ext.mfr;
+    // Manufacturer_Info (MIDB): from inline interrogation, live ext, or standalone Identify snapshot.
+    const pd::ManufacturerInfo &mfr = (iq_ok && iq.mfr.valid) ? iq.mfr
+                                    : ext.mfr.valid ? ext.mfr
+                                    : id_cur ? id_ext.mfr : ext.mfr;
     if (mfr.valid && (iq_ok || id_cur || mfr.name[0])) {
         if (mfr.name[0]) {
             StrBuf<28> &v = R.add("Mfr", kText);
@@ -805,8 +808,12 @@ void put_dwh(StrBuf<28> &v, uint16_t dwh) {
     }
 
     // Battery_Status (BSDO) + Battery_Capabilities (BCDB): live SoC % + state, and design / full / health.
-    const pd::BatteryCaps &bat = (iq_ok && iq.battery.valid) ? iq.battery : ext.battery;
-    const pd::BatteryStatus &bst = (iq_ok && iq.battery_status.valid) ? iq.battery_status : ext.battery_status;
+    const pd::BatteryCaps &bat = (iq_ok && iq.battery.valid) ? iq.battery
+                               : ext.battery.valid ? ext.battery
+                               : id_cur ? id_ext.battery : ext.battery;
+    const pd::BatteryStatus &bst = (iq_ok && iq.battery_status.valid) ? iq.battery_status
+                                 : ext.battery_status.valid ? ext.battery_status
+                                 : id_cur ? id_ext.battery_status : ext.battery_status;
     if (bst.valid && !bst.invalid_ref) {
         if (!bst.present) {
             R.add("Batt", kFaint).put("Not present");
@@ -885,7 +892,10 @@ void put_dwh(StrBuf<28> &v, uint16_t dwh) {
     const MatchResult &r = *d.r;
     const pd::IqStatus &iq = fusb302::interrogate_status();
     const bool iq_ok = d.iq_ok;
-    const pd::Identity &id = (iq_ok && iq.id.valid) ? iq.id : fusb302::sink_vdm().identity;
+    const bool id_cur = fusb302::identify_current();
+    const pd::Identity &id = (iq_ok && iq.id.valid) ? iq.id
+                           : (id_cur && fusb302::identify_identity().valid) ? fusb302::identify_identity()
+                           : fusb302::sink_vdm().identity;
     if (d.k2_sink) {   // the K2 draws the power itself
         R.add("ID", kFaint).put("K2");
         R.add("Sink", kOk).put(d.k2_sink_ok ? "K2 (sink mode OK)" : "K2 (sink mode PLUS)");
@@ -1259,7 +1269,16 @@ void put_line_id(StrBuf<36> &l, uint16_t vid, uint16_t pid, const char *vendor) 
     }
     case conn::Tab::Sink: {
         if (d.k2_sink) { id.head.put("K2"); id.line.put("The K2 draws the power itself"); return; }
-        if (!r.request_seen) { id.head.put("No request"); id.dim = true; id.line.put("The device asked for no offer"); return; }
+        if (!r.request_seen) {
+            if (fusb302::identify_current()) {
+                const pd::Identity &pid = fusb302::identify_identity();
+                if (pid.valid && pid.vendor && pid.vendor[0]) id.head.put(pid.vendor);
+                else id.head.put("Device read");
+                id.line.put("Standalone PD read");
+                return;
+            }
+            id.head.put("No request"); id.dim = true; id.line.put("The device asked for no offer"); return;
+        }
         put_v(id.head, r.want_mv);
         id.head.put("V ");
         put_a(id.head, r.want_ma);
@@ -1654,6 +1673,17 @@ void ConnectionPage::update(uint32_t now_ms) {
             dev_sig = mix_u32(dev_sig, uint32_t(iq.mfr.valid) | uint32_t(iq.mfr.vid) << 8);
             dev_sig = pg::mix_cstr(dev_sig, iq.mfr.name, sizeof iq.mfr.name);
         }
+        if (fusb302::identify_current()) {
+            const pd::Identity &iid = fusb302::identify_identity();
+            const pd::ExtInfo &iext = fusb302::identify_ext();
+            dev_sig = mix_u32(dev_sig, uint32_t(iid.valid) | uint32_t(iid.vid) << 8 | uint32_t(iid.pid) << 16);
+            dev_sig = mix_u32(dev_sig, uint32_t(iext.battery.valid) | uint32_t(iext.battery.design_dwh) << 8
+                                     | uint32_t(iext.battery.last_full_dwh) << 24);
+            dev_sig = mix_u32(dev_sig, uint32_t(iext.battery_status.valid) | uint32_t(iext.battery_status.charging) << 4
+                                     | uint32_t(iext.battery_status.present_dwh) << 16);
+            dev_sig = mix_u32(dev_sig, uint32_t(iext.mfr.valid) | uint32_t(iext.mfr.vid) << 8);
+            dev_sig = pg::mix_cstr(dev_sig, iext.mfr.name, sizeof iext.mfr.name);
+        }
     }
     const uint32_t c_base = mix_u32(c, dev_sig);
     const uint32_t asig = actions_sig();
@@ -1662,7 +1692,7 @@ void ConnectionPage::update(uint32_t now_ms) {
     const bool inputs_changed = !match_valid_ || c != cheap_sig_;
     cheap_sig_ = c;
 
-    const bool empty = conn::tab_empty(tab_, facts_) && !(tab_ == conn::Tab::Sink && fusb302::self_powered());
+    const bool empty = conn::tab_empty(tab_, facts_) && !(tab_ == conn::Tab::Sink && (fusb302::self_powered() || fusb302::identify_current()));
     if (empty) {
         match_valid_ = false;
         uint32_t h = mix_u32(2166136261u, uint32_t(tab_) | uint32_t(facts_.topo) << 4 | 1u << 8 | uint32_t(facts_.inline_sink) << 9
