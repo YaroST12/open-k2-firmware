@@ -137,7 +137,8 @@ measured on every move.
 
 ### Programmable sweep
 
-The windows come from the source's SPR PPS and SPR AVS APDOs (`plan.hpp` `Prog`, at most 4; EPR AVS is not swept). Each window
+The windows come from the source's SPR PPS and SPR AVS APDOs (`plan.hpp` `Prog`, at most 4; the standalone run sweeps no EPR AVS,
+a Deep run adds the one it reached, see "Deep run"). Each window
 runs four passes, each from the window's minimum up to its maximum and back down to the minimum (`Sweep`):
 
 | Pass (class) | PPS | AVS |
@@ -270,19 +271,37 @@ It is a polite, no-load conformance run: nothing in it lies to the charger or as
   deep-sweep point after the first (PPS class 1, AVS class 0), each step-walk level after the base (class 0) and each range row that
   moves within its APDO (judged as a slam) is captured and judged by the same per-move judge (`pdspec/prog_judge.hpp`,
   `Engine::judge_test_move`) into the same aggregates. An SPR window whose sweep was handed over whole (3 of 4 points judged) runs
-  only its slams and Get_PPS_Status asks in the stage; any other window runs its full passes. Not fed: the sweep's part below 5 V
-  (it runs after the stage), EPR AVS, a K2 powered by the charger. The standalone `pd-spec` runs are unchanged.
+  only its cover pass, its slams and Get_PPS_Status asks in the stage; any other window runs its full passes. Not fed: the sweep's
+  part below 5 V (it runs after the stage), a K2 powered by the charger. The standalone `pd-spec` runs are unchanged (SPR windows only).
+- **Cover pass** (`plan.hpp` `make_cover_sweep`, 2026-11-19): a covered window judges again what the sweep cannot give: three large
+  steps up from the minimum and back down (500 mV PPS, 1 V AVS: down-steps, the vPpsSmallStep / vAvsSmallStep boundary), then five
+  resolution steps onto each end (20 mV PPS, 100 mV AVS; down onto the minimum, up onto the maximum), then the slams. Engine Sim,
+  whole stage: IQ4 20.4 -> 26.3 s, FH22 34.2 -> 46.3 s, Xiaomi bank 11.4 -> 17.3 s.
+- **EPR AVS** (`kOptEprAvs`, `Env::epr_avs`): a Deep run hands its EPR AVS moves over like SPR ones and gives the stage the EPR AVS
+  APDO it reached (the live list is the SPR one once the run left EPR mode). The stage judges it as one more AVS window, only with the
+  cable proof, capped at the monitor ceiling (36 V device), inside EPR mode with the sink's keep-alives. Limits as SPR AVS (vAvsNew
+  +-5 %, vAvsValid +-0.5 V, 100 mV resolution, tAvsSrcTransSmall 50 ms for steps up to 1 V); a larger step uses tSrcTransReq EPR,
+  760 ms (`kAvsLargeStepEprMs`). Its cells are the `avs_*` ones. Sim, Baseus 140 W shape (EPR AVS 15-28 V), both windows covered:
+  38.3 -> 47.1 s.
+- **Per range** (`Env::on_apdo`, `specsec::Apdos`): every PPS / AVS measurement is also kept per APDO, 11 slots a range (8 for AVS:
+  no status, settle or status time), each with verdict, fails, worst value, limit, count and place. A range's word is its worst slot:
+  "spec" (all passed), "-" (nothing judged) or the family of the worst failure ("level", "timing", "shape"; tone Caution or Fail).
 - **Left out, on purpose:** PPS keep-alive and EPR keep-alive (the source Hard Resets by design), Hard Reset (the K2's own) and Detach
   (Rd off). They stay in the standalone tooling.
 - **Session:** `start_in_test()` runs on the live link the test already owns: no foreign-busy check, no Rd take-over, no give-back, no
   footer of its own. The standalone `start()` (the remote `pd-spec` command) keeps all of those.
 - **Results grid:** the section follows the units, one VerdictCell per check, rules above the PPS block, the AVS block and the
   observer. A cell's detail page shows the worst value, the limit, the count, the place and the verdict (all kept in the cell, live or resumed). A stage that did not run (no PD unit, a stop, a refusal) leaves the section out.
+  **Layout B** (user, 2026-11-19): on Results each PPS / AVS range line reads `PPS | 3.3-21V 5A | shape`, the kind as its label and
+  the range's word in a cell of its own. A kind's merged block (PPS, AVS) leaves the section when every measured range of that kind has
+  a line (`specsec::split`); Transitions and the observer always stay. The range's Steps page lists its spec checks after its steps
+  (worst value, then limit and count on the open row); OK opens the check's detail, BACK returns to the row.
 - **Record:** the journal keeps it (`Type::Spec`, `/jr/sp.rec`, written once when the stage ends) and the cells' limit, count and place (`Type::SpecDetail`,
-  `/jr/spd.rec`, behind it; journal format 5; a format 3 journal still loads, with "-" for those). A third file, `/jr/spt.rec`
+  `/jr/spd.rec`, behind it; journal format 5; a format 3 journal still loads, with "-" for those). Journal format 6 adds one
+  134-byte record per range (`/jr/sa1..4.rec`, `specsec::to_apdo_wire`); formats 3 to 5 still load, with no range cells. A third file, `/jr/spt.rec`
   keeps one 10-byte row per judged transition or pass (up to `specsec::kRowsMax` = 392; the later rows are not kept),
   so the device's detail page lists them (see `docs/CHARGER_TEST_FLOW.md`, "PD spec section"); **only in `K2_SPECROWS=1` builds**; a format 4 journal has none and shows the summary. The report card
-  does not carry the cells. The remote reads the section with `0x0B [6, off]`, the detail with `[7, off]` and, in `K2_SPECROWS=1` builds, the rows with `[8, off16]` (BadLength otherwise; `encode_charger_test_spec`); `ct_start.py` and the `k2_remote` charger-test
+  carries the 27 cells (format 11) and, from format 13, each range's word and slot verdicts (see `docs/QR_SHARE.md`). The remote reads the section with `0x0B [6, off]`, the detail with `[7, off]`, in `K2_SPECROWS=1` builds the rows with `[8, off16]` (BadLength otherwise; `encode_charger_test_spec`), and each range with `[9, off16]` (the reply of `[8]`; the data is a count byte, n in bits 0..3, bit 4 / 5 = the PPS / AVS block split, then one `to_apdo_wire` record per range: position, a byte of avs bit 0, tone bits 1-2, group bits 3-4, then 11 slots of 12 bytes); `ct_start.py` and the `k2_remote` charger-test
   export carry it in their summary and files; the web charger-test grid draws it (`tools/web/ctgrid.js`).
 - **Owner:** while the stage runs the charger test is the owner (`BusyWhy::TestRunning`, which wins over `BusyWhy::PdSpec`); `PdSpecSession`
   stays out of the way of the standalone owner checks. `BusyWhy::PdSpec` (12) is the standalone run's.

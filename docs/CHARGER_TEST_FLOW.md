@@ -825,12 +825,18 @@ The stage is planned only for a Deep level with the full Pd unit in the plan, on
 Running footer names it. Its PPS / AVS checks are judged from the run's own moves (`docs/agents/prog-unify.md`): while the stage is
 still ahead, every deep-sweep point after the first, every step-walk level after the base and every range row that moves within its
 APDO is offered to the engine (`Env::spec_move`; the session freezes the capture its Request armed and judges it on its next poll,
-`Env::spec_feeding` holds the next Request until then, at most `kSpecFeedMaxMs`). A window swept whole runs only its slams and
-status asks in the stage. The estimate follows the list (`specsec::estimate_ms`). A stop (BACK) asks the engine to end in order (the charger back at 5 V, `kStopGraceMs` grace, then it is
+`Env::spec_feeding` holds the next Request until then, at most `kSpecFeedMaxMs`). A window swept whole runs only its cover pass
+(three 500 mV / 1 V steps up and back, five resolution steps onto each end), its slams and status asks in the stage. EPR AVS moves are
+fed too, and the stage judges the EPR AVS APDO the run reached (`kOptEprAvs`, cable proof, under the monitor ceiling, inside EPR mode). The estimate follows the list (`specsec::estimate_ms`). A stop (BACK) asks the engine to end in order (the charger back at 5 V, `kStopGraceMs` grace, then it is
 ended hard); a lost link ends it as a fault. The default image has no spec stage and nothing in this page changes.
 
 The grid gains a section after the units: 27 VerdictCells (`specsec::kOrder`, labels in `spec_text.hpp`, at most 8 characters in
-the 52 px label strip) in the ordinary rows, a 2 px rule above the PPS block, the AVS block and the observer. A cell shows the worst value (or, for a skipped check, the
+the 52 px label strip) in the ordinary rows, a 2 px rule above the PPS block, the AVS block and the observer. **Layout B** (Results only,
+user 2026-11-19): a PPS / AVS range line takes its kind as label and the range's spec word ("spec", "-", "level", "timing", "shape";
+Caution or Fail fill) as a cell of its own, under a 2 px rule above the block's first range line; a kind whose every measured range has a
+line drops its merged block from the section (`specsec::split`, `result_layout::range_positions`). The range's footer keeps its own
+words first (fold, walk, lost) and shows its spec line only when the range itself passed. Its Steps page lists the range's spec checks
+after its steps (8 for AVS, 11 for PPS); OK opens `SpecDetail`, BACK goes back to the row. A cell shows the worst value (or, for a skipped check, the
 reason, struck out); OK on a cell opens `SpecDetail`. **The list below is built only with `K2_SPECROWS=1`** (off by default since 2026-11-17: the shipping
 image has no flash for it); without it every check opens the summary KvTable, no `/jr/spt.rec` is written or read and `0x0B [8]` answers BadLength.
 A check that judged more than one transition or pass (`specsec::has_list`: the fixed
@@ -850,10 +856,14 @@ count and the place (a, b). Live and resumed runs read the same stored values; a
 (`Type::Spec`, `/jr/sp.rec`) and its detail (`Type::SpecDetail`, `/jr/spd.rec`, written right behind it): a second
 record. A third file, `/jr/spt.rec` (ten bytes a row after a 90 byte header: magic `SPT1`, run id, a u16 row count and a u8 worst index per cell), keeps the
 rows; it is dropped when the run has none. The journal format is 5; a format 3 or 4 journal still loads (no rows file: its cells read
-the summary, and format 3 cells read "-"), a firmware that only knows an older format drops a format 5 journal. The report card does not carry any of them.
+the summary, and format 3 cells read "-"), a firmware that only knows an older format drops a format 5 journal. Journal format 6 adds `/jr/sa1..4.rec`, one 134-byte
+record per range (`specsec::to_apdo_wire`); formats 3 to 5 still load without them. The report card (format 13) carries each
+range's word and slot verdicts, not the rows.
 Remote `0x0B [6, off]` reads the section and `0x0B [7, off]` its detail (216 bytes, chunks of 48; each form fits the one-byte total); `0x0B [8, off_lo, off_hi]`
 reads the rows file (a reply of run id u32, total u16, offset u16, n u8, then up to 48 bytes; 16-bit total and offset because the file is
-up to about 4 KB; total 0 = no rows, BadLength from an older firmware).
+up to about 4 KB; total 0 = no rows, BadLength from an older firmware). `0x0B [9, off_lo, off_hi]` reads each range the same way: a
+count byte (n in bits 0..3, bits 4 / 5 = the PPS / AVS block the grid split), then the range records; `k2_remote`, `ct_start.py` and the
+web grid read it (an older firmware's BadLength = no ranges).
 `ct_start.py`, `k2_remote` and the web grid (`ctgrid.js`) show the section as its own section with the limit and count in the failure lines and titles;
 `k2_remote` and `pdspec_blob.decode_rows` add `rows` and `worst_row` to each listed cell of the export (keys only added), and the summary lists the failing transitions under a failed check. The web grid does not read the rows yet.
 `result_layout` turns the run's steps into rows and tokens (`build`; the on-device grid has no header rows, a skip tag
