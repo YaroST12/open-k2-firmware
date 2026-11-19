@@ -112,6 +112,7 @@ private:
     void on_item(pdspec::Family f, std::uint8_t idx, std::uint8_t total) override;
     void on_note(const char* why) override;
     void on_finish(pdspec::Stop why) override;
+    void on_apdo(pdspec::Check c, const pdspec::Meas& m) override;
 
     pdspec::StartResult start_run(std::uint8_t families, std::uint32_t now_ms, std::uint8_t opts, bool in_test, std::uint8_t covered = 0,
                                   bool keep = false);

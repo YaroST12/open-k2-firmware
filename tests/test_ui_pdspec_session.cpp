@@ -232,6 +232,11 @@ void test_moves_fed_before_the_stage() {
     CHECK_EQ(s.feeding(), false);
     CHECK_EQ(int(g_stub.tc_state), int(transcap::State::Frozen));
     CHECK_EQ(int(s.engine()->agg(sc::Check::PpsBand).n), 3);
+    // ... and each one is the range's own too (the charger test's evidence, its range row's spec cell).
+    const specsec::Apdos &ap = ui.charger_test_results().evidence().spec_apdo;
+    CHECK_EQ(ap.find(5) != nullptr, true);
+    CHECK_EQ(int(ap.find(5)->cells[specsec::apdo_slot(sc::Check::PpsBand)].n), 3);
+    CHECK_EQ(int(ap.find(5)->cells[specsec::apdo_slot(sc::Check::PpsMonotonic)].n), int(s.engine()->agg(sc::Check::PpsMonotonic).n));
     // Not recording: nothing to take, no wait.
     g_stub.tc_state = transcap::State::Off;
     CHECK_EQ(s.test_move(7, {5, false, 1, 5100, 5200}, sc::kMoveSweep, g_now), false);
@@ -249,6 +254,7 @@ void test_moves_fed_before_the_stage() {
     CHECK_EQ(int(s.engine()->agg(sc::Check::PpsBand).n), 1);   // a fresh engine for the new run
     g_stub.tc_rec = nullptr; g_stub.tc_freeze_on_trigger = false; g_stub.tc_state = transcap::State::Off;
     CHECK_EQ(int(s.start_in_test(g_now, 9)), int(sc::StartResult::Ok));
+    CHECK_EQ(int(ap.n), 0);   // run 8's moves went with its engine
     CHECK_EQ(int(s.engine()->covered()), 0);
     CHECK_EQ(int(s.engine()->agg(sc::Check::PpsBand).n), 0);
     s.cancel();

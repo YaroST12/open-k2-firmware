@@ -151,6 +151,11 @@ void PdSpecSession::on_item(sc::Family f, std::uint8_t idx, std::uint8_t total) 
 
 void PdSpecSession::on_note(const char* why) { K2LOG("[PDSPEC] note %s\n", why); }
 
+// A Deep run keeps each range's own spec cells in the charger test's evidence; a standalone run has no range rows.
+void PdSpecSession::on_apdo(sc::Check c, const sc::Meas& m) {
+    if (test_run_) ctx_.ui->charger_test_spec_apdo(c, m);
+}
+
 void PdSpecSession::on_finish(sc::Stop why) {
     const sc::Engine& e = *engine_;
     // The checks, the programmable passes and the caps note are in the blob only (`k2_remote pd-spec result`, report.txt): no log line
@@ -176,6 +181,7 @@ sc::StartResult PdSpecSession::start(std::uint8_t families, std::uint32_t now_ms
 
 sc::StartResult PdSpecSession::start_in_test(std::uint32_t now_ms, std::uint32_t run_id) {
     const bool fed = run_id && run_id == fed_run_ && engine_ && test_run_ && !started();
+    if (!fed) ctx_.ui->charger_test_spec_apdo_clear();   // the fresh engine judges every range again
     return start_run(specsec::kFamilyMask, now_ms, 0, true, fed ? covered_ : 0, fed);
 }
 
@@ -191,6 +197,7 @@ bool PdSpecSession::test_move(std::uint32_t run_id, const sc::ProgMove& mv, std:
     if (!engine_ || !test_run_ || fed_run_ != run_id || started()) {
         pool_ = {};
         engine_.emplace(static_cast<sc::Env&>(*this));
+        ctx_.ui->charger_test_spec_apdo_clear();
         test_run_ = true;
         fed_run_ = run_id;
         covered_ = 0;

@@ -36,17 +36,25 @@ StartResult Engine::start(std::uint32_t now_ms, std::uint8_t families, std::uint
     return StartResult::Ok;
 }
 
-#if K2_SPECROWS
-// A fixed transition's measurement also marks the record in flight (cur_): measured, and failed (the aggregate's own judgement, the
-// bracket counted), so the per-transition rows (chargertest/spec_rows.hpp) agree with the check's cell.
+// A fixed transition's measurement also marks the record in flight (cur_, K2_SPECROWS): measured, and failed (the aggregate's own
+// judgement, the bracket counted), so the per-transition rows (chargertest/spec_rows.hpp) agree with the check's cell. A programmable
+// move's goes to Env::on_apdo as well.
 void Engine::meas(Check c, const Meas& m) {
-    const bool bad = agg_[static_cast<std::size_t>(c)].add(def(c).kind, m);
+    [[maybe_unused]] const bool bad = agg_[static_cast<std::size_t>(c)].add(def(c).kind, m);
+#if K2_SPECROWS
     if (const std::uint8_t b = tr_bit(c)) {
         cur_.seen = static_cast<std::uint8_t>(cur_.seen | b);
         if (bad) cur_.fails = static_cast<std::uint8_t>(cur_.fails | b);
     }
-}
 #endif
+    if (prog_meas_) env_->on_apdo(c, m);
+}
+
+void Engine::judge_move(const ProgMove& mv, const StepOut& o, const Edges& e, const Snapshot& s, PassRec& r) {
+    prog_meas_ = true;
+    judge_prog(mv, o, e, s, r);
+    prog_meas_ = false;
+}
 
 void Engine::skip_family(Family f, Skip why) {
     for (std::size_t k = 0; k < kChecks; ++k) if (owns(f, Check(k))) skip(Check(k), why);
@@ -362,7 +370,7 @@ void Engine::measure_done(const Snapshot& s, std::uint32_t now) {
         env_->capture_stop();
         PassRec scratch;
         PassRec* slot = pass_slot();
-        judge_prog({tgt_pos_, prog().kind == ProgKind::Avs, cls_, from_mv_, tgt_mv_}, o, e, s, slot ? *slot : scratch);
+        judge_move({tgt_pos_, prog().kind == ProgKind::Avs, cls_, from_mv_, tgt_mv_}, o, e, s, slot ? *slot : scratch);
         // Not inside the new band by the end of the window (an unloaded fall can be slow): the next move starts once VBUS is there, and
         // its monotonic check has no level to compare with.
         if (!o.band.seen && !o.settled) { prev_valid_ = false; go(tgt_pos_, tgt_mv_, After::PpsNext, now); return; }
@@ -592,7 +600,7 @@ void Engine::judge_test_move(const ProgMove& mv, bool chain, const Edges& e, con
     accept0_ = s.accept_at;
     if (!chain) prev_valid_ = false;
     PassRec scratch;
-    judge_prog(mv, o, e, s, scratch);
+    judge_move(mv, o, e, s, scratch);
     if (!o.valid || (!o.band.seen && !o.settled)) prev_valid_ = false;
 }
 
@@ -620,10 +628,12 @@ void Engine::status_poll(const Snapshot& s, std::uint32_t now) {
     const auto a = static_cast<std::uint8_t>(tgt_pos_ | cls_ << 4 | (asked_end_ ? 0x80 : 0));
     const auto b = static_cast<std::uint8_t>(target / 100);
     const std::int32_t bits = pps_status_faults(s, target);
+    prog_meas_ = true;
     meas(Check::PpsStatus, {bits, 0, 0, 0, a, b});
     if (PassRec* p = pass_slot()) p->status = static_cast<std::uint8_t>(p->status | bits);
     if (s.pps_ask != pd::PpsAsk::Timeout && (s.pps_ask_us & 1) && (s.pps_rx_us & 1) && s.pps_rx_us - s.pps_ask_us < 1000000)
         meas(Check::PpsStatusTime, {std::int32_t(s.pps_rx_us - s.pps_ask_us), 0, 0, std::int32_t(pd::spec::kPpsStatusLimitMs * 1000), a, b});
+    prog_meas_ = false;
     prog_next(now);
 }
 

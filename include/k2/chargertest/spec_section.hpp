@@ -210,6 +210,102 @@ constexpr bool from_detail_wire(const std::uint8_t* w, std::size_t n, Result& r)
     return true;
 }
 
+// ---- per APDO (the range rows of a Deep run's PD block) -------------------------------------------------------------------------
+// Each PPS / AVS APDO keeps its own cells, folded from the engine's measurements of it (Env::on_apdo) the way an Agg folds them, so
+// the range's row carries its own spec word and its Detail lists its checks. A slot is one check; the PPS and AVS counterparts share
+// it (Count = none on that kind). Slots 0..3 judge the level, 4..8 the timing, 9..10 the shape of a step.
+inline constexpr std::size_t kApdoSlots = 11;
+inline constexpr std::array<C, kApdoSlots> kApdoPps{C::PpsAccuracy, C::PpsMonotonic, C::PpsTrack, C::PpsStatus, C::PpsBand, C::PpsSettle,
+                                                   C::PpsPsRdy, C::AcceptTime, C::PpsStatusTime, C::PpsOvershoot, C::PpsTransient};
+inline constexpr std::array<C, kApdoSlots> kApdoAvs{C::AvsAccuracy, C::AvsMonotonic, C::AvsTrack, C::Count, C::AvsBand, C::Count,
+                                                   C::AvsPsRdy, C::AcceptTime, C::Count, C::AvsOvershoot, C::AvsTransient};
+constexpr std::size_t apdo_slot(C c) {
+    for (std::size_t i = 0; i < kApdoSlots; ++i)
+        if (kApdoPps[i] == c || kApdoAvs[i] == c) return i;
+    return kApdoSlots;
+}
+constexpr C apdo_check(bool avs, std::size_t slot) { return slot < kApdoSlots ? (avs ? kApdoAvs : kApdoPps)[slot] : C::Count; }
+enum class Group : std::uint8_t { Level, Timing, Shape };
+constexpr Group slot_group(std::size_t slot) { return slot < 4 ? Group::Level : slot < 9 ? Group::Timing : Group::Shape; }
+constexpr const char* group_word(Group g) { return g == Group::Level ? "level" : g == Group::Timing ? "timing" : "shape"; }
+
+// Bit 7 of an APDO cell's code: the kept worst failed (its rank is redone from the quantised value, as Agg does from worst / lo / hi).
+inline constexpr std::uint8_t kWorstFailed = 0x80;
+constexpr void cell_add(C c, Cell& cell, const sc::Meas& m) {
+    const sc::CheckDef& d = sc::def(c);
+    const std::int32_t ex = sc::excess(d.kind, m);
+    if (ex > 0 && cell.fails < 255) ++cell.fails;
+    const sc::Meas kept{dequantize(d.unit, cell.value), 0, dequantize_limit(d.unit, cell.lo, false), dequantize_limit(d.unit, cell.hi, true)};
+    bool worst_failed = (cell.code & kWorstFailed) != 0;
+    if (cell.n == 0 || sc::Agg::rank(d.kind, m, ex > 0) > sc::Agg::rank(d.kind, kept, worst_failed)) {
+        cell.value = quantize(d.unit, m.value);
+        cell.lo = quantize_limit(d.unit, m.lo); cell.hi = quantize_limit(d.unit, m.hi);
+        cell.a = m.a; cell.b = m.b; worst_failed = ex > 0;
+    }
+    if (cell.n < 0xFFFF) ++cell.n;
+    const sc::Verdict v = d.inferred ? sc::Verdict::Unverified : cell.fails ? sc::Verdict::Fail : sc::Verdict::Pass;
+    cell.code = static_cast<std::uint8_t>(static_cast<unsigned>(v) | (worst_failed ? kWorstFailed : 0u));
+}
+
+struct Apdo {
+    std::uint8_t pos = 0;   // the APDO's position in the list (1-based, as Meas::a & 15 carries it)
+    bool avs = false;
+    std::array<Cell, kApdoSlots> cells{};
+};
+struct Apdos {
+    std::array<Apdo, sc::kMaxProg> r{};
+    std::uint8_t n = 0;
+    constexpr const Apdo* find(std::uint8_t pos) const {
+        for (std::size_t i = 0; i < n; ++i)
+            if (r[i].pos == pos) return &r[i];
+        return nullptr;
+    }
+    constexpr Apdo* find(std::uint8_t pos) { return const_cast<Apdo*>(static_cast<const Apdos*>(this)->find(pos)); }
+    // A check with no slot, or a fifth APDO, is dropped (the merged cells still count it).
+    constexpr void add(C c, const sc::Meas& m) {
+        const std::size_t slot = apdo_slot(c);
+        const auto pos = static_cast<std::uint8_t>(m.a & 15u);
+        if (slot >= kApdoSlots || pos == 0) return;
+        Apdo* p = find(pos);
+        if (!p) {
+            if (n >= r.size()) return;
+            p = &r[n++];
+            *p = Apdo{};
+            p->pos = pos;
+        }
+        p->avs = p->avs || sc::avs_check(c);
+        cell_add(c, p->cells[slot], m);
+    }
+};
+static_assert(sizeof(Apdos) <= 540, "RAM: one copy, in the Runner's evidence");
+
+// The range's word: Fail with the family of the judged failures (the larger weight x fails), Caution when only an inferred limit
+// (PPS settle) was exceeded, Pass ("spec") when something was judged and all passed, None when the range measured nothing.
+enum class RangeTone : std::uint8_t { None, Pass, Caution, Fail };
+struct RangeSpec { RangeTone tone = RangeTone::None; Group group = Group::Level; };
+constexpr RangeSpec range_spec(const Apdo& p) {
+    std::array<std::uint32_t, 3> pen{};
+    RangeSpec rs;
+    for (std::size_t i = 0; i < kApdoSlots; ++i) {
+        const Cell& c = p.cells[i];
+        const C k = apdo_check(p.avs, i);
+        if (c.n == 0 || k == C::Count) continue;
+        const auto g = static_cast<std::size_t>(slot_group(i));
+        if (sc::def(k).inferred) {
+            if (c.fails && rs.tone != RangeTone::Fail && rs.tone != RangeTone::Caution) rs = {RangeTone::Caution, slot_group(i)};
+        } else {
+            pen[g] += std::uint32_t(sc::def(k).weight) * c.fails;
+        }
+        if (rs.tone == RangeTone::None) rs.tone = RangeTone::Pass;
+    }
+    std::size_t worst = 0;
+    for (std::size_t g = 1; g < pen.size(); ++g)
+        if (pen[g] > pen[worst]) worst = g;
+    if (pen[worst]) rs = {RangeTone::Fail, static_cast<Group>(worst)};
+    return rs;
+}
+constexpr const char* range_word(const RangeSpec& rs) { return rs.tone == RangeTone::Pass ? "spec" : rs.tone == RangeTone::None ? "-" : group_word(rs.group); }
+
 // The time the stage adds to a run's estimate, from the list (hardware, Anker IQ4: 12 transitions in 32 s, 248 programmable moves in
 // 80 s): the fixed walk, then per programmable window either its slams and status asks (the run's own sweep covered it) or the
 // engine's full passes (the engine runs at most pdspec::kMaxRunMs).

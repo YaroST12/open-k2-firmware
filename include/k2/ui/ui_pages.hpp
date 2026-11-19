@@ -345,6 +345,8 @@ public:
     // PD Stress borrows the deep-sweep point buffer for its record (Runner::claim_sweep_record): empty while a test runs.
     std::span<int16_t> claim_record() { return runner_.claim_sweep_record(); }
     const charger_test::Runner& results() const { return runner_; }
+    void spec_apdo(pdspec::Check c, const pdspec::Meas& m) { runner_.spec_apdo(c, m); }
+    void spec_apdo_clear() { runner_.spec_apdo_clear(); }
     uint32_t selection_mask() const { return options_.selected; }
     // The PPS deep sweep's point count for the source in hand (the Tests-list line's count); 0 = no PPS APDO: the line is hidden.
     unsigned sweep_points() const;

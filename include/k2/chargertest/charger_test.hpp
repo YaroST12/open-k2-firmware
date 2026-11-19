@@ -445,6 +445,8 @@ struct Evidence {
     uint16_t svooc_vmax_mv = 0, svooc_stop_ms = 0;
     // The PD spec stage (spec_section.hpp): how it ended and one verdict per check. Journaled (/jr/sp.rec), not on the card.
     specsec::Result spec{};
+    // ... and per PPS / AVS APDO, folded live from the engine's programmable measurements (the range rows' spec cells).
+    specsec::Apdos spec_apdo{};
     // The VOOC family's ident command (0xA8 / 0xAC / 0xA6) when its detection row passed; 0 = none heard. One ident proves the
     // family, not the variant. Not journaled, not on the card.
     uint8_t vooc_ident = 0;
@@ -790,6 +792,9 @@ public:
     uint32_t run_id() const { return run_id_; }
     uint32_t revision() const { return revision_; }
     const Evidence& evidence() const { return evidence_; }
+    // The PD spec engine's per-APDO measurements of this run (Env::on_apdo); clear = the engine started again from nothing.
+    void spec_apdo(pdspec::Check c, const pdspec::Meas& m) { evidence_.spec_apdo.add(c, m); }
+    void spec_apdo_clear() { evidence_.spec_apdo = {}; }
     size_t index() const { return index_; }
     std::span<const Step> steps() const { return {steps_.data(), count_}; }
     uint32_t hold_left_ms(uint32_t now) const;

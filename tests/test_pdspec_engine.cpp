@@ -110,6 +110,8 @@ struct Sim final : Env {
     Stop stop = Stop::None;
     alignas(4) std::array<std::uint8_t, kPoolBytes> pool_{};
     std::span<std::uint8_t> record_pool() override { return pool_; }
+    std::vector<std::pair<Check, Meas>> apdo;   // Env::on_apdo: the programmable moves' measurements, as reported
+    void on_apdo(Check c, const Meas& x) override { apdo.push_back({c, x}); }
 
     Sim() {
         s.attached = true;
@@ -1443,6 +1445,39 @@ void covered_window_runs_the_slams_only() {
     CHECK_EQ(int(e2.agg(Check::PpsAccuracy).n), 2);
 }
 
+// Env::on_apdo: every measurement of a programmable move (its Accept and the Get_PPS_Status asks included) is reported with its APDO
+// in the place byte, as many as the merged aggregate counted; the fixed walk reports none.
+void apdo_hook_reports_every_programmable_measurement() {
+    Sim m;
+    m.list({fixed(5000), fixed(9000), pps(3300, 11000), avs(9000, 20000)});
+    Engine e(m);
+    CHECK_COND(e.start(0, 0x03) == StartResult::Ok);
+    drive(m, e);
+    CHECK_COND(e.stop() == Stop::Done);
+    std::array<int, kChecks> n{};
+    int wrong_place = 0;
+    for (const auto& [c, x] : m.apdo) {
+        ++n[std::size_t(c)];
+        const bool avs_move = avs_check(c) || (c == Check::AcceptTime && (x.a & 15) == 4);
+        if ((x.a & 15) != (avs_move ? 4 : 3)) ++wrong_place;
+    }
+    CHECK_EQ(wrong_place, 0);
+    for (std::size_t k = 0; k < kChecks; ++k) {
+        const Check c = Check(k);
+        if (c == Check::AcceptTime) continue;
+        CHECK_EQ(n[k], owns(Family::Pps, c) ? int(e.agg(c).n) : 0);
+    }
+    CHECK_COND(n[std::size_t(Check::PpsStatus)] > 0 && n[std::size_t(Check::AvsBand)] > 0);
+    CHECK_EQ(n[std::size_t(Check::AcceptTime)], int(e.agg(Check::AcceptTime).n) - 2);   // the walk 5 -> 9 -> 5 V keeps its two
+    // A charger-test move reports the same way, before any start.
+    Sim m2;
+    typical(m2);
+    Engine e2(m2);
+    e2.judge_test_move({5, false, 1, 5000, 5100}, false, clean_edges(), clean_step(5100), m2.snapshot());
+    CHECK_COND(!m2.apdo.empty());
+    for (const auto& [c, x] : m2.apdo) CHECK_EQ(int(x.a & 15), 5);
+}
+
 // The Deep run's spec section before and after: the same list with every window swept by the charger test (Sim ms).
 std::uint32_t spec_ms(std::initializer_list<pd::Pdo> l, std::uint8_t covered) {
     Sim m;
@@ -1510,6 +1545,7 @@ int main() {
     pps_ps_rdy_wire_allowance();
     test_moves_land_in_the_aggregates();
     covered_window_runs_the_slams_only();
+    apdo_hook_reports_every_programmable_measurement();
     covered_run_time();
     return test_report("test_pdspec_engine");
 }

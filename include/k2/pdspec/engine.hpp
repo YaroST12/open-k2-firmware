@@ -158,6 +158,9 @@ public:
     virtual void on_item(Family, std::uint8_t /*idx*/, std::uint8_t /*total*/) {}
     virtual void on_note(const char*) {}
     virtual void on_finish(Stop) {}
+    // One measurement of a programmable move (its APDO in m.a & 15), the Accept and Get_PPS_Status included: a caller that keeps
+    // per-APDO results (the Deep charger test's range rows) folds it in; the merged aggregates are unchanged by it.
+    virtual void on_apdo(Check, const Meas&) {}
 
 protected:
     ~Env() = default;   // never deleted through the interface (a virtual destructor would pull operator delete into the link)
@@ -262,11 +265,8 @@ private:
     const pd::Pdo& pdo(std::uint8_t pos) const { return env_->caps().pdos[pos - 1]; }
     std::int32_t level_mv(std::uint8_t pos, std::uint16_t mv) const { return mv ? mv : pdo(pos).max_mv; }
     bool programmable(std::uint8_t pos) const { return pos && pdo(pos).type != pd::PdoType::Fixed; }
-#if K2_SPECROWS
-    void meas(Check c, const Meas& m);   // out of line (engine.cpp): also marks the record in flight for the per-transition rows
-#else
-    void meas(Check c, const Meas& m) { agg_[static_cast<std::size_t>(c)].add(def(c).kind, m); }
-#endif
+    void meas(Check c, const Meas& m);   // out of line (engine.cpp): the record in flight (K2_SPECROWS) and Env::on_apdo
+    void judge_move(const ProgMove& mv, const StepOut& o, const Edges& e, const Snapshot& s, PassRec& r);   // judge_prog, reported per APDO
     void skip(Check c, Skip why) { auto& a = agg_[static_cast<std::size_t>(c)]; if (a.n == 0 && a.skip == Skip::None) a.skip = why; }
     void skip_family(Family f, Skip why);
     void next_family();
@@ -309,6 +309,7 @@ private:
     Env* env_;
     bool running_ = false, finishing_ = false, cancel_ = false, release_unconfirmed_ = false;
     bool hr_epr_ = false;   // the K2's Hard Reset went out in EPR mode
+    bool prog_meas_ = false;   // the measurements in flight are a programmable move's: Env::on_apdo gets them too
     Stop stop_ = Stop::None;
     std::uint32_t t0_ = 0, end_ms_ = 0;
     Levels L_{};
