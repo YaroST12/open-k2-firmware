@@ -97,7 +97,7 @@ void cancel() {
 }
 void note(std::span<const charger_test::Step> steps, std::size_t index) { g_j.note(steps, index); }
 void note_plan(std::span<const charger_test::Step> steps) { g_j.note_plan(steps); }
-void note_spec() { g_j.note_spec(); }
+void note_spec(const specsec::Apdos* apdo) { g_j.note_spec(apdo); }
 #if K2_SPECROWS
 std::size_t spec_rows_size() { return g_j.spec_rows_size(); }
 bool spec_rows_read(std::uint32_t off, std::span<std::uint8_t> out) {

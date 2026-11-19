@@ -304,6 +304,54 @@ constexpr RangeSpec range_spec(const Apdo& p) {
     if (pen[worst]) rs = {RangeTone::Fail, static_cast<Group>(worst)};
     return rs;
 }
+// One range on the wire (the journal record /jr/sa<n>.rec, the remote read 0x0B [9, off]): pos, avs, then per slot the cell's code,
+// fails, value, lo, hi, n (little endian), a, b. The remote reads a stream: the count, then each range's form (none: empty).
+inline constexpr std::size_t kApdoCellBytes = 12, kApdoWireBytes = 2 + kApdoCellBytes * kApdoSlots;
+static_assert(kApdoWireBytes % 2 == 0 && kApdoWireBytes <= 254, "one even journal record");
+constexpr std::uint8_t apdo_wire_byte(const Apdo& p, std::size_t k) {
+    if (k == 0) return p.pos;
+    if (k == 1) return p.avs ? 1 : 0;
+    const Cell& c = p.cells[(k - 2) / kApdoCellBytes];
+    const auto u16 = [](std::int32_t v, bool hi) { return static_cast<std::uint8_t>(hi ? static_cast<std::uint16_t>(v) >> 8 : v & 0xFF); };
+    switch ((k - 2) % kApdoCellBytes) {
+        case 0: return c.code;
+        case 1: return c.fails;
+        case 2: case 3: return u16(c.value, (k - 2) % 2);
+        case 4: case 5: return u16(c.lo, (k - 2) % 2);
+        case 6: case 7: return u16(c.hi, (k - 2) % 2);
+        case 8: case 9: return u16(c.n, (k - 2) % 2);
+        case 10: return c.a;
+        default: return c.b;
+    }
+}
+constexpr void to_apdo_wire(const Apdo& p, std::array<std::uint8_t, kApdoWireBytes>& w) {
+    for (std::size_t k = 0; k < kApdoWireBytes; ++k) w[k] = apdo_wire_byte(p, k);
+}
+// Adds the range (or replaces the one at its position). False = not a form of this version: nothing changes.
+constexpr bool from_apdo_wire(const std::uint8_t* w, std::size_t n, Apdos& a) {
+    if (n != kApdoWireBytes || w[0] == 0 || w[0] > 15 || w[1] > 1) return false;
+    Apdo p;
+    p.pos = w[0]; p.avs = w[1] != 0;
+    const auto s16 = [](const std::uint8_t* q) { return static_cast<std::int16_t>(static_cast<std::uint16_t>(q[0] | (q[1] << 8))); };
+    for (std::size_t i = 0; i < kApdoSlots; ++i) {
+        const std::uint8_t* q = w + 2 + kApdoCellBytes * i;
+        Cell& c = p.cells[i];
+        c = {q[0], q[1], s16(q + 2), s16(q + 4), s16(q + 6), static_cast<std::uint16_t>(q[8] | (q[9] << 8)), q[10], q[11]};
+        if (static_cast<unsigned>(c.verdict()) > static_cast<unsigned>(sc::Verdict::Unverified)) return false;
+    }
+    Apdo* slot = a.find(p.pos);
+    if (!slot) {
+        if (a.n >= a.r.size()) return false;
+        slot = &a.r[a.n++];
+    }
+    *slot = p;
+    return true;
+}
+constexpr std::size_t apdo_stream_size(const Apdos& a) { return a.n ? 1 + a.n * kApdoWireBytes : 0; }
+constexpr std::uint8_t apdo_stream_byte(const Apdos& a, std::size_t i) {
+    return i == 0 ? a.n : apdo_wire_byte(a.r[(i - 1) / kApdoWireBytes], (i - 1) % kApdoWireBytes);
+}
+
 constexpr const char* range_word(const RangeSpec& rs) { return rs.tone == RangeTone::Pass ? "spec" : rs.tone == RangeTone::None ? "-" : group_word(rs.group); }
 
 // The time the stage adds to a run's estimate, from the list (hardware, Anker IQ4: 12 transitions in 32 s, 248 programmable moves in

@@ -397,7 +397,7 @@ void ChargerTestSession::spec_done(const specsec::Result&) {
 #if K2_SPECROWS
     spec_live_run_ = runner_.run_id();   // the engine still holds the records behind the result: the detail page lists them from there
 #endif
-    if (journal_active_ && !journal_closed_) charger_journal::hw::note_spec();
+    if (journal_active_ && !journal_closed_) charger_journal::hw::note_spec(&runner_.spec_apdo());
 }
 // The Deep transition check: the row's own request armed the recorder (request_pd); the hold's start freezes it kPostMs on, so it
 // holds the Accept, the ramp and the first of the hold. Not over a capture an earlier event of this row already froze.
@@ -707,6 +707,7 @@ bool ChargerTestSession::boot_load(bool cancel) {
         const bool planned = rdcomeback::planned_reattach();
         runner_.restore(r.options, r.evidence, r.run_id, std::span<const ct::Step>(r.steps.data(), r.count),
                         r.phase, r.phase_index, r.resumed, r.attempt_index, r.attempts, planned);
+        runner_.spec_apdo_restore(r.spec_apdo);
         if (planned) K2LOG("[TEST] planned re-attach boot: the resume is not counted as a power loss\n");
         resume_pending_ = runner_.resumable() && !cancel;
         auto_resume_ = resume_pending_;   // every interrupted run resumes by itself once VBUS has been steady (BACK at boot cancels)

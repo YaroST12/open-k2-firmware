@@ -155,6 +155,13 @@ std::size_t encode_spec_detail(std::span<std::uint8_t> out, const specsec::Resul
     return finish_record(out, Type::SpecDetail, kSpecDetailPayload);
 }
 
+std::size_t encode_spec_apdo(std::span<std::uint8_t> out, const specsec::Apdo& a) {
+    std::array<std::uint8_t, specsec::kApdoWireBytes> w{};
+    specsec::to_apdo_wire(a, w);
+    std::memcpy(out.data() + 4, w.data(), w.size());
+    return finish_record(out, Type::SpecApdo, kSpecApdoPayload);
+}
+
 void apply(Replay& r, Type t, std::span<const std::uint8_t> p) {
     using namespace charger_test;
     switch (t) {
@@ -181,6 +188,9 @@ void apply(Replay& r, Type t, std::span<const std::uint8_t> p) {
         break;
     case Type::SpecDetail:
         if (r.found && r.evidence.spec.end != specsec::End::NotRun && p.size() == kSpecDetailPayload) specsec::from_detail_wire(p.data(), p.size(), r.evidence.spec);
+        break;
+    case Type::SpecApdo:   // read after sp.rec: a range without a spec result is not shown
+        if (r.found && r.evidence.spec.end != specsec::End::NotRun && p.size() == kSpecApdoPayload) specsec::from_apdo_wire(p.data(), p.size(), r.spec_apdo);
         break;
     case Type::Finish:
         if (r.found) { r.unfinished = false; r.phase = Phase::None; }
@@ -267,7 +277,9 @@ void Journal::replay(Replay& r) const {
     if (r.phase != Phase::None && r.phase_index < r.count)
         for (std::size_t k = 0; k < r.count; ++k) if (si.order[k] == r.phase_index) { r.phase_index = k; break; }
     detail::apply_order({r.steps.data(), r.count}, si.order.data());
-    static constexpr const char* const kSmallPaths[] = {"/jr/rs.rec", "/jr/at.rec", "/jr/sp.rec", "/jr/spd.rec", "/jr/fin.rec"};
+    static constexpr const char* const kSmallPaths[] = {"/jr/rs.rec", "/jr/at.rec", "/jr/sp.rec", "/jr/spd.rec", "/jr/sa1.rec", "/jr/sa2.rec",
+                                                        "/jr/sa3.rec", "/jr/sa4.rec", "/jr/fin.rec"};
+    static_assert(specsec::Apdos{}.r.size() == 4, "one range file per Apdos entry");
     for (const char* path : kSmallPaths) read_small(path, b, r);
     conclude(r);
 }
@@ -281,7 +293,7 @@ void Journal::start_arm() {
 }
 
 void Journal::cancel() { stage_ = Stage::Idle; clear_dirty(); }
-bool Journal::pending() const { return !broken_ && (stage_ != Stage::Idle || dirty_ != 0 || rows_pending() || header_stale()); }
+bool Journal::pending() const { return !broken_ && (stage_ != Stage::Idle || dirty_ != 0 || apdo_dirty_ != 0 || rows_pending() || header_stale()); }
 bool Journal::plan_pending() const { return !broken_ && (stage_ != Stage::Idle || plan_dirty_ != 0 || header_stale()); }
 
 void Journal::note(std::span<const charger_test::Step> steps, std::size_t idx) {
@@ -300,9 +312,11 @@ void Journal::note_plan(std::span<const charger_test::Step> steps) {
         dirty_ |= kOrderBit, plan_dirty_ |= kOrderBit;
 }
 
-void Journal::note_spec() {
+void Journal::note_spec(const specsec::Apdos* apdo) {
     if (!live()) return;
     dirty_ |= kSpecBit | kSpecDetailBit;
+    apdo_ = apdo;
+    apdo_dirty_ = apdo ? static_cast<std::uint8_t>((1u << apdo->n) - 1u) : 0;
 #if K2_SPECROWS
     rows_dirty_ = true;
 #endif
@@ -419,6 +433,13 @@ Err Journal::spec_detail(const specsec::Result& s) {
     return put("/jr/spd.rec", {buf.data(), encode_spec_detail(buf, s)});
 }
 
+Err Journal::spec_apdo(std::size_t idx, const specsec::Apdo& a) {
+    std::array<std::uint8_t, kMaxRecord> buf;
+    char path[] = "/jr/sa1.rec";
+    path[6] = static_cast<char>('1' + idx);
+    return put(path, {buf.data(), encode_spec_apdo(buf, a)});
+}
+
 #if K2_SPECROWS
 Err Journal::spec_rows(const SpecRowsSource* src) {
     if (broken_) return Err::Broken;
@@ -462,6 +483,11 @@ Err Journal::flush(std::uint32_t run_id, const charger_test::Options& o, const c
     if (x == Err::Ok && !did && header_stale()) x = write_header(run_id, o, e, steps);
     else if (x == Err::Ok && !did && (dirty_ & kSpecBit)) { dirty_ &= std::uint8_t(~kSpecBit); x = spec(e.spec); }
     else if (x == Err::Ok && !did && (dirty_ & kSpecDetailBit)) { dirty_ &= std::uint8_t(~kSpecDetailBit); x = spec_detail(e.spec); }
+    else if (x == Err::Ok && !did && apdo_dirty_ && apdo_) {
+        const std::size_t i = static_cast<std::size_t>(__builtin_ctz(apdo_dirty_));
+        apdo_dirty_ &= static_cast<std::uint8_t>(~(1u << i));
+        x = spec_apdo(i, apdo_->r[i]);
+    }
 #if K2_SPECROWS
     else if (x == Err::Ok && !did && rows_dirty_) { rows_dirty_ = false; x = spec_rows(rows); }
 #endif
@@ -664,7 +690,7 @@ bool Journal::stale(char (&path)[fs::kPathMax]) {
 
 Err Journal::stop(Err e) { stage_ = Stage::Idle; clear_dirty(); return e; }
 void Journal::clear_dirty() {
-    dirty_ = plan_dirty_ = 0;
+    dirty_ = plan_dirty_ = apdo_dirty_ = 0;
 #if K2_SPECROWS
     rows_dirty_ = false;
 #endif

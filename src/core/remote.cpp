@@ -1558,6 +1558,8 @@ remote::Status Remote::pdspec_start(const remote::PdSpecStart &) { return remote
 void Remote::pdspec_stop() {}
 size_t Remote::pdspec_read(uint16_t, std::span<uint8_t>) { return 0; }
 #endif
+// Each range's spec cells are the charger test's (the Deep run's PD spec section).
+const specsec::Apdos& Remote::charger_test_spec_apdo() { return ui_.charger_test_results().spec_apdo(); }
 #if K2_SPECROWS
 // The spec rows file is the charger test's (the Deep run's PD spec section): the session answers.
 uint16_t Remote::spec_rows_len() { return ui_.charger_test_spec_rows_len(); }

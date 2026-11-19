@@ -20,6 +20,8 @@
 //                   those cells read n = 0 and the detail page shows "-". The record is additive and sp.rec is unchanged)
 //   /jr/spt.rec     SpecRows (K2_SPECROWS builds only: the per-transition rows of the spec checks: "SPT1", run id, counts, worst, then the
 //                   10 byte rows; written right behind spd.rec, only read back. No file = the page shows the summary cell)
+//   /jr/sa1.rec ..  SpecApdo (format 6: one PPS / AVS range's own spec cells, specsec::to_apdo_wire, one record per range in the order
+//   /jr/sa4.rec     the run met them; written right behind spd.rec. None = the grid shows the merged section, as before)
 //   /jr/fin.rec     Finish  (the run ended: Done, Stopped or abandoned)
 // A section file: 8 bytes (id, row count, layout hash u32, crc16 over the whole file but these two bytes) then 18 bytes per
 // row (the plan row and its result). Rows are addressed by (section, ordinal): the n-th row of the plan that belongs to the
@@ -38,6 +40,7 @@
 // the wrong addresses, and a "last good copy" would need a second copy of every section (flash and a second consistency
 // story). The one window is the gap between a section file replaced and the header that names its new hash and order (one
 // flash write, tens of ms); it is the only way a clean power cut loses a run, and it is reported, never mis-read.
+// Format 6 = format 5 plus the optional /jr/sa<n>.rec (each range's spec cells); a format 3..5 journal loads without them.
 // Format 5 = format 4 plus the optional /jr/spt.rec (the spec's per-transition rows, 10 bytes each, read by the detail page and the
 // remote, never replayed; a build without K2_SPECROWS neither writes nor reads it, and the format byte is 5 either way).
 // Format 4 = format 3 plus the optional /jr/spd.rec (spec cell limit, count, place); the header layout is the same, so a format 3 or 4 journal is read as it is (no rows: the detail page shows its summary). Format 2 (sections, the order re-derived at replay), format 1 (one file per row, header
@@ -71,11 +74,11 @@ inline constexpr const char* kHeaderPath = "/jr/h.rec";
 inline constexpr const char* kSpecRowsPath = "/jr/spt.rec";
 inline constexpr std::size_t kSpecRowsMax = 4096;   // the rows file's ceiling (specsec::kRowsMaxFile is 4010; ui_charger_test.cpp static_asserts it fits)
 #endif
-inline constexpr std::uint8_t kFormat = 5;       // 5: the spec's per-transition rows ride in /jr/spt.rec (4: cell limit, count, place in /jr/spd.rec)
-inline constexpr std::uint8_t kMinFormat = 3;    // a format 3 or 4 journal (no spt.rec, no spd.rec) still loads: its detail shows the summary
+inline constexpr std::uint8_t kFormat = 6;       // 6: each range's spec cells in /jr/sa<n>.rec (5: per-transition rows in /jr/spt.rec, 4: cell limit, count, place in /jr/spd.rec)
+inline constexpr std::uint8_t kMinFormat = 3;    // a format 3 to 5 journal (no sa, spt or spd records) still loads: its detail shows the summary
 
 // Type::Step is the format 1 record (one row per file); nothing writes it any more.
-enum class Type : std::uint8_t { Header = 1, Step = 2, Phase = 3, Finish = 4, Resume = 5, Meta = 6, Attempt = 7, Spec = 8, SpecDetail = 9 };
+enum class Type : std::uint8_t { Header = 1, Step = 2, Phase = 3, Finish = 4, Resume = 5, Meta = 6, Attempt = 7, Spec = 8, SpecDetail = 9, SpecApdo = 10 };
 using Phase = charger_test::Phase;
 enum class Err : std::uint8_t { Ok, TooBig, Flash, Broken };
 
@@ -96,6 +99,7 @@ inline constexpr std::size_t kHeaderPayload = kHeaderBase + kOrderBytes, kPhaseP
 inline constexpr std::size_t kMetaPayload = 24, kAttemptPayload = 4;
 inline constexpr std::size_t kSpecPayload = (specsec::kWireBytes + 1) & ~std::size_t(1);   // the wire form, padded to an even length
 inline constexpr std::size_t kSpecDetailPayload = specsec::kDetailBytes;                      // 8 bytes per cell, already even
+inline constexpr std::size_t kSpecApdoPayload = specsec::kApdoWireBytes;                     // one range, already even
 inline constexpr std::size_t kRecordOverhead = 6;
 inline constexpr std::size_t kMaxRecord = kRecordOverhead + kHeaderPayload;
 inline constexpr std::size_t kSpecDetailRecord = kRecordOverhead + kSpecDetailPayload;   // the spec detail is the one record larger than the header
@@ -107,6 +111,7 @@ static_assert(charger_test::kMaxSteps < 255, "a section header counts rows in a 
 static_assert(kSpecPayload <= kHeaderPayload && kSpecPayload <= 254, "the spec record fits a header-sized buffer");
 static_assert(kSpecDetailPayload <= 254 && kSpecDetailPayload % 2 == 0, "the spec detail record is one even length byte; it is the largest record, so a read takes kReadRecord");
 static_assert(kHeaderPayload <= 254 && kHeaderPayload % 2 == 0, "a record payload length is one even byte");
+static_assert(kSpecApdoPayload <= kHeaderPayload, "a range record fits a header-sized buffer");
 static_assert(kSecHeader + kRowBytes * charger_test::kMaxSteps <= fs::kBlockSize - 8, "a section is at most one block");
 
 const char* section_path(Section s);
@@ -144,6 +149,7 @@ struct Replay {
     std::uint32_t run_id = 0;
     charger_test::Options options{};
     charger_test::Evidence evidence{};
+    specsec::Apdos spec_apdo{};         // each range's spec cells (format 6; none with no spec result)
     std::array<charger_test::Step, charger_test::kMaxSteps> steps{};   // the plan's order (the order the header carries, from the planner's step list)
     std::size_t count = 0;
     std::uint8_t resumed = 0;
@@ -190,6 +196,7 @@ std::size_t encode_meta(std::span<std::uint8_t> out, const RunMeta& m);
 std::size_t encode_attempt(std::span<std::uint8_t> out, std::size_t idx, std::uint8_t count);
 std::size_t encode_spec(std::span<std::uint8_t> out, const specsec::Result& s);
 std::size_t encode_spec_detail(std::span<std::uint8_t> out, const specsec::Result& s);
+std::size_t encode_spec_apdo(std::span<std::uint8_t> out, const specsec::Apdo& a);
 
 // Folds one valid small record (resume, meta, attempt, finish, spec) into the replay state. Header, rows and the phase marker need the
 // sections and are handled by Journal::replay.
@@ -276,8 +283,9 @@ public:
     // is on flash are rewritten, and the header after them - also when only the plan's ORDER moved (a re-announce re-placing a
     // row, a dropped hunt): the header names the order, so it is rewritten too. Costs a hash pass, no flash.
     void note_plan(std::span<const charger_test::Step> steps);
-    // The PD spec stage ended: Evidence::spec is written by a later pump() (one small record, behind any section or header write).
-    void note_spec();
+    // The PD spec stage ended: Evidence::spec is written by a later pump() (one small record, behind any section or header write),
+    // then each range of `apdo` (it must outlive the writes: the Runner's own).
+    void note_spec(const specsec::Apdos* apdo = nullptr);
     // The journal now mirrors a run read back at boot (its sections are on flash as read): later changes are written as changes.
     void adopt(const Replay& r);
     // A journal in the old layout is dropped at boot (the header only; the next arm sweeps the rest).
@@ -305,6 +313,8 @@ public:
     Err spec(const specsec::Result& s);
     // The detail of the same result (limit, count and place per cell): its own file, written by the pump right behind sp.rec.
     Err spec_detail(const specsec::Result& s);
+    // One range's spec cells (idx = its place in Apdos, the file /jr/sa<idx + 1>.rec).
+    Err spec_apdo(std::size_t idx, const specsec::Apdo& a);
 #if K2_SPECROWS
     // The per-transition rows of the spec result (specsec::rows_fill): their own file, written by the pump right behind spd.rec from the
     // source the caller hands the pump. No source or no rows (size 0) writes nothing and removes a file left by an earlier run. The file
@@ -388,6 +398,8 @@ private:
     Stage stage_ = Stage::Idle;
     std::size_t cur_ = 0;
     std::uint8_t dirty_ = 0;                                // sections whose file is to be rewritten (bit per Section)
+    std::uint8_t apdo_dirty_ = 0;                           // a bit per range of *apdo_ still to write
+    const specsec::Apdos* apdo_ = nullptr;
 #if K2_SPECROWS
     bool rows_dirty_ = false;                               // the spec rows (/jr/spt.rec) are to be written, from the source the pump is given
     bool rows_pending() const { return rows_dirty_; }

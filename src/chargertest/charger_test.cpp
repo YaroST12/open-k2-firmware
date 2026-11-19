@@ -1278,6 +1278,7 @@ Reason Runner::start(const pd::SourceCaps& caps, Options o, Input in, bool confi
     n_order_ = o.units.n; order_ = o.units.u;
     build(caps, o, in);
     evidence_ = {};
+    spec_apdo_ = {};
     evidence_.selected = o.selected; evidence_.session = in.session;
     evidence_.monitor_mv = std::min<uint32_t>(in.cap_mv, 65535); evidence_.cable_mv = used_cable_mv(in);
     evidence_.cable_ma = used_cable_ma(in);
@@ -2392,7 +2393,7 @@ void Runner::restore(const Options& o, const Evidence& e, uint32_t run_id, std::
                      size_t phase_index, uint8_t resumed, size_t attempt_unit, uint8_t attempts, bool planned_reattach) {
     count_ = std::min(steps.size(), steps_.size());
     std::copy_n(steps.begin(), count_, steps_.begin());
-    evidence_ = e; run_id_ = run_id; ++revision_; resumed_ = resumed; reattach_planned_ = planned_reattach; loaded_ = true; plan_frozen_ = true;
+    evidence_ = e; spec_apdo_ = {}; run_id_ = run_id; ++revision_; resumed_ = resumed; reattach_planned_ = planned_reattach; loaded_ = true; plan_frozen_ = true;
     opts_ = o;
     // A replay without the meta record (power cut between the header and it) carries no level: a Light plan names itself by its
     // rows (Advertised / LightLevel skips exist only there), so it never resumes as Medium and asks above 5 V.

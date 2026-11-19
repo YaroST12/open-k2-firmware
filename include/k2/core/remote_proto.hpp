@@ -153,6 +153,10 @@
 //                                    holds at most specsec::kRowsMax (392) rows; past that the last rows of the run are not listed and
 //                                    the counts are the ones listed. off past total is BadArg. An older firmware, and a build without K2_SPECROWS
 //                                    (the shipping default), answers BadLength.
+//                                    SPEC RANGES, req 9 off_lo(1) off_hi(1): each PPS / AVS range's own spec cells: count(1), then per range
+//                                    pos(1) avs(1) and 11 slots of code(1) fails(1) value(2) lo(2) hi(2) n(2) a(1) b(1) (LE, the cell
+//                                    rules of req 6 / 7; slot order specsec::kApdoPps / kApdoAvs). Same reply layout as req 8; total 0 =
+//                                    none. An older firmware answers BadLength: the grid keeps the merged section.
 //                                    CANCEL, req 5 (one byte): the device's own stop (BACK) - a run stops, the wait is
 //                                    cancelled (Rd released), the confirm window (and a pending remote START) closes, the
 //                                    Refuse stage returns to Review, a pending resume is abandoned. rsp what(1): kCtStop*.
@@ -1049,6 +1053,9 @@ constexpr uint8_t kChargerTestSpecReq = 6, kChargerTestSpecDetailReq = 7;
 // is up to about 4 KB).
 constexpr uint8_t kChargerTestSpecRowsReq = 8;
 constexpr size_t kCtSpecRowsHeader = 9;
+// `[9, off_lo, off_hi]`: each PPS / AVS range's own spec cells (specsec::apdo_stream_byte: the count, then 134 bytes per range), the
+// same reply layout as [8]. total 0 = none (no range measured, a run before them).
+constexpr uint8_t kChargerTestSpecApdoReq = 9;
 constexpr size_t kCtSpecChunk = 48, kCtSpecHeader = 7;
 static_assert(kCtSpecHeader + kCtSpecChunk <= kMaxRspPayload && kCtSpecRowsHeader + kCtSpecChunk <= kMaxRspPayload);
 static_assert(specsec::kWireBytes <= 255 && specsec::kDetailBytes <= 255, "total and off are one byte");
@@ -1707,6 +1714,7 @@ concept Backend = requires(B &b, uint8_t u8, uint16_t u16, bool on) {
     { b.spec_rows_len() } -> std::same_as<uint16_t>;                     // bytes of the spec rows file of the run in hand, 0 = none
     { b.spec_rows_read(uint16_t{}, std::span<uint8_t>{}) } -> std::same_as<size_t>;   // file bytes from off, returns how many
 #endif
+    { b.charger_test_spec_apdo() } -> std::same_as<const specsec::Apdos&>;   // each range's spec cells of the run in hand
     { b.loopprobe_len() } -> std::same_as<uint16_t>;                      // bytes of the stored loop probe file, 0 = none
     { b.loopprobe_read(uint16_t{}, std::span<uint8_t>{}) } -> std::same_as<size_t>;   // file bytes from off, returns how many
     { b.hostreport_len() } -> std::same_as<uint16_t>;                     // bytes of the stored Host report file, 0 = none
@@ -1943,6 +1951,18 @@ template <Backend B>
             const auto s = backend.charger_test_results();
             if (p[1] > charger_test_spec_total(s, p[0])) return reply_bad_arg(f);
             return reply_ok(f, encode_charger_test_spec(f.span(), s, p[0], p[1]));
+        }
+        if (p.size() == 3 && p[0] == kChargerTestSpecApdoReq) {
+            const specsec::Apdos& a = backend.charger_test_spec_apdo();
+            const uint16_t off = rd16(&p[1]);
+            const size_t total = specsec::apdo_stream_size(a);
+            if (off > total) return reply_bad_arg(f);
+            const size_t n = std::min<size_t>(kCtSpecChunk, total - off);
+            for (size_t i = 0; i < n; ++i) f.buf[kCtSpecRowsHeader + i] = specsec::apdo_stream_byte(a, off + i);
+            const uint32_t run = backend.charger_test_results().run_id;
+            f.buf[0] = uint8_t(run); f.buf[1] = uint8_t(run >> 8); f.buf[2] = uint8_t(run >> 16); f.buf[3] = uint8_t(run >> 24);
+            f.buf[4] = uint8_t(total); f.buf[5] = uint8_t(total >> 8); f.buf[6] = uint8_t(off); f.buf[7] = uint8_t(off >> 8); f.buf[8] = uint8_t(n);
+            return reply_ok(f, kCtSpecRowsHeader + n);
         }
 #if K2_SPECROWS
         if (p.size() == 3 && p[0] == kChargerTestSpecRowsReq) {

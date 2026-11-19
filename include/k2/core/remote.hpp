@@ -178,6 +178,7 @@ public:
     remote::Status pdspec_start(const remote::PdSpecStart &s);   // Busy when another tool owns the ports; other refusals show in info().start
     void pdspec_stop();                                          // never refused
     size_t pdspec_read(uint16_t off, std::span<uint8_t> out);
+    const specsec::Apdos& charger_test_spec_apdo();   // Cmd::ChargerTest req [9, off]
 #if K2_SPECROWS
     // Cmd::ChargerTest req [8, off]: the spec rows file of the run in hand (specsec::kRowsHdr + 10 byte rows), 0 = none.
     uint16_t spec_rows_len();

@@ -94,11 +94,54 @@ void the_range_word() {
     CHECK_STR(specsec::range_word(specsec::range_spec(*a.find(5))), "level");
 }
 
+// The wire form of one range (the journal record /jr/sa<n>.rec, the remote read 0x0B [9, off]): pos, avs, then per slot the cell's
+// code, fails, value, lo, hi, n (little endian), a, b. The stream the remote reads is the count, then each range's form.
+void wire_round_trip() {
+    specsec::Apdos a;
+    a.add(C::PpsBand, meas(300000, 0, 275000, 5));
+    a.add(C::PpsAccuracy, meas(9180, 8800, 9200, 5));
+    a.add(C::AvsOvershoot, meas(20900, -sc::kOpenLimit, 20500, 7, 2, 205));
+    std::array<std::uint8_t, specsec::kApdoWireBytes> w{};
+    specsec::to_apdo_wire(a.r[0], w);
+    CHECK_EQ(int(specsec::kApdoWireBytes), 2 + 12 * 11);
+    CHECK_EQ(int(w[0]), 5);
+    CHECK_EQ(int(w[1]), 0);
+    const std::size_t band = 2 + 12 * specsec::apdo_slot(C::PpsBand);
+    CHECK_EQ(int(w[band + 1]), 1);                             // fails
+    CHECK_EQ(int(w[band + 2] | w[band + 3] << 8), 3000);       // 300 ms in 0.1 ms
+    specsec::Apdos b;
+    CHECK_COND(specsec::from_apdo_wire(w.data(), w.size(), b));
+    specsec::to_apdo_wire(a.r[1], w);
+    CHECK_COND(specsec::from_apdo_wire(w.data(), w.size(), b));
+    CHECK_EQ(int(b.n), 2);
+    CHECK_COND(b.r[0].cells == a.r[0].cells && b.r[1].cells == a.r[1].cells && b.r[1].avs && b.r[1].pos == 7);
+    // The same range again replaces its entry; a damaged form changes nothing.
+    CHECK_COND(specsec::from_apdo_wire(w.data(), w.size(), b));
+    CHECK_EQ(int(b.n), 2);
+    w[1] = 2;
+    CHECK_COND(!specsec::from_apdo_wire(w.data(), w.size(), b));
+    w[1] = 1; w[2 + 12 * 4] = 7;                               // verdict 7
+    CHECK_COND(!specsec::from_apdo_wire(w.data(), w.size(), b));
+    w[2 + 12 * 4] = 0; w[0] = 0;
+    CHECK_COND(!specsec::from_apdo_wire(w.data(), w.size(), b));
+    CHECK_COND(!specsec::from_apdo_wire(w.data(), w.size() - 1, b));
+    CHECK_COND(b.r[1].cells == a.r[1].cells);
+    // The stream: count, then each range.
+    CHECK_EQ(int(specsec::apdo_stream_size(a)), 1 + 2 * int(specsec::kApdoWireBytes));
+    CHECK_EQ(int(specsec::apdo_stream_byte(a, 0)), 2);
+    specsec::to_apdo_wire(a.r[1], w);
+    bool same = true;
+    for (std::size_t i = 0; i < w.size(); ++i) same = same && specsec::apdo_stream_byte(a, 1 + specsec::kApdoWireBytes + i) == w[i];
+    CHECK_COND(same);
+    CHECK_EQ(int(specsec::apdo_stream_size(specsec::Apdos{})), 0);   // nothing to read: no range measured
+}
+
 }  // namespace
 
 int main() {
     cells_follow_the_aggregate_per_apdo();
     slots_and_groups();
     the_range_word();
+    wire_round_trip();
     return test_report("test_spec_apdo");
 }

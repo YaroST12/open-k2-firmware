@@ -233,7 +233,7 @@ void test_moves_fed_before_the_stage() {
     CHECK_EQ(int(g_stub.tc_state), int(transcap::State::Frozen));
     CHECK_EQ(int(s.engine()->agg(sc::Check::PpsBand).n), 3);
     // ... and each one is the range's own too (the charger test's evidence, its range row's spec cell).
-    const specsec::Apdos &ap = ui.charger_test_results().evidence().spec_apdo;
+    const specsec::Apdos &ap = ui.charger_test_results().spec_apdo();
     CHECK_EQ(ap.find(5) != nullptr, true);
     CHECK_EQ(int(ap.find(5)->cells[specsec::apdo_slot(sc::Check::PpsBand)].n), 3);
     CHECK_EQ(int(ap.find(5)->cells[specsec::apdo_slot(sc::Check::PpsMonotonic)].n), int(s.engine()->agg(sc::Check::PpsMonotonic).n));
