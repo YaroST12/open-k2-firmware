@@ -81,6 +81,17 @@ bool parse_battery_caps(std::span<const std::uint8_t> d, BatteryCaps& o) {
     return true;
 }
 
+bool parse_battery_status(std::span<const std::uint8_t> d, BatteryStatus& o) {
+    if (d.size() < 4) return false;
+    o = {};
+    o.valid = true;
+    o.invalid_ref = (d[1] & 1) != 0;
+    o.present = (d[1] & 2) != 0;
+    o.charging = o.present ? std::uint8_t((d[1] >> 2) & 3) : std::uint8_t(3);
+    o.present_dwh = le16(&d[2]);
+    return true;
+}
+
 bool parse_revision(std::span<const std::uint8_t> d, Revision& o) {
     if (d.size() < 4) return false;
     o = {};

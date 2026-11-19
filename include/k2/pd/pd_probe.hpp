@@ -19,7 +19,7 @@
 namespace k2::pd {
 
 inline constexpr std::uint32_t kProbeRespMs = 250, kProbeTotalMs = 900;
-inline constexpr std::uint8_t kExtGetManufacturerInfo = 0x06, kCtlGetSourceCapExt = 17;
+inline constexpr std::uint8_t kCtlGetSourceCapExt = 17;
 
 // Get_Manufacturer_Info for the port (target 0, ref 0) as the K2 sends it: chunked, like every extended message it sends
 // (the K2 never claims unchunked extended message support, so the unchunked form is not allowed). Extended header 0x8002

@@ -13,10 +13,14 @@ namespace k2::pd {
 // Extended message types (header bits 4:0 with the extended bit set).
 inline constexpr std::uint8_t kExtSourceCapsExt = 0x01;
 inline constexpr std::uint8_t kExtStatus = 0x02;
+inline constexpr std::uint8_t kExtGetBatteryCap = 0x03;
+inline constexpr std::uint8_t kExtGetBatteryStatus = 0x04;
 inline constexpr std::uint8_t kExtBatteryCaps = 0x05;
+inline constexpr std::uint8_t kExtGetManufacturerInfo = 0x06;
 inline constexpr std::uint8_t kExtManufacturerInfo = 0x07;
 inline constexpr std::uint8_t kExtPpsStatus = 0x0C;
 inline constexpr std::uint8_t kExtEprSinkCaps = 0x12;  // EPR_Sink_Capabilities (kExtEprSourceCaps is 0x11: pd_engine.hpp)
+inline constexpr std::uint8_t kDataBatteryStatus = 0x05;  // data message, not extended (BSDO)
 inline constexpr std::uint8_t kDataRevision = 0x0C;  // data message, not extended
 
 struct SourceCapsExt {  // SCEDB, 24 bytes (25 with the PD 3.1 EPR rating)
@@ -52,12 +56,39 @@ struct ManufacturerInfo {  // MIDB: VID, PID, up to 22 name bytes in the first c
     char name[27] = {};
 };
 
-struct BatteryCaps {  // BCDB, 9 bytes
+struct BatteryCaps {  // BCDB, 9 bytes (USB PD 3.2 table 6.55)
     bool valid = false;
     std::uint16_t vid = 0, pid = 0;
-    std::uint16_t design_dwh = 0, last_full_dwh = 0;  // 0.1 Wh
+    std::uint16_t design_dwh = 0, last_full_dwh = 0;  // 0.1 Wh; 0x0000 = not present, 0xFFFF = unknown
     bool invalid_ref = false;
+    bool design_known() const { return valid && !invalid_ref && design_dwh != 0 && design_dwh != 0xFFFFu; }
+    bool last_full_known() const { return valid && !invalid_ref && last_full_dwh != 0 && last_full_dwh != 0xFFFFu; }
 };
+
+struct BatteryStatus {  // BSDO, 4 bytes (USB PD 3.2 table 6.24)
+    bool valid = false;
+    bool present = false;
+    bool invalid_ref = false;
+    std::uint8_t charging = 3;      // 0 = charging, 1 = discharging, 2 = idle, 3 = unknown/invalid
+    std::uint16_t present_dwh = 0;  // 0.1 Wh; 0xFFFF = unknown
+    bool capacity_known() const { return valid && present && !invalid_ref && present_dwh != 0xFFFFu; }
+};
+
+// State of charge in 0..100 % from Battery_Capabilities + Battery_Status; -1 when unknown.
+constexpr int battery_soc_pct(const BatteryCaps& cap, const BatteryStatus& st) {
+    if (!st.capacity_known()) return -1;
+    const std::uint32_t full = cap.last_full_known() ? cap.last_full_dwh : cap.design_known() ? cap.design_dwh : 0u;
+    if (full == 0) return -1;
+    const std::uint32_t pct = (std::uint32_t(st.present_dwh) * 100u + full / 2u) / full;
+    return pct > 100u ? 100 : int(pct);
+}
+
+// Battery health in % (last_full / design); -1 when either capacity is unknown.
+constexpr int battery_health_pct(const BatteryCaps& cap) {
+    if (!cap.design_known() || !cap.last_full_known()) return -1;
+    const std::uint32_t pct = (std::uint32_t(cap.last_full_dwh) * 100u + cap.design_dwh / 2u) / cap.design_dwh;
+    return pct > 200u ? 200 : int(pct);
+}
 
 struct Revision {  // RMDO
     bool valid = false;
@@ -70,6 +101,7 @@ struct ExtInfo {
     PpsStatus pps;
     ManufacturerInfo mfr;
     BatteryCaps battery;
+    BatteryStatus battery_status;
     Revision revision;
 };
 
@@ -78,6 +110,7 @@ bool parse_status(std::span<const std::uint8_t> d, Status& out);
 bool parse_pps_status(std::span<const std::uint8_t> d, PpsStatus& out);
 bool parse_manufacturer_info(std::span<const std::uint8_t> d, ManufacturerInfo& out);
 bool parse_battery_caps(std::span<const std::uint8_t> d, BatteryCaps& out);
+bool parse_battery_status(std::span<const std::uint8_t> d, BatteryStatus& out);  // 4-byte BSDO
 bool parse_revision(std::span<const std::uint8_t> d, Revision& out);  // 4-byte data object
 
 }  // namespace k2::pd

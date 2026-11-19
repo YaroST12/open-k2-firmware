@@ -271,10 +271,10 @@ inline std::size_t encode_iq_status(bool running, const twin_hw::InlineLearn& l,
     b[7] = std::uint8_t(s.why);
     b[8] = std::uint8_t(s.match);
     b[9] = s.rev;
-    b[10] = s.asked_mask;
-    b[11] = s.ok_mask;
-    b[12] = s.refused_mask;
-    b[13] = s.silent_mask;
+    b[10] = std::uint8_t(s.asked_mask);
+    b[11] = std::uint8_t(s.ok_mask);
+    b[12] = std::uint8_t(s.refused_mask);
+    b[13] = std::uint8_t(s.silent_mask);
     b[14] = s.sent;
     b[15] = s.dev_acks;
     b[16] = s.resets_sent;
@@ -300,7 +300,7 @@ inline std::size_t encode_iq_status(bool running, const twin_hw::InlineLearn& l,
     b[47] = l.result.store.unchanged ? 1 : 0;
     const std::uint32_t ms = pd::iq_finished(s.phase) && s.ended_at >= s.started_at ? s.ended_at - s.started_at : 0;
     detail::le16(&b[48], std::uint16_t(std::min<std::uint32_t>(ms, 0xFFFFu)));
-    b[50] = s.late_mask;
+    b[50] = std::uint8_t(s.late_mask);
     b[51] = std::uint8_t((s.spoof ? 1 : 0) | (s.epr_partial ? 2 : 0) | (s.sopp_real ? 4 : 0));
     b[52] = s.sopp_queries;
     b[53] = s.sopp_replies;

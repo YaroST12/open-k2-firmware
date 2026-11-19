@@ -124,6 +124,27 @@ static void test_battery_caps() {
     const std::uint8_t inv[9] = {0, 0, 0, 0, 0, 0, 0, 0, 0x01};
     feed(e, ext_frame(0x05, inv, 9));
     CHECK_EQ(e.ext.battery.invalid_ref, true);
+    CHECK_EQ(e.ext.battery.design_known(), false);
+}
+
+static void test_battery_status_and_pct() {
+    Engine e;
+    const std::uint8_t cap[9] = {0xAC, 0x05, 0x34, 0x12, 0xC8, 0x00, 0xBE, 0x00, 0x00};  // 20.0 Wh design, 19.0 Wh full (95% health)
+    feed(e, ext_frame(0x05, cap, 9));
+    CHECK_EQ(battery_health_pct(e.ext.battery), 95);
+    // Battery_Status (data msg 0x05, 1 DO): present=1 (b9), charging=0 (b11:10), 15.2 Wh (152 = 0x0098) -> 80% of 19.0 Wh.
+    const std::uint8_t bsdo[4] = {0x00, 0x02, 0x98, 0x00};
+    e.on_message(Sop::Sop, std::uint16_t((1u << 12) | (2u << 6) | kDataBatteryStatus), bsdo, 1);
+    CHECK_EQ(e.ext.battery_status.valid, true);
+    CHECK_EQ(e.ext.battery_status.present, true);
+    CHECK_EQ(e.ext.battery_status.charging, 0);
+    CHECK_EQ(e.ext.battery_status.present_dwh, 152);
+    CHECK_EQ(battery_soc_pct(e.ext.battery, e.ext.battery_status), 80);
+    // Unknown capacity sentinel (0xFFFF) -> -1
+    const std::uint8_t unk[4] = {0x00, 0x0A, 0xFF, 0xFF};  // present=1, idle (10b), unknown cap
+    e.on_message(Sop::Sop, std::uint16_t((1u << 12) | (2u << 6) | kDataBatteryStatus), unk, 1);
+    CHECK_EQ(e.ext.battery_status.charging, 2);
+    CHECK_EQ(battery_soc_pct(e.ext.battery, e.ext.battery_status), -1);
 }
 
 static void test_revision() {
@@ -164,6 +185,7 @@ int main() {
     test_pps_status();
     test_manufacturer_info();
     test_battery_caps();
+    test_battery_status_and_pct();
     test_revision();
     test_ignores_non_sop_and_continuation_chunks();
     test_reset_clears_ext();

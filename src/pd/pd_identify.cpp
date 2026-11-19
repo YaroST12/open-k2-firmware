@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
 #include "k2/pd/pd_identify.hpp"
+#include "k2/pd/pd_ext.hpp"
 
 #include <algorithm>
 
 namespace k2::pd {
 
 namespace {
-constexpr std::uint8_t bit(IdStep s) { return std::uint8_t(1u << unsigned(s)); }
+constexpr std::uint16_t bit(IdStep s) { return std::uint16_t(1u << unsigned(s)); }
 constexpr std::uint8_t kVdmDiscoverIdentity = 1, kVdmDiscoverSvids = 2, kVdmDiscoverModes = 3;
 constexpr std::uint16_t kPdSvid = 0xFF00, kSvidDp = 0xFF01, kSvidTbt = 0x8087;
 }  // namespace
@@ -31,6 +32,9 @@ const char* id_step_short(IdStep s) {
         case IdStep::SinkCap: return "Sink caps";
         case IdStep::Status: return "Status";
         case IdStep::Revision: return "Revision";
+        case IdStep::BatCap: return "Battery cap";
+        case IdStep::BatStatus: return "Battery";
+        case IdStep::MfrInfo: return "Mfr info";
         case IdStep::Done: return "done";
     }
     return "?";
@@ -44,6 +48,9 @@ const char* id_step_name(IdStep s) {
         case IdStep::SinkCap: return "Get_Sink_Cap";
         case IdStep::Status: return "Get_Status";
         case IdStep::Revision: return "Get_Revision";
+        case IdStep::BatCap: return "Get_Battery_Cap";
+        case IdStep::BatStatus: return "Get_Battery_Status";
+        case IdStep::MfrInfo: return "Get_Manufacturer_Info";
         case IdStep::Done: return "done";
     }
     return "?";
@@ -134,6 +141,21 @@ bool Identify::build(std::span<const std::uint16_t> svids) {
         case IdStep::SinkCap: m.header = make_header(kCtlGetSinkCap, 0, rev_); break;
         case IdStep::Status: m.header = make_header(kCtlGetStatus, 0, rev_); break;
         case IdStep::Revision: m.header = make_header(kCtlGetRevision, 0, rev_); break;
+        case IdStep::BatCap:
+            m.header = make_header(kExtGetBatteryCap, 1, rev_, true);
+            m.len = 4;
+            m.data[0] = 0x01; m.data[1] = 0x80; m.data[2] = 0x00;
+            break;
+        case IdStep::BatStatus:
+            m.header = make_header(kExtGetBatteryStatus, 1, rev_, true);
+            m.len = 4;
+            m.data[0] = 0x01; m.data[1] = 0x80; m.data[2] = 0x00;
+            break;
+        case IdStep::MfrInfo:
+            m.header = make_header(kExtGetManufacturerInfo, 1, rev_, true);
+            m.len = 4;
+            m.data[0] = 0x02; m.data[1] = 0x80; m.data[2] = 0x00; m.data[3] = 0x00;
+            break;
         case IdStep::Done: return false;
     }
     tx_ = m;
@@ -219,6 +241,15 @@ void Identify::on_message(Sop sop, std::uint16_t header, std::span<const std::ui
                 st_.revision = payload[0] | (payload[1] << 8) | (payload[2] << 16) | (std::uint32_t(payload[3]) << 24);
                 step_ok();
             }
+            break;
+        case IdStep::BatCap:
+            if (ext && type == kExtBatteryCaps) step_ok();
+            break;
+        case IdStep::BatStatus:
+            if (!ext && type == kDataBatteryStatus && payload.size() >= 4) step_ok();
+            break;
+        case IdStep::MfrInfo:
+            if (ext && type == kExtManufacturerInfo) step_ok();
             break;
         case IdStep::Done: break;
     }

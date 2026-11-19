@@ -66,6 +66,8 @@ K2_HOT void Engine::on_message(Sop sop, std::uint16_t header, std::span<const st
         parse_vdm((header >> 8) & 1 ? vdm : sink_vdm, payload);  // bit 8 on SOP: the sender's power role
     } else if (!ext && ((header >> 12) & 7) == 0) {  // a control message on SOP
         on_sop_control(type, ((header >> 8) & 1) == 0);  // bit 8 clear: the sender is a sink
+    } else if (!ext && type == kDataBatteryStatus && ((header >> 12) & 7) >= 1 && payload.size() >= 4) {
+        parse_battery_status(payload.first(4), this->ext.battery_status);
     } else if (type == kDataRevision && ((header >> 12) & 7) == 1 &&
                (header & (1u << 8)) && payload.size() >= 4) {
         parse_revision(payload.first(4), this->ext.revision);

@@ -22,7 +22,7 @@ inline constexpr std::uint8_t kIdModeSvids = 2;
 inline constexpr std::uint8_t kIdMaxAttempts = 3;
 inline constexpr std::uint32_t kIdRespMs = 300, kIdBackoffMs = 40;
 
-enum class IdStep : std::uint8_t { Identity, Svids, Modes, SinkCap, Status, Revision, Done };
+enum class IdStep : std::uint8_t { Identity, Svids, Modes, SinkCap, Status, Revision, BatCap, BatStatus, MfrInfo, Done };
 enum class IdState : std::uint8_t { Idle, Running, Done, Aborted };
 // Why a running identify was cut short: Other = the driver did not say (shown as "link dropped").
 enum class IdWhy : std::uint8_t { None, Other, Detached, HardReset, Stopped };
@@ -35,8 +35,8 @@ constexpr std::uint32_t vdm_header(std::uint16_t svid, std::uint8_t cmd, std::ui
 struct IdStatus {
     IdState state = IdState::Idle;
     IdStep step = IdStep::Identity;
-    std::uint8_t ok_mask = 0;       // bit per IdStep that was answered
-    std::uint8_t skipped_mask = 0;  // bit per IdStep that was refused or gave up
+    std::uint16_t ok_mask = 0;      // bit per IdStep that was answered
+    std::uint16_t skipped_mask = 0; // bit per IdStep that was refused or gave up
     std::uint8_t retries = 0;       // total retries so far (silence, BUSY, tx failure)
     std::uint8_t num_sink_pdos = 0;
     std::array<std::uint32_t, 7> sink_pdos{};

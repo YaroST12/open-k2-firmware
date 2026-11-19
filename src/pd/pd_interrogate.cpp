@@ -51,6 +51,9 @@ const char* iq_step_name(IqStep s) {
         case IqStep::Modes: return "Discover Modes";
         case IqStep::Done: return "done";
         case IqStep::EprSinkCap: return "EPR_Get_Sink_Cap";
+        case IqStep::BatteryCap: return "Get_Battery_Cap";
+        case IqStep::BatteryStatus: return "Get_Battery_Status";
+        case IqStep::MfrInfo: return "Get_Manufacturer_Info";
     }
     return "?";
 }
@@ -259,14 +262,17 @@ std::uint8_t Interrogate::modes_wanted() const {
 }
 
 bool Interrogate::wanted(IqStep s) const {
-    const std::uint8_t b = iq_bit(s);
+    const std::uint16_t b = iq_bit(s);
     if ((st_.ok_mask | st_.refused_mask | st_.silent_mask) & b) return false;
     switch (s) {
         case IqStep::Identity:
         case IqStep::SinkCap: return true;
         case IqStep::SinkCapExt:
         case IqStep::Revision:
-        case IqStep::EprSinkCap: return st_.rev >= 2;   // PD 2.0 has none of these messages (EPR is PD 3.1)
+        case IqStep::EprSinkCap:
+        case IqStep::BatteryCap:
+        case IqStep::BatteryStatus:
+        case IqStep::MfrInfo: return st_.rev >= 2;   // PD 2.0 has none of these messages (EPR is PD 3.1)
         case IqStep::Svids: return st_.id.valid && ((st_.id.id_header >> 26) & 1) != 0;   // ID Header: modal operation supported
         case IqStep::Modes: return mode_idx_ < modes_wanted();
         case IqStep::Done: return false;
@@ -276,10 +282,10 @@ bool Interrogate::wanted(IqStep s) const {
 
 // An answer is in: a step already given up as silent becomes a late answer (it shows as answered, not as silent).
 void Interrogate::mark_ok(IqStep s) {
-    const std::uint8_t b = iq_bit(s);
+    const std::uint16_t b = iq_bit(s);
     st_.ok_mask |= b;
     if (st_.silent_mask & b) {
-        st_.silent_mask = std::uint8_t(st_.silent_mask & ~b);
+        st_.silent_mask = std::uint16_t(st_.silent_mask & ~b);
         st_.late_mask |= b;
     }
 }
@@ -438,6 +444,28 @@ void Interrogate::build() {
             epr_raw_ = {};
             epr_size_ = epr_have_ = 0;
             chunk_pending_ = false;
+            break;
+        case IqStep::BatteryCap:   // Get_Battery_Cap (0x03), chunked, 1-byte GBCDB: ref 0 (Fixed Battery 0)
+            m.header = make_header(kExtGetBatteryCap, 1, rev, true);
+            m.len = 4;
+            m.data[0] = 0x01;
+            m.data[1] = 0x80;
+            m.data[2] = 0x00;
+            break;
+        case IqStep::BatteryStatus:   // Get_Battery_Status (0x04), chunked, 1-byte GBSDB: ref 0 (Fixed Battery 0)
+            m.header = make_header(kExtGetBatteryStatus, 1, rev, true);
+            m.len = 4;
+            m.data[0] = 0x01;
+            m.data[1] = 0x80;
+            m.data[2] = 0x00;
+            break;
+        case IqStep::MfrInfo:   // Get_Manufacturer_Info (0x06), chunked, 2-byte GMIDB: target 0 (Port), ref 0
+            m.header = make_header(kExtGetManufacturerInfo, 1, rev, true);
+            m.len = 4;
+            m.data[0] = 0x02;
+            m.data[1] = 0x80;
+            m.data[2] = 0x00;
+            m.data[3] = 0x00;
             break;
         case IqStep::Done: return;
     }
@@ -747,16 +775,28 @@ void Interrogate::on_device(std::uint16_t h, std::span<const std::uint8_t> paylo
     if (ext) {
         if (payload.size() < 2) return;
         if (t == kExtEprSinkCaps) { on_epr_chunk(payload); return; }
-        if (t != kExtSinkCapsExt) return;
         const ExtHeader x = decode_ext_header(std::uint16_t(payload[0] | (payload[1] << 8)));
-        if (x.request || x.chunk_number != 0) return;
-        const std::size_t len = std::min<std::size_t>({std::size_t(x.data_size), payload.size() - 2, kIqSinkExtBytes});
-        if (len == 0) return;
-        st_.sink_ext = {};
-        std::copy_n(payload.begin() + 2, len, st_.sink_ext.begin());
-        st_.sink_ext_len = std::uint8_t(len);
-        mark_ok(IqStep::SinkCapExt);
-        if (asking(IqStep::SinkCapExt)) { got_answer(); next_step(); }
+        if (x.request || (x.chunked && x.chunk_number != 0)) return;
+        const auto data = payload.subspan(2, std::min<std::size_t>(payload.size() - 2, std::min<std::size_t>(x.data_size, kChunkBytes)));
+        if (t == kExtSinkCapsExt) {
+            const std::size_t len = std::min<std::size_t>(data.size(), kIqSinkExtBytes);
+            if (len == 0) return;
+            st_.sink_ext = {};
+            std::copy_n(data.begin(), len, st_.sink_ext.begin());
+            st_.sink_ext_len = std::uint8_t(len);
+            mark_ok(IqStep::SinkCapExt);
+            if (asking(IqStep::SinkCapExt)) { got_answer(); next_step(); }
+        } else if (t == kExtBatteryCaps) {
+            if (parse_battery_caps(data, st_.battery)) {
+                mark_ok(IqStep::BatteryCap);
+                if (asking(IqStep::BatteryCap)) { got_answer(); next_step(); }
+            }
+        } else if (t == kExtManufacturerInfo) {
+            if (parse_manufacturer_info(data, st_.mfr)) {
+                mark_ok(IqStep::MfrInfo);
+                if (asking(IqStep::MfrInfo)) { got_answer(); next_step(); }
+            }
+        }
         return;
     }
     if (t == kDataSinkCap) {
@@ -764,6 +804,13 @@ void Interrogate::on_device(std::uint16_t h, std::span<const std::uint8_t> paylo
         for (unsigned i = 0; i < st_.num_sink_pdos; i++) st_.sink_pdos[i] = le32(&payload[4 * i]);
         mark_ok(IqStep::SinkCap);
         if (asking(IqStep::SinkCap)) { got_answer(); next_step(); }
+        return;
+    }
+    if (t == kDataBatteryStatus && payload.size() >= 4) {
+        if (parse_battery_status(payload.first(4), st_.battery_status)) {
+            mark_ok(IqStep::BatteryStatus);
+            if (asking(IqStep::BatteryStatus)) { got_answer(); next_step(); }
+        }
         return;
     }
     if (t == kDataRevision && payload.size() >= 4) {

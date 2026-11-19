@@ -298,6 +298,32 @@ def decode_skedb(d):
     return s, text
 
 
+def decode_bcdb(d):
+    """Battery_Capabilities data block (USB PD 3.2 table 6.55, 9 bytes)."""
+    vid = d[0] | d[1] << 8
+    pid = d[2] | d[3] << 8
+    des = d[4] | d[5] << 8
+    full = d[6] | d[7] << 8
+    inv = bool(d[8] & 1)
+    fmt_wh = lambda v: "none" if v == 0 else "unknown" if v == 0xFFFF else f"{v / 10:.1f} Wh"
+    b = {"vid": vid, "pid": pid, "design_dwh": des, "last_full_dwh": full, "invalid_ref": inv}
+    text = f"BCDB VID {vid:04X} PID {pid:04X}, design {fmt_wh(des)}, last_full {fmt_wh(full)}" + (" [invalid-ref]" if inv else "")
+    return b, text
+
+
+def decode_bsdo(w):
+    """Battery_Status data object (USB PD 3.2 table 6.24, 4 bytes)."""
+    cap = (w >> 16) & 0xFFFF
+    inv = bool((w >> 8) & 1)
+    pres = bool((w >> 9) & 1)
+    chg_bits = (w >> 10) & 3
+    chg = {0: "charging", 1: "discharging", 2: "idle", 3: "invalid"}[chg_bits] if pres else "absent"
+    cap_s = "unknown" if cap == 0xFFFF else f"{cap / 10:.1f} Wh"
+    b = {"present_dwh": cap, "present": pres, "invalid_ref": inv, "charging": chg}
+    text = f"BSDO {cap_s}, {chg}" + (" [invalid-ref]" if inv else "")
+    return b, text
+
+
 class MessageDecoder:
     """Decodes messages in stream order: Request objects need the Source_Capabilities that offered them."""
 
@@ -343,6 +369,9 @@ class MessageDecoder:
                 if f["type"] == 1 and len(data) >= 24:
                     detail["scedb"], line = decode_scedb(data)
                     extra.append(line)
+                elif f["type"] == 5 and len(data) >= 9:
+                    detail["bcdb"], line = decode_bcdb(data)
+                    extra.append(line)
                 elif f["type"] == 15 and len(data) >= 24:
                     detail["skedb"], line = decode_skedb(data)
                     extra.append(line)
@@ -384,6 +413,9 @@ class MessageDecoder:
                 d, t = decode_vdm(objs)
                 detail["vdm"] = d
                 extra.append(t)
+            elif f["type"] == 5 and objs:
+                detail["bsdo"], line = decode_bsdo(objs[0])
+                extra.append(line)
             elif f["type"] == 12 and objs:
                 extra.append(f"PD {objs[0] >> 28 & 0xF}.{objs[0] >> 24 & 0xF}, version {objs[0] >> 20 & 0xF}.{objs[0] >> 16 & 0xF}")
             else:

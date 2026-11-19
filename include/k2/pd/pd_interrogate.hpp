@@ -69,10 +69,12 @@ inline constexpr std::size_t kIqEprMaxPdos = kIqEprMaxBytes / 4;
 enum class IqPhase : std::uint8_t { Idle, Reset1, Sniff1, Settle, Ask, Reset2, Sniff2, Done, Aborted };
 // The values are bit positions on the wire (iq_bit, the twin protocol): never reorder, append only. The ask order is
 // separate (kIqAskOrder): the plain control messages first, the VDMs last.
-// Done (6) is a sentinel that is also written raw on the wire, so EprSinkCap (PD 3.x EPR_Get_Sink_Cap) is appended after it.
-enum class IqStep : std::uint8_t { Identity, SinkCap, SinkCapExt, Revision, Svids, Modes, Done, EprSinkCap };
-inline constexpr std::array<IqStep, 7> kIqAskOrder = {IqStep::SinkCap, IqStep::SinkCapExt, IqStep::Revision, IqStep::EprSinkCap,
-                                                      IqStep::Identity, IqStep::Svids,       IqStep::Modes};
+// Done (6) is a sentinel that is also written raw on the wire, so EprSinkCap and later PD 3.x questions are appended after it.
+enum class IqStep : std::uint8_t { Identity, SinkCap, SinkCapExt, Revision, Svids, Modes, Done, EprSinkCap, BatteryCap, BatteryStatus, MfrInfo };
+inline constexpr std::array<IqStep, 10> kIqAskOrder = {
+    IqStep::SinkCap,    IqStep::SinkCapExt,    IqStep::Revision, IqStep::EprSinkCap,
+    IqStep::BatteryCap, IqStep::BatteryStatus, IqStep::MfrInfo,
+    IqStep::Identity,   IqStep::Svids,         IqStep::Modes};
 // Why a run ended early (with Aborted, or with Done after the final reset of a stopped run). Append only (wire values).
 enum class IqWhy : std::uint8_t { None, Stopped, Detached, NotInline, NoContract, Resets, Timeout, SourceResets, SourceRestarts };
 // What came back after one question (one attempt).
@@ -96,7 +98,7 @@ const char* iq_why_name(IqWhy w);
 const char* iq_refusal_name(IqRefusal r);
 const char* iq_match_name(IqMatch m);
 const char* iq_result_name(IqResult r);
-constexpr std::uint8_t iq_bit(IqStep s) { return std::uint8_t(1u << unsigned(s)); }
+constexpr std::uint16_t iq_bit(IqStep s) { return std::uint16_t(1u << unsigned(s)); }
 
 // What the driver and the caller know when a run is asked for.
 struct IqFacts {
@@ -181,11 +183,11 @@ struct IqStatus {
     IqWhy why = IqWhy::None;
     IqMatch match = IqMatch::Unknown;
     std::uint8_t rev = 0;           // the revision the questions were asked in (1 PD 2.0, 2 PD 3.x)
-    std::uint8_t asked_mask = 0;    // iq_bit per step that went on the wire at least once
-    std::uint8_t ok_mask = 0;       // answered (by us asking, or to the source's own question)
-    std::uint8_t refused_mask = 0;  // NAK, Not_Supported or Reject
-    std::uint8_t silent_mask = 0;   // asked kIqAttempts times, nothing came back (never together with ok_mask: see late_mask)
-    std::uint8_t late_mask = 0;     // answered, but only after the step was given up as silent (a late answer: in ok_mask too)
+    std::uint16_t asked_mask = 0;   // iq_bit per step that went on the wire at least once
+    std::uint16_t ok_mask = 0;      // answered (by us asking, or to the source's own question)
+    std::uint16_t refused_mask = 0; // NAK, Not_Supported or Reject
+    std::uint16_t silent_mask = 0;  // asked kIqAttempts times, nothing came back (never together with ok_mask: see late_mask)
+    std::uint16_t late_mask = 0;    // answered, but only after the step was given up as silent (a late answer: in ok_mask too)
     std::uint8_t sent = 0;         // questions transmitted (every attempt)
     std::uint8_t dev_acks = 0;      // GoodCRCs the device sent for them (the collision may hide some)
     std::uint8_t resets_sent = 0;   // our Hard Resets
@@ -209,6 +211,9 @@ struct IqStatus {
     std::uint8_t num_epr_pdos = 0;  // EPR_Sink_Capabilities objects kept (SPR 1..7 first, the EPR ones after)
     std::array<std::uint32_t, kIqEprMaxPdos> epr_pdos{};
     bool epr_partial = false;       // only the first chunk arrived (or the data size beyond kIqEprMaxBytes was cut)
+    BatteryCaps battery{};          // Battery_Capabilities (BCDB, ref 0)
+    BatteryStatus battery_status{}; // Battery_Status (BSDO, ref 0)
+    ManufacturerInfo mfr{};         // Manufacturer_Info (MIDB, target 0 port)
     // The e-marker spoof of this run (IqFacts::spoof): what the charger asked of the cable and what we answered.
     bool spoof = false;
     std::uint8_t sopp_queries = 0;  // Discover Identity requests the charger sent on SOP' (retries included), saturating

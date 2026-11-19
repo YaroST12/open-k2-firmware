@@ -98,12 +98,24 @@ int main() {
         CHECK_EQ(int(r.last_type()), int(kCtlGetRevision));
         const std::uint8_t rv[4] = {0, 0, 0x20, 0x31};
         r.id.on_message(Sop::Sop, make_header(kDataRevision, 1, 2), rv, r.now);
+        CHECK_EQ(bool(r.next()), true);
+        CHECK_EQ(int(r.last_type()), int(kExtGetBatteryCap));
+        const std::uint8_t bc[12] = {9, 0x80, 0xAC, 0x05, 0x34, 0x12, 0xC8, 0x00, 0xBE, 0x00, 0, 0};
+        r.id.on_message(Sop::Sop, make_header(kExtBatteryCaps, 3, 2, true), bc, r.now);
+        CHECK_EQ(bool(r.next()), true);
+        CHECK_EQ(int(r.last_type()), int(kExtGetBatteryStatus));
+        const std::uint8_t bs[4] = {0x00, 0x02, 0x98, 0x00};
+        r.id.on_message(Sop::Sop, make_header(kDataBatteryStatus, 1, 2), bs, r.now);
+        CHECK_EQ(bool(r.next()), true);
+        CHECK_EQ(int(r.last_type()), int(kExtGetManufacturerInfo));
+        const std::uint8_t mi[12] = {9, 0x80, 0xAC, 0x05, 0x34, 0x12, 'A', 'p', 'p', 'l', 'e', 0};
+        r.id.on_message(Sop::Sop, make_header(kExtManufacturerInfo, 3, 2, true), mi, r.now);
         r.run(50);
         CHECK_EQ(int(r.id.status().state), int(IdState::Done));
-        CHECK_EQ(int(r.id.status().ok_mask), 0x3F);
+        CHECK_EQ(int(r.id.status().ok_mask), 0x1FF);
         CHECK_EQ(int(r.id.status().skipped_mask), 0);
         CHECK_EQ(r.id.status().revision, 0x31200000u);
-        CHECK_EQ(r.sent.size(), 7u);
+        CHECK_EQ(r.sent.size(), 10u);
     }
 
     // ---- PD 2.0 partner: no Status / Revision, VDM version bit clear ----
