@@ -253,6 +253,18 @@ void test_moves_fed_before_the_stage() {
     CHECK_EQ(int(s.engine()->agg(sc::Check::PpsBand).n), 0);
     s.cancel();
     finish(ui);
+    // A Deep run fed moves and ended before its stage: the standalone pd-spec command after it starts from nothing.
+    g_stub.tc_state = transcap::State::Armed; g_stub.tc_rec = &rec; g_stub.tc_freeze_on_trigger = true;
+    CHECK_EQ(s.test_move(10, {5, false, 1, 5000, 5100}, sc::kMoveSweep | sc::kMoveLast, g_now), true);
+    run(ui, 10);
+    CHECK_EQ(int(s.status(g_now).state), int(PdSpecSession::State::Idle));
+    g_stub.tc_rec = nullptr; g_stub.tc_freeze_on_trigger = false; g_stub.tc_state = transcap::State::Off;
+    CHECK_EQ(int(s.start(1u << int(sc::Family::Pps), g_now)), int(sc::StartResult::Ok));
+    CHECK_EQ(int(s.engine()->covered()), 0);
+    CHECK_EQ(int(s.engine()->agg(sc::Check::PpsBand).n), 0);
+    CHECK_EQ(s.engine_for_test() == nullptr, true);
+    s.cancel();
+    finish(ui);
 }
 
 }  // namespace
