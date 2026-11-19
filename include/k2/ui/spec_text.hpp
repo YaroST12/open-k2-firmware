@@ -174,6 +174,49 @@ inline void detail_value(int row, int check, const specsec::Cell& c, StrBuf<20>&
     }
 }
 
+// ---- Layout B: a range's own checks -------------------------------------------------------------------------------------------
+// A range line's footer when its word is not "spec": the check behind the word, its worst value and its fails ("PPS ovs: 9.90V, 2 fail";
+// over an inferred limit "2 over"), shortened to the 27 footer cells by dropping the value, then the count.
+template <std::size_t N>
+void range_footer(StrBuf<N>& f, const specsec::Apdo& p, const specsec::RangeSpec& rs) {
+    const sc::Check c = specsec::apdo_check(p.avs, rs.slot);
+    if (c == sc::Check::Count) return;
+    const specsec::Cell& cell = p.cells[rs.slot];
+    const sc::Unit u = sc::def(c).unit;
+    StrBuf<48> g;
+    for (int part = 2; part >= 0; --part) {
+        g.clear();
+        g.put(label(c)).put(": ");
+        if (part != 1) put_value(g, u, specsec::dequantize(u, cell.value));
+        if (part == 2) g.put(", ");
+        if (part >= 1) g.put_u32(cell.fails).put(sc::def(c).inferred ? " over" : " fail");
+        if (text_cells(g.view()) <= 27) break;
+    }
+    f.put(g.view());
+}
+// A range's spec row on its Steps page: the worst value as the tail (none when nothing was measured) ...
+template <std::size_t N>
+void slot_tail(int check, const specsec::Cell& c, StrBuf<N>& s) {
+    const sc::Unit u = sc::kDefs[static_cast<std::size_t>(check)].unit;
+    if (c.measured()) put_value(s, u, specsec::dequantize(u, c.value));
+}
+// ... and the limit and count as its note (31 cells): "max 9.65V, 14 measured", the skip reason, or "not judged".
+template <std::size_t N>
+void slot_note(int check, const specsec::Cell& c, StrBuf<N>& s) {
+    if (c.verdict() == sc::Verdict::Skip) { s.put(sc::skip_name(c.skip())); return; }
+    if (!c.measured()) { s.put("not judged"); return; }
+    if (!c.detailed()) { s.put("-"); return; }
+    StrBuf<48> g;
+    for (int part = 2; part >= 0; --part) {
+        g.clear();
+        put_limit(g, sc::kDefs[static_cast<std::size_t>(check)], c);
+        if (part) g.put(", ").put_u32(c.n);
+        if (part == 2) g.put(" measured");
+        if (text_cells(g.view()) <= static_cast<int>(kit::kNoteMaxPx / kLabelAdv)) break;
+    }
+    s.put(g.view());
+}
+
 #if K2_SPECROWS
 // ---- the per-transition rows (specsec::Row): name, value, tail ----------------------------------------------------------------------
 // A row of the spec detail list reads  5->9V      9.21V  -0.29V : the pair (or the programmable window and step) at x28, the value in the

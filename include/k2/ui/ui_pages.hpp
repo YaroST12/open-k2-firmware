@@ -530,6 +530,11 @@ private:
     uint32_t run_t0_ K2_BSS_INIT(0);                  // when the run entered Running (the m:ss on screen)
     StrBuf<32> message_;
     int selection_ K2_BSS_INIT(0), family_ K2_BSS_INIT(0), result_family_ = -1, detail_index_ K2_BSS_INIT(0), detail_row_ K2_BSS_INIT(0);
+    // Layout B: the Steps page of a range line lists the range's spec checks after its steps (spec_range_: the APDO's position, 0 =
+    // none). SpecDetail shows a merged cell (spec_pos_ 0, detail_index_ = its kOrder index) or slot spec_slot_ of range spec_pos_;
+    // spec_back_steps_: BACK returns to the Steps row it came from.
+    uint8_t spec_range_ K2_BSS_INIT(0), spec_pos_ K2_BSS_INIT(0), spec_slot_ K2_BSS_INIT(0);
+    bool spec_back_steps_ K2_BSS_INIT(false);
     // The Steps page opened from a PD Results row lists that row's steps only (picked(): result_layout::row_has on this copy of the
     // row, its range or fixed levels); any other row lists its protocol family (result_family_, -1 = all).
     result_layout::CompactRow result_row_ K2_BSS_ZERO;
@@ -713,6 +718,13 @@ private:
     int row_count() const;
     // The PD spec section (Deep runs, K2_PDSPEC): rows after the unit rows in the Results grid, then the Changes row.
     int spec_n() const;            // rows shown (0 = no section)
+    // Layout B: which merged rows the range lines replace (computed with the grid), the cell of shown row k, the open check.
+    specsec::Split split_{};
+    size_t spec_cell(int k) const;
+    bool spec_open(pdspec::Check &c, specsec::Cell &cell) const;
+    const specsec::Apdo *spec_range() const;   // the Steps page's range, when it has spec checks to list
+    int range_spec_n() const;                  // ... and how many (0 = none)
+    uint8_t line_range_pos(int line) const;    // the APDO position of a Results line's range chip (0 = not a range line)
     int delta_row() const { return static_cast<int>(line_n_) + spec_n(); }   // the Changes pseudo-row, when there is one
     void build_results();      // chips layout of the stored run (k2/chargertest/result_layout.hpp), wrapped into display lines
     // The summary line of Results: the best passing mode per protocol family of the stored run ("PD 20V 3A  QC3 12V").

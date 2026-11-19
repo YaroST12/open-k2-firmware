@@ -1536,6 +1536,96 @@ static void test_the_results_grid_carries_the_pdspec_section() {
         CHECK_EQ(ui.charger_test_stage(), 6);
     }
 }
+// Layout B (user decision 2026-11-19): each range line reads "PPS | 3.3-21V 5A | spec" (the failing family's word when a check of the
+// range failed), the merged PPS / AVS rows leave the spec section once every measured range has a line, and a range's Steps page lists
+// its own checks after its steps; OK opens one, BACK returns to the Steps row. K2_DUMP: renders in all four rotations.
+static void test_layout_b_range_lines_carry_their_spec_word() {
+    namespace sc = pdspec;
+    using C = sc::Check;
+    six_pdo_fixture();
+    g_stub.caps.num_pdos = 8;
+    g_stub.caps.pdos[6] = pd::decode_pdo(0xc0000000u | (210u << 17) | (33u << 8) | 100);   // PPS 3.3-21V 5A
+    g_stub.caps.pdos[7] = pd::decode_pdo(0xE004B145u);                                    // SPR AVS
+    Ui ui; uint32_t t;
+    finished_results(ui, t);
+    const auto calm = [&] { for (int i = 0; i < 64 && ui.painting(); ++i) ui.tick(t += 100); CHECK_EQ(ui.painting(), false); };
+    const auto go = [&](Button b, int n = 1) { for (int i = 0; i < n; ++i) press(ui, b, t); ui.tick(t += 100); calm(); };
+    const auto renders = [&](const char* name) {   // K2_DUMP: the screen in all four rotations, then back to rotation 0
+        for (uint8_t rot = 0; rot < 4; ++rot) {
+            ui.set_rotation(rot, t); ui.tick(t += 100); calm();
+            char path[40];
+            std::snprintf(path, sizeof path, "%s_rot%u", name, unsigned(rot));
+            dump_screen(path);
+        }
+        ui.set_rotation(0, t); ui.tick(t += 100); calm();
+    };
+    const int units = ui.list_state().count;
+    const uint16_t lines = result_layout::range_positions(ui.charger_test_results().steps());
+    CHECK_EQ(lines >> 6 & 1u, 1u);
+    CHECK_EQ(lines >> 7 & 1u, 1u);
+    const specsec::Result r = spec_fixture();
+    const_cast<ct::Evidence&>(ui.charger_test_results().evidence()).spec = r;
+    ui.charger_test_spec_apdo_clear();
+    const auto m = [](int32_t v, int32_t lo, int32_t hi, uint8_t pos) { return sc::Meas{v, 0, lo, hi, static_cast<uint8_t>(pos | 1u << 4), 50}; };
+    ui.charger_test_spec_apdo(C::PpsBand, m(120000, 0, 275000, 6));
+    ui.charger_test_spec_apdo(C::PpsBand, m(120000, 0, 275000, 7));
+    ui.charger_test_spec_apdo(C::PpsOvershoot, m(9900, 8000, 9655, 7));
+    if (lines >> 8 & 1u) ui.charger_test_spec_apdo(C::AvsBand, m(30000, 0, 50000, 8));
+    top(ui, t); go(Button::Ok); go(Button::Back);   // into a unit's Steps and back: the grid is rebuilt
+    const specsec::Split sp = specsec::split(r, ui.charger_test_results().spec_apdo(), lines);
+    CHECK_COND(sp.pps);
+    CHECK_EQ(ui.list_state().count, units + int(specsec::shown_n(sp)));
+    // The failing range's line: its footer names the check, in the fail tone.
+    top(ui, t); go(Button::Minus);
+    int range_row = -1, range_press = 0;
+    for (int n = 0; n < units && range_row < 0; ++n) {
+        if (footer_shows("PPS ovs: 9.90V, 1 fail", kError)) { range_row = ui.charger_test_cursor(); range_press = n; }
+        else go(Button::Plus);
+    }
+    CHECK_EQ(range_row >= 0, true);
+    if (range_row < 0) return;
+    // Its Steps page: the PD steps, then the range's 11 PPS checks; the overshoot is the last but one.
+    go(Button::Ok);
+    CHECK_EQ(ui.charger_test_stage(), 7);
+    const int rows = ui.list_state().count;
+    go(Button::Plus, rows);
+    CHECK_EQ(ui.charger_test_cursor(), rows - 1);
+    go(Button::Minus);
+    CHECK_EQ(footer_shows("PPS ovs: fail 1", kCaution), true);
+    go(Button::Ok);
+    CHECK_EQ(ui.charger_test_stage(), 15);   // SpecDetail of the range's slot
+    CHECK_EQ(footer_shows("fail 1 of 1 measured", kCaution), true);
+    go(Button::Back);
+    CHECK_EQ(ui.charger_test_stage(), 7);
+    CHECK_EQ(ui.charger_test_cursor(), rows - 2);
+    // Every spec row of the range opens and draws whole; a slot it never measured reads the merged cell's skip or "not judged".
+    for (int row = rows - 11; row < rows; ++row) {
+        top(ui, t); go(Button::Plus, row);
+        go(Button::Ok);
+        CHECK_EQ(ui.charger_test_stage(), 15);
+        go(Button::Ok);   // OK returns as BACK does
+        CHECK_EQ(ui.charger_test_stage(), 7);
+        CHECK_EQ(ui.charger_test_cursor(), row);
+    }
+    go(Button::Back);
+    CHECK_EQ(ui.charger_test_stage(), 6);
+    CHECK_EQ(ui.charger_test_cursor(), range_row);
+    // The section's end: Transitions, the AVS rows while an AVS range has no line, then the observer.
+    go(Button::Plus, units + 40);
+    CHECK_EQ(ui.charger_test_cursor(), units + int(specsec::shown_n(sp)) - 1);
+    renders("b_spec_end");
+    go(Button::Ok);
+    CHECK_EQ(ui.charger_test_stage(), 15);   // the last row is the observer, whatever the split hid
+    go(Button::Back);
+    // Renders: the range lines, the range's Steps page at its overshoot row, that slot's detail.
+    top(ui, t); go(Button::Minus); go(Button::Plus, range_press);
+    CHECK_EQ(ui.charger_test_cursor(), range_row);
+    renders("b_results");
+    go(Button::Ok); go(Button::Plus, rows); go(Button::Minus);
+    renders("b_steps_spec");
+    go(Button::Ok);
+    renders("b_spec_detail");
+}
 // The detail page of a check whose run the session's engine still holds (the live run, right after the Deep test): the limit, the count
 // and the place come from the engine's aggregate, not the dim "-" a restored result shows. The stage's own result is built from the
 // engine exactly as the Runner does (spec_collect), then the grid is rebuilt and a measured check's detail opened.
@@ -5974,6 +6064,7 @@ int main() {
     test_preflight_refusal_is_logged();
     test_preflight_wrong_voltage_under_pdo1_contract_is_logged();
     test_the_results_grid_carries_the_pdspec_section();
+    test_layout_b_range_lines_carry_their_spec_word();
     test_the_spec_detail_shows_the_limit_while_the_engine_holds_the_run();
 #if K2_SPECROWS
     test_the_spec_detail_lists_the_transitions_of_the_journal();

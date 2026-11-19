@@ -1226,7 +1226,42 @@ raguard::Topology ChargerTestSession::guard_topology(uint32_t now, bool log) {
     return t;
 }
 int ChargerTestPage::last_row() const { return std::max(0, row_count() - 1); }
-int ChargerTestPage::spec_n() const { return s_.runner_.evidence().spec.shown() ? static_cast<int>(specsec::kCells) : 0; }
+int ChargerTestPage::spec_n() const { return s_.runner_.evidence().spec.shown() ? static_cast<int>(specsec::shown_n(split_)) : 0; }
+size_t ChargerTestPage::spec_cell(int k) const { return k < 0 ? specsec::kCells : specsec::shown_cell(split_, static_cast<size_t>(k)); }
+// The one way SpecDetail reads its check: false = nothing to show (no stage, a cell out of range, a range the run no longer holds).
+bool ChargerTestPage::spec_open(pdspec::Check &c, specsec::Cell &cell) const {
+    const specsec::Result &r = s_.runner_.evidence().spec;
+    if (!r.shown()) return false;
+    if (s_.spec_pos_) {
+        const specsec::Apdo *p = s_.runner_.spec_apdo().find(s_.spec_pos_);
+        c = p ? specsec::apdo_check(p->avs, s_.spec_slot_) : pdspec::Check::Count;
+        if (c == pdspec::Check::Count) return false;
+        cell = specsec::slot_cell(r, *p, s_.spec_slot_);
+        return true;
+    }
+    if (s_.detail_index_ < 0 || s_.detail_index_ >= static_cast<int>(specsec::kCells)) return false;
+    c = specsec::kOrder[static_cast<size_t>(s_.detail_index_)];
+    cell = r.cells[static_cast<size_t>(s_.detail_index_)];
+    return true;
+}
+const specsec::Apdo *ChargerTestPage::spec_range() const {
+    if (s_.stage_ != Stage::Steps || !s_.spec_range_ || !s_.runner_.evidence().spec.shown()) return nullptr;
+    return s_.runner_.spec_apdo().find(s_.spec_range_);
+}
+uint8_t ChargerTestPage::line_range_pos(int line) const {
+    if (line < 0 || static_cast<size_t>(line) >= line_n_) return 0;
+    const auto ln = lines_[static_cast<size_t>(line)];
+    if (layout_.rows[ln.row()].kind != result_layout::CompactKind::Pd) return 0;
+    result_layout::RowTokens rt;
+    result_layout::row_tokens(layout_, ln.row(), s_.runner_.steps(), s_.runner_.sweep_view(), rt);
+    for (int k = ln.first(); k < ln.first() + ln.count(); ++k)
+        if (rt.toks[static_cast<size_t>(k)].kind) return static_cast<uint8_t>(rt.toks[static_cast<size_t>(k)].mv);
+    return 0;
+}
+int ChargerTestPage::range_spec_n() const {
+    const specsec::Apdo *p = spec_range();
+    return p ? static_cast<int>(specsec::slot_n(p->avs)) : 0;
+}
 bool ChargerTestSession::confirm_live() const {
     return confirming_ && static_cast<int32_t>(ctx_.now - confirm_until_) < 0 && proposal(input(ctx_.now)) == confirm_proposal_;
 }
@@ -1535,7 +1570,7 @@ size_t ChargerTestSession::spec_rows_read(uint16_t off, std::span<uint8_t> out) 
 // rows file (the run's id must match). Fewer than two rows, a verdict that is not pass or fail, or no source: no list, the summary shows.
 [[gnu::noinline]] void ChargerTestPage::spec_list_load(int k) {
     spec_list_ = {};
-    if (k < 0 || k >= spec_n()) return;
+    if (s_.spec_pos_ || k < 0 || k >= static_cast<int>(specsec::kCells)) return;   // a range's slot: its summary table only
     const pdspec::Verdict v = s_.runner_.evidence().spec.cells[static_cast<size_t>(k)].verdict();
     if (v != pdspec::Verdict::Pass && v != pdspec::Verdict::Fail) return;
     if (!specsec::has_list(static_cast<size_t>(k))) return;
@@ -1626,6 +1661,7 @@ void ChargerTestPage::build_grid(bool running_grid, bool note_cuts) {
         oem.qc_why = justification;   // build() copies the words into tokens inside this scope
     }
     line_n_ = result_layout::build_compact(layout_, kGridMetrics, lines_, s_.runner_.steps(), oem, s_.runner_.sweep_view());
+    split_ = specsec::split(ev.spec, s_.runner_.spec_apdo(), result_layout::range_positions(s_.runner_.steps()));
     // build_compact() counts a row label or word it had to shorten: the gate fails on it like on any other cut.
     if (note_cuts && layout_.cuts) K2_TRUNC_NOTE_HERE(trunc::Kind::Cut, "results grid label or word", layout_.cuts);
 }
@@ -1795,7 +1831,7 @@ int ChargerTestPage::row_count() const {
     case Stage::Running: return static_cast<int>(s_.runner_.steps().size());
     case Stage::Results: return delta_row() + (s_.delta_n_ ? 1 : 0);
     case Stage::Changes: return static_cast<int>(s_.delta_n_);
-    case Stage::Steps: return static_cast<int>(counts(s_.runner_, s_.picked(), s_.result_family_).total);
+    case Stage::Steps: return static_cast<int>(counts(s_.runner_, s_.picked(), s_.result_family_).total) + range_spec_n();
 #if K2_SPECROWS
     case Stage::SpecDetail: return spec_list_.n >= 2 ? spec_list_.n : 0;   // the open check's transitions; the summary table has no rows
 #else
@@ -1924,8 +1960,9 @@ void ChargerTestPage::bar() {
     static_assert(static_cast<unsigned>(Stage::SpecDetail) == 15, "kBar is indexed by Stage: extend it with the enum");
     if (s_.stage_ == Stage::Steps && results_row_ >= 0 && static_cast<size_t>(results_row_) < line_n_)
         t.put(result_layout::row_label(layout_, lines_[static_cast<size_t>(results_row_)].row())).put_char(' ');
-    if (s_.stage_ == Stage::SpecDetail && s_.detail_index_ >= 0 && s_.detail_index_ < spec_n())
-        t.put(pdspec::kDefs[static_cast<size_t>(specsec::kOrder[static_cast<size_t>(s_.detail_index_)])].label);
+    pdspec::Check chk;
+    specsec::Cell cell;
+    if (s_.stage_ == Stage::SpecDetail && spec_open(chk, cell)) t.put(pdspec::kDefs[static_cast<size_t>(chk)].label);
     else t.put(m.title);
     kit::draw_top_bar(ctx_.content, t.view(), m.step, fusb302::self_powered() ? "SNK" : "PAS", true);   // title_badge follows in update
     bar_valid_ = false;   // the band repaint erased the V x A readout: title_badge paints it again
@@ -1954,6 +1991,16 @@ void ChargerTestPage::announce(const char* words) {
 }
 
 // The footer of the stage (no key names: the strip says what the keys do). Returns its tone; a message takes it on every stage.
+// A range's spec word as a verdict cell: a caution (an inferred limit exceeded) reads amber, nothing judged a dim "-".
+static kit::Verdict range_verdict(specsec::RangeTone t) {
+    switch (t) {
+        case specsec::RangeTone::Pass: return kit::Verdict::Pass;
+        case specsec::RangeTone::Caution: return kit::Verdict::Partial;
+        case specsec::RangeTone::Fail: return kit::Verdict::Fail;
+        case specsec::RangeTone::None: break;
+    }
+    return kit::Verdict::None;
+}
 // The footer of a PD spec check (a Results row or its detail page): what the cell says in words, the verdict's tone.
 static FooterTone spec_footer(StrBuf<32>& f, int check, const specsec::Cell& c, bool detail) {
     const char* name = spectext::label(static_cast<pdspec::Check>(check));
@@ -2058,8 +2105,9 @@ static FooterTone spec_footer(StrBuf<32>& f, int check, const specsec::Cell& c, 
     case Stage::Results: {
         if (s_.selection_ >= delta_row()) { f.put("Compare with the last card"); return FooterTone::Info; }
         if (s_.selection_ >= static_cast<int>(line_n_)) {   // a PD spec row
-            const int k = s_.selection_ - static_cast<int>(line_n_);
-            return spec_footer(f, static_cast<int>(specsec::kOrder[static_cast<size_t>(k)]), s_.runner_.evidence().spec.cells[static_cast<size_t>(k)], false);
+            const size_t ci = spec_cell(s_.selection_ - static_cast<int>(line_n_));
+            if (ci >= specsec::kCells) return FooterTone::Info;
+            return spec_footer(f, static_cast<int>(specsec::kOrder[ci]), s_.runner_.evidence().spec.cells[ci], false);
         }
         const size_t r_idx = lines_[static_cast<size_t>(s_.selection_)].row();
         const auto &row = layout_.rows[r_idx];
@@ -2105,6 +2153,15 @@ static FooterTone spec_footer(StrBuf<32>& f, int check, const specsec::Cell& c, 
             char wk[28] = {};
             const auto* walk = result_layout::step_caution(s_.runner_.steps(), algo, pos);   // a step walk the source did not follow at its quantum
             const size_t wl = walk ? ct::caution_text(*walk, wk) : 0;
+            // Layout B: after the fold, the walk and a lost source, the range's spec word that is not a pass names its check
+            const specsec::Apdo *sp = s_.runner_.evidence().spec.shown() ? s_.runner_.spec_apdo().find(pos) : nullptr;
+            const specsec::RangeSpec rs = sp ? specsec::range_spec(*sp) : specsec::RangeSpec{};
+            const bool spec_bad = rs.tone == specsec::RangeTone::Fail || rs.tone == specsec::RangeTone::Caution;
+            const auto spec_line = [&] {
+                f.clear();
+                spectext::range_footer(f, *sp, rs);
+                return rs.tone == specsec::RangeTone::Fail ? FooterTone::Error : FooterTone::Caution;
+            };
             if (const auto rw = s_.runner_.sweep_view().apdo(static_cast<uint8_t>(algo), pos); rw && rw->sum.points) {   // both 5 V parts
                 char nb[ctsweep::kFoldTextMax];
                 if (const size_t len = ctsweep::format_fold(rw->sum, nb)) {
@@ -2113,6 +2170,7 @@ static FooterTone spec_footer(StrBuf<32>& f, int check, const specsec::Cell& c, 
                     return FooterTone::Caution;
                 }
                 if (wl) { f.put(std::string_view(wk, wl)); return FooterTone::Caution; }
+                if (spec_bad && !lost) return spec_line();
                 if (lost || rc.tone == result_layout::Tone::Pass) {
                     char v[12] = {};
                     f.put("peak ");
@@ -2124,6 +2182,7 @@ static FooterTone spec_footer(StrBuf<32>& f, int check, const specsec::Cell& c, 
                 f.put("sweep failed");
                 return FooterTone::Caution;
             } else if (wl) { f.put(std::string_view(wk, wl)); return FooterTone::Caution; }
+            else if (spec_bad) return spec_line();
             f.put(result_layout::reach_footer(rc).c_str());
             using result_layout::Tone;
             return rc.tone == Tone::Pass ? FooterTone::Ok : rc.tone == Tone::Partial || rc.tone == Tone::Fail ? FooterTone::Caution
@@ -2133,8 +2192,9 @@ static FooterTone spec_footer(StrBuf<32>& f, int check, const specsec::Cell& c, 
         return put_counts(f, lbl, counts(s_.runner_, &row));
     }
     case Stage::SpecDetail: {
-        const int k = s_.detail_index_;
-        if (k < 0 || k >= spec_n()) { f.put("No result"); return FooterTone::Info; }
+        pdspec::Check chk;
+        specsec::Cell cell;
+        if (!spec_open(chk, cell)) { f.put("No result"); return FooterTone::Info; }
 #if K2_SPECROWS
         if (spec_list_on()) {   // the worst transition, by name, in the verdict's tone
             specsec::Row r;
@@ -2157,10 +2217,15 @@ static FooterTone spec_footer(StrBuf<32>& f, int check, const specsec::Cell& c, 
             return fail ? FooterTone::Error : FooterTone::Ok;
         }
 #endif
-        return spec_footer(f, static_cast<int>(specsec::kOrder[static_cast<size_t>(k)]), s_.runner_.evidence().spec.cells[static_cast<size_t>(k)], true);
+        return spec_footer(f, static_cast<int>(chk), cell, true);
     }
     case Stage::Steps: {
         const auto c = counts(s_.runner_, s_.picked(), s_.result_family_);
+        if (const specsec::Apdo *p = spec_range(); p && s_.selection_ >= static_cast<int>(c.total)) {   // a range's own spec check
+            const size_t slot = specsec::slot_at(p->avs, static_cast<size_t>(s_.selection_) - c.total);
+            const pdspec::Check chk = specsec::apdo_check(p->avs, slot);
+            if (chk != pdspec::Check::Count) return spec_footer(f, static_cast<int>(chk), specsec::slot_cell(s_.runner_.evidence().spec, *p, slot), false);
+        }
         if (s_.picked()) return put_counts(f, s_.result_label_, c);   // "PPS: 3 pass, 1 caution": the name the bar's title uses
         f.put_u32(c.total).put(" steps, ");   // a non-PD unit (QC, UFCS, ...): its whole step list
         if (!c.fail && c.caution) f.put_u32(c.caution).put(" caution");
@@ -2340,6 +2405,25 @@ void ChargerTestPage::list_row(int index, bool focused, kit::RowSpec &out) {
 #endif
     case Stage::Steps: {
         const int si = step_index(index);
+        if (const specsec::Apdo *p = si < 0 ? spec_range() : nullptr) {   // a range's spec checks follow its steps: marker, check, worst value
+            const int k = index - static_cast<int>(counts(s_.runner_, s_.picked(), s_.result_family_).total);
+            const size_t slot = specsec::slot_at(p->avs, static_cast<size_t>(std::max(k, 0)));
+            const pdspec::Check chk = specsec::apdo_check(p->avs, slot);
+            if (k >= 0 && chk != pdspec::Check::Count) {
+                const specsec::Cell cell = specsec::slot_cell(s_.runner_.evidence().spec, *p, slot);
+                std::string_view shown;
+                out.marker = kit::Marker::Verdict;
+                out.state = static_cast<uint8_t>(spectext::cell_view(static_cast<int>(chk), cell, spec_txt_, shown));
+                row_text_.put(spectext::label(chk));
+                out.text = row_text_.view();
+                out.data = true;
+                spectext::slot_tail(static_cast<int>(chk), cell, row_tail_);
+                out.tail = row_tail_.view();
+                out.tail_color = cell.fails && cell.verdict() == pdspec::Verdict::Fail ? kError : kText;
+                if (focused) { spectext::slot_note(static_cast<int>(chk), cell, row_note_); out.note = row_note_.view(); }
+                break;
+            }
+        }
         if (si < 0) { out.text = "No selected steps"; out.text_color = kDim; break; }
         const auto &steps = s_.runner_.steps();
         const auto &s = steps[static_cast<size_t>(si)];
@@ -2989,14 +3073,16 @@ void ChargerTestPage::grid_row(int index, kit::ResultRowSpec &out) {
     const bool results = s_.stage_ == Stage::Results;
     if (index >= static_cast<int>(line_n_) && index < delta_row()) {   // a PD spec check: one wide cell, the number it measured
         const int k = index - static_cast<int>(line_n_);
-        const size_t ck = static_cast<size_t>(specsec::kOrder[static_cast<size_t>(k)]);
+        const size_t ci = spec_cell(k);
+        if (ci >= specsec::kCells) return;
+        const size_t ck = static_cast<size_t>(specsec::kOrder[ci]);
         std::string_view shown;
-        const kit::Verdict v = spectext::cell_view(static_cast<int>(ck), s_.runner_.evidence().spec.cells[static_cast<size_t>(k)], spec_txt_, shown);
+        const kit::Verdict v = spectext::cell_view(static_cast<int>(ck), s_.runner_.evidence().spec.cells[ci], spec_txt_, shown);
         out.label = spectext::label(static_cast<pdspec::Check>(ck));
         out.cells[0] = {v, shown, {}};
         out.n = 1;
         out.focus = results && s_.selection_ == index;
-        out.section = specsec::section_start(static_cast<size_t>(k)) || k == 0;
+        out.section = specsec::section_start(ci) || k == 0;
         return;
     }
     if (index >= static_cast<int>(line_n_)) {
@@ -3022,6 +3108,10 @@ void ChargerTestPage::grid_row(int index, kit::ResultRowSpec &out) {
     result_layout::RowTokens rt;
     result_layout::row_tokens(layout_, r_idx, s_.runner_.steps(), s_.runner_.sweep_view(), rt);
     const int running = results || header ? -1 : running_token(rt, row, s_.runner_);
+    // Layout B (a Deep run with its spec stage): a range line reads "PPS | 3.3-21V 5A | spec", the kind as its label, the range's
+    // spec word in a cell of its own. Not while running: the stage has not judged anything yet.
+    const bool spec_b = (results || header) && s_.runner_.evidence().spec.shown();
+    uint8_t range_kind = 0, range_pos = 0;
     int n = 0;
     for (int k = 0; k < ln.count() && n < kit::kResultMaxCells; ++k) {
         const size_t ti = static_cast<size_t>(ln.first() + k);
@@ -3032,7 +3122,11 @@ void ChargerTestPage::grid_row(int index, kit::ResultRowSpec &out) {
             const size_t sp = volts.find(' ');
             if (sp != std::string_view::npos) { cur = volts.substr(sp + 1); volts = volts.substr(0, sp); }
         }
-        if (tk.kind) {   // a PD range chip: "PPS 5-11V", "AVS 15-28V"
+        if (tk.kind && spec_b) {
+            put_clip(cell_txt_[n][0], volts);
+            range_kind = tk.kind;
+            range_pos = static_cast<uint8_t>(tk.mv);
+        } else if (tk.kind) {   // a PD range chip: "PPS 5-11V", "AVS 15-28V"
             StrBuf<14> w;
             w.put(result_layout::kind_word(tk.kind)).put_char(' ').put(volts);
             put_clip(cell_txt_[n][0], w.view());
@@ -3047,6 +3141,12 @@ void ChargerTestPage::grid_row(int index, kit::ResultRowSpec &out) {
         out.cells[n].verdict = static_cast<int>(ti) == running ? kit::Verdict::Running : tone_verdict(tk.tone);
         out.cells[n].sweep = tk.sweep;
         ++n;
+    }
+    if (range_kind && n < kit::kResultMaxCells) {
+        out.label = result_layout::kind_word(range_kind);
+        const specsec::Apdo *p = s_.runner_.spec_apdo().find(range_pos);
+        const specsec::RangeSpec rs = p ? specsec::range_spec(*p) : specsec::RangeSpec{};
+        out.cells[n++] = {range_verdict(rs.tone), specsec::range_word(rs), {}};
     }
     out.n = static_cast<uint8_t>(n);
     out.focus = results && s_.selection_ >= 0 && s_.selection_ < static_cast<int>(line_n_) &&
@@ -3258,9 +3358,8 @@ void ChargerTestPage::paint_detail() {
 // KvTable from the body top. The limit, the count and the place are what the cell kept (a restored cell from an old journal reads "-").
 // K2_SPECROWS builds list the check's transitions instead when it has two or more (a band, then one row each).
 void ChargerTestPage::paint_spec_detail() {
-    const int k = s_.detail_index_;
 #if K2_SPECROWS
-    if (spec_list_on() && k >= 0 && k < spec_n()) {   // the check's transitions: the verdict band, then one row each (PLUS / MINUS scroll)
+    if (spec_list_on()) {   // the check's transitions: the verdict band, then one row each (PLUS / MINUS scroll)
         if (detail_step_ == 0) {
             const Surface &c = ctx_.content;
             if (ctx_.budget && !ctx_.budget->admit(static_cast<int>(c.w) * 36, true)) return;
@@ -3276,15 +3375,16 @@ void ChargerTestPage::paint_spec_detail() {
     }
 #endif
     if (laid_) return;
-    if (k < 0 || k >= spec_n()) { laid_ = true; return; }
+    pdspec::Check chk;
+    specsec::Cell cell;
+    if (!spec_open(chk, cell)) { laid_ = true; return; }
     constexpr kit::KvLayout kSpecDet{kit::kBodyY, kit::kRowH, 6, nullptr, nullptr, kit::kKvValueX, 18, Align::Left};
     PaintBudget *const pbg = ctx_.budget;
-    const specsec::Cell &cell = s_.runner_.evidence().spec.cells[static_cast<size_t>(k)];
     while (detail_step_ < spectext::kDetailRows) {
         if (pbg && !pbg->admit(2800, true)) return;
         StrBuf<20> v;
         uint16_t color = kText;
-        spectext::detail_value(detail_step_, static_cast<int>(specsec::kOrder[static_cast<size_t>(k)]), cell, v, color);
+        spectext::detail_value(detail_step_, static_cast<int>(chk), cell, v, color);
         kit::kv_row(ctx_.content, kSpecDet, kit::kv_row_y(kSpecDet, detail_step_), spectext::kDetailKeys[detail_step_], v.view(), color);
         ++detail_step_;
     }
@@ -3423,7 +3523,7 @@ bool ChargerTestPage::on_event(Event e) {
         case Stage::Steps: set_stage(Stage::Results, results_row_); break;
         case Stage::Detail: set_stage(Stage::Steps, s_.detail_row_); break;
         case Stage::Changes: set_stage(Stage::Results, delta_row()); break;
-        case Stage::SpecDetail: set_stage(Stage::Results, s_.detail_row_); break;
+        case Stage::SpecDetail: set_stage(s_.spec_back_steps_ ? Stage::Steps : Stage::Results, s_.detail_row_); break;
         default: set_stage(Stage::Algorithms); break;
         }
         update(ctx_.now);
@@ -3529,13 +3629,15 @@ __attribute__((noinline)) void ChargerTestPage::ok_event() {
         }
         break;
     case Stage::Changes: set_stage(Stage::Results, delta_row()); break;
-    case Stage::SpecDetail: set_stage(Stage::Results, s_.detail_row_); break;
+    case Stage::SpecDetail: set_stage(s_.spec_back_steps_ ? Stage::Steps : Stage::Results, s_.detail_row_); break;
     case Stage::Results:
         if (s_.selection_ >= delta_row()) {
             if (s_.delta_n_) set_stage(Stage::Changes);
         } else if (s_.selection_ >= static_cast<int>(line_n_)) {   // a PD spec check opens its detail
-            s_.detail_index_ = s_.selection_ - static_cast<int>(line_n_);
+            s_.detail_index_ = static_cast<int>(spec_cell(s_.selection_ - static_cast<int>(line_n_)));
             s_.detail_row_ = s_.selection_;
+            s_.spec_pos_ = 0;
+            s_.spec_back_steps_ = false;
             set_stage(Stage::SpecDetail);
         } else {
             int fam = -2;
@@ -3548,6 +3650,7 @@ __attribute__((noinline)) void ChargerTestPage::ok_event() {
             if (fam != -2) {
                 results_row_ = s_.selection_;
                 s_.result_family_ = fam;
+                s_.spec_range_ = line_range_pos(s_.selection_);
                 s_.result_row_ = row;   // a PD row opens its own steps (a range, a level family, a sweep), the others their family
                 const char *lbl = result_layout::row_label(layout_, lines_[static_cast<size_t>(s_.selection_)].row());
                 std::memset(s_.result_label_, 0, sizeof s_.result_label_);
@@ -3561,6 +3664,15 @@ __attribute__((noinline)) void ChargerTestPage::ok_event() {
             s_.detail_index_ = index;
             s_.detail_row_ = s_.selection_;
             set_stage(Stage::Detail);
+        } else if (const specsec::Apdo *p = spec_range()) {   // a range's spec check: its summary, BACK returns here
+            const int k = s_.selection_ - static_cast<int>(counts(s_.runner_, s_.picked(), s_.result_family_).total);
+            if (k >= 0 && k < range_spec_n()) {
+                s_.spec_pos_ = p->pos;
+                s_.spec_slot_ = static_cast<uint8_t>(specsec::slot_at(p->avs, static_cast<size_t>(k)));
+                s_.spec_back_steps_ = true;
+                s_.detail_row_ = s_.selection_;
+                set_stage(Stage::SpecDetail);
+            }
         }
         break;
     case Stage::Detail: set_stage(Stage::Steps, s_.detail_row_); break;
@@ -3591,7 +3703,9 @@ Strip ChargerTestPage::labels() const {
         case Stage::Changes: ok = sl::View; break;
         case Stage::Steps: ok = sl::Open; break;
         case Stage::Detail: ok = s_.card_no_ != 0 ? sl::StepsShare : sl::Steps; break;
-        case Stage::SpecDetail: ok = s_.card_no_ != 0 ? sl::ResultsShare : sl::Results; break;
+        case Stage::SpecDetail:
+            ok = s_.spec_back_steps_ ? (s_.card_no_ != 0 ? sl::StepsShare : sl::Steps) : (s_.card_no_ != 0 ? sl::ResultsShare : sl::Results);
+            break;
         case Stage::Resume: ok = sl::Resume; break;
         case Stage::Running: ok = sl::View; break;
         default: break;   // Identity / Ask are retired
