@@ -2153,14 +2153,15 @@ static FooterTone spec_footer(StrBuf<32>& f, int check, const specsec::Cell& c, 
             char wk[28] = {};
             const auto* walk = result_layout::step_caution(s_.runner_.steps(), algo, pos);   // a step walk the source did not follow at its quantum
             const size_t wl = walk ? ct::caution_text(*walk, wk) : 0;
-            // Layout B: after the fold, the walk and a lost source, the range's spec word that is not a pass names its check
+            // Layout B: the range's own words come first (a fold, a walk, a lost source, a range it did not reach); on a range that
+            // passed, a spec word that is not a pass names its check, in the tone the spec rows use
             const specsec::Apdo *sp = s_.runner_.evidence().spec.shown() ? s_.runner_.spec_apdo().find(pos) : nullptr;
             const specsec::RangeSpec rs = sp ? specsec::range_spec(*sp) : specsec::RangeSpec{};
-            const bool spec_bad = rs.tone == specsec::RangeTone::Fail || rs.tone == specsec::RangeTone::Caution;
+            const bool spec_bad = rc.tone == result_layout::Tone::Pass && (rs.tone == specsec::RangeTone::Fail || rs.tone == specsec::RangeTone::Caution);
             const auto spec_line = [&] {
                 f.clear();
                 spectext::range_footer(f, *sp, rs);
-                return rs.tone == specsec::RangeTone::Fail ? FooterTone::Error : FooterTone::Caution;
+                return FooterTone::Caution;
             };
             if (const auto rw = s_.runner_.sweep_view().apdo(static_cast<uint8_t>(algo), pos); rw && rw->sum.points) {   // both 5 V parts
                 char nb[ctsweep::kFoldTextMax];
@@ -3142,6 +3143,12 @@ void ChargerTestPage::grid_row(int index, kit::ResultRowSpec &out) {
         out.cells[n].sweep = tk.sweep;
         ++n;
     }
+    bool range_rule = false;   // a 2 px rule above the block's first range line
+    if (range_kind && !header && index > 0 && lines_[static_cast<size_t>(index) - 1].row() == r_idx) {
+        const auto pl = lines_[static_cast<size_t>(index) - 1];
+        range_rule = true;
+        for (int k = pl.first(); k < pl.first() + pl.count(); ++k) range_rule &= rt.toks[static_cast<size_t>(k)].kind == 0;
+    }
     if (range_kind && n < kit::kResultMaxCells) {
         out.label = result_layout::kind_word(range_kind);
         const specsec::Apdo *p = s_.runner_.spec_apdo().find(range_pos);
@@ -3151,7 +3158,7 @@ void ChargerTestPage::grid_row(int index, kit::ResultRowSpec &out) {
     out.n = static_cast<uint8_t>(n);
     out.focus = results && s_.selection_ >= 0 && s_.selection_ < static_cast<int>(line_n_) &&
                 (row.kind == result_layout::CompactKind::Pd ? s_.selection_ == index : lines_[static_cast<size_t>(s_.selection_)].row() == r_idx);
-    out.section = !header && section_break(layout_, std::span<const result_layout::CompactLine>(lines_.data(), line_n_), static_cast<size_t>(index));
+    out.section = range_rule || (!header && section_break(layout_, std::span<const result_layout::CompactLine>(lines_.data(), line_n_), static_cast<size_t>(index)));
 }
 
 void ChargerTestPage::paint_results() {
