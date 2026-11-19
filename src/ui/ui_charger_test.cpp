@@ -355,6 +355,11 @@ void ChargerTestSession::ceiling_stop() { svooc_trig::stop(); }
 // the test keeps the ports, the Rd and the run-owner flag) and Ui::poll ticks it after this session's poll.
 uint8_t ChargerTestSession::spec_start() {
 #if K2_PDSPEC
+    // An EPR AVS APDO the run reached (in EPR mode, with its cable) is a window of the stage too: the live list lost it at EPR exit.
+    if (const ct::Step* s = ct::reached_epr_avs(runner_.steps())) {
+        const pd::Pdo d = pd::decode_pdo(s->pdo);
+        return static_cast<uint8_t>(ctx_.ui->pd_spec().start_in_test(ctx_.now, runner_.run_id(), &d, s->pos));
+    }
     return static_cast<uint8_t>(ctx_.ui->pd_spec().start_in_test(ctx_.now, runner_.run_id()));
 #else
     return 255;

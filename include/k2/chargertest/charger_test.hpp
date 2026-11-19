@@ -316,6 +316,13 @@ constexpr bool is_sweep(const Step& s) {
 // re-announced after it against the list before it (mi_unlock::diff); each raised or new PDO then gets a mode row right behind it,
 // asking that PDO at its new level (mi_unlock::test_point) like any PD row. Both ride Step::hunt (journal bit 4, Step stays 20 B).
 constexpr bool is_mi_chain(const Step& s) { return s.group == Group::Pd && s.hunt && s.pos == 0; }
+// The EPR AVS APDO a run reached (a row of it ran: EPR entered, the cable fit): the PD spec stage sweeps it too, though the live list
+// loses it at EPR exit. nullptr = none.
+constexpr const Step* reached_epr_avs(std::span<const Step> steps) {
+    for (const Step& s : steps)
+        if (s.algorithm == Algorithm::EprAvs && s.pos >= 8 && s.pdo && s.verdict != Verdict::Skip) return &s;
+    return nullptr;
+}
 constexpr bool is_mi_mode(const Step& s) { return s.group == Group::Pd && s.hunt && s.pos != 0; }
 // Which part of its APDO a sweep row covers: below ctsweep::kSplitMv (the PdLow row) or from it up. The row's mv is its first
 // setpoint until it closes and the setpoint of its peak after; both stay on the row's side of the split.

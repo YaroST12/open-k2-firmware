@@ -199,6 +199,39 @@ void build_step(transcap::Rec &r, uint16_t from_mv, uint16_t to_mv) {
     r.push({t, to_mv, 0, 0});
 }
 
+// The EPR AVS gap (2026-11-19): a Deep run's EPR AVS moves (an APDO past position 7) are taken like the SPR ones and mark it covered;
+// the stage gets the APDO from the run (the live list is the SPR one again) and sweeps it with the cable proof only.
+void test_epr_avs_handed_to_the_stage() {
+    fixture();
+    g_stub.vbus_ceiling_mv = 36000;
+    g_stub.caps.pdos[0] = pd::decode_pdo((1u << 23) | (100u << 10) | 300);   // EPR capable
+    g_stub.cable_limits.observed = true; g_stub.cable_limits.max_mv = 50000; g_stub.cable_limits.max_ma = 5000;
+    std::unique_ptr<Ui> h; Ui &ui = boot(h);
+    PdSpecSession &s = ui.pd_spec();
+    static transcap::Rec rec;
+    build_step(rec, 15000, 15100);
+    g_stub.tc_rec = &rec; g_stub.tc_freeze_on_trigger = true;
+    g_stub.tc_state = transcap::State::Armed;
+    CHECK_EQ(s.test_move(7, {10, true, 0, 15000, 15100}, sc::kMoveSweep | sc::kMoveLast, g_now), true);
+    run(ui, 10);
+    CHECK_EQ(int(s.engine()->agg(sc::Check::AvsBand).n), 1);
+    g_stub.tc_rec = nullptr; g_stub.tc_freeze_on_trigger = false; g_stub.tc_state = transcap::State::Off;
+    const pd::Pdo ea = pd::decode_pdo(0xD0000000 | (280u << 17) | (150u << 8) | 140);   // EPR AVS 15-28 V
+    CHECK_EQ(int(s.start_in_test(g_now, 7, &ea, 10)), int(sc::StartResult::Ok));
+    CHECK_EQ(int(s.engine()->covered()), 1 << 10);
+    const sc::Levels &L = s.engine()->levels();
+    CHECK_EQ(int(L.n_prog), 1);
+    CHECK_EQ(int(L.prog[0].pos), 10);
+    CHECK_EQ(int(L.prog[0].hi), 28000);
+    s.cancel();
+    finish(ui);
+    g_stub.cable_limits.max_ma = 3000;   // no proof: no EPR AVS window
+    CHECK_EQ(int(s.start_in_test(g_now, 0, &ea, 10)), int(sc::StartResult::Ok));
+    CHECK_EQ(int(s.engine()->levels().n_prog), 0);
+    s.cancel();
+    finish(ui);
+}
+
 // prog_unify: a Deep run's PPS moves, handed over before its stage, are judged into the stage's engine on the session's next poll and
 // the recorder is released for the next Request; an APDO whose sweep was handed over whole runs only its slams in the stage.
 void test_moves_fed_before_the_stage() {
@@ -280,5 +313,6 @@ int main() {
     test_start_alone();
     test_capture_takes_over_only_what_nobody_waits_for();
     test_moves_fed_before_the_stage();
+    test_epr_avs_handed_to_the_stage();
     return test_report("test_ui_pdspec_session");
 }

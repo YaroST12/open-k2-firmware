@@ -1524,16 +1524,17 @@ uint32_t Runner::hold_ms() const {
 static_assert(pdspec::step_mv(pdspec::ProgKind::Pps, 1) == int(ctsweep::kStepMv) && pdspec::step_mv(pdspec::ProgKind::Avs, 0) == int(ctsweep::kStepMv));
 static_assert(pdspec::step_mv(pdspec::ProgKind::Pps, 0) == int(walk_step_mv(Algorithm::Pps)) &&
               pdspec::step_mv(pdspec::ProgKind::Avs, 0) == int(walk_step_mv(Algorithm::SprAvs)));
-// A move is the spec stage's while the stage is still ahead, on an SPR APDO, with the K2 on its own supply (the engine refuses one fed
-// by the charger). The wait is bounded: a capture that never freezes costs one move, not the row.
+// A move is the spec stage's while the stage is still ahead, on a PPS or AVS APDO (EPR AVS included), with the K2 on its own supply (the
+// engine refuses one fed by the charger). The wait is bounded: a capture that never freezes costs one move, not the row.
 bool Runner::spec_feed(const Input& in, const Step& s, int from_mv, int to_mv, uint8_t cls, uint8_t flags) {
     if (feed_ms_) {
         if (env_.spec_feeding() && in.now - feed_ms_ < kSpecFeedMaxMs) return true;
         feed_ms_ = 0;
         return false;
     }
-    if (!spec_pending_ || selfpwr_ || s.pos > 7 || (s.algorithm != Algorithm::Pps && s.algorithm != Algorithm::SprAvs)) return false;
-    if (!env_.spec_move({s.pos, s.algorithm == Algorithm::SprAvs, cls, from_mv, to_mv}, flags)) return false;
+    const bool avs = s.algorithm == Algorithm::SprAvs || s.algorithm == Algorithm::EprAvs;
+    if (!spec_pending_ || selfpwr_ || !s.pos || s.pos > 15 || (s.algorithm != Algorithm::Pps && !avs)) return false;
+    if (!env_.spec_move({s.pos, avs, cls, from_mv, to_mv}, flags)) return false;
     feed_ms_ = in.now | 1u;
     return true;
 }

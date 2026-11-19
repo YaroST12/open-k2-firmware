@@ -8508,6 +8508,38 @@ static void test_deep_run_feeds_its_moves_to_the_spec_section() {
     CHECK_COND(range >= 3);
     CHECK_EQ(f.spec_feed_waits > 0, true);
 }
+// The EPR AVS gap (2026-11-19): a Deep run on a charger whose AVS is EPR hands that APDO's moves (position 10, inside EPR mode) to the
+// section like the SPR ones, never above the ceiling.
+static void test_deep_run_feeds_its_epr_avs_moves() {
+    Fake f; f.caps = level_caps(true); f.spec_engine = true; f.spec_result = spec_cells(); f.spec_feed = true; f.prog_arm = true;
+    f.epr_caps = f.caps; f.epr_caps.epr = true; f.epr_caps.num_pdos = 10;
+    f.epr_caps.pdos[7] = pd::decode_pdo((560u << 10) | 300);
+    f.epr_caps.pdos[8] = pd::decode_pdo((720u << 10) | 300);   // 36 V
+    f.epr_caps.pdos[9] = pd::decode_pdo(0xD0000000 | (480u << 17) | (150u << 8) | 140);   // EPR AVS 15..48 V
+    ct::Runner r(f);
+    CHECK_EQ(r.start(f.caps, spec_opts(), f.in, true), ct::Reason::None);
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 1800000), true);
+    unsigned epr = 0, last = 0;
+    for (const auto& m : f.fed) {
+        if (m.mv.pos < 8) continue;
+        ++epr;
+        CHECK_EQ(int(m.mv.pos), 10);
+        CHECK_EQ(m.mv.avs, true);
+        CHECK_EQ(m.mv.to_mv <= 36000 && m.mv.to_mv >= 15000, true);
+        last += (m.flags & pdspec::kMoveLast) != 0;
+    }
+    CHECK_EQ(epr > 0, true);
+    CHECK_EQ(last >= 1, true);   // its sweep was handed over whole: the stage covers the window
+    // The stage gets the APDO from the run's rows; a run whose EPR AVS rows all skipped (no EPR cable) hands none over.
+    const ct::Step* ea = ct::reached_epr_avs(r.steps());
+    CHECK_EQ(ea != nullptr, true);
+    if (ea) { CHECK_EQ(int(ea->pos), 10); CHECK_EQ(pd::decode_pdo(ea->pdo).type == pd::PdoType::Avs, true); }
+    Fake g; g.caps = f.caps; g.epr_caps = f.epr_caps; g.spec_engine = true; g.spec_result = spec_cells(); g.in.cable_ma = 3000;
+    ct::Runner q(g);
+    CHECK_EQ(q.start(g.caps, spec_opts(), g.in, true), ct::Reason::None);
+    CHECK_EQ(run_until(g, q, [&] { return q.state() == ct::State::Done; }, 1800000), true);
+    CHECK_EQ(ct::reached_epr_avs(q.steps()) == nullptr, true);
+}
 // The handover waits for the section (one poll per move here, three below) and changes no verdict.
 static void test_feeding_the_spec_section_changes_no_verdict() {
     Fake plain; plain.caps = level_caps(); plain.spec_engine = true; plain.spec_result = spec_cells(); plain.prog_arm = true;
@@ -8836,7 +8868,7 @@ int main() {
     test_spec_stage_runs_once_in_a_deep_pd_unit(); test_spec_stage_is_deep_only(); test_spec_refusal_is_recorded_and_the_run_goes_on(); test_spec_cancel_ends_in_order();
     test_spec_leaves_the_source_at_5v_before_the_detach(); test_spec_watchdog_bounds_a_stuck_engine(); test_spec_runner_guard_stops_the_engine();
     test_spec_resumed_run_never_repeats_the_stage(); test_spec_preview_counts_the_stage();
-    test_deep_run_feeds_its_moves_to_the_spec_section(); test_feeding_the_spec_section_changes_no_verdict(); test_no_spec_feed_without_a_stage();
+    test_deep_run_feeds_its_moves_to_the_spec_section(); test_deep_run_feeds_its_epr_avs_moves(); test_feeding_the_spec_section_changes_no_verdict(); test_no_spec_feed_without_a_stage();
     test_pps_full_current_row_follows_a_spoofed_5a_identity(); test_pps_full_current_row_follows_a_reannounced_current();
     return test_report("test_charger_test");
 }
