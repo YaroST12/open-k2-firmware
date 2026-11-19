@@ -2008,7 +2008,7 @@ static kit::Verdict range_verdict(specsec::RangeTone t) {
     return kit::Verdict::None;
 }
 // The footer of a PD spec check (a Results row or its detail page): what the cell says in words, the verdict's tone.
-static FooterTone spec_footer(StrBuf<32>& f, int check, const specsec::Cell& c, bool detail) {
+[[gnu::noinline]] static FooterTone spec_footer(StrBuf<32>& f, int check, const specsec::Cell& c, bool detail) {
     const char* name = spectext::label(static_cast<pdspec::Check>(check));
     const pdspec::Verdict v = c.verdict();
     switch (v) {
@@ -2029,6 +2029,78 @@ static FooterTone spec_footer(StrBuf<32>& f, int check, const specsec::Cell& c, 
     return FooterTone::Ok;
 }
 
+static void put_of(StrBufBase &f, unsigned a, unsigned b, const char *tail) {
+    f.put_u32(a).put(" of ").put_u32(b).put(tail);
+}
+
+static bool put_fold_footer(StrBufBase &f, const std::optional<ctsweep::RowView> &rw) {
+    if (!rw || !rw->sum.points) return false;
+    char nb[ctsweep::kFoldTextMax];
+    const size_t len = ctsweep::format_fold(rw->sum, nb);
+    if (!len) return false;
+    f.clear();
+    f.put(std::string_view(nb, len));
+    return true;
+}
+
+static FooterTone range_footer(StrBuf<32> &f, const ct::Runner &runner, A algo, uint8_t pos) {
+    const auto rc = result_layout::reach(runner.steps(), algo, pos);   // one line per APDO: its own reach
+    // The APDO's deep sweep is part of this row: a fold it found takes the whole footer ("folds to 19.4V above 19.9V"), a lost
+    // source or a clean range with a sweep names the sweep's peak; a range that fell short says how far (the full summary is the [SWEEP] log line).
+    bool lost = false, dev = false;   // a failed sweep part (the source was lost) colours the chip red: the footer must not read "reached"
+    for (const auto &y : runner.steps())
+        if (ct::is_sweep(y) && y.algorithm == algo && y.pos == pos) {
+            lost |= y.verdict == ct::Verdict::Fail;
+            dev |= result_layout::caution(y, runner.sweep_view());
+        }
+    char wk[28] = {};
+    const auto* walk = result_layout::step_caution(runner.steps(), algo, pos);   // a step walk the source did not follow at its quantum
+    const size_t wl = walk ? ct::caution_text(*walk, wk) : 0;
+    // Layout B: the range's own words come first (a fold, a walk, a lost source, a range it did not reach); on a range that
+    // passed, a spec word that is not a pass names its check, in the tone the spec rows use
+    const specsec::Apdo *sp = runner.evidence().spec.shown() ? runner.spec_apdo().find(pos) : nullptr;
+    const specsec::RangeSpec rs = sp ? specsec::range_spec(*sp) : specsec::RangeSpec{};
+    const bool spec_bad = rc.tone == result_layout::Tone::Pass && (rs.tone == specsec::RangeTone::Fail || rs.tone == specsec::RangeTone::Caution);
+    const auto rw = runner.sweep_view().apdo(static_cast<uint8_t>(algo), pos);
+    const bool has_pts = rw && rw->sum.points;
+    if (has_pts && put_fold_footer(f, rw)) return FooterTone::Caution;
+    if (!has_pts && lost) { f.put("sweep failed"); return FooterTone::Caution; }   // no recorded point at all
+    if (wl) { f.put(std::string_view(wk, wl)); return FooterTone::Caution; }
+    if (spec_bad && !lost) { f.clear(); spectext::range_footer(f, *sp, rs); return FooterTone::Caution; }
+    if (has_pts && (lost || rc.tone == result_layout::Tone::Pass)) {   // both 5 V parts
+        char v[12] = {};
+        f.put("peak ");
+        f.put(std::string_view(v, ctsweep::format_mv(rw->sum.peak_mv, v))).put("V@");
+        f.put(std::string_view(v, ctsweep::format_mv(rw->sum.peak_at_mv, v))).put_char('V');
+        return lost || dev ? FooterTone::Caution : FooterTone::Ok;
+    }
+    f.put(result_layout::reach_footer(rc).c_str());
+    using result_layout::Tone;
+    return rc.tone == Tone::Pass ? FooterTone::Ok : rc.tone == Tone::Partial || rc.tone == Tone::Fail ? FooterTone::Caution
+                                                                                                        : FooterTone::Info;
+}
+
+#if K2_SPECROWS
+[[gnu::noinline]] static FooterTone spec_detail_footer(StrBuf<32> &f, const specsec::Row &r) {
+    const bool fail = (r.flags & specsec::kRowFail) != 0;
+    StrBuf<24> name, val, margin;
+    spectext::put_row_name(r, name);
+    spectext::put_row_value(r, val);
+    if (fail) spectext::put_row_tail(r, margin);
+    // "worst 9→12V: 540ms +40ms" in as much of it as the line holds (27 cells): the margin goes first, then the value
+    StrBuf<48> g;
+    for (int part = 2; part >= 0; --part) {
+        g.clear();
+        g.put("worst ").put(name.view());
+        if (part >= 1 && !val.view().empty()) g.put(": ").put(val.view());
+        if (part >= 2 && !margin.view().empty()) g.put_char(' ').put(margin.view());
+        if (text_cells(g.view()) <= 27) break;
+    }
+    f.put(g.view());
+    return fail ? FooterTone::Error : FooterTone::Ok;
+}
+#endif
+
 [[gnu::noinline]] FooterTone ChargerTestPage::footer_line(StrBuf<32> &f) {
     if (!s_.message_.view().empty()) {
         f.put(s_.message_.view().substr(0, kFooterCells));
@@ -2043,7 +2115,7 @@ static FooterTone spec_footer(StrBuf<32>& f, int check, const specsec::Cell& c, 
     case Stage::Custom: {
         unsigned on = 0;
         for (int n = 0; n < kFamilyCount; ++n) on += family_state(s_.options_.selected, n) != 0;
-        f.put_u32(on).put(" of ").put_u32(kFamilyCount).put(" families on");
+        put_of(f, on, kFamilyCount, " families on");
         return FooterTone::Info;
     }
     case Stage::Group: {
@@ -2057,14 +2129,14 @@ static FooterTone spec_footer(StrBuf<32>& f, int check, const specsec::Cell& c, 
             const uint32_t m = group_mask(s_.family_, i, algorithm_at(i));
             on += (s_.options_.selected & m) == m;
         }
-        f.put_u32(on).put(" of ").put_u32(static_cast<unsigned>(n)).put(" entries on");
+        put_of(f, on, static_cast<unsigned>(n), " entries on");
         return FooterTone::Info;
     }
     case Stage::Cable: {
         const auto sel = ctx_.cables.selected();
-        if (sel.kind == ctcable::Kind::Off) { f.put("Picked: no identity"); return FooterTone::Info; }
-        row_ = ctx_.cables.row(ctx_.cables.index_of(sel), CableIdentityList::View::CableStep);
         f.put("Picked: ");
+        if (sel.kind == ctcable::Kind::Off) { f.put("no identity"); return FooterTone::Info; }
+        row_ = ctx_.cables.row(ctx_.cables.index_of(sel), CableIdentityList::View::CableStep);
         const size_t room = kFooterCells - 8 - (row_.rating.empty() ? 0 : row_.rating.size() + 1);
         f.put(row_.text.view().substr(0, room));
         if (!row_.rating.empty()) f.put_char(' ').put(row_.rating);
@@ -2077,12 +2149,14 @@ static FooterTone spec_footer(StrBuf<32>& f, int check, const specsec::Cell& c, 
                            s_.summary_.refusal_mv ? int(s_.summary_.refusal_mv) : in.vbus_mv, f);
             return FooterTone::Caution;
         }
-        if (!s_.summary_.runnable) { f.put("Nothing to run: all skip"); return FooterTone::Caution; }
-        if (s_.confirming_) { f.put(s_.confirm_reattach_ ? kReattachConfirm : "Press again to start"); return FooterTone::Caution; }
-        if (in.cable_mv == 20000 && s_.summary_.max_mv == 21000) { f.put("PPS: 21V on 20V wire"); return FooterTone::Info; }
-        if (self_supplied()) { f.put("Self-powered: VBUS stays up"); return FooterTone::Info; }
-        f.put("Check the other port");
-        return FooterTone::Caution;
+        const char *msg = "Check the other port";
+        FooterTone tone = FooterTone::Caution;
+        if (!s_.summary_.runnable) msg = "Nothing to run: all skip";
+        else if (s_.confirming_) msg = s_.confirm_reattach_ ? kReattachConfirm : "Press again to start";
+        else if (in.cable_mv == 20000 && s_.summary_.max_mv == 21000) { msg = "PPS: 21V on 20V wire"; tone = FooterTone::Info; }
+        else if (self_supplied()) { msg = "Self-powered: VBUS stays up"; tone = FooterTone::Info; }
+        f.put(msg);
+        return tone;
     }
     case Stage::Refuse: f.put("Direct plug is the sure way"); return FooterTone::Caution;
     case Stage::Waiting: {
@@ -2096,15 +2170,19 @@ static FooterTone spec_footer(StrBuf<32>& f, int check, const specsec::Cell& c, 
     }
     case Stage::Running: {
         const auto &steps = s_.runner_.steps();
-        if (s_.runner_.state() == ct::State::Unsafe) { f.put("Unplug; verify measured 5V"); return FooterTone::Error; }
-        if (s_.runner_.reason() != ct::Reason::None) { f.put(ct::refusal_words(s_.runner_.reason())); return FooterTone::Caution; }
-        if (steps.empty()) { f.put("Starting"); return FooterTone::Info; }
-        if (s_.runner_.state() == ct::State::Spec) { f.put("PD spec checks"); return FooterTone::Info; }
-        if (s_.fc_words_ && fctrig::paint_critical()) { f.put(s_.fc_words_); return FooterTone::Info; }   // the window the screen sits out
+        const char *msg = nullptr;
+        FooterTone tone = FooterTone::Info;
+        if (s_.runner_.state() == ct::State::Unsafe) { msg = "Unplug; verify measured 5V"; tone = FooterTone::Error; }
+        else if (s_.runner_.reason() != ct::Reason::None) { msg = ct::refusal_words(s_.runner_.reason()); tone = FooterTone::Caution; }
+        else if (steps.empty()) msg = "Starting";
+        else if (s_.runner_.state() == ct::State::Spec) msg = "PD spec checks";
+        else if (s_.fc_words_ && fctrig::paint_critical()) msg = s_.fc_words_;   // the window the screen sits out
+        if (msg) { f.put(msg); return tone; }
         unsigned i, n;
         const char *unit;
         unit_progress(s_.runner_, std::min(s_.runner_.index(), steps.size() - 1), i, n, unit);
-        f.put(unit).put(": step ").put_u32(i).put(" of ").put_u32(n);
+        f.put(unit).put(": step ");
+        put_of(f, i, n, "");
         return FooterTone::Info;
     }
     case Stage::Results: {
@@ -2117,14 +2195,12 @@ static FooterTone spec_footer(StrBuf<32>& f, int check, const specsec::Cell& c, 
         const size_t r_idx = lines_[static_cast<size_t>(s_.selection_)].row();
         const auto &row = layout_.rows[r_idx];
         const char *lbl = result_layout::row_label(layout_, r_idx);
-        f.put(lbl).put(": ");
         if (row.kind == result_layout::CompactKind::Header || row.kind == result_layout::CompactKind::Fact ||
             row.kind == result_layout::CompactKind::Collapsed) {
-            f.put("see steps");
+            f.put(lbl).put(": see steps");
             return FooterTone::Info;
         }
         if (row.kind == result_layout::CompactKind::Levels) {   // "SVOOC: up to 120W claimed": claimed, never a pass
-            f.clear();
             f.put(result_layout::levels_footer(row, lbl).c_str());
             return FooterTone::Info;
         }
@@ -2139,62 +2215,12 @@ static FooterTone spec_footer(StrBuf<32>& f, int check, const specsec::Cell& c, 
                 const auto &tk = rt.toks[static_cast<size_t>(k)];
                 if (!tk.kind) continue;
                 range = true;
-                f.clear();
                 f.put(result_layout::kind_word(tk.kind)).put(": ");   // the footer names the line's kind: "PPS: caps 19.4V of 21V"
                 algo = static_cast<A>(result_layout::kind_algorithm(tk.kind));
                 pos = static_cast<uint8_t>(tk.mv);
             }
         }
-        if (range) {   // a range says how far the source got, not a count
-            const auto rc = result_layout::reach(s_.runner_.steps(), algo, pos);   // one line per APDO: its own reach
-            // The APDO's deep sweep is part of this row: a fold it found takes the whole footer ("folds to 19.4V above 19.9V"), a lost
-            // source or a clean range with a sweep names the sweep's peak; a range that fell short says how far (the full summary is the [SWEEP] log line).
-            bool lost = false, dev = false;   // a failed sweep part (the source was lost) colours the chip red: the footer must not read "reached"
-            for (const auto &y : s_.runner_.steps())
-                if (ct::is_sweep(y) && y.algorithm == algo && y.pos == pos) {
-                    lost |= y.verdict == ct::Verdict::Fail;
-                    dev |= result_layout::caution(y, s_.runner_.sweep_view());
-                }
-            char wk[28] = {};
-            const auto* walk = result_layout::step_caution(s_.runner_.steps(), algo, pos);   // a step walk the source did not follow at its quantum
-            const size_t wl = walk ? ct::caution_text(*walk, wk) : 0;
-            // Layout B: the range's own words come first (a fold, a walk, a lost source, a range it did not reach); on a range that
-            // passed, a spec word that is not a pass names its check, in the tone the spec rows use
-            const specsec::Apdo *sp = s_.runner_.evidence().spec.shown() ? s_.runner_.spec_apdo().find(pos) : nullptr;
-            const specsec::RangeSpec rs = sp ? specsec::range_spec(*sp) : specsec::RangeSpec{};
-            const bool spec_bad = rc.tone == result_layout::Tone::Pass && (rs.tone == specsec::RangeTone::Fail || rs.tone == specsec::RangeTone::Caution);
-            const auto spec_line = [&] {
-                f.clear();
-                spectext::range_footer(f, *sp, rs);
-                return FooterTone::Caution;
-            };
-            if (const auto rw = s_.runner_.sweep_view().apdo(static_cast<uint8_t>(algo), pos); rw && rw->sum.points) {   // both 5 V parts
-                char nb[ctsweep::kFoldTextMax];
-                if (const size_t len = ctsweep::format_fold(rw->sum, nb)) {
-                    f.clear();
-                    f.put(std::string_view(nb, len));
-                    return FooterTone::Caution;
-                }
-                if (wl) { f.put(std::string_view(wk, wl)); return FooterTone::Caution; }
-                if (spec_bad && !lost) return spec_line();
-                if (lost || rc.tone == result_layout::Tone::Pass) {
-                    char v[12] = {};
-                    f.put("peak ");
-                    f.put(std::string_view(v, ctsweep::format_mv(rw->sum.peak_mv, v))).put("V@");
-                    f.put(std::string_view(v, ctsweep::format_mv(rw->sum.peak_at_mv, v))).put_char('V');
-                    return lost || dev ? FooterTone::Caution : FooterTone::Ok;
-                }
-            } else if (lost) {   // no recorded point at all: say so rather than let the range's reach read as the whole story
-                f.put("sweep failed");
-                return FooterTone::Caution;
-            } else if (wl) { f.put(std::string_view(wk, wl)); return FooterTone::Caution; }
-            else if (spec_bad) return spec_line();
-            f.put(result_layout::reach_footer(rc).c_str());
-            using result_layout::Tone;
-            return rc.tone == Tone::Pass ? FooterTone::Ok : rc.tone == Tone::Partial || rc.tone == Tone::Fail ? FooterTone::Caution
-                                                                                                                : FooterTone::Info;
-        }
-        f.clear();   // the row's name leads the line again
+        if (range) return range_footer(f, s_.runner_, algo, pos);
         return put_counts(f, lbl, counts(s_.runner_, &row));
     }
     case Stage::SpecDetail: {
@@ -2205,22 +2231,7 @@ static FooterTone spec_footer(StrBuf<32>& f, int check, const specsec::Cell& c, 
         if (spec_list_on()) {   // the worst transition, by name, in the verdict's tone
             specsec::Row r;
             if (!spec_list_row(spec_list_.worst, r)) { f.put("worst: no row"); return FooterTone::Info; }
-            const bool fail = (r.flags & specsec::kRowFail) != 0;
-            StrBuf<24> name, val, margin;
-            spectext::put_row_name(r, name);
-            spectext::put_row_value(r, val);
-            if (fail) spectext::put_row_tail(r, margin);
-            // "worst 9→12V: 540ms +40ms" in as much of it as the line holds (27 cells): the margin goes first, then the value
-            StrBuf<48> g;
-            for (int part = 2; part >= 0; --part) {
-                g.clear();
-                g.put("worst ").put(name.view());
-                if (part >= 1 && !val.view().empty()) g.put(": ").put(val.view());
-                if (part >= 2 && !margin.view().empty()) g.put_char(' ').put(margin.view());
-                if (text_cells(g.view()) <= kFooterCells) break;
-            }
-            f.put(g.view());
-            return fail ? FooterTone::Error : FooterTone::Ok;
+            return spec_detail_footer(f, r);
         }
 #endif
         return spec_footer(f, static_cast<int>(chk), cell, true);
@@ -2240,20 +2251,15 @@ static FooterTone spec_footer(StrBuf<32>& f, int check, const specsec::Cell& c, 
     }
     case Stage::Detail: {
         const auto steps = s_.runner_.steps();
-        if (s_.detail_index_ >= 0 && static_cast<size_t>(s_.detail_index_) < steps.size() && (steps[static_cast<size_t>(s_.detail_index_)].reason == ct::Reason::StepResolution || steps[static_cast<size_t>(s_.detail_index_)].reason == ct::Reason::ProgCheck)) {
-            char wk[28] = {};   // the walk's own words ("steps 100mV, not 20mV") or the transition flags ("overshoot +1")
-            const auto& st = steps[static_cast<size_t>(s_.detail_index_)];
-            if (const size_t len = ct::caution_text(st, wk)) { f.put(std::string_view(wk, len)); return st.verdict == ct::Verdict::Pass ? FooterTone::Caution : FooterTone::Error; }
-        }
-        if (s_.detail_index_ >= 0 && static_cast<size_t>(s_.detail_index_) < steps.size() && steps[static_cast<size_t>(s_.detail_index_)].reason == ct::Reason::Folded) {
-            const auto& st = steps[static_cast<size_t>(s_.detail_index_)];   // a caution says what folded, from the APDO's sweep: "folds to 19.4V above 19.9V"
-            char nb[ctsweep::kFoldTextMax] = {};
-            size_t len = 0;
-            if (const auto rw = s_.runner_.sweep_view().apdo(uint8_t(st.algorithm), st.pos)) len = ctsweep::format_fold(rw->sum, nb);
-            if (len) { f.put(std::string_view(nb, len)); return FooterTone::Caution; }
-        }
         if (s_.detail_index_ >= 0 && static_cast<size_t>(s_.detail_index_) < steps.size()) {
-            const auto& st = steps[static_cast<size_t>(s_.detail_index_)];
+            const auto &st = steps[static_cast<size_t>(s_.detail_index_)];
+            if (st.reason == ct::Reason::StepResolution || st.reason == ct::Reason::ProgCheck) {
+                char wk[28] = {};   // the walk's own words ("steps 100mV, not 20mV") or the transition flags ("overshoot +1")
+                if (const size_t len = ct::caution_text(st, wk)) { f.put(std::string_view(wk, len)); return st.verdict == ct::Verdict::Pass ? FooterTone::Caution : FooterTone::Error; }
+            } else if (st.reason == ct::Reason::Folded) {
+                // a caution says what folded, from the APDO's sweep: "folds to 19.4V above 19.9V"
+                if (put_fold_footer(f, s_.runner_.sweep_view().apdo(uint8_t(st.algorithm), st.pos))) return FooterTone::Caution;
+            }
             if (result_layout::is_no_answer(st)) { f.put(trig::fail_long(fc::Fail::NoAnswer)); return FooterTone::Info; }   // 27 cells: the card carries ", unloaded"
         }
         f.put("Kept until the next start");
@@ -2293,7 +2299,6 @@ void ChargerTestPage::list_row(int index, bool focused, kit::RowSpec &out) {
             out.state = p + 1 == preset_row_of(s_.options_.selected);
             out.text = kPresetNames[p];
             row_tail_.put_u32(entries(kPresetMasks[p]));
-            out.tail = row_tail_.view();
             if (focused) out.note = kPresetNotes[p];
         } else if (index == kCustomRow) {
             const bool custom = preset_row_of(s_.options_.selected) == 0;
@@ -2324,7 +2329,6 @@ void ChargerTestPage::list_row(int index, bool focused, kit::RowSpec &out) {
             if (focused) out.note = kNoteXiaomi;
         } else {
             row_tail_.put_u32(entries(s_.options_.selected & kFamilies[index])).put_char('/').put_u32(entries(kFamilies[index]));
-            out.tail = row_tail_.view();
             if (focused) out.note = kNoteFamily;
         }
         break;
@@ -2337,7 +2341,6 @@ void ChargerTestPage::list_row(int index, bool focused, kit::RowSpec &out) {
             out.state = avs ? s_.options_.avs_sweep : s_.options_.pps_sweep;
             out.text = avs ? "AVS sweep" : "PPS sweep";
             row_tail_.put_u32(avs ? s_.avs_sweep_points() : s_.sweep_points()).put(" pts");
-            out.tail = row_tail_.view();
             if (focused) out.note = kNoteSweep;
             break;
         }
@@ -2359,7 +2362,6 @@ void ChargerTestPage::list_row(int index, bool focused, kit::RowSpec &out) {
         if (index == 0) {
             const auto c = counts(s_.runner_);
             row_text_.put("Run ").put_u32(s_.runner_.run_id()).put(": ").put_u32(c.pass + c.fail + c.skip + c.caution).put_char('/').put_u32(c.total).put(" done");
-            out.text = row_text_.view();
         } else if (index == 1) {
             out.text = ct::refusal_words(s_.runner_.reason());
             out.text_color = kCaution;
@@ -2392,8 +2394,6 @@ void ChargerTestPage::list_row(int index, bool focused, kit::RowSpec &out) {
             }
             out.tail_color = (d.was_dv && !d.now_dv) ? kOk : kCaution;
         }
-        out.text = row_text_.view().empty() ? out.text : row_text_.view();
-        out.tail = row_tail_.view();
         break;
     }
 #if K2_SPECROWS
@@ -2404,13 +2404,11 @@ void ChargerTestPage::list_row(int index, bool focused, kit::RowSpec &out) {
         out.marker = kit::Marker::Verdict;
         out.state = static_cast<uint8_t>(fail ? kit::Verdict::Fail : kit::Verdict::Pass);
         spectext::put_row_name(r, row_text_);
-        out.text = row_text_.view();
         // A fixed transition: the value at the second column, the margin at the tail. A programmable pass has a long name, so its tail
         // is the one number that matters: the steps that failed, else the worst error.
         if (prog && fail) spectext::put_row_tail(r, row_tail_);
         else if (prog) spectext::put_row_value(r, row_tail_);
         else { spectext::put_row_value(r, row_note_); out.col2 = row_note_.view(); spectext::put_row_tail(r, row_tail_); }
-        out.tail = row_tail_.view();
         out.tail_color = fail ? kError : kDim;
         break;
     }
@@ -2427,10 +2425,8 @@ void ChargerTestPage::list_row(int index, bool focused, kit::RowSpec &out) {
                 out.marker = kit::Marker::Verdict;
                 out.state = static_cast<uint8_t>(spectext::cell_view(static_cast<int>(chk), cell, spec_txt_, shown));
                 row_text_.put(spectext::label(chk));
-                out.text = row_text_.view();
                 out.data = true;
                 spectext::slot_tail(static_cast<int>(chk), cell, row_tail_);
-                out.tail = row_tail_.view();
                 out.tail_color = cell.fails && cell.verdict() == pdspec::Verdict::Fail ? kError : kText;
                 if (focused) { spectext::slot_note(static_cast<int>(chk), cell, row_note_); out.note = row_note_.view(); }
                 break;
@@ -2444,7 +2440,6 @@ void ChargerTestPage::list_row(int index, bool focused, kit::RowSpec &out) {
         out.state = static_cast<uint8_t>(vmap(s, view));
         // The step's label; a mode the Xiaomi chain unlocked reads by its watts ("Mi 55W"), its before -> after is the Detail page's.
         row_text_.put(step_label::label(s, si > 0 ? &steps[static_cast<size_t>(si) - 1] : nullptr).view());
-        out.text = row_text_.view();
         out.data = true;
         if (s.measured_mv) {
             row_tail_.put_fixed(s.measured_mv, 1).put_char('V');
@@ -2453,7 +2448,6 @@ void ChargerTestPage::list_row(int index, bool focused, kit::RowSpec &out) {
             row_tail_.put("--");
             out.tail_color = kFaint;
         }
-        out.tail = row_tail_.view();
         if (focused) {
             const bool listing = result_layout::noted(s);   // a Light run's listing: LISTED / NOT RUN, no skip cause
             const bool caution = result_layout::caution(s, view);   // a voltage fold (CAUTION: folds back) or a tracking deviation (off 450mV)
@@ -2470,6 +2464,8 @@ void ChargerTestPage::list_row(int index, bool focused, kit::RowSpec &out) {
     }
     default: break;
     }
+    if (!row_text_.view().empty()) out.text = row_text_.view();
+    if (!row_tail_.view().empty()) out.tail = row_tail_.view();
 }
 
 // RowList stages: bind the list on first paint after an invalidate, then apply count and selection (the window follows).
@@ -3063,28 +3059,26 @@ void ChargerTestPage::grid_row(int index, kit::ResultRowSpec &out) {
     const bool header = s_.stage_ == Stage::Steps;   // the Steps page's header: the picked row's own lines, never focused, no section rule
     if (header) index += hdr_first_;
     const bool results = s_.stage_ == Stage::Results;
-    if (index >= static_cast<int>(line_n_) && index < delta_row()) {   // a PD spec check: one wide cell, the number it measured
-        const int k = index - static_cast<int>(line_n_);
-        const size_t ci = spec_cell(k);
-        if (ci >= specsec::kCells) return;
-        const size_t ck = static_cast<size_t>(specsec::kOrder[ci]);
-        std::string_view shown;
-        const kit::Verdict v = spectext::cell_view(static_cast<int>(ck), s_.runner_.evidence().spec.cells[ci], spec_txt_, shown);
-        out.label = spectext::label(static_cast<pdspec::Check>(ck));
-        out.cells[0] = {v, shown, {}};
-        out.n = 1;
-        out.focus = results && s_.selection_ == index;
-        out.section = specsec::section_start(ci) || k == 0;
-        return;
-    }
     if (index >= static_cast<int>(line_n_)) {
-        StrBuf<12> t;
-        t.put_u32(static_cast<uint32_t>(s_.delta_n_)).put(" changed");
-        put_clip(cell_txt_[0][0], t.view());
-        out.label = "Changes";
-        out.cells[0] = {kit::Verdict::None, cell_txt_[0][0], {}};
+        if (index < delta_row()) {   // a PD spec check: one wide cell, the number it measured
+            const int k = index - static_cast<int>(line_n_);
+            const size_t ci = spec_cell(k);
+            if (ci >= specsec::kCells) return;
+            const size_t ck = static_cast<size_t>(specsec::kOrder[ci]);
+            std::string_view shown;
+            const kit::Verdict v = spectext::cell_view(static_cast<int>(ck), s_.runner_.evidence().spec.cells[ci], spec_txt_, shown);
+            out.label = spectext::label(static_cast<pdspec::Check>(ck));
+            out.cells[0] = {v, shown, {}};
+            out.section = specsec::section_start(ci) || k == 0;
+        } else {
+            StrBuf<12> t;
+            t.put_u32(static_cast<uint32_t>(s_.delta_n_)).put(" changed");
+            put_clip(cell_txt_[0][0], t.view());
+            out.label = "Changes";
+            out.cells[0] = {kit::Verdict::None, cell_txt_[0][0], {}};
+            out.section = spec_n() > 0;
+        }
         out.n = 1;
-        out.section = spec_n() > 0;
         out.focus = results && s_.selection_ == index;
         return;
     }

@@ -18,6 +18,24 @@ void centred_text(const Surface &s, const Font &f, int16_t x, int16_t w, int16_t
 }
 }  // namespace
 
+namespace detail {
+LabelLayout label_layout(int16_t x, int16_t y, int16_t w, int16_t h, std::string_view label, char (&buf)[kFitBuf]) {
+    const Font &f = h >= 22 ? kSmall : kLabelFont;
+    const std::string_view t = fit_text(f, label, w, buf);
+    const int16_t tw = static_cast<int16_t>(text_width(f, t));
+    return {&f, t, {static_cast<int16_t>(x + (w - tw) / 2), static_cast<int16_t>(y + (h - f.height) / 2), tw, f.height}};
+}
+
+Box strike_line(const Font &f, int16_t tx, int16_t ty, int16_t tw, int16_t cx, int16_t cw) {
+    const Glyph *gx = find_glyph(f, 'x');
+    const int xh = gx ? gx->top : f.ascent * 2 / 3;
+    int16_t x0 = static_cast<int16_t>(tx - 1), x1 = static_cast<int16_t>(tx + tw + 1);
+    if (x0 < cx) x0 = cx;
+    if (x1 > cx + cw) x1 = static_cast<int16_t>(cx + cw);
+    return {x0, static_cast<int16_t>(ty + f.ascent - 1 - xh / 2), static_cast<int16_t>(x1 > x0 ? x1 - x0 : 0), 1};
+}
+}  // namespace detail
+
 int strike_px(Verdict v, std::string_view label, int16_t w, int16_t h) {
     if (v != Verdict::Skip || label.empty()) return 0;
     char buf[kFitBuf];
@@ -59,13 +77,9 @@ void draw_verdict(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, 
             inner.w = static_cast<int16_t>(inner.w - kNotedBarW);
             gfx_fill(s, x, y, kNotedBarW, h, st.mark);
         }
-        if (sweep) {
-            const Box holes[2] = {hole, sm};
-            fill_except(s, inner, holes, 2, base);
-            gfx_text(s, kLabelFont, sm.x, sm.y, "S", v == Verdict::Fail ? st.ink : kDim, base);   // dim; black on the solid red
-        } else {
-            fill_except(s, inner, &hole, 1, base);
-        }
+        const Box holes[2] = {hole, sm};
+        fill_except(s, inner, holes, sweep ? 2 : 1, base);
+        if (sweep) gfx_text(s, kLabelFont, sm.x, sm.y, "S", v == Verdict::Fail ? st.ink : kDim, base);   // dim; black on the solid red
         gfx_text(s, *lay.font, hole.x, hole.y, lay.text, st.ink, base);
         if (v == Verdict::Skip && !lay.text.empty()) {
             const Box k = detail::strike_line(*lay.font, hole.x, hole.y, hole.w, x, w);
@@ -78,15 +92,16 @@ void draw_verdict(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, 
     int sz = (w < h ? w : h) - 4;
     if (sz > 12) sz = 12;
     const int16_t gx = static_cast<int16_t>(x + (w - sz) / 2), gy = static_cast<int16_t>(y + (h - sz) / 2);
+    const int16_t mx = static_cast<int16_t>(gx + sz / 2 - 1), my = static_cast<int16_t>(gy + sz / 2 - 1);
     Box hole{gx, gy, static_cast<int16_t>(sz), static_cast<int16_t>(sz)};
     bool solid_hole = false;
     switch (v) {
     case Verdict::None:
     case Verdict::Skip:
-    case Verdict::Stopped: hole = {gx, static_cast<int16_t>(gy + sz / 2 - 1), static_cast<int16_t>(sz), 2}; solid_hole = true; break;
-    case Verdict::Pending: hole = {static_cast<int16_t>(gx + sz / 2 - 1), static_cast<int16_t>(gy + sz / 2 - 1), 2, 2}; solid_hole = true; break;
-    case Verdict::Noted:   hole = {static_cast<int16_t>(gx + sz / 2 - 1), gy, 2, static_cast<int16_t>(sz)}; solid_hole = true; break;
-    case Verdict::Partial: hole = {gx, static_cast<int16_t>(gy + sz / 2 - 3), static_cast<int16_t>(sz), 6}; break;
+    case Verdict::Stopped: hole = {gx, my, static_cast<int16_t>(sz), 2}; solid_hole = true; break;
+    case Verdict::Pending: hole = {mx, my, 2, 2}; solid_hole = true; break;
+    case Verdict::Noted:   hole = {mx, gy, 2, static_cast<int16_t>(sz)}; solid_hole = true; break;
+    case Verdict::Partial: hole = {gx, static_cast<int16_t>(my - 2), static_cast<int16_t>(sz), 6}; break;
     case Verdict::Running:
     case Verdict::Pass:
     case Verdict::Fail: break;
@@ -97,14 +112,14 @@ void draw_verdict(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, 
         gfx_fill(s, hole.x, hole.y, hole.w, hole.h, st.ink);
     } else if (v == Verdict::Partial) {
         // A tilde: four columns of 2 px bars stepping mid, up, down, mid inside the 6 px strip, each column painted once.
-        const int16_t c = static_cast<int16_t>(gy + sz / 2 - 1), q = static_cast<int16_t>(sz / 4);
+        const int16_t q = static_cast<int16_t>(sz / 4);
         static constexpr int8_t kStep[4] = {0, -2, 2, 0};
         for (int i = 0; i < 4; i++) {
             const int16_t cx = static_cast<int16_t>(gx + i * q), cw = i == 3 ? static_cast<int16_t>(sz - 3 * q) : q;
             const int16_t above = static_cast<int16_t>(2 + kStep[i]), below = static_cast<int16_t>(2 - kStep[i]);
-            if (above) gfx_fill(s, cx, static_cast<int16_t>(c - 2), cw, above, base);
-            gfx_fill(s, cx, static_cast<int16_t>(c + kStep[i]), cw, 2, st.ink);
-            if (below) gfx_fill(s, cx, static_cast<int16_t>(c + kStep[i] + 2), cw, below, base);
+            if (above) gfx_fill(s, cx, static_cast<int16_t>(my - 2), cw, above, base);
+            gfx_fill(s, cx, static_cast<int16_t>(my + kStep[i]), cw, 2, st.ink);
+            if (below) gfx_fill(s, cx, static_cast<int16_t>(my + kStep[i] + 2), cw, below, base);
         }
     } else if (v == Verdict::Running) {
         const int16_t t = sz >= 8 ? kRunFrame : 1;
@@ -123,6 +138,21 @@ void draw_progress_rule(const Surface &s, int step, int segs) {
         const int x0 = i * kSpan / segs, x1 = (i + 1) * kSpan / segs;
         gfx_fill(s, static_cast<int16_t>(x0), kProgY, static_cast<int16_t>(x1 - x0 - 1), kProgH, i < step ? kFocus : kRule);
     }
+}
+
+void draw_top_bar(const Surface &s, std::string_view title, int step, std::string_view badge, bool readout_follows, int segs) {
+    char buf[40];
+    size_t n = 0;
+    if (step >= 1 && step <= segs) {
+        buf[n++] = static_cast<char>('0' + step);
+        buf[n++] = '/';
+        buf[n++] = static_cast<char>('0' + segs);
+        buf[n++] = ' ';
+    }
+    for (size_t i = 0; i < title.size() && n < sizeof(buf); i++) buf[n++] = title[i];
+    draw_status_left(s, false, Icon::Bolt, std::string_view(buf, n), 132, badge, readout_follows);
+    if (step > 0) draw_progress_rule(s, step, segs);
+    else gfx_fill(s, 0, kProgY + 1, s.w, kProgH - 1, kBg);
 }
 
 // ---- RowList -------------------------------------------------------------------------------------------------------------
@@ -159,11 +189,21 @@ void draw_marker(const Surface &s, int16_t x, int16_t y, const RowSpec &r, uint1
     case Marker::Radio:
         if (on) {
             fill(0, 0, m.w, m.h, col);
-        } else {
-            frame();
-            fill(1, 1, static_cast<int16_t>(m.w - 2), static_cast<int16_t>(m.h - 2), bg);
+            break;
+        }
+        [[fallthrough]];
+    case Marker::Box3:
+    case Marker::Check:
+        frame();
+        fill(1, 1, static_cast<int16_t>(m.w - 2), static_cast<int16_t>(m.h - 2), bg);
+        if (r.marker == Marker::Box3) {
+            if (r.state >= 2) fill(3, 3, 6, 6, col);
+            else if (r.state == 1) fill(3, 5, 6, 2, col);
+        } else if (r.marker == Marker::Check && on) {
+            draw_mark(s, static_cast<int16_t>(x + 2), static_cast<int16_t>(y + 2), 8, true, col, bg);
         }
         break;
+#if K2_TWIN
     case Marker::Level: {
         const int16_t in = static_cast<int16_t>(m.h - 2);
         const int16_t ink = r.state >= 2 ? in : r.state == 1 ? static_cast<int16_t>(in / 2) : 0;
@@ -172,17 +212,9 @@ void draw_marker(const Surface &s, int16_t x, int16_t y, const RowSpec &r, uint1
         if (ink > 0) fill(1, static_cast<int16_t>(1 + in - ink), static_cast<int16_t>(m.w - 2), ink, col);
         break;
     }
-    case Marker::Box3:
-    case Marker::Check:
-        fill(1, 1, static_cast<int16_t>(m.w - 2), static_cast<int16_t>(m.h - 2), bg);
-        frame();
-        if (r.marker == Marker::Box3) {
-            if (r.state >= 2) fill(3, 3, 6, 6, col);
-            else if (r.state == 1) fill(3, 5, 6, 2, col);
-        } else if (on) {
-            draw_mark(s, static_cast<int16_t>(x + 2), static_cast<int16_t>(y + 2), 8, true, col, bg);
-        }
-        break;
+#else
+    case Marker::Level: break;
+#endif
     case Marker::Verdict:
         draw_verdict(s, x, y, kMarkSize, kMarkSize, static_cast<Verdict>(r.state), {}, bg);
         break;
@@ -218,6 +250,60 @@ void RowList::clear_body_around(const Surface &s) {
 }
 
 // ---- KvTable -------------------------------------------------------------------------------------------------------------
+void kv_static_row(const Surface &s, const KvLayout &l, const char *label, int i, bool trailing_line) {
+    const Font &f = detail::font_or_small(l.label_font);
+    const int16_t y = kv_row_y(l, i);
+    gfx_fill(s, 0, y, s.w, 1, kBg);
+    const int16_t ty = static_cast<int16_t>(y + row_text_y(l.pitch, f.height));
+    gfx_text(s, f, l.label_x, ty, label, kInk2, kBg);
+    draw_leader(s, static_cast<int16_t>(l.label_x + text_width(f, label) + 5), static_cast<int16_t>(l.value_x - kLeaderGap),
+                static_cast<int16_t>(ty + f.ascent - 2));
+    if (trailing_line) gfx_fill(s, 0, kv_row_y(l, i + 1), s.w, 1, kBg);
+}
+
+void draw_dashed(const Surface &s, int16_t x0, int16_t x1, int16_t y, uint16_t ink, uint16_t bg) {
+    for (int16_t x = x0; x < x1; x = static_cast<int16_t>(x + kDashOn + kDashOff)) {
+        const int16_t on = static_cast<int16_t>(std::min<int>(kDashOn, x1 - x));
+        gfx_fill(s, x, y, on, 1, ink);
+        const int16_t off = static_cast<int16_t>(std::min<int>(kDashOff, x1 - x - on));
+        if (off > 0) gfx_fill(s, static_cast<int16_t>(x + on), y, off, 1, bg);
+    }
+}
+
+void kv_cells(const Surface &s, const KvLayout &l, Field *cells, int n, const uint8_t *chars) {
+    const Font &f = detail::font_or_small(l.value_font);
+    for (int i = 0; i < n; i++) {
+        const uint8_t w = chars && chars[i] < l.value_chars ? chars[i] : l.value_chars;
+        const int16_t x = l.align == Align::Right ? static_cast<int16_t>(l.value_x + (l.value_chars - w) * f.adv) : l.value_x;
+        cells[i].init(s, f, x, static_cast<int16_t>(kv_row_y(l, i) + row_text_y(l.pitch, f.height)), w, l.align, kText, kBg);
+    }
+}
+
+void kv_ground_row(const Surface &s, const KvLayout &l, const char *label, int i, const uint8_t *chars, uint32_t marks) {
+    const Font &kf = detail::font_or_small(l.label_font), &vf = detail::font_or_small(l.value_font);
+    const int16_t y = kv_row_y(l, i);
+    const uint8_t w = chars && chars[i] < l.value_chars ? chars[i] : l.value_chars;
+    const int16_t vx = l.align == Align::Right ? static_cast<int16_t>(l.value_x + (l.value_chars - w) * vf.adv) : l.value_x;
+    Box holes[3];
+    int h = 0;
+    if (marks >> i & 1u)
+        holes[h++] = {kMarkX, static_cast<int16_t>(y + 1 + (l.pitch - 1 - kMarkSize) / 2), kMarkSize, kMarkSize};
+    holes[h++] = {l.label_x, static_cast<int16_t>(y + row_text_y(l.pitch, kf.height)), static_cast<int16_t>(text_width(kf, label)), kf.height};
+    holes[h++] = {vx, static_cast<int16_t>(y + row_text_y(l.pitch, vf.height)), static_cast<int16_t>(w * vf.adv), vf.height};
+    fill_except(s, {0, static_cast<int16_t>(y + 1), s.w, static_cast<int16_t>(l.pitch - 1)}, holes, h, kBg);
+}
+
+void kv_row(const Surface &s, const KvLayout &l, int16_t y, std::string_view key, std::string_view value, uint16_t value_color,
+            bool ours K2_TRUNC_DEF) {
+    const Font &kf = detail::font_or_small(l.label_font), &vf = detail::font_or_small(l.value_font);
+    char buf[kFitBuf];
+    gfx_fill(s, 0, y, s.w, l.clear ? l.pitch : 1, kBg);
+    gfx_text(s, kf, l.label_x, static_cast<int16_t>(y + row_text_y(l.pitch, kf.height)), key, kInk2, kBg);
+    const int box = l.value_chars * vf.adv;
+    gfx_text(s, vf, l.value_x, static_cast<int16_t>(y + row_text_y(l.pitch, vf.height)),
+             ours ? fit_text(vf, value, box, buf K2_TRUNC_ARG) : fit_data(vf, value, box, buf K2_TRUNC_ARG), value_color, kBg);
+}
+
 void kv_static(const Surface &s, const KvLayout &l, const char *const *labels, int n) {
     for (int i = 0; i < n; i++) kv_static_row(s, l, labels[i], i, i + 1 == n);
 }
@@ -340,43 +426,43 @@ void ticket_ground(const Surface &s, int16_t y, int16_t h, int16_t w, uint16_t f
 }  // namespace
 
 // ---- ActionCell ----------------------------------------------------------------------------------------------------------
-bool ActionCell::draw_idle(std::string_view verb, std::string_view hint, PaintBudget *bg, bool focused) {
-    uint32_t sig = mix_u32(mix_init(), focused ? 0 : 2);
-    sig = mix(mix(sig, verb), hint);
+bool ActionCell::draw_ticket(uint32_t tag, std::string_view head, std::string_view sub,
+                             uint16_t fill, uint16_t ink, uint16_t frame, bool armed, PaintBudget *bg) {
+    uint32_t sig = mix_u32(mix_init(), tag);
+    sig = mix(mix(sig, head), sub);
+    const int16_t w = static_cast<int16_t>(surf_.w - 2 * kTicketInset);
     return e_.paint_budgeted(sig, bg, static_cast<int>(surf_.w) * h_, [&] {
         bar_px_ = -1;
-        const int16_t w = static_cast<int16_t>(surf_.w - 2 * kTicketInset);
-        const uint16_t fill = focused ? kTicket : kBg, ink = focused ? kOnTicket : kInk2;
-        const uint16_t frame = focused ? kTicketFrame : kRule;
         ticket_ground(surf_, y_, h_, w, fill);
         if (frame) draw_frame(surf_, kTicketInset, y_, w, h_, 2, frame);
-        const int content = kMid.height + (hint.empty() ? 0 : 6 + kLabelFont.height);
-        const int16_t top = static_cast<int16_t>(y_ + (h_ - content) / 2);
-        centred_text(surf_, kMid, 4, static_cast<int16_t>(surf_.w - 8), top, verb, ink, fill);
-        if (hint.empty()) return;
-        char buf[kFitBuf];
-        constexpr int16_t kTri = 11;
-        const std::string_view t = fit_text(kLabelFont, hint, surf_.w - 40, buf);
-        const int tw = kTri + 4 + text_width(kLabelFont, t);
-        const int16_t x0 = static_cast<int16_t>((surf_.w - tw) / 2);
-        const int16_t ly = static_cast<int16_t>(top + kMid.height + 6);
-        draw_warn_triangle(surf_, x0, static_cast<int16_t>(ly + (kLabelFont.height - kTri) / 2), kTri, kCaution, fill);
-        gfx_text(surf_, kLabelFont, static_cast<int16_t>(x0 + kTri + 4), ly, t, ink, fill);
+        const int gap = armed ? 4 : 6;
+        const int content = kMid.height + (armed || !sub.empty() ? gap + kLabelFont.height : 0);
+        const int16_t top = static_cast<int16_t>(y_ + (h_ - (armed ? kBarH : 0) - content) / 2);
+        centred_text(surf_, kMid, 4, static_cast<int16_t>(surf_.w - 8), top, head, ink, fill);
+        if (sub.empty()) return;
+        const int16_t ly = static_cast<int16_t>(top + kMid.height + gap);
+        if (armed) {
+            centred_text(surf_, kLabelFont, 4, static_cast<int16_t>(surf_.w - 8), ly, sub, ink, fill);
+        } else {
+            char buf[kFitBuf];
+            constexpr int16_t kTri = 11;
+            const std::string_view t = fit_text(kLabelFont, sub, surf_.w - 40, buf);
+            const int tw = kTri + 4 + text_width(kLabelFont, t);
+            const int16_t x0 = static_cast<int16_t>((surf_.w - tw) / 2);
+            draw_warn_triangle(surf_, x0, static_cast<int16_t>(ly + (kLabelFont.height - kTri) / 2), kTri, kCaution, fill);
+            gfx_text(surf_, kLabelFont, static_cast<int16_t>(x0 + kTri + 4), ly, t, ink, fill);
+        }
     });
 }
 
+bool ActionCell::draw_idle(std::string_view verb, std::string_view hint, PaintBudget *bg, bool focused) {
+    return draw_ticket(focused ? 0 : 2, verb, hint,
+                       focused ? kTicket : kBg, focused ? kOnTicket : kInk2, focused ? kTicketFrame : kRule, false, bg);
+}
+
 bool ActionCell::draw_armed(std::string_view word, std::string_view sub, int left_permille, PaintBudget *bg) {
-    uint32_t sig = mix_u32(mix_init(), 1);
-    sig = mix(mix(sig, word), sub);
+    if (!draw_ticket(1, word, sub, kCaution, kSpotInk, 0, true, bg)) return false;
     const int16_t w = static_cast<int16_t>(surf_.w - 2 * kTicketInset);
-    if (!e_.paint_budgeted(sig, bg, static_cast<int>(surf_.w) * h_, [&] {
-        bar_px_ = -1;
-        ticket_ground(surf_, y_, h_, w, kCaution);
-        const int content = kMid.height + 4 + kLabelFont.height;
-        const int16_t top = static_cast<int16_t>(y_ + (h_ - kBarH - content) / 2);
-        centred_text(surf_, kMid, 4, static_cast<int16_t>(surf_.w - 8), top, word, kSpotInk, kCaution);
-        centred_text(surf_, kLabelFont, 4, static_cast<int16_t>(surf_.w - 8), static_cast<int16_t>(top + kMid.height + 4), sub, kSpotInk, kCaution);
-    })) return false;
     if (left_permille < 0) left_permille = 0;
     if (left_permille > 1000) left_permille = 1000;
     const int16_t span = static_cast<int16_t>(w - 1);
@@ -436,26 +522,18 @@ CellRect verdict_cell_rect(const Surface &s, int16_t y, int16_t vh, int n, int i
 
 // The bracket of one run of cells that share a current, under their volt cells: the current text centred, a line either side
 // of it with a tick at each end. The boxes are what the caller leaves unpainted when it wipes the run's column.
-struct Bracket {
-    Box text{};
-    Box segs[4]{};
-    int nseg = 0;
-};
-Bracket bracket_of(const Surface &s, int16_t y, int n, int i, int j, std::string_view cur) {
-    Bracket b;
+int bracket_holes(const Surface &s, int16_t y, int n, int i, int j, std::string_view cur, Box (&holes)[5]) {
     const int16_t gx0 = static_cast<int16_t>(cell_x0(s, n, i) + 2), gx1 = static_cast<int16_t>(cell_x0(s, n, j + 1) - 4);
     const int16_t gx = static_cast<int16_t>((gx0 + gx1) / 2), by = static_cast<int16_t>(y + 31);
     const int tw = text_width(kLabelFont, cur);
-    b.text = {static_cast<int16_t>(gx - tw / 2), static_cast<int16_t>(y + 25), static_cast<int16_t>(tw), kLabelFont.height};
+    holes[0] = {static_cast<int16_t>(gx - tw / 2), static_cast<int16_t>(y + 25), static_cast<int16_t>(tw), kLabelFont.height};
     const int half = tw / 2 + 4;
-    if (gx1 - gx0 > half * 2 + 8) {
-        b.segs[0] = {gx0, by, static_cast<int16_t>(gx - half - gx0), 1};
-        b.segs[1] = {static_cast<int16_t>(gx + half), by, static_cast<int16_t>(gx1 - gx - half + 1), 1};
-        b.segs[2] = {gx0, static_cast<int16_t>(by - 3), 1, 3};
-        b.segs[3] = {gx1, static_cast<int16_t>(by - 3), 1, 3};
-        b.nseg = 4;
-    }
-    return b;
+    if (gx1 - gx0 <= half * 2 + 8) return 1;
+    holes[1] = {gx0, by, static_cast<int16_t>(gx - half - gx0), 1};
+    holes[2] = {static_cast<int16_t>(gx + half), by, static_cast<int16_t>(gx1 - gx - half + 1), 1};
+    holes[3] = {gx0, static_cast<int16_t>(by - 3), 1, 3};
+    holes[4] = {gx1, static_cast<int16_t>(by - 3), 1, 3};
+    return 5;
 }
 }  // namespace
 
@@ -503,13 +581,11 @@ void draw_result_row(const Surface &s, int16_t y, int16_t h, std::string_view ro
         if (cells[i].current.empty()) {
             gfx_fill(s, zx, zy, zw, zh, kBg);
         } else {
-            const Bracket b = bracket_of(s, y, n, i, j, cells[i].current);
             Box holes[5];
-            holes[0] = b.text;
-            for (int k = 0; k < b.nseg; k++) holes[1 + k] = b.segs[k];
-            fill_except(s, {zx, zy, zw, zh}, holes, 1 + b.nseg, kBg);
-            gfx_text(s, kLabelFont, b.text.x, b.text.y, cells[i].current, focus ? kInk : kDim, kBg);
-            for (int k = 0; k < b.nseg; k++) gfx_fill(s, b.segs[k].x, b.segs[k].y, b.segs[k].w, b.segs[k].h, kInk3);
+            const int nh = bracket_holes(s, y, n, i, j, cells[i].current, holes);
+            fill_except(s, {zx, zy, zw, zh}, holes, nh, kBg);
+            gfx_text(s, kLabelFont, holes[0].x, holes[0].y, cells[i].current, focus ? kInk : kDim, kBg);
+            for (int k = 1; k < nh; k++) gfx_fill(s, holes[k].x, holes[k].y, holes[k].w, holes[k].h, kInk3);
         }
         i = j + 1;
     }
@@ -714,6 +790,10 @@ int ResultGrid::sync_dots() {
 int ResultGrid::draw_some(int budget_px, int prefer, bool strict) {
     int spent = 0;
     pending_ = false;
+    auto fits_budget = [&](int cost) {
+        if ((strict || spent > 0) && spent + cost > budget_px) { pending_ = true; return false; }
+        return true;
+    };
     int16_t yy = y_;
     int slot = 0;
     for (int pass = prefer >= first_ ? 0 : 1; pass < 2; pass++) {
@@ -730,9 +810,7 @@ int ResultGrid::draw_some(int budget_px, int prefer, bool strict) {
                 const int16_t vh = verdict_part_h(r, h);
                 if (!valid_[slot] || sig_[slot] != sh) {
                     const int cost = surf_.w * h + row_overlay_px(surf_, r, h, ~0u);
-                    if ((strict || spent > 0) && spent + cost > budget_px) {
-                        pending_ = true;
-                    } else {
+                    if (fits_budget(cost)) {
                         draw_result_row(surf_, yy, h, r.label, r.cells, r.n, r.focus, r.section);
                         spent += cost;
                         sig_[slot] = sh; vd_[slot] = vd; core_[slot] = row_core(r, yy); valid_[slot] = true;
@@ -746,9 +824,7 @@ int ResultGrid::draw_some(int budget_px, int prefer, bool strict) {
                     int cost = row_overlay_px(surf_, r, h, chg);
                     for (int k = 0; k < r.n; k++)
                         if ((chg >> k) & 1) cost += verdict_cell_rect(surf_, cy, vh, r.n, k).w * vh;
-                    if ((strict || spent > 0) && spent + cost > budget_px) {
-                        pending_ = true;
-                    } else {
+                    if (fits_budget(cost)) {
                         for (int k = 0; k < r.n; k++) {
                             if (!((chg >> k) & 1)) continue;
                             const CellRect cr = verdict_cell_rect(surf_, cy, vh, r.n, k);
@@ -767,9 +843,7 @@ int ResultGrid::draw_some(int budget_px, int prefer, bool strict) {
     for (int k = slot; k < kMaxSlots; k++) valid_[k] = false;
     if (yy != end_y_) {
         const int cost = bottom_ > yy ? (bottom_ - yy) * surf_.w : 0;
-        if ((strict || spent > 0) && spent + cost > budget_px) {
-            pending_ = true;   // the blank under the last row waits too
-        } else {
+        if (fits_budget(cost)) {
             if (cost) gfx_fill(surf_, 0, yy, surf_.w, static_cast<int16_t>(bottom_ - yy), kBg);
             if (dot_on_ && dot_cell_.y >= yy) dot_on_ = false;   // under the last row: wiped
             spent += cost;

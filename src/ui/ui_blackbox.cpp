@@ -318,10 +318,14 @@ void BlackBoxPage::draw_strip() {
 void BlackBoxPage::draw_line_row(void *self, int index, const Rect &, bool, Field &f) {
     const BlackBoxPage &p = *static_cast<const BlackBoxPage *>(self);
     view::Row r;
-    if (!view::row_at(p.data(), size_t(index), r)) { f.set_colors(kDim, kBg); f.draw(""); return; }
     char buf[32];
-    const size_t n = view::format_row(r, buf);
-    f.set_colors(r.dir == '!' ? kError : r.dir == '<' ? kAmp : kVolt, kBg);
+    size_t n = 0;
+    uint16_t col = kDim;
+    if (view::row_at(p.data(), size_t(index), r)) {
+        n = view::format_row(r, buf);
+        col = r.dir == '!' ? kError : r.dir == '<' ? kAmp : kVolt;
+    }
+    f.set_colors(col, kBg);
     f.draw(std::string_view(buf, n));
 }
 

@@ -1240,6 +1240,30 @@ void put_line_id(StrBuf<36> &l, uint16_t vid, uint16_t pid, const char *vendor) 
 // The identity of a place with something on it (the empty and no-PD states are the page's own): Charger = the source's
 // power, its PD revision and offer kinds, the contract in use and its ID; Cable = the rating, its power and EPR, the chip's
 // ID; Device = what it asks, the request's state and offer, and what that is of the offer.
+template <size_t N>
+void put_va(StrBuf<N> &s, uint32_t mv, uint32_t ma) {
+    put_v(s, mv);
+    s.put("V ");
+    put_a(s, ma);
+}
+
+void add_pps_avs(Ident &id, bool pps, bool avs) {
+    if (pps) id.add("PPS", Ident::Outline);
+    else if (avs) id.add("AVS", Ident::Outline);
+}
+
+void add_soc_chip(Ident &id, const pd::BatteryCaps &bat, const pd::BatteryStatus &bst, bool chg_fallback) {
+    if (!bst.valid || bst.invalid_ref || !bst.present) return;
+    const int soc = pd::battery_soc_pct(bat, bst);
+    if (soc >= 0) {
+        StrBuf<8> sc;
+        sc.put_u32(static_cast<uint32_t>(soc)).put_char('%');
+        id.add(sc.view(), bst.charging == 0 ? Ident::Ok : Ident::Outline);
+    } else if (chg_fallback && bst.charging == 0) {
+        id.add("chg", Ident::Ok);
+    }
+}
+
 [[gnu::noinline]] void place_ident(Ident &id, conn::Tab tab, const TabData &d, bool stale) {
     const MatchResult &r = *d.r;
     switch (tab) {
@@ -1260,13 +1284,10 @@ void put_line_id(StrBuf<36> &l, uint16_t vid, uint16_t pid, const char *vendor) 
             avs = avs || caps.pdos[i].type == pd::PdoType::Avs;
         }
         if (caps.epr) id.add("EPR", Ident::Outline);
-        if (pps) id.add("PPS", Ident::Outline);
-        else if (avs) id.add("AVS", Ident::Outline);
+        add_pps_avs(id, pps, avs);
         if (r.request_seen) {
             StrBuf<12> t;
-            put_v(t, r.want_mv);
-            t.put("V ");
-            put_a(t, r.want_ma);
+            put_va(t, r.want_mv, r.want_ma);
             id.add(t.view(), Ident::Volt);
         }
         id.line.put_u32(uint32_t(r.rows)).put(r.rows == 1 ? " offer, ID " : " offers, ID ");
@@ -1317,23 +1338,13 @@ void put_line_id(StrBuf<36> &l, uint16_t vid, uint16_t pid, const char *vendor) 
                 pps = pps || p.type == pd::PdoType::Pps;
                 avs = avs || p.type == pd::PdoType::Avs;
             }
-            if (pps) id.add("PPS", Ident::Outline);
-            else if (avs) id.add("AVS", Ident::Outline);
+            add_pps_avs(id, pps, avs);
 
             const pd::ExtInfo &ext = fusb302::ext();
             const pd::ExtInfo &iext = fusb302::identify_ext();
             const pd::BatteryCaps &bat = ext.battery.valid ? ext.battery : iext.battery;
             const pd::BatteryStatus &bst = ext.battery_status.valid ? ext.battery_status : iext.battery_status;
-            if (bst.valid && !bst.invalid_ref && bst.present) {
-                const int soc = pd::battery_soc_pct(bat, bst);
-                if (soc >= 0) {
-                    StrBuf<8> sc;
-                    sc.put_u32(static_cast<uint32_t>(soc)).put_char('%');
-                    id.add(sc.view(), bst.charging == 0 ? Ident::Ok : Ident::Outline);
-                } else if (bst.charging == 0) {
-                    id.add("chg", Ident::Ok);
-                }
-            }
+            add_soc_chip(id, bat, bst, true);
 
             const char *fallback = d.k2_sink ? "Self-powered PD read" : "Standalone PD read";
             const std::string_view tag = d.k2_sink ? " \xC2\xB7 self-powered" : " \xC2\xB7 standalone";
@@ -1348,9 +1359,7 @@ void put_line_id(StrBuf<36> &l, uint16_t vid, uint16_t pid, const char *vendor) 
         }
         if (d.k2_sink) { id.head.put("K2"); id.line.put("The K2 draws the power itself"); return; }
         if (!r.request_seen) { id.head.put("No request"); id.dim = true; id.line.put("The device asked for no offer"); return; }
-        put_v(id.head, r.want_mv);
-        id.head.put("V ");
-        put_a(id.head, r.want_ma);
+        put_va(id.head, r.want_mv, r.want_ma);
         const pd::Contract &ct = fusb302::contract();
         const char *st = request_state_name(ct);
         if (st[0]) id.add(st, ct.ready ? Ident::Ok : Ident::Outline);
@@ -1363,14 +1372,7 @@ void put_line_id(StrBuf<36> &l, uint16_t vid, uint16_t pid, const char *vendor) 
             const pd::ExtInfo &ext = fusb302::ext();
             const pd::BatteryCaps &bat = iq.battery.valid ? iq.battery : ext.battery;
             const pd::BatteryStatus &bst = iq.battery_status.valid ? iq.battery_status : ext.battery_status;
-            if (bst.valid && !bst.invalid_ref && bst.present) {
-                const int soc = pd::battery_soc_pct(bat, bst);
-                if (soc >= 0) {
-                    StrBuf<8> sc;
-                    sc.put_u32(static_cast<uint32_t>(soc)).put_char('%');
-                    id.add(sc.view(), bst.charging == 0 ? Ident::Ok : Ident::Outline);
-                }
-            }
+            add_soc_chip(id, bat, bst, false);
         }
         id.line.put("Asks ").put_u32(r.want_mw / 1000).put("W of ").put_u32(r.src_max_mw / 1000).put("W offered");
         return;
@@ -1636,6 +1638,26 @@ void ConnectionPage::paint_status(uint32_t now_ms) {
     draw_footer_budgeted(ctx_.content, tone, txt.view(), status_, ctx_.budget);
 }
 
+static uint32_t mix_u16s(uint32_t h, const uint16_t *w, std::size_t n) {
+    for (std::size_t i = 0; i < n; i++) h = mix_u32(h, w[i]);
+    return h;
+}
+
+static uint32_t mix_identity(uint32_t h, const pd::Identity &id) {
+    h = mix_u32(h, uint32_t(id.valid) | uint32_t(id.vid) << 8 | uint32_t(id.pid) << 16);
+    return mix_u32(h, id.id_header);
+}
+
+static uint32_t mix_bat_mfr(uint32_t h, const pd::BatteryCaps &bat, const pd::BatteryStatus &bst,
+                            const pd::ManufacturerInfo &mfr) {
+    h = mix_u32(h, uint32_t(bat.valid) | uint32_t(bat.invalid_ref) << 1 | uint32_t(bat.design_dwh) << 16);
+    h = mix_u32(h, uint32_t(bat.last_full_dwh) | uint32_t(bst.valid) << 16 | uint32_t(bst.present) << 17
+                   | uint32_t(bst.invalid_ref) << 18 | uint32_t(bst.charging) << 19);
+    h = mix_u32(h, bst.present_dwh);
+    h = mix_u32(h, uint32_t(mfr.valid) | uint32_t(mfr.vid) << 8 | uint32_t(mfr.pid) << 24);
+    return pg::mix_cstr(h, mfr.name, sizeof mfr.name);
+}
+
 void ConnectionPage::update(uint32_t now_ms) {
     PaintBudget *const bg = ctx_.budget;
     const pd::Link &link = ctx_.ui->link();
@@ -1708,10 +1730,9 @@ void ConnectionPage::update(uint32_t now_ms) {
     c = mix_u32(c, em.raw_vdos[4]);
     c = mix_u32(c, uint32_t(em.max_power_w) | uint32_t(em.sop) << 16);
     c = mix_u32(c, fusb302::cable_seq());
-    c = mix_u32(c, uint32_t(vdm.identity.valid) | uint32_t(vdm.identity.vid) << 8 | uint32_t(vdm.identity.pid) << 16);
-    c = mix_u32(c, vdm.identity.id_header);
+    c = mix_identity(c, vdm.identity);
     c = mix_u32(c, uint32_t(vdm.num_svids) | uint32_t(vdm.modes_svid) << 8 | uint32_t(vdm.num_modes) << 24);
-    for (int i = 0; i < vdm.num_svids; i++) c = mix_u32(c, vdm.svids[i]);
+    c = mix_u16s(c, vdm.svids.data(), vdm.num_svids);
     c = pg::mix_u32s(c, vdm.modes.data(), vdm.num_modes);
     c = mix_u32(c, uint32_t(vdm.cuktech) | uint32_t(vdm.xiaomi) << 1 | uint32_t(vdm.xiaomi_cmd) << 2);
     {   // the lab-only Apple readout's rows (the serial is never displayed nor hashed)
@@ -1721,10 +1742,9 @@ void ConnectionPage::update(uint32_t now_ms) {
         c = pg::mix_cstr(c, ap.fw.data(), ap.fw.size());
         c = pg::mix_cstr(c, ap.hw.data(), ap.hw.size());
     }
-    c = mix_u32(c, uint32_t(snk.identity.valid) | uint32_t(snk.identity.vid) << 8 | uint32_t(snk.identity.pid) << 16);
-    c = mix_u32(c, snk.identity.id_header);
+    c = mix_identity(c, snk.identity);
     c = mix_u32(c, uint32_t(snk.num_svids));
-    for (int i = 0; i < snk.num_svids; i++) c = mix_u32(c, snk.svids[i]);
+    c = mix_u16s(c, snk.svids.data(), snk.num_svids);
     c = mix_u32(c, uint32_t(ctx_.analog.has_value()));
     c = mix_u32(c, uint32_t(dp_));
     c = mix_u32(c, uint32_t(dm_));   // the debounced ADC levels (Row D): raw jitter is not hashed
@@ -1737,14 +1757,7 @@ void ConnectionPage::update(uint32_t now_ms) {
     uint32_t dev_sig = 2166136261u;
     {
         const pd::ExtInfo &ext = fusb302::ext();
-        dev_sig = mix_u32(dev_sig, uint32_t(ext.battery.valid) | uint32_t(ext.battery.invalid_ref) << 1
-                                 | uint32_t(ext.battery.design_dwh) << 16);
-        dev_sig = mix_u32(dev_sig, uint32_t(ext.battery.last_full_dwh)
-                                 | uint32_t(ext.battery_status.valid) << 16 | uint32_t(ext.battery_status.present) << 17
-                                 | uint32_t(ext.battery_status.invalid_ref) << 18 | uint32_t(ext.battery_status.charging) << 19);
-        dev_sig = mix_u32(dev_sig, ext.battery_status.present_dwh);
-        dev_sig = mix_u32(dev_sig, uint32_t(ext.mfr.valid) | uint32_t(ext.mfr.vid) << 8 | uint32_t(ext.mfr.pid) << 24);
-        dev_sig = pg::mix_cstr(dev_sig, ext.mfr.name, sizeof ext.mfr.name);
+        dev_sig = mix_bat_mfr(dev_sig, ext.battery, ext.battery_status, ext.mfr);
         if (iq_ok) {
             const pd::IqStatus &iq = fusb302::interrogate_status();
             dev_sig = mix_u32(dev_sig, uint32_t(iq.phase) | uint32_t(iq.ok_mask) << 8 | uint32_t(iq.num_sink_pdos) << 24);
@@ -1753,13 +1766,7 @@ void ConnectionPage::update(uint32_t now_ms) {
                                      | uint32_t(iq.sink_ext_len) << 16 | uint32_t(iq.num_svids) << 24);
             dev_sig = mix_u32(dev_sig, iq.revision);
             dev_sig = mix_u32(dev_sig, uint32_t(iq.id.valid) | uint32_t(iq.id.vid) << 8 | uint32_t(iq.id.pid) << 16);
-            dev_sig = mix_u32(dev_sig, uint32_t(iq.battery.valid) | uint32_t(iq.battery.invalid_ref) << 1
-                                     | uint32_t(iq.battery.design_dwh) << 8 | uint32_t(iq.battery.last_full_dwh) << 24);
-            dev_sig = mix_u32(dev_sig, uint32_t(iq.battery_status.valid) | uint32_t(iq.battery_status.present) << 1
-                                     | uint32_t(iq.battery_status.invalid_ref) << 2
-                                     | uint32_t(iq.battery_status.charging) << 4 | uint32_t(iq.battery_status.present_dwh) << 16);
-            dev_sig = mix_u32(dev_sig, uint32_t(iq.mfr.valid) | uint32_t(iq.mfr.vid) << 8);
-            dev_sig = pg::mix_cstr(dev_sig, iq.mfr.name, sizeof iq.mfr.name);
+            dev_sig = mix_bat_mfr(dev_sig, iq.battery, iq.battery_status, iq.mfr);
         }
         if (fusb302::identify_current()) {
             const pd::Identity &iid = fusb302::identify_identity();
@@ -1767,13 +1774,7 @@ void ConnectionPage::update(uint32_t now_ms) {
             dev_sig = mix_u32(dev_sig, idst.revision);
             dev_sig = mix_u32(dev_sig, uint32_t(iid.valid) | uint32_t(iid.vid) << 8 | uint32_t(iid.pid) << 16);
             if (iid.valid && iid.vendor && iid.vendor[0]) dev_sig = pg::mix_cstr(dev_sig, iid.vendor);
-            dev_sig = mix_u32(dev_sig, uint32_t(iext.battery.valid) | uint32_t(iext.battery.invalid_ref) << 1
-                                     | uint32_t(iext.battery.design_dwh) << 8 | uint32_t(iext.battery.last_full_dwh) << 24);
-            dev_sig = mix_u32(dev_sig, uint32_t(iext.battery_status.valid) | uint32_t(iext.battery_status.present) << 1
-                                     | uint32_t(iext.battery_status.invalid_ref) << 2
-                                     | uint32_t(iext.battery_status.charging) << 4 | uint32_t(iext.battery_status.present_dwh) << 16);
-            dev_sig = mix_u32(dev_sig, uint32_t(iext.mfr.valid) | uint32_t(iext.mfr.vid) << 8);
-            dev_sig = pg::mix_cstr(dev_sig, iext.mfr.name, sizeof iext.mfr.name);
+            dev_sig = mix_bat_mfr(dev_sig, iext.battery, iext.battery_status, iext.mfr);
         }
     }
     const uint32_t c_base = mix_u32(c, dev_sig);
@@ -1846,20 +1847,16 @@ void ConnectionPage::update(uint32_t now_ms) {
     h = mix_u32(h, uint32_t(wl.src));
     h = mix_u32(h, uint32_t(ct.flags) | uint32_t(ct.accepted) << 8 | uint32_t(ct.ready) << 9 | uint32_t(ct.rejected) << 10);
     {   // the tab bodies read more than the match: cable, identity, USB link, protocol, sink mode
-        const pd::Identity &id = vdm.identity;
         const usblink::Link ul = fusb302::usb_link(dp_, dm_);   // debounced levels (Row D)
         h = mix_u32(h, uint32_t(em.valid) | uint32_t(em.is_active) << 1 | uint32_t(em.vid) << 8 | uint32_t(em.raw_vdos[4]) << 24);
         h = mix_u32(h, em.raw_vdos[4] | uint32_t(em.max_power_w) << 8 | uint32_t(em.sop) << 24);
         h = mix_u32(h, fusb302::cable_seq());
         h = mix_u32(h, uint32_t(fusb302::identify_current()));
-        h = mix_u32(h, uint32_t(id.valid) | uint32_t(id.vid) << 8 | uint32_t(id.pid) << 16);
-        h = mix_u32(h, id.id_header);
-        const pd::Identity &sid = snk.identity;
-        h = mix_u32(h, uint32_t(sid.valid) | uint32_t(sid.vid) << 8 | uint32_t(sid.pid) << 16);
-        h = mix_u32(h, sid.id_header);
+        h = mix_identity(h, vdm.identity);
+        h = mix_identity(h, snk.identity);
         h = mix_u32(h, uint32_t(vdm.num_svids) | uint32_t(snk.num_svids) << 8);
-        for (int i = 0; i < vdm.num_svids; i++) h = mix_u32(h, vdm.svids[i]);
-        for (int i = 0; i < snk.num_svids; i++) h = mix_u32(h, snk.svids[i]);
+        h = mix_u16s(h, vdm.svids.data(), vdm.num_svids);
+        h = mix_u16s(h, snk.svids.data(), snk.num_svids);
         h = mix_u32(h, uint32_t(ul.family) | uint32_t(ul.tbt) << 4 | uint32_t(ul.dp) << 8 | uint32_t(ul.cable_limited) << 9 | ul.mbps << 12);
         h = mix_u32(h, uint32_t(ul.dp_adv) | uint32_t(ul.tbt_adv) << 1 | uint32_t(ul.dp_2lane) << 2 | uint32_t(ul.dp_4lane) << 3);
         h = mix_u32(h, fc_ | uint32_t(fusb302::self_powered()) << 8 | uint32_t(fusb302::pin_rd() == 1) << 9);

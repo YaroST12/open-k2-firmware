@@ -1036,14 +1036,15 @@ bool LinesPage::paint_verdict(const std::optional<adc::Reading> &r, uint32_t now
         vsig_ = sig;
         const ChipStyle ts = tone_chip(v.tone);
         const int16_t y = static_cast<int16_t>(kVerdictY + 2);
-        gfx_fill(c, 0, y, 6, kit::kChipH, kBg);
-        int16_t x = static_cast<int16_t>(6 + kit::draw_chip(c, 6, y, v.main.view(), ts.fill, ts.ink));
+        auto draw_next = [&](int16_t x, std::string_view text, uint16_t fill, uint16_t ink) {
+            gfx_fill(c, x, y, 6, kit::kChipH, kBg);
+            return static_cast<int16_t>(x + 6 + kit::draw_chip(c, static_cast<int16_t>(x + 6), y, text, fill, ink));
+        };
+        int16_t x = draw_next(0, v.main.view(), ts.fill, ts.ink);
         const std::string_view ex = v.extra.view();
         if (!ex.empty()) {   // the detail: a voltage takes the volt spot, anything else the quiet bg2 chip
             const bool volts = ex.back() == 'V';
-            gfx_fill(c, x, y, 6, kit::kChipH, kBg);
-            x = static_cast<int16_t>(x + 6 + kit::draw_chip(c, static_cast<int16_t>(x + 6), y, ex, volts ? kSpotVolt : kBg2,
-                                                            volts ? kSpotInk : kInk));
+            x = draw_next(x, ex, volts ? kSpotVolt : kBg2, volts ? kSpotInk : kInk);
         }
         if (x < c.w) gfx_fill(c, x, y, static_cast<int16_t>(c.w - x), kit::kChipH, kBg);   // a shorter row must not leave the old tail
         painted_ = true;
@@ -1841,14 +1842,13 @@ void TriggerPage::paint_main(uint32_t now_ms) {
         if (fresh) {
             kit::kv_static(c, kFcKv, live ? kLiveKeys : retarget ? kHeldKeys : kCapKeys, 4);
             kit::kv_draw_text(c, kFcKv, live ? 1 : 0, e.name);
+            vbus_v_.init(c, kSmall, kFcKv.value_x, fc_row_text_y(live ? 3 : 2), 8, Align::Left, kVolt, kBg);
             if (live) {
                 state_v_.init(c, kSmall, kFcKv.value_x, fc_row_text_y(0), 12, Align::Left, kOk, kBg);
                 target_v_.init(c, kSmall, kFcKv.value_x, fc_row_text_y(2), 8, Align::Left, kVolt, kBg);
-                vbus_v_.init(c, kSmall, kFcKv.value_x, fc_row_text_y(3), 8, Align::Left, kVolt, kBg);
             } else {
                 fc_offered_text(e, s);
                 kit::kv_draw_text(c, kFcKv, 1, s.view(), e.kind == trig::Kind::Scan ? kText : kVolt);
-                vbus_v_.init(c, kSmall, kFcKv.value_x, fc_row_text_y(2), 8, Align::Left, kVolt, kBg);
                 if (retarget) {
                     held_v_.init(c, kSmall, kFcKv.value_x, fc_row_text_y(3), 8, Align::Left, kVolt, kBg);
                 } else {

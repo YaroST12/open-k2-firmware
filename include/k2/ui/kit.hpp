@@ -329,6 +329,8 @@ public:
     void invalidate() { e_.invalidate(); bar_px_ = -1; }
 
 private:
+    bool draw_ticket(uint32_t tag, std::string_view head, std::string_view sub,
+                     uint16_t fill, uint16_t ink, uint16_t frame, bool armed, PaintBudget *bg);
     Surface surf_{};
     int16_t y_ = 0, h_ = 0;
     Elem e_;

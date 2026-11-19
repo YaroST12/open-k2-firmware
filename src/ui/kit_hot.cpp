@@ -166,39 +166,6 @@ K2_HOT void paint_texts(const Surface &s, Box ground, const TextRun *runs, int n
     for (int i = 0; i < n; i++) gfx_text(s, *runs[i].font, runs[i].x, runs[i].y, runs[i].text, runs[i].ink, bg);
 }
 
-namespace detail {
-K2_HOT LabelLayout label_layout(int16_t x, int16_t y, int16_t w, int16_t h, std::string_view label, char (&buf)[kFitBuf]) {
-    const Font &f = h >= 22 ? kSmall : kLabelFont;
-    const std::string_view t = fit_text(f, label, w, buf);
-    const int16_t tw = static_cast<int16_t>(text_width(f, t));
-    return {&f, t, {static_cast<int16_t>(x + (w - tw) / 2), static_cast<int16_t>(y + (h - f.height) / 2), tw, f.height}};
-}
-
-K2_HOT Box strike_line(const Font &f, int16_t tx, int16_t ty, int16_t tw, int16_t cx, int16_t cw) {
-    const Glyph *gx = find_glyph(f, 'x');
-    const int xh = gx ? gx->top : f.ascent * 2 / 3;
-    int16_t x0 = static_cast<int16_t>(tx - 1), x1 = static_cast<int16_t>(tx + tw + 1);
-    if (x0 < cx) x0 = cx;
-    if (x1 > cx + cw) x1 = static_cast<int16_t>(cx + cw);
-    return {x0, static_cast<int16_t>(ty + f.ascent - 1 - xh / 2), static_cast<int16_t>(x1 > x0 ? x1 - x0 : 0), 1};
-}
-}  // namespace detail
-
-K2_HOT void draw_top_bar(const Surface &s, std::string_view title, int step, std::string_view badge, bool readout_follows, int segs) {
-    char buf[40];
-    size_t n = 0;
-    if (step >= 1 && step <= segs) {
-        buf[n++] = static_cast<char>('0' + step);
-        buf[n++] = '/';
-        buf[n++] = static_cast<char>('0' + segs);
-        buf[n++] = ' ';
-    }
-    for (size_t i = 0; i < title.size() && n < sizeof(buf); i++) buf[n++] = title[i];
-    draw_status_left(s, false, Icon::Bolt, std::string_view(buf, n), 132, badge, readout_follows);
-    if (step > 0) draw_progress_rule(s, step, segs);
-    else gfx_fill(s, 0, kProgY + 1, s.w, kProgH - 1, kBg);
-}
-
 K2_HOT uint32_t RowList::row_sig_cb(void *ctx, int index) {
     auto *self = static_cast<RowList *>(ctx);
     RowSpec r;
@@ -327,60 +294,6 @@ K2_HOT void RowList::draw(uint32_t now_ms, PaintBudget *bg) {
         extra_ = want;
     }
     list_.draw(now_ms, bg);
-}
-
-K2_HOT void kv_static_row(const Surface &s, const KvLayout &l, const char *label, int i, bool trailing_line) {
-    const Font &f = detail::font_or_small(l.label_font);
-    const int16_t y = kv_row_y(l, i);
-    gfx_fill(s, 0, y, s.w, 1, kBg);
-    const int16_t ty = static_cast<int16_t>(y + row_text_y(l.pitch, f.height));
-    gfx_text(s, f, l.label_x, ty, label, kInk2, kBg);
-    draw_leader(s, static_cast<int16_t>(l.label_x + text_width(f, label) + 5), static_cast<int16_t>(l.value_x - kLeaderGap),
-                static_cast<int16_t>(ty + f.ascent - 2));
-    if (trailing_line) gfx_fill(s, 0, kv_row_y(l, i + 1), s.w, 1, kBg);
-}
-
-K2_HOT void draw_dashed(const Surface &s, int16_t x0, int16_t x1, int16_t y, uint16_t ink, uint16_t bg) {
-    for (int16_t x = x0; x < x1; x = static_cast<int16_t>(x + kDashOn + kDashOff)) {
-        const int16_t on = static_cast<int16_t>(std::min<int>(kDashOn, x1 - x));
-        gfx_fill(s, x, y, on, 1, ink);
-        const int16_t off = static_cast<int16_t>(std::min<int>(kDashOff, x1 - x - on));
-        if (off > 0) gfx_fill(s, static_cast<int16_t>(x + on), y, off, 1, bg);
-    }
-}
-
-K2_HOT void kv_cells(const Surface &s, const KvLayout &l, Field *cells, int n, const uint8_t *chars) {
-    const Font &f = detail::font_or_small(l.value_font);
-    for (int i = 0; i < n; i++) {
-        const uint8_t w = chars && chars[i] < l.value_chars ? chars[i] : l.value_chars;
-        const int16_t x = l.align == Align::Right ? static_cast<int16_t>(l.value_x + (l.value_chars - w) * f.adv) : l.value_x;
-        cells[i].init(s, f, x, static_cast<int16_t>(kv_row_y(l, i) + row_text_y(l.pitch, f.height)), w, l.align, kText, kBg);
-    }
-}
-
-K2_HOT void kv_ground_row(const Surface &s, const KvLayout &l, const char *label, int i, const uint8_t *chars, uint32_t marks) {
-    const Font &kf = detail::font_or_small(l.label_font), &vf = detail::font_or_small(l.value_font);
-    const int16_t y = kv_row_y(l, i);
-    const uint8_t w = chars && chars[i] < l.value_chars ? chars[i] : l.value_chars;
-    const int16_t vx = l.align == Align::Right ? static_cast<int16_t>(l.value_x + (l.value_chars - w) * vf.adv) : l.value_x;
-    Box holes[3];
-    int h = 0;
-    if (marks >> i & 1u)
-        holes[h++] = {kMarkX, static_cast<int16_t>(y + 1 + (l.pitch - 1 - kMarkSize) / 2), kMarkSize, kMarkSize};
-    holes[h++] = {l.label_x, static_cast<int16_t>(y + row_text_y(l.pitch, kf.height)), static_cast<int16_t>(text_width(kf, label)), kf.height};
-    holes[h++] = {vx, static_cast<int16_t>(y + row_text_y(l.pitch, vf.height)), static_cast<int16_t>(w * vf.adv), vf.height};
-    fill_except(s, {0, static_cast<int16_t>(y + 1), s.w, static_cast<int16_t>(l.pitch - 1)}, holes, h, kBg);
-}
-
-K2_HOT void kv_row(const Surface &s, const KvLayout &l, int16_t y, std::string_view key, std::string_view value, uint16_t value_color,
-            bool ours K2_TRUNC_DEF) {
-    const Font &kf = detail::font_or_small(l.label_font), &vf = detail::font_or_small(l.value_font);
-    char buf[kFitBuf];
-    gfx_fill(s, 0, y, s.w, l.clear ? l.pitch : 1, kBg);
-    gfx_text(s, kf, l.label_x, static_cast<int16_t>(y + row_text_y(l.pitch, kf.height)), key, kInk2, kBg);
-    const int box = l.value_chars * vf.adv;
-    gfx_text(s, vf, l.value_x, static_cast<int16_t>(y + row_text_y(l.pitch, vf.height)),
-             ours ? fit_text(vf, value, box, buf K2_TRUNC_ARG) : fit_data(vf, value, box, buf K2_TRUNC_ARG), value_color, kBg);
 }
 
 }  // namespace k2::kit
