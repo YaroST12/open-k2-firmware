@@ -90,6 +90,7 @@ public:
     VdmInfo vdm;
     VdmInfo sink_vdm;
     ExtInfo ext;  // latest extended messages seen from the source
+    bool mfr_target_batt = false;  // route next Manufacturer_Info into ext.batt_mfr instead of ext.mfr
     Emarker cable;      // Discover Identity ACK from the cable (SOP' or SOP'')
     std::uint32_t cable_acks = 0;  // Discover Identity ACKs accepted from a cable since boot
     VdmInfo cable_vdm;  // cable SVIDs and modes (SOP' / SOP'' ACKs)

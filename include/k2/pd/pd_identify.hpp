@@ -22,7 +22,7 @@ inline constexpr std::uint8_t kIdModeSvids = 2;
 inline constexpr std::uint8_t kIdMaxAttempts = 3;
 inline constexpr std::uint32_t kIdRespMs = 300, kIdBackoffMs = 40;
 
-enum class IdStep : std::uint8_t { Identity, Svids, Modes, SinkCap, Status, Revision, BatCap, BatStatus, MfrInfo, Done };
+enum class IdStep : std::uint8_t { Identity, Svids, Modes, SinkCap, Status, Revision, BatCap, BatStatus, MfrInfo, BattMfrInfo, Done };
 enum class IdState : std::uint8_t { Idle, Running, Done, Aborted };
 // Why a running identify was cut short: Other = the driver did not say (shown as "link dropped").
 enum class IdWhy : std::uint8_t { None, Other, Detached, HardReset, Stopped };

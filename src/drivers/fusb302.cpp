@@ -981,6 +981,7 @@ K2_HOT void handle_frame(pd::Sop sop, std::uint16_t header, std::span<const std:
     const auto cable_acks = g_engine.cable_acks;
     const pd::EprInfo info_before = sink().status().epr_info;
     g_engine.epr_info_only = info_before == pd::EprInfo::Pending;   // the answer to our SPR-mode query is not the live list
+    g_engine.mfr_target_batt = ident_running() && ident().status().step == pd::IdStep::BattMfrInfo;
     g_engine.on_message(sop, header, payload, g_active_cc);
     {   // the Request period feeds the PPS keep-alive label on the home footer (no caps on record)
         const std::uint32_t req = g_engine.contract.requests;

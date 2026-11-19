@@ -70,11 +70,11 @@ enum class IqPhase : std::uint8_t { Idle, Reset1, Sniff1, Settle, Ask, Reset2, S
 // The values are bit positions on the wire (iq_bit, the twin protocol): never reorder, append only. The ask order is
 // separate (kIqAskOrder): the plain control messages first, the VDMs last.
 // Done (6) is a sentinel that is also written raw on the wire, so EprSinkCap and later PD 3.x questions are appended after it.
-enum class IqStep : std::uint8_t { Identity, SinkCap, SinkCapExt, Revision, Svids, Modes, Done, EprSinkCap, BatteryCap, BatteryStatus, MfrInfo };
-inline constexpr std::array<IqStep, 10> kIqAskOrder = {
+enum class IqStep : std::uint8_t { Identity, SinkCap, SinkCapExt, Revision, Svids, Modes, Done, EprSinkCap, BatteryCap, BatteryStatus, MfrInfo, Status, BattMfrInfo };
+inline constexpr std::array<IqStep, 12> kIqAskOrder = {
     IqStep::SinkCap,    IqStep::SinkCapExt,    IqStep::Revision, IqStep::EprSinkCap,
-    IqStep::BatteryCap, IqStep::BatteryStatus, IqStep::MfrInfo,
-    IqStep::Identity,   IqStep::Svids,         IqStep::Modes};
+    IqStep::BatteryCap, IqStep::BatteryStatus, IqStep::MfrInfo,  IqStep::BattMfrInfo,
+    IqStep::Status,     IqStep::Identity,      IqStep::Svids,    IqStep::Modes};
 // Why a run ended early (with Aborted, or with Done after the final reset of a stopped run). Append only (wire values).
 enum class IqWhy : std::uint8_t { None, Stopped, Detached, NotInline, NoContract, Resets, Timeout, SourceResets, SourceRestarts };
 // What came back after one question (one attempt).
@@ -214,6 +214,8 @@ struct IqStatus {
     BatteryCaps battery{};          // Battery_Capabilities (BCDB, ref 0)
     BatteryStatus battery_status{}; // Battery_Status (BSDO, ref 0)
     ManufacturerInfo mfr{};         // Manufacturer_Info (MIDB, target 0 port)
+    ManufacturerInfo batt_mfr{};    // Manufacturer_Info (MIDB, target 1 battery)
+    Status status{};                // Status (SDB)
     // The e-marker spoof of this run (IqFacts::spoof): what the charger asked of the cable and what we answered.
     bool spoof = false;
     std::uint8_t sopp_queries = 0;  // Discover Identity requests the charger sent on SOP' (retries included), saturating

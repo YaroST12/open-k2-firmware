@@ -109,6 +109,27 @@ static void test_manufacturer_info() {
     d[5] = 0x07;                               // non-printable byte shows as '?'
     feed(e, ext_frame(0x07, d, 12));
     CHECK_STR(e.ext.mfr.name, "A?ker");
+    CHECK_EQ(e.ext.batt_mfr.valid, false);
+    // Target=1 (battery pack) routes into ext.batt_mfr and auto-resets mfr_target_batt without clobbering ext.mfr.
+    const std::uint8_t bm[4 + 6] = {0xA9, 0x04, 0x78, 0x56, 'C', 'a', 'n', 'o', 'n', 0};
+    e.mfr_target_batt = true;
+    feed(e, ext_frame(0x07, bm, 10));
+    CHECK_EQ(e.mfr_target_batt, false);
+    CHECK_EQ(e.ext.batt_mfr.valid, true);
+    CHECK_EQ(e.ext.batt_mfr.vid, 0x04A9);
+    CHECK_EQ(e.ext.batt_mfr.pid, 0x5678);
+    CHECK_STR(e.ext.batt_mfr.name, "Canon");
+    CHECK_STR(e.ext.mfr.name, "A?ker");
+    // Subsequent Manufacturer_Info without mfr_target_batt updates ext.mfr, leaving ext.batt_mfr intact.
+    d[5] = 'n';
+    feed(e, ext_frame(0x07, d, 12));
+    CHECK_STR(e.ext.mfr.name, "Anker");
+    CHECK_STR(e.ext.batt_mfr.name, "Canon");
+    e.mfr_target_batt = true;
+    e.reset_source();
+    CHECK_EQ(e.mfr_target_batt, false);
+    CHECK_EQ(e.ext.mfr.valid, false);
+    CHECK_EQ(e.ext.batt_mfr.valid, false);
 }
 
 static void test_battery_caps() {

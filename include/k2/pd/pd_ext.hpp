@@ -100,6 +100,7 @@ struct ExtInfo {
     Status status;
     PpsStatus pps;
     ManufacturerInfo mfr;
+    ManufacturerInfo batt_mfr;
     BatteryCaps battery;
     BatteryStatus battery_status;
     Revision revision;

@@ -532,6 +532,27 @@ void put_if_fits(StrBuf<28> &v, std::string_view tag) {
     if (v.view().size() + tag.size() <= static_cast<std::size_t>(kValCells)) v.put(tag);
 }
 
+// Appends `tag` with a separating space when `v` is non-empty, only if it fits `kValCells`.
+void put_tag(StrBuf<28> &v, std::string_view tag) {
+    if (v.view().empty()) {
+        put_if_fits(v, tag);
+        return;
+    }
+    if (v.view().size() + 1 + tag.size() <= static_cast<std::size_t>(kValCells))
+        v.put_char(' ').put(tag);
+}
+
+// Appends a Manufacturer_Info row (name clipped to kValCells, or VID:PID fallback).
+void put_mfr_row(Rows &R, const char *key, const pd::ManufacturerInfo &mfr) {
+    if (mfr.name[0]) {
+        StrBuf<28> &v = R.add(key, kText);
+        for (std::size_t i = 0; i < sizeof mfr.name && mfr.name[i] && v.view().size() < static_cast<std::size_t>(kValCells); i++)
+            v.put_char(mfr.name[i]);
+    } else if (mfr.vid || mfr.pid) {
+        put_id(R.add(key, kText), mfr.vid, mfr.pid, nullptr);
+    }
+}
+
 // "PDO3 9V 3A", "PPS6 8.88V 2.05A", "AVS8 20V 5A", "BAT5 15V 45W": which offer the sink asked for and what it asked.
 // The type leads, so PPS and AVS need no suffix; the longest case "PPS11 21.12V 3.25A" is 18 cells.
 void put_request(StrBuf<28> &v, const MatchResult &r, const pd::SourceCaps &caps) {
@@ -811,15 +832,7 @@ void put_dwh(StrBuf<28> &v, uint16_t dwh) {
     const pd::ManufacturerInfo &mfr = (iq_ok && iq.mfr.valid) ? iq.mfr
                                     : ext.mfr.valid ? ext.mfr
                                     : id_cur ? id_ext.mfr : ext.mfr;
-    if (mfr.valid && (iq_ok || id_cur || mfr.name[0])) {
-        if (mfr.name[0]) {
-            StrBuf<28> &v = R.add("Mfr", kText);
-            for (std::size_t i = 0; i < sizeof mfr.name && mfr.name[i] && v.view().size() < static_cast<std::size_t>(kValCells); i++)
-                v.put_char(mfr.name[i]);
-        } else if (mfr.vid || mfr.pid) {
-            put_id(R.add("Mfr", kText), mfr.vid, mfr.pid, nullptr);
-        }
-    }
+    if (mfr.valid && (iq_ok || id_cur || mfr.name[0])) put_mfr_row(R, "Mfr", mfr);
 
     // PD Revision (RMDO): from inline interrogation or Identify.
     const uint32_t rev = (iq_ok && iq.revision) ? iq.revision : (id_cur ? fusb302::identify_status().revision : 0u);
@@ -829,21 +842,56 @@ void put_dwh(StrBuf<28> &v, uint16_t dwh) {
          .put(" v").put_u32((rev >> 20) & 0xFu).put_char('.').put_u32((rev >> 16) & 0xFu);
     }
 
-    // Sink_Capabilities_Extended (SKEDB): SPR/EPR max PDP and sink modes.
+    // Sink_Capabilities_Extended (SKEDB): SPR/EPR operational/max PDP and sink modes.
     if (iq_ok && iq.sink_ext_len >= 21) {
         StrBuf<28> &v = R.add("PDP", kText);
+        const uint8_t spr_min = iq.sink_ext[18];
+        const uint8_t spr_op = iq.sink_ext[19];
         const uint8_t spr_max = iq.sink_ext[20];
         const uint8_t epr_max = iq.sink_ext_len >= 24 ? iq.sink_ext[23] : 0;
         const uint8_t modes = iq.sink_ext[17];
-        if (spr_max) v.put("SPR ").put_u32(spr_max).put_char('W');
+        if (spr_max) {
+            if (spr_op && spr_op != spr_max && !epr_max)
+                v.put("SPR ").put_u32(spr_op).put_char('/').put_u32(spr_max).put_char('W');
+            else
+                v.put("SPR ").put_u32(spr_max).put_char('W');
+        }
         if (epr_max) {
             StrBuf<12> e;
-            e.put(v.view().empty() ? "EPR " : " EPR ").put_u32(epr_max).put_char('W');
-            put_if_fits(v, e.view());
+            e.put("EPR ").put_u32(epr_max).put_char('W');
+            put_tag(v, e.view());
         }
-        if (modes & 0x01) put_if_fits(v, v.view().empty() ? "PPS" : " PPS");
-        if (modes & 0x20) put_if_fits(v, v.view().empty() ? "AVS" : " AVS");
+        if (modes & 0x01) put_tag(v, "PPS");
+        if (modes & 0x20) put_tag(v, "AVS");
+        if (spr_max && spr_min && spr_min != spr_max && !spr_op && !epr_max) {
+            StrBuf<12> m;
+            m.put("min ").put_u32(spr_min);
+            put_tag(v, m.view());
+        }
         if (v.view().empty()) v.put("Present");
+    }
+
+    // SKEDB Sink details: FW/HW versions, power source flags, battery count, and load step.
+    if (iq_ok && iq.sink_ext_len >= 18) {
+        StrBuf<28> sv;
+        const uint8_t fw = iq.sink_ext[8];
+        const uint8_t hw = iq.sink_ext[9];
+        const uint8_t load_step = iq.sink_ext[11] & 3u;
+        const uint8_t batt_info = iq.sink_ext[16];
+        const uint8_t modes = iq.sink_ext[17];
+        if (fw || hw) sv.put("FW").put_u32(fw).put(" HW").put_u32(hw);
+        if (modes & 0x02) put_tag(sv, "VBUS");
+        if (modes & 0x04) put_tag(sv, "AC");
+        if (modes & 0x08) put_tag(sv, "Batt");
+        unsigned nb = 0;
+        for (uint8_t x = batt_info; x; x = uint8_t(x & (x - 1u))) nb++;
+        if (nb > 0) {
+            StrBuf<8> b;
+            b.put_u32(nb).put("bat");
+            put_tag(sv, b.view());
+        }
+        if (load_step & 1u) put_tag(sv, "500mA/us");
+        if (!sv.view().empty()) R.add("Sink", kText).put(sv.view());
     }
 
     // Battery_Status (BSDO) + Battery_Capabilities (BCDB): live SoC % + state, and design / full / health.
@@ -899,6 +947,34 @@ void put_dwh(StrBuf<28> &v, uint16_t dwh) {
             put_dwh(v, bat.last_full_dwh);
             v.put("Wh full");
         }
+    }
+
+    // Battery Manufacturer_Info (MIDB target 1).
+    const pd::ManufacturerInfo &batt_mfr = (iq_ok && iq.batt_mfr.valid) ? iq.batt_mfr
+                                         : ext.batt_mfr.valid ? ext.batt_mfr
+                                         : id_cur ? id_ext.batt_mfr : ext.batt_mfr;
+    if (batt_mfr.valid && (batt_mfr.name[0] || batt_mfr.vid || batt_mfr.pid)) put_mfr_row(R, "Batt mfr", batt_mfr);
+
+    // Status (SDB): internal temperature, thermal state, faults, and present power input.
+    const pd::Status &st = (iq_ok && iq.status.valid) ? iq.status
+                         : ext.status.valid ? ext.status
+                         : id_cur ? id_ext.status : ext.status;
+    if (st.valid && (st.internal_temp_c || st.temp_status || st.present_input || st.event_flags)) {
+        const bool otp_ts = st.temp_status == 3;
+        const uint16_t col = (otp_ts || (st.event_flags & 0x0E) != 0) ? kError : st.temp_status == 2 ? kCaution : kText;
+        StrBuf<28> sv;
+        if (st.internal_temp_c == 1) sv.put("<2C");
+        else if (st.internal_temp_c >= 2) sv.put_u32(st.internal_temp_c).put_char('C');
+        if (st.temp_status == 2) put_tag(sv, "Warn");
+        else if (otp_ts) put_tag(sv, "OTP");
+        else if (st.internal_temp_c == 0 && st.temp_status == 1) put_tag(sv, "Norm");
+        if (st.event_flags & 0x02) put_tag(sv, "OCP");
+        if ((st.event_flags & 0x04) && !otp_ts) put_tag(sv, "OTP");
+        if (st.event_flags & 0x08) put_tag(sv, "OVP");
+        if (st.present_input & 0x02) put_tag(sv, (st.present_input & 0x04) ? "AC" : "Ext");
+        if (st.present_input & 0x08) put_tag(sv, "Batt");
+        if (st.present_input & 0x10) put_tag(sv, "Int");
+        if (!sv.view().empty()) R.add("Status", col).put(sv.view());
     }
 
     // SVIDs (from inline interrogation or sniffed sink_vdm).
@@ -1648,14 +1724,27 @@ static uint32_t mix_identity(uint32_t h, const pd::Identity &id) {
     return mix_u32(h, id.id_header);
 }
 
+static uint32_t mix_mfr_info(uint32_t h, const pd::ManufacturerInfo &mfr) {
+    h = mix_u32(h, uint32_t(mfr.valid));
+    h = mix_u32(h, uint32_t(mfr.vid) | (uint32_t(mfr.pid) << 16));
+    return pg::mix_cstr(h, mfr.name, sizeof mfr.name);
+}
+
 static uint32_t mix_bat_mfr(uint32_t h, const pd::BatteryCaps &bat, const pd::BatteryStatus &bst,
                             const pd::ManufacturerInfo &mfr) {
     h = mix_u32(h, uint32_t(bat.valid) | uint32_t(bat.invalid_ref) << 1 | uint32_t(bat.design_dwh) << 16);
     h = mix_u32(h, uint32_t(bat.last_full_dwh) | uint32_t(bst.valid) << 16 | uint32_t(bst.present) << 17
                    | uint32_t(bst.invalid_ref) << 18 | uint32_t(bst.charging) << 19);
     h = mix_u32(h, bst.present_dwh);
-    h = mix_u32(h, uint32_t(mfr.valid) | uint32_t(mfr.vid) << 8 | uint32_t(mfr.pid) << 24);
-    return pg::mix_cstr(h, mfr.name, sizeof mfr.name);
+    return mix_mfr_info(h, mfr);
+}
+
+static uint32_t mix_dev_extra(uint32_t h, const pd::ManufacturerInfo &batt_mfr, const pd::Status &st) {
+    h = mix_mfr_info(h, batt_mfr);
+    h = mix_u32(h, uint32_t(st.valid) | uint32_t(st.internal_temp_c) << 8
+                   | uint32_t(st.present_input) << 16 | uint32_t(st.battery_input) << 24);
+    return mix_u32(h, uint32_t(st.event_flags) | uint32_t(st.temp_status) << 8
+                      | uint32_t(st.power_status) << 16);
 }
 
 void ConnectionPage::update(uint32_t now_ms) {
@@ -1758,15 +1847,19 @@ void ConnectionPage::update(uint32_t now_ms) {
     {
         const pd::ExtInfo &ext = fusb302::ext();
         dev_sig = mix_bat_mfr(dev_sig, ext.battery, ext.battery_status, ext.mfr);
+        dev_sig = mix_dev_extra(dev_sig, ext.batt_mfr, ext.status);
         if (iq_ok) {
             const pd::IqStatus &iq = fusb302::interrogate_status();
             dev_sig = mix_u32(dev_sig, uint32_t(iq.phase) | uint32_t(iq.ok_mask) << 8 | uint32_t(iq.num_sink_pdos) << 24);
             dev_sig = pg::mix_u32s(dev_sig, iq.sink_pdos.data(), iq.num_sink_pdos);
             dev_sig = mix_u32(dev_sig, uint32_t(iq.num_epr_pdos) | uint32_t(iq.epr_partial) << 8
                                      | uint32_t(iq.sink_ext_len) << 16 | uint32_t(iq.num_svids) << 24);
+            const std::size_t n_ext = std::min<std::size_t>(iq.sink_ext_len, iq.sink_ext.size());
+            for (std::size_t i = 0; i < n_ext; i++) dev_sig = mix_u32(dev_sig, iq.sink_ext[i]);
             dev_sig = mix_u32(dev_sig, iq.revision);
             dev_sig = mix_u32(dev_sig, uint32_t(iq.id.valid) | uint32_t(iq.id.vid) << 8 | uint32_t(iq.id.pid) << 16);
             dev_sig = mix_bat_mfr(dev_sig, iq.battery, iq.battery_status, iq.mfr);
+            dev_sig = mix_dev_extra(dev_sig, iq.batt_mfr, iq.status);
         }
         if (fusb302::identify_current()) {
             const pd::Identity &iid = fusb302::identify_identity();
@@ -1775,6 +1868,7 @@ void ConnectionPage::update(uint32_t now_ms) {
             dev_sig = mix_u32(dev_sig, uint32_t(iid.valid) | uint32_t(iid.vid) << 8 | uint32_t(iid.pid) << 16);
             if (iid.valid && iid.vendor && iid.vendor[0]) dev_sig = pg::mix_cstr(dev_sig, iid.vendor);
             dev_sig = mix_bat_mfr(dev_sig, iext.battery, iext.battery_status, iext.mfr);
+            dev_sig = mix_dev_extra(dev_sig, iext.batt_mfr, iext.status);
         }
     }
     const uint32_t c_base = mix_u32(c, dev_sig);

@@ -35,6 +35,7 @@ const char* id_step_short(IdStep s) {
         case IdStep::BatCap: return "Battery cap";
         case IdStep::BatStatus: return "Battery";
         case IdStep::MfrInfo: return "Mfr info";
+        case IdStep::BattMfrInfo: return "Batt mfr";
         case IdStep::Done: return "done";
     }
     return "?";
@@ -51,6 +52,7 @@ const char* id_step_name(IdStep s) {
         case IdStep::BatCap: return "Get_Battery_Cap";
         case IdStep::BatStatus: return "Get_Battery_Status";
         case IdStep::MfrInfo: return "Get_Manufacturer_Info";
+        case IdStep::BattMfrInfo: return "Get_Manufacturer_Info (batt)";
         case IdStep::Done: return "done";
     }
     return "?";
@@ -156,6 +158,11 @@ bool Identify::build(std::span<const std::uint16_t> svids) {
             m.len = 4;
             m.data[0] = 0x02; m.data[1] = 0x80; m.data[2] = 0x00; m.data[3] = 0x00;
             break;
+        case IdStep::BattMfrInfo:
+            m.header = make_header(kExtGetManufacturerInfo, 1, rev_, true);
+            m.len = 4;
+            m.data[0] = 0x02; m.data[1] = 0x80; m.data[2] = 0x01; m.data[3] = 0x00;
+            break;
         case IdStep::Done: return false;
     }
     tx_ = m;
@@ -249,6 +256,9 @@ void Identify::on_message(Sop sop, std::uint16_t header, std::span<const std::ui
             if (!ext && type == kDataBatteryStatus && payload.size() >= 4) step_ok();
             break;
         case IdStep::MfrInfo:
+            if (ext && type == kExtManufacturerInfo) step_ok();
+            break;
+        case IdStep::BattMfrInfo:
             if (ext && type == kExtManufacturerInfo) step_ok();
             break;
         case IdStep::Done: break;

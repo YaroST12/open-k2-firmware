@@ -54,6 +54,8 @@ const char* iq_step_name(IqStep s) {
         case IqStep::BatteryCap: return "Get_Battery_Cap";
         case IqStep::BatteryStatus: return "Get_Battery_Status";
         case IqStep::MfrInfo: return "Get_Manufacturer_Info";
+        case IqStep::Status: return "Get_Status";
+        case IqStep::BattMfrInfo: return "Get_Manufacturer_Info (batt)";
     }
     return "?";
 }
@@ -272,7 +274,9 @@ bool Interrogate::wanted(IqStep s) const {
         case IqStep::EprSinkCap:
         case IqStep::BatteryCap:
         case IqStep::BatteryStatus:
-        case IqStep::MfrInfo: return st_.rev >= 2;   // PD 2.0 has none of these messages (EPR is PD 3.1)
+        case IqStep::MfrInfo:
+        case IqStep::Status:
+        case IqStep::BattMfrInfo: return st_.rev >= 2;   // PD 2.0 has none of these messages (EPR is PD 3.1)
         case IqStep::Svids: return st_.id.valid && ((st_.id.id_header >> 26) & 1) != 0;   // ID Header: modal operation supported
         case IqStep::Modes: return mode_idx_ < modes_wanted();
         case IqStep::Done: return false;
@@ -467,6 +471,15 @@ void Interrogate::build() {
             m.data[2] = 0x00;
             m.data[3] = 0x00;
             break;
+        case IqStep::BattMfrInfo:   // Get_Manufacturer_Info (0x06), chunked, 2-byte GMIDB: target 1 (Battery), ref 0
+            m.header = make_header(kExtGetManufacturerInfo, 1, rev, true);
+            m.len = 4;
+            m.data[0] = 0x02;
+            m.data[1] = 0x80;
+            m.data[2] = 0x01;
+            m.data[3] = 0x00;
+            break;
+        case IqStep::Status: m.header = make_header(kCtlGetStatus, 0, rev); break;
         case IqStep::Done: return;
     }
     m.header = with_msg_id(std::uint16_t(m.header | watch_.src_roles()), watch_.next_id());
@@ -786,13 +799,24 @@ void Interrogate::on_device(std::uint16_t h, std::span<const std::uint8_t> paylo
             st_.sink_ext_len = std::uint8_t(len);
             mark_ok(IqStep::SinkCapExt);
             if (asking(IqStep::SinkCapExt)) { got_answer(); next_step(); }
+        } else if (t == kExtStatus) {
+            if (parse_status(data, st_.status)) {
+                mark_ok(IqStep::Status);
+                if (asking(IqStep::Status)) { got_answer(); next_step(); }
+            }
         } else if (t == kExtBatteryCaps) {
             if (parse_battery_caps(data, st_.battery)) {
                 mark_ok(IqStep::BatteryCap);
                 if (asking(IqStep::BatteryCap)) { got_answer(); next_step(); }
             }
         } else if (t == kExtManufacturerInfo) {
-            if (parse_manufacturer_info(data, st_.mfr)) {
+            if (asking(IqStep::BattMfrInfo)) {
+                if (parse_manufacturer_info(data, st_.batt_mfr)) {
+                    mark_ok(IqStep::BattMfrInfo);
+                    got_answer();
+                    next_step();
+                }
+            } else if (parse_manufacturer_info(data, st_.mfr)) {
                 mark_ok(IqStep::MfrInfo);
                 if (asking(IqStep::MfrInfo)) { got_answer(); next_step(); }
             }

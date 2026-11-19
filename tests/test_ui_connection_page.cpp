@@ -1307,21 +1307,44 @@ static void test_device_place_inline_interrogate_and_readout() {
     g_stub.iq_status.ok_mask = pd::iq_bit(pd::IqStep::Identity) | pd::iq_bit(pd::IqStep::SinkCap) |
                                pd::iq_bit(pd::IqStep::SinkCapExt) | pd::iq_bit(pd::IqStep::Revision) |
                                pd::iq_bit(pd::IqStep::BatteryCap) | pd::iq_bit(pd::IqStep::BatteryStatus) |
-                               pd::iq_bit(pd::IqStep::MfrInfo) | pd::iq_bit(pd::IqStep::Svids) |
+                               pd::iq_bit(pd::IqStep::MfrInfo) | pd::iq_bit(pd::IqStep::BattMfrInfo) |
+                               pd::iq_bit(pd::IqStep::Status) | pd::iq_bit(pd::IqStep::Svids) |
                                pd::iq_bit(pd::IqStep::EprSinkCap);
     g_stub.iq_status.id.valid = true; g_stub.iq_status.id.vid = 0x18D1; g_stub.iq_status.id.pid = 0x4EE7; g_stub.iq_status.id.vendor = "Google";
     g_stub.iq_status.mfr.valid = true; std::strcpy(g_stub.iq_status.mfr.name, "Google LLC");
     g_stub.iq_status.revision = 0x31200000u;
-    g_stub.iq_status.sink_ext_len = 24; g_stub.iq_status.sink_ext[17] = 0x21; g_stub.iq_status.sink_ext[20] = 37;
+    g_stub.iq_status.sink_ext_len = 24;
+    g_stub.iq_status.sink_ext[8] = 1; g_stub.iq_status.sink_ext[9] = 2;
+    g_stub.iq_status.sink_ext[16] = 0x01; g_stub.iq_status.sink_ext[17] = 0x23;
+    g_stub.iq_status.sink_ext[18] = 15; g_stub.iq_status.sink_ext[19] = 27; g_stub.iq_status.sink_ext[20] = 37;
     g_stub.iq_status.battery.valid = true; g_stub.iq_status.battery.design_dwh = 195; g_stub.iq_status.battery.last_full_dwh = 186;
     g_stub.iq_status.battery_status.valid = true; g_stub.iq_status.battery_status.present = true;
     g_stub.iq_status.battery_status.charging = 0; g_stub.iq_status.battery_status.present_dwh = 149;
+    g_stub.iq_status.batt_mfr.valid = true; g_stub.iq_status.batt_mfr.vid = 0x18D1; g_stub.iq_status.batt_mfr.pid = 0x0001;
+    std::strcpy(g_stub.iq_status.batt_mfr.name, "ATL-4800mAh");
+    g_stub.iq_status.status.valid = true; g_stub.iq_status.status.internal_temp_c = 34;
+    g_stub.iq_status.status.temp_status = 1; g_stub.iq_status.status.present_input = 0x02;
     g_stub.iq_status.num_svids = 2; g_stub.iq_status.svids[0] = 0xFF01; g_stub.iq_status.svids[1] = 0x18D1;
     g_stub.iq_status.num_epr_pdos = 9;
     settle(ui, t);
     CHECK_STR(std::string(cp(ui).status_line()).c_str(), "Device read");
-    // Mfr, Rev, SKEDB, Batt, Health, SVIDs, EPR all added (+7 rows) with zero truncation
-    CHECK_EQ(cp(ui).result_rows(), before_rows + 7);
+    // Mfr, Rev, PDP, Sink, Batt, Health, Batt mfr, Status, SVIDs, EPR all added (+10 rows) with zero truncation
+    CHECK_EQ(cp(ui).result_rows(), before_rows + 10);
+    auto row_visible_is = [&](int row_idx, const char *val, uint16_t ink = kText) {
+        while (cp(ui).window_first() > row_idx) {
+            ui.on_button(Button::Minus, ButtonEvent::Short, t += 100);
+            settle(ui, t);
+        }
+        while (cp(ui).window_first() + ConnectionPage::kPlaceRows <= row_idx) {
+            ui.on_button(Button::Plus, ButtonEvent::Short, t += 100);
+            settle(ui, t);
+        }
+        return row_value_is(row_idx - cp(ui).window_first(), val, ink);
+    };
+    CHECK(row_visible_is(before_rows + 2, "SPR 27/37W PPS AVS"));
+    CHECK(row_visible_is(before_rows + 3, "FW1 HW2 VBUS 1bat"));
+    CHECK(row_visible_is(before_rows + 6, "ATL-4800mAh"));
+    CHECK(row_visible_is(before_rows + 7, "34C Ext"));
 #ifdef K2_TRUNC_LOG
     CHECK_EQ(k2::trunc::failures(), 0);
 #endif
@@ -1349,24 +1372,45 @@ static void test_device_place_inline_interrogate_with_sink_pdos() {
     g_stub.iq_status.ok_mask = pd::iq_bit(pd::IqStep::Identity) | pd::iq_bit(pd::IqStep::SinkCap) |
                                pd::iq_bit(pd::IqStep::SinkCapExt) | pd::iq_bit(pd::IqStep::Revision) |
                                pd::iq_bit(pd::IqStep::BatteryCap) | pd::iq_bit(pd::IqStep::BatteryStatus) |
-                               pd::iq_bit(pd::IqStep::MfrInfo) | pd::iq_bit(pd::IqStep::Svids) |
+                               pd::iq_bit(pd::IqStep::MfrInfo) | pd::iq_bit(pd::IqStep::BattMfrInfo) |
+                               pd::iq_bit(pd::IqStep::Status) | pd::iq_bit(pd::IqStep::Svids) |
                                pd::iq_bit(pd::IqStep::EprSinkCap);
     g_stub.iq_status.id.valid = true; g_stub.iq_status.id.vid = 0x18D1; g_stub.iq_status.id.pid = 0x4EE7; g_stub.iq_status.id.vendor = "Google";
     g_stub.iq_status.num_sink_pdos = 3;
     g_stub.iq_status.sink_pdos = {0x3601912Cu, 0x0002D12Cu, 0xC0DC323Cu, 0, 0, 0, 0};   // 5V 3A, 9V 3A, PPS 5-11V 3A
     g_stub.iq_status.mfr.valid = true; std::strcpy(g_stub.iq_status.mfr.name, "Google LLC");
     g_stub.iq_status.revision = 0x31200000u;
-    g_stub.iq_status.sink_ext_len = 24; g_stub.iq_status.sink_ext[17] = 0x21; g_stub.iq_status.sink_ext[20] = 37; g_stub.iq_status.sink_ext[23] = 100;
+    g_stub.iq_status.sink_ext_len = 24;
+    g_stub.iq_status.sink_ext[8] = 2; g_stub.iq_status.sink_ext[9] = 1;
+    g_stub.iq_status.sink_ext[17] = 0x2B;   // PPS | AVS | VBUS | Batt
+    g_stub.iq_status.sink_ext[19] = 27; g_stub.iq_status.sink_ext[20] = 37; g_stub.iq_status.sink_ext[23] = 100;
     g_stub.iq_status.battery.valid = true; g_stub.iq_status.battery.design_dwh = 195; g_stub.iq_status.battery.last_full_dwh = 186;
     g_stub.iq_status.battery_status.valid = true; g_stub.iq_status.battery_status.present = true;
     g_stub.iq_status.battery_status.charging = 0; g_stub.iq_status.battery_status.present_dwh = 149;
+    g_stub.iq_status.batt_mfr.valid = true; g_stub.iq_status.batt_mfr.vid = 0x04A9; g_stub.iq_status.batt_mfr.pid = 0x5678;
+    g_stub.iq_status.status.valid = true; g_stub.iq_status.status.internal_temp_c = 42;
+    g_stub.iq_status.status.temp_status = 2; g_stub.iq_status.status.present_input = 0x06; g_stub.iq_status.status.event_flags = 0x08;
     g_stub.iq_status.num_svids = 2; g_stub.iq_status.svids[0] = 0xFF01; g_stub.iq_status.svids[1] = 0x18D1;
     g_stub.iq_status.num_epr_pdos = 9;
     settle(ui, t);
-    // Caps: Not seen (1 row) -> grouped Fixed (1 row) + PPS (1 row) (+1 net), plus Mfr, Rev, PDP, Batt, Health, SVIDs, EPR (+7) = +8 rows
-    CHECK_EQ(cp(ui).result_rows(), before_rows + 8);
-    // Scroll through the list so every row is painted and checked for truncation
-    ui.on_button(Button::Minus, ButtonEvent::Short, t += 100);
+    // Caps: Not seen (1 row) -> grouped Fixed (1 row) + PPS (1 row) (+1 net), plus Mfr, Rev, PDP, Sink, Batt, Health, Batt mfr, Status, SVIDs, EPR (+10) = +11 rows
+    CHECK_EQ(cp(ui).result_rows(), before_rows + 11);
+    auto row_visible_is = [&](int row_idx, const char *val, uint16_t ink = kText) {
+        while (cp(ui).window_first() > row_idx) {
+            ui.on_button(Button::Minus, ButtonEvent::Short, t += 100);
+            settle(ui, t);
+        }
+        while (cp(ui).window_first() + ConnectionPage::kPlaceRows <= row_idx) {
+            ui.on_button(Button::Plus, ButtonEvent::Short, t += 100);
+            settle(ui, t);
+        }
+        return row_value_is(row_idx - cp(ui).window_first(), val, ink);
+    };
+    CHECK(row_visible_is(before_rows + 3, "SPR 37W EPR 100W"));
+    CHECK(row_visible_is(before_rows + 4, "FW2 HW1 VBUS Batt"));
+    CHECK(row_visible_is(before_rows + 7, "04A9:5678"));
+    CHECK(row_visible_is(before_rows + 8, "42C Warn OVP AC", kError));
+    // Scroll through the remaining rows so every row is painted and checked for truncation
     for (int i = 0; i < 4; i++) { ui.on_button(Button::Plus, ButtonEvent::Short, t += 100); settle(ui, t); }
 #ifdef K2_TRUNC_LOG
     CHECK_EQ(k2::trunc::failures(), 0);
@@ -1586,6 +1630,109 @@ static void test_cable_identity_positive_chips_and_no_trunc() {
     g_stub.em = {};
 }
 
+static void test_device_place_telemetry_rows_and_live_repaints() {
+    // 1. Live updates to ext.status, ext.batt_mfr, and iq.sink_ext trigger immediate repaints via dev_sig.
+    Ui &ui = fresh_ui();
+    make_inline(ui, 20000);
+    g_stub.pm_online = true;
+    g_stub.pd_seen_attach = true;
+    g_stub.ol_facts.far_pd_message = true;
+    g_stub.caps.valid = true; g_stub.caps.spec_rev = 2; g_stub.caps.num_pdos = 1;
+    g_stub.caps.pdos[0] = {pd::PdoType::Fixed, 0, 5000, 5000, 3000, 15000};
+    g_stub.caps.raw_header = 0x1181; g_stub.caps.rx_count++;
+    uint32_t t = 21000;
+    for (int i = 0; i < 20; i++) ui.tick(t += 100);
+    ui.open_place(bench::Place::Device, t += 100);
+    settle(ui, t);
+    while (cp(ui).action_row() >= 0) ui.on_button(Button::Minus, ButtonEvent::Short, t += 100);
+    ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);
+    ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);
+    g_stub.iq_running = false;
+    g_stub.iq_status.phase = pd::IqPhase::Done;
+    g_stub.iq_status.ok_mask = pd::iq_bit(pd::IqStep::SinkCapExt);
+    g_stub.iq_status.sink_ext_len = 24;
+    g_stub.iq_status.sink_ext[18] = 15;
+    g_stub.iq_status.sink_ext[20] = 45;   // SPR 45W min 15 (spr_op == 0, epr_max == 0)
+    settle(ui, t);
+    const int base_rows = cp(ui).result_rows();   // includes PDP ("SPR 45W min 15"), no Sink/Batt mfr/Status yet
+    auto row_visible_is = [&](int row_idx, const char *val, uint16_t ink = kText) {
+        while (cp(ui).window_first() > row_idx) { ui.on_button(Button::Minus, ButtonEvent::Short, t += 100); settle(ui, t); }
+        while (cp(ui).window_first() + ConnectionPage::kPlaceRows <= row_idx) {
+            ui.on_button(Button::Plus, ButtonEvent::Short, t += 100); settle(ui, t);
+        }
+        return row_value_is(row_idx - cp(ui).window_first(), val, ink);
+    };
+    CHECK(row_visible_is(base_rows - 1, "SPR 45W min 15"));
+
+    // Updating iq.sink_ext bytes (load_step + AC + 2bat) repaints immediately without any other state change.
+    g_stub.iq_status.sink_ext[11] = 1;
+    g_stub.iq_status.sink_ext[16] = 0x05;
+    g_stub.iq_status.sink_ext[17] = 0x04;
+    settle(ui, t);
+    CHECK_EQ(cp(ui).result_rows(), base_rows + 1);
+    CHECK(row_visible_is(base_rows, "AC 2bat 500mA/us"));
+
+    // Updating ext.batt_mfr and ext.status triggers immediate repaints and handles <2C/Int, Warn, OTP deduplication, Norm.
+    g_stub.ext.batt_mfr.valid = true;
+    std::strcpy(g_stub.ext.batt_mfr.name, "VeryLongBatteryVendorName26");
+    g_stub.ext.status.valid = true;
+    g_stub.ext.status.internal_temp_c = 1;
+    g_stub.ext.status.present_input = 0x10;
+    settle(ui, t);
+    CHECK_EQ(cp(ui).result_rows(), base_rows + 3);
+    CHECK(row_visible_is(base_rows + 1, "VeryLongBatteryVend"));
+    CHECK(row_visible_is(base_rows + 2, "<2C Int"));
+
+    g_stub.ext.status.internal_temp_c = 0;
+    g_stub.ext.status.temp_status = 1;
+    g_stub.ext.status.present_input = 0x06;
+    settle(ui, t);
+    CHECK(row_visible_is(base_rows + 2, "Norm AC"));
+
+    g_stub.ext.status.internal_temp_c = 40;
+    g_stub.ext.status.temp_status = 2;
+    g_stub.ext.status.present_input = 0x08;
+    settle(ui, t);
+    CHECK(row_visible_is(base_rows + 2, "40C Warn Batt", kCaution));
+
+    // temp_status == 3 + event_flags OTP (0x04) must not duplicate "OTP".
+    g_stub.ext.status.internal_temp_c = 125;
+    g_stub.ext.status.temp_status = 3;
+    g_stub.ext.status.event_flags = 0x0E;
+    g_stub.ext.status.present_input = 0x1A;
+    settle(ui, t);
+    CHECK(row_visible_is(base_rows + 2, "125C OTP OCP OVP", kError));
+
+    // 2. Standalone Identify also surfaces id_ext.batt_mfr and id_ext.status and updates immediately.
+    Ui &ui2 = fresh_ui();
+    g_stub.cc = 1; g_stub.pm_online = true; g_stub.pm.vbus_mv = 0;
+    g_stub.caps.valid = false; g_stub.caps_this_attach = false;
+    uint32_t t2 = 12000;
+    for (; t2 <= 13400; t2 += 100) {
+        set_cc(0, (t2 / 100) % 2 == 0 ? 3300 : 0);
+        ui2.tick(t2);
+    }
+    g_stub.ident_current = true;
+    g_stub.ident.state = pd::IdState::Done;
+    g_stub.ident_identity.valid = true; g_stub.ident_identity.vid = 0x18D1; g_stub.ident_identity.pid = 0x4EE7;
+    g_stub.ident_ext.batt_mfr.valid = true; g_stub.ident_ext.batt_mfr.vid = 0x04A9; g_stub.ident_ext.batt_mfr.pid = 0x1234;
+    g_stub.ident_ext.status.valid = true; g_stub.ident_ext.status.internal_temp_c = 29; g_stub.ident_ext.status.present_input = 0x02;
+    ui2.open_place(bench::Place::Device, t2 += 100);
+    settle(ui2, t2);
+    while (cp(ui2).action_row() >= 0 || cp(ui2).window_first() > 0) ui2.on_button(Button::Minus, ButtonEvent::Short, t2 += 100);
+    settle(ui2, t2);
+    CHECK_EQ(cp(ui2).result_rows(), 3);   // ID, Batt mfr, Status
+    CHECK(row_value_is(1, "04A9:1234"));
+    CHECK(row_value_is(2, "29C Ext"));
+
+    g_stub.ident_ext.status.temp_status = 3;
+    settle(ui2, t2);
+    CHECK(row_value_is(2, "29C OTP Ext", kError));
+#ifdef K2_TRUNC_LOG
+    CHECK_EQ(k2::trunc::failures(), 0);
+#endif
+}
+
 int main() {
     test_sink_tab_pd_body_shows_the_raw_vooc_note();
     test_sink_tab_no_pd_shows_the_raw_vooc_note();
@@ -1631,5 +1778,6 @@ int main() {
     test_device_place_standalone_and_self_powered_identify();
     test_place_unified_one_row_scrolling();
     test_cable_identity_positive_chips_and_no_trunc();
+    test_device_place_telemetry_rows_and_live_repaints();
     return test_report("test_ui_connection_page");
 }

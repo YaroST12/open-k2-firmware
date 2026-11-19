@@ -112,6 +112,7 @@ K2_HOT void Engine::reset_source() {
     vdm = {};
     sink_vdm = {};
     ext = {};
+    mfr_target_batt = false;
     usb.on_reset();
     contract = {};
     caps.rx_count = rx;
@@ -204,7 +205,10 @@ K2_HOT void Engine::on_ext_message(std::uint8_t type, std::span<const std::uint8
         case kExtSourceCapsExt: parse_source_caps_ext(data, ext.caps_ext); break;
         case kExtStatus: parse_status(data, ext.status); break;
         case kExtBatteryCaps: parse_battery_caps(data, ext.battery); break;
-        case kExtManufacturerInfo: parse_manufacturer_info(data, ext.mfr); break;
+        case kExtManufacturerInfo:
+            parse_manufacturer_info(data, mfr_target_batt ? ext.batt_mfr : ext.mfr);
+            mfr_target_batt = false;
+            break;
         case kExtPpsStatus: parse_pps_status(data, ext.pps); break;
         default: break;
     }

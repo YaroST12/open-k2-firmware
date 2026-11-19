@@ -207,14 +207,33 @@ int main() {
         r.dev(kDataBatteryStatus, {0x00980200u});           // present, charging, 15.2 Wh -> 80% of 19.0 Wh
         CHECK_EQ(bool(r.next()), true);                     // Get_Manufacturer_Info, id 1
         CHECK_EQ(r.last_type(), unsigned(kExtGetManufacturerInfo));
+        CHECK_EQ(int(r.last().data[2]), 0);
         CHECK_EQ(r.last_id(), 1u);
         {
             std::vector<std::uint8_t> midb = {9, 0x80, 0xAC, 0x05, 0x34, 0x12, 'A', 'p', 'p', 'l', 'e', 0};
             r.rx(hdr(kExtManufacturerInfo, 3, 2, kSnk, 3, true), midb);
         }
-        CHECK_EQ(bool(r.next()), true);                     // the VDM last: Discover Identity, id 2
-        CHECK_EQ(word(r.last()), 0xFF00A001u);              // SVDM 2.0
+        CHECK_EQ(bool(r.next()), true);                     // Get_Manufacturer_Info (batt), id 2
+        CHECK_EQ(r.last_type(), unsigned(kExtGetManufacturerInfo));
+        CHECK_EQ(int(r.last().data[0]), 0x02);
+        CHECK_EQ(int(r.last().data[1]), 0x80);
+        CHECK_EQ(int(r.last().data[2]), 1);
+        CHECK_EQ(int(r.last().data[3]), 0);
         CHECK_EQ(r.last_id(), 2u);
+        {
+            std::vector<std::uint8_t> bmidb = {10, 0x80, 0xA9, 0x04, 0x78, 0x56, 'N', 'B', '-', '1', '0', 'L'};
+            r.rx(hdr(kExtManufacturerInfo, 3, 2, kSnk, 4, true), bmidb);
+        }
+        CHECK_EQ(bool(r.next()), true);                     // Get_Status, id 3
+        CHECK_EQ(r.last_type(), unsigned(kCtlGetStatus));
+        CHECK_EQ(r.last_id(), 3u);
+        {
+            std::vector<std::uint8_t> sdb = {6, 0x80, 42, 0x02, 0x01, 0x08, 0x02, 0x00};
+            r.rx(hdr(kExtStatus, 2, 2, kSnk, 5, true), sdb);
+        }
+        CHECK_EQ(bool(r.next()), true);                     // the VDM last: Discover Identity, id 4
+        CHECK_EQ(word(r.last()), 0xFF00A001u);              // SVDM 2.0
+        CHECK_EQ(r.last_id(), 4u);
         r.identity_ack(0x04A9, 0x1234);                     // not modal: no SVIDs, no Modes
         CHECK_EQ(bool(r.next()), true);                     // nothing left to ask: the final Hard Reset
         CHECK_EQ(bool(r.last().hard_reset), true);
@@ -225,10 +244,11 @@ int main() {
         CHECK_EQ(int(s.phase), int(IqPhase::Done));
         CHECK_EQ(int(s.why), int(IqWhy::None));
         CHECK_EQ(int(s.match), int(IqMatch::Same));
-        CHECK_EQ(int(s.sent), 8);
+        CHECK_EQ(int(s.sent), 10);
         CHECK_EQ(int(s.resets_sent), 1);
         CHECK_EQ(int(s.ok_mask), int(iq_bit(IqStep::Identity) | iq_bit(IqStep::SinkCap) | iq_bit(IqStep::SinkCapExt) |
-                                     iq_bit(IqStep::BatteryCap) | iq_bit(IqStep::BatteryStatus) | iq_bit(IqStep::MfrInfo)));
+                                     iq_bit(IqStep::BatteryCap) | iq_bit(IqStep::BatteryStatus) | iq_bit(IqStep::MfrInfo) |
+                                     iq_bit(IqStep::BattMfrInfo) | iq_bit(IqStep::Status)));
         CHECK_EQ(int(s.refused_mask), int(iq_bit(IqStep::Revision) | iq_bit(IqStep::EprSinkCap)));
         CHECK_EQ(bool(s.battery.valid), true);
         CHECK_EQ(int(s.battery.design_dwh), 200);
@@ -238,6 +258,16 @@ int main() {
         CHECK_EQ(battery_health_pct(s.battery), 95);
         CHECK_EQ(bool(s.mfr.valid), true);
         CHECK_COND(std::string(s.mfr.name) == "Apple");
+        CHECK_EQ(bool(s.batt_mfr.valid), true);
+        CHECK_EQ(int(s.batt_mfr.vid), 0x04A9);
+        CHECK_EQ(int(s.batt_mfr.pid), 0x5678);
+        CHECK_COND(std::string(s.batt_mfr.name) == "NB-10L");
+        CHECK_EQ(bool(s.status.valid), true);
+        CHECK_EQ(int(s.status.internal_temp_c), 42);
+        CHECK_EQ(int(s.status.present_input), 0x02);
+        CHECK_EQ(int(s.status.battery_input), 0x01);
+        CHECK_EQ(int(s.status.event_flags), 0x08);
+        CHECK_EQ(int(s.status.temp_status), 1);
         CHECK_EQ(bool(s.id.valid), true);
         CHECK_EQ(int(s.id.vid), 0x04A9);
         CHECK_EQ(int(s.id.pid), 0x1234);
@@ -380,6 +410,7 @@ int main() {
         CHECK_EQ(bool(r.next()), true);
         CHECK_EQ(bool(r.last().hard_reset), true);
         CHECK_EQ(int(r.iq.status().rev), 1);
+        CHECK_EQ(int(r.iq.status().asked_mask & (iq_bit(IqStep::Status) | iq_bit(IqStep::BattMfrInfo))), 0);
     }
 
     // ---- modal Identity: Discover SVIDs, then Discover Modes, DisplayPort first ----
@@ -395,7 +426,7 @@ int main() {
         r.dev_ctl(kCtlNotSupported);   // no Revision
         r.next();
         r.dev_ctl(kCtlNotSupported);   // no EPR sink
-        for (int i = 0; i < 3; i++) { r.next(); r.dev_ctl(kCtlNotSupported); }   // BatteryCap, BatteryStatus, MfrInfo
+        for (int i = 0; i < 5; i++) { r.next(); r.dev_ctl(kCtlNotSupported); }   // BatteryCap, BatteryStatus, MfrInfo, BattMfrInfo, Status
         CHECK_EQ(bool(r.next()), true);
         CHECK_EQ(word(r.last()), 0xFF00A001u);   // the VDMs last: Discover Identity
         r.identity_ack(0x05AC, 0x7513, true);
@@ -440,12 +471,13 @@ int main() {
         r.dev_ctl(kCtlNotSupported);
         r.next();
         r.dev_ctl(kCtlNotSupported);   // no EPR sink
-        for (int i = 0; i < 3; i++) { r.next(); r.dev_ctl(kCtlNotSupported); }   // BatteryCap, BatteryStatus, MfrInfo
+        for (int i = 0; i < 5; i++) { r.next(); r.dev_ctl(kCtlNotSupported); }   // BatteryCap, BatteryStatus, MfrInfo, BattMfrInfo, Status
         CHECK_EQ(bool(r.next()), true);
         CHECK_EQ(bool(r.last().hard_reset), true);
         CHECK_EQ(int(r.iq.status().asked_mask),
                  int(iq_bit(IqStep::SinkCap) | iq_bit(IqStep::SinkCapExt) | iq_bit(IqStep::Revision) | iq_bit(IqStep::EprSinkCap) |
-                     iq_bit(IqStep::BatteryCap) | iq_bit(IqStep::BatteryStatus) | iq_bit(IqStep::MfrInfo)));
+                     iq_bit(IqStep::BatteryCap) | iq_bit(IqStep::BatteryStatus) | iq_bit(IqStep::MfrInfo) |
+                     iq_bit(IqStep::BattMfrInfo) | iq_bit(IqStep::Status)));
     }
 
     // ---- a Hard Reset from the charger that comes long after our last question: re-sniff and go on; a third one ends the run ----
@@ -574,7 +606,7 @@ int main() {
         r.dev_ctl(kCtlNotSupported);
         r.next();                                           // EPR_Get_Sink_Cap
         r.dev_ctl(kCtlNotSupported);
-        for (int i = 0; i < 3; i++) { r.next(); r.dev_ctl(kCtlNotSupported); }   // BatteryCap, BatteryStatus, MfrInfo
+        for (int i = 0; i < 5; i++) { r.next(); r.dev_ctl(kCtlNotSupported); }   // BatteryCap, BatteryStatus, MfrInfo, BattMfrInfo, Status
         r.next();                                           // Discover Identity
         r.dev_ctl(kCtlNotSupported);
         CHECK_EQ(bool(r.next()), true);
@@ -615,7 +647,7 @@ int main() {
         r.start();
         r.next();
         r.dev_ctl(kCtlNotSupported);
-        for (int i = 0; i < 7; i++) {
+        for (int i = 0; i < 9; i++) {
             r.next();
             r.dev_ctl(kCtlNotSupported);
         }
@@ -645,7 +677,8 @@ int main() {
         CHECK_EQ(int(s.phase), int(IqPhase::Done));           // every step asked twice, all silent: done, nothing learned
         CHECK_EQ(int(s.silent_mask), int(iq_bit(IqStep::Identity) | iq_bit(IqStep::SinkCap) | iq_bit(IqStep::SinkCapExt) |
                                           iq_bit(IqStep::Revision) | iq_bit(IqStep::EprSinkCap) |
-                                          iq_bit(IqStep::BatteryCap) | iq_bit(IqStep::BatteryStatus) | iq_bit(IqStep::MfrInfo)));
+                                          iq_bit(IqStep::BatteryCap) | iq_bit(IqStep::BatteryStatus) | iq_bit(IqStep::MfrInfo) |
+                                          iq_bit(IqStep::BattMfrInfo) | iq_bit(IqStep::Status)));
         CHECK_EQ(int(s.resets_sent), 1);
         CHECK_COND(s.ended_at - s.started_at <= kIqTotalMs + kIqRenegMs + 10);
     }
@@ -759,7 +792,7 @@ int main() {
         d.dev_ctl(kCtlNotSupported);
         d.next();
         d.dev_ctl(kCtlNotSupported);                        // EPR_Get_Sink_Cap
-        for (int i = 0; i < 3; i++) { d.next(); d.dev_ctl(kCtlNotSupported); }   // BatteryCap, BatteryStatus, MfrInfo
+        for (int i = 0; i < 5; i++) { d.next(); d.dev_ctl(kCtlNotSupported); }   // BatteryCap, BatteryStatus, MfrInfo, BattMfrInfo, Status
         CHECK_EQ(bool(d.next()), true);                     // Discover Identity
         CHECK_EQ(d.last_type(), unsigned(kMsgVendorDefined));
         d.rx(hdr(kMsgVendorDefined, 1, 2, kSrc, 4), di);    // the charger asks the same
@@ -906,7 +939,7 @@ int main() {
         r.start();
         r.next();
         r.dev(kDataSinkCap, {kSinkPdo1});
-        for (int i = 0; i < 6; i++) {                         // Ext, Revision, EPR, BatteryCap, BatteryStatus, MfrInfo: refused
+        for (int i = 0; i < 8; i++) {                         // Ext, Revision, EPR, BatteryCap, BatteryStatus, MfrInfo, BattMfrInfo, Status: refused
             r.next();
             r.dev_ctl(kCtlNotSupported);
         }
@@ -1082,7 +1115,7 @@ int main() {
         r.contract();
         r.next();
         r.dev(kDataSinkCap, {kSinkPdo1});
-        for (int i = 0; i < 6; i++) {
+        for (int i = 0; i < 8; i++) {
             r.next();
             r.dev_ctl(kCtlNotSupported);
         }
@@ -1103,6 +1136,8 @@ int main() {
 
         CHECK_COND(std::string(iq_refusal_name(IqRefusal::BadSpoof)) != "?");
         CHECK_COND(std::string(iq_step_name(IqStep::EprSinkCap)) != "?");
+        CHECK_STR(iq_step_name(IqStep::Status), "Get_Status");
+        CHECK_STR(iq_step_name(IqStep::BattMfrInfo), "Get_Manufacturer_Info (batt)");
     }
 
     // ---- refusals, in order ----

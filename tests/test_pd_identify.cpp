@@ -108,14 +108,23 @@ int main() {
         r.id.on_message(Sop::Sop, make_header(kDataBatteryStatus, 1, 2), bs, r.now);
         CHECK_EQ(bool(r.next()), true);
         CHECK_EQ(int(r.last_type()), int(kExtGetManufacturerInfo));
+        CHECK_EQ(int(r.sent.back().data[2]), 0);
         const std::uint8_t mi[12] = {9, 0x80, 0xAC, 0x05, 0x34, 0x12, 'A', 'p', 'p', 'l', 'e', 0};
         r.id.on_message(Sop::Sop, make_header(kExtManufacturerInfo, 3, 2, true), mi, r.now);
+        CHECK_EQ(bool(r.next()), true);
+        CHECK_EQ(int(r.last_type()), int(kExtGetManufacturerInfo));
+        CHECK_EQ(int(r.sent.back().data[0]), 0x02);
+        CHECK_EQ(int(r.sent.back().data[1]), 0x80);
+        CHECK_EQ(int(r.sent.back().data[2]), 1);
+        CHECK_EQ(int(r.sent.back().data[3]), 0);
+        const std::uint8_t bmi[12] = {9, 0x80, 0xA9, 0x04, 0x78, 0x56, 'C', 'a', 'n', 'o', 'n', 0};
+        r.id.on_message(Sop::Sop, make_header(kExtManufacturerInfo, 3, 2, true), bmi, r.now);
         r.run(50);
         CHECK_EQ(int(r.id.status().state), int(IdState::Done));
-        CHECK_EQ(int(r.id.status().ok_mask), 0x1FF);
+        CHECK_EQ(int(r.id.status().ok_mask), 0x3FF);
         CHECK_EQ(int(r.id.status().skipped_mask), 0);
         CHECK_EQ(r.id.status().revision, 0x31200000u);
-        CHECK_EQ(r.sent.size(), 10u);
+        CHECK_EQ(r.sent.size(), 11u);
     }
 
     // ---- PD 2.0 partner: no Status / Revision, VDM version bit clear ----
@@ -282,6 +291,8 @@ int main() {
         CHECK_STR(id_step_short(IdStep::SinkCap), "Sink caps");
         CHECK_STR(id_step_short(IdStep::Status), "Status");
         CHECK_STR(id_step_short(IdStep::Revision), "Revision");
+        CHECK_STR(id_step_short(IdStep::BattMfrInfo), "Batt mfr");
+        CHECK_STR(id_step_name(IdStep::BattMfrInfo), "Get_Manufacturer_Info (batt)");
     }
 
     return test_report("test_pd_identify");
