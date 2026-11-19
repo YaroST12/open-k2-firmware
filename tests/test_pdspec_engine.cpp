@@ -68,6 +68,7 @@ struct Sim final : Env {
     int pps_status_ms = 3;              // Get_PPS_Status -> PPS_Status
     int pps_status_mode = 0;            // 0 a clean answer, 1 Not_Supported, 2 silence, 3 OMF set, 4 voltage off by 10 %
     std::uint8_t no_psrdy_pos = 0;      // Accept, then no PS_RDY: the sink Hard Resets after tPSTransition
+    int no_psrdy_skip = 0;              // ... after this many Accepts at that position with their PS_RDY
     std::uint8_t wait_pos = 0;          // Wait until the sink gives up (WaitExhausted)
     std::uint8_t stuck_pos = 0;         // no answer at all, and no give-up (a stuck sink)
     bool back_old = false;              // after a reset the sink asks for the level it had before
@@ -183,7 +184,9 @@ struct Sim final : Env {
             if (p && pps_overshoot_mv && vt > v) over_v = vt + pps_overshoot_mv;
             reached = vt == v;
             reached_at = t;
-            ev = want.pos == no_psrdy_pos ? Ev::Never : Ev::PsRdy;
+            bool never = want.pos == no_psrdy_pos;
+            if (never && no_psrdy_skip > 0) { --no_psrdy_skip; never = false; }
+            ev = never ? Ev::Never : Ev::PsRdy;
             ev_at = t;
         } else if (ev == Ev::Never && t >= ev_at + 550) {   // the sink's tPSTransition ran out: its own Hard Reset
             ++s.hard_resets;
@@ -1481,6 +1484,42 @@ void apdo_hook_reports_every_programmable_measurement() {
     for (const auto& [c, x] : m2.apdo) CHECK_EQ(int(x.a & 15), 5);
 }
 
+// The per-APDO stream adds up to the merged aggregates on failing sources too: every Pps-family measurement, whatever path took it.
+void apdo_sums_match(const Sim& m, const Engine& e) {
+    for (std::size_t k = 0; k < kChecks; ++k) {
+        const Check c = Check(k);
+        if (!owns(Family::Pps, c)) continue;
+        std::uint32_t n = 0, fails = 0;
+        for (const auto& [ck, x] : m.apdo)
+            if (ck == c) { ++n; fails += excess(def(c).kind, x) > 0; }
+        CHECK_EQ(n, std::uint32_t(e.agg(c).n));
+        CHECK_EQ(fails, std::uint32_t(e.agg(c).fails));
+    }
+}
+void apdo_hook_on_failing_sources() {
+    const auto run = [](auto setup, std::uint8_t families) {
+        Sim m;
+        typical(m);
+        setup(m);
+        Engine e(m);
+        CHECK_COND(e.start(0, families) == StartResult::Ok);
+        drive(m, e);
+        check_safe_end(m, e);
+        apdo_sums_match(m, e);
+        return std::pair{e.agg(Check::PpsPsRdy).fails, e.agg(Check::PpsBand).fails};
+    };
+    const std::uint8_t pps = bit(Family::Pps);
+    run([](Sim& m) { m.pps_offset_mv = 300; m.pps_start_ms = 40; }, pps);
+    run([](Sim& m) { m.pps_fold_from_mv = 9000; m.pps_fold_to_mv = 8590; }, pps);
+    run([](Sim& m) { m.fall = 20; }, pps);
+    run([](Sim& m) { m.pps_overshoot_mv = 300; m.pps_overshoot_ms = 10; }, pps);
+    run([](Sim& m) { m.pps_status_mode = 3; }, pps);
+    // No PS_RDY on a programmable step: the K2's own Hard Reset ends the move, measured outside the step's judging.
+    const auto [rdy_fails, band_fails] = run([](Sim& m) { m.no_psrdy_pos = 5; m.no_psrdy_skip = 4; }, pps);
+    (void)band_fails;
+    CHECK_COND(rdy_fails > 0);
+}
+
 // The Deep run's spec section before and after: the same list with every window swept by the charger test (Sim ms).
 std::uint32_t spec_ms(std::initializer_list<pd::Pdo> l, std::uint8_t covered) {
     Sim m;
@@ -1549,6 +1588,7 @@ int main() {
     test_moves_land_in_the_aggregates();
     covered_window_runs_a_cover_and_the_slams();
     apdo_hook_reports_every_programmable_measurement();
+    apdo_hook_on_failing_sources();
     covered_run_time();
     return test_report("test_pdspec_engine");
 }

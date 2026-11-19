@@ -47,7 +47,7 @@ void Engine::meas(Check c, const Meas& m) {
         if (bad) cur_.fails = static_cast<std::uint8_t>(cur_.fails | b);
     }
 #endif
-    if (prog_meas_) env_->on_apdo(c, m);
+    if (prog_meas_ || owns(Family::Pps, c)) env_->on_apdo(c, m);   // the flag: the shared Accept and the PPS_Status asks of a move
 }
 
 void Engine::judge_move(const ProgMove& mv, const StepOut& o, const Edges& e, const Snapshot& s, PassRec& r) {

@@ -895,6 +895,7 @@ void ChargerTestSession::capture_identity() {
     // The run's block (a Deep run's spec summary, SVOOC ceiling and sweep graphs; the Xiaomi section of any run whose chain row ran) is
     // built now, while the sweep is in RAM, into the share buffer (no share view is open under a finishing run); it is stored beside
     // the card and the share link carries it.
+    static_assert(ShareRecord::kBuffer >= report_card::deep::kMaxBlob, "build() needs the whole worst-case block");
     const std::size_t blk = report_card::deep::build(card_, runner_.steps(), runner_.evidence(), runner_.sweep_view(), ctx_.ui->share_buffer(),
                                                        &runner_.spec_apdo());
     save_card_store(std::span<const uint8_t>(ctx_.ui->share_buffer()).first(blk));
