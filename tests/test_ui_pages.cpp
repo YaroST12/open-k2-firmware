@@ -34,6 +34,7 @@ static Ui &fresh_ui() {
     // The inline latch survives a VBUS gap (pd::kInlineHoldMs), so a case no longer ends with the Link back at "standalone" by itself:
     // start from a new Link (the rest of the Ui carries over between cases as before).
     const_cast<pd::Link &>(ui.link()) = pd::Link{};
+    ui.context().keep.place_sel = {};
     g_stub.ms = 10000;
     ui.init(g_stub.ms);
     ui.set_rotation(0, g_stub.ms);   // boot default is bottom-edge@0; the pixel checks below assume the right edge (logical == physical, no scaling)
@@ -60,7 +61,7 @@ static void test_label_sets() {
         {"Back", "Up", "Bench",  "Dn"},           // Lines
         {"Back", "Up", "Open",   "Dn"},           // the Bench
         {"Back", "Up", "Open",   "Dn"},           // Settings
-        {"Back", "Tab-", "Actions", "Tab+"},      // Connection (a submenu of Tools): long OK shares only when there is something to share
+        {"Back", "Up", "Open",   "Dn"},           // Connection (Charger place): first action row focused
         {"Back", "Up", "Share*", "Dn"},           // Diag (a submenu of Tools): long OK shares the log
     };
     static constexpr uint8_t kPages[8] = {0, 1, 2, 3, 4, 5, kPdPage, kDiagPage};
@@ -357,10 +358,9 @@ static void test_cable_tab_not_found_greys_save() {
     Ui &ui = fresh_ui();
     g_stub = StubState();
     g_stub.em = {};                                     // valid = false, defaults 3A / 20V / USB 2.0
-    ui.goto_page(kPdPage + 1, 20000);                   // Cable tab
+    ui.goto_page(kPdPage + 1, 20000);                   // Cable place (Read e-marker is row 0, Save cable is row 1)
     ui.tick(20050);
-    ui.on_button(Button::Ok, ButtonEvent::Short, 20100);   // pop-up: Read cable, Save cable (greyed), ...
-    ui.on_button(Button::Plus, ButtonEvent::Short, 20150);
+    ui.on_button(Button::Plus, ButtonEvent::Short, 20150); // Save cable (greyed)
     ui.on_button(Button::Ok, ButtonEvent::Short, 20200);   // greyed: refused, nothing saved
     CHECK_EQ(g_stub.lib_saves, 0);
     g_stub.em.valid = true;
@@ -369,7 +369,7 @@ static void test_cable_tab_not_found_greys_save() {
     g_stub.em.raw_vdos = {0xFF00A041, (3u << 27) | 0x05ACu, 0, 0x12340005, (2u << 21) | (3u << 9) | (2u << 5)};
     ui.tick(20300);
     settle(ui, 20300);
-    ui.on_button(Button::Ok, ButtonEvent::Short, 20400);   // the pop-up is still open on Save cable
+    ui.on_button(Button::Ok, ButtonEvent::Short, 20400);   // Save cable is now enabled
     CHECK_EQ(g_stub.lib_saves, 1);
     g_stub = StubState();
 }
@@ -382,45 +382,41 @@ static void test_cable_tab_save_and_list() {
     g_stub.em.num_vdos = 5;
     g_stub.em.spec_rev = 2;
     g_stub.em.raw_vdos = {0xFF00A041, (3u << 27) | 0x05ACu, 0, 0x12340005, (2u << 21) | (3u << 9) | (2u << 5)};
-    ui.goto_page(kPdPage + 1, 20000);                       // Cable tab
+    ui.goto_page(kPdPage + 1, 20000);                       // Cable place (Read e-marker focused by default)
     ui.tick(20050);
-    ui.on_button(Button::Ok, ButtonEvent::Short, 20100);   // pop-up
-    CHECK_STR(label(ui, Button::Ok), "Select");
-    ui.on_button(Button::Plus, ButtonEvent::Short, 20150); // Save cable
-    ui.on_button(Button::Ok, ButtonEvent::Short, 20300);   // direct, no confirmation, no address
+    CHECK_STR(label(ui, Button::Ok), "Read");
+    ui.on_button(Button::Plus, ButtonEvent::Short, 20150);  // Save cable
+    CHECK_STR(label(ui, Button::Ok), "Save");
+    ui.on_button(Button::Ok, ButtonEvent::Short, 20300);    // direct, no confirmation, no address
     CHECK_EQ(g_stub.lib_saves, 1);
     CHECK_EQ(int(g_stub.lib.size()), 1);
     ui.tick(20350);                                         // toast painted
-    ui.on_button(Button::Ok, ButtonEvent::Short, 20400);   // the pop-up again
-    ui.on_button(Button::Plus, ButtonEvent::Short, 20410);
-    ui.on_button(Button::Ok, ButtonEvent::Short, 20420);   // the same cable again: nothing new
+    ui.on_button(Button::Ok, ButtonEvent::Short, 20420);    // the same cable again: nothing new
     CHECK_EQ(int(g_stub.lib.size()), 1);
     ui.tick(24000);                                         // toast expired
-    ui.on_button(Button::Ok, ButtonEvent::Short, 24100);   // pop-up: Saved cables is the fourth row
-    for (int i = 0; i < 3; ++i) ui.on_button(Button::Plus, ButtonEvent::Short, 24110 + i);
+    ui.on_button(Button::Plus, ButtonEvent::Short, 24110);  // Saved cables is the third action row
     ui.on_button(Button::Ok, ButtonEvent::Short, 24200);
     ui.tick(24250);
     CHECK_EQ(ui.menu() == Menu::Emarker, 1);
     CHECK_EQ(ui.menu_depth(), 2u);                          // Connection > Saved cables (opened from Home, no Tools under it)
     CHECK_STR(label(ui, Button::Ok), "View");
-    ui.on_button(Button::Ok, ButtonEvent::Short, 24300);   // detail card
+    ui.on_button(Button::Ok, ButtonEvent::Short, 24300);    // detail card
     CHECK_STR(label(ui, Button::Ok), "Delete");
-    ui.on_button(Button::Ok, ButtonEvent::Short, 24400);   // ask
+    ui.on_button(Button::Ok, ButtonEvent::Short, 24400);    // ask
     CHECK_EQ(g_stub.lib_removes, 0);
-    ui.on_button(Button::Back, ButtonEvent::Short, 24500); // keep
+    ui.on_button(Button::Back, ButtonEvent::Short, 24500);  // keep
     CHECK_EQ(g_stub.lib_removes, 0);
     ui.on_button(Button::Ok, ButtonEvent::Short, 24600);
-    ui.on_button(Button::Ok, ButtonEvent::Short, 24700);   // confirm
+    ui.on_button(Button::Ok, ButtonEvent::Short, 24700);    // confirm
     CHECK_EQ(g_stub.lib_removes, 1);
     CHECK_EQ(int(g_stub.lib.size()), 0);
     ui.tick(24750);
-    ui.on_button(Button::Back, ButtonEvent::Short, 24800); // list -> back to Connection
+    ui.on_button(Button::Back, ButtonEvent::Short, 24800);  // list -> back to Connection
     ui.tick(24850);
     CHECK_EQ(ui.menu() == Menu::Connection, 1);
     // Library full and flash failures reach the user as a toast, not a state change.
-    ui.on_button(Button::Ok, ButtonEvent::Short, 25000);
+    ui.on_button(Button::Minus, ButtonEvent::Short, 25000); // back to Save cable
     g_stub.lib_err = emlib::Err::Full;
-    ui.on_button(Button::Plus, ButtonEvent::Short, 25050);
     ui.on_button(Button::Ok, ButtonEvent::Short, 25100);
     CHECK_EQ(int(g_stub.lib.size()), 0);
     g_stub = StubState();
@@ -1387,9 +1383,8 @@ static void test_emarker_listen_window() {
     g_stub.cc = 1;
     ui.debug_link(true, 79900);
     ui.tick(80000);
-    ui.goto_page(kPdPage + 1, 80000);                     // Connection, Cable tab
+    ui.goto_page(kPdPage + 1, 80000);                     // Connection, Cable place (Read e-marker focused)
     CHECK_EQ(on_pd(ui), 1);
-    ui.on_button(Button::Ok, ButtonEvent::Short, 80050);  // pop-up
     ui.on_button(Button::Ok, ButtonEvent::Short, 80100);  // Read cable: with a source on VBUS it only listens
     CHECK_EQ(int(g_stub.last_scan_mode), int(k2::pd::EmarkerMode::Sniff));
     // The passive window runs 5 s; a new cable_seq inside it ends it (data arrived).
@@ -1400,7 +1395,6 @@ static void test_emarker_listen_window() {
     CHECK_EQ(ui.context().em_listen_until, 0u);
     CHECK_EQ(ui.context().em_quiet, false);
     // Listen again; nothing arrives: the window expires into the quiet state.
-    ui.on_button(Button::Ok, ButtonEvent::Short, 82900);   // pop-up again
     ui.on_button(Button::Ok, ButtonEvent::Short, 83000);   // Read cable
     ui.tick(87900);
     CHECK_EQ(ui.context().em_listen_until != 0, true);
@@ -1481,10 +1475,9 @@ static void test_identify_page() {
     ui.debug_link(false, 69000);                          // earlier tests left the link inline: detach clears it
     ui.debug_link(true, 69500);
     ui.tick(70000);
-    ui.goto_page(kPdPage + 2, 70000);                     // Connection, Sink tab
+    ui.goto_page(kPdPage + 2, 70000);                     // Connection, Device place
     g_stub.identifies = 0;
-    ui.on_button(Button::Ok, ButtonEvent::Short, 70080);   // pop-up: Identify is its only row
-    ui.on_button(Button::Ok, ButtonEvent::Short, 70100);
+    ui.on_button(Button::Ok, ButtonEvent::Short, 70100);   // primary action: Identify
     CHECK_EQ(g_stub.identifies, 1);
     g_stub.ident.state = pd::IdState::Done;
     g_stub.ident.ok_mask = 1;

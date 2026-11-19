@@ -32,6 +32,11 @@
  *               0 = none of it (the default while flash is short): the remote answers UnknownCmd, the Bench has no Loop probe row.
  *                   The host tests pass -DK2_LOOPPROBE=1; `make K2_LOOPPROBE=1` builds the tool in.
  *
+ * K2_TWIN  1 = Device twins (TwinPage, twin_hw, /twin flash library, remote Cmd::Twin, shell `twin` commands) are built in.
+ *          0 = none of it (the default): remote answers UnknownCmd, shell answers "unsupported", Device place has no Twins row.
+ *              Inline interrogation (pd_interrogate, fusb302::interrogate_*) stays built in for the Device place.
+ *              The host tests pass -DK2_TWIN=1; `make K2_TWIN=1` builds Device twins back in.
+ *
  * K2_OPPO_PROBE 1 = the OPPO charger-protocol lab probe (docs/ROADMAP.md, lab docs): the probe sequencer (pd/oppo_probe), the
  *                   shell commands `pd oppo-probe` / `pd oppo-power`, the remote command 0x4D (OPPO_PROBE), the [OPPO] log lines,
  *                   the sink-initiated DR_Swap and the data-role plumbing it needs (the FUSB302 data-role bit in the transmit
@@ -65,12 +70,7 @@
  *                  remote [8] answers BadLength (what an older firmware answers; tools/k2_remote.py treats it as "no rows").
  *                  The journal format byte stays 5 either way (the file is additive). The host tests build it off by default and
  *                  on in a second pass (`make test-specrows`, host-build-rows/): it changes struct layouts, so never per object. */
-/* K2_WHOS_ATTACHED  1 = Tools > Charger ID / Cable read / Device ID open the old tabbed "Who's attached" page on that tab
- *                     (tab strip, Tab+/Tab-, the action pop-up).
- *                   0 = each opens its own single tool: one tab, no strip, OK runs the tool's action, the other actions are
- *                       rows under the result (the default since 2026-11-12: the tabbed page did not work well).
- *
- * K2_SCREENSHOT  1 = screenshot capture (src/ui/capture.cpp, src/ui/rle565.cpp), remote Screenshot (0x0A), HTTP
+/* K2_SCREENSHOT  1 = screenshot capture (src/ui/capture.cpp, src/ui/rle565.cpp), remote Screenshot (0x0A), HTTP
  *                    /api/screenshot.bmp and Settings > Screenshot are built in.
  *                0 = none of it (the default: saves the 1920 B strip buffer and ~3 KB Flash). Remote answers UnknownCmd
  *                    and screenshot_enabled() returns false. The host tests pass -DK2_SCREENSHOT=1 explicitly;
@@ -98,6 +98,10 @@
 #define K2_LOOPPROBE 0
 #endif
 
+#ifndef K2_TWIN
+#define K2_TWIN 0
+#endif
+
 #ifndef K2_EEPROM_READ
 #define K2_EEPROM_READ 0
 #endif
@@ -119,10 +123,6 @@
 #endif
 #if K2_SPECROWS && !K2_PDSPEC
 #error "K2_SPECROWS=1 needs K2_PDSPEC=1 (the per-transition list belongs to the PD spec section)"
-#endif
-
-#ifndef K2_WHOS_ATTACHED
-#define K2_WHOS_ATTACHED 0
 #endif
 
 #ifndef K2_SCREENSHOT

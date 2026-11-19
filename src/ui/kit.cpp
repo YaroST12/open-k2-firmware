@@ -274,10 +274,10 @@ bool paint_identity(const Surface &c, const Ident &id, bool full, uint32_t &sig,
     int16_t cx[3] = {};
     int shown = 0;
     for (int16_t x = static_cast<int16_t>(8 + hw + 8); shown < id.n; shown++) {   // a chip that does not fit is left out whole
-        const int cw = chip_w(id.chip[shown].t.view());
+        const int16_t cw = static_cast<int16_t>(badge_text_bounds(kLabelFont, id.chip[shown].t.view()).w + 8);
         if (x + cw > c.w - 8) break;
         cx[shown] = x;
-        holes[nh++] = {x, chip_y, static_cast<int16_t>(cw), kChipH};
+        holes[nh++] = {x, chip_y, cw, kChipH};
         x = static_cast<int16_t>(x + cw + 4);
     }
     const int16_t lw = static_cast<int16_t>(text_width(kLabelFont, id.line.view()));

@@ -21,16 +21,17 @@ struct Readiness {
 };
 
 constexpr int kToolSlots = 14;       // the per-tool tables: Loop probe and PD Stress are the last two slots (each built in by its flag)
-constexpr int kToolCount = K2_PDSTRESS ? 14 : K2_LOOPPROBE ? 13 : 12;   // slots up to the last one built: FC trigger, PD trigger, Spoof, Cable R, Charger ID, Cable read, Device ID, Black Box, PD diagnosis, Report cards, Diag, Device twins, Loop probe, PD Stress (ToolsPage::tool_menu maps to Menu)
+constexpr int kToolCount = K2_PDSTRESS ? 14 : K2_LOOPPROBE ? 13 : K2_TWIN ? 12 : 11;   // slots up to the last one built: FC trigger, PD trigger, Spoof, Cable R, Charger ID, Cable read, Device ID, Black Box, PD diagnosis, Report cards, Diag, Device twins, Loop probe, PD Stress (ToolsPage::tool_menu maps to Menu)
 constexpr int kToolSpoof = 2;        // the Spoof row opens Cable read's Spoof list, not a menu of its own
 constexpr int kToolChargerId = 4;    // Charger ID, Cable read, Device ID: the Connection page on one tab each (Tab order)
 constexpr int kToolCableRead = 5;
 constexpr int kToolDeviceId = 6;
+constexpr int kToolTwin = 11;        // Device twins (opt-in: K2_TWIN)
 constexpr int kToolLoopProbe = 12;   // the HID-cable loop probe (needs the power monitor, like Cable R)
 constexpr int kToolPdStress = 13;    // renegotiation stress: a PD charger, the power monitor, nothing on the output
-// A slot whose tool is in this build (Loop probe and PD Stress are opt-in: K2_LOOPPROBE, K2_PDSTRESS).
+// A slot whose tool is in this build (Device twins, Loop probe and PD Stress are opt-in: K2_TWIN, K2_LOOPPROBE, K2_PDSTRESS).
 constexpr bool tool_built(int t) {
-    return t >= 0 && t < kToolSlots && (t != kToolLoopProbe || K2_LOOPPROBE) && (t != kToolPdStress || K2_PDSTRESS);
+    return t >= 0 && t < kToolSlots && (t != kToolTwin || K2_TWIN) && (t != kToolLoopProbe || K2_LOOPPROBE) && (t != kToolPdStress || K2_PDSTRESS);
 }
 constexpr int kToolRows = 13;        // one row per tool (the list scrolls: not all of them fit above the footer at once)
 

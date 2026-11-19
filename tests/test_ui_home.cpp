@@ -954,6 +954,32 @@ static void test_diag_event_word_falls_back() {
     g_stub.diag_state = 0;
 }
 
+static void test_battery_card_on_home() {
+    Ui &ui = home_ui();
+    live_pd(false, 9000, 2000);
+    // Without battery data, Card::Battery never enters the cycler.
+    for (int i = 0; i < 12; i++) {
+        run(ui, 25);
+        CHECK_EQ(ui.context().keep.cards.top() != hm::Card::Battery, true);
+        CHECK_EQ(ui.context().keep.cards.bottom() != hm::Card::Battery, true);
+    }
+    // With valid BatteryCaps + BatteryStatus, Card::Battery rotates into the deck and paints cleanly.
+    g_stub.ext.battery.valid = true;
+    g_stub.ext.battery.design_dwh = 200;
+    g_stub.ext.battery.last_full_dwh = 190;
+    g_stub.ext.battery_status.valid = true;
+    g_stub.ext.battery_status.present = true;
+    g_stub.ext.battery_status.charging = 0;
+    g_stub.ext.battery_status.present_dwh = 152;   // 80%
+    bool saw = false;
+    for (int i = 0; i < 30 && !saw; i++) {
+        run(ui, 25);
+        if (ui.context().keep.cards.top() == hm::Card::Battery || ui.context().keep.cards.bottom() == hm::Card::Battery) saw = true;
+    }
+    CHECK_EQ(saw, true);
+    g_stub.ext = {};
+}
+
 int main() {
     test_contract_text();
     test_cable_and_cc_text();
@@ -982,5 +1008,6 @@ int main() {
     test_drop_and_sag_cards();
     test_rework_guards_energy_lines_and_badges();
     test_diag_event_word_falls_back();
+    test_battery_card_on_home();
     return test_report("test_ui_home");
 }

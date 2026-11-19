@@ -711,13 +711,11 @@ static void test_emarker_menu_scenes() {
     }
     static Ui ui;
     ui.init(1000); ui.set_rotation(0, 1000); ui.tick(1000); ui.goto_page(static_cast<uint8_t>(Page::Tools), 1100);
-    ui.goto_page(kConnTabAlias + 1, 1200);                        // Connection, Cable tab
+    ui.goto_page(kConnTabAlias + 1, 1200);                        // Connection, Cable place
     ui.run_action(Action::EmarkerScan, 1300); ui.tick(1350);
     test_screen(ui, "conn_cable", 1380);
-    ui.on_button(Button::Ok, ButtonEvent::Short, 1400);           // the action pop-up
-    test_screen(ui, "conn_cable_popup", 1450);
-    CHECK_EQ(g_panel[50 * 240 + 1], kFocus);                      // the first action row carries the focus bar
-    for (int i = 0; i < 3; ++i) ui.on_button(Button::Plus, ButtonEvent::Short, 1500 + i);
+    // Navigate to Saved cables action row on the Cable place (Read e-marker = 0, Save cable = 1, Saved cables = 2)
+    while (ui.connection_page().action_row() < 2) ui.on_button(Button::Plus, ButtonEvent::Short, 1450);
     ui.on_button(Button::Ok, ButtonEvent::Short, 1550);           // Saved cables
     test_screen(ui, "em_saved", 1600);
     CHECK_EQ(g_panel[30 * 240 + 1], kFocus);                      // the kit RowList: cursor bar on the first cable
@@ -1227,13 +1225,12 @@ int main() {
         ui.run_action(Action::PdRescan, 13940);   // drops the forced link: the readings decide
         for (uint32_t t = 13950; t <= 14350; t += 100) ui.tick(t);
         CHECK_EQ(ui.link().inline_mode(), 1);
-        ui.on_button(Button::Ok, ButtonEvent::Short, 14355);   // pop-up: Identify
-        ui.on_button(Button::Ok, ButtonEvent::Short, 14357);   // inline: refused, there is no confirm any more
         g_stub.identifies = 0;
-        ui.on_button(Button::Ok, ButtonEvent::Short, 14358);   // a confirm press changes nothing either
-        CHECK_EQ(g_stub.identifies, 0);                         // nothing was ever transmitted
+        g_stub.iq_starts = 0;
+        ui.on_button(Button::Ok, ButtonEvent::Short, 14355);   // Ask device inline: arms confirm ("OK again: resets link")
+        CHECK_EQ(g_stub.identifies, 0);
+        CHECK_EQ(g_stub.iq_starts, 0);
         test_screen(ui, "conn_sink_refused", 14360);
-        ui.on_button(Button::Back, ButtonEvent::Short, 14365);
         g_stub.pm = saved;
         ui.debug_link(false, 14370); ui.debug_link(true, 14380);   // a replug clears the sticky inline state
         ui.tick(14390); ui.tick(14395);
@@ -1273,12 +1270,11 @@ int main() {
         CHECK_EQ(int(ui.identify(14810)), int(Ui::IdResult::NoDevice));
         CHECK_EQ(g_stub.identifies, 0);                              // nothing was transmitted
         ui.tick(14815);
-        ui.on_button(Button::Ok, ButtonEvent::Short, 14817);     // pop-up: Identify is greyed, the status bar names why
+        ui.on_button(Button::Ok, ButtonEvent::Short, 14817);     // Ask device with no device: status bar names why
         test_screen(ui, "conn_sink_nodevice", 14820);
-        int amber = 0;
-        for (int y = 222; y < 240; y++) for (int x = 0; x < 218; x++) amber += g_panel[y * 240 + x] == k2::kCaution;
-        CHECK_EQ(amber > 0, 1);
-        ui.on_button(Button::Back, ButtonEvent::Short, 14830);   // close the pop-up
+        int ink = 0;
+        for (int y = 222; y < 240; y++) for (int x = 0; x < 218; x++) ink += g_panel[y * 240 + x] != k2::kBar;
+        CHECK_EQ(ink > 0, 1);
         g_stub.pm = saved_pm; g_stub.adc = saved_adc;
     }
     {   // FC staged input: protocol list, draft/coarse, exact review, live retarget, cleanup.

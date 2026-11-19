@@ -34,8 +34,8 @@ int put_level(std::span<char> out, int n, uint32_t mv, bool whole_only) {
     return put_char(out, n, 'V');
 }
 
-constexpr Card kDeck[] = {Card::Peak, Card::Drop, Card::Cable, Card::Lines};
-constexpr int kDeckN = 4;
+constexpr Card kDeck[] = {Card::Peak, Card::Drop, Card::Cable, Card::Lines, Card::Battery};
+constexpr int kDeckN = static_cast<int>(sizeof(kDeck) / sizeof(kDeck[0]));
 
 int deck_index(Card c) {
     for (int i = 0; i < kDeckN; i++)

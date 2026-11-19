@@ -2599,6 +2599,9 @@ template <Backend B>
         return reply_ok(f, backend.cards(p, f.span()));
     }
     case Cmd::Twin: {
+#if !K2_TWIN
+        return reply_err(f, Status::UnknownCmd);
+#else
         bool writes = false;
         const Status vst = validate_twin(p, writes);
         if (vst != Status::Ok) return reply_status(f, vst);
@@ -2606,6 +2609,7 @@ template <Backend B>
         const size_t n = backend.twin(p, f.span());
         if (p[0] == kTwRun && n > 0 && f.buf[0] == 0) backend.lease_arm();
         return reply_ok(f, n);
+#endif
     }
     case Cmd::BlackBox: {
         uint32_t arg = 0;

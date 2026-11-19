@@ -80,6 +80,10 @@ struct StubState {
     k2::pd::Contract contract{};
     std::uint32_t req_period_ms = 0;      // what fusb302::request_period_ms() returns
     k2::pd::SinkCapsSeen sink_seen{};
+    k2::pd::IqStatus iq_status{};
+    bool iq_running = false;
+    k2::pd::IqRefusal iq_refusal = k2::pd::IqRefusal::None;
+    int iq_starts = 0, iq_aborts = 0;
     k2::pd::XiaomiTrace xm{};             // the sink's Request / Xiaomi chain record (fusb302::xiaomi_trace)
     // A source that lists SVID 0x2717 (model_units): a unit detach clears the sink's chain state as the real sink does, a PD attach
     // runs the chain again (mi_authed) and leaves mi_xm as the trace (the list before the chain in mi_xm.pre).

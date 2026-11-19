@@ -17,7 +17,9 @@
 #include "k2/ui/ui_blackbox.hpp"
 #include "k2/ui/ui_spoof.hpp"
 #include "k2/ui/ui_cards.hpp"
+#if K2_TWIN
 #include "k2/ui/ui_twin.hpp"
+#endif
 #include "k2/core/build_config.h"
 #if K2_LOOPPROBE
 #include "k2/ui/ui_loop_probe.hpp"
@@ -39,7 +41,9 @@
 #endif
 #include "k2/ui/ui_types.hpp"
 #include "k2/ui/page_arena.hpp"
+#if K2_TWIN
 #include "k2/twin/twin_hw.hpp"
+#endif
 
 #include "k2/pd/pd_link.hpp"
 #include "k2/drivers/power_monitor.hpp"
@@ -75,7 +79,9 @@ inline constexpr std::size_t kLongestMenuChain =
     std::max({arena_bytes<ConnectionPage, EmarkerPage, SharePage>(), arena_bytes<ConnectionPage, SpoofPage>(),
               arena_bytes<ConnectionPage, PdTriggerPage>(), arena_bytes<ConnectionPage, TriggerPage>(),
               arena_bytes<ConnectionPage, CardsPage, SharePage>(), arena_bytes<ConnectionPage, CableRPage>(),
+#if K2_TWIN
               arena_bytes<ConnectionPage, TwinPage>(),
+#endif
               arena_bytes<ConnectionPage, SharePage>(),
 #if K2_LOOPPROBE
               arena_bytes<ConnectionPage, LoopProbePage, SharePage>(), arena_bytes<LoopProbePage, SharePage>(),
@@ -95,8 +101,10 @@ inline constexpr std::size_t kPageArenaBytes = kLongestChain;
 #if K2_LOOPPROBE
 static_assert(kPageArenaBytes >= arena_bytes<ChargerTestPage, ConnectionPage, LoopProbePage, SharePage>(), "charger test + loop probe card");
 #endif
+#if K2_TWIN
 static_assert(kPageArenaBytes >= arena_bytes<ChargerTestPage, ConnectionPage, TwinPage>(), "charger test + twins");
 static_assert(kPageArenaBytes >= arena_bytes<DetailPage, ConnectionPage, TwinPage>(), "detail + twins");
+#endif
 #if K2_LOOPPROBE
 static_assert(kPageArenaBytes >= arena_bytes<DetailPage, ConnectionPage, LoopProbePage>(), "detail + loop probe");
 static_assert(kPageArenaBytes >= arena_bytes<HomePage, ConnectionPage, LoopProbePage, SharePage>(), "home + loop probe card");
@@ -184,12 +192,8 @@ public:
     void show_face(uint32_t now_ms);                          // the face last shown (the Bench's Meter row and its BACK)
     void open_place(bench::Place p, uint32_t now_ms);         // Place::Meter = the Bench's own list
     void to_meter(uint32_t now_ms);
-    // Opens Connection (Tools) on `tab`; `spoof` goes straight on to the Spoof list (the Tools shortcut).
+    // Opens the Charger / Cable / Device place (`tab`); `spoof` goes straight on to the Spoof list (the Tools shortcut).
     bool open_connection(conn::Tab tab, bool spoof, uint32_t now_ms);
-    // K2_WHOS_ATTACHED=0: open_connection opens the single tool of that tab (ConnectionPage::lock), not the tabbed page.
-    // The host tests build with K2_WHOS_ATTACHED=1 (the tabbed page's tests) and switch single tools on to test them.
-    void set_single_tools(bool on) { single_tools_ = on; }
-    bool single_tools() const { return single_tools_; }
     // The comeback of a bridged Refresh (core/rescan.cpp): Connection on its Source tab, saying "Rescanned (rebooted)".
     bool land_rescanned(uint32_t now_ms);
     // Submenus: a small stack (depth 3: Tools > Connection > Saved cables > Share). While one is open it gets every event,
@@ -208,8 +212,10 @@ public:
     const SharePage &share() const { return *find<SharePage>(Menu::Share); }
     // The open QR scan-test page (host tests); it exists only while Menu::QrTest is on the stack.
     const QrTestPage &qrtest_page() const { return *find<QrTestPage>(Menu::QrTest); }
+#if K2_TWIN
     // The open Device twins page (host tests); it exists only while Menu::Twin is on the stack. Not const: peek() builds a row.
     TwinPage &twin_page() { return *find<TwinPage>(Menu::Twin); }
+#endif
 #if K2_LOOPPROBE
     // The Loop probe page while Menu::LoopProbe is on the stack, else nullptr (host tests).
     LoopProbePage *loop_probe_page() const { return find<LoopProbePage>(Menu::LoopProbe); }
@@ -363,10 +369,12 @@ public:
 #else
     bool loop_probe_busy() const { return false; }   // K2_LOOPPROBE=0: the tool is not built in
 #endif
+#if K2_TWIN
     // What the twin live runner needs from the UI: the clock, the monitor ceiling, the latest VBUS and who else owns the ports
     // (the twin run itself is not "else"). The remote's `twin run` and the Device twins page start a run with it.
     twin_hw::LiveCtx twin_ctx(uint32_t now_ms) const;
-    void cancel_twin();                  // BACK, the remote `stop`: ends a live proof, 5 V asked
+#endif
+    void cancel_twin();                  // BACK, the remote `stop`: ends a live proof / inline interrogation
     BusyWhy busy_why() const;          // why an identity / START is refused right now, BusyWhy::None = free
     const char *busy_reason() const;   // the footer text of busy_why(), nullptr = free
     // ---- PD Stress (the resident session; the remote and the shell start and read it through these) ----
@@ -552,8 +560,7 @@ private:
     uint8_t rotation_steps_ K2_BSS_INIT(0);
     uint8_t requested_rotation_ = 0xFF;
     bool rotation_notice_drawn_ K2_BSS_INIT(false);
-    bool single_tools_ = !K2_WHOS_ATTACHED;
-    int8_t conn_lock_ = -1;   // open_connection -> build_menu: the tab a single tool locks to, -1 = the tabbed page
+    int8_t conn_lock_ = -1;   // open_connection / open_place -> build_menu: the place tab (Charger / Cable / Device)
     bool place_next_ K2_BSS_INIT(false); // open_place -> build_menu: the PD diagnosis opens as the Log place
     bool pressed_[4] K2_BSS_ZERO;          // lit, indexed by Button
     bool down_[4] K2_BSS_ZERO;             // physically down

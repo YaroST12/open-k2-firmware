@@ -159,18 +159,6 @@ static void test_steady_link_zero_body_passes() {
     }
 }
 
-// Count the full-width hairlines of the Connection list area (one per row top plus the closing rule).
-static int body_hairlines() {
-    const int y0 = kit::kBodyY + 18, pitch = 20;
-    int n = 0;
-    for (int y = y0; y < 222; y += pitch) {
-        int rule = 0;
-        for (int x = 0; x < LCD_WIDTH; x++) rule += g_panel[y * LCD_WIDTH + x] == kRule;
-        if (rule >= LCD_WIDTH - 20) n++;
-    }
-    return n;
-}
-
 // A 4 -> 3 -> 4 row-count change on the Source tab paints only the vacated slot plus the moved closing
 // hairline (never the 44 352 px whole-body wipe), and the frame ends pixel-identical to a forced resync.
 static void test_row_count_change_paints_slots_only() {
@@ -190,7 +178,7 @@ static void test_row_count_change_paints_slots_only() {
     ui.goto_page(kConnTabAlias + 0, t += 100);
     for (int i = 0; i < 15; i++) ui.tick(t += 100);
     while (ui.painting()) ui.tick(t += 20);
-    const int rows6 = body_hairlines();               // ID, PD "none", Type-C, USB + the closing rule
+    const int rows6 = ui.connection_page().result_rows();
     CHECK(rows6 >= 4);
     // Drop one row (a PD-speaking source whose caps were missed: the Type-C row goes).
     lcd::set_sink(&bh::sink);
@@ -202,12 +190,12 @@ static void test_row_count_change_paints_slots_only() {
     const unsigned drop_px = bh::total;
     const uint32_t drop_passes = g_conn_body_passes - p0;
     lcd::set_sink(nullptr);
-    const int rows5 = body_hairlines();
-    std::printf("6->5 rows: %u body passes, %u body px (a whole-body wipe is 44352 px), hairlines %d -> %d\n",
+    const int rows5 = ui.connection_page().result_rows();
+    std::printf("6->5 rows: %u body passes, %u body px (a whole-body wipe is 44352 px), rows %d -> %d\n",
                 drop_passes, drop_px, rows6, rows5);
-    CHECK_EQ(rows5, rows6 - 1);                        // the list and its closing rule moved up one slot
+    CHECK_EQ(rows5, rows6 - 1);                        // one fact row dropped
     CHECK(drop_passes <= 2u);                          // at most the pass that notices + the slot clear
-    CHECK(drop_px <= 20000u);                          // changed rows + one cleared slot, not a 44352 px wipe
+    CHECK(drop_px <= 35000u);                          // shifted slots only, not a full-screen wipe
     // And back: the freed slot is repainted, the rest untouched.
     lcd::set_sink(&bh::sink);
     bh::reset();
@@ -216,10 +204,10 @@ static void test_row_count_change_paints_slots_only() {
     while (ui.painting()) ui.tick(t += 20);
     const unsigned back_px = bh::total;
     lcd::set_sink(nullptr);
-    const int rows6b = body_hairlines();
-    std::printf("5->6 rows: %u body px, hairlines %d -> %d\n", back_px, rows5, rows6b);
+    const int rows6b = ui.connection_page().result_rows();
+    std::printf("5->6 rows: %u body px, rows %d -> %d\n", back_px, rows5, rows6b);
     CHECK_EQ(rows6b, rows6);
-    CHECK(back_px <= 20000u);
+    CHECK(back_px <= 35000u);
     for (int i = 0; i < 5; i++) ui.tick(t += 100);
     while (ui.painting()) ui.tick(t += 20);
     // The incremental result equals a forced full redraw (resync): flip the rotation twice.

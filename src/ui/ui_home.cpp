@@ -755,6 +755,30 @@ void HomePage::paint_card(int ci, const Frame &f) {
         }
         break;
     }
+    case hm::Card::Battery: {
+        const pd::ExtInfo &ext = fusb302::ext();
+        const pd::IqStatus &iq = fusb302::interrogate_status();
+        const pd::BatteryCaps &bat = ext.battery.valid ? ext.battery : iq.battery;
+        const pd::BatteryStatus &bst = ext.battery_status.valid ? ext.battery_status : iq.battery_status;
+        const int soc = pd::battery_soc_pct(bat, bst);
+        label("BATT", 3);
+        zone(16, 36);
+        if (soc >= 0) {
+            sb[0].put_u32(static_cast<uint32_t>(soc)).put_char('%');
+            right(kSmall, 29, sb[0].view(), bst.charging == 0 ? kOk : tone(m, kInk));
+        } else {
+            right(kSmall, 29, "--", kFaint);
+        }
+        zone(37, -1);
+        if (bst.capacity_known()) {
+            const char *st = bst.charging == 0 ? "chg " : bst.charging == 1 ? "dis " : bst.charging == 2 ? "idl " : "";
+            sb[1].put(st).put_u32(bst.present_dwh / 10u).put_char('.').put_u32(bst.present_dwh % 10u).put("Wh");
+        } else if (bst.valid && bst.present) {
+            sb[1].put(bst.charging == 0 ? "charging" : bst.charging == 1 ? "dischg" : bst.charging == 2 ? "idle" : "");
+        }
+        right(kLabelFont, 50, sb[1].view(), kDim);
+        break;
+    }
     case hm::Card::Count: break;
     }
 
@@ -930,6 +954,13 @@ void HomePage::update(uint32_t now_ms) {
     if (live && (has_drop || has_sag)) ok |= hm::card_bit(hm::Card::Drop);
     if (fusb302::emarker().valid) ok |= hm::card_bit(hm::Card::Cable);
     if (has_lines) ok |= hm::card_bit(hm::Card::Lines);
+    {
+        const pd::ExtInfo &ext = fusb302::ext();
+        const pd::IqStatus &iq = fusb302::interrogate_status();
+        const pd::BatteryCaps &bat = ext.battery.valid ? ext.battery : iq.battery;
+        const pd::BatteryStatus &bst = ext.battery_status.valid ? ext.battery_status : iq.battery_status;
+        if (pd::battery_soc_pct(bat, bst) >= 0) ok |= hm::card_bit(hm::Card::Battery);
+    }
     ctx_.keep.cards.tick(now_ms, live, ok);
     {   // Attention: a card whose signal is moving right now takes the upper cell, with the dot (home_cards.hpp)
         // While a card wants the cell it is forced every tick (it may have gained its data since); the release goes

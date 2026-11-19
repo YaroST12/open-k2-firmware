@@ -150,6 +150,7 @@ emlib::Err lib_rename(std::uint16_t seq, std::string_view name) {
     return e;
 }
 
+#if K2_TWIN
 unsigned twin_list(std::span<std::uint8_t> out) { return twin::Library(fs::instance()).list(out); }
 
 bool twin_get(std::uint8_t seq, twin::Twin& out) { return twin::Library(fs::instance()).get(seq, out); }
@@ -175,6 +176,7 @@ twin::Err twin_rename(std::uint8_t seq, std::string_view name) {
     if (e == twin::Err::Ok) g_gen++;
     return e;
 }
+#endif
 
 std::uint8_t bank() { return flash::store_bank(); }
 std::uint32_t generation() { return g_gen; }

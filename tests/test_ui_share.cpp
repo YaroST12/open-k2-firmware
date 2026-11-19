@@ -348,11 +348,10 @@ static void test_emarker_opener() {
     g_stub.lib_quirks = {{1, eight_rows()}};
     static Ui ui;
     ui.init(1000); ui.set_rotation(0, 1000); ui.tick(1000); ui.goto_page(static_cast<uint8_t>(Page::Tools), 1100);
-    ui.goto_page(kConnTabAlias + 1, 1200);                 // Connection, Cable tab (the remote's alias index)
+    ui.goto_page(kConnTabAlias + 1, 1200);                 // Connection, Cable place (Read e-marker focused by default)
     ui.tick(1350);
-    ui.on_button(Button::Ok, ButtonEvent::Short, 1400);    // the action pop-up
-    for (int i = 0; i < 3; i++) ui.on_button(Button::Plus, ButtonEvent::Short, 1500 + i);
-    ui.on_button(Button::Ok, ButtonEvent::Short, 1550);    // Saved cables
+    for (int i = 0; i < 2; i++) ui.on_button(Button::Plus, ButtonEvent::Short, 1500 + i);
+    ui.on_button(Button::Ok, ButtonEvent::Short, 1550);    // Saved cables (row 2)
     CHECK(ui.menu() == Menu::Emarker);
     ui.on_button(Button::Ok, ButtonEvent::Short, 1600);    // the cable's card
     ui.tick(1650);
@@ -490,13 +489,13 @@ static void test_pd_opener() {
     CHECK_EQ(int(ui.menu_depth()), 1);   // back on Connection (Tools > Connection > Share)
     CHECK(on_pd(ui));
 
-    // The Cable tab has no Share without a cable read, and neither does a page without caps.
-    ui.on_button(Button::Plus, ButtonEvent::Short, 1500);
+    // The Cable place has no Share without a cable read, and neither does a page without caps.
+    ui.goto_page(kConnTabAlias + 1, 1500);
     ui.tick(1600);
     CHECK_STR(ui.labels().b[int(Button::Ok)].lng, "");
     ui.on_button(Button::Ok, ButtonEvent::Long, 1700);
     CHECK_EQ(int(ui.menu_depth()), 1);
-    ui.on_button(Button::Minus, ButtonEvent::Short, 1800);
+    ui.goto_page(kConnTabAlias + 0, 1800);
     g_stub.caps.valid = false;
     ui.tick(1900);
     CHECK_STR(ui.labels().b[int(Button::Ok)].lng, "");

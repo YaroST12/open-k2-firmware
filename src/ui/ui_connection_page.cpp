@@ -34,9 +34,17 @@ namespace k2 {
 namespace {
 
 // The sink's wants list of the current attach: its Sink_Capabilities sniffed when the source asked for them
-// (cleared by the driver on every attach), or the ones Identify collected in this attach session.
-WantsList wants_now() {
-    return pick_wants(fusb302::sink_caps(), fusb302::identify_current(), fusb302::identify_status());
+// (cleared by the driver on every attach), the ones Identify collected in this attach session, or inline interrogation's.
+WantsList wants_now(bool iq_ok = false) {
+    WantsList w = pick_wants(fusb302::sink_caps(), fusb302::identify_current(), fusb302::identify_status());
+    if (w.pdos.empty() && iq_ok) {
+        const pd::IqStatus &iq = fusb302::interrogate_status();
+        if (iq.num_sink_pdos > 0) {
+            w.pdos = std::span<const uint32_t>(iq.sink_pdos.data(), iq.num_sink_pdos);
+            w.src = WantsSrc::Identify;
+        }
+    }
+    return w;
 }
 std::span<const uint32_t> sniffed_sink_caps() { return wants_now().pdos; }
 // The mismatch bit is part of the RDO we sniffed; unknown while no Request was seen.
@@ -97,35 +105,26 @@ MatchResult match_live(const pd::Link &link) {
 void ConnectionPage::enter() {
     guard_.clear();
     guard_primed_ = false;
-    popup_ = false;
-    popup_drawn_ = false;
-    more_ = false;
     op_ = StrBuf<24>();
     op_until_ = 0;
     id_asked_ = false;
+    iq_asked_ = false;
+    iq_armed_until_ = 0;
     sig_valid_ = false;
     match_valid_ = false;
     act_sel_ = -1;
     first_ = 0;
     id_sig_ = thumb_sig_ = 0;
     sense(ctx_.now);                   // facts only; the topology window starts with this one sample
-    if (locked_) {                     // a place keeps its tab and comes back on the row it was left on (update clamps it)
-        build_items();
-        act_sel_ = ctx_.keep.place_sel[static_cast<int>(conn::place_of(tab_))];
-        if (act_sel_ + 1 >= n_items_) act_sel_ = n_items_ - 2;
-        return;
-    }
-    tab_ = conn::default_tab(facts_);   // Sink if a device is inline or was seen on CC, else Source if a charger is seen, else Cable if a cable is held
-    defaulted_ = true;
+    build_items();
+    act_sel_ = ctx_.keep.place_sel[static_cast<int>(conn::place_of(tab_))];
+    if (act_sel_ + 1 >= n_items_) act_sel_ = n_items_ - 2;
 }
 
-// A place page (Charger, Cable, Device): this page locked to one tab, no tab strip, the place's name and icon in the masthead.
+// A place page (Charger, Cable, Device): one tab, no tab strip, the place's name and icon in the masthead.
 // OK with no row focused runs the place's own read; its actions are rows under the fact table.
 void ConnectionPage::lock(conn::Tab t) {
-    locked_ = true;
     tab_ = t;
-    defaulted_ = false;
-    more_ = false;
     act_sel_ = -1;
     first_ = 0;
     const bench::Place p = conn::place_of(t);
@@ -152,11 +151,12 @@ void ConnectionPage::place_key(bool down) {
 }
 
 void ConnectionPage::leave() {
-    popup_ = false;
-    popup_drawn_ = false;
     op_ = StrBuf<24>();
     op_until_ = 0;
     id_asked_ = false;
+    if (iq_asked_ && fusb302::interrogate_running()) fusb302::interrogate_abort();
+    iq_asked_ = false;
+    iq_armed_until_ = 0;
     ctx_.em_listen_until = 0;    // nor does a listen window or its "heard nothing" verdict
     ctx_.em_quiet = false;
 }
@@ -171,62 +171,33 @@ void ConnectionPage::invalidate() {
     sig_valid_ = false;
     body_pending_ = false;
     match_valid_ = false;
-    popup_drawn_ = false;
     body_ = Body::None;
     body_n_ = 0;
-    tab_sig_ = 0;
-    band_done_ = false;
     tail_cleared_ = false;
     close_done_ = false;
     body_clear_y_ = kFooterY;
-    nopd_msg_sig_ = 0;
     row_sig_.fill(0);
     id_sig_ = thumb_sig_ = 0;
     status_.invalidate();
 }
 
-void ConnectionPage::open_tab(conn::Tab t) {
-    tab_ = t;
-    defaulted_ = false;
-    more_ = false;
-    if (popup_) close_popup();
-    act_sel_ = -1;
-    sig_valid_ = false;
-}
-
-void ConnectionPage::close_popup() {
-    popup_ = false;
-    popup_drawn_ = false;
-    sig_valid_ = false;
-}
-
 Strip ConnectionPage::labels() const {
-    if (popup_) return {{sl::Back, sl::Up, sl::Select, sl::Dn}};
     const bool share = (tab_ == conn::Tab::Source && pd::active_caps().valid) || (tab_ == conn::Tab::Cable && fusb302::emarker().valid);
-    if (locked_) {   // a place page always scrolls or moves the focus
-        const int i = act_sel_ < 0 ? 0 : 1 + act_sel_;
-        return {{sl::Back, sl::Up, i < n_items_ ? conn::act_slot(items_[static_cast<std::size_t>(i)].act, more_, share) : share ? sl::ShareLong : sl::None, sl::Dn}};
-    }
-    return {{sl::Back, sl::TabPrev, share ? sl::ActionsShare : sl::Actions, sl::TabNext}};
+    const int i = act_sel_ < 0 ? 0 : 1 + act_sel_;
+    return {{sl::Back, sl::Up, i < n_items_ ? conn::act_slot(items_[static_cast<std::size_t>(i)].act, false, share) : share ? sl::ShareLong : sl::None, sl::Dn}};
 }
 
 bool ConnectionPage::on_event(Event e) {
     const bool shrt = e.press == Press::Short;
-    if (popup_) {
-        if (!shrt) return false;
-        switch (e.button) {
-        case Button::Back: close_popup(); break;
-        case Button::Plus: if (popup_sel_ + 1 < n_items_) popup_sel_++; break;
-        case Button::Minus: if (popup_sel_ > 0) popup_sel_--; break;
-        case Button::Ok:
-            if (popup_sel_ >= 0 && popup_sel_ < n_items_) activate(items_[static_cast<std::size_t>(popup_sel_)], ctx_.now);
-            break;
-        default: return false;
-        }
+    if (shrt && e.button == Button::Back && iq_asked_ && fusb302::interrogate_running()) {
+        fusb302::interrogate_abort();
+        iq_asked_ = false;
+        set_op("Cancelled", ctx_.now);
+        sig_valid_ = false;
         update(ctx_.now);
         return true;
     }
-    if (locked_ && shrt && e.button != Button::Back) {
+    if (shrt && e.button != Button::Back) {
         switch (e.button) {
         case Button::Plus: place_key(true); break;
         case Button::Minus: place_key(false); break;
@@ -245,24 +216,6 @@ bool ConnectionPage::on_event(Event e) {
         }
         default: return false;
         }
-        sig_valid_ = false;
-        update(ctx_.now);
-        return true;
-    }
-    if (shrt && (e.button == Button::Plus || e.button == Button::Minus)) {
-        tab_ = e.button == Button::Plus ? pdtabs::next(tab_) : pdtabs::prev(tab_);
-        defaulted_ = false;
-        more_ = false;
-        sig_valid_ = false;
-        update(ctx_.now);
-        return true;
-    }
-    if (shrt && e.button == Button::Ok) {
-        build_items();
-        if (n_items_ == 0) return true;
-        popup_ = true;
-        popup_drawn_ = false;
-        popup_sel_ = 0;
         sig_valid_ = false;
         update(ctx_.now);
         return true;
@@ -308,29 +261,22 @@ void ConnectionPage::build_items() {
                                  fusb302::caps_this_attach(), link.wait_kind());
     a.caps_valid = pd::active_caps().valid;
     a.cable_valid = fusb302::emarker().valid;
-    a.more = more_;
     // The no-PD gate (ROADMAP 2026-11-10, Row C): with the settled verdict "no PD" a device on the line
     // cannot be identified. The alone path (a dual-role phone) is PD-capable and stays offered.
     a.pd_none = verdict_ == pd::PdVerdict::None && (facts_.inline_sink || facts_.sink_seen) && !a.alone;
-    if (locked_) {
-        n_items_ = conn::place_actions(tab_, a, items_);
-        // The place's tools carry the Bench's readiness: a blocked one is dimmed with its tag and the fact line says why.
-        const SetupState ss = setup_state(ctx_);
-        const bench::Acts b = bench::actions(conn::place_of(tab_));
-        for (int i = 0; i < n_items_; i++) {
-            conn::Item &it = items_[static_cast<std::size_t>(i)];
-            if (it.act != conn::Act::Bench || it.arg < 0 || it.arg >= b.n || b.a[it.arg].kind != bench::ActKind::Tool) continue;
-            const Readiness rd = tool_readiness(b.a[it.arg].arg, ss, ctx_.pm_online);
-            it.enabled = rd.level != ToolLevel::Blocked;
-            it.caution = rd.level == ToolLevel::Caution;
-            it.why = rd.reason;
-            it.tag = rd.level == ToolLevel::Ready ? "" : rd.tag;
-        }
-        return;
+    n_items_ = conn::place_actions(tab_, a, items_);
+    // The place's tools carry the Bench's readiness: a blocked one is dimmed with its tag and the fact line says why.
+    const SetupState ss = setup_state(ctx_);
+    const bench::Acts b = bench::actions(conn::place_of(tab_));
+    for (int i = 0; i < n_items_; i++) {
+        conn::Item &it = items_[static_cast<std::size_t>(i)];
+        if (it.act != conn::Act::Bench || it.arg < 0 || it.arg >= b.n || b.a[it.arg].kind != bench::ActKind::Tool) continue;
+        const Readiness rd = tool_readiness(b.a[it.arg].arg, ss, ctx_.pm_online);
+        it.enabled = rd.level != ToolLevel::Blocked;
+        it.caution = rd.level == ToolLevel::Caution;
+        it.why = rd.reason;
+        it.tag = rd.level == ToolLevel::Ready ? "" : rd.tag;
     }
-    n_items_= conn::actions(tab_, a, items_);
-    if (popup_sel_ >= n_items_) popup_sel_ = n_items_ - 1;
-    if (popup_sel_ < 0) popup_sel_ = 0;
 }
 
 void ConnectionPage::activate(const conn::Item &it, uint32_t now_ms) {
@@ -343,11 +289,8 @@ void ConnectionPage::activate(const conn::Item &it, uint32_t now_ms) {
             set_op(ctx_.ui->link().inline_mode() || ctx_.inline_mode ? "Inline: listens only" : "Rescanning...", now_ms, 2500);
         else set_op("Busy, retry", now_ms, 1500);   // a negotiation in flight: the refresh waits for it
         break;
-    case conn::Act::Details:
-        more_ = !more_;
-        break;   // closes the pop-up and repaints the body (the signature carries more_)
+    case conn::Act::Details: break;
     case conn::Act::ShareCaps:
-        close_popup();
         share_caps(now_ms);
         return;
     case conn::Act::ReadCable:
@@ -364,19 +307,45 @@ void ConnectionPage::activate(const conn::Item &it, uint32_t now_ms) {
         break;
     }
     case conn::Act::SpoofAs:
-        close_popup();
         if (!ctx_.ui->push_menu(Menu::Spoof, now_ms)) set_op("Test running", now_ms);
         return;
     case conn::Act::SavedCables:
-        close_popup();
         if (!ctx_.ui->push_menu(Menu::Emarker, now_ms)) set_op("Test running", now_ms);
         return;
     case conn::Act::ShareCable:
-        close_popup();
         share_cable(now_ms);
         return;
     case conn::Act::Identify: {
-        // Inline this is refused outright (no confirm): the driver never transmits inline.
+        const bool inl = ctx_.ui->link().inline_mode() || ctx_.inline_mode;
+        if (inl) {
+            const bool confirm = before(now_ms, iq_armed_until_);
+            iq_armed_until_ = 0;
+            pd::IqFacts f{};
+            f.inline_link = true;
+            f.busy = ctx_.ui->ports_busy();
+            f.confirmed = confirm;
+            switch (fusb302::interrogate_start(f)) {
+            case pd::IqRefusal::None:
+                iq_asked_ = true;
+                iq_have_ = true;
+                iq_session_ = fusb302::session();
+                op_.clear();
+                op_until_ = 0;
+                break;
+            case pd::IqRefusal::NeedConfirm:
+                iq_armed_until_ = now_ms + Ui::kConfirmWindowMs;
+                set_op("OK again: resets link", now_ms, Ui::kConfirmWindowMs);
+                break;
+            case pd::IqRefusal::SelfPowered: set_op("Powered from VBUS", now_ms); break;
+            case pd::IqRefusal::OwnContract: set_op("K2 holds contract", now_ms); break;
+            case pd::IqRefusal::Running:
+            case pd::IqRefusal::Busy:
+            case pd::IqRefusal::BadSpoof: set_op("Busy, retry", now_ms); break;
+            case pd::IqRefusal::NoCc:
+            case pd::IqRefusal::NotInline: set_op("No device inline", now_ms); break;
+            }
+            break;
+        }
         const bool started = ctx_.ui->run_action(Action::Identify, now_ms);
         id_asked_ = started;
         if (!started) set_op(ctx_.id_no_device ? "No device to ask" : "Identify refused", now_ms);
@@ -384,7 +353,7 @@ void ConnectionPage::activate(const conn::Item &it, uint32_t now_ms) {
     }
     case conn::Act::Bench: break;   // on_event opens it (it may leave this page)
     }
-    close_popup();
+    sig_valid_ = false;
 }
 
 // ---------------------------------------------------------------------------------------
@@ -520,6 +489,7 @@ struct TabData {
     fastcharge::Protocol fc;
     int32_t vbus_mv = -1;   // the fast VBUS reading in 100 mV steps (what the Type-C row shows), -1 unknown
     uint32_t vooc = 0;      // the Sink tab's raw VOOC note (ConnectionPage::vooc_), 0 = no live session
+    bool iq_ok = false;     // fusb302::interrogate_status() belongs to the current session
 };
 
 // The Type-C row's VBUS: the un-averaged reading, 100 mV steps (the row's resolution), -1 when the
@@ -783,19 +753,144 @@ void vooc_row(Rows &R, uint32_t note) {
     else v.put("0x").put_hex(w, 3).put(" raw");
 }
 
+void put_dwh(StrBuf<28> &v, uint16_t dwh) {
+    v.put_u32(dwh / 10u).put_char('.').put_u32(dwh % 10u);
+}
+
+[[gnu::noinline]] void sink_device_rows(Rows &R, bool iq_ok) {
+    const pd::IqStatus &iq = fusb302::interrogate_status();
+    const pd::ExtInfo &ext = fusb302::ext();
+    const bool id_cur = fusb302::identify_current();
+
+    // Manufacturer_Info (MIDB): from inline interrogation, or engine ext (Identify / passive).
+    const pd::ManufacturerInfo &mfr = (iq_ok && iq.mfr.valid) ? iq.mfr : ext.mfr;
+    if (mfr.valid && (iq_ok || id_cur || mfr.name[0])) {
+        if (mfr.name[0]) {
+            StrBuf<28> &v = R.add("Mfr", kText);
+            for (std::size_t i = 0; i < sizeof mfr.name && mfr.name[i] && v.view().size() < static_cast<std::size_t>(kValCells); i++)
+                v.put_char(mfr.name[i]);
+        } else if (mfr.vid || mfr.pid) {
+            put_id(R.add("Mfr", kText), mfr.vid, mfr.pid, nullptr);
+        }
+    }
+
+    // PD Revision (RMDO): from inline interrogation or Identify.
+    const uint32_t rev = (iq_ok && iq.revision) ? iq.revision : (id_cur ? fusb302::identify_status().revision : 0u);
+    if (rev != 0) {
+        StrBuf<28> &v = R.add("Rev", kDim);
+        v.put("PD ").put_u32((rev >> 28) & 0xFu).put_char('.').put_u32((rev >> 24) & 0xFu)
+         .put(" v").put_u32((rev >> 20) & 0xFu).put_char('.').put_u32((rev >> 16) & 0xFu);
+    }
+
+    // Sink_Capabilities_Extended (SKEDB): SPR/EPR max PDP and sink modes.
+    if (iq_ok && iq.sink_ext_len >= 21) {
+        StrBuf<28> &v = R.add("SKEDB", kText);
+        const uint8_t spr_max = iq.sink_ext[20];
+        const uint8_t epr_max = iq.sink_ext_len >= 24 ? iq.sink_ext[23] : 0;
+        const uint8_t modes = iq.sink_ext[17];
+        if (spr_max) v.put("SPR ").put_u32(spr_max).put_char('W');
+        if (epr_max) {
+            StrBuf<12> e;
+            e.put(v.view().empty() ? "EPR " : " EPR ").put_u32(epr_max).put_char('W');
+            put_if_fits(v, e.view());
+        }
+        if (modes & 0x01) put_if_fits(v, v.view().empty() ? "PPS" : " PPS");
+        if (modes & 0x20) put_if_fits(v, v.view().empty() ? "AVS" : " AVS");
+        if (v.view().empty()) v.put("Present");
+    }
+
+    // Battery_Status (BSDO) + Battery_Capabilities (BCDB): live SoC % + state, and design / full / health.
+    const pd::BatteryCaps &bat = (iq_ok && iq.battery.valid) ? iq.battery : ext.battery;
+    const pd::BatteryStatus &bst = (iq_ok && iq.battery_status.valid) ? iq.battery_status : ext.battery_status;
+    if (bst.valid && !bst.invalid_ref) {
+        if (!bst.present) {
+            R.add("Batt", kFaint).put("Not present");
+        } else {
+            const int soc = pd::battery_soc_pct(bat, bst);
+            const char *st = bst.charging == 0 ? "chg" : bst.charging == 1 ? "dischg" : bst.charging == 2 ? "idle" : "";
+            StrBuf<28> &v = R.add("Batt", bst.charging == 0 ? kOk : kText);
+            if (soc >= 0) {
+                v.put_u32(static_cast<uint32_t>(soc)).put_char('%');
+                if (st[0]) v.put_char(' ').put(st);
+                if (bst.capacity_known()) {
+                    StrBuf<12> wh;
+                    wh.put_char(' ');
+                    wh.put_u32(bst.present_dwh / 10u).put_char('.').put_u32(bst.present_dwh % 10u).put("Wh");
+                    put_if_fits(v, wh.view());
+                }
+            } else if (bst.capacity_known()) {
+                put_dwh(v, bst.present_dwh);
+                v.put("Wh");
+                if (st[0]) v.put_char(' ').put(st);
+            } else {
+                v.put(st[0] ? st : "Present");
+            }
+        }
+    }
+    if (bat.design_known() || bat.last_full_known()) {
+        StrBuf<28> &v = R.add("BattCap", kDim);
+        if (bat.design_known() && bat.last_full_known()) {
+            put_dwh(v, bat.last_full_dwh);
+            v.put_char('/');
+            put_dwh(v, bat.design_dwh);
+            v.put("Wh");
+            const int hlth = pd::battery_health_pct(bat);
+            if (hlth >= 0) {
+                StrBuf<8> hs;
+                hs.put_char(' ').put_u32(static_cast<uint32_t>(hlth)).put_char('%');
+                put_if_fits(v, hs.view());
+            }
+        } else if (bat.design_known()) {
+            put_dwh(v, bat.design_dwh);
+            v.put("Wh design");
+        } else {
+            put_dwh(v, bat.last_full_dwh);
+            v.put("Wh full");
+        }
+    }
+
+    // SVIDs (from inline interrogation or sniffed sink_vdm).
+    const std::uint16_t *svids = nullptr;
+    unsigned n_svids = 0;
+    if (iq_ok && iq.num_svids > 0) { svids = iq.svids.data(); n_svids = iq.num_svids; }
+    else if (fusb302::sink_vdm().num_svids > 0) { svids = fusb302::sink_vdm().svids.data(); n_svids = fusb302::sink_vdm().num_svids; }
+    if (n_svids > 0) {
+        StrBuf<28> &v = R.add("SVIDs", kDim);
+        for (unsigned i = 0; i < n_svids; i++) {
+            const bool last = i + 1 == n_svids;
+            const std::size_t need = (i ? 1 : 0) + 4 + (last ? 0 : 2);
+            if (v.view().size() + need > static_cast<std::size_t>(kValCells)) {
+                if (v.view().size() + 2 <= static_cast<std::size_t>(kValCells)) v.put(" +");
+                break;
+            }
+            if (i) v.put_char(' ');
+            v.put_hex(svids[i], 4);
+        }
+    }
+
+    // EPR_Sink_Capabilities count (from inline interrogation).
+    if (iq_ok && iq.num_epr_pdos > 0) {
+        StrBuf<28> &v = R.add("EPR", kText);
+        v.put_u32(iq.num_epr_pdos).put(iq.num_epr_pdos == 1 ? " PDO" : " PDOs");
+        if (iq.epr_partial) put_if_fits(v, " (part)");
+    }
+}
+
 [[gnu::noinline]] void sink_rows(Rows &R, const TabData &d) {
     const MatchResult &r = *d.r;
-    const pd::Identity &id = fusb302::sink_vdm().identity;
+    const pd::IqStatus &iq = fusb302::interrogate_status();
+    const bool iq_ok = d.iq_ok;
+    const pd::Identity &id = (iq_ok && iq.id.valid) ? iq.id : fusb302::sink_vdm().identity;
     if (d.k2_sink) {   // the K2 draws the power itself
         R.add("ID", kFaint).put("K2");
         R.add("Sink", kOk).put(d.k2_sink_ok ? "K2 (sink mode OK)" : "K2 (sink mode PLUS)");
         link_rows(R, d);
         return;
     }
-    // The ID row: sniffed when no Identify of this session collected it (inline never asks).
+    // The ID row: sniffed when neither Identify nor inline interrogation collected it.
     if (id.valid) {
         StrBuf<28> &v = R.add("ID");
-        conn::id_value(v, kValCells, fusb302::identify_current(), id.vid, id.pid, id.vendor);
+        conn::id_value(v, kValCells, fusb302::identify_current() || (iq_ok && iq.id.valid), id.vid, id.pid, id.vendor);
     } else R.add("ID").put("Unknown");   // until the sink answers a Discover Identity (the charger's own, sniffed)
     if (r.request_seen) {
         put_request(R.add("Request", kAmp), r, *d.caps);
@@ -814,6 +909,7 @@ void vooc_row(Rows &R, uint32_t note) {
     vooc_row(R, d.vooc);   // a live session next to a PD contract: the phone holds both (before Caps, which drops first)
     if (!d.sink.empty()) put_sink_pdos(R, "Caps", d.sink);
     else R.add("Caps", kFaint).put("Not seen");
+    sink_device_rows(R, iq_ok);
 }
 
 // One survey field as a row of the Details page: what was read, else the word for why it was not (conn::sv_word).
@@ -904,36 +1000,6 @@ uint32_t survey_sig(bool more) {
 // ---------------------------------------------------------------------------------------
 // Painting
 // ---------------------------------------------------------------------------------------
-
-bool ConnectionPage::paint_tab_indicator() {
-    // Three cells of the bar's rule pitch, the name centred (S12): the active tab filled kFocusT, its name kFocus over a 2 px
-    // kFocus rule (UI_SYSTEM 7.13.4); the others kDim on the ground over a kRule one.
-    if (locked_) return true;   // a single tool has no strip
-    const uint8_t want = static_cast<uint8_t>(static_cast<uint8_t>(tab_) + 1);
-    if (tab_sig_ == want) return true;
-    const Surface &c = ctx_.content;
-    if (ctx_.budget && !ctx_.budget->admit(static_cast<int>(c.w) * kTabH, true)) return false;
-    tab_sig_ = want;
-    for (int t = 0; t < conn::kTabs; t++) {
-        const bool on = t == static_cast<int>(tab_);
-        const std::string_view name = conn::tab_name(static_cast<conn::Tab>(t));
-        const int16_t x = static_cast<int16_t>(t * kit::kProgPitch);
-        const int16_t w = kit::kProgSegW;
-        const kit::TextRun label{static_cast<int16_t>(x + (w - static_cast<int>(name.size()) * kLabelFont.adv) / 2),
-                                 static_cast<int16_t>(kTabY + 2), &kLabelFont, name, on ? kFocus : kDim};
-        kit::paint_texts(c, {x, kTabY, w, static_cast<int16_t>(kTabH - 2)}, &label, 1, on ? kFocusT : kBg);   // ground and name, once
-        gfx_fill(c, x, static_cast<int16_t>(kTabY + kTabH - 2), w, 2, on ? kFocus : kRule);
-        if (kit::kProgPitch > w) gfx_fill(c, static_cast<int16_t>(x + w), kTabY, static_cast<int16_t>(kit::kProgPitch - w), kTabH, kBg);   // the gap between cells
-    }
-    return true;
-}
-
-// The verdict band (UI_SYSTEM 5.8): kSurface, a 20 px dash at x6 (a state with no verdict colour), the word in S24 at x32.
-static void paint_band(const Surface &c, int16_t y, std::string_view word) {
-    gfx_fill(c, 0, y, c.w, kBandH, kSurface);
-    kit::draw_verdict(c, 6, static_cast<int16_t>(y + 8), 20, 20, kit::Verdict::None, "", kSurface);
-    gfx_text(c, kMid, 32, static_cast<int16_t>(y + 6), word, kText, kSurface);
-}
 
 namespace {
 
@@ -1207,11 +1273,8 @@ void put_line_id(StrBuf<36> &l, uint16_t vid, uint16_t pid, const char *vendor) 
 
 }  // namespace
 
-int16_t ConnectionPage::row_y0() const { return locked_ ? kTabY : kRowY0; }
-
 uint32_t ConnectionPage::actions_sig() const {
-    if (!locked_) return 0;
-    uint32_t h = mix_u32(2166136261u, uint32_t(act_sel_ + 1) | uint32_t(n_items_) << 8 | uint32_t(more_) << 16 | uint32_t(first_) << 20);
+    uint32_t h = mix_u32(2166136261u, uint32_t(act_sel_ + 1) | uint32_t(n_items_) << 8 | uint32_t(first_) << 20);
     for (int i = 0; i < n_items_; i++) {
         const conn::Item &it = items_[static_cast<std::size_t>(i)];
         h = mix_u32(h, uint32_t(it.enabled) | uint32_t(it.caution) << 1);
@@ -1306,55 +1369,21 @@ void build_no_pd_rows(Rows &R, const void *p) {
 void noop_build_rows(Rows &, const void *) {}
 }  // namespace
 
-// An empty tab: the band and its one line (the port-aware text of conn::empty_state); a place page: the dim headline and
-// that line in its identity block, then its action rows.
+// An empty place page: the dim headline and hint in its identity block, then its action rows.
 bool ConnectionPage::paint_empty(bool) {
     const conn::Empty e = conn::empty_state(tab_, facts_);
-    if (locked_) {
-        const Surface &c = ctx_.content;
-        PaintBudget *const bg = ctx_.budget;
-        const bool full = body_ != Body::Empty || body_tab_ != tab_;
-        if (full) {
-            body_ = Body::Empty; body_tab_ = tab_;
-            row_sig_.fill(0); body_n_ = 0; tail_cleared_ = ctx_.blank; close_done_ = false;
-            body_clear_y_ = kFooterY; id_sig_ = thumb_sig_ = 0;
-        }
-        if (!paint_ident_dim(c, e.title, e.hint, id_sig_, bg)) return false;
-        ListDrawState st{tail_cleared_, close_done_, body_clear_y_, bg};
-        return paint_place_list(c, items_, n_items_, act_sel_, false, false,
-                                {first_, res_n_, tot_n_, thumb_sig_, row_sig_, body_n_, st}, noop_build_rows, nullptr);
-    }
-    return paint_empty_tabs(e.title, e.hint);
-}
-
-bool ConnectionPage::paint_empty_tabs(const char *title, const char *hint) {
     const Surface &c = ctx_.content;
     PaintBudget *const bg = ctx_.budget;
     const bool full = body_ != Body::Empty || body_tab_ != tab_;
     if (full) {
         body_ = Body::Empty; body_tab_ = tab_;
-        row_sig_.fill(0); body_n_ = 0; band_done_ = false;
-        tail_cleared_ = false; close_done_ = false; body_clear_y_ = kFooterY;
-        nopd_msg_sig_ = 0;
+        row_sig_.fill(0); body_n_ = 0; tail_cleared_ = ctx_.blank; close_done_ = false;
+        body_clear_y_ = kFooterY; id_sig_ = thumb_sig_ = 0;
     }
-    if (!paint_tab_indicator()) return false;   // the strip owns kBodyY .. kRowY0
-    const int16_t y0 = row_y0(), list_y = static_cast<int16_t>(y0 + kListDy);
-    if (!band_done_) {
-        if (bg && !bg->admit(static_cast<int>(c.w) * kBandH, true)) return false;
-        paint_band(c, y0, title);
-        band_done_ = true;
-    }
-    const uint32_t hsig = pg::mix_cstr(mix_u32(mix_init(), static_cast<uint32_t>(tab_)), hint) | 1u;
-    if (hsig != nopd_msg_sig_) {
-        if (bg && !bg->admit(static_cast<int>(c.w) * (list_y - y0 - kBandH), true)) return false;
-        const kit::TextRun line{kKeyX, static_cast<int16_t>(y0 + kLineDy), &kSmall, hint, kDim};
-        kit::paint_texts(c, {0, static_cast<int16_t>(y0 + kBandH), c.w, static_cast<int16_t>(list_y - y0 - kBandH)}, &line, 1, kBg);
-        nopd_msg_sig_ = hsig;
-    }
-    Rows R;
+    if (!paint_ident_dim(c, e.title, e.hint, id_sig_, bg)) return false;
     ListDrawState st{tail_cleared_, close_done_, body_clear_y_, bg};
-    int painted = 0;
-    return paint_list(c, R, list_y, false, ctx_.blank, row_sig_, body_n_, st, painted);
+    return paint_place_list(c, items_, n_items_, act_sel_, false, false,
+                            {first_, res_n_, tot_n_, thumb_sig_, row_sig_, body_n_, st}, noop_build_rows, nullptr);
 }
 
 bool ConnectionPage::paint_body(const MatchResult &r, const pd::SourceCaps &caps, std::span<const uint32_t> sink,
@@ -1376,9 +1405,11 @@ bool ConnectionPage::paint_body(const MatchResult &r, const pd::SourceCaps &caps
     d.in_use = link.inline_mode();
     d.vbus_mv = vbus_;
     d.vooc = vooc_;
+    d.iq_ok = iq_have_ && iq_session_ == fusb302::session() && fusb302::interrogate_status().phase != pd::IqPhase::Idle;
     const bool dim = tab_ == conn::Tab::Cable && link.cable_stale();
-    if (locked_) return paint_body_locked(&d, dim);
-    return paint_body_tabs(&d, dim);
+    const bool done = paint_body_locked(&d, dim);
+    if (done) g_conn_body_passes++;
+    return done;
 }
 
 bool ConnectionPage::paint_body_locked(const void *tab_data, bool dim) {
@@ -1398,47 +1429,15 @@ bool ConnectionPage::paint_body_locked(const void *tab_data, bool dim) {
                             {first_, res_n_, tot_n_, thumb_sig_, row_sig_, body_n_, st}, build_body_rows, &bctx);
 }
 
-bool ConnectionPage::paint_body_tabs(const void *tab_data, bool dim) {
-    const auto &d = *static_cast<const TabData *>(tab_data);
-    const Surface &c = ctx_.content;
-    PaintBudget *const bg = ctx_.budget;
-    Rows R;
-    switch (tab_) {
-    case conn::Tab::Source: if (more_) details_rows(R); else source_rows(R, d); break;
-    case conn::Tab::Cable: cable_rows(R, d); break;
-    case conn::Tab::Sink: sink_rows(R, d); break;
-    }
-    const int16_t y0 = row_y0();
-    // Fixed row slots (Row D): a whole-body pass only when the area was wiped or never drawn here (new tab,
-    // pop-up closed, empty state left). A row-count change no longer wipes: the vacated slots are cleared and
-    // the closing hairline moves; every other row keeps its slot and repaints alone when its hash changed.
-    const bool full = body_ != Body::Rows || body_tab_ != tab_;
-    if (full) {
-        body_ = Body::Rows; body_tab_ = tab_;
-        row_sig_.fill(0); body_n_ = 0; tail_cleared_ = ctx_.blank; close_done_ = false;
-        body_clear_y_ = kFooterY;
-    }
-    if (!paint_tab_indicator()) return false;
-    ListDrawState st{tail_cleared_, close_done_, body_clear_y_, bg};
-    int painted = 0;
-    const bool done = paint_list(c, R, y0, dim, ctx_.blank, row_sig_, body_n_, st, painted);   // the tabbed page never scrolls
-    if (done) {
-        g_conn_body_passes++;
-        K2LOG("[CONN] body full=%d rows=%d\n", full ? 1 : 0, painted);
-    }
-    return done;
-}
-
-// The no-PD body (ROADMAP 2026-11-10, Row C): the verdict band (NO PD) and the one line of its case, then only the rows
+// The no-PD body (ROADMAP 2026-11-10, Row C): the dim identity headline (NO PD) and its one line, then only the rows
 // that are actually measured - the Type-C advertisement (Rp level + VBUS), the draw on the Sink tab, a legacy fast-charge
-// answer on the Source tab - and a single tool's action rows. paint_body only calls this when the paint signature moved.
+// answer on the Source tab - and the place's action rows. paint_body only calls this when the paint signature moved.
 bool ConnectionPage::paint_no_pd_body(const MatchResult &r, bool) {
     const char *line = conn::no_pd_line(tab_, none_why_);
     // The measured rows (at most three). The Type-C row uses the match's Rp reading (the active CC line driven into the
     // Rp window counts even before typec_ma()'s 3 s mark).
     const uint32_t rp_ma = r.typec_ma ? r.typec_ma : fusb302::typec_ma();
-    if (locked_) return paint_no_pd_locked(line, rp_ma);
-    return paint_no_pd_tabs(line, rp_ma);
+    return paint_no_pd_locked(line, rp_ma);
 }
 
 bool ConnectionPage::paint_no_pd_locked(const char *line, uint32_t rp_ma) {
@@ -1457,86 +1456,17 @@ bool ConnectionPage::paint_no_pd_locked(const char *line, uint32_t rp_ma) {
                             {first_, res_n_, tot_n_, thumb_sig_, row_sig_, body_n_, st}, build_no_pd_rows, &bctx);
 }
 
-bool ConnectionPage::paint_no_pd_tabs(const char *line, uint32_t rp_ma) {
-    const Surface &c = ctx_.content;
-    PaintBudget *const bg = ctx_.budget;
-    Rows R;
-    const NoPdBuildCtx bctx{tab_, static_cast<fastcharge::Protocol>(ctx_.fc), ctx_.pm_avg.current_ma, vbus_, vooc_, rp_ma};
-    build_no_pd_rows(R, &bctx);
-    const int16_t y0 = row_y0(), list_y = static_cast<int16_t>(y0 + kListDy);
-    const bool full = body_ != Body::NoPd || body_tab_ != tab_;
-    if (full) {
-        body_ = Body::NoPd; body_tab_ = tab_;
-        row_sig_.fill(0); body_n_ = 0; band_done_ = false;
-        tail_cleared_ = ctx_.blank; close_done_ = false;
-        body_clear_y_ = kFooterY; nopd_msg_sig_ = 0;
-    }
-    if (!paint_tab_indicator()) return false;
-    // The verdict band and its one line, painted only when the line moved (a live draw must not repaint them).
-    uint32_t mh = pg::mix_cstr(mix_u32(2166136261u, uint32_t(tab_) | uint32_t(none_why_) << 4), line) | 1u;
-    if (mh != nopd_msg_sig_) {
-        if (!band_done_) {
-            if (bg && !bg->admit(static_cast<int>(c.w) * kBandH, true)) return false;
-            paint_band(c, y0, text::conn::kNoPd);
-            band_done_ = true;
-        }
-        if (bg && !bg->admit(static_cast<int>(c.w) * (list_y - y0 - kBandH), true)) return false;
-        const kit::TextRun lr{kKeyX, static_cast<int16_t>(y0 + kLineDy), &kSmall, line, kDim};
-        kit::paint_texts(c, {0, static_cast<int16_t>(y0 + kBandH), c.w, static_cast<int16_t>(list_y - y0 - kBandH)}, &lr, 1, kBg);
-        nopd_msg_sig_ = mh;
-    }
-    ListDrawState st{tail_cleared_, close_done_, body_clear_y_, bg};
-    int painted = 0;
-    const bool done = paint_list(c, R, list_y, false, ctx_.blank, row_sig_, body_n_, st, painted);
-    K2LOG("[CONN] body nopd rows=%d\n", R.n);
-    return done;
-}
-
-void ConnectionPage::popup_row(void *self, int index, bool, kit::RowSpec &out) {
-    const auto *p = static_cast<const ConnectionPage *>(self);
-    const conn::Item &it = p->items_[static_cast<std::size_t>(index)];
-    out.text = it.label;
-    out.text_color = it.enabled ? kText : kFaint;
-}
-
-void ConnectionPage::paint_popup(uint32_t now_ms) {
-    PaintBudget *const bg = ctx_.budget;
-    build_items();
-    if (!popup_drawn_) {
-        const Surface &c = ctx_.content;
-        if (body_ != Body::Popup) {
-            body_ = Body::Popup;
-            body_clear_y_ = locked_ ? kit::kBodyY : kRowY0;
-            if (ctx_.blank) body_clear_y_ = kFooterY;
-        }
-        if (!paint_tab_indicator()) return;
-        while (body_clear_y_ < kFooterY) {
-            const int16_t h = std::min<int16_t>(PaintBudget::kStripRows, static_cast<int16_t>(kFooterY - body_clear_y_));
-            if (bg && !bg->admit(static_cast<int>(c.w) * h, true)) return;
-            gfx_fill(c, 0, body_clear_y_, c.w, h, kBg);
-            body_clear_y_ = static_cast<int16_t>(body_clear_y_ + h);
-        }
-        ctx_.rows.init(c, kRowY0, popup_row, this);
-        ctx_.rows.invalidate();
-        popup_drawn_ = true;
-    }
-    ctx_.rows.set_count(n_items_);
-    ctx_.rows.select(popup_sel_);
-    ctx_.rows.draw(now_ms, bg);
-}
-
-// The bottom bar: what the last action says, else the state of the shown tab and the topology word. It goes
+// The bottom bar: what the last action says, else the state of the shown place and the topology word. It goes
 // through the footer cache, so a steady state writes nothing.
 void ConnectionPage::paint_status(uint32_t now_ms) {
     StrBuf<40> txt;
     FooterTone tone = FooterTone::Info;
     const pd::IdStatus &ids = fusb302::identify_status();
-    const int focus = locked_ ? (act_sel_ < 0 ? 0 : 1 + act_sel_) : popup_ ? popup_sel_ : -1;
+    const int focus = act_sel_ < 0 ? 0 : 1 + act_sel_;
     const bool focus_off = focus >= 0 && focus < n_items_ && !items_[static_cast<std::size_t>(focus)].enabled;
-    // The pop-up's or an action row's greyed item names why; the tool's own action says it only when OK is pressed (its
-    // reason would repeat the band: NO DEVICE / "No device seen").
-    const conn::Item *row = locked_ && act_sel_ >= 0 && focus < n_items_ ? &items_[static_cast<std::size_t>(focus)] : nullptr;
-    if (focus_off && (popup_ || act_sel_ >= 0)) {
+    // An action row's greyed item names why; the tool's own action says it only when OK is pressed.
+    const conn::Item *row = act_sel_ >= 0 && focus < n_items_ ? &items_[static_cast<std::size_t>(focus)] : nullptr;
+    if (focus_off && act_sel_ >= 0) {
         txt.put(items_[static_cast<std::size_t>(focus)].why);
         tone = row && row->act == conn::Act::Bench ? FooterTone::Error : FooterTone::Caution;   // a blocked tool, as on the Bench
     } else if (row && row->caution) {
@@ -1548,6 +1478,11 @@ void ConnectionPage::paint_status(uint32_t now_ms) {
             const std::string_view hint = bench::act_hint(b.a[row->arg]);
             if (!hint.empty()) txt.put_char(hint[0] >= 'a' && hint[0] <= 'z' ? static_cast<char>(hint[0] - 'a' + 'A') : hint[0]).put(hint.substr(1));
         }
+    } else if (tab_ == conn::Tab::Sink && fusb302::interrogate_running()) {
+        const pd::IqPhase p = fusb302::interrogate_status().phase;
+        txt.put(p == pd::IqPhase::Reset1 || p == pd::IqPhase::Sniff1 ? "Resetting link..."
+              : p == pd::IqPhase::Reset2 || p == pd::IqPhase::Sniff2 ? "Restoring link..."
+                                                                     : "Asking device...");
     } else if (ctx_.em_scanning) {
         txt.put("Reading cable...");
     } else if (before(now_ms, ctx_.em_listen_until)) {
@@ -1597,16 +1532,18 @@ void ConnectionPage::update(uint32_t now_ms) {
     title_badge(false);
     if (bg && bg->more) return;
     sense(now_ms);
-    if (locked_) {
-        build_items();   // the action rows and the OK verb follow the live state
-        if (act_sel_ + 1 >= n_items_) act_sel_ = n_items_ - 2;
+    if (iq_asked_ && !fusb302::interrogate_running()) {
+        iq_asked_ = false;
+        const pd::IqStatus &iq = fusb302::interrogate_status();
+        const char *msg = iq.why == pd::IqWhy::SourceResets ? "Charger resets"
+                        : iq.why == pd::IqWhy::SourceRestarts ? "Charger restarts"
+                        : iq.ok_mask != 0 ? "Device read" : "No answer";
+        set_op(msg, now_ms, 4000);
     }
+    build_items();   // the action rows and the OK verb follow the live state
+    if (act_sel_ + 1 >= n_items_) act_sel_ = n_items_ - 2;
     paint_status(now_ms);
     if (bg && bg->more) return;
-    if (popup_) {
-        paint_popup(now_ms);
-        return;
-    }
     // Cheap pre-check: hash only the inputs that can reach the screen -- link state, caps header fields,
     // the displayed contract fields (flags/accepted/ready/rejected/pos/mv/op_ma/max_ma drive the Request /
     // State / Used rows), sink/identify list headers, e-marker and VDM scalar fields, fc, analog D+/D-, the
@@ -1684,10 +1621,38 @@ void ConnectionPage::update(uint32_t now_ms) {
     c = mix_u32(c, uint32_t(cc1_));
     c = mix_u32(c, uint32_t(cc2_));
     c = mix_u32(c, uint32_t(vbus_));   // the Type-C row's VBUS (100 mV steps)
-    const uint32_t svs = survey_sig(more_);
+    const uint32_t svs = survey_sig(tab_ == conn::Tab::Source);
     c = mix_u32(c, svs);
+    const bool iq_ok = iq_have_ && iq_session_ == fusb302::session() && fusb302::interrogate_status().phase != pd::IqPhase::Idle;
+    uint32_t dev_sig = 2166136261u;
+    {
+        const pd::ExtInfo &ext = fusb302::ext();
+        dev_sig = mix_u32(dev_sig, uint32_t(ext.battery.valid) | uint32_t(ext.battery.invalid_ref) << 1
+                                 | uint32_t(ext.battery.design_dwh) << 16);
+        dev_sig = mix_u32(dev_sig, uint32_t(ext.battery.last_full_dwh)
+                                 | uint32_t(ext.battery_status.valid) << 16 | uint32_t(ext.battery_status.present) << 17
+                                 | uint32_t(ext.battery_status.invalid_ref) << 18 | uint32_t(ext.battery_status.charging) << 19);
+        dev_sig = mix_u32(dev_sig, ext.battery_status.present_dwh);
+        dev_sig = mix_u32(dev_sig, uint32_t(ext.mfr.valid) | uint32_t(ext.mfr.vid) << 8 | uint32_t(ext.mfr.pid) << 24);
+        dev_sig = pg::mix_cstr(dev_sig, ext.mfr.name, sizeof ext.mfr.name);
+        if (iq_ok) {
+            const pd::IqStatus &iq = fusb302::interrogate_status();
+            dev_sig = mix_u32(dev_sig, uint32_t(iq.phase) | uint32_t(iq.ok_mask) << 8 | uint32_t(iq.num_sink_pdos) << 24);
+            dev_sig = mix_u32(dev_sig, uint32_t(iq.num_epr_pdos) | uint32_t(iq.epr_partial) << 8
+                                     | uint32_t(iq.sink_ext_len) << 16 | uint32_t(iq.num_svids) << 24);
+            dev_sig = mix_u32(dev_sig, iq.revision);
+            dev_sig = mix_u32(dev_sig, uint32_t(iq.id.valid) | uint32_t(iq.id.vid) << 8 | uint32_t(iq.id.pid) << 16);
+            dev_sig = mix_u32(dev_sig, uint32_t(iq.battery.valid) | uint32_t(iq.battery.design_dwh) << 8
+                                     | uint32_t(iq.battery.last_full_dwh) << 24);
+            dev_sig = mix_u32(dev_sig, uint32_t(iq.battery_status.valid) | uint32_t(iq.battery_status.charging) << 4
+                                     | uint32_t(iq.battery_status.present_dwh) << 16);
+            dev_sig = mix_u32(dev_sig, uint32_t(iq.mfr.valid) | uint32_t(iq.mfr.vid) << 8);
+            dev_sig = pg::mix_cstr(dev_sig, iq.mfr.name, sizeof iq.mfr.name);
+        }
+    }
+    const uint32_t c_base = mix_u32(c, dev_sig);
     const uint32_t asig = actions_sig();
-    c = mix_u32(c, asig);
+    c = mix_u32(c_base, asig);
     if (!body_pending_ && sig_valid_ && c == cheap_sig_) return;   // nothing changed: skip match_live + the full sig
     const bool inputs_changed = !match_valid_ || c != cheap_sig_;
     cheap_sig_ = c;
@@ -1729,7 +1694,7 @@ void ConnectionPage::update(uint32_t now_ms) {
     }
     const MatchResult &r = g_last_match;
     const pd::SourceCaps *caps = &g_book.caps;   // filled by match_live above
-    const WantsList wl = wants_now();
+    const WantsList wl = wants_now(iq_ok);
     const std::span<const uint32_t> sink = wl.pdos;
 
     uint32_t h = 2166136261u;
@@ -1756,6 +1721,8 @@ void ConnectionPage::update(uint32_t now_ms) {
         const usblink::Link ul = fusb302::usb_link(dp_, dm_);   // debounced levels (Row D)
         h = mix_u32(h, uint32_t(em.valid) | uint32_t(em.is_active) << 1 | uint32_t(em.vid) << 8 | uint32_t(em.raw_vdos[4]) << 24);
         h = mix_u32(h, em.raw_vdos[4] | uint32_t(em.max_power_w) << 8 | uint32_t(em.sop) << 24);
+        h = mix_u32(h, fusb302::cable_seq());
+        h = mix_u32(h, uint32_t(fusb302::identify_current()));
         h = mix_u32(h, uint32_t(id.valid) | uint32_t(id.vid) << 8 | uint32_t(id.pid) << 16);
         h = mix_u32(h, id.id_header);
         const pd::Identity &sid = snk.identity;
@@ -1768,11 +1735,14 @@ void ConnectionPage::update(uint32_t now_ms) {
         h = mix_u32(h, uint32_t(ul.dp_adv) | uint32_t(ul.tbt_adv) << 1 | uint32_t(ul.dp_2lane) << 2 | uint32_t(ul.dp_4lane) << 3);
         h = mix_u32(h, fc_ | uint32_t(fusb302::self_powered()) << 8 | uint32_t(fusb302::pin_rd() == 1) << 9);
         h = mix_u32(h, vooc_);   // the Sink tab's raw VOOC note (sampled every kVoocNoteMs)
+        h = mix_u32(h, dev_sig);
     }
     if (!body_pending_ && sig_valid_ && h == sig_) return;
     const bool redraw = !sig_valid_;   // invalidated (page entered, tab, pop-up closed, repaint pass): the area is stale
     body_pending_ = true;
-    if (paint_body(r, *caps, sink, redraw)) {
+    const bool painted_all = paint_body(r, *caps, sink, redraw);
+    cheap_sig_ = mix_u32(c_base, actions_sig());   // reflect any scroll clamping done by place_first() during paint
+    if (painted_all) {
         sig_ = h;
         sig_valid_ = true;
         body_pending_ = false;

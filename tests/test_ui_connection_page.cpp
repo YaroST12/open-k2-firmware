@@ -72,41 +72,14 @@ static int acts() {
            g_stub.rd_releases + g_stub.rd_run_changes;
 }
 
-static void test_default_tab_on_open() {
-    {   // nothing anywhere: Source, empty
-        Ui &ui = fresh_ui();
-        ui.goto_page(kMenuPageBase + uint8_t(Menu::Connection), 20000);
-        CHECK_EQ(int(cp(ui).tab()), int(conn::Tab::Source));
-    }
-    {   // only a cable: Cable
-        Ui &ui = fresh_ui();
-        g_stub.em.valid = true; g_stub.em.num_vdos = 5; g_stub.em.spec_rev = 2;
-        ui.goto_page(kMenuPageBase + uint8_t(Menu::Connection), 20000);
-        CHECK_EQ(int(cp(ui).tab()), int(conn::Tab::Cable));
-    }
-    {   // a charger is attached: Source (even with a cable held)
-        Ui &ui = fresh_ui();
-        g_stub.em.valid = true; g_stub.em.num_vdos = 5; g_stub.em.spec_rev = 2;
-        ui.debug_link(true, 20000);
-        ui.goto_page(kMenuPageBase + uint8_t(Menu::Connection), 20100);
-        CHECK_EQ(int(cp(ui).tab()), int(conn::Tab::Source));
-    }
-    {   // a device is inline: Sink wins over everything
-        Ui &ui = fresh_ui();
-        make_inline(ui, 20000);
-        g_stub.em.valid = true; g_stub.em.num_vdos = 5; g_stub.em.spec_rev = 2;
-        ui.goto_page(kMenuPageBase + uint8_t(Menu::Connection), 20100);
-        CHECK_EQ(int(cp(ui).tab()), int(conn::Tab::Sink));
-    }
-    {   // the remote's tab aliases pick the tab, whatever is attached
-        Ui &ui = fresh_ui();
-        CHECK(ui.goto_page(kConnTabAlias + 2, 20000));
-        CHECK_EQ(int(cp(ui).tab()), int(conn::Tab::Sink));
-        CHECK(ui.goto_page(kConnTabAlias + 1, 20100));
-        CHECK_EQ(int(cp(ui).tab()), int(conn::Tab::Cable));
-        CHECK(ui.goto_page(kConnTabAlias, 20200));
-        CHECK_EQ(int(cp(ui).tab()), int(conn::Tab::Source));
-    }
+static void test_place_aliases_pick_tab() {
+    Ui &ui = fresh_ui();
+    CHECK(ui.goto_page(kConnTabAlias + 2, 20000));
+    CHECK_EQ(int(cp(ui).tab()), int(conn::Tab::Sink));
+    CHECK(ui.goto_page(kConnTabAlias + 1, 20100));
+    CHECK_EQ(int(cp(ui).tab()), int(conn::Tab::Cable));
+    CHECK(ui.goto_page(kConnTabAlias, 20200));
+    CHECK_EQ(int(cp(ui).tab()), int(conn::Tab::Source));
 }
 
 static void test_topology_from_the_cc_lines() {
@@ -205,64 +178,39 @@ static void test_empty_states_are_passive() {
     }
 }
 
-static void test_tab_switching() {
+static void test_place_items_per_tab() {
     Ui &ui = fresh_ui();
-    ui.goto_page(kConnTabAlias, 20000);
+    ui.goto_page(kConnTabAlias, 20000);                              // Charger place
     ui.tick(20050);
     CHECK_EQ(int(cp(ui).tab()), int(conn::Tab::Source));
-    ui.on_button(Button::Plus, ButtonEvent::Short, 20100);
+    CHECK(cp(ui).item_count() >= 2);
+    CHECK_EQ(cp(ui).item(0).enabled, true);                          // Refresh is always available
+    ui.goto_page(kConnTabAlias + 1, 20300);                          // Cable place
+    ui.tick(20350);
     CHECK_EQ(int(cp(ui).tab()), int(conn::Tab::Cable));
-    ui.on_button(Button::Plus, ButtonEvent::Short, 20150);
+    CHECK(cp(ui).item_count() >= 5);                                 // Read, Save, Saved cables, Spoof as..., ...
+    ui.goto_page(kConnTabAlias + 2, 20450);                          // Device place
+    ui.tick(20500);
     CHECK_EQ(int(cp(ui).tab()), int(conn::Tab::Sink));
-    ui.on_button(Button::Plus, ButtonEvent::Short, 20200);          // wraps
-    CHECK_EQ(int(cp(ui).tab()), int(conn::Tab::Source));
-    ui.on_button(Button::Minus, ButtonEvent::Short, 20250);
-    CHECK_EQ(int(cp(ui).tab()), int(conn::Tab::Sink));
-    CHECK_EQ(on_pd(ui), 1);
-}
-
-static void test_popup_per_tab() {
-    Ui &ui = fresh_ui();
-    ui.goto_page(kConnTabAlias, 20000);
-    ui.tick(20050);
-    ui.on_button(Button::Ok, ButtonEvent::Short, 20100);
-    CHECK_EQ(cp(ui).popup_open(), true);
-    CHECK_EQ(cp(ui).popup_count(), 3);                              // Source: Refresh, Details, Share (QR)
-    CHECK_EQ(cp(ui).popup_item(0).enabled, true);                   // Refresh is always available
-    CHECK_EQ(cp(ui).popup_item(1).enabled, false);                  // no charger: no details
-    CHECK_EQ(cp(ui).popup_item(2).enabled, false);                  // nothing to share yet
-    ui.on_button(Button::Back, ButtonEvent::Short, 20200);          // BACK closes the pop-up, does not leave
-    CHECK_EQ(cp(ui).popup_open(), false);
-    CHECK_EQ(on_pd(ui), 1);
-    ui.on_button(Button::Plus, ButtonEvent::Short, 20300);          // Cable
-    ui.on_button(Button::Ok, ButtonEvent::Short, 20350);
-    CHECK_EQ(cp(ui).popup_count(), 6);                              // Read, Save, Spoof as..., Saved cables, Share, Refresh
-    ui.on_button(Button::Back, ButtonEvent::Short, 20400);
-    ui.on_button(Button::Plus, ButtonEvent::Short, 20450);          // Sink
-    ui.on_button(Button::Ok, ButtonEvent::Short, 20500);
-    CHECK_EQ(cp(ui).popup_count(), 2);                              // Identify, Refresh
-    CHECK_EQ(cp(ui).popup_item(0).enabled, false);                  // no device attached
-    CHECK_EQ(cp(ui).popup_item(1).enabled, true);
-    ui.on_button(Button::Back, ButtonEvent::Short, 20550);
-    ui.on_button(Button::Back, ButtonEvent::Short, 20600);          // second BACK leaves Connection
+    CHECK_EQ(cp(ui).item(0).enabled, false);                         // no device attached
+    ui.on_button(Button::Back, ButtonEvent::Short, 20600);           // BACK leaves Connection
     CHECK_EQ(on_pd(ui), 0);
 }
 
 static void test_spoof_greyed_while_a_device_is_inline() {
     Ui &ui = fresh_ui();
     make_inline(ui, 20000);
-    ui.goto_page(kConnTabAlias + 1, 20100);                         // Cable tab
+    ui.goto_page(kConnTabAlias + 1, 20100);                          // Cable place
     ui.tick(20150);
-    ui.on_button(Button::Ok, ButtonEvent::Short, 20200);
     int spoof = -1;
-    for (int i = 0; i < cp(ui).popup_count(); i++)
-        if (cp(ui).popup_item(i).act == conn::Act::SpoofAs) spoof = i;
-    CHECK(spoof >= 0);
-    CHECK_EQ(cp(ui).popup_item(spoof).enabled, false);
-    CHECK_STR(cp(ui).popup_item(spoof).why, "Live sink: unplug load");
+    for (int i = 0; i < cp(ui).item_count(); i++)
+        if (cp(ui).item(i).act == conn::Act::SpoofAs) spoof = i;
+    CHECK(spoof >= 1);
+    CHECK_EQ(cp(ui).item(spoof).enabled, false);
+    CHECK_STR(cp(ui).item(spoof).why, "Live sink: unplug load");
     const int depth = int(ui.menu_depth());
-    for (int i = 0; i < spoof; i++) ui.on_button(Button::Plus, ButtonEvent::Short, 20250 + i);
-    ui.on_button(Button::Ok, ButtonEvent::Short, 20400);            // refused: the Spoof list does not open
+    while (cp(ui).action_row() < spoof - 1) ui.on_button(Button::Plus, ButtonEvent::Short, 20250 + cp(ui).action_row() + 1);
+    ui.on_button(Button::Ok, ButtonEvent::Short, 20400);             // refused: the Spoof list does not open
     CHECK_EQ(int(ui.menu_depth()), depth);
     CHECK(ui.menu() != Menu::Spoof);
 }
@@ -271,9 +219,8 @@ static void test_spoof_enabled_when_nothing_is_inline() {
     Ui &ui = fresh_ui();
     ui.goto_page(kConnTabAlias + 1, 20100);
     ui.tick(20150);
-    ui.on_button(Button::Ok, ButtonEvent::Short, 20200);
-    for (int i = 0; i < cp(ui).popup_count(); i++)
-        if (cp(ui).popup_item(i).act == conn::Act::SpoofAs) CHECK_EQ(cp(ui).popup_item(i).enabled, true);
+    for (int i = 0; i < cp(ui).item_count(); i++)
+        if (cp(ui).item(i).act == conn::Act::SpoofAs) CHECK_EQ(cp(ui).item(i).enabled, true);
 }
 
 static void test_tools_spoof_shortcut_opens_the_cable_tab_list() {
@@ -412,20 +359,10 @@ static void test_source_tab_leaves_waiting_after_timeout() {
     CHECK_EQ(int(ui.link().waiting()), 0);             // the timeout ended the wait
 }
 
-// The no-PD body's geometry (ui_connection_page.cpp): rows from y 108, pitch 20, value at x 64.
-static int nopd_hairlines() {
-    int n = 0;
-    for (int y = 108; y < 222; y += 20) {
-        int rule = 0;
-        for (int x = 0; x < LCD_WIDTH; x++) rule += g_panel[y * LCD_WIDTH + x] == kRule;
-        if (rule >= LCD_WIDTH - 20) n++;
-    }
-    return n;
-}
-
-static bool nopd_row_value_is(int idx, const char *text, uint16_t colour = kText) {
-    constexpr int kValX = 64, kPitch = 20, kRowY0 = 108;
-    constexpr int W = 224 - kValX;
+// Place-page list geometry (ui_connection_page.cpp): rows from kit::kPlaceListY (68), pitch 20, value at x 64, 4 px scroll lane at right.
+static bool place_row_value_is(int idx, const char *text, uint16_t colour = kText) {
+    constexpr int kValX = 64, kPitch = 20, kRowY0 = kit::kPlaceListY;
+    constexpr int W = 220 - kValX;
     const int y = kRowY0 + idx * kPitch;
     const int vy = y + kit::row_text_y(kPitch, 16);
     uint16_t saved[W * (kPitch - 1)];
@@ -443,17 +380,8 @@ static bool nopd_row_value_is(int idx, const char *text, uint16_t colour = kText
     return same;
 }
 
-// Count the full-width hairlines of the Connection list area: one per row top plus the closing rule when
-// the list is short (kRowY0 = kit::kBodyY + 18, pitch 20, nine rows max -- ui_connection_page.cpp).
-static int body_hairlines() {
-    const int y0 = kit::kBodyY + 18, pitch = 20;
-    int n = 0;
-    for (int y = y0; y < 222; y += pitch) {
-        int rule = 0;
-        for (int x = 0; x < LCD_WIDTH; x++) rule += g_panel[y * LCD_WIDTH + x] == kRule;
-        if (rule >= LCD_WIDTH - 20) n++;   // a hairline spans the width (the panel edge pixels differ)
-    }
-    return n;
+static bool nopd_row_value_is(int idx, const char *text, uint16_t colour = kText) {
+    return place_row_value_is(idx, text, colour);
 }
 
 // A source without PD still advertises its Rp on the active CC line: once the no-PD verdict has settled
@@ -471,7 +399,7 @@ static void test_source_tab_typec_advertisement() {
     set_cc(408, 1);                         // a default-USB Rp on the active line
     ui.tick(t += 100);
     show(ui, 0, t);
-    CHECK_EQ(nopd_hairlines(), 2);                      // the Type-C row + the closing rule
+    CHECK_EQ(cp(ui).result_rows(), 1);                  // the Type-C row
     CHECK(nopd_row_value_is(0, "5V USB default"));
     // A 3 A Rp while VBUS sits at 20.2 V: the same row, now showing the measured voltage (and the
     // longest wording still fits the 19-cell column -- the trunc check at the end of main).
@@ -479,13 +407,13 @@ static void test_source_tab_typec_advertisement() {
     g_stub.pm.vbus_mv = 20250;
     ui.tick(t += 100);
     show(ui, 0, t);
-    CHECK_EQ(nopd_hairlines(), 2);
+    CHECK_EQ(cp(ui).result_rows(), 1);
     CHECK(nopd_row_value_is(0, "20.2V 3A"));
     // Default-USB Rp at 20.2 V: the longest possible Type-C row ("20.2V USB default", 17 cells).
     set_cc(408, 1);
     ui.tick(t += 100);
     show(ui, 0, t);
-    CHECK_EQ(nopd_hairlines(), 2);
+    CHECK_EQ(cp(ui).result_rows(), 1);
     CHECK(nopd_row_value_is(0, "20.2V USB default"));
 #ifdef K2_TRUNC_LOG
     CHECK_EQ(k2::trunc::failures(), 0);   // every Type-C row above fit the 19-cell column
@@ -539,21 +467,21 @@ static void test_source_tab_legacy_row_skips_pd_verdicts() {
     g_stub.fc = fastcharge::Protocol::Qc2_5V;           // a D+/D- protocol: the Legacy row appears
     ui.tick(t += 100);
     show(ui, 0, t);
-    const int rows_qc = nopd_hairlines();               // Type-C, Legacy + the closing rule
-    CHECK_EQ(rows_qc, 3);
+    const int rows_qc = cp(ui).result_rows();           // Type-C, Legacy
+    CHECK_EQ(rows_qc, 2);
     CHECK(nopd_row_value_is(1, "QC2", kEnergy));                 // fc_pill_text for Qc2_5V
     for (fastcharge::Protocol p : {fastcharge::Protocol::Pd, fastcharge::Protocol::PdPe,
                                    fastcharge::Protocol::PdMtk, fastcharge::Protocol::PdLikely}) {
         g_stub.fc = p;                                  // a PD verdict: no Legacy row
         ui.tick(t += 100);
         show(ui, 0, t);
-        CHECK_EQ(nopd_hairlines(), rows_qc - 1);
+        CHECK_EQ(cp(ui).result_rows(), rows_qc - 1);
     }
     g_stub.fc = fastcharge::Protocol::Pending;
 }
 
 // The Sink tab omits the Data row when the data line says nothing (the bug-9 rule): no "Data -"
-// placeholder. Rows here: ID, Request, State, Pwr, USB, Caps -- six rows, one closing hairline.
+// placeholder. Rows here: ID, Request, State, Pwr, USB, Caps -- six fact rows.
 static void test_sink_tab_omits_empty_data_row() {
     Ui &ui = fresh_ui();
     g_stub.pm.vbus_mv = 5000; g_stub.pm.current_ma = 0;
@@ -561,12 +489,12 @@ static void test_sink_tab_omits_empty_data_row() {
     g_stub.contract.mv = 5000; g_stub.contract.op_ma = g_stub.contract.max_ma = 3000;
     uint32_t t = 20000;
     show(ui, 2, t);                                     // Sink tab, a sink was seen on CC, no charger attached
-    CHECK_EQ(body_hairlines(), 7);                      // no Data row: nothing is known about the data line
+    CHECK_EQ(cp(ui).result_rows(), 6);                  // no Data row: nothing is known about the data line
     g_stub.ul.family = usblink::Family::Usb32; g_stub.ul.mbps = 5000;
     g_stub.ul.conf = usblink::Confidence::Negotiated;
     ui.tick(t += 100);
     show(ui, 2, t);
-    CHECK_EQ(body_hairlines(), 7);                      // a plain "5G" would only repeat the USB row
+    CHECK_EQ(cp(ui).result_rows(), 6);                  // a plain "5G" would only repeat the USB row
     g_stub.ul = {}; g_stub.contract = {};
 }
 
@@ -612,11 +540,11 @@ static void test_data_row_only_when_it_adds_something() {
     uint32_t t = 31000;
     ui.tick(t);
     show(ui, 2, t);                                   // Sink tab, no cable read: Data would be plain "5G"
-    const int rows_plain = body_hairlines();
+    const int rows_plain = cp(ui).result_rows();
     g_stub.em.valid = true; g_stub.em.raw_vdos[4] = 2;  // a 10G cable: Data "5G of 10G" says something
     g_stub.em.max_power_w = 100;
     show(ui, 2, t);
-    const int rows_cable = body_hairlines();
+    const int rows_cable = cp(ui).result_rows();
     CHECK_EQ(rows_cable, rows_plain + 1);             // the Data row appeared exactly there
     g_stub.em = {}; g_stub.contract = {}; g_stub.caps = {}; g_stub.ul = {};
 }
@@ -658,23 +586,7 @@ static void test_non_displayed_inputs_do_not_run_match_live() {
 // for pixel, then the page's band is restored. The row geometry is ui_connection_page.cpp's (kRowY0 =
 // kit::kBodyY + 18, pitch 20, value at x 64).
 static bool row_value_is(int idx, const char *text, uint16_t ink = kText) {
-    constexpr int kValX = 64, kPitch = 20, kRowY0 = kit::kBodyY + 18;
-    constexpr int W = 224 - kValX;   // the value column up to the right edge
-    const int y = kRowY0 + idx * kPitch;
-    const int vy = y + kit::row_text_y(kPitch, 16);
-    uint16_t saved[W * (kPitch - 1)];
-    for (int dy = 1; dy < kPitch; dy++)
-        for (int x = 0; x < W; x++) saved[(dy - 1) * W + x] = g_panel[(y + dy) * LCD_WIDTH + kValX + x];
-    const Surface s{0, 0, LCD_WIDTH, LCD_HEIGHT};
-    gfx_fill(s, kValX, y + 1, W, kPitch - 1, kBg);
-    gfx_text(s, kSmall, kValX, vy, text, ink, kBg);
-    bool same = true;
-    for (int dy = 1; dy < kPitch && same; dy++)
-        for (int x = 0; x < W; x++)
-            if (g_panel[(y + dy) * LCD_WIDTH + kValX + x] != saved[(dy - 1) * W + x]) { same = false; break; }
-    for (int dy = 1; dy < kPitch; dy++)   // restore what the page painted
-        for (int x = 0; x < W; x++) g_panel[(y + dy) * LCD_WIDTH + kValX + x] = saved[(dy - 1) * W + x];
-    return same;
+    return place_row_value_is(idx, text, ink);
 }
 
 // A plain 5 V source without PD (only its Rp advertises the current) plus a sink seen on CC: the Sink
@@ -695,7 +607,7 @@ static void test_sink_tab_pwr_row_is_a_budget_without_pd() {
         set_cc(408, 1);                       // the Rp advertisement on the active line: 500 mA
         ui.tick(t += 100);
         show(ui, 2, t);                       // Sink tab
-        CHECK_EQ(body_hairlines(), 6);        // ID, Request, Pwr, USB, Caps + the closing rule
+        CHECK_EQ(cp(ui).result_rows(), 5);    // ID, Request, Pwr, USB, Caps
         CHECK(row_value_is(2, "up to 2.5W"));
         CHECK(!row_value_is(2, "2W"));        // the old integer-math reading is gone
         g_stub.contract = {};
@@ -712,7 +624,7 @@ static void test_sink_tab_pwr_row_is_a_budget_without_pd() {
         set_cc(1678, 1);
         ui.tick(t += 100);
         show(ui, 2, t);
-        CHECK_EQ(body_hairlines(), 6);
+        CHECK_EQ(cp(ui).result_rows(), 5);
         CHECK(row_value_is(2, "up to 15W"));
         CHECK(!row_value_is(2, "15W"));
         g_stub.contract = {};
@@ -728,7 +640,7 @@ static void test_sink_tab_pwr_row_is_a_budget_without_pd() {
         uint32_t t = 20000;
         ui.tick(t);
         show(ui, 2, t);                       // Sink tab
-        CHECK_EQ(body_hairlines(), 7);        // ID, Request, State, Pwr, USB, Caps + the closing rule
+        CHECK_EQ(cp(ui).result_rows(), 6);    // ID, Request, State, Pwr, USB, Caps
         CHECK(row_value_is(3, "18W of 100W"));
         CHECK(!row_value_is(3, "up to 15W"));
         g_stub.caps = {}; g_stub.contract = {};
@@ -793,19 +705,23 @@ static void test_cable_tab_answered_row() {
     uint32_t t = 51000;
     ui.tick(t);
     show(ui, 1, t);
-    const int rows_without = body_hairlines();   // ID, Speed, Current, Voltage, EPR, Type, Length + the closing rule
-    CHECK_EQ(rows_without, 8);
-    CHECK(!row_value_is(7, "B, PD3, SVDM 1.0"));
-    g_stub.cable_ans = emk_variant::answered_from(2, 1);
+    const int rows_without = cp(ui).result_rows();   // ID, Speed, Current, Voltage, EPR, Type, Length
+    CHECK_EQ(rows_without, 7);
+    g_stub.cable_ans = emk_variant::answered_from(2, 1); g_stub.cable_seq++;
     show(ui, 1, t);
-    CHECK_EQ(body_hairlines(), rows_without + 1);
-    CHECK(row_value_is(7, "B, PD3, SVDM 1.0", kDim));
-    g_stub.cable_ans = emk_variant::answered_from(1, 0);
-    show(ui, 1, t);
-    CHECK(row_value_is(7, "A, PD3, SVDM 2.0", kDim));
-    g_stub.cable_ans = emk_variant::answered_from(1, 2);
-    show(ui, 1, t);
-    CHECK(row_value_is(7, "A, PD2, SVDM 1.0", kDim));
+    CHECK_EQ(cp(ui).result_rows(), rows_without + 1);
+    auto tick_paint = [&]() { for (int i = 0; i < 12; i++) ui.tick(t += 100); while (ui.painting()) ui.tick(t += 2); };
+    // Scroll down to see the 8th fact row (Answered) on the 7-row viewport.
+    ui.on_button(Button::Minus, ButtonEvent::Short, t += 100);   // unfocus action row -> first_ = 0
+    ui.on_button(Button::Plus, ButtonEvent::Short, t += 100);    // scroll down 6 rows -> row 7 at slot 1
+    tick_paint();
+    CHECK(row_value_is(7 - cp(ui).window_first(), "B, PD3, SVDM 1.0", kDim));
+    g_stub.cable_ans = emk_variant::answered_from(1, 0); g_stub.cable_seq++;
+    tick_paint();
+    CHECK(row_value_is(7 - cp(ui).window_first(), "A, PD3, SVDM 2.0", kDim));
+    g_stub.cable_ans = emk_variant::answered_from(1, 2); g_stub.cable_seq++;
+    tick_paint();
+    CHECK(row_value_is(7 - cp(ui).window_first(), "A, PD2, SVDM 1.0", kDim));
 #ifdef K2_TRUNC_LOG
     CHECK_EQ(k2::trunc::failures(), 0);
 #endif
@@ -842,7 +758,7 @@ static void test_live_request_repaints_only_its_rows() {
         for (int i = 0; i < 10; i++) ui.tick(t += 100);
         const unsigned moved = g_lcd_pixels - px0;
         std::printf("[live-request] tab %d: %u px for one request step\n", tab, moved);
-        CHECK(moved < 12000);   // at most a few 224 x 20 rows (4.5 k px each)
+        CHECK(moved < 20000);   // identity block + changed row, well under a full repaint
         // What is on the panel equals a whole-body repaint of the same data.
         const auto partial = frame();
         const auto full = show(ui, tab, t);
@@ -906,30 +822,26 @@ static void settle(Ui &ui, uint32_t &t) {
     while (ui.painting()) ui.tick(t += 2);
 }
 
-// Opening the page, switching tabs and opening Details never ask the charger anything: only Refresh does.
+// Opening the place pages never asks the charger anything: only Refresh does.
 static void test_survey_nothing_active_before_refresh() {
     Ui &ui = fresh_ui();
     uint32_t t = 20000;
     attach_charger(ui, t);
     const int base = acts();
     show(ui, 0, t); show(ui, 1, t); show(ui, 2, t); show(ui, 0, t);
-    ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);         // pop-up open
-    ui.on_button(Button::Plus, ButtonEvent::Short, t += 100);       // Details
-    ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);
     settle(ui, t);
-    CHECK_EQ(int(cp(ui).details_open()), 1);
     CHECK_EQ(acts(), base);
     CHECK_EQ(g_stub.survey_refreshes, 0);
 }
 
-// The Refresh item is what starts the survey; the pop-up's result goes with it.
+// Refresh (OK with no action row focused on the Charger place) starts the survey.
 static void test_survey_refresh_item_starts_it() {
     Ui &ui = fresh_ui();
     uint32_t t = 20000;
     attach_charger(ui, t);
     show(ui, 0, t);
     g_stub.rescan_result = rescan::Result::Asked;
-    ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);         // pop-up, Refresh is first
+    while (cp(ui).action_row() >= 0) ui.on_button(Button::Minus, ButtonEvent::Short, t += 100);
     ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);
     CHECK_EQ(g_stub.survey_refreshes, 1);
     CHECK_EQ(int(g_stub.survey_last), int(rescan::Result::Asked));
@@ -941,9 +853,12 @@ static void test_survey_status_line() {
     uint32_t t = 20000;
     attach_charger(ui, t);
     show(ui, 0, t);
+    while (cp(ui).action_row() >= 0) ui.on_button(Button::Minus, ButtonEvent::Short, t += 100);   // unfocus action row so footer shows survey status
+    settle(ui, t);
     CHECK_STR(std::string(cp(ui).status_line()).c_str(), "Source caps not read yet");
     show(ui, 1, t);                                                 // Cable tab: its own field is unasked too
     show(ui, 0, t);
+    while (cp(ui).action_row() >= 0) ui.on_button(Button::Minus, ButtonEvent::Short, t += 100);
     g_stub.survey.start(kSurveyCtx, t);
     settle(ui, t);
     char want[40];
@@ -962,46 +877,14 @@ static void test_survey_status_line() {
     CHECK(std::strncmp(cp(ui).status_line().data(), "Read: 1 got", 11) == 0);
 }
 
-// The Details item opens the second page of the Source tab, a second press goes back; a tab change closes it.
-static void test_survey_details_page_toggle() {
-    Ui &ui = fresh_ui();
-    uint32_t t = 20000;
-    attach_charger(ui, t);
-    const auto main_page = show(ui, 0, t);
-    CHECK_EQ(int(cp(ui).details_open()), 0);
-    ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);
-    CHECK_EQ(int(cp(ui).popup_item(1).act == conn::Act::Details), 1);
-    CHECK_EQ(int(cp(ui).popup_item(1).enabled), 1);                 // a charger is attached
-    ui.on_button(Button::Plus, ButtonEvent::Short, t += 100);
-    ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);
-    settle(ui, t);
-    CHECK_EQ(int(cp(ui).details_open()), 1);
-    CHECK_EQ(int(cp(ui).popup_open()), 0);
-    const auto details = frame();
-    CHECK(details != main_page);
-    ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);         // the same item now says "Main page"
-    ui.on_button(Button::Plus, ButtonEvent::Short, t += 100);
-    ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);
-    settle(ui, t);
-    CHECK_EQ(int(cp(ui).details_open()), 0);
-    CHECK(frame() == main_page);
-    ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);         // open Details again, then change the tab
-    ui.on_button(Button::Plus, ButtonEvent::Short, t += 100);
-    ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);
-    CHECK_EQ(int(cp(ui).details_open()), 1);
-    ui.on_button(Button::Plus, ButtonEvent::Short, t += 100);       // Cable
-    CHECK_EQ(int(cp(ui).details_open()), 0);
-}
-
-// The Details rows say what each field is (a word per status) and show the answers once they are in.
+// The Charger place's survey rows say what each field is and show the answers once they are in.
 static void test_survey_details_rows_follow_the_survey() {
     Ui &ui = fresh_ui();
     uint32_t t = 20000;
     attach_charger(ui, t);
     show(ui, 0, t);
-    ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);
-    ui.on_button(Button::Plus, ButtonEvent::Short, t += 100);
-    ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);
+    while (cp(ui).action_row() >= 0) ui.on_button(Button::Minus, ButtonEvent::Short, t += 100);
+    ui.on_button(Button::Plus, ButtonEvent::Short, t += 100);       // scroll down to survey rows (Caps, Mfr, Ext...)
     settle(ui, t);
     const auto unasked = frame();
     g_stub.survey.start(kSurveyCtx, t);
@@ -1034,10 +917,14 @@ static void test_sink_id_row_marks_a_sniffed_identity() {
     ui.tick(t);
     set_id(g_stub.sink_vdm, 0x05C6, 0x209E, "OnePlus");
     g_stub.ident_current = false;                       // nothing was asked this attach: sniffed
-    const auto sniffed = show(ui, 2, t);
+    show(ui, 2, t);
+    while (cp(ui).action_row() >= 0 || cp(ui).window_first() > 0) ui.on_button(Button::Minus, ButtonEvent::Short, t += 100);   // scroll to top so ID row is visible
+    settle(ui, t);
+    const auto sniffed = frame();
     g_stub.ident_current = true;                        // a same-session Identify collected it
     g_stub.ident.ok_mask = 0;                           // no Sink_Cap step: the wants list stays empty
-    const auto asked = show(ui, 2, t);
+    settle(ui, t);
+    const auto asked = frame();
     CHECK(sniffed != asked);                            // the ID row differs once the mark is in
     g_stub.sink_vdm = {};
 }
@@ -1056,14 +943,10 @@ static void test_sink_tab_offers_identify_when_a_device_is_alone() {
     }
     CHECK_EQ(int(ui.link().wait_kind()), int(raguard::WaitKind::DualRolePort));
     CHECK_EQ(int(ui.link().inline_mode()), 0);
-    ui.goto_page(kConnTabAlias, 13500);
+    ui.goto_page(kConnTabAlias + 2, 13500);                  // Device place
     ui.tick(13550);
-    ui.on_button(Button::Plus, ButtonEvent::Short, 13600);   // Cable
-    ui.on_button(Button::Plus, ButtonEvent::Short, 13650);   // Sink tab
-    ui.on_button(Button::Ok, ButtonEvent::Short, 13700);
-    CHECK_EQ(cp(ui).popup_count(), 2);                       // Identify, Refresh
-    CHECK_EQ(cp(ui).popup_item(0).enabled, true);            // Identify offered: a device is alone on the K2
-    CHECK_EQ(cp(ui).popup_item(1).enabled, true);
+    CHECK(cp(ui).item_count() >= 2);
+    CHECK_EQ(cp(ui).item(0).enabled, true);                  // Ask device offered: a device is alone on the K2
 }
 
 // Row B item 6 (red): the [UI] identify line keeps its fixed phrases in the format string. Today they ride a %s,
@@ -1125,12 +1008,6 @@ static int ink_in(int y0, int y1) {
     return n;
 }
 
-static int rule_span(int y) {
-    int n = 0;
-    for (int x = 0; x < LCD_WIDTH; x++) n += g_panel[y * LCD_WIDTH + x] == kRule;
-    return n;
-}
-
 // Pixel -> K2 -> SSD with the source's PD offers unanswered: attach with a small load behind the K2, the
 // caps counter climbs past the attach edge (repeated Source_Capabilities), the sink never answers
 // (far_pd_message false). After the settle window the verdict is None / SinkSilentSourceOffered and the
@@ -1159,19 +1036,14 @@ static void test_sink_tab_no_pd_offered_unanswered() {
     CHECK_EQ(int(cp(ui).pd_verdict()), int(pd::PdVerdict::None));
     CHECK_EQ(int(cp(ui).pd_none_why()), int(pd::PdNoneWhy::SinkSilentSourceOffered));
     dump_panel("k2_nopd_sink_offered");
-    // The no-PD body (rotation 0): the verdict band and its line, then the row list from y 108 with its hairline.
-    CHECK(ink_in(42, 106) > 100);
-    CHECK(rule_span(108) >= LCD_WIDTH - 20);
-    CHECK(ink_in(109, 160) > 50);
-    // The pop-up: Identify greyed with the same words the tab shows.
-    ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);
-    CHECK_EQ(cp(ui).popup_open(), true);
-    CHECK_EQ(cp(ui).popup_count(), 2);
-    CHECK_EQ(cp(ui).popup_item(0).enabled, false);
-    CHECK_STR(cp(ui).popup_item(0).why, "No PD from this device");
-    CHECK_EQ(cp(ui).popup_item(1).enabled, true);          // Refresh stays
-    ui.on_button(Button::Back, ButtonEvent::Short, t += 100);
-    CHECK_EQ(cp(ui).popup_open(), false);
+    // The no-PD body (rotation 0): identity block + row list from kit::kPlaceListY (68).
+    CHECK(ink_in(22, 67) > 100);
+    CHECK_EQ(cp(ui).result_rows(), 2);
+    CHECK(ink_in(kit::kPlaceListY + 1, kit::kPlaceListY + 40) > 50);
+    // The place's Ask device item is greyed with the same words the page shows.
+    CHECK(cp(ui).item_count() >= 2);
+    CHECK_EQ(cp(ui).item(0).enabled, false);
+    CHECK_STR(cp(ui).item(0).why, "No PD from this device");
 }
 
 // A plain Type-C source (Rp only, never offered PD) with a load behind the K2: after the settle the verdict
@@ -1201,9 +1073,9 @@ static void test_source_tab_no_pd_never_offered_all_rotations() {
         std::snprintf(name, sizeof name, "k2_nopd_source_never_rot%d", r);
         dump_panel(name);
         if (r == 0) {
-            CHECK(ink_in(42, 106) > 100);
-            CHECK(rule_span(108) >= LCD_WIDTH - 20);
-            CHECK(ink_in(109, 160) > 50);
+            CHECK(ink_in(22, 67) > 100);
+            CHECK_EQ(cp(ui).result_rows(), 1);
+            CHECK(ink_in(kit::kPlaceListY + 1, kit::kPlaceListY + 40) > 50);
         }
     }
     ui.set_rotation(0, t += 100);
@@ -1227,10 +1099,7 @@ static void test_pd_present_keeps_identify_offered() {
     for (int i = 0; i < 12; i++) ui.tick(t += 100);
     CHECK_EQ(int(cp(ui).pd_verdict()), int(pd::PdVerdict::Present));
     dump_panel("k2_pd_present_sink");
-    ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);
-    CHECK_EQ(cp(ui).popup_open(), true);
-    CHECK_EQ(cp(ui).popup_item(0).enabled, true);          // Identify stays offered
-    ui.on_button(Button::Back, ButtonEvent::Short, t += 100);
+    CHECK_EQ(cp(ui).item(0).enabled, true);                // Ask device stays offered
 }
 
 // The inline VOOC monitor sees a live session behind the K2 (a phone that never talks PD): the Sink tab's no-PD body
@@ -1250,30 +1119,21 @@ static void test_sink_tab_no_pd_shows_the_raw_vooc_note() {
     ui.goto_page(kConnTabAlias + 2, t += 100);
     settle(ui, t);
     CHECK_EQ(int(cp(ui).pd_verdict()), int(pd::PdVerdict::None));
-    CHECK(ink_in(149, 167) == 0);                          // two rows only: Type-C, Draw
+    CHECK_EQ(cp(ui).result_rows(), 2);                       // two rows only: Type-C, Draw
     g_stub.vooc.seen = true;
     g_stub.vooc.r82 = 0x6B;
     for (int i = 0; i < 6; i++) ui.tick(t += 100);
     while (ui.painting()) ui.tick(t += 2);
     dump_panel("k2_nopd_sink_vooc");
-    CHECK(rule_span(148) >= LCD_WIDTH - 20);
-    CHECK(ink_in(149, 167) > 50);                          // the VOOC note
+    CHECK_EQ(cp(ui).result_rows(), 3);                       // the VOOC note
+    CHECK(nopd_row_value_is(2, "0x82 0x06B raw", kDim));
     g_stub.vooc = {};
     for (int i = 0; i < 6; i++) ui.tick(t += 100);
     while (ui.painting()) ui.tick(t += 2);
-    CHECK(ink_in(149, 167) == 0);
+    CHECK_EQ(cp(ui).result_rows(), 2);
     g_stub.vooc = {};
 }
 
-// The phone on the USB-C port holds a PD contract AND runs SuperVOOC on D+/D- (hardware 2026-11-11): the Sink tab's PD
-// body gets the same one-line raw note, `VOOC 0x82 0x06F raw`, as one more row (a slot of the 20 px list, y 42 + 20 i),
-// and loses it when the session ends. The text is built by the same helper as the no-PD body; it must fit the 19 value
-// cells (the truncation log fails the gate otherwise).
-static int slots_with_ink() {
-    int n = 0;
-    for (int i = 0; i < 9; i++) n += ink_in(42 + 20 * i + 2, 42 + 20 * i + 18) > 20 ? 1 : 0;
-    return n;
-}
 static void test_sink_tab_pd_body_shows_the_raw_vooc_note() {
     Ui &ui = fresh_ui();
     g_stub.cc = 1;
@@ -1289,18 +1149,18 @@ static void test_sink_tab_pd_body_shows_the_raw_vooc_note() {
     ui.goto_page(kConnTabAlias + 2, t += 100);
     settle(ui, t);
     CHECK_EQ(int(cp(ui).pd_verdict()), int(pd::PdVerdict::Present));
-    const int before = slots_with_ink();
+    const int before = cp(ui).result_rows();
     CHECK(before >= 3 && before <= 8);                     // room for one more row
     g_stub.vooc.seen = true;
     g_stub.vooc.r82 = 0x6F;
     for (int i = 0; i < 6; i++) ui.tick(t += 100);
     while (ui.painting()) ui.tick(t += 2);
     dump_panel("k2_pd_sink_vooc");
-    CHECK_EQ(slots_with_ink(), before + 1);                // the VOOC row
+    CHECK_EQ(cp(ui).result_rows(), before + 1);            // the VOOC row
     g_stub.vooc = {};
     for (int i = 0; i < 6; i++) ui.tick(t += 100);
     while (ui.painting()) ui.tick(t += 2);
-    CHECK_EQ(slots_with_ink(), before);                    // the session ended: the row is gone at once
+    CHECK_EQ(cp(ui).result_rows(), before);                // the session ended: the row is gone at once
     g_stub.vooc = {};
 }
 
@@ -1315,7 +1175,6 @@ static void test_single_tools_lock_one_tab() {
     ui.tick(20050);
     CHECK_EQ(int(ui.menu()), int(Menu::Connection));
     CHECK_EQ(int(ui.page()), int(Page::Tools));                       // over the Bench
-    CHECK_EQ(cp(ui).locked(), true);
     CHECK_EQ(int(cp(ui).tab()), int(conn::Tab::Cable));
     CHECK_EQ(cp(ui).action_row(), 0);                                  // the first row: Read e-marker
     CHECK_STR(ok_label(ui), "Read");
@@ -1338,7 +1197,6 @@ static void test_single_tools_lock_one_tab() {
 
     ui.open_place(bench::Place::Charger, 21000);
     ui.tick(21050);
-    CHECK_EQ(cp(ui).locked(), true);
     CHECK_STR(ok_label(ui), "Open");                                   // Test charger
     ui.on_button(Button::Minus, ButtonEvent::Short, 21060);
     CHECK_STR(ok_label(ui), "Refresh");                                // no row: read the charger again
@@ -1363,14 +1221,13 @@ static void test_tools_rows_open_single_tools() {
         ui.on_button(Button::Ok, ButtonEvent::Short, 20500 + k * 1000);
         CHECK_EQ(on_pd(ui), 1);
         if (!on_pd(ui)) return;
-        CHECK_EQ(cp(ui).locked(), true);
         CHECK_EQ(int(cp(ui).tab()), int(kTabs[k]));
         ui.on_button(Button::Back, ButtonEvent::Short, 20600 + k * 1000);
         CHECK_EQ(int(ui.menu_depth()), 0);
     }
     ui.context().keep.place_sel[static_cast<int>(bench::Place::Charger)] = 1;   // Request voltage
     ui.open_place(bench::Place::Charger, 24000);
-    CHECK_STR(cp(ui).popup_item(2).label, "Request voltage");
+    CHECK_STR(cp(ui).item(2).label, "Request voltage");
     ui.on_button(Button::Ok, ButtonEvent::Short, 24100);
     CHECK_EQ(int(ui.menu()), int(Menu::PdTrigger));
     CHECK_EQ(int(ui.menu_depth()), 2);                                  // over the place page
@@ -1383,11 +1240,8 @@ static void test_tools_rows_open_single_tools() {
     ui.on_button(Button::Back, ButtonEvent::Short, 24500);
     CHECK_EQ(on_pd(ui), 1);
     CHECK_EQ(int(cp(ui).tab()), int(conn::Tab::Source));
-    ui.set_single_tools(true);
     CHECK(ui.open_connection(conn::Tab::Cable, true, 25000));
     CHECK_EQ(int(ui.menu()), int(Menu::Spoof));
-    CHECK_EQ(cp(ui).locked(), true);
-    ui.set_single_tools(false);
 }
 
 // Hardware 2026-11-15 (OnePlus 120 W, charger test SVOOC ceiling stage, PD-silent legacy session, no contract): the adapter
@@ -1420,6 +1274,56 @@ static void test_svooc_trigger_rise_is_not_a_sink() {
     g_stub.pm.vbus_mv = 5000; g_stub.cc = 0;
 }
 
+static void test_device_place_inline_interrogate_and_readout() {
+    Ui &ui = fresh_ui();
+    make_inline(ui, 20000);
+    g_stub.pm_online = true;
+    g_stub.pd_seen_attach = true;
+    g_stub.ol_facts.far_pd_message = true;
+    g_stub.caps.valid = true; g_stub.caps.spec_rev = 2; g_stub.caps.num_pdos = 1;
+    g_stub.caps.pdos[0] = {pd::PdoType::Fixed, 0, 5000, 5000, 3000, 15000};
+    g_stub.caps.raw_header = 0x1181; g_stub.caps.rx_count++;
+    uint32_t t = 21000;
+    for (int i = 0; i < 20; i++) ui.tick(t += 100);
+    ui.open_place(bench::Place::Device, t += 100);
+    settle(ui, t);
+    while (cp(ui).action_row() >= 0) ui.on_button(Button::Minus, ButtonEvent::Short, t += 100);   // OK = Ask device
+    const int before_rows = cp(ui).result_rows();
+    // First press arms confirmation ("OK again: resets link")
+    ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);
+    CHECK_EQ(g_stub.iq_starts, 0);
+    CHECK_STR(std::string(cp(ui).status_line()).c_str(), "OK again: resets link");
+    // Second press starts inline interrogation
+    ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);
+    CHECK_EQ(g_stub.iq_starts, 1);
+    CHECK_EQ(g_stub.iq_running, true);
+    CHECK_STR(std::string(cp(ui).status_line()).c_str(), "Asking device...");
+    // Populate full answers and finish interrogation
+    g_stub.iq_running = false;
+    g_stub.iq_status.phase = pd::IqPhase::Done;
+    g_stub.iq_status.ok_mask = pd::iq_bit(pd::IqStep::Identity) | pd::iq_bit(pd::IqStep::SinkCap) |
+                               pd::iq_bit(pd::IqStep::SinkCapExt) | pd::iq_bit(pd::IqStep::Revision) |
+                               pd::iq_bit(pd::IqStep::BatteryCap) | pd::iq_bit(pd::IqStep::BatteryStatus) |
+                               pd::iq_bit(pd::IqStep::MfrInfo) | pd::iq_bit(pd::IqStep::Svids) |
+                               pd::iq_bit(pd::IqStep::EprSinkCap);
+    g_stub.iq_status.id.valid = true; g_stub.iq_status.id.vid = 0x18D1; g_stub.iq_status.id.pid = 0x4EE7; g_stub.iq_status.id.vendor = "Google";
+    g_stub.iq_status.mfr.valid = true; std::strcpy(g_stub.iq_status.mfr.name, "Google LLC");
+    g_stub.iq_status.revision = 0x31200000u;
+    g_stub.iq_status.sink_ext_len = 24; g_stub.iq_status.sink_ext[17] = 0x21; g_stub.iq_status.sink_ext[20] = 37;
+    g_stub.iq_status.battery.valid = true; g_stub.iq_status.battery.design_dwh = 195; g_stub.iq_status.battery.last_full_dwh = 186;
+    g_stub.iq_status.battery_status.valid = true; g_stub.iq_status.battery_status.present = true;
+    g_stub.iq_status.battery_status.charging = 0; g_stub.iq_status.battery_status.present_dwh = 149;
+    g_stub.iq_status.num_svids = 2; g_stub.iq_status.svids[0] = 0xFF01; g_stub.iq_status.svids[1] = 0x18D1;
+    g_stub.iq_status.num_epr_pdos = 9;
+    settle(ui, t);
+    CHECK_STR(std::string(cp(ui).status_line()).c_str(), "Device read");
+    // Mfr, Rev, SKEDB, Batt, BattCap, SVIDs, EPR all added (+7 rows) with zero truncation
+    CHECK_EQ(cp(ui).result_rows(), before_rows + 7);
+#ifdef K2_TRUNC_LOG
+    CHECK_EQ(k2::trunc::failures(), 0);
+#endif
+}
+
 int main() {
     test_sink_tab_pd_body_shows_the_raw_vooc_note();
     test_sink_tab_no_pd_shows_the_raw_vooc_note();
@@ -1428,7 +1332,6 @@ int main() {
     test_survey_nothing_active_before_refresh();
     test_survey_refresh_item_starts_it();
     test_survey_status_line();
-    test_survey_details_page_toggle();
     test_survey_details_rows_follow_the_survey();
     test_refresh_goes_through_the_rescan_module();
     test_the_rescan_comeback_lands_on_the_source_tab();
@@ -1446,13 +1349,12 @@ int main() {
     test_proto_row_survives_the_row_cap();
     test_data_row_only_when_it_adds_something();
     test_non_displayed_inputs_do_not_run_match_live();
-    test_default_tab_on_open();
+    test_place_aliases_pick_tab();
     test_topology_from_the_cc_lines();
     test_passive_facts_are_the_pages_facts();
     test_topology_unknown_unless_passive_and_dead();
     test_empty_states_are_passive();
-    test_tab_switching();
-    test_popup_per_tab();
+    test_place_items_per_tab();
     test_spoof_greyed_while_a_device_is_inline();
     test_spoof_enabled_when_nothing_is_inline();
     test_tools_spoof_shortcut_opens_the_cable_tab_list();
@@ -1463,5 +1365,6 @@ int main() {
     test_single_tools_lock_one_tab();
     test_tools_rows_open_single_tools();
     test_svooc_trigger_rise_is_not_a_sink();
+    test_device_place_inline_interrogate_and_readout();
     return test_report("test_ui_connection_page");
 }

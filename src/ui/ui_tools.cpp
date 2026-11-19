@@ -109,9 +109,11 @@ constexpr Act kCable[] = {
     {"Loop probe", K::Tool, 12, nullptr},
 #endif
 };
+#if K2_TWIN
 constexpr Act kDevice[] = {
     {"Twins", K::Tool, 11, nullptr},
 };
+#endif
 // Battery, Log and K2 are pages of their own (the efficiency recorder, the PD diagnosis with its Black Box row, the settings
 // with System state and Boot info): they add no Bench tools.
 constexpr const char *kPlaceNames[kPlaces] = {"Meter", "Charger", "Cable", "Device", "Battery", "Log", "K2"};
@@ -142,7 +144,11 @@ Acts actions(Place p) {
     switch (p) {
     case Place::Charger: return acts(kCharger);
     case Place::Cable: return acts(kCable);
+#if K2_TWIN
     case Place::Device: return acts(kDevice);
+#else
+    case Place::Device:
+#endif
     case Place::Battery:
     case Place::Log:
     case Place::K2:

@@ -190,6 +190,26 @@ void service() {
 std::uint32_t pd_quiet_ms() { return g_stub.pd_chatter && g_stub.legacy_attach ? 0 : UINT32_MAX; }
 pd::TriggerRefusal trigger_refusal() { return g_stub.trig_refusal; }
 const pd::SinkCapsSeen& sink_caps() { return g_stub.sink_seen; }
+pd::IqRefusal interrogate_start(const pd::IqFacts& f) {
+    if (g_stub.iq_refusal != pd::IqRefusal::None) return g_stub.iq_refusal;
+    if (g_stub.iq_running) return pd::IqRefusal::Running;
+    if (!f.inline_link && !g_stub.link_inline && !g_stub.inl) return pd::IqRefusal::NotInline;
+    if (f.busy) return pd::IqRefusal::Busy;
+    if (f.self_powered || g_stub.self_powered) return pd::IqRefusal::SelfPowered;
+    if (!f.confirmed) return pd::IqRefusal::NeedConfirm;
+    g_stub.iq_starts++;
+    g_stub.iq_running = true;
+    g_stub.iq_status.phase = pd::IqPhase::Ask;
+    return pd::IqRefusal::None;
+}
+void interrogate_abort() {
+    g_stub.iq_aborts++;
+    g_stub.iq_running = false;
+    g_stub.iq_status.phase = pd::IqPhase::Aborted;
+    g_stub.iq_status.why = pd::IqWhy::Stopped;
+}
+bool interrogate_running() { return g_stub.iq_running; }
+const pd::IqStatus& interrogate_status() { return g_stub.iq_status; }
 void feed(uint8_t, uint16_t, std::span<const uint8_t>) {}
 pd::Err sink_request(const pd::Choice& c, bool confirmed, bool over_load) {
     g_stub.requests++;

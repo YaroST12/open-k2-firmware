@@ -285,9 +285,9 @@ void test_tools_row_opens_the_page() {
     CHECK_EQ(int(cp.tab()), int(conn::Tab::Cable));
     const bench::Acts acts = bench::actions(bench::Place::Cable);
     int row = 1;   // items 1.. are the rows (item 0 is the place's own read)
-    while (row < cp.popup_count() &&
-           !(cp.popup_item(row).act == conn::Act::Bench && acts.a[cp.popup_item(row).arg].arg == kToolLoopProbe)) row++;
-    CHECK_EQ(row < cp.popup_count(), true);
+    while (row < cp.item_count() &&
+           !(cp.item(row).act == conn::Act::Bench && acts.a[cp.item(row).arg].arg == kToolLoopProbe)) row++;
+    CHECK_EQ(row < cp.item_count(), true);
     for (int i = cp.action_row() + 1; i < row; i++) ui.on_button(Button::Plus, ButtonEvent::Short, g_t + 80);   // to Loop probe
     ui.on_button(Button::Ok, ButtonEvent::Short, g_t + 100);
     CHECK_EQ(int(ui.menu()), int(Menu::LoopProbe));

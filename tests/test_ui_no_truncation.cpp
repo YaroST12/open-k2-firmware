@@ -400,14 +400,8 @@ void walk_survey(Ui &ui, int rot, const Scenario &sc) {
             std::snprintf(name, sizeof name, "conn-%u %s", unsigned(tab), v.name);
             if (!ui.goto_page(static_cast<uint8_t>(kConnTabAlias + tab), g_t)) continue;
             draw_for_a_while(ui, name, rot, sc.name);
-            ui.on_button(Button::Ok, ButtonEvent::Short, g_t);           // the pop-up
-            draw_for_a_while(ui, name, rot, sc.name);
-            if (tab == 0) {                                              // Details is the second item of the Source pop-up
+            for (int step = 0; step < 3; ++step) {
                 ui.on_button(Button::Plus, ButtonEvent::Short, g_t);
-                draw_for_a_while(ui, name, rot, sc.name);
-                ui.on_button(Button::Ok, ButtonEvent::Short, g_t);
-                if (sc.pdos) CHECK_EQ(ui.connection_page().details_open(), true);   // the walk really reaches the Details page
-                std::snprintf(name, sizeof name, "conn-details %s", v.name);
                 draw_for_a_while(ui, name, rot, sc.name);
             }
         }

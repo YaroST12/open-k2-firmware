@@ -185,21 +185,24 @@ static void test_pd_tabs_text() {
     g_stub.caps.num_pdos = 1;
     g_stub.caps.pdos[0] = pd::decode_pdo(fixed);
     ui.goto_page(kPdPage, 1100);
+    ui.tick(1200);
+    // Release action focus and scroll to the top of the fact list (ID at y 68, PD at y 88).
+    ui.on_button(Button::Minus, ButtonEvent::Short, 1220);
+    ui.on_button(Button::Minus, ButtonEvent::Short, 1240);
     ui.tick(1300);
-    // Source tab: the ID row is first (y 42), the PD summary row second (value column x 64, row y 62).
     for (uint8_t r = 0; r < 4; ++r) {
         ui.set_rotation(r, 1300);
         settle(ui, 1300);
-        check_text(ui, 6, 67, 50, 82, kLabelFont, "PD", kDim, kBg);   // key at x 6, row_y+5
+        check_text(ui, 6, 93, 50, 108, kLabelFont, "PD", kDim, kBg);   // key at x 6, row_y+5
         parity(ui, 1300);
     }
-    // Short + moves to the Cable tab: no cable read, so the verdict band names it.
-    ui.on_button(Button::Plus, ButtonEvent::Short, 1400);
+    // Cable place: no cable read, so the identity headline names it.
+    ui.goto_page(kConnTabAlias + 1, 1400);
     ui.tick(1700);
     for (uint8_t r = 0; r < 4; ++r) {
         ui.set_rotation(r, 1700);
         settle(ui, 1700);
-        check_text(ui, 32, 48, 220, 78, kMid, "NO CABLE READ", kText, kSurface);   // the verdict band (UI_SYSTEM 5.8)
+        check_text(ui, 8, 24, 220, 50, kMid, "NO CABLE READ", kInk2, kBg);
         parity(ui, 1700);
     }
     CHECK_EQ(g_stub.requests + g_stub.scans + g_stub.rescans, 0);
@@ -213,19 +216,22 @@ static void test_source_fixed_rows_wrap() {
     g_stub.caps.num_pdos = 7;
     for (int i = 0; i < 7; ++i) g_stub.caps.pdos[i] = pd::decode_pdo((uint32_t(mv[i]) * 1000 / 50 << 10) | 300u);
     ui.goto_page(kPdPage, 1100);
+    ui.tick(1200);
+    ui.on_button(Button::Minus, ButtonEvent::Short, 1220);
+    ui.on_button(Button::Minus, ButtonEvent::Short, 1240);
     ui.tick(1300);
     for (uint8_t r = 0; r < 4; ++r) {
         ui.set_rotation(r, 1300);
         settle(ui, 1300);
-        // rows: ID (y 42), PD (62), Fixed (82), Fixed (102); value column x 64, text 3 px below the row top
-        check_text(ui, 64, 85, 220, 104, kSmall, "5/9/12/15/18/20V", kVolt, kBg);
-        check_text(ui, 64 + 16 * kSmall.adv, 85, 220, 104, kSmall, " 3A", kAmp, kBg);
-        check_text(ui, 64, 105, 220, 124, kSmall, "24V", kVolt, kBg, 15);
+        // rows: ID (y 68), PD (88), Fixed (108), Fixed (128); value column x 64, text 3 px below the row top
+        check_text(ui, 64, 111, 220, 130, kSmall, "5/9/12/15/18/20V", kVolt, kBg);
+        check_text(ui, 64 + 16 * kSmall.adv, 111, 220, 130, kSmall, " 3A", kAmp, kBg);
+        check_text(ui, 64, 131, 220, 150, kSmall, "24V", kVolt, kBg, 15);
         parity(ui, 1300);
     }
 }
 
-// K2_DUMP=dir writes the three tabs of a 100 W charger through a 5 A cable and a 45 W request.
+// K2_DUMP=dir writes the three places of a 100 W charger through a 5 A cable and a 45 W request.
 static void test_pd_tabs_dump() {
     const char *dir = std::getenv("K2_DUMP");
     Ui ui; fixture(ui);
@@ -238,17 +244,16 @@ static void test_pd_tabs_dump() {
     g_stub.em.latency_str = "10-20 ns (~2 m)";
     g_stub.contract.valid = true; g_stub.contract.ready = true; g_stub.contract.pos = 3;
     g_stub.contract.mv = 20000; g_stub.contract.op_ma = g_stub.contract.max_ma = 2250;
-    ui.goto_page(kPdPage, 1100);
     uint32_t t = 1300;
     static const char *const names[] = {"source", "cable", "sink"};
     for (int i = 0; i < 3; i++) {
+        ui.goto_page(static_cast<uint8_t>(kConnTabAlias + i), t);
         ui.tick(t); t += 300; ui.tick(t); t += 300;
         if (dir) {
             char path[256];
             std::snprintf(path, sizeof path, "%s/k2_pdtab_%s.panel", dir, names[i]);
             if (FILE *f = std::fopen(path, "wb")) { std::fwrite(g_panel, 2, LCD_WIDTH * LCD_HEIGHT, f); std::fclose(f); }
         }
-        ui.on_button(Button::Plus, ButtonEvent::Short, t);
     }
     CHECK_EQ(on_pd(ui), true);
 }

@@ -72,7 +72,7 @@ PageIf *Ui::build_menu(Menu m) {
     case Menu::Emarker: return pages_.push<EmarkerPage>(ctx_);
     case Menu::Connection: {
         ConnectionPage *p = pages_.push<ConnectionPage>(ctx_);
-        if (p && conn_lock_ >= 0) p->lock(static_cast<conn::Tab>(conn_lock_));   // a single tool, before enter() and the first paint
+        if (p) p->lock(conn_lock_ >= 0 ? static_cast<conn::Tab>(conn_lock_) : conn::Tab::Source);   // always a place page, before enter()
         conn_lock_ = -1;
         return p;
     }
@@ -85,7 +85,9 @@ PageIf *Ui::build_menu(Menu m) {
     case Menu::UsbLink: return pages_.push<UsbLinkPage>(ctx_);
     case Menu::Autorotate: return pages_.push<AutorotatePage>(ctx_);
     case Menu::QrTest: return pages_.push<QrTestPage>(ctx_);
+#if K2_TWIN
     case Menu::Twin: return pages_.push<TwinPage>(ctx_);
+#endif
 #if K2_LOOPPROBE
     case Menu::LoopProbe: return pages_.push<LoopProbePage>(ctx_);
 #endif
@@ -115,7 +117,9 @@ ListState Ui::list_state() {
         case Menu::BlackBox: return top_as<BlackBoxPage>().list_state();
         case Menu::Cards: return top_as<CardsPage>().list_state();
         case Menu::Autorotate: return top_as<AutorotatePage>().list_state();
+#if K2_TWIN
         case Menu::Twin: return top_as<TwinPage>().list_state();
+#endif
         case Menu::Diagnosis: return top_as<DiagnosisPage>().list_state();
         case Menu::Battery: return top_as<BatteryPage>().list_state();
         case Menu::Memory: return top_as<MemoryPage>().list_state();
@@ -325,8 +329,15 @@ void Ui::set_page(Page p, uint32_t now_ms) {
     paint_incoming(now_ms, t0, blank);
 }
 
-bool Ui::twin_live_busy() const { return twin_hw::live_running() || twin_hw::inline_running(); }   // a proof or an inline interrogation
+bool Ui::twin_live_busy() const {
+#if K2_TWIN
+    return twin_hw::live_running() || twin_hw::inline_running();   // a proof or an inline interrogation
+#else
+    return fusb302::interrogate_running();
+#endif
+}
 
+#if K2_TWIN
 twin_hw::LiveCtx Ui::twin_ctx(uint32_t now_ms) const {
     twin_hw::LiveCtx c;
     c.now = now_ms;
@@ -337,10 +348,15 @@ twin_hw::LiveCtx Ui::twin_ctx(uint32_t now_ms) const {
     c.owners_busy = pdstress_active() || pdspec_active() || fctrig::svooc_running() || fctrig::scan_running();
     return c;
 }
+#endif
 
 void Ui::cancel_twin() {
+#if K2_TWIN
     twin_hw::live_cancel();
     twin_hw::inline_cancel();
+#else
+    fusb302::interrogate_abort();
+#endif
 }
 
 void Ui::cancel_runs() {
@@ -449,12 +465,7 @@ Ui::Session Ui::session() {
         case Menu::Spoof: case Menu::UsbLink: case Menu::Autorotate: case Menu::BlackBox: case Menu::Display: rows = true; break;
         case Menu::Connection: {
             const ConnectionPage &cp = connection_page();
-            s.sub = static_cast<uint8_t>((static_cast<uint8_t>(cp.tab()) & kSubTabMask) | (cp.popup_open() ? kSubPopup : 0) |
-                                         (cp.details_open() ? kSubDetails : 0));
-            if (cp.popup_open()) {
-                s.sel = static_cast<uint8_t>(cp.popup_selected());
-                s.count = static_cast<uint8_t>(cp.popup_count());
-            }
+            s.sub = static_cast<uint8_t>(static_cast<uint8_t>(cp.tab()) & kSubTabMask);
             break;
         }
         default: break;
@@ -1140,19 +1151,15 @@ void Ui::refresh_action_views(uint32_t now_ms) {
 
 bool Ui::open_connection(conn::Tab tab, bool spoof, uint32_t now_ms) {
     BudgetScope scope(*this);
-    if (menu() == Menu::Connection && !spoof && (!single_tools_ || connection_page().tab() == tab)) {   // already there: switch the tab
+    if (menu() == Menu::Connection && !spoof && connection_page().tab() == tab) {   // already on this place
         ContentViewport viewport(layout_.content);
-        ConnectionPage &conn = top_as<ConnectionPage>();
-        conn.open_tab(tab);
         pump_paint(now_ms);
         return true;
     }
     if (depth_ > 0) set_page(page_, now_ms);   // a single Connection on the Tools page, whatever was open
     ctx_.now = now_ms;
-    conn_lock_ = single_tools_ ? static_cast<int8_t>(tab) : -1;   // Charger ID / Cable read / Device ID (K2_WHOS_ATTACHED=0)
+    conn_lock_ = static_cast<int8_t>(tab);
     if (!push_menu(Menu::Connection, now_ms)) { conn_lock_ = -1; return false; }
-    ConnectionPage &conn = top_as<ConnectionPage>();   // just built: the Connection page is on top
-    if (!single_tools_) conn.open_tab(tab);
     if (spoof) return push_menu(Menu::Spoof, now_ms);
     pump_paint(now_ms);
     return true;

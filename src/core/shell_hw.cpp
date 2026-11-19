@@ -43,8 +43,10 @@
 #include "k2/core/remote.hpp"
 #include "k2/core/remote_proto.hpp"
 #include "k2/core/storage.hpp"
+#if K2_TWIN
 #include "k2/twin/present.hpp"
 #include "k2/twin/twin_hw.hpp"
+#endif
 #include "tusb.h"
 #include "k2/ui/ui.hpp"
 
@@ -831,6 +833,7 @@ const char* lab_run(const lab::Cmd& c) {
     }
 }
 
+#if K2_TWIN
 // ---- device twins (k2/twin): the same library, prediction and live proof as the remote's Twin command, as text lines ----
 static_assert(shell::kTwinMax == twin::kCapacity && shell::kTwinNameMax == twin::kNameMax);
 
@@ -979,6 +982,9 @@ unsigned twin_numbers(std::array<std::uint8_t, twin::kCapacity>& seqs) { return 
     }
     return "?";
 }
+#else
+const char* twin_command(const shell::TwinCmd&) { return "unsupported"; }
+#endif
 
 // `diag`: the report the K2 shows (k2/pd/diag_live.hpp), one terminal line per report line; titles carry their
 // severity, notes are indented under them.
@@ -1179,10 +1185,12 @@ void session_end_impl() {
     g_log_on = false;
     if (dpsniff::streaming()) dpsniff::cancel();
     dbg_hw::stop();
+#if K2_TWIN
     if (g_twin_started) {
         g_twin_started = false;
         g_ui->cancel_twin();
     }
+#endif
     if (g_fc_started) fc_stop();
     silent_end();
     raw_to_hiz();

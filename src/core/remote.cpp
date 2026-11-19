@@ -54,7 +54,9 @@
 #include "k2/drivers/systick.hpp"
 #include "k2/pd/transcap.hpp"
 #include "k2/drivers/usb.hpp"
+#if K2_TWIN
 #include "k2/twin/twin_hw.hpp"
+#endif
 #include "k2/twin/wire.hpp"
 #include "k2/ui/ui_qrtest.hpp"
 #include "k2/core/build_config.h"
@@ -1668,6 +1670,7 @@ size_t Remote::cards(std::span<const uint8_t> p, std::span<uint8_t> out) {
     return report_card::remote::handle(api, p, out);
 }
 
+#if K2_TWIN
 namespace {
 // The Twin command's Api: the library in flash (k2::storage), the live proof and the learning (k2::twin_hw).
 struct TwinApi {
@@ -1724,6 +1727,10 @@ size_t Remote::twin(std::span<const uint8_t> p, std::span<uint8_t> out) {
     TwinApi api{ui_};
     return twin::wire::handle(api, p, out);
 }
+#else
+// K2_TWIN=0: the dispatcher answers Cmd::Twin with UnknownCmd and never calls this; kept only to satisfy the backend concept.
+size_t Remote::twin(std::span<const uint8_t>, std::span<uint8_t>) { return 0; }
+#endif
 
 // The Black Box diagnosis: read-only, the same report the screen shows.
 size_t Remote::diagnose(std::span<const uint8_t> p, std::span<uint8_t> out) {

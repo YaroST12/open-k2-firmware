@@ -86,7 +86,7 @@ Drop drop_of(bool live, bool has_idle, int32_t idle_mv, int32_t idle_ma, int32_t
 // only one cell changes at a time; a cell never shows the other's card; a card without data is skipped (and leaves at
 // once when it loses its data). The clock runs only while live and counts at most kMaxStepMs per tick, so a stalled
 // loop moves one cell at most. Not live: PEAK above Wh / Ah, frozen.
-enum class Card : uint8_t { Energy, Peak, Drop, Cable, Lines, Count };
+enum class Card : uint8_t { Energy, Peak, Drop, Cable, Lines, Battery, Count };
 using CardMask = uint8_t;
 constexpr CardMask card_bit(Card c) { return static_cast<CardMask>(1u << static_cast<unsigned>(c)); }
 

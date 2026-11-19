@@ -28,7 +28,9 @@
 #include "k2/pd/pd.hpp"
 #include "k2/pd/pd_sink.hpp"
 #include "k2/pd/pd_source.hpp"
+#if K2_TWIN
 #include "k2/twin/twin_hw.hpp"
+#endif
 #include "k2/ui/kit.hpp"
 #include "k2/ui/ui_style.hpp"
 #include "k2/ui/ui_viewport.hpp"
@@ -324,8 +326,10 @@ K2_HOT UiAction Ui::tick(uint32_t now_ms) {
     link::set_inline_mode(link_.inline_mode(), link_.inline_cause());
     ctx_.inline_mode = link_.inline_mode();
     charger_test_.poll(now_ms);
+#if K2_TWIN
     twin_hw::live_poll(twin_ctx(now_ms));   // the twin proof ends itself under the loop lock (its busy input, twin_hw.cpp)
     twin_hw::inline_poll();                 // an inline interrogation that ended: learn from it once
+#endif
 #if K2_PDSTRESS
     if (loopguard::locked() && pdstress_.running()) pdstress_.cancel();   // the HID-cable loop 5 V lock: released to 5 V at this poll
     pdstress_.poll(now_ms);   // after the charger test's poll: that one clears the run-owner flag a run of ours has set

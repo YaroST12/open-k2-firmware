@@ -914,24 +914,18 @@ public:
     Strip labels() const override;
     void invalidate() override;
     void leave() override;
-    ListState list_state() const { return ListState{}; }   // tabs, not a scrolling list
+    ListState list_state() const { return ListState{}; }
     conn::Tab tab() const { return tab_; }
-    void open_tab(conn::Tab t);
-    // A place page (Fieldbook CONCEPT 8; the single tools of K2_WHOS_ATTACHED=0 before it): the page shows one tab as the
-    // Charger, Cable or Device place - the identity block, then the full fact table, then the place's actions, in one list
-    // that scrolls under the identity. No tab strip, no Details page. OK with no row focused runs the place's own read.
+    // A place page (Charger, Cable, Device): one tab, identity block, full fact table, then the place's actions in one
+    // scrollable list. OK with no row focused runs the place's own read.
     void lock(conn::Tab t);
-    bool locked() const { return locked_; }
     int action_row() const { return act_sel_; }   // the focused action row (an index into the extras), -1 = none
-    static constexpr int kPlaceRows = 7;          // a place page: list rows on screen under the identity block
-    int window_first() const { return first_; }   // a place page: the first list row on screen
-    int result_rows() const { return res_n_; }    // a place page: the fact rows of the last paint (the actions follow)
-    bool popup_open() const { return popup_; }
+    static constexpr int kPlaceRows = 7;          // list rows on screen under the identity block
+    int window_first() const { return first_; }   // the first list row on screen
+    int result_rows() const { return res_n_; }    // the fact rows of the last paint (the actions follow)
     conn::Facts facts() const { return facts_; }
-    int popup_count() const { return n_items_; }
-    const conn::Item &popup_item(int i) const { return items_[static_cast<std::size_t>(i)]; }
-    int popup_selected() const { return popup_sel_; }
-    bool details_open() const { return more_; }   // the Source tab's second page (what the Refresh survey read)
+    int item_count() const { return n_items_; }
+    const conn::Item &item(int i) const { return items_[static_cast<std::size_t>(i)]; }
     std::string_view status_line() const { return status_txt_.view(); }   // what the bottom bar says
     // The one "PD present" verdict of this attach (ROADMAP 2026-11-10, Row C): cached in sense(), read by
     // build_items/paint_body and by the host tests.
@@ -940,7 +934,6 @@ public:
     // A short note on the status line (what an action did, or what a reboot carried over).
     void say(const char *text, uint32_t now_ms, uint32_t ms = 4000) { set_op(text, now_ms, ms); }
 private:
-    static void popup_row(void *self, int index, bool focused, kit::RowSpec &out);
     void sense(uint32_t now_ms);           // topology window + facts, once per update
     void build_items();
     void activate(const conn::Item &it, uint32_t now_ms);
@@ -950,44 +943,36 @@ private:
     void paint_status(uint32_t now_ms);
     bool paint_body(const MatchResult &r, const pd::SourceCaps &caps, std::span<const uint32_t> sink, bool redraw);
     [[gnu::noinline]] bool paint_body_locked(const void *tab_data, bool dim);
-    [[gnu::noinline]] bool paint_body_tabs(const void *tab_data, bool dim);
     [[gnu::noinline]] bool paint_no_pd_body(const MatchResult &r, bool redraw);
     [[gnu::noinline]] bool paint_no_pd_locked(const char *line, uint32_t rp_ma);
-    [[gnu::noinline]] bool paint_no_pd_tabs(const char *line, uint32_t rp_ma);
-    [[gnu::noinline]] bool paint_empty_tabs(const char *title, const char *hint);
     // The no-PD gate (ROADMAP 2026-11-10, Row C): the Sink tab on any no-PD verdict with a device on the line, the Source tab
-    // only when the source never offered PD. The Cable tab and the Details page never.
+    // only when the source never offered PD. The Cable tab never.
     bool no_pd_body() const {
-        return verdict_ == pd::PdVerdict::None && !more_ &&
+        return verdict_ == pd::PdVerdict::None &&
                (tab_ == conn::Tab::Sink ? (facts_.inline_sink || facts_.sink_seen)
                                         : tab_ == conn::Tab::Source && none_why_ == pd::PdNoneWhy::SourceNeverOffered);
     }
-    bool paint_tab_indicator();
     bool paint_empty(bool redraw);
-    void paint_popup(uint32_t now_ms);
-    int16_t row_y0() const;                // where the body starts: under the tab strip, or at kBodyY for a single tool
-    uint32_t actions_sig() const;          // the single tool's action rows: focus and enabled states
-    void close_popup();
+    uint32_t actions_sig() const;          // action rows: focus and enabled states
     conn::Tab tab_ = conn::Tab::Source;
     conn::Facts facts_;
     pd::PdVerdict verdict_ = pd::PdVerdict::Pending;
     pd::PdNoneWhy none_why_ = pd::PdNoneWhy::None;
-    bool popup_ = false;
-    bool popup_drawn_ = false;
-    bool locked_ = false;                  // a place page (lock()): one tab, the actions as rows
-    int act_sel_ = -1;                     // place page: the focused action row (items_[1 + act_sel_]), -1 = none: OK runs items_[0]
-    int first_ = 0;                        // place page: the first list row on screen (follows the focus, Up / Dn scroll it with none)
-    uint8_t res_n_ = 0, tot_n_ = 0;        // place page: fact rows and all rows of the last paint (the keys scroll by them)
-    uint32_t id_sig_ = 0;                  // place page: the identity block's hash (0 = repaint)
-    uint32_t thumb_sig_ = 0;               // place page: the scroll thumb's (first, total) as painted
-    void place_key(bool down);             // place page: Up / Dn
-    bool more_ = false;                    // Details: the second page of the Source tab (reset by a tab change)
+    int act_sel_ = -1;                     // focused action row (items_[1 + act_sel_]), -1 = none: OK runs items_[0]
+    int first_ = 0;                        // first list row on screen (follows the focus, Up / Dn scroll it with none)
+    uint8_t res_n_ = 0, tot_n_ = 0;        // fact rows and all rows of the last paint (the keys scroll by them)
+    uint32_t id_sig_ = 0;                  // identity block's hash (0 = repaint)
+    uint32_t thumb_sig_ = 0;               // scroll thumb's (first, total) as painted
+    void place_key(bool down);             // Up / Dn
     StrBuf<40> status_txt_;                // the bottom bar as last painted (tests read it; the page never does)
-    bool id_asked_ = false;               // Identify started from the pop-up: its progress shows in the status bar
-    int popup_sel_ = 0;
+    bool id_asked_ = false;                // Identify started from this page: its progress shows in the status bar
+    bool iq_asked_ = false;                // inline interrogation started from the Device place
+    bool iq_have_ = false;                 // an inline interrogation was started during iq_session_
+    uint32_t iq_armed_until_ = 0;          // 2-press confirm window for inline interrogation
+    uint32_t iq_session_ = 0;              // fusb302::session() of the last inline interrogation started here
     std::array<conn::Item, conn::kMaxItems> items_{};
     int n_items_ = 0;
-    Elem status_;                          // bottom status bar cache (the pop-up is the shared kit RowList, ctx_.rows)
+    Elem status_;                          // bottom status bar cache
     raguard::PeakWindow guard_;            // CC peaks for the topology (passive reads only)
     uint32_t guard_t_ = 0;
     bool guard_primed_ = false;
@@ -998,20 +983,16 @@ private:
     bool body_pending_ = false;            // a sliced paint_empty/paint_body did not finish on the last tick
     bool match_valid_ = false;             // cached g_last_match matches cheap_sig_ across resumed body slices
     uint32_t cheap_sig_ = 0;               // scalar pre-check signature; only meaningful while sig_valid_
-    bool defaulted_ = false;               // the tab was chosen by default_tab() on enter, not by the user
     // What the body area shows, so a changed row repaints alone: the kind, its tab, its row count and one hash per
     // painted row (key, value, colour, cut, dim). 40 bytes, no copy of the text.
     static constexpr int kBodyRows = 9;
-    enum class Body : uint8_t { None, Rows, Empty, Popup, NoPd };
+    enum class Body : uint8_t { None, Rows, Empty, NoPd };
     Body body_ = Body::None;
     conn::Tab body_tab_ = conn::Tab::Source;
     uint8_t body_n_ = 0;
-    uint8_t tab_sig_ = 0;
-    bool band_done_ = false;
     bool tail_cleared_ = false;
     bool close_done_ = false;
     int16_t body_clear_y_ = kFooterY;
-    uint32_t nopd_msg_sig_ = 0;            // the no-PD message block's hash (painted only when it moved)
     std::array<uint32_t, kBodyRows> row_sig_{};
     // Row D (page flicker): debounced volatile inputs. A value must hold kHoldMs before it reaches a row
     // or a paint signature, so a flapping fast-charge verdict, usb-link family or ADC/VBUS level repaints
