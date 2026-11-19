@@ -34,6 +34,7 @@
 #include "k2/pd/pd_spec_timing.hpp"
 #include "k2/pdspec/analyze.hpp"
 #include "k2/pdspec/plan.hpp"
+#include "k2/pdspec/prog_judge.hpp"
 #include "k2/pdspec/result.hpp"
 
 namespace k2::pdspec {
@@ -272,7 +273,7 @@ private:
     void measure_begin(std::uint32_t now);
     void measure_done(const Snapshot& s, std::uint32_t now);
     void judge_transition(const TransitionOut& o, const Edges& e, std::uint32_t now);
-    void judge_prog(const StepOut& o, const Edges& e, const Snapshot& s);
+    void judge_prog(const ProgMove& mv, const StepOut& o, const Edges& e, const Snapshot& s);
     void next_item(std::uint32_t now);
     void restore(std::uint32_t now);
     void finish(Stop why, std::uint32_t now);
@@ -290,7 +291,6 @@ private:
     void pass_begin(std::uint32_t now);
     void prog_next(std::uint32_t now);
     void pass_end(std::uint32_t now);
-    bool large_step(std::int32_t step_mv) const;
     std::array<Check, 6> prog_checks_meter() const;
     void status_begin(std::uint32_t now);
     void status_poll(const Snapshot& s, std::uint32_t now);
@@ -376,8 +376,6 @@ private:
 
 
 // ---------------------------------------------------------------------------------------------------------------------------------------
-
-inline constexpr std::int32_t kNever = 99999999;   // a value for an event that never came (fails any Max limit, reads "none")
 
 // The checks a family owns (the skip reasons go to these).
 constexpr bool owns(Family f, Check c) {

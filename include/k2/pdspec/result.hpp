@@ -64,6 +64,7 @@ inline constexpr std::size_t kChecks = static_cast<std::size_t>(Check::Count);
 enum class Kind : std::uint8_t { Max, Min, Range };
 // A Range limit with one open side (an overshoot is bounded only on the side the step moves to) carries this as the open bound.
 inline constexpr std::int32_t kOpenLimit = 1000000;
+inline constexpr std::int32_t kNever = 99999999;   // a value for an event that never came (fails any Max limit, reads "none")
 enum class Unit : std::uint8_t { Us, Ms, Mv, Count };
 // The PSC1 blob's checks (the first 21 of the table below).
 inline constexpr std::size_t kChecksPsc1 = 21;
