@@ -307,6 +307,10 @@ static void test_classify_pd_messages() {
     auto hdr = [](unsigned type, unsigned n) { return std::uint16_t(type | n << 12); };
     CHECK_EQ(int(classify_pd(false, hdr(2, 1), 3u << 28).code), int(Mark::TxRequest));
     CHECK_EQ(classify_pd(false, hdr(2, 1), 3u << 28).step, 3);
+    // An EPR_Request (data type 9: the RDO and a copy of the PDO) is a Request too: the EPR AVS moves are timed from it.
+    CHECK_EQ(int(classify_pd(false, hdr(9, 2), 9u << 28).code), int(Mark::TxRequest));
+    CHECK_EQ(classify_pd(false, hdr(9, 2), 9u << 28).step, 9);
+    CHECK_EQ(int(classify_pd(true, hdr(9, 2), 9u << 28).code), int(Mark::Rx));
     CHECK_EQ(int(classify_pd(true, hdr(3, 0), 0).code), int(Mark::Accept));
     CHECK_EQ(int(classify_pd(true, hdr(6, 0), 0).code), int(Mark::PsRdy));
     CHECK_EQ(int(classify_pd(true, hdr(4, 0), 0).code), int(Mark::Reject));

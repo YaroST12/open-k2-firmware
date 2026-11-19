@@ -133,6 +133,11 @@ struct Sim final : Env {
     }
     bool is_pps() const { return s.pos && c.pdos[s.pos - 1].type != pd::PdoType::Fixed; }
     void mark(transcap::Mark m) { if (cap_on) cm.push_back({t * 1000 + 1, std::uint8_t(m), 0, 0}); }
+    // A message the sink sent, marked as the driver marks it (transcap.cpp on_pd_event): classify_pd on its header and first object.
+    void mark_tx(std::uint16_t header, std::uint32_t obj0) {
+        const transcap::PdMark m = transcap::classify_pd(false, header, obj0);
+        if (cap_on && m.code != transcap::Mark::None) cm.push_back({t * 1000 + 1, std::uint8_t(m.code), m.step, m.arg});
+    }
     transcap::View view() const { return {cs, cm}; }
 
     void start_reset() {
@@ -313,7 +318,7 @@ struct Sim final : Env {
         s.state = pd::SinkState::Requesting;
         s.req_us = (t * 1000) | 1;
         s.accept_us = s.ps_rdy_us = 0;
-        mark(transcap::Mark::TxRequest);
+        mark_tx(ch.pos >= 8 || s.epr_mode ? 0x2089 : 0x1082, std::uint32_t(ch.pos) << 28);   // EPR_Request (RDO + PDO) / Request
         want = ch;
         if (ch.pos == reject_pos) ev = Ev::Reject;
         else if (ch.pos == wait_pos) ev = Ev::Wait;
@@ -1603,6 +1608,39 @@ void epr_avs_window_in_a_deep_run() {
     std::printf("  spec epr avs: %u ms -> %u ms\n", unsigned(t[0]), unsigned(t[1]));
 }
 
+// The Baseus 140 W list as the K2 read it in EPR mode (hardware 2026-11-19): PPS at 5 and 6, PDO 7 empty, 28 V at 8, EPR AVS 15-28 V
+// at 9. A Deep run handed all three windows over (EPR entered before its sweep), so the stage runs the covers only.
+void baseus140(Sim& m) {
+    m.list({fixed(5000, true), fixed(9000), fixed(15000), fixed(20000), pps(5000, 11000), pps(5000, 21000)});
+    m.c.pdos[7] = fixed(28000);
+    m.c.pdos[8] = avs(15000, 28000);
+    m.c.num_pdos = 9;
+    m.proof = true;
+}
+void epr_avs_stage_on_the_real_list() {
+    Sim m;
+    baseus140(m);
+    Engine e(m);
+    CHECK_COND(e.start(0, 0x03, kOptEprAvs, std::uint16_t(1u << 5 | 1u << 6 | 1u << 9)) == StartResult::Ok);
+    CHECK_EQ(int(e.levels().n_prog), 3);
+    int items = 0;
+    const std::uint32_t ms = drive(m, e, 3600000, [&](std::uint32_t) { if (e.family() == Family::Pps) items = e.items(); });
+    check_safe_end(m, e);
+    CHECK_COND(e.stop() == Stop::Done);
+    CHECK_EQ(items, 3 * int(kCoverPasses));
+    for (const Check c : {Check::AvsAccuracy, Check::AvsBand, Check::AvsOvershoot, Check::AvsPsRdy, Check::AcceptTime}) {
+        CHECK_COND(e.agg(c).n > 0);
+        CHECK_COND(verdict(e, c) == Verdict::Pass);
+    }
+    Sim n;
+    baseus140(n);
+    Engine en(n);
+    CHECK_COND(en.start(0, 0x03, 0, std::uint16_t(1u << 5 | 1u << 6)) == StartResult::Ok);
+    const std::uint32_t spr = drive(n, en);
+    CHECK_COND(en.stop() == Stop::Done);
+    std::printf("  spec baseus 140 W, all covered: %u ms without the EPR AVS window, %u ms with it\n", unsigned(spr), unsigned(ms));
+}
+
 void covered_run_time() {
     struct Case { const char* name; std::initializer_list<pd::Pdo> l; std::uint8_t cov; };
     const Case cases[] = {
@@ -1663,5 +1701,6 @@ int main() {
     apdo_hook_on_failing_sources();
     covered_run_time();
     epr_avs_window_in_a_deep_run();
+    epr_avs_stage_on_the_real_list();
     return test_report("test_pdspec_engine");
 }
