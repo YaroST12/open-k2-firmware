@@ -438,7 +438,7 @@ void test_the_tools_row_opens_the_page() {
     ui.context().keep.place_sel[static_cast<int>(bench::Place::Charger)] = 0;
     ui.open_place(bench::Place::Charger, g_now);   // the Charger place's "Stress test" row (Actions sub-page)
     run(ui, 120);
-    ui.on_button(Button::Plus, ButtonEvent::Long, g_now += 20);   // Info -> Actions
+    ui.on_button(Button::Back, ButtonEvent::Long, g_now += 20);   // Info -> Actions
     run(ui, 120);
     const bench::Acts acts = bench::actions(bench::Place::Charger);
     int row = 0;

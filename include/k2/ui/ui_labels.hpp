@@ -68,8 +68,6 @@ namespace sl {
     X(Stop, "Stop", "", "", false)                                                                                     \
     X(Up, "Up", "", "", false)                                                                                         \
     X(Dn, "Dn", "", "", false)                                                                                         \
-    X(UpPrev, "Up", "Prev", "", false)                                                                                 \
-    X(DnNext, "Dn", "Next", "", false)                                                                                 \
     X(UpDim, "Up", "", "", true)                                                                                       \
     X(DnDim, "Dn", "", "", true)                                                                                       \
     X(Inc, "+", "", "", false)                                                                                         \
@@ -88,6 +86,8 @@ namespace sl {
     X(Prev, "Prev", "", "", false)                                                                                     \
     X(Hero, "", "Hero", "", false)                                                                                     \
     X(BackDel, "Back", "Delete", "Del", false)                                                                         \
+    X(BackActs, "Back", "Acts", "", false)                                                                             \
+    X(BackInfo, "Back", "Info", "", false)                                                                             \
     /* OK verbs (kOkVerbs) */                                                                                          \
     X(Open, "Open", "", "", false)                                                                                     \
     X(Toggle, "Toggle", "", "", false)                                                                                 \

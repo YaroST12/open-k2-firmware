@@ -61,7 +61,7 @@ static void test_label_sets() {
         {"Back", "Up", "Bench",  "Dn"},           // Lines
         {"Back", "Up", "Open",   "Dn"},           // the Bench
         {"Back", "Up", "Open",   "Dn"},           // Settings
-        {"Back", "Up/Prev", "Refresh", "Dn/Next"}, // Connection (Charger place): Info page (OK = Read again)
+        {"Back/Acts", "Up", "Refresh", "Dn"},     // Connection (Charger place): Info page (OK = Read again, Long Back = Actions)
         {"Back", "Up", "Share*", "Dn"},           // Diag (a submenu of Tools): long OK shares the log
     };
     static constexpr uint8_t kPages[8] = {0, 1, 2, 3, 4, 5, kPdPage, kDiagPage};
@@ -116,7 +116,7 @@ static void test_global_paging() {
     ui.on_button(Button::Ok, ButtonEvent::Short, t);
     CHECK_EQ(ui.menu() == Menu::Connection, 1);                       // the Charger place page over the Bench
     ui.tick(t += 20);
-    ui.on_button(Button::Plus, ButtonEvent::Long, t += 10);            // Long Plus -> Charger Actions sub-page (row 0 = Test charger)
+    ui.on_button(Button::Back, ButtonEvent::Long, t += 10);            // Long Back -> Charger Actions sub-page (row 0 = Test charger)
     CHECK_EQ(ui.connection_page().actions_mode(), true);
     ui.on_button(Button::Ok, ButtonEvent::Short, t += 10);
     CHECK_EQ(ui.page() == Page::ChargerTest, 1);
@@ -368,7 +368,7 @@ static void test_cable_tab_not_found_greys_save() {
     g_stub.em = {};                                     // valid = false, defaults 3A / 20V / USB 2.0
     ui.goto_page(kPdPage + 1, 20000);                   // Cable place: opens Info page
     ui.tick(20050);
-    ui.on_button(Button::Plus, ButtonEvent::Long, 20100);  // Cable Actions sub-page (Read e-marker is row 0)
+    ui.on_button(Button::Back, ButtonEvent::Long, 20100);  // Cable Actions sub-page (Read e-marker is row 0)
     ui.on_button(Button::Plus, ButtonEvent::Short, 20150); // Save cable (greyed)
     ui.on_button(Button::Ok, ButtonEvent::Short, 20200);   // greyed: refused, nothing saved
     CHECK_EQ(g_stub.lib_saves, 0);
@@ -394,7 +394,7 @@ static void test_cable_tab_save_and_list() {
     ui.goto_page(kPdPage + 1, 20000);                       // Cable place (Info page)
     ui.tick(20050);
     CHECK_STR(label(ui, Button::Ok), "Read");
-    ui.on_button(Button::Plus, ButtonEvent::Long, 20080);   // Cable Actions sub-page
+    ui.on_button(Button::Back, ButtonEvent::Long, 20080);   // Cable Actions sub-page
     uint32_t ct = 20100;
     while (ui.connection_page().action_row() < 1) ui.on_button(Button::Plus, ButtonEvent::Short, ct += 10);   // Save cable
     CHECK_STR(label(ui, Button::Ok), "Save");
@@ -870,7 +870,7 @@ static void open_act(Ui &ui, bench::Place p, int tool, uint32_t t) {
     const int target = act_row(p, tool);
     if (ui.menu() == Menu::Connection) {
         if (!ui.connection_page().actions_mode() && ui.connection_page().has_pages())
-            ui.on_button(Button::Plus, ButtonEvent::Long, t + 2);
+            ui.on_button(Button::Back, ButtonEvent::Long, t + 2);
         int guard = 32;
         while (ui.connection_page().action_row() < target && guard-- > 0) ui.on_button(Button::Plus, ButtonEvent::Short, t + 5);
     } else {
@@ -901,8 +901,8 @@ static void test_tools_hub() {
     CHECK_EQ(ui.page() == Page::Tools, 1);
     CHECK_EQ(ui.menu() == Menu::Connection, 1);   // the Cable place page over the Bench
     CHECK_EQ(int(ui.connection_page().tab()), int(conn::Tab::Cable));
-    // In a place, Long Plus flips to Actions, short +/- select an action and OK opens it: Cable > Resistance is Cable R.
-    press(ui, Button::Plus, ButtonEvent::Long, kT0 + 36);
+    // In a place, Long Back flips to Actions, short +/- select an action and OK opens it: Cable > Resistance is Cable R.
+    press(ui, Button::Back, ButtonEvent::Long, kT0 + 36);
     for (int i = 0; i < act_row(bench::Place::Cable, 3); i++) press(ui, Button::Plus, ButtonEvent::Short, kT0 + 38);
     press(ui, Button::Ok, ButtonEvent::Short, kT0 + 40);
     CHECK_EQ(ui.menu_depth(), 2u);
@@ -950,8 +950,14 @@ static void test_submenu_is_modal() {
     press(ui, Button::Back, ButtonEvent::Short, kT0 + 120);
     CHECK_EQ(ui.menu() == Menu::Connection, 1);   // back on the Charger place page
     CHECK_EQ(g_stub.fc_stops, stops);
-    // Back in the place: a long BACK goes straight to the Meter.
+    // In the place page: Long Back flips Actions -> Info; Short Back returns to Bench where Long Back goes to Meter.
     press(ui, Button::Back, ButtonEvent::Long, kT0 + 130);
+    CHECK_EQ(ui.menu() == Menu::Connection, 1);
+    CHECK_EQ(ui.connection_page().actions_mode(), false);
+    press(ui, Button::Back, ButtonEvent::Short, kT0 + 135);
+    CHECK_EQ(ui.page() == Page::Tools, 1);
+    CHECK_EQ(ui.menu_depth(), 0u);
+    press(ui, Button::Back, ButtonEvent::Long, kT0 + 140);
     CHECK_EQ(ui.page() == Page::Home, 1);
     // Picking/editing/arming is passive; BACK retreats without resetting D+/D-.
     open_trigger(ui, kT0 + 150);

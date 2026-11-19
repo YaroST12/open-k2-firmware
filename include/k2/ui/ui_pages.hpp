@@ -922,7 +922,7 @@ public:
     ListState list_state() const { return act_page_ ? ctx_.rows.state() : ListState{}; }
     conn::Tab tab() const { return tab_; }
     // A place page (Charger, Cable, Device): Info page (identity block + fact table) and, when n_items_ > 1, a Meter-style
-    // Actions sub-page (kit::RowList) toggled by Long -/+. Short OK on Info runs items_[0]; on Actions runs items_[1 + act_sel_].
+    // Actions sub-page (kit::RowList) toggled by Long Back. Short OK on Info runs items_[0]; on Actions runs items_[1 + act_sel_].
     void lock(conn::Tab t);
     bool has_pages() const { return n_items_ > 1; }
     void set_actions_mode(bool on);

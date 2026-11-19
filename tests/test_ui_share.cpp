@@ -350,7 +350,7 @@ static void test_emarker_opener() {
     ui.init(1000); ui.set_rotation(0, 1000); ui.tick(1000); ui.goto_page(static_cast<uint8_t>(Page::Tools), 1100);
     ui.goto_page(kConnTabAlias + 1, 1200);                 // Connection, Cable place (starts on Info)
     ui.tick(1350);
-    ui.on_button(Button::Plus, ButtonEvent::Long, 1400);   // Info -> Actions
+    ui.on_button(Button::Back, ButtonEvent::Long, 1400);   // Info -> Actions
     uint32_t st = 1500;
     while (ui.connection_page().action_row() < 2) ui.on_button(Button::Plus, ButtonEvent::Short, st += 5);
     ui.on_button(Button::Ok, ButtonEvent::Short, 1550);    // Saved cables (row 2)

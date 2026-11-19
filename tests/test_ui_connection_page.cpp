@@ -854,7 +854,7 @@ static void test_survey_status_line() {
     show(ui, 0, t);
     while (cp(ui).action_row() >= 0) ui.on_button(Button::Minus, ButtonEvent::Short, t += 100);   // unfocus action row so footer shows Info status
     settle(ui, t);
-    CHECK_STR(std::string(cp(ui).status_line()).c_str(), "Hold -/+ for Actions");
+    CHECK_STR(std::string(cp(ui).status_line()).c_str(), "Hold Back for Actions");
     show(ui, 1, t);                                                 // Cable tab: Info page shows switching hint too
     show(ui, 0, t);
     while (cp(ui).action_row() >= 0) ui.on_button(Button::Minus, ButtonEvent::Short, t += 100);
@@ -870,7 +870,7 @@ static void test_survey_status_line() {
     g_stub.survey.abandon();                                        // the run is over: Info footer returns to switching hint
     settle(ui, t);
     CHECK(g_stub.survey.ran());
-    CHECK_STR(std::string(cp(ui).status_line()).c_str(), "Hold -/+ for Actions");
+    CHECK_STR(std::string(cp(ui).status_line()).c_str(), "Hold Back for Actions");
 }
 
 // The Charger place's survey rows say what each field is and show the answers once they are in.
@@ -1177,14 +1177,19 @@ static void test_single_tools_lock_one_tab() {
     CHECK_EQ(cp(ui).actions_mode(), false);                            // opens on Info page
     CHECK_EQ(cp(ui).action_row(), -1);
     CHECK_STR(ok_label(ui), "Read");
+    CHECK_STR(ui.labels().b[static_cast<int>(Button::Back)].shrt, "Back");
+    CHECK_STR(ui.labels().b[static_cast<int>(Button::Back)].lng, "Acts");
     CHECK_STR(ui.labels().b[static_cast<int>(Button::Minus)].shrt, "Up");
-    CHECK_STR(ui.labels().b[static_cast<int>(Button::Minus)].lng, "Prev");
+    CHECK_STR(ui.labels().b[static_cast<int>(Button::Minus)].lng, "");
     CHECK_STR(ui.labels().b[static_cast<int>(Button::Plus)].shrt, "Dn");
-    CHECK_STR(ui.labels().b[static_cast<int>(Button::Plus)].lng, "Next");
+    CHECK_STR(ui.labels().b[static_cast<int>(Button::Plus)].lng, "");
     CHECK_EQ(label_violation(ui.labels()) == nullptr, true);
-    ui.on_button(Button::Plus, ButtonEvent::Long, 20080);              // Long Plus -> Actions sub-page
+    ui.on_button(Button::Plus, ButtonEvent::Long, 20075);              // Long Plus does nothing (hardware Rd safety)
+    CHECK_EQ(cp(ui).actions_mode(), false);
+    ui.on_button(Button::Back, ButtonEvent::Long, 20080);              // Long Back -> Actions sub-page
     ui.tick(20090);
     CHECK_EQ(cp(ui).actions_mode(), true);
+    CHECK_STR(ui.labels().b[static_cast<int>(Button::Back)].lng, "Info");
     CHECK_EQ(cp(ui).action_row(), 0);                                  // the first row: Read e-marker
     CHECK_STR(ok_label(ui), "Read");
     ui.on_button(Button::Plus, ButtonEvent::Short, 20100);             // Dn: Save cable
@@ -1197,7 +1202,7 @@ static void test_single_tools_lock_one_tab() {
     for (int i = 0; i < 10; i++) ui.on_button(Button::Minus, ButtonEvent::Short, 20300 + i * 10);
     CHECK_EQ(cp(ui).action_row(), 0);                                  // Actions page: clamped on first action row (Read e-marker)
     CHECK_STR(ok_label(ui), "Read");
-    ui.on_button(Button::Minus, ButtonEvent::Long, 20450);             // Long Minus -> back to Info sub-page
+    ui.on_button(Button::Back, ButtonEvent::Long, 20450);              // Long Back -> back to Info sub-page
     ui.tick(20460);
     CHECK_EQ(cp(ui).actions_mode(), false);
     CHECK_EQ(cp(ui).action_row(), -1);
@@ -1211,7 +1216,7 @@ static void test_single_tools_lock_one_tab() {
     CHECK_EQ(cp(ui).has_pages(), true);
     CHECK_EQ(cp(ui).actions_mode(), false);
     CHECK_STR(ok_label(ui), "Refresh");                                // Read again
-    ui.on_button(Button::Plus, ButtonEvent::Long, 21055);
+    ui.on_button(Button::Back, ButtonEvent::Long, 21055);
     CHECK_EQ(cp(ui).actions_mode(), true);
     CHECK_EQ(cp(ui).action_row(), 0);
     CHECK_STR(ok_label(ui), "Open");                                   // Test charger
@@ -1228,7 +1233,7 @@ static void test_single_tools_lock_one_tab() {
     CHECK_EQ(cp(ui).actions_mode(), false);
     CHECK_EQ(cp(ui).action_row(), -1);
     CHECK_STR(ok_label(ui), "Ask");
-    ui.on_button(Button::Plus, ButtonEvent::Long, 21160);
+    ui.on_button(Button::Back, ButtonEvent::Long, 21160);
     CHECK_EQ(cp(ui).actions_mode(), true);
     CHECK_EQ(cp(ui).action_row(), 0);                                  // Twins
     CHECK_STR(ok_label(ui), "Open");
@@ -1265,7 +1270,7 @@ static void test_tools_rows_open_single_tools() {
     ui.context().keep.place_sel[static_cast<int>(bench::Place::Charger)] = 1;   // Request voltage
     ui.open_place(bench::Place::Charger, 24000);
     CHECK_EQ(cp(ui).actions_mode(), false);
-    ui.on_button(Button::Plus, ButtonEvent::Long, 24050);
+    ui.on_button(Button::Back, ButtonEvent::Long, 24050);
     CHECK_EQ(cp(ui).actions_mode(), true);
     CHECK_EQ(cp(ui).action_row(), 1);
     CHECK_STR(cp(ui).item(2).label, "Request voltage");
@@ -1552,8 +1557,8 @@ static void test_place_two_page_info_and_actions() {
         CHECK_EQ(cp(ui).window_first(), 0);
         CHECK_EQ(cp(ui).action_row(), -1);
 
-        // Long Plus enters Actions page using kit::RowList
-        ui.on_button(Button::Plus, ButtonEvent::Long, t += 100);
+        // Long Back enters Actions page using kit::RowList
+        ui.on_button(Button::Back, ButtonEvent::Long, t += 100);
         settle(ui, t);
         CHECK_EQ(cp(ui).actions_mode(), true);
         CHECK_EQ(cp(ui).action_row(), 0);
@@ -1609,12 +1614,12 @@ static void test_place_two_page_info_and_actions() {
         CHECK_EQ(cp(ui).action_row(), -1);
     }
 
-    // Long Plus switches to Actions sub-page with 2-dot pager & bright top-bar "Actions".
-    ui.on_button(Button::Plus, ButtonEvent::Long, t += 100);
+    // Long Back switches to Actions sub-page with 2-dot pager & bright top-bar "Actions".
+    ui.on_button(Button::Back, ButtonEvent::Long, t += 100);
     settle(ui, t);
     CHECK_EQ(cp(ui).actions_mode(), true);
     CHECK_EQ(cp(ui).action_row(), 0);
-    CHECK_STR(std::string(cp(ui).status_line()).c_str(), "Hold -/+ for Info");
+    CHECK_STR(std::string(cp(ui).status_line()).c_str(), "Hold Back for Info");
     CHECK_EQ(ui.list_state().count, cp(ui).item_count() - 1);
     ui.on_button(Button::Plus, ButtonEvent::Short, t += 100);
     settle(ui, t);
@@ -1625,8 +1630,8 @@ static void test_place_two_page_info_and_actions() {
     CHECK_EQ(cp(ui).item(4).enabled, false);
     CHECK_STR(cp(ui).item(4).tag, "load");
     CHECK_STR(std::string(cp(ui).status_line()).c_str(), "Live sink: unplug load");
-    // Long Minus switches back to Info sub-page.
-    ui.on_button(Button::Minus, ButtonEvent::Long, t += 100);
+    // Long Back switches back to Info sub-page.
+    ui.on_button(Button::Back, ButtonEvent::Long, t += 100);
     settle(ui, t);
     CHECK_EQ(cp(ui).actions_mode(), false);
     CHECK_EQ(cp(ui).action_row(), -1);

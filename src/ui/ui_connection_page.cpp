@@ -205,15 +205,19 @@ Strip ConnectionPage::labels() const {
     const sl::Id ok = iq_confirm ? sl::Confirm
                     : (i >= 0 && i < n_items_) ? conn::act_slot(items_[static_cast<std::size_t>(i)].act, false, share)
                     : share ? sl::ShareLong : sl::None;
-    return {{(iq_asked_ && fusb302::interrogate_running()) ? sl::Stop : sl::Back,
-             has_pages() ? sl::UpPrev : sl::Up,
+    const sl::Id back = (iq_asked_ && fusb302::interrogate_running()) ? sl::Stop
+                      : !has_pages() ? sl::Back
+                      : act_page_ ? sl::BackInfo : sl::BackActs;
+    return {{back,
+             sl::Up,
              ok,
-             has_pages() ? sl::DnNext : sl::Dn}};
+             sl::Dn}};
 }
 
 bool ConnectionPage::on_event(Event e) {
     const bool shrt = e.press == Press::Short;
-    if (shrt && e.button == Button::Back && iq_asked_ && fusb302::interrogate_running()) {
+    const bool iq_busy = iq_asked_ && fusb302::interrogate_running();
+    if (shrt && e.button == Button::Back && iq_busy) {
         fusb302::interrogate_abort();
         iq_asked_ = false;
         set_op("Cancelled", ctx_.now);
@@ -221,7 +225,7 @@ bool ConnectionPage::on_event(Event e) {
         update(ctx_.now);
         return true;
     }
-    if (e.press == Press::Long && (e.button == Button::Plus || e.button == Button::Minus) && has_pages()) {
+    if (e.press == Press::Long && e.button == Button::Back && !iq_busy && has_pages()) {
         act_page_ = !act_page_;
         draw_status_left(ctx_.content, true, icon_, title_, 136, act_page_ ? "Actions" : "Info", true, kInk);
         pg::clear_body(ctx_.content, kBarH);

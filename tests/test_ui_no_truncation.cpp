@@ -327,9 +327,9 @@ void walk_pages(Ui &ui, int rot, const Scenario &sc) {
         // The tab's own Info rows: scroll the list to its end so every row has been shown.
         for (int i = 0; i < 12; ++i) { ui.on_button(Button::Plus, ButtonEvent::Short, g_t); g_t += 150; ui.tick(g_t); }
         draw_for_a_while(ui, kTabNames[tab], rot, sc.name);
-        // Switch to the Actions sub-page via Long Plus and walk every action row.
+        // Switch to the Actions sub-page via Long Back and walk every action row.
         if (ui.connection_page().has_pages()) {
-            ui.on_button(Button::Plus, ButtonEvent::Long, g_t);
+            ui.on_button(Button::Back, ButtonEvent::Long, g_t);
             draw_for_a_while(ui, kTabNames[tab], rot, sc.name);
             for (int i = 0; i < 8; ++i) { ui.on_button(Button::Plus, ButtonEvent::Short, g_t); g_t += 150; ui.tick(g_t); }
             draw_for_a_while(ui, kTabNames[tab], rot, sc.name);

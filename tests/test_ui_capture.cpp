@@ -419,9 +419,9 @@ static void test_connection_gallery() {
         };
         const auto subpage = [&](const char *scene) {
             if (!ui->connection_page().has_pages()) return;
-            ui->on_button(Button::Plus, ButtonEvent::Long, now += 100);
+            ui->on_button(Button::Back, ButtonEvent::Long, now += 100);
             shot(scene);
-            ui->on_button(Button::Minus, ButtonEvent::Long, now += 100);
+            ui->on_button(Button::Back, ButtonEvent::Long, now += 100);
         };
         // Empty states: each combination of tab and port topology
         fresh(); cc(0, 0);        open(0); shot("source_empty");
@@ -716,7 +716,7 @@ static void test_emarker_menu_scenes() {
     ui.run_action(Action::EmarkerScan, 1300); ui.tick(1350);
     test_screen(ui, "conn_cable", 1380);
     // Navigate to Saved cables action row on the Cable Actions sub-page (Read e-marker = 0, Save cable = 1, Saved cables = 2)
-    ui.on_button(Button::Plus, ButtonEvent::Long, 1420);
+    ui.on_button(Button::Back, ButtonEvent::Long, 1420);
     while (ui.connection_page().action_row() < 2) ui.on_button(Button::Plus, ButtonEvent::Short, 1450);
     ui.on_button(Button::Ok, ButtonEvent::Short, 1550);           // Saved cables
     test_screen(ui, "em_saved", 1600);
@@ -1101,9 +1101,9 @@ int main() {
     ui.tick(9050);
     test_screen(ui, "conn_cable_full", 9200);
     CHECK_EQ(footer_painted(), 1);                         // the fact line is painted
-    ui.on_button(Button::Plus, ButtonEvent::Long, 9300);   // Cable Actions sub-page
+    ui.on_button(Button::Back, ButtonEvent::Long, 9300);   // Cable Actions sub-page
     test_screen(ui, "conn_cable_actions", 9400);
-    ui.on_button(Button::Minus, ButtonEvent::Long, 9500);  // back to Cable Info sub-page
+    ui.on_button(Button::Back, ButtonEvent::Long, 9500);   // back to Cable Info sub-page
     // Cable swap: CC gone for more than 300 ms, then back. The scan data stays, dimmed, with LAST.
     ui.tick(10000);
     g_stub.cc = 0;
@@ -1584,7 +1584,7 @@ int main() {
         CHECK_EQ(count_colours(4, 224, 200, 238, {k2::kErrorT, k2::kCautionT}) > 0, false);   // the fact line is a fact
         ui.context().keep.place_sel[static_cast<int>(bench::Place::Charger)] = 0;
         ui.on_button(Button::Ok, ButtonEvent::Short, 31200);           // the Charger place page: Info sub-page
-        ui.on_button(Button::Plus, ButtonEvent::Long, 31250);          // Long Plus: Charger Actions sub-page (RowList, Test charger focused)
+        ui.on_button(Button::Back, ButtonEvent::Long, 31250);          // Long Back: Charger Actions sub-page (RowList, Test charger focused)
         test_screen(ui, "bench_charger", 31300);
         CHECK_EQ(ui.menu() == Menu::Connection, 1);
         CHECK_EQ(ui.connection_page().actions_mode(), true);
