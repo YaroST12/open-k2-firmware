@@ -355,7 +355,7 @@ void ChargerTestSession::ceiling_stop() { svooc_trig::stop(); }
 // the test keeps the ports, the Rd and the run-owner flag) and Ui::poll ticks it after this session's poll.
 uint8_t ChargerTestSession::spec_start() {
 #if K2_PDSPEC
-    return static_cast<uint8_t>(ctx_.ui->pd_spec().start_in_test(ctx_.now));
+    return static_cast<uint8_t>(ctx_.ui->pd_spec().start_in_test(ctx_.now, runner_.run_id()));
 #else
     return 255;
 #endif
@@ -374,6 +374,21 @@ void ChargerTestSession::spec_collect(specsec::Result& r) {
                             static_cast<uint8_t>(st), e->release_unconfirmed());
 #else
     (void)r;
+#endif
+}
+bool ChargerTestSession::spec_move(const pdspec::ProgMove& mv, uint8_t flags) {
+#if K2_PDSPEC
+    return ctx_.ui->pd_spec().test_move(runner_.run_id(), mv, flags, ctx_.now);
+#else
+    (void)mv; (void)flags;
+    return false;
+#endif
+}
+bool ChargerTestSession::spec_feeding() {
+#if K2_PDSPEC
+    return ctx_.ui->pd_spec().feeding();
+#else
+    return false;
 #endif
 }
 // The stage's result is final: noted for the journal (one small record, written by journal_pump behind the rows and the header, on the

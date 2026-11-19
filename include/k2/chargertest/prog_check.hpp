@@ -4,7 +4,7 @@
 // new level, when it entered the band, whether it left the band again, where the final level sat against the request, and how much it
 // crept over the hold. Pure over values (a Recorder-shaped trace): the page freezes the capture and calls measure(); the runner turns the
 // flags into an amber caution on the range chip, never a failure (a cap is the source's design, the levels still pass).
-// Limits are the PD spec's (pd_spec_timing.hpp, docs/PD_PPS_AVS_SPEC_REFERENCE.md): the same ones the PD Spec section judges with.
+// Limits are the PD spec's, judged by the PD Spec section's own per-move judge (pdspec/prog_judge.hpp).
 // NOT judged, on purpose: the slew rate (the 30 mV/us limit is 30 V per sample at 1 kHz: unprovable, reported only) and the creep (the
 // docs name no limit for it: reported only).
 #pragma once
@@ -12,8 +12,8 @@
 #include <cstdint>
 #include <cstdlib>
 
-#include "k2/pd/pd_spec_timing.hpp"
 #include "k2/pdspec/analyze.hpp"
+#include "k2/pdspec/prog_judge.hpp"
 
 namespace k2::charger_test::progcheck {
 
@@ -55,32 +55,25 @@ constexpr const char* flag_text(std::uint8_t f) {
     return f & kOver ? "overshoot" : f & kLate ? "slow rise" : f & kTransient ? "transient" : f & kOff ? "level off" : "";
 }
 
-// The judgment over a measured step (analyze_step) and its PD edges.
+// The judgment over a measured step (analyze_step) and its PD edges: the PD spec judge (pdspec/prog_judge.hpp) of the move, its failing
+// measurements as flags.
 inline Out judge(const pdspec::StepOut& s, const pdspec::Edges& e, const In& in) {
     Out o;
     if (!s.valid || !e.accept) return o;
     o.measured = true;
-    const bool up = in.to_mv >= in.from_mv;
-    const std::int32_t step = std::abs(in.to_mv - in.from_mv);
-    const bool large = step > std::int32_t(in.avs ? pd::spec::kAvsSmallStepMv : pd::spec::kPpsSmallStepMv);
-    const std::int32_t lim_ms = std::int32_t(in.avs ? (large ? pd::spec::kAvsLargeStepMs : pd::spec::kAvsSmallStepMs)
-                                                    : (large ? pd::spec::kPpsLargeStepMs : pd::spec::kPpsSmallStepMs));
-    const std::int32_t extra = in.avs ? pd::spec::kAvsValidExtraMv : pd::spec::kPpsValidExtraMv;
-    const std::int32_t over = up ? s.peak_mv - pdspec::band_hi(in.to_mv) : pdspec::band_lo(in.to_mv) - s.peak_mv;
+    const pdspec::ProgMeas m = pdspec::measure_prog({0, in.avs, pdspec::kSlam, in.from_mv, in.to_mv}, s);
+    const std::int32_t over = m.up ? s.peak_mv - pdspec::band_hi(in.to_mv) : pdspec::band_lo(in.to_mv) - s.peak_mv;
     o.over_mv = over > 0 ? over : 0;
-    if (over > extra) o.flags |= kOver;
+    if (!pdspec::passes(pdspec::Kind::Range, m.over)) o.flags |= kOver;
     if (s.band.seen) {
         o.band_us = std::int32_t(s.band.us);
-        // The same bracket rule as the PD Spec section: late only when the whole sample gap is past the limit.
-        if (std::int32_t(s.band.us) - std::int32_t(s.band.gap_us) > lim_ms * 1000) o.flags |= kLate;
+        if (!pdspec::passes(pdspec::Kind::Max, m.band)) o.flags |= kLate;   // late only when the whole sample gap is past the limit
         if (e.psrdy) { o.lag_us = o.band_us - std::int32_t(e.psrdy_us - e.accept_us); o.lag_known = true; }
-        const std::int32_t tr_ms = std::int32_t(in.avs ? pd::spec::kAvsTransientMs : pd::spec::kPpsTransientMs);
         o.out_us = std::int32_t(s.out_us);
-        if (s.out_us && std::int32_t(s.out_us) - std::int32_t(s.band.gap_us) > tr_ms * 1000) o.flags |= kTransient;
+        if (!pdspec::passes(pdspec::Kind::Max, m.trans)) o.flags |= kTransient;
     }
-    const std::int32_t tol = in.to_mv * std::int32_t(in.avs ? pd::spec::kAvsNewPermille : pd::spec::kPpsNewPermille) / 1000;
     o.err_mv = s.final_mv - in.to_mv;
-    if (std::abs(o.err_mv) > tol) o.flags |= kOff;
+    if (!pdspec::passes(pdspec::Kind::Range, m.acc)) o.flags |= kOff;
     return o;
 }
 

@@ -5,7 +5,7 @@
 
 namespace k2::pdspec {
 
-StartResult Engine::start(std::uint32_t now_ms, std::uint8_t families, std::uint8_t opts) {
+StartResult Engine::start(std::uint32_t now_ms, std::uint8_t families, std::uint8_t opts, std::uint8_t covered) {
     if (running_) return StartResult::Running;
     const Snapshot s = env_->snapshot();
     if (s.inline_link) return StartResult::Inline;
@@ -19,6 +19,7 @@ StartResult Engine::start(std::uint32_t now_ms, std::uint8_t families, std::uint
     L_ = scan(env_->caps(), env_->cap_mv(), env_->epr_proof());
     walk_ = make_walk(L_.n_fixed);
     full20_ = (opts & kOptFull20) != 0;
+    covered_ = covered;
     note_ = pdspec::caps_note(env_->caps());
     hr0_ = s.source_hard_resets;
     caps0_ = s.caps_rx;
@@ -141,10 +142,9 @@ void Engine::lost(const Snapshot& s, std::uint32_t now) {
     if ((ph_ == Ph::Measure || ph_ == Ph::Frozen) && s.hard_resets != hard0_ && s.accept_at != accept0_) {
         const bool epr = (cur_.flags & kTrEpr) != 0;
         if (fam_ == Family::Pps) {   // a programmable step: its own PS_RDY check and window
-            const bool avs = prog().kind == ProgKind::Avs, large = large_step(std::abs(tgt_mv_ - from_mv_));
-            const std::uint32_t ms = avs ? (large ? pd::spec::kAvsLargeStepMs : pd::spec::kAvsSmallStepMs)
-                                         : (large ? pd::spec::kPpsLargeStepMs : pd::spec::kPpsSmallStepMs);
-            meas(avs ? Check::AvsPsRdy : Check::PpsPsRdy, {kNever, 0, 0, std::int32_t(ms * 1000), tgt_pos_, static_cast<std::uint8_t>(tgt_mv_ / 100)});
+            const bool avs = prog().kind == ProgKind::Avs;
+            const std::int32_t ms = step_limit_ms(avs, pdspec::large_step(avs, std::abs(tgt_mv_ - from_mv_)));
+            meas(avs ? Check::AvsPsRdy : Check::PpsPsRdy, {kNever, 0, 0, ms * 1000, tgt_pos_, static_cast<std::uint8_t>(tgt_mv_ / 100)});
         } else {
             meas(Check::PsRdyTime, {kNever, 0, 0, std::int32_t((epr ? pd::spec::kSrcTransReqEprMs : pd::spec::kSrcTransReqSprMs) * 1000), tgt_pos_, 0});
         }
@@ -182,8 +182,10 @@ void Engine::begin_family(std::uint32_t now) {
                     if (!avs_check(Check(k)) && !pps) skip(Check(k), Skip::NoPps);
                 }
             if (L_.n_prog == 0) { next_family(); return; }
-            items_ = static_cast<std::uint8_t>(L_.n_prog * kClasses);
-            w_ = cls_ = 0;
+            items_ = 0;
+            for (w_ = 0; w_ < L_.n_prog; ++w_) items_ = static_cast<std::uint8_t>(items_ + (first_class() == kSlam ? 1 : kClasses));
+            w_ = 0;
+            cls_ = first_class();
             env_->on_item(fam_, 0, items_);
             go(prog().pos, static_cast<std::uint16_t>(prog().lo), After::PpsSteps, now);
             return;
@@ -358,7 +360,9 @@ void Engine::measure_done(const Snapshot& s, std::uint32_t now) {
     if (fam_ == Family::Pps) {
         const StepOut o = captured_ && e.accept ? env_->capture_step({e.accept_us, from_mv_, tgt_mv_}) : StepOut{};
         env_->capture_stop();
-        judge_prog(o, e, s);
+        PassRec scratch;
+        PassRec* slot = pass_slot();
+        judge_prog({tgt_pos_, prog().kind == ProgKind::Avs, cls_, from_mv_, tgt_mv_}, o, e, s, slot ? *slot : scratch);
         // Not inside the new band by the end of the window (an unloaded fall can be slow): the next move starts once VBUS is there, and
         // its monotonic check has no level to compare with.
         if (!o.band.seen && !o.settled) { prev_valid_ = false; go(tgt_pos_, tgt_mv_, After::PpsNext, now); return; }
@@ -503,16 +507,12 @@ void Engine::prog_next(std::uint32_t now) {
     tgt_mv_ = static_cast<std::uint16_t>(m.mv);
     cur_mv_ = m.mv;
     const std::int32_t step = std::abs(tgt_mv_ - from_mv_);
-    captured_ = env_->capture_start(large_step(step) ? kPostLargeUs : kPostStepUs);
+    captured_ = env_->capture_start(pdspec::large_step(prog().kind == ProgKind::Avs, step) ? kPostLargeUs : kPostStepUs);
     if (!captured_) for (const Check c : prog_checks_meter()) skip(c, Skip::NoCapture);
     allowed_mv_ = from_mv_ > tgt_mv_ ? from_mv_ : tgt_mv_;
     phase_t_ = now;
     sent_ = false;
     ph_ = Ph::Measure;
-}
-
-bool Engine::large_step(std::int32_t step_mv) const {
-    return prog().kind == ProgKind::Avs ? step_mv > std::int32_t(pd::spec::kAvsSmallStepMv) : step_mv > std::int32_t(pd::spec::kPpsSmallStepMv);
 }
 
 void Engine::pass_end(std::uint32_t now) {
@@ -521,7 +521,7 @@ void Engine::pass_end(std::uint32_t now) {
     if (item_ < items_) env_->on_item(fam_, item_, items_);   // the next pass's number; none after the last
     if (++cls_ < kClasses) { pass_begin(now); return; }   // the pass ended at the window's minimum: the next class starts there
     cls_ = 0;
-    if (++w_ < L_.n_prog) { go(prog().pos, static_cast<std::uint16_t>(prog().lo), After::PpsSteps, now); return; }
+    if (++w_ < L_.n_prog) { cls_ = first_class(); go(prog().pos, static_cast<std::uint16_t>(prog().lo), After::PpsSteps, now); return; }
     restore(now);
 }
 
@@ -531,23 +531,12 @@ std::array<Check, 6> Engine::prog_checks_meter() const {
     return {Check::PpsMonotonic, Check::PpsAccuracy, cls_ == 0 ? Check::PpsSettle : Check::PpsBand, Check::PpsOvershoot, Check::PpsTransient, Check::PpsTrack};
 }
 
-void Engine::judge_prog(const StepOut& o, const Edges& e, const Snapshot& s) {
-    const bool avs = prog().kind == ProgKind::Avs;
-    const std::int32_t target = tgt_mv_, from = from_mv_;
-    const bool up = target > from;
-    const std::int32_t step = std::abs(target - from);
-    const bool large = large_step(step);
-    const std::int32_t lim_ms = std::int32_t(avs ? (large ? pd::spec::kAvsLargeStepMs : pd::spec::kAvsSmallStepMs)
-                                                 : (large ? pd::spec::kPpsLargeStepMs : pd::spec::kPpsSmallStepMs));
-    const auto a = static_cast<std::uint8_t>(tgt_pos_ | cls_ << 4 | (up ? 0 : 0x80));
-    const auto b = static_cast<std::uint8_t>(target / 100);
+void Engine::judge_prog(const ProgMove& mv, const StepOut& o, const Edges& e, const Snapshot& s, PassRec& r) {
+    const ProgMeas m = measure_prog(mv, o);
     cur_ = {};
-    PassRec scratch;
-    PassRec* slot = pass_slot();
-    PassRec& r = slot ? *slot : scratch;
     // PS_RDY is a received message: its limit carries the wire allowance (pd_spec_timing.hpp kPsRdyWireOverheadMs); the band does not.
-    const std::int32_t rdy_ms = lim_ms + std::int32_t(pd::spec::kPsRdyWireOverheadMs);
-    const Lat l = latencies(e, s, avs ? Check::AvsPsRdy : Check::PpsPsRdy, rdy_ms * 1000, a, b);
+    const std::int32_t rdy_ms = step_limit_ms(mv.avs, m.large) + std::int32_t(pd::spec::kPsRdyWireOverheadMs);
+    const Lat l = latencies(e, s, mv.avs ? Check::AvsPsRdy : Check::PpsPsRdy, rdy_ms * 1000, m.a, m.b);
     if (l.acc) {
         const std::uint32_t t = l.rdy ? l.rdy_us / 100 : 0xFFFF;
         if (t > r.psrdy_100us) r.psrdy_100us = static_cast<std::uint16_t>(t > 0xFFFF ? 0xFFFF : t);
@@ -555,60 +544,56 @@ void Engine::judge_prog(const StepOut& o, const Edges& e, const Snapshot& s) {
     }
     if (!o.valid) return;
     ++r.steps;
-    const auto sat = [](std::uint32_t us) { return static_cast<std::uint16_t>(us / 100 > 0xFFFE ? 0xFFFE : us / 100); };
+    const auto sat = [](std::int32_t us) { return static_cast<std::uint16_t>(us >= kNever || us / 100 > 0xFFFE ? 0xFFFE : us / 100); };
     // In the band (classes 1..3) / on the final level (the 20 mV class: unverified, the meter's floor).
-    if (!avs && cls_ == 0) {
-        const std::int32_t settle = o.settled ? std::int32_t(o.settle.us) : kNever;
-        meas(Check::PpsSettle, {settle, std::int32_t(o.settle.gap_us), 0, std::int32_t(pd::spec::kPpsSmallStepMs * 1000), a, b});
-        const std::uint16_t t = o.settled ? sat(o.settle.us) : 0xFFFF;
-        if (t > r.band_100us) r.band_100us = t;
-        if (!pdspec::passes(Kind::Max, {settle, std::int32_t(o.settle.gap_us), 0, std::int32_t(pd::spec::kPpsSmallStepMs * 1000)})) bump_sat(r.band_fails);
-    } else {
-        const Meas m{o.band.seen ? std::int32_t(o.band.us) : kNever, std::int32_t(o.band.gap_us), 0, lim_ms * 1000, a, b};
-        meas(avs ? Check::AvsBand : Check::PpsBand, m);
-        const std::uint16_t t = o.band.seen ? sat(o.band.us) : 0xFFFF;
-        if (t > r.band_100us) r.band_100us = t;
-        if (!pdspec::passes(Kind::Max, m)) bump_sat(r.band_fails);
-    }
+    meas(m.band_c, m.band);
+    const std::uint16_t t = m.band.value >= kNever ? 0xFFFF : sat(m.band.value);
+    if (t > r.band_100us) r.band_100us = t;
+    if (!pdspec::passes(Kind::Max, m.band)) bump_sat(r.band_fails);
     // Overshoot / undershoot beyond vPpsNew + vPpsValid (vAvsNew + vAvsValid), on the side the step moves to.
-    const std::int32_t extra = avs ? pd::spec::kAvsValidExtraMv : pd::spec::kPpsValidExtraMv;
-    const std::int32_t over = up ? o.peak_mv - band_hi(target) : band_lo(target) - o.peak_mv;
-    if (up) meas(avs ? Check::AvsOvershoot : Check::PpsOvershoot, {o.peak_mv, 0, -kOpenLimit, band_hi(target) + extra, a, b});
-    else meas(avs ? Check::AvsOvershoot : Check::PpsOvershoot, {o.peak_mv, 0, band_lo(target) - extra, kOpenLimit, a, b});
+    meas(m.over_c, m.over);
+    const std::int32_t over = m.up ? o.peak_mv - band_hi(mv.to_mv) : band_lo(mv.to_mv) - o.peak_mv;
     if (over > r.over_mv) r.over_mv = static_cast<std::int16_t>(over > 0x7FFF ? 0x7FFF : over);
-    if (over > extra) bump_sat(r.over_fails);
+    if (!pdspec::passes(Kind::Range, m.over)) bump_sat(r.over_fails);
     // How long VBUS left the band again after entering it (tPpsTransient / tAvsTransient); one sample of bracket.
-    if (o.band.seen) {
-        const std::int32_t tr_ms = std::int32_t(avs ? pd::spec::kAvsTransientMs : pd::spec::kPpsTransientMs);
-        const Meas mt{std::int32_t(o.out_us), o.out_us ? std::int32_t(o.band.gap_us) : 0, 0, tr_ms * 1000, a, b};
-        meas(avs ? Check::AvsTransient : Check::PpsTransient, mt);
-        if (sat(o.out_us) > r.out_100us) r.out_100us = sat(o.out_us);
-        if (!pdspec::passes(Kind::Max, mt)) bump_sat(r.out_fails);
+    if (m.trans_known) {
+        meas(m.trans_c, m.trans);
+        if (sat(m.trans.value) > r.out_100us) r.out_100us = sat(m.trans.value);
+        if (!pdspec::passes(Kind::Max, m.trans)) bump_sat(r.out_fails);
     }
     // The level is known when VBUS ended inside the band or sat still on its final level (an offset source); a level still moving at
     // the window's end (an unloaded fall) has none to judge.
-    if (!o.band.seen && !o.settled) return;
-    // The settled level inside vPpsNew / vAvsNew, and the move the right way (or not at all).
-    const std::int32_t tol = target * std::int32_t(avs ? pd::spec::kAvsNewPermille : pd::spec::kPpsNewPermille) / 1000;
-    const std::int32_t err = o.final_mv - target;
-    meas(avs ? Check::AvsAccuracy : Check::PpsAccuracy, {o.final_mv, 0, target - tol, target + tol, a, b});
-    if (std::abs(err) > tol) bump_sat(r.acc_fails);
+    if (!m.level_known) return;
+    meas(m.acc_c, m.acc);
+    const std::int32_t err = o.final_mv - mv.to_mv;
+    if (!pdspec::passes(Kind::Range, m.acc)) bump_sat(r.acc_fails);
     if (std::abs(err) > std::abs(r.worst_err_mv)) r.worst_err_mv = static_cast<std::int16_t>(err);
     if (prev_valid_) {
-        const std::int32_t delta = up ? o.final_mv - prev_mv_ : prev_mv_ - o.final_mv;
-        meas(avs ? Check::AvsMonotonic : Check::PpsMonotonic, {delta, 0, -kMonoAllowMv, 0, a, b});
+        const std::int32_t delta = m.up ? o.final_mv - prev_mv_ : prev_mv_ - o.final_mv;
+        meas(mv.avs ? Check::AvsMonotonic : Check::PpsMonotonic, {delta, 0, -kMonoAllowMv, 0, m.a, m.b});
         if (delta < -kMonoAllowMv) bump_sat(r.mono_fails);
         if (delta < r.min_delta_mv) r.min_delta_mv = static_cast<std::int16_t>(delta);
         // The finding of pd/prog_track.hpp on an upward step (the slams judge the two ends of a window, not a sweep): the first one of
         // a pass only - after a fold every later step sits on the plateau. The value is how far the output fell behind the request.
-        if (up && cls_ < 3 && !r.track) {
-            const std::int32_t behind = pd::track_behind(from, prev_mv_, target, o.final_mv), limit = pd::track_limit(step);
-            meas(avs ? Check::AvsTrack : Check::PpsTrack, {behind, 0, 0, limit, a, b});
+        if (m.up && mv.cls < kSlam && !r.track) {
+            const std::int32_t step = std::abs(mv.to_mv - mv.from_mv);
+            const std::int32_t behind = pd::track_behind(mv.from_mv, prev_mv_, mv.to_mv, o.final_mv), limit = pd::track_limit(step);
+            meas(mv.avs ? Check::AvsTrack : Check::PpsTrack, {behind, 0, 0, limit, m.a, m.b});
             if (behind > limit) r.track = 1;
         }
     }
     prev_mv_ = o.final_mv;
     prev_valid_ = true;
+}
+
+// The edges come from the charger test's own capture: no ms fallback (accept0_ = the Accept it saw), no pass record.
+void Engine::judge_test_move(const ProgMove& mv, bool chain, const Edges& e, const StepOut& o, const Snapshot& s) {
+    if (running_) return;
+    accept0_ = s.accept_at;
+    if (!chain) prev_valid_ = false;
+    PassRec scratch;
+    judge_prog(mv, o, e, s, scratch);
+    if (!o.valid || (!o.band.seen && !o.settled)) prev_valid_ = false;
 }
 
 // Get_PPS_Status (PPS only, never in the keep-alive family): asked through the sink, the answer judged against the no-load

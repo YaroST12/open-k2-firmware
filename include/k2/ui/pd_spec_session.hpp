@@ -19,6 +19,7 @@
 // and reads it with status() / result_read() / cancel().
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -48,8 +49,13 @@ public:
     pdspec::StartResult start(std::uint8_t families, std::uint32_t now_ms, std::uint8_t opts = 0);
     // The charger test's Deep section: the families of specsec::kFamilyMask, no options, started INSIDE a test run: the test owns the
     // ports (no foreign-busy check), the run's Rd and the run-owner flag, so neither is taken or given back here and no footer is shown.
-    // The engine stays readable through engine_for_test() until another run replaces it.
-    pdspec::StartResult start_in_test(std::uint32_t now_ms);
+    // The engine stays readable through engine_for_test() until another run replaces it. run_id: the charger-test run whose moves
+    // test_move() handed over (its engine and covered APDOs are kept; another run, or 0, starts from nothing).
+    pdspec::StartResult start_in_test(std::uint32_t now_ms, std::uint32_t run_id = 0);
+    // One PPS / AVS move of a Deep run before its stage (pdspec::MoveFlag bits). A recording capture is frozen now, a range row's
+    // frozen one is taken as it is; the next poll() judges it into the run's engine. false = no capture to take, nothing waits.
+    bool test_move(std::uint32_t run_id, const pdspec::ProgMove& mv, std::uint8_t flags, std::uint32_t now_ms);
+    bool feeding() const { return feed_.pending; }
     const pdspec::Engine* engine_for_test() const { return test_run_ && engine_ ? &*engine_ : nullptr; }
     // The run ends at the next poll: the keep-alives come back, the Rd is on and the source is released to 5 V first. No-op when
     // nothing runs.
@@ -107,7 +113,11 @@ private:
     void on_note(const char* why) override;
     void on_finish(pdspec::Stop why) override;
 
-    pdspec::StartResult start_run(std::uint8_t families, std::uint32_t now_ms, std::uint8_t opts, bool in_test);
+    pdspec::StartResult start_run(std::uint8_t families, std::uint32_t now_ms, std::uint8_t opts, bool in_test, std::uint8_t covered = 0,
+                                  bool keep = false);
+    bool started() const { return engine_ && (engine_->running() || engine_->finished()); }
+    void feed_take(std::uint32_t now_ms);
+    void feed_note(bool judged);
     bool self_supplied() const;
     void update_footer();
 
@@ -121,6 +131,18 @@ private:
     std::uint8_t last_start_ K2_BSS_INIT(0);        // pdspec::StartResult of the last start() call
     std::uint8_t foot_fam_ = 0xFF, foot_item_ = 0xFF, foot_items_ = 0xFF, foot_kind_ = 0xFF;
     StrBuf<28> foot_;
+    // The moves of a Deep run before its stage (test_move): the one in flight, and per APDO position the sweep points offered and
+    // judged; a sweep handed over (nearly) whole marks its APDO covered.
+    struct Feed {
+        pdspec::ProgMove mv{};
+        std::uint32_t t = 0;
+        std::uint8_t flags = 0;
+        bool pending = false, release = false, last_ok = false;
+    };
+    Feed feed_{};
+    std::uint32_t fed_run_ K2_BSS_INIT(0);
+    std::uint8_t covered_ K2_BSS_INIT(0);
+    std::array<std::uint8_t, 8> sw_off_{}, sw_ok_{};
 };
 
 }  // namespace k2

@@ -266,6 +266,12 @@ It is a polite, no-load conformance run: nothing in it lies to the charger or as
 
 - **Runs:** the Transitions family (fixed level pairs, up and down) and PPS / AVS (sweeps and slams inside each advertised APDO range),
   plus the Source reset observer (it only watches). The engine families mask is `0x03`. The result is 27 checks (`specsec::kOrder`).
+- **One pass per APDO** (`docs/agents/prog-unify.md`): before the stage, the run's own PPS / AVS moves feed the engine. Each 100 mV
+  deep-sweep point after the first (PPS class 1, AVS class 0), each step-walk level after the base (class 0) and each range row that
+  moves within its APDO (judged as a slam) is captured and judged by the same per-move judge (`pdspec/prog_judge.hpp`,
+  `Engine::judge_test_move`) into the same aggregates. An SPR window whose sweep was handed over whole (3 of 4 points judged) runs
+  only its slams and Get_PPS_Status asks in the stage; any other window runs its full passes. Not fed: the sweep's part below 5 V
+  (it runs after the stage), EPR AVS, a K2 powered by the charger. The standalone `pd-spec` runs are unchanged.
 - **Left out, on purpose:** PPS keep-alive and EPR keep-alive (the source Hard Resets by design), Hard Reset (the K2's own) and Detach
   (Rd off). They stay in the standalone tooling.
 - **Session:** `start_in_test()` runs on the live link the test already owns: no foreign-busy check, no Rd take-over, no give-back, no

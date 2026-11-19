@@ -672,13 +672,14 @@ void disarm_if_armed() { if (g_stub.tc_state == State::Armed) disarm(); }
 void release_unkept() { if (unkept_frozen(g_stub.tc_state, g_stub.tc_keep_pending, 0)) disarm(); }
 bool trigger(Reason r) {
     if (g_stub.tc_state != State::Armed) return false;
-    g_stub.tc_triggers++; g_stub.tc_reason = r; g_stub.tc_state = State::Post;
+    g_stub.tc_triggers++; g_stub.tc_reason = r; g_stub.tc_state = g_stub.tc_freeze_on_trigger ? State::Frozen : State::Post;
     return true;
 }
 bool trigger(Reason r, std::uint32_t) { return trigger(r); }   // the PD Spec Check's own post window: the stub has no clock
 bool triggered() { return g_stub.tc_state == State::Post || g_stub.tc_state == State::Frozen; }
 bool active() { return g_stub.tc_state != State::Off; }
-const Rec* frozen() { return nullptr; }   // no ring on the host: the PD Spec Check falls back to the sink's stamps
+// No ring on the host unless a test built one: the PD Spec Check falls back to the sink's stamps.
+const Rec* frozen() { return g_stub.tc_state == State::Frozen ? g_stub.tc_rec : nullptr; }
 void keep(std::uint32_t run_id, std::uint16_t step) { g_stub.tc_keeps++; g_stub.tc_keep_run = run_id; g_stub.tc_keep_step = step; g_stub.tc_keep_pending = true; }
 Status status() { Status s; s.state = g_stub.tc_state; s.keep = g_stub.tc_keep_pending; return s; }
 bool find_stored(std::uint32_t run_id, std::uint16_t step, Meta& m) {

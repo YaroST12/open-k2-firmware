@@ -210,9 +210,20 @@ constexpr bool from_detail_wire(const std::uint8_t* w, std::size_t n, Result& r)
     return true;
 }
 
-// The time the stage adds to a run's estimate: the engine takes about two minutes for the transitions and the PPS sweeps on a charger
-// that has both (the engine runs at most pdspec::kMaxRunMs).
-inline constexpr std::uint32_t kEstimateMs = 120000;
+// The time the stage adds to a run's estimate, from the list (hardware, Anker IQ4: 12 transitions in 32 s, 248 programmable moves in
+// 80 s): the fixed walk, then per programmable window either its slams and status asks (the run's own sweep covered it) or the
+// engine's full passes (the engine runs at most pdspec::kMaxRunMs).
+inline constexpr std::uint32_t kTransitionMs = 2700, kProgMoveMs = 320, kCoveredWindowMs = 4000;
+inline std::uint32_t estimate_ms(const sc::Levels& L, bool pps_swept, bool avs_swept) {
+    std::uint32_t ms = std::uint32_t(L.n_fixed > 1 ? L.n_fixed * (L.n_fixed - 1) : 0) * kTransitionMs;
+    for (std::size_t w = 0; w < L.n_prog; ++w) {
+        const bool swept = L.prog[w].kind == sc::ProgKind::Avs ? avs_swept : pps_swept;
+        std::uint32_t moves = 0;
+        for (std::uint8_t c = 0; c < sc::kClasses && !swept; ++c) moves += sc::measured_moves(sc::make_sweep(L.prog[w], c, false));
+        ms += swept ? kCoveredWindowMs : moves * kProgMoveMs;
+    }
+    return ms;
+}
 // The Runner's own bound on the stage: the engine's cap plus its orderly end. A stage past it is stopped, then abandoned.
 inline constexpr std::uint32_t kMaxMs = 1200000 + 30000;
 inline constexpr std::uint32_t kStopGraceMs = 15000;

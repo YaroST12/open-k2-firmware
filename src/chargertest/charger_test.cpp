@@ -253,6 +253,7 @@ const char* name(HuntCause c) {
 }
 namespace {
 constexpr uint32_t kHoldMs = 1000;
+constexpr uint32_t kSpecFeedMaxMs = 300;   // the spec stage's take of one move: a freeze and one Ui tick
 // The walk's move in the detail byte, nudged 1 mV off the two row markers (kDetailStepWalk, kDetailSweep) so a finished row never reads as a sweep.
 constexpr uint8_t step_walk_detail(int mv) {
     const int v = std::clamp(mv, 0, 255);
@@ -930,7 +931,10 @@ Summary Runner::preview(const pd::SourceCaps& caps, Options o, Input in) {
         }
     };
     plan_units(caps, o, in, units, count);
-    if (spec_planned(o, units)) { out.spec_checks = static_cast<uint8_t>(specsec::kCells); out.estimate_ms += specsec::kEstimateMs; }
+    if (spec_planned(o, units)) {
+        out.spec_checks = static_cast<uint8_t>(specsec::kCells);
+        out.estimate_ms += specsec::estimate_ms(pdspec::scan(caps, in.cap_mv, false), o.pps_sweep, o.avs_sweep);
+    }
     return out;
 }
 void Runner::add(Step s) {
@@ -1424,6 +1428,8 @@ void Runner::request(const Input& in) {
     phase_ms_ = in.now; stable_ = false; resets_ = link_resets(in.pd); band_.clear(); plat_mv_ = 0; plat_nr_ms_ = 0; from_mv_ = std::max(in.vbus_mv, 0);
     peak_lo_mv_ = 0xFFFF; peak_hi_mv_ = 0;
     row_accepted_ = row_ps_rdy_ = false; row_max_ma_ = 0;   // the needs-load latch is per Request (a retry starts it again)
+    feed_ms_ = 0;
+    prog_from_mv_ = pd::user_hold(in.pd) && in.pd.state == pd::SinkState::Ready && in.pd.pos == s.pos ? in.pd.mv : 0;
     row_timing_ = 0; row_ps_rdy_ms_ = 0;
     state_ = State::Requesting;
     if (s.group == Group::Pd) {
@@ -1513,6 +1519,23 @@ uint32_t Runner::hold_ms() const {
     return kHoldMs;
 }
 // The Deep checks' switches (the Tests list line sets the two apart); the step-walk and sweep rows have their own judgments.
+// The 100 mV sweep step is the PPS class 1 and the AVS class 0 of the spec engine's plan; a walk quantum is class 0 of either.
+static_assert(pdspec::step_mv(pdspec::ProgKind::Pps, 1) == int(ctsweep::kStepMv) && pdspec::step_mv(pdspec::ProgKind::Avs, 0) == int(ctsweep::kStepMv));
+static_assert(pdspec::step_mv(pdspec::ProgKind::Pps, 0) == int(walk_step_mv(Algorithm::Pps)) &&
+              pdspec::step_mv(pdspec::ProgKind::Avs, 0) == int(walk_step_mv(Algorithm::SprAvs)));
+// A move is the spec stage's while the stage is still ahead, on an SPR APDO, with the K2 on its own supply (the engine refuses one fed
+// by the charger). The wait is bounded: a capture that never freezes costs one move, not the row.
+bool Runner::spec_feed(const Input& in, const Step& s, int from_mv, int to_mv, uint8_t cls, uint8_t flags) {
+    if (feed_ms_) {
+        if (env_.spec_feeding() && in.now - feed_ms_ < kSpecFeedMaxMs) return true;
+        feed_ms_ = 0;
+        return false;
+    }
+    if (!spec_pending_ || selfpwr_ || s.pos > 7 || (s.algorithm != Algorithm::Pps && s.algorithm != Algorithm::SprAvs)) return false;
+    if (!env_.spec_move({s.pos, s.algorithm == Algorithm::SprAvs, cls, from_mv, to_mv}, flags)) return false;
+    feed_ms_ = in.now | 1u;
+    return true;
+}
 bool Runner::prog_wanted(const Step& s) const {
     if (s.group != Group::Pd || s.hunt || s.detail == kDetailStepWalk || s.detail == kDetailSweep) return false;
     return s.algorithm == Algorithm::Pps ? opts_.pps_sweep : (s.algorithm == Algorithm::SprAvs || s.algorithm == Algorithm::EprAvs) && opts_.avs_sweep;
@@ -1743,6 +1766,7 @@ void Runner::walk_step(const Input& in, const Step& eff) {
     // The level is the mean of the window, not the one sample that happens to close it: a source in burst mode swings every sample
     // by tens of mV around a level it holds well, and one sample read a +-swing as a jump (review item D). A steady window's mean is
     // within kWalkSteadyMv of every sample in it, so a clean source records what it recorded before.
+    if (walk_n_ && spec_feed(in, s, int(walk_mv_) - q, walk_mv_, 0, walk_n_ >= 2 ? pdspec::kMoveChain : 0)) return;
     const int level = walk_steady_.mean(in.vbus_mv);
     walk_lv_[walk_n_] = level;
     if (walk_n_ == 0) {
@@ -1813,6 +1837,11 @@ void Runner::sweep_begin(const Step& s, const Input& in) {
 void Runner::sweep_point(const Input& in, const Step& eff) {
     (void)eff;
     auto& s = steps_[index_];
+    if (sweep_n_) {   // the first point is the landing from the row before: not a sweep step
+        const uint8_t flags = uint8_t(pdspec::kMoveSweep | (sweep_n_ >= 2 ? pdspec::kMoveChain : 0) |
+                                      (sweep_mv_ + ctsweep::kStepMv > sweep_hi_ ? pdspec::kMoveLast : 0));
+        if (spec_feed(in, s, int(sweep_mv_) - int(ctsweep::kStepMv), sweep_mv_, s.algorithm == Algorithm::Pps ? 1 : 0, flags)) return;
+    }
     // The point's level is the mean of the last kWalkSteadyWindowMs of samples (fed by poll_impl), not the one sample that closes it
     // (review item D: a source in burst mode swings every sample by tens of mV around a level it holds).
     const int err = walk_steady_.mean(in.vbus_mv) - int(sweep_mv_);
@@ -3044,6 +3073,7 @@ void Runner::poll_impl(Input& in, const pd::SourceCaps& caps) {
         if ((!ready && !renewing) || !banded) { finish(in, Verdict::Fail, Reason::Voltage); return; }
         if (gap > 250) phase_ms_ = in.now;  // Missing samples cannot establish a continuous hold.
         if (in.now - phase_ms_ >= hold_ms()) {
+            if (prog_on_ && prog_from_mv_ && prog_from_mv_ != s.mv && spec_feed(in, s, prog_from_mv_, s.mv, pdspec::kSlam, 0)) return;
             const uint8_t found = prog_on_ ? env_.prog_take(s) : uint8_t(0);   // before finish(): the page's record() ends the capture
             finish(in, Verdict::Pass, found ? Reason::ProgCheck : Reason::None, found);
         }

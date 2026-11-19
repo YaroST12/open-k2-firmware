@@ -822,7 +822,11 @@ A Deep run has one more stage, `State::Spec`, right after its Pd unit (the contr
 and PPS / AVS families only (mask 0x03), plus the Source reset observer. It is the polite part of the standalone PD Spec Check
 (`docs/PD_SPEC_CHECK.md`, "Deep run"): no keep-alive silence, no Hard Reset, no detach, nothing above what the charger advertised.
 The stage is planned only for a Deep level with the full Pd unit in the plan, on a build that links the engine and with `Options::spec` on (`spec_planned`); Review lists it as a step and the
-Running footer names it. A stop (BACK) asks the engine to end in order (the charger back at 5 V, `kStopGraceMs` grace, then it is
+Running footer names it. Its PPS / AVS checks are judged from the run's own moves (`docs/agents/prog-unify.md`): while the stage is
+still ahead, every deep-sweep point after the first, every step-walk level after the base and every range row that moves within its
+APDO is offered to the engine (`Env::spec_move`; the session freezes the capture its Request armed and judges it on its next poll,
+`Env::spec_feeding` holds the next Request until then, at most `kSpecFeedMaxMs`). A window swept whole runs only its slams and
+status asks in the stage. The estimate follows the list (`specsec::estimate_ms`). A stop (BACK) asks the engine to end in order (the charger back at 5 V, `kStopGraceMs` grace, then it is
 ended hard); a lost link ends it as a fault. The default image has no spec stage and nothing in this page changes.
 
 The grid gains a section after the units: 27 VerdictCells (`specsec::kOrder`, labels in `spec_text.hpp`, at most 8 characters in
