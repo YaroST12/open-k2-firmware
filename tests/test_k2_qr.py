@@ -147,6 +147,19 @@ class SchemaV2(unittest.TestCase):
         with open(os.path.join(HERE, "fixtures", "deep_decoded.json")) as f:
             self.assertEqual(rec["deep"], json.load(f))   # the same Deep block the format 12 golden carries
 
+    def test_format_12_links_still_decode(self):
+        # tests/fixtures/qrshare_v12.tsv: the Deep and Xiaomi card links a format 12 firmware wrote. The reader expands them to format 13
+        # and falls back to the format 12 CRC; the Deep block reads as before (form 27: no range words), the Xiaomi section too.
+        old = load(os.path.join(HERE, "fixtures", "qrshare_v12.tsv"))
+        rec = q.decode_texts(old["card_deep_v12"]["parts"])[0]["record"]
+        self.assertTrue(rec["_store_crc_ok"])
+        self.assertNotIn("ranges", rec["deep"]["spec"])
+        with open(os.path.join(HERE, "fixtures", "deep_decoded.json")) as f:
+            self.assertEqual(rec["deep"], json.load(f))
+        mi = q.decode_texts(old["card_mi_v12"]["parts"])[0]["record"]
+        self.assertTrue(mi["_store_crc_ok"])
+        self.assertEqual(len(mi["deep"]["xiaomi"]["modes"]), 1)
+
     def test_v10_links_keep_their_crc_and_have_no_deep_block(self):
         # A format-10 firmware's link carries the CRC of its format-10 record; the reader writes format 11 and falls back to the
         # CRC with the byte before it. A flipped bit still fails.

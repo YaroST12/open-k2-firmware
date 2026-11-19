@@ -497,6 +497,19 @@ test("the graph geometry keeps the limit lines in view, breaks a run at an empty
   assert.equal(K2Deep.summary(flat), null);
 });
 
+test("format 12 links (tests/fixtures/qrshare_v12.tsv) keep their CRC and their block, with no range words", () => {
+  const rows = readFileSync(new URL("./fixtures/qrshare_v12.tsv", import.meta.url), "utf8").split("\n")
+    .filter((l) => l && !l.startsWith("#")).map((l) => l.split("\t"));
+  const row = (name) => rows.find((c) => c[0] === name);
+  // parseLink throws bad-crc on a CRC that does not match
+  const card = K2Card.parseLink(BASE + "2c." + toB64url(fromHex(row("card_deep_v12")[3]))).card;
+  assert.equal(card.deep_error, undefined);
+  assert.equal(card.deep.spec.ranges, undefined);
+  assert.deepEqual(JSON.parse(JSON.stringify(card.deep)), deepJson);
+  const mi = K2Card.parseLink(BASE + "2c." + toB64url(fromHex(row("card_mi_v12")[3]))).card;
+  assert.equal(mi.deep.xiaomi.modes.length, 1);
+});
+
 test("a format 11 Deep link (tests/fixtures/qrshare_v11.tsv) keeps its CRC and its block, with no Xiaomi section", () => {
   const row = readFileSync(new URL("./fixtures/qrshare_v11.tsv", import.meta.url), "utf8").split("\n")
     .filter((l) => l && !l.startsWith("#")).map((l) => l.split("\t")).find((c) => c[0] === "card_deep_v11");

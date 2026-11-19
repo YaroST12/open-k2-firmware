@@ -418,6 +418,13 @@ test("layout B: each range line carries its spec word, and a split kind's merged
   assert.equal(lines(steps.slice(0, 4), { spec: sp, live: true })[1], ": PPS 5-21V/3.2A:pass");
   assert.equal(lines(steps.slice(0, 4), {})[1], ": PPS 5-21V/3.2A:pass");
   assert.equal(lines(steps.slice(0, 4), { spec: { end: "not run", cells: [] } })[1], ": PPS 5-21V/3.2A:pass");
+  // the kit draws it: the bracket under the chip only, the word as a verdict cell of its own
+  const html = K2Kit.resultGridHtml([CtGrid.layout(steps, { spec: sp })[1]]);
+  assert.match(html, /class="k-rg-label">PPS</);
+  assert.match(html, /class="k-br" style="grid-column:1 \/ 2">3\.2A</);
+  assert.equal((html.match(/class="k-br"/g) || []).length, 1);
+  assert.match(html, /k-vc k-fail[^>]*grid-column:2/);
+  assert.match(html, /aria-label="shape fail"/);
 });
 
 // ---- OEM levels by their watts: the golden vectors shared with the firmware and tools/oem_watts.py ----------------------
