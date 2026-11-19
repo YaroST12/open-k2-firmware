@@ -280,7 +280,8 @@ void test_tools_row_opens_the_page() {
     ui.context().keep.bench_sel = 0;
     for (int i = 0; i < 2; i++) ui.on_button(Button::Plus, ButtonEvent::Short, g_t + 60);
     ui.on_button(Button::Ok, ButtonEvent::Short, g_t + 70);
-    CHECK_EQ(int(ui.menu()), int(Menu::Connection));   // the Cable place page
+    CHECK_EQ(int(ui.menu()), int(Menu::Connection));   // the Cable place page (starts on Info)
+    ui.on_button(Button::Plus, ButtonEvent::Long, g_t + 75);   // Info -> Actions
     const ConnectionPage &cp = ui.connection_page();
     CHECK_EQ(int(cp.tab()), int(conn::Tab::Cable));
     const bench::Acts acts = bench::actions(bench::Place::Cable);

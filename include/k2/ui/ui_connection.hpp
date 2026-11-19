@@ -343,10 +343,10 @@ constexpr bench::Place place_of(Tab t) {
     return t == Tab::Source ? bench::Place::Charger : t == Tab::Cable ? bench::Place::Cable : bench::Place::Device;
 }
 
-// A place page's items: out[0] is the page's own read (OK while no row is focused: read again, read the e-marker, ask the
-// device), out[1..] its rows in order - the cable's own actions first, then the tools of the place (bench::actions, Act::Bench
-// with their index; the page fills their readiness), the charger's read again last. Share is long OK, so it has no row;
-// nothing opens a second page.
+// A place page's items: out[0] is the Info page's own Short-OK read (read again, read the e-marker, ask the device),
+// out[1..] are the Actions page rows in order - the cable's own actions first (with Spoof as... tagged "load" when inline),
+// then the tools of the place (bench::actions, Act::Bench with their index; the page fills their readiness), the charger's
+// read again last. Share is long OK, so it has no row.
 inline int place_actions(Tab t, const ActFacts &a, std::array<Item, kMaxItems> &out) {
     int n = 0;
     auto put = [&](const Item &it) { if (n < kMaxItems) out[std::size_t(n++)] = it; };
@@ -360,6 +360,7 @@ inline int place_actions(Tab t, const ActFacts &a, std::array<Item, kMaxItems> &
         put(read);
         put({Act::SaveCable, "Save cable", a.cable_valid, "No cable read"});
         put({Act::SavedCables, "Saved cables", true, ""});
+        put({Act::SpoofAs, "Spoof as...", !a.inline_sink, kWhyLiveSink, -1, false, a.inline_sink ? "load" : ""});
     }
     const bench::Acts b = bench::actions(place_of(t));
     for (int i = 0; i < b.n; i++) put({Act::Bench, b.a[i].name, true, "", static_cast<int8_t>(i)});

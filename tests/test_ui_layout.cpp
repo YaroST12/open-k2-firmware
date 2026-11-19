@@ -52,13 +52,24 @@ static void test_centres_are_tunable_and_clamped() {
 }
 
 static void test_unequal_slots_tile_the_edge() {
-    // The shipped slot table: wide outer slots, narrow inner ones, no gaps or overlaps.
-    const int16_t c[4] = {33, 93, 147, 207}, n[4] = {66, 54, 54, 66};
-    Layout l = compute_layout(PanelEdge::Right, c, n, 16);
-    check_rect(l.slot[0], 224, 0, 16, 66);
-    check_rect(l.slot[1], 224, 66, 16, 54);
-    check_rect(l.slot[2], 224, 120, 16, 54);
-    check_rect(l.slot[3], 224, 174, 16, 66);
+    // Asymmetric hardware-aligned slot table: {70, 58, 58, 54} in Button order {Back, Minus, Ok, Plus}.
+    // Left and Bottom (rotation >= 2) mirror both centres and slot lengths across 240 px so slots tile 0..240 cleanly.
+    const int16_t c[4] = {35, 99, 157, 213}, n[4] = {70, 58, 58, 54};
+    const Layout r = compute_layout(PanelEdge::Right, c, n, 16);
+    check_rect(r.slot[0], 224, 0, 16, 70);
+    check_rect(r.slot[1], 224, 70, 16, 58);
+    check_rect(r.slot[2], 224, 128, 16, 58);
+    check_rect(r.slot[3], 224, 186, 16, 54);
+    const Layout l = compute_layout(PanelEdge::Left, c, n, 16);
+    check_rect(l.slot[0], 0, 0, 16, 54);
+    check_rect(l.slot[1], 0, 54, 16, 58);
+    check_rect(l.slot[2], 0, 112, 16, 58);
+    check_rect(l.slot[3], 0, 170, 16, 70);
+    const Layout b = compute_layout(PanelEdge::Bottom, c, n, 16);
+    check_rect(b.slot[0], 0, 224, 54, 16);
+    check_rect(b.slot[1], 54, 224, 58, 16);
+    check_rect(b.slot[2], 112, 224, 58, 16);
+    check_rect(b.slot[3], 170, 224, 70, 16);
 }
 
 static void test_shipped_style_tiles() {

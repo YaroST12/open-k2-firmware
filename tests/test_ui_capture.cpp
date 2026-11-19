@@ -417,10 +417,11 @@ static void test_connection_gallery() {
             ui->goto_page(uint8_t(kConnTabAlias + tab), now += 100);
             for (int i = 0; i < 12; i++) ui->tick(now += 100);
         };
-        const auto popup = [&](const char *scene) {
-            ui->on_button(Button::Ok, ButtonEvent::Short, now += 100);
+        const auto subpage = [&](const char *scene) {
+            if (!ui->connection_page().has_pages()) return;
+            ui->on_button(Button::Plus, ButtonEvent::Long, now += 100);
             shot(scene);
-            ui->on_button(Button::Back, ButtonEvent::Short, now += 100);
+            ui->on_button(Button::Minus, ButtonEvent::Long, now += 100);
         };
         // Empty states: each combination of tab and port topology
         fresh(); cc(0, 0);        open(0); shot("source_empty");
@@ -441,14 +442,14 @@ static void test_connection_gallery() {
         g_stub.em.is_active = false; g_stub.em.epr_capable = true; g_stub.em.sop = 1; g_stub.em.spec_rev = 2;
         ui->debug_link(true, now += 100);
         for (int i = 0; i < 4; i++) ui->tick(now += 100);
-        open(0); shot("source_filled"); popup("source_popup");
-        open(1); shot("cable_filled"); popup("cable_popup");
+        open(0); shot("source_filled"); subpage("source_actions");
+        open(1); shot("cable_filled"); subpage("cable_actions");
         g_stub.sink_vdm.identity.valid = true; g_stub.sink_vdm.identity.vid = 0x05AC; g_stub.sink_vdm.identity.pid = 0x1A2B;
         g_stub.sink_vdm.identity.vendor = "Apple"; g_stub.sink_vdm.identity.model = "iPad Air 5";
         g_stub.sink_vdm.num_svids = 2; g_stub.sink_vdm.svids[0] = 0x05AC; g_stub.sink_vdm.svids[1] = 0x8087;
         g_stub.sink_vdm.identity.id_header = 0xC0000000u | (2u << 27);
         g_stub.ident.state = k2::pd::IdState::Done; g_stub.ident.ok_mask = 0x1F; g_stub.ident.revision = 0x30000000;
-        open(2); shot("sink_filled"); popup("sink_popup");
+        open(2); shot("sink_filled"); subpage("sink_actions");
         // Tools: the new row order
         ui->goto_page(static_cast<uint8_t>(Page::Tools), now += 100);
         ui->tick(now += 100);
@@ -714,7 +715,8 @@ static void test_emarker_menu_scenes() {
     ui.goto_page(kConnTabAlias + 1, 1200);                        // Connection, Cable place
     ui.run_action(Action::EmarkerScan, 1300); ui.tick(1350);
     test_screen(ui, "conn_cable", 1380);
-    // Navigate to Saved cables action row on the Cable place (Read e-marker = 0, Save cable = 1, Saved cables = 2)
+    // Navigate to Saved cables action row on the Cable Actions sub-page (Read e-marker = 0, Save cable = 1, Saved cables = 2)
+    ui.on_button(Button::Plus, ButtonEvent::Long, 1420);
     while (ui.connection_page().action_row() < 2) ui.on_button(Button::Plus, ButtonEvent::Short, 1450);
     ui.on_button(Button::Ok, ButtonEvent::Short, 1550);           // Saved cables
     test_screen(ui, "em_saved", 1600);
@@ -1099,9 +1101,9 @@ int main() {
     ui.tick(9050);
     test_screen(ui, "conn_cable_full", 9200);
     CHECK_EQ(footer_painted(), 1);                         // the fact line is painted
-    ui.on_button(Button::Ok, ButtonEvent::Short, 9300);    // the pop-up over the filled tab
-    test_screen(ui, "conn_cable_popup", 9400);
-    ui.on_button(Button::Back, ButtonEvent::Short, 9500);
+    ui.on_button(Button::Plus, ButtonEvent::Long, 9300);   // Cable Actions sub-page
+    test_screen(ui, "conn_cable_actions", 9400);
+    ui.on_button(Button::Minus, ButtonEvent::Long, 9500);  // back to Cable Info sub-page
     // Cable swap: CC gone for more than 300 ms, then back. The scan data stays, dimmed, with LAST.
     ui.tick(10000);
     g_stub.cc = 0;
@@ -1581,20 +1583,20 @@ int main() {
         CHECK_EQ(g_panel[(24 + 1) * 240 + 11], k2::kBg);               // but not above the first one
         CHECK_EQ(count_colours(4, 224, 200, 238, {k2::kErrorT, k2::kCautionT}) > 0, false);   // the fact line is a fact
         ui.context().keep.place_sel[static_cast<int>(bench::Place::Charger)] = 0;
-        ui.on_button(Button::Ok, ButtonEvent::Short, 31200);           // the Charger place page: starts at top of facts
-        ui.on_button(Button::Plus, ButtonEvent::Short, 31250);         // Dn: focus Test charger (act 0)
+        ui.on_button(Button::Ok, ButtonEvent::Short, 31200);           // the Charger place page: Info sub-page
+        ui.on_button(Button::Plus, ButtonEvent::Long, 31250);          // Long Plus: Charger Actions sub-page (RowList, Test charger focused)
         test_screen(ui, "bench_charger", 31300);
         CHECK_EQ(ui.menu() == Menu::Connection, 1);
-        const ConnectionPage &cp = ui.connection_page();
-        auto row_y = [&](int act) { return 68 + (cp.result_rows() + act - cp.window_first()) * 20; };   // a list slot's top
+        CHECK_EQ(ui.connection_page().actions_mode(), true);
+        auto row_y = [&](int act) { return kit::kBodyY + act * kit::kRowH; };   // RowList slot top (act 0 focused is 40 px; act 1 starts at 24 + 40 = 64 when act 0 has note)
         CHECK_EQ(g_panel[(row_y(0) + 10) * 240 + 150], k2::kFocusFill);   // Test charger, focused
         ui.on_button(Button::Plus, ButtonEvent::Short, 31400);         // Request voltage: blocked by the load
         test_screen(ui, "bench_charger_blocked", 31500);
         CHECK_EQ(count_colours(4, 224, 200, 238, {k2::kErrorT}) > 0, true);   // the footer carries the blocker
-        ui.on_button(Button::Plus, ButtonEvent::Short, 31510);         // Fast charge: Request voltage unfocused
+        ui.on_button(Button::Plus, ButtonEvent::Short, 31510);         // Fast charge: Request voltage unfocused (row 1 at y = 24 + 26 = 50)
         ui.tick(31520);
-        CHECK_EQ(count_colours(8, row_y(1) + 2, 150, row_y(1) + 18, {k2::kInk3}) > 0, true);   // blocked: dim
-        CHECK_EQ(count_colours(150, row_y(1), 214, row_y(1) + 20, {k2::kError}) > 0, false);  // its tail is not red
+        CHECK_EQ(count_colours(8, row_y(1) + 2, 150, row_y(1) + 24, {k2::kInk3}) > 0, true);   // blocked: dim
+        CHECK_EQ(count_colours(150, row_y(1), 214, row_y(1) + kit::kRowH, {k2::kError}) > 0, false);  // its tail is not red
         g_stub.pm = saved_pm;
         g_stub.em = saved_em;
         ui.debug_link(false, 31510); ui.debug_link(true, 31520); // isolate the synthetic load fixture
@@ -1613,8 +1615,13 @@ int main() {
         ui.tick(31950);
         test_screen(ui, "emarker_none", 32000);
         int ink = 0;
-        for (int y = 74; y < 90; y++) for (int x = 8; x < 200; x++) ink += g_panel[y * 240 + x] != k2::kBg;
-        CHECK_EQ(ink > 0, 1);                                  // the message line
+        for (int y = kit::kIdHeadY; y < kit::kIdDashY; y++)
+            for (int x = 8; x < 200; x++) ink += g_panel[y * 240 + x] != k2::kBg;
+        CHECK_EQ(ink > 0, 1);                                  // the "Not read" identity block
+        int body_ink = 0;
+        for (int y = kit::kPlaceListY; y < kit::kPlaceListY + 20; y++)
+            for (int x = 8; x < 200; x++) body_ink += g_panel[y * 240 + x] != k2::kBg;
+        CHECK_EQ(body_ink, 0);                                 // no action or fact rows on empty Info page
         CHECK_EQ(ui.list_state().count, 0);
         g_stub.em = saved;
         g_stub.pm.vbus_mv = saved_vbus;

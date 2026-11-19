@@ -10,12 +10,11 @@
 
 namespace k2 {
 
-// Slot lengths along the panel, in on-screen order; the four tile the 240 px edge. The labels are at
-// most 7 characters ("Up/Prev", "Dn/Next", "Rescan", "Reset"; BACK is "Back"), 42 px at the 12 px font,
-// so every slot is wider than text + divider + padding at both ends. The outer pair and the inner
-// pair mirror each other, so the length can be looked up per button in every orientation. These are
-// tunable: the real button centres are not measured yet (see kSlotCenters in ui_style.hpp).
-constexpr unsigned kSlotLenPx[4] = {66, 54, 54, 66};
+// Slot lengths along the panel, in Button order (Back, Minus, Ok, Plus; Rot 0 top-to-bottom); the four tile the 240 px edge.
+// The labels are at most 7 characters ("Up/Prev", "Dn/Next", "Rescan", "Reset"; BACK is "Back"), 42 px at the 12 px font,
+// so every slot (>= 54 px) is wider than text + divider + padding at both ends. Lengths match the measured hardware button
+// positions (see kSlotCenters in ui_style.hpp).
+constexpr unsigned kSlotLenPx[4] = {70, 58, 58, 54};
 constexpr unsigned kLabelAdv = 6;   // advance of the 12 px panel font (kLabelFont, Spleen 6x12; tests check it)
 constexpr int kSlotPadPx = 4;       // clear space between text and either end of a slot
 constexpr int kDividerPx = 2;       // divider drawn on the leading edge of every slot but the first
@@ -37,7 +36,7 @@ constexpr int label_origin(const LabelZone &z, unsigned chars) {
 
 // Characters that fit the slot of one button, assuming the slot has a divider (the narrowest case).
 constexpr unsigned label_max_chars(Button b) {
-    return label_zone(static_cast<int>(b == Button::Back || b == Button::Plus ? kSlotLenPx[0] : kSlotLenPx[1]), 1).max_chars;
+    return label_zone(static_cast<int>(kSlotLenPx[static_cast<int>(b)]), 1).max_chars;
 }
 
 // One slot: the short-press action, the long-press action and an optional shorter spelling of

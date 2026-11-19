@@ -112,25 +112,25 @@ void ConnectionPage::enter() {
     iq_armed_until_ = 0;
     sig_valid_ = false;
     match_valid_ = false;
-    act_sel_ = -1;
     first_ = 0;
     res_n_ = 0;
     tot_n_ = 0;
     id_sig_ = thumb_sig_ = 0;
     sense(ctx_.now);                   // facts only; the topology window starts with this one sample
     build_items();
-    const bool empty = conn::tab_empty(tab_, facts_) && !(tab_ == conn::Tab::Sink && (fusb302::self_powered() || fusb302::identify_current()));
-    if (empty && n_items_ > 1) {
-        act_sel_ = ctx_.keep.place_sel[static_cast<int>(conn::place_of(tab_))];
-        if (act_sel_ + 1 >= n_items_) act_sel_ = n_items_ - 2;
-        if (act_sel_ < 0) act_sel_ = 0;
+    if (!has_pages()) act_page_ = false;
+    if (act_page_) {
+        act_sel_ = std::clamp<int>(ctx_.keep.place_sel[static_cast<int>(conn::place_of(tab_))], 0, n_items_ - 2);
+    } else {
+        act_sel_ = -1;
     }
 }
 
 // A place page (Charger, Cable, Device): one tab, no tab strip, the place's name and icon in the masthead.
-// OK with no row focused runs the place's own read; its actions are rows under the fact table.
+// Info page shows identity + facts; Actions page (when has_pages()) shows the place's actions in ctx_.rows.
 void ConnectionPage::lock(conn::Tab t) {
     tab_ = t;
+    act_page_ = false;
     act_sel_ = -1;
     first_ = 0;
     const bench::Place p = conn::place_of(t);
@@ -140,35 +140,22 @@ void ConnectionPage::lock(conn::Tab t) {
     sig_valid_ = false;
 }
 
-// Up / Dn on a place page: unified 1-row-at-a-time movement matching RowList. With fact rows above the actions,
-// Up / Dn scroll fact rows 1 row at a time until the action rows are reached, then step focus 1 action row at a time.
-// On an empty page (no fact rows), focus stays clamped within the action rows [0, rows - 1].
-void ConnectionPage::place_key(bool down) {
-    const int rows = n_items_ - 1;
-    if (down) {
-        if (act_sel_ >= 0) {
-            if (act_sel_ + 1 < rows) act_sel_++;
-        } else if (first_ + kPlaceRows < res_n_) {
-            first_++;
-        } else if (rows > 0) {
-            act_sel_ = 0;
-        }
+void ConnectionPage::set_actions_mode(bool on) {
+    const bool want = on && (n_items_ == 0 || has_pages());
+    if (act_page_ == want) return;
+    act_page_ = want;
+    if (act_page_) {
+        if (n_items_ > 1)
+            act_sel_ = std::clamp<int>(ctx_.keep.place_sel[static_cast<int>(conn::place_of(tab_))], 0, n_items_ - 2);
     } else {
-        if (act_sel_ > 0) {
-            act_sel_--;
-        } else if (act_sel_ == 0) {
-            if (res_n_ > 0) {
-                act_sel_ = -1;
-                if (first_ > 0) first_--;
-            }
-        } else if (first_ > 0) {
-            first_--;
-        }
+        act_sel_ = -1;
+        ctx_.rows.detach();
     }
-    if (act_sel_ >= 0) ctx_.keep.place_sel[static_cast<int>(conn::place_of(tab_))] = static_cast<uint8_t>(act_sel_);
+    invalidate();
 }
 
 void ConnectionPage::leave() {
+    if (act_page_) ctx_.rows.detach();
     op_ = StrBuf<24>();
     op_until_ = 0;
     id_asked_ = false;
@@ -181,11 +168,21 @@ void ConnectionPage::leave() {
 
 void ConnectionPage::draw_static() {
     if (ctx_.budget && !ctx_.budget->admit(140 * kBarH, true)) return;
-    title_bar();
+    if (has_pages()) {
+        bar_valid_ = false;
+        draw_status_left(ctx_.content, true, icon_, title_, 136, act_page_ ? "Actions" : "Info", true);
+    } else {
+        title_bar();
+    }
+    if (act_page_) {
+        ctx_.rows.init(ctx_.content, kit::kBodyY, &ConnectionPage::row_fn, this);
+        if (!ctx_.blank) kit::RowList::clear_body_around(ctx_.content);
+    }
     invalidate();
 }
 
 void ConnectionPage::invalidate() {
+    bar_valid_ = false;
     sig_valid_ = false;
     body_pending_ = false;
     match_valid_ = false;
@@ -197,17 +194,21 @@ void ConnectionPage::invalidate() {
     row_sig_.fill(0);
     id_sig_ = thumb_sig_ = 0;
     status_.invalidate();
+    if (act_page_) ctx_.rows.invalidate();
 }
 
 Strip ConnectionPage::labels() const {
     const bool share = (tab_ == conn::Tab::Source && pd::active_caps().valid) || (tab_ == conn::Tab::Cable && fusb302::emarker().valid);
-    const int i = act_sel_ < 0 ? 0 : 1 + act_sel_;
-    const bool iq_confirm = tab_ == conn::Tab::Sink && i < n_items_ && items_[static_cast<std::size_t>(i)].act == conn::Act::Identify
+    const int i = act_page_ ? 1 + act_sel_ : 0;
+    const bool iq_confirm = tab_ == conn::Tab::Sink && i >= 0 && i < n_items_ && items_[static_cast<std::size_t>(i)].act == conn::Act::Identify
                          && before(ctx_.now, iq_armed_until_);
     const sl::Id ok = iq_confirm ? sl::Confirm
-                    : i < n_items_ ? conn::act_slot(items_[static_cast<std::size_t>(i)].act, false, share)
+                    : (i >= 0 && i < n_items_) ? conn::act_slot(items_[static_cast<std::size_t>(i)].act, false, share)
                     : share ? sl::ShareLong : sl::None;
-    return {{(iq_asked_ && fusb302::interrogate_running()) ? sl::Stop : sl::Back, sl::Up, ok, sl::Dn}};
+    return {{(iq_asked_ && fusb302::interrogate_running()) ? sl::Stop : sl::Back,
+             has_pages() ? sl::UpPrev : sl::Up,
+             ok,
+             has_pages() ? sl::DnNext : sl::Dn}};
 }
 
 bool ConnectionPage::on_event(Event e) {
@@ -220,13 +221,43 @@ bool ConnectionPage::on_event(Event e) {
         update(ctx_.now);
         return true;
     }
+    if (e.press == Press::Long && (e.button == Button::Plus || e.button == Button::Minus) && has_pages()) {
+        act_page_ = !act_page_;
+        draw_status_left(ctx_.content, true, icon_, title_, 136, act_page_ ? "Actions" : "Info", true);
+        pg::clear_body(ctx_.content, kBarH);
+        if (act_page_) {
+            act_sel_ = std::clamp<int>(ctx_.keep.place_sel[static_cast<int>(conn::place_of(tab_))], 0, n_items_ - 2);
+            ctx_.rows.detach();
+            ctx_.rows.init(ctx_.content, kit::kBodyY, &ConnectionPage::row_fn, this);
+        } else {
+            act_sel_ = -1;
+            ctx_.rows.detach();
+        }
+        invalidate();
+        update(ctx_.now);
+        return true;
+    }
     if (shrt && e.button != Button::Back) {
         switch (e.button) {
-        case Button::Plus: place_key(true); break;
-        case Button::Minus: place_key(false); break;
+        case Button::Plus:
+            if (act_page_) {
+                if (act_sel_ + 1 < n_items_ - 1) act_sel_++;
+                ctx_.keep.place_sel[static_cast<int>(conn::place_of(tab_))] = static_cast<uint8_t>(act_sel_);
+            } else if (first_ + kPlaceRows < res_n_) {
+                first_++;
+            }
+            break;
+        case Button::Minus:
+            if (act_page_) {
+                if (act_sel_ > 0) act_sel_--;
+                ctx_.keep.place_sel[static_cast<int>(conn::place_of(tab_))] = static_cast<uint8_t>(act_sel_);
+            } else if (first_ > 0) {
+                first_--;
+            }
+            break;
         case Button::Ok: {
-            const int i = act_sel_ < 0 ? 0 : 1 + act_sel_;
-            if (i >= n_items_) break;
+            const int i = act_page_ ? 1 + act_sel_ : 0;
+            if (i < 0 || i >= n_items_) break;
             const conn::Item &it = items_[static_cast<std::size_t>(i)];
             if (it.act == conn::Act::Bench) {   // a tool or a page of the place: it may replace this page, so nothing here is touched after
                 const bench::Acts b = bench::actions(conn::place_of(tab_));
@@ -235,6 +266,7 @@ bool ConnectionPage::on_event(Event e) {
             }
             if (it.enabled) activate(it, ctx_.now);
             else set_op(it.why, ctx_.now);
+            if (ctx_.ui->menu() != Menu::Connection) return true;
             break;
         }
         default: return false;
@@ -244,8 +276,16 @@ bool ConnectionPage::on_event(Event e) {
         return true;
     }
     if (e.press == Press::Long && e.button == Button::Ok) {   // Share (QR): the shown tab's record
-        if (tab_ == conn::Tab::Source) { share_caps(ctx_.now); return true; }
-        if (tab_ == conn::Tab::Cable) { share_cable(ctx_.now); return true; }
+        if (tab_ == conn::Tab::Source) {
+            share_caps(ctx_.now);
+            if (ctx_.ui->menu() == Menu::Connection) update(ctx_.now);
+            return true;
+        }
+        if (tab_ == conn::Tab::Cable) {
+            share_cable(ctx_.now);
+            if (ctx_.ui->menu() == Menu::Connection) update(ctx_.now);
+            return true;
+        }
         return false;
     }
     return back_event(e);
@@ -464,11 +504,6 @@ static_assert(answered_rows_fit(), "the Answered row's key and value fit their c
 struct Rows {
     struct R {
         const char *key = ""; StrBuf<28> v; uint16_t c = kText; uint8_t cut = 0;
-        int8_t act = -1;       // an action row (a place page's extras): its index, -1 = a result row
-        bool focus = false, off = false;
-        bool drill = false;    // an action row that opens a page: the chevron when it has no tail
-        bool perf = false;     // the first action row under fact rows: the dashed perforation on its top line
-        const char *tail = ""; // an action row's tail word (a tool's readiness tag)
     };
     static constexpr int kCap = kMaxList;
     static constexpr int kCountOnly = 1 << 14;
@@ -1140,26 +1175,8 @@ uint32_t survey_sig(bool more) {
 
 namespace {
 
-// A single tool's other actions, as rows after the result (items_[0] is the tool's own action: OK runs it with no row
-// focused). A greyed row stays in its place; the footer names why while it is focused.
-void add_extras(Rows &R, const std::array<conn::Item, conn::kMaxItems> &it, int n, int sel) {
-    const bool facts = R.total > 0;   // fact rows above: the first action row carries the perforation
-    for (int i = 1; i < n; i++) {
-        const conn::Item &x0 = it[static_cast<std::size_t>(i)];
-        Rows::R &x = R.push();
-        x.key = "";
-        x.v.put(x0.label);
-        x.act = static_cast<int8_t>(i - 1);
-        x.perf = facts && i == 1;
-        x.focus = sel == i - 1;
-        x.off = !x0.enabled;
-        x.tail = x0.tag;
-        x.drill = x0.act == conn::Act::Bench || x0.act == conn::Act::SpoofAs || x0.act == conn::Act::SavedCables;
-    }
-}
-
-// A place page: the identity block's band (y22..67, kit::kIdY) and the list under it, with a 4 px lane on the right for the
-// scroll thumb.
+// A place page's Info list: the identity block's band (y22..67, kit::kIdY) and the fact list under it, with a 4 px lane on
+// the right for the scroll thumb. Actions live on the Actions sub-page (kit::RowList).
 using kit::kPlaceListY;
 constexpr int16_t kLane = 4;
 constexpr int kPlaceSlots = (kFooterY - kPlaceListY) / kRowPitch;   // 7
@@ -1167,9 +1184,8 @@ static_assert(kPlaceSlots == ConnectionPage::kPlaceRows && kPlaceSlots <= kVisRo
 static_assert(kValX + kValCells * 8 <= 224 - kLane, "the value column ends before the scroll lane");
 
 // The window of R (already windowed by the builder), painted from kPlaceListY down to the footer: one 20 px row per
-// slot, a slot repainted alone when its hash moved (Row D), the vacated slots cleared. The first action row carries the
-// dashed perforation, and the list keeps a 4 px lane at the right edge for its scroll thumb. An action row: its label
-// at x 8, focused = kFocusFill ground (with optional 3 px kFocusBar), a tail word or the drill chevron.
+// slot, a slot repainted alone when its hash moved (Row D), the vacated slots cleared, and a 4 px lane at the right edge
+// for its scroll thumb.
 struct ListDrawState {
     bool &tail_cleared;
     int16_t &clear_y;
@@ -1187,12 +1203,9 @@ bool paint_list(const Surface &c, const Rows &R, bool dim,
     for (int i = 0; i < n; i++) {
         const Rows::R &row = R.r[i];
         uint32_t h = mix_u32(2166136261u, uint32_t(row.c) | uint32_t(row.cut) << 16 | uint32_t(dim) << 24);
-        h = mix_u32(h, uint32_t(uint8_t(row.act)) | uint32_t(row.focus) << 8 | uint32_t(row.off) << 9 | uint32_t(row.drill) << 10
-                           | uint32_t(row.perf) << 11);
         h = pg::mix_cstr(h, row.key);
         h = mix_u32(h, 0x100u);   // key / value separator
         h = pg::mix_str(h, row.v.view());
-        h = pg::mix_cstr(h, row.tail);
         sigs[static_cast<std::size_t>(i)] = h | 1u;
     }
     if (!st.tail_cleared) {
@@ -1233,28 +1246,8 @@ bool paint_list(const Surface &c, const Rows &R, bool dim,
         if (st.bg && !st.bg->admit(static_cast<int>(c.w) * kRowPitch, true)) return false;
         sig_io[static_cast<std::size_t>(i)] = sigs[static_cast<std::size_t>(i)];
         const Rows::R &row = R.r[i];
-        if (row.perf) kit::draw_dashed(c, 0, w, y, kInk3, kBg);   // the perforation above the actions
-        else gfx_fill(c, 0, y, w, 1, kBg);
+        gfx_fill(c, 0, y, w, 1, kBg);
         const kit::Box body{0, static_cast<int16_t>(y + 1), w, static_cast<int16_t>(kRowPitch - 1)};
-        if (row.act >= 0) {
-            const bool bar = row.focus && kFocusBar != 0;
-            const uint16_t bg = row.focus ? kFocusFill : kBg;
-            const uint16_t ink = row.off ? (row.focus ? kOnFocusDim : kInk3) : (row.focus ? kOnFocus : kInk);
-            const uint16_t dim_ink = row.focus ? kOnFocusDim : kInk2;
-            const std::string_view tail = row.tail;
-            kit::TextRun t[2];
-            int nt = 0;
-            t[nt++] = {8, static_cast<int16_t>(y + kValDy), &kSmall, row.v.view(), ink};
-            if (!tail.empty())
-                t[nt++] = {static_cast<int16_t>(w - 8 - static_cast<int>(tail.size()) * kSmall.adv), static_cast<int16_t>(y + kValDy),
-                           &kSmall, tail, dim_ink};
-            const kit::Box g = bar ? kit::Box{3, body.y, static_cast<int16_t>(w - 3), body.h} : body;
-            if (bar) gfx_fill(c, 0, body.y, 3, body.h, kFocusBar);
-            kit::paint_texts(c, g, t, nt, bg);
-            if (tail.empty() && row.drill && !row.off)
-                kit::draw_drill(c, static_cast<int16_t>(w - 8), static_cast<int16_t>(body.y + body.h / 2), dim_ink);
-            continue;
-        }
         kit::TextRun runs[3];
         int nr = 0;
         runs[nr++] = {kKeyX, static_cast<int16_t>(y + kKeyDy), &kLabelFont, row.key, kDim};
@@ -1274,13 +1267,8 @@ bool paint_list(const Surface &c, const Rows &R, bool dim,
     return true;
 }
 
-// A place page's window: the focused action row stays on screen with the least scroll; with no row focused the window stays
-// where the keys left it. Clamped so the list never ends above the last slot.
-int place_first(int first, int focus_row, int total) {
-    if (focus_row >= 0) {
-        if (focus_row < first) first = focus_row;
-        if (focus_row >= first + kPlaceSlots) first = focus_row - kPlaceSlots + 1;
-    }
+// Clamped so the Info fact list never ends above the last slot.
+int place_first(int first, int total) {
     return std::clamp(first, 0, std::max(0, total - kPlaceSlots));
 }
 
@@ -1458,19 +1446,9 @@ void add_soc_chip(Ident &id, const pd::BatteryCaps &bat, const pd::BatteryStatus
 
 }  // namespace
 
-uint32_t ConnectionPage::actions_sig() const {
-    uint32_t h = mix_u32(2166136261u, uint32_t(act_sel_ + 1) | uint32_t(n_items_) << 8 | uint32_t(first_) << 20);
-    for (int i = 0; i < n_items_; i++) {
-        const conn::Item &it = items_[static_cast<std::size_t>(i)];
-        h = mix_u32(h, uint32_t(it.enabled) | uint32_t(it.caution) << 1);
-        h = pg::mix_cstr(h, it.tag);
-    }
-    return h;
-}
-
 namespace {
-// What a place page paints under its identity block: the fact rows `build` adds, then the place's actions; built once to
-// count, then for the window (the focus decides it, else the keys). The members it moves are the page's.
+// What the Info page paints under its identity block: the fact rows `build` adds (no action rows). Built once to
+// count, then for the window.
 struct PlaceList {
     int &first;
     uint8_t &res_n, &tot_n;
@@ -1480,22 +1458,16 @@ struct PlaceList {
     ListDrawState &st;
 };
 using BuildRowsFn = void (*)(Rows &, const void *);
-[[gnu::noinline]] bool paint_place_list(const Surface &c, const std::array<conn::Item, conn::kMaxItems> &items, int n_items,
-                                        int &act_sel, bool dim, PlaceList s, BuildRowsFn build, const void *ctx) {
+[[gnu::noinline]] bool paint_place_list(const Surface &c, bool dim, PlaceList s, BuildRowsFn build, const void *ctx) {
     Rows R;
     R.reset(Rows::kCountOnly);
     build(R, ctx);
-    const int results = R.total;
-    // Empty page: keep focus on the first action row (matches RowList).
-    if (results == 0 && act_sel < 0 && n_items > 1) act_sel = 0;
-    add_extras(R, items, n_items, act_sel);
     const int total = R.total;
-    s.first = place_first(s.first, act_sel >= 0 ? results + act_sel : -1, total);
-    s.res_n = static_cast<uint8_t>(results);
+    s.first = place_first(s.first, total);
+    s.res_n = static_cast<uint8_t>(total);
     s.tot_n = static_cast<uint8_t>(total);
     R.reset(s.first);
     build(R, ctx);
-    add_extras(R, items, n_items, act_sel);
     if (!paint_list(c, R, dim, s.sig, s.n_io, s.st)) return false;
     return paint_thumb(c, s.first, total, s.thumb_sig, s.st.bg);
 }
@@ -1555,7 +1527,7 @@ void build_no_pd_rows(Rows &R, const void *p) {
 void noop_build_rows(Rows &, const void *) {}
 }  // namespace
 
-// An empty place page: the dim headline and hint in its identity block, then its action rows.
+// An empty Info page: the dim headline and hint in its identity block, no fact or action rows.
 bool ConnectionPage::paint_empty(bool) {
     const conn::Empty e = conn::empty_state(tab_, facts_);
     const Surface &c = ctx_.content;
@@ -1568,8 +1540,7 @@ bool ConnectionPage::paint_empty(bool) {
     }
     if (!paint_ident_dim(c, e.title, e.hint, id_sig_, bg)) return false;
     ListDrawState st{tail_cleared_, body_clear_y_, bg};
-    return paint_place_list(c, items_, n_items_, act_sel_, false,
-                            {first_, res_n_, tot_n_, thumb_sig_, row_sig_, body_n_, st}, noop_build_rows, nullptr);
+    return paint_place_list(c, false, {first_, res_n_, tot_n_, thumb_sig_, row_sig_, body_n_, st}, noop_build_rows, nullptr);
 }
 
 bool ConnectionPage::paint_body(const MatchResult &r, const pd::SourceCaps &caps, std::span<const uint32_t> sink,
@@ -1604,7 +1575,7 @@ bool ConnectionPage::paint_body_locked(const void *tab_data, bool dim) {
     PaintBudget *const bg = ctx_.budget;
     const bool full = body_ != Body::Rows || body_tab_ != tab_;
     if (full) {
-        if (body_ == Body::Empty) { first_ = 0; act_sel_ = -1; }
+        if (body_ == Body::Empty) first_ = 0;
         body_ = Body::Rows; body_tab_ = tab_;
         row_sig_.fill(0); body_n_ = 0; tail_cleared_ = ctx_.blank; close_done_ = false;
         body_clear_y_ = kFooterY; id_sig_ = thumb_sig_ = 0;
@@ -1612,13 +1583,12 @@ bool ConnectionPage::paint_body_locked(const void *tab_data, bool dim) {
     if (!paint_place_ident(c, tab_, d, dim, id_sig_, bg)) return false;
     ListDrawState st{tail_cleared_, body_clear_y_, bg};
     const BodyBuildCtx bctx{tab_, &d};
-    return paint_place_list(c, items_, n_items_, act_sel_, dim,
-                            {first_, res_n_, tot_n_, thumb_sig_, row_sig_, body_n_, st}, build_body_rows, &bctx);
+    return paint_place_list(c, dim, {first_, res_n_, tot_n_, thumb_sig_, row_sig_, body_n_, st}, build_body_rows, &bctx);
 }
 
 // The no-PD body (ROADMAP 2026-11-10, Row C): the dim identity headline (NO PD) and its one line, then only the rows
 // that are actually measured - the Type-C advertisement (Rp level + VBUS), the draw on the Sink tab, a legacy fast-charge
-// answer on the Source tab - and the place's action rows. paint_body only calls this when the paint signature moved.
+// answer on the Source tab. paint_body only calls this when the paint signature moved.
 bool ConnectionPage::paint_no_pd_body(const MatchResult &r, bool) {
     const char *line = conn::no_pd_line(tab_, none_why_);
     // The measured rows (at most three). The Type-C row uses the match's Rp reading (the active CC line driven into the
@@ -1632,7 +1602,7 @@ bool ConnectionPage::paint_no_pd_locked(const char *line, uint32_t rp_ma) {
     PaintBudget *const bg = ctx_.budget;
     const bool full = body_ != Body::NoPd || body_tab_ != tab_;
     if (full) {
-        if (body_ == Body::Empty) { first_ = 0; act_sel_ = -1; }
+        if (body_ == Body::Empty) first_ = 0;
         body_ = Body::NoPd; body_tab_ = tab_;
         row_sig_.fill(0); body_n_ = 0; tail_cleared_ = ctx_.blank; close_done_ = false;
         body_clear_y_ = kFooterY; id_sig_ = thumb_sig_ = 0;
@@ -1640,8 +1610,51 @@ bool ConnectionPage::paint_no_pd_locked(const char *line, uint32_t rp_ma) {
     if (!paint_ident_dim(c, text::conn::kNoPd, line, id_sig_, bg)) return false;
     ListDrawState st{tail_cleared_, body_clear_y_, bg};
     const NoPdBuildCtx bctx{tab_, static_cast<fastcharge::Protocol>(ctx_.fc), ctx_.pm_avg.current_ma, vbus_, vooc_, rp_ma};
-    return paint_place_list(c, items_, n_items_, act_sel_, false,
-                            {first_, res_n_, tot_n_, thumb_sig_, row_sig_, body_n_, st}, build_no_pd_rows, &bctx);
+    return paint_place_list(c, false, {first_, res_n_, tot_n_, thumb_sig_, row_sig_, body_n_, st}, build_no_pd_rows, &bctx);
+}
+
+void ConnectionPage::row_fn(void *ctx, int index, bool focused, kit::RowSpec &out) {
+    static constexpr const char *kNotes[] = {
+        "probe or sniff cable chip",
+        "save read to library",
+        "view or arm saved clones",
+        "spoof e-marker to charger",
+        "rescan source capabilities",
+    };
+    static_assert(all_fit(kNotes, kLabelAdv, kit::kNoteMaxPx), "an action note is wider than the note box");
+    auto *p = static_cast<ConnectionPage *>(ctx);
+    out = kit::RowSpec{};
+    const int idx = index + 1;
+    if (idx < 1 || idx >= p->n_items_) return;
+    const conn::Item &it = p->items_[static_cast<std::size_t>(idx)];
+    out.text = it.label;
+    if (!it.enabled) {
+        out.text_color = kInk3;
+        out.tail = it.tag;
+        out.tail_color = kInk3;
+        out.chevron = false;
+    } else {
+        if (it.caution) {
+            out.tail = it.tag;
+            out.tail_color = kCaution;
+        }
+        out.chevron = !it.caution && (it.act == conn::Act::Bench || it.act == conn::Act::SavedCables || it.act == conn::Act::SpoofAs);
+    }
+    if (focused) {
+        if (it.act == conn::Act::Bench) {
+            const bench::Acts b = bench::actions(conn::place_of(p->tab_));
+            if (it.arg >= 0 && it.arg < b.n) out.note = bench::act_hint(b.a[it.arg]);
+        } else {
+            switch (it.act) {
+            case conn::Act::ReadCable:   out.note = kNotes[0]; break;
+            case conn::Act::SaveCable:   out.note = kNotes[1]; break;
+            case conn::Act::SavedCables: out.note = kNotes[2]; break;
+            case conn::Act::SpoofAs:     out.note = kNotes[3]; break;
+            case conn::Act::Refresh:     out.note = kNotes[4]; break;
+            default: break;
+            }
+        }
+    }
 }
 
 // The bottom bar: what the last action says, else the state of the shown place and the topology word. It goes
@@ -1750,7 +1763,8 @@ static uint32_t mix_dev_extra(uint32_t h, const pd::ManufacturerInfo &batt_mfr, 
 void ConnectionPage::update(uint32_t now_ms) {
     PaintBudget *const bg = ctx_.budget;
     const pd::Link &link = ctx_.ui->link();
-    title_badge(false);
+    if (has_pages()) title_pager(act_page_ ? 1 : 0, 2);
+    else title_badge(ctx_.stale());
     if (bg && bg->more) return;
     sense(now_ms);
     if (iq_asked_ && !fusb302::interrogate_running()) {
@@ -1762,9 +1776,21 @@ void ConnectionPage::update(uint32_t now_ms) {
         set_op(msg, now_ms, 4000);
     }
     build_items();   // the action rows and the OK verb follow the live state
-    if (act_sel_ + 1 >= n_items_) act_sel_ = n_items_ - 2;
+    if (!has_pages()) act_page_ = false;
+    if (act_page_) {
+        if (act_sel_ < 0) act_sel_ = 0;
+        if (act_sel_ + 1 >= n_items_) act_sel_ = n_items_ - 2;
+    } else {
+        act_sel_ = -1;
+    }
     paint_status(now_ms);
     if (bg && bg->more) return;
+    if (act_page_) {
+        ctx_.rows.set_count(n_items_ - 1);
+        ctx_.rows.select(act_sel_);
+        ctx_.rows.draw(now_ms, bg);
+        return;
+    }
     // Cheap pre-check: hash only the inputs that can reach the screen -- link state, caps header fields,
     // the displayed contract fields (flags/accepted/ready/rejected/pos/mv/op_ma/max_ma drive the Request /
     // State / Used rows), sink/identify list headers, e-marker and VDM scalar fields, fc, analog D+/D-, the
@@ -1872,8 +1898,8 @@ void ConnectionPage::update(uint32_t now_ms) {
         }
     }
     const uint32_t c_base = mix_u32(c, dev_sig);
-    const uint32_t asig = actions_sig();
-    c = mix_u32(c_base, asig);
+    const uint32_t fsig = static_cast<uint32_t>(first_);
+    c = mix_u32(c_base, fsig);
     if (!body_pending_ && sig_valid_ && c == cheap_sig_) return;   // nothing changed: skip match_live + the full sig
     const bool inputs_changed = !match_valid_ || c != cheap_sig_;
     cheap_sig_ = c;
@@ -1886,15 +1912,15 @@ void ConnectionPage::update(uint32_t now_ms) {
                                             | uint32_t(facts_.wake_port_off) << 24
                                             | uint32_t(facts_.vbus_mv >= raguard::kVbusAttachedMv) << 25);
         h_base = mix_u32(h_base, uint32_t(facts_.cable_fact));
-        const uint32_t h = mix_u32(h_base, asig);
+        const uint32_t h = mix_u32(h_base, fsig);
         if (!body_pending_ && sig_valid_ && h == sig_) return;
         const bool redraw = !sig_valid_;
         body_pending_ = true;
         const bool painted_all = paint_empty(redraw);
-        const uint32_t new_asig = actions_sig();
-        cheap_sig_ = mix_u32(c_base, new_asig);   // reflect any act_sel_ / first_ adjustment done by paint_place_list()
+        const uint32_t new_fsig = static_cast<uint32_t>(first_);
+        cheap_sig_ = mix_u32(c_base, new_fsig);   // reflect any first_ clamping done by paint_place_list()
         if (painted_all) {
-            sig_ = mix_u32(h_base, new_asig);
+            sig_ = mix_u32(h_base, new_fsig);
             sig_valid_ = true;
             body_pending_ = false;
         }
@@ -1937,7 +1963,7 @@ void ConnectionPage::update(uint32_t now_ms) {
     }
     h = pg::mix_u32s(h, sink.data(), sink.size());
     h = mix_u32(h, svs);
-    h = mix_u32(h, asig);
+    h = mix_u32(h, fsig);
     h = mix_u32(h, uint32_t(wl.src));
     h = mix_u32(h, uint32_t(ct.flags) | uint32_t(ct.accepted) << 8 | uint32_t(ct.ready) << 9 | uint32_t(ct.rejected) << 10);
     {   // the tab bodies read more than the match: cable, identity, USB link, protocol, sink mode
@@ -1961,7 +1987,7 @@ void ConnectionPage::update(uint32_t now_ms) {
     const bool redraw = !sig_valid_;   // invalidated (page entered, tab, pop-up closed, repaint pass): the area is stale
     body_pending_ = true;
     const bool painted_all = paint_body(r, *caps, sink, redraw);
-    cheap_sig_ = mix_u32(c_base, actions_sig());   // reflect any scroll clamping done by place_first() during paint
+    cheap_sig_ = mix_u32(c_base, static_cast<uint32_t>(first_));   // reflect any scroll clamping done by place_first() during paint
     if (painted_all) {
         sig_ = h;
         sig_valid_ = true;

@@ -192,6 +192,7 @@ public:
     void flip_face(int dir, uint32_t now_ms);
     void show_face(uint32_t now_ms);                          // the face last shown (the Bench's Meter row and its BACK)
     void open_place(bench::Place p, uint32_t now_ms);         // Place::Meter = the Bench's own list
+    void open_place_actions(bench::Place p, uint32_t now_ms); // Place::Charger/Cable/Device opened directly on its Actions sub-page
     void to_meter(uint32_t now_ms);
     // Opens the Charger / Cable / Device place (`tab`); `spoof` goes straight on to the Spoof list (the Tools shortcut).
     bool open_connection(conn::Tab tab, bool spoof, uint32_t now_ms);
@@ -562,6 +563,7 @@ private:
     uint8_t requested_rotation_ = 0xFF;
     bool rotation_notice_drawn_ K2_BSS_INIT(false);
     int8_t conn_lock_ = -1;   // open_connection / open_place -> build_menu: the place tab (Charger / Cable / Device)
+    bool conn_actions_next_ K2_BSS_INIT(false);   // open_place_actions / open_connection(spoof) -> build_menu: open on Actions sub-page
     bool place_next_ K2_BSS_INIT(false); // open_place -> build_menu: the PD diagnosis opens as the Log place
     bool pressed_[4] K2_BSS_ZERO;          // lit, indexed by Button
     bool down_[4] K2_BSS_ZERO;             // physically down

@@ -696,9 +696,10 @@ static void test_place_actions() {
     CHECK_EQ(int(it[std::size_t(n - 1)].act), int(Act::Refresh));
     CHECK_STR(it[std::size_t(n - 1)].label, "Read again");
 
-    // Cable place: out[0] is Read e-marker; rows keep Read e-marker, Save cable, Saved cables, and NO Spoof as...
+    // Cable place: out[0] is Read e-marker; Actions rows keep Read e-marker, Save cable, Saved cables, Spoof as... (tagged "load" when inline).
+    a.inline_sink = false;
     n = place_actions(Tab::Cable, a, it);
-    CHECK(n >= 4);
+    CHECK(n >= 5);
     CHECK_EQ(int(it[0].act), int(Act::ReadCable));
     CHECK_EQ(int(it[1].act), int(Act::ReadCable));
     CHECK_STR(it[1].label, "Read e-marker");
@@ -706,7 +707,16 @@ static void test_place_actions() {
     CHECK_STR(it[2].label, "Save cable");
     CHECK_EQ(int(it[3].act), int(Act::SavedCables));
     CHECK_STR(it[3].label, "Saved cables");
-    for (int i = 0; i < n; i++) CHECK(it[std::size_t(i)].act != Act::SpoofAs);
+    CHECK_EQ(int(it[4].act), int(Act::SpoofAs));
+    CHECK_STR(it[4].label, "Spoof as...");
+    CHECK_EQ(it[4].enabled, true);
+    CHECK_STR(it[4].tag, "");
+    a.inline_sink = true;
+    place_actions(Tab::Cable, a, it);
+    CHECK_EQ(it[4].enabled, false);
+    CHECK_STR(it[4].why, kWhyLiveSink);
+    CHECK_STR(it[4].tag, "load");
+    a.inline_sink = false;
 
     // Sink (Device) place: out[0] is Ask device (Act::Identify); no Ask device or Read again rows in out[1..].
     n = place_actions(Tab::Sink, a, it);

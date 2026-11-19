@@ -193,15 +193,21 @@ static void test_place_actions() {
     CHECK_EQ(place_rows(conn::Tab::Source, a) == std::string("Read again:Test charger,Request voltage,Fast charge,Report cards,") +
                                                       (K2_PDSTRESS ? "Stress test," : "") + "Read again",
              true);
-    CHECK_EQ(place_rows(conn::Tab::Cable, a) == std::string("Read e-marker:Read e-marker,Save cable,Saved cables,Resistance") +
+    CHECK_EQ(place_rows(conn::Tab::Cable, a) == std::string("Read e-marker:Read e-marker,Save cable,Saved cables,Spoof as...,Resistance") +
                                                     (K2_LOOPPROBE ? ",Loop probe" : ""),
              true);
     CHECK_EQ(place_rows(conn::Tab::Sink, a) == (K2_TWIN ? "Ask device:Twins" : "Ask device:"), true);
     std::array<conn::Item, conn::kMaxItems> it{};
     const int n = conn::place_actions(conn::Tab::Cable, a, it);
     CHECK_EQ(it[2].enabled, false);                                   // Save cable: no cable read
-    CHECK_EQ(it[4].act == conn::Act::Bench && it[4].arg == 0, true);  // Resistance: the Cable place's first tool
-    CHECK_EQ(n, K2_LOOPPROBE ? 6 : 5);
+    CHECK_EQ(it[4].act == conn::Act::SpoofAs && it[4].enabled, true); // Spoof as...: enabled when not inline
+    CHECK_EQ(it[5].act == conn::Act::Bench && it[5].arg == 0, true);  // Resistance: the Cable place's first tool
+    CHECK_EQ(n, K2_LOOPPROBE ? 7 : 6);
+    a.inline_sink = true;
+    conn::place_actions(conn::Tab::Cable, a, it);
+    CHECK_EQ(it[4].enabled, false);
+    CHECK_EQ(std::strcmp(it[4].tag, "load"), 0);
+    a.inline_sink = false;
     a.attached = true;
     conn::place_actions(conn::Tab::Sink, a, it);
     CHECK_EQ(it[0].enabled, true);                                    // a device to ask

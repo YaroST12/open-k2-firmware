@@ -61,7 +61,7 @@ static void test_label_sets() {
         {"Back", "Up", "Bench",  "Dn"},           // Lines
         {"Back", "Up", "Open",   "Dn"},           // the Bench
         {"Back", "Up", "Open",   "Dn"},           // Settings
-        {"Back", "Up", "Refresh", "Dn"},          // Connection (Charger place): starts at top of facts (OK = Read again)
+        {"Back", "Up/Prev", "Refresh", "Dn/Next"}, // Connection (Charger place): Info page (OK = Read again)
         {"Back", "Up", "Share*", "Dn"},           // Diag (a submenu of Tools): long OK shares the log
     };
     static constexpr uint8_t kPages[8] = {0, 1, 2, 3, 4, 5, kPdPage, kDiagPage};
@@ -72,8 +72,8 @@ static void test_label_sets() {
         // Nothing pages any more, so nothing is dimmed for being the first or the last page.
         CHECK_EQ(ui.labels().b[static_cast<int>(Button::Minus)].dim, false);
         CHECK_EQ(ui.labels().b[static_cast<int>(Button::Plus)].dim, false);
-        // Every label fits the slot: characters x advance of the panel font <= slot length.
-        for (int b = 0; b < 4; b++) CHECK_EQ(static_cast<int>(strlen(label(ui, static_cast<Button>(b))) * kLabelFont.adv) + kDividerPx + 2 * kSlotPadPx <= static_cast<int>(b == 0 || b == 3 ? kSlotLenPx[0] : kSlotLenPx[1]), 1);
+        // Every label fits the slot: characters <= label_max_chars(button).
+        for (int b = 0; b < 4; b++) CHECK_EQ(strlen(label(ui, static_cast<Button>(b))) <= label_max_chars(static_cast<Button>(b)), 1);
     }
 }
 
@@ -116,13 +116,15 @@ static void test_global_paging() {
     ui.on_button(Button::Ok, ButtonEvent::Short, t);
     CHECK_EQ(ui.menu() == Menu::Connection, 1);                       // the Charger place page over the Bench
     ui.tick(t += 20);
-    while (ui.connection_page().action_row() < 0) ui.on_button(Button::Plus, ButtonEvent::Short, t += 10);
+    ui.on_button(Button::Plus, ButtonEvent::Long, t += 10);            // Long Plus -> Charger Actions sub-page (row 0 = Test charger)
+    CHECK_EQ(ui.connection_page().actions_mode(), true);
     ui.on_button(Button::Ok, ButtonEvent::Short, t += 10);
     CHECK_EQ(ui.page() == Page::ChargerTest, 1);
     ui.on_button(Button::Back, ButtonEvent::Short, t);
     CHECK_EQ(ui.page() == Page::Tools, 1);
     CHECK_EQ(ui.menu() == Menu::Connection, 1);
     CHECK_EQ(int(ui.connection_page().tab()), int(conn::Tab::Source));
+    CHECK_EQ(ui.connection_page().actions_mode(), true);               // ChargerTest Back returns to Charger Actions sub-page
     ui.on_button(Button::Back, ButtonEvent::Short, t);
     CHECK_EQ(ui.page() == Page::Tools, 1);
     CHECK_EQ(ui.menu_depth(), 0u);
@@ -364,8 +366,9 @@ static void test_cable_tab_not_found_greys_save() {
     Ui &ui = fresh_ui();
     g_stub = StubState();
     g_stub.em = {};                                     // valid = false, defaults 3A / 20V / USB 2.0
-    ui.goto_page(kPdPage + 1, 20000);                   // Cable place (Read e-marker is row 0, Save cable is row 1)
+    ui.goto_page(kPdPage + 1, 20000);                   // Cable place: opens Info page
     ui.tick(20050);
+    ui.on_button(Button::Plus, ButtonEvent::Long, 20100);  // Cable Actions sub-page (Read e-marker is row 0)
     ui.on_button(Button::Plus, ButtonEvent::Short, 20150); // Save cable (greyed)
     ui.on_button(Button::Ok, ButtonEvent::Short, 20200);   // greyed: refused, nothing saved
     CHECK_EQ(g_stub.lib_saves, 0);
@@ -388,9 +391,10 @@ static void test_cable_tab_save_and_list() {
     g_stub.em.num_vdos = 5;
     g_stub.em.spec_rev = 2;
     g_stub.em.raw_vdos = {0xFF00A041, (3u << 27) | 0x05ACu, 0, 0x12340005, (2u << 21) | (3u << 9) | (2u << 5)};
-    ui.goto_page(kPdPage + 1, 20000);                       // Cable place (starts at top of facts)
+    ui.goto_page(kPdPage + 1, 20000);                       // Cable place (Info page)
     ui.tick(20050);
     CHECK_STR(label(ui, Button::Ok), "Read");
+    ui.on_button(Button::Plus, ButtonEvent::Long, 20080);   // Cable Actions sub-page
     uint32_t ct = 20100;
     while (ui.connection_page().action_row() < 1) ui.on_button(Button::Plus, ButtonEvent::Short, ct += 10);   // Save cable
     CHECK_STR(label(ui, Button::Ok), "Save");
@@ -795,8 +799,7 @@ static void test_every_label_fits_its_slot() {
                 printf("label blanked: %s button %d \"%s\" (%u chars, room for %u)\n", what, b, full, want, room);
             CHECK_EQ(want > 0 ? got > 0 : got == 0, 1);              // never blanked
             CHECK_EQ(got <= room, 1);
-            const int slot_len = static_cast<int>(b == 0 || b == 3 ? kSlotLenPx[0] : kSlotLenPx[1]);
-            CHECK_EQ(static_cast<int>(got * kLabelFont.adv) + kDividerPx + 2 * kSlotPadPx <= slot_len, 1);
+            CHECK_EQ(got <= label_max_chars(static_cast<Button>(b)), 1);
             CHECK_EQ(strlen(fit), got);
             // The short word alone always survives (the long press / alternative is what may be cut).
             if (l.shrt[0]) CHECK_EQ(strncmp(fit, l.shrt, strlen(l.shrt)), 0);
@@ -866,6 +869,8 @@ static void open_act(Ui &ui, bench::Place p, int tool, uint32_t t) {
     ui.tick(t + 2);
     const int target = act_row(p, tool);
     if (ui.menu() == Menu::Connection) {
+        if (!ui.connection_page().actions_mode() && ui.connection_page().has_pages())
+            ui.on_button(Button::Plus, ButtonEvent::Long, t + 2);
         int guard = 32;
         while (ui.connection_page().action_row() < target && guard-- > 0) ui.on_button(Button::Plus, ButtonEvent::Short, t + 5);
     } else {
@@ -896,7 +901,8 @@ static void test_tools_hub() {
     CHECK_EQ(ui.page() == Page::Tools, 1);
     CHECK_EQ(ui.menu() == Menu::Connection, 1);   // the Cable place page over the Bench
     CHECK_EQ(int(ui.connection_page().tab()), int(conn::Tab::Cable));
-    // In a place, short +/- select an action and OK opens it: Cable > Resistance is Cable R.
+    // In a place, Long Plus flips to Actions, short +/- select an action and OK opens it: Cable > Resistance is Cable R.
+    press(ui, Button::Plus, ButtonEvent::Long, kT0 + 36);
     for (int i = 0; i < act_row(bench::Place::Cable, 3); i++) press(ui, Button::Plus, ButtonEvent::Short, kT0 + 38);
     press(ui, Button::Ok, ButtonEvent::Short, kT0 + 40);
     CHECK_EQ(ui.menu_depth(), 2u);

@@ -73,8 +73,12 @@ PageIf *Ui::build_menu(Menu m) {
     case Menu::Emarker: return pages_.push<EmarkerPage>(ctx_);
     case Menu::Connection: {
         ConnectionPage *p = pages_.push<ConnectionPage>(ctx_);
-        if (p) p->lock(conn_lock_ >= 0 ? static_cast<conn::Tab>(conn_lock_) : conn::Tab::Source);   // always a place page, before enter()
+        if (p) {
+            p->lock(conn_lock_ >= 0 ? static_cast<conn::Tab>(conn_lock_) : conn::Tab::Source);   // always a place page, before enter()
+            if (conn_actions_next_) p->set_actions_mode(true);
+        }
         conn_lock_ = -1;
+        conn_actions_next_ = false;
         return p;
     }
     case Menu::Diag: return pages_.push<DiagPage>(ctx_);
@@ -895,8 +899,14 @@ void Ui::open_place(bench::Place p, uint32_t now_ms) {
     const conn::Tab tab = ctx_.keep.bench_sel == static_cast<int>(bench::Place::Charger) ? conn::Tab::Source
                         : ctx_.keep.bench_sel == static_cast<int>(bench::Place::Cable) ? conn::Tab::Cable : conn::Tab::Sink;
     conn_lock_ = static_cast<int8_t>(tab);
-    if (!push_menu(Menu::Connection, now_ms)) { conn_lock_ = -1; return; }
+    if (!push_menu(Menu::Connection, now_ms)) { conn_lock_ = -1; conn_actions_next_ = false; return; }
     pump_paint(now_ms);
+}
+
+void Ui::open_place_actions(bench::Place p, uint32_t now_ms) {
+    conn_actions_next_ = true;
+    open_place(p, now_ms);
+    conn_actions_next_ = false;
 }
 
 void Ui::to_meter(uint32_t now_ms) { set_page(Page::Home, now_ms); }
@@ -1160,7 +1170,8 @@ bool Ui::open_connection(conn::Tab tab, bool spoof, uint32_t now_ms) {
     if (depth_ > 0) set_page(page_, now_ms);   // a single Connection on the Tools page, whatever was open
     ctx_.now = now_ms;
     conn_lock_ = static_cast<int8_t>(tab);
-    if (!push_menu(Menu::Connection, now_ms)) { conn_lock_ = -1; return false; }
+    conn_actions_next_ = spoof;
+    if (!push_menu(Menu::Connection, now_ms)) { conn_lock_ = -1; conn_actions_next_ = false; return false; }
     if (spoof) return push_menu(Menu::Spoof, now_ms);
     pump_paint(now_ms);
     return true;

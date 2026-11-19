@@ -123,7 +123,7 @@ K2_HOT void draw_key_slot(const Surface &s, bool column, TextDir dir, unsigned s
     Box tri_box{};
     if (tri) {
         const int16_t cx = static_cast<int16_t>(zone.start + zone.len / 2);
-        tri_box = column ? Box{static_cast<int16_t>((s.w - 5) / 2), static_cast<int16_t>(cx - 4), 5, 9}
+        tri_box = column ? Box{static_cast<int16_t>((s.w - 9) / 2), static_cast<int16_t>(cx - 2), 9, 5}
                          : Box{static_cast<int16_t>(cx - 4), static_cast<int16_t>((s.h - 5) / 2), 9, 5};
         holes[nh++] = tri_box;
     }
@@ -138,22 +138,14 @@ K2_HOT void draw_key_slot(const Surface &s, bool column, TextDir dir, unsigned s
     }
     if (!tri) return;
     const bool up = tri > 0;
-    const int toward = !column ? (up ? 0 : 1) : (dir == TextDir::Ccw) == up ? 2 : 3;
     const uint16_t ink = lab.dim ? kInk3 : kInk2;
     for (int i = 0; i < 5; i++) {
-        const int k = toward == 0 || toward == 2 ? i : 4 - i;
+        const int k = up ? i : 4 - i;
         const int16_t lo = static_cast<int16_t>(4 - k), span = static_cast<int16_t>(2 * k + 1);
-        if (!column) {
-            const int16_t ly = static_cast<int16_t>(tri_box.y + i);
-            gfx_fill(s, tri_box.x, ly, lo, 1, ground);
-            gfx_fill(s, static_cast<int16_t>(tri_box.x + lo), ly, span, 1, ink);
-            gfx_fill(s, static_cast<int16_t>(tri_box.x + lo + span), ly, lo, 1, ground);
-        } else {
-            const int16_t lx = static_cast<int16_t>(tri_box.x + i);
-            gfx_fill(s, lx, tri_box.y, 1, lo, ground);
-            gfx_fill(s, lx, static_cast<int16_t>(tri_box.y + lo), 1, span, ink);
-            gfx_fill(s, lx, static_cast<int16_t>(tri_box.y + lo + span), 1, lo, ground);
-        }
+        const int16_t ly = static_cast<int16_t>(tri_box.y + i);
+        gfx_fill(s, tri_box.x, ly, lo, 1, ground);
+        gfx_fill(s, static_cast<int16_t>(tri_box.x + lo), ly, span, 1, ink);
+        gfx_fill(s, static_cast<int16_t>(tri_box.x + lo + span), ly, lo, 1, ground);
     }
 }
 

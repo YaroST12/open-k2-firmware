@@ -919,12 +919,15 @@ public:
     Strip labels() const override;
     void invalidate() override;
     void leave() override;
-    ListState list_state() const { return ListState{}; }
+    ListState list_state() const { return act_page_ ? ctx_.rows.state() : ListState{}; }
     conn::Tab tab() const { return tab_; }
-    // A place page (Charger, Cable, Device): one tab, identity block, full fact table, then the place's actions in one
-    // scrollable list. OK with no row focused runs the place's own read.
+    // A place page (Charger, Cable, Device): Info page (identity block + fact table) and, when n_items_ > 1, a Meter-style
+    // Actions sub-page (kit::RowList) toggled by Long -/+. Short OK on Info runs items_[0]; on Actions runs items_[1 + act_sel_].
     void lock(conn::Tab t);
-    int action_row() const { return act_sel_; }   // the focused action row (an index into the extras), -1 = none
+    bool has_pages() const { return n_items_ > 1; }
+    void set_actions_mode(bool on);
+    bool actions_mode() const { return act_page_; }
+    int action_row() const { return act_sel_; }   // the focused action row on Actions page, -1 = Info page
     static constexpr int kPlaceRows = 7;          // list rows on screen under the identity block
     int window_first() const { return first_; }   // the first list row on screen
     int result_rows() const { return res_n_; }    // the fact rows of the last paint (the actions follow)
@@ -958,17 +961,17 @@ private:
                                         : tab_ == conn::Tab::Source && none_why_ == pd::PdNoneWhy::SourceNeverOffered);
     }
     bool paint_empty(bool redraw);
-    uint32_t actions_sig() const;          // action rows: focus and enabled states
+    static void row_fn(void *ctx, int index, bool focused, kit::RowSpec &out);
     conn::Tab tab_ = conn::Tab::Source;
     conn::Facts facts_;
     pd::PdVerdict verdict_ = pd::PdVerdict::Pending;
     pd::PdNoneWhy none_why_ = pd::PdNoneWhy::None;
-    int act_sel_ = -1;                     // focused action row (items_[1 + act_sel_]), -1 = none: OK runs items_[0]
-    int first_ = 0;                        // first list row on screen (follows the focus, Up / Dn scroll it with none)
-    uint8_t res_n_ = 0, tot_n_ = 0;        // fact rows and all rows of the last paint (the keys scroll by them)
+    bool act_page_ = false;                // false = Info page (identity + facts), true = Actions page (RowList)
+    int act_sel_ = -1;                     // focused action row (items_[1 + act_sel_]), -1 = none (Info page)
+    int first_ = 0;                        // first fact row on Info page (Up / Dn scroll it)
+    uint8_t res_n_ = 0, tot_n_ = 0;        // fact rows and total rows of the last Info paint (res_n_ == tot_n_)
     uint32_t id_sig_ = 0;                  // identity block's hash (0 = repaint)
     uint32_t thumb_sig_ = 0;               // scroll thumb's (first, total) as painted
-    void place_key(bool down);             // Up / Dn
     StrBuf<40> status_txt_;                // the bottom bar as last painted (tests read it; the page never does)
     bool id_asked_ = false;                // Identify started from this page: its progress shows in the status bar
     bool iq_asked_ = false;                // inline interrogation started from the Device place

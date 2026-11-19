@@ -308,7 +308,7 @@ bool PageBase::back_event(Event e) {
         return true;
     }
     if (e.button != Button::Back) return false;
-    if (id_ == Page::ChargerTest) ui.open_place(bench::Place::Charger, ctx_.now);
+    if (id_ == Page::ChargerTest) ui.open_place_actions(bench::Place::Charger, ctx_.now);
     else ui.open_place(bench::Place::Meter, ctx_.now);   // the K2 place: the Bench
     return true;
 }

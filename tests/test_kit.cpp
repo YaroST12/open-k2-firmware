@@ -1286,7 +1286,48 @@ static void test_col2_and_pill() {
     CHECK_EQ(changed_in(same, snap(), 0, 240), 0);
 }
 
+static void test_draw_key_slot_arrows() {
+    // Vertical navigation arrows render as upright triangles (▲ / ▼) in both vertical (column == true) and
+    // horizontal (column == false) panels so they match vertical list scrolling rather than pointing sideways.
+    struct Case { Surface s; bool column; TextDir dir; };
+    const Case cases[] = {
+        {{224, 70, 16, 58}, true, TextDir::Ccw},
+        {{0, 54, 16, 58}, true, TextDir::Cw},
+        {{70, 0, 58, 16}, false, TextDir::Ccw},
+        {{54, 224, 58, 16}, false, TextDir::Cw},
+    };
+    for (const Case &c : cases) {
+        for (const bool is_up : {true, false}) {
+            lcd::fill(kBase);
+            const SlotLabel lab{is_up ? kUp : kDn, "", "", false};
+            kit::draw_key_slot(c.s, c.column, c.dir, 1, lab, false, false);
+            int min_x = 240, max_x = -1, min_y = 240, max_y = -1, total_ink = 0;
+            for (int y = c.s.y; y < c.s.y + c.s.h; ++y) {
+                for (int x = c.s.x; x < c.s.x + c.s.w; ++x) {
+                    const uint16_t p = px(x, y);
+                    CHECK_EQ(p != kBase, true);
+                    if (p == kInk2) {
+                        min_x = std::min(min_x, x); max_x = std::max(max_x, x);
+                        min_y = std::min(min_y, y); max_y = std::max(max_y, y);
+                        ++total_ink;
+                    }
+                }
+            }
+            CHECK_EQ(max_x - min_x + 1, 9);
+            CHECK_EQ(max_y - min_y + 1, 5);
+            CHECK_EQ(total_ink, 25);
+            for (int row = 0; row < 5; ++row) {
+                int row_ink = 0;
+                for (int x = min_x; x <= max_x; ++x) row_ink += px(x, min_y + row) == kInk2;
+                const int want = 2 * (is_up ? row : 4 - row) + 1;
+                CHECK_EQ(row_ink, want);
+            }
+        }
+    }
+}
+
 int main() {
+    test_draw_key_slot_arrows();
     test_col2_and_pill();
     test_result_row();
     test_result_rows_stream_each_pixel_once();

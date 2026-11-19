@@ -74,12 +74,12 @@ static void test_label_zone() {
 
 static void test_fit_in_slot() {
     // Slots tile the edge, and every label of every state fits its zone at the panel font's advance
-    // with the full words (no abbreviation fallback is needed). Outer slots mirror each other so the
-    // table is valid in every orientation.
+    // with the full words (no abbreviation fallback is needed).
     CHECK_EQ(kSlotLenPx[0] + kSlotLenPx[1] + kSlotLenPx[2] + kSlotLenPx[3], 240);
-    CHECK_EQ(kSlotLenPx[0], kSlotLenPx[3]);
-    CHECK_EQ(kSlotLenPx[1], kSlotLenPx[2]);
-    CHECK_EQ(label_max_chars(Button::Minus), 7);
+    for (unsigned len : kSlotLenPx) CHECK_EQ(len >= 54u, 1);
+    CHECK_EQ(label_max_chars(Button::Plus), 7);
+    CHECK_EQ(label_max_chars(Button::Minus) >= 7, 1);
+    CHECK_EQ(label_max_chars(Button::Ok) >= 7, 1);
     CHECK_EQ(label_max_chars(Button::Back) >= 4, 1);
     struct Sample { SlotLabel l; Button b; };
     const Sample samples[] = {{{"Back", "", ""}, Button::Back},
@@ -91,7 +91,7 @@ static void test_fit_in_slot() {
         const unsigned n = label_text(buf, s.l, label_max_chars(s.b));
         CHECK_EQ(n > 0, 1);
         CHECK_STR(buf, text_of(s.l, 24));   // the full text, nothing dropped
-        const int slot_len = static_cast<int>(s.b == Button::Back || s.b == Button::Plus ? kSlotLenPx[0] : kSlotLenPx[1]);
+        const int slot_len = static_cast<int>(kSlotLenPx[static_cast<int>(s.b)]);
         // Fits with divider + 4 px padding at each end in the worst case (a slot that has a divider).
         CHECK_EQ(static_cast<int>(n * kLabelFont.adv) + kDividerPx + 2 * kSlotPadPx <= slot_len, 1);
         CHECK_EQ(strlen(buf), n);

@@ -25,9 +25,13 @@ Layout compute_layout(PanelEdge edge, const int16_t (&centers)[4], const int16_t
                             l.content = {0, 0, kScreenW, static_cast<int16_t>(kScreenH - thickness)}; break;
     }
 
+    const bool rev = edge == PanelEdge::Left || edge == PanelEdge::Bottom;
     for (int i = 0; i < 4; i++) {
-        int start = centers[i] - slot_lens[i] / 2;
-        int end = start + slot_lens[i];
+        const int bi = rev ? 3 - i : i;
+        const int c = rev ? (span - centers[bi]) : centers[bi];
+        const int sl = slot_lens[bi];
+        int start = c - sl / 2;
+        int end = start + sl;
         if (start < 0) start = 0;
         if (end > span) end = span;
         int len = end > start ? end - start : 0;
