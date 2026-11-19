@@ -125,7 +125,7 @@ struct UiContext {
         std::array<uint8_t, bench::kPlaces> place_sel K2_BSS_ZERO;  // each place's last action: repeating a job is OK, OK, OK
         uint8_t face K2_BSS_INIT(0);                                 // Meter: the face last shown (0 Flow, 1 Graphs, 2 Numbers, 3 Lines, 4 Ripple)
         struct Ripple {                                              // Meter > Ripple: persisted scope settings across face flips
-            uint8_t timebase = 2;                                    // ripple::kDefaultTimebase (500 us/div)
+            uint8_t timebase = 1;                                    // ripple::kDefaultTimebase (50 us/div)
             uint8_t scale K2_BSS_INIT(0);                            // 0 = Auto
             uint8_t trigger K2_BSS_INIT(0);                          // 0 = Auto, 1 = Free
             bool hold K2_BSS_INIT(false);

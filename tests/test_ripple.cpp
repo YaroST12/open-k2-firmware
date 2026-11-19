@@ -7,6 +7,7 @@
 
 #include "k2/core/ripple.hpp"
 #include "k2/drivers/adc.hpp"
+#include "k2/drivers/lcd.hpp"
 #include "k2/ui/ui.hpp"
 #include "test_util.h"
 #include "ui_stubs.h"
@@ -26,12 +27,15 @@ void fill_sine(std::array<uint16_t, adc::kRippleSamples> &buf, double freq_hz, u
 
 void test_below_floor_noise() {
     std::array<uint16_t, adc::kRippleSamples> buf{};
-    for (size_t i = 0; i < buf.size(); i++) buf[i] = static_cast<uint16_t>(2056 + ((i & 1) ? 20 : -20));
+    for (size_t i = 0; i < buf.size(); i++) buf[i] = static_cast<uint16_t>(2056 + ((i & 1) ? 4 : -4));
+    // Huge mux-settling transient in the first samples must be ignored.
+    buf[0] = 1600;
+    buf[1] = 2600;
     const uint32_t period_ns = adc::sample_period_ns(5, adc::kAdcClockHz);
-    const ripple::Stats st = ripple::analyze(buf, period_ns, 1489, 2, ripple::Trigger::Auto);
+    const ripple::Stats st = ripple::analyze(buf, period_ns, 1489, 4, ripple::Trigger::Auto);
     CHECK_COND(st.valid);
     CHECK_COND(st.below_floor);
-    CHECK_EQ(st.pp_raw, 40);
+    CHECK_EQ(st.pp_raw, 8);
     CHECK_EQ(st.freq_hz, 0u);
     StrBuf<16> s;
     ripple::fmt_vpp(st, s);
@@ -41,24 +45,26 @@ void test_below_floor_noise() {
 }
 
 void test_sine_vpp_rms_freq_and_trigger() {
-    // 5 kHz sine, amplitude 100 counts (200 counts p-p ~ 161 mVpp at vref=1489 -> VDD=3300mV).
+    // 100 kHz GaN switching ripple, amplitude 12 counts (24 counts p-p ~ 19 mVpp at vref=1489 -> VDD=3300mV).
     std::array<uint16_t, adc::kRippleSamples> buf{};
-    const uint32_t period_ns = adc::sample_period_ns(5, adc::kAdcClockHz);   // ~4533 ns
-    fill_sine(buf, 5000.0, period_ns, 100.0, 1.2);   // start mid-cycle so trigger must advance
-    const ripple::Stats st = ripple::analyze(buf, period_ns, 1489, 2, ripple::Trigger::Auto);
+    const uint32_t period_ns = adc::sample_period_ns(0, adc::kAdcClockHz);   // 933 ns (1.07 MS/s)
+    fill_sine(buf, 100000.0, period_ns, 12.0, 1.2);
+    buf[0] = 1900;   // mux-settling glitch must not affect Vpp or frequency
+    const ripple::Stats st = ripple::analyze(buf, period_ns, 1489, ripple::kDefaultTimebase, ripple::Trigger::Auto);
     CHECK_COND(st.valid);
     CHECK_COND(!st.below_floor);
-    CHECK_COND(st.vpp_mv >= 158 && st.vpp_mv <= 164);
-    CHECK_COND(st.vrms_mv >= 54 && st.vrms_mv <= 60);
-    CHECK_COND(st.freq_hz >= 4750u && st.freq_hz <= 5250u);
-    CHECK_COND(st.trigger_idx > 0 && st.trigger_idx < 100);
+    CHECK_COND(st.vpp_mv >= 17 && st.vpp_mv <= 22);
+    CHECK_COND(st.vrms_mv >= 5 && st.vrms_mv <= 9);
+    CHECK_COND(st.freq_hz >= 95000u && st.freq_hz <= 105000u);
+    CHECK_COND(st.trigger_idx > 0 && st.trigger_idx < 50);
 
-    const ripple::Stats st_free = ripple::analyze(buf, period_ns, 1489, 2, ripple::Trigger::Free);
+    const ripple::Stats st_free = ripple::analyze(buf, period_ns, 1489, ripple::kDefaultTimebase, ripple::Trigger::Free);
     CHECK_EQ(st_free.trigger_idx, 0u);
 
+    CHECK_EQ(ripple::resolve_mv_per_div(0, 10), 10u);
     CHECK_EQ(ripple::resolve_mv_per_div(0, 80), 50u);
     CHECK_EQ(ripple::resolve_mv_per_div(0, 90), 100u);
-    CHECK_EQ(ripple::resolve_mv_per_div(1, 500), 20u);
+    CHECK_EQ(ripple::resolve_mv_per_div(1, 500), 10u);
 }
 
 void test_project_columns_span_and_continuity() {
@@ -126,12 +132,15 @@ void test_ripple_page_navigation_and_settings() {
 
     Ui ui;
     uint32_t t = 1000;
+    lcd::set_spi_div(4);
     ui.init(t);
     ui.goto_page(static_cast<uint8_t>(Page::Ripple), t);
     CHECK_COND(ui.page() == Page::Ripple);
     for (int i = 0; i < 6; i++) { t += 100; ui.tick(t); }
     CHECK_COND(g_capture_calls >= 1);
     CHECK_EQ(g_last_sample_code, ripple::kTimebases[ripple::kDefaultTimebase].sample_code);
+    // SPI3 boosted to /2 (60 MHz) while Ripple is active.
+    CHECK_EQ(lcd::spi_div(), 2u);
 
     CHECK_COND(label_violation(ui.labels()) == nullptr);
 
@@ -140,10 +149,11 @@ void test_ripple_page_navigation_and_settings() {
     t += 100; ui.tick(t);
     CHECK_COND(label_violation(ui.labels()) == nullptr);
 
-    // Move to row 1 (Time / div) and cycle it: 500 us/div (idx 2) -> 1 ms/div (idx 3, code 7).
+    // Move to row 1 (Time / div) and cycle it twice: 50us (1) -> 100us (2) -> 200us (3, code 2).
     ui.on_button(Button::Plus, ButtonEvent::Short, t);
     ui.on_button(Button::Ok, ButtonEvent::Short, t);
-    // BACK closes settings and triggers fresh capture with code 7.
+    ui.on_button(Button::Ok, ButtonEvent::Short, t);
+    // BACK closes settings and triggers fresh capture with code 2.
     ui.on_button(Button::Back, ButtonEvent::Short, t);
     const int before = g_capture_calls;
     t += 100; ui.tick(t);
@@ -161,9 +171,10 @@ void test_ripple_page_navigation_and_settings() {
     t += 100; ui.tick(t);
     CHECK_COND(g_capture_calls > held_calls);
 
-    // Plus flips to next Meter face (wraps back to Home).
+    // Plus flips to next Meter face (wraps back to Home) and restores SPI3 divider to /4.
     ui.on_button(Button::Plus, ButtonEvent::Short, t);
     CHECK_COND(ui.page() == Page::Home);
+    CHECK_EQ(lcd::spi_div(), 4u);
 }
 
 }  // namespace

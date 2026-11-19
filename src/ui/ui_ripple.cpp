@@ -6,6 +6,7 @@
 #include <algorithm>
 #include "k2/core/scratch.hpp"
 #include "k2/drivers/adc.hpp"
+#include "k2/drivers/lcd.hpp"
 #include "k2/ui/kit.hpp"
 
 namespace k2 {
@@ -24,19 +25,12 @@ bool budget_ok(PaintBudget *bg, int px, bool fill = false) {
     return !bg || bg->admit(px, true, fill);
 }
 
-// Graticule positions inside [0 .. kPlotW-1] x [0 .. kPlotH-1].
-constexpr bool is_grid_px(int16_t x, int16_t y) {
-    constexpr int16_t mid_y = RipplePage::kPlotH / 2;
-    constexpr int16_t q1_y = RipplePage::kPlotH / 4;
-    constexpr int16_t q3_y = (RipplePage::kPlotH * 3) / 4;
-    constexpr int16_t q1_x = RipplePage::kPlotW / 4;
-    constexpr int16_t mid_x = RipplePage::kPlotW / 2;
-    constexpr int16_t q3_x = (RipplePage::kPlotW * 3) / 4;
-    if (y == mid_y && ((x & 1) == 0)) return true;
-    if ((y == q1_y || y == q3_y) && ((x & 3) == 0)) return true;
-    if ((x == q1_x || x == mid_x || x == q3_x) && ((y & 3) == 0)) return true;
-    return false;
-}
+constexpr int16_t kGridQ1X = RipplePage::kPlotW / 4;
+constexpr int16_t kGridMidX = RipplePage::kPlotW / 2;
+constexpr int16_t kGridQ3X = (RipplePage::kPlotW * 3) / 4;
+constexpr int16_t kGridQ1Y = RipplePage::kPlotH / 4;
+constexpr int16_t kGridMidY = RipplePage::kPlotH / 2;
+constexpr int16_t kGridQ3Y = (RipplePage::kPlotH * 3) / 4;
 
 uint32_t hash_chips(uint8_t tb, uint8_t sc, bool hold) {
     return 1u + (uint32_t{tb} << 8) + (uint32_t{sc} << 4) + (hold ? 1u : 0u);
@@ -122,8 +116,19 @@ void RipplePage::invalidate() {
     if (settings_open_) ctx_.rows.invalidate();
 }
 
+RipplePage::~RipplePage() {
+    if (saved_spi_div_ != 0) {
+        lcd::set_spi_div(saved_spi_div_);
+        saved_spi_div_ = 0;
+    }
+}
+
 void RipplePage::leave() {
     if (settings_open_) ctx_.rows.detach();
+    if (saved_spi_div_ != 0) {
+        lcd::set_spi_div(saved_spi_div_);
+        saved_spi_div_ = 0;
+    }
 }
 
 void RipplePage::enter_settings() {
@@ -214,8 +219,15 @@ void RipplePage::draw_chips() {
 void RipplePage::draw_col(const Surface &S, int16_t x, ripple::ColSpan col, uint16_t trace_ink) {
     const int16_t sx = static_cast<int16_t>(kPlotX + x);
     gfx_fill(S, sx, kPlotY, 1, kPlotH, kBg);
-    for (int16_t y = 0; y < kPlotH; y++) {
-        if (is_grid_px(x, y)) gfx_fill(S, sx, static_cast<int16_t>(kPlotY + y), 1, 1, kRule);
+    if (x == kGridQ1X || x == kGridMidX || x == kGridQ3X) {
+        for (int16_t y = 0; y < kPlotH; y = static_cast<int16_t>(y + 4))
+            gfx_fill(S, sx, static_cast<int16_t>(kPlotY + y), 1, 1, kRule);
+    } else {
+        if ((x & 1) == 0) gfx_fill(S, sx, static_cast<int16_t>(kPlotY + kGridMidY), 1, 1, kRule);
+        if ((x & 3) == 0) {
+            gfx_fill(S, sx, static_cast<int16_t>(kPlotY + kGridQ1Y), 1, 1, kRule);
+            gfx_fill(S, sx, static_cast<int16_t>(kPlotY + kGridQ3Y), 1, 1, kRule);
+        }
     }
     if (col.lo <= col.hi && col.hi < kPlotH) {
         const int16_t h = static_cast<int16_t>(col.hi - col.lo + 1);
@@ -260,14 +272,18 @@ void RipplePage::paint_footer() {
     } else if (adc_busy_ && !have_sample_) {
         foot.put("ADC busy");
     } else {
-        if (cfg.hold) foot.put("Hold  ");
-        foot.put_u32(mv_per_div_).put("mV/d  ").put(ripple::kTimebases[tb].label).put("/d  ");
+        foot.put_u32(mv_per_div_).put("mV/d ").put(ripple::kTimebases[tb].label).put("/d ");
         foot.put(cfg.trigger == static_cast<uint8_t>(ripple::Trigger::Free) ? "Free" : "Trig");
     }
     draw_footer_budgeted(ctx_.content, FooterTone::Info, foot.c_str(), foot_elem_, ctx_.budget);
 }
 
 void RipplePage::update(uint32_t now_ms) {
+    // Boost SPI3 to max (60 MHz, /2) while Ripple is active; skipped automatically during screenshot streams.
+    if (saved_spi_div_ == 0) {
+        const unsigned cur = lcd::spi_div();
+        if (cur > 2 && lcd::set_spi_div(2)) saved_spi_div_ = static_cast<uint8_t>(cur);
+    }
     title_pager(4);
     if (settings_open_) {
         ctx_.rows.set_count(4);

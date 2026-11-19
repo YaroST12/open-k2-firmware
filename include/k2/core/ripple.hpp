@@ -17,8 +17,11 @@ namespace k2::ripple {
 inline constexpr std::int32_t kGainNum = 1;
 inline constexpr std::int32_t kGainDen = 1;
 
-// Noise floor in raw 12-bit ADC counts peak-to-peak (HID-only baseline measured 44..47 counts).
-inline constexpr std::uint16_t kNoiseFloorCounts = 52;
+// First samples after switching ADC1 from the scan sequence to PA1 carry mux-settling transients.
+inline constexpr std::size_t kSkipSamples = 4;
+
+// Noise floor in raw 12-bit ADC counts peak-to-peak (after skipping mux settling; ~8 mVpp at 3.3 V).
+inline constexpr std::uint16_t kNoiseFloorCounts = 10;
 
 // Nominal VDD when VREFINT is unavailable (0).
 inline constexpr std::int32_t kNominalVddMv = 3300;
@@ -27,30 +30,32 @@ inline constexpr std::int32_t kNominalVddMv = 3300;
 inline constexpr std::uint8_t kHorizDivs = 4;
 inline constexpr std::uint8_t kVertDivs = 4;
 
-// Fast PA1 timebases (1-2-5 sequence). Each maps to an ADC1 sample-time code (0..7 at 15 MHz)
-// whose 512-sample window is longer than 4 * us_per_div, leaving headroom for edge triggering.
+// Fast PA1 timebases. Each maps to an ADC1 sample-time code (0..7 at 15 MHz)
+// whose 508 usable samples are longer than 4 * us_per_div, leaving headroom for edge triggering.
 struct Timebase {
     std::uint16_t us_per_div;   // microseconds per horizontal division
     std::uint8_t sample_code;   // ADC1 SPT code (0..7)
-    const char *label;          // compact chip text ("100us", "200us", ...)
-    const char *menu_label;     // settings row text ("100 us/div", ...)
+    const char *label;          // compact chip text ("50us", "100us", ...)
+    const char *menu_label;     // settings row text ("50 us/div", ...)
 };
 
-inline constexpr std::uint8_t kTimebaseCount = 5;
+inline constexpr std::uint8_t kTimebaseCount = 7;
 inline constexpr Timebase kTimebases[kTimebaseCount] = {
+    {25,   0, "25us",  "25 us/div"},
+    {50,   0, "50us",  "50 us/div"},
     {100,  0, "100us", "100 us/div"},
     {200,  2, "200us", "200 us/div"},
     {500,  5, "500us", "500 us/div"},
     {1000, 7, "1ms",   "1 ms/div"},
     {2000, 7, "2ms",   "2 ms/div"},
 };
-inline constexpr std::uint8_t kDefaultTimebase = 2;   // 500 us/div (2.0 ms span)
+inline constexpr std::uint8_t kDefaultTimebase = 1;   // 50 us/div (200 us span, 1.07 MS/s)
 
-// Vertical scales: 0 = Auto, 1..5 = fixed mV/div (+-2 divs = +-2*mv_per_div full scale).
-inline constexpr std::uint8_t kScaleCount = 6;
-inline constexpr std::uint16_t kScaleMv[kScaleCount] = {0, 20, 50, 100, 200, 500};
-inline constexpr const char *kScaleLabel[kScaleCount] = {"AUTO", "20mV", "50mV", "100mV", "200mV", "500mV"};
-inline constexpr const char *kScaleMenu[kScaleCount] = {"Auto", "20 mV/div", "50 mV/div", "100 mV/div", "200 mV/div", "500 mV/div"};
+// Vertical scales: 0 = Auto, 1..6 = fixed mV/div (+-2 divs = +-2*mv_per_div full scale).
+inline constexpr std::uint8_t kScaleCount = 7;
+inline constexpr std::uint16_t kScaleMv[kScaleCount] = {0, 10, 20, 50, 100, 200, 500};
+inline constexpr const char *kScaleLabel[kScaleCount] = {"AUTO", "10mV", "20mV", "50mV", "100mV", "200mV", "500mV"};
+inline constexpr const char *kScaleMenu[kScaleCount] = {"Auto", "10 mV/div", "20 mV/div", "50 mV/div", "100 mV/div", "200 mV/div", "500 mV/div"};
 
 enum class Trigger : std::uint8_t { Auto = 0, Free = 1 };
 

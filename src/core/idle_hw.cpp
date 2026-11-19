@@ -146,9 +146,10 @@ Status status() {
 }
 
 void service(Ui& ui, bool boot_screen, std::uint32_t now) {
+    const bool ripple_boost = ui.page() == Page::Ripple && ui.menu_depth() == 0;
     idle::Inputs in;
     in.now_ms = now;
-    in.busy = boot_screen || ui.ports_busy();
+    in.busy = boot_screen || ui.ports_busy() || ripple_boost;
     in.alarm = ui.alert_active();
     // A PD message or VBUS move after the last tick: its age is shorter than the time since that tick.
     const std::uint32_t since = pdtrace::since_activity_ms();
@@ -192,16 +193,17 @@ void service(Ui& ui, bool boot_screen, std::uint32_t now) {
         g_wait_paint = true;
     }
     if (g_wait_paint && !ui.painting()) g_wait_paint = false;
-    if (idle::backlight_write_due(!g_asleep && !g_waking && !g_wait_paint && !ui.loop_probe_busy(), lcd::brightness(), o.brightness))
-        lcd::set_brightness(o.brightness);
+    const std::uint8_t target_bright = ripple_boost ? 100u : o.brightness;
+    if (idle::backlight_write_due(!g_asleep && !g_waking && !g_wait_paint && !ui.loop_probe_busy(), lcd::brightness(), target_bright))
+        lcd::set_brightness(target_bright);
 
     // The clock: the forced divider wins, else the low clock while the machine allows it and nothing needs timing. Off waits for
-    // the panel to be asleep; Dim waits for the wake repaint to finish.
+    // the panel to be asleep; Dim waits for the wake repaint to finish. Ripple keeps full 240 MHz so ADC_CLK stays 15 MHz.
     std::uint8_t want = 1;
     if (g_force_div != 0) want = g_force_div;
-    else if (o.low_clock_ok && !g_waking && !g_wait_paint && (o.state != idle::State::Off || g_asleep) && blocked == 0)
+    else if (!ripple_boost && o.low_clock_ok && !g_waking && !g_wait_paint && (o.state != idle::State::Off || g_asleep) && blocked == 0)
         want = kLowClockDiv;
-    if (want > 1 && (blocked & ~kBlockHold) != 0) want = 1;   // a DWT user runs: never low, even forced
+    if (want > 1 && ((blocked & ~kBlockHold) != 0 || ripple_boost)) want = 1;   // DWT or Ripple: never low, even forced
     apply_div(want);
 
     // Deferred save: one flash write per burst, never while a test owns the ports.

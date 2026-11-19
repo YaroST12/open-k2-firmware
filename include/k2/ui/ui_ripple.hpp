@@ -17,10 +17,11 @@ public:
     static constexpr int16_t kPlotY = 67;
     static constexpr int16_t kPlotW = 210;
     static constexpr int16_t kPlotH = 146;
-    static constexpr uint32_t kRefreshMs = 250;   // ~4 Hz capture cadence (pauses ADC scan 0.5..8.6 ms)
+    static constexpr uint32_t kRefreshMs = 100;   // ~10 Hz capture cadence at boosted CPU/SPI
     static constexpr uint8_t kNoCol = 0xFF;
 
     explicit RipplePage(UiContext &c) : PageBase(c, Page::Ripple, "Ripple", Icon::Meter) {}
+    ~RipplePage();
 
     void draw_static() override;
     void update(uint32_t now_ms) override;
@@ -55,6 +56,7 @@ private:
     uint32_t chip_sig_ = 0;
     uint8_t settings_sel_ = 0;
     uint8_t plot_col_ = 0;
+    uint8_t saved_spi_div_ = 0;   // non-zero when SPI3 was boosted to /2 (60 MHz) on entry
     bool settings_open_ = false;
     bool have_sample_ = false;
     bool cap_due_ = true;

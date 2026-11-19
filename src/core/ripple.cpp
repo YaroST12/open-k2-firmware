@@ -58,7 +58,7 @@ std::uint16_t resolve_mv_per_div(std::uint8_t scale_idx, std::int32_t peak_mv) {
     if (scale_idx > 0 && scale_idx < kScaleCount) return kScaleMv[scale_idx];
     const std::int32_t abs_peak = peak_mv < 0 ? -peak_mv : peak_mv;
     // Plot has +-2 vertical divisions; keep ~15% headroom so peaks don't clip the frame.
-    constexpr std::uint16_t kAutoSteps[] = {20, 50, 100, 200, 500, 1000};
+    constexpr std::uint16_t kAutoSteps[] = {10, 20, 50, 100, 200, 500, 1000};
     for (const std::uint16_t step : kAutoSteps) {
         const std::int32_t cap = static_cast<std::int32_t>(step) * 2 * 85 / 100;
         if (abs_peak <= cap) return step;
@@ -69,17 +69,18 @@ std::uint16_t resolve_mv_per_div(std::uint8_t scale_idx, std::int32_t peak_mv) {
 Stats analyze(std::span<const std::uint16_t> samples, std::uint32_t period_ns, std::uint16_t vref_raw,
               std::uint8_t timebase_idx, Trigger trig) {
     Stats st;
-    if (samples.size() < 2 || period_ns == 0) return st;
+    if (samples.size() <= kSkipSamples + 2 || period_ns == 0) return st;
+    const auto usable = samples.subspan(kSkipSamples);
     st.valid = true;
 
-    std::uint16_t lo = samples[0], hi = samples[0];
+    std::uint16_t lo = usable[0], hi = usable[0];
     std::uint32_t sum = 0;
-    for (const std::uint16_t v : samples) {
+    for (const std::uint16_t v : usable) {
         if (v < lo) lo = v;
         if (v > hi) hi = v;
         sum += v;
     }
-    const std::uint32_t n = static_cast<std::uint32_t>(samples.size());
+    const std::uint32_t n = static_cast<std::uint32_t>(usable.size());
     st.mean_raw = static_cast<std::uint16_t>((sum + n / 2u) / n);
     st.pp_raw = static_cast<std::uint16_t>(hi - lo);
     st.below_floor = st.pp_raw <= kNoiseFloorCounts;
@@ -88,17 +89,17 @@ Stats analyze(std::span<const std::uint16_t> samples, std::uint32_t period_ns, s
     st.vpp_mv = delta_to_mv(static_cast<std::int32_t>(st.pp_raw), vref_raw);
 
     std::uint32_t sum_sq = 0;
-    for (const std::uint16_t v : samples) {
+    for (const std::uint16_t v : usable) {
         const std::int32_t d = static_cast<std::int32_t>(v) - st.mean_raw;
         sum_sq += static_cast<std::uint32_t>(d * d);
     }
     const std::uint32_t rms_counts = isqrt32((sum_sq + n / 2u) / n);
     st.vrms_mv = delta_to_mv(static_cast<std::int32_t>(rms_counts), vref_raw);
 
-    // Rising zero-crossings with hysteresis (1/6 of p-p, minimum 8 counts) for both frequency and trigger.
-    const std::int32_t hyst = std::max<std::int32_t>(8, st.pp_raw / 6);
-    const std::uint32_t win = span_samples_for(timebase_idx, period_ns, samples.size());
-    const std::uint32_t max_trig = samples.size() > win ? static_cast<std::uint32_t>(samples.size() - win) : 0u;
+    // Rising zero-crossings with hysteresis (1/6 of p-p, minimum 3 counts) for both frequency and trigger.
+    const std::int32_t hyst = std::max<std::int32_t>(3, st.pp_raw / 6);
+    const std::uint32_t win = span_samples_for(timebase_idx, period_ns, usable.size());
+    const std::uint32_t max_trig = usable.size() > win ? static_cast<std::uint32_t>(usable.size() - win) : 0u;
 
     bool armed = false;
     std::uint32_t crossings = 0;
@@ -106,7 +107,7 @@ Stats analyze(std::span<const std::uint16_t> samples, std::uint32_t period_ns, s
     bool trig_found = false;
 
     for (std::uint32_t i = 0; i < n; i++) {
-        const std::int32_t d = static_cast<std::int32_t>(samples[i]) - st.mean_raw;
+        const std::int32_t d = static_cast<std::int32_t>(usable[i]) - st.mean_raw;
         if (!armed) {
             if (d <= -hyst) armed = true;
         } else if (d >= hyst) {
@@ -135,14 +136,15 @@ void project(std::span<const std::uint16_t> samples, std::uint32_t period_ns, st
              std::uint8_t plot_h, std::span<ColSpan> cols) {
     if (cols.empty() || plot_h < 2) return;
     const std::uint8_t mid = static_cast<std::uint8_t>(plot_h / 2u);
-    if (!stats.valid || samples.empty() || period_ns == 0 || mv_per_div == 0) {
+    if (!stats.valid || samples.size() <= kSkipSamples + 2 || period_ns == 0 || mv_per_div == 0) {
         for (ColSpan &c : cols) c = {mid, mid};
         return;
     }
 
-    const std::uint32_t win = span_samples_for(timebase_idx, period_ns, samples.size());
+    const auto usable = samples.subspan(kSkipSamples);
+    const std::uint32_t win = span_samples_for(timebase_idx, period_ns, usable.size());
     const std::uint32_t start = std::min<std::uint32_t>(stats.trigger_idx,
-        samples.size() > win ? static_cast<std::uint32_t>(samples.size() - win) : 0u);
+        usable.size() > win ? static_cast<std::uint32_t>(usable.size() - win) : 0u);
     const std::int32_t half_fs_mv = static_cast<std::int32_t>(mv_per_div) * (kVertDivs / 2);
     const std::int32_t half_px = static_cast<std::int32_t>(plot_h - 1) / 2;
     const std::uint32_t w = static_cast<std::uint32_t>(cols.size());
@@ -160,12 +162,12 @@ void project(std::span<const std::uint16_t> samples, std::uint32_t period_ns, st
         std::uint32_t i0 = start + (x * win) / w;
         std::uint32_t i1 = start + ((x + 1u) * win) / w;
         if (i1 <= i0) i1 = i0 + 1u;
-        if (i0 >= samples.size()) i0 = static_cast<std::uint32_t>(samples.size() - 1);
-        if (i1 > samples.size()) i1 = static_cast<std::uint32_t>(samples.size());
+        if (i0 >= usable.size()) i0 = static_cast<std::uint32_t>(usable.size() - 1);
+        if (i1 > usable.size()) i1 = static_cast<std::uint32_t>(usable.size());
 
         std::uint8_t ylo = 255, yhi = 0;
         for (std::uint32_t i = i0; i < i1; i++) {
-            const std::uint8_t y = to_y(samples[i]);
+            const std::uint8_t y = to_y(usable[i]);
             if (y < ylo) ylo = y;
             if (y > yhi) yhi = y;
         }
