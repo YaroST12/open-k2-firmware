@@ -114,7 +114,8 @@ check row per range) are rendered for the user in `runs/prog-unify/png`; see "La
 ## Layout alternatives
 
 Renders (host kit, real Results page behind, 2x): `runs/prog-unify/png/{results,alt_a,alt_b,alt_b_spec}_rot0..3.png`,
-from `tests/test_ui_prog_unify_mockups.cpp` (`K2_DUMP=<dir>`, then `tools/panel2png.py`).
+from `tests/test_ui_prog_unify_mockups.cpp` (`K2_DUMP=<dir>`, then `tools/panel2png.py`). The fixture has two PPS
+ranges (no AVS); an AVS range draws the same row.
 
 - **A, a spec row per range.** The spec section keeps Transitions and the observer; the PPS / AVS checks become one row
   per APDO (`PPS 21V`) with three grouped cells: Level (accuracy, monotonic, track, status), Timing (band / settle,
