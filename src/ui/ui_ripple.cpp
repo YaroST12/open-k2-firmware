@@ -77,7 +77,6 @@ void RipplePage::build_row(void *ctx, int index, bool focused, kit::RowSpec &out
 
 void RipplePage::draw_static() {
     title_bar();
-    title_pager(4);
     const Surface &S = ctx_.content;
     if (!ctx_.blank) gfx_fill(S, 0, kit::kBelowBar, S.w, static_cast<int16_t>(S.h - kit::kBelowBar), kBg);
 
@@ -284,7 +283,7 @@ void RipplePage::update(uint32_t now_ms) {
         const unsigned cur = lcd::spi_div();
         if (cur > 2 && lcd::set_spi_div(2)) saved_spi_div_ = static_cast<uint8_t>(cur);
     }
-    title_pager(4);
+    title_badge(ctx_.stale());
     if (settings_open_) {
         ctx_.rows.set_count(4);
         ctx_.rows.select(settings_sel_);
