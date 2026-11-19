@@ -416,7 +416,7 @@ uint8_t ChargerTestSession::prog_take(const ct::Step& s) {
     const auto* rec = transcap::frozen();
     if (!rec) return 0;
     const bool avs = s.algorithm != ct::Algorithm::Pps;
-    const auto o = ct::progcheck::measure(*rec, {avs, 0, int32_t(s.mv)});
+    const auto o = ct::progcheck::measure(*rec, {avs, 0, int32_t(s.mv), ct::progcheck::kSpanMs * 1000, s.pos});
     if (!o.measured) return 0;
     K2LOG("[PCHK] PDO%u %umV flags=%u over=%d band=%d lag=%d out=%d err=%d creep=%d slew=%d\n", unsigned(s.pos), unsigned(s.mv), unsigned(o.flags),
           int(o.over_mv), int(o.band_us), o.lag_known ? int(o.lag_us) : 0, int(o.out_us), int(o.err_mv), o.creep_known ? int(o.creep_mv) : 0, int(o.slew_mv_ms));

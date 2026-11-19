@@ -35,6 +35,7 @@ struct In {
     bool avs = false;
     std::int32_t from_mv = 0, to_mv = 0;   // the previous and the requested set point (from 0 = read it from the capture: the 20 ms before the Accept)
     std::uint32_t hold_us = kSpanMs * 1000;   // the span the creep is read over, back from the capture's end
+    std::uint8_t pos = 0;                     // the APDO's position: 8 and up is EPR AVS, its large step has the EPR limit
 };
 
 struct Out {
@@ -61,7 +62,7 @@ inline Out judge(const pdspec::StepOut& s, const pdspec::Edges& e, const In& in)
     Out o;
     if (!s.valid || !e.accept) return o;
     o.measured = true;
-    const pdspec::ProgMeas m = pdspec::measure_prog({0, in.avs, pdspec::kSlam, in.from_mv, in.to_mv}, s);
+    const pdspec::ProgMeas m = pdspec::measure_prog({in.pos, in.avs, pdspec::kSlam, in.from_mv, in.to_mv}, s);
     const std::int32_t over = m.up ? s.peak_mv - pdspec::band_hi(in.to_mv) : pdspec::band_lo(in.to_mv) - s.peak_mv;
     o.over_mv = over > 0 ? over : 0;
     if (!pdspec::passes(pdspec::Kind::Range, m.over)) o.flags |= kOver;
