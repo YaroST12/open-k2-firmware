@@ -11,6 +11,7 @@
 #include "k2/core/math_opt.hpp"
 #include "k2/chargertest/sweep.hpp"
 #include "k2/fastcharge/fc_engine.hpp"
+#include "k2/pdspec/prog_judge.hpp"
 #include "k2/pd/pd_ccmode.hpp"
 #include "k2/pd/pd_sink.hpp"
 
@@ -625,6 +626,11 @@ struct Env {
     // true is followed by a take; both before the row is recorded, so the page can still release the capture with the row.
     virtual bool prog_begin(const Step&) { return false; }
     virtual uint8_t prog_take(const Step&) { return 0; }
+    // A Deep run's own PPS / AVS moves feed the PD spec stage still ahead, so it sweeps no APDO twice. spec_move offers the move the
+    // recorder holds (pdspec::MoveFlag bits; false = not taken); spec_feeding stays true until the stage's engine has judged it, and
+    // the Runner asks for nothing new meanwhile.
+    virtual bool spec_move(const pdspec::ProgMove& mv, uint8_t flags) { (void)mv; (void)flags; return false; }
+    virtual bool spec_feeding() { return false; }
 protected:
     ~Env() = default;
 };
@@ -1049,6 +1055,9 @@ private:
     bool needs_load(const Input&) const;
     bool prog_wanted(const Step&) const;       // a fixed PPS / AVS row of a run with the Deep checks on (Options::pps_sweep / avs_sweep)
     bool prog_on_ K2_BSS_INIT(false);          // the row in flight asked for a transition capture at its hold's start (Env::prog_begin said yes)
+    bool spec_feed(const Input&, const Step&, int from_mv, int to_mv, uint8_t cls, uint8_t flags);   // true: wait, the stage takes the move
+    uint32_t feed_ms_ K2_BSS_INIT(0);          // a move was handed to the spec stage, which is still judging it (0 = none)
+    uint16_t prog_from_mv_ K2_BSS_INIT(0);     // the row's Request came from this set point of its own APDO (0 = from another level)
     enum class Probe : uint8_t { Off, Pending, Closing, Running } probe_ = Probe::Off;
     uint32_t probe_ms_ K2_BSS_INIT(0);
     Options opts_{};

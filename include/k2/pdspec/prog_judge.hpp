@@ -25,6 +25,9 @@ struct ProgMove {
     std::uint8_t cls = kSlam;
     std::int32_t from_mv = 0, to_mv = 0;
 };
+// A charger-test move as it is handed over: chained to the move before it (its level is the monotonic reference), a deep-sweep point,
+// the sweep's last point (the APDO was swept whole).
+enum MoveFlag : std::uint8_t { kMoveChain = 1, kMoveSweep = 2, kMoveLast = 4 };
 
 // Over vPpsSmallStep / vAvsSmallStep: the large-step limits apply.
 constexpr bool large_step(bool avs, std::int32_t step_mv) {

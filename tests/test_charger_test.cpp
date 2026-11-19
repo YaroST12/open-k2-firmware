@@ -424,6 +424,22 @@ struct Fake final : ct::Env {
     std::vector<ct::Step> prog_rows;   // the row of each begin
     bool prog_begin(const ct::Step& s) override { ++prog_begins; prog_rows.push_back(s); return prog_arm; }
     uint8_t prog_take(const ct::Step&) override { ++prog_takes; return prog_flags; }
+    // The Deep run's own PPS / AVS moves handed to the PD spec section before its stage (spec_move): spec_feed = the session takes
+    // them (a capture was recording); each take keeps spec_feeding() true for spec_feed_polls polls.
+    struct Fed { pdspec::ProgMove mv; uint8_t flags; uint32_t at; bool in_spec; };
+    std::vector<Fed> fed;
+    bool spec_feed = false; int spec_feed_polls = 1, spec_feed_left = 0, spec_feed_waits = 0;
+    bool spec_move(const pdspec::ProgMove& mv, uint8_t flags) override {
+        fed.push_back({mv, flags, in.now, spec_on});
+        if (!spec_feed) return false;
+        spec_feed_left = spec_feed_polls;
+        return true;
+    }
+    bool spec_feeding() override {
+        if (spec_feed_left <= 0) return false;
+        --spec_feed_left; ++spec_feed_waits;
+        return true;
+    }
     void spec_tick() {
         if (!spec_on) return;
         if ((spec_stop_t && in.now - spec_stop_t >= spec_exit_ms) || (spec_run_ms && in.now - spec_t0 >= spec_run_ms)) {
@@ -8445,6 +8461,81 @@ static void test_spec_resumed_run_never_repeats_the_stage() {
     CHECK_EQ(q.evidence().spec.same(ev.spec), true);
 }
 // The preview names the stage: Deep on a PD charger adds its checks and its time; Light and Medium add nothing.
+// prog_unify: a Deep run hands its own PPS / AVS moves to the PD spec section before the stage (every 100 mV sweep point after the
+// first, every step-walk level after the base, every range row that moves within its APDO), so the section sweeps no APDO twice.
+static void test_deep_run_feeds_its_moves_to_the_spec_section() {
+    Fake f; f.caps = level_caps(); f.spec_engine = true; f.spec_result = spec_cells(); f.spec_feed = true; f.prog_arm = true;
+    ct::Runner r(f);
+    CHECK_EQ(r.start(f.caps, spec_opts(), f.in, true), ct::Reason::None);
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 900000), true);
+    CHECK_EQ(f.spec_starts, 1);
+    std::array<unsigned, 8> sweep{}, last{}, first{};
+    unsigned walk = 0, range = 0;
+    for (const auto& m : f.fed) {
+        CHECK_EQ(m.in_spec, false);
+        CHECK_COND(m.mv.pos >= 1 && m.mv.pos <= 7);
+        if (m.flags & pdspec::kMoveSweep) {
+            ++sweep[m.mv.pos];
+            CHECK_EQ(m.mv.to_mv - m.mv.from_mv, 100);
+            CHECK_EQ(int(m.mv.cls), m.mv.avs ? 0 : 1);
+            if (!(m.flags & pdspec::kMoveChain)) ++first[m.mv.pos];
+            if (m.flags & pdspec::kMoveLast) ++last[m.mv.pos];
+        } else if (m.mv.cls == pdspec::kSlam) {
+            ++range;
+            CHECK_EQ(int(m.flags), 0);
+            // From the set point the APDO's previous row left (a move from a fixed level or another APDO is not one of these).
+            size_t k = 0;
+            while (k < f.req_times.size() && f.req_times[k] <= m.at) ++k;
+            CHECK_COND(k >= 2);
+            if (k >= 2) { CHECK_EQ(int(f.choices[k - 2].pos), int(m.mv.pos)); CHECK_EQ(int(f.choices[k - 2].mv), int(m.mv.from_mv)); }
+        } else {
+            ++walk;
+            CHECK_EQ(int(m.mv.cls), 0);
+            CHECK_EQ(m.mv.to_mv - m.mv.from_mv, m.mv.avs ? 100 : 20);
+        }
+    }
+    // One sweep part above 5 V per APDO, every point after the first: chained after its first move, the last one marked.
+    unsigned rows = 0;
+    for (const auto& rw : r.sweep_view().rows) {
+        if (rw.lo_mv < ctsweep::kSplitMv) continue;
+        ++rows;
+        CHECK_EQ(sweep[rw.pos], unsigned(rw.n) - 1);
+        CHECK_EQ(first[rw.pos], 1u);
+        CHECK_EQ(last[rw.pos], 1u);
+    }
+    CHECK_EQ(rows, 3u);
+    CHECK_EQ(walk, 15u);   // two PPS walks and one AVS walk, five moves each
+    CHECK_COND(range >= 3);
+    CHECK_EQ(f.spec_feed_waits > 0, true);
+}
+// The handover waits for the section (one poll per move here, three below) and changes no verdict.
+static void test_feeding_the_spec_section_changes_no_verdict() {
+    Fake plain; plain.caps = level_caps(); plain.spec_engine = true; plain.spec_result = spec_cells(); plain.prog_arm = true;
+    ct::Runner rp(plain);
+    CHECK_EQ(rp.start(plain.caps, spec_opts(), plain.in, true), ct::Reason::None);
+    CHECK_EQ(run_until(plain, rp, [&] { return rp.state() == ct::State::Done; }, 900000), true);
+    Fake f; f.caps = level_caps(); f.spec_engine = true; f.spec_result = spec_cells(); f.spec_feed = true; f.spec_feed_polls = 3; f.prog_arm = true;
+    ct::Runner r(f);
+    CHECK_EQ(r.start(f.caps, spec_opts(), f.in, true), ct::Reason::None);
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 900000), true);
+    CHECK_EQ(verdicts_of(r) == verdicts_of(rp), true);
+    CHECK_EQ(plain.fed.size(), f.fed.size());   // offered all the same; the plain session took none (no wait)
+    CHECK_EQ(plain.spec_feed_waits, 0);
+    CHECK_EQ(f.spec_feed_waits, int(f.fed.size()) * 3);
+}
+// Nothing is handed over when no stage follows: a Medium run, a K2 powered by the charger under test.
+static void test_no_spec_feed_without_a_stage() {
+    Fake m; m.caps = level_caps(); m.spec_engine = true; m.spec_feed = true;
+    ct::Runner rm(m);
+    CHECK_EQ(rm.start(m.caps, spec_opts(ct::Level::Medium), m.in, true), ct::Reason::None);
+    CHECK_EQ(run_until(m, rm, [&] { return rm.state() == ct::State::Done; }, 900000), true);
+    CHECK_EQ(m.fed.size(), size_t(0));
+    Fake s; s.caps = level_caps(); s.spec_engine = true; s.spec_feed = true; s.in.self_powered = true;
+    ct::Runner rs(s);
+    CHECK_EQ(rs.start(s.caps, spec_opts(), s.in, true), ct::Reason::None);
+    run_until(s, rs, [&] { return rs.state() == ct::State::Done; }, 900000);
+    CHECK_EQ(s.fed.size(), size_t(0));
+}
 static void test_spec_preview_counts_the_stage() {
     Fake f; f.caps = level_caps();
     const auto pv = [&](ct::Level l) { return ct::Runner::preview(f.caps, spec_opts(l), f.in); };
@@ -8727,6 +8818,7 @@ int main() {
     test_spec_stage_runs_once_in_a_deep_pd_unit(); test_spec_stage_is_deep_only(); test_spec_refusal_is_recorded_and_the_run_goes_on(); test_spec_cancel_ends_in_order();
     test_spec_leaves_the_source_at_5v_before_the_detach(); test_spec_watchdog_bounds_a_stuck_engine(); test_spec_runner_guard_stops_the_engine();
     test_spec_resumed_run_never_repeats_the_stage(); test_spec_preview_counts_the_stage();
+    test_deep_run_feeds_its_moves_to_the_spec_section(); test_feeding_the_spec_section_changes_no_verdict(); test_no_spec_feed_without_a_stage();
     test_pps_full_current_row_follows_a_spoofed_5a_identity(); test_pps_full_current_row_follows_a_reannounced_current();
     return test_report("test_charger_test");
 }
