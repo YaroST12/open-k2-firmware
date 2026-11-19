@@ -19,6 +19,7 @@ struct BandOp {
     int16_t fy = 0, tx = 0, ty = 0, sep = 0;
     bool flag = false;
     Icon icon = Icon::Bolt;
+    uint16_t badge_color = kInk2;
     StatusReadout mode = StatusReadout::None;
     Arrow flow = Arrow::Idle;
     uint8_t rotation = 0;

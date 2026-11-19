@@ -55,7 +55,9 @@ inline constexpr const char *kSourceUnread = "Source caps not read yet";   // a 
 inline constexpr const char *kCableUnread = "Cable not fully read yet";
 inline constexpr const char *kSinkUnread = "Sink caps not read yet";
 inline constexpr const char *kArmedBar = "Armed, replug to apply";
-inline constexpr const char *kFooters[] = {kSourceUnread, kCableUnread, kSinkUnread, kArmedBar};
+inline constexpr const char *kHoldActions = "Hold -/+ for Actions";
+inline constexpr const char *kHoldInfo = "Hold -/+ for Info";
+inline constexpr const char *kFooters[] = {kSourceUnread, kCableUnread, kSinkUnread, kArmedBar, kHoldActions, kHoldInfo};
 static_assert(all_fit(kFooters, 8, 27 * 8), "a Who's attached footer is over 27 characters");
 
 }  // namespace k2::text::conn

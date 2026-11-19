@@ -219,6 +219,12 @@ static void test_role_badge() {
     bool badge_ink = false;
     for (int y = 0; y < kBarH - 1; y++) for (int x = 67; x < 132; x++) if (px(x, y) == kDim) badge_ink = true;
     CHECK_EQ(badge_ink, 1);
+
+    clear(0x0004);
+    draw_status_left(kScr, true, Icon::Plug, "Charger", 136, "Actions", true, kInk);
+    bool bright_badge = false;
+    for (int y = 0; y < kBarH - 1; y++) for (int x = 94; x < 136; x++) if (px(x, y) == kInk) bright_badge = true;
+    CHECK_EQ(bright_badge, 1);
 }
 
 static void test_status_bar() {

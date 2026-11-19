@@ -170,7 +170,7 @@ void ConnectionPage::draw_static() {
     if (ctx_.budget && !ctx_.budget->admit(140 * kBarH, true)) return;
     if (has_pages()) {
         bar_valid_ = false;
-        draw_status_left(ctx_.content, true, icon_, title_, 136, act_page_ ? "Actions" : "Info", true);
+        draw_status_left(ctx_.content, true, icon_, title_, 136, act_page_ ? "Actions" : "Info", true, kInk);
     } else {
         title_bar();
     }
@@ -223,7 +223,7 @@ bool ConnectionPage::on_event(Event e) {
     }
     if (e.press == Press::Long && (e.button == Button::Plus || e.button == Button::Minus) && has_pages()) {
         act_page_ = !act_page_;
-        draw_status_left(ctx_.content, true, icon_, title_, 136, act_page_ ? "Actions" : "Info", true);
+        draw_status_left(ctx_.content, true, icon_, title_, 136, act_page_ ? "Actions" : "Info", true, kInk);
         pg::clear_body(ctx_.content, kBarH);
         if (act_page_) {
             act_sel_ = std::clamp<int>(ctx_.keep.place_sel[static_cast<int>(conn::place_of(tab_))], 0, n_items_ - 2);
@@ -1718,9 +1718,14 @@ void ConnectionPage::paint_status(uint32_t now_ms) {
                 pd::diag::screen::verdict(dr, dv);
                 s.diag = dv;
             }
-            conn::status_text(s, txt);
-            if (!op && s.spoof_armed && facts_.charger) tone = FooterTone::Caution;
-            else if (diag_on && txt.view() == s.diag) tone = DiagnosisPage::tone_of(dr);
+            const bool active_msg = op || (s.spoof_armed && facts_.charger) || s.sv->running() || (tab_ == conn::Tab::Source && diag_on);
+            if (has_pages() && !active_msg) {
+                txt.put(act_page_ ? text::conn::kHoldInfo : text::conn::kHoldActions);
+            } else {
+                conn::status_text(s, txt);
+                if (!op && s.spoof_armed && facts_.charger) tone = FooterTone::Caution;
+                else if (diag_on && txt.view() == s.diag) tone = DiagnosisPage::tone_of(dr);
+            }
         }
     }
     status_txt_ = txt;

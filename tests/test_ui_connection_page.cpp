@@ -846,16 +846,16 @@ static void test_survey_refresh_item_starts_it() {
     CHECK_EQ(int(g_stub.survey_last), int(rescan::Result::Asked));
 }
 
-// The status bar: the hint while the open tab has unasked fields, "Reading r/p" during the run, the summary after it.
+// The status bar: switching hint on paged Info at rest, "Reading r/p" during an active survey run.
 static void test_survey_status_line() {
     Ui &ui = fresh_ui();
     uint32_t t = 20000;
     attach_charger(ui, t);
     show(ui, 0, t);
-    while (cp(ui).action_row() >= 0) ui.on_button(Button::Minus, ButtonEvent::Short, t += 100);   // unfocus action row so footer shows survey status
+    while (cp(ui).action_row() >= 0) ui.on_button(Button::Minus, ButtonEvent::Short, t += 100);   // unfocus action row so footer shows Info status
     settle(ui, t);
-    CHECK_STR(std::string(cp(ui).status_line()).c_str(), "Source caps not read yet");
-    show(ui, 1, t);                                                 // Cable tab: its own field is unasked too
+    CHECK_STR(std::string(cp(ui).status_line()).c_str(), "Hold -/+ for Actions");
+    show(ui, 1, t);                                                 // Cable tab: Info page shows switching hint too
     show(ui, 0, t);
     while (cp(ui).action_row() >= 0) ui.on_button(Button::Minus, ButtonEvent::Short, t += 100);
     g_stub.survey.start(kSurveyCtx, t);
@@ -867,13 +867,10 @@ static void test_survey_status_line() {
     settle(ui, t);
     std::snprintf(want, sizeof want, "Reading %u/%u", g_stub.survey.resolved(), g_stub.survey.planned());
     CHECK_STR(std::string(cp(ui).status_line()).c_str(), want);
-    g_stub.survey.abandon();                                        // the run is over: one got, the rest silent
+    g_stub.survey.abandon();                                        // the run is over: Info footer returns to switching hint
     settle(ui, t);
     CHECK(g_stub.survey.ran());
-    StrBuf<40> sum;
-    conn::read_summary(g_stub.survey, sum);
-    CHECK_STR(std::string(cp(ui).status_line()).c_str(), std::string(sum.view()).c_str());
-    CHECK(std::strncmp(cp(ui).status_line().data(), "Read: 1 got", 11) == 0);
+    CHECK_STR(std::string(cp(ui).status_line()).c_str(), "Hold -/+ for Actions");
 }
 
 // The Charger place's survey rows say what each field is and show the answers once they are in.
@@ -1612,11 +1609,12 @@ static void test_place_two_page_info_and_actions() {
         CHECK_EQ(cp(ui).action_row(), -1);
     }
 
-    // Long Plus switches to Actions sub-page with 2-dot pager & top-bar "Actions".
+    // Long Plus switches to Actions sub-page with 2-dot pager & bright top-bar "Actions".
     ui.on_button(Button::Plus, ButtonEvent::Long, t += 100);
     settle(ui, t);
     CHECK_EQ(cp(ui).actions_mode(), true);
     CHECK_EQ(cp(ui).action_row(), 0);
+    CHECK_STR(std::string(cp(ui).status_line()).c_str(), "Hold -/+ for Info");
     CHECK_EQ(ui.list_state().count, cp(ui).item_count() - 1);
     ui.on_button(Button::Plus, ButtonEvent::Short, t += 100);
     settle(ui, t);

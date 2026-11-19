@@ -148,8 +148,8 @@ K2_HOT void readout_row(BandRow &row, StatusReadout mode, std::string_view v, st
             if (op.flag) row.icon(kMastIconX, kBarTextY, op.icon, kInk, kBar);
             row.text(*op.font, op.tx, op.ty, op.s0, kInk, kBar);
             if (!op.s1.empty()) {
-                row.fill(op.sep, 1, kInk3);
-                row.text(kLabelFont, op.sep + 5, kBarTextY, op.s1, kInk2, kBar);
+                row.fill(op.sep, 1, op.badge_color == kInk2 ? kInk3 : kInk2);
+                row.text(kLabelFont, op.sep + 5, kBarTextY, op.s1, op.badge_color, kBar);
             }
             break;
         case BandKind::Readout:
@@ -220,7 +220,7 @@ K2_HOT void draw_footer(const Surface &s, FooterTone tone, std::string_view text
 // the icon) or, when that would not fit before the badge or the readout, in font 12; an exception badge (a held Rd pin)
 // right-aligned to `right` behind a 1 px rule; the accent rule under it (row kBarH-1; draw_top_bar adds the second row).
 K2_HOT void draw_status_left(const Surface &s, bool has_icon, Icon icon, std::string_view title, int16_t right,
-                      std::string_view badge, bool readout_follows) {
+                      std::string_view badge, bool readout_follows, uint16_t badge_color) {
     char buf[kFitBuf];
     const int badge_w = static_cast<int>(badge.size() * kLabelAdv);
     const int sep = badge.empty() ? right : right - badge_w - 5;   // 4 px gap, 1 px rule before the badge
@@ -240,6 +240,7 @@ K2_HOT void draw_status_left(const Surface &s, bool has_icon, Icon icon, std::st
     op.sep = static_cast<int16_t>(sep);
     op.flag = has_icon && detail::fits(s, kMastIconX, kBarTextY, kIconSize, kIconSize);
     op.icon = icon;
+    op.badge_color = badge_color;
     detail::draw_band(s, 0, 0, kBarH - 1, op, readout_follows ? detail::kReadoutX : kScreenW);
     gfx_fill(s, 0, static_cast<int16_t>(kBarH - 1), s.w, 1, kAccent);   // the masthead rule
 }
