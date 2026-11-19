@@ -132,7 +132,8 @@ MiSection read_mi(std::span<const std::uint8_t> blob) {
     if (has_sv) r.skip(kSvoocBits);
     if (has_spec) {
         r.skip(3 + 6 + 1);
-        const unsigned cells = r.get(5);
+        const unsigned form = r.get(5);
+        const unsigned cells = form == kSpecRangesForm ? unsigned(specsec::kCells) : form;
         for (unsigned i = 0; i < cells && !r.bad; ++i) {
             const unsigned v = r.get(3);
             if (v == static_cast<unsigned>(pdspec::Verdict::Skip)) { r.skip(4); continue; }
@@ -140,6 +141,7 @@ MiSection read_mi(std::span<const std::uint8_t> blob) {
             r.skip(13);
             if (v == static_cast<unsigned>(pdspec::Verdict::Fail)) r.skip(24);
         }
+        if (form == kSpecRangesForm) r.skip(r.get(3) * kSpecRangeBits);
     }
     for (unsigned i = 0; i < kMaxRanges && !r.bad; ++i) {
         if (!(mask >> i & 1u)) continue;
@@ -162,7 +164,8 @@ MiSection read_mi(std::span<const std::uint8_t> blob) {
     return r.bad ? MiSection{} : m;
 }
 
-std::size_t build(const Card& c, std::span<const ct::Step> steps, const ct::Evidence& ev, ctsweep::View sweep, std::span<std::uint8_t> out) {
+std::size_t build(const Card& c, std::span<const ct::Step> steps, const ct::Evidence& ev, ctsweep::View sweep, std::span<std::uint8_t> out,
+                  const specsec::Apdos* apdo) {
     if (out.size() < kMaxBlob) return 0;
     const bool deep = c.level == ct::Level::Deep;
     const bool has_spec = deep && ev.spec.end != specsec::End::NotRun, has_sv = deep && ev.svooc_end != 0;
@@ -193,7 +196,8 @@ std::size_t build(const Card& c, std::span<const ct::Step> steps, const ct::Evid
         w.put(static_cast<unsigned>(r.end), 3);
         w.put(std::min<unsigned>(r.why, 63), 6);
         w.put(r.unconfirmed, 1);
-        w.put(specsec::kCells, 5);
+        const bool ranges = apdo && apdo->n;
+        w.put(ranges ? kSpecRangesForm : unsigned(specsec::kCells), 5);
         for (const specsec::Cell& cell : r.cells) {
             const unsigned v = cell.code & 7u;
             w.put(v, 3);
@@ -201,6 +205,15 @@ std::size_t build(const Card& c, std::span<const ct::Step> steps, const ct::Evid
             if (v == static_cast<unsigned>(pdspec::Verdict::Pending)) continue;
             w.put_signed(cell.value == specsec::kUnseen ? kValueNever : std::clamp<int>(cell.value, -kValueMax, kValueMax), 13);
             if (v == static_cast<unsigned>(pdspec::Verdict::Fail)) { w.put(cell.fails, 8); w.put(cell.a, 8); w.put(cell.b, 8); }
+        }
+        if (ranges) {
+            w.put(apdo->n, 3);
+            for (unsigned k = 0; k < apdo->n; ++k) {
+                const specsec::Apdo& p = apdo->r[k];
+                const specsec::RangeSpec rs = specsec::range_spec(p);
+                w.put(p.pos, 4); w.put(p.avs, 1); w.put(static_cast<unsigned>(rs.tone), 2); w.put(static_cast<unsigned>(rs.group), 2);
+                for (const specsec::Cell& cell : p.cells) w.put(cell.code & 7u, 3);
+            }
         }
     }
     for (unsigned i = 0; i < kMaxRanges; ++i) {

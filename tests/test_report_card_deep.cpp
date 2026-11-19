@@ -35,6 +35,7 @@ struct DBucket { int mean; unsigned down, up; };
 struct DRange { unsigned lo_dv, n, scale; std::vector<DBucket> b; };
 struct DCell { unsigned verdict = 0, skip = 0; int value = 0; unsigned fails = 0, a = 0, b = 0; };
 struct DMode { std::uint32_t before = 0, after = 0; unsigned mv = 0, ma = 0, verdict = 0, reason = 0; };
+struct DSpecRange { unsigned pos = 0, avs = 0, tone = 0, group = 0; std::vector<unsigned> verdicts; };
 struct Decoded {
     unsigned bits = 0, used = 0;
     bool has_mi = false;
@@ -45,6 +46,7 @@ struct Decoded {
     unsigned sv_end = 0, sv_why = 0, sv_asks = 0, sv_word = 0, sv_vmax = 0, sv_stop = 0;
     unsigned sp_end = 0, sp_why = 0, sp_unconf = 0, sp_cells = 0;
     std::vector<DCell> cells;
+    std::vector<DSpecRange> spec_ranges;   // v13: the spec part's form 28 (27 cells, then the ranges)
     std::vector<DRange> ranges;   // in range-index order of the set bits
 };
 
@@ -58,7 +60,8 @@ static Decoded decode(const Bytes& blob) {
     }
     if (d.has_spec) {
         d.sp_end = r.get(3); d.sp_why = r.get(6); d.sp_unconf = r.get(1); d.sp_cells = r.get(5);
-        for (unsigned i = 0; i < d.sp_cells; ++i) {
+        const unsigned ncells = d.sp_cells == 28 ? 27 : d.sp_cells;
+        for (unsigned i = 0; i < ncells; ++i) {
             DCell c;
             c.verdict = r.get(3);
             if (c.verdict == unsigned(sc::Verdict::Skip)) c.skip = r.get(4);
@@ -67,6 +70,15 @@ static Decoded decode(const Bytes& blob) {
                 if (c.verdict == unsigned(sc::Verdict::Fail)) { c.fails = r.get(8); c.a = r.get(8); c.b = r.get(8); }
             }
             d.cells.push_back(c);
+        }
+        if (d.sp_cells == 28) {
+            const unsigned n = r.get(3);
+            for (unsigned k = 0; k < n; ++k) {
+                DSpecRange g;
+                g.pos = r.get(4); g.avs = r.get(1); g.tone = r.get(2); g.group = r.get(2);
+                for (unsigned s = 0; s < 11; ++s) g.verdicts.push_back(r.get(3));
+                d.spec_ranges.push_back(g);
+            }
         }
     }
     for (unsigned i = 0; i < 4; ++i) {
@@ -119,9 +131,10 @@ static rc::Card deep_card(unsigned ranges) {
     for (unsigned i = 0; i < ranges; ++i) c.range[i] = {std::uint8_t(ct::Algorithm::Pps), std::uint8_t(i + 1), 33, 210, 210, 0, 100};
     return c;
 }
-static Bytes run_build(const rc::Card& c, const ct::Evidence& ev, const Sweep& s, std::span<const ct::Step> steps = {}) {
+static Bytes run_build(const rc::Card& c, const ct::Evidence& ev, const Sweep& s, std::span<const ct::Step> steps = {},
+                       const specsec::Apdos* apdo = nullptr) {
     Bytes out(dp::kMaxBlob, 0xEE);
-    const std::size_t n = dp::build(c, steps, ev, s.view(), out);
+    const std::size_t n = dp::build(c, steps, ev, s.view(), out, apdo);
     out.resize(n);
     return out;
 }
@@ -322,11 +335,15 @@ static void test_worst_case_is_the_budget() {
     // and the Xiaomi section at its worst: four modes
     std::vector<ct::Step> steps{mi_chain_row(k2::mi_unlock::kCodeFinished)};
     for (unsigned k = 0; k < k2::mi_unlock::kMaxModes; ++k) steps.push_back(mi_mode_row(std::uint8_t(6 + k), 0xC8DC3278u, 21000, 6000, ct::Verdict::Pass));
-    const Bytes b = run_build(c, ev, s, steps);
+    // and four PPS / AVS ranges with their own spec cells (v13)
+    specsec::Apdos ap;
+    for (std::uint8_t p = 4; p <= 7; ++p) ap.add(sc::Check::PpsBand, {300000, 0, 0, 275000, std::uint8_t(p | 1 << 4), 50});
+    const Bytes b = run_build(c, ev, s, steps, &ap);
     const Decoded d = decode(b);
     CHECK_EQ(d.modes.size(), std::size_t(k2::mi_unlock::kMaxModes));
-    CHECK_EQ(dp::kMaxBits, 3638u);
-    CHECK_EQ(dp::kMaxBlob, std::size_t(457));
+    CHECK_EQ(d.spec_ranges.size(), 4u);
+    CHECK_EQ(dp::kMaxBits, 3638u + 3u + 4u * 42u);
+    CHECK_EQ(dp::kMaxBlob, std::size_t(479));
     CHECK_EQ(d.bits, dp::kMaxBits);
     CHECK_EQ(d.used, dp::kMaxBits);
     CHECK_EQ(b.size(), dp::kMaxBlob);
@@ -334,6 +351,40 @@ static void test_worst_case_is_the_budget() {
     CHECK_EQ(d.ranges.size(), 4u);
     CHECK_EQ(d.sv_vmax, 511u); CHECK_EQ(d.sv_stop, 600u); CHECK_EQ(d.sv_word, 255u);
     CHECK_EQ(d.cells[26].fails, 255u);
+}
+
+// v13: each PPS / AVS range's spec word and slot verdicts ride in the spec part (form 28 = the 27 cells, then the ranges); without
+// ranges the part keeps form 27, so a v12 reader still reads it. read_mi skips the ranges to the Xiaomi tail.
+static void test_spec_ranges() {
+    const Sweep none;
+    ct::Evidence ev{};
+    ev.spec.end = specsec::End::Done;
+    specsec::Apdos ap;
+    ap.add(sc::Check::PpsBand, {100000, 0, 0, 275000, std::uint8_t(5 | 1 << 4), 50});
+    ap.add(sc::Check::PpsOvershoot, {9700, 0, -sc::kOpenLimit, 9500, std::uint8_t(5 | 2 << 4), 95});
+    ap.add(sc::Check::AvsAccuracy, {15200, 0, 14700, 15300, std::uint8_t(7 | 2 << 4), 150});
+    std::vector<ct::Step> steps{mi_chain_row(k2::mi_unlock::kCodeVerified), mi_mode_row(6, 0xC0DC3264u, 11000, 5000, ct::Verdict::Pass)};
+    const Bytes b = run_build(deep_card(0), ev, none, steps, &ap);
+    const Decoded d = decode(b);
+    CHECK_EQ(d.used, d.bits);
+    CHECK_EQ(d.sp_cells, 28u);
+    CHECK_EQ(d.cells.size(), specsec::kCells);
+    CHECK_EQ(d.spec_ranges.size(), 2u);
+    CHECK_EQ(d.spec_ranges[0].pos, 5u); CHECK_EQ(d.spec_ranges[0].avs, 0u);
+    CHECK_EQ(d.spec_ranges[0].tone, unsigned(specsec::RangeTone::Fail));
+    CHECK_EQ(d.spec_ranges[0].group, unsigned(specsec::Group::Shape));
+    CHECK_EQ(d.spec_ranges[0].verdicts[specsec::apdo_slot(sc::Check::PpsBand)], unsigned(sc::Verdict::Pass));
+    CHECK_EQ(d.spec_ranges[0].verdicts[specsec::apdo_slot(sc::Check::PpsOvershoot)], unsigned(sc::Verdict::Fail));
+    CHECK_EQ(d.spec_ranges[0].verdicts[specsec::apdo_slot(sc::Check::PpsStatus)], unsigned(sc::Verdict::Pending));
+    CHECK_EQ(d.spec_ranges[1].pos, 7u); CHECK_EQ(d.spec_ranges[1].avs, 1u);
+    CHECK_EQ(d.spec_ranges[1].tone, unsigned(specsec::RangeTone::Pass));
+    CHECK_EQ(d.modes.size(), 1u);
+    CHECK_EQ(dp::read_mi(b).n, 1u);
+    // No range measured: form 27, the v12 layout.
+    const Decoded e = decode(run_build(deep_card(0), ev, none, {}, nullptr));
+    CHECK_EQ(e.sp_cells, 27u); CHECK_EQ(e.used, e.bits);
+    const specsec::Apdos empty;
+    CHECK_EQ(decode(run_build(deep_card(0), ev, none, {}, &empty)).sp_cells, 27u);
 }
 
 // The Xiaomi section (v12): the chain row's outcome and each mode row, read back by the independent reader and by read_mi.
@@ -422,6 +473,7 @@ int main() {
     test_nothing_to_carry();
     test_worst_case_is_the_budget();
     test_xiaomi_section();
+    test_spec_ranges();
     test_blob_valid_checks();
     return test_report("test_report_card_deep");
 }
