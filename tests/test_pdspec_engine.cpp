@@ -1588,6 +1588,19 @@ void epr_avs_window_in_a_deep_run() {
     CHECK_COND(ec.stop() == Stop::Done);
     CHECK_EQ(items, int(kClasses) + int(kCoverPasses));
     CHECK_EQ(int(ec.agg(Check::AvsAccuracy).n), 10 + 6 + 2);
+    // The stage time the EPR AVS window adds to a Deep run whose sweeps covered both windows (Baseus 140 W shape).
+    std::uint32_t t[2] = {};
+    for (int opt = 0; opt < 2; ++opt) {
+        Sim b;
+        list(b);
+        Engine eb(b);
+        CHECK_COND(eb.start(0, 0x03, opt ? kOptEprAvs : 0, std::uint16_t(1u << 5 | 1u << 9)) == StartResult::Ok);
+        t[opt] = drive(b, eb);
+        check_safe_end(b, eb);
+        CHECK_COND(eb.stop() == Stop::Done);
+    }
+    CHECK_COND(t[1] > t[0]);
+    std::printf("  spec epr avs: %u ms -> %u ms\n", unsigned(t[0]), unsigned(t[1]));
 }
 
 void covered_run_time() {
