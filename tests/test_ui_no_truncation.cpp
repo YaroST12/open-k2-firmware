@@ -118,13 +118,24 @@ void walk_pages(Ui &ui, int rot, const Scenario &sc) {
     }
     static const char *const kMenuNames[] = {"trigger", "emarker", "pd-trigger", "cable-r", "black-box", "spoof", "usb-link",
                                              "autorotate", "cards", "share", "connection", "diag", "qrtest", "twin", "loop-probe",
-                                             "pd-stress", "diagnosis", "battery", "memory", "display"};
+                                             "pd-stress", "diagnosis", "battery", "memory", "display", "tests"};
     static_assert(std::size(kMenuNames) == static_cast<std::size_t>(Menu::Count), "a menu without a name here is walked under another's label");
     for (uint8_t m = 0; m < static_cast<uint8_t>(Menu::Count); ++m) {
         enter(kMenuNames[m], rot, sc.name);
         ui.goto_page(static_cast<uint8_t>(Page::Tools), g_t);
         if (!ui.push_menu(static_cast<Menu>(m), g_t)) continue;   // a menu that refuses to open has nothing to draw
         draw_for_a_while(ui, kMenuNames[m], rot, sc.name);
+    }
+    // Tests 5-page carousel: Overview, Charger, Cable, Battery, Device.
+    static const char *const kTestTabs[] = {"tests-overview", "tests-charger", "tests-cable", "tests-battery", "tests-device"};
+    for (int t = 0; t < static_cast<int>(TestTab::Count); ++t) {
+        enter(kTestTabs[t], rot, sc.name);
+        ui.open_tests(static_cast<TestTab>(t), g_t);
+        draw_for_a_while(ui, kTestTabs[t], rot, sc.name);
+        for (int r = 0; r < 5; ++r) {
+            ui.on_button(Button::Plus, ButtonEvent::Short, g_t);
+            draw_for_a_while(ui, kTestTabs[t], rot, sc.name);
+        }
     }
     // Device twins: every row has been the focused one (note line open), then the armed confirm and the Learn row's refusal.
     enter("twin-rows", rot, sc.name);

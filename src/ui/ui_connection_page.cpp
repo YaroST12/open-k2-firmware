@@ -1358,7 +1358,7 @@ void add_soc_chip(Ident &id, const pd::BatteryCaps &bat, const pd::BatteryStatus
             return;
         }
         if (d.k2_sink) { id.head.put("K2"); id.line.put("The K2 draws the power itself"); return; }
-        if (!r.request_seen) { id.head.put("No request"); id.dim = true; id.line.put("The device asked for no offer"); return; }
+        if (!r.request_seen) { id.head.put("No request"); id.dim = true; id.line.put("Press OK to interrogate"); return; }
         put_va(id.head, r.want_mv, r.want_ma);
         const pd::Contract &ct = fusb302::contract();
         const char *st = request_state_name(ct);

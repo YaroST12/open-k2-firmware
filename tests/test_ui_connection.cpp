@@ -129,6 +129,7 @@ static void test_empty_states_when_possibly_inline() {
     }
     CHECK_STR(e(Tab::Source, Topology::Unknown).title, "LINE IN USE");
     CHECK_STR(e(Tab::Sink, Topology::Unknown).title, "DEVICE IN USE");
+    CHECK_STR(e(Tab::Sink, Topology::Unknown).hint, "Press OK to interrogate");
     CHECK_STR(e(Tab::Cable, Topology::Unknown).title, "CABLE NOT READ");
     // The other empty states do not name a port either.
     const auto n = [](Tab t, Topology o) { return empty_state(t, facts(false, false, false, o)); };
@@ -682,6 +683,54 @@ static void test_id_value() {
     CHECK_STR(s.c_str(), "05C6:209E");
 }
 
+static void test_place_actions() {
+    std::array<Item, kMaxItems> it{};
+    ActFacts a;
+    a.attached = true; a.caps_valid = true; a.cable_valid = true;
+
+    // Source (Charger) place: out[0] is Read again, last row is Read again.
+    int n = place_actions(Tab::Source, a, it);
+    CHECK(n >= 2);
+    CHECK_EQ(int(it[0].act), int(Act::Refresh));
+    CHECK_STR(it[0].label, "Read again");
+    CHECK_EQ(int(it[std::size_t(n - 1)].act), int(Act::Refresh));
+    CHECK_STR(it[std::size_t(n - 1)].label, "Read again");
+
+    // Cable place: out[0] is Read e-marker; rows keep Read e-marker, Save cable, Saved cables, and NO Spoof as...
+    n = place_actions(Tab::Cable, a, it);
+    CHECK(n >= 4);
+    CHECK_EQ(int(it[0].act), int(Act::ReadCable));
+    CHECK_EQ(int(it[1].act), int(Act::ReadCable));
+    CHECK_STR(it[1].label, "Read e-marker");
+    CHECK_EQ(int(it[2].act), int(Act::SaveCable));
+    CHECK_STR(it[2].label, "Save cable");
+    CHECK_EQ(int(it[3].act), int(Act::SavedCables));
+    CHECK_STR(it[3].label, "Saved cables");
+    for (int i = 0; i < n; i++) CHECK(it[std::size_t(i)].act != Act::SpoofAs);
+
+    // Sink (Device) place: out[0] is Ask device (Act::Identify); no Ask device or Read again rows in out[1..].
+    n = place_actions(Tab::Sink, a, it);
+    CHECK(n >= 1);
+    CHECK_EQ(int(it[0].act), int(Act::Identify));
+    CHECK_STR(it[0].label, "Ask device");
+    CHECK_EQ(it[0].enabled, true);
+    for (int i = 1; i < n; i++) {
+        CHECK(it[std::size_t(i)].act != Act::Identify);
+        CHECK(it[std::size_t(i)].act != Act::Refresh);
+    }
+    a.pd_none = true;
+    place_actions(Tab::Sink, a, it);
+    CHECK_EQ(it[0].enabled, false);
+    CHECK_STR(it[0].why, kWhyNoPd);
+    a.alone = true;
+    place_actions(Tab::Sink, a, it);
+    CHECK_EQ(it[0].enabled, true);
+    a.alone = false; a.attached = false;
+    place_actions(Tab::Sink, a, it);
+    CHECK_EQ(it[0].enabled, false);
+    CHECK_STR(it[0].why, "No device seen");
+}
+
 int main() {
     test_default_tab();
     test_tab_empty();
@@ -701,6 +750,7 @@ int main() {
     test_status_survey();
     test_survey_words();
     test_actions();
+    test_place_actions();
     test_no_pd_gate();
     test_protocol();
     test_id_value();

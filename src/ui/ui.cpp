@@ -100,9 +100,14 @@ PageIf *Ui::build_menu(Menu m) {
         if (p && place_next_) p->as_place();   // the Log place, before enter() and the first paint
         return p;
     }
-    case Menu::Battery: return pages_.push<BatteryPage>(ctx_);
+    case Menu::Battery: {
+        BatteryPage *p = pages_.push<BatteryPage>(ctx_);
+        if (p && batt_tests_tab_) p->as_tests_tab();
+        return p;
+    }
     case Menu::Memory: return pages_.push<MemoryPage>(ctx_);
     case Menu::Display: return pages_.push<DisplayPage>(ctx_);
+    case Menu::Tests: return pages_.push<TestsPage>(ctx_, tests_tab_init_);
     default: return pages_.push<PdTriggerPage>(ctx_);
     }
 }
@@ -125,6 +130,7 @@ ListState Ui::list_state() {
         case Menu::Battery: return top_as<BatteryPage>().list_state();
         case Menu::Memory: return top_as<MemoryPage>().list_state();
         case Menu::Display: return top_as<DisplayPage>().list_state();
+        case Menu::Tests: return top_as<TestsPage>().list_state();
         default: return ListState{};
         }
     }
@@ -467,6 +473,14 @@ Ui::Session Ui::session() {
         case Menu::Connection: {
             const ConnectionPage &cp = connection_page();
             s.sub = static_cast<uint8_t>(static_cast<uint8_t>(cp.tab()) & kSubTabMask);
+            break;
+        }
+        case Menu::Tests: {
+            const TestsPage &tp = top_as<TestsPage>();
+            const ListState ls = tp.list_state();
+            const int c = tp.selected();
+            s.count = static_cast<uint8_t>(ls.count > 255 ? 255 : ls.count < 0 ? 0 : ls.count);
+            s.sel = static_cast<uint8_t>(c < 0 ? 0 : c > 254 ? 254 : c);
             break;
         }
         default: break;
@@ -868,23 +882,74 @@ void Ui::flip_face(int dir, uint32_t now_ms) {
 
 void Ui::show_face(uint32_t now_ms) { set_page(kFaces[ctx_.keep.face < kFaceCount ? ctx_.keep.face : 0], now_ms); }
 
+void Ui::open_tests(TestTab tab, uint32_t now_ms) {
+    BudgetScope scope(*this);
+    ctx_.keep.bench_sel = static_cast<int>(bench::Place::Tests);
+    set_page(Page::Tools, now_ms);
+    if (tab == TestTab::Battery) {
+        batt_tests_tab_ = true;
+        const bool ok = push_menu(Menu::Battery, now_ms);
+        batt_tests_tab_ = false;
+        if (ok) sync_panel();
+        return;
+    }
+    tests_tab_init_ = tab;
+    const bool ok = push_menu(Menu::Tests, now_ms);
+    tests_tab_init_ = TestTab::Overview;
+    if (ok) sync_panel();
+}
+
+void Ui::switch_tests_tab(TestTab tab, uint32_t now_ms) {
+    BudgetScope scope(*this);
+    if (tab != TestTab::Battery && menu() == Menu::Tests) {
+        ContentViewport viewport(layout_.content);
+        top_as<TestsPage>().set_tab(tab, now_ms);
+        sync_panel();
+        return;
+    }
+    if (tab == TestTab::Battery && menu() == Menu::Battery) return;
+    if (depth_ == 0) {
+        open_tests(tab, now_ms);
+        return;
+    }
+    const uint32_t t0 = now_us();
+    PageIf *const outgoing = pages_.at(depth_);
+    outgoing->leave();
+    const Menu next_m = (tab == TestTab::Battery) ? Menu::Battery : Menu::Tests;
+    const bool blank = clear_for_incoming(now_ms, *outgoing, menu_opaque(next_m));
+    --depth_;
+    pages_.pop();
+    if (next_m == Menu::Battery) batt_tests_tab_ = true;
+    else tests_tab_init_ = tab;
+    PageIf *const page = build_menu(next_m);
+    batt_tests_tab_ = false;
+    tests_tab_init_ = TestTab::Overview;
+    if (!page) {
+        refuse_menu(next_m, "arena", now_ms);
+        paint_incoming(now_ms, t0, true);
+        return;
+    }
+    stack_[depth_++] = next_m;
+    page->enter();
+    paint_incoming(now_ms, t0, blank);
+}
+
 void Ui::open_place(bench::Place p, uint32_t now_ms) {
     BudgetScope scope(*this);
     const bool conn_place = p == bench::Place::Charger || p == bench::Place::Cable || p == bench::Place::Device;
     const bool log_place = p == bench::Place::Log;
-    const bool batt_place = p == bench::Place::Battery;
+    if (p == bench::Place::Tests) {
+        open_tests(TestTab::Overview, now_ms);
+        return;
+    }
     if (p == bench::Place::K2) {   // the K2 place is the settings page; its BACK opens the Bench with K2 focused
         ctx_.keep.bench_sel = static_cast<int>(p);
         set_page(Page::Settings, now_ms);
         return;
     }
     // Meter: the Bench itself. The others: a place page over the Bench; BACK pops it and the Bench shows the place focused.
-    if (conn_place || log_place || batt_place) ctx_.keep.bench_sel = static_cast<int>(p);
+    if (conn_place || log_place) ctx_.keep.bench_sel = static_cast<int>(p);
     set_page(Page::Tools, now_ms);   // set_page keeps a base page asked for again
-    if (batt_place) {   // the battery recorder's page
-        if (push_menu(Menu::Battery, now_ms)) sync_panel();
-        return;
-    }
     if (log_place) {   // the PD diagnosis as the Log place: the stamp, the findings, the Black Box row
         place_next_ = true;
         if (push_menu(Menu::Diagnosis, now_ms)) sync_panel();

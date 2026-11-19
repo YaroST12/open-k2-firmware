@@ -23,7 +23,7 @@ inline constexpr const char *kWaiting = "CHARGER WAITING",     *kWaitingL = "Sta
 inline constexpr const char *kDualRole = "DUAL-ROLE PORT",     *kDualRoleL = "Toggles Rp: a phone alone?";
 inline constexpr const char *kNoCharger = "NO CHARGER",        *kNoChargerL = "Use either port";
 // Sink tab
-inline constexpr const char *kDevInUse = "DEVICE IN USE",      *kDevInUseL = "Line behind K2: not asked";
+inline constexpr const char *kDevInUse = "DEVICE IN USE",      *kDevInUseL = "Press OK to interrogate";
 inline constexpr const char *kNoDevice = "NO DEVICE";
 inline constexpr const char *kNoDevDirectL = "Plug into the other port", *kNoDevViaL = "Charger only in this setup",
                             *kNoDevL = "Plug into either port";

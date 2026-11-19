@@ -69,19 +69,17 @@ const char *armed_text(Act a, const view::Shown &s) {
 }  // namespace
 
 BatteryPage::BatteryPage(UiContext &c) : PageBase(c, Page::Count, "Battery", Icon::Battery) {
-    title_ = bench::place_name(bench::Place::Battery);
-    icon_ = place_icon(bench::Place::Battery);
     bar_icon_ = true;
 }
 
 void BatteryPage::enter() {
     view_ = View::Main;
     build();
-    sel_ = std::clamp(static_cast<int>(ctx_.keep.place_sel[static_cast<int>(bench::Place::Battery)]), 0, count() - 1);
+    sel_ = std::clamp(static_cast<int>(ctx_.keep.batt_sel), 0, count() - 1);
 }
 
 void BatteryPage::leave() {
-    if (view_ == View::Main) ctx_.keep.place_sel[static_cast<int>(bench::Place::Battery)] = static_cast<uint8_t>(sel_);
+    if (view_ == View::Main) ctx_.keep.batt_sel = static_cast<uint8_t>(sel_);
 }
 
 void BatteryPage::build() {
@@ -125,6 +123,7 @@ void BatteryPage::load_runs() {
 void BatteryPage::set_view(View v, int sel) {
     view_ = v;
     armed_until_ = 0;
+    bar_valid_ = false;
     build();
     sel_ = std::clamp(sel, 0, count() - 1);
     ctx_.rows.restart();
@@ -252,7 +251,8 @@ void BatteryPage::run_row(int i, bool focused, kit::RowSpec &out) {
 // ---- paint ----------------------------------------------------------------------------------------------------------------
 
 void BatteryPage::update(uint32_t now_ms) {
-    title_badge(false);
+    if (tests_tab_ && view_ == View::Main) title_pager(static_cast<int>(TestTab::Battery), static_cast<int>(TestTab::Count));
+    else title_badge(false);
     build();
     if (armed_until_ && static_cast<int32_t>(armed_until_ - now_ms) <= 0) armed_until_ = 0;
     if (note_until_ && static_cast<int32_t>(note_until_ - now_ms) <= 0) note_until_ = 0;
@@ -384,6 +384,11 @@ void BatteryPage::ok() {
 }
 
 bool BatteryPage::on_event(Event e) {
+    if (tests_tab_ && view_ == View::Main && e.press == Press::Long) {
+        if (e.button == Button::Minus) { ctx_.ui->switch_tests_tab(TestTab::Cable, ctx_.now); return true; }
+        if (e.button == Button::Plus) { ctx_.ui->switch_tests_tab(TestTab::Device, ctx_.now); return true; }
+        return false;
+    }
     if (e.press != Press::Short) return false;
     if (e.button == Button::Plus || e.button == Button::Minus) {
         sel_ = std::clamp(sel_ + (e.button == Button::Plus ? 1 : -1), 0, count() - 1);
@@ -406,12 +411,20 @@ bool BatteryPage::on_event(Event e) {
             return true;
         }
         armed_until_ = 0;
+        if (tests_tab_) {
+            ctx_.ui->switch_tests_tab(TestTab::Overview, ctx_.now);
+            return true;
+        }
     }
     return false;   // BACK in the Main view: the Ui pops the place
 }
 
 Strip BatteryPage::labels() const {
     Strip l = list_strip(base_labels());
+    if (tests_tab_ && view_ == View::Main) {
+        l[Button::Minus] = sl::UpPrev;
+        l[Button::Plus] = sl::DnNext;
+    }
     if (view_ == View::Runs) l[Button::Ok] = n_runs_ ? sl::View : sl::None;
     else if (armed()) l[Button::Ok] = sl::Confirm;
     else l[Button::Ok] = view::act_verb(act());

@@ -69,6 +69,8 @@ namespace sl {
     X(Stop, "Stop", "", "", false)                                                                                     \
     X(Up, "Up", "", "", false)                                                                                         \
     X(Dn, "Dn", "", "", false)                                                                                         \
+    X(UpPrev, "Up", "Prev", "", false)                                                                                 \
+    X(DnNext, "Dn", "Next", "", false)                                                                                 \
     X(UpDim, "Up", "", "", true)                                                                                       \
     X(DnDim, "Dn", "", "", true)                                                                                       \
     X(Inc, "+", "", "", false)                                                                                         \

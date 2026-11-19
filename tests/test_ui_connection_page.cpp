@@ -189,39 +189,36 @@ static void test_place_items_per_tab() {
     ui.goto_page(kConnTabAlias + 1, 20300);                          // Cable place
     ui.tick(20350);
     CHECK_EQ(int(cp(ui).tab()), int(conn::Tab::Cable));
-    CHECK(cp(ui).item_count() >= 5);                                 // Read, Save, Saved cables, Spoof as..., ...
+    CHECK(cp(ui).item_count() >= 4);                                 // Read, Save, Saved cables (no Spoof as...)
+    for (int i = 0; i < cp(ui).item_count(); i++)
+        CHECK(cp(ui).item(i).act != conn::Act::SpoofAs);
     ui.goto_page(kConnTabAlias + 2, 20450);                          // Device place
     ui.tick(20500);
     CHECK_EQ(int(cp(ui).tab()), int(conn::Tab::Sink));
+    CHECK(cp(ui).item_count() >= 1);
+    CHECK_EQ(int(cp(ui).item(0).act), int(conn::Act::Identify));     // OK explicitly interrogates/asks the device
     CHECK_EQ(cp(ui).item(0).enabled, false);                         // no device attached
+    for (int i = 1; i < cp(ui).item_count(); i++) {
+        CHECK(cp(ui).item(i).act != conn::Act::Identify);            // no "Ask device" button row
+        CHECK(cp(ui).item(i).act != conn::Act::Refresh);             // no "Read again" button row
+    }
     ui.on_button(Button::Back, ButtonEvent::Short, 20600);           // BACK leaves Connection
     CHECK_EQ(on_pd(ui), 0);
 }
 
-static void test_spoof_greyed_while_a_device_is_inline() {
-    Ui &ui = fresh_ui();
-    make_inline(ui, 20000);
-    ui.goto_page(kConnTabAlias + 1, 20100);                          // Cable place
-    ui.tick(20150);
-    int spoof = -1;
-    for (int i = 0; i < cp(ui).item_count(); i++)
-        if (cp(ui).item(i).act == conn::Act::SpoofAs) spoof = i;
-    CHECK(spoof >= 1);
-    CHECK_EQ(cp(ui).item(spoof).enabled, false);
-    CHECK_STR(cp(ui).item(spoof).why, "Live sink: unplug load");
-    const int depth = int(ui.menu_depth());
-    while (cp(ui).action_row() < spoof - 1) ui.on_button(Button::Plus, ButtonEvent::Short, 20250 + cp(ui).action_row() + 1);
-    ui.on_button(Button::Ok, ButtonEvent::Short, 20400);             // refused: the Spoof list does not open
-    CHECK_EQ(int(ui.menu_depth()), depth);
-    CHECK(ui.menu() != Menu::Spoof);
-}
-
-static void test_spoof_enabled_when_nothing_is_inline() {
-    Ui &ui = fresh_ui();
-    ui.goto_page(kConnTabAlias + 1, 20100);
-    ui.tick(20150);
-    for (int i = 0; i < cp(ui).item_count(); i++)
-        if (cp(ui).item(i).act == conn::Act::SpoofAs) CHECK_EQ(cp(ui).item(i).enabled, true);
+static void test_cable_place_has_no_spoof_row() {
+    for (bool inl : {false, true}) {
+        Ui &ui = fresh_ui();
+        if (inl) make_inline(ui, 20000);
+        ui.goto_page(kConnTabAlias + 1, 20100);                      // Cable place
+        ui.tick(20150);
+        CHECK(cp(ui).item_count() >= 4);
+        CHECK_EQ(int(cp(ui).item(1).act), int(conn::Act::ReadCable));
+        CHECK_EQ(int(cp(ui).item(2).act), int(conn::Act::SaveCable));
+        CHECK_EQ(int(cp(ui).item(3).act), int(conn::Act::SavedCables));
+        for (int i = 0; i < cp(ui).item_count(); i++)
+            CHECK(cp(ui).item(i).act != conn::Act::SpoofAs);
+    }
 }
 
 static void test_tools_spoof_shortcut_opens_the_cable_tab_list() {
@@ -946,7 +943,8 @@ static void test_sink_tab_offers_identify_when_a_device_is_alone() {
     CHECK_EQ(int(ui.link().inline_mode()), 0);
     ui.goto_page(kConnTabAlias + 2, 13500);                  // Device place
     ui.tick(13550);
-    CHECK(cp(ui).item_count() >= 2);
+    CHECK(cp(ui).item_count() >= 1);
+    CHECK_EQ(int(cp(ui).item(0).act), int(conn::Act::Identify));
     CHECK_EQ(cp(ui).item(0).enabled, true);                  // Ask device offered: a device is alone on the K2
 }
 
@@ -1042,7 +1040,7 @@ static void test_sink_tab_no_pd_offered_unanswered() {
     CHECK_EQ(cp(ui).result_rows(), 2);
     CHECK(ink_in(kit::kPlaceListY + 1, kit::kPlaceListY + 40) > 50);
     // The place's Ask device item is greyed with the same words the page shows.
-    CHECK(cp(ui).item_count() >= 2);
+    CHECK(cp(ui).item_count() >= 1);
     CHECK_EQ(cp(ui).item(0).enabled, false);
     CHECK_STR(cp(ui).item(0).why, "No PD from this device");
 }
@@ -1186,7 +1184,7 @@ static void test_single_tools_lock_one_tab() {
     CHECK_EQ(cp(ui).action_row(), 1);
     CHECK_STR(ok_label(ui), "Save");
     for (int i = 0; i < 10; i++) ui.on_button(Button::Plus, ButtonEvent::Short, 20150 + i * 10);
-    CHECK_EQ(cp(ui).action_row(), 5);                                  // stops on the last of the six rows (Loop probe)
+    CHECK_EQ(cp(ui).action_row(), cp(ui).item_count() - 2);            // stops on the last Cable action row
     CHECK_STR(ok_label(ui), "Open");
     for (int i = 0; i < 10; i++) ui.on_button(Button::Minus, ButtonEvent::Short, 20300 + i * 10);
     CHECK_EQ(cp(ui).action_row(), 0);                                  // empty page: clamped on first action row (Read e-marker)
@@ -1198,21 +1196,24 @@ static void test_single_tools_lock_one_tab() {
 
     ui.open_place(bench::Place::Charger, 21000);
     ui.tick(21050);
-    CHECK_STR(ok_label(ui), "Open");                                   // Test charger
+    CHECK_STR(ok_label(ui), "Refresh");                                // Read again (Charger place is info-only)
     ui.on_button(Button::Minus, ButtonEvent::Short, 21060);
     CHECK_EQ(cp(ui).action_row(), 0);                                  // empty page: stays clamped on row 0
-    CHECK_STR(ok_label(ui), "Open");                                   // still Test charger
+    CHECK_STR(ok_label(ui), "Refresh");                                // still Read again
     ui.open_place(bench::Place::Device, 21100);                        // a new place, not a tab switch
     ui.tick(21150);
     CHECK_EQ(int(cp(ui).tab()), int(conn::Tab::Sink));
+    CHECK_EQ(int(cp(ui).item(0).act), int(conn::Act::Identify));       // out[0] is Ask device
+    CHECK_EQ(cp(ui).item_count(), 1);                                  // no action rows: OK always asks
+    CHECK_EQ(cp(ui).action_row(), -1);
     CHECK_STR(ok_label(ui), "Ask");                                    // Ask device
     ui.on_button(Button::Back, ButtonEvent::Short, 21200);
     CHECK_EQ(int(ui.menu_depth()), 0);
 }
 
-// The Bench opens the place pages: Charger, Cable, Device each on its own tab. A place's tool opens its menu over the place
-// page (BACK comes back to it); Test charger replaces both and its BACK lands on the Charger place again. The Spoof shortcut
-// (single tools) lands on the Cable place.
+// The Bench opens the info-only place pages (Charger, Cable, Device) each on its own tab. Active charger tools live
+// in Tests -> Charger (opening a tool pushes it over Tests; Test charger replaces both and BACK returns to Tests -> Charger).
+// The Spoof shortcut (single tools) lands on Menu::Spoof.
 static void test_tools_rows_open_single_tools() {
     Ui &ui = fresh_ui();
     const conn::Tab kTabs[] = {conn::Tab::Source, conn::Tab::Cable, conn::Tab::Sink};
@@ -1227,21 +1228,21 @@ static void test_tools_rows_open_single_tools() {
         ui.on_button(Button::Back, ButtonEvent::Short, 20600 + k * 1000);
         CHECK_EQ(int(ui.menu_depth()), 0);
     }
-    ui.context().keep.place_sel[static_cast<int>(bench::Place::Charger)] = 1;   // Request voltage
-    ui.open_place(bench::Place::Charger, 24000);
-    CHECK_STR(cp(ui).item(2).label, "Request voltage");
+    ui.open_tests(TestTab::Charger, 24000);
+    CHECK_EQ(int(ui.menu()), int(Menu::Tests));
+    ui.on_button(Button::Plus, ButtonEvent::Short, 24050);             // Request voltage
     ui.on_button(Button::Ok, ButtonEvent::Short, 24100);
     CHECK_EQ(int(ui.menu()), int(Menu::PdTrigger));
-    CHECK_EQ(int(ui.menu_depth()), 2);                                  // over the place page
+    CHECK_EQ(int(ui.menu_depth()), 2);                                 // over Tests
     ui.on_button(Button::Back, ButtonEvent::Short, 24200);
-    CHECK_EQ(on_pd(ui), 1);
-    ui.on_button(Button::Minus, ButtonEvent::Short, 24300);             // Test charger
+    CHECK_EQ(int(ui.menu()), int(Menu::Tests));
+    ui.on_button(Button::Minus, ButtonEvent::Short, 24300);            // Test charger
     ui.on_button(Button::Ok, ButtonEvent::Short, 24400);
     CHECK_EQ(int(ui.page()), int(Page::ChargerTest));
     CHECK_EQ(int(ui.menu_depth()), 0);
     ui.on_button(Button::Back, ButtonEvent::Short, 24500);
-    CHECK_EQ(on_pd(ui), 1);
-    CHECK_EQ(int(cp(ui).tab()), int(conn::Tab::Source));
+    CHECK_EQ(int(ui.menu()), int(Menu::Tests));
+    CHECK_EQ(int(ui.menu_depth()), 1);
     CHECK(ui.open_connection(conn::Tab::Cable, true, 25000));
     CHECK_EQ(int(ui.menu()), int(Menu::Spoof));
 }
@@ -1616,8 +1617,7 @@ int main() {
     test_topology_unknown_unless_passive_and_dead();
     test_empty_states_are_passive();
     test_place_items_per_tab();
-    test_spoof_greyed_while_a_device_is_inline();
-    test_spoof_enabled_when_nothing_is_inline();
+    test_cable_place_has_no_spoof_row();
     test_tools_spoof_shortcut_opens_the_cable_tab_list();
     test_sink_id_row_marks_a_sniffed_identity();
     test_sink_tab_no_pd_offered_unanswered();

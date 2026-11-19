@@ -248,14 +248,14 @@ void PageBase::title_bar() {
     draw_status_left(ctx_.content, (menu || meter_face() || bar_icon_) && has_icon_, icon_, name, 132, role, true);
 }
 
-void PageBase::title_pager(int current) {
-    const uint32_t sig = 0x9A6E0000u | static_cast<uint32_t>(current);
+void PageBase::title_pager(int current, int count) {
+    const uint32_t sig = 0x9A6E0000u | (static_cast<uint32_t>(count & 0xFF) << 8) | static_cast<uint32_t>(current & 0xFF);
     if (bar_valid_ && sig == bar_sig_) return;
     const int cost = static_cast<int>(ctx_.content.w > 140 ? ctx_.content.w - 140 : 84) * (kBarH - 1);
     if (ctx_.budget && !ctx_.budget->admit(cost, true)) return;
     bar_valid_ = true;
     bar_sig_ = sig;
-    draw_top_pager(ctx_.content, kMeterFaces, current);
+    draw_top_pager(ctx_.content, count, current);
 }
 
 // Right end of the top chrome bar: the compact fmt3(V) x fmt3(A) readout, swapped for the stale-grey
@@ -308,7 +308,8 @@ bool PageBase::back_event(Event e) {
         return true;
     }
     if (e.button != Button::Back) return false;
-    ui.open_place(id_ == Page::ChargerTest ? bench::Place::Charger : bench::Place::Meter, ctx_.now);   // the K2 place: the Bench
+    if (id_ == Page::ChargerTest) ui.open_tests(TestTab::Charger, ctx_.now);
+    else ui.open_place(bench::Place::Meter, ctx_.now);   // the K2 place: the Bench
     return true;
 }
 

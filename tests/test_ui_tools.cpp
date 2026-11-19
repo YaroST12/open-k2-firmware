@@ -152,33 +152,19 @@ static void test_hurt_table() {
     CHECK_EQ(int(tool_hurt_by(kToolCount)), int(ToolHurt::Nothing));
 }
 
-// The Bench: every tool of the old hub is exactly one place's action, the Meter has none, every name fits a row. Battery, Log
-// and K2 are pages of their own (Battery: the efficiency recorder, no tool of the old hub): the PD diagnosis (tool 8) with its Black Box row (tool 7), the settings with System state (tool 10).
+// Bench places are info-only (actions() returns empty); active tools live in Tests tabs (TestsPage).
 static void test_bench_places_cover_every_tool() {
     using namespace bench;
-    int seen[kToolSlots] = {};
     for (int p = 0; p < kPlaces; p++) {
         const Acts a = actions(static_cast<Place>(p));
-        const Place pl = static_cast<Place>(p);
-        if (pl == Place::Meter || pl == Place::Battery || pl == Place::Log || pl == Place::K2) { CHECK_EQ(a.n, 0); continue; }
-        CHECK_EQ(a.n > 0, true);
-        CHECK_EQ(a.n <= 6, true);   // a place's action list fits under its identity without a long scroll
-        for (int i = 0; i < a.n; i++) {
-            CHECK_EQ(std::strlen(a.a[i].name) <= 22, true);   // font 16 from x28 to the chevron
-            CHECK_EQ(std::strlen(act_hint(a.a[i])) > 0, true);
-            CHECK_EQ(std::strlen(act_hint(a.a[i])) <= 27, true);
-            if (a.a[i].kind == ActKind::Tool) seen[a.a[i].arg]++;
-        }
+        CHECK_EQ(a.n, 0);
     }
-    // Spoof, Charger ID, Cable read and Device ID are the place pages themselves (conn::place_actions below); Black Box (7),
-    // PD diagnosis (8) and System state (10) are the Log and K2 pages' own rows.
-    for (int t = 0; t < kToolCount; t++)
-        CHECK_EQ(seen[t], t == kToolSpoof || (t >= kToolChargerId && t <= kToolDeviceId) || t == 7 || t == 8 || t == 10 ? 0 : 1);
+    CHECK_EQ(std::strcmp(place_name(Place::Tests), "Tests"), 0);
     CHECK_EQ(std::strcmp(place_name(Place::K2), "K2"), 0);
 }
 
-// A place page's rows: its own read first (Cable, Device) or last (Charger, read again), the cable's actions, then the
-// place's tools in Bench order. items[0] is the read OK runs with no row focused.
+// A place page's rows: info-only actions (Charger: Read again; Cable: Read e-marker, Save cable, Saved cables;
+// Device: no action rows, OK always asks). items[0] is the read OK runs with no row focused.
 static std::string place_rows(conn::Tab t, const conn::ActFacts &a) {
     std::array<conn::Item, conn::kMaxItems> it{};
     const int n = conn::place_actions(t, a, it);
@@ -189,23 +175,20 @@ static std::string place_rows(conn::Tab t, const conn::ActFacts &a) {
 
 static void test_place_actions() {
     conn::ActFacts a;
-    CHECK_EQ(place_rows(conn::Tab::Source, a) == std::string("Read again:Test charger,Request voltage,Fast charge,Report cards,") +
-                                                      (K2_PDSTRESS ? "Stress test," : "") + "Read again",
-             true);    CHECK_EQ(place_rows(conn::Tab::Cable, a) == "Read e-marker:Read e-marker,Save cable,Saved cables,Spoof as...,Resistance,Loop probe",
-             true);
-    CHECK_EQ(place_rows(conn::Tab::Sink, a) == "Ask device:Ask device,Twins,Read again", true);
+    CHECK_EQ(place_rows(conn::Tab::Source, a) == "Read again:Read again", true);
+    CHECK_EQ(place_rows(conn::Tab::Cable, a) == "Read e-marker:Read e-marker,Save cable,Saved cables", true);
+    CHECK_EQ(place_rows(conn::Tab::Sink, a) == "Ask device:", true);
     std::array<conn::Item, conn::kMaxItems> it{};
     const int n = conn::place_actions(conn::Tab::Cable, a, it);
     CHECK_EQ(it[2].enabled, false);                                   // Save cable: no cable read
-    CHECK_EQ(it[5].act == conn::Act::Bench && it[5].arg == 0, true);  // Resistance: the Cable place's first tool
-    CHECK_EQ(n, 7);
+    CHECK_EQ(n, 4);
     a.attached = true;
     conn::place_actions(conn::Tab::Sink, a, it);
-    CHECK_EQ(it[0].enabled && it[1].enabled, true);                   // a device to ask
+    CHECK_EQ(it[0].enabled, true);                                    // a device to ask
     a.pd_none = true;
     conn::place_actions(conn::Tab::Sink, a, it);
-    CHECK_EQ(it[1].enabled, false);
-    CHECK_EQ(std::strcmp(it[1].why, conn::kWhyNoPd), 0);
+    CHECK_EQ(it[0].enabled, false);
+    CHECK_EQ(std::strcmp(it[0].why, conn::kWhyNoPd), 0);
 }
 
 static std::string brow(bench::Place p, const bench::Facts &f) {
@@ -222,8 +205,8 @@ static void test_bench_rows() {
     CHECK_EQ(brow(Place::Charger, f) == "None on either port", true);
     CHECK_EQ(brow(Place::Cable, f) == "Not read", true);
     CHECK_EQ(brow(Place::Device, f) == "None inline", true);
-    CHECK_EQ(brow(Place::Battery, f) == "No run", true);
-    CHECK_EQ(row(Place::Battery, f).known, false);
+    CHECK_EQ(brow(Place::Tests, f) == "Charger, cable, batt, dev", true);
+    CHECK_EQ(row(Place::Tests, f).known, false);
     CHECK_EQ(brow(Place::Log, f) == "No session", true);
     f.captures = 3;
     CHECK_EQ(brow(Place::Log, f) == "No session, 3 captures", true);
@@ -239,7 +222,7 @@ static void test_bench_rows() {
     f.contract = true; f.ctr_mv = 20000; f.ctr_ma = 3000;
     f.diag.put("Healthy"); f.captures = 1; f.hid = true;
     f.batt = true; f.batt_status.put("Round trip 80.0%");
-    CHECK_EQ(brow(Place::Battery, f) == "Round trip 80.0%", true);
+    CHECK_EQ(brow(Place::Tests, f) == "Round trip 80.0%", true);
     CHECK_EQ(brow(Place::Meter, f) == "36.75W  20.04V  1.834A", true);
     CHECK_EQ(brow(Place::Charger, f) == "PD3.x 100W, 7 offers", true);
     CHECK_EQ(brow(Place::Cable, f) == "5A 20V, 100W", true);

@@ -123,6 +123,8 @@ struct UiContext {
             std::uint8_t sel K2_BSS_INIT(0);              // the Setup list's cursor
         } pdstress;
         std::array<uint8_t, bench::kPlaces> place_sel K2_BSS_ZERO;  // each place's last action: repeating a job is OK, OK, OK
+        uint8_t batt_sel K2_BSS_INIT(0);                             // BatteryPage main view cursor
+        std::array<uint8_t, 5> tests_sel K2_BSS_ZERO;                // TestsPage cursor per TestTab (Overview/Charger/Cable/Device)
         uint8_t face K2_BSS_INIT(0);                                 // Meter: the face last shown (0 Flow, 1 Graphs, 2 Numbers, 3 Lines, 4 Ripple)
         struct Ripple {                                              // Meter > Ripple: persisted scope settings across face flips
             uint8_t timebase = 1;                                    // ripple::kDefaultTimebase (50 us/div)
@@ -265,8 +267,8 @@ protected:
     // Right end of the top chrome bar: the compact V x A readout, the LAST pill when stale,
     // empty on Home (its hero carries the values).
     void title_badge(bool last);
-    // The Meter faces (Numbers, Lines, Ripple) carry a pager there instead: Flow, Graphs, Numbers, Lines, Ripple, `current` solid.
-    void title_pager(int current);
+    // Top-bar pager (Meter faces and Tests carousel): `count` dots, `current` solid.
+    void title_pager(int current, int count = kMeterFaces);
     bool meter_face() const { return id_ == Page::Detail || id_ == Page::Lines || id_ == Page::Ripple; }
     bool any_face() const { return id_ == Page::Home || id_ == Page::Graphs || meter_face(); }   // Flow and Graphs too
     // The navigation a page leaves to the base (CONCEPT 7), short presses only. On a Meter face: Up / Dn flip the face, OK opens

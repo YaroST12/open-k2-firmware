@@ -186,31 +186,41 @@ static void open_settled(Ui &ui, bench::Place pl, std::uint32_t &t) {
     while (ui.painting()) ui.tick(t += 20);
 }
 
+static void open_tests_settled(Ui &ui, TestTab tab, std::uint32_t &t) {
+    ui.open_tests(tab, t);
+    ui.tick(t += 100);
+    while (ui.painting()) ui.tick(t += 20);
+}
+
 static void test_page() {
     Ui &ui = fresh_ui();
     std::uint32_t t = 1000;
     ui.tick(t);
-    // the Bench row
+    // the Bench row (Tests carries battery status when a run is active, else the domains summary)
     bench::Facts f;
-    CHECK(eq(bench::row(bench::Place::Battery, f).status.view(), "No run"));
-    open_settled(ui, bench::Place::Battery, t);
+    CHECK(eq(bench::row(bench::Place::Tests, f).status.view(), "Charger, cable, batt, dev"));
+    open_tests_settled(ui, TestTab::Battery, t);
     CHECK_EQ(int(ui.menu()), int(Menu::Battery));
     const BatteryPage *p = ui.battery_page();
     CHECK(p != nullptr);
     if (!p) return;
+    CHECK(p->is_tests_tab());
     CHECK_EQ(p->selected(), 0);   // Start charge
     // OK starts a charge (the stub monitor reads 5 V)
     press(ui, Button::Ok, t);
     CHECK_EQ(int(bt::hw::service().rec().state()), int(bt::State::Measuring));
     CHECK_EQ(int(bt::hw::service().rec().mode()), int(bt::Mode::Charge));
+    // Short Back on Battery tab returns to Tests Overview, then Short Back pops to Bench
+    press(ui, Button::Back, t);
+    CHECK_EQ(int(ui.menu()), int(Menu::Tests));
+    CHECK(ui.tests_page() != nullptr && ui.tests_page()->tab() == TestTab::Overview);
+    press(ui, Button::Back, t);
+    CHECK_EQ(int(ui.menu()), int(Menu::Count));
     // the running dot on another page
-    ui.on_button(Button::Back, ButtonEvent::Short, t);   // pops the place
-    ui.tick(t += 100);
-    while (ui.painting()) ui.tick(t += 20);
     open_settled(ui, bench::Place::Meter, t);
     CHECK(count_px(kFocus, 216, 0, 224, 8) >= 20);   // rotation 0: content x = panel x, the strip is x224..239
     // finish by hand: End charge needs a second OK
-    open_settled(ui, bench::Place::Battery, t);
+    open_tests_settled(ui, TestTab::Battery, t);
     p = ui.battery_page();
     if (!p) return;
     while (p->selected() < p->list_state().count - 1 && p->act() != view::Act::EndPhase) press(ui, Button::Plus, t);
@@ -232,6 +242,21 @@ static void test_page() {
     press(ui, Button::Back, t);
     CHECK(!p->viewing_stored());
     CHECK_EQ(int(ui.menu()), int(Menu::Battery));
+    // Long -/+ flips to Cable / Device tabs cleanly
+    ui.on_button(Button::Minus, ButtonEvent::Long, t);
+    ui.tick(t += 100);
+    while (ui.painting()) ui.tick(t += 20);
+    CHECK_EQ(int(ui.menu()), int(Menu::Tests));
+    CHECK(ui.tests_page() != nullptr && ui.tests_page()->tab() == TestTab::Cable);
+    ui.on_button(Button::Plus, ButtonEvent::Long, t);
+    ui.tick(t += 100);
+    while (ui.painting()) ui.tick(t += 20);
+    CHECK_EQ(int(ui.menu()), int(Menu::Battery));
+    ui.on_button(Button::Plus, ButtonEvent::Long, t);
+    ui.tick(t += 100);
+    while (ui.painting()) ui.tick(t += 20);
+    CHECK_EQ(int(ui.menu()), int(Menu::Tests));
+    CHECK(ui.tests_page() != nullptr && ui.tests_page()->tab() == TestTab::Device);
 }
 
 // The place in Classic (the only theme): the identity's dashed rule in ink3, nothing left of the page under it from the Bench.
@@ -241,7 +266,7 @@ static void test_classic() {
     ui.tick(t);
     bt::hw::service().start(bt::Mode::RoundTrip, bt::Wiring::SamePort, true);
     for (int i = 0; i < 30; i++) bt::hw::poll(t += 1000, true);
-    open_settled(ui, bench::Place::Battery, t);
+    open_tests_settled(ui, TestTab::Battery, t);
     CHECK(count_px(kInk3, 8, 66, 216, 67) > 100);   // the perforation under the identity block (y kIdDashY)
     CHECK(count_px(kBg, 0, 22, 224, 220) > 224 * 100);
 }

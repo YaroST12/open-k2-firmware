@@ -87,38 +87,9 @@ Readiness tool_readiness(int tool, const SetupState &st, bool pm_online) {
 
 namespace bench {
 namespace {
-using K = ActKind;
-constexpr uint8_t pg(Page p) { return static_cast<uint8_t>(p); }
-
-// Tool slots (ui_tools.hpp / text/tools.hpp): 0 FC trigger, 1 PD trigger, 2 Spoof, 3 Cable R, 4 Charger ID, 5 Cable read,
-// 6 Device ID, 7 Black Box, 8 PD diagnosis, 9 Report cards, 10 Diag, 11 Device twins, 12 Loop probe, 13 PD Stress.
-// Charger, Cable and Device are the place pages (the Connection page in place mode, conn::place_actions): their own reads
-// (Charger ID, Cable read with Spoof and Saved cables, Device ID) are the page itself; these are the tools it adds.
-constexpr Act kCharger[] = {
-    {"Test charger", K::Page, pg(Page::ChargerTest), "grades every offer"},
-    {"Request voltage", K::Tool, 1, nullptr},
-    {"Fast charge", K::Tool, 0, nullptr},
-    {"Report cards", K::Tool, 9, nullptr},
-#if K2_PDSTRESS
-    {"Stress test", K::Tool, 13, nullptr},
-#endif
-};
-constexpr Act kCable[] = {
-    {"Resistance", K::Tool, 3, nullptr},
-#if K2_LOOPPROBE
-    {"Loop probe", K::Tool, 12, nullptr},
-#endif
-};
-#if K2_TWIN
-constexpr Act kDevice[] = {
-    {"Twins", K::Tool, 11, nullptr},
-};
-#endif
-// Battery, Log and K2 are pages of their own (the efficiency recorder, the PD diagnosis with its Black Box row, the settings
-// with System state and Boot info): they add no Bench tools.
-constexpr const char *kPlaceNames[kPlaces] = {"Meter", "Charger", "Cable", "Device", "Battery", "Log", "K2"};
-
-template <size_t N> constexpr Acts acts(const Act (&a)[N]) { return {a, static_cast<int>(N)}; }
+// Charger, Cable and Device on the Bench are info-only (their active tests live in the Tests carousel, ui_tests.cpp).
+// Tests, Log and K2 are pages of their own: none of the Bench places carry inline tool actions here.
+constexpr const char *kPlaceNames[kPlaces] = {"Meter", "Charger", "Cable", "Device", "Tests", "Log", "K2"};
 
 void put_volts(StrBuf<kStatusChars + 1> &s, int32_t mv) {
     if (mv % 1000 == 0) s.put_u32(static_cast<uint32_t>(mv / 1000));
@@ -140,20 +111,7 @@ std::string_view short_version(const char *v) {
 }
 }  // namespace
 
-Acts actions(Place p) {
-    switch (p) {
-    case Place::Charger: return acts(kCharger);
-    case Place::Cable: return acts(kCable);
-#if K2_TWIN
-    case Place::Device: return acts(kDevice);
-#else
-    case Place::Device:
-#endif
-    case Place::Battery:
-    case Place::Log:
-    case Place::K2:
-    case Place::Meter: break;
-    }
+Acts actions(Place) {
     return {nullptr, 0};
 }
 
@@ -196,9 +154,10 @@ Row row(Place p, const Facts &f) {
         put_amps(s, f.ctr_ma);
         if (f.vbus && f.mw >= 1000) s.put(", gets ").put_u32(static_cast<uint32_t>((f.mw + 500) / 1000)).put_char('W');
         break;
-    case Place::Battery:
-        r.known = f.batt;
-        s.put(f.batt_status.view().empty() ? std::string_view("No run") : f.batt_status.view());
+    case Place::Tests:
+        r.known = f.batt || f.caps || f.cable || f.contract;
+        s.put((f.batt && !f.batt_status.view().empty()) ? f.batt_status.view()
+                                                        : std::string_view("Charger, cable, batt, dev"));
         break;
     case Place::Log:
         r.known = true;
