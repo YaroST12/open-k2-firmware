@@ -388,6 +388,8 @@ struct Fake {
     // Each range's spec cells (Cmd::ChargerTest req [9, off]).
     k2::specsec::Apdos spec_apdo{};
     const k2::specsec::Apdos& charger_test_spec_apdo() { calls++; return spec_apdo; }
+    uint8_t spec_split = 0;   // specsec::split_bits of the grid's split
+    uint8_t charger_test_spec_split() { return spec_split; }
 #if K2_SPECROWS
     // The spec rows file (Cmd::ChargerTest req [8, off]), empty = none.
     std::vector<uint8_t> sr_file;

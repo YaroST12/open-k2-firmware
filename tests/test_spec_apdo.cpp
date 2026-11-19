@@ -105,7 +105,7 @@ void wire_round_trip() {
     specsec::to_apdo_wire(a.r[0], w);
     CHECK_EQ(int(specsec::kApdoWireBytes), 2 + 12 * 11);
     CHECK_EQ(int(w[0]), 5);
-    CHECK_EQ(int(w[1]), 0);
+    CHECK_EQ(int(w[1]), 0 | 3 << 1 | 1 << 3);   // PPS, the range's word: Fail, timing (the band)
     const std::size_t band = 2 + 12 * specsec::apdo_slot(C::PpsBand);
     CHECK_EQ(int(w[band + 1]), 1);                             // fails
     CHECK_EQ(int(w[band + 2] | w[band + 3] << 8), 3000);       // 300 ms in 0.1 ms
@@ -118,7 +118,7 @@ void wire_round_trip() {
     // The same range again replaces its entry; a damaged form changes nothing.
     CHECK_COND(specsec::from_apdo_wire(w.data(), w.size(), b));
     CHECK_EQ(int(b.n), 2);
-    w[1] = 2;
+    w[1] = 0x20;
     CHECK_COND(!specsec::from_apdo_wire(w.data(), w.size(), b));
     w[1] = 1; w[2 + 12 * 4] = 7;                               // verdict 7
     CHECK_COND(!specsec::from_apdo_wire(w.data(), w.size(), b));
@@ -129,6 +129,7 @@ void wire_round_trip() {
     // The stream: count, then each range.
     CHECK_EQ(int(specsec::apdo_stream_size(a)), 1 + 2 * int(specsec::kApdoWireBytes));
     CHECK_EQ(int(specsec::apdo_stream_byte(a, 0)), 2);
+    CHECK_EQ(int(specsec::apdo_stream_byte(a, 0, specsec::split_bits({true, true}))), 2 | 1 << 4 | 1 << 5);   // the split rides on the count
     specsec::to_apdo_wire(a.r[1], w);
     bool same = true;
     for (std::size_t i = 0; i < w.size(); ++i) same = same && specsec::apdo_stream_byte(a, 1 + specsec::kApdoWireBytes + i) == w[i];

@@ -32,6 +32,7 @@
 #include "k2/drivers/flash.hpp"
 #include "k2/drivers/fs_flash.hpp"
 #include "k2/drivers/pin_mark.hpp"
+#include "k2/chargertest/result_layout.hpp"
 #include "k2/chargertest/session_store.hpp"
 #include "k2/core/bootinfo_hw.hpp"
 #include "k2/core/boottrace_store.hpp"
@@ -1560,6 +1561,10 @@ size_t Remote::pdspec_read(uint16_t, std::span<uint8_t>) { return 0; }
 #endif
 // Each range's spec cells are the charger test's (the Deep run's PD spec section).
 const specsec::Apdos& Remote::charger_test_spec_apdo() { return ui_.charger_test_results().spec_apdo(); }
+uint8_t Remote::charger_test_spec_split() {
+    const auto& r = ui_.charger_test_results();
+    return specsec::split_bits(specsec::split(r.evidence().spec, r.spec_apdo(), result_layout::range_positions(r.steps())));
+}
 #if K2_SPECROWS
 // The spec rows file is the charger test's (the Deep run's PD spec section): the session answers.
 uint16_t Remote::spec_rows_len() { return ui_.charger_test_spec_rows_len(); }

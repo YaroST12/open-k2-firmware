@@ -310,13 +310,18 @@ constexpr RangeSpec range_spec(const Apdo& p) {
     if (pen[worst]) rs = {RangeTone::Fail, static_cast<Group>(worst), top[worst]};
     return rs;
 }
-// One range on the wire (the journal record /jr/sa<n>.rec, the remote read 0x0B [9, off]): pos, avs, then per slot the cell's code,
-// fails, value, lo, hi, n (little endian), a, b. The remote reads a stream: the count, then each range's form (none: empty).
+// One range on the wire (the journal record /jr/sa<n>.rec, the remote read 0x0B [9, off]): pos, then avs (bit 0) with the range's word
+// (range_spec: tone bits 1..2, group bits 3..4; derived, a reader recomputes it), then per slot the cell's code, fails, value, lo, hi, n
+// (little endian), a, b. The remote reads a stream: the count (bits 0..3) with the grid's split (bit 4 PPS, bit 5 AVS: split_bits),
+// then each range's form (none: empty).
 inline constexpr std::size_t kApdoCellBytes = 12, kApdoWireBytes = 2 + kApdoCellBytes * kApdoSlots;
 static_assert(kApdoWireBytes % 2 == 0 && kApdoWireBytes <= 254, "one even journal record");
 constexpr std::uint8_t apdo_wire_byte(const Apdo& p, std::size_t k) {
     if (k == 0) return p.pos;
-    if (k == 1) return p.avs ? 1 : 0;
+    if (k == 1) {
+        const RangeSpec rs = range_spec(p);
+        return static_cast<std::uint8_t>((p.avs ? 1u : 0u) | static_cast<unsigned>(rs.tone) << 1 | static_cast<unsigned>(rs.group) << 3);
+    }
     const Cell& c = p.cells[(k - 2) / kApdoCellBytes];
     const auto u16 = [](std::int32_t v, bool hi) { return static_cast<std::uint8_t>(hi ? static_cast<std::uint16_t>(v) >> 8 : v & 0xFF); };
     switch ((k - 2) % kApdoCellBytes) {
@@ -335,9 +340,9 @@ constexpr void to_apdo_wire(const Apdo& p, std::array<std::uint8_t, kApdoWireByt
 }
 // Adds the range (or replaces the one at its position). False = not a form of this version: nothing changes.
 constexpr bool from_apdo_wire(const std::uint8_t* w, std::size_t n, Apdos& a) {
-    if (n != kApdoWireBytes || w[0] == 0 || w[0] > 15 || w[1] > 1) return false;
+    if (n != kApdoWireBytes || w[0] == 0 || w[0] > 15 || w[1] > 0x1F) return false;
     Apdo p;
-    p.pos = w[0]; p.avs = w[1] != 0;
+    p.pos = w[0]; p.avs = (w[1] & 1u) != 0;
     const auto s16 = [](const std::uint8_t* q) { return static_cast<std::int16_t>(static_cast<std::uint16_t>(q[0] | (q[1] << 8))); };
     for (std::size_t i = 0; i < kApdoSlots; ++i) {
         const std::uint8_t* q = w + 2 + kApdoCellBytes * i;
@@ -354,8 +359,8 @@ constexpr bool from_apdo_wire(const std::uint8_t* w, std::size_t n, Apdos& a) {
     return true;
 }
 constexpr std::size_t apdo_stream_size(const Apdos& a) { return a.n ? 1 + a.n * kApdoWireBytes : 0; }
-constexpr std::uint8_t apdo_stream_byte(const Apdos& a, std::size_t i) {
-    return i == 0 ? a.n : apdo_wire_byte(a.r[(i - 1) / kApdoWireBytes], (i - 1) % kApdoWireBytes);
+constexpr std::uint8_t apdo_stream_byte(const Apdos& a, std::size_t i, std::uint8_t split = 0) {
+    return i == 0 ? static_cast<std::uint8_t>(a.n | split << 4) : apdo_wire_byte(a.r[(i - 1) / kApdoWireBytes], (i - 1) % kApdoWireBytes);
 }
 
 constexpr const char* range_word(const RangeSpec& rs) { return rs.tone == RangeTone::Pass ? "spec" : rs.tone == RangeTone::None ? "-" : group_word(rs.group); }
@@ -402,6 +407,7 @@ constexpr Split split(const Result& r, const Apdos& a, std::uint16_t lines) {
     s.avs = has[1] && !gap[1];
     return s;
 }
+constexpr std::uint8_t split_bits(const Split& s) { return static_cast<std::uint8_t>((s.pps ? 1u : 0u) | (s.avs ? 2u : 0u)); }
 constexpr bool hidden(const Split& s, std::size_t i) {
     return (s.pps && i >= kPpsFirst && i < kAvsFirst) || (s.avs && i >= kAvsFirst && i < kObserver);
 }

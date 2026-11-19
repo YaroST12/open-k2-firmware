@@ -156,7 +156,9 @@
 //                                    SPEC RANGES, req 9 off_lo(1) off_hi(1): each PPS / AVS range's own spec cells: count(1), then per range
 //                                    pos(1) avs(1) and 11 slots of code(1) fails(1) value(2) lo(2) hi(2) n(2) a(1) b(1) (LE, the cell
 //                                    rules of req 6 / 7; slot order specsec::kApdoPps / kApdoAvs). Same reply layout as req 8; total 0 =
-//                                    none. An older firmware answers BadLength: the grid keeps the merged section.
+//                                    none. An older firmware answers BadLength: the grid keeps the merged section. The count byte's bits
+//                                    4 / 5: the K2 grid hid the merged PPS / AVS rows (specsec::split); avs bits 1..2 / 3..4: the range's
+//                                    word, tone (0 none, 1 spec, 2 caution, 3 fail) and group (0 level, 1 timing, 2 shape).
 //                                    CANCEL, req 5 (one byte): the device's own stop (BACK) - a run stops, the wait is
 //                                    cancelled (Rd released), the confirm window (and a pending remote START) closes, the
 //                                    Refuse stage returns to Review, a pending resume is abandoned. rsp what(1): kCtStop*.
@@ -1715,6 +1717,7 @@ concept Backend = requires(B &b, uint8_t u8, uint16_t u16, bool on) {
     { b.spec_rows_read(uint16_t{}, std::span<uint8_t>{}) } -> std::same_as<size_t>;   // file bytes from off, returns how many
 #endif
     { b.charger_test_spec_apdo() } -> std::same_as<const specsec::Apdos&>;   // each range's spec cells of the run in hand
+    { b.charger_test_spec_split() } -> std::same_as<uint8_t>;   // specsec::split_bits: which merged kinds the Results grid replaced
     { b.loopprobe_len() } -> std::same_as<uint16_t>;                      // bytes of the stored loop probe file, 0 = none
     { b.loopprobe_read(uint16_t{}, std::span<uint8_t>{}) } -> std::same_as<size_t>;   // file bytes from off, returns how many
     { b.hostreport_len() } -> std::same_as<uint16_t>;                     // bytes of the stored Host report file, 0 = none
@@ -1958,7 +1961,8 @@ template <Backend B>
             const size_t total = specsec::apdo_stream_size(a);
             if (off > total) return reply_bad_arg(f);
             const size_t n = std::min<size_t>(kCtSpecChunk, total - off);
-            for (size_t i = 0; i < n; ++i) f.buf[kCtSpecRowsHeader + i] = specsec::apdo_stream_byte(a, off + i);
+            const uint8_t split = off == 0 ? backend.charger_test_spec_split() : uint8_t(0);
+            for (size_t i = 0; i < n; ++i) f.buf[kCtSpecRowsHeader + i] = specsec::apdo_stream_byte(a, off + i, split);
             const uint32_t run = backend.charger_test_results().run_id;
             f.buf[0] = uint8_t(run); f.buf[1] = uint8_t(run >> 8); f.buf[2] = uint8_t(run >> 16); f.buf[3] = uint8_t(run >> 24);
             f.buf[4] = uint8_t(total); f.buf[5] = uint8_t(total >> 8); f.buf[6] = uint8_t(off); f.buf[7] = uint8_t(off >> 8); f.buf[8] = uint8_t(n);

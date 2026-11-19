@@ -3226,6 +3226,7 @@ static void test_charger_test_spec_apdo_wire() {
     check_bytes(r, 6, {4, 3, 2, 1, 0, 0, 0, 0, 0});
     f.spec_apdo.add(k2::pdspec::Check::PpsBand, {300000, 0, 0, 275000, uint8_t(5 | 1 << 4), 50});
     f.spec_apdo.add(k2::pdspec::Check::AvsAccuracy, {15200, 0, 14700, 15300, uint8_t(7 | 2 << 4), 150});
+    f.spec_split = ss::split_bits({true, false});   // the K2 grid's split rides on the count byte
     const size_t total = ss::apdo_stream_size(f.spec_apdo);
     CHECK_EQ(total, size_t(1 + 2 * ss::kApdoWireBytes));
     std::vector<uint8_t> got;
@@ -3242,8 +3243,9 @@ static void test_charger_test_spec_apdo_wire() {
     }
     CHECK_EQ(got.size(), total);
     bool same = got.size() == total;
-    for (size_t i = 0; same && i < total; ++i) same = got[i] == ss::apdo_stream_byte(f.spec_apdo, i);
+    for (size_t i = 0; same && i < total; ++i) same = got[i] == ss::apdo_stream_byte(f.spec_apdo, i, f.spec_split);
     CHECK(same);
+    CHECK_EQ(got.empty() ? -1 : int(got[0]), 2 | 1 << 4);
     CHECK_EQ(run(f, request(0x0B, 62, {9, uint8_t(total + 1), uint8_t((total + 1) >> 8)}), r), 1);
     check_header(r, 0x0B, 62, Status::BadArg, 0);
     CHECK_EQ(run(f, request(0x0B, 63, {9, 0}), r), 1);      // two bytes: not this request
