@@ -65,6 +65,7 @@ int main() {
         Apdos a;
         a.add(sc::Check::PpsBand, {300000, 0, 0, 275000, std::uint8_t(5 | 1u << 4), 50});
         a.add(sc::Check::PpsAccuracy, {9180, 0, 8800, 9200, std::uint8_t(5 | 1u << 4), 92});
+        a.add(sc::Check::PpsStatus, {0, 0, 0, 0, std::uint8_t(5 | 3u << 4), 0});   // a clean PPS_Status: its bits, as words
         a.add(sc::Check::AvsAccuracy, {15200, 0, 14700, 15300, std::uint8_t(9 | 2u << 4), 150});
         std::printf("ranges ");
         for (std::size_t i = 0; i < apdo_stream_size(a); ++i) std::printf("%02x", apdo_stream_byte(a, i, split_bits({true, false})));
@@ -136,8 +137,10 @@ class Decode(unittest.TestCase):
         self.assertEqual((len(p["cells"]), len(a["cells"])), (11, 8))   # the AVS kind has no status checks and no settle
         band = next(c for c in p["cells"] if c["key"] == "pps_band")
         self.assertEqual((band["verdict"], band["fails"], band["value"], band["count"], band["limit"]), ("fail", 1, 300000, 1, [0, 275000]))
-        idle = next(c for c in p["cells"] if c["key"] == "pps_status")
+        idle = next(c for c in p["cells"] if c["key"] == "pps_status_time")
         self.assertEqual((idle["verdict"], idle["value"], idle["count"]), ("pending", None, 0))
+        status = next(c for c in p["cells"] if c["key"] == "pps_status")
+        self.assertEqual((status["verdict"], status["value_text"]), ("pass", "clean"))
         self.assertEqual(pb.decode_ranges(b""), {"split": {"pps": False, "avs": False}, "ranges": []})
         for bad in (raw[:-1], bytes([raw[0] | 0x40]) + raw[1:]):
             with self.assertRaises(ValueError):

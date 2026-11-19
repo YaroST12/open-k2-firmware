@@ -1782,7 +1782,7 @@ var K2Proto = (function () {
       var verdict = PDSPEC_VERDICTS[code], measured = verdict !== "pending" && verdict !== "skip", raw = s16(r, o + 2);
       var value = !measured ? null : raw === CT_SPEC_UNSEEN ? PDSPEC_NEVER : raw * CT_SPEC_STEP[d.unit];
       var cell = { key: key, label: d.label, unit: d.unit, verdict: verdict, fails: r[o + 1], value: value,
-                   value_text: value === null ? "-" : pdSpecValue(d.unit, value) };
+                   value_text: value === null ? "-" : key === "pps_status" && value < PDSPEC_NEVER ? pdSpecPsText(value) : pdSpecValue(d.unit, value) };
       var detail = Uint8Array.from(r.subarray(o + 4, o + 12)), x = ctSpecDetail(d, measured, detail, 0);
       cell.count = x.count; cell.limit = x.limit; cell.limit_text = x.limit_text; cell.at_text = x.at_text;
       cells.push(cell);

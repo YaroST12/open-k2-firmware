@@ -164,7 +164,7 @@ def decode_range(rec):
         measured = name not in ("pending", "skip")
         value = None if not measured else NEVER if raw == s["unseen"] else raw * s["steps"][d["unit"]] if d["unit"] in s["steps"] else raw
         cell = {"key": d["key"], "label": d["label"], "unit": d["unit"], "verdict": name, "fails": fails, "value": value,
-                "value_text": "-" if value is None else fmt_value(d["unit"], value)}
+                "value_text": "-" if value is None else ps_text(value) if d["key"] == "pps_status" and value < NEVER else fmt_value(d["unit"], value)}
         cell.update(_detail_of(s, t, d, measured, struct.pack("<hhHBB", lo, hi, n, a, b), 0))
         cells.append(cell)
     return {"pos": rec[0], "kind": "avs" if avs else "pps", "tone": _name(s["range_tones"], tone), "word": range_word(tone, group),
