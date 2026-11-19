@@ -55,6 +55,7 @@ struct Sim final : Env {
     bool proof = false, self = false, inl = false, cap_busy = false;
     bool inferred_rdy = false;          // the PS_RDY was inferred (a down-step): no read time for it
     bool no_accept_stamp = false;       // the Accept came in behind another frame of the same service pass: no RX edge for it (hardware 2026-11-17)
+    bool no_psrdy_stamp = false;        // ... and the same for the PS_RDY (33 of 340 EPR AVS moves, hardware 2026-11-19)
     int accept_ms = 5, start_ms = 30, pps_start_ms = 5, psrdy_after_ms = 10;
     int early_psrdy_ms = -1;            // >= 0: PS_RDY this long after the Accept, wherever VBUS is
     int pps_offset_mv = 0;              // a PPS output this far off its set point
@@ -206,7 +207,7 @@ struct Sim final : Env {
                    ((early_psrdy_ms >= 0 && t >= ev_at + std::uint32_t(early_psrdy_ms)) ||
                     (early_psrdy_ms < 0 && reached && t >= reached_at + std::uint32_t(psrdy_after_ms)))) {
             s.ps_rdy_at = inferred_rdy ? 0 : t;
-            s.ps_rdy_us = inferred_rdy ? 0 : (t * 1000) | 1;
+            s.ps_rdy_us = inferred_rdy || no_psrdy_stamp ? 0 : (t * 1000) | 1;
             mark(transcap::Mark::PsRdy);
             s.state = pd::SinkState::Ready;
             s.result = pd::SinkResult::Ok;
@@ -1641,6 +1642,26 @@ void epr_avs_stage_on_the_real_list() {
     std::printf("  spec baseus 140 W, all covered: %u ms without the EPR AVS window, %u ms with it\n", unsigned(spr), unsigned(ms));
 }
 
+// The sink's edge stamps are lost now and then (another frame's interrupt took them) and the capture is busy: a PS_RDY that came is
+// timed from the sink's ms stamps, never read as "not seen".
+void stamps_lost_without_a_capture() {
+    Sim m;
+    baseus140(m);
+    m.cap_busy = true;
+    m.no_psrdy_stamp = true;
+    Engine e(m);
+    CHECK_COND(e.start(0, bit(Family::Pps), kOptEprAvs) == StartResult::Ok);
+    drive(m, e, 3600000, [](std::uint32_t) {});
+    check_safe_end(m, e);
+    CHECK_COND(e.stop() == Stop::Done);
+    for (const Check c : {Check::AvsPsRdy, Check::PpsPsRdy}) {
+        const Agg& a = e.agg(c);
+        CHECK_COND(a.n > 0);
+        CHECK_EQ(int(a.fails), 0);
+        CHECK_COND(a.worst <= a.hi);
+    }
+}
+
 void covered_run_time() {
     struct Case { const char* name; std::initializer_list<pd::Pdo> l; std::uint8_t cov; };
     const Case cases[] = {
@@ -1702,5 +1723,6 @@ int main() {
     covered_run_time();
     epr_avs_window_in_a_deep_run();
     epr_avs_stage_on_the_real_list();
+    stamps_lost_without_a_capture();
     return test_report("test_pdspec_engine");
 }

@@ -263,7 +263,7 @@ private:
         FamStart, Goto, Settle, Measure, Frozen, LiveBand, Status, KaWait, ResetWatch, DetachGap, Recover, Restore, Finishing, Done
     };
     enum class After : std::uint8_t { Measure, PpsSteps, PpsNext, PpsKa, EprKa, HardReset, Detach, Family };
-    struct Lat { bool acc = false, rdy = false; std::uint32_t acc_us = 0, rdy_us = 0; };
+    struct Lat { bool acc = false, rdy = false, never = false, rdy_bad = false; std::uint32_t acc_us = 0, rdy_us = 0; };
 
     // ---- helpers ----
     static bool due(std::uint32_t now, std::uint32_t t) { return static_cast<std::int32_t>(now - t) >= 0; }

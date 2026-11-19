@@ -355,11 +355,20 @@ Engine::Lat Engine::latencies(const Edges& e, const Snapshot& s, Check rdy_c, st
         if (!acc_gap) l.acc_us = acc - req;
         meas(Check::AcceptTime, {std::int32_t(l.acc_us), acc_gap, 0, std::int32_t(pd::spec::kAcceptSpecLimitMs * 1000), a, b});
     }
+    if (have_acc && !have_rdy && !acc_gap && s.accept_at != accept0_ && s.ps_rdy_at && static_cast<std::int32_t>(s.ps_rdy_at - s.accept_at) >= 0) {
+        // The PS_RDY came but left no edge stamp (another frame's interrupt took it) and no capture marker: the sink's ms stamps time it.
+        have_rdy = true;
+        rdy_gap = kMsFallbackRdyGapUs;
+        l.rdy_us = (s.ps_rdy_at - s.accept_at) * 1000;
+    }
     if (have_acc && have_rdy) {
         l.rdy = true;
         if (!rdy_gap) l.rdy_us = rdy - acc;
-        meas(rdy_c, {std::int32_t(l.rdy_us), rdy_gap, 0, rdy_lim_us, a, b});
+        const Meas m{std::int32_t(l.rdy_us), rdy_gap, 0, rdy_lim_us, a, b};
+        l.rdy_bad = !pdspec::passes(Kind::Max, m);
+        meas(rdy_c, m);
     } else if (have_acc && !acc_gap) {   // (the ms fallback cannot tell "never" from an inferred PS_RDY: no value, not a failure)
+        l.never = l.rdy_bad = true;
         meas(rdy_c, {kNever, 0, 0, rdy_lim_us, a, b});   // the contract was taken without a PS_RDY
     }
     return l;
@@ -548,10 +557,10 @@ void Engine::judge_prog(const ProgMove& mv, const StepOut& o, const Edges& e, co
     // PS_RDY is a received message: its limit carries the wire allowance (pd_spec_timing.hpp kPsRdyWireOverheadMs); the band does not.
     const std::int32_t rdy_ms = step_limit_ms(mv.avs, m.large, epr_pos(mv.pos)) + std::int32_t(pd::spec::kPsRdyWireOverheadMs);
     const Lat l = latencies(e, s, mv.avs ? Check::AvsPsRdy : Check::PpsPsRdy, rdy_ms * 1000, m.a, m.b);
-    if (l.acc) {
+    if (l.rdy || l.never) {   // an Accept with no PS_RDY value at all (the ms fallback's inferred case) is neither
         const std::uint32_t t = l.rdy ? l.rdy_us / 100 : 0xFFFF;
         if (t > r.psrdy_100us) r.psrdy_100us = static_cast<std::uint16_t>(t > 0xFFFF ? 0xFFFF : t);
-        if (!l.rdy || l.rdy_us > std::uint32_t(rdy_ms) * 1000) bump_sat(r.psrdy_fails);
+        if (l.rdy_bad) bump_sat(r.psrdy_fails);
     }
     if (!o.valid) return;
     ++r.steps;
