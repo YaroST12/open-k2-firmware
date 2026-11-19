@@ -133,6 +133,8 @@ namespace sl {
     X(ShareLong, "", "Share", "", false)                                                                               \
     X(BenchReset, "Bench", "Reset", "", false)                                                                         \
     X(SetGrp, "Set", "Grp", "", false)                                                                                 \
+    X(SetHold, "Set", "Hold", "", false)                                                                               \
+    X(SetRun, "Set", "Run", "", false)                                                                                 \
     X(ToggleOpen, "Toggle", "Open", "", false)                                                                         \
     X(OpenShare, "Open", "Share", "", false)                                                                           \
     X(StartShare, "Start", "Share", "", false)                                                                         \

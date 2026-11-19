@@ -62,6 +62,7 @@ PageIf *Ui::build_base(Page p) {
     case Page::Tools: return pages_.push<ToolsPage>(ctx_);
     case Page::Settings: return pages_.push<SettingsPage>(ctx_);
     case Page::Graphs: return pages_.push<GraphsPage>(ctx_);
+    case Page::Ripple: return pages_.push<RipplePage>(ctx_);
     default: return pages_.push<HomePage>(ctx_);
     }
 }
@@ -298,7 +299,7 @@ bool Ui::menu_opaque(Menu m) {
 }
 
 namespace {
-constexpr Page kFaces[] = {Page::Home, Page::Graphs, Page::Detail, Page::Lines};   // Flow, Graphs, Numbers, Lines (the pager's order)
+constexpr Page kFaces[] = {Page::Home, Page::Graphs, Page::Detail, Page::Lines, Page::Ripple};   // Flow, Graphs, Numbers, Lines, Ripple (the pager's order)
 constexpr int kFaceCount = static_cast<int>(sizeof kFaces / sizeof kFaces[0]);
 static_assert(kFaceCount == kMeterFaces, "the pager shows every face");
 int face_of(Page p) {

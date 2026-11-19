@@ -147,6 +147,7 @@ struct StubState {
     k2::power::Metrics pm_display{};   // the One Euro filtered view; pm above is the 2.5 s average
     k2::power::Chip power_chip = k2::power::Chip::Ina226;
     std::optional<k2::adc::Reading> adc;
+    std::uint32_t (*ripple_fn)(std::span<std::uint16_t, k2::adc::kRippleSamples>, std::uint8_t) = nullptr;
     k2::fastcharge::Protocol fc = k2::fastcharge::Protocol::Pending;
     k2::vooc::Live vooc{};             // fastcharge::vooc_live(): the inline VOOC monitor's live view
     int polls = 0;

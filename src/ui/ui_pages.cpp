@@ -228,7 +228,7 @@ void model_row_text(StrBuf<24> &s) {
 // ---------------------------------------------------------------------------------------
 
 // Short bar names (8 cells at most) of the rotation pages, in Page order (a Bench place names itself: bar_icon_ + title_).
-static constexpr const char *kBarNames[] = {"Home", "Numbers", "Charger", "Lines", "Bench", "Settings", "Graphs"};
+static constexpr const char *kBarNames[] = {"Home", "Numbers", "Charger", "Lines", "Bench", "Settings", "Graphs", "Ripple"};
 static_assert(sizeof kBarNames / sizeof *kBarNames == static_cast<size_t>(Page::Count), "one bar name per rotation page");
 
 void PageBase::title_bar() {

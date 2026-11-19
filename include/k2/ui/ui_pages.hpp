@@ -123,7 +123,13 @@ struct UiContext {
             std::uint8_t sel K2_BSS_INIT(0);              // the Setup list's cursor
         } pdstress;
         std::array<uint8_t, bench::kPlaces> place_sel K2_BSS_ZERO;  // each place's last action: repeating a job is OK, OK, OK
-        uint8_t face K2_BSS_INIT(0);                                 // Meter: the face last shown (0 Flow, 1 Graphs, 2 Numbers, 3 Lines)
+        uint8_t face K2_BSS_INIT(0);                                 // Meter: the face last shown (0 Flow, 1 Graphs, 2 Numbers, 3 Lines, 4 Ripple)
+        struct Ripple {                                              // Meter > Ripple: persisted scope settings across face flips
+            uint8_t timebase = 2;                                    // ripple::kDefaultTimebase (500 us/div)
+            uint8_t scale K2_BSS_INIT(0);                            // 0 = Auto
+            uint8_t trigger K2_BSS_INIT(0);                          // 0 = Auto, 1 = Free
+            bool hold K2_BSS_INIT(false);
+        } ripple;
     } keep;
     // The pending QR scan-test request (remote Cmd::QrTest op 1, k2/ui/ui_qrtest.hpp): the (version, px, quiet) of
     // the next show, consumed by QrTestPage::enter(). The page itself lives in the page arena.
@@ -224,8 +230,8 @@ void model_row_text(StrBuf<24> &out);                                           
 // "No source" (mode 1), empty (mode 0), nullptr when live or stale. Mode: 0 no meter, 1 idle, 2 live, 3 stale.
 const char *home_idle_note(uint8_t mode);
 
-// The Meter's faces, PLUS / MINUS walk them: Flow (Home), Graphs, Numbers (Detail), Lines (Ui's kFaces, the pager's order).
-inline constexpr int kMeterFaces = 4;
+// The Meter's faces, PLUS / MINUS walk them: Flow (Home), Graphs, Numbers (Detail), Lines, Ripple (Ui's kFaces, the pager's order).
+inline constexpr int kMeterFaces = 5;
 
 class PageIf {
 public:
@@ -259,9 +265,9 @@ protected:
     // Right end of the top chrome bar: the compact V x A readout, the LAST pill when stale,
     // empty on Home (its hero carries the values).
     void title_badge(bool last);
-    // The Meter faces (Numbers, Lines) carry a pager there instead: Flow, Graphs, Numbers, Lines, `current` solid.
+    // The Meter faces (Numbers, Lines, Ripple) carry a pager there instead: Flow, Graphs, Numbers, Lines, Ripple, `current` solid.
     void title_pager(int current);
-    bool meter_face() const { return id_ == Page::Detail || id_ == Page::Lines; }
+    bool meter_face() const { return id_ == Page::Detail || id_ == Page::Lines || id_ == Page::Ripple; }
     bool any_face() const { return id_ == Page::Home || id_ == Page::Graphs || meter_face(); }   // Flow and Graphs too
     // The navigation a page leaves to the base (CONCEPT 7), short presses only. On a Meter face: Up / Dn flip the face, OK opens
     // the Bench, BACK goes to Flow (nothing on Flow). Elsewhere BACK goes one level up: the charger test to the Charger place,

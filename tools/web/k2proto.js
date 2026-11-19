@@ -43,7 +43,7 @@ var K2Proto = (function () {
   var ID_STATES = ["idle", "running", "done", "aborted"];
   var ID_STEPS = ["identity", "svids", "modes", "sink-cap", "status", "revision", "done"];
   // Rotation pages 0..6; while a submenu is open GET_STATE.page is 7 + index into MENUS (include/k2/ui/ui_types.hpp).
-  var PAGES = ["home", "detail", "chargertest", "lines", "tools", "settings", "graphs"];
+  var PAGES = ["home", "detail", "chargertest", "lines", "tools", "settings", "graphs", "ripple"];
   var MENUS = ["trigger", "emarker", "pdtrigger", "cabler", "blackbox", "spoof", "usblink", "autorotate", "cards", "share", "connection", "diag", "qrtest", "twin", "loopprobe", "pdstress", "diagnosis", "battery", "memory", "display", "pdspec"];
   var SETTINGS_MENUS = ["usblink", "autorotate", "memory", "display"];
   function pageName(i) {

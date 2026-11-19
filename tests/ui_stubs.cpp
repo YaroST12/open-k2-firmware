@@ -715,6 +715,11 @@ bool find_stored(std::uint32_t run_id, std::uint16_t step, Meta& m) {
 #ifndef K2_WORLD_STUBS
 namespace adc {
 std::optional<Reading> read() { return g_stub.adc; }
+std::uint32_t capture_ripple(std::span<std::uint16_t, kRippleSamples> out, std::uint8_t sample_code) {
+    if (g_stub.ripple_fn) return g_stub.ripple_fn(out, sample_code);
+    for (std::uint16_t &v : out) v = 2056;
+    return sample_period_ns(sample_code, kAdcClockHz);
+}
 }  // namespace adc
 #endif
 

@@ -7,7 +7,7 @@ namespace k2 {
 
 // The pages of the normal rotation (long [+] / [-] page through them).
 // Graphs is appended (the remote's numbers 0..5 stay); its place in the rotation, right after Home, is Ui's kFaces order.
-enum class Page : uint8_t { Home, Detail, ChargerTest, Lines, Tools, Settings, Graphs, Count };
+enum class Page : uint8_t { Home, Detail, ChargerTest, Lines, Tools, Settings, Graphs, Ripple, Count };
 // Submenus opened from Tools or Settings: modal, they have no place in the rotation. The remote
 // reports a showing submenu as page index kMenuPageBase + Menu. Connection (Source / Cable / Sink) and Diag
 // are Tools entries; Emarker is the saved-cables list opened from Connection's Cable tab; Twin is the Device twins list;

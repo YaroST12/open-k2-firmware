@@ -1150,6 +1150,10 @@ bool latest_dpdm(std::int32_t& dp, std::int32_t& dm) {
     dm = s->dm;
     return true;
 }
+std::uint32_t capture_ripple(std::span<std::uint16_t, kRippleSamples> out, std::uint8_t sample_code) {
+    for (std::uint16_t &v : out) v = 2056;
+    return sample_period_ns(sample_code, kAdcClockHz);
+}
 }  // namespace adc
 
 // ---- the parts of the main loop the world leaves out ----

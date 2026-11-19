@@ -1332,18 +1332,19 @@ test("fc levels mirror the on-device trigger page (include/k2/ui/ui_trigger.hpp)
 });
 
 test("core ids: pages and the extended fast-charge names", () => {
-  // 7 rotation pages since the Graphs page (ui_types.hpp Page); tests/test_page_names.py checks the firmware enum itself
-  assert.deepEqual(P.PAGES, ["home", "detail", "chargertest", "lines", "tools", "settings", "graphs"]);
+  // 8 rotation pages since the Ripple page (ui_types.hpp Page); tests/test_page_names.py checks the firmware enum itself
+  assert.deepEqual(P.PAGES, ["home", "detail", "chargertest", "lines", "tools", "settings", "graphs", "ripple"]);
   assert.equal(P.decodeState(u8(4, 0, 0, 0, 0, 0, 0, 0, ...new Array(16).fill(0))).page_name, "tools");
   assert.equal(P.decodeState(u8(5, 0, 0, 0, 0, 0, 0, 0, ...new Array(16).fill(0))).page_name, "settings");
   assert.equal(P.decodeState(u8(6, 0, 0, 0, 0, 0, 0, 0, ...new Array(16).fill(0))).page_name, "graphs");
-  assert.equal(P.decodeState(u8(7, 0, 0, 0, 0, 0, 0, 0, ...new Array(16).fill(0))).page_name, "tools/trigger");
-  assert.equal(P.decodeState(u8(8, 0, 0, 0, 0, 0, 0, 0, ...new Array(16).fill(0))).page_name, "tools/emarker");
-  assert.equal(P.pageName(13), "settings/usblink");
-  assert.equal(P.pageName(14), "settings/autorotate");
-  assert.equal(P.pageName(15), "tools/cards");
-  assert.equal(P.pageName(17), "tools/connection");
-  assert.equal(P.pageName(18), "tools/diag");
+  assert.equal(P.decodeState(u8(7, 0, 0, 0, 0, 0, 0, 0, ...new Array(16).fill(0))).page_name, "ripple");
+  assert.equal(P.decodeState(u8(8, 0, 0, 0, 0, 0, 0, 0, ...new Array(16).fill(0))).page_name, "tools/trigger");
+  assert.equal(P.decodeState(u8(9, 0, 0, 0, 0, 0, 0, 0, ...new Array(16).fill(0))).page_name, "tools/emarker");
+  assert.equal(P.pageName(14), "settings/usblink");
+  assert.equal(P.pageName(15), "settings/autorotate");
+  assert.equal(P.pageName(16), "tools/cards");
+  assert.equal(P.pageName(18), "tools/connection");
+  assert.equal(P.pageName(19), "tools/diag");
   assert.equal(P.pageName(99), "99");
   assert.equal(P.decodeState(u8(0, 0, 0, 0, 0, 0, 0, 0, ...new Array(16).fill(0), ...new Array(14).fill(0).map((_, i) => i === 12 ? 22 : 0))).fc, "USB DATA");
 });
@@ -2321,7 +2322,7 @@ test("memory: a short payload is a FrameError, and the call sends command 0x36",
 });
 
 test("memory: the Memory page has a name and the dashboard card is wired", () => {
-  assert.equal(P.pageName(7 + 18), "settings/memory");
+  assert.equal(P.pageName(8 + 18), "settings/memory");
   const html = readFileSync(path.join(here, "../tools/web/k2.html"), "utf8");
   assert.match(html, /id="c-memory"[^>]*data-page="device"/);
   assert.match(html, /K2Kit\.kvTableHtml/);

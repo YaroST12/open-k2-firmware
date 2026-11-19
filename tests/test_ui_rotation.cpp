@@ -503,7 +503,7 @@ static void test_optional_rotated_buttons() {
     ui.set_pressed(Button::Plus, false, 8400);
     ui.set_pressed(Button::Plus, true, 8500);
     ui.on_button(Button::Plus, ButtonEvent::Short, 9100);   // a fresh one at rotation 0: Dn flips to the next face
-    CHECK_EQ(ui.page(), Page::Home);
+    CHECK_EQ(ui.page(), Page::Ripple);
     ui.set_pressed(Button::Plus, false, 9200);
 
     ui.set_rotation(2, 9300);
@@ -513,7 +513,7 @@ static void test_optional_rotated_buttons() {
     CHECK_EQ(ui.rotate_buttons(), false);
     ui.goto_page(static_cast<uint8_t>(Page::Lines), 9400);
     ui.on_button(Button::Plus, ButtonEvent::Short, 9500);
-    CHECK_EQ(ui.page(), Page::Home);
+    CHECK_EQ(ui.page(), Page::Ripple);
     Ui fresh;
     fresh.init(10000);
     CHECK_EQ(fresh.rotate_buttons(), false);
@@ -652,10 +652,10 @@ static void test_remote_keys_are_logical() {
     CHECK_EQ(pick(false, Button::Plus) == cable, false);  // physical plus at rotation 2 = up
     CHECK_EQ(pick(true, Button::Minus) == pick(false, Button::Plus), true);   // remote minus = up, like that key
 
-    // Remote plus flips to the next face (Lines -> Flow) at rotation 2, where a physical plus flips back.
+    // Remote plus flips to the next face (Lines -> Ripple) at rotation 2, where a physical plus flips back.
     ui.goto_page(static_cast<uint8_t>(Page::Lines), 3000);
     ui.on_remote_button(Button::Plus, ButtonEvent::Short, 3100);
-    CHECK_EQ(ui.page(), Page::Home);
+    CHECK_EQ(ui.page(), Page::Ripple);
     ui.on_remote_button(Button::Minus, ButtonEvent::Short, 3200);
     CHECK_EQ(ui.page(), Page::Lines);
     ui.on_button(Button::Plus, ButtonEvent::Short, 3300);
