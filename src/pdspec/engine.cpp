@@ -5,7 +5,7 @@
 
 namespace k2::pdspec {
 
-StartResult Engine::start(std::uint32_t now_ms, std::uint8_t families, std::uint8_t opts) {
+StartResult Engine::start(std::uint32_t now_ms, std::uint8_t families, std::uint8_t opts, std::uint8_t covered) {
     if (running_) return StartResult::Running;
     const Snapshot s = env_->snapshot();
     if (s.inline_link) return StartResult::Inline;
@@ -19,6 +19,7 @@ StartResult Engine::start(std::uint32_t now_ms, std::uint8_t families, std::uint
     L_ = scan(env_->caps(), env_->cap_mv(), env_->epr_proof());
     walk_ = make_walk(L_.n_fixed);
     full20_ = (opts & kOptFull20) != 0;
+    covered_ = covered;
     note_ = pdspec::caps_note(env_->caps());
     hr0_ = s.source_hard_resets;
     caps0_ = s.caps_rx;
@@ -181,8 +182,10 @@ void Engine::begin_family(std::uint32_t now) {
                     if (!avs_check(Check(k)) && !pps) skip(Check(k), Skip::NoPps);
                 }
             if (L_.n_prog == 0) { next_family(); return; }
-            items_ = static_cast<std::uint8_t>(L_.n_prog * kClasses);
-            w_ = cls_ = 0;
+            items_ = 0;
+            for (w_ = 0; w_ < L_.n_prog; ++w_) items_ = static_cast<std::uint8_t>(items_ + (first_class() == kSlam ? 1 : kClasses));
+            w_ = 0;
+            cls_ = first_class();
             env_->on_item(fam_, 0, items_);
             go(prog().pos, static_cast<std::uint16_t>(prog().lo), After::PpsSteps, now);
             return;
@@ -357,7 +360,9 @@ void Engine::measure_done(const Snapshot& s, std::uint32_t now) {
     if (fam_ == Family::Pps) {
         const StepOut o = captured_ && e.accept ? env_->capture_step({e.accept_us, from_mv_, tgt_mv_}) : StepOut{};
         env_->capture_stop();
-        judge_prog({tgt_pos_, prog().kind == ProgKind::Avs, cls_, from_mv_, tgt_mv_}, o, e, s);
+        PassRec scratch;
+        PassRec* slot = pass_slot();
+        judge_prog({tgt_pos_, prog().kind == ProgKind::Avs, cls_, from_mv_, tgt_mv_}, o, e, s, slot ? *slot : scratch);
         // Not inside the new band by the end of the window (an unloaded fall can be slow): the next move starts once VBUS is there, and
         // its monotonic check has no level to compare with.
         if (!o.band.seen && !o.settled) { prev_valid_ = false; go(tgt_pos_, tgt_mv_, After::PpsNext, now); return; }
@@ -516,7 +521,7 @@ void Engine::pass_end(std::uint32_t now) {
     if (item_ < items_) env_->on_item(fam_, item_, items_);   // the next pass's number; none after the last
     if (++cls_ < kClasses) { pass_begin(now); return; }   // the pass ended at the window's minimum: the next class starts there
     cls_ = 0;
-    if (++w_ < L_.n_prog) { go(prog().pos, static_cast<std::uint16_t>(prog().lo), After::PpsSteps, now); return; }
+    if (++w_ < L_.n_prog) { cls_ = first_class(); go(prog().pos, static_cast<std::uint16_t>(prog().lo), After::PpsSteps, now); return; }
     restore(now);
 }
 
@@ -526,12 +531,9 @@ std::array<Check, 6> Engine::prog_checks_meter() const {
     return {Check::PpsMonotonic, Check::PpsAccuracy, cls_ == 0 ? Check::PpsSettle : Check::PpsBand, Check::PpsOvershoot, Check::PpsTransient, Check::PpsTrack};
 }
 
-void Engine::judge_prog(const ProgMove& mv, const StepOut& o, const Edges& e, const Snapshot& s) {
+void Engine::judge_prog(const ProgMove& mv, const StepOut& o, const Edges& e, const Snapshot& s, PassRec& r) {
     const ProgMeas m = measure_prog(mv, o);
     cur_ = {};
-    PassRec scratch;
-    PassRec* slot = pass_slot();
-    PassRec& r = slot ? *slot : scratch;
     // PS_RDY is a received message: its limit carries the wire allowance (pd_spec_timing.hpp kPsRdyWireOverheadMs); the band does not.
     const std::int32_t rdy_ms = step_limit_ms(mv.avs, m.large) + std::int32_t(pd::spec::kPsRdyWireOverheadMs);
     const Lat l = latencies(e, s, mv.avs ? Check::AvsPsRdy : Check::PpsPsRdy, rdy_ms * 1000, m.a, m.b);
@@ -582,6 +584,16 @@ void Engine::judge_prog(const ProgMove& mv, const StepOut& o, const Edges& e, co
     }
     prev_mv_ = o.final_mv;
     prev_valid_ = true;
+}
+
+// The edges come from the charger test's own capture: no ms fallback (accept0_ = the Accept it saw), no pass record.
+void Engine::judge_test_move(const ProgMove& mv, bool chain, const Edges& e, const StepOut& o, const Snapshot& s) {
+    if (running_) return;
+    accept0_ = s.accept_at;
+    if (!chain) prev_valid_ = false;
+    PassRec scratch;
+    judge_prog(mv, o, e, s, scratch);
+    if (!o.valid || (!o.band.seen && !o.settled)) prev_valid_ = false;
 }
 
 // Get_PPS_Status (PPS only, never in the keep-alive family): asked through the sink, the answer judged against the no-load

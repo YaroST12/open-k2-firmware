@@ -206,8 +206,12 @@ public:
     explicit Engine(Env& env) : env_(&env), pool_(env.record_pool()) {}
 
     // families: a bit per Family (1 << Family), 0 = all of them. The ones left out read "not selected". opts: kOptFull20 sweeps the
-    // whole window at 20 mV (else three 10-step windows).
-    StartResult start(std::uint32_t now_ms, std::uint8_t families = 0, std::uint8_t opts = 0);
+    // whole window at 20 mV (else three 10-step windows). covered: a bit per APDO position whose steps the charger test already handed
+    // in (judge_test_move): such a window runs only its slams and status asks.
+    StartResult start(std::uint32_t now_ms, std::uint8_t families = 0, std::uint8_t opts = 0, std::uint8_t covered = 0);
+    // One programmable move of a Deep charger-test run, captured and analyzed by the caller, judged into the aggregates before start().
+    // chain: the move followed a judged move of the same walk, whose level is its monotonic reference.
+    void judge_test_move(const ProgMove& mv, bool chain, const Edges& e, const StepOut& o, const Snapshot& s);
     void cancel() { if (running_ && !finishing_) cancel_ = true; }
     void poll(std::uint32_t now_ms);
 
@@ -273,7 +277,7 @@ private:
     void measure_begin(std::uint32_t now);
     void measure_done(const Snapshot& s, std::uint32_t now);
     void judge_transition(const TransitionOut& o, const Edges& e, std::uint32_t now);
-    void judge_prog(const ProgMove& mv, const StepOut& o, const Edges& e, const Snapshot& s);
+    void judge_prog(const ProgMove& mv, const StepOut& o, const Edges& e, const Snapshot& s, PassRec& r);
     void next_item(std::uint32_t now);
     void restore(std::uint32_t now);
     void finish(Stop why, std::uint32_t now);
@@ -288,6 +292,7 @@ private:
     void detach_gap(const Snapshot& s, std::uint32_t now);
     void recover(const Snapshot& s, std::uint32_t now);
     const Prog& prog() const;
+    std::uint8_t first_class() const { return covered_ >> prog().pos & 1 ? kSlam : 0; }
     void pass_begin(std::uint32_t now);
     void prog_next(std::uint32_t now);
     void pass_end(std::uint32_t now);
@@ -335,6 +340,7 @@ private:
     bool live_first_ = false, live_unseen_ = false;
     // The programmable sweep.
     std::uint8_t w_ = 0, cls_ = 0;      // the window (L_.prog) and the step class of the pass in flight
+    std::uint8_t covered_ = 0;          // start(): the windows the charger test swept
     Sweep sw_{};
     Move pend_{};                       // a move held back while Get_PPS_Status is asked
     bool have_pend_ = false, asked_top_ = false, asked_end_ = false, full20_ = false;

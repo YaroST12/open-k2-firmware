@@ -1352,6 +1352,121 @@ void rows_never_outnumber_the_measurements() {
 }
 #endif
 
+
+// A Deep charger-test run hands its own programmable moves (the 100 mV sweep, the step walk, the range rows) to the engine before the
+// engine runs (Engine::judge_test_move): they land in the same aggregates as the engine's own passes.
+StepOut clean_step(std::int32_t final_mv) {
+    StepOut o;
+    o.valid = true;
+    o.final_mv = final_mv;
+    o.settled = true;
+    o.settle = {3000, 1000, true};
+    o.band = {2000, 1000, true};
+    o.peak_mv = final_mv + 10;
+    return o;
+}
+Edges clean_edges() {
+    Edges ed;
+    ed.accept = ed.psrdy = true;
+    ed.req_us = 1001;
+    ed.accept_us = 6001;
+    ed.psrdy_us = 16001;
+    return ed;
+}
+
+void test_moves_land_in_the_aggregates() {
+    Sim m;
+    typical(m);
+    Engine e(m);
+    const Snapshot s = m.snapshot();
+    // Three chained 100 mV steps up (the sweep), then an unchained jump (a range row): the first point is the reference only.
+    e.judge_test_move({5, false, 1, 5000, 5100}, false, clean_edges(), clean_step(5100), s);
+    e.judge_test_move({5, false, 1, 5100, 5200}, true, clean_edges(), clean_step(5200), s);
+    e.judge_test_move({5, false, 1, 5200, 5300}, true, clean_edges(), clean_step(5300), s);
+    e.judge_test_move({5, false, kSlam, 5300, 11000}, false, clean_edges(), clean_step(11000), s);
+    CHECK_EQ(int(e.agg(Check::PpsAccuracy).n), 4);
+    CHECK_EQ(int(e.agg(Check::PpsBand).n), 4);
+    CHECK_EQ(int(e.agg(Check::PpsPsRdy).n), 4);
+    CHECK_EQ(int(e.agg(Check::PpsMonotonic).n), 2);
+    CHECK_EQ(int(e.agg(Check::PpsTrack).n), 2);
+    CHECK_COND(verdict(e, Check::PpsMonotonic) == Verdict::Pass);
+    CHECK_COND(verdict(e, Check::PpsBand) == Verdict::Pass);
+    CHECK_EQ(int(e.agg(Check::PpsBand).a), 5 | 1 << 4);   // the place names the window and the step class
+    // A fold inside the sweep: the next step ends below the last level, a monotonic and a track finding.
+    e.judge_test_move({5, false, 1, 5300, 5400}, false, clean_edges(), clean_step(5300), s);
+    e.judge_test_move({5, false, 1, 5400, 5500}, true, clean_edges(), clean_step(5150), s);
+    CHECK_COND(verdict(e, Check::PpsMonotonic) == Verdict::Fail);
+    CHECK_COND(verdict(e, Check::PpsTrack) == Verdict::Fail);
+    // A move whose level never settled is no reference for the next one.
+    StepOut moving = clean_step(5000);
+    moving.band.seen = moving.settled = false;
+    const int mono = e.agg(Check::PpsMonotonic).n;
+    e.judge_test_move({5, false, 1, 5500, 5600}, true, clean_edges(), moving, s);
+    e.judge_test_move({5, false, 1, 5600, 5700}, true, clean_edges(), clean_step(5700), s);
+    CHECK_EQ(int(e.agg(Check::PpsMonotonic).n), mono);
+    // An AVS move lands in the AVS checks; no pass record is written (the in-test engine has no pool).
+    e.judge_test_move({6, true, 0, 9000, 9100}, false, clean_edges(), clean_step(9100), s);
+    CHECK_EQ(int(e.agg(Check::AvsAccuracy).n), 1);
+    CHECK_EQ(int(e.passes().size()), 0);
+}
+
+// A window the charger test swept (covered) runs only the slams and its Get_PPS_Status asks: the step classes are already judged.
+void covered_window_runs_the_slams_only() {
+    Sim m;
+    typical(m);
+    Engine e(m);
+    e.judge_test_move({5, false, 1, 5000, 5100}, false, clean_edges(), clean_step(5100), m.snapshot());
+    CHECK_COND(e.start(0, bit(Family::Pps), 0, std::uint8_t(1u << 5)) == StartResult::Ok);
+    int items = 0;
+    drive(m, e, 3600000, [&](std::uint32_t) { if (e.family() == Family::Pps) items = e.items(); });
+    CHECK_EQ(items, 1);
+    check_safe_end(m, e);
+    CHECK_COND(e.stop() == Stop::Done);
+    CHECK_EQ(int(e.score()), 0);
+    CHECK_EQ(int(e.passes().size()), 1);
+    CHECK_EQ(int(e.passes()[0].cls), int(kSlam));
+    CHECK_EQ(int(e.agg(Check::PpsAccuracy).n), 1 + 2);
+    CHECK_EQ(int(e.agg(Check::PpsSettle).n), 0);
+    CHECK_EQ(m.pps_asks, 2);
+    CHECK_COND(verdict(e, Check::PpsStatus) == Verdict::Pass);
+    // An uncovered window next to a covered one keeps its full passes.
+    Sim m2;
+    m2.list({fixed(5000), fixed(9000), fixed(15000), fixed(20000), pps(3300, 11000), avs(9000, 20000)});
+    Engine e2(m2);
+    CHECK_COND(e2.start(0, bit(Family::Pps), 0, std::uint8_t(1u << 5)) == StartResult::Ok);
+    int items2 = 0;
+    drive(m2, e2, 3600000, [&](std::uint32_t) { if (e2.family() == Family::Pps) items2 = e2.items(); });
+    CHECK_EQ(items2, 1 + int(kClasses));
+    CHECK_COND(e2.stop() == Stop::Done);
+    CHECK_EQ(int(e2.agg(Check::AvsAccuracy).n), 220 + 44 + 22 + 2);
+    CHECK_EQ(int(e2.agg(Check::PpsAccuracy).n), 2);
+}
+
+// The Deep run's spec section before and after: the same list with every window swept by the charger test (Sim ms).
+std::uint32_t spec_ms(std::initializer_list<pd::Pdo> l, std::uint8_t covered) {
+    Sim m;
+    m.list(l);
+    Engine e(m);
+    CHECK_COND(e.start(0, 0x03, 0, covered) == StartResult::Ok);
+    const std::uint32_t t = drive(m, e);
+    check_safe_end(m, e);
+    CHECK_COND(e.stop() == Stop::Done);
+    return t;
+}
+void covered_run_time() {
+    struct Case { const char* name; std::initializer_list<pd::Pdo> l; std::uint8_t cov; };
+    const Case cases[] = {
+        {"iq4", {fixed(5000), fixed(9000), fixed(15000), fixed(20000), pps(3300, 11000)}, std::uint8_t(1u << 5)},
+        {"fh22", {fixed(5000), fixed(9000), fixed(12000), fixed(15000), fixed(20000), pps(5000, 21000), avs(9000, 20000)}, std::uint8_t(3u << 6)},
+        {"bank", {fixed(5000), fixed(9000), fixed(12000), pps(3300, 11000)}, std::uint8_t(1u << 4)},
+    };
+    for (const Case& c : cases) {
+        const std::uint32_t before = spec_ms(c.l, 0), after = spec_ms(c.l, c.cov);
+        CHECK_COND(after < before);
+        std::printf("  spec %s: %u ms -> %u ms\n", c.name, unsigned(before), unsigned(after));
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -1392,5 +1507,8 @@ int main() {
     avs_sweep_and_caps_note();
     full_20mv_sweep_option();
     pps_ps_rdy_wire_allowance();
+    test_moves_land_in_the_aggregates();
+    covered_window_runs_the_slams_only();
+    covered_run_time();
     return test_report("test_pdspec_engine");
 }
