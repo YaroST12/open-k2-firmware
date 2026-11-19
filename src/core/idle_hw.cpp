@@ -192,7 +192,7 @@ void service(Ui& ui, bool boot_screen, std::uint32_t now) {
         g_wait_paint = true;
     }
     if (g_wait_paint && !ui.painting()) g_wait_paint = false;
-    if (!g_asleep && !g_waking && !g_wait_paint && !ui.loop_probe_busy() && lcd::brightness() != o.brightness)
+    if (idle::backlight_write_due(!g_asleep && !g_waking && !g_wait_paint && !ui.loop_probe_busy(), lcd::brightness(), o.brightness))
         lcd::set_brightness(o.brightness);
 
     // The clock: the forced divider wins, else the low clock while the machine allows it and nothing needs timing. Off waits for

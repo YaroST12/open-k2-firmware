@@ -51,6 +51,11 @@ inline constexpr std::uint8_t kMinSavedPct = 10;       // a saved or Settings le
 // than kPdQuietMs. A settled quiet contract, a PD-silent source and passive inline are not negotiating.
 constexpr bool pd_settling(bool sink_in_flight, std::uint32_t since_pd_ms) { return sink_in_flight || since_pd_ms < kPdQuietMs; }
 
+// The glue writes the backlight when the panel is settled (awake, repainted) and the level on the PWM differs from the wanted one.
+// Compare the level the PWM carries, not the one last asked for: sleeping the panel zeroes the PWM and a wake back to the same
+// level would otherwise never re-light it.
+constexpr bool backlight_write_due(bool settled, std::uint8_t on_pwm, std::uint8_t wanted) { return settled && on_pwm != wanted; }
+
 struct Config {
     std::uint16_t dim_after_s = 60;        // 0 = never
     std::uint16_t off_after_s = 300;       // 0 = never

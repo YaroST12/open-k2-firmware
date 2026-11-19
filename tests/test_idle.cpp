@@ -566,7 +566,85 @@ static void test_clock_wrap_and_long_gaps() {
     }
 }
 
+// The glue's backlight decision against what the PWM carries (not what was last asked for): panel_sleep(true) zeroes the PWM
+// without touching the request, so a wake back to the pre-sleep level must still write. FakeBacklight mirrors lcd.cpp:
+// sleeping zeroes the PWM; set_brightness writes only while the panel is awake.
+struct FakeBacklight {
+    uint8_t applied = 100;
+    bool awake = true;
+    void sleep() { awake = false; applied = 0; }
+    void wake() { awake = true; }
+    void set(uint8_t pct) { if (awake) applied = pct; }
+};
+
+// One glue pass: the settled flag is the glue's (not asleep, not waking, not waiting for the repaint, no loop probe).
+static void glue_pass(FakeBacklight& lcd, const idle::Output& o, bool settled) {
+    if (idle::backlight_write_due(settled, lcd.applied, o.brightness)) lcd.set(o.brightness);
+}
+
+static void test_off_to_dim_on_vbus_relights_the_backlight() {
+    idle::Machine m;
+    FakeBacklight lcd;
+    idle::Output o = m.tick(quiet(0));
+    glue_pass(lcd, o, true);
+    o = m.tick(quiet(60000));
+    glue_pass(lcd, o, true);
+    CHECK_EQ(lcd.applied, 30);
+    o = m.tick(quiet(300000));
+    CHECK_EQ(o.panel_on, false);
+    lcd.sleep();
+    glue_pass(lcd, o, false);
+    CHECK_EQ(lcd.applied, 0);
+    o = m.tick(attached(300020));   // a charger arrives: wakes, and "attached never goes past Dim"
+    CHECK_EQ(o.state == idle::State::Active, true);
+    lcd.wake();
+    glue_pass(lcd, o, true);
+    CHECK_EQ(lcd.applied, 100);
+    o = m.tick(attached(360020));
+    CHECK_EQ(o.state == idle::State::Dim, true);
+    glue_pass(lcd, o, true);
+    CHECK_EQ(lcd.applied, 30);
+    o = m.tick(attached(900000));   // Off never comes while attached; a forced Off then Active is the other path
+    m.force(idle::Force::Off);
+    o = m.tick(attached(900020));
+    CHECK_EQ(o.panel_on, false);
+    lcd.sleep();
+    m.force(idle::Force::Dim);
+    o = m.tick(attached(900040));
+    lcd.wake();
+    glue_pass(lcd, o, true);
+    CHECK_EQ(lcd.applied, 30);       // the same level as before the sleep
+}
+
+static void test_forced_off_then_active_at_the_same_level_relights() {
+    idle::Machine m;
+    FakeBacklight lcd;
+    idle::Output o = m.tick(quiet(0));
+    glue_pass(lcd, o, true);
+    CHECK_EQ(lcd.applied, 100);
+    m.force(idle::Force::Off);
+    o = m.tick(quiet(20));
+    lcd.sleep();
+    glue_pass(lcd, o, false);
+    m.force(idle::Force::Active);
+    o = m.tick(quiet(40));
+    CHECK_EQ(o.brightness, 100);
+    lcd.wake();
+    glue_pass(lcd, o, true);
+    CHECK_EQ(lcd.applied, 100);
+}
+
+static void test_backlight_write_waits_for_a_settled_panel() {
+    CHECK_EQ(idle::backlight_write_due(false, 0, 100), false);   // asleep, waking or repainting: the panel stays dark
+    CHECK_EQ(idle::backlight_write_due(true, 0, 100), true);
+    CHECK_EQ(idle::backlight_write_due(true, 100, 100), false);  // an unchanged level is not rewritten (it restarts the counter)
+    CHECK_EQ(idle::backlight_write_due(true, 100, 30), true);
+}
+
 int main() {
+    test_off_to_dim_on_vbus_relights_the_backlight();
+    test_forced_off_then_active_at_the_same_level_relights();
+    test_backlight_write_waits_for_a_settled_panel();
     test_defaults_dim_then_off();
     test_outputs_per_state();
     test_dim_never_brighter_than_the_brightness();

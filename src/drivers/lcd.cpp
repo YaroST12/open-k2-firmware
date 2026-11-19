@@ -190,7 +190,6 @@ static_assert(offsetof(Tmr4, C2DT) == 0x38 && offsetof(Tmr4, PR) == 0x2C);
 inline Tmr4& tmr4() { return at<Tmr4>(0x40000800); }
 constexpr std::uint32_t kApb1EnTmr4 = 1u << 2;
 
-std::uint8_t g_pct = 100;       // the brightness asked for
 std::uint8_t g_applied = 0;     // what the compare register carries now
 bool g_pwm_on;
 PanelSeq g_seq;
@@ -420,9 +419,8 @@ void init() {
     p::lcd_reset.set();
     systick::delay_ms(120);         // controller needs 120 ms before accepting commands
 
-    g_pct = 100;
     g_seq = PanelSeq{};
-    pwm_start(g_pct);               // full brightness from here on, as the plain GPIO was
+    pwm_start(100);                 // full brightness from here on, as the plain GPIO was
 
     command(Cmd::SLPOUT);
     systick::delay_ms(120);
@@ -443,12 +441,12 @@ void park() {
 }
 
 void set_brightness(std::uint8_t pct) {
-    g_pct = pct > 100 ? 100 : pct;
+    if (pct > 100) pct = 100;
     // A sleeping or waking panel keeps the backlight off; an unchanged level is not rewritten (it restarts the counter).
-    if (g_pwm_on && g_seq.awake() && g_pct != g_applied) pwm_apply(g_pct);
+    if (g_pwm_on && g_seq.awake() && pct != g_applied) pwm_apply(pct);
 }
 
-std::uint8_t brightness() { return g_pct; }
+std::uint8_t brightness() { return g_applied; }
 
 void set_backlight(bool on) { set_brightness(on ? 100 : 0); }
 

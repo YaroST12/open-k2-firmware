@@ -39,7 +39,7 @@ enum Block : std::uint8_t {
 struct Status {
     idle::State state = idle::State::Active;
     idle::Force force = idle::Force::Auto;
-    std::uint8_t brightness_now = 100;     // what the backlight is asked for now (lcd::brightness())
+    std::uint8_t brightness_now = 100;     // what the PWM carries now (lcd::brightness()), 0 while the panel sleeps
     std::uint8_t panel = 0;                // 0 awake, 1 asleep, 2 waking
     std::uint8_t hclk_div = 1;             // the divider in force now
     std::uint8_t force_div = 0;            // the bench override, 0 = automatic

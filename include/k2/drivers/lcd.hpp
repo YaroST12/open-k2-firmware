@@ -20,10 +20,10 @@ void park();
 
 // Backlight brightness in percent, 0..100 (more is 100): PB7 is a 24 kHz PWM output of TMR4 channel 2 (inferred from the
 // STM32F1-family pin map, to be confirmed by a measurement), linear in duty. init() starts it at 100. While the panel is
-// asleep or waking (panel_sleep) the call is remembered but the backlight stays off; after the wake completes the caller
+// asleep or waking (panel_sleep) the call is dropped and the backlight stays off; after the wake completes the caller
 // repaints and then calls set_brightness again.
 void set_brightness(std::uint8_t pct);
-// The level last asked for (what set_brightness was given, clamped), whether or not the panel shows it now.
+// The level the backlight PWM carries now: 0 while the panel sleeps or wakes, whatever was last asked for.
 std::uint8_t brightness();
 
 // Backlight on or off: set_brightness(100) / set_brightness(0). The panel keeps its content; the loop probe
