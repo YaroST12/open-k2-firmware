@@ -138,8 +138,85 @@ void wire_round_trip() {
 
 }  // namespace
 
+// Layout B (user decision 2026-11-19): a kind's range lines replace its merged PPS / AVS rows when the stage ran, measured a range of
+// that kind and every such range has a line on the grid; otherwise that kind's merged rows stay (nothing is hidden). Transitions and
+// the observer always stay.
+void the_split_rule() {
+    specsec::Result r;
+    r.end = specsec::End::Done;
+    specsec::Apdos a;
+    a.add(C::PpsBand, meas(100000, 0, 275000, 5));
+    a.add(C::PpsBand, meas(100000, 0, 275000, 6));
+    a.add(C::AvsBand, meas(30000, 0, 50000, 10));
+    const std::uint16_t all = 1u << 5 | 1u << 6 | 1u << 10;
+    specsec::Split s = specsec::split(r, a, all);
+    CHECK_COND(s.pps && s.avs);
+    CHECK_EQ(int(specsec::shown_n(s)), 10);
+    CHECK_EQ(int(specsec::shown_cell(s, 0)), 0);
+    CHECK_EQ(int(specsec::shown_cell(s, 8)), 8);
+    CHECK_COND(specsec::kOrder[specsec::shown_cell(s, 9)] == C::SourceReset);
+    CHECK_EQ(int(specsec::shown_cell(s, 10)), int(specsec::kCells));
+    CHECK_COND(specsec::kOrder[specsec::kPpsFirst] == C::PpsMonotonic && specsec::kOrder[specsec::kAvsFirst] == C::AvsMonotonic);
+    // PPS 6 without a line (its unit deselected, its chip folded): PPS keeps its merged rows, AVS still splits.
+    s = specsec::split(r, a, all & ~(1u << 6));
+    CHECK_COND(!s.pps && s.avs);
+    CHECK_EQ(int(specsec::shown_n(s)), 9 + 10 + 1);
+    CHECK_COND(specsec::kOrder[specsec::shown_cell(s, 9)] == C::PpsMonotonic);
+    CHECK_COND(specsec::kOrder[specsec::shown_cell(s, 19)] == C::SourceReset);
+    // No range of a kind (no AVS measured), no stage, no ranges kept (an old journal): nothing splits there.
+    specsec::Apdos pps_only;
+    pps_only.add(C::PpsBand, meas(100000, 0, 275000, 5));
+    s = specsec::split(r, pps_only, all);
+    CHECK_COND(s.pps && !s.avs);
+    CHECK_EQ(int(specsec::shown_n(s)), 9 + 7 + 1);
+    s = specsec::split(r, specsec::Apdos{}, all);
+    CHECK_COND(!s.pps && !s.avs);
+    CHECK_EQ(int(specsec::shown_n(s)), int(specsec::kCells));
+    specsec::Result none;
+    s = specsec::split(none, a, all);
+    CHECK_COND(!s.pps && !s.avs);
+}
+
+// A range's Detail lists the slots its kind has (PPS 11, AVS 8); a slot the range never measured shows the merged cell's skip reason, or
+// reads pending.
+void the_range_slots() {
+    CHECK_EQ(int(specsec::slot_n(false)), 11);
+    CHECK_EQ(int(specsec::slot_n(true)), 8);
+    for (std::size_t k = 0; k < specsec::slot_n(true); ++k) CHECK_COND(specsec::apdo_check(true, specsec::slot_at(true, k)) != C::Count);
+    CHECK_EQ(int(specsec::slot_at(true, 8)), int(specsec::kApdoSlots));
+    specsec::Result r;
+    r.end = specsec::End::Done;
+    for (std::size_t i = 0; i < specsec::kCells; ++i) r.cells[i] = specsec::make_cell(sc::Verdict::Pass, sc::Skip::None, 0);
+    const std::size_t st = specsec::cell_index(C::PpsStatus);
+    CHECK_COND(specsec::kOrder[st] == C::PpsStatus);
+    r.cells[st] = specsec::make_cell(sc::Verdict::Skip, sc::Skip::NoData, 0);
+    specsec::Apdos a;
+    a.add(C::PpsBand, meas(100000, 0, 275000, 5));
+    const specsec::Apdo& p = *a.find(5);
+    CHECK_EQ(int(specsec::slot_cell(r, p, specsec::apdo_slot(C::PpsBand)).n), 1);
+    const specsec::Cell skip = specsec::slot_cell(r, p, specsec::apdo_slot(C::PpsStatus));
+    CHECK_COND(skip.verdict() == sc::Verdict::Skip && skip.skip() == sc::Skip::NoData);
+    CHECK_COND(specsec::slot_cell(r, p, specsec::apdo_slot(C::PpsAccuracy)).verdict() == sc::Verdict::Pending);
+}
+
+// The range word names its worst slot too (the footer of the range line).
+void the_worst_slot() {
+    specsec::Apdos a;
+    a.add(C::PpsBand, meas(100000, 0, 275000, 5));
+    CHECK_EQ(int(specsec::range_spec(*a.find(5)).slot), int(specsec::apdo_slot(C::PpsBand)));
+    a.add(C::PpsOvershoot, meas(9900, 8000, 9655, 5));
+    a.add(C::PpsOvershoot, meas(9900, 8000, 9655, 5));
+    a.add(C::PpsBand, meas(300000, 0, 275000, 5));
+    const specsec::RangeSpec rs = specsec::range_spec(*a.find(5));
+    CHECK_COND(rs.tone == specsec::RangeTone::Fail);
+    CHECK_EQ(int(rs.slot), int(specsec::apdo_slot(rs.group == specsec::Group::Shape ? C::PpsOvershoot : C::PpsBand)));
+}
+
 int main() {
     cells_follow_the_aggregate_per_apdo();
+    the_split_rule();
+    the_range_slots();
+    the_worst_slot();
     slots_and_groups();
     the_range_word();
     wire_round_trip();

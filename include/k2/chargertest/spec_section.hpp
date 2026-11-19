@@ -281,27 +281,33 @@ static_assert(sizeof(Apdos) <= 540, "RAM: one copy, in the Runner's evidence");
 
 // The range's word: Fail with the family of the judged failures (the larger weight x fails), Caution when only an inferred limit
 // (PPS settle) was exceeded, Pass ("spec") when something was judged and all passed, None when the range measured nothing.
+// slot: the check the footer names (the heaviest failure of the word's family, the exceeded inferred one, else the first judged).
 enum class RangeTone : std::uint8_t { None, Pass, Caution, Fail };
-struct RangeSpec { RangeTone tone = RangeTone::None; Group group = Group::Level; };
+struct RangeSpec { RangeTone tone = RangeTone::None; Group group = Group::Level; std::uint8_t slot = kApdoSlots; };
 constexpr RangeSpec range_spec(const Apdo& p) {
     std::array<std::uint32_t, 3> pen{};
+    std::array<std::uint8_t, 3> top{};
+    std::array<std::uint32_t, 3> top_pen{};
     RangeSpec rs;
     for (std::size_t i = 0; i < kApdoSlots; ++i) {
         const Cell& c = p.cells[i];
         const C k = apdo_check(p.avs, i);
         if (c.n == 0 || k == C::Count) continue;
         const auto g = static_cast<std::size_t>(slot_group(i));
+        const auto slot = static_cast<std::uint8_t>(i);
         if (sc::def(k).inferred) {
-            if (c.fails && rs.tone != RangeTone::Fail && rs.tone != RangeTone::Caution) rs = {RangeTone::Caution, slot_group(i)};
+            if (c.fails && rs.tone != RangeTone::Fail && rs.tone != RangeTone::Caution) rs = {RangeTone::Caution, slot_group(i), slot};
         } else {
-            pen[g] += std::uint32_t(sc::def(k).weight) * c.fails;
+            const std::uint32_t w = std::uint32_t(sc::def(k).weight) * c.fails;
+            pen[g] += w;
+            if (w > top_pen[g]) { top_pen[g] = w; top[g] = slot; }
         }
-        if (rs.tone == RangeTone::None) rs.tone = RangeTone::Pass;
+        if (rs.tone == RangeTone::None) rs = {RangeTone::Pass, slot_group(i), slot};
     }
     std::size_t worst = 0;
     for (std::size_t g = 1; g < pen.size(); ++g)
         if (pen[g] > pen[worst]) worst = g;
-    if (pen[worst]) rs = {RangeTone::Fail, static_cast<Group>(worst)};
+    if (pen[worst]) rs = {RangeTone::Fail, static_cast<Group>(worst), top[worst]};
     return rs;
 }
 // One range on the wire (the journal record /jr/sa<n>.rec, the remote read 0x0B [9, off]): pos, avs, then per slot the cell's code,
@@ -353,6 +359,61 @@ constexpr std::uint8_t apdo_stream_byte(const Apdos& a, std::size_t i) {
 }
 
 constexpr const char* range_word(const RangeSpec& rs) { return rs.tone == RangeTone::Pass ? "spec" : rs.tone == RangeTone::None ? "-" : group_word(rs.group); }
+
+// The slots a range of the kind has (PPS 11, AVS 8: the AVS family has no status checks and no inferred settle), k-th of them.
+constexpr std::size_t slot_n(bool avs) {
+    std::size_t n = 0;
+    for (std::size_t i = 0; i < kApdoSlots; ++i) n += apdo_check(avs, i) != C::Count;
+    return n;
+}
+constexpr std::size_t slot_at(bool avs, std::size_t k) {
+    for (std::size_t i = 0; i < kApdoSlots; ++i)
+        if (apdo_check(avs, i) != C::Count && k-- == 0) return i;
+    return kApdoSlots;
+}
+constexpr std::size_t cell_index(C c) {
+    for (std::size_t i = 0; i < kCells; ++i)
+        if (kOrder[i] == c) return i;
+    return kCells;
+}
+inline constexpr std::size_t kPpsFirst = cell_index(C::PpsMonotonic), kAvsFirst = cell_index(C::AvsMonotonic),
+                             kObserver = cell_index(C::SourceReset);
+// A range's slot as its Detail shows it: what the range measured, else the merged cell's skip (why the check never ran), else pending.
+constexpr Cell slot_cell(const Result& r, const Apdo& p, std::size_t slot) {
+    if (slot >= kApdoSlots) return {};
+    if (p.cells[slot].verdict() != sc::Verdict::Pending) return p.cells[slot];
+    const std::size_t m = cell_index(apdo_check(p.avs, slot));
+    return m < kCells && r.cells[m].verdict() == sc::Verdict::Skip ? r.cells[m] : Cell{};
+}
+
+// Layout B: a kind's range lines carry its spec word, so its merged rows leave the section. Only when the stage ran, measured a range
+// of that kind and every such range has a line (lines: a bit per APDO position with a range line); otherwise nothing of that kind
+// would be lost, so the merged rows stay. Transitions and the observer always stay.
+struct Split { bool pps = false, avs = false; };
+constexpr Split split(const Result& r, const Apdos& a, std::uint16_t lines) {
+    Split s;
+    if (r.end == End::NotRun) return s;
+    bool has[2]{}, gap[2]{};
+    for (std::size_t i = 0; i < a.n; ++i) {
+        has[a.r[i].avs] = true;
+        if (!(lines >> (a.r[i].pos & 15u) & 1u)) gap[a.r[i].avs] = true;
+    }
+    s.pps = has[0] && !gap[0];
+    s.avs = has[1] && !gap[1];
+    return s;
+}
+constexpr bool hidden(const Split& s, std::size_t i) {
+    return (s.pps && i >= kPpsFirst && i < kAvsFirst) || (s.avs && i >= kAvsFirst && i < kObserver);
+}
+constexpr std::size_t shown_n(const Split& s) {
+    return kCells - (s.pps ? kAvsFirst - kPpsFirst : 0) - (s.avs ? kObserver - kAvsFirst : 0);
+}
+// The cell of the row-th shown row (kCells past the end).
+constexpr std::size_t shown_cell(const Split& s, std::size_t row) {
+    for (std::size_t i = 0; i < kCells; ++i)
+        if (!hidden(s, i) && row-- == 0) return i;
+    return kCells;
+}
 
 // The time the stage adds to a run's estimate, from the list (hardware, Anker IQ4: 12 transitions in 32 s, 248 programmable moves in
 // 80 s): the fixed walk, then per programmable window either its cover, slams and status asks (the run's own sweep covered it) or the

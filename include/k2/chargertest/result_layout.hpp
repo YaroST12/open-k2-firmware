@@ -108,6 +108,8 @@ inline constexpr uint8_t kKindPps = 1, kKindSprAvs = 2, kKindEprAvs = 3;
 uint8_t kind_of(charger_test::Algorithm);   // the chip kind of a range algorithm; 0 for any other
 charger_test::Algorithm kind_algorithm(uint8_t kind);   // back: Count for 0
 const char* kind_word(uint8_t kind);   // "PPS" for kKindPps, "AVS" for both AVS kinds, "" for 0
+// A bit per APDO position (1..15) that has a range chip on the Results grid (build() with the default fold): the spec section's split.
+uint16_t range_positions(std::span<const charger_test::Step>);
 struct Row {
     char label[9] = {};
     Tone label_tone = Tone::Dim;
