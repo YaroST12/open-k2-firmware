@@ -61,6 +61,8 @@ inline constexpr std::uint32_t kAvsSmallStepMs = 50;          // tAvsSrcTransSma
 // A large AVS step is an ordinary transition in PD R3.3: tSrcTransition + tSrcReady (35 + 285 ms) for the level, tSrcTransReq (325 ms) for
 // PS_RDY; the check takes 325 ms for both (derived, docs/PD_PPS_AVS_SPEC_REFERENCE.md section 4).
 inline constexpr std::uint32_t kAvsLargeStepMs = 325;
+// The same in EPR mode (an EPR AVS APDO): tSrcTransReq EPR (760 ms) for both, over tSrcTransition + tSrcReady EPR (35 + 720 ms) (derived).
+inline constexpr std::uint32_t kAvsLargeStepEprMs = kSrcTransReqEprMs;
 // The band beyond vPpsNew / vAvsNew a step may overshoot into, and how long VBUS may stay between the two (no load: tPpsTransient's
 // under-60 mA row; tAvsTransient has a single 5 ms row).
 inline constexpr std::int32_t kPpsValidExtraMv = 100;        // vPpsValid

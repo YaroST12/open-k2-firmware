@@ -144,6 +144,58 @@ void windows_of_a_list() {
     CHECK_EQ(int(N.n_pps), 0);
 }
 
+// EPR AVS (a Deep run hands the APDO over, with the cable proof): its window after the SPR ones, capped at the ceiling; with every slot taken
+// the AVS windows keep theirs and the PPS ones give way from the end (the keep-alive list keeps every PPS APDO).
+pd::Pdo epr_avs(std::uint16_t hi) {
+    pd::Pdo d = avs(hi);
+    d.min_mv = 15000;
+    d.max_ma = 5000;
+    return d;
+}
+void epr_avs_window() {
+    pd::SourceCaps c = caps({fixed(5000, true), fixed(9000), fixed(15000), fixed(20000), pps(3300, 21000)});
+    c.pdos[7] = fixed(28000);
+    c.pdos[8] = epr_avs(28000);
+    c.num_pdos = 9;
+    CHECK_EQ(int(scan(c, 36000, true).n_prog), 1);                                // the standalone run: SPR windows only
+    CHECK_EQ(int(scan(c, 36000, false, kHostFloorMv, &c.pdos[8], 9).n_prog), 1);  // no cable proof
+    const Levels L = scan(c, 36000, true, kHostFloorMv, &c.pdos[8], 9);
+    CHECK_EQ(int(L.n_prog), 2);
+    CHECK_EQ(int(L.prog[1].pos), 9);
+    CHECK_COND(L.prog[1].kind == ProgKind::Avs);
+    CHECK_EQ(int(L.prog[1].lo), 15000);
+    CHECK_EQ(int(L.prog[1].hi), 28000);
+    CHECK_EQ(int(L.n_avs), 0);   // the caps note counts the SPR list
+    CHECK_EQ(int(L.epr), 8);
+    c.pdos[8] = epr_avs(48000);
+    const Levels M = scan(c, 36000, true, kHostFloorMv, &c.pdos[8], 9);
+    CHECK_EQ(int(M.prog[1].hi), 36000);
+    pd::SourceCaps f = caps({fixed(5000, true), fixed(20000), avs(20000), pps(3300, 11000), pps(3300, 16000), pps(3300, 21000)});
+    f.pdos[7] = fixed(28000);
+    f.pdos[8] = epr_avs(28000);
+    f.num_pdos = 9;
+    const Levels F = scan(f, 36000, true, kHostFloorMv, &f.pdos[8], 9);
+    CHECK_EQ(int(F.n_prog), 4);
+    CHECK_EQ(int(F.prog[0].pos), 4);
+    CHECK_EQ(int(F.prog[1].pos), 5);
+    CHECK_EQ(int(F.prog[2].pos), 3);
+    CHECK_EQ(int(F.prog[3].pos), 9);
+    CHECK_EQ(int(F.n_pps), 3);
+    const Levels G = scan(f, 36000, true);   // without EPR AVS: as before, three PPS and the SPR AVS
+    CHECK_EQ(int(G.n_prog), 4);
+    CHECK_EQ(int(G.prog[2].pos), 6);
+    CHECK_EQ(int(G.prog[3].pos), 3);
+    // The run hands the APDO over by itself (the live list is the SPR one again once the run left EPR mode); a fixed PDO or an SPR
+    // position is no EPR AVS window.
+    const pd::SourceCaps spr = caps({fixed(5000, true), fixed(20000), pps(3300, 21000)});
+    const pd::Pdo ea = epr_avs(28000);
+    CHECK_EQ(int(scan(spr, 36000, true, kHostFloorMv, &ea, 9).n_prog), 2);
+    CHECK_EQ(int(scan(spr, 36000, true, kHostFloorMv, &ea, 9).epr), 0);   // the EPR fixed walk node stays out
+    const pd::Pdo fx = fixed(28000);
+    CHECK_EQ(int(scan(spr, 36000, true, kHostFloorMv, &fx, 8).n_prog), 1);
+    CHECK_EQ(int(scan(spr, 36000, true, kHostFloorMv, &ea, 3).n_prog), 1);
+}
+
 // The measured moves of one pass, in order.
 std::vector<Move> moves(Sweep s) {
     std::vector<Move> v;
@@ -262,5 +314,6 @@ int main() {
     avs_steps();
     family_moves();
     cover_passes();
+    epr_avs_window();
     return test_report("test_pdspec_plan");
 }

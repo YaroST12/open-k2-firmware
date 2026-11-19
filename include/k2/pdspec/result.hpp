@@ -332,6 +332,7 @@ inline constexpr std::size_t kMaxTrans = 60;   // the walk of 8 nodes (56) plus 
 inline constexpr std::size_t kMaxPass = 16;    // kMaxProg windows x kClasses
 inline constexpr std::size_t kMaxBlob = kBlobHeader + kChecks * kAggBytes + kTimerBytes + kMaxTrans * kTransBytes + kMaxPass * kPassBytes;
 inline constexpr std::uint8_t kOptFull20 = 1;  // opts: the 20 mV class swept the whole window (else three 10-step windows)
+inline constexpr std::uint8_t kOptEprAvs = 2;  // opts: the EPR AVS APDO the run met (Env::epr_avs) is a window too; not kept in opts()
 
 struct BlobHead {
     std::uint8_t state = 0, stop = 0, n_trans = 0, n_pass = 0;

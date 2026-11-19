@@ -5,7 +5,7 @@
 
 namespace k2::pdspec {
 
-StartResult Engine::start(std::uint32_t now_ms, std::uint8_t families, std::uint8_t opts, std::uint8_t covered) {
+StartResult Engine::start(std::uint32_t now_ms, std::uint8_t families, std::uint8_t opts, std::uint16_t covered) {
     if (running_) return StartResult::Running;
     const Snapshot s = env_->snapshot();
     if (s.inline_link) return StartResult::Inline;
@@ -16,7 +16,9 @@ StartResult Engine::start(std::uint32_t now_ms, std::uint8_t families, std::uint
     n_tr_ = 0;
     n_pass_ = 0;
     pool_ = env_->record_pool();
-    L_ = scan(env_->caps(), env_->cap_mv(), env_->epr_proof());
+    pd::Pdo ea{};
+    const std::uint8_t ea_pos = (opts & kOptEprAvs) ? env_->epr_avs(ea) : 0;
+    L_ = scan(env_->caps(), env_->cap_mv(), env_->epr_proof(), kHostFloorMv, ea_pos ? &ea : nullptr, ea_pos);
     walk_ = make_walk(L_.n_fixed);
     full20_ = (opts & kOptFull20) != 0;
     covered_ = covered;
@@ -151,7 +153,7 @@ void Engine::lost(const Snapshot& s, std::uint32_t now) {
         const bool epr = (cur_.flags & kTrEpr) != 0;
         if (fam_ == Family::Pps) {   // a programmable step: its own PS_RDY check and window
             const bool avs = prog().kind == ProgKind::Avs;
-            const std::int32_t ms = step_limit_ms(avs, pdspec::large_step(avs, std::abs(tgt_mv_ - from_mv_)));
+            const std::int32_t ms = step_limit_ms(avs, pdspec::large_step(avs, std::abs(tgt_mv_ - from_mv_)), epr_pos(tgt_pos_));
             meas(avs ? Check::AvsPsRdy : Check::PpsPsRdy, {kNever, 0, 0, ms * 1000, tgt_pos_, static_cast<std::uint8_t>(tgt_mv_ / 100)});
         } else {
             meas(Check::PsRdyTime, {kNever, 0, 0, std::int32_t((epr ? pd::spec::kSrcTransReqEprMs : pd::spec::kSrcTransReqSprMs) * 1000), tgt_pos_, 0});
@@ -515,7 +517,7 @@ void Engine::prog_next(std::uint32_t now) {
     tgt_mv_ = static_cast<std::uint16_t>(m.mv);
     cur_mv_ = m.mv;
     const std::int32_t step = std::abs(tgt_mv_ - from_mv_);
-    captured_ = env_->capture_start(pdspec::large_step(prog().kind == ProgKind::Avs, step) ? kPostLargeUs : kPostStepUs);
+    captured_ = env_->capture_start(!pdspec::large_step(prog().kind == ProgKind::Avs, step) ? kPostStepUs : epr_pos(tgt_pos_) ? kPostLargeEprUs : kPostLargeUs);
     if (!captured_) for (const Check c : prog_checks_meter()) skip(c, Skip::NoCapture);
     allowed_mv_ = from_mv_ > tgt_mv_ ? from_mv_ : tgt_mv_;
     phase_t_ = now;
@@ -544,7 +546,7 @@ void Engine::judge_prog(const ProgMove& mv, const StepOut& o, const Edges& e, co
     const ProgMeas m = measure_prog(mv, o);
     cur_ = {};
     // PS_RDY is a received message: its limit carries the wire allowance (pd_spec_timing.hpp kPsRdyWireOverheadMs); the band does not.
-    const std::int32_t rdy_ms = step_limit_ms(mv.avs, m.large) + std::int32_t(pd::spec::kPsRdyWireOverheadMs);
+    const std::int32_t rdy_ms = step_limit_ms(mv.avs, m.large, epr_pos(mv.pos)) + std::int32_t(pd::spec::kPsRdyWireOverheadMs);
     const Lat l = latencies(e, s, mv.avs ? Check::AvsPsRdy : Check::PpsPsRdy, rdy_ms * 1000, m.a, m.b);
     if (l.acc) {
         const std::uint32_t t = l.rdy ? l.rdy_us / 100 : 0xFFFF;
