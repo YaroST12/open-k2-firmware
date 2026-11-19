@@ -380,17 +380,20 @@ class LevelOption(unittest.TestCase):
 
 
 class ReviewCursor(unittest.TestCase):
-    """START is not Review's top row any more (Level is above it, and Review opens on START): the walker expects the
-    firmware's own kStartRow after a pick on Cable, or ct_start's press check reads every START as WRONG."""
+    """START is Review's only row (row 0), and Tests's All tests preset is row 1 (under Depth): the walker expects the
+    firmware's own kStartRow after a pick on Cable and kPresetFirst on Tests."""
 
     def test_the_walker_expects_the_firmware_start_row(self):
         import re
         import ui_walk
         src = (Path(__file__).resolve().parent.parent / "src" / "ui" / "ui_charger_test.cpp").read_text()
-        m = re.search(r"constexpr int kLevelRow = (\d+), kStartRow = (\d+);", src)
-        self.assertIsNotNone(m)
-        self.assertEqual(ui_walk.START_ROW, int(m.group(2)))
-        self.assertEqual(ui_walk.LEVEL_ROW, int(m.group(1)))
+        m_start = re.search(r"constexpr int kStartRow = (\d+);", src)
+        m_alg = re.search(r"constexpr int kFamilyCount = \d+, kDepthRow = (\d+), kPresetFirst = (\d+),", src)
+        self.assertIsNotNone(m_start)
+        self.assertIsNotNone(m_alg)
+        self.assertEqual(ui_walk.START_ROW, int(m_start.group(1)))
+        self.assertEqual(ui_walk.ALG_DEPTH_ROW, int(m_alg.group(1)))
+        self.assertEqual(ui_walk.ALG_ALL_ROW, int(m_alg.group(2)))
         self.assertIs(ct_start.START_ROW, ui_walk.START_ROW)
 
 

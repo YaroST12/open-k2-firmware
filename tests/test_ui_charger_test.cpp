@@ -58,19 +58,19 @@ static void settle(Ui& ui, uint32_t now = 1200) {
     CHECK_EQ(ui.painting(), false);
 }
 static void open(Ui& ui) { ui.init(0); ui.set_rotation(0, 0); ui.tick(1000); ui.goto_page(static_cast<uint8_t>(Page::ChargerTest), 1100); settle(ui, 1100); }
-// A preset pick advances (there is no Next row): the first preset ("All tests") goes on to the Cable step.
+// A preset pick advances (there is no Next row): the first preset ("All tests", row 1) goes on to the Cable step.
 static void cable(Ui& ui, uint32_t now = 1200) {
-    top(ui, now); press(ui, Button::Ok, now); settle(ui, now);
+    top(ui, now); move(ui, 1, now); press(ui, Button::Ok, now); settle(ui, now);
     CHECK_EQ(ui.charger_test_stage(), 2);
 }
 // A cable pick selects and advances: the cursor starts on the cable in force, so one OK keeps it and goes on to Review.
 static void review(Ui& ui, uint32_t now = 1200) {
     cable(ui, now); press(ui, Button::Ok, now); settle(ui, now);
-    CHECK_EQ(ui.charger_test_stage(), 4); CHECK_EQ(ui.charger_test_cursor(), 1);   // START (row 1, under the Level row)
+    CHECK_EQ(ui.charger_test_stage(), 4); CHECK_EQ(ui.charger_test_cursor(), 0);   // START (row 0)
 }
 constexpr int kCustomStage = 14;   // Stage::Custom, the per-family / per-algorithm list under Tests step "Custom..." (not a numbered step)
-// Tests step rows (0-based): 0 All tests, 1 PD only, 2 Legacy only, 3 Vendor modes, 4 Custom..., 5 Last results (after a run).
-constexpr int kAllRow = 0, kPdRow = 1, kLegacyRow = 2, kVendorRow = 3, kCustomRow = 4;
+// Tests step rows (0-based): 0 Depth, 1 All tests, 2 PD only, 3 Legacy only, 4 Vendor modes, 5 Custom..., 6 Last results (after a run).
+constexpr int kDepthRow = 0, kAllRow = 1, kPdRow = 2, kLegacyRow = 3, kVendorRow = 4, kCustomRow = 5;
 // Custom list rows (the families in run order): 0 Huawei / Honor, 1 Samsung, 2 OPPO / vivo, 3 Xiaomi / Redmi, 4 USB PD,
 // 5 QC / UFCS, 6 Done (to the Cable step). Short OK toggles a family, long OK opens its entries.
 constexpr int kFamHuawei = 0, kFamSamsung = 1, kFamOppo = 2, kFamXiaomi = 3, kFamPd = 4, kFamQc = 5, kFamDone = 6;
@@ -192,7 +192,7 @@ static void read_results(Ui& ui) {
 }
 static void test_confirmation_and_capture() {
     fixture(); Ui ui; open(ui);
-    CHECK_EQ(ui.list_state().count, 5); CHECK_EQ(ui.list_state().visible, 7);   // four presets, Custom... (no run to view yet)
+    CHECK_EQ(ui.list_state().count, 6); CHECK_EQ(ui.list_state().visible, 7);   // Depth, four presets, Custom... (no run to view yet)
     CHECK_EQ(algos(ui), ct::kDefaultAlgorithms);
     CHECK_EQ(ui.charger_test_set_units(kPdOnly), true);   // the OEM units come first in the default order: keep the timeline short
     review(ui);
@@ -376,7 +376,7 @@ static void test_selection_and_focus_rendering() {
     check_row_text(kPdRow, "PD only", kText, kBg, kAllRow, 150); check_radio(kPdRow, false, kAllRow);
     check_row_text(kLegacyRow, "Legacy only", kText, kBg, kAllRow, 150);
     check_row_text(kCustomRow, "Custom...", kText, kBg, kAllRow, 150); check_radio(kCustomRow, false, kAllRow);
-    move(ui, kPdRow, 1220); ui.tick(1220); settle(ui, 1220);
+    top(ui, 1220); move(ui, kPdRow, 1220); ui.tick(1220); settle(ui, 1220);
     check_row_text(kAllRow, "All tests", kText, kBg, kPdRow, 150); check_radio(kAllRow, true, kPdRow);
     check_row_text(kPdRow, "PD only", kText, kFocusT, kPdRow, 150); check_radio(kPdRow, false, kPdRow, kFocusT);
     press(ui, Button::Ok, 1230); ui.tick(1230); settle(ui, 1230);   // a preset pick selects and advances: there is no Next row
@@ -623,8 +623,8 @@ static void test_full_help_text() {
     static constexpr const char* kPresetNote[] = {"Everything, QC Class B 20V too", "PD fixed, PPS, EPR, Xiaomi",
                                                   "D+/D-: vendor modes, QC, UFCS", "Huawei, Samsung, OPPO, vivo"};
     for (int r = 0; r < 4; ++r) {
-        top(ui, 1210); move(ui, r, 1210); ui.tick(1210 + r); settle(ui, 1210 + r);
-        check_row_note(r, kPresetNote[r]);
+        top(ui, 1210); move(ui, kAllRow + r, 1210); ui.tick(1210 + r); settle(ui, 1210 + r);
+        check_row_note(kAllRow + r, kPresetNote[r]);
     }
     top(ui, 1220); move(ui, kCustomRow, 1220); ui.tick(1220); settle(ui, 1220);
     check_row_note(kCustomRow, "Choose families one by one");
@@ -661,7 +661,7 @@ static void test_first_menu_and_pd_bundles() {
 // is no preset puts the pill on "Custom...".
 static void test_tests_step_presets() {
     fixture(); Ui ui; open(ui); ui.tick(1200);
-    CHECK_EQ(ui.charger_test_stage(), 0); CHECK_EQ(ui.list_state().count, 5);
+    CHECK_EQ(ui.charger_test_stage(), 0); CHECK_EQ(ui.list_state().count, 6);
     CHECK_EQ(kPdMask & kLegacyMask, 0); CHECK_EQ(kPdMask | kLegacyMask, ct::kDefaultAlgorithms);   // two halves of "All tests"
     CHECK_EQ(kPdMask != 0 && kLegacyMask != 0, true);
     CHECK_EQ(kLegacyMask & ct::bit(A::Qc2ClassB), ct::bit(A::Qc2ClassB));   // Class B rides with the legacy half
@@ -680,7 +680,7 @@ static void test_tests_step_presets() {
         check_radio(kVendorRow, true, kVendorRow, kFocusT); check_radio(kLegacyRow, false, kVendorRow);
     }
     CHECK_EQ(algos(ui), ct::kDefaultAlgorithms);
-    move(ui, kPdRow); press(ui, Button::Ok);
+    top(ui); move(ui, kPdRow); press(ui, Button::Ok);
     CHECK_EQ(algos(ui), kPdMask); CHECK_EQ(ui.charger_test_stage(), 2);
     press(ui, Button::Back); CHECK_EQ(ui.charger_test_stage(), 0); CHECK_EQ(ui.charger_test_cursor(), kPdRow);
     move(ui, 1); press(ui, Button::Ok);
@@ -747,11 +747,11 @@ static void test_three_step_header() {
     CHECK_EQ(ui.charger_test_stage(), 4);
     check_header("3/3 Review", 3);
 }
-// Review's Spoof row (row 1 of the table, the value column at x72) is the identity the START presents. The armed state is not
+// Review's Spoof row (row 2 of the table, the value column at x72) is the identity the START presents. The armed state is not
 // part of the line: it is on the Cable step (the ARMED pill) and in the Refuse / Waiting stages.
 static void check_review_spoof(std::string_view text, uint16_t color) {
     char buf[kFitBuf];
-    const int y = 100 + 1 * 18 + kit::row_text_y(18, kSmall.height);   // Review's table: two rows at an 18 px pitch from y 100 (Tests, Spoof), the Level control under them
+    const int y = 102 + 2 * 22 + kit::row_text_y(22, kSmall.height);   // Review's table: three rows at a 22 px pitch from y 102 (Tests, Depth, Spoof)
     check_text_at(kSmall, y, "Spoof", kDim, kBg, 6);   // the key of the identity row
     check_text_at(kSmall, y, fit_data(kSmall, text, 18 * kSmall.adv, buf), color, kBg, 72);
 }
@@ -1009,8 +1009,7 @@ static void test_pps_wire_headroom_note() {
 }
 static void test_review_start_is_only_row() {
     fixture(); Ui ui; open(ui); review(ui);
-    press(ui, Button::Plus); CHECK_EQ(ui.charger_test_cursor(), 1);    // START is the last row
-    press(ui, Button::Minus); CHECK_EQ(ui.charger_test_cursor(), 0);   // the Level row above it
+    press(ui, Button::Plus); CHECK_EQ(ui.charger_test_cursor(), 0);    // START is the only row
     press(ui, Button::Minus); CHECK_EQ(ui.charger_test_cursor(), 0);
     press(ui, Button::Back);
     CHECK_EQ(ui.charger_test_stage(), 2); CHECK_EQ(ui.charger_test_cursor(), 0);
@@ -1265,56 +1264,49 @@ static int amber_chip_sweep_gap() {
             if (g_panel[y * LCD_WIDTH + x] == kCaution && x > last_ink) last_ink = x;
     return first_dim < LCD_WIDTH && last_ink >= 0 ? first_dim - last_ink - 1 : -1;
 }
-static void test_review_level_row_cycles_and_counts() {
+static void test_depth_row_cycles_and_shows_on_review() {
     fixture();
     g_stub.caps.num_pdos = 3;
     g_stub.caps.pdos[1] = pd::decode_pdo((180u << 10) | 300);                                       // 9 V 3 A
     g_stub.caps.pdos[2] = pd::decode_pdo(0xC0000000u | (210u << 17) | (33u << 8) | 100u);           // PPS 3.3-21 V 5 A
     g_stub.vbus_ceiling_mv = 36000;
-    Ui ui; open(ui); review(ui);
+    Ui ui; open(ui);
+    CHECK_EQ(ui.charger_test_stage(), 0); CHECK_EQ(ui.charger_test_cursor(), kAllRow);   // opens on All tests, with Depth right above
+    press(ui, Button::Minus); settle(ui);
+    CHECK_EQ(ui.charger_test_cursor(), kDepthRow);
+    check_row_text(kDepthRow, "Depth", kText, kFocusT, kDepthRow, 150);
+    check_row_note(kDepthRow, "Medium: levels, no sweeps");
     const unsigned medium = ui.charger_test_view().preview.runnable;
     CHECK_EQ(ui.charger_test_selection() >> 28, 0u);
-    // The Level control: its picked segment (solid kFocus) is the level, whatever the wire value (Light 1, Medium 0, Deep 2).
-    auto picked = [&] {
-        int found = -1;
-        for (int i = 0; i < 3; ++i) {
-            const kit::SegSpan sp = kit::seg_span(224, 3, i);
-            if (g_panel[(136 + kit::kSegLabelH + 3) * LCD_WIDTH + sp.x + 3] == kFocus) { CHECK_EQ(found, -1); found = i; }
-        }
-        return found;
-    };
-    CHECK_EQ(picked(), 1);   // Medium
-    press(ui, Button::Minus); settle(ui);
-    CHECK_EQ(ui.charger_test_cursor(), 0);
-    auto v = ui.charger_test_view();
-    CHECK_STR(std::string(v.message, v.message_len).c_str(), "Medium: levels, no sweeps");
+    // OK on Depth cycles Medium -> Deep -> Light -> Medium (stays on Tests).
     press(ui, Button::Ok); settle(ui);
-    CHECK_EQ(ui.charger_test_stage(), 4); CHECK_EQ(ui.charger_test_cursor(), 0);   // OK on Level never starts
+    CHECK_EQ(ui.charger_test_stage(), 0); CHECK_EQ(ui.charger_test_cursor(), kDepthRow);
     CHECK_EQ(ui.charger_test_selection() >> 28, 0xEu);                             // Deep: both sweeps, level 2
+    check_row_note(kDepthRow, "Deep: + sweeps, steps, spec");
     const unsigned deep = ui.charger_test_view().preview.runnable;
-    CHECK_EQ(picked(), 2);
-    // Deep also runs the PD spec stage (specsec): the footer names it, the preview counts its checks, Light and Medium have none.
-    v = ui.charger_test_view();
-    CHECK_STR(std::string(v.message, v.message_len).c_str(), "Deep: + sweeps, steps, spec");
-    dump_screen("spec_review_deep");   // K2_DUMP: the Level page with Deep picked
-    CHECK_EQ(unsigned(v.preview.spec_checks), unsigned(specsec::kCells));
+    CHECK_EQ(unsigned(ui.charger_test_view().preview.spec_checks), unsigned(specsec::kCells));
     CHECK_EQ(unsigned(ui.charger_test_view().preview.total) >= deep, true);
     press(ui, Button::Ok); settle(ui);
-    CHECK_EQ(picked(), 0);
     CHECK_EQ(ui.charger_test_selection() >> 28, 0x1u);                             // Light
-    v = ui.charger_test_view();
-    CHECK_EQ(unsigned(v.preview.spec_checks), 0u);
-    const unsigned light = v.preview.runnable;
-    CHECK_STR(std::string(v.message, v.message_len).c_str(), "Light: lists offers at 5V");
-    std::printf("[review-level] runnable: Light %u, Medium %u, Deep %u\n", light, medium, deep);
+    check_row_note(kDepthRow, "Light: lists offers at 5V");
+    const unsigned light = ui.charger_test_view().preview.runnable;
+    CHECK_EQ(unsigned(ui.charger_test_view().preview.spec_checks), 0u);
+    std::printf("[tests-depth] runnable: Light %u, Medium %u, Deep %u\n", light, medium, deep);
     CHECK_EQ(light < medium && medium < deep, true);
-    press(ui, Button::Ok); settle(ui);
+    // Advance to Review: Depth shows as a KV row ("Light"), Plus/Minus are no-ops, OK starts confirmation.
+    review(ui); ui.tick(1300);
+    const int depth_y = 102 + 1 * 22 + kit::row_text_y(22, kSmall.height);
+    check_text_at(kSmall, depth_y, "Depth", kDim, kBg, 6);
+    check_text_at(kSmall, depth_y, "Light", kText, kBg, 72);
+    press(ui, Button::Minus); settle(ui); CHECK_EQ(ui.charger_test_cursor(), 0);
+    press(ui, Button::Plus); settle(ui); CHECK_EQ(ui.charger_test_cursor(), 0);
+    press(ui, Button::Ok, 1300); settle(ui, 1300);
+    CHECK_EQ(ui.charger_test_view().confirming, true);
+    // Back to Tests and cycle Light -> Medium.
+    press(ui, Button::Back); press(ui, Button::Back); press(ui, Button::Back);
+    top(ui); press(ui, Button::Ok); settle(ui);
     CHECK_EQ(ui.charger_test_selection() >> 28, 0u);                               // back to Medium
     CHECK_EQ(ui.charger_test_view().preview.runnable, medium);
-    press(ui, Button::Plus); settle(ui);
-    CHECK_EQ(ui.charger_test_cursor(), 1);
-    press(ui, Button::Ok, 1300); settle(ui, 1300);
-    CHECK_EQ(ui.charger_test_view().confirming, true);                             // START: the confirmation, as before
 }
 static void test_results_counters_are_words() {
     for (unsigned kind = 0; kind < 3; ++kind) {
@@ -2523,7 +2515,7 @@ static void test_step_label_gallery() {
         for (unsigned i = 0; i < 8; ++i) g_stub.caps.pdos[i] = pd::decode_pdo(kOffer[i]);
         Ui ui;
         open(ui); ui.set_rotation(rot, 1100);
-        move(ui, kPdRow); press(ui, Button::Ok);   // "PD only": the PD fixed / PPS / Xiaomi rows; a preset pick goes on to the cable
+        top(ui); move(ui, kPdRow); press(ui, Button::Ok);   // "PD only": the PD fixed / PPS / Xiaomi rows; a preset pick goes on to the cable
         CHECK_EQ(ui.charger_test_stage(), 2);
         press(ui, Button::Ok);                     // the cable pick keeps "Off" and goes on to Review
         CHECK_EQ(ui.charger_test_stage(), 4);
@@ -2578,7 +2570,7 @@ static void test_step_label_gallery() {
         Ui ui;
         open(ui); ui.set_rotation(3, 1100);
         CHECK_EQ(ui.charger_test_set_level(uint8_t(ct::Level::Light)), true);
-        move(ui, kPdRow); press(ui, Button::Ok); press(ui, Button::Ok);
+        top(ui); move(ui, kPdRow); press(ui, Button::Ok); press(ui, Button::Ok);
         CHECK_EQ(ui.charger_test_stage(), 4);
         start_press(ui, 1300); press(ui, Button::Ok, 1400);
         uint32_t t = 1500;
@@ -2634,7 +2626,7 @@ static void test_pd_block_scenes() {
         for (uint32_t w : s.pdos) g_stub.caps.pdos[i++] = pd::decode_pdo(w);
         Ui ui;
         open(ui); ui.set_rotation(rot, 1100);
-        move(ui, kPdRow); press(ui, Button::Ok); press(ui, Button::Ok);
+        top(ui); move(ui, kPdRow); press(ui, Button::Ok); press(ui, Button::Ok);
         CHECK_EQ(ui.charger_test_stage(), 4);
         start_press(ui, 1300); press(ui, Button::Ok, 1400);
         uint32_t t = 1500;
@@ -2700,7 +2692,7 @@ static void test_pd_version_answer_against_the_offer() {
         g_stub.source_revision = {true, c.major, c.minor, 1, 0};
         Ui ui;
         open(ui); ui.set_rotation(rot, 1100);
-        move(ui, kPdRow); press(ui, Button::Ok); press(ui, Button::Ok);
+        top(ui); move(ui, kPdRow); press(ui, Button::Ok); press(ui, Button::Ok);
         start_press(ui, 1300); press(ui, Button::Ok, 1400);
         uint32_t t = 1500;
         for (; t <= 900000 && ui.charger_test_busy(); t += 100) ui.tick(t);
@@ -2749,7 +2741,7 @@ static void test_readme_frames() {
     {   // Medium (the default level): Review, armed, Running, Results, the Steps of the first PD line, one step's Detail
         offer();
         Ui ui; open(ui); ui.set_rotation(3, 1100);
-        move(ui, kPdRow); press(ui, Button::Ok);
+        top(ui); move(ui, kPdRow); press(ui, Button::Ok);
         press(ui, Button::Ok);
         CHECK_EQ(ui.charger_test_stage(), 4);
         uint32_t t = 1100;
@@ -2789,7 +2781,7 @@ static void test_readme_frames() {
         offer();
         Ui ui; open(ui); ui.set_rotation(3, 1100);
         CHECK_EQ(ui.charger_test_set_level(uint8_t(ct::Level::Light)), true);
-        move(ui, kPdRow); press(ui, Button::Ok); press(ui, Button::Ok);
+        top(ui); move(ui, kPdRow); press(ui, Button::Ok); press(ui, Button::Ok);
         CHECK_EQ(ui.charger_test_stage(), 4);
         start_press(ui, 1300); press(ui, Button::Ok, 1400);
         uint32_t t = 1500;
@@ -3167,7 +3159,7 @@ static void test_start_wait_is_not_blocking() {
         start_press(ui, 1300); confirm_press_nowait(ui, 1300);
         ui.tick(1400);
         press(ui, Button::Back, 1500);
-        CHECK_EQ(ui.charger_test_stage(), 4); CHECK_EQ(ui.charger_test_cursor(), 1);
+        CHECK_EQ(ui.charger_test_stage(), 4); CHECK_EQ(ui.charger_test_cursor(), 0);
         CHECK_EQ(g_stub.rd_run, false); CHECK_EQ(g_stub.rd_run_changes, 2);
         CHECK_EQ(ui.charger_test_busy(), false);
         for (uint32_t t = 1520; t < 30000; t += 20) ui.tick(t);
@@ -3214,7 +3206,7 @@ static void test_start_wait_is_not_blocking() {
         fixture(); g_stub.pm.vbus_mv = 0;
         Ui ui; open(ui); review(ui);
         start_run(ui, 1300);
-        CHECK_EQ(ui.charger_test_stage(), 4); CHECK_EQ(ui.charger_test_cursor(), 1);
+        CHECK_EQ(ui.charger_test_stage(), 4); CHECK_EQ(ui.charger_test_cursor(), 0);
         CHECK_EQ(g_stub.rd_run, false); CHECK_EQ(ui.charger_test_busy(), false);
         press(ui, Button::Ok, g_wait_end + 100);          // a new first OK, not a start
         CHECK_EQ(ui.charger_test_stage(), 4); CHECK_EQ(ui.charger_test_busy(), false); CHECK_EQ(g_stub.rd_run, false);
@@ -3279,7 +3271,7 @@ static void rd_fixture() { fixture(); g_stub.pm.vbus_mv = 0; g_stub.vbus_on_rd =
 // The Cable step with one row picked (the pick advances): the Review page with that identity chosen.
 static void review_with(Ui& ui, int row, uint32_t now = 1200) {
     cable(ui, now); pick_row(ui, row, now);
-    CHECK_EQ(ui.charger_test_stage(), 4); CHECK_EQ(ui.charger_test_cursor(), 1);
+    CHECK_EQ(ui.charger_test_stage(), 4); CHECK_EQ(ui.charger_test_cursor(), 0);
 }
 static void test_cable_list_rows_and_default() {
     fixture(); g_stub.lib = {saved(1), saved(2)};
@@ -5649,7 +5641,7 @@ static void test_view_says_what_the_wizard_shows() {
     { // the Tests step: stage 0, the rows of the list, the footer's words
         fixture(); Ui ui; open(ui); ui.tick(1200);
         const auto v = ui.charger_test_view();
-        CHECK_EQ(v.stage, 0); CHECK_EQ(v.cursor, 0); CHECK_EQ(v.on_screen, true); CHECK_EQ(v.rows >= 5, true);
+        CHECK_EQ(v.stage, 0); CHECK_EQ(v.cursor, 1); CHECK_EQ(v.on_screen, true); CHECK_EQ(v.rows >= 6, true);
         CHECK_STR(view_text(v).c_str(), "Picked: All tests");
         CHECK_EQ(footer_says("Picked: All tests", kText), true);   // the same words are on the panel
         CHECK_EQ(v.confirming, false); CHECK_EQ(v.card_no, 0); CHECK_EQ(v.delta_n, 0);
@@ -5657,7 +5649,7 @@ static void test_view_says_what_the_wizard_shows() {
     { // Review: the preview counts, the footer, then the confirmation window with its timer
         fixture(); Ui ui; open(ui); review(ui); ui.tick(1300);
         auto v = ui.charger_test_view();
-        CHECK_EQ(v.stage, 4); CHECK_EQ(v.rows, 2);   // Level, START
+        CHECK_EQ(v.stage, 4); CHECK_EQ(v.rows, 1);   // START
         CHECK_EQ(v.preview.runnable > 0, true); CHECK_EQ(v.preview.refusal, ct::Reason::None);
         CHECK_EQ(v.confirming, false); CHECK_EQ(v.confirm_left_ms, 0u);
         CHECK_STR(view_text(v).c_str(), "Check the other port");
@@ -6127,7 +6119,7 @@ int main() {
     test_avs_sweep_is_a_selection_bit();
     test_avs_sweep_row_follows_the_only_sweep_kind();
     test_the_default_run_is_medium();
-    test_review_level_row_cycles_and_counts();
+    test_depth_row_cycles_and_shows_on_review();
     test_an_old_journal_resumes_without_the_default_sweep();
     test_self_powered_review_note(); test_review_carries_the_other_port_warning(); test_phantom_evidence_does_not_refuse_a_run_but_a_load_does(); test_self_powered_run_is_on_the_card(); test_a_cable_read_once_stays_with_the_run();
     test_pps_wire_headroom_note();

@@ -61,7 +61,7 @@ static void test_label_sets() {
         {"Back", "Up", "Bench",  "Dn"},           // Lines
         {"Back", "Up", "Open",   "Dn"},           // the Bench
         {"Back", "Up", "Open",   "Dn"},           // Settings
-        {"Back", "Up", "Open",   "Dn"},           // Connection (Charger place): first action row focused
+        {"Back", "Up", "Refresh", "Dn"},          // Connection (Charger place): starts at top of facts (OK = Read again)
         {"Back", "Up", "Share*", "Dn"},           // Diag (a submenu of Tools): long OK shares the log
     };
     static constexpr uint8_t kPages[8] = {0, 1, 2, 3, 4, 5, kPdPage, kDiagPage};
@@ -111,7 +111,9 @@ static void test_global_paging() {
     ui.context().keep.place_sel[static_cast<int>(bench::Place::Charger)] = 0;
     ui.on_button(Button::Ok, ButtonEvent::Short, t);
     CHECK_EQ(ui.menu() == Menu::Connection, 1);                       // the Charger place page over the Bench
-    ui.on_button(Button::Ok, ButtonEvent::Short, t);
+    ui.tick(t += 20);
+    while (ui.connection_page().action_row() < 0) ui.on_button(Button::Plus, ButtonEvent::Short, t += 10);
+    ui.on_button(Button::Ok, ButtonEvent::Short, t += 10);
     CHECK_EQ(ui.page() == Page::ChargerTest, 1);
     ui.on_button(Button::Back, ButtonEvent::Short, t);
     CHECK_EQ(ui.page() == Page::Tools, 1);
@@ -382,10 +384,11 @@ static void test_cable_tab_save_and_list() {
     g_stub.em.num_vdos = 5;
     g_stub.em.spec_rev = 2;
     g_stub.em.raw_vdos = {0xFF00A041, (3u << 27) | 0x05ACu, 0, 0x12340005, (2u << 21) | (3u << 9) | (2u << 5)};
-    ui.goto_page(kPdPage + 1, 20000);                       // Cable place (Read e-marker focused by default)
+    ui.goto_page(kPdPage + 1, 20000);                       // Cable place (starts at top of facts)
     ui.tick(20050);
     CHECK_STR(label(ui, Button::Ok), "Read");
-    ui.on_button(Button::Plus, ButtonEvent::Short, 20150);  // Save cable
+    uint32_t ct = 20100;
+    while (ui.connection_page().action_row() < 1) ui.on_button(Button::Plus, ButtonEvent::Short, ct += 10);   // Save cable
     CHECK_STR(label(ui, Button::Ok), "Save");
     ui.on_button(Button::Ok, ButtonEvent::Short, 20300);    // direct, no confirmation, no address
     CHECK_EQ(g_stub.lib_saves, 1);
@@ -856,7 +859,14 @@ static int act_row(bench::Place p, int tool) {
 static void open_act(Ui &ui, bench::Place p, int tool, uint32_t t) {
     ui.context().keep.place_sel[static_cast<int>(p)] = 0;
     ui.open_place(p, t);
-    for (int i = 0; i < act_row(p, tool); i++) ui.on_button(Button::Plus, ButtonEvent::Short, t + 5);
+    ui.tick(t + 2);
+    const int target = act_row(p, tool);
+    if (ui.menu() == Menu::Connection) {
+        int guard = 32;
+        while (ui.connection_page().action_row() < target && guard-- > 0) ui.on_button(Button::Plus, ButtonEvent::Short, t + 5);
+    } else {
+        for (int i = 0; i < target; i++) ui.on_button(Button::Plus, ButtonEvent::Short, t + 5);
+    }
     ui.on_button(Button::Ok, ButtonEvent::Short, t + 10);
 }
 

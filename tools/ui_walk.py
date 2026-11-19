@@ -25,13 +25,12 @@ import k2_lock
 import k2_remote as kr
 
 DEFAULT_MASK = 0x38FFFF     # charger_test::kDefaultAlgorithms: every algorithm selected except the three revision rows (Class B included)
-# Setup lists, 0-based. The Tests step ("algorithms"): rows 0 All tests, 1 PD only, 2 Legacy, 3 Vendor, 4 Custom...,
-# 5 Last results; a preset pick advances to Cable. The Custom list: rows 0..5 are the families, 6 Done.
-# A list's top row (Custom, a family group): NEXT_ROW is kept as its name. Review has two rows, 0 Level and 1 START, and opens
-# on START (kLevelRow / kStartRow in src/ui/ui_charger_test.cpp).
+# Setup lists, 0-based. The Tests step ("algorithms"): rows 0 Depth, 1 All tests, 2 PD only, 3 Legacy, 4 Vendor, 5 Custom...,
+# 6 Last results; a preset pick advances to Cable (and enters on All tests). The Custom list: rows 0..5 are the families, 6 Done.
+# A list's top row (Custom, a family group): NEXT_ROW is kept as its name. Review has one row, 0 START (kStartRow in src/ui/ui_charger_test.cpp).
 NEXT_ROW = 0
-LEVEL_ROW, START_ROW = 0, 1
-ALG_ALL_ROW, ALG_CUSTOM_ROW, ALG_FAMILY_ROW = 0, 4, 0   # Tests: All tests, Custom...; Custom: the first family (Huawei)
+START_ROW = 0
+ALG_DEPTH_ROW, ALG_ALL_ROW, ALG_CUSTOM_ROW, ALG_FAMILY_ROW = 0, 1, 5, 0   # Tests: Depth, All tests, Custom...; Custom: the first family (Huawei)
 SETTLE_S = 0.8
 
 

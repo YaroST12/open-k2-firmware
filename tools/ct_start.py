@@ -324,7 +324,7 @@ def main(argv=None):
             print("\n".join(w.log))
             print("could not reach Review START", file=sys.stderr)
             return 1
-        # Sent on every start: the device keeps the last choice (Review's Level row, Settings > Test level) until it is set
+        # Sent on every start: the device keeps the last choice (Tests's Depth row, Settings > Test level) until it is set
         # again. The level sets both deep sweeps; a sweep flag after it overrides that for this run.
         level = run_level(a)
         why = send_level(link, level)

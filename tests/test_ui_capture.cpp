@@ -1581,7 +1581,8 @@ int main() {
         CHECK_EQ(g_panel[(24 + 1) * 240 + 11], k2::kBg);               // but not above the first one
         CHECK_EQ(count_colours(4, 224, 200, 238, {k2::kErrorT, k2::kCautionT}) > 0, false);   // the fact line is a fact
         ui.context().keep.place_sel[static_cast<int>(bench::Place::Charger)] = 0;
-        ui.on_button(Button::Ok, ButtonEvent::Short, 31200);           // the Charger place page: Test charger focused
+        ui.on_button(Button::Ok, ButtonEvent::Short, 31200);           // the Charger place page: starts at top of facts
+        ui.on_button(Button::Plus, ButtonEvent::Short, 31250);         // Dn: focus Test charger (act 0)
         test_screen(ui, "bench_charger", 31300);
         CHECK_EQ(ui.menu() == Menu::Connection, 1);
         const ConnectionPage &cp = ui.connection_page();

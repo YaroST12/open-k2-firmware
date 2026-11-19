@@ -397,7 +397,8 @@ static void test_wizard_budgets() {
     r.tick(2); r.settle();
     CHECK_EQ(r.ui.charger_test_stage(), 0);
     // Tests -> Cable: a preset pick advances. First paint of the stage, a move, a scroll, an idle tick.
-    for (int i = 0; i < 6; ++i) r.press(Button::Minus);   // back on row 0
+    for (int i = 0; i < 6; ++i) r.press(Button::Minus);   // back on row 0 (Depth)
+    r.press(Button::Plus);                                // row 1 (All tests)
     r.settle();
     r.measured([](ChargerRig &x) { x.press(Button::Ok); x.settle(); });
     std::printf("wizard tests -> cable: %u px (budget %u)\n", r.last_px, 119000u);
@@ -468,6 +469,7 @@ static void test_results_grid_budgets() {
     r.ui.goto_page(static_cast<uint8_t>(Page::ChargerTest), 1100);   // re-enter with the richer source
     r.settle();
     for (unsigned i = 0; i < 12; ++i) r.press(Button::Minus);
+    r.press(Button::Plus);                          // row 1 (All tests; row 0 is Depth)
     r.press(Button::Ok); r.tick(2); r.settle();     // the first preset: advances to Cable
     r.press(Button::Ok); r.tick(2); r.settle();     // the first cable (Off): advances to Review
     CHECK_EQ(r.ui.charger_test_stage(), 4);

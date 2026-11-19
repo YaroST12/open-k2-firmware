@@ -114,11 +114,17 @@ void ConnectionPage::enter() {
     match_valid_ = false;
     act_sel_ = -1;
     first_ = 0;
+    res_n_ = 0;
+    tot_n_ = 0;
     id_sig_ = thumb_sig_ = 0;
     sense(ctx_.now);                   // facts only; the topology window starts with this one sample
     build_items();
-    act_sel_ = ctx_.keep.place_sel[static_cast<int>(conn::place_of(tab_))];
-    if (act_sel_ + 1 >= n_items_) act_sel_ = n_items_ - 2;
+    const bool empty = conn::tab_empty(tab_, facts_) && !(tab_ == conn::Tab::Sink && (fusb302::self_powered() || fusb302::identify_current()));
+    if (empty && n_items_ > 1) {
+        act_sel_ = ctx_.keep.place_sel[static_cast<int>(conn::place_of(tab_))];
+        if (act_sel_ + 1 >= n_items_) act_sel_ = n_items_ - 2;
+        if (act_sel_ < 0) act_sel_ = 0;
+    }
 }
 
 // A place page (Charger, Cable, Device): one tab, no tab strip, the place's name and icon in the masthead.
@@ -134,18 +140,30 @@ void ConnectionPage::lock(conn::Tab t) {
     sig_valid_ = false;
 }
 
-// Up / Dn on a place page. With a row focused they move the focus (Up from the first row lets go of it: OK then reads again);
-// with none they scroll the fact table a window at a time, and Dn takes the first row once it is on screen.
+// Up / Dn on a place page: unified 1-row-at-a-time movement matching RowList. With fact rows above the actions,
+// Up / Dn scroll fact rows 1 row at a time until the action rows are reached, then step focus 1 action row at a time.
+// On an empty page (no fact rows), focus stays clamped within the action rows [0, rows - 1].
 void ConnectionPage::place_key(bool down) {
     const int rows = n_items_ - 1;
-    constexpr int step = kPlaceRows - 1;   // a window less one row: the last row seen stays on screen
     if (down) {
-        if (act_sel_ >= 0) { if (act_sel_ + 1 < rows) act_sel_++; }
-        else if (rows > 0 && res_n_ < first_ + kPlaceRows) act_sel_ = 0;
-        else first_ += step;   // place_first clamps it at the next paint
+        if (act_sel_ >= 0) {
+            if (act_sel_ + 1 < rows) act_sel_++;
+        } else if (first_ + kPlaceRows < res_n_) {
+            first_++;
+        } else if (rows > 0) {
+            act_sel_ = 0;
+        }
     } else {
-        if (act_sel_ >= 0) act_sel_--;
-        else first_ = first_ > step ? first_ - step : 0;
+        if (act_sel_ > 0) {
+            act_sel_--;
+        } else if (act_sel_ == 0) {
+            if (res_n_ > 0) {
+                act_sel_ = -1;
+                if (first_ > 0) first_--;
+            }
+        } else if (first_ > 0) {
+            first_--;
+        }
     }
     if (act_sel_ >= 0) ctx_.keep.place_sel[static_cast<int>(conn::place_of(tab_))] = static_cast<uint8_t>(act_sel_);
 }
@@ -1295,7 +1313,12 @@ void put_line_id(StrBuf<36> &l, uint16_t vid, uint16_t pid, const char *vendor) 
         StrBuf<12> w;
         w.put_u32(em.max_power_w).put_char('W');
         id.add(w.view(), Ident::Solid);
-        id.add(em.epr_capable ? "EPR" : "no EPR", Ident::Outline);
+        if (em.epr_capable) id.add("EPR", Ident::Outline);
+        if (em.speed_str && em.speed_str[0]) {
+            char sb[24];
+            pdtabs::speed_short(sb, em.speed_str);
+            if (sb[0] && sb[0] != '?') id.add(sb, Ident::Outline);
+        }
         put_line_id(id.line, em.vid, em.pid, em.vendor_str);
         const std::string_view kind = em.is_active ? ", active" : ", passive";
         if (id.line.view().size() + kind.size() <= 35) id.line.put(kind);
@@ -1362,6 +1385,20 @@ void put_line_id(StrBuf<36> &l, uint16_t vid, uint16_t pid, const char *vendor) 
         StrBuf<12> o;
         o.put(p && p->type == pd::PdoType::Pps ? "PPS" : p && p->type == pd::PdoType::Avs ? "AVS" : "PDO").put_u32(uint32_t(r.want_pos));
         id.add(o.view(), Ident::Outline);
+        if (d.iq_ok) {
+            const pd::IqStatus &iq = fusb302::interrogate_status();
+            const pd::ExtInfo &ext = fusb302::ext();
+            const pd::BatteryCaps &bat = iq.battery.valid ? iq.battery : ext.battery;
+            const pd::BatteryStatus &bst = iq.battery_status.valid ? iq.battery_status : ext.battery_status;
+            if (bst.valid && !bst.invalid_ref && bst.present) {
+                const int soc = pd::battery_soc_pct(bat, bst);
+                if (soc >= 0) {
+                    StrBuf<8> sc;
+                    sc.put_u32(static_cast<uint32_t>(soc)).put_char('%');
+                    id.add(sc.view(), bst.charging == 0 ? Ident::Ok : Ident::Outline);
+                }
+            }
+        }
         id.line.put("Asks ").put_u32(r.want_mw / 1000).put("W of ").put_u32(r.src_max_mw / 1000).put("W offered");
         return;
     }
@@ -1393,11 +1430,13 @@ struct PlaceList {
 };
 using BuildRowsFn = void (*)(Rows &, const void *);
 [[gnu::noinline]] bool paint_place_list(const Surface &c, const std::array<conn::Item, conn::kMaxItems> &items, int n_items,
-                                        int act_sel, bool full, bool dim, PlaceList s, BuildRowsFn build, const void *ctx) {
+                                        int &act_sel, bool full, bool dim, PlaceList s, BuildRowsFn build, const void *ctx) {
     Rows R;
     R.reset(Rows::kCountOnly);
     build(R, ctx);
     const int results = R.total;
+    // Empty page: keep focus on the first action row (matches RowList).
+    if (results == 0 && act_sel < 0 && n_items > 1) act_sel = 0;
     add_extras(R, items, n_items, act_sel);
     const int total = R.total;
     s.first = place_first(s.first, act_sel >= 0 ? results + act_sel : -1, total);
@@ -1515,6 +1554,7 @@ bool ConnectionPage::paint_body_locked(const void *tab_data, bool dim) {
     PaintBudget *const bg = ctx_.budget;
     const bool full = body_ != Body::Rows || body_tab_ != tab_;
     if (full) {
+        if (body_ == Body::Empty) { first_ = 0; act_sel_ = -1; }
         body_ = Body::Rows; body_tab_ = tab_;
         row_sig_.fill(0); body_n_ = 0; tail_cleared_ = ctx_.blank; close_done_ = false;
         body_clear_y_ = kFooterY; id_sig_ = thumb_sig_ = 0;
@@ -1542,6 +1582,7 @@ bool ConnectionPage::paint_no_pd_locked(const char *line, uint32_t rp_ma) {
     PaintBudget *const bg = ctx_.budget;
     const bool full = body_ != Body::NoPd || body_tab_ != tab_;
     if (full) {
+        if (body_ == Body::Empty) { first_ = 0; act_sel_ = -1; }
         body_ = Body::NoPd; body_tab_ = tab_;
         row_sig_.fill(0); body_n_ = 0; tail_cleared_ = ctx_.blank; close_done_ = false;
         body_clear_y_ = kFooterY; id_sig_ = thumb_sig_ = 0;
@@ -1773,17 +1814,20 @@ void ConnectionPage::update(uint32_t now_ms) {
     const bool empty = conn::tab_empty(tab_, facts_) && !(tab_ == conn::Tab::Sink && (fusb302::self_powered() || fusb302::identify_current()));
     if (empty) {
         match_valid_ = false;
-        uint32_t h = mix_u32(2166136261u, uint32_t(tab_) | uint32_t(facts_.topo) << 4 | 1u << 8 | uint32_t(facts_.inline_sink) << 9
-                                      | uint32_t(facts_.wait) << 10 | uint32_t(facts_.open_cc_mv) << 12
-                                      | uint32_t(facts_.wake_port_off) << 24
-                                      | uint32_t(facts_.vbus_mv >= raguard::kVbusAttachedMv) << 25);
-        h = mix_u32(h, uint32_t(facts_.cable_fact));
-        h = mix_u32(h, asig);
+        uint32_t h_base = mix_u32(2166136261u, uint32_t(tab_) | uint32_t(facts_.topo) << 4 | 1u << 8 | uint32_t(facts_.inline_sink) << 9
+                                            | uint32_t(facts_.wait) << 10 | uint32_t(facts_.open_cc_mv) << 12
+                                            | uint32_t(facts_.wake_port_off) << 24
+                                            | uint32_t(facts_.vbus_mv >= raguard::kVbusAttachedMv) << 25);
+        h_base = mix_u32(h_base, uint32_t(facts_.cable_fact));
+        const uint32_t h = mix_u32(h_base, asig);
         if (!body_pending_ && sig_valid_ && h == sig_) return;
         const bool redraw = !sig_valid_;
         body_pending_ = true;
-        if (paint_empty(redraw)) {
-            sig_ = h;
+        const bool painted_all = paint_empty(redraw);
+        const uint32_t new_asig = actions_sig();
+        cheap_sig_ = mix_u32(c_base, new_asig);   // reflect any act_sel_ / first_ adjustment done by paint_place_list()
+        if (painted_all) {
+            sig_ = mix_u32(h_base, new_asig);
             sig_valid_ = true;
             body_pending_ = false;
         }

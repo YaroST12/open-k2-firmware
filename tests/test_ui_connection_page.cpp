@@ -13,6 +13,7 @@
 #include "fake_lcd.h"
 #include "ui_stubs.h"
 #include "k2/ui/ui.hpp"
+#include "k2/ui/kit.hpp"
 #include "k2/ui/ui_pages.hpp"
 #include "k2/ui/ui_style.hpp"
 #include "ui_nav.h"
@@ -1188,7 +1189,7 @@ static void test_single_tools_lock_one_tab() {
     CHECK_EQ(cp(ui).action_row(), 5);                                  // stops on the last of the six rows (Loop probe)
     CHECK_STR(ok_label(ui), "Open");
     for (int i = 0; i < 10; i++) ui.on_button(Button::Minus, ButtonEvent::Short, 20300 + i * 10);
-    CHECK_EQ(cp(ui).action_row(), -1);                                 // Up past the first: no row, OK reads the e-marker
+    CHECK_EQ(cp(ui).action_row(), 0);                                  // empty page: clamped on first action row (Read e-marker)
     CHECK_STR(ok_label(ui), "Read");
     ui.on_button(Button::Back, ButtonEvent::Short, 20500);
     CHECK_EQ(int(ui.menu_depth()), 0);
@@ -1199,7 +1200,8 @@ static void test_single_tools_lock_one_tab() {
     ui.tick(21050);
     CHECK_STR(ok_label(ui), "Open");                                   // Test charger
     ui.on_button(Button::Minus, ButtonEvent::Short, 21060);
-    CHECK_STR(ok_label(ui), "Refresh");                                // no row: read the charger again
+    CHECK_EQ(cp(ui).action_row(), 0);                                  // empty page: stays clamped on row 0
+    CHECK_STR(ok_label(ui), "Open");                                   // still Test charger
     ui.open_place(bench::Place::Device, 21100);                        // a new place, not a tab switch
     ui.tick(21150);
     CHECK_EQ(int(cp(ui).tab()), int(conn::Tab::Sink));
@@ -1443,6 +1445,146 @@ static void test_device_place_standalone_and_self_powered_identify() {
     }
 }
 
+static void test_place_unified_one_row_scrolling() {
+    // 1. Empty place page: opens at action_row() == 0 and stays clamped at 0 on Minus.
+    {
+        Ui &ui = fresh_ui();
+        uint32_t t = 20000;
+        ui.open_place(bench::Place::Cable, t);
+        settle(ui, t);
+        CHECK_EQ(cp(ui).result_rows(), 0);
+        CHECK_EQ(cp(ui).window_first(), 0);
+        CHECK_EQ(cp(ui).action_row(), 0);
+        ui.on_button(Button::Minus, ButtonEvent::Short, t += 100);
+        settle(ui, t);
+        CHECK_EQ(cp(ui).window_first(), 0);
+        CHECK_EQ(cp(ui).action_row(), 0);
+    }
+
+    // 2. Populated Cable place with >= 7 fact rows (8 rows: ID, Speed, Current, Voltage, EPR, Type, Length, Answered):
+    //    - Opening starts at window_first() == 0, action_row() == -1.
+    //    - Plus scrolls window_first() 1 row at a time until all fact rows are visible, then focuses action_row() == 0, 1, ...
+    //    - Minus steps back 1 action row at a time, then from action_row() == 0 with window_first() > 0 immediately
+    //      unfocuses AND decrements window_first() by 1 (no dead press), scrolling back to 0.
+    Ui &ui = fresh_ui();
+    make_inline(ui, 50000);
+    g_stub.pm_online = true;
+    pd::Emarker &em = g_stub.em;
+    em.valid = true; em.vid = 0x2E99; em.vendor_str = "Baseus"; em.speed_str = "USB 2.0"; em.latency_str = "<10 ns (~1 m)";
+    em.max_current_a = 5; em.max_voltage_v = 20; em.max_power_w = 100;
+    g_stub.cable_ans = emk_variant::answered_from(2, 1);
+    g_stub.cable_seq++;
+    uint32_t t = 51000;
+    ui.tick(t);
+    ui.open_place(bench::Place::Cable, t += 100);
+    settle(ui, t);
+
+    const int res = cp(ui).result_rows();
+    CHECK(res >= 8);
+    CHECK_EQ(cp(ui).window_first(), 0);
+    CHECK_EQ(cp(ui).action_row(), -1);
+
+    // Scroll down 1 fact row at a time until all fact rows are visible (first == res - kPlaceRows).
+    const int max_fact_first = res - ConnectionPage::kPlaceRows;
+    for (int f = 1; f <= max_fact_first; f++) {
+        ui.on_button(Button::Plus, ButtonEvent::Short, t += 100);
+        settle(ui, t);
+        CHECK_EQ(cp(ui).window_first(), f);
+        CHECK_EQ(cp(ui).action_row(), -1);
+    }
+
+    // Next Plus focuses action_row() == 0, then 1.
+    ui.on_button(Button::Plus, ButtonEvent::Short, t += 100);
+    settle(ui, t);
+    CHECK_EQ(cp(ui).action_row(), 0);
+    CHECK_EQ(cp(ui).window_first(), max_fact_first + 1);
+
+    ui.on_button(Button::Plus, ButtonEvent::Short, t += 100);
+    settle(ui, t);
+    CHECK_EQ(cp(ui).action_row(), 1);
+    CHECK_EQ(cp(ui).window_first(), max_fact_first + 2);
+
+    // Minus steps back 1 action row at a time.
+    ui.on_button(Button::Minus, ButtonEvent::Short, t += 100);
+    settle(ui, t);
+    CHECK_EQ(cp(ui).action_row(), 0);
+
+    // Minus from action_row() == 0 with window_first() > 0 immediately unfocuses AND decrements window_first() by 1.
+    const int wf_before = cp(ui).window_first();
+    CHECK(wf_before > 0);
+    ui.on_button(Button::Minus, ButtonEvent::Short, t += 100);
+    settle(ui, t);
+    CHECK_EQ(cp(ui).action_row(), -1);
+    CHECK_EQ(cp(ui).window_first(), wf_before - 1);
+
+    // Minus scrolls back 1 row at a time to 0.
+    for (int f = wf_before - 2; f >= 0; f--) {
+        ui.on_button(Button::Minus, ButtonEvent::Short, t += 100);
+        settle(ui, t);
+        CHECK_EQ(cp(ui).action_row(), -1);
+        CHECK_EQ(cp(ui).window_first(), f);
+    }
+    // At top: Minus stays at 0, -1.
+    ui.on_button(Button::Minus, ButtonEvent::Short, t += 100);
+    settle(ui, t);
+    CHECK_EQ(cp(ui).window_first(), 0);
+    CHECK_EQ(cp(ui).action_row(), -1);
+    g_stub.em = {}; g_stub.cable_ans = {};
+}
+
+static void test_cable_identity_positive_chips_and_no_trunc() {
+    Ui &ui = fresh_ui();
+    make_inline(ui, 50000);
+    g_stub.pm_online = true;
+    pd::Emarker &em = g_stub.em;
+    em.valid = true; em.epr_capable = false;
+    em.vid = 0x2E99; em.vendor_str = "Baseus"; em.speed_str = "USB 2.0"; em.latency_str = "<10 ns (~1 m)";
+    em.max_current_a = 5; em.max_voltage_v = 20; em.max_power_w = 100;
+    uint32_t t = 51000;
+    ui.tick(t);
+    ui.open_place(bench::Place::Cable, t += 100);
+    settle(ui, t);
+#ifdef K2_TRUNC_LOG
+    CHECK_EQ(k2::trunc::failures(), 0);
+#endif
+    // Verify the painted identity header matches positive chips only ([100W] [2.0]) and NOT "no EPR".
+    const Surface s = ui.context().content;
+    const int bw = s.w, bh = kit::kPlaceListY - kit::kIdY, by = kit::kIdY;
+    std::vector<uint16_t> orig(size_t(bw * bh));
+    for (int y = 0; y < bh; y++)
+        std::memcpy(&orig[size_t(y * bw)], &g_panel[size_t((by + y) * LCD_WIDTH + s.x)], size_t(bw) * sizeof(uint16_t));
+
+    auto matches_ident = [&](const kit::Ident &id) -> bool {
+        uint32_t sig = 0;
+        kit::paint_identity(s, id, true, sig);
+        bool eq = true;
+        for (int y = 0; y < bh && eq; y++)
+            if (std::memcmp(&orig[size_t(y * bw)], &g_panel[size_t((by + y) * LCD_WIDTH + s.x)], size_t(bw) * sizeof(uint16_t)) != 0)
+                eq = false;
+        for (int y = 0; y < bh; y++)
+            std::memcpy(&g_panel[size_t((by + y) * LCD_WIDTH + s.x)], &orig[size_t(y * bw)], size_t(bw) * sizeof(uint16_t));
+        return eq;
+    };
+
+    kit::Ident expected;
+    expected.dim = ui.link().cable_stale();
+    expected.head.put("5A 20V");
+    expected.add("100W", kit::Ident::Solid);
+    expected.add("2.0", kit::Ident::Outline);
+    expected.line.put("2E99:0000 Baseus, passive");
+    CHECK(matches_ident(expected));
+
+    kit::Ident with_no_epr;
+    with_no_epr.dim = ui.link().cable_stale();
+    with_no_epr.head.put("5A 20V");
+    with_no_epr.add("100W", kit::Ident::Solid);
+    with_no_epr.add("no EPR", kit::Ident::Outline);
+    with_no_epr.line.put("2E99:0000 Baseus, passive");
+    CHECK(!matches_ident(with_no_epr));
+
+    g_stub.em = {};
+}
+
 int main() {
     test_sink_tab_pd_body_shows_the_raw_vooc_note();
     test_sink_tab_no_pd_shows_the_raw_vooc_note();
@@ -1487,5 +1629,7 @@ int main() {
     test_device_place_inline_interrogate_and_readout();
     test_device_place_inline_interrogate_with_sink_pdos();
     test_device_place_standalone_and_self_powered_identify();
+    test_place_unified_one_row_scrolling();
+    test_cable_identity_positive_chips_and_no_trunc();
     return test_report("test_ui_connection_page");
 }

@@ -73,11 +73,11 @@ constexpr uint32_t kFamilies[] = {
 constexpr const char* kFamilyNames[] = {"Huawei / Honor", "Samsung", "OPPO / vivo", "Xiaomi / Redmi", "USB PD", "QC / UFCS"};
 // A family name is a Custom / Steps row text (16 px, x28 up to the count tail) and the Steps header title ("<name> steps").
 static_assert(all_fit(kFamilyNames, kSmallAdvPx, 112), "a family name is wider than its row");
-// Tests rows (wizard step 1): 0..3 the presets, 4 "Custom...", 5 "Last results" once a run exists.
+// Tests rows (wizard step 1): 0 Depth, 1..4 the presets, 5 "Custom...", 6 "Last results" once a run exists.
 // Custom rows: 0..kFamilyCount-1 the families, then "Done" (row kFamilyCount).
-constexpr int kFamilyCount = 6, kPresets = 4, kCustomRow = 4, kViewRow = 5;
-// Review: the Level row above START (index order = screen order); START is where the stage opens and where the remote lands.
-constexpr int kLevelRow = 0, kStartRow = 1;
+constexpr int kFamilyCount = 6, kDepthRow = 0, kPresetFirst = 1, kPresets = 4, kCustomRow = 5, kViewRow = 6;
+// Review: only START (index 0).
+constexpr int kStartRow = 0;
 // The presets are subsets of "All tests" (the default set, Class B included): PD = the PD family (its Xiaomi rows ride
 // along), Legacy = every D+/D- family (OEM vendor modes + QC / UFCS), Vendor modes = the OEM D+/D- families only.
 constexpr const char* kPresetNames[kPresets] = {"All tests", "PD only", "Legacy only", "Vendor modes"};
@@ -90,11 +90,16 @@ static_assert(all_fit(kPresetNames, kSmallAdvPx, 150), "a preset name is wider t
 // stage of its own (27 characters at most): the second press goes straight on.
 constexpr const char* kReattachConfirm = "Press again, K2 blinks once";
 static_assert(fits_px(kSmallAdvPx, kReattachConfirm, 216), "the re-attach confirmation is wider than the footer");
-// Review's footer while the cursor is on the Level row: what the level does (charger_test::Level order: Medium, Light, Deep).
+// Depth row's note on Tests (charger_test::Level order: Medium, Light, Deep).
 // A build with the PD spec stage (K2_PDSPEC) says so on Deep; the default image has no such stage and keeps the old words.
+constexpr const char *kLevelItems[ct::kLevelCount] = {"Light", "Medium", "Deep"};
+constexpr int level_segment(ct::Level l) { return l == ct::Level::Light ? 0 : l == ct::Level::Medium ? 1 : 2; }
+static_assert(level_segment(ct::next_level(ct::Level::Light)) == 1 && level_segment(ct::next_level(ct::Level::Medium)) == 2 &&
+              level_segment(ct::next_level(ct::Level::Deep)) == 0, "OK steps the level to the right and wraps");
+static_assert(all_fit(kLevelItems, kSmallAdvPx, 18 * kSmallAdvPx), "a Level word is wider than its value cell");
 constexpr const char *kLevelNotes[ct::kLevelCount] = {"Medium: levels, no sweeps", "Light: lists offers at 5V",
                                                        specsec::kBuilt ? "Deep: + sweeps, steps, spec" : "Deep: + sweeps and steps"};
-static_assert(all_fit(kLevelNotes, kSmallAdvPx, 216), "a level note is wider than the footer");
+static_assert(all_fit(kLevelNotes, kLabelAdv, kit::kNoteMaxPx), "a level note is wider than the row note");
 const char *level_note(ct::Level l) { return kLevelNotes[unsigned(l) < ct::kLevelCount ? unsigned(l) : 0]; }
 // A row whose engine times its own pulses stops the screen for the length of the handshake (the engine window the LCD idle hook
 // does not serve, Runner::paint_blocked; Engine::blocks_paint names the protocols). One Info footer line says why, painted before
@@ -1500,7 +1505,8 @@ void ChargerTestSession::set_level(ct::Level l) {
 void ChargerTestSession::enter() {
     ctx_.cables.sync();
     entering_ = true;   // the screen still shows the previous page, which the redraw erases: no body wipe here
-    set_stage(resume_pending_ ? Stage::Resume : Stage::Algorithms);
+    if (resume_pending_) set_stage(Stage::Resume);
+    else set_stage(Stage::Algorithms, kPresetFirst);
     entering_ = false;
 }
 void ChargerTestSession::set_stage(Stage s, int selection) {
@@ -1827,7 +1833,7 @@ int ChargerTestPage::row_count() const {
         return 2 + (pps_pts ? 1 : 0) + (avs_pts ? 1 : 0);
     }
     case Stage::Cable: return ctx_.cables.count();
-    case Stage::Review: return 2;   // Level, START
+    case Stage::Review: return 1;   // START
     case Stage::Running: return static_cast<int>(s_.runner_.steps().size());
     case Stage::Results: return delta_row() + (s_.delta_n_ ? 1 : 0);
     case Stage::Changes: return static_cast<int>(s_.delta_n_);
@@ -2072,7 +2078,6 @@ static FooterTone spec_footer(StrBuf<32>& f, int check, const specsec::Cell& c, 
             return FooterTone::Caution;
         }
         if (!s_.summary_.runnable) { f.put("Nothing to run: all skip"); return FooterTone::Caution; }
-        if (s_.selection_ == kLevelRow) { f.put(level_note(s_.options_.level)); return FooterTone::Info; }
         if (s_.confirming_) { f.put(s_.confirm_reattach_ ? kReattachConfirm : "Press again to start"); return FooterTone::Caution; }
         if (in.cable_mv == 20000 && s_.summary_.max_mv == 21000) { f.put("PPS: 21V on 20V wire"); return FooterTone::Info; }
         if (self_supplied()) { f.put("Self-powered: VBUS stays up"); return FooterTone::Info; }
@@ -2277,13 +2282,19 @@ void ChargerTestPage::list_row(int index, bool focused, kit::RowSpec &out) {
     row_note_.clear();
     switch (s_.stage_) {
     case Stage::Algorithms:
-        if (index < kPresets) {
+        if (index == kDepthRow) {
+            out.text = "Depth";
+            out.tail = kLevelItems[level_segment(s_.options_.level)];
+            out.tail_color = kFocus;
+            if (focused) out.note = level_note(s_.options_.level);
+        } else if (index < kCustomRow) {
+            const int p = index - kPresetFirst;
             out.marker = kit::Marker::Radio;
-            out.state = index + 1 == preset_row_of(s_.options_.selected);
-            out.text = kPresetNames[index];
-            row_tail_.put_u32(entries(kPresetMasks[index]));
+            out.state = p + 1 == preset_row_of(s_.options_.selected);
+            out.text = kPresetNames[p];
+            row_tail_.put_u32(entries(kPresetMasks[p]));
             out.tail = row_tail_.view();
-            if (focused) out.note = kPresetNotes[index];
+            if (focused) out.note = kPresetNotes[p];
         } else if (index == kCustomRow) {
             const bool custom = preset_row_of(s_.options_.selected) == 0;
             out.marker = kit::Marker::Radio;
@@ -2529,21 +2540,12 @@ static_assert(all_fit(kRdOn, kSmallAdvPx, 190), "a Waiting checklist item is wid
 // The Review table: five rows of 26 px from the body top, the key at x6 and the value from x72 (18 cells).
 constexpr kit::KvLayout kKv{kit::kBodyY, kit::kRowH, 6, nullptr, nullptr, 72, 18, Align::Left};
 // Review always carries the other-port warning: the alert band (36 px + its stripe, to y 66), two S16 lines under it, then the
-// two rows (Tests, Spoof at an 18 px pitch), the Level control (a label row and a segment bar, kit::kSegH = 34 px) and the 46 px
-// START ticket. The Peak and Power rows were dropped for the room; the two warning lines moved to a 16 px pitch and the rows' pitch
-// went from 22 to 18 to make room for the Level control.
+// three rows (Tests, Depth, Spoof at a 22 px pitch) and the 46 px START ticket.
 constexpr int16_t kWarnLine1Y = 66, kWarnLine2Y = 82;
-constexpr kit::KvLayout kReviewKv{100, 18, 6, nullptr, nullptr, 72, 18, Align::Left};
-constexpr int16_t kReviewLevelY = 136, kReviewCellY = 174, kReviewCellH = 46;
-static_assert(kReviewLevelY == 100 + 2 * 18 && kReviewLevelY + kit::kSegH + 4 <= kReviewCellY && kReviewCellY + kReviewCellH == kFooterY - 2,
-              "Review: the table, the Level control and START stack above the footer");
-constexpr int kReviewLevelCell = 2;
-// The segments run Light, Medium, Deep (the order OK steps them in); Level's wire values are 0 Medium, 1 Light, 2 Deep.
-constexpr const char *kLevelItems[ct::kLevelCount] = {"Light", "Medium", "Deep"};
-constexpr int level_segment(ct::Level l) { return l == ct::Level::Light ? 0 : l == ct::Level::Medium ? 1 : 2; }
-static_assert(level_segment(ct::next_level(ct::Level::Light)) == 1 && level_segment(ct::next_level(ct::Level::Medium)) == 2 &&
-              level_segment(ct::next_level(ct::Level::Deep)) == 0, "OK steps the picked segment to the right and wraps");
-static_assert(all_fit(kLevelItems, kSmallAdvPx, kit::seg_span(224, ct::kLevelCount, 0).w - 4), "a Level segment is wider than its word");
+constexpr kit::KvLayout kReviewKv{102, 22, 6, nullptr, nullptr, 72, 18, Align::Left};
+constexpr int16_t kReviewCellY = 174, kReviewCellH = 46;
+static_assert(102 + 3 * 22 <= kReviewCellY && kReviewCellY + kReviewCellH == kFooterY - 2,
+              "Review: the table and START stack above the footer");
 // The Detail table: under the verdict band, the value column at x92 (16 cells).
 constexpr kit::KvLayout kDet{60, kit::kRowH, 6, nullptr, nullptr, 92, 16, Align::Left};
 
@@ -2703,6 +2705,7 @@ void ChargerTestPage::paint_review() {
     // the PD spec stage's checks (Deep, K2_PDSPEC) are tests too
     buf.put_u32(s_.summary_.runnable + s_.summary_.spec_checks).put(" run, ").put_u32(s_.summary_.skipped).put(" skip");
     if (!kv(0, "Tests", buf.view(), s_.summary_.runnable ? kText : kCaution)) return;
+    if (!kv(1, "Depth", kLevelItems[level_segment(s_.options_.level)], kText)) return;
 
     buf.clear();
     const auto sel = ctx_.cables.selected();
@@ -2712,19 +2715,7 @@ void ChargerTestPage::paint_review() {
         buf.put(row_.text.view());
         if (!row_.rating.empty()) buf.put_char(' ').put(row_.rating);
     }
-    if (!kv(1, "Spoof", buf.view(), kText)) return;
-
-    // The Level control (the one thing the cursor can stand on besides START; OK steps Light -> Medium -> Deep -> Light).
-    {
-        const bool focus = s_.selection_ == kLevelRow;
-        const int lv = level_segment(s_.options_.level);
-        const uint32_t h = mix_u32(mix_u32(mix_init(), static_cast<uint32_t>(lv)), focus ? 7u : 3u) | 1u;
-        if (h != cell_sig_[kReviewLevelCell]) {
-            if (pbg && !pbg->admit(static_cast<int>(c.w) * kit::kSegH, true)) return;
-            cell_sig_[kReviewLevelCell] = h;
-            kit::draw_segmented(c, kReviewLevelY, "Level", kLevelItems, ct::kLevelCount, lv, focus);
-        }
-    }
+    if (!kv(2, "Spoof", buf.view(), kText)) return;
 
     if (s_.confirming_) {
         const int32_t left = std::max<int32_t>(0, static_cast<int32_t>(s_.confirm_until_ - ctx_.now));
@@ -2733,7 +2724,7 @@ void ChargerTestPage::paint_review() {
         buf.put("closes in ").put_u32(static_cast<uint32_t>((left + 999) / 1000)).put_char('s');
         action_.draw_armed("CONFIRM", buf.view(), permille, pbg);
     } else {
-        action_.draw_idle("START", "other port must be empty", pbg, s_.selection_ == kStartRow);
+        action_.draw_idle("START", "other port must be empty", pbg, true);
     }
 }
 
@@ -3522,7 +3513,7 @@ bool ChargerTestPage::on_event(Event e) {
         case Stage::Custom: set_stage(Stage::Algorithms, kCustomRow); break;
         case Stage::Cable: {
             const int pr = preset_row_of(s_.options_.selected);
-            set_stage(Stage::Algorithms, pr ? pr - 1 : kCustomRow);
+            set_stage(Stage::Algorithms, pr ? kPresetFirst + pr - 1 : kCustomRow);
             break;
         }
         case Stage::Review: set_stage(Stage::Cable, ctx_.cables.index_of(ctx_.cables.selected())); break;
@@ -3531,12 +3522,18 @@ bool ChargerTestPage::on_event(Event e) {
         case Stage::Detail: set_stage(Stage::Steps, s_.detail_row_); break;
         case Stage::Changes: set_stage(Stage::Results, delta_row()); break;
         case Stage::SpecDetail: set_stage(s_.spec_back_steps_ ? Stage::Steps : Stage::Results, s_.detail_row_); break;
-        default: set_stage(Stage::Algorithms); break;
+        default: set_stage(Stage::Algorithms, kPresetFirst); break;
         }
         update(ctx_.now);
         return true;
     }
     if (e.button == Button::Plus || e.button == Button::Minus) {
+        if (s_.stage_ == Stage::Review) {
+            invalidate_confirmation();
+            s_.message_.clear();
+            update(ctx_.now);
+            return true;
+        }
         if (s_.stage_ == Stage::Detail || (s_.stage_ == Stage::SpecDetail && !spec_list_on())) return true;
         const int dir = e.button == Button::Plus ? 1 : -1;
         if (s_.stage_ == Stage::Running) {   // scroll the verdict grid by hand; following resumes (paint_running) after kFollowResumeMs or at the next step
@@ -3578,9 +3575,11 @@ __attribute__((noinline)) void ChargerTestPage::ok_event() {
     }
     if (s_.runner_.busy()) return;   // BACK reads Stop while a run is live (UI_SYSTEM.md 7.13.1); OK is free
     switch (s_.stage_) {
-    case Stage::Algorithms:   // a preset picks and advances; "Custom..." opens the per-family list
-        if (s_.selection_ < kPresets) {
-            s_.options_.selected = kPresetMasks[s_.selection_];
+    case Stage::Algorithms:   // Depth cycles; a preset picks and advances; "Custom..." opens the per-family list
+        if (s_.selection_ == kDepthRow) {
+            s_.set_level(ct::next_level(s_.options_.level));
+        } else if (s_.selection_ < kCustomRow) {
+            s_.options_.selected = kPresetMasks[s_.selection_ - kPresetFirst];
             invalidate_confirmation();
             set_stage(Stage::Cable, ctx_.cables.index_of(ctx_.cables.selected()));
         } else if (s_.selection_ == kCustomRow) {
@@ -3615,10 +3614,6 @@ __attribute__((noinline)) void ChargerTestPage::ok_event() {
         set_stage(Stage::Review, kStartRow);
         break;
     case Stage::Review:
-        if (s_.selection_ == kLevelRow) {   // Light -> Medium -> Deep -> Light; the Tests row's step count follows (update_summary)
-            s_.set_level(ct::next_level(s_.options_.level));
-            break;
-        }
         if (confirm_live()) confirmed_start();   // the second press: guard, identity, then Rd and the wait last
         else open_confirmation();                // the first press: the confirm window, nothing touched
         break;
@@ -3693,13 +3688,13 @@ Strip ChargerTestPage::labels() const {
     sl::Id ok = sl::None;   // while a run is busy BACK reads Stop (UI_SYSTEM.md 7.13.1) and OK is blank
     if (!s_.runner_.busy()) {
         switch (s_.stage_) {
-        case Stage::Algorithms: ok = s_.selection_ < kPresets ? sl::Pick : sl::Open; break;
+        case Stage::Algorithms: ok = s_.selection_ == kDepthRow ? sl::Change : s_.selection_ < kCustomRow ? sl::Pick : sl::Open; break;
         case Stage::Custom:
             ok = s_.selection_ >= kFamilyCount ? sl::Next : s_.selection_ == kFamXiaomi ? sl::None : sl::ToggleOpen;
             break;
         case Stage::Group: ok = sl::SetGrp; break;
         case Stage::Cable: ok = sl::Pick; break;
-        case Stage::Review: ok = s_.selection_ == kLevelRow ? sl::Change : s_.confirming_ ? sl::Confirm : sl::Start; break;
+        case Stage::Review: ok = s_.confirming_ ? sl::Confirm : sl::Start; break;
         case Stage::Refuse: ok = sl::Start; break;
         case Stage::Waiting: break;   // BACK reads Stop
         case Stage::Results:
@@ -3719,7 +3714,7 @@ Strip ChargerTestPage::labels() const {
         }
     }
     Strip l = setup::labels(base_labels(), tests_stage(s_.stage_) ? setup::Step::Tests : setup::Step::Cable, ok);
-    if (s_.stage_ == Stage::Detail || (s_.stage_ == Stage::SpecDetail && !spec_list_on()) || s_.stage_ == Stage::Waiting) {   // nothing to move the cursor over (Review: Level and START)
+    if (s_.stage_ == Stage::Review || s_.stage_ == Stage::Detail || (s_.stage_ == Stage::SpecDetail && !spec_list_on()) || s_.stage_ == Stage::Waiting) {   // nothing to move the cursor over
         l[Button::Minus] = sl::None;
         l[Button::Plus] = sl::None;
     }

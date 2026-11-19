@@ -348,9 +348,10 @@ static void test_emarker_opener() {
     g_stub.lib_quirks = {{1, eight_rows()}};
     static Ui ui;
     ui.init(1000); ui.set_rotation(0, 1000); ui.tick(1000); ui.goto_page(static_cast<uint8_t>(Page::Tools), 1100);
-    ui.goto_page(kConnTabAlias + 1, 1200);                 // Connection, Cable place (Read e-marker focused by default)
+    ui.goto_page(kConnTabAlias + 1, 1200);                 // Connection, Cable place (starts at top of facts)
     ui.tick(1350);
-    for (int i = 0; i < 2; i++) ui.on_button(Button::Plus, ButtonEvent::Short, 1500 + i);
+    uint32_t st = 1500;
+    while (ui.connection_page().action_row() < 2) ui.on_button(Button::Plus, ButtonEvent::Short, st += 5);
     ui.on_button(Button::Ok, ButtonEvent::Short, 1550);    // Saved cables (row 2)
     CHECK(ui.menu() == Menu::Emarker);
     ui.on_button(Button::Ok, ButtonEvent::Short, 1600);    // the cable's card
@@ -517,6 +518,7 @@ static void test_charger_results_opener() {
     ui.goto_page(uint8_t(Page::ChargerTest), 1100);
     auto press = [&](Button b, std::uint32_t t) { ui.on_button(b, ButtonEvent::Short, t); };
     for (unsigned i = 0; i < charger_test::kMaxSteps; ++i) press(Button::Minus, 1200);
+    press(Button::Plus, 1200);                     // row 1: All tests (row 0 is Depth)
     press(Button::Ok, 1200);                       // Algorithms -> Cable
     press(Button::Ok, 1200);                       // Cable -> Review
     CHECK_EQ(ui.charger_test_stage(), 4);
