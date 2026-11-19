@@ -1288,7 +1288,7 @@ static void test_depth_row_cycles_and_shows_on_review() {
     CHECK_EQ(unsigned(ui.charger_test_view().preview.total) >= deep, true);
     press(ui, Button::Ok); settle(ui);
     CHECK_EQ(ui.charger_test_selection() >> 28, 0x1u);                             // Light
-    check_row_note(kDepthRow, "Checks charger offers at 5V");
+    check_row_note(kDepthRow, "Checks what the charger offers");
     const unsigned light = ui.charger_test_view().preview.runnable;
     CHECK_EQ(unsigned(ui.charger_test_view().preview.spec_checks), 0u);
     std::printf("[tests-depth] runnable: Light %u, Medium %u, Deep %u\n", light, medium, deep);

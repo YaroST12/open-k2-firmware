@@ -2230,7 +2230,7 @@ void SettingsPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
     // charger_test::Level order (Medium 0, Light 1, Deep 2): the charger test's default level and what it runs.
     static constexpr const char *kLevels[charger_test::kLevelCount] = {"Medium", "Light", "Deep"};
     static constexpr const char *kLevelNotes[charger_test::kLevelCount] = {
-        "Tests each advertised voltage", "Checks charger offers at 5V",
+        "Tests each advertised voltage", "Checks what the charger offers",
 #if K2_PDSPEC
         "Sweeps, accuracy & PD spec"
 #else
