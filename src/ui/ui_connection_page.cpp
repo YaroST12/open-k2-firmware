@@ -866,6 +866,7 @@ void put_dwh(StrBuf<28> &v, uint16_t dwh) {
     unsigned n_svids = 0;
     if (iq_ok && iq.num_svids > 0) { svids = iq.svids.data(); n_svids = iq.num_svids; }
     else if (fusb302::sink_vdm().num_svids > 0) { svids = fusb302::sink_vdm().svids.data(); n_svids = fusb302::sink_vdm().num_svids; }
+    else if (id_cur && fusb302::vdm().num_svids > 0) { svids = fusb302::vdm().svids.data(); n_svids = fusb302::vdm().num_svids; }
     if (n_svids > 0) {
         StrBuf<28> &v = R.add("SVIDs", kDim);
         for (unsigned i = 0; i < n_svids; i++) {
@@ -897,9 +898,18 @@ void put_dwh(StrBuf<28> &v, uint16_t dwh) {
                            : (id_cur && fusb302::identify_identity().valid) ? fusb302::identify_identity()
                            : fusb302::sink_vdm().identity;
     if (d.k2_sink) {   // the K2 draws the power itself
-        R.add("ID", kFaint).put("K2");
+        if (id_cur && id.valid) {
+            StrBuf<28> &v = R.add("ID");
+            conn::id_value(v, kValCells, true, id.vid, id.pid, id.vendor);
+        } else {
+            R.add("ID", kFaint).put("K2");
+        }
         R.add("Sink", kOk).put(d.k2_sink_ok ? "K2 (sink mode OK)" : "K2 (sink mode PLUS)");
         link_rows(R, d);
+        if (id_cur) {
+            if (!d.sink.empty()) put_sink_pdos(R, "Caps", d.sink);
+            sink_device_rows(R, iq_ok);
+        }
         return;
     }
     // The ID row: sniffed when neither Identify nor inline interrogation collected it.
@@ -1268,7 +1278,16 @@ void put_line_id(StrBuf<36> &l, uint16_t vid, uint16_t pid, const char *vendor) 
         return;
     }
     case conn::Tab::Sink: {
-        if (d.k2_sink) { id.head.put("K2"); id.line.put("The K2 draws the power itself"); return; }
+        if (d.k2_sink) {
+            if (fusb302::identify_current()) {
+                const pd::Identity &pid = fusb302::identify_identity();
+                if (pid.valid && pid.vendor && pid.vendor[0]) id.head.put(pid.vendor);
+                else id.head.put("Device read");
+                id.line.put("Self-powered PD read");
+                return;
+            }
+            id.head.put("K2"); id.line.put("The K2 draws the power itself"); return;
+        }
         if (!r.request_seen) {
             if (fusb302::identify_current()) {
                 const pd::Identity &pid = fusb302::identify_identity();
