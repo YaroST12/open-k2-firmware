@@ -184,7 +184,12 @@ void ConnectionPage::invalidate() {
 Strip ConnectionPage::labels() const {
     const bool share = (tab_ == conn::Tab::Source && pd::active_caps().valid) || (tab_ == conn::Tab::Cable && fusb302::emarker().valid);
     const int i = act_sel_ < 0 ? 0 : 1 + act_sel_;
-    return {{sl::Back, sl::Up, i < n_items_ ? conn::act_slot(items_[static_cast<std::size_t>(i)].act, false, share) : share ? sl::ShareLong : sl::None, sl::Dn}};
+    const bool iq_confirm = tab_ == conn::Tab::Sink && i < n_items_ && items_[static_cast<std::size_t>(i)].act == conn::Act::Identify
+                         && before(ctx_.now, iq_armed_until_);
+    const sl::Id ok = iq_confirm ? sl::Confirm
+                    : i < n_items_ ? conn::act_slot(items_[static_cast<std::size_t>(i)].act, false, share)
+                    : share ? sl::ShareLong : sl::None;
+    return {{(iq_asked_ && fusb302::interrogate_running()) ? sl::Stop : sl::Back, sl::Up, ok, sl::Dn}};
 }
 
 bool ConnectionPage::on_event(Event e) {
@@ -828,7 +833,7 @@ void put_dwh(StrBuf<28> &v, uint16_t dwh) {
         }
     }
     if (bat.design_known() || bat.last_full_known()) {
-        StrBuf<28> &v = R.add("BattCap", kDim);
+        StrBuf<28> &v = R.add("Health", kDim);
         if (bat.design_known() && bat.last_full_known()) {
             put_dwh(v, bat.last_full_dwh);
             v.put_char('/');

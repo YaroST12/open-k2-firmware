@@ -1317,7 +1317,7 @@ static void test_device_place_inline_interrogate_and_readout() {
     g_stub.iq_status.num_epr_pdos = 9;
     settle(ui, t);
     CHECK_STR(std::string(cp(ui).status_line()).c_str(), "Device read");
-    // Mfr, Rev, SKEDB, Batt, BattCap, SVIDs, EPR all added (+7 rows) with zero truncation
+    // Mfr, Rev, SKEDB, Batt, Health, SVIDs, EPR all added (+7 rows) with zero truncation
     CHECK_EQ(cp(ui).result_rows(), before_rows + 7);
 #ifdef K2_TRUNC_LOG
     CHECK_EQ(k2::trunc::failures(), 0);
