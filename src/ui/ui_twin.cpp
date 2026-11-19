@@ -1004,14 +1004,14 @@ void TwinPage::paint_detail(uint32_t now_ms) {
                 put_level(asked, e->out.mv, 'V');
                 put_level(asked, e->out.ma, 'A');
             }
+            static constexpr kit::KvLayout kInfoKv{0, kit::kInfoPitch, kit::kInfoTagX, nullptr, nullptr, kit::kInfoValueX, 21, Align::Left, true};
             const uint32_t ss = pg::mix_str(2166136261u, asked.view()) | 1u;
             if (ss != step_sig_) {
-                if (step_sig_ != 0) gfx_fill(s, 0, static_cast<int16_t>(kCellY + 4), s.w, kit::kInfoPitch, kBg);
-                kit::draw_info_row(s, static_cast<int16_t>(kCellY + 4), waking ? "Step" : "Asked", asked.view().substr(1));
+                kit::kv_row(s, kInfoKv, static_cast<int16_t>(kCellY + 4), waking ? "Step" : "Asked", asked.view().substr(1), kText);
                 step_sig_ = ss;
             }
             const uint32_t vs = pg::mix_str(2166136261u, v.view()) | 1u;
-            if (vs != vbus_sig_) kit::draw_info_row(s, static_cast<int16_t>(kCellY + 24), "VBUS", v.view(), kVolt);
+            if (vs != vbus_sig_) kit::kv_row(s, kInfoKv, static_cast<int16_t>(kCellY + 24), "VBUS", v.view(), kVolt);
             vbus_sig_ = vs;
             vbus_next_ = now_ms + 250;   // at most 4 updates a second
         }

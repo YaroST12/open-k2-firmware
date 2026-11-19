@@ -355,7 +355,7 @@ static void check_row_pill(int row, std::string_view tag, uint16_t color, uint16
     const int16_t py = static_cast<int16_t>(y + 1 + (kit::kRowH - 1 - kPillH) / 2);
     std::array<uint16_t, LCD_WIDTH * LCD_HEIGHT> actual;
     std::copy_n(g_panel, actual.size(), actual.begin());
-    fill_round({0, 0, 224, 240}, px0, py, pw, kPillH, 3, tint);
+    gfx_fill({0, 0, 224, 240}, px0, py, pw, kPillH, tint);
     gfx_text({0, 0, 224, 240}, kLabelFont, px0 + 4, py + 1, tag, color, tint);
     unsigned diff = 0;
     for (int yy = y; yy < y + kit::kRowH; ++yy)

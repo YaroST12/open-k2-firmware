@@ -440,18 +440,12 @@ void ConnectionPage::sense(uint32_t now_ms) {
 
 namespace {
 
-// Layout: a tab strip under the top bar (three cells of the bar's rule pitch, the active one underlined in kFocus), then
-// ONE edge-to-edge hairline list, 20 px pitch, 12 px dim key at x 6, 16 px value at x 64. The list ends at the footer
-// (kFooterY 222): nine rows fit y 42..222.
-constexpr int16_t kTabY = kit::kBodyY, kTabH = 18, kRowY0 = kTabY + kTabH, kRowPitch = 20, kValX = 64, kKeyX = 6;
+// Layout: identity block (kit::kIdY..kPlaceListY-1), then a place list of 20 px rows (12 px dim key at x 6, 16 px value
+// at x 64) ending at the footer (kFooterY 222), with a 4 px scrollbar lane on the right.
+constexpr int16_t kRowPitch = 20, kValX = 64, kKeyX = 6;
 constexpr int kMaxList = 9;
 constexpr int kValCells = (224 - kValX - 4) / 8;   // 19 cells of S16 in the value column
-static_assert(kRowY0 + kMaxList * kRowPitch <= kFooterY, "the nine rows end at the footer");
-// An empty or no-PD tab (UI_SYSTEM 5.8, 7.13): a 36 px verdict band (kSurface, a dash, the word in S24) under the tab strip,
-// ONE line of S16 under it, then (no-PD only) the measured rows from kNoPdRowY0.
-constexpr int16_t kBandH = 36, kLineDy = kBandH + 6, kListDy = kLineDy + 16 + 8;   // offsets from the body top
-constexpr int kVisRows = kMaxList;   // row slots on screen (a single tool scrolls its result + action rows through them)
-static_assert(kRowY0 + kListDy + 3 * kRowPitch <= kFooterY, "three measured rows end at the footer");
+constexpr int kVisRows = kMaxList;   // row_sig_ capacity in ConnectionPage
 static_assert(conn::kStatusCells <= static_cast<std::size_t>(kFooterCells), "the survey texts fit the footer line");
 // The Cable tab's Answered row: every orientation and table row fits the value column, and the 12 px key fits the
 // 58 px before it (6 px per cell).
@@ -1096,25 +1090,22 @@ constexpr int kPlaceSlots = (kFooterY - kPlaceListY) / kRowPitch;   // 7
 static_assert(kPlaceSlots == ConnectionPage::kPlaceRows && kPlaceSlots <= kVisRows, "a place page shows seven list rows under its identity block");
 static_assert(kValX + kValCells * 8 <= 224 - kLane, "the value column ends before the scroll lane");
 
-// The window of R (already windowed by the builder), painted from y0 down to the footer: one 20 px row per slot, a slot
-// repainted alone when its hash moved (Row D), the vacated slots cleared. The tabbed page draws a hairline on every row's top
-// and closes the table with one; a place page (`place`) has no hairlines - the first action row carries the dashed
-// perforation - and keeps the lane at the right edge for its scroll thumb. An action row: its label (x10, or x8 on a place
-// page), focused = kFocusT ground and the 3 px kFocus bar, or on a place page the inverted focus block, a tail word or the
-// chevron. Returns the rows painted.
+// The window of R (already windowed by the builder), painted from kPlaceListY down to the footer: one 20 px row per
+// slot, a slot repainted alone when its hash moved (Row D), the vacated slots cleared. The first action row carries the
+// dashed perforation, and the list keeps a 4 px lane at the right edge for its scroll thumb. An action row: its label
+// at x 8, focused = kFocusFill ground (with optional 3 px kFocusBar), a tail word or the drill chevron.
 struct ListDrawState {
     bool &tail_cleared;
-    bool &close_done;
     int16_t &clear_y;
     PaintBudget *bg = nullptr;
 };
 
-bool paint_list(const Surface &c, const Rows &R, int16_t y0, bool dim, bool blank,
-                std::array<uint32_t, kVisRows> &sig_io, uint8_t &n_io, ListDrawState &st, int &painted_out, bool place = false) {
-    const int slots = std::min(kVisRows, (kFooterY - y0) / kRowPitch);
+bool paint_list(const Surface &c, const Rows &R, bool dim,
+                std::array<uint32_t, kVisRows> &sig_io, uint8_t &n_io, ListDrawState &st) {
+    constexpr int16_t y0 = kPlaceListY;
+    constexpr int slots = kPlaceSlots;
     const int n = std::clamp(R.n, 0, slots);
-    const int16_t w = place ? static_cast<int16_t>(c.w - kLane) : c.w;
-    const int close = place ? 0 : 1;   // the closing hairline's row
+    const int16_t w = static_cast<int16_t>(c.w - kLane);
     constexpr int16_t kKeyDy = kit::row_text_y(kRowPitch, 12), kValDy = kit::row_text_y(kRowPitch, 16);
     std::array<uint32_t, kVisRows> sigs{};
     for (int i = 0; i < n; i++) {
@@ -1129,8 +1120,8 @@ bool paint_list(const Surface &c, const Rows &R, int16_t y0, bool dim, bool blan
         sigs[static_cast<std::size_t>(i)] = h | 1u;
     }
     if (!st.tail_cleared) {
-        const int16_t tail = static_cast<int16_t>(y0 + n * kRowPitch + (n < slots ? close : 0));   // under the closing hairline
-        if (!blank && kFooterY > tail) {
+        const int16_t tail = static_cast<int16_t>(y0 + n * kRowPitch);
+        if (kFooterY > tail) {
             if (st.clear_y < tail || st.clear_y >= kFooterY) st.clear_y = tail;
             while (st.clear_y < kFooterY) {
                 const int16_t h = std::min<int16_t>(PaintBudget::kStripRows, static_cast<int16_t>(kFooterY - st.clear_y));
@@ -1144,7 +1135,7 @@ bool paint_list(const Surface &c, const Rows &R, int16_t y0, bool dim, bool blan
     }
     if (n_io > n) {
         const int16_t clear_from = static_cast<int16_t>(y0 + n * kRowPitch);
-        const int16_t clear_to = static_cast<int16_t>(y0 + n_io * kRowPitch + close);
+        const int16_t clear_to = static_cast<int16_t>(y0 + n_io * kRowPitch);
         while (clear_from < clear_to && n_io > n) {
             if (st.clear_y < clear_from || st.clear_y >= clear_to) st.clear_y = clear_from;
             while (st.clear_y < clear_to) {
@@ -1158,24 +1149,18 @@ bool paint_list(const Surface &c, const Rows &R, int16_t y0, bool dim, bool blan
         }
         for (int i = n; i < n_io && i < kVisRows; i++) sig_io[static_cast<std::size_t>(i)] = 0;
         n_io = static_cast<uint8_t>(n);
-        st.close_done = false;
-    } else if (n > n_io) {
-        st.close_done = false;
     }
     char buf[kFitBuf];
-    painted_out = 0;
     for (int i = 0; i < n; i++) {
         const int16_t y = static_cast<int16_t>(y0 + i * kRowPitch);
         if (sigs[static_cast<std::size_t>(i)] == sig_io[static_cast<std::size_t>(i)]) continue;
         if (st.bg && !st.bg->admit(static_cast<int>(c.w) * kRowPitch, true)) return false;
-        painted_out++;
         sig_io[static_cast<std::size_t>(i)] = sigs[static_cast<std::size_t>(i)];
         const Rows::R &row = R.r[i];
-        if (!place) gfx_fill(c, 0, y, c.w, 1, kRule);
-        else if (row.perf) kit::draw_dashed(c, 0, w, y, kInk3, kBg);   // the perforation above the actions
+        if (row.perf) kit::draw_dashed(c, 0, w, y, kInk3, kBg);   // the perforation above the actions
         else gfx_fill(c, 0, y, w, 1, kBg);
         const kit::Box body{0, static_cast<int16_t>(y + 1), w, static_cast<int16_t>(kRowPitch - 1)};
-        if (row.act >= 0 && place) {
+        if (row.act >= 0) {
             const bool bar = row.focus && kFocusBar != 0;
             const uint16_t bg = row.focus ? kFocusFill : kBg;
             const uint16_t ink = row.off ? (row.focus ? kOnFocusDim : kInk3) : (row.focus ? kOnFocus : kInk);
@@ -1194,12 +1179,6 @@ bool paint_list(const Surface &c, const Rows &R, int16_t y0, bool dim, bool blan
                 kit::draw_drill(c, static_cast<int16_t>(w - 8), static_cast<int16_t>(body.y + body.h / 2), dim_ink);
             continue;
         }
-        if (row.act >= 0) {
-            const kit::TextRun t{10, static_cast<int16_t>(y + kValDy), &kSmall, row.v.view(), row.off ? kFaint : kText};
-            kit::paint_texts(c, body, &t, 1, row.focus ? kFocusT : kBg);
-            if (row.focus) gfx_fill(c, 0, body.y, 3, body.h, kFocus);
-            continue;
-        }
         kit::TextRun runs[3];
         int nr = 0;
         runs[nr++] = {kKeyX, static_cast<int16_t>(y + kKeyDy), &kLabelFont, row.key, kDim};
@@ -1215,11 +1194,6 @@ bool paint_list(const Surface &c, const Rows &R, int16_t y0, bool dim, bool blan
         }
         kit::paint_texts(c, body, runs, nr, kBg);
     }
-    if (!place && !st.close_done && n < slots) {
-        if (st.bg && !st.bg->admit(c.w, true)) return false;
-        gfx_fill(c, 0, static_cast<int16_t>(y0 + n * kRowPitch), c.w, 1, kRule);   // closes the table (moved with the count)
-        st.close_done = true;
-    }
     n_io = static_cast<uint8_t>(n);
     return true;
 }
@@ -1234,23 +1208,22 @@ int place_first(int first, int focus_row, int total) {
     return std::clamp(first, 0, std::max(0, total - kPlaceSlots));
 }
 
-// The scroll thumb in the lane (x220..223 of the list band): a 3 px kInk3 bar for the window's share of the list, only when the
-// list is longer than the window; the lane's ground otherwise. Painted when (first, total) moved.
-bool paint_thumb(const Surface &c, int first, int total, bool full, uint32_t &sig, PaintBudget *bg) {
+// The scroll thumb in the lane (x220..223 of the list band): a 3 px (ListView::kBarW) kInk3 bar for the window's share
+// of the list, only when the list overflows; the lane's ground otherwise. Painted when (first, total) moved.
+bool paint_thumb(const Surface &c, int first, int total, uint32_t &sig, PaintBudget *bg) {
     const uint32_t h = (uint32_t(first) << 8 | uint32_t(total)) + 1u;
-    if (!full && h == sig) return true;
+    if (h == sig) return true;
     const int16_t x = static_cast<int16_t>(c.w - kLane), band = static_cast<int16_t>(kFooterY - kPlaceListY);
     if (bg && !bg->admit(static_cast<int>(kLane) * band, true)) return false;
     sig = h;
-    gfx_fill(c, x, kPlaceListY, 1, band, kBg);
-    if (total <= kPlaceSlots) { gfx_fill(c, static_cast<int16_t>(x + 1), kPlaceListY, kLane - 1, band, kBg); return true; }
-    const int track = kPlaceSlots * kRowPitch;
-    const int16_t ty = static_cast<int16_t>(kPlaceListY + first * track / total);
-    const int16_t th = static_cast<int16_t>(std::max(6, kPlaceSlots * track / total));
-    const int16_t tx = static_cast<int16_t>(x + 1);
-    gfx_fill(c, tx, kPlaceListY, kLane - 1, static_cast<int16_t>(ty - kPlaceListY), kBg);
-    gfx_fill(c, tx, ty, kLane - 1, th, kInk3);
-    gfx_fill(c, tx, static_cast<int16_t>(ty + th), kLane - 1, static_cast<int16_t>(kFooterY - ty - th), kBg);
+    const ListState st{total, kPlaceSlots, first};
+    if (!st.overflows()) { gfx_fill(c, x, kPlaceListY, kLane, band, kBg); return true; }
+    int pos = 0, len = 0;
+    st.thumb(kPlaceSlots * kRowPitch, pos, len);
+    const kit::Box thumb{static_cast<int16_t>(x + 1), static_cast<int16_t>(kPlaceListY + pos),
+                         ListView::kBarW, static_cast<int16_t>(len)};
+    kit::fill_except(c, {x, kPlaceListY, kLane, band}, &thumb, 1, kBg);
+    gfx_fill(c, thumb.x, thumb.y, thumb.w, thumb.h, kInk3);
     return true;
 }
 
@@ -1430,7 +1403,7 @@ struct PlaceList {
 };
 using BuildRowsFn = void (*)(Rows &, const void *);
 [[gnu::noinline]] bool paint_place_list(const Surface &c, const std::array<conn::Item, conn::kMaxItems> &items, int n_items,
-                                        int &act_sel, bool full, bool dim, PlaceList s, BuildRowsFn build, const void *ctx) {
+                                        int &act_sel, bool dim, PlaceList s, BuildRowsFn build, const void *ctx) {
     Rows R;
     R.reset(Rows::kCountOnly);
     build(R, ctx);
@@ -1445,9 +1418,8 @@ using BuildRowsFn = void (*)(Rows &, const void *);
     R.reset(s.first);
     build(R, ctx);
     add_extras(R, items, n_items, act_sel);
-    int painted = 0;
-    if (!paint_list(c, R, kPlaceListY, dim, false, s.sig, s.n_io, s.st, painted, true)) return false;
-    return paint_thumb(c, s.first, total, full, s.thumb_sig, s.st.bg);
+    if (!paint_list(c, R, dim, s.sig, s.n_io, s.st)) return false;
+    return paint_thumb(c, s.first, total, s.thumb_sig, s.st.bg);
 }
 
 [[gnu::noinline]] bool paint_ident_dim(const Surface &c, const char *head, const char *line, uint32_t &sig, PaintBudget *bg) {
@@ -1517,8 +1489,8 @@ bool ConnectionPage::paint_empty(bool) {
         body_clear_y_ = kFooterY; id_sig_ = thumb_sig_ = 0;
     }
     if (!paint_ident_dim(c, e.title, e.hint, id_sig_, bg)) return false;
-    ListDrawState st{tail_cleared_, close_done_, body_clear_y_, bg};
-    return paint_place_list(c, items_, n_items_, act_sel_, false, false,
+    ListDrawState st{tail_cleared_, body_clear_y_, bg};
+    return paint_place_list(c, items_, n_items_, act_sel_, false,
                             {first_, res_n_, tot_n_, thumb_sig_, row_sig_, body_n_, st}, noop_build_rows, nullptr);
 }
 
@@ -1560,9 +1532,9 @@ bool ConnectionPage::paint_body_locked(const void *tab_data, bool dim) {
         body_clear_y_ = kFooterY; id_sig_ = thumb_sig_ = 0;
     }
     if (!paint_place_ident(c, tab_, d, dim, id_sig_, bg)) return false;
-    ListDrawState st{tail_cleared_, close_done_, body_clear_y_, bg};
+    ListDrawState st{tail_cleared_, body_clear_y_, bg};
     const BodyBuildCtx bctx{tab_, &d};
-    return paint_place_list(c, items_, n_items_, act_sel_, false, dim,
+    return paint_place_list(c, items_, n_items_, act_sel_, dim,
                             {first_, res_n_, tot_n_, thumb_sig_, row_sig_, body_n_, st}, build_body_rows, &bctx);
 }
 
@@ -1588,9 +1560,9 @@ bool ConnectionPage::paint_no_pd_locked(const char *line, uint32_t rp_ma) {
         body_clear_y_ = kFooterY; id_sig_ = thumb_sig_ = 0;
     }
     if (!paint_ident_dim(c, text::conn::kNoPd, line, id_sig_, bg)) return false;
-    ListDrawState st{tail_cleared_, close_done_, body_clear_y_, bg};
+    ListDrawState st{tail_cleared_, body_clear_y_, bg};
     const NoPdBuildCtx bctx{tab_, static_cast<fastcharge::Protocol>(ctx_.fc), ctx_.pm_avg.current_ma, vbus_, vooc_, rp_ma};
-    return paint_place_list(c, items_, n_items_, act_sel_, false, false,
+    return paint_place_list(c, items_, n_items_, act_sel_, false,
                             {first_, res_n_, tot_n_, thumb_sig_, row_sig_, body_n_, st}, build_no_pd_rows, &bctx);
 }
 

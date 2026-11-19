@@ -852,7 +852,7 @@ No current render in `runs/ui-all`. Read from the code and the 2026-11-08 render
 
 | page | diverges | proposal |
 |---|---|---|
-| PD trigger, setup | the legacy rounded card with a flow diagram and a checklist (`draw_checklist`, `ui_pages.cpp`) | the Waiting checklist rows of section 5.15 |
+| PD trigger, setup | the legacy rounded card with a flow diagram and a checklist (`draw_checklist` / `draw_flow_diagram`, removed) | the Waiting checklist rows of section 5.15 |
 | PD trigger, steps | uses the wizard bar, KvTable at 20 px, AlertBand | move the tables to 26 px, or to the dense variant |
 | FC trigger | wizard bar and RowList; tails are dim words (`levels`, `adjustable`) | fine. Add the note on the focused row |
 | Cable R | three table rows and an empty body | a hero for the result (font 48, `kOhm`) once measured; the rows above it |

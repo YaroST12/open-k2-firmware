@@ -250,8 +250,8 @@ void BlackBoxPage::paint_timeline_head() {
     draw_icon(c, 6, kTlHeadY + 2, trigger_icon(info.trigger), trigger_color(info.trigger), kBg);
     gfx_text(c, kSmall, 24, kTlHeadY, trigger_name(info.trigger), kText, kBg);
     if (info.filling) {
-        const int w = pill_width(3);
-        draw_pill(c, static_cast<int16_t>(216 - w), kTlHeadY + 1, "REC", kCaution, kCautionT, true);
+        const int w = kit::chip_w("REC");
+        kit::draw_chip(c, static_cast<int16_t>(216 - w), kTlHeadY + 1, "REC", kCaution, kBg);
     } else {
         const int w = static_cast<int>(at.size()) * kLabelFont.adv;
         gfx_text(c, kLabelFont, static_cast<int16_t>(216 - w), kTlHeadY + 3, at, kDim, kBg);

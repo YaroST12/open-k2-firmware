@@ -556,7 +556,7 @@ ifeq ($(HOST_K2_OPPO_PROBE),1)
 TEST_CXX_LIB  += $(SRC_DIR)/pd/oppo_probe.cpp
 endif
 TEST_CXX_LIB  += $(SRC_DIR)/ui/ui_viewport.cpp $(SRC_DIR)/core/logfmt.cpp $(SRC_DIR)/core/scratch.cpp
-TEST_CXX_LIB  += $(SRC_DIR)/ui/ui_orientation.cpp $(SRC_DIR)/ui/kit.cpp
+TEST_CXX_LIB  += $(SRC_DIR)/ui/kit.cpp
 TEST_CXX_LIB  += $(SRC_DIR)/ui/home_model.cpp $(SRC_DIR)/ui/home_cell.cpp $(SRC_DIR)/ui/home_proto.cpp $(SRC_DIR)/ui/home_cards.cpp $(SRC_DIR)/ui/ui_home.cpp
 TEST_CXX_LIB  += $(SRC_DIR)/chargertest/report_card.cpp $(SRC_DIR)/chargertest/report_card_store.cpp $(SRC_DIR)/chargertest/charger_journal_core.cpp
 TEST_CXX_LIB  += $(SRC_DIR)/chargertest/report_card_json.cpp $(SRC_DIR)/chargertest/result_layout.cpp $(SRC_DIR)/chargertest/step_label.cpp $(SRC_DIR)/core/fs.cpp

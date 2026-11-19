@@ -8,7 +8,6 @@
 #include "fake_lcd.h"
 #include "ui_stubs.h"
 #include "k2/ui/capture.hpp"
-#include "k2/ui/ui_orientation.hpp"
 #include "k2/ui/blend.hpp"
 #include "k2/ui/text.hpp"
 #include <algorithm>
@@ -169,90 +168,6 @@ static void test_captures_and_keys() {
                 }
                 ui.set_pressed(static_cast<Button>(key), false, 6500);
             }
-        }
-    }
-}
-
-static void test_physical_flow_pixels() {
-    const Surface surface{0, 0, 224, 240};
-    std::array<uint16_t, 16 * 16> upright{};
-    std::fill(std::begin(g_panel), std::end(g_panel), 0);
-    draw_physical_arrow(surface, 20, 20, true, 0, 0x1234);
-    for (int y = 0; y < 16; ++y)
-        std::copy(g_panel + (20 + y) * 240 + 20, g_panel + (20 + y) * 240 + 36, upright.begin() + y * 16);
-    CHECK_EQ(upright[1 * 16 + 7], 0x1234);
-    CHECK_EQ(upright[14 * 16 + 7], 0x1234);
-    CHECK_EQ(upright[14 * 16 + 2], 0);
-    for (uint8_t r = 0; r < 4; ++r) for (bool toward_top : {false, true}) {
-        std::fill(std::begin(g_panel), std::end(g_panel), 0);
-        draw_physical_arrow(surface, 20, 20, toward_top, r, 0x1234);
-        const int turn = (r + (toward_top ? 0 : 2)) & 3;
-        for (int y = 0; y < 16; ++y) for (int x = 0; x < 16; ++x) {
-            const int xx = turn == 0 ? x : turn == 1 ? y : turn == 2 ? 15 - x : 15 - y;
-            const int yy = turn == 0 ? y : turn == 1 ? 15 - x : turn == 2 ? 15 - y : x;
-            CHECK_EQ(g_panel[(20 + yy) * 240 + 20 + xx], upright[y * 16 + x]);
-        }
-    }
-    for (uint8_t r = 0; r < 4; ++r) {
-        std::fill(std::begin(g_panel), std::end(g_panel), 0);
-        draw_physical_chevron(surface, 20, 20, true, r, 0x1234);
-        int min_x = 240, max_x = 0, min_y = 240, max_y = 0;
-        for (int y = 20; y < 30; ++y) for (int x = 20; x < 30; ++x) if (g_panel[y * 240 + x]) {
-            min_x = std::min(min_x, x); max_x = std::max(max_x, x);
-            min_y = std::min(min_y, y); max_y = std::max(max_y, y);
-        }
-        // An apex has 2 pixels; the tail has two separated arms (4 pixels).
-        int apex = 0, tail = 0;
-        for (int i = 20; i < 30; ++i) {
-            if (!(r & 1)) {
-                apex += g_panel[(r == 0 ? min_y : max_y) * 240 + i] != 0;
-                tail += g_panel[(r == 0 ? max_y : min_y) * 240 + i] != 0;
-            } else {
-                apex += g_panel[i * 240 + (r == 1 ? min_x : max_x)] != 0;
-                tail += g_panel[i * 240 + (r == 1 ? max_x : min_x)] != 0;
-            }
-        }
-        CHECK_EQ(apex, 2); CHECK_EQ(tail, 4);
-    }
-}
-
-// The idle dash lies along the port axis: vertical (2 x 8) at rotations 0 and 2, horizontal (8 x 2) at 1 and 3,
-// centred in its 16 x 16 cell, and it takes the colour it is given (faint, grey when frozen).
-static void test_physical_dash() {
-    const Surface surface{0, 0, 224, 240};
-    for (uint8_t r = 0; r < 4; ++r) {
-        std::fill(std::begin(g_panel), std::end(g_panel), 0);
-        draw_physical_dash(surface, 20, 20, r, 0x1234);
-        int min_x = 240, max_x = -1, min_y = 240, max_y = -1, n = 0;
-        for (int y = 0; y < 240; ++y) for (int x = 0; x < 240; ++x) if (g_panel[y * 240 + x]) {
-            CHECK_EQ(g_panel[y * 240 + x], 0x1234);
-            min_x = std::min(min_x, x); max_x = std::max(max_x, x);
-            min_y = std::min(min_y, y); max_y = std::max(max_y, y);
-            ++n;
-        }
-        const bool vertical = !(r & 1);
-        CHECK_EQ(n, 16);
-        CHECK_EQ(max_x - min_x + 1, vertical ? 2 : 8);
-        CHECK_EQ(max_y - min_y + 1, vertical ? 8 : 2);
-        CHECK_EQ(min_x >= 20 && max_x < 36 && min_y >= 20 && max_y < 36, 1);
-        CHECK_EQ(min_x + max_x, 2 * 20 + 15);   // centred in the cell
-        CHECK_EQ(min_y + max_y, 2 * 20 + 15);
-    }
-}
-
-// The row-mask form of the physical chevron (what the status-bar band writes) equals the pixels of
-// draw_physical_chevron in all four rotations and both directions.
-static void test_physical_chevron_mask() {
-    const Surface surface{0, 0, 224, 240};
-    for (uint8_t r = 0; r < 4; ++r) for (bool toward_top : {false, true}) {
-        std::fill(std::begin(g_panel), std::end(g_panel), 0);
-        draw_physical_chevron(surface, 20, 20, toward_top, r, 0x1234);
-        const int w = physical_chevron_w(r), h = physical_chevron_h(r);
-        CHECK_EQ(w, (r & 1) ? 6 : 10);
-        CHECK_EQ(h, (r & 1) ? 10 : 6);
-        for (int y = 0; y < 12; ++y) for (int x = 0; x < 12; ++x) {
-            const bool mask = y < h && x < w && (physical_chevron_row(toward_top, r, y) >> x & 1);
-            CHECK_EQ(g_panel[(20 + y) * 240 + 20 + x] != 0, mask);
         }
     }
 }
@@ -804,9 +719,6 @@ int main() {
     test_viewport();
     test_captures_and_keys();
     test_lock_and_feed();
-    test_physical_flow_pixels();
-    test_physical_dash();
-    test_physical_chevron_mask();
     test_settings_rotation_modes();
     test_rotation_prefs_persist();
     test_optional_rotated_buttons();

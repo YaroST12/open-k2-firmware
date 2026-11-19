@@ -13,7 +13,12 @@ namespace k2 {
 
 constexpr int kLinesBarW = 112;          // track width, 0 .. 3.3 V
 constexpr int32_t kLinesFullMv = 3300;
-constexpr int lines_bar_px(int32_t mv) { return gauge_fill_px(kLinesBarW, mv, kLinesFullMv); }
+constexpr int lines_bar_px(int32_t mv) {
+    if (mv <= 0) return 0;
+    if (mv >= kLinesFullMv) return kLinesBarW;
+    const int px = static_cast<int>(math::mul_div_i32(kLinesBarW, mv, kLinesFullMv));
+    return px < 2 ? 2 : px;
+}
 // Tick offset inside the track (0.4 V BC1.2 detect level, 2.0 V upper QC level).
 constexpr int lines_tick_px(int32_t mv) { return static_cast<int>(math::mul_div_i32(kLinesBarW, mv, kLinesFullMv)); }
 constexpr int32_t kLinesTickLowMv = 400, kLinesTickHighMv = 2000;

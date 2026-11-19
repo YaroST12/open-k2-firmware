@@ -11,7 +11,6 @@
 #include "k2/ui/ui_tools.hpp"
 #include "k2/ui/text/tools.hpp"
 #include "k2/ui/ui_emarker.hpp"
-#include "k2/ui/ui_orientation.hpp"
 #include "k2/core/build_config.h"
 #include "k2/core/log.hpp"
 #include "k2/core/math_opt.hpp"
@@ -108,13 +107,6 @@ std::string_view stash_str(char *dst, std::size_t cap, std::string_view s) {
 [[gnu::noinline]] std::string_view trim_left(std::string_view s) {
     while (!s.empty() && s.front() == ' ') s.remove_prefix(1);
     return s;
-}
-
-[[gnu::noinline]] void paint_footer_sig(const Surface &c, FooterTone tone, std::string_view text, uint32_t &sig) {
-    const uint32_t sg = mix_str(2166136261u, text) * 31u + static_cast<uint32_t>(tone) + 1u;
-    if (sg == sig) return;
-    sig = sg;
-    draw_footer(c, tone, text);
 }
 }  // namespace pg
 
@@ -1119,7 +1111,8 @@ void PdTriggerPage::draw_static() {
 }
 
 void PdTriggerPage::reset_paint() {
-    rsig_ = bsig_ = fsig_ = barsig_ = tsig_ = vsig_ = 0;
+    rsig_ = bsig_ = barsig_ = tsig_ = vsig_ = 0;
+    foot_.invalidate();
     body_step_ = kNoStep;
     send_.invalidate();
 }
@@ -1420,7 +1413,7 @@ void PdTriggerPage::paint_footer() {
             tone = FooterTone::Caution;
         }
     }
-    pg::paint_footer_sig(c, tone, msg.view(), fsig_);
+    draw_footer_cached(c, tone, msg.view(), foot_);
 }
 
 void PdTriggerPage::paint_refusal() {
@@ -1431,16 +1424,15 @@ void PdTriggerPage::paint_refusal() {
     sig |= 1u;
     if (sig == rsig_) return;
     rsig_ = sig;
-    pg::clear_body(c);
-    FlowSpec f;
-    f.top_role = v.top_role; f.bottom_role = v.bottom_role;
-    f.top_color = f.bottom_color = kError; f.top_tint = f.bottom_tint = kErrorT;
-    f.caption = "none"; f.caption_color = kError;
-    draw_physical_flow_diagram(c, 0, 22, 72, f, ctx_.rotation);
-    CheckItem items[3];
-    for (int k = 0; k < v.n; k++) items[k] = {v.check[k], v.met[k]};
-    draw_checklist(c, 68, 22, 156, 72, kError, items, v.n);
-    draw_footer(c, FooterTone::Error, v.footer);
+    kit::draw_alert_band(c, kit::kBodyY, true, "NOT READY");
+    const int16_t body_y = static_cast<int16_t>(kit::kBodyY + kit::kAlertH + kit::kAlertStripeH);
+    gfx_fill(c, 0, body_y, c.w, static_cast<int16_t>(kFooterY - body_y), kBg);
+    for (int k = 0; k < v.n; k++) {
+        const int16_t y = static_cast<int16_t>(body_y + 8 + k * 22);
+        draw_mark(c, kit::kMarkX, static_cast<int16_t>(y + 2), 12, v.met[k], v.met[k] ? kOk : kError, kBg);
+        gfx_text(c, kSmall, kit::kTextX, y, v.check[k], v.met[k] ? kDim : kText, kBg);
+    }
+    draw_footer_cached(c, FooterTone::Error, v.footer, foot_);
 }
 
 // The live setup with the page's own verdict applied (a fake PDO load refuses without a real source).
@@ -1674,7 +1666,8 @@ bool TriggerPage::scan_view() const {
 
 void TriggerPage::draw_static() {
     kind_ = 255;   // the trace ring and the model survive a repaint, the paint signatures do not
-    bsig_ = barsig_ = fsig_ = tsig_ = ysig_ = 0;
+    bsig_ = barsig_ = tsig_ = ysig_ = 0;
+    foot_.invalidate();
     paint_bar();
 }
 
@@ -1824,7 +1817,7 @@ void TriggerPage::paint_main(uint32_t now_ms) {
             else pg::clear_body(c, kit::kBelowBar);
         }
         bsig_ = sig;
-        fsig_ = 0;
+        foot_.invalidate();
         tsig_ = 0;
         send_.invalidate();
     }
@@ -1931,8 +1924,8 @@ void TriggerPage::paint_main(uint32_t now_ms) {
     const bool unsafe = cleanup && release == trig::Release::State::Unsafe;
     const bool error = unsafe || refused_ != fc::Fail::None || !model_.available();
     const bool caution = cleanup || (model_.needs_confirm() && (stage == trig::Stage::Review || live));
-    pg::paint_footer_sig(ctx_.content, error ? FooterTone::Error : caution ? FooterTone::Caution : FooterTone::Info,
-                         footer, fsig_);
+    draw_footer_cached(ctx_.content, error ? FooterTone::Error : caution ? FooterTone::Caution : FooterTone::Info,
+                       footer, foot_);
 }
 
 void TriggerPage::paint_scan() {
@@ -1993,7 +1986,7 @@ void TriggerPage::paint_scan() {
                    : scanning_                    ? "Scanning..."
                    : acc > 0                      ? "Scan done"
                                                   : "Scan done: none answered";
-    pg::paint_footer_sig(c, ft, fm, fsig_);
+    draw_footer_cached(c, ft, fm, foot_);
 }
 
 void TriggerPage::update(uint32_t now_ms) {
@@ -2007,7 +2000,8 @@ void TriggerPage::update(uint32_t now_ms) {
         const bool blank = kind_ == 255 && ctx_.blank;
         kind_ = kind;
         if (!blank) pg::clear_body(ctx_.content, kit::kBelowBar);
-        bsig_ = fsig_ = tsig_ = ysig_ = 0;
+        bsig_ = tsig_ = ysig_ = 0;
+        foot_.invalidate();
         tile_sig_.fill(0);
     }
     if (kind == 1) paint_scan();
@@ -2095,7 +2089,8 @@ void TriggerPage::leave() {
 void TriggerPage::invalidate() {
     target_v_.invalidate(); vbus_v_.invalidate(); held_v_.invalidate(); state_v_.invalidate();
     send_.invalidate();
-    bsig_ = barsig_ = fsig_ = tsig_ = ysig_ = 0;
+    bsig_ = barsig_ = tsig_ = ysig_ = 0;
+    foot_.invalidate();
     tile_sig_.fill(0);
     kind_ = 255;
 }

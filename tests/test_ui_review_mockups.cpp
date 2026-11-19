@@ -17,6 +17,7 @@
 #include "k2/ui/gfx.hpp"
 #include "k2/ui/text.hpp"
 #include "k2/ui/ui_widgets.hpp"
+#include "k2/ui/kit.hpp"
 #include "k2/ui/ui_viewport.hpp"
 #include "k2/ui/ui_pages.hpp"
 #include "k2/pd/pd_source.hpp"
@@ -108,7 +109,7 @@ static void grid_cell(const Surface& s, int x, int y, const VCell& c) {
     const bool p = c.st == 'P', f = c.st == 'F';
     const uint16_t fg = p ? kEnergy : f ? kError : kDim;
     const uint16_t tint = p ? kOkT : f ? kErrorT : kDimT;
-    fill_round(s, static_cast<int16_t>(x), static_cast<int16_t>(y), 29, 20, 3, tint);
+    gfx_fill(s, static_cast<int16_t>(x), static_cast<int16_t>(y), 29, 20, tint);
     if (p || f) draw_mark(s, static_cast<int16_t>(x + 3), static_cast<int16_t>(y + 6), 8, p, fg, tint);
     else fill(s, x + 4, y + 9, 7, 2, fg);                       // skip: a dash, neither tick nor cross
     txt_r(s, kLabelFont, x + 26, y + 4, c.v, fg, tint);
@@ -181,7 +182,7 @@ static void paint_algorithms_after(const Surface& s) {
         const int y = 74 + i * 24;
         txt(s, kSmall, 10, y + 4, al[i].n, kText, kBg);
         const int w = pill_width(2);
-        draw_pill(s, static_cast<int16_t>(218 - w), static_cast<int16_t>(y + 5), "ON", kEnergy, kOkT, false);
+        kit::draw_chip(s, static_cast<int16_t>(218 - w), static_cast<int16_t>(y + 5), "ON", kOkT, kEnergy);
         txt_r(s, kLabelFont, 218 - w - 6, y + 6, al[i].c, kDim, kBg);
     }
     fill(s, 221, 50, 3, 168, kRule); fill(s, 221, 50, 3, 120, kDim);
@@ -201,7 +202,7 @@ static void paint_review_after(const Surface& s) {
     // The one action of the page: a full-width RowList-style focus row, with the confirm rule as a pill.
     fill(s, 0, 166, 220, 28, kFocusT); fill(s, 0, 166, 3, 28, kFocus);
     txt(s, kSmall, 10, 172, "START tests", kAmp, kFocusT);
-    draw_pill(s, static_cast<int16_t>(218 - pill_width(5)), 173, "OK x2", kCaution, kCautionT, false);
+    kit::draw_chip(s, static_cast<int16_t>(218 - pill_width(5)), 173, "OK x2", kCautionT, kCaution);
     txt(s, kLabelFont, 6, 200, "Voltage only; no load test", kDim, kBg);
     draw_footer(s, FooterTone::Caution, "No load! OK twice in 5s");
 }
@@ -216,7 +217,7 @@ static void paint_tools_after(const Surface& s) {
         {3, "LOAD", kError, kErrorT},       {6, "LOAD", kError, kErrorT}};
     for (const auto& g : tags) {
         const int y = 24 + g.row * 24, w = pill_width(static_cast<int>(std::strlen(g.tag)));
-        draw_pill(s, static_cast<int16_t>(218 - w), static_cast<int16_t>(y + 5), g.tag, g.c, g.t, false);
+        kit::draw_chip(s, static_cast<int16_t>(218 - w), static_cast<int16_t>(y + 5), g.tag, g.t, g.c);
     }
 }
 

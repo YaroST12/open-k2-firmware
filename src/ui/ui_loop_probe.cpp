@@ -301,14 +301,15 @@ void LoopProbePage::paint_progress(uint32_t now_ms) {
     if (sig == info_sig_) return;
     const bool step_changed = (info_sig_ >> 24) != (sig >> 24) || info_sig_ == 0;
     info_sig_ = sig;
+    static constexpr kit::KvLayout kInfoKv{0, kit::kInfoPitch, kit::kInfoTagX, nullptr, nullptr, kit::kInfoValueX, 21, Align::Left, true};
     if (step_changed) {
         StrBuf<20> s;
         s.put_u32(static_cast<uint32_t>(done + 1)).put_char('/').put_u32(static_cast<uint32_t>(lp::kSteps)).put_char(' ').put(lp::step_name(runner_.step()));
-        kit::draw_info_row(ctx_.content, kStepRowY, "Step", s.view());
+        kit::kv_row(ctx_.content, kInfoKv, kStepRowY, "Step", s.view(), kText);
     }
     StrBuf<12> t;
     t.put_fixed(static_cast<int32_t>(elapsed / 100 * 100), 1).put_char('s');
-    kit::draw_info_row(ctx_.content, kTimeRowY, "Time", t.view());
+    kit::kv_row(ctx_.content, kInfoKv, kTimeRowY, "Time", t.view(), kText);
 }
 
 void LoopProbePage::update(uint32_t now_ms) {

@@ -47,25 +47,8 @@ static void test_single_pass_updates() {
 
 
 static void test_geometry() {
-    // Hand-computed circle arcs: r=5 cuts 3,1,1,0,0 pixels; r=3 cuts 1,0,0; r<=1 is square.
-    const int r5[] = {3, 1, 1, 0, 0};
-    for (int i = 0; i < 5; i++) CHECK_EQ(round_inset(5, i), r5[i]);
-    const int r3[] = {1, 0, 0};
-    for (int i = 0; i < 3; i++) CHECK_EQ(round_inset(3, i), r3[i]);
-    CHECK_EQ(round_inset(1, 0), 0);
-    CHECK_EQ(round_inset(0, 0), 0);
-    CHECK_EQ(round_inset(6, 0), 4);   // 26 px badge corner: centres within 2.4 px of the arc axis
-    // Bottom rows mirror the top; a radius larger than half the height is clamped.
-    CHECK_EQ(round_row_inset(3, 14, 13), 1);
-    CHECK_EQ(round_row_inset(3, 14, 7), 0);
-    CHECK_EQ(round_row_inset(5, 4, 0), round_inset(2, 0));
     CHECK_EQ(pill_width(0), 8);
     CHECK_EQ(pill_width(5), 38);
-    CHECK_EQ(gauge_fill_px(160, 0, 100), 0);
-    CHECK_EQ(gauge_fill_px(160, 50, 100), 80);
-    CHECK_EQ(gauge_fill_px(160, 1, 100), 2);      // visible sliver
-    CHECK_EQ(gauge_fill_px(160, 300, 100), 160);  // clamped
-    CHECK_EQ(gauge_fill_px(160, 5, 0), 0);
     CHECK_EQ(chevron_left(true, 0), 4);
     CHECK_EQ(chevron_left(true, 5), 0);
     CHECK_EQ(chevron_left(false, 0), 0);          // down is the mirror image
@@ -77,21 +60,9 @@ static void test_geometry() {
     CHECK_EQ((int)spark_cell(3, 3, 3), (int)Cell::Line);
 }
 
-static void test_fill_round() {
+static void test_draw_frame() {
     clear();
-    fill_round(kScr, 10, 20, 14, 14, 3, 0x1234);
-    CHECK_EQ(px(10, 20), 0x1234);     // rectangular fill
-    CHECK_EQ(px(23, 20), 0x1234);
-    CHECK_EQ(px(10, 33), 0x1234);
-    CHECK_EQ(px(17, 27), 0x1234);
-    CHECK_EQ(px(9, 20), 0);           // nothing outside
-    CHECK_EQ(px(24, 27), 0);
-    CHECK_EQ(px(17, 34), 0);
-}
-
-static void test_frame_round() {
-    clear();
-    frame_round(kScr, 0, 0, 26, 26, 6, 2, 0xAAAA);
+    draw_frame(kScr, 0, 0, 26, 26, 2, 0xAAAA);
     CHECK_EQ(px(13, 0), 0xAAAA);      // top edge, 2 px thick
     CHECK_EQ(px(13, 1), 0xAAAA);
     CHECK_EQ(px(13, 2), 0);           // hollow inside
@@ -102,7 +73,7 @@ static void test_frame_round() {
     CHECK_EQ(px(13, 25), 0xAAAA);
     CHECK_EQ(px(0, 0), 0xAAAA);       // rectangular corner
     clear();
-    frame_round(kScr, 0, 0, 18, 8, 3, 1, 0xBBBB);
+    draw_frame(kScr, 0, 0, 18, 8, 1, 0xBBBB);
     CHECK_EQ(px(9, 0), 0xBBBB);
     CHECK_EQ(px(9, 1), 0);
     CHECK_EQ(px(0, 4), 0xBBBB);
@@ -161,96 +132,6 @@ static void test_footer_tones() {
         CHECK_EQ(px(6, 230), r.fill);
         CHECK_EQ(px(223, 239), r.fill);
     }
-}
-
-static void test_pill() {
-    clear();
-    int w = draw_pill(kScr, 20, 30, "PD3.0", kEnergy, kEnergyT, false);
-    CHECK_EQ(w, 38);
-    CHECK_EQ(px(20, 30), kEnergyT);          // rectangular tint fill
-    CHECK_EQ(px(21, 30), kEnergyT);
-    CHECK_EQ(px(20 + 37, 30 + 13), kEnergyT);
-    CHECK_EQ(px(20 + 43, 30 + 5), 0);        // nothing beyond the width
-    clear();
-    draw_pill(kScr, 20, 30, "CC1", kVolt, kVoltT, true);
-    CHECK_EQ(px(21, 30), kVolt);             // solid fill
-    clear();
-    draw_pill(kScr, 20, 30, "A", kAmp, kAmpT, false);
-    bool glyph = false;                      // some pixel carries the text colour
-    for (int y = 30; y < 44; y++) for (int x = 20; x < 20 + pill_width(1); x++) if (px(x, y) == kAmp) glyph = true;
-    CHECK_EQ(glyph, 1);
-}
-
-static void test_gauge() {
-    clear();
-    draw_gauge(kScr, 10, 50, 100, 3, 40, kAmp);
-    CHECK_EQ(px(10, 50), kAmp);
-    CHECK_EQ(px(49, 52), kAmp);
-    CHECK_EQ(px(50, 51), kRule);
-    CHECK_EQ(px(109, 50), kRule);
-    CHECK_EQ(px(110, 50), 0);
-    // Shrinking repaints the vacated span as track without redrawing the rest.
-    draw_gauge(kScr, 10, 50, 100, 3, 20, kAmp, 40);
-    CHECK_EQ(px(29, 51), kAmp);
-    CHECK_EQ(px(30, 51), kRule);
-    CHECK_EQ(px(49, 51), kRule);
-    // Growing paints only the new span in the fill colour.
-    draw_gauge(kScr, 10, 50, 100, 3, 60, kAmp, 20);
-    CHECK_EQ(px(69, 51), kAmp);
-    CHECK_EQ(px(70, 51), kRule);
-}
-
-static void test_triangle() {
-    // Height 9: the width grows 1..5 down to the middle row and shrinks again; right points right.
-    CHECK_EQ(tri_row_w(9, 0), 1);
-    CHECK_EQ(tri_row_w(9, 4), 5);
-    CHECK_EQ(tri_row_w(9, 8), 1);
-    CHECK_EQ(tri_row_w(9, 6), 3);
-    CHECK_EQ(tri_width(9), 5);
-    clear();
-    draw_triangle(kScr, 50, 60, 9, true, kVolt);
-    CHECK_EQ(px(50, 60), kVolt);             // top row: one pixel at the base
-    CHECK_EQ(px(51, 60), 0);
-    CHECK_EQ(px(54, 64), kVolt);             // apex on the middle row
-    CHECK_EQ(px(55, 64), 0);
-    CHECK_EQ(px(50, 68), kVolt);
-    CHECK_EQ(px(51, 68), 0);
-    CHECK_EQ(px(50, 69), 0);                 // 9 rows only
-    clear();
-    draw_triangle(kScr, 50, 60, 9, false, kVolt);   // points left: the base is on the right
-    CHECK_EQ(px(54, 60), kVolt);
-    CHECK_EQ(px(53, 60), 0);
-    CHECK_EQ(px(50, 64), kVolt);
-    CHECK_EQ(px(49, 64), 0);
-}
-
-static void test_chevron_ports() {
-    clear();
-    draw_chevron(kScr, 100, 100, true, kFlow);
-    CHECK_EQ(px(104, 100), kFlow);           // apex
-    CHECK_EQ(px(105, 100), kFlow);
-    CHECK_EQ(px(103, 100), 0);
-    CHECK_EQ(px(100, 104), kFlow);           // arm end, row 4
-    CHECK_EQ(px(109, 104), kFlow);
-    CHECK_EQ(px(105, 104), 0);               // hollow between the arms
-    CHECK_EQ(px(100, 106), 0);               // 6 rows only
-    clear();
-    draw_chevron(kScr, 100, 100, false, kFlow);
-    CHECK_EQ(px(100, 100), kFlow);           // down: arms on top, apex at the bottom
-    CHECK_EQ(px(104, 105), kFlow);
-    CHECK_EQ(px(100, 105), 0);
-
-    clear();
-    draw_port_male(kScr, 10, 10, kText, kBg);
-    CHECK_EQ(px(10, 10), kText);              // rectangular plug
-    CHECK_EQ(px(11, 10), kText);
-    CHECK_EQ(px(8 + 10, 10 + 3), kBg);       // slot
-    CHECK_EQ(px(10, 14), kText);
-    clear();
-    draw_port_female(kScr, 10, 10, kText);
-    CHECK_EQ(px(19, 10), kText);             // top edge
-    CHECK_EQ(px(19, 11), 0);                 // hollow
-    CHECK_EQ(px(14, 13), kText);             // tongue
 }
 
 static void test_sparkline() {
@@ -482,77 +363,6 @@ static void test_readout_delta() {
     CHECK_EQ(g_lcd_pixels - before, static_cast<unsigned>((kScr.w - ReadoutShown::kChevX) * (kBarH - 1)));
 }
 
-// Tool template: the flow diagram column and the checklist card (geometry, then pixels).
-static void test_tool_widgets() {
-    // Geometry of the 72 px diagram: ports 5 px inside the card, roles beside them, the line between.
-    const FlowGeom g = flow_geom(72);
-    CHECK_EQ(g.top_port_y, 5);
-    CHECK_EQ(g.bottom_port_y, 59);
-    CHECK_EQ(g.line_y, 17);
-    CHECK_EQ(g.line_h, 38);
-    CHECK_EQ(g.caption_y, 30);
-    CHECK_EQ(flow_geom(96).bottom_port_y, 83);   // a taller card keeps the top and moves the bottom
-    CHECK_EQ(flow_chevrons(72), 4);
-    CHECK_EQ(flow_chevrons(96), 7);
-    CHECK_EQ(checklist_icon_y(0), 6);
-    CHECK_EQ(checklist_text_y(2), 48);
-    CHECK_EQ(checklist_text_y(1) - checklist_text_y(0), 22);
-
-    clear();
-    FlowSpec f;
-    f.top_role = "K2"; f.bottom_role = "DEV";
-    f.top_color = kFocus; f.top_tint = kFocusT; f.bottom_color = kOk; f.bottom_tint = kOkT;
-    f.flow = Arrow::Idle; f.caption = "VCON"; f.caption_color = kFocus;
-    draw_flow_diagram(kScr, 0, 22, 72, f);
-    CHECK_EQ(px(1, 40), kSurface);              // the card
-    CHECK_EQ(px(2, 22 + 3), kSurface);          // corner inset
-    CHECK_EQ(px(14, 22 + 17 + 3), kFaint);      // the no-flow line (Idle)
-    CHECK_EQ(px(12, 22 + 5 + 1), kFocus);       // male plug body (top port at x 6, y 27)
-    CHECK_EQ(px(6, 22 + 59 + 3), kOk);          // female port frame, left edge
-    CHECK_EQ(px(30, 22 + 2 + 5), kFocusT);      // top role pill fill, between its text glyphs
-
-    clear();
-    f.flow = Arrow::Up; f.caption = "";
-    draw_flow_diagram(kScr, 0, 22, 72, f);
-    bool chev = false, line = false;
-    for (int y = 22 + 17; y < 22 + 55; y++)
-        for (int x = 8; x < 22; x++) { if (px(x, y) == kFlow) chev = true; if (px(x, y) == kFaint) line = true; }
-    CHECK_EQ(chev, 1);
-    CHECK_EQ(line, 0);
-
-    clear();
-    const CheckItem it[3] = {{"Device seen", true}, {"No charger", false}, {"No live sink", false}};
-    draw_checklist(kScr, 68, 22, 156, 72, kCaution, it, 3);
-    CHECK_EQ(px(69, 22 + 2), kSurface);
-    CHECK_EQ(px(69, 22 + 4 + 2), kCaution);     // accent bar x 68, y 26 .. 89
-    CHECK_EQ(px(70, 22 + 4 + 2), kCaution);
-    CHECK_EQ(px(71, 22 + 4 + 2), kSurface);
-    bool ok = false, bad = false;
-    for (int y = 22 + 6; y < 22 + 18; y++)
-        for (int x = 76; x < 88; x++) if (px(x, y) == kOk) ok = true;
-    for (int y = 22 + 28; y < 22 + 40; y++)
-        for (int x = 76; x < 88; x++) if (px(x, y) == kCaution) bad = true;
-    CHECK_EQ(ok, 1);
-    CHECK_EQ(bad, 1);
-    // A met row is dim, an open one is full-white text.
-    bool dim = false, white = false;
-    for (int y = 22 + 4; y < 22 + 21; y++) for (int x = 92; x < 150; x++) { if (px(x, y) == kDim) dim = true; if (px(x, y) == kText) white = true; }
-    CHECK_EQ(dim, 1);
-    CHECK_EQ(white, 0);
-    for (int y = 22 + 26; y < 22 + 43; y++) for (int x = 92; x < 150; x++) if (px(x, y) == kText) white = true;
-    CHECK_EQ(white, 1);
-
-    // Step tile: 22 x 22, done = ok fill, to do = caution fill, the number on it.
-    clear();
-    draw_step_tile(kScr, 6, 30, 2, false);
-    CHECK_EQ(px(6 + 11, 30 + 2), kCaution);
-    CHECK_EQ(px(6, 30), kCaution);               // rectangular tile
-    CHECK_EQ(px(5, 30), 0);
-    clear();
-    draw_step_tile(kScr, 6, 30, 1, true);
-    CHECK_EQ(px(6 + 11, 30 + 2), kOk);
-}
-
 static void test_fit_text() {
     trunc::Pause pause;   // the cuts here are the point of the test, not copy that overflowed
     char buf[kFitBuf];
@@ -600,15 +410,9 @@ int main() {
     test_footer();
     test_footer_fit();
     test_geometry();
-    test_fill_round();
-    test_frame_round();
+    test_draw_frame();
     test_icon();
-    test_pill();
-    test_gauge();
-    test_triangle();
-    test_chevron_ports();
     test_sparkline();
     test_range_trace();
-    test_tool_widgets();
     return test_report("test_ui_widgets");
 }

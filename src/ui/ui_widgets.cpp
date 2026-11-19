@@ -212,23 +212,7 @@ K2_HOT void stream_mono(const Surface &s, int16_t x, int16_t y, int sz, int src,
 
 }  // namespace
 
-K2_HOT void fill_round(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, int, uint16_t color) {
-    gfx_fill(s, x, y, w, h, color);
-}
-
-void fill_round_hole(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, int, uint16_t color, int16_t hx, int16_t hy,
-                     int16_t hw, int16_t hh) {
-    const int x1 = x + w, y1 = y + h;
-    const int ax0 = std::max<int>(x, hx), ax1 = std::min<int>(x1, hx + hw);
-    const int ay0 = std::max<int>(y, hy), ay1 = std::min<int>(y1, hy + hh);
-    if (ax0 >= ax1 || ay0 >= ay1) { gfx_fill(s, x, y, w, h, color); return; }
-    if (ay0 > y) gfx_fill(s, x, y, w, static_cast<int16_t>(ay0 - y), color);
-    if (ay1 < y1) gfx_fill(s, x, static_cast<int16_t>(ay1), w, static_cast<int16_t>(y1 - ay1), color);
-    if (ax0 > x) gfx_fill(s, x, static_cast<int16_t>(ay0), static_cast<int16_t>(ax0 - x), static_cast<int16_t>(ay1 - ay0), color);
-    if (ax1 < x1) gfx_fill(s, static_cast<int16_t>(ax1), static_cast<int16_t>(ay0), static_cast<int16_t>(x1 - ax1), static_cast<int16_t>(ay1 - ay0), color);
-}
-
-K2_HOT void frame_round(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, int, int t, uint16_t color) {
+K2_HOT void draw_frame(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, int t, uint16_t color) {
     if (w <= 2 * t || h <= 2 * t) { gfx_fill(s, x, y, w, h, color); return; }
     gfx_fill(s, x, y, w, static_cast<int16_t>(t), color);
     gfx_fill(s, x, static_cast<int16_t>(y + h - t), w, static_cast<int16_t>(t), color);
@@ -290,62 +274,19 @@ void draw_label_box(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h
         gfx_text({0, 0, kScreenW, kScreenW}, kLabelFont, p.x, p.y, text, fg, bg);
     } else {
         const TextOrigin p = center_in_box({x, y, w, h}, tb);
-        fill_round_hole(s, x, y, w, h, 0, bg, p.x, p.y,
-                        static_cast<int16_t>(text_width(kLabelFont, text)), static_cast<int16_t>(kLabelFont.height));
+        const int x1 = x + w, y1 = y + h;
+        const int ax0 = std::max<int>(x, p.x), ax1 = std::min<int>(x1, p.x + text_width(kLabelFont, text));
+        const int ay0 = std::max<int>(y, p.y), ay1 = std::min<int>(y1, p.y + kLabelFont.height);
+        if (ax0 >= ax1 || ay0 >= ay1) {
+            gfx_fill(s, x, y, w, h, bg);
+        } else {
+            if (ay0 > y) gfx_fill(s, x, y, w, static_cast<int16_t>(ay0 - y), bg);
+            if (ay1 < y1) gfx_fill(s, x, static_cast<int16_t>(ay1), w, static_cast<int16_t>(y1 - ay1), bg);
+            if (ax0 > x) gfx_fill(s, x, static_cast<int16_t>(ay0), static_cast<int16_t>(ax0 - x), static_cast<int16_t>(ay1 - ay0), bg);
+            if (ax1 < x1) gfx_fill(s, static_cast<int16_t>(ax1), static_cast<int16_t>(ay0), static_cast<int16_t>(x1 - ax1), static_cast<int16_t>(ay1 - ay0), bg);
+        }
         gfx_text(s, kLabelFont, p.x, p.y, text, fg, bg);
     }
-}
-
-int draw_pill(const Surface &s, int16_t x, int16_t y, std::string_view text, uint16_t color, uint16_t tint,
-              bool solid) {
-    const int w = pill_width(static_cast<int>(text.size()));
-    draw_label_box(s, x, y, static_cast<int16_t>(w), kPillH, text, solid ? kBg : color, solid ? color : tint);
-    return w;
-}
-
-void draw_gauge(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, int fill_px, uint16_t color,
-                int prev_px) {
-    if (fill_px > w) fill_px = w;
-    if (fill_px < 0) fill_px = 0;
-    if (prev_px < 0) {   // full repaint
-        if (fill_px > 0) gfx_fill(s, x, y, static_cast<int16_t>(fill_px), h, color);
-        if (fill_px < w) gfx_fill(s, static_cast<int16_t>(x + fill_px), y, static_cast<int16_t>(w - fill_px), h, kRule);
-        return;
-    }
-    if (prev_px > w) prev_px = w;
-    if (fill_px > prev_px) gfx_fill(s, static_cast<int16_t>(x + prev_px), y, static_cast<int16_t>(fill_px - prev_px), h, color);
-    else if (fill_px < prev_px) gfx_fill(s, static_cast<int16_t>(x + fill_px), y, static_cast<int16_t>(prev_px - fill_px), h, kRule);
-}
-
-void draw_triangle(const Surface &s, int16_t x, int16_t y, int h, bool right, uint16_t color) {
-    for (int r = 0; r < h; r++) {
-        const int w = tri_row_w(h, r);
-        gfx_fill(s, static_cast<int16_t>(right ? x : x + tri_width(h) - w), static_cast<int16_t>(y + r),
-                 static_cast<int16_t>(w), 1, color);
-    }
-}
-
-void draw_chevron(const Surface &s, int16_t x, int16_t y, bool up, uint16_t color) {
-    for (int k = 0; k < kChevH; k++) {
-        const int l = chevron_left(up, k);
-        const int yy = y + k;
-        if (l == 8 - l) {   // apex row: both arms overlap
-            gfx_fill(s, static_cast<int16_t>(x + l), static_cast<int16_t>(yy), 2, 1, color);
-        } else {
-            gfx_fill(s, static_cast<int16_t>(x + l), static_cast<int16_t>(yy), 2, 1, color);
-            gfx_fill(s, static_cast<int16_t>(x + 8 - l), static_cast<int16_t>(yy), 2, 1, color);
-        }
-    }
-}
-
-void draw_port_male(const Surface &s, int16_t x, int16_t y, uint16_t color, uint16_t bg) {
-    fill_round(s, x, y, 18, 8, 3, color);
-    gfx_fill(s, static_cast<int16_t>(x + 4), static_cast<int16_t>(y + 3), 10, 2, bg);
-}
-
-void draw_port_female(const Surface &s, int16_t x, int16_t y, uint16_t color) {
-    frame_round(s, x, y, 18, 8, 3, 1, color);
-    gfx_fill(s, static_cast<int16_t>(x + 4), static_cast<int16_t>(y + 3), 10, 2, color);
 }
 
 K2_HOT void draw_sparkline(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, const uint8_t *samples,
@@ -411,10 +352,6 @@ K2_HOT void draw_footer(const Surface &s, FooterTone tone, std::string_view text
     op.s0 = fitted;
     op.fy = fy;
     draw_band(s, 0, fy, s.h - fy, op);
-}
-
-void draw_footer_cached(const Surface &s, FooterTone tone, std::string_view text, Elem &e K2_TRUNC_DEF) {
-    draw_footer_budgeted(s, tone, text, e, nullptr K2_TRUNC_ARG);
 }
 
 bool draw_footer_budgeted(const Surface &s, FooterTone tone, std::string_view text, Elem &e, PaintBudget *bg K2_TRUNC_DEF) {
@@ -574,54 +511,6 @@ std::string_view fit_text_mid(const Font &f, std::string_view text, int max_px, 
     const std::string_view out = cut_mid(f, text, max_px, buf);
     if (out.data() != text.data()) K2_TRUNC_NOTE(trunc::Kind::Data, text, max_px);
     return out;
-}
-
-void draw_flow_diagram(const Surface &s, int16_t x, int16_t y, int16_t h, const FlowSpec &f) {
-    const FlowGeom g = flow_geom(h);
-    gfx_fill(s, x, y, kFlowW, h, kSurface);
-    draw_port_male(s, static_cast<int16_t>(x + 6), static_cast<int16_t>(y + g.top_port_y), f.top_color, kSurface);
-    draw_port_female(s, static_cast<int16_t>(x + 6), static_cast<int16_t>(y + g.bottom_port_y), f.bottom_color);
-    const struct { int16_t ry; std::string_view role; uint16_t color, tint; } roles[2] = {
-        {g.role_top_y, f.top_role, f.top_color, f.top_tint},
-        {g.role_bottom_y, f.bottom_role, f.bottom_color, f.bottom_tint},
-    };
-    for (const auto &rl : roles) {
-        if (rl.role.empty()) continue;
-        const int16_t w = static_cast<int16_t>(rl.role.size() * kLabelAdv + 8);
-        gfx_fill(s, static_cast<int16_t>(x + 28), static_cast<int16_t>(y + rl.ry), w, kPillH, rl.tint);
-        gfx_text(s, kLabelFont, static_cast<int16_t>(x + 32), static_cast<int16_t>(y + rl.ry + 1), rl.role, rl.color, rl.tint);
-    }
-    if (f.flow == Arrow::Idle) {
-        gfx_fill(s, static_cast<int16_t>(x + 14), static_cast<int16_t>(y + g.line_y), 2, g.line_h, kFaint);
-    } else {
-        const int n = flow_chevrons(h);
-        const int span = n * kChevPitch - (kChevPitch - kChevH);
-        const int y0 = y + g.line_y + (g.line_h - span) / 2;
-        for (int k = 0; k < n; k++)
-            draw_chevron(s, static_cast<int16_t>(x + 10), static_cast<int16_t>(y0 + k * kChevPitch), f.flow == Arrow::Up, kFlow);
-    }
-    if (!f.caption.empty())
-        gfx_text(s, kLabelFont, static_cast<int16_t>(x + 30), static_cast<int16_t>(y + g.caption_y), f.caption, f.caption_color, kSurface);
-}
-
-void draw_checklist(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, uint16_t accent,
-                    const CheckItem *items, int n) {
-    gfx_fill(s, x, y, w, h, kSurface);
-    gfx_fill(s, x, static_cast<int16_t>(y + 4), 3, static_cast<int16_t>(h - 8), accent);
-    for (int i = 0; i < n; i++) {
-        const CheckItem &it = items[i];
-        draw_icon(s, static_cast<int16_t>(x + 8), static_cast<int16_t>(y + checklist_icon_y(i)),
-                  it.met ? Icon::Check : Icon::Cross, it.met ? kOk : accent, kSurface);
-        gfx_text(s, kSmall, static_cast<int16_t>(x + 24), static_cast<int16_t>(y + checklist_text_y(i)), it.text,
-                 it.met ? kDim : kText, kSurface);
-    }
-}
-
-void draw_step_tile(const Surface &s, int16_t x, int16_t y, int number, bool done) {
-    const uint16_t c = done ? kOk : kCaution;
-    gfx_fill(s, x, y, 22, 22, c);
-    const char d[2] = {static_cast<char>('0' + number % 10), 0};
-    gfx_text(s, kSmall, static_cast<int16_t>(x + 6), static_cast<int16_t>(y + 2), d, kBg, c);
 }
 
 }  // namespace k2

@@ -17,44 +17,19 @@
 namespace k2 {
 
 // ---- pure geometry ---------------------------------------------------------------------------
-// Pixels cut off the left (and right) end of row `i` (0 = top row) of a rounded corner of radius r.
-constexpr int round_inset(int r, int i) {
-    if (r <= 0 || i < 0 || i >= r) return 0;
-    const int dy2 = 2 * (r - i) - 1;          // twice the distance from the row centre to the arc centre
-    const int q = 4 * r * r - dy2 * dy2;
-    int s = 0;
-    while ((s + 1) * (s + 1) <= q) s++;       // integer sqrt (tiny radii only)
-    return r - (s + 1) / 2;
-}
-
-// Inset of row i of a w x h rounded rectangle (the bottom rows mirror the top ones).
-constexpr int round_row_inset(int r, int h, int i) {
-    if (r * 2 > h) r = h / 2;
-    return round_inset(r, i < h - 1 - i ? i : h - 1 - i);
-}
-
 constexpr int kPillH = 14;
 constexpr int pill_width(int chars) { return chars * static_cast<int>(kLabelAdv) + 8; }
 
-// Width in pixels of a gauge fill: 0 when the value is not positive, at least 2 otherwise,
-// never more than w. `full` <= 0 draws an empty gauge.
-constexpr int gauge_fill_px(int w, int32_t value, int32_t full) {
-    if (value <= 0 || full <= 0) return 0;
-    if (value >= full) return w;
-    const int px = static_cast<int>(math::mul_div_i32(w, value, full));
-    return px < 2 ? 2 : px;
-}
-
 // Vertical chevron, 10 x 6: row k covers [l, l+2) and [8-l, 10-l) with l = kChevL[k]. The "up"
 // shape lists rows top to bottom, "down" mirrors them.
-constexpr int kChevW = 10, kChevH = 6, kChevPitch = 8;
+constexpr int kChevW = 10, kChevH = 6;
 constexpr uint8_t kChevL[kChevH] = {4, 3, 2, 1, 0, 0};
 constexpr int chevron_left(bool up, int row) { return kChevL[up ? row : kChevH - 1 - row]; }
 
-// The same chevron turned with the screen (rotation 0..3, see draw_physical_chevron): it points at the
+// The same chevron turned with the screen (rotation 0..3): it points at the
 // physical TOP port when toward_top, at the BOTTOM port otherwise. Quarter turns are 6 wide x 10 tall.
 // physical_chevron_row() is row `row` as a bit mask, bit c = column c from the left; the status-bar
-// band writes it row by row, draw_physical_chevron draws the identical pixels (host-tested).
+// band writes it row by row.
 constexpr int physical_chevron_w(unsigned rotation) { return (rotation & 1) ? kChevH : kChevW; }
 constexpr int physical_chevron_h(unsigned rotation) { return (rotation & 1) ? kChevW : kChevH; }
 constexpr uint16_t physical_chevron_row(bool toward_top, unsigned rotation, int row) {
@@ -75,11 +50,6 @@ constexpr uint16_t physical_chevron_row(bool toward_top, unsigned rotation, int 
     return bits;
 }
 
-// Solid arrow head of odd height h, tri_width(h) wide: row r is tri_row_w(h, r) pixels wide, growing
-// to the middle row. Drawn with its box top-left at (x, y); right = points right (base on the left).
-constexpr int tri_row_w(int h, int row) { return (row < h - 1 - row ? row : h - 1 - row) + 1; }
-constexpr int tri_width(int h) { return (h + 1) / 2; }
-
 // Sparkline cell classification. `level` is the height level of the row (h-1 = top row),
 // `v` the sample height (0..h-1), `prev` the previous sample.
 enum class Cell : uint8_t { None, Fill, Line };
@@ -90,11 +60,7 @@ constexpr Cell spark_cell(int level, int v, int prev) {
 }
 
 // ---- drawing (coordinates relative to the surface, like gfx_fill) -----------------------------
-void fill_round(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, int r, uint16_t color);
-// fill_round without the rectangle (hx, hy, hw, hh): the caller paints it next with an opaque text cell, so no pixel is written twice.
-void fill_round_hole(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, int r, uint16_t color, int16_t hx, int16_t hy,
-                     int16_t hw, int16_t hh);
-void frame_round(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, int r, int t, uint16_t color);
+void draw_frame(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, int t, uint16_t color);
 
 // 12 x 12 icon; set bits take fg, clear bits bg (opaque).
 void draw_icon(const Surface &s, int16_t x, int16_t y, Icon icon, uint16_t fg, uint16_t bg);
@@ -107,26 +73,9 @@ constexpr int mark_cell(const Font &f) { return mark_size(f) + 4; }   // 2 px le
 int draw_marked_text(const Surface &s, const Font &f, int16_t x, int16_t y, std::string_view text, uint16_t fg, uint16_t bg);
 int marked_width(const Font &f, std::string_view text);
 
-// Tag: S12 text in a kPillH box. solid = fill in `color` with black text, otherwise `tint` fill with `color` text.
-// Returns the pill width.
-int draw_pill(const Surface &s, int16_t x, int16_t y, std::string_view text, uint16_t color, uint16_t tint,
-              bool solid);
-// Shared single-pass S12 label-in-box painter (pills, chips, LAST badge).
+// Shared single-pass S12 label-in-box painter (chips, LAST badge).
 void draw_label_box(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, std::string_view text,
                     uint16_t fg, uint16_t bg);
-
-// Track (kRule) plus fill; only the fill/track boundary is repainted when `prev_px` is given.
-void draw_gauge(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, int fill_px, uint16_t color,
-                int prev_px = -1);
-
-void draw_triangle(const Surface &s, int16_t x, int16_t y, int h, bool right, uint16_t color);
-
-// One chevron with its top-left at (x, y); the pixels of a recolour are identical.
-void draw_chevron(const Surface &s, int16_t x, int16_t y, bool up, uint16_t color);
-
-// USB-C port symbols, 18 x 8: male = solid plug with a slot, female = outlined receptacle with a tongue.
-void draw_port_male(const Surface &s, int16_t x, int16_t y, uint16_t color, uint16_t bg);
-void draw_port_female(const Surface &s, int16_t x, int16_t y, uint16_t color);
 
 // w x h sparkline of `w` samples (oldest first, each 0..h-1): bg box, three rule lines, a fill
 // under the trace in `tint`, and a one-pixel trace in `color`.
@@ -188,12 +137,14 @@ void draw_footer(const Surface &s, FooterTone tone, std::string_view text K2_TRU
 // page's own footer then sets it again.
 bool footer_error_shown();
 void footer_error_clear();
+// Budget-gated version of draw_footer_cached: returns false and leaves `e` invalid/old if `bg` refuses.
+bool draw_footer_budgeted(const Surface &s, FooterTone tone, std::string_view text, Elem &e, PaintBudget *bg K2_TRUNC_DECL);
 // Same as draw_footer, but paints through the element's cache: skips the repaint when the
 // (tone, text) signature is unchanged since the last call with this `e` slot.
 // e.invalidate() forces a repaint.
-void draw_footer_cached(const Surface &s, FooterTone tone, std::string_view text, Elem &e K2_TRUNC_DECL);
-// Budget-gated version of draw_footer_cached: returns false and leaves `e` invalid/old if `bg` refuses.
-bool draw_footer_budgeted(const Surface &s, FooterTone tone, std::string_view text, Elem &e, PaintBudget *bg K2_TRUNC_DECL);
+inline void draw_footer_cached(const Surface &s, FooterTone tone, std::string_view text, Elem &e K2_TRUNC_DECL) {
+    draw_footer_budgeted(s, tone, text, e, nullptr K2_TRUNC_ARG);
+}
 
 // ---- top chrome bar (micro-GUI phase 1): 20 px band + 1 px hairline at y kBarH-1 -----------------
 // Page name left; on every page except Home the right side carries the compact fmt3(V) x fmt3(A)
@@ -311,38 +262,5 @@ std::string_view fit_data(const Font &f, std::string_view text, int max_px, char
 // whose differing part is usually the end). With too little room for start + dots + tail it is fit_text.
 // Always data (the gate counts it, never fails on it).
 std::string_view fit_text_mid(const Font &f, std::string_view text, int max_px, char (&buf)[kFitBuf] K2_TRUNC_DECL);
-
-// ---- tool template: flow diagram column, checklist card, step tile ------------------------------
-// FlowDiagram: a 64 x h card with a male port at the top, a female port at the bottom, a role pill
-// beside each (K2, CBL, DEV, CHG: the role of the thing, never the port position), the chevron
-// column between them and a caption mid-height. Offsets are relative to the card's top-left.
-struct FlowGeom { int16_t top_port_y, bottom_port_y, role_top_y, role_bottom_y, line_y, line_h, caption_y; };
-constexpr FlowGeom flow_geom(int16_t h) {
-    const int16_t bottom = static_cast<int16_t>(h - 13);
-    return {5, bottom, 2, static_cast<int16_t>(h - 16), 17, static_cast<int16_t>(bottom - 4 - 17),
-            static_cast<int16_t>(h / 2 - 6)};
-}
-constexpr int flow_chevrons(int16_t h) { return flow_geom(h).line_h / kChevPitch; }
-constexpr int16_t kFlowW = 64;
-
-struct FlowSpec {
-    std::string_view top_role, bottom_role;
-    uint16_t top_color = 0, top_tint = 0, bottom_color = 0, bottom_tint = 0;
-    Arrow flow = Arrow::Idle;            // Idle = a faint line, Up / Down = the chevron column
-    std::string_view caption;            // S12, at x 30 beside the column
-    uint16_t caption_color = 0;
-};
-void draw_flow_diagram(const Surface &s, int16_t x, int16_t y, int16_t h, const FlowSpec &f);
-
-// Checklist: a card with a 3 px accent bar and one row per item: a check (met, dim text) or a cross
-// in the accent colour (open, full text), B16 text. Rows are 22 px apart.
-struct CheckItem { std::string_view text; bool met; };
-constexpr int16_t checklist_icon_y(int i) { return static_cast<int16_t>(6 + 22 * i); }
-constexpr int16_t checklist_text_y(int i) { return static_cast<int16_t>(4 + 22 * i); }
-void draw_checklist(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, uint16_t accent,
-                    const CheckItem *items, int n);
-
-// StepCard tile: 22 x 22, r 5, a number on it; done = ok, to do = caution.
-void draw_step_tile(const Surface &s, int16_t x, int16_t y, int number, bool done);
 
 }  // namespace k2

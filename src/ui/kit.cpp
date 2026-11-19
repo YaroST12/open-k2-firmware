@@ -34,7 +34,7 @@ void draw_struck_text(const Surface &s, const Font &f, int16_t x, int16_t y, std
 
 // ---- VerdictCell --------------------------------------------------------------------------------------------------------
 void draw_run_mark(const Surface &s, const CellRect &cell, bool on, uint16_t under) {
-    frame_round(s, cell.x, cell.y, cell.w, cell.h, 0, kRunFrame, on ? verdict_style(Verdict::Running).mark : under);
+    draw_frame(s, cell.x, cell.y, cell.w, cell.h, kRunFrame, on ? verdict_style(Verdict::Running).mark : under);
 }
 
 // Every pixel of the cell is streamed once: the fill leaves a hole for the label or the glyph. The exceptions are a Skip
@@ -108,7 +108,7 @@ void draw_verdict(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, 
         }
     } else if (v == Verdict::Running) {
         const int16_t t = sz >= 8 ? kRunFrame : 1;
-        frame_round(s, gx, gy, static_cast<int16_t>(sz), static_cast<int16_t>(sz), 0, t, st.mark);
+        draw_frame(s, gx, gy, static_cast<int16_t>(sz), static_cast<int16_t>(sz), t, st.mark);
         gfx_fill(s, static_cast<int16_t>(gx + t), static_cast<int16_t>(gy + t), static_cast<int16_t>(sz - 2 * t),
                  static_cast<int16_t>(sz - 2 * t), base);
     } else {
@@ -247,7 +247,7 @@ int draw_chip(const Surface &s, int16_t x, int16_t y, std::string_view text, uin
 
 int draw_chip_frame(const Surface &s, int16_t x, int16_t y, std::string_view text, uint16_t frame, uint16_t ink, uint16_t bg) {
     const int16_t w = static_cast<int16_t>(badge_text_bounds(kLabelFont, text).w + 8);
-    frame_round(s, x, y, w, kChipH, 0, 1, frame);
+    draw_frame(s, x, y, w, kChipH, 1, frame);
     draw_label_box(s, static_cast<int16_t>(x + 1), static_cast<int16_t>(y + 1), static_cast<int16_t>(w - 2),
                    static_cast<int16_t>(kChipH - 2), text, ink, bg);
     return w;
@@ -310,45 +310,6 @@ void kv_ground(const Surface &s, const KvLayout &l, const char *const *labels, i
     for (int i = 0; i < n; i++) kv_ground_row(s, l, labels[i], i, chars, marks);
 }
 
-void kv_row_sel(const Surface &s, const KvLayout &l, int16_t y, std::string_view key, std::string_view value, uint16_t value_color,
-                bool focused K2_TRUNC_DEF) {
-    const Font &kf = detail::font_or_small(l.label_font), &vf = detail::font_or_small(l.value_font);
-    const bool bar = focused && kFocusBar != 0, inverted = focused && !bar;
-    const uint16_t bg = focused ? kFocusFill : kBg;
-    const int16_t gx = bar ? 3 : 0, body = static_cast<int16_t>(l.pitch - 1);
-    gfx_fill(s, 0, y, s.w, 1, kBg);
-    if (bar) gfx_fill(s, 0, static_cast<int16_t>(y + 1), 3, body, kFocusBar);
-    gfx_fill(s, gx, static_cast<int16_t>(y + 1), static_cast<int16_t>(s.w - gx), body, bg);
-    char buf[kFitBuf];
-    gfx_text(s, kf, l.label_x, static_cast<int16_t>(y + row_text_y(l.pitch, kf.height)), key, inverted ? kOnFocusDim : kInk2, bg);
-    gfx_text(s, vf, l.value_x, static_cast<int16_t>(y + row_text_y(l.pitch, vf.height)),
-             fit_text(vf, value, l.value_chars * vf.adv, buf K2_TRUNC_ARG), inverted ? kOnFocus : value_color, bg);
-}
-
-// ---- SegmentedControl ----------------------------------------------------------------------------------------------------
-void draw_segmented(const Surface &s, int16_t y, std::string_view label, const char *const *items, int n, int picked,
-                    bool focused K2_TRUNC_DEF) {
-    const bool bar = focused && kFocusBar != 0, inverted = focused && !bar;
-    const uint16_t bg = focused ? kFocusFill : kBg;
-    const int16_t gx = bar ? 3 : 0;
-    gfx_fill(s, gx, y, static_cast<int16_t>(s.w - gx), kSegH, bg);
-    if (bar) gfx_fill(s, 0, y, 3, kSegH, kFocusBar);
-    gfx_text(s, kLabelFont, 6, static_cast<int16_t>(y + 2), label, inverted ? kOnFocusDim : kInk2, bg);
-    const int16_t by = static_cast<int16_t>(y + kSegLabelH);
-    char buf[kFitBuf];
-    for (int i = 0; i < n; i++) {
-        const SegSpan sp = seg_span(s.w, n, i);
-        const bool on = i == picked;
-        if (on) gfx_fill(s, sp.x, by, sp.w, kSegBarH, kFocus);
-        const std::string_view t = fit_text(kSmall, items[i], sp.w - 4, buf K2_TRUNC_ARG);
-        gfx_text(s, kSmall, static_cast<int16_t>(sp.x + (sp.w - text_width(kSmall, t)) / 2),
-                 static_cast<int16_t>(by + (kSegBarH - kSmall.height) / 2), t, on ? kSpotInk : inverted ? kOnFocus : kText, on ? kFocus : bg);
-        // The frame goes over the word's cell: in a landscape mapping the bar loses a row or two while the glyphs keep their size,
-        // so the cell would otherwise cut into the frame.
-        if (!on) frame_round(s, sp.x, by, sp.w, kSegBarH, 0, 2, focused ? kFocus : kRule);
-    }
-}
-
 // ---- AlertBand -----------------------------------------------------------------------------------------------------------
 void draw_warn_triangle(const Surface &s, int16_t x, int16_t y, int16_t sz, uint16_t color, uint16_t ink) {
     for (int r = 0; r < sz; r++) {
@@ -388,7 +349,7 @@ bool ActionCell::draw_idle(std::string_view verb, std::string_view hint, PaintBu
         const uint16_t fill = focused ? kTicket : kBg, ink = focused ? kOnTicket : kInk2;
         const uint16_t frame = focused ? kTicketFrame : kRule;
         ticket_ground(surf_, y_, h_, w, fill);
-        if (frame) frame_round(surf_, kTicketInset, y_, w, h_, 0, 2, frame);
+        if (frame) draw_frame(surf_, kTicketInset, y_, w, h_, 2, frame);
         const int content = kMid.height + (hint.empty() ? 0 : 6 + kLabelFont.height);
         const int16_t top = static_cast<int16_t>(y_ + (h_ - content) / 2);
         centred_text(surf_, kMid, 4, static_cast<int16_t>(surf_.w - 8), top, verb, ink, fill);
@@ -457,15 +418,6 @@ void ProgressBar::set(int done, int total) {
         gfx_fill(surf_, static_cast<int16_t>(x_ + px), y_, static_cast<int16_t>(px_ - px), kH, kRule);
     }
     px_ = static_cast<int16_t>(px);
-}
-
-// ---- InfoBlock -----------------------------------------------------------------------------------------------------------
-void draw_info_row(const Surface &s, int16_t y, std::string_view tag, std::string_view value, uint16_t value_color) {
-    char buf[kFitBuf];
-    const int16_t ty = static_cast<int16_t>(y + (kInfoPitch - kSmall.height) / 2);
-    gfx_fill(s, 0, y, s.w, kInfoPitch, kBg);
-    gfx_text(s, kSmall, kInfoTagX, ty, tag, kDim, kBg);
-    gfx_text(s, kSmall, kInfoValueX, ty, fit_data(kSmall, value, s.w - kInfoValueX - 4, buf), value_color, kBg);
 }
 
 // ---- ResultGrid ----------------------------------------------------------------------------------------------------------
@@ -829,20 +781,48 @@ int ResultGrid::draw_some(int budget_px, int prefer, bool strict) {
 
 void ResultGrid::draw() { draw_some(1 << 30); }
 
-// ---- PassBandGauge -------------------------------------------------------------------------------------------------------
+// ---- PassBandGauge & RangeGauge ------------------------------------------------------------------------------------------
 namespace {
-// Paints columns [c0, c1) of the gauge strip.
-void gauge_cols(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t lo, int16_t hi, int16_t c0, int16_t c1) {
+struct StripCols {
+    int16_t c0, c1;
+    void fill(const Surface &s, int16_t y, int a, int b, int row, int rows, uint16_t col) const {
+        a = std::max<int>(a, c0);
+        b = std::min<int>(b, c1);
+        if (b > a) gfx_fill(s, static_cast<int16_t>(a), static_cast<int16_t>(y + row),
+                            static_cast<int16_t>(b - a), static_cast<int16_t>(rows), col);
+    }
+};
+
+// Clamps [c0, c1) to [x, x + w) and paints the strip's ground and 4 px rule track.
+bool strip_base(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t c0, int16_t c1, StripCols &out) {
     if (c0 < x) c0 = x;
     if (c1 > x + w) c1 = static_cast<int16_t>(x + w);
-    if (c1 <= c0) return;
+    if (c1 <= c0) return false;
+    out = {c0, c1};
     gfx_fill(s, c0, y, static_cast<int16_t>(c1 - c0), kPassBandH, kBg);
     gfx_fill(s, c0, static_cast<int16_t>(y + 4), static_cast<int16_t>(c1 - c0), 4, kRule);
-    const int16_t a = c0 > lo ? c0 : lo, b = c1 < hi + 1 ? c1 : static_cast<int16_t>(hi + 1);
-    if (b > a) {
-        gfx_fill(s, a, static_cast<int16_t>(y + 2), static_cast<int16_t>(b - a), 8, kOkT);
-        gfx_fill(s, a, static_cast<int16_t>(y + 4), static_cast<int16_t>(b - a), 4, kOk);
-    }
+    return true;
+}
+
+// Paints columns [c0, c1) of the pass-band strip.
+void gauge_cols(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t lo, int16_t hi, int16_t c0, int16_t c1) {
+    StripCols sc;
+    if (!strip_base(s, x, y, w, c0, c1, sc)) return;
+    sc.fill(s, y, lo, hi + 1, 2, 8, kOkT);
+    sc.fill(s, y, lo, hi + 1, 4, 4, kOk);
+}
+
+// Paints columns [c0, c1) of the range strip: ground and track, the dotted end lines, the tint between them, the setpoint
+// marker's caps, then the needle over everything. Every part clips to the columns, so any column interval repaints whole.
+void range_cols(const Surface &s, int16_t x, int16_t y, int16_t w, const RangeGeom &g, int16_t c0, int16_t c1) {
+    StripCols sc;
+    if (!strip_base(s, x, y, w, c0, c1, sc)) return;
+    sc.fill(s, y, g.lo + 2, g.hi - 1, 2, 8, kOkT);          // the tint between the lines (rows 2..9, over the track too)
+    for (const int a : {int(g.lo), int(g.hi) - 1})         // the lines: 2 px wide, 2 rows on / 2 off (rows 0,1 4,5 8,9)
+        for (const int r : {0, 4, 8}) sc.fill(s, y, a, a + 2, r, 2, kOk);
+    sc.fill(s, y, g.mark - 2, g.mark + 4, 0, 3, kFocus);   // the marker: a cap on the top and bottom edges
+    sc.fill(s, y, g.mark - 2, g.mark + 4, 9, 3, kFocus);
+    sc.fill(s, y, g.needle, g.needle + 2, 0, kPassBandH, kText);
 }
 }  // namespace
 
@@ -869,7 +849,6 @@ int draw_pass_band(const Surface &s, int16_t x, int16_t y, int16_t w, int32_t va
     return np;
 }
 
-// ---- RangeGauge ----------------------------------------------------------------------------------------------------------
 RangeGeom range_geom(int16_t x, int16_t w, int32_t value, int32_t set, int32_t lo, int32_t hi, int32_t full) {
     if (full <= 0) full = 1;
     auto at = [&](int32_t v) { return static_cast<int16_t>(x + math::mul_div_i32(w, std::max<int32_t>(v, 0), full)); };
@@ -880,29 +859,6 @@ RangeGeom range_geom(int16_t x, int16_t w, int32_t value, int32_t set, int32_t l
     g.needle = std::clamp<int16_t>(at(value), x, static_cast<int16_t>(x + w - 2));
     return g;
 }
-
-namespace {
-// Paints columns [c0, c1) of the range strip: ground and track, the dotted end lines, the tint between them, the setpoint
-// marker's caps, then the needle over everything. Every part clips to the columns, so any column interval repaints whole.
-void range_cols(const Surface &s, int16_t x, int16_t y, int16_t w, const RangeGeom &g, int16_t c0, int16_t c1) {
-    if (c0 < x) c0 = x;
-    if (c1 > x + w) c1 = static_cast<int16_t>(x + w);
-    if (c1 <= c0) return;
-    // fill(a, b, row, rows, colour): columns [a, b) clipped to [c0, c1)
-    auto fill = [&](int a, int b, int row, int rows, uint16_t col) {
-        a = std::max<int>(a, c0); b = std::min<int>(b, c1);
-        if (b > a) gfx_fill(s, static_cast<int16_t>(a), static_cast<int16_t>(y + row), static_cast<int16_t>(b - a), static_cast<int16_t>(rows), col);
-    };
-    fill(c0, c1, 0, kPassBandH, kBg);
-    fill(c0, c1, 4, 4, kRule);
-    fill(g.lo + 2, g.hi - 1, 2, 8, kOkT);                  // the tint between the lines (rows 2..9, over the track too)
-    for (const int a : {int(g.lo), int(g.hi) - 1})         // the lines: 2 px wide, 2 rows on / 2 off (rows 0,1 4,5 8,9)
-        for (const int r : {0, 4, 8}) fill(a, a + 2, r, 2, kOk);
-    fill(g.mark - 2, g.mark + 4, 0, 3, kFocus);            // the marker: a cap on the top and bottom edges
-    fill(g.mark - 2, g.mark + 4, 9, 3, kFocus);
-    fill(g.needle, g.needle + 2, 0, kPassBandH, kText);
-}
-}  // namespace
 
 RangePos draw_range_gauge(const Surface &s, int16_t x, int16_t y, int16_t w, int32_t value, int32_t set, int32_t lo, int32_t hi,
                           int32_t full, RangePos prev) {

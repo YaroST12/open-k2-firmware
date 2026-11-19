@@ -230,6 +230,7 @@ struct KvLayout {
     int16_t value_x = kKvValueX;        // left edge of the value box
     uint8_t value_chars = 18;
     Align align = Align::Left;
+    bool clear = false;                 // wipe the full row (l.pitch) before drawing, instead of just the 1 px top hairline
 };
 constexpr int16_t kv_row_y(const KvLayout &l, int i) { return static_cast<int16_t>(l.y0 + i * l.pitch); }
 // The static part (Fieldbook receipt): keys in ink2, a dot leader from each key to the value column, white space
@@ -300,29 +301,6 @@ void kv_ground(const Surface &s, const KvLayout &l, const char *const *labels, i
 // (fit_data: cut by design, only counted).
 void kv_row(const Surface &s, const KvLayout &l, int16_t y, std::string_view key, std::string_view value, uint16_t value_color,
             bool ours = false K2_TRUNC_DECL);
-// A key/value row the cursor can stand on (Review's Level): the row below its hairline is laid first, then kv_row's texts. Focused,
-// it takes the RowList's focus look (the focus ground, the 3 px kFocusBar when the theme has one, else the on-focus inks); the
-// value is firmware text (a cut fails the host gate).
-void kv_row_sel(const Surface &s, const KvLayout &l, int16_t y, std::string_view key, std::string_view value, uint16_t value_color,
-                bool focused K2_TRUNC_DECL);
-
-// ---- SegmentedControl ----------------------------------------------------------------------------------------------------
-// A choice that is plainly a control: a dim label row (S12) and under it a full-width bar of n equal segments (S16 words), one
-// picked. The picked segment is a solid kFocus block with dark ink; the others are 2 px frames (kRule, kFocus when the control
-// holds the cursor) with the normal ink. Focused, the whole block takes the RowList focus look (kFocusFill ground, the 3 px
-// kFocusBar when the theme has one). OK steps to the next segment (the page's job); a stateless painter like kv_row_sel.
-// The frame is 2 px and painted after the word, so a landscape mapping that drops rows never opens it.
-constexpr int16_t kSegLabelH = 14, kSegBarH = 20, kSegH = kSegLabelH + kSegBarH;   // label row, segment bar, the block
-constexpr int kSegMax = 4;
-struct SegSpan { int16_t x, w; };
-// Segment i of n across a surface w px wide: x6 .. w-6, 2 px between neighbours (pure).
-constexpr SegSpan seg_span(int16_t w, int n, int i) {
-    const int span = w - 12;
-    const int l = 6 + span * i / n + (i ? 1 : 0), r = 6 + span * (i + 1) / n - (i < n - 1 ? 1 : 0);
-    return SegSpan{static_cast<int16_t>(l), static_cast<int16_t>(r - l)};
-}
-void draw_segmented(const Surface &s, int16_t y, std::string_view label, const char *const *items, int n, int picked,
-                    bool focused K2_TRUNC_DECL);
 
 // ---- AlertBand -----------------------------------------------------------------------------------------------------------
 // Full-width band, kCaution or kError fill: a 20 px black triangle and the word in S24 (black ink). Short lines below it
@@ -373,11 +351,6 @@ private:
     Surface surf_{};
     int16_t x_ = 0, y_ = 0, w_ = 0, px_ = -1;
 };
-
-// ---- InfoBlock -----------------------------------------------------------------------------------------------------------
-// A tag / value row: the tag (S16, dim) at x4, the value (S16) at x52. The row (kInfoPitch tall, full width) is wiped
-// first, so a shorter value leaves nothing behind.
-void draw_info_row(const Surface &s, int16_t y, std::string_view tag, std::string_view value, uint16_t value_color = kText);
 
 // ---- ResultGrid ----------------------------------------------------------------------------------------------------------
 // A 60 px label strip (S12, dim, right-aligned at x55, 1 px rule at x60) and up to 5 verdict cells per row that flex-fill the

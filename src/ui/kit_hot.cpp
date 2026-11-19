@@ -287,7 +287,7 @@ K2_HOT void RowList::draw_row_cb(void *ctx, int index, const Rect &r, bool hi, F
         draw_drill(s, kTailX, static_cast<int16_t>(y + 1 + (kRowH - 1) / 2), sp.tail_color);
     } else if (pill_w) {
         const int16_t px0 = static_cast<int16_t>(kTailX - pill_w);
-        fill_round(s, px0, static_cast<int16_t>(y + 1 + (kRowH - 1 - kPillH) / 2), static_cast<int16_t>(pill_w), kPillH, 3, sp.tail_tint);
+        gfx_fill(s, px0, static_cast<int16_t>(y + 1 + (kRowH - 1 - kPillH) / 2), static_cast<int16_t>(pill_w), kPillH, sp.tail_tint);
         gfx_text(s, kLabelFont, static_cast<int16_t>(px0 + 4), static_cast<int16_t>(y + 1 + (kRowH - 1 - kPillH) / 2 + 1), tail_v,
                  sp.tail_color, sp.tail_tint);
     } else if (!tail_v.empty()) {
@@ -376,7 +376,7 @@ K2_HOT void kv_row(const Surface &s, const KvLayout &l, int16_t y, std::string_v
             bool ours K2_TRUNC_DEF) {
     const Font &kf = detail::font_or_small(l.label_font), &vf = detail::font_or_small(l.value_font);
     char buf[kFitBuf];
-    gfx_fill(s, 0, y, s.w, 1, kBg);
+    gfx_fill(s, 0, y, s.w, l.clear ? l.pitch : 1, kBg);
     gfx_text(s, kf, l.label_x, static_cast<int16_t>(y + row_text_y(l.pitch, kf.height)), key, kInk2, kBg);
     const int box = l.value_chars * vf.adv;
     gfx_text(s, vf, l.value_x, static_cast<int16_t>(y + row_text_y(l.pitch, vf.height)),

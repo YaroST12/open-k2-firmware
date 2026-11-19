@@ -202,7 +202,6 @@ inline bool put_field(SmallField<N> &f, PaintBudget *bg, std::string_view s, uin
 [[gnu::noinline]] void put_exact_unit(StrBufBase &out, uint32_t milli, char unit = 0);
 [[gnu::noinline]] void put_unit_or_dash(StrBufBase &out, bool ok, int32_t val, int dec, char unit, bool abs_val = false);
 [[gnu::noinline]] std::string_view trim_left(std::string_view s);
-[[gnu::noinline]] void paint_footer_sig(const Surface &c, FooterTone tone, std::string_view text, uint32_t &sig);
 inline void put_dv(StrBufBase &out, unsigned dv) { put_exact_unit(out, dv * 100u, 'V'); }
 inline void put_volts_trim(StrBufBase &out, int32_t mv) { put_exact_unit(out, mv < 0 ? 0u : static_cast<uint32_t>(mv), 0); }
 }  // namespace pg
@@ -1203,8 +1202,9 @@ private:
     SmallField<8> target_v_, vbus_v_, held_v_;
     SmallField<12> state_v_;
     kit::ActionCell send_;                // Review: SEND, then CONFIRM with the draining bar
+    Elem foot_;
     uint8_t kind_ = 255;                  // body painted: 0 main, 1 scan
-    uint32_t bsig_ = 0, barsig_ = 0, fsig_ = 0, tsig_ = 0, ysig_ = 0;
+    uint32_t bsig_ = 0, barsig_ = 0, tsig_ = 0, ysig_ = 0;
     std::array<uint32_t, fc::kScanSteps> tile_sig_{};   // per scan row (verdict, tail) cache
     int16_t trace_mv_[kTraceLen] = {};
     int trace_n_ = 0;
@@ -1259,7 +1259,8 @@ private:
     uint8_t body_step_ = 0xFF;    // the step the body was last cleared for
     uint32_t armed_at_ = 0;       // when the second-OK window opened (0 = not armed): drains the CONFIRM bar
     uint32_t rsig_ = 0;           // refusal view signature (0 = not painted)
-    uint32_t bsig_ = 0, fsig_ = 0, barsig_ = 0, tsig_ = 0, vsig_ = 0;   // body, footer, top bar, edge marks / resets, verdict
+    uint32_t bsig_ = 0, barsig_ = 0, tsig_ = 0, vsig_ = 0;   // body, top bar, edge marks / resets, verdict
+    Elem foot_;
     SmallField<12> f_[2];         // the live cells of the step: power + big value, or measured V + A
     kit::ProgressBar range_;      // VOLTAGE / CURRENT: where the value sits in its range
     kit::ActionCell send_;        // CONFIRM: SEND, then CONFIRM with the draining bar
