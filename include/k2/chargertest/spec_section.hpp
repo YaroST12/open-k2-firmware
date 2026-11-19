@@ -231,9 +231,10 @@ constexpr const char* group_word(Group g) { return g == Group::Level ? "level" :
 
 // Bit 7 of an APDO cell's code: the kept worst failed (its rank is redone from the quantised value, as Agg does from worst / lo / hi).
 inline constexpr std::uint8_t kWorstFailed = 0x80;
-constexpr void cell_add(C c, Cell& cell, const sc::Meas& m) {
+constexpr void cell_add(C c, Cell& cell, const sc::Meas& in) {
     const sc::CheckDef& d = sc::def(c);
-    const std::int32_t ex = sc::excess(d.kind, m);
+    const std::int32_t ex = sc::excess(d.kind, in);
+    const sc::Meas m = sc::kept(d.kind, in);
     if (ex > 0 && cell.fails < 255) ++cell.fails;
     const sc::Meas kept{dequantize(d.unit, cell.value), 0, dequantize_limit(d.unit, cell.lo, false), dequantize_limit(d.unit, cell.hi, true)};
     bool worst_failed = (cell.code & kWorstFailed) != 0;

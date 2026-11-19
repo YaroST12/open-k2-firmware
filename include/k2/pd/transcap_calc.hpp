@@ -209,7 +209,8 @@ constexpr PdMark classify_pd(bool rx, std::uint16_t header, std::uint32_t obj0) 
         default: break;
         }
     }
-    if (!rx && !ext && nobj > 0 && type == 2) return {Mark::TxRequest, std::uint8_t((obj0 >> 28) & 0xF), header};
+    // Request (2) and EPR_Request (9, the RDO then a copy of the PDO): both carry the object position in the RDO's bits 31:28.
+    if (!rx && !ext && nobj > 0 && (type == 2 || type == 9)) return {Mark::TxRequest, std::uint8_t((obj0 >> 28) & 0xF), header};
     return {rx ? Mark::Rx : Mark::Tx, 0, header};
 }
 constexpr Mark mark_of_reset(bool hard) { return hard ? Mark::HardReset : Mark::SoftReset; }

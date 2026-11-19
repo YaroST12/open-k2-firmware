@@ -47,6 +47,17 @@ void cells_follow_the_aggregate_per_apdo() {
     b.add(C::PpsAccuracy, meas(9180, 8800, 9200, 3));
     b.add(C::PpsAccuracy, meas(9100, 8800, 9200, 3));
     CHECK_EQ(int(b.find(3)->cells[specsec::apdo_slot(C::PpsAccuracy)].value), 918);
+    // A pass on its bracket (an ms-fallback Accept) is kept at its limit, as the merged aggregate keeps it.
+    sc::Agg acc;
+    for (const sc::Meas x : {sc::Meas{12000, 0, 0, 17000, 9, 150}, sc::Meas{20000, 5000, 0, 17000, 9, 157}}) {
+        b.add(C::AcceptTime, x);
+        acc.add(sc::Kind::Max, x);
+    }
+    const specsec::Cell& ac = b.find(9)->cells[specsec::apdo_slot(C::AcceptTime)];
+    CHECK_COND(ac.verdict() == sc::Verdict::Pass);
+    CHECK_EQ(int(ac.value), int(specsec::cell_of(C::AcceptTime, acc).value));
+    CHECK_EQ(int(ac.b), 157);
+    CHECK_EQ(acc.worst, 17000);
     // An inferred limit (PPS settle) reads unverified, measured or over.
     b.add(C::PpsSettle, meas(40000, 0, 25000, 3, 0));
     CHECK_COND(b.find(3)->cells[specsec::apdo_slot(C::PpsSettle)].verdict() == sc::Verdict::Unverified);

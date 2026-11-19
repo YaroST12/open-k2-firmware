@@ -182,8 +182,13 @@ void test_capture_takes_over_only_what_nobody_waits_for() {
 
 
 // A capture of one programmable step, from_mv -> to_mv at 1 kHz: the Request at 20 ms, the Accept at 25 ms, a 5 ms ramp, PS_RDY at
-// 40 ms, then the new level; frozen on a 1 us post window as the session's own freeze does.
-void build_step(transcap::Rec &r, uint16_t from_mv, uint16_t to_mv) {
+// 40 ms, then the new level; frozen on a 1 us post window as the session's own freeze does. The markers come from classify_pd on the
+// headers the sink sends (an EPR_Request at an EPR position), as the driver marks them.
+void build_step(transcap::Rec &r, uint16_t from_mv, uint16_t to_mv, uint8_t pos = 5) {
+    const auto mark = [&r](uint32_t t, bool rx, uint16_t header, uint32_t obj0) {
+        const transcap::PdMark m = transcap::classify_pd(rx, header, obj0);
+        r.mark(t, m.code, m.step, m.arg);
+    };
     r.clear();
     r.arm();
     uint32_t t = 1000;
@@ -191,9 +196,9 @@ void build_step(transcap::Rec &r, uint16_t from_mv, uint16_t to_mv) {
         const int k = int(t / 1000) - 26;   // the ramp's samples after the Accept
         const int v = k < 0 ? from_mv : k >= 5 ? to_mv : from_mv + (to_mv - from_mv) * (k + 1) / 5;
         r.push({t, uint16_t(v), 0, 0});
-        if (t == 20000) r.mark(t + 100, transcap::Mark::TxRequest);
-        if (t == 25000) r.mark(t + 100, transcap::Mark::Accept);
-        if (t == 40000) r.mark(t + 100, transcap::Mark::PsRdy);
+        if (t == 20000) mark(t + 100, false, pos >= 8 ? 0x2089 : 0x1082, uint32_t(pos) << 28);   // EPR_Request / Request
+        if (t == 25000) mark(t + 100, true, 0x03A3, 0);   // Accept
+        if (t == 40000) mark(t + 100, true, 0x05A6, 0);   // PS_RDY
     }
     r.trigger(t, transcap::Reason::Manual, 1);
     r.push({t, to_mv, 0, 0});
@@ -209,24 +214,24 @@ void test_epr_avs_handed_to_the_stage() {
     std::unique_ptr<Ui> h; Ui &ui = boot(h);
     PdSpecSession &s = ui.pd_spec();
     static transcap::Rec rec;
-    build_step(rec, 15000, 15100);
+    build_step(rec, 15000, 15100, 9);
     g_stub.tc_rec = &rec; g_stub.tc_freeze_on_trigger = true;
     g_stub.tc_state = transcap::State::Armed;
-    CHECK_EQ(s.test_move(7, {10, true, 0, 15000, 15100}, sc::kMoveSweep | sc::kMoveLast, g_now), true);
+    CHECK_EQ(s.test_move(7, {9, true, 0, 15000, 15100}, sc::kMoveSweep | sc::kMoveLast, g_now), true);
     run(ui, 10);
     CHECK_EQ(int(s.engine()->agg(sc::Check::AvsBand).n), 1);
     g_stub.tc_rec = nullptr; g_stub.tc_freeze_on_trigger = false; g_stub.tc_state = transcap::State::Off;
     const pd::Pdo ea = pd::decode_pdo(0xD0000000 | (280u << 17) | (150u << 8) | 140);   // EPR AVS 15-28 V
-    CHECK_EQ(int(s.start_in_test(g_now, 7, &ea, 10)), int(sc::StartResult::Ok));
-    CHECK_EQ(int(s.engine()->covered()), 1 << 10);
+    CHECK_EQ(int(s.start_in_test(g_now, 7, &ea, 9)), int(sc::StartResult::Ok));
+    CHECK_EQ(int(s.engine()->covered()), 1 << 9);
     const sc::Levels &L = s.engine()->levels();
     CHECK_EQ(int(L.n_prog), 1);
-    CHECK_EQ(int(L.prog[0].pos), 10);
+    CHECK_EQ(int(L.prog[0].pos), 9);
     CHECK_EQ(int(L.prog[0].hi), 28000);
     s.cancel();
     finish(ui);
     g_stub.cable_limits.max_ma = 3000;   // no proof: no EPR AVS window
-    CHECK_EQ(int(s.start_in_test(g_now, 0, &ea, 10)), int(sc::StartResult::Ok));
+    CHECK_EQ(int(s.start_in_test(g_now, 0, &ea, 9)), int(sc::StartResult::Ok));
     CHECK_EQ(int(s.engine()->levels().n_prog), 0);
     s.cancel();
     finish(ui);

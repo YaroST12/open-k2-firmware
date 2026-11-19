@@ -102,6 +102,13 @@ void late_band_entry_is_judged_against_the_step_size() {
     // A 500 mV step is small (25 ms): 5000 to 5500 on 2 mV/ms enters the band (5225 mV) 143 ms after the Accept.
     Trace small(ramp(5000, 5500, 2));
     CHECK_EQ(unsigned(measure(small.view(), pps(5000, 5500)).flags & kLate), unsigned(kLate));
+    // An EPR AVS APDO (position 8 and up) has the EPR large-step limit (760 ms): 21.5 to 28 V on 10 mV/ms enters the band (26.6 V)
+    // about 540 ms after the Accept, late for an SPR AVS APDO (325 ms), in time for an EPR one.
+    Trace epr(ramp(21500, 28000, 10), 100, true, 1900);
+    In e = avs(21500, 28000);
+    CHECK_EQ(unsigned(measure(epr.view(), e).flags & kLate), unsigned(kLate));
+    e.pos = 9;
+    CHECK_EQ(unsigned(measure(epr.view(), e).flags & kLate), 0u);
 }
 
 void leaving_the_band_again_is_the_transient() {
