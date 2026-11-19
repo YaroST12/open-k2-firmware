@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Yaraslau Furman
 // The Deep extension blob of the report card: the sweep bucket reducer and the writer (layout in report_card_deep.hpp).
 #include "k2/chargertest/report_card_deep.hpp"
+#include "k2/chargertest/result_layout.hpp"
 
 #include <algorithm>
 #include <cstring>
@@ -141,7 +142,7 @@ MiSection read_mi(std::span<const std::uint8_t> blob) {
             r.skip(13);
             if (v == static_cast<unsigned>(pdspec::Verdict::Fail)) r.skip(24);
         }
-        if (form == kSpecRangesForm) r.skip(r.get(3) * kSpecRangeBits);
+        if (form == kSpecRangesForm) { const unsigned n = r.get(3); r.skip(2 + n * kSpecRangeBits); }
     }
     for (unsigned i = 0; i < kMaxRanges && !r.bad; ++i) {
         if (!(mask >> i & 1u)) continue;
@@ -207,7 +208,8 @@ std::size_t build(const Card& c, std::span<const ct::Step> steps, const ct::Evid
             if (v == static_cast<unsigned>(pdspec::Verdict::Fail)) { w.put(cell.fails, 8); w.put(cell.a, 8); w.put(cell.b, 8); }
         }
         if (ranges) {
-            w.put(apdo->n, 3);
+            const specsec::Split sp = specsec::split(r, *apdo, result_layout::range_positions(steps));
+            w.put(apdo->n, 3); w.put(sp.pps, 1); w.put(sp.avs, 1);
             for (unsigned k = 0; k < apdo->n; ++k) {
                 const specsec::Apdo& p = apdo->r[k];
                 const specsec::RangeSpec rs = specsec::range_spec(p);

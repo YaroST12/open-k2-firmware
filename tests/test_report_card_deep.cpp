@@ -47,6 +47,7 @@ struct Decoded {
     unsigned sp_end = 0, sp_why = 0, sp_unconf = 0, sp_cells = 0;
     std::vector<DCell> cells;
     std::vector<DSpecRange> spec_ranges;   // v13: the spec part's form 28 (27 cells, then the ranges)
+    unsigned split_pps = 0, split_avs = 0;   // ... and which kinds' merged rows the range lines replace (specsec::split)
     std::vector<DRange> ranges;   // in range-index order of the set bits
 };
 
@@ -73,6 +74,7 @@ static Decoded decode(const Bytes& blob) {
         }
         if (d.sp_cells == 28) {
             const unsigned n = r.get(3);
+            d.split_pps = r.get(1); d.split_avs = r.get(1);
             for (unsigned k = 0; k < n; ++k) {
                 DSpecRange g;
                 g.pos = r.get(4); g.avs = r.get(1); g.tone = r.get(2); g.group = r.get(2);
@@ -342,7 +344,7 @@ static void test_worst_case_is_the_budget() {
     const Decoded d = decode(b);
     CHECK_EQ(d.modes.size(), std::size_t(k2::mi_unlock::kMaxModes));
     CHECK_EQ(d.spec_ranges.size(), 4u);
-    CHECK_EQ(dp::kMaxBits, 3638u + 3u + 4u * 42u);
+    CHECK_EQ(dp::kMaxBits, 3638u + 3u + 2u + 4u * 42u);
     CHECK_EQ(dp::kMaxBlob, std::size_t(479));
     CHECK_EQ(d.bits, dp::kMaxBits);
     CHECK_EQ(d.used, dp::kMaxBits);
@@ -380,6 +382,16 @@ static void test_spec_ranges() {
     CHECK_EQ(d.spec_ranges[1].tone, unsigned(specsec::RangeTone::Pass));
     CHECK_EQ(d.modes.size(), 1u);
     CHECK_EQ(dp::read_mi(b).n, 1u);
+    CHECK_EQ(d.split_pps, 0u); CHECK_EQ(d.split_avs, 0u);   // no range line on the grid: the merged rows stay
+    // The PPS range has its line (its range step), the AVS one has none: only PPS splits, as the grid draws it.
+    ct::Step pps{};
+    pps.algorithm = ct::Algorithm::Pps; pps.group = ct::group(pps.algorithm); pps.pos = 5; pps.pdo = 0xC8D23264u; pps.mv = 5000;
+    pps.verdict = ct::Verdict::Pass;
+    steps.push_back(pps);
+    const Decoded s = decode(run_build(deep_card(0), ev, none, steps, &ap));
+    CHECK_EQ(s.used, s.bits);
+    CHECK_EQ(s.split_pps, 1u); CHECK_EQ(s.split_avs, 0u);
+    CHECK_EQ(dp::read_mi(run_build(deep_card(0), ev, none, steps, &ap)).n, 1u);
     // No range measured: form 27, the v12 layout.
     const Decoded e = decode(run_build(deep_card(0), ev, none, {}, nullptr));
     CHECK_EQ(e.sp_cells, 27u); CHECK_EQ(e.used, e.bits);

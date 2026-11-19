@@ -59,7 +59,8 @@ inline constexpr unsigned kRangeBits = kRangeHeadBits + kBuckets * kBucketBits;
 inline constexpr std::int16_t kValueMax = 4094, kValueNever = -4096;   // the s13 value: saturation and the "never seen" mark
 inline constexpr unsigned kSpecRangesForm = unsigned(specsec::kCells) + 1;   // the spec part's form when the ranges follow (v13)
 inline constexpr unsigned kSpecRangeBits = 4 + 1 + 2 + 2 + 3 * unsigned(specsec::kApdoSlots);
-inline constexpr unsigned kSpecRangesBits = 3 + unsigned(pdspec::kMaxProg) * kSpecRangeBits;
+// The count, then the two kinds' split (specsec::split: their merged rows give way to the range lines), then each range.
+inline constexpr unsigned kSpecRangesBits = 3 + 2 + unsigned(pdspec::kMaxProg) * kSpecRangeBits;
 static_assert(kSpecRangesForm < 32 && pdspec::kMaxProg < 8);
 inline constexpr unsigned kMiHeadBits = 5 + 3;
 inline constexpr unsigned kMiModeBits = 32 + 32 + 9 + 7 + 3 + 6;
@@ -69,7 +70,7 @@ consteval unsigned worst_bits() {
     return kHdrBits + kSvoocBits + kSpecHeadBits + unsigned(specsec::kCells) * kCellFailBits + kSpecRangesBits + kMaxRanges * kRangeBits +
            kMiHeadBits + unsigned(mi_unlock::kMaxModes) * kMiModeBits;
 }
-inline constexpr unsigned kMaxBits = worst_bits();                       // every cell failing, four ranges, four full sweeps, four Xiaomi modes: 3809 (3638 before the v13 ranges)
+inline constexpr unsigned kMaxBits = worst_bits();                       // every cell failing, four ranges, four full sweeps, four Xiaomi modes: 3811 (3638 before the v13 ranges)
 inline constexpr std::size_t kMaxBlob = 2 + (kMaxBits + 7) / 8;           // the blob with its length: 479 B
 static_assert(kMaxBits < (1u << 12), "the link stream carries the block length in 12 bits");
 
