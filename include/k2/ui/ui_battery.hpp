@@ -40,9 +40,6 @@ public:
     battery::view::Act act() const;
     bool viewing_stored() const { return view_ == View::Stored; }
     bool viewing_runs() const { return view_ == View::Runs; }
-    // Shown as page 3 of the Tests carousel: pager dots in the bar, Long -/+ flips tabs, Short Back returns to Overview.
-    void as_tests_tab() { tests_tab_ = true; }
-    bool is_tests_tab() const { return tests_tab_; }
 
 private:
     enum class View : uint8_t { Main, Runs, Stored };
@@ -77,7 +74,6 @@ private:
     StrBuf<20> text_;
     uint32_t id_sig_ = 0;              // the identity block as painted (kit::paint_identity)
     bool full_ = true;                 // the next paint lays the identity block whole
-    bool tests_tab_ = false;           // true when opened as page 3 of the Tests carousel
     Elem foot_;                        // footer element cache (draw_footer_cached)
 };
 

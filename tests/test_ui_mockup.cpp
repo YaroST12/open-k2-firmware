@@ -68,7 +68,7 @@ static void battery_frames(Ui& ui, uint32_t& t, const char* prefix) {
     const auto name = [&](const char* scene) { static char buf[64]; std::snprintf(buf, sizeof buf, "%s%s", prefix, scene); return buf; };
     stub_battery_reset();
     ui.goto_page(uint8_t(Page::Home), t); t += 100;
-    ui.open_tests(TestTab::Battery, t); render(ui, t, name("place_battery"));
+    ui.open_place(bench::Place::Battery, t); render(ui, t, name("place_battery"));
     uint32_t tb = t;   // the recorder's own clock: the pages after this one keep the UI's
     bt::hw::service().start(bt::Mode::RoundTrip, bt::Wiring::SamePort, true);
     for (int k = 0; k < 600; k++) bt::hw::poll(tb += 1000, true);
@@ -82,7 +82,7 @@ static void battery_frames(Ui& ui, uint32_t& t, const char* prefix) {
     bt::hw::service().rec().finish();
     bt::hw::poll(tb += 1000, true);
     g_stub.pm.current_ma = ma;
-    ui.open_tests(TestTab::Battery, t); render(ui, t, name("place_battery_done"));
+    ui.open_place(bench::Place::Battery, t); render(ui, t, name("place_battery_done"));
     stub_battery_reset();
 }
 
@@ -429,7 +429,7 @@ int main() {
         live.goto_page(uint8_t(Page::Detail), tl + 100); render(live, tl, "readme_numbers");
         live.goto_page(uint8_t(Page::Lines), tl + 100); render(live, tl, "readme_lines");
         battery_frames(live, tl, "readme_");
-        live.open_place(bench::Place::Tests, tl);   // the Bench cursor rests on the place last opened
+        live.open_place(bench::Place::Battery, tl);   // the Bench cursor rests on the place last opened
         live.goto_page(uint8_t(Page::Tools), tl + 100); render(live, tl, "readme_bench");
         live.goto_page(uint8_t(Page::Home), tl + 100); tl += 100;
         live.open_place(bench::Place::K2, tl);

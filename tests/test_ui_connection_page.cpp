@@ -1196,24 +1196,30 @@ static void test_single_tools_lock_one_tab() {
 
     ui.open_place(bench::Place::Charger, 21000);
     ui.tick(21050);
-    CHECK_STR(ok_label(ui), "Refresh");                                // Read again (Charger place is info-only)
+    CHECK_STR(ok_label(ui), "Open");                                   // Test charger
     ui.on_button(Button::Minus, ButtonEvent::Short, 21060);
     CHECK_EQ(cp(ui).action_row(), 0);                                  // empty page: stays clamped on row 0
-    CHECK_STR(ok_label(ui), "Refresh");                                // still Read again
+    CHECK_STR(ok_label(ui), "Open");                                   // still Test charger
     ui.open_place(bench::Place::Device, 21100);                        // a new place, not a tab switch
     ui.tick(21150);
     CHECK_EQ(int(cp(ui).tab()), int(conn::Tab::Sink));
     CHECK_EQ(int(cp(ui).item(0).act), int(conn::Act::Identify));       // out[0] is Ask device
+#if K2_TWIN
+    CHECK_EQ(cp(ui).item_count(), 2);                                  // Ask device (out[0]) + Twins (out[1])
+    CHECK_EQ(cp(ui).action_row(), 0);                                  // empty page: clamped on Twins
+    CHECK_STR(ok_label(ui), "Open");                                   // Twins
+#else
     CHECK_EQ(cp(ui).item_count(), 1);                                  // no action rows: OK always asks
     CHECK_EQ(cp(ui).action_row(), -1);
     CHECK_STR(ok_label(ui), "Ask");                                    // Ask device
+#endif
     ui.on_button(Button::Back, ButtonEvent::Short, 21200);
     CHECK_EQ(int(ui.menu_depth()), 0);
 }
 
-// The Bench opens the info-only place pages (Charger, Cable, Device) each on its own tab. Active charger tools live
-// in Tests -> Charger (opening a tool pushes it over Tests; Test charger replaces both and BACK returns to Tests -> Charger).
-// The Spoof shortcut (single tools) lands on Menu::Spoof.
+// The Bench opens the place pages: Charger, Cable, Device each on its own tab. A place's tool opens its menu over the place
+// page (BACK comes back to it); Test charger replaces both and its BACK lands on the Charger place again. The Spoof shortcut
+// (single tools) lands on Menu::Spoof.
 static void test_tools_rows_open_single_tools() {
     Ui &ui = fresh_ui();
     const conn::Tab kTabs[] = {conn::Tab::Source, conn::Tab::Cable, conn::Tab::Sink};
@@ -1228,21 +1234,21 @@ static void test_tools_rows_open_single_tools() {
         ui.on_button(Button::Back, ButtonEvent::Short, 20600 + k * 1000);
         CHECK_EQ(int(ui.menu_depth()), 0);
     }
-    ui.open_tests(TestTab::Charger, 24000);
-    CHECK_EQ(int(ui.menu()), int(Menu::Tests));
-    ui.on_button(Button::Plus, ButtonEvent::Short, 24050);             // Request voltage
+    ui.context().keep.place_sel[static_cast<int>(bench::Place::Charger)] = 1;   // Request voltage
+    ui.open_place(bench::Place::Charger, 24000);
+    CHECK_STR(cp(ui).item(2).label, "Request voltage");
     ui.on_button(Button::Ok, ButtonEvent::Short, 24100);
     CHECK_EQ(int(ui.menu()), int(Menu::PdTrigger));
-    CHECK_EQ(int(ui.menu_depth()), 2);                                 // over Tests
+    CHECK_EQ(int(ui.menu_depth()), 2);                                 // over the place page
     ui.on_button(Button::Back, ButtonEvent::Short, 24200);
-    CHECK_EQ(int(ui.menu()), int(Menu::Tests));
+    CHECK_EQ(on_pd(ui), 1);
     ui.on_button(Button::Minus, ButtonEvent::Short, 24300);            // Test charger
     ui.on_button(Button::Ok, ButtonEvent::Short, 24400);
     CHECK_EQ(int(ui.page()), int(Page::ChargerTest));
     CHECK_EQ(int(ui.menu_depth()), 0);
     ui.on_button(Button::Back, ButtonEvent::Short, 24500);
-    CHECK_EQ(int(ui.menu()), int(Menu::Tests));
-    CHECK_EQ(int(ui.menu_depth()), 1);
+    CHECK_EQ(on_pd(ui), 1);
+    CHECK_EQ(int(cp(ui).tab()), int(conn::Tab::Source));
     CHECK(ui.open_connection(conn::Tab::Cable, true, 25000));
     CHECK_EQ(int(ui.menu()), int(Menu::Spoof));
 }

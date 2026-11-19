@@ -54,7 +54,7 @@ Readiness tool_readiness(int tool, const SetupState &st, bool pm_online);
 // (BatteryPage, k2/ui/ui_battery.hpp). Pure: the tables and the row texts; ToolsPage paints them.
 namespace bench {
 
-enum class Place : uint8_t { Meter, Charger, Cable, Device, Tests, Log, K2 };
+enum class Place : uint8_t { Meter, Charger, Cable, Device, Battery, Log, K2 };
 inline constexpr int kPlaces = 7;
 // A row's second line (font 12, at most kStatusChars) and whether its node is solid (something known) or hollow.
 inline constexpr int kStatusChars = 28;

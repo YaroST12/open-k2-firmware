@@ -29,7 +29,6 @@
 #endif
 #include "k2/ui/ui_diagnosis.hpp"
 #include "k2/ui/ui_battery.hpp"
-#include "k2/ui/ui_tests.hpp"
 #include "k2/ui/ui_connection.hpp"
 #include "k2/ui/ui_share.hpp"
 #include "k2/ui/ui_pages.hpp"
@@ -93,19 +92,7 @@ inline constexpr std::size_t kLongestMenuChain =
 #endif
               arena_bytes<TriggerPage, EmarkerPage, ConnectionPage>(), arena_bytes<CardsPage, SharePage>(),
               arena_bytes<DiagnosisPage, BlackBoxPage, SharePage>(), arena_bytes<BlackBoxPage, SharePage>(),
-              arena_bytes<BatteryPage, SharePage>(), arena_bytes<TestsPage, CardsPage, SharePage>(),
-              arena_bytes<TestsPage, PdTriggerPage>(), arena_bytes<TestsPage, TriggerPage>(),
-              arena_bytes<TestsPage, SpoofPage>(), arena_bytes<TestsPage, CableRPage>(),
-#if K2_TWIN
-              arena_bytes<TestsPage, TwinPage>(),
-#endif
-#if K2_LOOPPROBE
-              arena_bytes<TestsPage, LoopProbePage, SharePage>(),
-#endif
-#if K2_PDSTRESS
-              arena_bytes<TestsPage, PdStressPage>(),
-#endif
-              arena_bytes<QrTestPage>(),
+              arena_bytes<BatteryPage, SharePage>(), arena_bytes<QrTestPage>(),
               arena_bytes<DiagPage, SharePage>(), arena_bytes<UsbLinkPage>(), arena_bytes<AutorotatePage>(), arena_bytes<MemoryPage>(),
               arena_bytes<DisplayPage>()});
 inline constexpr std::size_t kLongestChain = kLargestBase + kLongestMenuChain;   // the deepest rotation page + the deepest menus
@@ -205,8 +192,6 @@ public:
     void flip_face(int dir, uint32_t now_ms);
     void show_face(uint32_t now_ms);                          // the face last shown (the Bench's Meter row and its BACK)
     void open_place(bench::Place p, uint32_t now_ms);         // Place::Meter = the Bench's own list
-    void open_tests(TestTab tab, uint32_t now_ms);            // Bench > Tests carousel on `tab`
-    void switch_tests_tab(TestTab tab, uint32_t now_ms);      // swaps top menu between Menu::Tests and Menu::Battery
     void to_meter(uint32_t now_ms);
     // Opens the Charger / Cable / Device place (`tab`); `spoof` goes straight on to the Spoof list (the Tools shortcut).
     bool open_connection(conn::Tab tab, bool spoof, uint32_t now_ms);
@@ -244,8 +229,6 @@ public:
     const DiagnosisPage &diagnosis_page() const { return *find<DiagnosisPage>(Menu::Diagnosis); }
     // The Battery place while Menu::Battery is on the stack, else nullptr (host tests).
     const BatteryPage *battery_page() const { return find<BatteryPage>(Menu::Battery); }
-    // The Tests carousel while Menu::Tests is on the stack, else nullptr (host tests).
-    const TestsPage *tests_page() const { return find<TestsPage>(Menu::Tests); }
     // Top submenu; Menu::Count when none is open.
     Menu menu() const { return depth_ ? stack_[depth_ - 1] : Menu::Count; }
     // Page index for the remote: the rotation page, or kMenuPageBase + menu while one is open.
@@ -580,8 +563,6 @@ private:
     bool rotation_notice_drawn_ K2_BSS_INIT(false);
     int8_t conn_lock_ = -1;   // open_connection / open_place -> build_menu: the place tab (Charger / Cable / Device)
     bool place_next_ K2_BSS_INIT(false); // open_place -> build_menu: the PD diagnosis opens as the Log place
-    TestTab tests_tab_init_ = TestTab::Overview;   // open_tests / switch_tests_tab -> build_menu: initial TestsPage tab
-    bool batt_tests_tab_ K2_BSS_INIT(false);       // open_tests / switch_tests_tab -> build_menu: BatteryPage as Tests tab 3
     bool pressed_[4] K2_BSS_ZERO;          // lit, indexed by Button
     bool down_[4] K2_BSS_ZERO;             // physically down
     bool remote_down_[4] K2_BSS_ZERO;      // a remote +/- is held, indexed by the physical key it lights

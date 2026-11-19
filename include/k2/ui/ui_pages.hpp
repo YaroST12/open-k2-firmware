@@ -123,8 +123,6 @@ struct UiContext {
             std::uint8_t sel K2_BSS_INIT(0);              // the Setup list's cursor
         } pdstress;
         std::array<uint8_t, bench::kPlaces> place_sel K2_BSS_ZERO;  // each place's last action: repeating a job is OK, OK, OK
-        uint8_t batt_sel K2_BSS_INIT(0);                             // BatteryPage main view cursor
-        std::array<uint8_t, 5> tests_sel K2_BSS_ZERO;                // TestsPage cursor per TestTab (Overview/Charger/Cable/Device)
         uint8_t face K2_BSS_INIT(0);                                 // Meter: the face last shown (0 Flow, 1 Graphs, 2 Numbers, 3 Lines, 4 Ripple)
         struct Ripple {                                              // Meter > Ripple: persisted scope settings across face flips
             uint8_t timebase = 1;                                    // ripple::kDefaultTimebase (50 us/div)

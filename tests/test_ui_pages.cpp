@@ -109,29 +109,24 @@ static void test_global_paging() {
     CHECK_EQ(ui.page() == Page::Home, 1);
     ui.on_button(Button::Back, ButtonEvent::Short, t);                // BACK on Flow: nothing above it
     CHECK_EQ(ui.page() == Page::Home, 1);
-    // Bench -> Tests -> Charger -> Test charger, then BACK climbs back: ChargerTest -> Tests(Charger) -> Tests(Overview) -> Bench.
+    // Bench -> Charger -> Test charger, then BACK climbs back: the charger test to its place, the place to the Bench.
     ui.on_button(Button::Ok, ButtonEvent::Short, t);
-    ui.context().keep.bench_sel = static_cast<int>(bench::Place::Tests);
-    ui.context().keep.tests_sel = {};
+    ui.context().keep.bench_sel = static_cast<int>(bench::Place::Charger);
+    ui.context().keep.place_sel[static_cast<int>(bench::Place::Charger)] = 0;
     ui.on_button(Button::Ok, ButtonEvent::Short, t);
-    CHECK_EQ(ui.menu() == Menu::Tests, 1);
-    CHECK_EQ(ui.tests_page() != nullptr && ui.tests_page()->tab() == TestTab::Overview, true);
+    CHECK_EQ(ui.menu() == Menu::Connection, 1);                       // the Charger place page over the Bench
     ui.tick(t += 20);
-    ui.on_button(Button::Ok, ButtonEvent::Short, t += 10);            // row 0 = Charger tab
-    CHECK_EQ(ui.tests_page() != nullptr && ui.tests_page()->tab() == TestTab::Charger, true);
-    ui.on_button(Button::Ok, ButtonEvent::Short, t += 10);            // row 0 = Test charger
+    while (ui.connection_page().action_row() < 0) ui.on_button(Button::Plus, ButtonEvent::Short, t += 10);
+    ui.on_button(Button::Ok, ButtonEvent::Short, t += 10);
     CHECK_EQ(ui.page() == Page::ChargerTest, 1);
     ui.on_button(Button::Back, ButtonEvent::Short, t);
     CHECK_EQ(ui.page() == Page::Tools, 1);
-    CHECK_EQ(ui.menu() == Menu::Tests, 1);
-    CHECK_EQ(ui.tests_page() != nullptr && ui.tests_page()->tab() == TestTab::Charger, true);
-    ui.on_button(Button::Back, ButtonEvent::Short, t);
-    CHECK_EQ(ui.menu() == Menu::Tests, 1);
-    CHECK_EQ(ui.tests_page() != nullptr && ui.tests_page()->tab() == TestTab::Overview, true);
+    CHECK_EQ(ui.menu() == Menu::Connection, 1);
+    CHECK_EQ(int(ui.connection_page().tab()), int(conn::Tab::Source));
     ui.on_button(Button::Back, ButtonEvent::Short, t);
     CHECK_EQ(ui.page() == Page::Tools, 1);
     CHECK_EQ(ui.menu_depth(), 0u);
-    CHECK_EQ(ui.context().keep.bench_sel, static_cast<int>(bench::Place::Tests));   // the Bench, Tests focused
+    CHECK_EQ(ui.context().keep.bench_sel, static_cast<int>(bench::Place::Charger));   // the Bench, Charger focused
     ui.context().keep.bench_sel = static_cast<int>(bench::Place::Meter);   // the Meter row goes back to the faces
     ui.on_button(Button::Ok, ButtonEvent::Short, t);
     CHECK_EQ(ui.page() == Page::Home, 1);
@@ -864,31 +859,22 @@ static int act_row(bench::Place p, int tool) {
     return -1;
 }
 
-// Bench -> Tests (or Log) -> the action's row -> OK, by key presses from the tab's top row.
+// Bench -> place -> the action's row -> OK, by key presses from the place's top row.
 static void open_act(Ui &ui, bench::Place p, int tool, uint32_t t) {
-    if (p == bench::Place::Charger || p == bench::Place::Cable) {
-        const TestTab tab = p == bench::Place::Charger ? TestTab::Charger : TestTab::Cable;
-        ui.goto_page(static_cast<uint8_t>(Page::Tools), t);   // pop any open menu so leave() doesn't overwrite tests_sel
-        ui.context().keep.tests_sel[static_cast<int>(tab)] = 0;
-        ui.open_tests(tab, t);
-        ui.tick(t + 2);
-        // Charger tab rows: 0 Test charger, 1 Request voltage (tool 1), 2 Fast charge (tool 0), 3 Report cards (tool 9)
-        // Cable tab rows: 0 Spoof as... (tool 2), 1 Resistance (tool 3), 2 Loop probe (tool 12)
-        const int target = p == bench::Place::Charger ? (tool == 1 ? 1 : tool == 0 ? 2 : tool == 9 ? 3 : 4)
-                                                      : (tool == 2 ? 0 : tool == 3 ? 1 : 2);
-        for (int i = 0; i < target; i++) ui.on_button(Button::Plus, ButtonEvent::Short, t + 5);
-        ui.on_button(Button::Ok, ButtonEvent::Short, t + 10);
-        return;
-    }
     ui.context().keep.place_sel[static_cast<int>(p)] = 0;
     ui.open_place(p, t);
     ui.tick(t + 2);
     const int target = act_row(p, tool);
-    for (int i = 0; i < target; i++) ui.on_button(Button::Plus, ButtonEvent::Short, t + 5);
+    if (ui.menu() == Menu::Connection) {
+        int guard = 32;
+        while (ui.connection_page().action_row() < target && guard-- > 0) ui.on_button(Button::Plus, ButtonEvent::Short, t + 5);
+    } else {
+        for (int i = 0; i < target; i++) ui.on_button(Button::Plus, ButtonEvent::Short, t + 5);
+    }
     ui.on_button(Button::Ok, ButtonEvent::Short, t + 10);
 }
 
-static void open_trigger(Ui &ui, uint32_t t) { open_act(ui, bench::Place::Charger, 0, t); }   // Tests > Charger > Fast charge
+static void open_trigger(Ui &ui, uint32_t t) { open_act(ui, bench::Place::Charger, 0, t); }   // Charger > Fast charge
 
 static void press(Ui &ui, Button b, ButtonEvent e, uint32_t t) { ui.on_button(b, e, t); }
 
@@ -904,27 +890,23 @@ static void test_tools_hub() {
     CHECK_EQ(ui.context().keep.bench_sel, 0);
     for (int i = 0; i < 8; i++) press(ui, Button::Plus, ButtonEvent::Short, kT0 + 20);
     CHECK_EQ(ui.context().keep.bench_sel, bench::kPlaces - 1);
-    for (int i = 0; i < 2; i++) press(ui, Button::Minus, ButtonEvent::Short, kT0 + 30);   // K2 > Log > Tests
-    CHECK_EQ(ui.context().keep.bench_sel, int(bench::Place::Tests));
-    ui.context().keep.tests_sel = {};
+    for (int i = 0; i < 4; i++) press(ui, Button::Minus, ButtonEvent::Short, kT0 + 30);   // K2 > Log > Battery > Device > Cable
+    ui.context().keep.place_sel[static_cast<int>(bench::Place::Cable)] = 0;
     press(ui, Button::Ok, ButtonEvent::Short, kT0 + 35);
     CHECK_EQ(ui.page() == Page::Tools, 1);
-    CHECK_EQ(ui.menu() == Menu::Tests, 1);
-    CHECK_EQ(ui.tests_page() != nullptr && ui.tests_page()->tab() == TestTab::Overview, true);
-    // Overview row 1 = Cable -> OK jumps to Cable tab -> row 1 = Resistance -> OK opens CableR
-    press(ui, Button::Plus, ButtonEvent::Short, kT0 + 36);
-    press(ui, Button::Ok, ButtonEvent::Short, kT0 + 37);
-    CHECK_EQ(ui.tests_page() != nullptr && ui.tests_page()->tab() == TestTab::Cable, true);
-    press(ui, Button::Plus, ButtonEvent::Short, kT0 + 38);   // row 1 = Resistance
+    CHECK_EQ(ui.menu() == Menu::Connection, 1);   // the Cable place page over the Bench
+    CHECK_EQ(int(ui.connection_page().tab()), int(conn::Tab::Cable));
+    // In a place, short +/- select an action and OK opens it: Cable > Resistance is Cable R.
+    for (int i = 0; i < act_row(bench::Place::Cable, 3); i++) press(ui, Button::Plus, ButtonEvent::Short, kT0 + 38);
     press(ui, Button::Ok, ButtonEvent::Short, kT0 + 40);
     CHECK_EQ(ui.menu_depth(), 2u);
     CHECK_EQ(ui.menu() == Menu::CableR, 1);
     CHECK_EQ(ui.page_index(), kMenuPageBase + static_cast<uint8_t>(Menu::CableR));
-    // BACK returns to Tests -> Cable, with selection kept.
+    // BACK returns to the place, with the selection kept.
     press(ui, Button::Back, ButtonEvent::Short, kT0 + 50);
     CHECK_EQ(ui.menu_depth(), 1u);
-    CHECK_EQ(ui.menu() == Menu::Tests, 1);
-    CHECK_EQ(ui.tests_page()->selected(), 1);
+    CHECK_EQ(ui.menu() == Menu::Connection, 1);
+    CHECK_EQ(ui.connection_page().action_row(), act_row(bench::Place::Cable, 3));
     press(ui, Button::Ok, ButtonEvent::Short, kT0 + 60);
     CHECK_EQ(ui.menu() == Menu::CableR, 1);
     press(ui, Button::Back, ButtonEvent::Short, kT0 + 70);
@@ -938,15 +920,12 @@ static void test_tools_hub() {
     CHECK_EQ(ui.menu() == Menu::PdTrigger, 1);
     CHECK_STR(label(ui, Button::Back), "Back");
     press(ui, Button::Back, ButtonEvent::Short, kT0 + 140);
-    // BACK from the tool goes back to Tests -> Charger, BACK -> Overview, BACK -> Bench.
-    CHECK_EQ(ui.menu() == Menu::Tests, 1);
-    CHECK_EQ(ui.tests_page() != nullptr && ui.tests_page()->tab() == TestTab::Charger, true);
-    press(ui, Button::Back, ButtonEvent::Short, kT0 + 160);
-    CHECK_EQ(ui.tests_page() != nullptr && ui.tests_page()->tab() == TestTab::Overview, true);
+    // BACK from the tool goes back to the Charger place page, a second BACK to the Bench.
+    CHECK_EQ(ui.menu() == Menu::Connection, 1);
     press(ui, Button::Back, ButtonEvent::Short, kT0 + 180);
     CHECK_EQ(ui.page() == Page::Tools, 1);
     CHECK_EQ(ui.menu_depth(), 0u);
-    CHECK_EQ(ui.context().keep.bench_sel, int(bench::Place::Tests));
+    CHECK_EQ(ui.context().keep.bench_sel, int(bench::Place::Charger));
     CHECK_EQ(g_stub.fc_stops, 0);                  // nothing was triggered: leaving the trigger tool left the pins alone
 }
 
@@ -963,9 +942,9 @@ static void test_submenu_is_modal() {
     CHECK_EQ(ui.menu() == Menu::Trigger, 1);
     // A short BACK pops; nothing was triggered, so the bus is left alone (no dpdm reset pulse).
     press(ui, Button::Back, ButtonEvent::Short, kT0 + 120);
-    CHECK_EQ(ui.menu() == Menu::Tests, 1);   // back on Tests -> Charger
+    CHECK_EQ(ui.menu() == Menu::Connection, 1);   // back on the Charger place page
     CHECK_EQ(g_stub.fc_stops, stops);
-    // Back in Tests: a long BACK goes straight to the Meter.
+    // Back in the place: a long BACK goes straight to the Meter.
     press(ui, Button::Back, ButtonEvent::Long, kT0 + 130);
     CHECK_EQ(ui.page() == Page::Home, 1);
     // Picking/editing/arming is passive; BACK retreats without resetting D+/D-.
@@ -978,7 +957,7 @@ static void test_submenu_is_modal() {
     press(ui, Button::Back, ButtonEvent::Short, kT0 + 170);
     press(ui, Button::Back, ButtonEvent::Short, kT0 + 172);
     press(ui, Button::Back, ButtonEvent::Short, kT0 + 174);
-    CHECK_EQ(ui.menu() == Menu::Tests, 1);
+    CHECK_EQ(ui.menu() == Menu::Connection, 1);
     CHECK_EQ(g_stub.fc_stops, s1);
     // Failed state still pending: BACK resets as well.
     open_trigger(ui, kT0 + 180);
@@ -1063,7 +1042,7 @@ static void test_trigger_submenu() {
     CHECK_EQ(int(ui.trigger({1, 0, 0}, t += 100, false).err), int(pd::Err::Busy));
     // Leaving during cleanup must not drop the guard.
     press(ui, Button::Back, ButtonEvent::Short, t += 100);
-    CHECK_EQ(ui.menu() == Menu::Tests, 1);
+    CHECK_EQ(ui.menu() == Menu::Connection, 1);
     CHECK_EQ(ui.ports_busy(), true);
     CHECK_EQ(ui.push_menu(Menu::PdTrigger, t += 100), false);
     CHECK_EQ(ui.goto_page(uint8_t(Page::ChargerTest), t += 100), true);
@@ -1507,6 +1486,7 @@ static void test_identify_page() {
     g_stub.pm = {};
     g_stub.ident = {};
     g_stub.vdm = {};
+    g_stub.self_powered = true;
     ui.debug_link(false, 69000);                          // earlier tests left the link inline: detach clears it
     ui.debug_link(true, 69500);
     ui.tick(70000);
@@ -1523,6 +1503,7 @@ static void test_identify_page() {
     g_stub.ident = {};
     g_stub.sink_vdm = {};
     g_stub.vdm = {};
+    g_stub.self_powered = false;
 }
 
 static void test_cable_submenu() {
@@ -1541,7 +1522,7 @@ static void test_cable_submenu() {
     CHECK_EQ(ui.menu() == Menu::CableR, 1);
     press(ui, Button::Ok, ButtonEvent::Short, kT0 + 220);    // reset clears the estimate
     press(ui, Button::Back, ButtonEvent::Short, kT0 + 230);
-    CHECK_EQ(ui.menu() == Menu::Tests, 1);                    // back on Tests -> Cable
+    CHECK_EQ(ui.menu() == Menu::Connection, 1);               // back on the Cable place page
     g_stub.pm_online = false;
 }
 
@@ -1944,95 +1925,6 @@ static void test_over_load_above_5v_needs_confirm() {
     g_stub = StubState();
 }
 
-static void test_tests_carousel() {
-    // Pure Overview formatters
-    StrBuf<tests_view::kMetricChars + 1> m;
-    StrBuf<tests_view::kSubChars + 1> l;
-
-    pd::SourceCaps caps{};
-    tests_view::format_charger(caps, false, fastcharge::Protocol::Pending, false, m, l);
-    CHECK_STR(m.c_str(), "");
-    CHECK_STR(l.c_str(), "No charger");
-
-    caps.valid = true;
-    caps.spec_rev = 2;
-    caps.num_pdos = 5;
-    caps.pdos[0] = {pd::PdoType::Fixed, 0, 5000, 5000, 3000, 15000};
-    caps.pdos[1] = {pd::PdoType::Fixed, 0, 9000, 9000, 3000, 27000};
-    caps.pdos[2] = {pd::PdoType::Fixed, 0, 15000, 15000, 3000, 45000};
-    caps.pdos[3] = {pd::PdoType::Fixed, 0, 20000, 20000, 5000, 100000};
-    caps.pdos[4] = {pd::PdoType::Pps, 0, 3300, 21000, 5000, 100000};
-    tests_view::format_charger(caps, true, fastcharge::Protocol::Pd, true, m, l);
-    CHECK_STR(m.c_str(), "100W");
-    CHECK_STR(l.c_str(), "PD3.0 5/9/15/20V + PPS");
-
-    pd::Emarker em{};
-    tests_view::format_cable(em, m, l);
-    CHECK_STR(m.c_str(), "");
-    CHECK_STR(l.c_str(), "Not read");
-    em.valid = true; em.max_current_a = 5; em.max_voltage_v = 50; em.max_power_w = 240; em.epr_capable = true;
-    tests_view::format_cable(em, m, l);
-    CHECK_STR(m.c_str(), "240W");
-    CHECK_STR(l.c_str(), "5A 50V EPR");
-
-    battery::view::Shown bs{};
-    tests_view::format_battery(bs, "", m, l);
-    CHECK_STR(m.c_str(), "");
-    CHECK_STR(l.c_str(), "No run");
-
-    pd::Identity id{};
-    pd::ExtInfo ext{};
-    pd::Contract ctr{};
-    tests_view::format_device(false, id, ext, 0, ctr, false, m, l);
-    CHECK_STR(m.c_str(), "");
-    CHECK_STR(l.c_str(), "None inline");
-    ctr.valid = true; ctr.mv = 9000; ctr.op_ma = 3000;
-    tests_view::format_device(false, id, ext, 0, ctr, true, m, l);
-    CHECK_STR(m.c_str(), "27W");
-    CHECK_STR(l.c_str(), "Asks 9V 3A");
-    id.valid = true; id.vendor = "Apple";
-    ext.battery.valid = true; ext.battery.design_dwh = 100;
-    ext.battery_status.valid = true; ext.battery_status.present = true; ext.battery_status.present_dwh = 80;
-    tests_view::format_device(true, id, ext, 0x31000000u, ctr, true, m, l);
-    CHECK_STR(m.c_str(), "80%");
-    CHECK_STR(l.c_str(), "Apple PD3.1 80%");
-
-    // 5-page carousel navigation via Long -/+ and Device -> Interrogate
-    Ui &ui = fresh_ui();
-    uint32_t t = kT0;
-    ui.open_place(bench::Place::Tests, t);
-    CHECK_EQ(ui.menu() == Menu::Tests, 1);
-    CHECK_EQ(ui.tests_page() != nullptr && ui.tests_page()->tab() == TestTab::Overview, true);
-    CHECK_EQ(label_violation(ui.labels()), nullptr);
-    CHECK_STR(label(ui, Button::Minus), "Up/Prev");
-    CHECK_STR(label(ui, Button::Plus), "Dn/Next");
-
-    // Long Plus cycles Overview -> Charger -> Cable -> Battery -> Device -> Overview
-    press(ui, Button::Plus, ButtonEvent::Long, t += 100);
-    CHECK_EQ(ui.tests_page() != nullptr && ui.tests_page()->tab() == TestTab::Charger, true);
-    press(ui, Button::Plus, ButtonEvent::Long, t += 100);
-    CHECK_EQ(ui.tests_page() != nullptr && ui.tests_page()->tab() == TestTab::Cable, true);
-    press(ui, Button::Plus, ButtonEvent::Long, t += 100);
-    CHECK_EQ(ui.menu() == Menu::Battery, 1);
-    CHECK_EQ(label_violation(ui.labels()), nullptr);
-    CHECK_STR(label(ui, Button::Minus), "Up/Prev");
-    CHECK_STR(label(ui, Button::Plus), "Dn/Next");
-    press(ui, Button::Plus, ButtonEvent::Long, t += 100);
-    CHECK_EQ(ui.menu() == Menu::Tests, 1);
-    CHECK_EQ(ui.tests_page() != nullptr && ui.tests_page()->tab() == TestTab::Device, true);
-    press(ui, Button::Plus, ButtonEvent::Long, t += 100);
-    CHECK_EQ(ui.tests_page() != nullptr && ui.tests_page()->tab() == TestTab::Overview, true);
-
-    // Long Minus wraps Overview -> Device -> Battery
-    press(ui, Button::Minus, ButtonEvent::Long, t += 100);
-    CHECK_EQ(ui.tests_page() != nullptr && ui.tests_page()->tab() == TestTab::Device, true);
-    // Row 0 on Device tab = Interrogate -> opens Place::Device (Connection on Sink tab)
-    ui.context().keep.tests_sel[static_cast<int>(TestTab::Device)] = 0;
-    press(ui, Button::Ok, ButtonEvent::Short, t += 100);
-    CHECK_EQ(ui.menu() == Menu::Connection, 1);
-    CHECK_EQ(int(ui.connection_page().tab()), int(conn::Tab::Sink));
-}
-
 int main() {
     test_over_load_above_5v_needs_confirm();
     test_usb_link_footer_icon_tone();
@@ -2063,7 +1955,6 @@ int main() {
     test_every_label_fits_its_slot();
     test_ai_rows_on_lines();
     test_tools_hub();
-    test_tests_carousel();
     test_submenu_is_modal();
     test_trigger_submenu();
     test_trigger_inline_override();

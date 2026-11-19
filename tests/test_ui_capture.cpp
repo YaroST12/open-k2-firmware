@@ -1580,23 +1580,21 @@ int main() {
         CHECK_EQ(g_panel[(24 + 56 + 1) * 240 + 11], k2::kAccent);      // the rail runs between the nodes
         CHECK_EQ(g_panel[(24 + 1) * 240 + 11], k2::kBg);               // but not above the first one
         CHECK_EQ(count_colours(4, 224, 200, 238, {k2::kErrorT, k2::kCautionT}) > 0, false);   // the fact line is a fact
-        ui.on_button(Button::Ok, ButtonEvent::Short, 31200);           // the Charger place page (info-only): starts at top of facts
-        ui.on_button(Button::Plus, ButtonEvent::Short, 31250);         // Dn: focus Read again (act 0)
+        ui.context().keep.place_sel[static_cast<int>(bench::Place::Charger)] = 0;
+        ui.on_button(Button::Ok, ButtonEvent::Short, 31200);           // the Charger place page: starts at top of facts
+        ui.on_button(Button::Plus, ButtonEvent::Short, 31250);         // Dn: focus Test charger (act 0)
         test_screen(ui, "bench_charger", 31300);
         CHECK_EQ(ui.menu() == Menu::Connection, 1);
         const ConnectionPage &cp = ui.connection_page();
         auto row_y = [&](int act) { return 68 + (cp.result_rows() + act - cp.window_first()) * 20; };   // a list slot's top
-        CHECK_EQ(g_panel[(row_y(0) + 10) * 240 + 150], k2::kFocusFill);   // Read again, focused
-        // Active charger tests now live in Tests -> Charger: Request voltage (row 1) is blocked by the load.
-        ui.open_tests(TestTab::Charger, 31350);
+        CHECK_EQ(g_panel[(row_y(0) + 10) * 240 + 150], k2::kFocusFill);   // Test charger, focused
         ui.on_button(Button::Plus, ButtonEvent::Short, 31400);         // Request voltage: blocked by the load
-        test_screen(ui, "tests_charger_blocked", 31500);
+        test_screen(ui, "bench_charger_blocked", 31500);
         CHECK_EQ(count_colours(4, 224, 200, 238, {k2::kErrorT}) > 0, true);   // the footer carries the blocker
         ui.on_button(Button::Plus, ButtonEvent::Short, 31510);         // Fast charge: Request voltage unfocused
         ui.tick(31520);
-        const int req_y = k2::kit::kBodyY + 1 * k2::kit::kRowH;
-        CHECK_EQ(count_colours(8, req_y + 2, 150, req_y + 18, {k2::kInk3}) > 0, true);   // blocked: dim
-        CHECK_EQ(count_colours(150, req_y, 214, req_y + 20, {k2::kError}) > 0, false);   // its tail is not red
+        CHECK_EQ(count_colours(8, row_y(1) + 2, 150, row_y(1) + 18, {k2::kInk3}) > 0, true);   // blocked: dim
+        CHECK_EQ(count_colours(150, row_y(1), 214, row_y(1) + 20, {k2::kError}) > 0, false);  // its tail is not red
         g_stub.pm = saved_pm;
         g_stub.em = saved_em;
         ui.debug_link(false, 31510); ui.debug_link(true, 31520); // isolate the synthetic load fixture

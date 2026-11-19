@@ -12,10 +12,8 @@ enum class Page : uint8_t { Home, Detail, ChargerTest, Lines, Tools, Settings, G
 // reports a showing submenu as page index kMenuPageBase + Menu. Connection (Source / Cable / Sink) and Diag
 // are Tools entries; Emarker is the saved-cables list opened from Connection's Cable tab; Twin is the Device twins list;
 // LoopProbe is the HID-cable loop probe (Tools); PdStress the renegotiation stress tool (Tools); Diagnosis is the Black Box
-// diagnosis of the PD session; Battery the efficiency recorder; Tests the 5-page test carousel (Bench > Tests).
-enum class Menu : uint8_t { Trigger, Emarker, PdTrigger, CableR, BlackBox, Spoof, UsbLink, Autorotate, Cards, Share, Connection, Diag, QrTest, Twin, LoopProbe, PdStress, Diagnosis, Battery, Memory, Display, Tests, Count };
-// The 5 pages of the Tests carousel (Menu::Tests for 0/1/2/4, Menu::Battery in tests-tab mode for 3).
-enum class TestTab : uint8_t { Overview = 0, Charger = 1, Cable = 2, Battery = 3, Device = 4, Count = 5 };
+// diagnosis of the PD session; Battery the efficiency recorder (Bench > Battery).
+enum class Menu : uint8_t { Trigger, Emarker, PdTrigger, CableR, BlackBox, Spoof, UsbLink, Autorotate, Cards, Share, Connection, Diag, QrTest, Twin, LoopProbe, PdStress, Diagnosis, Battery, Memory, Display, Count };
 inline constexpr uint8_t kMenuPageBase = static_cast<uint8_t>(Page::Count);
 // Remote-only page indices that open Connection on a tab (kConnTabAlias + Source / Cable / Sink): the old "pd",
 // "emarker" and "identify" page names land here. Ui::page_index() never reports them (Connection reports itself).

@@ -27,7 +27,7 @@ namespace k2 {
 
 namespace {
 using bench::Place;
-constexpr Icon kPlaceIcons[bench::kPlaces] = {Icon::Meter, Icon::Plug, Icon::Cable, Icon::Phone, Icon::Bolt, Icon::Report,
+constexpr Icon kPlaceIcons[bench::kPlaces] = {Icon::Meter, Icon::Plug, Icon::Cable, Icon::Phone, Icon::Battery, Icon::Report,
                                               Icon::Chip};
 static_assert(ToolsPage::kBenchEnd <= kit::kListBottom, "the seven places end above the strip the Ui lays before the footer");
 static_assert(ToolsPage::kNameDy + 16 <= ToolsPage::kStatusDy, "a row's name and status line do not overlap");

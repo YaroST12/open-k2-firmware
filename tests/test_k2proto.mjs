@@ -1345,7 +1345,6 @@ test("core ids: pages and the extended fast-charge names", () => {
   assert.equal(P.pageName(16), "tools/cards");
   assert.equal(P.pageName(18), "tools/connection");
   assert.equal(P.pageName(19), "tools/diag");
-  assert.equal(P.pageName(28), "tools/tests");
   assert.equal(P.pageName(99), "99");
   assert.equal(P.decodeState(u8(0, 0, 0, 0, 0, 0, 0, 0, ...new Array(16).fill(0), ...new Array(14).fill(0).map((_, i) => i === 12 ? 22 : 0))).fc, "USB DATA");
 });
