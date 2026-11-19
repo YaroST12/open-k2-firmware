@@ -552,34 +552,38 @@ void proto_row(Rows &R, const pd::VdmInfo &vdm) {
     if (conn::protocol_text(std::span<const uint16_t>(vdm.svids.data(), vdm.num_svids), t)) R.add("Proto", kEnergy).put(t.view());
 }
 
+void flush_fixed(Rows &R, StrBuf<28> &head, uint16_t cur_ma) {
+    if (head.view().empty()) return;
+    StrBuf<28> &v = R.add("Fixed", kVolt);
+    v.put(head.view()).put_char('V');
+    R.cut_here();
+    v.put_char(' ');
+    put_a(v, cur_ma);
+    head.clear();
+}
+
+void step_fixed(Rows &R, StrBuf<28> &head, uint16_t &cur_ma, const pd::Pdo &p) {
+    if (p.type != pd::PdoType::Fixed) return;
+    StrBuf<12> vs;
+    put_v(vs, p.max_mv);
+    StrBuf<12> as;
+    put_a(as, p.max_ma);
+    const std::size_t joined = head.view().size() + (head.view().empty() ? 0 : 1) + vs.view().size();
+    if (!head.view().empty() && (p.max_ma != cur_ma || joined + 2 + as.view().size() > kValCells)) {
+        flush_fixed(R, head, cur_ma);
+    }
+    if (!head.view().empty()) head.put_char('/');
+    head.put(vs.view());
+    cur_ma = p.max_ma;
+}
+
 // The fixed PDOs, one row per current group and per line of 19 cells ("5/9/15V 3A", "20/28/36/48V 5A"). Every line
 // ends with its own current, so no line needs the cut and none reads as another group's.
 void fixed_rows(Rows &R, const pd::SourceCaps &caps, int rows) {
     StrBuf<28> head;   // the voltages of the open line, "5/9/15"
     uint16_t cur_ma = 0;
-    auto flush = [&] {
-        if (head.view().empty()) return;
-        StrBuf<28> &v = R.add("Fixed", kVolt);
-        v.put(head.view()).put_char('V');
-        R.cut_here();
-        v.put_char(' ');
-        put_a(v, cur_ma);
-        head.clear();
-    };
-    for (int i = 0; i < rows; i++) {
-        const pd::Pdo &p = caps.pdos[i];
-        if (p.type != pd::PdoType::Fixed) continue;
-        StrBuf<12> vs;
-        put_v(vs, p.max_mv);
-        StrBuf<12> as;
-        put_a(as, p.max_ma);
-        const std::size_t joined = head.view().size() + (head.view().empty() ? 0 : 1) + vs.view().size();
-        if (!head.view().empty() && (p.max_ma != cur_ma || joined + 2 + as.view().size() > kValCells)) flush();
-        if (!head.view().empty()) head.put_char('/');
-        head.put(vs.view());
-        cur_ma = p.max_ma;
-    }
-    flush();
+    for (int i = 0; i < rows; i++) step_fixed(R, head, cur_ma, caps.pdos[i]);
+    flush_fixed(R, head, cur_ma);
 }
 
 // "3.3-11V 5A": the range in kVolt, the current in kAmp.
@@ -672,6 +676,29 @@ void range_row(Rows &R, const char *key, const pd::Pdo &p) {
     // an older reading has none). With VCONN required this is the ninth and last row.
     const emk_variant::Text ans = emk_variant::short_text(fusb302::cable_answered());
     if (!ans.view().empty()) R.add("Answered", kDim).put(ans.view());
+}
+
+void sink_pdo_rows(Rows &R, std::span<const uint32_t> sink) {
+    StrBuf<28> head;
+    uint16_t cur_ma = 0;
+    for (uint32_t raw : sink) step_fixed(R, head, cur_ma, pd::decode_pdo(raw));
+    flush_fixed(R, head, cur_ma);
+
+    for (uint32_t raw : sink) {
+        const pd::Pdo p = pd::decode_pdo(raw);
+        if (p.type != pd::PdoType::Pps && p.type != pd::PdoType::Avs) continue;
+        range_row(R, p.type == pd::PdoType::Pps ? "PPS" : "AVS", p);
+    }
+
+    for (uint32_t raw : sink) {
+        const pd::Pdo p = pd::decode_pdo(raw);
+        if (p.type != pd::PdoType::Battery) continue;
+        StrBuf<28> &v = R.add("BatPDO", kVolt);
+        if (p.min_mv != p.max_mv) { put_v(v, p.min_mv); v.put_char('-'); }
+        put_v(v, p.max_mv);
+        v.put("V ");
+        v.put_u32(p.max_mw / 1000).put_char('W');
+    }
 }
 
 // One row: "5V 3A 9V 3A" whole entries that fit the 19 cells, then a "+" when more follow (never a cut entry).
@@ -785,14 +812,14 @@ void put_dwh(StrBuf<28> &v, uint16_t dwh) {
     // PD Revision (RMDO): from inline interrogation or Identify.
     const uint32_t rev = (iq_ok && iq.revision) ? iq.revision : (id_cur ? fusb302::identify_status().revision : 0u);
     if (rev != 0) {
-        StrBuf<28> &v = R.add("Rev", kDim);
+        StrBuf<28> &v = R.add("Rev", kText);
         v.put("PD ").put_u32((rev >> 28) & 0xFu).put_char('.').put_u32((rev >> 24) & 0xFu)
          .put(" v").put_u32((rev >> 20) & 0xFu).put_char('.').put_u32((rev >> 16) & 0xFu);
     }
 
     // Sink_Capabilities_Extended (SKEDB): SPR/EPR max PDP and sink modes.
     if (iq_ok && iq.sink_ext_len >= 21) {
-        StrBuf<28> &v = R.add("SKEDB", kText);
+        StrBuf<28> &v = R.add("PDP", kText);
         const uint8_t spr_max = iq.sink_ext[20];
         const uint8_t epr_max = iq.sink_ext_len >= 24 ? iq.sink_ext[23] : 0;
         const uint8_t modes = iq.sink_ext[17];
@@ -840,13 +867,14 @@ void put_dwh(StrBuf<28> &v, uint16_t dwh) {
         }
     }
     if (bat.design_known() || bat.last_full_known()) {
-        StrBuf<28> &v = R.add("Health", kDim);
+        const int hlth = (bat.design_known() && bat.last_full_known()) ? pd::battery_health_pct(bat) : -1;
+        const uint16_t hc = hlth >= 80 ? kOk : hlth >= 0 ? kCaution : kText;
+        StrBuf<28> &v = R.add("Health", hc);
         if (bat.design_known() && bat.last_full_known()) {
             put_dwh(v, bat.last_full_dwh);
             v.put_char('/');
             put_dwh(v, bat.design_dwh);
             v.put("Wh");
-            const int hlth = pd::battery_health_pct(bat);
             if (hlth >= 0) {
                 StrBuf<8> hs;
                 hs.put_char(' ').put_u32(static_cast<uint32_t>(hlth)).put_char('%');
@@ -897,26 +925,22 @@ void put_dwh(StrBuf<28> &v, uint16_t dwh) {
     const pd::Identity &id = (iq_ok && iq.id.valid) ? iq.id
                            : (id_cur && fusb302::identify_identity().valid) ? fusb302::identify_identity()
                            : fusb302::sink_vdm().identity;
-    if (d.k2_sink) {   // the K2 draws the power itself
-        if (id_cur && id.valid) {
-            StrBuf<28> &v = R.add("ID");
-            conn::id_value(v, kValCells, true, id.vid, id.pid, id.vendor);
-        } else {
-            R.add("ID", kFaint).put("K2");
-        }
+    if (d.k2_sink && !id_cur) {   // the K2 draws the power itself (before Identify)
+        R.add("ID", kFaint).put("K2");
         R.add("Sink", kOk).put(d.k2_sink_ok ? "K2 (sink mode OK)" : "K2 (sink mode PLUS)");
         link_rows(R, d);
-        if (id_cur) {
-            if (!d.sink.empty()) put_sink_pdos(R, "Caps", d.sink);
-            sink_device_rows(R, iq_ok);
-        }
         return;
     }
     // The ID row: sniffed when neither Identify nor inline interrogation collected it.
     if (id.valid) {
         StrBuf<28> &v = R.add("ID");
-        conn::id_value(v, kValCells, fusb302::identify_current() || (iq_ok && iq.id.valid), id.vid, id.pid, id.vendor);
+        conn::id_value(v, kValCells, id_cur || (iq_ok && iq.id.valid), id.vid, id.pid, id.vendor);
     } else R.add("ID").put("Unknown");   // until the sink answers a Discover Identity (the charger's own, sniffed)
+    if (id_cur && (d.k2_sink || !r.request_seen)) {
+        if (!d.sink.empty()) sink_pdo_rows(R, d.sink);
+        sink_device_rows(R, iq_ok);
+        return;
+    }
     if (r.request_seen) {
         put_request(R.add("Request", kAmp), r, *d.caps);
         StrBuf<28> &st = R.add("State", kDim);
@@ -932,7 +956,7 @@ void put_dwh(StrBuf<28> &v, uint16_t dwh) {
     link_rows(R, d);
     proto_row(R, fusb302::sink_vdm());
     vooc_row(R, d.vooc);   // a live session next to a PD contract: the phone holds both (before Caps, which drops first)
-    if (!d.sink.empty()) put_sink_pdos(R, "Caps", d.sink);
+    if (!d.sink.empty()) sink_pdo_rows(R, d.sink);
     else R.add("Caps", kFaint).put("Not seen");
     sink_device_rows(R, iq_ok);
 }
@@ -1278,26 +1302,56 @@ void put_line_id(StrBuf<36> &l, uint16_t vid, uint16_t pid, const char *vendor) 
         return;
     }
     case conn::Tab::Sink: {
-        if (d.k2_sink) {
-            if (fusb302::identify_current()) {
-                const pd::Identity &pid = fusb302::identify_identity();
-                if (pid.valid && pid.vendor && pid.vendor[0]) id.head.put(pid.vendor);
-                else id.head.put("Device read");
-                id.line.put("Self-powered PD read");
-                return;
+        if ((!r.request_seen || d.k2_sink) && fusb302::identify_current()) {
+            const pd::Identity &pid = fusb302::identify_identity();
+            const bool has_vendor = pid.valid && pid.vendor && pid.vendor[0];
+            if (has_vendor) id.head.put(pid.vendor);
+            else id.head.put("Device read");
+            id.dim = false;
+
+            const uint32_t irev = fusb302::identify_status().revision;
+            if (irev != 0) {
+                StrBuf<12> rv;
+                rv.put("PD ").put_u32((irev >> 28) & 0xFu).put_char('.').put_u32((irev >> 24) & 0xFu);
+                id.add(rv.view(), Ident::Solid);
             }
-            id.head.put("K2"); id.line.put("The K2 draws the power itself"); return;
-        }
-        if (!r.request_seen) {
-            if (fusb302::identify_current()) {
-                const pd::Identity &pid = fusb302::identify_identity();
-                if (pid.valid && pid.vendor && pid.vendor[0]) id.head.put(pid.vendor);
-                else id.head.put("Device read");
-                id.line.put("Standalone PD read");
-                return;
+            bool pps = false, avs = false;
+            for (uint32_t raw : d.sink) {
+                const pd::Pdo p = pd::decode_pdo(raw);
+                pps = pps || p.type == pd::PdoType::Pps;
+                avs = avs || p.type == pd::PdoType::Avs;
             }
-            id.head.put("No request"); id.dim = true; id.line.put("The device asked for no offer"); return;
+            if (pps) id.add("PPS", Ident::Outline);
+            else if (avs) id.add("AVS", Ident::Outline);
+
+            const pd::ExtInfo &ext = fusb302::ext();
+            const pd::ExtInfo &iext = fusb302::identify_ext();
+            const pd::BatteryCaps &bat = ext.battery.valid ? ext.battery : iext.battery;
+            const pd::BatteryStatus &bst = ext.battery_status.valid ? ext.battery_status : iext.battery_status;
+            if (bst.valid && !bst.invalid_ref && bst.present) {
+                const int soc = pd::battery_soc_pct(bat, bst);
+                if (soc >= 0) {
+                    StrBuf<8> sc;
+                    sc.put_u32(static_cast<uint32_t>(soc)).put_char('%');
+                    id.add(sc.view(), bst.charging == 0 ? Ident::Ok : Ident::Outline);
+                } else if (bst.charging == 0) {
+                    id.add("chg", Ident::Ok);
+                }
+            }
+
+            const char *fallback = d.k2_sink ? "Self-powered PD read" : "Standalone PD read";
+            const std::string_view tag = d.k2_sink ? " \xC2\xB7 self-powered" : " \xC2\xB7 standalone";
+            if (pid.valid) {
+                put_line_id(id.line, pid.vid, pid.pid, has_vendor ? nullptr : pid.vendor);
+                if (id.line.view().size() + tag.size() <= 35) id.line.put(tag);
+                else { id.line.clear(); id.line.put(fallback); }
+            } else {
+                id.line.put(fallback);
+            }
+            return;
         }
+        if (d.k2_sink) { id.head.put("K2"); id.line.put("The K2 draws the power itself"); return; }
+        if (!r.request_seen) { id.head.put("No request"); id.dim = true; id.line.put("The device asked for no offer"); return; }
         put_v(id.head, r.want_mv);
         id.head.put("V ");
         put_a(id.head, r.want_ma);
@@ -1681,25 +1735,30 @@ void ConnectionPage::update(uint32_t now_ms) {
         if (iq_ok) {
             const pd::IqStatus &iq = fusb302::interrogate_status();
             dev_sig = mix_u32(dev_sig, uint32_t(iq.phase) | uint32_t(iq.ok_mask) << 8 | uint32_t(iq.num_sink_pdos) << 24);
+            dev_sig = pg::mix_u32s(dev_sig, iq.sink_pdos.data(), iq.num_sink_pdos);
             dev_sig = mix_u32(dev_sig, uint32_t(iq.num_epr_pdos) | uint32_t(iq.epr_partial) << 8
                                      | uint32_t(iq.sink_ext_len) << 16 | uint32_t(iq.num_svids) << 24);
             dev_sig = mix_u32(dev_sig, iq.revision);
             dev_sig = mix_u32(dev_sig, uint32_t(iq.id.valid) | uint32_t(iq.id.vid) << 8 | uint32_t(iq.id.pid) << 16);
-            dev_sig = mix_u32(dev_sig, uint32_t(iq.battery.valid) | uint32_t(iq.battery.design_dwh) << 8
-                                     | uint32_t(iq.battery.last_full_dwh) << 24);
-            dev_sig = mix_u32(dev_sig, uint32_t(iq.battery_status.valid) | uint32_t(iq.battery_status.charging) << 4
-                                     | uint32_t(iq.battery_status.present_dwh) << 16);
+            dev_sig = mix_u32(dev_sig, uint32_t(iq.battery.valid) | uint32_t(iq.battery.invalid_ref) << 1
+                                     | uint32_t(iq.battery.design_dwh) << 8 | uint32_t(iq.battery.last_full_dwh) << 24);
+            dev_sig = mix_u32(dev_sig, uint32_t(iq.battery_status.valid) | uint32_t(iq.battery_status.present) << 1
+                                     | uint32_t(iq.battery_status.invalid_ref) << 2
+                                     | uint32_t(iq.battery_status.charging) << 4 | uint32_t(iq.battery_status.present_dwh) << 16);
             dev_sig = mix_u32(dev_sig, uint32_t(iq.mfr.valid) | uint32_t(iq.mfr.vid) << 8);
             dev_sig = pg::mix_cstr(dev_sig, iq.mfr.name, sizeof iq.mfr.name);
         }
         if (fusb302::identify_current()) {
             const pd::Identity &iid = fusb302::identify_identity();
             const pd::ExtInfo &iext = fusb302::identify_ext();
+            dev_sig = mix_u32(dev_sig, idst.revision);
             dev_sig = mix_u32(dev_sig, uint32_t(iid.valid) | uint32_t(iid.vid) << 8 | uint32_t(iid.pid) << 16);
-            dev_sig = mix_u32(dev_sig, uint32_t(iext.battery.valid) | uint32_t(iext.battery.design_dwh) << 8
-                                     | uint32_t(iext.battery.last_full_dwh) << 24);
-            dev_sig = mix_u32(dev_sig, uint32_t(iext.battery_status.valid) | uint32_t(iext.battery_status.charging) << 4
-                                     | uint32_t(iext.battery_status.present_dwh) << 16);
+            if (iid.valid && iid.vendor && iid.vendor[0]) dev_sig = pg::mix_cstr(dev_sig, iid.vendor);
+            dev_sig = mix_u32(dev_sig, uint32_t(iext.battery.valid) | uint32_t(iext.battery.invalid_ref) << 1
+                                     | uint32_t(iext.battery.design_dwh) << 8 | uint32_t(iext.battery.last_full_dwh) << 24);
+            dev_sig = mix_u32(dev_sig, uint32_t(iext.battery_status.valid) | uint32_t(iext.battery_status.present) << 1
+                                     | uint32_t(iext.battery_status.invalid_ref) << 2
+                                     | uint32_t(iext.battery_status.charging) << 4 | uint32_t(iext.battery_status.present_dwh) << 16);
             dev_sig = mix_u32(dev_sig, uint32_t(iext.mfr.valid) | uint32_t(iext.mfr.vid) << 8);
             dev_sig = pg::mix_cstr(dev_sig, iext.mfr.name, sizeof iext.mfr.name);
         }

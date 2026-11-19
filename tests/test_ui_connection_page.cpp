@@ -1324,6 +1324,125 @@ static void test_device_place_inline_interrogate_and_readout() {
 #endif
 }
 
+static void test_device_place_inline_interrogate_with_sink_pdos() {
+    Ui &ui = fresh_ui();
+    make_inline(ui, 20000);
+    g_stub.pm_online = true;
+    g_stub.pd_seen_attach = true;
+    g_stub.ol_facts.far_pd_message = true;
+    g_stub.caps.valid = true; g_stub.caps.spec_rev = 2; g_stub.caps.num_pdos = 1;
+    g_stub.caps.pdos[0] = {pd::PdoType::Fixed, 0, 5000, 5000, 3000, 15000};
+    g_stub.caps.raw_header = 0x1181; g_stub.caps.rx_count++;
+    uint32_t t = 21000;
+    for (int i = 0; i < 20; i++) ui.tick(t += 100);
+    ui.open_place(bench::Place::Device, t += 100);
+    settle(ui, t);
+    while (cp(ui).action_row() >= 0) ui.on_button(Button::Minus, ButtonEvent::Short, t += 100);   // OK = Ask device
+    const int before_rows = cp(ui).result_rows();   // includes Caps: Not seen (1 row)
+    ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);
+    ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);
+    g_stub.iq_running = false;
+    g_stub.iq_status.phase = pd::IqPhase::Done;
+    g_stub.iq_status.ok_mask = pd::iq_bit(pd::IqStep::Identity) | pd::iq_bit(pd::IqStep::SinkCap) |
+                               pd::iq_bit(pd::IqStep::SinkCapExt) | pd::iq_bit(pd::IqStep::Revision) |
+                               pd::iq_bit(pd::IqStep::BatteryCap) | pd::iq_bit(pd::IqStep::BatteryStatus) |
+                               pd::iq_bit(pd::IqStep::MfrInfo) | pd::iq_bit(pd::IqStep::Svids) |
+                               pd::iq_bit(pd::IqStep::EprSinkCap);
+    g_stub.iq_status.id.valid = true; g_stub.iq_status.id.vid = 0x18D1; g_stub.iq_status.id.pid = 0x4EE7; g_stub.iq_status.id.vendor = "Google";
+    g_stub.iq_status.num_sink_pdos = 3;
+    g_stub.iq_status.sink_pdos = {0x3601912Cu, 0x0002D12Cu, 0xC0DC323Cu, 0, 0, 0, 0};   // 5V 3A, 9V 3A, PPS 5-11V 3A
+    g_stub.iq_status.mfr.valid = true; std::strcpy(g_stub.iq_status.mfr.name, "Google LLC");
+    g_stub.iq_status.revision = 0x31200000u;
+    g_stub.iq_status.sink_ext_len = 24; g_stub.iq_status.sink_ext[17] = 0x21; g_stub.iq_status.sink_ext[20] = 37; g_stub.iq_status.sink_ext[23] = 100;
+    g_stub.iq_status.battery.valid = true; g_stub.iq_status.battery.design_dwh = 195; g_stub.iq_status.battery.last_full_dwh = 186;
+    g_stub.iq_status.battery_status.valid = true; g_stub.iq_status.battery_status.present = true;
+    g_stub.iq_status.battery_status.charging = 0; g_stub.iq_status.battery_status.present_dwh = 149;
+    g_stub.iq_status.num_svids = 2; g_stub.iq_status.svids[0] = 0xFF01; g_stub.iq_status.svids[1] = 0x18D1;
+    g_stub.iq_status.num_epr_pdos = 9;
+    settle(ui, t);
+    // Caps: Not seen (1 row) -> grouped Fixed (1 row) + PPS (1 row) (+1 net), plus Mfr, Rev, PDP, Batt, Health, SVIDs, EPR (+7) = +8 rows
+    CHECK_EQ(cp(ui).result_rows(), before_rows + 8);
+    // Scroll through the list so every row is painted and checked for truncation
+    ui.on_button(Button::Minus, ButtonEvent::Short, t += 100);
+    for (int i = 0; i < 4; i++) { ui.on_button(Button::Plus, ButtonEvent::Short, t += 100); settle(ui, t); }
+#ifdef K2_TRUNC_LOG
+    CHECK_EQ(k2::trunc::failures(), 0);
+#endif
+}
+
+static void test_device_place_standalone_and_self_powered_identify() {
+    {   // Standalone DRP Identify: Rp toggling, !request_seen, identify_current() == true
+        Ui &ui = fresh_ui();
+        g_stub.cc = 1; g_stub.pm_online = true; g_stub.pm.vbus_mv = 0;
+        g_stub.caps.valid = false; g_stub.caps_this_attach = false;
+        uint32_t t = 12000;
+        for (; t <= 13400; t += 100) {
+            set_cc(0, (t / 100) % 2 == 0 ? 3300 : 0);
+            ui.tick(t);
+        }
+        CHECK_EQ(int(ui.link().wait_kind()), int(raguard::WaitKind::DualRolePort));
+        g_stub.ident_current = true;
+        g_stub.ident.state = pd::IdState::Done;
+        g_stub.ident.ok_mask = uint16_t((1u << int(pd::IdStep::Identity)) | (1u << int(pd::IdStep::SinkCap)) |
+                                        (1u << int(pd::IdStep::Revision)) | (1u << int(pd::IdStep::BatCap)) |
+                                        (1u << int(pd::IdStep::BatStatus)));
+        g_stub.ident_identity.valid = true; g_stub.ident_identity.vid = 0x18D1; g_stub.ident_identity.pid = 0x4EE7;
+        g_stub.ident_identity.vendor = "Google";
+        g_stub.ident.num_sink_pdos = 3;
+        g_stub.ident.sink_pdos = {0x3601912Cu, 0x0002D12Cu, 0xC0DC323Cu, 0, 0, 0, 0};
+        g_stub.ident.revision = 0x31200000u;
+        g_stub.ident_ext.battery.valid = true; g_stub.ident_ext.battery.design_dwh = 195; g_stub.ident_ext.battery.last_full_dwh = 150;
+        g_stub.ident_ext.battery_status.valid = true; g_stub.ident_ext.battery_status.present = true;
+        g_stub.ident_ext.battery_status.charging = 0; g_stub.ident_ext.battery_status.present_dwh = 120;
+        ui.open_place(bench::Place::Device, t += 100);
+        settle(ui, t);
+        while (cp(ui).action_row() >= 0 || cp(ui).window_first() > 0) ui.on_button(Button::Minus, ButtonEvent::Short, t += 100);
+        settle(ui, t);
+        // Report card rows only: ID, Fixed, PPS, Rev, Batt, Health (6 rows; no Request/Pwr/USB noise)
+        CHECK_EQ(cp(ui).result_rows(), 6);
+        CHECK(!row_value_is(0, "Unknown"));
+        CHECK(!row_value_is(1, "None seen", kFaint));
+#ifdef K2_TRUNC_LOG
+        CHECK_EQ(k2::trunc::failures(), 0);
+#endif
+    }
+    {   // Self-powered Identify: self_powered == true, identify_current() == true
+        Ui &ui = fresh_ui();
+        g_stub.self_powered = true;
+        g_stub.cc = 1; g_stub.pm_online = true; g_stub.pm.vbus_mv = 5000; g_stub.pm.current_ma = 0;
+        g_stub.caps.valid = true; g_stub.caps.spec_rev = 2; g_stub.caps.num_pdos = 1;
+        g_stub.caps.pdos[0] = {pd::PdoType::Fixed, 0, 5000, 5000, 3000, 15000};
+        g_stub.caps.raw_header = 0x1181; g_stub.caps.rx_count++;
+        uint32_t t = 20000;
+        for (int i = 0; i < 5; i++) ui.tick(t += 100);
+        ui.open_place(bench::Place::Device, t += 100);
+        settle(ui, t);
+        while (cp(ui).action_row() >= 0 || cp(ui).window_first() > 0) ui.on_button(Button::Minus, ButtonEvent::Short, t += 100);
+        settle(ui, t);
+        CHECK_EQ(cp(ui).result_rows(), 3);   // pre-Identify: ID: K2, Sink: K2 (sink mode OK), USB
+        g_stub.ident_current = true;
+        g_stub.ident.state = pd::IdState::Done;
+        g_stub.ident.ok_mask = uint16_t((1u << int(pd::IdStep::Identity)) | (1u << int(pd::IdStep::SinkCap)) |
+                                        (1u << int(pd::IdStep::Revision)) | (1u << int(pd::IdStep::BatCap)) |
+                                        (1u << int(pd::IdStep::BatStatus)));
+        g_stub.ident_identity.valid = true; g_stub.ident_identity.vid = 0x18D1; g_stub.ident_identity.pid = 0x4EE7;
+        g_stub.ident_identity.vendor = "Google";
+        g_stub.ident.num_sink_pdos = 2;
+        g_stub.ident.sink_pdos = {0x3601912Cu, 0xC0DC323Cu, 0, 0, 0, 0, 0};
+        g_stub.ident.revision = 0x31200000u;
+        g_stub.ident_ext.battery.valid = true; g_stub.ident_ext.battery.design_dwh = 195; g_stub.ident_ext.battery.last_full_dwh = 186;
+        g_stub.ident_ext.battery_status.valid = true; g_stub.ident_ext.battery_status.present = true;
+        g_stub.ident_ext.battery_status.charging = 0; g_stub.ident_ext.battery_status.present_dwh = 149;
+        settle(ui, t);
+        // Report card rows only: ID, Fixed, PPS, Rev, Batt, Health (6 rows; no Request/Pwr/USB/K2 noise)
+        CHECK_EQ(cp(ui).result_rows(), 6);
+        CHECK(!row_value_is(0, "K2", kFaint));
+#ifdef K2_TRUNC_LOG
+        CHECK_EQ(k2::trunc::failures(), 0);
+#endif
+    }
+}
+
 int main() {
     test_sink_tab_pd_body_shows_the_raw_vooc_note();
     test_sink_tab_no_pd_shows_the_raw_vooc_note();
@@ -1366,5 +1485,7 @@ int main() {
     test_tools_rows_open_single_tools();
     test_svooc_trigger_rise_is_not_a_sink();
     test_device_place_inline_interrogate_and_readout();
+    test_device_place_inline_interrogate_with_sink_pdos();
+    test_device_place_standalone_and_self_powered_identify();
     return test_report("test_ui_connection_page");
 }
