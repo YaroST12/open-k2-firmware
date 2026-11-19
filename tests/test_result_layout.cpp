@@ -1048,6 +1048,27 @@ static void test_epr_levels_are_chips_with_the_skip_reason() {
     rl::build(l, s);
     CHECK_EQ(sweep_row_of(l, 11, A::EprAvs) == nullptr, true);
 }
+// The positions with a range line on the Results grid (the spec section's split rule reads them): the chips build() keeps, so a
+// skipped-only EPR AVS range (folded, no line) is not one.
+static uint16_t chip_positions(const rl::Layout& l) {
+    uint16_t m = 0;
+    for (size_t i = 0; i < l.token_count; ++i) if (l.tokens[i].kind) m |= uint16_t(1u << l.tokens[i].mv);
+    return m;
+}
+static void test_range_positions_are_the_range_chips() {
+    auto s = mixed_pd();
+    rl::Layout l; rl::build(l, s);
+    CHECK_EQ(unsigned(rl::range_positions(s)), unsigned(1u << 5 | 1u << 6 | 1u << 9));
+    CHECK_EQ(unsigned(rl::range_positions(s)), unsigned(chip_positions(l)));
+    s.push_back(step(A::EprAvs, 15000, V::Skip, 11, 0xD0000000u | (480u << 17) | (150u << 8) | 140, ct::Reason::EprRefused));
+    rl::build(l, s);
+    CHECK_EQ(unsigned(rl::range_positions(s)), unsigned(chip_positions(l)));
+    CHECK_EQ(rl::range_positions(s) >> 11 & 1u, 0u);
+    s.push_back(step(A::SprAvs, 9000, V::Skip, 12, 0xE004B145u, ct::Reason::Request));   // a skipped SPR AVS range keeps its chip
+    rl::build(l, s);
+    CHECK_EQ(unsigned(rl::range_positions(s)), unsigned(chip_positions(l)));
+    CHECK_EQ(rl::range_positions(baseus()), uint16_t(1u << 6 | 1u << 7));
+}
 static void test_legacy_chips_collapse_distinct_voltages() {
     std::vector<ct::Step> s;
     for (unsigned mv : {5000u, 9000u, 20000u, 9000u, 5000u}) s.push_back(step(A::Qc3, mv, V::Pass));
@@ -1970,6 +1991,7 @@ int main() {
     test_cable_limited_epr_rows_fold_instead_of_showing_a_bare_label();
     test_epr_levels_are_chips_with_the_skip_reason();
     test_legacy_chips_collapse_distinct_voltages();
+    test_range_positions_are_the_range_chips();
     test_chips_carry_their_level();
     test_absent_protocols_fold_into_one_row();
     test_a_legacy_unit_keeps_its_row_when_folding_is_off();

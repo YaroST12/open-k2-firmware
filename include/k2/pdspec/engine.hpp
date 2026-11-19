@@ -12,7 +12,8 @@
 //   Pps          the programmable sweep (PPS APDOs, then the SPR AVS APDO; plan.hpp Sweep): per window steps of 20 / 100 / 500 mV
 //                (AVS 100 / 500 / 1000 mV) up to the maximum and back, then the two slams. Monotonic, accuracy, in band and
 //                PS_RDY within tPpsSrcTrans* / tAvsSrcTrans*, overshoot (vPpsValid / vAvsValid), transient; Get_PPS_Status at the
-//                top and the end of every PPS pass.
+//                top and the end of every PPS pass. A window the Deep charger test swept itself runs a short cover instead
+//                (plan.hpp make_cover_sweep: three large steps up and back, the resolution steps onto both ends), then the slams.
 //   PpsKeepAlive a PPS contract with the sink's keep-alive silenced: when does the source Hard Reset.
 //   EprKeepAlive the same in EPR mode (needs EPR and the cable proof).
 //   HardReset    the K2 Hard Resets the top fixed level: VBUS to vSafe0V, off time, turn-on, first capabilities.
@@ -139,6 +140,9 @@ public:
     virtual const pd::SourceCaps& caps() = 0;
     virtual std::uint32_t cap_mv() = 0;                    // the monitor ceiling a request may ask for
     virtual bool epr_proof() = 0;                          // the cable proof EPR levels need
+    // The EPR AVS APDO a Deep run met (kOptEprAvs): its position (0 = none) and the APDO, which the live list loses when the run leaves
+    // EPR mode.
+    virtual std::uint8_t epr_avs(pd::Pdo& out) { (void)out; return 0; }
     virtual pd::Err request(const pd::Choice& c) = 0;      // the sink's own guards apply; Ok = queued
     virtual void release() = 0;                            // back to 5 V (PDO 1)
     virtual bool hard_reset() = 0;                         // a K2 Hard Reset on the wire; false = refused
@@ -158,6 +162,9 @@ public:
     virtual void on_item(Family, std::uint8_t /*idx*/, std::uint8_t /*total*/) {}
     virtual void on_note(const char*) {}
     virtual void on_finish(Stop) {}
+    // One measurement of a programmable move (its APDO in m.a & 15), the Accept and Get_PPS_Status included: a caller that keeps
+    // per-APDO results (the Deep charger test's range rows) folds it in; the merged aggregates are unchanged by it.
+    virtual void on_apdo(Check, const Meas&) {}
 
 protected:
     ~Env() = default;   // never deleted through the interface (a virtual destructor would pull operator delete into the link)
@@ -187,6 +194,7 @@ inline constexpr std::uint32_t kPostStepUs = 300000;     // ... after a small pr
 // ... after a large one (a slam, an AVS step over 1 V): the 275 / 325 ms limit plus the 50 ms tail the level is read from, with room
 // to see how late a slow one is (an unloaded fall to the minimum).
 inline constexpr std::uint32_t kPostLargeUs = 700000;
+inline constexpr std::uint32_t kPostLargeEprUs = 1100000;   // ... an EPR AVS one: the 760 ms limit, the tail, the same room
 inline constexpr std::int32_t kLoadAbortMa = 100;
 inline constexpr std::uint8_t kLoadPolls = 5;
 inline constexpr std::uint8_t kOvPolls = 3;
@@ -206,9 +214,9 @@ public:
     explicit Engine(Env& env) : env_(&env), pool_(env.record_pool()) {}
 
     // families: a bit per Family (1 << Family), 0 = all of them. The ones left out read "not selected". opts: kOptFull20 sweeps the
-    // whole window at 20 mV (else three 10-step windows). covered: a bit per APDO position whose steps the charger test already handed
-    // in (judge_test_move): such a window runs only its slams and status asks.
-    StartResult start(std::uint32_t now_ms, std::uint8_t families = 0, std::uint8_t opts = 0, std::uint8_t covered = 0);
+    // whole window at 20 mV (else three 10-step windows); kOptEprAvs adds the EPR AVS window (plan.hpp scan). covered: a bit per APDO position whose steps the charger test already handed
+    // in (judge_test_move): such a window runs a short cover (plan.hpp make_cover_sweep) and its slams, with their status asks.
+    StartResult start(std::uint32_t now_ms, std::uint8_t families = 0, std::uint8_t opts = 0, std::uint16_t covered = 0);
     // One programmable move of a Deep charger-test run, captured and analyzed by the caller, judged into the aggregates before start().
     // chain: the move followed a judged move of the same walk, whose level is its monotonic reference.
     void judge_test_move(const ProgMove& mv, bool chain, const Edges& e, const StepOut& o, const Snapshot& s);
@@ -222,7 +230,7 @@ public:
     Family family() const { return fam_; }
     std::uint8_t item() const { return item_; }
     std::uint8_t items() const { return items_; }
-    std::uint8_t covered() const { return covered_; }
+    std::uint16_t covered() const { return covered_; }
     std::uint32_t elapsed_ms(std::uint32_t now_ms) const { return running_ ? now_ms - t0_ : end_ms_ - t0_; }
     const std::array<Agg, kChecks>& agg() const { return agg_; }
     const Agg& agg(Check c) const { return agg_[static_cast<std::size_t>(c)]; }
@@ -262,11 +270,8 @@ private:
     const pd::Pdo& pdo(std::uint8_t pos) const { return env_->caps().pdos[pos - 1]; }
     std::int32_t level_mv(std::uint8_t pos, std::uint16_t mv) const { return mv ? mv : pdo(pos).max_mv; }
     bool programmable(std::uint8_t pos) const { return pos && pdo(pos).type != pd::PdoType::Fixed; }
-#if K2_SPECROWS
-    void meas(Check c, const Meas& m);   // out of line (engine.cpp): also marks the record in flight for the per-transition rows
-#else
-    void meas(Check c, const Meas& m) { agg_[static_cast<std::size_t>(c)].add(def(c).kind, m); }
-#endif
+    void meas(Check c, const Meas& m);   // out of line (engine.cpp): the record in flight (K2_SPECROWS) and Env::on_apdo
+    void judge_move(const ProgMove& mv, const StepOut& o, const Edges& e, const Snapshot& s, PassRec& r);   // judge_prog, reported per APDO
     void skip(Check c, Skip why) { auto& a = agg_[static_cast<std::size_t>(c)]; if (a.n == 0 && a.skip == Skip::None) a.skip = why; }
     void skip_family(Family f, Skip why);
     void next_family();
@@ -293,7 +298,7 @@ private:
     void detach_gap(const Snapshot& s, std::uint32_t now);
     void recover(const Snapshot& s, std::uint32_t now);
     const Prog& prog() const;
-    std::uint8_t first_class() const { return covered_ >> prog().pos & 1 ? kSlam : 0; }
+    bool cover() const { return covered_ >> prog().pos & 1; }
     void pass_begin(std::uint32_t now);
     void prog_next(std::uint32_t now);
     void pass_end(std::uint32_t now);
@@ -309,6 +314,7 @@ private:
     Env* env_;
     bool running_ = false, finishing_ = false, cancel_ = false, release_unconfirmed_ = false;
     bool hr_epr_ = false;   // the K2's Hard Reset went out in EPR mode
+    bool prog_meas_ = false;   // the measurements in flight are a programmable move's: Env::on_apdo gets them too
     Stop stop_ = Stop::None;
     std::uint32_t t0_ = 0, end_ms_ = 0;
     Levels L_{};
@@ -341,7 +347,7 @@ private:
     bool live_first_ = false, live_unseen_ = false;
     // The programmable sweep.
     std::uint8_t w_ = 0, cls_ = 0;      // the window (L_.prog) and the step class of the pass in flight
-    std::uint8_t covered_ = 0;          // start(): the windows the charger test swept
+    std::uint16_t covered_ = 0;         // start(): the windows the charger test swept (a bit per APDO position)
     Sweep sw_{};
     Move pend_{};                       // a move held back while Get_PPS_Status is asked
     bool have_pend_ = false, asked_top_ = false, asked_end_ = false, full20_ = false;

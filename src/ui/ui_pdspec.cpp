@@ -151,6 +151,11 @@ void PdSpecSession::on_item(sc::Family f, std::uint8_t idx, std::uint8_t total) 
 
 void PdSpecSession::on_note(const char* why) { K2LOG("[PDSPEC] note %s\n", why); }
 
+// A Deep run keeps each range's own spec cells in the charger test's evidence; a standalone run has no range rows.
+void PdSpecSession::on_apdo(sc::Check c, const sc::Meas& m) {
+    if (test_run_) ctx_.ui->charger_test_spec_apdo(c, m);
+}
+
 void PdSpecSession::on_finish(sc::Stop why) {
     const sc::Engine& e = *engine_;
     // The checks, the programmable passes and the caps note are in the blob only (`k2_remote pd-spec result`, report.txt): no log line
@@ -169,14 +174,18 @@ void PdSpecSession::on_finish(sc::Stop why) {
 // ---- start, cancel, tick ---------------------------------------------------------------------------------------------------------------
 
 sc::StartResult PdSpecSession::start(std::uint8_t families, std::uint32_t now_ms, std::uint8_t opts) {
-    const sc::StartResult r = start_run(families, now_ms, opts, false);
+    epr_pos_ = 0;   // the standalone run sweeps the SPR windows only
+    const sc::StartResult r = start_run(families, now_ms, static_cast<std::uint8_t>(opts & sc::kOptFull20), false);
     last_start_ = static_cast<std::uint8_t>(r);
     return r;
 }
 
-sc::StartResult PdSpecSession::start_in_test(std::uint32_t now_ms, std::uint32_t run_id) {
+sc::StartResult PdSpecSession::start_in_test(std::uint32_t now_ms, std::uint32_t run_id, const pd::Pdo* epr_avs, std::uint8_t epr_pos) {
     const bool fed = run_id && run_id == fed_run_ && engine_ && test_run_ && !started();
-    return start_run(specsec::kFamilyMask, now_ms, 0, true, fed ? covered_ : 0, fed);
+    if (!fed) ctx_.ui->charger_test_spec_apdo_clear();   // the fresh engine judges every range again
+    epr_avs_ = epr_avs ? *epr_avs : pd::Pdo{};
+    epr_pos_ = epr_avs ? epr_pos : 0;
+    return start_run(specsec::kFamilyMask, now_ms, sc::kOptEprAvs, true, fed ? covered_ : 0, fed);
 }
 
 // ---- the Deep run's own moves (prog_unify) ---------------------------------------------------------------------------------------------
@@ -191,6 +200,7 @@ bool PdSpecSession::test_move(std::uint32_t run_id, const sc::ProgMove& mv, std:
     if (!engine_ || !test_run_ || fed_run_ != run_id || started()) {
         pool_ = {};
         engine_.emplace(static_cast<sc::Env&>(*this));
+        ctx_.ui->charger_test_spec_apdo_clear();
         test_run_ = true;
         fed_run_ = run_id;
         covered_ = 0;
@@ -237,11 +247,11 @@ void PdSpecSession::feed_note(bool judged) {
     if (!(feed_.flags & sc::kMoveSweep)) return;
     if (sw_off_[p] < 0xFF) { ++sw_off_[p]; if (judged) ++sw_ok_[p]; }
     if (!(feed_.flags & sc::kMoveLast)) return;
-    if (sw_ok_[p] * 4u >= sw_off_[p] * 3u) covered_ = static_cast<std::uint8_t>(covered_ | 1u << p);
+    if (sw_ok_[p] * 4u >= sw_off_[p] * 3u) covered_ = static_cast<std::uint16_t>(covered_ | 1u << p);
     sw_off_[p] = sw_ok_[p] = 0;
 }
 
-sc::StartResult PdSpecSession::start_run(std::uint8_t families, std::uint32_t now_ms, std::uint8_t opts, bool in_test, std::uint8_t covered,
+sc::StartResult PdSpecSession::start_run(std::uint8_t families, std::uint32_t now_ms, std::uint8_t opts, bool in_test, std::uint16_t covered,
                                          bool keep) {
     if (running()) return sc::StartResult::Running;
     if (!ctx_.pm_online) return sc::StartResult::NoMonitor;

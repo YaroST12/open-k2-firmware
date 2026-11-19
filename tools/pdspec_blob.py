@@ -28,6 +28,7 @@ NEVER = 99999999        # pdspec::kNever: an event that never came
 OPEN = 1000000          # pdspec::kOpenLimit: the open side of a one-sided Range limit
 SEC_HEADER, SEC_CELL = 3, 4   # specsec::kWireBytes = 3 + 4 per cell
 SEC_DETAIL_CELL = 8           # specsec::kDetailBytes = 8 per cell: limit lo(2) hi(2), count(2), a, b
+APDO_CELL = 12                # specsec::kApdoCellBytes: a range's slot, code fails value lo hi n a b
 NOT_SEEN16 = 0xFFFF
 NOT_SEEN32 = 0xFFFFFFFF
 STATES = ["idle", "running", "finished"]          # PdSpecSession::State (the status block and the blob header)
@@ -110,8 +111,77 @@ def section_tables():
          "unseen": int(re.search(r"kUnseen\s*=\s*(\d+)", text).group(1)),
          "wire_bytes": SEC_HEADER + SEC_CELL * len(order),
          "detail_bytes": SEC_DETAIL_CELL * len(order)}
+    # Each PPS / AVS range's own cells (specsec::kApdoPps / kApdoAvs: one check per slot, None = no such check on that kind) and its
+    # word (RangeTone, Group: range_spec / range_word).
+    s["apdo"] = {kind: [None if n == "Count" else by_enum[n]
+                        for n in re.findall(r"C::(\w+)", re.search(name + r"\{(.*?)\};", text, re.S).group(1))]
+                 for kind, name in (("pps", "kApdoPps"), ("avs", "kApdoAvs"))}
+    s["range_tones"] = [n.lower() for n in _enum_names(text, "RangeTone")]
+    s["groups"] = [n.lower() for n in _enum_names(text, "Group")]
+    s["apdo_bytes"] = 2 + APDO_CELL * len(s["apdo"]["pps"])
     _cache["s"] = s
     return s
+
+
+def range_word(tone, group):
+    """specsec::range_word: "spec" when everything judged passed, "-" when nothing was judged, else the family of the worst failure."""
+    s = section_tables()
+    t = _name(s["range_tones"], tone)
+    return "spec" if t == "pass" else "-" if t == "none" else _name(s["groups"], group)
+
+
+def split_keys(split):
+    """The merged cells' keys the K2's Results grid left out (layout B): a kind whose range lines carry its checks (split["pps"] /
+    split["avs"]) drops its block, the PPS block before the AVS one, the observer after them."""
+    cells = section_tables()["cells"]
+    enums = [d["enum"] for d in cells]
+    pps, avs, obs = enums.index("PpsMonotonic"), enums.index("AvsMonotonic"), enums.index("SourceReset")
+    keys = set()
+    if split.get("pps"):
+        keys |= {d["key"] for d in cells[pps:avs]}
+    if split.get("avs"):
+        keys |= {d["key"] for d in cells[avs:obs]}
+    return keys
+
+
+def decode_range(rec):
+    """One range's own spec cells (specsec::to_apdo_wire: the journal record /jr/sa<n>.rec, one entry of the remote stream): its
+    APDO position, kind, word and one entry per check of its kind (the cell rules of decode_section plus the detail form's)."""
+    s, t = section_tables(), load_tables()
+    rec = bytes(rec)
+    if len(rec) != s["apdo_bytes"] or not 0 < rec[0] <= 15 or rec[1] > 0x1F:
+        raise ValueError("not a PD spec range record")
+    avs, tone, group = rec[1] & 1, rec[1] >> 1 & 3, rec[1] >> 3 & 3
+    cells = []
+    for i, d in enumerate(s["apdo"]["avs" if avs else "pps"]):
+        if d is None:
+            continue
+        code, fails, raw, lo, hi, n, a, b = struct.unpack_from("<BBhhhHBB", rec, 2 + APDO_CELL * i)
+        verdict = code & 7
+        if verdict >= len(t["verdicts"]):
+            raise ValueError(f"PD spec range slot {i} has an unknown verdict")
+        name = t["verdicts"][verdict]
+        measured = name not in ("pending", "skip")
+        value = None if not measured else NEVER if raw == s["unseen"] else raw * s["steps"][d["unit"]] if d["unit"] in s["steps"] else raw
+        cell = {"key": d["key"], "label": d["label"], "unit": d["unit"], "verdict": name, "fails": fails, "value": value,
+                "value_text": "-" if value is None else ps_text(value) if d["key"] == "pps_status" and value < NEVER else fmt_value(d["unit"], value)}
+        cell.update(_detail_of(s, t, d, measured, struct.pack("<hhHBB", lo, hi, n, a, b), 0))
+        cells.append(cell)
+    return {"pos": rec[0], "kind": "avs" if avs else "pps", "tone": _name(s["range_tones"], tone), "word": range_word(tone, group),
+            "cells": cells}
+
+
+def decode_ranges(b):
+    """The remote read 0x0B [9, off] whole: the count with the grid's split on its high bits, then each range (decode_range). Empty =
+    no range measured. Returns {"split": {"pps", "avs"}, "ranges": [...]}; raises ValueError on a size the count does not name."""
+    b = bytes(b)
+    if not b:
+        return {"split": {"pps": False, "avs": False}, "ranges": []}
+    n, per = b[0] & 15, section_tables()["apdo_bytes"]
+    if b[0] & 0xC0 or len(b) != 1 + n * per:
+        raise ValueError(f"PD spec ranges are {len(b)} bytes for {n} ranges")
+    return {"split": {"pps": bool(b[0] >> 4 & 1), "avs": bool(b[0] >> 5 & 1)},
+            "ranges": [decode_range(b[1 + k * per: 1 + (k + 1) * per]) for k in range(n)]}
 
 
 def decode_section(b, detail=None):

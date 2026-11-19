@@ -316,6 +316,13 @@ constexpr bool is_sweep(const Step& s) {
 // re-announced after it against the list before it (mi_unlock::diff); each raised or new PDO then gets a mode row right behind it,
 // asking that PDO at its new level (mi_unlock::test_point) like any PD row. Both ride Step::hunt (journal bit 4, Step stays 20 B).
 constexpr bool is_mi_chain(const Step& s) { return s.group == Group::Pd && s.hunt && s.pos == 0; }
+// The EPR AVS APDO a run reached (a row of it ran: EPR entered, the cable fit): the PD spec stage sweeps it too, though the live list
+// loses it at EPR exit. nullptr = none.
+constexpr const Step* reached_epr_avs(std::span<const Step> steps) {
+    for (const Step& s : steps)
+        if (s.algorithm == Algorithm::EprAvs && s.pos >= 8 && s.pdo && s.verdict != Verdict::Skip) return &s;
+    return nullptr;
+}
 constexpr bool is_mi_mode(const Step& s) { return s.group == Group::Pd && s.hunt && s.pos != 0; }
 // Which part of its APDO a sweep row covers: below ctsweep::kSplitMv (the PdLow row) or from it up. The row's mv is its first
 // setpoint until it closes and the setpoint of its peak after; both stay on the row's side of the split.
@@ -790,6 +797,12 @@ public:
     uint32_t run_id() const { return run_id_; }
     uint32_t revision() const { return revision_; }
     const Evidence& evidence() const { return evidence_; }
+    // The PD spec stage per PPS / AVS APDO (the range rows' spec cells), folded live from the engine's programmable measurements
+    // (Env::on_apdo); clear = the engine started again from nothing. Beside Evidence, not in it: a snapshot copies Evidence on the stack.
+    const specsec::Apdos& spec_apdo() const { return spec_apdo_; }
+    void spec_apdo(pdspec::Check c, const pdspec::Meas& m) { spec_apdo_.add(c, m); }
+    void spec_apdo_clear() { spec_apdo_ = {}; }
+    void spec_apdo_restore(const specsec::Apdos& a) { spec_apdo_ = a; }   // after restore(): the journal's ranges
     size_t index() const { return index_; }
     std::span<const Step> steps() const { return {steps_.data(), count_}; }
     uint32_t hold_left_ms(uint32_t now) const;
@@ -897,6 +910,7 @@ private:
     uint32_t spec_ms_ K2_BSS_INIT(0), spec_stop_ms_ K2_BSS_INIT(0);
     Env& env_;
     Evidence evidence_;
+    specsec::Apdos spec_apdo_{};
     std::array<Step, kMaxSteps> steps_ K2_BSS_ZERO;
     size_t count_ K2_BSS_INIT(0), index_ K2_BSS_INIT(0), pd_retry_ = SIZE_MAX;
     uint8_t retries_ K2_BSS_INIT(0);         // retries the row pd_retry_ has had (a source Hard Reset or loss in the row)

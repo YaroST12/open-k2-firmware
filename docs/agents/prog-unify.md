@@ -1,6 +1,7 @@
 # Prog-unify: one pass over each PPS / AVS APDO in a Deep run
 
-Status: implemented on branch k2/prog-unify (2026-11-19). Goal (user, 2026-11-19): a Deep charger-test run touches each PPS / AVS APDO once.
+Status: implemented on branch k2/prog-unify (2026-11-19); layout B, the cover pass and EPR AVS on k2/prog-unify-b (see "Follow-up").
+Goal (user, 2026-11-19): a Deep charger-test run touches each PPS / AVS APDO once.
 
 ## Today
 
@@ -65,7 +66,7 @@ the per-APDO counters, the mask).
 - Coverage the charger test's moves cannot give: small down-steps, the 500 mV PPS class (the band / PS_RDY boundary at
   vPpsSmallStep; the IQ4's 500 mV PS_RDY finding) and AVS 500 / 1000 mV, the 20 mV windows at the APDO ends (the walk is
   at mid only), the track break (needs 500 mV steps). Not filled here beyond the slams and the status queries.
-- EPR AVS: the charger test sweeps it, the engine never judged it (SPR limits): it stays out of the avs_* cells.
+- EPR AVS: the charger test sweeps it, the engine never judged it (SPR limits): it stays out of the avs_* cells. (Closed by the follow-up.)
 - Self-powered runs: the stage is refused (as today); the moves are not fed.
 - Resume: the aggregates are RAM only. A run resumed after a reboot judges only the moves after it; its finished
   sweeps are not in the coverage mask, so the engine sweeps those windows itself (twice, on a resumed run only).
@@ -126,11 +127,31 @@ ranges (no AVS); an AVS range draws the same row.
   label drops its `PPS` (the row label carries it) to fit two cells. Also needs per-APDO verdicts (smaller: one
   byte per APDO), so a format change as well, smaller than A.
 
-Neither is built; both wait for the user's pick.
+The user picked B (2026-11-19); built on k2/prog-unify-b.
+
+## Follow-up (k2/prog-unify-b, 2026-11-19)
+
+User decisions: layout B, a short cover pass per covered range, EPR AVS judged in a Deep run.
+
+- **Per range.** The engine reports every programmable measurement with its APDO (`Env::on_apdo`); the run keeps
+  `specsec::Apdos` beside the Evidence: 11 slots a range (Level 0-3, Timing 4-8, Shape 9-10; AVS has 8), each a full cell
+  (verdict, fails, worst, limit, count, place). Word = the worst slot's group, "spec" when all passed, "-" when none judged.
+- **Layout B.** Results range line `PPS | 3.3-21V 5A | shape` (Caution / Fail fill); a kind's merged block leaves the spec
+  section only when every measured range of it has a line (`specsec::split`). Range Steps page lists its checks; OK opens
+  SpecDetail. Renders: `runs/prog-unify-b/png/b_*_rot0..3.png` (`test_ui_charger_test`).
+- **Cover pass** (`make_cover_sweep`): a covered window runs three large steps up and back (500 mV PPS, 1 V AVS) and five
+  resolution steps onto each end before its slams. Engine Sim, whole stage: IQ4 20.4 -> 26.3 s, FH22 34.2 -> 46.3 s, Xiaomi bank
+  11.4 -> 17.3 s.
+- **EPR AVS** (`kOptEprAvs`, `Env::epr_avs`): fed like SPR AVS; the stage judges the APDO the run reached, with the cable proof,
+  under the ceiling, inside EPR mode; a step over 1 V is judged against tSrcTransReq EPR (760 ms). Sim, Baseus 140 W shape:
+  38.3 -> 47.1 s. The standalone pd-spec stays SPR only; the Review estimate leaves EPR AVS out.
+- **Formats.** Journal 6 (`/jr/sa1..4.rec`), card 13 (spec form 28, 3811 bits), remote `0x0B [9, off16]` (count byte with
+  the split bits). Older journals and cards still load; readers updated (report_card.py, k2_remote.py, charger_summary.py,
+  deep.js, card.js, k2proto.js, ctgrid.js).
 
 ## Open decisions
 
-- Which layout (A, B, or keep the current one).
+- Which layout (A, B, or keep the current one). (B, 2026-11-19.)
 - Fill the coverage the sweep lacks (500 mV PPS steps, AVS 500 / 1000 mV, down-steps, the 20 mV ends) with extra engine
-  moves on covered windows, or accept the loss.
-- Feed the low sweep part and EPR AVS (needs the stage after PdLow, and EPR limits).
+  moves on covered windows, or accept the loss. (The cover pass, 2026-11-19; the middle class stays out: PPS 100 mV down-steps, AVS 500 mV.)
+- Feed the low sweep part (needs the stage after PdLow). EPR AVS: done 2026-11-19.

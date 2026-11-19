@@ -580,7 +580,7 @@ static void test_a_format_4_journal_still_loads_and_has_no_rows() {
     std::array<uint8_t, cj::kMaxRecord> b{};
     std::size_t n = 0;
     CHECK_EQ(int(v.fs->read_file(cj::kHeaderPath, b, n)), 0);
-    CHECK_EQ(b[4 + 8], 5);
+    CHECK_EQ(b[4 + 8], cj::kFormat);
     b[4 + 8] = 4;
     const std::uint16_t crc = bbstore::crc16(0xFFFF, {b.data(), n - 2});
     b[n - 2] = uint8_t(crc); b[n - 1] = uint8_t(crc >> 8);
@@ -588,6 +588,7 @@ static void test_a_format_4_journal_still_loads_and_has_no_rows() {
     v.reboot(); v.j->replay(r);
     CHECK_EQ(r.found, true); CHECK_EQ(int(r.problem), int(cj::Problem::None));
     CHECK_EQ(r.evidence.spec.same(spec_result()), true);
+    CHECK_EQ(int(r.spec_apdo.n), 0);   // no range records: the grid keeps the merged section
 #if K2_SPECROWS
     CHECK_EQ(v.j->spec_rows_size(), size_t(0));
 #endif
@@ -699,6 +700,50 @@ static void test_a_damaged_or_orphaned_detail_record_is_ignored() {
     v.reboot(); v.j->replay(r);
     CHECK_EQ(r.found, true); CHECK_EQ(int(r.evidence.spec.end), int(specsec::End::NotRun));
     CHECK_EQ(r.evidence.spec.cells[3].detailed(), false);
+}
+// prog_unify-b (format 6): each PPS / AVS range's own spec cells ride in a record of their own (/jr/sa1.rec ..), written by the pump
+// behind the spec records; a damaged one drops that range only, ranges without a spec result are ignored, the next arm sweeps them.
+static specsec::Apdos spec_apdos() {
+    specsec::Apdos a;
+    a.add(pdspec::Check::PpsBand, {300000, 0, 0, 275000, uint8_t(5 | 1 << 4), 50});
+    a.add(pdspec::Check::PpsAccuracy, {9180, 0, 8800, 9200, uint8_t(5 | 2 << 4), 92});
+    a.add(pdspec::Check::AvsOvershoot, {20900, 0, -pdspec::kOpenLimit, 20500, uint8_t(7 | 3 << 4), 205});
+    return a;
+}
+static void test_the_ranges_ride_in_their_own_records() {
+    Vol v; cj::Replay r;
+    auto p4 = plan(4);
+    arm(v, p4);
+    ct::Evidence ev = evidence();
+    ev.spec = spec_result();
+    const specsec::Apdos a = spec_apdos();
+    v.j->note_spec(&a);
+    int pumps = 0;
+    while (v.j->pending() && pumps < 10) { CHECK_EQ(int(v.j->pump(kRun, kOpt, ev, p4)), 0); ++pumps; }
+    CHECK_EQ(v.j->pending(), false);
+    CHECK_EQ(pumps <= 5, true);                                   // sp, spd, (spt,) sa1, sa2: one file per pump
+    v.reboot(); v.j->replay(r);
+    CHECK_EQ(r.found, true);
+    CHECK_EQ(int(r.spec_apdo.n), 2);
+    CHECK_EQ(int(r.spec_apdo.r[0].pos), 5); CHECK_EQ(int(r.spec_apdo.r[1].pos), 7);
+    CHECK_EQ(r.spec_apdo.r[0].cells == a.r[0].cells && r.spec_apdo.r[1].cells == a.r[1].cells && r.spec_apdo.r[1].avs, true);
+    // A damaged range record: that range is gone, the other stays.
+    std::array<uint8_t, cj::kMaxRecord> b{};
+    std::size_t n = 0;
+    CHECK_EQ(int(v.fs->read_file("/jr/sa1.rec", b, n)), 0);
+    CHECK_EQ(n, cj::kRecordOverhead + specsec::kApdoWireBytes);
+    b[20] ^= 0x5A;
+    v.fs->write_file("/jr/sa1.rec", {b.data(), n});
+    v.reboot(); v.j->replay(r);
+    CHECK_EQ(int(r.spec_apdo.n), 1); CHECK_EQ(int(r.spec_apdo.r[0].pos), 7);
+    // No spec result behind them: not shown.
+    v.fs->remove("/jr/sp.rec");
+    v.reboot(); v.j->replay(r);
+    CHECK_EQ(int(r.spec_apdo.n), 0);
+    // The next run starts clean.
+    arm(v, plan(3), 2); v.j->replay(r);
+    CHECK_EQ(int(r.spec_apdo.n), 0);
+    CHECK_EQ(v.fs->exists("/jr/sa2.rec"), false);
 }
 static void test_the_spec_record_is_even_and_fits() {
     std::array<uint8_t, cj::kMaxRecord> buf{};
@@ -1265,6 +1310,7 @@ int main() {
     test_meta_and_attempt_power_cut(); test_an_ended_run_is_not_resumable(); test_finish_cut_at_every_operation();
     test_finish_is_tried_after_a_failed_write(); test_resume_gate();
     test_the_spec_result_rides_in_its_own_record(); test_a_damaged_spec_record_reads_as_not_run(); test_the_spec_record_is_even_and_fits();
+    test_the_ranges_ride_in_their_own_records();
     test_a_journal_without_the_detail_record_still_loads(); test_a_damaged_or_orphaned_detail_record_is_ignored();
     test_a_noted_spec_result_is_written_by_a_pump(); test_a_format_3_journal_resumes_with_no_detail();
     test_a_format_4_journal_still_loads_and_has_no_rows();

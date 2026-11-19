@@ -144,6 +144,58 @@ void windows_of_a_list() {
     CHECK_EQ(int(N.n_pps), 0);
 }
 
+// EPR AVS (a Deep run hands the APDO over, with the cable proof): its window after the SPR ones, capped at the ceiling; with every slot taken
+// the AVS windows keep theirs and the PPS ones give way from the end (the keep-alive list keeps every PPS APDO).
+pd::Pdo epr_avs(std::uint16_t hi) {
+    pd::Pdo d = avs(hi);
+    d.min_mv = 15000;
+    d.max_ma = 5000;
+    return d;
+}
+void epr_avs_window() {
+    pd::SourceCaps c = caps({fixed(5000, true), fixed(9000), fixed(15000), fixed(20000), pps(3300, 21000)});
+    c.pdos[7] = fixed(28000);
+    c.pdos[8] = epr_avs(28000);
+    c.num_pdos = 9;
+    CHECK_EQ(int(scan(c, 36000, true).n_prog), 1);                                // the standalone run: SPR windows only
+    CHECK_EQ(int(scan(c, 36000, false, kHostFloorMv, &c.pdos[8], 9).n_prog), 1);  // no cable proof
+    const Levels L = scan(c, 36000, true, kHostFloorMv, &c.pdos[8], 9);
+    CHECK_EQ(int(L.n_prog), 2);
+    CHECK_EQ(int(L.prog[1].pos), 9);
+    CHECK_COND(L.prog[1].kind == ProgKind::Avs);
+    CHECK_EQ(int(L.prog[1].lo), 15000);
+    CHECK_EQ(int(L.prog[1].hi), 28000);
+    CHECK_EQ(int(L.n_avs), 0);   // the caps note counts the SPR list
+    CHECK_EQ(int(L.epr), 8);
+    c.pdos[8] = epr_avs(48000);
+    const Levels M = scan(c, 36000, true, kHostFloorMv, &c.pdos[8], 9);
+    CHECK_EQ(int(M.prog[1].hi), 36000);
+    pd::SourceCaps f = caps({fixed(5000, true), fixed(20000), avs(20000), pps(3300, 11000), pps(3300, 16000), pps(3300, 21000)});
+    f.pdos[7] = fixed(28000);
+    f.pdos[8] = epr_avs(28000);
+    f.num_pdos = 9;
+    const Levels F = scan(f, 36000, true, kHostFloorMv, &f.pdos[8], 9);
+    CHECK_EQ(int(F.n_prog), 4);
+    CHECK_EQ(int(F.prog[0].pos), 4);
+    CHECK_EQ(int(F.prog[1].pos), 5);
+    CHECK_EQ(int(F.prog[2].pos), 3);
+    CHECK_EQ(int(F.prog[3].pos), 9);
+    CHECK_EQ(int(F.n_pps), 3);
+    const Levels G = scan(f, 36000, true);   // without EPR AVS: as before, three PPS and the SPR AVS
+    CHECK_EQ(int(G.n_prog), 4);
+    CHECK_EQ(int(G.prog[2].pos), 6);
+    CHECK_EQ(int(G.prog[3].pos), 3);
+    // The run hands the APDO over by itself (the live list is the SPR one again once the run left EPR mode); a fixed PDO or an SPR
+    // position is no EPR AVS window.
+    const pd::SourceCaps spr = caps({fixed(5000, true), fixed(20000), pps(3300, 21000)});
+    const pd::Pdo ea = epr_avs(28000);
+    CHECK_EQ(int(scan(spr, 36000, true, kHostFloorMv, &ea, 9).n_prog), 2);
+    CHECK_EQ(int(scan(spr, 36000, true, kHostFloorMv, &ea, 9).epr), 0);   // the EPR fixed walk node stays out
+    const pd::Pdo fx = fixed(28000);
+    CHECK_EQ(int(scan(spr, 36000, true, kHostFloorMv, &fx, 8).n_prog), 1);
+    CHECK_EQ(int(scan(spr, 36000, true, kHostFloorMv, &ea, 3).n_prog), 1);
+}
+
 // The measured moves of one pass, in order.
 std::vector<Move> moves(Sweep s) {
     std::vector<Move> v;
@@ -217,6 +269,28 @@ void avs_steps() {
     CHECK_EQ(int(measured_moves(make_sweep(window(9000, 20000, ProgKind::Avs), 2, false))), 22);
 }
 
+// prog_unify-b: a window the charger test swept gets a short cover in the stage: a few large steps up from the minimum and back (500 mV
+// PPS, 1 V AVS), then the resolution step at both ends (down onto the minimum, up onto the maximum), then the slams as before.
+std::vector<std::int32_t> mvs(const std::vector<Move>& v, bool measured) {
+    std::vector<std::int32_t> o;
+    for (const Move& m : v) o.push_back(m.measured == measured ? m.mv : -m.mv);
+    return o;
+}
+void cover_passes() {
+    using V = std::vector<std::int32_t>;
+    CHECK_COND(mvs(moves(make_cover_sweep(window(3300, 11000), 2)), true) == V({3800, 4300, 4800, 4300, 3800, 3300}));
+    CHECK_COND(mvs(moves(make_cover_sweep(window(3300, 11000), 0)), true) ==
+               V({-3400, 3380, 3360, 3340, 3320, 3300, -10900, 10920, 10940, 10960, 10980, 11000, -3300}));
+    CHECK_COND(mvs(moves(make_cover_sweep(window(9000, 20000, ProgKind::Avs), 2)), true) == V({10000, 11000, 12000, 11000, 10000, 9000}));
+    CHECK_COND(mvs(moves(make_cover_sweep(window(9000, 20000, ProgKind::Avs), 0)), true) ==
+               V({-9500, 9400, 9300, 9200, 9100, 9000, -19500, 19600, 19700, 19800, 19900, 20000, -9000}));
+    // A narrow window: the large steps stop at its maximum.
+    CHECK_COND(mvs(moves(make_cover_sweep(window(3300, 4300), 2)), true) == V({3800, 4300, 3800, 3300}));
+    CHECK_COND(mvs(moves(make_cover_sweep(window(3300, 11000), 3)), true) == V({11000, 3300}));
+    CHECK_EQ(int(moves(make_cover_sweep(window(3300, 11000), 1)).size()), 0);   // no middle step class in a cover
+    CHECK_EQ(int(cover_moves(window(3300, 11000))), 6 + 10 + 2);
+}
+
 // The family's measured moves: the time budget of a run is about this many capture windows.
 void family_moves() {
     const Levels L = scan(caps({fixed(5000), fixed(9000), fixed(12000), fixed(15000), fixed(20000), pps(3300, 11000)}), 36000, false);
@@ -239,5 +313,7 @@ int main() {
     twenty_mv_windows();
     avs_steps();
     family_moves();
+    cover_passes();
+    epr_avs_window();
     return test_report("test_pdspec_plan");
 }

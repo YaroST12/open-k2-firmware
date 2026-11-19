@@ -5,7 +5,7 @@
 
 namespace k2::pdspec {
 
-StartResult Engine::start(std::uint32_t now_ms, std::uint8_t families, std::uint8_t opts, std::uint8_t covered) {
+StartResult Engine::start(std::uint32_t now_ms, std::uint8_t families, std::uint8_t opts, std::uint16_t covered) {
     if (running_) return StartResult::Running;
     const Snapshot s = env_->snapshot();
     if (s.inline_link) return StartResult::Inline;
@@ -16,7 +16,9 @@ StartResult Engine::start(std::uint32_t now_ms, std::uint8_t families, std::uint
     n_tr_ = 0;
     n_pass_ = 0;
     pool_ = env_->record_pool();
-    L_ = scan(env_->caps(), env_->cap_mv(), env_->epr_proof());
+    pd::Pdo ea{};
+    const std::uint8_t ea_pos = (opts & kOptEprAvs) ? env_->epr_avs(ea) : 0;
+    L_ = scan(env_->caps(), env_->cap_mv(), env_->epr_proof(), kHostFloorMv, ea_pos ? &ea : nullptr, ea_pos);
     walk_ = make_walk(L_.n_fixed);
     full20_ = (opts & kOptFull20) != 0;
     covered_ = covered;
@@ -36,17 +38,25 @@ StartResult Engine::start(std::uint32_t now_ms, std::uint8_t families, std::uint
     return StartResult::Ok;
 }
 
-#if K2_SPECROWS
-// A fixed transition's measurement also marks the record in flight (cur_): measured, and failed (the aggregate's own judgement, the
-// bracket counted), so the per-transition rows (chargertest/spec_rows.hpp) agree with the check's cell.
+// A fixed transition's measurement also marks the record in flight (cur_, K2_SPECROWS): measured, and failed (the aggregate's own
+// judgement, the bracket counted), so the per-transition rows (chargertest/spec_rows.hpp) agree with the check's cell. A programmable
+// move's goes to Env::on_apdo as well.
 void Engine::meas(Check c, const Meas& m) {
-    const bool bad = agg_[static_cast<std::size_t>(c)].add(def(c).kind, m);
+    [[maybe_unused]] const bool bad = agg_[static_cast<std::size_t>(c)].add(def(c).kind, m);
+#if K2_SPECROWS
     if (const std::uint8_t b = tr_bit(c)) {
         cur_.seen = static_cast<std::uint8_t>(cur_.seen | b);
         if (bad) cur_.fails = static_cast<std::uint8_t>(cur_.fails | b);
     }
-}
 #endif
+    if (prog_meas_ || owns(Family::Pps, c)) env_->on_apdo(c, m);   // the flag: the shared Accept and the PPS_Status asks of a move
+}
+
+void Engine::judge_move(const ProgMove& mv, const StepOut& o, const Edges& e, const Snapshot& s, PassRec& r) {
+    prog_meas_ = true;
+    judge_prog(mv, o, e, s, r);
+    prog_meas_ = false;
+}
 
 void Engine::skip_family(Family f, Skip why) {
     for (std::size_t k = 0; k < kChecks; ++k) if (owns(f, Check(k))) skip(Check(k), why);
@@ -143,7 +153,7 @@ void Engine::lost(const Snapshot& s, std::uint32_t now) {
         const bool epr = (cur_.flags & kTrEpr) != 0;
         if (fam_ == Family::Pps) {   // a programmable step: its own PS_RDY check and window
             const bool avs = prog().kind == ProgKind::Avs;
-            const std::int32_t ms = step_limit_ms(avs, pdspec::large_step(avs, std::abs(tgt_mv_ - from_mv_)));
+            const std::int32_t ms = step_limit_ms(avs, pdspec::large_step(avs, std::abs(tgt_mv_ - from_mv_)), epr_pos(tgt_pos_));
             meas(avs ? Check::AvsPsRdy : Check::PpsPsRdy, {kNever, 0, 0, ms * 1000, tgt_pos_, static_cast<std::uint8_t>(tgt_mv_ / 100)});
         } else {
             meas(Check::PsRdyTime, {kNever, 0, 0, std::int32_t((epr ? pd::spec::kSrcTransReqEprMs : pd::spec::kSrcTransReqSprMs) * 1000), tgt_pos_, 0});
@@ -183,9 +193,9 @@ void Engine::begin_family(std::uint32_t now) {
                 }
             if (L_.n_prog == 0) { next_family(); return; }
             items_ = 0;
-            for (w_ = 0; w_ < L_.n_prog; ++w_) items_ = static_cast<std::uint8_t>(items_ + (first_class() == kSlam ? 1 : kClasses));
+            for (w_ = 0; w_ < L_.n_prog; ++w_) items_ = static_cast<std::uint8_t>(items_ + (cover() ? kCoverPasses : kClasses));
             w_ = 0;
-            cls_ = first_class();
+            cls_ = 0;
             env_->on_item(fam_, 0, items_);
             go(prog().pos, static_cast<std::uint16_t>(prog().lo), After::PpsSteps, now);
             return;
@@ -362,7 +372,7 @@ void Engine::measure_done(const Snapshot& s, std::uint32_t now) {
         env_->capture_stop();
         PassRec scratch;
         PassRec* slot = pass_slot();
-        judge_prog({tgt_pos_, prog().kind == ProgKind::Avs, cls_, from_mv_, tgt_mv_}, o, e, s, slot ? *slot : scratch);
+        judge_move({tgt_pos_, prog().kind == ProgKind::Avs, cls_, from_mv_, tgt_mv_}, o, e, s, slot ? *slot : scratch);
         // Not inside the new band by the end of the window (an unloaded fall can be slow): the next move starts once VBUS is there, and
         // its monotonic check has no level to compare with.
         if (!o.band.seen && !o.settled) { prev_valid_ = false; go(tgt_pos_, tgt_mv_, After::PpsNext, now); return; }
@@ -463,7 +473,7 @@ const Prog& Engine::prog() const { return L_.prog[w_]; }
 
 void Engine::pass_begin(std::uint32_t now) {
     const Prog& p = prog();
-    sw_ = make_sweep(p, cls_, full20_);
+    sw_ = cover() ? make_cover_sweep(p, cls_) : make_sweep(p, cls_, full20_);
     have_pend_ = false;
     dir_ = 0;
     asked_top_ = false;
@@ -507,7 +517,7 @@ void Engine::prog_next(std::uint32_t now) {
     tgt_mv_ = static_cast<std::uint16_t>(m.mv);
     cur_mv_ = m.mv;
     const std::int32_t step = std::abs(tgt_mv_ - from_mv_);
-    captured_ = env_->capture_start(pdspec::large_step(prog().kind == ProgKind::Avs, step) ? kPostLargeUs : kPostStepUs);
+    captured_ = env_->capture_start(!pdspec::large_step(prog().kind == ProgKind::Avs, step) ? kPostStepUs : epr_pos(tgt_pos_) ? kPostLargeEprUs : kPostLargeUs);
     if (!captured_) for (const Check c : prog_checks_meter()) skip(c, Skip::NoCapture);
     allowed_mv_ = from_mv_ > tgt_mv_ ? from_mv_ : tgt_mv_;
     phase_t_ = now;
@@ -519,9 +529,10 @@ void Engine::pass_end(std::uint32_t now) {
     if (pass_raw()) ++n_pass_;
     ++item_;
     if (item_ < items_) env_->on_item(fam_, item_, items_);   // the next pass's number; none after the last
-    if (++cls_ < kClasses) { pass_begin(now); return; }   // the pass ended at the window's minimum: the next class starts there
+    if (++cls_ == 1 && cover()) ++cls_;                  // a cover has no middle class
+    if (cls_ < kClasses) { pass_begin(now); return; }    // the pass ended at the window's minimum: the next class starts there
     cls_ = 0;
-    if (++w_ < L_.n_prog) { cls_ = first_class(); go(prog().pos, static_cast<std::uint16_t>(prog().lo), After::PpsSteps, now); return; }
+    if (++w_ < L_.n_prog) { go(prog().pos, static_cast<std::uint16_t>(prog().lo), After::PpsSteps, now); return; }
     restore(now);
 }
 
@@ -535,7 +546,7 @@ void Engine::judge_prog(const ProgMove& mv, const StepOut& o, const Edges& e, co
     const ProgMeas m = measure_prog(mv, o);
     cur_ = {};
     // PS_RDY is a received message: its limit carries the wire allowance (pd_spec_timing.hpp kPsRdyWireOverheadMs); the band does not.
-    const std::int32_t rdy_ms = step_limit_ms(mv.avs, m.large) + std::int32_t(pd::spec::kPsRdyWireOverheadMs);
+    const std::int32_t rdy_ms = step_limit_ms(mv.avs, m.large, epr_pos(mv.pos)) + std::int32_t(pd::spec::kPsRdyWireOverheadMs);
     const Lat l = latencies(e, s, mv.avs ? Check::AvsPsRdy : Check::PpsPsRdy, rdy_ms * 1000, m.a, m.b);
     if (l.acc) {
         const std::uint32_t t = l.rdy ? l.rdy_us / 100 : 0xFFFF;
@@ -592,7 +603,7 @@ void Engine::judge_test_move(const ProgMove& mv, bool chain, const Edges& e, con
     accept0_ = s.accept_at;
     if (!chain) prev_valid_ = false;
     PassRec scratch;
-    judge_prog(mv, o, e, s, scratch);
+    judge_move(mv, o, e, s, scratch);
     if (!o.valid || (!o.band.seen && !o.settled)) prev_valid_ = false;
 }
 
@@ -620,10 +631,12 @@ void Engine::status_poll(const Snapshot& s, std::uint32_t now) {
     const auto a = static_cast<std::uint8_t>(tgt_pos_ | cls_ << 4 | (asked_end_ ? 0x80 : 0));
     const auto b = static_cast<std::uint8_t>(target / 100);
     const std::int32_t bits = pps_status_faults(s, target);
+    prog_meas_ = true;
     meas(Check::PpsStatus, {bits, 0, 0, 0, a, b});
     if (PassRec* p = pass_slot()) p->status = static_cast<std::uint8_t>(p->status | bits);
     if (s.pps_ask != pd::PpsAsk::Timeout && (s.pps_ask_us & 1) && (s.pps_rx_us & 1) && s.pps_rx_us - s.pps_ask_us < 1000000)
         meas(Check::PpsStatusTime, {std::int32_t(s.pps_rx_us - s.pps_ask_us), 0, 0, std::int32_t(pd::spec::kPpsStatusLimitMs * 1000), a, b});
+    prog_meas_ = false;
     prog_next(now);
 }
 

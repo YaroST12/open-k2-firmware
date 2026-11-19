@@ -5,10 +5,10 @@
 // Fixed transitions: one walk through every ordered pair of fixed levels (up and down), starting and ending at 5 V, so each pair is
 // measured exactly once and no unmeasured step sits between two measured ones (an Euler circuit of the complete directed graph).
 // EPR fixed levels at or below the K2's monitor ceiling join the walk when the cable proof is there.
-// Programmable windows (SPR PPS APDOs, then the SPR AVS APDO), modelled on the USB-C Source Power Test Specification SPT.6 procedure
+// Programmable windows (SPR PPS APDOs, then the SPR AVS APDO and, in a Deep run with the cable proof, the EPR AVS APDO), modelled on the USB-C Source Power Test Specification SPT.6 procedure
 // (E.2.k): per step size, up from the window's minimum while a whole step fits, then the rest up to its maximum, and down the same way;
 // then the two slams (minimum to maximum and back). PPS steps 20, 100 and 500 mV (the 20 mV pass in three windows by default, the
-// whole range as an option), SPR AVS 100, 500 and 1000 mV.
+// whole range as an option), AVS (SPR and EPR) 100, 500 and 1000 mV.
 #pragma once
 
 #include <array>
@@ -22,10 +22,12 @@ namespace k2::pdspec {
 inline constexpr std::size_t kMaxNodes = 8;                       // fixed levels in the walk (7 SPR + 1 EPR)
 inline constexpr std::size_t kMaxWalk = kMaxNodes * (kMaxNodes - 1) + 1;
 inline constexpr std::size_t kMaxApdos = 4;                       // SPR PPS APDOs kept for the keep-alive family
-inline constexpr std::size_t kMaxProg = 4;                        // programmable windows swept: up to 3 PPS + 1 AVS (or 4 PPS)
+inline constexpr std::size_t kMaxProg = 4;                        // programmable windows swept: up to 4, the AVS ones (SPR, EPR) first kept
 inline constexpr std::size_t kClasses = 4;                        // per window: three step sizes, then the slams
 inline constexpr std::uint8_t kSlam = 3;                          // the class of the slams
 inline constexpr std::uint8_t kWindowSteps = 10;                  // a 20 mV window: this many steps up, as many down
+inline constexpr std::uint8_t kCoverSteps = 3;                    // a covered window's cover: large steps up from the minimum, then back
+inline constexpr std::uint8_t kCoverEndSteps = 5;                 // ... and resolution steps onto each end
 inline constexpr std::int32_t kMinSpanMv = 1000;                  // a window narrower than this is not swept
 // The floor of a window: none on a K2 powered from the computer (the run refuses a K2 powered by the charger under test, and the
 // passive detach rule only fires under 3.0 V, under every SPR PPS minimum). A caller that has to keep its own rail passes 5000.
@@ -55,7 +57,7 @@ struct Levels {
     bool epr_offered = false;                       // EPR in PDO 1, or an EPR fixed level in the list
     std::array<std::uint8_t, kMaxApdos> pps{};      // SPR PPS positions with a swept window (the keep-alive family uses the first)
     std::uint8_t n_pps = 0;
-    std::array<Prog, kMaxProg> prog{};              // the windows swept: PPS first (list order), the SPR AVS APDO last
+    std::array<Prog, kMaxProg> prog{};              // the windows swept: PPS first (list order), then the SPR and the EPR AVS APDO
     std::uint8_t n_prog = 0;
     std::uint8_t n_avs = 0;                         // SPR AVS APDOs in the list (the caps note: PPS with or without AVS)
 };
@@ -74,8 +76,11 @@ inline Prog prog_window(const pd::Pdo& d, std::uint8_t pos, std::uint32_t cap_mv
 }
 
 // cap_mv: the monitor ceiling; epr_proof: the cable proof EPR levels need. EPR levels above the cap are left out. floor_mv: the lowest
-// programmable level asked for (kHostFloorMv on a K2 powered from the computer).
-inline Levels scan(const pd::SourceCaps& caps, std::uint32_t cap_mv, bool epr_proof, std::int32_t floor_mv = kHostFloorMv) {
+// programmable level asked for (kHostFloorMv on a K2 powered from the computer). epr_avs: the EPR AVS APDO a Deep run met at position
+// epr_pos (the live list is the SPR one once the run left EPR mode): a window too, with the cable proof (the sink enters EPR mode for
+// its Request).
+inline Levels scan(const pd::SourceCaps& caps, std::uint32_t cap_mv, bool epr_proof, std::int32_t floor_mv = kHostFloorMv,
+                   const pd::Pdo* epr_avs = nullptr, std::uint8_t epr_pos = 0) {
     Levels L;
     if (!caps.valid) return L;
     const std::size_t n = caps.num_pdos < caps.pdos.size() ? caps.num_pdos : caps.pdos.size();
@@ -107,16 +112,23 @@ inline Levels scan(const pd::SourceCaps& caps, std::uint32_t cap_mv, bool epr_pr
             ++L.n_avs;
         }
     }
-    // The SPR AVS APDO after the PPS windows (it takes the last slot when the PPS ones filled every slot).
+    // The SPR AVS APDO, then the EPR one, after the PPS windows: the last PPS windows give their slots up when every slot is taken.
+    std::array<Prog, 2> av{};
+    std::size_t n_av = 0;
     for (std::size_t i = 0; i < n && i < 7; ++i) {
         const pd::Pdo& d = caps.pdos[i];
         if (d.type != pd::PdoType::Avs) continue;
         const Prog p = prog_window(d, std::uint8_t(i + 1), cap_mv, floor_mv);
         if (p.hi - p.lo < kMinSpanMv) continue;
-        if (L.n_prog == kMaxProg) --L.n_prog;
-        L.prog[L.n_prog++] = p;
+        av[n_av++] = p;
         break;
     }
+    if (epr_avs && epr_proof && epr_pos >= 8 && epr_avs->type == pd::PdoType::Avs) {
+        const Prog p = prog_window(*epr_avs, epr_pos, cap_mv, floor_mv);
+        if (p.hi - p.lo >= kMinSpanMv) av[n_av++] = p;
+    }
+    if (L.n_prog + n_av > kMaxProg) L.n_prog = static_cast<std::uint8_t>(kMaxProg - n_av);
+    for (std::size_t k = 0; k < n_av; ++k) L.prog[L.n_prog++] = av[k];
     if (L.epr) L.fixed[L.n_fixed++] = L.epr;   // the EPR level is the walk's highest node
     return L;
 }
@@ -179,6 +191,13 @@ public:
     Sweep() = default;
     Sweep(std::int32_t lo, std::int32_t hi, std::int32_t step, bool windows)
         : lo_(lo), hi_(hi), step_(step), cur_(lo), windows_(windows), half_(0) {}
+    // The cover's resolution pass (make_cover_sweep): kCoverEndSteps down onto the minimum, as many up onto the maximum, then back to
+    // the minimum (the moves onto each start are not measured).
+    static Sweep ends(std::int32_t lo, std::int32_t hi, std::int32_t step) {
+        Sweep s(lo, hi, step, false);
+        s.ends_ = true;
+        return s;
+    }
     // half(): 0 while the moves go up, 1 once they come down, 2 when the pass is over.
     std::uint8_t half() const { return half_; }
     bool next(Move& m) {
@@ -186,6 +205,22 @@ public:
             if (half_ >= 2) return false;
             m = {half_ == 0 ? hi_ : lo_, true};
             ++half_;
+            return true;
+        }
+        if (ends_) {
+            while (half_ < 2) {
+                const std::int32_t start = half_ == 0 ? lo_ + kCoverEndSteps * step_ : hi_ - kCoverEndSteps * step_;
+                if (k_ == 0) {
+                    ++k_;
+                    if (cur_ != start) { cur_ = start; m = {cur_, false}; return true; }
+                }
+                if (k_ <= kCoverEndSteps) { ++k_; cur_ += half_ == 0 ? -step_ : step_; m = {cur_, true}; return true; }
+                half_ = static_cast<std::uint8_t>(half_ + 1);
+                k_ = 0;
+            }
+            if (cur_ == lo_) return false;
+            cur_ = lo_;
+            m = {cur_, false};
             return true;
         }
         if (!windows_) {
@@ -213,7 +248,7 @@ public:
 
 private:
     std::int32_t lo_ = 0, hi_ = 0, step_ = 0, cur_ = 0;
-    bool windows_ = false;
+    bool windows_ = false, ends_ = false;
     std::uint8_t half_ = 2, win_ = 0, k_ = 0;
 };
 
@@ -225,11 +260,28 @@ inline Sweep make_sweep(const Prog& p, std::uint8_t cls, bool full20) {
     return Sweep(p.lo, p.hi, step, windows);
 }
 
+// The passes of a window the charger test swept already (its moves judged into the engine): class 2 = kCoverSteps large steps up from
+// the minimum and back, class 0 = the ends, class 1 = nothing, the slams as in make_sweep. Down-steps and the ends are judged again.
+static_assert(2 * kCoverEndSteps * 100 <= kMinSpanMv, "the AVS ends fit in the narrowest window");
+inline constexpr std::uint8_t kCoverPasses = 3;   // classes 0, 2 and the slams
+inline Sweep make_cover_sweep(const Prog& p, std::uint8_t cls) {
+    const std::int32_t step = step_mv(p.kind, cls);
+    if (cls == 0) return Sweep::ends(p.lo, p.hi, step);
+    if (cls == 1) return Sweep{};
+    if (cls == 2) return Sweep(p.lo, p.lo + kCoverSteps * step < p.hi ? p.lo + kCoverSteps * step : p.hi, step, false);
+    return make_sweep(p, cls, false);
+}
+
 // How many measured moves a pass / the whole family makes: a run's time budget is about this many capture windows.
 inline std::uint32_t measured_moves(Sweep s) {
     std::uint32_t n = 0;
     Move m;
     while (s.next(m)) n += m.measured;
+    return n;
+}
+inline std::uint32_t cover_moves(const Prog& p) {
+    std::uint32_t n = 0;
+    for (std::uint8_t c = 0; c < kClasses; ++c) n += measured_moves(make_cover_sweep(p, c));
     return n;
 }
 inline std::uint32_t family_moves(const Levels& L, bool full20) {

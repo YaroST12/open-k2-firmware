@@ -72,6 +72,21 @@ void avs_large_down() {
     CHECK_COND(!passes(Kind::Max, m.trans));
 }
 
+// An EPR AVS slam (APDO 9): the large-step limit is the EPR tSrcTransReq (760 ms); the same slam in an SPR APDO keeps 325 ms. The small
+// step limit (tAvsSrcTransSmall) is one value for both.
+void avs_large_epr() {
+    const ProgMeas e = measure_prog({9, true, kSlam, 15000, 28000}, step(28000, 500000, 2000, 28100));
+    CHECK_COND(e.large);
+    CHECK_EQ(unsigned(e.a & 15u), 9u);
+    CHECK_EQ(e.band.hi, 760000);
+    CHECK_COND(passes(Kind::Max, e.band));
+    const ProgMeas s = measure_prog({3, true, kSlam, 9000, 20000}, step(20000, 500000, 2000, 20100));
+    CHECK_EQ(s.band.hi, 325000);
+    CHECK_COND(!passes(Kind::Max, s.band));
+    CHECK_EQ(step_limit_ms(true, false, true), step_limit_ms(true, false, false));
+    CHECK_EQ(step_limit_ms(true, true, true), 760);
+}
+
 // A move that never entered the band and never settled: the band reads never, no transient, no level.
 void never_in_band() {
     StepOut o;
@@ -90,6 +105,7 @@ int main() {
     pps_small_up();
     pps_settle_class();
     avs_large_down();
+    avs_large_epr();
     never_in_band();
     return test_report("test_pdspec_judge");
 }

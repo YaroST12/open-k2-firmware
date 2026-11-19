@@ -1099,7 +1099,7 @@ void meta(const RunMeta& m) {
     g_stub.journal_arm_open = false;
 }
 void attempt(std::size_t, std::uint8_t) { g_stub.journal_attempts++; }
-void note_spec() { g_stub.journal_spec_notes++; g_stub.journal_rows_noted = true; }
+void note_spec(const specsec::Apdos*) { g_stub.journal_spec_notes++; g_stub.journal_rows_noted = true; }
 #if K2_SPECROWS
 std::size_t spec_rows_size() { return g_stub.journal_rows.size(); }
 bool spec_rows_read(std::uint32_t off, std::span<std::uint8_t> out) {

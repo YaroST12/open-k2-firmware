@@ -3215,6 +3215,43 @@ static void test_charger_test_spec_rows_wire() {
 }
 #endif
 
+// prog_unify-b: each PPS / AVS range's spec cells, `0x0B req [9, off_lo, off_hi]`: the stream (count, then specsec::to_apdo_wire per
+// range) in chunks of at most 48 behind run_id(4) total(2) off(2) n(1); total 0 = no range measured (or an older run).
+static void test_charger_test_spec_apdo_wire() {
+    namespace ss = k2::specsec;
+    Fake f; Frame r;
+    f.test_results.run_id = 0x01020304;
+    CHECK_EQ(run(f, request(0x0B, 60, {9, 0, 0}), r), 1);
+    check_header(r, 0x0B, 60, Status::Ok, 9);
+    check_bytes(r, 6, {4, 3, 2, 1, 0, 0, 0, 0, 0});
+    f.spec_apdo.add(k2::pdspec::Check::PpsBand, {300000, 0, 0, 275000, uint8_t(5 | 1 << 4), 50});
+    f.spec_apdo.add(k2::pdspec::Check::AvsAccuracy, {15200, 0, 14700, 15300, uint8_t(7 | 2 << 4), 150});
+    f.spec_split = ss::split_bits({true, false});   // the K2 grid's split rides on the count byte
+    const size_t total = ss::apdo_stream_size(f.spec_apdo);
+    CHECK_EQ(total, size_t(1 + 2 * ss::kApdoWireBytes));
+    std::vector<uint8_t> got;
+    for (unsigned off = 0; off < total;) {
+        CHECK_EQ(run(f, request(0x0B, 61, {9, uint8_t(off), uint8_t(off >> 8)}), r), 1);
+        const uint8_t n = r[14];
+        CHECK_EQ(r[5], uint8_t(9 + n));
+        CHECK_EQ(int(r[10] | r[11] << 8), int(total));
+        CHECK_EQ(int(r[12] | r[13] << 8), int(off));
+        CHECK(n > 0 && n <= 48);
+        if (n == 0 || n > 48) break;
+        for (unsigned i = 0; i < n; ++i) got.push_back(r[15 + i]);
+        off += n;
+    }
+    CHECK_EQ(got.size(), total);
+    bool same = got.size() == total;
+    for (size_t i = 0; same && i < total; ++i) same = got[i] == ss::apdo_stream_byte(f.spec_apdo, i, f.spec_split);
+    CHECK(same);
+    CHECK_EQ(got.empty() ? -1 : int(got[0]), 2 | 1 << 4);
+    CHECK_EQ(run(f, request(0x0B, 62, {9, uint8_t(total + 1), uint8_t((total + 1) >> 8)}), r), 1);
+    check_header(r, 0x0B, 62, Status::BadArg, 0);
+    CHECK_EQ(run(f, request(0x0B, 63, {9, 0}), r), 1);      // two bytes: not this request
+    check_header(r, 0x0B, 63, Status::BadLength, 0);
+}
+
 // QA 2026-11-10 row B item 2 (red): a deep-sweep row goes over the wire with the sweep flag set (row flags bit 5)
 // and its detail byte carrying the recorded point count - the in-RAM marker kDetailSweep (161) stays on the step,
 // but the host must read the 61 points the sweep logged, not the marker 161.
@@ -3814,6 +3851,7 @@ int main() {
 #else
     test_charger_test_spec_rows_form_is_absent();
 #endif
+    test_charger_test_spec_apdo_wire();
      test_sweep_row_wire_carries_points(); test_sweep_row_that_never_ran_carries_zero_points(); test_folded_pass_reason_over_both_schemas();
     test_identify_refusal_wire_mapping();
     test_pd_attach_wire();

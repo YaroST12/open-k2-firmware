@@ -1111,6 +1111,16 @@ size_t summarize(std::span<const ct::Step> steps, std::span<SummaryLine> out) {
 uint8_t kind_of(A a) { return a == A::Pps ? kKindPps : a == A::SprAvs ? kKindSprAvs : a == A::EprAvs ? kKindEprAvs : uint8_t(0); }
 A kind_algorithm(uint8_t kind) { return kind == kKindPps ? A::Pps : kind == kKindSprAvs ? A::SprAvs : kind == kKindEprAvs ? A::EprAvs : A::Count; }
 const char* kind_word(uint8_t kind) { return kind == kKindPps ? "PPS" : kind ? "AVS" : ""; }
+// range_row's chip rule: any step names the range; a folded EPR AVS range needs one that was not skipped.
+uint16_t range_positions(std::span<const ct::Step> s) {
+    uint16_t m = 0;
+    for (const auto& x : s) {
+        if (!kind_of(x.algorithm) || !x.pdo || x.hunt || !x.pos || x.pos > 15) continue;
+        if (x.algorithm == A::EprAvs && x.verdict == ct::Verdict::Skip) continue;
+        m = uint16_t(m | 1u << x.pos);
+    }
+    return m;
+}
 int token_width(const Token& t, const Metrics& m) {
     const int word = t.kind ? int(std::strlen(kind_word(t.kind)) + 1) : 0;   // "PPS " is drawn before a range chip's volts
     return (int(std::strlen(t.text)) + word) * m.adv + (t.chip ? 2 * m.pad + m.mark : 0) + (t.sweep ? m.sweep : 0);   // the S mark: its fixed gap + one glyph

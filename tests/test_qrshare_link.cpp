@@ -264,7 +264,8 @@ static void test_worst_card_fits_one_code() {
     CHECK(d.text == std::string(out, n2));
 
     // format 11: the same worst card at Deep with the worst Deep block (3274 bits, 412 B) is one code: 921 characters of 929.
-    // Format 12's worst block (the Xiaomi section on top, kMaxBits) would not fit one code: pack_v2 leaves it out whole.
+    // Format 12 / 13's worst block (the Xiaomi section and the spec ranges on top, kMaxBits) would not fit one code: pack_v2 leaves it
+    // out whole.
     c.level = ct::Level::Deep;
     const Bytes drec = card_record(c);
     const auto worst_blob = [](unsigned nbits) {
@@ -274,7 +275,7 @@ static void test_worst_card_fits_one_code() {
         if (nbits % 8) b.back() &= std::uint8_t((1u << (nbits % 8)) - 1);
         return b;
     };
-    const unsigned v11_bits = rc::deep::kMaxBits - unsigned(qs::records::kMiWorstBits);
+    const unsigned v11_bits = rc::deep::kMaxBits - unsigned(qs::records::kMiWorstBits) - rc::deep::kSpecRangesBits;
     CHECK_EQ(v11_bits, 3274u);
     const Bytes blob = worst_blob(v11_bits);
     CHECK(rc::deep::blob_valid(blob));

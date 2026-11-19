@@ -33,11 +33,13 @@ enum MoveFlag : std::uint8_t { kMoveChain = 1, kMoveSweep = 2, kMoveLast = 4 };
 constexpr bool large_step(bool avs, std::int32_t step_mv) {
     return step_mv > std::int32_t(avs ? pd::spec::kAvsSmallStepMv : pd::spec::kPpsSmallStepMv);
 }
-// tPpsSrcTransSmall / Large, tAvsSrcTransSmall / Large (SPR), ms.
-constexpr std::int32_t step_limit_ms(bool avs, bool large) {
-    return std::int32_t(avs ? (large ? pd::spec::kAvsLargeStepMs : pd::spec::kAvsSmallStepMs)
+// tPpsSrcTransSmall / Large, tAvsSrcTransSmall / Large, ms; epr: an EPR AVS APDO (its large step has the EPR limit).
+constexpr std::int32_t step_limit_ms(bool avs, bool large, bool epr = false) {
+    return std::int32_t(avs ? (large ? (epr ? pd::spec::kAvsLargeStepEprMs : pd::spec::kAvsLargeStepMs) : pd::spec::kAvsSmallStepMs)
                             : (large ? pd::spec::kPpsLargeStepMs : pd::spec::kPpsSmallStepMs));
 }
+// An APDO at position 8 and up is in the EPR part of the list.
+constexpr bool epr_pos(std::uint8_t pos) { return pos >= 8; }
 
 struct ProgMeas {
     bool up = false, large = false;
@@ -61,7 +63,7 @@ inline ProgMeas measure_prog(const ProgMove& mv, const StepOut& o) {
     m.large = large_step(mv.avs, std::abs(target - mv.from_mv));
     m.a = static_cast<std::uint8_t>(mv.pos | mv.cls << 4 | (m.up ? 0 : 0x80));
     m.b = static_cast<std::uint8_t>(target / 100);
-    const std::int32_t lim_us = step_limit_ms(mv.avs, m.large) * 1000;
+    const std::int32_t lim_us = step_limit_ms(mv.avs, m.large, epr_pos(mv.pos)) * 1000;
     if (!mv.avs && mv.cls == 0) {
         m.band_c = Check::PpsSettle;
         m.band = {o.settled ? std::int32_t(o.settle.us) : kNever, std::int32_t(o.settle.gap_us), 0, lim_us, m.a, m.b};

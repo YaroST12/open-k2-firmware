@@ -2034,6 +2034,7 @@ class ResultsChanged(FrameError):
 CT_SPEC_REQ, CT_SPEC_HEADER = 6, 7   # 0x0B req [6, off]: run_id u32, total u8, off u8, n u8, then n bytes (kChargerTestSpecReq)
 CT_SPEC_DETAIL_REQ = 7                # 0x0B req [7, off]: the same chunks of the detail form (kChargerTestSpecDetailReq)
 CT_SPEC_ROWS_REQ, CT_SPEC_ROWS_HEADER = 8, 9   # 0x0B req [8, off_lo, off_hi]: run_id u32, total u16, off u16, n u8, then n bytes (kChargerTestSpecRowsReq)
+CT_SPEC_APDO_REQ = 9                  # 0x0B req [9, off_lo, off_hi]: each range's own cells, the reply layout of [8] (kChargerTestSpecApdoReq)
 
 
 def _read_charger_spec_form(link, run_id, form):
@@ -2061,12 +2062,12 @@ def _read_charger_spec_form(link, run_id, form):
     return bytes(blob)
 
 
-def _read_charger_spec_rows(link, run_id):
+def _read_charger_spec_rows(link, run_id, req=CT_SPEC_ROWS_REQ):
     """The per-transition rows file (0x0B [8, off16], 48-byte chunks) as bytes; None when the run has none (total 0). Offsets are 16 bit:
-    the file is up to about 4 KB."""
+    the file is up to about 4 KB. req 9 reads each range's own cells the same way."""
     blob, total = bytearray(), None
     while total is None or len(blob) < total:
-        p = link.call(CMD_CHARGER_TEST, struct.pack("<BH", CT_SPEC_ROWS_REQ, len(blob))).payload
+        p = link.call(CMD_CHARGER_TEST, struct.pack("<BH", req, len(blob))).payload
         if len(p) < CT_SPEC_ROWS_HEADER:
             raise FrameError("short charger-test spec rows reply")
         rid, tot, off, n = struct.unpack_from("<IHHB", p)
@@ -2119,6 +2120,21 @@ def read_charger_spec(link, run_id):
         got = listed.get(c["key"])
         if got and got["rows"]:
             c["rows"], c["worst_row"] = got["rows"], got["worst"]
+    # Each PPS / AVS range's own cells and word (0x0B [9, off16]) and which merged blocks the K2 grid left out ("split"); firmware
+    # without the form (BadLength), a run with none or a stream this tool cannot read leaves the merged section the whole story.
+    try:
+        raw = _read_charger_spec_rows(link, run_id, CT_SPEC_APDO_REQ)
+        ranges = pdspec_blob.decode_ranges(raw or b"")
+    except RemoteError as e:
+        if e.status not in (STATUS_BAD_LENGTH, STATUS_BAD_ARG):
+            raise
+        ranges = None
+    except ValueError as e:
+        if isinstance(e, FrameError):
+            raise
+        ranges = None
+    if ranges and ranges["ranges"]:
+        spec["ranges"], spec["split"] = ranges["ranges"], ranges["split"]
     return spec
 
 

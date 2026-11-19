@@ -308,6 +308,8 @@ public:
         return true;
     }
     uint8_t charger_test_svooc_cap() const { return static_cast<uint8_t>(charger_test_.svooc_cap()); }
+    void charger_test_spec_apdo(pdspec::Check c, const pdspec::Meas& m) { charger_test_.spec_apdo(c, m); }
+    void charger_test_spec_apdo_clear() { charger_test_.spec_apdo_clear(); }
 #if K2_SPECROWS
     uint16_t charger_test_spec_rows_len() const { return charger_test_.spec_rows_len(); }
     size_t charger_test_spec_rows_read(uint16_t off, std::span<uint8_t> out) const { return charger_test_.spec_rows_read(off, out); }

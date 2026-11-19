@@ -321,7 +321,64 @@ static void test_from_aggs_and_wire() {
     CHECK_COND(!specsec::from_wire(w.data(), 3 + 2 * specsec::kCells, keep));
 }
 
+// Layout B texts. A range line's footer names the check behind its word: "PPS ovs: 9.90V, 2 fail" in the 27 footer cells; a range's
+// spec row on its Steps page has the worst value as its tail and the limit and count as its note (31 cells), whatever the cell holds.
+static void test_range_texts() {
+    using C = sc::Check;
+    specsec::Apdos a;
+    const auto m = [](std::int32_t v, std::int32_t lo, std::int32_t hi) { sc::Meas x{v, 0, lo, hi, 5, 50}; return x; };
+    a.add(C::PpsOvershoot, m(9900, 8000, 9655));
+    a.add(C::PpsOvershoot, m(9800, 8000, 9655));
+    a.add(C::PpsBand, m(120000, 0, 275000));
+    const specsec::Apdo& p = *a.find(5);
+    const specsec::RangeSpec rs = specsec::range_spec(p);
+    CHECK_COND(rs.tone == specsec::RangeTone::Fail);
+    StrBuf<32> f;
+    spectext::range_footer(f, p, rs);
+    CHECK_STR(std::string(f.view()).c_str(), "PPS ovs: 9.90V, 2 fail");
+    StrBuf<16> t;
+    StrBuf<48> n;
+    const specsec::Cell& ov = p.cells[specsec::apdo_slot(C::PpsOvershoot)];
+    spectext::slot_tail(static_cast<int>(C::PpsOvershoot), ov, t);
+    spectext::slot_note(static_cast<int>(C::PpsOvershoot), ov, n);
+    CHECK_STR(std::string(t.view()).c_str(), "9.90V");
+    CHECK_STR(std::string(n.view()).c_str(), "8.00V-9.66V, 2 measured");   // the bounds as the cell keeps them (10 mV)
+    // Unjudged slots: the skip reason or "not judged" in the note, no tail.
+    t.clear(); n.clear();
+    spectext::slot_tail(static_cast<int>(C::PpsStatus), specsec::make_cell(sc::Verdict::Skip, sc::Skip::NoData, 0), t);
+    spectext::slot_note(static_cast<int>(C::PpsStatus), specsec::make_cell(sc::Verdict::Skip, sc::Skip::NoData, 0), n);
+    CHECK_COND(t.view().empty());
+    CHECK_STR(std::string(n.view()).c_str(), sc::skip_name(sc::Skip::NoData));
+    n.clear();
+    spectext::slot_note(static_cast<int>(C::PpsStatus), specsec::Cell{}, n);
+    CHECK_STR(std::string(n.view()).c_str(), "not judged");
+    // Worst case: every slot of both kinds, the widest values, limits and counts fit their cells.
+    for (const bool avs : {false, true}) {
+        for (std::size_t s = 0; s < specsec::kApdoSlots; ++s) {
+            const C c = specsec::apdo_check(avs, s);
+            if (c == C::Count) continue;
+            for (const std::int16_t v : {std::int16_t(-32766), std::int16_t(32766), specsec::kUnseen}) {
+                specsec::Apdo q;
+                q.pos = 15; q.avs = avs;
+                specsec::Cell& cell = q.cells[s];
+                cell = specsec::make_cell(sc::def(c).inferred ? sc::Verdict::Unverified : sc::Verdict::Fail, sc::Skip::None, 255, v);
+                cell.lo = -32766; cell.hi = v; cell.n = 65535;
+                const specsec::RangeSpec r2{sc::def(c).inferred ? specsec::RangeTone::Caution : specsec::RangeTone::Fail,
+                                            specsec::slot_group(s), static_cast<std::uint8_t>(s)};
+                f.clear(); t.clear(); n.clear();
+                spectext::range_footer(f, q, r2);
+                spectext::slot_tail(static_cast<int>(c), cell, t);
+                spectext::slot_note(static_cast<int>(c), cell, n);
+                CHECK_COND(!f.view().empty() && text_cells(f.view()) <= 27);
+                CHECK_COND(text_cells(t.view()) + 1 + static_cast<int>(std::strlen(spectext::label(c))) <= 23);   // label at x28, tail to x214
+                CHECK_COND(!n.view().empty() && text_cells(n.view()) <= static_cast<int>(kit::kNoteMaxPx / kLabelAdv));
+            }
+        }
+    }
+}
+
 int main() {
+    test_range_texts();
     test_from_aggs_and_wire();
     test_quantize();
     test_value_text();

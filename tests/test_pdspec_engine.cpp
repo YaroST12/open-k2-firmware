@@ -68,6 +68,7 @@ struct Sim final : Env {
     int pps_status_ms = 3;              // Get_PPS_Status -> PPS_Status
     int pps_status_mode = 0;            // 0 a clean answer, 1 Not_Supported, 2 silence, 3 OMF set, 4 voltage off by 10 %
     std::uint8_t no_psrdy_pos = 0;      // Accept, then no PS_RDY: the sink Hard Resets after tPSTransition
+    int no_psrdy_skip = 0;              // ... after this many Accepts at that position with their PS_RDY
     std::uint8_t wait_pos = 0;          // Wait until the sink gives up (WaitExhausted)
     std::uint8_t stuck_pos = 0;         // no answer at all, and no give-up (a stuck sink)
     bool back_old = false;              // after a reset the sink asks for the level it had before
@@ -110,6 +111,8 @@ struct Sim final : Env {
     Stop stop = Stop::None;
     alignas(4) std::array<std::uint8_t, kPoolBytes> pool_{};
     std::span<std::uint8_t> record_pool() override { return pool_; }
+    std::vector<std::pair<Check, Meas>> apdo;   // Env::on_apdo: the programmable moves' measurements, as reported
+    void on_apdo(Check c, const Meas& x) override { apdo.push_back({c, x}); }
 
     Sim() {
         s.attached = true;
@@ -181,7 +184,9 @@ struct Sim final : Env {
             if (p && pps_overshoot_mv && vt > v) over_v = vt + pps_overshoot_mv;
             reached = vt == v;
             reached_at = t;
-            ev = want.pos == no_psrdy_pos ? Ev::Never : Ev::PsRdy;
+            bool never = want.pos == no_psrdy_pos;
+            if (never && no_psrdy_skip > 0) { --no_psrdy_skip; never = false; }
+            ev = never ? Ev::Never : Ev::PsRdy;
             ev_at = t;
         } else if (ev == Ev::Never && t >= ev_at + 550) {   // the sink's tPSTransition ran out: its own Hard Reset
             ++s.hard_resets;
@@ -293,6 +298,11 @@ struct Sim final : Env {
     const pd::SourceCaps& caps() override { return c; }
     std::uint32_t cap_mv() override { return cap; }
     bool epr_proof() override { return proof; }
+    std::uint8_t epr_avs(pd::Pdo& out) override {   // the Deep run's EPR AVS APDO: the one in the list
+        for (std::size_t i = 7; i < c.num_pdos; ++i)
+            if (c.pdos[i].type == pd::PdoType::Avs) { out = c.pdos[i]; return std::uint8_t(i + 1); }
+        return 0;
+    }
     pd::Err request(const pd::Choice& ch) override {
         if (inl) return pd::Err::Inline;
         if (!s.attached || s.state != pd::SinkState::Ready || ev != Ev::None) return pd::Err::Busy;
@@ -1410,8 +1420,9 @@ void test_moves_land_in_the_aggregates() {
     CHECK_EQ(int(e.passes().size()), 0);
 }
 
-// A window the charger test swept (covered) runs only the slams and its Get_PPS_Status asks: the step classes are already judged.
-void covered_window_runs_the_slams_only() {
+// A window the charger test swept (covered) runs a short cover (the ends at 20 mV, three 500 mV steps up and back) and the slams, with
+// their Get_PPS_Status asks: the sweep's own steps are judged already, down-steps and the ends again here.
+void covered_window_runs_a_cover_and_the_slams() {
     Sim m;
     typical(m);
     Engine e(m);
@@ -1419,16 +1430,18 @@ void covered_window_runs_the_slams_only() {
     CHECK_COND(e.start(0, bit(Family::Pps), 0, std::uint8_t(1u << 5)) == StartResult::Ok);
     int items = 0;
     drive(m, e, 3600000, [&](std::uint32_t) { if (e.family() == Family::Pps) items = e.items(); });
-    CHECK_EQ(items, 1);
+    CHECK_EQ(items, int(kCoverPasses));
     check_safe_end(m, e);
     CHECK_COND(e.stop() == Stop::Done);
     CHECK_EQ(int(e.score()), 0);
-    CHECK_EQ(int(e.passes().size()), 1);
-    CHECK_EQ(int(e.passes()[0].cls), int(kSlam));
-    CHECK_EQ(int(e.agg(Check::PpsAccuracy).n), 1 + 2);
-    CHECK_EQ(int(e.agg(Check::PpsSettle).n), 0);
-    CHECK_COND(e.agg(Check::PpsSettle).skip == Skip::NoData);   // no walk handed over: the end of the run says so (finish)
-    CHECK_EQ(m.pps_asks, 2);
+    CHECK_EQ(int(e.passes().size()), 3);
+    CHECK_EQ(int(e.passes()[0].cls), 0);
+    CHECK_EQ(int(e.passes()[1].cls), 2);
+    CHECK_EQ(int(e.passes()[2].cls), int(kSlam));
+    CHECK_EQ(int(e.agg(Check::PpsAccuracy).n), 1 + 10 + 6 + 2);
+    CHECK_EQ(int(e.agg(Check::PpsSettle).n), 10);
+    CHECK_EQ(int(e.agg(Check::PpsBand).n), 1 + 6 + 2);
+    CHECK_EQ(m.pps_asks, 1 + 2 + 2);   // the ends pass has no top (it goes down first)
     CHECK_COND(verdict(e, Check::PpsStatus) == Verdict::Pass);
     // An uncovered window next to a covered one keeps its full passes.
     Sim m2;
@@ -1437,10 +1450,79 @@ void covered_window_runs_the_slams_only() {
     CHECK_COND(e2.start(0, bit(Family::Pps), 0, std::uint8_t(1u << 5)) == StartResult::Ok);
     int items2 = 0;
     drive(m2, e2, 3600000, [&](std::uint32_t) { if (e2.family() == Family::Pps) items2 = e2.items(); });
-    CHECK_EQ(items2, 1 + int(kClasses));
+    CHECK_EQ(items2, int(kCoverPasses) + int(kClasses));
     CHECK_COND(e2.stop() == Stop::Done);
     CHECK_EQ(int(e2.agg(Check::AvsAccuracy).n), 220 + 44 + 22 + 2);
-    CHECK_EQ(int(e2.agg(Check::PpsAccuracy).n), 2);
+    CHECK_EQ(int(e2.agg(Check::PpsAccuracy).n), 10 + 6 + 2);
+}
+
+// Env::on_apdo: every measurement of a programmable move (its Accept and the Get_PPS_Status asks included) is reported with its APDO
+// in the place byte, as many as the merged aggregate counted; the fixed walk reports none.
+void apdo_hook_reports_every_programmable_measurement() {
+    Sim m;
+    m.list({fixed(5000), fixed(9000), pps(3300, 11000), avs(9000, 20000)});
+    Engine e(m);
+    CHECK_COND(e.start(0, 0x03) == StartResult::Ok);
+    drive(m, e);
+    CHECK_COND(e.stop() == Stop::Done);
+    std::array<int, kChecks> n{};
+    int wrong_place = 0;
+    for (const auto& [c, x] : m.apdo) {
+        ++n[std::size_t(c)];
+        const bool avs_move = avs_check(c) || (c == Check::AcceptTime && (x.a & 15) == 4);
+        if ((x.a & 15) != (avs_move ? 4 : 3)) ++wrong_place;
+    }
+    CHECK_EQ(wrong_place, 0);
+    for (std::size_t k = 0; k < kChecks; ++k) {
+        const Check c = Check(k);
+        if (c == Check::AcceptTime) continue;
+        CHECK_EQ(n[k], owns(Family::Pps, c) ? int(e.agg(c).n) : 0);
+    }
+    CHECK_COND(n[std::size_t(Check::PpsStatus)] > 0 && n[std::size_t(Check::AvsBand)] > 0);
+    CHECK_EQ(n[std::size_t(Check::AcceptTime)], int(e.agg(Check::AcceptTime).n) - 2);   // the walk 5 -> 9 -> 5 V keeps its two
+    // A charger-test move reports the same way, before any start.
+    Sim m2;
+    typical(m2);
+    Engine e2(m2);
+    e2.judge_test_move({5, false, 1, 5000, 5100}, false, clean_edges(), clean_step(5100), m2.snapshot());
+    CHECK_COND(!m2.apdo.empty());
+    for (const auto& [c, x] : m2.apdo) CHECK_EQ(int(x.a & 15), 5);
+}
+
+// The per-APDO stream adds up to the merged aggregates on failing sources too: every Pps-family measurement, whatever path took it.
+void apdo_sums_match(const Sim& m, const Engine& e) {
+    for (std::size_t k = 0; k < kChecks; ++k) {
+        const Check c = Check(k);
+        if (!owns(Family::Pps, c)) continue;
+        std::uint32_t n = 0, fails = 0;
+        for (const auto& [ck, x] : m.apdo)
+            if (ck == c) { ++n; fails += excess(def(c).kind, x) > 0; }
+        CHECK_EQ(n, std::uint32_t(e.agg(c).n));
+        CHECK_EQ(fails, std::uint32_t(e.agg(c).fails));
+    }
+}
+void apdo_hook_on_failing_sources() {
+    const auto run = [](auto setup, std::uint8_t families) {
+        Sim m;
+        typical(m);
+        setup(m);
+        Engine e(m);
+        CHECK_COND(e.start(0, families) == StartResult::Ok);
+        drive(m, e);
+        check_safe_end(m, e);
+        apdo_sums_match(m, e);
+        return std::pair{e.agg(Check::PpsPsRdy).fails, e.agg(Check::PpsBand).fails};
+    };
+    const std::uint8_t pps = bit(Family::Pps);
+    run([](Sim& m) { m.pps_offset_mv = 300; m.pps_start_ms = 40; }, pps);
+    run([](Sim& m) { m.pps_fold_from_mv = 9000; m.pps_fold_to_mv = 8590; }, pps);
+    run([](Sim& m) { m.fall = 20; }, pps);
+    run([](Sim& m) { m.pps_overshoot_mv = 300; m.pps_overshoot_ms = 10; }, pps);
+    run([](Sim& m) { m.pps_status_mode = 3; }, pps);
+    // No PS_RDY on a programmable step: the K2's own Hard Reset ends the move, measured outside the step's judging.
+    const auto [rdy_fails, band_fails] = run([](Sim& m) { m.no_psrdy_pos = 5; m.no_psrdy_skip = 4; }, pps);
+    (void)band_fails;
+    CHECK_COND(rdy_fails > 0);
 }
 
 // The Deep run's spec section before and after: the same list with every window swept by the charger test (Sim ms).
@@ -1454,6 +1536,73 @@ std::uint32_t spec_ms(std::initializer_list<pd::Pdo> l, std::uint8_t covered) {
     CHECK_COND(e.stop() == Stop::Done);
     return t;
 }
+// EPR AVS in a Deep run (kOptEprAvs, the cable proof): the window is swept inside EPR mode, never above the ceiling, its moves reported
+// with their APDO; the standalone run (no option) judges no AVS on a list whose only AVS is EPR. A covered EPR AVS window (position 9,
+// past the mask's first byte) runs the cover.
+void epr_avs_window_in_a_deep_run() {
+    const auto list = [](Sim& m) {
+        m.list({fixed(5000, true), fixed(9000), fixed(15000), fixed(20000), pps(3300, 11000)});
+        m.c.pdos[7] = fixed(28000);
+        m.c.pdos[8] = avs(15000, 28000);
+        m.c.num_pdos = 9;
+        m.proof = true;
+    };
+    Sim m;
+    list(m);
+    Engine e(m);
+    CHECK_COND(e.start(0, bit(Family::Pps), kOptEprAvs) == StartResult::Ok);
+    bool epr = true;
+    int at9 = 0;
+    drive(m, e, 3600000, [&](std::uint32_t) {
+        if (m.s.pos == 9 && m.s.state == pd::SinkState::Ready) { ++at9; epr = epr && m.s.epr_mode; }
+    });
+    check_safe_end(m, e);
+    CHECK_COND(e.stop() == Stop::Done);
+    CHECK_COND(at9 > 0);
+    CHECK_COND(epr);
+    CHECK_EQ(m.max_req_mv, 28000);
+    CHECK_COND(verdict(e, Check::AvsAccuracy) == Verdict::Pass);
+    CHECK_EQ(int(e.agg(Check::AvsAccuracy).n), 260 + 52 + 26 + 2);
+    CHECK_EQ(int(e.score()), 0);
+    int avs_n = 0, off = 0;
+    for (const auto& [c, x] : m.apdo) {
+        if (!avs_check(c)) continue;
+        ++avs_n;
+        off += (x.a & 15u) != 9u;
+    }
+    CHECK_EQ(avs_n > 0, true);
+    CHECK_EQ(off, 0);
+    Sim s;
+    list(s);
+    Engine es(s);
+    CHECK_COND(es.start(0, bit(Family::Pps)) == StartResult::Ok);
+    drive(s, es);
+    CHECK_COND(es.agg(Check::AvsAccuracy).skip == Skip::NoAvs);
+    CHECK_EQ(s.max_req_mv, 11000);
+    Sim c;
+    list(c);
+    Engine ec(c);
+    CHECK_COND(ec.start(0, bit(Family::Pps), kOptEprAvs, std::uint16_t(1u << 9)) == StartResult::Ok);
+    int items = 0;
+    drive(c, ec, 3600000, [&](std::uint32_t) { if (ec.family() == Family::Pps) items = ec.items(); });
+    CHECK_COND(ec.stop() == Stop::Done);
+    CHECK_EQ(items, int(kClasses) + int(kCoverPasses));
+    CHECK_EQ(int(ec.agg(Check::AvsAccuracy).n), 10 + 6 + 2);
+    // The stage time the EPR AVS window adds to a Deep run whose sweeps covered both windows (Baseus 140 W shape).
+    std::uint32_t t[2] = {};
+    for (int opt = 0; opt < 2; ++opt) {
+        Sim b;
+        list(b);
+        Engine eb(b);
+        CHECK_COND(eb.start(0, 0x03, opt ? kOptEprAvs : 0, std::uint16_t(1u << 5 | 1u << 9)) == StartResult::Ok);
+        t[opt] = drive(b, eb);
+        check_safe_end(b, eb);
+        CHECK_COND(eb.stop() == Stop::Done);
+    }
+    CHECK_COND(t[1] > t[0]);
+    std::printf("  spec epr avs: %u ms -> %u ms\n", unsigned(t[0]), unsigned(t[1]));
+}
+
 void covered_run_time() {
     struct Case { const char* name; std::initializer_list<pd::Pdo> l; std::uint8_t cov; };
     const Case cases[] = {
@@ -1509,7 +1658,10 @@ int main() {
     full_20mv_sweep_option();
     pps_ps_rdy_wire_allowance();
     test_moves_land_in_the_aggregates();
-    covered_window_runs_the_slams_only();
+    covered_window_runs_a_cover_and_the_slams();
+    apdo_hook_reports_every_programmable_measurement();
+    apdo_hook_on_failing_sources();
     covered_run_time();
+    epr_avs_window_in_a_deep_run();
     return test_report("test_pdspec_engine");
 }

@@ -144,7 +144,17 @@ Xiaomi row. Readers: `tools/report_card.py` (`deep.xiaomi`), `tools/charger_summ
 "Mi 55W: before → after ✓"), `docs/site/r/deep.js` / `card.js` (a "Xiaomi" section). The store's repeat check also compares the
 Xiaomi sections, so a re-run with other modes is a new save.
 
-- **On the K2.** The card store keeps the blob after the 256 B card record in the same ring record (a Deep record is about 672 to
+### Card format 13: each range's spec word
+
+Format 13 (2026-11-19, results layout B) lets the spec part carry each PPS / AVS range's own verdicts. The cell count u5 reads 28
+(form 28) instead of 27: the 27 cells follow as before, then the range count u3, the grid's split (PPS u1, AVS u1: the merged block the
+K2's Results grid left to the range lines), then per range its APDO position u4, avs u1, tone u2 (none, pass, caution, fail), group u2
+(level, timing, shape) and 11 slot verdicts u3 (`specsec::kApdoPps` / `kApdoAvs`; an AVS range's 3 unused slots read pending): 42 bits a
+range. A run with no range measured keeps form 27, the format 12 layout. The worst blob is 3811 bits = 479 B. Readers:
+`tools/report_card.py` (`spec.split`, `spec.ranges` with pos, kind, tone, word and cells), `docs/site/r/deep.js` (the same keys) and
+`card.js` (one "PPS PDO #5" row per range in "PD spec check", the split block's failures moved to it); a format 12 reader cannot read the card
+(a version '2' link fails its CRC there, a version '1' record reads as newer). Golden block: `tests/fixtures/deep_form28.hex` (`test_report_card_deep`).
+ in the same ring record (a Deep record is about 672 to
   692 B: two per flash sector against seven for a plain card). The 12 newest blocks are kept; an older card is carried forward without
   its block (`maintain()`), and a save retries without the block when the ring is full, so a block never costs a card. The remote
   card read (`GET`) stays the 250 B payload. The sweep data is taken at run end, while it is still in RAM. `render_json(card, deep, out)`

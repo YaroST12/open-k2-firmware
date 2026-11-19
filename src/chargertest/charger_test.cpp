@@ -1278,6 +1278,7 @@ Reason Runner::start(const pd::SourceCaps& caps, Options o, Input in, bool confi
     n_order_ = o.units.n; order_ = o.units.u;
     build(caps, o, in);
     evidence_ = {};
+    spec_apdo_ = {};
     evidence_.selected = o.selected; evidence_.session = in.session;
     evidence_.monitor_mv = std::min<uint32_t>(in.cap_mv, 65535); evidence_.cable_mv = used_cable_mv(in);
     evidence_.cable_ma = used_cable_ma(in);
@@ -1523,16 +1524,17 @@ uint32_t Runner::hold_ms() const {
 static_assert(pdspec::step_mv(pdspec::ProgKind::Pps, 1) == int(ctsweep::kStepMv) && pdspec::step_mv(pdspec::ProgKind::Avs, 0) == int(ctsweep::kStepMv));
 static_assert(pdspec::step_mv(pdspec::ProgKind::Pps, 0) == int(walk_step_mv(Algorithm::Pps)) &&
               pdspec::step_mv(pdspec::ProgKind::Avs, 0) == int(walk_step_mv(Algorithm::SprAvs)));
-// A move is the spec stage's while the stage is still ahead, on an SPR APDO, with the K2 on its own supply (the engine refuses one fed
-// by the charger). The wait is bounded: a capture that never freezes costs one move, not the row.
+// A move is the spec stage's while the stage is still ahead, on a PPS or AVS APDO (EPR AVS included), with the K2 on its own supply (the
+// engine refuses one fed by the charger). The wait is bounded: a capture that never freezes costs one move, not the row.
 bool Runner::spec_feed(const Input& in, const Step& s, int from_mv, int to_mv, uint8_t cls, uint8_t flags) {
     if (feed_ms_) {
         if (env_.spec_feeding() && in.now - feed_ms_ < kSpecFeedMaxMs) return true;
         feed_ms_ = 0;
         return false;
     }
-    if (!spec_pending_ || selfpwr_ || s.pos > 7 || (s.algorithm != Algorithm::Pps && s.algorithm != Algorithm::SprAvs)) return false;
-    if (!env_.spec_move({s.pos, s.algorithm == Algorithm::SprAvs, cls, from_mv, to_mv}, flags)) return false;
+    const bool avs = s.algorithm == Algorithm::SprAvs || s.algorithm == Algorithm::EprAvs;
+    if (!spec_pending_ || selfpwr_ || !s.pos || s.pos > 15 || (s.algorithm != Algorithm::Pps && !avs)) return false;
+    if (!env_.spec_move({s.pos, avs, cls, from_mv, to_mv}, flags)) return false;
     feed_ms_ = in.now | 1u;
     return true;
 }
@@ -2392,7 +2394,7 @@ void Runner::restore(const Options& o, const Evidence& e, uint32_t run_id, std::
                      size_t phase_index, uint8_t resumed, size_t attempt_unit, uint8_t attempts, bool planned_reattach) {
     count_ = std::min(steps.size(), steps_.size());
     std::copy_n(steps.begin(), count_, steps_.begin());
-    evidence_ = e; run_id_ = run_id; ++revision_; resumed_ = resumed; reattach_planned_ = planned_reattach; loaded_ = true; plan_frozen_ = true;
+    evidence_ = e; spec_apdo_ = {}; run_id_ = run_id; ++revision_; resumed_ = resumed; reattach_planned_ = planned_reattach; loaded_ = true; plan_frozen_ = true;
     opts_ = o;
     // A replay without the meta record (power cut between the header and it) carries no level: a Light plan names itself by its
     // rows (Advertised / LightLevel skips exist only there), so it never resumes as Medium and asks above 5 V.

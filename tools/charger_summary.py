@@ -271,13 +271,15 @@ def _spec_lines(sp):
     if sp["end"] != "done":
         head += f" · {sp['end']}" + (f" ({sp['why']})" if sp.get("why") else "")
     out = [head]
+    import pdspec_blob
+    hidden = pdspec_blob.split_keys(sp.get("split") or {})   # the merged blocks the K2 grid gave to the range lines (layout B)
     for c in sp["cells"]:
-        kept = f" (limit {c['limit_text']}, {c['count']} measured)" if c.get("limit_text") else ""   # the detail form, when the device kept it
-        if c["verdict"] == "fail":
-            out.append(f"  - {c['label']}: FAIL, worst {c['value_text']}, {c['fails']} over{kept}")
-            out += _spec_row_lines(c)
-        elif c["verdict"] == "unverified":
-            out.append(f"  - {c['label']}: unverified (a K2 figure, no spec limit), worst {c['value_text']}{kept}")
+        if c["key"] not in hidden:
+            out += _spec_cell_lines(c, "  ")
+    for g in sp.get("ranges", []):   # each PPS / AVS range's own word, then its failed or unverified checks
+        out.append(f"  - {g['kind'].upper()} range, PDO #{g['pos']}: {g['word']}")
+        for c in g["cells"]:
+            out += _spec_cell_lines(c, "    ")
     skips = {}
     for c in sp["cells"]:
         if c["verdict"] == "skip":
@@ -286,6 +288,16 @@ def _spec_lines(sp):
     if sp.get("unconfirmed"):
         out.append("  - WARNING: the end-of-run return to 5 V was not confirmed: unplug the charger")
     return out
+
+
+def _spec_cell_lines(c, indent):
+    """One failed or unverified check with its worst value (and the limit and count when the device kept them); nothing otherwise."""
+    kept = f" (limit {c['limit_text']}, {c['count']} measured)" if c.get("limit_text") else ""   # the detail form, when the device kept it
+    if c["verdict"] == "fail":
+        return [f"{indent}- {c['label']}: FAIL, worst {c['value_text']}, {c['fails']} over{kept}"] + _spec_row_lines(c)
+    if c["verdict"] == "unverified":
+        return [f"{indent}- {c['label']}: unverified (a K2 figure, no spec limit), worst {c['value_text']}{kept}"]
+    return []
 
 
 def _spec_row_lines(c):

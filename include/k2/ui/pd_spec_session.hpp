@@ -50,8 +50,9 @@ public:
     // The charger test's Deep section: the families of specsec::kFamilyMask, no options, started INSIDE a test run: the test owns the
     // ports (no foreign-busy check), the run's Rd and the run-owner flag, so neither is taken or given back here and no footer is shown.
     // The engine stays readable through engine_for_test() until another run replaces it. run_id: the charger-test run whose moves
-    // test_move() handed over (its engine and covered APDOs are kept; another run, or 0, starts from nothing).
-    pdspec::StartResult start_in_test(std::uint32_t now_ms, std::uint32_t run_id = 0);
+    // test_move() handed over (its engine and covered APDOs are kept; another run, or 0, starts from nothing). epr_avs: the EPR AVS APDO
+    // the run met at epr_pos (pdspec::Env::epr_avs; nullptr = none).
+    pdspec::StartResult start_in_test(std::uint32_t now_ms, std::uint32_t run_id = 0, const pd::Pdo* epr_avs = nullptr, std::uint8_t epr_pos = 0);
     // One PPS / AVS move of a Deep run before its stage (pdspec::MoveFlag bits). A recording capture is frozen now, a range row's
     // frozen one is taken as it is; the next poll() judges it into the run's engine. false = no capture to take, nothing waits.
     bool test_move(std::uint32_t run_id, const pdspec::ProgMove& mv, std::uint8_t flags, std::uint32_t now_ms);
@@ -97,6 +98,7 @@ private:
     const pd::SourceCaps& caps() override;
     std::uint32_t cap_mv() override { return ctx_.cap_mv; }
     bool epr_proof() override;
+    std::uint8_t epr_avs(pd::Pdo& out) override { out = epr_avs_; return epr_pos_; }
     pd::Err request(const pd::Choice& c) override;
     void release() override;
     bool hard_reset() override;
@@ -112,8 +114,9 @@ private:
     void on_item(pdspec::Family f, std::uint8_t idx, std::uint8_t total) override;
     void on_note(const char* why) override;
     void on_finish(pdspec::Stop why) override;
+    void on_apdo(pdspec::Check c, const pdspec::Meas& m) override;
 
-    pdspec::StartResult start_run(std::uint8_t families, std::uint32_t now_ms, std::uint8_t opts, bool in_test, std::uint8_t covered = 0,
+    pdspec::StartResult start_run(std::uint8_t families, std::uint32_t now_ms, std::uint8_t opts, bool in_test, std::uint16_t covered = 0,
                                   bool keep = false);
     bool started() const { return engine_ && (engine_->running() || engine_->finished()); }
     void feed_take(std::uint32_t now_ms);
@@ -141,8 +144,10 @@ private:
     };
     Feed feed_{};
     std::uint32_t fed_run_ K2_BSS_INIT(0);
-    std::uint8_t covered_ K2_BSS_INIT(0);
-    std::array<std::uint8_t, 8> sw_off_{}, sw_ok_{};
+    std::uint16_t covered_ K2_BSS_INIT(0);
+    std::array<std::uint8_t, 16> sw_off_{}, sw_ok_{};   // by APDO position (EPR AVS up to 11)
+    pd::Pdo epr_avs_{};                                  // start_in_test(): the run's EPR AVS APDO, for the engine's scan
+    std::uint8_t epr_pos_ K2_BSS_INIT(0);
 };
 
 }  // namespace k2
