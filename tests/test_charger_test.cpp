@@ -8543,7 +8543,18 @@ static void test_spec_preview_counts_the_stage() {
     CHECK_EQ(unsigned(pv(ct::Level::Deep).spec_checks), unsigned(specsec::kBuilt ? specsec::kCells : 0));
     const auto plain = ct::Runner::preview(f.caps, [&] { auto o = spec_opts(); o.spec = false; return o; }(), f.in);
     CHECK_EQ(unsigned(plain.spec_checks), 0u);
-    CHECK_EQ(pv(ct::Level::Deep).estimate_ms, plain.estimate_ms + (specsec::kBuilt ? specsec::kEstimateMs : 0));
+    // prog_unify: the stage's share follows the list: the fixed walk, then per programmable window its slams and status asks (the
+    // run sweeps it itself) or the engine's own passes (a window the run does not sweep).
+    const pdspec::Levels L = pdspec::scan(f.caps, f.in.cap_mv, false);
+    CHECK_EQ(unsigned(L.n_prog), 3u);
+    const uint32_t swept = specsec::estimate_ms(L, true, true);
+    CHECK_EQ(swept, uint32_t(L.n_fixed * (L.n_fixed - 1)) * specsec::kTransitionMs + 3 * specsec::kCoveredWindowMs);
+    pdspec::Levels pps = L;   // the two PPS windows alone
+    pps.n_prog = 0;
+    for (size_t w = 0; w < L.n_prog; ++w) if (L.prog[w].kind == pdspec::ProgKind::Pps) pps.prog[pps.n_prog++] = L.prog[w];
+    CHECK_EQ(unsigned(pps.n_prog), 2u);
+    CHECK_EQ(specsec::estimate_ms(L, false, true), swept - 2 * specsec::kCoveredWindowMs + pdspec::family_moves(pps, false) * specsec::kProgMoveMs);
+    CHECK_EQ(pv(ct::Level::Deep).estimate_ms, plain.estimate_ms + (specsec::kBuilt ? swept : 0));
 }
 // A Light run resumed after a power loss is replanned Light (the level rides in the journal meta) and still asks only 5 V.
 // The schema-2 page says which level the run in hand ran at: run_selected bits 28..29 (the draft's own level is in the draft

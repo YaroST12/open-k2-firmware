@@ -931,7 +931,10 @@ Summary Runner::preview(const pd::SourceCaps& caps, Options o, Input in) {
         }
     };
     plan_units(caps, o, in, units, count);
-    if (spec_planned(o, units)) { out.spec_checks = static_cast<uint8_t>(specsec::kCells); out.estimate_ms += specsec::kEstimateMs; }
+    if (spec_planned(o, units)) {
+        out.spec_checks = static_cast<uint8_t>(specsec::kCells);
+        out.estimate_ms += specsec::estimate_ms(pdspec::scan(caps, in.cap_mv, false), o.pps_sweep, o.avs_sweep);
+    }
     return out;
 }
 void Runner::add(Step s) {
