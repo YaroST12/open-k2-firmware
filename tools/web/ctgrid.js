@@ -24,6 +24,12 @@ var CtGrid = (function () {
   var RANGE_ALGS = ["pps", "spr-avs", "epr-avs"];
   var PD_FIXED = ["pd2-fixed", "pd3x-fixed", "epr"];                   // the fixed levels that share the PD block's first run
   var KIND_WORD = { pps: "PPS", "spr-avs": "AVS", "epr-avs": "AVS" };   // a range chip's word (result_layout kind_word), drawn before its volts
+  var RANGE_VERDICT = { pass: "pass", caution: "partial", fail: "fail" };   // specsec::RangeTone as a cell verdict (none: no fill)
+  // specsec::kOrder: the merged spec cells in grid order (k2proto CT_SPEC_ORDER).
+  var SPEC_KEYS = ["accept_time", "ps_rdy_time", "src_start", "ps_rdy_early", "ps_rdy_low", "rise_time", "fall_time", "overshoot", "accuracy",
+                   "pps_monotonic", "pps_accuracy", "pps_settle", "pps_band", "pps_ps_rdy", "pps_overshoot", "pps_transient", "pps_status",
+                   "pps_status_time", "pps_track", "avs_monotonic", "avs_accuracy", "avs_band", "avs_ps_rdy", "avs_overshoot", "avs_transient",
+                   "avs_track", "source_reset"];
   // Sections (the device's order of families); a rule separates two runs of different sections.
   var SEC_HUAWEI = 0, SEC_SAMSUNG = 1, SEC_OPPO = 2, SEC_XIAOMI = 3, SEC_PD = 5, SEC_QC = 6;
   // The grid's metrics, from the device's Results grid: 8 px glyphs, 2 px padding, 1 px gap, 163 px of cells, 5 cells at most.
@@ -515,8 +521,8 @@ var CtGrid = (function () {
       var w = isCaution(f) ? cautionText(f) : f.result === "fail" && dr && dr !== "none" ? dr : engineWhy(f) || (f.reason !== "none" ? f.reason : "");
       return c.note ? (w ? w + ", " : "") + c.note : w;
     }
-    function cellOf(c) {
-      var v = verdictOf(c), lab = c.text, cur = "", kind = c.kind && !c.word ? c.kind + " " : "";   // a range chip's kind word leads its volts
+    function cellOf(c, bare) {
+      var v = verdictOf(c), lab = c.text, cur = "", kind = c.kind && !c.word && !bare ? c.kind + " " : "";   // a range chip's kind word leads its volts
       if (!c.word) { var sp = lab.indexOf(" "); if (sp >= 0) { cur = lab.slice(sp + 1); lab = lab.slice(0, sp); } }
       var w = whyOf(c), vw = WORD[v];
       return { verdict: v, label: kind + lab, current: cur, title: c.levelTitle || kind + c.text + (vw ? ": " + vw : "") + (w ? " (" + w + ")" : "") };
@@ -526,6 +532,15 @@ var CtGrid = (function () {
       var n = c.word ? c.text.length : (c.text.indexOf(" ") >= 0 ? c.text.indexOf(" ") : c.text.length);
       if (c.kind && !c.word) n += c.kind.length + 1;
       return n * ADV + 2 * PAD;
+    }
+
+    // Layout B (a finished Deep run with its spec stage): a range line takes the kind as its label and the range's spec word as a cell of
+    // its own (specsec::range_word), with a rule above the block's first range line.
+    var specB = !!(opts.spec && opts.spec.cells && opts.spec.end !== "not run" && !opts.live);
+    function rangeWordCell(pos) {
+      var g = (opts.spec.ranges || []).filter(function (x) { return x.pos === pos; })[0];
+      var w = g ? g.word : "-", v = (g && RANGE_VERDICT[g.tone]) || "none";
+      return { verdict: v, label: w, current: "", title: "PD spec: " + (g ? w + (v === "none" ? "" : " (" + g.tone + ")") : "not judged") };
     }
 
     var lines = [], prevSec = null, first = true, lastSec = null;
@@ -544,8 +559,17 @@ var CtGrid = (function () {
         cur.push(c); widest = Math.max(widest, gw); solo = !!c.kind;
       });
       pendingLines.push({ head: head, cells: cur });
-      pendingLines.forEach(function (pl) {
-        lines.push({ label: pl.head ? r.label : "", section: pl.head && brk, cells: pl.cells.map(cellOf) });
+      var prevKind = false;
+      pendingLines.forEach(function (pl, k) {
+        var kc = specB ? pl.cells.filter(function (c) { return c.kind && !c.word; })[0] : null;
+        var line = { label: pl.head ? r.label : "", section: pl.head && brk, cells: pl.cells.map(function (c) { return cellOf(c, c === kc); }) };
+        if (kc) {
+          line.label = kc.kind;
+          line.section = line.section || (k > 0 && !prevKind);
+          line.cells.push(rangeWordCell(kc.mv));
+        }
+        prevKind = pl.cells.some(function (c) { return c.kind && !c.word; });
+        lines.push(line);
       });
       if (r.sec !== null) lastSec = r.sec;
       prevSec = sec; first = false;
@@ -553,13 +577,25 @@ var CtGrid = (function () {
     return lines.concat(specLines(opts.spec));
   }
 
+  // The merged checks a split kind leaves to its range lines (specsec::split, pdspec_blob.split_keys): the PPS block, the AVS block.
+  function splitKeys(split) {
+    var out = {}, on = false, kind = "";
+    if (!split) return out;
+    SPEC_KEYS.forEach(function (k) {
+      if (k === "pps_monotonic") kind = "pps"; else if (k === "avs_monotonic") kind = "avs"; else if (k === "source_reset") kind = "";
+      on = !!(kind && split[kind]);
+      if (on) out[k] = true;
+    });
+    return out;
+  }
   // The Deep run's PD spec section (k2proto decodeChargerSpecSection) as grid lines: one wide cell per check under its short label,
   // a rule above the first row and above each family block (the device's spec rows, src/ui/ui_charger_test.cpp). The cell reads like
   // spectext::cell_view: a skip says why, struck; a pending one is empty; an unverified one (a K2 figure, no spec limit) shows the
   // number with no pass or fail look; a judged one shows the worst value, then ", N fail" when it failed.
   function specLines(sp) {
     if (!sp || !sp.cells || sp.end === "not run") return [];
-    return sp.cells.map(function (c) {
+    var hidden = splitKeys(sp.split);
+    return sp.cells.filter(function (c) { return !hidden[c.key]; }).map(function (c) {
       var verdict = "pending", label = "";
       if (c.verdict === "skip") { verdict = "skip"; label = c.skip || "skipped"; }
       else if (c.verdict === "unverified") { verdict = "none"; label = c.value_text; }

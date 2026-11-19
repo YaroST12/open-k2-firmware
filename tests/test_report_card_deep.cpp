@@ -4,6 +4,10 @@
 // The blob is read back by a reader written here from the wire description in the header (not the firmware's own code path), so
 // a mistake in the layout shows as a mismatch, not as a symmetric round trip.
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <fstream>
+#include <string>
 #include <vector>
 
 #include "k2/chargertest/report_card_deep.hpp"
@@ -388,8 +392,17 @@ static void test_spec_ranges() {
     pps.algorithm = ct::Algorithm::Pps; pps.group = ct::group(pps.algorithm); pps.pos = 5; pps.pdo = 0xC8D23264u; pps.mv = 5000;
     pps.verdict = ct::Verdict::Pass;
     steps.push_back(pps);
-    const Decoded s = decode(run_build(deep_card(0), ev, none, steps, &ap));
+    const Bytes sb = run_build(deep_card(0), ev, none, steps, &ap);
+    const Decoded s = decode(sb);
     CHECK_EQ(s.used, s.bits);
+    // The golden form 28 block for the tool readers (tests/test_k2_qr.py, deep.js); K2_DEEP_WRITE=1 rewrites it.
+    std::string hex;
+    for (const auto x : sb) { char h[3]; std::snprintf(h, sizeof h, "%02x", x); hex += h; }
+    const char* golden = "tests/fixtures/deep_form28.hex";
+    if (std::getenv("K2_DEEP_WRITE")) std::ofstream(golden) << hex << "\n";
+    std::string want;
+    std::ifstream(golden) >> want;
+    CHECK_STR(want.c_str(), hex.c_str());
     CHECK_EQ(s.split_pps, 1u); CHECK_EQ(s.split_avs, 0u);
     CHECK_EQ(dp::read_mi(run_build(deep_card(0), ev, none, steps, &ap)).n, 1u);
     // No range measured: form 27, the v12 layout.

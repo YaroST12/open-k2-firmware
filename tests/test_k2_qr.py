@@ -330,6 +330,37 @@ class DeepBlob(unittest.TestCase):
         self.assertEqual(t["SVOOC_REFUSALS"], report_card.SVOOC_REFUSALS)
         self.assertEqual(t["MAX_BITS"], report_card.DEEP_MAX_BITS)
         self.assertEqual(t["BUCKETS"], report_card.DEEP_BUCKETS)
+        self.assertEqual(t["APDO"], {k: [None if d is None else [d["key"], d["label"]] for d in v] for k, v in s["apdo"].items()})
+        self.assertEqual(t["RANGE_TONES"], s["range_tones"])
+        self.assertEqual(t["GROUPS"], s["groups"])
+
+    def test_form_28_ranges_decode_the_same_in_python_and_on_the_web_page(self):
+        # tests/fixtures/deep_form28.hex is the block tests/test_report_card_deep.cpp builds (test_spec_ranges): PPS 5 fails its
+        # overshoot (a shape word), AVS 7 passes, only the PPS block split (its range has a line); deep.js must read the same.
+        import shutil
+        import subprocess
+        with open(os.path.join(HERE, "fixtures", "deep_form28.hex")) as f:
+            blob = bytes.fromhex(f.read().strip())
+        d = report_card.decode_deep(blob, [])
+        spec = d["spec"]
+        self.assertEqual(spec["split"], {"pps": True, "avs": False})
+        self.assertEqual([(r["pos"], r["kind"], r["tone"], r["word"]) for r in spec["ranges"]],
+                         [(5, "pps", "fail", "shape"), (7, "avs", "pass", "spec")])
+        p, a = spec["ranges"]
+        self.assertEqual(len(p["cells"]), 11)
+        self.assertEqual(len(a["cells"]), 8)                                 # the AVS kind has no status, settle or status time
+        by = {c["key"]: c["verdict"] for c in p["cells"]}
+        self.assertEqual((by["pps_band"], by["pps_overshoot"], by["pps_status"]), ("pass", "fail", "pending"))
+        self.assertEqual(len(d["xiaomi"]["modes"]), 1)
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node is not installed")
+        js = os.path.join(ROOT, "docs", "site", "r", "deep.js")
+        out = subprocess.run([node, "-e", "process.stdout.write(JSON.stringify(require(process.argv[1]).decode(Buffer.from(process.argv[2], 'hex'), [])))",
+                              js, blob.hex()], capture_output=True, text=True, timeout=30, check=True).stdout
+        web = json.loads(out)
+        web["xiaomi"].pop("modes"); d["xiaomi"].pop("modes")               # the reason names need the card's table (card.js)
+        self.assertEqual(web, json.loads(json.dumps(d)))
 
     def test_a_bad_length_is_refused(self):
         good = _blob(_bits(0, 1) + _bits(1, 1) + _bits(0, 4) + _bits(0, 3 + 4 + 3 + 8 + 9 + 10))

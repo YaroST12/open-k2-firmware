@@ -42,7 +42,7 @@ var K2Card = (function () {
   var V10_PAYLOAD = 250;  // format 10 payload
   var UFCS_AT = 178;      // format 6: 4 modes of u24 (lo 100 mV 8 bits, hi 100 mV 9 bits, current in 50 mA 7 bits); hi 0 = unused
   var MAX_UFCS = 4;
-  var FORMAT = 12;        // the newest card format this file reads (12 = the block may carry the Xiaomi section; payload as 11)
+  var FORMAT = 13;        // the newest card format this file reads (13 = the block's spec part may carry each range's word; 12 = the block may carry the Xiaomi section; payload as 11)
   var MAX_RANGES = 4;
   var RECORD_MAGIC = 0xA6;
   var MAX_UNPACKED = 4096;
@@ -1089,8 +1089,19 @@ var K2Card = (function () {
 
   function signed(mv) { return (mv > 0 ? "+" : "") + mv + " mV"; }
 
+  var RANGE_TONE = {pass: "pass", caution: "partial", fail: "fail"};   // specsec::RangeTone as a row tone (none: no fill)
+
+  // The merged cells the K2's Results grid gives to the range lines (layout B, pdspec_blob.split_keys): a split kind's block.
+  function splitKeys(split) {
+    var keys = D.tables.CELLS.map(function (c) { return c[0]; }), out = {};
+    var pps = keys.indexOf("pps_monotonic"), avs = keys.indexOf("avs_monotonic"), obs = keys.indexOf("source_reset");
+    if (split && split.pps) keys.slice(pps, avs).forEach(function (k) { out[k] = true; });
+    if (split && split.avs) keys.slice(avs, obs).forEach(function (k) { out[k] = true; });
+    return out;
+  }
+
   function deepSpec(sp) {
-    var t = sp.tally, rows = [];
+    var t = sp.tally, rows = [], hidden = splitKeys(sp.split);
     var tone = t.fail ? "fail" : t.pass || t.unverified ? "pass" : "skip";
     rows.push(row("Result", sp.end === "done" ? (t.fail ? "failed" : "passed") : sp.end + (sp.why ? " (" + sp.why + ")" : ""), sp.end === "done" ? tone : "partial"));
     var counts = [t.pass + " passed", t.fail + " failed", t.skip + " skipped"];
@@ -1098,8 +1109,12 @@ var K2Card = (function () {
     if (t.pending) counts.push(t.pending + " not run");
     rows.push(row("Checks", counts.join(", ")));
     sp.cells.forEach(function (c) {
-      if (c.verdict !== "fail") return;
+      if (c.verdict !== "fail" || hidden[c.key]) return;
       rows.push(row(c.label, c.value_text + " worst, " + c.fails + (c.fails === 1 ? " fail" : " fails") + " at " + c.at_text, "fail"));
+    });
+    (sp.ranges || []).forEach(function (g) {   // each PPS / AVS range's word (format 13), then the checks it failed
+      var failed = g.cells.filter(function (c) { return c.verdict === "fail"; }).map(function (c) { return c.label; });
+      rows.push(row(g.kind.toUpperCase() + " PDO #" + g.pos, g.word + (failed.length ? ": " + failed.join(", ") + " failed" : ""), RANGE_TONE[g.tone] || ""));
     });
     var unv = sp.cells.filter(function (c) { return c.verdict === "unverified"; });
     if (unv.length) rows.push(row("Unverified", unv.map(function (c) { return c.label + " " + c.value_text; }).join(", ")));

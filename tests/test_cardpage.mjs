@@ -262,7 +262,7 @@ test("bad fragments say what is wrong", () => {
   flipped[20] ^= 1;
   assert.equal(code(BASE + "1c." + toB64url(flipped)), "bad-crc");
   const newer = payloadOf("fh22");
-  newer[33] = 13;   // one past format 12
+  newer[33] = 14;   // one past format 13
   assert.equal(code(BASE + "1c." + toB64url(recordOf(newer))), "newer-card");
 });
 
@@ -534,6 +534,23 @@ test("a link of a format 10 firmware keeps its own CRC and has no block", () => 
   const bad = Uint8Array.from(rec);
   bad[bad.length - 1] ^= 1;
   assert.throws(() => K2Card.parseLink(BASE + "2c." + toB64url(bad)), (e) => e.code === "bad-crc");
+});
+
+test("format 13: each PPS / AVS range's word is a row of the spec group; a split kind's merged failures move to its ranges", () => {
+  const hex = readFileSync(new URL("./fixtures/deep_form28.hex", import.meta.url), "utf8").trim();
+  const card = JSON.parse(JSON.stringify(K2Card.parseLink(deepLink).card));
+  card.deep = K2Deep.decode(Uint8Array.from(Buffer.from(hex, "hex")), []);
+  assert.deepEqual(card.deep.spec.split, {pps: true, avs: false});
+  const over = card.deep.spec.cells.find((c) => c.key === "pps_overshoot");
+  Object.assign(over, {verdict: "fail", value_text: "9.700 V", fails: 1, at_text: "APDO 5"});
+  const reset = card.deep.spec.cells.find((c) => c.key === "source_reset");
+  Object.assign(reset, {verdict: "fail", value_text: "1", fails: 1, at_text: "the source"});
+  const spec = K2Card.sections(card).find((x) => x.title === "Deep run details").groups.find((g) => g.title === "PD spec check");
+  const by = Object.fromEntries(spec.rows.map((r) => [r.label, r]));
+  assert.deepEqual([by["PPS PDO #5"].value, by["PPS PDO #5"].tone], ["shape: PPS overshoot failed", "fail"]);
+  assert.deepEqual([by["AVS PDO #7"].value, by["AVS PDO #7"].tone], ["spec", "pass"]);
+  assert.equal(by["PPS overshoot"], undefined);           // the PPS block split: its range row carries it
+  assert.equal(by["Source reset"].tone, "fail");           // the observer never splits
 });
 
 test("a Deep block this page cannot read leaves the card and says why", () => {

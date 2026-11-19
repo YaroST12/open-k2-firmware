@@ -391,6 +391,35 @@ test("the spec section is one wide cell per check, with rules above the family b
   assert.deepEqual(CtGrid.specLines({ end: "not run", cells: [] }), []);
 });
 
+// Layout B (src/ui/ui_charger_test.cpp, a finished Deep run with its spec stage): a range line reads "PPS | 5-21V 3.2A | shape", the kind as
+// its label and the range's spec word in a cell of its own, a rule above the block's first range line; a split kind's merged spec block
+// leaves the check lines (its range lines carry it). While running, or with no spec stage, the range chip keeps its kind word.
+test("layout B: each range line carries its spec word, and a split kind's merged block leaves the spec lines", () => {
+  const P = require("../tools/web/k2proto.js");
+  const fx = JSON.parse(readFileSync(path.join(root, "tests/fixtures/ct_spec_section.json"), "utf8"));
+  const steps = [S("pd3x-fixed", 5000, "pass", { pos: 1, pdo: 0x0001912C }), S("pd3x-fixed", 9000, "pass", { pos: 2, pdo: 0x0002D12C }),
+    S("pps", 5000, "pass", { pos: 5, pdo: 3248763456 }), S("pps", 21000, "pass", { pos: 5, pdo: 3248763456 }),
+    S("spr-avs", 15000, "pass", { pos: 6, pdo: 3248763456 }), S("spr-avs", 15000, "pass", { pos: 9, pdo: 3248763456 })];
+  const sp = P.decodeChargerSpecSection(Uint8Array.from(Buffer.from(fx.wire, "hex")));
+  sp.split = { pps: true, avs: false };
+  sp.ranges = [{ pos: 5, kind: "pps", tone: "fail", word: "shape", cells: [] }, { pos: 6, kind: "avs", tone: "caution", word: "timing", cells: [] },
+               { pos: 9, kind: "avs", tone: "pass", word: "spec", cells: [] }];
+  const got = lines(steps, { spec: sp });
+  assert.deepEqual(got.slice(0, 4), ["PD: 5V/3A:pass 9V/3A:pass", "-- PPS: 5-21V/3.2A:pass shape:fail", "AVS: 5-21V/3.2A:pass timing:partial",
+                                     "AVS: 5-21V/3.2A:pass spec:pass"]);
+  const checks = got.slice(4);
+  assert.equal(checks.length, 27 - 10);                                   // the PPS block (10 checks) left with the split
+  assert.ok(!checks.some((l) => /PPS mono|PPS lvl|PPS trk/.test(l)));
+  assert.ok(checks.some((l) => /^-- AVS mono:/.test(l)));
+  // a range with no spec cells of its own: "-", no fill
+  const none = lines(steps.slice(0, 4), { spec: Object.assign({}, sp, { ranges: [] }) });
+  assert.equal(none[1], "-- PPS: 5-21V/3.2A:pass -:none");
+  // running (live) or no spec stage: the plain chip
+  assert.equal(lines(steps.slice(0, 4), { spec: sp, live: true })[1], ": PPS 5-21V/3.2A:pass");
+  assert.equal(lines(steps.slice(0, 4), {})[1], ": PPS 5-21V/3.2A:pass");
+  assert.equal(lines(steps.slice(0, 4), { spec: { end: "not run", cells: [] } })[1], ": PPS 5-21V/3.2A:pass");
+});
+
 // ---- OEM levels by their watts: the golden vectors shared with the firmware and tools/oem_watts.py ----------------------
 test("OEM watts match tests/fixtures/oem_watts.txt", () => {
   let labels = 0, claims = 0;

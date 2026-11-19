@@ -374,6 +374,18 @@ test("charger spec section: the detail form decodes like the Python tool (limit,
   assert.ok(blank.cells.every((c) => c.limit_text === null));
 });
 
+test("charger spec section: summary lines name each range's word, and a split kind's merged checks move under its ranges", () => {
+  const sp = P.decodeChargerSpecSection(specWire);
+  Object.assign(sp, specFx.decoded_ranges);
+  sp.cells.find((c) => c.key === "pps_band").verdict = "fail";   // a merged PPS cell the split hides
+  const lines = P.specLines(sp);
+  const at = lines.findIndex((l) => /^  PPS range, PDO #5: /.test(l));
+  assert.ok(at > 0, lines.join("\n"));
+  assert.ok(lines.some((l) => /^  AVS range, PDO #9: /.test(l)));
+  assert.ok(lines.slice(at + 1).some((l) => /^    PPS in band: FAIL/.test(l)));
+  assert.ok(!lines.slice(0, at).some((l) => /PPS in band/.test(l)));
+});
+
 test("charger spec section: summary lines", () => {
   const lines = P.specLines(P.decodeChargerSpecSection(specWire));
   assert.match(lines[0], /^PD spec: 2 pass, 1 fail, 1 skip, 1 unverified, 22 not judged$/);
@@ -384,17 +396,49 @@ test("charger spec section: summary lines", () => {
   assert.ok(P.specLines(P.decodeChargerSpecSection(specWire, specDetail)).some((l) => /FAIL, worst 40\.0 ms, 3 over \(limit <= 25\.0 ms, 300 measured\)/.test(l)));
 });
 
-const specChunks = (runId, blob, detail) => (f) => {
-  const form = body(f)[0], data = form === 7 ? detail : blob;
+const specChunks = (runId, blob, detail, ranges) => (f) => {
+  const form = body(f)[0], data = form === 7 ? detail : form === 9 ? ranges : blob;
   if (!data) return [rsp(0x0B, f[3], 2, [])];   // BadLength: no such form (an older firmware)
+  if (form === 9) {   // the 16-bit offset form: run_id u32, total u16, off u16, n u8
+    const off = body(f)[1] | body(f)[2] << 8, n = Math.min(48, data.length - off);
+    return [rsp(0x0B, f[3], 0, [...le32(runId), data.length & 0xFF, data.length >> 8, off & 0xFF, off >> 8, n, ...data.subarray(off, off + n)])];
+  }
   const off = body(f)[1], n = Math.min(48, data.length - off);
   return [rsp(0x0B, f[3], 0, [...le32(runId), data.length, off, n, ...data.subarray(off, off + n)])];
 };
+const specRanges = Uint8Array.from(Buffer.from(specFx.ranges, "hex"));
+
+test("charger spec ranges: the slot tables are the firmware's own (spec_section.hpp kApdoPps / kApdoAvs)", () => {
+  const sec = readFileSync(path.join(here, "../include/k2/chargertest/spec_section.hpp"), "utf8");
+  const camel = (k) => k.split("_").map((w) => w[0].toUpperCase() + w.slice(1)).join("");
+  for (const [kind, name] of [["pps", "kApdoPps"], ["avs", "kApdoAvs"]]) {
+    const slots = new RegExp(name + "\\{([\\s\\S]*?)\\};").exec(sec)[1].match(/C::(\w+)/g).map((s) => s.slice(3));
+    assert.deepEqual(P.CT_SPEC_APDO[kind].map((k) => (k ? camel(k) : "Count")), slots, kind);
+  }
+  assert.equal(P.CT_SPEC_APDO_BYTES, 2 + 12 * P.CT_SPEC_APDO.pps.length);
+});
+
+test("charger spec ranges: the stream 0x0B [9] decodes like the Python tool", () => {
+  assert.deepEqual(P.decodeChargerSpecRanges(specRanges), specFx.decoded_ranges);
+  assert.deepEqual(P.decodeChargerSpecRanges(new Uint8Array(0)), { split: { pps: false, avs: false }, ranges: [] });
+  assert.throws(() => P.decodeChargerSpecRanges(specRanges.subarray(1)), /PD spec ranges/);
+});
+
+test("charger spec section: each range's cells ride on it (0x0B [9, off16]); firmware without the form leaves them out", async () => {
+  const { remote, sent } = rig(specChunks(0x01020304, specWire, specDetail, specRanges));
+  const s = await remote.chargerSpecSection(0x01020304);
+  assert.deepEqual(sent.map(body).filter((b) => b[0] === 9), [[9, 0, 0], [9, 48, 0], [9, 96, 0], [9, 144, 0], [9, 192, 0], [9, 240, 0]]);
+  assert.deepEqual(s.split, specFx.decoded_ranges.split);
+  assert.deepEqual(s.ranges, specFx.decoded_ranges.ranges);
+  const old = await rig(specChunks(0x01020304, specWire, specDetail)).remote.chargerSpecSection(0x01020304);
+  assert.equal(old.ranges, undefined);
+  assert.equal(old.split, undefined);
+});
 
 test("charger spec section: read in 48-byte chunks, 0x0B [6, off] then the detail form [7, off]", async () => {
   const { remote, sent } = rig(specChunks(0x01020304, specWire, specDetail));
   const s = await remote.chargerSpecSection(0x01020304);
-  assert.deepEqual(sent.map(body), [[6, 0], [6, 48], [6, 96], [7, 0], [7, 48], [7, 96], [7, 144], [7, 192]]);
+  assert.deepEqual(sent.map(body), [[6, 0], [6, 48], [6, 96], [7, 0], [7, 48], [7, 96], [7, 144], [7, 192], [9, 0, 0]]);
   assert.equal(s.cells.length, 27);
   assert.equal(s.cells[1].value_text, "40.0 ms");
   assert.equal(s.cells[1].count, 300);
@@ -405,7 +449,7 @@ test("charger spec section: read in 48-byte chunks, 0x0B [6, off] then the detai
 test("charger spec section: firmware without the detail form gives the cells alone", async () => {
   const { remote, sent } = rig(specChunks(0x01020304, specWire, null));
   const s = await remote.chargerSpecSection(0x01020304);
-  assert.deepEqual(sent.map(body), [[6, 0], [6, 48], [6, 96], [7, 0]]);
+  assert.deepEqual(sent.map(body), [[6, 0], [6, 48], [6, 96], [7, 0], [9, 0, 0]]);
   assert.equal(s.cells[1].value_text, "40.0 ms");
   assert.equal(s.detailed, false);
   assert.equal(s.cells[1].count, undefined);

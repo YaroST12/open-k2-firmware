@@ -3,14 +3,15 @@
 "use strict";
 // The extension block of a charger test card (include/k2/chargertest/report_card_deep.hpp): format 11 carries the Deep run's PD spec
 // summary, SVOOC ceiling stage and per-range error-band graphs of the PPS / AVS sweeps; format 12 adds the Xiaomi section at its
-// tail (the 0x2717 chain outcome and each mode it unlocked, before and after). The JavaScript twin of
+// tail (the 0x2717 chain outcome and each mode it unlocked, before and after); format 13 adds each PPS / AVS range's spec word and
+// slot verdicts after the spec cells. The JavaScript twin of
 // tools/report_card.py decode_deep(), key for key: tests/fixtures/deep_decoded.json is what the Python decoder gives for the
 // golden Deep link and tests/test_cardpage.mjs requires this file to give the same. The tables below are the firmware's own
 // (check list and labels from include/k2/pdspec/result.hpp and chargertest/spec_section.hpp, skip / stop / refusal texts from the
 // same headers); tests/test_k2_qr.py runs this file and compares them with what tools/pdspec_blob.py parses from the headers.
 // Logic only, no DOM: view.js draws plot(). Loaded by the page as a script (window.K2Deep, before card.js) and by Node.
 var K2Deep = (function () {
-  var MAX_BITS = 3638;        // report_card::deep::kMaxBits (3274 before the Xiaomi section)
+  var MAX_BITS = 3811;        // report_card::deep::kMaxBits (3638 before format 13's ranges, 3274 before the Xiaomi section)
   var MAX_RANGES = 4;
   var BUCKETS = 32;           // report_card::deep::kBuckets
   var NEVER = 99999999;       // pdspec::kNever: an event that never came
@@ -48,6 +49,16 @@ var K2Deep = (function () {
     ["avs_track", "AVS tracking", "mv", 1],
     ["source_reset", "Source reset", "count", 2]
   ];
+  // A range's slots (specsec::kApdoPps / kApdoAvs): [key, label], null = a slot that kind does not have.
+  var APDO = {
+    pps: [["pps_accuracy", "PPS accuracy"], ["pps_monotonic", "PPS monotonic"], ["pps_track", "PPS tracking"], ["pps_status", "PPS_Status"],
+      ["pps_band", "PPS in band"], ["pps_settle", "PPS settle"], ["pps_ps_rdy", "PPS PS_RDY"], ["accept_time", "Accept"],
+      ["pps_status_time", "PPS_Status t"], ["pps_overshoot", "PPS overshoot"], ["pps_transient", "PPS transient"]],
+    avs: [["avs_accuracy", "AVS accuracy"], ["avs_monotonic", "AVS monotonic"], ["avs_track", "AVS tracking"], null, ["avs_band", "AVS in band"],
+      null, ["avs_ps_rdy", "AVS PS_RDY"], ["accept_time", "Accept"], null, ["avs_overshoot", "AVS overshoot"], ["avs_transient", "AVS transient"]]
+  };
+  var RANGE_TONES = ["none", "pass", "caution", "fail"];   // specsec::RangeTone
+  var GROUPS = ["level", "timing", "shape"];               // specsec::Group
   var ENDS = ["not run","done","cancelled","fault","refused"];
   var VERDICTS = ["pending","pass","fail","skip","unverified"];
   var SKIPS = ["-","not offered","one fixed level","no PPS","no EPR","no EPR cable proof","capture busy","level refused","run stopped","not reached","K2 on the charger","no data","not selected","no AVS"];
@@ -142,6 +153,27 @@ var K2Deep = (function () {
 
   function nameOf(list, i) { return i >= 0 && i < list.length ? list[i] : "#" + i; }
 
+  // specsec::range_word: "spec" when all judged passed, "-" when nothing was judged, else the family of the worst failure.
+  function rangeWord(tone, group) {
+    var t = nameOf(RANGE_TONES, tone);
+    return t === "pass" ? "spec" : t === "none" ? "-" : nameOf(GROUPS, group);
+  }
+  // Format 13's ranges (report_card.py _decode_spec_ranges): the grid's split, then per range its APDO, kind, word and slot verdicts.
+  function decodeSpecRanges(r) {
+    var n = r.get(3), split = {pps: !!r.get(1), avs: !!r.get(1)}, ranges = [];
+    for (var i = 0; i < n; i++) {
+      var pos = r.get(4), avs = r.get(1), tone = r.get(2), group = r.get(2), kind = avs ? "avs" : "pps", cells = [];
+      APDO[kind].forEach(function (d) {
+        var vi = r.get(3);
+        if (!d) return;
+        if (vi >= VERDICTS.length) throw fail("Deep spec range verdict out of range");
+        cells.push({key: d[0], label: d[1], verdict: VERDICTS[vi]});
+      });
+      ranges.push({pos: pos, kind: kind, tone: nameOf(RANGE_TONES, tone), word: rangeWord(tone, group), cells: cells});
+    }
+    return {split: split, ranges: ranges};
+  }
+
   function psText(bits) {
     var s = PS_BITS.filter(function (p) { return bits & p[0]; }).map(function (p) { return p[1]; }).join(", ");
     return s || "clean";
@@ -185,6 +217,8 @@ var K2Deep = (function () {
     }
     if (hasSpec) {
       var send = r.get(3), swhy = r.get(6), unconfirmed = r.get(1), ncells = r.get(5);
+      var withRanges = ncells === SPEC_CELLS + 1;   // form 28 (format 13): each range's word follows the cells
+      if (withRanges) ncells--;
       if (ncells !== SPEC_CELLS || send >= ENDS.length) throw fail("Deep spec section does not match this decoder's check list");
       var endName = ENDS[send], cells = [];
       CELLS.forEach(function (d) {
@@ -216,6 +250,7 @@ var K2Deep = (function () {
       cells.forEach(function (c) { tally[c.verdict]++; });
       out.spec = {end: endName, why: endName === "cancelled" || endName === "fault" ? nameOf(STOPS, swhy) :
         endName === "refused" ? nameOf(STARTS, swhy) : null, unconfirmed: !!unconfirmed, tally: tally, cells: cells};
+      if (withRanges) { var sr = decodeSpecRanges(r); out.spec.split = sr.split; out.spec.ranges = sr.ranges; }
     }
     var graphs = [];
     for (i = 0; i < MAX_RANGES; i++) {
@@ -292,9 +327,10 @@ var K2Deep = (function () {
       worst_at_mv: g.lo_mv + Math.round((worst + 0.5) * per - 0.5) * g.step_mv};
   }
 
-  return {decode: decode, plot: plot, summary: summary, fmtValue: fmtValue, fmtAt: fmtAt, psText: psText, pdoText: pdoText, NEVER: NEVER,
+  return {decode: decode, plot: plot, rangeWord: rangeWord, summary: summary, fmtValue: fmtValue, fmtAt: fmtAt, psText: psText, pdoText: pdoText, NEVER: NEVER,
     tables: {CELLS: CELLS, ENDS: ENDS, VERDICTS: VERDICTS, SKIPS: SKIPS, STOPS: STOPS, STARTS: STARTS, STEPS: STEPS, PLAN: PLAN,
-      SVOOC_ENDS: SVOOC_ENDS, SVOOC_ABORTS: SVOOC_ABORTS, SVOOC_REFUSALS: SVOOC_REFUSALS, MAX_BITS: MAX_BITS, BUCKETS: BUCKETS, CT_VERDICTS: CT_VERDICTS}};
+      SVOOC_ENDS: SVOOC_ENDS, SVOOC_ABORTS: SVOOC_ABORTS, SVOOC_REFUSALS: SVOOC_REFUSALS, MAX_BITS: MAX_BITS, BUCKETS: BUCKETS, CT_VERDICTS: CT_VERDICTS,
+      APDO: APDO, RANGE_TONES: RANGE_TONES, GROUPS: GROUPS}};
 })();
 
 if (typeof module !== "undefined" && module.exports) module.exports = K2Deep;

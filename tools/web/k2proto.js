@@ -1762,6 +1762,41 @@ var K2Proto = (function () {
     return { count: n, limit: [lo, hi], limit_text: pdSpecLimit({ kind: d.kind, unit: d.unit, lo: lo, hi: hi }),
              at_text: pdSpecAt({ key: d.key, a: detail[o + 6], b: detail[o + 7] }, k) };
   }
+  // Each range's own cells (0x0B [9, off16], specsec::to_apdo_wire; tools/pdspec_blob.py decode_ranges): a count byte (n in bits 0..3, the
+  // grid's split in bits 4 PPS and 5 AVS), then per range its position, a kind/tone/group byte (avs bit 0, tone bits 1-2, group bits 3-4)
+  // and one 12-byte slot per check of its kind (code, fails, value, lo, hi, n u16, a, b). null in a slot table = a slot that kind lacks.
+  var CT_SPEC_APDO_REQ = 9, CT_SPEC_STREAM_HEADER = 9, CT_SPEC_APDO_CELL = 12;
+  var CT_SPEC_APDO = {
+    pps: ["pps_accuracy", "pps_monotonic", "pps_track", "pps_status", "pps_band", "pps_settle", "pps_ps_rdy", "accept_time", "pps_status_time",
+          "pps_overshoot", "pps_transient"],
+    avs: ["avs_accuracy", "avs_monotonic", "avs_track", null, "avs_band", null, "avs_ps_rdy", "accept_time", null, "avs_overshoot", "avs_transient"] };
+  var CT_SPEC_APDO_BYTES = 2 + CT_SPEC_APDO_CELL * CT_SPEC_APDO.pps.length;
+  var CT_SPEC_RANGE_TONES = ["none", "pass", "caution", "fail"], CT_SPEC_GROUPS = ["level", "timing", "shape"];   // specsec::RangeTone, Group
+  function decodeChargerSpecRange(r) {
+    if (r.length !== CT_SPEC_APDO_BYTES || !r[0] || r[0] > 15 || r[1] > 0x1F) throw new RangeError("not a PD spec range record");
+    var avs = r[1] & 1, tone = name(CT_SPEC_RANGE_TONES, (r[1] >> 1) & 3), kind = avs ? "avs" : "pps", cells = [];
+    CT_SPEC_APDO[kind].forEach(function (key, i) {
+      if (!key) return;
+      var d = PDSPEC_CHECKS.filter(function (c) { return c.key === key; })[0], o = 2 + CT_SPEC_APDO_CELL * i, code = r[o] & 7;
+      if (code >= PDSPEC_VERDICTS.length) throw new RangeError("PD spec range slot " + i + " has an unknown verdict");
+      var verdict = PDSPEC_VERDICTS[code], measured = verdict !== "pending" && verdict !== "skip", raw = s16(r, o + 2);
+      var value = !measured ? null : raw === CT_SPEC_UNSEEN ? PDSPEC_NEVER : raw * CT_SPEC_STEP[d.unit];
+      var cell = { key: key, label: d.label, unit: d.unit, verdict: verdict, fails: r[o + 1], value: value,
+                   value_text: value === null ? "-" : pdSpecValue(d.unit, value) };
+      var detail = Uint8Array.from(r.subarray(o + 4, o + 12)), x = ctSpecDetail(d, measured, detail, 0);
+      cell.count = x.count; cell.limit = x.limit; cell.limit_text = x.limit_text; cell.at_text = x.at_text;
+      cells.push(cell);
+    });
+    return { pos: r[0], kind: kind, tone: tone, word: tone === "pass" ? "spec" : tone === "none" ? "-" : name(CT_SPEC_GROUPS, (r[1] >> 3) & 3), cells: cells };
+  }
+  function decodeChargerSpecRanges(b) {
+    if (!b.length) return { split: { pps: false, avs: false }, ranges: [] };
+    var n = b[0] & 15;
+    if ((b[0] & 0xC0) || b.length !== 1 + n * CT_SPEC_APDO_BYTES) throw new RangeError("PD spec ranges are " + b.length + " bytes for " + n + " ranges");
+    var ranges = [];
+    for (var k = 0; k < n; k++) ranges.push(decodeChargerSpecRange(b.subarray(1 + k * CT_SPEC_APDO_BYTES, 1 + (k + 1) * CT_SPEC_APDO_BYTES)));
+    return { split: { pps: !!((b[0] >> 4) & 1), avs: !!((b[0] >> 5) & 1) }, ranges: ranges };
+  }
   function decodeChargerSpecSection(b, detail) {
     if (b.length !== CT_SPEC_WIRE) throw new FrameError("PD spec section is " + b.length + " bytes, expected " + CT_SPEC_WIRE);
     if (detail && detail.length !== CT_SPEC_DETAIL_WIRE) throw new FrameError("PD spec detail is " + detail.length + " bytes, expected " + CT_SPEC_DETAIL_WIRE);
@@ -1796,12 +1831,23 @@ var K2Proto = (function () {
     var tl = sp.tally, head = "PD spec: " + tl.pass + " pass, " + tl.fail + " fail, " + tl.skip + " skip" +
       (tl.unverified ? ", " + tl.unverified + " unverified" : "") + (tl.pending ? ", " + tl.pending + " not judged" : "") +
       (sp.end !== "done" ? " · " + sp.end + (sp.why ? " (" + sp.why + ")" : "") : "");
-    var out = [head], skips = {}, order = [];
-    sp.cells.forEach(function (c) {
+    var out = [head], skips = {}, order = [], hidden = {};
+    function cellLine(c, indent) {
       var kept = c.limit_text ? " (limit " + c.limit_text + ", " + c.count + " measured)" : "";   // the detail form, when the device kept it
-      if (c.verdict === "fail") out.push("  " + c.label + ": FAIL, worst " + c.value_text + ", " + c.fails + " over" + kept);
-      else if (c.verdict === "unverified") out.push("  " + c.label + ": unverified (a K2 figure, no spec limit), worst " + c.value_text + kept);
-      else if (c.verdict === "skip") { if (!skips[c.skip]) { skips[c.skip] = []; order.push(c.skip); } skips[c.skip].push(c.label); }
+      if (c.verdict === "fail") out.push(indent + c.label + ": FAIL, worst " + c.value_text + ", " + c.fails + " over" + kept);
+      else if (c.verdict === "unverified") out.push(indent + c.label + ": unverified (a K2 figure, no spec limit), worst " + c.value_text + kept);
+    }
+    // the merged blocks the K2 grid gave to the range lines (layout B, pdspec_blob.split_keys)
+    var pps = CT_SPEC_ORDER.indexOf("pps_monotonic"), avs = CT_SPEC_ORDER.indexOf("avs_monotonic"), obs = CT_SPEC_ORDER.indexOf("source_reset");
+    if (sp.split && sp.split.pps) CT_SPEC_ORDER.slice(pps, avs).forEach(function (k) { hidden[k] = true; });
+    if (sp.split && sp.split.avs) CT_SPEC_ORDER.slice(avs, obs).forEach(function (k) { hidden[k] = true; });
+    sp.cells.forEach(function (c) {
+      if (!hidden[c.key]) cellLine(c, "  ");
+      if (c.verdict === "skip") { if (!skips[c.skip]) { skips[c.skip] = []; order.push(c.skip); } skips[c.skip].push(c.label); }
+    });
+    (sp.ranges || []).forEach(function (g) {   // each PPS / AVS range's own word, then its failed or unverified checks
+      out.push("  " + g.kind.toUpperCase() + " range, PDO #" + g.pos + ": " + g.word);
+      g.cells.forEach(function (c) { cellLine(c, "    "); });
     });
     order.forEach(function (why) { out.push("  skipped, " + why + ": " + skips[why].join(", ")); });
     if (sp.unconfirmed) out.push("  WARNING: the end-of-run return to 5 V was not confirmed: unplug the charger");
@@ -1834,7 +1880,33 @@ var K2Proto = (function () {
     catch (e) {
       if (!(e instanceof RemoteError) || (e.status !== STATUS.BAD_LENGTH && e.status !== STATUS.BAD_ARG)) throw e;
     }
-    return decodeChargerSpecSection(blob, detail || undefined);
+    var sec = decodeChargerSpecSection(blob, detail || undefined);
+    // Each PPS / AVS range's own cells and word (0x0B [9, off16]) and the grid's split; firmware without the form (BadLength) or a
+    // stream this page cannot read leaves the merged section the whole story (k2_remote.read_charger_spec).
+    try {
+      var rg = decodeChargerSpecRanges((await this.chargerSpecStream(runId, CT_SPEC_APDO_REQ)) || new Uint8Array(0));
+      if (rg.ranges.length) { sec.ranges = rg.ranges; sec.split = rg.split; }
+    } catch (e) {
+      if (e instanceof RemoteError ? e.status !== STATUS.BAD_LENGTH && e.status !== STATUS.BAD_ARG : !(e instanceof RangeError)) throw e;
+    }
+    return sec;
+  };
+  // 0x0B [form, off16] until the stream is whole (form 9: each range's cells; a 9-byte header run_id u32, total u16, off u16, n u8):
+  // null when the run has none; FrameError when the run moved under the read.
+  K2Remote.prototype.chargerSpecStream = async function (runId, form) {
+    var blob = [], total = null;
+    while (total === null || blob.length < total) {
+      var p = (await this.link.call(CMD.CHARGER_TEST, [form, blob.length & 0xFF, blob.length >> 8])).payload;
+      need(p, CT_SPEC_STREAM_HEADER, "charger-test spec stream");
+      var v = dv(p), n = p[8];
+      if (p.length !== CT_SPEC_STREAM_HEADER + n) throw new FrameError("charger-test spec stream reply length does not match its count");
+      if (v.getUint32(0, true) !== runId) throw new FrameError("charger-test spec belongs to another run; retry results");
+      if (total === null) { total = v.getUint16(4, true); if (!total) return null; }
+      else if (v.getUint16(4, true) !== total) throw new FrameError("charger-test spec changed during the read; retry results");
+      if (v.getUint16(6, true) !== blob.length || !n) throw new FrameError("charger-test spec stream chunk did not advance");
+      for (var i = 0; i < n; i++) blob.push(p[CT_SPEC_STREAM_HEADER + i]);
+    }
+    return Uint8Array.from(blob);
   };
 
   K2Remote.prototype.chargerTest = async function (mode) {
@@ -2289,7 +2361,8 @@ var K2Proto = (function () {
     HANDBACK_VERDICTS: HANDBACK_VERDICTS, handbackText: handbackText, APPLE_REFUSALS: APPLE_REFUSALS, CARD_NAME_RE: CARD_NAME_RE,
     decodePdSpecStatus: decodePdSpecStatus, decodePdSpecBlob: decodePdSpecBlob, pdSpecValue: pdSpecValue, pdSpecLimit: pdSpecLimit, pdSpecAt: pdSpecAt,
     PDSPEC_CHECKS: PDSPEC_CHECKS, PDSPEC_SKIPS: PDSPEC_SKIPS, PDSPEC_CAPS_NOTES: PDSPEC_CAPS_NOTES, PDSPEC_STEPS: PDSPEC_STEPS, pdSpecPsText: pdSpecPsText, PDSPEC_STOPS: PDSPEC_STOPS, PDSPEC_STARTS: PDSPEC_STARTS, PDSPEC_FAMILIES: PDSPEC_FAMILIES, PDSPEC_STATES: PDSPEC_STATES,
-    decodeChargerSpecSection: decodeChargerSpecSection, CT_SPEC_ORDER: CT_SPEC_ORDER, CT_SPEC_SHORT: CT_SPEC_SHORT, CT_SPEC_WIRE: CT_SPEC_WIRE, CT_SPEC_DETAIL_WIRE: CT_SPEC_DETAIL_WIRE, specLines: specLines
+    decodeChargerSpecSection: decodeChargerSpecSection, decodeChargerSpecRanges: decodeChargerSpecRanges, CT_SPEC_APDO: CT_SPEC_APDO,
+    CT_SPEC_APDO_BYTES: CT_SPEC_APDO_BYTES, CT_SPEC_ORDER: CT_SPEC_ORDER, CT_SPEC_SHORT: CT_SPEC_SHORT, CT_SPEC_WIRE: CT_SPEC_WIRE, CT_SPEC_DETAIL_WIRE: CT_SPEC_DETAIL_WIRE, specLines: specLines
   };
 })();
 if (typeof module !== "undefined" && module.exports) module.exports = K2Proto;
