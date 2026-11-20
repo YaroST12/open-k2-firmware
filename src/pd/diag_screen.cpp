@@ -171,7 +171,7 @@ void note(const Report& r, const Finding& f, Out& o) {
     case Code::VbusLow:   // "18.45V on 20V -8% at 0.89A"
         o.volts2(f.a); o.s(" on "); o.volts(f.b);
         if (f.b > 0) { o.s(" -"); o.u((un(f.b - f.a) * 100 + un(f.b) / 2) / un(f.b)); o.c('%'); }
-        o.s(" @"); o.amps(f.c);
+        o.s(o.n + 10 <= kNoteChars ? " at " : " "); o.amps(f.c);   // "at" only while the widest current still fits
         break;
     case Code::VbusHigh: o.volts2(f.a); o.s(" on "); o.volts(f.b); o.s(" contract"); break;
     case Code::VbusLost:   // the source cut out: CC stayed attached
@@ -190,7 +190,7 @@ void note(const Report& r, const Finding& f, Out& o) {
         if (f.a == 1) {   // "PR_Swap rejected; 20V source" / "PR_Swap unanswered; stays sink"
             const unsigned t = un(f.c);
             o.s("PR_Swap ");
-            o.s(t == kReject ? "rejected" : t == kWait ? "Wait" : t == kNotSupported ? "unsupported" : "ignored");
+            o.s(t == kReject ? "rejected" : t == kWait ? "Wait" : t == kNotSupported ? "unsupported" : "no reply");
             if (f.b) { o.s("; src "); o.milli(f.d ? f.d : 5000, 0); o.s("V"); }
             else o.s("; stays sink");
         } else {

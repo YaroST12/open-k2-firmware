@@ -120,10 +120,8 @@ K2_HOT void Ui::pump_paint(uint32_t now_ms) {
     const bool body_painted = !bg || bg->spent != toast_px0;
     const bool toast_dirty = !ctx_.toast.drawn || (toast_was_drawn && body_painted);
     if (bg && bg->more) {
-        if (toast_dirty && ctx_.toast.active(now_ms) && !fctrig::paint_critical()) {
-            ctx_.toast.drawn = false;
-            draw_toast_overlay(now_ms);
-        }
+        // Body slices may cover the pill: mark it for one redraw after the last slice, not after each one.
+        if (toast_was_drawn && body_painted) ctx_.toast.drawn = false;
         paint_pending_ = true;
         return;
     }

@@ -34,7 +34,7 @@ int main() {
     In in;
     CHECK(row(in) == "Waiting for stable 5V");
     in.rd_on = true;
-    CHECK(row(in) == "Rd on, waiting charger");
+    CHECK(row(in) == "Rd on, charger pending");
     in.wait_over = true;
     CHECK(row(in) == "Waiting for stable 5V");
     in.behind_cable = true;
