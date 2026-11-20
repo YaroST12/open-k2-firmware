@@ -165,9 +165,11 @@ void CableIdentityList::fill_spec(const Row& r, kit::RowSpec& out) {
     out.data = !r.tail.empty();   // a clone's name comes from the library; the built-in names are literals
     out.col2 = r.rating;
     if (!st.tag.empty() && !r.rating.empty()) {
-        out.col2 = {};
+        // A pill takes the tail's room: the rating column stays only when it fits beside the pill (copy is never cut).
+        const int room = kit::kTailX - pill_width(text_cells(st.tag)) - kit::kTailGap - kit::kCol2X;
+        if (text_width(kSmall, r.rating) > room) out.col2 = {};
     }
-    out.tail_yields = st.tag.empty() && text_width(kSmall, r.text.view()) > 150;
+    out.tail_yields = true;     // the name is what the user reads: a long one takes the room of the "saved" word or the pill
     if (!st.tag.empty()) {        // a pill (ARMED / NEXT / CURR) wins over the dim word
         out.tail = st.tag;
         out.tail_color = st.tag_color;

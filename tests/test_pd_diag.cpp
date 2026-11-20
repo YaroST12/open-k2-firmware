@@ -1394,7 +1394,7 @@ void test_screen_case1() {
     CHECK_COND(quiet);
     CHECK_COND(s.rows.back().lanes);
     CHECK_STR(s.rows.back().label.data(), "Data lanes");
-    CHECK_STR(s.rows.back().note.data(), "pass through; PD: DP alt mode");
+    CHECK_STR(s.rows.back().note.data(), "unobserved; PD: DP alt mode");
     char v[40];
     screen::verdict(run.r, v);
     CHECK_STR(v, "Link OK, power short");

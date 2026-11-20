@@ -81,7 +81,7 @@ static void test_page_case1() {
     diag::screen::Row r0;
     CHECK(diag::screen::row(case1, 0, r0));
     CHECK_EQ(int(r0.sev), int(diag::Sev::Fail));
-    CHECK(count_px(kError) > 3000);                  // the fact line, 224 x 18, solid red
+    CHECK(count_px(kErrorT) > 1000);                 // the verdict pill (it replaced the solid footer band): error tint
     CHECK(count_px(kError) > 100);                   // the fail cell
     // PLUS walks down to the last row and stops there; MINUS walks back.
     for (unsigned i = 0; i < rows + 3; i++) ui.on_button(Button::Plus, ButtonEvent::Short, 1300 + i);

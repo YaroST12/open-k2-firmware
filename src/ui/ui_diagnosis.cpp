@@ -26,6 +26,13 @@ constexpr const char *kWaitTexts[] = {kWaitText};
 constexpr const char *kWaitNotes[] = {kWaitNote};
 static_assert(all_fit(kWaitTexts, kSmallAdvPx, kit::kTailX - kit::kTextX), "the waiting row runs into the tail");
 static_assert(all_fit(kWaitNotes, kLabelAdv, kit::kNoteMaxPx), "the waiting note is wider than the note box");
+// The screen form's budgets (pd::diag::screen, host-tested with worst-case numbers) fit this list's geometry (208 px canvas).
+// The tail is a hint (tail_yields): a long label keeps the row, the time gives way.
+static_assert(screen::kLabelChars * kSmallAdvPx <= static_cast<unsigned>(kit::kTailX - kit::kTextX), "a diagnosis label runs into the tail");
+static_assert(screen::kNoteChars * kLabelAdv <= static_cast<unsigned>(kit::kNoteMaxPx), "a diagnosis note is wider than the note box");
+static_assert(screen::kVerdictChars * kLabelAdv + 16 <= static_cast<unsigned>(kTwinContentW - 8), "the diagnosis verdict is wider than the toast pill");
+static_assert(DiagnosisPage::kStampWordX + static_cast<int>(screen::kLabelChars) * kSmallAdvPx <= kTwinContentW - 2, "the stamp's word runs off the page");
+static_assert(DiagnosisPage::kStampWordX + static_cast<int>(screen::kNoteChars * kLabelAdv) <= kTwinContentW - 2, "the stamp's sub-line runs off the page");
 static_assert(DiagnosisPage::kStampSubY + 12 <= DiagnosisPage::kStampH, "the stamp's sub-line leaves the stamp");
 
 constexpr const char kBlackBox[] = "Black Box";
@@ -71,8 +78,11 @@ void DiagnosisPage::paint_stamp() {
         const int16_t y = kit::kBelowBar;
         constexpr int16_t kCellX = 4, kCell = 20, kCellDy = (kStampH - kCell) / 2;
         const kit::Box cell{kCellX, static_cast<int16_t>(y + kCellDy), kCell, kCell};
-        const int16_t word_dy = sub.empty() ? (kStampH - kMid.height) / 2 : kStampWordDy;
-        const kit::TextRun runs[2] = {{kStampWordX, static_cast<int16_t>(y + word_dy), &kMid, word, ink},
+        // The word is font 24 when it fits the 208 px page, else font 16 (the longest labels, 15-16 characters).
+        const bool big = static_cast<int>(word.size()) * 12 <= c.w - kStampWordX - 2;
+        const Font &wf = big ? kMid : kSmall;
+        const int16_t word_dy = sub.empty() ? (kStampH - wf.height) / 2 : big ? kStampWordDy : kStampWordDy + 4;
+        const kit::TextRun runs[2] = {{kStampWordX, static_cast<int16_t>(y + word_dy), &wf, word, ink},
                                       {kStampWordX, static_cast<int16_t>(y + kStampSubY), &kLabelFont, sub, ink}};
         // the ground left of the word's run: the band beside and around the glyph cell
         kit::fill_except(c, {0, y, kStampWordX, kStampH}, &cell, 1, fill);
@@ -172,6 +182,7 @@ void DiagnosisPage::row_fn(void *self, int index, bool focused, kit::RowSpec &ou
     out.text = std::string_view(w.label.data());
     out.tail = std::string_view(w.tail.data());
     out.tail_color = kDim;
+    out.tail_yields = true;
     if (focused) out.note = std::string_view(w.note.data());
 }
 

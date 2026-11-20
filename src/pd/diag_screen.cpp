@@ -132,7 +132,7 @@ void note(const Report& r, const Finding& f, Out& o) {
         else { o.s(", "); o.u(un(f.c) & 0xFF); o.s("% of time"); }
         break;
     }
-    case Code::Pinned: o.s(">=95% of "); o.amps(f.a); o.s(", "); o.u(un(f.b)); o.s("% of "); o.dur(un(f.c)); break;
+    case Code::Pinned: o.amps(f.a); o.s(" pinned, "); o.u(un(f.b)); o.s("% of "); o.dur(un(f.c)); break;
     case Code::Draw:
         if (f.a) { o.s("on "); o.volts(f.a); o.amps(f.b); }
         else { o.s("at "); o.volts(r.vbus_mv); }
@@ -143,7 +143,7 @@ void note(const Report& r, const Finding& f, Out& o) {
         if (f.c > 1) { o.s(", "); o.u(un(f.c)); o.c('x'); }
         o.s(f.d ? ", no PD" : ", with PD");
         break;
-    case Code::FiveVoltOnly: o.s("offer to "); o.volts(f.a); o.s(", device to "); o.volts(f.b); break;
+    case Code::FiveVoltOnly: o.s("offer "); o.volts(f.a); o.s(", device "); o.volts(f.b); break;
     case Code::ContractUnseen:
         if (f.b) { o.s("VBUS "); o.volts(f.a); o.s(" when the K2 saw it"); }
         else o.s("no VBUS reading");
@@ -171,7 +171,7 @@ void note(const Report& r, const Finding& f, Out& o) {
     case Code::VbusLow:   // "18.45V on 20V -8% at 0.89A"
         o.volts2(f.a); o.s(" on "); o.volts(f.b);
         if (f.b > 0) { o.s(" -"); o.u((un(f.b - f.a) * 100 + un(f.b) / 2) / un(f.b)); o.c('%'); }
-        o.s(" at "); o.amps(f.c);
+        o.s(" @"); o.amps(f.c);
         break;
     case Code::VbusHigh: o.volts2(f.a); o.s(" on "); o.volts(f.b); o.s(" contract"); break;
     case Code::VbusLost:   // the source cut out: CC stayed attached
@@ -180,7 +180,7 @@ void note(const Report& r, const Finding& f, Out& o) {
         break;
     case Code::InputCuts: o.s("0mA in "); o.u(un(f.a)); o.s(" of "); o.u(un(f.b)); o.s(" windows"); break;
     case Code::OverSustained:   // "3.89A on 3.25A, 83% of 20s"
-        o.amps(f.a); o.s(" on "); o.amps(f.b); o.s(", "); o.u(un(f.c) >> 16); o.s("% of "); o.dur(un(f.d));
+        o.amps(f.a); o.s(" on "); o.amps(f.b); o.s(", "); o.u(un(f.c) >> 16); o.s(o.n + 10 <= kNoteChars ? "% of " : "% "); o.dur(un(f.d));
         break;
     case Code::NoGoodCrc: o.u(un(f.a)); o.s(" SOP frames unacknowledged"); break;
     case Code::Retries: o.u(un(f.a)); o.s(" frames sent again"); break;
@@ -190,24 +190,24 @@ void note(const Report& r, const Finding& f, Out& o) {
         if (f.a == 1) {   // "PR_Swap rejected; 20V source" / "PR_Swap unanswered; stays sink"
             const unsigned t = un(f.c);
             o.s("PR_Swap ");
-            o.s(t == kReject ? "rejected" : t == kWait ? "Wait" : t == kNotSupported ? "unsupported" : "unanswered");
-            if (f.b) { o.s("; "); o.milli(f.d ? f.d : 5000, 0); o.s("V source"); }
+            o.s(t == kReject ? "rejected" : t == kWait ? "Wait" : t == kNotSupported ? "unsupported" : "ignored");
+            if (f.b) { o.s("; src "); o.milli(f.d ? f.d : 5000, 0); o.s("V"); }
             else o.s("; stays sink");
         } else {
             o.s(f.a == 2 ? "DR_Swap" : f.a == 4 ? "VCONN_Swap" : "FR_Swap"); o.s(" not accepted");
         }
         break;
-    case Code::ModeNak: o.s(f.b ? "the cable plug NAKed Enter_Mode" : "Enter_Mode answered NAK"); break;
+    case Code::ModeNak: o.s(f.b ? "cable plug NAKed Enter_Mode" : "Enter_Mode answered NAK"); break;
     case Code::EnterUsbRefused: o.s("not accepted by the other end"); break;
     case Code::EprFailed: o.s("Enter_Failed, reason "); o.u(un(f.a)); break;
-    case Code::CableCap: o.s("e-marker 3A, device asks "); o.amps(f.a); break;
+    case Code::CableCap: o.s("e-marker 3A, wants "); o.amps(f.a); break;
     case Code::VdmLoop: {   // "Discover_SVIDs 5x, ACK" (the answer only when it fits)
         o.s(vdm_cmd(un(f.a))); o.c(' '); o.u(un(f.b)); o.c('x');
         const char* a = vdm_answer(un(f.c));
         if (o.n + 2 + std::strlen(a) <= kNoteChars) { o.s(", "); o.s(a); }
         break;
     }
-    case Code::CableSilent: o.s("Discover_Identity "); o.u(un(f.a)); o.s("x, no chip"); break;
+    case Code::CableSilent: o.s("Discover_Identity "); o.u(un(f.a)); o.s("x, no ID"); break;
     }
 }
 
@@ -216,9 +216,9 @@ unsigned healthy_count(const Report& r) {
     return unsigned(r.quiet_contract && r.quiet_link) + unsigned(r.quiet_quality && r.band_checked) + unsigned(r.quiet_roles);
 }
 
-void lanes_note(const Report& r, Out& o) {   // "pass through; PD: USB4 TBT DP D"
+void lanes_note(const Report& r, Out& o) {   // "unobserved; PD: USB4 TBT DP D"
     const auto& l = r.lanes;
-    o.s("pass through; PD: ");
+    o.s("unobserved; PD: ");
     bool any = false;
     auto sep = [&] { if (any) o.c(' '); any = true; };
     if (l.eusb) { sep(); o.s(l.usb_mode == 2 ? "USB4" : l.usb_mode == 1 ? "USB3" : "USB2"); }

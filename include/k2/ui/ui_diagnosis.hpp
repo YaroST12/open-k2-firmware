@@ -32,7 +32,7 @@ public:
     void as_place();
     bool place() const { return place_; }
     // The stamp: y22..69, the verdict's fill (kSurface when it has none), its 12 px glyph in a 20 px cell at x4 and the word
-    // (screen::word, the Home row-1 word, <= 16 chars) in font 24 from x30 to x222. When the word is the top finding's label
+    // (screen::word, the Home row-1 word, <= 16 chars) in font 24 from x30 (font 16 when it would pass x206). When the word is the top finding's label
     // (screen::names_top_finding) the list does not repeat that finding: its evidence note is the stamp's sub-line (font 12,
     // kStampSubY under the stamp's top, from x30) and the word sits at the top; else the word is centred. The list starts
     // 2 px under the stamp.
