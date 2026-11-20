@@ -11,6 +11,9 @@
 // on read (a stored Night or Paper loads as Classic) and written 0. Bits 6..7: Settings > Test level, the charger test's
 // default level (charger_test::Level: 0 Medium, the default, 1 Light, 2 Deep; 3 reads Medium); older firmware reads only
 // bits 0..3 (and 4..5) of the byte, so the file reads both ways.
+// Optional 9th byte: Settings > Long Back, the ring position long Back jumps to (ring::Pos, 0 Home = the default). Written
+// only when it is not 0, so the default keeps the 8-byte file older firmware wrote; a value past the ring reads Home. Older
+// firmware wants exactly 8 bytes: a file with a chosen target is a default file to it.
 // Orientation byte (the last byte, written 0 by older firmware and never checked by its decode, so the file reads
 // both ways): bit0..1 manual rotation 0..3 (x 90 deg), bit2 manual (0 = automatic, the default), bit3 rotate
 // buttons (Settings > Rotate buttons, default off), bit4 wake sleeping port (Settings > Wake sleeping port, default
@@ -22,10 +25,13 @@
 // littlefs; stored() imports it once.
 #pragma once
 #include <array>
+#include <cstddef>
 #include <cstdint>
+#include <span>
 
 #include "k2/core/fs.hpp"
 #include "k2/ui/smoothing.hpp"
+#include "k2/ui/ui_ring.hpp"
 
 namespace k2::uiprefs {
 
@@ -43,6 +49,7 @@ struct Prefs {
     bool idle_wake = false;            // Settings > Wake sleeping port: an idle K2 holds its Rd on a standby-signature line (off = no Rd at idle)
     std::uint8_t home_hero = 0;        // Home's hero quantity (home::qty_from): 0 W, 1 V, 2 A
     std::uint8_t ct_level = 0;         // Settings > Test level: the charger test's default level (charger_test::Level; 0 Medium)
+    std::uint8_t long_back = 0;        // Settings > Long Back: the ring::Pos long Back jumps to (0 Home)
     bool operator==(const Prefs&) const = default;
 };
 
@@ -59,26 +66,36 @@ constexpr std::array<std::uint8_t, 8> encode(Prefs p) {
     return {kMagic[0], kMagic[1], kMagic[2], kMagic[3], f, static_cast<std::uint8_t>(~f), s, o};
 }
 
-constexpr Prefs decode(const std::array<std::uint8_t, 8>& r) {
+// The record with its optional 9th byte; record_len says how much of it is written.
+constexpr std::array<std::uint8_t, 9> encode_ext(Prefs p) {
+    const auto r = encode(p);
+    return {r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], p.long_back < ring::kCount ? p.long_back : std::uint8_t{0}};
+}
+constexpr std::size_t record_len(Prefs p) { return p.long_back != 0 && p.long_back < ring::kCount ? 9 : 8; }
+
+// 8 bytes (the record) or 9 (with the ring target); any other length is no record.
+constexpr Prefs decode(std::span<const std::uint8_t> r) {
+    if (r.size() != 8 && r.size() != 9) return {};
     for (std::size_t i = 0; i < kMagic.size(); i++) if (r[i] != kMagic[i]) return {};
     if (static_cast<std::uint8_t>(r[4] ^ r[5]) != 0xFF || (r[4] & ~3u)) return {};
     const unsigned preset = r[6] & 0x0Fu;   // bits 4..5: the retired theme, ignored
     const smoothing::Preset sm = preset == 0 ? smoothing::kDefault : smoothing::preset_from_index(preset - 1u);
     return {(r[4] & 1) != 0, (r[4] & 2) == 0, sm, (r[7] & 4) != 0, static_cast<std::uint8_t>(r[7] & 3), (r[7] & 8) != 0, (r[7] & 16) != 0,
             static_cast<std::uint8_t>(((r[7] >> 5) & 3) == 3 ? 0 : (r[7] >> 5) & 3),
-            static_cast<std::uint8_t>((r[6] >> 6) == 3 ? 0 : r[6] >> 6)};
+            static_cast<std::uint8_t>((r[6] >> 6) == 3 ? 0 : r[6] >> 6),
+            static_cast<std::uint8_t>(r.size() == 9 && r[8] < ring::kCount ? r[8] : 0)};
 }
 
 inline Prefs load(fs::Fs& f) {
-    std::array<std::uint8_t, 8> r{};
+    std::array<std::uint8_t, 9> r{};
     std::size_t n = 0;
-    if (f.read_file(kPath, r, n) != fs::Err::Ok || n != r.size()) return {};
-    return decode(r);
+    if (f.read_file(kPath, r, n) != fs::Err::Ok) return {};
+    return decode(std::span<const std::uint8_t>(r.data(), n));
 }
 
 inline bool save(fs::Fs& f, Prefs p) {
-    const auto r = encode(p);
-    return f.write_file(kPath, r) == fs::Err::Ok;
+    const auto r = encode_ext(p);
+    return f.write_file(kPath, std::span<const std::uint8_t>(r.data(), record_len(p))) == fs::Err::Ok;
 }
 
 // Firmware side (src/ui/uiprefs.cpp, stubbed in the host UI tests).

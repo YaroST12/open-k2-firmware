@@ -213,6 +213,43 @@ void test_ct_level_bits() {
     CHECK_EQ(uiprefs::save(v.f, Prefs{.ct_level = 2}) == true, 1);
     CHECK_EQ(uiprefs::load(v.f).ct_level, 2);
 }
+// Settings > Long Back: the ring position long Back jumps to. An optional 9th byte, written only when it is not Home (0), so the
+// default keeps the 8-byte file older firmware wrote; a 9-byte file decodes through the same call, a value past the ring is Home.
+void test_long_back_byte() {
+    using uiprefs::Prefs;
+    CHECK_EQ(Prefs{}.long_back, 0);
+    CHECK_EQ(uiprefs::record_len(Prefs{}), 8u);                       // Home adds nothing to the file
+    CHECK_EQ(uiprefs::record_len(Prefs{.long_back = 5}), 9u);
+    const auto r = uiprefs::encode_ext(Prefs{.qc_after_pd = true, .long_back = 5});
+    const std::array<std::uint8_t, 9> want{'K', '2', 'U', 'P', 1, 0xFE, 0, 0, 5};
+    CHECK_EQ(r == want, 1);
+    CHECK_EQ(uiprefs::decode(r).long_back, 5);
+    CHECK_EQ(uiprefs::decode(r).qc_after_pd, 1);
+    // an old 8-byte record has no ring target
+    const std::array<std::uint8_t, 8> old{'K', '2', 'U', 'P', 1, 0xFE, 0, 0};
+    CHECK_EQ(uiprefs::decode(old).long_back, 0);
+    // a value past the last ring position reads as Home; every real position survives
+    std::array<std::uint8_t, 9> odd = want; odd[8] = 11;
+    CHECK_EQ(uiprefs::decode(odd).long_back, 0);
+    odd[8] = 200;
+    CHECK_EQ(uiprefs::decode(odd).long_back, 0);
+    for (std::uint8_t p = 0; p < 11; p++) {
+        const Prefs in{.screenshot = false, .rotation_manual = true, .rotation = 1, .home_hero = 2, .ct_level = 1, .long_back = p};
+        CHECK_EQ(uiprefs::decode(uiprefs::encode_ext(in)) == in, 1);
+    }
+    // any other length is no record
+    CHECK_EQ(uiprefs::decode(std::span<const std::uint8_t>(want.data(), 7)) == Prefs{}, 1);
+    // survives the file system, and a smaller record replaces a larger one
+    Vol v;
+    CHECK_EQ(uiprefs::save(v.f, Prefs{.long_back = 9}) == true, 1);
+    CHECK_EQ(uiprefs::load(v.f).long_back, 9);
+    CHECK_EQ(uiprefs::save(v.f, Prefs{.home_hero = 1}) == true, 1);
+    CHECK_EQ(uiprefs::load(v.f).long_back, 0);
+    CHECK_EQ(uiprefs::load(v.f).home_hero, 1);
+    // a legacy 8-byte file loads as before
+    CHECK_EQ(v.f.write_file(uiprefs::kPath, std::span<const std::uint8_t>(old)) == fs::Err::Ok, 1);
+    CHECK_EQ(uiprefs::load(v.f).qc_after_pd, 1);
+}
 void test_legacy_page_is_outside_the_volume() {
     CHECK_EQ(flash::store_sector_allowed(uiprefs::kLegacyAddr), 0);   // no static grant: erasable only with our signature on it
     CHECK_EQ(flash::legacy_candidate(uiprefs::kLegacyAddr), 1);
@@ -232,6 +269,7 @@ int main() {
     test_home_hero_bits();
     test_retired_theme_bits();
     test_ct_level_bits();
+    test_long_back_byte();
     test_legacy_page_is_outside_the_volume();
     return test_report("test_uiprefs");
 }

@@ -2131,6 +2131,7 @@ enum class SettingRow : uint8_t {
     Smoothing,
     IdleWake,
     TestLevel,
+    LongBack,
     Display,
     SystemState,
     Memory,
@@ -2224,13 +2225,13 @@ void SettingsPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
 #if K2_SCREENSHOT
         "Screenshot",
 #endif
-        "Smoothing", "Wake port", "Test level", "Display", "System state", "Memory", "Boot info"};
+        "Smoothing", "Wake port", "Test level", "Long Back", "Display", "System state", "Memory", "Boot info"};
     static constexpr Icon kIcons[kSettingsRows] = {
         Icon::Usb, Icon::Rotate, Icon::Keys,
 #if K2_SCREENSHOT
         Icon::Camera,
 #endif
-        Icon::Wave, Icon::Plug, Icon::Bolt, Icon::Meter, Icon::Chip, Icon::Chip, Icon::Report};
+        Icon::Wave, Icon::Plug, Icon::Bolt, Icon::Clock, Icon::Meter, Icon::Chip, Icon::Chip, Icon::Report};
     static constexpr const char *kPresets[smoothing::kPresetCount] = {"Off", "Low", "Medium", "High"};
     static constexpr const char *kPresetNotes[smoothing::kPresetCount] = {"Raw readings", "Light calming", "Balanced", "Steady, slower"};
     // charger_test::Level order (Medium 0, Light 1, Deep 2): the charger test's default level and what it runs.
@@ -2286,6 +2287,10 @@ void SettingsPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
         out.note = kLevelNotes[l];
         break;
     }
+    case SettingRow::LongBack:   // the ring view's long Back target (ring::view_key)
+        out.tail = ring::name(ring::sanitize_target(self->ctx_.keep.long_back));
+        out.note = "Where Hold Back jumps";
+        break;
     case SettingRow::Display:
         out.tail = {self->display_tail_, uidisp::format_summary(self->display_tail_, idle_hw::config())};
         out.note = "Brightness, dim, screen off";
@@ -2349,6 +2354,10 @@ bool SettingsPage::on_event(Event e) {
             update(ctx_.now);
             break;
         }
+        case SettingRow::LongBack:   // Home -> Lines -> ... -> K2 -> Home; remembered
+            ctx_.ui->set_long_back(static_cast<uint8_t>(ring::next(ring::sanitize_target(ctx_.keep.long_back))));
+            update(ctx_.now);
+            break;
         case SettingRow::RotateButtons:
             ctx_.ui->set_rotate_buttons(!ctx_.ui->rotate_buttons());
             update(ctx_.now);
@@ -2389,7 +2398,7 @@ bool SettingsPage::on_event(Event e) {
 Strip SettingsPage::labels() const {
     const auto row = static_cast<SettingRow>(sel_);
     const bool opens = row < SettingRow::RotateButtons || row >= SettingRow::Display;
-    const bool cycles = row == SettingRow::Smoothing || row == SettingRow::TestLevel;
+    const bool cycles = row == SettingRow::Smoothing || row == SettingRow::TestLevel || row == SettingRow::LongBack;
     return setting_labels(base_labels(), opens ? sl::Open : cycles ? sl::Cycle : sl::Toggle);
 }
 

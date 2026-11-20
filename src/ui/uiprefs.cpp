@@ -36,10 +36,10 @@ Prefs stored() {
 
 bool set(Prefs p) {
     const bool ok = save(fs::instance(), p);
-    K2LOG("[PREFS] qc_after_pd=%d screenshot=%d smoothing=%s rotation=%s%u buttons=%d wake=%d hero=%u level=%u (%s)\n",
+    K2LOG("[PREFS] qc_after_pd=%d screenshot=%d smoothing=%s rotation=%s%u buttons=%d wake=%d hero=%u level=%u back=%u (%s)\n",
           p.qc_after_pd ? 1 : 0, p.screenshot ? 1 : 0, smoothing::name(p.smoothing), p.rotation_manual ? "manual" : "auto",
           unsigned(p.rotation) * 90, p.rotate_buttons ? 1 : 0, p.idle_wake ? 1 : 0, unsigned(p.home_hero),
-          unsigned(p.ct_level), ok ? "saved" : "FLASH ERROR");
+          unsigned(p.ct_level), unsigned(p.long_back), ok ? "saved" : "FLASH ERROR");
     return ok;
 }
 

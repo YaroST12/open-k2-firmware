@@ -1633,8 +1633,8 @@ static void test_settings_test_level_row() {
     CHECK_EQ(g_stub.prefs.ct_level, 0);   // default Medium
     ui.context().keep.settings_sel = 0;
     ui.open_place(bench::Place::K2, kT0);
-    for (int i = 0; i < SettingsPage::kDisplayRow - 1; i++) press(ui, Button::Plus, ButtonEvent::Short, kT0 + 10 + i);   // Test level sits above Display
-    CHECK_EQ(ui.context().keep.settings_sel, SettingsPage::kDisplayRow - 1);
+    for (int i = 0; i < SettingsPage::kDisplayRow - 2; i++) press(ui, Button::Plus, ButtonEvent::Short, kT0 + 10 + i);   // Test level sits two above Display (Long Back between)
+    CHECK_EQ(ui.context().keep.settings_sel, SettingsPage::kDisplayRow - 2);
     CHECK_STR(label(ui, Button::Ok), "Cycle");
     const int sets = g_stub.prefs_sets;
     static constexpr uint8_t kNext[3] = {2, 1, 0};   // Deep, Light, Medium
@@ -1646,6 +1646,46 @@ static void test_settings_test_level_row() {
     }
     CHECK_EQ(g_stub.prefs_sets, sets + 3);
     press(ui, Button::Back, ButtonEvent::Short, kT0 + 90);
+}
+
+// Settings > Long Back: the ring position long Back jumps to. Home out of the box, OK walks the ring's eleven positions and
+// remembers each in uiprefs; the ring view's long Back then goes there. restore_long_back is the boot half.
+static void test_settings_long_back_row() {
+    Ui &ui = fresh_ui();
+    g_stub.prefs = {};
+    ui.context().keep.settings_sel = 0;
+    ui.context().keep.long_back = 0;
+    ui.open_place(bench::Place::K2, kT0);
+    for (int i = 0; i < SettingsPage::kDisplayRow - 1; i++) press(ui, Button::Plus, ButtonEvent::Short, kT0 + 10 + i);   // Long Back sits above Display
+    CHECK_EQ(ui.context().keep.settings_sel, SettingsPage::kDisplayRow - 1);
+    CHECK_STR(label(ui, Button::Ok), "Cycle");
+    const int sets = g_stub.prefs_sets;
+    press(ui, Button::Ok, ButtonEvent::Short, kT0 + 40);
+    CHECK_EQ(int(ui.context().keep.long_back), int(ring::Pos::Lines));
+    CHECK_EQ(int(g_stub.prefs.long_back), int(ring::Pos::Lines));
+    press(ui, Button::Ok, ButtonEvent::Short, kT0 + 50);
+    press(ui, Button::Ok, ButtonEvent::Short, kT0 + 60);
+    CHECK_EQ(int(g_stub.prefs.long_back), int(ring::Pos::Graph));
+    CHECK_EQ(g_stub.prefs_sets, sets + 3);
+    // From the ring view of the K2 page, long Back lands on the chosen page.
+    press(ui, Button::Back, ButtonEvent::Short, kT0 + 70);
+    CHECK_EQ(ui.ring_view(), true);
+    press(ui, Button::Back, ButtonEvent::Long, kT0 + 80);
+    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Graph));
+    CHECK_EQ(ui.ring_view(), true);
+    // The full circle ends back on Home, which the record stores as no target at all.
+    ui.open_place(bench::Place::K2, kT0 + 100);
+    ui.context().keep.settings_sel = SettingsPage::kDisplayRow - 1;
+    for (int i = 0; i < ring::kCount - 3; i++) press(ui, Button::Ok, ButtonEvent::Short, kT0 + 110 + i * 10);
+    CHECK_EQ(int(ui.context().keep.long_back), 0);
+    CHECK_EQ(int(g_stub.prefs.long_back), 0);
+    // Boot: a stored target comes back, a value past the ring is Home.
+    Ui &again = fresh_ui();
+    again.restore_long_back(static_cast<uint8_t>(ring::Pos::Log));
+    CHECK_EQ(int(again.context().keep.long_back), int(ring::Pos::Log));
+    again.restore_long_back(200);
+    CHECK_EQ(int(again.context().keep.long_back), 0);
+    again.context().keep.settings_sel = 0;
 }
 
 static void test_k2_place() {
@@ -2050,6 +2090,7 @@ int main() {
     test_log_place();
     test_k2_place();
     test_settings_test_level_row();
+    test_settings_long_back_row();
     test_debug_fake_zero_clears();
     test_fake_zero_leaves_no_gone_rows();
     test_memory_page_scrub();

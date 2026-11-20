@@ -141,6 +141,10 @@ public:
     // stores it in the uiprefs record; restore_home_hero is the boot-time half (the stored byte, writes nothing).
     void set_home_hero(home::Qty q);
     void restore_home_hero(uint8_t stored) { ctx_.keep.home_hero = home::qty_from(stored); }
+    // The ring position long Back jumps to (Settings > Long Back): set_long_back puts it in force and stores it in the uiprefs
+    // record; restore_long_back is the boot-time half. Anything past the ring is Home.
+    void set_long_back(uint8_t pos);
+    void restore_long_back(uint8_t stored) { ctx_.keep.long_back = static_cast<uint8_t>(ring::sanitize_target(stored)); }
     // No sensor is guessed: a future verified driver supplies screen-axis gravity in mg.
     void feed_gravity(std::optional<orientation::Gravity> gravity, uint32_t now_ms);
     // Called every main-loop pass (~20 ms): samples power, integrates energy, and every

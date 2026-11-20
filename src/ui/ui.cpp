@@ -245,6 +245,15 @@ void Ui::set_home_hero(home::Qty q) {
     if (p != before) uiprefs::set(p);
 }
 
+void Ui::set_long_back(uint8_t pos) {
+    ctx_.keep.long_back = static_cast<uint8_t>(ring::sanitize_target(pos));
+    K2LOG("[UI] long back=%u\n", unsigned(ctx_.keep.long_back));
+    uiprefs::Prefs p = uiprefs::stored();
+    const uiprefs::Prefs before = p;
+    p.long_back = ctx_.keep.long_back;
+    if (p != before) uiprefs::set(p);
+}
+
 void Ui::feed_gravity(std::optional<orientation::Gravity> gravity, uint32_t now_ms) {
     const auto changed = gravity_.update(gravity, now_ms);
     if (!rotation_lock_ && changed) set_rotation(*changed, now_ms);

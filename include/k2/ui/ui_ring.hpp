@@ -29,6 +29,12 @@ constexpr const char *mast_name(Pos p) {
     return kNames[static_cast<int>(p) < kCount ? static_cast<int>(p) : 0];
 }
 
+// The plain name for the Settings row's tail (at most 7 characters: the row's tail room).
+constexpr const char *name(Pos p) {
+    constexpr const char *kNames[kCount] = {"Home", "Lines", "Numbers", "Graph", "Ripple", "Charger", "Cable", "Device", "Battery", "Log", "K2"};
+    return kNames[static_cast<int>(p) < kCount ? static_cast<int>(p) : 0];
+}
+
 // The persisted long-Back target (uiprefs): anything out of range is Home.
 constexpr Pos sanitize_target(unsigned v) { return v < static_cast<unsigned>(kCount) ? static_cast<Pos>(v) : Pos::Home; }
 
