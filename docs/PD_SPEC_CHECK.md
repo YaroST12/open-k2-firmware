@@ -95,7 +95,7 @@ is sure and a fail can be over-reported by that much at most (conservative).
 
 A check is judged per measurement and aggregated: count, fails, and the worst value with the limit it was judged against and where it
 came from (the PDO pair; for a programmable check the APDO, the step size, the direction and the level asked for, "APDO 5 500 mV down
-to 5.0 V"). Verdict: skip when nothing was measured (with the reason: not offered, one fixed level, no PPS, no EPR, no EPR cable proof,
+to 5.0 V"). Verdict: skip when nothing was measured (with the reason: not offered, one fixed level, no PPS, no EPR, no EPR proof,
 capture busy, level refused, run stopped, not reached, K2 on the charger, no data, not selected, no AVS),
 fail when any
 measurement failed, else pass; a measured check with an inferred limit is unverified (neither pass nor fail).

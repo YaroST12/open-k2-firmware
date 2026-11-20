@@ -131,7 +131,7 @@ class Decode(unittest.TestCase):
         self.assertEqual(s[5]["counts"]["hard_reset"], 1)
         self.assertTrue(s[1]["done"])
         self.assertTrue(s[8]["skipped"])
-        self.assertEqual(s[8]["na"], "no EPR cable proof")
+        self.assertEqual(s[8]["na"], "no EPR proof")
 
     def test_distributions(self):
         a = {x["id"]: x for x in self.r["sequences"]}[1]["dist"]["accept"]

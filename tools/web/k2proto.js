@@ -1574,7 +1574,7 @@ var K2Proto = (function () {
   var PDSPEC_STOPS = ["running", "done", "cancelled", "VBUS over the limit", "load on the output", "source did not come back", "step stuck",
                       "no PD contract", "link inline", "run time cap"];
   var PDSPEC_FAMILIES = ["Transitions", "PPS/AVS", "PPS timeout", "EPR timeout", "Hard Reset", "Detach"];
-  var PDSPEC_SKIPS = ["-", "not offered", "one fixed level", "no PPS", "no EPR", "no EPR cable proof", "capture busy", "level refused",
+  var PDSPEC_SKIPS = ["-", "not offered", "one fixed level", "no PPS", "no EPR", "no EPR proof", "capture busy", "level refused",
                       "run stopped", "not reached", "K2 on the charger", "no data", "not selected", "no AVS"];
   var PDSPEC_VERDICTS = ["pending", "pass", "fail", "skip", "unverified"];
   var PDSPEC_CAPS_NOTES = ["no PPS, no AVS", "PPS without AVS: allowed before PD R3.3", "PPS + AVS present", "AVS without PPS"];
