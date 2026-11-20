@@ -385,7 +385,7 @@ K2_HOT void RowList::draw_row_cb(void *ctx, int index, const Rect &r, bool hi, F
         tail_v = fit_text(kSmall, tail, kTailMaxPx, tbuf);
         const int vw = text_width(kSmall, tail_v);
         hole(static_cast<int16_t>(kTailX - vw), ty, vw, kSmall.height);
-        right -= vw + 8;
+        right -= vw + 6;   // 6 px gap: a 5-char col2 value (40 px) fits beside a 48 px margin tail
     }
     std::string_view col2_v;
     if (!sp.col2.empty()) {
