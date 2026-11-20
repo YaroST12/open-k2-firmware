@@ -189,6 +189,12 @@ inline constexpr uint32_t kRestartCapsMs = 1000, kRestartSettleMs = 10000;
 // them at 0 V, then Hi-Z). Waits before a unit's first handshake: kLegacyFirstWaitMs after the PD-silent attach (1000 ms),
 // kLegacyGapMs after the previous unit's release (the 500 ms D+/D- discharge), plus kAfcPreMs more before AFC.
 inline constexpr uint32_t kLegacyFirstWaitMs = 1000, kLegacyGapMs = 500, kAfcPreMs = 500;
+// pattern reannounce-after-own-release (Anker IQ4, runs/qc2b-2026-11-21): a source that reads the engine's D+/D- release as a re-plug
+// announces its list to the PD-silent sink again (first frame 0.1 to 0.5 s after the release, VBUS at 5 V all along). The first release of
+// a silent Legacy attach is watched for kOwnReleaseCapsMs (the 500 ms line discharge + kRestartCapsMs); a frame in it is the source's
+// answer to our own release, not PD traffic: the unit waits in place for kLegacyQuietMs of quiet (at most kRestartSettleMs) instead of
+// detaching. Frames before the release are real PD traffic and arm nothing. A source quiet in that window is not watched again.
+inline constexpr uint32_t kOwnReleaseCapsMs = kLegacyGapMs + kRestartCapsMs;
 // Detach: Rd off, wait until VBUS has been below vSafe0V for kDetachDarkHoldMs (at most kDetachDarkMs; a source that never lets
 // go, a USB-A port, gets kDetachQuickMs from the second unit on).
 inline constexpr uint32_t kDetachDarkMs = 10000, kDetachDarkHoldMs = 300, kDetachQuickMs = 1500;
@@ -995,6 +1001,9 @@ private:
     bool recover_ K2_BSS_INIT(false), hot_ K2_BSS_INIT(false), stable_ K2_BSS_INIT(false), stopping_ K2_BSS_INIT(false), pd_owned_ K2_BSS_INIT(false), fc_owned_ K2_BSS_INIT(false);
     bool restart_dark_ K2_BSS_INIT(false), restart_wait_ K2_BSS_INIT(false);   // a silent Legacy release: the source's output went dark / came back
     uint32_t restart_ms_ K2_BSS_INIT(0);                             // when it came back (restart_wait_)
+    // own_rel_ = the last fc release of a silent Legacy attach is watched (kOwnReleaseCapsMs), own_rel_ms_ = its time; reann_ = what this
+    // attach's source did after a release: 0 not seen yet, 1 quiet (not watched again), 2 announces (every release is waited out).
+    bool own_rel_ K2_BSS_INIT(false); uint8_t reann_ K2_BSS_INIT(0); uint32_t own_rel_ms_ K2_BSS_INIT(0);
     // pattern usb-a-no-load-auto-off (kCutMv): the cut clocks of the legacy attach. cut_start_ms_ = the first sample under kCutMv of the
     // last completed fall, cut_back_ms_ = the first vSafe5V sample after it, both 0 = none since the row's request, row_hi_ = the highest VBUS since the row's request.
     // cut_onsets_ = the onsets of the cuts that came back inside kCutWindowMs (the period is read from them), cut_retry_idx_ = the row

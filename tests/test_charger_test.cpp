@@ -344,6 +344,7 @@ struct Fake final : ct::Env {
         if (!pd && restart_after_flat && flat_session) restart_at = in.now + restart_delay_ms;
         if (!pd) { flat_session = false; fc_released = true; fc_released_at = in.now; }
         if (!pd && restart_on_release && fc_releases == restart_on_release) restart_at = in.now + restart_delay_ms;
+        if (!pd && reannounce_ms && handed) { chatter_from = in.now + reannounce_after_ms; chatter_until = chatter_from + reannounce_ms; ++reannounces; }
         if (!release_ok || latched) return;
         in.vbus_mv = 5000;
         if (pd && in.pd.epr_mode && spr_caps.valid) caps = spr_caps;
@@ -508,6 +509,10 @@ struct Fake final : ct::Env {
     // PD-silent sink for restart_chatter_ms (r1a: ~300 ms after VBUS; the same charger's PD-silent attach announced for ~6.1 s).
     int restart_on_release = 0; uint32_t restart_delay_ms = 30, restart_dark_ms = 1000, restart_caps_ms = 100, restart_chatter_ms = 0;
     uint32_t restart_at = 0, restart_back_at = 0;
+    // pattern reannounce-after-own-release (Anker IQ4, runs/qc2b-2026-11-21): the source reads every D+/D- release (the fc engine's reset to
+    // 5 V) as a re-plug and announces its list to the PD-silent sink reannounce_after_ms later, for reannounce_ms, VBUS never below 5 V.
+    // attach_flood_ms: the same announcement after every PD-silent attach (the IQ4's first attach: ~7.4 s of caps).
+    uint32_t reannounce_after_ms = 0, reannounce_ms = 0, attach_flood_ms = 0; int reannounces = 0;
     // The fc engine's link guard (link::inline_now): a legacy trigger is refused "PD or load active" while the driver still holds
     // decoded caps, i.e. a PD frame arrived less than 2000 ms ago (the legacy-only driver drops stale caps after 2 s of quiet).
     bool link_guard = false; int guard_refusals = 0;
@@ -541,6 +546,7 @@ struct Fake final : ct::Env {
         if (!alive()) return;
         if (caps.valid) saved = caps;
         ++detaches; detach_vbus = in.vbus_mv; seq.push_back('D'); rd_on = false; rd_off_at = in.now; fc_at_off = fc_requests; pd_at_off = pd_requests;
+        if (reannounce_ms) chatter_from = chatter_until = 0;   // a detach ends the announcement; the next attach starts its own
         handed = false; caps.valid = false; in.pd.state = pd::SinkState::Idle; in.pd.held = false; in.pd.epr_mode = false;
         in.pd.epr_info = pd::EprInfo::None; info_shown = {};
         in.pd.mv = 5000; in.fc_state = fc::State::Idle; low_now = false;
@@ -633,7 +639,10 @@ struct Fake final : ct::Env {
                                 if (wrong_decay_rel) wrong_decay_at = in.now + wrong_decay_rel;
                             }
                         }
-                    } else { ++handovers; handed = true; handed_at = in.now; in.pd_quiet_ms = saved.valid && !silent_after_rd ? 0 : 1000000; }
+                    } else {
+                        ++handovers; handed = true; handed_at = in.now; in.pd_quiet_ms = saved.valid && !silent_after_rd ? 0 : 1000000;
+                        if (attach_flood_ms) { chatter_from = in.now; chatter_until = in.now + attach_flood_ms; }
+                    }
                 } else if (!keep_vbus) in.vbus_mv = 0;
             }
             if (handed && give_up_ms) {
@@ -8031,6 +8040,101 @@ static void test_legacy_restart_wait_is_bounded_and_a_load_still_refuses() {
         CHECK_EQ(f.fc_times.size(), size_t(1));
     }
 }
+
+// pattern reannounce-after-own-release (Anker IQ4, runs/qc2b-2026-11-21): the source reads every D+/D- release as a re-plug and announces
+// its list to the PD-silent sink again, VBUS at 5 V all along. That announcement is the source's answer to our own release, not PD
+// traffic of its own: the unit waits in place until it stops (the link guard lets the next request through after 2 s of quiet) instead of
+// detaching, attaching and waiting out the attach's announcement again; the SCP rows no longer read it as "PD active".
+static void reannounce_setup(Fake& f, uint32_t after, uint32_t len, uint32_t attach_len) {
+    f.link_guard = true; f.reannounce_after_ms = after; f.reannounce_ms = len; f.attach_flood_ms = attach_len;
+}
+static void test_legacy_units_chain_through_the_sources_reannounce_after_a_release() {
+    Fake f; ct::Runner r(f);
+    reannounce_setup(f, 100, 3000, 3000);
+    const auto o = with_units(ct::bit(A::Fcp) | ct::bit(A::Scp) | ct::bit(A::Afc), {ct::Unit::Fcp, ct::Unit::Scp, ct::Unit::Afc});
+    CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+    const uint32_t t0 = f.in.now;
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 600000), true);
+    CHECK_EQ(f.attaches_legacy, 1);   // one PD-silent attach for the three units
+    CHECK_EQ(f.guard_refusals, 0);
+    CHECK_EQ(f.reannounces >= 2, true);
+    for (const ct::Unit u : {ct::Unit::Fcp, ct::Unit::Scp, ct::Unit::Afc}) {
+        CHECK_EQ(count_unit_verdict(r, u, ct::Verdict::Pass) > 0, true);
+        CHECK_EQ(count_unit_verdict(r, u, ct::Verdict::Skip), 0u);
+        CHECK_EQ(count_unit_verdict(r, u, ct::Verdict::Fail), 0u);
+    }
+    std::printf("reannounce chain: %u ms, attaches %d, reannounces %d\n", f.in.now - t0, f.attaches_legacy, f.reannounces);
+}
+// The SCP unit's rows, each its own session with a release between them: none of them is skipped "PD active" by the source's answer.
+static void test_scp_rows_are_not_pd_active_after_our_own_release() {
+    Fake f; ct::Runner r(f);
+    reannounce_setup(f, 100, 3000, 0);
+    const auto o = with_units(ct::bit(A::Scp), {ct::Unit::Scp});
+    CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 600000), true);
+    CHECK_EQ(count_unit_verdict(r, ct::Unit::Scp, ct::Verdict::Skip, ct::Reason::PdActive, false), 0u);
+    CHECK_EQ(count_unit_verdict(r, ct::Unit::Scp, ct::Verdict::Fail), 0u);
+    CHECK_EQ(f.guard_refusals, 0);
+    CHECK_EQ(f.fc_requests, 4);      // 5 V, 10 V, 4.5 V, 5 V: every row asked
+    CHECK_EQ(f.detaches, 2);         // the run's own start and end; no boundary in between
+    CHECK_EQ(f.fc_times.size(), size_t(4));
+    for (size_t n = 1; n < f.fc_times.size(); ++n)   // each row waited for the announcement to stop: 100 + 3000 ms, then 2 s of quiet at least
+        CHECK_EQ(f.fc_times[n] - f.fc_times[n - 1] >= 3100, true);
+}
+// A source that stays quiet after the first release is watched for it once per attach (kOwnReleaseCapsMs), not at every row.
+static void test_a_quiet_source_is_watched_once_per_attach() {
+    Fake f; ct::Runner r(f);
+    f.link_guard = true;
+    const auto o = with_units(ct::bit(A::Scp), {ct::Unit::Scp});
+    CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 600000), true);
+    CHECK_EQ(f.fc_times.size(), size_t(4));
+    if (f.fc_times.size() != 4) return;
+    std::printf("quiet source: SCP row gaps %u %u %u ms\n", f.fc_times[1] - f.fc_times[0], f.fc_times[2] - f.fc_times[1], f.fc_times[3] - f.fc_times[2]);
+    CHECK_EQ(f.fc_times[1] - f.fc_times[0] > f.fc_times[2] - f.fc_times[1] + 500, true);   // the first release was watched
+    CHECK_EQ(f.fc_times[3] - f.fc_times[2], f.fc_times[2] - f.fc_times[1]);                // the source stayed quiet: not again
+    CHECK_EQ(count_unit_verdict(r, ct::Unit::Scp, ct::Verdict::Pass), 4u);
+}
+// Real PD traffic is no echo of our release: a source that announces before the release (the unit's own PD-active proof) still skips the unit.
+static void test_pd_traffic_before_the_release_still_skips_the_unit() {
+    Fake f; ct::Runner r(f);
+    reannounce_setup(f, 100, 3000, 0);
+    const auto o = with_units(ct::bit(A::Scp), {ct::Unit::Scp});
+    CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+    CHECK_EQ(run_until(f, r, [&] { return f.fc_requests == 1; }, 200000), true);
+    f.chatter_from = f.in.now; f.chatter_until = f.in.now + 1000000;   // frames from the source while the row runs
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 600000), true);
+    CHECK_EQ(count_unit_verdict(r, ct::Unit::Scp, ct::Verdict::Skip, ct::Reason::PdActive, false) > 0, true);
+    CHECK_EQ(f.guard_refusals, 0);
+}
+// An announcement that never stops is bounded by kRestartSettleMs: then the unit is PD active as before, the guard was never asked.
+static void test_endless_reannounce_after_a_release_is_bounded() {
+    Fake f; ct::Runner r(f);
+    reannounce_setup(f, 100, 10000000, 0);
+    const auto o = with_units(ct::bit(A::Scp), {ct::Unit::Scp});
+    CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+    const uint32_t t0 = f.in.now;
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 600000), true);
+    CHECK_EQ(f.guard_refusals, 0);
+    CHECK_EQ(f.fc_times.size(), size_t(1));
+    CHECK_EQ(count_unit_verdict(r, ct::Unit::Scp, ct::Verdict::Skip, ct::Reason::PdActive, false) > 0, true);
+    CHECK_EQ(f.in.now - t0 < 60000, true);
+}
+// A sink plugged in while the unit waits for the announcement to stop ends the run at once, as in the restart wait.
+static void test_load_during_the_reannounce_wait_stops_the_run() {
+    Fake f; ct::Runner r(f);
+    reannounce_setup(f, 100, 6000, 0);
+    const auto o = with_units(ct::bit(A::Scp), {ct::Unit::Scp});
+    CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+    CHECK_EQ(run_until(f, r, [&] { return f.reannounces == 1; }, 200000), true);
+    f.tick(r, 500);
+    f.in.inline_load = true;
+    f.tick(r, 300);
+    CHECK_EQ(r.reason(), ct::Reason::Inline);
+    f.in.inline_load = false;
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Stopped; }, 20000), true);
+    CHECK_EQ(f.fc_times.size(), size_t(1));
+}
 // Charger-test level (user decision 2026-11-15). A source with every kind of offer: 5/9/15/20 V 3 A, PPS 3.3-21 V 5 A,
 // PPS 3.3-11 V 5 A, SPR AVS 9-20 V; `epr` sets PDO 1's EPR bit.
 static pd::SourceCaps level_caps(bool epr = false) {
@@ -8859,6 +8963,8 @@ int main() {
     test_default_sweep_on_a_low_latch_source();
     test_self_powered_run_sweeps_from_5v();
     test_legacy_row_waits_through_a_source_restart(); test_legacy_restart_wait_is_bounded_and_a_load_still_refuses();
+    test_legacy_units_chain_through_the_sources_reannounce_after_a_release(); test_scp_rows_are_not_pd_active_after_our_own_release();
+    test_a_quiet_source_is_watched_once_per_attach(); test_pd_traffic_before_the_release_still_skips_the_unit(); test_endless_reannounce_after_a_release_is_bounded(); test_load_during_the_reannounce_wait_stops_the_run();
     test_scp_ack_without_voltage_ends_early_and_skips_the_raises(); test_scp_no_change_without_restart_does_not_wait();
     test_level_maps_to_the_run_switches(); test_level_plans_per_level(); test_step_walk_is_planned_only_in_deep(); test_prog_check_flags_a_passing_programmable_row(); test_prog_check_clean_capture_changes_nothing();
     test_prog_check_without_a_capture_asks_nothing_more(); test_prog_check_follows_the_sweep_switches(); test_light_run_requests_nothing_but_5v(); test_light_lists_the_epr_levels_as_advertised();

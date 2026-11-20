@@ -1300,6 +1300,7 @@ Reason Runner::start(const pd::SourceCaps& caps, Options o, Input in, bool confi
     ceiling_pending_ = ceiling_done_ = ceil_stopping_ = ceil_recover_ = ceil_cycled_ = false; ceil_ms_ = ceil_stop_ms_ = ceil_low_ms_ = 0; ceil_why_ = 0;
     spec_done_ = spec_stopping_ = spec_fault_ = false; spec_ms_ = spec_stop_ms_ = 0; spec_pending_ = spec_wanted();
     attached_ = detached_ = ending_ = silent_ = legacy_active_ = never_dark_ = dipped_ = dark_ = false; attach_try_ = 0;
+    own_rel_ = false; reann_ = 0;
     rp_restart_ = false; contract_wrong_ = false; attach_max_mv_ = 0;
     pre_ms_ = 0;
     pd_retry_ = cut_index_ = SIZE_MAX; retries_ = epr_tries_ = 0; settle_ms_ = settle_until_ = 0; auth_open_ = false;
@@ -1548,6 +1549,9 @@ uint32_t Runner::hold_left_ms(uint32_t now) const {
 void Runner::release(const Input& in, bool stop) {
     stopping_ = stop;
     if (stop) skip_pending(reason_);
+    // Our own D+/D- release of a PD-quiet silent attach: the source's announcement that may follow is its answer to it (own_rel_).
+    own_rel_ = !stop && fc_owned_ && mode_ == Mode::Legacy && silent_ && attached_ && reann_ != 1 && in.pd_quiet_ms >= kLegacyQuietMs;
+    if (own_rel_) own_rel_ms_ = in.now;
     reissue_release();
     // Nothing is held and VBUS never left vSafe5V: there is nothing to wait for.
     if (!stop && !pd_owned_ && !fc_owned_ && !hot_ && !recover_ && safe5(in.vbus_mv)) { next(in); return; }   // the sink may refuse and is asked again by poll(); the legacy engine always lets go
@@ -2193,7 +2197,7 @@ void Runner::poll_attach(const Input& in, const pd::SourceCaps& caps, uint32_t g
             if (in.now - stable_ms_ >= kLegacySteadyMs) {
                 if (handover_.outcome == HandoverOutcome::NotTried) handover_ = {HandoverOutcome::FellBack, in.now - unit_ms_};
                 attached_ = silent_ = true; session_ = in.session; resets_ = link_resets(in.pd); hot_ = false; caps_gone_ms_ = in.now;
-                ceil_cycled_ = false;
+                ceil_cycled_ = false; own_rel_ = false; reann_ = 0;
                 // The first handshake waits 1000 ms after the PD-silent attach (the baseline settle is 500 of it).
                 pre_ms_ = kLegacyFirstWaitMs - 500 + (unit_ == Unit::Afc ? kAfcPreMs : 0);
                 state_ = State::Baseline; stable_ = true; stable_ms_ = in.now; phase_ms_ = in.now;
@@ -2705,6 +2709,15 @@ void Runner::poll_impl(Input& in, const pd::SourceCaps& caps) {
             const bool heard = in.pd_quiet_ms < back;   // a frame since VBUS came back
             restart_wait_ = back < kRestartSettleMs && (heard ? in.pd_quiet_ms < kLegacyQuietMs : back < kRestartCapsMs);
         }
+        // pattern reannounce-after-own-release: same wait, counted from our own release (no VBUS dip to count from).
+        if (own_rel_) {
+            const uint32_t since = in.now - own_rel_ms_;
+            const bool heard = in.pd_quiet_ms < since;   // a frame since the release
+            if (heard) reann_ = 2;
+            else if (since >= kOwnReleaseCapsMs) reann_ = 1;
+            own_rel_ = !stopping_ && silent_ && attached_ && mode_ == Mode::Legacy && !restart_wait_ && !restart_dark_ && since < kRestartSettleMs &&
+                       (heard ? in.pd_quiet_ms < kLegacyQuietMs : since < kOwnReleaseCapsMs);
+        }
         const Reason changed = dropped && pd_owned_ ? Reason::Lost : in.loop_lock ? Reason::Loop :
             in.inline_load ? Reason::Inline : in.fake ? Reason::Fake :
             in.vbus_mv < 0 || in.cap_mv < 5000 ? Reason::NoMonitor : Reason::None;
@@ -2712,10 +2725,10 @@ void Runner::poll_impl(Input& in, const pd::SourceCaps& caps) {
         // Offers that changed or PD that showed up end the unit's rows, not the run.
         else if (!stopping_) {
             const Reason unit_stop = offers_changed ? Reason::CapsChanged :
-                legacy_pending && pd_active && !restart_wait_ ? Reason::PdActive : Reason::None;
+                legacy_pending && pd_active && !restart_wait_ && !own_rel_ ? Reason::PdActive : Reason::None;
             if (unit_stop != Reason::None) skip_unit(unit_stop);
         }
-        if (restart_wait_ && !stopping_) { stable_ = false; return; }
+        if ((restart_wait_ || own_rel_) && !stopping_) { stable_ = false; return; }
         // The next row is a PD row and the source has not announced its list again (it just came back from a cut or a Hard Reset):
         // a request now is refused ("no source caps") and would fail the row. Wait; offers_changed ends it after kCapsReturnMs.
         bool wait_caps = false;
