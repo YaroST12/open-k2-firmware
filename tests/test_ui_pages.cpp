@@ -177,6 +177,40 @@ static void test_ring_navigation() {
     ui.set_home_hero(home::Qty::W);   // the Ui carries over between cases
 }
 
+// The ring state rides the session snapshot, and a run that owns the ports makes +/- skip the pages that are menus (they would
+// be refused) in the key's direction; the pages that are not menus stay reachable.
+static void test_ring_flag_and_busy_skip() {
+    Ui &ui = fresh_ui();
+    uint32_t t = 30000;
+    const auto key = [&](Button b) { ui.on_button(b, ButtonEvent::Short, t += 50); t = settle(ui, t); };
+    CHECK_EQ((ui.session().flags & kSessionRingView) != 0, true);       // boot: the ring has the keys
+    key(Button::Ok);                                                     // Home entered
+    CHECK_EQ((ui.session().flags & kSessionRingView) == 0, true);
+    key(Button::Back);
+    CHECK_EQ((ui.session().flags & kSessionRingView) != 0, true);
+    for (int i = 0; i < 4; i++) key(Button::Plus);                       // Ripple
+    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Ripple));
+    g_stub.pm.vbus_mv = 9000;                                            // a QC level was stopped with VBUS still raised: the
+    ui.stop_fc(t += 100);                                                // 5 V release guard owns the ports until it is back at 5 V
+    ui.tick(t += 100);
+    CHECK_EQ(ui.ports_busy(), true);
+    key(Button::Plus);                                                   // Charger..Log are menus: skipped, K2 is a page
+    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::K2));
+    CHECK_EQ(ui.ring_view(), true);
+    key(Button::Plus);
+    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Home));
+    key(Button::Minus);                                                  // and the other way round
+    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::K2));
+    key(Button::Minus);
+    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Ripple));
+    g_stub.pm.vbus_mv = 5000;
+    for (int i = 0; i < 6; i++) ui.tick(t += 100);
+    CHECK_EQ(ui.ports_busy(), false);
+    key(Button::Plus);
+    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Charger));          // free again: the menu shows
+    ui.goto_page(uint8_t(Page::Home), t += 100);
+}
+
 static void test_short_presses_do_not_page() {
     Ui &ui = fresh_ui();
     fill_pdos(3);
@@ -877,9 +911,10 @@ static int act_row(bench::Place p, int tool) {
         const conn::Tab tab = p == bench::Place::Charger ? conn::Tab::Source : p == bench::Place::Cable ? conn::Tab::Cable : conn::Tab::Sink;
         std::array<conn::Item, conn::kMaxItems> it{};
         const int n = conn::place_actions(tab, conn::ActFacts{}, it);
-        for (int i = 1; i < n; i++) {
+        const int first = tab == conn::Tab::Sink ? 0 : 1;   // the Device page's rows start at item 0 (ConnectionPage::first_act)
+        for (int i = first; i < n; i++) {
             const conn::Item &x = it[static_cast<size_t>(i)];
-            if (x.act == conn::Act::Bench && a.a[x.arg].kind == bench::ActKind::Tool && a.a[x.arg].arg == tool) return i - 1;
+            if (x.act == conn::Act::Bench && a.a[x.arg].kind == bench::ActKind::Tool && a.a[x.arg].arg == tool) return i - first;
         }
         return -1;
     }
@@ -1650,6 +1685,27 @@ static void test_settings_test_level_row() {
 
 // Settings > Long Back: the ring position long Back jumps to. Home out of the box, OK walks the ring's eleven positions and
 // remembers each in uiprefs; the ring view's long Back then goes there. restore_long_back is the boot half.
+// Every action of a place is a row of its entered page: the row exists once, and the keys (enter, walk, OK) reach its menu.
+static void test_every_bench_act_is_a_row() {
+    for (const bench::Place p : {bench::Place::Charger, bench::Place::Cable, bench::Place::Device}) {
+        const bench::Acts acts = bench::actions(p);
+        const conn::Tab tab = p == bench::Place::Charger ? conn::Tab::Source : p == bench::Place::Cable ? conn::Tab::Cable : conn::Tab::Sink;
+        std::array<conn::Item, conn::kMaxItems> it{};
+        const int n = conn::place_actions(tab, conn::ActFacts{}, it);
+        for (int k = 0; k < acts.n; k++) {
+            int rows = 0;
+            for (int i = 0; i < n; i++) rows += it[static_cast<size_t>(i)].act == conn::Act::Bench && it[static_cast<size_t>(i)].arg == k;
+            CHECK_EQ(rows, 1);
+            if (acts.a[k].kind != bench::ActKind::Tool) continue;
+            Ui &ui = fresh_ui();
+            open_act(ui, p, acts.a[k].arg, kT0 + 200 + k * 20);
+            CHECK_EQ(ui.ring_view(), false);
+            // Spoof is a shortcut into Connection's Cable tab (see tool_menu).
+            CHECK_EQ(ui.menu() == (acts.a[k].arg == 2 ? Menu::Connection : tool_menu(acts.a[k].arg)), true);
+        }
+    }
+}
+
 static void test_settings_long_back_row() {
     Ui &ui = fresh_ui();
     g_stub.prefs = {};
@@ -2073,6 +2129,7 @@ int main() {
     test_fake_pdos_on_the_page();
     test_label_sets();
     test_ring_navigation();
+    test_ring_flag_and_busy_skip();
     test_short_presses_do_not_page();
     test_back_goes_home();
     test_press_flash();
@@ -2091,6 +2148,7 @@ int main() {
     test_k2_place();
     test_settings_test_level_row();
     test_settings_long_back_row();
+    test_every_bench_act_is_a_row();
     test_debug_fake_zero_clears();
     test_fake_zero_leaves_no_gone_rows();
     test_memory_page_scrub();

@@ -29,6 +29,8 @@ constexpr WalkDest kWalkDests[] = {
     {"Spoof", kMenuPageBase + static_cast<uint8_t>(Menu::Spoof), false},
     {"UsbLink", kMenuPageBase + static_cast<uint8_t>(Menu::UsbLink), false},
     {"Cards", kMenuPageBase + static_cast<uint8_t>(Menu::Cards), false},
+    {"Battery", kMenuPageBase + static_cast<uint8_t>(Menu::Battery), false},     // the ring's Battery and Log places
+    {"Diagnosis", kMenuPageBase + static_cast<uint8_t>(Menu::Diagnosis), false},
 };
 constexpr unsigned kWalkN = sizeof kWalkDests / sizeof kWalkDests[0];
 
