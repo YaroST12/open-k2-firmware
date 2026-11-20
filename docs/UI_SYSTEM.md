@@ -15,7 +15,7 @@ All coordinates are logical content pixels: x 0..207 on twin-rail pages and x 0.
 ## 0 Fieldbook (2026-11-12)
 
 The Fieldbook rework (concept `runs/ui-rework-fable/CONCEPT.md`, branch `k2/fieldbook`) replaced the paging hub with a
-Meter and a Bench of six places (seven since the Battery place, 2026-11-13). Where this section and a later one differ, this section is current; the later sections
+Meter and six places (seven since the Battery place, 2026-11-13); the Bench list itself became the ring of 0.2 on 2026-11-20. Where this section and a later one differ, this section is current; the later sections
 keep the measured geometry of the parts that did not change.
 
 ### 0.1 Theme
@@ -34,28 +34,39 @@ white on `kError` with a `kErrD` bar track, near is the orange chip with orange 
 renders the charge, ramp, idle, LAST and unplugged scenes, asserts the line and tint pixels (and their absence after LAST
 and unplugged) and the digit/tint contrast (WCAG 2.x); `K2_DUMP=dir` writes the Flow scenes for `tools/panel2png.py`.
 
-### 0.2 Navigation
+### 0.2 Navigation (ring, 2026-11-20)
+
+One carousel of eleven pages replaced the Bench list (user decision). `include/k2/ui/ui_ring.hpp` is the pure model
+(`tests/test_ui_ring.cpp`); `Ui::ring_*` wires it.
 
 ```
-Meter (Home)  Up/Dn flip the faces: Flow, Numbers, Lines.  OK -> Bench
-  Bench       Meter, Charger, Cable, Device, Battery, Log, K2. Each row: rail node (solid = known, hollow = nothing), name, status line
-    Charger   place page: Source identity + fact table + Test charger, Request voltage, Fast charge, Report cards
-    Cable     place page: e-marker identity + fact table + Read e-marker, Save cable, Saved cables, Spoof as..., Resistance, Loop probe
-    Device    place page: request identity + fact table + Ask device, Twins
-    Battery   efficiency recorder: run identity + In / Out / Time / Efficiency + start, end, settings, Saved runs, Share
-    Log       PD diagnosis: verdict stamp, findings, Black Box row
-    K2        settings: firmware identity, USB Link .. Wake sleeping port, System state, Boot info
+Home > Lines > Numbers > Graph > Ripple > Charger > Cable > Device > Battery > Log > K2 > (Home)
 ```
 
-- The device boots into Flow. OK on a face opens the Bench; BACK on the Bench returns to the face it came from.
-- The Bench rows are 28 px (seven of them from y24 to y220): the name in font 16 on the row's top line, the status in font
-  12 right under it (y+16), the icon at y+8 and the 8 px node at y+4 (`ToolsPage::kRowPitch` and friends). Six places had
-  32 px rows.
-- A place page sits over the Bench (`Ui::open_place`): Charger, Cable and Device are the Connection page locked to one tab
-  (`ConnectionPage::lock`), Battery is `BatteryPage` (`Menu::Battery`), Log is `DiagnosisPage::as_place`, K2 is
-  `SettingsPage`. BACK from a place lands on the Bench
-  with that place focused (`keep.bench_sel`). Each place remembers its last action row (`keep.place_sel`).
-- The remote page names are unchanged (`tools` = the Bench).
+| state | PLUS / MINUS | OK | short Back | long Back |
+|---|---|---|---|---|
+| Ring view (the page is shown, the masthead carries its numbered name) | previous / next page, wrapping | enter the page (Lines and Numbers only look: no entry) | Home | the page chosen in Settings > Long Back |
+| Entered (the page's own rows and actions) | scroll the rows | the focused row's action | up one level; at the top level back to the ring view | the ring view on the same page |
+
+- Boot lands on Home in the ring view. `Ui::goto_page`, the remote `page N`, `open_connection`, `open_place` and a started
+  charger test land entered (the page was asked for by name).
+- Home entered keeps Home 2c: PLUS / MINUS move the hero, OK cycles the span, long OK resets the energy, Back exits to the ring.
+  Graph entered: OK = Zoom, PLUS / MINUS blank.
+- The read actions are rows inside the entered page. Charger, Cable and Device are the Connection page locked to one tab
+  (`ConnectionPage::lock`); their Info / Actions rows carry every `bench::actions` tool as an `Act::Bench` row. Battery is
+  `BatteryPage`, Log is `DiagnosisPage::as_place`, K2 is `SettingsPage`. Pages with no actions (Battery, Log, K2, Meter
+  faces) are scroll-only when entered.
+- A tool page opened from a place (Menu over Lines excepted) pops back to that place; Back from a tool over Lines exits to the
+  owner's ring page. A ring walk skips a target while `ports_busy()` refuses a menu target (charger test, release guard,
+  twin, PD stress, PD spec, loop probe).
+- ChargerTest: Back goes up to the Charger place's Actions; long Back stops the run and shows the Charger ring page.
+- Long Back target: `/prefs.cfg` optional 9th byte (written only when non-zero and below 11; older firmware reads a 9-byte
+  file as defaults). Settings row `Long Back` cycles the eleven positions; Home is the default.
+- Long PLUS is not used. The OK + Back 3 s reboot chord and the Back-Hold cancel are unchanged.
+- Ring vs entered is visible: the masthead (slot 0 of the opposite rail) shows the position and name (`6 CHARGER`) in the ring view and the page's
+  own title when entered. Session flag `RingView` (bit 6) is reported by GET_STATE (`ring_view`).
+- Remote page names: `tools` is gone from the rotation list. `page N` is 0..6 for Home, Detail, ChargerTest, Lines, Settings,
+  Graphs, Ripple; a showing submenu is 7 + its Menu index. Menu page names keep the `tools/` prefix.
 
 ### 0.3 Place page (Charger, Cable, Device)
 
@@ -821,7 +832,7 @@ Renders: `mock_pd_source.png`, `mock_pd_sink.png`, `mock_pd_cable.png`, `mock_pd
 
 ### 7.4 Tools
 
-Superseded by the Bench and the place pages (0.2, 0.3); the hub list below no longer exists.
+Superseded by the ring and the place pages (0.2, 0.3); the hub list below no longer exists.
 
 Renders: `mock_tools.png`, `mock_tools_end.png`.
 
@@ -1294,8 +1305,9 @@ All footers are 27 characters at most and checked by `static_assert`; none names
 ## 10 Twin-rail walkthrough
 
 1. Start in `Home`: the single 224 x 240 content body keeps the button strip on the physical button edge.
-2. Enter the Bench, then open Charger, Cable or Device. The opposite rail shows the place name; `OK` enters
-   `Actions` and `Back` returns to `Info`. `Long Back` still means Home.
+2. Step the ring to Charger, Cable or Device and press `OK`. The opposite rail shows the place name; `OK` enters
+   `Actions` and `Back` returns to `Info`, then to the ring. Short `Back` in the ring is Home; `Long Back` goes to the
+   Settings target.
 3. Check the four rotations. The button rail and opposite telemetry rail must frame one body rectangle:
    208 x 240 in portrait and 240 x 208 in landscape.
 4. Move list focus. A focused row opens to 40 px, carries its explanation in the note, and never truncates

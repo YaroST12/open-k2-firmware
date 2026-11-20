@@ -726,6 +726,13 @@ test("decodeSession reads every field of GET_STATE part 1", () => {
   assert.deepEqual(Object.keys(s.flags).filter((k) => s.flags[k]), ["em_scanning", "em_quiet"]);
 });
 
+test("decodeSession: bit 6 is the ring view flag", () => {
+  const p = Uint8Array.from(SESSION_PAYLOAD);
+  p[30] = 0x40;
+  const s = P.decodeSession(p);
+  assert.deepEqual(Object.keys(s.flags).filter((k) => s.flags[k]), ["ring_view"]);
+});
+
 test("decodeSession: sentinels are null, the tab is for Connection only, short payloads throw", () => {
   const p = Uint8Array.from(SESSION_PAYLOAD);
   p[20] = 0xFF; p[21] = 0xFF; p[27] = 0xFF; p[23] = 1;           // open CC unknown, no cursor, stack [emarker]

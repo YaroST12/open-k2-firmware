@@ -88,6 +88,12 @@ class SessionDecode(unittest.TestCase):
         self.assertEqual(s["home_window"], "10m")
         self.assertEqual({k for k, v in s["flags"].items() if v}, {"em_scanning", "em_quiet"})
 
+    def test_ring_view_flag(self):
+        p = bytearray(SESSION)
+        p[30] = 0x40                               # RingView only (bit 6)
+        s = kr.decode_session(bytes(p))
+        self.assertEqual({k for k, v in s["flags"].items() if v}, {"ring_view"})
+
     def test_sentinels_become_null(self):
         p = bytearray(SESSION)
         p[20:22] = b"\xFF\xFF"                  # open CC unknown

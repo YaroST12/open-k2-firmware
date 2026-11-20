@@ -55,7 +55,7 @@ class State(unittest.TestCase):
 
     def test_lines_page_name(self):
         self.assertEqual(kr.PAGES[3], "lines")
-        self.assertEqual(kr.PAGES[:7], ["home", "detail", "chargertest", "lines", "tools", "settings", "graphs"])
+        self.assertEqual(kr.PAGES[:7], ["home", "detail", "chargertest", "lines", "settings", "graphs", "ripple"])
         self.assertEqual(kr.PAGES[7:], ["trigger", "emarker", "pdtrigger", "cabler", "blackbox", "spoof", "usblink", "autorotate", "cards", "share", "connection", "diag", "qrtest", "twin", "loopprobe", "pdstress", "diagnosis", "battery", "memory", "display"])
 
     def test_inline_cause_is_the_last_byte(self):

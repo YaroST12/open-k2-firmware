@@ -33,7 +33,7 @@ import k2_remote as kr
 ROOT = Path(__file__).resolve().parent.parent
 PY = sys.executable
 REMOTE_TIMEOUT_S = 25
-DEFAULT_PAGES = ("home", "detail", "chargertest", "lines", "tools", "settings", "connection", "diag")
+DEFAULT_PAGES = ("home", "detail", "chargertest", "lines", "settings", "connection", "diag")
 CEILING_MS = 20     # one slow-task period (main_loop.cpp kLoopMs); the host surveys use the same ceiling
 SVC_CEILING_MS = 10  # PD service gap: a third of tSenderResponse
 
@@ -54,7 +54,7 @@ def allowed(args):
 
 
 def page_index(name):
-    """Ui::page_index of a page name, as `debug loop --page` and GET_STATE.page count it (6 + menu while a menu is open)."""
+    """Ui::page_index of a page name, as `debug loop --page` and GET_STATE.page count it (7 + menu while a menu is open)."""
     return kr.PAGES.index(name)
 
 

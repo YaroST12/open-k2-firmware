@@ -43,7 +43,7 @@ var K2Proto = (function () {
   var ID_STATES = ["idle", "running", "done", "aborted"];
   var ID_STEPS = ["identity", "svids", "modes", "sink-cap", "status", "revision", "done"];
   // Rotation pages 0..6; while a submenu is open GET_STATE.page is 7 + index into MENUS (include/k2/ui/ui_types.hpp).
-  var PAGES = ["home", "detail", "chargertest", "lines", "tools", "settings", "graphs", "ripple"];
+  var PAGES = ["home", "detail", "chargertest", "lines", "settings", "graphs", "ripple"];
   var MENUS = ["trigger", "emarker", "pdtrigger", "cabler", "blackbox", "spoof", "usblink", "autorotate", "cards", "share", "connection", "diag", "qrtest", "twin", "loopprobe", "pdstress", "diagnosis", "battery", "memory", "display"];
   var SETTINGS_MENUS = ["usblink", "autorotate", "memory", "display"];
   function pageName(i) {
@@ -381,7 +381,7 @@ var K2Proto = (function () {
   var SESSION_PD_NONE_WHY = ["none", "sink-silent-source-offered", "source-never-offered"];
   var SESSION_TABS = ["source", "cable", "sink"];
   var SESSION_HOME_WINDOWS = ["10s", "60s", "10m"];
-  var SESSION_FLAGS = ["hold_card", "rotation_notice", "em_scanning", "em_listening", "em_quiet", "id_no_device"];
+  var SESSION_FLAGS = ["hold_card", "rotation_notice", "em_scanning", "em_listening", "em_quiet", "id_no_device", "ring_view"];
   function decodeSession(p) {
     need(p, SESSION_LEN, "state session");
     var v = dv(p), stack = [], i, flags = {};

@@ -144,7 +144,7 @@ def page_names():
         names = [n.strip().lower() for n in m.group(1).split(",") if n.strip()]
         return [n for n in names if n != "count"]
     except (OSError, AttributeError):
-        return ["home", "detail", "chargertest", "pd", "diag", "lines", "tools", "settings"]
+        return ["home", "detail", "chargertest", "lines", "settings", "graphs", "ripple"]
 
 
 def git_matches(ping_git, head):

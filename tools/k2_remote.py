@@ -185,10 +185,10 @@ ACTIONS = {"pd-rescan": 1, "emarker": 2, "energy-reset": 3, "fc-scan": 4, "fc-re
 # Actions the firmware refuses without the confirm byte (remote::action_needs_confirm): they raise VBUS above 5 V.
 ACTIONS_NEED_CONFIRM = ("fc-scan",)
 SOPS = {"sop": 0, "sop1": 1, "sop2": 2}
-# Rotation pages (settable with `page`), then Tools/Settings submenus: the state reports a
-# showing submenu as 6 + its index. Connection and Diag can also be opened remotely.
-PAGES = ["home", "detail", "chargertest", "lines", "tools", "settings", "graphs", "ripple", "trigger", "emarker", "pdtrigger", "cabler", "blackbox", "spoof", "usblink", "autorotate", "cards", "share", "connection", "diag", "qrtest", "twin", "loopprobe", "pdstress", "diagnosis", "battery", "memory", "display"]
-ROTATION_PAGES = 8
+# Rotation pages (settable with `page`; they land entered, not in the ring view), then the submenus (opened from a ring page's
+# actions or from Settings): the state reports a showing submenu as 7 + its index. Connection and Diag can also be opened remotely.
+PAGES = ["home", "detail", "chargertest", "lines", "settings", "graphs", "ripple", "trigger", "emarker", "pdtrigger", "cabler", "blackbox", "spoof", "usblink", "autorotate", "cards", "share", "connection", "diag", "qrtest", "twin", "loopprobe", "pdstress", "diagnosis", "battery", "memory", "display"]
+ROTATION_PAGES = 7
 # Names the old numbering used, still accepted by `page`: they open Connection on the matching tab. The firmware
 # reads kConnTabAlias + tab (include/k2/ui/ui_types.hpp) as "open Connection on that tab"; the state itself reports a
 # showing Connection as its menu index (16), whatever the tab.
@@ -577,7 +577,7 @@ SESSION_WAIT_KIND = ["unknown", "no-source", "charger-waiting", "dual-role-port"
 SESSION_PD_NONE_WHY = ["none", "sink-silent-source-offered", "source-never-offered"]
 SESSION_TABS = ["source", "cable", "sink"]
 SESSION_HOME_WINDOWS = ["10s", "60s", "10m"]
-SESSION_FLAGS = ["hold_card", "rotation_notice", "em_scanning", "em_listening", "em_quiet", "id_no_device"]
+SESSION_FLAGS = ["hold_card", "rotation_notice", "em_scanning", "em_listening", "em_quiet", "id_no_device", "ring_view"]
 SESSION_LEN = 31
 MENU_NAMES = PAGES[ROTATION_PAGES:]                       # Menu order: the stack holds Menu indices
 
