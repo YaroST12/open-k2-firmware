@@ -97,7 +97,7 @@ K2_HOT void draw_key_slot(const Surface &s, bool column, TextDir dir, unsigned s
     const int tri = !down && (shrt == kUp || shrt == kDn) ? (shrt == kUp ? 1 : -1) : 0;
     const unsigned chars = tri ? 0 : label_text(text, lab, zone.max_chars);
     const std::string_view label(text, chars);
-    const bool cap = is_ok && chars > 0 && !down;
+    const bool cap = is_ok && chars > 0 && !down && !lab.dim;   // a dim OK is unavailable: plain dim text, no cap
     const uint16_t ground = down ? kCap : kBg2;
     const uint16_t cap_fill = armed ? kCaution : kCap;
     const uint16_t bg = cap ? cap_fill : ground;
