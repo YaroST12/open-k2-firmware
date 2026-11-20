@@ -13,10 +13,10 @@ namespace k2::qrtest {
 bool show(Ui& ui, std::uint8_t version, std::uint8_t px, std::uint8_t quiet, std::uint32_t now_ms) {
     ui.context().qrtest = {version, px, quiet};   // QrTestPage::enter() consumes it
     // The page leases its encode workspace from the scratch arena during paint(); goto_page refuses Menu::QrTest
-    // (no params), so close any open menu / land on Tools cleanly, then push.
+    // (no params), so close any open menu / land on Lines cleanly, then push.
     const Page cur = ui.page();
-    const bool small_base = cur == Page::Lines || cur == Page::Tools || cur == Page::Settings;
-    if (ui.menu_depth() > 0 || !small_base) ui.goto_page(static_cast<std::uint8_t>(Page::Tools), now_ms);
+    const bool small_base = cur == Page::Lines || cur == Page::Settings;
+    if (ui.menu_depth() > 0 || !small_base) ui.goto_page(static_cast<std::uint8_t>(Page::Lines), now_ms);
     return ui.push_menu(Menu::QrTest, now_ms);
 }
 

@@ -56,7 +56,7 @@ Ui &boot(std::unique_ptr<Ui> &h) {
     return *h;
 }
 PdStressPage &open(Ui &ui) {
-    ui.goto_page(uint8_t(Page::Tools), g_now);
+    ui.goto_page(uint8_t(Page::Lines), g_now);
     ui.push_menu(Menu::PdStress, g_now + 10);
     run(ui, 120);
     return *ui.pd_stress_page();
@@ -448,8 +448,8 @@ void test_the_tools_row_opens_the_page() {
     press(ui, Button::Ok);
     run(ui, 120);
     CHECK_EQ(int(ui.menu()), int(Menu::PdStress));
-    CHECK_EQ(int(ToolsPage::tool_menu(kToolPdStress)), int(Menu::PdStress));
-    CHECK_STR(ToolsPage::tool_name(kToolPdStress), "PD Stress");
+    CHECK_EQ(int(tool_menu(kToolPdStress)), int(Menu::PdStress));
+    CHECK_STR(tool_name(kToolPdStress), "PD Stress");
 }
 
 // ---- renders ----------------------------------------------------------------------------------------------------------------------------

@@ -147,10 +147,10 @@ static void test_pdo_line() {
     pd::Pdo avs{}; avs.type = pd::PdoType::Avs; avs.min_mv = 15000; avs.max_mv = 48000; avs.max_ma = 5000; avs.max_mw = 240000;
     pdo_line(avs, l);
     CHECK_STR(l.text.c_str(), "AVS 15-48V 5A"); CHECK_STR(l.tail.c_str(), "240W");
-    // The widest EPR AVS: 25.5-51.1 V and 4.99 A would take 20 cells: the amps round to 5A.
+    // The widest EPR AVS: 25.5-51.1 V and 5 A would take 21 cells (the row has 20): the amps drop.
     const auto widest_avs = pd::decode_pdo(0xD0000000u | (511u << 17) | (255u << 8) | 255u);
     pdo_line(widest_avs, l);
-    CHECK_STR(l.text.c_str(), "AVS 25.5-51.1V 5A"); CHECK_STR(l.tail.c_str(), "255W");
+    CHECK_STR(l.text.c_str(), "AVS 25.5-51.1V"); CHECK_STR(l.tail.c_str(), "255W");
     // 10 A and above: a whole number.
     pd::Pdo big{}; big.type = pd::PdoType::Fixed; big.max_mv = 48000; big.max_ma = 5000; big.max_mw = 240000;
     pdo_line(big, l); CHECK_STR(l.text.c_str(), "FIX 48V 5A");

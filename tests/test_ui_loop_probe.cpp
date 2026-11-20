@@ -33,7 +33,7 @@ Ui &open_page() {
     g_t += 1000;
     ui.init(g_t);
     ui.tick(g_t);
-    ui.goto_page(uint8_t(Page::Tools), g_t + 50);
+    ui.goto_page(uint8_t(Page::Lines), g_t + 50);
     ui.push_menu(Menu::LoopProbe, g_t + 100);
     g_t += 150;
     ui.tick(g_t);
@@ -276,9 +276,9 @@ void test_tools_row_opens_the_page() {
     Ui &ui = ui_instance();
     g_t += 1000;
     ui.init(g_t);
-    ui.goto_page(uint8_t(Page::Tools), g_t + 50);   // the Bench: Cable is two rows down from Meter
-    ui.context().keep.bench_sel = 0;
-    for (int i = 0; i < 2; i++) ui.on_button(Button::Plus, ButtonEvent::Short, g_t + 60);
+    ui.goto_page(uint8_t(Page::Home), g_t + 50);
+    ui.on_button(Button::Back, ButtonEvent::Short, g_t + 55);   // Home entered -> the ring on Home
+    for (int i = 0; i < 6; i++) ui.on_button(Button::Plus, ButtonEvent::Short, g_t + 60);   // Cable is six steps on
     ui.on_button(Button::Ok, ButtonEvent::Short, g_t + 70);
     CHECK_EQ(int(ui.menu()), int(Menu::Connection));   // the Cable place page (starts on Info)
     ui.on_button(Button::Ok, ButtonEvent::Short, g_t + 75);    // Info -> Actions
@@ -292,8 +292,8 @@ void test_tools_row_opens_the_page() {
     for (int i = cp.action_row(); i < row; i++) ui.on_button(Button::Plus, ButtonEvent::Short, g_t + 80);   // to Loop probe
     ui.on_button(Button::Ok, ButtonEvent::Short, g_t + 100);
     CHECK_EQ(int(ui.menu()), int(Menu::LoopProbe));
-    CHECK_STR(ToolsPage::tool_name(kToolLoopProbe), "Loop probe");
-    CHECK_EQ(int(ToolsPage::tool_menu(kToolLoopProbe)), int(Menu::LoopProbe));
+    CHECK_STR(tool_name(kToolLoopProbe), "Loop probe");
+    CHECK_EQ(int(tool_menu(kToolLoopProbe)), int(Menu::LoopProbe));
 }
 
 }  // namespace

@@ -21,7 +21,7 @@ struct Readiness {
 };
 
 constexpr int kToolSlots = 14;       // the per-tool tables: Loop probe and PD Stress are the last two slots (each built in by its flag)
-constexpr int kToolCount = K2_PDSTRESS ? 14 : K2_LOOPPROBE ? 13 : K2_TWIN ? 12 : 11;   // slots up to the last one built: FC trigger, PD trigger, Spoof, Cable R, Charger ID, Cable read, Device ID, Black Box, PD diagnosis, Report cards, Diag, Device twins, Loop probe, PD Stress (ToolsPage::tool_menu maps to Menu)
+constexpr int kToolCount = K2_PDSTRESS ? 14 : K2_LOOPPROBE ? 13 : K2_TWIN ? 12 : 11;   // slots up to the last one built: FC trigger, PD trigger, Spoof, Cable R, Charger ID, Cable read, Device ID, Black Box, PD diagnosis, Report cards, Diag, Device twins, Loop probe, PD Stress (tool_menu maps to Menu)
 constexpr int kToolSpoof = 2;        // the Spoof row opens Cable read's Spoof list, not a menu of its own
 constexpr int kToolChargerId = 4;    // Charger ID, Cable read, Device ID: the Connection page on one tab each (Tab order)
 constexpr int kToolCableRead = 5;
@@ -47,11 +47,11 @@ ToolHurt tool_hurt_by(int tool);
 // `pm_online`: the power monitor answers (Cable R needs it).
 Readiness tool_readiness(int tool, const SetupState &st, bool pm_online);
 
-// ---- the Bench (Fieldbook, CONCEPT 7): seven places, each a list of actions ----------------------------------------------
-// The Bench replaced the page carousel and the Tools hub: Meter (back to the faces), Charger, Cable, Device, Battery, Log,
-// K2. Every tool of the old hub is one place's action; a place adds the pages that used to sit in the carousel (Test
-// charger, Settings) and the lists that hid behind a tool (Saved cables). Battery is the efficiency recorder's page
-// (BatteryPage, k2/ui/ui_battery.hpp). Pure: the tables and the row texts; ToolsPage paints them.
+// ---- the places: each a list of actions ---------------------------------------------------------------------------------
+// The places are the ring's Charger, Cable, Device, Battery, Log and K2 pages (ui_ring.hpp); Meter is Home. Every tool of the
+// old hub is one place's action; a place adds the pages that used to sit in the carousel (Test charger, Settings) and the
+// lists that hid behind a tool (Saved cables). Battery is the efficiency recorder's page (BatteryPage, k2/ui/ui_battery.hpp).
+// Pure: the tables and the row texts.
 namespace bench {
 
 enum class Place : uint8_t { Meter, Charger, Cable, Device, Battery, Log, K2 };

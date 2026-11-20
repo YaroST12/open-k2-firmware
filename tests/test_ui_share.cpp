@@ -347,7 +347,7 @@ static void test_emarker_opener() {
     g_stub.lib = {saved};
     g_stub.lib_quirks = {{1, eight_rows()}};
     static Ui ui;
-    ui.init(1000); ui.set_rotation(0, 1000); ui.tick(1000); ui.goto_page(static_cast<uint8_t>(Page::Tools), 1100);
+    ui.init(1000); ui.set_rotation(0, 1000); ui.tick(1000); ui.goto_page(static_cast<uint8_t>(Page::Lines), 1100);
     ui.goto_page(kConnTabAlias + 1, 1200);                 // Connection, Cable place (starts on Info)
     ui.tick(1350);
     ui.on_button(Button::Ok, ButtonEvent::Short, 1400);    // Info -> Actions
@@ -413,7 +413,7 @@ static void test_cards_opener() {
     CHECK_EQ(int(rc::hw::put(c)), int(rc::Err::Ok));
     static Ui ui;
     ui.init(1000); ui.tick(1000);
-    ui.goto_page(uint8_t(Page::Tools), 1050);
+    ui.goto_page(uint8_t(Page::Lines), 1050);
     ui.push_menu(Menu::Cards, 1100);
     ui.tick(1150);
     ui.on_button(Button::Ok, ButtonEvent::Long, 1200);       // the list has no Share

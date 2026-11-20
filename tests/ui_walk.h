@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
 // The page set the switch walks visit (test_ui_overdraw prices every switch, test_ui_capture proves each one pixel-exact):
-// the six rotation pages, then the Tools / Settings submenus that open without a record or parameters. `index` is what
+// the seven rotation pages, then the submenus that open without a record or parameters. `index` is what
 // Ui::goto_page takes. `opaque` mirrors Ui::page_opaque / menu_opaque: a switch into it paints once, with no erase pass.
 #pragma once
 #include <cstdint>
@@ -18,7 +18,7 @@ struct WalkDest {
 };
 
 constexpr WalkDest kWalkDests[] = {
-    {"Home", 0, true}, {"Detail", 1, true}, {"Charger", 2, true}, {"Lines", 3, false}, {"Tools", 4, true}, {"Settings", 5, true},
+    {"Home", 0, true}, {"Detail", 1, true}, {"Charger", 2, true}, {"Lines", 3, false}, {"Settings", static_cast<uint8_t>(Page::Settings), true},
     {"Graphs", static_cast<uint8_t>(Page::Graphs), true},
     {"Ripple", static_cast<uint8_t>(Page::Ripple), false},
     {"Connection", kPdPage, false}, {"Diag", kDiagPage, true},

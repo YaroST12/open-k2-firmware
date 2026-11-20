@@ -114,7 +114,7 @@ struct UiContext {
         home::CardCycler cards;                           // Home: the right-column cards (reset on attach and long OK)
         home::Attention attention;                        // Home: what is changing now, for the upper card and its dot
         home::DiagDwell diag_dwell;                       // Home: when row 1 first showed each event finding
-        int bench_sel = 1;                               // Bench: the focused place (Charger first: the Meter row only goes back)
+        uint8_t long_back K2_BSS_INIT(0);                // Settings: the ring position long Back jumps to (ring::Pos; Home = 0; uiprefs)
         int settings_sel K2_BSS_INIT(0);                  // Settings: the highlighted row
         trig::Model trigger;                              // FC trigger: the draft (protocol, target) survives cancel()
         struct PdStress {                                 // Tools > PD Stress: the setup the next START uses
@@ -125,7 +125,6 @@ struct UiContext {
             std::uint8_t sel K2_BSS_INIT(0);              // the Setup list's cursor
         } pdstress;
         std::array<uint8_t, bench::kPlaces> place_sel K2_BSS_ZERO;  // each place's last action: repeating a job is OK, OK, OK
-        uint8_t face K2_BSS_INIT(0);                                 // Meter: the face last shown (0 Flow, 1 Graphs, 2 Numbers, 3 Lines, 4 Ripple)
         struct Ripple {                                              // Meter > Ripple: persisted scope settings across face flips
             uint8_t timebase = 1;                                    // ripple::kDefaultTimebase (50 us/div)
             uint8_t scale K2_BSS_INIT(0);                            // 0 = Auto
@@ -232,9 +231,6 @@ void model_row_text(StrBuf<24> &out);                                           
 // "No source" (mode 1), empty (mode 0), nullptr when live or stale. Mode: 0 no meter, 1 idle, 2 live, 3 stale.
 const char *home_idle_note(uint8_t mode);
 
-// The Meter's faces, PLUS / MINUS walk them: Flow (Home), Graphs, Numbers (Detail), Lines, Ripple (Ui's kFaces, the pager's order).
-inline constexpr int kMeterFaces = 5;
-
 class PageIf {
 public:
     virtual void draw_static() = 0;                 // clear-screen layout: title, headers, fields
@@ -272,14 +268,6 @@ protected:
     // Right end of the top chrome bar: the compact V x A readout, the LAST pill when stale,
     // empty on Home (its hero carries the values).
     void title_badge(bool last);
-    // Top-bar pager (Meter faces and Tests carousel): `count` dots, `current` solid.
-    void title_pager(int current, int count = kMeterFaces);
-    bool meter_face() const { return id_ == Page::Detail || id_ == Page::Lines || id_ == Page::Ripple; }
-    bool any_face() const { return id_ == Page::Home || id_ == Page::Graphs || meter_face(); }   // Flow and Graphs too
-    // The navigation a page leaves to the base (CONCEPT 7), short presses only. On a Meter face: Up / Dn flip the face, OK opens
-    // the Bench, BACK goes to Flow (nothing on Flow). Elsewhere BACK goes one level up: the charger test to the Charger place,
-    // Settings to the K2 place. A submenu takes none of it (the Ui pops it on BACK).
-    bool back_event(Event e);
     // Short [+] / [-] scroll `lv` down / up one row; declined when the list does not overflow.
     bool scroll_event(ListView &lv, Event e, uint32_t now_ms = 0);
     Strip base_labels() const;
@@ -878,7 +866,7 @@ public:
     explicit DetailPage(UiContext &c) : PageBase(c, Page::Detail, "Numbers", Icon::Meter) {}
     void draw_static() override;
     void update(uint32_t now_ms) override;
-    bool on_event(Event e) override { return back_event(e); }
+    bool on_event(Event) override { return false; }   // view-only in the ring
     Strip labels() const override { return base_labels(); }
     kit::OppRailSpec opp_rail() const override { return {"NUMBERS", 0, 0, kit::OppTelemetry::PeakSagR}; }
     void invalidate() override;
@@ -1154,48 +1142,11 @@ private:
     uint8_t static_step_ = 0;
 };
 
-// Tools hub: a list of tools, each opens its own submenu. Short [+] / [-] select, OK opens.
-// The Bench (Page::Tools; the remote still calls it "tools"), src/ui/ui_bench.cpp: the seven places (bench::Place) with what
-// is known about each. OK opens a place's page (Ui::open_place): the Meter faces, the Charger / Cable / Device place pages
-// (ConnectionPage locked to a tab), the Battery place (BatteryPage), the Log place (DiagnosisPage), the K2 place
-// (SettingsPage). Every tool of the old hub is
-// one place page's action.
-class ToolsPage final : public PageBase {
-public:
-    explicit ToolsPage(UiContext &c) : PageBase(c, Page::Tools, "Bench", Icon::Meter) {}
-    void draw_static() override;
-    void update(uint32_t now_ms) override;
-    bool on_event(Event e) override;
-    Strip labels() const override;
-    void invalidate() override;
-    ListState list_state() const { return ListState{}; }
-    int count() const { return bench::kPlaces; }   // rows: the seven places
-    int selected() const;                           // the focused one of them (ctx_.keep.bench_sel)
-    bench::Facts facts() const;   // what the Bench rows read now, from the context and the drivers
-    // Bench geometry (Option B 208x240): seven 32 px rows from y 4 (y 4..228), icon at x 190.
-    static constexpr int16_t kRowY0 = 4, kRowPitch = 30;
-    static constexpr int16_t kTextX = 28, kNameDy = 1, kStatusDy = 17, kIconX = 190, kIconDy = 9;
-    static constexpr int16_t kNodeX = 8, kNodeDy = 5, kNodeSz = 8, kRailX = 11, kRailW = 2;
-    static constexpr int16_t kBenchEnd = kRowY0 + bench::kPlaces * kRowPitch;   // 214
-    static constexpr int kTools = kToolCount;
-    // Row -> submenu. The Spoof row is a shortcut: it opens Connection's Cable tab on the Spoof list (the same
-    // CableIdentityList), so tool_menu(2) names the Spoof menu that opens on top of Connection.
-    static Menu tool_menu(int i) {
-        constexpr Menu kMenus[kToolSlots] = {Menu::Trigger, Menu::PdTrigger, Menu::Spoof, Menu::CableR,
-                                             Menu::Connection, Menu::Connection, Menu::Connection,
-                                             Menu::BlackBox, Menu::Diagnosis, Menu::Cards, Menu::Diag,
-                                             Menu::Twin, Menu::LoopProbe, Menu::PdStress};
-        return kMenus[tool_built(i) ? i : 0];
-    }
-    static const char *tool_name(int i);
-private:
-    void paint_bench();                                // the rows whose content changed (all after invalidate())
-    void paint_row(int i, bool known, bool focus);
-    uint32_t sig_[bench::kPlaces] = {};                // each Bench row's node and focus as painted (0 = repaint)
-    Field status_[bench::kPlaces];                     // each Bench row's status line (char-diffed: the Meter row is live)
-    bool tail_ = false;                                // the strip under the last row is painted
-    Elem foot_;                                        // footer element cache (draw_footer_cached)
-};
+// The tool slots of the place pages' action rows (ui_places.cpp): slot -> the menu it opens and the name its row shows.
+// The Spoof slot is a shortcut: it opens Connection's Cable tab on the Spoof list, so tool_menu(2) names the Spoof menu that
+// opens on top of Connection.
+Menu tool_menu(int i);
+const char *tool_name(int i);
 
 // Staged FC trigger (Tools): Pick/Edit/Review/Apply. Only accepted requests touch D+/D-;
 // cancellation hands measured cleanup to Ui so leaving the menu cannot drop the safety guard.

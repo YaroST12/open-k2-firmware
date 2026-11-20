@@ -147,7 +147,7 @@ static void fresh() { pdtrace::init(); pdtrace::clear_captures(); g_first = true
 }  // namespace bb
 
 static void open_blackbox(Ui &ui, uint32_t t) {
-    ui.goto_page(static_cast<uint8_t>(Page::Tools), t);
+    ui.goto_page(static_cast<uint8_t>(Page::Lines), t);
     ui.push_menu(Menu::BlackBox, t + 10);
     ui.tick(t + 20);
     ui.tick(t + 400);                                  // the readout settles over two samples
@@ -215,7 +215,7 @@ static void test_page(Ui &ui, uint8_t page, const char *name) {
 }
 
 static void test_menu(Ui &ui, Menu m, const char *name) {
-    ui.goto_page(static_cast<uint8_t>(Page::Tools), 5000);
+    ui.goto_page(static_cast<uint8_t>(Page::Lines), 5000);
     ui.push_menu(m, 5100);
     test_screen(ui, name, 5200);
 }
@@ -452,7 +452,7 @@ static void test_connection_gallery() {
         g_stub.ident.state = k2::pd::IdState::Done; g_stub.ident.ok_mask = 0x1F; g_stub.ident.revision = 0x30000000;
         open(2); shot("sink_filled"); subpage("sink_actions");
         // Tools: the new row order
-        ui->goto_page(static_cast<uint8_t>(Page::Tools), now += 100);
+        ui->goto_page(static_cast<uint8_t>(Page::Lines), now += 100);
         ui->tick(now += 100);
         shot("tools");
     }
@@ -498,7 +498,7 @@ static void test_wizard_gallery() {
         CHECK_EQ(g_stub.spoof_arms, 0);
         press(Button::Back);                                          // closes the window only
         // Tools -> Spoof: arm the first built-in chip at once, then the wizard's Cable step shows the same marker.
-        ui.goto_page(static_cast<uint8_t>(Page::Tools), now += 100);
+        ui.goto_page(static_cast<uint8_t>(Page::Lines), now += 100);
         ui.tick(now += 100);
         CHECK_EQ(ui.push_menu(Menu::Spoof, now += 100), true);
         ui.tick(now += 100);
@@ -530,7 +530,7 @@ static void test_spoof_focus_and_active() {
         g_stub.lib.push_back(e);
     }
     static Ui ui;
-    ui.init(1000); ui.set_rotation(0, 1000); ui.tick(1000); ui.goto_page(static_cast<uint8_t>(Page::Tools), 1100);
+    ui.init(1000); ui.set_rotation(0, 1000); ui.tick(1000); ui.goto_page(static_cast<uint8_t>(Page::Lines), 1100);
     ui.push_menu(Menu::Spoof, 1200);
     test_screen(ui, "spoof_off_instructions", 1250);
     constexpr int kList = SpoofPage::kListY;      // the identity list starts under the two key/value rows
@@ -570,7 +570,7 @@ static void test_cards_scenes() {
     g_stub = {};
     stub_cards_reset();
     static Ui ui;
-    ui.init(1000); ui.set_rotation(0, 1000); ui.tick(1000); ui.goto_page(static_cast<uint8_t>(Page::Tools), 1100);
+    ui.init(1000); ui.set_rotation(0, 1000); ui.tick(1000); ui.goto_page(static_cast<uint8_t>(Page::Lines), 1100);
     ui.push_menu(Menu::Cards, 1200);
     test_screen(ui, "cards_empty", 1250);
     ui.on_button(Button::Back, ButtonEvent::Short, 1300);
@@ -651,7 +651,7 @@ static void test_cards_fh22_scenes() {
     g_stub = {};
     stub_cards_reset();
     static Ui ui;
-    ui.init(1000); ui.set_rotation(0, 1000); ui.tick(1000); ui.goto_page(static_cast<uint8_t>(Page::Tools), 1100);
+    ui.init(1000); ui.set_rotation(0, 1000); ui.tick(1000); ui.goto_page(static_cast<uint8_t>(Page::Lines), 1100);
     report_card::Card fh = cardfx::fh22_full();
     report_card::hw::put(fh);
     ui.push_menu(Menu::Cards, 1200);
@@ -686,7 +686,7 @@ static void test_cards_vooc_fold_scenes() {
     for (uint8_t rot = 0; rot < 4; ++rot) {
         static Ui ui;
         const uint32_t t = 1000u + 1000u * rot;
-        ui.init(t); ui.set_rotation(rot, t); ui.tick(t); ui.goto_page(static_cast<uint8_t>(Page::Tools), t + 100);
+        ui.init(t); ui.set_rotation(rot, t); ui.tick(t); ui.goto_page(static_cast<uint8_t>(Page::Lines), t + 100);
         ui.push_menu(Menu::Cards, t + 200);
         ui.tick(t + 300);
         ui.on_button(Button::Ok, ButtonEvent::Short, t + 400);
@@ -712,7 +712,7 @@ static void test_emarker_menu_scenes() {
         g_stub.lib.push_back(e);
     }
     static Ui ui;
-    ui.init(1000); ui.set_rotation(0, 1000); ui.tick(1000); ui.goto_page(static_cast<uint8_t>(Page::Tools), 1100);
+    ui.init(1000); ui.set_rotation(0, 1000); ui.tick(1000); ui.goto_page(static_cast<uint8_t>(Page::Lines), 1100);
     ui.goto_page(kConnTabAlias + 1, 1200);                        // Connection, Cable place
     ui.run_action(Action::EmarkerScan, 1300); ui.tick(1350);
     test_screen(ui, "conn_cable", 1380);
@@ -947,7 +947,7 @@ int main() {
     test_page(ui, kPdPage, "pd");
     test_page(ui, kDiagPage, "diag");
     test_page(ui, static_cast<uint8_t>(Page::Lines), "lines");
-    test_page(ui, static_cast<uint8_t>(Page::Tools), "tools");
+    test_page(ui, static_cast<uint8_t>(Page::Lines), "tools");
     // Power-flow arrow glyphs (UTF-8 in the 24 px font) survive the strip-wise capture.
     g_stub.pm.current_ma = -1520; g_stub.pm.power_mw = -30456; g_stub.pm.flow = k2::power::Flow::Reverse;
     test_page(ui, 0, "home_reverse");
@@ -1164,15 +1164,16 @@ int main() {
         test_screen(ui, "wiz_back_from_live", t); t += 200;    // back at CONFIRM
         press(Button::Back);                                   // CURRENT
         press(Button::Back);                                   // OFFER (fixed: no VOLTAGE)
-        press(Button::Back);                                   // exits
-        CHECK_EQ(static_cast<int>(ui.menu()), static_cast<int>(Menu::Count));
+        press(Button::Back);                                   // exits: a menu over Lines is the Charger place, shown in the ring
+        CHECK_EQ(static_cast<int>(ui.menu()), static_cast<int>(Menu::Connection));
+        CHECK_EQ(ui.ring_view(), true);
         g_stub.sink = {};
     }
     {   // PPS path: OFFER on the 3.3-11 V PPS, VOLTAGE with coarse steps, CURRENT, CONFIRM
         uint32_t t = 15000;
         auto press = [&](Button b, ButtonEvent e = ButtonEvent::Short) { ui.on_button(b, e, t); t += 100; };
         const int req0 = g_stub.requests;
-        ui.goto_page(static_cast<uint8_t>(Page::Tools), t); ui.push_menu(Menu::PdTrigger, t + 50); t += 100;
+        ui.goto_page(static_cast<uint8_t>(Page::Lines), t); ui.push_menu(Menu::PdTrigger, t + 50); t += 100;
         for (int i = 0; i < 4; i++) press(Button::Plus);       // PDO 5: PPS 3.3-11 V
         test_screen(ui, "wiz_offer_pps", t); t += 200;
         press(Button::Ok);
@@ -1199,7 +1200,7 @@ int main() {
         uint32_t t = 17000;
         auto press = [&](Button b, ButtonEvent e = ButtonEvent::Short) { ui.on_button(b, e, t); t += 100; };
         g_stub.request_err = k2::pd::Err::Busy;
-        ui.goto_page(static_cast<uint8_t>(Page::Tools), t); ui.push_menu(Menu::PdTrigger, t + 50); t += 100;
+        ui.goto_page(static_cast<uint8_t>(Page::Lines), t); ui.push_menu(Menu::PdTrigger, t + 50); t += 100;
         press(Button::Ok); press(Button::Ok);                  // 5 V fixed: CONFIRM
         press(Button::Ok);
         test_screen(ui, "wiz_confirm_refused", t); t += 200;
@@ -1207,7 +1208,7 @@ int main() {
         ui.goto_page(static_cast<uint8_t>(Page::Home), t);
         fill_epr();
         t += 100;
-        ui.goto_page(static_cast<uint8_t>(Page::Tools), t); ui.push_menu(Menu::PdTrigger, t + 50); t += 100;
+        ui.goto_page(static_cast<uint8_t>(Page::Lines), t); ui.push_menu(Menu::PdTrigger, t + 50); t += 100;
         for (int i = 0; i < 9; i++) press(Button::Plus);
         test_screen(ui, "wiz_offer_scroll", t); t += 200;
         ui.goto_page(static_cast<uint8_t>(Page::Home), t);
@@ -1399,7 +1400,7 @@ int main() {
     // Cable resistance submenu: waiting, idle reference taken, result shown.
     g_stub.pm_online = true;
     g_stub.pm.vbus_mv = 5100; g_stub.pm.current_ma = 40;
-    ui.goto_page(static_cast<uint8_t>(k2::Page::Tools), 5500);
+    ui.goto_page(static_cast<uint8_t>(k2::Page::Lines), 5500);
     ui.push_menu(k2::Menu::CableR, 5501);
     test_screen(ui, "cable_wait", 5200);
     {   // Reset visibly does something, an instruction carries no success mark, the table names the load port.
@@ -1559,26 +1560,14 @@ int main() {
         CHECK_EQ(g_panel[141 * 240 + kOx + 8], k2::kError);        // Meter dot red
         g_stub.pm_online = true;
     }
-    {   // The Bench: seven 28 px rows from y24, the rail and the nodes at x8..15 (y+4..11), the focused row on the focus ground
-        // (Classic: the bar at x0..2); then the Charger place, its actions as a RowList with the blockers' tails and the footer.
+    {   // The Charger place (ring page 6), its actions as a RowList with the blockers' tails.
         const auto saved_pm = g_stub.pm;
         const auto saved_em = g_stub.em;
         g_stub.pm.vbus_mv = 5000; g_stub.pm.current_ma = 1000;
         g_stub.em = {};               // no cable read
         ui.debug_fake_pdos(0, 30900); // release forced-link fixtures so the live load guard updates
-        ui.context().keep.bench_sel = 1;
-        ui.open_place(bench::Place::Meter, 31000);
-        test_screen(ui, "bench", 31100);
-        CHECK_EQ(g_panel[44 * 240 + kOx + 1], k2::kFocusBar);
-        CHECK_EQ(g_panel[44 * 240 + kOx + 134], k2::kFocusFill);
-        CHECK_EQ(g_panel[12 * 240 + kOx + 11], k2::kAccent);
-        CHECK_EQ(g_panel[72 * 240 + kOx + 11], k2::kBg);
-        CHECK_EQ(g_panel[69 * 240 + kOx + 9], k2::kAccent);
-        CHECK_EQ(g_panel[64 * 240 + kOx + 11], k2::kAccent);
-        CHECK_EQ(g_panel[4 * 240 + kOx + 11], k2::kBg);
-        CHECK_EQ(count_colours(4, 224, 200, 238, {k2::kErrorT, k2::kCautionT}) > 0, false);   // the fact line is a fact
         ui.context().keep.place_sel[static_cast<int>(bench::Place::Charger)] = 0;
-        ui.on_button(Button::Ok, ButtonEvent::Short, 31200);           // the Charger place page: Info sub-page
+        ui.open_place(bench::Place::Charger, 31200);                   // the Charger place page, entered: Info sub-page
         ui.on_button(Button::Ok, ButtonEvent::Short, 31250);           // OK enters the Actions sub-page
         test_screen(ui, "bench_charger", 31300);
         CHECK_EQ(ui.menu() == Menu::Connection, 1);
@@ -1596,13 +1585,14 @@ int main() {
         g_stub.em = saved_em;
         ui.debug_link(false, 31510); ui.debug_link(true, 31520); // isolate the synthetic load fixture
         ui.open_place(bench::Place::Meter, 31530);
+        ui.on_button(Button::Back, ButtonEvent::Short, 31535);         // Home entered -> the ring
     }
     {   // Cable tab with no cable data: the large "not read" message, no rows.
         const auto saved = g_stub.em;
         const auto saved_vbus = g_stub.pm.vbus_mv;
         g_stub.pm.vbus_mv = 0;                                 // no source on the cable: the VCONN scan
         g_stub.em = {};                                        // valid = false
-        ui.goto_page(static_cast<uint8_t>(Page::Tools), 31900);
+        ui.goto_page(static_cast<uint8_t>(Page::Lines), 31900);
         ui.tick(31905);                                        // the page reads the new VBUS
         ui.goto_page(kConnTabAlias + 1, 31910);
         ui.tick(31915);
@@ -1723,7 +1713,7 @@ int main() {
     test_cards_vooc_fold_scenes();
     // Scratch-leasing page falls back cleanly to 1-row stack strips without conflicting with its own paint Lease.
     {
-        ui.goto_page(static_cast<uint8_t>(Page::Tools), 8500);
+        ui.goto_page(static_cast<uint8_t>(Page::Lines), 8500);
         ui.push_menu(Menu::Share, 8510);
         CHECK_EQ(ui.capture_needs_scratch(), true);
         test_screen(ui, "share_fallback", 8600);
@@ -1732,7 +1722,7 @@ int main() {
     }
     // Every string any page or submenu draws must only use glyphs of the font it is drawn with.
     for (int m = 0; m < static_cast<int>(Menu::Count); m++) {
-        ui.goto_page(static_cast<uint8_t>(Page::Tools), 9000);
+        ui.goto_page(static_cast<uint8_t>(Page::Lines), 9000);
         ui.push_menu(static_cast<Menu>(m), 9001);
         for (int st = 0; st < 4; st++) {                      // idle, negotiating, active, failed
             g_stub.fc_state = st;

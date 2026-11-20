@@ -3533,7 +3533,7 @@ bool ChargerTestPage::on_event(Event e) {
         // call); with nothing to stop BACK walks the wizard back.
         if (s_.stop() != ChargerTestSession::Stopped::Nothing) { update(ctx_.now); return true; }
         switch (s_.stage_) {
-        case Stage::Algorithms: return back_event(e);
+        case Stage::Algorithms: return false;   // the Ui leaves to the ring
         case Stage::Group: set_stage(Stage::Custom, s_.family_); break;
         case Stage::Custom: set_stage(Stage::Algorithms, kCustomRow); break;
         case Stage::Cable: {

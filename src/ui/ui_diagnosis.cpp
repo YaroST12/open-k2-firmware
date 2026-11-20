@@ -223,7 +223,7 @@ bool DiagnosisPage::on_event(Event e) {
         ctx_.ui->push_menu(Menu::BlackBox, ctx_.now);
         return true;
     }
-    return back_event(e);
+    return false;
 }
 
 Strip DiagnosisPage::labels() const {

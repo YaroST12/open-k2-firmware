@@ -161,7 +161,7 @@ static void test_emarker_unpowered_setup() {
     g_stub.pm_online = true;
     ui.init(0);
     ui.debug_link(false, 1000);
-    ui.goto_page(static_cast<uint8_t>(Page::Tools), 1100);
+    ui.goto_page(static_cast<uint8_t>(Page::Lines), 1100);
     ui.push_menu(Menu::Emarker, 1200);
     ui.tick(1300);
     for (uint8_t r = 0; r < 4; ++r) {
@@ -267,7 +267,7 @@ static void test_trigger_ranges() {
     g_stub.caps.pdos[0] = pd::decode_pdo(avs);
     g_stub.caps.pdos[1] = pd::decode_pdo(spr_avs);
     ui.tick(1000);
-    ui.goto_page(static_cast<uint8_t>(Page::Tools), 1100);
+    ui.goto_page(static_cast<uint8_t>(Page::Lines), 1100);
     CHECK_EQ(ui.push_menu(Menu::PdTrigger, 1150), true);
     ui.tick(1300);
     for (uint8_t r = 0; r < 4; ++r) {
@@ -289,7 +289,7 @@ static void test_trigger_edit_caption() {
     g_stub.caps.num_pdos = 1;
     g_stub.caps.pdos[0] = pd::decode_pdo(pps);
     ui.tick(1000);
-    ui.goto_page(static_cast<uint8_t>(Page::Tools), 1100);
+    ui.goto_page(static_cast<uint8_t>(Page::Lines), 1100);
     CHECK_EQ(ui.push_menu(Menu::PdTrigger, 1150), true);
     ui.tick(1300);
     ui.on_button(Button::Ok, ButtonEvent::Short, 1400);
@@ -311,7 +311,7 @@ static void test_live_measurements() {
     g_stub.caps.num_pdos = 1;
     g_stub.caps.pdos[0] = pd::decode_pdo(fixed);
     ui.tick(1000);
-    ui.goto_page(static_cast<uint8_t>(Page::Tools), 1100);
+    ui.goto_page(static_cast<uint8_t>(Page::Lines), 1100);
     CHECK_EQ(ui.push_menu(Menu::PdTrigger, 1150), true);
     ui.tick(1300);
     // The test uses only the fake host sink; no device or real voltage request is involved.

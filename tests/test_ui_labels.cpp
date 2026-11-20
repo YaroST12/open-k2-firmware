@@ -133,6 +133,12 @@ static void test_vocabulary() {
     CHECK_EQ(label_violation(strip({"Back"}, {"V-"}, {}, {"V+"})) != nullptr, 1);
     CHECK_EQ(label_violation(strip({"Back"}, {"Up"}, {}, {"+"})) != nullptr, 1);
     CHECK_EQ(label_violation(strip({"Back"}, {"-"}, {}, {"Dn"})) != nullptr, 1);
+    // The ring strip: Home / Prev / Enter / Next; the pairs never split or cross.
+    CHECK_EQ(label_violation(strip({"Home", "Jump"}, {"Prev"}, {"Enter"}, {"Next"})) == nullptr, 1);
+    CHECK_EQ(label_violation(strip({"Back"}, {"Hero-"}, {"Zoom", "Reset"}, {"Hero+"})) == nullptr, 1);
+    CHECK_EQ(label_violation(strip({"Back"}, {"Prev"}, {}, {"Dn"})) != nullptr, 1);
+    CHECK_EQ(label_violation(strip({"Back"}, {"Up"}, {}, {"Next"})) != nullptr, 1);
+    CHECK_EQ(label_violation(strip({"Back"}, {"Hero-"}, {}, {"Next"})) != nullptr, 1);
     // A footer never repeats the strip.
     for (const char *f : {"This boot only", "Replug to apply", "Back to 5V", "Above 5V: send twice", "Okay", "1/3 cables"})
         CHECK_EQ(footer_is_clean(f), 1);

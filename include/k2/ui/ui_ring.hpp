@@ -9,6 +9,7 @@
 #pragma once
 #include <cstdint>
 #include "k2/ui/ui_events.hpp"
+#include "k2/ui/ui_labels.hpp"
 #include "k2/ui/ui_types.hpp"
 
 namespace k2::ring {
@@ -88,6 +89,16 @@ constexpr Step view_key(Pos cur, Event e, Pos long_back) {
         return {long_back == cur ? Do::None : Do::Show, long_back};
     }
     return {Do::None, cur};
+}
+
+// The strip in the ring view: Prev / Next move, Enter dims where the page has nothing to do, Back goes Home and its long press
+// (named Jump) goes to the chosen page; nothing is named when the long press would land where the short one does or on the
+// page already in view.
+constexpr Strip view_strip(Pos cur, Pos long_back) {
+    const bool jump = long_back != cur && long_back != Pos::Home;
+    sl::Id back = jump ? sl::HomeJump : sl::Home;
+    if (cur == Pos::Home) back = jump ? sl::Jump : sl::None;
+    return {{back, sl::Prev, can_enter(cur) ? sl::Enter : sl::EnterDim, sl::Next}};
 }
 
 // A Back the entered page did not take: a short one at the page's top level, or a long one anywhere, leaves to the ring.

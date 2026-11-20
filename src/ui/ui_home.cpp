@@ -150,28 +150,28 @@ void HomePage::invalidate() {
     for (hm::DigitField &d : hd_) d.invalidate();
 }
 
+// Entered (the ring view owns the keys otherwise): +/- walk the hero, OK zooms the trend span, long OK resets the energy.
 Strip HomePage::labels() const {
-    Strip l = base_labels();                  // Up / Dn flip the faces (long: the trend span)
-    l[Button::Back] = sl::Hero;               // no level above Flow; long: the hero cycles W -> V -> A
-    l[Button::Ok] = sl::BenchReset;           // short: the Bench; long: energy reset
-    return l;
+    return {{sl::Back, sl::HeroPrev, sl::ZoomReset, sl::HeroNext}};
 }
 
 bool HomePage::on_event(Event e) {
-    if (e.button == Button::Ok && e.press == Press::Long) {
+    if (e.press == Press::Long && e.button == Button::Ok) {
         ctx_.ui->run_action(Action::EnergyReset, ctx_.now);   // energy, peaks, sag and the card cycler
         return true;
     }
-    if ((e.button == Button::Plus || e.button == Button::Minus) && e.press == Press::Long) {   // the trend span 10s / 60s / 10m
-        window_ = e.button == Button::Plus ? trend::next(window_) : trend::prev(window_);
+    if (e.press != Press::Short) return false;
+    if (e.button == Button::Ok) {   // the trend span 10s / 60s / 10m
+        window_ = trend::next(window_);
         sweep_ok_ = false;   // the next update reloads the sweeps for the new window and repaints the cells
         return true;
     }
-    if (e.button == Button::Back && e.press == Press::Long) {
-        ctx_.ui->set_home_hero(hm::next(ctx_.keep.home_hero));
+    if (e.button == Button::Plus || e.button == Button::Minus) {
+        const home::Qty q = ctx_.keep.home_hero;
+        ctx_.ui->set_home_hero(e.button == Button::Plus ? hm::next(q) : hm::prev(q));
         return true;
     }
-    return back_event(e);
+    return false;
 }
 
 // ---- sampling --------------------------------------------------------------------------------

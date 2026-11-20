@@ -277,15 +277,15 @@ static void test_live_home() {
     CHECK_TRUE(ink_logical(ui, 4, 223, 220, 16, kDim) > 8);               // session row 2: the diagnosis
 }
 
-// Long Back cycles the hero W -> V -> A -> W: each quantity moves to the hero cell, the setting is stored, and a new Ui
+// Hero+ (the entered Home's PLUS) cycles the hero W -> V -> A -> W: each quantity moves to the hero cell, the setting is stored, and a new Ui
 // (a reboot) starts with the stored hero. A record without the field reads W.
 static void test_hero_cycle() {
     Ui &ui = home_ui();
     CHECK_EQ(int(ui.context().keep.home_hero), int(hm::Qty::W));
     live_pd(false, 20010, 1520);
     run(ui, 20);
-    CHECK_STR(ui.labels().b[static_cast<int>(Button::Back)].lng, "Hero");
-    ui.on_button(Button::Back, ButtonEvent::Long, g_t);
+    CHECK_STR(ui.labels().b[static_cast<int>(Button::Plus)].shrt, "Hero+");
+    ui.on_button(Button::Plus, ButtonEvent::Short, g_t);
     run(ui, 20);
     dump("2c", "hero_v");
     CHECK_EQ(int(ui.context().keep.home_hero), int(hm::Qty::V));
@@ -294,7 +294,7 @@ static void test_hero_cycle() {
     CHECK_TRUE(ink_logical(ui, 0, 0, 4, kHeroH, kVolt) == 4 * kHeroH);
     CHECK_TRUE(ink_logical(ui, 8, kRowDigitY[0], 120, 30, kWatt) > 40);   // W moves to row 1
     CHECK_EQ(ink_logical(ui, 10, 68, 205, 3, kVolt), 0);                  // the V hero has no bar
-    ui.on_button(Button::Back, ButtonEvent::Long, g_t);
+    ui.on_button(Button::Plus, ButtonEvent::Short, g_t);
     run(ui, 20);
     dump("2c", "hero_a");
     CHECK_EQ(int(uiprefs::stored().home_hero), 2);
@@ -307,7 +307,8 @@ static void test_hero_cycle() {
     CHECK_EQ(int(again.context().keep.home_hero), int(hm::Qty::W));   // nothing restored: the default
     again.restore_home_hero(kept);
     CHECK_EQ(int(again.context().keep.home_hero), int(hm::Qty::A));
-    again.on_button(Button::Back, ButtonEvent::Long, g_t);   // fresh_ui starts on Home: A -> W
+    again.on_button(Button::Ok, ButtonEvent::Short, g_t);    // fresh_ui starts on Home in the ring: enter it
+    again.on_button(Button::Plus, ButtonEvent::Short, g_t);  // A -> W
     CHECK_EQ(int(again.context().keep.home_hero), int(hm::Qty::W));
     CHECK_EQ(int(uiprefs::stored().home_hero), 0);
     CHECK_EQ(int(hm::qty_from(7)), int(hm::Qty::W));
@@ -483,29 +484,26 @@ static void test_sweep_strips_match_full_render() {
     }
 }
 
-// A long Dn steps the window of all three sweeps forward, a long Up back; its label sits once, after the hero label.
+// OK (Zoom) steps the window of all three sweeps 10 s -> 60 s -> 10 min -> 10 s; its label sits once, after the hero label.
 static void test_window_cycle() {
     Ui &ui = home_ui();
     live_pd(false, 20010, 1520);
     run(ui, 10);
     const int a = ink_logical(ui, 46, 3, 30, 12, kFaint);   // the window label, faint after POWER
     CHECK_TRUE(a > 3);
-    ui.on_button(Button::Plus, ButtonEvent::Long, g_t);
+    ui.on_button(Button::Ok, ButtonEvent::Short, g_t);
     run(ui, 10);
     CHECK_TRUE(ui.context().keep.home_window == trend::Window::S60);
     dump("2c", "window_60s");
-    ui.on_button(Button::Plus, ButtonEvent::Long, g_t);
+    ui.on_button(Button::Ok, ButtonEvent::Short, g_t);
     run(ui, 10);
     dump("2c", "window_10m");
-    ui.on_button(Button::Minus, ButtonEvent::Long, g_t);
+    ui.on_button(Button::Ok, ButtonEvent::Short, g_t);
     run(ui, 10);
-    CHECK_TRUE(ui.context().keep.home_window == trend::Window::S60);
-    ui.on_button(Button::Minus, ButtonEvent::Long, g_t);
-    run(ui, 10);
-    CHECK_TRUE(ui.context().keep.home_window == trend::Window::S10);
+    CHECK_TRUE(ui.context().keep.home_window == trend::Window::S10);   // around
     CHECK_TRUE(ui.page() == Page::Home);   // the span presses never leave Flow
     for (int r = 0; r < 2; r++) CHECK_EQ(ink_logical(ui, 30, kRowTop[r] + 3, 18, 12, kFaint), 0);   // never in a ledger row
-    CHECK_STR(ui.labels().b[static_cast<int>(Button::Ok)].shrt, "Bench");
+    CHECK_STR(ui.labels().b[static_cast<int>(Button::Ok)].shrt, "Zoom");
     CHECK_STR(ui.labels().b[static_cast<int>(Button::Ok)].lng, "Reset");
 }
 

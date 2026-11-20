@@ -109,7 +109,7 @@ void draw_for_a_while(Ui &ui, const char *screen, int rot, const char *scenario)
 
 void walk_pages(Ui &ui, int rot, const Scenario &sc) {
     constexpr uint8_t pages = static_cast<uint8_t>(Page::Count);
-    static const char *const kPageNames[] = {"home", "detail", "charger-test", "lines", "tools", "settings", "graphs", "ripple"};
+    static const char *const kPageNames[] = {"home", "detail", "charger-test", "lines", "settings", "graphs", "ripple"};
     static_assert(std::size(kPageNames) == pages, "a page without a name here is walked out of bounds");
     for (uint8_t p = 0; p < pages; ++p) {
         enter(kPageNames[p], rot, sc.name);
@@ -122,13 +122,13 @@ void walk_pages(Ui &ui, int rot, const Scenario &sc) {
     static_assert(std::size(kMenuNames) == static_cast<std::size_t>(Menu::Count), "a menu without a name here is walked under another's label");
     for (uint8_t m = 0; m < static_cast<uint8_t>(Menu::Count); ++m) {
         enter(kMenuNames[m], rot, sc.name);
-        ui.goto_page(static_cast<uint8_t>(Page::Tools), g_t);
+        ui.goto_page(static_cast<uint8_t>(Page::Lines), g_t);
         if (!ui.push_menu(static_cast<Menu>(m), g_t)) continue;   // a menu that refuses to open has nothing to draw
         draw_for_a_while(ui, kMenuNames[m], rot, sc.name);
     }
     // Device twins: every row has been the focused one (note line open), then the armed confirm and the Learn row's refusal.
     enter("twin-rows", rot, sc.name);
-    ui.goto_page(static_cast<uint8_t>(Page::Tools), g_t);
+    ui.goto_page(static_cast<uint8_t>(Page::Lines), g_t);
     if (ui.push_menu(Menu::Twin, g_t)) {
         draw_for_a_while(ui, "twin-rows", rot, sc.name);
         ui.on_button(Button::Ok, ButtonEvent::Short, g_t);                      // arms the first row (or says why not)
@@ -139,7 +139,7 @@ void walk_pages(Ui &ui, int rot, const Scenario &sc) {
     }
     // Loop probe: the armed confirm, a run in flight, its end (share view, then back to the table), a BACK stop.
     enter("loop-probe", rot, sc.name);
-    ui.goto_page(static_cast<uint8_t>(Page::Tools), g_t);
+    ui.goto_page(static_cast<uint8_t>(Page::Lines), g_t);
     if (ui.push_menu(Menu::LoopProbe, g_t)) {
         ui.on_button(Button::Ok, ButtonEvent::Short, g_t);                      // arms START (or says why not)
         draw_for_a_while(ui, "loop-armed", rot, sc.name);
@@ -158,7 +158,7 @@ void walk_pages(Ui &ui, int rot, const Scenario &sc) {
     // pages, then Save (the saved row shows on Setup) and a saved result opened again.
     // The run refuses a load, so the output is empty for it and the stub converter follows each Request.
     enter("pd-stress", rot, sc.name);
-    ui.goto_page(static_cast<uint8_t>(Page::Tools), g_t);
+    ui.goto_page(static_cast<uint8_t>(Page::Lines), g_t);
     const int32_t amps_before = g_stub.pm.current_ma;
     const auto sink_before = g_stub.sink;
     const auto cc_before = g_stub.caps.active_cc;
@@ -200,7 +200,7 @@ void walk_pages(Ui &ui, int rot, const Scenario &sc) {
     g_stub.sink = sink_before;
     g_stub.caps.active_cc = cc_before;
     // Memory: the healthy, caution, error, large-number and not-yet-measured readings.
-    ui.goto_page(static_cast<uint8_t>(Page::Tools), g_t);
+    ui.goto_page(static_cast<uint8_t>(Page::Lines), g_t);
     if (ui.push_menu(Menu::Memory, g_t)) {
         memstat::Snapshot m;
         m.ram_total = 98304; m.ram_static = 64000; m.psp_size = 10944; m.msp_size = 1344;
@@ -256,7 +256,7 @@ void walk_pages(Ui &ui, int rot, const Scenario &sc) {
     // the phases, discharging, done), the saved runs and a stored run.
     enter("battery", rot, sc.name);
     stub_battery_reset();
-    ui.goto_page(static_cast<uint8_t>(Page::Tools), g_t);
+    ui.goto_page(static_cast<uint8_t>(Page::Lines), g_t);
     if (ui.push_menu(Menu::Battery, g_t)) {
         auto step = [&](Button b, const char *what) {
             ui.on_button(b, ButtonEvent::Short, g_t);
@@ -307,7 +307,7 @@ void walk_pages(Ui &ui, int rot, const Scenario &sc) {
             g_stub.diag_report = path == kDiagFixtures[0] ? diag_fixture::case1() : diag_fixture::report(path);
             g_stub.diag_state = 1;
             enter("diagnosis-rows", rot, sc.name);
-            ui.goto_page(static_cast<uint8_t>(Page::Tools), g_t);
+            ui.goto_page(static_cast<uint8_t>(Page::Lines), g_t);
             if (ui.push_menu(Menu::Diagnosis, g_t)) {
                 draw_for_a_while(ui, "diagnosis-rows", rot, sc.name);
                 for (int i = 0; i < 24; ++i) { ui.on_button(Button::Plus, ButtonEvent::Short, g_t); g_t += 150; ui.tick(g_t); }
@@ -506,7 +506,7 @@ void test_long_cable_names() {
         for (int i = 0; i < 8; ++i) { draw_for_a_while(ui, "wizard-cable-long", rot, "names"); press(Button::Plus); }
         // Spoof: arm each clone in turn (the amber ARMED pill on the longest name), then leave.
         trunc::context("long cable names, spoof");
-        ui.goto_page(static_cast<uint8_t>(Page::Tools), g_t);
+        ui.goto_page(static_cast<uint8_t>(Page::Lines), g_t);
         ui.push_menu(Menu::Spoof, g_t);
         for (int i = 0; i < 8; ++i) { press(Button::Plus); draw_for_a_while(ui, "spoof-long", rot, "names"); press(Button::Ok); draw_for_a_while(ui, "spoof-long", rot, "names"); }
         CHECK_EQ(trunc::data_hits() >= hits, true);   // external saved cable names may use fit_data on 208 px beside ARMED pill
@@ -551,7 +551,7 @@ void test_card_screens() {
         ui.init(g_t);
         ui.set_rotation(static_cast<uint8_t>(rot), g_t);
         auto press = [&](Button bt) { g_t += 150; ui.on_button(bt, ButtonEvent::Short, g_t); ui.tick(g_t + 50); g_t += 50; };
-        ui.goto_page(static_cast<uint8_t>(Page::Tools), g_t);
+        ui.goto_page(static_cast<uint8_t>(Page::Lines), g_t);
         ui.push_menu(Menu::Cards, g_t);
         draw_for_a_while(ui, "cards-list", rot, "cards");
         for (int card = 0; card < 4; ++card) {
@@ -590,7 +590,7 @@ void test_card_screens() {
                     d.group[0] = {verdict, max_mv, 0, uint8_t(why), 0};
                     d.group[5] = {verdict, max_mv, 0, uint8_t(why), 0};
                     CHECK_EQ(int(rc::hw::put(d)), int(rc::Err::Ok));
-                    ui.goto_page(static_cast<uint8_t>(Page::Tools), g_t);
+                    ui.goto_page(static_cast<uint8_t>(Page::Lines), g_t);
                     ui.push_menu(Menu::Cards, g_t);
                     for (int i = 0; i < 6; ++i) { g_t += 150; ui.tick(g_t); }
                     g_t += 150; ui.on_button(Button::Ok, ButtonEvent::Short, g_t); ui.tick(g_t + 50); g_t += 50;
@@ -656,7 +656,7 @@ void test_card_screens() {
                             CHECK_EQ(int(cells) * widest + (int(cells) - 1) * rl::kGridMetrics.gap <= rl::kGridMetrics.avail, true);
                         }
                         CHECK_EQ(int(rc::hw::put(d)), int(rc::Err::Ok));
-                        ui.goto_page(static_cast<uint8_t>(Page::Tools), g_t);
+                        ui.goto_page(static_cast<uint8_t>(Page::Lines), g_t);
                         ui.push_menu(Menu::Cards, g_t);
                         for (int i = 0; i < 6; ++i) { g_t += 150; ui.tick(g_t); }
                         g_t += 150; ui.on_button(Button::Ok, ButtonEvent::Short, g_t); ui.tick(g_t + 50); g_t += 50;
@@ -825,7 +825,7 @@ void test_resume_words() {
 // The Tools entry that opens the Connection page is called "Who's attached" (14 cells, the longest Tools name): its menu row and
 // the page's title bar must be drawn whole in every rotation (the font has the apostrophe: Spleen and Atkinson cover ASCII 32..126).
 void test_whos_attached() {
-    CHECK_STR(ToolsPage::tool_name(4), "Charger ID");
+    CHECK_STR(tool_name(4), "Charger ID");
     CHECK_EQ(fits_px(kSmallAdvPx, "Who's attached", 130), true);   // the Tools row title box
     apply(kScenarios[0]);
     static Ui ui;
@@ -834,7 +834,7 @@ void test_whos_attached() {
     const int cuts_before = trunc::failures();
     for (int rot = 0; rot < 4; ++rot) {
         ui.set_rotation(static_cast<uint8_t>(rot), g_t);
-        ui.goto_page(static_cast<uint8_t>(Page::Tools), g_t);
+        ui.goto_page(static_cast<uint8_t>(Page::Lines), g_t);
         for (int row = 0; row < 8; ++row) {   // every Tools row has been the focused one: the long name is drawn selected too
             draw_for_a_while(ui, "whos-attached tools", rot, "idle");
             g_t += 150; ui.on_button(Button::Plus, ButtonEvent::Short, g_t); ui.tick(g_t + 50); g_t += 50;

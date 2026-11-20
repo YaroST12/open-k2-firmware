@@ -4,6 +4,7 @@
 #include "k2/ui/ui_ring.hpp"
 #include <cstdio>
 #include <cstring>
+#include "k2/ui/ui_labels.hpp"
 using namespace k2;
 using namespace k2::ring;
 static int g_n = 0, g_bad = 0;
@@ -107,6 +108,22 @@ int main() {
     // The persisted long-back target: out of range falls back to Home.
     CHECK(sanitize_target(0) == Pos::Home && sanitize_target(10) == Pos::K2);
     CHECK(sanitize_target(11) == Pos::Home && sanitize_target(255) == Pos::Home);
+
+    // The ring strip: Prev / Next move, Enter dims where there is nothing to enter, Back goes Home (Jump names the long press).
+    {
+        const Strip s = view_strip(Pos::Graph, Pos::Home);
+        CHECK(s[Button::Back] == sl::Home && s[Button::Minus] == sl::Prev && s[Button::Ok] == sl::Enter && s[Button::Plus] == sl::Next);
+        CHECK(view_strip(Pos::Graph, Pos::Charger)[Button::Back] == sl::HomeJump);
+        CHECK(view_strip(Pos::Charger, Pos::Charger)[Button::Back] == sl::Home);   // already the jump target: nothing to name
+        CHECK(view_strip(Pos::Home, Pos::Home)[Button::Back] == sl::None);          // nowhere to go
+        CHECK(view_strip(Pos::Home, Pos::Charger)[Button::Back] == sl::Jump);
+        CHECK(view_strip(Pos::Lines, Pos::Home)[Button::Ok] == sl::EnterDim && view_strip(Pos::Numbers, Pos::Home)[Button::Ok] == sl::EnterDim);
+        for (int i = 0; i < kCount; ++i)
+            for (int j = 0; j < kCount; ++j) {
+                const PanelLabels pl = resolve(view_strip(static_cast<Pos>(i), static_cast<Pos>(j)));
+                CHECK(label_violation(pl) == nullptr);
+            }
+    }
 
     std::printf("%d checks, %d failed\n", g_n, g_bad);
     return g_bad != 0;

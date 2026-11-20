@@ -331,13 +331,11 @@ bool GraphsPage::on_event(Event e) {
         window_ = trend::next(window_);
         return true;
     }
-    return back_event(e);   // Up / Dn flip the faces, BACK goes to Flow
+    return false;
 }
 
 Strip GraphsPage::labels() const {
-    Strip l = base_labels();
-    l[Button::Ok] = sl::Zoom;
-    return l;
+    return {{sl::Back, sl::None, sl::Zoom, sl::None}};
 }
 
 }  // namespace k2

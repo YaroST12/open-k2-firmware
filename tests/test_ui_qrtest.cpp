@@ -325,7 +325,7 @@ static void test_page() {
     CHECK_EQ(int(ui.menu()), int(Menu::QrTest));
     ui.on_button(Button::Back, ButtonEvent::Short, 1850);
     CHECK_EQ(int(ui.menu()), int(Menu::Count));
-    ui.goto_page(static_cast<std::uint8_t>(Page::Tools), 1900);
+    ui.goto_page(static_cast<std::uint8_t>(Page::Lines), 1900);
     CHECK(ui.push_menu(Menu::QrTest, 2000));
     CHECK_EQ(int(ui.menu()), int(Menu::QrTest));
 }

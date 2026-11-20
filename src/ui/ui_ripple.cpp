@@ -352,7 +352,7 @@ bool RipplePage::on_event(Event e) {
         if (!cfg.hold) cap_due_ = true;
         return true;
     }
-    return back_event(e);
+    return false;
 }
 
 Strip RipplePage::labels() const {
@@ -361,9 +361,7 @@ Strip RipplePage::labels() const {
         l[Button::Ok] = sl::Cycle;
         return l;
     }
-    Strip l = base_labels();
-    l[Button::Ok] = ctx_.keep.ripple.hold ? sl::SetRun : sl::SetHold;
-    return l;
+    return {{sl::Back, sl::None, ctx_.keep.ripple.hold ? sl::SetRun : sl::SetHold, sl::None}};
 }
 
 }  // namespace k2

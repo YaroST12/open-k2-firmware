@@ -275,7 +275,7 @@ void pdo_text(const pd::Pdo &p, AmpsForm form, StrBuf<24> &out) {
 }
 }  // namespace
 
-static_assert(kPdoLineCells * static_cast<int>(kSmallAdvPx) <= kit::kTailX - kit::kTextX - kit::kTailGap, "a PDO row's text and tail run into each other");
+static_assert(kPdoLineCells * static_cast<int>(kSmallAdvPx) <= kit::kTailX - kit::kTextX - 8, "a PDO row's text and tail run into each other");
 
 void pdo_line(const pd::Pdo &p, PdoLine &out) {
     out = PdoLine{};

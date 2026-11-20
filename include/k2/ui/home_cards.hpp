@@ -12,9 +12,10 @@
 namespace k2::home {
 
 // ---- hero --------------------------------------------------------------------------------------
-// The quantity in the hero cell; the other two sit in the ledger rows. Long Back walks W -> V -> A -> W.
+// The quantity in the hero cell; the other two sit in the ledger rows. Entered Home: + walks W -> V -> A -> W, - back.
 enum class Qty : uint8_t { W, V, A };
 constexpr Qty next(Qty q) { return q == Qty::W ? Qty::V : q == Qty::V ? Qty::A : Qty::W; }
+constexpr Qty prev(Qty q) { return q == Qty::W ? Qty::A : q == Qty::V ? Qty::W : Qty::V; }
 // The stored setting: 1 = V, 2 = A, anything else (0, a record from older firmware) = W.
 constexpr Qty qty_from(uint8_t s) { return s == 1 ? Qty::V : s == 2 ? Qty::A : Qty::W; }
 constexpr uint8_t qty_byte(Qty q) { return static_cast<uint8_t>(q); }

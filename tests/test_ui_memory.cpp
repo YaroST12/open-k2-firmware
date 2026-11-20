@@ -85,7 +85,7 @@ static void test_rotation(int rot) {
     CHECK_EQ(int(ui.page()), int(Page::Settings));
     dump("settings_row", rot);
     ui.context().keep.settings_sel = 0;
-    ui.goto_page(static_cast<std::uint8_t>(Page::Tools), t);
+    ui.goto_page(static_cast<std::uint8_t>(Page::Lines), t);
     CHECK(ui.push_menu(Menu::Memory, t));
     // 146 blocks: 30 free is 20.5 % (fine), 29 is 19.9 % (caution), 15 is 10.3 % (caution), 14 is 9.6 % (error).
     const struct { const char *what; std::uint32_t free; std::uint32_t low; bool ok; int tone; } cases[] = {
@@ -142,7 +142,8 @@ static void test_rotation(int rot) {
     stub_memstat_set(memstat::Snapshot{});
     ui.on_button(Button::Back, ButtonEvent::Short, t);
     settle(ui, t);
-    CHECK_EQ(int(ui.page()), int(Page::Tools));
+    CHECK_EQ(int(ui.page()), int(Page::Settings));   // Memory over Lines belongs to the K2 place: BACK leaves to its ring page
+    CHECK_EQ(ui.ring_view(), true);
 }
 
 int main() {

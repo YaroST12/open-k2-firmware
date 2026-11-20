@@ -292,7 +292,7 @@ bool ConnectionPage::on_event(Event e) {
         }
         return false;
     }
-    return back_event(e);
+    return false;
 }
 
 void ConnectionPage::set_op(const char *text, uint32_t now_ms, uint32_t ms) {
@@ -1778,8 +1778,7 @@ static uint32_t mix_dev_extra(uint32_t h, const pd::ManufacturerInfo &batt_mfr, 
 void ConnectionPage::update(uint32_t now_ms) {
     PaintBudget *const bg = ctx_.budget;
     const pd::Link &link = ctx_.ui->link();
-    if (has_pages()) title_pager(act_page_ ? 1 : 0, 2);
-    else title_badge(ctx_.stale());
+    title_badge(ctx_.stale());
     if (bg && bg->more) return;
     sense(now_ms);
     if (iq_asked_ && !fusb302::interrogate_running()) {

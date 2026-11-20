@@ -46,7 +46,7 @@ Ui &open_page() {
     g_t += 1000;
     ui.init(g_t);
     ui.tick(g_t);
-    ui.goto_page(uint8_t(Page::Tools), g_t + 50);
+    ui.goto_page(uint8_t(Page::Lines), g_t + 50);
     ui.push_menu(Menu::Twin, g_t + 100);
     g_t += 150;
     ui.tick(g_t);
@@ -376,8 +376,9 @@ void test_back_stops_the_run() {
     CHECK_EQ(twin_hw::live_running() ? 1 : 0, 0);
     press(ui, Button::Back);                     // idle: BACK goes to the list,
     CHECK_EQ(ui.twin_page().in_detail() ? 1 : 0, 0);
-    press(ui, Button::Back);                     // then leaves the page
-    CHECK_EQ(int(ui.menu_depth()), 0);
+    press(ui, Button::Back);                     // then leaves the page: out to the Device ring page
+    CHECK_EQ(ui.ring_view(), true);
+    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Device));
 }
 
 void test_leaving_cancels_own_run() {

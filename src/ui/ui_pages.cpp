@@ -227,8 +227,8 @@ void model_row_text(StrBuf<24> &s) {
 // Shared page helpers
 // ---------------------------------------------------------------------------------------
 
-// Short bar names of the rotation pages, in Page order (a Bench place names itself: bar_icon_ + title_).
-static constexpr const char *kBarNames[] = {"HOME", "NUMBERS", "TEST", "LINES", "BENCH", "SETTINGS", "GRAPHS", "RIPPLE"};
+// Short bar names of the base pages, in Page order (a place page names itself: bar_icon_ + title_).
+static constexpr const char *kBarNames[] = {"HOME", "NUMBERS", "TEST", "LINES", "SETTINGS", "GRAPHS", "RIPPLE"};
 static_assert(sizeof kBarNames / sizeof *kBarNames == static_cast<size_t>(Page::Count), "one bar name per rotation page");
 
 kit::OppRailSpec PageBase::opp_rail() const {
@@ -239,30 +239,7 @@ kit::OppRailSpec PageBase::opp_rail() const {
 // Option B (Pure 2-Side-Bar): title, pager dots and live telemetry live on the 16 px Opposite Telemetry Rail,
 // so the legacy horizontal TopBar helpers are no-ops.
 void PageBase::title_bar() { bar_valid_ = true; }
-void PageBase::title_pager(int, int) { bar_valid_ = true; }
 void PageBase::title_badge(bool) { bar_valid_ = true; }
-
-bool PageBase::back_event(Event e) {
-    if (is_menu() || e.press != Press::Short) return false;
-    Ui &ui = *ctx_.ui;
-    if (any_face()) {
-        if (e.button == Button::Plus || e.button == Button::Minus) {   // Dn = the next face: Flow, Numbers, Lines, Flow...
-            ui.flip_face(e.button == Button::Plus ? 1 : -1, ctx_.now);
-            return true;
-        }
-        if (e.button == Button::Ok) {
-            ui.open_place(bench::Place::Meter, ctx_.now);   // the Bench's own list
-            return true;
-        }
-        if (e.button != Button::Back || id_ == Page::Home) return false;
-        ui.to_meter(ctx_.now);
-        return true;
-    }
-    if (e.button != Button::Back) return false;
-    if (id_ == Page::ChargerTest) ui.open_place_actions(bench::Place::Charger, ctx_.now);
-    else ui.open_place(bench::Place::Meter, ctx_.now);   // the K2 place: the Bench
-    return true;
-}
 
 bool PageBase::scroll_event(ListView &lv, Event e, uint32_t now_ms) {
     if (e.press != Press::Short) return false;
@@ -273,9 +250,7 @@ bool PageBase::scroll_event(ListView &lv, Event e, uint32_t now_ms) {
 }
 
 Strip PageBase::base_labels() const {
-    Strip p = nav_strip();   // modal menus too: short [+] / [-] scroll or step, BACK leaves
-    if (!is_menu() && any_face()) p[Button::Ok] = sl::Bench;
-    return p;
+    return nav_strip();   // modal menus too: short [+] / [-] scroll or step, BACK leaves
 }
 
 // ---------------------------------------------------------------------------------------
@@ -744,7 +719,7 @@ bool DiagPage::on_event(Event e) {
         ctx_.ui->open_share(qrshare::Type::Log, qrshare::kSchemaLog, "Log", len, ctx_.now);
         return true;
     }
-    return back_event(e);
+    return false;
 }
 
 Strip DiagPage::labels() const {
@@ -864,7 +839,7 @@ bool MemoryPage::on_event(Event e) {
         }
         return true;
     }
-    return back_event(e);
+    return false;
 }
 
 Strip MemoryPage::labels() const {
@@ -1076,7 +1051,6 @@ bool LinesPage::paint_verdict(const std::optional<adc::Reading> &r, uint32_t now
 
 void LinesPage::update(uint32_t now_ms) {
     PaintBudget *const bg = ctx_.budget;
-    title_pager(3);
     if (bg && bg->more) return;
     const std::optional<adc::Reading> &r = ctx_.analog;
     const int32_t mv[4] = {r ? r->dp_mv : 0, r ? r->dm_mv : 0, r ? r->cc1_mv : 0, r ? r->cc2_mv : 0};
@@ -1090,8 +1064,8 @@ void LinesPage::update(uint32_t now_ms) {
     paint_verdict(r, now_ms);
 }
 
-bool LinesPage::on_event(Event e) {
-    return back_event(e);
+bool LinesPage::on_event(Event) {
+    return false;   // view-only in the ring
 }
 
 Strip LinesPage::labels() const {
@@ -2409,7 +2383,7 @@ bool SettingsPage::on_event(Event e) {
         }
         return true;
     }
-    return back_event(e);
+    return false;
 }
 
 Strip SettingsPage::labels() const {

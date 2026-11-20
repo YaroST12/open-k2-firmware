@@ -38,15 +38,15 @@ static void test_only_the_visible_pages_exist() {
     ui.goto_page(static_cast<uint8_t>(Page::Detail), 1200);
     CHECK_EQ(int(ui.live_pages()), 1);
     CHECK_EQ(int(ui.page_bytes()), int(sizeof(DetailPage)));   // Home is gone, Detail took its place
-    ui.goto_page(static_cast<uint8_t>(Page::Tools), 1300);
-    CHECK_EQ(int(ui.page_bytes()), int(sizeof(ToolsPage)));
+    ui.goto_page(static_cast<uint8_t>(Page::Lines), 1300);
+    CHECK_EQ(int(ui.page_bytes()), int(sizeof(LinesPage)));
     CHECK(ui.push_menu(Menu::BlackBox, 1400));
     CHECK_EQ(int(ui.live_pages()), 2);                 // the base stays under its menu
     const std::size_t two = ui.page_bytes();
-    CHECK(two > sizeof(ToolsPage) + sizeof(BlackBoxPage) - 1);
+    CHECK(two > sizeof(LinesPage) + sizeof(BlackBoxPage) - 1);
     CHECK(ui.pop_menu(1500));
     CHECK_EQ(int(ui.live_pages()), 1);
-    CHECK_EQ(int(ui.page_bytes()), int(sizeof(ToolsPage)));   // the menu is destroyed, the arena is given back
+    CHECK_EQ(int(ui.page_bytes()), int(sizeof(LinesPage)));   // the menu is destroyed, the arena is given back
     ui.goto_page(static_cast<uint8_t>(Page::Home), 1600);
     CHECK_EQ(int(ui.page_bytes()), int(sizeof(HomePage)));
 }
@@ -54,7 +54,7 @@ static void test_only_the_visible_pages_exist() {
 // The deepest chain of the UI fits: Tools > Connection > Saved cables > Share.
 static void test_the_deepest_chain_fits() {
     Ui &ui = fresh();
-    ui.goto_page(static_cast<uint8_t>(Page::Tools), 1200);
+    ui.goto_page(static_cast<uint8_t>(Page::Lines), 1200);
     CHECK(ui.push_menu(Menu::Connection, 1300));
     CHECK(ui.push_menu(Menu::Emarker, 1400));
     CHECK(ui.push_menu(Menu::Share, 1500));
@@ -78,7 +78,7 @@ static void fill_record(Ui &ui, std::size_t n) {
 // Every rotation page under every menu chain the UI can open (goto_page / open_connection / the Connection place tools push
 // them over whatever page is current). A refused push is never silent, so each step must succeed here.
 static void test_every_base_fits_every_reachable_chain() {
-    const Page bases[] = {Page::Home, Page::Detail, Page::ChargerTest, Page::Lines, Page::Tools, Page::Settings};
+    const Page bases[] = {Page::Home, Page::Detail, Page::ChargerTest, Page::Lines, Page::Settings};
     std::uint32_t t = 2000;
     for (const Page base : bases) {
         const Menu tools[] = {Menu::Twin, Menu::LoopProbe, Menu::Emarker, Menu::Cards, Menu::PdStress, Menu::Spoof, Menu::CableR};
@@ -111,7 +111,7 @@ static void test_every_base_fits_every_reachable_chain() {
 static void test_a_refused_menu_is_not_silent() {
     Ui &ui = fresh();
     std::uint32_t t = 3000;
-    ui.goto_page(static_cast<uint8_t>(Page::Tools), t += 100);
+    ui.goto_page(static_cast<uint8_t>(Page::Lines), t += 100);
     CHECK(ui.push_menu(Menu::Connection, t += 100));
     CHECK(ui.push_menu(Menu::Emarker, t += 100));
     fill_record(ui, 64);
@@ -155,33 +155,23 @@ static void test_a_page_is_built_fresh_and_the_share_record_survives() {
 static void test_remembered_state_survives_leaving_the_page() {
     Ui &ui = fresh();
     CHECK(ui.context().keep.home_window == trend::Window::S10);
-    press(ui, Button::Plus, 1200, ButtonEvent::Long);  // Flow: a long Dn steps the trend span
+    press(ui, Button::Ok, 1190);                       // the ring: OK enters Home
+    press(ui, Button::Ok, 1200);                       // entered Home: OK steps the trend span
     const trend::Window w = ui.context().keep.home_window;
     CHECK(w != trend::Window::S10);
     ui.goto_page(static_cast<uint8_t>(Page::Detail), 1300);
     ui.goto_page(static_cast<uint8_t>(Page::Home), 1400);
     CHECK(ui.context().keep.home_window == w);
 
-    ui.goto_page(static_cast<uint8_t>(Page::Tools), 1500);
-    CHECK_EQ(ui.context().keep.bench_sel, 1);          // the Bench opens on Charger
-    press(ui, Button::Plus, 1600);
-    press(ui, Button::Plus, 1610);
-    CHECK_EQ(ui.context().keep.bench_sel, 3);
-    ui.goto_page(static_cast<uint8_t>(Page::Home), 1700);
-    ui.goto_page(static_cast<uint8_t>(Page::Tools), 1800);
-    CHECK_EQ(ui.context().keep.bench_sel, 3);
-    press(ui, Button::Minus, 1810);                    // the rebuilt page steps on from where the cursor was
-    CHECK_EQ(ui.context().keep.bench_sel, 2);
-    press(ui, Button::Ok, 1820);                       // a place remembers its own action
-    { std::uint32_t tt = 1820; settle(ui, tt); }
+    ui.open_place(bench::Place::Cable, 1500);          // the Cable ring page, entered
+    { std::uint32_t tt = 1500; settle(ui, tt); }
     press(ui, Button::Ok, 1825);                       // Info -> Actions (linear OK -> Actions)
     press(ui, Button::Plus, 1830);
-    CHECK_EQ(int(ui.context().keep.place_sel[static_cast<int>(bench::Place::Cable)]), 1);
+    CHECK_EQ(int(ui.context().keep.place_sel[static_cast<int>(bench::Place::Cable)]), 1);   // a place remembers its own action
     ui.goto_page(static_cast<uint8_t>(Page::Home), 1840);
-    press(ui, Button::Ok, 1850);                       // OK on Flow: the Bench's list, the focus still on the last place
-    CHECK(ui.page() == Page::Tools);
-    CHECK_EQ(int(ui.menu_depth()), 0);                 // the Bench list itself, no place page over it
-    CHECK_EQ(ui.context().keep.bench_sel, 2);
+    ui.open_place(bench::Place::Cable, 1850);
+    { std::uint32_t tt = 1850; settle(ui, tt); }
+    CHECK_EQ(int(ui.context().keep.place_sel[static_cast<int>(bench::Place::Cable)]), 1);
 
     ui.goto_page(static_cast<uint8_t>(Page::Settings), 1900);
     press(ui, Button::Plus, 2000);
@@ -204,7 +194,7 @@ static void test_remembered_state_survives_leaving_the_page() {
 // Connection is built on its default tab each time, whatever tab the last visit left.
 static void test_a_menu_reenters_on_its_default() {
     Ui &ui = fresh();
-    ui.goto_page(static_cast<uint8_t>(Page::Tools), 1200);
+    ui.goto_page(static_cast<uint8_t>(Page::Lines), 1200);
     CHECK(ui.push_menu(Menu::Connection, 1300));
     const conn::Tab dflt = ui.connection_page().tab();
     CHECK(ui.pop_menu(1350));

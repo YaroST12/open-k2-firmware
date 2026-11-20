@@ -73,7 +73,7 @@ static void battery_frames(Ui& ui, uint32_t& t, const char* prefix) {
     bt::hw::service().start(bt::Mode::RoundTrip, bt::Wiring::SamePort, true);
     for (int k = 0; k < 600; k++) bt::hw::poll(tb += 1000, true);
     render(ui, t, name("place_battery_charging"));
-    ui.goto_page(uint8_t(Page::Tools), t); render(ui, t, name("bench_battery_running"));
+    ui.goto_page(uint8_t(Page::Lines), t); render(ui, t, name("bench_battery_running"));
     bt::hw::service().rec().end_phase();
     bt::hw::service().rec().next();
     const int32_t ma = g_stub.pm.current_ma;
@@ -159,9 +159,6 @@ int main() {
     // Diag / Lines / Tools / Settings
     ui.goto_page(kDiagPage, t + 100); render(ui, t, "diag");
     ui.goto_page(uint8_t(Page::Lines), t + 100); render(ui, t, "lines");
-    ui.goto_page(uint8_t(Page::Tools), t + 100); render(ui, t, "tools");
-    for (int i = 0; i < 7; i++) { ui.on_button(Button::Plus, ButtonEvent::Short, t); t += 100; }
-    render(ui, t, "tools_end");   // last of the eight 1-line rows selected
     ui.goto_page(uint8_t(Page::Settings), t + 100); render(ui, t, "settings");
     for (int i = 0; i < 4; i++) { ui.on_button(Button::Plus, ButtonEvent::Short, t); t += 100; }
     render(ui, t, "settings_end");   // last of the five 2-line rows selected
@@ -195,7 +192,8 @@ int main() {
     static const uint8_t kPdOnly[] = {uint8_t(ct::Unit::Pd), uint8_t(ct::Unit::PdLow)};
     CHECK_EQ(ui.charger_test_set_units(kPdOnly), true);
     for (int i = 0; i < ct::kMaxSteps; ++i) ui.on_button(Button::Minus, ButtonEvent::Short, t);   // to the top
-    ui.on_button(Button::Ok, ButtonEvent::Short, t); t += 100;   // Next -> Cable
+    for (int i = 0; i < 2; ++i) ui.on_button(Button::Plus, ButtonEvent::Short, t);   // the "PD only" preset row (same units as above)
+    ui.on_button(Button::Ok, ButtonEvent::Short, t); t += 100;   // a preset picks and advances -> Cable
     render(ui, t, "ct_cable");
     ui.on_button(Button::Ok, ButtonEvent::Short, t); t += 100;   // Next -> Review
     render(ui, t, "ct_review");
@@ -241,7 +239,7 @@ int main() {
     stub_twin_add("OnePlus 55W", {0x2601912C, 0x0002D12C, 0x0003C12C, 0xC0DC3264});
     stub_twin_add("Samsung Galaxy S24 Ultra", {0x2601912C, 0x0002D12C, 0xC0DC3264});
     const auto key = [&](Button b, int n = 1) { for (int i = 0; i < n; i++) { ui.on_button(b, ButtonEvent::Short, t); t += 100; } };
-    ui.goto_page(uint8_t(Page::Tools), t + 100);
+    ui.goto_page(uint8_t(Page::Lines), t + 100);
     ui.push_menu(Menu::Twin, t + 100); render(ui, t, "twin_list");      // Google focused: full power
     key(Button::Plus, 2);
     render(ui, t, "twin_cable");                                         // OnePlus focused: limited by the cable
@@ -310,7 +308,7 @@ int main() {
     // table after BACK from it, and a refusal (VBUS above 5.5 V).
     fixture();
     g_stub.pm.vbus_mv = 5000; g_stub.pm.current_ma = 0; g_stub.pm.power_mw = 0;
-    ui.goto_page(uint8_t(Page::Tools), t + 100);
+    ui.goto_page(uint8_t(Page::Lines), t + 100);
     CHECK_EQ(ui.push_menu(Menu::LoopProbe, t + 100), true);
     render(ui, t, "loop_idle");
     ui.on_button(Button::Ok, ButtonEvent::Short, t); t += 100;
@@ -342,7 +340,7 @@ int main() {
     const pd::diag::Report kInline = diag_fixture::report("tests/fixtures/bbdiag/legion_inline.raw");
     g_stub.diag_report = kCase1;
     g_stub.diag_state = 1;
-    ui.goto_page(uint8_t(Page::Tools), t + 100);
+    ui.goto_page(uint8_t(Page::Lines), t + 100);
     ui.push_menu(Menu::Diagnosis, t + 100); render(ui, t, "diagnosis_case1");
     const unsigned n1 = pd::diag::screen::row_count(kCase1);
     for (unsigned i = 1; i < n1; i++) {
@@ -430,7 +428,7 @@ int main() {
         live.goto_page(uint8_t(Page::Lines), tl + 100); render(live, tl, "readme_lines");
         battery_frames(live, tl, "readme_");
         live.open_place(bench::Place::Battery, tl);   // the Bench cursor rests on the place last opened
-        live.goto_page(uint8_t(Page::Tools), tl + 100); render(live, tl, "readme_bench");
+        live.goto_page(uint8_t(Page::Lines), tl + 100); render(live, tl, "readme_bench");
         live.goto_page(uint8_t(Page::Home), tl + 100); tl += 100;
         live.open_place(bench::Place::K2, tl);
         for (int i = 0; i < 400 && live.painting(); i++) live.tick(tl += 20);

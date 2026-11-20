@@ -265,7 +265,7 @@ static void other_pages(Ui& ui) {
     // Home with no power meter (error state): the heroes keep "--", the protocol row is red.
     fixture();
     g_stub.pm_online = false;
-    ui.goto_page(uint8_t(Page::Tools), g_t); settle(ui);
+    ui.goto_page(uint8_t(Page::Lines), g_t); settle(ui);
     ui.goto_page(uint8_t(Page::Home), g_t);
     shot(ui, "b_home_nometer");
     fixture();
@@ -275,7 +275,7 @@ static void other_pages(Ui& ui) {
     // strip label boxes carry a tint here that a host overlay cannot repaint faithfully.
     // Tools with a load attached (inline); the first row is selected and keeps its solid pill.
     fixture();
-    ui.goto_page(uint8_t(Page::Tools), g_t);
+    ui.goto_page(uint8_t(Page::Lines), g_t);
     shot(ui, "b_tools");
     overlay("a_tools", [](const Surface& s) { paint_tools_after(s); });
 }

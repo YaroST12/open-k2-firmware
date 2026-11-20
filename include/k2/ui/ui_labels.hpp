@@ -150,7 +150,16 @@ namespace sl {
     X(ShareShare, "Share", "Share", "", false)                                                                         \
     X(ReadShare, "Read", "Share", "", false)                                                                           \
     X(SaveShare, "Save", "Share", "", false)                                                                           \
-    X(AskShare, "Ask", "Share", "", false)
+    X(AskShare, "Ask", "Share", "", false)                                                                             \
+    /* the page ring (ui_ring.hpp): Back goes Home, long Back jumps; OK enters; Home entered: hero and zoom */         \
+    X(Home, "Home", "", "", false)                                                                                     \
+    X(HomeJump, "Home", "Jump", "", false)                                                                             \
+    X(Jump, "", "Jump", "", false)                                                                                     \
+    X(Enter, "Enter", "", "", false)                                                                                   \
+    X(EnterDim, "Enter", "", "", true)                                                                                 \
+    X(HeroPrev, "Hero-", "", "", false)                                                                                \
+    X(HeroNext, "Hero+", "", "", false)                                                                                \
+    X(ZoomReset, "Zoom", "Reset", "", false)
 
 enum Id : uint8_t {
 #define K2_SLOT_ENUM(name, ...) name,

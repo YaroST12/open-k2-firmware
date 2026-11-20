@@ -54,101 +54,126 @@ static const char *label(Ui &ui, Button b) {
 
 static void test_label_sets() {
     Ui &ui = fresh_ui();
-    const char *expect[8][4] = {   // Back, Minus, Ok, Plus
-        {"Hero*", "Up", "Bench", "Dn"},           // Flow: no level above it (long Back cycles the hero), Up / Dn flip the face
-        {"Back", "Up", "Bench",  "Dn"},           // Numbers
-        {"Back", "Up", "Pick",   "Dn"},           // Charger test: a preset picks and advances
-        {"Back", "Up", "Bench",  "Dn"},           // Lines
-        {"Back", "Up", "Open",   "Dn"},           // the Bench
-        {"Back", "Up", "Open",   "Dn"},           // Settings
+    // goto_page lands entered, except on the view-only pages (Numbers, Lines): those read Home / Prev / Enter (dim) / Next.
+    const char *expect[9][4] = {   // Back, Minus, Ok, Plus
+        {"Back", "Hero-", "Zoom", "Hero+"},        // Home entered: hero and span
+        {"Home", "Prev", "Enter", "Next"},         // Numbers: the ring only
+        {"Back", "Up", "Pick",   "Dn"},            // Charger test: a preset picks and advances
+        {"Home", "Prev", "Enter", "Next"},         // Lines: the ring only
+        {"Back", "Up", "Open",   "Dn"},            // K2 (Settings)
+        {"Back", "", "Zoom", ""},                  // Graph entered
+        {"Back", "", "Set/Hold", ""},              // Ripple entered
         {"Back", "Up", "Actions", "Dn"},           // Connection (Charger place): Info page (OK opens the Actions page, Back leaves it)
-        {"Back", "Up", "Share*", "Dn"},           // Diag (a submenu of Tools): long OK shares the log
+        {"Back", "Up", "Share*", "Dn"},            // Diag (a submenu of K2): long OK shares the log
     };
-    static constexpr uint8_t kPages[8] = {0, 1, 2, 3, 4, 5, kPdPage, kDiagPage};
-    for (uint8_t i = 0; i < 8; i++) {
+    static constexpr uint8_t kPages[9] = {0, 1, 2, 3, 4, 5, 6, kPdPage, kDiagPage};
+    for (uint8_t i = 0; i < 9; i++) {
         const uint8_t p = kPages[i];
         ui.goto_page(p, 20000);
         for (int b = 0; b < 4; b++) CHECK_STR(label(ui, static_cast<Button>(b)), expect[i][b]);
-        // Nothing pages any more, so nothing is dimmed for being the first or the last page.
         CHECK_EQ(ui.labels().b[static_cast<int>(Button::Minus)].dim, false);
         CHECK_EQ(ui.labels().b[static_cast<int>(Button::Plus)].dim, false);
         // Every label fits the slot: characters <= label_max_chars(button).
         for (int b = 0; b < 4; b++) CHECK_EQ(strlen(label(ui, static_cast<Button>(b))) <= label_max_chars(static_cast<Button>(b)), 1);
+        CHECK_EQ(label_violation(ui.labels()) == nullptr, true);
     }
 }
 
-// Fieldbook navigation (CONCEPT 7): Up / Dn flip the Meter's faces with a wrap, OK opens the Bench, the Bench opens a place,
-// BACK climbs one level, a long BACK lands on Flow from anywhere. No press pages through the old carousel.
-static void test_global_paging() {
+// Ring navigation (the carousel of eleven pages): + / - walk it with a wrap, OK enters a page with something to do, Back
+// goes Home, long Back jumps to the page chosen in Settings. An entered page owns the keys; the Back it does not take leaves to
+// the ring on the same page. Long + / - never do anything.
+static void test_ring_navigation() {
     Ui &ui = fresh_ui();
     uint32_t t = 20000;
+    const auto key = [&](Button b, ButtonEvent e = ButtonEvent::Short) { ui.on_button(b, e, t += 50); t = settle(ui, t); };
     CHECK_EQ(ui.page() == Page::Home, 1);
+    CHECK_EQ(ui.ring_view(), true);                                    // boot: Home in the ring
+    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Home));
     CHECK_EQ(static_cast<int>(ui.on_button(Button::Plus, ButtonEvent::Short, t)), static_cast<int>(UiAction::None));
-    CHECK_EQ(ui.page() == Page::Graphs, 1);                           // Flow -> Graphs -> Numbers -> Lines -> Ripple -> Flow
-    ui.on_button(Button::Plus, ButtonEvent::Short, t);
-    CHECK_EQ(ui.page() == Page::Detail, 1);
-    ui.on_button(Button::Plus, ButtonEvent::Short, t);
-    CHECK_EQ(ui.page() == Page::Lines, 1);
-    ui.on_button(Button::Plus, ButtonEvent::Short, t);
+    for (int i = 1; i < ring::kCount; i++) {
+        if (i > 1) key(Button::Plus);
+        t = settle(ui, t);
+        CHECK_EQ(int(ui.ring_position()), i);
+        CHECK_EQ(ui.ring_view(), true);
+    }
+    CHECK_EQ(ui.page() == Page::Settings, 1);                          // 11 K2
+    key(Button::Plus);
+    CHECK_EQ(ui.page() == Page::Home, 1);                              // wraps
+    key(Button::Minus);
+    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::K2));             // and back the other way
+    key(Button::Minus);
+    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Log));
+    key(Button::Plus, ButtonEvent::Long);                              // long presses move nothing
+    key(Button::Minus, ButtonEvent::Long);
+    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Log));
+    // Back goes Home; OK on the view-only pages does nothing, on the others it enters.
+    key(Button::Back);
+    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Home));
+    key(Button::Plus);
+    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Lines));
+    key(Button::Ok);
+    CHECK_EQ(ui.ring_view(), true);                                    // Lines: nothing to enter
+    key(Button::Plus); key(Button::Plus); key(Button::Plus);           // Numbers, Graph, Ripple
     CHECK_EQ(ui.page() == Page::Ripple, 1);
-    ui.on_button(Button::Plus, ButtonEvent::Short, t);
-    CHECK_EQ(ui.page() == Page::Home, 1);
-    ui.on_button(Button::Minus, ButtonEvent::Short, t);               // and back the other way, wrapping too
+    key(Button::Ok);
+    CHECK_EQ(ui.ring_view(), false);                                   // entered
+    key(Button::Back);
+    CHECK_EQ(ui.ring_view(), true);                                    // the Back it does not take: out to the ring, same page
     CHECK_EQ(ui.page() == Page::Ripple, 1);
-    ui.on_button(Button::Minus, ButtonEvent::Short, t);
-    CHECK_EQ(ui.page() == Page::Lines, 1);
-    ui.on_button(Button::Plus, ButtonEvent::Long, t);                 // long presses page nothing
-    ui.on_button(Button::Minus, ButtonEvent::Long, t);
-    CHECK_EQ(ui.page() == Page::Lines, 1);
-    ui.on_button(Button::Ok, ButtonEvent::Short, t);                  // OK on a face: the Bench
-    CHECK_EQ(ui.page() == Page::Tools, 1);
-    CHECK_EQ(ui.menu_depth(), 0u);
-    ui.on_button(Button::Back, ButtonEvent::Short, t);                // BACK on the Bench: the face it came from
-    CHECK_EQ(ui.page() == Page::Lines, 1);
-    ui.on_button(Button::Back, ButtonEvent::Short, t);                // BACK on Numbers or Lines: Flow
+    key(Button::Ok);
+    key(Button::Back, ButtonEvent::Long);                              // a long Back from an entered page: the ring, same page
+    CHECK_EQ(ui.ring_view(), true);
+    CHECK_EQ(ui.page() == Page::Ripple, 1);
+    // Long Back in the ring jumps to the chosen page (Home by default).
+    key(Button::Back, ButtonEvent::Long);
     CHECK_EQ(ui.page() == Page::Home, 1);
-    ui.on_button(Button::Back, ButtonEvent::Short, t);                // BACK on Flow: nothing above it
+    ui.context().keep.long_back = static_cast<uint8_t>(ring::Pos::Battery);
+    key(Button::Back, ButtonEvent::Long);
+    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Battery));
+    key(Button::Back);
     CHECK_EQ(ui.page() == Page::Home, 1);
-    // Bench -> Charger -> Test charger, then BACK climbs back: the charger test to its place, the place to the Bench.
-    ui.on_button(Button::Ok, ButtonEvent::Short, t);
-    ui.context().keep.bench_sel = static_cast<int>(bench::Place::Charger);
+    ui.context().keep.long_back = 0;
+    key(Button::Back);                                                 // Back on Home in the ring: nothing above it
+    CHECK_EQ(ui.page() == Page::Home, 1);
+    // Home entered: +/- the hero, OK the span, Back out.
+    key(Button::Ok);
+    CHECK_EQ(ui.ring_view(), false);
+    key(Button::Plus);
+    CHECK_EQ(static_cast<int>(ui.context().keep.home_hero), static_cast<int>(home::Qty::V));
+    key(Button::Minus);
+    CHECK_EQ(static_cast<int>(ui.context().keep.home_hero), static_cast<int>(home::Qty::W));
+    key(Button::Back);
+    CHECK_EQ(ui.ring_view(), true);
+    // Charger -> Actions -> Test charger, then Back climbs: the charger test to its place Actions, Actions to Info, Info to the ring.
+    for (int i = 0; i < 5; i++) key(Button::Plus);
+    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Charger));
     ui.context().keep.place_sel[static_cast<int>(bench::Place::Charger)] = 0;
-    ui.on_button(Button::Ok, ButtonEvent::Short, t);
-    CHECK_EQ(ui.menu() == Menu::Connection, 1);                       // the Charger place page over the Bench
-    ui.tick(t += 20);
-    ui.on_button(Button::Ok, ButtonEvent::Short, t += 10);            // OK -> Charger Actions sub-page (row 0 = Test charger)
+    key(Button::Ok);
+    CHECK_EQ(ui.menu() == Menu::Connection, 1);
+    CHECK_EQ(ui.ring_view(), false);
+    key(Button::Ok);                                                   // Info -> Actions (row 0 = Test charger)
     CHECK_EQ(ui.connection_page().actions_mode(), true);
-    ui.on_button(Button::Ok, ButtonEvent::Short, t += 10);
+    key(Button::Ok);
     CHECK_EQ(ui.page() == Page::ChargerTest, 1);
-    ui.on_button(Button::Back, ButtonEvent::Short, t);
-    CHECK_EQ(ui.page() == Page::Tools, 1);
+    key(Button::Back);
+    CHECK_EQ(ui.page() == Page::Lines, 1);
     CHECK_EQ(ui.menu() == Menu::Connection, 1);
     CHECK_EQ(int(ui.connection_page().tab()), int(conn::Tab::Source));
-    CHECK_EQ(ui.connection_page().actions_mode(), true);               // ChargerTest Back returns to Charger Actions sub-page
-    ui.on_button(Button::Back, ButtonEvent::Short, t);                 // Actions -> Info
+    CHECK_EQ(ui.connection_page().actions_mode(), true);
+    key(Button::Back);                                                 // Actions -> Info
     CHECK_EQ(ui.connection_page().actions_mode(), false);
-    ui.on_button(Button::Back, ButtonEvent::Short, t);
-    CHECK_EQ(ui.page() == Page::Tools, 1);
-    CHECK_EQ(ui.menu_depth(), 0u);
-    CHECK_EQ(ui.context().keep.bench_sel, static_cast<int>(bench::Place::Charger));   // the Bench, Charger focused
-    ui.context().keep.bench_sel = static_cast<int>(bench::Place::Meter);   // the Meter row goes back to the faces
-    ui.on_button(Button::Ok, ButtonEvent::Short, t);
-    CHECK_EQ(ui.page() == Page::Home, 1);
-    // A long BACK nobody takes lands on Flow, from a page or a submenu over it.
-    ui.goto_page(static_cast<uint8_t>(Page::Settings), t);
-    ui.on_button(Button::Back, ButtonEvent::Long, t);
-    CHECK_EQ(ui.page() == Page::Home, 1);
+    CHECK_EQ(ui.ring_view(), false);
+    key(Button::Back);                                                 // Info -> the ring on Charger
+    CHECK_EQ(ui.ring_view(), true);
+    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Charger));
+    // A long Back from a page opened over a base page leaves to the ring too: K2's Diag submenu.
     ui.goto_page(kDiagPage, t);
     CHECK_EQ(int(ui.menu_depth()), 1);
-    ui.on_button(Button::Back, ButtonEvent::Long, t);
-    CHECK_EQ(ui.page() == Page::Home, 1);
-    CHECK_EQ(int(ui.menu_depth()), 0);
-    // Back held 5 s is no reboot any more (OK + Back held 3 s is: test_reboot_hold_card); long Back on Home cycles the hero.
+    key(Button::Back, ButtonEvent::Long);
+    CHECK_EQ(ui.ring_view(), true);
+    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::K2));
+    // Back held 5 s is no reboot any more (OK + Back held 3 s is: test_reboot_hold_card).
     CHECK_EQ(static_cast<int>(ui.on_button(Button::Back, ButtonEvent::Hold, t)), static_cast<int>(UiAction::None));
-    CHECK_EQ(static_cast<int>(ui.context().keep.home_hero), static_cast<int>(home::Qty::W));
-    CHECK_EQ(static_cast<int>(ui.on_button(Button::Back, ButtonEvent::Long, t)), static_cast<int>(UiAction::None));
-    CHECK_EQ(static_cast<int>(ui.context().keep.home_hero), static_cast<int>(home::Qty::V));
-    CHECK_EQ(ui.page() == Page::Home, 1);
     ui.set_home_hero(home::Qty::W);   // the Ui carries over between cases
 }
 
@@ -176,10 +201,11 @@ static void test_back_goes_home() {
     ui.on_button(Button::Back, ButtonEvent::Short, 20000);
     CHECK_EQ(ui.page() == Page::Home, 1);
     CHECK_EQ(ui.menu_depth(), 0u);
-    ui.goto_page(static_cast<uint8_t>(Page::Tools), 20000);   // opened from the Tools list: BACK returns there
+    ui.goto_page(static_cast<uint8_t>(Page::Lines), 20000);   // a place's menu over Lines: BACK leaves to its ring page (K2 -> Settings)
     ui.push_menu(Menu::Diag, 20000);
     ui.on_button(Button::Back, ButtonEvent::Short, 20000);
-    CHECK_EQ(ui.page() == Page::Tools, 1);
+    CHECK_EQ(ui.page() == Page::Settings, 1);
+    CHECK_EQ(ui.ring_view(), true);
     CHECK_EQ(ui.menu_depth(), 0u);
     ui.goto_page(0, 20000);
     ui.on_button(Button::Back, ButtonEvent::Short, 20000);
@@ -234,19 +260,19 @@ static void test_reboot_hold_card() {
     CHECK_EQ(card(ui), 0);
     CHECK_EQ(static_cast<int>(ui.tick(43200)), kNone);   // still held Back alone: nothing comes back
     CHECK_EQ(card(ui), 0);
-    // The keys' own events (Back's Long = the hero cycle, OK's Short = zoom) are dropped until a fresh press.
+    // The keys' own events (Back's Long, OK's Short) are dropped until a fresh press.
     CHECK_EQ(static_cast<int>(ui.on_button(Button::Back, ButtonEvent::Long, 43300)), kNone);
     CHECK_EQ(static_cast<int>(ui.context().keep.home_hero), static_cast<int>(home::Qty::W));
     ui.set_pressed(Button::Back, false, 43400);
     CHECK_EQ(static_cast<int>(ui.on_button(Button::Back, ButtonEvent::Short, 43400)), kNone);
     CHECK_EQ(ui.page() == Page::Home, 1);
-    ui.set_pressed(Button::Back, true, 44000);       // pressed afresh: Back works again
+    ui.set_pressed(Button::Back, true, 44000);       // pressed afresh: Back works again (Home's ring Long Back lands on Home)
     CHECK_EQ(static_cast<int>(ui.on_button(Button::Back, ButtonEvent::Long, 44500)), kNone);
-    CHECK_EQ(static_cast<int>(ui.context().keep.home_hero), static_cast<int>(home::Qty::V));
+    CHECK_EQ(ui.page() == Page::Home, 1);
     ui.set_pressed(Button::Back, false, 44600);
 
     // Held 3 s: the reboot, asked once, from a submenu as well as from a page.
-    ui.goto_page(static_cast<uint8_t>(Page::Tools), 50000);
+    ui.goto_page(static_cast<uint8_t>(Page::Lines), 50000);
     ui.push_menu(Menu::Diag, 50000);
     ui.set_pressed(Button::Back, true, 50100);
     ui.set_pressed(Button::Ok, true, 50150);
@@ -541,9 +567,10 @@ static void test_em_row_text() {
 
 static void test_page_actions() {
     Ui &ui = fresh_ui();
-    // A short OK on Flow opens the Bench; a long OK resets the meter (the page consumes it).
+    // Home in the ring: OK enters it, and a short OK there cycles the span (the page consumes it).
     ui.on_button(Button::Ok, ButtonEvent::Short, 20000);
-    CHECK_EQ(ui.page() == Page::Tools, 1);
+    CHECK_EQ(ui.ring_view(), false);
+    CHECK_EQ(ui.page() == Page::Home, 1);
     ui.goto_page(0, 20010);
 }
 
@@ -765,7 +792,7 @@ static void test_cable_kelvin_rows() {
 
 static void test_cable_mode_toggle() {
     Ui &ui = fresh_ui();
-    ui.goto_page(static_cast<uint8_t>(Page::Tools), 20000);
+    ui.goto_page(static_cast<uint8_t>(Page::Lines), 20000);
     ui.push_menu(Menu::CableR, 20100);
     CHECK_EQ(static_cast<int>(ui.cable_mode()), static_cast<int>(cable_r::Mode::Passive));
     CHECK_STR(label(ui, Button::Plus), "Mode");
@@ -814,7 +841,7 @@ static void test_every_label_fits_its_slot() {
         check_all("page");
     }
     for (int m = 0; m < static_cast<int>(Menu::Count); m++) {
-        ui.goto_page(static_cast<uint8_t>(Page::Tools), 21000);
+        ui.goto_page(static_cast<uint8_t>(Page::Lines), 21000);
         ui.push_menu(static_cast<Menu>(m), 21100);
         check_all("menu");
         fill_pdos(7);
@@ -889,20 +916,16 @@ static void press(Ui &ui, Button b, ButtonEvent e, uint32_t t) { ui.on_button(b,
 static void test_tools_hub() {
     Ui &ui = fresh_ui();
     g_stub.fc_stops = 0;
-    ui.goto_page(static_cast<uint8_t>(Page::Tools), kT0);
+    ui.goto_page(static_cast<uint8_t>(Page::Lines), kT0);
     CHECK_EQ(ui.list_state().count, 0);   // fixed rows, no scroll
     CHECK_EQ(ui.menu_depth(), 0u);
-    // The Bench: short +/- move between the seven places (no wrap, no paging), OK opens one on the same page.
-    ui.context().keep.bench_sel = 0;
-    press(ui, Button::Minus, ButtonEvent::Short, kT0 + 10);
-    CHECK_EQ(ui.context().keep.bench_sel, 0);
-    for (int i = 0; i < 8; i++) press(ui, Button::Plus, ButtonEvent::Short, kT0 + 20);
-    CHECK_EQ(ui.context().keep.bench_sel, bench::kPlaces - 1);
-    for (int i = 0; i < 4; i++) press(ui, Button::Minus, ButtonEvent::Short, kT0 + 30);   // K2 > Log > Battery > Device > Cable
+    // The ring: + / - walk the eleven pages, OK enters one. Lines (2 LINES) to Cable (7 CABLE) is five steps on.
+    for (int i = 0; i < 5; i++) press(ui, Button::Plus, ButtonEvent::Short, kT0 + 20);
+    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Cable));
     ui.context().keep.place_sel[static_cast<int>(bench::Place::Cable)] = 0;
     press(ui, Button::Ok, ButtonEvent::Short, kT0 + 35);
-    CHECK_EQ(ui.page() == Page::Tools, 1);
-    CHECK_EQ(ui.menu() == Menu::Connection, 1);   // the Cable place page over the Bench
+    CHECK_EQ(ui.page() == Page::Lines, 1);
+    CHECK_EQ(ui.menu() == Menu::Connection, 1);   // the Cable place page over Lines
     CHECK_EQ(int(ui.connection_page().tab()), int(conn::Tab::Cable));
     // In a place, OK flips to Actions, short +/- select an action and OK opens it: Cable > Resistance is Cable R.
     press(ui, Button::Ok, ButtonEvent::Short, kT0 + 36);
@@ -929,14 +952,13 @@ static void test_tools_hub() {
     CHECK_EQ(ui.menu() == Menu::PdTrigger, 1);
     CHECK_STR(label(ui, Button::Back), "Back");
     press(ui, Button::Back, ButtonEvent::Short, kT0 + 140);
-    // BACK from the tool goes back to the Charger Actions page, a second BACK to its Info page, a third to the Bench.
+    // BACK from the tool goes back to the Charger Actions page, a second BACK to its Info page, a third to the ring.
     CHECK_EQ(ui.menu() == Menu::Connection, 1);
     press(ui, Button::Back, ButtonEvent::Short, kT0 + 170);
     CHECK_EQ(ui.connection_page().actions_mode(), false);
     press(ui, Button::Back, ButtonEvent::Short, kT0 + 180);
-    CHECK_EQ(ui.page() == Page::Tools, 1);
-    CHECK_EQ(ui.menu_depth(), 0u);
-    CHECK_EQ(ui.context().keep.bench_sel, int(bench::Place::Charger));
+    CHECK_EQ(ui.ring_view(), true);
+    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Charger));
     CHECK_EQ(g_stub.fc_stops, 0);                  // nothing was triggered: leaving the trigger tool left the pins alone
 }
 
@@ -949,20 +971,19 @@ static void test_submenu_is_modal() {
     // Long +/- on protocol selection do nothing; the modal still suppresses paging.
     press(ui, Button::Plus, ButtonEvent::Long, kT0 + 100);
     press(ui, Button::Minus, ButtonEvent::Long, kT0 + 110);
-    CHECK_EQ(ui.page() == Page::Tools, 1);
+    CHECK_EQ(ui.page() == Page::Lines, 1);
     CHECK_EQ(ui.menu() == Menu::Trigger, 1);
     // A short BACK pops; nothing was triggered, so the bus is left alone (no dpdm reset pulse).
     press(ui, Button::Back, ButtonEvent::Short, kT0 + 120);
     CHECK_EQ(ui.menu() == Menu::Connection, 1);   // back on the Charger place page
     CHECK_EQ(g_stub.fc_stops, stops);
-    // In the place page: Short Back flips Actions -> Info, and a second Short Back returns to Bench where Long Back goes to Meter.
+    // In the place page: Short Back flips Actions -> Info, and a second Short Back leaves to the ring, where Short Back goes Home.
     press(ui, Button::Back, ButtonEvent::Short, kT0 + 130);
     CHECK_EQ(ui.menu() == Menu::Connection, 1);
     CHECK_EQ(ui.connection_page().actions_mode(), false);
     press(ui, Button::Back, ButtonEvent::Short, kT0 + 135);
-    CHECK_EQ(ui.page() == Page::Tools, 1);
-    CHECK_EQ(ui.menu_depth(), 0u);
-    press(ui, Button::Back, ButtonEvent::Long, kT0 + 140);
+    CHECK_EQ(ui.ring_view(), true);
+    press(ui, Button::Back, ButtonEvent::Short, kT0 + 140);
     CHECK_EQ(ui.page() == Page::Home, 1);
     // Picking/editing/arming is passive; BACK retreats without resetting D+/D-.
     open_trigger(ui, kT0 + 150);
@@ -1086,7 +1107,7 @@ static void test_trigger_submenu() {
     for (int n = 0; n < 6; ++n) ui.tick(t += 100);
     CHECK_EQ(ui.ports_busy(), false);
     CHECK_EQ(int(ui.fc_release().state()), int(trig::Release::State::Safe));
-    ui.goto_page(uint8_t(Page::Tools), t += 100);
+    ui.goto_page(uint8_t(Page::Lines), t += 100);
     // Initial arm timeout and source-session changes cannot send stale requests.
     open_trigger(ui, t += 1000);
     press(ui, Button::Ok, ButtonEvent::Short, t += 100);
@@ -1118,7 +1139,7 @@ static void test_fc_session_change_stops_running() {
     Ui ui; g_stub = {};
     g_stub.pm_online = true; g_stub.pm.vbus_mv = 5000;
     ui.init(0); ui.tick(6000);
-    ui.goto_page(uint8_t(Page::Tools), 6000);
+    ui.goto_page(uint8_t(Page::Lines), 6000);
     ui.push_menu(Menu::Trigger, 6000);
     for (uint32_t t = 6100; t <= 6400; t += 100) ui.on_button(Button::Ok, ButtonEvent::Short, t);
     CHECK_EQ(g_stub.fc_starts, 1);
@@ -1139,7 +1160,7 @@ static void test_fc_retarget_refuses_new_load() {
     Ui ui; g_stub = {};
     g_stub.pm_online = true; g_stub.pm.vbus_mv = 5000;
     ui.init(0); ui.tick(6000);
-    ui.goto_page(uint8_t(Page::Tools), 6000); ui.push_menu(Menu::Trigger, 6000);
+    ui.goto_page(uint8_t(Page::Lines), 6000); ui.push_menu(Menu::Trigger, 6000);
     uint32_t t = 6000;
     auto key = [&](Button b) { ui.on_button(b, ButtonEvent::Short, t += 100); };
     key(Button::Plus); // QC3
@@ -1283,7 +1304,7 @@ static void test_contract_text() {
 }
 
 static void open_pd_trigger(Ui &ui, uint32_t t) {
-    ui.goto_page(static_cast<uint8_t>(Page::Tools), t);
+    ui.goto_page(static_cast<uint8_t>(Page::Lines), t);
     ui.push_menu(Menu::PdTrigger, t);
 }
 
@@ -1340,7 +1361,8 @@ static void test_pd_trigger_menu() {
     CHECK_STR(label(ui, Button::Ok), "Send");             // back on CONFIRM
     g_stub.sink.held = false;
     for (int i = 0; i < 3; i++) ui.on_button(Button::Back, ButtonEvent::Short, t + 20050 + i);   // CURRENT, OFFER, exit
-    CHECK_EQ(ui.menu_depth(), 0);
+    CHECK_EQ(ui.ring_view(), true);                       // out to the Charger ring page (its own menu shows there)
+    CHECK_EQ(ui.menu() == Menu::PdTrigger, 0);
     CHECK_EQ(g_stub.releases, 1);
     g_stub.releases = 0;
     {   // PPS path (PDO 5): OFFER -> VOLTAGE -> CURRENT -> CONFIRM, long +/- is the coarse step
@@ -1356,7 +1378,8 @@ static void test_pd_trigger_menu() {
         ui.on_button(Button::Back, ButtonEvent::Short, t + 30021);  // VOLTAGE
         ui.on_button(Button::Back, ButtonEvent::Short, t + 30022);  // OFFER
         ui.on_button(Button::Back, ButtonEvent::Short, t + 30023);  // exit
-        CHECK_EQ(ui.menu_depth(), 0);
+        CHECK_EQ(ui.ring_view(), true);
+        CHECK_EQ(ui.menu() == Menu::PdTrigger, 0);
         CHECK_EQ(g_stub.releases, 0);
     }
     // Paging away from the Tools page while it is open is closed first: the release is not doubled.
@@ -1382,7 +1405,8 @@ static void test_pd_trigger_refusals() {
     CHECK_EQ(g_stub.requests, 0);
     CHECK_STR(label(ui, Button::Ok), "");
     ui.on_button(Button::Back, ButtonEvent::Short, 61200);
-    CHECK_EQ(ui.menu_depth(), 0);
+    CHECK_EQ(ui.ring_view(), true);
+    CHECK_EQ(ui.menu() == Menu::PdTrigger, 0);
     // Identify inline: refused even with a confirm - an inline K2 never transmits; the sniffed
     // identity fills the Sink tab instead. The refusal is its own result now (the remote maps it
     // to pd::Err::Inline, not "busy").
@@ -1568,8 +1592,9 @@ static void test_blackbox_submenu() {
     press(ui, Button::Back, ButtonEvent::Short, kT0 + 140);     // the list leaves to the Log place it was opened from
     CHECK_EQ(ui.menu() == Menu::Diagnosis, 1);
     CHECK_EQ(ui.diagnosis_page().place(), true);
-    press(ui, Button::Back, ButtonEvent::Short, kT0 + 150);     // and the place to the Bench
-    CHECK_EQ(ui.menu_depth(), 0u);
+    press(ui, Button::Back, ButtonEvent::Short, kT0 + 150);     // and the place to the ring
+    CHECK_EQ(ui.ring_view(), true);
+    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Log));
     pdtrace::init();
 }
 
@@ -1582,7 +1607,7 @@ static void test_log_place() {
     const uint32_t t_open = settle(ui, kT0);
     CHECK_EQ(ui.menu() == Menu::Diagnosis, 1);
     CHECK_EQ(ui.diagnosis_page().place(), true);
-    CHECK_EQ(ui.context().keep.bench_sel, static_cast<int>(bench::Place::Log));
+    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Log));
     CHECK_EQ(g_panel[(kit::kBelowBar + 2) * LCD_WIDTH + 100], kSurface);   // the stamp's ground (no verdict yet)
     CHECK_STR(label(ui, Button::Ok), "");                                   // a finding opens nothing
     for (int i = 0; i < 12; i++) press(ui, Button::Plus, ButtonEvent::Short, t_open + 10 + i);
@@ -1648,9 +1673,9 @@ static void test_k2_place() {
     CHECK_EQ(ui.menu() == Menu::Share, 1);
     press(ui, Button::Back, ButtonEvent::Short, kT0 + 70);
     CHECK_EQ(ui.menu_depth(), 0u);
-    press(ui, Button::Back, ButtonEvent::Short, kT0 + 80);   // the place leaves to the Bench, K2 focused
-    CHECK_EQ(ui.page() == Page::Tools, true);
-    CHECK_EQ(ui.context().keep.bench_sel, static_cast<int>(bench::Place::K2));
+    press(ui, Button::Back, ButtonEvent::Short, kT0 + 80);   // the page leaves to the ring, K2 in view
+    CHECK_EQ(ui.ring_view(), true);
+    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::K2));
     ui.context().keep.settings_sel = 0;
 }
 
@@ -1751,7 +1776,9 @@ static void test_home_stale() {
     ui.tick(84300);
     settle(ui, 84300);
     CHECK_EQ(count(150, 1, 222, 18, kStale) > 100, 1);   // it counts the age but stays a plate
-    // Long OK on Home drops the frozen state: back to the NO VBUS plate.
+    // Long OK on Home (entered) drops the frozen state: back to the NO VBUS plate.
+    ui.on_button(Button::Ok, ButtonEvent::Short, 84350);
+    CHECK_EQ(ui.ring_view(), false);
     ui.on_button(Button::Ok, ButtonEvent::Long, 84400);
     ui.tick(84500);
     settle(ui, 84500);
@@ -1824,7 +1851,7 @@ static void test_usb_link_toggles() {
     g_stub = StubState();
     g_stub.usb_stored = {false, false};
     k2::usbcfg::current = {false, false};
-    ui.goto_page(static_cast<uint8_t>(Page::Tools), 21000);
+    ui.goto_page(static_cast<uint8_t>(Page::Lines), 21000);
     ui.push_menu(Menu::UsbLink, 21100);
     CHECK_EQ(ui.menu() == Menu::UsbLink, 1);
     CHECK_STR(label(ui, Button::Ok), "Toggle");
@@ -1869,7 +1896,7 @@ static void test_usb_link_webusb_row() {
     g_stub.usb_stored = {false, false};
     k2::usbcfg::current = {false, false};
     CHECK_EQ(k2::usbcfg::rows(), 4);
-    ui.goto_page(static_cast<uint8_t>(Page::Tools), 23000);
+    ui.goto_page(static_cast<uint8_t>(Page::Lines), 23000);
     ui.push_menu(Menu::UsbLink, 23100);
     ui.on_button(Button::Minus, ButtonEvent::Short, 23200);       // wraps from HID to the last row: WebUSB
     ui.on_button(Button::Ok, ButtonEvent::Short, 23300);
@@ -1894,7 +1921,7 @@ static void test_usb_link_footer_icon_tone() {
     g_stub = StubState();
     g_stub.usb_stored = {false, false};
     k2::usbcfg::current = {false, false};
-    ui.goto_page(static_cast<uint8_t>(Page::Tools), 22000);
+    ui.goto_page(static_cast<uint8_t>(Page::Lines), 22000);
     ui.push_menu(Menu::UsbLink, 22100);
     ui.tick(22200); ui.tick(22300);
     CHECK_EQ(icon_count(kOkT), 0);                      // off: no green
@@ -1903,7 +1930,7 @@ static void test_usb_link_footer_icon_tone() {
     g_stub = StubState();
     g_stub.usb_stored = {true, false};
     k2::usbcfg::current = {true, false};
-    ui.goto_page(static_cast<uint8_t>(Page::Tools), 22500);
+    ui.goto_page(static_cast<uint8_t>(Page::Lines), 22500);
     ui.push_menu(Menu::UsbLink, 22600);
     ui.tick(22700); ui.tick(22800);
     while (ui.painting()) ui.tick(22900);
@@ -2005,7 +2032,7 @@ int main() {
     test_diag_model_row();
     test_fake_pdos_on_the_page();
     test_label_sets();
-    test_global_paging();
+    test_ring_navigation();
     test_short_presses_do_not_page();
     test_back_goes_home();
     test_press_flash();

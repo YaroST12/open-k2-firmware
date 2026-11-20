@@ -15,6 +15,9 @@ static void test_hero_cycle() {
     CHECK_EQ(static_cast<int>(next(Qty::W)), static_cast<int>(Qty::V));
     CHECK_EQ(static_cast<int>(next(Qty::V)), static_cast<int>(Qty::A));
     CHECK_EQ(static_cast<int>(next(Qty::A)), static_cast<int>(Qty::W));
+    CHECK_EQ(static_cast<int>(prev(Qty::W)), static_cast<int>(Qty::A));
+    CHECK_EQ(static_cast<int>(prev(Qty::V)), static_cast<int>(Qty::W));
+    CHECK_EQ(static_cast<int>(prev(Qty::A)), static_cast<int>(Qty::V));
     // The stored byte: 0 (and anything unknown) is W, the migration-safe default.
     CHECK_EQ(static_cast<int>(qty_from(0)), static_cast<int>(Qty::W));
     CHECK_EQ(static_cast<int>(qty_from(1)), static_cast<int>(Qty::V));

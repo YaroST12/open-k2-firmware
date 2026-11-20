@@ -1170,7 +1170,9 @@ static void test_single_tools_lock_one_tab() {
     ui.open_place(bench::Place::Cable, 20000);
     ui.tick(20050);
     CHECK_EQ(int(ui.menu()), int(Menu::Connection));
-    CHECK_EQ(int(ui.page()), int(Page::Tools));                       // over the Bench
+    CHECK_EQ(int(ui.page()), int(Page::Lines));                       // the Cable ring page, entered
+    CHECK_EQ(ui.ring_view(), false);
+    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Cable));
     CHECK_EQ(int(cp(ui).tab()), int(conn::Tab::Cable));
     CHECK_EQ(cp(ui).has_pages(), true);
     CHECK_EQ(cp(ui).actions_mode(), false);                            // opens on Info page
@@ -1206,10 +1208,10 @@ static void test_single_tools_lock_one_tab() {
     ui.tick(20460);
     CHECK_EQ(cp(ui).actions_mode(), false);
     CHECK_EQ(cp(ui).action_row(), -1);
-    ui.on_button(Button::Back, ButtonEvent::Short, 20500);             // Short Back on Info -> back to Bench
-    CHECK_EQ(int(ui.menu_depth()), 0);
-    CHECK_EQ(int(ui.page()), int(Page::Tools));
-    CHECK_EQ(ui.context().keep.bench_sel, int(bench::Place::Cable));    // the Bench list, focused on the place just left
+    ui.on_button(Button::Back, ButtonEvent::Short, 20500);             // Short Back on Info -> out to the ring, same page
+    CHECK_EQ(ui.ring_view(), true);
+    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Cable));
+    CHECK_EQ(int(ui.menu()), int(Menu::Connection));
 
     ui.open_place(bench::Place::Charger, 21000);
     ui.tick(21050);
@@ -1249,10 +1251,11 @@ static void test_single_tools_lock_one_tab() {
     CHECK_EQ(cp(ui).actions_mode(), false);                            // single-page: Long Plus does nothing
 #endif
     ui.on_button(Button::Back, ButtonEvent::Short, 21200);
-    CHECK_EQ(int(ui.menu_depth()), 0);
+    CHECK_EQ(ui.ring_view(), true);                                    // Short Back on Info leaves to the ring
+    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Device));
 }
 
-// The Bench opens the place pages: Charger, Cable, Device each on its own tab. A place's tool opens its menu over the place
+// The ring opens the place pages: Charger, Cable, Device each on its own tab (Home + 5/6/7 steps, then OK). A place's tool opens its menu over the place
 // page (BACK comes back to it); Test charger replaces both and its BACK lands on the Charger place's Actions sub-page again.
 // The Spoof shortcut opens Cable Actions underneath Menu::Spoof.
 static void test_tools_rows_open_single_tools() {
@@ -1260,14 +1263,15 @@ static void test_tools_rows_open_single_tools() {
     const conn::Tab kTabs[] = {conn::Tab::Source, conn::Tab::Cable, conn::Tab::Sink};
     for (int k = 0; k < 3; k++) {
         ui.open_place(bench::Place::Meter, 20000 + k * 1000);
-        for (int i = 0; i < 6; i++) ui.on_button(Button::Minus, ButtonEvent::Short, 20010 + k * 1000 + i * 10);   // Meter row
-        for (int i = 0; i <= k; i++) ui.on_button(Button::Plus, ButtonEvent::Short, 20100 + k * 1000 + i * 10);
+        ui.on_button(Button::Back, ButtonEvent::Short, 20010 + k * 1000);   // Home entered -> the ring on Home
+        CHECK_EQ(ui.ring_view(), true);
+        for (int i = 0; i < 5 + k; i++) ui.on_button(Button::Plus, ButtonEvent::Short, 20100 + k * 1000 + i * 10);   // Charger, Cable, Device
         ui.on_button(Button::Ok, ButtonEvent::Short, 20500 + k * 1000);
         CHECK_EQ(on_pd(ui), 1);
         if (!on_pd(ui)) return;
         CHECK_EQ(int(cp(ui).tab()), int(kTabs[k]));
         ui.on_button(Button::Back, ButtonEvent::Short, 20600 + k * 1000);
-        CHECK_EQ(int(ui.menu_depth()), 0);
+        CHECK_EQ(ui.ring_view(), true);                                // Info -> out to the ring
     }
     ui.context().keep.place_sel[static_cast<int>(bench::Place::Charger)] = 1;   // Request voltage (action_row 1 -> item 2)
     ui.open_place(bench::Place::Charger, 24000);

@@ -83,7 +83,7 @@ static const char *label(Ui &ui, Button b) {
 static bool dim(Ui &ui, Button b) { return ui.labels().b[static_cast<int>(b)].dim; }
 
 static void open_display(Ui &ui) {
-    ui.goto_page(5, g_t += 100);   // Settings
+    ui.goto_page(static_cast<std::uint8_t>(Page::Settings), g_t += 100);
     while (ui.painting()) ui.tick(g_t += 2);
     for (int i = 0; i < SettingsPage::kDisplayRow; i++) press(ui, Button::Plus);
     CHECK_STR(label(ui, Button::Ok), "Open");

@@ -60,7 +60,6 @@ PageIf *Ui::build_base(Page p) {
     case Page::Detail: return pages_.push<DetailPage>(ctx_);
     case Page::ChargerTest: return pages_.push<ChargerTestPage>(ctx_, charger_test_);
     case Page::Lines: return pages_.push<LinesPage>(ctx_);
-    case Page::Tools: return pages_.push<ToolsPage>(ctx_);
     case Page::Settings: return pages_.push<SettingsPage>(ctx_);
     case Page::Graphs: return pages_.push<GraphsPage>(ctx_);
     case Page::Ripple: return pages_.push<RipplePage>(ctx_);
@@ -136,7 +135,6 @@ ListState Ui::list_state() {
     switch (page_) {
     case Page::ChargerTest: return top_as<ChargerTestPage>().list_state();
     case Page::Lines: return top_as<LinesPage>().list_state();
-    case Page::Tools: return top_as<ToolsPage>().list_state();
     case Page::Settings: return top_as<SettingsPage>().list_state();
     default: return ListState{};
     }
@@ -161,7 +159,9 @@ void Ui::init(uint32_t now_ms, bool cancel_resume) {
 
     booting_ = true;
     lcd::fill(kBg);
+    ring_landing_ = true;   // boots in the ring view, on Home
     set_page(Page::Home, now_ms);
+    ring_landing_ = false;
     ctx_.cables.load();   // the remembered cable selection, before boot_restore's boot-time arming reads it
     if (charger_test_.boot_restore(cancel_resume)) set_page(Page::ChargerTest, now_ms);   // reboot-resume: "Resume run?" (or by itself)
 #if K2_PDSTRESS
@@ -311,7 +311,7 @@ void Ui::draw_toast_overlay(uint32_t now_ms) {
 // tests/test_ui_capture.cpp proves each entry: it compares the switch against a clean paint, in all four rotations.
 bool Ui::page_opaque(Page p, bool entering) const {
     switch (p) {
-    case Page::Home: case Page::Detail: case Page::Tools: case Page::Settings: case Page::Graphs: return true;
+    case Page::Home: case Page::Detail: case Page::Settings: case Page::Graphs: return true;
     case Page::ChargerTest: return charger_test_.paints_opaque(entering);   // the stage decides what its paint covers
     default: return false;
     }
@@ -323,16 +323,6 @@ bool Ui::menu_opaque(Menu m) {
     default: return false;   // the rest wipe their body on a live screen (no gain over the erase), or paint by mode, or hold data
     }
 }
-
-namespace {
-constexpr Page kFaces[] = {Page::Home, Page::Graphs, Page::Detail, Page::Lines, Page::Ripple};   // Flow, Graphs, Numbers, Lines, Ripple (the pager's order)
-constexpr int kFaceCount = static_cast<int>(sizeof kFaces / sizeof kFaces[0]);
-static_assert(kFaceCount == kMeterFaces, "the pager shows every face");
-int face_of(Page p) {
-    for (int i = 0; i < kFaceCount; i++) if (kFaces[i] == p) return i;
-    return -1;
-}
-}  // namespace
 
 void Ui::set_page(Page p, uint32_t now_ms) {
     // Every way out of a page or submenu lands here (paging, BACK, the remote): a trigger never survives.
@@ -346,9 +336,9 @@ void Ui::set_page(Page p, uint32_t now_ms) {
     const bool changed = p != page_;
     if (changed) pages_.at(0)->leave();
     page_ = p;
+    ring_view_ = ring_landing_;
     if (p != Page::Home && notice_ == kCalibrationNotice && rotation_notice_until_ == 0)
         rotation_notice_until_ = now_ms + 5000;   // one boot warning, deferred until a page with a footer is visible
-    if (const int f = face_of(p); f >= 0) ctx_.keep.face = static_cast<uint8_t>(f);   // the Bench returns to the face last shown
     const bool blank = clear_for_incoming(now_ms, *outgoing, page_opaque(p, true));   // the outgoing pages are still alive for a replay
     pages_.pop_to(changed ? 0 : 1);        // the menus go; so does the rotation page unless it is the one asked for
     if (changed) build_base(p);
@@ -497,13 +487,10 @@ Ui::Session Ui::session() {
         }
         default: break;
         }
-    } else if (page_ == Page::Tools) {   // the Bench paints its seven places itself; a place's actions use the RowList
-        const ToolsPage &t = top_as<ToolsPage>();
-        s.count = static_cast<uint8_t>(t.count());
-        s.sel = static_cast<uint8_t>(t.selected());
     } else {
-        rows = page_ == Page::Settings;
+        rows = page_ == Page::Settings && !ring_view_;
     }
+    if (depth_ && ring_view_) rows = false;   // the ring view moves between pages: no list is being scrolled
     if (rows) {
         const int n = ctx_.rows.count(), c = ctx_.rows.selected();
         s.count = static_cast<uint8_t>(n > 255 ? 255 : n < 0 ? 0 : n);
@@ -512,7 +499,8 @@ Ui::Session Ui::session() {
     s.home_window = static_cast<uint8_t>(ctx_.keep.home_window);
     s.flags = static_cast<uint8_t>((hold_shown_ ? kSessionHoldCard : 0) | (rotation_notice_until_ ? kSessionRotationNotice : 0) |
                                    (ctx_.em_scanning ? kSessionEmScanning : 0) | (ctx_.em_listen_until ? kSessionEmListening : 0) |
-                                   (ctx_.em_quiet ? kSessionEmQuiet : 0) | (ctx_.id_no_device ? kSessionIdNoDevice : 0));
+                                   (ctx_.em_quiet ? kSessionEmQuiet : 0) | (ctx_.id_no_device ? kSessionIdNoDevice : 0) |
+                                   (ring_view_ ? kSessionRingView : 0));
     return s;
 }
 
@@ -645,6 +633,7 @@ bool Ui::paint_more(uint32_t now_ms) {
 
 void Ui::paint_incoming(uint32_t now_ms, uint32_t t0, bool blank) {
     BudgetScope scope(*this);
+    ring_settle();
     sync_surface();
     last_update_ms_ = now_ms;
     current().invalidate();   // the erase pass erased everything the field caches remember; a built page has drawn nothing
@@ -694,6 +683,7 @@ bool Ui::push_menu(Menu m, uint32_t now_ms) {
         return false;
     }
     stack_[depth_++] = m;
+    ring_view_ = ring_landing_;
     page->enter();
     const bool blank = clear_for_incoming(now_ms, *outgoing, menu_opaque(m));
     paint_incoming(now_ms, t0, blank);
@@ -711,15 +701,17 @@ bool Ui::open_share(qrshare::Type type, std::uint8_t schema, std::string_view ti
     return true;
 }
 
-bool Ui::pop_menu(uint32_t now_ms) {
-    if (depth_ == 0) return false;
+bool Ui::pop_menu(uint32_t now_ms) { return depth_ > 0 && pop_to(depth_ - 1, now_ms); }
+
+// Closes every menu above keep_depth in one paint (the top one's ink is what is on screen).
+bool Ui::pop_to(unsigned keep_depth, uint32_t now_ms) {
+    if (depth_ <= keep_depth) return false;
     const uint32_t t0 = now_us();
     PageIf *const outgoing = pages_.at(depth_);   // the top menu
-    --depth_;
-    outgoing->leave();
+    while (depth_ > keep_depth) pages_.at(depth_--)->leave();   // menu stack_[i] lives at arena index i + 1
     const bool incoming_opaque = depth_ > 0 ? menu_opaque(stack_[depth_ - 1]) : page_opaque(page_);   // the page below
     const bool blank = clear_for_incoming(now_ms, *outgoing, incoming_opaque);
-    pages_.pop();                                  // the page below is the one that was kept
+    pages_.pop_to(depth_ + 1);                     // the page below is the one that was kept
     paint_incoming(now_ms, t0, blank);
     return true;
 }
@@ -896,7 +888,7 @@ void Ui::draw_opp_slot(unsigned slot) {
     if (slot > 3 || !uses_opp_rail()) return;
     ContentViewport::Pause unscaled_rail;
     const PanelEdge opp_edge = opposite_edge(orient_.edge);
-    const OppCells oc = build_opp_cells(ctx_, current().opp_rail());
+    const OppCells oc = build_opp_cells(ctx_, opp_spec());
     int16_t pos = 0;
     for (unsigned i = 0; i < slot; i++) pos = static_cast<int16_t>(pos + oc.c[i].len);
     const Rect &r = layout_.opp_rail;
@@ -916,7 +908,7 @@ void Ui::sync_opp_rail() {
     if (!uses_opp_rail()) return;
     ContentViewport::Pause unscaled_rail;
     const PanelEdge opp_edge = opposite_edge(orient_.edge);
-    const OppCells oc = build_opp_cells(ctx_, current().opp_rail());
+    const OppCells oc = build_opp_cells(ctx_, opp_spec());
     int16_t pos = 0;
     const Rect &r = layout_.opp_rail;
     for (unsigned i = 0; i < 4; i++) {
@@ -1089,11 +1081,25 @@ UiAction Ui::dispatch_button(Event event, uint32_t now_ms) {
         top_as<TriggerPage>().on_event({Button::Back, Press::Long});
     if (event.button == Button::Back && event.press == Press::Hold && !depth_ && page_ == Page::ChargerTest)
         charger_test_.cancel();
-    // A submenu sees everything first and a short BACK it declines pops it; a long BACK nobody takes goes to the Meter.
+    if (ring_view_) {   // in the ring the keys only move; the page below sees none of them
+        ring_key(event, now_ms);
+        if (ctx_.toast.active(now_ms)) {
+            ctx_.toast.drawn = false;
+            draw_toast_overlay(now_ms);
+            paint_pending_ = true;
+        }
+        return UiAction::None;
+    }
+    // An entered page sees everything first. A short BACK it declines pops its menu, or at the top level (the ring page itself)
+    // leaves to the ring; a long BACK nobody takes leaves to the ring from any depth.
     const bool prep_was_pending = clear_pending_ || static_pending_;
     const Dispatch d = depth_ ? dispatch_modal(event, current()) : dispatch(event, current());
-    if (d.route == Route::Pop) pop_menu(now_ms);
-    else if (d.global == Global::ToMeter) to_meter(now_ms);
+    const bool short_back = event.button == Button::Back && event.press == Press::Short;
+    // The place pages are menus over Lines (depth 1 is their top level); a menu over any other page is one level down from it.
+    const bool top_level = depth_ <= (page_ == Page::Lines ? 1 : 0);
+    if (d.route == Route::Pop && ring::entered_back(Press::Short, top_level) == ring::Do::None) pop_menu(now_ms);
+    else if (page_ == Page::ChargerTest && !depth_ && d.route == Route::Unhandled && short_back) open_place_actions(bench::Place::Charger, now_ms);   // up one level: the place's Actions
+    else if (d.route == Route::Pop || d.global == Global::ToMeter || (d.route == Route::Unhandled && short_back && !depth_)) ring_leave(now_ms);
     else {
         if (prep_was_pending && (clear_pending_ || static_pending_)) {
             current().invalidate();
@@ -1109,45 +1115,97 @@ UiAction Ui::dispatch_button(Event event, uint32_t now_ms) {
     return UiAction::None;
 }
 
-// ---- Fieldbook navigation (kFaces: before set_page) ------------------------------------------------------------------------
+// ---- the page ring (ui_ring.hpp) -------------------------------------------------------------------------------------------
 
-void Ui::flip_face(int dir, uint32_t now_ms) {
-    const int f = face_of(page_);
-    const int cur = f < 0 ? ctx_.keep.face : f;
-    set_page(kFaces[(cur + kFaceCount + (dir < 0 ? -1 : 1)) % kFaceCount], now_ms);
+ring::Pos Ui::ring_position() const {
+    const Menu first = depth_ ? stack_[0] : Menu::Count;
+    const uint8_t tab = first == Menu::Connection ? static_cast<uint8_t>(connection_page().tab()) : 0;
+    return ring::owner(page_, first, tab);
 }
 
-void Ui::show_face(uint32_t now_ms) { set_page(kFaces[ctx_.keep.face < kFaceCount ? ctx_.keep.face : 0], now_ms); }
+Strip Ui::strip_now() const {
+    if (!ring_view_) return current().labels();
+    return ring::view_strip(ring_position(), ring::sanitize_target(ctx_.keep.long_back));
+}
+
+kit::OppRailSpec Ui::opp_spec() const {
+    kit::OppRailSpec s = current().opp_rail();
+    if (ring_view_) {   // the position number replaces the page's dots; an entered page shows its own title
+        s.title = ring::mast_name(ring_position());
+        s.dot_count = 0;
+        s.dot_cur = 0;
+    }
+    return s;
+}
+
+// The view-only pages have nothing to enter, so they are always in the ring view.
+void Ui::ring_settle() {
+    if (depth_ == 0 && (page_ == Page::Lines || page_ == Page::Detail)) ring_view_ = true;
+}
+
+bool Ui::ring_show(ring::Pos pos, uint32_t now_ms) {
+    const ring::Target t = ring::target(pos);
+    if (t.menu != Menu::Count && ports_busy()) return false;   // a menu would be refused: change nothing
+    BudgetScope scope(*this);
+    ring_landing_ = true;
+    set_page(t.page, now_ms);
+    bool ok = true;
+    if (t.menu != Menu::Count) {
+        if (t.menu == Menu::Connection) conn_lock_ = static_cast<int8_t>(t.tab);
+        place_next_ = t.menu == Menu::Diagnosis;   // the PD diagnosis opens as the Log place
+        ok = push_menu(t.menu, now_ms);
+        place_next_ = false;
+        if (!ok) { conn_lock_ = -1; conn_actions_next_ = false; }
+    }
+    ring_landing_ = false;
+    return ok;
+}
+
+// +/- skip a page that is refused (a menu while a run owns the ports) and go on in their direction.
+void Ui::ring_walk(ring::Pos to, int dir, uint32_t now_ms) {
+    const ring::Pos cur = ring_position();
+    for (int i = 0; i < ring::kCount && to != cur; i++) {
+        if (ring_show(to, now_ms)) return;
+        if (dir == 0) return;
+        to = dir > 0 ? ring::next(to) : ring::prev(to);
+    }
+}
+
+void Ui::ring_enter(uint32_t now_ms) {
+    (void)now_ms;
+    ring_view_ = false;
+    sync_panel();
+    sync_opp_rail();
+}
+
+void Ui::ring_leave(uint32_t now_ms) {
+    if (page_ == Page::ChargerTest && !depth_) (void)charger_test_.stop();   // leaving the run's page ends it, and frees the ports for the place
+    if (depth_ > 0 || page_ == Page::ChargerTest) {
+        if (ring_show(ring_position(), now_ms)) return;   // the ring page again, at its top
+        if (depth_ > 0) {   // refused (a run owns the ports): the menu goes, the base page shows in the ring
+            ring_landing_ = true;
+            set_page(page_, now_ms);
+            ring_landing_ = false;
+            return;
+        }
+    }
+    ring_view_ = true;
+    sync_panel();
+    sync_opp_rail();
+}
+
+void Ui::ring_key(Event e, uint32_t now_ms) {
+    const ring::Step s = ring::view_key(ring_position(), e, ring::sanitize_target(ctx_.keep.long_back));
+    if (s.what == ring::Do::Show) ring_walk(s.to, e.button == Button::Plus ? 1 : e.button == Button::Minus ? -1 : 0, now_ms);
+    else if (s.what == ring::Do::Enter) ring_enter(now_ms);
+}
 
 void Ui::open_place(bench::Place p, uint32_t now_ms) {
     BudgetScope scope(*this);
-    const bool conn_place = p == bench::Place::Charger || p == bench::Place::Cable || p == bench::Place::Device;
-    const bool batt_place = p == bench::Place::Battery;
-    const bool log_place = p == bench::Place::Log;
-    if (p == bench::Place::K2) {   // the K2 place is the settings page; its BACK opens the Bench with K2 focused
-        ctx_.keep.bench_sel = static_cast<int>(p);
-        set_page(Page::Settings, now_ms);
-        return;
-    }
-    // Meter: the Bench itself. The others: a place page over the Bench; BACK pops it and the Bench shows the place focused.
-    if (conn_place || log_place || batt_place) ctx_.keep.bench_sel = static_cast<int>(p);
-    set_page(Page::Tools, now_ms);   // set_page keeps a base page asked for again
-    if (batt_place) {   // the battery recorder's page
-        if (push_menu(Menu::Battery, now_ms)) sync_panel();
-        return;
-    }
-    if (log_place) {   // the PD diagnosis as the Log place: the stamp, the findings, the Black Box row
-        place_next_ = true;
-        if (push_menu(Menu::Diagnosis, now_ms)) sync_panel();
-        place_next_ = false;
-        return;
-    }
-    if (!conn_place) return;
-    const conn::Tab tab = ctx_.keep.bench_sel == static_cast<int>(bench::Place::Charger) ? conn::Tab::Source
-                        : ctx_.keep.bench_sel == static_cast<int>(bench::Place::Cable) ? conn::Tab::Cable : conn::Tab::Sink;
-    conn_lock_ = static_cast<int8_t>(tab);
-    if (!push_menu(Menu::Connection, now_ms)) { conn_lock_ = -1; conn_actions_next_ = false; return; }
-    pump_paint(now_ms);
+    constexpr ring::Pos kPos[bench::kPlaces] = {ring::Pos::Home, ring::Pos::Charger, ring::Pos::Cable, ring::Pos::Device,
+                                                ring::Pos::Battery, ring::Pos::Log, ring::Pos::K2};
+    const ring::Pos pos = kPos[static_cast<int>(p) < bench::kPlaces ? static_cast<int>(p) : 0];
+    if (ring_show(pos, now_ms) && ring::can_enter(pos)) ring_enter(now_ms);
 }
 
 void Ui::open_place_actions(bench::Place p, uint32_t now_ms) {
@@ -1155,8 +1213,6 @@ void Ui::open_place_actions(bench::Place p, uint32_t now_ms) {
     open_place(p, now_ms);
     conn_actions_next_ = false;
 }
-
-void Ui::to_meter(uint32_t now_ms) { set_page(Page::Home, now_ms); }
 
 bool Ui::run_action(Action a, uint32_t now_ms, bool confirm) {
     BudgetScope scope(*this);
@@ -1414,7 +1470,7 @@ bool Ui::open_connection(conn::Tab tab, bool spoof, uint32_t now_ms) {
         pump_paint(now_ms);
         return true;
     }
-    if (depth_ > 0) set_page(page_, now_ms);   // a single Connection on the Tools page, whatever was open
+    if (depth_ > 0) set_page(page_, now_ms);   // a single Connection over the page, whatever was open
     ctx_.now = now_ms;
     conn_lock_ = static_cast<int8_t>(tab);
     conn_actions_next_ = spoof;

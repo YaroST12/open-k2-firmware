@@ -5,14 +5,13 @@
 
 namespace k2 {
 
-// The pages of the normal rotation (long [+] / [-] page through them).
-// Graphs is appended (the remote's numbers 0..5 stay); its place in the rotation, right after Home, is Ui's kFaces order.
-enum class Page : uint8_t { Home, Detail, ChargerTest, Lines, Tools, Settings, Graphs, Ripple, Count };
-// Submenus opened from Tools or Settings: modal, they have no place in the rotation. The remote
+// The base pages. The page ring (ui_ring.hpp) walks eleven positions over them and the menus; the numbers here are the remote's.
+enum class Page : uint8_t { Home, Detail, ChargerTest, Lines, Settings, Graphs, Ripple, Count };
+// Submenus opened from a ring page or Settings: modal, they have no place of their own in the ring. The remote
 // reports a showing submenu as page index kMenuPageBase + Menu. Connection (Source / Cable / Sink) and Diag
-// are Tools entries; Emarker is the saved-cables list opened from Connection's Cable tab; Twin is the Device twins list;
-// LoopProbe is the HID-cable loop probe (Tools); PdStress the renegotiation stress tool (Tools); Diagnosis is the Black Box
-// diagnosis of the PD session; Battery the efficiency recorder (Bench > Battery).
+// are the Charger / Cable / Device places; Emarker is the saved-cables list opened from Connection's Cable tab; Twin is the Device twins list;
+// LoopProbe is the HID-cable loop probe; PdStress the renegotiation stress tool; Diagnosis is the Black Box
+// diagnosis of the PD session; Battery the efficiency recorder (the Battery place).
 enum class Menu : uint8_t { Trigger, Emarker, PdTrigger, CableR, BlackBox, Spoof, UsbLink, Autorotate, Cards, Share, Connection, Diag, QrTest, Twin, LoopProbe, PdStress, Diagnosis, Battery, Memory, Display, Count };
 inline constexpr uint8_t kMenuPageBase = static_cast<uint8_t>(Page::Count);
 // Remote-only page indices that open Connection on a tab (kConnTabAlias + Source / Cable / Sink): the old "pd",
@@ -35,6 +34,7 @@ inline constexpr uint8_t kSessionEmScanning = 1 << 2;     // an e-marker scan is
 inline constexpr uint8_t kSessionEmListening = 1 << 3;    // the passive listen window after a scan is open
 inline constexpr uint8_t kSessionEmQuiet = 1 << 4;        // the last listen window heard no cable reply
 inline constexpr uint8_t kSessionIdNoDevice = 1 << 5;     // Identify was refused: nothing on CC
+inline constexpr uint8_t kSessionRingView = 1 << 6;       // the page ring has the keys (+/- move, OK enters); clear = an entered page
 // Ui::Session::sub: the Connection page's tab (bits 1:0, conn::Tab), its pop-up (bit 2) and its details page (bit 3).
 inline constexpr uint8_t kSubTabMask = 3, kSubPopup = 1 << 2, kSubDetails = 1 << 3;
 

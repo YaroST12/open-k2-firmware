@@ -13,6 +13,7 @@
 #include "k2/ui/ui_calc.hpp"
 #include "k2/ui/ui_events.hpp"
 #include "k2/ui/ui_labels.hpp"
+#include "k2/ui/ui_ring.hpp"
 #include "k2/ui/ui_layout.hpp"
 #include "k2/ui/ui_blackbox.hpp"
 #include "k2/ui/ui_spoof.hpp"
@@ -70,7 +71,7 @@ inline constexpr std::size_t kMaxMenuDepth = kPageArenaDepth - 1;
 // Every rotation page (Page enum; build_page in ui.cpp).
 inline constexpr std::size_t kLargestBase =
     std::max({arena_bytes<HomePage>(), arena_bytes<DetailPage>(), arena_bytes<ChargerTestPage>(), arena_bytes<LinesPage>(),
-              arena_bytes<ToolsPage>(), arena_bytes<SettingsPage>(), arena_bytes<GraphsPage>(), arena_bytes<RipplePage>()});
+              arena_bytes<SettingsPage>(), arena_bytes<GraphsPage>(), arena_bytes<RipplePage>()});
 // Every menu chain the UI can open (top of the list = nearest the rotation page), each at most kMaxMenuDepth deep. Place pages
 // (Connection) under each tool of their place (Charger: Request voltage, Fast charge, Report cards > Share, Stress test;
 // Cable: Spoof, Resistance, Loop probe > Share; Device: Twins) and Connection's own Share rows, Black box > Share, Diagnosis >
@@ -110,9 +111,9 @@ static_assert(kPageArenaBytes >= arena_bytes<DetailPage, ConnectionPage, TwinPag
 static_assert(kPageArenaBytes >= arena_bytes<DetailPage, ConnectionPage, LoopProbePage>(), "detail + loop probe");
 static_assert(kPageArenaBytes >= arena_bytes<HomePage, ConnectionPage, LoopProbePage, SharePage>(), "home + loop probe card");
 #endif
-static_assert(kPageArenaBytes >= arena_bytes<ToolsPage, ConnectionPage, EmarkerPage, SharePage>(), "the deepest Tools chain fits");
+static_assert(kPageArenaBytes >= arena_bytes<LinesPage, ConnectionPage, EmarkerPage, SharePage>(), "the deepest ring-page chain fits");
 static_assert(kPageArenaBytes >= arena_bytes<ChargerTestPage, BlackBoxPage>(), "black box opens over charger test");
-static_assert(kPageArenaBytes >= arena_bytes<ToolsPage, QrTestPage>(), "the qrtest page fits over Tools");
+static_assert(kPageArenaBytes >= arena_bytes<LinesPage, QrTestPage>(), "the qrtest page fits over Lines");
 static_assert(kPageArenaBytes >= arena_bytes<SettingsPage, DiagPage, SharePage>(), "settings > diag > share fits");
 static_assert(kPageArenaBytes >= arena_bytes<SettingsPage, MemoryPage>(), "settings > memory fits");
 static_assert(kPageArenaBytes >= arena_bytes<SettingsPage, DisplayPage>(), "settings > display fits");
@@ -187,13 +188,13 @@ public:
     // Jump to a page by index: a rotation page, kMenuPageBase + Menu (a submenu), or kConnTabAlias + tab
     // (Connection on that tab). Any open submenu is closed first; false when out of range or refused.
     bool goto_page(uint8_t page, uint32_t now_ms);
-    // Fieldbook navigation (CONCEPT 7). The Meter is three faces (Flow, Numbers, Lines) that Up / Dn flip with a wrap; OK on a
-    // face opens the Bench; the Bench opens a place on the same page (Page::Tools); a long BACK nobody takes lands on Flow.
-    void flip_face(int dir, uint32_t now_ms);
-    void show_face(uint32_t now_ms);                          // the face last shown (the Bench's Meter row and its BACK)
-    void open_place(bench::Place p, uint32_t now_ms);         // Place::Meter = the Bench's own list
+    // The page ring (ui_ring.hpp): eleven pages in one loop. In the ring view the keys only move (+/- walk, OK enters, Back goes
+    // Home, long Back to the page chosen in Settings); an entered page owns the keys and a Back it declines leaves to the ring.
+    // Openers from outside (goto_page, the remote, the charger test) land entered; the view-only pages always land in the ring.
+    bool ring_view() const { return ring_view_; }
+    ring::Pos ring_position() const;
+    void open_place(bench::Place p, uint32_t now_ms);         // a place, entered (Place::Meter = Home)
     void open_place_actions(bench::Place p, uint32_t now_ms); // Place::Charger/Cable/Device opened directly on its Actions sub-page
-    void to_meter(uint32_t now_ms);
     // Opens the Charger / Cable / Device place (`tab`); `spoof` goes straight on to the Spoof list (the Tools shortcut).
     bool open_connection(conn::Tab tab, bool spoof, uint32_t now_ms);
     // The comeback of a bridged Refresh (core/rescan.cpp): Connection on its Source tab, saying "Rescanned (rebooted)".
@@ -290,7 +291,7 @@ public:
     void set_cable_mode(cable_r::Mode m) { ctx_.cable_mode = m; cable_reset(); }
     const std::optional<cable_r::Kelvin> &kelvin() const { return ctx_.kelvin; }
     // What the four buttons do on the current page (Button order).
-    PanelLabels labels() { return resolve(current().labels()); }
+    PanelLabels labels() { return resolve(strip_now()); }
     // True when the current page covers the strip (the QR code): its four labels are not drawn (GET_STATE part 3).
     bool strip_hidden() { return current().hides_strip(); }
     bool charger_test_busy() const { return charger_test_.busy(); }
@@ -420,7 +421,7 @@ public:
     // Read-only view of the Connection page (tab, pop-up rows, facts) for the host tests.
     // It exists only while Menu::Connection is on the stack.
     const ConnectionPage &connection_page() const { return *find<ConnectionPage>(Menu::Connection); }
-    kit::OppRailSpec current_opp_rail() const { return current().opp_rail(); }
+    kit::OppRailSpec current_opp_rail() const { return opp_spec(); }
     // The page arena (host tests): how many pages are alive and how many bytes of the arena they use.
     std::size_t live_pages() const { return pages_.depth(); }
     std::size_t page_bytes() const { return pages_.used(); }
@@ -463,6 +464,16 @@ private:
     void draw_panel();
     void draw_opp_rail();
     void sync_opp_rail();
+    // The ring (ui_ring.hpp): the one flag, and what the strip and the opposite rail show for it.
+    Strip strip_now() const;              // the ring's Prev / Enter / Next while in the ring view, else the page's own
+    kit::OppRailSpec opp_spec() const;    // the page's rail, its masthead the ring position while in the ring view
+    bool ring_show(ring::Pos pos, uint32_t now_ms);   // build and show a ring page in the ring view; false = refused, nothing changed
+    void ring_walk(ring::Pos to, int dir, uint32_t now_ms);   // ring_show, stepping on past a refused page in the key's direction
+    void ring_enter(uint32_t now_ms);
+    void ring_leave(uint32_t now_ms);     // back to the ring on the same page (a menu chain is rebuilt at its top)
+    void ring_settle();                   // after a build: the view-only pages are always in the ring view
+    void ring_key(Event e, uint32_t now_ms);
+    bool pop_to(unsigned keep_depth, uint32_t now_ms);
     void draw_opp_slot(unsigned slot);
     void draw_toast_overlay(uint32_t now_ms);
     void draw_release_notice();   // the toast notices every page shares, and the battery recorder's running dot
@@ -576,7 +587,9 @@ private:
     bool rotation_notice_drawn_ K2_BSS_INIT(false);
     int8_t conn_lock_ = -1;   // open_connection / open_place -> build_menu: the place tab (Charger / Cable / Device)
     bool conn_actions_next_ K2_BSS_INIT(false);   // open_place_actions / open_connection(spoof) -> build_menu: open on Actions sub-page
-    bool place_next_ K2_BSS_INIT(false); // open_place -> build_menu: the PD diagnosis opens as the Log place
+    bool place_next_ K2_BSS_INIT(false); // ring_show -> build_menu: the PD diagnosis opens as the Log place
+    bool ring_view_ K2_BSS_INIT(true);      // the keys walk the ring (boots in it, on Home)
+    bool ring_landing_ K2_BSS_INIT(false);  // ring_show builds: the next page lands in the ring view, not entered
     bool pressed_[4] K2_BSS_ZERO;          // lit, indexed by Button
     bool down_[4] K2_BSS_ZERO;             // physically down
     bool remote_down_[4] K2_BSS_ZERO;      // a remote +/- is held, indexed by the physical key it lights

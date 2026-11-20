@@ -233,7 +233,7 @@ static void test_text() {
 static Ui &open_cards(uint32_t t) {
     static Ui ui;
     ui.init(t); ui.tick(t);
-    ui.goto_page(uint8_t(Page::Tools), t + 50);
+    ui.goto_page(uint8_t(Page::Lines), t + 50);
     ui.push_menu(Menu::Cards, t + 100);
     ui.tick(t + 150);
     return ui;
@@ -256,12 +256,14 @@ static void test_page() {
     ui.tick(40350);
     CHECK_EQ(ui.menu() == Menu::Cards, 1);
     ui.on_button(Button::Back, ButtonEvent::Short, 40400);
-    CHECK_EQ(int(ui.menu_depth()), 0);
+    CHECK_EQ(ui.ring_view(), true);                             // out to the Charger ring page
+    CHECK_EQ(ui.menu() == Menu::Cards, 0);
 
     rc::Card a = make_card(0x11111111, "First"), b = make_card(0x22222222, nullptr, 0x0B05, 0x1234), d = make_card(0x33333333, nullptr);
     CHECK_EQ(int(rc::hw::put(a)), int(rc::Err::Ok));
     CHECK_EQ(int(rc::hw::put(b)), int(rc::Err::Ok));
     CHECK_EQ(int(rc::hw::put(d)), int(rc::Err::Ok));
+    ui.goto_page(uint8_t(Page::Lines), 40480);
     ui.push_menu(Menu::Cards, 40500);                           // re-enter: the store is re-read
     ui.tick(40550);
     CHECK_STR(label(ui, Button::Ok), "Open");
@@ -306,22 +308,23 @@ static void test_page() {
     std::array<rc::Card, 8> all;
     CHECK_EQ(int(rc::hw::list(all)), 2);
     ui.on_button(Button::Back, ButtonEvent::Short, 41300);
-    CHECK_EQ(int(ui.menu_depth()), 0);
+    CHECK_EQ(ui.ring_view(), true);
+    CHECK_EQ(ui.menu() == Menu::Cards, 0);
     stub_cards_reset();
 }
 
 static void test_tools_hub_lists_cards() {
     CHECK_EQ(kToolCount, 14);   // Device twins, the Loop probe, then PD Stress (tests/test_ui_tools.cpp)
-    CHECK_STR(ToolsPage::tool_name(11), "Device twins");
-    CHECK_EQ(ToolsPage::tool_menu(11) == Menu::Twin, 1);
+    CHECK_STR(tool_name(11), "Device twins");
+    CHECK_EQ(tool_menu(11) == Menu::Twin, 1);
     CHECK_EQ(int(tool_readiness(11, SetupState{}, false).level), int(ToolLevel::Ready));
     CHECK_EQ(std::strlen(tool_hint(11)) <= 24 && std::strlen(tool_hint(11)) > 0, 1);
-    CHECK_STR(ToolsPage::tool_name(8), "PD diagnosis");
-    CHECK_EQ(ToolsPage::tool_menu(8) == Menu::Diagnosis, 1);
-    CHECK_STR(ToolsPage::tool_name(9), "Report cards");
-    CHECK_EQ(ToolsPage::tool_menu(9) == Menu::Cards, 1);
-    CHECK_EQ(ToolsPage::tool_menu(2) == Menu::Spoof, 1);
-    CHECK_EQ(ToolsPage::tool_menu(10) == Menu::Diag, 1);
+    CHECK_STR(tool_name(8), "PD diagnosis");
+    CHECK_EQ(tool_menu(8) == Menu::Diagnosis, 1);
+    CHECK_STR(tool_name(9), "Report cards");
+    CHECK_EQ(tool_menu(9) == Menu::Cards, 1);
+    CHECK_EQ(tool_menu(2) == Menu::Spoof, 1);
+    CHECK_EQ(tool_menu(10) == Menu::Diag, 1);
     CHECK_EQ(int(tool_readiness(8, SetupState{}, false).level), int(ToolLevel::Ready));
     CHECK_EQ(int(tool_readiness(9, SetupState{}, false).level), int(ToolLevel::Ready));
     CHECK_EQ(std::strlen(tool_hint(9)) <= 24 && std::strlen(tool_hint(9)) > 0, 1);

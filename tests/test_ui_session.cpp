@@ -183,7 +183,7 @@ static void test_stack_and_connection() {
     CHECK_EQ(int(s.sub & kSubTabMask), int(conn::Tab::Source));
     CHECK_EQ(int(s.sub & kSubPopup), 0);
     // a list page reports the cursor the rows show
-    ui.goto_page(static_cast<uint8_t>(Page::Tools), g_stub.ms);
+    ui.goto_page(static_cast<uint8_t>(Page::Settings), g_stub.ms);
     run(ui, 5);
     s = ui.session();
     CHECK_EQ(int(s.depth), 0);
@@ -228,7 +228,7 @@ static void test_keys_every_page_and_menu() {
         check_keys(ui, "page");
     }
     for (int m = 0; m < static_cast<int>(Menu::Count); m++) {
-        ui.goto_page(static_cast<uint8_t>(Page::Tools), g_stub.ms += 1000);
+        ui.goto_page(static_cast<uint8_t>(Page::Lines), g_stub.ms += 1000);
         ui.push_menu(static_cast<Menu>(m), g_stub.ms += 100);
         check_keys(ui, "menu");
         ui.pop_menu(g_stub.ms += 100);
@@ -239,16 +239,19 @@ static void test_keys_follow_the_page() {
     Ui &ui = fresh_ui();
     ui.goto_page(0, g_stub.ms += 1000);
     remote::KeysInfo k = remote::keys_from_labels(ui.labels(), ui.strip_hidden());
-    CHECK_STR(k.k[0].shrt, "");                       // Flow: no level above it, long BACK cycles the hero
-    CHECK_STR(k.k[0].lng, "Hero");
-    CHECK_STR(k.k[1].shrt, "Up");                     // Up / Dn flip the Meter's faces, with a wrap: never dim
-    CHECK_STR(k.k[1].lng, "");
+    CHECK_STR(k.k[0].shrt, "Back");                   // Home entered: BACK leaves to the ring, +/- pick the hero
+    CHECK_STR(k.k[1].shrt, "Hero-");
     CHECK_EQ(int(k.flags & 2), 0);
     CHECK_EQ(int(k.flags & 0x10), 0);                 // the strip is drawn
-    CHECK_STR(k.k[2].shrt, "Bench");
-    CHECK_STR(k.k[3].shrt, "Dn");
+    CHECK_STR(k.k[2].shrt, "Zoom");
+    CHECK_STR(k.k[3].shrt, "Hero+");
     CHECK_EQ(int(k.flags & 8), 0);
-    ui.goto_page(static_cast<uint8_t>(Page::Tools), g_stub.ms += 1000);
+    ui.on_button(Button::Back, ButtonEvent::Short, g_stub.ms += 100);   // in the ring: Home / Prev / Enter / Next
+    k = remote::keys_from_labels(ui.labels(), ui.strip_hidden());
+    CHECK_STR(k.k[1].shrt, "Prev");
+    CHECK_STR(k.k[2].shrt, "Enter");
+    CHECK_STR(k.k[3].shrt, "Next");
+    ui.goto_page(static_cast<uint8_t>(Page::Lines), g_stub.ms += 1000);
     ui.push_menu(Menu::Share, g_stub.ms += 100);      // the QR code covers the strip
     CHECK_EQ(int(remote::keys_from_labels(ui.labels(), ui.strip_hidden()).flags & 0x10), 0x10);
 }

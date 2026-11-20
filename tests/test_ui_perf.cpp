@@ -46,8 +46,8 @@ static void test_page_switch_budgets() {
     ui.init(1000);
     ui.set_rotation(0, 1000);
     ui.tick(1100);
-    // One full screen (content 224x240 + panel 240x16) is 57600 px. A switch into an opaque page (Detail, Diag, Lines, Tools,
-    // Settings: Ui::page_opaque) paints once with no erase pass, so it costs about one screen; a page that is not opaque
+    // One full screen (content 224x240 + panel 240x16) is 57600 px. A switch into an opaque page (Detail, Diag, Lines,
+    // Settings, Graphs: Ui::page_opaque) paints once with no erase pass, so it costs about one screen; a page that is not opaque
     // (Charger, Connection) still pays the erase replay of the page it replaces, Home's included (its two measurement cells,
     // band and info block make that replay dear). Connection (entered here on the Source tab) wipes and repaints its whole
     // body: up to eight rows of text over a full-body fill. tests/test_ui_overdraw.cpp prices every pair. Connection also sets
@@ -55,7 +55,7 @@ static void test_page_switch_budgets() {
     // place) adds its identity block's text over its own ground and the dashed line, ~100 px of glyph cells.
     struct { uint8_t page; unsigned budget; const char *name; } cases[] = {
         {1, 59500, "Detail"}, {2, 60500, "Charger"}, {kPdPage, 142600, "Connection"}, {kDiagPage, 58800, "Diag"},
-        {3, 77000, "Lines"}, {4, 58800, "Tools"}, {5, 62500, "Settings"},
+        {3, 77000, "Lines"}, {4, 62500, "Settings"}, {5, 62500, "Graphs"}, {6, 108000, "Ripple"},
     };
     for (auto &c : cases) {
         g_lcd_pixels = 0;
@@ -78,14 +78,14 @@ static void test_scroll_budgets() {
     ui.init(1000);
     ui.set_rotation(0, 1000);
     ui.tick(1100);
-    // Tools hub: moving the selection one row repaints the two highlight-transition rows and the
+    // Settings (K2 place): moving the selection one row repaints the two highlight-transition rows and the
     // changed text cells only (was ~42k with a full-row fill per row).
     ui.goto_page(4, 2000);
     ui.tick(2100);
     for (int i = 0; i < 3; i++) {
         g_lcd_pixels = 0;
         ui.on_button(Button::Plus, ButtonEvent::Short, 2200 + i * 100);
-        std::printf("tools move %-2d: %u px (budget 26000)\n", i, g_lcd_pixels);
+        std::printf("settings move %-2d: %u px (budget 26000)\n", i, g_lcd_pixels);
         CHECK_EQ(g_lcd_pixels <= 26000, true);
     }
     // ChargerTest setup list (ListView): same budget on the shared widget.
@@ -120,7 +120,7 @@ static void test_scroll_budgets() {
     ui.pop_menu(4700);
     // Settings (kit RowList, 39 px two-line rows): moving the selection repaints exactly the two rows
     // whose highlight changed, opaque (row fill then text), plus the footer hint.
-    ui.goto_page(5, 4800);
+    ui.goto_page(static_cast<uint8_t>(Page::Settings), 4800);
     ui.tick(4900);
     for (int i = 0; i < 3; i++) {
         g_lcd_pixels = 0;
@@ -199,7 +199,7 @@ static void test_scroll_budgets() {
         ui.on_button(Button::Plus, ButtonEvent::Short, 8100 + i * 100);
         ui.tick(8100 + i * 100 + 50);
         // The kit RowList opens the focused row to 40 px (its note line), so a move shifts the rows under it: the budget is
-        // the kit's (as Tools and Settings), still far below a body wipe.
+        // the kit's (as Settings), still far below a body wipe.
         std::printf("cards scroll %-2d: %u px (budget 25000)\n", i, g_lcd_pixels);
         CHECK_EQ(g_lcd_pixels <= 25000, true);
     }
@@ -436,8 +436,8 @@ static void test_wizard_budgets() {
     std::printf("wizard review: incremental vs forced redraw diff=%u\n", diff);
     CHECK_EQ(diff, 0u);
 
-    // Tools -> Spoof on the same list: arming repaints the card, two pills and the footer only.
-    r.ui.goto_page(static_cast<uint8_t>(Page::Tools), r.now);
+    // Settings -> Spoof on the same list: arming repaints the card, two pills and the footer only.
+    r.ui.goto_page(static_cast<uint8_t>(Page::Lines), r.now);
     r.tick(2); r.settle();
     CHECK_EQ(r.ui.push_menu(Menu::Spoof, r.now), true);
     r.tick(2); r.settle();
@@ -545,24 +545,24 @@ static void test_convergence() {
     ui.tick(1100);
     ui.tick(1400);   // let the display throttles lapse so a redraw is not held back
 
-    ui.goto_page(4, 2000);   // Tools
+    ui.goto_page(static_cast<uint8_t>(Page::Settings), 2000);
     ui.tick(2100);
     for (int i = 0; i < 5; i++) ui.on_button(Button::Plus, ButtonEvent::Short, 2200 + i * 100);
     ui.tick(2500);
     ui.tick(2800);
     while (ui.painting()) ui.tick(2800);
     unsigned diff = force_full_redraw(ui, 2800);
-    std::printf("tools: incremental vs forced redraw diff=%u\n", diff);
+    std::printf("settings (first): incremental vs forced redraw diff=%u\n", diff);
     CHECK_EQ(diff, 0u);
 
-    ui.goto_page(5, 2900);   // Settings (two-line kit RowList rows), selection moved
+    ui.goto_page(static_cast<uint8_t>(Page::Graphs), 2900);   // Graphs
     ui.tick(2950);
     for (int i = 0; i < 3; i++) ui.on_button(Button::Plus, ButtonEvent::Short, 2960 + i * 10);
     ui.tick(2990);
     ui.tick(2995);
     while (ui.painting()) ui.tick(2995);
     diff = force_full_redraw(ui, 2995);
-    std::printf("settings: incremental vs forced redraw diff=%u\n", diff);
+    std::printf("graphs: incremental vs forced redraw diff=%u\n", diff);
     CHECK_EQ(diff, 0u);
 
     ui.goto_page(2, 3000);   // ChargerTest setup list, then scroll
@@ -576,7 +576,7 @@ static void test_convergence() {
     CHECK_EQ(diff, 0u);
 
     // A full tour followed by a forced same-instant redraw of Home must be pixel-stable.
-    const uint8_t tour[] = {1, 2, 3, 4, 5, kPdPage, kDiagPage};
+    const uint8_t tour[] = {1, 2, 3, 4, 5, 6, kPdPage, kDiagPage};
     for (uint8_t i = 0; i < sizeof tour; i++) { ui.goto_page(tour[i], 4000 + i * 100); ui.tick(4100 + i * 100); }
     ui.goto_page(0, 5000);
     ui.tick(5100);
@@ -695,8 +695,8 @@ static void test_tick_cost() {
     struct { uint8_t page; unsigned idle3_px, worst_px; const char *name; } cases[] = {
         {0, 29500, 29500, "Home"}, {1, 450, 3400, "Detail"}, {2, 0, 3200, "Charger"}, {kPdPage, 0, 3200, "Connect"},
         {kDiagPage, 0, 3400, "Diag"}, {3, 0, 3200, "Lines"},
-        {4, 0, 4800, "Bench"},   // the Meter row's live readings and the watts a device gets, on top of the OppRail cells
-        {5, 0, 3200, "Settings"},
+        {4, 0, 4800, "Settings"},   // the identity block and the OppRail cells
+        {static_cast<uint8_t>(Page::Ripple), 0, 3200, "Ripple"},
         {static_cast<uint8_t>(Page::Graphs), 1850, 1650, "Graphs"},   // the elapsed and Wh digits, and the scrolling graphs
     };
     std::printf("page tick = %u ms; px per tick with live values moving (wire ms at DIV8/DIV4/DIV2):\n",
@@ -803,7 +803,7 @@ static void test_pipeline_model() {
     std::printf("pipeline model, 6 page switches %u px: serial %.1f ms (%.3f us/px), pipelined %.1f ms (%.3f us/px), wire "
                 "floor %.1f ms\n", px_pipe, serial, serial * 1000 / px_serial, pipe, pipe * 1000 / px_pipe, floor_ms);
     CHECK_EQ(px_serial, px_pipe);              // the same pixels either way
-    CHECK_EQ(pipe < serial * 0.965, true);     // the overlap still saves 3.5 % under the model
+    CHECK_EQ(pipe < serial * 0.975, true);     // the overlap still saves 2.5 % under the model (measured 3.1 % over Detail..Graphs..Home)
     CHECK_EQ(pipe >= floor_ms, true);          // and never beats the wire
 }
 
