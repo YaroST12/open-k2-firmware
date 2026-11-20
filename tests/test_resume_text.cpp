@@ -14,7 +14,7 @@ static In combo(unsigned m) {
 }
 
 int main() {
-    // Every state fits its field (status 20, row 23, note 31, footer 27): the screenshot of 2026-11-07 cut
+    // Every state fits its field (status 20, row 22, note 29, footer 27): the screenshot of 2026-11-07 cut
     // "Self-powered, VBUS lost" (23) to "Self-powered, VBUS l..." and the footer (37) at the edge.
     for (unsigned m = 0; m < 64; ++m) {
         const In in = combo(m);
@@ -34,7 +34,7 @@ int main() {
     In in;
     CHECK(row(in) == "Waiting for stable 5V");
     in.rd_on = true;
-    CHECK(row(in) == "Rd on, awaiting charger");
+    CHECK(row(in) == "Rd on, waiting charger");
     in.wait_over = true;
     CHECK(row(in) == "Waiting for stable 5V");
     in.behind_cable = true;

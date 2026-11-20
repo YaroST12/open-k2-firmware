@@ -5,14 +5,14 @@
 // The stage shows why a run is waiting: a reboot (or a lost VBUS on a self-powered K2) interrupted it and it goes on by itself
 // once VBUS is steady. "Self-powered" is a fact about the supply NOW, never about the run that was journaled: a run begun on a
 // self-powered K2 that comes back on a host-powered one (the Baseus 70W report, 2026-11-07) is a plain reboot.
-// Every string fits its field on the kit list (a 16 px row text beside the 12 px marker column leaves 23 cells, the focused
-// 12 px note 31 cells, the footer 27 cells): status 20 cells, row 23 cells, note 31 cells, footer 27 cells.
+// Every string fits its field on the 208 px kit list (a tail-less 16 px row text from x28 to the scroll lane leaves 22 cells,
+// the focused 12 px note 29 cells, the footer pill 30): status 20 cells, row 22 cells, note 29 cells, footer 27 cells.
 #pragma once
 #include <string_view>
 
 namespace k2::resumetext {
 
-inline constexpr unsigned kStatusMax = 20, kRowMax = 23, kNoteMax = 31, kFooterMax = 27;
+inline constexpr unsigned kStatusMax = 20, kRowMax = 22, kNoteMax = 29, kFooterMax = 27;
 
 struct In {
     bool self_now = false;       // the K2 is self-supplied now (pinned Rd, or bus-powered)
