@@ -1139,6 +1139,19 @@ void TwinPage::update(uint32_t now_ms) {
         close_detail();
         return;
     }
+    // The floating pill is drawn without erasing: when its text or tone changes the old one is cleared and the body repaints.
+    compose_footer();
+    {
+        uint32_t sg = mix_u32(mix_init(), static_cast<uint32_t>(foot_tone_) * 31u + 1u);
+        sg = mix(sg, foot_text_.view());
+        if (foot_.valid && foot_.needs(sg)) {
+            draw_footer(ctx_.content, FooterTone::Info, {});   // clears the band the old pill sat in
+            ctx_.rows.invalidate();
+            det_sig_ = 0;
+        }
+        foot_.sig = sg;
+        foot_.valid = true;
+    }
     if (detail_) {
         paint_detail(now_ms);
     } else {
@@ -1147,7 +1160,6 @@ void TwinPage::update(uint32_t now_ms) {
         ctx_.rows.select(sel_);
         ctx_.rows.draw(now_ms, ctx_.budget);
     }
-    compose_footer();
     if (foot_tone_ != FooterTone::Info && !foot_text_.view().empty())
         draw_toast(ctx_.content, foot_tone_, foot_text_.view());
 }
