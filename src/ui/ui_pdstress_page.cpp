@@ -38,7 +38,7 @@ static_assert(all_fit(kSeqNames, kSmallAdvPx, kit::kTailX - kit::kTextX), "a seq
 constexpr const char *kSeqNotes[] = {
     "Fixed levels up, then down", "5V to top level and back", "Same Request at 9V and top", "Get_Source_Cap every 500 ms",
     "Fixed to PPS at one voltage", "PPS steps 20 mV to 2 V",  "AVS steps 100 mV to 2 V",    "Half current and back",
-    "EPR 28V and back. Opt-in",   "Soft_Reset again and again", "PPS requests under 5V",    "Mismatch bit, no real mismatch",
+    "EPR 28V and back. Opt-in",   "Soft_Reset again and again", "PPS requests under 5V",    "Mismatch bit, no mismatch",
 };
 static_assert(std::size(kSeqNotes) == ps::kSeqCount, "one note per sequence");
 
@@ -51,9 +51,9 @@ static_assert(all_fit(kSeqNotes, kLabelAdv, kit::kNoteMaxPx) && all_fit(kRowNote
 constexpr const char *kPaceNames[] = {"per sequence", "all Settled", "all Ready"};
 static_assert(all_fit(kPaceNames, kSmallAdvPx, 112), "a pace name runs into the row text");
 
-// The ResultGrid's label strip (font 12, right-aligned at x55, kResultLabelW - 8 = 52 px): at most 8 characters.
-constexpr const char *kRowLabels[] = {"P1 Fixed", "P2 Slam", "P3 Same", "P4 Caps", "P5 F/PPS", "P6 PPS",
-                                      "P7 AVS",   "P8 Amps", "P9 EPR",  "P10 Soft", "P11 <5V", "P12 Mism"};
+// The ResultGrid's label strip (font 12, kResultLabelW - 8 = 46 px): at most 7 characters.
+constexpr const char *kRowLabels[] = {"P1 Fix",  "P2 Slam", "P3 Same", "P4 Caps", "P5 FPPS", "P6 PPS",
+                                      "P7 AVS",  "P8 Amps", "P9 EPR",  "P10 Sft", "P11 <5V", "P12 Msm"};
 static_assert(std::size(kRowLabels) == ps::kSeqCount, "one grid label per sequence");
 static_assert(all_fit(kRowLabels, kLabelAdv, kit::kResultLabelW - 8), "a result row label is wider than the label strip");
 
@@ -80,10 +80,10 @@ static_assert(all_fit(kStopShort, kLabelAdv, kit::kNoteMaxPx - 14 * static_cast<
 
 // The fixed footers and notes (font 16).
 constexpr const char *kFooters[] = {
-    "Keep the output empty",  "Running: keep output empty", "Resuming after K2 reboot", "Stopping: back to 5V",
+    "Keep the output empty",  "Running: keep port empty",   "Resuming after K2 reboot", "Stopping: back to 5V",
     "Pick at least one test", "Result saved",               "Result discarded",         "Save failed: flash full",
-    "Save failed",            "Result unreadable",          "Another run holds the port", "No PD source",
-    "Load inline: unplug it", "No picked test applies",     "No buffer: charger test on", "Already running",
+    "Save failed",            "Result unreadable",          "Another run holds port",   "No PD source",
+    "Load inline: unplug it", "No picked test applies",     "Busy: charger test on",    "Already running",
     "No power meter",
 };
 enum Foot : uint8_t {
@@ -103,35 +103,34 @@ static_assert(all_fit(kReviewKeys, kSmallAdvPx, kit::kKvValueX - 6 - 4), "a Revi
 constexpr int16_t kReviewRuleY = kit::kBodyY + kReviewRows * kit::kRowH;   // 154
 constexpr int16_t kActionY = kReviewRuleY + 2, kActionH = 64;                  // 156..219
 
-// Running (level 1): seq n/N and the clock, the bar, the name, VBUS at 48 px, then the counts in two columns.
-constexpr int16_t kSeqY = 26, kClockX = 170, kProgY = 44, kNameY = 50, kVbusLabelY = 74, kHeroX = 196, kHeroY = 70;
-constexpr int16_t kCountRuleY = 120, kSplitX = 112;
-constexpr kit::KvLayout kCountsL{kCountRuleY + 2, kit::kRowH, 6, &kLabelFont, nullptr, 76, 4, Align::Right};
-constexpr kit::KvLayout kCountsR{kCountRuleY + 2, kit::kRowH, 116, &kLabelFont, nullptr, 186, 4, Align::Right};
+// Running (level 1): seq n/N and the clock, the bar, the name, VBUS at 48 px, then the counts in two columns (208 px canvas).
+constexpr int16_t kSeqY = 4, kClockX = 156, kProgY = 24, kNameY = 30, kVbusLabelY = 56, kHeroX = 186, kHeroY = 52;
+constexpr int16_t kCountRuleY = 104, kSplitX = 104;
+constexpr kit::KvLayout kCountsL{kCountRuleY + 2, kit::kRowH, 4, &kLabelFont, nullptr, 72, 4, Align::Right};
+constexpr kit::KvLayout kCountsR{kCountRuleY + 2, kit::kRowH, 106, &kLabelFont, nullptr, 174, 4, Align::Right};
 constexpr const char *kCountKeysL[] = {"Transitions", "Hard resets", "Soft resets"};
 constexpr const char *kCountKeysR[] = {"Rej / Wait", "Out of band", "Reboots"};
-static_assert(all_fit(kCountKeysL, kLabelAdv, 76 - 6 - 2) && all_fit(kCountKeysR, kLabelAdv, 186 - 116 - 2),
+static_assert(all_fit(kCountKeysL, kLabelAdv, 72 - 4 - 2) && all_fit(kCountKeysR, kLabelAdv, 174 - 106 - 2),
               "a count key runs into its value");
 constexpr int kCountRows = 3;
 constexpr uint32_t kHeroMs = 250;   // digits at most 4 times a second
 constexpr int kRunBudgetPx = PdStressPage::kRunBudgetPx;
 
 // Results: the score band, the counters, the grid.
-constexpr int16_t kScoreY = 26, kScoreX = 54, kScoreNoteX = 132, kBandRuleY = 52, kTallyY = 54, kTallyRuleY = 78, kGridY = 80;
-// Three counters, each the number (font 16) then the word as a verdict cell (font 12): the same look as the grid's cells, the skip
-// word struck. No lone glyph: a skip dash beside its number would read as a minus sign.
-constexpr int16_t kTallyW = 74, kTallyNumX = 4, kTallyCellX = 24, kTallyCellW = 46, kTallyCellH = 20;
-static_assert(3 * kTallyW <= 224, "the counters fit across");
+constexpr int16_t kScoreY = 4, kScoreX = 50, kScoreNoteX = 124, kBandRuleY = 30, kTallyY = 32, kTallyRuleY = 56, kGridY = 58;
+// Three counters, each the number (font 16) then the word as a verdict cell (font 12).
+constexpr int16_t kTallyW = 69, kTallyNumX = 2, kTallyCellX = 22, kTallyCellW = 44, kTallyCellH = 20;
+static_assert(3 * kTallyW <= 208, "the counters fit across 208 px");
 constexpr const char *kTallyWords[] = {"clean", "issues", "skip"};
 static_assert(all_fit(kTallyWords, kLabelAdv, kTallyCellW - 4), "a counter word is wider than its cell");
 
 // Detail: two pages of seven counters.
-constexpr kit::KvLayout kDetail{kit::kBodyY, kit::kRowH, 6, nullptr, nullptr, 160, 6, Align::Right};
+constexpr kit::KvLayout kDetail{kit::kBodyY, kit::kRowH, 6, nullptr, nullptr, 156, 6, Align::Right};
 constexpr const char *kDetailKeys[PdStressPage::kDetailPages][PdStressPage::kDetailRows] = {
     {"Transitions", "Accept late", "PS_RDY late", "PS_RDY out of band", "Wait", "Reject", "Caps resent"},
     {"VBUS out of band", "Soft resets", "Hard resets", "VBUS dropouts", "Contract lost", "No recovery", "Seq score"},
 };
-static_assert(all_fit(kDetailKeys[0], kSmallAdvPx, 160 - 6 - 4) && all_fit(kDetailKeys[1], kSmallAdvPx, 160 - 6 - 4),
+static_assert(all_fit(kDetailKeys[0], kSmallAdvPx, 156 - 6 - 4) && all_fit(kDetailKeys[1], kSmallAdvPx, 156 - 6 - 4),
               "a Detail key runs into the value");
 // The event behind each Detail row (Count = not an event: transitions on page 1, the sequence's score on page 2).
 constexpr ps::Event kDetailEvents[PdStressPage::kDetailPages][PdStressPage::kDetailRows] = {
@@ -299,7 +298,8 @@ void PdStressPage::bar() {
         break;
     case Stage::Detail: t.put(kRowLabels[static_cast<std::size_t>(detail_seq_)]); break;
     }
-    kit::draw_top_bar(ctx_.content, t.view(), step, fusb302::self_powered() ? "SNK" : "PAS", true, 2);   // title_badge follows in update
+    (void)step;
+    bar_valid_ = true;
     bar_valid_ = false;
     bar_drawn_ = true;
 }
@@ -775,7 +775,8 @@ void PdStressPage::update(uint32_t now_ms) {
     case Stage::Detail: paint_detail(); break;
     }
     compose_footer(now_ms);
-    draw_footer_cached(ctx_.content, foot_tone_, foot_text_.view(), foot_);
+    if (foot_tone_ == FooterTone::Caution || foot_tone_ == FooterTone::Error)
+        draw_footer_cached(ctx_.content, foot_tone_, foot_text_.view(), foot_);
 }
 
 // ---- input --------------------------------------------------------------------------------------------------------------------------

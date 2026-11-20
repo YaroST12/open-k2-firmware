@@ -143,13 +143,14 @@ void SpoofPage::update(uint32_t now_ms) {
     ctx_.rows.set_count(count);
     ctx_.rows.select(sel_);
     ctx_.rows.draw(now_ms, ctx_.budget);
+    if (ctx_.budget && ctx_.budget->more) return;
     StrBuf<27> st;
     FooterTone tone = FooterTone::Info;   // neutral by default; Ok only while spoofing is active
     if (note_.view().size()) { tone = footer_tone_of(note_color_); st.put(note_.view()); }
     else if (sink) { tone = FooterTone::Caution; st.put("Live sink: unplug load"); }
     else if (armed) { tone = FooterTone::Ok; st.put(cl.armed() ? "Answering SOP' requests" : "External identity armed"); }
     else { st.put("Plug in charger only"); }
-    draw_footer_cached(c, tone, st.view(), foot_);
+    if (tone != FooterTone::Info) draw_footer_cached(c, tone, st.view(), foot_);
 }
 
 }  // namespace k2

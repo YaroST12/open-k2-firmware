@@ -164,7 +164,7 @@ constexpr const char* skip_name(Skip s) {
         case Skip::OneLevel: return "one fixed level";
         case Skip::NoPps: return "no PPS";
         case Skip::NoEpr: return "no EPR";
-        case Skip::NoEprProof: return "no EPR cable proof";
+        case Skip::NoEprProof: return "no EPR proof";
         case Skip::NoCapture: return "capture busy";
         case Skip::Refused: return "level refused";
         case Skip::Stopped: return "run stopped";

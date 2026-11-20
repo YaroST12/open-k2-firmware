@@ -202,18 +202,51 @@ namespace { bool g_footer_error; }
 bool footer_error_shown() { return g_footer_error; }
 void footer_error_clear() { g_footer_error = false; }
 
+namespace {
+// The pill itself; `erase` first clears the band either side of it (a footer line repaints over its previous pill).
+void toast_pill(const Surface &s, FooterTone tone, std::string_view text, bool erase K2_TRUNC_DEF) {
+    const int16_t py = static_cast<int16_t>(s.h - kToastH - kToastMarginBottom);
+    if (text.empty() || s.w < 32 || s.h < kToastH + kToastMarginBottom) {
+        if (erase && py >= 0) gfx_fill(s, 0, py, s.w, kToastH, kBg);
+        return;
+    }
+    if (tone == FooterTone::Error) g_footer_error = true;
+    uint16_t fill = kBar, border = kFocus, ink = kInk;
+    switch (tone) {
+    case FooterTone::Ok:      fill = kOkT; border = kOk; ink = kInk; break;
+    case FooterTone::Caution: fill = kCautionT; border = kCaution; ink = kInk; break;
+    case FooterTone::Error:   fill = kErrorT; border = kError; ink = kInk; break;
+    case FooterTone::Info:    break;
+    }
+    char buf[kFitBuf];
+    const int max_tw = s.w - 24;   // 4 px outer margin + 8 px inner padding each side
+    const auto fitted = fit_text(kLabelFont, text, max_tw > 12 ? max_tw : 12, buf K2_TRUNC_ARG);
+    const int16_t tw = static_cast<int16_t>(text_width(kLabelFont, fitted));
+    const int16_t pw = static_cast<int16_t>(tw + 16);
+    const int16_t px = static_cast<int16_t>((s.w - pw) / 2);
+    if (erase) {
+        if (px > 0) gfx_fill(s, 0, py, px, kToastH, kBg);
+        if (s.w - px - pw > 0) gfx_fill(s, static_cast<int16_t>(px + pw), py, static_cast<int16_t>(s.w - px - pw), kToastH, kBg);
+    }
+    draw_frame(s, px, py, pw, kToastH, 1, border);
+    draw_label_box(s, static_cast<int16_t>(px + 1), static_cast<int16_t>(py + 1),
+                   static_cast<int16_t>(pw - 2), static_cast<int16_t>(kToastH - 2), fitted, ink, fill);
+}
+}  // namespace
+
+// A page's status line: the toast pill, repainted over its own previous pill (the band beside it is the page ground).
 K2_HOT void draw_footer(const Surface &s, FooterTone tone, std::string_view text K2_TRUNC_DEF) {
     g_footer_error = tone == FooterTone::Error;
-    const int16_t fy = static_cast<int16_t>(s.h - 18);   // the footer hugs the content bottom (kFooterY on a full-height surface)
-    const FooterStyle st = footer_style(tone);
-    char buf[kFitBuf];                                  // a footer that would run off the surface ends in "..."
-    const auto fitted = fit_text(kSmall, text, std::min<int>(kFooterTextPx, s.w - kFooterTextX), buf K2_TRUNC_ARG);
-    detail::BandOp op{};
-    op.kind = detail::BandKind::Footer;
-    op.fst = st;
-    op.s0 = fitted;
-    op.fy = fy;
-    detail::draw_band(s, 0, fy, s.h - fy, op);
+    toast_pill(s, tone, text, true K2_TRUNC_ARG);
+}
+
+K2_HOT void draw_toast(const Surface &s, FooterTone tone, std::string_view text K2_TRUNC_DEF) {
+    if (s.x && ContentViewport::stretched()) {
+        ContentViewport::Pause panel_space;
+        toast_pill(s, tone, text, false K2_TRUNC_ARG);
+        return;
+    }
+    toast_pill(s, tone, text, false K2_TRUNC_ARG);
 }
 
 // Fieldbook masthead: no fill (the band is the ground), the 12 px icon at x8, the title in font 16 at x8 (x26 behind

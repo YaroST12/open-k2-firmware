@@ -36,15 +36,16 @@ K2_HOT void ToolsPage::paint_bench() {
         }
         status_[i].draw(r.status.view());
     }
-    if (!tail_ && in_band(kBenchEnd, static_cast<int16_t>(kit::kListBottom - kBenchEnd))) {
-        if (bg && !bg->admit(static_cast<int>(ctx_.content.w) * (kit::kListBottom - kBenchEnd), true)) return;
-        gfx_fill(ctx_.content, 0, kBenchEnd, ctx_.content.w, static_cast<int16_t>(kit::kListBottom - kBenchEnd), kBg);
+    if (!tail_) {
+        if (in_band(0, kRowY0)) {
+            if (bg && !bg->admit(static_cast<int>(ctx_.content.w) * kRowY0, true, true)) return;
+            gfx_fill(ctx_.content, 0, 0, ctx_.content.w, kRowY0, kBg);
+        }
+        if (in_band(kBenchEnd, static_cast<int16_t>(ctx_.content.h - kBenchEnd))) {
+            if (bg && !bg->admit(static_cast<int>(ctx_.content.w) * (ctx_.content.h - kBenchEnd), true, true)) return;
+            gfx_fill(ctx_.content, 0, kBenchEnd, ctx_.content.w, static_cast<int16_t>(ctx_.content.h - kBenchEnd), kBg);
+        }
         tail_ = true;
-    }
-    if (in_band(static_cast<int16_t>(ctx_.content.h - 18), 18)) {
-        StrBuf<28> line;
-        bench::fact(f, line);
-        draw_footer_budgeted(ctx_.content, FooterTone::Info, line.view(), foot_, bg);
     }
 }
 

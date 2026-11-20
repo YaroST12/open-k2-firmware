@@ -21,6 +21,7 @@ public:
     void update(uint32_t now_ms) override;
     bool on_event(Event e) override;
     Strip labels() const override;
+    kit::OppRailSpec opp_rail() const override { return {"GRAPHS", 0, 0, kit::OppTelemetry::PeakSagR}; }
     void invalidate() override;
 
     // What a column shows, in rows from the graph's top. kNoRow = nothing; lo == kUnknown = the panel is not known (the

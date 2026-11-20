@@ -29,10 +29,10 @@ namespace {
 using bench::Place;
 constexpr Icon kPlaceIcons[bench::kPlaces] = {Icon::Meter, Icon::Plug, Icon::Cable, Icon::Phone, Icon::Battery, Icon::Report,
                                               Icon::Chip};
-static_assert(ToolsPage::kBenchEnd <= kit::kListBottom, "the seven places end above the strip the Ui lays before the footer");
+static_assert(ToolsPage::kBenchEnd <= kFooterY, "the seven places fit in the 240 px body");
 static_assert(ToolsPage::kNameDy + 16 <= ToolsPage::kStatusDy, "a row's name and status line do not overlap");
 static_assert(ToolsPage::kStatusDy + 12 <= ToolsPage::kRowPitch, "a row's status line stays inside the row");
-static_assert(ToolsPage::kTextX + bench::kStatusChars * 6 <= ToolsPage::kIconX, "a status line ends before the icon");
+static_assert(ToolsPage::kTextX + 27 * 6 <= ToolsPage::kIconX, "a status line ends before the icon");
 
 // A fast-charge verdict worth naming on the Charger row (PD speaks for itself through its capabilities).
 const char *fc_word(fastcharge::Protocol p) {

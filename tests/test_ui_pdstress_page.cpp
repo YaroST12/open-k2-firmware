@@ -245,7 +245,7 @@ void test_running_shows_the_counts_and_back_stops() {
     CHECK_EQ(tr > 0, true);
     CHECK_EQ(p.count_value(0), tr);
     CHECK_EQ(p.count_value(5), 0u);                         // no reboots
-    CHECK_STR(foot(ui).c_str(), "Running: keep output empty");
+    CHECK_STR(foot(ui).c_str(), "Running: keep port empty");
     press(ui, Button::Back);
     CHECK_EQ(int(ui.menu()), int(Menu::PdStress));          // BACK stops, it does not leave
     for (int i = 0; i < 40 && ui.pd_stress().active(); i++) run(ui, 500);
@@ -297,7 +297,7 @@ void test_results_show_a_row_per_picked_sequence() {
     CHECK_EQ(p.result_rows(), 2 + 2);                       // P1, P6, then Save result / Discard
     kit::ResultRowSpec r;
     p.result_row(0, r);
-    CHECK_STR(std::string(r.label).c_str(), "P1 Fixed");
+    CHECK_STR(std::string(r.label).c_str(), "P1 Fix");
     CHECK_EQ(r.n, 1);
     const dg::Digest d = live_digest(ui);
     CHECK_EQ(int(p.seq_verdict(ps::Seq::Ladder)), int(dg::verdict(d, ps::Seq::Ladder)));
@@ -438,7 +438,7 @@ void test_the_tools_row_opens_the_page() {
     ui.context().keep.place_sel[static_cast<int>(bench::Place::Charger)] = 0;
     ui.open_place(bench::Place::Charger, g_now);   // the Charger place's "Stress test" row (Actions sub-page)
     run(ui, 120);
-    ui.on_button(Button::Back, ButtonEvent::Long, g_now += 20);   // Info -> Actions
+    ui.on_button(Button::Ok, ButtonEvent::Short, g_now += 20);   // Info -> Actions
     run(ui, 120);
     const bench::Acts acts = bench::actions(bench::Place::Charger);
     int row = 0;

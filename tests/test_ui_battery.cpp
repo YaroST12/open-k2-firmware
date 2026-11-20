@@ -242,8 +242,8 @@ static void test_classic() {
     bt::hw::service().start(bt::Mode::RoundTrip, bt::Wiring::SamePort, true);
     for (int i = 0; i < 30; i++) bt::hw::poll(t += 1000, true);
     open_settled(ui, bench::Place::Battery, t);
-    CHECK(count_px(kInk3, 8, 66, 216, 67) > 100);   // the perforation under the identity block (y kIdDashY)
-    CHECK(count_px(kBg, 0, 22, 224, 220) > 224 * 100);
+    CHECK(count_px(kInk3, kOppRailThickness + 8, kit::kIdDashY, kOppRailThickness + 200, kit::kIdDashY + 1) > 90);   // the perforation under the identity block (y kIdDashY)
+    CHECK(count_px(kBg, kOppRailThickness, 0, kOppRailThickness + 208, 240) > 208 * 100);
 }
 
 int main() {

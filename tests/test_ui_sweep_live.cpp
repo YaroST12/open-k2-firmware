@@ -36,8 +36,8 @@ using A = ct::Algorithm;
 namespace {
 constexpr int kRunningStage = 5, kCustomStage = 14;
 constexpr int kFamHuawei = 0, kFamSamsung = 1, kFamOppo = 2, kFamPd = 4, kFamQc = 5, kFamDone = 6;
-// The Running view's gauge strip, the target line (rows 88..99, its last two rows share the strip's first two) and the name line.
-constexpr int kStripY = 98, kTargetY = 88, kPointY = 86, kNameY = 68;
+// The Running view's gauge strip, the target line (rows 68..79, its last two rows share the strip's first two) and the name line.
+constexpr int kStripY = runlay::kPlainRun.gauge_y, kTargetY = 68, kPointY = 66, kNameY = runlay::kPlainRun.name_y;
 // A sweep row restacks the view (run_layout.hpp): the name moves up, the signed error is the hero (three 48 px cells at x18..89, a
 // 24 px sign left of the first digit, "mV" / "V" on the baseline), the act / set pair stacks on the right, and the gauge and the
 // grid move down to make room.
@@ -79,7 +79,7 @@ void fixture(bool avs, int ceiling_mv) {
 void start_sweep(Ui& ui, uint32_t& t, bool avs, uint8_t rot, int ceiling_mv) {
     fixture(avs, ceiling_mv);
     ui.init(0); ui.set_rotation(rot, 0); ui.tick(1000); ui.goto_page(static_cast<uint8_t>(Page::ChargerTest), 1100);
-    top(ui, 1200); move(ui, 4, 1200); press(ui, Button::Ok, 1200);   // Tests step: Custom...
+    top(ui, 1200); move(ui, 5, 1200); press(ui, Button::Ok, 1200);   // Tests step: Custom...
     CHECK_EQ(ui.charger_test_stage(), kCustomStage);
     for (int fam : {kFamHuawei, kFamSamsung, kFamOppo, kFamQc}) { top(ui, 1200); move(ui, unsigned(fam), 1200); press(ui, Button::Ok, 1200); }
     top(ui, 1200); move(ui, kFamPd, 1200); ui.on_button(Button::Ok, ButtonEvent::Long, 1200);   // the PD family's entries
@@ -119,22 +119,23 @@ bool run_to_plan_row(Ui& ui, uint32_t& t) {
     return false;
 }
 
-// The panel holds `text` drawn at (x, y) in `font` (the page paints a cached cell with exactly these pixels).
+// The panel holds `text` drawn at logical (x, y) in `font` (rotation 0: content offset +kOppRailThickness).
 unsigned text_diff(const Font& font, int x, int y, std::string_view text, uint16_t color, int rows = 0) {
     std::array<uint16_t, size_t(LCD_WIDTH) * LCD_HEIGHT> actual;
     std::copy_n(g_panel, actual.size(), actual.begin());
-    gfx_text({0, 0, 224, 240}, font, x, y, text, color, kBg);
+    gfx_text({kOppRailThickness, 0, 208, 240}, font, x, y, text, color, kBg);
     unsigned diff = 0;
+    const int px = kOppRailThickness + x;
     for (int yy = y; yy < y + (rows ? rows : font.height); ++yy)
-        for (int xx = x; xx < x + text_width(font, text); ++xx) diff += actual[size_t(yy) * LCD_WIDTH + xx] != g_panel[size_t(yy) * LCD_WIDTH + xx];
+        for (int xx = px; xx < px + text_width(font, text); ++xx) diff += actual[size_t(yy) * LCD_WIDTH + xx] != g_panel[size_t(yy) * LCD_WIDTH + xx];
     std::copy(actual.begin(), actual.end(), g_panel);
     return diff;
 }
-uint16_t at(int x, int y) { return g_panel[size_t(y) * LCD_WIDTH + x]; }
-// The columns of a strip row (default the top one) holding `color`, inside the content (x < 224).
+uint16_t at(int x, int y) { return g_panel[size_t(y) * LCD_WIDTH + kOppRailThickness + x]; }
+// The logical columns of a strip row (default the top one) holding `color`, inside the content (x < 208).
 std::vector<int> columns_of(uint16_t color, int y = kStripY) {
     std::vector<int> v;
-    for (int x = 0; x < 224; ++x) if (at(x, y) == color) v.push_back(x);
+    for (int x = 0; x < 208; ++x) if (at(x, y) == color) v.push_back(x);
     return v;
 }
 
@@ -154,8 +155,8 @@ void settle(Ui& ui, uint32_t& t) {
 
 // Where the logical content sits on the panel in a rotation, and where a logical point lands: mapped(c) = c * extent / logical, the
 // origin of a glyph cell only (a cell keeps its native size).
-Rect content_box(uint8_t rot) { return compute_layout(orientation_for(rot).edge, kSlotCenters, kSlotLens, kPanelThickness).content; }
-int map_x(const Rect& b, int x) { return b.x + x * b.w / 224; }
+Rect content_box(uint8_t rot) { return compute_layout(orientation_for(rot).edge, kSlotCenters, kSlotLens, kPanelThickness).twin_content; }
+int map_x(const Rect& b, int x) { return b.x + x * b.w / 208; }
 int map_y(const Rect& b, int y) { return b.y + y * b.h / 240; }
 
 // The number of pixels of the glyph cell 'text' (font, logical x / y, colour on ground) that differ on the panel; the cell sits at the
@@ -224,10 +225,10 @@ void check_error_hero(const Rect& b, int32_t vbus, unsigned set, const char* wha
     // the block: act over set, the labels and the units on the values' baselines
     allowed.clear();
     const int dy = runlay::kA24 - runlay::kA12;
-    elem(kLabelFont, runlay::kBlockLabelX, runlay::kActY + dy, "act", kDim);
+    elem(kLabelFont, runlay::kBlockLabelX, runlay::kActY + dy, "ac", kDim);
     elem(kMid, runlay::kBlockValueX, runlay::kActY, vbus >= 0 ? cells6(vbus) : std::string("    --"), vbus >= 0 ? kVolt : kDim);
     elem(kLabelFont, runlay::kBlockUnitX, runlay::kActY + dy, "V", vbus >= 0 ? kVolt : kDim);
-    elem(kLabelFont, runlay::kBlockLabelX, runlay::kSetY + dy, "set", kDim);
+    elem(kLabelFont, runlay::kBlockLabelX, runlay::kSetY + dy, "st", kDim);
     elem(kMid, runlay::kBlockValueX, runlay::kSetY, set ? cells6(int32_t(set)) : std::string("    --"), set ? kText : kDim);
     elem(kLabelFont, runlay::kBlockUnitX, runlay::kSetY + dy, "V", kDim);
     const unsigned block_stray = stray_ink(map_x(b, runlay::kBlockLabelX), map_y(b, runlay::kActY),
@@ -274,7 +275,7 @@ void check_scene(bool avs, int ceiling_mv, unsigned points, bool expect_out_of_b
     (void)vbus;
     const auto ok = columns_of(kOk, kSweepStripY);
     CHECK_EQ(ok.size(), 4u);
-    const auto geom = kit::range_geom(6, 210, 0, live.set_mv, live.lo_mv, live.hi_mv, full_scale(r));
+    const auto geom = kit::range_geom(6, 196, 0, live.set_mv, live.lo_mv, live.hi_mv, full_scale(r));
     if (ok.size() == 4) {
         CHECK_EQ(ok[0], int(geom.lo)); CHECK_EQ(ok[1], int(geom.lo) + 1);
         CHECK_EQ(ok[2], int(geom.hi) - 1); CHECK_EQ(ok[3], int(geom.hi));
@@ -305,8 +306,8 @@ int main() {
     CHECK_EQ(kMid.height, runlay::kH24); CHECK_EQ(kMid.ascent, runlay::kA24); CHECK_EQ(kMid.adv, runlay::kAdv24);
     CHECK_EQ(kBig.height, runlay::kH48); CHECK_EQ(kBig.ascent, runlay::kA48); CHECK_EQ(kBig.adv, runlay::kAdv48);
     for (int n = 0; n <= 3; ++n) {
-        CHECK_EQ(runlay::sweep_clear(n, 224, 240), true);   // portrait (rot 0, 2)
-        CHECK_EQ(runlay::sweep_clear(n, 240, 224), true);   // landscape (rot 1, 3)
+        CHECK_EQ(runlay::sweep_clear(n, 208, 240), true);   // portrait (rot 0, 2)
+        CHECK_EQ(runlay::sweep_clear(n, 240, 208), true);   // landscape (rot 1, 3)
     }
     // the walk itself bites: the layout of dc7aec88 (name y48, a 30 px hero at y67, a font-16 line at y98) overlaps in landscape only, which
     // is why its rot 0 test passed while the hero's bottom ink row was gone on a device in the default (gravity) rotation
@@ -316,11 +317,11 @@ int main() {
         CHECK_EQ(runlay::overlap(old_hero, old_line, 224, 240), false);
         CHECK_EQ(runlay::overlap(old_hero, old_line, 240, 224), true);
         CHECK_EQ(runlay::overlap(old_name, old_hero, 240, 224), false);
-        // and the sign's gap is needed: without it a one-digit error's sign stands two columns into its digit cell in landscape
+        // and the sign's gap is needed: without it a one-digit error's sign stands into its digit cell in landscape
         const Box bare{"sign", int16_t(sweep_hero::sign_x(runlay::kHeroDigitsRight, runlay::kAdv48, runlay::kAdv24, 1)), kHeroY + runlay::kSignDy, runlay::kAdv24, runlay::kH24, true};
-        CHECK_EQ(runlay::overlap(bare, runlay::digits_box(1), 240, 224), true);
-        CHECK_EQ(runlay::overlap(bare, runlay::digits_box(1), 224, 240), false);
-        CHECK_EQ(runlay::overlap(runlay::sign_box(1), runlay::digits_box(1), 240, 224), false);
+        CHECK_EQ(runlay::overlap(bare, runlay::digits_box(1), 240, 208), true);
+        CHECK_EQ(runlay::overlap(bare, runlay::digits_box(1), 208, 240), false);
+        CHECK_EQ(runlay::overlap(runlay::sign_box(1), runlay::digits_box(1), 240, 208), false);
     }
     // PPS 3.3-21 V and SPR AVS 9-20 V on a converter that follows every request: the error reads 0, green, in the hero.
     check_scene(false, 36000, 12, false, "sweep_pps_rot0_early");
@@ -358,7 +359,7 @@ int main() {
         target += v; target += "V";
         CHECK_EQ(text_diff(kLabelFont, 6, kTargetY, target, kDim, 10), 0u);   // today's line, at today's place
         for (int y = kPointY; y < kTargetY; ++y)   // nothing at the sweep line's place above it
-            for (int x = 0; x < 224; ++x) CHECK_EQ(at(x, y), kBg);
+            for (int x = 0; x < 208; ++x) CHECK_EQ(at(x, y), kBg);
         CHECK_EQ(columns_of(kFocus).size(), 0u);   // no marker
         const auto ok = columns_of(kOk, kStripY + 4);   // the pass band's window (rows 4..7 of the strip): one solid run of columns
         CHECK_EQ(ok.empty(), false);
@@ -392,9 +393,9 @@ int main() {
             target += v; target += "V";
             CHECK_EQ(text_diff(kLabelFont, 6, kTargetY, target, kDim, 10), 0u);
             CHECK_EQ(columns_of(kOk, kStripY + 4).empty(), false);
-            for (int y = kPointY; y < kTargetY; ++y) for (int x = 0; x < 224; ++x) CHECK_EQ(at(x, y), kBg);
-            for (int y = 85; y < 98; ++y) for (int x = 120; x < 224; ++x) CHECK_EQ(at(x, y), kBg);   // the sweep hero's lower rows
-            for (int x = 0; x < 224; ++x) CHECK_EQ(at(x, 48), kBg);
+            for (int y = kPointY; y < kTargetY; ++y) for (int x = 0; x < 208; ++x) CHECK_EQ(at(x, y), kBg);
+            for (int y = 65; y < 78; ++y) for (int x = 114; x < 208; ++x) CHECK_EQ(at(x, y), kBg);   // the sweep hero's lower rows
+            for (int x = 0; x < 208; ++x) CHECK_EQ(at(x, 28), kBg);
             dump_panel("plan_row_after_sweep_rot0");
         }
     }

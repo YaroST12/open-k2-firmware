@@ -8,9 +8,22 @@ namespace k2 {
 
 constexpr int16_t kScreenW = 240;
 constexpr int16_t kScreenH = 240;
+constexpr int16_t kOppRailThickness = 16;
+constexpr int16_t kTwinContentW = kScreenW - 2 * kOppRailThickness;   // 208 px (Portrait twin-rail body)
+constexpr int16_t kTwinContentH = kScreenH;                           // 240 px (full vertical span, no TopBar/Footer)
 
 enum class Button : uint8_t { Back, Minus, Ok, Plus };
 enum class PanelEdge : uint8_t { Right, Left, Top, Bottom };
+
+constexpr PanelEdge opposite_edge(PanelEdge edge) {
+    switch (edge) {
+    case PanelEdge::Right:  return PanelEdge::Left;
+    case PanelEdge::Left:   return PanelEdge::Right;
+    case PanelEdge::Top:    return PanelEdge::Bottom;
+    case PanelEdge::Bottom: return PanelEdge::Top;
+    }
+    return PanelEdge::Left;
+}
 
 struct Rect { int16_t x, y, w, h; };
 
@@ -37,8 +50,10 @@ constexpr uint8_t kMadctl[4] = {0x00, 0x60, 0xC0, 0xA0};
 
 struct Layout {
     Rect panel;
-    Rect content;
-    Rect slot[4];   // in on-screen order along the panel (top to bottom, or left to right)
+    Rect content;       // single-strip content (224x240 Portrait / 240x224 Landscape): Home & full-panel pages
+    Rect opp_rail;      // 16 px opposite telemetry rail (opposite_edge(edge))
+    Rect twin_content;  // twin-rail content (208x240 Portrait / 240x208 Landscape): all standard pages != Home
+    Rect slot[4];       // in on-screen order along the panel (top to bottom, or left to right)
 };
 
 // centers: slot centre along the panel axis (pixels); slot_len: slot size along the axis;

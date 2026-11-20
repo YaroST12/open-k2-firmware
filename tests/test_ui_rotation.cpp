@@ -56,10 +56,23 @@ static void test_native_menu_fonts() {
         }
         uint16_t lut[16], line[240];
         make_blend_lut(kInk, kCautionT, lut);   // a Caution fact line: ink on the amber tint
-        const int footer_top = box.y + kFooterY * box.h / 240 + 1;
-        for (int row = 0; row < kSmall.height; ++row) {
-            const int width = render_row(kSmall, "Identify", row, lut, line, 240);
-            CHECK_EQ(std::equal(line, line + width, g_panel + (footer_top + row) * 240 + box.x + kFooterTextX * box.w / 224), true);
+        const int text_w = text_width(kLabelFont, "Identify");
+        const int pill_w = text_w + 16;
+        const int pill_x = (logical.w - pill_w) / 2;
+        Rect inner;
+        {
+            ContentViewport viewport(box);
+            inner = ContentViewport::mapped_rect({
+                static_cast<int16_t>(pill_x + 1),
+                static_cast<int16_t>(logical.h - kToastH - kToastMarginBottom + 1),
+                static_cast<int16_t>(pill_w - 2),
+                static_cast<int16_t>(kToastH - 2),
+            });
+        }
+        const TextOrigin origin = center_in_box(inner, badge_text_bounds(kLabelFont, "Identify"));
+        for (int row = 0; row < kLabelFont.height; ++row) {
+            const int label_width = render_row(kLabelFont, "Identify", row, lut, line, 240);
+            CHECK_EQ(std::equal(line, line + label_width, g_panel + (origin.y + row) * 240 + origin.x), true);
         }
         Field field;
         {
@@ -139,12 +152,13 @@ static void test_captures_and_keys() {
             CHECK_EQ(capture_begin(ui), true);
             for (int strip = 0; strip < kCaptureStrips; ++strip) {
                 const uint16_t* pixels = capture_strip(ui, strip, 6000);
-                CHECK_EQ(std::equal(pixels, pixels + kCaptureStripPixels,
-                                    expected.begin() + strip * kCaptureStripPixels), true);
+                const bool same = std::equal(pixels, pixels + kCaptureStripPixels,
+                                             expected.begin() + strip * kCaptureStripPixels);
+                CHECK_EQ(same, true);
             }
             capture_end(ui, 6000);
             CHECK_EQ(ui.rotation(), r);
-            CHECK_EQ(ui.context().content.w, 224);
+            CHECK_EQ(ui.context().content.w, p == 0 || qrtest ? 224 : 208);
             CHECK_EQ(ui.context().content.h, 240);
             ui.set_pressed(Button::Ok, true, 6000);
             CHECK_EQ(ui.lit(Button::Ok), true);
@@ -279,21 +293,22 @@ static void test_settings_rotation_modes() {
     while (ui.painting()) ui.tick(6600);
     CHECK_EQ(ui.menu() == Menu::Autorotate, true);
     CHECK_EQ(ui.list_state().count, 5);
-    CHECK_EQ(g_panel[30 * 240 + 1], kFocus);   // selection bar x0..2
+    constexpr int kOx = 16;
+    CHECK_EQ(g_panel[3 * 240 + kOx + 1], kFocus);   // selection bar x0..2 in the twin-rail content
     unsigned active_pixels = 0;   // the active row carries the radio dot in kFocus (12 px marker at x8, row 0 at y24)
-    for (int y = 31; y < 43; ++y)
-        for (int x = 8; x < 20; ++x) active_pixels += g_panel[y * 240 + x] == kFocus;
+    for (int y = 9; y < 21; ++y)
+        for (int x = 8; x < 20; ++x) active_pixels += g_panel[y * 240 + kOx + x] == kFocus;
     CHECK_EQ(active_pixels > 0, true);
     uint32_t now = 7000;
     for (uint8_t rotation = 0; rotation < 4; ++rotation) {
         ui.on_button(Button::Plus, ButtonEvent::Short, now);
         while (ui.painting()) ui.tick(now);
         if (rotation == 0) {
-            CHECK_EQ(g_panel[30 * 240 + 1] == kFocus, false);
-            CHECK_EQ(g_panel[(30 + 26) * 240 + 1], kFocus);   // rows are 26 px pitch now
+            CHECK_EQ(g_panel[3 * 240 + kOx + 1] == kFocus, false);
+            CHECK_EQ(g_panel[(3 + 26) * 240 + kOx + 1], kFocus);   // rows are 26 px pitch now
             unsigned still_active = 0;
-            for (int y = 31; y < 43; ++y)
-                for (int x = 8; x < 20; ++x) still_active += g_panel[y * 240 + x] == kFocus;
+            for (int y = 9; y < 21; ++y)
+                for (int x = 8; x < 20; ++x) still_active += g_panel[y * 240 + kOx + x] == kFocus;
             CHECK_EQ(still_active > 0, true);
         }
         ui.on_button(Button::Ok, ButtonEvent::Short, now + 100);
@@ -309,8 +324,9 @@ static void test_settings_rotation_modes() {
         CHECK_EQ(capture_begin(ui), true);
         for (int strip = 0; strip < kCaptureStrips; ++strip) {
             const uint16_t *pixels = capture_strip(ui, strip, now + 600);
-            CHECK_EQ(std::equal(pixels, pixels + kCaptureStripPixels,
-                                expected.begin() + strip * kCaptureStripPixels), true);
+            const bool same = std::equal(pixels, pixels + kCaptureStripPixels,
+                                         expected.begin() + strip * kCaptureStripPixels);
+            CHECK_EQ(same, true);
         }
         capture_end(ui, now + 600);
         now += 1000;

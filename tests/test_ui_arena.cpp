@@ -174,7 +174,7 @@ static void test_remembered_state_survives_leaving_the_page() {
     CHECK_EQ(ui.context().keep.bench_sel, 2);
     press(ui, Button::Ok, 1820);                       // a place remembers its own action
     { std::uint32_t tt = 1820; settle(ui, tt); }
-    ui.on_button(Button::Back, ButtonEvent::Long, 1825);   // Info -> Actions
+    press(ui, Button::Ok, 1825);                       // Info -> Actions (linear OK -> Actions)
     press(ui, Button::Plus, 1830);
     CHECK_EQ(int(ui.context().keep.place_sel[static_cast<int>(bench::Place::Cable)]), 1);
     ui.goto_page(static_cast<uint8_t>(Page::Home), 1840);

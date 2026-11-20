@@ -170,7 +170,8 @@ static void test_paint_cost() {
     t += 300; ui.tick(t); settle(ui, t);
     std::printf("graphs digit tick (VBUS 20.01 -> 20.02, W 64.2 -> 64.3): %u px\n", g_lcd_pixels);
     CHECK_EQ(g_lcd_pixels > 0u, true);
-    CHECK_EQ(g_lcd_pixels <= 4u * 8u * 16u + 2u * 8u * 16u, true);
+    // Digits on the Graphs header + OppRail PK telemetry slot (16 x 62 = 992 px) when W reaches a new peak.
+    CHECK_EQ(g_lcd_pixels <= 4u * 8u * 16u + 2u * 8u * 16u + 16u * 62u, true);
     // A moving signal: a sawtooth on the current (and so the power) scrolls every column of two graphs.
     unsigned mv_total = 0, mv_worst = 0, scrolls = 0;
     for (int i = 0; i < 44; i++) {

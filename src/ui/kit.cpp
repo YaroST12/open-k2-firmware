@@ -339,7 +339,7 @@ int draw_chip_frame(const Surface &s, int16_t x, int16_t y, std::string_view tex
     return w;
 }
 
-static_assert(8 + 35 * 6 <= 224 - 4, "the identity line's 35 cells of font 12 fit beside the lane");
+static_assert(8 + 32 * 6 <= 208 - 4, "the identity line's 32 cells of font 12 fit beside the lane");
 
 bool paint_identity(const Surface &c, const Ident &id, bool full, uint32_t &sig, PaintBudget *bg) {
     uint32_t h = mix_u32(mix_init(), uint32_t(id.dim) | uint32_t(id.n) << 1);
@@ -352,6 +352,8 @@ bool paint_identity(const Surface &c, const Ident &id, bool full, uint32_t &sig,
     if (!full && h == sig) return true;
     if (bg && !bg->admit(static_cast<int>(c.w) * (kPlaceListY - kIdY), true)) return false;
     sig = h;
+    char lbuf[kFitBuf];
+    const std::string_view line_v = id.line.view().empty() ? std::string_view{} : fit_data(kLabelFont, id.line.view(), c.w - 12, lbuf);
     const int16_t hw = static_cast<int16_t>(text_width(kMid, id.head.view()));
     const int16_t chip_y = static_cast<int16_t>(kIdHeadY + (kMid.height - kChipH) / 2);
     Box holes[6];
@@ -366,7 +368,7 @@ bool paint_identity(const Surface &c, const Ident &id, bool full, uint32_t &sig,
         holes[nh++] = {x, chip_y, cw, kChipH};
         x = static_cast<int16_t>(x + cw + 4);
     }
-    const int16_t lw = static_cast<int16_t>(text_width(kLabelFont, id.line.view()));
+    const int16_t lw = static_cast<int16_t>(text_width(kLabelFont, line_v));
     if (lw > 0) holes[nh++] = {8, kIdLineY, lw, static_cast<int16_t>(kLabelFont.height)};
     fill_except(c, {0, kIdY, c.w, static_cast<int16_t>(kIdDashY - kIdY)}, holes, nh, kBg);
     gfx_text(c, kMid, 8, kIdHeadY, id.head.view(), id.dim ? kInk2 : kInk, kBg);
@@ -379,7 +381,7 @@ bool paint_identity(const Surface &c, const Ident &id, bool full, uint32_t &sig,
         if (ch.k == Ident::Outline) draw_chip_frame(c, cx[i], chip_y, ch.t.view(), cc.fill, cc.ink, kBg);
         else draw_chip(c, cx[i], chip_y, ch.t.view(), cc.fill, cc.ink);
     }
-    if (lw > 0) gfx_text(c, kLabelFont, 8, kIdLineY, id.line.view(), kInk2, kBg);
+    if (lw > 0) gfx_text(c, kLabelFont, 8, kIdLineY, line_v, kInk2, kBg);
     gfx_fill(c, 0, kIdDashY, 8, 1, kBg);
     draw_dashed(c, 8, static_cast<int16_t>(c.w - 8), kIdDashY, kInk3, kBg);
     gfx_fill(c, static_cast<int16_t>(c.w - 8), kIdDashY, 8, 1, kBg);
@@ -410,9 +412,9 @@ void draw_warn_triangle(const Surface &s, int16_t x, int16_t y, int16_t sz, uint
 void draw_alert_band(const Surface &s, int16_t y, bool error, std::string_view word) {
     const uint16_t fill = error ? kError : kCaution, ink = error ? kErrInk : kSpotInk;
     gfx_fill(s, 0, y, s.w, kAlertH, fill);
-    draw_warn_triangle(s, 8, static_cast<int16_t>(y + 8), 20, ink, fill);
+    draw_warn_triangle(s, 4, static_cast<int16_t>(y + 8), 20, ink, fill);
     char buf[kFitBuf];
-    gfx_text(s, kMid, 36, static_cast<int16_t>(y + (kAlertH - kMid.height) / 2), fit_text(kMid, word, s.w - 36 - 4, buf), ink, fill);
+    gfx_text(s, kMid, 26, static_cast<int16_t>(y + (kAlertH - kMid.height) / 2), fit_text(kMid, word, s.w - 26 - 2, buf), ink, fill);
     gfx_fill(s, 0, static_cast<int16_t>(y + kAlertH), s.w, 2, ink);
     gfx_fill(s, 0, static_cast<int16_t>(y + kAlertH + 2), s.w, static_cast<int16_t>(kAlertStripeH - 2), kBg);
 }
@@ -550,9 +552,9 @@ void draw_result_row(const Surface &s, int16_t y, int16_t h, std::string_view ro
     gfx_fill(s, 0, static_cast<int16_t>(y + body), s.w, 1, kBg);
     // Label strip: the focus bar and tint, or the plain ground, with the right-aligned unit label on top.
     char buf[kFitBuf];
-    const std::string_view lab = fit_text(kLabelFont, row_label, kResultLabelW - 8, buf);
+    const std::string_view lab = fit_text(kLabelFont, row_label, kResultLabelW - 6, buf);
     const int16_t lw = static_cast<int16_t>(text_width(kLabelFont, lab));
-    const Box lab_box{static_cast<int16_t>(kResultLabelW - 5 - lw), static_cast<int16_t>(y + (h - kLabelFont.height) / 2), lw, kLabelFont.height};
+    const Box lab_box{static_cast<int16_t>(kResultLabelW - 3 - lw), static_cast<int16_t>(y + (h - kLabelFont.height) / 2), lw, kLabelFont.height};
     // Focus is inversion: the label cell is a focus block (Classic: its tint behind the 3 px bar).
     const int16_t bar = focus && kFocusBar ? 3 : 0;
     if (bar) gfx_fill(s, 0, y, bar, body, kFocusBar);

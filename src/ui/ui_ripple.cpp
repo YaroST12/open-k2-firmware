@@ -18,8 +18,8 @@ constexpr int16_t kFrameY = RipplePage::kPlotY - 1;
 constexpr int16_t kFrameW = RipplePage::kPlotW + 2;
 constexpr int16_t kFrameH = RipplePage::kPlotH + 2;
 
-constexpr int16_t kRow1Y = 26;
-constexpr int16_t kRow2Y = 47;
+constexpr int16_t kRow1Y = 4;
+constexpr int16_t kRow2Y = 26;
 
 bool budget_ok(PaintBudget *bg, int px, bool fill = false) {
     return !bg || bg->admit(px, true, fill);
@@ -81,7 +81,7 @@ void RipplePage::draw_static() {
     if (!ctx_.blank) gfx_fill(S, 0, kit::kBelowBar, S.w, static_cast<int16_t>(S.h - kit::kBelowBar), kBg);
 
     vpp_f_.init(S, kSmall, 6, kRow1Y, 13, Align::Left, kText, kBg);
-    freq_f_.init(S, kSmall, 126, kRow1Y, 11, Align::Right, kAccent, kBg);
+    freq_f_.init(S, kSmall, 114, kRow1Y, 11, Align::Right, kAccent, kBg);
     vrms_f_.init(S, kLabelFont, 6, kRow2Y, 13, Align::Left, kDim, kBg);
     vpp_ink_ = kText;
     freq_ink_ = kAccent;
@@ -263,18 +263,7 @@ bool RipplePage::paint_plot() {
 }
 
 void RipplePage::paint_footer() {
-    const auto &cfg = ctx_.keep.ripple;
-    const uint8_t tb = cfg.timebase < ripple::kTimebaseCount ? cfg.timebase : ripple::kDefaultTimebase;
-    StrBuf<40> foot;
-    if (settings_open_) {
-        foot.put("PA1 AC-coupled");
-    } else if (adc_busy_ && !have_sample_) {
-        foot.put("ADC busy");
-    } else {
-        foot.put_u32(mv_per_div_).put("mV/d ").put(ripple::kTimebases[tb].label).put("/d ");
-        foot.put(cfg.trigger == static_cast<uint8_t>(ripple::Trigger::Free) ? "Free" : "Trig");
-    }
-    draw_footer_budgeted(ctx_.content, FooterTone::Info, foot.c_str(), foot_elem_, ctx_.budget);
+    foot_elem_.invalidate();
 }
 
 void RipplePage::update(uint32_t now_ms) {

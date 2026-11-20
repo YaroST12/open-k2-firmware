@@ -165,15 +165,8 @@ static void test_pool() {
     CHECK_EQ(is(sl::Dim, "", "", "", true), true);
     CHECK_EQ(is(sl::Hero, "", "Hero", "", false), true);
     CHECK_EQ(is(sl::BackDel, "Back", "Delete", "Del", false), true);
-    CHECK_EQ(is(sl::BackActs, "Back", "Acts", "", false), true);
-    CHECK_EQ(is(sl::BackInfo, "Back", "Info", "", false), true);
-    {
-        char bbuf[24];
-        CHECK_EQ(label_text(bbuf, slot_label(sl::BackActs), label_max_chars(Button::Back)), 9u);
-        CHECK_STR(bbuf, "Back/Acts");
-        CHECK_EQ(label_text(bbuf, slot_label(sl::BackInfo), label_max_chars(Button::Back)), 9u);
-        CHECK_STR(bbuf, "Back/Info");
-    }
+    CHECK_EQ(is(sl::Actions, "Actions", "", "", false), true);
+    CHECK_EQ(is(sl::ActionsShare, "Actions", "Share", "", false), true);
     CHECK_EQ(is(sl::BenchReset, "Bench", "Reset", "", false), true);
     CHECK_EQ(is(sl::IncBig, "+", "Big*", "", false), true);
     CHECK_EQ(is(sl::Dec05A, "-", "0.5A", "", false), true);

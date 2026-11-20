@@ -23,28 +23,28 @@
 
 namespace k2::kit {
 
-// ---- geometry ---------------------------------------------------------------------------------------------------------
-constexpr int16_t kBodyY = 24;            // first body row, under the top bar and its rule
+// ---- geometry (Option B: 208 x 240 twin-rail canvas, no permanent TopBar or Footer) -----------------------------------
+constexpr int16_t kBodyY = 2;             // first body row (no TopBar)
 constexpr int16_t kRowH = 26;             // list and key/value row pitch
 constexpr int16_t kFocusExtra = 14;       // the focused row opens to kRowH + kFocusExtra = 40 px when it has a note
 constexpr int16_t kNoteDy = 24;           // note line top, from the row top
 constexpr int16_t kMarkX = 8, kMarkSize = 12;
 constexpr int16_t kTextX = 28;            // row text left edge
-constexpr int16_t kTailX = 214;           // right edge of a row's value, count or chevron
-constexpr int kTailGap = 8;               // gap between a title and the value / chevron beside it
-constexpr int16_t kNoteMaxPx = 190;       // note box: x28 .. 218
-constexpr int kWindowRows = (kFooterY - kBodyY - kFocusExtra) / kRowH;   // rows in the default body, with the open row: 7
-static_assert(kWindowRows == 7, "the focused row's 14 px must fit above the footer");
-static_assert(kBodyY + kWindowRows * kRowH + kFocusExtra <= kFooterY, "a RowList never reaches the footer band");
-constexpr int16_t kListBottom = kBodyY + kWindowRows * kRowH + kFocusExtra;   // where a default RowList (at kBodyY) ends: 220
+constexpr int16_t kTailX = 198;           // right edge of a row's value, count or chevron (208 px canvas)
+constexpr int kTailGap = 2;               // gap between a title and the value / chevron beside it
+constexpr int16_t kNoteMaxPx = 174;       // note box: x28 .. 202 (29 chars of font 12)
+constexpr int kWindowRows = (kFooterY - kBodyY - kFocusExtra) / kRowH;   // rows in the default body, with the open row: 8
+static_assert(kWindowRows == 8, "the focused row's 14 px must fit in the 240 px body");
+static_assert(kBodyY + kWindowRows * kRowH + kFocusExtra <= kFooterY, "a RowList never runs off the surface");
+constexpr int16_t kListBottom = kBodyY + kWindowRows * kRowH + kFocusExtra;   // where a default RowList (at kBodyY) ends: 224
 // Where a RowList that starts at `y` ends (its whole rows, the open one counted, as RowList::init sizes them). A list under an
 // identity block or a stamp ends above kListBottom; the page fills the gap once (fill_list_gap) so no old page shows there.
 constexpr int16_t list_end(int16_t y) { return static_cast<int16_t>(y + (kFooterY - y - kFocusExtra) / kRowH * kRowH + kFocusExtra); }
 void fill_list_gap(const Surface &s, int16_t y);
-constexpr int16_t kProgPitch = 75, kProgSegW = 74, kProgY = kBarH - 1, kProgH = 2;   // wizard progress rule
+constexpr int16_t kProgPitch = 75, kProgSegW = 74, kProgY = 20, kProgH = 2;   // wizard progress rule (legacy helper)
 constexpr int kProgSegs = 3;
-constexpr int16_t kBelowBar = kProgY + kProgH;   // first row no top bar touches (22): a body fill starts here, never at kBarH
-constexpr int16_t kKvValueX = 72;         // key/value tables: value column (x92 for long keys)
+constexpr int16_t kBelowBar = 0;          // top of body (no horizontal TopBar in Option B)
+constexpr int16_t kKvValueX = 68;         // key/value tables: value column (208 px canvas)
 constexpr int16_t kInfoTagX = 4, kInfoValueX = 52, kInfoPitch = 20;   // InfoBlock columns
 
 // y of a 16 px (or `font_h` px) text line inside a row of `pitch` whose rule is on the top line.
@@ -65,6 +65,36 @@ void fill_except(const Surface &s, Box r, const Box *holes, int n, uint16_t colo
 // bg2 rail. `column` = a side rail (the text runs along it in `dir`); `down` = the key is held (the slot flashes in the cap
 // colour). Every pixel of the slot is written once.
 void draw_key_slot(const Surface &s, bool column, TextDir dir, unsigned slot, const SlotLabel &lab, bool is_ok, bool down);
+
+// ---- Opposite Telemetry Rail (Option B: 16 x 240 opposite edge) --------------------------------------------------------
+enum class OppTelemetry : uint8_t {
+    Vaw,        // VBUS (kSpotVolt), IBUS (kSpotAmp), Power (kSpotWatt)
+    PeakSagR,   // PK <W>, SAG <V>, R <mR> (Numbers / Graphs)
+    WattCcDp,   // <W> (kSpotWatt), CC1 <V>, D+ <V> (Actions / Cable)
+    AmpCcDp,    // <A> (kSpotAmp), CC1 <V>, D+ <V> (ChargerTest Running)
+};
+
+struct OppRailSpec {
+    std::string_view title;
+    uint8_t dot_count = 0;
+    uint8_t dot_cur = 0;
+    OppTelemetry telemetry = OppTelemetry::Vaw;
+};
+
+struct OppCell {
+    int16_t len = 60;
+    bool masthead = false;
+    uint16_t spot = 0;
+    std::string_view tag;
+    uint16_t tag_color = kDim;
+    std::string_view value;
+    uint16_t value_color = kInk;
+    uint8_t dot_count = 0;
+    uint8_t dot_cur = 0;
+};
+
+// Draws one slot (0..3) of the Opposite Telemetry Rail on its own surface `s` (single-pass via fill_except).
+void draw_opp_slot(const Surface &s, PanelEdge opp_edge, TextDir dir, unsigned slot, const OppCell &cell);
 
 // A text line of a ground: its origin, font, text and ink (the bg is the ground's).
 struct TextRun {
@@ -285,7 +315,7 @@ struct Ident {
         chip[n++].k = k;
     }
 };
-static_assert(8 + 35 * 6 <= 224 - 4, "the identity line's 35 cells of font 12 fit beside a place list's scroll lane");
+static_assert(8 + 32 * 6 <= 208 - 4, "the identity line's 32 cells of font 12 fit beside a place list's scroll lane");
 // Paints the band when its content hash moved from `sig` (or `full`); sig is updated.
 bool paint_identity(const Surface &c, const Ident &id, bool full, uint32_t &sig, PaintBudget *bg = nullptr);
 // Initialises n value cells (white on kBg) at the layout's value box of each row.
@@ -361,16 +391,16 @@ private:
 // opens with a 2 px kRule section rule, counted in its height. A row that is the only cell of its unit and never ran spells
 // the reason as the cell label. The focused unit lights the label strip (kFocusT, 3 px kFocus bar, kFocus label).
 constexpr int kResultMaxCells = 5;
-constexpr int16_t kResultLabelW = 60;                       // label strip, x0..59, rule at x60
-// Worst case of strike_px in one 224 px grid row: a strike never exceeds its own cell and the cells tile what is right of the
+constexpr int16_t kResultLabelW = 54;                       // label strip, x0..53, rule at x54 (208 px canvas -> 5 cells x 30 px)
+// Worst case of strike_px in one 208 px grid row: a strike never exceeds its own cell and the cells tile what is right of the
 // rule, so all five struck at once is the cell span (the headroom the page's one-row budget adds, ui_pages.hpp kFlightRowPx).
-constexpr int kStrikeRowMaxPx = 224 - kResultLabelW - 1;
+constexpr int kStrikeRowMaxPx = 208 - kResultLabelW - 1;
 constexpr int16_t kSweepGap = 6;                           // the fixed gap between a chip's label and its "S" mark: one 12 px advance
 constexpr int16_t kSweepMarkW = 12;                        // the "S" mark group: kSweepGap + one 6 px label glyph (ctx: result_layout cell_width)
 constexpr int16_t kResultRowH = 26, kResultRowHCur = 40;    // volt-only and with-current row heights
 // Worst case of the outlines in one row: the running step is one cell (a row never wears two), at most the whole span right
 // of the rule and the tallest verdict part (a volt-only row under a section rule: 26 - 1).
-constexpr int kMarkRowMaxPx = run_mark_px(224 - kResultLabelW - 1, kResultRowH - 1);
+constexpr int kMarkRowMaxPx = run_mark_px(208 - kResultLabelW - 1, kResultRowH - 1);
 constexpr int16_t kResultSectionH = 2;                      // the rule above a family's first row
 struct ResultCell {
     Verdict verdict = Verdict::Pending;

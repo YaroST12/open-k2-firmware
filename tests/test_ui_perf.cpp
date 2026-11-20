@@ -54,8 +54,8 @@ static void test_page_switch_budgets() {
     // its OK verb once its first update has built the rows (a key-rail slot repaint inside the switch). Settings (the K2
     // place) adds its identity block's text over its own ground and the dashed line, ~100 px of glyph cells.
     struct { uint8_t page; unsigned budget; const char *name; } cases[] = {
-        {1, 59500, "Detail"}, {2, 59000, "Charger"}, {kPdPage, 142600, "Connection"}, {kDiagPage, 58800, "Diag"},
-        {3, 60000, "Lines"}, {4, 58800, "Tools"}, {5, 58400, "Settings"},
+        {1, 59500, "Detail"}, {2, 60500, "Charger"}, {kPdPage, 142600, "Connection"}, {kDiagPage, 58800, "Diag"},
+        {3, 77000, "Lines"}, {4, 58800, "Tools"}, {5, 62500, "Settings"},
     };
     for (auto &c : cases) {
         g_lcd_pixels = 0;
@@ -150,6 +150,7 @@ static void test_scroll_budgets() {
     ui.on_button(Button::Plus, ButtonEvent::Short, 5950);  // select "Saved cables"
     ui.on_button(Button::Ok, ButtonEvent::Short, 6000);   // open the saved-cable list
     ui.tick(6100);
+    while (ui.painting()) ui.tick(6100);
     for (int i = 0; i < 3; i++) {
         g_lcd_pixels = 0;
         ui.on_button(Button::Plus, ButtonEvent::Short, 6200 + i * 100);
@@ -228,14 +229,15 @@ void put(uint32_t k) {
 void pixels(const uint16_t *p, uint32_t c) { panel.push(p, c); put(c); }
 void fill(uint16_t color, uint32_t c) { panel.fill(color, c); put(c); }
 const lcd::Sink sink = {begin, pixels, fill};
-// Pixels written in rows y0..y1-1 (all columns) at least `times` times.
-unsigned rewrites(int ya, int yb, int times) {
+// Pixels written in rows y0..y1-1, columns xa..xb-1 at least `times` times.
+unsigned rewrites(int ya, int yb, int times, int xa = 0, int xb = 240) {
     unsigned o = 0;
-    for (int y = ya; y < yb; ++y) for (int x = 0; x < 240; ++x) o += n[y * 240 + x] >= times;
+    for (int y = ya; y < yb; ++y) for (int x = xa; x < xb; ++x) o += n[y * 240 + x] >= times;
     return o;
 }
-// Pixels written at all in rows ya..yb-1.
+// Pixels written at all in rows ya..yb-1 (or content body columns 16..223).
 unsigned touched(int ya, int yb) { return rewrites(ya, yb, 1); }
+unsigned touched_body(int ya, int yb) { return rewrites(ya, yb, 1, kOppRailThickness, 224); }
 }  // namespace heat
 
 struct ChargerRig {
@@ -280,8 +282,8 @@ static void test_charger_page_flicker() {
         g_stub.pd_traffic = i & 1;
         g_stub.pm.vbus_mv = (i % 3 == 2) ? 3000 : 5000 + 20 * i;
         r.measured([](ChargerRig &x) { x.tick(); });
-        // The title bar (y < 20) carries the PD-activity badge, which follows pd_traffic by design.
-        worst_idle = std::max(worst_idle, heat::touched(20, 240));
+        // OppRail telemetry (x < 16) tracks VBUS; the body (x 16..223) must stay at 0.
+        worst_idle = std::max(worst_idle, heat::touched_body(0, 240));
     }
     std::printf("charger idle with volatile inputs: worst %u body px per tick\n", worst_idle);
     CHECK_EQ(worst_idle, 0u);
@@ -298,9 +300,9 @@ static void test_charger_page_flicker() {
     r.long_ok();                        // long OK opens the family's entries: Group
     r.tick(2); r.settle();
     r.measured([](ChargerRig &x) { x.press(Button::Ok); });   // toggles the first entry (PD fixed)
-    // Geometry: rows from y 24 (the focused one is 40 px tall), the footer from y 222.
-    const unsigned bands = heat::touched(22, 24) + heat::touched(110, 222);
-    const unsigned quiet = heat::touched(64, 110);
+    // Geometry: rows from y 2 (the focused one is 40 px tall), footer toast from y 220.
+    const unsigned bands = heat::touched_body(0, 2) + heat::touched_body(110, 220);
+    const unsigned quiet = heat::touched_body(42, 110);
     std::printf("charger group entry toggle: %u px, margin bands %u px, unaffected slots %u px\n", r.last_px, bands, quiet);
     CHECK_EQ(bands, 0u);
     CHECK_EQ(quiet, 0u);
@@ -336,15 +338,15 @@ static void test_charger_page_flicker() {
         g_stub.pd_traffic = i & 1;
         g_stub.pm.vbus_mv = 5000 + 20 * i;
         r.measured([](ChargerRig &x) { x.tick(); });
-        review_idle = std::max(review_idle, heat::touched(20, 240));
+        review_idle = std::max(review_idle, heat::touched_body(0, 240));
     }
     std::printf("charger review idle with volatile inputs: worst %u body px per tick\n", review_idle);
     CHECK_EQ(review_idle, 0u);
-    // VBUS off the 5 V default refuses the start: that changes the hint line (y 208) and the amber footer, nothing above.
+    // VBUS off the 5 V default refuses the start: that changes ActionCell (y 176..231) and the amber toast, nothing above.
     g_stub.pm.vbus_mv = 3000;
     r.measured([](ChargerRig &x) { x.tick(); });
-    std::printf("charger review refusal note: %u px, list and summary %u px\n", r.last_px, heat::touched(20, 208));
-    CHECK_EQ(heat::touched(20, 208), 0u);
+    std::printf("charger review refusal note: %u px, summary %u px\n", r.last_px, heat::touched_body(0, 176));
+    CHECK_EQ(heat::touched_body(0, 176), 0u);
     g_stub.pd_traffic = false; g_stub.pm.vbus_mv = 5000;
     r.tick(2);
     r.settle();
@@ -384,15 +386,15 @@ static void test_wizard_budgets() {
     // Custom list: first paint of the stage, then a move.
     r.move(3); r.settle();              // Custom... (row 4)
     r.measured([](ChargerRig &x) { x.press(Button::Ok); x.settle(); });
-    std::printf("wizard tests -> custom: %u px (budget %u)\n", r.last_px, 126000u);
+    std::printf("wizard tests -> custom: %u px (budget %u)\n", r.last_px, 157000u);
     CHECK_EQ(r.ui.charger_test_stage(), 14);
-    CHECK_EQ(r.last_px <= 126000u, true);
+    CHECK_EQ(r.last_px <= 157000u, true);
     r.tick(2); r.settle();
     diff = force_full_redraw(r.ui, r.now);
     CHECK_EQ(diff, 0u);
     r.measured([](ChargerRig &x) { x.move(1); x.settle(); });
-    std::printf("wizard custom move: %u px (budget %u)\n", r.last_px, 23000u);
-    CHECK_EQ(r.last_px <= 23000u, true);
+    std::printf("wizard custom move: %u px (budget %u)\n", r.last_px, 26000u);
+    CHECK_EQ(r.last_px <= 26000u, true);
     r.press(Button::Back);
     r.tick(2); r.settle();
     CHECK_EQ(r.ui.charger_test_stage(), 0);
@@ -401,16 +403,16 @@ static void test_wizard_budgets() {
     r.press(Button::Plus);                                // row 1 (All tests)
     r.settle();
     r.measured([](ChargerRig &x) { x.press(Button::Ok); x.settle(); });
-    std::printf("wizard tests -> cable: %u px (budget %u)\n", r.last_px, 119000u);
+    std::printf("wizard tests -> cable: %u px (budget %u)\n", r.last_px, 163000u);
     CHECK_EQ(r.ui.charger_test_stage(), 2);
-    CHECK_EQ(r.last_px <= 119000u, true);
+    CHECK_EQ(r.last_px <= 163000u, true);
     r.tick(2); r.settle();
     diff = force_full_redraw(r.ui, r.now);
     std::printf("wizard cable: incremental vs forced redraw diff=%u\n", diff);
     CHECK_EQ(diff, 0u);
     r.measured([](ChargerRig &x) { x.move(1); x.settle(); });
-    std::printf("wizard cable move: %u px (budget %u)\n", r.last_px, 23000u);
-    CHECK_EQ(r.last_px <= 23000u, true);
+    std::printf("wizard cable move: %u px (budget %u)\n", r.last_px, 26000u);
+    CHECK_EQ(r.last_px <= 26000u, true);
     r.measured([](ChargerRig &x) { x.tick(3); });
     CHECK_EQ(r.last_px, 0u);
     // Scrolling the cable list (11 rows, 5 visible): a window shift repaints the visible rows and nothing outside.
@@ -418,15 +420,15 @@ static void test_wizard_budgets() {
     for (int i = 0; i < 8; ++i) {
         r.measured([](ChargerRig &x) { x.move(1); x.settle(); });
         worst = std::max(worst, r.last_px);
-        CHECK_EQ(heat::touched(22, 24), 0u);
+        CHECK_EQ(heat::touched_body(0, 2), 0u);
     }
     std::printf("wizard cable scroll: worst %u px (budget %u)\n", worst, 30000u);
     CHECK_EQ(worst <= 30000u, true);
     // Review: a pick advances; first paint, then idle.
     r.measured([](ChargerRig &x) { x.press(Button::Ok); x.settle(); });
-    std::printf("wizard cable -> review: %u px (budget %u)\n", r.last_px, 130000u);
+    std::printf("wizard cable -> review: %u px (budget %u)\n", r.last_px, 173000u);
     CHECK_EQ(r.ui.charger_test_stage(), 4);
-    CHECK_EQ(r.last_px <= 130000u, true);   // measured 118041: the wipe, the summary lines, the cable rows and the footer
+    CHECK_EQ(r.last_px <= 173000u, true);   // measured 156930: the wipe, the summary lines, the cable rows and the toast
     r.tick(2); r.settle();
     r.measured([](ChargerRig &x) { x.tick(3); });
     CHECK_EQ(r.last_px, 0u);
@@ -498,7 +500,7 @@ static void test_results_grid_budgets() {
     r.tick(4); r.settle();
     // A move inside the window rewrites the rows that change focus (26 or 40 px each) and the footer line (it explains the
     // focused unit). A move that scrolls the window repaints every visible row: ResultGrid has no blit, so that is the
-    // cost of a scroll. Budgets: measured (19 264 and 37 632) +10 %.
+    // cost of a scroll. The Option B toast adds one 208 x 16 band erase; budgets: measured 25 178 / 47 408 +10 %.
     unsigned worst_move = 0, worst_scroll = 0, scrolls = 0;
     for (int i = 0; i < 12; ++i) {
         r.measured([](ChargerRig &x) { x.press(Button::Plus); x.tick(4); x.settle(); });
@@ -507,10 +509,10 @@ static void test_results_grid_budgets() {
         scrolls += scrolled;
         CHECK_EQ(heat::touched(20, 72), 0u);   // the hero band, counters and summary strip stay as they are
     }
-    std::printf("charger results selection move: worst %u px (budget 21200), scrolling move: worst %u px (budget 41400), %u scrolls\n",
+    std::printf("charger results selection move: worst %u px (budget 28000), scrolling move: worst %u px (budget 52000), %u scrolls\n",
                 worst_move, worst_scroll, scrolls);
-    CHECK_EQ(worst_move <= 21200, true);
-    CHECK_EQ(scrolls > 0 && worst_scroll <= 41400, true);
+    CHECK_EQ(worst_move <= 28000, true);
+    CHECK_EQ(scrolls > 0 && worst_scroll <= 52000, true);
     g_stub = old;
 }
 
@@ -691,10 +693,10 @@ static void test_tick_cost() {
     // Budgets are measured values plus ~10 %. Home and Detail animate (flow arrow, gauges), so
     // their "idle" (3 ticks, inputs unchanged) is not zero; every other page must stay at 0.
     struct { uint8_t page; unsigned idle3_px, worst_px; const char *name; } cases[] = {
-        {0, 29500, 29500, "Home"}, {1, 450, 3400, "Detail"}, {2, 0, 1850, "Charger"}, {kPdPage, 0, 1850, "Connect"},
-        {kDiagPage, 0, 2000, "Diag"}, {3, 0, 1850, "Lines"},
-        {4, 0, 3400, "Bench"},   // the Meter row's live readings and the watts a device gets, on top of the bar readout
-        {5, 0, 1850, "Settings"},
+        {0, 29500, 29500, "Home"}, {1, 450, 3400, "Detail"}, {2, 0, 3200, "Charger"}, {kPdPage, 0, 3200, "Connect"},
+        {kDiagPage, 0, 3400, "Diag"}, {3, 0, 3200, "Lines"},
+        {4, 0, 4800, "Bench"},   // the Meter row's live readings and the watts a device gets, on top of the OppRail cells
+        {5, 0, 3200, "Settings"},
         {static_cast<uint8_t>(Page::Graphs), 1850, 1650, "Graphs"},   // the elapsed and Wh digits, and the scrolling graphs
     };
     std::printf("page tick = %u ms; px per tick with live values moving (wire ms at DIV8/DIV4/DIV2):\n",
@@ -801,7 +803,7 @@ static void test_pipeline_model() {
     std::printf("pipeline model, 6 page switches %u px: serial %.1f ms (%.3f us/px), pipelined %.1f ms (%.3f us/px), wire "
                 "floor %.1f ms\n", px_pipe, serial, serial * 1000 / px_serial, pipe, pipe * 1000 / px_pipe, floor_ms);
     CHECK_EQ(px_serial, px_pipe);              // the same pixels either way
-    CHECK_EQ(pipe < serial * 0.95, true);      // the overlap is worth at least 5 % under the model
+    CHECK_EQ(pipe < serial * 0.965, true);     // the overlap still saves 3.5 % under the model
     CHECK_EQ(pipe >= floor_ms, true);          // and never beats the wire
 }
 

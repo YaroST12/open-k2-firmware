@@ -104,6 +104,8 @@ struct UiContext {
     // The one list view of the simple menu pages (Tools, Settings, Autorotate, USB link): only one is visible at a time, so
     // they share it instead of each owning a 10-row ListView. A page binds it in draw_static().
     kit::RowList rows;
+    // Shared transient floating toast pill (Option B: 16 px bottom-center overlay, ~2.5 s auto-expiry).
+    Toast toast;
     // What a page remembers after it is left. Pages are built when entered and destroyed when left (page_arena.hpp), so
     // anything that must survive a page switch lives here, not in the page; the page holds a reference under its old name.
     struct Remembered {
@@ -200,7 +202,7 @@ inline bool put_field(SmallField<N> &f, PaintBudget *bg, std::string_view s, uin
     return put_field_buf(f, f.cur_data(), bg, s, fg, bg_col);
 }
 [[gnu::noinline]] void invalidate_fields(Field *f, int n);
-[[gnu::noinline]] void clear_body(const Surface &c, int16_t y0 = kBarH);
+[[gnu::noinline]] void clear_body(const Surface &c, int16_t y0 = 0);
 [[gnu::noinline]] std::string_view stash_str(char *dst, std::size_t cap, std::string_view s);
 [[gnu::noinline]] uint32_t mix_str(uint32_t h, std::string_view s);
 [[gnu::noinline]] uint32_t mix_cstr(uint32_t h, const char *s, std::size_t max_len = ~std::size_t(0));
@@ -240,6 +242,7 @@ public:
     virtual bool on_event(Event e) = 0;             // true = consumed
     virtual Strip labels() const = 0;         // what the four buttons do now
     virtual void invalidate() = 0;                  // forget what is on screen (after a capture)
+    virtual void invalidate_for_capture() { invalidate(); }
     // Copy the live counters the page shows (those that change while the UI is drawing, like the
     // USB stats) so that every draw of one frame sees one consistent set. Default: nothing live.
     virtual void sample() {}
@@ -250,6 +253,8 @@ public:
     // The page draws over the whole panel, the button strip's edge included (a full-screen QR code): the Ui then leaves the
     // strip unpainted, key-press flashes too, so nothing lands on the code. Default: the strip is shown.
     virtual bool hides_strip() const { return false; }
+    // Option B Opposite Telemetry Rail descriptor (MastheadCell title/dots + telemetry mode).
+    virtual kit::OppRailSpec opp_rail() const { return {}; }
 protected:
     ~PageIf() = default;
 };
@@ -257,6 +262,8 @@ protected:
 // A page of the rotation (id < Page::Count) or a submenu (id == Page::Count). A submenu has a plain
 // title bar, never consumes BACK (the Ui pops it) and labels [+]/[-] as scrolling, not paging.
 class PageBase : public PageIf {
+public:
+    kit::OppRailSpec opp_rail() const override;
 protected:
     PageBase(UiContext &c, Page id, const char *title) : ctx_(c), id_(id), title_(title) {}
     PageBase(UiContext &c, Page id, const char *title, Icon icon) : ctx_(c), id_(id), title_(title), has_icon_(true), icon_(icon) {}
@@ -631,6 +638,8 @@ public:
     bool on_event(Event e) override;
     Strip labels() const override;
     void invalidate() override;
+    void invalidate_for_capture() override;
+    kit::OppRailSpec opp_rail() const override;
     void leave() override { s_.leave(); }
     // Repaint hooks the session calls while this page is alive.
     void on_stage(bool entering);          // the stage changed: wipe the body (not while entering), drop the caches
@@ -648,12 +657,12 @@ public:
     // kit::kStrikeRowMaxPx, plus a Running cell's outline, kit::kMarkRowMaxPx, ~21 ms). Between steps (and while laying out)
     // there is no cap. The gauge band and the step outline are one pair: the gauge is item 1, the grid's rebuild and
     // ResultGrid::sync_dots (two cell rims a move, never gated) come right after it, so on a step change they move in one tick.
-    static constexpr int kFlightPx = 6000;
+    static constexpr int kFlightPx = 9200;
     // The one tick that may paint more: the start of a row whose engine times its own handshake. The session (not the update) paints
     // the footer line that names the window, kAnnouncePx (the footer band, 224 x 18), after that tick's update and before the
     // engine starts; the screen is still for the next >= 1 s anyway (Runner::paint_blocked). Counted against nothing else.
-    static constexpr int kAnnouncePx = 224 * 18;
-    static constexpr int kFlightRowPx = 224 * 42 + kit::kStrikeRowMaxPx + kit::kMarkRowMaxPx;
+    static constexpr int kAnnouncePx = 208 * 16 + 6000;   // the pill's erase, frame and text overdraw before a timed engine window
+    static constexpr int kFlightRowPx = 208 * 42 + kit::kStrikeRowMaxPx + kit::kMarkRowMaxPx;
     static constexpr int kHeroPx = 5000;         // the 4-digit 48 px readout (4 x 24 x 48) plus its unit
     static constexpr int kNeedlePx = 200;        // the old and the new needle column and the window edge they cross
     static constexpr int kRangePx = 36 * 12;     // a sweep row's gauge move: the old and new marker (6 columns each) and needle (2 each)
@@ -871,6 +880,7 @@ public:
     void update(uint32_t now_ms) override;
     bool on_event(Event e) override { return back_event(e); }
     Strip labels() const override { return base_labels(); }
+    kit::OppRailSpec opp_rail() const override { return {"NUMBERS", 0, 0, kit::OppTelemetry::PeakSagR}; }
     void invalidate() override;
 private:
     struct CellState { uint16_t fg = kText; bool valid = false; char cur[10] = {}; };
@@ -925,10 +935,19 @@ public:
     // Actions sub-page (kit::RowList) toggled by Long Back. Short OK on Info runs items_[0]; on Actions runs items_[1 + act_sel_].
     void lock(conn::Tab t);
     bool has_pages() const { return n_items_ > 1; }
+    int first_act() const { return tab_ == conn::Tab::Sink ? 0 : 1; }
+    int act_count() const { return n_items_ > first_act() ? n_items_ - first_act() : 0; }
     void set_actions_mode(bool on);
     bool actions_mode() const { return act_page_; }
     int action_row() const { return act_sel_; }   // the focused action row on Actions page, -1 = Info page
-    static constexpr int kPlaceRows = 7;          // list rows on screen under the identity block
+    static constexpr int kPlaceRows = 9;   // 9 x 20 px fact rows under identity block (y 46..226, no footer)
+    kit::OppRailSpec opp_rail() const override {
+        if (has_pages()) {
+            return act_page_ ? kit::OppRailSpec{"ACTIONS", 2, 1, kit::OppTelemetry::WattCcDp}
+                             : kit::OppRailSpec{title_, 2, 0, kit::OppTelemetry::Vaw};
+        }
+        return {title_, 0, 0, kit::OppTelemetry::Vaw};
+    }          // list rows on screen under the identity block
     int window_first() const { return first_; }   // the first list row on screen
     int result_rows() const { return res_n_; }    // the fact rows of the last paint (the actions follow)
     conn::Facts facts() const { return facts_; }
@@ -1129,9 +1148,8 @@ private:
     [[gnu::noinline]] bool paint_verdict(const std::optional<adc::Reading> &r, uint32_t now_ms);
     Field v_[4];
     int px_[4] = {-1, -1, -1, -1};
-    Field pv_[1];                // the Rp value
+    Field pv_[3];                // Rp, D+/D- classifier, VREF + MCU temp
     uint32_t vsig_ = 0;          // verdict row content last painted
-    Elem foot_;
     bool painted_ = false;
     uint8_t static_step_ = 0;
 };
@@ -1154,12 +1172,11 @@ public:
     int count() const { return bench::kPlaces; }   // rows: the seven places
     int selected() const;                           // the focused one of them (ctx_.keep.bench_sel)
     bench::Facts facts() const;   // what the Bench rows read now, from the context and the drivers
-    // Bench geometry (logical content px): seven 28 px rows, the name (font 16) on the row's top line, the status (font 12)
-    // right under it, the icon and the node centred on the pair.
-    static constexpr int16_t kRowY0 = 24, kRowPitch = 28;
-    static constexpr int16_t kTextX = 28, kNameDy = 0, kStatusDy = 16, kIconX = 204, kIconDy = 8;
-    static constexpr int16_t kNodeX = 8, kNodeDy = 4, kNodeSz = 8, kRailX = 11, kRailW = 2;
-    static constexpr int16_t kBenchEnd = kRowY0 + bench::kPlaces * kRowPitch;   // 220
+    // Bench geometry (Option B 208x240): seven 32 px rows from y 4 (y 4..228), icon at x 190.
+    static constexpr int16_t kRowY0 = 4, kRowPitch = 30;
+    static constexpr int16_t kTextX = 28, kNameDy = 1, kStatusDy = 17, kIconX = 190, kIconDy = 9;
+    static constexpr int16_t kNodeX = 8, kNodeDy = 5, kNodeSz = 8, kRailX = 11, kRailW = 2;
+    static constexpr int16_t kBenchEnd = kRowY0 + bench::kPlaces * kRowPitch;   // 214
     static constexpr int kTools = kToolCount;
     // Row -> submenu. The Spoof row is a shortcut: it opens Connection's Cable tab on the Spoof list (the same
     // CableIdentityList), so tool_menu(2) names the Spoof menu that opens on top of Connection.
@@ -1317,7 +1334,7 @@ public:
     static constexpr int kRows = 10 + kScreenshotRows;
     static constexpr int kDisplayRow = 6 + kScreenshotRows;
     static constexpr int kSystemRow = 7 + kScreenshotRows, kMemoryRow = 8 + kScreenshotRows, kBootRow = 9 + kScreenshotRows;
-    static constexpr int16_t kIdHeadY = 25, kIdLineY = 46, kIdDashY = 63, kListY = 66;   // identity y22..65, the list under it
+    static constexpr int16_t kIdHeadY = 3, kIdLineY = 24, kIdDashY = 41, kListY = 44;   // identity y0..43, the list under it
 private:
     static void row_fn(void *ctx, int index, bool focused, kit::RowSpec &out);   // reads the live settings: no value cache
     void paint_identity();

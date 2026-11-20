@@ -16,13 +16,21 @@ Layout compute_layout(PanelEdge edge, const int16_t (&centers)[4], const int16_t
 
     switch (edge) {
     case PanelEdge::Right:  l.panel = {static_cast<int16_t>(kScreenW - thickness), 0, thickness, kScreenH};
-                            l.content = {0, 0, static_cast<int16_t>(kScreenW - thickness), kScreenH}; break;
+                            l.content = {0, 0, static_cast<int16_t>(kScreenW - thickness), kScreenH};
+                            l.opp_rail = {0, 0, thickness, kScreenH};
+                            l.twin_content = {thickness, 0, static_cast<int16_t>(kScreenW - 2 * thickness), kScreenH}; break;
     case PanelEdge::Left:   l.panel = {0, 0, thickness, kScreenH};
-                            l.content = {thickness, 0, static_cast<int16_t>(kScreenW - thickness), kScreenH}; break;
+                            l.content = {thickness, 0, static_cast<int16_t>(kScreenW - thickness), kScreenH};
+                            l.opp_rail = {static_cast<int16_t>(kScreenW - thickness), 0, thickness, kScreenH};
+                            l.twin_content = {thickness, 0, static_cast<int16_t>(kScreenW - 2 * thickness), kScreenH}; break;
     case PanelEdge::Top:    l.panel = {0, 0, kScreenW, thickness};
-                            l.content = {0, thickness, kScreenW, static_cast<int16_t>(kScreenH - thickness)}; break;
+                            l.content = {0, thickness, kScreenW, static_cast<int16_t>(kScreenH - thickness)};
+                            l.opp_rail = {0, static_cast<int16_t>(kScreenH - thickness), kScreenW, thickness};
+                            l.twin_content = {0, thickness, kScreenW, static_cast<int16_t>(kScreenH - 2 * thickness)}; break;
     case PanelEdge::Bottom: l.panel = {0, static_cast<int16_t>(kScreenH - thickness), kScreenW, thickness};
-                            l.content = {0, 0, kScreenW, static_cast<int16_t>(kScreenH - thickness)}; break;
+                            l.content = {0, 0, kScreenW, static_cast<int16_t>(kScreenH - thickness)};
+                            l.opp_rail = {0, 0, kScreenW, thickness};
+                            l.twin_content = {0, thickness, kScreenW, static_cast<int16_t>(kScreenH - 2 * thickness)}; break;
     }
 
     const bool rev = edge == PanelEdge::Left || edge == PanelEdge::Bottom;

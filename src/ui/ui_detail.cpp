@@ -22,17 +22,18 @@
 namespace k2 {
 
 namespace {
-// The three values: font 24, five cells each, a 12 x 16 key chip after the digits, a 3 px underline under value and chip.
-constexpr int16_t kValY = 27, kValPitch = 75, kValChars = 5;
-constexpr int16_t kChipX = kValChars * 12 + 1, kChipW = 12, kChipH = 16, kChipY = kValY + 4;
-constexpr int16_t kUnderY = 53, kUnderH = 3, kUnderW = kChipX + kChipW;   // 73 px
-static_assert(2 * kValPitch + kUnderW <= 224, "the W column ends inside the content");
+// The three values: font 24, five cells each, an 8 x 16 key chip after the digits, a 3 px underline under value and chip.
+// Option B 208 px width: 3 columns x 70 px pitch, 68 px underline (2 * 70 + 68 = 208).
+constexpr int16_t kValY = 4, kValPitch = 70, kValChars = 5;
+constexpr int16_t kChipX = kValChars * 12, kChipW = 8, kChipH = 16, kChipY = kValY + 4;
+constexpr int16_t kUnderY = 30, kUnderH = 3, kUnderW = kChipX + kChipW;   // 68 px
+static_assert(2 * kValPitch + kUnderW <= 208, "the W column ends inside the 208 px content");
 
-// The receipt: 8 rows of 22 px from y 60, two columns. Keys font 12 at x 4 / x 106 on the value's baseline; values font 16
-// right-aligned to x 100 / x 222; a hairline under every row but the last (x 4..100 / 106..222).
-constexpr int16_t kGridY0 = 60, kRowPitch = 22, kRows = 8;
-constexpr int16_t kKeyL = 4, kKeyR = 106, kValRtL = 100, kValRtR = 222;
-constexpr int16_t kTextDy = 3;                                    // value line-box top inside a row
+// The receipt: 8 rows of 24 px from y 36, two columns (reclaiming TopBar + Footer height).
+// Keys font 12 at x 2 / x 104 on the value's baseline; values font 16 right-aligned to x 100 / x 206.
+constexpr int16_t kGridY0 = 36, kRowPitch = 24, kRows = 8;
+constexpr int16_t kKeyL = 2, kKeyR = 104, kValRtL = 100, kValRtR = 206;
+constexpr int16_t kTextDy = 4;                                    // value line-box top inside a row
 constexpr int16_t kKeyDy = kTextDy + 12 - 9;                     // font 12 on the font 16 baseline (ascent 12 vs 9)
 constexpr int16_t kRuleDy = kRowPitch - 1;
 
@@ -48,8 +49,8 @@ constexpr int16_t row_top(int row) { return static_cast<int16_t>(kGridY0 + row *
 struct Cell { const char *key; uint8_t chars; };
 // In slot order from SWh: left, right, left, right ... The value widths are the cells' worst cases.
 constexpr Cell kCells[SCount - kFirstCell] = {
-    {"Energy", 7}, {"PDO", 9}, {"Charge", 7}, {"Cable", 8}, {"Time", 8}, {"Max", 5}, {"Temp", 4}, {"D+", 5},
-    {"R", 6}, {"D-", 5}, {"CC1", 5}, {"Fast chg", 8}, {"CC2", 5}, {"USB", 10}, {"Flow", 8}, {"Alt", 10},
+    {"Wh", 7}, {"PDO", 9}, {"Ah", 7}, {"Cable", 8}, {"Time", 8}, {"Max", 5}, {"Temp", 4}, {"D+", 5},
+    {"R", 6}, {"D-", 5}, {"CC1", 5}, {"FC", 8}, {"CC2", 5}, {"USB", 10}, {"Flow", 8}, {"Alt", 10},
 };
 constexpr bool keys_clear() {   // a key never reaches into its value's cells
     for (int i = 0; i < SCount - kFirstCell; i++) {
@@ -146,7 +147,7 @@ void DetailPage::draw_static() {
         for (int q = 0; q < 3; q++) {
             const int16_t x = static_cast<int16_t>(q * kValPitch);
             gfx_fill(c, static_cast<int16_t>(x + kChipX), kChipY, kChipW, kChipH, chip_fill(q));
-            gfx_text(c, kLabelFont, static_cast<int16_t>(x + kChipX + 3), static_cast<int16_t>(kChipY + 2), kChipLetter[q], chip_ink(q),
+            gfx_text(c, kLabelFont, static_cast<int16_t>(x + kChipX + 1), static_cast<int16_t>(kChipY + 2), kChipLetter[q], chip_ink(q),
                      chip_fill(q));
             gfx_fill(c, x, kUnderY, kUnderW, kUnderH, chip_fill(q));
         }

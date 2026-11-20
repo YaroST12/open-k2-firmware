@@ -56,7 +56,7 @@ K2_HOT void Ui::pump_paint(uint32_t now_ms) {
                 clear_y_ = static_cast<int16_t>(clear_y_ + rows);
             }
         } else {
-            ContentViewport viewport(layout_.content);
+            ContentViewport viewport(active_dest(), ctx_.content.w, ctx_.content.h);
             while (clear_y_ < clear_y1_) {
                 const int rows = std::min<int>(PaintBudget::kStripRows, clear_y1_ - clear_y_);
                 const int cost = static_cast<int>(ctx_.content.w) * rows;
@@ -69,16 +69,20 @@ K2_HOT void Ui::pump_paint(uint32_t now_ms) {
         clear_full_lcd_ = false;
     }
 
-    ContentViewport viewport(layout_.content);
+    ContentViewport viewport(active_dest(), ctx_.content.w, ctx_.content.h);
     ctx_.blank = paint_blank_;
     if (chrome_gaps_pending_) {
-        const int h1 = kit::kBodyY - kBarH;
-        const int h2 = kFooterY - kit::kListBottom;
-        const int cost = static_cast<int>(ctx_.content.w) * (h1 + h2);
-        if (bg && !bg->admit(cost, true, true)) { paint_pending_ = true; return; }
-        gfx_fill(ctx_.content, 0, kBarH, ctx_.content.w, static_cast<int16_t>(h1), kBg);
-        gfx_fill(ctx_.content, 0, kit::kListBottom, ctx_.content.w, static_cast<int16_t>(h2), kBg);
+        const int cost = static_cast<int>(ctx_.content.w) * kit::kBodyY;
+        if (bg && !bg->admit(cost, true)) { paint_pending_ = true; return; }
+        gfx_fill(ctx_.content, 0, 0, ctx_.content.w, kit::kBodyY, kBg);
         chrome_gaps_pending_ = false;
+    }
+    if (toast_clear_pending_) {
+        const int16_t y = static_cast<int16_t>(ctx_.content.h - kToastH - kToastMarginBottom);
+        const int cost = static_cast<int>(ctx_.content.w) * (ctx_.content.h - y);
+        if (bg && !bg->admit(cost, true, true)) { paint_pending_ = true; return; }
+        gfx_fill(ctx_.content, 0, y, ctx_.content.w, static_cast<int16_t>(ctx_.content.h - y), kBg);
+        toast_clear_pending_ = false;
     }
     if (static_pending_) {
         current().draw_static();
@@ -97,15 +101,44 @@ K2_HOT void Ui::pump_paint(uint32_t now_ms) {
         }
         panel_pending_ = false;
     }
+    if (opp_pending_) {
+        if (uses_opp_rail()) {
+            for (unsigned i = 0; i < 4; i++) {
+                if (!(opp_mask_ & (1u << i))) continue;
+                const int cost = kOppRailThickness * 64;
+                if (bg && !bg->admit(cost, true)) { paint_pending_ = true; return; }
+                draw_opp_slot(i);
+                opp_mask_ &= static_cast<uint8_t>(~(1u << i));
+            }
+        }
+        opp_mask_ = 0;
+        opp_pending_ = false;
+    }
+    const bool toast_was_drawn = ctx_.toast.drawn;
+    const int toast_px0 = bg ? bg->spent : -1;
     current().update(now_ms);
-    if (bg && bg->more) { paint_pending_ = true; return; }
+    const bool body_painted = !bg || bg->spent != toast_px0;
+    const bool toast_dirty = !ctx_.toast.drawn || (toast_was_drawn && body_painted);
+    if (bg && bg->more) {
+        if (toast_dirty && ctx_.toast.active(now_ms) && !fctrig::paint_critical()) {
+            ctx_.toast.drawn = false;
+            draw_toast_overlay(now_ms);
+        }
+        paint_pending_ = true;
+        return;
+    }
 
     ctx_.blank = false;
     paint_blank_ = false;
     paint_pending_ = false;
     draw_release_notice();
     draw_rotation_notice(now_ms);
+    if ((toast_dirty || rotation_notice_drawn_) && ctx_.toast.active(now_ms) && !fctrig::paint_critical()) {
+        ctx_.toast.drawn = false;
+        draw_toast_overlay(now_ms);
+    }
     sync_panel();
+    if (uses_opp_rail()) sync_opp_rail();
     if (timing_in_flight_) {
         timing_in_flight_ = false;
         full_px_ = static_cast<uint32_t>(paint::meter.px_count() - paint_px0_);
@@ -170,7 +203,7 @@ K2_HOT UiAction Ui::tick(uint32_t now_ms) {
         requested_rotation_ = 0xFF;
         set_rotation(target, now_ms);
     }
-    ContentViewport viewport(layout_.content);
+    ContentViewport viewport(active_dest(), ctx_.content.w, ctx_.content.h);
     if (!down_[static_cast<int>(Button::Minus)] && !down_[static_cast<int>(Button::Plus)]) rotation_chord_ = false;
     ctx_.now = now_ms;
     for (int k = 0; k < 4; k++)   // end a press flash that outlived its press
@@ -371,6 +404,14 @@ K2_HOT UiAction Ui::tick(uint32_t now_ms) {
                 rotation_notice_until_ = 0;
                 notice_ = nullptr;
                 current().invalidate();
+                paint_pending_ = true;
+                pump_paint(now_ms);
+            }
+            if (!paint_pending_ && !fctrig::paint_critical() && ctx_.toast.expired(now_ms)) {
+                ctx_.toast.clear();
+                ctx_.toast.erase_pending = false;
+                toast_clear_pending_ = true;
+                current().invalidate_for_capture();
                 paint_pending_ = true;
                 pump_paint(now_ms);
             }

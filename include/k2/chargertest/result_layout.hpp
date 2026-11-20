@@ -141,7 +141,7 @@ struct Line {
 struct Metrics { int adv = 6, pad = 2, gap = 2, avail = 158, mark = 11, max_groups = 0; bool cells = false; int sweep = 12; };
 // The Results / Running verdict grid wraps the layout into lines of at most 5 equal cells (8 px glyphs, 163 px beside the label
 // strip, 1 px gaps). Shared with the gate's sweep of every passive label (tests/test_ui_no_truncation.cpp).
-inline constexpr Metrics kGridMetrics{.adv = 8, .pad = 2, .gap = 1, .avail = 163, .max_groups = 5, .cells = true, .sweep = 12};
+inline constexpr Metrics kGridMetrics{.adv = 8, .pad = 2, .gap = 1, .avail = 153, .max_groups = 5, .cells = true, .sweep = 12};
 
 // Results-tab sections, in the default run order (docs/CHARGER_TEST_FLOW.md): the OEM vendor modes by company
 // (Huawei / Honor, Samsung, OPPO / OnePlus / vivo), the identity facts of a PD source (QC4+/QC5, Lenovo, HP), USB PD (CC) with

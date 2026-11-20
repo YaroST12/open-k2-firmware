@@ -23,18 +23,18 @@ namespace {
 
 namespace lp = loopprobe;
 
-constexpr kit::KvLayout kTable{kit::kBodyY, kit::kRowH, 6, nullptr, nullptr, LoopProbePage::kValueX, LoopProbePage::kValueChars,
+constexpr kit::KvLayout kTable{kit::kBodyY, kit::kRowH, 6, &kLabelFont, nullptr, LoopProbePage::kValueX, LoopProbePage::kValueChars,
                                Align::Left};
 
 // The keys are the steps in run order (lp::Step); the value column says what each step did.
 constexpr const char *kKeys[lp::kSteps] = {"Baseline", "Drop", "D+/D-", "E-marker", "CC"};
-static_assert(all_fit(kKeys, kSmallAdvPx, LoopProbePage::kValueX - 6 - 4), "a loop probe step name runs into the value column");
+static_assert(all_fit(kKeys, kLabelAdv, LoopProbePage::kValueX - 6 - 4), "a loop probe step name runs into the value column");
 #if K2_HOST_REPORT
 namespace lph = loopprobe::host;
 constexpr const char *kHostKeys[lph::kRows] = {"Host", "PD", "Ident", "DR swap", "USB"};   // lph::row_key()
 static_assert(lph::kRows == lp::kSteps, "the Host view reuses the step table's rows");
 static_assert(lph::kRowChars == LoopProbePage::kValueChars, "a Host view value fills the value column");
-static_assert(all_fit(kHostKeys, kSmallAdvPx, LoopProbePage::kValueX - 6 - 4), "a Host view key runs into the value column");
+static_assert(all_fit(kHostKeys, kLabelAdv, LoopProbePage::kValueX - 6 - 4), "a Host view key runs into the value column");
 #endif
 
 // lp::Why, short, after "skip " / "stop " in the value column.

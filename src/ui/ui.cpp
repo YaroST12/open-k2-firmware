@@ -24,6 +24,7 @@
 #include "k2/loopprobe/loop_probe_hw.hpp"
 #endif
 #include "k2/ui/kit.hpp"
+#include "k2/ui/readout_fmt.hpp"
 #include "k2/ui/text.hpp"
 #include "k2/ui/ui_calc.hpp"
 #include "k2/ui/uiprefs.hpp"
@@ -141,11 +142,20 @@ ListState Ui::list_state() {
     }
 }
 
+void Ui::sync_surface() {
+    if (uses_opp_rail()) {
+        ctx_.content = {0, 0, kTwinContentW, kTwinContentH};
+        ctx_.screen = surface_of(layout_.twin_content);
+    } else {
+        ctx_.content = {0, 0, 224, 240};
+        ctx_.screen = surface_of(layout_.content);
+    }
+}
+
 void Ui::init(uint32_t now_ms, bool cancel_resume) {
     lcd::set_rotation(orient_.rotation);
     layout_ = compute_layout(orient_.edge, kSlotCenters, kSlotLens, kPanelThickness);
-    ctx_.content = {0, 0, 224, 240};   // logical content; ContentViewport maps it onto layout_.content
-    ctx_.screen = surface_of(layout_.content);
+    sync_surface();
     panel_ = surface_of(layout_.panel);
     ctx_.meter.reset(now_ms);
 
@@ -184,8 +194,7 @@ void Ui::set_rotation(uint8_t rotation, uint32_t now_ms) {
     orient_ = orientation_for(rotation);
     ctx_.rotation = rotation;
     layout_ = compute_layout(orient_.edge, kSlotCenters, kSlotLens, kPanelThickness);
-    ctx_.content = {0, 0, 224, 240};
-    ctx_.screen = surface_of(layout_.content);
+    sync_surface();
     panel_ = surface_of(layout_.panel);
     BudgetScope scope(*this);
     lcd::set_rotation(rotation);
@@ -273,15 +282,28 @@ void Ui::rotation_gesture(uint32_t now_ms) {
 void Ui::draw_rotation_notice(uint32_t now_ms) {
     if (!rotation_notice_until_ ||
         static_cast<int32_t>(now_ms - rotation_notice_until_) >= 0) return;
-    ContentViewport viewport(layout_.content);
+    ContentViewport viewport(active_dest(), ctx_.content.w, ctx_.content.h);
     StrBuf<24> notice;
-    if (notice_) notice.put(notice_);   // a refusal note (refuse_menu) shares the strip and its timer
+    if (notice_) notice.put(notice_);   // a refusal note (refuse_menu) shares the toast and its timer
     else if (rotation_lock_) notice.put("Manual ").put_u32(rotation() * 90).put(" deg");
     else notice.put("Autorotate: Auto");
     if (notice_ == kCalibrationNotice && page_ == Page::Home) return;
-    draw_footer(ctx_.content, notice_ == kCalibrationNotice ? FooterTone::Caution
+    draw_toast(ctx_.content, notice_ == kCalibrationNotice ? FooterTone::Caution
                          : notice_ ? FooterTone::Error : FooterTone::Info, notice.view());
     rotation_notice_drawn_ = true;
+}
+
+void Ui::draw_toast_overlay(uint32_t now_ms) {
+    if (ctx_.toast.erase_pending) {
+        gfx_fill(ctx_.content, 0, static_cast<int16_t>(ctx_.content.h - kToastH - kToastMarginBottom),
+                 ctx_.content.w, kToastH, kBg);
+        ctx_.toast.erase_pending = false;
+    }
+    if (!ctx_.toast.active(now_ms)) return;
+    uint16_t first = 0, last = 0;
+    if (ctx_.toast.drawn && !ContentViewport::panel_band(first, last)) return;
+    draw_toast(ctx_.content, ctx_.toast.tone, ctx_.toast.view());
+    ctx_.toast.drawn = true;
 }
 
 // Opaque pages: the full paint (draw_static + update with ctx_.blank false) writes every content pixel, panel strip aside
@@ -289,7 +311,7 @@ void Ui::draw_rotation_notice(uint32_t now_ms) {
 // tests/test_ui_capture.cpp proves each entry: it compares the switch against a clean paint, in all four rotations.
 bool Ui::page_opaque(Page p, bool entering) const {
     switch (p) {
-    case Page::Home: case Page::Detail: case Page::Lines: case Page::Tools: case Page::Settings: case Page::Graphs: return true;
+    case Page::Home: case Page::Detail: case Page::Tools: case Page::Settings: case Page::Graphs: return true;
     case Page::ChargerTest: return charger_test_.paints_opaque(entering);   // the stage decides what its paint covers
     default: return false;
     }
@@ -297,7 +319,7 @@ bool Ui::page_opaque(Page p, bool entering) const {
 
 bool Ui::menu_opaque(Menu m) {
     switch (m) {
-    case Menu::UsbLink: case Menu::Diag: case Menu::Memory: return true;
+    case Menu::Diag: case Menu::Memory: return true;
     default: return false;   // the rest wipe their body on a live screen (no gain over the erase), or paint by mode, or hold data
     }
 }
@@ -520,7 +542,8 @@ void Ui::redraw(uint32_t now_ms) {
 }
 
 void Ui::erase_outgoing(uint32_t now_ms, PageIf &outgoing) {
-    ContentViewport viewport(layout_.content);
+    const Rect out_dest = ctx_.content.w == kTwinContentW ? layout_.twin_content : layout_.content;
+    ContentViewport viewport(out_dest, ctx_.content.w, ctx_.content.h);
     rotation_notice_drawn_ = false;
     // Erase the outgoing page's ink by replaying its own paint with every pixel forced to
     // kBg: only the pixels it actually drew are rewritten, not the whole screen. The hold
@@ -531,8 +554,9 @@ void Ui::erase_outgoing(uint32_t now_ms, PageIf &outgoing) {
     outgoing.draw_static();
     outgoing.update(now_ms);
     draw_release_notice();
-    if (hold_shown_) gfx_fill(ctx_.content, 12, 70, 200, 84, kBg);   // the hold card's box (its own draw is cached)
+    if (hold_shown_) gfx_fill(ctx_.content, static_cast<int16_t>((ctx_.content.w - 200) / 2), 70, 200, 84, kBg);
     draw_rotation_notice(now_ms);
+    draw_toast_overlay(now_ms);
     lcd::set_erase(false);
 }
 
@@ -547,14 +571,21 @@ void Ui::reset_paint_pipeline() {
     clear_full_lcd_ = false;
     clear_y_ = clear_y1_ = 0;
     chrome_gaps_pending_ = false;
+    toast_clear_pending_ = false;
     static_pending_ = false;
     panel_pending_ = false;
+    opp_pending_ = false;
     timing_in_flight_ = false;
     panel_mask_ = 0;
+    opp_mask_ = 0;
 }
 
 void Ui::start_full_clear() {
     reset_paint_pipeline();
+    if (ctx_.toast.active(ctx_.now)) {
+        ctx_.toast.drawn = false;
+        ctx_.toast.erase_pending = true;
+    }
     clear_pending_ = true;
     clear_full_lcd_ = true;
     clear_y_ = 0;
@@ -563,10 +594,23 @@ void Ui::start_full_clear() {
 
 // Clears what the incoming page must not find under it; false = nothing was cleared and the page paints over live ink.
 bool Ui::clear_for_incoming(uint32_t now_ms, PageIf &outgoing, bool incoming_opaque, bool detach_rows) {
-    constexpr uint32_t kContentPx = 224u * 240u;
+    const bool clear_toast = ctx_.toast.drawn || fc_release_.busy() || loopguard::locked()
+#if K2_PDSTRESS
+        || pdstress_.footer() != nullptr
+#endif
+#if K2_PDSPEC
+        || pdspec_.footer() != nullptr
+#endif
+        ;
+    const uint32_t content_px = static_cast<uint32_t>(ctx_.content.w) * static_cast<uint32_t>(ctx_.content.h);
+    const int16_t next_w = uses_opp_rail() ? kTwinContentW : 224;
     reset_paint_pipeline();
+    toast_clear_pending_ = clear_toast;
+    ctx_.toast.clear();
+    ctx_.toast.erase_pending = false;
     if (!incoming_opaque) {
-        if (full_px_ < kContentPx && (!ctx_.budget || full_px_ <= static_cast<uint32_t>(PaintBudget::kDefaultPx))) {
+        if (ctx_.content.w == next_w && full_px_ < content_px &&
+            (!ctx_.budget || full_px_ <= static_cast<uint32_t>(PaintBudget::kDefaultPx))) {
             PaintBudget *const saved_budget = ctx_.budget;
             ctx_.budget = nullptr;   // small outgoing erase replays completely without slicing
             erase_outgoing(now_ms, outgoing);
@@ -601,20 +645,21 @@ bool Ui::paint_more(uint32_t now_ms) {
 
 void Ui::paint_incoming(uint32_t now_ms, uint32_t t0, bool blank) {
     BudgetScope scope(*this);
+    sync_surface();
     last_update_ms_ = now_ms;
     current().invalidate();   // the erase pass erased everything the field caches remember; a built page has drawn nothing
     current().sample();
     paint_blank_ = blank;
-    // No page paints the rows between its top bar's hairline and the body (kBarH..kBodyY; the wizard rule also leaves a gap
-    // pixel between its segments) nor the two rows between a list's bottom and the footer: an opaque page lays that ground
-    // first (5 rows, 1,120 px), the page's own paint goes over it. Home has neither bar nor footer.
-    chrome_gaps_pending_ = !blank && !(depth_ == 0 && (page_ == Page::Home || page_ == Page::Graphs));
+    chrome_gaps_pending_ = !blank && uses_opp_rail() && kit::kBodyY > 0;
     static_pending_ = true;
     panel_pending_ = true;
     panel_mask_ = 0x0Fu;
+    opp_pending_ = uses_opp_rail();
+    opp_mask_ = opp_pending_ ? 0x0Fu : 0u;
+    for (uint32_t &s : opp_sig_) s = 0;
     paint_t0_us_ = t0;
     paint_px0_ = paint::meter.px_count();
-    full_px_ = 224u * 240u;
+    full_px_ = static_cast<uint32_t>(ctx_.content.w) * static_cast<uint32_t>(ctx_.content.h);
     timing_in_flight_ = true;
     paint_pending_ = true;
     pump_paint(now_ms);
@@ -692,6 +737,201 @@ void Ui::sync_panel() {
         if (slot_sig(i) != slot_sig_[i]) draw_slot(i);
 }
 
+namespace {
+struct OppCells {
+    kit::OppCell c[4];
+    StrBuf<12> txt[4];
+};
+
+void fmt_opp_v(StrBuf<12> &out, bool ok, int32_t mv) {
+    if (!ok) { out.put("--.-V"); return; }
+    char buf[12];
+    const std::size_t n = readout::fmt3(buf, mv < 0 ? 0 : mv, 'V');
+    out.put({buf, n});
+}
+void fmt_opp_a(StrBuf<12> &out, bool ok, int32_t ma) {
+    if (!ok) { out.put("-.--A"); return; }
+    char buf[12];
+    const std::size_t n = readout::fmt3(buf, power::magnitude(ma), 'A');
+    out.put({buf, n});
+}
+void fmt_opp_w(StrBuf<12> &out, bool ok, int32_t mw) {
+    if (!ok) { out.put("--.-W"); return; }
+    char buf[12];
+    const std::size_t n = readout::fmt3(buf, power::magnitude(mw), 'W');
+    out.put({buf, n});
+}
+void fmt_opp_adc_v(StrBuf<12> &out, const std::optional<adc::Reading> &r, int32_t mv) {
+    if (!r || mv < 0) { out.put("-.--V"); return; }
+    out.put_fixed(mv, 2).put_char('V');
+}
+
+OppCells build_opp_cells(const UiContext &ctx, const kit::OppRailSpec &spec) {
+    OppCells oc{};
+    // Slot 0: uppercase MastheadCell
+    for (char ch : spec.title) {
+        if (oc.txt[0].view().size() >= 9) break;
+        if (ch >= 'a' && ch <= 'z') ch = static_cast<char>(ch - 'a' + 'A');
+        oc.txt[0].put_char(ch);
+    }
+    const bool wide0 = spec.dot_count > 0 || oc.txt[0].view().size() > 7;
+    const int16_t lens[4] = {wide0 ? int16_t(64) : int16_t(54),
+                             wide0 ? int16_t(59) : int16_t(62),
+                             wide0 ? int16_t(59) : int16_t(62),
+                             wide0 ? int16_t(58) : int16_t(62)};
+    for (int i = 0; i < 4; i++) oc.c[i].len = lens[i];
+    oc.c[0].masthead = true;
+    oc.c[0].value = oc.txt[0].view();
+    oc.c[0].value_color = kInk;
+    oc.c[0].dot_count = spec.dot_count;
+    oc.c[0].dot_cur = spec.dot_cur;
+
+    const bool stale = ctx.stale();
+    const bool ok = ctx.pm_online || stale;
+    const power::Metrics &pm = stale ? ctx.last.pm : ctx.pm;
+    const uint16_t ink = stale ? kStale : kInk;
+
+    switch (spec.telemetry) {
+    case kit::OppTelemetry::Vaw:
+        fmt_opp_v(oc.txt[1], ok, pm.vbus_mv);
+        oc.c[1].spot = stale ? kStale : kSpotVolt;
+        oc.c[1].value = oc.txt[1].view();
+        oc.c[1].value_color = ink;
+
+        fmt_opp_a(oc.txt[2], ok, pm.current_ma);
+        oc.c[2].spot = stale ? kStale : kSpotAmp;
+        oc.c[2].value = oc.txt[2].view();
+        oc.c[2].value_color = ink;
+
+        fmt_opp_w(oc.txt[3], ok, pm.power_mw);
+        oc.c[3].spot = stale ? kStale : kWattFill;
+        oc.c[3].value = oc.txt[3].view();
+        oc.c[3].value_color = ink;
+        break;
+
+    case kit::OppTelemetry::PeakSagR: {
+        fmt_opp_w(oc.txt[1], ctx.extremes.peak_mw() > 0, static_cast<int32_t>(ctx.extremes.peak_mw()));
+        oc.c[1].tag = "PK ";
+        oc.c[1].tag_color = kDim;
+        oc.c[1].value = oc.txt[1].view();
+        oc.c[1].value_color = stale ? kStale : kWattFill;
+
+        const bool has_sag = ctx.extremes.has_sag();
+        const uint32_t sag_mv = has_sag ? (ctx.extremes.sag_bp() * ctx.extremes.sag_level_mv() + 5000u) / 10000u : 0u;
+        fmt_opp_v(oc.txt[2], has_sag, static_cast<int32_t>(sag_mv));
+        oc.c[2].tag = "SAG ";
+        oc.c[2].tag_color = kDim;
+        oc.c[2].value = oc.txt[2].view();
+        oc.c[2].value_color = stale ? kStale : kSpotVolt;
+
+        if (const auto est = ctx.cable.estimate()) {
+            char rbuf[10];
+            const int rn = cable_r::fmt_mohm(std::span(rbuf), est->mohm);
+            oc.txt[3].put({rbuf, static_cast<std::size_t>(rn > 0 ? rn : 0)});
+        } else {
+            oc.txt[3].put("--");
+        }
+        oc.c[3].tag = "R ";
+        oc.c[3].tag_color = kDim;
+        oc.c[3].value = oc.txt[3].view();
+        oc.c[3].value_color = stale ? kStale : kInk2;
+        break;
+    }
+
+    case kit::OppTelemetry::WattCcDp:
+        fmt_opp_w(oc.txt[1], ok, pm.power_mw);
+        oc.c[1].spot = stale ? kStale : kWattFill;
+        oc.c[1].value = oc.txt[1].view();
+        oc.c[1].value_color = ink;
+
+        fmt_opp_adc_v(oc.txt[2], ctx.analog, ctx.analog ? ctx.analog->cc1_mv : -1);
+        oc.c[2].tag = "CC1 ";
+        oc.c[2].tag_color = kDim;
+        oc.c[2].value = oc.txt[2].view();
+        oc.c[2].value_color = ink;
+
+        fmt_opp_adc_v(oc.txt[3], ctx.analog, ctx.analog ? ctx.analog->dp_mv : -1);
+        oc.c[3].tag = "D+ ";
+        oc.c[3].tag_color = kDim;
+        oc.c[3].value = oc.txt[3].view();
+        oc.c[3].value_color = ink;
+        break;
+
+    case kit::OppTelemetry::AmpCcDp:
+        fmt_opp_a(oc.txt[1], ok, pm.current_ma);
+        oc.c[1].spot = stale ? kStale : kSpotAmp;
+        oc.c[1].value = oc.txt[1].view();
+        oc.c[1].value_color = ink;
+
+        fmt_opp_adc_v(oc.txt[2], ctx.analog, ctx.analog ? ctx.analog->cc1_mv : -1);
+        oc.c[2].tag = "CC1 ";
+        oc.c[2].tag_color = kDim;
+        oc.c[2].value = oc.txt[2].view();
+        oc.c[2].value_color = ink;
+
+        fmt_opp_adc_v(oc.txt[3], ctx.analog, ctx.analog ? ctx.analog->dp_mv : -1);
+        oc.c[3].tag = "D+ ";
+        oc.c[3].tag_color = kDim;
+        oc.c[3].value = oc.txt[3].view();
+        oc.c[3].value_color = ink;
+        break;
+    }
+    return oc;
+}
+
+uint32_t opp_cell_sig(PanelEdge opp_edge, int16_t pos, const kit::OppCell &c) {
+    uint32_t h = mix_init();
+    h = mix_u32(h, static_cast<uint32_t>(opp_edge) | (static_cast<uint32_t>(pos) << 4) |
+                   (static_cast<uint32_t>(c.len) << 14) | (static_cast<uint32_t>(c.masthead) << 24) |
+                   (static_cast<uint32_t>(c.dot_count) << 25) | (static_cast<uint32_t>(c.dot_cur) << 28));
+    h = mix_u32(h, static_cast<uint32_t>(c.spot) | (static_cast<uint32_t>(c.value_color) << 16));
+    h = mix_u32(h, c.tag_color);
+    h = mix(h, c.tag);
+    h = mix(h, c.value);
+    return h | 1u;
+}
+}  // namespace
+
+void Ui::draw_opp_slot(unsigned slot) {
+    if (slot > 3 || !uses_opp_rail()) return;
+    ContentViewport::Pause unscaled_rail;
+    const PanelEdge opp_edge = opposite_edge(orient_.edge);
+    const OppCells oc = build_opp_cells(ctx_, current().opp_rail());
+    int16_t pos = 0;
+    for (unsigned i = 0; i < slot; i++) pos = static_cast<int16_t>(pos + oc.c[i].len);
+    const Rect &r = layout_.opp_rail;
+    const Rect sr = panel_is_column(opp_edge)
+                        ? Rect{r.x, static_cast<int16_t>(r.y + pos), r.w, oc.c[slot].len}
+                        : Rect{static_cast<int16_t>(r.x + pos), r.y, oc.c[slot].len, r.h};
+    opp_sig_[slot] = opp_cell_sig(opp_edge, pos, oc.c[slot]);
+    kit::draw_opp_slot(surface_of(sr), opp_edge, panel_text_dir(orient_.edge), slot, oc.c[slot]);
+}
+
+void Ui::draw_opp_rail() {
+    if (!uses_opp_rail()) return;
+    for (unsigned i = 0; i < 4; i++) draw_opp_slot(i);
+}
+
+void Ui::sync_opp_rail() {
+    if (!uses_opp_rail()) return;
+    ContentViewport::Pause unscaled_rail;
+    const PanelEdge opp_edge = opposite_edge(orient_.edge);
+    const OppCells oc = build_opp_cells(ctx_, current().opp_rail());
+    int16_t pos = 0;
+    const Rect &r = layout_.opp_rail;
+    for (unsigned i = 0; i < 4; i++) {
+        const uint32_t sig = opp_cell_sig(opp_edge, pos, oc.c[i]);
+        if (sig != opp_sig_[i]) {
+            opp_sig_[i] = sig;
+            const Rect sr = panel_is_column(opp_edge)
+                                ? Rect{r.x, static_cast<int16_t>(r.y + pos), r.w, oc.c[i].len}
+                                : Rect{static_cast<int16_t>(r.x + pos), r.y, oc.c[i].len, r.h};
+            kit::draw_opp_slot(surface_of(sr), opp_edge, panel_text_dir(orient_.edge), i, oc.c[i]);
+        }
+        pos = static_cast<int16_t>(pos + oc.c[i].len);
+    }
+}
+
 void Ui::update_lit(int k, bool was_held, uint32_t now_ms) {
     const bool is_held = held(k);
     bool lit = pressed_[k];
@@ -760,9 +1000,11 @@ void Ui::update_hold_card(uint32_t now_ms, RebootChord::Step step) {
 // and an ink bar filling along its bottom edge towards the reboot. Square corners, like every Fieldbook block.
 void Ui::draw_hold_card(uint32_t ms) {
     const Surface &c = ctx_.content;
-    constexpr int16_t kX = 10, kY = 70, kW = 204, kH = 84, kF = 2;               // the card, its frame inside
+    constexpr int16_t kY = 70, kW = 200, kH = 84, kF = 2;               // the card, its frame inside (fits 208 and 224)
+    const int16_t kX = static_cast<int16_t>((c.w - kW) / 2);
     constexpr int16_t kIn = kW - 2 * kF, kBarH = 10, kBarY = kY + kH - kF - kBarH;
-    constexpr int16_t kCountX = kX + (kW - 11 * 12) / 2, kNoteX = kX + (kW - 17 * 6) / 2;
+    const int16_t kCountX = static_cast<int16_t>(kX + (kW - 11 * 12) / 2);
+    const int16_t kNoteX = static_cast<int16_t>(kX + (kW - 17 * 6) / 2);
     const uint32_t total = kChordRebootMs;
     const int left = hold_secs_left(ms, total);
     const int px = hold_fill_px(ms, total, kIn);
@@ -791,7 +1033,7 @@ void Ui::draw_hold_card(uint32_t ms) {
 }
 
 void Ui::show_rebooting() {
-    ContentViewport viewport(layout_.content);
+    ContentViewport viewport(active_dest(), ctx_.content.w, ctx_.content.h);
     gfx_text(ctx_.content, kMid, 14, 100, "Rebooting...", kWarn, kBg);
 }
 
@@ -837,7 +1079,7 @@ UiAction Ui::finish_button(UiAction action, uint32_t now_ms) {
 }
 
 UiAction Ui::dispatch_button(Event event, uint32_t now_ms) {
-    ContentViewport viewport(layout_.content);
+    ContentViewport viewport(active_dest(), ctx_.content.w, ctx_.content.h);
     static const char *const names[4] = {"BACK", "-", "OK", "+"};
     K2LOG("[KEY] [%s] %s page=%d\n", names[static_cast<int>(event.button)],
                 event.press == Press::Long ? "long" : event.press == Press::Hold ? "hold" : "short", static_cast<int>(page_index()));
@@ -858,6 +1100,11 @@ UiAction Ui::dispatch_button(Event event, uint32_t now_ms) {
             paint_pending_ = true;
         }
         sync_panel();
+    }
+    if (ctx_.toast.active(now_ms)) {
+        ctx_.toast.drawn = false;
+        draw_toast_overlay(now_ms);
+        paint_pending_ = true;
     }
     return UiAction::None;
 }
@@ -913,7 +1160,7 @@ void Ui::to_meter(uint32_t now_ms) { set_page(Page::Home, now_ms); }
 
 bool Ui::run_action(Action a, uint32_t now_ms, bool confirm) {
     BudgetScope scope(*this);
-    ContentViewport viewport(layout_.content);
+    ContentViewport viewport(active_dest(), ctx_.content.w, ctx_.content.h);
     // The confirm flag overrides no refusal: inline, every active TX (Identify, the VCONN cable read) is refused
     // outright - an inline K2 has no PD role of its own (2026-11-10). It is only the remote's "yes" for an action that
     // can raise the output above 5 V (remote::action_needs_confirm: FcScan), handed on to the driver.
@@ -1011,7 +1258,7 @@ static bool same_choice(const pd::Choice &a, const pd::Choice &b) {
 }
 
 Ui::TriggerOutcome Ui::trigger(const pd::Choice &c, uint32_t now_ms, bool confirm, bool over_load) {
-    ContentViewport viewport(layout_.content);
+    ContentViewport viewport(active_dest(), ctx_.content.w, ctx_.content.h);
     if (ports_busy()) {
         K2LOG("[TEST] PD request refused: test running\n");
         return {pd::Err::Busy, false};
@@ -1045,7 +1292,7 @@ Ui::TriggerOutcome Ui::trigger(const pd::Choice &c, uint32_t now_ms, bool confir
 }
 
 Ui::TriggerOutcome Ui::device_trigger(const pd::Choice &c, uint32_t now_ms) {
-    ContentViewport viewport(layout_.content);
+    ContentViewport viewport(active_dest(), ctx_.content.w, ctx_.content.h);
     if (!pd::is_fake() && trigger_needs_confirm(pd::active_caps(), c, ctx_.cap_mv)) {
         const bool armed = ctx_.trig_armed && same_choice(c, trig_choice_) && now_ms < trig_until_;
         if (!armed) {
@@ -1062,7 +1309,7 @@ Ui::TriggerOutcome Ui::device_trigger(const pd::Choice &c, uint32_t now_ms) {
 }
 
 void Ui::trigger_release(uint32_t now_ms) {
-    ContentViewport viewport(layout_.content);
+    ContentViewport viewport(active_dest(), ctx_.content.w, ctx_.content.h);
     cancel_charger_test();
     cancel_twin();
     fusb302::sink_release();
@@ -1077,7 +1324,7 @@ void Ui::stop_fc(uint32_t now_ms) {
 }
 
 bool Ui::trigger_hard_reset(uint32_t now_ms, bool lab_inline) {
-    ContentViewport viewport(layout_.content);
+    ContentViewport viewport(active_dest(), ctx_.content.w, ctx_.content.h);
     cancel_charger_test();
     cancel_twin();
     const bool ok = fusb302::sink_hard_reset(lab_inline);
@@ -1088,7 +1335,7 @@ bool Ui::trigger_hard_reset(uint32_t now_ms, bool lab_inline) {
 }
 
 Ui::IdResult Ui::identify(uint32_t now_ms) {
-    ContentViewport viewport(layout_.content);
+    ContentViewport viewport(active_dest(), ctx_.content.w, ctx_.content.h);
     if (ports_busy()) {
         K2LOG("[TEST] Identify refused: test running\n");
         return IdResult::Refused;
@@ -1127,7 +1374,7 @@ Ui::IdResult Ui::identify(uint32_t now_ms) {
 
 void Ui::debug_fake_pdos(uint8_t n, uint32_t now_ms) {
     BudgetScope scope(*this);
-    ContentViewport viewport(layout_.content);
+    ContentViewport viewport(active_dest(), ctx_.content.w, ctx_.content.h);
     pd::set_fake(n);
     if (n == 0) {
         link_.clear_force();
@@ -1139,7 +1386,7 @@ void Ui::debug_fake_pdos(uint8_t n, uint32_t now_ms) {
 
 void Ui::debug_link(bool attached, uint32_t now_ms) {
     BudgetScope scope(*this);
-    ContentViewport viewport(layout_.content);
+    ContentViewport viewport(active_dest(), ctx_.content.w, ctx_.content.h);
     if (attached) link_.force_attached(now_ms);
     else link_.force_detached(now_ms);
     if (!attached) {
@@ -1155,7 +1402,7 @@ void Ui::debug_link(bool attached, uint32_t now_ms) {
 
 // The views an action reports into: the Connection page (status bar) and the saved-cables browser.
 void Ui::refresh_action_views(uint32_t now_ms) {
-    ContentViewport viewport(layout_.content);   // rotated layouts scale the logical content onto the panel
+    ContentViewport viewport(active_dest(), ctx_.content.w, ctx_.content.h);   // rotated layouts scale the logical content onto the panel
     if (menu() == Menu::Connection) top_as<ConnectionPage>().update(now_ms);
     else if (menu() == Menu::Emarker) top_as<EmarkerPage>().update(now_ms);
 }
@@ -1163,7 +1410,7 @@ void Ui::refresh_action_views(uint32_t now_ms) {
 bool Ui::open_connection(conn::Tab tab, bool spoof, uint32_t now_ms) {
     BudgetScope scope(*this);
     if (menu() == Menu::Connection && !spoof && connection_page().tab() == tab) {   // already on this place
-        ContentViewport viewport(layout_.content);
+        ContentViewport viewport(active_dest(), ctx_.content.w, ctx_.content.h);
         pump_paint(now_ms);
         return true;
     }
@@ -1180,7 +1427,7 @@ bool Ui::open_connection(conn::Tab tab, bool spoof, uint32_t now_ms) {
 bool Ui::land_rescanned(uint32_t now_ms) {
     BudgetScope scope(*this);
     if (!open_connection(conn::Tab::Source, false, now_ms)) return false;
-    ContentViewport viewport(layout_.content);
+    ContentViewport viewport(active_dest(), ctx_.content.w, ctx_.content.h);
     ConnectionPage &conn = top_as<ConnectionPage>();
     conn.say("Rescanned (rebooted)", now_ms);
     pump_paint(now_ms);
@@ -1190,7 +1437,7 @@ bool Ui::land_rescanned(uint32_t now_ms) {
 ChargerTestSession::RemoteStart Ui::charger_test_start(bool all_tests, uint32_t now_ms) {
     if (charger_test_.start_held()) return {ChargerTestSession::RemoteStart::Result::Busy};   // nothing moves, the page stays
     BudgetScope scope(*this);
-    ContentViewport viewport(layout_.content);
+    ContentViewport viewport(active_dest(), ctx_.content.w, ctx_.content.h);
     ctx_.now = now_ms;
     if (page_ != Page::ChargerTest || depth_) set_page(Page::ChargerTest, now_ms);   // the run lives on its page (leaving stops it)
     const auto r = charger_test_.remote_start(all_tests);
@@ -1200,7 +1447,7 @@ ChargerTestSession::RemoteStart Ui::charger_test_start(bool all_tests, uint32_t 
 
 ChargerTestSession::Stopped Ui::charger_test_stop(uint32_t now_ms) {
     BudgetScope scope(*this);
-    ContentViewport viewport(layout_.content);
+    ContentViewport viewport(active_dest(), ctx_.content.w, ctx_.content.h);
     ctx_.now = now_ms;
     const auto s = charger_test_.stop();
     if (s != ChargerTestSession::Stopped::Nothing) current().update(now_ms);
@@ -1230,23 +1477,48 @@ bool Ui::capture_needs_scratch() const {
     return m == Menu::Share || m == Menu::QrTest || m == Menu::PdStress;
 }
 
+void Ui::capture_state_begin() {
+    capture_state_ = true;
+    capture_toast_visible_ = ctx_.toast.drawn;
+    capture_paint_critical_ = fctrig::paint_critical();
+}
+
+void Ui::capture_state_end() {
+    capture_state_ = false;
+}
+
 void Ui::render_for_capture(uint32_t now_ms) {
     PaintBudget *const saved_budget = ctx_.budget;
+    uint32_t saved_slot[4], saved_opp[4];
+    const Toast saved_toast = ctx_.toast;
+    const bool toast_was_visible = capture_state_ ? capture_toast_visible_ : ctx_.toast.drawn;
+    const bool paint_critical = capture_state_ ? capture_paint_critical_ : fctrig::paint_critical();
+    for (int i = 0; i < 4; i++) { saved_slot[i] = slot_sig_[i]; saved_opp[i] = opp_sig_[i]; }
     ctx_.budget = nullptr;   // captures always render the complete frame atomically
     ctx_.rows.set_budget(nullptr);
     ctx_.now = now_ms;
-    ContentViewport viewport(layout_.content);
+    sync_surface();
+    if (ctx_.toast.active(now_ms)) ctx_.toast.drawn = false;
+    ctx_.toast.erase_pending = false;
+    ContentViewport viewport(active_dest(), ctx_.content.w, ctx_.content.h);
     rotation_notice_drawn_ = false;
     gfx_fill(ctx_.content, 0, 0, ctx_.content.w, ctx_.content.h, kBg);
-    current().invalidate();   // the clear erased everything the field caches remember
+    current().invalidate_for_capture();   // the clear erased everything the field caches remember
     ctx_.blank = true;
     current().draw_static();
     draw_panel();
+    draw_opp_rail();
     current().update(now_ms);
     ctx_.blank = false;
     draw_release_notice();
     if (hold_shown_) { hold_shown_ = false; draw_hold_card(hold_ms_); }   // the card is part of the screen
-    if (!hold_shown_) draw_rotation_notice(now_ms);
+    if (!hold_shown_) {
+        draw_rotation_notice(now_ms);
+        ctx_.toast.erase_pending = false;
+        if (toast_was_visible || (!capture_state_ && !paint_critical)) draw_toast_overlay(now_ms);
+    }
+    for (int i = 0; i < 4; i++) { slot_sig_[i] = saved_slot[i]; opp_sig_[i] = saved_opp[i]; }
+    ctx_.toast = saved_toast;
     ctx_.budget = saved_budget;
     ctx_.rows.set_budget(saved_budget);
 }
@@ -1256,7 +1528,8 @@ void Ui::resync(uint32_t now_ms) {
     ctx_.budget = nullptr;
     ctx_.rows.set_budget(nullptr);
     ctx_.now = now_ms;
-    ContentViewport viewport(layout_.content);
+    sync_surface();
+    ContentViewport viewport(active_dest(), ctx_.content.w, ctx_.content.h);
     rotation_notice_drawn_ = false;
     current().invalidate();
     pump_paint(now_ms);
@@ -1267,31 +1540,31 @@ void Ui::resync(uint32_t now_ms) {
 void Ui::refresh(uint32_t now_ms) {
     BudgetScope scope(*this);
     ctx_.now = now_ms;
-    ContentViewport viewport(layout_.content);
+    ContentViewport viewport(active_dest(), ctx_.content.w, ctx_.content.h);
     pump_paint(now_ms);
 }
 
 void Ui::draw_release_notice() {
     if (fc_release_.busy() && menu() != Menu::Trigger) {
         const bool unsafe = fc_release_.state() == trig::Release::State::Unsafe;
-        draw_footer(ctx_.content, unsafe ? FooterTone::Error : FooterTone::Caution,
-                    unsafe ? "Unsafe VBUS: unplug source" : "FC releasing; verify 5V");
+        draw_toast(ctx_.content, unsafe ? FooterTone::Error : FooterTone::Caution,
+                   unsafe ? "Unsafe VBUS: unplug source" : "FC releasing; verify 5V");
     } else if (loopguard::locked() && menu() != Menu::Trigger) {
-        draw_footer(ctx_.content, FooterTone::Caution, loopguard::kLockText);   // on whatever page is up, while the lock holds
+        draw_toast(ctx_.content, FooterTone::Caution, loopguard::kLockText);   // on whatever page is up, while the lock holds
     }
 #if K2_PDSTRESS
     else if (const char *line = pdstress_.footer(); line && menu() != Menu::Trigger && menu() != Menu::PdStress) {
-        draw_footer(ctx_.content, FooterTone::Info, line);   // the run's one line, on whatever page is up (its own page has its footer)
+        draw_toast(ctx_.content, FooterTone::Info, line);   // the run's one line, on whatever page is up
     }
 #endif
 #if K2_PDSPEC
     else if (const char *line = pdspec_.footer(); line && menu() != Menu::Trigger) {
-        draw_footer(ctx_.content, FooterTone::Info, line);
+        draw_toast(ctx_.content, FooterTone::Info, line);
     }
 #endif
     // A battery run in progress: the 5 x 5 accent dot (the charger test's running dot) in the content's top-right corner, on
     // every page but a QR code (it could land on the code).
-    if (battery_dot()) gfx_fill(ctx_.content, kBattDotX, 0, kBattDot, kBattDot, kFocus);
+    if (battery_dot()) gfx_fill(ctx_.content, static_cast<int16_t>(ctx_.content.w - kBattDot), 0, kBattDot, kBattDot, kFocus);
 }
 
 bool Ui::battery_dot() const {

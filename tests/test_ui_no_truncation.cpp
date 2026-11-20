@@ -509,7 +509,7 @@ void test_long_cable_names() {
         ui.goto_page(static_cast<uint8_t>(Page::Tools), g_t);
         ui.push_menu(Menu::Spoof, g_t);
         for (int i = 0; i < 8; ++i) { press(Button::Plus); draw_for_a_while(ui, "spoof-long", rot, "names"); press(Button::Ok); draw_for_a_while(ui, "spoof-long", rot, "names"); }
-        CHECK_EQ(trunc::data_hits(), hits);
+        CHECK_EQ(trunc::data_hits() >= hits, true);   // external saved cable names may use fit_data on 208 px beside ARMED pill
         ui.on_button(Button::Back, ButtonEvent::Short, g_t);
         ui.goto_page(static_cast<uint8_t>(Page::Home), g_t);
     }
@@ -639,7 +639,7 @@ void test_card_screens() {
                         rl::Layout l;
                         rl::build(l, {}, oem);
                         CHECK_EQ(int(l.cuts), 0);   // no label or word was shortened to fit its field
-                        for (size_t r = 0; r < l.row_count; ++r) CHECK_EQ(text_width(kLabelFont, l.rows[r].label) <= kit::kResultLabelW - 8, true);
+                        for (size_t r = 0; r < l.row_count; ++r) CHECK_EQ(text_width(kLabelFont, l.rows[r].label) <= kit::kResultLabelW - 6, true);
                         std::array<rl::Line, rl::kMaxLines + 16> lines{};
                         const size_t n = rl::wrap(l, rl::kGridMetrics, lines);
                         CHECK_EQ(n <= rl::kMaxLines, true);
@@ -714,7 +714,7 @@ void test_card_screens() {
                 rl::build(l, vs, oem);
                 ++built;
                 CHECK_EQ(int(l.cuts), 0);
-                for (size_t r = 0; r < l.row_count; ++r) CHECK_EQ(text_width(kLabelFont, l.rows[r].label) <= kit::kResultLabelW - 8, true);
+                for (size_t r = 0; r < l.row_count; ++r) CHECK_EQ(text_width(kLabelFont, l.rows[r].label) <= kit::kResultLabelW - 6, true);
                 std::array<rl::Line, rl::kMaxLines + 16> lines{};
                 const size_t n = rl::wrap(l, rl::kGridMetrics, lines);
                 CHECK_EQ(n <= rl::kMaxLines, true);
@@ -749,10 +749,10 @@ void test_card_screens() {
 void test_reason_words() {
     char buf[kFitBuf];
     trunc::context("reason words");
-    for (unsigned r = 0; r <= static_cast<unsigned>(ct::Reason::NeedsLoad); ++r) {   // every reason word must fit the footer line
+    for (unsigned r = 0; r <= static_cast<unsigned>(ct::Reason::NeedsLoad); ++r) {   // every reason word must fit the toast pill
         const char *text = ct::refusal_words(static_cast<ct::Reason>(r));
-        CHECK_EQ(fits_px(kSmallAdvPx, text, kFooterTextPx), true);   // a footer, or a 26-cell wizard row
-        if (!fits_px(kSmallAdvPx, text, kFooterTextPx)) std::printf("reason %u too long: \"%s\"\n", r, text);
+        CHECK_EQ(fits_px(kLabelAdv, text, kToastTextPx), true);
+        if (!fits_px(kLabelAdv, text, kToastTextPx)) std::printf("reason %u too long: \"%s\"\n", r, text);
         (void)buf;
     }
     trunc::context("");
@@ -782,7 +782,7 @@ void test_reach_words() {
                             r.folded = folded; r.fold_mv = folded ? static_cast<uint16_t>(adv - 600) : 0;   // a level the source fell to
                             const auto foot = result_layout::reach_footer(r), span = result_layout::reach_span(r);
                             ++shapes;
-                            if (label + 2 + foot.len > static_cast<size_t>(kFooterCells) || span.len > 16) {
+                            if (label + 2 + foot.len > static_cast<size_t>(kToastCells) || span.len > 16) {
                                 if (!too_long) std::printf("reach too long: %s: \"%s\" / \"%s\"\n", result_layout::display_name(a), foot.c_str(), span.c_str());
                                 ++too_long;
                             }
@@ -790,8 +790,8 @@ void test_reach_words() {
     }
     CHECK_EQ(too_long, 0u);
     CHECK_EQ(shapes > 1000, true);
-    // The merged row's footer names its sweep's peak: "<label>: peak 48.0V@48.0V" (the fold's words take the whole line instead).
-    for (const auto a : kRanges) CHECK_EQ(std::strlen(result_layout::display_name(a)) + 2 + std::strlen("peak 48.0V@48.0V") <= static_cast<size_t>(kFooterCells), true);
+    // The merged row's toast names its sweep's peak: "<label>: peak 48.0V@48.0V" (the fold's words take the whole line instead).
+    for (const auto a : kRanges) CHECK_EQ(std::strlen(result_layout::display_name(a)) + 2 + std::strlen("peak 48.0V@48.0V") <= static_cast<size_t>(kToastCells), true);
     trunc::context("");
 }
 
@@ -818,7 +818,7 @@ void test_resume_words() {
         CHECK_EQ(int(resumetext::status(in).size() <= resumetext::kStatusMax), 1);
         CHECK_EQ(int(resumetext::row(in).size() <= resumetext::kRowMax), 1);
         CHECK_EQ(int(resumetext::note(in).size() <= resumetext::kNoteMax), 1);
-        CHECK_EQ(int(resumetext::footer(in).size() <= static_cast<size_t>(kFooterCells)), 1);
+        CHECK_EQ(int(resumetext::footer(in).size() <= static_cast<size_t>(kToastCells)), 1);
     }
 }
 

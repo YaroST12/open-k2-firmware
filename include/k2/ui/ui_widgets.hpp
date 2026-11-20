@@ -91,17 +91,15 @@ void draw_range_trace(const Surface &s, int16_t x, int16_t y, int cols, int xs, 
                       const uint8_t *hi, uint8_t mark_a, uint16_t ca, uint8_t mark_b, uint16_t cb, uint16_t color,
                       uint16_t bg);
 
-// Footer: the band y 222..239, no icon. The tone is the band FILL (docs/UI_DESIGN.md section 6, item 9) and the
-// message is S16 text from x 4. The whole band is repainted, so a message change needs no clearing.
-constexpr int16_t kFooterY = 222;
+// Option B (Footer-Less + Floating Toast): no permanent bottom footer reservation (kFooterY = 240).
+// draw_footer() remains available for unit tests / legacy callers (hugs s.h - 18); transient notifications use draw_toast().
+constexpr int16_t kFooterY = 240;
 constexpr int16_t kFooterTextX = 8;
 constexpr int16_t kFooterBarW = 4;   // the tone bar at the left edge of an Ok / Caution fact line
 
-// The most cells a footer line holds: the text runs x 4..219 (27 cells of the 8 px font). Constant footer strings
-// are static_asserted against it; a longer runtime one is cut with "..." as the last resort and host builds report it
-// to the no-truncation gate (trunc.hpp).
-constexpr int kFooterCells = 27;
-constexpr int kFooterTextPx = kFooterCells * static_cast<int>(kSmallAdvPx);   // 216
+// The most cells a footer / toast line holds across 208 px (25 cells of 8 px S16, or 29 cells of 6 px S12).
+constexpr int kFooterCells = 25;
+constexpr int kFooterTextPx = kFooterCells * static_cast<int>(kSmallAdvPx);   // 200
 
 // Footer tone: Info is the neutral band (also for a plain hint or a count), Ok a good or active state, Caution an
 // amber warning, Error a red one. A tone is a fill plus its text colour, so the mapping lives in one table.
@@ -145,6 +143,46 @@ bool draw_footer_budgeted(const Surface &s, FooterTone tone, std::string_view te
 inline void draw_footer_cached(const Surface &s, FooterTone tone, std::string_view text, Elem &e K2_TRUNC_DECL) {
     draw_footer_budgeted(s, tone, text, e, nullptr K2_TRUNC_ARG);
 }
+
+// ---- Floating transient Toast pill (Option B: 16 px pill, bottom-center overlay, ~2.5 s auto-expiry) ----
+constexpr int16_t kToastH = 16;
+constexpr int16_t kToastMarginBottom = 4;
+constexpr uint32_t kToastDefaultMs = 2500;
+constexpr int kToastCells = (kTwinContentW - 24) / static_cast<int>(kLabelAdv);   // 30 cells of font 12 in 208 px
+constexpr int kToastTextPx = kToastCells * static_cast<int>(kLabelAdv);           // 180 px
+
+struct Toast {
+    char text[32] = {};
+    uint8_t len = 0;
+    FooterTone tone = FooterTone::Info;
+    uint32_t until_ms = 0;
+    bool drawn = false;
+    bool erase_pending = false;
+
+    void show(FooterTone t, std::string_view msg, uint32_t now_ms, uint32_t dwell_ms = kToastDefaultMs) {
+        const bool changed = t != tone || msg != view();
+        erase_pending = erase_pending || (drawn && changed);
+        tone = t;
+        len = static_cast<uint8_t>(msg.size() < sizeof(text) - 1 ? msg.size() : sizeof(text) - 1);
+        for (uint8_t i = 0; i < len; i++) text[i] = msg[i];
+        text[len] = '\0';
+        until_ms = now_ms + dwell_ms;
+        if (until_ms == 0) until_ms = 1;
+        drawn = false;
+    }
+    void clear() { erase_pending = erase_pending || drawn; len = 0; text[0] = '\0'; until_ms = 0; drawn = false; }
+    bool active(uint32_t now_ms) const {
+        return until_ms != 0 && len > 0 && static_cast<int32_t>(now_ms - until_ms) < 0;
+    }
+    bool expired(uint32_t now_ms) const {
+        return until_ms != 0 && static_cast<int32_t>(now_ms - until_ms) >= 0;
+    }
+    std::string_view view() const { return {text, len}; }
+};
+
+// Draws the 16 px floating toast pill centred near the bottom of `s` (s.h - kToastH - kToastMarginBottom).
+// Single-pass fill + 1 px tone border + S12 text; sets footer_error_shown() when tone == FooterTone::Error.
+void draw_toast(const Surface &s, FooterTone tone, std::string_view text K2_TRUNC_DECL);
 
 // ---- top chrome bar (micro-GUI phase 1): 20 px band + 1 px hairline at y kBarH-1 -----------------
 // Page name left; on every page except Home the right side carries the compact fmt3(V) x fmt3(A)

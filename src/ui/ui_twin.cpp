@@ -37,11 +37,11 @@ constexpr const char *kFooters[] = {
     "Asks the charger. Confirm", "Stopped. 5 V back", "Tool or test running", "Device inline: unplug it",
     "Power monitor not ready", "No charger to run against", "No twin yet. Learn one", "Twin learned", "Twin updated",
     "Already known", "Plug a device in alone", "Nothing to learn from", "Library full", "Twin not stored",
-    "Reading the device", "Device did not answer", "Deletes this twin for good", "Twin deleted", "Saved as another twin",
-    "Basis: its sink caps", "Basis: its sniffed Request", "No charger: no predictions", "Twin not deleted",
+    "Reading the device", "Device did not answer", "Deletes this twin", "Twin deleted", "Saved as another twin",
+    "Basis: its sink caps", "Basis: sniffed Request", "No charger: no predict", "Twin not deleted",
     "Live proof running",
     // A charger that has not offered: the wake (docs/UI_SYSTEM.md 9.9). The K2 presents Rd only after the confirm.
-    "Wakes the charger. Confirm", "Waking charger", "Charger has not offered", "Charger did not offer",
+    "Wakes charger. Confirm", "Waking charger", "Charger has not offered", "Charger did not offer",
     "Stopped. Charger released",
     // Learning a device inline: the K2 resets the link and asks the device itself (docs/DEVICE_TWIN.md section 9).
     "Resets the link. Confirm", "Resetting the link", "Asking the device", "Stopped. Link reset", "Learned. Contract changed",
@@ -49,7 +49,7 @@ constexpr const char *kFooters[] = {
     // The source Hard Resets on the first question: asking through this charger is not possible (docs/DEVICE_TWIN.md 9.1).
     "Charger resets when asked",
     // The same through a source that re-negotiates after the first question (a laptop port).
-    "Charger restarts when asked",
+    "Charger restarts on ask",
     // A device inline, no charger list: the Hard Reset makes the charger list again (docs/DEVICE_TWIN.md section 5).
     "Asking the charger again", "Charger offered again", "Reset not sent",
 };
@@ -58,7 +58,7 @@ constexpr int kFootIqArm = 29, kFootIqReset = 30, kFootIqAsk = 31, kFootIqStop =
               kFootIqOwn = 35, kFootNoPower = 36, kFootIqResets = 37, kFootIqRestarts = 38;
 constexpr int kFootAskAgain = 39, kFootOfferedAgain = 40, kFootResetNot = 41;
 constexpr const char *kNotes[] = {
-    "no charger to predict from", "reads a device alone on the K2", "live proof running", "removes it from the K2",
+    "no charger to predict from", "reads a device alone on K2", "live proof running", "removes it from the K2",
     "no contract, charger", "stopped", "charger sent no caps", "unsafe VBUS, stopped", "gets 100 of 240W, charger",
     "charger refused 20V", "no PS_RDY at 20V", "charger reset at 20V", "out of band 20.0V", "asks the charger for 20V5A",
     "asks for PPS 20.5V5A",
@@ -68,9 +68,9 @@ constexpr int kNoteWakes = 15, kNoteWaking = 16, kNoteSilent = 17;
 constexpr const char *kLimit[] = {"full power", "limit: device max", "limit: charger", "limit: cable 5A"};
 static_assert(all_fit(kFooters, kSmallAdvPx, kFooterCells * static_cast<int>(kSmallAdvPx)), "a Device twins footer is wider than the footer line");
 static_assert(all_fit(kNotes, kLabelAdv, kit::kNoteMaxPx), "a Device twins note is wider than the note box");
-static_assert(all_fit(kActionText, kSmallAdvPx, 224 - ListView::kBarW - kit::kTextX), "a Device twins action runs into the scroll lane");
-static_assert(fits_px(kSmallAdvPx, kLearnText, 224 - ListView::kBarW - kit::kTextX), "the Learn row text runs into the scroll lane");
-static_assert(fits_px(kSmallAdvPx, kAskAgainText, 224 - ListView::kBarW - kit::kTextX), "the Ask charger again row text runs into the scroll lane");
+static_assert(all_fit(kActionText, kSmallAdvPx, 208 - ListView::kBarW - kit::kTextX), "a Device twins action runs into the scroll lane");
+static_assert(fits_px(kSmallAdvPx, kLearnText, 208 - ListView::kBarW - kit::kTextX), "the Learn row text runs into the scroll lane");
+static_assert(fits_px(kSmallAdvPx, kAskAgainText, 208 - ListView::kBarW - kit::kTextX), "the Ask charger again row text runs into the scroll lane");
 static_assert(fits_px(kLabelAdv, kAskAgainNote, kit::kNoteMaxPx), "the Ask charger again note is wider than the note box");
 
 // The runner's verdict as the kit's verdict cell shows it: a charger that said no or never answered is a fail, a run the
@@ -89,12 +89,12 @@ constexpr uint32_t kLearnWaitMs = 15000;   // an alone-Identify: contract wait (
 
 // Detail geometry (docs/UI_SYSTEM.md 9.2): body lines from kBodyY, the action box under them.
 constexpr int16_t kNameH = 20, kGetsH = 26, kBarLineH = 6, kContractH = 20, kRuleH = 4;
-constexpr int16_t kLeft = 6, kRight = 218;
+constexpr int16_t kLeft = 6, kRight = 202;
 constexpr const char *kSourceWord = "Source";   // over the charger's side of the header
 constexpr int16_t kCellY = 156, kCellH = 64;     // the armed ActionCell / the proof box (the charger test's START box)
 // The source / device split: one 1 px hairline at kSplitX from the "gets" line down. Left of it the charger's facts (left-aligned,
-// x6..100), right of it the device's (right-aligned to x218, x110..218). A fact too wide for its half drops to font 12.
-constexpr int16_t kSplitX = 104, kLeftRoom = kSplitX - 4 - kLeft, kRightX = kSplitX + 6, kRightRoom = kRight - kRightX;
+// x6..98), right of it the device's (right-aligned to x202, x108..202). A fact too wide for its half drops to font 12.
+constexpr int16_t kSplitX = 102, kLeftRoom = kSplitX - 4 - kLeft, kRightX = kSplitX + 6, kRightRoom = kRight - kRightX;
 
 void put_level(StrBufBase &b, uint32_t milli, char unit) {
     char t[12];
@@ -1148,7 +1148,8 @@ void TwinPage::update(uint32_t now_ms) {
         ctx_.rows.draw(now_ms, ctx_.budget);
     }
     compose_footer();
-    draw_footer_cached(ctx_.content, foot_tone_, foot_text_.view(), foot_);
+    if (foot_tone_ != FooterTone::Info && !foot_text_.view().empty())
+        draw_toast(ctx_.content, foot_tone_, foot_text_.view());
 }
 
 }  // namespace k2

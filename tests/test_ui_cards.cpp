@@ -117,7 +117,7 @@ static void test_text() {
             CHECK_EQ(int(sheet.row[i].below), 1);
         }
     CHECK_EQ(int(noted), 1);
-    CHECK_EQ(int(sheet.height() <= 222 - 60), 1);
+    CHECK_EQ(int(sheet.height() <= kFooterY - 60), 1);
 
     // The PD row's cause: the reason when it fits 136 px, else "see detail" (the group screen has it in full; nothing is cut).
     StrBuf<24> why;
@@ -176,7 +176,7 @@ static void test_text() {
     CHECK_STR(t.view().data(), "run 3 boot 4 self-pwr r2");
     c.runs = 99; c.boots = 99999; c.resumed = 16;
     t.clear(); cards_stats_text(c, t);
-    CHECK_STR(t.view().data(), "run 99 boot 99999 self r16");
+    CHECK_STR(t.view().data(), "run 99 boot 99999");
     CHECK_EQ(t.view().size() <= static_cast<size_t>(kFooterCells), 1);
     c.runs = 3; c.boots = 4; c.resumed = 0; c.cable.flags = 0;
     c.cable.flags = rc::kCableReattach;   // the planned re-attach says so in place of the firmware, without a resume count
@@ -185,21 +185,21 @@ static void test_text() {
     CHECK_EQ(t.view().size() <= static_cast<size_t>(kFooterCells), 1);
     c.runs = 99; c.boots = 99999;   // the words shorten before anything is cut
     t.clear(); cards_stats_text(c, t);
-    CHECK_STR(t.view().data(), "run 99 boot 99999 re-attach");
+    CHECK_STR(t.view().data(), "run 99 boot 99999 reatt");
     c.runs = 3; c.boots = 4; c.cable.flags = 0;
 
     // A card the charger was tested on again with the same result: how often and when it last was, the fullest form that fits.
     c.times = 3; c.last_boots = 9;
     t.clear(); cards_stats_text(c, t);
-    CHECK_STR(t.view().data(), "run 3 boot 4 x3 last boot 9");
+    CHECK_STR(t.view().data(), "run 3 boot 4 x3 b9");
     CHECK_EQ(t.view().size() <= static_cast<size_t>(kFooterCells), 1);
     c.runs = 99; c.boots = 99999; c.times = 99; c.last_boots = 9999; c.resumed = 16;
     t.clear(); cards_stats_text(c, t);
-    CHECK_STR(t.view().data(), "run 99 boot 99999 x99 b9999");
+    CHECK_STR(t.view().data(), "run 99 boot 99999 x99 r16");
     CHECK_EQ(t.view().size() <= static_cast<size_t>(kFooterCells), 1);
     c.runs = 255; c.times = 255; c.last_boots = 65535;
     t.clear(); cards_stats_text(c, t);
-    CHECK_STR(t.view().data(), "run 255 boot 99999 x255 r16");   // the shortest form leaves room for the resume count
+    CHECK_STR(t.view().data(), "run 255 boot 99999 x255");   // 25 cells: the resume count no longer fits
     CHECK_EQ(t.view().size() <= static_cast<size_t>(kFooterCells), 1);
     // The open list row's note: the boot of the latest repeat, inside 30 cells even with the longest name.
     rc::Card d = make_card(0x1A2B3C4D, "Anker 735");
@@ -344,7 +344,7 @@ static void test_sheet_wrap() {
 // Every group and range sheet over every reason, verdict and engine detail code the firmware can store: each row has its lines
 // (nothing was dropped as unwrappable) and the whole sheet stands above the footer (the last rows drop first, never overlap it).
 static void test_sheet_never_overflows() {
-    constexpr int kSheetRoom = 222 - 60;   // the footer top minus the sheet top
+    constexpr int kSheetRoom = kFooterY - 60;   // the surface bottom (no footer) minus the sheet top
     auto check = [&](const rc::Card &c, bool range, unsigned idx) {
         CardSheet s;
         cards_sheet(c, range, idx, s);
@@ -411,14 +411,14 @@ static void test_sheet_ufcs_modes() {
     cards_sheet(wide, false, kUfcs, w);
     for (unsigned i = 0; i < w.n; ++i) CHECK(w.row[i].lines > 0 || w.row[i].verdict);
     CHECK(rc::ufcs_modes(wide) == 4u);
-    CHECK_EQ(w.height() <= 222 - 60, true);
+    CHECK_EQ(w.height() <= kFooterY - 60, true);
 
     // The cause rows come before the modes; with all four modes and a failed group the last mode drops rather than overflowing.
     rc::Card bad = wide;
     bad.group[kUfcs] = {rc::GV::Fail, 9000, 127, uint8_t(ct::Reason::Capped), 12000};
     CardSheet b;
     cards_sheet(bad, false, kUfcs, b);
-    CHECK_EQ(b.height() <= 222 - 60, true);
+    CHECK_EQ(b.height() <= kFooterY - 60, true);
     CHECK(b.n <= unsigned(kSheetRows));
     for (unsigned i = 0; i < b.n; ++i) CHECK(b.row[i].lines > 0 || b.row[i].verdict);
 #undef CHECK
@@ -496,17 +496,17 @@ static void test_mi_fact_text() {
     m.mode[2] = {0, 0xC8DC3278u, 200, 100, uint8_t(ct::Verdict::Skip), 0};
     m.mode[3] = {0, 0xC8DC3278u, 200, 60, uint8_t(ct::Verdict::Fail), 0};
     cards_mi_text(m, s);
-    CHECK_STR(s.view().data(), "55W\x01 66W- 100W- 60W\x02");
-    CHECK_EQ(marked_width(kLabelFont, s.view()) <= 214 - 80, 1);
+    CHECK_STR(s.view().data(), "4: 1\x01 1\x02 2 skip");
+    CHECK_EQ(marked_width(kLabelFont, s.view()) <= 202 - 80, 1);
     // the worst case: four tested modes at three-digit watts, every one a mark; the watts no longer fit, the counts do
     for (unsigned i = 0; i < 4; ++i) m.mode[i] = {0, 0xC9903278u, 200, 120, uint8_t(i == 3 ? ct::Verdict::Fail : ct::Verdict::Pass), 0};
     cards_mi_text(m, s);
     CHECK_STR(s.view().data(), "4 modes: 3\x01 1\x02");
-    CHECK_EQ(marked_width(kLabelFont, s.view()) <= 214 - 80, 1);
+    CHECK_EQ(marked_width(kLabelFont, s.view()) <= 202 - 80, 1);
     m.mode[2].verdict = uint8_t(ct::Verdict::Skip);
     cards_mi_text(m, s);
-    CHECK_STR(s.view().data(), "4 modes: 2\x01 1\x02 1 skip");
-    CHECK_EQ(marked_width(kLabelFont, s.view()) <= 214 - 80, 1);
+    CHECK_STR(s.view().data(), "4: 2\x01 1\x02 1 skip");
+    CHECK_EQ(marked_width(kLabelFont, s.view()) <= 202 - 80, 1);
 }
 
 static void test_dump_renders() {

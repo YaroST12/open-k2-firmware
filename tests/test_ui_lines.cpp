@@ -10,16 +10,16 @@ using namespace k2;
 using fastcharge::Protocol;
 
 static void test_bars() {
-    CHECK_EQ(kLinesBarW, 112);
+    CHECK_EQ(kLinesBarW, 104);
     CHECK_EQ(lines_bar_px(0), 0);
     CHECK_EQ(lines_bar_px(-50), 0);
-    CHECK_EQ(lines_bar_px(600), 20);        // mockup: D+ 0.60 V fills 20 px
-    CHECK_EQ(lines_bar_px(1680), 57);       // CC1 1.68 V
-    CHECK_EQ(lines_bar_px(3300), 112);
-    CHECK_EQ(lines_bar_px(5000), 112);      // clamps
+    CHECK_EQ(lines_bar_px(600), 18);        // D+ 0.60 V fills 18 px on 104 px track
+    CHECK_EQ(lines_bar_px(1680), 52);       // CC1 1.68 V
+    CHECK_EQ(lines_bar_px(3300), 104);
+    CHECK_EQ(lines_bar_px(5000), 104);      // clamps
     CHECK_EQ(lines_bar_px(10) >= 2, 1);     // a visible stub for any positive reading
-    CHECK_EQ(lines_tick_px(400), 13);       // x 117 in the mockup = 104 + 13
-    CHECK_EQ(lines_tick_px(2000), 67);      // x 171
+    CHECK_EQ(lines_tick_px(400), 12);       // 0.4 V tick on 104 px track
+    CHECK_EQ(lines_tick_px(2000), 63);      // 2.0 V tick on 104 px track
     // The bars are monotonic.
     int prev = 0;
     for (int mv = 0; mv <= 3400; mv += 10) { CHECK_EQ(lines_bar_px(mv) >= prev, 1); prev = lines_bar_px(mv); }

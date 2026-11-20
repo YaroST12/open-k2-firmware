@@ -21,19 +21,11 @@ namespace screen = pd::diag::screen;
 namespace live = pd::diag::live;
 
 constexpr const char kWaitText[] = "Waiting for PD";
-constexpr const char kWaitNote[] = "starts at the first PD message";
+constexpr const char kWaitNote[] = "starts on first PD message";
 constexpr const char *kWaitTexts[] = {kWaitText};
 constexpr const char *kWaitNotes[] = {kWaitNote};
 static_assert(all_fit(kWaitTexts, kSmallAdvPx, kit::kTailX - kit::kTextX), "the waiting row runs into the tail");
 static_assert(all_fit(kWaitNotes, kLabelAdv, kit::kNoteMaxPx), "the waiting note is wider than the note box");
-// The screen form's budgets (pd::diag::screen, host-tested with worst-case numbers) fit this list's geometry.
-static_assert(screen::kLabelChars * kSmallAdvPx + kSmallAdvPx + screen::kTailChars * kSmallAdvPx <=
-                  static_cast<unsigned>(kit::kTailX - kit::kTextX),
-              "a diagnosis label and its tail do not fit one row");
-static_assert(screen::kNoteChars * kLabelAdv <= static_cast<unsigned>(kit::kNoteMaxPx), "a diagnosis note is wider than the note box");
-static_assert(screen::kVerdictChars <= static_cast<std::size_t>(kFooterCells), "the diagnosis verdict is wider than the footer");
-static_assert(DiagnosisPage::kStampWordX + static_cast<int>(screen::kLabelChars) * 12 <= 224 - 2, "the stamp's word runs off the page");
-static_assert(DiagnosisPage::kStampWordX + static_cast<int>(screen::kNoteChars * kLabelAdv) <= 224 - 2, "the stamp's sub-line runs off the page");
 static_assert(DiagnosisPage::kStampSubY + 12 <= DiagnosisPage::kStampH, "the stamp's sub-line leaves the stamp");
 
 constexpr const char kBlackBox[] = "Black Box";

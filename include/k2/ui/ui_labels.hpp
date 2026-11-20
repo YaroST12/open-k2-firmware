@@ -86,8 +86,6 @@ namespace sl {
     X(Prev, "Prev", "", "", false)                                                                                     \
     X(Hero, "", "Hero", "", false)                                                                                     \
     X(BackDel, "Back", "Delete", "Del", false)                                                                         \
-    X(BackActs, "Back", "Acts", "", false)                                                                             \
-    X(BackInfo, "Back", "Info", "", false)                                                                             \
     /* OK verbs (kOkVerbs) */                                                                                          \
     X(Open, "Open", "", "", false)                                                                                     \
     X(Toggle, "Toggle", "", "", false)                                                                                 \

@@ -18,7 +18,7 @@ struct WalkDest {
 };
 
 constexpr WalkDest kWalkDests[] = {
-    {"Home", 0, true}, {"Detail", 1, true}, {"Charger", 2, true}, {"Lines", 3, true}, {"Tools", 4, true}, {"Settings", 5, true},
+    {"Home", 0, true}, {"Detail", 1, true}, {"Charger", 2, true}, {"Lines", 3, false}, {"Tools", 4, true}, {"Settings", 5, true},
     {"Graphs", static_cast<uint8_t>(Page::Graphs), true},
     {"Ripple", static_cast<uint8_t>(Page::Ripple), false},
     {"Connection", kPdPage, false}, {"Diag", kDiagPage, true},
@@ -27,7 +27,7 @@ constexpr WalkDest kWalkDests[] = {
     {"CableR", kMenuPageBase + static_cast<uint8_t>(Menu::CableR), false},
     {"BlackBox", kMenuPageBase + static_cast<uint8_t>(Menu::BlackBox), false},
     {"Spoof", kMenuPageBase + static_cast<uint8_t>(Menu::Spoof), false},
-    {"UsbLink", kMenuPageBase + static_cast<uint8_t>(Menu::UsbLink), true},
+    {"UsbLink", kMenuPageBase + static_cast<uint8_t>(Menu::UsbLink), false},
     {"Cards", kMenuPageBase + static_cast<uint8_t>(Menu::Cards), false},
 };
 constexpr unsigned kWalkN = sizeof kWalkDests / sizeof kWalkDests[0];

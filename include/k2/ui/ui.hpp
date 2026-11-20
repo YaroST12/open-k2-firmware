@@ -250,6 +250,8 @@ public:
     void sample() { current().sample(); }
     // True when painting the active page leases scratch::arena(), so capture must keep its strip on stack.
     bool capture_needs_scratch() const;
+    void capture_state_begin();
+    void capture_state_end();
     void render_for_capture(uint32_t now_ms);
     void resync(uint32_t now_ms);
     // Paints the current page now from its own change signatures, without invalidating them: a page
@@ -418,6 +420,7 @@ public:
     // Read-only view of the Connection page (tab, pop-up rows, facts) for the host tests.
     // It exists only while Menu::Connection is on the stack.
     const ConnectionPage &connection_page() const { return *find<ConnectionPage>(Menu::Connection); }
+    kit::OppRailSpec current_opp_rail() const { return current().opp_rail(); }
     // The page arena (host tests): how many pages are alive and how many bytes of the arena they use.
     std::size_t live_pages() const { return pages_.depth(); }
     std::size_t page_bytes() const { return pages_.used(); }
@@ -453,13 +456,22 @@ private:
     void paint_incoming(uint32_t now_ms, uint32_t t0, bool blank);
     // Full repaint of the current page after a real lcd::fill (init, rotation change), where the screen is already blank.
     void redraw(uint32_t now_ms);
+    bool uses_opp_rail() const { return !current().hides_strip() && (depth_ > 0 || page_ != Page::Home); }
+    const PageIf &current() const { return *pages_.at(depth_); }
+    Rect active_dest() const { return uses_opp_rail() ? layout_.twin_content : layout_.content; }
+    void sync_surface();
     void draw_panel();
-    void draw_release_notice();   // the footer notes every page shares, and the battery recorder's running dot
+    void draw_opp_rail();
+    void sync_opp_rail();
+    void draw_opp_slot(unsigned slot);
+    void draw_toast_overlay(uint32_t now_ms);
+    void draw_release_notice();   // the toast notices every page shares, and the battery recorder's running dot
     bool battery_dot() const;     // a battery run is in progress and the page may carry its dot
-    static constexpr int16_t kBattDot = 5, kBattDotX = 224 - kBattDot;
+    static constexpr int16_t kBattDot = 5;
     void sync_panel();   // redraws the slots whose label changed since they were drawn
     uint32_t slot_sig(unsigned slot);
     uint32_t slot_sig_[4] K2_BSS_ZERO;
+    uint32_t opp_sig_[4] K2_BSS_ZERO;
     void draw_slot(unsigned slot);
     void log_timing(uint32_t now_ms);
 
@@ -583,10 +595,16 @@ private:
     bool clear_pending_ K2_BSS_INIT(false);
     bool clear_full_lcd_ K2_BSS_INIT(false);
     bool chrome_gaps_pending_ K2_BSS_INIT(false);
+    bool toast_clear_pending_ K2_BSS_INIT(false);
+    bool capture_state_ K2_BSS_INIT(false);
+    bool capture_toast_visible_ K2_BSS_INIT(false);
+    bool capture_paint_critical_ K2_BSS_INIT(false);
     bool static_pending_ K2_BSS_INIT(false);
     bool panel_pending_ K2_BSS_INIT(false);
+    bool opp_pending_ K2_BSS_INIT(false);
     bool timing_in_flight_ K2_BSS_INIT(false);
     uint8_t panel_mask_ K2_BSS_INIT(0);
+    uint8_t opp_mask_ K2_BSS_INIT(0);
 };
 
 }  // namespace k2

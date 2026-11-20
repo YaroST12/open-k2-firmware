@@ -6,11 +6,11 @@
 
 namespace k2 {
 
-// Map the pages' established 224x240 coordinates into the rotated content rectangle.
+// Map the pages' logical coordinates (208x240 twin-rail or 224x240 Home) into the rotated content rectangle.
 // Each source row is consumed once; only one output row is retained, never a framebuffer. Main loop only.
 class ContentViewport {
 public:
-    explicit ContentViewport(Rect destination);
+    explicit ContentViewport(Rect destination, int16_t logical_w = 224, int16_t logical_h = 240);
     ~ContentViewport();
     ContentViewport(const ContentViewport&) = delete;
     ContentViewport& operator=(const ContentViewport&) = delete;
@@ -51,7 +51,10 @@ private:
     void flush();
 
     Rect destination_;
+    int16_t logical_w_ = 224, logical_h_ = 240;
     const lcd::Sink* previous_ = nullptr;
+    const lcd::Sink* saved_sink_ = nullptr;
+    ContentViewport* prev_active_ = nullptr;
     bool owns_ = false;
     bool has_band_ = false;
     uint16_t x0_ = 0, y0_ = 0, width_ = 0, column_ = 0, row_ = 0;

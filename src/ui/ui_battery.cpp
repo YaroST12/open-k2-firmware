@@ -24,7 +24,7 @@ constexpr uint32_t kNoteMs = 2500;   // a refusal holds the footer this long
 
 // The focused rows' notes (font 12, <= kNoteMaxPx).
 constexpr const char *kNotes[] = {
-    "charger in, bank on the output",    // StartCharge
+    "charger in, bank on output",        // StartCharge
     "bank on output, load on input",     // StartDischarge, same port
     "bank on input, load on output",     // StartDischarge, moved
     "charge, then discharge",            // StartRoundTrip
@@ -33,7 +33,7 @@ constexpr const char *kNotes[] = {
     "ends the run here",                 // Finish
     "the bank stays on the output",      // Wiring, same port
     "the bank moves to the input",       // Wiring, moved
-    "a phase ends under this current",   // EndMa
+    "phase ends under this current",     // EndMa
     "for this long",                     // EndS
     "the newest runs kept on flash",     // Runs
     "the run as a QR code",              // Share
@@ -47,24 +47,24 @@ static_assert(all_fit(kNotes, kLabelAdv, kit::kNoteMaxPx), "a Battery note is wi
 constexpr const char *kBareRows[] = {"Start round trip", "Start discharge", "End discharge", "Finish run", "Share as QR",
                                      "No saved runs"};
 static_assert(all_fit(kBareRows, kSmallAdvPx, kit::kTailX - kit::kTextX), "a Battery row runs into the tail");
-constexpr const char *kTailRows[] = {"Efficiency", "End below", "End after", "#999 Round trip"};
+constexpr const char *kTailRows[] = {"Efficiency", "End below", "End after", "#999 Dischg", "#999 Round"};
 static_assert(all_fit(kTailRows, kSmallAdvPx, kit::kTailX - kit::kTextX - kit::kTailGap - 7 * static_cast<int>(kSmallAdvPx)),
               "a Battery row and its tail do not fit one row");
 
 const char *mode_name(bt::Mode m) {
     switch (m) {
     case bt::Mode::Charge: return "Charge";
-    case bt::Mode::Discharge: return "Discharge";
+    case bt::Mode::Discharge: return "Dischg";
     case bt::Mode::RoundTrip: break;
     }
-    return "Round trip";
+    return "Round";
 }
 
 bool live_any() { return bt::hw::service().rec().state() != bt::State::Idle; }
 
 const char *armed_text(Act a, const view::Shown &s) {
-    if (a == Act::Finish) return "OK again ends the run";
-    return s.kind == bt::Kind::Charge ? "OK again ends the charge" : "OK again ends the discharge";
+    if (a == Act::Finish) return "Press again to end run";
+    return s.kind == bt::Kind::Charge ? "Press again: end charge" : "Press again: end dischg";
 }
 }  // namespace
 
@@ -288,7 +288,8 @@ void BatteryPage::update(uint32_t now_ms) {
     } else {
         tone = view::footer(shown_, bt::hw::monitor_online(), sv.write_failed(), sv.rec().dirty(), f);
     }
-    draw_footer_cached(ctx_.content, tone, f.view(), foot_);
+    if (tone != FooterTone::Info && !f.view().empty())
+        draw_toast(ctx_.content, tone, f.view());
 }
 
 // ---- events ---------------------------------------------------------------------------------------------------------------

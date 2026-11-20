@@ -358,10 +358,10 @@ static void test_source_tab_leaves_waiting_after_timeout() {
     CHECK_EQ(int(ui.link().waiting()), 0);             // the timeout ended the wait
 }
 
-// Place-page list geometry (ui_connection_page.cpp): rows from kit::kPlaceListY (68), pitch 20, value at x 64, 4 px scroll lane at right.
+// Place-page list geometry (Option B 208x240, x offset +16 for left OppRail in rot 0): rows from kit::kPlaceListY (46), pitch 20, value at logical x 52 (panel x 68).
 static bool place_row_value_is(int idx, const char *text, uint16_t colour = kText) {
-    constexpr int kValX = 64, kPitch = 20, kRowY0 = kit::kPlaceListY;
-    constexpr int W = 220 - kValX;
+    constexpr int kValX = kOppRailThickness + 52, kPitch = 20, kRowY0 = kit::kPlaceListY;
+    constexpr int W = 204 - 52;
     const int y = kRowY0 + idx * kPitch;
     const int vy = y + kit::row_text_y(kPitch, 16);
     uint16_t saved[W * (kPitch - 1)];
@@ -833,31 +833,30 @@ static void test_survey_nothing_active_before_refresh() {
     CHECK_EQ(g_stub.survey_refreshes, 0);
 }
 
-// Refresh (OK with no action row focused on the Charger place) starts the survey.
+// Refresh ("Read again", last item on Charger [Actions]) starts the survey.
 static void test_survey_refresh_item_starts_it() {
     Ui &ui = fresh_ui();
     uint32_t t = 20000;
     attach_charger(ui, t);
     show(ui, 0, t);
     g_stub.rescan_result = rescan::Result::Asked;
-    while (cp(ui).action_row() >= 0) ui.on_button(Button::Minus, ButtonEvent::Short, t += 100);
-    ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);
+    ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);   // Info -> Actions
+    for (int i = 0; i < 10; i++) ui.on_button(Button::Plus, ButtonEvent::Short, t += 10);   // last row = Read again
+    ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);   // activate Read again
     CHECK_EQ(g_stub.survey_refreshes, 1);
     CHECK_EQ(int(g_stub.survey_last), int(rescan::Result::Asked));
 }
 
-// The status bar: switching hint on paged Info at rest, "Reading r/p" during an active survey run.
+// The status line: live survey state at rest and "Reading r/p" during an active survey run.
 static void test_survey_status_line() {
     Ui &ui = fresh_ui();
     uint32_t t = 20000;
     attach_charger(ui, t);
     show(ui, 0, t);
-    while (cp(ui).action_row() >= 0) ui.on_button(Button::Minus, ButtonEvent::Short, t += 100);   // unfocus action row so footer shows Info status
     settle(ui, t);
-    CHECK_STR(std::string(cp(ui).status_line()).c_str(), "Hold Back for Actions");
-    show(ui, 1, t);                                                 // Cable tab: Info page shows switching hint too
+    CHECK_STR(std::string(cp(ui).status_line()).c_str(), "Source caps not read yet");
+    show(ui, 1, t);
     show(ui, 0, t);
-    while (cp(ui).action_row() >= 0) ui.on_button(Button::Minus, ButtonEvent::Short, t += 100);
     g_stub.survey.start(kSurveyCtx, t);
     settle(ui, t);
     char want[40];
@@ -867,10 +866,10 @@ static void test_survey_status_line() {
     settle(ui, t);
     std::snprintf(want, sizeof want, "Reading %u/%u", g_stub.survey.resolved(), g_stub.survey.planned());
     CHECK_STR(std::string(cp(ui).status_line()).c_str(), want);
-    g_stub.survey.abandon();                                        // the run is over: Info footer returns to switching hint
+    g_stub.survey.abandon();
     settle(ui, t);
     CHECK(g_stub.survey.ran());
-    CHECK_STR(std::string(cp(ui).status_line()).c_str(), "Hold Back for Actions");
+    CHECK_STR(std::string(cp(ui).status_line()).c_str(), "Read: 1 got, 7 no answer");
 }
 
 // The Charger place's survey rows say what each field is and show the answers once they are in.
@@ -1176,9 +1175,9 @@ static void test_single_tools_lock_one_tab() {
     CHECK_EQ(cp(ui).has_pages(), true);
     CHECK_EQ(cp(ui).actions_mode(), false);                            // opens on Info page
     CHECK_EQ(cp(ui).action_row(), -1);
-    CHECK_STR(ok_label(ui), "Read");
+    CHECK_STR(ok_label(ui), "Actions");
     CHECK_STR(ui.labels().b[static_cast<int>(Button::Back)].shrt, "Back");
-    CHECK_STR(ui.labels().b[static_cast<int>(Button::Back)].lng, "Acts");
+    CHECK_STR(ui.labels().b[static_cast<int>(Button::Back)].lng, "");
     CHECK_STR(ui.labels().b[static_cast<int>(Button::Minus)].shrt, "Up");
     CHECK_STR(ui.labels().b[static_cast<int>(Button::Minus)].lng, "");
     CHECK_STR(ui.labels().b[static_cast<int>(Button::Plus)].shrt, "Dn");
@@ -1186,27 +1185,28 @@ static void test_single_tools_lock_one_tab() {
     CHECK_EQ(label_violation(ui.labels()) == nullptr, true);
     ui.on_button(Button::Plus, ButtonEvent::Long, 20075);              // Long Plus does nothing (hardware Rd safety)
     CHECK_EQ(cp(ui).actions_mode(), false);
-    ui.on_button(Button::Back, ButtonEvent::Long, 20080);              // Long Back -> Actions sub-page
+    ui.on_button(Button::Ok, ButtonEvent::Short, 20080);               // Short OK -> Actions sub-page
     ui.tick(20090);
     CHECK_EQ(cp(ui).actions_mode(), true);
-    CHECK_STR(ui.labels().b[static_cast<int>(Button::Back)].lng, "Info");
-    CHECK_EQ(cp(ui).action_row(), 0);                                  // the first row: Read e-marker
+    CHECK_STR(ui.labels().b[static_cast<int>(Button::Back)].shrt, "Back");
+    CHECK_STR(ui.labels().b[static_cast<int>(Button::Back)].lng, "");
+    CHECK_EQ(cp(ui).action_row(), 0);                                  // row 0: Read e-marker
     CHECK_STR(ok_label(ui), "Read");
     ui.on_button(Button::Plus, ButtonEvent::Short, 20100);             // Dn: Save cable
     CHECK_EQ(int(cp(ui).tab()), int(conn::Tab::Cable));                // never a tab switch
     CHECK_EQ(cp(ui).action_row(), 1);
     CHECK_STR(ok_label(ui), "Save");
     for (int i = 0; i < 10; i++) ui.on_button(Button::Plus, ButtonEvent::Short, 20150 + i * 10);
-    CHECK_EQ(cp(ui).action_row(), cp(ui).item_count() - 2);            // stops on the last Cable action row
+    CHECK_EQ(cp(ui).action_row(), cp(ui).act_count() - 1);             // stops on the last Cable action row
     CHECK_STR(ok_label(ui), "Open");
     for (int i = 0; i < 10; i++) ui.on_button(Button::Minus, ButtonEvent::Short, 20300 + i * 10);
     CHECK_EQ(cp(ui).action_row(), 0);                                  // Actions page: clamped on first action row (Read e-marker)
     CHECK_STR(ok_label(ui), "Read");
-    ui.on_button(Button::Back, ButtonEvent::Long, 20450);              // Long Back -> back to Info sub-page
+    ui.on_button(Button::Back, ButtonEvent::Short, 20450);             // Short Back -> back to Info sub-page
     ui.tick(20460);
     CHECK_EQ(cp(ui).actions_mode(), false);
     CHECK_EQ(cp(ui).action_row(), -1);
-    ui.on_button(Button::Back, ButtonEvent::Short, 20500);
+    ui.on_button(Button::Back, ButtonEvent::Short, 20500);             // Short Back on Info -> back to Bench
     CHECK_EQ(int(ui.menu_depth()), 0);
     CHECK_EQ(int(ui.page()), int(Page::Tools));
     CHECK_EQ(ui.context().keep.bench_sel, int(bench::Place::Cable));    // the Bench list, focused on the place just left
@@ -1215,14 +1215,14 @@ static void test_single_tools_lock_one_tab() {
     ui.tick(21050);
     CHECK_EQ(cp(ui).has_pages(), true);
     CHECK_EQ(cp(ui).actions_mode(), false);
-    CHECK_STR(ok_label(ui), "Refresh");                                // Read again
-    ui.on_button(Button::Back, ButtonEvent::Long, 21055);
+    CHECK_STR(ok_label(ui), "Actions");
+    ui.on_button(Button::Ok, ButtonEvent::Short, 21055);               // Short OK -> Actions
     CHECK_EQ(cp(ui).actions_mode(), true);
     CHECK_EQ(cp(ui).action_row(), 0);
-    CHECK_STR(ok_label(ui), "Open");                                   // Test charger
+    CHECK_STR(ok_label(ui), "Open");                                   // row 0 = Test charger
     ui.on_button(Button::Minus, ButtonEvent::Short, 21060);
     CHECK_EQ(cp(ui).action_row(), 0);                                  // Actions page: stays clamped on row 0
-    CHECK_STR(ok_label(ui), "Open");                                   // still Test charger
+    CHECK_STR(ok_label(ui), "Open");
     ui.open_place(bench::Place::Device, 21100);                        // a new place, not a tab switch
     ui.tick(21150);
     CHECK_EQ(int(cp(ui).tab()), int(conn::Tab::Sink));
@@ -1232,11 +1232,13 @@ static void test_single_tools_lock_one_tab() {
     CHECK_EQ(cp(ui).has_pages(), true);
     CHECK_EQ(cp(ui).actions_mode(), false);
     CHECK_EQ(cp(ui).action_row(), -1);
-    CHECK_STR(ok_label(ui), "Ask");
-    ui.on_button(Button::Back, ButtonEvent::Long, 21160);
+    CHECK_STR(ok_label(ui), "Actions");
+    ui.on_button(Button::Ok, ButtonEvent::Short, 21160);
     CHECK_EQ(cp(ui).actions_mode(), true);
-    CHECK_EQ(cp(ui).action_row(), 0);                                  // Twins
-    CHECK_STR(ok_label(ui), "Open");
+    CHECK_EQ(cp(ui).action_row(), 0);                                  // row 0: Ask device
+    CHECK_STR(ok_label(ui), "Ask");
+    ui.on_button(Button::Back, ButtonEvent::Short, 21180);             // Short Back on Actions -> returns to Info
+    CHECK_EQ(cp(ui).actions_mode(), false);
 #else
     CHECK_EQ(cp(ui).item_count(), 1);                                  // no action rows: OK always asks
     CHECK_EQ(cp(ui).has_pages(), false);
@@ -1267,10 +1269,10 @@ static void test_tools_rows_open_single_tools() {
         ui.on_button(Button::Back, ButtonEvent::Short, 20600 + k * 1000);
         CHECK_EQ(int(ui.menu_depth()), 0);
     }
-    ui.context().keep.place_sel[static_cast<int>(bench::Place::Charger)] = 1;   // Request voltage
+    ui.context().keep.place_sel[static_cast<int>(bench::Place::Charger)] = 1;   // Request voltage (action_row 1 -> item 2)
     ui.open_place(bench::Place::Charger, 24000);
     CHECK_EQ(cp(ui).actions_mode(), false);
-    ui.on_button(Button::Back, ButtonEvent::Long, 24050);
+    ui.on_button(Button::Ok, ButtonEvent::Short, 24050);
     CHECK_EQ(cp(ui).actions_mode(), true);
     CHECK_EQ(cp(ui).action_row(), 1);
     CHECK_STR(cp(ui).item(2).label, "Request voltage");
@@ -1280,7 +1282,7 @@ static void test_tools_rows_open_single_tools() {
     ui.on_button(Button::Back, ButtonEvent::Short, 24200);
     CHECK_EQ(on_pd(ui), 1);
     CHECK_EQ(cp(ui).actions_mode(), true);
-    ui.on_button(Button::Minus, ButtonEvent::Short, 24300);            // Test charger
+    ui.on_button(Button::Minus, ButtonEvent::Short, 24300);            // Test charger (action_row 0 -> item 1)
     ui.on_button(Button::Ok, ButtonEvent::Short, 24400);
     CHECK_EQ(int(ui.page()), int(Page::ChargerTest));
     CHECK_EQ(int(ui.menu_depth()), 0);
@@ -1340,8 +1342,8 @@ static void test_device_place_inline_interrogate_and_readout() {
     for (int i = 0; i < 20; i++) ui.tick(t += 100);
     ui.open_place(bench::Place::Device, t += 100);
     settle(ui, t);
-    while (cp(ui).action_row() >= 0) ui.on_button(Button::Minus, ButtonEvent::Short, t += 100);   // OK = Ask device
     const int before_rows = cp(ui).result_rows();
+    if (cp(ui).has_pages() && !cp(ui).actions_mode()) ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);   // Info -> Actions (row 0 = Ask device)
     // First press arms confirmation ("OK again: resets link")
     ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);
     CHECK_EQ(g_stub.iq_starts, 0);
@@ -1376,6 +1378,7 @@ static void test_device_place_inline_interrogate_and_readout() {
     g_stub.iq_status.status.temp_status = 1; g_stub.iq_status.status.present_input = 0x02;
     g_stub.iq_status.num_svids = 2; g_stub.iq_status.svids[0] = 0xFF01; g_stub.iq_status.svids[1] = 0x18D1;
     g_stub.iq_status.num_epr_pdos = 9;
+    if (cp(ui).actions_mode()) ui.on_button(Button::Back, ButtonEvent::Short, t += 100);   // back to Info to inspect rows
     settle(ui, t);
     CHECK_STR(std::string(cp(ui).status_line()).c_str(), "Device read");
     // Mfr, Rev, PDP, Sink, Batt, Health, Batt mfr, Status, SVIDs, EPR all added (+10 rows) with zero truncation
@@ -1413,8 +1416,8 @@ static void test_device_place_inline_interrogate_with_sink_pdos() {
     for (int i = 0; i < 20; i++) ui.tick(t += 100);
     ui.open_place(bench::Place::Device, t += 100);
     settle(ui, t);
-    while (cp(ui).action_row() >= 0) ui.on_button(Button::Minus, ButtonEvent::Short, t += 100);   // OK = Ask device
     const int before_rows = cp(ui).result_rows();   // includes Caps: Not seen (1 row)
+    if (cp(ui).has_pages() && !cp(ui).actions_mode()) ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);
     ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);
     ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);
     g_stub.iq_running = false;
@@ -1442,6 +1445,7 @@ static void test_device_place_inline_interrogate_with_sink_pdos() {
     g_stub.iq_status.status.temp_status = 2; g_stub.iq_status.status.present_input = 0x06; g_stub.iq_status.status.event_flags = 0x08;
     g_stub.iq_status.num_svids = 2; g_stub.iq_status.svids[0] = 0xFF01; g_stub.iq_status.svids[1] = 0x18D1;
     g_stub.iq_status.num_epr_pdos = 9;
+    if (cp(ui).actions_mode()) ui.on_button(Button::Back, ButtonEvent::Short, t += 100);
     settle(ui, t);
     // Caps: Not seen (1 row) -> grouped Fixed (1 row) + PPS (1 row) (+1 net), plus Mfr, Rev, PDP, Sink, Batt, Health, Batt mfr, Status, SVIDs, EPR (+10) = +11 rows
     CHECK_EQ(cp(ui).result_rows(), before_rows + 11);
@@ -1557,21 +1561,20 @@ static void test_place_two_page_info_and_actions() {
         CHECK_EQ(cp(ui).window_first(), 0);
         CHECK_EQ(cp(ui).action_row(), -1);
 
-        // Long Back enters Actions page using kit::RowList
-        ui.on_button(Button::Back, ButtonEvent::Long, t += 100);
+        // Short OK enters Actions page using kit::RowList
+        ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);
         settle(ui, t);
         CHECK_EQ(cp(ui).actions_mode(), true);
         CHECK_EQ(cp(ui).action_row(), 0);
-        CHECK_EQ(ui.list_state().count, cp(ui).item_count() - 1);
+        CHECK_EQ(ui.list_state().count, cp(ui).act_count());
         ui.on_button(Button::Minus, ButtonEvent::Short, t += 100);
         settle(ui, t);
         CHECK_EQ(cp(ui).action_row(), 0);
     }
 
-    // 2. Populated Cable place with >= 7 fact rows (8 rows: ID, Speed, Current, Voltage, EPR, Type, Length, Answered):
-    //    - Info page opens at window_first() == 0, action_row() == -1.
-    //    - Short Plus scrolls fact rows 1 row at a time and clamps at res - kPlaceRows (never spills into action rows).
-    //    - Long Plus flips to Actions sub-page; Short +/- step through Actions; Long Minus flips back to Info.
+    // 2. Populated Cable place with >= 8 fact rows (8 rows: ID, Speed, Current, Voltage, EPR, Type, Length, Answered):
+    //    - Info page opens at window_first() == 0, action_row() == -1 (all 8 rows fit in kPlaceRows = 9 without scrolling!).
+    //    - Short OK switches to Actions sub-page; Short +/- step through Actions; Short Back switches back to Info.
     Ui &ui = fresh_ui();
     make_inline(ui, 50000);
     g_stub.pm_online = true;
@@ -1591,8 +1594,8 @@ static void test_place_two_page_info_and_actions() {
     CHECK_EQ(cp(ui).window_first(), 0);
     CHECK_EQ(cp(ui).action_row(), -1);
 
-    // Scroll down 1 fact row at a time until all fact rows are visible (first == res - kPlaceRows).
-    const int max_fact_first = res - ConnectionPage::kPlaceRows;
+    // Scroll down 1 fact row at a time until all fact rows are visible (first == max(0, res - kPlaceRows)).
+    const int max_fact_first = std::max(0, res - ConnectionPage::kPlaceRows);
     for (int f = 1; f <= max_fact_first; f++) {
         ui.on_button(Button::Plus, ButtonEvent::Short, t += 100);
         settle(ui, t);
@@ -1614,24 +1617,23 @@ static void test_place_two_page_info_and_actions() {
         CHECK_EQ(cp(ui).action_row(), -1);
     }
 
-    // Long Back switches to Actions sub-page with 2-dot pager & bright top-bar "Actions".
-    ui.on_button(Button::Back, ButtonEvent::Long, t += 100);
+    // Short OK switches to Actions sub-page with 2-dot pager on OppRail.
+    ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);
     settle(ui, t);
     CHECK_EQ(cp(ui).actions_mode(), true);
     CHECK_EQ(cp(ui).action_row(), 0);
-    CHECK_STR(std::string(cp(ui).status_line()).c_str(), "Hold Back for Info");
-    CHECK_EQ(ui.list_state().count, cp(ui).item_count() - 1);
+    CHECK_EQ(ui.list_state().count, cp(ui).act_count());
     ui.on_button(Button::Plus, ButtonEvent::Short, t += 100);
     settle(ui, t);
     CHECK_EQ(cp(ui).action_row(), 1);
-    // Inline sink greys Spoof as... (row index 3 in Actions = item 4) with "load" tail and footer reason.
+    // Inline sink greys Spoof as... (row index 3 in Actions = item 4) with "load" tail and reason.
     for (int k = 0; k < 2; k++) { ui.on_button(Button::Plus, ButtonEvent::Short, t += 100); settle(ui, t); }
     CHECK_EQ(cp(ui).action_row(), 3);
     CHECK_EQ(cp(ui).item(4).enabled, false);
     CHECK_STR(cp(ui).item(4).tag, "load");
     CHECK_STR(std::string(cp(ui).status_line()).c_str(), "Live sink: unplug load");
-    // Long Back switches back to Info sub-page.
-    ui.on_button(Button::Back, ButtonEvent::Long, t += 100);
+    // Short Back switches back to Info sub-page.
+    ui.on_button(Button::Back, ButtonEvent::Short, t += 100);
     settle(ui, t);
     CHECK_EQ(cp(ui).actions_mode(), false);
     CHECK_EQ(cp(ui).action_row(), -1);
@@ -1655,7 +1657,7 @@ static void test_cable_identity_positive_chips_and_no_trunc() {
     CHECK_EQ(k2::trunc::failures(), 0);
 #endif
     // Verify the painted identity header matches positive chips only ([100W] [2.0]) and NOT "no EPR".
-    const Surface s = ui.context().content;
+    const Surface s = ui.context().screen;
     const int bw = s.w, bh = kit::kPlaceListY - kit::kIdY, by = kit::kIdY;
     std::vector<uint16_t> orig(size_t(bw * bh));
     for (int y = 0; y < bh; y++)
@@ -1706,7 +1708,7 @@ static void test_device_place_telemetry_rows_and_live_repaints() {
     for (int i = 0; i < 20; i++) ui.tick(t += 100);
     ui.open_place(bench::Place::Device, t += 100);
     settle(ui, t);
-    while (cp(ui).action_row() >= 0) ui.on_button(Button::Minus, ButtonEvent::Short, t += 100);
+    if (cp(ui).has_pages() && !cp(ui).actions_mode()) ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);
     ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);
     ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);
     g_stub.iq_running = false;
@@ -1715,6 +1717,7 @@ static void test_device_place_telemetry_rows_and_live_repaints() {
     g_stub.iq_status.sink_ext_len = 24;
     g_stub.iq_status.sink_ext[18] = 15;
     g_stub.iq_status.sink_ext[20] = 45;   // SPR 45W min 15 (spr_op == 0, epr_max == 0)
+    if (cp(ui).actions_mode()) ui.on_button(Button::Back, ButtonEvent::Short, t += 100);
     settle(ui, t);
     const int base_rows = cp(ui).result_rows();   // includes PDP ("SPR 45W min 15"), no Sink/Batt mfr/Status yet
     auto row_visible_is = [&](int row_idx, const char *val, uint16_t ink = kText) {

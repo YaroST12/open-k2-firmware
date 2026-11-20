@@ -10,7 +10,7 @@ The design language of the K2 screen, measured from the charger test.
 - **Related.** `docs/UI_DESIGN.md` holds the hardware facts, the navigation map and the input language.
   The skill `k2-micro-gui` holds the work loop and the paint budgets.
 
-All coordinates are logical content pixels: x 0..223, y 0..239.
+All coordinates are logical content pixels: x 0..207 on twin-rail pages and x 0..223 on Home.
 
 ## 0 Fieldbook (2026-11-12)
 
@@ -140,28 +140,26 @@ pure in `k2/ui/battery_view.hpp` (`tests/test_ui_battery.cpp`).
 | item | value | source |
 |---|---|---|
 | Panel | 240 x 240 | `kScreenW`, `kScreenH` |
-| Logical content | 224 x 240, origin 0,0 | `ContentViewport`, `kLogicalW`, `kLogicalH` |
+| Standard content | 208 x 240 portrait / 240 x 208 landscape | `ContentViewport`, `kTwinContentW`, `kTwinContentH` |
+| Home content | 224 x 240 portrait / 240 x 224 landscape | single-strip Home |
 | Button strip | 16 px thick, on the button edge | `kPanelThickness` |
-| Strip slots | 66, 54, 54, 66 px along the edge | `kSlotLenPx` |
-| Portrait (rotation 0, 2) | content drawn 1:1 | |
-| Landscape (rotation 1, 3) | content mapped to 240 x 224 | fills stretch in x and lose every 15th row in y; glyphs and markers keep their native size |
+| Opposite rail | 16 px on the opposing edge | `OppRail` |
+| Strip slots | 70, 58, 58, 54 px (mirrored on Left/Bottom) | `kSlotLens` |
+| Portrait (rotation 0, 2) | content drawn 1:1 between rails | |
+| Landscape (rotation 1, 3) | content mapped between top/bottom rails | glyphs and markers keep their native size |
 
-Design in the 224 x 240 space. Check all four rotations. A 1 px line can vanish in landscape, so the kit draws
+Design standard pages in 208 x 240. Home keeps 224 x 240. Check all four rotations. A 1 px line can vanish in landscape, so the kit draws
 markers at native size (`draw_marker`).
 
 ### 2.2 Vertical bands
 
 | y | height | band | owner |
 |---|---|---|---|
-| 0..19 | 20 | TopBar band, `kBar` fill | `draw_status_left`, `draw_top_readout` |
-| 20 | 1 | hairline `kRule`, or the first row of the progress rule | `kBarH` = 21 |
-| 21 | 1 | second row of the progress rule; `kBg` on a plain bar | `kProgY` = 20, `kProgH` = 2 |
-| 22..23 | 2 | clear. A body fill or a full-width band starts at 22 | `kBelowBar` = 22 |
-| 24..219 | 196 | body. The first row starts at 24 | `kBodyY` = 24 |
-| 220..221 | 2 | clear | `kListBottom` = 220 |
-| 222..239 | 18 | Footer | `kFooterY` = 222 |
+| 0..1 | 2 | content margin | `kBodyY` = 2 |
+| 2..239 | 238 | full-height page body | `kFooterY` = 240 |
+| floating near bottom | 16 | transient action/error toast, 4 px from the edge | `draw_toast` |
 
-A default list holds 7 rows: six of 26 px and the open one of 40 px (`kWindowRows` = 7, 6 x 26 + 40 = 196).
+There is no permanent horizontal TopBar or Footer. Page names, wizard dots and live telemetry live on `OppRail`.
 
 ### 2.3 Columns
 
@@ -178,9 +176,9 @@ A default list holds 7 rows: six of 26 px and the open one of 40 px (`kWindowRow
 | 92 | KvTable value, long keys | Step detail `kDet` |
 | 104 | dim second column of a row | `kCol2X` |
 | 112 | centre rule of a two-column row | Waiting |
-| 214 | right edge of a row tail, count or chevron | `kTailX` |
-| 218 | right edge of right-aligned body text and of a note box | `kNoteMaxPx` = 190 from x28 |
-| 221..223 | scroll lane, 3 px | `ListView::kBarW` |
+| 198 | right edge of a row tail, count or chevron | `kTailX` |
+| 202 | right edge of right-aligned body text and note box | `kNoteMaxPx` = 174 from x28 |
+| 205..207 | scroll lane, 3 px | `ListView::kBarW` |
 
 Gaps: 8 px between a row text and its tail (`kTailGap`). 4 px before the second column.
 
@@ -1292,3 +1290,18 @@ or arming presents nothing: Rd goes on only at the confirm.
 | Rd afterwards | the page keeps the woken Rd after a finished proof (without it the caps vanish and the verdicts would hide) and gives it back in `leave()`; a run the shell started releases it at its end |
 
 All footers are 27 characters at most and checked by `static_assert`; none names a key.
+
+## 10 Twin-rail walkthrough
+
+1. Start in `Home`: the single 224 x 240 content body keeps the button strip on the physical button edge.
+2. Enter the Bench, then open Charger, Cable or Device. The opposite rail shows the place name; `OK` enters
+   `Actions` and `Back` returns to `Info`. `Long Back` still means Home.
+3. Check the four rotations. The button rail and opposite telemetry rail must frame one body rectangle:
+   208 x 240 in portrait and 240 x 208 in landscape.
+4. Move list focus. A focused row opens to 40 px, carries its explanation in the note, and never truncates
+   fixed copy.
+5. Trigger an action. Routine facts remain inline; only a transient result, confirmation or error uses a
+   bottom toast, which expires and restores the underlying body.
+6. For capture QA, compare every strip with the live panel (`test_ui_capture` / `test_ui_rotation`) before
+   taking hardware screenshots. Then check all rotations on the connected K2 and verify the heartbeat
+   `stack_free`.

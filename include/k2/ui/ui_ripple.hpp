@@ -13,10 +13,10 @@ namespace k2 {
 
 class RipplePage final : public PageBase {
 public:
-    static constexpr int16_t kPlotX = 7;
-    static constexpr int16_t kPlotY = 67;
-    static constexpr int16_t kPlotW = 210;
-    static constexpr int16_t kPlotH = 146;
+    static constexpr int16_t kPlotX = 5;
+    static constexpr int16_t kPlotY = 48;
+    static constexpr int16_t kPlotW = 198;
+    static constexpr int16_t kPlotH = 184;
     static constexpr uint32_t kRefreshMs = 100;   // ~10 Hz capture cadence at boosted CPU/SPI
     static constexpr uint8_t kNoCol = 0xFF;
 

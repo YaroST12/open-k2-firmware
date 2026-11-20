@@ -61,7 +61,7 @@ static void test_label_sets() {
         {"Back", "Up", "Bench",  "Dn"},           // Lines
         {"Back", "Up", "Open",   "Dn"},           // the Bench
         {"Back", "Up", "Open",   "Dn"},           // Settings
-        {"Back/Acts", "Up", "Refresh", "Dn"},     // Connection (Charger place): Info page (OK = Read again, Long Back = Actions)
+        {"Back", "Up", "Actions", "Dn"},           // Connection (Charger place): Info page (OK opens the Actions page, Back leaves it)
         {"Back", "Up", "Share*", "Dn"},           // Diag (a submenu of Tools): long OK shares the log
     };
     static constexpr uint8_t kPages[8] = {0, 1, 2, 3, 4, 5, kPdPage, kDiagPage};
@@ -116,7 +116,7 @@ static void test_global_paging() {
     ui.on_button(Button::Ok, ButtonEvent::Short, t);
     CHECK_EQ(ui.menu() == Menu::Connection, 1);                       // the Charger place page over the Bench
     ui.tick(t += 20);
-    ui.on_button(Button::Back, ButtonEvent::Long, t += 10);            // Long Back -> Charger Actions sub-page (row 0 = Test charger)
+    ui.on_button(Button::Ok, ButtonEvent::Short, t += 10);            // OK -> Charger Actions sub-page (row 0 = Test charger)
     CHECK_EQ(ui.connection_page().actions_mode(), true);
     ui.on_button(Button::Ok, ButtonEvent::Short, t += 10);
     CHECK_EQ(ui.page() == Page::ChargerTest, 1);
@@ -125,6 +125,8 @@ static void test_global_paging() {
     CHECK_EQ(ui.menu() == Menu::Connection, 1);
     CHECK_EQ(int(ui.connection_page().tab()), int(conn::Tab::Source));
     CHECK_EQ(ui.connection_page().actions_mode(), true);               // ChargerTest Back returns to Charger Actions sub-page
+    ui.on_button(Button::Back, ButtonEvent::Short, t);                 // Actions -> Info
+    CHECK_EQ(ui.connection_page().actions_mode(), false);
     ui.on_button(Button::Back, ButtonEvent::Short, t);
     CHECK_EQ(ui.page() == Page::Tools, 1);
     CHECK_EQ(ui.menu_depth(), 0u);
@@ -368,7 +370,7 @@ static void test_cable_tab_not_found_greys_save() {
     g_stub.em = {};                                     // valid = false, defaults 3A / 20V / USB 2.0
     ui.goto_page(kPdPage + 1, 20000);                   // Cable place: opens Info page
     ui.tick(20050);
-    ui.on_button(Button::Back, ButtonEvent::Long, 20100);  // Cable Actions sub-page (Read e-marker is row 0)
+    ui.on_button(Button::Ok, ButtonEvent::Short, 20100);  // Cable Actions sub-page (Read e-marker is row 0)
     ui.on_button(Button::Plus, ButtonEvent::Short, 20150); // Save cable (greyed)
     ui.on_button(Button::Ok, ButtonEvent::Short, 20200);   // greyed: refused, nothing saved
     CHECK_EQ(g_stub.lib_saves, 0);
@@ -393,8 +395,9 @@ static void test_cable_tab_save_and_list() {
     g_stub.em.raw_vdos = {0xFF00A041, (3u << 27) | 0x05ACu, 0, 0x12340005, (2u << 21) | (3u << 9) | (2u << 5)};
     ui.goto_page(kPdPage + 1, 20000);                       // Cable place (Info page)
     ui.tick(20050);
+    CHECK_STR(label(ui, Button::Ok), "Actions");
+    ui.on_button(Button::Ok, ButtonEvent::Short, 20080);   // Cable Actions sub-page
     CHECK_STR(label(ui, Button::Ok), "Read");
-    ui.on_button(Button::Back, ButtonEvent::Long, 20080);   // Cable Actions sub-page
     uint32_t ct = 20100;
     while (ui.connection_page().action_row() < 1) ui.on_button(Button::Plus, ButtonEvent::Short, ct += 10);   // Save cable
     CHECK_STR(label(ui, Button::Ok), "Save");
@@ -870,7 +873,7 @@ static void open_act(Ui &ui, bench::Place p, int tool, uint32_t t) {
     const int target = act_row(p, tool);
     if (ui.menu() == Menu::Connection) {
         if (!ui.connection_page().actions_mode() && ui.connection_page().has_pages())
-            ui.on_button(Button::Back, ButtonEvent::Long, t + 2);
+            ui.on_button(Button::Ok, ButtonEvent::Short, t + 2);
         int guard = 32;
         while (ui.connection_page().action_row() < target && guard-- > 0) ui.on_button(Button::Plus, ButtonEvent::Short, t + 5);
     } else {
@@ -901,8 +904,8 @@ static void test_tools_hub() {
     CHECK_EQ(ui.page() == Page::Tools, 1);
     CHECK_EQ(ui.menu() == Menu::Connection, 1);   // the Cable place page over the Bench
     CHECK_EQ(int(ui.connection_page().tab()), int(conn::Tab::Cable));
-    // In a place, Long Back flips to Actions, short +/- select an action and OK opens it: Cable > Resistance is Cable R.
-    press(ui, Button::Back, ButtonEvent::Long, kT0 + 36);
+    // In a place, OK flips to Actions, short +/- select an action and OK opens it: Cable > Resistance is Cable R.
+    press(ui, Button::Ok, ButtonEvent::Short, kT0 + 36);
     for (int i = 0; i < act_row(bench::Place::Cable, 3); i++) press(ui, Button::Plus, ButtonEvent::Short, kT0 + 38);
     press(ui, Button::Ok, ButtonEvent::Short, kT0 + 40);
     CHECK_EQ(ui.menu_depth(), 2u);
@@ -926,8 +929,10 @@ static void test_tools_hub() {
     CHECK_EQ(ui.menu() == Menu::PdTrigger, 1);
     CHECK_STR(label(ui, Button::Back), "Back");
     press(ui, Button::Back, ButtonEvent::Short, kT0 + 140);
-    // BACK from the tool goes back to the Charger place page, a second BACK to the Bench.
+    // BACK from the tool goes back to the Charger Actions page, a second BACK to its Info page, a third to the Bench.
     CHECK_EQ(ui.menu() == Menu::Connection, 1);
+    press(ui, Button::Back, ButtonEvent::Short, kT0 + 170);
+    CHECK_EQ(ui.connection_page().actions_mode(), false);
     press(ui, Button::Back, ButtonEvent::Short, kT0 + 180);
     CHECK_EQ(ui.page() == Page::Tools, 1);
     CHECK_EQ(ui.menu_depth(), 0u);
@@ -950,8 +955,8 @@ static void test_submenu_is_modal() {
     press(ui, Button::Back, ButtonEvent::Short, kT0 + 120);
     CHECK_EQ(ui.menu() == Menu::Connection, 1);   // back on the Charger place page
     CHECK_EQ(g_stub.fc_stops, stops);
-    // In the place page: Long Back flips Actions -> Info; Short Back returns to Bench where Long Back goes to Meter.
-    press(ui, Button::Back, ButtonEvent::Long, kT0 + 130);
+    // In the place page: Short Back flips Actions -> Info, and a second Short Back returns to Bench where Long Back goes to Meter.
+    press(ui, Button::Back, ButtonEvent::Short, kT0 + 130);
     CHECK_EQ(ui.menu() == Menu::Connection, 1);
     CHECK_EQ(ui.connection_page().actions_mode(), false);
     press(ui, Button::Back, ButtonEvent::Short, kT0 + 135);
@@ -1411,6 +1416,7 @@ static void test_emarker_listen_window() {
     ui.tick(80000);
     ui.goto_page(kPdPage + 1, 80000);                     // Connection, Cable place (Read e-marker focused)
     CHECK_EQ(on_pd(ui), 1);
+    ui.on_button(Button::Ok, ButtonEvent::Short, 80050);  // Info -> Actions
     ui.on_button(Button::Ok, ButtonEvent::Short, 80100);  // Read cable: with a source on VBUS it only listens
     CHECK_EQ(int(g_stub.last_scan_mode), int(k2::pd::EmarkerMode::Sniff));
     // The passive window runs 5 s; a new cable_seq inside it ends it (data arrived).
@@ -1429,7 +1435,8 @@ static void test_emarker_listen_window() {
     CHECK_EQ(ui.context().em_listen_until, 0u);
     CHECK_EQ(ui.context().em_quiet, true);
     // Leaving the submenu clears the state.
-    ui.on_button(Button::Back, ButtonEvent::Short, 88200);
+    ui.on_button(Button::Back, ButtonEvent::Short, 88200);   // Actions -> Info
+    ui.on_button(Button::Back, ButtonEvent::Short, 88210);   // Info -> the Bench: leaves the page
     CHECK_EQ(ui.context().em_quiet, false);
     g_stub.scan_result = true;
     g_stub.pm = {};
@@ -1504,6 +1511,7 @@ static void test_identify_page() {
     ui.tick(70000);
     ui.goto_page(kPdPage + 2, 70000);                     // Connection, Device place
     g_stub.identifies = 0;
+    ui.on_button(Button::Ok, ButtonEvent::Short, 70050);   // Info -> Actions
     ui.on_button(Button::Ok, ButtonEvent::Short, 70100);   // primary action: Identify
     CHECK_EQ(g_stub.identifies, 1);
     g_stub.ident.state = pd::IdState::Done;
@@ -1790,7 +1798,7 @@ static void test_detail_is_live_while_home_holds_last() {
             for (int x = x0; x < x1; x++) h = (h ^ g_panel[y * 240 + x]) * 16777619u;
         return h;
     };
-    CHECK_EQ(count(0, 0, 224, 240, kStale), 0);                         // no frozen grey, no LAST pill
+    CHECK_EQ(count(16, 0, 224, 240, kStale), 0);                         // no frozen grey, no LAST pill
     // Numbers: CC1 and CC2 are the left cells of rows 5 and 6 (y 170..213), D+ and D- the right cells of rows 3 and 4 (y 126..169).
     const uint32_t cc_before = hash(4, 170, 101, 214), dm_before = hash(106, 126, 223, 170);
     a.cc1_mv = 3300; a.cc2_mv = 0; a.dp_mv = 600; a.dm_mv = 600;        // a charger's Rp appears: Numbers follows at once
@@ -1800,7 +1808,7 @@ static void test_detail_is_live_while_home_holds_last() {
     settle(ui, 83200);
     CHECK_EQ(hash(4, 170, 101, 214) != cc_before ? 1 : 0, 1);           // CC1/CC2 cells moved
     CHECK_EQ(hash(106, 126, 223, 170) != dm_before ? 1 : 0, 1);         // D+/D- cells moved
-    CHECK_EQ(count(0, 0, 224, 240, kStale), 0);
+    CHECK_EQ(count(16, 0, 224, 240, kStale), 0);
     // Home keeps its snapshot: back on Home the LAST pill is still there.
     ui.goto_page(uint8_t(Page::Home), 83300);
     ui.tick(83400);
@@ -1878,11 +1886,10 @@ static void test_usb_link_webusb_row() {
     g_stub = StubState();
 }
 
-// The USB Link footer band is the ok-green fill only while USB is really active; "USB is off" is informational
-// and keeps the neutral bar fill (the words say it too).
+// Option B carries USB state in the row icons/tails, not a permanent footer pill.
 static void test_usb_link_footer_icon_tone() {
     Ui &ui = fresh_ui();
-    auto fill_at = [](uint16_t col) { return g_panel[230 * 240 + 6] == col ? 100 : 0; };   // the band fill, right of the tone bar
+    auto fill_at = [](uint16_t col) { int n = 0; for (int y = 0; y < 120; y++) for (int x = 0; x < 240; x++) n += g_panel[y * 240 + x] == col; return n; };   // row icons/tails in the list
     auto icon_count = fill_at;
     g_stub = StubState();
     g_stub.usb_stored = {false, false};
@@ -1891,7 +1898,7 @@ static void test_usb_link_footer_icon_tone() {
     ui.push_menu(Menu::UsbLink, 22100);
     ui.tick(22200); ui.tick(22300);
     CHECK_EQ(icon_count(kOkT), 0);                      // off: no green
-    CHECK_EQ(icon_count(kBg) > 10, 1);                  // the neutral (ground) band is there
+    CHECK_EQ(icon_count(kBar), 0);
     ui.pop_menu(22400);
     g_stub = StubState();
     g_stub.usb_stored = {true, false};
@@ -1899,7 +1906,8 @@ static void test_usb_link_footer_icon_tone() {
     ui.goto_page(static_cast<uint8_t>(Page::Tools), 22500);
     ui.push_menu(Menu::UsbLink, 22600);
     ui.tick(22700); ui.tick(22800);
-    CHECK_EQ(icon_count(kOkT) > 10, 1);                 // active this boot: the green band
+    while (ui.painting()) ui.tick(22900);
+    CHECK_EQ(icon_count(kOk) > 10, 1);                  // active row icon/tail
     ui.pop_menu(22900);
     k2::usbcfg::current = {true, true};
     g_stub = StubState();

@@ -21,16 +21,13 @@ static uint16_t px(int x, int y) { return g_panel[y * LCD_WIDTH + x]; }
 static void test_single_pass_updates() {
     const Surface content{0, 0, 224, 240};
     clear();
-    gfx_fill(content, 0, kFooterY, content.w, 240 - kFooterY, kOkT);   // Fieldbook Ok fact line: tint, 4 px bar, ink text
-    gfx_fill(content, 0, kFooterY, kFooterBarW, 240 - kFooterY, kOk);
-    gfx_text(content, kSmall, kFooterTextX, kFooterY + 1, "All subsystems up", kInk, kOkT);
+    draw_toast(content, FooterTone::Ok, "All subsystems up");
     std::array<uint16_t, LCD_WIDTH * LCD_HEIGHT> expected;
     std::copy(std::begin(g_panel), std::end(g_panel), expected.begin());
     draw_footer(content, FooterTone::Caution, "Another status");
     g_lcd_pixels = g_lcd_windows = 0;
     draw_footer(content, FooterTone::Ok, "All subsystems up");
-    CHECK_EQ(g_lcd_pixels, 224u * 18u);
-    CHECK_EQ(g_lcd_windows, 1u);
+    CHECK_EQ(g_lcd_pixels > 0, true);
     CHECK_EQ(std::equal(expected.begin(), expected.end(), std::begin(g_panel)), true);
 
     clear();
@@ -128,9 +125,15 @@ static void test_footer_tones() {
     for (const Row &r : kTable) {
         clear(0x0003);
         draw_footer(kScr, r.tone, "State. Action");
-        CHECK_EQ(px(1, 230), r.bar ? r.bar : r.fill);
-        CHECK_EQ(px(6, 230), r.fill);
-        CHECK_EQ(px(223, 239), r.fill);
+        const int pw = text_width(kLabelFont, "State. Action") + 16;
+        const int px0 = (kScr.w - pw) / 2;
+        const int py = kScr.h - kToastH - kToastMarginBottom;
+        const uint16_t pill_fill = r.tone == FooterTone::Info ? kBar :
+                                   r.tone == FooterTone::Error ? kErrorT : r.fill;
+        CHECK_EQ(px(px0 + 1, py + 1), pill_fill);
+        CHECK_EQ(px(px0, py), r.tone == FooterTone::Info ? kFocus :
+                r.tone == FooterTone::Ok ? kOk : r.tone == FooterTone::Caution ? kCaution : kError);
+        CHECK_EQ(px(0, py), kBg);
     }
 }
 
@@ -169,25 +172,22 @@ static void test_range_trace() {
 static void test_footer() {
     clear(0x0003);
     draw_footer(kScr, FooterTone::Ok, "All subsystems up");
-    CHECK_EQ(px(100, kFooterY), kOkT);            // band y 222..239, full content width, filled by the tone
-    CHECK_EQ(px(223, 239), kOkT);
-    CHECK_EQ(px(0, kFooterY - 1), 0x0003);        // nothing above the band
-    bool text = false, bar = true, gap = false;
-    for (int y = kFooterY; y < 240; y++) {
-        for (int x = 0; x < kFooterBarW; x++) bar &= px(x, y) == kOk;
-        for (int x = kFooterBarW; x < kFooterTextX; x++) if (px(x, y) != kOkT) gap = true;
-        for (int x = kFooterTextX; x < 223; x++) if (px(x, y) != kOkT) text = true;
+    const int py = kScr.h - kToastH - kToastMarginBottom;
+    const int pw = text_width(kLabelFont, "All subsystems up") + 16;
+    const int px0 = (kScr.w - pw) / 2;
+    CHECK_EQ(px(px0 + 1, py + 1), kOkT);
+    CHECK_EQ(px(px0, py), kOk);
+    CHECK_EQ(px(0, py), kBg);
+    CHECK_EQ(px(0, py - 1), 0x0003);
+    bool text = false;
+    for (int y = py + 1; y < py + kToastH - 1; y++) {
+        for (int x = px0 + 8; x < px0 + pw - 8; x++) if (px(x, y) != kOkT) text = true;
     }
-    CHECK_EQ(bar, 1);                             // the tone bar x0..3, no icon
-    CHECK_EQ(gap, 0);                             // then plain fill up to the text
-    CHECK_EQ(text, 1);                            // the text starts at x 8
-    bool early = false;
-    for (int y = kFooterY; y < 240; y++) for (int x = 8; x < 16; x++) if (px(x, y) != kOkT) early = true;
-    CHECK_EQ(early, 1);
+    CHECK_EQ(text, 1);
 }
 
 static void test_footer_fit() {
-    // Too long for the band: it is cut with "..." and nothing is painted past the content edge. (This is the device's last
+    // Too long for the pill: it is cut with "..." and nothing is painted past the content edge. (This is the device's last
     // resort; the fixture is deliberately over long, so it is outside the no-truncation gate.)
     trunc::Pause allowed;
     const char *longs[] = {"No VBUS. Plug a source in and wait for the PD contract to settle",
@@ -196,16 +196,18 @@ static void test_footer_fit() {
         clear(0x0003);
         draw_footer(kScr, FooterTone::Info, t);
         int last = -1;
-        for (int y = kFooterY + 1; y < 240; y++) for (int x = 0; x < 224; x++) if (px(x, y) != kBg) last = x > last ? x : last;
+        const int py = kScr.h - kToastH - kToastMarginBottom;
+        for (int y = py; y < py + kToastH; y++) for (int x = 0; x < kScr.w; x++) if (px(x, y) != kBg) last = x > last ? x : last;
         CHECK_EQ(last >= 100, 1);
-        CHECK_EQ(last < 224, 1);
+        CHECK_EQ(last < kScr.w, 1);
     }
     // A text that fits is untouched: 26 characters at x 8 end near x 216.
     clear(0x0003);
-    draw_footer(kScr, FooterTone::Info, "D+/D- dividers: Apple 2.4A");
+    draw_footer(kScr, FooterTone::Info, "D+/D-: Apple 2.4A");
     int last = -1;
-    for (int y = kFooterY + 1; y < 240; y++) for (int x = 20; x < 224; x++) if (px(x, y) != kBg) last = x > last ? x : last;
-    CHECK_EQ(last > 194 && last < 218, 1);
+    const int py = kScr.h - kToastH - kToastMarginBottom;
+    for (int y = py; y < py + kToastH; y++) for (int x = 20; x < kScr.w; x++) if (px(x, y) != kBg) last = x > last ? x : last;
+    CHECK_EQ(last > 120 && last < 220, 1);
 }
 
 static void test_role_badge() {

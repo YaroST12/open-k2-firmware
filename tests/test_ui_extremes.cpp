@@ -23,9 +23,9 @@ using namespace k2;
 static void check_text(Ui &ui, int x, int y, int right, int bottom, const Font &font,
                        std::string_view text, uint16_t fg, uint16_t bg, int rows = 0) {
     const Rect box = compute_layout(orientation_for(ui.rotation()).edge, kSlotCenters,
-                                    kSlotLens, kPanelThickness).content;
-    const int px = box.x + x * box.w / 224, py = box.y + y * box.h / 240;
-    const int edge = box.x + right * box.w / 224, floor = box.y + bottom * box.h / 240;
+                                    kSlotLens, kPanelThickness).twin_content;   // every page but Home: 208 x 240 logical
+    const int px = box.x + x * box.w / 208, py = box.y + y * box.h / 240;
+    const int edge = box.x + right * box.w / 208, floor = box.y + bottom * box.h / 240;
     CHECK_EQ(px + text_width(font, text) <= edge, true);
     CHECK_EQ(py + font.height <= floor, true);
     uint16_t lut[16], line[240];
@@ -42,6 +42,7 @@ static void check_text(Ui &ui, int x, int y, int right, int bottom, const Font &
                 break;
             }
         }
+        if (!same && row == 0 && std::getenv("XDBG") && ui.rotation() == 0) { static int k; char p[64]; std::snprintf(p, sizeof p, "/tmp/xd_%d.panel", k++); if (FILE *f = std::fopen(p, "wb")) { std::fwrite(g_panel, 2, LCD_WIDTH * LCD_HEIGHT, f); std::fclose(f); } printf("XDBG %s '%.*s' px %d py %d\n", p, int(text.size()), text.data(), px, py); }
         CHECK_EQ(same, true);
     }
 }
@@ -64,22 +65,22 @@ static void parity(Ui &ui, uint32_t now) {
 }
 
 static void check_menu_mini(Ui &ui, std::string_view text, bool volts = false) {
-    const Rect box = compute_layout(orientation_for(ui.rotation()).edge, kSlotCenters,
-                                    kSlotLens, kPanelThickness).content;
-    // The chrome bar readout has fixed slots: the band maps its origin (x 140 = 140*240/224 at
-    // the wide rotations) but paints text at native pixel advances: each value right-aligned in its 30 px slot, volts from
-    // +15 (x155), amps from +52 (x192), in ink (the colour key in front of it carries the quantity).
-    const int slot = 5 * static_cast<int>(kLabelAdv);
-    const int x = box.x + 140 * box.w / 224 + (volts ? kMastVoltX : kMastAmpX) - 140 + slot - text_width(kLabelFont, text);
-    const int y = box.y + kBarTextY;
-    CHECK_EQ(text_width(kLabelFont, text) <= slot, true);
+    // In Option B, OppRail is horizontal in rotations 1 and 3 (panel_text_dir == 0); check the telemetry text there.
+    const Orientation o = orientation_for(ui.rotation());
+    if (panel_is_column(opposite_edge(o.edge))) return;
+    const Rect r = compute_layout(o.edge, kSlotCenters, kSlotLens, kPanelThickness).opp_rail;
+    const int16_t slot_len = 59;   // PdTriggerPage title > 7 chars -> wide0 (64, 59, 59, 58)
+    const int16_t slot_x = static_cast<int16_t>(r.x + (volts ? 64 : 64 + slot_len));
+    // OppRail telemetry cells (slots 1..3) are centred in slot_len: spot_w (5) + text_width.
+    const int tw = text_width(kLabelFont, text);
+    const int a0 = (slot_len - (5 + tw)) / 2;
+    const int x = slot_x + a0 + 5;
+    const int y = r.y + (opposite_edge(o.edge) == PanelEdge::Top ? 1 : 3);
     uint16_t lut[16], line[240];
-    make_blend_lut(kInk, kBar, lut);
+    make_blend_lut(kInk, kBg2, lut);
     for (int row = 0; row < kLabelFont.height; ++row) {
         const int n = render_row(kLabelFont, text, row, lut, line, 240);
         const bool same = std::equal(line, line + n, g_panel + (y + row) * LCD_WIDTH + x);
-        if (!same && row == 6 && text == "OVR")
-            for (int i = 0; i < n; ++i) printf("%04x/%04x ", g_panel[(y + row) * LCD_WIDTH + x + i], line[i]);
         CHECK_EQ(same, true);
     }
 }
@@ -127,14 +128,14 @@ static void test_diag_counters() {
     for (uint8_t r = 0; r < 4; ++r) {
         ui.set_rotation(r, 1300);
         settle(ui, 1300);
-        // Diag kit KvTable rows: value right-aligned to x218 in one 17 char box (x82), kSmall at row_y+4, rows at 24 + i*22.
+        // Diag kit KvTable rows: value right-aligned to x204 in one 17 char box (x68), kSmall at row_y+4, rows at 2 + i*22.
         // Rows 1/2 print compact counts (10K, 999M, ">999M": at most 5 chars each), so the worst case
         // ">999M / >999M" is 13 chars, clear of the labels (S12 at x28).
         // A saturated count is neutral, never the caution colour (the amber is for ordinary log drops).
-        check_text(ui, 114, 50, 218, 69, kSmall, ">999M / >999M", kText, kBg);
-        check_text(ui, 114, 72, 218, 91, kSmall, ">999M / >999M", kText, kBg);
-        check_text(ui, 82, 116, 218, 135, kSmall, "4294967295 on CC1", kText, kBg);
-        check_text(ui, 114, 138, 218, 157, kSmall, "4294967295 ms", kText, kBg);
+        check_text(ui, 100, 28, 204, 47, kSmall, ">999M / >999M", kText, kBg);
+        check_text(ui, 100, 50, 204, 69, kSmall, ">999M / >999M", kText, kBg);
+        check_text(ui, 68, 94, 204, 113, kSmall, "4294967295 on CC1", kText, kBg);
+        check_text(ui, 100, 116, 204, 135, kSmall, "4294967295 ms", kText, kBg);
         parity(ui, 1300);
     }
     // Ordinary log drops keep the caution colour; only the saturated count above went neutral.
@@ -143,13 +144,13 @@ static void test_diag_counters() {
     ui.set_rotation(0, 1400);
     ui.tick(1400);
     settle(ui, 1400);
-    check_text(ui, 146, 72, 218, 91, kSmall, "5000 / 12", kCaution, kBg);
+    check_text(ui, 132, 50, 204, 69, kSmall, "5000 / 12", kCaution, kBg);
     usb::stats = {};
     g_stub.caps.rx_count = 0;
     ui.set_rotation(0, 1500);   // right edge: logical == physical, exact pixel match
     ui.tick(1500);
     settle(ui, 1500);
-    check_text(ui, 178, 50, 218, 69, kSmall, "0 / 0", kText, kBg);
+    check_text(ui, 164, 28, 204, 47, kSmall, "0 / 0", kText, kBg);
     parity(ui, 1500);
 }
 
@@ -193,7 +194,7 @@ static void test_pd_tabs_text() {
     for (uint8_t r = 0; r < 4; ++r) {
         ui.set_rotation(r, 1300);
         settle(ui, 1300);
-        check_text(ui, 6, 93, 50, 108, kLabelFont, "PD", kDim, kBg);   // key at x 6, row_y+5
+        check_text(ui, 4, 71, 50, 86, kLabelFont, "PD", kDim, kBg);   // key at x 4, row_y+5
         parity(ui, 1300);
     }
     // Cable place: no cable read, so the identity headline names it.
@@ -202,7 +203,7 @@ static void test_pd_tabs_text() {
     for (uint8_t r = 0; r < 4; ++r) {
         ui.set_rotation(r, 1700);
         settle(ui, 1700);
-        check_text(ui, 8, 24, 220, 50, kMid, "NO CABLE READ", kInk2, kBg);
+        check_text(ui, 8, 2, 204, 30, kMid, "NO CABLE READ", kInk2, kBg);
         parity(ui, 1700);
     }
     CHECK_EQ(g_stub.requests + g_stub.scans + g_stub.rescans, 0);
@@ -223,10 +224,10 @@ static void test_source_fixed_rows_wrap() {
     for (uint8_t r = 0; r < 4; ++r) {
         ui.set_rotation(r, 1300);
         settle(ui, 1300);
-        // rows: ID (y 68), PD (88), Fixed (108), Fixed (128); value column x 64, text 3 px below the row top
-        check_text(ui, 64, 111, 220, 130, kSmall, "5/9/12/15/18/20V", kVolt, kBg);
-        check_text(ui, 64 + 16 * kSmall.adv, 111, 220, 130, kSmall, " 3A", kAmp, kBg);
-        check_text(ui, 64, 131, 220, 150, kSmall, "24V", kVolt, kBg, 15);
+        // rows: ID (y 46), PD (66), Fixed (86), Fixed (106); value column x 52, text 3 px below the row top
+        check_text(ui, 52, 89, 204, 108, kSmall, "5/9/12/15/18/20V", kVolt, kBg);
+        check_text(ui, 52 + 16 * kSmall.adv, 89, 204, 108, kSmall, " 3A", kAmp, kBg);
+        check_text(ui, 52, 109, 204, 128, kSmall, "24V", kVolt, kBg, 15);
         parity(ui, 1300);
     }
 }
@@ -272,9 +273,9 @@ static void test_trigger_ranges() {
     for (uint8_t r = 0; r < 4; ++r) {
         ui.set_rotation(r, 1300);
         settle(ui, 1300);
-        // The widest AVS row: text from x28, the power at the right edge (x182..214), on the focused row (y24..50).
-        check_text(ui, 28, 30, 214, 49, kSmall, "AVS 25.5-51.1V 5A", kText, kFocusT);
-        check_text(ui, 182, 30, 214, 49, kSmall, "255W", kWatt, kFocusT);
+        // The widest AVS row: text from x28, the power at the right edge (x166..198), on the focused row (y2..28).
+        check_text(ui, 28, 8, 198, 27, kSmall, "AVS 25.5-51.1V", kText, kFocusT);
+        check_text(ui, 166, 8, 198, 27, kSmall, "255W", kWatt, kFocusT);
         parity(ui, 1300);
     }
     ui.on_button(Button::Plus, ButtonEvent::Short, 1300);
@@ -295,9 +296,9 @@ static void test_trigger_edit_caption() {
     for (uint8_t r = 0; r < 4; ++r) {
         ui.set_rotation(r, 1400);
         settle(ui, 1400);
-        // VOLTAGE: the offer (the amps round to one decimal so the row fits) and its exact current limit in the table.
-        check_text(ui, 72, 27, 224, 45, kSmall, "PPS 3.3-25.5V 6.4A", kText, kBg);
-        check_text(ui, 72, 47, 224, 65, kSmall, "6.35A", kAmp, kBg);
+        // VOLTAGE: the offer (amps dropped when text+tail > 20 cells) and its exact current limit in the table.
+        check_text(ui, 64, 5, 208, 25, kSmall, "PPS 3.3-25.5V", kText, kBg);
+        check_text(ui, 64, 25, 208, 45, kSmall, "6.35A", kAmp, kBg);
         parity(ui, 1400);
     }
     ui.on_button(Button::Back, ButtonEvent::Short, 1500);
@@ -320,26 +321,24 @@ static void test_live_measurements() {
     g_stub.sink.held = true;
     struct Measurement { int32_t ma; const char *text; const Font *font; int y; };
     const Measurement cases[] = {
-        {9990, "9.99A", &kSmall, 131},
-        {10000, "10.00A", &kSmall, 131},
-        {123450, "123.45A", &kSmall, 131},
-        {INT32_MAX, "2147483.65A", &kSmall, 131},
-        {INT32_MIN, "2147483.65A", &kSmall, 131},
+        {9990, "9.99A", &kSmall, 109},
+        {10000, "10.00A", &kSmall, 109},
+        {123450, "123.45A", &kSmall, 109},
+        {INT32_MAX, "2147483.65A", &kSmall, 109},
+        {INT32_MIN, "2147483.65A", &kSmall, 109},
     };
     uint32_t now = 2000;
-    // The chrome bar's readout is fmt3-based (three total digits, floating point, magnitudes only):
-    // a value that formats to more than 5 characters incl. the unit shows "OVR" in its slot.
     for (const auto &value : cases) for (auto flow : {power::Flow::Forward, power::Flow::Reverse, power::Flow::Idle}) {
         g_stub.pm.current_ma = value.ma;
         g_stub.pm.flow = flow;
         now += 200;
         ui.tick(now);
         const char *mini = value.ma == 9990 ? "9.99A" : value.ma == 10000 ? "10.0A"
-                         : value.ma == 123450 ? "123A" : "OVR";
+                         : value.ma == 123450 ? "123A" : "2147484A";
         for (uint8_t r = 0; r < 4; ++r) {
             ui.set_rotation(r, now);
             settle(ui, now);
-            check_text(ui, 84, value.y, 224, 151, *value.font, value.text, kAmp, kBg);   // the measured-A cell of the LIVE table
+            check_text(ui, 84, value.y, 208, 129, *value.font, value.text, kAmp, kBg);   // the measured-A cell of the LIVE table
             check_menu_mini(ui, mini);
             parity(ui, now);
         }
@@ -351,9 +350,9 @@ static void test_live_measurements() {
     for (uint8_t r = 0; r < 4; ++r) {
         ui.set_rotation(r, now);
         settle(ui, now);
-        check_text(ui, 84, 91, 224, 111, kSmall, "2147483.65V", kVolt, kBg);
-        check_menu_mini(ui, "10.0A");   // amps slot: 10000 mA fits, no OVR
-        check_menu_mini(ui, "OVR", true);   // volts slot: INT32_MAX overflows
+        check_text(ui, 84, 69, 208, 89, kSmall, "2147483.65V", kVolt, kBg);
+        check_menu_mini(ui, "10.0A");   // amps slot: 10000 mA fits
+        check_menu_mini(ui, "2147484V", true);   // volts slot: fmt3 formats INT32_MAX in OppRail
         parity(ui, now);
     }
     CHECK_EQ(g_stub.requests, 1);

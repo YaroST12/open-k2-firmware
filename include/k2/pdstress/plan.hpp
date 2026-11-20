@@ -127,7 +127,7 @@ constexpr const char* na_name(Na n) {
         case Na::PpsAbove5V: return "PPS starts at 5 V or more";
         case Na::NoHeadroom: return "under 1 A advertised";
         case Na::NoEpr: return "no EPR 28 V";
-        case Na::NoEprProof: return "no EPR cable proof";
+        case Na::NoEprProof: return "no EPR proof";
         case Na::SelfPowered: return "K2 would brown out";
         case Na::NotSelected: return "not selected";
     }

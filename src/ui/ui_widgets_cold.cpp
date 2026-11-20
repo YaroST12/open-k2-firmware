@@ -133,6 +133,7 @@ void draw_range_trace(const Surface &s, int16_t x, int16_t y, int cols, int xs, 
 }
 
 bool draw_footer_budgeted(const Surface &s, FooterTone tone, std::string_view text, Elem &e, PaintBudget *bg K2_TRUNC_DEF) {
+    if (bg && bg->more) return false;
     uint32_t sg = mix_u32(mix_init(), static_cast<uint32_t>(tone) * 31u + 1u);
     sg = mix(sg, text);
     return e.paint_budgeted(sg, bg, static_cast<int>(s.w) * 18, [&] { draw_footer(s, tone, text K2_TRUNC_ARG); });

@@ -37,7 +37,7 @@ int ink_in(int xa, int xb, int ya, int yb, uint16_t bg) {   // pixels differing 
 int one_rim(int y0, int y1) {
     int n = 0, l = 240, r = -1, t = 240, b = -1;
     for (int y = y0; y < y1; y++)
-        for (int x = 61; x < 224; x++)
+        for (int x = kit::kResultLabelW + 1; x < 224; x++)
             if (px(x, y) == kFocus) { n++; l = std::min(l, x); r = std::max(r, x); t = std::min(t, y); b = std::max(b, y); }
     if (n == 0) return 0;
     const int w = r - l + 1, h = b - t + 1;
@@ -75,7 +75,7 @@ void row_fn(void *ctx, int i, bool focused, kit::RowSpec &out) {
 
 static void test_tables() {
     using kit::Verdict;
-    CHECK_EQ(kit::kWindowRows, 7);
+    CHECK_EQ(kit::kWindowRows, 8);
     CHECK_EQ(kit::kBodyY + kit::kWindowRows * kit::kRowH + kit::kFocusExtra <= kFooterY, 1);
     // pass: green tint + green ink; fail: solid red + black ink; running: the pending look (no fill, faint ink) + a kFocus dot
     CHECK_EQ(kit::verdict_style(Verdict::Pass).fill, kOkT);
@@ -148,8 +148,8 @@ static void test_row_list_geometry() {
     kit::RowList l;
     l.init(kSurf, kit::kBodyY, row_fn, &m);
     l.set_count(m.n); l.select(2); l.draw(1);
-    CHECK_EQ(l.visible(), 7);
-    const int y2 = 24 + 2 * 26;                        // row 2 top
+    CHECK_EQ(l.visible(), 8);
+    const int y2 = kit::kBodyY + 2 * 26;                // row 2 top
     CHECK_EQ(px(1, y2 + 3), kFocus);                    // the cyan bar at x0..2
     CHECK_EQ(px(2, y2 + 39), kFocus);                   // runs the whole 40 px (hairline excluded)
     CHECK_EQ(px(150, y2 + 39), kFocusT);                // the open row is one tinted block
@@ -157,15 +157,15 @@ static void test_row_list_geometry() {
     CHECK_EQ(px(150, y2), kBg);                         // Fieldbook: no hairlines, the row's top line is the ground
     CHECK_EQ(px(100, y2 + 40), kBg);                    // row 3 starts 40 px below row 2: the rows below shifted by 14
     CHECK_EQ(px(1, y2 + 40 + 3) != kFocus, 1);
-    CHECK_EQ(px(100, 24 + 26), kBg);                    // rows above keep the 26 px pitch
+    CHECK_EQ(px(100, kit::kBodyY + 26), kBg);           // rows above keep the 26 px pitch
     CHECK_EQ(ink_in(28, 120, y2 + 24, y2 + 36, kFocusT) > 0, 1);   // the 12 px note
-    CHECK_EQ(ink_in(28, 120, 24 + 26 + 14, 24 + 26 + 26, kBg) > 0, 1);   // an unfocused row has its text, no note below it
-    // Past the last row the rest of the list rect is plain kBg, the footer band below is untouched.
-    CHECK_EQ(px(100, 24 + 5 * 26 + 14 + 10), kBg);
-    CHECK_EQ(px(100, kFooterY), kBase);
+    CHECK_EQ(ink_in(28, 120, kit::kBodyY + 26 + 14, kit::kBodyY + 26 + 26, kBg) > 0, 1);   // an unfocused row has its text, no note below it
+    // Past the last row the rest of the list rect is plain kBg, the band below kListBottom is untouched.
+    CHECK_EQ(px(100, kit::kBodyY + 5 * 26 + 14 + 10), kBg);
+    CHECK_EQ(px(100, kit::kListBottom), kBase);
 }
 
-// A short list (5 rows in a 7 row window): the open row 4 runs over the first empty slot. Reached by walking down or bound
+// A short list (5 rows in an 8 row window): the open row 4 runs over the first empty slot. Reached by walking down or bound
 // there directly, it is one solid block with its full-height bar, and the empty slots below it stay plain background.
 static void test_last_row_opens_over_empty_slot() {
     for (int walk = 0; walk < 2; walk++) {
@@ -176,11 +176,11 @@ static void test_last_row_opens_over_empty_slot() {
         l.set_count(m.n);
         if (walk) for (int s = 0; s < 5; s++) {
             l.select(s); l.draw(1 + s);
-            const int ys = 24 + s * 26;
+            const int ys = kit::kBodyY + s * 26;
             for (int dy : {1, 20, 39}) CHECK_EQ(px(1, ys + dy), kFocus);   // every step: the open row's bar is whole
         }
         else { l.select(4); l.draw(1); }
-        const int y4 = 24 + 4 * 26;
+        const int y4 = kit::kBodyY + 4 * 26;
         for (int dy : {1, 20, 39}) {
             CHECK_EQ(px(1, y4 + dy), kFocus);
             CHECK_EQ(px(5, y4 + dy), kFocusT);
@@ -196,7 +196,7 @@ static void test_row_without_note_stays_26() {
     kit::RowList l;
     l.init(kSurf, kit::kBodyY, row_fn, &m);
     l.set_count(m.n); l.select(2); l.draw(1);
-    const int y2 = 24 + 2 * 26;
+    const int y2 = kit::kBodyY + 2 * 26;
     CHECK_EQ(px(1, y2 + 3), kFocus);
     CHECK_EQ(px(100, y2 + 26), kBg);                    // the next row follows at the plain pitch
     CHECK_EQ(px(1, y2 + 25), kFocus);
@@ -206,8 +206,8 @@ static void test_row_without_note_stays_26() {
     m.note[3] = "note 3";
     l.select(3); l.draw(2);
     l.select(1); l.draw(3);
-    CHECK_EQ(px(100, 24 + 5 * 26 + 10), kBg);
-    CHECK_EQ(px(100, 24 + 7 * 26), kBg);   // below the last row of 5: nothing of the open row remains
+    CHECK_EQ(px(100, kit::kBodyY + 5 * 26 + 10), kBg);
+    CHECK_EQ(px(100, kit::kBodyY + 7 * 26), kBg);   // below the last row of 5: nothing of the open row remains
 }
 
 static void test_row_list_caches() {
@@ -223,15 +223,15 @@ static void test_row_list_caches() {
     auto a = snap();
     l.select(2); l.draw(20);                            // a focus move: rows 1..4 change (the 14 px shift), row 0 does not
     auto b = snap();
-    CHECK_EQ(changed_in(a, b, 24, 24 + 26), 0);
-    CHECK_EQ(changed_in(a, b, 24 + 26, 24 + 5 * 26 + 14) > 0, 1);
-    CHECK_EQ(changed_in(a, b, 24 + 5 * 26 + 14, 240), 0);
+    CHECK_EQ(changed_in(a, b, kit::kBodyY, kit::kBodyY + 26), 0);
+    CHECK_EQ(changed_in(a, b, kit::kBodyY + 26, kit::kBodyY + 5 * 26 + 14) > 0, 1);
+    CHECK_EQ(changed_in(a, b, kit::kBodyY + 5 * 26 + 14, 240), 0);
     a = snap();
     m.tail[0] = "99";                                   // a value change repaints its own row only
     l.draw(30);
     b = snap();
-    CHECK_EQ(changed_in(a, b, 24 + 26, 240), 0);
-    CHECK_EQ(changed_in(a, b, 24, 24 + 26) > 0, 1);
+    CHECK_EQ(changed_in(a, b, kit::kBodyY + 26, 240), 0);
+    CHECK_EQ(changed_in(a, b, kit::kBodyY, kit::kBodyY + 26) > 0, 1);
     // invalidate reaches the cache: the next draw repaints the same pixels
     a = snap();
     l.invalidate(); l.draw(40);
@@ -246,10 +246,10 @@ static void test_markers() {
     kit::RowList l;
     l.init(kSurf, kit::kBodyY, row_fn, &m);
     l.set_count(m.n); l.select(0); l.draw(1);
-    const int cy1 = 24 + 40 + 7 + 6;                    // row 1 marker centre (row 0 is the open 40 px row)
+    const int cy1 = kit::kBodyY + 40 + 7 + 6;           // row 1 marker centre (row 0 is the open 40 px row)
     CHECK_EQ(px(14, cy1), kFocus);                      // the picked radio's dot
-    CHECK_EQ(px(14, 24 + 40 + 26 + 7 + 6), kBg);        // row 2 (off): hollow, the centre is the row base
-    CHECK_EQ(px(8, 24 + 40 + 26 + 7 + 6) != kBg, 1);    // ... with a ring (dim)
+    CHECK_EQ(px(14, kit::kBodyY + 40 + 26 + 7 + 6), kBg);        // row 2 (off): hollow, the centre is the row base
+    CHECK_EQ(px(8, kit::kBodyY + 40 + 26 + 7 + 6) != kBg, 1);    // ... with a ring (dim)
     // radio: a square. On is a solid block, off a hollow frame (a shape cue, not only colour). Every pixel of the 12 px square is
     // rewritten on each state, so painting over the other state, or over junk, leaves exactly the fresh drawing.
     for (int pass = 0; pass < 2; pass++) {
@@ -295,9 +295,9 @@ static void test_tail_and_chevron() {
     kit::RowList l;
     l.init(kSurf, kit::kBodyY, row_fn, &m);
     l.set_count(m.n); l.select(0); l.draw(1);
-    const int y1 = 24 + 40;                             // row 1 (below the open row)
-    CHECK_EQ(ink_in(215, 221, y1 + 2, y1 + 24, kBg), 0);   // the value ends at x214
-    CHECK_EQ(ink_in(198, 215, y1 + 2, y1 + 24, kBg) > 0, 1);
+    const int y1 = kit::kBodyY + 40;                    // row 1 (below the open row)
+    CHECK_EQ(ink_in(kit::kTailX + 1, 221, y1 + 2, y1 + 24, kBg), 0);   // the value ends at kTailX
+    CHECK_EQ(ink_in(kit::kTailX - 16, kit::kTailX + 1, y1 + 2, y1 + 24, kBg) > 0, 1);
     lcd::fill(kBase);
     kit::RowSpec r; r.chevron = true;
     kit::draw_drill(kSurf, 214, 100, kDim);
@@ -315,18 +315,18 @@ static void test_thumb_and_lane() {
     CHECK_EQ(px(222, 100) != kBase, 1);                 // track / thumb in the lane
     for (int i = 1; i < 12; i++) { l.select(i); l.draw(10 + 200 * i); }
     l.draw(5000);
-    CHECK_EQ(l.state().offset, 5);                      // 12 rows, window of 7
-    CHECK_EQ(px(100, kFooterY), kBase);                 // the footer band is never touched
-    CHECK_EQ(px(222, kFooterY), kBase);
-    CHECK_EQ(px(222, 24 + 7 * 26 + 14 - 1) != kBase, 1);   // the track ends where the rect ends, above the footer
+    CHECK_EQ(l.state().offset, 4);                      // 12 rows, window of 8
+    CHECK_EQ(px(100, kit::kListBottom), kBase);         // the band below kListBottom is never touched
+    CHECK_EQ(px(222, kit::kListBottom), kBase);
+    CHECK_EQ(px(222, kit::kBodyY + 8 * 26 + 14 - 1) != kBase, 1);   // the track ends where the rect ends
     // A list that fits runs its row base under the lane: no notch next to the focused row.
     Model s; fill_model(s, 3);
     lcd::fill(kBase);
     kit::RowList f;
     f.init(kSurf, kit::kBodyY, row_fn, &s);
     f.set_count(s.n); f.select(1); f.draw(1);
-    CHECK_EQ(px(222, 24 + 26 + 20), kFocusT);
-    CHECK_EQ(px(222, 24 + 5), kBg);
+    CHECK_EQ(px(222, kit::kBodyY + 26 + 20), kFocusT);
+    CHECK_EQ(px(222, kit::kBodyY + 5), kBg);
 }
 
 static void test_verdict_cell() {
@@ -598,21 +598,21 @@ static void test_kv_and_info() {
     const char *const labels[3] = {"Tests", "Peak", "Cable"};
     lcd::fill(kBase);
     kit::kv_static(kSurf, lay, labels, 3);
-    CHECK_EQ(px(100, 24), kBg);                         // receipt rows: white space, no hairlines
-    CHECK_EQ(px(100, 24 + 26), kBg);
-    CHECK_EQ(px(100, 24 + 3 * 26), kBg);                // the closing line is ground too
-    CHECK_EQ(px(100, 24 + 4 * 26), kBase);
-    CHECK_EQ(ink_in(6, 60, 24 + 1, 24 + 26, kBg) > 0, 1);   // key
+    CHECK_EQ(px(100, lay.y0), kBg);                     // receipt rows: white space, no hairlines
+    CHECK_EQ(px(100, lay.y0 + 26), kBg);
+    CHECK_EQ(px(100, lay.y0 + 3 * 26), kBg);            // the closing line is ground too
+    CHECK_EQ(px(100, lay.y0 + 4 * 26), kBase);
+    CHECK_EQ(ink_in(6, 60, lay.y0 + 1, lay.y0 + 26, kBg) > 0, 1);   // key
     {   // the dot leader from the key to the value column, 2 x 2 px dots
         int dots = 0;
-        for (int y = 24; y < 24 + 26; y++) for (int x = 50; x < lay.value_x - 4; x++) dots += px(x, y) == kFaint;
+        for (int y = lay.y0; y < lay.y0 + 26; y++) for (int x = 50; x < lay.value_x - 4; x++) dots += px(x, y) == kFaint;
         CHECK_EQ(dots > 0 && dots % 4 == 0, 1);
     }
     Field cells[3];
     kit::kv_cells(kSurf, lay, cells, 3);
     cells[1].draw("20V 3.25A");
-    CHECK_EQ(ink_in(72, 150, 24 + 26 + 1, 24 + 2 * 26, kBg) > 0, 1);
-    CHECK_EQ(ink_in(72, 150, 24 + 1, 24 + 26, kBase), 0);   // the other cells are not touched
+    CHECK_EQ(ink_in(lay.value_x, 150, lay.y0 + 26 + 1, lay.y0 + 2 * 26, kBg) > 0, 1);
+    CHECK_EQ(ink_in(lay.value_x, 150, lay.y0 + 1, lay.y0 + 26, kBase), 0);   // the other cells are not touched
     // Per-cell widths: a right-aligned cell narrowed to 5 of 18 chars keeps its right edge and leaves the left of the box alone.
     lcd::fill(kBase);
     const uint8_t narrow[3] = {18, 5, 18};
@@ -620,12 +620,12 @@ static void test_kv_and_info() {
     kit::kv_cells(kSurf, rl, cells, 3, narrow);
     cells[1].draw("12345");
     const int right = rl.value_x + 18 * kSmall.adv, left5 = right - 5 * kSmall.adv;
-    CHECK_EQ(ink_in(left5, right, 24 + 26 + 1, 24 + 2 * 26, kBg) > 0, 1);
-    CHECK_EQ(ink_in(rl.value_x, left5, 24 + 26 + 1, 24 + 2 * 26, kBase), 0);
+    CHECK_EQ(ink_in(left5, right, lay.y0 + 26 + 1, lay.y0 + 2 * 26, kBg) > 0, 1);
+    CHECK_EQ(ink_in(rl.value_x, left5, lay.y0 + 26 + 1, lay.y0 + 2 * 26, kBase), 0);
     lcd::fill(kBase);
     kit::kv_row(kSurf, lay, 24, "Header", "PD3.1", kText);
     CHECK_EQ(px(100, 24), kBg);
-    CHECK_EQ(ink_in(72, 120, 25, 49, kBg) > 0, 1);
+    CHECK_EQ(ink_in(lay.value_x, 120, 25, 49, kBg) > 0, 1);
     lcd::fill(kBase);
     kit::KvLayout info = {50, kit::kInfoPitch, kit::kInfoTagX, nullptr, nullptr, kit::kInfoValueX, 21, Align::Left, true};
     kit::kv_row(kSurf, info, 50, "PD", "20V5A", kText);
@@ -652,37 +652,37 @@ static void test_result_row() {
     const ResultCell vc[4] = {{Verdict::Pass, "5V", {}}, {Verdict::Fail, "9V", {}}, {Verdict::Skip, "12V", {}}, {Verdict::Running, "20V", {}}};
     lcd::fill(kBase);
     kit::draw_result_row(kSurf, 100, 26, "QC2", vc, 4);
-    CHECK_EQ(px(60, 110), kBg);                         // no label rule: white space
+    CHECK_EQ(px(54, 110), kBg);                         // no label rule: white space
     CHECK_EQ(px(2, 110), kBg);                          // strip is not focused
-    CHECK_EQ(ink_in(6, 56, 100, 125, kBg) > 0, 1);      // the 12 px label
+    CHECK_EQ(ink_in(6, 52, 100, 125, kBg) > 0, 1);      // the 12 px label
     CHECK_EQ(px(65, 102), kOkT);                        // pass cell: tint
-    CHECK_EQ(px(61, 100), kOkT);                        // the first cell starts at x61
-    CHECK_EQ(px(107, 102), kError);                     // fail cell: solid red (n=4: 163/4 = 41 px pitch, cell 2 at x102)
-    CHECK_EQ(px(101, 110), kBg);                        // the 1 px gap between cells
+    CHECK_EQ(px(55, 100), kOkT);                        // the first cell starts at x55
+    CHECK_EQ(px(107, 102), kError);                     // fail cell: solid red (n=4: 169/4 = 42 px pitch, cell 2 at x97)
+    CHECK_EQ(px(96, 110), kBg);                         // the 1 px gap between cells
     CHECK_EQ(px(223, 110), kBg);                        // the right edge stays clear
     CHECK_EQ(px(150, 125), kBg);                        // the last line of a row is never painted over
     CHECK_EQ(px(186, 110), kBg);                        // running: the pending look, no fill
     CHECK_EQ(px(190, 110), kBg);
-    {   // ... inside a 2 px outline along the 4th cell's edge (x183..222, the row's top edge), no dot
+    {   // ... inside a 2 px outline along the 4th cell's edge (x182..222, the row's top edge), no dot
         int marks = 0, left = 224, top = 240;
         for (int yy = 100; yy < 126; yy++)
             for (int xx = 0; xx < 224; xx++)
                 if (px(xx, yy) == kFocus) { marks++; left = std::min(left, xx); top = std::min(top, yy); }
-        CHECK_EQ(left, 183);
+        CHECK_EQ(left, 182);
         CHECK_EQ(top, 100);
-        CHECK_EQ(px(184, 110), kFocus);
+        CHECK_EQ(px(183, 110), kFocus);
         CHECK_EQ(px(222, 110), kFocus);
         CHECK_EQ(marks >= kit::run_mark_px(30, 20), 1);   // the rim, whatever the cell's exact box
     }
-    CHECK_EQ(px(60, 126), kBase);                       // nothing below the row
+    CHECK_EQ(px(54, 126), kBase);                       // nothing below the row
 
     // Focused unit: tint, 3 px bar and a cyan label.
     lcd::fill(kBase);
     kit::draw_result_row(kSurf, 100, 26, "QC2", vc, 4, true);
     CHECK_EQ(px(1, 110), kFocus);
     CHECK_EQ(px(30, 102), kFocusT);
-    CHECK_EQ(px(59, 110), kFocusT);
-    CHECK_EQ(px(60, 110), kBg);
+    CHECK_EQ(px(53, 110), kFocusT);
+    CHECK_EQ(px(54, 110), kBg);
 
     // Section rule: two kRule lines on the row's top, the content starts under them.
     lcd::fill(kBase);
@@ -697,11 +697,11 @@ static void test_result_row() {
     kit::draw_result_row(kSurf, 100, 40, "USB PD", cc, 4);
     CHECK_EQ(px(65, 100 + 23), kOkT);                   // cells are 24 px tall
     CHECK_EQ(px(65, 100 + 24), kBg);                    // and the bracket zone below is plain
-    CHECK_EQ(ink_in(61, 224, 100 + 28, 100 + 40, kBg) > 0, 1);   // current labels and brackets
-    CHECK_EQ(px(63, 100 + 31), kFaint);                   // the run 5V 9V 12V: bracket line left end
-    CHECK_EQ(px(63, 100 + 29), kFaint);                   // its 3 px end tick
-    CHECK_EQ(px(63, 100 + 28), kFaint);                   // ... 3 px above the line
-    CHECK_EQ(px(63, 100 + 27), kBg);
+    CHECK_EQ(ink_in(55, 224, 100 + 28, 100 + 40, kBg) > 0, 1);   // current labels and brackets
+    CHECK_EQ(px(57, 100 + 31), kFaint);                   // the run 5V 9V 12V: bracket line left end
+    CHECK_EQ(px(57, 100 + 29), kFaint);                   // its 3 px end tick
+    CHECK_EQ(px(57, 100 + 28), kFaint);                   // ... 3 px above the line
+    CHECK_EQ(px(57, 100 + 27), kBg);
     // Neutral: the bracket under the failed 12V is dim, never red.
     int reds = 0;
     for (int y = 100 + 24; y < 100 + 40; y++)
@@ -949,11 +949,11 @@ static void test_result_grid_budgeted() {
     gq.draw();
     CHECK_EQ(changed_in(pdelta, snap(), 0, 240), 0);
     // A Skip cell's strike is in the cost model, on both paths. Row 0 is 26 px (a 25 px verdict part, so the 16 px label): its
-    // first cell is 81 px wide ("5V" is 16 px, a strike of 18). The verdict-only repaint costs the cell's area plus the strike.
+    // first cell is 84 px wide ("5V" is 16 px, a strike of 18). The verdict-only repaint costs the cell's area plus the strike.
     mp.pass[0] = 3;
     n0 = g_lcd_pixels;
     spent = gp.draw_some(1 << 20);
-    CHECK_EQ(spent, 81 * 25 + 18);
+    CHECK_EQ(spent, 84 * 25 + 18);
     CHECK_EQ(g_lcd_pixels - n0, unsigned(spent));
     // The whole row of a fresh grid (the first piece of a 1 px budget) costs the row's area plus the same strike.
     lcd::fill(kBase);
@@ -1275,11 +1275,11 @@ static void test_col2_and_pill() {
     CHECK_EQ(ink_in(28, 100, y0 + 2, y0 + 24, kBg) > 0, 1);
     // the second row has no col2: its name runs on past x104
     CHECK_EQ(ink_in(110, 190, y0 + 26 + 2, y0 + 26 + 24, kBg) > 0, 1);
-    // a pill tail: tint behind the text, right edge at x214
+    // a pill tail: tint behind the text, right edge at kit::kTailX
     m.pill = true;
     l.invalidate(); l.draw(2);
-    CHECK_EQ(px(177, y0 + 13), kCautionT);
-    CHECK_EQ(ink_in(215, 224, y0 + 2, y0 + 24, kBg), 0);
+    CHECK_EQ(px(kit::kTailX - 37, y0 + 13), kCautionT);
+    CHECK_EQ(ink_in(kit::kTailX + 1, 224, y0 + 2, y0 + 24, kBg), 0);
     // same content again paints nothing
     const auto same = snap();
     l.draw(3);

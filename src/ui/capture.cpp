@@ -177,6 +177,7 @@ bool capture_busy() { return g_sink_ptr != nullptr; }
 bool capture_begin(Ui &ui) {
     if (g_sink_ptr != nullptr) return false;
     g_sink_ptr = &g_http_sink;
+    ui.capture_state_begin();
     ui.sample();
     return true;
 }
@@ -192,6 +193,7 @@ const uint16_t *capture_strip(Ui &ui, int strip, uint32_t now_ms) {
 
 void capture_end(Ui &ui, uint32_t now_ms) {
     ui.resync(now_ms);
+    ui.capture_state_end();
     g_sink_ptr = nullptr;
 }
 #else
@@ -204,6 +206,7 @@ bool capture_screen(Ui &ui, uint8_t seq, uint32_t now_ms, uint8_t transport) {
     if (g_sink_ptr != nullptr) return false;
     PixelSink sink;
     g_sink_ptr = &sink;
+    ui.capture_state_begin();
     ui.sample();
     const bool cdc = transport != remote::kShotViaHid;
     if (cdc) usb::set_cdc_hold(true);   // no shell text inside the stream
@@ -214,6 +217,7 @@ bool capture_screen(Ui &ui, uint8_t seq, uint32_t now_ms, uint8_t transport) {
         : capture_screen_scratch(ui, sink, seq, now_ms, transport, total);
     if (cdc) usb::set_cdc_hold(false);
     ui.resync(now_ms);
+    ui.capture_state_end();
     g_sink_ptr = nullptr;
     K2LOG("[RMT] screenshot %s: %d bytes in %d ms\n", ok ? "done" : "aborted",
                 static_cast<int>(total), static_cast<int>(systick::millis() - t0));

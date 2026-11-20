@@ -75,7 +75,7 @@ SetupView setup_view(Tool tool, const SetupState &st);
 // One PDO as a kit RowList row: the text "FIX 9V 3A" / "PPS 3.3-11V 5A" / "AVS 25.5-51.1V 5A" and the power as the tail
 // ("27W"). Text and tail together never exceed kPdoLineCells (what the row has between the marker and the right edge):
 // the amps lose precision first (4.99A -> 5A), then drop, so a row is never cut. Pure text; colours are the page's.
-inline constexpr int kPdoLineCells = 22;
+inline constexpr int kPdoLineCells = 20;
 struct PdoLine {
     StrBuf<24> text;
     StrBuf<8> tail;

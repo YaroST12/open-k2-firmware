@@ -218,7 +218,7 @@ void test_detail_opens_and_closes() {
     press(ui, Button::Plus);
     CHECK_STR(label(ui, Button::Ok), "Delete");
     CHECK_EQ(ui.twin_page().action(), 2);
-    CHECK_EQ(ui.twin_page().first_line() > 0 ? 1 : 0, 1);   // the page scrolled so Delete is on screen
+    CHECK_EQ(ui.twin_page().first_line(), 0);                // all rows fit in the taller 208x240 body without scrolling
     press(ui, Button::Plus);                     // clamped
     CHECK_EQ(ui.twin_page().action(), 2);
     press(ui, Button::Back);                     // back to the list, on the same twin
@@ -403,7 +403,7 @@ void test_delete_confirm() {
     press(ui, Button::Ok);                       // arms, deletes nothing
     CHECK_EQ(ui.twin_page().armed() ? 1 : 0, 1);
     CHECK_EQ(int(g_stub.twins.size()), 3);
-    CHECK_STR(footer_of(ui).c_str(), "Deletes this twin for good");
+    CHECK_STR(footer_of(ui).c_str(), "Deletes this twin");
     CHECK_STR(label(ui, Button::Ok), "Confirm");
     press(ui, Button::Ok);
     CHECK_EQ(int(g_stub.twins.size()), 2);
@@ -630,7 +630,7 @@ void test_learn_inline_results() {
     g_stub.twin_iq_status.phase = pd::IqPhase::Aborted;
     g_stub.twin_iq_status.why = pd::IqWhy::SourceRestarts;
     step(ui, 100);
-    CHECK_STR(footer_of(ui).c_str(), "Charger restarts when asked");
+    CHECK_STR(footer_of(ui).c_str(), "Charger restarts on ask");
     unplug_inline(ui);
 }
 
@@ -794,7 +794,7 @@ void test_wake_not_before_confirm() {
     press(ui, Button::Ok);                       // arms, presents nothing
     CHECK_EQ(g_stub.twin_starts, 0);
     CHECK_EQ(ui.twin_page().armed() ? 1 : 0, 1);
-    CHECK_STR(footer_of(ui).c_str(), "Wakes the charger. Confirm");
+    CHECK_STR(footer_of(ui).c_str(), "Wakes charger. Confirm");
     CHECK_STR(label(ui, Button::Ok), "Confirm");
     step(ui, 200);
     CHECK_EQ(g_stub.rd_run_changes, 0);          // opening the page and arming never touched Rd
@@ -838,7 +838,7 @@ void test_wake_refused_without_a_charger() {
     g_stub.caps.valid = false;                   // nothing on the plug: Unknown
     Ui &ui = open_page();
     open_twin(ui, 0);
-    CHECK_STR(footer_of(ui).c_str(), "No charger: no predictions");
+    CHECK_STR(footer_of(ui).c_str(), "No charger: no predict");
     CHECK_STR(note_of(ui, 0).c_str(), "no charger to predict from");
     press(ui, Button::Ok);
     CHECK_STR(footer_of(ui).c_str(), "No charger to run against");
@@ -850,7 +850,7 @@ void test_wake_refused_without_a_charger() {
     Ui &ui2 = open_page();
     make_alone(ui2);
     open_twin(ui2, 0);
-    CHECK_STR(footer_of(ui2).c_str(), "No charger: no predictions");
+    CHECK_STR(footer_of(ui2).c_str(), "No charger: no predict");
     press(ui2, Button::Ok);
     CHECK_STR(footer_of(ui2).c_str(), "No charger to run against");
     CHECK_EQ(g_stub.twin_starts, 0);

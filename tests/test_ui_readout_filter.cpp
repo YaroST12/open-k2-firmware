@@ -16,7 +16,7 @@ using namespace k2;
 
 namespace {
 
-constexpr int kBandX = 140, kBandW = 84, kBandH = kBarH - 1;   // draw_top_readout's band, hairline row excluded
+constexpr int kBandX = 0, kBandW = kOppRailThickness, kBandY0 = 54, kBandY1 = 240;   // OppRail V/A/W telemetry slots (1..3)
 
 power::Metrics metrics(int32_t mv, int32_t ma) {
     power::Metrics m{};
@@ -29,7 +29,7 @@ power::Metrics metrics(int32_t mv, int32_t ma) {
 
 std::vector<uint16_t> band() {
     std::vector<uint16_t> b;
-    for (int y = 0; y < kBandH; y++)
+    for (int y = kBandY0; y < kBandY1; y++)
         for (int x = kBandX; x < kBandX + kBandW; x++) b.push_back(g_panel[y * 240 + x]);
     return b;
 }
@@ -45,7 +45,7 @@ struct Rig {
         ui.goto_page(static_cast<uint8_t>(Page::Tools), now);   // a page with the V x A readout in the bar (Home and the Meter faces have none)
         settle();
     }
-    void settle() { for (int i = 0; i < 4; i++) tick(); }
+    void settle() { for (int i = 0; i < 4 || (i < 60 && ui.painting()); i++) tick(); }
     void tick() { now += 100; ui.tick(now); }   // kPageTickMs: one page update per call
     // The bar as drawn for a screen whose average and display filter both read (mv, ma).
     std::vector<uint16_t> reference(int32_t mv, int32_t ma) {
@@ -104,7 +104,9 @@ unsigned x0, x1, y0, y1, cx, cy;
 void begin(uint16_t a, uint16_t b, uint16_t c, uint16_t d) { x0 = cx = a; y0 = cy = b; x1 = c; y1 = d; }
 void put(uint32_t k) {
     for (; k; --k) {
-        if (cx >= static_cast<unsigned>(kBandX) && cy < static_cast<unsigned>(kBandH)) ++inside;
+        if (cx < static_cast<unsigned>(kBandX + kBandW) &&
+            cy >= static_cast<unsigned>(kBandY0) && cy < static_cast<unsigned>(kBandY1))
+            ++inside;
         if (++cx > x1) { cx = x0; if (++cy > y1) cy = y0; }
     }
 }

@@ -81,8 +81,8 @@ constexpr int kStartRow = 0;
 // The presets are subsets of "All tests" (the default set, Class B included): PD = the PD family (its Xiaomi rows ride
 // along), Legacy = every D+/D- family (OEM vendor modes + QC / UFCS), Vendor modes = the OEM D+/D- families only.
 constexpr const char* kPresetNames[kPresets] = {"All tests", "PD only", "Legacy only", "Vendor modes"};
-// The 12 px note under the focused row (x28 .. 218).
-constexpr const char* kPresetNotes[kPresets] = {"Everything, QC Class B 20V too", "PD fixed, PPS, EPR, Xiaomi",
+// The 12 px note under the focused row (x28 .. 202, 29 chars).
+constexpr const char* kPresetNotes[kPresets] = {"Everything, QC Class B 20V", "PD fixed, PPS, EPR, Xiaomi",
                                                 "D+/D-: vendor modes, QC, UFCS", "Huawei, Samsung, OPPO, vivo"};
 static_assert(all_fit(kPresetNotes, kLabelAdv, kit::kNoteMaxPx), "a preset note is wider than the row note");
 static_assert(all_fit(kPresetNames, kSmallAdvPx, 150), "a preset name is wider than its row");
@@ -97,7 +97,7 @@ constexpr int level_segment(ct::Level l) { return l == ct::Level::Light ? 0 : l 
 static_assert(level_segment(ct::next_level(ct::Level::Light)) == 1 && level_segment(ct::next_level(ct::Level::Medium)) == 2 &&
               level_segment(ct::next_level(ct::Level::Deep)) == 0, "OK steps the level to the right and wraps");
 static_assert(all_fit(kLevelItems, kSmallAdvPx, 18 * kSmallAdvPx), "a Level word is wider than its value cell");
-constexpr const char *kLevelNotes[ct::kLevelCount] = {"Tests each advertised voltage", "Checks what the charger offers",
+constexpr const char *kLevelNotes[ct::kLevelCount] = {"Tests each advertised voltage", "Checks what charger offers",
                                                        specsec::kBuilt ? "Sweeps, accuracy & PD spec" : "Sweeps & voltage accuracy"};
 static_assert(all_fit(kLevelNotes, kLabelAdv, kit::kNoteMaxPx), "a level note is wider than the row note");
 const char *level_note(ct::Level l) { return kLevelNotes[unsigned(l) < ct::kLevelCount ? unsigned(l) : 0]; }
@@ -137,7 +137,7 @@ int preset_row_of(uint32_t selected) {
     for (int n = 0; n < kPresets; ++n) if (kPresetMasks[n] == selected) return n + 1;
     return 0;
 }
-constexpr int kBestChars = 26;   // the Results best line: 16 px (8 px cells) in the 212 px beside the page margins
+constexpr int kBestChars = 25;   // the Results best line: 16 px (8 px cells) in the 200 px beside the page margins
 using result_layout::kGridMetrics;
 static_assert((kFamilies[0] | kFamilies[1] | kFamilies[2] | kFamilies[3] | kFamilies[4] | kFamilies[5]) == ct::kDefaultAlgorithms);
 static_assert(kPresetMasks[3] != 0 && (kPresetMasks[3] & ct::kDefaultAlgorithms) == kPresetMasks[3]);
@@ -1532,6 +1532,7 @@ ChargerTestPage::ChargerTestPage(UiContext& c, ChargerTestSession& s) : PageBase
     s_.bind_view(this);
 }
 void ChargerTestPage::on_stage(bool entering) {
+    ctx_.toast.clear();
     invalidate();
     grid_ = kit::ResultGrid{};
     if (!entering && !ctx_.blank) clear_y_ = kit::kBelowBar;
@@ -1620,7 +1621,7 @@ bool ChargerTestPage::spec_list_row(int i, specsec::Row &r) const {
 }
 #endif
 void ChargerTestPage::on_confirmation_dropped() { foot_.invalidate(); action_.invalidate(); }
-void ChargerTestPage::on_cable_changed() { update(ctx_.now); }
+void ChargerTestPage::on_cable_changed() { ctx_.ui->refresh(ctx_.now); }
 void ChargerTestPage::build_grid(bool running_grid, bool note_cuts) {
     result_layout::OemNotes oem;
     if (running_grid) {
@@ -1817,7 +1818,7 @@ void ChargerTestPage::describe(ChargerTestSession::View& v) {
     v.rows = static_cast<uint8_t>(std::min(row_count(), 255));
     StrBuf<32> f;
     footer_line(f);
-    const std::string_view t = f.view().substr(0, kFooterCells);
+    const std::string_view t = f.view().substr(0, sizeof(v.message) - 1);
     for (size_t i = 0; i < t.size(); ++i) v.message[i] = t[i];
     v.message[t.size()] = 0;
     v.message_len = static_cast<uint8_t>(t.size());
@@ -1879,7 +1880,7 @@ namespace {
 constexpr const char *kNoteCustom = "Choose families one by one", *kNoteLast = "The run kept from last time",
                      *kNoteFamily = "Entries inside this family", *kNoteXiaomi = "SVID 0x2717 auth, runs in PD",
                      *kNotePdFixed = "Fixed offers: SPR + EPR", *kNotePps = "PPS + SPR/EPR AVS offers",
-                     *kNoteClassB = "20 V; Class A shows a skip", *kNoteUfcs = "UART 5/9/12V; needs UFCS source",
+                     *kNoteClassB = "20 V; Class A shows a skip", *kNoteUfcs = "UART 5/9/12V; needs UFCS",
                      *kNoteVivo = "UART 5/9/11V, unproven", *kNoteHs = "5V handshake, not power",
                      *kNoteEntry = "One entry of this family", *kNoteSweep = "Every 100mV, 1A; opt-in";
 constexpr const char *kNotes[] = {kNoteCustom, kNoteLast, kNoteFamily, kNoteXiaomi, kNotePdFixed, kNotePps, kNoteClassB,
@@ -1951,48 +1952,65 @@ void unit_progress(const ct::Runner &runner, size_t at, unsigned &i, unsigned &n
 }
 }  // namespace
 
-void ChargerTestPage::bar() {
-    struct BarMeta { const char *title; uint8_t step; };
-    // Stage enum order: Algorithms(0), Group(1), Cable(2), Identity(3), Review(4), Running(5),
-    // Results(6), Steps(7), Detail(8), Resume(9), Changes(10), Ask(11), Refuse(12), Waiting(13), Custom(14), SpecDetail(15).
-    static constexpr BarMeta kBar[16] = {
-        {"Tests", 1}, {"Entries", 1}, {"Spoof cable", 2}, {"Spoof cable", 2}, {"Review", 3},
-        {"Charger test", 0}, {"Results", 0}, {"steps", 0}, {"Step detail", 0}, {"Charger test", 0},
-        {"Changes", 0}, {"Spoof cable", 2}, {"Charger test", 0}, {"Charger test", 0}, {"Custom", 1}, {"PD spec", 0},
-    };
-    const unsigned st = static_cast<unsigned>(s_.stage_);
-    const BarMeta &m = st < 16 ? kBar[st] : BarMeta{"Charger test", 0};
-    StrBuf<24> t;
-    static_assert(static_cast<unsigned>(Stage::SpecDetail) == 15, "kBar is indexed by Stage: extend it with the enum");
-    if (s_.stage_ == Stage::Steps && results_row_ >= 0 && static_cast<size_t>(results_row_) < line_n_)
-        t.put(result_layout::row_label(layout_, lines_[static_cast<size_t>(results_row_)].row())).put_char(' ');
-    pdspec::Check chk;
-    specsec::Cell cell;
-    if (s_.stage_ == Stage::SpecDetail && spec_open(chk, cell)) t.put(pdspec::kDefs[static_cast<size_t>(chk)].label);
-    else t.put(m.title);
-    kit::draw_top_bar(ctx_.content, t.view(), m.step, fusb302::self_powered() ? "SNK" : "PAS", true);   // title_badge follows in update
-    bar_valid_ = false;   // the band repaint erased the V x A readout: title_badge paints it again
-    bar_key_ = static_cast<uint8_t>(st + 1);
+kit::OppRailSpec ChargerTestPage::opp_rail() const {
+    const Stage st = s_.stage_;
+    if (st == Stage::Algorithms || st == Stage::Custom || st == Stage::Group)
+        return {"TEST", 3, 0, kit::OppTelemetry::Vaw};
+    if (st == Stage::Cable)
+        return {"TEST", 3, 1, kit::OppTelemetry::Vaw};
+    if (st == Stage::Review || st == Stage::Refuse)
+        return {"TEST", 3, 2, kit::OppTelemetry::Vaw};
+    if (st == Stage::Running)
+        return {"TEST", 0, 0, kit::OppTelemetry::AmpCcDp};
+    if (st == Stage::Waiting)
+        return {"WAITING", 0, 0, kit::OppTelemetry::WattCcDp};
+    if (st == Stage::Results)
+        return {"RESULTS", 0, 0, kit::OppTelemetry::Vaw};
+    if (st == Stage::Steps || st == Stage::Detail || st == Stage::SpecDetail)
+        return {"DETAIL", 0, 0, kit::OppTelemetry::Vaw};
+    return {"TEST", 0, 0, kit::OppTelemetry::Vaw};
 }
 
-bool ChargerTestPage::foot(FooterTone tone, std::string_view text) {
-    return draw_footer_budgeted(ctx_.content, tone, text, foot_, ctx_.budget);
+void ChargerTestPage::bar() {
+    bar_valid_ = true;
+    bar_key_ = static_cast<uint8_t>(static_cast<unsigned>(s_.stage_) + 1u);
 }
-constexpr int kFooterBandH = 240 - kFooterY;   // the footer band: y222..239
+
 // The footer's signature (tone + text; never 0): the same value whoever painted it, so a repaint finds its words already there.
 static uint32_t footer_sig(FooterTone tone, std::string_view text) {
     return mix_u32(pg::mix_str(mix_init(), text), static_cast<uint32_t>(tone)) | 1u;
 }
-// A handshake window is about to open (ChargerTestSession::request_fc, before fctrig::start): paint the footer line that says
+bool ChargerTestPage::foot(FooterTone tone, std::string_view text) {
+    const bool show = !text.empty() && s_.stage_ != Stage::Running && s_.stage_ != Stage::Algorithms;
+    const uint32_t sig = show ? footer_sig(tone, text) : 1u;
+    if (!show && sig == foot_sig_) return true;
+    if (show && sig == foot_sig_) return true;
+    foot_sig_ = sig;
+    if (show) {
+        ctx_.toast.show(tone, text, ctx_.now);
+        if (ctx_.toast.erase_pending) {
+            gfx_fill(ctx_.content, 0, static_cast<int16_t>(ctx_.content.h - kToastH - kToastMarginBottom),
+                     ctx_.content.w, kToastH, kBg);
+            ctx_.toast.erase_pending = false;
+            grid_.invalidate();
+            action_.invalidate();
+            ctx_.rows.invalidate();
+        }
+    }
+    return true;
+}
+constexpr int kFooterBandH = kToastH;
+// A handshake window is about to open (ChargerTestSession::request_fc, before fctrig::start): paint the toast pill that says
 // why the screen will be still, and remember it as painted so the page does not repaint it from inside the window.
 void ChargerTestPage::announce(const char* words) {
-    if (s_.stage_ != Stage::Running || !laid_) return;
+    if (s_.stage_ != Stage::Running) return;
     const std::string_view text(words);
     const uint32_t sig = footer_sig(FooterTone::Info, text);
     if (sig == foot_sig_) return;
-    // Engine-window announcement paints ahead of fctrig::start and is counted against nothing else (see ui_pages.hpp),
-    // so it must not drain the current frame's PaintBudget before paint_running() updates the gauge band.
-    draw_footer_budgeted(ctx_.content, FooterTone::Info, text, foot_, nullptr);
+    ctx_.toast.show(FooterTone::Info, text, ctx_.now);
+    draw_footer(ctx_.content, FooterTone::Info, text);
+    ctx_.toast.erase_pending = false;
+    ctx_.toast.drawn = true;
     foot_sig_ = sig;
 }
 
@@ -2103,7 +2121,7 @@ static FooterTone range_footer(StrBuf<32> &f, const ct::Runner &runner, A algo, 
 
 [[gnu::noinline]] FooterTone ChargerTestPage::footer_line(StrBuf<32> &f) {
     if (!s_.message_.view().empty()) {
-        f.put(s_.message_.view().substr(0, kFooterCells));
+        f.put(s_.message_.view().substr(0, kToastCells));
         return FooterTone::Caution;
     }
     switch (s_.stage_) {
@@ -2533,17 +2551,17 @@ constexpr const char *kChecks[3] = {"Rd presented", "VBUS up", "Source caps"};
 static_assert(all_fit(kChecks, kSmallAdvPx, 190), "a Waiting checklist item is wider than its row");
 constexpr const char *kRdOn[2] = {"Rd on CC1", "Rd on CC2"};   // the checklist's first row once the Rd sits on a line
 static_assert(all_fit(kRdOn, kSmallAdvPx, 190), "a Waiting checklist item is wider than its row");
-// The Review table: five rows of 26 px from the body top, the key at x6 and the value from x72 (18 cells).
-constexpr kit::KvLayout kKv{kit::kBodyY, kit::kRowH, 6, nullptr, nullptr, 72, 18, Align::Left};
-// Review always carries the other-port warning: the alert band (36 px + its stripe, to y 66), two S16 lines under it, then the
-// three rows (Tests, Depth, Spoof at a 22 px pitch) and the 46 px START ticket.
-constexpr int16_t kWarnLine1Y = 66, kWarnLine2Y = 82;
-constexpr kit::KvLayout kReviewKv{102, 22, 6, nullptr, nullptr, 72, 18, Align::Left};
-constexpr int16_t kReviewCellY = 174, kReviewCellH = 46;
-static_assert(102 + 3 * 22 <= kReviewCellY && kReviewCellY + kReviewCellH == kFooterY - 2,
-              "Review: the table and START stack above the footer");
-// The Detail table: under the verdict band, the value column at x92 (16 cells).
-constexpr kit::KvLayout kDet{60, kit::kRowH, 6, nullptr, nullptr, 92, 16, Align::Left};
+// The Review table: five rows of 26 px from the body top, the key at x6 and the value from x68 (17 cells).
+constexpr kit::KvLayout kKv{kit::kBodyY, kit::kRowH, 6, nullptr, nullptr, 68, 17, Align::Left};
+// Review always carries the other-port warning: the alert band (y2..44), two S16 lines under it, then the
+// three rows (Tests, Depth, Spoof at a 24 px pitch) and the 54 px START ticket.
+constexpr int16_t kWarnLine1Y = 48, kWarnLine2Y = 66;
+constexpr kit::KvLayout kReviewKv{90, 24, 6, nullptr, nullptr, 68, 17, Align::Left};
+constexpr int16_t kReviewCellY = 176, kReviewCellH = 56;
+static_assert(90 + 3 * 24 <= kReviewCellY && kReviewCellY + kReviewCellH <= kFooterY - 2,
+              "Review: the table and START stack cleanly in 240 px");
+// The Detail table: under the verdict band (y 2..37), the value column at x76 (16 cells).
+constexpr kit::KvLayout kDet{44, kit::kRowH, 6, nullptr, nullptr, 76, 16, Align::Left};
 
 kit::Verdict tone_verdict(Tone t) {
     switch (t) {
@@ -2668,8 +2686,8 @@ using runlay::kPlainRun;
 using runlay::kSweepRun;
 constexpr int16_t kRunBelowBar = runlay::kBelowBar, kRunHeroRight = runlay::kPlainHeroRight;
 static_assert(kSweepRun.gauge_y + kit::kPassBandH <= kSweepRun.rule_y && kSweepRun.rule_y + 2 <= kSweepRun.grid_y, "sweep: gauge, rule, grid in order");
-static_assert(kRunHeroRight + 3 + 12 <= 224, "the plain hero's unit fits the content width");
-static_assert(runlay::kBlockUnitX + runlay::kAdv12 <= 224, "the act / set unit fits the content width");
+static_assert(kRunHeroRight + 3 + 12 <= 208, "the plain hero's unit fits the 208 px content width");
+static_assert(runlay::kBlockUnitX + runlay::kAdv12 <= 208, "the act / set unit fits the 208 px content width");
 static_assert(ctsweep::kErrOkMv == result_layout::kSweepPassMv, "the error hero and the sweep chip share the pass window");
 static_assert(runlay::kHeroDigitsRight - 3 * runlay::kAdv48 - runlay::kAdv24 >= 0, "the sign and the three digit cells fit the content width");
 }  // namespace
@@ -2682,8 +2700,8 @@ void ChargerTestPage::paint_review() {
         // The stern warning, on every Review, whatever the link says: the test opens the lines and a device on the other port can
         // be damaged. START's own arm + CONFIRM is the acknowledgement (one confirm per run).
         kit::draw_alert_band(c, kit::kBodyY, false, "OTHER PORT FREE");
-        gfx_text(c, kSmall, 6, kWarnLine1Y, "A device on the other port", kText, kBg);
-        gfx_text(c, kSmall, 6, kWarnLine2Y, "can be damaged. Unplug it.", kText, kBg);
+        gfx_text(c, kSmall, 6, kWarnLine1Y, "Device on the other port", kText, kBg);
+        gfx_text(c, kSmall, 6, kWarnLine2Y, "can be damaged. Unplug it", kText, kBg);
         action_.init(c, kReviewCellY, kReviewCellH);
         laid_ = true;
     }
@@ -2784,9 +2802,9 @@ void ChargerTestPage::lay_running(bool sweeping, bool wipe) {
     gfx_fill(c, 0, L.rule_y, c.w, 2, kRule);
     if (sweeping) {   // the act / set block's fixed words: labels and units, on their values' baselines
         const int16_t dy = static_cast<int16_t>(runlay::kA24 - runlay::kA12);
-        gfx_text(c, kLabelFont, runlay::kBlockLabelX, static_cast<int16_t>(runlay::kActY + dy), "act", kDim, kBg);
+        gfx_text(c, kLabelFont, runlay::kBlockLabelX, static_cast<int16_t>(runlay::kActY + dy), "ac", kDim, kBg);
         gfx_text(c, kLabelFont, runlay::kBlockUnitX, static_cast<int16_t>(runlay::kActY + dy), "V", kVolt, kBg);
-        gfx_text(c, kLabelFont, runlay::kBlockLabelX, static_cast<int16_t>(runlay::kSetY + dy), "set", kDim, kBg);
+        gfx_text(c, kLabelFont, runlay::kBlockLabelX, static_cast<int16_t>(runlay::kSetY + dy), "st", kDim, kBg);
         gfx_text(c, kLabelFont, runlay::kBlockUnitX, static_cast<int16_t>(runlay::kSetY + dy), "V", kDim, kBg);
     }
     grid_.init(c, L.grid_y, kFooterY, &ChargerTestPage::result_row_fn, this);   // every row dirty again
@@ -2852,7 +2870,7 @@ void ChargerTestPage::paint_waiting(uint32_t now) {
             else { s.put("--"); ink = kFaint; }
             sv = s.view();
         }
-        put_line(c, kSmall, static_cast<int16_t>((i & 1) ? 154 : 42), static_cast<int16_t>(i < 2 ? 92 : 118), sv, ink, 8, cell_sig_[i], false,
+        put_line(c, kSmall, static_cast<int16_t>((i & 1) ? 138 : 42), static_cast<int16_t>(i < 2 ? 92 : 118), sv, ink, 8, cell_sig_[i], false,
                  false, &bg);
     }
 
@@ -2918,7 +2936,7 @@ void ChargerTestPage::paint_running(uint32_t now) {
     if (!laid_ || sweeping != sweep_laid_) {
         const bool wipe = sweeping != sweep_laid_;
         if (!bg.admit(wipe ? c.w * (kFooterY - kRunBelowBar) : c.w * (kit::kPassBandH + 2))) return;
-        if (!laid_) prog_.init(c, 6, 44, 212);
+        if (!laid_) prog_.init(c, 6, 24, 196);
         lay_running(sweeping, wipe);
         laid_ = true;
     }
@@ -2928,22 +2946,22 @@ void ChargerTestPage::paint_running(uint32_t now) {
     const int32_t vbus_g = std::max<int32_t>(vbus, 0);
     // 1. the gauge strip, once per target (a new step, or the sweep range): the whole strip, the needle drawn at the live reading
     const uint32_t strip_sig = sweeping ? (mix_u32(mix_u32(0x5eedu, live.lo_mv), live.hi_mv) | 1u) : static_cast<uint32_t>(target) + 1u;
-    if (strip_sig != cell_sig_[5] && bg.admit(target > 0 ? 210 * kit::kPassBandH : c.w * kit::kPassBandH)) {
+    if (strip_sig != cell_sig_[5] && bg.admit(target > 0 ? 196 * kit::kPassBandH : c.w * kit::kPassBandH)) {
         cell_sig_[5] = strip_sig;
         needle_px_ = mark_px_ = -1;
         if (sweeping) {
-            const kit::RangePos p = kit::draw_range_gauge(c, 6, L.gauge_y, 210, vbus_g, live.set_mv, live.lo_mv, live.hi_mv, full);
+            const kit::RangePos p = kit::draw_range_gauge(c, 6, L.gauge_y, 196, vbus_g, live.set_mv, live.lo_mv, live.hi_mv, full);
             needle_px_ = p.needle; mark_px_ = p.mark;
         } else if (target > 0) {
-            needle_px_ = kit::draw_pass_band(c, 6, L.gauge_y, 210, vbus_g, target, full, -1);
+            needle_px_ = kit::draw_pass_band(c, 6, L.gauge_y, 196, vbus_g, target, full, -1);
         } else {
             gfx_fill(c, 0, L.gauge_y, c.w, kit::kPassBandH, kBg);
         }
     }
     // 1a. a sweep row's marker follows the setpoint: the next point's Request is out, so the marker moves on without waiting for the hero
     if (sweeping && needle_px_ >= 0 && mark_px_ >= 0 &&
-        kit::range_geom(6, 210, vbus_g, live.set_mv, live.lo_mv, live.hi_mv, full).mark != mark_px_ && bg.admit(kRangePx)) {
-        const kit::RangePos p = kit::draw_range_gauge(c, 6, L.gauge_y, 210, vbus_g, live.set_mv, live.lo_mv, live.hi_mv, full, {static_cast<int16_t>(mark_px_), static_cast<int16_t>(needle_px_)});
+        kit::range_geom(6, 196, vbus_g, live.set_mv, live.lo_mv, live.hi_mv, full).mark != mark_px_ && bg.admit(kRangePx)) {
+        const kit::RangePos p = kit::draw_range_gauge(c, 6, L.gauge_y, 196, vbus_g, live.set_mv, live.lo_mv, live.hi_mv, full, {static_cast<int16_t>(mark_px_), static_cast<int16_t>(needle_px_)});
         needle_px_ = p.needle; mark_px_ = p.mark;
     }
     // 1b. the step outline, in the same tick as the gauge band: the layout follows the runner now, and the grid moves the
@@ -2953,23 +2971,33 @@ void ChargerTestPage::paint_running(uint32_t now) {
         grid_key_ = key;
         build_grid(true);
     }
-    // 5. the footer (the unit and its step), one cached band: evaluated before sync_dots/hero/clock/header so a
-    // handshake-window end or step change is never starved behind dot sync or 250 ms/1 s redraws.
+    // 5. Only a real exception or the active handshake is overlaid on Running; the progress/header already names the step.
     StrBuf<32> buf;
     {
-        const FooterTone tone = footer_line(buf);
-        const uint32_t sig = footer_sig(tone, buf.view());
-        if (sig != foot_sig_) {
-            if (pbg) {
-                const int before = pbg->spent;
-                if (foot(tone, buf.view())) {
-                    bg.spent += pbg->spent - before;
+        const bool notice = s_.runner_.state() == ct::State::Unsafe ||
+                            s_.runner_.reason() != ct::Reason::None ||
+                            s_.runner_.steps().empty() ||
+                            s_.runner_.state() == ct::State::Spec;
+        if (notice) {
+            const FooterTone tone = footer_line(buf);
+            const uint32_t sig = footer_sig(tone, buf.view());
+            if (sig != foot_sig_) {
+                if (pbg) {
+                    const int before = pbg->spent;
+                    if (foot(tone, buf.view())) {
+                        bg.spent += pbg->spent - before;
+                        foot_sig_ = sig;
+                    }
+                } else if (bg.admit(c.w * kFooterBandH)) {
+                    foot(tone, buf.view());
                     foot_sig_ = sig;
                 }
-            } else if (bg.admit(c.w * kFooterBandH)) {
-                foot(tone, buf.view());
-                foot_sig_ = sig;
             }
+        } else if (s_.fc_words_ && !fctrig::paint_critical() &&
+                   ctx_.toast.view() == s_.fc_words_) {
+            ctx_.toast.clear();
+            foot_sig_ = 0;
+            grid_.invalidate();
         }
     }
     grid_.set_count(static_cast<int>(line_n_));
@@ -2985,7 +3013,7 @@ void ChargerTestPage::paint_running(uint32_t now) {
         buf.put_u32(secs / 60).put_char(':');
         if (secs % 60 < 10) buf.put_char('0');
         buf.put_u32(secs % 60);
-        put_line(c, kSmall, 170, 25, buf.view(), kDim, 6, cell_sig_[1], true, false, &bg);
+        put_line(c, kSmall, 154, 4, buf.view(), kDim, 6, cell_sig_[1], true, false, &bg);
     }
     // 3. the live VBUS and its needle: every update between steps, about 4 Hz while a step is in flight (yields refreshes while grid rows are pending).
     // A sweep row's hero is the signed error (reading - setpoint, to the mV) with the act / set pair beside it, all of one reading:
@@ -3000,10 +3028,10 @@ void ChargerTestPage::paint_running(uint32_t now) {
             hero_color_ = kVolt;
         }
         if (sweeping && needle_px_ >= 0 && mark_px_ >= 0) {
-            const kit::RangePos p = kit::draw_range_gauge(c, 6, L.gauge_y, 210, vbus_g, live.set_mv, live.lo_mv, live.hi_mv, full, {static_cast<int16_t>(mark_px_), static_cast<int16_t>(needle_px_)});
+            const kit::RangePos p = kit::draw_range_gauge(c, 6, L.gauge_y, 196, vbus_g, live.set_mv, live.lo_mv, live.hi_mv, full, {static_cast<int16_t>(mark_px_), static_cast<int16_t>(needle_px_)});
             needle_px_ = p.needle; mark_px_ = p.mark;
         } else if (target > 0 && needle_px_ >= 0) {
-            needle_px_ = kit::draw_pass_band(c, 6, L.gauge_y, 210, vbus_g, target, full, needle_px_);
+            needle_px_ = kit::draw_pass_band(c, 6, L.gauge_y, 196, vbus_g, target, full, needle_px_);
         }
     }
     // 4. the step header: counter, progress bar, protocol, step name, target. A step change is visible within a tick or two.
@@ -3012,20 +3040,20 @@ void ChargerTestPage::paint_running(uint32_t now) {
         const int done = static_cast<int>(work.done), total = static_cast<int>(work.total);
         buf.clear();
         buf.put_u32(work.done).put_char('/').put_u32(work.total).put(" steps");
-        put_line(c, kSmall, 6, 25, buf.view(), kText, 12, cell_sig_[0], false, false, &bg);
+        put_line(c, kSmall, 6, 4, buf.view(), kText, 12, cell_sig_[0], false, false, &bg);
         if (bg.admit(prog_.cost(done, total))) prog_.set(done, total);
         const int fam = st ? family(*st) : -1;
         // the family label (dim, 12 px) above the name; a sweep row's name moves up and the label goes to its right, baseline to baseline
         const char *const fam_name = fam >= 0 ? kFamilyNames[fam] : "";
         if (sweeping) put_line(c, kLabelFont, runlay::kSweepFamX, L.name_y + kSmall.ascent - kLabelFont.ascent, fam_name, kDim, 16, cell_sig_[2], true, false, &bg);
-        else put_line(c, kLabelFont, 6, 52, fam_name, kDim, 16, cell_sig_[2], false, false, &bg);
+        else put_line(c, kLabelFont, 6, 32, fam_name, kDim, 16, cell_sig_[2], false, false, &bg);
         buf.clear();
         if (st) buf.put(step_label::label(*st, at > 0 ? &steps[at - 1] : nullptr).view());
         put_line(c, kSmall, 6, L.name_y, buf.view(), kText, 11, cell_sig_[3], false, true, &bg);
         if (!sweeping) {
             buf.clear();
             if (st && st->mv) { buf.put("target "); pg::put_volts_trim(buf, st->mv); buf.put_char('V'); }
-            put_line(c, kLabelFont, 6, 88, buf.view(), kDim, 16, cell_sig_[4], false, false, &bg);
+            put_line(c, kLabelFont, 6, 68, buf.view(), kDim, 16, cell_sig_[4], false, false, &bg);
         }
     }
     // 6. the verdict grid follows the step under test (the layout was rebuilt at 1b). The window scrolls to the running line (a
@@ -3155,7 +3183,7 @@ void ChargerTestPage::paint_results() {
         if (!bg.admit(1600)) return;
         // pass / fail / skip; a run that found a voltage fold adds a fourth cell, "caution" (amber tilde), between pass and fail
         const kit::Verdict kinds[4] = {kit::Verdict::Pass, kit::Verdict::Partial, kit::Verdict::Fail, kit::Verdict::Skip};
-        const int cols = all.caution ? 4 : 3, pitch = all.caution ? 56 : 75;
+        const int cols = all.caution ? 4 : 3, pitch = all.caution ? 52 : 68;
         for (int i = 0; i < cols; ++i) {
             const int16_t x = static_cast<int16_t>(i * pitch);
             if (i) gfx_fill(c, static_cast<int16_t>(x - 1), 22, 1, 24, kRule);
@@ -3169,13 +3197,14 @@ void ChargerTestPage::paint_results() {
     const unsigned n4[4] = {all.pass, all.caution, all.fail, all.skip};
     static constexpr const char *kWords4[4] = {"pass", "caution", "fail", "skip"};
     const uint16_t ink4[4] = {kOk, kCaution, kError, kDim};
-    const int cols = all.caution ? 4 : 3, pitch = all.caution ? 56 : 75, chars = all.caution ? 5 : 7;
+    const int cols = all.caution ? 4 : 3, pitch = all.caution ? 52 : 68, chars = all.caution ? 4 : 6;
     for (int i = 0; i < cols; ++i) {
         const int k = all.caution || i < 1 ? i : i + 1;   // without a caution the cell is skipped: pass, fail, skip
         StrBuf<12> t;
         t.put_u32(n4[k]);
-        if (!all.caution && t.view().size() + 1 + std::strlen(kWords4[k]) <= size_t(chars)) t.put_char(' ').put(kWords4[k]);
-        put_line(c, kSmall, static_cast<int16_t>(i * pitch + 16), 26, t.view(), ink4[k], chars, cell_sig_[i], false, false, &bg);
+        if (!all.caution && t.view().size() + 1 + std::strlen(kWords4[k]) <= 7) t.put_char(' ').put(kWords4[k]);
+        const unsigned cw = std::max<unsigned>(chars, static_cast<unsigned>(t.view().size()));
+        put_line(c, kSmall, static_cast<int16_t>(i * pitch + 16), 26, t.view(), ink4[k], cw, cell_sig_[i], false, false, &bg);
     }
     put_line(c, kSmall, 6, 51, best_.view(), best_none_ ? kDim : kText,
              kBestChars, cell_sig_[4], false, true, &bg);   // [0..3] are the header's cells (four with a caution)
@@ -3204,12 +3233,12 @@ void ChargerTestPage::draw_capture(const transcap::Meta &m) {
 static void draw_band(const Surface &c, kit::Verdict v, std::string_view word, bool tight, std::string_view right) {
     const auto vs = kit::verdict_style(v);
     const uint16_t fill = vs.filled ? vs.fill : kSurface;
-    gfx_fill(c, 0, 22, c.w, 36, fill);
-    kit::draw_verdict(c, 6, 30, 20, 20, v, {}, fill);
-    if (tight) gfx_text(c, kSmall, 32, 32, word, vs.ink, fill);
-    else gfx_text(c, kMid, 32, 28, word, vs.ink, fill);
+    gfx_fill(c, 0, 2, c.w, 36, fill);
+    kit::draw_verdict(c, 6, 10, 20, 20, v, {}, fill);
+    if (tight) gfx_text(c, kSmall, 32, 12, word, vs.ink, fill);
+    else gfx_text(c, kMid, 32, 8, word, vs.ink, fill);
     const uint16_t ink = vs.ink == kDim || vs.ink == kFaint ? kText : vs.ink;
-    gfx_text(c, kSmall, static_cast<int16_t>(218 - static_cast<int>(right.size()) * kSmallAdvPx), 32, right, ink, fill);
+    gfx_text(c, kSmall, static_cast<int16_t>(c.w - 6 - static_cast<int>(right.size()) * kSmallAdvPx), 12, right, ink, fill);
 }
 
 // One step's detail: a verdict band, then a fixed table (no scroll). A step with a stored capture gives its last two rows to the
@@ -3235,9 +3264,9 @@ void ChargerTestPage::paint_detail() {
         // The band word (LISTED / NOT RUN for a Light run's listing) and the step's name share the band: a long word (CAUTION) beside
         // a long name (PPS 7.14->11V) would overlap, so the word drops to the small font then and the name keeps its whole text.
         const std::string_view word = result_layout::verdict_word(s, view);
-        const bool tight = word.size() > 6 && 32 + text_width(kMid, word) + 8 + static_cast<int>(val.view().size() * kSmallAdvPx) > 218;
+        const bool tight = word.size() > 6 && 32 + text_width(kMid, word) + 8 + static_cast<int>(val.view().size() * kSmallAdvPx) > c.w - 6;
         char buf[kFitBuf];
-        draw_band(c, v, word, tight, fit_data(kSmall, val.view(), tight ? 218 - 32 - 8 - text_width(kSmall, word) : 96, buf));
+        draw_band(c, v, word, tight, fit_data(kSmall, val.view(), tight ? c.w - 6 - 32 - 8 - text_width(kSmall, word) : 80, buf));
         detail_step_ = 1;
     }
     while (detail_step_ >= 1 && detail_step_ <= 6) {
@@ -3388,15 +3417,15 @@ void ChargerTestPage::paint_resume() {
     PaintBudget *const pbg = ctx_.budget;
     Budget bg{pbg, (1 << 30)};
     if (!laid_) {
-        if (!bg.admit(static_cast<int>(c.w) * 24 + 26 * 8 * 16)) return;
+        if (!bg.admit(static_cast<int>(c.w) * 24 + 25 * 8 * 16)) return;
         gfx_fill(c, 0, 26, c.w, 24, kBg);
-        put_line(c, kSmall, 6, 28, resumetext::status(resume_words(ctx_.now)), kCaution, 26, cell_sig_[0]);
+        put_line(c, kSmall, 4, 28, resumetext::status(resume_words(ctx_.now)), kCaution, 25, cell_sig_[0]);
         ctx_.rows.init(c, 56, &ChargerTestPage::row_fn, this);
         ctx_.rows.restart();
         ctx_.rows.invalidate();
         laid_ = true;
     } else {
-        put_line(c, kSmall, 6, 28, resumetext::status(resume_words(ctx_.now)), kCaution, 26, cell_sig_[0], false, false, &bg);
+        put_line(c, kSmall, 4, 28, resumetext::status(resume_words(ctx_.now)), kCaution, 25, cell_sig_[0], false, false, &bg);
     }
     paint_list();
 }
@@ -3418,6 +3447,7 @@ void ChargerTestPage::share_card() {
 void ChargerTestPage::draw_static() {
     invalidate();
     if (!ctx_.blank && s_.stage_ != Stage::Algorithms) clear_y_ = kit::kBelowBar;
+    if (!ctx_.blank && s_.stage_ == Stage::Algorithms) kit::RowList::clear_body_around(ctx_.content);
     if (ctx_.budget && !ctx_.budget->admit(static_cast<int>(ctx_.content.w) * kit::kBelowBar, true)) return;
     bar();
 }
@@ -3428,6 +3458,11 @@ void ChargerTestPage::update(uint32_t now) {
     sync_proposal(now);
     s_.selection_ = std::clamp(s_.selection_, 0, last_row());
     fill_cable_names();
+    if (s_.stage_ != Stage::Running) {
+        StrBuf<32> f;
+        const FooterTone tone = footer_line(f);
+        foot(tone, f.view());
+    }
     // A step in flight inside an engine window the idle hook does not serve (the handshake pulses, the VOOC receive slices,
     // the UFCS/VIVO windows): nothing paints. The tick is dropped, the next one repaints what is dirty. Every tick tells the
     // blocked-paint meter whether it was sat out: its longest window is the `[CT] gap ... blocked=` of the row.
@@ -3459,10 +3494,6 @@ void ChargerTestPage::update(uint32_t now) {
     default: paint_list(); break;
     }
     if (s_.stage_ == Stage::Running) return;   // its footer is one of paint_running's budgeted items
-    if (pbg && pbg->more) return;
-    StrBuf<32> f;
-    const FooterTone tone = footer_line(f);
-    foot(tone, f.view());
 }
 
 bool ChargerTestPage::on_event(Event e) {
@@ -3736,6 +3767,12 @@ void ChargerTestPage::invalidate() {
     hero_color_ = 0;
     clear_y_ = kFooterY;
     detail_step_ = 0;
+}
+
+void ChargerTestPage::invalidate_for_capture() {
+    const uint32_t foot_sig = foot_sig_;
+    invalidate();
+    foot_sig_ = foot_sig;
 }
 
 }  // namespace k2

@@ -227,69 +227,20 @@ void model_row_text(StrBuf<24> &s) {
 // Shared page helpers
 // ---------------------------------------------------------------------------------------
 
-// Short bar names (8 cells at most) of the rotation pages, in Page order (a Bench place names itself: bar_icon_ + title_).
-static constexpr const char *kBarNames[] = {"Home", "Numbers", "Charger", "Lines", "Bench", "Settings", "Graphs", "Ripple"};
+// Short bar names of the rotation pages, in Page order (a Bench place names itself: bar_icon_ + title_).
+static constexpr const char *kBarNames[] = {"HOME", "NUMBERS", "TEST", "LINES", "BENCH", "SETTINGS", "GRAPHS", "RIPPLE"};
 static_assert(sizeof kBarNames / sizeof *kBarNames == static_cast<size_t>(Page::Count), "one bar name per rotation page");
 
-void PageBase::title_bar() {
-    // Slim chrome bar: page name left plus the role badge, 1 px hairline below (kBarH-1). On a rotation
-    // page (Home included) the badge names a held Rd pin ("Rd pin CC2", e.g. a leftover pd-reread --pin)
-    // instead of the bare boot-role SNK, so a pin still set is visible on the status line; no pin is the
-    // passive inline role (PAS). Menus keep the short SNK/PAS: their long titles need the badge width.
-    // The band repaint erases the right-side readout; the next title_badge call repaints it.
-    bar_valid_ = false;
-    const bool menu = is_menu();
-    const char *name = menu || bar_icon_ ? title_ : kBarNames[static_cast<int>(id_)];
-    char badge[11];
-    std::string_view role = menu ? std::string_view(fusb302::self_powered() ? "SNK" : "PAS")
-                                 : role_badge(fusb302::pin_rd(), badge);
-    if (role == "PAS") role = {};   // Fieldbook: the masthead carries a role only as an exception (a held Rd pin, a sink)
-    // The readout area is the page's update() job (title_badge, always called first thing and always repainting after this).
-    draw_status_left(ctx_.content, (menu || meter_face() || bar_icon_) && has_icon_, icon_, name, 132, role, true);
+kit::OppRailSpec PageBase::opp_rail() const {
+    const char *name = (is_menu() || bar_icon_) ? title_ : kBarNames[static_cast<int>(id_)];
+    return {name ? std::string_view(name) : std::string_view{}, 0, 0, kit::OppTelemetry::Vaw};
 }
 
-void PageBase::title_pager(int current, int count) {
-    const uint32_t sig = 0x9A6E0000u | (static_cast<uint32_t>(count & 0xFF) << 8) | static_cast<uint32_t>(current & 0xFF);
-    if (bar_valid_ && sig == bar_sig_) return;
-    const int cost = static_cast<int>(ctx_.content.w > 140 ? ctx_.content.w - 140 : 84) * (kBarH - 1);
-    if (ctx_.budget && !ctx_.budget->admit(cost, true)) return;
-    bar_valid_ = true;
-    bar_sig_ = sig;
-    draw_top_pager(ctx_.content, count, current);
-}
-
-// Right end of the top chrome bar: the compact fmt3(V) x fmt3(A) readout, swapped for the stale-grey
-// LAST pill while the page shows previous data. Home keeps the pill when stale (design 6.6) but
-// never the live readout: its hero carries the values.
-namespace {
-// Measured direction as the physical arrow: positive current = bottom port to top port (Up); Idle = deadband.
-Arrow arrow_of(const power::Metrics &pm) {
-    return pm.flow == power::Flow::Forward ? Arrow::Up : pm.flow == power::Flow::Reverse ? Arrow::Down : Arrow::Idle;
-}
-}  // namespace
-
-void PageBase::title_badge(bool last) {
-    const bool frozen = last && ctx_.live.seen();
-    const bool home = id_ == Page::Home;
-    const power::Metrics &pm = frozen ? ctx_.last.pm : ctx_.pm;
-    const StatusReadout mode = home ? (frozen ? StatusReadout::Stale : StatusReadout::None)
-                                    : last ? StatusReadout::Stale
-                                           : ctx_.pm_online ? StatusReadout::Live : StatusReadout::None;
-    char vb[8], ab[8];
-    const std::string_view vs{vb, mode == StatusReadout::Live ? readout::fmt3(std::span(vb), pm.vbus_mv, 'V') : 0};
-    const std::string_view as{ab, mode == StatusReadout::Live ? readout::fmt3(std::span(ab), pm.current_ma, 'A') : 0};
-    // The chevron slot of the live readout: a direction change or a rotation repaints it, nothing else does.
-    const Arrow flow = mode == StatusReadout::Live ? arrow_of(pm) : Arrow::Idle;
-    uint32_t sig = pg::mix_str(pg::mix_str(2166136261u ^ static_cast<uint32_t>(mode), vs), as);
-    sig = mix_u32(mix_u32(sig, static_cast<uint32_t>(flow)), static_cast<uint32_t>(ctx_.rotation & 3u));
-    if (bar_valid_ && sig == bar_sig_) return;
-    const int full_cost = static_cast<int>(ctx_.content.w > 140 ? ctx_.content.w - 140 : 84) * (kBarH - 1);
-    if (ctx_.budget && !ctx_.budget->admit(bar_valid_ ? 600 : full_cost, true)) return;
-    if (!bar_valid_) readout_shown_.valid = false;
-    bar_valid_ = true;
-    bar_sig_ = sig;
-    draw_top_readout(ctx_.content, mode, vs, as, flow, ctx_.rotation, readout_shown_);
-}
+// Option B (Pure 2-Side-Bar): title, pager dots and live telemetry live on the 16 px Opposite Telemetry Rail,
+// so the legacy horizontal TopBar helpers are no-ops.
+void PageBase::title_bar() { bar_valid_ = true; }
+void PageBase::title_pager(int, int) { bar_valid_ = true; }
+void PageBase::title_badge(bool) { bar_valid_ = true; }
 
 bool PageBase::back_event(Event e) {
     if (is_menu() || e.press != Press::Short) return false;
@@ -531,6 +482,7 @@ void EmarkerPage::update(uint32_t now_ms) {
             draw_icon(c, kit::kMarkX, static_cast<int16_t>(kit::kBodyY + 7), Icon::Emark, kDim, kBg);
         });
     }
+    if (ctx_.budget && ctx_.budget->more) return;
     StrBuf<27> st;
     FooterTone tone = FooterTone::Info;   // counts and positions are neutral facts
     if (note_until_) {
@@ -542,7 +494,13 @@ void EmarkerPage::update(uint32_t now_ms) {
         st.put("Cable ").put_u32(static_cast<uint32_t>(idx + 1)).put(" of ").put_u32(static_cast<uint32_t>(n));
         if (menu_.view == EmView::Confirm) { st.put(". Not deleted"); tone = FooterTone::Caution; }
     }
-    draw_footer_cached(c, tone, st.view(), foot_);
+    if (note_until_ || menu_.view == EmView::Confirm) {
+        draw_footer_cached(c, tone, st.view(), foot_);
+    } else {
+        foot_.paint_budgeted(1, ctx_.budget, static_cast<int>(c.w) * 20, [&] {
+            gfx_fill(c, 0, static_cast<int16_t>(c.h - 20), c.w, 20, kBg);
+        });
+    }
 }
 
 // The shown cable's entry, re-read when the selection or the library changed.
@@ -672,7 +630,7 @@ namespace {
 // Diag: a kit KvTable of 9 rows at a 22 px pitch (the nine rows need 198 px, 26 px rows would not fit above the footer),
 // S12 keys at x28, S16 values right-aligned to x218 in one 17-char box (the widest, "RX"), and a verdict marker at x8 on
 // the first row of each group: USB (0..2), PD (3..5), SYS (6..8).
-constexpr kit::KvLayout kDgLayout{kit::kBodyY, 22, kit::kTextX, &kLabelFont, nullptr, 218 - 17 * 8, 17, Align::Right};
+constexpr kit::KvLayout kDgLayout{kit::kBodyY, 22, kit::kTextX, &kLabelFont, nullptr, 204 - 17 * 8, 17, Align::Right};
 // Worst case per row ("4294M / 4294M" is 13 chars, RX 17): each cell is only as wide as its text, clear of the S12 keys.
 constexpr uint8_t kDgValueChars[DiagPage::kRows] = {7, 13, 13, 7, 17, 13, 7, 11, 11};
 const char *const kDgLabel[DiagPage::kRows] = {"Link", "RST/ISR", "TX/drop", "FUSB302", "RX", "Poll gap", "Meter", "Uptime", "Model"};
@@ -698,6 +656,15 @@ void DiagPage::draw_static() {
         if (bg && !bg->admit(cost, true)) return;
         if (!ctx_.blank) kit::kv_ground_row(c, kDgLayout, kDgLabel[i], i, kDgValueChars, kMarksMask);
         kit::kv_static_row(c, kDgLayout, kDgLabel[i], i, i + 1 == kRows);
+        static_step_++;
+    }
+    if (static_step_ == kRows + 1) {
+        const int16_t below = static_cast<int16_t>(kit::kv_row_y(kDgLayout, kRows) + 1);
+        if (!ctx_.blank && below < c.h) {
+            const int cost = static_cast<int>(c.w) * (c.h - below);
+            if (bg && !bg->admit(cost, true, true)) return;
+            gfx_fill(c, 0, below, c.w, static_cast<int16_t>(c.h - below), kBg);
+        }
         static_step_++;
     }
 }
@@ -762,7 +729,8 @@ void DiagPage::update(uint32_t now_ms) {
         {FooterTone::Error, "FUSB302 not answering"},
         {FooterTone::Info, "Power meter starting"},
     };
-    draw_footer_budgeted(ctx_.content, kDiagFoot[state].tone, kDiagFoot[state].msg, foot_, bg);
+    if (kDiagFoot[state].tone == FooterTone::Error || kDiagFoot[state].tone == FooterTone::Caution)
+        draw_toast(ctx_.content, kDiagFoot[state].tone, kDiagFoot[state].msg);
 }
 
 bool DiagPage::on_event(Event e) {
@@ -807,8 +775,8 @@ void DiagPage::invalidate() {
 // ---------------------------------------------------------------------------------------
 
 namespace {
-// Nine rows at a 22 px pitch (as Diag), S12 keys at x6, S16 values right-aligned to x218 in one 16-char box (the widest value).
-constexpr kit::KvLayout kMemLayout{kit::kBodyY, 22, 6, &kLabelFont, nullptr, 218 - memstat::kValueMax * 8, memstat::kValueMax, Align::Right};
+// Nine rows at a 22 px pitch (as Diag), S12 keys at x6, S16 values right-aligned to x204 in one 16-char box (208 px canvas).
+constexpr kit::KvLayout kMemLayout{kit::kBodyY, 22, 6, &kLabelFont, nullptr, 204 - memstat::kValueMax * 8, memstat::kValueMax, Align::Right};
 constexpr std::array<uint8_t, memstat::kRows> kMemValueChars = [] {
     std::array<uint8_t, memstat::kRows> a{};
     for (auto &v : a) v = memstat::kValueMax;
@@ -822,6 +790,7 @@ void MemoryPage::draw_static() {
     if (static_step_ == 0) {
         if (bg && !bg->admit(140 * kBarH, true)) return;
         title_bar();
+        if (!ctx_.blank && kit::kBodyY > 0) gfx_fill(c, 0, 0, c.w, kit::kBodyY, kBg);
         kit::kv_cells(c, kMemLayout, val_, kRows, kMemValueChars.data());
         foot_.invalidate();
         pg::invalidate_fields(val_, kRows);
@@ -835,6 +804,15 @@ void MemoryPage::draw_static() {
         const char *label = memstat::row_label(static_cast<memstat::Row>(i));
         if (!ctx_.blank) kit::kv_ground_row(c, kMemLayout, label, i, kMemValueChars.data(), 0);
         kit::kv_static_row(c, kMemLayout, label, i, i + 1 == kRows);
+        static_step_++;
+    }
+    if (static_step_ == kRows + 1) {
+        const int16_t below = static_cast<int16_t>(kit::kv_row_y(kMemLayout, kRows) + 1);
+        if (!ctx_.blank && below < c.h) {
+            const int cost = static_cast<int>(c.w) * (c.h - below);
+            if (bg && !bg->admit(cost, true)) return;
+            gfx_fill(c, 0, below, c.w, static_cast<int16_t>(c.h - below), kBg);
+        }
         static_step_++;
     }
 }
@@ -854,11 +832,21 @@ void MemoryPage::update(uint32_t) {
             return;
     }
     if (bg && bg->more) return;
-    char f[memstat::kFooterMax + 1];
-    const std::size_t n = memstat::footer_text(s, std::span<char>(f, memstat::kFooterMax));
     const memstat::Level lv = memstat::footer_level(s);
-    draw_footer_budgeted(ctx_.content, lv == memstat::Level::Error ? FooterTone::Error : lv == memstat::Level::Caution ? FooterTone::Caution : FooterTone::Info,
-                         std::string_view(f, n), foot_, bg);
+    char f[memstat::kFooterMax + 1];
+    const std::size_t n = lv == memstat::Level::Ok ? 0 : memstat::footer_text(s, std::span<char>(f, memstat::kFooterMax));
+    const FooterTone tone = lv == memstat::Level::Error ? FooterTone::Error
+                          : lv == memstat::Level::Caution ? FooterTone::Caution : FooterTone::Info;
+    const std::string_view fv(f, n);
+    const uint32_t fsig = mix(mix_u32(mix_init(), static_cast<uint32_t>(lv)), fv);
+    const bool had_toast = foot_.valid;
+    foot_.paint_budgeted(fsig, bg, static_cast<int>(ctx_.content.w) * 16, [&] {
+        if (lv != memstat::Level::Ok) {
+            draw_toast(ctx_.content, tone, fv);
+        } else if (had_toast) {
+            gfx_fill(ctx_.content, 0, static_cast<int16_t>(ctx_.content.h - 20), ctx_.content.w, 16, kBg);
+        }
+    });
 }
 
 bool MemoryPage::on_event(Event e) { return back_event(e); }
@@ -876,23 +864,23 @@ void MemoryPage::invalidate() {
 // ---------------------------------------------------------------------------------------
 
 namespace {
-// Meter > Lines (Fieldbook): four 24 px line rows under the masthead (an ink chip as the tag, the value, an ink bar on a bg2
-// track), dashed threshold lines at 0.4 V and 2.0 V down through the rows to their axis labels, then the verdict chips and
-// the Rp receipt row. The MCU temperature lives on Numbers.
-constexpr int16_t kLnRowY0 = 26, kLnRowPitch = 24;
+// Meter > Lines (Option B 208x240): four 26 px line rows from y 4, dashed threshold lines at 0.4 V and 2.0 V
+// down to axis labels, verdict chips, and 3 receipt rows (Rp, D+/D-, VREF + MCU temp). Zero footer.
+constexpr int16_t kLnRowY0 = 4, kLnRowPitch = 26;
 constexpr int16_t kLnRowY(int i) { return static_cast<int16_t>(kLnRowY0 + i * kLnRowPitch); }
-constexpr int16_t kLnChipX = 6, kLnChipW = 30, kLnChipDy = 5;
-constexpr int16_t kLnValX = 44, kLnValChars = 5, kLnValDy = 4;
-constexpr int16_t kLnBarX = 100, kLnBarH = 10, kLnBarDy = 7;
-constexpr int16_t kLnAxisY = kLnRowY0 + 4 * kLnRowPitch;   // 122: the dashes stop here, their labels under it
+constexpr int16_t kLnChipX = 6, kLnChipW = 28, kLnChipDy = 6;
+constexpr int16_t kLnValX = 40, kLnValChars = 5, kLnValDy = 5;
+constexpr int16_t kLnBarX = 94, kLnBarH = 10, kLnBarDy = 8;
+constexpr int16_t kLnAxisY = kLnRowY0 + 4 * kLnRowPitch;   // 108: the dashes stop here, their labels under it
 constexpr int16_t kLnAxisTextY = kLnAxisY + 3, kKeyAxisX = 6;
-constexpr int16_t kVerdictY = 144;                          // the verdict chips
+constexpr int16_t kVerdictY = 128;                          // the verdict chips
 constexpr int16_t kLnDash = 2;                              // the threshold lines: 2 px dash, 2 px gap
-static_assert(kLnBarX + kLinesBarW <= 222, "the bars end inside the content");
+static_assert(kLnBarX + kLinesBarW <= 206, "the bars end inside the 208 px content");
 constexpr const char *kLnTag[4] = {"D+", "D-", "CC1", "CC2"};
 constexpr int32_t kLnFaintMv = 100;                         // a line under 0.1 V reads as nothing on it
-// The Rp receipt row: key font 16 at x 6, a dot leader, "3.0A on CC1" right-aligned to x 218.
-constexpr kit::KvLayout kLnKv{168, 26, 6, nullptr, nullptr, static_cast<int16_t>(218 - 12 * 8), 12, Align::Right};
+// Three receipt rows (Rp, D+/D-, VREF): key font 16 at x 6, dot leader, 12-char value right-aligned to x 202.
+constexpr kit::KvLayout kLnKv{154, 26, 6, nullptr, nullptr, static_cast<int16_t>(202 - 12 * 8), 12, Align::Right};
+constexpr const char *kLnReceiptLabels[3] = {"Rp", "D+/D-", "VREF"};
 
 int16_t tick_x(int32_t mv) { return static_cast<int16_t>(kLnBarX + lines_tick_px(mv)); }
 // One threshold column between y0 and y1 (exclusive): dash pixels in ink3, the gaps in the ground, phase anchored to y 0 so the
@@ -931,10 +919,9 @@ void LinesPage::draw_static() {
             v_[i].init(c, kSmall, kLnValX, static_cast<int16_t>(y + kLnValDy), kLnValChars, Align::Right, kText, kBg);
             px_[i] = -1;
         }
-        kit::kv_cells(c, kLnKv, pv_, 1);
+        kit::kv_cells(c, kLnKv, pv_, 3);
         painted_ = false;
         vsig_ = 0;
-        foot_.invalidate();
         static_step_ = 1;
     }
     while (static_step_ <= 4) {
@@ -975,22 +962,22 @@ void LinesPage::draw_static() {
         gfx_text(c, kLabelFont, static_cast<int16_t>(hi - 9), kLnAxisTextY, "2.0", kDim, kBg);
         static_step_ = 6;
     }
-    static const char *const kRpLabel = "Rp";
-    if (static_step_ == 6) {
+    while (static_step_ >= 6 && static_step_ < 9) {
+        const int r = static_step_ - 6;
         const int cost = ctx_.blank ? 600 : 3800;
         if (bg && !bg->admit(cost, true)) return;
-        if (!ctx_.blank) kit::kv_ground_row(c, kLnKv, kRpLabel, 0, nullptr, 0);
-        kit::kv_static_row(c, kLnKv, kRpLabel, 0, true);
-        static_step_ = 7;
+        if (!ctx_.blank) kit::kv_ground_row(c, kLnKv, kLnReceiptLabels[r], r, nullptr, 0);
+        kit::kv_static_row(c, kLnKv, kLnReceiptLabels[r], r, r == 2);
+        static_step_++;
     }
-    if (static_step_ == 7) {
-        const int16_t below = static_cast<int16_t>(kit::kv_row_y(kLnKv, 1) + 1);
-        if (!ctx_.blank && below < kit::kListBottom) {
-            const int cost = static_cast<int>(c.w) * (kit::kListBottom - below);
+    if (static_step_ == 9) {
+        const int16_t below = static_cast<int16_t>(kit::kv_row_y(kLnKv, 3) + 1);
+        if (!ctx_.blank && below < c.h) {
+            const int cost = static_cast<int>(c.w) * (c.h - below);
             if (bg && !bg->admit(cost, true)) return;
-            gfx_fill(c, 0, below, c.w, static_cast<int16_t>(kit::kListBottom - below), kBg);
+            gfx_fill(c, 0, below, c.w, static_cast<int16_t>(c.h - below), kBg);
         }
-        static_step_ = 8;
+        static_step_ = 10;
     }
 }
 
@@ -1051,8 +1038,20 @@ bool LinesPage::paint_verdict(const std::optional<adc::Reading> &r, uint32_t now
         painted_ = true;
     }
     if (!pg::put_field(pv_[0], bg, rp.view(), r ? kText : kFaint)) return false;
-    return draw_footer_budgeted(c, v.tone == Tone::Ok ? FooterTone::Ok : v.tone == Tone::Caution ? FooterTone::Caution : FooterTone::Info,
-                                v.footer.view(), foot_, bg);   // Info and Dim are neutral
+    const std::string_view dd = !v.extra.view().empty() ? v.extra.view() : v.main.view();
+    if (!pg::put_field(pv_[1], bg, dd.empty() ? "--" : dd, v.tone == Tone::Dim ? kFaint : kText)) return false;
+    StrBuf<16> vref;
+    if (r) {
+        vref.put_fixed(r->aux_mv, 2).put("V");
+        if (r->mcu.valid) {
+            StrBuf<24> t;
+            mcu_text(t, true, r->mcu.deci_c);
+            vref.put(" ").put(t.view());
+        }
+    } else {
+        vref.put("--");
+    }
+    return pg::put_field(pv_[2], bg, vref.view(), r ? kText : kFaint);
 }
 
 void LinesPage::update(uint32_t now_ms) {
@@ -1083,10 +1082,9 @@ void LinesPage::invalidate() {
     static_step_ = 0;
     painted_ = false;
     vsig_ = 0;
-    foot_.invalidate();
     for (int &p : px_) p = -1;
     pg::invalidate_fields(v_, 4);
-    pg::invalidate_fields(pv_, 1);
+    pg::invalidate_fields(pv_, 3);
 }
 
 // ---------------------------------------------------------------------------------------
@@ -1096,9 +1094,9 @@ void LinesPage::invalidate() {
 
 namespace {
 // The key/value tables of the wizard: 20 px rows, S12 keys, S16 values (the same table as the FC trigger).
-constexpr kit::KvLayout kPtKv{kit::kBodyY, 20, 6, &kLabelFont, nullptr, 72, 18, Align::Left};
+constexpr kit::KvLayout kPtKv{kit::kBodyY, 20, 6, &kLabelFont, nullptr, 64, 18, Align::Left};
 constexpr kit::KvLayout kPtLiveKv{kit::kBodyY + kit::kAlertH + 8, 20, 6, &kLabelFont, nullptr, 84, 16, Align::Left};
-constexpr int16_t kPtBigY = 112, kPtRangeY = 162, kPtRangeX = 10, kPtRangeW = 204;   // Voltage / Current: big value, range bar
+constexpr int16_t kPtBigY = 112, kPtRangeY = 162, kPtRangeX = 10, kPtRangeW = 188;   // Voltage / Current: big value, range bar
 constexpr int16_t kPtSendY = 120, kPtSendH = 72;                                     // Confirm: the SEND cell
 constexpr uint8_t kNoStep = 0xFF;
 int16_t pt_text_y(const kit::KvLayout &l, int row) {
@@ -1134,7 +1132,8 @@ void PdTriggerPage::paint_bar() {
     };
     const char *title = refused ? "PD trigger" : kBar[static_cast<unsigned>(st)].title;
     const int step = refused ? 0 : kBar[static_cast<unsigned>(st)].step;
-    kit::draw_top_bar(ctx_.content, title, step, fusb302::self_powered() ? "SNK" : "PAS", true);   // (a plain bar also clears the rule's 2nd row)
+    (void)title; (void)step;
+    bar_valid_ = true;
 }
 
 // Opened from Tools: refuse outright inline, unplugged or without caps; else the wizard starts on the
@@ -1385,7 +1384,6 @@ void PdTriggerPage::paint_live() {
 }
 
 void PdTriggerPage::paint_footer() {
-    const Surface &c = ctx_.content;
     const pd::SinkStatus &st = fusb302::sink_status();
     StrBuf<32> msg;
     FooterTone tone = FooterTone::Info;
@@ -1415,7 +1413,8 @@ void PdTriggerPage::paint_footer() {
             tone = FooterTone::Caution;
         }
     }
-    draw_footer_cached(c, tone, msg.view(), foot_);
+    if (tone == FooterTone::Caution || tone == FooterTone::Error)
+        draw_toast(ctx_.content, tone, msg.view());
 }
 
 void PdTriggerPage::paint_refusal() {
@@ -1434,7 +1433,7 @@ void PdTriggerPage::paint_refusal() {
         draw_mark(c, kit::kMarkX, static_cast<int16_t>(y + 2), 12, v.met[k], v.met[k] ? kOk : kError, kBg);
         gfx_text(c, kSmall, kit::kTextX, y, v.check[k], v.met[k] ? kDim : kText, kBg);
     }
-    draw_footer_cached(c, FooterTone::Error, v.footer, foot_);
+    draw_toast(c, FooterTone::Error, v.footer);
 }
 
 // The live setup with the page's own verdict applied (a fake PDO load refuses without a real source).
@@ -1601,11 +1600,22 @@ void CableRPage::update(uint32_t) {
         for (int i = 0; i < 2; i++) pg::put_field(val_[i], nullptr, v.step[i].value.view(), cr_value_color(v.step[i].tone));
         paint_result(v);
     }
-    const bool cleared = ctx_.now < cleared_until_;
-    const std::string_view foot = cleared ? std::string_view("Cleared, measuring again") : v.foot.view();
-    const CrTone tone = cleared ? CrTone::Dim : v.foot_tone;
-    // Dim = an instruction or a plain state: the neutral band, a green fill would read as "done".
-    draw_footer_cached(ctx_.content, footer_tone_of(cr_color(tone)), foot, foot_);
+    if (cleared_until_ && static_cast<int32_t>(ctx_.now - cleared_until_) < 0 && !v.has_result) return;
+    cleared_until_ = 0;
+    const std::string_view foot = v.foot.view();
+    const CrTone tone = v.foot_tone;
+    const FooterTone ft = footer_tone_of(cr_color(tone));
+    if (ft == FooterTone::Caution || ft == FooterTone::Error) {
+        ctx_.toast.show(ft, foot, ctx_.now);
+    } else {
+        if (ctx_.toast.active(ctx_.now)) {
+            ctx_.toast.clear();
+            ctx_.toast.erase_pending = false;
+        }
+        foot_.paint_budgeted(1, ctx_.budget, static_cast<int>(ctx_.content.w) * 20, [&] {
+            gfx_fill(ctx_.content, 0, static_cast<int16_t>(ctx_.content.h - 20), ctx_.content.w, 20, kBg);
+        });
+    }
 }
 
 bool CableRPage::on_event(Event e) {
@@ -1613,7 +1623,10 @@ bool CableRPage::on_event(Event e) {
     if (e.button == Button::Ok) {
         ctx_.cable.reset();
         ctx_.kelvin.reset();
-        cleared_until_ = ctx_.now + 1500;   // the idle reading is retaken at once, so say that it was cleared
+        cleared_until_ = ctx_.now + 1500;
+        ctx_.toast.show(FooterTone::Info, "Cleared, measuring again", ctx_.now, 1500);
+        draw_toast(ctx_.content, FooterTone::Info, ctx_.toast.view());
+        ctx_.toast.drawn = true;
         update(ctx_.now);
         return true;
     }
@@ -1645,7 +1658,7 @@ namespace {
 // The key/value table of the staged pages: 20 px rows, S12 keys, S16 values from x72.
 constexpr kit::KvLayout kFcKv{kit::kBodyY, 20, 6, &kLabelFont, nullptr, 72, 16, Align::Left};
 constexpr kit::KvLayout kFcRelKv{kit::kBodyY + kit::kAlertH + 4, 20, 6, &kLabelFont, nullptr, 72, 16, Align::Left};
-constexpr int16_t kFcSparkX = 6, kFcSparkY = 110, kFcSparkW = 210, kFcSparkH = 108;   // Live: the VBUS trace under the table
+constexpr int16_t kFcSparkX = 6, kFcSparkY = 110, kFcSparkW = 196, kFcSparkH = 108;   // Live: the VBUS trace under the table
 constexpr int16_t kFcBigY = 118, kFcSendY = 164, kFcSendH = 52;   // Edit / Review: the draft value, the SEND cell
 constexpr int16_t kFcScanPitch = 22, kFcSumY = kit::kBodyY + 7 * kFcScanPitch + 4, kFcSumH = 36;   // Scan: rows, summary cell
 constexpr uint32_t kFcTraceStepMs = 250;
@@ -1685,7 +1698,8 @@ void TriggerPage::paint_bar() {
     bar_valid_ = false;   // the band repaint erased the readout: title_badge redraws it
     const char *title = scan ? "FC scan" : retarget ? "Retarget" : "FC trigger";
     const int step = scan || stage == trig::Stage::Live ? 0 : stage == trig::Stage::Pick ? 1 : stage == trig::Stage::Edit ? 2 : 3;
-    kit::draw_top_bar(ctx_.content, title, step, fusb302::self_powered() ? "SNK" : "PAS", true);
+    (void)title; (void)step;
+    bar_valid_ = true;
 }
 
 void TriggerPage::sample() {
@@ -1822,6 +1836,7 @@ void TriggerPage::paint_main(uint32_t now_ms) {
         foot_.invalidate();
         tsig_ = 0;
         send_.invalidate();
+        if (stage == trig::Stage::Live) ctx_.toast.clear();
     }
     StrBuf<32> s;
     if (cleanup) {
@@ -1899,6 +1914,7 @@ void TriggerPage::paint_main(uint32_t now_ms) {
             }
         }
     }
+    if (ctx_.budget && ctx_.budget->more) return;
     // Footer: facts only. The Edit hint says how far one step moves.
     const char *footer = nullptr;
     if (cleanup) {
@@ -1925,8 +1941,8 @@ void TriggerPage::paint_main(uint32_t now_ms) {
     const bool unsafe = cleanup && release == trig::Release::State::Unsafe;
     const bool error = unsafe || refused_ != fc::Fail::None || !model_.available();
     const bool caution = cleanup || (model_.needs_confirm() && (stage == trig::Stage::Review || live));
-    draw_footer_cached(ctx_.content, error ? FooterTone::Error : caution ? FooterTone::Caution : FooterTone::Info,
-                       footer, foot_);
+    if (error || (caution && stage != trig::Stage::Live))
+        ctx_.toast.show(error ? FooterTone::Error : FooterTone::Caution, footer, ctx_.now);
 }
 
 void TriggerPage::paint_scan() {
@@ -1987,7 +2003,7 @@ void TriggerPage::paint_scan() {
                    : scanning_                    ? "Scanning..."
                    : acc > 0                      ? "Scan done"
                                                   : "Scan done: none answered";
-    draw_footer_cached(c, ft, fm, foot_);
+    if (ft != FooterTone::Info) ctx_.toast.show(ft, fm, ctx_.now);
 }
 
 void TriggerPage::update(uint32_t now_ms) {
@@ -2160,10 +2176,10 @@ void SettingsPage::draw_static() {
     }
     if (static_step_ == 1) {
         const int16_t end = kit::list_end(kListY);
-        if (!ctx_.blank && end < kit::kListBottom) {
-            const int cost = static_cast<int>(ctx_.content.w) * (kit::kListBottom - end);
-            if (bg && !bg->admit(cost, true)) return;
-            kit::fill_list_gap(ctx_.content, kListY);
+        if (!ctx_.blank && end < ctx_.content.h) {
+            const int cost = static_cast<int>(ctx_.content.w) * (ctx_.content.h - end);
+            if (bg && !bg->admit(cost, true, true)) return;
+            gfx_fill(ctx_.content, 0, end, ctx_.content.w, static_cast<int16_t>(ctx_.content.h - end), kBg);
         }
         static_step_ = 2;
     }
@@ -2214,7 +2230,7 @@ void SettingsPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
 #if K2_SCREENSHOT
         "Screenshot",
 #endif
-        "Smoothing", "Wake sleeping port", "Test level", "Display", "System state", "Memory", "Boot info"};
+        "Smoothing", "Wake port", "Test level", "Display", "System state", "Memory", "Boot info"};
     static constexpr Icon kIcons[kSettingsRows] = {
         Icon::Usb, Icon::Rotate, Icon::Keys,
 #if K2_SCREENSHOT
@@ -2226,7 +2242,7 @@ void SettingsPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
     // charger_test::Level order (Medium 0, Light 1, Deep 2): the charger test's default level and what it runs.
     static constexpr const char *kLevels[charger_test::kLevelCount] = {"Medium", "Light", "Deep"};
     static constexpr const char *kLevelNotes[charger_test::kLevelCount] = {
-        "Tests each advertised voltage", "Checks what the charger offers",
+        "Tests each advertised voltage", "Checks what charger offers",
 #if K2_PDSPEC
         "Sweeps, accuracy & PD spec"
 #else
@@ -2290,7 +2306,7 @@ void SettingsPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
         break;
     default:   // SettingRow::BootInfo
         out.chevron = true;
-        out.note = "this boot's record as a QR code";
+        out.note = "this boot's log as a QR code";
         break;
     }
 }
@@ -2304,15 +2320,6 @@ void SettingsPage::update(uint32_t) {
     ctx_.rows.select(sel_);
     ctx_.rows.draw(ctx_.now, bg);
     if (bg && bg->more) return;
-    const auto row = static_cast<SettingRow>(sel_);
-    draw_footer_budgeted(ctx_.content, FooterTone::Info,
-                         row == SettingRow::SystemState      ? "Checks of every subsystem"
-                         : row == SettingRow::Memory         ? "Stack headroom, RAM, flash"
-                         : row == SettingRow::BootInfo       ? "Shared as QR codes"
-                         : row == SettingRow::Display        ? "Opens a settings page"
-                         : row >= SettingRow::RotateButtons  ? "Remembered across boots"
-                                                             : "Opens a settings page",
-                         foot_, bg);
 }
 
 bool SettingsPage::on_event(Event e) {
@@ -2418,7 +2425,6 @@ void AutorotatePage::update(uint32_t) {
     title_badge(false);
     ctx_.rows.select(sel_);
     ctx_.rows.draw(ctx_.now, ctx_.budget);
-    draw_footer_cached(ctx_.content, FooterTone::Info, "Applies now. Remembered", foot_);
 }
 
 bool AutorotatePage::on_event(Event e) {
@@ -2475,7 +2481,7 @@ void DisplayPage::draw_static() {
 }
 
 void DisplayPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
-    static constexpr const char *kTitles[3] = {"Brightness", "Dim after", "Screen off after"};
+    static constexpr const char *kTitles[3] = {"Brightness", "Dim after", "Screen off"};
     static constexpr Icon kIcons[3] = {Icon::Meter, Icon::Clock, Icon::Clock};
     const auto *self = static_cast<const DisplayPage *>(ctx);
     const idle::Config &c = idle_hw::config();
@@ -2506,8 +2512,6 @@ void DisplayPage::update(uint32_t) {
     title_badge(false);
     ctx_.rows.select(cur());
     ctx_.rows.draw(ctx_.now, ctx_.budget);
-    draw_footer_cached(ctx_.content, FooterTone::Info,
-                       view_ == View::Adjust ? "Applies at once" : "Remembered across boots", foot_);
 }
 
 bool DisplayPage::on_event(Event e) {
@@ -2617,21 +2621,13 @@ void UsbLinkPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
     out.text = m.name;
     out.tail = on ? "ON" : "OFF";
     out.tail_color = on ? kOk : kDim;
-    out.note = m.hint;
+    out.note = usbcfg::same_mode(self->pending_, usbcfg::current) ? m.hint : "Replug to apply";
 }
 
 void UsbLinkPage::update(uint32_t) {
     title_badge(false);
-    const bool differs = !usbcfg::same_mode(pending_, usbcfg::current);
     ctx_.rows.select(sel_);
     ctx_.rows.draw(ctx_.now, ctx_.budget);
-    if (differs) {
-        draw_footer_cached(ctx_.content, FooterTone::Caution, "Replug to apply", foot_);
-    } else if (!usbcfg::any(pending_)) {
-        draw_footer_cached(ctx_.content, FooterTone::Info, "USB link off", foot_);   // off is neutral information, never ok-green
-    } else {
-        draw_footer_cached(ctx_.content, FooterTone::Ok, "Active this boot", foot_);
-    }
 }
 
 bool UsbLinkPage::on_event(Event e) {

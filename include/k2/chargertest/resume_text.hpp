@@ -29,7 +29,7 @@ constexpr std::string_view row(const In& in) {
     if (in.gate_ready) return "VBUS 5V stable: ready";
     if (in.held) return "Press OK to try again";
     if (in.behind_cable) return "Needs a direct plug";
-    if (in.rd_on && !in.wait_over) return "Rd on, awaiting charger";
+    if (in.rd_on && !in.wait_over) return "Rd on, waiting charger";
     return "Waiting for stable 5V";
 }
 

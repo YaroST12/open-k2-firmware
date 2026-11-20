@@ -23,12 +23,12 @@ namespace k2::spectext {
 
 namespace sc = pdspec;
 
-// The ResultGrid's label strip (font 12, right-aligned at x55, kResultLabelW - 8 = 52 px): at most 8 characters, by sc::Check.
-inline constexpr char kCheckShort[][9] = {
-    "Accept",   "PS_RDY",  "VBUS go",  "Rdy high", "Rdy low",  "Rise",     "Fall",     "Oversh.",  "Level",    "PPS mono", "PPS lvl",
-    "PPS set",  "PPS t/o", "EPR t/o",  "HR 0V",    "HR off",   "HR on",    "HR caps",  "Detach",   "Re-att.",  "Src rst",  "PPS band",
-    "PPS rdy",  "PPS ovs", "PPS tr.",  "PPS stat", "Stat t",   "AVS mono", "AVS lvl",  "AVS band", "AVS rdy",  "AVS ovs",  "AVS tr.",
-    "Re-caps",  "PPS trk", "AVS trk",
+// The ResultGrid's label strip (font 12, kResultLabelW - 8 = 46 px): at most 7 characters, by sc::Check.
+inline constexpr char kCheckShort[][8] = {
+    "Accept",  "PS_RDY",  "VBUS go", "Rdy hi",  "Rdy low", "Rise",    "Fall",    "Oversh",  "Level",   "PPS mon", "PPS lvl",
+    "PPS set", "PPS t/o", "EPR t/o", "HR 0V",   "HR off",  "HR on",   "HR caps", "Detach",  "Re-att",  "Src rst", "PPS bnd",
+    "PPS rdy", "PPS ovs", "PPS tr",  "PPS st",  "Stat t",  "AVS mon", "AVS lvl", "AVS bnd", "AVS rdy", "AVS ovs", "AVS tr",
+    "Re-caps", "PPS trk", "AVS trk",
 };
 static_assert(std::size(kCheckShort) == sc::kChecks, "one grid label per check");
 static_assert(all_fit(kCheckShort, kLabelAdv, kit::kResultLabelW - 8), "a check label is wider than the label strip");

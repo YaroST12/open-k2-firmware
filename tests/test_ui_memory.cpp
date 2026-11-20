@@ -33,7 +33,7 @@ static int leader_gap(int y0, int y1) {
     const auto px = [](int x, int y) { return g_panel[y * LCD_WIDTH + x]; };
     int dot_end = -1;
     for (int y = y0; y + 1 < y1; y++)
-        for (int x = 0; x + 1 < 160; x++)
+        for (int x = kOppRailThickness; x + 1 < kOppRailThickness + 160; x++)
             if (px(x, y) == kInk3 && px(x + 1, y) == kInk3 && px(x, y + 1) == kInk3 && px(x + 1, y + 1) == kInk3 && x + 1 > dot_end)
                 dot_end = x + 1;
     if (dot_end < 0) return 999;
@@ -96,27 +96,29 @@ static void test_rotation(int rot) {
     for (const auto &c : cases) {
         stub_memstat_set(snap(c.free, c.low, c.ok));
         settle(ui, t);
-        // Classic footer tones: caution is the amber tint (kCautionT) with an amber bar, error is solid kError with black ink.
-        const int amber_fill = count_px(kCautionT), red_fill = count_px(kError);
+        // Toast pill tones: caution is the amber tint (kCautionT) with an amber border, error is kErrorT with a red border.
+        const int amber_fill = count_px(kCautionT), red_fill = count_px(kErrorT);
         if (c.tone == 0) {
             CHECK_EQ(amber_fill, 0);
             CHECK_EQ(red_fill, 0);
             CHECK_EQ(count_px(kCaution), 0);   // a normal value is never amber ...
             CHECK_EQ(count_px(kError), 0);     // ... or red
         } else if (c.tone == 1) {
-            CHECK(amber_fill > 2000);          // the footer band is the tone fill
+            CHECK(amber_fill > 400);           // the toast pill is the tone fill
             CHECK_EQ(red_fill, 0);
-            CHECK(count_px(kCaution) > 40);    // the value's ink, and the footer bar
+            CHECK(count_px(kCaution) > 40);    // the value's ink, and the toast border
         } else {
-            CHECK(red_fill > 2000);            // the solid footer band and the value's ink
+            CHECK(red_fill > 400);             // the toast pill fill
+            CHECK(count_px(kError) > 40);      // the value's ink and toast border
             CHECK_EQ(amber_fill, 0);
             CHECK_EQ(count_px(kCaution), 0);
         }
         if (rot == 0) {
-            // the FS free row (the sixth): its value box is x 90..218; the Stack low row (the second) never takes a tone
-            const int y0 = 24 + 22 * 5, y1 = y0 + 22;
-            CHECK_EQ(count_px(kCaution, 90, 24 + 22, 218, 24 + 44) + count_px(kError, 90, 24 + 22, 218, 24 + 44), 0);
-            const int amber = count_px(kCaution, 90, y0, 218, y1), red = count_px(kError, 90, y0, 218, y1);
+            // the FS free row (the sixth): its value box is x (16+76)..(16+204); the Stack low row (the second) never takes a tone
+            const int vx0 = kOppRailThickness + 76, vx1 = kOppRailThickness + 204;
+            const int y0 = kit::kBodyY + 22 * 5, y1 = y0 + 22;
+            CHECK_EQ(count_px(kCaution, vx0, kit::kBodyY + 22, vx1, kit::kBodyY + 44) + count_px(kError, vx0, kit::kBodyY + 22, vx1, kit::kBodyY + 44), 0);
+            const int amber = count_px(kCaution, vx0, y0, vx1, y1), red = count_px(kError, vx0, y0, vx1, y1);
             CHECK_EQ(amber > 20, c.tone == 1);
             CHECK_EQ(red > 20, c.tone == 2);
         }
@@ -125,7 +127,7 @@ static void test_rotation(int rot) {
             // included: FS free "212 KB (106 blk)" fills the whole 16-character box (it read as part of the leader at 4 px).
             int worst = 999;
             for (int i = 0; i < memstat::kRows; i++) {
-                const int g = leader_gap(24 + 22 * i, 24 + 22 * (i + 1));
+                const int g = leader_gap(kit::kBodyY + 22 * i, kit::kBodyY + 22 * (i + 1));
                 if (g < worst) worst = g;
             }
             CHECK_EQ(worst >= 8 && worst < 999, true);

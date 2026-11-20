@@ -36,9 +36,9 @@ constexpr unsigned kHandshakeDv = 55;   // a group whose highest passing voltage
 // The open card: a 36 px head, then rows of 14 px (S12 text, a hairline on the top line). Row 0 is PD fixed, then one row per
 // range, a static Handover row, an optional QC4+/QC5 fact row, then the tested legacy groups in two half-width columns.
 constexpr int16_t kDY = 60, kDP = 14;
-constexpr int16_t kColW0 = 111, kColX1 = 112;   // the left column ends at the divider on x111
-constexpr int kPdWhyPx = 136;                   // the PD fixed row's cause: x84 .. the right margin
-constexpr int16_t kRightEdge = 214;            // value right edge of the full-width rows
+constexpr int16_t kColW0 = 103, kColX1 = 104;   // the left column ends at the divider on x103 (208 px canvas)
+constexpr int kPdWhyPx = 120;                   // the PD fixed row's cause: x84 .. the right margin
+constexpr int16_t kRightEdge = 202;            // value right edge of the full-width rows (208 px canvas)
 
 struct Sel { bool range; unsigned idx; };       // range: index into Card::range, else the ct::Group number
 
@@ -47,7 +47,7 @@ struct Sel { bool range; unsigned idx; };       // range: index into Card::range
 int qc_fact_lines(const rc::Card &c) {
     char t[48];
     if (!rc::qc_label_text(c, t, sizeof t)) return 0;
-    return text_width(kLabelFont, t) <= 224 - 16 ? 1 : 2;
+    return text_width(kLabelFont, t) <= 208 - 16 ? 1 : 2;
 }
 
 // Top of the first legacy row (its hairline). `mi`: the card has the Xiaomi fact line (CardsPage::mi_, from its stored block).
@@ -75,9 +75,9 @@ Sel sel_at(const rc::Card &c, int row) {
 
 struct Slot { int16_t x, y, w; };
 Slot cell_at(const rc::Card &c, int row, bool mi) {
-    if (row <= int(c.n_ranges)) return {0, int16_t(kDY + kDP * row), 224};
+    if (row <= int(c.n_ranges)) return {0, int16_t(kDY + kDP * row), 208};
     const int k = row - 1 - int(c.n_ranges);
-    return {int16_t((k & 1) ? kColX1 : 0), int16_t(legacy_y(c, mi) + kDP * (k / 2)), int16_t((k & 1) ? 112 : kColW0)};
+    return {int16_t((k & 1) ? kColX1 : 0), int16_t(legacy_y(c, mi) + kDP * (k / 2)), int16_t((k & 1) ? 104 : kColW0)};
 }
 
 constexpr kit::KvLayout kHandover = {kDY, kDP, 8, &kLabelFont, &kLabelFont, 80, 24, Align::Left};
@@ -108,7 +108,9 @@ uint16_t tone_color(tone::Tone t) { return tone_meta(t).color; }
 // fit_data / fit_text_mid in paint_head and paint_confirm only.
 [[gnu::noinline]] void put_line(const Surface &c, const Font &f, int16_t x, int16_t y, int max_px, std::string_view s, uint16_t fg, uint16_t bg K2_TRUNC_DECL) {
     char buf[kFitBuf];
-    gfx_text(c, f, x, y, fit_text(f, s, max_px, buf K2_TRUNC_ARG), fg, bg);
+    const int lim = std::min<int>(max_px, std::max<int>(0, c.w - x));
+    const Font &uf = (&f == &kSmall && text_width(kSmall, s) > lim && text_width(kLabelFont, s) <= lim) ? kLabelFont : f;
+    gfx_text(c, uf, x, y, fit_text(uf, s, lim, buf K2_TRUNC_ARG), fg, bg);
 }
 // Text with check / cross marks (draw_marked_text): the width is the marked width, a longer text is reported and not drawn past the box.
 [[gnu::noinline]] void put_marked(const Surface &c, const Font &f, int16_t x, int16_t y, int max_px, std::string_view s, uint16_t fg, uint16_t bg K2_TRUNC_DECL) {
@@ -172,11 +174,14 @@ void cards_mi_text(const rc::deep::MiSection &m, StrBuf<32> &out) {
         pass += v == charger_test::Verdict::Pass;
         fail += v == charger_test::Verdict::Fail;
     }
-    out.clear();
-    out.put_u32(m.n).put(" modes:");
-    if (pass) out.put_char(' ').put_u32(pass).put_char(kMarkCheck);
-    if (fail) out.put_char(' ').put_u32(fail).put_char(kMarkCross);
-    if (m.n - pass - fail) out.put_char(' ').put_u32(m.n - pass - fail).put(" skip");
+    for (int form = 0; form < 2; ++form) {   // "4 modes: ..." then "4: ..." when the words do not fit the 208 px canvas
+        out.clear();
+        out.put_u32(m.n).put(form ? ":" : " modes:");
+        if (pass) out.put_char(' ').put_u32(pass).put_char(kMarkCheck);
+        if (fail) out.put_char(' ').put_u32(fail).put_char(kMarkCross);
+        if (m.n - pass - fail) out.put_char(' ').put_u32(m.n - pass - fail).put(" skip");
+        if (marked_width(kLabelFont, out.view()) <= kBoxPx) return;
+    }
 }
 
 void cards_title_text(const rc::Card &c, StrBuf<24> &out) {
@@ -660,7 +665,7 @@ void CardsPage::paint_empty() {
     const kit::TextRun runs[4] = {{8, 30, &kSmall, kEmptyTitle, kText},      {8, 54, &kLabelFont, kEmptyHint[0], kDim},
                                   {8, 68, &kLabelFont, kEmptyHint[1], kDim}, {8, 82, &kLabelFont, kEmptyHint[2], kDim}};
     kit::paint_texts(c, {0, kBarH, c.w, static_cast<int16_t>(kFooterY - kBarH)}, runs, 4, kBg);
-    draw_footer_cached(c, FooterTone::Info, note_.view().size() ? note_.view() : "0 cards saved", foot_);
+    if (note_.view().size()) draw_footer_cached(c, FooterTone::Info, note_.view(), foot_);
 }
 
 // One saved charger: the verdict cell, the name, "5P 2F" (checks passed, failed); the open row adds the full name and boots.
@@ -677,7 +682,8 @@ void CardsPage::row_fn(void *self, int index, bool focused, kit::RowSpec &out) {
     out.tail_color = kDim;
     StrBuf<24> title;
     cards_title_text(cd, title);
-    const int avail = 178 - int(out.tail.size()) * int(kSmall.adv) + (out.tail.empty() ? 8 : 0);   // x28 .. the tail's left gap
+    out.data = true;
+    const int avail = 162 - int(out.tail.size()) * int(kSmall.adv) + (out.tail.empty() ? 8 : 0);   // x28 .. the tail's left gap
     char fitted[kFitBuf];
     out.text = pg::stash_str(p.line_.text, sizeof p.line_.text, fit_text_mid(kSmall, title.view(), avail, fitted));
     if (focused) {
@@ -696,11 +702,8 @@ void CardsPage::paint_list(bool rebuild) {
     ctx_.rows.set_count(n_);
     ctx_.rows.select(idx_);
     ctx_.rows.draw(ctx_.now, ctx_.budget);
-    StrBuf<24> st;
-    if (note_.view().size()) st.put(note_.view());
-    else st.put_u32(uint32_t(idx_ + 1)).put_char('/').put_u32(uint32_t(n_)).put(n_ == 1 ? " charger" : " chargers");
-    draw_footer_cached(c, !note_.view().size() ? FooterTone::Info : note_color_ == kError ? FooterTone::Error : FooterTone::Ok,
-                       st.view(), foot_);
+    if (note_.view().size())
+        draw_footer_cached(c, note_color_ == kError ? FooterTone::Error : FooterTone::Ok, note_.view(), foot_);
 }
 
 // The head of the open card and of its sub-screen: a verdict cell and the title (S16), a dim line under them.
@@ -827,7 +830,7 @@ void CardsPage::paint_detail() {
         char label[48];
         auto fact = [&](const char *text, uint16_t ink) {
             gfx_fill(c, 0, ly, c.w, 1, kRule);
-            put_line(c, kLabelFont, 8, int16_t(ly + kit::row_text_y(kDP, kLabelFont.height)), c.w - 16, text, ink, kBg);
+            put_line(c, kLabelFont, 4, int16_t(ly + kit::row_text_y(kDP, kLabelFont.height)), c.w - 8, text, ink, kBg);
             ly = int16_t(ly + kDP);
         };
         if (qc_fact_lines(cd) == 1) {
@@ -861,9 +864,6 @@ void CardsPage::paint_detail() {
         for (int r = first; r < rows(); r++) paint_cell(r, r == row_);
     }
     prev_row_ = row_;
-    StrBuf<32> st;
-    cards_stats_text(cd, st);
-    draw_footer_cached(c, FooterTone::Info, st.view(), foot_);
 }
 
 [[gnu::noinline]] static void paint_group_rows(const Surface &c, const CardSheet &sh) {
@@ -918,9 +918,6 @@ void CardsPage::paint_group() {
         cards_sheet(cd, sel.range, sel.idx, sh);
         paint_group_rows(c, sh);
     }
-    head.clear();
-    head.put_u32(uint32_t(row_ + 1)).put_char('/').put_u32(uint32_t(rows())).put(" rows");
-    draw_footer_cached(c, FooterTone::Info, head.view(), foot_);
 }
 
 void CardsPage::paint_confirm() {

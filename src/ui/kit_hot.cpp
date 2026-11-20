@@ -149,6 +149,172 @@ K2_HOT void draw_key_slot(const Surface &s, bool column, TextDir dir, unsigned s
     }
 }
 
+K2_HOT void draw_opp_slot(const Surface &s, PanelEdge opp_edge, TextDir dir, unsigned slot, const OppCell &cell) {
+    if (s.w <= 0 || s.h <= 0) return;
+    {
+        uint16_t by = static_cast<uint16_t>(s.y), bh = static_cast<uint16_t>(s.h);
+        if (!lcd::clip_to_band(by, bh)) return;
+    }
+    const bool vertical = panel_is_column(opp_edge);
+    const uint16_t bg = cell.masthead ? kBar : kBg2;
+    const uint16_t border_col = cell.masthead ? kFocus : kRule;
+    const int16_t along = vertical ? s.h : s.w;
+    const int16_t fh = static_cast<int16_t>(kLabelFont.height);
+
+    // Inner divider (1 px along content-facing edge) + optional slot separator.
+    Box body{0, 0, s.w, s.h};
+    if (vertical) {
+        const int16_t div_x = opp_edge == PanelEdge::Left ? static_cast<int16_t>(s.w - 1) : 0;
+        gfx_fill(s, div_x, 0, 1, s.h, border_col);
+        body.x = opp_edge == PanelEdge::Left ? 0 : 1;
+        body.w = static_cast<int16_t>(s.w - 1);
+        if (cell.masthead) {
+            gfx_fill(s, body.x, static_cast<int16_t>(s.h - 1), body.w, 1, kFocus);
+            body.h = static_cast<int16_t>(s.h - 1);
+        } else if (slot > 1) {
+            gfx_fill(s, body.x, 0, 2, 1, bg);
+            gfx_fill(s, static_cast<int16_t>(body.x + 2), 0, static_cast<int16_t>(body.w > 4 ? body.w - 4 : body.w), 1, kRule);
+            if (body.w > 4) gfx_fill(s, static_cast<int16_t>(body.x + body.w - 2), 0, 2, 1, bg);
+            body.y = 1;
+            body.h = static_cast<int16_t>(s.h - 1);
+        }
+    } else {
+        const int16_t div_y = opp_edge == PanelEdge::Top ? static_cast<int16_t>(s.h - 1) : 0;
+        gfx_fill(s, 0, div_y, s.w, 1, border_col);
+        body.y = opp_edge == PanelEdge::Top ? 0 : 1;
+        body.h = static_cast<int16_t>(s.h - 1);
+        if (cell.masthead) {
+            gfx_fill(s, static_cast<int16_t>(s.w - 1), body.y, 1, body.h, kFocus);
+            body.w = static_cast<int16_t>(s.w - 1);
+        } else if (slot > 1) {
+            gfx_fill(s, 0, body.y, 1, 2, bg);
+            gfx_fill(s, 0, static_cast<int16_t>(body.y + 2), 1, static_cast<int16_t>(body.h > 4 ? body.h - 4 : body.h), kRule);
+            if (body.h > 4) gfx_fill(s, 0, static_cast<int16_t>(body.y + body.h - 2), 1, 2, bg);
+            body.x = 1;
+            body.w = static_cast<int16_t>(s.w - 1);
+        }
+    }
+
+    const uint8_t dots = cell.dot_count > 5 ? 5 : cell.dot_count;
+    const int spot_w = cell.spot ? 5 : 0;
+    const int dots_w = dots > 0 ? static_cast<int>(dots) * 5 : 0;
+    const int avail = std::max<int>(along - 4 - spot_w - dots_w, 0);
+    const int tag_w_raw = text_width(kLabelFont, cell.tag);
+    std::string_view tag_v = (tag_w_raw > 0 && tag_w_raw + 12 <= avail) ? cell.tag : std::string_view{};
+    const int tag_w = text_width(kLabelFont, tag_v);
+    char vbuf[kFitBuf];
+    const std::string_view val_v = cell.value.empty() ? std::string_view{} : fit_text(kLabelFont, cell.value, std::max<int>(avail - tag_w, 6), vbuf);
+    const int val_w = text_width(kLabelFont, val_v);
+    const int total = spot_w + tag_w + val_w + dots_w;
+    const int16_t a0 = static_cast<int16_t>((along - total) / 2);
+
+    // Precompute element boxes for single-pass fill_except (zero overdraw).
+    Box holes[6];
+    int nh = 0;
+    Box spot_box{}, tag_box{}, val_box{}, dot_box[5]{};
+    const int16_t tx = opp_edge == PanelEdge::Left ? 1 : 3;
+    const int16_t ty = opp_edge == PanelEdge::Top ? 1 : 3;
+
+    if (vertical) {
+        if (dir == TextDir::Ccw) {
+            int16_t cur = static_cast<int16_t>(a0 + total);
+            if (cell.spot) {
+                spot_box = {static_cast<int16_t>(tx + 2), static_cast<int16_t>(cur - 3), 8, 3};
+                holes[nh++] = spot_box;
+                cur = static_cast<int16_t>(cur - 5);
+            }
+            if (tag_w > 0) {
+                tag_box = {tx, static_cast<int16_t>(cur - tag_w), fh, static_cast<int16_t>(tag_w)};
+                holes[nh++] = tag_box;
+                cur = static_cast<int16_t>(cur - tag_w);
+            }
+            if (val_w > 0) {
+                val_box = {tx, static_cast<int16_t>(cur - val_w), fh, static_cast<int16_t>(val_w)};
+                holes[nh++] = val_box;
+                cur = static_cast<int16_t>(cur - val_w);
+            }
+            if (dots > 0) {
+                const int16_t d0 = static_cast<int16_t>(cur - dots_w);
+                const Box group{static_cast<int16_t>(tx + 4), d0, 3, static_cast<int16_t>(dots * 5 - 2)};
+                if (nh < 6) holes[nh++] = group;
+                for (uint8_t i = 0; i < dots; i++)
+                    dot_box[i] = {static_cast<int16_t>(tx + 4), static_cast<int16_t>(d0 + (dots - 1 - i) * 5), 3, 3};
+            }
+        } else {
+            int16_t cur = a0;
+            if (cell.spot) {
+                spot_box = {static_cast<int16_t>(tx + 2), cur, 8, 3};
+                holes[nh++] = spot_box;
+                cur = static_cast<int16_t>(cur + 5);
+            }
+            if (tag_w > 0) {
+                tag_box = {tx, cur, fh, static_cast<int16_t>(tag_w)};
+                holes[nh++] = tag_box;
+                cur = static_cast<int16_t>(cur + tag_w);
+            }
+            if (val_w > 0) {
+                val_box = {tx, cur, fh, static_cast<int16_t>(val_w)};
+                holes[nh++] = val_box;
+                cur = static_cast<int16_t>(cur + val_w);
+            }
+            if (dots > 0) {
+                const Box group{static_cast<int16_t>(tx + 4), static_cast<int16_t>(cur + 2), 3, static_cast<int16_t>(dots * 5 - 2)};
+                if (nh < 6) holes[nh++] = group;
+                for (uint8_t i = 0; i < dots; i++)
+                    dot_box[i] = {static_cast<int16_t>(tx + 4), static_cast<int16_t>(cur + 2 + i * 5), 3, 3};
+            }
+        }
+    } else {
+        int16_t cur = a0;
+        if (cell.spot) {
+            spot_box = {cur, static_cast<int16_t>(ty + 2), 3, 8};
+            holes[nh++] = spot_box;
+            cur = static_cast<int16_t>(cur + 5);
+        }
+        if (tag_w > 0) {
+            tag_box = {cur, ty, static_cast<int16_t>(tag_w), fh};
+            holes[nh++] = tag_box;
+            cur = static_cast<int16_t>(cur + tag_w);
+        }
+        if (val_w > 0) {
+            val_box = {cur, ty, static_cast<int16_t>(val_w), fh};
+            holes[nh++] = val_box;
+            cur = static_cast<int16_t>(cur + val_w);
+        }
+        if (dots > 0) {
+            const Box group{static_cast<int16_t>(cur + 2), static_cast<int16_t>(ty + 4), static_cast<int16_t>(dots * 5 - 2), 3};
+            if (nh < 6) holes[nh++] = group;
+            for (uint8_t i = 0; i < dots; i++)
+                dot_box[i] = {static_cast<int16_t>(cur + 2 + i * 5), static_cast<int16_t>(ty + 4), 3, 3};
+        }
+    }
+
+    fill_except(s, body, holes, nh, bg);
+    if (cell.spot) gfx_fill(s, spot_box.x, spot_box.y, spot_box.w, spot_box.h, cell.spot);
+    if (tag_w > 0) {
+        if (vertical) gfx_text_rot(s, kLabelFont, tag_box.x, tag_box.y, tag_v, cell.tag_color, bg, dir);
+        else gfx_text(s, kLabelFont, tag_box.x, tag_box.y, tag_v, cell.tag_color, bg);
+    }
+    if (val_w > 0) {
+        if (vertical) gfx_text_rot(s, kLabelFont, val_box.x, val_box.y, val_v, cell.value_color, bg, dir);
+        else gfx_text(s, kLabelFont, val_box.x, val_box.y, val_v, cell.value_color, bg);
+    }
+    if (dots > 0) {
+        // Fill the 2 px gaps between dots inside the single dot-group hole, then paint the 3x3 dots.
+        for (uint8_t i = 0; i < dots; i++) {
+            gfx_fill(s, dot_box[i].x, dot_box[i].y, 3, 3, i == cell.dot_cur ? kFocus : kInk3);
+            if (i + 1 < dots) {
+                if (vertical) {
+                    const int16_t gy = dir == TextDir::Ccw ? static_cast<int16_t>(dot_box[i].y - 2) : static_cast<int16_t>(dot_box[i].y + 3);
+                    gfx_fill(s, dot_box[i].x, gy, 3, 2, bg);
+                } else {
+                    gfx_fill(s, static_cast<int16_t>(dot_box[i].x + 3), dot_box[i].y, 2, 3, bg);
+                }
+            }
+        }
+    }
+}
+
 K2_HOT void paint_texts(const Surface &s, Box ground, const TextRun *runs, int n, uint16_t bg) {
     Box holes[kMaxHoles];
     int m = 0;
@@ -219,7 +385,7 @@ K2_HOT void RowList::draw_row_cb(void *ctx, int index, const Rect &r, bool hi, F
         tail_v = fit_text(kSmall, tail, kTailMaxPx, tbuf);
         const int vw = text_width(kSmall, tail_v);
         hole(static_cast<int16_t>(kTailX - vw), ty, vw, kSmall.height);
-        right -= vw + kTailGap;
+        right -= vw + 8;
     }
     std::string_view col2_v;
     if (!sp.col2.empty()) {
@@ -232,7 +398,7 @@ K2_HOT void RowList::draw_row_cb(void *ctx, int index, const Rect &r, bool hi, F
     hole(kTextX, ty, text_width(kSmall, text_v), kSmall.height);
     std::string_view note_v;
     if (hi && r.h > kRowH && !sp.note.empty()) {
-        note_v = fit_text(kLabelFont, sp.note, kNoteMaxPx, nbuf);
+        note_v = sp.data ? fit_data(kLabelFont, sp.note, kNoteMaxPx, nbuf) : fit_text(kLabelFont, sp.note, kNoteMaxPx, nbuf);
         hole(kTextX, static_cast<int16_t>(y + kNoteDy), text_width(kLabelFont, note_v), kLabelFont.height);
     }
 
@@ -246,8 +412,9 @@ K2_HOT void RowList::draw_row_cb(void *ctx, int index, const Rect &r, bool hi, F
         draw_drill(s, kTailX, static_cast<int16_t>(y + 1 + (kRowH - 1) / 2), sp.tail_color);
     } else if (pill_w) {
         const int16_t px0 = static_cast<int16_t>(kTailX - pill_w);
-        gfx_fill(s, px0, static_cast<int16_t>(y + 1 + (kRowH - 1 - kPillH) / 2), static_cast<int16_t>(pill_w), kPillH, sp.tail_tint);
-        gfx_text(s, kLabelFont, static_cast<int16_t>(px0 + 4), static_cast<int16_t>(y + 1 + (kRowH - 1 - kPillH) / 2 + 1), tail_v,
+        const int16_t py = static_cast<int16_t>(y + 1 + (kRowH - 1 - kPillH) / 2);
+        gfx_fill_panel(gfx_native_rect(s, px0, py, static_cast<int16_t>(pill_w), kPillH), sp.tail_tint);
+        gfx_text(s, kLabelFont, static_cast<int16_t>(px0 + 4), static_cast<int16_t>(py + 1), tail_v,
                  sp.tail_color, sp.tail_tint);
     } else if (!tail_v.empty()) {
         gfx_text(s, kSmall, static_cast<int16_t>(kTailX - text_width(kSmall, tail_v)), ty, tail_v, sp.tail_color, bg);

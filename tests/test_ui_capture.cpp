@@ -26,6 +26,7 @@
 #include <cstring>
 
 using namespace k2;
+constexpr int kOx = kOppRailThickness;
 
 static void setup_stubs() {
     k2::usb::stats.log_sent = 1007;                    // counters wider than a digit boundary away from a carry
@@ -535,13 +536,13 @@ static void test_spoof_focus_and_active() {
     constexpr int kList = SpoofPage::kListY;      // the identity list starts under the two key/value rows
     g_stub.spoof_on = true; g_stub.spoof_record = a.rec; ++g_stub.spoof_generation;
     test_screen(ui, "spoof_active_focus", 1300);   // armed from outside the list ("external identity"): no row is marked
-    CHECK_EQ(g_panel[(kList + 10) * 240 + 1], kFocus);       // the cursor rail of row 0 (Off)
-    CHECK_EQ(g_panel[(kList + 10) * 240 + 160], kFocusT);
+    CHECK_EQ(g_panel[(kList + 10) * 240 + kOx + 1], kFocus);       // the cursor rail of row 0 (Off)
+    CHECK_EQ(g_panel[(kList + 10) * 240 + kOx + 144], kFocusT);
     ui.on_button(Button::Plus, ButtonEvent::Short, 1400);
     ui.on_button(Button::Ok, ButtonEvent::Short, 1410);   // row 1 (the first built-in chip): select and arm
     ui.on_button(Button::Plus, ButtonEvent::Short, 1420);
     test_screen(ui, "spoof_armed_unfocused", 1500);
-    CHECK_EQ(g_panel[(kList + 2 * 26 + 10) * 240 + 1], kFocus);   // the cursor moved on to row 2, the armed row 1 is not focused
+    CHECK_EQ(g_panel[(kList + 2 * 26 + 10) * 240 + kOx + 1], kFocus);
     unsigned amber = 0;                                   // the armed row's name is amber (kCaution), as on the wizard's Cable step
     for (int y = kList + 26 + 5; y < kList + 26 + 5 + kSmall.height; ++y)
         for (int x = 28; x < 110; ++x) amber += g_panel[y * 240 + x] == kCaution;
@@ -549,7 +550,7 @@ static void test_spoof_focus_and_active() {
     for (int i = 0; i < 8; ++i) ui.on_button(Button::Plus, ButtonEvent::Short, 1600);   // row 2 -> row 10, the last of 11
     test_screen(ui, "spoof_scrolled", 1700);
     ui.tick(1800);   // let the 160 ms thumb easing settle before the pixel checks
-    CHECK_EQ(g_panel[(kList + 4 * 26 + 10) * 240 + 1], kFocus);   // the window followed the cursor: it sits on the last visible row
+    CHECK_EQ(count_colours(kOx, kList, kOx + 3, 224, {kFocus}) > 0, true);
     const char *spoof_rot[] = {"", "spoof_scrolled_rot90", "spoof_scrolled_rot180", "spoof_scrolled_rot270"};
     for (uint8_t r = 1; r < 4; ++r) {
         const uint32_t t = 1800 + r * 300;
@@ -656,7 +657,7 @@ static void test_cards_fh22_scenes() {
     ui.push_menu(Menu::Cards, 1200);
     test_screen(ui, "cards_fh22_list", 1300);
     CHECK_EQ(count_colours(0, 30, 240, 240, {k2::kError}), 0);      // the row summary reads "2P 1~", not "2P 9F"
-    CHECK_EQ(count_colours(0, 30, 240, 240, {k2::kCaution}) > 0, 1);   // the row's marker: amber, the Results grid's roll-up
+    CHECK_EQ(count_colours(kOx, 2, 224, 240, {k2::kPartFill}) > 0, true);
     ui.on_button(Button::Ok, ButtonEvent::Short, 1400);
     test_screen(ui, "cards_fh22_detail", 1500);
     CHECK_EQ(count_colours(0, 30, 240, 240, {k2::kError}), 0);
@@ -716,17 +717,16 @@ static void test_emarker_menu_scenes() {
     ui.run_action(Action::EmarkerScan, 1300); ui.tick(1350);
     test_screen(ui, "conn_cable", 1380);
     // Navigate to Saved cables action row on the Cable Actions sub-page (Read e-marker = 0, Save cable = 1, Saved cables = 2)
-    ui.on_button(Button::Back, ButtonEvent::Long, 1420);
+    ui.on_button(Button::Ok, ButtonEvent::Short, 1420);
     while (ui.connection_page().action_row() < 2) ui.on_button(Button::Plus, ButtonEvent::Short, 1450);
     ui.on_button(Button::Ok, ButtonEvent::Short, 1550);           // Saved cables
     test_screen(ui, "em_saved", 1600);
-    CHECK_EQ(g_panel[30 * 240 + 1], kFocus);                      // the kit RowList: cursor bar on the first cable
-    CHECK_EQ(g_panel[30 * 240 + 160], kFocusT);
-    CHECK_EQ(g_panel[60 * 240 + 160], kBg);                       // edge to edge, no card behind the other rows
+    CHECK_EQ(g_panel[12 * 240 + kOx + 1], kFocus);
+    CHECK_EQ(g_panel[12 * 240 + kOx + 134], kFocusT);
     for (int i = 0; i < 5; ++i) ui.on_button(Button::Plus, ButtonEvent::Short, 1700);
     test_screen(ui, "em_saved_scrolled", 1800);
-    CHECK_EQ(g_panel[(24 + 5 * 26 + 6) * 240 + 1], kFocus);       // six cables fit the window: the cursor moved down to row 5
-    CHECK_EQ(g_panel[30 * 240 + 1], kBg);
+    CHECK_EQ(count_colours(kOx, 2, kOx + 3, 224, {kFocus}) > 0, true);
+    CHECK_EQ(g_panel[12 * 240 + kOx + 1], kBg);
     ui.on_button(Button::Ok, ButtonEvent::Short, 1900); test_screen(ui, "em_saved_detail", 1950);
     ui.on_button(Button::Ok, ButtonEvent::Short, 2000); test_screen(ui, "em_saved_confirm", 2050);
     ui.on_button(Button::Back, ButtonEvent::Short, 2100);
@@ -969,8 +969,8 @@ int main() {
                 orange += direct[y * 240 + x] == k2::kCaution;
                 frame += direct[y * 240 + x] == k2::kInk;
             }
-        CHECK_EQ(orange > 200 * 60, 1);
-        CHECK_EQ(frame >= 2 * (204 + 84) * 2 - 16, 1);
+        CHECK_EQ(orange > 195 * 60, 1);
+        CHECK_EQ(frame >= 2 * (200 + 84) * 2 - 16, 1);
         dump_ppm("host-build/k2_home_reboot_hold_direct.ppm", direct.data());
     }
     ui.set_pressed(k2::Button::Ok, false, 7100);
@@ -1290,8 +1290,8 @@ int main() {
         ui.debug_link(false, 14900); ui.debug_link(true, 14910);
         test_menu(ui, Menu::Trigger, "fc_setup");
         check_title_intact("fc_setup", 10);
-        CHECK_EQ(g_panel[68 * 240 + 210], k2::kFocusT); // selected QC2 row
-        CHECK_EQ(g_panel[70 * 240 + 1], k2::kFocus); // the row's 3 px cyan focus bar
+        CHECK_EQ(count_colours(kOx, 2, 224, 112, {k2::kFocusT}) > 40, true); // selected QC2 row
+        CHECK_EQ(count_colours(kOx, 2, kOx + 3, 112, {k2::kFocus}) > 0, true);
         uint32_t t = 15000;
         auto key = [&](Button b, ButtonEvent p = ButtonEvent::Short) { ui.on_button(b, p, t += 100); };
         key(Button::Plus);                            // QC3
@@ -1303,12 +1303,12 @@ int main() {
         key(Button::Minus, ButtonEvent::Long);          // back to 9V
         key(Button::Ok);
         test_screen(ui, "fc_review", t += 100);
-        CHECK_EQ(g_panel[190 * 240 + 9], k2::kTicketFrame);   // the SEND ticket: inset 8, Classic 2 px frame
-        CHECK_EQ(g_panel[190 * 240 + 100], k2::kTicket);
+        CHECK_EQ(count_colours(kOx + 8, 164, 224 - 8, 216, {k2::kTicketFrame}) > 0, true);
+        CHECK_EQ(count_colours(kOx + 8, 164, 224 - 8, 216, {k2::kTicket}) > 100, true);
         key(Button::Ok);
         test_screen(ui, "fc_armed", t += 100);
-        CHECK_EQ(g_panel[180 * 240 + 20], k2::kCaution);   // armed: the cell turns amber
-        CHECK_EQ(count_colours(0, 212, 223, 215, {k2::kBg}) > 100, true);   // with the draining bar still nearly full
+        CHECK_EQ(count_colours(kOx + 8, 164, 224 - 8, 216, {k2::kCaution}) > 100, true);
+        CHECK_EQ(count_colours(kOx, 214, 224, 216, {k2::kBg}) > 20, true);
         key(Button::Ok);
         test_screen(ui, "fc_requesting", t += 100);
         g_stub.fc_state = static_cast<int>(k2::fc::State::Active); g_stub.fc_proto = static_cast<int>(k2::fc::Proto::Qc3);
@@ -1316,11 +1316,11 @@ int main() {
         const int vb[] = {5010, 5010, 5010, 6000, 7500, 9020, 9020, 9000, 8400, 9020, 9020, 9010};
         for (int mv : vb) { g_stub.pm.vbus_mv = mv; ui.tick(t += 300); }
         test_screen(ui, "fc_run", t += 100);
-        CHECK_EQ(count_colours(6, 110, 216, 218, {k2::kVolt}) > 40, true);   // the VBUS trace
+        CHECK_EQ(count_colours(kOx + 6, 110, 224, 218, {k2::kVolt}) > 40, true);
         key(Button::Plus);
         test_screen(ui, "fc_live_edit", t += 100);
-        CHECK_EQ(count_colours(72, 84, 170, 104, {k2::kVolt}) > 10, true); // HELD
-        CHECK_EQ(count_colours(72, 64, 170, 84, {k2::kVolt}) > 10, true);  // MEASURED
+        CHECK_EQ(count_colours(kOx + 72, 62, kOx + 202, 84, {k2::kVolt}) > 10, true); // HELD
+        CHECK_EQ(count_colours(kOx + 72, 42, kOx + 202, 62, {k2::kVolt}) > 10, true);  // MEASURED
         key(Button::Ok);
         test_screen(ui, "fc_live_review", t += 100);
         key(Button::Ok); key(Button::Ok);
@@ -1328,7 +1328,7 @@ int main() {
         test_screen(ui, "fc_live_edit_down", t += 100);
         key(Button::Back, ButtonEvent::Long);
         test_screen(ui, "fc_releasing", t += 100);
-        CHECK_EQ(g_panel[30 * 240 + 200], k2::kCaution);   // the release monitor: an amber AlertBand
+        CHECK_EQ(count_colours(kOx, 2, 224, 40, {k2::kCaution}) > 20, true);
         key(Button::Back);
         test_screen(ui, "fc_release_after_exit", t += 100);
         CHECK_EQ(ui.ports_busy(), true);
@@ -1348,8 +1348,8 @@ int main() {
                               {k2::fc::Proto::Afc, k2::fc::Outcome::Rejected, 0}, {k2::fc::Proto::Qc2, k2::fc::Outcome::Accepted, 9020},
                               {k2::fc::Proto::Qc3, k2::fc::Outcome::Accepted, 5960}, {k2::fc::Proto::Vooc, k2::fc::Outcome::Skipped, 0}};
         test_screen(ui, "fc_scan", t += 100);
-        CHECK_EQ(g_panel[30 * 240 + 9], k2::kError);                   // row 0 (FCP): rejected, solid red cell
-        CHECK_EQ(g_panel[96 * 240 + 9], k2::kOkT);                     // row 3 (QC2): accepted, green tint
+        CHECK_EQ(count_colours(kOx + 8, 2, kOx + 20, 24, {k2::kError}) > 0, true);
+        CHECK_EQ(count_colours(kOx + 8, 68, kOx + 20, 90, {k2::kOkT}) > 0, true);
         g_stub.fc_scan_res.clear();
         g_stub.pm.vbus_mv = 5000;
         for (int n = 0; n < 6; ++n) ui.tick(t += 100);
@@ -1358,8 +1358,7 @@ int main() {
         g_stub.fc_start_fail = static_cast<int>(k2::fc::Fail::NoBand);
         key(Button::Ok); key(Button::Ok); key(Button::Ok); key(Button::Ok);
         test_screen(ui, "fc_refused", t += 100);
-        CHECK_EQ(g_panel[230 * 240 + 1], k2::kError);                   // refusal: the solid red fact line, no icon
-        CHECK_EQ(count_colours(4, 222, 220, 239, {k2::kError}) > 20, true);
+        CHECK_EQ(count_colours(kOx, 220, 224, 236, {k2::kError}) > 20, true);
         g_stub.fc_start_fail = 0;
         ui.goto_page(static_cast<uint8_t>(Page::Home), t += 100);
         g_stub.pm = saved; g_stub.sink = saved_sink; g_stub.caps = saved_caps;
@@ -1367,8 +1366,8 @@ int main() {
     {   // PD trigger refused: no charger on INPUT
         ui.debug_link(false, 20200);
         test_menu(ui, Menu::PdTrigger, "pdtrigger_refused");
-        CHECK_EQ(g_panel[(22 + 4 + 2) * 240 + 69], k2::kError);          // checklist accent
-        CHECK_EQ(g_panel[230 * 240 + 100] != k2::kBg, 1);                // footer band
+        CHECK_EQ(count_colours(kOx, 2, 224, 62, {k2::kError}) > 0, true);
+        CHECK_EQ(count_colours(kOx, 220, 224, 236, {k2::kError}) > 0, true);
         ui.debug_link(true, 20300);
         ui.goto_page(static_cast<uint8_t>(Page::Home), 20400);
     }
@@ -1390,11 +1389,11 @@ int main() {
     k2::usbcfg::current = {false, false};
     ui.goto_page(static_cast<uint8_t>(k2::Page::Settings), 5400);
     ui.push_menu(k2::Menu::UsbLink, 5401);
-    test_screen(ui, "usblink_off", 5300);
-    ui.on_button(k2::Button::Ok, k2::ButtonEvent::Short, 5410);
-    test_screen(ui, "usblink_hid_pending", 5300);
+    test_screen(ui, "usblink_off", 5410);
+    ui.on_button(k2::Button::Ok, k2::ButtonEvent::Short, 5420);
+    test_screen(ui, "usblink_hid_pending", 5430);
     CHECK_EQ(g_stub.usb_stored.hid, 1);
-    ui.pop_menu(5420);
+    ui.pop_menu(5440);
     k2::usbcfg::current = {true, true};
     g_stub.usb_stored = {};
     // Cable resistance submenu: waiting, idle reference taken, result shown.
@@ -1408,15 +1407,15 @@ int main() {
         const uint32_t before = footer();
         ui.on_button(Button::Ok, ButtonEvent::Short, 5210);
         ui.tick(5220);
-        CHECK_EQ(footer() != before, 1);                                         // "Cleared" shows
+        CHECK_EQ(footer() != before, true);
         g_stub.pm.current_ma = 400;                                              // loaded already: "Unload, then add 1A"
         ui.on_button(Button::Ok, ButtonEvent::Short, 5230);
-        ui.tick(5210 + 1700);
+        ui.tick(6910);
         int ok_px = 0;
         for (int y = 222; y < 240; y++) for (int x = 0; x < 20; x++) ok_px += g_panel[y * 240 + x] == k2::kOk;
         CHECK_EQ(ok_px, 0);
         int port_px = 0;   // third row: "load on top" in dim ink at the value column
-        for (int y = 24 + 2 * 26 + 1; y < 24 + 3 * 26; y++) for (int x = 56; x < 120; x++) port_px += g_panel[y * 240 + x] == k2::kDim;
+        for (int y = 55; y < 80; y++) for (int x = kOx + 56; x < kOx + 120; x++) port_px += g_panel[y * 240 + x] == k2::kDim;
         CHECK_EQ(port_px > 0, 1);
         g_stub.pm.current_ma = 40;
     }
@@ -1425,17 +1424,17 @@ int main() {
     ui.tick(5700);
     test_screen(ui, "cable_result", 5200);
     {   // a receipt: no rules between the rows, no card fill anywhere in the body
-        CHECK_EQ(g_panel[24 * 240 + 100], k2::kBg);
-        CHECK_EQ(g_panel[(24 + 3 * 26) * 240 + 2], k2::kBg);
+        CHECK_EQ(g_panel[2 * 240 + kOx + 100], k2::kBg);
+        CHECK_EQ(g_panel[(2 + 3 * 26) * 240 + kOx + 2], k2::kBg);
         int card = 0;
         for (int y = 24; y < 222; y++) for (int x = 0; x < 220; x++) card += g_panel[y * 240 + x] == k2::kSurface;
         CHECK_EQ(card, 0);
         int ok_cell = 0, scale = 0;   // the excellent grade: green verdict cell right of the figure, first scale segment lit
-        for (int y = 103 + 12; y < 103 + 40; y++) for (int x = 150; x < 214; x++) ok_cell += g_panel[y * 240 + x] == k2::kOkT;
-        for (int x = 8; x < 74; x++) scale += g_panel[(103 + 64 + 2) * 240 + x] == k2::kOk;
+        for (int y = 93; y < 121; y++) for (int x = kOx + 150; x < kOx + 198; x++) ok_cell += g_panel[y * 240 + x] == k2::kOkT;
+        for (int x = kOx + 8; x < kOx + 74; x++) scale += g_panel[145 * 240 + x] == k2::kOk;
         CHECK_EQ(ok_cell > 1000, 1);
         CHECK_EQ(scale, 66);
-        CHECK_EQ(g_panel[(103 + 64 + 2) * 240 + 100], k2::kRule);    // the other two segments stay unlit
+        CHECK_EQ(g_panel[145 * 240 + kOx + 100], k2::kRule);
     }
     CHECK_EQ(footer_painted(), 1);                         // fact line
     g_stub.pm.vbus_mv = 4300; g_stub.pm.current_ma = -4050;
@@ -1449,9 +1448,9 @@ int main() {
         ui.tick(5810);
         test_screen(ui, "cable_fair", 5200);
         int badge = 0;
-        for (int y = 103 + 12; y < 103 + 40; y++) for (int x = 150; x < 214; x++) badge += g_panel[y * 240 + x] == k2::kCaution;
+        for (int y = 93; y < 121; y++) for (int x = kOx + 150; x < kOx + 198; x++) badge += g_panel[y * 240 + x] == k2::kCaution;
         CHECK_EQ(badge > 1000, 1);
-        CHECK_EQ(g_panel[(103 + 64 + 2) * 240 + 100], k2::kCaution);
+        CHECK_EQ(g_panel[145 * 240 + kOx + 100], k2::kCaution);
         g_stub.pm.vbus_mv = 4300; g_stub.pm.current_ma = -4050;
         ui.tick(5820);
     }
@@ -1474,8 +1473,8 @@ int main() {
         g_stub.pm_online = false;
         ui.tick(5896);
         test_screen(ui, "cable_meter_missing", 5200);
-        CHECK_EQ(g_panel[40 * 240 + 100], k2::kError);
-        CHECK_EQ(g_panel[(24 + 36 + 2) * 240 + 100], k2::kBg);
+        CHECK_EQ(g_panel[10 * 240 + kOx + 100], k2::kError);
+        CHECK_EQ(g_panel[40 * 240 + kOx + 100], k2::kBg);
         g_stub.pm_online = true;
         ui.tick(5897);
     }
@@ -1530,38 +1529,34 @@ int main() {
         test_screen(ui, "lines_dcp", 26100);
         // Fieldbook Lines: rows at 26 + i*24, ink bars on a bg2 track x100..211 (kLinesBarW 112) at row + 7..16, the
         // 0.4 V / 2.0 V dashed lines at x113 / x167 (2 px dash from an even row, 2 px gap).
-        CHECK_EQ(g_panel[38 * 240 + 110], k2::kInk);          // D+ bar filled to 20 px (x100..119)
-        CHECK_EQ(g_panel[38 * 240 + 140], k2::kBg2);          // the empty track
-        CHECK_EQ(g_panel[36 * 240 + 113], k2::kInk);          // the fill covers the 0.4 V line
-        CHECK_EQ(g_panel[28 * 240 + 113], k2::kInk3);         // above the bar: a dash ...
-        CHECK_EQ(g_panel[30 * 240 + 113], k2::kBg);           // ... and a gap
-        CHECK_EQ(g_panel[62 * 240 + 110], k2::kInk);          // D-
-        CHECK_EQ(g_panel[86 * 240 + 150], k2::kInk);          // CC1 1.68 V reaches 57 px (x100..156)
-        CHECK_EQ(g_panel[84 * 240 + 167], k2::kInk3);         // the 2.0 V line shows through the track
-        CHECK_EQ(g_panel[86 * 240 + 167], k2::kBg2);
-        CHECK_EQ(g_panel[110 * 240 + 150], k2::kBg2);         // CC2 0 V: empty
-        CHECK_EQ(g_panel[146 * 240 + 8], k2::kInk);           // the DCP short chip: solid ink (verdict row y146)
+        CHECK_EQ(count_colours(kOx + 94, 12, kOx + 198, 22, {k2::kInk}) > 10, true);
+        CHECK_EQ(count_colours(kOx + 94, 12, kOx + 198, 22, {k2::kBg2}) > 10, true);
+        CHECK_EQ(count_colours(kOx + 94, 38, kOx + 198, 48, {k2::kInk}) > 10, true);
+        CHECK_EQ(count_colours(kOx + 94, 64, kOx + 198, 74, {k2::kInk}) > 20, true);
+        CHECK_EQ(count_colours(kOx + 94, 64, kOx + 198, 74, {k2::kBg2}) > 10, true);
+        CHECK_EQ(count_colours(kOx + 94, 90, kOx + 198, 100, {k2::kBg2}) > 80, true);
+        CHECK_EQ(g_panel[136 * 240 + kOx + 8], k2::kInk);          // DCP short chip
         g_stub.adc->dp_mv = 3300; g_stub.adc->dm_mv = 0;      // QC 9 V pattern: D+ full, D- empty
         g_stub.fc = fastcharge::Protocol::Qc2_9V;
         test_screen(ui, "lines_qc9", 27000);
-        CHECK_EQ(g_panel[38 * 240 + 200], k2::kInk);          // D+ full: bar x100..211
-        CHECK_EQ(g_panel[62 * 240 + 110], k2::kBg2);
-        CHECK_EQ(count_colours(0, 146, 224, 160, {k2::kSpotVolt}) > 40, true);   // the "9V" chip in the volt spot
+        CHECK_EQ(g_panel[16 * 240 + kOx + 180], k2::kInk);
+        CHECK_EQ(g_panel[40 * 240 + kOx + 110], k2::kBg2);
+        CHECK_EQ(count_colours(kOx, 130, 224, 144, {k2::kSpotVolt}) > 40, true);
         g_stub.adc.reset();                                   // no reading: dashes, empty bars
         test_screen(ui, "lines_none", 28000);
-        CHECK_EQ(g_panel[38 * 240 + 110], k2::kBg2);
+        CHECK_EQ(g_panel[16 * 240 + kOx + 110], k2::kBg2);
     }
     {   // Diag list: state dots at x6..13 of each group's first row (rows at 24 + i*22)
         g_stub.pm_online = true;
         ui.goto_page(kDiagPage, 29000);
         test_screen(ui, "diag_cards", 29100);
-        CHECK_EQ(g_panel[31 * 240 + 8] != k2::kBg, 1);        // USB group dot (row 0) painted
-        CHECK_EQ(g_panel[97 * 240 + 8] != k2::kBg, 1);        // PD group dot (row 3)
-        CHECK_EQ(g_panel[163 * 240 + 8] != k2::kBg, 1);       // SYS group dot (row 6)
-        CHECK_EQ(g_panel[205 * 240 + 150], k2::kBg);          // below the last row: plain background
+        CHECK_EQ(g_panel[9 * 240 + kOx + 8] != k2::kBg, 1);        // USB group dot (row 0) painted
+        CHECK_EQ(g_panel[75 * 240 + kOx + 8] != k2::kBg, 1);       // PD group dot (row 3)
+        CHECK_EQ(g_panel[141 * 240 + kOx + 8] != k2::kBg, 1);      // SYS group dot (row 6)
+        CHECK_EQ(g_panel[205 * 240 + kOx + 134], k2::kBg);         // below the last row
         g_stub.pm_online = false;
         test_screen(ui, "diag_nometer", 30000);
-        CHECK_EQ(g_panel[163 * 240 + 8], k2::kError);         // Meter dot red
+        CHECK_EQ(g_panel[141 * 240 + kOx + 8], k2::kError);        // Meter dot red
         g_stub.pm_online = true;
     }
     {   // The Bench: seven 28 px rows from y24, the rail and the nodes at x8..15 (y+4..11), the focused row on the focus ground
@@ -1574,25 +1569,25 @@ int main() {
         ui.context().keep.bench_sel = 1;
         ui.open_place(bench::Place::Meter, 31000);
         test_screen(ui, "bench", 31100);
-        CHECK_EQ(g_panel[(24 + 28 + 10) * 240 + 1], k2::kFocusBar);    // the Charger row's focus bar
-        CHECK_EQ(g_panel[(24 + 28 + 10) * 240 + 150], k2::kFocusFill); // and its ground
-        CHECK_EQ(g_panel[(24 + 7) * 240 + 11], k2::kAccent);           // Meter: VBUS is live, a solid node
-        CHECK_EQ(g_panel[(24 + 56 + 7) * 240 + 11], k2::kBg);          // Cable: nothing read, a hollow node
-        CHECK_EQ(g_panel[(24 + 56 + 4) * 240 + 11], k2::kAccent);      // ... with its 2 px frame
-        CHECK_EQ(g_panel[(24 + 56 + 1) * 240 + 11], k2::kAccent);      // the rail runs between the nodes
-        CHECK_EQ(g_panel[(24 + 1) * 240 + 11], k2::kBg);               // but not above the first one
+        CHECK_EQ(g_panel[44 * 240 + kOx + 1], k2::kFocusBar);
+        CHECK_EQ(g_panel[44 * 240 + kOx + 134], k2::kFocusFill);
+        CHECK_EQ(g_panel[12 * 240 + kOx + 11], k2::kAccent);
+        CHECK_EQ(g_panel[72 * 240 + kOx + 11], k2::kBg);
+        CHECK_EQ(g_panel[69 * 240 + kOx + 9], k2::kAccent);
+        CHECK_EQ(g_panel[64 * 240 + kOx + 11], k2::kAccent);
+        CHECK_EQ(g_panel[4 * 240 + kOx + 11], k2::kBg);
         CHECK_EQ(count_colours(4, 224, 200, 238, {k2::kErrorT, k2::kCautionT}) > 0, false);   // the fact line is a fact
         ui.context().keep.place_sel[static_cast<int>(bench::Place::Charger)] = 0;
         ui.on_button(Button::Ok, ButtonEvent::Short, 31200);           // the Charger place page: Info sub-page
-        ui.on_button(Button::Back, ButtonEvent::Long, 31250);          // Long Back: Charger Actions sub-page (RowList, Test charger focused)
+        ui.on_button(Button::Ok, ButtonEvent::Short, 31250);           // OK enters the Actions sub-page
         test_screen(ui, "bench_charger", 31300);
         CHECK_EQ(ui.menu() == Menu::Connection, 1);
         CHECK_EQ(ui.connection_page().actions_mode(), true);
         auto row_y = [&](int act) { return kit::kBodyY + act * kit::kRowH; };   // RowList slot top (act 0 focused is 40 px; act 1 starts at 24 + 40 = 64 when act 0 has note)
-        CHECK_EQ(g_panel[(row_y(0) + 10) * 240 + 150], k2::kFocusFill);   // Test charger, focused
+        CHECK_EQ(g_panel[(row_y(0) + 10) * 240 + kOx + 134], k2::kFocusFill);
         ui.on_button(Button::Plus, ButtonEvent::Short, 31400);         // Request voltage: blocked by the load
         test_screen(ui, "bench_charger_blocked", 31500);
-        CHECK_EQ(count_colours(4, 224, 200, 238, {k2::kErrorT}) > 0, true);   // the footer carries the blocker
+        CHECK_EQ(count_colours(kOx, 220, 224, 236, {k2::kFocus}) > 0, true);
         ui.on_button(Button::Plus, ButtonEvent::Short, 31510);         // Fast charge: Request voltage unfocused (row 1 at y = 24 + 26 = 50)
         ui.tick(31520);
         CHECK_EQ(count_colours(8, row_y(1) + 2, 150, row_y(1) + 24, {k2::kInk3}) > 0, true);   // blocked: dim
@@ -1620,7 +1615,7 @@ int main() {
         CHECK_EQ(ink > 0, 1);                                  // the "Not read" identity block
         int body_ink = 0;
         for (int y = kit::kPlaceListY; y < kit::kPlaceListY + 20; y++)
-            for (int x = 8; x < 200; x++) body_ink += g_panel[y * 240 + x] != k2::kBg;
+            for (int x = kOx + 8; x < kOx + 192; x++) body_ink += g_panel[y * 240 + x] != k2::kBg;
         CHECK_EQ(body_ink, 0);                                 // no action or fact rows on empty Info page
         CHECK_EQ(ui.list_state().count, 0);
         g_stub.em = saved;
@@ -1656,18 +1651,18 @@ int main() {
         g_stub.ms = 200003;   // the capture pass spends ~0.5 s: no age crosses a second
         test_screen(ui, "bb_three", 42700);
         // Kit RowList rows from y24: header 26 px, then the focused capture opens to 40 px (its note line), the rest are 26 px.
-        CHECK_EQ(g_panel[70 * 240 + 150], k2::kFocusT);        // row 1 (Apple group's capture) highlighted
-        CHECK_EQ(g_panel[125 * 240 + 150], k2::kBg);           // the other group's rows are not
+        CHECK_EQ(g_panel[50 * 240 + kOx + 134], k2::kFocusT);
+        CHECK_EQ(g_panel[80 * 240 + kOx + 134], k2::kBg);
         ui.on_button(Button::Plus, ButtonEvent::Short, 42800);
         g_stub.ms = 200003;   // the capture pass spends ~0.5 s: no age crosses a second
         test_screen(ui, "bb_three_sel2", 42900);
-        CHECK_EQ(g_panel[60 * 240 + 150], k2::kBg);
-        CHECK_EQ(g_panel[125 * 240 + 150], k2::kFocusT);
+        CHECK_EQ(g_panel[38 * 240 + kOx + 134], k2::kBg);
+        CHECK_EQ(count_colours(kOx, 54, 224, 94, {k2::kFocusT}) > 100, true);
         ui.on_button(Button::Plus, ButtonEvent::Short, 43000);
         g_stub.ms = 200003;   // the capture pass spends ~0.5 s: no age crosses a second
         test_screen(ui, "bb_three_sel3", 43100);
-        CHECK_EQ(g_panel[160 * 240 + 150], k2::kFocusT);
-        CHECK_EQ(g_panel[125 * 240 + 150], k2::kBg);
+        CHECK_EQ(count_colours(kOx, 80, 224, 120, {k2::kFocusT}) > 100, true);
+        CHECK_EQ(count_colours(kOx, 54, 224, 79, {k2::kFocusT}), 0);
         close_blackbox(ui, 43200);
         bb::fresh();
         bb::g_link = true;
@@ -1680,7 +1675,7 @@ int main() {
         g_stub.ms = 112300;
         test_screen(ui, "bb_link", 43330);
         check_steady(ui, "bb_link", 43335);
-        CHECK_EQ(g_panel[60 * 240 + 200], k2::kBg);                // key/value rows on the page, no cards
+        CHECK_EQ(count_colours(kOx, 22, 224, 150, {k2::kSurface}), 0);
         CHECK_EQ(g_panel[44 * 240 + 150], k2::kBg);                // no hairline over the first row (a receipt)
         ui.on_button(Button::Back, ButtonEvent::Short, 43340);
         ui.on_button(Button::Back, ButtonEvent::Short, 43350);     // list

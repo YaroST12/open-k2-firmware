@@ -40,7 +40,7 @@ public:
 
     static constexpr int16_t kRuleY = kit::kBodyY + static_cast<int16_t>(loopprobe::kSteps) * kit::kRowH;   // 154
     static constexpr int16_t kActionY = kRuleY + 2, kActionH = 64;                                              // 156..219
-    static constexpr int16_t kValueX = 80;       // the value column: 17 cells of font 16 to x216
+    static constexpr int16_t kValueX = 70;       // the value column: 17 cells of font 16 to x206 (208 px canvas)
     static constexpr uint8_t kValueChars = 17;
     static constexpr int16_t kBarY = kActionY + 4, kStepRowY = kBarY + 8, kTimeRowY = kStepRowY + kit::kInfoPitch + 2;
 

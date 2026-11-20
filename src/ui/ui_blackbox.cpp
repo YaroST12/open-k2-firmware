@@ -88,11 +88,6 @@ void capture_parts(CaptureParts &p, const pdtrace::CaptureInfo &info, std::span<
     p.count = all.substr(b + 1);
 }
 
-// "41K free" of the flash ring, or "idle, not saving" once no PD traffic came for the idle time.
-void put_flash(StrBufBase &f, const bbpersist::Status &s) {
-    if (s.idle) f.put("Idle, not saving. ");
-    f.put_u32(s.free_bytes / 1024).put("K free");
-}
 }  // namespace
 
 // ---- model: identities, groups ------------------------------------------------------------------
@@ -221,15 +216,6 @@ void BlackBoxPage::paint_list() {
     ctx_.rows.set_count(nrows_ + 1);                  // the groups and captures, then the live row
     ctx_.rows.select(sel_row());
     ctx_.rows.draw(ctx_.now, ctx_.budget);
-    const bbpersist::Status fl = bbpersist::status();
-    StrBuf<32> f;
-    if (empty) {
-        f.put("Empty. ");
-    } else {
-        f.put_u32(norder_).put(norder_ == 1 ? " capture. " : " captures. ");
-    }
-    put_flash(f, fl);
-    draw_footer_cached(c, FooterTone::Info, f.view(), foot_);   // a count, not a good state
 }
 
 // ---- timeline -----------------------------------------------------------------------------------
@@ -249,14 +235,15 @@ void BlackBoxPage::paint_timeline_head() {
     gfx_fill(c, 0, kTlHeadY, c.w, static_cast<int16_t>(kStripBoxY - kTlHeadY), kBg);
     draw_icon(c, 6, kTlHeadY + 2, trigger_icon(info.trigger), trigger_color(info.trigger), kBg);
     gfx_text(c, kSmall, 24, kTlHeadY, trigger_name(info.trigger), kText, kBg);
+    const int16_t right = static_cast<int16_t>(c.w - 8);
     if (info.filling) {
         const int w = kit::chip_w("REC");
-        kit::draw_chip(c, static_cast<int16_t>(216 - w), kTlHeadY + 1, "REC", kCaution, kBg);
+        kit::draw_chip(c, static_cast<int16_t>(right - w), kTlHeadY + 1, "REC", kCaution, kBg);
     } else {
         const int w = static_cast<int>(at.size()) * kLabelFont.adv;
-        gfx_text(c, kLabelFont, static_cast<int16_t>(216 - w), kTlHeadY + 3, at, kDim, kBg);
+        gfx_text(c, kLabelFont, static_cast<int16_t>(right - w), kTlHeadY + 3, at, kDim, kBg);
     }
-    const int avail = (216 - 8) / kLabelFont.adv;
+    const int avail = (right - 8) / kLabelFont.adv;
     std::size_t kn = std::min<std::size_t>(k.n, static_cast<std::size_t>(avail));
     gfx_text(c, kLabelFont, 8, kTlHeadY + 19, std::string_view(k.key, kn), k.identity ? kText : kDim, kBg);
     if (k.vendor[0]) {
@@ -288,7 +275,6 @@ void BlackBoxPage::paint_link() {
         kit::kv_row(c, kLinkLayout, kit::kv_row_y(kLinkLayout, i), kLinkNames[i], seen ? rows[i] : "not seen", seen ? kText : kDim);
     }
     gfx_fill(c, 0, kit::kv_row_y(kLinkLayout, 5), c.w, 1, kRule);
-    draw_footer(c, FooterTone::Info, "CC wire only, no data");
     link_painted_ = true;
     link_sig_ = sig;
 }
@@ -384,11 +370,6 @@ void BlackBoxPage::update(uint32_t) {
     lv.draw(ctx_.now, ctx_.budget);
     const ListState &st = lv.state();
     tl_offset_ = st.offset;
-    StrBuf<30> f;
-    char sm[32];
-    f.put(std::string_view(sm, view::format_capture_long(data(), info.seq, sm)));
-    if (st.overflows()) f.put(" Scroll");
-    draw_footer_cached(ctx_.content, FooterTone::Info, f.view(), foot_);   // a recording is a fact, not a verdict
 }
 
 bool BlackBoxPage::on_event(Event e) {

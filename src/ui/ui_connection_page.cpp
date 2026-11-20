@@ -120,7 +120,7 @@ void ConnectionPage::enter() {
     build_items();
     if (!has_pages()) act_page_ = false;
     if (act_page_) {
-        act_sel_ = std::clamp<int>(ctx_.keep.place_sel[static_cast<int>(conn::place_of(tab_))], 0, n_items_ - 2);
+        act_sel_ = std::clamp<int>(ctx_.keep.place_sel[static_cast<int>(conn::place_of(tab_))], 0, std::max(0, act_count() - 1));
     } else {
         act_sel_ = -1;
     }
@@ -145,8 +145,8 @@ void ConnectionPage::set_actions_mode(bool on) {
     if (act_page_ == want) return;
     act_page_ = want;
     if (act_page_) {
-        if (n_items_ > 1)
-            act_sel_ = std::clamp<int>(ctx_.keep.place_sel[static_cast<int>(conn::place_of(tab_))], 0, n_items_ - 2);
+        if (act_count() > 0)
+            act_sel_ = std::clamp<int>(ctx_.keep.place_sel[static_cast<int>(conn::place_of(tab_))], 0, act_count() - 1);
     } else {
         act_sel_ = -1;
         ctx_.rows.detach();
@@ -167,13 +167,6 @@ void ConnectionPage::leave() {
 }
 
 void ConnectionPage::draw_static() {
-    if (ctx_.budget && !ctx_.budget->admit(140 * kBarH, true)) return;
-    if (has_pages()) {
-        bar_valid_ = false;
-        draw_status_left(ctx_.content, true, icon_, title_, 136, act_page_ ? "Actions" : "Info", true, kInk);
-    } else {
-        title_bar();
-    }
     if (act_page_) {
         ctx_.rows.init(ctx_.content, kit::kBodyY, &ConnectionPage::row_fn, this);
         if (!ctx_.blank) kit::RowList::clear_body_around(ctx_.content);
@@ -199,19 +192,17 @@ void ConnectionPage::invalidate() {
 
 Strip ConnectionPage::labels() const {
     const bool share = (tab_ == conn::Tab::Source && pd::active_caps().valid) || (tab_ == conn::Tab::Cable && fusb302::emarker().valid);
-    const int i = act_page_ ? 1 + act_sel_ : 0;
+    const sl::Id back = (iq_asked_ && fusb302::interrogate_running()) ? sl::Stop : sl::Back;
+    if (has_pages() && !act_page_) {
+        return {{back, sl::Up, share ? sl::ActionsShare : sl::Actions, sl::Dn}};
+    }
+    const int i = act_page_ ? first_act() + act_sel_ : 0;
     const bool iq_confirm = tab_ == conn::Tab::Sink && i >= 0 && i < n_items_ && items_[static_cast<std::size_t>(i)].act == conn::Act::Identify
                          && before(ctx_.now, iq_armed_until_);
     const sl::Id ok = iq_confirm ? sl::Confirm
                     : (i >= 0 && i < n_items_) ? conn::act_slot(items_[static_cast<std::size_t>(i)].act, false, share)
                     : share ? sl::ShareLong : sl::None;
-    const sl::Id back = (iq_asked_ && fusb302::interrogate_running()) ? sl::Stop
-                      : !has_pages() ? sl::Back
-                      : act_page_ ? sl::BackInfo : sl::BackActs;
-    return {{back,
-             sl::Up,
-             ok,
-             sl::Dn}};
+    return {{back, sl::Up, ok, sl::Dn}};
 }
 
 bool ConnectionPage::on_event(Event e) {
@@ -225,18 +216,12 @@ bool ConnectionPage::on_event(Event e) {
         update(ctx_.now);
         return true;
     }
-    if (e.press == Press::Long && e.button == Button::Back && !iq_busy && has_pages()) {
-        act_page_ = !act_page_;
-        draw_status_left(ctx_.content, true, icon_, title_, 136, act_page_ ? "Actions" : "Info", true, kInk);
-        pg::clear_body(ctx_.content, kBarH);
-        if (act_page_) {
-            act_sel_ = std::clamp<int>(ctx_.keep.place_sel[static_cast<int>(conn::place_of(tab_))], 0, n_items_ - 2);
-            ctx_.rows.detach();
-            ctx_.rows.init(ctx_.content, kit::kBodyY, &ConnectionPage::row_fn, this);
-        } else {
-            act_sel_ = -1;
-            ctx_.rows.detach();
-        }
+    if (shrt && e.button == Button::Back && act_page_ && has_pages()) {
+        act_page_ = false;
+        act_sel_ = -1;
+        ctx_.rows.detach();
+        ctx_.toast.clear();
+        pg::clear_body(ctx_.content, 0);
         invalidate();
         update(ctx_.now);
         return true;
@@ -245,7 +230,7 @@ bool ConnectionPage::on_event(Event e) {
         switch (e.button) {
         case Button::Plus:
             if (act_page_) {
-                if (act_sel_ + 1 < n_items_ - 1) act_sel_++;
+                if (act_sel_ + 1 < act_count()) act_sel_++;
                 ctx_.keep.place_sel[static_cast<int>(conn::place_of(tab_))] = static_cast<uint8_t>(act_sel_);
             } else if (first_ + kPlaceRows < res_n_) {
                 first_++;
@@ -260,7 +245,17 @@ bool ConnectionPage::on_event(Event e) {
             }
             break;
         case Button::Ok: {
-            const int i = act_page_ ? 1 + act_sel_ : 0;
+            if (has_pages() && !act_page_) {
+                act_page_ = true;
+                act_sel_ = std::clamp<int>(ctx_.keep.place_sel[static_cast<int>(conn::place_of(tab_))], 0, std::max(0, act_count() - 1));
+                pg::clear_body(ctx_.content, 0);
+                ctx_.rows.detach();
+                ctx_.rows.init(ctx_.content, kit::kBodyY, &ConnectionPage::row_fn, this);
+                invalidate();
+                update(ctx_.now);
+                return true;
+            }
+            const int i = act_page_ ? first_act() + act_sel_ : 0;
             if (i < 0 || i >= n_items_) break;
             const conn::Item &it = items_[static_cast<std::size_t>(i)];
             if (it.act == conn::Act::Bench) {   // a tool or a page of the place: it may replace this page, so nothing here is touched after
@@ -274,6 +269,11 @@ bool ConnectionPage::on_event(Event e) {
             break;
         }
         default: return false;
+        }
+        if (act_page_ && (e.button == Button::Plus || e.button == Button::Minus)) {
+            const int at = first_act() + act_sel_;
+            if (at >= 0 && at < n_items_ && !items_[static_cast<std::size_t>(at)].enabled)
+                set_op(items_[static_cast<std::size_t>(at)].why, ctx_.now);
         }
         sig_valid_ = false;
         update(ctx_.now);
@@ -300,6 +300,12 @@ void ConnectionPage::set_op(const char *text, uint32_t now_ms, uint32_t ms) {
     op_.put(text);
     op_until_ = now_ms + ms;
     if (op_until_ == 0) op_until_ = 1;
+    const std::string_view sv = op_.view();
+    if (!act_page_ && sv == "Device read") return;
+    const FooterTone tone = (sv == "Cable saved" || sv == "Device read" || sv == "Rescanned (rebooted)") ? FooterTone::Ok
+                          : (sv == "Flash error" || sv == "Library full") ? FooterTone::Error
+                          : FooterTone::Info;
+    ctx_.toast.show(tone, sv, now_ms, ms);
 }
 
 void ConnectionPage::share_caps(uint32_t now_ms) {
@@ -398,6 +404,7 @@ void ConnectionPage::activate(const conn::Item &it, uint32_t now_ms) {
                 iq_session_ = fusb302::session();
                 op_.clear();
                 op_until_ = 0;
+                ctx_.toast.clear();
                 break;
             case pd::IqRefusal::NeedConfirm:
                 iq_armed_until_ = now_ms + Ui::kConfirmWindowMs;
@@ -484,13 +491,13 @@ void ConnectionPage::sense(uint32_t now_ms) {
 
 namespace {
 
-// Layout: identity block (kit::kIdY..kPlaceListY-1), then a place list of 20 px rows (12 px dim key at x 6, 16 px value
-// at x 64) ending at the footer (kFooterY 222), with a 4 px scrollbar lane on the right.
-constexpr int16_t kRowPitch = 20, kValX = 64, kKeyX = 6;
+// Layout (Option B 208x240): identity block (kit::kIdY..kPlaceListY-1), then a place list of 9 x 20 px rows
+// (12 px dim key at x 4, 16 px value at x 52) with a 4 px scrollbar lane on the right.
+constexpr int16_t kRowPitch = 20, kValX = 52, kKeyX = 4;
 constexpr int kMaxList = 9;
-constexpr int kValCells = (224 - kValX - 4) / 8;   // 19 cells of S16 in the value column
+constexpr int kValCells = (208 - kValX - 4) / 8;   // 19 cells of S16 in the value column
 constexpr int kVisRows = kMaxList;   // row_sig_ capacity in ConnectionPage
-static_assert(conn::kStatusCells <= static_cast<std::size_t>(kFooterCells), "the survey texts fit the footer line");
+static_assert(conn::kStatusCells <= 27, "the survey texts fit the status buffer");
 // The Cable tab's Answered row: every orientation and table row fits the value column, and the 12 px key fits the
 // 58 px before it (6 px per cell).
 constexpr bool answered_rows_fit() {
@@ -1183,9 +1190,9 @@ namespace {
 // the right for the scroll thumb. Actions live on the Actions sub-page (kit::RowList).
 using kit::kPlaceListY;
 constexpr int16_t kLane = 4;
-constexpr int kPlaceSlots = (kFooterY - kPlaceListY) / kRowPitch;   // 7
-static_assert(kPlaceSlots == ConnectionPage::kPlaceRows && kPlaceSlots <= kVisRows, "a place page shows seven list rows under its identity block");
-static_assert(kValX + kValCells * 8 <= 224 - kLane, "the value column ends before the scroll lane");
+constexpr int kPlaceSlots = (kFooterY - kPlaceListY) / kRowPitch;   // 9
+static_assert(kPlaceSlots == ConnectionPage::kPlaceRows && kPlaceSlots <= kVisRows, "a place page shows nine list rows under its identity block");
+static_assert(kValX + kValCells * 8 <= 208 - kLane, "the value column ends before the scroll lane");
 
 // The window of R (already windowed by the builder), painted from kPlaceListY down to the footer: one 20 px row per
 // slot, a slot repainted alone when its hash moved (Row D), the vacated slots cleared, and a 4 px lane at the right edge
@@ -1624,12 +1631,13 @@ void ConnectionPage::row_fn(void *ctx, int index, bool focused, kit::RowSpec &ou
         "view or arm saved clones",
         "spoof e-marker to charger",
         "rescan source capabilities",
+        "identify attached device",
     };
     static_assert(all_fit(kNotes, kLabelAdv, kit::kNoteMaxPx), "an action note is wider than the note box");
     auto *p = static_cast<ConnectionPage *>(ctx);
     out = kit::RowSpec{};
-    const int idx = index + 1;
-    if (idx < 1 || idx >= p->n_items_) return;
+    const int idx = p->first_act() + index;
+    if (idx < p->first_act() || idx >= p->n_items_) return;
     const conn::Item &it = p->items_[static_cast<std::size_t>(idx)];
     out.text = it.label;
     if (!it.enabled) {
@@ -1645,7 +1653,9 @@ void ConnectionPage::row_fn(void *ctx, int index, bool focused, kit::RowSpec &ou
         out.chevron = !it.caution && (it.act == conn::Act::Bench || it.act == conn::Act::SavedCables || it.act == conn::Act::SpoofAs);
     }
     if (focused) {
-        if (it.act == conn::Act::Bench) {
+        if ((!it.enabled || it.caution) && it.why && it.why[0]) {
+            out.note = it.why;
+        } else if (it.act == conn::Act::Bench) {
             const bench::Acts b = bench::actions(conn::place_of(p->tab_));
             if (it.arg >= 0 && it.arg < b.n) out.note = bench::act_hint(b.a[it.arg]);
         } else {
@@ -1655,6 +1665,7 @@ void ConnectionPage::row_fn(void *ctx, int index, bool focused, kit::RowSpec &ou
             case conn::Act::SavedCables: out.note = kNotes[2]; break;
             case conn::Act::SpoofAs:     out.note = kNotes[3]; break;
             case conn::Act::Refresh:     out.note = kNotes[4]; break;
+            case conn::Act::Identify:    out.note = kNotes[5]; break;
             default: break;
             }
         }
@@ -1667,7 +1678,7 @@ void ConnectionPage::paint_status(uint32_t now_ms) {
     StrBuf<40> txt;
     FooterTone tone = FooterTone::Info;
     const pd::IdStatus &ids = fusb302::identify_status();
-    const int focus = act_sel_ < 0 ? 0 : 1 + act_sel_;
+    const int focus = act_sel_ < 0 ? 0 : first_act() + act_sel_;
     const bool focus_off = focus >= 0 && focus < n_items_ && !items_[static_cast<std::size_t>(focus)].enabled;
     // An action row's greyed item names why; the tool's own action says it only when OK is pressed.
     const conn::Item *row = act_sel_ >= 0 && focus < n_items_ ? &items_[static_cast<std::size_t>(focus)] : nullptr;
@@ -1722,18 +1733,13 @@ void ConnectionPage::paint_status(uint32_t now_ms) {
                 pd::diag::screen::verdict(dr, dv);
                 s.diag = dv;
             }
-            const bool active_msg = op || (s.spoof_armed && facts_.charger) || s.sv->running() || (tab_ == conn::Tab::Source && diag_on);
-            if (has_pages() && !active_msg) {
-                txt.put(act_page_ ? text::conn::kHoldInfo : text::conn::kHoldActions);
-            } else {
-                conn::status_text(s, txt);
-                if (!op && s.spoof_armed && facts_.charger) tone = FooterTone::Caution;
-                else if (diag_on && txt.view() == s.diag) tone = DiagnosisPage::tone_of(dr);
-            }
+            conn::status_text(s, txt);
+            if (!op && s.spoof_armed && facts_.charger) tone = FooterTone::Caution;
+            else if (diag_on && txt.view() == s.diag) tone = DiagnosisPage::tone_of(dr);
         }
     }
     status_txt_ = txt;
-    draw_footer_budgeted(ctx_.content, tone, txt.view(), status_, ctx_.budget);
+    (void)tone;
 }
 
 static uint32_t mix_u16s(uint32_t h, const uint16_t *w, std::size_t n) {
@@ -1788,14 +1794,14 @@ void ConnectionPage::update(uint32_t now_ms) {
     if (!has_pages()) act_page_ = false;
     if (act_page_) {
         if (act_sel_ < 0) act_sel_ = 0;
-        if (act_sel_ + 1 >= n_items_) act_sel_ = n_items_ - 2;
+        if (act_sel_ >= act_count()) act_sel_ = std::max(0, act_count() - 1);
     } else {
         act_sel_ = -1;
     }
     paint_status(now_ms);
     if (bg && bg->more) return;
     if (act_page_) {
-        ctx_.rows.set_count(n_items_ - 1);
+        ctx_.rows.set_count(act_count());
         ctx_.rows.select(act_sel_);
         ctx_.rows.draw(now_ms, bg);
         return;
