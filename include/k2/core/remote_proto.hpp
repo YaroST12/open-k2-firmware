@@ -898,6 +898,9 @@ constexpr uint8_t kLabSniff = 1;   // D+/D- edge capture: sub-op cancel 0, arm 1
 // Reply: state u8 (0 idle, 1 listening, 2 dropping Rd for the detach), end u8 (pd::ListenEnd of the last window), secs u8, left_s u8, frames u16, port u8.
 // A refused start answers Busy with one byte, a pd::ListenRefusal.
 constexpr uint8_t kLabListen = 2;
+// Legacy timing knobs of the charger test (charger_test::LegacyKnob): [3, knob] reads, [3, knob, value u32 LE] sets (RAM only, the constants
+// again at boot; a value outside 0..60000 ms, or a Hold under the capture floor, is BadArg). Reply: knob u8, value u32 LE (the value now in force).
+constexpr uint8_t kLabTune = 3;
 
 constexpr uint8_t kCableStatus = 0, kCableReset = 1, kCablePassive = 2, kCableKelvin = 3;
 // UFCS op codes (first payload byte of Cmd::Ufcs); the read reply header is off(2) total(2) n(1).
@@ -1553,6 +1556,7 @@ size_t encode_cable_r(std::span<uint8_t> out, const CableRInfo &i);
 size_t encode_lab(std::span<uint8_t> out, const LabResult &r);
 size_t encode_sniff(std::span<uint8_t> out, const SniffInfo &r);
 size_t encode_listen(std::span<uint8_t> out, const ListenInfo &r);
+size_t encode_lab_tune(std::span<uint8_t> out, uint8_t knob, uint32_t value);   // Lab op 3: knob, value u32 LE
 size_t encode_vooc(std::span<uint8_t> out, const VoocSnapshot &v, uint8_t page);   // vooc-monitor: FC op 4, one page
 size_t encode_svooc(std::span<uint8_t> out, const SvoocSnapshot &v);   // svooc-trigger: FC op 5, the summary
 size_t encode_svooc_timing(std::span<uint8_t> out, const SvoocSnapshot &v);   // op 5 / 0 page 1: stall and D- release counts
@@ -2410,6 +2414,13 @@ template <Backend B>
                 return reply_byte(f, static_cast<Status>(r.status), r.refusal);
             }
             return reply_ok(f, encode_listen(f.span(), r));
+        }
+        if (p[0] == kLabTune) {
+            if (p.size() != 2 && p.size() != 6) return reply_bad_len(f);
+            if (p[1] >= static_cast<uint8_t>(charger_test::LegacyKnob::Count)) return reply_bad_arg(f);
+            if (p.size() == 6 && !charger_test::legacy_tune_set(p[1], rd32(&p[2]))) return reply_bad_arg(f);
+            const uint32_t v = charger_test::legacy_tune(static_cast<charger_test::LegacyKnob>(p[1]));
+            return reply_ok(f, encode_lab_tune(f.span(), p[1], v));
         }
         if (p[0] != kLabLoad) return reply_bad_arg(f);
         if (p.size() != 5) return reply_bad_len(f);

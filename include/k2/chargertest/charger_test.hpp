@@ -189,6 +189,12 @@ inline constexpr uint32_t kRestartCapsMs = 1000, kRestartSettleMs = 10000;
 // them at 0 V, then Hi-Z). Waits before a unit's first handshake: kLegacyFirstWaitMs after the PD-silent attach (1000 ms),
 // kLegacyGapMs after the previous unit's release (the 500 ms D+/D- discharge), plus kAfcPreMs more before AFC.
 inline constexpr uint32_t kLegacyFirstWaitMs = 1000, kLegacyGapMs = 500, kAfcPreMs = 500;
+// The four waits above plus the row Hold are switchable at run time (Cmd::Lab kLabTune, `k2_remote charger-legacy-tune`): RAM only, the
+// constants again at boot. quiet_ms 0 starts the first handshake as soon as VBUS is steady at 5 V, caps still arriving or not.
+enum class LegacyKnob : uint8_t { QuietMs, SteadyMs, FirstWaitMs, GapMs, HoldMs, Count };
+uint32_t legacy_tune(LegacyKnob k);
+bool legacy_tune_set(uint8_t knob, uint32_t value);   // false: unknown knob or out of range
+void legacy_tune_reset();
 // pattern reannounce-after-own-release (Anker IQ4, runs/qc2b-2026-11-21): a source that reads the engine's D+/D- release as a re-plug
 // announces its list to the PD-silent sink again (first frame 0.1 to 0.5 s after the release, VBUS at 5 V all along). The first release of
 // a silent Legacy attach is watched for kOwnReleaseCapsMs (the 500 ms line discharge + kRestartCapsMs); a frame in it is the source's

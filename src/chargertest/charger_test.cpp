@@ -253,6 +253,16 @@ const char* name(HuntCause c) {
 }
 namespace {
 constexpr uint32_t kHoldMs = 1000;
+constexpr uint32_t kHoldFloorMs = progcheck::kStableMs + progcheck::kPostMs + 100;   // below it the transition capture would outlive the hold
+constexpr uint32_t kTuneMaxMs = 60000;
+constexpr std::array<uint32_t, size_t(LegacyKnob::Count)> kTuneDefault = {kLegacyQuietMs, kLegacySteadyMs, kLegacyFirstWaitMs, kLegacyGapMs, kHoldMs};
+std::array<uint32_t, size_t(LegacyKnob::Count)> g_tune = kTuneDefault;
+uint32_t quiet_ms() { return g_tune[size_t(LegacyKnob::QuietMs)]; }
+// The wait `want` ms after the Baseline's own 500 ms settle (stable_ms_ / pre_ms_ count the Baseline); a shorter want pulls the start back.
+void baseline_wait(uint32_t want, uint32_t extra, uint32_t now, uint32_t& pre_ms, uint32_t& stable_ms) {
+    pre_ms = (want > 500 ? want - 500 : 0) + extra;
+    stable_ms = want < 500 ? now - (500 - want) : now;
+}
 constexpr uint32_t kSpecFeedMaxMs = 300;   // the spec stage's take of one move: a freeze and one Ui tick
 // The walk's move in the detail byte, nudged 1 mV off the two row markers (kDetailStepWalk, kDetailSweep) so a finished row never reads as a sweep.
 constexpr uint8_t step_walk_detail(int mv) {
@@ -262,6 +272,16 @@ constexpr uint8_t step_walk_detail(int mv) {
 // The transition capture (Env::prog_begin) is triggered where the hold starts, kStableMs after the band's stable start, and freezes its
 // post window later; the hold ends kHoldMs after that stable start, with one 50 ms tick of slack at each end (hold_ms() is the one tick).
 static_assert(progcheck::kStableMs + progcheck::kPostMs + 100 <= kHoldMs, "the capture freezes before the hold ends");
+}  // namespace
+uint32_t legacy_tune(LegacyKnob k) { return k < LegacyKnob::Count ? g_tune[size_t(k)] : 0; }
+bool legacy_tune_set(uint8_t knob, uint32_t value) {
+    if (knob >= size_t(LegacyKnob::Count) || value > kTuneMaxMs) return false;
+    if (knob == uint8_t(LegacyKnob::HoldMs) && value < kHoldFloorMs) return false;
+    g_tune[knob] = value;
+    return true;
+}
+void legacy_tune_reset() { g_tune = kTuneDefault; }
+namespace {
 // "A Hard Reset happened on the link", whoever sent it: the sink counts the ones the K2 sent (hard_resets) and the ones the source
 // sent (source_hard_resets) apart, and the runner only ever compares this sum with a value it took from the same sum.
 uint32_t link_resets(const pd::SinkStatus& s) { return s.hard_resets + s.source_hard_resets; }
@@ -1275,6 +1295,9 @@ Reason Runner::start(const pd::SourceCaps& caps, Options o, Input in, bool confi
     info_ = 0; info_rows_ = false;
     o.units = resolve(o);
     opts_ = o;
+    K2LOG("[CT] legacy tune quiet=%ums steady=%ums first=%ums gap=%ums hold=%ums\n", unsigned(legacy_tune(LegacyKnob::QuietMs)),
+          unsigned(legacy_tune(LegacyKnob::SteadyMs)), unsigned(legacy_tune(LegacyKnob::FirstWaitMs)), unsigned(legacy_tune(LegacyKnob::GapMs)),
+          unsigned(legacy_tune(LegacyKnob::HoldMs)));
     n_order_ = o.units.n; order_ = o.units.u;
     build(caps, o, in);
     evidence_ = {};
@@ -1518,7 +1541,7 @@ const mi_unlock::Mode* Runner::mi_mode(const Step& s) const {
     return nullptr;
 }
 uint32_t Runner::hold_ms() const {
-    return kHoldMs;
+    return legacy_tune(LegacyKnob::HoldMs);
 }
 // The Deep checks' switches (the Tests list line sets the two apart); the step-walk and sweep rows have their own judgments.
 // The 100 mV sweep step is the PPS class 1 and the AVS class 0 of the spec engine's plan; a walk quantum is class 0 of either.
@@ -1550,7 +1573,7 @@ void Runner::release(const Input& in, bool stop) {
     stopping_ = stop;
     if (stop) skip_pending(reason_);
     // Our own D+/D- release of a PD-quiet silent attach: the source's announcement that may follow is its answer to it (own_rel_).
-    own_rel_ = !stop && fc_owned_ && mode_ == Mode::Legacy && silent_ && attached_ && reann_ != 1 && in.pd_quiet_ms >= kLegacyQuietMs;
+    own_rel_ = !stop && fc_owned_ && mode_ == Mode::Legacy && silent_ && attached_ && reann_ != 1 && in.pd_quiet_ms >= quiet_ms();
     if (own_rel_) own_rel_ms_ = in.now;
     reissue_release();
     // Nothing is held and VBUS never left vSafe5V: there is nothing to wait for.
@@ -1971,7 +1994,7 @@ void Runner::next(const Input& in) {
         // Legacy -> Legacy keeps the PD-silent session: only the D+/D- cleanup (the release above) sits in between. Any PD traffic
         // since the attach, or a VBUS that is not at 5 V, means the session is gone: detach and attach again as before.
         if (i != SIZE_MAX && mode_ == Mode::Legacy && mode(unit_of(steps_[i])) == Mode::Legacy && legacy_active_ && silent_ &&
-            safe5(in.vbus_mv) && in.pd_quiet_ms >= kLegacyQuietMs) { continue_legacy(unit_of(steps_[i]), in); return; }
+            safe5(in.vbus_mv) && in.pd_quiet_ms >= quiet_ms()) { continue_legacy(unit_of(steps_[i]), in); return; }
         ending_ = true; begin_detach(in); return;
     }
     // No PD row is pending yet, but the EPR list (heard at the Pd attach) will add some: the Pd unit still runs once.
@@ -2131,9 +2154,9 @@ void Runner::continue_legacy(Unit u, const Input& in) {
     unit_ = u; own_cut_ = false;
     pd_owned_ = fc_owned_ = recover_ = hot_ = false; pd_retry_ = cut_index_ = SIZE_MAX;
     unit_ms_ = in.now;
-    pre_ms_ = u == Unit::Afc ? kAfcPreMs : 0;
     session_ = in.session; resets_ = link_resets(in.pd); caps_gone_ms_ = in.now;
-    state_ = State::Baseline; stable_ = true; stable_ms_ = in.now; phase_ms_ = in.now;   // kLegacyGapMs (+ kAfcPreMs) before the first row
+    state_ = State::Baseline; stable_ = true; phase_ms_ = in.now;   // kLegacyGapMs (+ kAfcPreMs) before the first row
+    baseline_wait(legacy_tune(LegacyKnob::GapMs), u == Unit::Afc ? kAfcPreMs : 0, in.now, pre_ms_, stable_ms_);
 }
 // Detach: Rd off, the 5 V default, then wait for the source to drop its output (VBUS below vSafe0V for kDetachDarkHoldMs).
 void Runner::begin_detach(const Input& in) {
@@ -2192,15 +2215,15 @@ void Runner::poll_attach(const Input& in, const pd::SourceCaps& caps, uint32_t g
         }
         // PD-silent: caps are heard and recorded, never acknowledged. VBUS cycles around the source's Hard Resets are expected.
         if (late_pd_ && caps.valid) replan_pd(caps, in, true);
-        if (safe5(in.vbus_mv) && in.pd_quiet_ms >= kLegacyQuietMs && in.fc_state == fc::State::Idle) {
+        if (safe5(in.vbus_mv) && in.pd_quiet_ms >= quiet_ms() && in.fc_state == fc::State::Idle) {
             if (!stable_ || gap > 250) { stable_ = true; stable_ms_ = in.now; }
-            if (in.now - stable_ms_ >= kLegacySteadyMs) {
+            if (in.now - stable_ms_ >= legacy_tune(LegacyKnob::SteadyMs)) {
                 if (handover_.outcome == HandoverOutcome::NotTried) handover_ = {HandoverOutcome::FellBack, in.now - unit_ms_};
                 attached_ = silent_ = true; session_ = in.session; resets_ = link_resets(in.pd); hot_ = false; caps_gone_ms_ = in.now;
                 ceil_cycled_ = false; own_rel_ = false; reann_ = 0;
                 // The first handshake waits 1000 ms after the PD-silent attach (the baseline settle is 500 of it).
-                pre_ms_ = kLegacyFirstWaitMs - 500 + (unit_ == Unit::Afc ? kAfcPreMs : 0);
-                state_ = State::Baseline; stable_ = true; stable_ms_ = in.now; phase_ms_ = in.now;
+                baseline_wait(legacy_tune(LegacyKnob::FirstWaitMs), unit_ == Unit::Afc ? kAfcPreMs : 0, in.now, pre_ms_, stable_ms_);
+                state_ = State::Baseline; stable_ = true; phase_ms_ = in.now;
                 return;
             }
         } else stable_ = false;
@@ -2670,7 +2693,7 @@ void Runner::poll_impl(Input& in, const pd::SourceCaps& caps) {
     }
     // A Legacy unit sits PD-silent: any PD frame is PD traffic. (A resumed unit has no such proof: it asks the sink.)
     const bool pd_active = mode_ == Mode::Legacy &&
-        (silent_ ? in.pd_quiet_ms < kLegacyQuietMs : (caps.valid && caps.active_cc) || in.pd_traffic);
+        (silent_ ? in.pd_quiet_ms < quiet_ms() : (caps.valid && caps.active_cc) || in.pd_traffic);
     if (state_ == State::Releasing) {
         // A non-PD source that browned out (a bank asked for a level it does not have) comes back on its own:
         // wait for vSafe5V instead of ending the run. A PD contract that vanished still stops it.
@@ -2708,7 +2731,7 @@ void Runner::poll_impl(Input& in, const pd::SourceCaps& caps) {
             const uint32_t back = in.now - restart_ms_;
             const bool heard = in.pd_quiet_ms < back;   // a frame since VBUS came back
             // frames of the source's answer to our release (reann_ 2) just before the cut are 2.5 s of quiet away: wait for that, not 1 s
-            restart_wait_ = back < kRestartSettleMs && (heard ? in.pd_quiet_ms < kLegacyQuietMs : back < (reann_ == 2 ? kLegacyQuietMs : kRestartCapsMs));
+            restart_wait_ = back < kRestartSettleMs && (heard ? in.pd_quiet_ms < quiet_ms() : back < (reann_ == 2 ? quiet_ms() : kRestartCapsMs));
         }
         // pattern reannounce-after-own-release: same wait, counted from our own release (no VBUS dip to count from).
         if (own_rel_) {
@@ -2717,7 +2740,7 @@ void Runner::poll_impl(Input& in, const pd::SourceCaps& caps) {
             if (heard) reann_ = 2;
             else if (since >= kOwnReleaseCapsMs) reann_ = 1;
             own_rel_ = !stopping_ && silent_ && attached_ && mode_ == Mode::Legacy && !restart_wait_ && !restart_dark_ && since < kOwnReleaseSettleMs &&
-                       (heard ? in.pd_quiet_ms < kLegacyQuietMs : since < kOwnReleaseCapsMs);
+                       (heard ? in.pd_quiet_ms < quiet_ms() : since < kOwnReleaseCapsMs);
         }
         const Reason changed = dropped && pd_owned_ ? Reason::Lost : in.loop_lock ? Reason::Loop :
             in.inline_load ? Reason::Inline : in.fake ? Reason::Fake :

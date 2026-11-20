@@ -4506,6 +4506,23 @@ def cmd_listen_attach(link, a):
     return d
 
 
+LEGACY_KNOBS = ["quiet_ms", "steady_ms", "first_wait_ms", "gap_ms", "hold_ms"]   # charger_test::LegacyKnob order
+
+
+def cmd_charger_legacy_tune(link, a):
+    """Read or set one Legacy timing knob of the charger test (RAM only, the constants again at boot). Without a value the knob is
+    read back; without a knob all of them are. Returns {knob: ms} as now in force."""
+    names = LEGACY_KNOBS if a.knob is None else [a.knob]
+    out = {}
+    for name in names:
+        i = LEGACY_KNOBS.index(name)
+        args = bytes([3, i]) + (a.value.to_bytes(4, "little") if a.value is not None and a.knob is not None else b"")
+        p = link.call(CMD_LAB, args).payload
+        _need(p, 5, "charger legacy tune")
+        out[name] = int.from_bytes(p[1:5], "little")
+    return out
+
+
 def cmd_lab(link, a):
     if a.lab_cmd == "listen-attach":
         return cmd_listen_attach(link, a)
@@ -5616,7 +5633,7 @@ COMMANDS = {"ping": cmd_ping, "info": cmd_info, "press": cmd_press, "state": cmd
             "adc-raw": cmd_adc_raw, "ripple": cmd_ripple, "fc": cmd_fc,
             "pd": cmd_pd, "identify-device": cmd_identify_device, "pd-reread": cmd_pd_reread, "apple-read": cmd_apple_read,
             "stop": cmd_stop, "lease": cmd_lease, "store": cmd_store, "blackbox": cmd_blackbox, "transcap": cmd_transcap,
-            "diagnose": cmd_diagnose, "cable-r": cmd_cable_r, "ufcs": cmd_ufcs, "pd-stress": cmd_pd_stress, "pd-spec": cmd_pd_spec, "loop-probe": cmd_loop_probe, "battery": cmd_battery, "lab": cmd_lab, "qrtest": cmd_qrtest, "charger-test": cmd_charger_test, "charger-units": cmd_charger_units,
+            "diagnose": cmd_diagnose, "cable-r": cmd_cable_r, "ufcs": cmd_ufcs, "pd-stress": cmd_pd_stress, "pd-spec": cmd_pd_spec, "loop-probe": cmd_loop_probe, "battery": cmd_battery, "lab": cmd_lab, "charger-legacy-tune": cmd_charger_legacy_tune, "qrtest": cmd_qrtest, "charger-test": cmd_charger_test, "charger-units": cmd_charger_units,
             "charger-cable": cmd_charger_cable, "charger-sweep": cmd_charger_sweep, "charger-avs-sweep": cmd_charger_avs_sweep, "charger-level": cmd_charger_level, "charger-svooc-cap": cmd_charger_svooc_cap, "cards": cmd_cards,
             "mi-cable-auth": cmd_mi_cable_auth,
             "twin": cmd_twin}
@@ -5671,6 +5688,10 @@ def build_parser():
     cl = sub.add_parser("charger-level", help="level of the NEXT charger run: light = nothing above 5 V (what is advertised), "
                         "medium = the default run, deep = medium + the PPS and AVS deep sweeps")
     cl.add_argument("level", choices=TEST_LEVELS)
+    lt = sub.add_parser("charger-legacy-tune", help="Legacy timing knobs of the charger test, RAM only (the constants again at boot): no argument "
+                        "lists them, a knob reads it, a knob and a value in ms sets it (quiet_ms 0: start the first handshake at once)")
+    lt.add_argument("knob", nargs="?", choices=LEGACY_KNOBS)
+    lt.add_argument("value", nargs="?", type=int)
     mc = sub.add_parser("mi-cable-auth", help="Xiaomi cable-side auth, answered only while the built-in Xiaomi 6A (id 2) is armed "
                         "(on by default at boot: 'on 7 0 0 1 0'; a set holds until the next set or a reboot, so 'off' silences "
                         "the automatic answer): no argument reads the config; "

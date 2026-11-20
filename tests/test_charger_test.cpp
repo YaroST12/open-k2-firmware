@@ -589,6 +589,7 @@ struct Fake final : ct::Env {
     bool rescan_low = false, low_now = false;   // a source that sags below vSafe5V after the attach and never settles
     void pd_rescan() override { ++rescans; }
     Fake() {
+        ct::legacy_tune_reset();
         in.vbus_mv = 5000; in.cap_mv = 36000; in.session = 1; in.xm = &xm;
         in.cable_mv = 50000; in.cable_ma = 5000; in.cable_observed = true;
         caps.valid = true; caps.spec_rev = 2; caps.active_cc = 1; caps.num_pdos = 7; caps.raw_header = 0x7181;
@@ -6122,6 +6123,49 @@ static void test_legacy_waits_between_units() {
     CHECK_EQ(f.in.now - t_qc3 >= ct::kLegacyGapMs, true);
     CHECK_EQ(f.in.now - t_qc3 < ct::kLegacyGapMs + ct::kAfcPreMs, true);
 }
+// The Legacy timing knobs: first_wait_ms and gap_ms shorten the waits, quiet_ms 0 starts the handshake while the source still floods caps,
+// a Hold under the capture floor is refused, and a new Runner (a Fake) starts from the constants.
+static void test_legacy_tune_knobs() {
+    CHECK_EQ(ct::legacy_tune_set(uint8_t(ct::LegacyKnob::HoldMs), 100), false);
+    CHECK_EQ(ct::legacy_tune_set(9, 1), false);
+    CHECK_EQ(ct::legacy_tune_set(uint8_t(ct::LegacyKnob::GapMs), 60001), false);
+    {   // defaults: a flood of 4 s after the attach is waited out, plus the quiet time
+        Fake f; ct::Runner r(f);
+        f.attach_flood_ms = 4000;
+        const auto o = with_units(ct::bit(A::Qc2), {ct::Unit::Qc2});
+        CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+        CHECK_EQ(run_until(f, r, [&] { return f.attaches_legacy == 1; }, 60000), true);
+        const uint32_t t0 = f.in.now;
+        CHECK_EQ(run_until(f, r, [&] { return f.fc_requests > 0; }, 20000), true);
+        CHECK_EQ(f.in.now - t0 >= 4000 + ct::kLegacyQuietMs, true);
+    }
+    {   // quiet_ms 0, first_wait 300: the handshake starts inside the flood
+        Fake f; ct::Runner r(f);
+        CHECK_EQ(ct::legacy_tune_set(uint8_t(ct::LegacyKnob::QuietMs), 0), true);
+        CHECK_EQ(ct::legacy_tune_set(uint8_t(ct::LegacyKnob::FirstWaitMs), 300), true);
+        f.attach_flood_ms = 4000;
+        const auto o = with_units(ct::bit(A::Qc2), {ct::Unit::Qc2});
+        CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+        CHECK_EQ(run_until(f, r, [&] { return f.attaches_legacy == 1; }, 60000), true);
+        const uint32_t t0 = f.in.now;
+        CHECK_EQ(run_until(f, r, [&] { return f.fc_requests > 0; }, 20000), true);
+        CHECK_EQ(f.in.now - t0 < 2000, true);
+        CHECK_EQ(ct::legacy_tune(ct::LegacyKnob::QuietMs), 0u);
+    }
+    {   // gap_ms 100 between two units: shorter than the 500 ms discharge
+        Fake f; ct::Runner r(f);
+        CHECK_EQ(ct::legacy_tune_set(uint8_t(ct::LegacyKnob::GapMs), 100), true);
+        const auto o = with_units(ct::bit(A::Qc2) | ct::bit(A::Qc3), {ct::Unit::Qc2, ct::Unit::Qc3});
+        CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+        CHECK_EQ(run_until(f, r, [&] { return r.unit() == ct::Unit::Qc3; }, 60000), true);
+        const uint32_t t1 = f.in.now; const int n1 = f.fc_requests;
+        CHECK_EQ(run_until(f, r, [&] { return f.fc_requests > n1; }, 10000), true);
+        CHECK_EQ(f.in.now - t1 < ct::kLegacyGapMs, true);
+    }
+    ct::legacy_tune_reset();
+    Fake f;
+    CHECK_EQ(ct::legacy_tune(ct::LegacyKnob::GapMs), uint32_t(ct::kLegacyGapMs));
+}
 // A charger that keeps PD alive (re-sends its caps for ever): one longer retry, then every row of the unit is "blocked by PD"
 // and the next unit still gets its own attach.
 static void test_legacy_attach_that_never_falls_back_is_blocked_by_pd() {
@@ -8949,7 +8993,7 @@ int main() {
     test_a_dip_shorter_than_the_minimum_is_no_cut(); test_a_protocol_failure_after_a_clean_comeback_is_a_fail(); test_the_7s_cut_sequence_over_the_5v_steps_of_the_cuktech_run(); test_a_fall_in_a_raised_row_is_no_cut_casualty(); test_a_silent_vooc_family_on_a_7s_cut_port_ends_no_answer(); test_the_10_unit_run_over_every_cut_phase_ends_as_without_cuts();
     test_a_cut_in_the_first_baseline_waits_for_the_comeback(); test_a_baseline_dip_that_does_not_come_back_still_stops();
     test_custom_unit_list_runs_in_order(); test_pd_unit_attaches_with_a_contract(); test_a_failed_unit_does_not_stop_the_run();
-    test_default_unit_order_is_vendor_modes_then_pd_then_legacy(); test_default_order_runs_vendor_modes_before_pd_before_legacy(); test_pd_between_vendor_and_legacy_units(); test_pd_replan_in_the_middle_keeps_the_rows_in_order(); test_consecutive_legacy_units_share_one_attach(); test_legacy_session_that_sees_pd_traffic_is_renewed(); test_silent_ufcs_source_reports_no_response_not_pd_active(); test_legacy_waits_between_units();
+    test_default_unit_order_is_vendor_modes_then_pd_then_legacy(); test_default_order_runs_vendor_modes_before_pd_before_legacy(); test_pd_between_vendor_and_legacy_units(); test_pd_replan_in_the_middle_keeps_the_rows_in_order(); test_consecutive_legacy_units_share_one_attach(); test_legacy_session_that_sees_pd_traffic_is_renewed(); test_silent_ufcs_source_reports_no_response_not_pd_active(); test_legacy_waits_between_units(); test_legacy_tune_knobs();
     test_legacy_attach_that_never_falls_back_is_blocked_by_pd(); test_legacy_retry_that_falls_back_runs_the_unit(); test_legacy_attach_waits_out_hard_reset_cycles();
     test_silent_attach_source_that_revives_pd_does_not_go_unsafe(); test_silent_baseline_sag_that_never_returns_is_still_unsafe(); test_silent_sink_output_off_skips_legacy_units_and_runs_pd();
     test_later_unit_output_cut_in_its_baseline_is_a_lost_unit_not_unsafe(); test_later_unit_elevated_or_stuck_baseline_still_ends_unsafe();
