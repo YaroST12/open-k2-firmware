@@ -86,5 +86,7 @@ constexpr std::uint32_t image_free_bytes(const Snapshot& s) { return s.image_byt
 void poll(std::uint32_t now_ms, bool may_walk);
 // The cached figures; a plain copy, no scan.
 Snapshot snapshot();
+// Non-destructive free-block scrub on the littlefs volume; returns true on success and sets erased.
+bool scrub_storage(std::uint32_t& erased);
 
 }  // namespace k2::memstat

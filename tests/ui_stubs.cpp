@@ -1205,10 +1205,14 @@ k2::memstat::Snapshot g_memstat = [] {
     return s;
 }();
 }  // namespace
+static bool g_scrub_ok = true;
+static std::uint32_t g_scrub_erased = 0;
 void stub_memstat_set(const k2::memstat::Snapshot& s) { g_memstat = s; }
+void stub_memstat_scrub(bool ok, std::uint32_t erased) { g_scrub_ok = ok; g_scrub_erased = erased; }
 namespace k2::memstat {
 void poll(std::uint32_t, bool) {}
 Snapshot snapshot() { return g_memstat; }
+bool scrub_storage(std::uint32_t& erased) { erased = g_scrub_erased; return g_scrub_ok; }
 }  // namespace k2::memstat
 namespace k2::report_card::hw {
 std::size_t list(std::span<Card> out) { return g_cf->store.list(out); }

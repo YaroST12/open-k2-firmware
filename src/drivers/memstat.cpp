@@ -63,4 +63,8 @@ void poll(std::uint32_t now_ms, bool may_walk) {
 
 Snapshot snapshot() { return g; }
 
+bool scrub_storage(std::uint32_t& erased) {
+    return fs::instance().scrub_free_blocks(erased) == fs::Err::Ok;
+}
+
 }  // namespace k2::memstat

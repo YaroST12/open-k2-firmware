@@ -1945,6 +1945,27 @@ static void test_over_load_above_5v_needs_confirm() {
     g_stub = StubState();
 }
 
+static void test_memory_page_scrub() {
+    Ui &ui = fresh_ui();
+    ui.goto_page(static_cast<uint8_t>(Page::Settings), 30000);
+    ui.push_menu(Menu::Memory, 30010);
+    while (ui.painting()) ui.tick(30020);
+    stub_memstat_scrub(true, 2);
+    ui.on_button(Button::Ok, ButtonEvent::Short, 30030);
+    while (ui.painting()) ui.tick(30040);
+    CHECK_STR(ui.context().toast.view().data(), "Scrubbed 2 blocks");
+    stub_memstat_scrub(true, 0);
+    ui.on_button(Button::Ok, ButtonEvent::Short, 30050);
+    while (ui.painting()) ui.tick(30060);
+    CHECK_STR(ui.context().toast.view().data(), "Storage clean");
+    stub_memstat_scrub(false, 0);
+    ui.on_button(Button::Ok, ButtonEvent::Short, 30070);
+    while (ui.painting()) ui.tick(30080);
+    CHECK_STR(ui.context().toast.view().data(), "Scrub failed");
+    stub_memstat_scrub(true, 0);
+    ui.pop_menu(30090);
+}
+
 int main() {
     test_over_load_above_5v_needs_confirm();
     test_usb_link_footer_icon_tone();
@@ -2004,6 +2025,7 @@ int main() {
     test_settings_test_level_row();
     test_debug_fake_zero_clears();
     test_fake_zero_leaves_no_gone_rows();
+    test_memory_page_scrub();
     test_pd_list_clears_on_detach();   // last: it leaves the forced link detached
     return test_report("test_ui_pages");
 }

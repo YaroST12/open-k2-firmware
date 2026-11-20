@@ -306,6 +306,7 @@ extern StubState g_stub;
 void stub_cards_reset();   // empties the RAM-backed report card store
 void stub_ps_saved_reset();   // empties the RAM-backed PD Stress saved results
 void stub_memstat_set(const k2::memstat::Snapshot& s);   // the snapshot k2::memstat::snapshot() returns in host tests
+void stub_memstat_scrub(bool ok, uint32_t erased);       // controls k2::memstat::scrub_storage() in host tests
 void stub_battery_reset();    // a fresh battery recorder over an empty RAM volume (k2::battery::hw)
 // Adds a twin to the stub library (the sink PDO words are the device's own); returns its number.
 uint8_t stub_twin_add(const char *name, std::initializer_list<uint32_t> sink_pdos, uint16_t vid = 0, uint16_t pid = 0);

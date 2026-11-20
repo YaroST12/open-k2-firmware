@@ -159,6 +159,45 @@ Err Fs::compact() {
     return map(r);
 }
 
+Err Fs::scrub_free_blocks(std::uint32_t& erased) {
+    erased = 0;
+    if (!mounted_) return Err::NotReady;
+    const std::uint32_t n = block_count();
+    constexpr std::uint32_t kMaxScrubBlocks = 512;
+    if (n > kMaxScrubBlocks) return Err::Invalid;
+    const int cons = lfs_fs_mkconsistent(&lfs_);
+    if (cons < 0) return map(cons);
+    changed();
+    struct UsedMap {
+        std::array<std::uint8_t, kMaxScrubBlocks / 8> bits{};
+        std::uint32_t limit = 0;
+    } map_ctx;
+    map_ctx.limit = n;
+    const int tr = lfs_fs_traverse(&lfs_, [](void* c, lfs_block_t b) -> int {
+        auto* u = static_cast<UsedMap*>(c);
+        if (b < u->limit) u->bits[b >> 3] |= static_cast<std::uint8_t>(1u << (b & 7));
+        return 0;
+    }, &map_ctx);
+    if (tr < 0) return map(tr);
+    std::array<std::uint8_t, 64> buf{};
+    for (std::uint32_t b = 0; b < n; ++b) {
+        if (map_ctx.bits[b >> 3] & (1u << (b & 7))) continue;
+        bool dirty = false;
+        for (std::uint32_t off = 0; off < kBlockSize && !dirty; off += buf.size()) {
+            const std::uint32_t chunk = std::min<std::uint32_t>(buf.size(), kBlockSize - off);
+            if (dev_.read(b, off, buf.data(), chunk) != 0) return Err::Io;
+            for (std::uint32_t i = 0; i < chunk; ++i) {
+                if (buf[i] != 0xFF) { dirty = true; break; }
+            }
+        }
+        if (dirty) {
+            if (dev_.erase(b) != 0) return Err::Io;
+            ++erased;
+        }
+    }
+    return Err::Ok;
+}
+
 Err Fs::shrink() {
     if (!mounted_) return Err::NotReady;
     if (grown_ == 0 || lfs_.block_count == grown_) return Err::Ok;

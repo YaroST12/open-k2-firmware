@@ -843,15 +843,35 @@ void MemoryPage::update(uint32_t) {
     foot_.paint_budgeted(fsig, bg, static_cast<int>(ctx_.content.w) * 16, [&] {
         if (lv != memstat::Level::Ok) {
             draw_toast(ctx_.content, tone, fv);
-        } else if (had_toast) {
+        } else if (had_toast && !ctx_.toast.active(ctx_.now)) {
             gfx_fill(ctx_.content, 0, static_cast<int16_t>(ctx_.content.h - 20), ctx_.content.w, 16, kBg);
         }
     });
 }
 
-bool MemoryPage::on_event(Event e) { return back_event(e); }
+bool MemoryPage::on_event(Event e) {
+    if (e.press == Press::Short && e.button == Button::Ok) {
+        std::uint32_t erased = 0;
+        const bool ok = memstat::scrub_storage(erased);
+        if (!ok) {
+            ctx_.toast.show(FooterTone::Error, "Scrub failed", ctx_.now);
+        } else if (erased == 0) {
+            ctx_.toast.show(FooterTone::Ok, "Storage clean", ctx_.now);
+        } else {
+            StrBuf<24> msg;
+            msg.put("Scrubbed ").put_u32(erased).put(erased == 1 ? " block" : " blocks");
+            ctx_.toast.show(FooterTone::Ok, msg.view(), ctx_.now);
+        }
+        return true;
+    }
+    return back_event(e);
+}
 
-Strip MemoryPage::labels() const { return base_labels(); }
+Strip MemoryPage::labels() const {
+    Strip s = base_labels();
+    s[Button::Ok] = sl::Scrub;
+    return s;
+}
 
 void MemoryPage::invalidate() {
     static_step_ = 0;

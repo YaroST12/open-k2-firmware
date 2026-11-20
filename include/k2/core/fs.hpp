@@ -118,6 +118,9 @@ public:
     // Rewrites every metadata pair into its other block (lfs_fs_gc with the smallest compaction threshold); under a fence a
     // pair whose other block lies above it moves to a new block. Two rounds move both blocks of every pair below the fence.
     Err compact();
+    // Non-destructive free-block scrub: makes metadata consistent, traverses all in-use blocks, and cleanly erases any
+    // unallocated block that is not all 0xFF (such as a page left partially erased by a power cut).
+    Err scrub_free_blocks(std::uint32_t& erased);
     // Shrinks a mounted wide volume to grown_blocks (one superblock commit, atomic) and remounts it. Err::Exists while a
     // block at or above grown_blocks is still in use (nothing changes then).
     Err shrink();

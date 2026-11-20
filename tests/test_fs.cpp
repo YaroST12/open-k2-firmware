@@ -368,6 +368,28 @@ void test_used_blocks_asked_mid_write_is_not_kept() {
     CHECK_EQ(after, truth);
 }
 
+void test_scrub_free_blocks() {
+    RamDisk d(kBlocks);
+    fs::Fs f(d, kBlocks);
+    bool formatted = false;
+    CHECK_EQ(f.mount_or_format(formatted) == fs::Err::Ok, 1);
+    CHECK_EQ(f.write_file("/keep", sv("hello")) == fs::Err::Ok, 1);
+    const std::uint32_t free_blk = 40;
+    const std::uint8_t dirty[4] = {0xAA, 0x55, 0x12, 0x34};
+    CHECK_EQ(d.prog(free_blk, 12, dirty, sizeof dirty), 0);
+
+    std::uint32_t erased = 99;
+    CHECK_EQ(f.scrub_free_blocks(erased) == fs::Err::Ok, 1);
+    CHECK_EQ(erased, 1u);
+    std::uint8_t check[4]{};
+    CHECK_EQ(d.read(free_blk, 12, check, sizeof check), 0);
+    CHECK_EQ(check[0] == 0xFF && check[1] == 0xFF && check[2] == 0xFF && check[3] == 0xFF, 1);
+    CHECK_STR(slurp(f, "/keep").c_str(), "hello");
+
+    CHECK_EQ(f.scrub_free_blocks(erased) == fs::Err::Ok, 1);
+    CHECK_EQ(erased, 0u);
+}
+
 }  // namespace
 
 int main() {
@@ -386,5 +408,6 @@ int main() {
     test_used_blocks_walks_once_until_a_write();
     test_inline_limit();
     test_used_blocks_asked_mid_write_is_not_kept();
+    test_scrub_free_blocks();
     return test_report("test_fs");
 }

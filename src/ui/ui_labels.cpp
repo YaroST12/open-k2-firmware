@@ -97,7 +97,7 @@ PanelLabels resolve(const Strip &s) {
 namespace {
 constexpr const char *kOkVerbs[] = {
     "Scan", "Listen", "Run", "Force", "Start", "Stop", "Send", "Rescan", "Clear", "Open", "Reset",
-    "Next", "Select", "View", "Delete", "Arm", "Disarm", "Toggle", "Cycle", "Apply", "Refresh", "Ask",
+    "Next", "Select", "View", "Delete", "Arm", "Disarm", "Toggle", "Cycle", "Apply", "Refresh", "Scrub", "Ask",
     "Confirm", "Zoom",
     // The Meter faces: OK opens the Bench
     "Bench",

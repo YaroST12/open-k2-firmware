@@ -110,6 +110,7 @@ namespace sl {
     X(View, "View", "", "", false)                                                                                     \
     X(Save, "Save", "", "", false)                                                                                     \
     X(Refresh, "Refresh", "", "", false)                                                                               \
+    X(Scrub, "Scrub", "", "", false)                                                                                   \
     X(Delete, "Delete", "", "", false)                                                                                 \
     X(Link, "Link", "", "", false)                                                                                     \
     X(K2Data, "K2 data", "", "", false)                                                                                \
