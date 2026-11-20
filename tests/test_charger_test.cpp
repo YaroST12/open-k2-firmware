@@ -652,7 +652,7 @@ struct Fake final : ct::Env {
                 else if (ph < 4200) { in.vbus_mv = 3500; in.pd_quiet_ms = ph - 4000; }
                 else { in.vbus_mv = 5100; in.pd_quiet_ms = ph - 4000; }
             } else if (handed) {
-                if (stays_pd || (in.now >= chatter_from && in.now < chatter_until)) in.pd_quiet_ms = 0;
+                if (stays_pd || (in.now >= chatter_from && in.now < chatter_until && !(restart_at && in.now >= restart_at))) in.pd_quiet_ms = 0;   // none while the output is cut
                 else in.pd_quiet_ms = std::min<uint32_t>(in.pd_quiet_ms + 100, 1000000);
             }
             if (grow_at && in.now >= grow_at) { grow_at = 0; caps = grown; caps.valid = true; caps.active_cc = 1; }
@@ -8120,6 +8120,17 @@ static void test_endless_reannounce_after_a_release_is_bounded() {
     CHECK_EQ(count_unit_verdict(r, ct::Unit::Scp, ct::Verdict::Skip, ct::Reason::PdActive, false) > 0, true);
     CHECK_EQ(f.in.now - t0 < 60000, true);
 }
+// An answer as long as the attach's own announcement (7.4 s on the IQ4) is waited out in place, not cut off at kRestartSettleMs.
+static void test_a_reannounce_as_long_as_the_attach_flood_is_waited_out() {
+    Fake f; ct::Runner r(f);
+    reannounce_setup(f, 300, 7400, 7400);
+    const auto o = with_units(ct::bit(A::Fcp) | ct::bit(A::Scp), {ct::Unit::Fcp, ct::Unit::Scp});
+    CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 900000), true);
+    CHECK_EQ(f.attaches_legacy, 1);
+    CHECK_EQ(count_unit_verdict(r, ct::Unit::Scp, ct::Verdict::Pass), 4u);
+    CHECK_EQ(count_unit_verdict(r, ct::Unit::Scp, ct::Verdict::Skip), 0u);
+}
 // A sink plugged in while the unit waits for the announcement to stop ends the run at once, as in the restart wait.
 static void test_load_during_the_reannounce_wait_stops_the_run() {
     Fake f; ct::Runner r(f);
@@ -8134,6 +8145,31 @@ static void test_load_during_the_reannounce_wait_stops_the_run() {
     f.in.inline_load = false;
     CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Stopped; }, 20000), true);
     CHECK_EQ(f.fc_times.size(), size_t(1));
+}
+// The IQ4's next step: the source's answer to the release, then its own output cut after the same or the next row (the restart pattern
+// above). The waits do not stack (each is bounded by kRestartSettleMs on its own and the later one restarts nothing), no row is read
+// as PD active, the guard is never asked early, and the units after it (SCP rows, AFC) still run.
+static void test_reannounce_then_output_restart_on_the_same_unit() {
+    for (const int rel : {1, 2}) for (const uint32_t delay : {30u, 1500u}) {   // the cut before the announcement is heard, and after it
+        Fake f; ct::Runner r(f);
+        reannounce_setup(f, 100, 3000, 0);
+        f.restart_on_release = rel; f.restart_delay_ms = delay; f.restart_chatter_ms = 3000;
+        const auto o = with_units(ct::bit(A::Scp) | ct::bit(A::Afc), {ct::Unit::Scp, ct::Unit::Afc});
+        CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+        const uint32_t t0 = f.in.now;
+        CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 600000), true);
+        CHECK_EQ(f.restart_back_at != 0, true);
+        CHECK_EQ(f.guard_refusals, 0);
+        CHECK_EQ(f.fc_requests, 6);   // 4 SCP rows + 2 AFC rows
+        for (const ct::Unit u : {ct::Unit::Scp, ct::Unit::Afc}) {
+            CHECK_EQ(count_unit_verdict(r, u, ct::Verdict::Skip, ct::Reason::PdActive, false), 0u);
+            CHECK_EQ(count_unit_verdict(r, u, ct::Verdict::Fail), 0u);
+        }
+        CHECK_EQ(count_unit_verdict(r, ct::Unit::Scp, ct::Verdict::Pass), 4u);
+        CHECK_EQ(count_unit_verdict(r, ct::Unit::Afc, ct::Verdict::Pass) > 0, true);
+        CHECK_EQ(f.in.now - t0 < 2 * ct::kRestartSettleMs + 60000, true);
+        std::printf("reannounce + restart on release %d (cut after %u ms): %u ms\n", rel, delay, f.in.now - t0);
+    }
 }
 // Charger-test level (user decision 2026-11-15). A source with every kind of offer: 5/9/15/20 V 3 A, PPS 3.3-21 V 5 A,
 // PPS 3.3-11 V 5 A, SPR AVS 9-20 V; `epr` sets PDO 1's EPR bit.
@@ -8964,7 +9000,7 @@ int main() {
     test_self_powered_run_sweeps_from_5v();
     test_legacy_row_waits_through_a_source_restart(); test_legacy_restart_wait_is_bounded_and_a_load_still_refuses();
     test_legacy_units_chain_through_the_sources_reannounce_after_a_release(); test_scp_rows_are_not_pd_active_after_our_own_release();
-    test_a_quiet_source_is_watched_once_per_attach(); test_pd_traffic_before_the_release_still_skips_the_unit(); test_endless_reannounce_after_a_release_is_bounded(); test_load_during_the_reannounce_wait_stops_the_run();
+    test_a_quiet_source_is_watched_once_per_attach(); test_pd_traffic_before_the_release_still_skips_the_unit(); test_endless_reannounce_after_a_release_is_bounded(); test_load_during_the_reannounce_wait_stops_the_run(); test_reannounce_then_output_restart_on_the_same_unit(); test_a_reannounce_as_long_as_the_attach_flood_is_waited_out();
     test_scp_ack_without_voltage_ends_early_and_skips_the_raises(); test_scp_no_change_without_restart_does_not_wait();
     test_level_maps_to_the_run_switches(); test_level_plans_per_level(); test_step_walk_is_planned_only_in_deep(); test_prog_check_flags_a_passing_programmable_row(); test_prog_check_clean_capture_changes_nothing();
     test_prog_check_without_a_capture_asks_nothing_more(); test_prog_check_follows_the_sweep_switches(); test_light_run_requests_nothing_but_5v(); test_light_lists_the_epr_levels_as_advertised();

@@ -2707,7 +2707,8 @@ void Runner::poll_impl(Input& in, const pd::SourceCaps& caps) {
         if (restart_wait_) {
             const uint32_t back = in.now - restart_ms_;
             const bool heard = in.pd_quiet_ms < back;   // a frame since VBUS came back
-            restart_wait_ = back < kRestartSettleMs && (heard ? in.pd_quiet_ms < kLegacyQuietMs : back < kRestartCapsMs);
+            // frames of the source's answer to our release (reann_ 2) just before the cut are 2.5 s of quiet away: wait for that, not 1 s
+            restart_wait_ = back < kRestartSettleMs && (heard ? in.pd_quiet_ms < kLegacyQuietMs : back < (reann_ == 2 ? kLegacyQuietMs : kRestartCapsMs));
         }
         // pattern reannounce-after-own-release: same wait, counted from our own release (no VBUS dip to count from).
         if (own_rel_) {
@@ -2715,7 +2716,7 @@ void Runner::poll_impl(Input& in, const pd::SourceCaps& caps) {
             const bool heard = in.pd_quiet_ms < since;   // a frame since the release
             if (heard) reann_ = 2;
             else if (since >= kOwnReleaseCapsMs) reann_ = 1;
-            own_rel_ = !stopping_ && silent_ && attached_ && mode_ == Mode::Legacy && !restart_wait_ && !restart_dark_ && since < kRestartSettleMs &&
+            own_rel_ = !stopping_ && silent_ && attached_ && mode_ == Mode::Legacy && !restart_wait_ && !restart_dark_ && since < kOwnReleaseSettleMs &&
                        (heard ? in.pd_quiet_ms < kLegacyQuietMs : since < kOwnReleaseCapsMs);
         }
         const Reason changed = dropped && pd_owned_ ? Reason::Lost : in.loop_lock ? Reason::Loop :
@@ -2725,7 +2726,7 @@ void Runner::poll_impl(Input& in, const pd::SourceCaps& caps) {
         // Offers that changed or PD that showed up end the unit's rows, not the run.
         else if (!stopping_) {
             const Reason unit_stop = offers_changed ? Reason::CapsChanged :
-                legacy_pending && pd_active && !restart_wait_ && !own_rel_ ? Reason::PdActive : Reason::None;
+                legacy_pending && pd_active && !restart_wait_ && !own_rel_ && !(restart_dark_ && reann_ == 2) ? Reason::PdActive : Reason::None;
             if (unit_stop != Reason::None) skip_unit(unit_stop);
         }
         if ((restart_wait_ || own_rel_) && !stopping_) { stable_ = false; return; }

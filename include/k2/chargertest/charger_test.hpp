@@ -194,7 +194,9 @@ inline constexpr uint32_t kLegacyFirstWaitMs = 1000, kLegacyGapMs = 500, kAfcPre
 // a silent Legacy attach is watched for kOwnReleaseCapsMs (the 500 ms line discharge + kRestartCapsMs); a frame in it is the source's
 // answer to our own release, not PD traffic: the unit waits in place for kLegacyQuietMs of quiet (at most kRestartSettleMs) instead of
 // detaching. Frames before the release are real PD traffic and arm nothing. A source quiet in that window is not watched again.
-inline constexpr uint32_t kOwnReleaseCapsMs = kLegacyGapMs + kRestartCapsMs;
+// The wait is bounded by kOwnReleaseSettleMs: the IQ4's attach announced for 7.4 s, so one as long as that ends ~10.4 s after the release
+// (7.4 + 2.5 s quiet + the first frame), past kRestartSettleMs; the wait that ends in a detach anyway is lost time.
+inline constexpr uint32_t kOwnReleaseCapsMs = kLegacyGapMs + kRestartCapsMs, kOwnReleaseSettleMs = 12000;
 // Detach: Rd off, wait until VBUS has been below vSafe0V for kDetachDarkHoldMs (at most kDetachDarkMs; a source that never lets
 // go, a USB-A port, gets kDetachQuickMs from the second unit on).
 inline constexpr uint32_t kDetachDarkMs = 10000, kDetachDarkHoldMs = 300, kDetachQuickMs = 1500;
