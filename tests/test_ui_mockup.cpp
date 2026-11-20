@@ -31,6 +31,12 @@ static void dump(const char* name) {
     }
 }
 
+// K2_ROT=0..3 renders the whole run in one rotation (landscape and portrait); unset keeps the legacy mix: rotation 3 for the
+// pages, rotation 0 for the charger-test frames.
+static int g_rot = -1;
+static uint8_t rot_pages() { return g_rot < 0 ? 3 : uint8_t(g_rot); }
+static uint8_t rot_ct() { return g_rot < 0 ? 0 : uint8_t(g_rot); }
+
 static void fixture() {
     g_stub = {};
     pd::set_fake(0);
@@ -86,13 +92,40 @@ static void battery_frames(Ui& ui, uint32_t& t, const char* prefix) {
     stub_battery_reset();
 }
 
+// The ring (docs/UI_SYSTEM.md 0.2): every page in the ring view (numbered masthead, ring strip), then entered, then the
+// action rows of the places. Frames: ring<NN>_<name>, ring<NN>_<name>_in, ring<NN>_<name>_act; the K2 page also scrolled to its
+// Long Back row.
+static void ring_frames(Ui& ui, uint32_t& t) {
+    static const char* const kNames[ring::kCount] = {"home", "lines", "numbers", "graph", "ripple", "charger", "cable", "device", "battery", "log", "k2"};
+    const auto key = [&](Button b, ButtonEvent e = ButtonEvent::Short) { ui.on_button(b, e, t += 100); };
+    char nm[48];
+    ui.goto_page(uint8_t(Page::Home), t); key(Button::Back);   // entered Home -> the ring view on Home
+    for (int i = 0; i < ring::kCount; ++i) {
+        if (i > 0) key(Button::Plus);
+        std::snprintf(nm, sizeof nm, "ring%02d_%s", i, kNames[i]); render(ui, t, nm);
+        if (!ring::can_enter(static_cast<ring::Pos>(i))) continue;
+        key(Button::Ok);
+        std::snprintf(nm, sizeof nm, "ring%02d_%s_in", i, kNames[i]); render(ui, t, nm);
+        if (i >= int(ring::Pos::Charger) && i <= int(ring::Pos::Device)) {
+            key(Button::Ok);   // the place's Actions
+            std::snprintf(nm, sizeof nm, "ring%02d_%s_act", i, kNames[i]); render(ui, t, nm);
+        }
+        if (i == int(ring::Pos::K2)) {
+            for (int k = 0; k < 8; ++k) key(Button::Plus);
+            std::snprintf(nm, sizeof nm, "ring%02d_%s_longback", i, kNames[i]); render(ui, t, nm);
+        }
+        key(Button::Back, ButtonEvent::Long);   // out to the ring on the same page
+    }
+}
+
 int main() {
+    if (const char* r = std::getenv("K2_ROT")) g_rot = std::atoi(r) & 3;
     fixture();
     Ui ui;
     ui.init(0);
     // The design canvas is the bottom-strip 240x220 layout (rotation 3 = buttons at the bottom);
     // the device boot default is rotation 0 (buttons on the physical right edge).
-    ui.configure_rotation(false, 3);
+    ui.configure_rotation(false, rot_pages());
     uint32_t t = 1000;
 
     // Home / Detail
@@ -137,7 +170,7 @@ int main() {
         g_stub.cable_read = {emk_attached::Mode::Alone, 0};
         static Ui bare;
         bare.init(0);
-        bare.configure_rotation(false, 3);
+        bare.configure_rotation(false, rot_pages());
         uint32_t tb = 1000;
         static const struct { raclass::PullDown p; const char* name; } kScenes[] = {
             {raclass::PullDown::Cc2, "pd_cable_chip_silent"}, {raclass::PullDown::None, "pd_cable_no_chip"},
@@ -210,7 +243,7 @@ int main() {
         ui.on_button(Button::Back, ButtonEvent::Short, t); t += 100;   // disarm
         for (int i = 0; i < 4 && ui.charger_test_cursor() != 1; ++i) { ui.on_button(Button::Plus, ButtonEvent::Short, t); t += 100; }
     }
-    ui.set_rotation(0, t); t += 200;
+    ui.set_rotation(rot_ct(), t); t += 200;
     // Each scene is checked against the stage it is named after, so a change of the START flow cannot silently
     // retitle a scene. The first START press opens the confirm window on Review (no dialog: the cable identity was
     // chosen on the Cable step).
@@ -421,7 +454,7 @@ int main() {
         g_stub.fc = k2::fastcharge::Protocol::Pd;
         static Ui live;
         live.init(0);
-        live.configure_rotation(false, 3);
+        live.configure_rotation(false, rot_pages());
         uint32_t tl = 1000;
         live.goto_page(uint8_t(Page::Home), tl); render(live, tl, "readme_home");
         live.goto_page(uint8_t(Page::Detail), tl + 100); render(live, tl, "readme_numbers");
@@ -429,6 +462,7 @@ int main() {
         battery_frames(live, tl, "readme_");
         live.open_place(bench::Place::Battery, tl);   // the Bench cursor rests on the place last opened
         live.goto_page(uint8_t(Page::Lines), tl + 100); render(live, tl, "readme_bench");
+        ring_frames(live, tl);
         live.goto_page(uint8_t(Page::Home), tl + 100); tl += 100;
         live.open_place(bench::Place::K2, tl);
         for (int i = 0; i < 400 && live.painting(); i++) live.tick(tl += 20);
