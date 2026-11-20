@@ -27,7 +27,7 @@ static void test_single_pass_updates() {
     draw_footer(content, FooterTone::Caution, "Another status");
     g_lcd_pixels = g_lcd_windows = 0;
     draw_footer(content, FooterTone::Ok, "All subsystems up");
-    CHECK_EQ(g_lcd_pixels > 0, true);
+    CHECK_EQ(g_lcd_pixels, static_cast<unsigned>(content.w) * static_cast<unsigned>(kToastH));   // the pill and the band beside it, once
     CHECK_EQ(std::equal(expected.begin(), expected.end(), std::begin(g_panel)), true);
 
     clear();
