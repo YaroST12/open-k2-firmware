@@ -459,7 +459,7 @@ static void test_wizard_budgets() {
 // The Results grid (eight 18 px unit rows, counters, summary strip): the first paint of the page and one selection move are
 // bounded, and a move touches only the two rows that change focus (or the scroll window), never the margin above the list.
 static void test_results_grid_budgets() {
-    constexpr unsigned kResRowPx = 40 * 221;   // one tallest (volt + current) row without the 3 px scrollbar lane
+    constexpr unsigned kResRowPx = 40 * 208;   // one tallest (volt + current) row of the 208 px twin-rail content
     const auto old = g_stub;
     static ChargerRig r;
     r.start();
@@ -500,19 +500,20 @@ static void test_results_grid_budgets() {
     r.tick(4); r.settle();
     // A move inside the window rewrites the rows that change focus (26 or 40 px each) and the footer line (it explains the
     // focused unit). A move that scrolls the window repaints every visible row: ResultGrid has no blit, so that is the
-    // cost of a scroll. The Option B toast adds one 208 x 16 band erase; budgets: measured 25 178 / 47 408 +10 %.
+    // cost of a scroll: the 168 x 208 window is 34 944 px, and the floating toast pill is redrawn after every budgeted slice of
+    // it (about 5 times, 3 300 px each, over the bottom rows). Budgets: measured 21 850 / 55 472 +10 %.
     unsigned worst_move = 0, worst_scroll = 0, scrolls = 0;
     for (int i = 0; i < 12; ++i) {
         r.measured([](ChargerRig &x) { x.press(Button::Plus); x.tick(4); x.settle(); });
-        const bool scrolled = heat::touched(72, 222) > 3 * kResRowPx;
+        const bool scrolled = heat::touched(72, 240) > 3 * kResRowPx;   // the window is y72..240
         (scrolled ? worst_scroll : worst_move) = std::max(scrolled ? worst_scroll : worst_move, r.last_px);
         scrolls += scrolled;
         CHECK_EQ(heat::touched(20, 72), 0u);   // the hero band, counters and summary strip stay as they are
     }
-    std::printf("charger results selection move: worst %u px (budget 28000), scrolling move: worst %u px (budget 52000), %u scrolls\n",
+    std::printf("charger results selection move: worst %u px (budget 28000), scrolling move: worst %u px (budget 61000), %u scrolls\n",
                 worst_move, worst_scroll, scrolls);
     CHECK_EQ(worst_move <= 28000, true);
-    CHECK_EQ(scrolls > 0 && worst_scroll <= 52000, true);
+    CHECK_EQ(scrolls > 0 && worst_scroll <= 61000, true);
     g_stub = old;
 }
 

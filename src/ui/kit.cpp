@@ -659,6 +659,18 @@ int16_t grid_row(ResultGrid::RowFn fn, void *ctx, int first, int i, ResultRowSpe
 }
 }  // namespace
 
+void ResultGrid::invalidate_from(int16_t y) {
+    int16_t yy = y_;
+    int slot = 0;
+    for (int i = first_; i < count_ && slot < kMaxSlots; i++, slot++) {
+        ResultRowSpec r;
+        const int16_t h = grid_row(fn_, ctx_, first_, i, r);
+        if (yy + h > bottom_) break;
+        yy = static_cast<int16_t>(yy + h);
+        if (yy > y) valid_[slot] = false;
+    }
+}
+
 void ResultGrid::show(int index, int lead) {
     if (index < 0 || index >= count_) return;
     if (first_ >= count_) first_ = count_ > 0 ? count_ - 1 : 0;

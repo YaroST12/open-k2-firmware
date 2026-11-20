@@ -459,6 +459,9 @@ public:
     int draw_some(int budget_px, int prefer = -1, bool strict = false);
     bool pending() const { return pending_; }
     void invalidate();
+    // Marks dirty the visible rows that reach down to y or below (a toast pill floats over the bottom of the window: only the
+    // rows under its band repaint, not the whole grid).
+    void invalidate_from(int16_t y);
     // Rows fully visible from first(); y of the row `index` (-1 when it is not visible).
     int visible() const { return vis_; }
     int row_y(int index) const;

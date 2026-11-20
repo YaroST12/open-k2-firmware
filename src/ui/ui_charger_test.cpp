@@ -1992,7 +1992,7 @@ bool ChargerTestPage::foot(FooterTone tone, std::string_view text) {
             gfx_fill(ctx_.content, 0, static_cast<int16_t>(ctx_.content.h - kToastH - kToastMarginBottom),
                      ctx_.content.w, kToastH, kBg);
             ctx_.toast.erase_pending = false;
-            grid_.invalidate();
+            grid_.invalidate_from(static_cast<int16_t>(ctx_.content.h - kToastH - kToastMarginBottom));
             action_.invalidate();
             ctx_.rows.invalidate();
         }
