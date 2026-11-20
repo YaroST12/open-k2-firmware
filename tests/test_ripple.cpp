@@ -171,9 +171,15 @@ void test_ripple_page_navigation_and_settings() {
     t += 100; ui.tick(t);
     CHECK_COND(g_capture_calls > held_calls);
 
-    // Plus flips to next Meter face (wraps back to Home) and restores SPI3 divider to /4.
+    // Back leaves the entered page for the ring (still Ripple, still boosted); Plus then steps on to the Charger place,
+    // which leaves Ripple and restores the SPI3 divider to /4.
+    ui.on_button(Button::Back, ButtonEvent::Short, t);
+    CHECK_COND(ui.ring_view());
+    CHECK_COND(ui.page() == Page::Ripple);
+    CHECK_EQ(lcd::spi_div(), 2u);
     ui.on_button(Button::Plus, ButtonEvent::Short, t);
-    CHECK_COND(ui.page() == Page::Home);
+    t += 100; ui.tick(t);
+    CHECK_COND(ui.page() != Page::Ripple);
     CHECK_EQ(lcd::spi_div(), 4u);
 }
 
