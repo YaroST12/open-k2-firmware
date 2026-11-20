@@ -38,7 +38,7 @@ namespace k2 {
 
 class TwinPage final : public PageBase {
 public:
-    explicit TwinPage(UiContext &c) : PageBase(c, Page::Count, "Device twins", Icon::Phone) {}
+    explicit TwinPage(UiContext &c) : PageBase(c, Page::Count, "Twins", Icon::Phone) {}
     void draw_static() override;
     void update(uint32_t now_ms) override;
     bool on_event(Event e) override;

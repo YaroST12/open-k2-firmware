@@ -61,7 +61,7 @@ constexpr uint32_t kClockMs = 250;   // the elapsed time repaints at most 4 time
 
 }  // namespace
 
-LoopProbePage::LoopProbePage(UiContext &c) : PageBase(c, Page::Count, "Loop probe", Icon::Usb), runner_(lp::hw::env()) {}
+LoopProbePage::LoopProbePage(UiContext &c) : PageBase(c, Page::Count, "Probe", Icon::Usb), runner_(lp::hw::env()) {}
 
 // ---- lifecycle ----------------------------------------------------------------------------------------------------------------
 

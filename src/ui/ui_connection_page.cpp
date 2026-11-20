@@ -498,15 +498,15 @@ constexpr int kMaxList = 9;
 constexpr int kValCells = (208 - kValX - 4) / 8;   // 19 cells of S16 in the value column
 constexpr int kVisRows = kMaxList;   // row_sig_ capacity in ConnectionPage
 static_assert(conn::kStatusCells <= 27, "the survey texts fit the status buffer");
-// The Cable tab's Answered row: every orientation and table row fits the value column, and the 12 px key fits the
-// 58 px before it (6 px per cell).
+// The Cable tab's Replied row: every orientation and table row fits the value column, and the 12 px key fits the
+// 48 px before it (6 px per cell) with a 4 px gap.
 constexpr bool answered_rows_fit() {
     for (std::uint8_t o = 1; o <= 2; o++)
         for (std::size_t i = 0; i < emk_variant::kAttempts; i++)
             if (emk_variant::short_text(emk_variant::answered_from(o, i)).view().size() > static_cast<std::size_t>(kValCells)) return false;
-    return std::string_view("Answered").size() * 6 <= static_cast<std::size_t>(kValX - kKeyX);
+    return std::string_view("Replied").size() * 6 + 4 <= static_cast<std::size_t>(kValX - kKeyX);
 }
-static_assert(answered_rows_fit(), "the Answered row's key and value fit their columns");
+static_assert(answered_rows_fit(), "the Replied row's key and value fit their columns");
 
 // A value row. `cut` > 0 splits the value there: the head in `c`, the tail (the current) in kAmp; so a "20/28V 5A" line
 // reads in unit colours. 0 = one colour.
@@ -754,7 +754,7 @@ void range_row(Rows &R, const char *key, const pd::Pdo &p) {
     // How the cable answered the read ("A, PD3, SVDM 1.0"): only when this firmware's scan found it (a clone's or
     // an older reading has none). With VCONN required this is the ninth and last row.
     const emk_variant::Text ans = emk_variant::short_text(fusb302::cable_answered());
-    if (!ans.view().empty()) R.add("Answered", kDim).put(ans.view());
+    if (!ans.view().empty()) R.add("Replied", kDim).put(ans.view());
 }
 
 void sink_pdo_rows(Rows &R, std::span<const uint32_t> sink) {

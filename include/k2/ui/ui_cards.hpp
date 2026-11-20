@@ -88,7 +88,7 @@ void cards_sheet(const report_card::Card &c, bool range, unsigned idx, CardSheet
 
 class CardsPage final : public PageBase {
 public:
-    explicit CardsPage(UiContext &c) : PageBase(c, Page::Count, "Report cards", Icon::Report) {}
+    explicit CardsPage(UiContext &c) : PageBase(c, Page::Count, "Cards", Icon::Report) {}
     void draw_static() override;
     void update(uint32_t now_ms) override;
     bool on_event(Event e) override;

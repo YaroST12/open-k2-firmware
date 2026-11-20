@@ -18,7 +18,7 @@ namespace k2 {
 
 class DiagnosisPage final : public PageBase {
 public:
-    explicit DiagnosisPage(UiContext &c) : PageBase(c, Page::Count, "PD diagnosis", Icon::Blackbox) {}
+    explicit DiagnosisPage(UiContext &c) : PageBase(c, Page::Count, "Diagnosis", Icon::Blackbox) {}
     void draw_static() override;
     void update(uint32_t now_ms) override;
     bool on_event(Event e) override;

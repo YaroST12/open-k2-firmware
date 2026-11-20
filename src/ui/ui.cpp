@@ -769,6 +769,7 @@ void fmt_opp_adc_v(StrBuf<12> &out, const std::optional<adc::Reading> &r, int32_
 
 OppCells build_opp_cells(const UiContext &ctx, const kit::OppRailSpec &spec) {
     OppCells oc{};
+    if (spec.title.size() > 9) K2_TRUNC_NOTE_HERE(trunc::Kind::Cut, spec.title, 0);   // the masthead cell holds 9 characters
     // Slot 0: uppercase MastheadCell
     for (char ch : spec.title) {
         if (oc.txt[0].view().size() >= 9) break;

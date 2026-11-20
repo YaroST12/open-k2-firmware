@@ -167,7 +167,7 @@ const TwinPage::Entry *TwinPage::entry_by_seq(uint8_t seq) const {
 }
 
 void TwinPage::draw_static() {
-    title_ = detail_ ? "Twin" : "Device twins";
+    title_ = detail_ ? "Twin" : "Twins";
     has_icon_ = !detail_;
     title_bar();
     if (detail_) {
@@ -210,7 +210,7 @@ void TwinPage::enter() {
     renego_ok_ = false;
     detail_ = false;
     wake_ok_ = false;
-    title_ = "Device twins";
+    title_ = "Twins";
     has_icon_ = true;
     reload();
     invalidate();
@@ -232,7 +232,7 @@ void TwinPage::leave() {
     renego_wait_ = false;                         // the Hard Reset is already out; the charger relists without this page
     started_ = false;
     detail_ = false;
-    title_ = "Device twins";
+    title_ = "Twins";
     has_icon_ = true;
 }
 

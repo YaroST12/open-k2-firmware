@@ -1037,7 +1037,7 @@ public:
     // The saved-cables browser opened from Connection's Cable tab: it starts in the list view and BACK leaves it from there.
     // The list is the kit RowList (names read from flash on demand), one cable's table is a kit KvTable and the delete
     // question a kit AlertBand. The remote's e-marker state reads the driver, not this page.
-    explicit EmarkerPage(UiContext &c) : PageBase(c, Page::Count, "Saved cables", Icon::Emark) {}
+    explicit EmarkerPage(UiContext &c) : PageBase(c, Page::Count, "Cables", Icon::Emark) {}
     void enter() override;
     void draw_static() override;
     void update(uint32_t now_ms) override;
@@ -1152,7 +1152,7 @@ const char *tool_name(int i);
 // cancellation hands measured cleanup to Ui so leaving the menu cannot drop the safety guard.
 class TriggerPage final : public PageBase {
 public:
-    explicit TriggerPage(UiContext &c) : PageBase(c, Page::Count, "FC trigger", Icon::Brick) {}
+    explicit TriggerPage(UiContext &c) : PageBase(c, Page::Count, "FC trig", Icon::Brick) {}
     void draw_static() override;
     void update(uint32_t now_ms) override;
     bool on_event(Event e) override;
@@ -1205,7 +1205,7 @@ private:
 // BACK goes one step back; BACK on OFFER leaves and releases to 5 V (leave()).
 class PdTriggerPage final : public PageBase {
 public:
-    explicit PdTriggerPage(UiContext &c) : PageBase(c, Page::Count, "PD trigger", Icon::Pd) {}
+    explicit PdTriggerPage(UiContext &c) : PageBase(c, Page::Count, "PD trig", Icon::Pd) {}
     void draw_static() override;
     void update(uint32_t now_ms) override;
     bool on_event(Event e) override;
@@ -1325,7 +1325,7 @@ private:
 
 class AutorotatePage final : public PageBase {
 public:
-    explicit AutorotatePage(UiContext &c) : PageBase(c, Page::Count, "Autorotate", Icon::Rotate) {}
+    explicit AutorotatePage(UiContext &c) : PageBase(c, Page::Count, "Rotation", Icon::Rotate) {}
     void enter() override;
     void draw_static() override;
     void update(uint32_t now_ms) override;

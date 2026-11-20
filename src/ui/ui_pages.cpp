@@ -2463,7 +2463,7 @@ void DisplayPage::show(View v) {
         const idle::Config &c = idle_hw::config();
         const int at = v == View::PickDim ? uidisp::index_of(uidisp::kDimAfter, c.dim_after_s) : uidisp::index_of(uidisp::kOffAfter, c.off_after_s);
         pick_ = at < 0 ? 0 : at;   // a value set from the remote and not in the list starts on the first option
-        title_ = v == View::PickDim ? "Dim after" : "Screen off";
+        title_ = v == View::PickDim ? "Dim after" : "Off after";
     } else {
         title_ = "Display";
     }
