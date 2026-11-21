@@ -75,6 +75,8 @@ using runlay::kFamilyNames;
 // A family name is a Custom / Steps row text (16 px, x28 up to the count tail) and the Steps header title ("<name> steps").
 static_assert(all_fit(kFamilyNames, kSmallAdvPx, 112), "a family name is wider than its row");
 static_assert(all_fit(kFamilyNames, kLabelAdv, runlay::kLeftW), "a family name is wider than the Running header's left column");
+constexpr const char *kSweepNames[] = {"PPS 3.3-4.9V", "PPS 3.3-20.5V", "PPS 5.5-21V", "AVS 15-28V", "AVS 15-48V"};
+static_assert(all_fit(kSweepNames, kSmallAdvPx, runlay::kSweepNameCells * runlay::kAdv16), "a sweep name is wider than its cells");
 // Tests rows (wizard step 1): 0 Depth, 1..4 the presets, 5 "Custom...", 6 "Last results" once a run exists.
 // Custom rows: 0..kFamilyCount-1 the families, then "Done" (row kFamilyCount).
 constexpr int kFamilyCount = 6, kDepthRow = 0, kPresetFirst = 1, kPresets = 4, kCustomRow = 5, kViewRow = 6;
@@ -3069,7 +3071,7 @@ void ChargerTestPage::paint_running(uint32_t now) {
             name_small_ = small;            gfx_fill(c, runlay::kLeftX, L.name_y, runlay::kLeftW, runlay::kH16, kBg);
             cell_sig_[3] = 0;
         }
-        if (sweeping) put_line(c, kSmall, 6, L.name_y, buf.view(), kText, 11, cell_sig_[3], false, true, &bg);
+        if (sweeping) put_line(c, kSmall, 6, L.name_y, buf.view(), kText, runlay::kSweepNameCells, cell_sig_[3], false, true, &bg);
         else if (small) put_line(c, kLabelFont, runlay::kLeftX, L.name_y + kSmall.ascent - kLabelFont.ascent, buf.view(), kText, runlay::kNameCellsSmall, cell_sig_[3], false, true, &bg);
         else put_line(c, kSmall, runlay::kLeftX, L.name_y, buf.view(), kText, runlay::kNameCells, cell_sig_[3], false, true, &bg);
         if (!sweeping) {
