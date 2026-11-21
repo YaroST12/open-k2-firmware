@@ -365,6 +365,25 @@ def test_a_qc3plus_group_that_really_ran_is_unchanged():
     assert "- QC3+: 5V ✓, 9V ✗ voltage, 12V skipped" in bad and "no QC3+" not in bad
 
 
+def test_a_silent_protocol_reads_skipped_no_reply_on_a_card_and_a_run():
+    text = charger_summary.summarize_card(_card({"PD": {"verdict": "pass", "max_mv": 20000},
+        "AFC": {"verdict": "skip", "reason": "request failed", "detail": 5, "why": "no reply"},
+        "VIVO": {"verdict": "skip", "reason": "request failed", "detail": 7, "why": "no reply"}}))
+    assert "- AFC, VIVO: skipped, no reply" in text
+    assert "request failed" not in text and "no response" not in text
+    # the run's step rows: every VIVO row skipped under the first row's no-response, none passed
+    def row(p, res, mv):
+        return {"protocol": p, "pos": 0, "result": res, "reason": "request failed", "detail": 7, "detail_reason": "no response",
+                "target_mv": mv, "measured_mv": 0, "continuous": False, "raw_pdo": 0}
+    run = {"run_id": 1, "state": "done", "reason": "none", "evidence": {}, "steps": [row("vivo", "skip", 5000), row("vivo", "skip", 9000)]}
+    text = charger_summary.summarize(run)
+    assert "VIVO: skipped, no reply" in text and "no response" not in text
+    # a vivo charger that answered 5 V and then went silent stays a failed unit with the engine's word
+    run["steps"] = [dict(row("vivo", "pass", 5000), reason="none", detail=0, detail_reason="none", measured_mv=5000), row("vivo", "fail", 9000)]
+    text = charger_summary.summarize(run)
+    assert "no reply" not in text and "no response" in text
+
+
 def test_card_summary_reads_a_qc3plus_skip_as_no_qc3plus():
     text = charger_summary.summarize_card(_card({"PD": {"verdict": "pass", "max_mv": 20000},
                                                  "QC3+": {"verdict": "skip", "reason": "no QC3+ response", "why": "no QC3+"}}))

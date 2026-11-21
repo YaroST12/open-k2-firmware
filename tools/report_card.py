@@ -256,7 +256,11 @@ def _u(b, at, n):
     return int.from_bytes(b[at:at + n], "little")
 
 
-def group_why(group, detail, reason):
+# A skipped unit whose protocol never answered its first request is "not offered", not a failure (report_card.hpp silent_skip).
+SILENT_SKIPS = {("AFC", "unsupported"), ("FCP", "unsupported"), ("SCP", "unsupported"), ("UFCS", "no response"), ("VIVO", "no response")}
+
+
+def group_why(group, detail, reason, skipped=False):
     """The readable cause of a failed or skipped group: the engine's code when one was stored, else the reason."""
     if reason == "no QC3+ response":
         return "no QC3+"   # the engine code is "no response"; the group says "no QC3+" (report_card.hpp group_why)
@@ -271,6 +275,8 @@ def group_why(group, detail, reason):
         elif detail < len(FC_FAILS):
             if FC_FAILS[detail] == "no answer" and group in ("VOOC", "SVOOC", "SVOOC65"):
                 return "no answer to either wake, unloaded"   # report_card.cpp group_why
+            if skipped and (group, FC_FAILS[detail]) in SILENT_SKIPS:
+                return "no reply"
             return FC_FAILS[detail]
     return reason
 
@@ -341,7 +347,7 @@ def decode(b):
             e["reason"] = REASONS[reason]
         if detail:
             e["detail"] = detail
-            e["why"] = group_why(GROUPS[g], detail, REASONS[reason])
+            e["why"] = group_why(GROUPS[g], detail, REASONS[reason], VERDICT[verdict] == "skip")
         groups[GROUPS[g]] = e
     ranges = []
     for i in range(b[31]):

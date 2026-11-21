@@ -522,7 +522,10 @@ var K2Card = (function () {
 
   // ---- the card --------------------------------------------------------------------------------------------------------
 
-  function groupWhy(group, detail, reason) {
+  // A skipped unit whose protocol never answered is "not offered", not a failure (report_card.hpp silent_skip).
+  var SILENT_SKIPS = { AFC: "unsupported", FCP: "unsupported", SCP: "unsupported", UFCS: "no response", VIVO: "no response" };
+
+  function groupWhy(group, detail, reason, skipped) {
     if (reason === "no QC3+ response") return "no QC3+";
     if (detail) {
       if (group === "PD") {
@@ -532,6 +535,7 @@ var K2Card = (function () {
       } else if (detail < FC_FAILS.length) {
         if (FC_FAILS[detail] === "no answer" && (group === "VOOC" || group === "SVOOC" || group === "SVOOC65"))
           return "no answer to either wake, unloaded";   // report_card.cpp group_why
+        if (skipped && SILENT_SKIPS[group] === FC_FAILS[detail]) return "no reply";
         return FC_FAILS[detail];
       }
     }
@@ -557,13 +561,13 @@ var K2Card = (function () {
     return "";
   }
 
-  function putVerdictFields(e, maxMv, failMv, reason, detail, group) {
+  function putVerdictFields(e, maxMv, failMv, reason, detail, group) {   // e.verdict is set: a skip of a silent unit reads "no reply"
     if (maxMv) e.max_mv = maxMv;
     if (failMv) e.fail_mv = failMv;
     if (reason) e.reason = REASONS[reason];
     if (detail) {
       e.detail = detail;
-      e.why = groupWhy(group, detail, REASONS[reason]);
+      e.why = groupWhy(group, detail, REASONS[reason], e.verdict === "skip");
     }
   }
 

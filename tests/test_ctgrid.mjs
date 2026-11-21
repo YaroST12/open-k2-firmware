@@ -473,6 +473,15 @@ test("a VOOC family that was skipped as 'no answer' folds as No reply, not Skipp
   assert.ok(!got.some((l) => /^Skipped/.test(l)), got.join(" | "));
 });
 
+test("a silent VIVO / UFCS / AFC unit (skipped, no first answer) folds as No reply; a heard one stays a fail row", () => {
+  const row = (alg, mv, detail_reason) => ({ ...S(alg, mv, "skip", { reason: "request failed", detail: 7 }), detail_reason });
+  const got = lines([row("vivo", 5000, "no response"), row("vivo", 9000, "no response"), row("afc", 5000, "unsupported"), S("fcp", 5000, "fail")], { fold: true });
+  assert.ok(got.some((l) => /^No reply: .*VIVO/.test(l) && /AFC/.test(l)), got.join(" | "));
+  assert.ok(!got.some((l) => /^Skipped/.test(l)), got.join(" | "));
+  const heard = lines([S("vivo", 5000, "pass"), { ...S("vivo", 9000, "fail", { reason: "request failed", detail: 7 }), detail_reason: "no response" }], { fold: true });
+  assert.ok(!heard.some((l) => /^No reply/.test(l)), heard.join(" | "));
+});
+
 test("a VOOC family that never answered folds as one word", () => {
   const fam = [S("vooc", 5000, "fail", { detail: 13 }), S("svooc", 5000, "skip", { reason: "request failed" }),
                S("svooc65", 5000, "skip", { reason: "request failed" }), S("fcp", 5000, "fail")];

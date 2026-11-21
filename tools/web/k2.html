@@ -3536,6 +3536,7 @@ var CtGrid = (function () {
     { word: "SVOOC", mv: 10000, ma: 10000, w: 100, ceiling: true },
     { word: "SVOOC", mv: 11000, ma: 11000, w: 120, ceiling: true }
   ];
+  var SILENT_SKIP = { vivo: "no response", ufcs: "no response", afc: "unsupported", fcp: "unsupported", scp: "unsupported" };   // result_layout.cpp ct::never_answered
   var VOOC_ALGS = ["vooc", "svooc", "svooc65"];   // one shared detection: the finished grid reads them as the levels above
   var RAN_ITS_COURSE = { judged: 1, stopped: 1, cap: 1, "time cap": 1 };   // svooc_ceiling::End names (readout, card)
   // "120W", "22.5W" (0.1 W, the tenth only when not 0; whole watts from 100 W, so at most 5 characters); "" for 0 mW.
@@ -3710,12 +3711,14 @@ var CtGrid = (function () {
     var of = function (a) { return steps.filter(function (s) { return s.alg === a; }); };
     var isPd = function (a) { return has(PD_GROUP, a) || !!REVISIONS[a]; };
     var isRange = function (a) { return has(RANGE_ALGS, a); };
+    function silentSkip(s) { return s.result === "skip" && !!s.raw && !!SILENT_SKIP[s.alg] && SILENT_SKIP[s.alg] === s.raw.detail_reason; }
     function isAbsent(a) {
       var xs = of(a);
       if (!xs.length || xs.some(function (s) { return s.result === "pass"; })) return false;
       if (xs.every(function (s) { return s.result === "skip" && s.reason === "not advertised"; })) return true;
-      // a VOOC family row skipped because no wake clocked an opener reads "no reply" (result_layout.cpp is_no_answer)
+      // a VOOC family row skipped because no wake clocked an opener, or a unit that never answered, reads "no reply" (result_layout.cpp is_no_answer)
       if (has(VOOC_ALGS, a) && xs.every(function (s) { return s.result === "skip" && s.raw && /^no answer/.test(s.raw.detail_reason || ""); })) return true;
+      if (xs.every(silentSkip)) return true;
       return xs[0].result === "fail";
     }
     // The source offered no PD at all: every PD step is "not advertised" (a block with no chip that is not this was skipped).
@@ -3929,7 +3932,7 @@ var CtGrid = (function () {
     rows.forEach(function (r) {
       if (r.chips.length !== 1 || r.chips[0].word || r.chips[0].tone !== "skip" || (r.probe && r.chips[0].text === "auth")) return;   // the Xiaomi auth chip stays struck
       var c = r.chips[0], why = c.tag, st = c.steps[0] || {};
-      if (!why) why = st.reason === "not advertised" ? "no reply" : st.reason === "PD active: use QC port" ? "PD active" :
+      if (!why) why = st.reason === "not advertised" || silentSkip(st) ? "no reply" : st.reason === "PD active: use QC port" ? "PD active" :
                       st.reason === "not implemented" ? "n/a" : "skipped";
       c.text = (c.kind ? c.kind + " " : "") + why; c.word = true; c.tone = "dim";   // a range chip keeps its kind word: the row is labelled "PD"
     });

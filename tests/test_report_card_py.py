@@ -244,6 +244,12 @@ def test_group_why_prefers_the_engine_code_and_falls_back_to_the_reason():
     for g in ("VOOC", "SVOOC", "SVOOC65"):             # a silent family: the long form (report_card.cpp group_why)
         assert f(g, 13, "request failed") == "no answer to either wake, unloaded"
     assert f("QC3", 13, "request failed") == "no answer"
+    # a skipped unit whose protocol never answered: "no reply" (report_card.hpp silent_skip); a failed one keeps the engine's word
+    for g, d in (("VIVO", 7), ("UFCS", 7), ("AFC", 5), ("FCP", 5), ("SCP", 5)):
+        assert report_card.FC_FAILS[d] == ("no response" if d == 7 else "unsupported")
+        assert f(g, d, "request failed", skipped=True) == "no reply"
+        assert f(g, d, "request failed") == report_card.FC_FAILS[d]
+    assert f("QC2", 6, "request failed", skipped=True) == "no handshake"   # QC2 stays a fail, never "no reply"
 
 
 def test_epr_detail_names_match_the_firmware_and_the_tools():

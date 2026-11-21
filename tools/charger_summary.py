@@ -152,6 +152,8 @@ def _skip_why(s):
     """Why a skipped row did not run: the engine's words when the bare reason is "request failed" (a sibling skipped after
     its unit's first row failed carries that row's detail), else the reason."""
     if s["reason"] == "request failed" and s.get("detail_reason", "none") != "none":
+        if (PROTO_NAMES.get(_group_key(s)[0]), s["detail_reason"]) in report_card.SILENT_SKIPS:
+            return "no reply"   # the protocol never answered: not offered (the firmware card says the same)
         return s["detail_reason"]
     return s["reason"]
 
@@ -398,7 +400,7 @@ def summarize_card(c):
         elif e.get("reason") == NO_QC3PLUS:
             out.append(f"- {name}: no QC3+")   # not folded into the "skipped" list; same words as the firmware's card text
         else:
-            no_answer = e.get("why", "").startswith("no answer")   # a silent VOOC family: the engine's words, not "request failed"
+            no_answer = e.get("why", "").startswith(("no answer", "no reply"))   # a silent unit: the engine's words, not "request failed"
             skipped.setdefault(e["why"] if no_answer else e.get("reason", ""), []).append(name)
     for why, names in skipped.items():
         out.append(f"- {', '.join(names)}: skipped" + (f", {why}" if why else ""))
