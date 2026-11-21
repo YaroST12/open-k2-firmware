@@ -182,6 +182,10 @@ int main() {
         // The empty places: the dim headline, its line, then the action rows.
         bare.goto_page(uint8_t(Page::Home), tb); tb += 100;
         bare.open_place(bench::Place::Charger, tb); render(bare, tb, "place_charger_empty");
+        // a blocked tool focused: its dimmed words stay readable on the focus fill
+        bare.on_button(Button::Ok, ButtonEvent::Short, tb += 100);     // the place's Actions
+        bare.on_button(Button::Plus, ButtonEvent::Short, tb += 100);   // Request voltage: no PD source
+        render(bare, tb, "place_charger_blocked_focus");
         bare.goto_page(uint8_t(Page::Home), tb); tb += 100;
         bare.open_place(bench::Place::Cable, tb); render(bare, tb, "place_cable_empty");
         bare.goto_page(uint8_t(Page::Home), tb); tb += 100;
@@ -204,6 +208,9 @@ int main() {
     for (int i = 0; i < SettingsPage::kRows; i++) { ui.on_button(Button::Minus, ButtonEvent::Short, t); t += 100; }   // to the top
     for (int i = 0; i < SettingsPage::kDisplayRow; i++) { ui.on_button(Button::Plus, ButtonEvent::Short, t); t += 100; }
     render(ui, t, "settings_display");
+    ui.on_button(Button::Minus, ButtonEvent::Short, t); t += 100;   // the row above Display: Long Back, with its note
+    render(ui, t, "settings_longback");
+    ui.on_button(Button::Plus, ButtonEvent::Short, t); t += 100;
     ui.on_button(Button::Ok, ButtonEvent::Short, t); t += 100;
     render(ui, t, "display");
     ui.on_button(Button::Ok, ButtonEvent::Short, t); t += 100;
@@ -400,6 +407,11 @@ int main() {
     ui.open_place(bench::Place::Log, t); render(ui, t, "place_log_case1");
     g_stub.diag_report = kRamp;
     render(ui, t, "place_log_ramp");
+    pd::diag::Report sink = kCase1;   // an amber finding, link OK, K2 the sink: the chip is neutral, no standing pill
+    for (unsigned i = 0; i < sink.n; i++) sink.f[i].sev = pd::diag::Sev::Warn;
+    sink.empty = false; sink.link = 0; sink.power = pd::diag::kPowerActive;
+    g_stub.diag_report = sink;
+    render(ui, t, "place_log_sink");
     g_stub.diag_report = {};
     g_stub.diag_state = 0;
     static const struct { const pd::diag::Report* r; uint8_t state; const char* name; } kHome[] = {

@@ -1559,9 +1559,11 @@ static void test_a_pass_or_a_skip_reads_as_placeholders() {
     mark(ct::Verdict::Skip);
     open_steps();
     CHECK_EQ(volt_ink(), 0);           // a skipped step shows the placeholder, not 12.0V
+    dump_screen("skip_steps");         // K2_DUMP
     press(ui, Button::Ok); ui.tick(t += 100); calm();
     CHECK_EQ(ui.charger_test_stage(), 8);
     check_text_at(kSmall, ty_measured, "--", kFaint, kBg, 76);
+    dump_screen("skip_detail");
 }
 // The PD spec section of a Deep run (include/k2/chargertest/spec_section.hpp): one row per check after the unit rows, each a one-cell
 // VerdictCell with the worst value; OK opens the check's detail page, BACK returns to the row. The cells are set on the finished
