@@ -995,6 +995,132 @@ static Fail scp_flat_run(int target_mv, std::uint32_t flat_ms, std::uint32_t* en
     *st = e.state();
     return e.fail();
 }
+// SCP session kept for the charger test's next rows (Engine::keep): the end of a detect row or a "no change" row leaves the session
+// alive (no bus reset, ACCP traffic goes on) and the next target rides it without the detection.
+static FakeCharger* scp_keep_charger(FakeCharger& c) {
+    fcp_charger(c);
+    c.scp_charger = true;
+    c.regs[accp::kRegScpType0] = 0x10;
+    return &c;
+}
+// Run until the session ends (a kept one then sits held, with its hold clock just started).
+static void scp_run_to_end(FakeCharger& c, Engine& e) {
+    for (int n = 0; n < 1500 && e.state() == State::Negotiating; ++n) c.run(e, 10);
+}
+// A stop while a session sits held releases the lines at once, with the failure's hold time still unspent.
+static void scp_stop_on_a_held_session_releases_at_once() {
+    FakeCharger c;
+    scp_keep_charger(c);
+    Engine e(c);
+    CHECK(e.start(Proto::Scp, 5000, false, false, 0) == Fail::None);
+    e.keep(true);
+    scp_run_to_end(c, e);
+    CHECK(e.held() && c.resets == 0);
+    e.stop();
+    CHECK(c.resets == 1 && !e.held() && e.state() == State::Idle);
+}
+static void scp_kept_detect_session_takes_the_next_rows() {
+    FakeCharger c;
+    scp_keep_charger(c);
+    Engine e(c);
+    CHECK(e.start(Proto::Scp, 5000, false, false, 0) == Fail::None);
+    e.keep(true);   // after start(): a start clears it
+    scp_run_to_end(c, e);
+    CHECK(e.state() == State::Failed && e.fail() == Fail::Detected && e.held());
+    CHECK(c.resets == 0 && c.writes.empty());
+    const size_t reads0 = c.reads.size();
+    c.run(e, 2000);   // the watchdog (500 ms) would drop an unattended session
+    CHECK(e.held() && c.resets == 0 && c.reads.size() > reads0 + 10);
+    CHECK(c.scp_on == false && c.vbus_mv() == 5000);
+    // a detect-only target on a kept session has nothing to read again
+    CHECK(e.set_target(5000, false, 0, 0) == Fail::Unsupported);
+    // 10 V at 2.25 A: the init writes (no second type/limit read), then the target
+    const size_t type_reads = std::count(c.reads.begin(), c.reads.end(), accp::kRegScpType0);
+    CHECK(e.set_target(9000, true, 0, 2250) == Fail::None);
+    CHECK(e.state() == State::Negotiating && !e.held());
+    c.run(e, 3000);
+    CHECK(e.state() == State::Active && c.vbus_mv() == 9000);
+    CHECK(std::count(c.reads.begin(), c.reads.end(), accp::kRegScpType0) == static_cast<long>(type_reads));
+    CHECK(c.regs[accp::kRegScpIset] == accp::hi8(2250) && c.regs[accp::kRegScpIset + 1] == accp::lo8(2250));
+    CHECK(c.resets == 0);
+    // the next row changes the current: the limit register is rewritten, the init is not
+    const size_t w0 = c.writes.size();
+    CHECK(e.set_target(5000, true, 0, 3000) == Fail::None);
+    c.run(e, 2000);
+    CHECK(e.state() == State::Active && c.vbus_mv() == 5000);
+    CHECK(c.regs[accp::kRegScpIset] == accp::hi8(3000) && c.regs[accp::kRegScpIset + 1] == accp::lo8(3000));
+    for (size_t i = w0; i < c.writes.size(); ++i) CHECK(c.writes[i].first != accp::kRegScpCtrl0);
+    CHECK(c.resets == 0);
+    e.stop();
+    CHECK(c.resets == 1 && !e.held() && e.state() == State::Idle);
+}
+static void scp_kept_no_change_session_takes_a_lower_row() {
+    FakeCharger c;
+    scp_keep_charger(c);
+    Engine e(c);
+    e.start(Proto::Scp, 9000, true, false, 2250);
+    e.keep(true);   // after start(): a start clears it
+    std::uint32_t last_write = 0;
+    size_t writes = 0;
+    for (int n = 0; n < 1500 && e.state() == State::Negotiating; ++n) {
+        c.run(e, 10);
+        if (c.writes.size() != writes) { writes = c.writes.size(); last_write = c.now; }
+        if (last_write != 0) c.apply_at = c.now + 60000;   // the adapter takes the setpoint and ignores it
+    }
+    CHECK(e.state() == State::Failed && e.fail() == Fail::NoChange && e.held());
+    CHECK(c.resets == 0);
+    c.apply_at = c.now;
+    CHECK(e.set_target(5000, true, 0, 3000) == Fail::None);
+    c.run(e, 2000);
+    CHECK(e.state() == State::Active && c.vbus_mv() == 5000 && c.resets == 0);
+}
+// Without keep() the same ends release as before; a kept session never outlives its welcome.
+static void scp_unkept_or_stale_sessions_release() {
+    {
+        FakeCharger c;
+        scp_keep_charger(c);
+        Engine e(c);
+        e.start(Proto::Scp, 5000, false, false, 0);
+        scp_run_to_end(c, e);
+        CHECK(e.state() == State::Failed && !e.held() && c.resets == 1);
+        CHECK(e.set_target(9000, true, 0, 2250) == Fail::Unsupported);
+    }
+    {   // nobody asks: released after kScpHoldMs, the failure stays the row's
+        FakeCharger c;
+        scp_keep_charger(c);
+        Engine e(c);
+        e.start(Proto::Scp, 5000, false, false, 0);
+        e.keep(true);   // after start(): a start clears it
+        scp_run_to_end(c, e);
+        CHECK(e.held() && c.resets == 0);
+        c.run(e, kScpHoldMs + 300);
+        CHECK(!e.held() && c.resets == 1 && e.state() == State::Failed && e.fail() == Fail::Detected);
+    }
+    {   // the adapter stops answering while held
+        FakeCharger c;
+        scp_keep_charger(c);
+        Engine e(c);
+        e.start(Proto::Scp, 5000, false, false, 0);
+        e.keep(true);   // after start(): a start clears it
+        scp_run_to_end(c, e);
+        c.afc_ok = false;
+        c.run(e, 1000);
+        CHECK(!e.held() && c.resets == 1);
+    }
+    {   // a new start ends a held session first, and a start without keep() does not inherit the flag
+        FakeCharger c;
+        scp_keep_charger(c);
+        Engine e(c);
+        e.start(Proto::Scp, 5000, false, false, 0);
+        e.keep(true);   // after start(): a start clears it
+        scp_run_to_end(c, e);
+        CHECK(e.held());
+        CHECK(e.start(Proto::Scp, 5000, false, false, 0) == Fail::None);
+        CHECK(c.resets == 1 && !e.held());
+        scp_run_to_end(c, e);
+        CHECK(e.state() == State::Failed && e.fail() == Fail::Detected && !e.held() && c.resets == 2);
+    }
+}
 static void scp_acked_write_with_flat_vbus_ends_early() {
     for (const int target : {9000, 12000, 4500}) {
         std::uint32_t after = 0;
@@ -1679,6 +1805,7 @@ int main() {
     scp_cuktech_port_writes_2500_ma_for_the_5a_and_4500ma_rows();
     scp_without_caps_keeps_the_old_cap_and_current();
     scp_session_rereads_caps_and_refuses_above_them();
+    scp_kept_detect_session_takes_the_next_rows(); scp_stop_on_a_held_session_releases_at_once(); scp_kept_no_change_session_takes_a_lower_row(); scp_unkept_or_stale_sessions_release();
     scp_not_supported(); scp_down_target_with_unchanged_vbus_is_not_overvoltage();
     scp_acked_write_with_flat_vbus_ends_early(); scp_slow_start_and_small_steps_are_not_cut();
     unacked_rise_is_unsupported_afc();

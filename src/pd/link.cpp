@@ -31,6 +31,7 @@ Probe probe_now() {
     const auto& c = fusb302::caps();
     p.pd_active = (c.valid && c.active_cc != 0) || fusb302::contract().valid;
     p.cc_active = c.active_cc != 0;
+    p.sink_request_seen = fusb302::contract().valid;
     p.sticky_inline = g_sticky_inline;
     p.inline_cause = g_inline_cause;
     p.self_supply_ma = usb::configured() ? 0 : pd::kSelfSupplyAllowanceMa;   // no USB host: the K2 may run on this VBUS
@@ -47,5 +48,6 @@ bool pd_likely_now() { return pd_likely(probe_now()); }
 Reason inline_now() { return inline_reason(probe_now()); }
 
 bool far_sink_now() { return far_sink_draws(probe_now()); }
+bool silent_caps_only_now() { return silent_caps_only(probe_now()); }
 
 }  // namespace k2::link

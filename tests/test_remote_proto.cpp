@@ -355,6 +355,41 @@ static void test_lab() {
 
 // Lab listen attach: [2, sub] stop 0 / status 2, [2, 1, secs, port] start (detach first), [2, 1, secs, port, flags] with flags bit 0 =
 // no detach. Reply state (0 idle, 1 listening, 2 dropping Rd), end, secs, left_s, frames (LE), port.
+// Lab op 3: the Legacy timing knobs of the charger test, read and set over the wire; the defaults are the constants.
+static void test_lab_tune() {
+    namespace ct = k2::charger_test;
+    Fake f; Frame r;
+    ct::legacy_tune_reset();
+    { const auto q = request(0x51, 1, {3, 0}); CHECK_EQ(run(f, q, r), 1); }                       // read quiet_ms: the default is 0
+    check_header(r, 0x51, 1, Status::Ok, 5);
+    check_bytes(r, kRspHeader, {0, 0, 0, 0, 0});
+    { const auto q = request(0x51, 2, {3, 0, 0xC4, 0x09, 0, 0}); CHECK_EQ(run(f, q, r), 1); }     // quiet_ms = 2500 = 0x09C4
+    check_header(r, 0x51, 2, Status::Ok, 5);
+    check_bytes(r, kRspHeader, {0, 0xC4, 0x09, 0, 0});
+    CHECK_EQ(ct::legacy_tune(ct::LegacyKnob::QuietMs), 2500u);
+    { const auto q = request(0x51, 3, {3, 3, 0x2C, 0x01, 0, 0}); CHECK_EQ(run(f, q, r), 1); }     // gap_ms = 300
+    check_header(r, 0x51, 3, Status::Ok, 5);
+    CHECK_EQ(ct::legacy_tune(ct::LegacyKnob::GapMs), 300u);
+    { const auto q = request(0x51, 4, {3, 6}); CHECK_EQ(run(f, q, r), 1); }                       // unknown knob
+    check_header(r, 0x51, 4, Status::BadArg, 0);
+    { const auto q = request(0x51, 9, {3, 5}); CHECK_EQ(run(f, q, r), 1); }                       // chain level: on by default
+    check_header(r, 0x51, 9, Status::Ok, 5);
+    check_bytes(r, kRspHeader, {5, 1, 0, 0, 0});   // the reply starts with the knob id
+    { const auto q = request(0x51, 10, {3, 5, 2, 0, 0, 0}); CHECK_EQ(run(f, q, r), 1); }          // a level above the known ones
+    check_header(r, 0x51, 10, Status::BadArg, 0);
+    { const auto q = request(0x51, 5, {3, 1, 0x60, 0xEA, 0, 0}); CHECK_EQ(run(f, q, r), 1); }     // 60000 ms is the cap
+    check_header(r, 0x51, 5, Status::Ok, 5);
+    { const auto q = request(0x51, 6, {3, 1, 0x61, 0xEA, 0, 0}); CHECK_EQ(run(f, q, r), 1); }     // 60001 is over it
+    check_header(r, 0x51, 6, Status::BadArg, 0);
+    CHECK_EQ(ct::legacy_tune(ct::LegacyKnob::SteadyMs), 60000u);                                   // the refused set changed nothing
+    { const auto q = request(0x51, 7, {3, 4, 100, 0, 0, 0}); CHECK_EQ(run(f, q, r), 1); }         // a Hold under the capture floor
+    check_header(r, 0x51, 7, Status::BadArg, 0);
+    { const auto q = request(0x51, 8, {3, 0, 1}); CHECK_EQ(run(f, q, r), 1); }                    // a value is 4 bytes
+    check_header(r, 0x51, 8, Status::BadLength, 0);
+    ct::legacy_tune_reset();
+    CHECK_EQ(ct::legacy_tune(ct::LegacyKnob::QuietMs), 0u);   // the default: start inside the source's announcement
+}
+
 static void test_lab_listen() {
     Fake f; Frame r;
     { const auto q = request(0x51, 1, {2, 1, 10, 2}); CHECK_EQ(run(f, q, r), 1); }
@@ -3903,6 +3938,7 @@ int main() {
     test_fc_vooc_monitor();   // vooc-monitor
     test_fc_svooc_trigger();  // svooc-trigger
     test_lab_listen();
+    test_lab_tune();
     test_lines_locked_by_the_svooc_trigger();
     test_ripple_frame();
     test_pdos();

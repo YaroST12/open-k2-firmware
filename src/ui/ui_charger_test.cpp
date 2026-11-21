@@ -22,6 +22,7 @@
 #include "k2/chargertest/charger_journal_hw.hpp"
 #include "k2/pd/emk_spoof.hpp"
 #include "k2/pd/pd_ccmode.hpp"
+#include "k2/pd/link.hpp"
 #include "k2/pd/pd_link.hpp"
 #include "k2/drivers/power_monitor.hpp"
 #include "k2/pd/power_source.hpp"
@@ -252,7 +253,7 @@ charger_test::Input ChargerTestSession::input(uint32_t now) const {
     const auto fs = fctrig::status();
     in.fc_state = fs.state; in.fc_fail = fs.fail; in.fc_tries = static_cast<uint8_t>(fs.tries);
     in.fc_ident = static_cast<uint8_t>(fs.ident);
-    in.fc_adapter_mv = fs.adapter_mv;
+    in.fc_adapter_mv = fs.adapter_mv; in.fc_held = fs.held;
     in.pd_quiet_ms = fusb302::pd_quiet_ms();
     in.probe_done = fusb302::probe_status().state != pd::ProbeState::Running;
 #if K2_PDSPEC
@@ -293,8 +294,12 @@ fc::Fail ChargerTestSession::request_fc(fc::Proto p, int mv, bool retarget, int 
         fc_words_ = handshake_words(p);
         if (fc_words_ && view_) view_->announce(fc_words_);   // before the engine starts: nothing can be painted once it has
     }
-    return retarget ? fctrig::set_target(mv, true, ufcs_ma) : fctrig::start(p, mv, true, false, ma, ufcs_ma);
+    if (retarget) return fctrig::set_target(mv, true, ufcs_ma, p == fc::Proto::Scp ? ma : -1);
+    // A PD-silent attach whose source is still announcing (quiet_ms below the caps' stale time) is not a contract; a load or a foreign sink still refuses.
+    const bool silent_caps = ct::legacy_guard_override() && link::silent_caps_only_now();
+    return fctrig::start(p, mv, true, silent_caps, ma, ufcs_ma);
 }
+void ChargerTestSession::fc_keep(bool on) { fctrig::keep(on); }
 void ChargerTestSession::legacy_only(bool on) { fusb302::legacy_only(on); }
 void ChargerTestSession::pd_rescan() { fusb302::rescan(); }
 // One unit's ends (docs/CHARGER_TEST_FLOW.md): detach = Rd off, the 5 V default, VBUS dark; attach = Rd on as a fresh attach, the
@@ -1445,7 +1450,9 @@ void ChargerTestSession::begin_run() {
     ctx_.ui->pd_spec().yield_record();
 #endif
     seen_cable_ = false;   // a new run reads its own cable
-    const auto in = input(ctx_.now);
+    auto in = input(ctx_.now);
+    // VBUS up with no Rp anywhere on the line: a USB-A style port, whose output a detach never turns off.
+    in.no_cc = in.vbus_mv >= pd::kVSafe0Mv && !in.self_powered && !fusb302::rp_on_line();
     journal_active_ = false; capture_kept_ = false; reattach_plan_ = false; reattach_ask_ = false; reattach_ = 0;
     capture_identity();
     const auto r = runner_.start(fusb302::caps(), options_, in, true);

@@ -479,6 +479,12 @@ size_t encode_sniff(std::span<uint8_t> out, const SniffInfo &r) {
     return w.size();
 }
 
+size_t encode_lab_tune(std::span<uint8_t> out, uint8_t knob, uint32_t value) {
+    Writer w(out);
+    w.u8(knob); w.u32(value);
+    return w.size();
+}
+
 size_t encode_listen(std::span<uint8_t> out, const ListenInfo &r) {
     Writer w(out);
     w.u8(r.state); w.u8(r.end); w.u8(r.secs); w.u8(r.left_s); w.u16(r.frames); w.u8(r.port);

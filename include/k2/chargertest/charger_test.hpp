@@ -172,11 +172,15 @@ struct UnitList {
     uint8_t n = 0;
     bool add(Unit x) { if (n >= u.size() || x >= Unit::Count) return false; u[n++] = x; return true; }
 };
-// Legacy attach: PD quiet for kLegacyQuietMs (longer than the ~1 s a source stays silent around its own hard reset) plus
+// Legacy attach: the quiet_ms knob defaults to 0 (start inside the source's announcement); set to kLegacyQuietMs (longer than the
+// ~1 s a source stays silent around its own hard reset) it waits for that much PD quiet, plus
 // kLegacySteadyMs of vSafe5V means the source gave up PD. kLegacyGiveUpMs without that, the unit detaches and tries once more
 // with kLegacyRetryMs (a source that gets no Request retries Source_Capabilities and hard-resets, 5.07 s cycle on the Baseus
 // CJ21, before it disables PD); still no fallback = Reason::BlockedByPd and the unit's rows are skipped.
 inline constexpr uint32_t kLegacyQuietMs = 2500, kLegacySteadyMs = 500, kLegacyGiveUpMs = 20000, kLegacyRetryMs = 60000;
+// pattern rp-without-vbus: the source's Rp is on the line but VBUS stays dark this long into an attach: the Rd is cycled at once
+// (the same one retry as the give-up, taken 2 s in instead of 20 s).
+inline constexpr uint32_t kLegacyNoVbusMs = 2000;
 // pattern output-reset-after-unanswered-scp: a source that cuts its own output between two rows of a PD-silent Legacy unit and
 // announces Source_Capabilities again when VBUS is back (UGREEN X865, runs/ugreen-qa/r1a-stream: first frame ~300 ms after the
 // return; its PD-silent attach announced for ~6.1 s). The next row waits after the return: kRestartCapsMs with no frame means the
@@ -189,6 +193,26 @@ inline constexpr uint32_t kRestartCapsMs = 1000, kRestartSettleMs = 10000;
 // them at 0 V, then Hi-Z). Waits before a unit's first handshake: kLegacyFirstWaitMs after the PD-silent attach (1000 ms),
 // kLegacyGapMs after the previous unit's release (the 500 ms D+/D- discharge), plus kAfcPreMs more before AFC.
 inline constexpr uint32_t kLegacyFirstWaitMs = 1000, kLegacyGapMs = 500, kAfcPreMs = 500;
+// The four waits above plus the row Hold are switchable at run time (Cmd::Lab kLabTune, `k2_remote charger-legacy-tune`): RAM only, the
+// constants again at boot. quiet_ms 0 starts the first handshake as soon as VBUS is steady at 5 V, caps still arriving or not.
+// Chain is a level, not a time: 0 = every legacy row opens its own session as before, 1 = the SCP rows of a unit retarget one session
+// (no D+/D- release between them).
+enum class LegacyKnob : uint8_t { QuietMs, SteadyMs, FirstWaitMs, GapMs, HoldMs, Chain, Count };
+uint32_t legacy_tune(LegacyKnob k);
+bool legacy_tune_set(uint8_t knob, uint32_t value);   // false: unknown knob or out of range
+void legacy_tune_reset();
+// The PD driver drops Source_Capabilities nobody answered this long after the last frame; until then the link guard reads a PD-silent
+// source's own announcements as a PD contract and refuses the fast-charge start. quiet_ms under it (link::kCapsStaleMs) means the run
+// starts inside that window, so the guard's "PD contract" (and only that one, never a load) must not stop the Runner's own Legacy request.
+bool legacy_guard_override();
+// pattern reannounce-after-own-release (Anker IQ4, runs/qc2b-2026-11-21): a source that reads the engine's D+/D- release as a re-plug
+// announces its list to the PD-silent sink again (first frame 0.1 to 0.5 s after the release, VBUS at 5 V all along). The first release of
+// a silent Legacy attach is watched for kOwnReleaseCapsMs (the 500 ms line discharge + kRestartCapsMs); a frame in it is the source's
+// answer to our own release, not PD traffic: the unit waits in place for kLegacyQuietMs of quiet (at most kRestartSettleMs) instead of
+// detaching. Frames before the release are real PD traffic and arm nothing. A source quiet in that window is not watched again.
+// The wait is bounded by kOwnReleaseSettleMs: the IQ4's attach announced for 7.4 s, so one as long as that ends ~10.4 s after the release
+// (7.4 + 2.5 s quiet + the first frame), past kRestartSettleMs; the wait that ends in a detach anyway is lost time.
+inline constexpr uint32_t kOwnReleaseCapsMs = kLegacyGapMs + kRestartCapsMs, kOwnReleaseSettleMs = 12000;
 // Detach: Rd off, wait until VBUS has been below vSafe0V for kDetachDarkHoldMs (at most kDetachDarkMs; a source that never lets
 // go, a USB-A port, gets kDetachQuickMs from the second unit on).
 inline constexpr uint32_t kDetachDarkMs = 10000, kDetachDarkHoldMs = 300, kDetachQuickMs = 1500;
@@ -355,6 +379,8 @@ struct Input {
     int vbus_mv = -1, ibus_ma = 0;   // ibus_ma: magnitude; above kLoadAbortMa during a raised row means a load
     uint32_t pd_quiet_ms = UINT32_MAX;   // ms since the last PD frame was received (since the handover began)
     bool inline_load = false, fake = false, busy = false, cable_observed = false, pd_traffic = false, spoof_on = false;
+    // At START: VBUS is up and no Rp is on the line, a port with no CC (USB-A). It never goes dark on a detach, so START does not wait for it.
+    bool no_cc = false;
     bool loop_lock = false;   // k2::loopguard::locked(): the HID-cable loop 5 V lock (Reason::Loop)
     // The K2 runs on the source's own VBUS through a pinned Rd (fusb302::self_powered()). start() and resume() latch it for the
     // run: a unit boundary must not drop VBUS (the K2 would die), and a VBUS loss suspends the run instead of ending it.
@@ -368,6 +394,7 @@ struct Input {
     fc::Fail fc_fail = fc::Fail::None;
     uint8_t fc_tries = 0;   // fctrig::Status::tries
     uint8_t fc_ident = 0;   // fctrig::Status::ident: the VOOC family's ident command of a Detected session (0 = none)
+    bool fc_held = false;   // fctrig::Status::held: an SCP session whose row ended is kept alive for the next one
     int fc_adapter_mv = 0;  // fctrig::Status::adapter_mv: the SCP adapter's own voltage readback of this session (0 = not read / not SCP)
     bool probe_done = false;   // the source probe the runner asked for has finished (answered, refused or timed out)
     bool epr_proof = false;    // set by the Runner, not the caller: the source accepted EPR entry earlier in this run (cable proven)
@@ -557,6 +584,8 @@ struct Env {
     virtual pd::Err request_pd(pd::Choice) = 0;
     // `ma`: the row's current (SCP: the limit to write; 0 = detect only). Other protocols ignore it.
     virtual fc::Fail request_fc(fc::Proto, int mv, bool retarget, int ma) = 0;
+    // After a request_fc that started or retargeted an SCP row: whether the session outlives a detect / "no change" end (a row follows).
+    virtual void fc_keep(bool) {}
     virtual void release(bool pd) = 0;
     // One unit's attach (docs/CHARGER_TEST_FLOW.md). detach(): Rd off, the 5 V default, the source sees a detach and drops its
     // output. attach(mode): Rd on again as a fresh attach, the sink PD-active (Pd: caps, an immediate PDO 1 request) or PD-silent
@@ -788,6 +817,7 @@ public:
     // highlights it, so the list is already on that row when the next quiet stretch begins.
     size_t upcoming() const { return pick(); }
     Unit unit() const { return unit_; }   // the unit being run (Unit::Count before the first one starts)
+    uint32_t unit_time_ms(Unit u) const { return u < Unit::Count ? unit_time_[size_t(u)] : 0; }   // busy ms spent in the unit this run
     // The run's units in execution order (the rows of steps() follow the same order).
     std::span<const Unit> unit_order() const { return {order_.data(), n_order_}; }
     Mode attach_mode() const { return mode_; }
@@ -859,6 +889,8 @@ private:
     void reissue_release();
     void next(const Input&);
     size_t pick() const;
+    size_t scp_next(const Input&, bool passed) const;
+    void skip_group_rows(Group g, bool raises_only, uint8_t detail);   // every Pending row of g (only those above 5 V) ends Skip / Request
     void skip_pending(Reason);
     void suspend();
     bool unfinished() const;   // a row is still Pending or Running
@@ -884,6 +916,7 @@ private:
     // noinline: LTO folded poll_impl into the single Runner::poll call site (ChargerTestSession::runner_tick), next to the
     // caller's Input copies: 1048 B of frame against FRAME_MAX 1024.
     [[gnu::noinline]] void poll_impl(Input&, const pd::SourceCaps&);
+    void count_unit_time(uint32_t now);
     uint32_t hold_ms() const;
     // The SVOOC ceiling stage: queued by finish() when the VOOC family was detected and the options asked for it, begun by next()
     // once the family session is released (D+/D- free, 5 V), ended by poll_ceiling(). One stage per run.
@@ -995,6 +1028,9 @@ private:
     bool recover_ K2_BSS_INIT(false), hot_ K2_BSS_INIT(false), stable_ K2_BSS_INIT(false), stopping_ K2_BSS_INIT(false), pd_owned_ K2_BSS_INIT(false), fc_owned_ K2_BSS_INIT(false);
     bool restart_dark_ K2_BSS_INIT(false), restart_wait_ K2_BSS_INIT(false);   // a silent Legacy release: the source's output went dark / came back
     uint32_t restart_ms_ K2_BSS_INIT(0);                             // when it came back (restart_wait_)
+    // own_rel_ = the last fc release of a silent Legacy attach is watched (kOwnReleaseCapsMs), own_rel_ms_ = its time; reann_ = what this
+    // attach's source did after a release: 0 not seen yet, 1 quiet (not watched again), 2 announces (every release is waited out).
+    bool own_rel_ K2_BSS_INIT(false); uint8_t reann_ K2_BSS_INIT(0); uint32_t own_rel_ms_ K2_BSS_INIT(0);
     // pattern usb-a-no-load-auto-off (kCutMv): the cut clocks of the legacy attach. cut_start_ms_ = the first sample under kCutMv of the
     // last completed fall, cut_back_ms_ = the first vSafe5V sample after it, both 0 = none since the row's request, row_hi_ = the highest VBUS since the row's request.
     // cut_onsets_ = the onsets of the cuts that came back inside kCutWindowMs (the period is read from them), cut_retry_idx_ = the row
@@ -1031,6 +1067,7 @@ private:
     bool silent_ K2_BSS_INIT(false);         // a Legacy attach was verified PD-quiet (a resumed run has no such proof)
     bool legacy_active_ K2_BSS_INIT(false);  // the last attach was Legacy: legacy_only(false) + pd_rescan() restore the sink at the end
     bool never_dark_ K2_BSS_INIT(false);     // a detach that left VBUS up (a USB-A port has no CC): later detaches do not wait long
+    bool rel_rd_ K2_BSS_INIT(false);         // the Rd off that answers a D+/D- release which left VBUS up: its end checks VBUS before going on
     bool dipped_ K2_BSS_INIT(false);         // VBUS fell during this detach
     bool late_pd_ K2_BSS_INIT(false);        // no source caps at START: the PD rows are planned from the first list heard
     uint32_t plan_sig_ K2_BSS_INIT(0);       // caps_sig() of the list the PD rows were last planned from
@@ -1050,6 +1087,9 @@ private:
     bool pd_skips_held_ K2_BSS_INIT(false);   // record_pd_skips kept provisional EPR "not offered" rows back (the entry has not decided them yet)
     uint8_t attach_try_ K2_BSS_INIT(0);
     uint32_t unit_ms_ K2_BSS_INIT(0), att_ms_ K2_BSS_INIT(0);   // the unit's detach began; this attach phase began
+    std::array<uint32_t, size_t(Unit::Count)> unit_time_ K2_BSS_ZERO;   // busy ms per unit this run (the end-of-run [CT] split)
+    uint32_t time_ms_ K2_BSS_INIT(0);                                    // the poll the split last counted to (0 = idle)
+    bool time_pending_ K2_BSS_INIT(false);                               // a run started and its split is not logged yet
     uint32_t pre_ms_ K2_BSS_INIT(0);                 // extra quiet before the unit's first handshake, on top of the 500 ms baseline settle
     enum class Att : uint8_t { Caps, Contract } att_ = Att::Caps;
     bool rp_restart_ K2_BSS_INIT(false);   // the attach wait was restarted once after a source-side Rp drop (pattern slow-rp-wake)

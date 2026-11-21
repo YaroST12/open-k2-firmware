@@ -3,6 +3,7 @@
 #include "test_util.h"
 #include "k2/chargertest/charger_test.hpp"
 #include "k2/chargertest/charger_journal.hpp"
+#include "k2/chargertest/prog_check.hpp"
 #include "k2/chargertest/step_label.hpp"
 #include "k2/chargertest/result_layout.hpp"
 #include "k2/core/rd_intent.hpp"
@@ -26,6 +27,10 @@ struct Fake final : ct::Env {
     pd::SourceCaps caps;
     int pd_requests = 0, fc_requests = 0, retargets = 0, releases = 0, fc_releases = 0;
     std::vector<bool> retarget_log;   // the retarget flag of each request_fc call, in order
+    // The kept SCP session: fc_keep() is the Runner's wish; with model_held a NoChange end under it leaves the lines held (Input::fc_held)
+    // instead of Failed-and-free, as the engine does.
+    bool keep_on = false, model_held = false; int keeps_on = 0;
+    void fc_keep(bool k) override { keep_on = k; keeps_on += k; }
     // A bank that browns out: the n-th fc request drops VBUS to 4.45 V with a new attach session until low_until.
     int drop_at = 0, glitch_at = 0, pd_drop_at = 0, pd_drop_times = 1; uint32_t low_until = 0; bool gone = false;
     // pattern usb-a-cuts-on-low-dpdm: an A-to-C cable's Rp is fed from VBUS, so CC comes back (a new attach session) only some ms
@@ -299,6 +304,7 @@ struct Fake final : ct::Env {
     }
     fc::Fail request_fc(fc::Proto p, int mv, bool retarget, int ma) override {
         if (!alive()) return fc::Fail::NoHandshake;
+        in.fc_held = false;   // a request takes the held lines (a retarget continues them, a new session replaces them)
         ++fc_requests; retargets += retarget; retarget_log.push_back(retarget); protocols.push_back(p); fc_mas.push_back(ma); fc_mvs.push_back(mv);
         if (std::find(cut_on_requests.begin(), cut_on_requests.end(), fc_requests) != cut_on_requests.end()) cut_start_at = in.now + cut_delay_ms;
         if (cut_on) { in.fc_state = fc::State::Failed; in.fc_fail = fc::Fail::NoHandshake; return fc::Fail::None; }   // the output is dark: nobody answers
@@ -306,7 +312,7 @@ struct Fake final : ct::Env {
         if (ra_dead_legacy && ra_on) { ++ra_dead_fc; return fc::Fail::NoHandshake; }
         if (serve_caps && fc_requests >= serve_caps_from && (p == fc::Proto::Scp || p == fc::Proto::Ufcs)) in.fc_caps = serve_caps;
         if (glitch_at == fc_requests) ++in.session;   // CC blip: new session, VBUS unchanged
-        if (link_guard && handed && in.pd_quiet_ms < 2000) { ++guard_refusals; return fc::Fail::Inline; }
+        if (link_guard && handed && in.pd_quiet_ms < k2::link::kCapsStaleMs && !ct::legacy_guard_override()) { ++guard_refusals; return fc::Fail::Inline; }
         fc_times.push_back(in.now);
         if (no_response_proto == p && mv > 5000) {    // the engine gave up: the output never left 5 V
             in.fc_state = fc::State::Failed; in.fc_fail = fc::Fail::NoResponse; in.vbus_mv = 5000;
@@ -339,11 +345,12 @@ struct Fake final : ct::Env {
     }
     void release(bool pd) override {
         if (!alive()) return;
-        ++releases; fc_releases += !pd;
+        ++releases; fc_releases += !pd; if (!pd) in.fc_held = false;
         collapse_t0 = 0; in.ibus_ma = 0; out_on = false; ka_at = ka_end = 0; silent_end_at = 0; no_change_end_at = 0;
         if (!pd && restart_after_flat && flat_session) restart_at = in.now + restart_delay_ms;
         if (!pd) { flat_session = false; fc_released = true; fc_released_at = in.now; }
         if (!pd && restart_on_release && fc_releases == restart_on_release) restart_at = in.now + restart_delay_ms;
+        if (!pd && reannounce_ms && handed) { chatter_from = in.now + reannounce_after_ms; chatter_until = chatter_from + reannounce_ms; ++reannounces; }
         if (!release_ok || latched) return;
         in.vbus_mv = 5000;
         if (pd && in.pd.epr_mode && spr_caps.valid) caps = spr_caps;
@@ -508,6 +515,10 @@ struct Fake final : ct::Env {
     // PD-silent sink for restart_chatter_ms (r1a: ~300 ms after VBUS; the same charger's PD-silent attach announced for ~6.1 s).
     int restart_on_release = 0; uint32_t restart_delay_ms = 30, restart_dark_ms = 1000, restart_caps_ms = 100, restart_chatter_ms = 0;
     uint32_t restart_at = 0, restart_back_at = 0;
+    // pattern reannounce-after-own-release (Anker IQ4, runs/qc2b-2026-11-21): the source reads every D+/D- release (the fc engine's reset to
+    // 5 V) as a re-plug and announces its list to the PD-silent sink reannounce_after_ms later, for reannounce_ms, VBUS never below 5 V.
+    // attach_flood_ms: the same announcement after every PD-silent attach (the IQ4's first attach: ~7.4 s of caps).
+    uint32_t reannounce_after_ms = 0, reannounce_ms = 0, attach_flood_ms = 0; int reannounces = 0;
     // The fc engine's link guard (link::inline_now): a legacy trigger is refused "PD or load active" while the driver still holds
     // decoded caps, i.e. a PD frame arrived less than 2000 ms ago (the legacy-only driver drops stale caps after 2 s of quiet).
     bool link_guard = false; int guard_refusals = 0;
@@ -541,6 +552,7 @@ struct Fake final : ct::Env {
         if (!alive()) return;
         if (caps.valid) saved = caps;
         ++detaches; detach_vbus = in.vbus_mv; seq.push_back('D'); rd_on = false; rd_off_at = in.now; fc_at_off = fc_requests; pd_at_off = pd_requests;
+        if (reannounce_ms) chatter_from = chatter_until = 0;   // a detach ends the announcement; the next attach starts its own
         handed = false; caps.valid = false; in.pd.state = pd::SinkState::Idle; in.pd.held = false; in.pd.epr_mode = false;
         in.pd.epr_info = pd::EprInfo::None; info_shown = {};
         in.pd.mv = 5000; in.fc_state = fc::State::Idle; low_now = false;
@@ -583,6 +595,7 @@ struct Fake final : ct::Env {
     bool rescan_low = false, low_now = false;   // a source that sags below vSafe5V after the attach and never settles
     void pd_rescan() override { ++rescans; }
     Fake() {
+        ct::legacy_tune_reset();
         in.vbus_mv = 5000; in.cap_mv = 36000; in.session = 1; in.xm = &xm;
         in.cable_mv = 50000; in.cable_ma = 5000; in.cable_observed = true;
         caps.valid = true; caps.spec_rev = 2; caps.active_cc = 1; caps.num_pdos = 7; caps.raw_header = 0x7181;
@@ -633,7 +646,10 @@ struct Fake final : ct::Env {
                                 if (wrong_decay_rel) wrong_decay_at = in.now + wrong_decay_rel;
                             }
                         }
-                    } else { ++handovers; handed = true; handed_at = in.now; in.pd_quiet_ms = saved.valid && !silent_after_rd ? 0 : 1000000; }
+                    } else {
+                        ++handovers; handed = true; handed_at = in.now; in.pd_quiet_ms = saved.valid && !silent_after_rd ? 0 : 1000000;
+                        if (attach_flood_ms) { chatter_from = in.now; chatter_until = in.now + attach_flood_ms; }
+                    }
                 } else if (!keep_vbus) in.vbus_mv = 0;
             }
             if (handed && give_up_ms) {
@@ -643,7 +659,7 @@ struct Fake final : ct::Env {
                 else if (ph < 4200) { in.vbus_mv = 3500; in.pd_quiet_ms = ph - 4000; }
                 else { in.vbus_mv = 5100; in.pd_quiet_ms = ph - 4000; }
             } else if (handed) {
-                if (stays_pd || (in.now >= chatter_from && in.now < chatter_until)) in.pd_quiet_ms = 0;
+                if (stays_pd || (in.now >= chatter_from && in.now < chatter_until && !(restart_at && in.now >= restart_at))) in.pd_quiet_ms = 0;   // none while the output is cut
                 else in.pd_quiet_ms = std::min<uint32_t>(in.pd_quiet_ms + 100, 1000000);
             }
             if (grow_at && in.now >= grow_at) { grow_at = 0; caps = grown; caps.valid = true; caps.active_cc = 1; }
@@ -684,7 +700,10 @@ struct Fake final : ct::Env {
             }
             if (no_change_end_at && in.now >= no_change_end_at) {
                 no_change_end_at = 0;
-                if (in.fc_state == fc::State::Negotiating) { in.fc_state = fc::State::Failed; in.fc_fail = fc::Fail::NoChange; in.vbus_mv = 5000; }
+                if (in.fc_state == fc::State::Negotiating) {
+                    in.fc_state = fc::State::Failed; in.fc_fail = fc::Fail::NoChange; in.vbus_mv = 5000;
+                    in.fc_held = model_held && keep_on;
+                }
             }
             if (silent_end_at && in.now >= silent_end_at) {
                 silent_end_at = 0;
@@ -805,7 +824,7 @@ static void test_plan_and_run() {
     read_only(r, f);
     // Every 5 V row of a legacy unit asks the engine (the attach's own 5 V proves nothing): QC3 / QC3+ ramps retarget four times each.
     // 17 = 19 - the 2 hunt rows: this source advertises its APDOs at 3.2 A, so no 6 A Request goes out (decision 2026-11-07).
-    CHECK_EQ(f.pd_requests, 17); CHECK_EQ(f.fc_requests, 41); CHECK_EQ(f.retargets, 24);   // + the six Class B rows (QC2B 20 V, the QC3B ramp); retargets: QC2 9/12/20 V, QC3 x4, QC3B x5 (all five go on in the QC3 session), QC3+ x4, UFCS 9/11/5/12/20 V, AFC 12 V, FCP 9/12 V
+    CHECK_EQ(f.pd_requests, 17); CHECK_EQ(f.fc_requests, 41); CHECK_EQ(f.retargets, 27);   // + the six Class B rows (QC2B 20 V, the QC3B ramp); retargets: QC2 9/12/20 V, QC3 x4, QC3B x5 (all five go on in the QC3 session), QC3+ x4, UFCS 9/11/5/12/20 V, AFC 12 V, FCP 9/12 V, SCP 10/4.5/5 V (the rows share one session)
     // Seven vendor units share ONE PD-silent attach (a session boundary only where the session mode changes), then the Pd unit
     // (detach, Pd attach), then the standard protocols (QC2, QC3, QC3+, UFCS) in a second PD-silent attach; the run ends detached
     // and re-attaches in Pd.
@@ -2933,7 +2952,7 @@ static void test_full_legacy_ranges_and_guards() {
     CHECK_EQ(qc20 || qc320, false);   // QC2/QC3 never plan a 20 V row
     f.tick(r, 500000);
     CHECK_EQ(r.state(), ct::State::Done); CHECK_EQ(f.pd_requests, 0); CHECK_EQ(f.rescans, 0);
-    CHECK_EQ(f.fc_requests, 41); CHECK_EQ(f.retargets, 24);   // the QC 5 V rows are requested too; 40 = 34 + the six Class B rows; retargets as in the full plan: QC2 3, QC3 4 + QC3B 5, QC3+ 4, UFCS 5, AFC 1, FCP 2
+    CHECK_EQ(f.fc_requests, 41); CHECK_EQ(f.retargets, 27);   // the QC 5 V rows are requested too; 40 = 34 + the six Class B rows; retargets as in the full plan: QC2 3, QC3 4 + QC3B 5, QC3+ 4, UFCS 5, AFC 1, FCP 2, SCP 3
     for (const auto p : f.protocols) CHECK_EQ(p < fc::Proto::Count, true);
 
     for (unsigned mode = 0; mode < 3; ++mode) {
@@ -6053,8 +6072,11 @@ static void test_consecutive_legacy_units_share_one_attach() {
 }
 // The shared session is only kept while the line stays PD-quiet at 5 V: PD traffic between two Legacy units ends it with a
 // detach and a fresh attach, so the next unit still runs.
+// The tests of the PD-quiet wait run it at its conservative value; the default (0) starts inside the source's announcement.
+static void wait_quiet() { CHECK_EQ(ct::legacy_tune_set(uint8_t(ct::LegacyKnob::QuietMs), ct::kLegacyQuietMs), true); }
 static void test_legacy_session_that_sees_pd_traffic_is_renewed() {
     Fake f; ct::Runner r(f);
+    wait_quiet();
     const auto o = with_units(ct::bit(A::Qc2) | ct::bit(A::Qc3), {ct::Unit::Qc2, ct::Unit::Qc3});
     CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
     CHECK_EQ(run_until(f, r, [&] { return r.unit() == ct::Unit::Qc2 && f.fc_requests > 0; }, 60000), true);
@@ -6113,10 +6135,100 @@ static void test_legacy_waits_between_units() {
     CHECK_EQ(f.in.now - t_qc3 >= ct::kLegacyGapMs, true);
     CHECK_EQ(f.in.now - t_qc3 < ct::kLegacyGapMs + ct::kAfcPreMs, true);
 }
+// The Legacy timing knobs: first_wait_ms and gap_ms shorten the waits, quiet_ms 0 starts the handshake while the source still floods caps,
+// a Hold under 300 ms is refused, and a new Runner (a Fake) starts from the constants.
+static void test_legacy_tune_knobs() {
+    CHECK_EQ(ct::legacy_tune_set(uint8_t(ct::LegacyKnob::HoldMs), 299), false);
+    CHECK_EQ(ct::legacy_tune_set(uint8_t(ct::LegacyKnob::HoldMs), 300), true);
+    ct::legacy_tune_reset();
+    CHECK_EQ(ct::legacy_tune_set(9, 1), false);
+    CHECK_EQ(ct::legacy_tune(ct::LegacyKnob::Chain), 1u);
+    CHECK_EQ(ct::legacy_tune_set(uint8_t(ct::LegacyKnob::Chain), 2), false);   // a level, not a time: only the known ones
+    CHECK_EQ(ct::legacy_tune_set(uint8_t(ct::LegacyKnob::Chain), 0), true);
+    CHECK_EQ(ct::legacy_tune(ct::LegacyKnob::Chain), 0u);
+    ct::legacy_tune_reset();
+    CHECK_EQ(ct::legacy_tune(ct::LegacyKnob::QuietMs), 0u);                              // the default starts inside the source's announcement
+    CHECK_EQ(ct::legacy_guard_override(), true);
+    CHECK_EQ(ct::legacy_tune_set(uint8_t(ct::LegacyKnob::QuietMs), k2::link::kCapsStaleMs), true);
+    CHECK_EQ(ct::legacy_guard_override(), false);                                       // waiting the caps out: no override
+    CHECK_EQ(ct::legacy_tune_set(uint8_t(ct::LegacyKnob::QuietMs), k2::link::kCapsStaleMs - 1), true);
+    CHECK_EQ(ct::legacy_guard_override(), true);
+    ct::legacy_tune_reset();
+    CHECK_EQ(ct::legacy_tune_set(uint8_t(ct::LegacyKnob::GapMs), 60001), false);
+    {   // quiet_ms 2500: a flood of 4 s after the attach is waited out, plus the quiet time
+        Fake f; ct::Runner r(f);
+        CHECK_EQ(ct::legacy_tune_set(uint8_t(ct::LegacyKnob::QuietMs), ct::kLegacyQuietMs), true);
+        f.attach_flood_ms = 4000;
+        const auto o = with_units(ct::bit(A::Qc2), {ct::Unit::Qc2});
+        CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+        CHECK_EQ(run_until(f, r, [&] { return f.attaches_legacy == 1; }, 60000), true);
+        const uint32_t t0 = f.in.now;
+        CHECK_EQ(run_until(f, r, [&] { return f.fc_requests > 0; }, 20000), true);
+        CHECK_EQ(f.in.now - t0 >= 4000 + ct::kLegacyQuietMs, true);
+    }
+    {   // quiet_ms 0, first_wait 300: the handshake starts inside the flood
+        Fake f; ct::Runner r(f);
+        CHECK_EQ(ct::legacy_tune_set(uint8_t(ct::LegacyKnob::QuietMs), 0), true);
+        CHECK_EQ(ct::legacy_tune_set(uint8_t(ct::LegacyKnob::FirstWaitMs), 300), true);
+        f.attach_flood_ms = 4000;
+        const auto o = with_units(ct::bit(A::Qc2), {ct::Unit::Qc2});
+        CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+        CHECK_EQ(run_until(f, r, [&] { return f.attaches_legacy == 1; }, 60000), true);
+        const uint32_t t0 = f.in.now;
+        CHECK_EQ(run_until(f, r, [&] { return f.fc_requests > 0; }, 20000), true);
+        CHECK_EQ(f.in.now - t0 < 2000, true);
+        CHECK_EQ(ct::legacy_tune(ct::LegacyKnob::QuietMs), 0u);
+    }
+    {   // gap_ms 100 between two units: shorter than the 500 ms discharge
+        Fake f; ct::Runner r(f);
+        CHECK_EQ(ct::legacy_tune_set(uint8_t(ct::LegacyKnob::GapMs), 100), true);
+        const auto o = with_units(ct::bit(A::Qc2) | ct::bit(A::Qc3), {ct::Unit::Qc2, ct::Unit::Qc3});
+        CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+        CHECK_EQ(run_until(f, r, [&] { return r.unit() == ct::Unit::Qc3; }, 60000), true);
+        const uint32_t t1 = f.in.now; const int n1 = f.fc_requests;
+        CHECK_EQ(run_until(f, r, [&] { return f.fc_requests > n1; }, 10000), true);
+        CHECK_EQ(f.in.now - t1 < ct::kLegacyGapMs, true);
+    }
+    ct::legacy_tune_reset();
+    Fake f;
+    CHECK_EQ(ct::legacy_tune(ct::LegacyKnob::GapMs), uint32_t(ct::kLegacyGapMs));
+}
+// hold_ms down to 300 shortens a Legacy row's hold; a PD row keeps the floor its transition capture needs.
+static void test_hold_knob_goes_to_300_and_pd_rows_keep_the_capture_floor() {
+    for (const bool pd_row : {false, true}) {
+        Fake f; ct::Runner r(f);
+        CHECK_EQ(ct::legacy_tune_set(uint8_t(ct::LegacyKnob::HoldMs), 300), true);
+        if (pd_row) CHECK_EQ(r.start(f.caps, kPd, f.in, true), ct::Reason::None);
+        else CHECK_EQ(r.start(f.caps, with_units(ct::bit(A::Qc2), {ct::Unit::Qc2}), f.in, true), ct::Reason::None);
+        CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Holding; }, 100000), true);
+        const uint32_t left = r.hold_left_ms(f.in.now);        // The hold counts from the band's stable start (kStableMs before Holding): 300 ms is already over, the PD floor is not.
+        if (pd_row) CHECK_EQ(left >= ct::progcheck::kPostMs, true);
+        else CHECK_EQ(left, 0u);
+        ct::legacy_tune_reset();
+    }
+}
+// The per-unit time split: each unit's busy ms add up to the run's (the [CT] line at the end prints them).
+static void test_unit_time_split_adds_up_to_the_run() {
+    Fake f; ct::Runner r(f);
+    const auto o = with_units(ct::bit(A::Qc2) | ct::bit(A::Fcp), {ct::Unit::Qc2, ct::Unit::Fcp});
+    CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+    const uint32_t t0 = f.in.now;
+    CHECK_EQ(run_until(f, r, [&] { return !r.busy(); }, 300000), true);
+    const uint32_t total = f.in.now - t0;
+    const uint32_t qc2 = r.unit_time_ms(ct::Unit::Qc2), fcp = r.unit_time_ms(ct::Unit::Fcp);
+    CHECK_EQ(qc2 > 1000, true);
+    CHECK_EQ(fcp > 1000, true);
+    CHECK_EQ(r.unit_time_ms(ct::Unit::Scp), 0u);
+    CHECK_EQ(qc2 + fcp <= total, true);
+    CHECK_EQ(total - (qc2 + fcp) < 1000, true);   // what is left is the Verify 5V settle before the first unit
+    Fake g; g.in.now = f.in.now; CHECK_EQ(r.start(g.caps, o, g.in, true), ct::Reason::None);   // a new run counts from zero
+    CHECK_EQ(r.unit_time_ms(ct::Unit::Qc2), 0u);
+}
 // A charger that keeps PD alive (re-sends its caps for ever): one longer retry, then every row of the unit is "blocked by PD"
 // and the next unit still gets its own attach.
 static void test_legacy_attach_that_never_falls_back_is_blocked_by_pd() {
     Fake f; ct::Runner r(f);
+    wait_quiet();
     f.stays_pd = true;
     const auto o = with_units(ct::bit(A::Qc2) | ct::bit(A::Qc3), {ct::Unit::Qc2, ct::Unit::Qc3});
     CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
@@ -6136,6 +6248,7 @@ static void test_legacy_attach_that_never_falls_back_is_blocked_by_pd() {
 // The same charger that lets go of PD during the longer retry: the unit runs normally.
 static void test_legacy_retry_that_falls_back_runs_the_unit() {
     Fake f; ct::Runner r(f);
+    wait_quiet();
     f.stays_pd = true;
     const auto o = with_units(ct::bit(A::Qc2), {ct::Unit::Qc2});
     CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
@@ -6165,6 +6278,7 @@ static void test_legacy_attach_waits_out_hard_reset_cycles() {
 static void test_silent_attach_source_that_revives_pd_does_not_go_unsafe() {
     for (const uint32_t dark_ms : {600u, 1500u}) {   // how long VBUS sags to 3 V and the list stays dark
         Fake f; ct::Runner r(f); f.reset_dark_ms = dark_ms;
+        wait_quiet();
         const auto o = with_units(ct::bit(A::Qc2) | ct::bit(A::Qc3) | ct::bit(A::Pd3Fixed), {ct::Unit::Qc2, ct::Unit::Qc3, ct::Unit::Pd});
         CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
         CHECK_EQ(run_until(f, r, [&] { return f.handed && r.state() == ct::State::Baseline && r.unit() == ct::Unit::Qc2; }, 60000), true);
@@ -6191,6 +6305,7 @@ static void test_silent_sink_output_off_skips_legacy_units_and_runs_pd() {
     const std::array<std::array<ct::Unit, 3>, 2> orders = {{{ct::Unit::Qc2, ct::Unit::Qc3, ct::Unit::Pd}, {ct::Unit::Pd, ct::Unit::Qc2, ct::Unit::Qc3}}};
     for (const auto& order : orders) {
         Fake f; ct::Runner r(f); f.silent_off_ms = 3600;   // the attach is verified quiet at ~3 s: the output goes off in the first Baseline, before its handshake
+        wait_quiet();
         const auto o = with_units(ct::bit(A::Qc2) | ct::bit(A::Qc3) | ct::bit(A::Pd3Fixed), {order[0], order[1], order[2]});
         CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
         bool unsafe = false;
@@ -6285,6 +6400,67 @@ static void test_later_unit_elevated_or_stuck_baseline_still_ends_unsafe() {
             CHECK_EQ(int(r.state()), int(ct::State::Stopped));
         }
         CHECK_EQ(count_unit_verdict(r, ct::Unit::Pd, ct::Verdict::Pass), 0u);
+    }
+}
+// pattern usb-a-never-dark: START on a port with no CC and VBUS already up (no Rp, no Rd of ours): the first detach is the short one
+// instead of waiting kDetachDarkMs for an output that never goes dark.
+static void test_start_on_a_port_without_cc_detaches_quickly() {
+    for (const bool no_cc : {false, true}) {
+        Fake f; ct::Runner r(f);
+        f.never_dark = true; f.in.no_cc = no_cc; f.caps.active_cc = 0;
+        const auto o = with_units(ct::bit(A::Qc2), {ct::Unit::Qc2});
+        CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+        const uint32_t t0 = f.in.now;
+        CHECK_EQ(run_until(f, r, [&] { return f.attaches_legacy == 1; }, 30000), true);
+        const uint32_t took = f.in.now - t0;
+        if (no_cc) CHECK_EQ(took < ct::kDetachQuickMs + 1000, true);
+        else CHECK_EQ(took >= ct::kDetachDarkMs, true);
+        CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 200000), true);
+    }
+}
+// pattern release-leaves-vbus-up: a D+/D- release after a high level (QC2 Class B at 12 V) that leaves VBUS up is answered with an
+// Rd off (the source returns to 5 V on a detach) before the run is called unsafe. A port that stays up through the Rd off is unsafe.
+static void test_release_that_leaves_vbus_up_falls_back_to_an_rd_off() {
+    for (const int arm : {0, 1, 2, 3}) {   // 0 falls back, 1 the port stays up, 2 two units, 3 an inline load (the fallback never cuts it)
+        Fake f; ct::Runner r(f);
+        f.never_dark = arm == 1;
+        const auto o = arm == 2 ? with_units(ct::bit(A::Qc2) | ct::bit(A::Fcp), {ct::Unit::Qc2, ct::Unit::Fcp})
+                                : with_units(ct::bit(A::Qc2), {ct::Unit::Qc2});
+        CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+        f.release_ok = false;   // the D+/D- release does not bring VBUS down
+        if (arm == 3) { CHECK_EQ(run_until(f, r, [&] { return f.fc_requests >= 1; }, 100000), true); f.in.inline_load = true; }
+        CHECK_EQ(run_until(f, r, [&] { return !r.busy() || r.state() == ct::State::Unsafe; }, 300000), true);
+        if (arm == 1 || arm == 3) {
+            CHECK_EQ(int(r.state()), int(ct::State::Unsafe));
+            CHECK_EQ(int(r.reason()), int(ct::Reason::Release));
+            CHECK_EQ(f.detaches, arm == 1 ? 2 : 1);   // arm 1 tried the Rd off once; the inline load was never cut
+            CHECK_EQ(f.attaches_pd >= (arm == 1 ? 1 : 0), true);   // Rd is given back
+        } else {
+            CHECK_EQ(int(r.state()), int(ct::State::Done));
+            CHECK_EQ(f.detaches, arm == 2 ? 3 : 2);   // each unit's own detach (the second unit follows the fallback's) plus the fallbacks
+            CHECK_EQ(f.attaches_legacy, arm == 2 ? 2 : 1);
+            CHECK_EQ(f.attaches_pd >= 1, true);   // the PD policy is given back
+            for (const auto& s : r.steps()) CHECK_EQ(int(s.reason) == int(ct::Reason::Release), false);
+        }
+    }
+}
+// pattern rp-without-vbus (a charger's top C port): Rp is on the line but VBUS does not come after the Rd. The Rd is cycled
+// kLegacyNoVbusMs into the attach, not after kLegacyGiveUpMs. Without an Rp (a dead port) the 20 s wait stays.
+static void test_legacy_attach_with_rp_but_no_vbus_cycles_rd_early() {
+    for (const bool rp : {true, false}) {
+        Fake f; ct::Runner r(f);
+        f.no_vbus_after_rd = true; f.caps.active_cc = rp ? 1 : 0;
+        const auto o = with_units(ct::bit(A::Qc2), {ct::Unit::Qc2});
+        CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+        CHECK_EQ(run_until(f, r, [&] { return f.attaches_legacy == 1; }, 30000), true);
+        const uint32_t t1 = f.in.now;
+        const bool again = run_until(f, r, [&] { return f.attaches_legacy == 2; }, 30000);
+        CHECK_EQ(again, true);
+        const uint32_t gap = f.in.now - t1;
+        if (rp) CHECK_EQ(gap < ct::kLegacyNoVbusMs + ct::kDetachDarkMs, true);
+        else CHECK_EQ(gap >= ct::kLegacyGiveUpMs, true);
+        f.no_vbus_after_rd = false;
+        CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 200000), true);
     }
 }
 // A Pd unit whose attach never brings VBUS or the source list back fails its rows with NoReattach; the run still ends. A
@@ -7082,6 +7258,7 @@ static void test_self_powered_soft_reset_without_caps_fails_the_unit() {
 // A Legacy unit whose charger stays in PD is blocked once and not retried with a CC open: the run goes on, no detach.
 static void test_self_powered_blocked_legacy_unit_never_detaches() {
     Fake f; f.in.self_powered = true; f.stays_pd = true; ct::Runner r(f);
+    wait_quiet();
     CHECK_EQ(r.start(f.caps, with_units(ct::bit(A::Qc2) | ct::bit(A::Pd3Fixed), {ct::Unit::Qc2, ct::Unit::Pd}), f.in, true), ct::Reason::None);
     f.tick(r, 300000);
     CHECK_EQ(r.state(), ct::State::Done);
@@ -7982,9 +8159,85 @@ static void test_scp_no_change_without_restart_does_not_wait() {
 // PD-silent sink ~300 ms after VBUS was back. The next row went out ~100 ms after the return and the fc engine's link guard refused it
 // "PD or load active" (or, a tick later, the Runner skipped the unit as PD active). The row waits through the restart: VBUS back, then
 // kLegacyQuietMs of PD quiet counted from the later of the last frame and the return, at most kRestartSettleMs; then it runs normally.
+// The SCP rows of a unit ride one session (chain knob, default on): no release between them, every row after the first a retarget,
+// and the verdicts are the ones of a session per row.
+struct ScpRun { std::vector<ct::Step> steps; std::vector<int> mvs; std::vector<bool> rt; int releases = 0; int keeps = 0; uint32_t total_ms = 0; };
+static ScpRun run_scp_unit(unsigned chain, bool flat) {
+    Fake f; ct::Runner r(f);   // the Fake's constructor resets the knobs
+    CHECK_EQ(ct::legacy_tune_set(uint8_t(ct::LegacyKnob::Chain), chain), true);
+    const fc::Caps caps = scp_caps_of(3300, 12000, 1000, 2500);
+    f.caps = {}; f.serve_caps = &caps;
+    if (flat) { f.no_change_proto = fc::Proto::Scp; f.model_held = true; }
+    const auto o = with_units(ct::bit(A::Scp), {ct::Unit::Scp});
+    CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+    const uint32_t t0 = f.in.now;
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 600000), true);
+    ct::legacy_tune_reset();
+    return {{r.steps().begin(), r.steps().end()}, f.fc_mvs, f.retarget_log, f.fc_releases, f.keeps_on, f.in.now - t0};
+}
+// A cancel while the chained session runs (a row after a no-change end rides its kept lines) releases the lines at once.
+static void test_cancel_while_the_scp_session_is_kept_releases_it() {
+    Fake f; ct::Runner r(f);
+    const fc::Caps caps = scp_caps_of(3300, 12000, 1000, 2500);
+    f.caps = {}; f.serve_caps = &caps; f.no_change_proto = fc::Proto::Scp; f.model_held = true;
+    const auto o = with_units(ct::bit(A::Scp), {ct::Unit::Scp});
+    CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+    CHECK_EQ(run_until(f, r, [&] { return f.retargets >= 2; }, 600000), true);
+    const int rel = f.fc_releases;
+    r.cancel(f.in);
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Stopped || r.state() == ct::State::Done; }, 60000), true);
+    CHECK_EQ(f.in.fc_held, false);
+    CHECK_EQ(f.fc_releases > rel, true);
+}
+static void same_verdicts(const ScpRun& a, const ScpRun& b) {
+    CHECK_EQ(a.steps.size(), b.steps.size());
+    for (size_t i = 0; i < a.steps.size() && i < b.steps.size(); ++i) {
+        CHECK_EQ(a.steps[i].verdict, b.steps[i].verdict);
+        CHECK_EQ(a.steps[i].reason, b.steps[i].reason);
+        CHECK_EQ(a.steps[i].detail, b.steps[i].detail);
+        CHECK_EQ(a.steps[i].mv, b.steps[i].mv);
+    }
+}
+static void test_scp_rows_share_one_session() {
+    const ScpRun one = run_scp_unit(1, false), many = run_scp_unit(0, false);
+    CHECK_EQ(one.mvs == many.mvs, true);
+    CHECK_EQ(one.releases, 1);                               // the unit's end
+    CHECK_EQ(many.releases > 1, true);                       // a session per row
+    CHECK_EQ(one.rt.size() >= 4, true);
+    for (size_t i = 1; i < one.rt.size(); ++i) CHECK_EQ(one.rt[i], true);   // every row after the detect row retargets
+    CHECK_EQ(one.rt.empty() ? true : bool(one.rt[0]), false);
+    CHECK_EQ(one.keeps > 0, true);
+    CHECK_EQ(many.keeps, 0);                                 // chain 0 never asks the engine to keep a session
+    same_verdicts(one, many);
+    CHECK_EQ(one.total_ms < many.total_ms, true);
+    std::printf("SCP unit: session per row %u ms, one session %u ms (releases %d -> %d)\n", many.total_ms, one.total_ms, many.releases, one.releases);
+}
+// A raise the charger acks without moving: the engine keeps the lines (held), the rows after it ride the same session, and
+// the verdicts, reasons and details are those of the release-per-row run.
+static void test_scp_no_change_held_session_takes_the_next_rows() {
+    const ScpRun one = run_scp_unit(1, true), many = run_scp_unit(0, true);
+    std::printf("SCP no-change unit: session per row %u ms (releases %d), one session %u ms (releases %d)\n", many.total_ms, many.releases, one.total_ms, one.releases);
+    same_verdicts(one, many);
+    CHECK_EQ(one.mvs == many.mvs, true);
+    CHECK_EQ(one.mvs == std::vector<int>({5000, 10000, 4500, 5000}), true);
+    CHECK_EQ(one.releases, 1);
+    CHECK_EQ(many.releases > 1, true);
+    CHECK_EQ(one.total_ms < many.total_ms, true);
+}
+// The knob's default is on and a unit without SCP is untouched by it.
+static void test_chain_knob_default_and_other_units() {
+    CHECK_EQ(ct::legacy_tune(ct::LegacyKnob::Chain), 1u);
+    Fake f; f.caps = {}; ct::Runner r(f);
+    CHECK_EQ(r.start(f.caps, {.selected = ct::bit(A::Fcp)}, f.in, true), ct::Reason::None);
+    f.tick(r, 60000);
+    CHECK_EQ(f.keeps_on, 0);
+}
+// The SCP rows below are each a session of their own (chain 0): the release between them is what these tests exercise.
+static void unchained() { CHECK_EQ(ct::legacy_tune_set(uint8_t(ct::LegacyKnob::Chain), 0), true); }
 static void test_legacy_row_waits_through_a_source_restart() {
     for (const uint32_t chatter : {0u, 6100u}) {   // r2: no announcement after the cut; r1a: an announcement as long as the attach's
-        Fake f; ct::Runner r(f);
+        Fake f; ct::Runner r(f); unchained();
+        wait_quiet();
         f.link_guard = true; f.restart_on_release = 1; f.restart_chatter_ms = chatter;
         const auto o = with_units(ct::bit(A::Scp), {ct::Unit::Scp});
         CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
@@ -8007,7 +8260,8 @@ static void test_legacy_row_waits_through_a_source_restart() {
 // kRestartSettleMs, then the unit is PD-active as before and nothing was sent to the guard meanwhile. A load still ends the run at once.
 static void test_legacy_restart_wait_is_bounded_and_a_load_still_refuses() {
     {
-        Fake f; ct::Runner r(f);
+        Fake f; ct::Runner r(f); unchained();
+        wait_quiet();
         f.link_guard = true; f.restart_on_release = 1; f.restart_chatter_ms = 10000000;
         const auto o = with_units(ct::bit(A::Scp), {ct::Unit::Scp});
         CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
@@ -8017,7 +8271,8 @@ static void test_legacy_restart_wait_is_bounded_and_a_load_still_refuses() {
         CHECK_EQ(count_unit_verdict(r, ct::Unit::Scp, ct::Verdict::Skip, ct::Reason::PdActive, false) > 0, true);
     }
     {
-        Fake f; ct::Runner r(f);
+        Fake f; ct::Runner r(f); unchained();
+        wait_quiet();
         f.link_guard = true; f.restart_on_release = 1; f.restart_chatter_ms = 6100;
         const auto o = with_units(ct::bit(A::Scp), {ct::Unit::Scp});
         CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
@@ -8029,6 +8284,161 @@ static void test_legacy_restart_wait_is_bounded_and_a_load_still_refuses() {
         f.in.inline_load = false;
         CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Stopped; }, 20000), true);
         CHECK_EQ(f.fc_times.size(), size_t(1));
+    }
+}
+
+// pattern reannounce-after-own-release (Anker IQ4, runs/qc2b-2026-11-21): the source reads every D+/D- release as a re-plug and announces
+// its list to the PD-silent sink again, VBUS at 5 V all along. That announcement is the source's answer to our own release, not PD
+// traffic of its own: the unit waits in place until it stops (the link guard lets the next request through after 2 s of quiet) instead of
+// detaching, attaching and waiting out the attach's announcement again; the SCP rows no longer read it as "PD active".
+static void reannounce_setup(Fake& f, uint32_t after, uint32_t len, uint32_t attach_len) {
+    f.link_guard = true; f.reannounce_after_ms = after; f.reannounce_ms = len; f.attach_flood_ms = attach_len;
+}
+static void test_legacy_units_chain_through_the_sources_reannounce_after_a_release() {
+    Fake f; ct::Runner r(f);
+    reannounce_setup(f, 100, 3000, 3000);
+    const auto o = with_units(ct::bit(A::Fcp) | ct::bit(A::Scp) | ct::bit(A::Afc), {ct::Unit::Fcp, ct::Unit::Scp, ct::Unit::Afc});
+    CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+    const uint32_t t0 = f.in.now;
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 600000), true);
+    CHECK_EQ(f.attaches_legacy, 1);   // one PD-silent attach for the three units
+    CHECK_EQ(f.guard_refusals, 0);
+    CHECK_EQ(f.reannounces >= 2, true);
+    for (const ct::Unit u : {ct::Unit::Fcp, ct::Unit::Scp, ct::Unit::Afc}) {
+        CHECK_EQ(count_unit_verdict(r, u, ct::Verdict::Pass) > 0, true);
+        CHECK_EQ(count_unit_verdict(r, u, ct::Verdict::Skip), 0u);
+        CHECK_EQ(count_unit_verdict(r, u, ct::Verdict::Fail), 0u);
+    }
+    std::printf("reannounce chain: %u ms, attaches %d, reannounces %d\n", f.in.now - t0, f.attaches_legacy, f.reannounces);
+}
+// The SCP unit's rows, each its own session with a release between them: none of them is skipped "PD active" by the source's answer.
+static void test_scp_rows_are_not_pd_active_after_our_own_release() {
+    Fake f; ct::Runner r(f); unchained();
+    wait_quiet();
+    reannounce_setup(f, 100, 3000, 0);
+    const auto o = with_units(ct::bit(A::Scp), {ct::Unit::Scp});
+    CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 600000), true);
+    CHECK_EQ(count_unit_verdict(r, ct::Unit::Scp, ct::Verdict::Skip, ct::Reason::PdActive, false), 0u);
+    CHECK_EQ(count_unit_verdict(r, ct::Unit::Scp, ct::Verdict::Fail), 0u);
+    CHECK_EQ(f.guard_refusals, 0);
+    CHECK_EQ(f.fc_requests, 4);      // 5 V, 10 V, 4.5 V, 5 V: every row asked
+    CHECK_EQ(f.detaches, 2);         // the run's own start and end; no boundary in between
+    CHECK_EQ(f.fc_times.size(), size_t(4));
+    for (size_t n = 1; n < f.fc_times.size(); ++n)   // each row waited for the announcement to stop: 100 + 3000 ms, then 2 s of quiet at least
+        CHECK_EQ(f.fc_times[n] - f.fc_times[n - 1] >= 3100, true);
+}
+// A source that stays quiet after the first release is watched for it once per attach (kOwnReleaseCapsMs), not at every row.
+static void test_a_quiet_source_is_watched_once_per_attach() {
+    Fake f; ct::Runner r(f); unchained();
+    f.link_guard = true;
+    const auto o = with_units(ct::bit(A::Scp), {ct::Unit::Scp});
+    CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 600000), true);
+    CHECK_EQ(f.fc_times.size(), size_t(4));
+    if (f.fc_times.size() != 4) return;
+    std::printf("quiet source: SCP row gaps %u %u %u ms\n", f.fc_times[1] - f.fc_times[0], f.fc_times[2] - f.fc_times[1], f.fc_times[3] - f.fc_times[2]);
+    CHECK_EQ(f.fc_times[1] - f.fc_times[0] > f.fc_times[2] - f.fc_times[1] + 500, true);   // the first release was watched
+    CHECK_EQ(f.fc_times[3] - f.fc_times[2], f.fc_times[2] - f.fc_times[1]);                // the source stayed quiet: not again
+    CHECK_EQ(count_unit_verdict(r, ct::Unit::Scp, ct::Verdict::Pass), 4u);
+}
+// Real PD traffic is no echo of our release: a source that announces before the release (the unit's own PD-active proof) still skips the unit.
+static void test_pd_traffic_before_the_release_still_skips_the_unit() {
+    Fake f; ct::Runner r(f); unchained();
+    wait_quiet();
+    reannounce_setup(f, 100, 3000, 0);
+    const auto o = with_units(ct::bit(A::Scp), {ct::Unit::Scp});
+    CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+    CHECK_EQ(run_until(f, r, [&] { return f.fc_requests == 1; }, 200000), true);
+    f.chatter_from = f.in.now; f.chatter_until = f.in.now + 1000000;   // frames from the source while the row runs
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 600000), true);
+    CHECK_EQ(count_unit_verdict(r, ct::Unit::Scp, ct::Verdict::Skip, ct::Reason::PdActive, false) > 0, true);
+    CHECK_EQ(f.guard_refusals, 0);
+}
+// quiet_ms 0 starts the rows inside the source's announcement: the Runner's own Legacy start overrides the guard's "PD contract" (the UI
+// passes silent_caps), so no row is refused or skipped "PD active" by the source's own unanswered caps.
+static void test_quiet_zero_reaches_the_charger_through_the_attach_announcement() {
+    Fake f; ct::Runner r(f);
+    CHECK_EQ(ct::legacy_tune_set(uint8_t(ct::LegacyKnob::QuietMs), 0), true);
+    reannounce_setup(f, 100, 3000, 3000);
+    const auto o = with_units(ct::bit(A::Fcp) | ct::bit(A::Scp), {ct::Unit::Fcp, ct::Unit::Scp});
+    CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+    const uint32_t t0 = f.in.now;
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 600000), true);
+    CHECK_EQ(f.guard_refusals, 0);
+    for (const ct::Unit u : {ct::Unit::Fcp, ct::Unit::Scp}) {
+        CHECK_EQ(count_unit_verdict(r, u, ct::Verdict::Pass) > 0, true);
+        CHECK_EQ(count_unit_verdict(r, u, ct::Verdict::Skip, ct::Reason::PdActive, false), 0u);
+        CHECK_EQ(count_unit_verdict(r, u, ct::Verdict::Fail), 0u);
+    }
+    std::printf("quiet_ms 0: %u ms, refusals %d\n", f.in.now - t0, f.guard_refusals);
+}
+// An announcement that never stops is bounded by kRestartSettleMs: then the unit is PD active as before, the guard was never asked.
+static void test_endless_reannounce_after_a_release_is_bounded() {
+    Fake f; ct::Runner r(f); unchained();
+    wait_quiet();
+    reannounce_setup(f, 100, 10000000, 0);
+    const auto o = with_units(ct::bit(A::Scp), {ct::Unit::Scp});
+    CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+    const uint32_t t0 = f.in.now;
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 600000), true);
+    CHECK_EQ(f.guard_refusals, 0);
+    CHECK_EQ(f.fc_times.size(), size_t(1));
+    CHECK_EQ(count_unit_verdict(r, ct::Unit::Scp, ct::Verdict::Skip, ct::Reason::PdActive, false) > 0, true);
+    CHECK_EQ(f.in.now - t0 < 60000, true);
+}
+// An answer as long as the attach's own announcement (7.4 s on the IQ4) is waited out in place, not cut off at kRestartSettleMs.
+static void test_a_reannounce_as_long_as_the_attach_flood_is_waited_out() {
+    Fake f; ct::Runner r(f);
+    reannounce_setup(f, 300, 7400, 7400);
+    const auto o = with_units(ct::bit(A::Fcp) | ct::bit(A::Scp), {ct::Unit::Fcp, ct::Unit::Scp});
+    CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 900000), true);
+    CHECK_EQ(f.attaches_legacy, 1);
+    CHECK_EQ(count_unit_verdict(r, ct::Unit::Scp, ct::Verdict::Pass), 4u);
+    CHECK_EQ(count_unit_verdict(r, ct::Unit::Scp, ct::Verdict::Skip), 0u);
+}
+// A sink plugged in while the unit waits for the announcement to stop ends the run at once, as in the restart wait.
+static void test_load_during_the_reannounce_wait_stops_the_run() {
+    Fake f; ct::Runner r(f);
+    wait_quiet();
+    unchained();
+    reannounce_setup(f, 100, 6000, 0);
+    const auto o = with_units(ct::bit(A::Scp), {ct::Unit::Scp});
+    CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+    CHECK_EQ(run_until(f, r, [&] { return f.reannounces == 1; }, 200000), true);
+    f.tick(r, 500);
+    f.in.inline_load = true;
+    f.tick(r, 300);
+    CHECK_EQ(r.reason(), ct::Reason::Inline);
+    f.in.inline_load = false;
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Stopped; }, 20000), true);
+    CHECK_EQ(f.fc_times.size(), size_t(1));
+}
+// The IQ4's next step: the source's answer to the release, then its own output cut after the same or the next row (the restart pattern
+// above). The waits do not stack (each is bounded by kRestartSettleMs on its own and the later one restarts nothing), no row is read
+// as PD active, the guard is never asked early, and the units after it (SCP rows, AFC) still run.
+static void test_reannounce_then_output_restart_on_the_same_unit() {
+    for (const int rel : {1, 2}) for (const uint32_t delay : {30u, 1500u}) {   // the cut before the announcement is heard, and after it
+        Fake f; ct::Runner r(f);
+        wait_quiet();
+        reannounce_setup(f, 100, 3000, 0);
+        f.restart_on_release = rel; f.restart_delay_ms = delay; f.restart_chatter_ms = 3000;
+        const auto o = with_units(ct::bit(A::Scp) | ct::bit(A::Afc), {ct::Unit::Scp, ct::Unit::Afc});
+        CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+        const uint32_t t0 = f.in.now;
+        CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 600000), true);
+        CHECK_EQ(f.restart_back_at != 0, true);
+        CHECK_EQ(f.guard_refusals, 0);
+        CHECK_EQ(f.fc_requests, 6);   // 4 SCP rows + 2 AFC rows
+        for (const ct::Unit u : {ct::Unit::Scp, ct::Unit::Afc}) {
+            CHECK_EQ(count_unit_verdict(r, u, ct::Verdict::Skip, ct::Reason::PdActive, false), 0u);
+            CHECK_EQ(count_unit_verdict(r, u, ct::Verdict::Fail), 0u);
+        }
+        CHECK_EQ(count_unit_verdict(r, ct::Unit::Scp, ct::Verdict::Pass), 4u);
+        CHECK_EQ(count_unit_verdict(r, ct::Unit::Afc, ct::Verdict::Pass) > 0, true);
+        CHECK_EQ(f.in.now - t0 < 2 * ct::kRestartSettleMs + 60000, true);
+        std::printf("reannounce + restart on release %d (cut after %u ms): %u ms\n", rel, delay, f.in.now - t0);
     }
 }
 // Charger-test level (user decision 2026-11-15). A source with every kind of offer: 5/9/15/20 V 3 A, PPS 3.3-21 V 5 A,
@@ -8809,14 +9219,14 @@ int main() {
     test_a_dip_shorter_than_the_minimum_is_no_cut(); test_a_protocol_failure_after_a_clean_comeback_is_a_fail(); test_the_7s_cut_sequence_over_the_5v_steps_of_the_cuktech_run(); test_a_fall_in_a_raised_row_is_no_cut_casualty(); test_a_silent_vooc_family_on_a_7s_cut_port_ends_no_answer(); test_the_10_unit_run_over_every_cut_phase_ends_as_without_cuts();
     test_a_cut_in_the_first_baseline_waits_for_the_comeback(); test_a_baseline_dip_that_does_not_come_back_still_stops();
     test_custom_unit_list_runs_in_order(); test_pd_unit_attaches_with_a_contract(); test_a_failed_unit_does_not_stop_the_run();
-    test_default_unit_order_is_vendor_modes_then_pd_then_legacy(); test_default_order_runs_vendor_modes_before_pd_before_legacy(); test_pd_between_vendor_and_legacy_units(); test_pd_replan_in_the_middle_keeps_the_rows_in_order(); test_consecutive_legacy_units_share_one_attach(); test_legacy_session_that_sees_pd_traffic_is_renewed(); test_silent_ufcs_source_reports_no_response_not_pd_active(); test_legacy_waits_between_units();
+    test_default_unit_order_is_vendor_modes_then_pd_then_legacy(); test_default_order_runs_vendor_modes_before_pd_before_legacy(); test_pd_between_vendor_and_legacy_units(); test_pd_replan_in_the_middle_keeps_the_rows_in_order(); test_consecutive_legacy_units_share_one_attach(); test_legacy_session_that_sees_pd_traffic_is_renewed(); test_silent_ufcs_source_reports_no_response_not_pd_active(); test_legacy_waits_between_units(); test_legacy_tune_knobs(); test_hold_knob_goes_to_300_and_pd_rows_keep_the_capture_floor(); test_unit_time_split_adds_up_to_the_run(); test_scp_rows_share_one_session(); test_scp_no_change_held_session_takes_the_next_rows(); test_cancel_while_the_scp_session_is_kept_releases_it(); test_chain_knob_default_and_other_units();
     test_legacy_attach_that_never_falls_back_is_blocked_by_pd(); test_legacy_retry_that_falls_back_runs_the_unit(); test_legacy_attach_waits_out_hard_reset_cycles();
     test_silent_attach_source_that_revives_pd_does_not_go_unsafe(); test_silent_baseline_sag_that_never_returns_is_still_unsafe(); test_silent_sink_output_off_skips_legacy_units_and_runs_pd();
     test_later_unit_output_cut_in_its_baseline_is_a_lost_unit_not_unsafe(); test_later_unit_elevated_or_stuck_baseline_still_ends_unsafe();
     test_unsafe_clears_when_vbus_is_gone_for_the_debounce();
     test_failed_release_at_low_vbus_is_a_lost_source_not_unsafe();
     test_unsafe_clears_when_vbus_stays_under_vsafe5();
-    test_pd_attach_without_vbus_or_caps_is_no_reattach(); test_pd_plan_comes_from_the_first_attach(); test_source_gone_in_a_unit_skips_the_remaining_units();
+    test_pd_attach_without_vbus_or_caps_is_no_reattach(); test_legacy_attach_with_rp_but_no_vbus_cycles_rd_early(); test_start_on_a_port_without_cc_detaches_quickly(); test_release_that_leaves_vbus_up_falls_back_to_an_rd_off(); test_pd_plan_comes_from_the_first_attach(); test_source_gone_in_a_unit_skips_the_remaining_units();
     test_pd_attach_5v_contract_held_at_wrong_voltage_fails_wrong_voltage();
     test_pd_attach_5v_contract_then_rp_cut_before_timeout_fails_wrong_voltage();
     test_pd_attach_without_any_caps_stays_no_reattach();
@@ -8859,6 +9269,8 @@ int main() {
     test_default_sweep_on_a_low_latch_source();
     test_self_powered_run_sweeps_from_5v();
     test_legacy_row_waits_through_a_source_restart(); test_legacy_restart_wait_is_bounded_and_a_load_still_refuses();
+    test_legacy_units_chain_through_the_sources_reannounce_after_a_release(); test_scp_rows_are_not_pd_active_after_our_own_release();
+    test_a_quiet_source_is_watched_once_per_attach(); test_pd_traffic_before_the_release_still_skips_the_unit(); test_endless_reannounce_after_a_release_is_bounded(); test_quiet_zero_reaches_the_charger_through_the_attach_announcement(); test_load_during_the_reannounce_wait_stops_the_run(); test_reannounce_then_output_restart_on_the_same_unit(); test_a_reannounce_as_long_as_the_attach_flood_is_waited_out();
     test_scp_ack_without_voltage_ends_early_and_skips_the_raises(); test_scp_no_change_without_restart_does_not_wait();
     test_level_maps_to_the_run_switches(); test_level_plans_per_level(); test_step_walk_is_planned_only_in_deep(); test_prog_check_flags_a_passing_programmable_row(); test_prog_check_clean_capture_changes_nothing();
     test_prog_check_without_a_capture_asks_nothing_more(); test_prog_check_follows_the_sweep_switches(); test_light_run_requests_nothing_but_5v(); test_light_lists_the_epr_levels_as_advertised();

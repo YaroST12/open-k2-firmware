@@ -87,6 +87,30 @@ static void test_far_sink_draws() {
     CHECK_EQ(far_sink_draws(Probe{}), false);                         // monitor offline, nothing latched
 }
 
+// The charger test's own Legacy start may override the guard only for the source's unanswered caps: a load or a foreign sink's
+// latch behind the K2 still refuses, with or without a decoded contract.
+static void test_silent_caps_only() {
+    CHECK_EQ(silent_caps_only(probe(5000, 13, true)), true);          // caps, nothing drawing
+    CHECK_EQ(silent_caps_only(probe(5000, 0, true)), true);
+    CHECK_EQ(silent_caps_only(probe(9130, 2800, true)), false);       // caps + load
+    CHECK_EQ(silent_caps_only(probe(5000, 51, true)), false);
+    Probe sticky = probe(5000, 13, true);
+    sticky.sticky_inline = true;                                      // a foreign sink latched
+    CHECK_EQ(silent_caps_only(sticky), false);
+    CHECK_EQ(silent_caps_only(probe(5000, 13, false)), false);        // no caps: nothing to override
+    CHECK_EQ(silent_caps_only(probe(9130, 2800, false)), false);      // load alone is not this case
+    Probe own = probe(5100, 95, true);
+    own.self_supply_ma = k2::pd::kSelfSupplyAllowanceMa;              // the K2's own supply current is no sink
+    CHECK_EQ(silent_caps_only(own), true);
+    Probe req = probe(5000, 13, true);
+    req.sink_request_seen = true;                                     // a sink's Request was decoded before the latch was published
+    CHECK_EQ(silent_caps_only(req), false);
+    CHECK_EQ(silent_caps_only(Probe{}), false);
+    Probe blind;
+    blind.pd_active = true;                                           // monitor offline: caps alone, nothing else known
+    CHECK_EQ(silent_caps_only(blind), true);
+}
+
 static void test_names() {
     CHECK_STR(name(Reason::None), "none");
     CHECK_STR(name(Reason::PdContract), "PD contract");
@@ -110,6 +134,7 @@ int main() {
     test_names();
     test_sticky_inline();
     test_far_sink_draws();
+    test_silent_caps_only();
     test_pd_likely();
     return test_report("test_link_guard");
 }

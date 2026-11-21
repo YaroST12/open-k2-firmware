@@ -5,6 +5,7 @@
 #include "k2/core/fmt.hpp"
 #include "k2/core/log.hpp"
 #include "k2/fastcharge/accp.hpp"
+#include "k2/pd/link_guard.hpp"
 #include "k2/pd/pd_link.hpp"
 #include "k2/fastcharge/qc.hpp"
 #include <algorithm>
@@ -253,6 +254,18 @@ const char* name(HuntCause c) {
 }
 namespace {
 constexpr uint32_t kHoldMs = 1000;
+constexpr uint32_t kHoldFloorMs = progcheck::kStableMs + progcheck::kPostMs + 100;   // below it the transition capture would outlive the hold (PD rows only)
+constexpr uint32_t kHoldKnobMinMs = 300;   // the lab knob's own floor: a Legacy row judges after one stable band
+constexpr uint32_t kTuneMaxMs = 60000;
+constexpr uint32_t kChainMaxLevel = 1;
+constexpr std::array<uint32_t, size_t(LegacyKnob::Count)> kTuneDefault = {0, kLegacySteadyMs, kLegacyFirstWaitMs, kLegacyGapMs, kHoldMs, 1};
+std::array<uint32_t, size_t(LegacyKnob::Count)> g_tune = kTuneDefault;
+uint32_t quiet_ms() { return g_tune[size_t(LegacyKnob::QuietMs)]; }
+// The wait `want` ms after the Baseline's own 500 ms settle (stable_ms_ / pre_ms_ count the Baseline); a shorter want pulls the start back.
+void baseline_wait(uint32_t want, uint32_t extra, uint32_t now, uint32_t& pre_ms, uint32_t& stable_ms) {
+    pre_ms = (want > 500 ? want - 500 : 0) + extra;
+    stable_ms = want < 500 ? now - (500 - want) : now;
+}
 constexpr uint32_t kSpecFeedMaxMs = 300;   // the spec stage's take of one move: a freeze and one Ui tick
 // The walk's move in the detail byte, nudged 1 mV off the two row markers (kDetailStepWalk, kDetailSweep) so a finished row never reads as a sweep.
 constexpr uint8_t step_walk_detail(int mv) {
@@ -262,6 +275,17 @@ constexpr uint8_t step_walk_detail(int mv) {
 // The transition capture (Env::prog_begin) is triggered where the hold starts, kStableMs after the band's stable start, and freezes its
 // post window later; the hold ends kHoldMs after that stable start, with one 50 ms tick of slack at each end (hold_ms() is the one tick).
 static_assert(progcheck::kStableMs + progcheck::kPostMs + 100 <= kHoldMs, "the capture freezes before the hold ends");
+}  // namespace
+uint32_t legacy_tune(LegacyKnob k) { return k < LegacyKnob::Count ? g_tune[size_t(k)] : 0; }
+bool legacy_tune_set(uint8_t knob, uint32_t value) {
+    if (knob >= size_t(LegacyKnob::Count) || value > (knob == uint8_t(LegacyKnob::Chain) ? kChainMaxLevel : kTuneMaxMs)) return false;
+    if (knob == uint8_t(LegacyKnob::HoldMs) && value < kHoldKnobMinMs) return false;
+    g_tune[knob] = value;
+    return true;
+}
+void legacy_tune_reset() { g_tune = kTuneDefault; }
+bool legacy_guard_override() { return quiet_ms() < link::kCapsStaleMs; }
+namespace {
 // "A Hard Reset happened on the link", whoever sent it: the sink counts the ones the K2 sent (hard_resets) and the ones the source
 // sent (source_hard_resets) apart, and the runner only ever compares this sum with a value it took from the same sum.
 uint32_t link_resets(const pd::SinkStatus& s) { return s.hard_resets + s.source_hard_resets; }
@@ -1275,6 +1299,9 @@ Reason Runner::start(const pd::SourceCaps& caps, Options o, Input in, bool confi
     info_ = 0; info_rows_ = false;
     o.units = resolve(o);
     opts_ = o;
+    K2LOG("[CT] legacy tune quiet=%ums steady=%ums first=%ums gap=%ums hold=%ums chain=%u\n", unsigned(legacy_tune(LegacyKnob::QuietMs)),
+          unsigned(legacy_tune(LegacyKnob::SteadyMs)), unsigned(legacy_tune(LegacyKnob::FirstWaitMs)), unsigned(legacy_tune(LegacyKnob::GapMs)),
+          unsigned(legacy_tune(LegacyKnob::HoldMs)), unsigned(legacy_tune(LegacyKnob::Chain)));
     n_order_ = o.units.n; order_ = o.units.u;
     build(caps, o, in);
     evidence_ = {};
@@ -1299,7 +1326,10 @@ Reason Runner::start(const pd::SourceCaps& caps, Options o, Input in, bool confi
     handover_ = {}; unit_ = Unit::Count; mode_ = Mode::Pd;
     ceiling_pending_ = ceiling_done_ = ceil_stopping_ = ceil_recover_ = ceil_cycled_ = false; ceil_ms_ = ceil_stop_ms_ = ceil_low_ms_ = 0; ceil_why_ = 0;
     spec_done_ = spec_stopping_ = spec_fault_ = false; spec_ms_ = spec_stop_ms_ = 0; spec_pending_ = spec_wanted();
-    attached_ = detached_ = ending_ = silent_ = legacy_active_ = never_dark_ = dipped_ = dark_ = false; attach_try_ = 0;
+    attached_ = detached_ = ending_ = silent_ = legacy_active_ = never_dark_ = dipped_ = dark_ = rel_rd_ = false; attach_try_ = 0;
+    unit_time_.fill(0); time_ms_ = 0; time_pending_ = true;
+    never_dark_ = in.no_cc;   // a port with no CC does not go dark: the first detach is the short one too
+    own_rel_ = false; reann_ = 0;
     rp_restart_ = false; contract_wrong_ = false; attach_max_mv_ = 0;
     pre_ms_ = 0;
     pd_retry_ = cut_index_ = SIZE_MAX; retries_ = epr_tries_ = 0; settle_ms_ = settle_until_ = 0; auth_open_ = false;
@@ -1445,10 +1475,17 @@ void Runner::request(const Input& in) {
         if (err == pd::Err::Busy) { busy_retry_at_ = in.now + 200; return; }
         if (err != pd::Err::Ok) finish(in, Verdict::Fail, Reason::Request, 128 + static_cast<uint8_t>(err));
     } else {
-        const bool retarget = fc_owned_ && s.continuous;
+        // An SCP row joins the kept or live session of the row before it (scp_next picked it): same session, no release in between.
+        const bool chained = s.group == Group::Scp && s.ma > 0 && legacy_tune(LegacyKnob::Chain) >= 1 && (in.fc_held || in.fc_state == fc::State::Active);
+        const bool retarget = fc_owned_ && (s.continuous || chained);
         fc_owned_ = true;
         const auto err = env_.request_fc(proto(s.group), s.mv, retarget, s.ma);
         if (err != fc::Fail::None) finish(in, Verdict::Fail, Reason::Request, static_cast<uint8_t>(err));
+        else if (s.group == Group::Scp && legacy_tune(LegacyKnob::Chain) >= 1) {
+            bool more = false;   // a later SCP row of the unit still wants the session
+            for (size_t n = index_ + 1; n < count_; ++n) more = more || (steps_[n].group == Group::Scp && steps_[n].verdict == Verdict::Pending);
+            env_.fc_keep(more);
+        }
     }
 }
 // The row leaves the plan (the rows after it move up; the cursor is picked again by the caller).
@@ -1517,7 +1554,8 @@ const mi_unlock::Mode* Runner::mi_mode(const Step& s) const {
     return nullptr;
 }
 uint32_t Runner::hold_ms() const {
-    return kHoldMs;
+    const uint32_t h = legacy_tune(LegacyKnob::HoldMs);
+    return index_ < count_ && steps_[index_].group == Group::Pd ? std::max(h, kHoldFloorMs) : h;   // the capture of a PD row needs its floor
 }
 // The Deep checks' switches (the Tests list line sets the two apart); the step-walk and sweep rows have their own judgments.
 // The 100 mV sweep step is the PPS class 1 and the AVS class 0 of the spec engine's plan; a walk quantum is class 0 of either.
@@ -1545,9 +1583,19 @@ bool Runner::prog_wanted(const Step& s) const {
 uint32_t Runner::hold_left_ms(uint32_t now) const {
     return state_ == State::Holding ? hold_ms() - std::min(hold_ms(), now - phase_ms_) : 0;
 }
+void Runner::skip_group_rows(Group g, bool raises_only, uint8_t detail) {
+    for (size_t n = 0; n < count_; ++n) {
+        auto& o = steps_[n];
+        if (o.verdict != Verdict::Pending || o.group != g || (raises_only && o.mv <= 5000)) continue;
+        o.verdict = Verdict::Skip; o.reason = Reason::Request; o.detail = detail; env_.record(o);
+    }
+}
 void Runner::release(const Input& in, bool stop) {
     stopping_ = stop;
     if (stop) skip_pending(reason_);
+    // Our own D+/D- release of a PD-quiet silent attach: the source's announcement that may follow is its answer to it (own_rel_).
+    own_rel_ = !stop && fc_owned_ && mode_ == Mode::Legacy && silent_ && attached_ && reann_ != 1 && in.pd_quiet_ms >= quiet_ms();
+    if (own_rel_) own_rel_ms_ = in.now;
     reissue_release();
     // Nothing is held and VBUS never left vSafe5V: there is nothing to wait for.
     if (!stop && !pd_owned_ && !fc_owned_ && !hot_ && !recover_ && safe5(in.vbus_mv)) { next(in); return; }   // the sink may refuse and is asked again by poll(); the legacy engine always lets go
@@ -1744,6 +1792,11 @@ void Runner::finish_row(const Input& in, Verdict v, Reason r, uint8_t detail) {
                 steps_[n].verdict = Verdict::Skip; steps_[n].reason = r; steps_[n].detail = detail; env_.record(steps_[n]);
             }
         }
+        // The held session hops to the next row inside this call, so the raise rows a no-change end rules out are skipped here, before it
+        // (the failure path's own skip comes after finish() returns).
+        if (v == Verdict::Fail && s.group == Group::Scp && s.mv > 5000 && detail == uint8_t(fc::Fail::NoChange) && !cut_wait_)
+            skip_group_rows(Group::Scp, true, detail);
+        if (scp_next(in, v == Verdict::Pass) != SIZE_MAX) { next(in); return; }
         release(in, false);
     }
 }
@@ -1906,6 +1959,15 @@ size_t Runner::pick() const {
             if (steps_[n].verdict == Verdict::Pending && unit_of(steps_[n]) == order_[k]) return n;
     return SIZE_MAX;
 }
+// The next SCP row of the unit when the session of the row that just ended can take it: kept after a detect / "no change" end (held),
+// or live after a pass. Every release of a legacy session makes some sources announce their list again (pattern
+// reannounce-after-own-release) and the next row would open with a new detection, so the rows ride one session.
+size_t Runner::scp_next(const Input& in, bool passed) const {
+    if (legacy_tune(LegacyKnob::Chain) < 1 || steps_[index_].group != Group::Scp || !fc_owned_ || !attached_ || ending_ || stopping_ || cut_wait_) return SIZE_MAX;
+    if (!in.fc_held && !(passed && in.fc_state == fc::State::Active)) return SIZE_MAX;
+    const size_t i = pick();
+    return i != SIZE_MAX && unit_of(steps_[i]) == unit_ && steps_[i].group == Group::Scp && steps_[i].ma > 0 ? i : SIZE_MAX;
+}
 // The run's one scheduler: the unit in progress goes on with its next row; when it has none left it ends with its detach, and
 // the next detached state starts the next unit (docs/CHARGER_TEST_FLOW.md).
 void Runner::next(const Input& in) {
@@ -1967,7 +2029,7 @@ void Runner::next(const Input& in) {
         // Legacy -> Legacy keeps the PD-silent session: only the D+/D- cleanup (the release above) sits in between. Any PD traffic
         // since the attach, or a VBUS that is not at 5 V, means the session is gone: detach and attach again as before.
         if (i != SIZE_MAX && mode_ == Mode::Legacy && mode(unit_of(steps_[i])) == Mode::Legacy && legacy_active_ && silent_ &&
-            safe5(in.vbus_mv) && in.pd_quiet_ms >= kLegacyQuietMs) { continue_legacy(unit_of(steps_[i]), in); return; }
+            safe5(in.vbus_mv) && in.pd_quiet_ms >= quiet_ms()) { continue_legacy(unit_of(steps_[i]), in); return; }
         ending_ = true; begin_detach(in); return;
     }
     // No PD row is pending yet, but the EPR list (heard at the Pd attach) will add some: the Pd unit still runs once.
@@ -2127,9 +2189,9 @@ void Runner::continue_legacy(Unit u, const Input& in) {
     unit_ = u; own_cut_ = false;
     pd_owned_ = fc_owned_ = recover_ = hot_ = false; pd_retry_ = cut_index_ = SIZE_MAX;
     unit_ms_ = in.now;
-    pre_ms_ = u == Unit::Afc ? kAfcPreMs : 0;
     session_ = in.session; resets_ = link_resets(in.pd); caps_gone_ms_ = in.now;
-    state_ = State::Baseline; stable_ = true; stable_ms_ = in.now; phase_ms_ = in.now;   // kLegacyGapMs (+ kAfcPreMs) before the first row
+    state_ = State::Baseline; stable_ = true; phase_ms_ = in.now;   // kLegacyGapMs (+ kAfcPreMs) before the first row
+    baseline_wait(legacy_tune(LegacyKnob::GapMs), u == Unit::Afc ? kAfcPreMs : 0, in.now, pre_ms_, stable_ms_);
 }
 // Detach: Rd off, the 5 V default, then wait for the source to drop its output (VBUS below vSafe0V for kDetachDarkHoldMs).
 void Runner::begin_detach(const Input& in) {
@@ -2150,6 +2212,13 @@ void Runner::poll_detach(const Input& in) {
     if (!((dark_ && in.now - dark_ms_ >= kDetachDarkHoldMs) || in.now - att_ms_ >= limit)) return;
     if (!dipped_) never_dark_ = true;   // a source that kept its output up (a USB-A port has no CC): later detaches do not wait long
     detached_ = true; hot_ = false;
+    if (rel_rd_) {
+        rel_rd_ = false; ending_ = false;
+        if (in.vbus_mv >= kUnsafeLowMv && !safe5(in.vbus_mv)) { unsafe(Reason::Release); return; }   // end_legacy() gives Rd back
+        pd_owned_ = fc_owned_ = recover_ = false;
+        if (stopping_) { end_legacy(); state_ = State::Stopped; return; }
+        next(in); return;
+    }
     if (ending_) { ending_ = false; next(in); }
     else begin_attach(in);
 }
@@ -2188,18 +2257,24 @@ void Runner::poll_attach(const Input& in, const pd::SourceCaps& caps, uint32_t g
         }
         // PD-silent: caps are heard and recorded, never acknowledged. VBUS cycles around the source's Hard Resets are expected.
         if (late_pd_ && caps.valid) replan_pd(caps, in, true);
-        if (safe5(in.vbus_mv) && in.pd_quiet_ms >= kLegacyQuietMs && in.fc_state == fc::State::Idle) {
+        if (safe5(in.vbus_mv) && in.pd_quiet_ms >= quiet_ms() && in.fc_state == fc::State::Idle) {
             if (!stable_ || gap > 250) { stable_ = true; stable_ms_ = in.now; }
-            if (in.now - stable_ms_ >= kLegacySteadyMs) {
+            if (in.now - stable_ms_ >= legacy_tune(LegacyKnob::SteadyMs)) {
                 if (handover_.outcome == HandoverOutcome::NotTried) handover_ = {HandoverOutcome::FellBack, in.now - unit_ms_};
                 attached_ = silent_ = true; session_ = in.session; resets_ = link_resets(in.pd); hot_ = false; caps_gone_ms_ = in.now;
-                ceil_cycled_ = false;
+                ceil_cycled_ = false; own_rel_ = false; reann_ = 0;
                 // The first handshake waits 1000 ms after the PD-silent attach (the baseline settle is 500 of it).
-                pre_ms_ = kLegacyFirstWaitMs - 500 + (unit_ == Unit::Afc ? kAfcPreMs : 0);
-                state_ = State::Baseline; stable_ = true; stable_ms_ = in.now; phase_ms_ = in.now;
+                baseline_wait(legacy_tune(LegacyKnob::FirstWaitMs), unit_ == Unit::Afc ? kAfcPreMs : 0, in.now, pre_ms_, stable_ms_);
+                state_ = State::Baseline; stable_ = true; phase_ms_ = in.now;
                 return;
             }
         } else stable_ = false;
+        // Rp on the line and still no VBUS: the retry's Rd cycle now, not after the give-up wait.
+        const bool rp_no_vbus = caps.active_cc && in.vbus_mv >= 0 && in.vbus_mv < pd::kVSafe0Mv && in.now - att_ms_ >= kLegacyNoVbusMs;
+        if (rp_no_vbus && !selfpwr_ && !attach_try_ && handover_.outcome != HandoverOutcome::StayedPd) {
+            K2LOG("[CT] Rp without VBUS %ums into the attach: Rd cycle\n", unsigned(in.now - att_ms_));
+            attach_try_ = 1; begin_detach(in); return;
+        }
         if (in.now - att_ms_ < (attach_try_ ? kLegacyRetryMs : kLegacyGiveUpMs)) return;
         if (!selfpwr_ && !attach_try_ && handover_.outcome != HandoverOutcome::StayedPd) { attach_try_ = 1; begin_detach(in); return; }   // once more, longer
         if (handover_.outcome == HandoverOutcome::NotTried) handover_ = {HandoverOutcome::StayedPd, in.now - unit_ms_};
@@ -2502,6 +2577,7 @@ Reason Runner::resume(Input in, bool confirmed) {
     const size_t first = pick();
     unit_ = first == SIZE_MAX ? Unit::Count : unit_of(steps_[first]); mode_ = unit_ == Unit::Count ? Mode::Pd : mode(unit_);
     attached_ = first != SIZE_MAX && mode_ == Mode::Pd; detached_ = ending_ = silent_ = legacy_active_ = false; attach_try_ = 0; unit_ms_ = in.now;
+    unit_time_.fill(0); time_ms_ = 0; time_pending_ = true;
     rp_restart_ = false; contract_wrong_ = false; attach_max_mv_ = 0;
     last_ms_ = phase_ms_ = in.now; stable_ = stopping_ = pd_owned_ = fc_owned_ = recover_ = sag_cut_ = sag_open_ = false;
     reason_ = Reason::None; loaded_ = false; suspended_ = false;
@@ -2512,11 +2588,32 @@ Reason Runner::resume(Input in, bool confirmed) {
     if (!safe5(in.vbus_mv) && !dip_reading(in.vbus_mv)) { unsafe(Reason::Release); return reason_; }
     return Reason::None;
 }
+// The run's time per unit, one [CT] line when it ends (Done, Stopped): what each protocol cost, for the lab's speed work.
+// (noinline: its 13 outgoing arguments stay out of poll()'s frame, above poll_impl's.)
+[[gnu::noinline]] static void log_unit_time(const std::array<uint32_t, size_t(Unit::Count)>& t) {
+    static_assert(unsigned(Unit::PdLow) + 1 == unsigned(Unit::Count), "the split line names every unit");
+    K2LOG("[CT] unit ms PD %u QC2 %u QC3 %u QC3+ %u AFC %u FCP %u SCP %u VOOC %u SVOOC %u SVOOC65 %u UFCS %u VIVO %u PDlow %u\n",
+          unsigned(t[0]), unsigned(t[1]), unsigned(t[2]), unsigned(t[3]), unsigned(t[4]), unsigned(t[5]), unsigned(t[6]),
+          unsigned(t[7]), unsigned(t[8]), unsigned(t[9]), unsigned(t[10]), unsigned(t[11]), unsigned(t[12]));
+}
+void Runner::count_unit_time(uint32_t now) {
+    if (busy()) {
+        if (unit_ < Unit::Count && time_ms_ && now - time_ms_ < 2000) unit_time_[size_t(unit_)] += now - time_ms_;
+        time_ms_ = now;
+        return;
+    }
+    time_ms_ = 0;
+    if (!time_pending_) return;
+    time_pending_ = false;
+    log_unit_time(unit_time_);
+}
 void Runner::poll(Input in, const pd::SourceCaps& caps) {
     const auto state = state_;
     const auto reason = reason_;
     const auto index = index_;
+    count_unit_time(in.now);
     poll_impl(in, caps);
+    if (!busy()) count_unit_time(in.now);
     // Stored rows change only with a state/index transition; timer-only polls do not invalidate reads.
     if (state_ != state || reason_ != reason || index_ != index) ++revision_;
 }
@@ -2666,7 +2763,7 @@ void Runner::poll_impl(Input& in, const pd::SourceCaps& caps) {
     }
     // A Legacy unit sits PD-silent: any PD frame is PD traffic. (A resumed unit has no such proof: it asks the sink.)
     const bool pd_active = mode_ == Mode::Legacy &&
-        (silent_ ? in.pd_quiet_ms < kLegacyQuietMs : (caps.valid && caps.active_cc) || in.pd_traffic);
+        (silent_ ? in.pd_quiet_ms < quiet_ms() : (caps.valid && caps.active_cc) || in.pd_traffic);
     if (state_ == State::Releasing) {
         // A non-PD source that browned out (a bank asked for a level it does not have) comes back on its own:
         // wait for vSafe5V instead of ending the run. A PD contract that vanished still stops it.
@@ -2703,7 +2800,17 @@ void Runner::poll_impl(Input& in, const pd::SourceCaps& caps) {
         if (restart_wait_) {
             const uint32_t back = in.now - restart_ms_;
             const bool heard = in.pd_quiet_ms < back;   // a frame since VBUS came back
-            restart_wait_ = back < kRestartSettleMs && (heard ? in.pd_quiet_ms < kLegacyQuietMs : back < kRestartCapsMs);
+            // frames of the source's answer to our release (reann_ 2) just before the cut are 2.5 s of quiet away: wait for that, not 1 s
+            restart_wait_ = back < kRestartSettleMs && (heard ? in.pd_quiet_ms < quiet_ms() : back < (reann_ == 2 ? quiet_ms() : kRestartCapsMs));
+        }
+        // pattern reannounce-after-own-release: same wait, counted from our own release (no VBUS dip to count from).
+        if (own_rel_) {
+            const uint32_t since = in.now - own_rel_ms_;
+            const bool heard = in.pd_quiet_ms < since;   // a frame since the release
+            if (heard) reann_ = 2;
+            else if (since >= kOwnReleaseCapsMs) reann_ = 1;
+            own_rel_ = !stopping_ && silent_ && attached_ && mode_ == Mode::Legacy && !restart_wait_ && !restart_dark_ && since < kOwnReleaseSettleMs &&
+                       (heard ? in.pd_quiet_ms < quiet_ms() : since < kOwnReleaseCapsMs);
         }
         const Reason changed = dropped && pd_owned_ ? Reason::Lost : in.loop_lock ? Reason::Loop :
             in.inline_load ? Reason::Inline : in.fake ? Reason::Fake :
@@ -2712,10 +2819,10 @@ void Runner::poll_impl(Input& in, const pd::SourceCaps& caps) {
         // Offers that changed or PD that showed up end the unit's rows, not the run.
         else if (!stopping_) {
             const Reason unit_stop = offers_changed ? Reason::CapsChanged :
-                legacy_pending && pd_active && !restart_wait_ ? Reason::PdActive : Reason::None;
+                legacy_pending && pd_active && !restart_wait_ && !own_rel_ && !(restart_dark_ && reann_ == 2) ? Reason::PdActive : Reason::None;
             if (unit_stop != Reason::None) skip_unit(unit_stop);
         }
-        if (restart_wait_ && !stopping_) { stable_ = false; return; }
+        if ((restart_wait_ || own_rel_) && !stopping_) { stable_ = false; return; }
         // The next row is a PD row and the source has not announced its list again (it just came back from a cut or a Hard Reset):
         // a request now is refused ("no source caps") and would fail the row. Wait; offers_changed ends it after kCapsReturnMs.
         bool wait_caps = false;
@@ -2770,6 +2877,11 @@ void Runner::poll_impl(Input& in, const pd::SourceCaps& caps) {
                 end_sag_recovery(in);
                 pd_owned_ = fc_owned_ = recover_ = false;
                 if (stopping_) { end_legacy(); state_ = State::Stopped; } else next(in);
+            } else if (fc_owned_ && !pd_owned_ && !selfpwr_ && mode_ == Mode::Legacy && !rel_rd_ && !in.inline_load && in.vbus_mv >= 0 && !safe5(in.vbus_mv)) {
+                // pattern release-leaves-vbus-up: the D+/D- release left a raised level up (QC2 Class B at 12 V, GaN3 65W). A detach
+                // is the other way down for it: Rd off, and only an output that survives that is unsafe (poll_detach).
+                K2LOG("[CT] release left VBUS at %dmV: Rd off\n", int(in.vbus_mv));
+                rel_rd_ = true; ending_ = true; begin_detach(in);
             } else unsafe(Reason::Release);
         }
         return;
@@ -3013,12 +3125,7 @@ void Runner::poll_impl(Input& in, const pd::SourceCaps& caps) {
         // SCP acked a raise's setpoints and VBUS stayed put (the engine's NoChange): the unit takes writes and ignores them, so its
         // other raise rows would only repeat the 12 s wait and the output reset after it. The 4.5 V and 5 V rows still run.
         const bool scp_ignores_raise = group == Group::Scp && in.fc_fail == fc::Fail::NoChange && s.mv > 5000;
-        if (never_answered || scp_ignores_raise)
-            for (size_t n = 0; n < count_; ++n) {
-                auto& o = steps_[n];
-                if (o.verdict != Verdict::Pending || o.group != group || (!never_answered && o.mv <= 5000)) continue;
-                o.verdict = Verdict::Skip; o.reason = Reason::Request; o.detail = static_cast<uint8_t>(in.fc_fail); env_.record(o);
-            }
+        if (never_answered || scp_ignores_raise) skip_group_rows(group, !never_answered, static_cast<uint8_t>(in.fc_fail));
         return;
     }
     const bool banded = band_ok(eff, in, gap);

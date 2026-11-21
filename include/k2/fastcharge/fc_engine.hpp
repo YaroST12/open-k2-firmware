@@ -33,6 +33,8 @@ inline constexpr std::uint32_t kQc2TransitionMs = 12000;
 // kScpNoChangeMs after the last write. A passing 4.5 V row moved 0.5 V within 150 ms of the Vset ack (2026-11 capture), so 2 s is
 // over ten times the slowest observed answer; the 100 mV is above the monitor's noise and below any slew that counts as following.
 inline constexpr std::uint32_t kScpNoChangeMs = 2000;
+// A kept SCP session (Engine::keep) nobody retargets within this long is released.
+inline constexpr std::uint32_t kScpHoldMs = 4000;
 inline constexpr int kScpNoChangeMv = 100, kScpNoChangeStepMv = 300;
 
 enum class Proto : std::uint8_t { Qc2, Qc3, Qc3Plus, Afc, Fcp, Scp, Vooc, SuperVooc, SuperVooc65, Ufcs, Vivo, Count };
@@ -158,7 +160,13 @@ public:
     Fail start(Proto p, int target_mv, bool confirmed, bool allow_inline = false, int scp_ma = accp::kScpInitMa,
                int ufcs_ma = 0);
     // Change the target of a running trigger (QC2 level, QC3 voltage, a new UFCS Request at `ufcs_ma`).
-    Fail set_target(int target_mv, bool confirmed, int ufcs_ma = 0);
+    // `scp_ma` >= 0 sets the SCP current limit of the new level (an SCP session the first row left detect-only gets its init then).
+    Fail set_target(int target_mv, bool confirmed, int ufcs_ma = 0, int scp_ma = -1);
+    // SCP: with keep(true) a session that ends Detected or NoChange is not released: the lines stay as they are, the keep-alive reads
+    // go on and set_target() takes the next level on the live session (held()), so the next rows skip the BC1.2 re-detection and the
+    // SCP detection. The state reads Failed with that fail until then; stop(), start() or kScpHoldMs release it. start() clears the flag.
+    void keep(bool on) { keep_ = on; }
+    bool held() const { return held_; }
     // Leave the session and go Idle. A running UFCS session first sends Exit_UFCS_Mode and keeps the UART (D- idle high)
     // until the source's ACK or kUfcsExitMs, which poll() serves (exiting()); only then the bus reset takes both lines to 0 V:
     // D- low for 2 ms or more while the source is still in UFCS mode is a hardware reset, which cuts VBUS. Every other
@@ -304,6 +312,11 @@ private:
     Caps caps_ K2_BSS_ZERO;                                // what the adapter / source said about itself (see caps())
     std::array<std::uint8_t, 8> scp_lim_ K2_BSS_ZERO;      // SCP limit registers 0x90..0x97 as read in this session
     void patch_scp_current();
+    bool keep_ K2_BSS_INIT(false), held_ K2_BSS_INIT(false);   // keep(): hold an SCP session at its Detected / NoChange end; held_: it is held now
+    bool scp_read_ K2_BSS_INIT(false), scp_on_ K2_BSS_INIT(false);   // this session read the adapter's registers / wrote the enable and init
+    int scp_iset_ma_ K2_BSS_INIT(0);                                  // the current limit written last
+    std::uint32_t hold_ms_ K2_BSS_INIT(0);                            // when the hold began
+    void hold_poll(std::uint32_t now);
     std::uint8_t uid_ K2_BSS_INIT(0);                       // message number of our next message (0..15); the source's ACK moves it on
     std::array<std::uint8_t, 14> utx_ K2_BSS_ZERO;         // the message sent last that is still waiting for its ACK (kept for the retransmit; a Request is the longest, 14 bytes)
     std::uint8_t utx_n_ K2_BSS_INIT(0);                     // its length, 0 = nothing outstanding
