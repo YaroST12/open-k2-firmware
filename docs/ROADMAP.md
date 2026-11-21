@@ -80,6 +80,14 @@ Everything is C++23; there are no C files left in `src/` (TinyUSB and lwIP under
 
 Open defects, newest first. A row leaves this list when its fix is merged and seen on hardware.
 
+- **QC2 Deep testing animation does not advance to the next voltage badge** (2026-11-21, user hardware report). During a
+  Deep charger test, QC2 changes VBUS voltage through its levels, but the Running-grid highlight/outline stays stuck on
+  the first voltage badge instead of advancing to the active voltage badge.
+
+- **PPS Deep range label disagrees with the range being tested** (2026-11-21, user hardware report). The UI displays a
+  `5V-21V` PPS range while the engine is visibly stepping through a `3.3V-5V` range (check APDO min/max formatting vs
+  sweep target bounds).
+
 - **`K2_PDSTRESS=1` does not pass the gate: `ChargerTestSession::poll` needs 1056 B of stack** (2026-11-14, found on
   k2/bugbatch; pre-existing: the base tree gives the same warning). The PD Stress build pulls more inlined code into
   `poll`, over `FRAME_MAX` (1024 B), so `-Wstack-usage` fails `make gate K2_PDSTRESS=1`; the default build is not
