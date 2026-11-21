@@ -13,11 +13,11 @@ that did not start. Then polls `charger-test status`
 until the run ends (done, stopped, unsafe...) and prints `charger-test summary`. Run `k2_remote.py action pd-rescan` first:
 a run with 0 PDOs is invalid.
 
-    python3 tools/ct_start.py [--wait 300] [--level light|medium|deep|offers] [--units qc2,qc3,pd] [--cable off|builtin|builtin:N|saved:N]
+    python3 tools/ct_start.py [--wait 300] [--level light|medium|deep] [--units qc2,qc3,pd] [--cable off|builtin|builtin:N|saved:N]
 
 --level sets the run's thoroughness (`charger-level`, sent before every START: the device keeps the last choice): light
 records what the charger advertises and asks for nothing above 5 V, medium (the default) is the full run without deep
-sweeps, offers is PD only: every offer is listed and one AVS step is asked at its minimum (no sweeps, no --units), deep adds the PPS and AVS deep sweeps, the PD spec section (a build with the PD spec engine; the summary lists its
+sweeps, deep adds the PPS and AVS deep sweeps, the PD spec section (a build with the PD spec engine; the summary lists its
 verdicts, nothing is asked above what the charger advertises) and the SuperVOOC ceiling stage (after a detected VOOC family; ct_start
 sends its mode on every deep run: --svooc-cap usb-a, else on; usb-a is a no-op, the ceiling stage runs as on). --avs-sweep or --svooc-cap without --level means deep;
 --sweep / --no-sweep override the level's PPS sweep for this run. The summary ends with the VOOC family's ident and, on a
@@ -33,8 +33,6 @@ picked another, so a charger whose PDO 1 has the EPR bit gets its EPR and AVS le
 before START, and it is whatever was picked last on the device or by an earlier --cable (the device remembers it, an explicit
 --cable off included: pass --cable off again, or --cable builtin, to change it). With --cable the choice is sent before every START.
 A charger that is not on the plug directly (a cable in between) is refused by the Ra guard (exit 6) for any identity but off.
---level offers ignores --cable: the run decides by the connection (a cable read this attach answers itself, an EPR-rated one
-with no spoof; none read and the charger on the plug: the EPR spoof; else no spoof and the EPR rows skip), so the Ra guard never refuses it.
 """
 import argparse
 import sys
@@ -120,17 +118,6 @@ def preflight(link, sleep=time.sleep):
         if not st["pd_valid"]:
             print("note: no PD source capabilities after a rescan: legacy-only run", file=sys.stderr)
     return None
-
-
-OFFERS_IDENTITY = ("decided by the run: the cable read this attach answers (an EPR-rated one is used as it is, no spoof); with none read "
-                   "and the charger on the top plug the EPR spoof; otherwise no spoof, the EPR rows skip")
-
-
-def identity_line(level, cable_arg, now):
-    """The "cable identity:" line. A Read-offers run decides by the connection, whatever was picked, so it prints the rule."""
-    if level == "offers":
-        return "cable identity: " + OFFERS_IDENTITY + ("; --cable is ignored at --level offers" if cable_arg is not None else "")
-    return "cable identity: " + (cable_arg if cable_arg is not None else cable_words(now) + " (the device's choice)")
 
 
 def cable_words(reply):
@@ -248,8 +235,7 @@ def parse_args(argv=None):
     ap.add_argument("--wait", type=float, default=900)
     ap.add_argument("--level", choices=kr.TEST_LEVELS,
                     help="light: what is advertised, nothing above 5 V; medium (default): the full run, no deep sweeps; "
-                         "deep: medium plus the PPS and AVS deep sweeps and the PD spec section; "
-                         "offers: PD only, every offer listed plus one AVS step at its minimum")
+                         "deep: medium plus the PPS and AVS deep sweeps and the PD spec section")
     ap.add_argument("--path")
     sweep = ap.add_mutually_exclusive_group()
     sweep.add_argument("--sweep", action="store_true",
@@ -270,13 +256,11 @@ def parse_args(argv=None):
                          "the part from 5 V up runs in pd, the part below 5 V in pd-low (a list without pd-low skips it)")
     ap.add_argument("--cable", default=None,
                     help="cable identity of the run: off, builtin, builtin:<id|name> (1 epr-50v, 2 xiaomi-6a, 4 oneplus) "
-                         "or saved:<library id>. Default: the device's own choice (the EPR spoof until another one is picked); ignored at --level offers; "
+                         "or saved:<library id>. Default: the device's own choice (the EPR spoof until another one is picked); "
                          "it is printed before START. 'off' is remembered by the device like any pick")
     a = ap.parse_args(argv)
     if a.level == "light" and (a.sweep or a.avs_sweep):
         ap.error("--level light asks for nothing above 5 V: no deep sweep with it")
-    if a.level == "offers" and (a.sweep or a.avs_sweep or a.svooc_cap or a.units):
-        ap.error("--level offers is PD only with one AVS step: no sweeps, SuperVOOC cap or --units with it")
     if a.level in ("light", "medium") and a.svooc_cap:
         ap.error("the SuperVOOC ceiling stage runs at --level deep only (light and medium stop at the detection)")
     return a
@@ -348,8 +332,7 @@ def main(argv=None):
             print(why, file=sys.stderr)
             return 1
         print("level: " + level + {"light": " (what is advertised, nothing above 5 V)", "medium": " (no deep sweeps)",
-                                   "deep": " (PPS and AVS deep sweeps, PD spec section)",
-                                   "offers": " (PD offers, one AVS step)"}[level], file=sys.stderr)
+                                   "deep": " (PPS and AVS deep sweeps, PD spec section)"}[level], file=sys.stderr)
         if pps_sweep(a) is not None:
             kr.charger_sweep(link, pps_sweep(a))
             print("PPS deep sweep: " + ("on (every 100 mV per PPS APDO, 1 A)" if pps_sweep(a) else "off (--no-sweep)"),
@@ -373,7 +356,7 @@ def main(argv=None):
         except kr.RemoteError as e:
             print(f"could not set the cable identity: {e}", file=sys.stderr)
             return 1
-        print(identity_line(level, a.cable, now), file=sys.stderr)
+        print("cable identity: " + (a.cable if a.cable is not None else cable_words(now) + " (the device's choice)"), file=sys.stderr)
         before = run_id_of(link)
         if before is None:
             print("the K2 does not answer charger-test status", file=sys.stderr)

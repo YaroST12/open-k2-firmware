@@ -36,7 +36,7 @@ STATES = ["Setup", "Verify 5V", "Negotiating", "Hold", "Return to 5V", "Complete
           "UNSAFE: unplug source", "Detach charger", "Initializing...", "SVOOC ceiling", "PD spec"]
 HANDOVER = ["not tried", "fell back", "stayed PD", "fault", "reboot", "in PD contract"]
 VERDICT = ["none", "pass", "fail", "skip"]
-LEVELS = ["medium", "light", "deep", "offers"]   # charger_test::Level, the wire values (0 = Medium)
+LEVELS = ["medium", "light", "deep", "old"]   # charger_test::Level, the wire values (0 = Medium; 3 = a retired preset, old cards only)
 MAX_RANGES = 4
 # What a group's detail byte means: pd::Err (stored as 128 + err) and pd::SinkResult for PD, fc::Fail for the rest.
 # Mirrors fc::name(Fail), pd::err_name and pd::result_name; tests/test_report_card_py.py parses those and compares.

@@ -612,8 +612,7 @@ them should move them into the kit first.
 - A hazard that does not block rides in the cell as the hint line.
 - **Review reminder (charger test, 2026-11-21, the user's decision).** Review step 3/3 has no alert band: the ActionCell hint `other port must be empty`
   under START is the only reminder (the K2 cannot see a device there; START's arm + CONFIRM is the acknowledgement). The five kv rows
-  (Tests, Depth, Spoof, Peak, Power) lay up under the rule at y154 above the 64 px START ticket. A Read-offers run's Spoof row says what
-  it presents (`Cable 50V 5A`, the EPR identity, `Off`). `test_ui_no_truncation` covers it in four rotations; renders
+  (Tests, Depth, Spoof, Peak, Power) lay up under the rule at y154 above the 64 px START ticket. `test_ui_no_truncation` covers it in four rotations; renders
   `mock_ct_review*`, `mock_ct_confirm*`.
 
 **Alert with choices.** `ra_guard_refuse.png`

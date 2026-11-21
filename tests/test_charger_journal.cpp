@@ -776,7 +776,7 @@ static void test_a_noted_spec_result_is_written_by_a_pump() {
 // The run's level rides in the meta byte p[1] bits 3..4 (user decision 2026-11-15): a resumed Light run is replanned Light, never as
 // Medium; a meta written before the level existed (bits 3..4 zero) reads Medium.
 static void test_meta_keeps_the_level() {
-    for (const auto l : {ct::Level::Light, ct::Level::Medium, ct::Level::Deep, ct::Level::Offers}) {
+    for (const auto l : {ct::Level::Light, ct::Level::Medium, ct::Level::Deep}) {
         Vol v; cj::Replay r;
         cj::RunMeta m = meta3(); m.level = l; m.pps_sweep = l == ct::Level::Deep;
         arm(v, plan(6));
@@ -791,6 +791,14 @@ static void test_meta_keeps_the_level() {
     CHECK_EQ((buf[4 + 1] >> 3) & 3, 2);   // Deep = 2 in bits 3..4
     m.level = ct::Level::Medium; cj::encode_meta(buf, m);
     CHECK_EQ((buf[4 + 1] >> 3) & 3, 0);   // Medium = 0: an older journal's zero bits read Medium
+    {   // the retired level 3 (a journal written by an older build) replans as the default, never as an unplannable level
+        Vol v; cj::Replay r;
+        cj::RunMeta o = meta3(); o.level = ct::Level::Retired;
+        arm(v, plan(6));
+        CHECK_EQ(int(v.j->meta(o)), 0);
+        v.reboot(); v.j->replay(r);
+        CHECK_EQ(int(r.meta.level), int(ct::Level::Medium)); CHECK_EQ(int(r.options.level), int(ct::Level::Medium));
+    }
 }
 // A meta written without a guard reading (no identity, or a firmware before the byte existed) replays as "not judged".
 static void test_meta_without_a_guard_reads_zero() {

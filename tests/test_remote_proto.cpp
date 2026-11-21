@@ -3459,20 +3459,20 @@ static void test_charger_avs_sweep() {
     CHECK_EQ(run(f, request(0x54, 5, {1}), r), 1); check_header(r, 0x54, 5, Status::Busy, 0);
 }
 
-// Cmd::ChargerLevel (0x5B): [level(1)] the level of the next run (0 Medium, 1 Light, 2 Deep, 3 Offers), rsp [level(1)]; BadArg past Offers;
+// Cmd::ChargerLevel (0x5B): [level(1)] the level of the next run (0 Medium, 1 Light, 2 Deep), rsp [level(1)]; BadArg past Deep;
 // Busy while a run is active.
 static void test_charger_level() {
     Fake f; Frame r;
-    for (uint8_t l = 0; l < 4; ++l) {
+    for (uint8_t l = 0; l < 3; ++l) {
         CHECK_EQ(run(f, request(0x5B, uint8_t(1 + l), {l}), r), 1);
         check_header(r, 0x5B, uint8_t(1 + l), Status::Ok, 1); check_bytes(r, kRspHeader, {l});
         CHECK_EQ(f.level_set, int(l));
     }
-    CHECK_EQ(f.level_sets, 4);
+    CHECK_EQ(f.level_sets, 3);
     const int calls = f.calls;
     CHECK_EQ(run(f, request(0x5B, 4, {}), r), 1); check_header(r, 0x5B, 4, Status::BadLength, 0);
     CHECK_EQ(run(f, request(0x5B, 5, {1, 1}), r), 1); check_header(r, 0x5B, 5, Status::BadLength, 0);
-    CHECK_EQ(run(f, request(0x5B, 6, {4}), r), 1); check_header(r, 0x5B, 6, Status::BadArg, 0);
+    CHECK_EQ(run(f, request(0x5B, 6, {3}), r), 1); check_header(r, 0x5B, 6, Status::BadArg, 0);
     CHECK_EQ(f.calls, calls);
     f.level_status = Status::Busy;
     CHECK_EQ(run(f, request(0x5B, 7, {1}), r), 1); check_header(r, 0x5B, 7, Status::Busy, 0);

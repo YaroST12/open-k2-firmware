@@ -54,15 +54,6 @@ constexpr Choice canonical(Choice c) {
     return c;
 }
 
-// The identity a run presents. A Read-offers run decides by the connection, whatever the pick is: a cable that was read answers the
-// charger itself (an EPR-rated one enters EPR, a weaker one skips the EPR rows); with none read it presents the default EPR built-in
-// when the spoof can work (the charger on the plug), else nothing. Every other level presents the pick.
-constexpr Choice run_choice(Choice pick, bool offers, bool cable_read, bool spoof_possible) {
-    return !offers ? pick : !cable_read && spoof_possible ? kDefaultChoice : Choice{};
-}
-// A cable read this attach that is rated for EPR (50 V, 5 A).
-constexpr bool epr_rated(bool observed, uint16_t max_mv, uint16_t max_ma) { return observed && max_mv == 50000 && max_ma == 5000; }
-
 // What the report card records of the identity a run presented: the e-marker's VID / PID (ID header VDO bits 15:0,
 // product VDO bits 31:16) and the limits its cable VDO claims (current bits 6:5: 1 = 3 A, 2 = 5 A; voltage bits 10:9:
 // 20 / 30 / 40 / 50 V; an unknown code counts as the 3 A / 20 V default).

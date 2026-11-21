@@ -990,30 +990,11 @@ and the hardware check). A row leaves this list when its fix is merged and the h
 
 ## Specified work (not started)
 
-- **Charger test "Offers" depth** (user decision 2026-11-21). PD only: reads Source_Capabilities, enters EPR as the
-  PD unit does, reads EPR_Source_Capabilities, then one AVS request (the EPR AVS APDO in EPR, else the SPR AVS APDO) at its
-  minimum voltage and 1 A; Accept + PS_RDY + VBUS within the step tolerance, never above 36 V; no AVS offered is a dim skip.
-  Fixed and PPS levels stay Advertised. Back to 5 V, EPR exit and Rd drop go through the existing release path.
-  **Partial: built and host-tested (3b66351c engine, wire and tools; dc9a2eda UI), not verified on hardware.**
-  A new `ct::Level::Offers` (run level 3; journal, remote status, card byte and `ct_start.py --level offers` carry it, no
-  format bump). It is the Tests step's 4th Depth value (Light, Medium, Deep, Offers; not in Settings); the preset pick is
-  kept but the run is PD only. The cable rule (k2/offers-cable, 2026-11-21, after a hardware bug: Offers forced the spoof on
-  a real EPR cable and ct_start refused it): a cable read this attach that is e-marked and EPR-rated (50 V, 5 A) answers the
-  charger itself, no spoof; no cable read and the spoof can work (charger on the plug, the Ra guard's own test): the default
-  EPR spoof; otherwise (a weaker cable read, or no spoof possible): no spoof, the EPR rows skip with the cable reason and the
-  AVS step runs on the SPR AVS APDO. The Settings spoof is ignored; Review's Spoof line says what is presented (Cable 50V 5A,
-  the EPR identity, Off); ct_start prints the rule and never refuses Offers (cdc32492 Review without the band, f3693009 the rule;
-  not verified on hardware). Validate: a PD charger with EPR AVS, an SPR-only charger, a fixed-only charger, a Spoof-Off setting
-  (EPR must still be entered); an EPR charger behind a real e-marked EPR cable (the cable read before START: EPR entered, no
-  spoof, Review "Cable 50V 5A"); the same behind a 3 A or unmarked cable (no spoof, EPR rows skip, SPR AVS runs); the charger
-  directly on the top plug with nothing read (the spoof, as before); the card names the run kind. Hardware 2026-11-21 (57e1a23f, 100 W
-  SPR charger, 5 A 50 V EPR cable, runs/hw-2026-11-21/offers-cable): Offers runs with no refusal, cable unread (Spoof Off) and
-  after a Charger-tab read (Review "Cable 50V 5A"); Review has no band, START hint shown; EPR/AVS paths still need an EPR
-  charger. Open: a Cable-tab read with the charger asleep does not count (`physical_cable()` takes only the attach scan);
-  the card says "cable not read" when Review said "Cable 50V 5A" (START's scan skipped at VBUS 0); ct_start prints
-  "(Light run)" for an Offers run. Inline rule (every level): with
-  the inline latch set START is refused ("load attached"), a latch during START's wait cancels it and puts Rd and identity
-  back; nothing transmits, presents Rd/Ra, turns on VCONN or enters EPR.
+- ~~**Charger test "Offers" depth**~~ removed (user decision 2026-11-21, k2/test-layer-reads): the Offers level (3b66351c, dc9a2eda,
+  f3693009) and its cable rule are gone; the Depth row is Light, Medium, Deep again. Light plus the PD pick lists the offers.
+  Wire value 3 stays reserved: an old card/journal that carries it decodes (card "Old", journal replans as Medium).
+  Inline rule (every level): with the inline latch set START is refused ("load attached"), a latch during START's wait
+  cancels it and puts Rd and identity back; nothing transmits, presents Rd/Ra, turns on VCONN or enters EPR.
 - **HID-cable loop: the loop probe** (user decision 2026-11-11). Topology: the K2 on a charger, a cable from its PD-bus
   port back into its own left (HID) port, so the HID port's VBUS follows the PD bus. The 5 V lock half is built (see
   "Not verified on hardware"); the probe is not started.

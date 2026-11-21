@@ -541,7 +541,7 @@ progress { width: 100%; height: 10px; accent-color: var(--accent); }
     </div>
     <div id="ctr-confirm" class="confirm" role="alertdialog" aria-labelledby="ctr-confirm-h" aria-describedby="ctr-confirm-p" hidden>
       <h3 id="ctr-confirm-h">Start the charger test?</h3>
-      <p id="ctr-warn" class="stern" role="alert">OTHER PORT FREE? A device on the other port can be damaged. Unplug it.</p>
+      <p id="ctr-warn" class="stern" role="alert">The other port must be empty.</p>
       <p id="ctr-confirm-p">The K2 becomes an active sink and asks the charger for <b>every level it offers</b> in the chosen units:
         each PD voltage, the PPS / AVS steps, EPR levels up to the K2's monitor ceiling, and the QC and vendor fast-charge modes.
         The K2's output follows every level. Disconnect any phone, laptop or other load from the output first.</p>
@@ -722,7 +722,7 @@ var K2Proto = (function () {
     for (var i = 0; i < PROG_FLAGS.length; i++) if ((flags >> i) & 1) o.push(PROG_FLAGS[i]);
     return o.join(", ");
   }
-  var TEST_LEVELS = ["medium", "light", "deep", "offers"];   // charger_test::Level order: Medium 0 (the default), Light 1, Deep 2, Offers 3 (Read offers)
+  var TEST_LEVELS = ["medium", "light", "deep"];   // charger_test::Level order: Medium 0 (the default), Light 1, Deep 2
   var LATENCY = ["n/a", "<10 ns (~1 m)", "10-20 ns (~2 m)", "20-30 ns (~3 m)", "30-40 ns (~4 m)",
                  "40-50 ns (~5 m)", "50-60 ns (~6 m)", "60-70 ns (~7 m)", ">70 ns"];
   var TERMINATION = ["Passive (VCONN not required)", "Passive (VCONN required)",

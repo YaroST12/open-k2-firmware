@@ -370,8 +370,6 @@ public:
     // The identity the next START presents (Cmd::ChargerCable); false for a malformed choice or a clone not in the library.
     // The Cable step's cursor follows it. Nothing is armed until a START.
     bool set_cable_choice(ctcable::Choice c);
-    ctcable::Choice run_choice() const;   // the identity START presents (ctcable::run_choice): the pick; a Read-offers run decides by the cable read and the spoof guard
-    bool run_uses_cable() const;          // a Read-offers run with an EPR-rated cable read: that cable answers, no spoof (Review says "Cable 50V 5A")
     ctcable::Info cable_info() const;
     Stage stage() const { return stage_; }
     bool reattach_planned() const { return reattach_plan_; }
@@ -431,8 +429,7 @@ private:
     [[gnu::noinline]] bool apply_cable(ctcable::Choice);   // arm the identity and turn the Ra mode on; false = refused (message set)
     void release_run();            // Rd, Ra mode and a dialog-armed spoof back to passive
     void guard_sample(uint32_t now);                 // one CC reading into the Ra guard's peak window
-    raguard::Reading guard_reading() const;          // the window's peaks plus VBUS and the passive flag, no sample taken
-    raguard::Topology guard_topology(uint32_t now, bool log = true, bool sample = true);  // what the lines say about the charger (cable / direct), judged now
+    raguard::Topology guard_topology(uint32_t now, bool log = true);  // what the lines say about the charger (cable / direct), judged now
     void fill_cable_names();            // the saved names of the rows the Cable list shows (never loaded while painting)
     void set_stage(Stage, int selection = 0);
     void message(const char*);

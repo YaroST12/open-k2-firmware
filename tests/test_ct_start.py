@@ -358,7 +358,7 @@ class LevelOption(unittest.TestCase):
         self.assertEqual(ct_start.run_level(ct_start.parse_args([])), "medium")
 
     def test_each_level_parses(self):
-        for name in ("light", "medium", "deep", "offers"):
+        for name in ("light", "medium", "deep"):
             self.assertEqual(ct_start.run_level(ct_start.parse_args(["--level", name])), name)
 
     def test_an_unknown_level_is_refused(self):
@@ -377,25 +377,6 @@ class LevelOption(unittest.TestCase):
         for flag in ("--avs-sweep", "--sweep"):
             with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
                 ct_start.parse_args(["--level", "light", flag])
-
-
-class OffersLevel(unittest.TestCase):
-    """--level offers is the Read-offers preset: PD only, one AVS step. It takes no sweep, ceiling or unit flags, and it never
-    sends a SuperVOOC mode (that stage is Deep's)."""
-
-    def test_offers_parses_and_sends_no_svooc_mode(self):
-        a = ct_start.parse_args(["--level", "offers"])
-        self.assertEqual(ct_start.run_level(a), "offers")
-        self.assertIsNone(ct_start.svooc_mode(a))
-        self.assertIsNone(ct_start.pps_sweep(a))
-
-    def test_offers_is_a_wire_level(self):
-        self.assertEqual(ct_start.kr.TEST_LEVELS.index("offers"), 3)
-
-    def test_offers_with_a_sweep_ceiling_or_units_flag_is_refused(self):
-        for flags in (["--avs-sweep"], ["--sweep"], ["--svooc-cap", "on"], ["--units", "pd"]):
-            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
-                ct_start.parse_args(["--level", "offers"] + flags)
 
 
 class ReviewCursor(unittest.TestCase):
@@ -558,27 +539,6 @@ class CableDefaultRun(unittest.TestCase):
         self.assertEqual(sent[0], (1, 2))
         rc, sent, text = self.run_main(["--wait", "5", "--cable", "builtin:cuktech-6a"])   # the older name of id 2
         self.assertEqual(sent[0], (1, 2))
-
-    def test_offers_says_the_run_decides_and_starts_in_every_case(self):
-        # the cable read answers (EPR-rated: no spoof); nothing read on the plug: the EPR spoof; else no spoof. None of them is a
-        # refusal, so ct_start prints the rule instead of the device's pick and starts
-        rc, sent, text = self.run_main(["--wait", "5", "--level", "offers"])
-        self.assertEqual(rc, 0)
-        self.assertNotIn("(the device's choice)", text)
-        self.assertIn("cable identity: decided by the run", text)
-        self.assertIn("cable read this attach", text)
-        self.assertNotIn("--cable off", text)
-        self.assertNotIn("ignored", text)
-
-    def test_offers_notes_that_cable_is_ignored(self):
-        rc, sent, text = self.run_main(["--wait", "5", "--level", "offers", "--cable", "off"])
-        self.assertEqual(rc, 0)
-        self.assertEqual(sent[0], (0, 0))                 # still remembered by the device for the next levels
-        self.assertIn("--cable is ignored at --level offers", text)
-
-    def test_other_levels_keep_the_devices_choice_line(self):
-        rc, sent, text = self.run_main(["--wait", "5", "--level", "medium"])
-        self.assertIn("cable identity: builtin:1 (the device's choice)", text)
 
     def test_a_guard_refusal_exits_six_and_points_at_cable_off(self):
         rc, sent, text = self.run_main(["--wait", "5"], started=ct_start.REFUSED)

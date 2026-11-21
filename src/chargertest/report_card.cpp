@@ -665,7 +665,7 @@ bool decode_card(std::span<const uint8_t> payload, Card& c) {
         d.last_uptime_s = q[3] | uint32_t(q[4]) << 8 | uint32_t(q[5]) << 16;
     }
     if (p[33] >= 8 && payload.size() >= off::kV8 + 1) d.rebalanced = p[off::kV8];
-    if (p[33] >= 8 && payload.size() >= off::kV8 + 2 && p[off::kV8 + 1] < ct::kRunLevelCount) d.level = ct::Level(p[off::kV8 + 1]);
+    if (p[33] >= 8 && payload.size() >= off::kV8 + 2 && p[off::kV8 + 1] <= unsigned(ct::Level::Retired)) d.level = ct::Level(p[off::kV8 + 1]);
     if (p[33] >= 9 && payload.size() >= off::kV9 + kMaxRanges * kSpreadLevels)
         for (unsigned i = 0; i < kMaxRanges; ++i)
             for (unsigned k = 0; k < kSpreadLevels; ++k)
