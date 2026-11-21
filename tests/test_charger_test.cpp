@@ -8923,6 +8923,22 @@ static void test_offers_asks_one_epr_avs_level_in_epr() {
     }
     CHECK_EQ(f.entry_times.size() >= 1, true);
     CHECK_EQ(f.in.pd.epr_mode, false);   // left through the usual release
+    for (const auto& s : r.steps()) CHECK_EQ(s.reason == ct::Reason::CableLimit, false);   // the forced identity is never cable-unfit
+}
+// A cable that was read and is not 50 V / 5 A keeps EPR entry off (the forced identity applies only while nothing was read).
+static void test_offers_with_a_read_weak_cable_skips_the_epr_entry() {
+    Fake f = epr_spoof_fake();
+    f.in.cable_observed = true; f.in.cable_mv = 20000; f.in.cable_ma = 3000;
+    const auto& apdo = f.caps.pdos[1];
+    const unsigned lo = (apdo.min_mv + 99) / 100 * 100;
+    ct::Runner r(f);
+    CHECK_EQ(r.start(f.caps, ct::with_level({}, ct::Level::Offers), f.in, true), ct::Reason::None);
+    f.tick(r, 600000);
+    CHECK_EQ(int(r.state()), int(ct::State::Done));
+    CHECK_EQ(f.entry_times.size(), size_t(0));
+    unsigned pos = 0, mv = 0, ma = 0;
+    CHECK_EQ(offers_pass_rows(r, nullptr, &pos, &mv, &ma), 1u);
+    CHECK_EQ(pos, 2u); CHECK_EQ(mv, lo);   // the SPR AVS APDO answers instead
 }
 static void test_offers_asks_the_spr_avs_level_when_epr_is_refused() {
     Fake f = epr_spoof_fake();
@@ -9550,7 +9566,7 @@ int main() {
     test_prog_check_without_a_capture_asks_nothing_more(); test_prog_check_follows_the_sweep_switches(); test_light_run_requests_nothing_but_5v(); test_light_lists_the_epr_levels_as_advertised();
     test_epr_spoof_identity_tests_epr_and_avs(); test_epr_capable_list_never_gives_epr_rows_not_offered(); test_epr_spoof_identity_at_light_makes_no_requests();
     test_offers_asks_one_epr_avs_level_in_epr(); test_offers_asks_the_spr_avs_level_when_epr_is_refused(); test_offers_without_an_avs_offer_asks_nothing_above_5v();
-    test_offers_never_asks_above_the_monitor_ceiling(); test_offers_masks_the_selection_to_pd();
+    test_offers_never_asks_above_the_monitor_ceiling(); test_offers_masks_the_selection_to_pd(); test_offers_with_a_read_weak_cable_skips_the_epr_entry();
     test_depth_cycle_appends_offers(); test_offers_preview_is_pd_only_whatever_the_pick();
     test_a_resumed_light_run_stays_light();
     test_the_page_names_the_run_level();

@@ -6011,6 +6011,19 @@ static void test_remote_start_is_the_devices_start() {
         CHECK_EQ(ui.charger_test_busy(), false); CHECK_EQ(ui.charger_test_stage(), 4); nothing_armed_stub();
     }
 }
+// The remote START is the device's own: the same forced identity, with the Settings spoof Off.
+static void test_remote_offers_start_presents_the_epr_identity() {
+    fixture(); Ui ui; boot_home(ui);
+    CHECK_EQ(ui.charger_test_set_cable(ctcable::Choice{}), true);
+    CHECK_EQ(ui.charger_test_set_level(uint8_t(ct::Level::Offers)), true);
+    CHECK_EQ(ui.charger_test_start(false, 1200).result == RemoteStart::Result::Accepted, true);
+    CHECK_EQ(g_stub.spoof_on, false);                                            // nothing armed until the confirmation is through
+    for (uint32_t t = 1200; t <= 2100 && !ui.charger_test_busy(); t += 20) ui.tick(t);
+    CHECK_EQ(ui.charger_test_busy(), true);
+    CHECK_EQ(ui.charger_test_results().level(), ct::Level::Offers);
+    CHECK_EQ(g_stub.spoof_on, true); CHECK_EQ(g_stub.spoof_arms, 1);
+    CHECK_EQ(ui.charger_test_cable_info().run == ctcable::kDefaultChoice, true);
+}
 
 // OEM levels by their watts (oem_watts.hpp): a VOOC-family charger detected at 5 V (opener 0xA8). Medium: the ident alone, every
 // level not tested. Deep: the ceiling stage stood at 0x06D under 11.02 V (120 W claimed): every SuperVOOC level claimed. The Results
@@ -6514,7 +6527,7 @@ int main() {
     test_avs_sweep_is_a_selection_bit();
     test_avs_sweep_row_follows_the_only_sweep_kind();
     test_the_default_run_is_medium();
-    test_depth_offers_value_and_the_forced_epr_spoof(); test_other_levels_keep_the_spoof_pick();
+    test_depth_offers_value_and_the_forced_epr_spoof(); test_other_levels_keep_the_spoof_pick(); test_remote_offers_start_presents_the_epr_identity();
     test_depth_row_cycles_and_shows_on_review();
     test_an_old_journal_resumes_without_the_default_sweep();
     test_self_powered_review_note(); test_review_carries_the_other_port_warning(); test_phantom_evidence_does_not_refuse_a_run_but_a_load_does(); test_self_powered_run_is_on_the_card(); test_a_cable_read_once_stays_with_the_run();
