@@ -6384,6 +6384,26 @@ static void test_start_on_a_port_without_cc_detaches_quickly() {
         CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 200000), true);
     }
 }
+// pattern release-leaves-vbus-up: a D+/D- release after a high level (QC2 Class B at 12 V) that leaves VBUS up is answered with an
+// Rd off (the source returns to 5 V on a detach) before the run is called unsafe. A port that stays up through the Rd off is unsafe.
+static void test_release_that_leaves_vbus_up_falls_back_to_an_rd_off() {
+    for (const bool stays_up : {false, true}) {
+        Fake f; ct::Runner r(f);
+        f.never_dark = stays_up;
+        const auto o = with_units(ct::bit(A::Qc2), {ct::Unit::Qc2});
+        CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+        f.release_ok = false;   // the D+/D- release does not bring VBUS down
+        CHECK_EQ(run_until(f, r, [&] { return !r.busy() || r.state() == ct::State::Unsafe; }, 200000), true);
+        if (stays_up) {
+            CHECK_EQ(int(r.state()), int(ct::State::Unsafe));
+            CHECK_EQ(int(r.reason()), int(ct::Reason::Release));
+        } else {
+            CHECK_EQ(int(r.state()), int(ct::State::Done));
+            CHECK_EQ(f.detaches, 2);   // the unit's own detach and the fallback
+            CHECK_EQ(f.attaches_pd >= 1, true);   // the PD policy is given back
+        }
+    }
+}
 // pattern rp-without-vbus (a charger's top C port): Rp is on the line but VBUS does not come after the Rd. The Rd is cycled
 // kLegacyNoVbusMs into the attach, not after kLegacyGiveUpMs. Without an Rp (a dead port) the 20 s wait stays.
 static void test_legacy_attach_with_rp_but_no_vbus_cycles_rd_early() {
@@ -9166,7 +9186,7 @@ int main() {
     test_unsafe_clears_when_vbus_is_gone_for_the_debounce();
     test_failed_release_at_low_vbus_is_a_lost_source_not_unsafe();
     test_unsafe_clears_when_vbus_stays_under_vsafe5();
-    test_pd_attach_without_vbus_or_caps_is_no_reattach(); test_legacy_attach_with_rp_but_no_vbus_cycles_rd_early(); test_start_on_a_port_without_cc_detaches_quickly(); test_pd_plan_comes_from_the_first_attach(); test_source_gone_in_a_unit_skips_the_remaining_units();
+    test_pd_attach_without_vbus_or_caps_is_no_reattach(); test_legacy_attach_with_rp_but_no_vbus_cycles_rd_early(); test_start_on_a_port_without_cc_detaches_quickly(); test_release_that_leaves_vbus_up_falls_back_to_an_rd_off(); test_pd_plan_comes_from_the_first_attach(); test_source_gone_in_a_unit_skips_the_remaining_units();
     test_pd_attach_5v_contract_held_at_wrong_voltage_fails_wrong_voltage();
     test_pd_attach_5v_contract_then_rp_cut_before_timeout_fails_wrong_voltage();
     test_pd_attach_without_any_caps_stays_no_reattach();

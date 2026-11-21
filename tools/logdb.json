@@ -747,6 +747,7 @@
   "750": "[PCHK] PDO%u %umV flags=%u over=%d band=%d lag=%d out=%d err=%d creep=%d slew=%d\n",
   "751": "[CT] legacy tune quiet=%ums steady=%ums first=%ums gap=%ums hold=%ums\n",
   "752": "[CT] legacy tune quiet=%ums steady=%ums first=%ums gap=%ums hold=%ums chain=%u\n",
-  "753": "[CT] Rp without VBUS %ums into the attach: Rd cycle\n"
+  "753": "[CT] Rp without VBUS %ums into the attach: Rd cycle\n",
+  "754": "[CT] release left VBUS at %dmV: Rd off\n"
  }
 }

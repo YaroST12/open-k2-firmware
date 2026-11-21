@@ -1325,7 +1325,7 @@ Reason Runner::start(const pd::SourceCaps& caps, Options o, Input in, bool confi
     handover_ = {}; unit_ = Unit::Count; mode_ = Mode::Pd;
     ceiling_pending_ = ceiling_done_ = ceil_stopping_ = ceil_recover_ = ceil_cycled_ = false; ceil_ms_ = ceil_stop_ms_ = ceil_low_ms_ = 0; ceil_why_ = 0;
     spec_done_ = spec_stopping_ = spec_fault_ = false; spec_ms_ = spec_stop_ms_ = 0; spec_pending_ = spec_wanted();
-    attached_ = detached_ = ending_ = silent_ = legacy_active_ = never_dark_ = dipped_ = dark_ = false; attach_try_ = 0;
+    attached_ = detached_ = ending_ = silent_ = legacy_active_ = never_dark_ = dipped_ = dark_ = rel_rd_ = false; attach_try_ = 0;
     never_dark_ = in.no_cc;   // a port with no CC does not go dark: the first detach is the short one too
     own_rel_ = false; reann_ = 0;
     rp_restart_ = false; contract_wrong_ = false; attach_max_mv_ = 0;
@@ -2209,6 +2209,12 @@ void Runner::poll_detach(const Input& in) {
     if (!((dark_ && in.now - dark_ms_ >= kDetachDarkHoldMs) || in.now - att_ms_ >= limit)) return;
     if (!dipped_) never_dark_ = true;   // a source that kept its output up (a USB-A port has no CC): later detaches do not wait long
     detached_ = true; hot_ = false;
+    if (rel_rd_) {
+        rel_rd_ = false; ending_ = false;
+        if (in.vbus_mv >= kUnsafeLowMv && !safe5(in.vbus_mv)) { unsafe(Reason::Release); return; }   // end_legacy() gives Rd back
+        if (stopping_) { end_legacy(); state_ = State::Stopped; return; }
+        next(in); return;
+    }
     if (ending_) { ending_ = false; next(in); }
     else begin_attach(in);
 }
@@ -2845,6 +2851,11 @@ void Runner::poll_impl(Input& in, const pd::SourceCaps& caps) {
                 end_sag_recovery(in);
                 pd_owned_ = fc_owned_ = recover_ = false;
                 if (stopping_) { end_legacy(); state_ = State::Stopped; } else next(in);
+            } else if (fc_owned_ && !pd_owned_ && !selfpwr_ && mode_ == Mode::Legacy && !rel_rd_) {
+                // pattern release-leaves-vbus-up: the D+/D- release left a raised level up (QC2 Class B at 12 V, GaN3 65W). A detach
+                // is the other way down for it: Rd off, and only an output that survives that is unsafe (poll_detach).
+                K2LOG("[CT] release left VBUS at %dmV: Rd off\n", int(in.vbus_mv));
+                rel_rd_ = true; ending_ = true; begin_detach(in);
             } else unsafe(Reason::Release);
         }
         return;

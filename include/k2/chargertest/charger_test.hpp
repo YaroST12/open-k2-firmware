@@ -1065,6 +1065,7 @@ private:
     bool silent_ K2_BSS_INIT(false);         // a Legacy attach was verified PD-quiet (a resumed run has no such proof)
     bool legacy_active_ K2_BSS_INIT(false);  // the last attach was Legacy: legacy_only(false) + pd_rescan() restore the sink at the end
     bool never_dark_ K2_BSS_INIT(false);     // a detach that left VBUS up (a USB-A port has no CC): later detaches do not wait long
+    bool rel_rd_ K2_BSS_INIT(false);         // the Rd off that answers a D+/D- release which left VBUS up: its end checks VBUS before going on
     bool dipped_ K2_BSS_INIT(false);         // VBUS fell during this detach
     bool late_pd_ K2_BSS_INIT(false);        // no source caps at START: the PD rows are planned from the first list heard
     uint32_t plan_sig_ K2_BSS_INIT(0);       // caps_sig() of the list the PD rows were last planned from
