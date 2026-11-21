@@ -266,11 +266,6 @@ void BatteryPage::update(uint32_t now_ms) {
     }
     kit::paint_identity(ctx_.content, id, full_, id_sig_);
     full_ = false;
-    // the rows
-    sel_ = std::clamp(sel_, 0, count() - 1);
-    ctx_.rows.set_count(count());
-    ctx_.rows.select(sel_);
-    ctx_.rows.draw(now_ms, ctx_.budget);
     // the footer: a refusal, an armed hand end, else the state
     StrBuf<28> f;
     FooterTone tone = FooterTone::Info;
@@ -288,8 +283,22 @@ void BatteryPage::update(uint32_t now_ms) {
     } else {
         tone = view::footer(shown_, bt::hw::monitor_online(), sv.write_failed(), sv.rec().dirty(), f);
     }
-    if (tone != FooterTone::Info && !f.view().empty())
-        draw_toast(ctx_.content, tone, f.view());
+    const bool pill = tone != FooterTone::Info && !f.view().empty();
+    // A pill floats over the rows and a new one never covers the old one's ends: repaint the rows under it first.
+    if (!pill ? !pill_.view().empty() : pill_.view() != f.view()) {
+        if (!pill_.view().empty()) {
+            const int16_t gap = kit::list_end(kit::kPlaceListY);   // under the list nothing else paints
+            gfx_fill(ctx_.content, 0, gap, ctx_.content.w, static_cast<int16_t>(kFooterY - gap), kBg);
+            ctx_.rows.invalidate();
+        }
+        pill_.clear();
+        if (pill) pill_.put(f.view());
+    }
+    sel_ = std::clamp(sel_, 0, count() - 1);
+    ctx_.rows.set_count(count());
+    ctx_.rows.select(sel_);
+    ctx_.rows.draw(now_ms, ctx_.budget);
+    if (pill) draw_toast(ctx_.content, tone, f.view());
 }
 
 // ---- events ---------------------------------------------------------------------------------------------------------------

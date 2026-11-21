@@ -75,6 +75,7 @@ private:
     uint32_t id_sig_ = 0;              // the identity block as painted (kit::paint_identity)
     bool full_ = true;                 // the next paint lays the identity block whole
     Elem foot_;                        // footer element cache (draw_footer_cached)
+    StrBuf<28> pill_;                  // the toast pill on screen (empty = none): a change repaints the rows under the old one
 };
 
 }  // namespace k2
