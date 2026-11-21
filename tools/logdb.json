@@ -750,6 +750,7 @@
   "753": "[CT] legacy tune quiet=%ums steady=%ums first=%ums gap=%ums hold=%ums chain=%u\n",
   "754": "[CT] Rp without VBUS %ums into the attach: Rd cycle\n",
   "755": "[CT] unit ms PD %u QC2 %u QC3 %u QC3+ %u AFC %u FCP %u SCP %u VOOC %u SVOOC %u SVOOC65 %u UFCS %u VIVO %u PDlow %u\n",
-  "756": "[CT] release left VBUS at %dmV: Rd off\n"
+  "756": "[CT] release left VBUS at %dmV: Rd off\n",
+  "757": "[CT] legacy retry %s after %s\n"
  }
 }

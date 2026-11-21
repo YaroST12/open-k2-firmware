@@ -884,7 +884,7 @@ private:
     void epr_info_rows(const pd::SourceCaps&, const Input&);   // lay the EPR rows out per level from the info list (when one was heard)
     void request(const Input&);
     void finish(const Input&, Verdict, Reason, uint8_t detail = 0);
-    void finish_row(const Input&, Verdict, Reason, uint8_t detail);   // finish() once the cut-retry check (cut_hold) let the verdict stand
+    void finish_row(const Input&, Verdict, Reason, uint8_t detail);   // finish() once the retry checks (cut_hold, race_hold) let the verdict stand
     void release(const Input&, bool stop);
     void reissue_release();
     void next(const Input&);
@@ -1045,6 +1045,14 @@ private:
     // A casualty whose cut is still in progress waits in Releasing (cut_wait_) for VBUS to come back: the row is Pending, the verdict it
     // would have had is kept here (cut_v_ / cut_why_ / cut_detail_ / cut_mv_ = the VBUS of that moment), cut_final_ = the retries of this row are used up.
     bool cut_wait_ K2_BSS_INIT(false), cut_final_ K2_BSS_INIT(false); Verdict cut_v_ = Verdict::Fail; Reason cut_why_ = Reason::None; uint8_t cut_detail_ K2_BSS_INIT(0); int cut_mv_ K2_BSS_INIT(0);
+    // pattern legacy-start-races-announcement: a unit that started inside the source's announcement (PD quiet under kLegacyQuietMs at its
+    // first fast-charge request) asks its first step once more after real quiet when it fails with a race-type reason (race_hold).
+    // race_seen_ = the unit's first request was made, race_idx_ its row, race_tried_ = the one retry is used, race_wait_ = the retry's
+    // Releasing wait (for kLegacyQuietMs of quiet, at most kRestartSettleMs from race_ms_).
+    bool race_seen_ K2_BSS_INIT(false), race_fast_ K2_BSS_INIT(false), race_tried_ K2_BSS_INIT(false), race_wait_ K2_BSS_INIT(false);
+    size_t race_idx_ = SIZE_MAX; uint32_t race_ms_ K2_BSS_INIT(0);
+    bool race_hold(const Input&, Verdict, Reason, uint8_t detail);   // finish(): a first step the announcement spoiled is asked again (true)
+    void race_reset() { race_seen_ = race_fast_ = race_tried_ = race_wait_ = false; race_idx_ = SIZE_MAX; }
     void track_cut(const Input&);
     void track_dip(const Input&);                            // the dip clocks above (every poll)
     bool dip_wait(const Input&) const;                       // VBUS is in a dip that may still come back: the 5 V check waits

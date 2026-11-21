@@ -92,6 +92,9 @@ struct Fake final : ct::Env {
     fc::Proto unsupported_proto = fc::Proto::Count;
     // A port that speaks no QC (JT-P18 USB-C, 2026-11-07): every request of the protocol ends in the engine's NoHandshake, VBUS stays at 5 V.
     fc::Proto no_handshake_proto = fc::Proto::Count;
+    // A source still announcing (PD quiet under kLegacyQuietMs) spoils a new session's first try: race_kind Inline = the request is refused,
+    // anything else = the engine's handshake fails with it. race_load also plugs a sink in at the refusal.
+    fc::Fail race_kind = fc::Fail::None; bool race_load = false; int race_hits = 0;
     int fc_offset_mv = 0;                             // the output lands this far from the requested voltage (above 5 V)
     int fc_max_mv = 0;                                // a Class A charger: the output stops at this level however high the request (0 = no limit)
     // pattern output-capped-below-advertised (Baseus FH22, 2026-11-08): a PD source accepts every request of its list (PS_RDY, the
@@ -313,6 +316,12 @@ struct Fake final : ct::Env {
         if (serve_caps && fc_requests >= serve_caps_from && (p == fc::Proto::Scp || p == fc::Proto::Ufcs)) in.fc_caps = serve_caps;
         if (glitch_at == fc_requests) ++in.session;   // CC blip: new session, VBUS unchanged
         if (link_guard && handed && in.pd_quiet_ms < k2::link::kCapsStaleMs && !ct::legacy_guard_override()) { ++guard_refusals; return fc::Fail::Inline; }
+        if (race_kind != fc::Fail::None && !retarget && in.pd_quiet_ms < ct::kLegacyQuietMs) {
+            ++race_hits;
+            if (race_load) in.inline_load = true;
+            if (race_kind == fc::Fail::Inline) return fc::Fail::Inline;
+            in.fc_state = fc::State::Failed; in.fc_fail = race_kind; in.vbus_mv = 5000; return fc::Fail::None;
+        }
         fc_times.push_back(in.now);
         if (no_response_proto == p && mv > 5000) {    // the engine gave up: the output never left 5 V
             in.fc_state = fc::State::Failed; in.fc_fail = fc::Fail::NoResponse; in.vbus_mv = 5000;
@@ -8415,6 +8424,80 @@ static void test_load_during_the_reannounce_wait_stops_the_run() {
     CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Stopped; }, 20000), true);
     CHECK_EQ(f.fc_times.size(), size_t(1));
 }
+// pattern legacy-start-races-announcement (Baseus 140W, runs/legacy-speed): quiet_ms 0 starts the first handshake inside the source's
+// announcement, which now and then spoils it (guard refusal, dropped handshake). The unit's first step is asked once more after real
+// PD quiet before it gets a verdict; one log line says so. A real no-answer still fails after that one retry.
+static unsigned log_count(const char* needle) {
+    unsigned n = 0;
+    for (size_t at = 0; (at = g_stub.log_text.find(needle, at)) != std::string::npos; at += std::strlen(needle)) ++n;
+    return n;
+}
+static void race_fast() { CHECK_EQ(ct::legacy_tune_set(uint8_t(ct::LegacyKnob::QuietMs), 0), true); unchained(); }
+static void test_a_first_step_spoiled_by_the_announcement_is_asked_again_after_quiet() {
+    for (const fc::Fail kind : {fc::Fail::Inline, fc::Fail::NoHandshake}) {
+        Fake f; ct::Runner r(f); race_fast(); g_stub.log_text.clear();
+        f.link_guard = true; f.attach_flood_ms = 3000; f.race_kind = kind;
+        const auto o = with_units(ct::bit(A::Fcp), {ct::Unit::Fcp});
+        CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+        CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 600000), true);
+        CHECK_EQ(f.race_hits, 1);
+        CHECK_EQ(log_count("[CT] legacy retry "), 1u);
+        CHECK_EQ(log_count(kind == fc::Fail::Inline ? "[CT] legacy retry FCP after PD or load active\n" : "[CT] legacy retry FCP after no handshake\n"), 1u);
+        CHECK_EQ(count_unit_verdict(r, ct::Unit::Fcp, ct::Verdict::Pass) > 0, true);
+        CHECK_EQ(count_unit_verdict(r, ct::Unit::Fcp, ct::Verdict::Fail), 0u);
+        CHECK_EQ(count_unit_verdict(r, ct::Unit::Fcp, ct::Verdict::Skip), 0u);
+        CHECK_EQ(f.guard_refusals, 0);
+        CHECK_EQ(f.fc_times.empty(), false);
+        if (!f.fc_times.empty()) CHECK_EQ(f.fc_times[0] >= f.chatter_until - 100 + ct::kLegacyQuietMs, true);   // the retry waited for the quiet
+    }
+}
+static void test_a_real_no_answer_fails_after_one_retry() {
+    Fake f; ct::Runner r(f); race_fast(); g_stub.log_text.clear();
+    f.attach_flood_ms = 1000; f.no_handshake_proto = fc::Proto::Fcp;
+    const auto o = with_units(ct::bit(A::Fcp), {ct::Unit::Fcp});
+    CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 600000), true);
+    CHECK_EQ(log_count("[CT] legacy retry "), 1u);
+    const unsigned failed = count_unit_verdict(r, ct::Unit::Fcp, ct::Verdict::Fail);
+    CHECK_EQ(failed > 0, true);
+    CHECK_EQ(count_unit_verdict(r, ct::Unit::Fcp, ct::Verdict::Pass), 0u);
+    CHECK_EQ(f.fc_requests, int(failed) + 1);   // every row once, the first one twice
+    CHECK_EQ(r.steps()[0].verdict == ct::Verdict::Fail && r.steps()[0].reason == ct::Reason::Request, true);
+}
+// The conservative start (a full PD quiet before the handshake) is not the race: a no-answer is one try, as before.
+static void test_a_quiet_start_is_not_retried() {
+    Fake f; ct::Runner r(f); wait_quiet(); unchained(); g_stub.log_text.clear();
+    f.attach_flood_ms = 1000; f.no_handshake_proto = fc::Proto::Fcp;
+    const auto o = with_units(ct::bit(A::Fcp), {ct::Unit::Fcp});
+    CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 600000), true);
+    CHECK_EQ(log_count("[CT] legacy retry "), 0u);
+    CHECK_EQ(f.fc_requests, int(count_unit_verdict(r, ct::Unit::Fcp, ct::Verdict::Fail)));
+}
+// A sink plugged in at the refusal ends the run while the retry waits (the Releasing checks): nothing is asked a second time.
+static void test_a_load_at_the_refusal_ends_the_run_before_the_retry() {
+    Fake f; ct::Runner r(f); race_fast(); g_stub.log_text.clear();
+    f.link_guard = true; f.attach_flood_ms = 3000; f.race_kind = fc::Fail::Inline; f.race_load = true;
+    const auto o = with_units(ct::bit(A::Fcp), {ct::Unit::Fcp});
+    CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+    CHECK_EQ(run_until(f, r, [&] { return r.reason() == ct::Reason::Inline; }, 60000), true);
+    f.in.inline_load = false;
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Stopped; }, 60000), true);
+    CHECK_EQ(f.fc_requests, 1);
+}
+// A source that keeps talking is waited for at most kRestartSettleMs; the retry then goes out and is refused again: the row fails, once.
+static void test_the_retry_wait_is_bounded() {
+    Fake f; ct::Runner r(f); race_fast(); g_stub.log_text.clear();
+    f.stays_pd = true; f.race_kind = fc::Fail::Inline;
+    const auto o = with_units(ct::bit(A::Fcp), {ct::Unit::Fcp});
+    CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+    const uint32_t t0 = f.in.now;
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 600000), true);
+    CHECK_EQ(log_count("[CT] legacy retry "), 1u);
+    CHECK_EQ(r.steps()[0].verdict == ct::Verdict::Fail && r.steps()[0].detail == uint8_t(fc::Fail::Inline), true);
+    CHECK_EQ(f.race_hits >= 2, true);
+    CHECK_EQ(f.in.now - t0 < 120000, true);
+}
 // The IQ4's next step: the source's answer to the release, then its own output cut after the same or the next row (the restart pattern
 // above). The waits do not stack (each is bounded by kRestartSettleMs on its own and the later one restarts nothing), no row is read
 // as PD active, the guard is never asked early, and the units after it (SCP rows, AFC) still run.
@@ -9271,6 +9354,8 @@ int main() {
     test_legacy_row_waits_through_a_source_restart(); test_legacy_restart_wait_is_bounded_and_a_load_still_refuses();
     test_legacy_units_chain_through_the_sources_reannounce_after_a_release(); test_scp_rows_are_not_pd_active_after_our_own_release();
     test_a_quiet_source_is_watched_once_per_attach(); test_pd_traffic_before_the_release_still_skips_the_unit(); test_endless_reannounce_after_a_release_is_bounded(); test_quiet_zero_reaches_the_charger_through_the_attach_announcement(); test_load_during_the_reannounce_wait_stops_the_run(); test_reannounce_then_output_restart_on_the_same_unit(); test_a_reannounce_as_long_as_the_attach_flood_is_waited_out();
+    test_a_first_step_spoiled_by_the_announcement_is_asked_again_after_quiet(); test_a_real_no_answer_fails_after_one_retry(); test_a_quiet_start_is_not_retried();
+    test_a_load_at_the_refusal_ends_the_run_before_the_retry(); test_the_retry_wait_is_bounded();
     test_scp_ack_without_voltage_ends_early_and_skips_the_raises(); test_scp_no_change_without_restart_does_not_wait();
     test_level_maps_to_the_run_switches(); test_level_plans_per_level(); test_step_walk_is_planned_only_in_deep(); test_prog_check_flags_a_passing_programmable_row(); test_prog_check_clean_capture_changes_nothing();
     test_prog_check_without_a_capture_asks_nothing_more(); test_prog_check_follows_the_sweep_switches(); test_light_run_requests_nothing_but_5v(); test_light_lists_the_epr_levels_as_advertised();

@@ -1335,7 +1335,7 @@ Reason Runner::start(const pd::SourceCaps& caps, Options o, Input in, bool confi
     pd_retry_ = cut_index_ = SIZE_MAX; retries_ = epr_tries_ = 0; settle_ms_ = settle_until_ = 0; auth_open_ = false;
     xiaomi_seen_ = xiaomi_reset_ = x_svid_ = x_authed_ = false; tail_at_ = 0; hr_count_ = link_resets(in.pd);
     last_ms_ = phase_ms_ = in.now; stable_ = stopping_ = pd_owned_ = fc_owned_ = recover_ = hot_ = sag_cut_ = sag_open_ = false; busy_retry_at_ = 0;
-    cut_wait_ = cut_dark_ = false; cut_start_ms_ = cut_back_ms_ = 0; cut_retry_idx_ = SIZE_MAX; cut_tries_ = 0; cut_last_mv_ = -1; n_cut_onsets_ = 0;
+    cut_wait_ = cut_dark_ = false; cut_start_ms_ = cut_back_ms_ = 0; cut_retry_idx_ = SIZE_MAX; cut_tries_ = 0; cut_last_mv_ = -1; n_cut_onsets_ = 0; race_reset();
     list_tracking_ = false; flight_restart_ = wd_wait_ = false;   // the settle window is seeded by the first poll, not opened by START
     reason_ = Reason::None; refusal_mv_ = 0;
     probe_ = (has_unit(o.units, Unit::Pd) || has_unit(o.units, Unit::PdLow)) ? Probe::Pending : Probe::Off;   // ask the charger who it is once, at the end of the first Pd unit
@@ -1478,6 +1478,7 @@ void Runner::request(const Input& in) {
         // An SCP row joins the kept or live session of the row before it (scp_next picked it): same session, no release in between.
         const bool chained = s.group == Group::Scp && s.ma > 0 && legacy_tune(LegacyKnob::Chain) >= 1 && (in.fc_held || in.fc_state == fc::State::Active);
         const bool retarget = fc_owned_ && (s.continuous || chained);
+        if (!race_seen_ && mode_ == Mode::Legacy) { race_seen_ = true; race_fast_ = silent_ && in.pd_quiet_ms < kLegacyQuietMs; race_idx_ = index_; }
         fc_owned_ = true;
         const auto err = env_.request_fc(proto(s.group), s.mv, retarget, s.ma);
         if (err != fc::Fail::None) finish(in, Verdict::Fail, Reason::Request, static_cast<uint8_t>(err));
@@ -1606,8 +1607,23 @@ void Runner::reissue_release() {
     if (fc_owned_) env_.release(false);
 }
 void Runner::finish(const Input& in, Verdict v, Reason r, uint8_t detail) {
-    if (cut_hold(in, v, r, detail)) return;
+    if (cut_hold(in, v, r, detail) || race_hold(in, v, r, detail)) return;
     finish_row(in, v, r, detail);
+}
+// A unit that started inside the source's announcement (quiet under kLegacyQuietMs) and failed its first step with a race-type reason
+// (the guard refused it, the handshake never came) is asked once more after real quiet; the row goes back to Pending and waits in
+// Releasing (race_wait_), where a load behind the K2 still ends the run. "Unsupported" / "no response" are a charger's own answers
+// (a silent UFCS or VIVO source would pay a second window for nothing): verdicts, not races.
+bool Runner::race_hold(const Input& in, Verdict v, Reason r, uint8_t detail) {
+    if (v != Verdict::Fail || r != Reason::Request || !race_fast_ || race_tried_ || race_wait_ || cut_wait_ || index_ != race_idx_ || index_ >= count_ ||
+        mode_ != Mode::Legacy || pd_owned_ || stopping_ || !silent_ || in.inline_load || steps_[index_].group == Group::Pd) return false;
+    const auto why = static_cast<fc::Fail>(detail);
+    if (why != fc::Fail::Inline && why != fc::Fail::NoHandshake) return false;
+    race_tried_ = true; race_wait_ = true; race_ms_ = in.now;
+    K2LOG("[CT] legacy retry %s after %s\n", name(unit_), fc::name(why));
+    steps_[index_].verdict = Verdict::Pending; steps_[index_].reason = Reason::None;
+    release(in, false);
+    return true;
 }
 // kDipMinMv: the clocks of a dip, every poll. A dip opens at the first reading in the dip range and ends at the first vSafe5V reading
 // (a comeback: counted, its tail session is adopted for kDipTailMs); a reading above vSafe5V or under kDipMinMv ends it uncounted (those
@@ -2176,7 +2192,7 @@ void Runner::begin_unit(Unit u, const Input& in) {
     if (selfpwr_ && self_path(u) == SelfPath::NeedsExternalPower) {   // a row that can cut the output cannot run on the output itself
         unit_ = u; skip_unit(Reason::NeedsExternalPower); next(in); return;
     }
-    unit_ = u; mode_ = mode(u); wd_wait_ = false;
+    unit_ = u; mode_ = mode(u); wd_wait_ = false; race_reset();
     attached_ = silent_ = ending_ = false; attach_try_ = 0; pd_retry_ = cut_index_ = SIZE_MAX;
     rp_restart_ = false; contract_wrong_ = false; attach_max_mv_ = 0;
     pd_owned_ = fc_owned_ = recover_ = hot_ = sag_cut_ = sag_open_ = own_cut_ = false;   // a detach/attach boundary: the window does not cross it
@@ -2186,7 +2202,7 @@ void Runner::begin_unit(Unit u, const Input& in) {
 }
 // The next Legacy unit inside the same PD-silent attach: no detach, a gap for the D+/D- cleanup, then its first handshake.
 void Runner::continue_legacy(Unit u, const Input& in) {
-    unit_ = u; own_cut_ = false;
+    unit_ = u; own_cut_ = false; race_reset();
     pd_owned_ = fc_owned_ = recover_ = hot_ = false; pd_retry_ = cut_index_ = SIZE_MAX;
     unit_ms_ = in.now;
     session_ = in.session; resets_ = link_resets(in.pd); caps_gone_ms_ = in.now;
@@ -2457,7 +2473,7 @@ void Runner::cancel(Input in) {
         release(in, true);
         return;
     }
-    if (state_ == State::Releasing) { cut_wait_ = false; stopping_ = true; skip_pending(reason_); return; }
+    if (state_ == State::Releasing) { cut_wait_ = race_wait_ = false; stopping_ = true; skip_pending(reason_); return; }
     if (state_ == State::Detach || state_ == State::Attach) { skip_pending(reason_); end_legacy(); state_ = State::Stopped; return; }
     if (index_ < count_ && steps_[index_].verdict == Verdict::Running) {
         auto& s = steps_[index_]; s.verdict = Verdict::Fail; s.reason = reason_;
@@ -2482,7 +2498,7 @@ void Runner::restore(const Options& o, const Evidence& e, uint32_t run_id, std::
     handover_ = {}; unit_ = Unit::Count; mode_ = Mode::Pd; epr_stage_ = 0; info_ = 0; info_rows_ = false;
     attached_ = detached_ = ending_ = silent_ = legacy_active_ = dark_ = false; pd_skips_recorded_ = true; pd_skips_held_ = false;
     pd_owned_ = fc_owned_ = stopping_ = stable_ = recover_ = hot_ = false; probe_ = Probe::Off; pd_retry_ = cut_index_ = SIZE_MAX;
-    cut_wait_ = cut_dark_ = false; cut_start_ms_ = cut_back_ms_ = 0; cut_retry_idx_ = SIZE_MAX; cut_tries_ = 0; cut_last_mv_ = -1; n_cut_onsets_ = 0;
+    cut_wait_ = cut_dark_ = false; cut_start_ms_ = cut_back_ms_ = 0; cut_retry_idx_ = SIZE_MAX; cut_tries_ = 0; cut_last_mv_ = -1; n_cut_onsets_ = 0; race_reset();
     selfpwr_ = suspended_ = adopt_ = false;
     ceiling_pending_ = ceil_stopping_ = ceil_recover_ = ceil_cycled_ = false; ceiling_done_ = true;   // a resumed run never repeats the stage (it is not journaled)
     spec_pending_ = spec_stopping_ = spec_fault_ = false; spec_done_ = true;   // nor the spec stage (its result is: evidence_.spec)
@@ -2812,6 +2828,8 @@ void Runner::poll_impl(Input& in, const pd::SourceCaps& caps) {
             own_rel_ = !stopping_ && silent_ && attached_ && mode_ == Mode::Legacy && !restart_wait_ && !restart_dark_ && since < kOwnReleaseSettleMs &&
                        (heard ? in.pd_quiet_ms < quiet_ms() : since < kOwnReleaseCapsMs);
         }
+        // pattern legacy-start-races-announcement: the retried first step waits for real quiet (kLegacyQuietMs), at most kRestartSettleMs.
+        if (race_wait_) race_wait_ = !stopping_ && silent_ && attached_ && mode_ == Mode::Legacy && in.now - race_ms_ < kRestartSettleMs && in.pd_quiet_ms < kLegacyQuietMs;
         const Reason changed = dropped && pd_owned_ ? Reason::Lost : in.loop_lock ? Reason::Loop :
             in.inline_load ? Reason::Inline : in.fake ? Reason::Fake :
             in.vbus_mv < 0 || in.cap_mv < 5000 ? Reason::NoMonitor : Reason::None;
@@ -2819,10 +2837,10 @@ void Runner::poll_impl(Input& in, const pd::SourceCaps& caps) {
         // Offers that changed or PD that showed up end the unit's rows, not the run.
         else if (!stopping_) {
             const Reason unit_stop = offers_changed ? Reason::CapsChanged :
-                legacy_pending && pd_active && !restart_wait_ && !own_rel_ && !(restart_dark_ && reann_ == 2) ? Reason::PdActive : Reason::None;
+                legacy_pending && pd_active && !restart_wait_ && !own_rel_ && !race_wait_ && !(restart_dark_ && reann_ == 2) ? Reason::PdActive : Reason::None;
             if (unit_stop != Reason::None) skip_unit(unit_stop);
         }
-        if ((restart_wait_ || own_rel_) && !stopping_) { stable_ = false; return; }
+        if ((restart_wait_ || own_rel_ || race_wait_) && !stopping_) { stable_ = false; return; }
         // The next row is a PD row and the source has not announced its list again (it just came back from a cut or a Hard Reset):
         // a request now is refused ("no source caps") and would fail the row. Wait; offers_changed ends it after kCapsReturnMs.
         bool wait_caps = false;
@@ -3114,7 +3132,7 @@ void Runner::poll_impl(Input& in, const pd::SourceCaps& caps) {
         // A VOOC family that never clocked after either wake is "no answer": a skip, since an unloaded adapter may stay silent.
         const bool no_answer = group >= Group::Vooc && group <= Group::SuperVooc65 && in.fc_fail == fc::Fail::NoAnswer;
         finish(in, no_answer ? Verdict::Skip : Verdict::Fail, Reason::Request, group == Group::Pd ? static_cast<uint8_t>(in.pd.result) : static_cast<uint8_t>(in.fc_fail));
-        if (cut_wait_) return;   // held as a port cut's casualty: its retry decides, so the family is not judged "never answered" yet
+        if (cut_wait_ || race_wait_) return;   // held as a port cut's casualty or a raced start's first step: its retry decides, so the family is not judged "never answered" yet
         // AFC / FCP / SCP the charger never answered (pattern qc-only-unacked-rise): the protocol is not spoken, so none of its
         // other levels can prove anything and none of them needs an engine session of its own.
         // A UFCS source that never answered the opening exchange is the same case (no response to its listen window), and so is a
