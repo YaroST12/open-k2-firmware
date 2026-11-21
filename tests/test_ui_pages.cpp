@@ -1478,21 +1478,30 @@ static void test_emarker_listen_window() {
     ui.on_button(Button::Ok, ButtonEvent::Short, 80050);  // Info -> Actions
     ui.on_button(Button::Ok, ButtonEvent::Short, 80100);  // Read cable: with a source on VBUS it only listens
     CHECK_EQ(int(g_stub.last_scan_mode), int(k2::pd::EmarkerMode::Sniff));
-    // The passive window runs 5 s; a new cable_seq inside it ends it (data arrived).
+    // The passive window runs 5 s; a new cable_seq inside it ends it (data arrived) and switches back to Info.
     ui.tick(82000);
     CHECK_EQ(ui.context().em_listen_until != 0, true);
+    CHECK_EQ(ui.connection_page().actions_mode(), true);
     g_stub.cable_seq++;
     ui.tick(82200);
+    { uint32_t t = 82200; while (ui.painting()) ui.tick(t += 2); }
     CHECK_EQ(ui.context().em_listen_until, 0u);
     CHECK_EQ(ui.context().em_quiet, false);
-    // Listen again; nothing arrives: the window expires into the quiet state.
+    CHECK_EQ(ui.connection_page().actions_mode(), false);
+    // Re-enter Actions and listen again; nothing arrives: the window expires into the quiet state + Error toast.
+    ui.on_button(Button::Ok, ButtonEvent::Short, 82300);   // Info -> Actions
+    CHECK_EQ(ui.connection_page().actions_mode(), true);
     ui.on_button(Button::Ok, ButtonEvent::Short, 83000);   // Read cable
     ui.tick(87900);
     CHECK_EQ(ui.context().em_listen_until != 0, true);
     CHECK_EQ(ui.context().em_quiet, false);
     ui.tick(88100);
+    { uint32_t t = 88100; while (ui.painting()) ui.tick(t += 2); }
     CHECK_EQ(ui.context().em_listen_until, 0u);
     CHECK_EQ(ui.context().em_quiet, true);
+    CHECK_EQ(ui.connection_page().actions_mode(), true);
+    CHECK_STR(ui.context().toast.view().data(), "Failed to read");
+    CHECK_EQ(int(ui.context().toast.tone), int(k2::FooterTone::Error));
     // Leaving the submenu clears the state.
     ui.on_button(Button::Back, ButtonEvent::Short, 88200);   // Actions -> Info
     ui.on_button(Button::Back, ButtonEvent::Short, 88210);   // Info -> the Bench: leaves the page

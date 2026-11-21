@@ -1802,6 +1802,111 @@ static void test_device_place_telemetry_rows_and_live_repaints() {
 #endif
 }
 
+static void test_cable_read_emarker_ux_paths() {
+    // 1. VCONN ReadCable success -> switches to Info (actions_mode() == false), no error toast.
+    {
+        Ui &ui = fresh_ui();
+        g_stub.em = {};
+        g_stub.pm = {};
+        g_stub.cc = 0;
+        g_stub.scan_result = true;
+        ui.goto_page(kConnTabAlias + 1, 20000);   // Cable place (Info)
+        ui.tick(20050);
+        CHECK_EQ(cp(ui).actions_mode(), false);
+        ui.on_button(Button::Ok, ButtonEvent::Short, 20100);   // Info -> Actions (ReadCable focused)
+        CHECK_EQ(cp(ui).actions_mode(), true);
+        ui.on_button(Button::Ok, ButtonEvent::Short, 20150);   // Read e-marker (VCONN)
+        ui.tick(20200);
+        CHECK_EQ(int(g_stub.last_scan_mode), int(k2::pd::EmarkerMode::Vconn));
+        CHECK_EQ(cp(ui).actions_mode(), false);
+        CHECK_EQ(ui.context().toast.active(20200), false);
+    }
+
+    // 2. VCONN ReadCable failure -> stays on Actions, "Failed to read" toast with FooterTone::Error.
+    {
+        Ui &ui = fresh_ui();
+        g_stub.em = {};
+        g_stub.pm = {};
+        g_stub.cc = 0;
+        g_stub.scan_result = false;
+        ui.goto_page(kConnTabAlias + 1, 30000);
+        ui.tick(30050);
+        ui.on_button(Button::Ok, ButtonEvent::Short, 30100);   // Info -> Actions
+        CHECK_EQ(cp(ui).actions_mode(), true);
+        ui.on_button(Button::Ok, ButtonEvent::Short, 30150);   // Read e-marker (VCONN fails)
+        ui.tick(30200);
+        CHECK_EQ(int(g_stub.last_scan_mode), int(k2::pd::EmarkerMode::Vconn));
+        CHECK_EQ(cp(ui).actions_mode(), true);
+        CHECK_EQ(ui.context().toast.active(30200), true);
+        CHECK_STR(ui.context().toast.view().data(), "Failed to read");
+        CHECK_EQ(int(ui.context().toast.tone), int(k2::FooterTone::Error));
+        CHECK_EQ(ui.context().toast.active(30150 + k2::kToastDefaultMs - 1), true);
+        CHECK_EQ(ui.context().toast.active(30150 + k2::kToastDefaultMs), false);
+    }
+
+    // 3. Sniff async success (cable_seq++) -> switches to Info (actions_mode() == false).
+    {
+        Ui &ui = fresh_ui();
+        g_stub.em = {};
+        g_stub.scan_result = false;
+        g_stub.pm = {};
+        g_stub.pm.vbus_mv = 5117;
+        g_stub.cc = 1;
+        uint32_t t = 40000;
+        ui.debug_link(true, t);
+        ui.tick(t += 50);
+        ui.goto_page(kConnTabAlias + 1, t += 50);
+        while (ui.painting()) ui.tick(t += 2);
+        ui.on_button(Button::Ok, ButtonEvent::Short, t += 50);   // Info -> Actions
+        while (ui.painting()) ui.tick(t += 2);
+        ui.on_button(Button::Ok, ButtonEvent::Short, t += 50);   // Read e-marker (Sniff listen)
+        while (ui.painting()) ui.tick(t += 2);
+        CHECK_EQ(int(g_stub.last_scan_mode), int(k2::pd::EmarkerMode::Sniff));
+        CHECK_EQ(cp(ui).actions_mode(), true);
+        CHECK_EQ(ui.context().em_listen_until != 0, true);
+        g_stub.cable_seq++;
+        ui.tick(t += 500);
+        while (ui.painting()) ui.tick(t += 2);
+        CHECK_EQ(ui.context().em_listen_until, 0u);
+        CHECK_EQ(cp(ui).actions_mode(), false);
+        CHECK_EQ(ui.context().toast.active(t), false);
+        ui.debug_link(false, t += 100);
+    }
+
+    // 4. Sniff async timeout (em_quiet) -> stays on Actions, "Failed to read" toast with FooterTone::Error.
+    {
+        Ui &ui = fresh_ui();
+        g_stub.em = {};
+        g_stub.scan_result = false;
+        g_stub.pm = {};
+        g_stub.pm.vbus_mv = 5117;
+        g_stub.cc = 1;
+        uint32_t t = 50000;
+        ui.debug_link(true, t);
+        ui.tick(t += 50);
+        ui.goto_page(kConnTabAlias + 1, t += 50);
+        while (ui.painting()) ui.tick(t += 2);
+        ui.on_button(Button::Ok, ButtonEvent::Short, t += 50);   // Info -> Actions
+        while (ui.painting()) ui.tick(t += 2);
+        ui.on_button(Button::Ok, ButtonEvent::Short, t += 50);   // Read e-marker (Sniff listen)
+        while (ui.painting()) ui.tick(t += 2);
+        CHECK_EQ(cp(ui).actions_mode(), true);
+        ui.tick(t += 5200);                                      // 5 s listen window expires
+        while (ui.painting()) ui.tick(t += 2);
+        CHECK_EQ(ui.context().em_listen_until, 0u);
+        CHECK_EQ(ui.context().em_quiet, true);
+        CHECK_EQ(cp(ui).actions_mode(), true);
+        CHECK_EQ(ui.context().toast.active(t), true);
+        CHECK_STR(ui.context().toast.view().data(), "Failed to read");
+        CHECK_EQ(int(ui.context().toast.tone), int(k2::FooterTone::Error));
+        ui.debug_link(false, t += 100);
+    }
+
+    g_stub.scan_result = true;
+    g_stub.pm = {};
+    g_stub.cc = 0;
+}
+
 int main() {
     test_sink_tab_pd_body_shows_the_raw_vooc_note();
     test_sink_tab_no_pd_shows_the_raw_vooc_note();
@@ -1848,5 +1953,6 @@ int main() {
     test_place_two_page_info_and_actions();
     test_cable_identity_positive_chips_and_no_trunc();
     test_device_place_telemetry_rows_and_live_repaints();
+    test_cable_read_emarker_ux_paths();
     return test_report("test_ui_connection_page");
 }

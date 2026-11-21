@@ -107,6 +107,7 @@ void ConnectionPage::enter() {
     guard_primed_ = false;
     op_ = StrBuf<24>();
     op_until_ = 0;
+    em_read_pending_ = false;
     id_asked_ = false;
     iq_asked_ = false;
     iq_armed_until_ = 0;
@@ -132,6 +133,7 @@ void ConnectionPage::lock(conn::Tab t) {
     tab_ = t;
     act_page_ = false;
     act_sel_ = -1;
+    em_read_pending_ = false;
     first_ = 0;
     const bench::Place p = conn::place_of(t);
     title_ = bench::place_name(p);
@@ -154,10 +156,21 @@ void ConnectionPage::set_actions_mode(bool on) {
     invalidate();
 }
 
+void ConnectionPage::exit_actions() {
+    act_page_ = false;
+    act_sel_ = -1;
+    em_read_pending_ = false;
+    ctx_.rows.detach();
+    ctx_.toast.clear();
+    pg::clear_body(ctx_.content, 0);
+    invalidate();
+}
+
 void ConnectionPage::leave() {
     if (act_page_) ctx_.rows.detach();
     op_ = StrBuf<24>();
     op_until_ = 0;
+    em_read_pending_ = false;
     id_asked_ = false;
     if (iq_asked_ && fusb302::interrogate_running()) fusb302::interrogate_abort();
     iq_asked_ = false;
@@ -217,12 +230,7 @@ bool ConnectionPage::on_event(Event e) {
         return true;
     }
     if (shrt && e.button == Button::Back && act_page_ && has_pages()) {
-        act_page_ = false;
-        act_sel_ = -1;
-        ctx_.rows.detach();
-        ctx_.toast.clear();
-        pg::clear_body(ctx_.content, 0);
-        invalidate();
+        exit_actions();
         update(ctx_.now);
         return true;
     }
@@ -303,7 +311,7 @@ void ConnectionPage::set_op(const char *text, uint32_t now_ms, uint32_t ms) {
     const std::string_view sv = op_.view();
     if (!act_page_ && sv == "Device read") return;
     const FooterTone tone = (sv == "Cable saved" || sv == "Device read" || sv == "Rescanned (rebooted)") ? FooterTone::Ok
-                          : (sv == "Flash error" || sv == "Library full") ? FooterTone::Error
+                          : (sv == "Flash error" || sv == "Library full" || sv == "Failed to read") ? FooterTone::Error
                           : FooterTone::Info;
     ctx_.toast.show(tone, sv, now_ms, ms);
 }
@@ -366,11 +374,21 @@ void ConnectionPage::activate(const conn::Item &it, uint32_t now_ms) {
     case conn::Act::ShareCaps:
         share_caps(now_ms);
         return;
-    case conn::Act::ReadCable:
+    case conn::Act::ReadCable: {
         // Inline the Vconn read is refused by the driver (an inline K2 never transmits); the sniff
         // method stays available and touches nothing.
-        ctx_.ui->run_action(Action::EmarkerScan, now_ms);
+        em_read_pending_ = false;
+        const bool ran = ctx_.ui->run_action(Action::EmarkerScan, now_ms);
+        if (ran && ctx_.em_found) {
+            if (act_page_ && has_pages()) exit_actions();
+        } else if (ran && ctx_.em_listen_until != 0) {
+            em_read_pending_ = true;
+            set_op("Listening...", now_ms);
+        } else {
+            set_op("Failed to read", now_ms);
+        }
         break;
+    }
     case conn::Act::SaveCable: {
         const emlib::Result r = storage::lib_save_current();
         set_op(r.err == emlib::Err::Ok ? (r.existed ? "Already saved" : "Cable saved")
@@ -1790,6 +1808,14 @@ void ConnectionPage::update(uint32_t now_ms) {
         set_op(msg, now_ms, 4000);
     }
     build_items();   // the action rows and the OK verb follow the live state
+    if (em_read_pending_ && ctx_.em_listen_until == 0) {
+        em_read_pending_ = false;
+        if (ctx_.em_quiet) {
+            set_op("Failed to read", now_ms);
+        } else if (act_page_ && has_pages()) {
+            exit_actions();
+        }
+    }
     if (!has_pages()) act_page_ = false;
     if (act_page_) {
         if (act_sel_ < 0) act_sel_ = 0;

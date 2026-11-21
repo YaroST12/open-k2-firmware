@@ -149,6 +149,7 @@ struct UiContext {
     bool blank K2_BSS_INIT(false);
     bool em_scanned K2_BSS_INIT(false);
     bool em_scanning K2_BSS_INIT(false);
+    bool em_found K2_BSS_INIT(false);
     bool em_quiet K2_BSS_INIT(false);          // the last listen window ended without a cable reply
     bool inline_mode K2_BSS_INIT(false);    // a live sink is attached: active operations are gated (refused, no confirm)
     bool plus_key K2_BSS_INIT(false);       // the physical + key is down right now (Waiting watches it: it is wired to the CC pins)
@@ -953,8 +954,9 @@ public:
 private:
     void sense(uint32_t now_ms);           // topology window + facts, once per update
     void build_items();
+    void exit_actions();
     void activate(const conn::Item &it, uint32_t now_ms);
-    void set_op(const char *text, uint32_t now_ms, uint32_t ms = 2500);
+    void set_op(const char *text, uint32_t now_ms, uint32_t ms = kToastDefaultMs);
     void share_caps(uint32_t now_ms);
     void share_cable(uint32_t now_ms);
     void paint_status(uint32_t now_ms);
@@ -982,6 +984,7 @@ private:
     uint32_t id_sig_ = 0;                  // identity block's hash (0 = repaint)
     uint32_t thumb_sig_ = 0;               // scroll thumb's (first, total) as painted
     StrBuf<40> status_txt_;                // the bottom bar as last painted (tests read it; the page never does)
+    bool em_read_pending_ = false;         // Read e-marker started a passive listen window from Actions
     bool id_asked_ = false;                // Identify started from this page: its progress shows in the status bar
     bool iq_asked_ = false;                // inline interrogation started from the Device place
     bool iq_have_ = false;                 // an inline interrogation was started during iq_session_

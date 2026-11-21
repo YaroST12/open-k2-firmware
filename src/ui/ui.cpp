@@ -1116,6 +1116,7 @@ UiAction Ui::dispatch_button(Event event, uint32_t now_ms) {
             paint_pending_ = true;
         }
         sync_panel();
+        if (uses_opp_rail()) sync_opp_rail();
     }
     if (ctx_.toast.active(now_ms)) {
         ctx_.toast.drawn = false;
@@ -1262,6 +1263,7 @@ bool Ui::run_action(Action a, uint32_t now_ms, bool confirm) {
                     unsigned(fusb302::cable_seq()), unsigned(cable_seq_seen_));
         ctx_.em_scanning = true;
         ctx_.em_listen_until = 0;
+        ctx_.em_found = false;
         ctx_.em_quiet = false;
         refresh_action_views(now_ms);
         bool found = fusb302::read_emarker(false, mode);
@@ -1276,6 +1278,7 @@ bool Ui::run_action(Action a, uint32_t now_ms, bool confirm) {
             // refused by the driver (an inline K2 never transmits): no scan ran, so no scan mark
             // and no listen window either
         } else if (found || mode == pd::EmarkerMode::Vconn) {   // a listen that heard nothing is not a scan
+            ctx_.em_found = found;
             ctx_.em_scanned = true;
             link_.emarker_scanned(now_ms);
             cable_seq_seen_ = fusb302::cable_seq();
