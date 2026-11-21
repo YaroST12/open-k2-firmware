@@ -498,13 +498,13 @@ static void test_optional_rotated_buttons() {
     CHECK_EQ(ui.page(), Page::Lines);
 
     ui.open_place(bench::Place::Charger, 7400);
-    ui.on_button(Button::Back, ButtonEvent::Short, 7450);                // out to the ring on Charger
+    ui.on_button(Button::Back, ButtonEvent::Short, 7450);                // out to the ring on Link
     ui.on_button(Button::Minus, ButtonEvent::Short, 7500);
     ui.on_button(Button::Ok, ButtonEvent::Short, 7600);
-    CHECK_EQ(ui.menu() == Menu::Connection, true);                       // a place page ...
-    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Cable));            // rotation 2 swaps the direction: [-] walks on
+    CHECK_EQ(ui.menu() == Menu::Battery, true);                          // Battery place page ...
+    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Battery));          // rotation 2 swaps the direction: [-] walks on (Link -> Battery)
     ui.on_button(Button::Back, ButtonEvent::Short, 7700);
-    CHECK_EQ(ui.ring_view(), true);   // Info -> out to the ring
+    CHECK_EQ(ui.ring_view(), true);   // Battery -> out to the ring
 
     const auto before_chord = ui.page();
     chord(ui, 7800);
@@ -658,16 +658,16 @@ static void test_remote_keys_are_logical() {
         u.set_rotate_buttons(true);
         u.set_rotation(2, 1100);
         u.open_place(bench::Place::Charger, 1200);
-        u.on_button(Button::Back, ButtonEvent::Short, 1250);    // out to the ring on Charger
+        u.on_button(Button::Back, ButtonEvent::Short, 1250);    // out to the ring on Link
         if (remote) { u.on_remote_button(key, ButtonEvent::Short, 1300); u.on_remote_button(Button::Ok, ButtonEvent::Short, 1400); }
         else        { u.on_button(key, ButtonEvent::Short, 1300);        u.on_button(Button::Ok, ButtonEvent::Short, 1400); }
-        return u.menu() == Menu::Connection ? static_cast<int>(u.ring_position()) : -1;   // a place page opened from the ring
+        return !u.ring_view() ? static_cast<int>(u.ring_position()) : -1;   // entered page opened from the ring
     };
-    const int cable = static_cast<int>(ring::Pos::Cable);
-    CHECK_EQ(pick(true, Button::Plus) == cable, true);    // remote plus = on
-    CHECK_EQ(pick(false, Button::Minus) == cable, true);  // physical minus at rotation 2 = on
-    CHECK_EQ(pick(false, Button::Plus) == cable, false);  // physical plus at rotation 2 = back
-    CHECK_EQ(pick(true, Button::Minus) == pick(false, Button::Plus), true);   // remote minus = up, like that key
+    const int battery = static_cast<int>(ring::Pos::Battery);
+    CHECK_EQ(pick(true, Button::Plus) == battery, true);    // remote plus = on (Link -> Battery)
+    CHECK_EQ(pick(false, Button::Minus) == battery, true);  // physical minus at rotation 2 = on
+    CHECK_EQ(pick(false, Button::Plus) == battery, false);  // physical plus at rotation 2 = back (Link -> Ripple)
+    CHECK_EQ(pick(true, Button::Minus) == pick(false, Button::Plus), true);   // remote minus = back, like physical plus
 
     // Remote plus walks the ring on (Lines -> Numbers) at rotation 2, where a physical plus walks back.
     ui.goto_page(static_cast<uint8_t>(Page::Lines), 3000);
@@ -722,11 +722,11 @@ static void test_remote_keys_are_logical() {
     // Rotation 0 with the setting on or off: logical equals physical.
     ui.set_rotation(0, 8000);
     ui.open_place(bench::Place::Charger, 8100);
-    ui.on_button(Button::Back, ButtonEvent::Short, 8150);   // out to the ring on Charger
+    ui.on_button(Button::Back, ButtonEvent::Short, 8150);   // out to the ring on Link
     ui.on_remote_button(Button::Plus, ButtonEvent::Short, 8200);
     ui.on_remote_button(Button::Ok, ButtonEvent::Short, 8300);
-    CHECK_EQ(ui.menu() == Menu::Connection, true);   // the Cable place page
-    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Cable));
+    CHECK_EQ(ui.menu() == Menu::Battery, true);   // the Battery place page
+    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Battery));
 }
 
 int main() {

@@ -706,61 +706,98 @@ static void test_place_actions() {
     ActFacts a;
     a.attached = true; a.caps_valid = true; a.cable_valid = true;
 
-    // Source (Charger) place: out[0] is Read again, last row is Read again.
-    int n = place_actions(Tab::Source, a, it);
-    CHECK(n >= 2);
-    CHECK_EQ(int(it[0].act), int(Act::Refresh));
-    CHECK_STR(it[0].label, "Read again");
-    CHECK_EQ(int(it[std::size_t(n - 1)].act), int(Act::Refresh));
-    CHECK_STR(it[std::size_t(n - 1)].label, "Read again");
+    CHECK_EQ(int(act_slot(Act::ResetLink, false, false)), int(sl::Reset));
+    CHECK_EQ(int(act_slot(Act::ResetLink, false, true)), int(sl::ResetShare));
 
-    // Cable place: out[0] is Read e-marker; Actions rows keep Read e-marker, Save cable, Saved cables, Spoof as... (tagged "load" when inline).
+    // Source (Charger): 0 = Reset & re-read, 1 = Spec & offers, 2 = Read again, 3.. = Charger bench actions.
+    int n = place_actions(Tab::Source, a, it);
+    CHECK(n >= 4);
+    CHECK_EQ(int(it[0].act), int(Act::ResetLink));
+    CHECK_STR(it[0].label, "Reset & re-read");
+    CHECK_STR(it[0].tag, "Link");
+    CHECK_EQ(it[0].caution, false);
+    CHECK_EQ(int(it[1].act), int(Act::Details));
+    CHECK_STR(it[1].label, "Spec & offers");
+    CHECK_EQ(int(it[2].act), int(Act::Refresh));
+    CHECK_STR(it[2].label, "Read again");
+    CHECK_EQ(int(it[3].act), int(Act::Bench));
+
+    // Cable: 0 = Reset & re-read, 1 = Read e-marker, 2 = Chip details, bench actions, then Save cable, Saved cables, Spoof as...
     a.inline_sink = false;
     n = place_actions(Tab::Cable, a, it);
-    CHECK(n >= 5);
-    CHECK_EQ(int(it[0].act), int(Act::ReadCable));
+    const int cb_n = bench::actions(bench::Place::Cable).n;
+    CHECK_EQ(n, 3 + cb_n + 3);
+    CHECK_EQ(int(it[0].act), int(Act::ResetLink));
     CHECK_EQ(int(it[1].act), int(Act::ReadCable));
     CHECK_STR(it[1].label, "Read e-marker");
-    // The empty Cable page names the row it points at; the Charger page names the tests that fill it.
     CHECK_STR(tx::kCableNoneL, (std::string("Actions: ") + it[1].label).c_str());
     CHECK_STR(tx::kOffersNone, "No offers read");
     CHECK_STR(tx::kOffersNoneL, "Tests: Light, PD");
-    CHECK_EQ(int(it[2].act), int(Act::SaveCable));
-    CHECK_STR(it[2].label, "Save cable");
-    CHECK_EQ(int(it[3].act), int(Act::SavedCables));
-    CHECK_STR(it[3].label, "Saved cables");
-    CHECK_EQ(int(it[4].act), int(Act::SpoofAs));
-    CHECK_STR(it[4].label, "Spoof as...");
-    CHECK_EQ(it[4].enabled, true);
-    CHECK_STR(it[4].tag, "");
+    CHECK_EQ(int(it[2].act), int(Act::Details));
+    CHECK_STR(it[2].label, "Chip details");
+    for (int i = 0; i < cb_n; i++) CHECK_EQ(int(it[std::size_t(3 + i)].act), int(Act::Bench));
+    const int save_i = 3 + cb_n;
+    CHECK_EQ(int(it[std::size_t(save_i)].act), int(Act::SaveCable));
+    CHECK_STR(it[std::size_t(save_i)].label, "Save cable");
+    CHECK_EQ(int(it[std::size_t(save_i + 1)].act), int(Act::SavedCables));
+    CHECK_STR(it[std::size_t(save_i + 1)].label, "Saved cables");
+    CHECK_EQ(int(it[std::size_t(save_i + 2)].act), int(Act::SpoofAs));
+    CHECK_STR(it[std::size_t(save_i + 2)].label, "Spoof as...");
+    CHECK_EQ(it[std::size_t(save_i + 2)].enabled, true);
+    CHECK_STR(it[std::size_t(save_i + 2)].tag, "");
     a.inline_sink = true;
     place_actions(Tab::Cable, a, it);
-    CHECK_EQ(it[4].enabled, false);
-    CHECK_STR(it[4].why, kWhyLiveSink);
-    CHECK_STR(it[4].tag, "load");
+    CHECK_EQ(it[0].caution, true);                                            // Reset & re-read inline carries caution
+    CHECK_EQ(it[std::size_t(save_i + 2)].enabled, false);
+    CHECK_STR(it[std::size_t(save_i + 2)].why, kWhyLiveSink);
+    CHECK_STR(it[std::size_t(save_i + 2)].tag, "load");
     a.inline_sink = false;
 
-    // Sink (Device) place: out[0] is Ask device (Act::Identify); no Ask device or Read again rows in out[1..].
+    // Sink (Device): 0 = Reset & re-read, 1 = Sink details, 2 = Ask device (Act::Identify), 3.. = Device bench actions.
     n = place_actions(Tab::Sink, a, it);
-    CHECK(n >= 1);
-    CHECK_EQ(int(it[0].act), int(Act::Identify));
-    CHECK_STR(it[0].label, "Ask device");
-    CHECK_EQ(it[0].enabled, true);
-    for (int i = 1; i < n; i++) {
-        CHECK(it[std::size_t(i)].act != Act::Identify);
-        CHECK(it[std::size_t(i)].act != Act::Refresh);
-    }
+    CHECK(n >= 3);
+    CHECK_EQ(int(it[0].act), int(Act::ResetLink));
+    CHECK_EQ(int(it[1].act), int(Act::Details));
+    CHECK_STR(it[1].label, "Sink details");
+    CHECK_EQ(int(it[2].act), int(Act::Identify));
+    CHECK_STR(it[2].label, "Ask device");
+    CHECK_EQ(it[2].enabled, true);
     a.pd_none = true;
     place_actions(Tab::Sink, a, it);
-    CHECK_EQ(it[0].enabled, false);
-    CHECK_STR(it[0].why, kWhyNoPd);
+    CHECK_EQ(it[2].enabled, false);
+    CHECK_STR(it[2].why, kWhyNoPd);
     a.alone = true;
     place_actions(Tab::Sink, a, it);
-    CHECK_EQ(it[0].enabled, true);
+    CHECK_EQ(it[2].enabled, true);
     a.alone = false; a.attached = false;
     place_actions(Tab::Sink, a, it);
-    CHECK_EQ(it[0].enabled, false);
-    CHECK_STR(it[0].why, "No device seen");
+    CHECK_EQ(it[2].enabled, false);
+    CHECK_STR(it[2].why, "No device seen");
+}
+
+static void test_debounced_port_sense() {
+    DebouncedSense ds;
+    // First sample commits immediately.
+    CHECK_EQ(int(ds.commit(PortSense::NoCharger, 1000)), int(PortSense::NoCharger));
+    // Rapid flaps < 600 ms across idle states never change the committed state.
+    CHECK_EQ(int(ds.commit(PortSense::ChargerWaiting, 1100)), int(PortSense::NoCharger));
+    CHECK_EQ(int(ds.commit(PortSense::DualRolePort, 1300)), int(PortSense::NoCharger));
+    CHECK_EQ(int(ds.commit(PortSense::SourceAsleep, 1500)), int(PortSense::NoCharger));
+    CHECK_EQ(int(ds.commit(PortSense::LineInUse, 1700)), int(PortSense::NoCharger));
+    CHECK_EQ(int(ds.commit(PortSense::ChargerWaiting, 1900)), int(PortSense::NoCharger));
+    CHECK_EQ(int(ds.commit(PortSense::ChargerWaiting, 2499)), int(PortSense::NoCharger));   // 599 ms: still held
+    CHECK_EQ(int(ds.commit(PortSense::ChargerWaiting, 2500)), int(PortSense::ChargerWaiting));   // 600 ms: commits
+    // Real attach commits immediately without waiting 600 ms.
+    CHECK_EQ(int(ds.commit(PortSense::Attached, 2510)), int(PortSense::Attached));
+    // Projection onto Facts restores the debounced idle state.
+    Facts f = facts(true, false, false, Topology::Unknown, false, raguard::WaitKind::DualRolePort);
+    CHECK_EQ(int(classify_port_sense(f)), int(PortSense::LineInUse));
+    apply_port_sense(f, PortSense::ChargerWaiting);
+    CHECK_EQ(int(classify_port_sense(f)), int(PortSense::ChargerWaiting));
+    CHECK_EQ(f.inline_sink, false);
+    apply_port_sense(f, PortSense::SourceAsleep);
+    CHECK_EQ(int(classify_port_sense(f)), int(PortSense::SourceAsleep));
+    CHECK_EQ(source_asleep(f), true);
 }
 
 int main() {
@@ -784,6 +821,7 @@ int main() {
     test_survey_words();
     test_actions();
     test_place_actions();
+    test_debounced_port_sense();
     test_no_pd_gate();
     test_protocol();
     test_id_value();

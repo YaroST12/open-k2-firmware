@@ -66,4 +66,36 @@ inline constexpr const char *kHoldInfo = "Hold Back for Info";
 inline constexpr const char *kFooters[] = {kSourceUnread, kCableUnread, kSinkUnread, kArmedBar, kHoldActions, kHoldInfo};
 static_assert(all_fit(kFooters, 8, 27 * 8), "a Who's attached footer is over 27 characters");
 
+// ---- 3-slice Overview & Actions copy (width-checked against RowList / 208 px slice canvas) --------------------------
+inline constexpr int kActionLabelMaxPx = 128;   // 16 cells of S16 beside a right-side tail/pill
+inline constexpr int kActionNoteMaxPx = 174;    // kit::kNoteMaxPx (29 cells of font 12)
+inline constexpr int kSliceLineMaxPx = 192;     // 32 cells of font 12 (x8..200 on 208 px canvas)
+
+inline constexpr const char *kActResetLink = "Reset & re-read";
+inline constexpr const char *kActSpecOffers = "Spec & offers";
+inline constexpr const char *kActChipDetails = "Chip details";
+inline constexpr const char *kActSinkDetails = "Sink details";
+inline constexpr const char *kActionLabels[] = {kActResetLink, kActSpecOffers, kActChipDetails, kActSinkDetails, kReadEmarker};
+static_assert(all_fit(kActionLabels, 8, kActionLabelMaxPx), "an Actions row label is wider than the row box");
+
+inline constexpr const char *kNoteResetInline = "Force fresh PD negotiation";
+inline constexpr const char *kNoteResetStand = "Wake / rescan source caps";
+inline constexpr const char *kNoteResetArmed = "Hard Reset drops VBUS ~0.8s";
+inline constexpr const char *kNoteSpecSource = "Open full offers & details";
+inline constexpr const char *kNoteSpecCable = "Open full e-marker details";
+inline constexpr const char *kNoteSpecSink = "Open full sink details";
+inline constexpr const char *kActionNotes[] = {kNoteResetInline, kNoteResetStand, kNoteResetArmed,
+                                               kNoteSpecSource, kNoteSpecCable, kNoteSpecSink};
+static_assert(all_fit(kActionNotes, 6, kActionNoteMaxPx), "an Actions row note is wider than kit::kNoteMaxPx");
+
+inline constexpr const char *kSliceTagCharger = "CHARGER";
+inline constexpr const char *kSliceTagCable = "CABLE";
+inline constexpr const char *kSliceTagSink = "SINK";
+inline constexpr const char *kSliceBottleneck = "Bottleneck: caps link";
+inline constexpr const char *kSliceReadyL1 = "Sensed on port \xC2\xB7 safe to probe";
+inline constexpr const char *kSliceNoPdL1 = "VBUS live \xC2\xB7 no PD seen";
+inline constexpr const char *kSliceNoVbusL1 = "No VBUS \xC2\xB7 ready for chip scan";
+inline constexpr const char *kSliceLines[] = {kSliceBottleneck, kSliceReadyL1, kSliceNoPdL1, kSliceNoVbusL1};
+static_assert(all_fit(kSliceLines, 6, kSliceLineMaxPx), "an Overview slice line is wider than 32 cells");
+
 }  // namespace k2::text::conn

@@ -3,6 +3,7 @@
 #include "k2/ui/ui.hpp"
 #include "k2/battery/battery_hw.hpp"
 #include "k2/core/gap_meter.hpp"
+#include "k2/core/held.hpp"
 #include "k2/core/log.hpp"
 #include "k2/core/loop_guard.hpp"
 #include "k2/core/paint_meter.hpp"
@@ -74,11 +75,17 @@ PageIf *Ui::build_menu(Menu m) {
     case Menu::Connection: {
         ConnectionPage *p = pages_.push<ConnectionPage>(ctx_);
         if (p) {
-            p->lock(conn_lock_ >= 0 ? static_cast<conn::Tab>(conn_lock_) : conn::Tab::Source);   // always a place page, before enter()
-            if (conn_actions_next_) p->set_actions_mode(true);
+            const conn::Tab t = conn_lock_ >= 0 ? static_cast<conn::Tab>(conn_lock_) : conn::Tab::Source;
+            if (conn_overview_next_) {
+                p->set_overview(t);
+            } else {
+                p->lock(t);
+                if (conn_actions_next_) p->set_actions_mode(true);
+            }
         }
         conn_lock_ = -1;
         conn_actions_next_ = false;
+        conn_overview_next_ = false;
         return p;
     }
     case Menu::Diag: return pages_.push<DiagPage>(ctx_);
@@ -1166,11 +1173,14 @@ bool Ui::ring_show(ring::Pos pos, uint32_t now_ms) {
     set_page(t.page, now_ms);
     bool ok = true;
     if (t.menu != Menu::Count) {
-        if (t.menu == Menu::Connection) conn_lock_ = static_cast<int8_t>(t.tab);
+        if (t.menu == Menu::Connection) {
+            if (conn_lock_ < 0) conn_lock_ = static_cast<int8_t>(t.tab);
+            conn_overview_next_ = !conn_actions_next_;
+        }
         place_next_ = t.menu == Menu::Diagnosis;   // the PD diagnosis opens as the Log place
         ok = push_menu(t.menu, now_ms);
         place_next_ = false;
-        if (!ok) { conn_lock_ = -1; conn_actions_next_ = false; }
+        if (!ok) { conn_lock_ = -1; conn_actions_next_ = false; conn_overview_next_ = false; }
     }
     ring_landing_ = false;
     return ok;
@@ -1204,7 +1214,7 @@ bool Ui::ring_page_rests() const {
     const ring::Target t = ring::target(ring_position());
     if (t.menu == Menu::Count || t.menu != stack_[0] || t.page != page_) return false;
     switch (t.menu) {
-    case Menu::Connection: return connection_page().tab() == static_cast<conn::Tab>(t.tab) && connection_page().ring_rest();
+    case Menu::Connection: return connection_page().ring_rest();
     case Menu::Battery: return battery_page()->ring_rest();
     case Menu::Diagnosis: return diagnosis_page().ring_rest();
     default: return false;
@@ -1240,10 +1250,22 @@ void Ui::ring_key(Event e, uint32_t now_ms) {
 
 void Ui::open_place(bench::Place p, uint32_t now_ms) {
     BudgetScope scope(*this);
-    constexpr ring::Pos kPos[bench::kPlaces] = {ring::Pos::Home, ring::Pos::Charger, ring::Pos::Cable, ring::Pos::Device,
+    constexpr ring::Pos kPos[bench::kPlaces] = {ring::Pos::Home, ring::Pos::Link, ring::Pos::Link, ring::Pos::Link,
                                                 ring::Pos::Battery, ring::Pos::Log, ring::Pos::K2};
     const ring::Pos pos = kPos[static_cast<int>(p) < bench::kPlaces ? static_cast<int>(p) : 0];
-    if (ring_show(pos, now_ms) && ring::can_enter(pos)) ring_enter(now_ms);
+    if (pos == ring::Pos::Link) {
+        const conn::Tab tab = p == bench::Place::Cable ? conn::Tab::Cable
+                            : p == bench::Place::Device ? conn::Tab::Sink
+                            : conn::Tab::Source;
+        conn_lock_ = static_cast<int8_t>(tab);
+    }
+    const bool shown = ring_show(pos, now_ms);
+    if (!shown) {
+        conn_lock_ = -1;
+        conn_overview_next_ = false;
+    } else if (ring::can_enter(pos)) {
+        ring_enter(now_ms);
+    }
 }
 
 void Ui::open_place_actions(bench::Place p, uint32_t now_ms) {
@@ -1310,6 +1332,10 @@ bool Ui::run_action(Action a, uint32_t now_ms, bool confirm) {
             ctx_.em_scanned = true;
             link_.emarker_scanned(now_ms);
             cable_seq_seen_ = fusb302::cable_seq();
+            if (mode == pd::EmarkerMode::Vconn && found) {
+                held::poll(now_ms, link_.inline_mode());
+                held::mark_cable_probed();
+            }
         } else {   // sniff, nothing decoded yet: keep listening for the source's own query
             ctx_.em_listen_until = now_ms + kListenWindowMs;
             K2LOG("[UI] e-marker sniff: nothing yet, listening 5 s\n");
@@ -1431,6 +1457,22 @@ bool Ui::trigger_hard_reset(uint32_t now_ms, bool lab_inline) {
     return ok;
 }
 
+Ui::LinkResetResult Ui::link_reset(bool confirmed, uint32_t now_ms) {
+    if (ports_busy()) return LinkResetResult::Busy;
+    const bool inl = link_.inline_mode() || ctx_.inline_mode;
+    if (inl) {
+        if (fusb302::self_powered() || power_source::bus_powered()) return LinkResetResult::SelfPowered;
+        if (!confirmed) return LinkResetResult::NeedConfirm;
+        held::clear_for_reset();
+        const bool sent = fusb302::sink_hard_reset(true);
+        K2LOG("[UI] link reset (inline Hard Reset): %s\n", sent ? "sent" : "refused");
+        return sent ? LinkResetResult::HardReset : LinkResetResult::NoLink;
+    }
+    held::clear_for_reset();
+    if (run_action(Action::PdRescan, now_ms)) return LinkResetResult::Cycled;
+    return LinkResetResult::Busy;
+}
+
 Ui::IdResult Ui::identify(uint32_t now_ms) {
     ContentViewport viewport(active_dest(), ctx_.content.w, ctx_.content.h);
     if (ports_busy()) {
@@ -1476,6 +1518,7 @@ void Ui::debug_fake_pdos(uint8_t n, uint32_t now_ms) {
     if (n == 0) {
         link_.clear_force();
         fusb302::clear_source();   // the driver's list goes too, so the remote state agrees
+        held::clear_for_reset();
     }
     K2LOG("[UI] debug fake pdos: %d\n", int(n));
     current().update(now_ms);
@@ -1488,6 +1531,7 @@ void Ui::debug_link(bool attached, uint32_t now_ms) {
     else link_.force_detached(now_ms);
     if (!attached) {
         fusb302::clear_source();
+        held::clear_for_reset();
         // A real detach at the CC level too: every owner of Rd is dropped and Rd stays off for the hold, so the charger
         // sees the sink leave (a display-only override left a stuck Rd in place, hardware 2026-11-06).
         const bool cc = fusb302::cc_detach();
@@ -1506,7 +1550,7 @@ void Ui::refresh_action_views(uint32_t now_ms) {
 
 bool Ui::open_connection(conn::Tab tab, bool spoof, uint32_t now_ms) {
     BudgetScope scope(*this);
-    if (menu() == Menu::Connection && !spoof && connection_page().tab() == tab) {   // already on this place
+    if (menu() == Menu::Connection && !spoof && connection_page().spec_mode() && connection_page().tab() == tab) {   // already on this place
         ContentViewport viewport(active_dest(), ctx_.content.w, ctx_.content.h);
         pump_paint(now_ms);
         return true;
@@ -1515,7 +1559,8 @@ bool Ui::open_connection(conn::Tab tab, bool spoof, uint32_t now_ms) {
     ctx_.now = now_ms;
     conn_lock_ = static_cast<int8_t>(tab);
     conn_actions_next_ = spoof;
-    if (!push_menu(Menu::Connection, now_ms)) { conn_lock_ = -1; conn_actions_next_ = false; return false; }
+    conn_overview_next_ = false;
+    if (!push_menu(Menu::Connection, now_ms)) { conn_lock_ = -1; conn_actions_next_ = false; conn_overview_next_ = false; return false; }
     if (spoof) return push_menu(Menu::Spoof, now_ms);
     pump_paint(now_ms);
     return true;

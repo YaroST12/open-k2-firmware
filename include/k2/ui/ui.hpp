@@ -201,6 +201,10 @@ public:
     void open_place_actions(bench::Place p, uint32_t now_ms); // Place::Charger/Cable/Device opened directly on its Actions sub-page
     // Opens the Charger / Cable / Device place (`tab`); `spoof` goes straight on to the Spoof list (the Tools shortcut).
     bool open_connection(conn::Tab tab, bool spoof, uint32_t now_ms);
+    // Reset the PD link and re-read the settlement: standalone runs rescan + survey; inline arms a 2-press confirm then sends
+    // one Hard Reset (refused when VBUS-powered with no USB host supply).
+    enum class LinkResetResult : uint8_t { Cycled, HardReset, NeedConfirm, SelfPowered, Busy, NoLink };
+    LinkResetResult link_reset(bool confirmed, uint32_t now_ms);
     // The comeback of a bridged Refresh (core/rescan.cpp): Connection on its Source tab, saying "Rescanned (rebooted)".
     bool land_rescanned(uint32_t now_ms);
     // Submenus: a small stack (depth 3: Tools > Connection > Saved cables > Share). While one is open it gets every event,
@@ -593,6 +597,7 @@ private:
     bool rotation_notice_drawn_ K2_BSS_INIT(false);
     int8_t conn_lock_ = -1;   // open_connection / open_place -> build_menu: the place tab (Charger / Cable / Device)
     bool conn_actions_next_ K2_BSS_INIT(false);   // open_place_actions / open_connection(spoof) -> build_menu: open on Actions sub-page
+    bool conn_overview_next_ K2_BSS_INIT(false);  // ring_show(Pos::Link) / open_place -> build_menu: open on 3-slice Overview
     bool place_next_ K2_BSS_INIT(false); // ring_show -> build_menu: the PD diagnosis opens as the Log place
     bool ring_view_ K2_BSS_INIT(true);      // the keys walk the ring (boots in it, on Home)
     bool ring_landing_ K2_BSS_INIT(false);  // ring_show builds: the next page lands in the ring view, not entered

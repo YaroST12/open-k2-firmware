@@ -5,6 +5,7 @@
 #include "test_util.h"
 #include "fake_lcd.h"
 #include "ui_stubs.h"
+#include "k2/core/held.hpp"
 #include "k2/ui/ui.hpp"
 #include "k2/ui/ui_pages.hpp"
 #include "k2/ui/ui_style.hpp"
@@ -35,6 +36,7 @@ static Ui &fresh_ui() {
     // start from a new Link (the rest of the Ui carries over between cases as before).
     const_cast<pd::Link &>(ui.link()) = pd::Link{};
     ui.context().keep.place_sel = {};
+    held::reset();
     g_stub.ms = 10000;
     ui.init(g_stub.ms);
     ui.set_rotation(0, g_stub.ms);   // boot default is bottom-edge@0; the pixel checks below assume the right edge (logical == physical, no scaling)
@@ -79,7 +81,7 @@ static void test_label_sets() {
     }
 }
 
-// Ring navigation (the carousel of eleven pages): + / - walk it with a wrap, OK enters a page with something to do, Back
+// Ring navigation (the carousel of nine pages): + / - walk it with a wrap, OK enters a page with something to do, Back
 // goes Home, long Back jumps to the page chosen in Settings. An entered page owns the keys; the Back it does not take leaves to
 // the ring on the same page. Long + / - never do anything.
 static void test_ring_navigation() {
@@ -96,7 +98,7 @@ static void test_ring_navigation() {
         CHECK_EQ(int(ui.ring_position()), i);
         CHECK_EQ(ui.ring_view(), true);
     }
-    CHECK_EQ(ui.page() == Page::Settings, 1);                          // 11 K2
+    CHECK_EQ(ui.page() == Page::Settings, 1);                          // 9 K2
     key(Button::Plus);
     CHECK_EQ(ui.page() == Page::Home, 1);                              // wraps
     key(Button::Minus);
@@ -144,15 +146,26 @@ static void test_ring_navigation() {
     CHECK_EQ(static_cast<int>(ui.context().keep.home_hero), static_cast<int>(home::Qty::W));
     key(Button::Back);
     CHECK_EQ(ui.ring_view(), true);
-    // Charger -> Actions -> Test charger, then Back climbs: the charger test to its place Actions, Actions to Info, Info to the ring.
+    // Link -> Charger Actions -> Test charger, then Back climbs: the charger test to Charger Actions, Actions to Overview, Overview to the ring.
     for (int i = 0; i < 5; i++) key(Button::Plus);
-    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Charger));
+    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Link));
     ui.context().keep.place_sel[static_cast<int>(bench::Place::Charger)] = 0;
     key(Button::Ok);
     CHECK_EQ(ui.menu() == Menu::Connection, 1);
     CHECK_EQ(ui.ring_view(), false);
-    key(Button::Ok);                                                   // Info -> Actions (row 0 = Test charger)
+    key(Button::Ok);                                                   // Overview (Charger focused) -> Charger Actions
     CHECK_EQ(ui.connection_page().actions_mode(), true);
+    {
+        const bench::Acts acts = bench::actions(bench::Place::Charger);
+        int ct_row = 0;
+        while (ct_row < ui.connection_page().item_count()) {
+            const auto &it = ui.connection_page().item(ct_row);
+            if (it.act == conn::Act::Bench && acts.a[it.arg].kind == bench::ActKind::Page && acts.a[it.arg].arg == uint8_t(Page::ChargerTest)) break;
+            ++ct_row;
+        }
+        int guard = 32;
+        while (ui.connection_page().action_row() < ct_row && guard-- > 0) key(Button::Plus);
+    }
     key(Button::Ok);
     CHECK_EQ(ui.page() == Page::ChargerTest, 1);
     key(Button::Back);
@@ -160,12 +173,12 @@ static void test_ring_navigation() {
     CHECK_EQ(ui.menu() == Menu::Connection, 1);
     CHECK_EQ(int(ui.connection_page().tab()), int(conn::Tab::Source));
     CHECK_EQ(ui.connection_page().actions_mode(), true);
-    key(Button::Back);                                                 // Actions -> Info
+    key(Button::Back);                                                 // Actions -> Overview
     CHECK_EQ(ui.connection_page().actions_mode(), false);
     CHECK_EQ(ui.ring_view(), false);
-    key(Button::Back);                                                 // Info -> the ring on Charger
+    key(Button::Back);                                                 // Overview -> the ring on Link
     CHECK_EQ(ui.ring_view(), true);
-    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Charger));
+    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Link));
     // A long Back from a page opened over a base page leaves to the ring too: K2's Diag submenu.
     ui.goto_page(kDiagPage, t);
     CHECK_EQ(int(ui.menu_depth()), 1);
@@ -194,7 +207,7 @@ static void test_ring_flag_and_busy_skip() {
     ui.stop_fc(t += 100);                                                // 5 V release guard owns the ports until it is back at 5 V
     ui.tick(t += 100);
     CHECK_EQ(ui.ports_busy(), true);
-    key(Button::Plus);                                                   // Charger..Log are menus: skipped, K2 is a page
+    key(Button::Plus);                                                   // Link..Log are menus: skipped, K2 is a page
     CHECK_EQ(int(ui.ring_position()), int(ring::Pos::K2));
     CHECK_EQ(ui.ring_view(), true);
     key(Button::Plus);
@@ -207,7 +220,7 @@ static void test_ring_flag_and_busy_skip() {
     for (int i = 0; i < 6; i++) ui.tick(t += 100);
     CHECK_EQ(ui.ports_busy(), false);
     key(Button::Plus);
-    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Charger));          // free again: the menu shows
+    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Link));             // free again: the menu shows
     ui.goto_page(uint8_t(Page::Home), t += 100);
 }
 
@@ -428,10 +441,13 @@ static void test_cable_tab_not_found_greys_save() {
     Ui &ui = fresh_ui();
     g_stub = StubState();
     g_stub.em = {};                                     // valid = false, defaults 3A / 20V / USB 2.0
-    ui.goto_page(kPdPage + 1, 20000);                   // Cable place: opens Info page
+    ui.goto_page(kPdPage + 1, 20000);                   // Cable place: opens Spec page
     ui.tick(20050);
-    ui.on_button(Button::Ok, ButtonEvent::Short, 20100);  // Cable Actions sub-page (Read e-marker is row 0)
-    ui.on_button(Button::Plus, ButtonEvent::Short, 20150); // Save cable (greyed)
+    ui.on_button(Button::Ok, ButtonEvent::Short, 20100);  // Cable Actions sub-page (Reset & re-read is row 0)
+    uint32_t ct = 20110;
+    while (ui.connection_page().action_row() >= 0 &&
+           ui.connection_page().item(ui.connection_page().action_row()).act != conn::Act::SaveCable)
+        ui.on_button(Button::Plus, ButtonEvent::Short, ct += 5); // Save cable (greyed)
     ui.on_button(Button::Ok, ButtonEvent::Short, 20200);   // greyed: refused, nothing saved
     CHECK_EQ(g_stub.lib_saves, 0);
     g_stub.em.valid = true;
@@ -453,13 +469,15 @@ static void test_cable_tab_save_and_list() {
     g_stub.em.num_vdos = 5;
     g_stub.em.spec_rev = 2;
     g_stub.em.raw_vdos = {0xFF00A041, (3u << 27) | 0x05ACu, 0, 0x12340005, (2u << 21) | (3u << 9) | (2u << 5)};
-    ui.goto_page(kPdPage + 1, 20000);                       // Cable place (Info page)
+    ui.goto_page(kPdPage + 1, 20000);                       // Cable place (Spec page)
     ui.tick(20050);
     CHECK_STR(label(ui, Button::Ok), "Actions");
-    ui.on_button(Button::Ok, ButtonEvent::Short, 20080);   // Cable Actions sub-page
-    CHECK_STR(label(ui, Button::Ok), "Read");
+    ui.on_button(Button::Ok, ButtonEvent::Short, 20080);   // Cable Actions sub-page (Reset & re-read is row 0)
+    CHECK_STR(label(ui, Button::Ok), "Reset");
     uint32_t ct = 20100;
-    while (ui.connection_page().action_row() < 1) ui.on_button(Button::Plus, ButtonEvent::Short, ct += 10);   // Save cable
+    while (ui.connection_page().action_row() >= 0 &&
+           ui.connection_page().item(ui.connection_page().action_row()).act != conn::Act::SaveCable)
+        ui.on_button(Button::Plus, ButtonEvent::Short, ct += 10);   // Save cable
     CHECK_STR(label(ui, Button::Ok), "Save");
     ui.on_button(Button::Ok, ButtonEvent::Short, 20300);    // direct, no confirmation, no address
     CHECK_EQ(g_stub.lib_saves, 1);
@@ -468,7 +486,7 @@ static void test_cable_tab_save_and_list() {
     ui.on_button(Button::Ok, ButtonEvent::Short, 20420);    // the same cable again: nothing new
     CHECK_EQ(int(g_stub.lib.size()), 1);
     ui.tick(24000);                                         // toast expired
-    ui.on_button(Button::Plus, ButtonEvent::Short, 24110);  // Saved cables is the third action row
+    ui.on_button(Button::Plus, ButtonEvent::Short, 24110);  // Saved cables is right after Save cable
     ui.on_button(Button::Ok, ButtonEvent::Short, 24200);
     ui.tick(24250);
     CHECK_EQ(ui.menu() == Menu::Emarker, 1);
@@ -911,7 +929,7 @@ static int act_row(bench::Place p, int tool) {
         const conn::Tab tab = p == bench::Place::Charger ? conn::Tab::Source : p == bench::Place::Cable ? conn::Tab::Cable : conn::Tab::Sink;
         std::array<conn::Item, conn::kMaxItems> it{};
         const int n = conn::place_actions(tab, conn::ActFacts{}, it);
-        const int first = tab == conn::Tab::Sink ? 0 : 1;   // the Device page's rows start at item 0 (ConnectionPage::first_act)
+        const int first = 0;   // ConnectionPage::first_act() is 0 for every slice's Actions list
         for (int i = first; i < n; i++) {
             const conn::Item &x = it[static_cast<size_t>(i)];
             if (x.act == conn::Act::Bench && a.a[x.arg].kind == bench::ActKind::Tool && a.a[x.arg].arg == tool) return i - first;
@@ -934,7 +952,7 @@ static void open_act(Ui &ui, bench::Place p, int tool, uint32_t t) {
     ui.tick(t + 2);
     const int target = act_row(p, tool);
     if (ui.menu() == Menu::Connection) {
-        if (!ui.connection_page().actions_mode() && ui.connection_page().has_pages())
+        if (!ui.connection_page().actions_mode())
             ui.on_button(Button::Ok, ButtonEvent::Short, t + 2);
         int guard = 32;
         while (ui.connection_page().action_row() < target && guard-- > 0) ui.on_button(Button::Plus, ButtonEvent::Short, t + 5);
@@ -954,15 +972,16 @@ static void test_tools_hub() {
     ui.goto_page(static_cast<uint8_t>(Page::Lines), kT0);
     CHECK_EQ(ui.list_state().count, 0);   // fixed rows, no scroll
     CHECK_EQ(ui.menu_depth(), 0u);
-    // The ring: + / - walk the eleven pages, OK enters one. Lines (2 LINES) to Cable (7 CABLE) is five steps on.
-    for (int i = 0; i < 5; i++) press(ui, Button::Plus, ButtonEvent::Short, kT0 + 20);
-    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Cable));
+    // The ring: + / - walk the nine pages, OK enters one. Lines (2 LINES) to Link (6 LINK) is four steps on.
+    for (int i = 0; i < 4; i++) press(ui, Button::Plus, ButtonEvent::Short, kT0 + 20);
+    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Link));
     ui.context().keep.place_sel[static_cast<int>(bench::Place::Cable)] = 0;
     press(ui, Button::Ok, ButtonEvent::Short, kT0 + 35);
     CHECK_EQ(ui.page() == Page::Lines, 1);
-    CHECK_EQ(ui.menu() == Menu::Connection, 1);   // the Cable place page over Lines
+    CHECK_EQ(ui.menu() == Menu::Connection, 1);   // the Link overview over Lines
+    press(ui, Button::Plus, ButtonEvent::Short, kT0 + 35);   // focus Cable slice
     CHECK_EQ(int(ui.connection_page().tab()), int(conn::Tab::Cable));
-    // In a place, OK flips to Actions, short +/- select an action and OK opens it: Cable > Resistance is Cable R.
+    // In Link Overview, OK flips to Actions for the focused slice, short +/- select an action and OK opens it: Cable > Resistance is Cable R.
     press(ui, Button::Ok, ButtonEvent::Short, kT0 + 36);
     for (int i = 0; i < act_row(bench::Place::Cable, 3); i++) press(ui, Button::Plus, ButtonEvent::Short, kT0 + 38);
     press(ui, Button::Ok, ButtonEvent::Short, kT0 + 40);
@@ -993,7 +1012,7 @@ static void test_tools_hub() {
     CHECK_EQ(ui.connection_page().actions_mode(), false);
     press(ui, Button::Back, ButtonEvent::Short, kT0 + 180);
     CHECK_EQ(ui.ring_view(), true);
-    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Charger));
+    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Link));
     CHECK_EQ(g_stub.fc_stops, 0);                  // nothing was triggered: leaving the trigger tool left the pins alone
 }
 
@@ -1473,12 +1492,16 @@ static void test_emarker_listen_window() {
     g_stub.cc = 1;
     ui.debug_link(true, 79900);
     ui.tick(80000);
-    ui.goto_page(kPdPage + 1, 80000);                     // Connection, Cable place (Read e-marker focused)
+    ui.goto_page(kPdPage + 1, 80000);                     // Connection, Cable place (Spec page)
     CHECK_EQ(on_pd(ui), 1);
-    ui.on_button(Button::Ok, ButtonEvent::Short, 80050);  // Info -> Actions
+    ui.on_button(Button::Ok, ButtonEvent::Short, 80050);  // Spec -> Actions (Reset & re-read = 0, Read e-marker = 1)
+    uint32_t rt = 80060;
+    while (ui.connection_page().action_row() >= 0 &&
+           ui.connection_page().item(ui.connection_page().action_row()).act != conn::Act::ReadCable)
+        ui.on_button(Button::Plus, ButtonEvent::Short, rt += 5);
     ui.on_button(Button::Ok, ButtonEvent::Short, 80100);  // Read cable: with a source on VBUS it only listens
     CHECK_EQ(int(g_stub.last_scan_mode), int(k2::pd::EmarkerMode::Sniff));
-    // The passive window runs 5 s; a new cable_seq inside it ends it (data arrived) and switches back to Info.
+    // The passive window runs 5 s; a new cable_seq inside it ends it (data arrived) and switches back to Overview/Spec.
     ui.tick(82000);
     CHECK_EQ(ui.context().em_listen_until != 0, true);
     CHECK_EQ(ui.connection_page().actions_mode(), true);
@@ -1489,8 +1512,11 @@ static void test_emarker_listen_window() {
     CHECK_EQ(ui.context().em_quiet, false);
     CHECK_EQ(ui.connection_page().actions_mode(), false);
     // Re-enter Actions and listen again; nothing arrives: the window expires into the quiet state + Error toast.
-    ui.on_button(Button::Ok, ButtonEvent::Short, 82300);   // Info -> Actions
+    ui.on_button(Button::Ok, ButtonEvent::Short, 82300);   // Overview/Spec -> Actions
     CHECK_EQ(ui.connection_page().actions_mode(), true);
+    while (ui.connection_page().action_row() >= 0 &&
+           ui.connection_page().item(ui.connection_page().action_row()).act != conn::Act::ReadCable)
+        ui.on_button(Button::Plus, ButtonEvent::Short, rt += 5);
     ui.on_button(Button::Ok, ButtonEvent::Short, 83000);   // Read cable
     ui.tick(87900);
     CHECK_EQ(ui.context().em_listen_until != 0, true);
@@ -1503,8 +1529,9 @@ static void test_emarker_listen_window() {
     CHECK_STR(ui.context().toast.view().data(), "Failed to read");
     CHECK_EQ(int(ui.context().toast.tone), int(k2::FooterTone::Error));
     // Leaving the submenu clears the state.
-    ui.on_button(Button::Back, ButtonEvent::Short, 88200);   // Actions -> Info
-    ui.on_button(Button::Back, ButtonEvent::Short, 88210);   // Info -> the Bench: leaves the page
+    ui.on_button(Button::Back, ButtonEvent::Short, 88200);   // Actions -> Overview
+    ui.on_button(Button::Back, ButtonEvent::Short, 88210);   // Overview -> ring view
+    ui.on_button(Button::Back, ButtonEvent::Short, 88220);   // ring view -> Home: leaves the page
     CHECK_EQ(ui.context().em_quiet, false);
     g_stub.scan_result = true;
     g_stub.pm = {};
@@ -1579,8 +1606,12 @@ static void test_identify_page() {
     ui.tick(70000);
     ui.goto_page(kPdPage + 2, 70000);                     // Connection, Device place
     g_stub.identifies = 0;
-    ui.on_button(Button::Ok, ButtonEvent::Short, 70050);   // Info -> Actions
-    ui.on_button(Button::Ok, ButtonEvent::Short, 70100);   // primary action: Identify
+    ui.on_button(Button::Ok, ButtonEvent::Short, 70050);   // Spec -> Actions
+    uint32_t it = 70060;
+    while (ui.connection_page().action_row() >= 0 &&
+           ui.connection_page().item(ui.connection_page().action_row()).act != conn::Act::Identify)
+        ui.on_button(Button::Plus, ButtonEvent::Short, it += 5);
+    ui.on_button(Button::Ok, ButtonEvent::Short, 70100);   // Ask device: Identify
     CHECK_EQ(g_stub.identifies, 1);
     g_stub.ident.state = pd::IdState::Done;
     g_stub.ident.ok_mask = 1;
@@ -1692,7 +1723,7 @@ static void test_settings_test_level_row() {
     press(ui, Button::Back, ButtonEvent::Short, kT0 + 90);
 }
 
-// Settings > Long Back: the ring position long Back jumps to. Home out of the box, OK walks the ring's eleven positions and
+// Settings > Long Back: the ring position long Back jumps to. Home out of the box, OK walks the ring's nine positions and
 // remembers each in uiprefs; the ring view's long Back then goes there. restore_long_back is the boot half.
 // Every action of a place is a row of its entered page: the row exists once, and the keys (enter, walk, OK) reach its menu.
 static void test_every_bench_act_is_a_row() {

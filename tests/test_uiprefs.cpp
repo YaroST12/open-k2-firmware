@@ -229,11 +229,11 @@ void test_long_back_byte() {
     const std::array<std::uint8_t, 8> old{'K', '2', 'U', 'P', 1, 0xFE, 0, 0};
     CHECK_EQ(uiprefs::decode(old).long_back, 0);
     // a value past the last ring position reads as Home; every real position survives
-    std::array<std::uint8_t, 9> odd = want; odd[8] = 11;
+    std::array<std::uint8_t, 9> odd = want; odd[8] = ring::kCount;
     CHECK_EQ(uiprefs::decode(odd).long_back, 0);
     odd[8] = 200;
     CHECK_EQ(uiprefs::decode(odd).long_back, 0);
-    for (std::uint8_t p = 0; p < 11; p++) {
+    for (std::uint8_t p = 0; p < ring::kCount; p++) {
         const Prefs in{.screenshot = false, .rotation_manual = true, .rotation = 1, .home_hero = 2, .ct_level = 1, .long_back = p};
         CHECK_EQ(uiprefs::decode(uiprefs::encode_ext(in)) == in, 1);
     }
@@ -241,8 +241,8 @@ void test_long_back_byte() {
     CHECK_EQ(uiprefs::decode(std::span<const std::uint8_t>(want.data(), 7)) == Prefs{}, 1);
     // survives the file system, and a smaller record replaces a larger one
     Vol v;
-    CHECK_EQ(uiprefs::save(v.f, Prefs{.long_back = 9}) == true, 1);
-    CHECK_EQ(uiprefs::load(v.f).long_back, 9);
+    CHECK_EQ(uiprefs::save(v.f, Prefs{.long_back = 7}) == true, 1);
+    CHECK_EQ(uiprefs::load(v.f).long_back, 7);
     CHECK_EQ(uiprefs::save(v.f, Prefs{.home_hero = 1}) == true, 1);
     CHECK_EQ(uiprefs::load(v.f).long_back, 0);
     CHECK_EQ(uiprefs::load(v.f).home_hero, 1);

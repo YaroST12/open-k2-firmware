@@ -96,7 +96,7 @@ static void battery_frames(Ui& ui, uint32_t& t, const char* prefix) {
 // action rows of the places. Frames: ring<NN>_<name>, ring<NN>_<name>_in, ring<NN>_<name>_act; the K2 page also scrolled to its
 // Long Back row.
 static void ring_frames(Ui& ui, uint32_t& t) {
-    static const char* const kNames[ring::kCount] = {"home", "lines", "numbers", "graph", "ripple", "charger", "cable", "device", "battery", "log", "k2"};
+    static const char* const kNames[ring::kCount] = {"home", "lines", "numbers", "graph", "ripple", "link", "battery", "log", "k2"};
     const auto key = [&](Button b, ButtonEvent e = ButtonEvent::Short) { ui.on_button(b, e, t += 100); };
     char nm[48];
     ui.goto_page(uint8_t(Page::Home), t); key(Button::Back);   // entered Home -> the ring view on Home
@@ -106,8 +106,8 @@ static void ring_frames(Ui& ui, uint32_t& t) {
         if (!ring::can_enter(static_cast<ring::Pos>(i))) continue;
         key(Button::Ok);
         std::snprintf(nm, sizeof nm, "ring%02d_%s_in", i, kNames[i]); render(ui, t, nm);
-        if (i >= int(ring::Pos::Charger) && i <= int(ring::Pos::Device)) {
-            key(Button::Ok);   // the place's Actions
+        if (i == int(ring::Pos::Link)) {
+            key(Button::Ok);   // the focused slice's Actions
             std::snprintf(nm, sizeof nm, "ring%02d_%s_act", i, kNames[i]); render(ui, t, nm);
         }
         if (i == int(ring::Pos::K2)) {

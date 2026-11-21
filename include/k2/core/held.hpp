@@ -10,22 +10,31 @@
 #include "k2/pd/cable_full.hpp"
 #include "k2/pd/emk_variant.hpp"
 #include "k2/pd/pd.hpp"
+#include "k2/pd/pd_held.hpp"
 
 namespace k2::held {
 
 void poll();   // main loop: keeps the driver's lists
+void poll(std::uint32_t now_ms, bool inline_mode, bool probed = false);
 void reset();   // forget the held offers and cable (host tests start from nothing)
+void clear_for_reset();
 
 // The live caps when there are any, else the held ones (the debug fake list always wins).
 const pd::SourceCaps &shown_caps();
 bool showing_held();   // the live caps are gone, the held ones are shown
 // The EPR PDOs: the live EPR list when it has one, else the held one.
 std::span<const std::uint32_t> epr_raw();
+pd::OfferSource offer_source();
+bool offer_throttled();
+std::uint32_t live_offer_mw();
+void mark_charger_probed();
 
 // The cable the Cable tab shows: the last read one, until a read returns a different cable (k2/pd/pd_held.hpp).
 const pd::Emarker &cable_em();
 const cable_full::Full &cable_extra();
 emk_variant::Answered cable_answered();
 bool cable_thunderbolt();   // the held cable advertised SVID 0x8087
+pd::CableSource cable_source();
+void mark_cable_probed();
 
 }  // namespace k2::held

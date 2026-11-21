@@ -197,6 +197,7 @@ struct RowSpec {
     std::string_view col2;       // dim second column, left-aligned at kCol2X (the text is cut to fit before it)
     uint16_t tail_tint = 0;      // non-zero: the tail is a 12 px pill on this fill (text in tail_color) instead of plain text
     bool tail_yields = false;    // the tail is a hint: it is left out when `text` would not fit beside it (the text then runs up to the scroll lane)
+    bool section_before = false; // draw a 2 px kRule divider at the top of this row (separating a pinned top section)
 };
 constexpr int16_t kCol2X = 104;
 // The 12 x 12 marker at (x, y) on `bg`.

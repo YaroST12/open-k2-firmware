@@ -522,11 +522,11 @@ static void test_results_grid_budgets() {
 // Stepping out of an entered ring page that already is what the ring view shows (its top level, first sub-page, nothing
 // scrolled or in flight) repaints only what differs: the key strip, the rail's title and the muting. The body stays untouched.
 static void test_ring_leave_paint() {
-    // The Connection places keep their body whole (no rows to mute). Battery and Log repaint their list rows, muted or lit
-    // again: the list area only (Battery 34850 px, Log 15616 px measured), never the identity block or the title bar.
+    // Link's 3-slice Overview toggles only its single focused slice (~16,432 px body) when entering/leaving ring view,
+    // never rebuilding the other two slices. Battery and Log repaint their list rows, muted or lit again.
     struct { bench::Place place; ring::Pos pos; const char *name; unsigned px, body_px; } cases[] = {
-        {bench::Place::Charger, ring::Pos::Charger, "Charger", 5400, 0},   {bench::Place::Cable, ring::Pos::Cable, "Cable", 8500, 0},
-        {bench::Place::Device, ring::Pos::Device, "Device", 5400, 0},      {bench::Place::Battery, ring::Pos::Battery, "Battery", 46800, 38400},
+        {bench::Place::Charger, ring::Pos::Link, "Link", 22500, 17000},
+        {bench::Place::Battery, ring::Pos::Battery, "Battery", 46800, 38400},
         {bench::Place::Log, ring::Pos::Log, "Log", 22400, 17200}};
     for (const auto &c : cases) {
         fixture();
@@ -725,11 +725,11 @@ static void test_match_precheck() {
     ui.goto_page(kPdPage, 2000);
     ui.tick(2100);
     ui.tick(2200);
-    ui.tick(2300);   // let one-shot state (inline latch etc.) settle: the page is painted now
-    while (ui.painting()) ui.tick(2300);
+    ui.tick(2900);   // let one-shot state (inline latch + 800 ms offer settle) settle: the page is painted now
+    while (ui.painting()) ui.tick(2900);
     const uint32_t base = g_match_live_calls;
     std::vector<uint16_t> before(g_panel, g_panel + 240 * 240);
-    for (int i = 0; i < 50; i++) ui.tick(2400 + 100u * i);   // 50 ten-hz ticks, unchanged inputs
+    for (int i = 0; i < 50; i++) ui.tick(3000 + 100u * i);   // 50 ten-hz ticks, unchanged inputs
     const uint32_t skipped = g_match_live_calls - base;
     std::printf("pd precheck: %u match_live calls over 50 unchanged updates\n", skipped);
     CHECK_EQ(skipped, 0u);

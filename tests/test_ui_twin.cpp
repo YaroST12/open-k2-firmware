@@ -376,9 +376,9 @@ void test_back_stops_the_run() {
     CHECK_EQ(twin_hw::live_running() ? 1 : 0, 0);
     press(ui, Button::Back);                     // idle: BACK goes to the list,
     CHECK_EQ(ui.twin_page().in_detail() ? 1 : 0, 0);
-    press(ui, Button::Back);                     // then leaves the page: out to the Device ring page
+    press(ui, Button::Back);                     // then leaves the page: out to the Link ring page
     CHECK_EQ(ui.ring_view(), true);
-    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Device));
+    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Link));
 }
 
 void test_leaving_cancels_own_run() {

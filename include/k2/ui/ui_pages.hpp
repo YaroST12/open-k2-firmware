@@ -924,27 +924,36 @@ public:
     Strip labels() const override;
     void invalidate() override;
     void leave() override;
-    ListState list_state() const { return act_page_ ? ctx_.rows.state() : ListState{}; }
+    ListState list_state() const { return view_ == View::Actions ? ctx_.rows.state() : ListState{}; }
     conn::Tab tab() const { return tab_; }
-    // A place page (Charger, Cable, Device): Info page (identity block + fact table) and, when n_items_ > 1, a Meter-style
-    // Actions sub-page (kit::RowList) toggled by Long Back. Short OK on Info runs items_[0]; on Actions runs items_[1 + act_sel_].
+    // Unified 3-slice Link page:
+    //   Overview: 3 horizontal slices (Charger / Cable / Sink) on full 208x238 height; direct slice focus when entered.
+    //   Actions:  compact slice header + pinned top "Reset & re-read" section + slice-specific entries in kit::RowList.
+    //   Spec:     full scrollable fact table for the slice (Charger PDOs/Details, Cable VDOs/R, Sink Request/Caps).
+    enum class View : uint8_t { Overview, Actions, Spec };
+    void set_overview(conn::Tab focus = conn::Tab::Source);
     void lock(conn::Tab t);
-    bool has_pages() const { return n_items_ > 1; }
-    int first_act() const { return tab_ == conn::Tab::Sink ? 0 : 1; }
-    int act_count() const { return n_items_ > first_act() ? n_items_ - first_act() : 0; }
+    bool has_pages() const { return n_items_ > 0; }
+    int first_act() const { return 0; }
+    int act_count() const { return n_items_; }
     void set_actions_mode(bool on);
-    bool actions_mode() const { return act_page_; }
-    // The page is what the ring view shows of it as it stands: Info page, not scrolled, nothing of its own in flight.
-    bool ring_rest() const { return !act_page_ && first_ == 0 && !em_read_pending_ && !id_asked_ && !iq_asked_ && !(op_until_ && int32_t(op_until_ - ctx_.now) > 0); }   // an expired note never clears op_until_
-    int action_row() const { return act_sel_; }   // the focused action row on Actions page, -1 = Info page
+    View view() const { return view_; }
+    bool overview_mode() const { return view_ == View::Overview; }
+    bool actions_mode() const { return view_ == View::Actions; }
+    bool spec_mode() const { return view_ == View::Spec; }
+    // The page is what the ring view shows of it as it stands: 3-slice Overview, nothing of its own in flight.
+    bool ring_rest() const {
+        return view_ == View::Overview && !em_read_pending_ && !id_asked_ && !iq_asked_ &&
+               !(reset_armed_until_ && int32_t(reset_armed_until_ - ctx_.now) > 0) &&
+               !(op_until_ && int32_t(op_until_ - ctx_.now) > 0);
+    }
+    int action_row() const { return act_sel_; }   // the focused action row on Actions page, -1 when not in Actions
     static constexpr int kPlaceRows = 9;   // 9 x 21 px fact rows under identity block (y 46..235, no footer)
     kit::OppRailSpec opp_rail() const override {
-        if (has_pages()) {
-            return act_page_ ? kit::OppRailSpec{"ACTIONS", 2, 1, kit::OppTelemetry::WattCcDp}
-                             : kit::OppRailSpec{title_, 2, 0, kit::OppTelemetry::Vaw};
-        }
+        if (view_ == View::Overview) return {"LINK", 0, 0, kit::OppTelemetry::Vaw};
+        if (view_ == View::Actions) return {title_, 0, 0, kit::OppTelemetry::Vaw};
         return {title_, 0, 0, kit::OppTelemetry::Vaw};
-    }          // list rows on screen under the identity block
+    }
     int window_first() const { return first_; }   // the first list row on screen
     int result_rows() const { return res_n_; }    // the fact rows of the last paint (the actions follow)
     conn::Facts facts() const { return facts_; }
@@ -960,6 +969,9 @@ public:
 private:
     void sense(uint32_t now_ms);           // topology window + facts, once per update
     void build_items();
+    void enter_overview(conn::Tab t);
+    void enter_actions();
+    void enter_spec();
     void exit_actions();
     void activate(const conn::Item &it, uint32_t now_ms);
     void set_op(const char *text, uint32_t now_ms, uint32_t ms = kToastDefaultMs);
@@ -967,6 +979,8 @@ private:
     void share_cable(uint32_t now_ms);
     void read_cable(uint32_t now_ms);      // the cable read of Read e-marker
     void paint_status(uint32_t now_ms);
+    [[gnu::noinline]] bool paint_overview(const MatchResult &r, const pd::SourceCaps &caps, std::span<const uint32_t> sink);
+    bool paint_actions_ident(const MatchResult &r, const pd::SourceCaps &caps, std::span<const uint32_t> sink);
     bool paint_body(const MatchResult &r, const pd::SourceCaps &caps, std::span<const uint32_t> sink, bool redraw);
     [[gnu::noinline]] bool paint_body_locked(const void *tab_data);
     [[gnu::noinline]] bool paint_no_pd_body(const MatchResult &r, bool redraw);
@@ -984,13 +998,18 @@ private:
     conn::Facts facts_;
     pd::PdVerdict verdict_ = pd::PdVerdict::Pending;
     pd::PdNoneWhy none_why_ = pd::PdNoneWhy::None;
-    bool act_page_ = false;                // false = Info page (identity + facts), true = Actions page (RowList)
-    int act_sel_ = -1;                     // focused action row (items_[1 + act_sel_]), -1 = none (Info page)
-    int first_ = 0;                        // first fact row on Info page (Up / Dn scroll it)
-    uint8_t res_n_ = 0, tot_n_ = 0;        // fact rows and total rows of the last Info paint (res_n_ == tot_n_)
+    View view_ = View::Overview;
+    bool direct_spec_ = false;             // entered directly into Spec via open_connection() / remote alias
+    int act_sel_ = -1;                     // focused action row on Actions page, -1 when not in Actions
+    int first_ = 0;                        // first fact row on Spec page (Up / Dn scroll it)
+    uint8_t res_n_ = 0, tot_n_ = 0;        // fact rows and total rows of the last Spec paint
     uint32_t id_sig_ = 0;                  // identity block's hash (0 = repaint)
     uint32_t thumb_sig_ = 0;               // scroll thumb's (first, total) as painted
-    StrBuf<40> status_txt_;                // the bottom bar as last painted (tests read it; the page never does)
+    std::array<uint32_t, 3> slice_sig_{};  // 3-slice Overview per-slice hashes (Charger / Cable / Sink)
+    uint32_t reset_armed_until_ = 0;       // 2-press confirm window for inline Reset & re-read
+    bool actions_gap_cleared_ = false;     // gap below RowList at kPlaceListY cleared once per Actions entry
+    conn::DebouncedSense port_sense_;      // 600 ms debounced idle port-sense classifier
+    StrBuf<40> status_txt_;                // last status string (for tests / toast mirror)
     bool em_read_pending_ = false;         // Read e-marker started a passive listen window from Actions
     bool id_asked_ = false;                // Identify started from this page: its progress shows in the status bar
     bool iq_asked_ = false;                // inline interrogation started from the Device place

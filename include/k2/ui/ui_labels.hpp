@@ -145,6 +145,7 @@ namespace sl {
     X(ActionsShare, "Actions", "Share", "", false)                                                                     \
     X(ConfirmShare, "Confirm", "Share", "", false)                                                                     \
     X(RefreshShare, "Refresh", "Share", "", false)                                                                     \
+    X(ResetShare, "Reset", "Share", "", false)                                                                         \
     X(CancelShare, "Cancel", "Share", "", false)                                                                       \
     X(ViewShare, "View", "Share", "", false)                                                                           \
     X(ShareShare, "Share", "Share", "", false)                                                                         \

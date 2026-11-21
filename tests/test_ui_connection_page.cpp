@@ -182,43 +182,52 @@ static void test_empty_states_are_passive() {
 
 static void test_place_items_per_tab() {
     Ui &ui = fresh_ui();
-    ui.goto_page(kConnTabAlias, 20000);                              // Charger place
+    ui.goto_page(kConnTabAlias, 20000);                              // Charger Spec
     ui.tick(20050);
     CHECK_EQ(int(cp(ui).tab()), int(conn::Tab::Source));
-    CHECK(cp(ui).item_count() >= 2);
-    CHECK_EQ(cp(ui).item(0).enabled, true);                          // Refresh is always available
-    ui.goto_page(kConnTabAlias + 1, 20300);                          // Cable place
+    CHECK(cp(ui).item_count() >= 4);
+    CHECK_EQ(int(cp(ui).item(0).act), int(conn::Act::ResetLink));    // row 0: pinned Reset & re-read
+    CHECK_EQ(cp(ui).item(0).enabled, true);
+    CHECK_EQ(int(cp(ui).item(1).act), int(conn::Act::Details));
+    CHECK_EQ(int(cp(ui).item(2).act), int(conn::Act::Refresh));
+    ui.goto_page(kConnTabAlias + 1, 20300);                          // Cable Spec
     ui.tick(20350);
     CHECK_EQ(int(cp(ui).tab()), int(conn::Tab::Cable));
-    CHECK(cp(ui).item_count() >= 5);                                 // Read, Save, Saved cables, Spoof as...
-    CHECK_EQ(int(cp(ui).item(4).act), int(conn::Act::SpoofAs));
-    ui.goto_page(kConnTabAlias + 2, 20450);                          // Device place
+    const int cb_n = bench::actions(bench::Place::Cable).n;
+    CHECK_EQ(cp(ui).item_count(), 3 + cb_n + 3);
+    CHECK_EQ(int(cp(ui).item(0).act), int(conn::Act::ResetLink));
+    CHECK_EQ(int(cp(ui).item(1).act), int(conn::Act::ReadCable));
+    CHECK_EQ(int(cp(ui).item(2).act), int(conn::Act::Details));
+    CHECK_EQ(int(cp(ui).item(3 + cb_n + 2).act), int(conn::Act::SpoofAs));
+    ui.goto_page(kConnTabAlias + 2, 20450);                          // Device Spec
     ui.tick(20500);
     CHECK_EQ(int(cp(ui).tab()), int(conn::Tab::Sink));
-    CHECK(cp(ui).item_count() >= 1);
-    CHECK_EQ(int(cp(ui).item(0).act), int(conn::Act::Identify));     // OK explicitly interrogates/asks the device
-    CHECK_EQ(cp(ui).item(0).enabled, false);                         // no device attached
-    for (int i = 1; i < cp(ui).item_count(); i++) {
-        CHECK(cp(ui).item(i).act != conn::Act::Identify);            // no "Ask device" button row
-        CHECK(cp(ui).item(i).act != conn::Act::Refresh);             // no "Read again" button row
-    }
+    CHECK(cp(ui).item_count() >= 3);
+    CHECK_EQ(int(cp(ui).item(0).act), int(conn::Act::ResetLink));
+    CHECK_EQ(int(cp(ui).item(1).act), int(conn::Act::Details));
+    CHECK_EQ(int(cp(ui).item(2).act), int(conn::Act::Identify));     // Ask device
+    CHECK_EQ(cp(ui).item(2).enabled, false);                         // no device attached
     ui.on_button(Button::Back, ButtonEvent::Short, 20600);           // BACK leaves Connection
     CHECK_EQ(on_pd(ui), 0);
 }
 
 static void test_cable_place_has_spoof_row() {
+    const int cb_n = bench::actions(bench::Place::Cable).n;
+    const int save_i = 3 + cb_n;
     for (bool inl : {false, true}) {
         Ui &ui = fresh_ui();
         if (inl) make_inline(ui, 20000);
-        ui.goto_page(kConnTabAlias + 1, 20100);                      // Cable place
+        ui.goto_page(kConnTabAlias + 1, 20100);                      // Cable Spec
         ui.tick(20150);
-        CHECK(cp(ui).item_count() >= 5);
+        CHECK_EQ(cp(ui).item_count(), save_i + 3);
+        CHECK_EQ(int(cp(ui).item(0).act), int(conn::Act::ResetLink));
         CHECK_EQ(int(cp(ui).item(1).act), int(conn::Act::ReadCable));
-        CHECK_EQ(int(cp(ui).item(2).act), int(conn::Act::SaveCable));
-        CHECK_EQ(int(cp(ui).item(3).act), int(conn::Act::SavedCables));
-        CHECK_EQ(int(cp(ui).item(4).act), int(conn::Act::SpoofAs));
-        CHECK_EQ(cp(ui).item(4).enabled, !inl);
-        CHECK_STR(cp(ui).item(4).tag, inl ? "load" : "");
+        CHECK_EQ(int(cp(ui).item(2).act), int(conn::Act::Details));
+        CHECK_EQ(int(cp(ui).item(save_i).act), int(conn::Act::SaveCable));
+        CHECK_EQ(int(cp(ui).item(save_i + 1).act), int(conn::Act::SavedCables));
+        CHECK_EQ(int(cp(ui).item(save_i + 2).act), int(conn::Act::SpoofAs));
+        CHECK_EQ(cp(ui).item(save_i + 2).enabled, !inl);
+        CHECK_STR(cp(ui).item(save_i + 2).tag, inl ? "load" : "");
     }
 }
 
@@ -797,8 +806,8 @@ static void test_cable_full_rows() {
     g_stub.em = {}; g_stub.cable_full = {};
 }
 
-// The Charger tab keeps the offers after the charger goes quiet (VBUS off, Rd dropped) and swaps them only for a different
-// offer list; an identical list changes nothing.
+// The Charger tab keeps the high-water-mark offers after the charger goes quiet (VBUS off, Rd dropped) or throttles
+// to a lower power offer (marking offer_throttled), and replaces them only for a higher/equal-power list after 800 ms.
 static void test_charger_tab_keeps_the_offers() {
     Ui &ui = fresh_ui();
     make_inline(ui, 56000);
@@ -814,6 +823,8 @@ static void test_charger_tab_keeps_the_offers() {
     show(ui, 0, t);
     const int rows = cp(ui).result_rows();
     CHECK(rows >= 3);
+    CHECK_EQ(held::shown_caps().num_pdos, 3);
+    CHECK_EQ(held::offer_throttled(), false);
     const pd::SourceCaps three = g_stub.caps;
     g_stub.caps = {};                                  // the driver's list is gone: the charger sleeps
     g_stub.pm.vbus_mv = 0;
@@ -824,15 +835,24 @@ static void test_charger_tab_keeps_the_offers() {
     g_stub.pm.vbus_mv = 5000;
     show(ui, 0, t);
     CHECK_EQ(cp(ui).result_rows(), rows);
-    g_stub.caps.num_pdos = 2;                          // a renegotiation with other offers
+    g_stub.caps.num_pdos = 2;                          // throttle to lower power (27 W < 55 W): high-water-mark keeps 55 W
     g_stub.caps.raw_header = 0x1581; g_stub.caps.rx_count++;
     show(ui, 0, t);
-    CHECK_EQ(held::shown_caps().num_pdos, 2);
+    CHECK_EQ(held::shown_caps().num_pdos, 3);
+    CHECK_EQ(held::offer_throttled(), true);
+    CHECK_EQ(held::live_offer_mw(), 27000u);
+    g_stub.caps = three;                               // upgrade to higher power (100 W > 55 W): replaces held after 800 ms
+    g_stub.caps.num_pdos = 4;
+    g_stub.caps.pdos[3] = {pd::PdoType::Fixed, 0, 20000, 20000, 5000, 100000};
+    g_stub.caps.raw_header = 0x1781; g_stub.caps.rx_count++;
+    show(ui, 0, t);
+    CHECK_EQ(held::shown_caps().num_pdos, 4);
+    CHECK_EQ(held::offer_throttled(), false);
     g_stub.caps = {};
     g_stub.pm.vbus_mv = 0;
     show(ui, 0, t);
     CHECK(held::showing_held());
-    CHECK_EQ(held::shown_caps().num_pdos, 2);          // the new list is the one held now
+    CHECK_EQ(held::shown_caps().num_pdos, 4);          // the new high-water-mark list is held now
 #ifdef K2_TRUNC_LOG
     CHECK_EQ(k2::trunc::failures(), 0);
 #endif
@@ -1010,15 +1030,16 @@ static void test_survey_nothing_active_before_refresh() {
     CHECK_EQ(g_stub.survey_refreshes, 0);
 }
 
-// Refresh ("Read again", last item on Charger [Actions]) starts the survey.
+// Refresh ("Read again", row 2 on Charger [Actions]) starts the survey.
 static void test_survey_refresh_item_starts_it() {
     Ui &ui = fresh_ui();
     uint32_t t = 20000;
     attach_charger(ui, t);
     show(ui, 0, t);
     g_stub.rescan_result = rescan::Result::Asked;
-    ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);   // Info -> Actions
-    for (int i = 0; i < 10; i++) ui.on_button(Button::Plus, ButtonEvent::Short, t += 10);   // last row = Read again
+    ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);   // Spec -> Actions (row 0 = Reset & re-read)
+    ui.on_button(Button::Plus, ButtonEvent::Short, t += 10);  // row 1 = Spec & offers
+    ui.on_button(Button::Plus, ButtonEvent::Short, t += 10);  // row 2 = Read again
     ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);   // activate Read again
     CHECK_EQ(g_stub.survey_refreshes, 1);
     CHECK_EQ(int(g_stub.survey_last), int(rescan::Result::Asked));
@@ -1115,11 +1136,11 @@ static void test_sink_tab_offers_identify_when_a_device_is_alone() {
     }
     CHECK_EQ(int(ui.link().wait_kind()), int(raguard::WaitKind::DualRolePort));
     CHECK_EQ(int(ui.link().inline_mode()), 0);
-    ui.goto_page(kConnTabAlias + 2, 13500);                  // Device place
+    ui.goto_page(kConnTabAlias + 2, 13500);                  // Device Spec
     ui.tick(13550);
-    CHECK(cp(ui).item_count() >= 1);
-    CHECK_EQ(int(cp(ui).item(0).act), int(conn::Act::Identify));
-    CHECK_EQ(cp(ui).item(0).enabled, true);                  // Ask device offered: a device is alone on the K2
+    CHECK(cp(ui).item_count() >= 3);
+    CHECK_EQ(int(cp(ui).item(2).act), int(conn::Act::Identify));
+    CHECK_EQ(cp(ui).item(2).enabled, true);                  // Ask device offered: a device is alone on the K2
 }
 
 // Row B item 6 (red): the [UI] identify line keeps its fixed phrases in the format string. Today they ride a %s,
@@ -1213,10 +1234,11 @@ static void test_sink_tab_no_pd_offered_unanswered() {
     CHECK(ink_in(22, 67) > 100);
     CHECK_EQ(cp(ui).result_rows(), 2);
     CHECK(ink_in(kit::kPlaceListY + 1, kit::kPlaceListY + 40) > 50);
-    // The place's Ask device item is greyed with the same words the page shows.
-    CHECK(cp(ui).item_count() >= 1);
-    CHECK_EQ(cp(ui).item(0).enabled, false);
-    CHECK_STR(cp(ui).item(0).why, "No PD from this device");
+    // The place's Ask device item (row 2) is greyed with the same words the page shows.
+    CHECK(cp(ui).item_count() >= 3);
+    CHECK_EQ(int(cp(ui).item(2).act), int(conn::Act::Identify));
+    CHECK_EQ(cp(ui).item(2).enabled, false);
+    CHECK_STR(cp(ui).item(2).why, "No PD from this device");
 }
 
 // A plain Type-C source (Rp only, never offered PD) with a load behind the K2: after the settle the verdict
@@ -1347,14 +1369,14 @@ static void test_single_tools_lock_one_tab() {
     ui.open_place(bench::Place::Cable, 20000);
     ui.tick(20050);
     CHECK_EQ(int(ui.menu()), int(Menu::Connection));
-    CHECK_EQ(int(ui.page()), int(Page::Lines));                       // the Cable ring page, entered
+    CHECK_EQ(int(ui.page()), int(Page::Lines));                       // the Link ring page, entered
     CHECK_EQ(ui.ring_view(), false);
-    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Cable));
+    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Link));
     CHECK_EQ(int(cp(ui).tab()), int(conn::Tab::Cable));
-    CHECK_EQ(cp(ui).has_pages(), true);
-    CHECK_EQ(cp(ui).actions_mode(), false);                            // opens on Info page
+    CHECK_EQ(cp(ui).overview_mode(), true);                           // opens on 3-slice Overview focused on Cable
+    CHECK_EQ(cp(ui).actions_mode(), false);
     CHECK_EQ(cp(ui).action_row(), -1);
-    CHECK_STR(ok_label(ui), "Actions");
+    CHECK_STR(ok_label(ui), "Open");
     CHECK_STR(ui.labels().b[static_cast<int>(Button::Back)].shrt, "Back");
     CHECK_STR(ui.labels().b[static_cast<int>(Button::Back)].lng, "");
     CHECK_STR(ui.labels().b[static_cast<int>(Button::Minus)].shrt, "Up");
@@ -1363,107 +1385,102 @@ static void test_single_tools_lock_one_tab() {
     CHECK_STR(ui.labels().b[static_cast<int>(Button::Plus)].lng, "");
     CHECK_EQ(label_violation(ui.labels()) == nullptr, true);
     ui.on_button(Button::Plus, ButtonEvent::Long, 20075);              // Long Plus does nothing (hardware Rd safety)
-    CHECK_EQ(cp(ui).actions_mode(), false);
-    ui.on_button(Button::Ok, ButtonEvent::Short, 20080);               // Short OK -> Actions sub-page
+    CHECK_EQ(cp(ui).overview_mode(), true);
+    ui.on_button(Button::Ok, ButtonEvent::Short, 20080);               // Short OK -> Cable Actions sub-page
     ui.tick(20090);
     CHECK_EQ(cp(ui).actions_mode(), true);
     CHECK_STR(ui.labels().b[static_cast<int>(Button::Back)].shrt, "Back");
     CHECK_STR(ui.labels().b[static_cast<int>(Button::Back)].lng, "");
-    CHECK_EQ(cp(ui).action_row(), 0);                                  // row 0: Read e-marker
-    CHECK_STR(ok_label(ui), "Read");
-    ui.on_button(Button::Plus, ButtonEvent::Short, 20100);             // Dn: Save cable
+    CHECK_EQ(cp(ui).action_row(), 0);                                  // row 0: Reset & re-read
+    CHECK_STR(ok_label(ui), "Reset");
+    ui.on_button(Button::Plus, ButtonEvent::Short, 20100);             // Dn: Read e-marker
     CHECK_EQ(int(cp(ui).tab()), int(conn::Tab::Cable));                // never a tab switch
     CHECK_EQ(cp(ui).action_row(), 1);
-    CHECK_STR(ok_label(ui), "Save");
+    CHECK_STR(ok_label(ui), "Read");
+    ui.on_button(Button::Plus, ButtonEvent::Short, 20110);             // Dn: Chip details
+    CHECK_EQ(cp(ui).action_row(), 2);
+    CHECK_STR(ok_label(ui), "View");
     for (int i = 0; i < 10; i++) ui.on_button(Button::Plus, ButtonEvent::Short, 20150 + i * 10);
-    CHECK_EQ(cp(ui).action_row(), cp(ui).act_count() - 1);             // stops on the last Cable action row
+    CHECK_EQ(cp(ui).action_row(), cp(ui).act_count() - 1);             // stops on the last Cable action row (Spoof as...)
     CHECK_STR(ok_label(ui), "Open");
     for (int i = 0; i < 10; i++) ui.on_button(Button::Minus, ButtonEvent::Short, 20300 + i * 10);
-    CHECK_EQ(cp(ui).action_row(), 0);                                  // Actions page: clamped on first action row (Read e-marker)
-    CHECK_STR(ok_label(ui), "Read");
-    ui.on_button(Button::Back, ButtonEvent::Short, 20450);             // Short Back -> back to Info sub-page
+    CHECK_EQ(cp(ui).action_row(), 0);                                  // Actions page: clamped on row 0 (Reset & re-read)
+    CHECK_STR(ok_label(ui), "Reset");
+    ui.on_button(Button::Back, ButtonEvent::Short, 20450);             // Short Back -> back to 3-slice Overview
     ui.tick(20460);
-    CHECK_EQ(cp(ui).actions_mode(), false);
+    CHECK_EQ(cp(ui).overview_mode(), true);
     CHECK_EQ(cp(ui).action_row(), -1);
-    ui.on_button(Button::Back, ButtonEvent::Short, 20500);             // Short Back on Info -> out to the ring, same page
+    ui.on_button(Button::Back, ButtonEvent::Short, 20500);             // Short Back on Overview -> out to the ring, Pos::Link
     CHECK_EQ(ui.ring_view(), true);
-    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Cable));
+    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Link));
     CHECK_EQ(int(ui.menu()), int(Menu::Connection));
 
     ui.open_place(bench::Place::Charger, 21000);
     ui.tick(21050);
-    CHECK_EQ(cp(ui).has_pages(), true);
-    CHECK_EQ(cp(ui).actions_mode(), false);
-    CHECK_STR(ok_label(ui), "Actions");
-    ui.on_button(Button::Ok, ButtonEvent::Short, 21055);               // Short OK -> Actions
+    CHECK_EQ(cp(ui).overview_mode(), true);
+    CHECK_STR(ok_label(ui), "Open");
+    ui.on_button(Button::Ok, ButtonEvent::Short, 21055);               // Short OK -> Charger Actions
     CHECK_EQ(cp(ui).actions_mode(), true);
-    CHECK_EQ(cp(ui).action_row(), 0);
-    CHECK_STR(ok_label(ui), "Open");                                   // row 0 = Test charger
+    CHECK_EQ(cp(ui).action_row(), 0);                                  // row 0 = Reset & re-read
+    CHECK_STR(ok_label(ui), "Reset");
     ui.on_button(Button::Minus, ButtonEvent::Short, 21060);
     CHECK_EQ(cp(ui).action_row(), 0);                                  // Actions page: stays clamped on row 0
-    CHECK_STR(ok_label(ui), "Open");
-    ui.open_place(bench::Place::Device, 21100);                        // a new place, not a tab switch
+    CHECK_STR(ok_label(ui), "Reset");
+    ui.open_place(bench::Place::Device, 21100);                        // Device slice focused on Overview
     ui.tick(21150);
     CHECK_EQ(int(cp(ui).tab()), int(conn::Tab::Sink));
-    CHECK_EQ(int(cp(ui).item(0).act), int(conn::Act::Identify));       // out[0] is Ask device
-#if K2_TWIN
-    CHECK_EQ(cp(ui).item_count(), 2);                                  // Ask device (out[0]) + Twins (out[1])
-    CHECK_EQ(cp(ui).has_pages(), true);
-    CHECK_EQ(cp(ui).actions_mode(), false);
-    CHECK_EQ(cp(ui).action_row(), -1);
-    CHECK_STR(ok_label(ui), "Actions");
-    ui.on_button(Button::Ok, ButtonEvent::Short, 21160);
+    CHECK_EQ(cp(ui).overview_mode(), true);
+    CHECK_EQ(int(cp(ui).item(0).act), int(conn::Act::ResetLink));
+    CHECK_EQ(int(cp(ui).item(1).act), int(conn::Act::Details));
+    CHECK_EQ(int(cp(ui).item(2).act), int(conn::Act::Identify));
+    ui.on_button(Button::Ok, ButtonEvent::Short, 21160);               // Overview -> Device Actions
     CHECK_EQ(cp(ui).actions_mode(), true);
-    CHECK_EQ(cp(ui).action_row(), 0);                                  // row 0: Ask device
+    CHECK_EQ(cp(ui).action_row(), 0);                                  // row 0: Reset & re-read
+    ui.on_button(Button::Plus, ButtonEvent::Short, 21165);             // row 1: Sink details
+    CHECK_STR(ok_label(ui), "View");
+    ui.on_button(Button::Plus, ButtonEvent::Short, 21170);             // row 2: Ask device
     CHECK_STR(ok_label(ui), "Ask");
-    ui.on_button(Button::Back, ButtonEvent::Short, 21180);             // Short Back on Actions -> returns to Info
-    CHECK_EQ(cp(ui).actions_mode(), false);
-#else
-    CHECK_EQ(cp(ui).item_count(), 1);                                  // no action rows: OK always asks
-    CHECK_EQ(cp(ui).has_pages(), false);
-    CHECK_EQ(cp(ui).actions_mode(), false);
-    CHECK_EQ(cp(ui).action_row(), -1);
-    CHECK_STR(ok_label(ui), "Ask");                                    // Ask device
-    ui.on_button(Button::Plus, ButtonEvent::Long, 21160);
-    CHECK_EQ(cp(ui).actions_mode(), false);                            // single-page: Long Plus does nothing
-#endif
+    ui.on_button(Button::Back, ButtonEvent::Short, 21180);             // Short Back on Actions -> returns to Overview
+    CHECK_EQ(cp(ui).overview_mode(), true);
     ui.on_button(Button::Back, ButtonEvent::Short, 21200);
-    CHECK_EQ(ui.ring_view(), true);                                    // Short Back on Info leaves to the ring
-    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Device));
+    CHECK_EQ(ui.ring_view(), true);                                    // Short Back on Overview leaves to the ring
+    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Link));
 }
 
-// The ring opens the place pages: Charger, Cable, Device each on its own tab (Home + 5/6/7 steps, then OK). A place's tool opens its menu over the place
-// page (BACK comes back to it); Test charger replaces both and its BACK lands on the Charger place's Actions sub-page again.
+// The ring opens the unified Link page (Home + 5 steps, then OK). Slice Actions open tools over the Connection page
+// (BACK comes back to Actions); Test charger replaces both and its BACK lands on Charger Actions again.
 // The Spoof shortcut opens Cable Actions underneath Menu::Spoof.
 static void test_tools_rows_open_single_tools() {
     Ui &ui = fresh_ui();
-    const conn::Tab kTabs[] = {conn::Tab::Source, conn::Tab::Cable, conn::Tab::Sink};
-    for (int k = 0; k < 3; k++) {
-        ui.open_place(bench::Place::Meter, 20000 + k * 1000);
-        ui.on_button(Button::Back, ButtonEvent::Short, 20010 + k * 1000);   // Home entered -> the ring on Home
-        CHECK_EQ(ui.ring_view(), true);
-        for (int i = 0; i < 5 + k; i++) ui.on_button(Button::Plus, ButtonEvent::Short, 20100 + k * 1000 + i * 10);   // Charger, Cable, Device
-        ui.on_button(Button::Ok, ButtonEvent::Short, 20500 + k * 1000);
-        CHECK_EQ(on_pd(ui), 1);
-        if (!on_pd(ui)) return;
-        CHECK_EQ(int(cp(ui).tab()), int(kTabs[k]));
-        ui.on_button(Button::Back, ButtonEvent::Short, 20600 + k * 1000);
-        CHECK_EQ(ui.ring_view(), true);                                // Info -> out to the ring
-    }
-    ui.context().keep.place_sel[static_cast<int>(bench::Place::Charger)] = 1;   // Request voltage (action_row 1 -> item 2)
+    ui.open_place(bench::Place::Meter, 20000);
+    ui.on_button(Button::Back, ButtonEvent::Short, 20010);             // Home entered -> the ring on Home
+    CHECK_EQ(ui.ring_view(), true);
+    for (int i = 0; i < 5; i++) ui.on_button(Button::Plus, ButtonEvent::Short, 20100 + i * 10);   // Pos::Link (5)
+    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Link));
+    CHECK_EQ(cp(ui).overview_mode(), true);
+    ui.on_button(Button::Ok, ButtonEvent::Short, 20500);               // enter Link Overview
+    CHECK_EQ(on_pd(ui), 1);
+    CHECK_EQ(ui.ring_view(), false);
+    CHECK_EQ(int(cp(ui).tab()), int(conn::Tab::Source));
+    ui.on_button(Button::Back, ButtonEvent::Short, 20600);
+    CHECK_EQ(ui.ring_view(), true);                                    // Overview -> out to the ring
+
+    // Charger Actions: 0=Reset & re-read, 1=Spec & offers, 2=Read again, 3=Test charger, 4=Request voltage
+    ui.context().keep.place_sel[static_cast<int>(bench::Place::Charger)] = 4;   // Request voltage
     ui.open_place(bench::Place::Charger, 24000);
-    CHECK_EQ(cp(ui).actions_mode(), false);
+    CHECK_EQ(cp(ui).overview_mode(), true);
     ui.on_button(Button::Ok, ButtonEvent::Short, 24050);
     CHECK_EQ(cp(ui).actions_mode(), true);
-    CHECK_EQ(cp(ui).action_row(), 1);
-    CHECK_STR(cp(ui).item(2).label, "Request voltage");
+    CHECK_EQ(cp(ui).action_row(), 4);
+    CHECK_STR(cp(ui).item(4).label, "Request voltage");
     ui.on_button(Button::Ok, ButtonEvent::Short, 24100);
     CHECK_EQ(int(ui.menu()), int(Menu::PdTrigger));
     CHECK_EQ(int(ui.menu_depth()), 2);                                 // over the place page
     ui.on_button(Button::Back, ButtonEvent::Short, 24200);
     CHECK_EQ(on_pd(ui), 1);
     CHECK_EQ(cp(ui).actions_mode(), true);
-    ui.on_button(Button::Minus, ButtonEvent::Short, 24300);            // Test charger (action_row 0 -> item 1)
+    ui.on_button(Button::Minus, ButtonEvent::Short, 24300);            // Test charger (row 3)
+    CHECK_EQ(cp(ui).action_row(), 3);
     ui.on_button(Button::Ok, ButtonEvent::Short, 24400);
     CHECK_EQ(int(ui.page()), int(Page::ChargerTest));
     CHECK_EQ(int(ui.menu_depth()), 0);
@@ -1471,7 +1488,7 @@ static void test_tools_rows_open_single_tools() {
     CHECK_EQ(on_pd(ui), 1);
     CHECK_EQ(int(cp(ui).tab()), int(conn::Tab::Source));
     CHECK_EQ(cp(ui).actions_mode(), true);
-    CHECK_EQ(cp(ui).action_row(), 0);
+    CHECK_EQ(cp(ui).action_row(), 3);
     CHECK(ui.open_connection(conn::Tab::Cable, true, 25000));
     CHECK_EQ(int(ui.menu()), int(Menu::Spoof));
     ui.on_button(Button::Back, ButtonEvent::Short, 25100);
@@ -1521,10 +1538,12 @@ static void test_device_place_inline_interrogate_and_readout() {
     g_stub.caps.raw_header = 0x1181; g_stub.caps.rx_count++;
     uint32_t t = 21000;
     for (int i = 0; i < 20; i++) ui.tick(t += 100);
-    ui.open_place(bench::Place::Device, t += 100);
+    ui.goto_page(kConnTabAlias + 2, t += 100);   // Sink Spec
     settle(ui, t);
     const int before_rows = cp(ui).result_rows();
-    if (cp(ui).has_pages() && !cp(ui).actions_mode()) ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);   // Info -> Actions (row 0 = Ask device)
+    ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);   // Spec -> Actions (row 0 = Reset & re-read)
+    ui.on_button(Button::Plus, ButtonEvent::Short, t += 100); // row 1 = Sink details
+    ui.on_button(Button::Plus, ButtonEvent::Short, t += 100); // row 2 = Ask device
     // First press arms confirmation ("OK again: resets link")
     ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);
     CHECK_EQ(g_stub.iq_starts, 0);
@@ -1559,7 +1578,8 @@ static void test_device_place_inline_interrogate_and_readout() {
     g_stub.iq_status.status.temp_status = 1; g_stub.iq_status.status.present_input = 0x02;
     g_stub.iq_status.num_svids = 2; g_stub.iq_status.svids[0] = 0xFF01; g_stub.iq_status.svids[1] = 0x18D1;
     g_stub.iq_status.num_epr_pdos = 9;
-    if (cp(ui).actions_mode()) ui.on_button(Button::Back, ButtonEvent::Short, t += 100);   // back to Info to inspect rows
+    ui.on_button(Button::Minus, ButtonEvent::Short, t += 100);   // row 1 = Sink details
+    ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);      // -> View::Spec to inspect rows
     settle(ui, t);
     CHECK_STR(std::string(cp(ui).status_line()).c_str(), "Device read");
     // Mfr, Rev, PDP, Sink, Batt, Health, Batt mfr, Status, SVIDs, EPR all added (+10 rows) with zero truncation
@@ -1595,12 +1615,14 @@ static void test_device_place_inline_interrogate_with_sink_pdos() {
     g_stub.caps.raw_header = 0x1181; g_stub.caps.rx_count++;
     uint32_t t = 21000;
     for (int i = 0; i < 20; i++) ui.tick(t += 100);
-    ui.open_place(bench::Place::Device, t += 100);
+    ui.goto_page(kConnTabAlias + 2, t += 100);   // Sink Spec
     settle(ui, t);
     const int before_rows = cp(ui).result_rows();   // includes Caps: Not seen (1 row)
-    if (cp(ui).has_pages() && !cp(ui).actions_mode()) ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);
-    ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);
-    ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);
+    ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);      // Spec -> Actions
+    ui.on_button(Button::Plus, ButtonEvent::Short, t += 100);    // row 1 = Sink details
+    ui.on_button(Button::Plus, ButtonEvent::Short, t += 100);    // row 2 = Ask device
+    ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);      // arm
+    ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);      // confirm
     g_stub.iq_running = false;
     g_stub.iq_status.phase = pd::IqPhase::Done;
     g_stub.iq_status.ok_mask = pd::iq_bit(pd::IqStep::Identity) | pd::iq_bit(pd::IqStep::SinkCap) |
@@ -1626,7 +1648,8 @@ static void test_device_place_inline_interrogate_with_sink_pdos() {
     g_stub.iq_status.status.temp_status = 2; g_stub.iq_status.status.present_input = 0x06; g_stub.iq_status.status.event_flags = 0x08;
     g_stub.iq_status.num_svids = 2; g_stub.iq_status.svids[0] = 0xFF01; g_stub.iq_status.svids[1] = 0x18D1;
     g_stub.iq_status.num_epr_pdos = 9;
-    if (cp(ui).actions_mode()) ui.on_button(Button::Back, ButtonEvent::Short, t += 100);
+    ui.on_button(Button::Minus, ButtonEvent::Short, t += 100);   // row 1 = Sink details
+    ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);      // -> View::Spec
     settle(ui, t);
     // Caps: Not seen (1 row) -> grouped Fixed (1 row) + PPS (1 row) (+1 net), plus Mfr, Rev, PDP, Sink, Batt, Health, Batt mfr, Status, SVIDs, EPR (+10) = +11 rows
     CHECK_EQ(cp(ui).result_rows(), before_rows + 11);
@@ -1676,7 +1699,7 @@ static void test_device_place_standalone_and_self_powered_identify() {
         g_stub.ident_ext.battery.valid = true; g_stub.ident_ext.battery.design_dwh = 195; g_stub.ident_ext.battery.last_full_dwh = 150;
         g_stub.ident_ext.battery_status.valid = true; g_stub.ident_ext.battery_status.present = true;
         g_stub.ident_ext.battery_status.charging = 0; g_stub.ident_ext.battery_status.present_dwh = 120;
-        ui.open_place(bench::Place::Device, t += 100);
+        ui.goto_page(kConnTabAlias + 2, t += 100);
         settle(ui, t);
         while (cp(ui).action_row() >= 0 || cp(ui).window_first() > 0) ui.on_button(Button::Minus, ButtonEvent::Short, t += 100);
         settle(ui, t);
@@ -1697,7 +1720,7 @@ static void test_device_place_standalone_and_self_powered_identify() {
         g_stub.caps.raw_header = 0x1181; g_stub.caps.rx_count++;
         uint32_t t = 20000;
         for (int i = 0; i < 5; i++) ui.tick(t += 100);
-        ui.open_place(bench::Place::Device, t += 100);
+        ui.goto_page(kConnTabAlias + 2, t += 100);
         settle(ui, t);
         while (cp(ui).action_row() >= 0 || cp(ui).window_first() > 0) ui.on_button(Button::Minus, ButtonEvent::Short, t += 100);
         settle(ui, t);
@@ -1726,12 +1749,13 @@ static void test_device_place_standalone_and_self_powered_identify() {
 }
 
 static void test_place_two_page_info_and_actions() {
-    // 1. Empty place page: opens on Info (result_rows == 0, action_row == -1); Long Plus flips to Actions (action_row == 0).
+    // 1. Empty Cable Spec page: opens on Spec (result_rows == 0, action_row == -1); Short OK enters Actions.
     {
         Ui &ui = fresh_ui();
         uint32_t t = 20000;
-        ui.open_place(bench::Place::Cable, t);
+        ui.goto_page(kConnTabAlias + 1, t);
         settle(ui, t);
+        CHECK_EQ(cp(ui).spec_mode(), true);
         CHECK_EQ(cp(ui).actions_mode(), false);
         CHECK_EQ(cp(ui).result_rows(), 0);
         CHECK_EQ(cp(ui).window_first(), 0);
@@ -1753,9 +1777,9 @@ static void test_place_two_page_info_and_actions() {
         CHECK_EQ(cp(ui).action_row(), 0);
     }
 
-    // 2. Populated Cable place with >= 8 fact rows (8 rows: ID, Speed, Current, Voltage, EPR, Type, Length, Answered):
-    //    - Info page opens at window_first() == 0, action_row() == -1 (all 8 rows fit in kPlaceRows = 9 without scrolling!).
-    //    - Short OK switches to Actions sub-page; Short +/- step through Actions; Short Back switches back to Info.
+    // 2. Populated Cable Spec with >= 8 fact rows:
+    //    - Spec opens at window_first() == 0, action_row() == -1; Short OK switches to Actions;
+    //      Short +/- step through Actions; Short Back switches to Overview.
     Ui &ui = fresh_ui();
     make_inline(ui, 50000);
     g_stub.pm_online = true;
@@ -1766,12 +1790,12 @@ static void test_place_two_page_info_and_actions() {
     g_stub.cable_seq++;
     uint32_t t = 51000;
     ui.tick(t);
-    ui.open_place(bench::Place::Cable, t += 100);
+    ui.goto_page(kConnTabAlias + 1, t += 100);
     settle(ui, t);
 
     const int res = cp(ui).result_rows();
     CHECK(res >= 8);
-    CHECK_EQ(cp(ui).actions_mode(), false);
+    CHECK_EQ(cp(ui).spec_mode(), true);
     CHECK_EQ(cp(ui).window_first(), 0);
     CHECK_EQ(cp(ui).action_row(), -1);
 
@@ -1783,7 +1807,7 @@ static void test_place_two_page_info_and_actions() {
         CHECK_EQ(cp(ui).window_first(), f);
         CHECK_EQ(cp(ui).action_row(), -1);
     }
-    // Further Short Plus on Info clamps at max_fact_first (does not enter Actions).
+    // Further Short Plus on Spec clamps at max_fact_first (does not enter Actions).
     ui.on_button(Button::Plus, ButtonEvent::Short, t += 100);
     settle(ui, t);
     CHECK_EQ(cp(ui).window_first(), max_fact_first);
@@ -1798,25 +1822,23 @@ static void test_place_two_page_info_and_actions() {
         CHECK_EQ(cp(ui).action_row(), -1);
     }
 
-    // Short OK switches to Actions sub-page with 2-dot pager on OppRail.
+    // Short OK switches to Actions sub-page.
     ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);
     settle(ui, t);
     CHECK_EQ(cp(ui).actions_mode(), true);
     CHECK_EQ(cp(ui).action_row(), 0);
     CHECK_EQ(ui.list_state().count, cp(ui).act_count());
-    ui.on_button(Button::Plus, ButtonEvent::Short, t += 100);
-    settle(ui, t);
-    CHECK_EQ(cp(ui).action_row(), 1);
-    // Inline sink greys Spoof as... (row index 3 in Actions = item 4) with "load" tail and reason.
-    for (int k = 0; k < 2; k++) { ui.on_button(Button::Plus, ButtonEvent::Short, t += 100); settle(ui, t); }
-    CHECK_EQ(cp(ui).action_row(), 3);
-    CHECK_EQ(cp(ui).item(4).enabled, false);
-    CHECK_STR(cp(ui).item(4).tag, "load");
+    const int spoof_row = cp(ui).act_count() - 1;
+    for (int k = 0; k < spoof_row; k++) { ui.on_button(Button::Plus, ButtonEvent::Short, t += 100); settle(ui, t); }
+    CHECK_EQ(cp(ui).action_row(), spoof_row);
+    CHECK_EQ(int(cp(ui).item(spoof_row).act), int(conn::Act::SpoofAs));
+    CHECK_EQ(cp(ui).item(spoof_row).enabled, false);
+    CHECK_STR(cp(ui).item(spoof_row).tag, "load");
     CHECK_STR(std::string(cp(ui).status_line()).c_str(), "Live sink: unplug load");
-    // Short Back switches back to Info sub-page.
+    // Short Back on Actions switches back to Overview.
     ui.on_button(Button::Back, ButtonEvent::Short, t += 100);
     settle(ui, t);
-    CHECK_EQ(cp(ui).actions_mode(), false);
+    CHECK_EQ(cp(ui).overview_mode(), true);
     CHECK_EQ(cp(ui).action_row(), -1);
     CHECK_EQ(ui.list_state().count, 0);
     g_stub.em = {}; g_stub.cable_ans = {};
@@ -1832,7 +1854,7 @@ static void test_cable_identity_positive_chips_and_no_trunc() {
     em.max_current_a = 5; em.max_voltage_v = 20; em.max_power_w = 100;
     uint32_t t = 51000;
     ui.tick(t);
-    ui.open_place(bench::Place::Cable, t += 100);
+    ui.goto_page(kConnTabAlias + 1, t += 100);
     settle(ui, t);
 #ifdef K2_TRUNC_LOG
     CHECK_EQ(k2::trunc::failures(), 0);
@@ -1887,9 +1909,11 @@ static void test_device_place_telemetry_rows_and_live_repaints() {
     g_stub.caps.raw_header = 0x1181; g_stub.caps.rx_count++;
     uint32_t t = 21000;
     for (int i = 0; i < 20; i++) ui.tick(t += 100);
-    ui.open_place(bench::Place::Device, t += 100);
+    ui.goto_page(kConnTabAlias + 2, t += 100);
     settle(ui, t);
-    if (cp(ui).has_pages() && !cp(ui).actions_mode()) ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);
+    ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);      // Spec -> Actions
+    ui.on_button(Button::Plus, ButtonEvent::Short, t += 100);    // row 1 = Sink details
+    ui.on_button(Button::Plus, ButtonEvent::Short, t += 100);    // row 2 = Ask device
     ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);
     ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);
     g_stub.iq_running = false;
@@ -1898,7 +1922,8 @@ static void test_device_place_telemetry_rows_and_live_repaints() {
     g_stub.iq_status.sink_ext_len = 24;
     g_stub.iq_status.sink_ext[18] = 15;
     g_stub.iq_status.sink_ext[20] = 45;   // SPR 45W min 15 (spr_op == 0, epr_max == 0)
-    if (cp(ui).actions_mode()) ui.on_button(Button::Back, ButtonEvent::Short, t += 100);
+    ui.on_button(Button::Minus, ButtonEvent::Short, t += 100);   // row 1 = Sink details
+    ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);      // -> View::Spec
     settle(ui, t);
     const int base_rows = cp(ui).result_rows();   // includes PDP ("SPR 45W min 15"), no Sink/Batt mfr/Status yet
     auto row_visible_is = [&](int row_idx, const char *val, uint16_t ink = kText) {
@@ -1963,7 +1988,7 @@ static void test_device_place_telemetry_rows_and_live_repaints() {
     g_stub.ident_identity.valid = true; g_stub.ident_identity.vid = 0x18D1; g_stub.ident_identity.pid = 0x4EE7;
     g_stub.ident_ext.batt_mfr.valid = true; g_stub.ident_ext.batt_mfr.vid = 0x04A9; g_stub.ident_ext.batt_mfr.pid = 0x1234;
     g_stub.ident_ext.status.valid = true; g_stub.ident_ext.status.internal_temp_c = 29; g_stub.ident_ext.status.present_input = 0x02;
-    ui2.open_place(bench::Place::Device, t2 += 100);
+    ui2.goto_page(kConnTabAlias + 2, t2 += 100);
     settle(ui2, t2);
     while (cp(ui2).action_row() >= 0 || cp(ui2).window_first() > 0) ui2.on_button(Button::Minus, ButtonEvent::Short, t2 += 100);
     settle(ui2, t2);
@@ -1980,22 +2005,24 @@ static void test_device_place_telemetry_rows_and_live_repaints() {
 }
 
 static void test_cable_read_emarker_ux_paths() {
-    // 1. VCONN ReadCable success -> switches to Info (actions_mode() == false), no error toast.
+    // 1. VCONN ReadCable success -> switches to Spec (spec_mode() == true, actions_mode() == false), no error toast.
     {
         Ui &ui = fresh_ui();
         g_stub.em = {};
         g_stub.pm = {};
         g_stub.cc = 0;
         g_stub.scan_result = true;
-        ui.goto_page(kConnTabAlias + 1, 20000);   // Cable place (Info)
+        ui.goto_page(kConnTabAlias + 1, 20000);   // Cable Spec
         ui.tick(20050);
         CHECK_EQ(cp(ui).actions_mode(), false);
-        ui.on_button(Button::Ok, ButtonEvent::Short, 20100);   // Info -> Actions (ReadCable focused)
+        ui.on_button(Button::Ok, ButtonEvent::Short, 20100);   // Spec -> Actions (row 0 = Reset & re-read)
         CHECK_EQ(cp(ui).actions_mode(), true);
+        ui.on_button(Button::Plus, ButtonEvent::Short, 20125); // row 1 = Read e-marker
         ui.on_button(Button::Ok, ButtonEvent::Short, 20150);   // Read e-marker (VCONN)
         ui.tick(20200);
         CHECK_EQ(int(g_stub.last_scan_mode), int(k2::pd::EmarkerMode::Vconn));
         CHECK_EQ(cp(ui).actions_mode(), false);
+        CHECK_EQ(cp(ui).spec_mode(), true);
         CHECK_EQ(ui.context().toast.active(20200), false);
     }
 
@@ -2008,8 +2035,9 @@ static void test_cable_read_emarker_ux_paths() {
         g_stub.scan_result = false;
         ui.goto_page(kConnTabAlias + 1, 30000);
         ui.tick(30050);
-        ui.on_button(Button::Ok, ButtonEvent::Short, 30100);   // Info -> Actions
+        ui.on_button(Button::Ok, ButtonEvent::Short, 30100);   // Spec -> Actions
         CHECK_EQ(cp(ui).actions_mode(), true);
+        ui.on_button(Button::Plus, ButtonEvent::Short, 30125); // row 1 = Read e-marker
         ui.on_button(Button::Ok, ButtonEvent::Short, 30150);   // Read e-marker (VCONN fails)
         ui.tick(30200);
         CHECK_EQ(int(g_stub.last_scan_mode), int(k2::pd::EmarkerMode::Vconn));
@@ -2021,7 +2049,7 @@ static void test_cable_read_emarker_ux_paths() {
         CHECK_EQ(ui.context().toast.active(30150 + k2::kToastDefaultMs), false);
     }
 
-    // 3. Sniff async success (cable_seq++) -> switches to Info (actions_mode() == false).
+    // 3. Sniff async success (cable_seq++) -> switches to Spec (actions_mode() == false).
     {
         Ui &ui = fresh_ui();
         g_stub.em = {};
@@ -2034,7 +2062,9 @@ static void test_cable_read_emarker_ux_paths() {
         ui.tick(t += 50);
         ui.goto_page(kConnTabAlias + 1, t += 50);
         while (ui.painting()) ui.tick(t += 2);
-        ui.on_button(Button::Ok, ButtonEvent::Short, t += 50);   // Info -> Actions
+        ui.on_button(Button::Ok, ButtonEvent::Short, t += 50);   // Spec -> Actions
+        while (ui.painting()) ui.tick(t += 2);
+        ui.on_button(Button::Plus, ButtonEvent::Short, t += 50); // row 1 = Read e-marker
         while (ui.painting()) ui.tick(t += 2);
         ui.on_button(Button::Ok, ButtonEvent::Short, t += 50);   // Read e-marker (Sniff listen)
         while (ui.painting()) ui.tick(t += 2);
@@ -2046,6 +2076,7 @@ static void test_cable_read_emarker_ux_paths() {
         while (ui.painting()) ui.tick(t += 2);
         CHECK_EQ(ui.context().em_listen_until, 0u);
         CHECK_EQ(cp(ui).actions_mode(), false);
+        CHECK_EQ(cp(ui).spec_mode(), true);
         CHECK_EQ(ui.context().toast.active(t), false);
         ui.debug_link(false, t += 100);
     }
@@ -2063,7 +2094,9 @@ static void test_cable_read_emarker_ux_paths() {
         ui.tick(t += 50);
         ui.goto_page(kConnTabAlias + 1, t += 50);
         while (ui.painting()) ui.tick(t += 2);
-        ui.on_button(Button::Ok, ButtonEvent::Short, t += 50);   // Info -> Actions
+        ui.on_button(Button::Ok, ButtonEvent::Short, t += 50);   // Spec -> Actions
+        while (ui.painting()) ui.tick(t += 2);
+        ui.on_button(Button::Plus, ButtonEvent::Short, t += 50); // row 1 = Read e-marker
         while (ui.painting()) ui.tick(t += 2);
         ui.on_button(Button::Ok, ButtonEvent::Short, t += 50);   // Read e-marker (Sniff listen)
         while (ui.painting()) ui.tick(t += 2);
@@ -2093,9 +2126,11 @@ static void setup_scrollable_device(Ui &ui, uint32_t &t) {
     g_stub.caps.pdos[0] = {pd::PdoType::Fixed, 0, 5000, 5000, 3000, 15000};
     g_stub.caps.raw_header = 0x1181; g_stub.caps.rx_count++;
     for (int i = 0; i < 20; i++) ui.tick(t += 100);
-    ui.open_place(bench::Place::Device, t += 100);
+    ui.goto_page(kConnTabAlias + 2, t += 100);
     settle(ui, t);
-    if (cp(ui).has_pages() && !cp(ui).actions_mode()) ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);
+    ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);      // Spec -> Actions
+    ui.on_button(Button::Plus, ButtonEvent::Short, t += 100);    // row 1 = Sink details
+    ui.on_button(Button::Plus, ButtonEvent::Short, t += 100);    // row 2 = Ask device
     ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);
     ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);
     g_stub.iq_running = false;
@@ -2123,7 +2158,8 @@ static void setup_scrollable_device(Ui &ui, uint32_t &t) {
     g_stub.iq_status.status.temp_status = 2; g_stub.iq_status.status.present_input = 0x06; g_stub.iq_status.status.event_flags = 0x08;
     g_stub.iq_status.num_svids = 2; g_stub.iq_status.svids[0] = 0xFF01; g_stub.iq_status.svids[1] = 0x18D1;
     g_stub.iq_status.num_epr_pdos = 9;
-    if (cp(ui).actions_mode()) ui.on_button(Button::Back, ButtonEvent::Short, t += 100);
+    ui.on_button(Button::Minus, ButtonEvent::Short, t += 100);   // row 1 = Sink details
+    ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);      // -> View::Spec
     settle(ui, t);
 }
 
@@ -2205,6 +2241,215 @@ static void test_device_scroll_toast_stays_on_top() {
     }
 }
 
+// Track 2B: 3-slice Overview, Direct Slice Focus, Spec drill-in & full Back chain (Spec -> Actions -> Overview -> Ring).
+static void test_overview_3slice_focus_and_navigation() {
+    Ui &ui = fresh_ui();
+    uint32_t t = 20000;
+    // Walk the ring to Pos::Link (ring_view == true -> calm 3-slice Overview with NO focus bar).
+    ui.open_place(bench::Place::Meter, t);
+    ui.on_button(Button::Back, ButtonEvent::Short, t += 20);
+    CHECK_EQ(ui.ring_view(), true);
+    for (int i = 0; i < 5; i++) ui.on_button(Button::Plus, ButtonEvent::Short, t += 20);
+    settle(ui, t);
+    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Link));
+    CHECK_EQ(cp(ui).overview_mode(), true);
+    CHECK_EQ(cp(ui).ring_rest(), true);
+    const int x_bar = kOppRailThickness + 1;
+    CHECK(g_panel[10 * LCD_WIDTH + x_bar] != kFocusBar);   // no focus highlight in ring view
+
+    // Enter Pos::Link -> Direct Slice Focus lights Slice 0 (Charger).
+    ui.on_button(Button::Ok, ButtonEvent::Short, t += 50);
+    settle(ui, t);
+    CHECK_EQ(ui.ring_view(), false);
+    CHECK_EQ(cp(ui).overview_mode(), true);
+    CHECK_EQ(int(cp(ui).tab()), int(conn::Tab::Source));
+    if (kFocusBar != 0) CHECK_EQ(g_panel[10 * LCD_WIDTH + x_bar], kFocusBar);
+
+    // Plus steps Charger -> Cable -> Sink (clamped at Sink); Minus steps back to Charger (clamped).
+    ui.on_button(Button::Plus, ButtonEvent::Short, t += 50);
+    settle(ui, t);
+    CHECK_EQ(int(cp(ui).tab()), int(conn::Tab::Cable));
+    if (kFocusBar != 0) {
+        CHECK(g_panel[10 * LCD_WIDTH + x_bar] != kFocusBar);
+        CHECK_EQ(g_panel[90 * LCD_WIDTH + x_bar], kFocusBar);
+    }
+    ui.on_button(Button::Plus, ButtonEvent::Short, t += 50);
+    settle(ui, t);
+    CHECK_EQ(int(cp(ui).tab()), int(conn::Tab::Sink));
+    ui.on_button(Button::Plus, ButtonEvent::Short, t += 50);   // clamped at Sink
+    CHECK_EQ(int(cp(ui).tab()), int(conn::Tab::Sink));
+    ui.on_button(Button::Minus, ButtonEvent::Short, t += 50);
+    ui.on_button(Button::Minus, ButtonEvent::Short, t += 50);
+    CHECK_EQ(int(cp(ui).tab()), int(conn::Tab::Source));
+    ui.on_button(Button::Minus, ButtonEvent::Short, t += 50);  // clamped at Source
+    CHECK_EQ(int(cp(ui).tab()), int(conn::Tab::Source));
+
+    // OK -> View::Actions for Charger; Row 0 = Reset & re-read, Row 1 = Spec & offers (2 px kRule top divider).
+    ui.on_button(Button::Ok, ButtonEvent::Short, t += 50);
+    settle(ui, t);
+    CHECK_EQ(cp(ui).actions_mode(), true);
+    CHECK_EQ(cp(ui).action_row(), 0);
+    CHECK_EQ(int(cp(ui).item(0).act), int(conn::Act::ResetLink));
+    CHECK_STR(ok_label(ui), "Reset");
+    // Row 0 is focused (expanded by kFocusExtra = 14 px -> height 40 px), so Row 1 starts at kPlaceListY + 40 = 86.
+    const int div_y = kit::kPlaceListY + kit::kRowH + kit::kFocusExtra;
+    CHECK_EQ(g_panel[div_y * LCD_WIDTH + kOppRailThickness + 20], kRule);
+    CHECK_EQ(g_panel[(div_y + 1) * LCD_WIDTH + kOppRailThickness + 20], kRule);
+
+    // Step to Row 1 (Spec & offers) and press OK -> View::Spec.
+    ui.on_button(Button::Plus, ButtonEvent::Short, t += 50);
+    CHECK_EQ(cp(ui).action_row(), 1);
+    CHECK_STR(ok_label(ui), "View");
+    ui.on_button(Button::Ok, ButtonEvent::Short, t += 50);
+    settle(ui, t);
+    CHECK_EQ(cp(ui).spec_mode(), true);
+
+    // Full Short Back chain: Spec -> Actions -> Overview -> Ring view.
+    ui.on_button(Button::Back, ButtonEvent::Short, t += 50);
+    settle(ui, t);
+    CHECK_EQ(cp(ui).actions_mode(), true);
+    ui.on_button(Button::Back, ButtonEvent::Short, t += 50);
+    settle(ui, t);
+    CHECK_EQ(cp(ui).overview_mode(), true);
+    CHECK_EQ(ui.ring_view(), false);
+    ui.on_button(Button::Back, ButtonEvent::Short, t += 50);
+    settle(ui, t);
+    CHECK_EQ(ui.ring_view(), true);
+    CHECK_EQ(int(ui.ring_position()), int(ring::Pos::Link));
+
+    // Long Back from Actions leaves straight to Ring view.
+    ui.on_button(Button::Ok, ButtonEvent::Short, t += 50);   // Ring -> Overview
+    ui.on_button(Button::Ok, ButtonEvent::Short, t += 50);   // Overview -> Actions
+    CHECK_EQ(cp(ui).actions_mode(), true);
+    ui.on_button(Button::Back, ButtonEvent::Long, t += 50);
+    CHECK_EQ(ui.ring_view(), true);
+    CHECK_EQ(label_violation(ui.labels()) == nullptr, true);
+#ifdef K2_TRUNC_LOG
+    CHECK_EQ(k2::trunc::failures(), 0);
+#endif
+}
+
+// Track 2B: Top "Reset & re-read" section: standalone CC cycle, inline 2-press confirm + disarm on move, self-powered refusal.
+static void test_reset_link_actions_standalone_inline_selfpowered() {
+    // 1. Standalone charger: single OK cycles link, clears held offers, shows toast, returns to Overview.
+    {
+        Ui &ui = fresh_ui();
+        g_stub.pm_online = true; g_stub.pm.vbus_mv = 5000; g_stub.cc = 1; g_stub.self_powered = false;
+        g_stub.caps.valid = true; g_stub.caps.num_pdos = 1;
+        g_stub.caps.pdos[0] = {pd::PdoType::Fixed, 0, 5000, 5000, 3000, 15000};
+        uint32_t t = 20000;
+        for (int i = 0; i < 4; i++) ui.tick(t += 100);
+        ui.open_place_actions(bench::Place::Charger, t += 100);
+        settle(ui, t);
+        CHECK_EQ(cp(ui).actions_mode(), true);
+        CHECK_EQ(cp(ui).action_row(), 0);
+        ui.on_button(Button::Ok, ButtonEvent::Short, t += 50);
+        settle(ui, t);
+        CHECK_EQ(cp(ui).overview_mode(), true);
+        CHECK_STR(ui.context().toast.view().data(), "Rescanning...");
+    }
+
+    // 2. Inline link: first OK arms (Confirm verb, toast); moving to Row 1 disarms; 2nd OK triggers HardReset -> Overview.
+    {
+        Ui &ui = fresh_ui();
+        make_inline(ui, 30000);
+        g_stub.self_powered = false;
+        uint32_t t = 31000;
+        ui.open_place_actions(bench::Place::Charger, t);
+        settle(ui, t);
+        CHECK_EQ(cp(ui).actions_mode(), true);
+        CHECK_EQ(cp(ui).action_row(), 0);
+        CHECK_STR(ok_label(ui), "Reset");
+        // First OK arms inline confirmation.
+        ui.on_button(Button::Ok, ButtonEvent::Short, t += 50);
+        settle(ui, t);
+        CHECK_EQ(cp(ui).actions_mode(), true);
+        CHECK_STR(ok_label(ui), "Confirm");
+        CHECK_EQ(label_violation(ui.labels()) == nullptr, true);
+        CHECK_STR(ui.context().toast.view().data(), "OK again: resets link");
+        // Moving focus off Row 0 disarms it.
+        ui.on_button(Button::Plus, ButtonEvent::Short, t += 50);
+        CHECK_EQ(cp(ui).action_row(), 1);
+        ui.on_button(Button::Minus, ButtonEvent::Short, t += 50);
+        CHECK_EQ(cp(ui).action_row(), 0);
+        CHECK_STR(ok_label(ui), "Reset");
+        // Arm again and press OK within confirm window -> HardReset -> returns to Overview.
+        ui.on_button(Button::Ok, ButtonEvent::Short, t += 50);
+        CHECK_STR(ok_label(ui), "Confirm");
+        ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);
+        settle(ui, t);
+        CHECK_EQ(cp(ui).overview_mode(), true);
+        CHECK_STR(ui.context().toast.view().data(), "Resetting link...");
+    }
+
+    // 3. Self-powered K2: refuses with "Power K2 via USB port" toast and stays on Actions.
+    {
+        Ui &ui = fresh_ui();
+        make_inline(ui, 40000);
+        g_stub.self_powered = true;
+        uint32_t t = 41000;
+        ui.open_place_actions(bench::Place::Charger, t);
+        settle(ui, t);
+        CHECK_EQ(cp(ui).actions_mode(), true);
+        ui.on_button(Button::Ok, ButtonEvent::Short, t += 50);
+        settle(ui, t);
+        CHECK_EQ(cp(ui).actions_mode(), true);
+        CHECK_STR(ui.context().toast.view().data(), "Power K2 via USB port");
+        CHECK_EQ(int(ui.context().toast.tone), int(FooterTone::Caution));
+    }
+}
+
+// Track 2B: Overview provenance chips (SNIFFED / PROBED / PEAK), bottleneck Cable highlight, and Cable Res. row.
+static void test_overview_provenance_throttled_and_bottleneck() {
+    Ui &ui = fresh_ui();
+    make_inline(ui, 50000);
+    g_stub.pm_online = true;
+    g_stub.pd_seen_attach = true;
+    g_stub.caps.valid = true; g_stub.caps.spec_rev = 2; g_stub.caps.epr = true; g_stub.caps.num_pdos = 3;
+    g_stub.caps.pdos[0] = {pd::PdoType::Fixed, 0, 5000, 5000, 3000, 15000};
+    g_stub.caps.pdos[1] = {pd::PdoType::Fixed, 0, 20000, 20000, 5000, 100000};
+    g_stub.caps.pdos[2] = {pd::PdoType::Fixed, 0, 28000, 28000, 5000, 140000};
+    g_stub.caps.raw_header = 0x1181; g_stub.caps.rx_count++;
+    g_stub.contract.valid = true; g_stub.contract.ready = true; g_stub.contract.pos = 2;
+    g_stub.contract.mv = 20000; g_stub.contract.op_ma = g_stub.contract.max_ma = 3000;
+    g_stub.em.valid = true; g_stub.em.vid = 0x0451; g_stub.em.pid = 0x1234; g_stub.em.vendor_str = "TI";
+    g_stub.em.speed_str = "USB4 Gen3"; g_stub.em.latency_str = "<10 ns (~1 m)";
+    g_stub.em.max_current_a = 3; g_stub.em.max_voltage_v = 20; g_stub.em.max_power_w = 60;
+    // Feed a passive cable resistance measurement (~112 mOhm).
+    ui.context().cable.sample(20000, 100);
+    ui.context().cable.sample(19776, 2100);
+    CHECK(ui.context().cable.estimate().has_value());
+
+    uint32_t t = 51000;
+    for (int i = 0; i < 12; i++) ui.tick(t += 100);
+    ui.open_place(bench::Place::Charger, t += 100);
+    settle(ui, t);
+    CHECK_EQ(cp(ui).overview_mode(), true);
+    CHECK_EQ(int(held::offer_source()), int(pd::OfferSource::Sniffed));
+    // Slice 1 (Cable, unfocused) is a bottleneck (60W cable < 140W charger): 3 px kCaution bar + kCautionT ground.
+    const int x_bar = kOppRailThickness + 1;
+    CHECK_EQ(g_panel[90 * LCD_WIDTH + x_bar], kCaution);
+    CHECK_EQ(g_panel[155 * LCD_WIDTH + kOppRailThickness + 10], kCautionT);
+
+    // Throttle charger from 140W down to 60W and settle > 800 ms -> PEAK / offer_throttled().
+    g_stub.caps.num_pdos = 2;
+    g_stub.caps.pdos[1] = {pd::PdoType::Fixed, 0, 20000, 20000, 3000, 60000};
+    for (int i = 0; i < 12; i++) ui.tick(t += 100);
+    settle(ui, t);
+    CHECK_EQ(held::offer_throttled(), true);
+    CHECK_EQ(held::live_offer_mw(), 60000u);
+
+    // Cable Spec view includes measured Res. row.
+    ui.goto_page(kConnTabAlias + 1, t += 100);
+    settle(ui, t);
+    CHECK_EQ(cp(ui).spec_mode(), true);
+    CHECK(cp(ui).result_rows() >= 8);
+#ifdef K2_TRUNC_LOG
+    CHECK_EQ(k2::trunc::failures(), 0);
+#endif
+    g_stub.em = {};
+}
+
 int main() {
     test_sink_tab_pd_body_shows_the_raw_vooc_note();
     test_sink_tab_no_pd_shows_the_raw_vooc_note();
@@ -2258,5 +2503,8 @@ int main() {
     test_cable_read_emarker_ux_paths();
     test_device_scroll_thumb_reaches_bottom();
     test_device_scroll_toast_stays_on_top();
+    test_overview_3slice_focus_and_navigation();
+    test_reset_link_actions_standalone_inline_selfpowered();
+    test_overview_provenance_throttled_and_bottleneck();
     return test_report("test_ui_connection_page");
 }

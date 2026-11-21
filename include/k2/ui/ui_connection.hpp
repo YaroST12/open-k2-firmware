@@ -68,6 +68,80 @@ constexpr bool source_asleep(const Facts &f) {
     return !f.charger && !f.inline_sink && f.vbus_mv >= 0 && f.vbus_mv < raguard::kVbusAttachedMv &&
            pd::standby_signature(f.open_cc_mv) && f.wake_port_off;
 }
+
+// Pure 600 ms debounced port-sense classifier: prevents rapid flickering across idle states
+// (NoCharger / ChargerWaiting / DualRolePort / SourceAsleep / LineInUse / Crossed / FlipHint).
+// First sample commits immediately; real charger attach (Attached) commits immediately.
+enum class PortSense : std::uint8_t {
+    NoCharger,
+    ChargerWaiting,
+    DualRolePort,
+    SourceAsleep,
+    LineInUse,
+    Crossed,
+    FlipHint,
+    Attached,
+};
+
+constexpr PortSense classify_port_sense(const Facts &f) {
+    if (f.charger) return PortSense::Attached;
+    if (f.inline_sink) return PortSense::LineInUse;
+    if (f.cross == raguard::CrossKind::Crossed) return PortSense::Crossed;
+    if (f.cross == raguard::CrossKind::Hint) return PortSense::FlipHint;
+    if (source_asleep(f)) return PortSense::SourceAsleep;
+    if (f.wait == raguard::WaitKind::ChargerWaiting) return PortSense::ChargerWaiting;
+    if (f.wait == raguard::WaitKind::DualRolePort) return PortSense::DualRolePort;
+    return PortSense::NoCharger;
+}
+
+struct DebouncedSense {
+    static constexpr std::uint32_t kHoldMs = 600;
+    PortSense state = PortSense::NoCharger;
+    PortSense cand = PortSense::NoCharger;
+    std::uint32_t since = 0;
+    bool primed = false;
+
+    void reset() { *this = {}; }
+
+    PortSense commit(PortSense raw, std::uint32_t now_ms) {
+        if (!primed || raw == PortSense::Attached) {
+            primed = true;
+            state = cand = raw;
+            since = now_ms;
+            return state;
+        }
+        if (raw != cand) {
+            cand = raw;
+            since = now_ms;
+        }
+        if (cand != state && static_cast<std::uint32_t>(now_ms - since) >= kHoldMs) {
+            state = cand;
+        }
+        return state;
+    }
+};
+
+// Projects a debounced idle PortSense back onto Facts when raw port sense has not held long enough.
+constexpr void apply_port_sense(Facts &f, PortSense stable) {
+    if (classify_port_sense(f) == stable || stable == PortSense::Attached) return;
+    f.charger = false;
+    f.inline_sink = (stable == PortSense::LineInUse);
+    f.cross = stable == PortSense::Crossed ? raguard::CrossKind::Crossed
+            : stable == PortSense::FlipHint ? raguard::CrossKind::Hint
+                                            : raguard::CrossKind::None;
+    if (stable == PortSense::ChargerWaiting) f.wait = raguard::WaitKind::ChargerWaiting;
+    else if (stable == PortSense::DualRolePort) f.wait = raguard::WaitKind::DualRolePort;
+    else if (f.wait == raguard::WaitKind::ChargerWaiting || f.wait == raguard::WaitKind::DualRolePort)
+        f.wait = raguard::WaitKind::Unknown;
+    if (stable == PortSense::SourceAsleep) {
+        if (!pd::standby_signature(f.open_cc_mv)) f.open_cc_mv = 2950;
+        if (f.vbus_mv < 0 || f.vbus_mv >= raguard::kVbusAttachedMv) f.vbus_mv = 0;
+        f.wake_port_off = true;
+    } else if (pd::standby_signature(f.open_cc_mv)) {
+        f.open_cc_mv = -1;
+    }
+}
+
 namespace tx = text::conn;   // the page copy (include/k2/ui/text/connection.hpp)
 
 // The tab to open on: Sink when a device is inline or was seen on CC, else Source when a charger is seen,
@@ -270,7 +344,7 @@ void status_text(const StatusIn &s, StrBuf<N> &out) {
 
 // ---- action pop-up ----------------------------------------------------------------------------------
 // Bench: a place page's tool (bench::actions of the place, `arg` its index there); the page fills its readiness.
-enum class Act : std::uint8_t { Refresh, ShareCaps, ReadCable, SaveCable, SpoofAs, SavedCables, ShareCable, Identify, Details, Bench };
+enum class Act : std::uint8_t { Refresh, ShareCaps, ReadCable, SaveCable, SpoofAs, SavedCables, ShareCable, Identify, Details, Bench, ResetLink };
 struct Item {
     Act act = Act::Refresh;
     const char *label = "";
@@ -280,7 +354,7 @@ struct Item {
     bool caution = false;       // usable, but the footer names a caution (a Bench tool's readiness)
     const char *tag = "";       // the row's tail word (a Bench tool's readiness tag), "" = none
 };
-inline constexpr int kMaxItems = 8;
+inline constexpr int kMaxItems = 9;
 
 struct ActFacts {
     bool more = false;          // the Source tab shows its second page (Details): the item goes back
@@ -302,6 +376,7 @@ constexpr sl::Id act_slot(Act a, bool more, bool share) {
     case Act::SaveCable: return share ? sl::SaveShare : sl::Save;
     case Act::SpoofAs: case Act::SavedCables: case Act::Bench: return share ? sl::OpenShare : sl::Open;
     case Act::Identify: return share ? sl::AskShare : sl::Ask;
+    case Act::ResetLink: return share ? sl::ResetShare : sl::Reset;
     }
     return share ? sl::ShareLong : sl::None;
 }
@@ -344,28 +419,36 @@ constexpr bench::Place place_of(Tab t) {
     return t == Tab::Source ? bench::Place::Charger : t == Tab::Cable ? bench::Place::Cable : bench::Place::Device;
 }
 
-// A place page's items: out[0] is the Info page's own Short-OK read (read again, read the e-marker, ask the device),
-// out[1..] are the Actions page rows in order - the cable's own actions first (with Spoof as... tagged "load" when inline),
-// then the tools of the place (bench::actions, Act::Bench with their index; the page fills their readiness), the charger's
-// read again last. Share is long OK, so it has no row.
+// A slice's Actions menu: index 0 is ALWAYS the pinned top-section "Reset & re-read" entry (separated by a 2 px rule),
+// followed by the slice's own spec/read/tool actions in order. Share is long OK, so it has no row.
 inline int place_actions(Tab t, const ActFacts &a, std::array<Item, kMaxItems> &out) {
     int n = 0;
     auto put = [&](const Item &it) { if (n < kMaxItems) out[std::size_t(n++)] = it; };
-    const Item again{Act::Refresh, "Read again", true, ""};
-    const Item read{Act::ReadCable, tx::kReadEmarker, true, ""};
-    const bool seen = a.attached || a.alone;
-    const bool id_ok = seen && !(a.pd_none && !a.alone);
-    const Item ask{Act::Identify, "Ask device", id_ok, !id_ok && seen ? kWhyNoPd : "No device seen"};
-    put(t == Tab::Source ? again : t == Tab::Cable ? read : ask);
-    if (t == Tab::Cable) {
-        put(read);
+    const bench::Acts b = bench::actions(place_of(t));
+    put({Act::ResetLink, tx::kActResetLink, true, "", -1, a.inline_sink, "Link"});
+    switch (t) {
+    case Tab::Source:
+        put({Act::Details, tx::kActSpecOffers, true, ""});
+        put({Act::Refresh, "Read again", true, ""});
+        for (int i = 0; i < b.n; i++) put({Act::Bench, b.a[i].name, true, "", static_cast<int8_t>(i)});
+        break;
+    case Tab::Cable:
+        put({Act::ReadCable, tx::kReadEmarker, true, ""});
+        put({Act::Details, tx::kActChipDetails, true, ""});
+        for (int i = 0; i < b.n; i++) put({Act::Bench, b.a[i].name, true, "", static_cast<int8_t>(i)});
         put({Act::SaveCable, "Save cable", a.cable_valid, "No cable read"});
         put({Act::SavedCables, "Saved cables", true, ""});
         put({Act::SpoofAs, "Spoof as...", !a.inline_sink, kWhyLiveSink, -1, false, a.inline_sink ? "load" : ""});
+        break;
+    case Tab::Sink: {
+        const bool seen = a.attached || a.alone;
+        const bool id_ok = seen && !(a.pd_none && !a.alone);
+        put({Act::Details, tx::kActSinkDetails, true, ""});
+        put({Act::Identify, "Ask device", id_ok, !id_ok && seen ? kWhyNoPd : "No device seen"});
+        for (int i = 0; i < b.n; i++) put({Act::Bench, b.a[i].name, true, "", static_cast<int8_t>(i)});
+        break;
     }
-    const bench::Acts b = bench::actions(place_of(t));
-    for (int i = 0; i < b.n; i++) put({Act::Bench, b.a[i].name, true, "", static_cast<int8_t>(i)});
-    if (t == Tab::Source) put(again);
+    }
     return n;
 }
 

@@ -278,10 +278,11 @@ void test_tools_row_opens_the_page() {
     ui.init(g_t);
     ui.goto_page(uint8_t(Page::Home), g_t + 50);
     ui.on_button(Button::Back, ButtonEvent::Short, g_t + 55);   // Home entered -> the ring on Home
-    for (int i = 0; i < 6; i++) ui.on_button(Button::Plus, ButtonEvent::Short, g_t + 60);   // Cable is six steps on
-    ui.on_button(Button::Ok, ButtonEvent::Short, g_t + 70);
-    CHECK_EQ(int(ui.menu()), int(Menu::Connection));   // the Cable place page (starts on Info)
-    ui.on_button(Button::Ok, ButtonEvent::Short, g_t + 75);    // Info -> Actions
+    for (int i = 0; i < 5; i++) ui.on_button(Button::Plus, ButtonEvent::Short, g_t + 60);   // Link is five steps on
+    ui.on_button(Button::Ok, ButtonEvent::Short, g_t + 70);     // enter Link Overview (focuses Charger)
+    CHECK_EQ(int(ui.menu()), int(Menu::Connection));
+    ui.on_button(Button::Plus, ButtonEvent::Short, g_t + 72);   // focus Cable slice
+    ui.on_button(Button::Ok, ButtonEvent::Short, g_t + 75);     // Overview -> Cable Actions
     const ConnectionPage &cp = ui.connection_page();
     CHECK_EQ(int(cp.tab()), int(conn::Tab::Cable));
     const bench::Acts acts = bench::actions(bench::Place::Cable);

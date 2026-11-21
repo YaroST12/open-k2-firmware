@@ -14,6 +14,7 @@
 #include "test_util.h"
 #include "fake_lcd.h"
 #include "ui_stubs.h"
+#include "k2/core/held.hpp"
 #include "k2/ui/ui.hpp"
 #include "k2/ui/ui_pages.hpp"
 #include "k2/ui/ui_style.hpp"
@@ -55,6 +56,7 @@ static Ui &fresh_ui() {
     static std::unique_ptr<Ui> ui;
     ui = std::make_unique<Ui>();
     g_stub = StubState();
+    held::reset();
     g_stub.ms = 10000;
     g_stub.cc = 0;
     g_stub.pm.vbus_mv = 0;
@@ -85,6 +87,8 @@ static void test_steady_link_zero_body_passes() {
     Ui &ui = fresh_ui();
     make_inline(ui, 20000);
     g_stub.pm_online = true;
+    g_stub.pd_seen_attach = true;
+    g_stub.ol_facts.far_pd_message = true;
     g_stub.pm.vbus_mv = 20030;
     g_stub.pm_fast_set = true; g_stub.pm_fast_mv = 20030;
     g_stub.caps.valid = true; g_stub.caps.spec_rev = 2; g_stub.caps.active_cc = 1; g_stub.caps.num_pdos = 3;
@@ -224,8 +228,87 @@ static void test_row_count_change_paints_slots_only() {
     g_stub.pm.vbus_mv = 5000;
 }
 
+// Track 2B: 3-slice Overview must write 0 pixels during flapping signals, rapid PD renegotiation storms (< 800 ms),
+// and idle port-sense flapping (< 600 ms).
+static void test_overview_zero_repaints_on_flap_and_reneg_storm() {
+    Ui &ui = fresh_ui();
+    make_inline(ui, 20000);
+    g_stub.pm_online = true;
+    g_stub.pd_seen_attach = true;
+    g_stub.ol_facts.far_pd_message = true;
+    g_stub.pm.vbus_mv = 20030;
+    g_stub.pm_fast_set = true; g_stub.pm_fast_mv = 20030;
+    g_stub.caps.valid = true; g_stub.caps.spec_rev = 2; g_stub.caps.active_cc = 1; g_stub.caps.num_pdos = 3;
+    g_stub.caps.pdos[0] = {pd::PdoType::Fixed, 0, 5000, 5000, 3000, 15000};
+    g_stub.caps.pdos[1] = {pd::PdoType::Fixed, 0, 9000, 9000, 3000, 27000};
+    g_stub.caps.pdos[2] = {pd::PdoType::Pps, 0, 5000, 11000, 5000, 55000};
+    g_stub.caps.raw_header = 0x1181; g_stub.caps.rx_count++;
+    g_stub.contract.valid = true; g_stub.contract.ready = true; g_stub.contract.pos = 2;
+    g_stub.contract.mv = 9000; g_stub.contract.op_ma = g_stub.contract.max_ma = 3000;
+    g_stub.em.valid = true; g_stub.em.vid = 0x1234; g_stub.em.pid = 0x5678; g_stub.em.vendor_str = "Cable";
+    g_stub.em.max_current_a = 5; g_stub.em.max_voltage_v = 20; g_stub.em.max_power_w = 100;
+    set_adc(300, 80, 1678, 3300);
+
+    uint32_t t = 22000;
+    ui.open_place(bench::Place::Charger, t);
+    for (int i = 0; i < 15; i++) ui.tick(t += 100);   // settle past 800 ms held-offer window
+    while (ui.painting()) ui.tick(t += 20);
+    CHECK_EQ(ui.connection_page().overview_mode(), true);
+
+    static const fastcharge::Protocol flap[] = {fastcharge::Protocol::Pending, fastcharge::Protocol::Qc2_5V,
+                                                fastcharge::Protocol::NoQuick, fastcharge::Protocol::Dcp5V};
+    lcd::set_sink(&bh::sink);
+    bh::reset();
+    const uint32_t passes0 = g_conn_body_passes, ml0 = g_match_live_calls;
+    for (int i = 0; i < 60; i++) {   // 6 s of flapping signals + rapid PD renegotiation storm (200 ms alternating)
+        t += 100;
+        g_stub.fc = flap[(i / 2) % 4];
+        g_stub.ul.mbps = ((i / 2) & 1) ? 10000u : 480u;
+        g_stub.ul.family = ((i / 2) & 1) ? usblink::Family::Usb32 : usblink::Family::Usb2;
+        set_adc(300 + (i % 5) * 11, 80 + (i % 3) * 7, 1678 + (i % 4) * 5, 3300 - (i % 3) * 9);
+        g_stub.pm_fast_mv = ((i / 2) & 1) ? 20290 : 20310;
+        // Rapid Source_Capabilities renegotiation storm every 200 ms (< 800 ms settle window):
+        g_stub.caps.num_pdos = (i / 2) % 2 == 0 ? 3 : 2;
+        g_stub.caps.raw_header = static_cast<uint16_t>(0x1181 + i * 2);
+        g_stub.caps.rx_count++;
+        ui.tick(t);
+    }
+    const unsigned px = bh::total;
+    const uint32_t passes = g_conn_body_passes - passes0, ml = g_match_live_calls - ml0;
+    lcd::set_sink(nullptr);
+    std::printf("overview storm: %u body passes, %u body px, %u match_live calls\n", passes, px, ml);
+    CHECK_EQ(passes, 0u);
+    CHECK_EQ(px, 0u);
+    CHECK_EQ(ml, 0u);
+
+    // Idle port-sense flapping (< 600 ms) on Overview: 0 body passes, 0 px.
+    Ui &ui2 = fresh_ui();
+    g_stub.pm_online = true;
+    g_stub.pm.vbus_mv = 0;
+    uint32_t t2 = 30000;
+    set_adc(0, 0, 0, 0);
+    ui2.open_place(bench::Place::Charger, t2);
+    for (int i = 0; i < 10; i++) ui2.tick(t2 += 100);
+    while (ui2.painting()) ui2.tick(t2 += 20);
+    lcd::set_sink(&bh::sink);
+    bh::reset();
+    const uint32_t p2_0 = g_conn_body_passes;
+    for (int i = 0; i < 30; i++) {   // 3 s of standby/open CC blips < 600 ms
+        t2 += 100;
+        g_stub.open_cc_mv[0] = (i % 4 < 2) ? 2950 : -1;
+        ui2.tick(t2);
+    }
+    const unsigned px2 = bh::total;
+    const uint32_t passes2 = g_conn_body_passes - p2_0;
+    lcd::set_sink(nullptr);
+    std::printf("overview idle sense flap: %u body passes, %u body px\n", passes2, px2);
+    CHECK_EQ(passes2, 0u);
+    CHECK_EQ(px2, 0u);
+}
+
 int main() {
     test_steady_link_zero_body_passes();
     test_row_count_change_paints_slots_only();
+    test_overview_zero_repaints_on_flap_and_reneg_storm();
     return test_report("test_ui_conn_flicker");
 }

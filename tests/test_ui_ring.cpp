@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
-// The page ring (include/k2/ui/ui_ring.hpp): eleven pages in a loop, view-only keys in the ring, one total owner function.
+// The page ring (include/k2/ui/ui_ring.hpp): nine pages in a loop, view-only keys in the ring, one total owner function.
 #include "k2/ui/ui_ring.hpp"
 #include <cstdio>
 #include <cstring>
@@ -13,12 +13,12 @@ static int g_n = 0, g_bad = 0;
 static Event ev(Button b, Press p) { return Event{b, p}; }
 
 int main() {
-    // The loop: next / prev wrap over all eleven, in the user's order.
-    static_assert(kCount == 11);
+    // The loop: next / prev wrap over all nine, in the user's order.
+    static_assert(kCount == 9);
     CHECK(next(Pos::Home) == Pos::Lines && next(Pos::Lines) == Pos::Numbers && next(Pos::Numbers) == Pos::Graph);
-    CHECK(next(Pos::Graph) == Pos::Ripple && next(Pos::Ripple) == Pos::Charger && next(Pos::Charger) == Pos::Cable);
-    CHECK(next(Pos::Cable) == Pos::Device && next(Pos::Device) == Pos::Battery && next(Pos::Battery) == Pos::Log);
-    CHECK(next(Pos::Log) == Pos::K2 && next(Pos::K2) == Pos::Home && prev(Pos::Home) == Pos::K2);
+    CHECK(next(Pos::Graph) == Pos::Ripple && next(Pos::Ripple) == Pos::Link && next(Pos::Link) == Pos::Battery);
+    CHECK(next(Pos::Battery) == Pos::Log && next(Pos::Log) == Pos::K2 && next(Pos::K2) == Pos::Home);
+    CHECK(prev(Pos::Home) == Pos::K2);
     {
         Pos p = Pos::Home;
         for (int i = 0; i < kCount; ++i) { CHECK(prev(next(p)) == p); p = next(p); }
@@ -39,9 +39,9 @@ int main() {
         CHECK(s.what == Do::Show && s.to == Pos::Home);
         s = view_key(Pos::Home, ev(Button::Back, Press::Short), Pos::Home);
         CHECK(s.what == Do::None);
-        s = view_key(Pos::Cable, ev(Button::Back, Press::Long), Pos::Charger);
-        CHECK(s.what == Do::Show && s.to == Pos::Charger);
-        s = view_key(Pos::Charger, ev(Button::Back, Press::Long), Pos::Charger);   // already there
+        s = view_key(Pos::Battery, ev(Button::Back, Press::Long), Pos::Link);
+        CHECK(s.what == Do::Show && s.to == Pos::Link);
+        s = view_key(Pos::Link, ev(Button::Back, Press::Long), Pos::Link);   // already there
         CHECK(s.what == Do::None);
         // Long OK / long +/- / holds are consumed: no long Plus in the ring, no page action leaks out of the view.
         for (Button b : {Button::Minus, Button::Ok, Button::Plus}) {
@@ -75,16 +75,16 @@ int main() {
     CHECK(owner(Page::Graphs, Menu::Count, 0) == Pos::Graph);
     CHECK(owner(Page::Ripple, Menu::Count, 0) == Pos::Ripple);
     CHECK(owner(Page::Settings, Menu::Count, 0) == Pos::K2);
-    CHECK(owner(Page::ChargerTest, Menu::Count, 0) == Pos::Charger);
-    CHECK(owner(Page::Lines, Menu::Connection, 0) == Pos::Charger);
-    CHECK(owner(Page::Lines, Menu::Connection, 1) == Pos::Cable);
-    CHECK(owner(Page::Lines, Menu::Connection, 2) == Pos::Device);
+    CHECK(owner(Page::ChargerTest, Menu::Count, 0) == Pos::Link);
+    CHECK(owner(Page::Lines, Menu::Connection, 0) == Pos::Link);
+    CHECK(owner(Page::Lines, Menu::Connection, 1) == Pos::Link);
+    CHECK(owner(Page::Lines, Menu::Connection, 2) == Pos::Link);
     // Tool pages belong to the place that opens them; Share and the QR test follow the page they sit on.
-    CHECK(owner(Page::Lines, Menu::Trigger, 0) == Pos::Charger && owner(Page::Lines, Menu::PdTrigger, 0) == Pos::Charger);
-    CHECK(owner(Page::Lines, Menu::Cards, 0) == Pos::Charger && owner(Page::Lines, Menu::PdStress, 0) == Pos::Charger);
-    CHECK(owner(Page::Lines, Menu::Emarker, 0) == Pos::Cable && owner(Page::Lines, Menu::CableR, 0) == Pos::Cable);
-    CHECK(owner(Page::Lines, Menu::Spoof, 0) == Pos::Cable && owner(Page::Lines, Menu::LoopProbe, 0) == Pos::Cable);
-    CHECK(owner(Page::Lines, Menu::Twin, 0) == Pos::Device);
+    CHECK(owner(Page::Lines, Menu::Trigger, 0) == Pos::Link && owner(Page::Lines, Menu::PdTrigger, 0) == Pos::Link);
+    CHECK(owner(Page::Lines, Menu::Cards, 0) == Pos::Link && owner(Page::Lines, Menu::PdStress, 0) == Pos::Link);
+    CHECK(owner(Page::Lines, Menu::Emarker, 0) == Pos::Link && owner(Page::Lines, Menu::CableR, 0) == Pos::Link);
+    CHECK(owner(Page::Lines, Menu::Spoof, 0) == Pos::Link && owner(Page::Lines, Menu::LoopProbe, 0) == Pos::Link);
+    CHECK(owner(Page::Lines, Menu::Twin, 0) == Pos::Link);
     CHECK(owner(Page::Lines, Menu::Battery, 0) == Pos::Battery);
     CHECK(owner(Page::Lines, Menu::BlackBox, 0) == Pos::Log && owner(Page::Lines, Menu::Diagnosis, 0) == Pos::Log);
     for (Menu m : {Menu::Diag, Menu::UsbLink, Menu::Autorotate, Menu::Memory, Menu::Display}) CHECK(owner(Page::Home, m, 0) == Pos::K2);
@@ -97,8 +97,7 @@ int main() {
         const Page base = t.menu == Menu::Count ? t.page : Page::Lines;   // a menu target sits over any host page
         CHECK(owner(base, t.menu, t.tab) == p);
     }
-    CHECK(target(Pos::Charger).menu == Menu::Connection && target(Pos::Charger).tab == 0);
-    CHECK(target(Pos::Cable).tab == 1 && target(Pos::Device).tab == 2);
+    CHECK(target(Pos::Link).menu == Menu::Connection && target(Pos::Link).tab == 0);
     CHECK(target(Pos::Log).menu == Menu::Diagnosis && target(Pos::Battery).menu == Menu::Battery);
     CHECK(target(Pos::K2).menu == Menu::Count && target(Pos::K2).page == Page::Settings);
 
@@ -115,19 +114,20 @@ int main() {
         CHECK(same);
     }
     CHECK(std::strcmp(mast_name(Pos::Graph), "4 GRAPHS") == 0);
+    CHECK(std::strcmp(mast_name(Pos::Link), "6 LINK") == 0);
 
     // The persisted long-back target: out of range falls back to Home.
-    CHECK(sanitize_target(0) == Pos::Home && sanitize_target(10) == Pos::K2);
-    CHECK(sanitize_target(11) == Pos::Home && sanitize_target(255) == Pos::Home);
+    CHECK(sanitize_target(0) == Pos::Home && sanitize_target(8) == Pos::K2);
+    CHECK(sanitize_target(9) == Pos::Home && sanitize_target(255) == Pos::Home);
 
     // The ring strip: Prev / Next move, Enter dims where there is nothing to enter, Back goes Home (Jump names the long press).
     {
         const Strip s = view_strip(Pos::Graph, Pos::Home);
         CHECK(s[Button::Back] == sl::Home && s[Button::Minus] == sl::Prev && s[Button::Ok] == sl::Enter && s[Button::Plus] == sl::Next);
-        CHECK(view_strip(Pos::Graph, Pos::Charger)[Button::Back] == sl::HomeJump);
-        CHECK(view_strip(Pos::Charger, Pos::Charger)[Button::Back] == sl::Home);   // already the jump target: nothing to name
+        CHECK(view_strip(Pos::Graph, Pos::Link)[Button::Back] == sl::HomeJump);
+        CHECK(view_strip(Pos::Link, Pos::Link)[Button::Back] == sl::Home);   // already the jump target: nothing to name
         CHECK(view_strip(Pos::Home, Pos::Home)[Button::Back] == sl::None);          // nowhere to go
-        CHECK(view_strip(Pos::Home, Pos::Charger)[Button::Back] == sl::Jump);
+        CHECK(view_strip(Pos::Home, Pos::Link)[Button::Back] == sl::Jump);
         CHECK(view_strip(Pos::Lines, Pos::Home)[Button::Ok] == sl::EnterDim && view_strip(Pos::Numbers, Pos::Home)[Button::Ok] == sl::EnterDim);
         for (int i = 0; i < kCount; ++i)
             for (int j = 0; j < kCount; ++j) {

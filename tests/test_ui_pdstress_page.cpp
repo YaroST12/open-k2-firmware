@@ -440,10 +440,10 @@ void test_the_tools_row_opens_the_page() {
     run(ui, 120);
     ui.on_button(Button::Ok, ButtonEvent::Short, g_now += 20);   // Info -> Actions
     run(ui, 120);
-    const bench::Acts acts = bench::actions(bench::Place::Charger);
     int row = 0;
-    while (row < acts.n && std::string_view(acts.a[row].name) != "Stress test") ++row;
-    CHECK_EQ(row < acts.n, true);
+    const ConnectionPage &cp = ui.connection_page();
+    while (row < cp.item_count() && std::string_view(cp.item(row).label) != "Stress test") ++row;
+    CHECK_EQ(row < cp.item_count(), true);
     presses(ui, Button::Plus, row);
     press(ui, Button::Ok);
     run(ui, 120);

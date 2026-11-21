@@ -34,37 +34,44 @@ white on `kError` with a `kErrD` bar track, near is the orange chip with orange 
 renders the charge, ramp, idle, LAST and unplugged scenes, asserts the line and tint pixels (and their absence after LAST
 and unplugged) and the digit/tint contrast (WCAG 2.x); `K2_DUMP=dir` writes the Flow scenes for `tools/panel2png.py`.
 
-### 0.2 Navigation (ring, 2026-11-20)
+### 0.2 Navigation (ring, 2026-11-22)
 
-One carousel of eleven pages replaced the Bench list (user decision). `include/k2/ui/ui_ring.hpp` is the pure model
-(`tests/test_ui_ring.cpp`); `Ui::ring_*` wires it.
+One carousel of nine pages replaced the eleven-page ring (collapsing Charger, Cable and Device back into one unified 3-slice `Link` page). `include/k2/ui/ui_ring.hpp` is the pure model (`tests/test_ui_ring.cpp`); `Ui::ring_*` wires it.
 
 ```
-Home > Lines > Numbers > Graph > Ripple > Charger > Cable > Device > Battery > Log > K2 > (Home)
+Home > Lines > Numbers > Graph > Ripple > Link > Battery > Log > K2 > (Home)
 ```
 
 | state | PLUS / MINUS | OK | short Back | long Back |
 |---|---|---|---|---|
 | Ring view (the page is shown, the masthead carries its numbered name) | previous / next page, wrapping | enter the page (Lines and Numbers only look: no entry) | Home | the page chosen in Settings > Long Back |
-| Entered (the page's own rows and actions) | scroll the rows | the focused row's action | up one level; at the top level back to the ring view | the ring view on the same page |
+| Entered (the page's own rows and actions) | scroll the rows (or step Charger / Cable / Sink slice on Link) | the focused slice / row's action | up one level; at the top level back to the ring view | the ring view on the same page |
 
 - Boot lands on Home in the ring view. `Ui::goto_page`, the remote `page N`, `open_connection`, `open_place` and a started
   charger test land entered (the page was asked for by name).
 - Home entered keeps Home 2c: PLUS / MINUS move the hero, OK cycles the span, long OK resets the energy, Back exits to the ring.
   Graph entered: OK = Zoom, PLUS / MINUS blank.
-- The read actions are rows inside the entered page. Charger, Cable and Device are the Connection page locked to one tab
-  (`ConnectionPage::lock`); their Info / Actions rows carry every `bench::actions` tool as an `Act::Bench` row. Battery is
-  `BatteryPage`, Log is `DiagnosisPage::as_place`, K2 is `SettingsPage`. Pages with no actions (Battery, Log, K2, Meter
+- `6 LINK` is `ConnectionPage` in 3-slice Overview mode (`View::Overview`): full-height `208 x 238` (no permanent bottom footer),
+  three equal bands (`CHARGER` 79 px, `CABLE` 79 px, `SINK` 80 px) showing debounced port sense, provenance (`PROBED`, `PEAK`,
+  `SNIFFED`, `3A?`), cable resistance (`mΩ`), and bottleneck highlights. Entering (`OK`) enables Direct Slice Focus (`-/+` steps
+  across the three slices, `OK` opens that slice's `View::Actions` page).
+- Slice Actions (`View::Actions`): compact slice header (`y 2..44`), pinned top `Reset & re-read` section (`Act::ResetLink`,
+  separated by a 2 px `RowSpec::section_before` rule — standalone runs rescan + survey; inline arms a 2-press Hard Reset confirm,
+  refused when VBUS-powered without USB host supply), followed by the slice's own interrogation & tool entries (including
+  `Spec & offers` / `Chip details` / `Sink details` opening the full scrollable `View::Spec` sheet).
+- Passive offer stability (`pd::HeldOffers::capture_settled`): 800 ms quiet-wire settle gate + high-water-mark protection prevents
+  rapid multi-port renegotiation flicker and stops transient low fallback offers (e.g. 15 W / 60 W) from overwriting a known peak.
+- Battery is `BatteryPage`, Log is `DiagnosisPage::as_place`, K2 is `SettingsPage`. Pages with no actions (Battery, Log, K2, Meter
   faces) are scroll-only when entered.
 - A tool page opened from a place (Menu over Lines excepted) pops back to that place; Back from a tool over Lines exits to the
   owner's ring page. A ring walk skips a target while `ports_busy()` refuses a menu target (charger test, release guard,
   twin, PD stress, PD spec, loop probe).
-- ChargerTest: Back goes up to the Charger place's Actions; long Back stops the run and shows the Charger ring page.
-- Long Back target: `/prefs.cfg` optional 9th byte (written only when non-zero and below 11; older firmware reads a 9-byte
-  file as defaults). Settings row `Long Back` cycles the eleven positions; Home is the default.
+- ChargerTest: Back goes up to the Charger slice's Actions; long Back stops the run and shows the Link ring page.
+- Long Back target: `/prefs.cfg` optional 9th byte (written only when non-zero and below 9; older firmware reads a 9-byte
+  file as defaults). Settings row `Long Back` cycles the nine positions; Home is the default.
 - Long PLUS is not used. The OK + Back 3 s reboot chord and the Back-Hold cancel are unchanged.
-- Ring vs entered is visible: the masthead (slot 0 of the opposite rail) shows the position and name (`6 CHARGER`) in the ring view and the page's
-  own title when entered. Session flag `RingView` (bit 6) is reported by GET_STATE (`ring_view`).
+- Ring vs entered is visible: the masthead (slot 0 of the opposite rail) shows the position and name (`6 LINK`) in the ring view and the page's
+  own title (`LINK`, `CHARGER`, `CABLE`, `DEVICE`) when entered. Session flag `RingView` (bit 6) is reported by GET_STATE (`ring_view`).
 - Remote page names: `tools` is gone from the rotation list. `page N` is 0..6 for Home, Detail, ChargerTest, Lines, Settings,
   Graphs, Ripple; a showing submenu is 7 + its Menu index. Menu page names keep the `tools/` prefix.
 

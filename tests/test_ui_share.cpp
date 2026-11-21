@@ -353,8 +353,10 @@ static void test_emarker_opener() {
     ui.tick(1350);
     ui.on_button(Button::Ok, ButtonEvent::Short, 1400);    // Info -> Actions
     uint32_t st = 1500;
-    while (ui.connection_page().action_row() < 2) ui.on_button(Button::Plus, ButtonEvent::Short, st += 5);
-    ui.on_button(Button::Ok, ButtonEvent::Short, 1550);    // Saved cables (row 2)
+    while (ui.connection_page().action_row() >= 0 &&
+           ui.connection_page().item(ui.connection_page().action_row()).act != conn::Act::SavedCables)
+        ui.on_button(Button::Plus, ButtonEvent::Short, st += 5);
+    ui.on_button(Button::Ok, ButtonEvent::Short, 1550);    // Saved cables
     CHECK(ui.menu() == Menu::Emarker);
     ui.on_button(Button::Ok, ButtonEvent::Short, 1600);    // the cable's card
     ui.tick(1650);

@@ -383,7 +383,8 @@ K2_HOT uint32_t RowList::row_sig_cb(void *ctx, int index) {
     uint32_t h = mix_init();
     h = mix_u32(h, static_cast<uint32_t>(r.marker) | (static_cast<uint32_t>(r.state) << 4) |
                        (static_cast<uint32_t>(r.icon) << 8) | (static_cast<uint32_t>(r.chevron) << 16) |
-                       (static_cast<uint32_t>(focused) << 17) | (static_cast<uint32_t>(self->muted_) << 18));
+                       (static_cast<uint32_t>(focused) << 17) | (static_cast<uint32_t>(self->muted_) << 18) |
+                       (static_cast<uint32_t>(r.section_before) << 19));
     h = mix_u32(h, r.marker_color | (static_cast<uint32_t>(r.text_color) << 16));
     h = mix_u32(h, r.tail_color | (static_cast<uint32_t>(r.tail_tint) << 16));
     h = mix(h, r.text);
@@ -461,9 +462,12 @@ K2_HOT void RowList::draw_row_cb(void *ctx, int index, const Rect &r, bool hi, F
         hole(kTextX, static_cast<int16_t>(y + kNoteDy), text_width(kLabelFont, note_v), kLabelFont.height);
     }
 
+    const int16_t rw = self->list_.row_width();
+    const int16_t top = sp.section_before ? 2 : 1;
+    if (sp.section_before) gfx_fill(s, 0, y, rw, 2, kRule);
     const int16_t gx = bar ? 3 : 0;
-    if (bar) gfx_fill(s, 0, static_cast<int16_t>(y + 1), 3, static_cast<int16_t>(r.h - 1), bar_col);
-    fill_except(s, {gx, static_cast<int16_t>(y + 1), static_cast<int16_t>(self->list_.row_width() - gx), static_cast<int16_t>(r.h - 1)},
+    if (bar) gfx_fill(s, 0, static_cast<int16_t>(y + top), 3, static_cast<int16_t>(r.h - top), bar_col);
+    fill_except(s, {gx, static_cast<int16_t>(y + top), static_cast<int16_t>(rw - gx), static_cast<int16_t>(r.h - top)},
                 holes, nh, bg);
 
     draw_marker(s, kMarkX, static_cast<int16_t>(y + 7), sp, bg);

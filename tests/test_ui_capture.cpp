@@ -717,9 +717,12 @@ static void test_emarker_menu_scenes() {
     ui.goto_page(kConnTabAlias + 1, 1200);                        // Connection, Cable place
     ui.run_action(Action::EmarkerScan, 1300); ui.tick(1350);
     test_screen(ui, "conn_cable", 1380);
-    // Navigate to Saved cables action row on the Cable Actions sub-page (Read e-marker = 0, Save cable = 1, Saved cables = 2)
+    // Navigate to Saved cables action row on the Cable Actions sub-page
     ui.on_button(Button::Ok, ButtonEvent::Short, 1420);
-    while (ui.connection_page().action_row() < 2) ui.on_button(Button::Plus, ButtonEvent::Short, 1450);
+    uint32_t ct = 1440;
+    while (ui.connection_page().action_row() >= 0 &&
+           ui.connection_page().item(ui.connection_page().action_row()).act != conn::Act::SavedCables)
+        ui.on_button(Button::Plus, ButtonEvent::Short, ct += 5);
     ui.on_button(Button::Ok, ButtonEvent::Short, 1550);           // Saved cables
     test_screen(ui, "em_saved", 1600);
     CHECK_EQ(g_panel[12 * 240 + kOx + 1], kFocus);
@@ -1573,15 +1576,21 @@ int main() {
         test_screen(ui, "bench_charger", 31300);
         CHECK_EQ(ui.menu() == Menu::Connection, 1);
         CHECK_EQ(ui.connection_page().actions_mode(), true);
-        auto row_y = [&](int act) { return kit::kBodyY + act * kit::kRowH; };   // RowList slot top (act 0 focused is 40 px; act 1 starts at 24 + 40 = 64 when act 0 has note)
+        auto row_y = [&](int act) { return kit::kPlaceListY + act * kit::kRowH; };   // RowList sits below slice identity block (y = kPlaceListY)
         CHECK_EQ(g_panel[(row_y(0) + 10) * 240 + kOx + 134], k2::kFocusFill);
-        ui.on_button(Button::Plus, ButtonEvent::Short, 31400);         // Request voltage: blocked by the load
+        uint32_t bt = 31320;
+        while (ui.connection_page().action_row() >= 0 &&
+               std::string_view(ui.connection_page().item(ui.connection_page().action_row()).label) != "Request voltage")
+            ui.on_button(Button::Plus, ButtonEvent::Short, bt += 10);   // Request voltage: blocked by the load
+        const int req_row = ui.connection_page().action_row();
         test_screen(ui, "bench_charger_blocked", 31500);
-        CHECK_EQ(count_colours(kOx, 220, 224, 236, {k2::kFocus}) > 0, true);
-        ui.on_button(Button::Plus, ButtonEvent::Short, 31510);         // Fast charge: Request voltage unfocused (row 1 at y = 24 + 26 = 50)
+        CHECK_EQ(count_colours(kOx, kit::kPlaceListY, kOx + 3, 240, {k2::kFocus}) > 0, true);
+        ui.on_button(Button::Plus, ButtonEvent::Short, 31510);         // Fast charge: Request voltage unfocused
         ui.tick(31520);
-        CHECK_EQ(count_colours(8, row_y(1) + 2, 150, row_y(1) + 24, {k2::kInk3}) > 0, true);   // blocked: dim
-        CHECK_EQ(count_colours(150, row_y(1), 214, row_y(1) + kit::kRowH, {k2::kError}) > 0, false);  // its tail is not red
+        const int req_off = ui.connection_page().list_state().offset;
+        const int req_y = kit::kPlaceListY + (req_row - req_off) * kit::kRowH;
+        CHECK_EQ(count_colours(kOx + 8, req_y + 2, kOx + 150, req_y + 24, {k2::kInk3}) > 0, true);   // blocked: dim
+        CHECK_EQ(count_colours(kOx + 150, req_y, kOx + 204, req_y + kit::kRowH, {k2::kError}) > 0, false);  // its tail is not red
         g_stub.pm = saved_pm;
         g_stub.em = saved_em;
         ui.debug_link(false, 31510); ui.debug_link(true, 31520); // isolate the synthetic load fixture
