@@ -1002,8 +1002,11 @@ and the hardware check). A row leaves this list when its fix is merged and the h
   charger itself, no spoof; no cable read and the spoof can work (charger on the plug, the Ra guard's own test): the default
   EPR spoof; otherwise (a weaker cable read, or no spoof possible): no spoof, the EPR rows skip with the cable reason and the
   AVS step runs on the SPR AVS APDO. The Settings spoof is ignored; Review's Spoof line says what is presented (Cable 50V 5A,
-  the EPR identity, Off); ct_start prints the rule and never refuses Offers. Validate: a PD charger with EPR AVS, an SPR-only charger, a fixed-only
-  charger, a Spoof-Off setting (EPR must still be entered); the card names the run kind. Inline rule (every level): with
+  the EPR identity, Off); ct_start prints the rule and never refuses Offers (cdc32492 Review without the band, f3693009 the rule;
+  not verified on hardware). Validate: a PD charger with EPR AVS, an SPR-only charger, a fixed-only charger, a Spoof-Off setting
+  (EPR must still be entered); an EPR charger behind a real e-marked EPR cable (the cable read before START: EPR entered, no
+  spoof, Review "Cable 50V 5A"); the same behind a 3 A or unmarked cable (no spoof, EPR rows skip, SPR AVS runs); the charger
+  directly on the top plug with nothing read (the spoof, as before); the card names the run kind. Inline rule (every level): with
   the inline latch set START is refused ("load attached"), a latch during START's wait cancels it and puts Rd and identity
   back; nothing transmits, presents Rd/Ra, turns on VCONN or enters EPR.
 - **HID-cable loop: the loop probe** (user decision 2026-11-11). Topology: the K2 on a charger, a cable from its PD-bus

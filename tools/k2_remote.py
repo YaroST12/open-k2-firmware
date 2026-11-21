@@ -5826,7 +5826,7 @@ def build_parser():
         cs.add_argument("state", choices=["on", "off"])
     sv = sub.add_parser("charger-svooc-cap", help="SuperVOOC ceiling stage of the NEXT charger run (no argument: read the mode and "
                         "the latest result). on = needs the guards to pass; usb-a is accepted and runs as on (the charger test "
-                        "waives nothing; the Review warning asks for an empty other port). "
+                        "waives nothing; the Review START hint asks for an empty other port). "
                         "The ceiling is read from the 0x86 protocol words, never tested by load")
     sv.add_argument("mode", nargs="?", choices=SVOOC_CAP_MODES)
     sub.add_parser("pdos", help="decoded source capabilities")

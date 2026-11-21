@@ -167,7 +167,7 @@ aborts with `Overvoltage` and releases the lines), and the card and Results show
   it is **not a drawn current** and the watts are not a drawn power, and the K2 never loads the charger (the trigger's 50 mA guard and 12 V abort stay).
   Modes: `off` (Light, Medium), `on` (Deep; the trigger's start guards must pass), `usb-a` (accepted and run as `on`: the charger test
   waives nothing since the latch policy of 2026-11-15, so the wire value, the CLI flag and the web mode stay for
-  compatibility and do nothing; the run's inline checks see only a load or a sink's Request, and the Review warning asks
+  compatibility and do nothing; the run's inline checks see only a load or a sink's Request, and the START hint asks
   for an empty other port). The stage starts only once D+/D- are free
   (`svooc_trig::lines_free()`): the family session's release holds them at 0 V for 500 ms first. An adapter that talked
   and then sent no edge for `kQuietMs` (500 ms) ended the session (every no-load session so far, ~3.3 s after the wake):
@@ -546,8 +546,8 @@ the pick that was made.
    it presents the default EPR identity; otherwise (a weaker cable read, or the spoof impossible) it presents nothing, the
    EPR rows skip with the cable reason and the AVS step runs on the SPR AVS APDO. The Ra guard is not asked for the last
    two, so Offers never reaches the Refuse stage; `ct_start.py --level offers` prints the rule and ignores `--cable`.
-   Every other level presents the pick and meets the guard as before. The web dashboard's START confirm shows the same text in
-   its own confirm step.
+   Every other level presents the pick and meets the guard as before. The START sample is taken before the choice, so the choice
+   and the guard judge the same window.
 
    **Inline latch policy (2026-11-15, the user's decision).** The Link's inline latch keeps only 100 %-certain evidence
    ("unblock steps blocked by the phantom 'other device' tests; I'd only keep them when we are 100 %, absolutely
@@ -556,7 +556,7 @@ the pick that was made.
    a run; the enum values stay for the wire, the journal and old records, and nothing sets them. The charger test has no
    special handling of those causes and the usb-a waiver is redundant for it (see the SuperVOOC stage). Accepted
    tradeoff: a K2 inserted into a live but silent link (no current, no sink message yet) is no longer protected; the
-   Review warning is the protection. Hardware reason: the K2 reads about 1.75 V on CC2 with nothing plugged in, so a
+   START hint "other port must be empty" is the only protection. Hardware reason: the K2 reads about 1.75 V on CC2 with nothing plugged in, so a
    far Rd latched with an empty top port on the CUKTECH USB-A port (`docs/CHARGER_QUIRKS.md`).
 
 Back is always `Back` and retreats one level: Group -> Custom -> Tests, Cable -> Tests (cursor on the preset in force),
