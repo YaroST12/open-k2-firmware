@@ -6207,6 +6207,23 @@ static void test_hold_knob_goes_to_300_and_pd_rows_keep_the_capture_floor() {
         ct::legacy_tune_reset();
     }
 }
+// The per-unit time split: each unit's busy ms add up to the run's (the [CT] line at the end prints them).
+static void test_unit_time_split_adds_up_to_the_run() {
+    Fake f; ct::Runner r(f);
+    const auto o = with_units(ct::bit(A::Qc2) | ct::bit(A::Fcp), {ct::Unit::Qc2, ct::Unit::Fcp});
+    CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+    const uint32_t t0 = f.in.now;
+    CHECK_EQ(run_until(f, r, [&] { return !r.busy(); }, 300000), true);
+    const uint32_t total = f.in.now - t0;
+    const uint32_t qc2 = r.unit_time_ms(ct::Unit::Qc2), fcp = r.unit_time_ms(ct::Unit::Fcp);
+    CHECK_EQ(qc2 > 1000, true);
+    CHECK_EQ(fcp > 1000, true);
+    CHECK_EQ(r.unit_time_ms(ct::Unit::Scp), 0u);
+    CHECK_EQ(qc2 + fcp <= total, true);
+    CHECK_EQ(total - (qc2 + fcp) < 1000, true);   // what is left is the Verify 5V settle before the first unit
+    Fake g; g.in.now = f.in.now; CHECK_EQ(r.start(g.caps, o, g.in, true), ct::Reason::None);   // a new run counts from zero
+    CHECK_EQ(r.unit_time_ms(ct::Unit::Qc2), 0u);
+}
 // A charger that keeps PD alive (re-sends its caps for ever): one longer retry, then every row of the unit is "blocked by PD"
 // and the next unit still gets its own attach.
 static void test_legacy_attach_that_never_falls_back_is_blocked_by_pd() {
@@ -9196,7 +9213,7 @@ int main() {
     test_a_dip_shorter_than_the_minimum_is_no_cut(); test_a_protocol_failure_after_a_clean_comeback_is_a_fail(); test_the_7s_cut_sequence_over_the_5v_steps_of_the_cuktech_run(); test_a_fall_in_a_raised_row_is_no_cut_casualty(); test_a_silent_vooc_family_on_a_7s_cut_port_ends_no_answer(); test_the_10_unit_run_over_every_cut_phase_ends_as_without_cuts();
     test_a_cut_in_the_first_baseline_waits_for_the_comeback(); test_a_baseline_dip_that_does_not_come_back_still_stops();
     test_custom_unit_list_runs_in_order(); test_pd_unit_attaches_with_a_contract(); test_a_failed_unit_does_not_stop_the_run();
-    test_default_unit_order_is_vendor_modes_then_pd_then_legacy(); test_default_order_runs_vendor_modes_before_pd_before_legacy(); test_pd_between_vendor_and_legacy_units(); test_pd_replan_in_the_middle_keeps_the_rows_in_order(); test_consecutive_legacy_units_share_one_attach(); test_legacy_session_that_sees_pd_traffic_is_renewed(); test_silent_ufcs_source_reports_no_response_not_pd_active(); test_legacy_waits_between_units(); test_legacy_tune_knobs(); test_hold_knob_goes_to_300_and_pd_rows_keep_the_capture_floor(); test_scp_rows_share_one_session(); test_scp_no_change_held_session_takes_the_next_rows(); test_cancel_while_the_scp_session_is_kept_releases_it(); test_chain_knob_default_and_other_units();
+    test_default_unit_order_is_vendor_modes_then_pd_then_legacy(); test_default_order_runs_vendor_modes_before_pd_before_legacy(); test_pd_between_vendor_and_legacy_units(); test_pd_replan_in_the_middle_keeps_the_rows_in_order(); test_consecutive_legacy_units_share_one_attach(); test_legacy_session_that_sees_pd_traffic_is_renewed(); test_silent_ufcs_source_reports_no_response_not_pd_active(); test_legacy_waits_between_units(); test_legacy_tune_knobs(); test_hold_knob_goes_to_300_and_pd_rows_keep_the_capture_floor(); test_unit_time_split_adds_up_to_the_run(); test_scp_rows_share_one_session(); test_scp_no_change_held_session_takes_the_next_rows(); test_cancel_while_the_scp_session_is_kept_releases_it(); test_chain_knob_default_and_other_units();
     test_legacy_attach_that_never_falls_back_is_blocked_by_pd(); test_legacy_retry_that_falls_back_runs_the_unit(); test_legacy_attach_waits_out_hard_reset_cycles();
     test_silent_attach_source_that_revives_pd_does_not_go_unsafe(); test_silent_baseline_sag_that_never_returns_is_still_unsafe(); test_silent_sink_output_off_skips_legacy_units_and_runs_pd();
     test_later_unit_output_cut_in_its_baseline_is_a_lost_unit_not_unsafe(); test_later_unit_elevated_or_stuck_baseline_still_ends_unsafe();

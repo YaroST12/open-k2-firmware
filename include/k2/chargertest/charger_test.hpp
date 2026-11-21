@@ -817,6 +817,7 @@ public:
     // highlights it, so the list is already on that row when the next quiet stretch begins.
     size_t upcoming() const { return pick(); }
     Unit unit() const { return unit_; }   // the unit being run (Unit::Count before the first one starts)
+    uint32_t unit_time_ms(Unit u) const { return u < Unit::Count ? unit_time_[size_t(u)] : 0; }   // busy ms spent in the unit this run
     // The run's units in execution order (the rows of steps() follow the same order).
     std::span<const Unit> unit_order() const { return {order_.data(), n_order_}; }
     Mode attach_mode() const { return mode_; }
@@ -915,6 +916,7 @@ private:
     // noinline: LTO folded poll_impl into the single Runner::poll call site (ChargerTestSession::runner_tick), next to the
     // caller's Input copies: 1048 B of frame against FRAME_MAX 1024.
     [[gnu::noinline]] void poll_impl(Input&, const pd::SourceCaps&);
+    void count_unit_time(uint32_t now);
     uint32_t hold_ms() const;
     // The SVOOC ceiling stage: queued by finish() when the VOOC family was detected and the options asked for it, begun by next()
     // once the family session is released (D+/D- free, 5 V), ended by poll_ceiling(). One stage per run.
@@ -1085,6 +1087,9 @@ private:
     bool pd_skips_held_ K2_BSS_INIT(false);   // record_pd_skips kept provisional EPR "not offered" rows back (the entry has not decided them yet)
     uint8_t attach_try_ K2_BSS_INIT(0);
     uint32_t unit_ms_ K2_BSS_INIT(0), att_ms_ K2_BSS_INIT(0);   // the unit's detach began; this attach phase began
+    std::array<uint32_t, size_t(Unit::Count)> unit_time_ K2_BSS_ZERO;   // busy ms per unit this run (the end-of-run [CT] split)
+    uint32_t time_ms_ K2_BSS_INIT(0);                                    // the poll the split last counted to (0 = idle)
+    bool time_logged_ K2_BSS_INIT(true);
     uint32_t pre_ms_ K2_BSS_INIT(0);                 // extra quiet before the unit's first handshake, on top of the 500 ms baseline settle
     enum class Att : uint8_t { Caps, Contract } att_ = Att::Caps;
     bool rp_restart_ K2_BSS_INIT(false);   // the attach wait was restarted once after a source-side Rp drop (pattern slow-rp-wake)
