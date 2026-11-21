@@ -990,30 +990,11 @@ and the hardware check). A row leaves this list when its fix is merged and the h
 
 ## Specified work (not started)
 
-- **Charger test "Offers" depth** (user decision 2026-11-21). PD only: reads Source_Capabilities, enters EPR as the
-  PD unit does, reads EPR_Source_Capabilities, then one AVS request (the EPR AVS APDO in EPR, else the SPR AVS APDO) at its
-  minimum voltage and 1 A; Accept + PS_RDY + VBUS within the step tolerance, never above 36 V; no AVS offered is a dim skip.
-  Fixed and PPS levels stay Advertised. Back to 5 V, EPR exit and Rd drop go through the existing release path.
-  **Partial: built and host-tested (3b66351c engine, wire and tools; dc9a2eda UI), not verified on hardware.**
-  A new `ct::Level::Offers` (run level 3; journal, remote status, card byte and `ct_start.py --level offers` carry it, no
-  format bump). It is the Tests step's 4th Depth value (Light, Medium, Deep, Offers; not in Settings); the preset pick is
-  kept but the run is PD only. The cable rule (k2/offers-cable, 2026-11-21, after a hardware bug: Offers forced the spoof on
-  a real EPR cable and ct_start refused it): a cable read this attach that is e-marked and EPR-rated (50 V, 5 A) answers the
-  charger itself, no spoof; no cable read and the spoof can work (charger on the plug, the Ra guard's own test): the default
-  EPR spoof; otherwise (a weaker cable read, or no spoof possible): no spoof, the EPR rows skip with the cable reason and the
-  AVS step runs on the SPR AVS APDO. The Settings spoof is ignored; Review's Spoof line says what is presented (Cable 50V 5A,
-  the EPR identity, Off); ct_start prints the rule and never refuses Offers (cdc32492 Review without the band, f3693009 the rule;
-  not verified on hardware). Validate: a PD charger with EPR AVS, an SPR-only charger, a fixed-only charger, a Spoof-Off setting
-  (EPR must still be entered); an EPR charger behind a real e-marked EPR cable (the cable read before START: EPR entered, no
-  spoof, Review "Cable 50V 5A"); the same behind a 3 A or unmarked cable (no spoof, EPR rows skip, SPR AVS runs); the charger
-  directly on the top plug with nothing read (the spoof, as before); the card names the run kind. Hardware 2026-11-21 (57e1a23f, 100 W
-  SPR charger, 5 A 50 V EPR cable, runs/hw-2026-11-21/offers-cable): Offers runs with no refusal, cable unread (Spoof Off) and
-  after a Charger-tab read (Review "Cable 50V 5A"); Review has no band, START hint shown; EPR/AVS paths still need an EPR
-  charger. Open: a Cable-tab read with the charger asleep does not count (`physical_cable()` takes only the attach scan);
-  the card says "cable not read" when Review said "Cable 50V 5A" (START's scan skipped at VBUS 0); ct_start prints
-  "(Light run)" for an Offers run. Inline rule (every level): with
-  the inline latch set START is refused ("load attached"), a latch during START's wait cancels it and puts Rd and identity
-  back; nothing transmits, presents Rd/Ra, turns on VCONN or enters EPR.
+- ~~**Charger test "Offers" depth**~~ removed (user decision 2026-11-21, k2/test-layer-reads): the Offers level (3b66351c, dc9a2eda,
+  f3693009) and its cable rule are gone; the Depth row is Light, Medium, Deep again. Light plus the PD pick lists the offers.
+  Wire value 3 stays reserved: an old card/journal that carries it decodes (card "Old", journal replans as Medium).
+  Inline rule (every level): with the inline latch set START is refused ("load attached"), a latch during START's wait
+  cancels it and puts Rd and identity back; nothing transmits, presents Rd/Ra, turns on VCONN or enters EPR.
 - **HID-cable loop: the loop probe** (user decision 2026-11-11). Topology: the K2 on a charger, a cable from its PD-bus
   port back into its own left (HID) port, so the HID port's VBUS follows the PD bus. The 5 V lock half is built (see
   "Not verified on hardware"); the probe is not started.
@@ -1217,6 +1198,16 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
 
 ## Not verified on hardware
 
+- **Test layer reads, held data, depth-scaled preset counts** (k2/test-layer-reads: 2d2e9203, bae38bca, 7da8be65, 4e745924, cb4f51b4;
+  host-tested only). Opening the Charger or Cable tab starts nothing; the offers come from a Light run with the PD pick, the cable
+  from the Cable Actions row. Held data (same charger, same cable): offers stay until a different renegotiation replaces them,
+  cable identity, SVIDs and modes until a different identity or SVID set is read; sleep and detach alone clear nothing and grey
+  nothing. Empty states "No offers read" / "Tests: Light, PD" and "Not read" / "Actions: Read e-marker". The Tests step preset
+  tails count runnable tests plus spec checks at the selected Depth (real plan with caps, nominal SPR list without); Custom
+  family rows keep their own ON/OFF/PART counts. Check on hardware: the preset counts change with each Depth press; a fresh
+  boot with a charger shows both empty states and K2 sends nothing on tab open (no Rd/VCONN edge on the lines); Light + PD
+  fills the Charger tab; sleep and unplug keep both tabs' data; a different charger replaces the offers; inline, Read again
+  says "Inline: listens only" and sends nothing. .bss +136 B, text -1936 B vs 82792207 (like-for-like worktree builds); the preset counts alone: .bss +8 B, text +552 B.
 - **Charger-test levels** (k2/ct-level, built and host-tested only). Check on a PD charger with PPS (the Anker IQ4): a
   Light run (Review Level row, or `ct_start.py --level light`) keeps VBUS at 5 V for the whole run (`pd_trace.py dump`:
   no Request above 5 V, `vbus_fast` never above 5.5 V), the grid shows the listed PDOs/APDOs/EPR levels in green as advertised (the Pass look; no Request, no EPR entry, no Mi 6A hunt), legacy listings Noted (grey left bar), the card header reads "Light run"; a Deep run sweeps every PPS and AVS APDO; Medium has no sweep rows.
@@ -1436,8 +1427,8 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
 | Feature | Status | Hardware | Module | Risk |
 |---|---|---|---|---|
 | E-marker read (VCONN mode, sniff mode) | done | verified | `pd_emarker_plan`, `fusb302` | VCONN 5 V on CC |
-| Full cable identity read (k2/cable-full-id): after SOP' Discover Identity, Discover SVIDs and Discover Modes per SVID, and on an active cable the SOP'' identity, SVIDs and modes (best effort); decoded: active VDO 2 extras (U3 power, optical / retimer, hub hops, asym), TBT3 cable mode, DP cable capabilities, other SVIDs raw hex. RAM only (88 B), cleared on a new scan and on detach; shown as more Cable tab rows (scrolls), `k2_remote emarker` / web (GET_EMARKER parts 3 and 4). Not in the saved record, QR or JSON (a format change, left for a decision) | partial (c443b46f, c3496a89, 4b2fcfb6, b8b9ea95) | not verified on hardware (host tests with a fake FUSB302 only; needs a TBT3 / USB4 cable and an active cable) | `cable_full`, `emk_learn`, `fusb302`, `ui_connection_page`, `remote_proto` | VCONN 5 V on CC, as the e-marker read |
-| Automatic reads on opening a tab (k2/cable-full-id): the Cable tab runs the full cable read when it opens and when a new cable shows while open; the Charger tab reads the offers once per attach (Rd if no contract, Source_Capabilities, the EPR list by EPR_Get_Source_Cap in SPR mode: no EPR entry, no spoof, no request above 5 V, no D+/D-, no VDM). Held reads are not repeated, Refresh / Read e-marker force. Never inline (the latch): no read of any kind, the toast and the status say "Inline: listens only"; a latch mid-read aborts the offers read and restores the port. Refused while a charger test, trigger, stress or spec run owns the port. The cable read blocks, so a latch that sets mid-read is only seen after it. An empty port and a lone cable look the same passively, so both get one scan per key. The Charger offers read shows "Reading..." in the PD and EPR rows (a toast announces the start when caps are already held). RAM only | partial (4e47727f, f7917f25, 64891d11, e5ad3108, a96deea4, 798a85f9, def8c130, b4de0174) | not verified on hardware (host tests with a fake FUSB302 only) | `pd_offers`, `offers_read`, `ui_connection_page`, `fusb302` | Rd on a source's CC when no contract is held; VCONN 5 V on the cable read |
+| Full cable identity read (k2/cable-full-id): after SOP' Discover Identity, Discover SVIDs and Discover Modes per SVID, and on an active cable the SOP'' identity, SVIDs and modes (best effort); decoded: active VDO 2 extras (U3 power, optical / retimer, hub hops, asym), TBT3 cable mode, DP cable capabilities, other SVIDs raw hex. RAM only (88 B), runs only from the Cable Actions row (opening the tab reads nothing, k2/test-layer-reads) and stays until a different identity or SVID set is read (same cable), not cleared by sleep or detach; shown as more Cable tab rows (scrolls), `k2_remote emarker` / web (GET_EMARKER parts 3 and 4). Not in the saved record, QR or JSON (a format change, left for a decision) | partial (c443b46f, c3496a89, 4b2fcfb6, b8b9ea95) | not verified on hardware (host tests with a fake FUSB302 only; needs a TBT3 / USB4 cable and an active cable) | `cable_full`, `emk_learn`, `fusb302`, `ui_connection_page`, `remote_proto` | VCONN 5 V on CC, as the e-marker read |
+| ~~Automatic reads on opening a tab~~ (k2/cable-full-id) removed (k2/test-layer-reads, bae38bca): opening the Charger or Cable tab starts nothing; the offers come from a Light run with the PD pick (the test layer), the cable from the Cable Actions row. Held offers and cable data stay for the same charger and cable (7da8be65). The manual rows keep the inline rule: with the latch set nothing is sent (Read again says "Inline: listens only", the cable read only listens). RAM only | partial (4e47727f, f7917f25, 64891d11, e5ad3108, a96deea4, 798a85f9, def8c130, b4de0174, bae38bca) | not verified on hardware (host tests with a fake FUSB302 only) | `pd_offers`, `offers_read`, `ui_connection_page`, `fusb302` | Rd on a source's CC when no contract is held; VCONN 5 V on the cable read |
 | Apple cable 6-chunk reader | done | not verified | `pd_engine` | |
 | Record codec (`emrec`), JSON (`emjson`), names (`emname`) | done | verified | `emrec`, `emjson`, `emname` | |
 | Cable library, 140 entries (/emk files) | done | verified | `emlib`, `flash_map.hpp` | **FLASH** |

@@ -14,12 +14,17 @@ inline constexpr int kBandWordPx = 188;
 inline constexpr int kLinePx = 212;
 
 // ---- empty tabs: the band word, then the one line ------------------------------------------------------------------
+// Pages with nothing held yet say which test or action fills them: offers come from a Light or PD test, the cable from the
+// Cable Actions row (kReadEmarker is that row's label).
+inline constexpr const char *kOffersNone = "No offers read",   *kOffersNoneL = "Tests: Light, PD";
+inline constexpr const char *kReadEmarker = "Read e-marker";
+inline constexpr const char *kCableNone = "Not read",          *kCableNoneL = "Actions: Read e-marker";
 // Source tab
 inline constexpr const char *kLineInUse = "LINE IN USE",       *kLineInUseL = "VBUS live, no source PD";
 inline constexpr const char *kCrossed = "CC CROSSED",          *kCrossedL = "Flip one of the two cables";
 inline constexpr const char *kFlip = "FLIP A CABLE?",          *kFlipL = "Charger waits, no answer";
 inline constexpr const char *kAsleep = "SOURCE ASLEEP",        *kAsleepL = "Refresh or a test wakes it";
-inline constexpr const char *kWaiting = "CHARGER WAITING",     *kWaitingL = "Start a charger test";
+inline constexpr const char *kWaiting = "CHARGER WAITING",     *kWaitingL = kOffersNoneL;
 inline constexpr const char *kDualRole = "DUAL-ROLE PORT",     *kDualRoleL = "Toggles Rp: a phone alone?";
 inline constexpr const char *kNoCharger = "NO CHARGER",        *kNoChargerL = "Use either port";
 // Sink tab
@@ -34,12 +39,12 @@ inline constexpr const char *kCableInUseL = "A device may be in use", *kCableVia
 inline constexpr const char *kChipSilent = "CHIP, NO ANSWER",  *kChipSilentL = "Try with charger attached";
 inline constexpr const char *kNoChip = "NO CHIP FOUND",        *kNoChipL = "Plain cable, no e-marker";
 inline constexpr const char *kNoCable = "NO CABLE",            *kNoCableL = "Charger plugged in direct";
-inline constexpr const char *kNoCableRead = "NO CABLE READ",   *kNoCableReadL = "Plug a cable into a port";
+inline constexpr const char *kNoCableRead = "NO CABLE READ",   *kNoCableReadL = kCableNoneL;
 
-inline constexpr const char *kBandWords[] = {kLineInUse, kCrossed, kFlip, kAsleep, kWaiting, kDualRole, kNoCharger, kDevInUse,
+inline constexpr const char *kBandWords[] = {kOffersNone, kCableNone, kLineInUse, kCrossed, kFlip, kAsleep, kWaiting, kDualRole, kNoCharger, kDevInUse,
                                              kNoDevice, kCableNotRead, kChipSilent, kNoChip, kNoCable, kNoCableRead};
 static_assert(all_fit(kBandWords, 12, kBandWordPx), "a Who's attached band word is wider than the band");
-inline constexpr const char *kLines[] = {kLineInUseL, kCrossedL, kFlipL, kAsleepL, kWaitingL, kDualRoleL, kNoChargerL,
+inline constexpr const char *kLines[] = {kOffersNoneL, kCableNoneL, kLineInUseL, kCrossedL, kFlipL, kAsleepL, kWaitingL, kDualRoleL, kNoChargerL,
                                          kDevInUseL, kDualRoleSinkL, kNoDevDirectL, kNoDevViaL, kNoDevL, kCableInUseL, kCableViaL,
                                          kChipSilentL, kNoChipL, kNoCableL, kNoCableReadL};
 static_assert(all_fit(kLines, 8, kLinePx), "a Who's attached line is wider than 26 cells");

@@ -100,7 +100,7 @@ Faces (MINUS / PLUS flips, wraps)            OK opens the Bench     BACK returns
 ### See what a charger offers over PD
 
 1. Plug the charger in.
-2. Press OK on Home to open the Bench and open the **Charger** place: every offer (fixed, PPS, AVS, EPR) is listed.
+2. Press OK on Home to open the Bench and open the **Charger** place: it lists the offers of the last read (fixed, PPS, AVS, EPR). Opening it sends nothing, so before any read it says "No offers read" and "Tests: Light, PD": run **Test charger** with the **Light** depth and the **PD only** preset (nothing above 5 V is requested) and the offers appear. They stay for the same charger, through sleep and unplug, until a different offers set replaces them. **Read again** under Actions asks the charger once more.
 3. For a one-glance view with the contract next to the live numbers, flip to **Numbers** (PLUS twice from Home).
 
 ### Run the charger test and share the result
@@ -113,7 +113,7 @@ Faces (MINUS / PLUS flips, wraps)            OK opens the Bench     BACK returns
 ### Read a cable's e-marker
 
 1. Open the **Cable** place on the Bench (the chip in an e-marked cable tells its current and voltage rating).
-2. Plug the cable into the bottom port with **nothing else** connected. The tab reads the e-marker by itself when it opens (and when a new cable shows up while it is open); a read already held is not repeated. With no row selected, press OK to read it again. With a device inline the tab does not read by itself and says "Inline: listens only".
+2. Plug the cable into the bottom port with **nothing else** connected. Opening the tab reads nothing: it shows the last cable read ("Not read" and "Actions: Read e-marker" before the first). Press OK with no row selected, or **Read e-marker** under Actions, to read it. The record stays until a different cable identity is read, through sleep and unplug. With a device inline the K2 never transmits: the cable read only listens (no VCONN).
 3. Move down to **Save cable** and press OK to keep it. Saved cables are listed under **Saved cables** and exported as JSON on the USB drive.
 
 ### Ask a charger for a voltage
@@ -271,7 +271,7 @@ The list of seven places. Each row shows a one-line status. MINUS / PLUS select 
 
 ### The Charger, Cable and Device places
 
-Three places share one page, the same one that [Who's attached](#whos-attached) describes: Charger shows the **Source** record, Cable the **Cable** record (the e-marker) and Device the **Sink** record. MINUS / PLUS move the focus down the action rows under the record; OK on a focused row opens it; with no row focused, OK runs the place's own read: **Read again** (Charger), **Read e-marker** (Cable) or **Ask device** (Device). Long OK shares the Source caps or the Cable record as a QR code. BACK returns to the Bench with the place still selected. A row that is not ready (a live sink inline, no cable read yet) still opens and says why. Opening the Cable place reads the cable, and opening the Charger place reads the charger's offers (Source_Capabilities, plus the EPR list when it offers EPR), once per attach; Refresh reads again. The offers read takes Rd only if no contract is held, never asks for more than 5 V, and gives the port back as it found it. With a device inline neither read starts, and the screen says "Inline: listens only".
+Three places share one page, the same one that [Who's attached](#whos-attached) describes: Charger shows the **Source** record, Cable the **Cable** record (the e-marker) and Device the **Sink** record. MINUS / PLUS move the focus down the action rows under the record; OK on a focused row opens it; with no row focused, OK runs the place's own read: **Read again** (Charger), **Read e-marker** (Cable) or **Ask device** (Device). Long OK shares the Source caps or the Cable record as a QR code. BACK returns to the Bench with the place still selected. A row that is not ready (a live sink inline, no cable read yet) still opens and says why. Opening a place sends nothing. Charger shows the offers of the last read, and "No offers read" with "Tests: Light, PD" before there is one: a Light charger test with the PD pick lists the offers at 5 V. Cable shows "Not read" with "Actions: Read e-marker" until you read it. **Read again** (Charger) and **Read e-marker** are your own reads; with a device inline nothing is sent (Read again says "Inline: listens only", the cable read only listens). Held data stays for the same charger and the same cable: sleep or unplug does not clear it, and a different renegotiation (offers) or a different identity or SVID set (cable) replaces it.
 
 ### Charger test
 
@@ -283,20 +283,22 @@ Steps of the wizard:
 
 1. **Tests (step 1 of 3)**: pick what to run. OK picks a preset and moves to Spoof cable; the footer shows "Picked: ...".
 
-   | Preset | Units | What |
-   | :--- | :--- | :--- |
-   | All tests | 15 | Everything, including QC Class B 20 V |
-   | PD only | 2 | PD fixed and PPS, plus the Xiaomi 6 A step |
-   | Legacy only | 13 | D+/D- protocols: vendor modes, QC, UFCS |
-   | Vendor modes | 7 | Huawei, Samsung, OPPO, vivo |
-   | Custom... | | Pick families and individual tests |
-   | Last results | | Appears once a run exists; opens the last Results |
+   | Preset | What |
+   | :--- | :--- |
+   | All tests | Everything, including QC Class B 20 V |
+   | PD only | PD fixed, PPS and AVS levels, plus the Xiaomi 6 A step |
+   | Legacy only | D+/D- protocols: vendor modes, QC, UFCS |
+   | Vendor modes | Huawei, Samsung, OPPO, vivo |
+   | Custom... | Pick families and individual tests |
+   | Last results | Appears once a run exists; opens the last Results |
+
+   The number at the right of a preset is how many tests that run would make at the **Depth** in force (Light, Medium or Deep; OK on the Depth row cycles it), so PD only grows with the depth (for a typical charger 1 at Light, 17 at Medium, 48 at Deep). It follows the charger's real offers when the K2 has read them, and a typical SPR charger's list when it has not. It counts tests and spec checks, the same way on every row.
 
    **Custom**: six families (Huawei/Honor, Samsung, OPPO/OnePlus/vivo, Xiaomi/Redmi, USB PD, QC/UFCS) with counts as ON, OFF or PART. Short OK toggles a family, long OK opens its group (inside, short OK sets one test, long OK toggles the whole group). The Xiaomi family cannot be toggled on its own because it rides on PD. The last row is Next.
 
 2. **Spoof cable (2 of 3)**: the cable identity the K2 presents to the charger (it answers the charger's cable query). The list is the shared one: **Off (real cable)** (no identity), built-ins (for example EPR 50 V 5 A, Xiaomi 6A, OnePlus 100W) and your saved cables. **Xiaomi 6A** is a Xiaomi-branded 20 V 5 A cable without EPR (the K2 still tries EPR entry with it; an EPR charger that checks the cable is expected to refuse, so its EPR levels usually end skipped); it also answers the charger's Xiaomi cable check, which some Xiaomi-family chargers ask before they offer their 6 A mode. The dialog opens on **EPR 50 V 5 A**: with nothing picked yet, the K2 presents that cable, so a charger that advertises EPR gets its EPR levels and EPR AVS tested instead of being skipped for an unread cable. OK picks the row under the cursor and goes to Review; the choice is remembered, **Off (real cable)** included (an explicit Off stays Off). The default itself is never written to flash, and a boot that has nothing remembered arms nothing. It applies to the PD units only.
 
-3. **Review (3 of 3)**: a short summary (Tests, Depth, Spoof, Peak, Power; the Read offers depth shows the cable it will use: the one read this attach if it is rated 50 V 5 A, else the EPR spoof when the charger is on the top plug, else none) and START. START is the only control; the depth is picked on the Tests step (see [Test levels](#test-levels)). START has the focus and reads "other port must be empty": its own arm and CONFIRM are the acknowledgement, so make sure the other port is empty before the first press.
+3. **Review (3 of 3)**: a short summary (Tests, Depth, Spoof, Peak, Power) and START. START is the only control; the depth is picked on the Tests step (see [Test levels](#test-levels)). START has the focus and reads "other port must be empty": its own arm and CONFIRM are the acknowledgement, so make sure the other port is empty before the first press.
    - The level of each new run starts at Settings > Test level.
    - The first OK on START opens a confirmation window: "No load! OK twice within 5 s".
    - The second OK starts the test. BACK, a changed setting, or 5 s with no OK closes the window.
@@ -605,7 +607,7 @@ Radio rows: **Auto** (follows gravity), then **Manual** 0, 90, 180, 270 degrees.
 - **Screenshot**: ON allows remote and browser screen capture. Remembered. Turn it off if you do not want the screen readable over USB.
 - **Smoothing**: Off ("Raw readings"), Low ("Light calming"), Medium ("Balanced"), High ("Steady, slower"). OK cycles. Applied at once, remembered. It filters the display readings only, not the recorded data.
 - **Wake sleeping port**: OFF by default, and then the idle K2 presents no Rd and stays passive. ON lets an idle K2 hold its own Rd on one line at a time (2 s each) when that line reads like a sleeping source (about 3.0 to 3.3 V open, for example a splitter port with nothing plugged in), so the source can wake and the PD list appears without any pin. With it ON every waiting charger also sees the K2 as a sink for a moment, so turn it off again when you do not need it. It never acts during a charger test or a cable/source tool, and turning it off lets go of the line at once. Remembered.
-- **Test level**: the level each new charger test starts at: Light ("Charger test: offers at 5V"), Medium ("Charger test: levels, no sweeps", the default) or Deep ("Charger test: + PPS, AVS sweeps"). OK cycles Light, Medium, Deep. Remembered. The Review step's Level bar changes the level too; that choice holds for every run until the next change or a reboot, which starts again from this setting. See [Test levels](#test-levels).
+- **Test level**: the level each new charger test starts at: Light ("Charger test: offers at 5V"), Medium ("Charger test: levels, no sweeps", the default) or Deep ("Charger test: + PPS, AVS sweeps"). OK cycles Light, Medium, Deep. Remembered. The Depth row on the Tests step changes it too; that choice holds for every run until the next change or a reboot, which starts again from this setting. See [Test levels](#test-levels).
 
 ---
 

@@ -532,22 +532,16 @@ the pick that was made.
    Back returns to the same Results row. The other units keep the whole-unit step list and the `N steps, M failed` footer.
 2. **Spoof cable** (stage 2). The shared cable-identity list (below); OK on a row picks it and goes to Review.
 3. **Review** (stage 4). The kv rows `Tests`, `Depth`, `Spoof` (the short identity name plus its
-   rating, plain `Off` when the pick is Off — a START with Off disarms whatever is armed; a Read-offers run shows what it will
-   present, see below), `Peak` and `Power`, then the START ticket (the other-port reminder is its hint). The first OK on
+   rating, plain `Off` when the pick is Off — a START with Off disarms whatever is armed), `Peak` and `Power`, then the START ticket (the other-port reminder is its hint). The first OK on
    START opens the confirm window, the second starts.
 
    **Other-port reminder (2026-11-21, the user's decision).** The START ticket's hint `other port must be empty` is the
    only reminder (the amber band `OTHER PORT FREE`, its two lines and the Caution footer `Check the other port` of 2026-11-15
    are gone; the K2 cannot detect a device there). START's own arm + CONFIRM is the acknowledgement: one confirm per run.
 
-   **Read offers: the cable rule (2026-11-21).** Whatever the picked identity, a Read-offers run decides by the connection:
-   a cable read this attach with a valid, observed e-marker rated 50 V / 5 A answers the charger itself (no spoof; Spoof line
-   `Cable 50V 5A`); with no cable read and the spoof able to work (the Ra guard's own test: the charger on the top plug)
-   it presents the default EPR identity; otherwise (a weaker cable read, or the spoof impossible) it presents nothing, the
-   EPR rows skip with the cable reason and the AVS step runs on the SPR AVS APDO. The Ra guard is not asked for the last
-   two, so Offers never reaches the Refuse stage; `ct_start.py --level offers` prints the rule and ignores `--cable`.
-   Every other level presents the pick and meets the guard as before. The START sample is taken before the choice, so the choice
-   and the guard judge the same window.
+   **No Offers depth (2026-11-21, the user's decision).** The Depth row cycles Light, Medium, Deep. A "read offers" run was
+   tried (a fourth depth, 3b66351c) and removed: Light plus the PD pick lists the offers. Wire value 3 stays reserved; an
+   old journal or card that carries it still decodes (a card reads "Old", a journal replans as Medium), nothing plans it.
 
    **Inline latch policy (2026-11-15, the user's decision).** The Link's inline latch keeps only 100 %-certain evidence
    ("unblock steps blocked by the phantom 'other device' tests; I'd only keep them when we are 100 %, absolutely

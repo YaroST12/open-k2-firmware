@@ -408,6 +408,10 @@ States of a row:
 Repaints: a row repaints when its signature changes (marker, state, colours, texts, focus). A focus move
 repaints two rows. A change of the open height re-lays the rows below it.
 
+The Tests step's preset tails count what the run would make at the selected Depth (`ct::planned_tests`: runnable tests plus spec checks;
+the real plan with caps, `ct::nominal_caps()` without), cached by input key. The Charger and Cable tabs keep their last read over sleep
+and detach (same charger, same cable) and, empty, say `No offers read` / `Tests: Light, PD` and `Not read` / `Actions: Read e-marker`.
+
 Seen in: `b_ct_algorithms.png` (radio, count tail, note, chevron), `b_ct_cable.png` (second column),
 `b_ct_steps.png` (verdict marker, volt tail, thumb), `ra_guard_refuse.png` (choices, no marker).
 
@@ -612,8 +616,7 @@ them should move them into the kit first.
 - A hazard that does not block rides in the cell as the hint line.
 - **Review reminder (charger test, 2026-11-21, the user's decision).** Review step 3/3 has no alert band: the ActionCell hint `other port must be empty`
   under START is the only reminder (the K2 cannot see a device there; START's arm + CONFIRM is the acknowledgement). The five kv rows
-  (Tests, Depth, Spoof, Peak, Power) lay up under the rule at y154 above the 64 px START ticket. A Read-offers run's Spoof row says what
-  it presents (`Cable 50V 5A`, the EPR identity, `Off`). `test_ui_no_truncation` covers it in four rotations; renders
+  (Tests, Depth, Spoof, Peak, Power) lay up under the rule at y154 above the 64 px START ticket. `test_ui_no_truncation` covers it in four rotations; renders
   `mock_ct_review*`, `mock_ct_confirm*`.
 
 **Alert with choices.** `ra_guard_refuse.png`

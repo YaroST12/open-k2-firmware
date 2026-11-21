@@ -278,7 +278,7 @@ TEST_SWEEP_BIT = 1 << 31   # draft_selected bit 31 = the PPS deep sweep on (remo
 TEST_AVS_SWEEP_BIT = 1 << 30   # draft_selected bit 30 = the AVS deep sweep on (remote_proto.hpp)
 TEST_LEVEL_SHIFT = 28          # draft_selected bits 28..29 = the level of the next run (charger_test::Level)
 TEST_LEVEL_MASK = 3 << TEST_LEVEL_SHIFT
-TEST_LEVELS = ["medium", "light", "deep", "offers"]   # charger_test::Level order: Medium 0 (the default), Light 1, Deep 2, Offers 3 (the Read-offers preset)
+TEST_LEVELS = ["medium", "light", "deep"]   # charger_test::Level order: Medium 0 (the default), Light 1, Deep 2
 TEST_STATES = ["idle", "baseline", "requesting", "holding", "releasing", "done", "stopped", "unsafe", "detach charger", "initializing...",
                "svooc ceiling", "pd spec"]
 TEST_RESULTS = ["pending", "running", "pass", "fail", "skip"]
@@ -1913,9 +1913,9 @@ def charger_sweep(link, on):
 
 
 def charger_level(link, level):
-    """Set the level of the next charger-test run ("light", "medium", "deep" or "offers", or its index). Light asks for nothing
-    above 5 V (it records what is advertised), Medium is the default run, Deep is Medium plus the PPS and AVS deep sweeps (it turns
-    both sweep flags on; Light and Medium turn them off), Offers is PD only: the lists plus one AVS step at its minimum. Refused while a run is in progress. Returns the level name."""
+    """Set the level of the next charger-test run ("light", "medium" or "deep", or its index). Light asks for nothing above
+    5 V (it records what is advertised), Medium is the default run, Deep is Medium plus the PPS and AVS deep sweeps (it turns
+    both sweep flags on; Light and Medium turn them off). Refused while a run is in progress. Returns the level name."""
     idx = TEST_LEVELS.index(level) if isinstance(level, str) else int(level)
     p = link.call(CMD_CHARGER_LEVEL, bytes([idx])).payload
     _need(p, 1, "charger level")
@@ -5805,7 +5805,7 @@ def build_parser():
     cc.add_argument("cable", nargs="?", help="off | builtin | builtin:<id 1, 2, 4 | epr-50v | xiaomi-6a | oneplus> | "
                     "saved:<library id>; Ra mode + spoof for the run unless off")
     cl = sub.add_parser("charger-level", help="level of the NEXT charger run: light = nothing above 5 V (what is advertised), "
-                        "medium = the default run, deep = medium + the PPS and AVS deep sweeps, offers = PD offers + one AVS step")
+                        "medium = the default run, deep = medium + the PPS and AVS deep sweeps")
     cl.add_argument("level", choices=TEST_LEVELS)
     lt = sub.add_parser("charger-legacy-tune", help="Legacy timing knobs of the charger test, RAM only (the constants again at boot): no argument "
                         "lists them, a knob reads it, a knob and a value in ms sets it (quiet_ms 0: start the first handshake at once)")

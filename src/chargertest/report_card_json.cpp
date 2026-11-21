@@ -33,7 +33,7 @@ std::size_t render_json(const Card& c, std::span<char> out) {
     if (c.format >= 8 && c.rebalanced)
         t.put("\"rebalanced\":%u,", unsigned(c.rebalanced));
     // The run's level (v8 spare byte): only a Light or Deep run names it, so every older card reads as Medium.
-    if (c.level != ct::Level::Medium) t.put("\"level\":\"%s\",", c.level == ct::Level::Light ? "light" : c.level == ct::Level::Deep ? "deep" : "offers");
+    if (c.level != ct::Level::Medium) t.put("\"level\":\"%s\",", c.level == ct::Level::Light ? "light" : c.level == ct::Level::Deep ? "deep" : "old");
     t.put("\"fw\":\"%08x\",\"state\":\"%s\",\"reason\":\"%s\",\"pdos\":%u,\"spec_rev\":%u,", unsigned(c.fw), ct::name(c.state),
           ct::name(c.reason), unsigned(c.num_pdos), unsigned(c.spec_rev));
     t.put("\"handover\":\"%s\",\"handover_ms\":%u,\"groups\":{", kHandover[unsigned(c.handover)], unsigned(c.handover_ds) * 100u);

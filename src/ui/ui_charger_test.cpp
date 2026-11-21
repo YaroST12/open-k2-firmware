@@ -90,23 +90,23 @@ constexpr const char* kPresetNotes[kPresets] = {"Everything, QC Class B 20V", "P
                                                 "D+/D-: vendor modes, QC, UFCS", "Huawei, Samsung, OPPO, vivo"};
 static_assert(all_fit(kPresetNotes, kLabelAdv, kit::kNoteMaxPx), "a preset note is wider than the row note");
 static_assert(all_fit(kPresetNames, kSmallAdvPx, 150), "a preset name is wider than its row");
+// The count is a byte (ev8 clamps at 255): its three digits fit beside the widest name.
+static_assert(all_fit(kPresetNames, kSmallAdvPx, kit::kTailX - kit::kTextX - 3 * int(kSmallAdvPx) - 4), "a preset count would touch its name");
 // The planned re-attach (rdintent::plan_reattach) is announced on the footer of the START confirmation, never as a warning or a
 // stage of its own (27 characters at most): the second press goes straight on.
 constexpr const char* kReattachConfirm = "Press again, K2 blinks once";
 static_assert(fits_px(kSmallAdvPx, kReattachConfirm, 216), "the re-attach confirmation is wider than the footer");
 // Depth row's note on Tests (charger_test::Level order: Medium, Light, Deep).
 // A build with the PD spec stage (K2_PDSPEC) says so on Deep; the default image has no such stage and keeps the old words.
-constexpr const char *kLevelItems[ct::kRunLevelCount] = {"Light", "Medium", "Deep", "Offers"};
-constexpr int level_segment(ct::Level l) { return l == ct::Level::Light ? 0 : l == ct::Level::Medium ? 1 : l == ct::Level::Deep ? 2 : 3; }
-static_assert(level_segment(ct::next_depth(ct::Level::Light)) == 1 && level_segment(ct::next_depth(ct::Level::Medium)) == 2 &&
-              level_segment(ct::next_depth(ct::Level::Deep)) == 3 && level_segment(ct::next_depth(ct::Level::Offers)) == 0,
-              "OK steps the level to the right and wraps");
+constexpr const char *kLevelItems[ct::kLevelCount] = {"Light", "Medium", "Deep"};
+constexpr int level_segment(ct::Level l) { return l == ct::Level::Light ? 0 : l == ct::Level::Medium ? 1 : 2; }
+static_assert(level_segment(ct::next_level(ct::Level::Light)) == 1 && level_segment(ct::next_level(ct::Level::Medium)) == 2 &&
+              level_segment(ct::next_level(ct::Level::Deep)) == 0, "OK steps the level to the right and wraps");
 static_assert(all_fit(kLevelItems, kSmallAdvPx, 18 * kSmallAdvPx), "a Level word is wider than its value cell");
-constexpr const char *kLevelNotes[ct::kRunLevelCount] = {"Tests each advertised voltage", "Checks what charger offers",
-                                                          specsec::kBuilt ? "Sweeps, accuracy & PD spec" : "Sweeps & voltage accuracy",
-                                                          "Lists offers, one AVS request"};
+constexpr const char *kLevelNotes[ct::kLevelCount] = {"Tests each advertised voltage", "Checks what charger offers",
+                                                       specsec::kBuilt ? "Sweeps, accuracy & PD spec" : "Sweeps & voltage accuracy"};
 static_assert(all_fit(kLevelNotes, kLabelAdv, kit::kNoteMaxPx), "a level note is wider than the row note");
-const char *level_note(ct::Level l) { return kLevelNotes[unsigned(l) < ct::kRunLevelCount ? unsigned(l) : 0]; }
+const char *level_note(ct::Level l) { return kLevelNotes[unsigned(l) < ct::kLevelCount ? unsigned(l) : 0]; }
 // A row whose engine times its own pulses stops the screen for the length of the handshake (the engine window the LCD idle hook
 // does not serve, Runner::paint_blocked; Engine::blocks_paint names the protocols). One Info footer line says why, painted before
 // the engine starts and left alone until the window ends. Protocols with no such window say nothing: the QC2 / QC3 / QC3+ handshake
@@ -1240,18 +1240,14 @@ void ChargerTestSession::guard_sample(uint32_t now) {
     guard_t_ = now;
     guard_.add(ctx_.analog ? ctx_.analog->cc1_mv : -1, ctx_.analog ? ctx_.analog->cc2_mv : -1);
 }
-raguard::Reading ChargerTestSession::guard_reading() const {
+raguard::Topology ChargerTestSession::guard_topology(uint32_t now, bool log) {
+    guard_sample(now);   // the freshest reading counts too: a dialog answered within one sample period still has two
     raguard::Reading r;
     r.cc1_mv = guard_.cc1(); r.cc2_mv = guard_.cc2();
     r.vbus_mv = ctx_.pm_online ? ctx_.vbus_fast_mv : -1;
     // Passive = nothing of ours on the lines: no run Rd, no Ra mode, no boot Rd, no sink inline. Anything else
     // changes what the lines read and the guard cannot judge.
     r.passive = !fusb302::rd_for_run_on() && !fusb302::ra_active() && !fusb302::self_powered() && !ctx_.inline_mode;
-    return r;
-}
-raguard::Topology ChargerTestSession::guard_topology(uint32_t now, bool log, bool sample) {
-    if (sample) guard_sample(now);   // the freshest reading counts too: a dialog answered within one sample period still has two
-    const auto r = guard_reading();
     const auto t = raguard::classify(r);
     if (log) K2LOG("[GUARD] cc1 %d cc2 %d vbus %d mV passive %d -> %s\n", int(r.cc1_mv), int(r.cc2_mv), int(r.vbus_mv), int(r.passive), raguard::name(t));
     return t;
@@ -1295,16 +1291,6 @@ int ChargerTestPage::range_spec_n() const {
 }
 bool ChargerTestSession::confirm_live() const {
     return confirming_ && static_cast<int32_t>(ctx_.now - confirm_until_) < 0 && proposal(input(ctx_.now)) == confirm_proposal_;
-}
-// The identity START presents (ctcable::run_choice). A Read-offers run lets the cable read answer, else the EPR spoof where the guard
-// allows it (the charger on the plug), else nothing: the EPR rows then skip as cable-limited and the SPR AVS step still runs.
-ctcable::Choice ChargerTestSession::run_choice() const {
-    return ctcable::run_choice(ctx_.cables.selected(), options_.level == ct::Level::Offers, physical_cable().observed,
-                               raguard::spoof_allowed(raguard::classify(guard_reading())));
-}
-bool ChargerTestSession::run_uses_cable() const {
-    const auto cable = physical_cable();
-    return options_.level == ct::Level::Offers && ctcable::epr_rated(cable.observed, cable.max_mv, cable.max_ma);
 }
 // The remote / test seam: select an identity in the shared list. A clone that is not in the library is refused.
 bool ChargerTestSession::set_cable_choice(ctcable::Choice c) {
@@ -1408,7 +1394,7 @@ void ChargerTestSession::open_confirmation() {
         return;
     }
     // The same rule begin_run applies to the identity the START arms: the footer says so when the K2 is going to blink off.
-    const auto sel = run_choice();
+    const auto sel = ctx_.cables.selected();
     ctcable::Facts fx;
     // The footer promises the blink only when the facts are in hand: the source's claim (Source_Caps_Ext) was read in this attach.
     // The preview touches nothing, so a claim it does not have is not asked for here; the run asks it in its arm (claim_step).
@@ -1423,16 +1409,12 @@ void ChargerTestSession::open_confirmation() {
 void ChargerTestSession::confirmed_start() {
     const bool skip_spoof = skip_spoof_run_;   // "Start, skip spoof" on the Refuse stage: this run without the identity
     skip_spoof_run_ = false;                  // the stored pick stays; only this run carries no identity
-    // A Read-offers run chooses by the guard's own verdict, so the START sample is taken before it chooses and judges the same window:
-    // a choice made without it could turn into a refusal on it.
-    const bool offers = options_.level == ct::Level::Offers && !skip_spoof;
-    if (offers) guard_sample(ctx_.now);
-    const auto choice = skip_spoof ? ctcable::Choice{} : run_choice();
+    const auto choice = skip_spoof ? ctcable::Choice{} : ctx_.cables.selected();
     const bool bypass = guard_bypass_;   // "Start anyway" on the Cable-connected warning: the identity runs, the reading is recorded
     guard_bypass_ = false;
     run_guard_ = 0;
     if (choice.kind != ctcable::Kind::Off) {
-        topology_ = guard_topology(ctx_.now, true, !offers);
+        topology_ = guard_topology(ctx_.now);
         const bool refused = !raguard::spoof_allowed(topology_);
         if (refused && !bypass) { set_stage(Stage::Refuse); return; }
         run_guard_ = static_cast<uint8_t>((1 + static_cast<uint8_t>(topology_)) | (refused ? 0x80 : 0));
@@ -1541,9 +1523,7 @@ bool ChargerTestSession::set_units(std::span<const uint8_t> units) {
     return true;
 }
 void ChargerTestSession::set_level(ct::Level l) {
-    const uint32_t picked = options_.selected;
     options_ = ct::with_level(options_, l);
-    options_.selected = picked;   // Offers plans PD only (the Runner masks it); the pick stays for the way back round the Depth cycle
     invalidate_confirmation();   // the preview's step count follows the level
 }
 void ChargerTestSession::enter() {
@@ -1809,6 +1789,28 @@ uint32_t ChargerTestSession::wait_total_ms() {
 
 void ChargerTestSession::update_summary(const ct::Input& in) {
     if (stage_ <= Stage::Review || stage_ == Stage::Custom) summary_ = ct::Runner::preview(fusb302::caps(), options_, in);
+    if (stage_ == Stage::Algorithms) update_preset_counts(in);
+}
+
+// Each preset row counts the tests that preset would make at the chosen depth (ct::planned_tests: the real list, else the nominal
+// one). The previews run only when what they plan from changed: the depth and its switches, the list, the cable, the monitor cap.
+void ChargerTestSession::update_preset_counts(const ct::Input& in) {
+    static_assert(std::tuple_size_v<decltype(preset_n_)> == kPresets);
+    const auto& caps = fusb302::caps();
+    uint32_t key = 2166136261u;
+    const auto mix = [&key](uint32_t v) { key = (key ^ v) * 16777619u; };
+    mix(uint32_t(options_.level)); mix(options_.pps_sweep); mix(options_.avs_sweep); mix(options_.spec);
+    mix(in.cap_mv); mix(in.cable_mv); mix(in.cable_ma); mix(in.cable_observed); mix(in.pd.xiaomi_svid);
+    mix(in.spoof_on); mix(in.spoof_mv); mix(in.spoof_ma);
+    mix(caps.valid); mix(caps.num_pdos);
+    for (size_t n = 0; caps.valid && n < std::min<size_t>(caps.num_pdos, caps.pdos.size()); ++n) mix(caps.pdos[n].raw);
+    key |= 1;   // 0 is "not computed"
+    if (key == preset_key_) return;
+    preset_key_ = key;
+    for (int p = 0; p < kPresets; ++p) {
+        ct::Options o = options_; o.selected = kPresetMasks[p];
+        preset_n_[p] = ev8(ct::planned_tests(caps, o, in));
+    }
 }
 
 // The session half of the remote view; the page adds rows and the footer's words below. Every field is a read of RAM that
@@ -1846,7 +1848,7 @@ ChargerTestSession::View ChargerTestSession::view() {
     }
     v.pps_points = sweep_points();
     v.avs_points = avs_sweep_points();
-    v.armed_is_pick = ctx_.cables.armed() && ctx_.cables.armed_choice() == run_choice();
+    v.armed_is_pick = ctx_.cables.armed() && ctx_.cables.armed_choice() == ctx_.cables.selected();
     v.cable_armed = ctx_.cables.armed();
     v.topology = static_cast<uint8_t>(topology_);
     v.run_guard = run_guard_;
@@ -2362,7 +2364,7 @@ void ChargerTestPage::list_row(int index, bool focused, kit::RowSpec &out) {
             out.marker = kit::Marker::Radio;
             out.state = p + 1 == preset_row_of(s_.options_.selected);
             out.text = kPresetNames[p];
-            row_tail_.put_u32(entries(kPresetMasks[p]));
+            row_tail_.put_u32(s_.preset_n_[p]);
             if (focused) out.note = kPresetNotes[p];
         } else if (index == kCustomRow) {
             const bool custom = preset_row_of(s_.options_.selected) == 0;
@@ -2762,9 +2764,8 @@ void ChargerTestPage::paint_review() {
     if (!kv(1, "Depth", kLevelItems[level_segment(s_.options_.level)], kText)) return;
 
     buf.clear();
-    const auto sel = s_.run_choice();   // what the run presents: a Read-offers run follows the cable read and the guard
-    if (s_.run_uses_cable()) buf.put("Cable 50V 5A");   // the read cable answers the charger itself: no spoof
-    else if (sel.kind == ctcable::Kind::Off) buf.put("Off");   // plain: a START with Off disarms whatever is armed
+    const auto sel = ctx_.cables.selected();
+    if (sel.kind == ctcable::Kind::Off) buf.put("Off");   // plain: a START with Off disarms whatever is armed
     else {
         row_ = ctx_.cables.row(ctx_.cables.index_of(sel), CableIdentityList::View::CableStep);
         buf.put(row_.text.view());
@@ -3687,7 +3688,7 @@ __attribute__((noinline)) void ChargerTestPage::ok_event() {
     switch (s_.stage_) {
     case Stage::Algorithms:   // Depth cycles; a preset picks and advances; "Custom..." opens the per-family list
         if (s_.selection_ == kDepthRow) {
-            s_.set_level(ct::next_depth(s_.options_.level));
+            s_.set_level(ct::next_level(s_.options_.level));
         } else if (s_.selection_ < kCustomRow) {
             s_.options_.selected = kPresetMasks[s_.selection_ - kPresetFirst];
             invalidate_confirmation();

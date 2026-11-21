@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
 // "Who's attached" on the real hardware: runs the pure plan of k2/pd/pd_survey.hpp. One Refresh on the Connection page starts it
-// (nothing active is ever sent before that, apart from the Charger tab's own offers read, core/offers_read.hpp); the main loop polls it and it hands each action to its sender:
+// (nothing active is ever sent before that); the main loop polls it and it hands each action to its sender:
 //   Caps   the Refresh's own Get_Source_Cap (core/rescan.cpp, already asked by the page): Got when a Source_Capabilities came back
 //   Wire   fusb302::survey_wire_start: Discover Identity / SVIDs / Modes, Get_Source_Cap_Extended, Get_Manufacturer_Info (the
 //          pd::Reread sequencer, survey order, 220 ms between messages)

@@ -125,8 +125,6 @@ struct UiContext {
             std::uint8_t sel K2_BSS_INIT(0);              // the Setup list's cursor
         } pdstress;
         std::array<uint8_t, bench::kPlaces> place_sel K2_BSS_ZERO;  // each place's last action: repeating a job is OK, OK, OK
-        uint32_t cable_auto_key K2_BSS_INIT(0);          // Connection > Cable: the attach + cable the automatic read last ran for
-        bool cable_auto_set K2_BSS_INIT(false);           // (re-entering the tab with that key held reads nothing again)
         struct Ripple {                                              // Meter > Ripple: persisted scope settings across face flips
             uint8_t timebase K2_BSS_INIT(0);                         // 0 = Auto, 1..7 = fixed kTimebases[timebase - 1]
             uint8_t scale K2_BSS_INIT(0);                            // 0 = Auto
@@ -370,8 +368,6 @@ public:
     // The identity the next START presents (Cmd::ChargerCable); false for a malformed choice or a clone not in the library.
     // The Cable step's cursor follows it. Nothing is armed until a START.
     bool set_cable_choice(ctcable::Choice c);
-    ctcable::Choice run_choice() const;   // the identity START presents (ctcable::run_choice): the pick; a Read-offers run decides by the cable read and the spoof guard
-    bool run_uses_cable() const;          // a Read-offers run with an EPR-rated cable read: that cable answers, no spoof (Review says "Cable 50V 5A")
     ctcable::Info cable_info() const;
     Stage stage() const { return stage_; }
     bool reattach_planned() const { return reattach_plan_; }
@@ -405,6 +401,7 @@ public:
     static uint32_t wait_total_ms();
     // The Review preview over the live reading; the page tick and view() share it (stages up to Review, and Custom).
     void update_summary(const charger_test::Input& in);
+    void update_preset_counts(const charger_test::Input& in);
 private:
     friend class ChargerTestPage;
     // [[gnu::noinline]] on the big one-call-site helpers: -Os inlines each into update() / on_event() / poll(), whose
@@ -431,8 +428,7 @@ private:
     [[gnu::noinline]] bool apply_cable(ctcable::Choice);   // arm the identity and turn the Ra mode on; false = refused (message set)
     void release_run();            // Rd, Ra mode and a dialog-armed spoof back to passive
     void guard_sample(uint32_t now);                 // one CC reading into the Ra guard's peak window
-    raguard::Reading guard_reading() const;          // the window's peaks plus VBUS and the passive flag, no sample taken
-    raguard::Topology guard_topology(uint32_t now, bool log = true, bool sample = true);  // what the lines say about the charger (cable / direct), judged now
+    raguard::Topology guard_topology(uint32_t now, bool log = true);  // what the lines say about the charger (cable / direct), judged now
     void fill_cable_names();            // the saved names of the rows the Cable list shows (never loaded while painting)
     void set_stage(Stage, int selection = 0);
     void message(const char*);
@@ -534,6 +530,9 @@ private:
     // lines and the remote knob (charger-sweep, Cmd 0x0F) still toggle each sweep on its own after that.
     charger_test::Options options_{};
     charger_test::Summary summary_;
+    // The Tests list's preset counts (planned_tests at the chosen depth), kept until the depth, the source list or the cable changes.
+    std::array<uint8_t, 4> preset_n_{};
+    uint32_t preset_key_ K2_BSS_INIT(0);
     uint32_t run_t0_ K2_BSS_INIT(0);                  // when the run entered Running (the m:ss on screen)
     StrBuf<32> message_;
     int selection_ K2_BSS_INIT(0), family_ K2_BSS_INIT(0), result_family_ = -1, detail_index_ K2_BSS_INIT(0), detail_row_ K2_BSS_INIT(0);
@@ -964,12 +963,10 @@ private:
     void set_op(const char *text, uint32_t now_ms, uint32_t ms = kToastDefaultMs);
     void share_caps(uint32_t now_ms);
     void share_cable(uint32_t now_ms);
-    void read_cable(uint32_t now_ms);      // the cable read of Read e-marker: also what opening the Cable tab runs (auto_reads)
-    void auto_reads(uint32_t now_ms);      // opening a tab reads its data once per attach: Cable (e-marker), Source (offers)
-    void note_refusal(const char *text, uint32_t now_ms);   // why the automatic read does not run: a toast once, the status text while it holds
+    void read_cable(uint32_t now_ms);      // the cable read of Read e-marker
     void paint_status(uint32_t now_ms);
     bool paint_body(const MatchResult &r, const pd::SourceCaps &caps, std::span<const uint32_t> sink, bool redraw);
-    [[gnu::noinline]] bool paint_body_locked(const void *tab_data, bool dim);
+    [[gnu::noinline]] bool paint_body_locked(const void *tab_data);
     [[gnu::noinline]] bool paint_no_pd_body(const MatchResult &r, bool redraw);
     [[gnu::noinline]] bool paint_no_pd_locked(const char *line, uint32_t rp_ma);
     // The no-PD gate (ROADMAP 2026-11-10, Row C): the Sink tab on any no-PD verdict with a device on the line, the Source tab
@@ -993,8 +990,6 @@ private:
     uint32_t thumb_sig_ = 0;               // scroll thumb's (first, total) as painted
     StrBuf<40> status_txt_;                // the bottom bar as last painted (tests read it; the page never does)
     bool em_read_pending_ = false;         // Read e-marker started a passive listen window from Actions
-    const char *refusal_ = nullptr;
-    bool reading_toast_ = false;             // the offers read's start was announced        // the automatic read's refusal reason last shown (a literal): shown again only when it changes
     bool id_asked_ = false;                // Identify started from this page: its progress shows in the status bar
     bool iq_asked_ = false;                // inline interrogation started from the Device place
     bool iq_have_ = false;                 // an inline interrogation was started during iq_session_

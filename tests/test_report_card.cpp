@@ -813,11 +813,11 @@ static void test_v8_level_roundtrip() {
     CHECK_EQ(d == c, 1);
     CHECK_EQ(rc::same_results(m, c), false);
     CHECK_EQ(rc::same_results(c, d), true);
-    c.level = ct::Level::Offers;   // the Read-offers run: byte 3, no format bump
+    c.level = ct::Level::Retired;   // a card of the retired level 3 (an older build) still decodes
     rc::encode_card(buf, c);
     CHECK_EQ(buf[4 + 197], 3);
     CHECK_EQ(rc::decode_card({buf.data() + 4, rc::kPayload}, d), 1);
-    CHECK_EQ(int(d.level), int(ct::Level::Offers));
+    CHECK_EQ(int(d.level), int(ct::Level::Retired));
     buf[4 + 33] = 7;   // a v7 card: no v8 block
     CHECK_EQ(rc::decode_card({buf.data() + 4, rc::kPayload}, d), 1);
     CHECK_EQ(int(d.level), int(ct::Level::Medium));

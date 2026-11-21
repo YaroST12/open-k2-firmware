@@ -123,7 +123,7 @@ var K2Proto = (function () {
     for (var i = 0; i < PROG_FLAGS.length; i++) if ((flags >> i) & 1) o.push(PROG_FLAGS[i]);
     return o.join(", ");
   }
-  var TEST_LEVELS = ["medium", "light", "deep", "offers"];   // charger_test::Level order: Medium 0 (the default), Light 1, Deep 2, Offers 3 (Read offers)
+  var TEST_LEVELS = ["medium", "light", "deep"];   // charger_test::Level order: Medium 0 (the default), Light 1, Deep 2
   var LATENCY = ["n/a", "<10 ns (~1 m)", "10-20 ns (~2 m)", "20-30 ns (~3 m)", "30-40 ns (~4 m)",
                  "40-50 ns (~5 m)", "50-60 ns (~6 m)", "60-70 ns (~7 m)", ">70 ns"];
   var TERMINATION = ["Passive (VCONN not required)", "Passive (VCONN required)",

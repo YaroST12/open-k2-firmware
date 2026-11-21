@@ -8,10 +8,9 @@
 // Passive: it only reads what the PD engine and the ADC already know. The topology word in the status bar
 // and the port-aware empty states come from raguard::classify over the CC levels the ADC already averages;
 // reading them never starts an active CC operation. Active work (Refresh, Read cable, Identify) happens only
-// from the pop-up, through Ui::run_action and its inline confirm. The one exception is opening a tab: the Cable
-// tab reads the cable and the Charger tab reads the offers once (auto_reads), never while a device is inline.
+// from the pop-up, through Ui::run_action and its inline confirm. Opening a tab starts nothing: the tests read the offers.
 #include "k2/core/log.hpp"
-#include "k2/core/offers_read.hpp"
+#include "k2/core/held.hpp"
 #include "k2/core/survey.hpp"
 #include "k2/pd/cable_full.hpp"
 #include "k2/pd/emk_variant.hpp"
@@ -76,7 +75,7 @@ const OfferBook &sync_book(const pd::Link &link) {
     was_fake = pd::is_fake();
     was_session = session;
     if (attached && link.waiting()) g_book.clear();   // the new source has not sent caps yet
-    else g_book.merge(offers::shown_caps());   // the live caps, else the offers read's snapshot (the port was given back)
+    else g_book.merge(held::shown_caps());   // the live caps, else the held offers (core/held)
     return g_book;
 }
 
@@ -111,7 +110,6 @@ void ConnectionPage::enter() {
     op_ = StrBuf<24>();
     op_until_ = 0;
     em_read_pending_ = false;
-    refusal_ = nullptr;
     id_asked_ = false;
     iq_asked_ = false;
     iq_armed_until_ = 0;
@@ -208,7 +206,7 @@ void ConnectionPage::invalidate() {
 }
 
 Strip ConnectionPage::labels() const {
-    const bool share = (tab_ == conn::Tab::Source && offers::shown_caps().valid) || (tab_ == conn::Tab::Cable && fusb302::emarker().valid);
+    const bool share = (tab_ == conn::Tab::Source && held::shown_caps().valid) || (tab_ == conn::Tab::Cable && held::cable_em().valid);
     const sl::Id back = (iq_asked_ && fusb302::interrogate_running()) ? sl::Stop : sl::Back;
     if (has_pages() && !act_page_) {
         return {{back, sl::Up, share ? sl::ActionsShare : sl::Actions, sl::Dn}};
@@ -321,15 +319,15 @@ void ConnectionPage::set_op(const char *text, uint32_t now_ms, uint32_t ms) {
 }
 
 void ConnectionPage::share_caps(uint32_t now_ms) {
-    const pd::SourceCaps &caps = offers::shown_caps();
+    const pd::SourceCaps &caps = held::shown_caps();
     if (!caps.valid) { set_op("No caps yet", now_ms); return; }
     const std::size_t len = qrshare::records::pdcaps(caps, ctx_.ui->share_buffer());
     ctx_.ui->open_share(qrshare::Type::PdCaps, qrshare::kSchemaPdCaps, "Source caps", len, now_ms);
 }
 
-// The live cable as a share record (no quirk table: that belongs to a saved clone).
+// The held cable as a share record (no quirk table: that belongs to a saved clone).
 void ConnectionPage::share_cable(uint32_t now_ms) {
-    const pd::Emarker &em = fusb302::emarker();
+    const pd::Emarker &em = held::cable_em();
     if (!em.valid || em.num_vdos < 5 || (em.spec_rev != 1 && em.spec_rev != 2)) { set_op("No cable read", now_ms); return; }
     const emrec::Record rec = emrec::make({em.raw_vdos.data(), 5}, em.spec_rev, "Live cable");
     const std::size_t len = qrshare::records::emarker(rec, "Live cable", nullptr, ctx_.ui->share_buffer());
@@ -344,8 +342,8 @@ void ConnectionPage::build_items() {
     // A device alone on the K2 (a dual-role phone): offer the active Identify there too (the driver presents Rd)
     a.alone = pd::identify_alone(a.inline_sink, ctx_.pm_online, ctx_.pm_online ? ctx_.vbus_fast_mv : -1,
                                  fusb302::caps_this_attach(), link.wait_kind());
-    a.caps_valid = offers::shown_caps().valid;
-    a.cable_valid = fusb302::emarker().valid;
+    a.caps_valid = held::shown_caps().valid;
+    a.cable_valid = held::cable_em().valid;
     // The no-PD gate (ROADMAP 2026-11-10, Row C): with the settled verdict "no PD" a device on the line
     // cannot be identified. The alone path (a dual-role phone) is PD-capable and stays offered.
     a.pd_none = verdict_ == pd::PdVerdict::None && (facts_.inline_sink || facts_.sink_seen) && !a.alone;
@@ -377,52 +375,6 @@ void ConnectionPage::read_cable(uint32_t now_ms) {
     } else {
         set_op("Failed to read", now_ms);
     }
-}
-
-// A refusal is a state, not an event: its reason stays in the status bar (under any action message) while it holds.
-// The status text is what tests read; the user sees the toast, shown once when the refusal begins (the tab body says it too).
-void ConnectionPage::note_refusal(const char *text, uint32_t now_ms) {
-    if (text && (!refusal_ || std::string_view(text) != refusal_)) ctx_.toast.show(FooterTone::Caution, text, now_ms, kToastDefaultMs);
-    refusal_ = text;
-}
-
-// Opening a tab reads what it shows, once: the Cable tab the e-marker, the Charger tab the offers (the main loop runs that read,
-// offers::poll; the page only keeps it wanted). Nothing here ever reaches a live line: with a device inline (the latch) no read
-// of any kind starts and the reason is shown instead. A read already held is not repeated; Read again / Read e-marker force.
-void ConnectionPage::auto_reads(uint32_t now_ms) {
-    const pd::Link &link = ctx_.ui->link();
-    const bool inl = link.inline_mode() || ctx_.inline_mode;
-    if (tab_ == conn::Tab::Source) {
-        offers::want(now_ms);
-        const pd::OrWhy w = offers::why();
-        // Only a reason that still holds: the refusal outlives the latch until the main loop's next pass.
-        note_refusal(w == pd::OrWhy::Inline && inl ? conn::kWhyInline : w == pd::OrWhy::Busy && ctx_.ui->ports_busy() ? conn::kWhyBusy : nullptr, now_ms);
-        // Rows that already hold caps show no loading state, so announce the read's start once.
-        if (offers::running() && !reading_toast_) ctx_.toast.show(FooterTone::Info, "Reading offers...", now_ms, kToastDefaultMs);
-        reading_toast_ = offers::running();
-        return;
-    }
-    reading_toast_ = false;
-    if (tab_ != conn::Tab::Cable) return;
-    // A charger straight on the top plug: no cable between to read. (A bare cable and an empty port look the same passively, no Rp
-    // on either line, so both get the one scan: VCONN on a free CC, nothing else.)
-    if (facts_.topo == raguard::Topology::DirectReceptacle) { note_refusal(nullptr, now_ms); return; }
-    const uint32_t key = conn::cable_auto_key(fusb302::cable_seq(), fusb302::session(), link.cable_stale());
-    const bool held = fusb302::emarker().valid && !link.cable_stale();
-    if (held) {
-        ctx_.keep.cable_auto_key = key;
-        ctx_.keep.cable_auto_set = true;
-        note_refusal(nullptr, now_ms);
-        return;
-    }
-    if (ctx_.keep.cable_auto_set && ctx_.keep.cable_auto_key == key) { note_refusal(nullptr, now_ms); return; }
-    if (inl) { note_refusal(conn::kWhyInline, now_ms); return; }
-    if (ctx_.ui->ports_busy()) { note_refusal(conn::kWhyBusy, now_ms); return; }
-    note_refusal(nullptr, now_ms);
-    if (ctx_.em_scanning || ctx_.em_listen_until != 0 || offers::running() || survey::running() || fusb302::interrogate_running()) return;   // later
-    ctx_.keep.cable_auto_key = key;   // before the read: it repaints this page, which must not start it again
-    ctx_.keep.cable_auto_set = true;
-    read_cable(now_ms);
 }
 
 void ConnectionPage::activate(const conn::Item &it, uint32_t now_ms) {
@@ -551,9 +503,10 @@ void ConnectionPage::sense(uint32_t now_ms) {
         guard_primed_ = true;
     }
     conn::sense_passive(facts_, ctx_, link, guard_);
-    // The offers read gave the port back (or is still on it): the charger is still there, so the tab shows what was read, not the
-    // empty "Charger waiting" band.
-    if (tab_ == conn::Tab::Source && !facts_.charger && !facts_.inline_sink && (offers::running() || offers::showing_held())) facts_.charger = true;
+    // The charger went quiet but its offers are held: the tab shows them, not the empty "Charger waiting" band.
+    if (tab_ == conn::Tab::Source && !facts_.charger && held::showing_held()) facts_.charger = true;
+    held::poll();   // the page may open before the main loop's pass: the held cable is the driver's up to this frame
+    if (held::cable_em().valid) facts_.cable = true;   // a read cable stays on its tab after it is unplugged
     // The one "PD present" verdict of this attach, cached for build_items / paint_body / the tests.
     verdict_ = link.pd_verdict();
     none_why_ = link.pd_none_why();
@@ -762,15 +715,6 @@ void range_row(Rows &R, const char *key, const pd::Pdo &p) {
 
 void put_sink_pdos(Rows &R, const char *key, std::span<const uint32_t> sink);
 
-// The EPR row sits with the offers when the source says it has EPR PDOs and the list is read or being read; the Details rows
-// then leave theirs out. The EPR positions (8 on) when the list has them, else what it lists.
-bool epr_in_offers(const pd::SourceCaps &caps) { return caps.epr && (!offers::epr_raw().empty() || offers::running()); }
-void epr_offer_row(Rows &R) {
-    const std::span<const uint32_t> e = offers::epr_raw();
-    if (e.empty()) R.add("EPR", kFaint).put("Reading...");
-    else put_sink_pdos(R, "EPR", e.size() > 7 ? e.subspan(7) : e);
-}
-
 // Only one tab builder runs per paint, but inlined all three their locals add up in paint_body()'s frame,
 // which already holds the Rows (stack budget, tools/stack_depth.py).
 [[gnu::noinline]] void source_rows(Rows &R, const TabData &d) {
@@ -798,16 +742,15 @@ void epr_offer_row(Rows &R) {
             if (p.type != pd::PdoType::Pps && p.type != pd::PdoType::Avs) continue;
             range_row(R, p.type == pd::PdoType::Pps ? "PPS" : "AVS", p);
         }
-        if (epr_in_offers(caps)) epr_offer_row(R);
         if (r.request_seen) put_request(R.add("Used", kOk), r, caps);
     } else if (!traffic && (r.typec_ma || r.typec_rp)) {
         // A Type-C Rp advertisement exists (the source is attached): show it with the measured VBUS
         // and the advertised current, a default-USB Rp included.
-        pdv.put(offers::running() ? "Reading..." : d.in_use ? "None, in use" : "None");
+        pdv.put(d.in_use ? "None, in use" : "None");
         StrBuf<28> &v = R.add("Type-C", kText);
         typec_row_text(d.vbus_mv, r.typec_ma, v);
     } else {
-        pdv.put(offers::running() ? "Reading..." : traffic ? "Active, no caps" : d.in_use ? "None, in use" : "No caps yet");
+        pdv.put(traffic ? "Active, no caps" : d.in_use ? "None, in use" : "No caps yet");
     }
     if (!r.caps_seen && legacy_row_protocol(d.fc)) {   // legacy fast-charge protocols the K2 detected
         StrBuf<6> fcn;
@@ -830,7 +773,7 @@ void epr_offer_row(Rows &R) {
 void cable_full_rows(Rows &R, const pd::Emarker &em);
 
 [[gnu::noinline]] void cable_rows(Rows &R, const TabData &) {
-    const pd::Emarker &em = fusb302::emarker();
+    const pd::Emarker &em = held::cable_em();
     put_id(R.add("ID"), em.vid, em.pid, em.vendor_str);
     StrBuf<28> &sp = R.add("Speed", kText);
     char sb[24];
@@ -838,7 +781,7 @@ void cable_full_rows(Rows &R, const pd::Emarker &em);
     sp.put(sb);
     // The lane and Thunderbolt / USB4 tags follow while they fit; the speed itself is always whole.
     if (em.is_active && em.vdo2_valid && em.usb_lanes == 2) put_if_fits(sp, " x2");
-    if (em.vid == 0x8087 || fusb302::cable_thunderbolt()) { if (sp.view().substr(0, 2) != "TB") put_if_fits(sp, " TB"); }
+    if (em.vid == 0x8087 || held::cable_thunderbolt()) { if (sp.view().substr(0, 2) != "TB") put_if_fits(sp, " TB"); }
     else if (em.usb4_supported && sp.view().substr(0, 4) != "USB4") put_if_fits(sp, " USB4");
     put_a(R.add("Current", kAmp), uint32_t(em.max_current_a) * 1000);
     StrBuf<28> &volt = R.add("Voltage", kVolt);
@@ -851,7 +794,7 @@ void cable_full_rows(Rows &R, const pd::Emarker &em);
     R.add("Length", kText).put(em.latency_str ? em.latency_str : "?");
     // How the cable answered the read ("A, PD3, SVDM 1.0"): only when this firmware's scan found it (a clone's or
     // an older reading has none). With VCONN required this is the ninth and last row.
-    const emk_variant::Text ans = emk_variant::short_text(fusb302::cable_answered());
+    const emk_variant::Text ans = emk_variant::short_text(held::cable_answered());
     if (!ans.view().empty()) R.add("Replied", kDim).put(ans.view());
     cable_full_rows(R, em);
 }
@@ -938,7 +881,7 @@ void cable_plug_rows(Rows &R, const cable_full::Plug &p, bool second) {
 
 void cable_full_rows(Rows &R, const pd::Emarker &em) {
     if (em.is_active && em.vdo2_valid) cable_active_rows(R, em);
-    const cable_full::Full &f = fusb302::cable_extra();
+    const cable_full::Full &f = held::cable_extra();
     if (!f.valid) return;
     cable_plug_rows(R, f.p1, false);
     if (f.id2_ack) {
@@ -1295,7 +1238,7 @@ void word_row(Rows &R, const char *key, pd::SvField f) {
 // the survey says (a sniffed one counts); a field without one says its status. Values are built to fit the 19 cells: the
 // external name is copied up to them, lists keep whole entries.
 [[gnu::noinline]] void details_rows(Rows &R) {
-    const pd::SourceCaps &caps = offers::shown_caps();
+    const pd::SourceCaps &caps = held::shown_caps();
     if (caps.valid) {
         StrBuf<28> &v = R.add("Caps", kText);
         v.put_u32(caps.num_pdos).put(caps.num_pdos == 1 ? " PDO" : " PDOs");
@@ -1330,8 +1273,7 @@ void word_row(Rows &R, const char *key, pd::SvField f) {
         v.put_hex(vdm.modes_svid, 4).put(": ").put_u32(vdm.num_modes).put(vdm.num_modes == 1 ? " mode" : " modes");
     } else word_row(R, "Modes", pd::SvField::Modes);
 
-    const std::span<const uint32_t> epr = offers::epr_raw();   // the live list, else the one the offers read kept
-    if (epr_in_offers(caps)) return;   // already shown with the offers
+    const std::span<const uint32_t> epr = held::epr_raw();   // the live list, else the one kept
     if (!epr.empty()) put_sink_pdos(R, "EPR", epr.size() > 7 ? epr.subspan(7) : epr);   // the EPR positions (8 on) when the list has them
     else word_row(R, "EPR", pd::SvField::EprList);
 }
@@ -1351,10 +1293,10 @@ uint32_t survey_sig(bool more) {
     const pd::SourceCaps &epr = fusb302::epr_info_list();
     h = mix_u32(h, uint32_t(epr.valid) | uint32_t(epr.num_pdos) << 8);
     for (std::size_t i = 0; i < epr.num_pdos && i < pd::kMaxPdos; i++) h = mix_u32(h, epr.pdos[i].raw);
-    // the automatic offers read: its progress, its held snapshot and the EPR list it kept
-    const pd::SourceCaps &held = offers::shown_caps();
-    h = mix_u32(h, uint32_t(offers::running()) | uint32_t(offers::showing_held()) << 1 | uint32_t(held.valid) << 2 | uint32_t(held.num_pdos) << 8);
-    h = pg::mix_u32s(h, offers::epr_raw().data(), offers::epr_raw().size());
+    // the held offers: shown when the live ones are gone
+    const pd::SourceCaps &kept = held::shown_caps();
+    h = mix_u32(h, uint32_t(held::showing_held()) | uint32_t(kept.valid) << 1 | uint32_t(kept.num_pdos) << 8);
+    h = pg::mix_u32s(h, held::epr_raw().data(), held::epr_raw().size());
     return h;
 }
 
@@ -1519,15 +1461,16 @@ void add_soc_chip(Ident &id, const pd::BatteryCaps &bat, const pd::BatteryStatus
     }
 }
 
-[[gnu::noinline]] void place_ident(Ident &id, conn::Tab tab, const TabData &d, bool stale) {
+[[gnu::noinline]] void place_ident(Ident &id, conn::Tab tab, const TabData &d) {
     const MatchResult &r = *d.r;
     switch (tab) {
     case conn::Tab::Source: {
         if (d.waiting) { id.head.put("Waiting"); id.dim = true; id.line.put("for the charger's offers"); return; }
         if (!r.caps_seen) {
-            id.head.put(r.typec_ma || r.typec_rp ? "Type-C" : "No offers");
+            const bool typec = r.typec_ma || r.typec_rp;
+            id.head.put(typec ? "Type-C" : text::conn::kOffersNone);
             id.dim = true;
-            id.line.put(r.typec_ma || r.typec_rp ? "no PD offers on the line" : "no PD offers yet");
+            id.line.put(typec ? "no PD offers on the line" : text::conn::kOffersNoneL);
             return;
         }
         const pd::SourceCaps &caps = *d.caps;
@@ -1555,10 +1498,10 @@ void add_soc_chip(Ident &id, const pd::BatteryCaps &bat, const pd::BatteryStatus
         return;
     }
     case conn::Tab::Cable: {
-        const pd::Emarker &em = fusb302::emarker();
-        if (!em.valid) { id.head.put("Not read"); id.dim = true; id.line.put("No e-marker answer held"); return; }
+        const pd::Emarker &em = held::cable_em();
+        if (!em.valid) { id.head.put(text::conn::kCableNone); id.dim = true; id.line.put(text::conn::kCableNoneL); return; }
         id.head.put_u32(em.max_current_a).put("A ").put_u32(em.max_voltage_v).put_char('V');
-        id.dim = stale;
+        id.dim = false;
         StrBuf<12> w;
         w.put_u32(em.max_power_w).put_char('W');
         id.add(w.view(), Ident::Solid);
@@ -1671,9 +1614,9 @@ using BuildRowsFn = void (*)(Rows &, const void *);
     return paint_identity(c, id, false, sig, bg);
 }
 
-[[gnu::noinline]] bool paint_place_ident(const Surface &c, conn::Tab tab, const TabData &d, bool dim, uint32_t &sig, PaintBudget *bg) {
+[[gnu::noinline]] bool paint_place_ident(const Surface &c, conn::Tab tab, const TabData &d, uint32_t &sig, PaintBudget *bg) {
     Ident id;
-    place_ident(id, tab, d, dim);
+    place_ident(id, tab, d);
     return paint_identity(c, id, false, sig, bg);
 }
 
@@ -1705,7 +1648,6 @@ void build_no_pd_rows(Rows &R, const void *p) {
         typec_row_text(ctx.vbus_mv, ctx.rp_ma, v);   // the debounced VBUS (Row D), like the list body
         if (v.view().empty()) v.put("Unknown");
     }
-    if (ctx.tab == conn::Tab::Source && offers::running()) R.add("PD", kFaint).put("Reading...");   // the read may yet find offers
     if (ctx.tab == conn::Tab::Sink) {
         put_a(R.add("Draw", kAmp), uint32_t(power::abs_sat(ctx.current_ma)));
         vooc_row(R, ctx.vooc);
@@ -1755,13 +1697,12 @@ bool ConnectionPage::paint_body(const MatchResult &r, const pd::SourceCaps &caps
     d.vbus_mv = vbus_;
     d.vooc = vooc_;
     d.iq_ok = iq_have_ && iq_session_ == fusb302::session() && fusb302::interrogate_status().phase != pd::IqPhase::Idle;
-    const bool dim = tab_ == conn::Tab::Cable && link.cable_stale();
-    const bool done = paint_body_locked(&d, dim);
+    const bool done = paint_body_locked(&d);
     if (done) g_conn_body_passes++;
     return done;
 }
 
-bool ConnectionPage::paint_body_locked(const void *tab_data, bool dim) {
+bool ConnectionPage::paint_body_locked(const void *tab_data) {
     const auto &d = *static_cast<const TabData *>(tab_data);
     const Surface &c = ctx_.content;
     PaintBudget *const bg = ctx_.budget;
@@ -1772,10 +1713,10 @@ bool ConnectionPage::paint_body_locked(const void *tab_data, bool dim) {
         row_sig_.fill(0); body_n_ = 0; tail_cleared_ = ctx_.blank; close_done_ = false;
         body_clear_y_ = kFooterY; id_sig_ = thumb_sig_ = 0;
     }
-    if (!paint_place_ident(c, tab_, d, dim, id_sig_, bg)) return false;
+    if (!paint_place_ident(c, tab_, d, id_sig_, bg)) return false;
     ListDrawState st{tail_cleared_, body_clear_y_, bg};
     const BodyBuildCtx bctx{tab_, &d};
-    return paint_place_list(c, dim, {first_, res_n_, tot_n_, thumb_sig_, row_sig_, body_n_, st}, build_body_rows, &bctx);
+    return paint_place_list(c, false, {first_, res_n_, tot_n_, thumb_sig_, row_sig_, body_n_, st}, build_body_rows, &bctx);
 }
 
 // The no-PD body (ROADMAP 2026-11-10, Row C): the dim identity headline (NO PD) and its one line, then only the rows
@@ -1880,8 +1821,6 @@ void ConnectionPage::paint_status(uint32_t now_ms) {
         txt.put(p == pd::IqPhase::Reset1 || p == pd::IqPhase::Sniff1 ? "Resetting link..."
               : p == pd::IqPhase::Reset2 || p == pd::IqPhase::Sniff2 ? "Restoring link..."
                                                                      : "Asking device...");
-    } else if (tab_ == conn::Tab::Source && offers::running()) {
-        txt.put("Reading offers...");
     } else if (ctx_.em_scanning) {
         txt.put("Reading cable...");
     } else if (before(now_ms, ctx_.em_listen_until)) {
@@ -1908,7 +1847,6 @@ void ConnectionPage::paint_status(uint32_t now_ms) {
             s.no_pd = no_pd_body();
             const bool op = before(now_ms, op_until_);
             if (op) s.op = op_.view();
-            else if (refusal_) s.op = refusal_;
             // The PD diagnosis verdict, only while its session is open: a finished one would contradict the tab's live state.
             char dv[pd::diag::screen::kVerdictChars + 8];
             const pd::diag::Report &dr = pd::diag::live::report();
@@ -1986,7 +1924,6 @@ void ConnectionPage::update(uint32_t now_ms) {
                         : iq.ok_mask != 0 ? "Device read" : "No answer";
         set_op(msg, now_ms, 4000);
     }
-    auto_reads(now_ms);
     build_items();   // the action rows and the OK verb follow the live state
     if (em_read_pending_ && ctx_.em_listen_until == 0) {
         em_read_pending_ = false;
@@ -2043,7 +1980,7 @@ void ConnectionPage::update(uint32_t now_ms) {
     c = mix_u32(c, vooc_);
     c = mix_u32(c, uint32_t(link.attached()) | uint32_t(link.waiting()) << 1 | uint32_t(link.inline_mode()) << 2
               | uint32_t(pd::is_fake()) << 3 | uint32_t(fusb302::active_cc()) << 4
-              | uint32_t(tab_) << 8 | uint32_t(link.cable_stale()) << 12 | fc_ << 16
+              | uint32_t(tab_) << 8 | fc_ << 16
               | uint32_t(facts_.topo) << 24 | uint32_t(facts_.wait) << 26 | uint32_t(fusb302::self_powered()) << 28);
     c = mix_u32(c, uint32_t(verdict_) | uint32_t(none_why_) << 4);   // the no-PD gate's verdict settles at attach+1.5 s
     c = mix_u32(c, uint32_t(facts_.cable_fact));                     // the empty Cable tab's words: chip silent / no chip
@@ -2065,7 +2002,9 @@ void ConnectionPage::update(uint32_t now_ms) {
     c = mix_u32(c, em.raw_vdos[4]);
     c = mix_u32(c, uint32_t(em.max_power_w) | uint32_t(em.sop) << 16);
     c = mix_u32(c, fusb302::cable_seq());
-    c = mix_cable_full(c, fusb302::cable_extra());
+    c = mix_cable_full(c, held::cable_extra());
+    c = mix_u32(c, uint32_t(held::cable_em().valid) | uint32_t(held::cable_em().vid) << 8 | uint32_t(held::cable_em().raw_vdos[4]) << 24);
+    c = mix_u32(c, held::cable_em().raw_vdos[3] ^ uint32_t(held::cable_answered().orientation) << 28);
     c = mix_identity(c, vdm.identity);
     c = mix_u32(c, uint32_t(vdm.num_svids) | uint32_t(vdm.modes_svid) << 8 | uint32_t(vdm.num_modes) << 24);
     c = mix_u16s(c, vdm.svids.data(), vdm.num_svids);
@@ -2170,7 +2109,7 @@ void ConnectionPage::update(uint32_t now_ms) {
 
     uint32_t h = 2166136261u;
     h = mix_u32(h, uint32_t(verdict_) | uint32_t(none_why_) << 4);   // the no-PD body switches on the verdict edge
-    h = mix_u32(h, uint32_t(tab_) | uint32_t(link.cable_stale()) << 8 | uint32_t(link.waiting()) << 9 | uint32_t(caps->epr) << 10 | uint32_t(caps->spec_rev) << 11 | uint32_t(r.verdict) << 16 | uint32_t(r.flags) << 24);
+    h = mix_u32(h, uint32_t(tab_) | uint32_t(link.waiting()) << 9 | uint32_t(caps->epr) << 10 | uint32_t(caps->spec_rev) << 11 | uint32_t(r.verdict) << 16 | uint32_t(r.flags) << 24);
     h = mix_u32(h, r.typec_ma | uint32_t(fusb302::pd_traffic()) << 16 | uint32_t(link.inline_mode()) << 17);
     h = mix_u32(h, uint32_t(r.typec_rp));
     h = mix_u32(h, uint32_t(vbus_mv));
@@ -2192,7 +2131,9 @@ void ConnectionPage::update(uint32_t now_ms) {
         h = mix_u32(h, uint32_t(em.valid) | uint32_t(em.is_active) << 1 | uint32_t(em.vid) << 8 | uint32_t(em.raw_vdos[4]) << 24);
         h = mix_u32(h, em.raw_vdos[4] | uint32_t(em.max_power_w) << 8 | uint32_t(em.sop) << 24);
         h = mix_u32(h, fusb302::cable_seq());
-        h = mix_cable_full(h, fusb302::cable_extra());
+        h = mix_cable_full(h, held::cable_extra());
+        h = mix_u32(h, uint32_t(held::cable_em().valid) | uint32_t(held::cable_em().vid) << 8 | uint32_t(held::cable_em().raw_vdos[4]) << 24);
+        h = mix_u32(h, held::cable_em().raw_vdos[3] ^ uint32_t(held::cable_answered().orientation) << 28);
         h = mix_u32(h, uint32_t(fusb302::identify_current()));
         h = mix_identity(h, vdm.identity);
         h = mix_identity(h, snk.identity);

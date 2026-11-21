@@ -95,10 +95,10 @@ enum class Reason : uint8_t {
 };
 // Step.detail of a PPS step-walk row while it is Pending/Running (finish() overwrites it with the result); sits above every
 // engine code and the EPR skip codes so the card and the tools never mistake it for one.
-// Charger-test thoroughness (Options::level, with_level). The values are the wire values: 0 = Medium. Offers (Read offers) is the
-// Tests step's fourth Depth value, not a Settings default: Settings counts kLevelCount depths, the wires kRunLevelCount.
-enum class Level : uint8_t { Medium = 0, Light = 1, Deep = 2, Offers = 3 };
-inline constexpr unsigned kLevelCount = 3, kRunLevelCount = 4;
+// Charger-test thoroughness (Options::level, with_level). The values are the wire values: 0 = Medium. 3 was a retired preset:
+// old cards decode it (Retired), nothing selects or plans it, and the value is not reused.
+enum class Level : uint8_t { Medium = 0, Light = 1, Deep = 2, Retired = 3 };
+inline constexpr unsigned kLevelCount = 3;
 inline constexpr uint8_t kDetailStepWalk = 160;
 // Step.detail of a deep-sweep row (ROADMAP "PPS deep sweep"; the AVS sweep reuses the marker on its AVS algorithms).
 // Unlike the walk's marker it SURVIVES finish() (finish keeps it), so a finished run's results strip and the card can
@@ -308,28 +308,19 @@ struct Options {
 //   Medium - the fixed levels, the PPS / AVS points, the legacy level steps; no deep sweeps, no SVOOC ceiling.
 //   Deep   - Medium plus the PPS and AVS deep sweeps over every APDO, the SVOOC ceiling stage and the PD spec stage (no-load
 //            conformance of the transitions and the PPS / AVS moves, one more section of the results).
-//   Offers - PD only (kOffersAlgorithms, no PdLow, no sweeps): the source's lists are read (SPR, then EPR after the usual entry) and
-//            every offer is an Advertised row, except ONE AVS Request at the APDO's minimum, 1 A at most (the EPR AVS APDO when
-//            the run is in EPR, else the SPR one). No AVS offered = the AVS row's NoOffer skip.
 // The sweep flags stay their own switches afterwards (the Custom flow's sweep rows and the remote commands toggle them).
 // The SVOOC ceiling stage (the guarded trigger, VBUS up to the adapter's ceiling) is Deep only: Light and Medium stop at the
 // VOOC family's detection and its ident. Deep turns it on, keeping the mode the operator set (UsbA is the retired waiver and
 // runs as On).
-inline constexpr uint32_t kOffersAlgorithms = kPdFixedAlgorithms | kPpsAlgorithms;
-// A level whose rows are the source's own list (Light, Offers): a PD row above 5 V is never asked except Offers' one AVS Request.
-constexpr bool lists_only(Level l) { return l == Level::Light || l == Level::Offers; }
 constexpr Options with_level(Options o, Level l) {
     o.level = l;
     o.pps_sweep = o.avs_sweep = o.spec = l == Level::Deep;
     if (l != Level::Deep) o.svooc_cap = svooc_ceiling::Mode::Off;
     else if (o.svooc_cap == svooc_ceiling::Mode::Off) o.svooc_cap = svooc_ceiling::Mode::On;
-    if (l == Level::Offers) { o.selected &= kOffersAlgorithms; if (!o.selected) o.selected = kOffersAlgorithms; }
     return o;
 }
-// Settings' cycle (Light, Medium, Deep): Offers is not part of it (a stray Offers value re-enters at Light).
+// The Depth cycle (Settings and the Tests step): Light, Medium, Deep; a stray value re-enters at Light.
 constexpr Level next_level(Level l) { return l == Level::Light ? Level::Medium : l == Level::Medium ? Level::Deep : Level::Light; }
-// The Tests step's Depth row: the same cycle with Offers appended after Deep.
-constexpr Level next_depth(Level l) { return l == Level::Deep ? Level::Offers : next_level(l); }
 const char* name(Level);
 struct Step {
     Group group = Group::Pd;
@@ -522,6 +513,11 @@ struct Summary {
     Reason refusal = Reason::None;
     uint16_t refusal_mv = 0;   // the measured VBUS (mV) behind a Release / WrongVoltage refusal (0 = none)
 };
+// The source list a count assumes before any charger has answered: a typical SPR charger (5 / 9 / 12 / 15 / 20 V fixed, two PPS ranges).
+pd::SourceCaps nominal_caps();
+// How many tests a run of `o` would make: the rows that run plus the spec stage's checks, the Review's "N run". Without a source list
+// (caps.valid false) it plans the nominal one, so the count still scales with the depth.
+unsigned planned_tests(const pd::SourceCaps&, Options, Input);
 const char* explanation(const Step&);
 // The step-walk caution's note, "steps 100mV, not 20mV" (the mean move, rounded to 10 mV from 50 up, then the nominal step) or
 // "steps ignored"; or a transition check's finding, "overshoot +1" (the first flag, then how many more); 0 characters for any other reason.
