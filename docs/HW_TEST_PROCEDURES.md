@@ -142,7 +142,7 @@ classification and the non-charging procedures remain manual. UFCS is implemente
   A valid, wire-observed PD3 passive-cable identity can establish a 30 V physical limit;
   that does not satisfy the separate 50 V / 5 A EPR requirement.
   EPR/AVS use already available offers; the suite does not discover absent EPR capabilities.
-- QC2 tests 5/9/12 V (Class A rows; "QC2 Class B" (20 V row) and "QC3 Class B" (5/12/20/12/5 ramp) are in the default selection and run after them: a charger that stays at 12 V shows them as a neutral skip "Class A only (12 V max)", never a failure; a 20 V miss on a Class A charger is expected). QC3 and QC3+ test 5/9/12/9/5 V with
+- QC2 tests 5/9/12 V (Class A rows; "QC2 Class B" (20 V row) and "QC3 Class B" (5/12/20/12/5 ramp) are in the default selection and run after them: a charger that stays at 12 V shows them as a neutral skip "Class A only (12 V max)", never a failure; a 20 V miss on a Class A charger is expected; a charger with no QC handshake at all shows QC2, QC3, QC3+ and both Class B units as a dim skip "no reply", never red). QC3 and QC3+ test 5/9/12/9/5 V with
   retargeting on the same handshake, proving both directions (QC3 spec range 3.6-12 V).
   AFC tests 9/12 V, FCP 5/9/12 V, SCP handshake, 10 V 2.25 A, 4.5 V 5 A, 5 V 4.5 A (the suite draws no current, so the cable rating gates no row; a load above 100 mA aborts the row; the handshake counts as "detected"). VOOC/SVOOC/SVOOC65 test their
   existing 5 V responder modes, not claimed proprietary high-power operation.
@@ -387,7 +387,7 @@ coverage must demonstrate real measured transitions, not merely a reset log.
   3.3/3.3 V (20 V). Log: `[FC] start QC2 9000mV confirmed=1 ... -> none`, `[FC] QC2 active vbus=...`.
   A 20 V request on a 9/12 V-only charger ends in `voltage not reached`.
 - **Pass:** each supported level is within +/-2% of its target for at least 1 s; `fc reset` returns to
-  4.75..5.50 V. **Fail:** `no handshake`, `no response`, `overvoltage`, VBUS above target + 10 % (the K2 aborts).
+  4.75..5.50 V. **Fail:** `overvoltage`, VBUS above target + 10 % (the K2 aborts), or a handshake that answered and a later level that does not. A first handshake with no answer (`no handshake`, `no response`) is a charger that never offered the protocol: a dim skip "no reply" in the charger test, never a fail. The manual `R fc` request still reports the engine's words.
 - **Cleanup:** `R fc reset`; confirm 5 V.
 
 ### T07 Quick Charge 3.0 (increment and decrement) and QC3+
@@ -429,8 +429,8 @@ coverage must demonstrate real measured transitions, not merely a reset log.
   ```
 - **Expected:** `active` and VBUS at 9 V (7.65..9.9) / 12 V (10.2..13.2). The AFC wire exchange is on D-
   (command bytes, odd parity). `state.fc` classifies it as `AFC FCP` while up.
-- **Pass:** target level reached and held 5 s; **Fail:** `no handshake` (no AFC reply), `no volt`
-  (`voltage not reached`).
+- **Pass:** target level reached and held 5 s; **Fail:** `no volt` (`voltage not reached`). No AFC reply to the first
+  ping is "no reply" (a dim skip in the charger test, a `no handshake` word in a manual request).
 - **Cleanup:** `R fc reset`.
 
 ### T09 Huawei FCP and SCP
@@ -454,8 +454,8 @@ coverage must demonstrate real measured transitions, not merely a reset log.
   ```
 - **Expected:** FCP: `active`, VBUS 9 V / 12 V in the band; log `[FC] reg 0x.. = 0x..` lines for ACCP
   register reads. SCP: `active`, VBUS follows the target; the state holds for 30 s without `source lost`.
-- **Pass:** target reached and held 30 s (SCP keep-alive proves itself here). **Fail:** `no handshake`,
-  `lost` after 0.5 s (keep-alive broken).
+- **Pass:** target reached and held 30 s (SCP keep-alive proves itself here). **Fail:** `lost` after 0.5 s (keep-alive
+  broken). No answer to the first exchange is "no reply" (a dim skip in the charger test).
 - **Cleanup:** `R fc reset`.
 
 ### T10 OPPO VOOC / SuperVOOC
@@ -487,7 +487,7 @@ coverage must demonstrate real measured transitions, not merely a reset log.
 - **Charger needed:** the Baseus EnerCore CJ21 67 W (PD 3.0, QC 3.0, AFC, FCP, PPS) has **no UFCS, no VIVO and
   no VOOC**, so it cannot verify any of these. Use a charger that lists UFCS (many Chinese 65 W+ bricks) for UFCS,
   a vivo FlashCharge brick (44/66/120 W) for VIVO, and an OPPO VOOC/SuperVOOC brick for T10.
-  On the CJ21 the correct outcome of the UFCS rows is `no handshake` (D+ does not follow D-), with VBUS staying at 5 V.
+  On the CJ21 the correct outcome of the UFCS rows is a dim skip "no reply" in the charger test (`no handshake` in a manual request: D+ does not follow D-), with VBUS staying at 5 V.
 - **Steps, on-device:** Charger test tab, select the UFCS group, review, confirm. Expect rows UFCS 5/9/12/5 V.
 - **Expected on a UFCS source:** log `[FC] start UFCS ...`, then `Active` at 5 V (the first row), 9 V and 12 V
   within the capability list, VBUS within 10 % of the target, a ping about every 100 ms; the final row returns to 5 V.

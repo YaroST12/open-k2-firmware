@@ -105,17 +105,20 @@ another. The runner does this:
 ## What a legacy 5 V row proves
 
 5 V is what every source delivers with no protocol at all, so a legacy row never passes on VBUS alone. A row passes only
-with the charger's own answer, and a unit whose first (5 V) row fails is shown as one "No reply" row in the Results grid
-and the card (`result_layout`, `is_absent`), not as a full unit.
+with the charger's own answer. A unit whose first (detection) step gets nothing back and none of whose rows passed was never
+offered: every row is a `Skip` (`Reason::Request`, the engine's word in the detail, read as "no reply"), dim, never red, never
+counted as a fail, and the unit is one "No reply" cell in the Running grid and one "No reply" word in the Results grid and the
+card (`ct::no_reply`, `result_layout::is_no_answer` / `is_absent`). A unit that answered its first step and failed a later one
+stays a `Fail` with the engine's word, as does a request the guard refused (Inline, over the limit).
 
-| Protocol | The 5 V row passes when | A plain 5 V source (no D+/D- reply) gives |
+| Protocol | The 5 V row passes when | A plain 5 V source (no D+/D- reply) gives: all Skip "no reply" |
 |---|---|---|
-| QC2, QC3, QC3+ | the HVDCP handshake completed: D+ at 0.6 V, D- released, and D- fell by at least 350 mV (the charger opened the D+/D- short, about 1.25 s later); QC3/QC3+ also entered continuous mode | Fail, no handshake |
-| FCP, SCP | the ACCP register exchange was answered (an unanswered read or write aborts the row; SCP at 5 V ends as "detected" once every identifying read answered) | Fail, no handshake / no response |
-| AFC | the ping byte was answered | Fail, no response |
-| UFCS | the charger acknowledged our frames and sent its output capabilities | Fail, no handshake / no response |
+| QC2, QC3, QC3+ | the HVDCP handshake completed: D+ at 0.6 V, D- released, and D- fell by at least 350 mV (the charger opened the D+/D- short, about 1.25 s later); QC3/QC3+ also entered continuous mode | Skip, no reply (no handshake); QC2 Class B and QC3 Class B follow with the same words, never "Class A only". A handshake that completed and a later level that fails stays a Fail |
+| FCP, SCP | the ACCP register exchange was answered (an unanswered read or write aborts the row; SCP at 5 V ends as "detected" once every identifying read answered) | Skip, no reply (nothing answered the first exchange) |
+| AFC | the ping byte was answered | Skip, no reply |
+| UFCS | the charger acknowledged our frames and sent its output capabilities | Skip, no reply (no handshake / no response) |
 | VOOC, SVOOC, SVOOC65 | the adapter clocked its identification command (0xA8, 0x68 or 0x88, or the same byte shifted one bit) after our wake: Pass "detected", the session ends at once and nothing is ever answered (no trigger, no level change). One session decides all three rows (below) | Skip "no answer" (never clocked after either wake, not a fail) or Fail no response (frames, no opener); the other two family rows skip with the same words |
-| VIVO | the charger sent a reply frame (cmd 0x08) or its entry notice (cmd 0x55); any other frame, including the K2's own request echoed back through a D+/D- short, is ignored | Fail, no response |
+| VIVO | the charger sent a reply frame (cmd 0x08) or its entry notice (cmd 0x55); any other frame, including the K2's own request echoed back through a D+/D- short, is ignored | Skip, no reply |
 
 QC2 detection reads the D+/D- state, not the voltage: a DCP or BC1.2 charger keeps the lines shorted and D- stays at
 0.6 V, an Apple divider holds D- at 2.7 V, and a bare pin reads 0 V. None of them is a QC charger, and none of them lets
