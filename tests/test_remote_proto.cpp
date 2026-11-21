@@ -1224,8 +1224,34 @@ static void test_emarker() {
     CHECK_EQ(run(f, request(0x05, 3, {2}), r), 1);
     check_header(r, 0x05, 3, Status::Ok, 17);
     check_bytes(r, kRspHeader, {1, 2, 1, 3, 3, 0x8C, 60, 70, 2, 2, 2, 2, 1, 2, 2, 1, 3});
+    // Part 3: no full read yet -> valid 0 and nothing else.
     CHECK_EQ(run(f, request(0x05, 4, {3}), r), 1);
-    check_header(r, 0x05, 4, Status::BadArg, 0);
+    check_header(r, 0x05, 4, Status::Ok, 4);
+    check_bytes(r, kRspHeader, {0, 0, 0, 0});
+    CHECK_EQ(run(f, request(0x05, 5, {4}), r), 1);
+    check_header(r, 0x05, 5, Status::Ok, 5);
+    check_bytes(r, kRspHeader, {0, 0, 0, 0, 0});
+    // A read: SOP' answered SVIDs 0x8087 and 0xFF01 (both modes), SOP'' answered identity (3 VDOs) and one SVID, no mode.
+    f.em.full.valid = true;
+    f.em.full.p1.svids_ack = true; f.em.full.p1.nsvid = 2; f.em.full.p1.mode_ack = 3;
+    f.em.full.p1.svid = {0x8087, 0xFF01, 0, 0}; f.em.full.p1.mode = {0x00030001, 0x0000100C, 0, 0};
+    f.em.full.id2_ack = true; f.em.full.id2_n = 3; f.em.full.id2 = {0x11111111, 0x22222222, 0x33333333, 0, 0};
+    f.em.full.p2.svids_ack = true; f.em.full.p2.nsvid = 1; f.em.full.p2.svid = {0xFF01, 0, 0, 0};
+    CHECK_EQ(run(f, request(0x05, 6, {3}), r), 1);
+    check_header(r, 0x05, 6, Status::Ok, 4 + 12);
+    check_bytes(r, kRspHeader, {1, 1, 2, 3, 0x87, 0x80, 0x01, 0x00, 0x03, 0x00, 0x01, 0xFF, 0x0C, 0x10, 0x00, 0x00});
+    CHECK_EQ(run(f, request(0x05, 7, {4}), r), 1);
+    check_header(r, 0x05, 7, Status::Ok, 2 + 12 + 3 + 6);
+    check_bytes(r, kRspHeader, {1, 3, 0x11, 0x11, 0x11, 0x11, 0x22, 0x22, 0x22, 0x22, 0x33, 0x33, 0x33, 0x33,
+                                1, 1, 0, 0x01, 0xFF, 0, 0, 0, 0});
+    // The worst case fits one frame: four SVIDs on each plug, five identity VDOs.
+    f.em.full.p1.nsvid = 4; f.em.full.p2.nsvid = 4; f.em.full.id2_n = 5;
+    CHECK_EQ(run(f, request(0x05, 8, {3}), r), 1);
+    check_header(r, 0x05, 8, Status::Ok, 4 + 24);
+    CHECK_EQ(run(f, request(0x05, 9, {4}), r), 1);
+    check_header(r, 0x05, 9, Status::Ok, 2 + 20 + 3 + 24);
+    CHECK_EQ(run(f, request(0x05, 10, {5}), r), 1);
+    check_header(r, 0x05, 10, Status::BadArg, 0);
 }
 
 static void test_identity() {

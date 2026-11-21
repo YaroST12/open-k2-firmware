@@ -845,6 +845,42 @@ test("emarker reads part 0 and part 1 (part 2 is optional)", async () => {
   assert.deepEqual(e.vdos, [0x01020304]);
 });
 
+test("cable full read decodes TBT3, DP and raw SVIDs on both plugs", () => {
+  const le = (v, n) => Array.from({ length: n }, (_, i) => Math.floor(v / 2 ** (8 * i)) & 0xFF);
+  const p3 = u8(1, 1, 3, 0b011, ...le(0x8087, 2), ...le(0x02430003, 4), ...le(0xFF01, 2), ...le(0x30000C0C, 4), ...le(0x1234, 2), 0, 0, 0, 0);
+  const p4 = u8(1, 2, ...le(0xAAAAAAAA, 4), ...le(0xBBBBBBBB, 4), 1, 0, 0);
+  const f = P.decodeCableFull(p3, p4);
+  const s = f.sop1.svids;
+  assert.deepEqual(s.map((e) => e.svid), [0x8087, 0xFF01, 0x1234]);
+  assert.deepEqual(s[0].tbt, { tbt_mode: true, speed: "10/20G", rounded: false, optical: false, retimer: true, uni_training: false, active: true });
+  assert.deepEqual(s[1].dp, { rate: "UHBR20", cable: "optical", pins: "CD" });
+  assert.equal(s[2].mode_answered, false);
+  assert.equal(s[2].tbt, undefined);
+  assert.deepEqual([f.sop2.id_ack, f.sop2.id_vdos, f.sop2.svids_ack, f.sop2.svids], [true, [0xAAAAAAAA, 0xBBBBBBBB], true, []]);
+  assert.equal(P.decodeCableFull(u8(0, 0, 0, 0), u8(0, 0, 0, 0, 0)), null);          // no read ran
+  assert.equal(P.decodeCableFull(p3).sop2, undefined);                                // part 4 missing
+  assert.throws(() => P.decodeCableFull(p3.subarray(0, 10)), P.FrameError);
+  assert.throws(() => P.decodeCableFull(p3, p4.subarray(0, 6)), P.FrameError);
+});
+
+test("active cable VDO 2 extras, reserved bits ignored before VDO 1.3", () => {
+  const v = (2 << 12) | (1 << 6) | (1 << 10) | (1 << 9) | (1 << 1);
+  const x = P.decodeActiveExtra(v, true);
+  assert.deepEqual([x.u3_power_text, x.hub_hops, x.asym, x.optical, x.retimer, x.usb2, x.usb32], ["1-5mW", 1, true, true, true, true, true]);
+  const y = P.decodeActiveExtra(v, false);
+  assert.deepEqual([y.optical, y.retimer], [false, false]);
+  assert.equal(P.decodeActiveExtra(7 << 12, true).u3_power_text, "?");
+});
+
+test("emarker asks parts 3 and 4 only when part 2 exists", async () => {
+  const part0 = [1, 1, 0xAC, 0x05, 0x34, 0x12, 0, 0, 0, 0, 2, 3, 5, 50, 240, 0, 1, ...Array.from("Apple\0USB4", (c) => c.charCodeAt(0))];
+  const p2 = [1, 2, 3, 2, 3, 0, 60, 80, 4, 2];
+  const { link, sent } = rig((f) => [rsp(5, f[3], f[5] === 4 ? 3 : 0, f[5] === 0 ? part0 : f[5] === 2 ? p2 : f[5] === 3 ? [1, 1, 1, 1, 0x01, 0xFF, 0x0C, 0x0C, 0, 0x30] : [4, 3, 2, 1])]);
+  const e = await new P.K2Remote(link).emarker();
+  assert.deepEqual(sent.map((f) => f[5]), [0, 1, 2, 3, 4]);   // an older part-3 firmware answering BadArg to part 4 leaves full null
+  assert.equal(e.full, null);
+});
+
 // ---- screenshot over the link --------------------------------------------------------------------
 
 function runs(px) {                       // reference encoder: runs only

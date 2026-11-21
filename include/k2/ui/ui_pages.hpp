@@ -125,6 +125,8 @@ struct UiContext {
             std::uint8_t sel K2_BSS_INIT(0);              // the Setup list's cursor
         } pdstress;
         std::array<uint8_t, bench::kPlaces> place_sel K2_BSS_ZERO;  // each place's last action: repeating a job is OK, OK, OK
+        uint32_t cable_auto_key K2_BSS_INIT(0);          // Connection > Cable: the attach + cable the automatic read last ran for
+        bool cable_auto_set K2_BSS_INIT(false);           // (re-entering the tab with that key held reads nothing again)
         struct Ripple {                                              // Meter > Ripple: persisted scope settings across face flips
             uint8_t timebase K2_BSS_INIT(0);                         // 0 = Auto, 1..7 = fixed kTimebases[timebase - 1]
             uint8_t scale K2_BSS_INIT(0);                            // 0 = Auto
@@ -960,6 +962,9 @@ private:
     void set_op(const char *text, uint32_t now_ms, uint32_t ms = kToastDefaultMs);
     void share_caps(uint32_t now_ms);
     void share_cable(uint32_t now_ms);
+    void read_cable(uint32_t now_ms);      // the cable read of Read e-marker: also what opening the Cable tab runs (auto_reads)
+    void auto_reads(uint32_t now_ms);      // opening a tab reads its data once per attach: Cable (e-marker), Source (offers)
+    void note_refusal(const char *text, uint32_t now_ms);   // why the automatic read does not run: a toast once, the status text while it holds
     void paint_status(uint32_t now_ms);
     bool paint_body(const MatchResult &r, const pd::SourceCaps &caps, std::span<const uint32_t> sink, bool redraw);
     [[gnu::noinline]] bool paint_body_locked(const void *tab_data, bool dim);
@@ -986,6 +991,8 @@ private:
     uint32_t thumb_sig_ = 0;               // scroll thumb's (first, total) as painted
     StrBuf<40> status_txt_;                // the bottom bar as last painted (tests read it; the page never does)
     bool em_read_pending_ = false;         // Read e-marker started a passive listen window from Actions
+    const char *refusal_ = nullptr;
+    bool reading_toast_ = false;             // the offers read's start was announced        // the automatic read's refusal reason last shown (a literal): shown again only when it changes
     bool id_asked_ = false;                // Identify started from this page: its progress shows in the status bar
     bool iq_asked_ = false;                // inline interrogation started from the Device place
     bool iq_have_ = false;                 // an inline interrogation was started during iq_session_

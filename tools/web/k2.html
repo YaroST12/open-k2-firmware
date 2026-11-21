@@ -1091,6 +1091,54 @@ var K2Proto = (function () {
              max_temp_c: p[6], shutdown_temp_c: p[7], u3_power: p[8], usb_lanes: p[9] };
   }
 
+  // GET_EMARKER parts 3 and 4 (the full cable read). Mirrors decode_cable_full in k2_remote.py: the firmware sends numbers, the
+  // TBT3 / DP mode words are decoded here and every other SVID keeps its raw mode word.
+  var TBT_SPEED = { 1: "USB3", 2: "10G", 3: "10/20G" }, DP_CABLE = ["passive", "retimer", "redriver", "optical"];
+  var U3_POWER = [">10mW", "5-10mW", "1-5mW", "0.5-1mW", "0.2-0.5mW", "50-200uW", "<50uW"];
+  function decodeActiveExtra(vdo2, v13) {
+    var u3 = (vdo2 >>> 12) & 7;
+    return { u3_power_text: u3 < 7 ? U3_POWER[u3] : "?", u3_via_u3s: !!((vdo2 >>> 11) & 1), optical: v13 && !!((vdo2 >>> 10) & 1),
+             retimer: v13 && !!((vdo2 >>> 9) & 1), usb2: !((vdo2 >>> 5) & 1), usb32: !((vdo2 >>> 4) & 1),
+             hub_hops: (vdo2 >>> 6) & 3, asym: !!((vdo2 >>> 1) & 1) };
+  }
+  function decodeTbtMode(v) {
+    return { tbt_mode: !!(v & 1), speed: TBT_SPEED[(v >>> 16) & 7] || "?", rounded: !!((v >>> 19) & 1), optical: !!((v >>> 21) & 1),
+             retimer: !!((v >>> 22) & 1), uni_training: !!((v >>> 23) & 1), active: !!((v >>> 25) & 1) };
+  }
+  function decodeDpMode(v) {
+    var rate = (v >>> 2) & 15, pins = ((v >>> 8) | (v >>> 16)) & 63, s = "";
+    for (var i = 0; i < 6; i++) if ((pins >> i) & 1) s += String.fromCharCode(65 + i);
+    return { rate: { 1: "HBR3", 2: ((v >>> 26) & 1) ? "UHBR13.5" : "UHBR10", 3: "UHBR20" }[rate] || "", cable: DP_CABLE[(v >>> 28) & 3], pins: s };
+  }
+  function decodePlug(p, o) {
+    need(p, o + 3, "cable plug");
+    var n = p[o + 1], v = dv(p);
+    need(p, o + 3 + 6 * n, "cable plug svids");
+    var svids = [];
+    for (var i = 0; i < n; i++) {
+      var b = o + 3 + 6 * i, svid = v.getUint16(b, true), mode = v.getUint32(b + 2, true);
+      var e = { svid: svid, name: svid === 0x8087 ? "tbt3" : svid === 0xFF01 ? "dp" : null, mode_answered: !!((p[o + 2] >> i) & 1), mode_vdo: mode };
+      if (e.mode_answered && svid === 0x8087) e.tbt = decodeTbtMode(mode);
+      else if (e.mode_answered && svid === 0xFF01) e.dp = decodeDpMode(mode);
+      svids.push(e);
+    }
+    return { svids_ack: !!p[o], svids: svids, end: o + 3 + 6 * n };
+  }
+  function decodeCableFull(p3, p4) {
+    need(p3, 4, "cable full");
+    if (!p3[0]) return null;
+    var s1 = decodePlug(p3, 1), out = { sop1: { svids_ack: s1.svids_ack, svids: s1.svids } };
+    if (p4) {
+      need(p4, 2, "cable full SOP''");
+      var n = p4[1], v = dv(p4);
+      need(p4, 2 + 4 * n, "cable full SOP'' identity");
+      var s2 = decodePlug(p4, 2 + 4 * n), ids = [];
+      for (var i = 0; i < n; i++) ids.push(v.getUint32(2 + 4 * i, true));
+      out.sop2 = { id_ack: !!p4[0], id_vdos: ids, svids_ack: s2.svids_ack, svids: s2.svids };
+    }
+    return out;
+  }
+
   // FC (k2/fc-trigger): state proto fail scan_flags scan_step target_mv(2) vbus_mv(2) n { proto outcome mv(2) } x n
   function decodeFc(p) {
     need(p, 10, "fc");
@@ -1289,7 +1337,7 @@ var K2Proto = (function () {
              retries: p[4], revision: v.getUint32(6, true), sink_pdos: pdos };
   }
 
-  function decodeEmarker(p0, p1, p2) {
+  function decodeEmarker(p0, p1, p2, p3, p4) {
     need(p0, 17, "emarker");
     p1 = p1 || new Uint8Array(0);
     var v = dv(p0), rest = p0.subarray(17), nul = rest.indexOf(0);
@@ -1300,7 +1348,8 @@ var K2Proto = (function () {
              xid: v.getUint32(6, true), hw_rev: p0[10], fw_rev: p0[11], max_current_a: p0[12],
              max_voltage_v: p0[13], max_power_w: v.getUint16(14, true), num_vdos: p0[16],
              vendor: cstr(vendor), speed: cstr(speed), vdos: vdos,
-             detail: p2 ? decodeEmarkerDetail(p2) : null };
+             detail: p2 ? decodeEmarkerDetail(p2) : null,
+             full: p3 ? decodeCableFull(p3, p4) : null };
   }
 
   // ---- screenshots -----------------------------------------------------------------------------
@@ -1543,7 +1592,13 @@ var K2Proto = (function () {
     var p2 = null;
     try { p2 = (await this.link.call(CMD.GET_EMARKER, [2])).payload; decodeEmarkerDetail(p2); }
     catch (e) { if (!(e instanceof RemoteError || e instanceof FrameError)) throw e; p2 = null; }
-    return decodeEmarker(p0, p1, p2);
+    // Parts 3 and 4 (the full read) exist only on firmware that has part 2.
+    var p3 = null, p4 = null;
+    if (p2) {
+      try { p3 = (await this.link.call(CMD.GET_EMARKER, [3])).payload; p4 = (await this.link.call(CMD.GET_EMARKER, [4])).payload; decodeCableFull(p3, p4); }
+      catch (e) { if (!(e instanceof RemoteError || e instanceof FrameError)) throw e; p3 = p4 = null; }
+    }
+    return decodeEmarker(p0, p1, p2, p3, p4);
   };
 
   // Saved-cable library (command 0x61); ids are stable sequence numbers. Mirrors cmd_emlib in k2_remote.py.
@@ -2948,7 +3003,7 @@ var K2Proto = (function () {
     CT_STOPPED: CT_STOPPED, CT_CABLE_KINDS: CT_CABLE_KINDS, CT_BUILTINS: CT_BUILTINS, CT_GUARD_REFUSAL: CT_GUARD_REFUSAL,
     CT_START_FOLLOW_MS: CT_START_FOLLOW_MS, CT_START_POLL_MS: CT_START_POLL_MS,
     decodeChargerCable: decodeChargerCable, decodeChargerSvoocCap: decodeChargerSvoocCap, svoocLines: svoocLines, decodeChargerTestStart: decodeChargerTestStart, ctStartStep: ctStartStep,
-    decodeEmarker: decodeEmarker, decodeEmarkerDetail: decodeEmarkerDetail, decodeAdcRaw: decodeAdcRaw,
+    decodeEmarker: decodeEmarker, decodeEmarkerDetail: decodeEmarkerDetail, decodeCableFull: decodeCableFull, decodeActiveExtra: decodeActiveExtra, decodeAdcRaw: decodeAdcRaw,
     decodeRippleInfo: decodeRippleInfo, decodeIdentity: decodeIdentity, decodePdTrigger: decodePdTrigger, decodeMatch: decodeMatch, decodeMemory: decodeMemory, memoryView: memoryView, decodePower: decodePower, powerSetBytes: powerSetBytes, MEM_FS_CAUTION_PCT: MEM_FS_CAUTION_PCT, MEM_FS_ERROR_PCT: MEM_FS_ERROR_PCT, decodeStop: decodeStop, decodeLease: decodeLease, decodeIdentifyProgress: decodeIdentifyProgress, PD_ERRS: PD_ERRS,
     decodeFc: decodeFc, decodeVoocSummary: decodeVoocSummary, decodeVoocRows: decodeVoocRows, decodeCableR: decodeCableR, parseLogStats: parseLogStats,
     formatAgo: formatAgo, formatUptime: formatUptime, isUnknownCmd: isUnknownCmd, FC_PROTOS: FC_PROTOS, FC_LEVELS: FC_LEVELS, FC_NAMES: FC_NAMES,

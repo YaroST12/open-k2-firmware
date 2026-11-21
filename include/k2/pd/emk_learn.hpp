@@ -28,9 +28,10 @@ inline constexpr unsigned kLogBytes = 320;   // packed transcript bytes kept (a 
 inline constexpr unsigned kMaxObjs = 7;      // data objects of a PD message
 inline constexpr unsigned kMaxVdos = kMaxObjs - 1;   // objects after the VDM header in a seed
 
-// One request: `n` data objects (the VDM header first), sent as SOP' with this PD specification revision field
-// (1 = PD 2.0, 2 = PD 3.x).
+// One request: `n` data objects (the VDM header first), sent as SOP' (`sop` 1; 2 = SOP'') with this PD specification
+// revision field (1 = PD 2.0, 2 = PD 3.x).
 struct Request {
+    std::uint8_t sop = 1;
     std::uint8_t spec_rev = 2;
     std::uint8_t n = 0;
     std::array<std::uint32_t, kMaxObjs> w{};
@@ -48,6 +49,11 @@ struct Reply {
 // One exchange on the wire. False: the request was not acknowledged at all (no GoodCRC, the link or the cable is
 // gone) and the run stops; true: `rep.got` tells whether an answer followed.
 using ExchangeFn = bool (*)(void* ctx, const Request& req, Reply& rep);
+
+// What a reply is, for the request header it answers: a structured ACK/NAK/BUSY of the same SVID and command, a
+// Not_Supported control message, or something else (a retransmission of an earlier answer, a different command).
+enum class Cls : std::uint8_t { None, Ack, Nak, Busy, NotSupported, Other };
+Cls classify(std::uint32_t req_hdr, const Reply& rep);
 
 // A seed is one request. Structured (raw false): the VDM header is built from svid and cmd (object position 0, the
 // answered variant's SVDM version). Raw: `hdr` goes out exactly as given (any position, version and reserved bits),

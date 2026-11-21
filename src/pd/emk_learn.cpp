@@ -4,15 +4,11 @@
 
 namespace k2::emk_learn {
 namespace {
-
-enum class Cls : std::uint8_t { None, Ack, Nak, Busy, NotSupported, Other };
-
 constexpr std::uint8_t kCtlNotSupported = 16;
 constexpr std::uint8_t kMsgVdm = 0x0F;
 constexpr std::uint8_t kSweepFirst = 16, kSweepLast = 31;   // the SVID-specific command range
+}  // namespace
 
-// What a reply is, for the request header it answers: a structured ACK/NAK/BUSY of the same SVID and command, a
-// Not_Supported control message, or something else (a retransmission of an earlier answer, a different command).
 Cls classify(std::uint32_t req_hdr, const Reply& rep) {
     if (!rep.got) return Cls::None;
     const unsigned type = rep.header & 0x1Fu;
@@ -27,6 +23,8 @@ Cls classify(std::uint32_t req_hdr, const Reply& rep) {
         default: return Cls::Other;
     }
 }
+
+namespace {
 
 struct Run {
     ExchangeFn fn;

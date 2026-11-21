@@ -9,6 +9,7 @@
 #include "k2/core/bootmode.hpp"
 #include "k2/core/build_config.h"
 #include "k2/loopprobe/loop_cc.hpp"
+#include "k2/pd/cable_full.hpp"
 #include "k2/pd/cc_probe.hpp"
 #include "k2/pd/ra_probe.hpp"
 #include "k2/pd/ra_class.hpp"
@@ -274,6 +275,12 @@ bool cable_session(bool confirmed, CableBody body, void* ctx);
 // `rep.got` tells whether a message other than GoodCRC followed within `timeout_ms`.
 bool cable_exchange(const emk_learn::Request& req, emk_learn::Reply& rep, std::uint32_t timeout_ms);
 
+// The Cable tab's scan: cable_session's VCONN scan (same refusals) and, once the cable answers Discover Identity, the
+// full read of cable_full.hpp (SVIDs, modes, SOP'' on an active cable) in the answered variant. Result: cable_extra().
+bool cable_scan_full(bool confirmed);
+// What the last full read found; empty (valid false) without one or when no cable is held (a plain scan, a detach).
+const cable_full::Full& cable_extra();
+
 // Counts cables decoded since boot (rises each time a SOP' Discover Identity ACK is accepted, from a
 // scan or from the source's own exchange): the UI marks the cable data fresh when it changes.
 std::uint32_t cable_seq();
@@ -433,6 +440,14 @@ bool reread_abort();
 // PDO 1 5 V contract inside its linger). A charger-test START and the spoof arming take it over like the self-hold
 // instead of refusing "tool busy" / "Ra refused: contract".
 bool reread_own_hold();
+// The offers read (k2/core/offers_read.hpp): true while a re-read's attach (Rd or the 5 V contract) is still the K2's to give back;
+// reread_release_now() ends its linger at once (housekeeping then drops Rd and the contract when the sink is quiet). false = not yet
+// (the run or its log line is still pending), ask again. Neither touches the forced line or the Ra mode, unlike reread_abort().
+bool reread_attach_held();
+bool reread_release_now();
+// Ends a running re-read and gives its attach back, also when the line went inline meanwhile (reread_abort refuses then): only
+// stops the run and sets the release due; never starts, transmits or touches the forced line / Ra.
+void reread_stand_down();
 // Another owner takes the contract (and the Rd) a pd-reread attach made: from here the attach is that owner's, and the
 // re-read's own release timer ([REREAD] attach released) never fires on it. Called by every tool that starts talking on the
 // link after a re-read: sink_request itself (`pd attach`, `pd request`, the identity and unit paths), a PD Stress run start, a

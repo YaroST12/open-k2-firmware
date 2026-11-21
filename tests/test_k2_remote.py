@@ -626,6 +626,59 @@ class Decoders(unittest.TestCase):
             self.assertIsNone(e["attached"])
             self.assertNotIn("read:", kr.render("emarker", e))
 
+    # Parts 3 and 4: the full read. SOP' answered SVIDs 0x8087 (TBT3 active 10/20G retimer) and 0xFF01 (DP UHBR20 optical,
+    # pins C and D) plus one unknown SVID that did not answer Discover Modes; SOP'' answered identity and no SVIDs.
+    P3 = (bytes([1, 1, 3, 0b011]) + (0x8087).to_bytes(2, "little") + (0x02430003).to_bytes(4, "little")
+          + (0xFF01).to_bytes(2, "little") + (0x3000_0C0C).to_bytes(4, "little")
+          + (0x1234).to_bytes(2, "little") + bytes(4))
+    P4 = bytes([1, 2]) + (0xAAAAAAAA).to_bytes(4, "little") + (0xBBBBBBBB).to_bytes(4, "little") + bytes([1, 0, 0])
+
+    def test_cable_full_decoded(self):
+        f = kr.decode_emarker(self.PART0, b"", self.P2_OLD, self.P3, self.P4)["full"]
+        s = f["sop1"]["svids"]
+        self.assertTrue(f["sop1"]["svids_ack"])
+        self.assertEqual([e["svid"] for e in s], [0x8087, 0xFF01, 0x1234])
+        self.assertEqual((s[0]["name"], s[1]["name"], s[2]["name"]), ("tbt3", "dp", None))
+        self.assertEqual(s[0]["tbt"], {"tbt_mode": True, "speed": "10/20G", "rounded": False, "optical": False,
+                                       "retimer": True, "uni_training": False, "active": True})
+        self.assertEqual(s[1]["dp"], {"rate": "UHBR20", "cable": "optical", "pins": "CD"})
+        self.assertFalse(s[2]["mode_answered"])
+        self.assertNotIn("tbt", s[2])
+        self.assertEqual((f["sop2"]["id_ack"], f["sop2"]["id_vdos"]), (True, [0xAAAAAAAA, 0xBBBBBBBB]))
+        self.assertEqual(f["sop2"]["svids"], [])
+        self.assertTrue(f["sop2"]["svids_ack"])
+
+    def test_cable_full_absent(self):
+        e = kr.decode_emarker(self.PART0, b"", self.P2_OLD, bytes(4), bytes(5))
+        self.assertNotIn("full", e)                       # no read ran on this cable
+        self.assertNotIn("full", kr.decode_emarker(self.PART0, b"", self.P2_OLD))   # older firmware: parts unknown
+        e = kr.decode_emarker(self.PART0, b"", self.P2_OLD, self.P3)       # part 4 missing: SOP' only
+        self.assertIn("sop1", e["full"])
+        self.assertNotIn("sop2", e["full"])
+
+    def test_cable_full_short_frames(self):
+        with self.assertRaises(kr.FrameError):
+            kr.decode_emarker(self.PART0, b"", self.P2_OLD, self.P3[:10])
+        with self.assertRaises(kr.FrameError):
+            kr.decode_emarker(self.PART0, b"", self.P2_OLD, self.P3, self.P4[:6])
+
+    def test_cable_full_text(self):
+        t = kr.render("emarker", kr.decode_emarker(self.PART0, b"", self.P2_OLD, self.P3, self.P4))
+        self.assertIn("SOP' tbt3: 10/20G active retimer", t)
+        self.assertIn("SOP' dp: UHBR20 optical pins CD", t)
+        self.assertIn("SOP' 0x1234: no mode reply", t)
+        self.assertIn("SOP'' identity: answered, 2 VDOs", t)
+
+    def test_active_extra(self):
+        # VDO 2: U3 power code 2 (bits 14:12), hub hops 1, USB 2.0 and USB 3.2 present, optical + retimer (v1.3), asym.
+        v = 2 << 12 | 1 << 6 | 1 << 10 | 1 << 9 | 1 << 1
+        x = kr.decode_active_extra(v, True)
+        self.assertEqual((x["u3_power_text"], x["hub_hops"], x["asym"]), ("1-5mW", 1, True))
+        self.assertTrue(x["optical"] and x["retimer"] and x["usb2"] and x["usb32"])
+        y = kr.decode_active_extra(v, False)
+        self.assertFalse(y["optical"] or y["retimer"])
+        self.assertEqual(kr.decode_active_extra(7 << 12, True)["u3_power_text"], "?")
+
 
 def rle_runs(px):
     """Reference encoder: runs only (valid RLE565)."""

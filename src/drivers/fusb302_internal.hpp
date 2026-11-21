@@ -93,6 +93,7 @@ extern std::uint32_t g_physical_session;
 extern pd::CableLimits g_scanned_cable;
 extern bool g_scanned_valid;
 extern emk_variant::Answered g_answered;
+extern cable_full::Full g_cable_full;
 extern emk_attached::ReadInfo g_read_info;
 extern raclass::PullDown g_pull_down;
 extern VbusFn g_vbus_source;
