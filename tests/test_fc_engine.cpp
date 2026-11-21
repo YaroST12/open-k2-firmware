@@ -1007,6 +1007,18 @@ static FakeCharger* scp_keep_charger(FakeCharger& c) {
 static void scp_run_to_end(FakeCharger& c, Engine& e) {
     for (int n = 0; n < 1500 && e.state() == State::Negotiating; ++n) c.run(e, 10);
 }
+// A stop while a session sits held releases the lines at once, with the failure's hold time still unspent.
+static void scp_stop_on_a_held_session_releases_at_once() {
+    FakeCharger c;
+    scp_keep_charger(c);
+    Engine e(c);
+    CHECK(e.start(Proto::Scp, 5000, false, false, 0) == Fail::None);
+    e.keep(true);
+    scp_run_to_end(c, e);
+    CHECK(e.held() && c.resets == 0);
+    e.stop();
+    CHECK(c.resets == 1 && !e.held() && e.state() == State::Idle);
+}
 static void scp_kept_detect_session_takes_the_next_rows() {
     FakeCharger c;
     scp_keep_charger(c);
@@ -1793,7 +1805,7 @@ int main() {
     scp_cuktech_port_writes_2500_ma_for_the_5a_and_4500ma_rows();
     scp_without_caps_keeps_the_old_cap_and_current();
     scp_session_rereads_caps_and_refuses_above_them();
-    scp_kept_detect_session_takes_the_next_rows(); scp_kept_no_change_session_takes_a_lower_row(); scp_unkept_or_stale_sessions_release();
+    scp_kept_detect_session_takes_the_next_rows(); scp_stop_on_a_held_session_releases_at_once(); scp_kept_no_change_session_takes_a_lower_row(); scp_unkept_or_stale_sessions_release();
     scp_not_supported(); scp_down_target_with_unchanged_vbus_is_not_overvoltage();
     scp_acked_write_with_flat_vbus_ends_early(); scp_slow_start_and_small_steps_are_not_cut();
     unacked_rise_is_unsupported_afc();

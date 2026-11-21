@@ -34,6 +34,7 @@ struct Probe {
     int current_ma = 0;           // signed; only the magnitude counts
     bool pd_active = false;       // FUSB302: CC attached and PD decoded (Source_Capabilities, or a Request when the caps were missed)
     bool cc_active = false;       // FUSB302: a CC line is attached (caps may be missed)
+    bool sink_request_seen = false;   // FUSB302: a sink's Request was decoded (answered caps, whoever sent it); pd_active already holds it
     bool sticky_inline = false;   // pd::Link::inline_mode(), published by the UI
     pd::InlineCause inline_cause = pd::InlineCause::None;   // pd::Link::inline_cause(), published with it
     int self_supply_ma = 0;       // the K2's own draw through the shunt when it runs on this VBUS (no USB host), pd::LinkInput
@@ -60,9 +61,11 @@ constexpr bool far_sink_draws(Probe p) {
 // source's own announcements read as a PdContract.
 constexpr std::uint32_t kCapsStaleMs = 2000;
 
-// Only unanswered caps and nothing else behind the K2: the contract reason without a load or a foreign sink's latch. The one case
-// where the charger test's own Legacy start may override the guard.
-constexpr bool silent_caps_only(const Probe& p) { return inline_reason(p) == Reason::PdContract && !far_sink_draws(p); }
+// Only unanswered caps and nothing else behind the K2: the contract reason without a load, a foreign sink's latch or a decoded
+// Request (the latch may not be published yet). The one case where the charger test's own Legacy start may override the guard.
+constexpr bool silent_caps_only(const Probe& p) {
+    return inline_reason(p) == Reason::PdContract && !far_sink_draws(p) && !p.sink_request_seen;
+}
 
 constexpr int kPdLikelyMinMv = pd::kVSafe5MaxMv;   // above 5.5 V only a negotiated contract or a legacy trigger
 

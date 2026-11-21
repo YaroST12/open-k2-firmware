@@ -102,6 +102,9 @@ static void test_silent_caps_only() {
     Probe own = probe(5100, 95, true);
     own.self_supply_ma = k2::pd::kSelfSupplyAllowanceMa;              // the K2's own supply current is no sink
     CHECK_EQ(silent_caps_only(own), true);
+    Probe req = probe(5000, 13, true);
+    req.sink_request_seen = true;                                     // a sink's Request was decoded before the latch was published
+    CHECK_EQ(silent_caps_only(req), false);
     CHECK_EQ(silent_caps_only(Probe{}), false);
     Probe blind;
     blind.pd_active = true;                                           // monitor offline: caps alone, nothing else known

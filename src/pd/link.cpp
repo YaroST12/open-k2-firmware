@@ -31,6 +31,7 @@ Probe probe_now() {
     const auto& c = fusb302::caps();
     p.pd_active = (c.valid && c.active_cc != 0) || fusb302::contract().valid;
     p.cc_active = c.active_cc != 0;
+    p.sink_request_seen = fusb302::contract().valid;
     p.sticky_inline = g_sticky_inline;
     p.inline_cause = g_inline_cause;
     p.self_supply_ma = usb::configured() ? 0 : pd::kSelfSupplyAllowanceMa;   // no USB host: the K2 may run on this VBUS
