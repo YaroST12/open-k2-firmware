@@ -1978,7 +1978,9 @@ kit::OppRailSpec ChargerTestPage::opp_rail() const {
         return {"WAITING", 0, 0, kit::OppTelemetry::WattCcDp};
     if (st == Stage::Results)
         return {"RESULTS", 0, 0, kit::OppTelemetry::Vaw};
-    if (st == Stage::Steps || st == Stage::Detail || st == Stage::SpecDetail)
+    if (st == Stage::Steps)   // the strip's and the footer's name for the list
+        return {"STEPS", 0, 0, kit::OppTelemetry::Vaw};
+    if (st == Stage::Detail || st == Stage::SpecDetail)
         return {"DETAIL", 0, 0, kit::OppTelemetry::Vaw};
     return {"TEST", 0, 0, kit::OppTelemetry::Vaw};
 }

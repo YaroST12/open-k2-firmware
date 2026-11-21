@@ -1542,6 +1542,7 @@ static void test_a_pass_or_a_skip_reads_as_placeholders() {
         top(ui, t); calm();
         press(ui, Button::Ok); ui.tick(t += 100); calm();
         CHECK_EQ(ui.charger_test_stage(), 7);
+        CHECK_EQ(ui.current_opp_rail().title == "STEPS", true);   // the list is called Steps, as its strip and footer say
         top(ui, t); calm();
     };
     const int ty_measured = 44 + 1 * kit::kRowH + kit::row_text_y(kit::kRowH, kSmall.height);
@@ -1550,6 +1551,7 @@ static void test_a_pass_or_a_skip_reads_as_placeholders() {
     CHECK_EQ(volt_ink() > 50, true);   // a measured step keeps its reading
     press(ui, Button::Ok); ui.tick(t += 100); calm();
     CHECK_EQ(ui.charger_test_stage(), 8);
+    CHECK_EQ(ui.current_opp_rail().title == "DETAIL", true);
     check_text_at(kSmall, ty_measured, "12.00V", kVolt, kBg, 76);
     check_text_at(kSmall, ty_reason(), "--", kDim, kBg, 76);
     press(ui, Button::Back); ui.tick(t += 100); calm();

@@ -25,13 +25,13 @@ constexpr bool can_enter(Pos p) { return p != Pos::Lines && p != Pos::Numbers; }
 
 // The masthead text in the ring view: 1-based position and the name, at most 9 characters (the rail's slot).
 constexpr const char *mast_name(Pos p) {
-    constexpr const char *kNames[kCount] = {"1 HOME", "2 LINES", "3 NUMBERS", "4 GRAPH", "5 RIPPLE", "6 CHARGER", "7 CABLE", "8 DEVICE", "9 BATTERY", "10 LOG", "11 K2"};
+    constexpr const char *kNames[kCount] = {"1 HOME", "2 LINES", "3 NUMBERS", "4 GRAPHS", "5 RIPPLE", "6 CHARGER", "7 CABLE", "8 DEVICE", "9 BATTERY", "10 LOG", "11 K2"};
     return kNames[static_cast<int>(p) < kCount ? static_cast<int>(p) : 0];
 }
 
 // The plain name for the Settings row's tail (at most 7 characters: the row's tail room).
 constexpr const char *name(Pos p) {
-    constexpr const char *kNames[kCount] = {"Home", "Lines", "Numbers", "Graph", "Ripple", "Charger", "Cable", "Device", "Battery", "Log", "K2"};
+    constexpr const char *kNames[kCount] = {"Home", "Lines", "Numbers", "Graphs", "Ripple", "Charger", "Cable", "Device", "Battery", "Log", "K2"};
     return kNames[static_cast<int>(p) < kCount ? static_cast<int>(p) : 0];
 }
 
