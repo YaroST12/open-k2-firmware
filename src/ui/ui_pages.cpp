@@ -2289,7 +2289,7 @@ void SettingsPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
     }
     case SettingRow::LongBack:   // the ring view's long Back target (ring::view_key)
         out.tail = ring::name(ring::sanitize_target(self->ctx_.keep.long_back));
-        out.note = "Where Hold Back jumps";
+        out.note = "Where Long Back jumps";
         break;
     case SettingRow::Display:
         out.tail = {self->display_tail_, uidisp::format_summary(self->display_tail_, idle_hw::config())};
