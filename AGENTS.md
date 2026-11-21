@@ -16,11 +16,20 @@ Overrides built-in parallel pre-reading and whole-file reading defaults. Keep wo
 
 Open only the doc section relevant to the current task:
 
+- Feature status, known bugs, and next-up priorities: `docs/ROADMAP.md` (1,400+ lines — search with `rg -n` and read only relevant sections)
 - Build, gate, debug, and hardware summary: `docs/agents/HANDOFF.md`
 - Coding standards: `docs/CODING_STANDARDS.md`
 - Commit message format: `docs/agents/COMMITS.md`
 - UI layout & design spec: `docs/UI_DESIGN.md`
 - Hardware test procedures: `docs/HW_TEST_PROCEDURES.md`
+
+## Roadmap Tracking (`docs/ROADMAP.md`)
+
+Every agent working on this repository must reference and maintain `docs/ROADMAP.md`:
+
+- **Before starting work**: Search `docs/ROADMAP.md` (`rg -n`) for existing entries under `## Current bugs`, `## Specified work (not started)`, `## Not verified on hardware`, or feature tables so work aligns with prior specs, root-cause notes, and priorities.
+- **After completing work or finding bugs**: Update `docs/ROADMAP.md` with your progress — mark completed/partial items with the commit hash, add newly discovered bugs or follow-ups under `## Current bugs`, and move items between sections as appropriate.
+- **Hardware verification honesty**: Only mark an item `verified` / move it to `## Verified on hardware` (with date, hardware setup, and evidence) after observing it on a real K2; passing host tests alone stays `not verified`.
 
 ## Critical Workflow & Hardware Guardrails
 
