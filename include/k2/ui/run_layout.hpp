@@ -53,6 +53,9 @@ inline constexpr const char *kFamilyNames[] = {"Huawei/Honor", "Samsung", "OPPO/
 
 // Sweep: the error hero (left), the act / set block (right).
 inline constexpr int16_t kSweepFamX = 110;
+// The sweep name ("PPS 3.3-4.9V", "AVS 15-28V") runs from x6 up to the family label: 13 16 px cells, the longest range a PDO word can name.
+inline constexpr int kSweepNameCells = 13;
+static_assert(6 + kSweepNameCells * kAdv16 <= kSweepFamX, "the sweep name reaches the family label");
 inline constexpr int16_t kHeroDigitsRight = 89;                  // right edge of the three digit cells (x17..88)
 inline constexpr int16_t kHeroUnitX = kHeroDigitsRight + 3;      // "mV" / "V", 24 px font, on the digits' baseline (92..116)
 inline constexpr int16_t kSignGap = 5;                           // the sign's right edge stands this far left of the first digit's cell
@@ -73,7 +76,7 @@ struct Box {
 // (digits_box / sign_box). Row labels sit on the value's baseline.
 inline constexpr Box kSweepBoxes[] = {
     {"progress", 6, 24, 196, 3, false},
-    {"name", 6, kSweepRun.name_y, 11 * kAdv16, kH16, true},
+    {"name", 6, kSweepRun.name_y, kSweepNameCells * kAdv16, kH16, true},
     {"family", kSweepFamX, kSweepRun.name_y + kA16 - kA12, 16 * kAdv12, kH12, true},
     {"hero unit", kHeroUnitX, kSweepRun.hero_y + kH48 - kA24, 2 * kAdv24, kH24, true},
     {"act label", kBlockLabelX, kActY + kA24 - kA12, 2 * kAdv12, kH12, true},
