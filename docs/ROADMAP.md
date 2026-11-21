@@ -122,7 +122,11 @@ Open defects, newest first. A row leaves this list when its fix is merged and se
   "PPS 3.3-4.9V" to "PPS 3.3-...", so only the 5-21V part showed a readable range. Hardware 2026-11-21 (same run): this Baseus port offers
   PPS 5-11 V and 5-21 V (no 3.3 V APDO); walks 13->21->13->9->5 V and the 5..21 V sweep ran under the "PPS 5-21V" chip
   and header, no mismatch. The UGREEN 65 W USB-C port (PPS 5-11 V, 5-21 V, SPR AVS 9-20 V;
-  `153757-ugreen-c-deep`, 30 pass / 0 fail) matched too. The 3.3-4.9 V header fix still needs a charger with a 3.3 V APDO.
+  `153757-ugreen-c-deep`, 30 pass / 0 fail) matched too. Joyroom 65 W (PPS 3.3-11 V 5 A, 3.3-21 V 3 A), 2026-11-21: on b4d5ed89 the
+  low part's header reads "PPS 3.3-..." (`155748-joyroom-low-old/sheet.png`); on 53dee143 (98068797) it reads
+  "PPS 3.3-4.9V" with the grid chip on the swept APDO, Deep run 26 pass / 0 fail (`154914-joyroom-deep/sheet-low*.png`).
+  Fixed and seen on hardware; leaves this list when 98068797 is merged. Side note from the same frames: the first sweep
+  point shows a red "+1.8 V" error for ~1 s while VBUS is still at 5.1 V (the step down from the 5 V return), then passes.
 
 - **`K2_PDSTRESS=1` does not pass the gate: `ChargerTestSession::poll` needs 1056 B of stack** (2026-11-14, found on
   k2/bugbatch; pre-existing: the base tree gives the same warning). The PD Stress build pulls more inlined code into
