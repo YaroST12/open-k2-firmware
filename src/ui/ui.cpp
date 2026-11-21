@@ -1197,9 +1197,23 @@ void Ui::ring_enter(uint32_t now_ms) {
     }
 }
 
+// Depth 1 and already the ring target's own menu, tab and base page, at rest: leaving then only flips the view and repaints
+// the strip, the rail and the muting. Every other chain (a tool page, a deeper menu, an Actions sub-page) is rebuilt at its top.
+bool Ui::ring_page_rests() const {
+    if (depth_ != 1) return false;
+    const ring::Target t = ring::target(ring_position());
+    if (t.menu == Menu::Count || t.menu != stack_[0] || t.page != page_) return false;
+    switch (t.menu) {
+    case Menu::Connection: return connection_page().tab() == static_cast<conn::Tab>(t.tab) && connection_page().ring_rest();
+    case Menu::Battery: return battery_page()->ring_rest();
+    case Menu::Diagnosis: return diagnosis_page().ring_rest();
+    default: return false;
+    }
+}
+
 void Ui::ring_leave(uint32_t now_ms) {
     if (page_ == Page::ChargerTest && !depth_) (void)charger_test_.stop();   // leaving the run's page ends it, and frees the ports for the place
-    if (depth_ > 0 || page_ == Page::ChargerTest) {
+    if ((depth_ > 0 && !ring_page_rests()) || page_ == Page::ChargerTest) {
         if (ring_show(ring_position(), now_ms)) return;   // the ring page again, at its top
         if (depth_ > 0) {   // refused (a run owns the ports): the menu goes, the base page shows in the ring
             ring_landing_ = true;

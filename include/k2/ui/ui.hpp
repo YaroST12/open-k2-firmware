@@ -474,7 +474,8 @@ private:
     bool ring_show(ring::Pos pos, uint32_t now_ms);   // build and show a ring page in the ring view; false = refused, nothing changed
     void ring_walk(ring::Pos to, int dir, uint32_t now_ms);   // ring_show, stepping on past a refused page in the key's direction
     void ring_enter(uint32_t now_ms);
-    void ring_leave(uint32_t now_ms);     // back to the ring on the same page (a menu chain is rebuilt at its top)
+    void ring_leave(uint32_t now_ms);     // back to the ring on the same page (a menu chain is rebuilt at its top unless it already is that page)
+    bool ring_page_rests() const;         // the entered menu is the ring position's own page, as the ring view would show it
     void ring_settle();                   // after a build: the view-only pages are always in the ring view
     void ring_key(Event e, uint32_t now_ms);
     bool pop_to(unsigned keep_depth, uint32_t now_ms);

@@ -519,6 +519,73 @@ static void test_results_grid_budgets() {
     g_stub = old;
 }
 
+// Stepping out of an entered ring page that already is what the ring view shows (its top level, first sub-page, nothing
+// scrolled or in flight) repaints only what differs: the key strip, the rail's title and the muting. The body stays untouched.
+static void test_ring_leave_paint() {
+    // The Connection places keep their body whole (no rows to mute). Battery and Log repaint their list rows, muted or lit
+    // again: the list area only (Battery 34850 px, Log 15616 px measured), never the identity block or the title bar.
+    struct { bench::Place place; ring::Pos pos; const char *name; unsigned px, body_px; } cases[] = {
+        {bench::Place::Charger, ring::Pos::Charger, "Charger", 5400, 0},   {bench::Place::Cable, ring::Pos::Cable, "Cable", 8500, 0},
+        {bench::Place::Device, ring::Pos::Device, "Device", 5400, 0},      {bench::Place::Battery, ring::Pos::Battery, "Battery", 46800, 38400},
+        {bench::Place::Log, ring::Pos::Log, "Log", 22400, 17200}};
+    for (const auto &c : cases) {
+        fixture();
+        Ui ui;
+        ui.init(1000);
+        ui.set_rotation(0, 1000);
+        ui.tick(1100);
+        ui.tick(1400);
+        uint32_t now = 2000;
+        auto settle = [&] { for (int i = 0; i < 4; ++i) { now += kPageTickMs; ui.tick(now); } while (ui.painting()) ui.tick(now); };
+        auto measure = [&](Button b, ButtonEvent press) {
+            std::memset(heat::n, 0, sizeof heat::n); heat::total = 0;
+            lcd::set_sink(&heat::sink);
+            ui.on_button(b, press, now);
+            settle();
+            lcd::set_sink(nullptr);
+        };
+        ui.open_place(c.place, now);
+        settle();
+        CHECK_EQ(ui.ring_view(), false);
+        const unsigned enter_px = [&] {
+            // The same place entered from the ring view: no rebuild either.
+            measure(Button::Back, ButtonEvent::Short);
+            CHECK_EQ(ui.ring_view(), true);
+            CHECK_EQ(int(ui.ring_position()), int(c.pos));
+            const unsigned left = heat::total, left_body = heat::touched_body(0, 240);
+            const unsigned diff = force_full_redraw(ui, now);
+            std::printf("ring leave %-7s: %u px (body %u), incremental vs forced diff=%u\n", c.name, left, left_body, diff);
+            CHECK_EQ(left_body <= c.body_px, true);
+            CHECK_EQ(left <= c.px, true);       // a rebuild paints 85000 to 123000 px here
+            CHECK_EQ(diff, 0u);
+            measure(Button::Ok, ButtonEvent::Short);
+            return heat::total;
+        }();
+        std::printf("ring enter %-7s: %u px (body %u)\n", c.name, enter_px, heat::touched_body(0, 240));
+        CHECK_EQ(ui.ring_view(), false);
+        CHECK_EQ(heat::touched_body(0, 240) <= c.body_px, true);
+        CHECK_EQ(enter_px <= c.px, true);
+    }
+    // Not at rest: the Actions sub-page is rebuilt on the way out (a Long Back leaves from any depth), and still converges.
+    fixture();
+    Ui ui;
+    ui.init(1000);
+    ui.set_rotation(0, 1000);
+    ui.tick(1100);
+    ui.tick(1400);
+    ui.open_place(bench::Place::Charger, 2000);
+    for (int i = 0; i < 6; ++i) ui.tick(2100 + 50 * i);
+    ui.on_button(Button::Ok, ButtonEvent::Short, 2500);
+    for (int i = 0; i < 6; ++i) ui.tick(2600 + 50 * i);
+    ui.on_button(Button::Back, ButtonEvent::Long, 3000);
+    for (int i = 0; i < 6; ++i) ui.tick(3100 + 50 * i);
+    while (ui.painting()) ui.tick(3500);
+    CHECK_EQ(ui.ring_view(), true);
+    const unsigned diff = force_full_redraw(ui, 3500);
+    std::printf("ring leave from Actions: incremental vs forced diff=%u\n", diff);
+    CHECK_EQ(diff, 0u);
+}
+
 // Incremental updates must converge to exactly what a forced full redraw paints. The forced
 // redraw is a rotation flip at the same instant (lcd::fill + redraw), which does not disturb
 // page state (goto_page would re-enter the charger-test page and reset its stage).
@@ -817,6 +884,7 @@ int main() {
     test_page_switch_budgets();
     test_scroll_budgets();
     test_convergence();
+    test_ring_leave_paint();
     test_trigger_pick_budgets();
     test_charger_page_flicker();
     test_wizard_budgets();
