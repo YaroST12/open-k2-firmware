@@ -6290,6 +6290,39 @@ static void test_toasts_time_out() {
     }
 }
 
+static void test_transient_current_spike_does_not_abort_run() {
+    // Regression (150819-deep-b4d5): a dark charger wakes on START even with a 0->5V inrush spike, and a single raw
+    // current spike mid-run (e.g. transcap 1-avg 140 us sample during PPS steps) does not latch inline / fail the run.
+    fixture();
+    g_stub.pm.vbus_mv = 0;
+    g_stub.vbus_on_rd = true;
+    g_stub.caps.valid = false;
+    g_stub.caps.num_pdos = 0;
+    g_stub.caps.active_cc = 0;
+    Ui ui;
+    open(ui);
+    review(ui);
+    g_hook_t0 = 1300;
+    start_press(ui, 1300);
+    confirm_press_nowait(ui, 1300);
+    // Wake the charger with a brief 2-tick inrush spike as VBUS rises.
+    g_stub.pm.vbus_mv = 5000;
+    g_stub.pm.current_ma = 250;
+    ui.tick(1350);
+    ui.tick(1370);
+    g_stub.pm.current_ma = 0;
+    finish_wait(ui, 1370, caps_after_700ms);
+    CHECK_EQ(ui.charger_test_stage(), kRunningStage);
+    CHECK_EQ(ui.link().inline_mode(), false);
+    // Mid-run single-tick and 2-tick current spikes (even across a 470 ms gap) must not latch inline.
+    uint32_t t = g_wait_end + 100;
+    for (int i = 0; i < 12 && ui.charger_test_busy(); ++i) {
+        g_stub.pm.current_ma = (i == 2 || i == 8 || i == 9) ? 140 : 0;
+        t += (i == 9) ? 470 : 20;
+        ui.tick(t);
+    }
+    CHECK_EQ(ui.link().inline_mode(), false);
+}
 int main() {
     overlap_enable();
     test_view_says_what_the_wizard_shows();
@@ -6435,5 +6468,6 @@ int main() {
     test_silent_vivo_reads_no_reply_not_a_fail();
     test_silent_qc_reads_no_reply_not_a_fail();
     test_xiaomi_unit_scenes();
+    test_transient_current_spike_does_not_abort_run();
     return test_report("test_ui_charger_test");
 }

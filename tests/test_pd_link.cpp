@@ -172,14 +172,22 @@ static LinkInput inl(std::uint32_t t, std::int32_t vbus, std::int32_t ma, std::u
     return i;
 }
 
+static std::uint32_t latch_load(Link& l, std::uint32_t t0, std::int32_t vbus, std::int32_t ma, std::uint32_t req = 0,
+                                std::uint8_t cc = 1, std::int32_t cc1_mv = -1, std::int32_t cc2_mv = -1) {
+    LinkInput i = inl(t0, vbus, ma, req);
+    i.cc = cc; i.cc1_mv = cc1_mv; i.cc2_mv = cc2_mv;
+    l.update(i);
+    return t0;
+}
+
 static void test_inline_by_current() {
     Link l;
     l.update(inl(0, 5000, 10));
     l.update(inl(100, 5000, 50));
     CHECK_EQ(l.inline_mode(), 0);       // 50 mA is not "more than 50"
-    l.update(inl(200, 5000, -51));
+    const std::uint32_t t = latch_load(l, 200, 5000, -51);
     CHECK_EQ(l.inline_mode(), 1);       // either direction
-    l.update(inl(300, 5000, 13));
+    l.update(inl(t + 100, 5000, 13));
     CHECK_EQ(l.inline_mode(), 1);       // sticky: an idle laptop draws ~13 mA
 }
 
@@ -254,7 +262,7 @@ static void test_a_rise_long_after_the_own_trigger_does_not_latch_either() {
     m.update(inl(0, 5000, 0, 0, false));
     m.update(inl(10, 9000, 0, 0, false));
     CHECK_EQ(m.inline_mode(), 0);
-    m.update(inl(20, 9000, 400, 0, false));  // the same link, a load: now it is certain
+    latch_load(m, 20, 9000, 400);            // the same link, a load: now it is certain
     CHECK_EQ(m.inline_mode(), 1);
     CHECK_EQ(int(m.inline_cause()), int(InlineCause::Load));
 }
@@ -269,15 +277,15 @@ static void test_inline_by_request_then_vbus() {
 
 static void test_inline_clears_when_idle() {
     Link l;
-    l.update(inl(0, 5000, 2000, 1));
+    const std::uint32_t t = latch_load(l, 0, 5000, 2000, 1);
     CHECK_EQ(l.inline_mode(), 1);
-    l.update(inl(100, 5000, 0, 1));     // load gone: 0 mA, no new Request
-    l.update(inl(kInlineQuietMs - 500, 5000, 0, 1));
+    l.update(inl(t + 100, 5000, 0, 1));     // load gone: 0 mA, no new Request
+    l.update(inl(t + kInlineQuietMs - 500, 5000, 0, 1));
     CHECK_EQ(l.inline_mode(), 1);       // not yet quiet for the whole window
-    l.update(inl(kInlineQuietMs + 1100, 5000, 0, 1));
+    l.update(inl(t + kInlineQuietMs + 1100, 5000, 0, 1));
     CHECK_EQ(l.inline_mode(), 0);       // idle for the whole window: restored without a detach
     CHECK_EQ(l.attached(), 1);
-    l.update(inl(kInlineQuietMs + 1200, 5000, 0, 1));
+    l.update(inl(t + kInlineQuietMs + 1200, 5000, 0, 1));
     CHECK_EQ(l.inline_mode(), 0);       // the old Request count must not re-latch
 }
 
@@ -285,14 +293,14 @@ static void test_inline_clears_when_idle() {
 // screen off) is still a phone. Hardware 2026-11-09: 2 s of quiet was enough to put the K2's Rd back on a hub - K2 - phone chain.
 static void test_a_short_lull_is_not_proof_of_a_standalone_k2() {
     Link l;
-    l.update(inl(0, 5000, 900, 1));
+    const std::uint32_t t = latch_load(l, 0, 5000, 900, 1);
     CHECK_EQ(l.inline_mode(), 1);
-    l.update(inl(100, 5000, 20, 1));
-    l.update(inl(kInlineQuietMs - 500, 5000, 20, 1));   // just under kInlineQuietMs below 50 mA
+    l.update(inl(t + 100, 5000, 20, 1));
+    l.update(inl(t + kInlineQuietMs - 500, 5000, 20, 1));   // just under kInlineQuietMs below 50 mA
     CHECK_EQ(l.inline_mode(), 1);
-    l.update(inl(kInlineQuietMs - 400, 5000, 900, 1));  // the phone draws again: the window restarts
-    l.update(inl(kInlineQuietMs - 300, 5000, 20, 1));
-    l.update(inl(kInlineQuietMs - 300 + kInlineQuietMs - 100, 5000, 20, 1));
+    l.update(inl(t + kInlineQuietMs - 400, 5000, 900, 1));  // the phone draws again: the window restarts
+    l.update(inl(t + kInlineQuietMs - 300, 5000, 20, 1));
+    l.update(inl(t + kInlineQuietMs - 300 + kInlineQuietMs - 100, 5000, 20, 1));
     CHECK_EQ(l.inline_mode(), 1);
 }
 
@@ -301,45 +309,45 @@ static void test_a_short_lull_is_not_proof_of_a_standalone_k2() {
 // attach a K2 sink again: the flap loop of the 2026-11-09 capture (inline yes / no every 0.5 s, 181502..183788 ms).
 static void test_inline_survives_a_vbus_collapse_and_the_reattach() {
     Link l;
-    l.update(inl(0, 5000, 900, 3));
+    const std::uint32_t t = latch_load(l, 0, 5000, 900, 3);
     CHECK_EQ(l.inline_mode(), 1);
-    l.update(inl(100, 0, 0, 3));
-    l.update(inl(500, 0, 0, 3));
+    l.update(inl(t + 100, 0, 0, 3));
+    l.update(inl(t + 500, 0, 0, 3));
     CHECK_EQ(l.attached(), 0);
     CHECK_EQ(l.inline_mode(), 1);       // detached for a moment: still possibly inline
-    l.update(inl(1500, 0, 0, 3));
+    l.update(inl(t + 1500, 0, 0, 3));
     CHECK_EQ(l.inline_mode(), 1);
-    l.update(inl(2000, 5000, 0, 3));    // back, no load yet, the old Request count must not matter
+    l.update(inl(t + 2000, 5000, 0, 3));    // back, no load yet, the old Request count must not matter
     CHECK_EQ(l.attached(), 1);
     CHECK_EQ(l.inline_mode(), 1);
-    l.update(inl(2000 + kInlineQuietMs - 500, 5000, 0, 3));   // the quiet window starts at the re-attach, not at the old load
+    l.update(inl(t + 2000 + kInlineQuietMs - 500, 5000, 0, 3));   // the quiet window starts at the re-attach, not at the old load
     CHECK_EQ(l.inline_mode(), 1);
 }
 
 // Gone for real: nothing came back for kInlineHoldMs, the next attach starts from "standalone".
 static void test_inline_clears_after_a_long_detach() {
     Link l;
-    l.update(inl(0, 5000, 900, 3));
-    l.update(inl(100, 0, 0, 3));
-    l.update(inl(500, 0, 0, 3));
+    const std::uint32_t t = latch_load(l, 0, 5000, 900, 3);
+    l.update(inl(t + 100, 0, 0, 3));
+    l.update(inl(t + 500, 0, 0, 3));
     CHECK_EQ(l.attached(), 0);
-    l.update(inl(100 + kInlineHoldMs - 100, 0, 0, 3));
+    l.update(inl(t + 100 + kInlineHoldMs - 100, 0, 0, 3));
     CHECK_EQ(l.inline_mode(), 1);
-    l.update(inl(100 + kInlineHoldMs + 100, 0, 0, 3));
+    l.update(inl(t + 100 + kInlineHoldMs + 100, 0, 0, 3));
     CHECK_EQ(l.inline_mode(), 0);
-    l.update(inl(100 + kInlineHoldMs + 2000, 5000, 0, 3));
+    l.update(inl(t + 100 + kInlineHoldMs + 2000, 5000, 0, 3));
     CHECK_EQ(l.inline_mode(), 0);       // the old Request count must not re-trigger
 }
 
 static void test_inline_stays_while_active() {
     Link l;
-    l.update(inl(0, 5000, 2000, 1));
-    for (std::uint32_t t = 100; t < 6000; t += 100) l.update(inl(t, 5000, (t / 100) % 2 ? 0 : 80, 1));
+    const std::uint32_t t0 = latch_load(l, 0, 5000, 2000, 1);
+    for (std::uint32_t t = t0 + 100; t < t0 + 6000; t += 100) l.update(inl(t, 5000, (t / 100) % 2 ? 0 : 80, 1));
     CHECK_EQ(l.inline_mode(), 1);       // current above 50 mA every 200 ms keeps the window open
-    l.update(inl(6100, 5000, 0, 2));    // a fresh Request restarts it too
-    l.update(inl(6100 + kInlineQuietMs - 1000, 5000, 0, 2));
+    l.update(inl(t0 + 6100, 5000, 0, 2));    // a fresh Request restarts it too
+    l.update(inl(t0 + 6100 + kInlineQuietMs - 1000, 5000, 0, 2));
     CHECK_EQ(l.inline_mode(), 1);
-    l.update(inl(6100 + kInlineQuietMs + 100, 5000, 0, 2));
+    l.update(inl(t0 + 6100 + kInlineQuietMs + 100, 5000, 0, 2));
     CHECK_EQ(l.inline_mode(), 0);
 }
 
@@ -352,7 +360,7 @@ static void test_a_boot_into_a_silent_live_contract_does_not_latch_until_traffic
     for (std::uint32_t t = 0; t <= 60000; t += 100) l.update(inl(t, 20190, 0, 0, false));
     CHECK_EQ(l.inline_mode(), 0);
     CHECK_EQ(int(l.inline_cause()), int(InlineCause::None));
-    l.update(inl(60100, 20190, 600, 0, false));           // the laptop draws
+    latch_load(l, 60100, 20190, 600);                     // the laptop draws
     CHECK_EQ(l.inline_mode(), 1);
     CHECK_EQ(int(l.inline_cause()), int(InlineCause::Load));
     Link r;
@@ -756,8 +764,8 @@ static void test_only_traffic_latches_and_names_its_cause() {
     CHECK_EQ(l.inline_mode(), 0);
     CHECK_EQ(int(l.inline_cause()), int(InlineCause::None));
     Link m;   // a load latch keeps its cause when a Request follows
-    m.update(inl(0, 5100, 400));
-    m.update(inl(20, 5100, 400, 1));
+    const std::uint32_t mt = latch_load(m, 0, 5100, 400);
+    m.update(inl(mt + 20, 5100, 400, 1));
     CHECK_EQ(int(m.inline_cause()), int(InlineCause::Load));
 }
 
@@ -765,11 +773,11 @@ static void test_only_traffic_latches_and_names_its_cause() {
 // a latch never clears in the first moments after VBUS returns.
 static void test_after_a_cut_the_sink_gets_time_to_show_itself() {
     Link l;
-    l.update(inl(0, 5100, 900));
+    const std::uint32_t t0 = latch_load(l, 0, 5100, 900);
     CHECK_EQ(l.inline_mode(), 1);
-    const std::uint32_t cut_at = kInlineQuietMs - 500;
+    const std::uint32_t cut_at = t0 + kInlineQuietMs - 500;
     const std::uint32_t back_at = cut_at + 800;
-    for (std::uint32_t t = 20; t < cut_at; t += 20) l.update(inl(t, 5100, 0));         // quiet just short of kInlineQuietMs
+    for (std::uint32_t t = t0 + 20; t < cut_at; t += 20) l.update(inl(t, 5100, 0));         // quiet just short of kInlineQuietMs
     for (std::uint32_t t = cut_at; t < back_at; t += 20) {                              // a cut: VBUS and the line gone
         LinkInput i = inl(t, 3900, 0);
         i.cc = 0;
@@ -821,46 +829,46 @@ static void test_usba_phone_unplug_m4c_stays_attached() {
 static void test_inline_m4b_pd_unplug_open_rp() {
     // M4b: PD charger + phone inline -> unplug: VBUS=0, CC1=3300 mV -> clears in ~1.5 s.
     Link l;
-    l.update(inl(0, 9000, 1500, 1));
+    const std::uint32_t t0 = latch_load(l, 0, 9000, 1500, 1);
     CHECK_EQ(l.inline_mode(), 1);
-    for (std::uint32_t t = 20; t < 1500; t += 20) {
+    for (std::uint32_t t = t0 + 20; t < t0 + 1500; t += 20) {
         LinkInput i = inl(t, 0, 0, 1);
         i.cc = 0; i.cc1_mv = 3300; i.cc2_mv = 0;
         l.update(i);
     }
     CHECK_EQ(l.attached(), 0);
     CHECK_EQ(l.inline_mode(), 1);   // not yet > kInlineOpenRpMs
-    LinkInput open = inl(1540, 0, 0, 1);
+    LinkInput open = inl(t0 + 1540, 0, 0, 1);
     open.cc = 0; open.cc1_mv = 3300; open.cc2_mv = 0;
     l.update(open);
     CHECK_EQ(l.inline_mode(), 0);   // cleared by open_rp at ~1.5 s
 
     // Both unplugged (VBUS=0, CC=0, cc1=0, cc2=0) -> clears in kInlineHoldMs (3 s).
     Link b;
-    b.update(inl(0, 9000, 1500, 1));
+    const std::uint32_t tb = latch_load(b, 0, 9000, 1500, 1);
     CHECK_EQ(b.inline_mode(), 1);
-    for (std::uint32_t t = 20; t <= 20 + kInlineHoldMs - 100; t += 20) {
+    for (std::uint32_t t = tb + 20; t <= tb + 20 + kInlineHoldMs - 100; t += 20) {
         LinkInput i = inl(t, 0, 0, 1);
         i.cc = 0; i.cc1_mv = 0; i.cc2_mv = 0;
         b.update(i);
     }
     CHECK_EQ(b.inline_mode(), 1);
-    LinkInput gone = inl(20 + kInlineHoldMs + 100, 0, 0, 1);
+    LinkInput gone = inl(tb + 20 + kInlineHoldMs + 100, 0, 0, 1);
     gone.cc = 0; gone.cc1_mv = 0; gone.cc2_mv = 0;
     b.update(gone);
     CHECK_EQ(b.inline_mode(), 0);
 
     // 1.2 s VBUS dip preserves inline_.
     Link d;
-    d.update(inl(0, 9000, 1500, 1));
-    for (std::uint32_t t = 20; t < 1220; t += 20) {
+    const std::uint32_t td = latch_load(d, 0, 9000, 1500, 1);
+    for (std::uint32_t t = td + 20; t < td + 1220; t += 20) {
         LinkInput i = inl(t, 0, 0, 1);
         i.cc = 0; i.cc1_mv = 0; i.cc2_mv = 0;
         d.update(i);
     }
     CHECK_EQ(d.attached(), 0);
     CHECK_EQ(d.inline_mode(), 1);
-    d.update(inl(1240, 5000, 0, 1));
+    d.update(inl(td + 1240, 5000, 0, 1));
     CHECK_EQ(d.attached(), 1);
     CHECK_EQ(d.inline_mode(), 1);
 }
@@ -868,18 +876,16 @@ static void test_inline_m4b_pd_unplug_open_rp() {
 static void test_inline_m4c_usba_phone_unplug_open_rp() {
     // M4c: USB-A charger + phone -> unplug: VBUS=5000, I=0, CC1 jumps 420 -> 3311 mV, cc: 1 -> 0 -> stays attached and clears in ~1.5 s.
     Link l;
-    LinkInput chg = inl(0, 5000, 1200);
-    chg.cc = 1; chg.cc1_mv = 420; chg.cc2_mv = 1750;
-    l.update(chg);
+    const std::uint32_t t0 = latch_load(l, 0, 5000, 1200, 0, 1, 420, 1750);
     CHECK_EQ(l.inline_mode(), 1);
-    for (std::uint32_t t = 20; t < 1500; t += 20) {
+    for (std::uint32_t t = t0 + 20; t < t0 + 1500; t += 20) {
         LinkInput i = inl(t, 5000, 0);
         i.cc = 0; i.cc1_mv = 3311; i.cc2_mv = 1750;
         l.update(i);
     }
     CHECK_EQ(l.attached(), 1);
     CHECK_EQ(l.inline_mode(), 1);
-    LinkInput done = inl(1540, 5000, 0);
+    LinkInput done = inl(t0 + 1540, 5000, 0);
     done.cc = 0; done.cc1_mv = 3311; done.cc2_mv = 1750;
     l.update(done);
     CHECK_EQ(l.attached(), 1);
@@ -890,16 +896,50 @@ static void test_inline_direct_pd_charger_plain_cable_phone_sipping_negative() {
     // Direct PD charger + plain cable + phone sipping 20 mA (cc=1, cc1=1600, cc2=3300):
     // open_rp MUST NOT fire from CC2's open Rp while CC1 is loaded by the phone's Rd!
     Link l;
-    LinkInput chg = inl(0, 9000, 1000, 1);
-    chg.cc = 1; chg.cc1_mv = 1600; chg.cc2_mv = 3300;
-    l.update(chg);
+    const std::uint32_t t0 = latch_load(l, 0, 9000, 1000, 1, 1, 1600, 3300);
     CHECK_EQ(l.inline_mode(), 1);
-    for (std::uint32_t t = 20; t <= 20 + kInlineOpenRpMs + 1000; t += 20) {
+    for (std::uint32_t t = t0 + 20; t <= t0 + 20 + kInlineOpenRpMs + 1000; t += 20) {
         LinkInput i = inl(t, 9000, 20, 1);
         i.cc = 1; i.cc1_mv = 1600; i.cc2_mv = 3300;
         l.update(i);
     }
     CHECK_EQ(l.inline_mode(), 1);
+}
+
+// Regression (Baseus 140W 150819-deep-b4d5): CurrentSpikeFilter passes a live load on the first boot sample, rejects
+// up to 2 consecutive raw current spikes (e.g. 140 us transcap samples or VBUS-step capacitive surges), latches on 3
+// sustained samples, and drops back to 0 in 3 samples after unplug.
+static void test_transient_raw_current_spikes_never_latch_inline() {
+    CurrentSpikeFilter f;
+    // First boot sample passes through immediately (booting into a live sink must latch on tick 1).
+    CHECK_EQ(f.push(500), 500);
+    f.reset();
+    CHECK_EQ(f.push(0), 0);
+    CHECK_EQ(f.push(500), 0);   // 1 spike right after 0 is still rejected
+    f.reset();
+    Link l;
+    for (int i = 0; i < 3; ++i) l.update(inl(std::uint32_t(i * 20), 5700, f.push(0), 0, true));
+    // Up to 2 consecutive spikes (positive or negative) in a 5-sample window do not latch.
+    for (int i = 0; i < 2; ++i) {
+        l.update(inl(std::uint32_t(60 + i * 20), 5700, f.push(i == 1 ? -140 : 140), 0, true));
+        CHECK_EQ(l.inline_mode(), 0);
+    }
+    // Back to 0, then 2 spikes separated by a gap never latch.
+    for (int i = 0; i < 3; ++i) l.update(inl(std::uint32_t(100 + i * 20), 5700, f.push(0), 0, true));
+    l.update(inl(160, 5700, f.push(150), 0, true));
+    l.update(inl(630, 5700, f.push(150), 0, true));
+    CHECK_EQ(l.inline_mode(), 0);
+    // 3 sustained samples latch inline_mode(), and 3 zero samples drop back to 0 for open-Rp release.
+    for (int i = 0; i < 5; ++i) f.push(0);
+    for (int i = 0; i < 2; ++i) {
+        l.update(inl(std::uint32_t(1000 + i * 20), 5700, f.push(400), 0, true));
+        CHECK_EQ(l.inline_mode(), 0);
+    }
+    l.update(inl(1040, 5700, f.push(400), 0, true));
+    CHECK_EQ(l.inline_mode(), 1);
+    CHECK_EQ(int(l.inline_cause()), int(InlineCause::Load));
+    for (int i = 0; i < 2; ++i) f.push(0);
+    CHECK_EQ(f.push(0), 0);
 }
 
 int main() {
@@ -956,5 +996,6 @@ int main() {
     test_inline_m4b_pd_unplug_open_rp();
     test_inline_m4c_usba_phone_unplug_open_rp();
     test_inline_direct_pd_charger_plain_cable_phone_sipping_negative();
+    test_transient_raw_current_spikes_never_latch_inline();
     return test_report("test_pd_link");
 }

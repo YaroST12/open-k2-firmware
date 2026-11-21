@@ -539,6 +539,7 @@ private:
     uint32_t last_update_ms_ K2_BSS_INIT(0);
     uint32_t cable_seq_seen_ K2_BSS_INIT(0);   // fusb302::cable_seq() last folded into the link state
     pd::Link link_;
+    pd::CurrentSpikeFilter current_filter_;
     uint32_t trig_until_ K2_BSS_INIT(0);
     pd::Choice trig_choice_ K2_BSS_ZERO;
 

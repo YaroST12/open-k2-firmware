@@ -202,6 +202,25 @@ constexpr bool identify_alone(bool inline_mode, bool vbus_known, std::int32_t vb
            wait_kind == raguard::WaitKind::DualRolePort;
 }
 
+// 5-sample sliding median by magnitude for Ui::tick() -> LinkInput::current_ma.
+// Rejects up to 2 consecutive raw current spikes (e.g., 140 us transcap samples or VBUS-step capacitive pulses),
+// passes sample 1 immediately after reset (booting into a live load), and follows real plug/unplug in 3 ticks (~60 ms).
+class CurrentSpikeFilter {
+public:
+    static constexpr std::size_t kWindow = 5;
+
+    void reset() {
+        head_ = 0;
+        count_ = 0;
+    }
+    std::int32_t push(std::int32_t current_ma);
+
+private:
+    std::int32_t buf_[kWindow] K2_BSS_ZERO;
+    std::uint8_t head_ K2_BSS_INIT(0);
+    std::uint8_t count_ K2_BSS_INIT(0);
+};
+
 // "5s", "1m 23s", "1h 02m", "99h+".
 void format_ago(std::uint32_t seconds, char* out, std::size_t n);
 

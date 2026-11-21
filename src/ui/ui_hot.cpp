@@ -256,6 +256,7 @@ K2_HOT UiAction Ui::tick(uint32_t now_ms) {
         if (ctx_.cable_mode == cable_r::Mode::Passive) ctx_.cable.sample(ctx_.pm_avg.vbus_mv, ctx_.pm_avg.current_ma);
     } else {
         ctx_.cable.reset();
+        current_filter_.reset();
     }
     ctx_.analog = adc::read();
     ctx_.plus_key = down_[static_cast<int>(Button::Plus)];   // the physical key (remote presses never set down_): the Waiting stage logs while it is held
@@ -311,7 +312,7 @@ K2_HOT UiAction Ui::tick(uint32_t now_ms) {
     in.vbus_known = ctx_.pm_online;
     in.vbus_mv = ctx_.vbus_fast_mv;
     in.current_known = ctx_.pm_online;
-    in.current_ma = raw_current_ma;
+    in.current_ma = ctx_.pm_online ? current_filter_.push(raw_current_ma) : 0;
     in.cc = fusb302::active_cc();
     in.caps_rx = fusb302::rx_count();
     in.requests = fusb302::contract().requests;

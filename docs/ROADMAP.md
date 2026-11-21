@@ -99,6 +99,14 @@ Open defects, newest first. A row leaves this list when its fix is merged and se
   Also on that build a START against the Baseus with its output off (it needs Rd to turn on) gave "no PD source
   capabilities after a rescan: legacy-only run". The same runs on 53dee143 (without b4d5ed89) woke the charger and passed
   32/0 (Deep) and 26/0 (Medium).
+  **Fixed on host, not verified on hardware:** `b4d5ed89` switched `Ui::tick()` (`src/ui/ui_hot.cpp`) from the 128-sample
+  `pm_avg.current_ma` to unfiltered single-sample `power::read_raw()` while `transcap::arm()` runs INA226 in 1-avg 140 us
+  mode (`kIna226Fast`), so a single transient sample > 50 mA (150 uV) latched `inline_` on `439886 ms`. Added a 5-sample
+  sliding median by magnitude (`pd::CurrentSpikeFilter`) before `LinkInput::current_ma` (rejects up to 2-tick spikes while
+  passing boot tick 1 and dropping to 0 in 3 ticks on unplug). Note on `150305-deep-b4d5`: that capture started with
+  `vbus=5010 mV`, `cc1=3313 mV`, `dp=2695/dm=2700` (same as `145031-deep-b4d9` before `b4d5ed89`), whereas dark-port
+  `START` (`vbus < 4500 mV`) is unchanged and regression-tested with an inrush spike (`test_pd_link`,
+  `test_ui_charger_test`). Needs hardware run on Baseus 140 W.
 
 - **`make gate` fails at the tests on public since 3614728f** (2026-11-21, host). `test_ui_perf.cpp:516` (worst scroll over
   53600) and `test_ui_overdraw.cpp:227` (6 full-paint budgets) fail from 3614728f (place scrollbar to the bottom, toast

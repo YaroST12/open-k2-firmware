@@ -156,6 +156,7 @@ void Ui::init(uint32_t now_ms, bool cancel_resume) {
     sync_surface();
     panel_ = surface_of(layout_.panel);
     ctx_.meter.reset(now_ms);
+    current_filter_.reset();
 
     booting_ = true;
     lcd::fill(kBg);

@@ -192,6 +192,26 @@ void Link::force_detached(std::uint32_t now_ms) {
     paused_seen_ = false;
 }
 
+std::int32_t CurrentSpikeFilter::push(std::int32_t current_ma) {
+    buf_[head_] = current_ma;
+    head_ = static_cast<std::uint8_t>((head_ + 1) % kWindow);
+    if (count_ < kWindow) count_++;
+    std::int32_t sorted[kWindow];
+    const std::size_t n = count_;
+    for (std::size_t i = 0; i < n; ++i) sorted[i] = buf_[i];
+    for (std::size_t i = 1; i < n; ++i) {
+        const std::int32_t key = sorted[i];
+        const std::int32_t key_mag = power::abs_sat(key);
+        std::size_t j = i;
+        while (j > 0 && power::abs_sat(sorted[j - 1]) > key_mag) {
+            sorted[j] = sorted[j - 1];
+            --j;
+        }
+        sorted[j] = key;
+    }
+    return sorted[(n - 1) / 2];
+}
+
 bool Link::take_new_source() {
     const bool r = new_source_;
     new_source_ = false;
