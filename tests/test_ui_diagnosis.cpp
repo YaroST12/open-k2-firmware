@@ -67,6 +67,11 @@ static void test_verdict_tone() {
     CHECK_EQ(int(DiagnosisPage::verdict_tone(r)), int(FooterTone::Error));
     r.power = diag::kPowerOver;
     CHECK_EQ(int(DiagnosisPage::verdict_tone(r)), int(FooterTone::Caution));
+    diag::Report fail = diag_fixture::case1();   // a Fail finding under an over-draw verdict: red, like the stamp over it
+    fail.empty = false;
+    fail.link = 0;
+    fail.power = diag::kPowerOver;
+    CHECK_EQ(int(DiagnosisPage::verdict_tone(fail)), int(FooterTone::Error));
     r.power = diag::kPowerOk;
     r.link = 1;
     CHECK_EQ(int(DiagnosisPage::verdict_tone(r)), int(FooterTone::Caution));
@@ -201,6 +206,38 @@ static void test_verdict_toast_times_out() {
     CHECK(err > 100);
 }
 
+// "Link OK, K2 is sink" over a Warn finding: the stamp stays amber for the finding, the chip is neutral and times out (no standing pill).
+static void test_sink_verdict_is_no_standing_pill() {
+    diag::Report r = diag_fixture::case1();
+    for (unsigned i = 0; i < r.n; i++) r.f[i].sev = diag::Sev::Warn;
+    r.empty = false; r.link = 0; r.power = diag::kPowerActive;
+    g_stub.diag_report = r;
+    g_stub.diag_state = 1;
+    Ui &ui = fresh_ui();
+    ui.tick(1000);
+    std::uint32_t t = 1100;
+    ui.open_place(bench::Place::Log, t);
+    ui.tick(t += 100);
+    while (ui.painting()) ui.tick(t += 20);
+    CHECK(ui.context().toast.active(t));
+    CHECK_EQ(int(ui.context().toast.tone), int(FooterTone::Info));
+    CHECK(!ui.context().toast.drawn || ui.context().toast.tone != FooterTone::Caution);
+    for (int i = 0; i < 160; i++) ui.tick(t += 20);
+    while (ui.painting()) ui.tick(t += 20);
+    CHECK(!ui.context().toast.active(t));
+    CHECK(!ui.context().toast.drawn);
+    const int caution = count_px(kCautionT);   // the footer slot stays clear of a caution pill; only the stamp's own tint remains
+    for (int i = 0; i < 160; i++) ui.tick(t += 20);
+    CHECK_EQ(count_px(kCautionT), caution);
+    CHECK(!ui.context().toast.active(t));
+    // the pill rows: no caution-tinted pixels in the footer pill strip
+    const int y0 = ui.context().content.h - kToastH - kToastMarginBottom;
+    int pill = 0;
+    for (int y = y0; y < y0 + kToastH; y++)
+        for (int x = 0; x < ui.context().content.w; x++) pill += g_panel[(kit::kBelowBar + y) * LCD_WIDTH + x] == kCautionT;
+    CHECK_EQ(pill, 0);
+}
+
 int main() {
     test_cell_of();
     test_tone_of();
@@ -209,5 +246,6 @@ int main() {
     test_page_empty();
     test_place_stamp_replaces_top();
     test_verdict_toast_times_out();
+    test_sink_verdict_is_no_standing_pill();
     return test_report("test_ui_diagnosis");
 }

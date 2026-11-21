@@ -229,7 +229,7 @@ FooterTone DiagnosisPage::tone_of(const diag::Report &r) {
 FooterTone DiagnosisPage::verdict_tone(const diag::Report &r) {
     if (r.empty || r.no_pd) return FooterTone::Info;
     if (r.link == 2 || r.power == diag::kPowerShort) return FooterTone::Error;
-    if (r.link == 1 || r.power == diag::kPowerOver) return FooterTone::Caution;
+    if (r.link == 1 || r.power == diag::kPowerOver) return tone_of(r) == FooterTone::Error ? FooterTone::Error : FooterTone::Caution;   // a failing finding keeps the hero's red
     return r.power == diag::kPowerOk ? FooterTone::Ok : FooterTone::Info;
 }
 
