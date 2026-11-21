@@ -2241,6 +2241,20 @@ static void test_charger_tab_inline_never_starts_the_offers_read() {
     CHECK_EQ(ui.context().toast.active(t), false);   // the toast was shown once and ran out
 }
 
+// The K2 lives on this port's VBUS: the list is read on the contract it holds, Rd is left as it is.
+static void test_charger_tab_self_powered_keeps_rd() {
+    Ui &ui = fresh_ui();
+    g_stub.self_powered = true;
+    uint32_t t = offers_fresh_presence();
+    attach_charger(ui, t);
+    t = open_and_settle(ui, kConnTabAlias, t);
+    for (int i = 0; i < 60; i++) main_loop_pass(ui, t += 100);
+    CHECK_EQ(g_stub.rr_starts, 0);
+    CHECK_EQ(g_stub.rr_releases, 0);
+    CHECK_EQ(g_stub.rr_stand_downs, 0);
+    g_stub.self_powered = false;
+}
+
 // The refusal belongs to the presence it was raised for: the latch lifting and the charger leaving leave nothing stale.
 static void test_charger_tab_inline_refusal_does_not_go_stale() {
     Ui &ui = fresh_ui();
@@ -2357,6 +2371,29 @@ static void test_auto_read_states_all_rotations() {
             std::snprintf(name, sizeof name, "k2_auto_inline_charger_rot%d", r);
             dump_panel(name);
         }
+        {   // a plain 5 V charger waiting, no caps yet: the rows say so while the read runs
+            Ui &ui = fresh_ui();
+            uint32_t t = offers_fresh_presence();
+            g_stub.cc = 1; g_stub.pm.vbus_mv = 5000; g_stub.pm.current_ma = 0; g_stub.pm_online = true;
+            g_stub.caps = {};
+            for (int i = 0; i < 3; i++) ui.tick(t += 100);
+            ui.set_rotation(r, t += 100);
+            t = open_and_settle(ui, kConnTabAlias, t);
+            main_loop_pass(ui, t += 100);
+            g_stub.rr_status.state = pd::RereadState::Running;
+            for (int i = 0; i < 36; i++) main_loop_pass(ui, t += 100);   // past the toast: the rows alone show the read
+            while (ui.painting()) ui.tick(t += 2);
+            CHECK_EQ(offers::running(), true);
+            CHECK_EQ(ui.context().toast.active(t), false);
+            const auto reading = frame();
+            std::snprintf(name, sizeof name, "k2_auto_offers_nocaps_rot%d", r);
+            dump_panel(name);
+            g_stub.rr_status.state = pd::RereadState::Idle;
+            for (int i = 0; i < 60; i++) main_loop_pass(ui, t += 100);
+            while (ui.painting()) ui.tick(t += 2);
+            CHECK_EQ(offers::running(), false);
+            CHECK_EQ(frame() != reading, true);   // the loading row went away with the read
+        }
         {   // the offers read under way
             Ui &ui = fresh_ui();
             uint32_t t = offers_fresh_presence();
@@ -2436,6 +2473,7 @@ int main() {
     test_cable_tab_reads_when_the_inline_latch_lifts();
     test_charger_tab_inline_never_starts_the_offers_read();
     test_charger_tab_inline_refusal_does_not_go_stale();
+    test_charger_tab_self_powered_keeps_rd();
     test_charger_tab_reads_offers_and_yields_to_the_latch();
     test_refresh_counts_as_the_offers_read();
     test_auto_read_states_all_rotations();

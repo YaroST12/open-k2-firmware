@@ -397,7 +397,7 @@ void ConnectionPage::auto_reads(uint32_t now_ms) {
         const pd::OrWhy w = offers::why();
         // Only a reason that still holds: the refusal outlives the latch until the main loop's next pass.
         note_refusal(w == pd::OrWhy::Inline && inl ? conn::kWhyInline : w == pd::OrWhy::Busy && ctx_.ui->ports_busy() ? conn::kWhyBusy : nullptr, now_ms);
-        // The read is quick and the rows already hold their data: announce its start once so it is seen.
+        // Rows that already hold caps show no loading state, so announce the read's start once.
         if (offers::running() && !reading_toast_) ctx_.toast.show(FooterTone::Info, "Reading offers...", now_ms, kToastDefaultMs);
         reading_toast_ = offers::running();
         return;
@@ -1705,6 +1705,7 @@ void build_no_pd_rows(Rows &R, const void *p) {
         typec_row_text(ctx.vbus_mv, ctx.rp_ma, v);   // the debounced VBUS (Row D), like the list body
         if (v.view().empty()) v.put("Unknown");
     }
+    if (ctx.tab == conn::Tab::Source && offers::running()) R.add("PD", kFaint).put("Reading...");   // the read may yet find offers
     if (ctx.tab == conn::Tab::Sink) {
         put_a(R.add("Draw", kAmp), uint32_t(power::abs_sat(ctx.current_ma)));
         vooc_row(R, ctx.vooc);
