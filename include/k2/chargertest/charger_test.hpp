@@ -197,6 +197,11 @@ enum class LegacyKnob : uint8_t { QuietMs, SteadyMs, FirstWaitMs, GapMs, HoldMs,
 uint32_t legacy_tune(LegacyKnob k);
 bool legacy_tune_set(uint8_t knob, uint32_t value);   // false: unknown knob or out of range
 void legacy_tune_reset();
+// The PD driver drops Source_Capabilities nobody answered this long after the last frame; until then the link guard reads a PD-silent
+// source's own announcements as a PD contract and refuses the fast-charge start. quiet_ms under it means the run starts inside that
+// window, so the guard's "PD contract" (and only that one, never a load) must not stop the Runner's own Legacy request.
+inline constexpr uint32_t kCapsStaleMs = 2000;
+bool legacy_guard_override();
 // pattern reannounce-after-own-release (Anker IQ4, runs/qc2b-2026-11-21): a source that reads the engine's D+/D- release as a re-plug
 // announces its list to the PD-silent sink again (first frame 0.1 to 0.5 s after the release, VBUS at 5 V all along). The first release of
 // a silent Legacy attach is watched for kOwnReleaseCapsMs (the 500 ms line discharge + kRestartCapsMs); a frame in it is the source's

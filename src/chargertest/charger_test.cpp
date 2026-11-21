@@ -282,6 +282,7 @@ bool legacy_tune_set(uint8_t knob, uint32_t value) {
     return true;
 }
 void legacy_tune_reset() { g_tune = kTuneDefault; }
+bool legacy_guard_override() { return quiet_ms() < kCapsStaleMs; }
 namespace {
 // "A Hard Reset happened on the link", whoever sent it: the sink counts the ones the K2 sent (hard_resets) and the ones the source
 // sent (source_hard_resets) apart, and the runner only ever compares this sum with a value it took from the same sum.

@@ -4517,7 +4517,12 @@ def cmd_charger_legacy_tune(link, a):
     for name in names:
         i = LEGACY_KNOBS.index(name)
         args = bytes([3, i]) + (a.value.to_bytes(4, "little") if a.value is not None and a.knob is not None else b"")
-        p = link.call(CMD_LAB, args).payload
+        try:
+            p = link.call(CMD_LAB, args).payload
+        except RemoteError as e:
+            if a.knob is None and e.status == STATUS_BAD_ARG:   # an older firmware has fewer knobs: the list stops at its last one
+                break
+            raise
         _need(p, 5, "charger legacy tune")
         out[name] = int.from_bytes(p[1:5], "little")
     return out

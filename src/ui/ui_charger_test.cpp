@@ -22,6 +22,7 @@
 #include "k2/chargertest/charger_journal_hw.hpp"
 #include "k2/pd/emk_spoof.hpp"
 #include "k2/pd/pd_ccmode.hpp"
+#include "k2/pd/link.hpp"
 #include "k2/pd/pd_link.hpp"
 #include "k2/drivers/power_monitor.hpp"
 #include "k2/pd/power_source.hpp"
@@ -292,7 +293,10 @@ fc::Fail ChargerTestSession::request_fc(fc::Proto p, int mv, bool retarget, int 
         fc_words_ = handshake_words(p);
         if (fc_words_ && view_) view_->announce(fc_words_);   // before the engine starts: nothing can be painted once it has
     }
-    return retarget ? fctrig::set_target(mv, true, ufcs_ma, p == fc::Proto::Scp ? ma : -1) : fctrig::start(p, mv, true, false, ma, ufcs_ma);
+    if (retarget) return fctrig::set_target(mv, true, ufcs_ma, p == fc::Proto::Scp ? ma : -1);
+    // A PD-silent attach whose source is still announcing (quiet_ms below the caps' stale time) is not a contract; a load still refuses.
+    const bool silent_caps = ct::legacy_guard_override() && link::inline_now() == link::Reason::PdContract;
+    return fctrig::start(p, mv, true, silent_caps, ma, ufcs_ma);
 }
 void ChargerTestSession::fc_keep(bool on) { fctrig::keep(on); }
 void ChargerTestSession::legacy_only(bool on) { fusb302::legacy_only(on); }

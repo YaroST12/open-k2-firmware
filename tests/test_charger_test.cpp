@@ -6141,6 +6141,12 @@ static void test_legacy_tune_knobs() {
     CHECK_EQ(ct::legacy_tune_set(uint8_t(ct::LegacyKnob::Chain), 0), true);
     CHECK_EQ(ct::legacy_tune(ct::LegacyKnob::Chain), 0u);
     ct::legacy_tune_reset();
+    CHECK_EQ(ct::legacy_guard_override(), false);                                       // the default waits the caps out: no override
+    CHECK_EQ(ct::legacy_tune_set(uint8_t(ct::LegacyKnob::QuietMs), ct::kCapsStaleMs - 1), true);
+    CHECK_EQ(ct::legacy_guard_override(), true);
+    CHECK_EQ(ct::legacy_tune_set(uint8_t(ct::LegacyKnob::QuietMs), ct::kCapsStaleMs), true);
+    CHECK_EQ(ct::legacy_guard_override(), false);
+    ct::legacy_tune_reset();
     CHECK_EQ(ct::legacy_tune_set(uint8_t(ct::LegacyKnob::GapMs), 60001), false);
     {   // defaults: a flood of 4 s after the attach is waited out, plus the quiet time
         Fake f; ct::Runner r(f);

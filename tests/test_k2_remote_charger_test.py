@@ -1030,5 +1030,30 @@ class ChargerTestStartTest(unittest.TestCase):
                          "run 8 started (previous run 7)")
 
 
+class LegacyTune(unittest.TestCase):
+    class Lab:
+        def __init__(self, knobs):
+            self.knobs, self.sent = knobs, []
+
+        def call(self, cmd, payload=b""):
+            self.sent.append(payload)
+            if payload[1] >= self.knobs:   # the firmware's own knob count
+                raise kr.RemoteError(kr.STATUS_BAD_ARG, cmd)
+            return kr.Response(cmd, len(self.sent), 0, bytes([payload[1]]) + (2500 + payload[1]).to_bytes(4, "little"))
+
+    def test_read_all_stops_at_the_firmware_last_knob(self):
+        a = kr.build_parser().parse_args(["charger-legacy-tune"])
+        out = kr.cmd_charger_legacy_tune(self.Lab(5), a)    # a firmware from before chain_level
+        self.assertEqual(list(out), kr.LEGACY_KNOBS[:5])
+        out = kr.cmd_charger_legacy_tune(self.Lab(6), a)
+        self.assertEqual(list(out), kr.LEGACY_KNOBS)
+        self.assertEqual(out["chain_level"], 2505)
+
+    def test_named_unknown_knob_still_refused(self):
+        a = kr.build_parser().parse_args(["charger-legacy-tune", "chain_level"])
+        with self.assertRaises(kr.RemoteError):
+            kr.cmd_charger_legacy_tune(self.Lab(5), a)
+
+
 if __name__ == "__main__":
     unittest.main()
