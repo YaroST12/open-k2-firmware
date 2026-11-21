@@ -10,6 +10,7 @@
 #include "card_fixtures.h"
 #include "diag_fixture.h"
 #include "fake_lcd.h"
+#include "overlap_log.h"
 #include "k2/battery/battery_hw.hpp"
 #include "k2/chargertest/report_card_hw.hpp"
 #include "k2/core/idle_hw.hpp"
@@ -105,6 +106,10 @@ void enter(const char *screen, int rot, const char *scenario) {
 void draw_for_a_while(Ui &ui, const char *screen, int rot, const char *scenario) {
     enter(screen, rot, scenario);
     for (int i = 0; i < 6; ++i) { g_t += 150; ui.tick(g_t); }
+    // A switch paints over several ticks (budgeted rows, the erase pass): tick on at the same time (a run's clock must not
+    // move) until a tick paints nothing.
+    for (int i = 0, last = -1; i < 60 && static_cast<int>(g_lcd_windows) != last; ++i) { last = static_cast<int>(g_lcd_windows); ui.tick(g_t); }
+    trunc::settled();   // a press's paint runs over several ticks: only the frame it ends on counts
 }
 
 void walk_pages(Ui &ui, int rot, const Scenario &sc) {
@@ -850,6 +855,7 @@ void test_whos_attached() {
 }  // namespace
 
 int main() {
+    overlap_enable();   // draw_for_a_while() checks each settled frame: overlapping text fails the run
     test_whos_attached();
     test_reason_words();
     test_reach_words();
