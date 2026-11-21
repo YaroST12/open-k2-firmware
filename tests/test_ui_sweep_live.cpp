@@ -86,7 +86,7 @@ void fixture(bool avs, int ceiling_mv, int shape = 0) {
 void start_sweep(Ui& ui, uint32_t& t, bool avs, uint8_t rot, int ceiling_mv, int shape = 0) {
     fixture(avs, ceiling_mv, shape);
     ui.init(0); ui.set_rotation(rot, 0); ui.tick(1000); ui.goto_page(static_cast<uint8_t>(Page::ChargerTest), 1100);
-    top(ui, 1200); move(ui, 6, 1200); press(ui, Button::Ok, 1200);   // Tests step: Custom...
+    top(ui, 1200); move(ui, 5, 1200); press(ui, Button::Ok, 1200);   // Tests step: Custom...
     CHECK_EQ(ui.charger_test_stage(), kCustomStage);
     for (int fam : {kFamHuawei, kFamSamsung, kFamOppo, kFamQc}) { top(ui, 1200); move(ui, unsigned(fam), 1200); press(ui, Button::Ok, 1200); }
     top(ui, 1200); move(ui, kFamPd, 1200); ui.on_button(Button::Ok, ButtonEvent::Long, 1200);   // the PD family's entries

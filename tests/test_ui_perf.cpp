@@ -296,7 +296,7 @@ static void test_charger_page_flicker() {
     // 2. A content change must not wipe the body ahead of the list repaint: the margin above the list (y 22..23) and
     // everything below the rows are ink-free, so nothing may write them. Group of the USB PD family (rows: PD fixed, PPS),
     // "PD fixed" toggled: exactly the focused row (40 px with its note) changes; the PPS row below stays untouched.
-    r.move(5);                          // Tests row 5: "Custom..." (rows are 0-based: there is no Next row)
+    r.move(4);                          // Tests row 4: "Custom..." (rows are 0-based: there is no Next row)
     r.press(Button::Ok);                // > the Custom list (the families, then Done)
     r.tick(2); r.settle();
     r.move(4);                          // Custom row 4: the USB PD family
@@ -387,7 +387,7 @@ static void test_wizard_budgets() {
     r.measured([](ChargerRig &x) { x.tick(3); });
     CHECK_EQ(r.last_px, 0u);
     // Custom list: first paint of the stage, then a move.
-    r.move(4); r.settle();              // Custom... (row 5)
+    r.move(3); r.settle();              // Custom... (row 4)
     r.measured([](ChargerRig &x) { x.press(Button::Ok); x.settle(); });
     std::printf("wizard tests -> custom: %u px (budget %u)\n", r.last_px, 157000u);
     CHECK_EQ(r.ui.charger_test_stage(), 14);

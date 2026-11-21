@@ -74,8 +74,8 @@ static void review(Ui& ui, uint32_t now = 1200) {
     CHECK_EQ(ui.charger_test_stage(), 4); CHECK_EQ(ui.charger_test_cursor(), 0);   // START (row 0)
 }
 constexpr int kCustomStage = 14;   // Stage::Custom, the per-family / per-algorithm list under Tests step "Custom..." (not a numbered step)
-// Tests step rows (0-based): 0 Depth, 1 All tests, 2 PD only, 3 Legacy only, 4 Vendor modes, 5 Read offers, 6 Custom..., 7 Last results (after a run).
-constexpr int kDepthRow = 0, kAllRow = 1, kPdRow = 2, kLegacyRow = 3, kVendorRow = 4, kOffersRow = 5, kCustomRow = 6;
+// Tests step rows (0-based): 0 Depth, 1 All tests, 2 PD only, 3 Legacy only, 4 Vendor modes, 5 Custom..., 6 Last results (after a run).
+constexpr int kDepthRow = 0, kAllRow = 1, kPdRow = 2, kLegacyRow = 3, kVendorRow = 4, kCustomRow = 5;
 // Custom list rows (the families in run order): 0 Huawei/Honor, 1 Samsung, 2 OPPO/vivo, 3 Xiaomi/Redmi, 4 USB PD,
 // 5 QC/UFCS, 6 Done (to the Cable step). Short OK toggles a family, long OK opens its entries.
 constexpr int kFamHuawei = 0, kFamSamsung = 1, kFamOppo = 2, kFamXiaomi = 3, kFamPd = 4, kFamQc = 5, kFamDone = 6;
@@ -197,7 +197,7 @@ static void read_results(Ui& ui) {
 }
 static void test_confirmation_and_capture() {
     fixture(); Ui ui; open(ui);
-    CHECK_EQ(ui.list_state().count, 7);     CHECK_EQ(ui.list_state().visible, 8);   // Depth, four presets, Read offers, Custom... (no run to view yet)
+    CHECK_EQ(ui.list_state().count, 6);     CHECK_EQ(ui.list_state().visible, 8);   // Depth, four presets, Custom... (no run to view yet)
     CHECK_EQ(algos(ui), ct::kDefaultAlgorithms);
     CHECK_EQ(ui.charger_test_set_units(kPdOnly), true);   // the OEM units come first in the default order: keep the timeline short
     review(ui);
@@ -701,7 +701,7 @@ static void test_first_menu_and_pd_bundles() {
 // is no preset puts the pill on "Custom...".
 static void test_tests_step_presets() {
     fixture(); Ui ui; open(ui); ui.tick(1200);
-    CHECK_EQ(ui.charger_test_stage(), 0); CHECK_EQ(ui.list_state().count, 7);
+    CHECK_EQ(ui.charger_test_stage(), 0); CHECK_EQ(ui.list_state().count, 6);
     CHECK_EQ(kPdMask & kLegacyMask, 0); CHECK_EQ(kPdMask | kLegacyMask, ct::kDefaultAlgorithms);   // two halves of "All tests"
     CHECK_EQ(kPdMask != 0 && kLegacyMask != 0, true);
     CHECK_EQ(kLegacyMask & ct::bit(A::Qc2ClassB), ct::bit(A::Qc2ClassB));   // Class B rides with the legacy half
@@ -1267,39 +1267,6 @@ static void test_avs_sweep_row_follows_the_only_sweep_kind() {
 }
 // User decision 2026-11-15: the default run is the Medium level, without the deep sweeps; Deep turns both on (bits 31 PPS,
 // 30 AVS), and the draft carries the level in bits 28..29. The remote knob still turns one sweep off after that.
-// "Read offers" sits after the presets and before "Custom...": one OK picks the Offers plan (PD only, one AVS step) and
-// advances to the Cable step; the Depth row does not touch it, and another preset takes the Depth row's level back.
-static void dump_screen(const char* name);
-static void test_read_offers_row_starts_the_offers_plan() {
-    fixture(); Ui ui; open(ui);
-    const auto renders = [&](const char* name) {   // K2_DUMP: all four rotations, then back to rotation 0
-        for (uint8_t rot = 0; rot < 4; ++rot) {
-            char path[40]; std::snprintf(path, sizeof path, "%s_rot%u", name, unsigned(rot));
-            ui.set_rotation(rot, 1500 + rot); settle(ui, 1500 + rot); dump_screen(path);
-        }
-        ui.set_rotation(0, 1600); settle(ui, 1600);
-    };
-    top(ui); move(ui, kOffersRow); settle(ui); renders("offers_tests");   // the focused row opens its note
-    press(ui, Button::Ok); settle(ui);
-    CHECK_EQ(ui.charger_test_stage(), 2);                                       // the Cable step
-    CHECK_EQ(algos(ui), ct::kOffersAlgorithms);
-    CHECK_EQ((ui.charger_test_selection() >> 28) & 3u, unsigned(ct::Level::Offers));
-    CHECK_EQ(ui.charger_test_selection() >> 30, 0u);                            // no sweep rides on it
-    press(ui, Button::Back); settle(ui);
-    top(ui); press(ui, Button::Ok); settle(ui);                                 // Depth: cycles the presets' level only
-    CHECK_EQ((ui.charger_test_selection() >> 28) & 3u, unsigned(ct::Level::Offers));
-    top(ui); move(ui, kAllRow); press(ui, Button::Ok); settle(ui);
-    CHECK_EQ((ui.charger_test_selection() >> 28) & 3u, unsigned(ct::Level::Deep));   // the Depth row's pick is back
-    CHECK_EQ(algos(ui), ct::kDefaultAlgorithms);
-    press(ui, Button::Back); settle(ui);
-    top(ui); move(ui, kOffersRow); press(ui, Button::Ok); settle(ui);
-    press(ui, Button::Ok); settle(ui);                                          // the Cable step to Review
-    CHECK_EQ(ui.charger_test_stage(), 4);
-    renders("offers_review");
-    start_run(ui, 1300);                                                        // the same START, arm and confirm
-    CHECK_EQ(ui.charger_test_busy(), true);
-    CHECK_EQ(algos(ui), ct::kOffersAlgorithms);
-}
 static void test_the_default_run_is_medium() {
     fixture(); Ui ui; open(ui);
     CHECK_EQ(ui.charger_test_selection() >> 28, 0u);                   // Medium, no sweep
@@ -1309,9 +1276,7 @@ static void test_the_default_run_is_medium() {
     CHECK_EQ(ui.charger_test_selection() >> 28, 0x6u);                 // the AVS sweep stays, the level stays Deep
     CHECK_EQ(ui.charger_test_set_level(uint8_t(ct::Level::Light)), true);
     CHECK_EQ(ui.charger_test_selection() >> 28, 0x1u);
-    CHECK_EQ(ui.charger_test_set_level(uint8_t(ct::Level::Offers)), true);   // the Read-offers plan
-    CHECK_EQ(ui.charger_test_set_level(4), false);                     // no such level
-    CHECK_EQ(ui.charger_test_set_level(uint8_t(ct::Level::Light)), true);
+    CHECK_EQ(ui.charger_test_set_level(3), false);                     // no such level
     // The SVOOC ceiling stage follows the level (Deep only); a usb-a waiver survives Deep and is dropped below it.
     CHECK_EQ(ui.charger_test_svooc_cap(), 0u);                         // Light: off
     CHECK_EQ(ui.charger_test_set_level(uint8_t(ct::Level::Deep)), true);
@@ -6479,7 +6444,6 @@ int main() {
     test_avs_sweep_is_a_selection_bit();
     test_avs_sweep_row_follows_the_only_sweep_kind();
     test_the_default_run_is_medium();
-    test_read_offers_row_starts_the_offers_plan();
     test_depth_row_cycles_and_shows_on_review();
     test_an_old_journal_resumes_without_the_default_sweep();
     test_self_powered_review_note(); test_review_carries_the_other_port_warning(); test_phantom_evidence_does_not_refuse_a_run_but_a_load_does(); test_self_powered_run_is_on_the_card(); test_a_cable_read_once_stays_with_the_run();

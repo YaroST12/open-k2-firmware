@@ -77,9 +77,9 @@ static_assert(all_fit(kFamilyNames, kSmallAdvPx, 112), "a family name is wider t
 static_assert(all_fit(kFamilyNames, kLabelAdv, runlay::kLeftW), "a family name is wider than the Running header's left column");
 constexpr const char *kSweepNames[] = {"PPS 3.3-4.9V", "PPS 3.3-20.5V", "PPS 5.5-21V", "AVS 15-28V", "AVS 15-48V"};
 static_assert(all_fit(kSweepNames, kSmallAdvPx, runlay::kSweepNameCells * runlay::kAdv16), "a sweep name is wider than its cells");
-// Tests rows (wizard step 1): 0 Depth, 1..4 the presets, 5 "Read offers", 6 "Custom...", 7 "Last results" once a run exists.
+// Tests rows (wizard step 1): 0 Depth, 1..4 the presets, 5 "Custom...", 6 "Last results" once a run exists.
 // Custom rows: 0..kFamilyCount-1 the families, then "Done" (row kFamilyCount).
-constexpr int kFamilyCount = 6, kDepthRow = 0, kPresetFirst = 1, kPresets = 4, kOffersRow = 5, kCustomRow = 6, kViewRow = 7;
+constexpr int kFamilyCount = 6, kDepthRow = 0, kPresetFirst = 1, kPresets = 4, kCustomRow = 5, kViewRow = 6;
 // Review: only START (index 0).
 constexpr int kStartRow = 0;
 // The presets are subsets of "All tests" (the default set, Class B included): PD = the PD family (its Xiaomi rows ride
@@ -90,9 +90,6 @@ constexpr const char* kPresetNotes[kPresets] = {"Everything, QC Class B 20V", "P
                                                 "D+/D-: vendor modes, QC, UFCS", "Huawei, Samsung, OPPO, vivo"};
 static_assert(all_fit(kPresetNotes, kLabelAdv, kit::kNoteMaxPx), "a preset note is wider than the row note");
 static_assert(all_fit(kPresetNames, kSmallAdvPx, 150), "a preset name is wider than its row");
-// "Read offers" (Level::Offers): the PD list, EPR entry and one AVS step at the APDO's minimum; it does not use the Depth row.
-constexpr const char *kOffersName = "Read offers", *kOffersNote = "Offers + EPR + one AVS step";
-static_assert(fits_px(kSmallAdvPx, kOffersName, 150) && fits_px(kLabelAdv, kOffersNote, kit::kNoteMaxPx), "the Read offers copy is wider than its row");
 // The planned re-attach (rdintent::plan_reattach) is announced on the footer of the START confirmation, never as a warning or a
 // stage of its own (27 characters at most): the second press goes straight on.
 constexpr const char* kReattachConfirm = "Press again, K2 blinks once";
@@ -140,7 +137,6 @@ constexpr uint32_t kPresetMasks[kPresets] = {
     ct::kDefaultAlgorithms & ~kFamilies[kFamPd],
     kFamilies[kFamHuawei] | kFamilies[kFamSamsung] | kFamilies[kFamOppo]};
 // The preset row the selection equals (1-based row), 0 = none: "Custom..." carries the pill then.
-bool offers_picked(const ct::Options& o) { return o.level == ct::Level::Offers; }
 int preset_row_of(uint32_t selected) {
     for (int n = 0; n < kPresets; ++n) if (kPresetMasks[n] == selected) return n + 1;
     return 0;
@@ -1162,10 +1158,7 @@ void ChargerTestSession::invalidate_confirmation() {
 ChargerTestSession::RemoteStart ChargerTestSession::remote_start(bool all_tests) {
     RemoteStart r;
     if (start_held()) { r.result = RemoteStart::Result::Busy; return r; }
-    if (all_tests) {
-        if (options_.level == ct::Level::Offers) set_level(depth_level_);   // "All tests" is not the Read-offers plan
-        options_.selected = kPresetMasks[0];
-    }
+    if (all_tests) options_.selected = kPresetMasks[0];
     if (stage_ != Stage::Review) set_stage(Stage::Review, kStartRow);
     else { invalidate_confirmation(); selection_ = kStartRow; }
     open_confirmation();
@@ -1520,13 +1513,8 @@ bool ChargerTestSession::set_units(std::span<const uint8_t> units) {
     return true;
 }
 void ChargerTestSession::set_level(ct::Level l) {
-    if (l != ct::Level::Offers) depth_level_ = l;
     options_ = ct::with_level(options_, l);
     invalidate_confirmation();   // the preview's step count follows the level
-}
-void ChargerTestSession::set_depth(ct::Level l) {
-    depth_level_ = l;
-    if (options_.level != ct::Level::Offers) set_level(l);   // Read offers keeps its plan: the depth is for the presets
 }
 void ChargerTestSession::enter() {
     ctx_.cables.sync();
@@ -2155,7 +2143,7 @@ static FooterTone range_footer(StrBuf<32> &f, const ct::Runner &runner, A algo, 
     switch (s_.stage_) {
     case Stage::Algorithms: {
         const int pr = preset_row_of(s_.options_.selected);
-        f.put("Picked: ").put(s_.options_.level == ct::Level::Offers ? kOffersName : pr ? kPresetNames[pr - 1] : "custom set");
+        f.put("Picked: ").put(pr ? kPresetNames[pr - 1] : "custom set");
         return FooterTone::Info;
     }
     case Stage::Custom: {
@@ -2336,23 +2324,18 @@ void ChargerTestPage::list_row(int index, bool focused, kit::RowSpec &out) {
     case Stage::Algorithms:
         if (index == kDepthRow) {
             out.text = "Depth";
-            out.tail = kLevelItems[level_segment(s_.depth_level_)];
+            out.tail = kLevelItems[level_segment(s_.options_.level)];
             out.tail_color = kFocus;
-            if (focused) out.note = level_note(s_.depth_level_);
-        } else if (index < kOffersRow) {
+            if (focused) out.note = level_note(s_.options_.level);
+        } else if (index < kCustomRow) {
             const int p = index - kPresetFirst;
             out.marker = kit::Marker::Radio;
-            out.state = !offers_picked(s_.options_) && p + 1 == preset_row_of(s_.options_.selected);
+            out.state = p + 1 == preset_row_of(s_.options_.selected);
             out.text = kPresetNames[p];
             row_tail_.put_u32(entries(kPresetMasks[p]));
             if (focused) out.note = kPresetNotes[p];
-        } else if (index == kOffersRow) {
-            out.marker = kit::Marker::Radio;
-            out.state = offers_picked(s_.options_);
-            out.text = kOffersName;
-            if (focused) out.note = kOffersNote;
         } else if (index == kCustomRow) {
-            const bool custom = !offers_picked(s_.options_) && preset_row_of(s_.options_.selected) == 0;
+            const bool custom = preset_row_of(s_.options_.selected) == 0;
             out.marker = kit::Marker::Radio;
             out.state = custom;
             out.text = "Custom...";
@@ -2752,7 +2735,7 @@ void ChargerTestPage::paint_review() {
     // the PD spec stage's checks (Deep, K2_PDSPEC) are tests too
     buf.put_u32(s_.summary_.runnable + s_.summary_.spec_checks).put(" run, ").put_u32(s_.summary_.skipped).put(" skip");
     if (!kv(0, "Tests", buf.view(), s_.summary_.runnable ? kText : kCaution)) return;
-    if (!kv(1, "Depth", offers_picked(s_.options_) ? "Offers" : kLevelItems[level_segment(s_.options_.level)], kText)) return;
+    if (!kv(1, "Depth", kLevelItems[level_segment(s_.options_.level)], kText)) return;
 
     buf.clear();
     const auto sel = ctx_.cables.selected();
@@ -3593,7 +3576,7 @@ bool ChargerTestPage::on_event(Event e) {
         case Stage::Custom: set_stage(Stage::Algorithms, kCustomRow); break;
         case Stage::Cable: {
             const int pr = preset_row_of(s_.options_.selected);
-            set_stage(Stage::Algorithms, offers_picked(s_.options_) ? kOffersRow : pr ? kPresetFirst + pr - 1 : kCustomRow);
+            set_stage(Stage::Algorithms, pr ? kPresetFirst + pr - 1 : kCustomRow);
             break;
         }
         case Stage::Review: set_stage(Stage::Cable, ctx_.cables.index_of(ctx_.cables.selected())); break;
@@ -3657,18 +3640,12 @@ __attribute__((noinline)) void ChargerTestPage::ok_event() {
     switch (s_.stage_) {
     case Stage::Algorithms:   // Depth cycles; a preset picks and advances; "Custom..." opens the per-family list
         if (s_.selection_ == kDepthRow) {
-            s_.set_depth(ct::next_level(s_.depth_level_));
-        } else if (s_.selection_ == kOffersRow) {
-            s_.set_level(ct::Level::Offers);   // PD only, one AVS step: the selection is masked with the level
-            invalidate_confirmation();
-            set_stage(Stage::Cable, ctx_.cables.index_of(ctx_.cables.selected()));
+            s_.set_level(ct::next_level(s_.options_.level));
         } else if (s_.selection_ < kCustomRow) {
-            if (offers_picked(s_.options_)) s_.set_level(s_.depth_level_);   // leaving Read offers: the Depth row's level is back
             s_.options_.selected = kPresetMasks[s_.selection_ - kPresetFirst];
             invalidate_confirmation();
             set_stage(Stage::Cable, ctx_.cables.index_of(ctx_.cables.selected()));
         } else if (s_.selection_ == kCustomRow) {
-            if (offers_picked(s_.options_)) { s_.set_level(s_.depth_level_); s_.options_.selected = kPresetMasks[0]; }   // a full set to edit, not the PD pair
             set_stage(Stage::Custom, 0);
         } else {
             set_stage(Stage::Results);
