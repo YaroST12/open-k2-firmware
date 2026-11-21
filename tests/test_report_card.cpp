@@ -1245,7 +1245,33 @@ static void test_xiaomi_rows_stay_off_the_card() {
     CHECK_EQ(a == b, true);
 }
 
+// Runner-shaped steps of a protocol that never answered reach the card as a Skip that keeps its detail, so silent_skip holds; the
+// same protocol failing after a pass is a Fail and is not silent.
+static void test_a_silent_protocol_survives_the_build_as_a_silent_skip() {
+    const auto fc = [](fc::Fail f) { return uint8_t(f); };
+    const std::vector<ct::Step> silent = {
+        step(A::Vivo, ct::Group::Vivo, 0, 5000, V::Skip, 0, ct::Reason::Request, 0, false, false, fc(fc::Fail::NoResponse)),
+        step(A::Vivo, ct::Group::Vivo, 1, 9000, V::Skip, 0, ct::Reason::Request, 0, false, false, fc(fc::Fail::NoResponse)),
+        step(A::Afc, ct::Group::Afc, 0, 9000, V::Skip, 0, ct::Reason::Request, 0, false, false, fc(fc::Fail::Unsupported)),
+    };
+    const rc::Card c = rc::build(silent, evidence(), {}, {}, {}, ct::State::Done, ct::Reason::None);
+    for (const ct::Group g : {ct::Group::Vivo, ct::Group::Afc}) {
+        const auto& r = c.group[unsigned(g)];
+        CHECK_EQ(int(r.verdict), int(rc::GV::Skip));
+        CHECK_EQ(rc::silent_skip(unsigned(g), r), true);
+        CHECK_STR(rc::group_why(unsigned(g), r), "no reply");
+    }
+    const std::vector<ct::Step> heard = {
+        step(A::Vivo, ct::Group::Vivo, 0, 5000, V::Pass, 5010),
+        step(A::Vivo, ct::Group::Vivo, 1, 9000, V::Fail, 5000, ct::Reason::Request, 0, false, false, fc(fc::Fail::NoResponse)),
+    };
+    const rc::Card h = rc::build(heard, evidence(), {}, {}, {}, ct::State::Done, ct::Reason::None);
+    CHECK_EQ(int(h.group[unsigned(ct::Group::Vivo)].verdict), int(rc::GV::Fail));
+    CHECK_EQ(rc::silent_skip(unsigned(ct::Group::Vivo), h.group[unsigned(ct::Group::Vivo)]), false);
+}
+
 int main() {
+    test_a_silent_protocol_survives_the_build_as_a_silent_skip();
     test_xiaomi_rows_stay_off_the_card();
     test_v8_level_roundtrip();
     test_spr_avs_range_limits();

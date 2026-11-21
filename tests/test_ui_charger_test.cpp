@@ -5928,7 +5928,15 @@ static void vooc_watts_run(Ui& ui, uint32_t& t, ct::Level level, uint8_t rot, ui
     review(ui);
     start_press(ui, 1300); press(ui, Button::Ok, 1400);
     g_stub.fc_start_hook = silent ? vooc_silent : vooc_detects;
-    for (t = 1500; t <= 900000 && ui.charger_test_busy(); t += 100) ui.tick(t);
+    bool mid = false;
+    for (t = 1500; t <= 900000 && ui.charger_test_busy(); t += 100) {
+        ui.tick(t);
+        const auto& st = ui.charger_test_results().steps();
+        if (silent && !mid && !st.empty() && st[0].algorithm == A::Vooc && st[0].verdict == ct::Verdict::Skip) {   // the running frame of a silent unit
+            mid = true; settle(ui, t);
+            char nm[64]; std::snprintf(nm, sizeof nm, "vooc_silent_running_rot%u", unsigned(rot)); dump_panel(nm);
+        }
+    }
     g_stub.fc_start_hook = nullptr;
     g_stub.fc_status_fail = g_stub.fc_status_ident = 0;
     CHECK_EQ(ui.charger_test_stage(), 6);
@@ -5979,7 +5987,17 @@ static void test_silent_vivo_reads_no_reply_not_a_fail() {
         start_press(ui, 1300); press(ui, Button::Ok, 1400);
         g_stub.fc_start_hook = vivo_silent;
         uint32_t t = 1500;
-        for (; t <= 900000 && ui.charger_test_busy(); t += 100) ui.tick(t);
+        bool mid = false;
+        for (; t <= 900000 && ui.charger_test_busy(); t += 100) {
+            ui.tick(t);
+            // The running grid right after the silent unit's first step ended: dim and struck, never a red cell (the frame to set beside vooc_silent_running).
+            const auto& st = ui.charger_test_results().steps();
+            if (!mid && !st.empty() && st[0].algorithm == A::Vivo && st[0].verdict == ct::Verdict::Skip) {
+                mid = true; settle(ui, t);
+                char nm[64]; std::snprintf(nm, sizeof nm, "vivo_none_running_rot%u", unsigned(rot)); dump_panel(nm);
+            }
+        }
+        CHECK_EQ(mid, true);
         g_stub.fc_start_hook = nullptr;
         g_stub.fc_status_fail = g_stub.fc_status_ident = 0;
         CHECK_EQ(ui.charger_test_stage(), 6);
@@ -5999,7 +6017,10 @@ static void test_silent_vivo_reads_no_reply_not_a_fail() {
         for (int k = 0; k < 3; ++k) { press(ui, Button::Plus, t); settle(ui, t); t += 200; }
         std::snprintf(name, sizeof name, "vivo_none_rot%u_row2", unsigned(rot)); dump_panel(name);
         press(ui, Button::Ok, t); ui.tick(t); settle(ui, t); t += 200;
+        CHECK_EQ(ui.charger_test_stage(), 7);
+        std::snprintf(name, sizeof name, "vivo_none_rot%u_steps", unsigned(rot)); dump_panel(name);
         press(ui, Button::Ok, t); ui.tick(t); settle(ui, t); t += 200;
+        CHECK_EQ(ui.charger_test_stage(), 8);
         std::snprintf(name, sizeof name, "vivo_none_rot%u_detail", unsigned(rot)); dump_panel(name);
     }
 }
