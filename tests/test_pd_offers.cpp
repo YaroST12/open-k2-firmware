@@ -130,14 +130,35 @@ void test_a_new_presence_re_arms_after_the_gap() {
     CHECK_EQ(o.due(t0 + kOffersGapMs), true);
 }
 
-void test_refresh_re_arms_at_once() {
-    OffersRead o; std::uint32_t now = 0;
+void test_a_refresh_counts_as_the_read() {
+    // The Refresh survey reads the offers itself: the automatic read does not follow it.
+    OffersRead o; std::uint32_t now = 5000;
     o.presence(true, now);
-    o.start(kCharger, now);
-    run(o, now, true, false, true);
-    CHECK_EQ(o.due(now), false);
-    o.rearm();
     CHECK_EQ(o.due(now), true);
+    o.mark_read(now);
+    CHECK_EQ(o.due(now), false);
+    CHECK_EQ(o.running(), false);
+    o.presence(false, now + 100); o.presence(false, now + 100 + kOffersGoneMs);   // a new presence after the gap reads again
+    o.presence(true, now + 100 + kOffersGoneMs + 10);
+    CHECK_EQ(o.due(now + kOffersGapMs), true);
+}
+
+void test_presence_reports_the_new_presence_once() {
+    OffersRead o; std::uint32_t now = 0;
+    CHECK_EQ(o.presence(true, now), false);
+    CHECK_EQ(o.presence(false, now), false);
+    CHECK_EQ(o.presence(false, now + kOffersGoneMs - 1), false);
+    CHECK_EQ(o.presence(false, now + kOffersGoneMs), true);       // gone long enough: the held view is dropped now
+    CHECK_EQ(o.presence(false, now + kOffersGoneMs + 10), false);
+}
+
+void test_cancel_ends_a_running_read_without_an_action() {
+    OffersRead o; std::uint32_t now = 0;
+    o.start(kCharger, now);
+    CHECK_EQ(int(o.poll(now)), int(OrAct::Attach));
+    o.cancel();
+    CHECK_EQ(o.running(), false);
+    CHECK_EQ(int(o.poll(now + 10)), int(OrAct::None));
 }
 
 void test_a_stuck_attach_is_aborted_at_the_bound() {
@@ -178,7 +199,9 @@ int main() {
     test_refusals_name_their_reason_and_start_nothing();
     test_one_read_per_presence_even_when_it_fails_or_the_port_cycles();
     test_a_new_presence_re_arms_after_the_gap();
-    test_refresh_re_arms_at_once();
+    test_a_refresh_counts_as_the_read();
+    test_presence_reports_the_new_presence_once();
+    test_cancel_ends_a_running_read_without_an_action();
     test_a_stuck_attach_is_aborted_at_the_bound();
     test_a_silent_epr_ask_ends_at_the_bound_and_releases();
     test_refused_epr_is_kept_apart_from_silence();

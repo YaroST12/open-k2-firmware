@@ -9,7 +9,7 @@
 //   Release  give back what the attach took (Rd and the contract); never when the K2 already held a contract
 //   Abort    the bound hit inside the attach: the attach's own release runs
 // One read per presence of the charger: the latch re-arms when the charger was gone kOffersGoneMs (the K2's own Rd cycle does not
-// count: it keeps the presence), and two reads are never closer than kOffersGapMs; a Refresh re-arms both.
+// count: it keeps the presence), and two reads are never closer than kOffersGapMs. A Refresh's survey counts as the read.
 #pragma once
 #include <cstdint>
 
@@ -35,11 +35,12 @@ struct OrCtx {
 
 class OffersRead {
 public:
-    // Every main-loop tick: is the charger there. Absent for kOffersGoneMs re-arms the latch.
-    void presence(bool present, std::uint32_t now);
+    // Every main-loop tick: is the charger there. Absent for kOffersGoneMs re-arms the latch; true on that one call.
+    bool presence(bool present, std::uint32_t now);
     OrWhy gate(const OrCtx& c) const;                 // why a read may not start now (None = it may)
     bool due(std::uint32_t now) const;                // not running, not yet tried in this presence, gap kept
-    void rearm();                                     // a Refresh: read again
+    void mark_read(std::uint32_t now);                // a Refresh's survey read the offers: count it as this presence's read
+    void cancel() { if (running()) step_ = OrStep::Done; }   // another owner took the port: end with no action
     bool start(const OrCtx& c, std::uint32_t now);    // false = refused (why() says); the attempt is latched when it starts
     OrAct poll(std::uint32_t now);                    // the next action to perform, once per step
     void attached(bool caps, bool epr_capable, bool owns_port);   // the Attach ended: caps in hand, EPR bit, Rd or contract taken
@@ -56,7 +57,7 @@ private:
     void leave_epr();
     OrStep step_ = OrStep::Idle;
     OrWhy why_ = OrWhy::None;
-    bool issued_ = false, owns_ = false, epr_asked_ = false, tried_ = false, have_start_ = false, absent_ = false;
+    bool issued_ = false, owns_ = false, epr_asked_ = false, tried_ = false, have_start_ = false, absent_ = false, gone_ = false;
     SvOutcome epr_ = SvOutcome::Silent;
     std::uint32_t started_ = 0, absent_since_ = 0;
 };

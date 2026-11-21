@@ -4,10 +4,13 @@
 
 namespace k2::pd {
 
-void OffersRead::presence(bool present, std::uint32_t now) {
-    if (present) { absent_ = false; return; }
+bool OffersRead::presence(bool present, std::uint32_t now) {
+    if (present) { absent_ = gone_ = false; return false; }
     if (!absent_) { absent_ = true; absent_since_ = now; }
-    if (std::int32_t(now - absent_since_) >= std::int32_t(kOffersGoneMs)) tried_ = false;
+    if (gone_ || std::int32_t(now - absent_since_) < std::int32_t(kOffersGoneMs)) return false;
+    gone_ = true;
+    tried_ = false;
+    return true;
 }
 
 OrWhy OffersRead::gate(const OrCtx& c) const {
@@ -22,10 +25,10 @@ bool OffersRead::due(std::uint32_t now) const {
     return !have_start_ || std::int32_t(now - started_) >= std::int32_t(kOffersGapMs);
 }
 
-void OffersRead::rearm() {
+void OffersRead::mark_read(std::uint32_t now) {
     if (running()) return;
-    tried_ = false;
-    have_start_ = false;
+    tried_ = have_start_ = true;
+    started_ = now;
 }
 
 bool OffersRead::start(const OrCtx& c, std::uint32_t now) {

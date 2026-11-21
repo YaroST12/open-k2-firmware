@@ -440,6 +440,14 @@ bool reread_abort();
 // PDO 1 5 V contract inside its linger). A charger-test START and the spoof arming take it over like the self-hold
 // instead of refusing "tool busy" / "Ra refused: contract".
 bool reread_own_hold();
+// The offers read (k2/core/offers_read.hpp): true while a re-read's attach (Rd or the 5 V contract) is still the K2's to give back;
+// reread_release_now() ends its linger at once (housekeeping then drops Rd and the contract when the sink is quiet). false = not yet
+// (the run or its log line is still pending), ask again. Neither touches the forced line or the Ra mode, unlike reread_abort().
+bool reread_attach_held();
+bool reread_release_now();
+// Ends a running re-read and gives its attach back, also when the line went inline meanwhile (reread_abort refuses then): only
+// stops the run and sets the release due; never starts, transmits or touches the forced line / Ra.
+void reread_stand_down();
 // Another owner takes the contract (and the Rd) a pd-reread attach made: from here the attach is that owner's, and the
 // re-read's own release timer ([REREAD] attach released) never fires on it. Called by every tool that starts talking on the
 // link after a re-read: sink_request itself (`pd attach`, `pd request`, the identity and unit paths), a PD Stress run start, a
