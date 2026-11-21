@@ -40,13 +40,13 @@ bool inline_now() { return fusb302::inline_mode() || fusb302::sink_downstream();
 
 bool self_supplied() { return fusb302::self_powered() || power_source::bus_powered(); }
 
-pd::OrCtx context(bool present, bool charger_test) {
+pd::OrCtx context(bool present, bool ports_busy) {
     const pd::SinkStatus& ss = fusb302::sink_status();
     const bool quiet = ss.state == pd::SinkState::Idle || ss.state == pd::SinkState::Ready || ss.state == pd::SinkState::Failed;
     pd::OrCtx c;
     c.present = present;
     c.inline_sink = inline_now();
-    c.busy = charger_test || fusb302::run_owner() || survey::running() || rescan::active() || fusb302::interrogate_running() ||
+    c.busy = ports_busy || fusb302::run_owner() || survey::running() || rescan::active() || fusb302::interrogate_running() ||
              fusb302::reread_status().state == pd::RereadState::Running || fusb302::xiaomi_chain_active() || !quiet;
     // A K2 that lives on this port, or is a sink there already, keeps its Rd and contract: the list is read on it, nothing is given back.
     c.contract = ss.state == pd::SinkState::Ready || self_supplied();
@@ -133,7 +133,7 @@ void on_refresh(rescan::Result r) {
     g_r.mark_read(systick::millis());
 }
 
-void poll(bool charger_test, bool present) {
+void poll(bool ports_busy, bool present) {
     const std::uint32_t now = systick::millis();
     const bool settling = g_released && std::int32_t(now - g_released_at) < std::int32_t(kSettleMs);
     if (g_r.presence(present || g_r.running() || settling, now)) {   // the charger is gone for good: what was held is not its
@@ -142,7 +142,7 @@ void poll(bool charger_test, bool present) {
         g_released = false;
     }
     if (g_r.running()) {
-        if (charger_test || fusb302::run_owner()) {
+        if (ports_busy || fusb302::run_owner()) {
             K2LOG("[OFFERS] a run took the port: read ended\n");
             g_r.cancel();
             g_wait = Wait::None;
@@ -162,7 +162,7 @@ void poll(bool charger_test, bool present) {
     }
     if (!g_wanted || std::int32_t(now - g_want_until) >= 0) { g_wanted = false; return; }
     if (!present || !g_r.due(now)) return;
-    if (g_r.start(context(present, charger_test), now)) {
+    if (g_r.start(context(present, ports_busy), now)) {
         g_held.valid = false;
         g_epr_n = 0;
         g_released = false;
@@ -171,6 +171,7 @@ void poll(bool charger_test, bool present) {
 }
 
 bool running() { return g_r.running(); }
+bool showing_held() { return g_held.valid && !pd::is_fake() && !pd::active_caps().valid; }
 pd::OrWhy why() { return g_r.step() == OrStep::Refused ? g_r.why() : pd::OrWhy::None; }
 
 const pd::SourceCaps& shown_caps() {

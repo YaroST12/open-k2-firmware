@@ -18,10 +18,11 @@ namespace k2::offers {
 void want(std::uint32_t now);
 // A Refresh just ran rescan::request() and got `r`: its survey reads the offers, so the automatic read does not follow it.
 void on_refresh(rescan::Result r);
-// Main loop. `present`: a charger is attached or waiting (steady Rp); `charger_test`: a charger test owns the line.
-void poll(bool charger_test, bool present);
+// Main loop. `present`: a charger is attached or waiting (steady Rp); `ports_busy`: a charger test, PD Stress or another tool owns the line.
+void poll(bool ports_busy, bool present);
 
 bool running();
+bool showing_held();   // the page shows the read's snapshot: the live caps are gone (the port was given back), the held ones are not
 pd::OrWhy why();   // why the last attempt was refused (None when it was not)
 
 // The live caps when there are any, else the ones the read held (the fake list always wins).
