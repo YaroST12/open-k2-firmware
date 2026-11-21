@@ -457,6 +457,19 @@ unsigned tone_rank(Tone t) {
     }
 }
 [[gnu::noinline]] void legacy_row(TokenBuf& b, std::span<const ct::Step> s, A a) {
+    // A unit whose detection step got no reply (every row a no-answer skip) is one dim cell, as soon as that step settles: the
+    // Running grid reads like the Results fold. Chip mv = its first row's, so a token still finds its step.
+    const ct::Step* first = nullptr;
+    bool silent = true;
+    for (const auto& y : s) {
+        if (y.algorithm != a || !y.mv) continue;
+        if (!first) first = &y;
+        silent &= is_no_answer(y);
+    }
+    if (first && silent) {
+        if (Token* k = b.token(false, Tone::Dim)) { k->mv = first->mv; put_text(*k, "No reply"); }   // a word, not a chip: a chip splits at its space
+        return;
+    }
     for (size_t i = 0; i < s.size(); ++i) {
         const auto& x = s[i];
         if (x.algorithm != a || !x.mv) continue;

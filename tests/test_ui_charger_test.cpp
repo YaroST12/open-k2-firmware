@@ -6024,6 +6024,54 @@ static void test_silent_vivo_reads_no_reply_not_a_fail() {
         std::snprintf(name, sizeof name, "vivo_none_rot%u_detail", unsigned(rot)); dump_panel(name);
     }
 }
+// A PD-only charger: QC2 (with its Class B rows), QC3 and UFCS get no first handshake. Each unit is a skip ("no reply") at once: the
+// Running grid shows its one dim cell, never a red one, and Results folds them into "No reply".
+static void qc_silent(int proto) {
+    const auto p = static_cast<k2::fc::Proto>(proto);
+    const bool qc = p == k2::fc::Proto::Qc2 || p == k2::fc::Proto::Qc3 || p == k2::fc::Proto::Ufcs;
+    g_stub.fc_status_fail = qc ? int(k2::fc::Fail::NoHandshake) : 0;
+    g_stub.fc_status_ident = 0;
+}
+static void test_silent_qc_reads_no_reply_not_a_fail() {
+    for (uint8_t rot = 0; rot < 4; ++rot) {
+        Ui ui;
+        six_pdo_fixture();
+        constexpr uint8_t kUnits[] = {uint8_t(ct::Unit::Qc2), uint8_t(ct::Unit::Qc3), uint8_t(ct::Unit::Ufcs), uint8_t(ct::Unit::Pd)};
+        open(ui); ui.set_rotation(rot, 1050); settle(ui, 1050);
+        CHECK_EQ(ui.charger_test_set_units(kUnits), true);
+        CHECK_EQ(ui.charger_test_set_level(uint8_t(ct::Level::Medium)), true);
+        review(ui);
+        start_press(ui, 1300); press(ui, Button::Ok, 1400);
+        g_stub.fc_start_hook = qc_silent;
+        uint32_t t = 1500;
+        bool mid = false;
+        for (; t <= 900000 && ui.charger_test_busy(); t += 100) {
+            ui.tick(t);
+            const auto& st = ui.charger_test_results().steps();
+            if (!mid && !st.empty() && st[0].algorithm == A::Qc2 && st[0].verdict == ct::Verdict::Skip) {
+                mid = true; settle(ui, t);
+                char nm[64]; std::snprintf(nm, sizeof nm, "qc_none_running_rot%u", unsigned(rot)); dump_panel(nm);
+            }
+        }
+        CHECK_EQ(mid, true);
+        g_stub.fc_start_hook = nullptr;
+        g_stub.fc_status_fail = g_stub.fc_status_ident = 0;
+        CHECK_EQ(ui.charger_test_stage(), 6);
+        ui.tick(t); t += 200; ui.tick(t); t += 200;
+        settle(ui, t);
+        unsigned silent = 0;
+        for (const auto& s : ui.charger_test_results().steps()) {
+            if (s.algorithm != A::Qc2 && s.algorithm != A::Qc3 && s.algorithm != A::Ufcs && s.algorithm != A::Qc2ClassB && s.algorithm != A::Qc3ClassB) continue;
+            ++silent;
+            CHECK_EQ(s.verdict == ct::Verdict::Skip, true);
+            CHECK_EQ(s.detail, uint8_t(k2::fc::Fail::NoHandshake));
+            CHECK_EQ(result_layout::is_no_answer(s), true);
+        }
+        CHECK_EQ(silent >= 5, true);
+        char name[64];
+        std::snprintf(name, sizeof name, "qc_none_rot%u", unsigned(rot)); dump_panel(name);
+    }
+}
 static void test_vooc_family_results_read_watts_levels() {
     struct Scene { const char* name; ct::Level level; uint16_t ceiling; int32_t vmax_mv; };
     // deep69: the ladder stood at 6.3 A under 11.0 V (69 W): 50 and 65 W claimed, 100 and 120 W not reached
@@ -6333,6 +6381,7 @@ int main() {
     test_vooc_family_results_read_watts_levels();
     test_vooc_family_silent_reads_no_answer();
     test_silent_vivo_reads_no_reply_not_a_fail();
+    test_silent_qc_reads_no_reply_not_a_fail();
     test_xiaomi_unit_scenes();
     return test_report("test_ui_charger_test");
 }

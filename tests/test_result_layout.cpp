@@ -1914,6 +1914,22 @@ static void test_a_silent_protocol_folds_as_no_reply_and_a_heard_one_stays_red()
         CHECK_EQ(find(v, "No reply") == nullptr, true);
         CHECK_EQ(find(v, "VIVO") != nullptr, true);
     }
+    {   // the Running grid (no fold): a silent unit is one dim "No reply" cell on its own row once its detection step settled; a
+        // unit still pending, or one that answered and failed later, keeps its level cells
+        std::vector<ct::Step> r;
+        for (unsigned mv : {5000u, 9000u, 11000u}) { auto x = step(A::Vivo, mv, V::Skip, 0, 0, ct::Reason::Request); x.detail = uint8_t(fc::Fail::NoResponse); r.push_back(x); }
+        for (A a : {A::Qc2, A::Qc3}) for (unsigned mv : {5000u, 9000u}) { auto x = step(a, mv, V::Skip, 0, 0, ct::Reason::Request); x.detail = uint8_t(fc::Fail::NoHandshake); r.push_back(x); }
+        r.push_back(step(A::Ufcs, 5000, V::Pending));
+        r.push_back(step(A::Ufcs, 9000, V::Pending));
+        rl::OemNotes run; run.fold = false; run.headers = false;
+        rl::Layout l; rl::build(l, r, run);
+        for (const char* name : {"VIVO", "QC2", "QC3"}) CHECK_STR(chips(l, row_of(l, name)).c_str(), "No reply");
+        CHECK_EQ(chips(l, row_of(l, "UFCS")).find("No reply") == std::string::npos, true);
+        std::vector<ct::Step> h = {step(A::Vivo, 5000, V::Pass), step(A::Vivo, 9000, V::Fail, 0, 0, ct::Reason::Request)};
+        h[1].detail = uint8_t(fc::Fail::NoResponse);
+        rl::Layout hl; rl::build(hl, h, run);
+        CHECK_EQ(chips(hl, row_of(hl, "VIVO")).find("No reply") == std::string::npos, true);
+    }
 }
 // SCP names the limit it writes: its chip reads the level's watts (10 V x 2.25 A = 22.5 W) where it used to read the current; the
 // handshake row names none and keeps its volts. The summary line words the best SCP level the same way.
