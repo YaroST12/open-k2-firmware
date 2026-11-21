@@ -771,6 +771,7 @@ private:
     uint8_t detail_step_ = 0;
     bool laid_ = false;                   // the stage's static part is on screen
     bool sweep_laid_ = false;             // Running: the layout on screen is the sweep row's (Layout kSweep), not the plain one
+    bool name_small_ = false;             // Running (plain): the step name is drawn in the 12 px font (it outgrew the left column)
 };
 
 // The Home protocol row's source: the one derive_proto call site. Home paints from it on every live frame, and the

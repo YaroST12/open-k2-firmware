@@ -36,6 +36,16 @@ inline constexpr int kH16 = 16, kA16 = 12, kAdv16 = 8;
 inline constexpr int kH24 = 24, kA24 = 19, kAdv24 = 12;
 inline constexpr int kH48 = 30, kA48 = 30, kAdv48 = 24;
 
+// Plain: the left column (family, name, target) ends kLeftGap short of the hero's left edge, so no cell of it can reach a digit.
+// A name wider than kNameCells 16 px cells drops to the 12 px font (kNameCellsSmall cells); every family name fits kFamCells.
+inline constexpr int16_t kPlainHeroLeft = kPlainHeroRight - kPlainRun.hero_chars * kAdv48;   // 92
+inline constexpr int16_t kLeftX = 6, kLeftGap = 6;
+inline constexpr int16_t kLeftW = kPlainHeroLeft - kLeftGap - kLeftX;   // 80 px
+inline constexpr int kNameCells = kLeftW / kAdv16, kNameCellsSmall = kLeftW / kAdv12, kFamCells = kLeftW / kAdv12, kTargetCells = kLeftW / kAdv12;
+constexpr bool name_small(int cells) { return cells > kNameCells; }
+// The families by company, in the run order (the Custom rows, the Steps title and the Running header's label).
+inline constexpr const char *kFamilyNames[] = {"Huawei/Honor", "Samsung", "OPPO/vivo", "Xiaomi/Redmi", "USB PD", "QC/UFCS"};
+
 // Sweep: the error hero (left), the act / set block (right).
 inline constexpr int16_t kSweepFamX = 110;
 inline constexpr int16_t kHeroDigitsRight = 89;                  // right edge of the three digit cells (x17..88)

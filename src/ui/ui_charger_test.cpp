@@ -70,9 +70,10 @@ constexpr uint32_t kFamilies[] = {
     ct::kPdFixedAlgorithms | ct::kPpsAlgorithms,
     ct::bit(A::Qc2) | ct::bit(A::Qc3) | ct::bit(A::Qc3Plus) | ct::bit(A::Qc2ClassB) | ct::bit(A::Qc3ClassB) | ct::bit(A::Ufcs)   // Class B (20 V) is part of the QC family
 };
-constexpr const char* kFamilyNames[] = {"Huawei / Honor", "Samsung", "OPPO / vivo", "Xiaomi / Redmi", "USB PD", "QC / UFCS"};
+using runlay::kFamilyNames;
 // A family name is a Custom / Steps row text (16 px, x28 up to the count tail) and the Steps header title ("<name> steps").
 static_assert(all_fit(kFamilyNames, kSmallAdvPx, 112), "a family name is wider than its row");
+static_assert(all_fit(kFamilyNames, kLabelAdv, runlay::kLeftW), "a family name is wider than the Running header's left column");
 // Tests rows (wizard step 1): 0 Depth, 1..4 the presets, 5 "Custom...", 6 "Last results" once a run exists.
 // Custom rows: 0..kFamilyCount-1 the families, then "Done" (row kFamilyCount).
 constexpr int kFamilyCount = 6, kDepthRow = 0, kPresetFirst = 1, kPresets = 4, kCustomRow = 5, kViewRow = 6;
@@ -2870,7 +2871,7 @@ void ChargerTestPage::paint_waiting(uint32_t now) {
             else { s.put("--"); ink = kFaint; }
             sv = s.view();
         }
-        put_line(c, kSmall, static_cast<int16_t>((i & 1) ? 138 : 42), static_cast<int16_t>(i < 2 ? 92 : 118), sv, ink, 8, cell_sig_[i], false,
+        put_line(c, kSmall, static_cast<int16_t>((i & 1) ? 148 : 42), static_cast<int16_t>(i < 2 ? 92 : 118), sv, ink, 7, cell_sig_[i], false,   // 7 cells: "Rp 1.5A"; 6 px after the label
                  false, &bg);
     }
 
@@ -3046,14 +3047,22 @@ void ChargerTestPage::paint_running(uint32_t now) {
         // the family label (dim, 12 px) above the name; a sweep row's name moves up and the label goes to its right, baseline to baseline
         const char *const fam_name = fam >= 0 ? kFamilyNames[fam] : "";
         if (sweeping) put_line(c, kLabelFont, runlay::kSweepFamX, L.name_y + kSmall.ascent - kLabelFont.ascent, fam_name, kDim, 16, cell_sig_[2], true, false, &bg);
-        else put_line(c, kLabelFont, 6, 32, fam_name, kDim, 16, cell_sig_[2], false, false, &bg);
+        else put_line(c, kLabelFont, runlay::kLeftX, 32, fam_name, kDim, runlay::kFamCells, cell_sig_[2], false, false, &bg);
         buf.clear();
         if (st) buf.put(step_label::label(*st, at > 0 ? &steps[at - 1] : nullptr).view());
-        put_line(c, kSmall, 6, L.name_y, buf.view(), kText, 11, cell_sig_[3], false, true, &bg);
+        // The plain name stays in the left column, kLeftGap short of the hero: a longer one drops to the 12 px font.
+        const bool small = !sweeping && runlay::name_small(text_cells(buf.view()));
+        if (small != name_small_) {   // the other font leaves rows of the old glyphs behind: blank the cell, repaint the name
+            name_small_ = small;            gfx_fill(c, runlay::kLeftX, L.name_y, runlay::kLeftW, runlay::kH16, kBg);
+            cell_sig_[3] = 0;
+        }
+        if (sweeping) put_line(c, kSmall, 6, L.name_y, buf.view(), kText, 11, cell_sig_[3], false, true, &bg);
+        else if (small) put_line(c, kLabelFont, runlay::kLeftX, L.name_y + kSmall.ascent - kLabelFont.ascent, buf.view(), kText, runlay::kNameCellsSmall, cell_sig_[3], false, true, &bg);
+        else put_line(c, kSmall, runlay::kLeftX, L.name_y, buf.view(), kText, runlay::kNameCells, cell_sig_[3], false, true, &bg);
         if (!sweeping) {
             buf.clear();
             if (st && st->mv) { buf.put("target "); pg::put_volts_trim(buf, st->mv); buf.put_char('V'); }
-            put_line(c, kLabelFont, 6, 68, buf.view(), kDim, 16, cell_sig_[4], false, false, &bg);
+            put_line(c, kLabelFont, runlay::kLeftX, 68, buf.view(), kDim, runlay::kTargetCells, cell_sig_[4], false, false, &bg);
         }
     }
     // 6. the verdict grid follows the step under test (the layout was rebuilt at 1b). The window scrolls to the running line (a

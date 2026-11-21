@@ -26,6 +26,7 @@
 #include "k2/ui/ui_setup_page.hpp"
 #include "k2/ui/text.hpp"
 #include "k2/ui/trunc.hpp"
+#include "overlap_log.h"
 #include "k2/ui/ui_widgets.hpp"
 #include "k2/ui/blend.hpp"
 #include "k2/ui/spec_text.hpp"
@@ -74,8 +75,8 @@ static void review(Ui& ui, uint32_t now = 1200) {
 constexpr int kCustomStage = 14;   // Stage::Custom, the per-family / per-algorithm list under Tests step "Custom..." (not a numbered step)
 // Tests step rows (0-based): 0 Depth, 1 All tests, 2 PD only, 3 Legacy only, 4 Vendor modes, 5 Custom..., 6 Last results (after a run).
 constexpr int kDepthRow = 0, kAllRow = 1, kPdRow = 2, kLegacyRow = 3, kVendorRow = 4, kCustomRow = 5;
-// Custom list rows (the families in run order): 0 Huawei / Honor, 1 Samsung, 2 OPPO / vivo, 3 Xiaomi / Redmi, 4 USB PD,
-// 5 QC / UFCS, 6 Done (to the Cable step). Short OK toggles a family, long OK opens its entries.
+// Custom list rows (the families in run order): 0 Huawei/Honor, 1 Samsung, 2 OPPO/vivo, 3 Xiaomi/Redmi, 4 USB PD,
+// 5 QC/UFCS, 6 Done (to the Cable step). Short OK toggles a family, long OK opens its entries.
 constexpr int kFamHuawei = 0, kFamSamsung = 1, kFamOppo = 2, kFamXiaomi = 3, kFamPd = 4, kFamQc = 5, kFamDone = 6;
 static void custom(Ui& ui, uint32_t now = 1200) {   // from the Tests step: open the Custom list
     top(ui, now); move(ui, kCustomRow, now); press(ui, Button::Ok, now); settle(ui, now);
@@ -428,10 +429,10 @@ static void test_selection_and_focus_rendering() {
     press(ui, Button::Back, 1246); ui.tick(1250); settle(ui, 1250);
     check_radio(kAllRow, true, kAllRow, kFocusFill);
     custom(ui, 1255); ui.tick(1255); settle(ui, 1255);   // the families: Box3 markers, the focused one open with its note
-    check_row_text(kFamHuawei, "Huawei / Honor", kText, kFocusFill, kFamHuawei, 120); check_radio(kFamHuawei, true, kFamHuawei, kFocusFill);
+    check_row_text(kFamHuawei, "Huawei/Honor", kText, kFocusFill, kFamHuawei, 120); check_radio(kFamHuawei, true, kFamHuawei, kFocusFill);
     move(ui, kFamPd, 1260); ui.tick(1260); settle(ui, 1260);
     check_row_text(kFamPd, "USB PD", kText, kFocusFill, kFamPd, 100); check_radio(kFamPd, true, kFamPd, kFocusFill);
-    check_row_text(kFamXiaomi, "Xiaomi / Redmi", kDim, kBg, kFamPd, 120);   // mirrors the PD selection, no count of its own
+    check_row_text(kFamXiaomi, "Xiaomi/Redmi", kDim, kBg, kFamPd, 120);   // mirrors the PD selection, no count of its own
     check_radio(kFamXiaomi, true, kFamPd);
     press(ui, Button::Ok, 1300); ui.tick(1300); settle(ui, 1300);   // a short OK toggles the family
     check_radio(kFamPd, false, kFamPd, kFocusFill); check_radio(kFamXiaomi, false, kFamPd);
@@ -4986,6 +4987,8 @@ static void test_no_journal_releases_an_inherited_rd() {
 }
 // ---- the Ra guard: a spoof needs the charger directly on the plug (include/k2/pd/ra_guard.hpp) ----
 static void dump_screen(const char* name) {   // $K2_DUMP/k2_<name>.panel (240x240 RGB565 LE; tools/panel2png.py)
+    k2::trunc::context(name);
+    k2::trunc::settled();   // every dumped screen is a settled frame: overlapping text fails the run
     const char* dir = std::getenv("K2_DUMP");
     if (!dir) return;
     char path[256];
@@ -5672,13 +5675,13 @@ static void test_waiting_cc_cells_show_raw_mv_while_plus_is_down() {
     Ui ui; open(ui);
     enter_waiting(ui, 1500);
     ui.tick(1600);
-    check_text_at(kSmall, 92, "Rp 3A", kText, kBg, 138);   // the Rp word while the key is up
+    check_text_at(kSmall, 92, "Rp 3A", kText, kBg, 148);   // the Rp word while the key is up
     ui.set_pressed(Button::Plus, true, 1700);
     ui.tick(1800);
-    check_text_at(kSmall, 92, "1650mV", kText, kBg, 138);   // the raw level while it is down
+    check_text_at(kSmall, 92, "1650mV", kText, kBg, 148);   // the raw level while it is down
     ui.set_pressed(Button::Plus, false, 1900);
     ui.tick(2000);
-    check_text_at(kSmall, 92, "Rp 3A", kText, kBg, 138);
+    check_text_at(kSmall, 92, "Rp 3A", kText, kBg, 148);
 }
 
 // Shell parity batch 1 (red): the charger-test view is what the screen shows, read without a screenshot. The footer words
@@ -6049,6 +6052,7 @@ static void test_xiaomi_unit_scenes() {
 }
 
 int main() {
+    overlap_enable();
     test_view_says_what_the_wizard_shows();
     test_view_carries_the_wait_and_the_run();
     test_waiting_plus_minus_do_nothing();
