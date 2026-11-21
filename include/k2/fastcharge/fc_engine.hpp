@@ -86,6 +86,9 @@ struct Env {
     virtual int dm_mv() { return -1; }
     virtual int ceiling_mv() { return 0; }     // power::max_vbus_mv(); 0 = nothing may be triggered
     virtual link::Reason inline_reason() { return link::Reason::None; }   // k2::link::inline_now()
+    // Only the source's own unanswered caps behind the K2 (k2::link::silent_caps_only_now()): the one inline case a VOOC-family
+    // start may override, and only when its caller allowed inline.
+    virtual bool silent_caps_only() { return false; }
     // The HID-cable loop 5 V lock (k2::loopguard::locked()): no target above kLockMv starts or is retargeted to (OverLimit),
     // and a running session above it, or with VBUS above kLockVbusMv, is aborted with OverLimit (both lines to 0 V).
     virtual bool hv_locked() { return false; }
@@ -254,6 +257,7 @@ private:
     void build_script();
     void run_script();
     void keep_alive();
+    bool vooc_inline_blocked();   // VOOC family: any inline reason, but the caller-allowed silent-caps window
     bool scp_unmoved(int vbus) const;
     void ufcs_poll(std::uint32_t now);
     void ufcs_track(std::size_t n, UKind kind, std::uint32_t now);
@@ -312,6 +316,7 @@ private:
     Caps caps_ K2_BSS_ZERO;                                // what the adapter / source said about itself (see caps())
     std::array<std::uint8_t, 8> scp_lim_ K2_BSS_ZERO;      // SCP limit registers 0x90..0x97 as read in this session
     void patch_scp_current();
+    bool inline_ok_ K2_BSS_INIT(false);   // start() was allowed to run inline (the charger test's own PD-silent start)
     bool keep_ K2_BSS_INIT(false), held_ K2_BSS_INIT(false);   // keep(): hold an SCP session at its Detected / NoChange end; held_: it is held now
     bool scp_read_ K2_BSS_INIT(false), scp_on_ K2_BSS_INIT(false);   // this session read the adapter's registers / wrote the enable and init
     int scp_iset_ma_ K2_BSS_INIT(0);                                  // the current limit written last

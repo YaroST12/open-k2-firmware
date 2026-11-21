@@ -230,6 +230,7 @@ struct HwEnv final : fc::Env {
     }
     int ceiling_mv() override { return power::max_vbus_mv(); }
     link::Reason inline_reason() override { return link::inline_now(); }
+    bool silent_caps_only() override { return link::silent_caps_only_now(); }
     bool hv_locked() override { return loopguard::locked(); }   // the HID-cable loop 5 V lock: no legacy raise, a raised session aborts
     void set_dp(fc::Drive d) override { dpdm::set_dp(d); }
     void set_dm(fc::Drive d) override { dpdm::set_dm(d); }

@@ -1360,8 +1360,44 @@ static void vooc_vbus_above_5v5_aborts() {
     }
 }
 
-// Nothing of this runs inline (a phone or a PD contract behind the K2): refused even with the override, and a session that
-// sees one appear ends at once.
+// Nothing of this runs inline (a phone or a PD contract behind the K2): refused even with the override (bar the silent-caps
+// window below), and a session that sees one appear ends at once.
+// The one exception: the charger test's own PD-silent start while the source's unanswered caps still read as a contract (no load,
+// no Request): allowed only with allow_inline, and a Request or load appearing in the session ends it at once.
+static void vooc_silent_caps_window() {
+    using k2::link::Reason;
+    for (auto p : {Proto::Vooc, Proto::SuperVooc, Proto::SuperVooc65}) {
+        FakeCharger c;
+        Engine e(c);
+        c.inline_now = Reason::PdContract;
+        c.silent_caps = true;
+        CHECK(e.start(p, 5000, true, false) == Fail::Inline);   // the caller did not allow inline: still refused
+        CHECK(e.start(p, 5000, true, true) == Fail::None);
+        c.run(e, 50);
+        CHECK(e.state() == State::Negotiating);
+        c.silent_caps = false;                                   // a Request or load showed up
+        c.run(e, 1);
+        CHECK(e.state() == State::Failed && e.fail() == Fail::Inline && c.resets == 1);
+        // A load (DataDevice) is no silent-caps case, whatever the fake's flag says.
+        FakeCharger d;
+        Engine g(d);
+        d.inline_now = Reason::DataDevice;
+        d.silent_caps = true;
+        CHECK(g.start(p, 5000, true, true) == Fail::Inline);
+        // The window closing on its own (the caps went stale) does not end the session.
+        FakeCharger s;
+        Engine h(s);
+        s.inline_now = Reason::PdContract;
+        s.silent_caps = true;
+        CHECK(h.start(p, 5000, true, true) == Fail::None);
+        s.run(h, 20);
+        s.inline_now = Reason::None;
+        s.silent_caps = false;
+        s.run(h, 20);
+        CHECK(h.fail() != Fail::Inline);
+    }
+}
+
 static void vooc_never_inline() {
     using k2::link::Reason;
     for (auto p : {Proto::Vooc, Proto::SuperVooc, Proto::SuperVooc65}) {
@@ -1821,6 +1857,7 @@ int main() {
     vooc_other_commands_are_never_answered();
     vooc_vbus_above_5v5_aborts();
     vooc_never_inline();
+    vooc_silent_caps_window();
     vooc_stop_releases();
     legacy_5v_steps_fit_the_cut_window();
     silent_5v_steps_fit_the_cut_window();
