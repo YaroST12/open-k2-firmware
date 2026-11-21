@@ -80,6 +80,10 @@ Everything is C++23; there are no C files left in `src/` (TinyUSB and lwIP under
 
 Open defects, newest first. A row leaves this list when its fix is merged and seen on hardware.
 
+- **`make gate` fails at the tests on public since 3614728f** (2026-11-21, host). `test_ui_perf.cpp:516` (worst scroll over
+  53600) and `test_ui_overdraw.cpp:227` (6 full-paint budgets) fail from 3614728f (place scrollbar to the bottom, toast
+  above the scroll); b4d92f10 (Ripple native pixels) adds 2 more overdraw fails. 949c134c and earlier pass.
+
 - **QC2 Deep testing animation does not advance to the next voltage badge** (2026-11-21, user hardware report). During a
   Deep charger test, QC2 changes VBUS voltage through its levels, but the Running-grid highlight/outline stays stuck on
   the first voltage badge instead of advancing to the active voltage badge.
