@@ -2493,9 +2493,9 @@ void ChargerTestPage::list_row(int index, bool focused, kit::RowSpec &out) {
 void ChargerTestPage::paint_list() {
     if (!laid_) {
 #if K2_SPECROWS
-        int16_t y = s_.stage_ == Stage::Resume ? 56 : s_.stage_ == Stage::Refuse ? 110 : s_.stage_ == Stage::SpecDetail ? 58 : kit::kBodyY;
+        int16_t y = s_.stage_ == Stage::Resume ? runlay::kResumeRowsY : s_.stage_ == Stage::Refuse ? runlay::kRefuseRowsY : s_.stage_ == Stage::SpecDetail ? 58 : kit::kBodyY;
 #else
-        int16_t y = s_.stage_ == Stage::Resume ? 56 : s_.stage_ == Stage::Refuse ? 110 : kit::kBodyY;
+        int16_t y = s_.stage_ == Stage::Resume ? runlay::kResumeRowsY : s_.stage_ == Stage::Refuse ? runlay::kRefuseRowsY : kit::kBodyY;
 #endif
         hdr_n_ = 0;
         if (s_.stage_ == Stage::Steps && s_.picked() && results_row_ >= 0 && static_cast<size_t>(results_row_) < line_n_) {
@@ -2530,10 +2530,10 @@ void ChargerTestPage::paint_warning() {
     if (!laid_) {
         const Surface &c = ctx_.content;
         if (ctx_.budget && !ctx_.budget->admit(static_cast<int>(c.w) * 44 + 1200, true)) return;
-        kit::draw_alert_band(c, 22, false, "Cable connected");
-        gfx_text(c, kSmall, 6, 64, "the spoof won't reach", kText, kBg);
-        gfx_text(c, kSmall, 6, 84, "the charger.", kText, kBg);
-        ctx_.rows.init(c, 110, &ChargerTestPage::row_fn, this);
+        kit::draw_alert_band(c, kit::kBodyY, false, "Cable connected");
+        gfx_text(c, kSmall, 6, runlay::kRefuseRowsY - 46, "the spoof won't reach", kText, kBg);
+        gfx_text(c, kSmall, 6, runlay::kRefuseRowsY - 26, "the charger.", kText, kBg);
+        ctx_.rows.init(c, runlay::kRefuseRowsY, &ChargerTestPage::row_fn, this);
         ctx_.rows.restart();
         ctx_.rows.invalidate();
         hdr_n_ = 0;
@@ -3192,30 +3192,39 @@ void ChargerTestPage::paint_results() {
         if (!bg.admit(1600)) return;
         // pass / fail / skip; a run that found a voltage fold adds a fourth cell, "caution" (amber tilde), between pass and fail
         const kit::Verdict kinds[4] = {kit::Verdict::Pass, kit::Verdict::Partial, kit::Verdict::Fail, kit::Verdict::Skip};
-        const int cols = all.caution ? 4 : 3, pitch = all.caution ? 52 : 68;
+        const int cols = all.caution ? 4 : 3, pitch = c.w / cols;
         for (int i = 0; i < cols; ++i) {
             const int16_t x = static_cast<int16_t>(i * pitch);
-            if (i) gfx_fill(c, static_cast<int16_t>(x - 1), 22, 1, 24, kRule);
-            kit::draw_verdict(c, static_cast<int16_t>(x + 2), 28, 12, 12, kinds[all.caution || i < 1 ? i : i + 1], {}, kBg);
+            if (i) gfx_fill(c, static_cast<int16_t>(x - 1), 0, 1, runlay::kResBandH, kRule);
+            kit::draw_verdict(c, static_cast<int16_t>(x + 2), 6, 12, 12, kinds[all.caution || i < 1 ? i : i + 1], {}, kBg);
         }
-        gfx_fill(c, 0, 46, c.w, 1, kRule);
-        gfx_fill(c, 0, 70, c.w, 2, kRule);
-        grid_.init(c, 72, kFooterY, &ChargerTestPage::result_row_fn, this);
+        gfx_fill(c, 0, runlay::kResBandH, c.w, 1, kRule);
+        gfx_fill(c, 0, runlay::kResRule2Y, c.w, 2, kRule);
+        grid_.init(c, runlay::kResGridY, kFooterY, &ChargerTestPage::result_row_fn, this);
         laid_ = true;
     }
     const unsigned n4[4] = {all.pass, all.caution, all.fail, all.skip};
     static constexpr const char *kWords4[4] = {"pass", "caution", "fail", "skip"};
     const uint16_t ink4[4] = {kOk, kCaution, kError, kDim};
-    const int cols = all.caution ? 4 : 3, pitch = all.caution ? 52 : 68, chars = all.caution ? 4 : 6;
+    const int cols = all.caution ? 4 : 3, pitch = c.w / cols, chars = (pitch - 18) / kSmallAdvPx;   // the text ends 2 px short of the next cell's rule
+    // The words (pass / fail / skip) show for all three counts or for none: one of them too wide for its cell never leaves its
+    // neighbours spelled out (a caution run has four narrow cells and shows numbers only).
+    bool words = !all.caution;
+    for (int i = 0; words && i < cols; ++i) {
+        const int k = i < 1 ? i : i + 1;
+        StrBuf<12> t;
+        t.put_u32(n4[k]);
+        words = static_cast<int>(t.view().size() + 1 + std::strlen(kWords4[k])) <= chars;
+    }
     for (int i = 0; i < cols; ++i) {
         const int k = all.caution || i < 1 ? i : i + 1;   // without a caution the cell is skipped: pass, fail, skip
         StrBuf<12> t;
         t.put_u32(n4[k]);
-        if (!all.caution && t.view().size() + 1 + std::strlen(kWords4[k]) <= 7) t.put_char(' ').put(kWords4[k]);
-        const unsigned cw = std::max<unsigned>(chars, static_cast<unsigned>(t.view().size()));
-        put_line(c, kSmall, static_cast<int16_t>(i * pitch + 16), 26, t.view(), ink4[k], cw, cell_sig_[i], false, false, &bg);
+        if (words) t.put_char(' ').put(kWords4[k]);
+        const unsigned cw = std::max<unsigned>(static_cast<unsigned>(chars), static_cast<unsigned>(t.view().size()));
+        put_line(c, kSmall, static_cast<int16_t>(i * pitch + 16), 4, t.view(), ink4[k], cw, cell_sig_[i], false, false, &bg);
     }
-    put_line(c, kSmall, 6, 51, best_.view(), best_none_ ? kDim : kText,
+    put_line(c, kSmall, 6, runlay::kResBestY, best_.view(), best_none_ ? kDim : kText,
              kBestChars, cell_sig_[4], false, true, &bg);   // [0..3] are the header's cells (four with a caution)
     if (pbg && pbg->more) return;
     grid_.set_count(delta_row() + (s_.delta_n_ ? 1 : 0));
@@ -3239,7 +3248,7 @@ void ChargerTestPage::draw_capture(const transcap::Meta &m) {
 
 // The verdict band of a detail page (y22..57): the verdict's fill and glyph, the word (font 24; font 12 when `tight`) and `right` (font 12,
 // right-aligned to x218).
-static void draw_band(const Surface &c, kit::Verdict v, std::string_view word, bool tight, std::string_view right) {
+static void draw_band(const Surface &c, kit::Verdict v, std::string_view word, bool tight, std::string_view right, bool label = false) {
     const auto vs = kit::verdict_style(v);
     const uint16_t fill = vs.filled ? vs.fill : kSurface;
     gfx_fill(c, 0, 2, c.w, 36, fill);
@@ -3247,7 +3256,8 @@ static void draw_band(const Surface &c, kit::Verdict v, std::string_view word, b
     if (tight) gfx_text(c, kSmall, 32, 12, word, vs.ink, fill);
     else gfx_text(c, kMid, 32, 8, word, vs.ink, fill);
     const uint16_t ink = vs.ink == kDim || vs.ink == kFaint ? kText : vs.ink;
-    gfx_text(c, kSmall, static_cast<int16_t>(c.w - 6 - static_cast<int>(right.size()) * kSmallAdvPx), 12, right, ink, fill);
+    if (label) gfx_text(c, kLabelFont, static_cast<int16_t>(c.w - 6 - static_cast<int>(right.size()) * kLabelAdv), static_cast<int16_t>(12 + kSmall.ascent - kLabelFont.ascent), right, ink, fill);
+    else gfx_text(c, kSmall, static_cast<int16_t>(c.w - 6 - static_cast<int>(right.size()) * kSmallAdvPx), 12, right, ink, fill);
 }
 
 // One step's detail: a verdict band, then a fixed table (no scroll). A step with a stored capture gives its last two rows to the
@@ -3273,9 +3283,12 @@ void ChargerTestPage::paint_detail() {
         // The band word (LISTED / NOT RUN for a Light run's listing) and the step's name share the band: a long word (CAUTION) beside
         // a long name (PPS 7.14->11V) would overlap, so the word drops to the small font then and the name keeps its whole text.
         const std::string_view word = result_layout::verdict_word(s, view);
-        const bool tight = word.size() > 6 && 32 + text_width(kMid, word) + 8 + static_cast<int>(val.view().size() * kSmallAdvPx) > c.w - 6;
+        // word and name in 24 / 16 px; else the word in 16 px; else the name in 12 px too.
+        const int room_mid = c.w - 6 - 32 - 8 - text_width(kMid, word), room_small = c.w - 6 - 32 - 8 - text_width(kSmall, word);
+        const int name_w = static_cast<int>(val.view().size() * kSmallAdvPx);
+        const bool tight = name_w > room_mid, label = tight && name_w > room_small;
         char buf[kFitBuf];
-        draw_band(c, v, word, tight, fit_data(kSmall, val.view(), tight ? c.w - 6 - 32 - 8 - text_width(kSmall, word) : 80, buf));
+        draw_band(c, v, word, tight, fit_data(label ? kLabelFont : kSmall, val.view(), label ? room_small : tight ? room_small : room_mid, buf), label);
         detail_step_ = 1;
     }
     while (detail_step_ >= 1 && detail_step_ <= 6) {
@@ -3427,14 +3440,14 @@ void ChargerTestPage::paint_resume() {
     Budget bg{pbg, (1 << 30)};
     if (!laid_) {
         if (!bg.admit(static_cast<int>(c.w) * 24 + 25 * 8 * 16)) return;
-        gfx_fill(c, 0, 26, c.w, 24, kBg);
-        put_line(c, kSmall, 4, 28, resumetext::status(resume_words(ctx_.now)), kCaution, 25, cell_sig_[0]);
-        ctx_.rows.init(c, 56, &ChargerTestPage::row_fn, this);
+        gfx_fill(c, 0, runlay::kResumeY, c.w, 24, kBg);
+        put_line(c, kSmall, 4, runlay::kResumeY + 2, resumetext::status(resume_words(ctx_.now)), kCaution, 25, cell_sig_[0]);
+        ctx_.rows.init(c, runlay::kResumeRowsY, &ChargerTestPage::row_fn, this);
         ctx_.rows.restart();
         ctx_.rows.invalidate();
         laid_ = true;
     } else {
-        put_line(c, kSmall, 4, 28, resumetext::status(resume_words(ctx_.now)), kCaution, 25, cell_sig_[0], false, false, &bg);
+        put_line(c, kSmall, 4, runlay::kResumeY + 2, resumetext::status(resume_words(ctx_.now)), kCaution, 25, cell_sig_[0], false, false, &bg);
     }
     paint_list();
 }

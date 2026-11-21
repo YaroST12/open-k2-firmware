@@ -30,6 +30,7 @@
 #include "k2/ui/ui_widgets.hpp"
 #include "k2/ui/blend.hpp"
 #include "k2/ui/spec_text.hpp"
+#include "k2/ui/run_layout.hpp"
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
@@ -112,7 +113,7 @@ constexpr int kRefuseStage = 12;   // Stage::Refuse, the Ra guard's refusal of a
 constexpr int kWaitStage = 13;     // Stage::Waiting, START's wait for the charger (never blocks the UI)
 constexpr int kRunningStage = 5;   // Stage::Running
 constexpr int kResumeStage = 9;    // Stage::Resume
-constexpr int kRefuseY = 110;      // the Refuse stage's answer rows start here (under the alert band and its two lines)
+constexpr int kRefuseY = k2::runlay::kRefuseRowsY;      // the Refuse stage's answer rows start here (under the alert band and its two lines)
 // Cable rows (the one identity list): 0 Off, 1..3 the three built-in chips (ids 1, 2, 4), 4.. the saved clones.
 constexpr int kOffRow = 0, kBuiltinRow = 1, kSavedRow = 4;
 // Pick a cable-identity row from the top of the Cable step: it selects the choice and advances to Review (nothing is armed).
@@ -1369,12 +1370,12 @@ static void test_results_counters_are_words() {
         g_stub.pd_chatter = true;
         for (uint32_t t = 1500; t <= 120000; t += 100) ui.tick(t);
         CHECK_EQ(ui.charger_test_stage(), 6);
-        // The counters strip (y 2..26, three 68 px columns) says the totals as words in the verdict colours: "0 pass  0 fail
-        // 4 skip", 16 px text at x = 16 + 68 * column after the verdict shape (the fail count stays kError even at 0).
+        // The counters strip (y 0..23, three 69 px columns) says the totals as words in the verdict colours: "0 pass  0 fail
+        // 4 skip", 16 px text at x = 16 + 69 * column after the verdict shape (the fail count stays kError even at 0).
         const struct { int x; std::string_view text; uint16_t color; } words[] = {
-            {16, "0 pass", kOk}, {16 + 68, "0 fail", kError}, {16 + 136, "4 skip", kDim}};
+            {16, "0 pass", kOk}, {16 + 69, "0 fail", kError}, {16 + 138, "4 skip", kDim}};
         for (const auto& w : words) {
-            check_text_at(kSmall, 26, w.text, w.color, kBg, w.x);
+            check_text_at(kSmall, 4, w.text, w.color, kBg, w.x);
         }
         no_operations();
     }
@@ -1422,11 +1423,12 @@ static void test_results_grid_rows_rail_and_footer() {
     six_pdo_fixture(); Ui ui; uint32_t t;
     finished_results(ui, t);
     CHECK_EQ(ui.list_state().count > 8, true);
-    CHECK_EQ(PANEL[70 * LCD_WIDTH + 100] == kRule && PANEL[71 * LCD_WIDTH + 100] == kRule, true);   // the 2 px rule over the grid
-    CHECK_EQ(PANEL[72 * LCD_WIDTH + 1] == kFocus, true);                                           // rail on the focused row
-    CHECK_EQ(PANEL[72 * LCD_WIDTH + 30] == kFocusFill, true);                                         // and its tint
-    CHECK_EQ(PANEL[72 * LCD_WIDTH + kit::kResultLabelW] == kBg, true);                            // no label rule: white space
-    CHECK_EQ(PANEL[73 * LCD_WIDTH + kit::kResultLabelW + 2] == kOkT, true);                        // a passing cell: the flat pass fill
+    constexpr int kTop = k2::runlay::kResGridY;
+    CHECK_EQ(PANEL[(kTop - 2) * LCD_WIDTH + 100] == kRule && PANEL[(kTop - 1) * LCD_WIDTH + 100] == kRule, true);   // the 2 px rule over the grid
+    CHECK_EQ(PANEL[kTop * LCD_WIDTH + 1] == kFocus, true);                                           // rail on the focused row
+    CHECK_EQ(PANEL[kTop * LCD_WIDTH + 30] == kFocusFill, true);                                         // and its tint
+    CHECK_EQ(PANEL[kTop * LCD_WIDTH + kit::kResultLabelW] == kBg, true);                            // no label rule: white space
+    CHECK_EQ(PANEL[(kTop + 1) * LCD_WIDTH + kit::kResultLabelW + 2] == kOkT, true);                        // a passing cell: the flat pass fill
     move(ui, 2); ui.tick(t + 100);
     CHECK_EQ(ui.charger_test_stage(), 6);
 }
@@ -1436,8 +1438,8 @@ static void test_results_cells_are_flat_fills() {
     six_pdo_fixture(); Ui ui; uint32_t t;
     finished_results(ui, t);
     unsigned fill = 0, gaps = 0;
-    int last_fill = 0, fill_y = 72;
-    for (int y = 72; y < 112; ++y) {
+    int last_fill = 0, fill_y = k2::runlay::kResGridY;
+    for (int y = k2::runlay::kResGridY; y < k2::runlay::kResGridY + 40; ++y) {
         unsigned row_fill = 0;
         int row_last = 0;
         for (int x = kit::kResultLabelW + 1; x < kTwinContentW; ++x) {
@@ -1490,7 +1492,7 @@ static void test_a_capped_range_reads_amber_and_says_how_far_it_got() {
     settle(ui, t);
     // The chip: an amber tint with the bar under its text.
     unsigned tint = 0, bar = 0;
-    for (int y = 72; y < kFooterY; ++y)
+    for (int y = k2::runlay::kResGridY; y < kFooterY; ++y)
         for (int x = kit::kResultLabelW + 1; x < 224; ++x) {
             const uint16_t p = PANEL[y * LCD_WIDTH + x];
             tint += p == kPartFill; bar += p == kOnPart;
@@ -1508,7 +1510,7 @@ static void test_a_capped_range_reads_amber_and_says_how_far_it_got() {
     }
     CHECK_EQ(detail, true);
     if (!detail) return;
-    check_text_at(kMid, 8, "CAPPED", kOnPart, kPartFill, 32);
+    check_text_at(kSmall, 12, "CAPPED", kOnPart, kPartFill, 32);   // beside the whole name the word drops to 16 px
     const int ty = 44 + 2 * kit::kRowH + kit::row_text_y(kit::kRowH, kSmall.height);   // the third row of the Detail table (x6 label, x76 value)
     check_text_at(kSmall, ty, "Reached", kDim, kBg, 6);
     check_text_at(kSmall, ty, "3.3-19.4V of 21V", kCaution, kBg, 76);   // the PPS range starts at 3.3 V: 16 cells, the full value column
@@ -2227,9 +2229,9 @@ static void test_a_voltage_fold_reads_as_a_caution() {
     }
     // The header: pass / caution / fail / skip; the caution cell is amber (four columns: the number only, behind its amber mark).
     StrBuf<8> n; n.put_u32(caution);
-    check_text_at(kSmall, 26, n.view(), kCaution, kBg, 68);
+    check_text_at(kSmall, 4, n.view(), kCaution, kBg, 68);
     n.clear(); n.put_u32(pass);
-    check_text_at(kSmall, 26, n.view(), kOk, kBg, 16);
+    check_text_at(kSmall, 4, n.view(), kOk, kBg, 16);
     // Steps of the PPS row: the footer counts that family's cautions, in the caution tone ("PPS: n pass, m caution").
     const auto pps = pick_family(ui, "PPS");
     CHECK_EQ(pps.line >= 0, true);
@@ -2407,9 +2409,9 @@ static void test_a_sweep_off_by_more_than_100mv_reads_as_a_caution() {
     press(ui, Button::Back); ui.tick(t += 100); calm();
     top(ui, t); calm();
     StrBuf<8> n; n.put_u32(caution);
-    check_text_at(kSmall, 26, n.view(), kCaution, kBg, 68);        // the header's caution cell holds the deviating sweeps
+    check_text_at(kSmall, 4, n.view(), kCaution, kBg, 68);        // the header's caution cell holds the deviating sweeps
     n.clear(); n.put_u32(pass);
-    check_text_at(kSmall, 26, n.view(), kOk, kBg, 16);
+    check_text_at(kSmall, 4, n.view(), kOk, kBg, 16);
     // The PPS row's steps page lists the range steps and the APDO's sweep, and counts its deviating sweep as a caution.
     const auto sw = pick_family(ui, "PPS");
     CHECK_EQ(sw.line >= 0, true);
@@ -2570,8 +2572,9 @@ static void test_step_label_gallery() {
         press(ui, Button::Ok);                     // the cable pick keeps "Off" and goes on to Review
         CHECK_EQ(ui.charger_test_stage(), 4);
         char name[48];
-        const auto shot = [&](const char* scene, uint32_t at) {
+        const auto shot = [&](const char* scene, uint32_t& at, bool whole = true) {
             ui.tick(at);
+            for (int i = 0; whole && i < 60 && ui.painting(); ++i) ui.tick(at += 20);   // a settled frame, as the screen shows it
             std::snprintf(name, sizeof name, "labels_rot%u_%s", unsigned(rot), scene);
             dump_panel(name);
         };
@@ -2595,7 +2598,7 @@ static void test_step_label_gallery() {
                 std::count_if(steps.begin(), steps.end(), [](const ct::Step& s) { return s.verdict > ct::Verdict::Running; }) >= 8) break;
         }
         CHECK_EQ(ui.charger_test_stage(), 5);
-        shot("running", t);
+        shot("running", t, false);   // mid-run: the painter is never waited for
         for (; t <= 900000 && ui.charger_test_busy(); t += 100) ui.tick(t);
         CHECK_EQ(ui.charger_test_stage(), 6);
         ui.tick(t); t += 200; ui.tick(t); t += 200;
@@ -2696,7 +2699,7 @@ static void test_pd_block_scenes() {
             std::string want = s.ver;
             for (size_t i = 0; i < n && want.size() + 2 + std::strlen(lines[i].text) <= 26; ++i) want += std::string("  ") + lines[i].text;
             CHECK_EQ(want.size() > std::strlen(s.ver), true);
-            check_text_at(kSmall, 51, want, kText, kBg, 6);
+            check_text_at(kSmall, k2::runlay::kResBestY, want, kText, kBg, 6);
         }
         move(ui, 40, t); shot("end");
         top(ui, t); settle(ui, t);
@@ -2756,7 +2759,7 @@ static void test_pd_version_answer_against_the_offer() {
             const size_t n = result_layout::summarize(ui.charger_test_results().steps(), lines);
             std::string want = c.head;
             for (size_t i = 0; i < n && want.size() + 2 + std::strlen(lines[i].text) <= 26; ++i) want += std::string("  ") + lines[i].text;
-            check_text_at(kSmall, 51, want, kText, kBg, 6);
+            check_text_at(kSmall, k2::runlay::kResBestY, want, kText, kBg, 6);
         }
         top(ui, t); press(ui, Button::Ok, t); ui.tick(t); t += 200;
         CHECK_EQ(ui.charger_test_stage(), 7);
@@ -2922,9 +2925,9 @@ static void test_results_best_line_names_the_best_modes() {
     std::string want = "PD3.0";
     for (size_t i = 0; i < n && want.size() + 2 + std::strlen(lines[i].text) <= 26; ++i) want += std::string("  ") + lines[i].text;
     CHECK_EQ(want.size() > 7, true);
-    check_text_at(kSmall, 51, want, kText, kBg, 6);
+    check_text_at(kSmall, k2::runlay::kResBestY, want, kText, kBg, 6);
     move(ui, 2); ui.tick(t + 100);
-    check_text_at(kSmall, 51, want, kText, kBg, 6);
+    check_text_at(kSmall, k2::runlay::kResBestY, want, kText, kBg, 6);
 }
 static void test_start_presents_rd() {
     { // charger alone, no VBUS: the first OK touches nothing; the confirming OK presents Rd, VBUS comes up, the run starts
@@ -4711,10 +4714,12 @@ static void test_the_running_grid_follows_the_step() {
     // A step whose chip the layout merged into one already decided (the same volts at another current) has no cell of its own to
     // light: its row is on screen all the same. Those are the rare ones.
     for (unsigned k = 0; k < 5; ++k) ui.tick(now += 100);
+    for (int i = 0; i < 60 && ui.painting(); ++i) ui.tick(now += 20);
     dump_screen("results_end");   // K2_DUMP: the finished run's Results grid, the skipped units struck out
     if (ui.charger_test_stage() == 6) {
         for (int k = 0; k < 5; ++k) {
             move(ui, 3, now += 100); ui.tick(now += 100); ui.tick(now += 100);
+            for (int i = 0; i < 60 && ui.painting(); ++i) ui.tick(now += 20);
             char name[32]; std::snprintf(name, sizeof name, "results_scrolled%d", k);
             dump_screen(name);
         }
@@ -5081,9 +5086,9 @@ static void test_refuse_stage_wording_and_skip_spoof_keeps_the_pick() {
     pick_builtin(ui);
     CHECK_EQ(ui.charger_test_stage(), kRefuseStage); CHECK_EQ(ui.charger_test_cursor(), 0);
     ui.tick(1500); settle(ui, 1500);
-    check_text_at(kMid, 22 + (kit::kAlertH - kMid.height) / 2, "Cable connected", kBg, kCaution, 26);   // the alert band's word
-    check_text_at(kSmall, 64, "the spoof won't reach", kText, kBg, 6);   // the two explanation lines
-    check_text_at(kSmall, 84, "the charger.", kText, kBg, 6);
+    check_text_at(kMid, kit::kBodyY + (kit::kAlertH - kMid.height) / 2, "Cable connected", kBg, kCaution, 26);   // the alert band's word
+    check_text_at(kSmall, kRefuseY - 46, "the spoof won't reach", kText, kBg, 6);   // the two explanation lines
+    check_text_at(kSmall, kRefuseY - 26, "the charger.", kText, kBg, 6);
     CHECK_EQ(ui.list_state().count, 2);
     check_row_text(0, "Start anyway", kCaution, kFocusFill, -1, 150, kRefuseY);
     check_row_text(1, "Start, skip spoof", kText, kBg, -1, 150, kRefuseY);

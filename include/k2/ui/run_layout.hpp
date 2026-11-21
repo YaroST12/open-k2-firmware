@@ -30,6 +30,11 @@ inline constexpr RunLayout kSweepRun{28, 54, 108, 122, 124, 3};
 inline constexpr int16_t kBelowBar = 27;       // first row under the progress bar (y24..26); a body wipe starts here
 inline constexpr int16_t kPlainHeroRight = 188;
 
+// Results: the counts band (y0..23) and its rule, the best-line row, a 2 px rule, then the grid takes the rest of the body.
+// Resume: the status line (y2..25) and its three rows; Refuse: the alert band at y2, two lines, then the two choices.
+inline constexpr int16_t kResumeY = 2, kResumeRowsY = 30, kRefuseRowsY = 90;
+inline constexpr int16_t kResBandH = 24, kResBestY = kResBandH + 5, kResRule2Y = kResBestY + 19, kResGridY = kResRule2Y + 2;   // 24, 29, 48, 50
+
 // Font cell metrics the geometry is written in (checked against the real fonts in the test).
 inline constexpr int kH12 = 12, kA12 = 9, kAdv12 = 6;
 inline constexpr int kH16 = 16, kA16 = 12, kAdv16 = 8;
