@@ -513,6 +513,11 @@ struct Summary {
     Reason refusal = Reason::None;
     uint16_t refusal_mv = 0;   // the measured VBUS (mV) behind a Release / WrongVoltage refusal (0 = none)
 };
+// The source list a count assumes before any charger has answered: a typical SPR charger (5 / 9 / 12 / 15 / 20 V fixed, two PPS ranges).
+pd::SourceCaps nominal_caps();
+// How many tests a run of `o` would make: the rows that run plus the spec stage's checks, the Review's "N run". Without a source list
+// (caps.valid false) it plans the nominal one, so the count still scales with the depth.
+unsigned planned_tests(const pd::SourceCaps&, Options, Input);
 const char* explanation(const Step&);
 // The step-walk caution's note, "steps 100mV, not 20mV" (the mean move, rounded to 10 mV from 50 up, then the nominal step) or
 // "steps ignored"; or a transition check's finding, "overshoot +1" (the first flag, then how many more); 0 characters for any other reason.

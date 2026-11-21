@@ -1308,6 +1308,55 @@ static void test_the_default_run_is_medium() {
     CHECK_EQ(ui.charger_test_set_level(uint8_t(ct::Level::Medium)), true);
     CHECK_EQ(ui.charger_test_svooc_cap(), 0u);                         // Medium: off
 }
+// The Tests step's preset counters are the tests that preset would make at the chosen depth (the list in hand, else a nominal one),
+// not the unit entries ("PD only 2" at every depth).
+static void check_preset_tails(Ui& ui, bool with_caps) {
+    using A = ct::Algorithm;
+    constexpr uint32_t kPdMask = ct::kPdFixedAlgorithms | ct::kPpsAlgorithms;
+    const uint32_t masks[4] = {ct::kDefaultAlgorithms, ct::kDefaultAlgorithms & kPdMask, ct::kDefaultAlgorithms & ~kPdMask,
+                               ct::bit(A::Fcp) | ct::bit(A::Scp) | ct::bit(A::Afc) | ct::bit(A::Vooc) | ct::bit(A::SuperVooc) |
+                               ct::bit(A::SuperVooc65) | ct::bit(A::Vivo)};
+    unsigned prev_pd = 0;
+    for (const auto l : {ct::Level::Light, ct::Level::Medium, ct::Level::Deep}) {
+        CHECK_EQ(ui.charger_test_set_level(uint8_t(l)), true);
+        top(ui); ui.tick(1210); settle(ui, 1210);
+        ct::Input in; in.cap_mv = ui.context().cap_mv;
+        const auto o = ct::with_level({}, l);
+        unsigned pd_n = 0;
+        for (int r = 0; r < 4; ++r) {
+            ct::Options p = o; p.selected = masks[r];
+            const unsigned want = ct::planned_tests(with_caps ? g_stub.caps : pd::SourceCaps{}, p, in);
+            char t[8]; std::snprintf(t, sizeof t, "%u", want);
+            const int x0 = kit::kTailX - text_width(kSmall, t);
+            check_text_at(kSmall, wizard_text_y(kAllRow + r, kDepthRow), t, kDim, kBg, x0);   // the Depth row is focused and open
+            if (r == 1) pd_n = want;
+        }
+        // The nominal source offers a PPS range and four fixed levels to walk; the lone 5 V offer of the fixture has nothing more to test.
+        CHECK_EQ(with_caps ? pd_n >= prev_pd : pd_n > prev_pd, true);
+        if (!with_caps && l == ct::Level::Medium) CHECK_EQ(pd_n > 2, true);   // the old entry count
+        prev_pd = pd_n;
+    }
+}
+static void dump_screen(const char* name);
+static void test_preset_counts_follow_the_depth() {
+    fixture(); Ui ui; open(ui);
+    ui.charger_test_set_level(uint8_t(ct::Level::Medium));
+    check_preset_tails(ui, true);
+    fixture(); g_stub.caps = {}; Ui nui; open(nui);   // no list yet: the nominal one
+    check_preset_tails(nui, false);
+    // The screens at each depth, in all four rotations (a settled frame each: the no-truncation walk runs on it).
+    static constexpr const char* kDepthName[] = {"light", "medium", "deep"};
+    for (int rot = 0; rot < 4; ++rot) {
+        const uint32_t t = 1300 + 10 * rot;
+        CHECK_EQ(nui.charger_test_set_level(uint8_t(ct::Level::Light)), true);
+        nui.set_rotation(uint8_t(rot), t); top(nui, t); nui.tick(t + 1); settle(nui, t + 1);
+        for (int d = 0; d < 3; ++d) {   // OK on the Depth row steps Light, Medium, Deep
+            if (d) { press(nui, Button::Ok, t + 2 + d); nui.tick(t + 2 + d); settle(nui, t + 2 + d); }
+            char name[40]; std::snprintf(name, sizeof name, "tests_%s_r%d", kDepthName[d], rot);
+            dump_screen(name);
+        }
+    }
+}
 // Review (step 3/3): the Level row sits above START. START keeps the opening focus; MINUS reaches Level, whose OK cycles
 // Medium -> Deep -> Light -> Medium (next_level), the Tests row's step count follows the level, and the footer says what the
 // level does. PLUS goes back to START, whose OK opens the confirmation as before.
@@ -6511,6 +6560,7 @@ int main() {
     test_avs_sweep_row_follows_the_only_sweep_kind();
     test_the_default_run_is_medium();
     test_depth_row_cycles_and_shows_on_review();
+    test_preset_counts_follow_the_depth();
     test_an_old_journal_resumes_without_the_default_sweep();
     test_self_powered_review_note(); test_review_carries_the_other_port_warning(); test_phantom_evidence_does_not_refuse_a_run_but_a_load_does(); test_self_powered_run_is_on_the_card(); test_a_cable_read_once_stays_with_the_run();
     test_pps_wire_headroom_note();

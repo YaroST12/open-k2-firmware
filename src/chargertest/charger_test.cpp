@@ -962,6 +962,18 @@ Summary Runner::preview(const pd::SourceCaps& caps, Options o, Input in) {
     }
     return out;
 }
+pd::SourceCaps nominal_caps() {
+    pd::SourceCaps c; c.valid = true; c.spec_rev = 2; c.active_cc = 1; c.num_pdos = 7;
+    constexpr unsigned kVolts[] = {5000, 9000, 12000, 15000, 20000};
+    for (unsigned n = 0; n < 5; ++n) c.pdos[n] = pd::decode_pdo(((kVolts[n] / 50) << 10) | (n == 4 ? 500 : 300));
+    c.pdos[5] = pd::decode_pdo(0xc0000000 | (110u << 17) | (50u << 8) | 60);   // PPS 3.3-11 V 3 A
+    c.pdos[6] = pd::decode_pdo(0xc0000000 | (200u << 17) | (50u << 8) | 60);   // PPS 3.3-20 V 3 A
+    return c;
+}
+unsigned planned_tests(const pd::SourceCaps& caps, Options o, Input in) {
+    const auto s = Runner::preview(caps.valid ? caps : nominal_caps(), o, in);
+    return unsigned(s.runnable) + s.spec_checks;
+}
 void Runner::add(Step s) {
     if (count_ < steps_.size()) steps_[count_++] = s;
 }

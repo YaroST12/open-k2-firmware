@@ -401,6 +401,7 @@ public:
     static uint32_t wait_total_ms();
     // The Review preview over the live reading; the page tick and view() share it (stages up to Review, and Custom).
     void update_summary(const charger_test::Input& in);
+    void update_preset_counts(const charger_test::Input& in);
 private:
     friend class ChargerTestPage;
     // [[gnu::noinline]] on the big one-call-site helpers: -Os inlines each into update() / on_event() / poll(), whose
@@ -529,6 +530,9 @@ private:
     // lines and the remote knob (charger-sweep, Cmd 0x0F) still toggle each sweep on its own after that.
     charger_test::Options options_{};
     charger_test::Summary summary_;
+    // The Tests list's preset counts (planned_tests at the chosen depth), kept until the depth, the source list or the cable changes.
+    std::array<uint8_t, 4> preset_n_{};
+    uint32_t preset_key_ K2_BSS_INIT(0);
     uint32_t run_t0_ K2_BSS_INIT(0);                  // when the run entered Running (the m:ss on screen)
     StrBuf<32> message_;
     int selection_ K2_BSS_INIT(0), family_ K2_BSS_INIT(0), result_family_ = -1, detail_index_ K2_BSS_INIT(0), detail_row_ K2_BSS_INIT(0);

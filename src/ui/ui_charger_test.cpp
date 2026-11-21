@@ -1787,6 +1787,28 @@ uint32_t ChargerTestSession::wait_total_ms() {
 
 void ChargerTestSession::update_summary(const ct::Input& in) {
     if (stage_ <= Stage::Review || stage_ == Stage::Custom) summary_ = ct::Runner::preview(fusb302::caps(), options_, in);
+    if (stage_ == Stage::Algorithms) update_preset_counts(in);
+}
+
+// Each preset row counts the tests that preset would make at the chosen depth (ct::planned_tests: the real list, else the nominal
+// one). The previews run only when what they plan from changed: the depth and its switches, the list, the cable, the monitor cap.
+void ChargerTestSession::update_preset_counts(const ct::Input& in) {
+    static_assert(std::tuple_size_v<decltype(preset_n_)> == kPresets);
+    const auto& caps = fusb302::caps();
+    uint32_t key = 2166136261u;
+    const auto mix = [&key](uint32_t v) { key = (key ^ v) * 16777619u; };
+    mix(uint32_t(options_.level)); mix(options_.pps_sweep); mix(options_.avs_sweep); mix(options_.spec);
+    mix(in.cap_mv); mix(in.cable_mv); mix(in.cable_ma); mix(in.cable_observed); mix(in.pd.xiaomi_svid);
+    mix(in.spoof_on); mix(in.spoof_mv); mix(in.spoof_ma);
+    mix(caps.valid); mix(caps.num_pdos);
+    for (size_t n = 0; caps.valid && n < std::min<size_t>(caps.num_pdos, caps.pdos.size()); ++n) mix(caps.pdos[n].raw);
+    key |= 1;   // 0 is "not computed"
+    if (key == preset_key_) return;
+    preset_key_ = key;
+    for (int p = 0; p < kPresets; ++p) {
+        ct::Options o = options_; o.selected = kPresetMasks[p];
+        preset_n_[p] = ev8(ct::planned_tests(caps, o, in));
+    }
 }
 
 // The session half of the remote view; the page adds rows and the footer's words below. Every field is a read of RAM that
@@ -2340,7 +2362,7 @@ void ChargerTestPage::list_row(int index, bool focused, kit::RowSpec &out) {
             out.marker = kit::Marker::Radio;
             out.state = p + 1 == preset_row_of(s_.options_.selected);
             out.text = kPresetNames[p];
-            row_tail_.put_u32(entries(kPresetMasks[p]));
+            row_tail_.put_u32(s_.preset_n_[p]);
             if (focused) out.note = kPresetNotes[p];
         } else if (index == kCustomRow) {
             const bool custom = preset_row_of(s_.options_.selected) == 0;

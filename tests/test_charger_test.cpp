@@ -990,6 +990,36 @@ static void test_preview_counts_the_chain_row_with_the_svid() {
     CHECK_EQ(pvx.runnable, pv.runnable + 1);
     CHECK_EQ(pvx.skipped + 1, pv.skipped);
 }
+// The Tests step's counter: the tests a run would make at the chosen depth, from the real list or, before any charger has answered,
+// the nominal one. PD was a flat "2" (the two unit entries) at every depth.
+static void test_planned_tests_scale_with_depth() {
+    constexpr uint32_t kPdAll = ct::kPdFixedAlgorithms | ct::kPpsAlgorithms;
+    Fake f; f.caps = cuktech_caps();
+    const pd::SourceCaps none;   // no list yet
+    const pd::SourceCaps* lists[] = {&f.caps, &none};
+    for (const pd::SourceCaps* c : lists) {
+        unsigned pd_n[3], all_n[3];
+        const ct::Level lv[3] = {ct::Level::Light, ct::Level::Medium, ct::Level::Deep};
+        for (int n = 0; n < 3; ++n) {
+            pd_n[n] = ct::planned_tests(*c, ct::with_level({.selected = kPdAll}, lv[n]), f.in);
+            all_n[n] = ct::planned_tests(*c, ct::with_level({}, lv[n]), f.in);
+        }
+        CHECK_EQ(pd_n[0] < pd_n[1] && pd_n[1] < pd_n[2], true);
+        CHECK_EQ(pd_n[1] > 2, true);
+        CHECK_EQ(pd_n[0] >= 1, true);
+        CHECK_EQ(all_n[0] < all_n[1] && all_n[1] < all_n[2], true);
+        CHECK_EQ(all_n[1] > pd_n[1], true);
+    }
+    // A real list is counted as the Review counts it: the rows that run, plus the spec stage's checks.
+    for (const auto l : {ct::Level::Light, ct::Level::Medium, ct::Level::Deep}) {
+        const auto o = ct::with_level({.selected = kPdAll}, l);
+        const auto pv = ct::Runner::preview(f.caps, o, f.in);
+        CHECK_EQ(ct::planned_tests(f.caps, o, f.in), unsigned(pv.runnable) + pv.spec_checks);
+    }
+    // No list: the nominal one, which is a typical SPR charger's.
+    const auto o = ct::with_level({.selected = kPdAll}, ct::Level::Medium);
+    CHECK_EQ(ct::planned_tests(none, o, f.in), ct::planned_tests(ct::nominal_caps(), o, f.in));
+}
 // The full-current PPS row: the APDO's top voltage at its whole advertised current (clamped to the cable), after the APDO's
 // other rows. A non-hunt row: it asks what the APDO offers, not the OEM 6 A.
 static std::vector<ct::Step> full_rows(const ct::Runner& r) {
@@ -9338,6 +9368,7 @@ int main() {
     test_pd_bundles();
     test_source_probe_costs_at_most_a_second(); test_source_probe_only_in_a_pd_contract_and_once(); test_source_probe_skipped_without_a_contract();
     test_mi_chain_row_is_planned_once_last_of_the_pd_unit(); test_preview_counts_the_chain_row_with_the_svid();
+    test_planned_tests_scale_with_depth();
     test_pps_full_current_row_with_a_5a_cable(); test_pps_full_current_row_clamps_to_an_unread_cable();
     test_pps_over_5a_apdo_with_a_5a_cable_is_a_cable_limit_skip(); test_pps_over_5a_apdo_with_an_unread_cable_is_a_cable_limit_skip();
     test_pps_over_5a_apdo_with_a_spoofed_6a_cable_asks_the_advertised_current();
