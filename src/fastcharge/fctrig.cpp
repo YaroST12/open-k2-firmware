@@ -412,8 +412,10 @@ Fail start(Proto p, int target_mv, bool confirmed, bool allow_inline, int scp_ma
     return f;
 }
 
-Fail set_target(int target_mv, bool confirmed, int ufcs_ma) {
-    const Fail f = g_engine.set_target(target_mv, confirmed, ufcs_ma);
+void keep(bool on) { g_engine.keep(on); }
+
+Fail set_target(int target_mv, bool confirmed, int ufcs_ma, int scp_ma) {
+    const Fail f = g_engine.set_target(target_mv, confirmed, ufcs_ma, scp_ma);
     K2LOG("[FC] target %dmV confirmed=%d -> %s\n", target_mv, confirmed ? 1 : 0, fc::name(f));
     return f;
 }
@@ -518,7 +520,7 @@ Status status() {
     // otherwise show 0 mV next to a charging phone.
     const auto m = power::read();
     return {g_engine.state(), g_engine.proto(), f, g_engine.target_mv(), g_engine.vooc_tries(), m ? m->vbus_mv : g_engine.reached_mv(), g_engine.adapter_mv(),
-            int(g_engine.vooc_ident())};
+            int(g_engine.vooc_ident()), g_engine.held()};
 }
 
 const fc::Caps& caps() { return g_engine.caps(); }

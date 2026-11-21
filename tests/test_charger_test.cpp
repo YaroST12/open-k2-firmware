@@ -26,6 +26,10 @@ struct Fake final : ct::Env {
     pd::SourceCaps caps;
     int pd_requests = 0, fc_requests = 0, retargets = 0, releases = 0, fc_releases = 0;
     std::vector<bool> retarget_log;   // the retarget flag of each request_fc call, in order
+    // The kept SCP session: fc_keep() is the Runner's wish; with model_held a NoChange end under it leaves the lines held (Input::fc_held)
+    // instead of Failed-and-free, as the engine does.
+    bool keep_on = false, model_held = false; int keeps_on = 0;
+    void fc_keep(bool k) override { keep_on = k; keeps_on += k; }
     // A bank that browns out: the n-th fc request drops VBUS to 4.45 V with a new attach session until low_until.
     int drop_at = 0, glitch_at = 0, pd_drop_at = 0, pd_drop_times = 1; uint32_t low_until = 0; bool gone = false;
     // pattern usb-a-cuts-on-low-dpdm: an A-to-C cable's Rp is fed from VBUS, so CC comes back (a new attach session) only some ms
@@ -299,6 +303,7 @@ struct Fake final : ct::Env {
     }
     fc::Fail request_fc(fc::Proto p, int mv, bool retarget, int ma) override {
         if (!alive()) return fc::Fail::NoHandshake;
+        in.fc_held = false;   // a request takes the held lines (a retarget continues them, a new session replaces them)
         ++fc_requests; retargets += retarget; retarget_log.push_back(retarget); protocols.push_back(p); fc_mas.push_back(ma); fc_mvs.push_back(mv);
         if (std::find(cut_on_requests.begin(), cut_on_requests.end(), fc_requests) != cut_on_requests.end()) cut_start_at = in.now + cut_delay_ms;
         if (cut_on) { in.fc_state = fc::State::Failed; in.fc_fail = fc::Fail::NoHandshake; return fc::Fail::None; }   // the output is dark: nobody answers
@@ -339,7 +344,7 @@ struct Fake final : ct::Env {
     }
     void release(bool pd) override {
         if (!alive()) return;
-        ++releases; fc_releases += !pd;
+        ++releases; fc_releases += !pd; if (!pd) in.fc_held = false;
         collapse_t0 = 0; in.ibus_ma = 0; out_on = false; ka_at = ka_end = 0; silent_end_at = 0; no_change_end_at = 0;
         if (!pd && restart_after_flat && flat_session) restart_at = in.now + restart_delay_ms;
         if (!pd) { flat_session = false; fc_released = true; fc_released_at = in.now; }
@@ -694,7 +699,10 @@ struct Fake final : ct::Env {
             }
             if (no_change_end_at && in.now >= no_change_end_at) {
                 no_change_end_at = 0;
-                if (in.fc_state == fc::State::Negotiating) { in.fc_state = fc::State::Failed; in.fc_fail = fc::Fail::NoChange; in.vbus_mv = 5000; }
+                if (in.fc_state == fc::State::Negotiating) {
+                    in.fc_state = fc::State::Failed; in.fc_fail = fc::Fail::NoChange; in.vbus_mv = 5000;
+                    in.fc_held = model_held && keep_on;
+                }
             }
             if (silent_end_at && in.now >= silent_end_at) {
                 silent_end_at = 0;
@@ -815,7 +823,7 @@ static void test_plan_and_run() {
     read_only(r, f);
     // Every 5 V row of a legacy unit asks the engine (the attach's own 5 V proves nothing): QC3 / QC3+ ramps retarget four times each.
     // 17 = 19 - the 2 hunt rows: this source advertises its APDOs at 3.2 A, so no 6 A Request goes out (decision 2026-11-07).
-    CHECK_EQ(f.pd_requests, 17); CHECK_EQ(f.fc_requests, 41); CHECK_EQ(f.retargets, 24);   // + the six Class B rows (QC2B 20 V, the QC3B ramp); retargets: QC2 9/12/20 V, QC3 x4, QC3B x5 (all five go on in the QC3 session), QC3+ x4, UFCS 9/11/5/12/20 V, AFC 12 V, FCP 9/12 V
+    CHECK_EQ(f.pd_requests, 17); CHECK_EQ(f.fc_requests, 41); CHECK_EQ(f.retargets, 27);   // + the six Class B rows (QC2B 20 V, the QC3B ramp); retargets: QC2 9/12/20 V, QC3 x4, QC3B x5 (all five go on in the QC3 session), QC3+ x4, UFCS 9/11/5/12/20 V, AFC 12 V, FCP 9/12 V, SCP 10/4.5/5 V (the rows share one session)
     // Seven vendor units share ONE PD-silent attach (a session boundary only where the session mode changes), then the Pd unit
     // (detach, Pd attach), then the standard protocols (QC2, QC3, QC3+, UFCS) in a second PD-silent attach; the run ends detached
     // and re-attaches in Pd.
@@ -2943,7 +2951,7 @@ static void test_full_legacy_ranges_and_guards() {
     CHECK_EQ(qc20 || qc320, false);   // QC2/QC3 never plan a 20 V row
     f.tick(r, 500000);
     CHECK_EQ(r.state(), ct::State::Done); CHECK_EQ(f.pd_requests, 0); CHECK_EQ(f.rescans, 0);
-    CHECK_EQ(f.fc_requests, 41); CHECK_EQ(f.retargets, 24);   // the QC 5 V rows are requested too; 40 = 34 + the six Class B rows; retargets as in the full plan: QC2 3, QC3 4 + QC3B 5, QC3+ 4, UFCS 5, AFC 1, FCP 2
+    CHECK_EQ(f.fc_requests, 41); CHECK_EQ(f.retargets, 27);   // the QC 5 V rows are requested too; 40 = 34 + the six Class B rows; retargets as in the full plan: QC2 3, QC3 4 + QC3B 5, QC3+ 4, UFCS 5, AFC 1, FCP 2, SCP 3
     for (const auto p : f.protocols) CHECK_EQ(p < fc::Proto::Count, true);
 
     for (unsigned mode = 0; mode < 3; ++mode) {
@@ -6128,6 +6136,11 @@ static void test_legacy_waits_between_units() {
 static void test_legacy_tune_knobs() {
     CHECK_EQ(ct::legacy_tune_set(uint8_t(ct::LegacyKnob::HoldMs), 100), false);
     CHECK_EQ(ct::legacy_tune_set(9, 1), false);
+    CHECK_EQ(ct::legacy_tune(ct::LegacyKnob::Chain), 1u);
+    CHECK_EQ(ct::legacy_tune_set(uint8_t(ct::LegacyKnob::Chain), 2), false);   // a level, not a time: only the known ones
+    CHECK_EQ(ct::legacy_tune_set(uint8_t(ct::LegacyKnob::Chain), 0), true);
+    CHECK_EQ(ct::legacy_tune(ct::LegacyKnob::Chain), 0u);
+    ct::legacy_tune_reset();
     CHECK_EQ(ct::legacy_tune_set(uint8_t(ct::LegacyKnob::GapMs), 60001), false);
     {   // defaults: a flood of 4 s after the attach is waited out, plus the quiet time
         Fake f; ct::Runner r(f);
@@ -8035,9 +8048,70 @@ static void test_scp_no_change_without_restart_does_not_wait() {
 // PD-silent sink ~300 ms after VBUS was back. The next row went out ~100 ms after the return and the fc engine's link guard refused it
 // "PD or load active" (or, a tick later, the Runner skipped the unit as PD active). The row waits through the restart: VBUS back, then
 // kLegacyQuietMs of PD quiet counted from the later of the last frame and the return, at most kRestartSettleMs; then it runs normally.
+// The SCP rows of a unit ride one session (chain knob, default on): no release between them, every row after the first a retarget,
+// and the verdicts are the ones of a session per row.
+struct ScpRun { std::vector<ct::Step> steps; std::vector<int> mvs; std::vector<bool> rt; int releases = 0; int keeps = 0; uint32_t total_ms = 0; };
+static ScpRun run_scp_unit(unsigned chain, bool flat) {
+    Fake f; ct::Runner r(f);   // the Fake's constructor resets the knobs
+    CHECK_EQ(ct::legacy_tune_set(uint8_t(ct::LegacyKnob::Chain), chain), true);
+    const fc::Caps caps = scp_caps_of(3300, 12000, 1000, 2500);
+    f.caps = {}; f.serve_caps = &caps;
+    if (flat) { f.no_change_proto = fc::Proto::Scp; f.model_held = true; }
+    const auto o = with_units(ct::bit(A::Scp), {ct::Unit::Scp});
+    CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+    const uint32_t t0 = f.in.now;
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 600000), true);
+    ct::legacy_tune_reset();
+    return {{r.steps().begin(), r.steps().end()}, f.fc_mvs, f.retarget_log, f.fc_releases, f.keeps_on, f.in.now - t0};
+}
+static void same_verdicts(const ScpRun& a, const ScpRun& b) {
+    CHECK_EQ(a.steps.size(), b.steps.size());
+    for (size_t i = 0; i < a.steps.size() && i < b.steps.size(); ++i) {
+        CHECK_EQ(a.steps[i].verdict, b.steps[i].verdict);
+        CHECK_EQ(a.steps[i].reason, b.steps[i].reason);
+        CHECK_EQ(a.steps[i].detail, b.steps[i].detail);
+        CHECK_EQ(a.steps[i].mv, b.steps[i].mv);
+    }
+}
+static void test_scp_rows_share_one_session() {
+    const ScpRun one = run_scp_unit(1, false), many = run_scp_unit(0, false);
+    CHECK_EQ(one.mvs == many.mvs, true);
+    CHECK_EQ(one.releases, 1);                               // the unit's end
+    CHECK_EQ(many.releases > 1, true);                       // a session per row
+    CHECK_EQ(one.rt.size() >= 4, true);
+    for (size_t i = 1; i < one.rt.size(); ++i) CHECK_EQ(one.rt[i], true);   // every row after the detect row retargets
+    CHECK_EQ(one.rt.empty() ? true : bool(one.rt[0]), false);
+    CHECK_EQ(one.keeps > 0, true);
+    CHECK_EQ(many.keeps, 0);                                 // chain 0 never asks the engine to keep a session
+    same_verdicts(one, many);
+    CHECK_EQ(one.total_ms < many.total_ms, true);
+    std::printf("SCP unit: session per row %u ms, one session %u ms (releases %d -> %d)\n", many.total_ms, one.total_ms, many.releases, one.releases);
+}
+// A raise the charger acks without moving: the engine keeps the lines (held), the rows after it ride the same session, and
+// the verdicts, reasons and details are those of the release-per-row run.
+static void test_scp_no_change_held_session_takes_the_next_rows() {
+    const ScpRun one = run_scp_unit(1, true), many = run_scp_unit(0, true);
+    std::printf("SCP no-change unit: session per row %u ms (releases %d), one session %u ms (releases %d)\n", many.total_ms, many.releases, one.total_ms, one.releases);
+    same_verdicts(one, many);
+    CHECK_EQ(one.mvs == many.mvs, true);
+    CHECK_EQ(one.mvs == std::vector<int>({5000, 10000, 4500, 5000}), true);
+    CHECK_EQ(one.releases, 1);
+    CHECK_EQ(many.releases > 1, true);
+    CHECK_EQ(one.total_ms < many.total_ms, true);
+}
+// The knob's default is on and a unit without SCP is untouched by it.
+static void test_chain_knob_default_and_other_units() {
+    CHECK_EQ(ct::legacy_tune(ct::LegacyKnob::Chain), 1u);
+    Fake f; f.caps = {}; ct::Runner r(f);
+    CHECK_EQ(r.start(f.caps, {.selected = ct::bit(A::Fcp)}, f.in, true), ct::Reason::None);
+    f.tick(r, 60000);
+    CHECK_EQ(f.keeps_on, 0);
+}
+// The SCP rows below are each a session of their own (chain 0): the release between them is what these tests exercise.
+static void unchained() { CHECK_EQ(ct::legacy_tune_set(uint8_t(ct::LegacyKnob::Chain), 0), true); }
 static void test_legacy_row_waits_through_a_source_restart() {
     for (const uint32_t chatter : {0u, 6100u}) {   // r2: no announcement after the cut; r1a: an announcement as long as the attach's
-        Fake f; ct::Runner r(f);
+        Fake f; ct::Runner r(f); unchained();
         f.link_guard = true; f.restart_on_release = 1; f.restart_chatter_ms = chatter;
         const auto o = with_units(ct::bit(A::Scp), {ct::Unit::Scp});
         CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
@@ -8060,7 +8134,7 @@ static void test_legacy_row_waits_through_a_source_restart() {
 // kRestartSettleMs, then the unit is PD-active as before and nothing was sent to the guard meanwhile. A load still ends the run at once.
 static void test_legacy_restart_wait_is_bounded_and_a_load_still_refuses() {
     {
-        Fake f; ct::Runner r(f);
+        Fake f; ct::Runner r(f); unchained();
         f.link_guard = true; f.restart_on_release = 1; f.restart_chatter_ms = 10000000;
         const auto o = with_units(ct::bit(A::Scp), {ct::Unit::Scp});
         CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
@@ -8070,7 +8144,7 @@ static void test_legacy_restart_wait_is_bounded_and_a_load_still_refuses() {
         CHECK_EQ(count_unit_verdict(r, ct::Unit::Scp, ct::Verdict::Skip, ct::Reason::PdActive, false) > 0, true);
     }
     {
-        Fake f; ct::Runner r(f);
+        Fake f; ct::Runner r(f); unchained();
         f.link_guard = true; f.restart_on_release = 1; f.restart_chatter_ms = 6100;
         const auto o = with_units(ct::bit(A::Scp), {ct::Unit::Scp});
         CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
@@ -8111,7 +8185,7 @@ static void test_legacy_units_chain_through_the_sources_reannounce_after_a_relea
 }
 // The SCP unit's rows, each its own session with a release between them: none of them is skipped "PD active" by the source's answer.
 static void test_scp_rows_are_not_pd_active_after_our_own_release() {
-    Fake f; ct::Runner r(f);
+    Fake f; ct::Runner r(f); unchained();
     reannounce_setup(f, 100, 3000, 0);
     const auto o = with_units(ct::bit(A::Scp), {ct::Unit::Scp});
     CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
@@ -8127,7 +8201,7 @@ static void test_scp_rows_are_not_pd_active_after_our_own_release() {
 }
 // A source that stays quiet after the first release is watched for it once per attach (kOwnReleaseCapsMs), not at every row.
 static void test_a_quiet_source_is_watched_once_per_attach() {
-    Fake f; ct::Runner r(f);
+    Fake f; ct::Runner r(f); unchained();
     f.link_guard = true;
     const auto o = with_units(ct::bit(A::Scp), {ct::Unit::Scp});
     CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
@@ -8141,7 +8215,7 @@ static void test_a_quiet_source_is_watched_once_per_attach() {
 }
 // Real PD traffic is no echo of our release: a source that announces before the release (the unit's own PD-active proof) still skips the unit.
 static void test_pd_traffic_before_the_release_still_skips_the_unit() {
-    Fake f; ct::Runner r(f);
+    Fake f; ct::Runner r(f); unchained();
     reannounce_setup(f, 100, 3000, 0);
     const auto o = with_units(ct::bit(A::Scp), {ct::Unit::Scp});
     CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
@@ -8153,7 +8227,7 @@ static void test_pd_traffic_before_the_release_still_skips_the_unit() {
 }
 // An announcement that never stops is bounded by kRestartSettleMs: then the unit is PD active as before, the guard was never asked.
 static void test_endless_reannounce_after_a_release_is_bounded() {
-    Fake f; ct::Runner r(f);
+    Fake f; ct::Runner r(f); unchained();
     reannounce_setup(f, 100, 10000000, 0);
     const auto o = with_units(ct::bit(A::Scp), {ct::Unit::Scp});
     CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
@@ -8178,6 +8252,7 @@ static void test_a_reannounce_as_long_as_the_attach_flood_is_waited_out() {
 // A sink plugged in while the unit waits for the announcement to stop ends the run at once, as in the restart wait.
 static void test_load_during_the_reannounce_wait_stops_the_run() {
     Fake f; ct::Runner r(f);
+    unchained();
     reannounce_setup(f, 100, 6000, 0);
     const auto o = with_units(ct::bit(A::Scp), {ct::Unit::Scp});
     CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
@@ -8993,7 +9068,7 @@ int main() {
     test_a_dip_shorter_than_the_minimum_is_no_cut(); test_a_protocol_failure_after_a_clean_comeback_is_a_fail(); test_the_7s_cut_sequence_over_the_5v_steps_of_the_cuktech_run(); test_a_fall_in_a_raised_row_is_no_cut_casualty(); test_a_silent_vooc_family_on_a_7s_cut_port_ends_no_answer(); test_the_10_unit_run_over_every_cut_phase_ends_as_without_cuts();
     test_a_cut_in_the_first_baseline_waits_for_the_comeback(); test_a_baseline_dip_that_does_not_come_back_still_stops();
     test_custom_unit_list_runs_in_order(); test_pd_unit_attaches_with_a_contract(); test_a_failed_unit_does_not_stop_the_run();
-    test_default_unit_order_is_vendor_modes_then_pd_then_legacy(); test_default_order_runs_vendor_modes_before_pd_before_legacy(); test_pd_between_vendor_and_legacy_units(); test_pd_replan_in_the_middle_keeps_the_rows_in_order(); test_consecutive_legacy_units_share_one_attach(); test_legacy_session_that_sees_pd_traffic_is_renewed(); test_silent_ufcs_source_reports_no_response_not_pd_active(); test_legacy_waits_between_units(); test_legacy_tune_knobs();
+    test_default_unit_order_is_vendor_modes_then_pd_then_legacy(); test_default_order_runs_vendor_modes_before_pd_before_legacy(); test_pd_between_vendor_and_legacy_units(); test_pd_replan_in_the_middle_keeps_the_rows_in_order(); test_consecutive_legacy_units_share_one_attach(); test_legacy_session_that_sees_pd_traffic_is_renewed(); test_silent_ufcs_source_reports_no_response_not_pd_active(); test_legacy_waits_between_units(); test_legacy_tune_knobs(); test_scp_rows_share_one_session(); test_scp_no_change_held_session_takes_the_next_rows(); test_chain_knob_default_and_other_units();
     test_legacy_attach_that_never_falls_back_is_blocked_by_pd(); test_legacy_retry_that_falls_back_runs_the_unit(); test_legacy_attach_waits_out_hard_reset_cycles();
     test_silent_attach_source_that_revives_pd_does_not_go_unsafe(); test_silent_baseline_sag_that_never_returns_is_still_unsafe(); test_silent_sink_output_off_skips_legacy_units_and_runs_pd();
     test_later_unit_output_cut_in_its_baseline_is_a_lost_unit_not_unsafe(); test_later_unit_elevated_or_stuck_baseline_still_ends_unsafe();

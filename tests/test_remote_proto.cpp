@@ -370,8 +370,13 @@ static void test_lab_tune() {
     { const auto q = request(0x51, 3, {3, 3, 0x2C, 0x01, 0, 0}); CHECK_EQ(run(f, q, r), 1); }     // gap_ms = 300
     check_header(r, 0x51, 3, Status::Ok, 5);
     CHECK_EQ(ct::legacy_tune(ct::LegacyKnob::GapMs), 300u);
-    { const auto q = request(0x51, 4, {3, 5}); CHECK_EQ(run(f, q, r), 1); }                       // unknown knob
+    { const auto q = request(0x51, 4, {3, 6}); CHECK_EQ(run(f, q, r), 1); }                       // unknown knob
     check_header(r, 0x51, 4, Status::BadArg, 0);
+    { const auto q = request(0x51, 9, {3, 5}); CHECK_EQ(run(f, q, r), 1); }                       // chain level: on by default
+    check_header(r, 0x51, 9, Status::Ok, 5);
+    check_bytes(r, kRspHeader, {5, 1, 0, 0, 0});   // the reply starts with the knob id
+    { const auto q = request(0x51, 10, {3, 5, 2, 0, 0, 0}); CHECK_EQ(run(f, q, r), 1); }          // a level above the known ones
+    check_header(r, 0x51, 10, Status::BadArg, 0);
     { const auto q = request(0x51, 5, {3, 1, 0x60, 0xEA, 0, 0}); CHECK_EQ(run(f, q, r), 1); }     // 60000 ms is the cap
     check_header(r, 0x51, 5, Status::Ok, 5);
     { const auto q = request(0x51, 6, {3, 1, 0x61, 0xEA, 0, 0}); CHECK_EQ(run(f, q, r), 1); }     // 60001 is over it

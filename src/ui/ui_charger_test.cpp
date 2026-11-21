@@ -251,7 +251,7 @@ charger_test::Input ChargerTestSession::input(uint32_t now) const {
     const auto fs = fctrig::status();
     in.fc_state = fs.state; in.fc_fail = fs.fail; in.fc_tries = static_cast<uint8_t>(fs.tries);
     in.fc_ident = static_cast<uint8_t>(fs.ident);
-    in.fc_adapter_mv = fs.adapter_mv;
+    in.fc_adapter_mv = fs.adapter_mv; in.fc_held = fs.held;
     in.pd_quiet_ms = fusb302::pd_quiet_ms();
     in.probe_done = fusb302::probe_status().state != pd::ProbeState::Running;
 #if K2_PDSPEC
@@ -292,8 +292,9 @@ fc::Fail ChargerTestSession::request_fc(fc::Proto p, int mv, bool retarget, int 
         fc_words_ = handshake_words(p);
         if (fc_words_ && view_) view_->announce(fc_words_);   // before the engine starts: nothing can be painted once it has
     }
-    return retarget ? fctrig::set_target(mv, true, ufcs_ma) : fctrig::start(p, mv, true, false, ma, ufcs_ma);
+    return retarget ? fctrig::set_target(mv, true, ufcs_ma, p == fc::Proto::Scp ? ma : -1) : fctrig::start(p, mv, true, false, ma, ufcs_ma);
 }
+void ChargerTestSession::fc_keep(bool on) { fctrig::keep(on); }
 void ChargerTestSession::legacy_only(bool on) { fusb302::legacy_only(on); }
 void ChargerTestSession::pd_rescan() { fusb302::rescan(); }
 // One unit's ends (docs/CHARGER_TEST_FLOW.md): detach = Rd off, the 5 V default, VBUS dark; attach = Rd on as a fresh attach, the

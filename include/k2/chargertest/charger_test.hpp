@@ -191,7 +191,9 @@ inline constexpr uint32_t kRestartCapsMs = 1000, kRestartSettleMs = 10000;
 inline constexpr uint32_t kLegacyFirstWaitMs = 1000, kLegacyGapMs = 500, kAfcPreMs = 500;
 // The four waits above plus the row Hold are switchable at run time (Cmd::Lab kLabTune, `k2_remote charger-legacy-tune`): RAM only, the
 // constants again at boot. quiet_ms 0 starts the first handshake as soon as VBUS is steady at 5 V, caps still arriving or not.
-enum class LegacyKnob : uint8_t { QuietMs, SteadyMs, FirstWaitMs, GapMs, HoldMs, Count };
+// Chain is a level, not a time: 0 = every legacy row opens its own session as before, 1 = the SCP rows of a unit retarget one session
+// (no D+/D- release between them).
+enum class LegacyKnob : uint8_t { QuietMs, SteadyMs, FirstWaitMs, GapMs, HoldMs, Chain, Count };
 uint32_t legacy_tune(LegacyKnob k);
 bool legacy_tune_set(uint8_t knob, uint32_t value);   // false: unknown knob or out of range
 void legacy_tune_reset();
@@ -382,6 +384,7 @@ struct Input {
     fc::Fail fc_fail = fc::Fail::None;
     uint8_t fc_tries = 0;   // fctrig::Status::tries
     uint8_t fc_ident = 0;   // fctrig::Status::ident: the VOOC family's ident command of a Detected session (0 = none)
+    bool fc_held = false;   // fctrig::Status::held: an SCP session whose row ended is kept alive for the next one
     int fc_adapter_mv = 0;  // fctrig::Status::adapter_mv: the SCP adapter's own voltage readback of this session (0 = not read / not SCP)
     bool probe_done = false;   // the source probe the runner asked for has finished (answered, refused or timed out)
     bool epr_proof = false;    // set by the Runner, not the caller: the source accepted EPR entry earlier in this run (cable proven)
@@ -571,6 +574,8 @@ struct Env {
     virtual pd::Err request_pd(pd::Choice) = 0;
     // `ma`: the row's current (SCP: the limit to write; 0 = detect only). Other protocols ignore it.
     virtual fc::Fail request_fc(fc::Proto, int mv, bool retarget, int ma) = 0;
+    // After a request_fc that started or retargeted an SCP row: whether the session outlives a detect / "no change" end (a row follows).
+    virtual void fc_keep(bool) {}
     virtual void release(bool pd) = 0;
     // One unit's attach (docs/CHARGER_TEST_FLOW.md). detach(): Rd off, the 5 V default, the source sees a detach and drops its
     // output. attach(mode): Rd on again as a fresh attach, the sink PD-active (Pd: caps, an immediate PDO 1 request) or PD-silent
@@ -873,6 +878,7 @@ private:
     void reissue_release();
     void next(const Input&);
     size_t pick() const;
+    size_t scp_next(const Input&, bool passed) const;
     void skip_pending(Reason);
     void suspend();
     bool unfinished() const;   // a row is still Pending or Running

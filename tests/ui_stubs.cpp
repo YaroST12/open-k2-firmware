@@ -894,7 +894,8 @@ Fail start(Proto proto, int mv, bool confirmed, bool allow_inline, int, int) {
     if (allow_inline) g_stub.fc_inline_ok++;
     return static_cast<Fail>(g_stub.fc_start_fail);
 }
-Fail set_target(int mv, bool confirmed, int) {
+void keep(bool) {}
+Fail set_target(int mv, bool confirmed, int, int) {
     g_stub.fc_retargets++;
     g_stub.fc_retarget_mv = mv;
     g_stub.fc_confirmed = confirmed;

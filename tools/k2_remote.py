@@ -4506,7 +4506,7 @@ def cmd_listen_attach(link, a):
     return d
 
 
-LEGACY_KNOBS = ["quiet_ms", "steady_ms", "first_wait_ms", "gap_ms", "hold_ms"]   # charger_test::LegacyKnob order
+LEGACY_KNOBS = ["quiet_ms", "steady_ms", "first_wait_ms", "gap_ms", "hold_ms", "chain_level"]   # charger_test::LegacyKnob order (chain_level: 0 off, 1 SCP rows share a session)
 
 
 def cmd_charger_legacy_tune(link, a):

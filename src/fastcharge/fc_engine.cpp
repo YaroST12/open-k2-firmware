@@ -167,19 +167,33 @@ void Engine::build_script() {
         add(Op::Write, Chk::Soft, accp::kRegFcpIout, accp::kFcpIoutCode, 10);   // refused with a NACK by some adapters; the voltage write still counts
         add(Op::Write, Chk::None, accp::kRegFcpVoutEn, 1, 0);
     } else if (proto_ == Proto::Scp) {
-        if (phase_ != Phase::Script && phase_ != Phase::Band && phase_ != Phase::ScpKeep) {
+        // The identifying reads once per session, the init once (a retarget of a kept detect session starts with it), later levels
+        // only move the voltage (and the current limit when it changed).
+        if (!scp_read_) {
+            scp_read_ = true;
             add(Op::Read, Chk::Bit4Set, accp::kRegScpType0, 0, 0);
             add(Op::Read, Chk::Log, accp::kRegScpType1, 0, 0);
             for (std::uint8_t r = 0; r < 8; r++) add(Op::Read, Chk::Log, accp::kRegScpLimits + r, 0, 0);
-            if (scp_ma_ <= 0) return;   // detect only: type bits and limits read, nothing written
-            add(Op::Write, Chk::None, accp::kRegScpCtrl0, accp::kScpCtrl0Enable, accp::kScpEnableWaitMs);
-            add(Op::Write, Chk::None, accp::kRegScpCtrl1, accp::kScpCtrl1Value, 0);
-            set_v(accp::kScpInitMv);
+        }
+        if (scp_ma_ <= 0) return;   // detect only: type bits and limits read, nothing written
+        if (caps_.scp.valid) scp_ma_ = std::min(scp_ma_, caps_.scp.max_ma);   // a first script patches this after its limit read
+        const auto iset = [&] {
             add(Op::Write, Chk::None, accp::kRegScpIset, accp::hi8(scp_ma_), 0);
             add(Op::Write, Chk::None, accp::kRegScpIset + 1, accp::lo8(scp_ma_), 0);
             add(Op::Write, Chk::None, accp::kRegScpIset8, static_cast<std::uint8_t>(std::min(255, scp_ma_ / 50)), 0);
+            scp_iset_ma_ = scp_ma_;
+        };
+        bool init = false;
+        if (!scp_on_) {
+            scp_on_ = init = true;
+            add(Op::Write, Chk::None, accp::kRegScpCtrl0, accp::kScpCtrl0Enable, accp::kScpEnableWaitMs);
+            add(Op::Write, Chk::None, accp::kRegScpCtrl1, accp::kScpCtrl1Value, 0);
+            set_v(accp::kScpInitMv);
+            iset();
+        } else if (scp_ma_ != scp_iset_ma_) {
+            iset();
         }
-        if (target_mv_ != accp::kScpInitMv || script_n_ == 0) set_v(target_mv_);
+        if (!(init && target_mv_ == accp::kScpInitMv)) set_v(target_mv_);
     }
 }
 
@@ -192,6 +206,7 @@ void Engine::begin_script() {
 // before the limit registers were read, so they are rewritten in place.
 void Engine::patch_scp_current() {
     scp_ma_ = std::min(scp_ma_, caps_.scp.max_ma);
+    scp_iset_ma_ = scp_ma_;
     for (std::size_t i = script_i_ + 1; i < script_n_; i++) {
         Action& w = script_[i];
         if (w.op != Action::Op::Write) continue;
@@ -798,7 +813,11 @@ Fail Engine::start(Proto p, int target_mv, bool confirmed, bool allow_inline, in
     // VOOC detection never runs inline, override or not: the wake and the listen would sit on a phone's own VOOC lines.
     if ((!allow_inline || vooc_family(p)) && env_.inline_reason() != link::Reason::None) return Fail::Inline;
     finish_exit();   // an Exit_UFCS_Mode wait still holding the lines ends now (its reset counts for the re-detection hold below)
+    if (held_) release_bus();   // a kept SCP session ends here: the re-detection hold below counts from this release
     const std::uint32_t now = env_.now_ms();
+    keep_ = false;
+    scp_read_ = scp_on_ = false;
+    scp_iset_ma_ = 0;
     proto_ = p;
     target_mv_ = target_mv;
     scp_ma_ = scp_ma;
@@ -842,8 +861,8 @@ Fail Engine::start(Proto p, int target_mv, bool confirmed, bool allow_inline, in
     return Fail::None;
 }
 
-Fail Engine::set_target(int target_mv, bool confirmed, int ufcs_ma) {
-    if (state_ != State::Negotiating && state_ != State::Active) return Fail::Unsupported;
+Fail Engine::set_target(int target_mv, bool confirmed, int ufcs_ma, int scp_ma) {
+    if (state_ != State::Negotiating && state_ != State::Active && !held_) return Fail::Unsupported;
     if (vooc_family(proto_)) return Fail::Unsupported;   // detection only: the VOOC output never leaves 5 V
     if (phase_ == Phase::RedetectHold || phase_ == Phase::HsDischarge || phase_ == Phase::HsFloatDp || phase_ == Phase::HsBias ||
         phase_ == Phase::HsSample || phase_ == Phase::HsWaitDrop || phase_ == Phase::UfcsOpen ||
@@ -851,9 +870,14 @@ Fail Engine::set_target(int target_mv, bool confirmed, int ufcs_ma) {
         phase_ == Phase::UfcsPower || phase_ == Phase::VivoOpen || phase_ == Phase::VivoSeq) {
         return Fail::Busy;
     }
+    const int new_ma = proto_ == Proto::Scp && scp_ma >= 0 ? scp_ma : scp_ma_;
+    if (proto_ == Proto::Scp && new_ma <= 0) return Fail::Unsupported;   // a detect-only level has nothing to retarget (its registers are read)
     const Fail f = validate(proto_, target_mv, confirmed);
     if (f != Fail::None) return f;
     const std::uint32_t now = env_.now_ms();
+    held_ = false;   // the kept session runs again: its keep-alive is the engine's, as in any SCP session
+    keep_fail_ = 0;
+    if (proto_ == Proto::Scp) scp_ma_ = new_ma;
     prev_mv_ = guard_mv();
     entry_mv_ = std::max(0, env_.vbus_mv());
     qc3_nomove_ = qc3_dead_ = 0;
@@ -909,6 +933,7 @@ void Engine::stop() {
 }
 
 void Engine::stop_now() {
+    keep_ = false;
     if (state_ != State::Failed) vivo_release();
     release_bus();
     state_ = State::Idle;
@@ -919,6 +944,7 @@ void Engine::stop_now() {
 
 // The UART (if it holds the lines) let go, both lines to 0 V, the release stamped for the next session's re-detection hold.
 void Engine::release_bus() {
+    held_ = false;
     if (uart_up_) { uart_up_ = false; env_.ufcs_close(); }
     env_.reset_bus();
     reset_ms_ = env_.now_ms(); reset_seen_ = true;
@@ -954,6 +980,16 @@ void Engine::abort(Fail why) {
     // AFC / FCP / SCP that never answered: no reply to the first exchange (or no HVDCP handshake to carry it) means the charger does
     // not speak the protocol. The rest (overvoltage above the ceiling, source lost, ...) keeps its own code.
     if (unacked_handshake() && (why == Fail::NoResponse || why == Fail::NoHandshake)) why = Fail::Unsupported;
+    if (keep_ && proto_ == Proto::Scp && (why == Fail::Detected || why == Fail::NoChange)) {
+        // Kept: the session is fine, only the row ended. Lines untouched, keep-alive from hold_poll().
+        held_ = true;
+        hold_ms_ = env_.now_ms();
+        due_ms_ = hold_ms_ + accp::kScpKeepAliveMs;
+        state_ = State::Failed;
+        phase_ = Phase::Off;
+        fail_ = why;
+        return;
+    }
     vivo_release();
     release_bus();
     state_ = State::Failed;
@@ -1047,10 +1083,23 @@ void Engine::service_hs() {
     busy_ = false;
 }
 
+// A kept SCP session between two rows: the keep-alive goes on, the monitor guards stay, and a session nobody retargets is released.
+void Engine::hold_poll(std::uint32_t now) {
+    const int vbus = env_.vbus_mv();
+    if (vbus < 0 || vbus > env_.ceiling_mv() || now - hold_ms_ >= kScpHoldMs) {
+        vivo_release();
+        release_bus();   // the failure stays the row's (Detected / NoChange)
+        return;
+    }
+    if (now < due_ms_) return;
+    keep_alive();   // three misses release it (abort(): held only for Detected / NoChange)
+}
+
 void Engine::poll() {
     if (busy_) return;
     busy_ = true;
     if (phase_ == Phase::UfcsExit) ufcs_exit_poll(env_.now_ms());   // Idle already: the abort guards of poll_step() do not apply
+    else if (held_) hold_poll(env_.now_ms());
     else poll_step();
     busy_ = false;
 }

@@ -255,7 +255,8 @@ namespace {
 constexpr uint32_t kHoldMs = 1000;
 constexpr uint32_t kHoldFloorMs = progcheck::kStableMs + progcheck::kPostMs + 100;   // below it the transition capture would outlive the hold
 constexpr uint32_t kTuneMaxMs = 60000;
-constexpr std::array<uint32_t, size_t(LegacyKnob::Count)> kTuneDefault = {kLegacyQuietMs, kLegacySteadyMs, kLegacyFirstWaitMs, kLegacyGapMs, kHoldMs};
+constexpr uint32_t kChainMaxLevel = 1;
+constexpr std::array<uint32_t, size_t(LegacyKnob::Count)> kTuneDefault = {kLegacyQuietMs, kLegacySteadyMs, kLegacyFirstWaitMs, kLegacyGapMs, kHoldMs, 1};
 std::array<uint32_t, size_t(LegacyKnob::Count)> g_tune = kTuneDefault;
 uint32_t quiet_ms() { return g_tune[size_t(LegacyKnob::QuietMs)]; }
 // The wait `want` ms after the Baseline's own 500 ms settle (stable_ms_ / pre_ms_ count the Baseline); a shorter want pulls the start back.
@@ -275,7 +276,7 @@ static_assert(progcheck::kStableMs + progcheck::kPostMs + 100 <= kHoldMs, "the c
 }  // namespace
 uint32_t legacy_tune(LegacyKnob k) { return k < LegacyKnob::Count ? g_tune[size_t(k)] : 0; }
 bool legacy_tune_set(uint8_t knob, uint32_t value) {
-    if (knob >= size_t(LegacyKnob::Count) || value > kTuneMaxMs) return false;
+    if (knob >= size_t(LegacyKnob::Count) || value > (knob == uint8_t(LegacyKnob::Chain) ? kChainMaxLevel : kTuneMaxMs)) return false;
     if (knob == uint8_t(LegacyKnob::HoldMs) && value < kHoldFloorMs) return false;
     g_tune[knob] = value;
     return true;
@@ -1295,9 +1296,9 @@ Reason Runner::start(const pd::SourceCaps& caps, Options o, Input in, bool confi
     info_ = 0; info_rows_ = false;
     o.units = resolve(o);
     opts_ = o;
-    K2LOG("[CT] legacy tune quiet=%ums steady=%ums first=%ums gap=%ums hold=%ums\n", unsigned(legacy_tune(LegacyKnob::QuietMs)),
+    K2LOG("[CT] legacy tune quiet=%ums steady=%ums first=%ums gap=%ums hold=%ums chain=%u\n", unsigned(legacy_tune(LegacyKnob::QuietMs)),
           unsigned(legacy_tune(LegacyKnob::SteadyMs)), unsigned(legacy_tune(LegacyKnob::FirstWaitMs)), unsigned(legacy_tune(LegacyKnob::GapMs)),
-          unsigned(legacy_tune(LegacyKnob::HoldMs)));
+          unsigned(legacy_tune(LegacyKnob::HoldMs)), unsigned(legacy_tune(LegacyKnob::Chain)));
     n_order_ = o.units.n; order_ = o.units.u;
     build(caps, o, in);
     evidence_ = {};
@@ -1469,10 +1470,17 @@ void Runner::request(const Input& in) {
         if (err == pd::Err::Busy) { busy_retry_at_ = in.now + 200; return; }
         if (err != pd::Err::Ok) finish(in, Verdict::Fail, Reason::Request, 128 + static_cast<uint8_t>(err));
     } else {
-        const bool retarget = fc_owned_ && s.continuous;
+        // An SCP row joins the kept or live session of the row before it (scp_next picked it): same session, no release in between.
+        const bool chained = s.group == Group::Scp && s.ma > 0 && legacy_tune(LegacyKnob::Chain) >= 1 && (in.fc_held || in.fc_state == fc::State::Active);
+        const bool retarget = fc_owned_ && (s.continuous || chained);
         fc_owned_ = true;
         const auto err = env_.request_fc(proto(s.group), s.mv, retarget, s.ma);
         if (err != fc::Fail::None) finish(in, Verdict::Fail, Reason::Request, static_cast<uint8_t>(err));
+        else if (s.group == Group::Scp && legacy_tune(LegacyKnob::Chain) >= 1) {
+            bool more = false;   // a later SCP row of the unit still wants the session
+            for (size_t n = index_ + 1; n < count_; ++n) more = more || (steps_[n].group == Group::Scp && steps_[n].verdict == Verdict::Pending);
+            env_.fc_keep(more);
+        }
     }
 }
 // The row leaves the plan (the rows after it move up; the cursor is picked again by the caller).
@@ -1771,6 +1779,15 @@ void Runner::finish_row(const Input& in, Verdict v, Reason r, uint8_t detail) {
                 steps_[n].verdict = Verdict::Skip; steps_[n].reason = r; steps_[n].detail = detail; env_.record(steps_[n]);
             }
         }
+        // The held session hops to the next row inside this call, so the raise rows a no-change end rules out are skipped here, before it
+        // (the failure path's own skip comes after finish() returns).
+        if (v == Verdict::Fail && s.group == Group::Scp && s.mv > 5000 && detail == uint8_t(fc::Fail::NoChange) && !cut_wait_)
+            for (size_t n = 0; n < count_; ++n) {
+                auto& o = steps_[n];
+                if (o.verdict != Verdict::Pending || o.group != Group::Scp || o.mv <= 5000) continue;
+                o.verdict = Verdict::Skip; o.reason = Reason::Request; o.detail = detail; env_.record(o);
+            }
+        if (scp_next(in, v == Verdict::Pass) != SIZE_MAX) { next(in); return; }
         release(in, false);
     }
 }
@@ -1932,6 +1949,15 @@ size_t Runner::pick() const {
         for (size_t n = 0; n < count_; ++n)
             if (steps_[n].verdict == Verdict::Pending && unit_of(steps_[n]) == order_[k]) return n;
     return SIZE_MAX;
+}
+// The next SCP row of the unit when the session of the row that just ended can take it: kept after a detect / "no change" end (held),
+// or live after a pass. Every release of a legacy session makes some sources announce their list again (pattern
+// reannounce-after-own-release) and the next row would open with a new detection, so the rows ride one session.
+size_t Runner::scp_next(const Input& in, bool passed) const {
+    if (legacy_tune(LegacyKnob::Chain) < 1 || steps_[index_].group != Group::Scp || !fc_owned_ || !attached_ || ending_ || stopping_ || cut_wait_) return SIZE_MAX;
+    if (!in.fc_held && !(passed && in.fc_state == fc::State::Active)) return SIZE_MAX;
+    const size_t i = pick();
+    return i != SIZE_MAX && unit_of(steps_[i]) == unit_ && steps_[i].group == Group::Scp && steps_[i].ma > 0 ? i : SIZE_MAX;
 }
 // The run's one scheduler: the unit in progress goes on with its next row; when it has none left it ends with its detach, and
 // the next detached state starts the next unit (docs/CHARGER_TEST_FLOW.md).

@@ -24,7 +24,10 @@ using fc::State;
 // A PD contract or a load behind the K2 (k2::link) refuses with Fail::Inline; `allow_inline` is the
 // explicit override and never stands in for `confirmed` (needed above 5 V).
 Fail start(Proto p, int target_mv, bool confirmed, bool allow_inline = false, int scp_ma = accp::kScpInitMa, int ufcs_ma = 0);
-Fail set_target(int target_mv, bool confirmed, int ufcs_ma = 0);
+// scp_ma >= 0 retargets an SCP session with that current limit (the rows of one charger-test unit share the session).
+Fail set_target(int target_mv, bool confirmed, int ufcs_ma = 0, int scp_ma = -1);
+// SCP only, call after start() / set_target(): a detect or "no change" end then leaves the session held for the next row.
+void keep(bool on);
 void stop();       // BACK / leaving the page / remote reset: discharge to 5 V, then passive idle
 
 // The guarded SuperVOOC trigger (k2/fastcharge/svooc_trig.hpp, remote only) holds D+/D- or still watches VBUS come
@@ -94,6 +97,7 @@ struct Status {
     int vbus_mv;        // live INA VBUS in every state (the engine value only if the monitor is offline)
     int adapter_mv = 0; // SCP: the adapter's own voltage readback of this session (0 = not read yet, or not SCP)
     int ident = 0;      // VOOC family: the ident command the adapter clocked in a Detected session (0xA8 / 0xAC / 0xA6), else 0
+    bool held = false;  // SCP: the row ended but the session is kept for the next one (state Failed, lines still driven)
 };
 Status status();
 // What the engine's SCP / UFCS sessions read from the charger (fc::Caps): the planner of the charger test sizes later rows from it.

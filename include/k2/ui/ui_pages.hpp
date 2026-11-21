@@ -449,6 +449,7 @@ private:
     pd::CableLimits physical_cable() const;   // the driver's reading, else what this run read earlier
     pd::Err request_pd(pd::Choice) override;
     fc::Fail request_fc(fc::Proto, int, bool, int) override;
+    void fc_keep(bool) override;
     void release(bool) override;
     uint8_t ceiling_start() override;   // svooc_trig::start with the Probe profile; 0 = running, else svooc::Refusal
     void ceiling_stop() override;
