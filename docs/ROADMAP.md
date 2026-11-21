@@ -80,6 +80,18 @@ Everything is C++23; there are no C files left in `src/` (TinyUSB and lwIP under
 
 Open defects, newest first. A row leaves this list when its fix is merged and seen on hardware.
 
+- **Back-to-back screenshots stall a charger-test run** (2026-11-21, 1.1.0-217-53dee143, Baseus 140 W). With
+  `k2_remote.py screenshot` every ~0.65 s (each ~450 ms on the device) a Medium run sat after `Verify 5V` for ~7 min and
+  went on within a second of the loop stopping (`runs/hw-2026-11-21/152248-qc2-fast2/`); one every ~3 s is harmless.
+  Something in the step start waits for a quiet the screenshot keeps resetting; a run should never wait on the shell.
+
+- **b4d5ed89 (live-VBUS attach / inline release) breaks charger-test runs** (2026-11-21, Baseus 140 W, nothing behind the
+  K2; `runs/hw-2026-11-21/150819-deep-b4d5/`). A Deep run stopped at the PPS 5-11 V sweep (5.8 V Request accepted, no
+  PS_RDY yet) with `FAIL load attached`, the rest skipped "load attached", `Sink downstream (inline=1 far request=0)`.
+  Also on that build a START against the Baseus with its output off (it needs Rd to turn on) gave "no PD source
+  capabilities after a rescan: legacy-only run". The same runs on 53dee143 (without b4d5ed89) woke the charger and passed
+  32/0 (Deep) and 26/0 (Medium).
+
 - **`make gate` fails at the tests on public since 3614728f** (2026-11-21, host). `test_ui_perf.cpp:516` (worst scroll over
   53600) and `test_ui_overdraw.cpp:227` (6 full-paint budgets) fail from 3614728f (place scrollbar to the bottom, toast
   above the scroll); b4d92f10 (Ripple native pixels) adds 2 more overdraw fails. 949c134c and earlier pass.
@@ -89,15 +101,18 @@ Open defects, newest first. A row leaves this list when its fix is merged and se
   the first voltage badge instead of advancing to the active voltage badge.
   Not reproduced on the host (2026-11-21): a Medium and a Deep plan with VBUS following each Request put the dot on the
   5 / 9 / 12 V cells in turn; QC2 opens no paint-block window. Regression test 82910f13 (`test_ui_charger_test`).
-  Next: a Deep run with the QC2 unit on hardware, screenshots against the `[CT]` step log, and the flashed build's hash.
+  Hardware 2026-11-21 (1.1.0-217-53dee143, Baseus 140 W, Deep `pd,qc2,pd-low`, `runs/hw-2026-11-21/151301-deep-mine/`):
+  QC2 5/9/12 V pass and the running outline moved 5 V -> 12 V with 5 V and 9 V filled green (screenshots every ~3 s, so the
+  ~1 s 9 V step was not caught on its own). Not reproduced; ask which build and charger showed it.
 
 - **PPS Deep range label disagrees with the range being tested** (2026-11-21, user hardware report). The UI displays a
   `5V-21V` PPS range while the engine is visibly stepping through a `3.3V-5V` range (check APDO min/max formatting vs
   sweep target bounds).
   Host check 2026-11-21: label, live range and swept points agree on one- and two-APDO lists (3.3-21V; 3.3-11V + 3.3-21V;
   3.3-5.9V + 5-21V). Found and fixed on the way (98068797, host-tested): the Running header name cell clipped the low part
-  "PPS 3.3-4.9V" to "PPS 3.3-...", so only the 5-21V part showed a readable range. Next: a Deep PPS run on hardware with
-  screenshots of the header and grid chip during the 3.3-4.9 V part.
+  "PPS 3.3-4.9V" to "PPS 3.3-...", so only the 5-21V part showed a readable range. Hardware 2026-11-21 (same run): this Baseus port offers
+  PPS 5-11 V and 5-21 V (no 3.3 V APDO); walks 13->21->13->9->5 V and the 5..21 V sweep ran under the "PPS 5-21V" chip
+  and header, no mismatch. The 3.3-4.9 V header fix still needs a charger with a 3.3 V APDO.
 
 - **`K2_PDSTRESS=1` does not pass the gate: `ChargerTestSession::poll` needs 1056 B of stack** (2026-11-14, found on
   k2/bugbatch; pre-existing: the base tree gives the same warning). The PD Stress build pulls more inlined code into
