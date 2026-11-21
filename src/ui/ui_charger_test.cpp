@@ -173,6 +173,10 @@ const char* detail_name(const ct::Step& s) {
     return s.detail >= 128 ? pd::err_name(static_cast<pd::Err>(s.detail - 128)) :
                             pd::result_name(static_cast<pd::SinkResult>(s.detail));
 }
+// A skipped or never-run step measured nothing worth showing: the voltage it carries is the source's idle level, not a reading.
+bool measured_shown(const ct::Step& s) {
+    return s.measured_mv && s.verdict != ct::Verdict::Skip && s.verdict != ct::Verdict::Pending;
+}
 // A caution by tracking (a passing sweep whose worst error passes the pass window, result_layout::deviates): the reason words, "off 450mV".
 void put_off(StrBufBase& b, const ctsweep::View& v, const ct::Step& s) {
     b.put("off ").put_u32(result_layout::sweep_worst_mv(v, static_cast<uint8_t>(s.algorithm), s.pos)).put("mV");
@@ -2467,7 +2471,7 @@ void ChargerTestPage::list_row(int index, bool focused, kit::RowSpec &out) {
         // The step's label; a mode the Xiaomi chain unlocked reads by its watts ("Mi 55W"), its before -> after is the Detail page's.
         row_text_.put(step_label::label(s, si > 0 ? &steps[static_cast<size_t>(si) - 1] : nullptr).view());
         out.data = true;
-        if (s.measured_mv) {
+        if (measured_shown(s)) {
             row_tail_.put_fixed(s.measured_mv, 1).put_char('V');
             out.tail_color = kVolt;
         } else {
@@ -3337,7 +3341,7 @@ void ChargerTestPage::paint_detail() {
             break;
         case 2:
             key = "Measured";
-            if (s.measured_mv) { val.put_fixed(s.measured_mv, 2).put_char('V'); col = kVolt; }
+            if (measured_shown(s)) { val.put_fixed(s.measured_mv, 2).put_char('V'); col = kVolt; }
             else { val.put("--"); col = kFaint; }
             sv = val.view();
             break;
@@ -3360,7 +3364,8 @@ void ChargerTestPage::paint_detail() {
             if (deviates) { put_off(val, s_.runner_.sweep_view(), s); sv = val.view(); }
             else if (s.reason == ct::Reason::ProgCheck && ct::caution_text(s, pk)) { val.put(pk); sv = val.view(); }   // "overshoot +1": the first flag and how many more (<= 12 cells)
             else sv = detail_name(s);
-            if (s.verdict == ct::Verdict::Fail || deviates || result_layout::caution(s)) col = kCaution;
+            if (sv.empty()) { sv = "--"; col = kDim; }   // a pass has no reason: the placeholder the Window row uses
+            else if (s.verdict == ct::Verdict::Fail || deviates || result_layout::caution(s)) col = kCaution;
             break;
         }
         case 5:

@@ -1519,6 +1519,48 @@ static void test_a_capped_range_reads_amber_and_says_how_far_it_got() {
 }
 static void dump_screen(const char* name);
 static int ty_reason() { return 44 + 3 * kit::kRowH + kit::row_text_y(kit::kRowH, kSmall.height); }   // the fourth row of the Detail table
+// A pass has no reason and a skipped step never measured anything: the Detail table says "--" (the Window row's placeholder) and the Steps
+// row's tail does too, neither a blank cell nor the source's idle voltage in the measured colour.
+static void test_a_pass_or_a_skip_reads_as_placeholders() {
+    six_pdo_fixture(); Ui ui; uint32_t t;
+    finished_results(ui, t);
+    const auto calm = [&] { for (int i = 0; i < 64 && ui.painting(); ++i) ui.tick(t += 100); CHECK_EQ(ui.painting(), false); };
+    const auto& r = ui.charger_test_results();
+    const auto mark = [&](ct::Verdict v) {
+        for (const auto& s : r.steps()) {
+            auto& w = const_cast<ct::Step&>(s);
+            w.verdict = v; w.reason = ct::Reason::None; w.detail = 0; w.measured_mv = 12000;
+        }
+    };
+    const auto volt_ink = [&] {
+        int n = 0;
+        for (int y = kit::kBodyY; y < kFooterY; ++y)
+            for (int x = 0; x < kTwinContentW; ++x) n += PANEL[y * LCD_WIDTH + x] == kVolt;   // the rail's own V reading stays out
+        return n;
+    };
+    const auto open_steps = [&] {
+        top(ui, t); calm();
+        press(ui, Button::Ok); ui.tick(t += 100); calm();
+        CHECK_EQ(ui.charger_test_stage(), 7);
+        top(ui, t); calm();
+    };
+    const int ty_measured = 44 + 1 * kit::kRowH + kit::row_text_y(kit::kRowH, kSmall.height);
+    mark(ct::Verdict::Pass);
+    open_steps();
+    CHECK_EQ(volt_ink() > 50, true);   // a measured step keeps its reading
+    press(ui, Button::Ok); ui.tick(t += 100); calm();
+    CHECK_EQ(ui.charger_test_stage(), 8);
+    check_text_at(kSmall, ty_measured, "12.00V", kVolt, kBg, 76);
+    check_text_at(kSmall, ty_reason(), "--", kDim, kBg, 76);
+    press(ui, Button::Back); ui.tick(t += 100); calm();
+    press(ui, Button::Back); ui.tick(t += 100); calm();
+    mark(ct::Verdict::Skip);
+    open_steps();
+    CHECK_EQ(volt_ink(), 0);           // a skipped step shows the placeholder, not 12.0V
+    press(ui, Button::Ok); ui.tick(t += 100); calm();
+    CHECK_EQ(ui.charger_test_stage(), 8);
+    check_text_at(kSmall, ty_measured, "--", kFaint, kBg, 76);
+}
 // The PD spec section of a Deep run (include/k2/chargertest/spec_section.hpp): one row per check after the unit rows, each a one-cell
 // VerdictCell with the worst value; OK opens the check's detail page, BACK returns to the row. The cells are set on the finished
 // run (the host stub has no pdspec engine run), including the extremes the quantised value can hold.
@@ -6169,6 +6211,7 @@ int main() {
     test_results_grid_rows_rail_and_footer();
     test_results_cells_are_flat_fills();
     test_a_capped_range_reads_amber_and_says_how_far_it_got();
+    test_a_pass_or_a_skip_reads_as_placeholders();
     test_toasts_time_out();
     test_steps_rows_show_whole_labels();
     test_step_label_gallery();
