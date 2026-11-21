@@ -85,6 +85,23 @@ void apply(const Scenario &sc) {
         g_stub.em.max_current_a = 5; g_stub.em.max_voltage_v = 50; g_stub.em.max_power_w = 250;
         g_stub.em.epr_capable = true;
         g_stub.cable_ans = k2::emk_variant::answered_from(2, 1);  // orientation B, PD3 + SVDM 1.0
+        // The full read at its widest: an active optical cable (3-digit temperatures, hub hops, asymmetric), four SVIDs with
+        // the Thunderbolt and DisplayPort modes decoded, a SOP'' plug with raw words.
+        pd::Emarker &em = g_stub.em;
+        em.is_active = true; em.vdo_version = 3; em.vdo2_valid = true; em.usb_lanes = 2; em.usb_gen2 = true;
+        em.usb4_supported = true; em.optical_isolated = true; em.vconn_required = true;
+        em.max_temp_c = 255; em.shutdown_temp_c = 255; em.u3_power = 4;
+        em.raw_vdos[5] = 3u << 6 | 1u << 10 | 1u << 9 | 1u << 1;
+        k2::cable_full::Full &f = g_stub.cable_full;
+        f = {};
+        f.valid = true;
+        f.p1.svids_ack = true; f.p1.nsvid = 4; f.p1.mode_ack = 0xF; f.p1.svid = {0x8087, 0xFF01, 0xFF02, 0x1D45};
+        f.p1.mode[0] = 3u << 16 | 1u << 19 | 1u << 21 | 1u << 22 | 1u << 23 | 1u << 25 | 1u;
+        f.p1.mode[1] = 3u << 2 | 1u << 26 | 3u << 28 | 0x3Fu << 8 | 0x3Fu << 16;
+        f.p1.mode[2] = 0xFFFFFFFFu; f.p1.mode[3] = 0xFFFFFFFFu;
+        f.id2_ack = true; f.id2_n = 5; f.id2[0] = 0xFFFF; f.id2[2] = 0xFFFFu << 16;
+        f.p2.svids_ack = true; f.p2.nsvid = 4; f.p2.mode_ack = 0xF; f.p2.svid = {0xFFFF, 0xFFFE, 0xFFFD, 0xFFFC};
+        f.p2.mode = {0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu};
     }
     // Device twins: names as long as the library takes (24 cells) next to short ones, one of every outcome kind.
     stub_twin_reset();
@@ -330,7 +347,7 @@ void walk_pages(Ui &ui, int rot, const Scenario &sc) {
         if (!ui.goto_page(static_cast<uint8_t>(kConnTabAlias + tab), g_t)) continue;
         draw_for_a_while(ui, kTabNames[tab], rot, sc.name);
         // The tab's own Info rows: scroll the list to its end so every row has been shown.
-        for (int i = 0; i < 12; ++i) { ui.on_button(Button::Plus, ButtonEvent::Short, g_t); g_t += 150; ui.tick(g_t); }
+        for (int i = 0; i < 24; ++i) { ui.on_button(Button::Plus, ButtonEvent::Short, g_t); g_t += 150; ui.tick(g_t); }   // the Cable tab's 24 rows
         draw_for_a_while(ui, kTabNames[tab], rot, sc.name);
         // Switch to the Actions sub-page via Long Back and walk every action row.
         if (ui.connection_page().has_pages()) {

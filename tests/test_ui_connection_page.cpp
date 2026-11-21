@@ -728,6 +728,74 @@ static void test_cable_tab_answered_row() {
     g_stub.em = {}; g_stub.cable_ans = {};
 }
 
+// The Cable tab after a full read: an active, optical Thunderbolt cable with every SVID answered, and a SOP'' plug. The
+// list is longer than the window, so the walk scrolls to the end; every row painted must fit (test_report fails on a cut).
+static void test_cable_full_rows() {
+    Ui &ui = fresh_ui();
+    make_inline(ui, 52000);
+    g_stub.pm_online = true;
+    pd::Emarker &em = g_stub.em;
+    em.valid = true; em.is_active = true; em.vid = 0x2E99; em.vendor_str = "Baseus"; em.speed_str = "USB 3.2 Gen2 (10G)";
+    em.latency_str = "<10 ns (~1 m)"; em.max_current_a = 5; em.max_voltage_v = 50; em.max_power_w = 250; em.epr_capable = true;
+    em.vdo_version = 3; em.vdo2_valid = true; em.usb_lanes = 2; em.usb_gen2 = true; em.usb4_supported = true;
+    em.optical_isolated = true; em.type_c_plug = true;
+    em.max_temp_c = 70; em.shutdown_temp_c = 85; em.u3_power = 3;
+    em.raw_vdos[5] = 70u << 24 | 85u << 16 | 3u << 12 | 1u << 10 | 1u << 9 | 2u << 6 | 1u << 1;   // optical retimer, 2 hubs
+    cable_full::Full &f = g_stub.cable_full;
+    f.valid = true;
+    f.p1.svids_ack = true; f.p1.nsvid = 4; f.p1.mode_ack = 0xF;
+    f.p1.svid = {0x8087, 0xFF01, 0xFF02, 0x1D45};
+    f.p1.mode[0] = 3u << 16 | 1u << 19 | 1u << 21 | 1u << 22 | 1u << 23 | 1u << 25 | 1u;   // 10/20G, rounded, optical, retimer, uni
+    f.p1.mode[1] = 3u << 2 | 2u << 28 | 0x3Fu << 8;                                        // UHBR20, re-driver, pins A..F
+    f.p1.mode[2] = 0x0000AB12u; f.p1.mode[3] = 0xFFFFFFFFu;
+    f.id2_ack = true; f.id2_n = 5; f.id2[0] = 0x2E99; f.id2[2] = 0x1234u << 16;
+    f.p2.svids_ack = true; f.p2.nsvid = 2; f.p2.mode_ack = 0x3; f.p2.svid = {0xFF02, 0x1D45, 0, 0};
+    f.p2.mode[0] = 0x0000AB12u; f.p2.mode[1] = 0xFFFFFFFFu;
+    g_stub.cable_seq++;
+    uint32_t t = 53000;
+    ui.tick(t);
+    show(ui, 1, t);
+    // ID, Speed, Current, Voltage, EPR, Type, Length (7), Temp, U3 pwr, Build, USB, Lanes (12), SVIDs, TBT3, TBT ext, DP,
+    // DP pins, Mode, Mode (19), Plug 2, SVIDs 2, Mode 2, Mode 2 (23)
+    CHECK_EQ(cp(ui).result_rows(), 23);
+    static const char *const want[] = {"max 70C off 85C", "0.5-1mW", "Optical retimer iso", "USB2 USB3 USB4", "2 lanes Gen2+ hub 2",
+                                       "8087 FF01 FF02 1D45", "10/20G active rnd", "optical retimer uni", "UHBR20 redriver",
+                                       "A B C D E F", "FF02 0000AB12", "1D45 FFFFFFFF", "2E99:1234", "FF02 1D45", "FF02 0000AB12"};
+    bool seen[sizeof want / sizeof *want] = {};
+    auto look = [&]() {
+        for (std::size_t k = 0; k < sizeof want / sizeof *want; k++)
+            for (int i = 0; i < 9; i++)
+                if (row_value_is(i, want[k])) seen[k] = true;
+    };
+    auto tick_paint = [&]() { for (int i = 0; i < 12; i++) ui.tick(t += 100); while (ui.painting()) ui.tick(t += 2); };
+    auto dump = [&](int n) {   // K2_DUMP: the windows as panel files (tools/panel2png.py)
+        if (const char *dir = std::getenv("K2_DUMP")) {
+            char path[256];
+            std::snprintf(path, sizeof path, "%s/k2_cable_full_%02d.panel", dir, n);
+            if (FILE *fp = std::fopen(path, "wb")) { std::fwrite(g_panel, 2, LCD_WIDTH * LCD_HEIGHT, fp); std::fclose(fp); }
+        }
+    };
+    look();
+    dump(0);
+    ui.on_button(Button::Minus, ButtonEvent::Short, t += 100);   // unfocus the action row, then page down to the end
+    for (int p = 0, last = -1; p < 40 && cp(ui).window_first() != last; p++) {   // one row per press
+        last = cp(ui).window_first();
+        ui.on_button(Button::Plus, ButtonEvent::Short, t += 100);
+        tick_paint();
+        look();
+        if (p % 8 == 7) dump(1 + p / 8);
+    }
+    dump(9);
+    for (std::size_t k = 0; k < sizeof want / sizeof *want; k++) {
+        if (!seen[k]) std::printf("not seen: %s\n", want[k]);
+        CHECK(seen[k]);
+    }
+#ifdef K2_TRUNC_LOG
+    CHECK_EQ(k2::trunc::failures(), 0);
+#endif
+    g_stub.em = {}; g_stub.cable_full = {};
+}
+
 // ---- a live link repaints the rows that changed, not the whole tab ----
 
 // A PPS phone behind the K2 re-requests every second or two (volts and amps move by a step): the Request and Pwr rows
@@ -2043,6 +2111,7 @@ int main() {
     test_live_request_repaints_only_its_rows();
     test_worst_case_rows_fit();
     test_cable_tab_answered_row();
+    test_cable_full_rows();
     test_each_tab_shows_its_own_side();
     test_sink_tab_not_empty_when_a_sink_was_seen();
     test_source_tab_leaves_waiting_after_timeout();

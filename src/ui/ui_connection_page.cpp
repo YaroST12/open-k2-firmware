@@ -11,6 +11,7 @@
 // from the pop-up, through Ui::run_action and its inline confirm.
 #include "k2/core/log.hpp"
 #include "k2/core/survey.hpp"
+#include "k2/pd/cable_full.hpp"
 #include "k2/pd/emk_variant.hpp"
 #include "k2/pd/emrec.hpp"
 #include "k2/pd/diag_live.hpp"
@@ -525,6 +526,16 @@ constexpr bool answered_rows_fit() {
     return std::string_view("Replied").size() * 6 + 4 <= static_cast<std::size_t>(kValX - kKeyX);
 }
 static_assert(answered_rows_fit(), "the Replied row's key and value fit their columns");
+// The Cable tab's full-read rows: every key fits the 12 px key column and the fixed texts the value column. Appended
+// tags go through put_if_fits / put_tag; the table texts (U3 power, TBT speed) are walked by test_ui_no_truncation.
+constexpr bool cable_full_rows_fit() {
+    for (std::string_view k : {"Temp", "U3 pwr", "Build", "USB", "Lanes", "SVIDs", "SVIDs 2", "TBT3", "TBT ext", "DP", "DP pins",
+                               "Mode", "Mode 2", "Plug 2"})
+        if (k.size() * 6 + 4 > static_cast<std::size_t>(kValX - kKeyX)) return false;
+    return std::string_view("max 255C off 255C").size() <= static_cast<std::size_t>(kValCells) &&
+           std::string_view("Optical retimer").size() <= static_cast<std::size_t>(kValCells);
+}
+static_assert(cable_full_rows_fit(), "the Cable tab's full-read rows fit their columns");
 
 // A value row. `cut` > 0 splits the value there: the head in `c`, the tail (the current) in kAmp; so a "20/28V 5A" line
 // reads in unit colours. 0 = one colour.
@@ -749,6 +760,8 @@ void range_row(Rows &R, const char *key, const pd::Pdo &p) {
     }
 }
 
+void cable_full_rows(Rows &R, const pd::Emarker &em);
+
 [[gnu::noinline]] void cable_rows(Rows &R, const TabData &) {
     const pd::Emarker &em = fusb302::emarker();
     put_id(R.add("ID"), em.vid, em.pid, em.vendor_str);
@@ -773,6 +786,98 @@ void range_row(Rows &R, const char *key, const pd::Pdo &p) {
     // an older reading has none). With VCONN required this is the ninth and last row.
     const emk_variant::Text ans = emk_variant::short_text(fusb302::cable_answered());
     if (!ans.view().empty()) R.add("Replied", kDim).put(ans.view());
+    cable_full_rows(R, em);
+}
+
+// "2717 2E87 +": whole four-digit entries, a "+" when more follow (the Source and Cable tabs' SVIDs rows).
+void put_svid_list(StrBuf<28> &v, const std::uint16_t *s, std::size_t n) {
+    std::size_t shown = 0;
+    for (; shown < n; shown++) {
+        const bool last = shown + 1 == n;
+        const std::size_t after = v.view().size() + (shown ? 1 : 0) + 4;
+        if (after + (last ? 0 : 2) > static_cast<std::size_t>(kValCells)) break;
+        if (shown) v.put_char(' ');
+        v.put_hex(s[shown], 4);
+    }
+    if (shown < n) v.put(shown ? " +" : "+");
+}
+
+// One answered Discover Modes word, raw: "FF02 0000AB12".
+void put_mode_row(Rows &R, const char *key, std::uint16_t svid, std::uint32_t vdo) {
+    R.add(key, kText).put_hex(svid, 4).put_char(' ').put_hex(vdo, 8);
+}
+
+// The active cable's VDO 2 rows (temperatures, U3 power, build, USB, lanes); each only when the cable stated it.
+void cable_active_rows(Rows &R, const pd::Emarker &em) {
+    if (em.max_temp_c || em.shutdown_temp_c)
+        R.add("Temp", kText).put("max ").put_u32(em.max_temp_c).put("C off ").put_u32(em.shutdown_temp_c).put_char('C');
+    R.add("U3 pwr", kText).put(cable_full::u3_power_text(em.u3_power));
+    const bool v13 = em.vdo_version >= 3;
+    const cable_full::ActiveExtra x = cable_full::decode_active_extra(em.raw_vdos[5], v13);
+    if (v13) {
+        StrBuf<28> &b = R.add("Build", kText);
+        b.put(x.optical ? "Optical" : "Copper").put(x.retimer ? " retimer" : " redriver");
+        if (em.optical_isolated) put_if_fits(b, " iso");
+    }
+    StrBuf<28> &u = R.add("USB", kText);
+    if (x.usb2) u.put("USB2");
+    if (x.usb32) put_tag(u, "USB3");
+    if (em.usb4_supported) put_tag(u, "USB4");
+    StrBuf<28> &l = R.add("Lanes", kText);
+    l.put_u32(em.usb_lanes).put(em.usb_lanes == 1 ? " lane" : " lanes").put(em.usb_gen2 ? " Gen2+" : " Gen1");
+    if (x.hub_hops) {
+        const char hub[] = {' ', 'h', 'u', 'b', ' ', static_cast<char>('0' + x.hub_hops), 0};   // hops are 1..3
+        put_if_fits(l, hub);
+    }
+    if (x.asym) put_if_fits(l, " asym");
+}
+
+// What a plug answered after its identity: SVIDs, then the decoded Thunderbolt and DisplayPort modes or raw words.
+// SOP'' (`second`) keeps raw words and the "2" keys.
+void cable_plug_rows(Rows &R, const cable_full::Plug &p, bool second) {
+    if (p.svids_ack) {
+        StrBuf<28> &v = R.add(second ? "SVIDs 2" : "SVIDs", kText);
+        if (p.nsvid) put_svid_list(v, p.svid.data(), p.nsvid);
+        else v.put("none");
+    }
+    for (unsigned i = 0; i < p.nsvid && i < cable_full::kMaxSvids; i++) {
+        if (!(p.mode_ack >> i & 1u)) continue;
+        const std::uint32_t m = p.mode[i];
+        if (second || (p.svid[i] != cable_full::kSvidTbt && p.svid[i] != cable_full::kSvidDp)) {
+            put_mode_row(R, second ? "Mode 2" : "Mode", p.svid[i], m);
+        } else if (p.svid[i] == cable_full::kSvidTbt) {
+            const cable_full::Tbt t = cable_full::decode_tbt(m);
+            StrBuf<28> &v = R.add("TBT3", kText);
+            v.put(cable_full::tbt_speed_text(t.speed)).put(t.active ? " active" : " passive");
+            if (t.rounded) put_if_fits(v, " rnd");
+            StrBuf<28> e;
+            if (t.optical) put_tag(e, "optical");
+            if (t.retimer) put_tag(e, "retimer");
+            if (t.uni_training) put_tag(e, "uni");
+            if (!e.view().empty()) R.add("TBT ext", kText).put(e.view());
+        } else {
+            const cable_full::Dp d = cable_full::decode_dp(m);
+            StrBuf<28> &v = R.add("DP", kText);
+            v.put(cable_full::dp_rate_text(d));
+            put_tag(v, cable_full::dp_cable_text(d.cable));
+            if (d.pins) {
+                StrBuf<28> &pn = R.add("DP pins", kText);
+                for (unsigned k = 0; k < 6; k++)
+                    if (d.pins >> k & 1u) { if (!pn.view().empty()) pn.put_char(' '); pn.put_char(char('A' + k)); }
+            }
+        }
+    }
+}
+
+void cable_full_rows(Rows &R, const pd::Emarker &em) {
+    if (em.is_active && em.vdo2_valid) cable_active_rows(R, em);
+    const cable_full::Full &f = fusb302::cable_extra();
+    if (!f.valid) return;
+    cable_plug_rows(R, f.p1, false);
+    if (f.id2_ack) {
+        put_id(R.add("Plug 2", kText), static_cast<std::uint16_t>(f.id2[0]), static_cast<std::uint16_t>(f.id2[2] >> 16), nullptr);
+        cable_plug_rows(R, f.p2, true);
+    }
 }
 
 void sink_pdo_rows(Rows &R, std::span<const uint32_t> sink) {
@@ -1150,18 +1255,8 @@ void word_row(Rows &R, const char *key, pd::SvField f) {
     } else word_row(R, "Ext", pd::SvField::CapsExt);
 
     const pd::VdmInfo &vdm = fusb302::vdm();
-    if (vdm.num_svids > 0) {   // "2717 2E87 +": whole four-digit entries, a "+" when more follow
-        StrBuf<28> &v = R.add("SVIDs", kText);
-        std::size_t shown = 0;
-        for (; shown < vdm.num_svids; shown++) {
-            const bool last = shown + 1 == vdm.num_svids;
-            const std::size_t after = v.view().size() + (shown ? 1 : 0) + 4;
-            if (after + (last ? 0 : 2) > static_cast<std::size_t>(kValCells)) break;
-            if (shown) v.put_char(' ');
-            v.put_hex(vdm.svids[shown], 4);
-        }
-        if (shown < vdm.num_svids) v.put(shown ? " +" : "+");
-    } else word_row(R, "SVIDs", pd::SvField::Svids);
+    if (vdm.num_svids > 0) put_svid_list(R.add("SVIDs", kText), vdm.svids.data(), vdm.num_svids);
+    else word_row(R, "SVIDs", pd::SvField::Svids);
 
     if (vdm.num_modes > 0) {
         StrBuf<28> &v = R.add("Modes", kText);
@@ -1765,6 +1860,19 @@ static uint32_t mix_u16s(uint32_t h, const uint16_t *w, std::size_t n) {
     return h;
 }
 
+static uint32_t mix_plug(uint32_t h, const cable_full::Plug &p) {
+    h = mix_u32(h, uint32_t(p.svids_ack) | uint32_t(p.nsvid) << 1 | uint32_t(p.mode_ack) << 8);
+    h = mix_u16s(h, p.svid.data(), p.svid.size());
+    return pg::mix_u32s(h, p.mode.data(), p.mode.size());
+}
+
+// The Cable tab's full-read data (SVIDs, modes, SOP'' identity): a finished read repaints the rows.
+static uint32_t mix_cable_full(uint32_t h, const cable_full::Full &f) {
+    h = mix_u32(h, uint32_t(f.valid) | uint32_t(f.id2_ack) << 1 | uint32_t(f.id2_n) << 2);
+    h = pg::mix_u32s(h, f.id2.data(), f.id2.size());
+    return mix_plug(mix_plug(h, f.p1), f.p2);
+}
+
 static uint32_t mix_identity(uint32_t h, const pd::Identity &id) {
     h = mix_u32(h, uint32_t(id.valid) | uint32_t(id.vid) << 8 | uint32_t(id.pid) << 16);
     return mix_u32(h, id.id_header);
@@ -1885,6 +1993,7 @@ void ConnectionPage::update(uint32_t now_ms) {
     c = mix_u32(c, em.raw_vdos[4]);
     c = mix_u32(c, uint32_t(em.max_power_w) | uint32_t(em.sop) << 16);
     c = mix_u32(c, fusb302::cable_seq());
+    c = mix_cable_full(c, fusb302::cable_extra());
     c = mix_identity(c, vdm.identity);
     c = mix_u32(c, uint32_t(vdm.num_svids) | uint32_t(vdm.modes_svid) << 8 | uint32_t(vdm.num_modes) << 24);
     c = mix_u16s(c, vdm.svids.data(), vdm.num_svids);
@@ -2011,6 +2120,7 @@ void ConnectionPage::update(uint32_t now_ms) {
         h = mix_u32(h, uint32_t(em.valid) | uint32_t(em.is_active) << 1 | uint32_t(em.vid) << 8 | uint32_t(em.raw_vdos[4]) << 24);
         h = mix_u32(h, em.raw_vdos[4] | uint32_t(em.max_power_w) << 8 | uint32_t(em.sop) << 24);
         h = mix_u32(h, fusb302::cable_seq());
+        h = mix_cable_full(h, fusb302::cable_extra());
         h = mix_u32(h, uint32_t(fusb302::identify_current()));
         h = mix_identity(h, vdm.identity);
         h = mix_identity(h, snk.identity);
