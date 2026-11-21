@@ -94,9 +94,7 @@ Open defects, newest first. A row leaves this list when its fix is merged and se
   affected. Fix with the tool's return: split the frame (a `noinline` helper for the stress branch), then the PD Stress
   row above can be validated.
 
-- **The Bench K2 row says "HID on / WebUSB on / HID off"** (2026-11-14, found on k2/bugbatch). `ui_tools.cpp` builds
-  the note from two flags, so HID + WebUSB reads "HID on" while the Settings identity line and the USB Link page now
-  name the whole mode (`usbcfg::describe`: "HID+WebUSB"). Fix: the same `describe(current)` text, checked for width.
+- ~~**The Bench K2 row says "HID on / WebUSB on / HID off"**~~ obsolete 2026-11-21: the page ring replaced the Bench, so no screen shows that row (`bench::row` is called only from tests).
 
 - **`test_ui_mockup` renders before the budgeted paint has settled** (2026-11-14, host tool). Its `render()` ticks twice
   and dumps, so pages that paint over several passes come out partial (`home_diag_*`, the USB link page with leftover
@@ -156,11 +154,7 @@ Open defects, newest first. A row leaves this list when its fix is merged and se
   `runs/2026-11-11-iq4-scp/`): the IQ4 does not follow SCP 10 V (row timeout at 5.0 V), then cuts VBUS to 0 for ~70 ms
   and restarts PD (CHARGER_QUIRKS `output-reset-after-unanswered-scp`). The charger's behaviour, handled by the budget;
   parked by the user. On 1.0.0-594 (PC-powered full run) SCP 10 / 12 V were skipped `PD active: use QC port`, so no cut.
-- **FCP 12 V not released on the IQ4** (2026-11-11, PC-powered `--units fcp,scp`): the D+/D- reset left VBUS at 12.1 V,
-  the run stopped Unsafe "5V release failed" after 8 s; a PD Soft_Reset then gave 5 V in ~150 ms
-  (`fc-holds-after-bus-reset`). Seen once; the self-powered full run went on from FCP to SCP 5 V. Not seen again on
-  1.0.0-594 (idle fix in): FCP 12 V released in both PC-powered runs (`--units qc2,qc3,fcp` and the full run,
-  `runs/2026-11-11-iq4-idle/`), so the old 0.6 V / 0.6 V idle (QC2 12 V code) is the likely cause. Close after one more.
+- ~~**FCP 12 V not released on the IQ4**~~ closed 2026-11-21 (2026-11-11, seen once, PC-powered `--units fcp,scp`: VBUS stayed at 12.1 V after the D+/D- reset). Not seen again after the D+/D- idle fix: FCP 5/9/12 V passed and the run went on to SCP on the IQ4 on 2026-11-14 (`runs/ct-merge/ct-iq4.log`).
 - ~~**QC2 / QC3 fail on the IQ4 above 5 V**~~ fixed by the D+/D- idle fix (k2/idle-dpdm): on 1.0.0-594 (PC-powered,
   `runs/2026-11-11-iq4-idle/`) `--units qc2,qc3,fcp` 13 pass / 0 fail, and the full run 27 pass / 4 fail / 26 skip with
   QC2 5/9/12 V, QC3 5→12→5 V, QC3B 5/12 V all pass. History: (2026-11-11 self-powered full run: QC2 9 V `voltage not reached`, QC3
@@ -338,11 +332,7 @@ Open defects, newest first. A row leaves this list when its fix is merged and se
 - **A refused e-marker read kept the last read's mode and acks** (2026-11-11, fixed in 472c40f9, host-tested;
   `tests/test_fusb302_scan.cpp` `test_refused_read_clears_the_last_read`). Validate (hardware): with a sink inline or
   Ra mode on, `k2_remote emarker --json` after a refused read shows `read_mode` none and 0 acks.
-- **Docs: `docs/CHARGER_QUIRKS.md` called the Baseus cable of the FH22 / CUKTECH notes a "plain cable"** (2026-11-11;
-  reworded on `k2/small-fixes`, docs only): that cable later answered as chipped (5 A normal). The FH22 section and the
-  CUKTECH `5a-without-emarker` note now name it as the Baseus 100 W cable whose chip stays silent when read alone
-  (pattern `cable-chip-silent-alone`). The A-to-C "plain cable" of the CUKTECH sag-fix verification (981c831) is another
-  cable and was left. Nothing to validate on hardware.
+- ~~**Docs: `docs/CHARGER_QUIRKS.md` called the Baseus cable of the FH22 / CUKTECH notes a "plain cable"**~~ completed: reworded on `k2/small-fixes` (pattern `cable-chip-silent-alone`); the remaining "plain cable" at CHARGER_QUIRKS.md:509 is the A-to-C cable of 981c831, another cable.
 
 - **Connection page ("Who's attached") flickers on a steady link** (2026-11-10, user report; handoff row 2c): the tab
   refreshed its info without anything new appearing. Fixed in bd9dd91b, hardware check pending.
