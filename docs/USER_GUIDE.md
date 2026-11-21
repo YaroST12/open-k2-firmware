@@ -113,7 +113,7 @@ Faces (MINUS / PLUS flips, wraps)            OK opens the Bench     BACK returns
 ### Read a cable's e-marker
 
 1. Open the **Cable** place on the Bench (the chip in an e-marked cable tells its current and voltage rating).
-2. Plug the cable into the bottom port with **nothing else** connected. With no row selected, press OK: that reads the e-marker.
+2. Plug the cable into the bottom port with **nothing else** connected. The tab reads the e-marker by itself when it opens (and when a new cable shows up while it is open); a read already held is not repeated. With no row selected, press OK to read it again. With a device inline the tab does not read by itself and says "Inline: listens only".
 3. Move down to **Save cable** and press OK to keep it. Saved cables are listed under **Saved cables** and exported as JSON on the USB drive.
 
 ### Ask a charger for a voltage
@@ -271,7 +271,7 @@ The list of seven places. Each row shows a one-line status. MINUS / PLUS select 
 
 ### The Charger, Cable and Device places
 
-Three places share one page, the same one that [Who's attached](#whos-attached) describes: Charger shows the **Source** record, Cable the **Cable** record (the e-marker) and Device the **Sink** record. MINUS / PLUS move the focus down the action rows under the record; OK on a focused row opens it; with no row focused, OK runs the place's own read: **Read again** (Charger), **Read e-marker** (Cable) or **Ask device** (Device). Long OK shares the Source caps or the Cable record as a QR code. BACK returns to the Bench with the place still selected. A row that is not ready (a live sink inline, no cable read yet) still opens and says why.
+Three places share one page, the same one that [Who's attached](#whos-attached) describes: Charger shows the **Source** record, Cable the **Cable** record (the e-marker) and Device the **Sink** record. MINUS / PLUS move the focus down the action rows under the record; OK on a focused row opens it; with no row focused, OK runs the place's own read: **Read again** (Charger), **Read e-marker** (Cable) or **Ask device** (Device). Long OK shares the Source caps or the Cable record as a QR code. BACK returns to the Bench with the place still selected. A row that is not ready (a live sink inline, no cable read yet) still opens and says why. Opening the Cable place reads the cable, and opening the Charger place reads the charger's offers (Source_Capabilities, plus the EPR list when it offers EPR), once per attach; Refresh reads again. The offers read takes Rd only if no contract is held, never asks for more than 5 V, and gives the port back as it found it. With a device inline neither read starts, and the screen says "Inline: listens only".
 
 ### Charger test
 
