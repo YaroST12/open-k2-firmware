@@ -2215,6 +2215,7 @@ void Runner::poll_detach(const Input& in) {
     if (rel_rd_) {
         rel_rd_ = false; ending_ = false;
         if (in.vbus_mv >= kUnsafeLowMv && !safe5(in.vbus_mv)) { unsafe(Reason::Release); return; }   // end_legacy() gives Rd back
+        pd_owned_ = fc_owned_ = recover_ = false;
         if (stopping_) { end_legacy(); state_ = State::Stopped; return; }
         next(in); return;
     }
@@ -2872,7 +2873,7 @@ void Runner::poll_impl(Input& in, const pd::SourceCaps& caps) {
                 end_sag_recovery(in);
                 pd_owned_ = fc_owned_ = recover_ = false;
                 if (stopping_) { end_legacy(); state_ = State::Stopped; } else next(in);
-            } else if (fc_owned_ && !pd_owned_ && !selfpwr_ && mode_ == Mode::Legacy && !rel_rd_) {
+            } else if (fc_owned_ && !pd_owned_ && !selfpwr_ && mode_ == Mode::Legacy && !rel_rd_ && !in.inline_load && in.vbus_mv >= 0 && !safe5(in.vbus_mv)) {
                 // pattern release-leaves-vbus-up: the D+/D- release left a raised level up (QC2 Class B at 12 V, GaN3 65W). A detach
                 // is the other way down for it: Rd off, and only an output that survives that is unsafe (poll_detach).
                 K2LOG("[CT] release left VBUS at %dmV: Rd off\n", int(in.vbus_mv));

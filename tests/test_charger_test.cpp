@@ -6421,20 +6421,26 @@ static void test_start_on_a_port_without_cc_detaches_quickly() {
 // pattern release-leaves-vbus-up: a D+/D- release after a high level (QC2 Class B at 12 V) that leaves VBUS up is answered with an
 // Rd off (the source returns to 5 V on a detach) before the run is called unsafe. A port that stays up through the Rd off is unsafe.
 static void test_release_that_leaves_vbus_up_falls_back_to_an_rd_off() {
-    for (const bool stays_up : {false, true}) {
+    for (const int arm : {0, 1, 2, 3}) {   // 0 falls back, 1 the port stays up, 2 two units, 3 an inline load (the fallback never cuts it)
         Fake f; ct::Runner r(f);
-        f.never_dark = stays_up;
-        const auto o = with_units(ct::bit(A::Qc2), {ct::Unit::Qc2});
+        f.never_dark = arm == 1;
+        const auto o = arm == 2 ? with_units(ct::bit(A::Qc2) | ct::bit(A::Fcp), {ct::Unit::Qc2, ct::Unit::Fcp})
+                                : with_units(ct::bit(A::Qc2), {ct::Unit::Qc2});
         CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
         f.release_ok = false;   // the D+/D- release does not bring VBUS down
-        CHECK_EQ(run_until(f, r, [&] { return !r.busy() || r.state() == ct::State::Unsafe; }, 200000), true);
-        if (stays_up) {
+        if (arm == 3) { CHECK_EQ(run_until(f, r, [&] { return f.fc_requests >= 1; }, 100000), true); f.in.inline_load = true; }
+        CHECK_EQ(run_until(f, r, [&] { return !r.busy() || r.state() == ct::State::Unsafe; }, 300000), true);
+        if (arm == 1 || arm == 3) {
             CHECK_EQ(int(r.state()), int(ct::State::Unsafe));
             CHECK_EQ(int(r.reason()), int(ct::Reason::Release));
+            CHECK_EQ(f.detaches, arm == 1 ? 2 : 1);   // arm 1 tried the Rd off once; the inline load was never cut
+            CHECK_EQ(f.attaches_pd >= (arm == 1 ? 1 : 0), true);   // Rd is given back
         } else {
             CHECK_EQ(int(r.state()), int(ct::State::Done));
-            CHECK_EQ(f.detaches, 2);   // the unit's own detach and the fallback
+            CHECK_EQ(f.detaches, arm == 2 ? 3 : 2);   // each unit's own detach (the second unit follows the fallback's) plus the fallbacks
+            CHECK_EQ(f.attaches_legacy, arm == 2 ? 2 : 1);
             CHECK_EQ(f.attaches_pd >= 1, true);   // the PD policy is given back
+            for (const auto& s : r.steps()) CHECK_EQ(int(s.reason) == int(ct::Reason::Release), false);
         }
     }
 }
