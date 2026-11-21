@@ -3,6 +3,7 @@
 #include "test_util.h"
 #include "k2/chargertest/charger_test.hpp"
 #include "k2/chargertest/charger_journal.hpp"
+#include "k2/chargertest/prog_check.hpp"
 #include "k2/chargertest/step_label.hpp"
 #include "k2/chargertest/result_layout.hpp"
 #include "k2/core/rd_intent.hpp"
@@ -6135,9 +6136,11 @@ static void test_legacy_waits_between_units() {
     CHECK_EQ(f.in.now - t_qc3 < ct::kLegacyGapMs + ct::kAfcPreMs, true);
 }
 // The Legacy timing knobs: first_wait_ms and gap_ms shorten the waits, quiet_ms 0 starts the handshake while the source still floods caps,
-// a Hold under the capture floor is refused, and a new Runner (a Fake) starts from the constants.
+// a Hold under 300 ms is refused, and a new Runner (a Fake) starts from the constants.
 static void test_legacy_tune_knobs() {
-    CHECK_EQ(ct::legacy_tune_set(uint8_t(ct::LegacyKnob::HoldMs), 100), false);
+    CHECK_EQ(ct::legacy_tune_set(uint8_t(ct::LegacyKnob::HoldMs), 299), false);
+    CHECK_EQ(ct::legacy_tune_set(uint8_t(ct::LegacyKnob::HoldMs), 300), true);
+    ct::legacy_tune_reset();
     CHECK_EQ(ct::legacy_tune_set(9, 1), false);
     CHECK_EQ(ct::legacy_tune(ct::LegacyKnob::Chain), 1u);
     CHECK_EQ(ct::legacy_tune_set(uint8_t(ct::LegacyKnob::Chain), 2), false);   // a level, not a time: only the known ones
@@ -6189,6 +6192,20 @@ static void test_legacy_tune_knobs() {
     ct::legacy_tune_reset();
     Fake f;
     CHECK_EQ(ct::legacy_tune(ct::LegacyKnob::GapMs), uint32_t(ct::kLegacyGapMs));
+}
+// hold_ms down to 300 shortens a Legacy row's hold; a PD row keeps the floor its transition capture needs.
+static void test_hold_knob_goes_to_300_and_pd_rows_keep_the_capture_floor() {
+    for (const bool pd_row : {false, true}) {
+        Fake f; ct::Runner r(f);
+        CHECK_EQ(ct::legacy_tune_set(uint8_t(ct::LegacyKnob::HoldMs), 300), true);
+        if (pd_row) CHECK_EQ(r.start(f.caps, kPd, f.in, true), ct::Reason::None);
+        else CHECK_EQ(r.start(f.caps, with_units(ct::bit(A::Qc2), {ct::Unit::Qc2}), f.in, true), ct::Reason::None);
+        CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Holding; }, 100000), true);
+        const uint32_t left = r.hold_left_ms(f.in.now);        // The hold counts from the band's stable start (kStableMs before Holding): 300 ms is already over, the PD floor is not.
+        if (pd_row) CHECK_EQ(left >= ct::progcheck::kPostMs, true);
+        else CHECK_EQ(left, 0u);
+        ct::legacy_tune_reset();
+    }
 }
 // A charger that keeps PD alive (re-sends its caps for ever): one longer retry, then every row of the unit is "blocked by PD"
 // and the next unit still gets its own attach.
@@ -9179,7 +9196,7 @@ int main() {
     test_a_dip_shorter_than_the_minimum_is_no_cut(); test_a_protocol_failure_after_a_clean_comeback_is_a_fail(); test_the_7s_cut_sequence_over_the_5v_steps_of_the_cuktech_run(); test_a_fall_in_a_raised_row_is_no_cut_casualty(); test_a_silent_vooc_family_on_a_7s_cut_port_ends_no_answer(); test_the_10_unit_run_over_every_cut_phase_ends_as_without_cuts();
     test_a_cut_in_the_first_baseline_waits_for_the_comeback(); test_a_baseline_dip_that_does_not_come_back_still_stops();
     test_custom_unit_list_runs_in_order(); test_pd_unit_attaches_with_a_contract(); test_a_failed_unit_does_not_stop_the_run();
-    test_default_unit_order_is_vendor_modes_then_pd_then_legacy(); test_default_order_runs_vendor_modes_before_pd_before_legacy(); test_pd_between_vendor_and_legacy_units(); test_pd_replan_in_the_middle_keeps_the_rows_in_order(); test_consecutive_legacy_units_share_one_attach(); test_legacy_session_that_sees_pd_traffic_is_renewed(); test_silent_ufcs_source_reports_no_response_not_pd_active(); test_legacy_waits_between_units(); test_legacy_tune_knobs(); test_scp_rows_share_one_session(); test_scp_no_change_held_session_takes_the_next_rows(); test_cancel_while_the_scp_session_is_kept_releases_it(); test_chain_knob_default_and_other_units();
+    test_default_unit_order_is_vendor_modes_then_pd_then_legacy(); test_default_order_runs_vendor_modes_before_pd_before_legacy(); test_pd_between_vendor_and_legacy_units(); test_pd_replan_in_the_middle_keeps_the_rows_in_order(); test_consecutive_legacy_units_share_one_attach(); test_legacy_session_that_sees_pd_traffic_is_renewed(); test_silent_ufcs_source_reports_no_response_not_pd_active(); test_legacy_waits_between_units(); test_legacy_tune_knobs(); test_hold_knob_goes_to_300_and_pd_rows_keep_the_capture_floor(); test_scp_rows_share_one_session(); test_scp_no_change_held_session_takes_the_next_rows(); test_cancel_while_the_scp_session_is_kept_releases_it(); test_chain_knob_default_and_other_units();
     test_legacy_attach_that_never_falls_back_is_blocked_by_pd(); test_legacy_retry_that_falls_back_runs_the_unit(); test_legacy_attach_waits_out_hard_reset_cycles();
     test_silent_attach_source_that_revives_pd_does_not_go_unsafe(); test_silent_baseline_sag_that_never_returns_is_still_unsafe(); test_silent_sink_output_off_skips_legacy_units_and_runs_pd();
     test_later_unit_output_cut_in_its_baseline_is_a_lost_unit_not_unsafe(); test_later_unit_elevated_or_stuck_baseline_still_ends_unsafe();

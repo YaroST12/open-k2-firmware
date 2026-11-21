@@ -254,7 +254,8 @@ const char* name(HuntCause c) {
 }
 namespace {
 constexpr uint32_t kHoldMs = 1000;
-constexpr uint32_t kHoldFloorMs = progcheck::kStableMs + progcheck::kPostMs + 100;   // below it the transition capture would outlive the hold
+constexpr uint32_t kHoldFloorMs = progcheck::kStableMs + progcheck::kPostMs + 100;   // below it the transition capture would outlive the hold (PD rows only)
+constexpr uint32_t kHoldKnobMinMs = 300;   // the lab knob's own floor: a Legacy row judges after one stable band
 constexpr uint32_t kTuneMaxMs = 60000;
 constexpr uint32_t kChainMaxLevel = 1;
 constexpr std::array<uint32_t, size_t(LegacyKnob::Count)> kTuneDefault = {0, kLegacySteadyMs, kLegacyFirstWaitMs, kLegacyGapMs, kHoldMs, 1};
@@ -278,7 +279,7 @@ static_assert(progcheck::kStableMs + progcheck::kPostMs + 100 <= kHoldMs, "the c
 uint32_t legacy_tune(LegacyKnob k) { return k < LegacyKnob::Count ? g_tune[size_t(k)] : 0; }
 bool legacy_tune_set(uint8_t knob, uint32_t value) {
     if (knob >= size_t(LegacyKnob::Count) || value > (knob == uint8_t(LegacyKnob::Chain) ? kChainMaxLevel : kTuneMaxMs)) return false;
-    if (knob == uint8_t(LegacyKnob::HoldMs) && value < kHoldFloorMs) return false;
+    if (knob == uint8_t(LegacyKnob::HoldMs) && value < kHoldKnobMinMs) return false;
     g_tune[knob] = value;
     return true;
 }
@@ -1552,7 +1553,8 @@ const mi_unlock::Mode* Runner::mi_mode(const Step& s) const {
     return nullptr;
 }
 uint32_t Runner::hold_ms() const {
-    return legacy_tune(LegacyKnob::HoldMs);
+    const uint32_t h = legacy_tune(LegacyKnob::HoldMs);
+    return index_ < count_ && steps_[index_].group == Group::Pd ? std::max(h, kHoldFloorMs) : h;   // the capture of a PD row needs its floor
 }
 // The Deep checks' switches (the Tests list line sets the two apart); the step-walk and sweep rows have their own judgments.
 // The 100 mV sweep step is the PPS class 1 and the AVS class 0 of the spec engine's plan; a walk quantum is class 0 of either.
