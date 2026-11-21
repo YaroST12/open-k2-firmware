@@ -4824,6 +4824,52 @@ static void test_the_gauge_band_and_the_dot_move_in_the_same_tick() {
     gauge_and_dot_move_together(false);
     gauge_and_dot_move_together(true);
 }
+// Hardware 2026-11-21: in a Deep run the QC2 unit's dot sat on its first (5 V) cell while the 9 V and 12 V steps ran. The dot is on
+// the cell of the level under test, at every level of the plan (Medium and Deep alike).
+static void running_dot_follows_the_qc2_level(ct::Level level) {
+    fixture();
+    g_stub.caps.num_pdos = 3; g_stub.caps.pdos[1] = pd::decode_pdo((180u << 10) | 300); g_stub.caps.pdos[2] = pd::decode_pdo((240u << 10) | 300);
+    Ui ui; ui.init(0); ui.set_rotation(0, 0); ui.tick(1000); ui.goto_page(static_cast<uint8_t>(Page::ChargerTest), 1100);
+    CHECK_EQ(ui.charger_test_set_level(uint8_t(level)), true);
+    review(ui); start_press(ui, 1300); press(ui, Button::Ok, 1400);
+    unsigned checked = 0, wrong = 0, none = 0, seen_mv = 0;
+    for (uint32_t now = 1500; now <= 400000 && ui.charger_test_busy(); now += 100) {
+        if (g_stub.fc_proto == int(k2::fc::Proto::Qc2) && g_stub.fc_state == int(k2::fc::State::Active) && g_stub.fc_target_mv > 0) g_stub.pm.vbus_mv = g_stub.fc_target_mv;   // the charger follows the Request
+        ui.tick(now);
+        const auto& r = ui.charger_test_results();
+        if (ui.charger_test_stage() != kRunningStage || r.steps().empty() || r.index() >= r.steps().size() || !r.quiet()) continue;
+        const ct::Step& st = r.steps()[r.index()];
+        if (st.algorithm != A::Qc2 || st.verdict != ct::Verdict::Running) continue;
+        for (int i = 0; i < 8 && ui.painting(); ++i) ui.tick(now += 20);   // the budgeted rows settle
+        // The QC2 row's chips, ascending: one per distinct level of the Class A algorithm (Class B 20 V is its own row).
+        unsigned lv[8], n = 0;
+        for (const auto& x : r.steps())
+            if (x.algorithm == A::Qc2 && x.mv) {
+                bool have = false;
+                for (unsigned k = 0; k < n; ++k) have |= lv[k] == x.mv;
+                if (!have && n < 8) lv[n++] = x.mv;
+            }
+        std::sort(lv, lv + n);
+        unsigned cell = 0;
+        while (cell < n && lv[cell] != st.mv) ++cell;
+        if (cell == n) continue;
+        const auto dots = running_dots();
+        if (dots.empty()) { ++none; continue; }
+        const int span = 208 - kGridCellsX;   // the cells run from the label column to the scroll gutter
+        const int want_x = kGridCellsX + (span * int(cell) * 2 + int(n)) / (2 * int(n));
+        ++checked; seen_mv |= 1u << (st.mv / 1000 - 1);
+        if (dots.size() != 1 || dots[0].first != want_x) ++wrong;
+    }
+    CHECK_EQ(checked > 3, true);
+    CHECK_EQ(seen_mv & (1u << 8), 1u << 8);    // 9 V
+    CHECK_EQ(seen_mv & (1u << 11), 1u << 11);  // 12 V
+    CHECK_EQ(wrong, 0u);
+    (void)none;
+}
+static void test_the_running_dot_follows_the_qc2_level() {
+    running_dot_follows_the_qc2_level(ct::Level::Medium);
+    running_dot_follows_the_qc2_level(ct::Level::Deep);
+}
 // A charger that answers no handshake fails every legacy unit at its first step. Those rows stay where the plan put them, so the
 // running row still has the finished ones above it (hardware 2026-11-08, FH22: the failed rows fell to a trailing "No reply"
 // row, the running SVOOC row sat at the top of the window with only pending rows below it).
@@ -6293,7 +6339,7 @@ int main() {
     test_a_row_in_an_engine_window_paints_nothing(); test_the_running_grid_follows_the_step(); test_a_light_run_bar_starts_empty_and_only_fills();
     test_the_gap_line_names_the_blocked_window(); test_a_started_row_that_ends_as_a_skip_still_logs_its_gap();
     test_a_handshake_window_says_why_the_screen_is_still(); test_the_running_screen_keeps_updating_through_a_qc_handshake();
-    test_failed_units_stay_above_the_running_row(); test_the_gauge_band_and_the_dot_move_in_the_same_tick();
+    test_failed_units_stay_above_the_running_row(); test_the_gauge_band_and_the_dot_move_in_the_same_tick(); test_the_running_dot_follows_the_qc2_level();
     test_a_manual_scroll_of_the_running_grid_holds_then_resumes();
     test_resume_self_and_bus_powered_present_no_rd();
     test_resume_host_powered_refusals();
