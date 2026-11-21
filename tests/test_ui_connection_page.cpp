@@ -358,9 +358,9 @@ static void test_source_tab_leaves_waiting_after_timeout() {
     CHECK_EQ(int(ui.link().waiting()), 0);             // the timeout ended the wait
 }
 
-// Place-page list geometry (Option B 208x240, x offset +16 for left OppRail in rot 0): rows from kit::kPlaceListY (46), pitch 20, value at logical x 52 (panel x 68).
+// Place-page list geometry (Option B 208x240, x offset +16 for left OppRail in rot 0): rows from kit::kPlaceListY (46), pitch 21, value at logical x 52 (panel x 68).
 static bool place_row_value_is(int idx, const char *text, uint16_t colour = kText) {
-    constexpr int kValX = kOppRailThickness + 52, kPitch = 20, kRowY0 = kit::kPlaceListY;
+    constexpr int kValX = kOppRailThickness + 52, kPitch = 21, kRowY0 = kit::kPlaceListY;
     constexpr int W = 204 - 52;
     const int y = kRowY0 + idx * kPitch;
     const int vy = y + kit::row_text_y(kPitch, 16);
@@ -1907,6 +1907,127 @@ static void test_cable_read_emarker_ux_paths() {
     g_stub.cc = 0;
 }
 
+static void setup_scrollable_device(Ui &ui, uint32_t &t) {
+    make_inline(ui, t);
+    g_stub.pm_online = true;
+    g_stub.pd_seen_attach = true;
+    g_stub.ol_facts.far_pd_message = true;
+    g_stub.caps.valid = true; g_stub.caps.spec_rev = 2; g_stub.caps.num_pdos = 1;
+    g_stub.caps.pdos[0] = {pd::PdoType::Fixed, 0, 5000, 5000, 3000, 15000};
+    g_stub.caps.raw_header = 0x1181; g_stub.caps.rx_count++;
+    for (int i = 0; i < 20; i++) ui.tick(t += 100);
+    ui.open_place(bench::Place::Device, t += 100);
+    settle(ui, t);
+    if (cp(ui).has_pages() && !cp(ui).actions_mode()) ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);
+    ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);
+    ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);
+    g_stub.iq_running = false;
+    g_stub.iq_status.phase = pd::IqPhase::Done;
+    g_stub.iq_status.ok_mask = pd::iq_bit(pd::IqStep::Identity) | pd::iq_bit(pd::IqStep::SinkCap) |
+                               pd::iq_bit(pd::IqStep::SinkCapExt) | pd::iq_bit(pd::IqStep::Revision) |
+                               pd::iq_bit(pd::IqStep::BatteryCap) | pd::iq_bit(pd::IqStep::BatteryStatus) |
+                               pd::iq_bit(pd::IqStep::MfrInfo) | pd::iq_bit(pd::IqStep::BattMfrInfo) |
+                               pd::iq_bit(pd::IqStep::Status) | pd::iq_bit(pd::IqStep::Svids) |
+                               pd::iq_bit(pd::IqStep::EprSinkCap);
+    g_stub.iq_status.id.valid = true; g_stub.iq_status.id.vid = 0x18D1; g_stub.iq_status.id.pid = 0x4EE7; g_stub.iq_status.id.vendor = "Google";
+    g_stub.iq_status.num_sink_pdos = 3;
+    g_stub.iq_status.sink_pdos = {0x3601912Cu, 0x0002D12Cu, 0xC0DC323Cu, 0, 0, 0, 0};
+    g_stub.iq_status.mfr.valid = true; std::strcpy(g_stub.iq_status.mfr.name, "Google LLC");
+    g_stub.iq_status.revision = 0x31200000u;
+    g_stub.iq_status.sink_ext_len = 24;
+    g_stub.iq_status.sink_ext[8] = 2; g_stub.iq_status.sink_ext[9] = 1;
+    g_stub.iq_status.sink_ext[17] = 0x2B;
+    g_stub.iq_status.sink_ext[19] = 27; g_stub.iq_status.sink_ext[20] = 37; g_stub.iq_status.sink_ext[23] = 100;
+    g_stub.iq_status.battery.valid = true; g_stub.iq_status.battery.design_dwh = 195; g_stub.iq_status.battery.last_full_dwh = 186;
+    g_stub.iq_status.battery_status.valid = true; g_stub.iq_status.battery_status.present = true;
+    g_stub.iq_status.battery_status.present_dwh = 149;
+    g_stub.iq_status.batt_mfr.valid = true; g_stub.iq_status.batt_mfr.vid = 0x04A9; g_stub.iq_status.batt_mfr.pid = 0x5678;
+    g_stub.iq_status.status.valid = true; g_stub.iq_status.status.internal_temp_c = 42;
+    g_stub.iq_status.status.temp_status = 2; g_stub.iq_status.status.present_input = 0x06; g_stub.iq_status.status.event_flags = 0x08;
+    g_stub.iq_status.num_svids = 2; g_stub.iq_status.svids[0] = 0xFF01; g_stub.iq_status.svids[1] = 0x18D1;
+    g_stub.iq_status.num_epr_pdos = 9;
+    if (cp(ui).actions_mode()) ui.on_button(Button::Back, ButtonEvent::Short, t += 100);
+    settle(ui, t);
+}
+
+static void test_device_scroll_thumb_reaches_bottom() {
+    Ui &ui = fresh_ui();
+    uint32_t t = 20000;
+    setup_scrollable_device(ui, t);
+    const int total = cp(ui).result_rows();
+    CHECK(total > ConnectionPage::kPlaceRows);
+    const int max_offset = total - ConnectionPage::kPlaceRows;
+    for (int i = 0; i < max_offset; i++) {
+        ui.on_button(Button::Plus, ButtonEvent::Short, t += 100);
+        settle(ui, t);
+    }
+    CHECK_EQ(cp(ui).window_first(), max_offset);
+    // Portrait content starts at x = kOppRailThickness (16), width = kTwinContentW (208).
+    // Scroll thumb (3 px wide, kInk3) sits at logical x = 205..207 -> panel x = 221..223.
+    const int thumb_x = kOppRailThickness + kTwinContentW - 2;
+    CHECK_EQ(g_panel[(kFooterY - 2) * LCD_WIDTH + thumb_x], kInk3);
+    CHECK_EQ(g_panel[(kFooterY - 1) * LCD_WIDTH + thumb_x], kInk3);
+    CHECK_EQ(g_panel[kit::kPlaceListY * LCD_WIDTH + thumb_x], kBg);
+}
+
+static void test_device_scroll_toast_stays_on_top() {
+    Ui &ui = fresh_ui();
+    uint32_t t = 20000;
+    setup_scrollable_device(ui, t);
+    const int total = cp(ui).result_rows();
+    CHECK(total > ConnectionPage::kPlaceRows);
+
+    ui.context().toast.show(FooterTone::Info, "OK again: resets link", t, kToastDefaultMs);
+    ui.tick(t += 100);
+    while (ui.painting()) ui.paint_more(t += 2);
+    CHECK(ui.context().toast.active(t));
+    CHECK(ui.context().toast.drawn);
+
+    // Snapshot the toast pill itself (the centered frame at y = 220..235, clear of the x=220..223 scroll lane).
+    constexpr int py = kFooterY - kToastH - kToastMarginBottom;
+    constexpr int x0 = kOppRailThickness + 4;
+    constexpr int w = kTwinContentW - 8;
+    std::vector<uint16_t> expected(static_cast<size_t>(kToastH) * w);
+    int pill_l = w, pill_r = -1;
+    for (int dy = 0; dy < kToastH; dy++) {
+        for (int dx = 0; dx < w; dx++) {
+            const uint16_t px = g_panel[(py + dy) * LCD_WIDTH + x0 + dx];
+            expected[static_cast<size_t>(dy) * w + dx] = px;
+            if (dy == 0 && px != kBg) {
+                if (dx < pill_l) pill_l = dx;
+                if (dx > pill_r) pill_r = dx;
+            }
+        }
+    }
+    CHECK(pill_r - pill_l + 1 > 32);
+
+    auto check_toast_band = [&]() {
+        for (int dy = 0; dy < kToastH; dy++) {
+            for (int dx = pill_l; dx <= pill_r; dx++) {
+                CHECK_EQ(g_panel[(py + dy) * LCD_WIDTH + x0 + dx], expected[static_cast<size_t>(dy) * w + dx]);
+            }
+        }
+    };
+
+    const int max_offset = total - ConnectionPage::kPlaceRows;
+    for (int i = 0; i < max_offset; i++) {
+        ui.on_button(Button::Plus, ButtonEvent::Short, t += 20);
+        check_toast_band();
+        while (ui.painting()) {
+            ui.paint_more(t += 2);
+            check_toast_band();
+        }
+    }
+    for (int i = 0; i < max_offset; i++) {
+        ui.on_button(Button::Minus, ButtonEvent::Short, t += 20);
+        check_toast_band();
+        while (ui.painting()) {
+            ui.paint_more(t += 2);
+            check_toast_band();
+        }
+    }
+}
+
 int main() {
     test_sink_tab_pd_body_shows_the_raw_vooc_note();
     test_sink_tab_no_pd_shows_the_raw_vooc_note();
@@ -1954,5 +2075,7 @@ int main() {
     test_cable_identity_positive_chips_and_no_trunc();
     test_device_place_telemetry_rows_and_live_repaints();
     test_cable_read_emarker_ux_paths();
+    test_device_scroll_thumb_reaches_bottom();
+    test_device_scroll_toast_stays_on_top();
     return test_report("test_ui_connection_page");
 }

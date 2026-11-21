@@ -205,7 +205,7 @@ static void test_pd_tabs_text() {
     for (uint8_t r = 0; r < 4; ++r) {
         ui.set_rotation(r, 1300);
         settle(ui, 1300);
-        check_text(ui, 4, 71, 50, 86, kLabelFont, "PD", kDim, kBg);   // key at x 4, row_y+5
+        check_text(ui, 4, 72, 50, 88, kLabelFont, "PD", kDim, kBg);   // key at x 4, row_y+5 (row 1 at y 67)
         parity(ui, 1300);
     }
     // Cable place: no cable read, so the identity headline names it.
@@ -235,10 +235,10 @@ static void test_source_fixed_rows_wrap() {
     for (uint8_t r = 0; r < 4; ++r) {
         ui.set_rotation(r, 1300);
         settle(ui, 1300);
-        // rows: ID (y 46), PD (66), Fixed (86), Fixed (106); value column x 52, text 3 px below the row top
-        check_text(ui, 52, 89, 204, 108, kSmall, "5/9/12/15/18/20V", kVolt, kBg);
-        check_text(ui, 52 + 16 * kSmall.adv, 89, 204, 108, kSmall, " 3A", kAmp, kBg);
-        check_text(ui, 52, 109, 204, 128, kSmall, "24V", kVolt, kBg, 15);
+        // rows: ID (y 46), PD (67), Fixed (88), Fixed (109); value column x 52, text 3 px below the row top
+        check_text(ui, 52, 91, 204, 111, kSmall, "5/9/12/15/18/20V", kVolt, kBg);
+        check_text(ui, 52 + 16 * kSmall.adv, 91, 204, 111, kSmall, " 3A", kAmp, kBg);
+        check_text(ui, 52, 112, 204, 132, kSmall, "24V", kVolt, kBg, 15);
         parity(ui, 1300);
     }
 }

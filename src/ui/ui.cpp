@@ -1117,6 +1117,7 @@ UiAction Ui::dispatch_button(Event event, uint32_t now_ms) {
             current().invalidate();
             paint_pending_ = true;
         }
+        if (ctx_.budget && ctx_.budget->more) paint_pending_ = true;
         sync_panel();
         if (uses_opp_rail()) sync_opp_rail();
     }

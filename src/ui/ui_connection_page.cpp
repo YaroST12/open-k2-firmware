@@ -509,9 +509,9 @@ void ConnectionPage::sense(uint32_t now_ms) {
 
 namespace {
 
-// Layout (Option B 208x240): identity block (kit::kIdY..kPlaceListY-1), then a place list of 9 x 20 px rows
+// Layout (Option B 208x240): identity block (kit::kIdY..kPlaceListY-1), then a place list of 9 x 21 px rows
 // (12 px dim key at x 4, 16 px value at x 52) with a 4 px scrollbar lane on the right.
-constexpr int16_t kRowPitch = 20, kValX = 52, kKeyX = 4;
+constexpr int16_t kRowPitch = 21, kValX = 52, kKeyX = 4;
 constexpr int kMaxList = 9;
 constexpr int kValCells = (208 - kValX - 4) / 8;   // 19 cells of S16 in the value column
 constexpr int kVisRows = kMaxList;   // row_sig_ capacity in ConnectionPage
@@ -1212,7 +1212,7 @@ constexpr int kPlaceSlots = (kFooterY - kPlaceListY) / kRowPitch;   // 9
 static_assert(kPlaceSlots == ConnectionPage::kPlaceRows && kPlaceSlots <= kVisRows, "a place page shows nine list rows under its identity block");
 static_assert(kValX + kValCells * 8 <= 208 - kLane, "the value column ends before the scroll lane");
 
-// The window of R (already windowed by the builder), painted from kPlaceListY down to the footer: one 20 px row per
+// The window of R (already windowed by the builder), painted from kPlaceListY down to the footer: one 21 px row per
 // slot, a slot repainted alone when its hash moved (Row D), the vacated slots cleared, and a 4 px lane at the right edge
 // for its scroll thumb.
 struct ListDrawState {
@@ -1312,7 +1312,7 @@ bool paint_thumb(const Surface &c, int first, int total, uint32_t &sig, PaintBud
     const ListState st{total, kPlaceSlots, first};
     if (!st.overflows()) { gfx_fill(c, x, kPlaceListY, kLane, band, kBg); return true; }
     int pos = 0, len = 0;
-    st.thumb(kPlaceSlots * kRowPitch, pos, len);
+    st.thumb(band, pos, len);
     const kit::Box thumb{static_cast<int16_t>(x + 1), static_cast<int16_t>(kPlaceListY + pos),
                          ListView::kBarW, static_cast<int16_t>(len)};
     kit::fill_except(c, {x, kPlaceListY, kLane, band}, &thumb, 1, kBg);
