@@ -37,6 +37,7 @@
 #include "k2/pd/pd_engine.hpp"
 #include "k2/pd/pd_identify.hpp"
 #include "k2/pd/pd_interrogate.hpp"
+#include "k2/pd/link_guard.hpp"
 #include "k2/pd/pd_link.hpp"
 #include "k2/pd/pd_probe.hpp"
 #include "k2/pd/pd_reread.hpp"
@@ -1641,7 +1642,7 @@ K2_HOT void service() {
     pdtrace::service_called();
     // Legacy-only: a source that kept announcing during its give-up cycle refilled the caps; once it has
     // been quiet they are stale and would make the inline guard refuse every legacy trigger (PdContract).
-    if (g_legacy_only && g_engine.caps.valid && pd_quiet_ms() >= 2000) g_engine.reset_source();
+    if (g_legacy_only && g_engine.caps.valid && pd_quiet_ms() >= link::kCapsStaleMs) g_engine.reset_source();
     // INT_N (or the 1 ms fallback) brings us here. Drain while the chip signalled again during the
     // pass or the RX FIFO was not empty; bounded so a stuck line cannot starve the main loop.
     for (int pass = 0; pass < 8; pass++) {

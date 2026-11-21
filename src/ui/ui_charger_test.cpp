@@ -294,8 +294,8 @@ fc::Fail ChargerTestSession::request_fc(fc::Proto p, int mv, bool retarget, int 
         if (fc_words_ && view_) view_->announce(fc_words_);   // before the engine starts: nothing can be painted once it has
     }
     if (retarget) return fctrig::set_target(mv, true, ufcs_ma, p == fc::Proto::Scp ? ma : -1);
-    // A PD-silent attach whose source is still announcing (quiet_ms below the caps' stale time) is not a contract; a load still refuses.
-    const bool silent_caps = ct::legacy_guard_override() && link::inline_now() == link::Reason::PdContract;
+    // A PD-silent attach whose source is still announcing (quiet_ms below the caps' stale time) is not a contract; a load or a foreign sink still refuses.
+    const bool silent_caps = ct::legacy_guard_override() && link::silent_caps_only_now();
     return fctrig::start(p, mv, true, silent_caps, ma, ufcs_ma);
 }
 void ChargerTestSession::fc_keep(bool on) { fctrig::keep(on); }

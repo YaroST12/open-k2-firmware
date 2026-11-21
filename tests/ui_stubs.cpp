@@ -77,6 +77,16 @@ Reason inline_now() {
     p.current_ma = g_stub.pm.current_ma;
     return inline_reason(p);
 }
+bool silent_caps_only_now() {
+    Probe p;
+    p.pd_active = g_stub.caps.valid && g_stub.caps.active_cc != 0;
+    p.cc_active = g_stub.caps.active_cc != 0;
+    p.sticky_inline = g_stub.link_inline;
+    p.vbus_known = p.current_known = g_stub.pm_online;
+    p.vbus_mv = g_stub.pm.vbus_mv;
+    p.current_ma = g_stub.pm.current_ma;
+    return silent_caps_only(p);
+}
 }  // namespace link
 
 #ifndef K2_WORLD_STUBS

@@ -47,5 +47,6 @@ bool pd_likely_now() { return pd_likely(probe_now()); }
 Reason inline_now() { return inline_reason(probe_now()); }
 
 bool far_sink_now() { return far_sink_draws(probe_now()); }
+bool silent_caps_only_now() { return silent_caps_only(probe_now()); }
 
 }  // namespace k2::link

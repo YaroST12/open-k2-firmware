@@ -5,6 +5,7 @@
 #include "k2/core/fmt.hpp"
 #include "k2/core/log.hpp"
 #include "k2/fastcharge/accp.hpp"
+#include "k2/pd/link_guard.hpp"
 #include "k2/pd/pd_link.hpp"
 #include "k2/fastcharge/qc.hpp"
 #include <algorithm>
@@ -282,7 +283,7 @@ bool legacy_tune_set(uint8_t knob, uint32_t value) {
     return true;
 }
 void legacy_tune_reset() { g_tune = kTuneDefault; }
-bool legacy_guard_override() { return quiet_ms() < kCapsStaleMs; }
+bool legacy_guard_override() { return quiet_ms() < link::kCapsStaleMs; }
 namespace {
 // "A Hard Reset happened on the link", whoever sent it: the sink counts the ones the K2 sent (hard_resets) and the ones the source
 // sent (source_hard_resets) apart, and the runner only ever compares this sum with a value it took from the same sum.
@@ -1578,6 +1579,13 @@ bool Runner::prog_wanted(const Step& s) const {
 uint32_t Runner::hold_left_ms(uint32_t now) const {
     return state_ == State::Holding ? hold_ms() - std::min(hold_ms(), now - phase_ms_) : 0;
 }
+void Runner::skip_group_rows(Group g, bool raises_only, uint8_t detail) {
+    for (size_t n = 0; n < count_; ++n) {
+        auto& o = steps_[n];
+        if (o.verdict != Verdict::Pending || o.group != g || (raises_only && o.mv <= 5000)) continue;
+        o.verdict = Verdict::Skip; o.reason = Reason::Request; o.detail = detail; env_.record(o);
+    }
+}
 void Runner::release(const Input& in, bool stop) {
     stopping_ = stop;
     if (stop) skip_pending(reason_);
@@ -1783,11 +1791,7 @@ void Runner::finish_row(const Input& in, Verdict v, Reason r, uint8_t detail) {
         // The held session hops to the next row inside this call, so the raise rows a no-change end rules out are skipped here, before it
         // (the failure path's own skip comes after finish() returns).
         if (v == Verdict::Fail && s.group == Group::Scp && s.mv > 5000 && detail == uint8_t(fc::Fail::NoChange) && !cut_wait_)
-            for (size_t n = 0; n < count_; ++n) {
-                auto& o = steps_[n];
-                if (o.verdict != Verdict::Pending || o.group != Group::Scp || o.mv <= 5000) continue;
-                o.verdict = Verdict::Skip; o.reason = Reason::Request; o.detail = detail; env_.record(o);
-            }
+            skip_group_rows(Group::Scp, true, detail);
         if (scp_next(in, v == Verdict::Pass) != SIZE_MAX) { next(in); return; }
         release(in, false);
     }
@@ -3077,12 +3081,7 @@ void Runner::poll_impl(Input& in, const pd::SourceCaps& caps) {
         // SCP acked a raise's setpoints and VBUS stayed put (the engine's NoChange): the unit takes writes and ignores them, so its
         // other raise rows would only repeat the 12 s wait and the output reset after it. The 4.5 V and 5 V rows still run.
         const bool scp_ignores_raise = group == Group::Scp && in.fc_fail == fc::Fail::NoChange && s.mv > 5000;
-        if (never_answered || scp_ignores_raise)
-            for (size_t n = 0; n < count_; ++n) {
-                auto& o = steps_[n];
-                if (o.verdict != Verdict::Pending || o.group != group || (!never_answered && o.mv <= 5000)) continue;
-                o.verdict = Verdict::Skip; o.reason = Reason::Request; o.detail = static_cast<uint8_t>(in.fc_fail); env_.record(o);
-            }
+        if (never_answered || scp_ignores_raise) skip_group_rows(group, !never_answered, static_cast<uint8_t>(in.fc_fail));
         return;
     }
     const bool banded = band_ok(eff, in, gap);

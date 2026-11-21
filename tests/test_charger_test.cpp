@@ -311,7 +311,7 @@ struct Fake final : ct::Env {
         if (ra_dead_legacy && ra_on) { ++ra_dead_fc; return fc::Fail::NoHandshake; }
         if (serve_caps && fc_requests >= serve_caps_from && (p == fc::Proto::Scp || p == fc::Proto::Ufcs)) in.fc_caps = serve_caps;
         if (glitch_at == fc_requests) ++in.session;   // CC blip: new session, VBUS unchanged
-        if (link_guard && handed && in.pd_quiet_ms < 2000) { ++guard_refusals; return fc::Fail::Inline; }
+        if (link_guard && handed && in.pd_quiet_ms < k2::link::kCapsStaleMs && !ct::legacy_guard_override()) { ++guard_refusals; return fc::Fail::Inline; }
         fc_times.push_back(in.now);
         if (no_response_proto == p && mv > 5000) {    // the engine gave up: the output never left 5 V
             in.fc_state = fc::State::Failed; in.fc_fail = fc::Fail::NoResponse; in.vbus_mv = 5000;
@@ -6142,9 +6142,9 @@ static void test_legacy_tune_knobs() {
     CHECK_EQ(ct::legacy_tune(ct::LegacyKnob::Chain), 0u);
     ct::legacy_tune_reset();
     CHECK_EQ(ct::legacy_guard_override(), false);                                       // the default waits the caps out: no override
-    CHECK_EQ(ct::legacy_tune_set(uint8_t(ct::LegacyKnob::QuietMs), ct::kCapsStaleMs - 1), true);
+    CHECK_EQ(ct::legacy_tune_set(uint8_t(ct::LegacyKnob::QuietMs), k2::link::kCapsStaleMs - 1), true);
     CHECK_EQ(ct::legacy_guard_override(), true);
-    CHECK_EQ(ct::legacy_tune_set(uint8_t(ct::LegacyKnob::QuietMs), ct::kCapsStaleMs), true);
+    CHECK_EQ(ct::legacy_tune_set(uint8_t(ct::LegacyKnob::QuietMs), k2::link::kCapsStaleMs), true);
     CHECK_EQ(ct::legacy_guard_override(), false);
     ct::legacy_tune_reset();
     CHECK_EQ(ct::legacy_tune_set(uint8_t(ct::LegacyKnob::GapMs), 60001), false);
@@ -8070,6 +8070,20 @@ static ScpRun run_scp_unit(unsigned chain, bool flat) {
     ct::legacy_tune_reset();
     return {{r.steps().begin(), r.steps().end()}, f.fc_mvs, f.retarget_log, f.fc_releases, f.keeps_on, f.in.now - t0};
 }
+// A cancel while the chained session runs (a row after a no-change end rides its kept lines) releases the lines at once.
+static void test_cancel_while_the_scp_session_is_kept_releases_it() {
+    Fake f; ct::Runner r(f);
+    const fc::Caps caps = scp_caps_of(3300, 12000, 1000, 2500);
+    f.caps = {}; f.serve_caps = &caps; f.no_change_proto = fc::Proto::Scp; f.model_held = true;
+    const auto o = with_units(ct::bit(A::Scp), {ct::Unit::Scp});
+    CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+    CHECK_EQ(run_until(f, r, [&] { return f.retargets >= 2; }, 600000), true);
+    const int rel = f.fc_releases;
+    r.cancel(f.in);
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Stopped || r.state() == ct::State::Done; }, 60000), true);
+    CHECK_EQ(f.in.fc_held, false);
+    CHECK_EQ(f.fc_releases > rel, true);
+}
 static void same_verdicts(const ScpRun& a, const ScpRun& b) {
     CHECK_EQ(a.steps.size(), b.steps.size());
     for (size_t i = 0; i < a.steps.size() && i < b.steps.size(); ++i) {
@@ -8230,6 +8244,24 @@ static void test_pd_traffic_before_the_release_still_skips_the_unit() {
     CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 600000), true);
     CHECK_EQ(count_unit_verdict(r, ct::Unit::Scp, ct::Verdict::Skip, ct::Reason::PdActive, false) > 0, true);
     CHECK_EQ(f.guard_refusals, 0);
+}
+// quiet_ms 0 starts the rows inside the source's announcement: the Runner's own Legacy start overrides the guard's "PD contract" (the UI
+// passes silent_caps), so no row is refused or skipped "PD active" by the source's own unanswered caps.
+static void test_quiet_zero_reaches_the_charger_through_the_attach_announcement() {
+    Fake f; ct::Runner r(f);
+    CHECK_EQ(ct::legacy_tune_set(uint8_t(ct::LegacyKnob::QuietMs), 0), true);
+    reannounce_setup(f, 100, 3000, 3000);
+    const auto o = with_units(ct::bit(A::Fcp) | ct::bit(A::Scp), {ct::Unit::Fcp, ct::Unit::Scp});
+    CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+    const uint32_t t0 = f.in.now;
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 600000), true);
+    CHECK_EQ(f.guard_refusals, 0);
+    for (const ct::Unit u : {ct::Unit::Fcp, ct::Unit::Scp}) {
+        CHECK_EQ(count_unit_verdict(r, u, ct::Verdict::Pass) > 0, true);
+        CHECK_EQ(count_unit_verdict(r, u, ct::Verdict::Skip, ct::Reason::PdActive, false), 0u);
+        CHECK_EQ(count_unit_verdict(r, u, ct::Verdict::Fail), 0u);
+    }
+    std::printf("quiet_ms 0: %u ms, refusals %d\n", f.in.now - t0, f.guard_refusals);
 }
 // An announcement that never stops is bounded by kRestartSettleMs: then the unit is PD active as before, the guard was never asked.
 static void test_endless_reannounce_after_a_release_is_bounded() {
@@ -9074,7 +9106,7 @@ int main() {
     test_a_dip_shorter_than_the_minimum_is_no_cut(); test_a_protocol_failure_after_a_clean_comeback_is_a_fail(); test_the_7s_cut_sequence_over_the_5v_steps_of_the_cuktech_run(); test_a_fall_in_a_raised_row_is_no_cut_casualty(); test_a_silent_vooc_family_on_a_7s_cut_port_ends_no_answer(); test_the_10_unit_run_over_every_cut_phase_ends_as_without_cuts();
     test_a_cut_in_the_first_baseline_waits_for_the_comeback(); test_a_baseline_dip_that_does_not_come_back_still_stops();
     test_custom_unit_list_runs_in_order(); test_pd_unit_attaches_with_a_contract(); test_a_failed_unit_does_not_stop_the_run();
-    test_default_unit_order_is_vendor_modes_then_pd_then_legacy(); test_default_order_runs_vendor_modes_before_pd_before_legacy(); test_pd_between_vendor_and_legacy_units(); test_pd_replan_in_the_middle_keeps_the_rows_in_order(); test_consecutive_legacy_units_share_one_attach(); test_legacy_session_that_sees_pd_traffic_is_renewed(); test_silent_ufcs_source_reports_no_response_not_pd_active(); test_legacy_waits_between_units(); test_legacy_tune_knobs(); test_scp_rows_share_one_session(); test_scp_no_change_held_session_takes_the_next_rows(); test_chain_knob_default_and_other_units();
+    test_default_unit_order_is_vendor_modes_then_pd_then_legacy(); test_default_order_runs_vendor_modes_before_pd_before_legacy(); test_pd_between_vendor_and_legacy_units(); test_pd_replan_in_the_middle_keeps_the_rows_in_order(); test_consecutive_legacy_units_share_one_attach(); test_legacy_session_that_sees_pd_traffic_is_renewed(); test_silent_ufcs_source_reports_no_response_not_pd_active(); test_legacy_waits_between_units(); test_legacy_tune_knobs(); test_scp_rows_share_one_session(); test_scp_no_change_held_session_takes_the_next_rows(); test_cancel_while_the_scp_session_is_kept_releases_it(); test_chain_knob_default_and_other_units();
     test_legacy_attach_that_never_falls_back_is_blocked_by_pd(); test_legacy_retry_that_falls_back_runs_the_unit(); test_legacy_attach_waits_out_hard_reset_cycles();
     test_silent_attach_source_that_revives_pd_does_not_go_unsafe(); test_silent_baseline_sag_that_never_returns_is_still_unsafe(); test_silent_sink_output_off_skips_legacy_units_and_runs_pd();
     test_later_unit_output_cut_in_its_baseline_is_a_lost_unit_not_unsafe(); test_later_unit_elevated_or_stuck_baseline_still_ends_unsafe();
@@ -9125,7 +9157,7 @@ int main() {
     test_self_powered_run_sweeps_from_5v();
     test_legacy_row_waits_through_a_source_restart(); test_legacy_restart_wait_is_bounded_and_a_load_still_refuses();
     test_legacy_units_chain_through_the_sources_reannounce_after_a_release(); test_scp_rows_are_not_pd_active_after_our_own_release();
-    test_a_quiet_source_is_watched_once_per_attach(); test_pd_traffic_before_the_release_still_skips_the_unit(); test_endless_reannounce_after_a_release_is_bounded(); test_load_during_the_reannounce_wait_stops_the_run(); test_reannounce_then_output_restart_on_the_same_unit(); test_a_reannounce_as_long_as_the_attach_flood_is_waited_out();
+    test_a_quiet_source_is_watched_once_per_attach(); test_pd_traffic_before_the_release_still_skips_the_unit(); test_endless_reannounce_after_a_release_is_bounded(); test_quiet_zero_reaches_the_charger_through_the_attach_announcement(); test_load_during_the_reannounce_wait_stops_the_run(); test_reannounce_then_output_restart_on_the_same_unit(); test_a_reannounce_as_long_as_the_attach_flood_is_waited_out();
     test_scp_ack_without_voltage_ends_early_and_skips_the_raises(); test_scp_no_change_without_restart_does_not_wait();
     test_level_maps_to_the_run_switches(); test_level_plans_per_level(); test_step_walk_is_planned_only_in_deep(); test_prog_check_flags_a_passing_programmable_row(); test_prog_check_clean_capture_changes_nothing();
     test_prog_check_without_a_capture_asks_nothing_more(); test_prog_check_follows_the_sweep_switches(); test_light_run_requests_nothing_but_5v(); test_light_lists_the_epr_levels_as_advertised();

@@ -29,4 +29,7 @@ Reason inline_now();
 // VOOC monitor's gate.
 bool far_sink_now();
 
+// Only the source's own unanswered caps hold the guard (silent_caps_only): no load, no foreign sink.
+bool silent_caps_only_now();
+
 }  // namespace k2::link

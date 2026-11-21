@@ -56,6 +56,14 @@ constexpr bool far_sink_draws(Probe p) {
     return inline_reason(p) == Reason::DataDevice;
 }
 
+// The PD driver drops Source_Capabilities nobody answered this long after the last frame (fusb302.cpp): until then a PD-silent
+// source's own announcements read as a PdContract.
+constexpr std::uint32_t kCapsStaleMs = 2000;
+
+// Only unanswered caps and nothing else behind the K2: the contract reason without a load or a foreign sink's latch. The one case
+// where the charger test's own Legacy start may override the guard.
+constexpr bool silent_caps_only(const Probe& p) { return inline_reason(p) == Reason::PdContract && !far_sink_draws(p); }
+
 constexpr int kPdLikelyMinMv = pd::kVSafe5MaxMv;   // above 5.5 V only a negotiated contract or a legacy trigger
 
 // CC attached, VBUS above 5.5 V and current flowing, but no Source_Capabilities seen (the K2 booted
