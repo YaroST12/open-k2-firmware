@@ -27,6 +27,8 @@ public:
     void enter() override { sel_ = 0; }
     const ListState &list_state() const { return ctx_.rows.state(); }
     int selected() const { return sel_; }
+    // The page is what the ring view shows of it as it stands: nothing selected away or scrolled.
+    bool ring_rest() const { return sel_ == 0 && ctx_.rows.state().offset == 0; }
     // The Log place (Bench > Log): the title and icon of the place, the verdict as a stamp over the findings, and a last row
     // that drills into the Black Box. Called before enter() and the first paint.
     void as_place();
