@@ -785,11 +785,13 @@ static void test_three_step_header() {
     CHECK_EQ(ui.charger_test_stage(), 4);
     check_header(ui, 3);
 }
+// Review's table rows sit from the body top at the kit pitch (the page's no-alert layout); y of row i's text line.
+static int review_row_y(int i) { return kit::kBodyY + i * kit::kRowH + kit::row_text_y(kit::kRowH, kSmall.height); }
 // Review's Spoof row (row 2 of the table, the value column at x72) is the identity the START presents. The armed state is not
 // part of the line: it is on the Cable step (the ARMED pill) and in the Refuse / Waiting stages.
 static void check_review_spoof(std::string_view text, uint16_t color) {
     char buf[kFitBuf];
-    const int y = 90 + 2 * 24 + kit::row_text_y(24, kSmall.height);
+    const int y = review_row_y(2);
     check_text_at(kSmall, y, "Spoof", kDim, kBg, 6);   // the key of the identity row
     check_text_at(kSmall, y, fit_data(kSmall, text, 17 * kSmall.adv, buf), color, kBg, 68);
 }
@@ -1069,23 +1071,42 @@ static void test_self_powered_review_note() {
         fixture(); g_stub.self_powered = self != 0;
         Ui ui; open(ui); review(ui);
         if (self) CHECK_EQ(footer_says("Self-powered: VBUS stays up", kText), true);
-        else CHECK_EQ(footer_says("Check the other port", kCaution), true);   // the default Review footer: the warning's one-line echo
+        else CHECK_EQ(ui.charger_test_view().message_len, 0);   // the default Review footer is empty: no fixed warning toast
     }
 }
-// Review ALWAYS carries the stern other-port warning (user decision 2026-11-15): the amber band, the two lines, the START ticket's
-// hint and the Caution footer, on a bare idle link, a self-powered K2 and under the Level row's cursor alike; START's own confirm is
-// the acknowledgement (one confirm per run, nothing more). The band word must also fit its box (no cut).
+constexpr int kReviewRuleY = 154, kReviewCellY = 156, kReviewCellH = 64;
+// The START ticket as the kit draws it with the hint under it: compared over the cell's rows on a copy of the panel.
+static bool start_cell_says(std::string_view hint) {
+    std::array<uint16_t, LCD_WIDTH * LCD_HEIGHT> keep;
+    std::copy_n(g_panel, keep.size(), keep.begin());
+    kit::ActionCell ref;
+    ref.init(kContent0, kReviewCellY, kReviewCellH);
+    ref.draw_idle("START", hint, nullptr, true);
+    unsigned diff = 0;
+    for (int y = kReviewCellY; y < kReviewCellY + kReviewCellH; ++y)
+        for (int x = 0; x < LCD_WIDTH; ++x) diff += keep[y * LCD_WIDTH + x] != g_panel[y * LCD_WIDTH + x];
+    std::copy(keep.begin(), keep.end(), g_panel);
+    return diff == 0;
+}
+// Review carries no alert band and no warning lines (user decision 2026-11-21): the other port is START's hint only. The table
+// starts at the body top, the rule and the 64 px ticket follow, and no amber is painted above the ticket (the Tests row is text).
+// The idle footer is empty: "Check the other port" only repeated the fixed warning, so no toast rides on a bare Review.
 static void test_review_carries_the_other_port_warning() {
-    CHECK_EQ(text_width(kMid, "OTHER PORT FREE") <= 240 - 36 - 4, true);   // the band's word box
-    for (unsigned mode = 0; mode < 3; ++mode) {
+    static_assert(kit::kBodyY + 5 * kit::kRowH <= kReviewRuleY && kReviewCellY + kReviewCellH <= kFooterY, "five rows, rule, ticket");
+    for (unsigned mode = 0; mode < 2; ++mode) {
         fixture(); g_stub.self_powered = mode == 1;
         Ui ui; open(ui); review(ui);
-        if (mode == 2) { press(ui, Button::Minus); settle(ui); CHECK_EQ(ui.charger_test_cursor(), 0); }   // the Level row
-        CHECK_EQ(PANEL[30 * LCD_WIDTH + 2], kCaution);   // the band's amber, left of the triangle
-        check_text_at(kMid, 8, "OTHER PORT FREE", kSpotInk, kCaution, 26);
-        check_text_at(kSmall, 48, "Device on the other port", kText, kBg, 6);
-        check_text_at(kSmall, 66, "can be damaged. Unplug it", kText, kBg, 6);
-        if (mode == 0) CHECK_EQ(footer_says("Check the other port", kCaution), true);
+        for (int y = kit::kBodyY; y < kReviewRuleY; ++y)
+            for (int x = 0; x < 208; ++x) CHECK_EQ(PANEL[y * LCD_WIDTH + x] != kCaution, true);   // no band, no amber text
+        check_text_at(kSmall, review_row_y(0), "Tests", kDim, kBg, 6);
+        check_text_at(kSmall, review_row_y(1), "Depth", kDim, kBg, 6);
+        check_text_at(kSmall, review_row_y(2), "Spoof", kDim, kBg, 6);
+        check_text_at(kSmall, review_row_y(3), "Peak", kDim, kBg, 6);
+        check_text_at(kSmall, review_row_y(4), "Power", kDim, kBg, 6);
+        check_text_at(kSmall, review_row_y(4), mode ? "From the charger" : "K2 on USB", kText, kBg, 68);
+        CHECK_EQ(start_cell_says("other port must be empty"), true);   // START's hint is the one reminder
+        CHECK_EQ(start_cell_says("something else"), false);
+        CHECK_EQ(ui.charger_test_view().message_len == (mode ? 27 : 0), true);   // empty, or the self-powered note
         if (mode == 1) CHECK_EQ(footer_says("Self-powered: VBUS stays up", kText), true);
         no_operations();
     }
@@ -1297,7 +1318,7 @@ static void test_depth_offers_value_and_the_forced_epr_spoof() {
     press(ui, Button::Ok); settle(ui);                                           // the Off row stays picked: on to Review
     CHECK_EQ(ui.charger_test_stage(), 4);
     ui.tick(1300);
-    const int depth_y = 90 + 1 * 24 + kit::row_text_y(24, kSmall.height);
+    const int depth_y = review_row_y(1);
     check_text_at(kSmall, depth_y, "Depth", kDim, kBg, 6);
     check_text_at(kSmall, depth_y, "Offers", kText, kBg, 68);
     check_review_spoof(std::string(emrec::builtin_info(1).label), kText);       // what the run will present, not "Off"
@@ -1415,7 +1436,7 @@ static void test_depth_row_cycles_and_shows_on_review() {
     CHECK_EQ(light < medium && medium < deep, true);
     // Advance to Review: Depth shows as a KV row ("Light"), Plus/Minus are no-ops, OK starts confirmation.
     review(ui); ui.tick(1300);
-    const int depth_y = 90 + 1 * 24 + kit::row_text_y(24, kSmall.height);
+    const int depth_y = review_row_y(1);
     check_text_at(kSmall, depth_y, "Depth", kDim, kBg, 6);
     check_text_at(kSmall, depth_y, "Light", kText, kBg, 68);
     press(ui, Button::Minus); settle(ui); CHECK_EQ(ui.charger_test_cursor(), 0);
@@ -5871,7 +5892,7 @@ static void test_view_says_what_the_wizard_shows() {
         CHECK_EQ(v.stage, 4); CHECK_EQ(v.rows, 1);   // START
         CHECK_EQ(v.preview.runnable > 0, true); CHECK_EQ(v.preview.refusal, ct::Reason::None);
         CHECK_EQ(v.confirming, false); CHECK_EQ(v.confirm_left_ms, 0u);
-        CHECK_STR(view_text(v).c_str(), "Check the other port");
+        CHECK_STR(view_text(v).c_str(), "");   // a bare Review has no footer message
         start_press(ui, 1300); ui.tick(1400);
         v = ui.charger_test_view();
         CHECK_EQ(v.confirming, true); CHECK_EQ(v.confirm_left_ms > 0 && v.confirm_left_ms <= Ui::kConfirmWindowMs, true);
