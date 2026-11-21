@@ -50,6 +50,7 @@ inline constexpr Timebase kTimebases[kTimebaseCount] = {
     {2000, 7, "2ms",   "2 ms/div"},
 };
 inline constexpr std::uint8_t kDefaultTimebase = 1;   // 50 us/div (200 us span, 1.07 MS/s)
+inline constexpr std::uint8_t kTimebaseSettingCount = kTimebaseCount + 1;   // 0 = Auto, 1..7 = fixed kTimebases[setting - 1]
 
 // Vertical scales: 0 = Auto, 1..6 = fixed mV/div (+-2 divs = +-2*mv_per_div full scale).
 inline constexpr std::uint8_t kScaleCount = 7;
@@ -84,6 +85,13 @@ std::int32_t delta_to_mv(std::int32_t delta_counts, std::uint16_t vref_raw);
 // Choose mV/div for a given peak AC excursion: returns the fixed scale when scale_idx > 0,
 // or the smallest nice step (20, 50, 100, 200, 500, 1000 mV/div) that holds peak_mv inside +-2 divs.
 std::uint16_t resolve_mv_per_div(std::uint8_t scale_idx, std::int32_t peak_mv);
+
+// Settings menu label for a timebase setting (0 = "Auto", 1..7 = kTimebases[setting - 1].menu_label).
+const char *timebase_menu_label(std::uint8_t setting);
+
+// Choose physical timebase index (0..kTimebaseCount-1) for Auto timescale from the current stats.
+// Pure 32-bit integer math with hysteresis (1.5..8.0 cycles across 4 divs).
+std::uint8_t resolve_auto_timebase(std::uint8_t cur_tb, const Stats &st);
 
 // Analyze a PA1 capture buffer for Vpp, Vrms, dominant frequency, and rising-edge trigger index.
 // `timebase_idx` selects the displayed window length (for clamping trigger_idx so the window fits).

@@ -66,6 +66,34 @@ std::uint16_t resolve_mv_per_div(std::uint8_t scale_idx, std::int32_t peak_mv) {
     return 1000;
 }
 
+const char *timebase_menu_label(std::uint8_t setting) {
+    if (setting == 0) return "Auto";
+    const std::uint8_t idx = setting - 1 < kTimebaseCount ? static_cast<std::uint8_t>(setting - 1) : kDefaultTimebase;
+    return kTimebases[idx].menu_label;
+}
+
+std::uint8_t resolve_auto_timebase(std::uint8_t cur_tb, const Stats &st) {
+    if (cur_tb >= kTimebaseCount) cur_tb = kDefaultTimebase;
+    if (!st.valid || st.below_floor) return cur_tb;
+
+    auto cycles_x10_for = [](std::uint8_t tb, std::uint32_t freq_hz) -> std::uint32_t {
+        const std::uint32_t win_us = std::uint32_t{kTimebases[tb].us_per_div} * kHorizDivs;
+        return (freq_hz >= 100000u) ? (win_us * (freq_hz / 1000u) / 100u)
+                                    : ((win_us * freq_hz) / 100000u);
+    };
+
+    if (st.freq_hz > 0) {
+        const std::uint32_t cur_cycles_x10 = cycles_x10_for(cur_tb, st.freq_hz);
+        if (cur_cycles_x10 >= 15u && cur_cycles_x10 <= 80u) return cur_tb;
+        for (std::uint8_t tb = 0; tb < kTimebaseCount; tb++) {
+            if (cycles_x10_for(tb, st.freq_hz) >= 25u) return tb;
+        }
+        return static_cast<std::uint8_t>(kTimebaseCount - 1);
+    }
+
+    return cur_tb + 1 < kTimebaseCount ? static_cast<std::uint8_t>(cur_tb + 1) : cur_tb;
+}
+
 Stats analyze(std::span<const std::uint16_t> samples, std::uint32_t period_ns, std::uint16_t vref_raw,
               std::uint8_t timebase_idx, Trigger trig) {
     Stats st;

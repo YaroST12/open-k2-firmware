@@ -126,7 +126,7 @@ struct UiContext {
         } pdstress;
         std::array<uint8_t, bench::kPlaces> place_sel K2_BSS_ZERO;  // each place's last action: repeating a job is OK, OK, OK
         struct Ripple {                                              // Meter > Ripple: persisted scope settings across face flips
-            uint8_t timebase = 1;                                    // ripple::kDefaultTimebase (50 us/div)
+            uint8_t timebase K2_BSS_INIT(0);                         // 0 = Auto, 1..7 = fixed kTimebases[timebase - 1]
             uint8_t scale K2_BSS_INIT(0);                            // 0 = Auto
             uint8_t trigger K2_BSS_INIT(0);                          // 0 = Auto, 1 = Free
             bool hold K2_BSS_INIT(false);
@@ -931,7 +931,7 @@ public:
     void set_actions_mode(bool on);
     bool actions_mode() const { return act_page_; }
     int action_row() const { return act_sel_; }   // the focused action row on Actions page, -1 = Info page
-    static constexpr int kPlaceRows = 9;   // 9 x 20 px fact rows under identity block (y 46..226, no footer)
+    static constexpr int kPlaceRows = 9;   // 9 x 21 px fact rows under identity block (y 46..235, no footer)
     kit::OppRailSpec opp_rail() const override {
         if (has_pages()) {
             return act_page_ ? kit::OppRailSpec{"ACTIONS", 2, 1, kit::OppTelemetry::WattCcDp}

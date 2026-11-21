@@ -9,6 +9,8 @@
 #include "k2/drivers/adc.hpp"
 #include "k2/drivers/lcd.hpp"
 #include "k2/ui/ui.hpp"
+#include "k2/ui/ui_style.hpp"
+#include "fake_lcd.h"
 #include "test_util.h"
 #include "ui_stubs.h"
 
@@ -72,17 +74,59 @@ void test_project_columns_span_and_continuity() {
     const uint32_t period_ns = adc::sample_period_ns(5, adc::kAdcClockHz);
     fill_sine(buf, 4000.0, period_ns, 120.0);
     const ripple::Stats st = ripple::analyze(buf, period_ns, 1489, 2, ripple::Trigger::Auto);
-    std::array<ripple::ColSpan, RipplePage::kPlotW> cols{};
-    ripple::project(buf, period_ns, 1489, st, 2, 50, RipplePage::kPlotH, cols);
+    constexpr int16_t kTestPlotW = 204;
+    constexpr uint8_t kTestPlotH = 192;
+    std::array<ripple::ColSpan, kTestPlotW> cols{};
+    ripple::project(buf, period_ns, 1489, st, 2, 50, kTestPlotH, cols);
     uint8_t top = 255, bot = 0;
     for (size_t x = 0; x < cols.size(); x++) {
         CHECK_COND(cols[x].lo <= cols[x].hi);
-        CHECK_COND(cols[x].hi < RipplePage::kPlotH);
+        CHECK_COND(cols[x].hi < kTestPlotH);
         if (cols[x].lo < top) top = cols[x].lo;
         if (cols[x].hi > bot) bot = cols[x].hi;
     }
-    CHECK_COND(top < RipplePage::kPlotH / 4);
-    CHECK_COND(bot > (RipplePage::kPlotH * 3) / 4);
+    CHECK_COND(top < kTestPlotH / 4);
+    CHECK_COND(bot > (kTestPlotH * 3) / 4);
+}
+
+void test_auto_timebase_resolution() {
+    CHECK_STR(ripple::timebase_menu_label(0), "Auto");
+    for (uint8_t i = 1; i < ripple::kTimebaseSettingCount; i++) {
+        CHECK_STR(ripple::timebase_menu_label(i), ripple::kTimebases[i - 1].menu_label);
+    }
+
+    ripple::Stats st{};
+    st.valid = true;
+    st.below_floor = false;
+
+    // Frequencies outside hysteresis should pick the smallest timebase with >= 2.5 cycles in 4 divs.
+    st.freq_hz = 60000;
+    CHECK_EQ(ripple::resolve_auto_timebase(4, st), 0u);   // 25us (6.0 cycles)
+    st.freq_hz = 24000;
+    CHECK_EQ(ripple::resolve_auto_timebase(4, st), 1u);   // 25us has 2.4 cycles (< 2.5) -> 50us (4.8 cycles)
+    st.freq_hz = 5400;
+    CHECK_EQ(ripple::resolve_auto_timebase(1, st), 3u);   // 200us (4.3 cycles)
+    st.freq_hz = 1200;
+    CHECK_EQ(ripple::resolve_auto_timebase(1, st), 5u);   // 1ms (4.8 cycles)
+    st.freq_hz = 100;
+    CHECK_EQ(ripple::resolve_auto_timebase(1, st), 6u);   // 2ms (clamped at slowest)
+
+    // Hysteresis: 1.5..8.0 cycles across 4 divs stays put on cur_tb.
+    st.freq_hz = 10000;   // at 50us (200us span): 2.0 cycles
+    CHECK_EQ(ripple::resolve_auto_timebase(1, st), 1u);
+    st.freq_hz = 35000;   // at 50us (200us span): 7.0 cycles
+    CHECK_EQ(ripple::resolve_auto_timebase(1, st), 1u);
+
+    // Below-floor signal stays put (don't hunt on flat noise).
+    st.below_floor = true;
+    st.freq_hz = 60000;
+    CHECK_EQ(ripple::resolve_auto_timebase(3, st), 3u);
+
+    // Above-floor with 0 crossings steps one timebase slower, clamped at kTimebaseCount - 1.
+    st.below_floor = false;
+    st.freq_hz = 0;
+    CHECK_EQ(ripple::resolve_auto_timebase(1, st), 2u);
+    CHECK_EQ(ripple::resolve_auto_timebase(ripple::kTimebaseCount - 1, st), ripple::kTimebaseCount - 1u);
 }
 
 void test_formatters() {
@@ -136,11 +180,28 @@ void test_ripple_page_navigation_and_settings() {
     ui.init(t);
     ui.goto_page(static_cast<uint8_t>(Page::Ripple), t);
     CHECK_COND(ui.page() == Page::Ripple);
+    // Default is Auto (0), which starts at kDefaultTimebase (code 0) and auto-switches 5 kHz -> 200us (tb 3, code 2).
     for (int i = 0; i < 6; i++) { t += 100; ui.tick(t); }
-    CHECK_COND(g_capture_calls >= 1);
-    CHECK_EQ(g_last_sample_code, ripple::kTimebases[ripple::kDefaultTimebase].sample_code);
+    CHECK_COND(g_capture_calls >= 2);
+    CHECK_EQ(g_last_sample_code, ripple::kTimebases[3].sample_code);
     // SPI3 boosted to /2 (60 MHz) while Ripple is active.
     CHECK_EQ(lcd::spi_div(), 2u);
+
+    // Check portrait (rot 0, content 208x240 at x0=16, y0=0) frame borders: x=1..206, y=45..238 -> panel x=17..222, y=45..238.
+    CHECK_EQ(g_panel[45 * 240 + 17], kRule);
+    CHECK_EQ(g_panel[45 * 240 + 222], kRule);
+    CHECK_EQ(g_panel[238 * 240 + 17], kRule);
+    CHECK_EQ(g_panel[238 * 240 + 222], kRule);
+
+    // Check landscape (rot 1, content 240x208 at x0=0, y0=16) frame borders: x=1..238, y=45..206 -> panel x=1..238, y=61..222.
+    ui.set_rotation(1, t);
+    for (int i = 0; i < 10; i++) { t += 100; ui.tick(t); }
+    CHECK_EQ(g_panel[61 * 240 + 1], kRule);
+    CHECK_EQ(g_panel[61 * 240 + 238], kRule);
+    CHECK_EQ(g_panel[222 * 240 + 1], kRule);
+    CHECK_EQ(g_panel[222 * 240 + 238], kRule);
+    ui.set_rotation(0, t);
+    for (int i = 0; i < 10; i++) { t += 100; ui.tick(t); }
 
     CHECK_COND(label_violation(ui.labels()) == nullptr);
 
@@ -149,10 +210,14 @@ void test_ripple_page_navigation_and_settings() {
     t += 100; ui.tick(t);
     CHECK_COND(label_violation(ui.labels()) == nullptr);
 
-    // Move to row 1 (Time / div) and cycle it twice: 50us (1) -> 100us (2) -> 200us (3, code 2).
+    // Move to row 1 (Time / div) and cycle through all 8 settings: Auto (0) -> 25us (1) -> ... -> 2ms (7) -> Auto (0).
     ui.on_button(Button::Plus, ButtonEvent::Short, t);
-    ui.on_button(Button::Ok, ButtonEvent::Short, t);
-    ui.on_button(Button::Ok, ButtonEvent::Short, t);
+    for (uint8_t s = 0; s < ripple::kTimebaseSettingCount; s++) {
+        ui.on_button(Button::Ok, ButtonEvent::Short, t);
+    }
+
+    // Cycle 4 times from Auto (0) to select 200us fixed (setting 4 -> kTimebases[3], code 2).
+    for (int i = 0; i < 4; i++) ui.on_button(Button::Ok, ButtonEvent::Short, t);
     // BACK closes settings and triggers fresh capture with code 2.
     ui.on_button(Button::Back, ButtonEvent::Short, t);
     const int before = g_capture_calls;
@@ -189,6 +254,7 @@ int main() {
     test_below_floor_noise();
     test_sine_vpp_rms_freq_and_trigger();
     test_project_columns_span_and_continuity();
+    test_auto_timebase_resolution();
     test_formatters();
     test_ripple_page_navigation_and_settings();
     return test_report("test_ripple");

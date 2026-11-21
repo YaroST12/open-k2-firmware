@@ -8,32 +8,34 @@
 #include "k2/drivers/adc.hpp"
 #include "k2/drivers/lcd.hpp"
 #include "k2/ui/kit.hpp"
+#include "k2/ui/ui_viewport.hpp"
 
 namespace k2 {
 
 namespace {
 
-constexpr int16_t kFrameX = RipplePage::kPlotX - 1;
-constexpr int16_t kFrameY = RipplePage::kPlotY - 1;
-constexpr int16_t kFrameW = RipplePage::kPlotW + 2;
-constexpr int16_t kFrameH = RipplePage::kPlotH + 2;
+constexpr int16_t kFrameX = 1;
+constexpr int16_t kFrameY = 45;
+constexpr int16_t kPlotX = 2;
+constexpr int16_t kPlotY = 46;
 
 constexpr int16_t kRow1Y = 4;
 constexpr int16_t kRow2Y = 26;
+
+int16_t plot_w_for(const Surface &S) {
+    return std::clamp<int16_t>(static_cast<int16_t>(S.w - 4), 1, RipplePage::kMaxPlotW);
+}
+
+int16_t plot_h_for(const Surface &S) {
+    return std::max<int16_t>(2, static_cast<int16_t>(S.h - 48));
+}
 
 bool budget_ok(PaintBudget *bg, int px, bool fill = false) {
     return !bg || bg->admit(px, true, fill);
 }
 
-constexpr int16_t kGridQ1X = RipplePage::kPlotW / 4;
-constexpr int16_t kGridMidX = RipplePage::kPlotW / 2;
-constexpr int16_t kGridQ3X = (RipplePage::kPlotW * 3) / 4;
-constexpr int16_t kGridQ1Y = RipplePage::kPlotH / 4;
-constexpr int16_t kGridMidY = RipplePage::kPlotH / 2;
-constexpr int16_t kGridQ3Y = (RipplePage::kPlotH * 3) / 4;
-
-uint32_t hash_chips(uint8_t tb, uint8_t sc, bool hold) {
-    return 1u + (uint32_t{tb} << 8) + (uint32_t{sc} << 4) + (hold ? 1u : 0u);
+uint32_t hash_chips(uint8_t tb, bool is_auto, uint8_t sc, bool hold) {
+    return 1u + (uint32_t{tb} << 9) + (is_auto ? (1u << 8) : 0u) + (uint32_t{sc} << 4) + (hold ? 1u : 0u);
 }
 
 }  // namespace
@@ -41,7 +43,6 @@ uint32_t hash_chips(uint8_t tb, uint8_t sc, bool hold) {
 void RipplePage::build_row(void *ctx, int index, bool focused, kit::RowSpec &out) {
     const auto &self = *static_cast<const RipplePage *>(ctx);
     const auto &cfg = self.ctx_.keep.ripple;
-    const uint8_t tb = cfg.timebase < ripple::kTimebaseCount ? cfg.timebase : ripple::kDefaultTimebase;
     const uint8_t sc = cfg.scale < ripple::kScaleCount ? cfg.scale : 0;
     const bool free_trig = cfg.trigger == static_cast<uint8_t>(ripple::Trigger::Free);
 
@@ -55,9 +56,9 @@ void RipplePage::build_row(void *ctx, int index, bool focused, kit::RowSpec &out
         break;
     case 1:
         out.text = "Time / div";
-        out.tail = ripple::kTimebases[tb].menu_label;
+        out.tail = ripple::timebase_menu_label(cfg.timebase);
         out.tail_color = kAccent;
-        if (focused) out.note = "Horizontal span (4 divs)";
+        if (focused) out.note = "Auto or fixed span (4 divs)";
         break;
     case 2:
         out.text = "Scale";
@@ -75,23 +76,30 @@ void RipplePage::build_row(void *ctx, int index, bool focused, kit::RowSpec &out
     }
 }
 
-void RipplePage::draw_static() {
-    title_bar();
-    const Surface &S = ctx_.content;
-    if (!ctx_.blank) gfx_fill(S, 0, kit::kBelowBar, S.w, static_cast<int16_t>(S.h - kit::kBelowBar), kBg);
-
-    vpp_f_.init(S, kSmall, 6, kRow1Y, 13, Align::Left, kText, kBg);
-    freq_f_.init(S, kSmall, 114, kRow1Y, 11, Align::Right, kAccent, kBg);
-    vrms_f_.init(S, kLabelFont, 6, kRow2Y, 13, Align::Left, kDim, kBg);
+void RipplePage::init_fields(const Surface &S) {
+    vpp_f_.init(S, kSmall, 4, kRow1Y, 13, Align::Left, kText, kBg);
+    freq_f_.init(S, kSmall, static_cast<int16_t>(S.w - 4 - 11 * kSmall.adv), kRow1Y, 11, Align::Right, kAccent, kBg);
+    vrms_f_.init(S, kLabelFont, 4, kRow2Y, 10, Align::Left, kDim, kBg);
     vpp_ink_ = kText;
     freq_ink_ = kAccent;
+}
 
+void RipplePage::draw_static() {
+    title_bar();
     if (settings_open_) {
+        const Surface &S = ctx_.content;
+        if (!ctx_.blank) gfx_fill(S, 0, kit::kBelowBar, S.w, static_cast<int16_t>(S.h - kit::kBelowBar), kBg);
         ctx_.rows.init(S, kit::kBodyY, &RipplePage::build_row, this);
         ctx_.rows.set_count(4);
         ctx_.rows.select(settings_sel_);
         ctx_.rows.invalidate();
     } else {
+        ContentViewport::Pause unscaled;
+        const Surface &S = ctx_.screen;
+        screen_w_ = S.w;
+        screen_h_ = S.h;
+        if (!ctx_.blank) gfx_fill(S, 0, 0, S.w, S.h, kBg);
+        init_fields(S);
         frame_ok_ = false;
         chip_sig_ = 0;
         for (ripple::ColSpan &c : shown_) c = {kNoCol, kNoCol};
@@ -132,8 +140,12 @@ void RipplePage::leave() {
 
 void RipplePage::enter_settings() {
     settings_open_ = true;
+    {
+        ContentViewport::Pause unscaled;
+        const Surface &S = ctx_.screen;
+        gfx_fill(S, 0, 0, S.w, S.h, kBg);
+    }
     const Surface &S = ctx_.content;
-    gfx_fill(S, 0, kit::kBelowBar, S.w, static_cast<int16_t>(S.h - kit::kBelowBar), kBg);
     ctx_.rows.init(S, kit::kBodyY, &RipplePage::build_row, this);
     ctx_.rows.set_count(4);
     ctx_.rows.select(settings_sel_);
@@ -144,8 +156,12 @@ void RipplePage::enter_settings() {
 void RipplePage::exit_settings() {
     ctx_.rows.detach();
     settings_open_ = false;
-    const Surface &S = ctx_.content;
-    gfx_fill(S, 0, kit::kBelowBar, S.w, static_cast<int16_t>(S.h - kit::kBelowBar), kBg);
+    ContentViewport::Pause unscaled;
+    const Surface &S = ctx_.screen;
+    screen_w_ = S.w;
+    screen_h_ = S.h;
+    gfx_fill(S, 0, 0, S.w, S.h, kBg);
+    init_fields(S);
     vpp_f_.invalidate();
     freq_f_.invalidate();
     vrms_f_.invalidate();
@@ -165,7 +181,10 @@ void RipplePage::take_sample(uint32_t now_ms) {
         return;
     }
     auto &cfg = ctx_.keep.ripple;
-    const uint8_t tb = cfg.timebase < ripple::kTimebaseCount ? cfg.timebase : ripple::kDefaultTimebase;
+    const bool is_auto_tb = cfg.timebase == 0;
+    const uint8_t tb = is_auto_tb ? (active_tb_ < ripple::kTimebaseCount ? active_tb_ : ripple::kDefaultTimebase)
+                                  : (cfg.timebase - 1 < ripple::kTimebaseCount ? static_cast<uint8_t>(cfg.timebase - 1)
+                                                                               : ripple::kDefaultTimebase);
     const uint8_t sc = cfg.scale < ripple::kScaleCount ? cfg.scale : 0;
     const auto trig = static_cast<ripple::Trigger>(cfg.trigger & 1u);
 
@@ -181,9 +200,29 @@ void RipplePage::take_sample(uint32_t now_ms) {
     adc_busy_ = false;
     const uint16_t vref = ctx_.analog ? ctx_.analog->vref_raw : 0;
     stats_ = ripple::analyze(buf, period_ns, vref, tb, trig);
+    uint8_t used_tb = tb;
+    if (is_auto_tb) {
+        const uint8_t next_tb = ripple::resolve_auto_timebase(tb, stats_);
+        if (next_tb != tb) {
+            active_tb_ = next_tb;
+            if (ripple::kTimebases[next_tb].sample_code == ripple::kTimebases[tb].sample_code) {
+                used_tb = next_tb;
+                stats_ = ripple::analyze(buf, period_ns, vref, used_tb, trig);
+            } else {
+                cap_due_ = true;
+            }
+        } else {
+            active_tb_ = tb;
+        }
+    } else {
+        active_tb_ = tb;
+    }
     const int32_t peak_mv = std::max(stats_.max_ac_mv, -stats_.min_ac_mv);
     mv_per_div_ = ripple::resolve_mv_per_div(sc, peak_mv);
-    ripple::project(buf, period_ns, vref, stats_, tb, mv_per_div_, static_cast<uint8_t>(kPlotH), cols_);
+    const int16_t pw = plot_w_for(ctx_.screen);
+    const int16_t ph = plot_h_for(ctx_.screen);
+    ripple::project(buf, period_ns, vref, stats_, used_tb, mv_per_div_, static_cast<uint8_t>(ph),
+                    std::span<ripple::ColSpan>(cols_.data(), static_cast<size_t>(pw)));
     scratch::release();
     have_sample_ = true;
     plot_col_ = 0;
@@ -192,69 +231,88 @@ void RipplePage::take_sample(uint32_t now_ms) {
 
 void RipplePage::draw_chips() {
     const auto &cfg = ctx_.keep.ripple;
-    const uint8_t tb = cfg.timebase < ripple::kTimebaseCount ? cfg.timebase : ripple::kDefaultTimebase;
+    const bool is_auto_tb = cfg.timebase == 0;
+    const uint8_t tb = is_auto_tb ? (active_tb_ < ripple::kTimebaseCount ? active_tb_ : ripple::kDefaultTimebase)
+                                  : (cfg.timebase - 1 < ripple::kTimebaseCount ? static_cast<uint8_t>(cfg.timebase - 1)
+                                                                               : ripple::kDefaultTimebase);
     const uint8_t sc = cfg.scale < ripple::kScaleCount ? cfg.scale : 0;
-    const uint32_t sig = hash_chips(tb, sc, cfg.hold);
+    const uint32_t sig = hash_chips(tb, is_auto_tb, sc, cfg.hold);
     if (sig == chip_sig_) return;
 
-    const Surface &S = ctx_.content;
+    const Surface &S = ctx_.screen;
     if (!budget_ok(ctx_.budget, 128 * 16, true)) return;
-    gfx_fill(S, 92, static_cast<int16_t>(kRow2Y - 1), static_cast<int16_t>(S.w - 92), 16, kBg);
+    constexpr int16_t kClearX = 66;
+    gfx_fill(S, kClearX, static_cast<int16_t>(kRow2Y - 1), static_cast<int16_t>(S.w - kClearX), 16, kBg);
 
-    int16_t x = static_cast<int16_t>(S.w - 6);
+    int16_t x = static_cast<int16_t>(S.w - 4);
     auto place_right = [&](const char *txt, uint16_t fill, uint16_t ink, bool framed) {
         const int16_t w = static_cast<int16_t>(std::string_view(txt).size() * kLabelFont.adv + 8);
         x = static_cast<int16_t>(x - w);
         if (framed) kit::draw_chip_frame(S, x, static_cast<int16_t>(kRow2Y - 1), txt, fill, ink, kBg);
         else kit::draw_chip(S, x, static_cast<int16_t>(kRow2Y - 1), txt, fill, ink);
-        x = static_cast<int16_t>(x - 4);
+        x = static_cast<int16_t>(x - 3);
     };
     if (cfg.hold) place_right("HOLD", kCaution, kBg, false);
     place_right(ripple::kScaleLabel[sc], kRule, kDim, true);
-    place_right(ripple::kTimebases[tb].label, kRule, kAccent, true);
+    StrBuf<12> tb_chip;
+    if (is_auto_tb) tb_chip.put("A ");
+    tb_chip.put(ripple::kTimebases[tb].label);
+    place_right(tb_chip.c_str(), kRule, kAccent, true);
     chip_sig_ = sig;
 }
 
-void RipplePage::draw_col(const Surface &S, int16_t x, ripple::ColSpan col, uint16_t trace_ink) {
+void RipplePage::draw_col(const Surface &S, int16_t x, int16_t plot_w, int16_t plot_h, ripple::ColSpan col, uint16_t trace_ink) {
     const int16_t sx = static_cast<int16_t>(kPlotX + x);
-    gfx_fill(S, sx, kPlotY, 1, kPlotH, kBg);
-    if (x == kGridQ1X || x == kGridMidX || x == kGridQ3X) {
-        for (int16_t y = 0; y < kPlotH; y = static_cast<int16_t>(y + 4))
+    const int16_t q1x = static_cast<int16_t>(plot_w / 4);
+    const int16_t midx = static_cast<int16_t>(plot_w / 2);
+    const int16_t q3x = static_cast<int16_t>((plot_w * 3) / 4);
+    const int16_t q1y = static_cast<int16_t>(plot_h / 4);
+    const int16_t midy = static_cast<int16_t>(plot_h / 2);
+    const int16_t q3y = static_cast<int16_t>((plot_h * 3) / 4);
+
+    gfx_fill(S, sx, kPlotY, 1, plot_h, kBg);
+    if (x == q1x || x == midx || x == q3x) {
+        for (int16_t y = 0; y < plot_h; y = static_cast<int16_t>(y + 4))
             gfx_fill(S, sx, static_cast<int16_t>(kPlotY + y), 1, 1, kRule);
     } else {
-        if ((x & 1) == 0) gfx_fill(S, sx, static_cast<int16_t>(kPlotY + kGridMidY), 1, 1, kRule);
+        if ((x & 1) == 0) gfx_fill(S, sx, static_cast<int16_t>(kPlotY + midy), 1, 1, kRule);
         if ((x & 3) == 0) {
-            gfx_fill(S, sx, static_cast<int16_t>(kPlotY + kGridQ1Y), 1, 1, kRule);
-            gfx_fill(S, sx, static_cast<int16_t>(kPlotY + kGridQ3Y), 1, 1, kRule);
+            gfx_fill(S, sx, static_cast<int16_t>(kPlotY + q1y), 1, 1, kRule);
+            gfx_fill(S, sx, static_cast<int16_t>(kPlotY + q3y), 1, 1, kRule);
         }
     }
-    if (col.lo <= col.hi && col.hi < kPlotH) {
+    if (col.lo <= col.hi && col.hi < plot_h) {
         const int16_t h = static_cast<int16_t>(col.hi - col.lo + 1);
         gfx_fill(S, sx, static_cast<int16_t>(kPlotY + col.lo), 1, h, trace_ink);
     }
 }
 
 bool RipplePage::paint_plot() {
-    const Surface &S = ctx_.content;
+    const Surface &S = ctx_.screen;
+    const int16_t frame_w = static_cast<int16_t>(S.w - 2);
+    const int16_t frame_h = static_cast<int16_t>(S.h - 46);
+    const int16_t plot_w = plot_w_for(S);
+    const int16_t plot_h = plot_h_for(S);
+
     if (!frame_ok_) {
-        if (!budget_ok(ctx_.budget, kFrameW * 2 + kFrameH * 2, true)) return false;
-        draw_frame(S, kFrameX, kFrameY, kFrameW, kFrameH, 1, kRule);
+        if (!budget_ok(ctx_.budget, frame_w * 2 + frame_h * 2, true)) return false;
+        draw_frame(S, kFrameX, kFrameY, frame_w, frame_h, 1, kRule);
         frame_ok_ = true;
     }
     if (!plot_dirty_) return true;
 
     const bool hold = ctx_.keep.ripple.hold;
     const uint16_t trace_ink = !have_sample_ ? kRule : hold ? kStale : stats_.below_floor ? kDim : kOk;
-    for (int16_t x = plot_col_; x < kPlotW; x++) {
+    for (int16_t x = static_cast<int16_t>(plot_col_); x < plot_w; x++) {
         const ripple::ColSpan want = have_sample_ ? cols_[x]
-                                                  : ripple::ColSpan{static_cast<uint8_t>(kPlotH / 2),
-                                                                    static_cast<uint8_t>(kPlotH / 2)};
+                                                  : ripple::ColSpan{static_cast<uint8_t>(plot_h / 2),
+                                                                    static_cast<uint8_t>(plot_h / 2)};
         if (shown_[x].lo == want.lo && shown_[x].hi == want.hi) continue;
-        if (!budget_ok(ctx_.budget, kPlotH, true)) {
-            plot_col_ = static_cast<uint8_t>(x);
+        if (!budget_ok(ctx_.budget, plot_h, true)) {
+            plot_col_ = static_cast<uint16_t>(x);
             return false;
         }
-        draw_col(S, x, want, trace_ink);
+        draw_col(S, x, plot_w, plot_h, want, trace_ink);
         shown_[x] = want;
     }
     plot_col_ = 0;
@@ -281,7 +339,17 @@ void RipplePage::update(uint32_t now_ms) {
         return;
     }
 
+    ContentViewport::Pause unscaled;
+    const Surface &S = ctx_.screen;
     const auto &cfg = ctx_.keep.ripple;
+    if (S.w != screen_w_ || S.h != screen_h_) {
+        screen_w_ = S.w;
+        screen_h_ = S.h;
+        init_fields(S);
+        invalidate();
+        if (!cfg.hold) cap_due_ = true;
+    }
+
     if (!cfg.hold && (cap_due_ || !have_sample_ || now_ms - last_cap_ms_ >= kRefreshMs)) {
         take_sample(now_ms);
     }
@@ -327,7 +395,7 @@ bool RipplePage::on_event(Event e) {
         if (e.button == Button::Ok) {
             switch (settings_sel_) {
             case 0: cfg.hold = !cfg.hold; break;
-            case 1: cfg.timebase = static_cast<uint8_t>((cfg.timebase + 1) % ripple::kTimebaseCount); break;
+            case 1: cfg.timebase = static_cast<uint8_t>((cfg.timebase + 1) % ripple::kTimebaseSettingCount); break;
             case 2: cfg.scale = static_cast<uint8_t>((cfg.scale + 1) % ripple::kScaleCount); break;
             case 3: cfg.trigger = static_cast<uint8_t>((cfg.trigger + 1) & 1u); break;
             }
