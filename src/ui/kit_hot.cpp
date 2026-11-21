@@ -14,6 +14,16 @@ namespace {
 constexpr int kTailMaxPx = 112;
 constexpr int16_t kChevW = 6;
 constexpr int kMaxHoles = 6;
+
+// Where a tail of `vw` px starts so it ends on kTailX. The landscape map stretches origins but not glyphs, so the logical
+// kTailX - vw would end further left the wider the text: anchor on the mapped right edge instead (to within a source column).
+int16_t tail_origin(const Surface &s, int16_t y, int vw) {
+    const int plain = kTailX - vw;
+    if (!ContentViewport::scaled()) return static_cast<int16_t>(plain);
+    const int edge = ContentViewport::mapped_rect({static_cast<int16_t>(s.x + kTailX), static_cast<int16_t>(s.y + y), 1, 1}).x;
+    const int col = ContentViewport::source_x(edge - vw);
+    return static_cast<int16_t>(col < 0 ? plain : col - s.x);
+}
 }  // namespace
 
 K2_HOT void fill_except(const Surface &s, Box r, const Box *holes, int n, uint16_t color) {
@@ -374,6 +384,7 @@ K2_HOT void RowList::draw_row_cb(void *ctx, int index, const Rect &r, bool hi, F
     };
     if (sp.marker != Marker::None) hole(kMarkX, static_cast<int16_t>(y + 7), kMarkSize, kMarkSize);
     std::string_view tail_v;
+    int16_t tail_x = 0;
     int pill_w = 0;
     if (sp.chevron) {
         right -= kChevW + kTailGap;
@@ -384,7 +395,8 @@ K2_HOT void RowList::draw_row_cb(void *ctx, int index, const Rect &r, bool hi, F
     } else if (!tail.empty()) {
         tail_v = fit_text(kSmall, tail, kTailMaxPx, tbuf);
         const int vw = text_width(kSmall, tail_v);
-        hole(static_cast<int16_t>(kTailX - vw), ty, vw, kSmall.height);
+        tail_x = tail_origin(s, ty, vw);
+        hole(tail_x, ty, vw, kSmall.height);
         right -= vw + 6;   // 6 px gap: a 5-char col2 value (40 px) fits beside a 48 px margin tail
     }
     std::string_view col2_v;
@@ -417,7 +429,7 @@ K2_HOT void RowList::draw_row_cb(void *ctx, int index, const Rect &r, bool hi, F
         gfx_text(s, kLabelFont, static_cast<int16_t>(px0 + 4), static_cast<int16_t>(py + 1), tail_v,
                  sp.tail_color, sp.tail_tint);
     } else if (!tail_v.empty()) {
-        gfx_text(s, kSmall, static_cast<int16_t>(kTailX - text_width(kSmall, tail_v)), ty, tail_v, sp.tail_color, bg);
+        gfx_text(s, kSmall, tail_x, ty, tail_v, sp.tail_color, bg);
     }
     const uint16_t dim = hi ? kOnFocusDim : kDim;
     if (!col2_v.empty()) gfx_text(s, kSmall, kCol2X, ty, col2_v, dim, bg);

@@ -305,6 +305,40 @@ static void test_tail_and_chevron() {
     CHECK_EQ(ink_in(215, 224, 95, 105, kBase), 0);
 }
 
+// Landscape stretches positions by 240/208 but not glyphs, so a tail anchored on its logical origin ends further left the wider
+// it is. Every tail must end on the same panel column, the mapped kTailX, to within the 1 px a column owner can round.
+static void test_tails_share_a_right_edge_when_scaled() {
+    const Rect dest[] = {{16, 0, 208, 240}, {0, 16, 240, 208}, {0, 0, 240, 208}};
+    const char *tails[] = {"1", "ON", "Medium", "Display", "Home"};
+    for (const Rect &d : dest) {
+        Model m; fill_model(m, 6);
+        for (int i = 0; i < 5; i++) m.tail[i] = tails[i];
+        lcd::fill(kBase);
+        const Surface logical{0, 0, 208, 240};
+        int lo = 999, hi = -1, want = 0;
+        {
+            ContentViewport viewport(d, 208, 240);
+            kit::RowList l;
+            l.init(logical, kit::kBodyY, row_fn, &m);
+            l.set_count(m.n); l.select(5); l.draw(1);
+            want = ContentViewport::mapped_rect({kit::kTailX, 0, 1, 1}).x;
+            for (int i = 0; i < 5; i++) {
+                const Rect box = ContentViewport::mapped_rect({0, static_cast<int16_t>(kit::kBodyY + i * 26 + 2), 208, 22});
+                int edge = -1;
+                for (int x = 239; x >= 150 && edge < 0; x--)
+                    for (int y = box.y; y < box.y + box.h; y++)
+                        if (px(x, y) != kBg && px(x, y) != kBase) { edge = x + 1; break; }
+                CHECK_EQ(edge > 0, true);
+                lo = std::min(lo, edge); hi = std::max(hi, edge);
+            }
+        }
+        if (hi - lo > 1) printf("  scaled tails %d,%d: right edges %d..%d, mapped kTailX %d\n", d.x, d.y, lo, hi, want);
+        CHECK_EQ(hi - lo <= 1, true);
+        CHECK_EQ(hi <= want, true);
+        CHECK_EQ(want - hi <= 1, true);
+    }
+}
+
 static void test_thumb_and_lane() {
     Model m; fill_model(m, 12);
     lcd::fill(kBase);
@@ -1348,6 +1382,7 @@ int main() {
     test_row_list_caches();
     test_markers();
     test_tail_and_chevron();
+    test_tails_share_a_right_edge_when_scaled();
     test_thumb_and_lane();
     test_verdict_cell();
     test_sweep_mark();

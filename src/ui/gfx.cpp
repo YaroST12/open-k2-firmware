@@ -42,9 +42,15 @@ K2_HOT void gfx_text(const Surface &s, const Font &f, int16_t x, int16_t y, std:
               uint16_t fg, uint16_t bg, int16_t cell_offset K2_TRUNC_DEF) {
     if (x < 0 || y < 0 || x >= s.w || y >= s.h || text.empty()) return;
     int px = text_width(f, text);
-    if (px > s.w - x - cell_offset) {
-        K2_TRUNC_NOTE(trunc::Kind::Clip, text, s.w - x - cell_offset);
-        px = s.w - x - cell_offset;
+    int room = s.w - x - cell_offset;
+    // Landscape stretches origins but not glyphs: text anchored on the mapped right edge may start in the last source columns
+    // yet still end inside the panel region, so the room is what the stretched span leaves.
+    if (px > room && ContentViewport::scaled())
+        room = ContentViewport::mapped_rect({static_cast<int16_t>(s.x + x), static_cast<int16_t>(s.y + y),
+                                             static_cast<int16_t>(s.w - x), 1}).w - cell_offset;
+    if (px > room) {
+        K2_TRUNC_NOTE(trunc::Kind::Clip, text, room);
+        px = room;
     }
     int rows = f.height;
     if (rows > s.h - y) rows = s.h - y;

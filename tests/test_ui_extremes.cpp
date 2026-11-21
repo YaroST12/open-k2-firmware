@@ -21,11 +21,19 @@
 using namespace k2;
 
 static void check_text(Ui &ui, int x, int y, int right, int bottom, const Font &font,
-                       std::string_view text, uint16_t fg, uint16_t bg, int rows = 0) {
+                       std::string_view text, uint16_t fg, uint16_t bg, int rows = 0, bool right_anchored = false) {
     const Rect box = compute_layout(orientation_for(ui.rotation()).edge, kSlotCenters,
                                     kSlotLens, kPanelThickness).twin_content;   // every page but Home: 208 x 240 logical
-    const int px = box.x + x * box.w / 208, py = box.y + y * box.h / 240;
     const int edge = box.x + right * box.w / 208, floor = box.y + bottom * box.h / 240;
+    int px = box.x + x * box.w / 208;
+    const int py = box.y + y * box.h / 240;
+    if (right_anchored) {   // a tail ends on the mapped right edge; the column that owns it may start one panel column earlier
+        uint16_t lut0[16], line0[240];
+        make_blend_lut(fg, bg, lut0);
+        const int n0 = render_row(font, text, 5, lut0, line0, 240);
+        px = edge - text_width(font, text);
+        if (!std::equal(line0, line0 + n0, g_panel + (py + 5) * LCD_WIDTH + px)) px--;
+    }
     CHECK_EQ(px + text_width(font, text) <= edge, true);
     CHECK_EQ(py + font.height <= floor, true);
     uint16_t lut[16], line[240];
@@ -278,7 +286,7 @@ static void test_trigger_ranges() {
         settle(ui, 1300);
         // The widest AVS row: text from x28, the power at the right edge (x166..198), on the focused row (y2..28).
         check_text(ui, 28, 8, 198, 27, kSmall, "AVS 25.5-51.1V", kText, kFocusT);
-        check_text(ui, 166, 8, 198, 27, kSmall, "255W", kWatt, kFocusT);
+        check_text(ui, 166, 8, 198, 27, kSmall, "255W", kWatt, kFocusT, 0, true);
         parity(ui, 1300);
     }
     ui.on_button(Button::Plus, ButtonEvent::Short, 1300);
