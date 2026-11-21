@@ -345,11 +345,11 @@ static void test_charger_page_flicker() {
     }
     std::printf("charger review idle with volatile inputs: worst %u body px per tick\n", review_idle);
     CHECK_EQ(review_idle, 0u);
-    // VBUS off the 5 V default refuses the start: that changes ActionCell (y 176..231) and the amber toast, nothing above.
+    // VBUS off the 5 V default refuses the start: that changes ActionCell (y 156..219) and the amber toast, nothing above.
     g_stub.pm.vbus_mv = 3000;
     r.measured([](ChargerRig &x) { x.tick(); });
-    std::printf("charger review refusal note: %u px, summary %u px\n", r.last_px, heat::touched_body(0, 176));
-    CHECK_EQ(heat::touched_body(0, 176), 0u);
+    std::printf("charger review refusal note: %u px, summary %u px\n", r.last_px, heat::touched_body(0, 156));
+    CHECK_EQ(heat::touched_body(0, 156), 0u);
     g_stub.pd_traffic = false; g_stub.pm.vbus_mv = 5000;
     r.tick(2);
     r.settle();
