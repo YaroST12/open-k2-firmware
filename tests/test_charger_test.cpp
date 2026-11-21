@@ -8926,6 +8926,29 @@ static void test_offers_asks_one_epr_avs_level_in_epr() {
     for (const auto& s : r.steps()) CHECK_EQ(s.reason == ct::Reason::CableLimit, false);   // the forced identity is never cable-unfit
 }
 // A cable that was read and is not 50 V / 5 A keeps EPR entry off (the forced identity applies only while nothing was read).
+// "Do not disturb the connection": a load that latches while the read runs ends it with Reason::Inline. Before the EPR entry nothing
+// is entered or asked; once in EPR, no AVS request follows. An inline load is never cut, so the run stops Unsafe (unplug) at once.
+static void test_offers_latch_before_the_epr_entry_asks_nothing() {
+    Fake f = epr_spoof_fake();
+    ct::Runner r(f);
+    CHECK_EQ(r.start(f.caps, ct::with_level({}, ct::Level::Offers), f.in, true), ct::Reason::None);
+    f.in.inline_load = true;
+    CHECK_EQ(run_until(f, r, [&] { return !r.busy() || r.state() == ct::State::Unsafe; }, 600000), true);
+    CHECK_EQ(f.entry_times.size(), size_t(0));
+    CHECK_EQ(requests_above_5v(f, 0, 0), 0u);
+    CHECK_EQ(int(r.state()), int(ct::State::Unsafe)); CHECK_EQ(int(r.reason()), int(ct::Reason::Release));   // an inline load is never cut: the unsafe stop
+}
+static void test_offers_latch_after_the_epr_entry_asks_no_avs() {
+    Fake f = epr_spoof_fake();
+    ct::Runner r(f);
+    CHECK_EQ(r.start(f.caps, ct::with_level({}, ct::Level::Offers), f.in, true), ct::Reason::None);
+    CHECK_EQ(run_until(f, r, [&] { return f.in.pd.epr_mode; }, 600000), true);
+    const size_t before = f.choices.size();
+    f.in.inline_load = true;
+    CHECK_EQ(run_until(f, r, [&] { return !r.busy() || r.state() == ct::State::Unsafe; }, 600000), true);
+    CHECK_EQ(f.choices.size(), before);   // nothing was asked after the latch: the engine leaves the charge alone ("unplug source")
+    CHECK_EQ(int(r.state()), int(ct::State::Unsafe)); CHECK_EQ(int(r.reason()), int(ct::Reason::Release));
+}
 static void test_offers_with_a_read_weak_cable_skips_the_epr_entry() {
     Fake f = epr_spoof_fake();
     f.in.cable_observed = true; f.in.cable_mv = 20000; f.in.cable_ma = 3000;
@@ -9568,6 +9591,7 @@ int main() {
     test_offers_asks_one_epr_avs_level_in_epr(); test_offers_asks_the_spr_avs_level_when_epr_is_refused(); test_offers_without_an_avs_offer_asks_nothing_above_5v();
     test_offers_never_asks_above_the_monitor_ceiling(); test_offers_masks_the_selection_to_pd(); test_offers_with_a_read_weak_cable_skips_the_epr_entry();
     test_depth_cycle_appends_offers(); test_offers_preview_is_pd_only_whatever_the_pick();
+    test_offers_latch_before_the_epr_entry_asks_nothing(); test_offers_latch_after_the_epr_entry_asks_no_avs();
     test_a_resumed_light_run_stays_light();
     test_the_page_names_the_run_level();
     test_spec_stage_runs_once_in_a_deep_pd_unit(); test_spec_stage_is_deep_only(); test_spec_refusal_is_recorded_and_the_run_goes_on(); test_spec_cancel_ends_in_order();

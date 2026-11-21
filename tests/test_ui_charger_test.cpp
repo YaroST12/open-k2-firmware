@@ -6032,6 +6032,7 @@ static void test_inline_at_entry_touches_nothing() {
     inline_now();
     CHECK_EQ(ui.charger_test_set_level(uint8_t(ct::Level::Offers)), true);
     for (uint32_t t = 1200; t < 3000; t += 20) ui.tick(t);
+    CHECK_EQ(ui.link().inline_mode(), true);                                     // the latch is real, not just the stub flag
     nothing_armed_stub(); no_operations();
     review(ui, 3100);                                                            // the Tests, Cable and Review steps read nothing either
     for (uint32_t t = 3200; t < 5000; t += 20) ui.tick(t);
