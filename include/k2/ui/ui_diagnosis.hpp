@@ -45,6 +45,9 @@ public:
     // The footer tone of a report: the worst finding's (Error, Caution), Ok only for a healthy link that had the power it
     // needed, Info otherwise (no session, a contract not seen, Info findings only).
     static FooterTone tone_of(const pd::diag::Report &r);
+    // The footer chip's tone: it speaks the link and power words ("Link OK, K2 is sink"), so only they colour it. A finding's
+    // own colour lives in the stamp and the list.
+    static FooterTone verdict_tone(const pd::diag::Report &r);
 
 private:
     static void row_fn(void *self, int index, bool focused, kit::RowSpec &out);

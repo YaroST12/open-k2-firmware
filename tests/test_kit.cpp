@@ -54,6 +54,7 @@ struct Model {
     kit::Marker marker = kit::Marker::Radio;
     int on = -1;      // the picked row (radio / check)
     bool notes = true;
+    uint16_t ink = 0;  // a row's text and tail colour (0 = the default)
 };
 void fill_model(Model &m, int n) {
     m.n = n;
@@ -69,6 +70,7 @@ void row_fn(void *ctx, int i, bool focused, kit::RowSpec &out) {
     out.state = static_cast<uint8_t>(i == m->on);
     out.text = m->text[i];
     out.tail = m->tail[i];
+    if (m->ink) out.text_color = out.tail_color = m->ink;
     out.note = focused ? std::string_view(m->note[i]) : std::string_view();
 }
 }  // namespace
@@ -337,6 +339,26 @@ static void test_tails_share_a_right_edge_when_scaled() {
         CHECK_EQ(hi <= want, true);
         CHECK_EQ(want - hi <= 1, true);
     }
+}
+
+// A blocked row's ink3 text is near invisible on the focus fill: the focused row lifts it to the focus-dim ink, the rest keep ink3.
+static void test_blocked_row_reads_on_the_focus_fill() {
+    Model m; fill_model(m, 3);
+    m.ink = kInk3;
+    lcd::fill(kBase);
+    kit::RowList l;
+    l.init(kSurf, kit::kBodyY, row_fn, &m);
+    l.set_count(m.n); l.select(1); l.draw(1);
+    const auto count = [](int y0, int y1, uint16_t c) {
+        int n = 0;
+        for (int y = y0; y < y1; y++)
+            for (int x = 0; x < 224; x++) n += px(x, y) == c;
+        return n;
+    };
+    const int fy = kit::kBodyY + kit::kRowH;   // the focused row, then the one below it
+    CHECK_EQ(count(fy, fy + kit::kRowH + kit::kFocusExtra, kInk3), 0);
+    CHECK_EQ(count(fy, fy + kit::kRowH + kit::kFocusExtra, kOnFocusDim) > 20, true);
+    CHECK_EQ(count(kit::kBodyY, fy, kInk3) > 20, true);
 }
 
 static void test_thumb_and_lane() {
@@ -1383,6 +1405,7 @@ int main() {
     test_markers();
     test_tail_and_chevron();
     test_tails_share_a_right_edge_when_scaled();
+    test_blocked_row_reads_on_the_focus_fill();
     test_thumb_and_lane();
     test_verdict_cell();
     test_sweep_mark();

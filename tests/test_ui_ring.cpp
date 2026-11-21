@@ -105,6 +105,17 @@ int main() {
     // The masthead names are 1-based and fit the rail's 9 characters.
     for (int i = 0; i < kCount; ++i) CHECK(mast_name(static_cast<Pos>(i))[0] != 0 && std::strlen(mast_name(static_cast<Pos>(i))) <= 9);
 
+    // One name per page: the masthead is the plain name in capitals behind its number ("4 GRAPHS" = "Graphs"), the page's own rail says GRAPHS.
+    for (int i = 0; i < kCount; ++i) {
+        const char *m = mast_name(static_cast<Pos>(i)), *n = name(static_cast<Pos>(i));
+        while (*m >= '0' && *m <= '9') ++m;
+        ++m;
+        bool same = std::strlen(m) == std::strlen(n);
+        for (size_t k = 0; same && n[k]; ++k) same = m[k] == (n[k] >= 'a' && n[k] <= 'z' ? n[k] - 'a' + 'A' : n[k]);
+        CHECK(same);
+    }
+    CHECK(std::strcmp(mast_name(Pos::Graph), "4 GRAPHS") == 0);
+
     // The persisted long-back target: out of range falls back to Home.
     CHECK(sanitize_target(0) == Pos::Home && sanitize_target(10) == Pos::K2);
     CHECK(sanitize_target(11) == Pos::Home && sanitize_target(255) == Pos::Home);
