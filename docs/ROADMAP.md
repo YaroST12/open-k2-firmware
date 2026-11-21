@@ -112,7 +112,7 @@ Open defects, newest first. A row leaves this list when its fix is merged and se
   Hardware 2026-11-21 (1.1.0-217-53dee143, Baseus 140 W, Deep `pd,qc2,pd-low`, `runs/hw-2026-11-21/151301-deep-mine/`):
   QC2 5/9/12 V pass and the running outline moved 5 V -> 12 V with 5 V and 9 V filled green (screenshots every ~3 s, so the
   ~1 s 9 V step was not caught on its own). Not reproduced; the UGREEN 65 W USB-A port (Deep, same build, `153343-ugreen-deep`) showed the same: the outline went
-  5 V -> 12 V on QC2 and followed QC3 5 -> 9 -> 12 -> 9 -> 5 V.
+  5 V -> 12 V on QC2 and followed QC3 5 -> 9 -> 12 -> 9 -> 5 V; the UGREEN USB-C port (`153757-ugreen-c-deep`) caught the outline on QC2 9 V.
 
 - **PPS Deep range label disagrees with the range being tested** (2026-11-21, user hardware report). The UI displays a
   `5V-21V` PPS range while the engine is visibly stepping through a `3.3V-5V` range (check APDO min/max formatting vs
@@ -121,7 +121,8 @@ Open defects, newest first. A row leaves this list when its fix is merged and se
   3.3-5.9V + 5-21V). Found and fixed on the way (98068797, host-tested): the Running header name cell clipped the low part
   "PPS 3.3-4.9V" to "PPS 3.3-...", so only the 5-21V part showed a readable range. Hardware 2026-11-21 (same run): this Baseus port offers
   PPS 5-11 V and 5-21 V (no 3.3 V APDO); walks 13->21->13->9->5 V and the 5..21 V sweep ran under the "PPS 5-21V" chip
-  and header, no mismatch. The 3.3-4.9 V header fix still needs a charger with a 3.3 V APDO.
+  and header, no mismatch. The UGREEN 65 W USB-C port (PPS 5-11 V, 5-21 V, SPR AVS 9-20 V;
+  `153757-ugreen-c-deep`, 30 pass / 0 fail) matched too. The 3.3-4.9 V header fix still needs a charger with a 3.3 V APDO.
 
 - **`K2_PDSTRESS=1` does not pass the gate: `ChargerTestSession::poll` needs 1056 B of stack** (2026-11-14, found on
   k2/bugbatch; pre-existing: the base tree gives the same warning). The PD Stress build pulls more inlined code into
