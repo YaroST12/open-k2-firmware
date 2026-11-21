@@ -75,7 +75,7 @@ const OfferBook &sync_book(const pd::Link &link) {
     was_fake = pd::is_fake();
     was_session = session;
     if (attached && link.waiting()) g_book.clear();   // the new source has not sent caps yet
-    else g_book.merge(held::shown_caps());   // the live caps, else the offers read's snapshot (the port was given back)
+    else g_book.merge(held::shown_caps());   // the live caps, else the held offers (core/held)
     return g_book;
 }
 
