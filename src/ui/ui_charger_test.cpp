@@ -1240,14 +1240,18 @@ void ChargerTestSession::guard_sample(uint32_t now) {
     guard_t_ = now;
     guard_.add(ctx_.analog ? ctx_.analog->cc1_mv : -1, ctx_.analog ? ctx_.analog->cc2_mv : -1);
 }
-raguard::Topology ChargerTestSession::guard_topology(uint32_t now, bool log) {
-    guard_sample(now);   // the freshest reading counts too: a dialog answered within one sample period still has two
+raguard::Reading ChargerTestSession::guard_reading() const {
     raguard::Reading r;
     r.cc1_mv = guard_.cc1(); r.cc2_mv = guard_.cc2();
     r.vbus_mv = ctx_.pm_online ? ctx_.vbus_fast_mv : -1;
     // Passive = nothing of ours on the lines: no run Rd, no Ra mode, no boot Rd, no sink inline. Anything else
     // changes what the lines read and the guard cannot judge.
     r.passive = !fusb302::rd_for_run_on() && !fusb302::ra_active() && !fusb302::self_powered() && !ctx_.inline_mode;
+    return r;
+}
+raguard::Topology ChargerTestSession::guard_topology(uint32_t now, bool log) {
+    guard_sample(now);   // the freshest reading counts too: a dialog answered within one sample period still has two
+    const auto r = guard_reading();
     const auto t = raguard::classify(r);
     if (log) K2LOG("[GUARD] cc1 %d cc2 %d vbus %d mV passive %d -> %s\n", int(r.cc1_mv), int(r.cc2_mv), int(r.vbus_mv), int(r.passive), raguard::name(t));
     return t;
@@ -1292,9 +1296,15 @@ int ChargerTestPage::range_spec_n() const {
 bool ChargerTestSession::confirm_live() const {
     return confirming_ && static_cast<int32_t>(ctx_.now - confirm_until_) < 0 && proposal(input(ctx_.now)) == confirm_proposal_;
 }
-// The identity START presents: the pick, or the EPR cable for a Read-offers run with no cable read (ctcable::run_choice).
+// The identity START presents (ctcable::run_choice). A Read-offers run lets the cable read answer, else the EPR spoof where the guard
+// allows it (the charger on the plug), else nothing: the EPR rows then skip as cable-limited and the SPR AVS step still runs.
 ctcable::Choice ChargerTestSession::run_choice() const {
-    return ctcable::run_choice(ctx_.cables.selected(), options_.level == ct::Level::Offers, physical_cable().observed);
+    return ctcable::run_choice(ctx_.cables.selected(), options_.level == ct::Level::Offers, physical_cable().observed,
+                               raguard::spoof_allowed(raguard::classify(guard_reading())));
+}
+bool ChargerTestSession::run_uses_cable() const {
+    const auto cable = physical_cable();
+    return options_.level == ct::Level::Offers && ctcable::epr_rated(cable.observed, cable.max_mv, cable.max_ma);
 }
 // The remote / test seam: select an identity in the shared list. A clone that is not in the library is refused.
 bool ChargerTestSession::set_cable_choice(ctcable::Choice c) {
@@ -2748,8 +2758,9 @@ void ChargerTestPage::paint_review() {
     if (!kv(1, "Depth", kLevelItems[level_segment(s_.options_.level)], kText)) return;
 
     buf.clear();
-    const auto sel = s_.run_choice();   // what the run presents: a Read-offers run brings the EPR cable itself
-    if (sel.kind == ctcable::Kind::Off) buf.put("Off");   // plain: a START with Off disarms whatever is armed
+    const auto sel = s_.run_choice();   // what the run presents: a Read-offers run follows the cable read and the guard
+    if (s_.run_uses_cable()) buf.put("Cable 50V 5A");   // the read cable answers the charger itself: no spoof
+    else if (sel.kind == ctcable::Kind::Off) buf.put("Off");   // plain: a START with Off disarms whatever is armed
     else {
         row_ = ctx_.cables.row(ctx_.cables.index_of(sel), CableIdentityList::View::CableStep);
         buf.put(row_.text.view());

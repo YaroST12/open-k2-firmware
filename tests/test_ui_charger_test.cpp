@@ -6045,6 +6045,73 @@ static void test_remote_offers_start_presents_the_epr_identity() {
     CHECK_EQ(g_stub.spoof_on, true); CHECK_EQ(g_stub.spoof_arms, 1);
     CHECK_EQ(ui.charger_test_cable_info().run == ctcable::kDefaultChoice, true);
 }
+// The Offers cable rule: (a) an EPR-rated cable read answers the charger itself (no spoof), (b) nothing read and the charger on the plug
+// = the EPR spoof, (c) anything else = no spoof, the EPR rows skip (the engine's CableLimit) and START is never refused for it.
+struct OffersCase { int cc1, cc2; bool read; uint16_t mv, ma; ctcable::Choice pick; };
+static void offers_review_and_start(const OffersCase& c, const char* spoof_line, bool spoof_armed) {
+    rd_fixture();   // no VBUS before the Rd: the guard judges the lines
+    g_stub.cable_limits.observed = c.read; g_stub.cable_limits.max_mv = c.mv; g_stub.cable_limits.max_ma = c.ma;
+    set_cc(c.cc1, c.cc2);
+    Ui ui; open(ui);
+    CHECK_EQ(ui.charger_test_set_cable(c.pick), true);
+    CHECK_EQ(ui.charger_test_set_level(uint8_t(ct::Level::Offers)), true);
+    review(ui);
+    for (uint32_t t = 1300; t < 2200; t += 20) ui.tick(t);   // the guard's window fills while Review is open
+    settle(ui, 2200);
+    check_review_spoof(spoof_line, kText);
+    for (uint8_t rot = 0; rot < 4; ++rot) { ui.set_rotation(rot, 2300 + rot); settle(ui, 2300 + rot); }   // every rotation lays out
+    ui.set_rotation(0, 2400); settle(ui, 2400);
+    nothing_armed_stub();
+    start_press(ui, 2500); confirm_press_nowait(ui, 2600);
+    CHECK_EQ(ui.charger_test_stage(), kWaitStage);   // started (Rd on, waiting for the charger), never refused for the spoof
+    CHECK_EQ(g_stub.rd_run, true);
+    CHECK_EQ(g_stub.spoof_on, spoof_armed); CHECK_EQ(g_stub.spoof_arms, spoof_armed ? 1 : 0);
+    CHECK_EQ(ui.charger_test_cable_info().run == (spoof_armed ? ctcable::kDefaultChoice : ctcable::Choice{}), true);
+    CHECK_EQ(ui.charger_test_cable_info().choice == c.pick, true);   // the stored pick stays whatever the run presented
+}
+static void test_offers_with_an_epr_cable_read_presents_the_cable() {   // (a)
+    offers_review_and_start({3300, 0, true, 50000, 5000, kBuiltin}, "Cable 50V 5A", false);   // a cable in between: the pick is a spoof, not presented
+    offers_review_and_start({3300, 3300, true, 50000, 5000, kOff}, "Cable 50V 5A", false);    // also on a plain receptacle reading
+}
+static void test_offers_with_nothing_read_and_the_charger_on_the_plug_spoofs() {   // (b)
+    offers_review_and_start({3300, 3300, false, 20000, 3000, kOff}, "EPR 50V 5A", true);
+    offers_review_and_start({3300, 3300, false, 20000, 3000, kBuiltin}, "EPR 50V 5A", true);
+}
+static void test_offers_otherwise_runs_without_the_spoof() {   // (c)
+    offers_review_and_start({3300, 0, false, 20000, 3000, kOff}, "Off", false);       // nothing read, a cable in between: the spoof cannot work
+    offers_review_and_start({3300, 0, false, 20000, 3000, kBuiltin}, "Off", false);   // a spoof pick does not push it through the guard
+    offers_review_and_start({3300, 3300, true, 20000, 3000, kBuiltin}, "Off", false); // a weaker cable was read: it answers, no spoof over it
+    offers_review_and_start({3300, 3300, true, 30000, 5000, kBuiltin}, "Off", false);
+}
+// Any other level keeps the pick and the guard: a spoof pick through a cable still lands on the Refuse stage.
+static void test_other_levels_still_meet_the_guard_with_a_cable_read() {
+    rd_fixture();
+    g_stub.cable_limits.observed = true; g_stub.cable_limits.max_mv = 50000; g_stub.cable_limits.max_ma = 5000;
+    set_cc(3300, 0);
+    Ui ui; open(ui);
+    CHECK_EQ(ui.charger_test_set_cable(kBuiltin), true);
+    review(ui);
+    for (uint32_t t = 1300; t < 2200; t += 20) ui.tick(t);
+    settle(ui, 2200);
+    check_review_spoof(std::string(emrec::builtin_info(1).label), kText);
+    start_press(ui, 2500); confirm_press_nowait(ui, 2600);
+    CHECK_EQ(ui.charger_test_stage(), kRefuseStage);
+    CHECK_EQ(g_stub.spoof_arms, 0);
+}
+// The remote START (tools/ct_start.py) follows the same rule: (c) is accepted and runs, no Refuse stage.
+static void test_remote_offers_start_without_a_spoof_is_not_refused() {
+    rd_fixture(); g_stub.cable_limits.observed = false; g_stub.cable_limits.max_mv = 20000; g_stub.cable_limits.max_ma = 3000;
+    set_cc(3300, 0);
+    Ui ui; open(ui);
+    ticks(ui, 1100, 3000);   // a dark charger: the link detaches and its list goes (a changed offer drops a confirmation)
+    CHECK_EQ(ui.charger_test_set_cable(kBuiltin), true);
+    CHECK_EQ(ui.charger_test_set_level(uint8_t(ct::Level::Offers)), true);
+    CHECK_EQ(ui.charger_test_start(false, 3000).result == RemoteStart::Result::Accepted, true);
+    ticks(ui, 3000, 3900);
+    CHECK_EQ(ui.charger_test_stage(), kWaitStage);                               // started, not the Refuse stage
+    CHECK_EQ(g_stub.spoof_on, false); CHECK_EQ(g_stub.spoof_arms, 0); CHECK_EQ(g_stub.ra_ons, 0);
+    CHECK_EQ(g_stub.rd_run, true);
+}
 // "Do not disturb the connection": a load behind the K2 (the inline latch) means nothing new transmits, whatever the level.
 static void inline_now() { g_stub.pm_online = true; g_stub.pm.vbus_mv = 3000; g_stub.pm.current_ma = 500; }   // a live sink on a part-way VBUS: the ticks latch the link
 static void test_inline_at_entry_touches_nothing() {
@@ -6598,6 +6665,9 @@ int main() {
     test_avs_sweep_row_follows_the_only_sweep_kind();
     test_the_default_run_is_medium();
     test_depth_offers_value_and_the_forced_epr_spoof(); test_other_levels_keep_the_spoof_pick(); test_remote_offers_start_presents_the_epr_identity();
+    test_offers_with_an_epr_cable_read_presents_the_cable(); test_offers_with_nothing_read_and_the_charger_on_the_plug_spoofs();
+    test_offers_otherwise_runs_without_the_spoof(); test_other_levels_still_meet_the_guard_with_a_cable_read();
+    test_remote_offers_start_without_a_spoof_is_not_refused();
     test_depth_row_cycles_and_shows_on_review();
     test_an_old_journal_resumes_without_the_default_sweep();
     test_self_powered_review_note(); test_review_carries_the_other_port_warning(); test_phantom_evidence_does_not_refuse_a_run_but_a_load_does(); test_self_powered_run_is_on_the_card(); test_a_cable_read_once_stays_with_the_run();

@@ -559,6 +559,27 @@ class CableDefaultRun(unittest.TestCase):
         rc, sent, text = self.run_main(["--wait", "5", "--cable", "builtin:cuktech-6a"])   # the older name of id 2
         self.assertEqual(sent[0], (1, 2))
 
+    def test_offers_says_the_run_decides_and_starts_in_every_case(self):
+        # the cable read answers (EPR-rated: no spoof); nothing read on the plug: the EPR spoof; else no spoof. None of them is a
+        # refusal, so ct_start prints the rule instead of the device's pick and starts
+        rc, sent, text = self.run_main(["--wait", "5", "--level", "offers"])
+        self.assertEqual(rc, 0)
+        self.assertNotIn("(the device's choice)", text)
+        self.assertIn("cable identity: decided by the run", text)
+        self.assertIn("cable read this attach", text)
+        self.assertNotIn("--cable off", text)
+        self.assertNotIn("ignored", text)
+
+    def test_offers_notes_that_cable_is_ignored(self):
+        rc, sent, text = self.run_main(["--wait", "5", "--level", "offers", "--cable", "off"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(sent[0], (0, 0))                 # still remembered by the device for the next levels
+        self.assertIn("--cable is ignored at --level offers", text)
+
+    def test_other_levels_keep_the_devices_choice_line(self):
+        rc, sent, text = self.run_main(["--wait", "5", "--level", "medium"])
+        self.assertIn("cable identity: builtin:1 (the device's choice)", text)
+
     def test_a_guard_refusal_exits_six_and_points_at_cable_off(self):
         rc, sent, text = self.run_main(["--wait", "5"], started=ct_start.REFUSED)
         self.assertEqual(rc, 6)
