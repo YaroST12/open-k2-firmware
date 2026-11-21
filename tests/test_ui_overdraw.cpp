@@ -17,6 +17,7 @@
 #include "k2/pd/pd_source.hpp"
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <vector>
 
 using namespace k2;
@@ -49,7 +50,7 @@ void fixture() {
 // remains on the screenshot path (Ui::render_for_capture), which costs no wire time.
 // The walk is tests/ui_walk.h (shared with test_ui_capture); the budgets sit in the same order.
 constexpr unsigned kN = kWalkN;
-constexpr unsigned kFullMax[kN] = {0, 0, 57100, 27500, 0, 0, 53000, 55000, 0, 57800, 98000, 19900, 43800, 49500, 55000, 57700, 55000, 57700};   // measured Option B twin-rail costs
+constexpr unsigned kFullMax[kN] = {0, 0, 57100, 27500, 0, 0, 53000, 55000, 0, 57800, 98000, 19900, 43800, 49500, 55000, 57700, 55000, 59100};   // measured Option B twin-rail costs; Diagnosis (the last) adds its floating verdict toast, laid over the body (2 720 px)
 constexpr const WalkDest *kDests = kWalkDests;
 // The worst page switch, as a multiple of the screen (ratchet, see full_max). A menu reached from a menu is two switches
 // (goto_page pops to the base page, then pushes), which is what the worst cell is.
@@ -62,6 +63,9 @@ constexpr double kOpaqueMaxX = 1.05;
 // switch is still the cheaper one (hardware-free host walk: Home -> Detail 1.34x opaque against 1.44x with the erase pass,
 // Detail -> Home 1.00x against 2.26x).
 constexpr double kScaledFullSlack = 1.25;
+// A page that floats a toast over its body (the Log verdict) pays the toast's pixels twice on entry and again to erase it on the
+// way out; a switch away from it may exceed the opaque bound by that much (16 px x ~170 px = 0.05 of the screen, 0.08 in rotation 2).
+constexpr double kToastSlackX = 0.09;
 constexpr double kScaledSwitchMaxX = 3.85;
 constexpr double kScaledOpaqueMaxX = 1.36;
 
@@ -231,8 +235,9 @@ void check_rotation(uint8_t rotation, bool print) {
             CHECK_EQ(g_diff[a][b], 0);
             if (kDests[b].opaque && walk_one_switch(a, b)) {
                 const double x = double(g_sw[a][b].sent) / kScreenPx;
-                if (x > opaque_max) std::printf("  OPAQUE TOO DEAR %s -> %s: %.2fx the screen\n", kDests[a].name, kDests[b].name, x);
-                CHECK_EQ(x <= opaque_max, true);
+                const double bound = opaque_max + (std::strcmp(kDests[a].name, "Diagnosis") == 0 ? kToastSlackX : 0.0);
+                if (x > bound) std::printf("  OPAQUE TOO DEAR %s -> %s: %.2fx the screen\n", kDests[a].name, kDests[b].name, x);
+                CHECK_EQ(x <= bound, true);
             }
         }
 }

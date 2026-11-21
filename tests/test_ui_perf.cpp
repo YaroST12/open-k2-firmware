@@ -12,6 +12,7 @@
 #include "ui_nav.h"
 #include "ui_stubs.h"
 #include "k2/drivers/lcd_timing.hpp"
+#include "k2/ui/run_layout.hpp"
 #include "k2/pd/pd_source.hpp"
 #include "k2/pd/emlib.hpp"
 #include "k2/pd/emrec.hpp"
@@ -500,19 +501,19 @@ static void test_results_grid_budgets() {
     r.tick(4); r.settle();
     // A move inside the window rewrites the rows that change focus (26 or 40 px each) and the footer line (it explains the
     // focused unit). A move that scrolls the window repaints every visible row: ResultGrid has no blit, so that is the
-    // cost of a scroll: the 168 x 208 window is 34 944 px plus one pill redraw after the last slice. Budgets: measured 21 850 / 44 080 +10 %.
+    // cost of a scroll: the 190 x 208 window is 39 520 px plus one pill redraw after the last slice. Budgets: measured 30 586 / 48 724 +10 %.
     unsigned worst_move = 0, worst_scroll = 0, scrolls = 0;
     for (int i = 0; i < 12; ++i) {
         r.measured([](ChargerRig &x) { x.press(Button::Plus); x.tick(4); x.settle(); });
-        const bool scrolled = heat::touched(72, 240) > 3 * kResRowPx;   // the window is y72..240
+        const bool scrolled = heat::touched(runlay::kResGridY, 240) > 3 * kResRowPx;   // the window is y50..240
         (scrolled ? worst_scroll : worst_move) = std::max(scrolled ? worst_scroll : worst_move, r.last_px);
         scrolls += scrolled;
-        CHECK_EQ(heat::touched(20, 72), 0u);   // the hero band, counters and summary strip stay as they are
+        CHECK_EQ(heat::touched(0, runlay::kResGridY), 0u);   // the counts band, best line and rules stay as they are
     }
-    std::printf("charger results selection move: worst %u px (budget 28000), scrolling move: worst %u px (budget 48500), %u scrolls\n",
+    std::printf("charger results selection move: worst %u px (budget 33700), scrolling move: worst %u px (budget 53600), %u scrolls\n",
                 worst_move, worst_scroll, scrolls);
-    CHECK_EQ(worst_move <= 28000, true);
-    CHECK_EQ(scrolls > 0 && worst_scroll <= 48500, true);
+    CHECK_EQ(worst_move <= 33700, true);
+    CHECK_EQ(scrolls > 0 && worst_scroll <= 53600, true);
     g_stub = old;
 }
 
