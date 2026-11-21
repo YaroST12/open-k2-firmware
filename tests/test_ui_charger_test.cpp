@@ -6044,16 +6044,22 @@ static void test_silent_qc_reads_no_reply_not_a_fail() {
         start_press(ui, 1300); press(ui, Button::Ok, 1400);
         g_stub.fc_start_hook = qc_silent;
         uint32_t t = 1500;
-        bool mid = false;
+        bool mid = false, late = false;
         for (; t <= 900000 && ui.charger_test_busy(); t += 100) {
             ui.tick(t);
             const auto& st = ui.charger_test_results().steps();
+            if (!late) for (const auto& y : st) if (y.algorithm == A::Ufcs && y.verdict == ct::Verdict::Skip) {
+                late = true; settle(ui, t);   // QC2, QC3 and UFCS all settled: three dim "No reply" cells
+                char nm[64]; std::snprintf(nm, sizeof nm, "qc_none_running_late_rot%u", unsigned(rot)); dump_panel(nm);
+                break;
+            }
             if (!mid && !st.empty() && st[0].algorithm == A::Qc2 && st[0].verdict == ct::Verdict::Skip) {
                 mid = true; settle(ui, t);
                 char nm[64]; std::snprintf(nm, sizeof nm, "qc_none_running_rot%u", unsigned(rot)); dump_panel(nm);
             }
         }
         CHECK_EQ(mid, true);
+        CHECK_EQ(late, true);
         g_stub.fc_start_hook = nullptr;
         g_stub.fc_status_fail = g_stub.fc_status_ident = 0;
         CHECK_EQ(ui.charger_test_stage(), 6);

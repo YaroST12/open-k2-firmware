@@ -389,6 +389,21 @@ def test_a_silent_protocol_reads_skipped_no_reply_on_a_card_and_a_run():
     assert "no reply" not in text and "no response" in text
 
 
+def test_a_silent_qc_or_ufcs_run_reads_no_reply_per_unit_and_class_b_too():
+    def row(p, res, mv, detail=6, why="no handshake"):
+        return {"protocol": p, "pos": 0, "result": res, "reason": "request failed", "detail": detail, "detail_reason": why,
+                "target_mv": mv, "measured_mv": 0, "continuous": False, "raw_pdo": 0}
+    for protos in (("qc2", "qc2b"), ("qc3",), ("qc3+",), ("ufcs",)):
+        run = {"run_id": 1, "state": "done", "reason": "none", "evidence": {},
+               "steps": [row(p, "skip", 5000 + 1000 * i) for i, p in enumerate(protos)]}
+        text = charger_summary.summarize(run)
+        assert "skipped, no reply" in text and "no handshake" not in text, protos
+    # QC2 heard (5 V passed), then 9 V fails: the engine's word stays
+    run["steps"] = [dict(row("qc2", "pass", 5000), reason="none", detail=0, detail_reason="none", measured_mv=5000), row("qc2", "fail", 9000)]
+    text = charger_summary.summarize(run)
+    assert "no reply" not in text and "no handshake" in text
+
+
 def test_card_summary_reads_a_qc3plus_skip_as_no_qc3plus():
     text = charger_summary.summarize_card(_card({"PD": {"verdict": "pass", "max_mv": 20000},
                                                  "QC3+": {"verdict": "skip", "reason": "no QC3+ response", "why": "no QC3+"}}))

@@ -138,6 +138,27 @@ test("FH22 #18: a protocol the charger never answered is grey with its reason, n
   assert.ok(afc.rows.every((r) => r.tone !== "fail"));
 });
 
+test("a QC / UFCS group whose first handshake got nothing is grey 'no reply'; a heard one that fails keeps the engine's word", () => {
+  const GROUPS = ["PD", "QC2", "QC3", "QC3+", "AFC", "FCP", "SCP", "VOOC", "SVOOC", "SVOOC65", "UFCS", "VIVO"];
+  const REQUEST_FAILED = 11, NO_HANDSHAKE = 6, SKIP = 3, FAIL = 2;
+  const put = (p, g, verdict, maxMv) => {   // one group's 4 bytes: verdict + reason, then detail | fail_mv | max_mv
+    const q = 56 + 4 * GROUPS.indexOf(g), v = NO_HANDSHAKE << 18 | maxMv / 100;
+    p.set([verdict << 6 | REQUEST_FAILED, v & 0xFF, v >> 8 & 0xFF, v >> 16 & 0xFF], q);
+  };
+  const p = payloadOf("fh22_full").slice();
+  for (const g of ["QC2", "QC3", "QC3+", "UFCS"]) put(p, g, SKIP, 0);
+  const b = K2Card.badges(K2Card.decodePayload(p));
+  for (const g of ["QC2", "QC3", "QC3+", "UFCS"]) {
+    const x = b.find((y) => y.id === "grp:" + g);
+    assert.equal(x.tone, "skip", g);
+    assert.equal(x.status, "no reply", g);
+  }
+  put(p, "QC2", FAIL, 9000);   // a handshake that was heard and then failed keeps the engine's word
+  const heard = K2Card.badges(K2Card.decodePayload(p)).find((y) => y.id === "grp:QC2");
+  assert.equal(heard.status, "no handshake");
+  assert.notEqual(heard.tone, "skip");
+});
+
 test("a protocol that answered and then failed stays amber; an AVS range cut short of its top is amber too", () => {
   const card = JSON.parse(JSON.stringify(K2Card.parseLink(golden.fh22_full.link).card));
   card.groups.QC3 = { verdict: "fail", max_mv: 9000, fail_mv: 12000, reason: "timeout" };
