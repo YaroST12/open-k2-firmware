@@ -114,7 +114,8 @@ Open defects, newest first. A row leaves this list when its fix is merged and se
   START woke the charger with Rd, every PPS sweep clean (`runs/soak-1121-172629/`). Inline latch on
   the same build (Joyroom 65 W on the bottom port, a phone on the top port charging at ~9 V 1.3 A): latched "sink request",
   START refused "load attached, latched by sink request"; after a K2 reboot under that load it latched "load" (the current
-  path through the filter) by 6 s after boot, and START refused again.
+  path through the filter) by 6 s after boot, and START refused again. Phone unplugged: the latch was clear at the first read
+  (~3 s later; CC2 back at open Rp 3.3 V, VBUS dark) and a START woke the Joyroom and ran (Light, pd: 1 pass, 0 fail).
 
 - **`make gate` fails at the tests on public since 3614728f** (2026-11-21, host). `test_ui_perf.cpp:516` (worst scroll over
   53600) and `test_ui_overdraw.cpp:227` (6 full-paint budgets) fail from 3614728f (place scrollbar to the bottom, toast
