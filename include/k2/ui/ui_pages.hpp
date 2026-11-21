@@ -432,7 +432,7 @@ private:
     void release_run();            // Rd, Ra mode and a dialog-armed spoof back to passive
     void guard_sample(uint32_t now);                 // one CC reading into the Ra guard's peak window
     raguard::Reading guard_reading() const;          // the window's peaks plus VBUS and the passive flag, no sample taken
-    raguard::Topology guard_topology(uint32_t now, bool log = true);  // what the lines say about the charger (cable / direct), judged now
+    raguard::Topology guard_topology(uint32_t now, bool log = true, bool sample = true);  // what the lines say about the charger (cable / direct), judged now
     void fill_cable_names();            // the saved names of the rows the Cable list shows (never loaded while painting)
     void set_stage(Stage, int selection = 0);
     void message(const char*);

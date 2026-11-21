@@ -6059,7 +6059,11 @@ static void offers_review_and_start(const OffersCase& c, const char* spoof_line,
     for (uint32_t t = 1300; t < 2200; t += 20) ui.tick(t);   // the guard's window fills while Review is open
     settle(ui, 2200);
     check_review_spoof(spoof_line, kText);
-    for (uint8_t rot = 0; rot < 4; ++rot) { ui.set_rotation(rot, 2300 + rot); settle(ui, 2300 + rot); }   // every rotation lays out
+    static int shown = 0; ++shown;
+    for (uint8_t rot = 0; rot < 4; ++rot) {   // every rotation lays out; K2_DUMP renders each case
+        char path[40]; std::snprintf(path, sizeof path, "offers_case%d_rot%u", shown, unsigned(rot));
+        ui.set_rotation(rot, 2300 + rot); settle(ui, 2300 + rot); dump_screen(path);
+    }
     ui.set_rotation(0, 2400); settle(ui, 2400);
     nothing_armed_stub();
     start_press(ui, 2500); confirm_press_nowait(ui, 2600);
@@ -6082,6 +6086,24 @@ static void test_offers_otherwise_runs_without_the_spoof() {   // (c)
     offers_review_and_start({3300, 0, false, 20000, 3000, kBuiltin}, "Off", false);   // a spoof pick does not push it through the guard
     offers_review_and_start({3300, 3300, true, 20000, 3000, kBuiltin}, "Off", false); // a weaker cable was read: it answers, no spoof over it
     offers_review_and_start({3300, 3300, true, 30000, 5000, kBuiltin}, "Off", false);
+}
+// The guard's window can turn from Direct to Cable on START's own fresh sample (the last Direct reading leaves the window):
+// the Read-offers run judges after that sample, so a choice made without it is never refused.
+static void test_offers_chooses_after_the_starts_own_sample() {
+    rd_fixture(); g_stub.cable_limits.observed = false; g_stub.cable_limits.max_mv = 20000; g_stub.cable_limits.max_ma = 3000;
+    set_cc(3300, 3300);
+    Ui ui; open(ui);
+    CHECK_EQ(ui.charger_test_set_level(uint8_t(ct::Level::Offers)), true);
+    review(ui);                                                   // the window holds one Direct reading
+    set_cc(3300, 0);
+    for (uint32_t t = 1300; t <= 1900; t += 100) ui.tick(t);      // seven Cable readings: Direct is still the peak of the eight
+    start_press(ui, 1950); confirm_press_nowait(ui, 1990);        // the START sample (Cable) evicts the Direct one
+    CHECK_EQ(ui.charger_test_stage(), kWaitStage);                // started without the identity, not the Refuse stage
+    CHECK_EQ(g_stub.spoof_on, false); CHECK_EQ(g_stub.spoof_arms, 0);
+    CHECK_EQ(ui.charger_test_cable_info().run == ctcable::Choice{}, true);
+    ticks(ui, 2000, 3500);                                        // VBUS comes up (the guard now reads Unknown): the run keeps what it started with
+    CHECK_EQ(g_stub.spoof_on, false); CHECK_EQ(g_stub.spoof_arms, 0);
+    CHECK_EQ(ui.charger_test_cable_info().run == ctcable::Choice{}, true);
 }
 // Any other level keeps the pick and the guard: a spoof pick through a cable still lands on the Refuse stage.
 static void test_other_levels_still_meet_the_guard_with_a_cable_read() {
@@ -6668,6 +6690,7 @@ int main() {
     test_offers_with_an_epr_cable_read_presents_the_cable(); test_offers_with_nothing_read_and_the_charger_on_the_plug_spoofs();
     test_offers_otherwise_runs_without_the_spoof(); test_other_levels_still_meet_the_guard_with_a_cable_read();
     test_remote_offers_start_without_a_spoof_is_not_refused();
+    test_offers_chooses_after_the_starts_own_sample();
     test_depth_row_cycles_and_shows_on_review();
     test_an_old_journal_resumes_without_the_default_sweep();
     test_self_powered_review_note(); test_review_carries_the_other_port_warning(); test_phantom_evidence_does_not_refuse_a_run_but_a_load_does(); test_self_powered_run_is_on_the_card(); test_a_cable_read_once_stays_with_the_run();

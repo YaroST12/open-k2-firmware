@@ -1249,8 +1249,8 @@ raguard::Reading ChargerTestSession::guard_reading() const {
     r.passive = !fusb302::rd_for_run_on() && !fusb302::ra_active() && !fusb302::self_powered() && !ctx_.inline_mode;
     return r;
 }
-raguard::Topology ChargerTestSession::guard_topology(uint32_t now, bool log) {
-    guard_sample(now);   // the freshest reading counts too: a dialog answered within one sample period still has two
+raguard::Topology ChargerTestSession::guard_topology(uint32_t now, bool log, bool sample) {
+    if (sample) guard_sample(now);   // the freshest reading counts too: a dialog answered within one sample period still has two
     const auto r = guard_reading();
     const auto t = raguard::classify(r);
     if (log) K2LOG("[GUARD] cc1 %d cc2 %d vbus %d mV passive %d -> %s\n", int(r.cc1_mv), int(r.cc2_mv), int(r.vbus_mv), int(r.passive), raguard::name(t));
@@ -1423,12 +1423,16 @@ void ChargerTestSession::open_confirmation() {
 void ChargerTestSession::confirmed_start() {
     const bool skip_spoof = skip_spoof_run_;   // "Start, skip spoof" on the Refuse stage: this run without the identity
     skip_spoof_run_ = false;                  // the stored pick stays; only this run carries no identity
+    // A Read-offers run chooses by the guard's own verdict, so the START sample is taken before it chooses and judges the same window:
+    // a choice made without it could turn into a refusal on it.
+    const bool offers = options_.level == ct::Level::Offers && !skip_spoof;
+    if (offers) guard_sample(ctx_.now);
     const auto choice = skip_spoof ? ctcable::Choice{} : run_choice();
     const bool bypass = guard_bypass_;   // "Start anyway" on the Cable-connected warning: the identity runs, the reading is recorded
     guard_bypass_ = false;
     run_guard_ = 0;
     if (choice.kind != ctcable::Kind::Off) {
-        topology_ = guard_topology(ctx_.now);
+        topology_ = guard_topology(ctx_.now, true, !offers);
         const bool refused = !raguard::spoof_allowed(topology_);
         if (refused && !bypass) { set_stage(Stage::Refuse); return; }
         run_guard_ = static_cast<uint8_t>((1 + static_cast<uint8_t>(topology_)) | (refused ? 0x80 : 0));
