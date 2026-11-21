@@ -1681,6 +1681,9 @@ static void test_settings_test_level_row() {
     CHECK_EQ(ui.context().keep.settings_sel, SettingsPage::kDisplayRow - 2);
     CHECK_STR(label(ui, Button::Ok), "Cycle");
     const int sets = g_stub.prefs_sets;
+    // The Tests step's Depth row may sit on Offers (run level 3); that is a draft, never stored, and the row cycles from the stored level.
+    CHECK_EQ(ui.charger_test_set_level(uint8_t(charger_test::Level::Offers)), true);
+    CHECK_EQ(g_stub.prefs.ct_level, 0); CHECK_EQ(g_stub.prefs_sets, sets);
     static constexpr uint8_t kNext[3] = {2, 1, 0};   // Deep, Light, Medium
     for (int i = 0; i < 3; i++) {
         press(ui, Button::Ok, ButtonEvent::Short, kT0 + 40 + i * 10);

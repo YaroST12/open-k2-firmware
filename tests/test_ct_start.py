@@ -358,7 +358,7 @@ class LevelOption(unittest.TestCase):
         self.assertEqual(ct_start.run_level(ct_start.parse_args([])), "medium")
 
     def test_each_level_parses(self):
-        for name in ("light", "medium", "deep"):
+        for name in ("light", "medium", "deep", "offers"):
             self.assertEqual(ct_start.run_level(ct_start.parse_args(["--level", name])), name)
 
     def test_an_unknown_level_is_refused(self):
@@ -377,6 +377,25 @@ class LevelOption(unittest.TestCase):
         for flag in ("--avs-sweep", "--sweep"):
             with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
                 ct_start.parse_args(["--level", "light", flag])
+
+
+class OffersLevel(unittest.TestCase):
+    """--level offers is the Read-offers preset: PD only, one AVS step. It takes no sweep, ceiling or unit flags, and it never
+    sends a SuperVOOC mode (that stage is Deep's)."""
+
+    def test_offers_parses_and_sends_no_svooc_mode(self):
+        a = ct_start.parse_args(["--level", "offers"])
+        self.assertEqual(ct_start.run_level(a), "offers")
+        self.assertIsNone(ct_start.svooc_mode(a))
+        self.assertIsNone(ct_start.pps_sweep(a))
+
+    def test_offers_is_a_wire_level(self):
+        self.assertEqual(ct_start.kr.TEST_LEVELS.index("offers"), 3)
+
+    def test_offers_with_a_sweep_ceiling_or_units_flag_is_refused(self):
+        for flags in (["--avs-sweep"], ["--sweep"], ["--svooc-cap", "on"], ["--units", "pd"]):
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                ct_start.parse_args(["--level", "offers"] + flags)
 
 
 class ReviewCursor(unittest.TestCase):

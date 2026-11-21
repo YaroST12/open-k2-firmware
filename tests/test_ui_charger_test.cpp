@@ -1267,6 +1267,70 @@ static void test_avs_sweep_row_follows_the_only_sweep_kind() {
 }
 // User decision 2026-11-15: the default run is the Medium level, without the deep sweeps; Deep turns both on (bits 31 PPS,
 // 30 AVS), and the draft carries the level in bits 28..29. The remote knob still turns one sweep off after that.
+// "Offers" is the Depth row's fourth value (Light -> Medium -> Deep -> Offers -> Light): the Review line says so, the preset picked
+// stays as it was (Offers -> Light finds it again) but the run is the PD plan whatever it is, and the run presents the EPR cable
+// itself while the Settings spoof is Off: the Review Spoof line shows it, START arms it, the stored pick stays Off.
+static void dump_screen(const char* name);
+static void test_depth_offers_value_and_the_forced_epr_spoof() {
+    fixture(); Ui ui; open(ui);
+    CHECK_EQ(ui.charger_test_set_cable(ctcable::Choice{}), true);               // Settings spoof: Off
+    top(ui); press(ui, Button::Ok); settle(ui);                                  // Medium -> Deep
+    CHECK_EQ(ui.charger_test_selection() >> 28, 0xEu);
+    press(ui, Button::Ok); settle(ui);                                           // Deep -> Offers
+    CHECK_EQ(ui.charger_test_cursor(), kDepthRow);
+    CHECK_EQ((ui.charger_test_selection() >> 28), unsigned(ct::Level::Offers));  // no sweep rides on it
+    CHECK_EQ(algos(ui), ct::kDefaultAlgorithms);                                 // the picked set is kept for the way back
+    check_row_text(kDepthRow, "Depth", kText, kFocusFill, kDepthRow, 150);
+    check_row_note(kDepthRow, "Lists offers, one AVS request");
+    for (uint8_t rot = 0; rot < 4; ++rot) {                                      // K2_DUMP: the Tests list in every rotation
+        char path[40]; std::snprintf(path, sizeof path, "offers_tests_rot%u", unsigned(rot));
+        ui.set_rotation(rot, 1500 + rot); settle(ui, 1500 + rot); dump_screen(path);
+    }
+    ui.set_rotation(0, 1600); settle(ui, 1600);
+    const unsigned offers_all = ui.charger_test_view().preview.runnable;
+    pick_row(ui, kPdRow); press(ui, Button::Back); settle(ui);                  // PD only, back on Tests
+    CHECK_EQ(ui.charger_test_view().preview.runnable, offers_all);              // legacy rows are not in an Offers plan, PD pick or not
+    pick_row(ui, kLegacyRow); press(ui, Button::Back); settle(ui);
+    CHECK_EQ(ui.charger_test_view().preview.runnable, offers_all);              // a legacy-only pick plans the PD list
+    top(ui); move(ui, kAllRow); press(ui, Button::Ok); settle(ui);              // All tests: on to the Cable step
+    CHECK_EQ(ui.charger_test_stage(), 2);
+    press(ui, Button::Ok); settle(ui);                                           // the Off row stays picked: on to Review
+    CHECK_EQ(ui.charger_test_stage(), 4);
+    ui.tick(1300);
+    const int depth_y = 90 + 1 * 24 + kit::row_text_y(24, kSmall.height);
+    check_text_at(kSmall, depth_y, "Depth", kDim, kBg, 6);
+    check_text_at(kSmall, depth_y, "Offers", kText, kBg, 68);
+    check_review_spoof(std::string(emrec::builtin_info(1).label), kText);       // what the run will present, not "Off"
+    for (uint8_t rot = 0; rot < 4; ++rot) {
+        char path[40]; std::snprintf(path, sizeof path, "offers_review_rot%u", unsigned(rot));
+        ui.set_rotation(rot, 1700 + rot); settle(ui, 1700 + rot); dump_screen(path);
+    }
+    ui.set_rotation(0, 1800); settle(ui, 1800);
+    CHECK_EQ(g_stub.spoof_on, false);                                            // nothing armed before START
+    start_run(ui, 1900);
+    CHECK_EQ(ui.charger_test_busy(), true);
+    CHECK_EQ(ui.charger_test_results().level(), ct::Level::Offers);
+    CHECK_EQ(g_stub.spoof_on, true); CHECK_EQ(g_stub.spoof_arms, 1);            // the EPR identity answers the charger's cable check
+    CHECK_EQ(ui.charger_test_cable_info().run == ctcable::kDefaultChoice, true);
+    CHECK_EQ(ui.charger_test_cable_info().choice == ctcable::Choice{}, true);   // the stored pick stays Off
+}
+// Any other level keeps the pick as it is: Off arms nothing, and Review says Off. The way back round the cycle finds the preset.
+static void test_other_levels_keep_the_spoof_pick() {
+    fixture();
+    {
+        Ui ui; open(ui);
+        CHECK_EQ(ui.charger_test_set_cable(ctcable::Choice{}), true);
+        review(ui); ui.tick(1300);
+        check_review_spoof("Off", kText);
+        start_run(ui, 1400);
+        CHECK_EQ(ui.charger_test_busy(), true);
+        CHECK_EQ(g_stub.spoof_on, false); CHECK_EQ(g_stub.spoof_arms, 0);
+    }
+    fixture(); Ui again; open(again);
+    top(again); for (int i = 0; i < 4; ++i) { press(again, Button::Ok); settle(again); }   // Medium -> Deep -> Offers -> Light -> Medium
+    CHECK_EQ(again.charger_test_selection() >> 28, 0u);
+    CHECK_EQ(algos(again), ct::kDefaultAlgorithms);
+}
 static void test_the_default_run_is_medium() {
     fixture(); Ui ui; open(ui);
     CHECK_EQ(ui.charger_test_selection() >> 28, 0u);                   // Medium, no sweep
@@ -1276,7 +1340,10 @@ static void test_the_default_run_is_medium() {
     CHECK_EQ(ui.charger_test_selection() >> 28, 0x6u);                 // the AVS sweep stays, the level stays Deep
     CHECK_EQ(ui.charger_test_set_level(uint8_t(ct::Level::Light)), true);
     CHECK_EQ(ui.charger_test_selection() >> 28, 0x1u);
-    CHECK_EQ(ui.charger_test_set_level(3), false);                     // no such level
+    CHECK_EQ(ui.charger_test_set_level(uint8_t(ct::Level::Offers)), true);   // the Depth row's fourth value
+    CHECK_EQ(ui.charger_test_selection() >> 28, 3u);                   // no sweep rides on it
+    CHECK_EQ(ui.charger_test_set_level(4), false);                     // no such level
+    CHECK_EQ(ui.charger_test_set_level(uint8_t(ct::Level::Light)), true);
     // The SVOOC ceiling stage follows the level (Deep only); a usb-a waiver survives Deep and is dropped below it.
     CHECK_EQ(ui.charger_test_svooc_cap(), 0u);                         // Light: off
     CHECK_EQ(ui.charger_test_set_level(uint8_t(ct::Level::Deep)), true);
@@ -1328,7 +1395,7 @@ static void test_depth_row_cycles_and_shows_on_review() {
     check_row_note(kDepthRow, "Tests each advertised voltage");
     const unsigned medium = ui.charger_test_view().preview.runnable;
     CHECK_EQ(ui.charger_test_selection() >> 28, 0u);
-    // OK on Depth cycles Medium -> Deep -> Light -> Medium (stays on Tests).
+    // OK on Depth cycles Medium -> Deep -> Offers -> Light -> Medium (stays on Tests).
     press(ui, Button::Ok); settle(ui);
     CHECK_EQ(ui.charger_test_stage(), 0); CHECK_EQ(ui.charger_test_cursor(), kDepthRow);
     CHECK_EQ(ui.charger_test_selection() >> 28, 0xEu);                             // Deep: both sweeps, level 2
@@ -1336,6 +1403,9 @@ static void test_depth_row_cycles_and_shows_on_review() {
     const unsigned deep = ui.charger_test_view().preview.runnable;
     CHECK_EQ(unsigned(ui.charger_test_view().preview.spec_checks), unsigned(specsec::kCells));
     CHECK_EQ(unsigned(ui.charger_test_view().preview.total) >= deep, true);
+    press(ui, Button::Ok); settle(ui);
+    CHECK_EQ(ui.charger_test_selection() >> 28, 0x3u);                             // Offers: no sweep
+    check_row_note(kDepthRow, "Lists offers, one AVS request");
     press(ui, Button::Ok); settle(ui);
     CHECK_EQ(ui.charger_test_selection() >> 28, 0x1u);                             // Light
     check_row_note(kDepthRow, "Checks what charger offers");
@@ -5941,6 +6011,68 @@ static void test_remote_start_is_the_devices_start() {
         CHECK_EQ(ui.charger_test_busy(), false); CHECK_EQ(ui.charger_test_stage(), 4); nothing_armed_stub();
     }
 }
+// The remote START is the device's own: the same forced identity, with the Settings spoof Off.
+static void test_remote_offers_start_presents_the_epr_identity() {
+    fixture(); Ui ui; boot_home(ui);
+    CHECK_EQ(ui.charger_test_set_cable(ctcable::Choice{}), true);
+    CHECK_EQ(ui.charger_test_set_level(uint8_t(ct::Level::Offers)), true);
+    CHECK_EQ(ui.charger_test_start(false, 1200).result == RemoteStart::Result::Accepted, true);
+    CHECK_EQ(g_stub.spoof_on, false);                                            // nothing armed until the confirmation is through
+    for (uint32_t t = 1200; t <= 2100 && !ui.charger_test_busy(); t += 20) ui.tick(t);
+    CHECK_EQ(ui.charger_test_busy(), true);
+    CHECK_EQ(ui.charger_test_results().level(), ct::Level::Offers);
+    CHECK_EQ(g_stub.spoof_on, true); CHECK_EQ(g_stub.spoof_arms, 1);
+    CHECK_EQ(ui.charger_test_cable_info().run == ctcable::kDefaultChoice, true);
+}
+// "Do not disturb the connection": a load behind the K2 (the inline latch) means nothing new transmits, whatever the level.
+static void inline_now() { g_stub.pm_online = true; g_stub.pm.vbus_mv = 3000; g_stub.pm.current_ma = 500; }   // a live sink on a part-way VBUS: the ticks latch the link
+static void test_inline_at_entry_touches_nothing() {
+    rd_fixture();
+    Ui ui; open(ui);
+    inline_now();
+    CHECK_EQ(ui.charger_test_set_level(uint8_t(ct::Level::Offers)), true);
+    for (uint32_t t = 1200; t < 3000; t += 20) ui.tick(t);
+    CHECK_EQ(ui.link().inline_mode(), true);                                     // the latch is real, not just the stub flag
+    nothing_armed_stub(); no_operations();
+    review(ui, 3100);                                                            // the Tests, Cable and Review steps read nothing either
+    for (uint32_t t = 3200; t < 5000; t += 20) ui.tick(t);
+    CHECK_EQ(ui.charger_test_stage(), 4);
+    nothing_armed_stub(); no_operations();   // scans counts the VCONN e-marker read
+}
+// Offers goes through the same START guards as every level: refused with the live-sink reason, nothing presented, asked or armed.
+static void test_offers_start_is_refused_inline() {
+    rd_fixture();
+    Ui ui; open(ui);
+    CHECK_EQ(ui.charger_test_set_cable(ctcable::Choice{}), true);
+    CHECK_EQ(ui.charger_test_set_level(uint8_t(ct::Level::Offers)), true);
+    review(ui);
+    inline_now();
+    for (uint32_t t = 1300; t < 1700; t += 20) ui.tick(t);
+    CHECK_EQ(ui.link().inline_mode(), true);
+    start_run(ui, 1800);
+    CHECK_EQ(ui.charger_test_busy(), false); CHECK_EQ(ui.charger_test_stage(), 4);
+    CHECK_EQ(footer_says("load attached", kCaution), true);
+    nothing_armed_stub(); no_operations(); CHECK_EQ(g_stub.spoof_on, false); CHECK_EQ(g_stub.ra_on, false);
+}
+// A load that latches while START waits for the charger ends the wait: the Rd and the identity go back, nothing is read.
+static void test_inline_latch_during_the_wait_restores_the_port() {
+    rd_fixture(); g_stub.vbus_on_rd = false;                                     // VBUS never comes: the wait stays open
+    Ui ui; open(ui);
+    CHECK_EQ(ui.charger_test_set_cable(ctcable::Choice{}), true);
+    CHECK_EQ(ui.charger_test_set_level(uint8_t(ct::Level::Offers)), true);
+    review(ui);
+    start_press(ui, 1400); confirm_press_nowait(ui, 1500);
+    CHECK_EQ(ui.charger_test_stage(), kWaitStage);
+    CHECK_EQ(g_stub.rd_run, true); CHECK_EQ(g_stub.spoof_on, true);              // the forced identity is on the line
+    const int scans = g_stub.scans;
+    inline_now();
+    for (uint32_t t = 1520; t < 2200; t += 20) { fusb302::service(); ui.tick(t); }
+    CHECK_EQ(ui.link().inline_mode(), true);
+    CHECK_EQ(ui.charger_test_stage(), 4); CHECK_EQ(ui.charger_test_busy(), false);
+    CHECK_EQ(g_stub.rd_run, false); CHECK_EQ(g_stub.spoof_on, false); CHECK_EQ(g_stub.ra_on, false);
+    CHECK_EQ(g_stub.scans, scans);                                               // nothing was read on the way out
+    CHECK_EQ(int(ui.charger_test_results().reason()), int(ct::Reason::Inline));
+}
 
 // OEM levels by their watts (oem_watts.hpp): a VOOC-family charger detected at 5 V (opener 0xA8). Medium: the ident alone, every
 // level not tested. Deep: the ceiling stage stood at 0x06D under 11.02 V (120 W claimed): every SuperVOOC level claimed. The Results
@@ -6444,6 +6576,7 @@ int main() {
     test_avs_sweep_is_a_selection_bit();
     test_avs_sweep_row_follows_the_only_sweep_kind();
     test_the_default_run_is_medium();
+    test_depth_offers_value_and_the_forced_epr_spoof(); test_other_levels_keep_the_spoof_pick(); test_remote_offers_start_presents_the_epr_identity();
     test_depth_row_cycles_and_shows_on_review();
     test_an_old_journal_resumes_without_the_default_sweep();
     test_self_powered_review_note(); test_review_carries_the_other_port_warning(); test_phantom_evidence_does_not_refuse_a_run_but_a_load_does(); test_self_powered_run_is_on_the_card(); test_a_cable_read_once_stays_with_the_run();
@@ -6462,7 +6595,7 @@ int main() {
     test_skip_results_and_deselection(); test_navigation_and_stop_controls();
     test_start_waits_for_the_caps();
     test_decisions_use_the_unaveraged_vbus();
-    test_remote_start_is_the_devices_start();
+    test_remote_start_is_the_devices_start(); test_inline_at_entry_touches_nothing(); test_offers_start_is_refused_inline(); test_inline_latch_during_the_wait_restores_the_port();
     test_vooc_family_results_read_watts_levels();
     test_vooc_family_silent_reads_no_answer();
     test_silent_vivo_reads_no_reply_not_a_fail();

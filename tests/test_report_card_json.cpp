@@ -291,6 +291,11 @@ static void test_level_renders() {
     c.level = ct::Level::Deep;
     j.assign(jb.data(), rc::render_json(c, jb));
     CHECK_EQ(j.find("\"level\":\"deep\",") != std::string::npos, true);
+    c.level = ct::Level::Offers;   // the Read-offers run names itself in both
+    j.assign(jb.data(), rc::render_json(c, jb));
+    CHECK_EQ(j.find("\"level\":\"offers\",") != std::string::npos, true);
+    const size_t mo = rc::render_summary(c, std::span<char>(sb.data(), sb.size() - 1));
+    CHECK_EQ(std::string(sb.data(), mo).find("Offers run") != std::string::npos, true);
 }
 static void test_in_contract_handover_renders() {
     rc::Card c = sample();

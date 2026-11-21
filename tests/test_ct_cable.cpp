@@ -73,7 +73,21 @@ static void test_facts_read_the_vdos() {
     CHECK_EQ(f.max_ma, 3000);                                     // current code 1
 }
 
+// A Read-offers run presents the EPR cable itself unless an e-marked cable is physically there; any other level keeps the pick.
+static void test_run_choice_forces_the_epr_identity_for_offers() {
+    const Choice off{}, two{Kind::Builtin, 2}, saved{Kind::Saved, 3};
+    for (const Choice pick : {off, two, saved, ctcable::kDefaultChoice}) {
+        CHECK_EQ(ctcable::run_choice(pick, true, false) == ctcable::kDefaultChoice, true);   // Offers, no cable read: the EPR identity
+        CHECK_EQ(ctcable::run_choice(pick, true, true) == pick, true);                       // a cable was read: the pick stays
+        CHECK_EQ(ctcable::run_choice(pick, false, false) == pick, true);                     // any other level: untouched
+        CHECK_EQ(ctcable::run_choice(pick, false, true) == pick, true);
+    }
+    const auto f = ctcable::facts(emrec::builtin_cable(ctcable::kDefaultChoice.seq));
+    CHECK_EQ(f.max_mv, 50000); CHECK_EQ(f.max_ma, 5000);                                   // what EPR entry needs
+}
+
 int main() {
+    test_run_choice_forces_the_epr_identity_for_offers();
     test_valid_choices();
     test_facts_of_the_builtin_cable();
     test_canonical_builtin_ids();

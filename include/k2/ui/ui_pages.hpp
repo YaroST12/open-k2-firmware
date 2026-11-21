@@ -368,6 +368,7 @@ public:
     // The identity the next START presents (Cmd::ChargerCable); false for a malformed choice or a clone not in the library.
     // The Cable step's cursor follows it. Nothing is armed until a START.
     bool set_cable_choice(ctcable::Choice c);
+    ctcable::Choice run_choice() const;   // the identity START presents: the pick, or the EPR cable for a Read-offers run (ctcable::run_choice)
     ctcable::Info cable_info() const;
     Stage stage() const { return stage_; }
     bool reattach_planned() const { return reattach_plan_; }
