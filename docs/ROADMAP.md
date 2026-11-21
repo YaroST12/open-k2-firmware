@@ -109,8 +109,10 @@ Open defects, newest first. A row leaves this list when its fix is merged and se
   `test_ui_charger_test`). Needs hardware run on Baseus 140 W.
   **Hardware 2026-11-21 (1.1.0-226-8c7a981b, Joyroom 65 W, PPS 3.3-11 V / 3.3-21 V):** `tools/ct_soak.py` 2 Deep runs
   (pd, pd-low, qc2, both orders) 26 pass / 0 fail each through every PPS sweep, no "load attached", no reboot, stack low
-  16392 B; 3 Medium runs over random unit subsets 0 fail (`runs/soak-1121-164810/`, `runs/soak-1121-165751/`). Not
-  re-checked: the Baseus 140 W itself, and the inline latch still firing on a real load behind the K2 (a phone).
+  16392 B; 3 Medium runs over random unit subsets 0 fail (`runs/soak-1121-164810/`, `runs/soak-1121-165751/`). Baseus
+  140 W, same build, output dark at START (VBUS 0 V, a 20 V / 5 A cable so EPR skipped): 2 Deep runs 24 pass / 0 fail,
+  START woke the charger with Rd, every PPS sweep clean (`runs/soak-1121-172629/`). Not re-checked: the inline latch still
+  firing on a real load behind the K2 (a phone).
 
 - **`make gate` fails at the tests on public since 3614728f** (2026-11-21, host). `test_ui_perf.cpp:516` (worst scroll over
   53600) and `test_ui_overdraw.cpp:227` (6 full-paint budgets) fail from 3614728f (place scrollbar to the bottom, toast
