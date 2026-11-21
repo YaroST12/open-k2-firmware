@@ -168,6 +168,18 @@ void format_proto(const ProtoInfo &p, ProtoText &out) {
     }
 }
 
+void format_idle_wait(raguard::WaitKind wait, ProtoText &out) {
+    out.tag.clear();
+    out.value.clear();
+    out.tag.put("--");
+    switch (wait) {
+    case raguard::WaitKind::ChargerWaiting: out.value.put("Charger waiting"); break;
+    case raguard::WaitKind::DualRolePort:   out.value.put("Dual-role port"); break;
+    case raguard::WaitKind::NoSource:
+    case raguard::WaitKind::Unknown:        out.value.put("No source"); break;
+    }
+}
+
 void format_lines(bool data_lines, int32_t a_mv, int32_t b_mv, LinesText &out) {
     out.tag.clear();
     out.value.clear();

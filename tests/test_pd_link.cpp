@@ -47,11 +47,15 @@ static void test_vbus_glitch_ignored() {
 
 static void test_cc_detach_and_attach() {
     Link l;
+    l.emarker_scanned(0);
     l.update(in(0, 5000));
     l.update(in(100, 5000, 0));
     l.update(in(401, 5000, 0));
-    CHECK_EQ(l.attached(), 0);      // CC gone with VBUS still up (hard reset excluded: 300 ms)
-    l.update(in(500, 5000, 2));     // CC back: attach at once
+    CHECK_EQ(l.attached(), 1);      // live 5V VBUS + cc==0 stays attached (USB-A / unloaded 56k Rp)
+    CHECK_EQ(l.cable_stale(), 1);   // CC detach still marks the cable stale
+    l.update(in(500, 3900, 0));     // dropping VBUS below kLegacyVbusMinMv with cc==0 detaches
+    CHECK_EQ(l.attached(), 0);
+    l.update(in(600, 5000, 2));     // CC back: attach at once
     CHECK_EQ(l.attached(), 1);
 }
 
@@ -284,11 +288,11 @@ static void test_a_short_lull_is_not_proof_of_a_standalone_k2() {
     l.update(inl(0, 5000, 900, 1));
     CHECK_EQ(l.inline_mode(), 1);
     l.update(inl(100, 5000, 20, 1));
-    l.update(inl(9000, 5000, 20, 1));   // 9 s below 50 mA
+    l.update(inl(kInlineQuietMs - 500, 5000, 20, 1));   // just under kInlineQuietMs below 50 mA
     CHECK_EQ(l.inline_mode(), 1);
-    l.update(inl(9100, 5000, 900, 1));  // the phone draws again: the window restarts
-    l.update(inl(9200, 5000, 20, 1));
-    l.update(inl(9200 + kInlineQuietMs - 100, 5000, 20, 1));
+    l.update(inl(kInlineQuietMs - 400, 5000, 900, 1));  // the phone draws again: the window restarts
+    l.update(inl(kInlineQuietMs - 300, 5000, 20, 1));
+    l.update(inl(kInlineQuietMs - 300 + kInlineQuietMs - 100, 5000, 20, 1));
     CHECK_EQ(l.inline_mode(), 1);
 }
 
@@ -705,7 +709,8 @@ static void test_a_sink_drawing_through_the_cuts_stays_inline() {
 static void test_a_sink_talking_pd_through_the_cuts_stays_inline() {
     Link l;
     for (std::uint32_t t = 0; t < 60000; t += 20) {
-        const std::uint32_t requests = t / kAoPeriodMs + (t % kAoPeriodMs >= 400 ? 1 : 0);   // one Request per re-attach
+        const std::uint32_t p = t % kAoPeriodMs;
+        const std::uint32_t requests = (t / kAoPeriodMs) * 2 + (p >= 400 ? 1 : 0) + (p >= 3400 ? 1 : 0);   // Requests within kInlineQuietMs across cuts
         l.update(auto_off(t, 0, requests));
     }
     CHECK_EQ(l.inline_mode(), 1);
@@ -762,19 +767,139 @@ static void test_after_a_cut_the_sink_gets_time_to_show_itself() {
     Link l;
     l.update(inl(0, 5100, 900));
     CHECK_EQ(l.inline_mode(), 1);
-    for (std::uint32_t t = 20; t < 9500; t += 20) l.update(inl(t, 5100, 0));        // 9.5 s quiet
-    for (std::uint32_t t = 9500; t < 10300; t += 20) {                              // a cut: VBUS and the line gone
+    const std::uint32_t cut_at = kInlineQuietMs - 500;
+    const std::uint32_t back_at = cut_at + 800;
+    for (std::uint32_t t = 20; t < cut_at; t += 20) l.update(inl(t, 5100, 0));         // quiet just short of kInlineQuietMs
+    for (std::uint32_t t = cut_at; t < back_at; t += 20) {                              // a cut: VBUS and the line gone
         LinkInput i = inl(t, 3900, 0);
         i.cc = 0;
         l.update(i);
     }
     CHECK_EQ(l.attached(), 0);
-    for (std::uint32_t t = 10300; t < 10300 + kInlineResumeMs - 200; t += 20) l.update(inl(t, 5100, 0));
+    for (std::uint32_t t = back_at; t < back_at + kInlineResumeMs - 200; t += 20) l.update(inl(t, 5100, 0));
     CHECK_EQ(l.inline_mode(), 1);     // back, quiet, but not yet for kInlineResumeMs
-    l.update(inl(10300 + kInlineResumeMs - 100, 5100, 700));   // the sink draws again
-    for (std::uint32_t t = 10300 + kInlineResumeMs; t < 10300 + kInlineResumeMs + kInlineQuietMs - 500; t += 20)
+    l.update(inl(back_at + kInlineResumeMs - 100, 5100, 700));   // the sink draws again
+    for (std::uint32_t t = back_at + kInlineResumeMs; t < back_at + kInlineResumeMs + kInlineQuietMs - 500; t += 20)
         l.update(inl(t, 5100, 0));
     CHECK_EQ(l.inline_mode(), 1);     // its draw restarted the whole quiet window
+}
+
+static void test_pps_3v3_hysteresis_recovery() {
+    Link l;
+    l.update(in(0, 0, 1));
+    l.update(in(400, 0, 1));
+    CHECK_EQ(l.attached(), 0);
+    l.update(in(500, 2000, 1));     // below kVbusAttachMinMv: stays detached
+    CHECK_EQ(l.attached(), 0);
+    l.update(in(600, 3300, 1));     // 3.3 V PPS with active CC: recovers
+    CHECK_EQ(l.attached(), 1);
+}
+
+static void test_usba_attach_cc0_clears_waiting_immediately() {
+    Link l;
+    l.update(in(0, 0, 0));
+    l.update(in(400, 0, 0));
+    CHECK_EQ(l.attached(), 0);
+    l.update(in(500, 5000, 0, 1));  // USB-A 5 V attaches with cc == 0
+    CHECK_EQ(l.attached(), 1);
+    CHECK_EQ(l.waiting(), 0);       // no active CC: no 5 s stall waiting for caps
+    CHECK_EQ(l.charger_stale(), 0);
+}
+
+static void test_usba_phone_unplug_m4c_stays_attached() {
+    Link l;
+    l.update(inl(0, 5000, 1000));   // phone charging on USB-A (cc == 1)
+    CHECK_EQ(l.attached(), 1);
+    for (std::uint32_t t = 20; t <= 500; t += 20) {
+        LinkInput i = inl(t, 5000, 0);
+        i.cc = 0;                   // phone unplugged, active_cc drops 1 -> 0
+        l.update(i);
+    }
+    CHECK_EQ(l.attached(), 1);      // live 5 V VBUS keeps USB-A attached
+}
+
+static void test_inline_m4b_pd_unplug_open_rp() {
+    // M4b: PD charger + phone inline -> unplug: VBUS=0, CC1=3300 mV -> clears in ~1.5 s.
+    Link l;
+    l.update(inl(0, 9000, 1500, 1));
+    CHECK_EQ(l.inline_mode(), 1);
+    for (std::uint32_t t = 20; t < 1500; t += 20) {
+        LinkInput i = inl(t, 0, 0, 1);
+        i.cc = 0; i.cc1_mv = 3300; i.cc2_mv = 0;
+        l.update(i);
+    }
+    CHECK_EQ(l.attached(), 0);
+    CHECK_EQ(l.inline_mode(), 1);   // not yet > kInlineOpenRpMs
+    LinkInput open = inl(1540, 0, 0, 1);
+    open.cc = 0; open.cc1_mv = 3300; open.cc2_mv = 0;
+    l.update(open);
+    CHECK_EQ(l.inline_mode(), 0);   // cleared by open_rp at ~1.5 s
+
+    // Both unplugged (VBUS=0, CC=0, cc1=0, cc2=0) -> clears in kInlineHoldMs (3 s).
+    Link b;
+    b.update(inl(0, 9000, 1500, 1));
+    CHECK_EQ(b.inline_mode(), 1);
+    for (std::uint32_t t = 20; t <= 20 + kInlineHoldMs - 100; t += 20) {
+        LinkInput i = inl(t, 0, 0, 1);
+        i.cc = 0; i.cc1_mv = 0; i.cc2_mv = 0;
+        b.update(i);
+    }
+    CHECK_EQ(b.inline_mode(), 1);
+    LinkInput gone = inl(20 + kInlineHoldMs + 100, 0, 0, 1);
+    gone.cc = 0; gone.cc1_mv = 0; gone.cc2_mv = 0;
+    b.update(gone);
+    CHECK_EQ(b.inline_mode(), 0);
+
+    // 1.2 s VBUS dip preserves inline_.
+    Link d;
+    d.update(inl(0, 9000, 1500, 1));
+    for (std::uint32_t t = 20; t < 1220; t += 20) {
+        LinkInput i = inl(t, 0, 0, 1);
+        i.cc = 0; i.cc1_mv = 0; i.cc2_mv = 0;
+        d.update(i);
+    }
+    CHECK_EQ(d.attached(), 0);
+    CHECK_EQ(d.inline_mode(), 1);
+    d.update(inl(1240, 5000, 0, 1));
+    CHECK_EQ(d.attached(), 1);
+    CHECK_EQ(d.inline_mode(), 1);
+}
+
+static void test_inline_m4c_usba_phone_unplug_open_rp() {
+    // M4c: USB-A charger + phone -> unplug: VBUS=5000, I=0, CC1 jumps 420 -> 3311 mV, cc: 1 -> 0 -> stays attached and clears in ~1.5 s.
+    Link l;
+    LinkInput chg = inl(0, 5000, 1200);
+    chg.cc = 1; chg.cc1_mv = 420; chg.cc2_mv = 1750;
+    l.update(chg);
+    CHECK_EQ(l.inline_mode(), 1);
+    for (std::uint32_t t = 20; t < 1500; t += 20) {
+        LinkInput i = inl(t, 5000, 0);
+        i.cc = 0; i.cc1_mv = 3311; i.cc2_mv = 1750;
+        l.update(i);
+    }
+    CHECK_EQ(l.attached(), 1);
+    CHECK_EQ(l.inline_mode(), 1);
+    LinkInput done = inl(1540, 5000, 0);
+    done.cc = 0; done.cc1_mv = 3311; done.cc2_mv = 1750;
+    l.update(done);
+    CHECK_EQ(l.attached(), 1);
+    CHECK_EQ(l.inline_mode(), 0);
+}
+
+static void test_inline_direct_pd_charger_plain_cable_phone_sipping_negative() {
+    // Direct PD charger + plain cable + phone sipping 20 mA (cc=1, cc1=1600, cc2=3300):
+    // open_rp MUST NOT fire from CC2's open Rp while CC1 is loaded by the phone's Rd!
+    Link l;
+    LinkInput chg = inl(0, 9000, 1000, 1);
+    chg.cc = 1; chg.cc1_mv = 1600; chg.cc2_mv = 3300;
+    l.update(chg);
+    CHECK_EQ(l.inline_mode(), 1);
+    for (std::uint32_t t = 20; t <= 20 + kInlineOpenRpMs + 1000; t += 20) {
+        LinkInput i = inl(t, 9000, 20, 1);
+        i.cc = 1; i.cc1_mv = 1600; i.cc2_mv = 3300;
+        l.update(i);
+    }
+    CHECK_EQ(l.inline_mode(), 1);
 }
 
 int main() {
@@ -825,5 +950,11 @@ int main() {
     test_a_far_rd_with_vbus_up_through_the_cuts_never_latches();
     test_only_traffic_latches_and_names_its_cause();
     test_after_a_cut_the_sink_gets_time_to_show_itself();
+    test_pps_3v3_hysteresis_recovery();
+    test_usba_attach_cc0_clears_waiting_immediately();
+    test_usba_phone_unplug_m4c_stays_attached();
+    test_inline_m4b_pd_unplug_open_rp();
+    test_inline_m4c_usba_phone_unplug_open_rp();
+    test_inline_direct_pd_charger_plain_cable_phone_sipping_negative();
     return test_report("test_pd_link");
 }

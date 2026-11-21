@@ -51,14 +51,14 @@ void Link::update(const LinkInput& in) {
     if (forced_) return;
     if (!attached_) requests_at_attach_ = in.requests;  // only Requests seen while attached count
 
-    // VBUS trigger with hysteresis: low below vSafe0V, back at vSafe5V min.
+    // VBUS trigger with hysteresis: low below vSafe0V, back at kVbusAttachMinMv (covers 3.3V PPS).
     if (in.vbus_known) {
         if (in.vbus_mv < kVSafe0Mv) {
             if (!low_timing_) { low_timing_ = true; low_since_ = in.now_ms; }
             if (!vbus_low_ && in.now_ms - low_since_ > kDetachDebounceMs) vbus_low_ = true;
         } else {
             low_timing_ = false;
-            if (in.vbus_mv >= kVSafe5MinMv) vbus_low_ = false;
+            if (in.vbus_mv >= kVbusAttachMinMv) vbus_low_ = false;
         }
     } else {
         low_timing_ = false;
@@ -77,21 +77,31 @@ void Link::update(const LinkInput& in) {
         gone_timing_ = false;
         cc_gone_ = false;
     }
-    (void)was_gone;
 
-    const bool want = !vbus_low_ && !cc_gone_;
+    const bool vbus_legacy = in.vbus_known && !vbus_low_ && in.vbus_mv >= kLegacyVbusMinMv;
+    const bool want = in.vbus_known ? (!vbus_low_ && (!cc_gone_ || vbus_legacy)) : !cc_gone_;
     if (!want && attached_) {
         // The detach time is the first sample of whichever trigger fired.
         std::uint32_t at = in.now_ms;
-        if (vbus_low_ && cc_gone_) at = low_since_ < gone_since_ ? low_since_ : gone_since_;
-        else if (vbus_low_) at = low_since_;
-        else at = gone_since_;
+        if (vbus_low_ && cc_gone_) {
+            const std::uint32_t cc_at = was_gone ? in.now_ms : gone_since_;
+            at = low_since_ < cc_at ? low_since_ : cc_at;
+        } else if (vbus_low_) {
+            at = low_since_;
+        } else {
+            at = was_gone ? in.now_ms : gone_since_;
+        }
         set_attached(false, at);
     } else if (want && !attached_) {
         set_attached(true, in.now_ms);
     }
-    if (!attached_ && inline_ && in.now_ms - detach_at_ > kInlineHoldMs) inline_ = false;   // gone for real
-    if (waiting_ && in.caps_rx != rx_at_detach_) waiting_ = false;   // new Source_Capabilities arrived
+    if (!attached_ && inline_ && in.now_ms - detach_at_ > kInlineHoldMs) {
+        inline_ = false;   // gone for real
+        open_rp_timing_ = false;
+        paused_seen_ = false;
+    }
+    if (waiting_ && cc_gone_) waiting_ = false;                      // no active CC line: Source_Capabilities cannot arrive
+    else if (waiting_ && in.caps_rx != rx_at_detach_) waiting_ = false;   // new Source_Capabilities arrived
     else if (waiting_ && in.now_ms - attach_at_ > kWaitingCapsMs) waiting_ = false;   // a non-PD source
 
     // The one PD verdict per attach, computed on every tick so it settles at kPdVerdictSettleMs sharp.
@@ -109,13 +119,15 @@ void Link::update(const LinkInput& in) {
     if (inline_ && (!attached_ || cut)) {
         quiet_since_ = in.now_ms - quiet_since_ > dt ? quiet_since_ + dt : in.now_ms;
         paused_at_ = in.now_ms;
+        paused_seen_ = true;
     }
 
+    const std::int32_t mag = power::abs_sat(in.current_ma);
+    const bool loaded = in.current_known && mag > kInlineCurrentMa + (in.self_supply_ma > 0 ? in.self_supply_ma : 0);
+    const bool new_request = in.requests != requests_seen_;
+    requests_seen_ = in.requests;
+
     if (attached_) {
-        const std::int32_t mag = power::abs_sat(in.current_ma);
-        const bool loaded = in.current_known && mag > kInlineCurrentMa + (in.self_supply_ma > 0 ? in.self_supply_ma : 0);
-        const bool new_request = in.requests != requests_seen_;
-        requests_seen_ = in.requests;
         // Only evidence that is certain latches: a load beyond the K2's own supply, or a sink's PD Request that the K2 did not
         // send. Level evidence never latches (user decision 2026-11-15): a sink-band level on CC (a floating CC2 reads ~1.75 V on
         // a USB-A port with nothing plugged in), a VBUS above 5.5 V and a VBUS rise can all be explained without a device behind
@@ -125,14 +137,41 @@ void Link::update(const LinkInput& in) {
             if (loaded || request) {
                 inline_ = true;
                 quiet_since_ = in.now_ms;
+                paused_seen_ = false;
+                open_rp_timing_ = false;
                 cause_ = loaded ? InlineCause::Load : InlineCause::Request;
             }
         } else if (loaded || new_request) {
             quiet_since_ = in.now_ms;    // live traffic: keep the guard
-        } else if (in.now_ms - quiet_since_ > kInlineQuietMs && in.now_ms - paused_at_ >= kInlineResumeMs) {
+        } else if (in.now_ms - quiet_since_ > kInlineQuietMs && (!paused_seen_ || in.now_ms - paused_at_ >= kInlineResumeMs)) {
             inline_ = false;             // the sink left without a CC detach: Auto-CRC comes back
             requests_at_attach_ = in.requests;
+            open_rp_timing_ = false;
+            paused_seen_ = false;
         }
+    }
+
+    if (inline_) {
+        bool open_rp = false;
+        if (in.cc1_mv >= 0 && in.cc2_mv >= 0 && !in.line_held && !in.own_contract) {
+            if (in.cc == 1) open_rp = in.cc1_mv >= raguard::kRpMinMv;
+            else if (in.cc == 2) open_rp = in.cc2_mv >= raguard::kRpMinMv;
+            else open_rp = in.cc1_mv >= raguard::kRpMinMv || in.cc2_mv >= raguard::kRpMinMv;
+        }
+        if (!loaded && !new_request && open_rp) {
+            if (!open_rp_timing_) { open_rp_timing_ = true; open_rp_since_ = in.now_ms; }
+            if (in.now_ms - open_rp_since_ > kInlineOpenRpMs &&
+                (!attached_ || !paused_seen_ || in.now_ms - paused_at_ >= kInlineResumeMs)) {
+                inline_ = false;
+                requests_at_attach_ = in.requests;
+                open_rp_timing_ = false;
+                paused_seen_ = false;
+            }
+        } else {
+            open_rp_timing_ = false;
+        }
+    } else {
+        open_rp_timing_ = false;
     }
 }
 
@@ -149,6 +188,8 @@ void Link::force_detached(std::uint32_t now_ms) {
     forced_ = true;
     if (attached_) set_attached(false, now_ms);
     inline_ = false;   // an explicit debug detach is a statement, not a VBUS gap
+    open_rp_timing_ = false;
+    paused_seen_ = false;
 }
 
 bool Link::take_new_source() {

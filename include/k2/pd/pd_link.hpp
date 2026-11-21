@@ -36,6 +36,8 @@
 namespace k2::pd {
 
 inline constexpr std::int32_t kVSafe0Mv = 800;
+inline constexpr std::int32_t kVbusAttachMinMv = 3000;   // clears vbus_low_ (covers 3.3V PPS while keeping < 3V detached)
+inline constexpr std::int32_t kLegacyVbusMinMv = 4200;   // live USB-A / legacy 5V source even with cc == 0 (above 3900 mV auto-off cut)
 inline constexpr std::int32_t kVSafe5MinMv = 4750;
 inline constexpr std::int32_t kVSafe5MaxMv = 5500;
 inline constexpr std::uint32_t kDetachDebounceMs = 300;
@@ -79,10 +81,12 @@ inline constexpr std::int32_t kSelfSupplyAllowanceMa = 150;
 inline constexpr std::int32_t kInlineCurrentMa = 50;
 // A flip back to "standalone" needs proof, never a missed sample: no Request and below 50 mA for this long. A phone that sips
 // less than 50 mA for a few seconds is still a phone, and the K2's Rd on top of its own breaks the sink's contract.
-inline constexpr std::uint32_t kInlineQuietMs = 10000;
+inline constexpr std::uint32_t kInlineQuietMs = 5000;
 // The inline state outlives a VBUS collapse (a hub or charger re-negotiating, a swap) for this long: "possibly inline" is the safe
 // state, the K2 stays passive through the gap. Detached longer than this = unplugged for real, the next attach starts standalone.
-inline constexpr std::uint32_t kInlineHoldMs = 15000;
+inline constexpr std::uint32_t kInlineHoldMs = 3000;
+// Fast physical proof that the sink's 5.1k Rd left: an open Rp on the active CC line (or either line when cc == 0) with no load/Request.
+inline constexpr std::uint32_t kInlineOpenRpMs = 1500;
 // A VBUS that was at or above vSafe5V this recently still counts as "up" for the cut test below (vbus_cut()).
 inline constexpr std::uint32_t kDarkSinkMs = 3000;
 
@@ -160,6 +164,9 @@ private:
     InlineCause cause_ K2_BSS_INIT(InlineCause::None);
     std::uint32_t requests_at_attach_ K2_BSS_INIT(0), requests_seen_ K2_BSS_INIT(0), quiet_since_ K2_BSS_INIT(0);
     std::uint32_t paused_at_ K2_BSS_INIT(0);   // the last tick the quiet window was paused (a cut or a detach, see vbus_cut())
+    bool paused_seen_ K2_BSS_INIT(false);     // paused_at_ holds a real pause this inline session
+    bool open_rp_timing_ K2_BSS_INIT(false);
+    std::uint32_t open_rp_since_ K2_BSS_INIT(0);
     bool up_seen_ K2_BSS_INIT(false);          // vbus_up_ms_ holds a real sample
     bool vbus_low_ K2_BSS_INIT(false), cc_gone_ K2_BSS_INIT(false);
     std::uint32_t vbus_up_ms_ K2_BSS_INIT(0);   // the last sample at/above vSafe5V (see kDarkSinkMs)

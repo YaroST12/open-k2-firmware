@@ -58,6 +58,7 @@ constexpr int16_t kRowTop[2] = {kInfoRow1Top, kInfoRow2Top};
 // Row 1's diagnosis word (hm::format_diag) and its tag fit between the tag column and the elapsed time.
 static_assert(pd::diag::screen::kLabelChars <= static_cast<std::size_t>(kDiagChars), "the diagnosis word runs into the elapsed time");
 static_assert(hm::kInfoValX + kDiagChars * static_cast<int>(kSmallAdvPx) <= kElX, "the diagnosis word overlaps the elapsed time");
+static_assert(hm::kInfoValX + 15 * static_cast<int>(kSmallAdvPx) <= kElX, "idle wait text overlaps elapsed time");
 static_assert(hm::kInfoTagX + hm::kDiagTag.size() * kSmallAdvPx <= static_cast<unsigned>(hm::kInfoValX), "the Diag tag runs into its value");
 
 // Repaint zones of the info cell (logical, inclusive). A zone is wider and lower than its fields on purpose: a glyph
@@ -833,6 +834,7 @@ void HomePage::paint_info(const Frame &f) {
     hm::ProtoText pt;
     const bool starting = m == hm::Mode::NoMeter && hm::meter_starting(false, f.now);
     if (m == hm::Mode::NoMeter) pt.value.put(starting ? "Power meter starting" : "Power meter not found");
+    else if (m == hm::Mode::Idle) hm::format_idle_wait(ctx_.ui->link().wait_kind(), pt);
     else hm::format_proto(f.proto, pt);
     const bool known = (live || stale) && f.proto.kind != hm::ProtoKind::None;
     const uint16_t tcol = known ? kDim : kFaint;

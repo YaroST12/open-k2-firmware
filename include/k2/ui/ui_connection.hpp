@@ -114,6 +114,7 @@ constexpr Empty empty_state(Tab t, const Facts &f) {
         return {tx::kNoCharger, tx::kNoChargerL};
     case Tab::Sink:
         if (f.inline_sink) return {tx::kDevInUse, tx::kDevInUseL};
+        if (f.wait == raguard::WaitKind::DualRolePort) return {tx::kDualRole, tx::kDualRoleSinkL};
         if (direct) return {tx::kNoDevice, tx::kNoDevDirectL};
         if (via_cable) return {tx::kNoDevice, tx::kNoDevViaL};
         return {tx::kNoDevice, tx::kNoDevL};

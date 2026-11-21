@@ -24,6 +24,7 @@ inline constexpr const char *kDualRole = "DUAL-ROLE PORT",     *kDualRoleL = "To
 inline constexpr const char *kNoCharger = "NO CHARGER",        *kNoChargerL = "Use either port";
 // Sink tab
 inline constexpr const char *kDevInUse = "DEVICE IN USE",      *kDevInUseL = "Press OK to interrogate";
+inline constexpr const char *kDualRoleSinkL = "Ask to identify device";
 inline constexpr const char *kNoDevice = "NO DEVICE";
 inline constexpr const char *kNoDevDirectL = "Plug into the other port", *kNoDevViaL = "Charger only in this setup",
                             *kNoDevL = "Plug into either port";
@@ -39,7 +40,7 @@ inline constexpr const char *kBandWords[] = {kLineInUse, kCrossed, kFlip, kAslee
                                              kNoDevice, kCableNotRead, kChipSilent, kNoChip, kNoCable, kNoCableRead};
 static_assert(all_fit(kBandWords, 12, kBandWordPx), "a Who's attached band word is wider than the band");
 inline constexpr const char *kLines[] = {kLineInUseL, kCrossedL, kFlipL, kAsleepL, kWaitingL, kDualRoleL, kNoChargerL,
-                                         kDevInUseL, kNoDevDirectL, kNoDevViaL, kNoDevL, kCableInUseL, kCableViaL,
+                                         kDevInUseL, kDualRoleSinkL, kNoDevDirectL, kNoDevViaL, kNoDevL, kCableInUseL, kCableViaL,
                                          kChipSilentL, kNoChipL, kNoCableL, kNoCableReadL};
 static_assert(all_fit(kLines, 8, kLinePx), "a Who's attached line is wider than 26 cells");
 

@@ -326,6 +326,24 @@ static void test_source_tab_reads_the_waiting_classifier() {
               "NO CHARGER");
 }
 
+static void test_sink_tab_dual_role_port() {
+    for (Topology o : {Topology::Unknown, Topology::DirectReceptacle, Topology::CableSingleCc, Topology::NoSource}) {
+        const Empty em = empty_state(Tab::Sink, facts(false, false, false, o, false, raguard::WaitKind::DualRolePort));
+        CHECK_STR(em.title, "DUAL-ROLE PORT");
+        CHECK_STR(em.hint, "Ask to identify device");
+        CHECK_EQ(std::strlen(em.title) <= 15, 1);
+        CHECK_EQ(std::strlen(em.hint) <= 26, 1);
+        CHECK_EQ(std::strstr(em.hint, "OK") == nullptr && std::strstr(em.hint, "START") == nullptr, 1);
+    }
+    // inline_sink still wins over DualRolePort.
+    const Empty inl = empty_state(Tab::Sink, facts(true, false, false, Topology::Unknown, false, raguard::WaitKind::DualRolePort));
+    CHECK_STR(inl.title, "DEVICE IN USE");
+    CHECK_STR(inl.hint, "Press OK to interrogate");
+    // ChargerWaiting does not trigger DualRolePort on Sink tab.
+    const Empty chg = empty_state(Tab::Sink, facts(false, false, false, Topology::CableSingleCc, false, raguard::WaitKind::ChargerWaiting));
+    CHECK_STR(chg.title, "NO DEVICE");
+}
+
 // The bottom bar reads the same classifier: on a real waiting charger it must not say "No charger" while the tab
 // says "CHARGER WAITING" (and k2_remote state.waiting must agree too).
 static void test_bar_reads_the_waiting_classifier() {
@@ -749,6 +767,7 @@ int main() {
     test_empty_states_when_possibly_inline();
     test_empty_footer_never_repeats_the_band();
     test_source_tab_reads_the_waiting_classifier();
+    test_sink_tab_dual_role_port();
     test_bar_reads_the_waiting_classifier();
     test_the_three_readers_agree();
     test_crossed_cc_reads_on_the_tab_and_the_bar();

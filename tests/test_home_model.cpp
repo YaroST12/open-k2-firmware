@@ -202,6 +202,27 @@ static void test_protocol_row() {
     CHECK_STR(t.value.c_str(), "Detecting");
 }
 
+static void test_idle_wait() {
+    ProtoText t;
+    format_idle_wait(raguard::WaitKind::ChargerWaiting, t);
+    CHECK_STR(t.tag.c_str(), "--");
+    CHECK_STR(t.value.c_str(), "Charger waiting");
+    CHECK_EQ(t.value.view().size() <= 16u, true);
+
+    format_idle_wait(raguard::WaitKind::DualRolePort, t);
+    CHECK_STR(t.tag.c_str(), "--");
+    CHECK_STR(t.value.c_str(), "Dual-role port");
+    CHECK_EQ(t.value.view().size() <= 16u, true);
+
+    format_idle_wait(raguard::WaitKind::NoSource, t);
+    CHECK_STR(t.tag.c_str(), "--");
+    CHECK_STR(t.value.c_str(), "No source");
+
+    format_idle_wait(raguard::WaitKind::Unknown, t);
+    CHECK_STR(t.tag.c_str(), "--");
+    CHECK_STR(t.value.c_str(), "No source");
+}
+
 static void test_exception_badge() {
     CHECK_EQ(static_cast<int>(pill_of(Mode::Live, Alarm::None)), static_cast<int>(Pill::None));
     CHECK_EQ(static_cast<int>(pill_of(Mode::Live, Alarm::Near)), static_cast<int>(Pill::None));   // near: the cell speaks, no pill
@@ -460,6 +481,7 @@ int main() {
     test_elapsed();
     test_level();
     test_protocol_row();
+    test_idle_wait();
     test_steady_snapshot();
     test_exception_badge();
     test_max_text_never_comes_from_live_vbus();

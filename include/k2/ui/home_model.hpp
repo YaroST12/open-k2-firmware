@@ -16,6 +16,7 @@
 #include "k2/core/bss_zero.hpp"
 #include "k2/core/math_opt.hpp"
 #include "k2/pd/diag.hpp"
+#include "k2/pd/ra_guard.hpp"
 #include "k2/ui/ui_calc.hpp"
 
 namespace k2::home {
@@ -142,6 +143,8 @@ struct ProtoText {
     StrBuf<20> value;
 };
 void format_proto(const ProtoInfo &p, ProtoText &out);
+// Row 2 when VBUS is dark (Mode::Idle): surfaces the waiting classifier without changing Mode::Stale.
+void format_idle_wait(raguard::WaitKind wait, ProtoText &out);
 
 // The stale (LAST) snapshot: a live reading is kept only when it matches the one kSnapshotMs before it, VBUS within 10 %
 // and the same protocol row (a measured level may move). A session's tail, VBUS falling through the display filter or

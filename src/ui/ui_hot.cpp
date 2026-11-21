@@ -241,9 +241,11 @@ K2_HOT UiAction Ui::tick(uint32_t now_ms) {
         ctx_.keep.attention.reset();
         sag_settle_.reset();
     }
+    int32_t raw_current_ma = ctx_.pm.current_ma;
     if (ctx_.pm_online) {
         // energy: the unfiltered sample, so smoothing never changes the Wh total
         const power::Metrics raw = power::read_raw().value_or(ctx_.pm);
+        raw_current_ma = raw.current_ma;
         ctx_.meter.update(now_ms, raw.power_mw, raw.current_ma);
         if (ctx_.pm.vbus_mv >= 1000) {
             ctx_.trend.push(now_ms, static_cast<uint32_t>(ctx_.pm.vbus_mv) / 10, power::magnitude(ctx_.pm.current_ma) / 10,
@@ -309,7 +311,7 @@ K2_HOT UiAction Ui::tick(uint32_t now_ms) {
     in.vbus_known = ctx_.pm_online;
     in.vbus_mv = ctx_.vbus_fast_mv;
     in.current_known = ctx_.pm_online;
-    in.current_ma = ctx_.pm_avg.current_ma;
+    in.current_ma = raw_current_ma;
     in.cc = fusb302::active_cc();
     in.caps_rx = fusb302::rx_count();
     in.requests = fusb302::contract().requests;

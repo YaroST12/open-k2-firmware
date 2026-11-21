@@ -486,15 +486,16 @@ static void test_sink_tab_omits_empty_data_row() {
     g_stub.pm.vbus_mv = 5000; g_stub.pm.current_ma = 0;
     g_stub.contract.valid = true; g_stub.contract.ready = true; g_stub.contract.pos = 1;
     g_stub.contract.mv = 5000; g_stub.contract.op_ma = g_stub.contract.max_ma = 3000;
+    g_stub.pd_seen_attach = true; g_stub.ol_facts.far_pd_message = true;   // the Request is PD traffic, answered by the sink
     uint32_t t = 20000;
-    show(ui, 2, t);                                     // Sink tab, a sink was seen on CC, no charger attached
+    show(ui, 2, t);                                     // Sink tab, a sink was seen on CC
     CHECK_EQ(cp(ui).result_rows(), 6);                  // no Data row: nothing is known about the data line
     g_stub.ul.family = usblink::Family::Usb32; g_stub.ul.mbps = 5000;
     g_stub.ul.conf = usblink::Confidence::Negotiated;
     ui.tick(t += 100);
     show(ui, 2, t);
     CHECK_EQ(cp(ui).result_rows(), 6);                  // a plain "5G" would only repeat the USB row
-    g_stub.ul = {}; g_stub.contract = {};
+    g_stub.ul = {}; g_stub.contract = {}; g_stub.pd_seen_attach = false; g_stub.ol_facts.far_pd_message = false;
 }
 
 // The Proto row must survive the 9-row cap: when the Alt row would only show "-", it is dropped and the
