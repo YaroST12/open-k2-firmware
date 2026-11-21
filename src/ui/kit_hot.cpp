@@ -367,6 +367,10 @@ K2_HOT void RowList::draw_row_cb(void *ctx, int index, const Rect &r, bool hi, F
     } else if (hi && sp.marker == Marker::Icon && sp.marker_color == 0) {
         sp.marker_color = kAccent;
     }
+    if (hi) {   // blocked / placeholder ink3 all but vanishes on the focus fill: the focus-dim ink reads there
+        if (sp.text_color == kInk3) sp.text_color = kOnFocusDim;
+        if (sp.tail_color == kInk3) sp.tail_color = kOnFocusDim;
+    }
 
     const int16_t ty = static_cast<int16_t>(y + row_text_y(kRowH, kSmall.height));
     std::string_view tail = sp.tail;
