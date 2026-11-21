@@ -117,7 +117,8 @@ Open defects, newest first. A row leaves this list when its fix is merged and se
   path through the filter) by 6 s after boot, and START refused again. Phone unplugged: the latch was clear at the first read
   (~3 s later; CC2 back at open Rp 3.3 V, VBUS dark) and a START woke the Joyroom and ran (Light, pd: 1 pass, 0 fail).
 
-- **`make gate` fails at the tests on public since 3614728f** (2026-11-21, host). `test_ui_perf.cpp:516` (worst scroll over
+- ~~**`make gate` fails at the tests on public since 3614728f** (2026-11-21, host).~~ Fixed in fb3f086f: the toast is re-raised only
+  after a slice that covered it (Results scroll 49.5k px); Ripple/Connection/Diagnosis budgets re-measured. Host only. `test_ui_perf.cpp:516` (worst scroll over
   53600) and `test_ui_overdraw.cpp:227` (6 full-paint budgets) fail from 3614728f (place scrollbar to the bottom, toast
   above the scroll); b4d92f10 (Ripple native pixels) adds 2 more overdraw fails. 949c134c and earlier pass.
 
