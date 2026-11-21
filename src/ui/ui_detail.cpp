@@ -22,18 +22,21 @@
 namespace k2 {
 
 namespace {
-// The three values: font 24, five cells each, an 8 x 16 key chip after the digits, a 3 px underline under value and chip.
+// The three values: font 24, five cells each (60 px of a 70 px column, so no digit touches its neighbour), a 3 px underline under
+// the value and a 14 px unit tag hanging from the underline's right end (the key chip; beside the digits it had no room).
 // Option B 208 px width: 3 columns x 70 px pitch, 68 px underline (2 * 70 + 68 = 208).
-constexpr int16_t kValY = 4, kValPitch = 70, kValChars = 5;
-constexpr int16_t kChipX = kValChars * 12, kChipW = 8, kChipH = 16, kChipY = kValY + 4;
-constexpr int16_t kUnderY = 30, kUnderH = 3, kUnderW = kChipX + kChipW;   // 68 px
+constexpr int16_t kValY = 2, kValPitch = 70, kValChars = 5;
+constexpr int16_t kUnderY = 28, kUnderH = 3, kUnderW = 68;
+constexpr int16_t kChipW = 14, kChipH = 14, kChipX = kUnderW - kChipW, kChipY = kUnderY + kUnderH;
 static_assert(2 * kValPitch + kUnderW <= 208, "the W column ends inside the 208 px content");
+static_assert(kValChars * 12 <= kValPitch - 8, "a value leaves a gap before the next column");
+static_assert(kValY + 24 < kUnderY, "the value cell ends above its underline");
 
-// The receipt: 8 rows of 24 px from y 36, two columns (reclaiming TopBar + Footer height).
+// The receipt: 8 rows of 24 px from y 47, two columns (reclaiming TopBar + Footer height).
 // Keys font 12 at x 2 / x 104 on the value's baseline; values font 16 right-aligned to x 100 / x 206.
-constexpr int16_t kGridY0 = 36, kRowPitch = 24, kRows = 8;
-constexpr int16_t kKeyL = 2, kKeyR = 104, kValRtL = 100, kValRtR = 206;
+constexpr int16_t kGridY0 = kChipY + kChipH + 2, kRowPitch = 24, kRows = 8;constexpr int16_t kKeyL = 2, kKeyR = 104, kValRtL = 100, kValRtR = 206;
 constexpr int16_t kTextDy = 4;                                    // value line-box top inside a row
+static_assert(kGridY0 + (kRows - 1) * kRowPitch + kTextDy + 16 <= 240, "the receipt ends inside the content");
 constexpr int16_t kKeyDy = kTextDy + 12 - 9;                     // font 12 on the font 16 baseline (ascent 12 vs 9)
 constexpr int16_t kRuleDy = kRowPitch - 1;
 
@@ -79,17 +82,18 @@ constexpr const char *kChipLetter[3] = {"V", "A", "W"};
 // The ground around what the page paints, each pixel once, so Numbers covers the whole content when it opens over a live
 // page (no erase pass). A value's hole is its field box; a rule's hole is the rule.
 void lay_values_ground(const Surface &c) {
-    kit::Box h[6];
-    int n = 0;
+    kit::Box h[3];
     for (int q = 0; q < 3; q++) {
         const Pos p = pos_of(q);
-        h[n++] = {p.x, p.y, static_cast<int16_t>(p.chars * kMid.adv), kMid.height};
-        h[n++] = {static_cast<int16_t>(p.x + kChipX), kChipY, kChipW, kChipH};
+        h[q] = {p.x, p.y, static_cast<int16_t>(p.chars * kMid.adv), kMid.height};
     }
-    kit::fill_except(c, {0, kit::kBelowBar, c.w, static_cast<int16_t>(kUnderY - kit::kBelowBar)}, h, n, kBg);
-    kit::Box u[3];
-    for (int q = 0; q < 3; q++) u[q] = {static_cast<int16_t>(q * kValPitch), kUnderY, kUnderW, kUnderH};
-    kit::fill_except(c, {0, kUnderY, c.w, static_cast<int16_t>(kGridY0 - kUnderY)}, u, 3, kBg);
+    kit::fill_except(c, {0, kit::kBelowBar, c.w, static_cast<int16_t>(kUnderY - kit::kBelowBar)}, h, 3, kBg);
+    kit::Box u[6];
+    for (int q = 0; q < 3; q++) {
+        u[2 * q] = {static_cast<int16_t>(q * kValPitch), kUnderY, kUnderW, kUnderH};
+        u[2 * q + 1] = {static_cast<int16_t>(q * kValPitch + kChipX), kChipY, kChipW, kChipH};
+    }
+    kit::fill_except(c, {0, kUnderY, c.w, static_cast<int16_t>(kGridY0 - kUnderY)}, u, 6, kBg);
 }
 
 void lay_row_ground(const Surface &c, int r) {
@@ -147,8 +151,8 @@ void DetailPage::draw_static() {
         for (int q = 0; q < 3; q++) {
             const int16_t x = static_cast<int16_t>(q * kValPitch);
             gfx_fill(c, static_cast<int16_t>(x + kChipX), kChipY, kChipW, kChipH, chip_fill(q));
-            gfx_text(c, kLabelFont, static_cast<int16_t>(x + kChipX + 1), static_cast<int16_t>(kChipY + 2), kChipLetter[q], chip_ink(q),
-                     chip_fill(q));
+            gfx_text(c, kLabelFont, static_cast<int16_t>(x + kChipX + (kChipW - kLabelAdv) / 2), static_cast<int16_t>(kChipY + 1),
+                     kChipLetter[q], chip_ink(q), chip_fill(q));
             gfx_fill(c, x, kUnderY, kUnderW, kUnderH, chip_fill(q));
         }
         static_step_ = 2;
