@@ -1020,6 +1020,25 @@ static void test_planned_tests_scale_with_depth() {
     const auto o = ct::with_level({.selected = kPdAll}, ct::Level::Medium);
     CHECK_EQ(ct::planned_tests(none, o, f.in), ct::planned_tests(ct::nominal_caps(), o, f.in));
 }
+// The widest real list (7 SPR + 4 EPR slots, 50 V 5 A cable, Deep, every test): the UI keeps the count in a byte, so it must fit.
+static void test_planned_tests_of_the_widest_list_fit_a_byte() {
+    pd::SourceCaps c; c.valid = true; c.epr = true; c.spec_rev = 2; c.active_cc = 1; c.num_pdos = unsigned(pd::kMaxPdos); c.raw_header = 0x2181;
+    const unsigned fixed_mv[] = {5000, 9000, 12000, 15000, 20000, 28000, 36000, 48000};
+    const unsigned slot[] = {0, 1, 2, 3, 4, 7, 8, 9};   // 5/9/12/15/20 V, then the EPR fixed levels at positions 8..10
+    for (int i = 0; i < 5; ++i) c.pdos[std::size_t(i)] = pd::decode_pdo(((fixed_mv[i] / 50) << 10) | 500);
+    c.pdos[5] = pd::decode_pdo(0xc0000000 | (210u << 17) | (33u << 8) | 60);               // PPS 3.3-21 V
+    c.pdos[6] = pd::decode_pdo(0xc0000000 | (1u << 28) | (200u << 17) | (90u << 8) | 100);   // SPR AVS 9-20 V
+    for (int i = 5; i < 8; ++i) c.pdos[std::size_t(slot[i])] = pd::decode_pdo(((fixed_mv[i] / 50) << 10) | 500);
+    c.pdos[10] = pd::decode_pdo(0xc0000000 | (1u << 28) | (480u << 17) | (150u << 8) | 240);   // EPR AVS 15-48 V
+    Fake f; f.in.cable_mv = 50000; f.in.cable_ma = 5000; f.in.cable_observed = true;
+    unsigned prev = 0;
+    for (const auto l : {ct::Level::Light, ct::Level::Medium, ct::Level::Deep}) {
+        const unsigned n = ct::planned_tests(c, ct::with_level({}, l), f.in);
+        CHECK_EQ(n > prev, true);
+        CHECK_EQ(n <= 255, true);
+        prev = n;
+    }
+}
 // The full-current PPS row: the APDO's top voltage at its whole advertised current (clamped to the cable), after the APDO's
 // other rows. A non-hunt row: it asks what the APDO offers, not the OEM 6 A.
 static std::vector<ct::Step> full_rows(const ct::Runner& r) {
@@ -9368,7 +9387,7 @@ int main() {
     test_pd_bundles();
     test_source_probe_costs_at_most_a_second(); test_source_probe_only_in_a_pd_contract_and_once(); test_source_probe_skipped_without_a_contract();
     test_mi_chain_row_is_planned_once_last_of_the_pd_unit(); test_preview_counts_the_chain_row_with_the_svid();
-    test_planned_tests_scale_with_depth();
+    test_planned_tests_scale_with_depth(); test_planned_tests_of_the_widest_list_fit_a_byte();
     test_pps_full_current_row_with_a_5a_cable(); test_pps_full_current_row_clamps_to_an_unread_cable();
     test_pps_over_5a_apdo_with_a_5a_cable_is_a_cable_limit_skip(); test_pps_over_5a_apdo_with_an_unread_cable_is_a_cable_limit_skip();
     test_pps_over_5a_apdo_with_a_spoofed_6a_cable_asks_the_advertised_current();

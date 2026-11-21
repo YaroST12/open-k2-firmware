@@ -90,6 +90,8 @@ constexpr const char* kPresetNotes[kPresets] = {"Everything, QC Class B 20V", "P
                                                 "D+/D-: vendor modes, QC, UFCS", "Huawei, Samsung, OPPO, vivo"};
 static_assert(all_fit(kPresetNotes, kLabelAdv, kit::kNoteMaxPx), "a preset note is wider than the row note");
 static_assert(all_fit(kPresetNames, kSmallAdvPx, 150), "a preset name is wider than its row");
+// The count is a byte (ev8 clamps at 255): its three digits fit beside the widest name.
+static_assert(all_fit(kPresetNames, kSmallAdvPx, kit::kTailX - kit::kTextX - 3 * int(kSmallAdvPx) - 4), "a preset count would touch its name");
 // The planned re-attach (rdintent::plan_reattach) is announced on the footer of the START confirmation, never as a warning or a
 // stage of its own (27 characters at most): the second press goes straight on.
 constexpr const char* kReattachConfirm = "Press again, K2 blinks once";
