@@ -204,7 +204,7 @@ void DiagnosisPage::update(uint32_t now_ms) {
     if (bg && bg->more) return;
     char v[screen::kVerdictChars + 8];
     screen::verdict(r, v);
-    const FooterTone tone = tone_of(r);
+    const FooterTone tone = verdict_tone(r);
     if (tone == FooterTone::Error || tone == FooterTone::Caution) {
         pill_ = draw_footer_budgeted(ctx_.content, tone, v, foot_, bg) || pill_;
         return;
@@ -224,6 +224,13 @@ FooterTone DiagnosisPage::tone_of(const diag::Report &r) {
     if (worst == diag::Sev::Warn) return FooterTone::Caution;
     if (!r.empty && r.link == 0 && r.power == diag::kPowerOk) return FooterTone::Ok;
     return FooterTone::Info;
+}
+
+FooterTone DiagnosisPage::verdict_tone(const diag::Report &r) {
+    if (r.empty || r.no_pd) return FooterTone::Info;
+    if (r.link == 2 || r.power == diag::kPowerShort) return FooterTone::Error;
+    if (r.link == 1 || r.power == diag::kPowerOver) return FooterTone::Caution;
+    return r.power == diag::kPowerOk ? FooterTone::Ok : FooterTone::Info;
 }
 
 bool DiagnosisPage::on_event(Event e) {

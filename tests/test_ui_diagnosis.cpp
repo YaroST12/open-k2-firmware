@@ -53,6 +53,29 @@ static void test_tone_of() {
     CHECK_EQ(int(DiagnosisPage::tone_of(ok)), int(FooterTone::Info));
 }
 
+// The footer chip says "Link OK, K2 is sink": its tone follows those words, not the worst finding (the stamp carries that).
+static void test_verdict_tone() {
+    diag::Report r = diag_fixture::case1();
+    for (unsigned i = 0; i < r.n; i++) r.f[i].sev = diag::Sev::Warn;   // findings stay: an amber stamp is no reason for an amber chip
+    r.empty = false;
+    r.link = 0;
+    r.power = diag::kPowerActive;
+    CHECK_EQ(int(DiagnosisPage::verdict_tone(r)), int(FooterTone::Info));
+    r.power = diag::kPowerOk;
+    CHECK_EQ(int(DiagnosisPage::verdict_tone(r)), int(FooterTone::Ok));
+    r.power = diag::kPowerShort;
+    CHECK_EQ(int(DiagnosisPage::verdict_tone(r)), int(FooterTone::Error));
+    r.power = diag::kPowerOver;
+    CHECK_EQ(int(DiagnosisPage::verdict_tone(r)), int(FooterTone::Caution));
+    r.power = diag::kPowerOk;
+    r.link = 1;
+    CHECK_EQ(int(DiagnosisPage::verdict_tone(r)), int(FooterTone::Caution));
+    r.link = 2;
+    CHECK_EQ(int(DiagnosisPage::verdict_tone(r)), int(FooterTone::Error));
+    const diag::Report none{};
+    CHECK_EQ(int(DiagnosisPage::verdict_tone(none)), int(FooterTone::Info));
+}
+
 static Ui &fresh_ui() {
     static Ui ui;
     g_stub.ms = 1000;
@@ -181,6 +204,7 @@ static void test_verdict_toast_times_out() {
 int main() {
     test_cell_of();
     test_tone_of();
+    test_verdict_tone();
     test_page_case1();
     test_page_empty();
     test_place_stamp_replaces_top();
