@@ -408,6 +408,10 @@ States of a row:
 Repaints: a row repaints when its signature changes (marker, state, colours, texts, focus). A focus move
 repaints two rows. A change of the open height re-lays the rows below it.
 
+The Tests step's preset tails count what the run would make at the selected Depth (`ct::planned_tests`: runnable tests plus spec checks;
+the real plan with caps, `ct::nominal_caps()` without), cached by input key. The Charger and Cable tabs keep their last read over sleep
+and detach (same charger, same cable) and, empty, say `No offers read` / `Tests: Light, PD` and `Not read` / `Actions: Read e-marker`.
+
 Seen in: `b_ct_algorithms.png` (radio, count tail, note, chevron), `b_ct_cable.png` (second column),
 `b_ct_steps.png` (verdict marker, volt tail, thumb), `ra_guard_refuse.png` (choices, no marker).
 
