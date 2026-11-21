@@ -156,6 +156,7 @@ bool sink_band(std::uint16_t& first, std::uint16_t& last) {
 void stream_begin(std::uint16_t x0, std::uint16_t y0, std::uint16_t x1, std::uint16_t y1) {
     g_lcd_windows++;
     if (g_sink) { g_sink_work.begins++; g_sink->begin(x0, y0, x1, y1); return; }
+    k2::paint::meter.panel_window(x0, y0, x1, y1);
     if (g_lcd_timing) {
         if (g_lcd_timing->serial) { t_dma_wait(); t_spend(g_lcd_timing->call_us + g_lcd_timing->window_us); }
         else g_twin_pending = true;   // recorded only, as lcd.cpp does

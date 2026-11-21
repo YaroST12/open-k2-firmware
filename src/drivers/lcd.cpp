@@ -542,6 +542,7 @@ private:
 
 K2_HOT void stream_begin(std::uint16_t x0, std::uint16_t y0, std::uint16_t x1, std::uint16_t y1) {
     if (g_sink) return g_sink->begin(x0, y0, x1, y1);
+    paint::meter.panel_window(x0, y0, x1, y1);   // the toast's overlap watch (Ui::pump_paint)
     // A panel in sleep (or waking) shows nothing and its RAM write would only wake the wire: drop the stream. The wake repaints
     // everything. Latched at begin, so a window never changes sides half-way.
     g_drop = !g_seq.awake();

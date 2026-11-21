@@ -118,10 +118,10 @@ K2_HOT void Ui::pump_paint(uint32_t now_ms) {
     const int toast_px0 = bg ? bg->spent : -1;
     ctx_.rows.set_muted(ring_view_);
     current().update(now_ms);
-    const bool body_painted = !bg || bg->spent != toast_px0;
-    const bool toast_dirty = !ctx_.toast.drawn || (toast_was_drawn && body_painted);
-    if (bg && bg->more) {
-        // Body slices may cover the pill: redraw the active toast immediately so it never disappears mid-scroll.
+    // Covered: the body painted, and a panel window crossed the pill since it was last drawn (paint_meter.hpp overlay watch).
+    const bool body_painted = (!bg || bg->spent != toast_px0) && paint::meter.watch_hit();
+    const bool toast_dirty = !ctx_.toast.drawn || (toast_was_drawn && body_painted);    if (bg && bg->more) {
+        // A slice that covered the pill raises it again at once, so it never disappears mid-scroll; one that missed it costs nothing.
         if ((toast_dirty || rotation_notice_drawn_) && ctx_.toast.active(now_ms) && !fctrig::paint_critical()) {
             ctx_.toast.drawn = false;
             draw_toast_overlay(now_ms);

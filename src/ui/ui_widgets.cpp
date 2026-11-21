@@ -7,6 +7,7 @@
 #include "k2/ui/ui_types.hpp"
 #include "k2/ui/ui_style.hpp"
 #include "k2/ui/text.hpp"
+#include "k2/core/paint_meter.hpp"
 #include "k2/drivers/lcd.hpp"
 #include "k2/ui/blend.hpp"
 #include "k2/ui/ui_viewport.hpp"
@@ -242,12 +243,14 @@ K2_HOT void draw_footer(const Surface &s, FooterTone tone, std::string_view text
 }
 
 K2_HOT void draw_toast(const Surface &s, FooterTone tone, std::string_view text K2_TRUNC_DEF) {
+    paint::meter.watch_record();   // the pill's panel rectangle: Ui::pump_paint re-raises it only after a paint that crossed it
     if (s.x && ContentViewport::stretched()) {
         ContentViewport::Pause panel_space;
         toast_pill(s, tone, text, false K2_TRUNC_ARG);
-        return;
+    } else {
+        toast_pill(s, tone, text, false K2_TRUNC_ARG);
     }
-    toast_pill(s, tone, text, false K2_TRUNC_ARG);
+    paint::meter.watch_set();
 }
 
 // Fieldbook masthead: no fill (the band is the ground), the 12 px icon at x8, the title in font 16 at x8 (x26 behind

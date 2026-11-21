@@ -36,12 +36,44 @@ public:
     void begin_window() { base_ = cur_; }
     Reading window() const { return read({cur_.px - base_.px, cur_.lcd - base_.lcd, cur_.fs - base_.fs}); }
 
+    // Overlay watch (the UI's toast pill): the panel windows opened between watch_record() and watch_set() join the
+    // watched rectangle; a later panel window that crosses it sets watch_hit(). Panel coordinates only (the lcd driver
+    // feeds panel_window() past its sink check), so every rotation and viewport map is already applied. Pills share one
+    // band but differ in width, so the rectangle only grows, until a whole-panel window (a rotation, a full clear) drops
+    // it. With no rectangle, watch_hit() is true: the caller repaints its overlay as if covered.
+    void panel_window(std::uint16_t x0, std::uint16_t y0, std::uint16_t x1, std::uint16_t y1) {
+        if (rec_) {
+            if (x0 < r_[0]) r_[0] = x0;
+            if (y0 < r_[1]) r_[1] = y0;
+            if (x1 > r_[2]) r_[2] = x1;
+            if (y1 > r_[3]) r_[3] = y1;
+            return;
+        }
+        if (x0 == 0 && y0 == 0 && x1 >= kPanelMax && y1 >= kPanelMax) valid_ = false;
+        if (x0 <= w_[2] && x1 >= w_[0] && y0 <= w_[3] && y1 >= w_[1]) hit_ = true;
+    }
+    void watch_record() { rec_ = true; r_[0] = r_[1] = 0xFFFF; r_[2] = r_[3] = 0; }
+    void watch_set() {
+        rec_ = false;
+        if (r_[0] <= r_[2]) {
+            if (!valid_) { w_[0] = w_[1] = 0xFFFF; w_[2] = w_[3] = 0; }
+            for (int i = 0; i < 2; i++) if (r_[i] < w_[i]) w_[i] = r_[i];
+            for (int i = 2; i < 4; i++) if (r_[i] > w_[i]) w_[i] = r_[i];
+            valid_ = true;
+            hit_ = false;   // only a pill that reached the panel is uncovered (one drawn into a capture sink is not)
+        }
+    }
+    bool watch_hit() const { return hit_ || !valid_; }
+
 private:
     struct Sums {
         std::uint64_t px = 0, lcd = 0, fs = 0;
     };
     static Reading read(const Sums& s) { return {sat32(s.px), ms_of(s.lcd), ms_of(s.fs)}; }
     Sums cur_, base_;
+    static constexpr std::uint16_t kPanelMax = 239;   // lcd::kWidth - 1 (this header stays free of driver headers)
+    std::uint16_t r_[4] = {0xFFFF, 0xFFFF, 0, 0}, w_[4] = {0xFFFF, 0xFFFF, 0, 0};
+    bool rec_ = false, hit_ = false, valid_ = false;
 };
 
 inline Meter meter;

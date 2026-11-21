@@ -6,6 +6,7 @@
 // slots whose (row, highlight) changed. These budgets lock that in; the convergence checks
 // prove the incremental paths produce exactly the same pixels as a forced full redraw.
 #include "fake_lcd.h"
+#include "k2/core/paint_meter.hpp"
 #include "k2/ui/pixel_sink.hpp"
 #include "test_util.h"
 #include "k2/ui/ui.hpp"
@@ -218,6 +219,7 @@ void begin(uint16_t a, uint16_t b, uint16_t c, uint16_t d) {
     static bool attached;
     if (!attached) { panel.attach(g_panel, 240, 0, 240); attached = true; }
     panel.window(a, b, c, d);
+    k2::paint::meter.panel_window(a, b, c, d);   // the toast's overlap watch, as the fake panel's own stream feeds it
     x0 = cx = a; y0 = cy = b; x1 = c; y1 = d;
 }
 void put(uint32_t k) {
