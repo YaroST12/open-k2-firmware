@@ -13,6 +13,7 @@
 #include <cstdarg>
 
 #include "k2/core/binlog.hpp"
+#include "k2/core/held.hpp"
 #include "k2/pd/emk_quirk.hpp"
 #include "k2/core/version.hpp"
 #include "k2/core/lz.hpp"
@@ -500,8 +501,11 @@ static void test_pd_opener() {
     ui.goto_page(kConnTabAlias + 0, 1800);
     g_stub.caps.valid = false;
     ui.tick(1900);
+    CHECK_STR(ui.labels().b[int(Button::Ok)].lng, "Share");   // the offers are held after the charger goes quiet
+    held::reset();
+    ui.tick(2000);
     CHECK_STR(ui.labels().b[int(Button::Ok)].lng, "");
-    ui.on_button(Button::Ok, ButtonEvent::Long, 2000);
+    ui.on_button(Button::Ok, ButtonEvent::Long, 2100);
     CHECK_EQ(int(ui.menu_depth()), 1);
     g_stub = old;
 }

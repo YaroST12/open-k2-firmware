@@ -12,6 +12,7 @@
 #include "test_util.h"
 #include "fake_lcd.h"
 #include "ui_stubs.h"
+#include "k2/core/held.hpp"
 #include "k2/ui/ui.hpp"
 #include "k2/ui/kit.hpp"
 #include "k2/ui/ui_pages.hpp"
@@ -790,6 +791,87 @@ static void test_cable_full_rows() {
         if (!seen[k]) std::printf("not seen: %s\n", want[k]);
         CHECK(seen[k]);
     }
+#ifdef K2_TRUNC_LOG
+    CHECK_EQ(k2::trunc::failures(), 0);
+#endif
+    g_stub.em = {}; g_stub.cable_full = {};
+}
+
+// The Charger tab keeps the offers after the charger goes quiet (VBUS off, Rd dropped) and swaps them only for a different
+// offer list; an identical list changes nothing.
+static void test_charger_tab_keeps_the_offers() {
+    Ui &ui = fresh_ui();
+    make_inline(ui, 56000);
+    g_stub.pm_online = true;
+    g_stub.caps.valid = true; g_stub.caps.spec_rev = 2; g_stub.caps.active_cc = 1; g_stub.caps.num_pdos = 3;
+    g_stub.caps.pdos[0] = {pd::PdoType::Fixed, 0, 5000, 5000, 3000, 15000};
+    g_stub.caps.pdos[1] = {pd::PdoType::Fixed, 0, 9000, 9000, 3000, 27000};
+    g_stub.caps.pdos[2] = {pd::PdoType::Pps, 0, 5000, 11000, 5000, 55000};
+    g_stub.caps.raw_header = 0x1181; g_stub.caps.rx_count++;
+    g_stub.pd_seen_attach = true;
+    uint32_t t = 57000;
+    ui.tick(t);
+    show(ui, 0, t);
+    const int rows = cp(ui).result_rows();
+    CHECK(rows >= 3);
+    const pd::SourceCaps three = g_stub.caps;
+    g_stub.caps = {};                                  // the driver's list is gone: the charger sleeps
+    g_stub.pm.vbus_mv = 0;
+    show(ui, 0, t);
+    CHECK_EQ(cp(ui).result_rows(), rows);              // the same rows, not the empty band
+    g_stub.caps = three;                               // the same offers again, a new message
+    g_stub.caps.raw_header = 0x1381; g_stub.caps.rx_count += 2;
+    g_stub.pm.vbus_mv = 5000;
+    show(ui, 0, t);
+    CHECK_EQ(cp(ui).result_rows(), rows);
+    g_stub.caps.num_pdos = 2;                          // a renegotiation with other offers
+    g_stub.caps.raw_header = 0x1581; g_stub.caps.rx_count++;
+    show(ui, 0, t);
+    CHECK_EQ(held::shown_caps().num_pdos, 2);
+    g_stub.caps = {};
+    g_stub.pm.vbus_mv = 0;
+    show(ui, 0, t);
+    CHECK(held::showing_held());
+    CHECK_EQ(held::shown_caps().num_pdos, 2);          // the new list is the one held now
+#ifdef K2_TRUNC_LOG
+    CHECK_EQ(k2::trunc::failures(), 0);
+#endif
+    g_stub.caps = {};
+}
+
+// A read cable stays on the Cable tab after the driver forgets it (detach, a read starting), in full colour, until a read
+// returns a different cable; the same cable read again without SVIDs keeps the SVIDs it had.
+static void test_cable_tab_keeps_a_read_cable() {
+    Ui &ui = fresh_ui();
+    make_inline(ui, 54000);
+    g_stub.pm_online = true;
+    pd::Emarker &em = g_stub.em;
+    em.valid = true; em.vid = 0x2E99; em.vendor_str = "Baseus"; em.speed_str = "USB 2.0"; em.latency_str = "<10 ns (~1 m)";
+    em.max_current_a = 5; em.max_voltage_v = 20; em.max_power_w = 100; em.raw_vdos[3] = 0x11;
+    cable_full::Full &f = g_stub.cable_full;
+    f.valid = true; f.p1.svids_ack = true; f.p1.nsvid = 1; f.p1.svid[0] = 0xFF01;
+    uint32_t t = 55000;
+    ui.tick(t);
+    show(ui, 1, t);
+    const int with_svids = cp(ui).result_rows();
+    CHECK(with_svids > 7);
+    CHECK(row_value_is(1, "2.0"));
+    g_stub.em = {}; g_stub.cable_full = {}; g_stub.cable_ans = {}; g_stub.cable_seq++;   // unplugged: the driver's copy is gone
+    show(ui, 1, t);
+    CHECK_EQ(cp(ui).result_rows(), with_svids);
+    CHECK(row_value_is(1, "2.0"));                    // not dimmed
+    em.valid = true; em.vid = 0x2E99; em.vendor_str = "Baseus"; em.speed_str = "USB 2.0"; em.latency_str = "<10 ns (~1 m)";
+    em.max_current_a = 5; em.max_voltage_v = 20; em.max_power_w = 100; em.raw_vdos[3] = 0x11;
+    g_stub.cable_seq++;                               // the same cable read again: identity only
+    show(ui, 1, t);
+    CHECK_EQ(cp(ui).result_rows(), with_svids);
+    em.raw_vdos[3] = 0x12;                            // another cable: the old SVIDs are not its own
+    g_stub.cable_seq++;
+    show(ui, 1, t);
+    CHECK_EQ(cp(ui).result_rows(), 7);
+    g_stub.em = {}; g_stub.cable_seq++;
+    show(ui, 1, t);
+    CHECK_EQ(cp(ui).result_rows(), 7);
 #ifdef K2_TRUNC_LOG
     CHECK_EQ(k2::trunc::failures(), 0);
 #endif
@@ -2112,6 +2194,8 @@ int main() {
     test_worst_case_rows_fit();
     test_cable_tab_answered_row();
     test_cable_full_rows();
+    test_charger_tab_keeps_the_offers();
+    test_cable_tab_keeps_a_read_cable();
     test_each_tab_shows_its_own_side();
     test_sink_tab_not_empty_when_a_sink_was_seen();
     test_source_tab_leaves_waiting_after_timeout();

@@ -5,6 +5,7 @@
 #include "test_util.h"
 #include "fake_lcd.h"
 #include "ui_stubs.h"
+#include "k2/core/held.hpp"
 #include "k2/ui/ui.hpp"
 #include "k2/ui/ui_style.hpp"
 #include "ui_nav.h"
@@ -1592,6 +1593,7 @@ int main() {
         const auto saved_vbus = g_stub.pm.vbus_mv;
         g_stub.pm.vbus_mv = 0;                                 // no source on the cable: the VCONN scan
         g_stub.em = {};                                        // valid = false
+        held::reset();                                         // and no cable held from the screens before
         ui.goto_page(static_cast<uint8_t>(Page::Lines), 31900);
         ui.tick(31905);                                        // the page reads the new VBUS
         ui.goto_page(kConnTabAlias + 1, 31910);

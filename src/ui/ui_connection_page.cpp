@@ -206,7 +206,7 @@ void ConnectionPage::invalidate() {
 }
 
 Strip ConnectionPage::labels() const {
-    const bool share = (tab_ == conn::Tab::Source && held::shown_caps().valid) || (tab_ == conn::Tab::Cable && fusb302::emarker().valid);
+    const bool share = (tab_ == conn::Tab::Source && held::shown_caps().valid) || (tab_ == conn::Tab::Cable && held::cable_em().valid);
     const sl::Id back = (iq_asked_ && fusb302::interrogate_running()) ? sl::Stop : sl::Back;
     if (has_pages() && !act_page_) {
         return {{back, sl::Up, share ? sl::ActionsShare : sl::Actions, sl::Dn}};
@@ -325,9 +325,9 @@ void ConnectionPage::share_caps(uint32_t now_ms) {
     ctx_.ui->open_share(qrshare::Type::PdCaps, qrshare::kSchemaPdCaps, "Source caps", len, now_ms);
 }
 
-// The live cable as a share record (no quirk table: that belongs to a saved clone).
+// The held cable as a share record (no quirk table: that belongs to a saved clone).
 void ConnectionPage::share_cable(uint32_t now_ms) {
-    const pd::Emarker &em = fusb302::emarker();
+    const pd::Emarker &em = held::cable_em();
     if (!em.valid || em.num_vdos < 5 || (em.spec_rev != 1 && em.spec_rev != 2)) { set_op("No cable read", now_ms); return; }
     const emrec::Record rec = emrec::make({em.raw_vdos.data(), 5}, em.spec_rev, "Live cable");
     const std::size_t len = qrshare::records::emarker(rec, "Live cable", nullptr, ctx_.ui->share_buffer());
@@ -343,7 +343,7 @@ void ConnectionPage::build_items() {
     a.alone = pd::identify_alone(a.inline_sink, ctx_.pm_online, ctx_.pm_online ? ctx_.vbus_fast_mv : -1,
                                  fusb302::caps_this_attach(), link.wait_kind());
     a.caps_valid = held::shown_caps().valid;
-    a.cable_valid = fusb302::emarker().valid;
+    a.cable_valid = held::cable_em().valid;
     // The no-PD gate (ROADMAP 2026-11-10, Row C): with the settled verdict "no PD" a device on the line
     // cannot be identified. The alone path (a dual-role phone) is PD-capable and stays offered.
     a.pd_none = verdict_ == pd::PdVerdict::None && (facts_.inline_sink || facts_.sink_seen) && !a.alone;
@@ -504,7 +504,9 @@ void ConnectionPage::sense(uint32_t now_ms) {
     }
     conn::sense_passive(facts_, ctx_, link, guard_);
     // The charger went quiet but its offers are held: the tab shows them, not the empty "Charger waiting" band.
-    if (tab_ == conn::Tab::Source && !facts_.charger && !facts_.inline_sink && held::showing_held()) facts_.charger = true;
+    if (tab_ == conn::Tab::Source && !facts_.charger && held::showing_held()) facts_.charger = true;
+    held::poll();   // the page may open before the main loop's pass: the held cable is the driver's up to this frame
+    if (held::cable_em().valid) facts_.cable = true;   // a read cable stays on its tab after it is unplugged
     // The one "PD present" verdict of this attach, cached for build_items / paint_body / the tests.
     verdict_ = link.pd_verdict();
     none_why_ = link.pd_none_why();
@@ -771,7 +773,7 @@ void put_sink_pdos(Rows &R, const char *key, std::span<const uint32_t> sink);
 void cable_full_rows(Rows &R, const pd::Emarker &em);
 
 [[gnu::noinline]] void cable_rows(Rows &R, const TabData &) {
-    const pd::Emarker &em = fusb302::emarker();
+    const pd::Emarker &em = held::cable_em();
     put_id(R.add("ID"), em.vid, em.pid, em.vendor_str);
     StrBuf<28> &sp = R.add("Speed", kText);
     char sb[24];
@@ -779,7 +781,7 @@ void cable_full_rows(Rows &R, const pd::Emarker &em);
     sp.put(sb);
     // The lane and Thunderbolt / USB4 tags follow while they fit; the speed itself is always whole.
     if (em.is_active && em.vdo2_valid && em.usb_lanes == 2) put_if_fits(sp, " x2");
-    if (em.vid == 0x8087 || fusb302::cable_thunderbolt()) { if (sp.view().substr(0, 2) != "TB") put_if_fits(sp, " TB"); }
+    if (em.vid == 0x8087 || held::cable_thunderbolt()) { if (sp.view().substr(0, 2) != "TB") put_if_fits(sp, " TB"); }
     else if (em.usb4_supported && sp.view().substr(0, 4) != "USB4") put_if_fits(sp, " USB4");
     put_a(R.add("Current", kAmp), uint32_t(em.max_current_a) * 1000);
     StrBuf<28> &volt = R.add("Voltage", kVolt);
@@ -792,7 +794,7 @@ void cable_full_rows(Rows &R, const pd::Emarker &em);
     R.add("Length", kText).put(em.latency_str ? em.latency_str : "?");
     // How the cable answered the read ("A, PD3, SVDM 1.0"): only when this firmware's scan found it (a clone's or
     // an older reading has none). With VCONN required this is the ninth and last row.
-    const emk_variant::Text ans = emk_variant::short_text(fusb302::cable_answered());
+    const emk_variant::Text ans = emk_variant::short_text(held::cable_answered());
     if (!ans.view().empty()) R.add("Replied", kDim).put(ans.view());
     cable_full_rows(R, em);
 }
@@ -879,7 +881,7 @@ void cable_plug_rows(Rows &R, const cable_full::Plug &p, bool second) {
 
 void cable_full_rows(Rows &R, const pd::Emarker &em) {
     if (em.is_active && em.vdo2_valid) cable_active_rows(R, em);
-    const cable_full::Full &f = fusb302::cable_extra();
+    const cable_full::Full &f = held::cable_extra();
     if (!f.valid) return;
     cable_plug_rows(R, f.p1, false);
     if (f.id2_ack) {
@@ -1459,7 +1461,7 @@ void add_soc_chip(Ident &id, const pd::BatteryCaps &bat, const pd::BatteryStatus
     }
 }
 
-[[gnu::noinline]] void place_ident(Ident &id, conn::Tab tab, const TabData &d, bool stale) {
+[[gnu::noinline]] void place_ident(Ident &id, conn::Tab tab, const TabData &d) {
     const MatchResult &r = *d.r;
     switch (tab) {
     case conn::Tab::Source: {
@@ -1495,10 +1497,10 @@ void add_soc_chip(Ident &id, const pd::BatteryCaps &bat, const pd::BatteryStatus
         return;
     }
     case conn::Tab::Cable: {
-        const pd::Emarker &em = fusb302::emarker();
+        const pd::Emarker &em = held::cable_em();
         if (!em.valid) { id.head.put("Not read"); id.dim = true; id.line.put("No e-marker answer held"); return; }
         id.head.put_u32(em.max_current_a).put("A ").put_u32(em.max_voltage_v).put_char('V');
-        id.dim = stale;
+        id.dim = false;
         StrBuf<12> w;
         w.put_u32(em.max_power_w).put_char('W');
         id.add(w.view(), Ident::Solid);
@@ -1611,9 +1613,9 @@ using BuildRowsFn = void (*)(Rows &, const void *);
     return paint_identity(c, id, false, sig, bg);
 }
 
-[[gnu::noinline]] bool paint_place_ident(const Surface &c, conn::Tab tab, const TabData &d, bool dim, uint32_t &sig, PaintBudget *bg) {
+[[gnu::noinline]] bool paint_place_ident(const Surface &c, conn::Tab tab, const TabData &d, uint32_t &sig, PaintBudget *bg) {
     Ident id;
-    place_ident(id, tab, d, dim);
+    place_ident(id, tab, d);
     return paint_identity(c, id, false, sig, bg);
 }
 
@@ -1694,13 +1696,12 @@ bool ConnectionPage::paint_body(const MatchResult &r, const pd::SourceCaps &caps
     d.vbus_mv = vbus_;
     d.vooc = vooc_;
     d.iq_ok = iq_have_ && iq_session_ == fusb302::session() && fusb302::interrogate_status().phase != pd::IqPhase::Idle;
-    const bool dim = tab_ == conn::Tab::Cable && link.cable_stale();
-    const bool done = paint_body_locked(&d, dim);
+    const bool done = paint_body_locked(&d);
     if (done) g_conn_body_passes++;
     return done;
 }
 
-bool ConnectionPage::paint_body_locked(const void *tab_data, bool dim) {
+bool ConnectionPage::paint_body_locked(const void *tab_data) {
     const auto &d = *static_cast<const TabData *>(tab_data);
     const Surface &c = ctx_.content;
     PaintBudget *const bg = ctx_.budget;
@@ -1711,10 +1712,10 @@ bool ConnectionPage::paint_body_locked(const void *tab_data, bool dim) {
         row_sig_.fill(0); body_n_ = 0; tail_cleared_ = ctx_.blank; close_done_ = false;
         body_clear_y_ = kFooterY; id_sig_ = thumb_sig_ = 0;
     }
-    if (!paint_place_ident(c, tab_, d, dim, id_sig_, bg)) return false;
+    if (!paint_place_ident(c, tab_, d, id_sig_, bg)) return false;
     ListDrawState st{tail_cleared_, body_clear_y_, bg};
     const BodyBuildCtx bctx{tab_, &d};
-    return paint_place_list(c, dim, {first_, res_n_, tot_n_, thumb_sig_, row_sig_, body_n_, st}, build_body_rows, &bctx);
+    return paint_place_list(c, false, {first_, res_n_, tot_n_, thumb_sig_, row_sig_, body_n_, st}, build_body_rows, &bctx);
 }
 
 // The no-PD body (ROADMAP 2026-11-10, Row C): the dim identity headline (NO PD) and its one line, then only the rows
@@ -1978,7 +1979,7 @@ void ConnectionPage::update(uint32_t now_ms) {
     c = mix_u32(c, vooc_);
     c = mix_u32(c, uint32_t(link.attached()) | uint32_t(link.waiting()) << 1 | uint32_t(link.inline_mode()) << 2
               | uint32_t(pd::is_fake()) << 3 | uint32_t(fusb302::active_cc()) << 4
-              | uint32_t(tab_) << 8 | uint32_t(link.cable_stale()) << 12 | fc_ << 16
+              | uint32_t(tab_) << 8 | fc_ << 16
               | uint32_t(facts_.topo) << 24 | uint32_t(facts_.wait) << 26 | uint32_t(fusb302::self_powered()) << 28);
     c = mix_u32(c, uint32_t(verdict_) | uint32_t(none_why_) << 4);   // the no-PD gate's verdict settles at attach+1.5 s
     c = mix_u32(c, uint32_t(facts_.cable_fact));                     // the empty Cable tab's words: chip silent / no chip
@@ -2000,7 +2001,9 @@ void ConnectionPage::update(uint32_t now_ms) {
     c = mix_u32(c, em.raw_vdos[4]);
     c = mix_u32(c, uint32_t(em.max_power_w) | uint32_t(em.sop) << 16);
     c = mix_u32(c, fusb302::cable_seq());
-    c = mix_cable_full(c, fusb302::cable_extra());
+    c = mix_cable_full(c, held::cable_extra());
+    c = mix_u32(c, uint32_t(held::cable_em().valid) | uint32_t(held::cable_em().vid) << 8 | uint32_t(held::cable_em().raw_vdos[4]) << 24);
+    c = mix_u32(c, held::cable_em().raw_vdos[3] ^ uint32_t(held::cable_answered().orientation) << 28);
     c = mix_identity(c, vdm.identity);
     c = mix_u32(c, uint32_t(vdm.num_svids) | uint32_t(vdm.modes_svid) << 8 | uint32_t(vdm.num_modes) << 24);
     c = mix_u16s(c, vdm.svids.data(), vdm.num_svids);
@@ -2105,7 +2108,7 @@ void ConnectionPage::update(uint32_t now_ms) {
 
     uint32_t h = 2166136261u;
     h = mix_u32(h, uint32_t(verdict_) | uint32_t(none_why_) << 4);   // the no-PD body switches on the verdict edge
-    h = mix_u32(h, uint32_t(tab_) | uint32_t(link.cable_stale()) << 8 | uint32_t(link.waiting()) << 9 | uint32_t(caps->epr) << 10 | uint32_t(caps->spec_rev) << 11 | uint32_t(r.verdict) << 16 | uint32_t(r.flags) << 24);
+    h = mix_u32(h, uint32_t(tab_) | uint32_t(link.waiting()) << 9 | uint32_t(caps->epr) << 10 | uint32_t(caps->spec_rev) << 11 | uint32_t(r.verdict) << 16 | uint32_t(r.flags) << 24);
     h = mix_u32(h, r.typec_ma | uint32_t(fusb302::pd_traffic()) << 16 | uint32_t(link.inline_mode()) << 17);
     h = mix_u32(h, uint32_t(r.typec_rp));
     h = mix_u32(h, uint32_t(vbus_mv));
@@ -2127,7 +2130,9 @@ void ConnectionPage::update(uint32_t now_ms) {
         h = mix_u32(h, uint32_t(em.valid) | uint32_t(em.is_active) << 1 | uint32_t(em.vid) << 8 | uint32_t(em.raw_vdos[4]) << 24);
         h = mix_u32(h, em.raw_vdos[4] | uint32_t(em.max_power_w) << 8 | uint32_t(em.sop) << 24);
         h = mix_u32(h, fusb302::cable_seq());
-        h = mix_cable_full(h, fusb302::cable_extra());
+        h = mix_cable_full(h, held::cable_extra());
+        h = mix_u32(h, uint32_t(held::cable_em().valid) | uint32_t(held::cable_em().vid) << 8 | uint32_t(held::cable_em().raw_vdos[4]) << 24);
+        h = mix_u32(h, held::cable_em().raw_vdos[3] ^ uint32_t(held::cable_answered().orientation) << 28);
         h = mix_u32(h, uint32_t(fusb302::identify_current()));
         h = mix_identity(h, vdm.identity);
         h = mix_identity(h, snk.identity);

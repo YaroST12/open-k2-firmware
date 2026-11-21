@@ -9,9 +9,13 @@
 namespace k2::held {
 namespace {
 pd::HeldOffers g_held;
+pd::HeldCable g_cable;
 }
 
-void poll() { g_held.capture(fusb302::caps(), fusb302::epr_info_list()); }
+void poll() {
+    g_held.capture(fusb302::caps(), fusb302::epr_info_list());
+    g_cable.capture(fusb302::emarker(), fusb302::cable_extra(), fusb302::cable_answered());
+}
 
 bool showing_held() { return g_held.caps().valid && !pd::is_fake() && !pd::active_caps().valid; }
 
@@ -30,5 +34,15 @@ std::span<const std::uint32_t> epr_raw() {
     }
     return g_held.epr();
 }
+
+void reset() {
+    g_held = {};
+    g_cable = {};
+}
+
+const pd::Emarker &cable_em() { return g_cable.em(); }
+const cable_full::Full &cable_extra() { return g_cable.full(); }
+emk_variant::Answered cable_answered() { return g_cable.answered(); }
+bool cable_thunderbolt() { return g_cable.thunderbolt(); }
 
 }  // namespace k2::held

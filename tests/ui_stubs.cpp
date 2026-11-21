@@ -38,10 +38,12 @@
 #include "k2/core/trace_hid_hw.hpp"
 #include "k2/loopprobe/loop_probe_hw.hpp"
 #include "k2/battery/battery_hw.hpp"
+#include "k2/core/held.hpp"
 #include "k2/core/memstat.hpp"
 #include "k2/core/hw_revision.hpp"
 #include "k2/core/idle_hw.hpp"
 
+StubState::StubState() { k2::held::reset(); }
 StubState g_stub;
 
 namespace k2 {

@@ -29,6 +29,7 @@
 #include <initializer_list>
 #include <utility>
 struct StubState {
+    StubState();   // also forgets what the Charger and Cable tabs held (k2/core/held.hpp): a new stub is a new charger and cable
     uint32_t ms = 1000;
     // The charger-test journal as the boot finds it (load() answers journal_load) and what the page wrote back.
     k2::charger_journal::Replay journal{};

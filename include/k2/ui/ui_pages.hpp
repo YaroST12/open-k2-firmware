@@ -962,7 +962,7 @@ private:
     void read_cable(uint32_t now_ms);      // the cable read of Read e-marker
     void paint_status(uint32_t now_ms);
     bool paint_body(const MatchResult &r, const pd::SourceCaps &caps, std::span<const uint32_t> sink, bool redraw);
-    [[gnu::noinline]] bool paint_body_locked(const void *tab_data, bool dim);
+    [[gnu::noinline]] bool paint_body_locked(const void *tab_data);
     [[gnu::noinline]] bool paint_no_pd_body(const MatchResult &r, bool redraw);
     [[gnu::noinline]] bool paint_no_pd_locked(const char *line, uint32_t rp_ma);
     // The no-PD gate (ROADMAP 2026-11-10, Row C): the Sink tab on any no-PD verdict with a device on the line, the Source tab
