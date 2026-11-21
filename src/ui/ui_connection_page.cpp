@@ -1467,9 +1467,10 @@ void add_soc_chip(Ident &id, const pd::BatteryCaps &bat, const pd::BatteryStatus
     case conn::Tab::Source: {
         if (d.waiting) { id.head.put("Waiting"); id.dim = true; id.line.put("for the charger's offers"); return; }
         if (!r.caps_seen) {
-            id.head.put(r.typec_ma || r.typec_rp ? "Type-C" : "No offers");
+            const bool typec = r.typec_ma || r.typec_rp;
+            id.head.put(typec ? "Type-C" : text::conn::kOffersNone);
             id.dim = true;
-            id.line.put(r.typec_ma || r.typec_rp ? "no PD offers on the line" : "no PD offers yet");
+            id.line.put(typec ? "no PD offers on the line" : text::conn::kOffersNoneL);
             return;
         }
         const pd::SourceCaps &caps = *d.caps;
@@ -1498,7 +1499,7 @@ void add_soc_chip(Ident &id, const pd::BatteryCaps &bat, const pd::BatteryStatus
     }
     case conn::Tab::Cable: {
         const pd::Emarker &em = held::cable_em();
-        if (!em.valid) { id.head.put("Not read"); id.dim = true; id.line.put("No e-marker answer held"); return; }
+        if (!em.valid) { id.head.put(text::conn::kCableNone); id.dim = true; id.line.put(text::conn::kCableNoneL); return; }
         id.head.put_u32(em.max_current_a).put("A ").put_u32(em.max_voltage_v).put_char('V');
         id.dim = false;
         StrBuf<12> w;

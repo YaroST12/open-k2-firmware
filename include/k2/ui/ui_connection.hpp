@@ -352,7 +352,7 @@ inline int place_actions(Tab t, const ActFacts &a, std::array<Item, kMaxItems> &
     int n = 0;
     auto put = [&](const Item &it) { if (n < kMaxItems) out[std::size_t(n++)] = it; };
     const Item again{Act::Refresh, "Read again", true, ""};
-    const Item read{Act::ReadCable, "Read e-marker", true, ""};
+    const Item read{Act::ReadCable, tx::kReadEmarker, true, ""};
     const bool seen = a.attached || a.alone;
     const bool id_ok = seen && !(a.pd_none && !a.alone);
     const Item ask{Act::Identify, "Ask device", id_ok, !id_ok && seen ? kWhyNoPd : "No device seen"};

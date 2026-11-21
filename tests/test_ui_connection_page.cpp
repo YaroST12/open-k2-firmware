@@ -839,6 +839,32 @@ static void test_charger_tab_keeps_the_offers() {
     g_stub.caps = {};
 }
 
+// The Charger and Cable pages with nothing held, as a charger waits on the line and as nothing is plugged: all four rotations
+// (K2_DUMP writes the panels).
+static void test_empty_pages_say_what_fills_them() {
+    const struct { const char *name; int cc1, cc2; } scenes[] = {{"idle", 0, 0}, {"waiting", 3300, 3300}};
+    for (const auto &sc : scenes)
+        for (uint8_t rot = 0; rot < 4; rot++) {
+            Ui &ui = fresh_ui();
+            ui.set_rotation(rot, g_stub.ms);
+            set_cc(sc.cc1, sc.cc2);
+            uint32_t t = 13000;
+            for (int i = 0; i < 12; i++) ui.tick(t += 100);
+            for (uint8_t tab = 0; tab < 2; tab++) {
+                show(ui, tab, t);
+                CHECK_EQ(cp(ui).result_rows(), 0);                          // the identity block alone, no fact rows
+                if (const char *dir = std::getenv("K2_DUMP")) {
+                    char path[256];
+                    std::snprintf(path, sizeof path, "%s/k2_empty_%s_%s_rot%u.panel", dir, sc.name, tab ? "cable" : "charger", unsigned(rot));
+                    if (FILE *f = std::fopen(path, "wb")) { std::fwrite(g_panel, 2, LCD_WIDTH * LCD_HEIGHT, f); std::fclose(f); }
+                }
+            }
+#ifdef K2_TRUNC_LOG
+            CHECK_EQ(k2::trunc::failures(), 0);
+#endif
+        }
+}
+
 // A read cable stays on the Cable tab after the driver forgets it (detach, a read starting), in full colour, until a read
 // returns a different cable; the same cable read again without SVIDs keeps the SVIDs it had.
 static void test_cable_tab_keeps_a_read_cable() {
@@ -2196,6 +2222,7 @@ int main() {
     test_cable_full_rows();
     test_charger_tab_keeps_the_offers();
     test_cable_tab_keeps_a_read_cable();
+    test_empty_pages_say_what_fills_them();
     test_each_tab_shows_its_own_side();
     test_sink_tab_not_empty_when_a_sink_was_seen();
     test_source_tab_leaves_waiting_after_timeout();

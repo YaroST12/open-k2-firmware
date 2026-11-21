@@ -80,7 +80,7 @@ static void test_empty_states() {
     CHECK_STR(e(Tab::Cable, Topology::CableSingleCc).title, "CABLE NOT READ");
     CHECK_STR(e(Tab::Cable, Topology::CableSingleCc).hint, "Unplug the charger to read");
     CHECK_STR(e(Tab::Cable, Topology::Unknown).title, "NO CABLE READ");
-    CHECK_STR(e(Tab::Cable, Topology::Unknown).hint, "Plug a cable into a port");
+    CHECK_STR(e(Tab::Cable, Topology::Unknown).hint, "Actions: Read e-marker");
     CHECK_STR(e(Tab::Cable, Topology::NoSource).title, "NO CABLE READ");
     // Titles fit the band (S24 from x32, 15 cells); every hint is ONE line of 26 cells, and no hint names a key.
     for (int t = 0; t < kTabs; t++) {
@@ -311,7 +311,7 @@ static void test_source_tab_reads_the_waiting_classifier() {
     CHECK_STR(empty_state(Tab::Source, facts(false, false, false, Topology::Unknown, false, raguard::WaitKind::ChargerWaiting)).title,
               "CHARGER WAITING");   // RED until the fix: the topology alone says "NO CHARGER"
     CHECK_STR(empty_state(Tab::Source, facts(false, false, false, Topology::Unknown, false, raguard::WaitKind::ChargerWaiting)).hint,
-              "Start a charger test");
+              "Tests: Light, PD");
     const Empty ph = empty_state(Tab::Source, facts(false, false, false, Topology::CableSingleCc, false, raguard::WaitKind::DualRolePort));
     CHECK_STR(ph.title, "DUAL-ROLE PORT");   // RED until the fix: a toggling phone still says "CHARGER WAITING"/"NO CHARGER"
     CHECK_EQ(std::strlen(ph.title) <= 18, 1);
@@ -721,6 +721,10 @@ static void test_place_actions() {
     CHECK_EQ(int(it[0].act), int(Act::ReadCable));
     CHECK_EQ(int(it[1].act), int(Act::ReadCable));
     CHECK_STR(it[1].label, "Read e-marker");
+    // The empty Cable page names the row it points at; the Charger page names the tests that fill it.
+    CHECK_STR(tx::kCableNoneL, (std::string("Actions: ") + it[1].label).c_str());
+    CHECK_STR(tx::kOffersNone, "No offers read");
+    CHECK_STR(tx::kOffersNoneL, "Tests: Light, PD");
     CHECK_EQ(int(it[2].act), int(Act::SaveCable));
     CHECK_STR(it[2].label, "Save cable");
     CHECK_EQ(int(it[3].act), int(Act::SavedCables));
