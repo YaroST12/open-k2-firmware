@@ -1888,18 +1888,19 @@ static void test_a_silent_protocol_folds_as_no_reply_and_a_heard_one_stays_red()
     for (unsigned mv : {5000u, 9000u, 11000u, 5000u}) add(A::Vivo, mv, fc::Fail::NoResponse);
     add(A::Ufcs, 5000, fc::Fail::NoResponse);
     for (A a : {A::Afc, A::Fcp, A::Scp}) add(a, 5000, fc::Fail::Unsupported);
+    for (A a : {A::Qc2, A::Qc3, A::Qc3Plus, A::Ufcs}) add(a, 5000, fc::Fail::NoHandshake);
     for (const auto& x : s) CHECK_EQ(rl::is_no_answer(x), true);
     rl::Layout l;
     rl::build(l, s);
     CHECK_EQ(find(l, "Skipped") == nullptr, true);
     const std::string nr = chips(l, row_of(l, "No reply"));
-    for (const char* name : {"VIVO", "UFCS", "AFC", "FCP", "SCP"}) CHECK_EQ(nr.find(name) != std::string::npos, true);
-    {   // a plain skip (no engine word) and a fail are not "no reply"; nor is QC2's no handshake (a fail by design)
+    for (const char* name : {"VIVO", "UFCS", "AFC", "FCP", "SCP", "QC2", "QC3", "QC3+"}) CHECK_EQ(nr.find(name) != std::string::npos, true);
+    {   // a plain skip (no engine word) and a fail are not "no reply"; nor is a QC2 row that failed after the unit was heard
         auto plain = s[0]; plain.detail = 0;
         CHECK_EQ(rl::is_no_answer(plain), false);
         auto fl = s[0]; fl.verdict = V::Fail;
         CHECK_EQ(rl::is_no_answer(fl), false);
-        auto qc = step(A::Qc2, 5000, V::Skip, 0, 0, ct::Reason::Request); qc.detail = uint8_t(fc::Fail::NoHandshake);
+        auto qc = step(A::Qc2, 9000, V::Fail, 0, 0, ct::Reason::Request); qc.detail = uint8_t(fc::Fail::NoHandshake);
         CHECK_EQ(rl::is_no_answer(qc), false);
     }
     {   // answered at 5 V, then the 9 V request got no frame: a real fail, shown as the unit's own failed chip, never folded

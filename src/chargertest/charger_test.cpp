@@ -468,12 +468,13 @@ bool qc3_class_b_peak_passed(std::span<const Step> steps) {
 // only". That reason says the charger does QC2 and stops at 12 V, which needs a QC2 handshake that worked: a Class A row of the run
 // that failed in the engine (Reason::Request) with none passed is the evidence it never did, and the Class B row carries that failure.
 // A run with no QC2 Class A row to learn from (Class B selected alone, rows skipped) has no such evidence: the neutral skip stays.
+// The silent first handshake is a skip "no reply" (never_answered), the same evidence as the failure it replaced.
 bool qc2_never_handshook(std::span<const Step> steps) {
     bool failed = false;
     for (const auto& x : steps) {
         if (x.algorithm != Algorithm::Qc2) continue;
         if (x.verdict == Verdict::Pass) return false;
-        failed |= x.verdict == Verdict::Fail && x.reason == Reason::Request;
+        failed |= x.reason == Reason::Request && (x.verdict == Verdict::Fail || (x.verdict == Verdict::Skip && no_reply(x.group, fc::Fail(x.detail))));
     }
     return failed;
 }
@@ -1615,9 +1616,10 @@ void Runner::finish(const Input& in, Verdict v, Reason r, uint8_t detail) {
 // Releasing (race_wait_), where a load behind the K2 still ends the run. "Unsupported" / "no response" are a charger's own answers
 // (a silent UFCS or VIVO source would pay a second window for nothing): verdicts, not races.
 bool Runner::race_hold(const Input& in, Verdict v, Reason r, uint8_t detail) {
-    if (v != Verdict::Fail || r != Reason::Request || !race_fast_ || race_tried_ || race_wait_ || cut_wait_ || index_ != race_idx_ || index_ >= count_ ||
-        mode_ != Mode::Legacy || pd_owned_ || stopping_ || !silent_ || in.inline_load || steps_[index_].group == Group::Pd) return false;
     const auto why = static_cast<fc::Fail>(detail);
+    const bool silent_skip = v == Verdict::Skip && index_ < count_ && never_answered(steps_[index_].group, why);   // a first step's "no reply" is held like the fail it was
+    if ((v != Verdict::Fail && !silent_skip) || r != Reason::Request || !race_fast_ || race_tried_ || race_wait_ || cut_wait_ || index_ != race_idx_ || index_ >= count_ ||
+        mode_ != Mode::Legacy || pd_owned_ || stopping_ || !silent_ || in.inline_load || steps_[index_].group == Group::Pd) return false;
     if (why != fc::Fail::Inline && why != fc::Fail::NoHandshake) return false;
     race_tried_ = true; race_wait_ = true; race_ms_ = in.now;
     K2LOG("[CT] legacy retry %s after %s\n", name(unit_), fc::name(why));
@@ -3144,7 +3146,9 @@ void Runner::poll_impl(Input& in, const pd::SourceCaps& caps) {
         // SCP acked a raise's setpoints and VBUS stayed put (the engine's NoChange): the unit takes writes and ignores them, so its
         // other raise rows would only repeat the 12 s wait and the output reset after it. The 4.5 V and 5 V rows still run.
         const bool scp_ignores_raise = group == Group::Scp && in.fc_fail == fc::Fail::NoChange && s.mv > 5000;
-        if (unanswered || scp_ignores_raise) skip_group_rows(group, !unanswered, static_cast<uint8_t>(in.fc_fail));
+        // A QC / UFCS unit heard before that gets no handshake at one level missed that level only: its other rows still run.
+        const bool dead_unit = unanswered && !(heard && in.fc_fail == fc::Fail::NoHandshake);
+        if (dead_unit || scp_ignores_raise) skip_group_rows(group, !dead_unit, static_cast<uint8_t>(in.fc_fail));
         return;
     }
     const bool banded = band_ok(eff, in, gap);

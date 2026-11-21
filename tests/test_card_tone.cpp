@@ -199,7 +199,8 @@ static void test_a_silent_protocol_is_grey_and_says_no_reply() {
     rc::Card c;
     using G = charger_test::Group;
     const struct { G g; fc::Fail why; } silent[] = {{G::Vivo, fc::Fail::NoResponse}, {G::Ufcs, fc::Fail::NoResponse}, {G::Afc, fc::Fail::Unsupported},
-                                                      {G::Fcp, fc::Fail::Unsupported}, {G::Scp, fc::Fail::Unsupported}};
+                                                      {G::Fcp, fc::Fail::Unsupported}, {G::Scp, fc::Fail::Unsupported},
+                                                      {G::Qc2, fc::Fail::NoHandshake}, {G::Qc3, fc::Fail::NoHandshake}, {G::Qc3Plus, fc::Fail::NoHandshake}, {G::Ufcs, fc::Fail::NoHandshake}};
     for (const auto& s : silent) {
         c.group[unsigned(s.g)] = {rc::GV::Skip, 0, uint8_t(s.why), uint8_t(charger_test::Reason::Request)};
         CHECK_EQ(int(tn::group(c, unsigned(s.g))), int(Tone::Skip));
@@ -210,8 +211,9 @@ static void test_a_silent_protocol_is_grey_and_says_no_reply() {
     rc::GroupResult failed{rc::GV::Fail, 5000, uint8_t(fc::Fail::NoResponse), uint8_t(charger_test::Reason::Request)};   // heard, then failed
     CHECK_STR(rc::group_why(unsigned(G::Vivo), failed), "no response");
     CHECK_EQ(rc::silent_skip(unsigned(G::Vivo), failed), false);
-    rc::GroupResult qc{rc::GV::Skip, 0, uint8_t(fc::Fail::NoHandshake), uint8_t(charger_test::Reason::Request)};
+    rc::GroupResult qc{rc::GV::Fail, 9000, uint8_t(fc::Fail::NoHandshake), uint8_t(charger_test::Reason::Request)};   // QC2 heard at 5 V, no handshake at 9 V
     CHECK_EQ(rc::silent_skip(unsigned(G::Qc2), qc), false);
+    CHECK_STR(rc::group_why(unsigned(G::Qc2), qc), "no handshake");
 }
 
 int main() {

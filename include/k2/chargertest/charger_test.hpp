@@ -23,10 +23,12 @@ enum class Algorithm : uint8_t {
     Vooc, SuperVooc, SuperVooc65, Ufcs, Vivo, Pd30Revision, Pd31Revision, Pd32Revision, EprAvs, Qc2ClassB, Qc3ClassB, Count
 };
 // The engine's "protocol not spoken" failure of a unit's detection step: AFC / FCP / SCP Unsupported, UFCS / VIVO NoResponse (no frame in the
-// entry window). A unit that never answered was not offered: it is a skip ("no reply"), not a fail. QC2 / QC3 keep their NoHandshake fail.
+// entry window), QC2 / QC3 / QC3+ / UFCS NoHandshake (the first handshake got nothing back). A unit that never answered was not offered:
+// it is a skip ("no reply"), not a fail. The runner applies it to a unit's first step only; a unit that answered and then fails stays a fail.
 constexpr bool never_answered(Group g, fc::Fail f) {
     return ((g == Group::Afc || g == Group::Fcp || g == Group::Scp) && f == fc::Fail::Unsupported) ||
-           ((g == Group::Ufcs || g == Group::Vivo) && f == fc::Fail::NoResponse);
+           ((g == Group::Ufcs || g == Group::Vivo) && f == fc::Fail::NoResponse) ||
+           ((g == Group::Qc2 || g == Group::Qc3 || g == Group::Qc3Plus || g == Group::Ufcs) && f == fc::Fail::NoHandshake);
 }
 // A VOOC family that clocked no opener after either wake (NoAnswer): a skip too, an unloaded adapter may stay silent.
 constexpr bool silent_vooc(Group g, fc::Fail f) { return g >= Group::Vooc && g <= Group::SuperVooc65 && f == fc::Fail::NoAnswer; }

@@ -1949,7 +1949,8 @@ static void test_unsupported_protocol_skips_its_other_rows() {
 // A plain 5 V source (no handshake answers at all, a bank or a PD-only port) must not pass ANY legacy row: a row passes only
 // with the charger's own answer. The 5 V row of QC2 / QC3 / QC3+ is no exception (CUKTECH 120 W C1, 2026-11-06: those three
 // passed 5 V on a bare vSafe5V reading while their 9 V and 12 V rows said "no handshake"). With the same plain source
-// every row asks the engine and the engine says no.
+// every row asks the engine and the engine says no. (request_ok = false is the request path's own refusal: a Fail. The engine's
+// silence on a unit's first handshake is a skip, test_silent_first_handshake_is_no_reply.)
 static void test_silent_source_fails_every_handshake_row() {
     for (auto a : {A::Qc2, A::Qc3, A::Qc3Plus, A::Vooc, A::SuperVooc, A::SuperVooc65, A::Ufcs, A::Vivo, A::Fcp, A::Scp}) {
         Fake f; f.caps = {}; f.request_ok = false;
@@ -1960,6 +1961,44 @@ static void test_silent_source_fails_every_handshake_row() {
         CHECK_EQ(r.steps()[0].verdict, ct::Verdict::Fail);
         CHECK_EQ(f.fc_requests > 0, true);   // the 5 V row asked the engine; it was not decided from VBUS alone
         for (const auto& s : r.steps()) CHECK_EQ(s.verdict == ct::Verdict::Pass, false);
+    }
+}
+// QC2 / QC3 / QC3+ / UFCS whose first handshake the engine ends "no handshake" (a PD-only port, a bank that answers no D+/D-): the unit
+// was never offered, so every row is a skip "no reply" (dim, not a fail), the other levels get no session, and the Class B 20 V row
+// reads the same, never "Class A only". Nothing the engine did not answer may pass.
+static void test_silent_first_handshake_is_no_reply() {
+    struct U { A alg; fc::Proto proto; size_t rows; };
+    for (const auto& u : {U{A::Qc2, fc::Proto::Qc2, 4}, U{A::Qc3, fc::Proto::Qc3, 6}, U{A::Qc3Plus, fc::Proto::Qc3Plus, 0}, U{A::Ufcs, fc::Proto::Ufcs, 0}}) {
+        Fake f; f.caps = {}; f.no_handshake_proto = u.proto;
+        ct::Runner r(f);
+        const uint32_t sel = ct::bit(u.alg) | (u.alg == A::Qc2 ? ct::bit(A::Qc2ClassB) : u.alg == A::Qc3 ? ct::bit(A::Qc3ClassB) : 0u);
+        r.start(f.caps, {.selected = sel}, f.in, true);
+        CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 300000), true);
+        CHECK_EQ(f.fc_requests, 1);   // the detection step asked once; the rest of the unit never got a session
+        CHECK_EQ(r.steps().size() > 1, true);
+        for (const auto& s : r.steps()) {
+            CHECK_EQ(s.verdict, ct::Verdict::Skip); CHECK_EQ(s.reason, ct::Reason::Request);
+            CHECK_EQ(int(s.detail), int(fc::Fail::NoHandshake));
+            CHECK_EQ(result_layout::is_no_answer(s), true);
+        }
+        (void)u.rows;
+    }
+}
+// A unit whose handshake answered and whose next level then gets nothing back did offer the mode: that row stays a real fail (the
+// levels after it skip with it), only a first step that never heard the charger is "no reply".
+static void test_a_handshake_that_answered_then_fails_stays_a_fail() {
+    for (const auto& [alg, proto] : {std::pair{A::Qc2, fc::Proto::Qc2}, std::pair{A::Qc3, fc::Proto::Qc3}, std::pair{A::Ufcs, fc::Proto::Ufcs}}) {
+        (void)proto;
+        Fake f; f.caps = {};
+        ct::Runner r(f);
+        r.start(f.caps, {.selected = ct::bit(alg)}, f.in, true);
+        CHECK_EQ(run_until(f, r, [&] { return r.steps()[0].verdict == ct::Verdict::Pass && f.fc_requests >= 2; }, 60000), true);
+        f.in.fc_state = fc::State::Failed; f.in.fc_fail = fc::Fail::NoHandshake; f.in.vbus_mv = 5000;
+        CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 300000), true);
+        CHECK_EQ(r.steps()[0].verdict, ct::Verdict::Pass);
+        CHECK_EQ(r.steps()[1].verdict, ct::Verdict::Fail); CHECK_EQ(r.steps()[1].reason, ct::Reason::Request);
+        CHECK_EQ(int(r.steps()[1].detail), int(fc::Fail::NoHandshake));
+        CHECK_EQ(result_layout::is_no_answer(r.steps()[1]), false);
     }
 }
 // The same units against a charger that answers the handshake: the 5 V row passes, and only because the engine ran.
@@ -2799,9 +2838,9 @@ static void test_qc2_class_b_miss_on_a_qc3_class_b_charger_is_a_fail() {
     }
     CHECK_EQ(std::string(ct::name(ct::Reason::Qc3Only20V)) == "20 V via QC3 only", true);
 }
-// JT-P18 USB-C (2026-11-07): the port speaks no QC, QC2 5/9/12 V all fail "no handshake". "Class A only" claims the charger does QC2
-// and tops out at 12 V: with no QC2 handshake in the run the Class B 20 V row carries the handshake failure, not the neutral skip.
-// Class B selected alone (no Class A rows to learn from) keeps the neutral skip.
+// JT-P18 USB-C (2026-11-07): the port speaks no QC, QC2 5/9/12 V all end "no handshake". "Class A only" claims the charger does QC2
+// and tops out at 12 V: with no QC2 handshake in the run the Class B 20 V row is "no reply" like the Class A rows (a skip, dim, not
+// a fail), never the neutral skip. Class B selected alone (no Class A rows to learn from) keeps the neutral skip.
 static void test_qc2_class_b_after_a_failed_qc2_handshake_is_not_class_a_only() {
     {
         Fake f; f.caps = {}; f.no_handshake_proto = fc::Proto::Qc2;
@@ -2811,14 +2850,15 @@ static void test_qc2_class_b_after_a_failed_qc2_handshake_is_not_class_a_only() 
         CHECK_EQ(r.state(), ct::State::Done);
         unsigned a_rows = 0, b_rows = 0;
         for (const auto& s : r.steps()) {
-            // the 5 V row opens the session and fails; 9 V / 12 V are retargets in it and are skipped with its failure
-            if (s.algorithm == A::Qc2) { ++a_rows; CHECK_EQ(s.verdict, a_rows == 1 ? ct::Verdict::Fail : ct::Verdict::Skip); CHECK_EQ(s.reason, ct::Reason::Request); }
-            if (s.algorithm == A::Qc2ClassB) {
-                ++b_rows; CHECK_EQ(s.verdict, ct::Verdict::Fail); CHECK_EQ(s.reason, ct::Reason::Request);
-                CHECK_EQ(s.detail, static_cast<uint8_t>(fc::Fail::NoHandshake));
-            }
+            // the 5 V row opens the session and gets nothing back; 9 V / 12 V and the Class B row are skipped with it
+            if (s.algorithm == A::Qc2) ++a_rows;
+            if (s.algorithm == A::Qc2ClassB) ++b_rows;
+            CHECK_EQ(s.verdict, ct::Verdict::Skip); CHECK_EQ(s.reason, ct::Reason::Request);
+            CHECK_EQ(s.detail, static_cast<uint8_t>(fc::Fail::NoHandshake));
+            CHECK_EQ(result_layout::is_no_answer(s), true);
         }
         CHECK_EQ(a_rows, 3u); CHECK_EQ(b_rows, 1u);
+        CHECK_EQ(f.fc_requests, 1);
     }
     {
         Fake f; f.caps = {}; f.no_handshake_proto = fc::Proto::Qc2;
@@ -2952,16 +2992,14 @@ static void test_a_failed_qc2_retarget_leaves_the_class_b_row_to_run() {
         CHECK_EQ(r.steps()[3].reason, ct::Reason::ClassAOnly);
         CHECK_EQ(f.fc_requests, 4);
     }
-    {   // the first level fails: the 9 V / 12 V retargets are skipped, the Class B row still asks
+    {   // the first level gets no reply: the unit's other rows are skipped with it (the Class B row too: "no reply", not a fail)
         Fake f; f.caps = {}; f.no_handshake_proto = fc::Proto::Qc2;
         ct::Runner r(f);
         r.start(f.caps, {.selected = ct::bit(A::Qc2) | ct::bit(A::Qc2ClassB)}, f.in, true);
         f.tick(r, 200000);
         CHECK_EQ(r.state(), ct::State::Done);
-        CHECK_EQ(r.steps()[0].verdict, ct::Verdict::Fail);
-        for (size_t n = 1; n < 3; ++n) { CHECK_EQ(r.steps()[n].verdict, ct::Verdict::Skip); CHECK_EQ(r.steps()[n].reason, ct::Reason::Request); }
-        CHECK_EQ(r.steps()[3].verdict, ct::Verdict::Fail); CHECK_EQ(r.steps()[3].reason, ct::Reason::Request);
-        CHECK_EQ(f.fc_requests, 2);
+        for (size_t n = 0; n < 4; ++n) { CHECK_EQ(r.steps()[n].verdict, ct::Verdict::Skip); CHECK_EQ(r.steps()[n].reason, ct::Reason::Request); }
+        CHECK_EQ(f.fc_requests, 1);
     }
 }
 static void test_full_legacy_ranges_and_guards() {
@@ -5649,12 +5687,14 @@ static void test_a_dip_shorter_than_the_minimum_is_no_cut() {
     CHECK_EQ(r.steps()[0].verdict, ct::Verdict::Fail);
     CHECK_EQ(r.evidence().cut_retries, 0);
 }
-static void test_a_protocol_failure_after_a_clean_comeback_is_a_fail() {
+// (the port is clean and the charger silent: the unit's first step is "no reply", a skip, but never "port cuts")
+static void test_a_protocol_failure_after_a_clean_comeback_is_not_a_cut() {
     Fake f; f.caps = {}; f.cut_on_requests = {1}; f.no_handshake_after_cut = true; ct::Runner r(f);
     CHECK_EQ(r.start(f.caps, kQc2, f.in, true), ct::Reason::None);
     f.tick(r, 120000);
     CHECK_EQ(r.state(), ct::State::Done);
-    CHECK_EQ(r.steps()[0].verdict, ct::Verdict::Fail);          // the retry saw a clean port and a silent charger: that is the verdict
+    CHECK_EQ(r.steps()[0].verdict, ct::Verdict::Skip);          // the retry saw a clean port and a silent charger: that is the verdict (no reply)
+    CHECK_EQ(result_layout::is_no_answer(r.steps()[0]), true);
     CHECK_EQ(r.steps()[0].reason == ct::Reason::PortCuts, false);
     CHECK_EQ(r.evidence().cut_retries, 1);
     CHECK_EQ(f.cuts_seen, 1);
@@ -5663,7 +5703,7 @@ static void test_a_protocol_failure_after_a_clean_comeback_is_a_fail() {
         CHECK_EQ(q.start(g.caps, kQc2, g.in, true), ct::Reason::None);
         g.tick(q, 120000);
         CHECK_EQ(q.state(), ct::State::Done);
-        CHECK_EQ(q.steps()[0].verdict, ct::Verdict::Fail);
+        CHECK_EQ(q.steps()[0].verdict, ct::Verdict::Skip);
         CHECK_EQ(q.steps()[0].reason == ct::Reason::PortCuts, false);
         CHECK_EQ(q.evidence().cut_retries, 2);   // both cuts were retried; the third attempt was silent, not cut: the verdict stands at once
     }
@@ -8466,6 +8506,18 @@ static void test_a_first_step_spoiled_by_the_announcement_is_asked_again_after_q
         if (!f.fc_times.empty()) CHECK_EQ(f.fc_times[0] >= f.chatter_until - 100 + ct::kLegacyQuietMs, true);   // the retry waited for the quiet
     }
 }
+// A QC2 first step that gets no handshake inside the announcement is a "no reply" skip: it is held for the retry like the fail it was.
+static void test_a_silent_qc2_first_step_spoiled_by_the_announcement_is_asked_again() {
+    Fake f; ct::Runner r(f); race_fast(); g_stub.log_text.clear();
+    f.attach_flood_ms = 3000; f.race_kind = fc::Fail::NoHandshake;
+    const auto o = with_units(ct::bit(A::Qc2), {ct::Unit::Qc2});
+    CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 600000), true);
+    CHECK_EQ(f.race_hits, 1);
+    CHECK_EQ(log_count("[CT] legacy retry "), 1u);
+    CHECK_EQ(count_unit_verdict(r, ct::Unit::Qc2, ct::Verdict::Pass) > 0, true);
+    CHECK_EQ(count_unit_verdict(r, ct::Unit::Qc2, ct::Verdict::Skip), 0u);
+}
 static void test_a_real_no_answer_fails_after_one_retry() {
     Fake f; ct::Runner r(f); race_fast(); g_stub.log_text.clear();
     f.attach_flood_ms = 1000; f.no_handshake_proto = fc::Proto::Fcp;
@@ -9299,7 +9351,7 @@ int main() {
     test_a_cut_short_list_without_a_xiaomi_chain_is_still_offers_changed();
     test_an_unsolicited_list_change_during_a_normal_row_replans_per_row();
     test_plan_and_run(); test_an_auto_hold_counts_as_released(); test_quiet_is_exactly_the_row_in_flight(); test_paint_blocked_needs_flight_and_an_engine_window(); test_refusals(); test_hold_keeps_the_baseline_until_released(); test_safe5_baseline();test_cancel_and_failed_release(); test_release_waits_for_the_sink_verification_and_its_hard_reset();
-    test_faults(); test_loop_lock_refuses_and_aborts(); test_timeouts_and_skips(); test_one_second_holds(); test_qc2_settles_within_two_percent(); test_qc2_5v_accepts_vsafe5_reading(); test_legacy_5v_accepts_vsafe5_reading(); test_qc3_rows_use_an_asymmetric_band(); test_legacy_rows_use_a_five_percent_band(); test_legacy_5v_row_uses_the_vsafe5_window(); test_scp_4v5_row_judges_the_adapter_readback(); test_qc3plus_without_response_is_a_distinct_skip(); test_unsupported_protocol_skips_its_other_rows(); test_silent_source_fails_every_handshake_row(); test_answered_handshake_passes_the_5v_row(); test_svooc_row_follows_the_adapter_ramp(); test_svooc_detected_is_a_pass(); test_vooc_family_shares_one_session(); test_ceiling_off_runs_no_stage(); test_ceiling_is_deep_only_and_the_ident_is_kept(); test_ceiling_judged_ladder_is_the_result(); test_ceiling_refusal_is_recorded_and_the_run_goes_on(); test_ceiling_no_adapter_and_early_abort(); test_ceiling_cap_stops_a_session_that_is_never_judged(); test_ceiling_cancel_stops_the_trigger(); test_ceiling_needs_a_detected_svooc_family(); test_ceiling_waits_for_the_lines_after_the_family_release(); test_ceiling_lines_never_free_is_a_recorded_refusal(); test_ceiling_usb_a_mode_is_the_plain_on(); test_ceiling_quiet_adapter_is_stopped_at(); test_ceiling_runner_guard_names_its_cause(); test_ceiling_vbus_lost_after_the_stage_is_recovered_by_an_rd_cycle(); test_ceiling_vbus_that_never_returns_ends_the_run(); test_ceiling_adapter_ramp_is_part_of_the_stage(); test_ceiling_vbus_stuck_high_after_the_stage_is_unsafe(); test_vivo_no_response_skips_the_other_vivo_rows(); test_vivo_that_answered_then_fails_stays_a_fail(); test_pps_min_step_accepts_unloaded_floor(); test_pps_up_step_uses_the_tight_band();
+    test_faults(); test_loop_lock_refuses_and_aborts(); test_timeouts_and_skips(); test_one_second_holds(); test_qc2_settles_within_two_percent(); test_qc2_5v_accepts_vsafe5_reading(); test_legacy_5v_accepts_vsafe5_reading(); test_qc3_rows_use_an_asymmetric_band(); test_legacy_rows_use_a_five_percent_band(); test_legacy_5v_row_uses_the_vsafe5_window(); test_scp_4v5_row_judges_the_adapter_readback(); test_qc3plus_without_response_is_a_distinct_skip(); test_unsupported_protocol_skips_its_other_rows(); test_silent_source_fails_every_handshake_row(); test_silent_first_handshake_is_no_reply(); test_a_handshake_that_answered_then_fails_stays_a_fail(); test_answered_handshake_passes_the_5v_row(); test_svooc_row_follows_the_adapter_ramp(); test_svooc_detected_is_a_pass(); test_vooc_family_shares_one_session(); test_ceiling_off_runs_no_stage(); test_ceiling_is_deep_only_and_the_ident_is_kept(); test_ceiling_judged_ladder_is_the_result(); test_ceiling_refusal_is_recorded_and_the_run_goes_on(); test_ceiling_no_adapter_and_early_abort(); test_ceiling_cap_stops_a_session_that_is_never_judged(); test_ceiling_cancel_stops_the_trigger(); test_ceiling_needs_a_detected_svooc_family(); test_ceiling_waits_for_the_lines_after_the_family_release(); test_ceiling_lines_never_free_is_a_recorded_refusal(); test_ceiling_usb_a_mode_is_the_plain_on(); test_ceiling_quiet_adapter_is_stopped_at(); test_ceiling_runner_guard_names_its_cause(); test_ceiling_vbus_lost_after_the_stage_is_recovered_by_an_rd_cycle(); test_ceiling_vbus_that_never_returns_ends_the_run(); test_ceiling_adapter_ramp_is_part_of_the_stage(); test_ceiling_vbus_stuck_high_after_the_stage_is_unsafe(); test_vivo_no_response_skips_the_other_vivo_rows(); test_vivo_that_answered_then_fails_stays_a_fail(); test_pps_min_step_accepts_unloaded_floor(); test_pps_up_step_uses_the_tight_band();
     test_missing_samples_and_wrap();
     test_fixed_band_judges_a_burst_mode_ripple_on_its_mean(); test_fixed_band_still_fails_a_steady_low_or_high_level(); test_fixed_band_keeps_the_per_sample_overvoltage_guards();
     test_pps_renewal();
@@ -9314,7 +9366,7 @@ int main() {
     test_measured_dwell_and_plan_capacity();
     test_usb_a_sag_tail_session_is_not_source_lost(); test_usb_a_sag_tail_waits_for_vbus_to_climb(); test_usb_a_sag_tail_with_dead_or_low_vbus_is_still_lost(); test_session_change_in_baseline_without_a_sag_is_still_lost(); test_usb_a_midrow_session_opens_the_adopt_window(); test_usb_a_sag_dip_under_1v_inside_the_window_waits();
     test_cut_in_the_row_then_a_clean_retry_passes(); test_a_retried_first_scp_row_replans_like_an_unretried_one(); test_a_retried_first_scp_row_keeps_the_rows_a_wide_list_offers(); test_a_retried_first_ufcs_row_replans_like_an_unretried_one(); test_a_retried_first_vooc_family_row_ends_like_an_unretried_one(); test_several_cuts_in_a_row_then_a_clean_retry_passes(); test_every_retry_cut_is_a_skip_not_a_fail(); test_the_retries_are_counted_per_row(); test_a_cut_that_reads_no_response_does_not_skip_the_family(); test_a_loss_that_does_not_come_back_in_the_window_is_a_fail();
-    test_a_dip_shorter_than_the_minimum_is_no_cut(); test_a_protocol_failure_after_a_clean_comeback_is_a_fail(); test_the_7s_cut_sequence_over_the_5v_steps_of_the_cuktech_run(); test_a_fall_in_a_raised_row_is_no_cut_casualty(); test_a_silent_vooc_family_on_a_7s_cut_port_ends_no_answer(); test_the_10_unit_run_over_every_cut_phase_ends_as_without_cuts();
+    test_a_dip_shorter_than_the_minimum_is_no_cut(); test_a_protocol_failure_after_a_clean_comeback_is_not_a_cut(); test_the_7s_cut_sequence_over_the_5v_steps_of_the_cuktech_run(); test_a_fall_in_a_raised_row_is_no_cut_casualty(); test_a_silent_vooc_family_on_a_7s_cut_port_ends_no_answer(); test_the_10_unit_run_over_every_cut_phase_ends_as_without_cuts();
     test_a_cut_in_the_first_baseline_waits_for_the_comeback(); test_a_baseline_dip_that_does_not_come_back_still_stops();
     test_custom_unit_list_runs_in_order(); test_pd_unit_attaches_with_a_contract(); test_a_failed_unit_does_not_stop_the_run();
     test_default_unit_order_is_vendor_modes_then_pd_then_legacy(); test_default_order_runs_vendor_modes_before_pd_before_legacy(); test_pd_between_vendor_and_legacy_units(); test_pd_replan_in_the_middle_keeps_the_rows_in_order(); test_consecutive_legacy_units_share_one_attach(); test_legacy_session_that_sees_pd_traffic_is_renewed(); test_silent_ufcs_source_reports_no_response_not_pd_active(); test_legacy_waits_between_units(); test_legacy_tune_knobs(); test_hold_knob_goes_to_300_and_pd_rows_keep_the_capture_floor(); test_unit_time_split_adds_up_to_the_run(); test_scp_rows_share_one_session(); test_scp_no_change_held_session_takes_the_next_rows(); test_cancel_while_the_scp_session_is_kept_releases_it(); test_chain_knob_default_and_other_units();
@@ -9369,7 +9421,7 @@ int main() {
     test_legacy_row_waits_through_a_source_restart(); test_legacy_restart_wait_is_bounded_and_a_load_still_refuses();
     test_legacy_units_chain_through_the_sources_reannounce_after_a_release(); test_scp_rows_are_not_pd_active_after_our_own_release();
     test_a_quiet_source_is_watched_once_per_attach(); test_pd_traffic_before_the_release_still_skips_the_unit(); test_endless_reannounce_after_a_release_is_bounded(); test_quiet_zero_reaches_the_charger_through_the_attach_announcement(); test_load_during_the_reannounce_wait_stops_the_run(); test_reannounce_then_output_restart_on_the_same_unit(); test_a_reannounce_as_long_as_the_attach_flood_is_waited_out();
-    test_a_first_step_spoiled_by_the_announcement_is_asked_again_after_quiet(); test_a_real_no_answer_fails_after_one_retry(); test_a_quiet_start_is_not_retried();
+    test_a_first_step_spoiled_by_the_announcement_is_asked_again_after_quiet(); test_a_silent_qc2_first_step_spoiled_by_the_announcement_is_asked_again(); test_a_real_no_answer_fails_after_one_retry(); test_a_quiet_start_is_not_retried();
     test_a_load_at_the_refusal_ends_the_run_before_the_retry(); test_the_retry_wait_is_bounded();
     test_scp_ack_without_voltage_ends_early_and_skips_the_raises(); test_scp_no_change_without_restart_does_not_wait();
     test_level_maps_to_the_run_switches(); test_level_plans_per_level(); test_step_walk_is_planned_only_in_deep(); test_prog_check_flags_a_passing_programmable_row(); test_prog_check_clean_capture_changes_nothing();
