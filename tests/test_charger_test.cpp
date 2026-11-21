@@ -8981,7 +8981,30 @@ static void test_offers_masks_the_selection_to_pd() {
     for (const auto& s : r.steps()) { CHECK_EQ(int(ct::unit_of(s)), int(ct::Unit::Pd)); CHECK_EQ(ct::is_sweep(s), false); }
     { unsigned above = 0; for (const auto& c : f.choices) above += c.mv != 5000; CHECK_EQ(above <= 1u, true); }   // the AVS pick at most
     CHECK_STR(ct::name(ct::Level::Offers), "Offers");
-    CHECK_EQ(int(ct::next_level(ct::Level::Deep)), int(ct::Level::Light));   // Offers never joins the Depth cycle
+    CHECK_EQ(int(ct::next_level(ct::Level::Deep)), int(ct::Level::Light));   // Settings' cycle has no Offers
+}
+// The Depth row's cycle appends Offers after Deep: Light -> Medium -> Deep -> Offers -> Light. A stray value re-enters at Light.
+static void test_depth_cycle_appends_offers() {
+    CHECK_EQ(int(ct::next_depth(ct::Level::Light)), int(ct::Level::Medium));
+    CHECK_EQ(int(ct::next_depth(ct::Level::Medium)), int(ct::Level::Deep));
+    CHECK_EQ(int(ct::next_depth(ct::Level::Deep)), int(ct::Level::Offers));
+    CHECK_EQ(int(ct::next_depth(ct::Level::Offers)), int(ct::Level::Light));
+    CHECK_EQ(int(ct::next_level(ct::Level::Offers)), int(ct::Level::Light));
+}
+// The preview of an Offers plan is PD only whatever the picked set: a legacy-only pick plans the PD list, and no legacy row is
+// counted (the Review line is the same as for a PD-only pick).
+static void test_offers_preview_is_pd_only_whatever_the_pick() {
+    Fake f; f.caps = level_caps();
+    const auto count = [&](uint32_t selected) {
+        ct::Options o; o.selected = selected; o.level = ct::Level::Offers;
+        return ct::Runner::preview(f.caps, o, f.in);
+    };
+    const auto pd = count(ct::kOffersAlgorithms);
+    CHECK_EQ(pd.runnable >= 1, true);
+    for (const uint32_t pick : {ct::kAllAlgorithms, ct::kDefaultAlgorithms, uint32_t(ct::bit(A::Qc2))}) {
+        const auto o = count(pick);
+        CHECK_EQ(o.total, pd.total); CHECK_EQ(o.runnable, pd.runnable); CHECK_EQ(o.skipped, pd.skipped);
+    }
 }
 // ---- The PD spec stage (spec_section.hpp) of a Deep run ------------------------------------------------------------------
 // The pdspec engine runs the no-load conformance checks on the Pd unit's link, at the end of the Pd unit, once its contract is back
@@ -9528,6 +9551,7 @@ int main() {
     test_epr_spoof_identity_tests_epr_and_avs(); test_epr_capable_list_never_gives_epr_rows_not_offered(); test_epr_spoof_identity_at_light_makes_no_requests();
     test_offers_asks_one_epr_avs_level_in_epr(); test_offers_asks_the_spr_avs_level_when_epr_is_refused(); test_offers_without_an_avs_offer_asks_nothing_above_5v();
     test_offers_never_asks_above_the_monitor_ceiling(); test_offers_masks_the_selection_to_pd();
+    test_depth_cycle_appends_offers(); test_offers_preview_is_pd_only_whatever_the_pick();
     test_a_resumed_light_run_stays_light();
     test_the_page_names_the_run_level();
     test_spec_stage_runs_once_in_a_deep_pd_unit(); test_spec_stage_is_deep_only(); test_spec_refusal_is_recorded_and_the_run_goes_on(); test_spec_cancel_ends_in_order();

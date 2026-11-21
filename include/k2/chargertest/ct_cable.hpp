@@ -54,6 +54,10 @@ constexpr Choice canonical(Choice c) {
     return c;
 }
 
+// The identity a run presents. A Read-offers run needs the EPR cable to enter EPR, so it presents the default built-in whatever
+// the pick is, unless a cable was read (that one answers the charger; the pick stays). Every other level presents the pick.
+constexpr Choice run_choice(Choice pick, bool offers, bool cable_observed) { return offers && !cable_observed ? kDefaultChoice : pick; }
+
 // What the report card records of the identity a run presented: the e-marker's VID / PID (ID header VDO bits 15:0,
 // product VDO bits 31:16) and the limits its cable VDO claims (current bits 6:5: 1 = 3 A, 2 = 5 A; voltage bits 10:9:
 // 20 / 30 / 40 / 50 V; an unknown code counts as the 3 A / 20 V default).

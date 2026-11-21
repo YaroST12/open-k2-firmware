@@ -95,8 +95,8 @@ enum class Reason : uint8_t {
 };
 // Step.detail of a PPS step-walk row while it is Pending/Running (finish() overwrites it with the result); sits above every
 // engine code and the EPR skip codes so the card and the tools never mistake it for one.
-// Charger-test thoroughness (Options::level, with_level). The values are the wire values: 0 = Medium. Offers is the "Read offers"
-// preset, not a depth: it never enters the Depth cycle or Settings (kLevelCount counts the depths), only the wires (kRunLevelCount).
+// Charger-test thoroughness (Options::level, with_level). The values are the wire values: 0 = Medium. Offers (Read offers) is the
+// Tests step's fourth Depth value, not a Settings default: Settings counts kLevelCount depths, the wires kRunLevelCount.
 enum class Level : uint8_t { Medium = 0, Light = 1, Deep = 2, Offers = 3 };
 inline constexpr unsigned kLevelCount = 3, kRunLevelCount = 4;
 inline constexpr uint8_t kDetailStepWalk = 160;
@@ -326,8 +326,10 @@ constexpr Options with_level(Options o, Level l) {
     if (l == Level::Offers) { o.selected &= kOffersAlgorithms; if (!o.selected) o.selected = kOffersAlgorithms; }
     return o;
 }
-// The Depth cycle: Offers is not part of it (a stray Offers value re-enters at Light).
+// Settings' cycle (Light, Medium, Deep): Offers is not part of it (a stray Offers value re-enters at Light).
 constexpr Level next_level(Level l) { return l == Level::Light ? Level::Medium : l == Level::Medium ? Level::Deep : Level::Light; }
+// The Tests step's Depth row: the same cycle with Offers appended after Deep.
+constexpr Level next_depth(Level l) { return l == Level::Deep ? Level::Offers : next_level(l); }
 const char* name(Level);
 struct Step {
     Group group = Group::Pd;

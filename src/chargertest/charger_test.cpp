@@ -941,6 +941,7 @@ static bool spec_planned(const Options& o, const UnitList& units) {
 }
 Summary Runner::preview(const pd::SourceCaps& caps, Options o, Input in) {
     Summary out;
+    if (o.level == Level::Offers) o = with_level(o, Level::Offers);   // the same PD-only plan start() runs, whatever the pick
     in.epr_info = nullptr;   // a preview plans from the source list alone
     in.fc_caps = nullptr;
     out.refusal = refusal(o, in, false, true);
