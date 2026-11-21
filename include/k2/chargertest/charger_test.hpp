@@ -178,6 +178,9 @@ struct UnitList {
 // with kLegacyRetryMs (a source that gets no Request retries Source_Capabilities and hard-resets, 5.07 s cycle on the Baseus
 // CJ21, before it disables PD); still no fallback = Reason::BlockedByPd and the unit's rows are skipped.
 inline constexpr uint32_t kLegacyQuietMs = 2500, kLegacySteadyMs = 500, kLegacyGiveUpMs = 20000, kLegacyRetryMs = 60000;
+// pattern rp-without-vbus: the source's Rp is on the line but VBUS stays dark this long into an attach: the Rd is cycled at once
+// (the same one retry as the give-up, taken 2 s in instead of 20 s).
+inline constexpr uint32_t kLegacyNoVbusMs = 2000;
 // pattern output-reset-after-unanswered-scp: a source that cuts its own output between two rows of a PD-silent Legacy unit and
 // announces Source_Capabilities again when VBUS is back (UGREEN X865, runs/ugreen-qa/r1a-stream: first frame ~300 ms after the
 // return; its PD-silent attach announced for ~6.1 s). The next row waits after the return: kRestartCapsMs with no frame means the
@@ -375,8 +378,7 @@ struct Input {
     uint16_t spoof_mv = 0, spoof_ma = 0;
     int vbus_mv = -1, ibus_ma = 0;   // ibus_ma: magnitude; above kLoadAbortMa during a raised row means a load
     uint32_t pd_quiet_ms = UINT32_MAX;   // ms since the last PD frame was received (since the handover began)
-    bool inline_load = false, fake = false, busy = false, cable_observed = false, pd_traffic = false, spoof_on = false;
-    bool loop_lock = false;   // k2::loopguard::locked(): the HID-cable loop 5 V lock (Reason::Loop)
+    bool inline_load = false, fake = false, busy = false, cable_observed = false, pd_traffic = false, spoof_on = false;    bool loop_lock = false;   // k2::loopguard::locked(): the HID-cable loop 5 V lock (Reason::Loop)
     // The K2 runs on the source's own VBUS through a pinned Rd (fusb302::self_powered()). start() and resume() latch it for the
     // run: a unit boundary must not drop VBUS (the K2 would die), and a VBUS loss suspends the run instead of ending it.
     bool self_powered = false;

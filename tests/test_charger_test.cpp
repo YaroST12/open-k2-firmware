@@ -6368,6 +6368,25 @@ static void test_later_unit_elevated_or_stuck_baseline_still_ends_unsafe() {
         CHECK_EQ(count_unit_verdict(r, ct::Unit::Pd, ct::Verdict::Pass), 0u);
     }
 }
+// pattern rp-without-vbus (a charger's top C port): Rp is on the line but VBUS does not come after the Rd. The Rd is cycled
+// kLegacyNoVbusMs into the attach, not after kLegacyGiveUpMs. Without an Rp (a dead port) the 20 s wait stays.
+static void test_legacy_attach_with_rp_but_no_vbus_cycles_rd_early() {
+    for (const bool rp : {true, false}) {
+        Fake f; ct::Runner r(f);
+        f.no_vbus_after_rd = true; f.caps.active_cc = rp ? 1 : 0;
+        const auto o = with_units(ct::bit(A::Qc2), {ct::Unit::Qc2});
+        CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+        CHECK_EQ(run_until(f, r, [&] { return f.attaches_legacy == 1; }, 30000), true);
+        const uint32_t t1 = f.in.now;
+        const bool again = run_until(f, r, [&] { return f.attaches_legacy == 2; }, 30000);
+        CHECK_EQ(again, true);
+        const uint32_t gap = f.in.now - t1;
+        if (rp) CHECK_EQ(gap < ct::kLegacyNoVbusMs + ct::kDetachDarkMs, true);
+        else CHECK_EQ(gap >= ct::kLegacyGiveUpMs, true);
+        f.no_vbus_after_rd = false;
+        CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 200000), true);
+    }
+}
 // A Pd unit whose attach never brings VBUS or the source list back fails its rows with NoReattach; the run still ends. A
 // source that is back with its list but has not yet granted the 5 V contract is not a failure: the rows go on.
 static void test_pd_attach_without_vbus_or_caps_is_no_reattach() {
@@ -9131,7 +9150,7 @@ int main() {
     test_unsafe_clears_when_vbus_is_gone_for_the_debounce();
     test_failed_release_at_low_vbus_is_a_lost_source_not_unsafe();
     test_unsafe_clears_when_vbus_stays_under_vsafe5();
-    test_pd_attach_without_vbus_or_caps_is_no_reattach(); test_pd_plan_comes_from_the_first_attach(); test_source_gone_in_a_unit_skips_the_remaining_units();
+    test_pd_attach_without_vbus_or_caps_is_no_reattach(); test_legacy_attach_with_rp_but_no_vbus_cycles_rd_early(); test_pd_plan_comes_from_the_first_attach(); test_source_gone_in_a_unit_skips_the_remaining_units();
     test_pd_attach_5v_contract_held_at_wrong_voltage_fails_wrong_voltage();
     test_pd_attach_5v_contract_then_rp_cut_before_timeout_fails_wrong_voltage();
     test_pd_attach_without_any_caps_stays_no_reattach();

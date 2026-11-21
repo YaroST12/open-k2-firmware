@@ -1325,8 +1325,7 @@ Reason Runner::start(const pd::SourceCaps& caps, Options o, Input in, bool confi
     handover_ = {}; unit_ = Unit::Count; mode_ = Mode::Pd;
     ceiling_pending_ = ceiling_done_ = ceil_stopping_ = ceil_recover_ = ceil_cycled_ = false; ceil_ms_ = ceil_stop_ms_ = ceil_low_ms_ = 0; ceil_why_ = 0;
     spec_done_ = spec_stopping_ = spec_fault_ = false; spec_ms_ = spec_stop_ms_ = 0; spec_pending_ = spec_wanted();
-    attached_ = detached_ = ending_ = silent_ = legacy_active_ = never_dark_ = dipped_ = dark_ = false; attach_try_ = 0;
-    own_rel_ = false; reann_ = 0;
+    attached_ = detached_ = ending_ = silent_ = legacy_active_ = never_dark_ = dipped_ = dark_ = false; attach_try_ = 0;    own_rel_ = false; reann_ = 0;
     rp_restart_ = false; contract_wrong_ = false; attach_max_mv_ = 0;
     pre_ms_ = 0;
     pd_retry_ = cut_index_ = SIZE_MAX; retries_ = epr_tries_ = 0; settle_ms_ = settle_until_ = 0; auth_open_ = false;
@@ -2258,6 +2257,12 @@ void Runner::poll_attach(const Input& in, const pd::SourceCaps& caps, uint32_t g
                 return;
             }
         } else stable_ = false;
+        // Rp on the line and still no VBUS: the retry's Rd cycle now, not after the give-up wait.
+        const bool rp_no_vbus = caps.active_cc && in.vbus_mv >= 0 && in.vbus_mv < pd::kVSafe0Mv && in.now - att_ms_ >= kLegacyNoVbusMs;
+        if (rp_no_vbus && !selfpwr_ && !attach_try_ && handover_.outcome != HandoverOutcome::StayedPd) {
+            K2LOG("[CT] Rp without VBUS %ums into the attach: Rd cycle\n", unsigned(in.now - att_ms_));
+            attach_try_ = 1; begin_detach(in); return;
+        }
         if (in.now - att_ms_ < (attach_try_ ? kLegacyRetryMs : kLegacyGiveUpMs)) return;
         if (!selfpwr_ && !attach_try_ && handover_.outcome != HandoverOutcome::StayedPd) { attach_try_ = 1; begin_detach(in); return; }   // once more, longer
         if (handover_.outcome == HandoverOutcome::NotTried) handover_ = {HandoverOutcome::StayedPd, in.now - unit_ms_};
