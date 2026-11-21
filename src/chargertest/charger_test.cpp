@@ -1327,7 +1327,7 @@ Reason Runner::start(const pd::SourceCaps& caps, Options o, Input in, bool confi
     ceiling_pending_ = ceiling_done_ = ceil_stopping_ = ceil_recover_ = ceil_cycled_ = false; ceil_ms_ = ceil_stop_ms_ = ceil_low_ms_ = 0; ceil_why_ = 0;
     spec_done_ = spec_stopping_ = spec_fault_ = false; spec_ms_ = spec_stop_ms_ = 0; spec_pending_ = spec_wanted();
     attached_ = detached_ = ending_ = silent_ = legacy_active_ = never_dark_ = dipped_ = dark_ = rel_rd_ = false; attach_try_ = 0;
-    unit_time_.fill(0); time_ms_ = 0; time_logged_ = false;
+    unit_time_.fill(0); time_ms_ = 0; time_pending_ = true;
     never_dark_ = in.no_cc;   // a port with no CC does not go dark: the first detach is the short one too
     own_rel_ = false; reann_ = 0;
     rp_restart_ = false; contract_wrong_ = false; attach_max_mv_ = 0;
@@ -2577,6 +2577,7 @@ Reason Runner::resume(Input in, bool confirmed) {
     const size_t first = pick();
     unit_ = first == SIZE_MAX ? Unit::Count : unit_of(steps_[first]); mode_ = unit_ == Unit::Count ? Mode::Pd : mode(unit_);
     attached_ = first != SIZE_MAX && mode_ == Mode::Pd; detached_ = ending_ = silent_ = legacy_active_ = false; attach_try_ = 0; unit_ms_ = in.now;
+    unit_time_.fill(0); time_ms_ = 0; time_pending_ = true;
     rp_restart_ = false; contract_wrong_ = false; attach_max_mv_ = 0;
     last_ms_ = phase_ms_ = in.now; stable_ = stopping_ = pd_owned_ = fc_owned_ = recover_ = sag_cut_ = sag_open_ = false;
     reason_ = Reason::None; loaded_ = false; suspended_ = false;
@@ -2588,6 +2589,13 @@ Reason Runner::resume(Input in, bool confirmed) {
     return Reason::None;
 }
 // The run's time per unit, one [CT] line when it ends (Done, Stopped): what each protocol cost, for the lab's speed work.
+// (noinline: its 13 outgoing arguments stay out of poll()'s frame, above poll_impl's.)
+[[gnu::noinline]] static void log_unit_time(const std::array<uint32_t, size_t(Unit::Count)>& t) {
+    static_assert(unsigned(Unit::PdLow) + 1 == unsigned(Unit::Count), "the split line names every unit");
+    K2LOG("[CT] unit ms PD %u QC2 %u QC3 %u QC3+ %u AFC %u FCP %u SCP %u VOOC %u SVOOC %u SVOOC65 %u UFCS %u VIVO %u PDlow %u\n",
+          unsigned(t[0]), unsigned(t[1]), unsigned(t[2]), unsigned(t[3]), unsigned(t[4]), unsigned(t[5]), unsigned(t[6]),
+          unsigned(t[7]), unsigned(t[8]), unsigned(t[9]), unsigned(t[10]), unsigned(t[11]), unsigned(t[12]));
+}
 void Runner::count_unit_time(uint32_t now) {
     if (busy()) {
         if (unit_ < Unit::Count && time_ms_ && now - time_ms_ < 2000) unit_time_[size_t(unit_)] += now - time_ms_;
@@ -2595,13 +2603,9 @@ void Runner::count_unit_time(uint32_t now) {
         return;
     }
     time_ms_ = 0;
-    if (time_logged_) return;
-    time_logged_ = true;
-    static_assert(unsigned(Unit::PdLow) + 1 == unsigned(Unit::Count), "the split line names every unit");
-    const auto& t = unit_time_;
-    K2LOG("[CT] unit ms PD %u QC2 %u QC3 %u QC3+ %u AFC %u FCP %u SCP %u VOOC %u SVOOC %u SVOOC65 %u UFCS %u VIVO %u PDlow %u\n",
-          unsigned(t[0]), unsigned(t[1]), unsigned(t[2]), unsigned(t[3]), unsigned(t[4]), unsigned(t[5]), unsigned(t[6]),
-          unsigned(t[7]), unsigned(t[8]), unsigned(t[9]), unsigned(t[10]), unsigned(t[11]), unsigned(t[12]));
+    if (!time_pending_) return;
+    time_pending_ = false;
+    log_unit_time(unit_time_);
 }
 void Runner::poll(Input in, const pd::SourceCaps& caps) {
     const auto state = state_;

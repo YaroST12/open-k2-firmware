@@ -1089,7 +1089,7 @@ private:
     uint32_t unit_ms_ K2_BSS_INIT(0), att_ms_ K2_BSS_INIT(0);   // the unit's detach began; this attach phase began
     std::array<uint32_t, size_t(Unit::Count)> unit_time_ K2_BSS_ZERO;   // busy ms per unit this run (the end-of-run [CT] split)
     uint32_t time_ms_ K2_BSS_INIT(0);                                    // the poll the split last counted to (0 = idle)
-    bool time_logged_ K2_BSS_INIT(true);
+    bool time_pending_ K2_BSS_INIT(false);                               // a run started and its split is not logged yet
     uint32_t pre_ms_ K2_BSS_INIT(0);                 // extra quiet before the unit's first handshake, on top of the 500 ms baseline settle
     enum class Att : uint8_t { Caps, Contract } att_ = Att::Caps;
     bool rp_restart_ K2_BSS_INIT(false);   // the attach wait was restarted once after a source-side Rp drop (pattern slow-rp-wake)
