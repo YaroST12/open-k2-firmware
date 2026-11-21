@@ -839,6 +839,27 @@ Owner scan matrix (geometry corrected: v25 at 2 px with a 2-module quiet zone ne
 
 For each row: run the command, scan with the phone, note whether it reads, what the results page labels it ("QR scan test v<NN> <N>px"), and from how far away it still reads; then BACK (or `qrtest stop`) to leave. Record one row per scan in section 3.
 
+### T27 Charger-test soak (before a release, after a charger-test or PD-link change)
+
+`tools/ct_soak.py` repeats the charger test on the connected charger with a random subset of the test units in random
+order, so faults that depend on unit order or build up over many runs show up without a dedicated test. Each run records the
+debug stream (as T25) and starts the run with `ct_start.py`; afterwards it checks for a reboot (uptime went back), an
+UNSAFE / `[FAULT]` / Stopped line, and records the stack low-water mark and the `[CT] unit ms` split. It stops at the first
+reboot (`--keep-going` overrides).
+
+```
+python3 tools/ct_soak.py 10                                         # every unit, medium level
+python3 tools/ct_soak.py 5 --level deep --units pd,pd-low,qc2       # PD/PPS/AVS sweeps on a PD charger
+python3 tools/ct_soak.py 30 --units fcp,scp,afc,qc2,qc3,qc3+,ufcs --knobs   # legacy units, random timing knobs
+```
+
+- Output: `runs/soak-<date>/`: `summary.tsv` (one row per run), `log`, `run-NN/` (ct.log, stream). The seed is printed;
+  `--seed N` replays the same unit draws.
+- `--knobs` sets random `charger-legacy-tune` values per run and restores the defaults at the end.
+- Pass: no reboot, `bad=0` on every run, the same pass / fail counts for the same units, `stack_low` steady (no creep
+  across runs). A fail that the charger explains (QC 20 V, SCP "acked, no change") is not a finding.
+- Needs a charger and nothing else of the device; never part of `make gate`.
+
 ### T20 hardware plan summary
 
 Handover (T20) and journal (T21) were built on the host only; nothing here is hardware-verified yet. First hardware run: T20 with the CJ21 (confirm the 300 ms CC detach makes the charger drop PD and offer QC3/AFC/FCP; measure the 20 s timeout), then T21 steps 1 to 5.

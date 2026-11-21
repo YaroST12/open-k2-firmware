@@ -93,7 +93,7 @@ Open defects, newest first. A row leaves this list when its fix is merged and se
   went on within a second of the loop stopping (`runs/hw-2026-11-21/152248-qc2-fast2/`); one every ~3 s is harmless.
   Something in the step start waits for a quiet the screenshot keeps resetting; a run should never wait on the shell.
 
-- **b4d5ed89 (live-VBUS attach / inline release) breaks charger-test runs** (2026-11-21, Baseus 140 W, nothing behind the
+- ~~**b4d5ed89 (live-VBUS attach / inline release) breaks charger-test runs**~~ fixed in 8c7a981b, seen on hardware (2026-11-21, Baseus 140 W, nothing behind the
   K2; `runs/hw-2026-11-21/150819-deep-b4d5/`). A Deep run stopped at the PPS 5-11 V sweep (5.8 V Request accepted, no
   PS_RDY yet) with `FAIL load attached`, the rest skipped "load attached", `Sink downstream (inline=1 far request=0)`.
   Also on that build a START against the Baseus with its output off (it needs Rd to turn on) gave "no PD source
@@ -107,6 +107,10 @@ Open defects, newest first. A row leaves this list when its fix is merged and se
   `vbus=5010 mV`, `cc1=3313 mV`, `dp=2695/dm=2700` (same as `145031-deep-b4d9` before `b4d5ed89`), whereas dark-port
   `START` (`vbus < 4500 mV`) is unchanged and regression-tested with an inrush spike (`test_pd_link`,
   `test_ui_charger_test`). Needs hardware run on Baseus 140 W.
+  **Hardware 2026-11-21 (1.1.0-226-8c7a981b, Joyroom 65 W, PPS 3.3-11 V / 3.3-21 V):** `tools/ct_soak.py` 2 Deep runs
+  (pd, pd-low, qc2, both orders) 26 pass / 0 fail each through every PPS sweep, no "load attached", no reboot, stack low
+  16392 B; 3 Medium runs over random unit subsets 0 fail (`runs/soak-1121-164810/`, `runs/soak-1121-165751/`). Not
+  re-checked: the Baseus 140 W itself, and the inline latch still firing on a real load behind the K2 (a phone).
 
 - **`make gate` fails at the tests on public since 3614728f** (2026-11-21, host). `test_ui_perf.cpp:516` (worst scroll over
   53600) and `test_ui_overdraw.cpp:227` (6 full-paint budgets) fail from 3614728f (place scrollbar to the bottom, toast
