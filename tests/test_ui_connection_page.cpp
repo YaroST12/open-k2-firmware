@@ -168,7 +168,7 @@ static void test_topology_unknown_unless_passive_and_dead() {
 }
 
 // Showing every empty state on every topology only reads: no Rd, Ra, rescan, request or line force. The Cable tab's own read
-// (one e-marker scan, once, and only with a cable in the path: Rp on one line) is the only exception.
+// (one e-marker scan, once, never with a charger straight on the top plug) is the only exception.
 static void test_empty_states_are_passive() {
     const int ccs[][2] = {{3300, 3300}, {3300, 0}, {0, 0}};
     for (const auto &cc : ccs) {
@@ -176,7 +176,7 @@ static void test_empty_states_are_passive() {
             Ui &ui = fresh_ui();
             g_stub.pm.vbus_mv = 0;
             set_cc(cc[0], cc[1]);
-            const int base = acts() + (tab == 1 && cc[0] != cc[1] ? 1 : 0);
+            const int base = acts() + (tab == 1 && !(cc[0] == 3300 && cc[1] == 3300) ? 1 : 0);
             const uint32_t t = open_and_settle(ui, kConnTabAlias + uint8_t(tab), 20000);
             CHECK_EQ(int(cp(ui).tab()), tab);
             ui.tick(t + 100);
@@ -2154,6 +2154,26 @@ static void test_cable_tab_reads_once_on_open() {
     CHECK_EQ(g_stub.scans, 3);
 }
 
+// A bare cable in the bottom port with nothing else (no Rp on either line, VBUS down) is read; a charger straight on the top plug
+// has no cable between, so nothing is scanned there, and the scan follows once the lines change.
+static void test_cable_tab_reads_a_bare_cable_not_a_top_plug() {
+    Ui &ui = fresh_ui();
+    g_stub.em = {};
+    g_stub.pm.vbus_mv = 0;
+    set_cc(3300, 3300);
+    uint32_t t = open_and_settle(ui, kConnTabAlias + 1, 20000);
+    CHECK_EQ(int(cp(ui).facts().topo), int(raguard::Topology::DirectReceptacle));
+    for (int i = 0; i < 20; i++) ui.tick(t += 100);
+    CHECK_EQ(g_stub.scans, 0);
+    set_cc(0, 0);                                    // the charger is unplugged, a bare cable stays
+    for (int i = 0; i < 30; i++) ui.tick(t += 100);
+    CHECK_EQ(int(cp(ui).facts().topo), int(raguard::Topology::NoSource));
+    CHECK_EQ(g_stub.scans, 1);
+    CHECK_EQ(int(g_stub.last_scan_mode), int(k2::pd::EmarkerMode::Vconn));
+    for (int i = 0; i < 40; i++) ui.tick(t += 100);
+    CHECK_EQ(g_stub.scans, 1);
+}
+
 // Coming back with a valid read in hand does not scan again; Read e-marker forces one.
 static void test_cable_tab_held_read_is_not_repeated() {
     Ui &ui = fresh_ui();
@@ -2218,6 +2238,31 @@ static void test_charger_tab_inline_never_starts_the_offers_read() {
     CHECK_EQ(acts(), base);
     CHECK_EQ(offers::running(), false);
     CHECK_STR(std::string(cp(ui).status_line()).c_str(), conn::kWhyInline);
+    CHECK_EQ(ui.context().toast.active(t), false);   // the toast was shown once and ran out
+}
+
+// The refusal belongs to the presence it was raised for: the latch lifting and the charger leaving leave nothing stale.
+static void test_charger_tab_inline_refusal_does_not_go_stale() {
+    Ui &ui = fresh_ui();
+    uint32_t t = offers_fresh_presence();
+    attach_charger(ui, t);
+    make_inline(ui, t += 100);
+    t = open_and_settle(ui, kConnTabAlias, t += 100);
+    for (int i = 0; i < 5; i++) main_loop_pass(ui, t += 100);
+    CHECK_EQ(int(offers::why()), int(pd::OrWhy::Inline));
+    CHECK_EQ(ui.context().toast.active(t), true);
+    CHECK_STR(ui.context().toast.text, conn::kWhyInline);
+    g_stub.pm.vbus_mv = 0; g_stub.pm.current_ma = 0; g_stub.cc = 0; g_stub.pm_online = false;
+    g_stub.caps = {};
+    for (int i = 0; i < 80; i++) main_loop_pass(ui, t += 100);
+    CHECK_EQ(int(ui.link().inline_mode()), 0);
+    ui.goto_page(0, t += 100);
+    for (int i = 0; i < 10; i++) main_loop_pass(ui, t += 100);
+    t = open_and_settle(ui, kConnTabAlias, t += 100);
+    for (int i = 0; i < 10; i++) main_loop_pass(ui, t += 100);
+    CHECK_EQ(int(offers::why()), int(pd::OrWhy::None));
+    CHECK_EQ(std::string(cp(ui).status_line()).find(conn::kWhyInline) == std::string::npos, true);
+    CHECK_EQ(ui.context().toast.active(t) && std::string_view(ui.context().toast.text) == conn::kWhyInline, false);
 }
 
 // Not inline: the read runs with the indicator, restores the port and shows what it read; the latch mid-read ends it at once.
@@ -2324,6 +2369,8 @@ static void test_auto_read_states_all_rotations() {
             for (int i = 0; i < 10; i++) main_loop_pass(ui, t += 100);
             while (ui.painting()) ui.tick(t += 2);
             CHECK_STR(std::string(cp(ui).status_line()).c_str(), "Reading offers...");
+            CHECK_EQ(ui.context().toast.active(t), true);   // what the user sees of the read starting
+            CHECK_STR(ui.context().toast.text, "Reading offers...");
             std::snprintf(name, sizeof name, "k2_auto_offers_reading_rot%d", r);
             dump_panel(name);
             g_stub.rr_status.state = pd::RereadState::Idle;
@@ -2383,10 +2430,12 @@ int main() {
     test_device_scroll_thumb_reaches_bottom();
     test_device_scroll_toast_stays_on_top();
     test_cable_tab_reads_once_on_open();
+    test_cable_tab_reads_a_bare_cable_not_a_top_plug();
     test_cable_tab_held_read_is_not_repeated();
     test_cable_tab_inline_reads_nothing_and_says_why();
     test_cable_tab_reads_when_the_inline_latch_lifts();
     test_charger_tab_inline_never_starts_the_offers_read();
+    test_charger_tab_inline_refusal_does_not_go_stale();
     test_charger_tab_reads_offers_and_yields_to_the_latch();
     test_refresh_counts_as_the_offers_read();
     test_auto_read_states_all_rotations();

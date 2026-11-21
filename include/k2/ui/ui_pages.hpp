@@ -990,7 +990,8 @@ private:
     uint32_t thumb_sig_ = 0;               // scroll thumb's (first, total) as painted
     StrBuf<40> status_txt_;                // the bottom bar as last painted (tests read it; the page never does)
     bool em_read_pending_ = false;         // Read e-marker started a passive listen window from Actions
-    const char *refusal_ = nullptr;        // the automatic read's refusal reason last shown (a literal): shown again only when it changes
+    const char *refusal_ = nullptr;
+    bool reading_toast_ = false;             // the offers read's start was announced        // the automatic read's refusal reason last shown (a literal): shown again only when it changes
     bool id_asked_ = false;                // Identify started from this page: its progress shows in the status bar
     bool iq_asked_ = false;                // inline interrogation started from the Device place
     bool iq_have_ = false;                 // an inline interrogation was started during iq_session_

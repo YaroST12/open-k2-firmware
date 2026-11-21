@@ -395,12 +395,18 @@ void ConnectionPage::auto_reads(uint32_t now_ms) {
     if (tab_ == conn::Tab::Source) {
         offers::want(now_ms);
         const pd::OrWhy w = offers::why();
-        note_refusal(w == pd::OrWhy::Inline ? conn::kWhyInline : w == pd::OrWhy::Busy ? conn::kWhyBusy : nullptr, now_ms);
+        // Only a reason that still holds: the refusal outlives the latch until the main loop's next pass.
+        note_refusal(w == pd::OrWhy::Inline && inl ? conn::kWhyInline : w == pd::OrWhy::Busy && ctx_.ui->ports_busy() ? conn::kWhyBusy : nullptr, now_ms);
+        // The read is quick and the rows already hold their data: announce its start once so it is seen.
+        if (offers::running() && !reading_toast_) ctx_.toast.show(FooterTone::Info, "Reading offers...", now_ms, kToastDefaultMs);
+        reading_toast_ = offers::running();
         return;
     }
+    reading_toast_ = false;
     if (tab_ != conn::Tab::Cable) return;
-    // Nothing on the lines, or a charger straight on the top plug: no cable between to read, and a scan would drive the lines for nothing.
-    if (facts_.topo == raguard::Topology::DirectReceptacle || facts_.topo == raguard::Topology::NoSource) return;
+    // A charger straight on the top plug: no cable between to read. (A bare cable and an empty port look the same passively, no Rp
+    // on either line, so both get the one scan: VCONN on a free CC, nothing else.)
+    if (facts_.topo == raguard::Topology::DirectReceptacle) { note_refusal(nullptr, now_ms); return; }
     const uint32_t key = conn::cable_auto_key(fusb302::cable_seq(), fusb302::session(), link.cable_stale());
     const bool held = fusb302::emarker().valid && !link.cable_stale();
     if (held) {
