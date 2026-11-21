@@ -6056,6 +6056,32 @@ static void test_xiaomi_unit_scenes() {
     }
 }
 
+
+// Stage footers are floating toasts, never persistent: each times out after kToastDefaultMs, and the repaint that clears it does
+// not raise it again (Results, Steps, Detail, and Review, whose pill covers the START hint).
+static void toast_times_out(const char* what, Ui& ui, uint32_t& t) {
+    ticks_for(ui, t, 3000);
+    settle(ui, t);
+    if (ui.context().toast.active(t) || ui.context().toast.drawn) std::fprintf(stderr, "toast persists on %s\n", what);
+    CHECK_EQ(ui.context().toast.active(t), false);
+    CHECK_EQ(ui.context().toast.drawn, false);
+    ticks_for(ui, t, 3000);
+    CHECK_EQ(ui.context().toast.active(t), false);
+}
+static void test_toasts_time_out() {
+    six_pdo_fixture(); Ui ui; uint32_t t;
+    finished_results(ui, t);
+    toast_times_out("results", ui, t);
+    press(ui, Button::Ok, t); t += 200; ui.tick(t); settle(ui, t);
+    toast_times_out("steps", ui, t);
+    press(ui, Button::Ok, t); t += 200; ui.tick(t); settle(ui, t);
+    toast_times_out("detail", ui, t);
+    {   Ui r; open(r); review(r); uint32_t u = 1300; r.tick(u);
+        toast_times_out("review", r, u);
+        CHECK_EQ(r.charger_test_stage(), 4);   // the START hint is back, nothing left over it
+    }
+}
+
 int main() {
     overlap_enable();
     test_view_says_what_the_wizard_shows();
@@ -6141,6 +6167,7 @@ int main() {
     test_results_grid_rows_rail_and_footer();
     test_results_cells_are_flat_fills();
     test_a_capped_range_reads_amber_and_says_how_far_it_got();
+    test_toasts_time_out();
     test_steps_rows_show_whole_labels();
     test_step_label_gallery();
     test_pd_block_scenes();
