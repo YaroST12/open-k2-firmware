@@ -708,7 +708,7 @@ void PdStressPage::paint_results() {
     const Surface &c = ctx_.content;
     if (!laid_) {
         if (!ctx_.blank) gfx_fill(c, 0, kit::kBelowBar, c.w, static_cast<int16_t>(kFooterY - kit::kBelowBar), kBg);
-        gfx_text(c, kSmall, 6, 30, "Score", kDim, kBg);
+        gfx_text(c, kSmall, 6, kScoreY + 4, "Score", kDim, kBg);   // beside the 24 px score, clear of the tally band
         StrBuf<8> s;
         put_score(s, res_score_cp_);
         put_cell_raw(c, kMid, kScoreX, kScoreY, 6, Align::Right, res_valid_ ? s.view() : std::string_view{"--"}, kText);
