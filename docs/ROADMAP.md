@@ -83,10 +83,17 @@ Open defects, newest first. A row leaves this list when its fix is merged and se
 - **QC2 Deep testing animation does not advance to the next voltage badge** (2026-11-21, user hardware report). During a
   Deep charger test, QC2 changes VBUS voltage through its levels, but the Running-grid highlight/outline stays stuck on
   the first voltage badge instead of advancing to the active voltage badge.
+  Not reproduced on the host (2026-11-21): a Medium and a Deep plan with VBUS following each Request put the dot on the
+  5 / 9 / 12 V cells in turn; QC2 opens no paint-block window. Regression test 82910f13 (`test_ui_charger_test`).
+  Next: a Deep run with the QC2 unit on hardware, screenshots against the `[CT]` step log, and the flashed build's hash.
 
 - **PPS Deep range label disagrees with the range being tested** (2026-11-21, user hardware report). The UI displays a
   `5V-21V` PPS range while the engine is visibly stepping through a `3.3V-5V` range (check APDO min/max formatting vs
   sweep target bounds).
+  Host check 2026-11-21: label, live range and swept points agree on one- and two-APDO lists (3.3-21V; 3.3-11V + 3.3-21V;
+  3.3-5.9V + 5-21V). Found and fixed on the way (98068797, host-tested): the Running header name cell clipped the low part
+  "PPS 3.3-4.9V" to "PPS 3.3-...", so only the 5-21V part showed a readable range. Next: a Deep PPS run on hardware with
+  screenshots of the header and grid chip during the 3.3-4.9 V part.
 
 - **`K2_PDSTRESS=1` does not pass the gate: `ChargerTestSession::poll` needs 1056 B of stack** (2026-11-14, found on
   k2/bugbatch; pre-existing: the base tree gives the same warning). The PD Stress build pulls more inlined code into
