@@ -785,11 +785,13 @@ static void test_three_step_header() {
     CHECK_EQ(ui.charger_test_stage(), 4);
     check_header(ui, 3);
 }
+// Review's table rows sit from the body top at the kit pitch (the page's no-alert layout); y of row i's text line.
+static int review_row_y(int i) { return kit::kBodyY + i * kit::kRowH + kit::row_text_y(kit::kRowH, kSmall.height); }
 // Review's Spoof row (row 2 of the table, the value column at x72) is the identity the START presents. The armed state is not
 // part of the line: it is on the Cable step (the ARMED pill) and in the Refuse / Waiting stages.
 static void check_review_spoof(std::string_view text, uint16_t color) {
     char buf[kFitBuf];
-    const int y = 90 + 2 * 24 + kit::row_text_y(24, kSmall.height);
+    const int y = review_row_y(2);
     check_text_at(kSmall, y, "Spoof", kDim, kBg, 6);   // the key of the identity row
     check_text_at(kSmall, y, fit_data(kSmall, text, 17 * kSmall.adv, buf), color, kBg, 68);
 }
@@ -1069,23 +1071,42 @@ static void test_self_powered_review_note() {
         fixture(); g_stub.self_powered = self != 0;
         Ui ui; open(ui); review(ui);
         if (self) CHECK_EQ(footer_says("Self-powered: VBUS stays up", kText), true);
-        else CHECK_EQ(footer_says("Check the other port", kCaution), true);   // the default Review footer: the warning's one-line echo
+        else CHECK_EQ(ui.charger_test_view().message_len, 0);   // the default Review footer is empty: no fixed warning toast
     }
 }
-// Review ALWAYS carries the stern other-port warning (user decision 2026-11-15): the amber band, the two lines, the START ticket's
-// hint and the Caution footer, on a bare idle link, a self-powered K2 and under the Level row's cursor alike; START's own confirm is
-// the acknowledgement (one confirm per run, nothing more). The band word must also fit its box (no cut).
+constexpr int kReviewRuleY = 154, kReviewCellY = 156, kReviewCellH = 64;
+// The START ticket as the kit draws it with the hint under it: compared over the cell's rows on a copy of the panel.
+static bool start_cell_says(std::string_view hint) {
+    std::array<uint16_t, LCD_WIDTH * LCD_HEIGHT> keep;
+    std::copy_n(g_panel, keep.size(), keep.begin());
+    kit::ActionCell ref;
+    ref.init(kContent0, kReviewCellY, kReviewCellH);
+    ref.draw_idle("START", hint, nullptr, true);
+    unsigned diff = 0;
+    for (int y = kReviewCellY; y < kReviewCellY + kReviewCellH; ++y)
+        for (int x = 0; x < LCD_WIDTH; ++x) diff += keep[y * LCD_WIDTH + x] != g_panel[y * LCD_WIDTH + x];
+    std::copy(keep.begin(), keep.end(), g_panel);
+    return diff == 0;
+}
+// Review carries no alert band and no warning lines (user decision 2026-11-21): the other port is START's hint only. The table
+// starts at the body top, the rule and the 64 px ticket follow, and no amber is painted above the ticket (the Tests row is text).
+// The idle footer is empty: "Check the other port" only repeated the fixed warning, so no toast rides on a bare Review.
 static void test_review_carries_the_other_port_warning() {
-    CHECK_EQ(text_width(kMid, "OTHER PORT FREE") <= 240 - 36 - 4, true);   // the band's word box
-    for (unsigned mode = 0; mode < 3; ++mode) {
+    static_assert(kit::kBodyY + 5 * kit::kRowH <= kReviewRuleY && kReviewCellY + kReviewCellH <= kFooterY, "five rows, rule, ticket");
+    for (unsigned mode = 0; mode < 2; ++mode) {
         fixture(); g_stub.self_powered = mode == 1;
         Ui ui; open(ui); review(ui);
-        if (mode == 2) { press(ui, Button::Minus); settle(ui); CHECK_EQ(ui.charger_test_cursor(), 0); }   // the Level row
-        CHECK_EQ(PANEL[30 * LCD_WIDTH + 2], kCaution);   // the band's amber, left of the triangle
-        check_text_at(kMid, 8, "OTHER PORT FREE", kSpotInk, kCaution, 26);
-        check_text_at(kSmall, 48, "Device on the other port", kText, kBg, 6);
-        check_text_at(kSmall, 66, "can be damaged. Unplug it", kText, kBg, 6);
-        if (mode == 0) CHECK_EQ(footer_says("Check the other port", kCaution), true);
+        for (int y = kit::kBodyY; y < kReviewRuleY; ++y)
+            for (int x = 0; x < 208; ++x) CHECK_EQ(PANEL[y * LCD_WIDTH + x] != kCaution, true);   // no band, no amber text
+        check_text_at(kSmall, review_row_y(0), "Tests", kDim, kBg, 6);
+        check_text_at(kSmall, review_row_y(1), "Depth", kDim, kBg, 6);
+        check_text_at(kSmall, review_row_y(2), "Spoof", kDim, kBg, 6);
+        check_text_at(kSmall, review_row_y(3), "Peak", kDim, kBg, 6);
+        check_text_at(kSmall, review_row_y(4), "Power", kDim, kBg, 6);
+        check_text_at(kSmall, review_row_y(4), mode ? "From the charger" : "K2 on USB", kText, kBg, 68);
+        CHECK_EQ(start_cell_says("other port must be empty"), true);   // START's hint is the one reminder
+        CHECK_EQ(start_cell_says("something else"), false);
+        CHECK_EQ(ui.charger_test_view().message_len == (mode ? 27 : 0), true);   // empty, or the self-powered note
         if (mode == 1) CHECK_EQ(footer_says("Self-powered: VBUS stays up", kText), true);
         no_operations();
     }
@@ -1297,7 +1318,7 @@ static void test_depth_offers_value_and_the_forced_epr_spoof() {
     press(ui, Button::Ok); settle(ui);                                           // the Off row stays picked: on to Review
     CHECK_EQ(ui.charger_test_stage(), 4);
     ui.tick(1300);
-    const int depth_y = 90 + 1 * 24 + kit::row_text_y(24, kSmall.height);
+    const int depth_y = review_row_y(1);
     check_text_at(kSmall, depth_y, "Depth", kDim, kBg, 6);
     check_text_at(kSmall, depth_y, "Offers", kText, kBg, 68);
     check_review_spoof(std::string(emrec::builtin_info(1).label), kText);       // what the run will present, not "Off"
@@ -1415,7 +1436,7 @@ static void test_depth_row_cycles_and_shows_on_review() {
     CHECK_EQ(light < medium && medium < deep, true);
     // Advance to Review: Depth shows as a KV row ("Light"), Plus/Minus are no-ops, OK starts confirmation.
     review(ui); ui.tick(1300);
-    const int depth_y = 90 + 1 * 24 + kit::row_text_y(24, kSmall.height);
+    const int depth_y = review_row_y(1);
     check_text_at(kSmall, depth_y, "Depth", kDim, kBg, 6);
     check_text_at(kSmall, depth_y, "Light", kText, kBg, 68);
     press(ui, Button::Minus); settle(ui); CHECK_EQ(ui.charger_test_cursor(), 0);
@@ -5871,7 +5892,7 @@ static void test_view_says_what_the_wizard_shows() {
         CHECK_EQ(v.stage, 4); CHECK_EQ(v.rows, 1);   // START
         CHECK_EQ(v.preview.runnable > 0, true); CHECK_EQ(v.preview.refusal, ct::Reason::None);
         CHECK_EQ(v.confirming, false); CHECK_EQ(v.confirm_left_ms, 0u);
-        CHECK_STR(view_text(v).c_str(), "Check the other port");
+        CHECK_STR(view_text(v).c_str(), "");   // a bare Review has no footer message
         start_press(ui, 1300); ui.tick(1400);
         v = ui.charger_test_view();
         CHECK_EQ(v.confirming, true); CHECK_EQ(v.confirm_left_ms > 0 && v.confirm_left_ms <= Ui::kConfirmWindowMs, true);
@@ -6023,6 +6044,95 @@ static void test_remote_offers_start_presents_the_epr_identity() {
     CHECK_EQ(ui.charger_test_results().level(), ct::Level::Offers);
     CHECK_EQ(g_stub.spoof_on, true); CHECK_EQ(g_stub.spoof_arms, 1);
     CHECK_EQ(ui.charger_test_cable_info().run == ctcable::kDefaultChoice, true);
+}
+// The Offers cable rule: (a) an EPR-rated cable read answers the charger itself (no spoof), (b) nothing read and the charger on the plug
+// = the EPR spoof, (c) anything else = no spoof, the EPR rows skip (the engine's CableLimit) and START is never refused for it.
+struct OffersCase { int cc1, cc2; bool read; uint16_t mv, ma; ctcable::Choice pick; };
+static void offers_review_and_start(const OffersCase& c, const char* spoof_line, bool spoof_armed) {
+    rd_fixture();   // no VBUS before the Rd: the guard judges the lines
+    g_stub.cable_limits.observed = c.read; g_stub.cable_limits.max_mv = c.mv; g_stub.cable_limits.max_ma = c.ma;
+    set_cc(c.cc1, c.cc2);
+    Ui ui; open(ui);
+    CHECK_EQ(ui.charger_test_set_cable(c.pick), true);
+    CHECK_EQ(ui.charger_test_set_level(uint8_t(ct::Level::Offers)), true);
+    review(ui);
+    for (uint32_t t = 1300; t < 2200; t += 20) ui.tick(t);   // the guard's window fills while Review is open
+    settle(ui, 2200);
+    check_review_spoof(spoof_line, kText);
+    static int shown = 0; ++shown;
+    for (uint8_t rot = 0; rot < 4; ++rot) {   // every rotation lays out; K2_DUMP renders each case
+        char path[40]; std::snprintf(path, sizeof path, "offers_case%d_rot%u", shown, unsigned(rot));
+        ui.set_rotation(rot, 2300 + rot); settle(ui, 2300 + rot); dump_screen(path);
+    }
+    ui.set_rotation(0, 2400); settle(ui, 2400);
+    nothing_armed_stub();
+    start_press(ui, 2500); confirm_press_nowait(ui, 2600);
+    CHECK_EQ(ui.charger_test_stage(), kWaitStage);   // started (Rd on, waiting for the charger), never refused for the spoof
+    CHECK_EQ(g_stub.rd_run, true);
+    CHECK_EQ(g_stub.spoof_on, spoof_armed); CHECK_EQ(g_stub.spoof_arms, spoof_armed ? 1 : 0);
+    CHECK_EQ(ui.charger_test_cable_info().run == (spoof_armed ? ctcable::kDefaultChoice : ctcable::Choice{}), true);
+    CHECK_EQ(ui.charger_test_cable_info().choice == c.pick, true);   // the stored pick stays whatever the run presented
+}
+static void test_offers_with_an_epr_cable_read_presents_the_cable() {   // (a)
+    offers_review_and_start({3300, 0, true, 50000, 5000, kBuiltin}, "Cable 50V 5A", false);   // a cable in between: the pick is a spoof, not presented
+    offers_review_and_start({3300, 3300, true, 50000, 5000, kOff}, "Cable 50V 5A", false);    // also on a plain receptacle reading
+}
+static void test_offers_with_nothing_read_and_the_charger_on_the_plug_spoofs() {   // (b)
+    offers_review_and_start({3300, 3300, false, 20000, 3000, kOff}, "EPR 50V 5A", true);
+    offers_review_and_start({3300, 3300, false, 20000, 3000, kBuiltin}, "EPR 50V 5A", true);
+}
+static void test_offers_otherwise_runs_without_the_spoof() {   // (c)
+    offers_review_and_start({3300, 0, false, 20000, 3000, kOff}, "Off", false);       // nothing read, a cable in between: the spoof cannot work
+    offers_review_and_start({3300, 0, false, 20000, 3000, kBuiltin}, "Off", false);   // a spoof pick does not push it through the guard
+    offers_review_and_start({3300, 3300, true, 20000, 3000, kBuiltin}, "Off", false); // a weaker cable was read: it answers, no spoof over it
+    offers_review_and_start({3300, 3300, true, 30000, 5000, kBuiltin}, "Off", false);
+}
+// The guard's window can turn from Direct to Cable on START's own fresh sample (the last Direct reading leaves the window):
+// the Read-offers run judges after that sample, so a choice made without it is never refused.
+static void test_offers_chooses_after_the_starts_own_sample() {
+    rd_fixture(); g_stub.cable_limits.observed = false; g_stub.cable_limits.max_mv = 20000; g_stub.cable_limits.max_ma = 3000;
+    set_cc(3300, 3300);
+    Ui ui; open(ui);
+    CHECK_EQ(ui.charger_test_set_level(uint8_t(ct::Level::Offers)), true);
+    review(ui);                                                   // the window holds one Direct reading
+    set_cc(3300, 0);
+    for (uint32_t t = 1300; t <= 1900; t += 100) ui.tick(t);      // seven Cable readings: Direct is still the peak of the eight
+    start_press(ui, 1950); confirm_press_nowait(ui, 1990);        // the START sample (Cable) evicts the Direct one
+    CHECK_EQ(ui.charger_test_stage(), kWaitStage);                // started without the identity, not the Refuse stage
+    CHECK_EQ(g_stub.spoof_on, false); CHECK_EQ(g_stub.spoof_arms, 0);
+    CHECK_EQ(ui.charger_test_cable_info().run == ctcable::Choice{}, true);
+    ticks(ui, 2000, 3500);                                        // VBUS comes up (the guard now reads Unknown): the run keeps what it started with
+    CHECK_EQ(g_stub.spoof_on, false); CHECK_EQ(g_stub.spoof_arms, 0);
+    CHECK_EQ(ui.charger_test_cable_info().run == ctcable::Choice{}, true);
+}
+// Any other level keeps the pick and the guard: a spoof pick through a cable still lands on the Refuse stage.
+static void test_other_levels_still_meet_the_guard_with_a_cable_read() {
+    rd_fixture();
+    g_stub.cable_limits.observed = true; g_stub.cable_limits.max_mv = 50000; g_stub.cable_limits.max_ma = 5000;
+    set_cc(3300, 0);
+    Ui ui; open(ui);
+    CHECK_EQ(ui.charger_test_set_cable(kBuiltin), true);
+    review(ui);
+    for (uint32_t t = 1300; t < 2200; t += 20) ui.tick(t);
+    settle(ui, 2200);
+    check_review_spoof(std::string(emrec::builtin_info(1).label), kText);
+    start_press(ui, 2500); confirm_press_nowait(ui, 2600);
+    CHECK_EQ(ui.charger_test_stage(), kRefuseStage);
+    CHECK_EQ(g_stub.spoof_arms, 0);
+}
+// The remote START (tools/ct_start.py) follows the same rule: (c) is accepted and runs, no Refuse stage.
+static void test_remote_offers_start_without_a_spoof_is_not_refused() {
+    rd_fixture(); g_stub.cable_limits.observed = false; g_stub.cable_limits.max_mv = 20000; g_stub.cable_limits.max_ma = 3000;
+    set_cc(3300, 0);
+    Ui ui; open(ui);
+    ticks(ui, 1100, 3000);   // a dark charger: the link detaches and its list goes (a changed offer drops a confirmation)
+    CHECK_EQ(ui.charger_test_set_cable(kBuiltin), true);
+    CHECK_EQ(ui.charger_test_set_level(uint8_t(ct::Level::Offers)), true);
+    CHECK_EQ(ui.charger_test_start(false, 3000).result == RemoteStart::Result::Accepted, true);
+    ticks(ui, 3000, 3900);
+    CHECK_EQ(ui.charger_test_stage(), kWaitStage);                               // started, not the Refuse stage
+    CHECK_EQ(g_stub.spoof_on, false); CHECK_EQ(g_stub.spoof_arms, 0); CHECK_EQ(g_stub.ra_ons, 0);
+    CHECK_EQ(g_stub.rd_run, true);
 }
 // "Do not disturb the connection": a load behind the K2 (the inline latch) means nothing new transmits, whatever the level.
 static void inline_now() { g_stub.pm_online = true; g_stub.pm.vbus_mv = 3000; g_stub.pm.current_ma = 500; }   // a live sink on a part-way VBUS: the ticks latch the link
@@ -6577,6 +6687,10 @@ int main() {
     test_avs_sweep_row_follows_the_only_sweep_kind();
     test_the_default_run_is_medium();
     test_depth_offers_value_and_the_forced_epr_spoof(); test_other_levels_keep_the_spoof_pick(); test_remote_offers_start_presents_the_epr_identity();
+    test_offers_with_an_epr_cable_read_presents_the_cable(); test_offers_with_nothing_read_and_the_charger_on_the_plug_spoofs();
+    test_offers_otherwise_runs_without_the_spoof(); test_other_levels_still_meet_the_guard_with_a_cable_read();
+    test_remote_offers_start_without_a_spoof_is_not_refused();
+    test_offers_chooses_after_the_starts_own_sample();
     test_depth_row_cycles_and_shows_on_review();
     test_an_old_journal_resumes_without_the_default_sweep();
     test_self_powered_review_note(); test_review_carries_the_other_port_warning(); test_phantom_evidence_does_not_refuse_a_run_but_a_load_does(); test_self_powered_run_is_on_the_card(); test_a_cable_read_once_stays_with_the_run();

@@ -167,7 +167,7 @@ aborts with `Overvoltage` and releases the lines), and the card and Results show
   it is **not a drawn current** and the watts are not a drawn power, and the K2 never loads the charger (the trigger's 50 mA guard and 12 V abort stay).
   Modes: `off` (Light, Medium), `on` (Deep; the trigger's start guards must pass), `usb-a` (accepted and run as `on`: the charger test
   waives nothing since the latch policy of 2026-11-15, so the wire value, the CLI flag and the web mode stay for
-  compatibility and do nothing; the run's inline checks see only a load or a sink's Request, and the Review warning asks
+  compatibility and do nothing; the run's inline checks see only a load or a sink's Request, and the START hint asks
   for an empty other port). The stage starts only once D+/D- are free
   (`svooc_trig::lines_free()`): the family session's release holds them at 0 V for 500 ms first. An adapter that talked
   and then sent no edge for `kQuietMs` (500 ms) ended the session (every no-load session so far, ~3.3 s after the wake):
@@ -531,19 +531,23 @@ the pick that was made.
    footer `<row>: n pass, m caution` (`result_layout::family_footer`). A PPS row is one APDO range; its sweep is a row of its own.
    Back returns to the same Results row. The other units keep the whole-unit step list and the `N steps, M failed` footer.
 2. **Spoof cable** (stage 2). The shared cable-identity list (below); OK on a row picks it and goes to Review.
-3. **Review** (stage 4). The other-port warning (below), the kv rows `Tests`, `Spoof` (the short identity name plus its
-   rating, plain `Off` when the pick is Off — a START with Off disarms whatever is armed) and the settable `Level`, then
-   the START ticket (the `Peak`, `Cap`, `Header` and status rows of earlier builds are gone; self-powered shows on the footer). The first OK on
+3. **Review** (stage 4). The kv rows `Tests`, `Depth`, `Spoof` (the short identity name plus its
+   rating, plain `Off` when the pick is Off — a START with Off disarms whatever is armed; a Read-offers run shows what it will
+   present, see below), `Peak` and `Power`, then the START ticket (the other-port reminder is its hint). The first OK on
    START opens the confirm window, the second starts.
 
-   **Other-port warning (2026-11-15, the user's decision).** Review always carries a stern warning that a device on the
-   other port can be damaged: an amber alert band `OTHER PORT FREE`, two font-16 lines ("A device on the other port" /
-   "can be damaged. Unplug it."), the START ticket's hint `other port must be empty` and a Caution footer `Check the
-   other port` (the refusal, nothing-to-run, Level, confirm-window, PPS 21 V and self-powered footers keep priority).
-   To fit, the page shows three kv rows (`Tests`, `Spoof`, `Level`; `Peak` and `Power` are gone, the PD page and the
-   card carry the best PDO and the self-powered footer stays) and the START ticket is 48 px high (was 64). START's own
-   arm + CONFIRM is the acknowledgement: one confirm per run. The web dashboard's START confirm shows the same text in
-   its own confirm step.
+   **Other-port reminder (2026-11-21, the user's decision).** The START ticket's hint `other port must be empty` is the
+   only reminder (the amber band `OTHER PORT FREE`, its two lines and the Caution footer `Check the other port` of 2026-11-15
+   are gone; the K2 cannot detect a device there). START's own arm + CONFIRM is the acknowledgement: one confirm per run.
+
+   **Read offers: the cable rule (2026-11-21).** Whatever the picked identity, a Read-offers run decides by the connection:
+   a cable read this attach with a valid, observed e-marker rated 50 V / 5 A answers the charger itself (no spoof; Spoof line
+   `Cable 50V 5A`); with no cable read and the spoof able to work (the Ra guard's own test: the charger on the top plug)
+   it presents the default EPR identity; otherwise (a weaker cable read, or the spoof impossible) it presents nothing, the
+   EPR rows skip with the cable reason and the AVS step runs on the SPR AVS APDO. The Ra guard is not asked for the last
+   two, so Offers never reaches the Refuse stage; `ct_start.py --level offers` prints the rule and ignores `--cable`.
+   Every other level presents the pick and meets the guard as before. The START sample is taken before the choice, so the choice
+   and the guard judge the same window.
 
    **Inline latch policy (2026-11-15, the user's decision).** The Link's inline latch keeps only 100 %-certain evidence
    ("unblock steps blocked by the phantom 'other device' tests; I'd only keep them when we are 100 %, absolutely
@@ -552,7 +556,7 @@ the pick that was made.
    a run; the enum values stay for the wire, the journal and old records, and nothing sets them. The charger test has no
    special handling of those causes and the usb-a waiver is redundant for it (see the SuperVOOC stage). Accepted
    tradeoff: a K2 inserted into a live but silent link (no current, no sink message yet) is no longer protected; the
-   Review warning is the protection. Hardware reason: the K2 reads about 1.75 V on CC2 with nothing plugged in, so a
+   START hint "other port must be empty" is the only protection. Hardware reason: the K2 reads about 1.75 V on CC2 with nothing plugged in, so a
    far Rd latched with an empty top port on the CUKTECH USB-A port (`docs/CHARGER_QUIRKS.md`).
 
 Back is always `Back` and retreats one level: Group -> Custom -> Tests, Cable -> Tests (cursor on the preset in force),

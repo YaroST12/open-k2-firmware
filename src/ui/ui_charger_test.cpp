@@ -1240,14 +1240,18 @@ void ChargerTestSession::guard_sample(uint32_t now) {
     guard_t_ = now;
     guard_.add(ctx_.analog ? ctx_.analog->cc1_mv : -1, ctx_.analog ? ctx_.analog->cc2_mv : -1);
 }
-raguard::Topology ChargerTestSession::guard_topology(uint32_t now, bool log) {
-    guard_sample(now);   // the freshest reading counts too: a dialog answered within one sample period still has two
+raguard::Reading ChargerTestSession::guard_reading() const {
     raguard::Reading r;
     r.cc1_mv = guard_.cc1(); r.cc2_mv = guard_.cc2();
     r.vbus_mv = ctx_.pm_online ? ctx_.vbus_fast_mv : -1;
     // Passive = nothing of ours on the lines: no run Rd, no Ra mode, no boot Rd, no sink inline. Anything else
     // changes what the lines read and the guard cannot judge.
     r.passive = !fusb302::rd_for_run_on() && !fusb302::ra_active() && !fusb302::self_powered() && !ctx_.inline_mode;
+    return r;
+}
+raguard::Topology ChargerTestSession::guard_topology(uint32_t now, bool log, bool sample) {
+    if (sample) guard_sample(now);   // the freshest reading counts too: a dialog answered within one sample period still has two
+    const auto r = guard_reading();
     const auto t = raguard::classify(r);
     if (log) K2LOG("[GUARD] cc1 %d cc2 %d vbus %d mV passive %d -> %s\n", int(r.cc1_mv), int(r.cc2_mv), int(r.vbus_mv), int(r.passive), raguard::name(t));
     return t;
@@ -1292,9 +1296,15 @@ int ChargerTestPage::range_spec_n() const {
 bool ChargerTestSession::confirm_live() const {
     return confirming_ && static_cast<int32_t>(ctx_.now - confirm_until_) < 0 && proposal(input(ctx_.now)) == confirm_proposal_;
 }
-// The identity START presents: the pick, or the EPR cable for a Read-offers run with no cable read (ctcable::run_choice).
+// The identity START presents (ctcable::run_choice). A Read-offers run lets the cable read answer, else the EPR spoof where the guard
+// allows it (the charger on the plug), else nothing: the EPR rows then skip as cable-limited and the SPR AVS step still runs.
 ctcable::Choice ChargerTestSession::run_choice() const {
-    return ctcable::run_choice(ctx_.cables.selected(), options_.level == ct::Level::Offers, physical_cable().observed);
+    return ctcable::run_choice(ctx_.cables.selected(), options_.level == ct::Level::Offers, physical_cable().observed,
+                               raguard::spoof_allowed(raguard::classify(guard_reading())));
+}
+bool ChargerTestSession::run_uses_cable() const {
+    const auto cable = physical_cable();
+    return options_.level == ct::Level::Offers && ctcable::epr_rated(cable.observed, cable.max_mv, cable.max_ma);
 }
 // The remote / test seam: select an identity in the shared list. A clone that is not in the library is refused.
 bool ChargerTestSession::set_cable_choice(ctcable::Choice c) {
@@ -1413,12 +1423,16 @@ void ChargerTestSession::open_confirmation() {
 void ChargerTestSession::confirmed_start() {
     const bool skip_spoof = skip_spoof_run_;   // "Start, skip spoof" on the Refuse stage: this run without the identity
     skip_spoof_run_ = false;                  // the stored pick stays; only this run carries no identity
+    // A Read-offers run chooses by the guard's own verdict, so the START sample is taken before it chooses and judges the same window:
+    // a choice made without it could turn into a refusal on it.
+    const bool offers = options_.level == ct::Level::Offers && !skip_spoof;
+    if (offers) guard_sample(ctx_.now);
     const auto choice = skip_spoof ? ctcable::Choice{} : run_choice();
     const bool bypass = guard_bypass_;   // "Start anyway" on the Cable-connected warning: the identity runs, the reading is recorded
     guard_bypass_ = false;
     run_guard_ = 0;
     if (choice.kind != ctcable::Kind::Off) {
-        topology_ = guard_topology(ctx_.now);
+        topology_ = guard_topology(ctx_.now, true, !offers);
         const bool refused = !raguard::spoof_allowed(topology_);
         if (refused && !bypass) { set_stage(Stage::Refuse); return; }
         run_guard_ = static_cast<uint8_t>((1 + static_cast<uint8_t>(topology_)) | (refused ? 0x80 : 0));
@@ -2199,10 +2213,10 @@ static FooterTone range_footer(StrBuf<32> &f, const ct::Runner &runner, A algo, 
                            s_.summary_.refusal_mv ? int(s_.summary_.refusal_mv) : in.vbus_mv, f);
             return FooterTone::Caution;
         }
-        const char *msg = "Check the other port";
-        FooterTone tone = FooterTone::Caution;
-        if (!s_.summary_.runnable) msg = "Nothing to run: all skip";
-        else if (s_.confirming_) msg = s_.confirm_reattach_ ? kReattachConfirm : "Press again to start";
+        const char *msg = "";   // the other port is START's hint; no fixed warning toast rides on a bare Review
+        FooterTone tone = FooterTone::Info;
+        if (!s_.summary_.runnable) { msg = "Nothing to run: all skip"; tone = FooterTone::Caution; }
+        else if (s_.confirming_) { msg = s_.confirm_reattach_ ? kReattachConfirm : "Press again to start"; tone = FooterTone::Caution; }
         else if (in.cable_mv == 20000 && s_.summary_.max_mv == 21000) { msg = "PPS: 21V on 20V wire"; tone = FooterTone::Info; }
         else if (self_supplied()) { msg = "Self-powered: VBUS stays up"; tone = FooterTone::Info; }
         f.put(msg);
@@ -2585,12 +2599,10 @@ constexpr const char *kRdOn[2] = {"Rd on CC1", "Rd on CC2"};   // the checklist'
 static_assert(all_fit(kRdOn, kSmallAdvPx, 190), "a Waiting checklist item is wider than its row");
 // The Review table: five rows of 26 px from the body top, the key at x6 and the value from x68 (17 cells).
 constexpr kit::KvLayout kKv{kit::kBodyY, kit::kRowH, 6, nullptr, nullptr, 68, 17, Align::Left};
-// Review always carries the other-port warning: the alert band (y2..44), two S16 lines under it, then the
-// three rows (Tests, Depth, Spoof at a 24 px pitch) and the 54 px START ticket.
-constexpr int16_t kWarnLine1Y = 48, kWarnLine2Y = 66;
-constexpr kit::KvLayout kReviewKv{90, 24, 6, nullptr, nullptr, 68, 17, Align::Left};
-constexpr int16_t kReviewCellY = 176, kReviewCellH = 56;
-static_assert(90 + 3 * 24 <= kReviewCellY && kReviewCellY + kReviewCellH <= kFooterY - 2,
+// Review: five kKv rows from the body top (Tests, Depth, Spoof, Peak, Power), the rule at y154 and the 64 px START ticket. The
+// other port is START's hint only (no alert band).
+constexpr int16_t kReviewRuleY = 154, kReviewCellY = 156, kReviewCellH = 64;
+static_assert(kit::kBodyY + 5 * kit::kRowH <= kReviewRuleY && kReviewCellY + kReviewCellH <= kFooterY - 2,
               "Review: the table and START stack cleanly in 240 px");
 // The Detail table: under the verdict band (y 2..37), the value column at x76 (16 cells).
 constexpr kit::KvLayout kDet{44, kit::kRowH, 6, nullptr, nullptr, 76, 16, Align::Left};
@@ -2728,23 +2740,19 @@ void ChargerTestPage::paint_review() {
     const Surface &c = ctx_.content;
     PaintBudget *const pbg = ctx_.budget;
     if (!laid_) {
-        if (pbg && !pbg->admit(static_cast<int>(c.w) * 44 + 1400, true)) return;
-        // The stern warning, on every Review, whatever the link says: the test opens the lines and a device on the other port can
-        // be damaged. START's own arm + CONFIRM is the acknowledgement (one confirm per run).
-        kit::draw_alert_band(c, kit::kBodyY, false, "OTHER PORT FREE");
-        gfx_text(c, kSmall, 6, kWarnLine1Y, "Device on the other port", kText, kBg);
-        gfx_text(c, kSmall, 6, kWarnLine2Y, "can be damaged. Unplug it", kText, kBg);
+        if (pbg && !pbg->admit(300, true)) return;
+        gfx_fill(c, 0, kReviewRuleY, c.w, 1, kRule);
         action_.init(c, kReviewCellY, kReviewCellH);
         laid_ = true;
     }
     auto kv = [&](int i, const char *key, std::string_view v, uint16_t color) -> bool {
         const uint32_t h = mix_u32(pg::mix_str(pg::mix_cstr(mix_init(), key), v), color) | 1u;
         if (h == cell_sig_[i]) return true;
-        if (pbg && !pbg->admit(static_cast<int>(c.w) * kReviewKv.pitch, true)) return false;
+        if (pbg && !pbg->admit(static_cast<int>(c.w) * kit::kRowH, true)) return false;
         cell_sig_[i] = h;
-        const int16_t y = kit::kv_row_y(kReviewKv, i);
-        gfx_fill(c, 0, static_cast<int16_t>(y + 1), c.w, kReviewKv.pitch - 1, kBg);
-        kit::kv_row(c, kReviewKv, y, key, v, color);
+        const int16_t y = kit::kv_row_y(kKv, i);
+        gfx_fill(c, 0, static_cast<int16_t>(y + 1), c.w, kit::kRowH - 1, kBg);
+        kit::kv_row(c, kKv, y, key, v, color);
         return true;
     };
     StrBuf<48> buf;
@@ -2754,14 +2762,37 @@ void ChargerTestPage::paint_review() {
     if (!kv(1, "Depth", kLevelItems[level_segment(s_.options_.level)], kText)) return;
 
     buf.clear();
-    const auto sel = s_.run_choice();   // what the run presents: a Read-offers run brings the EPR cable itself
-    if (sel.kind == ctcable::Kind::Off) buf.put("Off");   // plain: a START with Off disarms whatever is armed
+    const auto sel = s_.run_choice();   // what the run presents: a Read-offers run follows the cable read and the guard
+    if (s_.run_uses_cable()) buf.put("Cable 50V 5A");   // the read cable answers the charger itself: no spoof
+    else if (sel.kind == ctcable::Kind::Off) buf.put("Off");   // plain: a START with Off disarms whatever is armed
     else {
         row_ = ctx_.cables.row(ctx_.cables.index_of(sel), CableIdentityList::View::CableStep);
         buf.put(row_.text.view());
         if (!row_.rating.empty()) buf.put_char(' ').put(row_.rating);
     }
     if (!kv(2, "Spoof", buf.view(), kText)) return;
+
+    // The best advertised level (what the charger offers), then who powers the K2.
+    buf.clear();
+    const auto &caps = fusb302::caps();
+    const pd::Pdo *best = nullptr;
+    if (caps.valid)
+        for (size_t n = 0; n < caps.num_pdos && n < caps.pdos.size(); ++n)
+            if (!best || caps.pdos[n].max_mw > best->max_mw) best = &caps.pdos[n];
+    if (best) {
+        pg::put_volts_trim(buf, best->max_mv);
+        buf.put("V ");
+        pg::put_volts_trim(buf, best->max_ma);
+        buf.put_char('A');
+        if (best->max_mw) buf.put_char(' ').put_u32(best->max_mw / 1000).put_char('W');
+    } else if (s_.summary_.max_mv) {
+        pg::put_volts_trim(buf, static_cast<int32_t>(s_.summary_.max_mv));
+        buf.put_char('V');
+    } else {
+        buf.put("--");
+    }
+    if (!kv(3, "Peak", buf.view(), buf.view() == "--" ? kDim : kText)) return;
+    if (!kv(4, "Power", self_supplied() ? "From the charger" : "K2 on USB", kText)) return;
 
     if (s_.confirming_) {
         const int32_t left = std::max<int32_t>(0, static_cast<int32_t>(s_.confirm_until_ - ctx_.now));

@@ -240,7 +240,7 @@ int main() {
     ui.on_button(Button::Minus, ButtonEvent::Short, t); t += 100;   // the Level row: its focus look and its footer note
     render(ui, t, "ct_review_level");
     ui.on_button(Button::Plus, ButtonEvent::Short, t); t += 100;    // back to START
-    // The always-on other-port warning, in all four rotations (the Review step idle, then armed for its single confirm).
+    // Review (no alert band; START's hint is the other-port reminder) in all four rotations, idle, then armed for its single confirm.
     for (uint8_t rot = 0; rot < 4; ++rot) {
         char nm[32];
         ui.set_rotation(rot, t); t += 200;

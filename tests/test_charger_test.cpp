@@ -8962,6 +8962,45 @@ static void test_offers_with_a_read_weak_cable_skips_the_epr_entry() {
     unsigned pos = 0, mv = 0, ma = 0;
     CHECK_EQ(offers_pass_rows(r, nullptr, &pos, &mv, &ma), 1u);
     CHECK_EQ(pos, 2u); CHECK_EQ(mv, lo);   // the SPR AVS APDO answers instead
+    unsigned limited = 0;
+    for (const auto& s : r.steps()) limited += s.reason == ct::Reason::CableLimit;
+    CHECK_EQ(limited >= 1u, true);         // (c) the EPR rows skip with the cable reason
+}
+// The Offers cable rule (a): an EPR-rated cable that was read, no spoof presented: the run enters EPR and asks the EPR AVS level.
+static void test_offers_with_a_read_epr_cable_needs_no_spoof() {
+    Fake f = epr_spoof_fake();
+    f.in.spoof_on = false; f.in.spoof_mv = 0; f.in.spoof_ma = 0;
+    f.in.cable_observed = true; f.in.cable_mv = 50000; f.in.cable_ma = 5000;
+    const auto& apdo = f.epr_caps.pdos[10];
+    const unsigned lo = (apdo.min_mv + 99) / 100 * 100;
+    ct::Runner r(f);
+    CHECK_EQ(r.start(f.caps, ct::with_level({}, ct::Level::Offers), f.in, true), ct::Reason::None);
+    f.tick(r, 600000);
+    CHECK_EQ(int(r.state()), int(ct::State::Done));
+    unsigned pos = 0, mv = 0, ma = 0;
+    CHECK_EQ(offers_pass_rows(r, nullptr, &pos, &mv, &ma), 1u);
+    CHECK_EQ(pos, 11u); CHECK_EQ(mv, lo);
+    CHECK_EQ(requests_above_5v(f, 11, lo), 1u);
+    CHECK_EQ(f.entry_times.size() >= 1, true);
+    for (const auto& s : r.steps()) CHECK_EQ(s.reason == ct::Reason::CableLimit, false);
+}
+// (c), no cable read and no spoof (the charger is behind a cable, the spoof cannot work): the run starts; an unread cable does not block the
+// entry, the charger's own cable check answers it, and a refusal leaves the SPR AVS APDO as the one AVS step.
+static void test_offers_without_a_cable_read_or_a_spoof_follows_the_chargers_check() {
+    Fake f = epr_spoof_fake();
+    f.in.spoof_on = false; f.in.spoof_mv = 0; f.in.spoof_ma = 0;
+    f.epr_refuse = true;   // the source's own check of the (non EPR) cable behind it
+    const auto& apdo = f.caps.pdos[1];
+    const unsigned lo = (apdo.min_mv + 99) / 100 * 100;
+    ct::Runner r(f);
+    CHECK_EQ(r.start(f.caps, ct::with_level({}, ct::Level::Offers), f.in, true), ct::Reason::None);
+    f.tick(r, 600000);
+    CHECK_EQ(int(r.state()), int(ct::State::Done));
+    CHECK_EQ(f.in.pd.epr_mode, false);
+    unsigned pos = 0, mv = 0, ma = 0;
+    CHECK_EQ(offers_pass_rows(r, nullptr, &pos, &mv, &ma), 1u);
+    CHECK_EQ(pos, 2u); CHECK_EQ(mv, lo);
+    CHECK_EQ(requests_above_5v(f, 2, lo), 1u);
 }
 static void test_offers_asks_the_spr_avs_level_when_epr_is_refused() {
     Fake f = epr_spoof_fake();
@@ -9590,6 +9629,7 @@ int main() {
     test_epr_spoof_identity_tests_epr_and_avs(); test_epr_capable_list_never_gives_epr_rows_not_offered(); test_epr_spoof_identity_at_light_makes_no_requests();
     test_offers_asks_one_epr_avs_level_in_epr(); test_offers_asks_the_spr_avs_level_when_epr_is_refused(); test_offers_without_an_avs_offer_asks_nothing_above_5v();
     test_offers_never_asks_above_the_monitor_ceiling(); test_offers_masks_the_selection_to_pd(); test_offers_with_a_read_weak_cable_skips_the_epr_entry();
+    test_offers_with_a_read_epr_cable_needs_no_spoof(); test_offers_without_a_cable_read_or_a_spoof_follows_the_chargers_check();
     test_depth_cycle_appends_offers(); test_offers_preview_is_pd_only_whatever_the_pick();
     test_offers_latch_before_the_epr_entry_asks_nothing(); test_offers_latch_after_the_epr_entry_asks_no_avs();
     test_a_resumed_light_run_stays_light();

@@ -73,21 +73,35 @@ static void test_facts_read_the_vdos() {
     CHECK_EQ(f.max_ma, 3000);                                     // current code 1
 }
 
-// A Read-offers run presents the EPR cable itself unless an e-marked cable is physically there; any other level keeps the pick.
-static void test_run_choice_forces_the_epr_identity_for_offers() {
+// Offers presents what the connection allows: a cable that was read answers the charger itself (no spoof, whatever its rating: an
+// EPR one runs the EPR rows, a weaker one skips them); nothing read and a spoof that can work (the charger on the plug) = the EPR
+// identity; nothing read and no spoof possible = nothing. Any other level presents the pick.
+static void test_run_choice_offers_follows_the_cable_and_the_spoof() {
     const Choice off{}, two{Kind::Builtin, 2}, saved{Kind::Saved, 3};
     for (const Choice pick : {off, two, saved, ctcable::kDefaultChoice}) {
-        CHECK_EQ(ctcable::run_choice(pick, true, false) == ctcable::kDefaultChoice, true);   // Offers, no cable read: the EPR identity
-        CHECK_EQ(ctcable::run_choice(pick, true, true) == pick, true);                       // a cable was read: the pick stays
-        CHECK_EQ(ctcable::run_choice(pick, false, false) == pick, true);                     // any other level: untouched
-        CHECK_EQ(ctcable::run_choice(pick, false, true) == pick, true);
+        CHECK_EQ(ctcable::run_choice(pick, true, false, true) == ctcable::kDefaultChoice, true);   // (b) nothing read, spoof can work
+        CHECK_EQ(ctcable::run_choice(pick, true, false, false) == off, true);                      // (c) nothing read, spoof impossible
+        CHECK_EQ(ctcable::run_choice(pick, true, true, true) == off, true);                        // (a) / (c) a cable was read: it answers
+        CHECK_EQ(ctcable::run_choice(pick, true, true, false) == off, true);
+        for (const bool read : {false, true})                                                       // any other level: untouched
+            for (const bool possible : {false, true}) CHECK_EQ(ctcable::run_choice(pick, false, read, possible) == pick, true);
     }
     const auto f = ctcable::facts(emrec::builtin_cable(ctcable::kDefaultChoice.seq));
-    CHECK_EQ(f.max_mv, 50000); CHECK_EQ(f.max_ma, 5000);                                   // what EPR entry needs
+    CHECK_EQ(f.max_mv, 50000); CHECK_EQ(f.max_ma, 5000);                                           // what EPR entry needs
+}
+
+// The EPR-rated cable of rule (a): 50 V and 5 A, read.
+static void test_epr_rated_needs_a_read_50v_5a_cable() {
+    CHECK_EQ(ctcable::epr_rated(true, 50000, 5000), true);
+    CHECK_EQ(ctcable::epr_rated(false, 50000, 5000), false);   // the default limits of an unread cable never count
+    CHECK_EQ(ctcable::epr_rated(true, 50000, 3000), false);
+    CHECK_EQ(ctcable::epr_rated(true, 40000, 5000), false);
+    CHECK_EQ(ctcable::epr_rated(true, 20000, 3000), false);
 }
 
 int main() {
-    test_run_choice_forces_the_epr_identity_for_offers();
+    test_run_choice_offers_follows_the_cable_and_the_spoof();
+    test_epr_rated_needs_a_read_50v_5a_cable();
     test_valid_choices();
     test_facts_of_the_builtin_cable();
     test_canonical_builtin_ids();

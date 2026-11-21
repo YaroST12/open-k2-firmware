@@ -33,6 +33,8 @@ picked another, so a charger whose PDO 1 has the EPR bit gets its EPR and AVS le
 before START, and it is whatever was picked last on the device or by an earlier --cable (the device remembers it, an explicit
 --cable off included: pass --cable off again, or --cable builtin, to change it). With --cable the choice is sent before every START.
 A charger that is not on the plug directly (a cable in between) is refused by the Ra guard (exit 6) for any identity but off.
+--level offers ignores --cable: the run decides by the connection (a cable read this attach answers itself, an EPR-rated one
+with no spoof; none read and the charger on the plug: the EPR spoof; else no spoof and the EPR rows skip), so the Ra guard never refuses it.
 """
 import argparse
 import sys
@@ -118,6 +120,17 @@ def preflight(link, sleep=time.sleep):
         if not st["pd_valid"]:
             print("note: no PD source capabilities after a rescan: legacy-only run", file=sys.stderr)
     return None
+
+
+OFFERS_IDENTITY = ("decided by the run: the cable read this attach answers (an EPR-rated one is used as it is, no spoof); with none read "
+                   "and the charger on the top plug the EPR spoof; otherwise no spoof, the EPR rows skip")
+
+
+def identity_line(level, cable_arg, now):
+    """The "cable identity:" line. A Read-offers run decides by the connection, whatever was picked, so it prints the rule."""
+    if level == "offers":
+        return "cable identity: " + OFFERS_IDENTITY + ("; --cable is ignored at --level offers" if cable_arg is not None else "")
+    return "cable identity: " + (cable_arg if cable_arg is not None else cable_words(now) + " (the device's choice)")
 
 
 def cable_words(reply):
@@ -257,7 +270,7 @@ def parse_args(argv=None):
                          "the part from 5 V up runs in pd, the part below 5 V in pd-low (a list without pd-low skips it)")
     ap.add_argument("--cable", default=None,
                     help="cable identity of the run: off, builtin, builtin:<id|name> (1 epr-50v, 2 xiaomi-6a, 4 oneplus) "
-                         "or saved:<library id>. Default: the device's own choice (the EPR spoof until another one is picked); "
+                         "or saved:<library id>. Default: the device's own choice (the EPR spoof until another one is picked); ignored at --level offers; "
                          "it is printed before START. 'off' is remembered by the device like any pick")
     a = ap.parse_args(argv)
     if a.level == "light" and (a.sweep or a.avs_sweep):
@@ -360,7 +373,7 @@ def main(argv=None):
         except kr.RemoteError as e:
             print(f"could not set the cable identity: {e}", file=sys.stderr)
             return 1
-        print("cable identity: " + (a.cable if a.cable is not None else cable_words(now) + " (the device's choice)"), file=sys.stderr)
+        print(identity_line(level, a.cable, now), file=sys.stderr)
         before = run_id_of(link)
         if before is None:
             print("the K2 does not answer charger-test status", file=sys.stderr)
