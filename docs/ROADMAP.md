@@ -80,6 +80,14 @@ Everything is C++23; there are no C files left in `src/` (TinyUSB and lwIP under
 
 Open defects, newest first. A row leaves this list when its fix is merged and seen on hardware.
 
+- **A legacy-only run (USB-A port, no PD) fails a PD row and a red Xiaomi "auth"** (2026-11-21, 1.1.0-217-53dee143,
+  UGREEN 65 W USB-A port through an A-to-C cable, Deep full run, `runs/hw-2026-11-21/153343-ugreen-deep/`). The preflight
+  said "no PD source capabilities after a rescan: legacy-only run", yet the PD unit planned a row that ended
+  `FAIL no PD after re-attach` and the Xiaomi row shows a red "auth" cell; on a port with no PD both should be a dim
+  skip. `ct_start.py` then died reading the summary: `FrameError: charger-test row contradicts negotiated wire revision`
+  (`k2_remote.py:1627`). The legacy units themselves were right: FCP 9/12 V, AFC 9/12 V, QC2 5/9/12 V, QC3 5-12-5 V,
+  QC3B 5/12 V pass; SCP 10 V / 4.5 V "acked, no change"; VOOC, VIVO, UFCS, QC3+ no reply.
+
 - **Back-to-back screenshots stall a charger-test run** (2026-11-21, 1.1.0-217-53dee143, Baseus 140 W). With
   `k2_remote.py screenshot` every ~0.65 s (each ~450 ms on the device) a Medium run sat after `Verify 5V` for ~7 min and
   went on within a second of the loop stopping (`runs/hw-2026-11-21/152248-qc2-fast2/`); one every ~3 s is harmless.
@@ -103,7 +111,8 @@ Open defects, newest first. A row leaves this list when its fix is merged and se
   5 / 9 / 12 V cells in turn; QC2 opens no paint-block window. Regression test 82910f13 (`test_ui_charger_test`).
   Hardware 2026-11-21 (1.1.0-217-53dee143, Baseus 140 W, Deep `pd,qc2,pd-low`, `runs/hw-2026-11-21/151301-deep-mine/`):
   QC2 5/9/12 V pass and the running outline moved 5 V -> 12 V with 5 V and 9 V filled green (screenshots every ~3 s, so the
-  ~1 s 9 V step was not caught on its own). Not reproduced; ask which build and charger showed it.
+  ~1 s 9 V step was not caught on its own). Not reproduced; the UGREEN 65 W USB-A port (Deep, same build, `153343-ugreen-deep`) showed the same: the outline went
+  5 V -> 12 V on QC2 and followed QC3 5 -> 9 -> 12 -> 9 -> 5 V.
 
 - **PPS Deep range label disagrees with the range being tested** (2026-11-21, user hardware report). The UI displays a
   `5V-21V` PPS range while the engine is visibly stepping through a `3.3V-5V` range (check APDO min/max formatting vs
