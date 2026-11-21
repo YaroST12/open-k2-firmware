@@ -378,7 +378,10 @@ struct Input {
     uint16_t spoof_mv = 0, spoof_ma = 0;
     int vbus_mv = -1, ibus_ma = 0;   // ibus_ma: magnitude; above kLoadAbortMa during a raised row means a load
     uint32_t pd_quiet_ms = UINT32_MAX;   // ms since the last PD frame was received (since the handover began)
-    bool inline_load = false, fake = false, busy = false, cable_observed = false, pd_traffic = false, spoof_on = false;    bool loop_lock = false;   // k2::loopguard::locked(): the HID-cable loop 5 V lock (Reason::Loop)
+    bool inline_load = false, fake = false, busy = false, cable_observed = false, pd_traffic = false, spoof_on = false;
+    // At START: VBUS is up and no Rp is on the line, a port with no CC (USB-A). It never goes dark on a detach, so START does not wait for it.
+    bool no_cc = false;
+    bool loop_lock = false;   // k2::loopguard::locked(): the HID-cable loop 5 V lock (Reason::Loop)
     // The K2 runs on the source's own VBUS through a pinned Rd (fusb302::self_powered()). start() and resume() latch it for the
     // run: a unit boundary must not drop VBUS (the K2 would die), and a VBUS loss suspends the run instead of ending it.
     bool self_powered = false;

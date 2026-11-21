@@ -1449,7 +1449,9 @@ void ChargerTestSession::begin_run() {
     ctx_.ui->pd_spec().yield_record();
 #endif
     seen_cable_ = false;   // a new run reads its own cable
-    const auto in = input(ctx_.now);
+    auto in = input(ctx_.now);
+    // VBUS up with no Rp anywhere on the line: a USB-A style port, whose output a detach never turns off.
+    in.no_cc = in.vbus_mv >= pd::kVSafe0Mv && !in.self_powered && !fusb302::rp_on_line();
     journal_active_ = false; capture_kept_ = false; reattach_plan_ = false; reattach_ask_ = false; reattach_ = 0;
     capture_identity();
     const auto r = runner_.start(fusb302::caps(), options_, in, true);
