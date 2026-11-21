@@ -990,14 +990,16 @@ and the hardware check). A row leaves this list when its fix is merged and the h
 
 ## Specified work (not started)
 
-- **Charger test "Read offers" preset** (user decision 2026-11-21). PD only: reads Source_Capabilities, enters EPR as the
+- **Charger test "Offers" depth** (user decision 2026-11-21). PD only: reads Source_Capabilities, enters EPR as the
   PD unit does, reads EPR_Source_Capabilities, then one AVS request (the EPR AVS APDO in EPR, else the SPR AVS APDO) at its
   minimum voltage and 1 A; Accept + PS_RDY + VBUS within the step tolerance, never above 36 V; no AVS offered is a dim skip.
   Fixed and PPS levels stay Advertised. Back to 5 V, EPR exit and Rd drop go through the existing release path.
-  **Partial: built and host-tested (3b66351c engine, wire and tools; 53a6d0bb Tests row), not verified on hardware.**
+  **Partial: built and host-tested (3b66351c engine, wire and tools; dc9a2eda UI), not verified on hardware.**
   A new `ct::Level::Offers` (run level 3; journal, remote status, card byte and `ct_start.py --level offers` carry it, no
-  format bump). Tests row 5 "Read offers" before "Custom..."; the Depth row does not apply to it. Validate: a PD charger
-  with EPR AVS, an SPR-only charger, a fixed-only charger; the card names the run kind.
+  format bump). It is the Tests step's 4th Depth value (Light, Medium, Deep, Offers; not in Settings); the preset pick is
+  kept but the run is PD only. The run presents the default EPR cable itself when no cable is observed, whatever the
+  Settings spoof; Review's Spoof line shows it. Validate: a PD charger with EPR AVS, an SPR-only charger, a fixed-only
+  charger, a Spoof-Off setting (EPR must still be entered); the card names the run kind.
 - **HID-cable loop: the loop probe** (user decision 2026-11-11). Topology: the K2 on a charger, a cable from its PD-bus
   port back into its own left (HID) port, so the HID port's VBUS follows the PD bus. The 5 V lock half is built (see
   "Not verified on hardware"); the probe is not started.
