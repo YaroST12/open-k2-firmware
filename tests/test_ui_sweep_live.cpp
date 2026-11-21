@@ -58,7 +58,8 @@ void dump_panel(const char* name) {
 }
 
 // A source with a fixed 5 V and one programmable range; the converter follows every request up to `ceiling_mv`.
-void fixture(bool avs, int ceiling_mv) {
+// shape 1: two PPS APDOs, 3.3-11 V 5 A and 3.3-21 V 3 A; shape 2: 3.3-5.9 V and 5-21 V (the Baseus-like lists of ROADMAP "PPS Deep range label").
+void fixture(bool avs, int ceiling_mv, int shape = 0) {
     g_stub = {}; pd::set_fake(0);
     g_stub.pm_online = true; g_stub.pm.vbus_mv = 5000;
     g_stub.fc_answers = true;
@@ -72,12 +73,18 @@ void fixture(bool avs, int ceiling_mv) {
         g_stub.caps.pdos[0] = pd::decode_pdo((100u << 10) | 300);
         g_stub.caps.pdos[1] = pd::decode_pdo(0xC0000000u | (210u << 17) | (33u << 8) | 100u);
     }
+    if (shape) {
+        const auto apdo = [](unsigned max_mv, unsigned min_mv, unsigned ma) { return pd::decode_pdo(0xC0000000u | (max_mv / 100 << 17) | (min_mv / 100 << 8) | (ma / 50)); };
+        g_stub.caps.num_pdos = 3;
+        g_stub.caps.pdos[1] = shape == 1 ? apdo(11000, 3300, 5000) : apdo(5900, 3300, 3000);
+        g_stub.caps.pdos[2] = shape == 1 ? apdo(21000, 3300, 3000) : apdo(21000, 5000, 3000);
+    }
     g_stub.caps.raw_header = 0x1181;
 }
 
 // Starts a PD-only run with the deep sweep armed (Tests -> Custom -> PD family -> the sweep's own line -> Review -> START).
-void start_sweep(Ui& ui, uint32_t& t, bool avs, uint8_t rot, int ceiling_mv) {
-    fixture(avs, ceiling_mv);
+void start_sweep(Ui& ui, uint32_t& t, bool avs, uint8_t rot, int ceiling_mv, int shape = 0) {
+    fixture(avs, ceiling_mv, shape);
     ui.init(0); ui.set_rotation(rot, 0); ui.tick(1000); ui.goto_page(static_cast<uint8_t>(Page::ChargerTest), 1100);
     top(ui, 1200); move(ui, 5, 1200); press(ui, Button::Ok, 1200);   // Tests step: Custom...
     CHECK_EQ(ui.charger_test_stage(), kCustomStage);
@@ -424,5 +431,33 @@ int main() {
                 dump_panel(name);
             }
         }
+    // The badge of every sweep part names the range that part sweeps (ROADMAP bug 2026-11-21: "5V-21V" shown while 3.3-5 V was stepped):
+    // each part of a split sweep (5 V up, then the low part in PdLow), at the first point, mid-row and at the last point.
+    for (int shape = 0; shape < 3; ++shape) {
+        Ui ui; uint32_t t;
+        start_sweep(ui, t, false, 0, 36000, shape);
+        size_t last = SIZE_MAX; unsigned parts = 0, checked = 0;        for (; t <= 3000000 && ui.charger_test_busy(); t += 100) {
+            ui.tick(t);
+            const auto& r = ui.charger_test_results();
+            const auto live = r.sweep_live();
+            if (ui.charger_test_stage() != kRunningStage || !live.active || r.index() >= r.steps().size()) continue;
+            if (r.index() != last) { last = r.index(); ++parts; }
+            if (live.n != 0 && live.n != 1 && live.set_mv != live.hi_mv) continue;   // the first, second and last point of a part
+            settle(ui, t);
+            const auto& st = r.steps()[r.index()];
+            const pd::Pdo apdo = pd::decode_pdo(st.pdo);
+            CHECK_EQ(live.lo_mv >= apdo.min_mv && live.hi_mv <= apdo.max_mv, true);   // the points stay inside the APDO the row runs
+            const std::string want = std::string("PPS ") + step_label::range(live.lo_mv, live.hi_mv, 0).c_str();
+            const std::string badge = step_label::label(st, r.index() ? &r.steps()[r.index() - 1] : nullptr).c_str();
+            if (badge != want || text_diff(kSmall, 6, kSweepNameY, want, kText) != 0u)
+                std::printf("  shape %d part %u..%u n=%u set=%u: badge '%s', want '%s'\n", shape, live.lo_mv, live.hi_mv, live.n, live.set_mv, badge.c_str(), want.c_str());
+            CHECK_STR(badge.c_str(), want.c_str());
+            CHECK_EQ(text_diff(kSmall, 6, kSweepNameY, want, kText), 0u);   // and the panel shows it, not a stale name
+            if (live.n == 1) { char nm[48]; std::snprintf(nm, sizeof nm, "sweep_label_s%d_%s%zu", shape, live.lo_mv < 5000 ? "low" : "high", r.index()); dump_panel(nm); }
+            ++checked;
+        }
+        CHECK_EQ(parts, shape == 0 ? 2u : shape == 1 ? 4u : 3u);   // each APDO's 5 V-up part, then the low parts (PdLow)
+        CHECK_EQ(checked >= 6u, true);
+    }
     return test_report("test_ui_sweep_live");
 }

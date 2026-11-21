@@ -2,7 +2,7 @@
 
 What flows into and out of a power bank over hours, phase by phase, from the power monitor: Wh and mAh in, Wh and mAh out,
 the time, and for a round trip the efficiency Wh out / Wh in. It runs in the background on every page; the screen is the
-Battery place on the Bench.
+Battery page of the ring (page 9).
 
 | Part | Where |
 | :--- | :--- |
@@ -10,7 +10,7 @@ Battery place on the Bench.
 | Stored runs and the service (writes, SRAM checkpoint, boot) | `src/battery/battery_store.cpp` |
 | K2 glue (volume, `.noinit` checkpoint, power monitor, `[BATT]` log lines) | `k2/battery/battery_hw.hpp`, `src/battery/battery_hw.cpp`; `main.cpp` (boot), `main_loop.cpp` (poll) |
 | Remote protocol (CMD_BATTERY 0x58) | `k2/battery/battery_wire.hpp`, `src/battery/battery_wire.cpp`; host test `tests/test_remote_proto.cpp` |
-| Screen (Bench > Battery) | `k2/ui/battery_view.hpp` (pure texts and rows), `k2/ui/ui_battery.hpp` (`BatteryPage`); host test `tests/test_ui_battery.cpp` |
+| Screen (ring page 9 Battery) | `k2/ui/battery_view.hpp` (pure texts and rows), `k2/ui/ui_battery.hpp` (`BatteryPage`); host test `tests/test_ui_battery.cpp` |
 | Host tools | `tools/k2_remote.py battery ...`, `tools/battery_rec.py` (record and status decoder), `tools/k2_qr.py` (BATT share) |
 
 ## Modes and wiring
@@ -97,7 +97,7 @@ The same bytes are the flash file, the remote's `read` payload and the QR share 
 | Cold boot after a finished run | Nothing to resume; the run is on flash. |
 | Firmware update (DFU) | The app wipes SRAM before it enters the bootloader: a cold boot as above. |
 
-## Screen (Bench > Battery)
+## Screen (ring page 9 Battery)
 
 - Bench row: `No run`, `Charging 1h05m, 12.34Wh`, `Charged 12.34Wh, waiting`, `Round trip 80.0%`, `Discharged 9.87Wh`,
   `Cut short, 12.34Wh`. A solid node while a run exists since boot.

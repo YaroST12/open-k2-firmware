@@ -80,13 +80,53 @@ Everything is C++23; there are no C files left in `src/` (TinyUSB and lwIP under
 
 Open defects, newest first. A row leaves this list when its fix is merged and seen on hardware.
 
+- **A legacy-only run (USB-A port, no PD) fails a PD row and a red Xiaomi "auth"** (2026-11-21, 1.1.0-217-53dee143,
+  UGREEN 65 W USB-A port through an A-to-C cable, Deep full run, `runs/hw-2026-11-21/153343-ugreen-deep/`). The preflight
+  said "no PD source capabilities after a rescan: legacy-only run", yet the PD unit planned a row that ended
+  `FAIL no PD after re-attach` and the Xiaomi row shows a red "auth" cell; on a port with no PD both should be a dim
+  skip. `ct_start.py` then died reading the summary: `FrameError: charger-test row contradicts negotiated wire revision`
+  (`k2_remote.py:1627`). The legacy units themselves were right: FCP 9/12 V, AFC 9/12 V, QC2 5/9/12 V, QC3 5-12-5 V,
+  QC3B 5/12 V pass; SCP 10 V / 4.5 V "acked, no change"; VOOC, VIVO, UFCS, QC3+ no reply.
+
+- **Back-to-back screenshots stall a charger-test run** (2026-11-21, 1.1.0-217-53dee143, Baseus 140 W). With
+  `k2_remote.py screenshot` every ~0.65 s (each ~450 ms on the device) a Medium run sat after `Verify 5V` for ~7 min and
+  went on within a second of the loop stopping (`runs/hw-2026-11-21/152248-qc2-fast2/`); one every ~3 s is harmless.
+  Something in the step start waits for a quiet the screenshot keeps resetting; a run should never wait on the shell.
+
+- **b4d5ed89 (live-VBUS attach / inline release) breaks charger-test runs** (2026-11-21, Baseus 140 W, nothing behind the
+  K2; `runs/hw-2026-11-21/150819-deep-b4d5/`). A Deep run stopped at the PPS 5-11 V sweep (5.8 V Request accepted, no
+  PS_RDY yet) with `FAIL load attached`, the rest skipped "load attached", `Sink downstream (inline=1 far request=0)`.
+  Also on that build a START against the Baseus with its output off (it needs Rd to turn on) gave "no PD source
+  capabilities after a rescan: legacy-only run". The same runs on 53dee143 (without b4d5ed89) woke the charger and passed
+  32/0 (Deep) and 26/0 (Medium).
+
+- **`make gate` fails at the tests on public since 3614728f** (2026-11-21, host). `test_ui_perf.cpp:516` (worst scroll over
+  53600) and `test_ui_overdraw.cpp:227` (6 full-paint budgets) fail from 3614728f (place scrollbar to the bottom, toast
+  above the scroll); b4d92f10 (Ripple native pixels) adds 2 more overdraw fails. 949c134c and earlier pass.
+
 - **QC2 Deep testing animation does not advance to the next voltage badge** (2026-11-21, user hardware report). During a
   Deep charger test, QC2 changes VBUS voltage through its levels, but the Running-grid highlight/outline stays stuck on
   the first voltage badge instead of advancing to the active voltage badge.
+  Not reproduced on the host (2026-11-21): a Medium and a Deep plan with VBUS following each Request put the dot on the
+  5 / 9 / 12 V cells in turn; QC2 opens no paint-block window. Regression test 82910f13 (`test_ui_charger_test`).
+  Hardware 2026-11-21 (1.1.0-217-53dee143, Baseus 140 W, Deep `pd,qc2,pd-low`, `runs/hw-2026-11-21/151301-deep-mine/`):
+  QC2 5/9/12 V pass and the running outline moved 5 V -> 12 V with 5 V and 9 V filled green (screenshots every ~3 s, so the
+  ~1 s 9 V step was not caught on its own). Not reproduced; the UGREEN 65 W USB-A port (Deep, same build, `153343-ugreen-deep`) showed the same: the outline went
+  5 V -> 12 V on QC2 and followed QC3 5 -> 9 -> 12 -> 9 -> 5 V; the UGREEN USB-C port (`153757-ugreen-c-deep`) caught the outline on QC2 9 V.
 
 - **PPS Deep range label disagrees with the range being tested** (2026-11-21, user hardware report). The UI displays a
   `5V-21V` PPS range while the engine is visibly stepping through a `3.3V-5V` range (check APDO min/max formatting vs
   sweep target bounds).
+  Host check 2026-11-21: label, live range and swept points agree on one- and two-APDO lists (3.3-21V; 3.3-11V + 3.3-21V;
+  3.3-5.9V + 5-21V). Found and fixed on the way (98068797, host-tested): the Running header name cell clipped the low part
+  "PPS 3.3-4.9V" to "PPS 3.3-...", so only the 5-21V part showed a readable range. Hardware 2026-11-21 (same run): this Baseus port offers
+  PPS 5-11 V and 5-21 V (no 3.3 V APDO); walks 13->21->13->9->5 V and the 5..21 V sweep ran under the "PPS 5-21V" chip
+  and header, no mismatch. The UGREEN 65 W USB-C port (PPS 5-11 V, 5-21 V, SPR AVS 9-20 V;
+  `153757-ugreen-c-deep`, 30 pass / 0 fail) matched too. Joyroom 65 W (PPS 3.3-11 V 5 A, 3.3-21 V 3 A), 2026-11-21: on b4d5ed89 the
+  low part's header reads "PPS 3.3-..." (`155748-joyroom-low-old/sheet.png`); on 53dee143 (98068797) it reads
+  "PPS 3.3-4.9V" with the grid chip on the swept APDO, Deep run 26 pass / 0 fail (`154914-joyroom-deep/sheet-low*.png`).
+  Fixed and seen on hardware; leaves this list when 98068797 is merged. Side note from the same frames: the first sweep
+  point shows a red "+1.8 V" error for ~1 s while VBUS is still at 5.1 V (the step down from the 5 V return), then passes.
 
 - **`K2_PDSTRESS=1` does not pass the gate: `ChargerTestSession::poll` needs 1056 B of stack** (2026-11-14, found on
   k2/bugbatch; pre-existing: the base tree gives the same warning). The PD Stress build pulls more inlined code into
@@ -94,9 +134,7 @@ Open defects, newest first. A row leaves this list when its fix is merged and se
   affected. Fix with the tool's return: split the frame (a `noinline` helper for the stress branch), then the PD Stress
   row above can be validated.
 
-- **The Bench K2 row says "HID on / WebUSB on / HID off"** (2026-11-14, found on k2/bugbatch). `ui_tools.cpp` builds
-  the note from two flags, so HID + WebUSB reads "HID on" while the Settings identity line and the USB Link page now
-  name the whole mode (`usbcfg::describe`: "HID+WebUSB"). Fix: the same `describe(current)` text, checked for width.
+- ~~**The Bench K2 row says "HID on / WebUSB on / HID off"**~~ obsolete 2026-11-21: the page ring replaced the Bench, so no screen shows that row (`bench::row` is called only from tests).
 
 - **`test_ui_mockup` renders before the budgeted paint has settled** (2026-11-14, host tool). Its `render()` ticks twice
   and dumps, so pages that paint over several passes come out partial (`home_diag_*`, the USB link page with leftover
@@ -156,11 +194,7 @@ Open defects, newest first. A row leaves this list when its fix is merged and se
   `runs/2026-11-11-iq4-scp/`): the IQ4 does not follow SCP 10 V (row timeout at 5.0 V), then cuts VBUS to 0 for ~70 ms
   and restarts PD (CHARGER_QUIRKS `output-reset-after-unanswered-scp`). The charger's behaviour, handled by the budget;
   parked by the user. On 1.0.0-594 (PC-powered full run) SCP 10 / 12 V were skipped `PD active: use QC port`, so no cut.
-- **FCP 12 V not released on the IQ4** (2026-11-11, PC-powered `--units fcp,scp`): the D+/D- reset left VBUS at 12.1 V,
-  the run stopped Unsafe "5V release failed" after 8 s; a PD Soft_Reset then gave 5 V in ~150 ms
-  (`fc-holds-after-bus-reset`). Seen once; the self-powered full run went on from FCP to SCP 5 V. Not seen again on
-  1.0.0-594 (idle fix in): FCP 12 V released in both PC-powered runs (`--units qc2,qc3,fcp` and the full run,
-  `runs/2026-11-11-iq4-idle/`), so the old 0.6 V / 0.6 V idle (QC2 12 V code) is the likely cause. Close after one more.
+- ~~**FCP 12 V not released on the IQ4**~~ closed 2026-11-21 (2026-11-11, seen once, PC-powered `--units fcp,scp`: VBUS stayed at 12.1 V after the D+/D- reset). Not seen again after the D+/D- idle fix: FCP 5/9/12 V passed and the run went on to SCP on the IQ4 on 2026-11-14 (`runs/ct-merge/ct-iq4.log`).
 - ~~**QC2 / QC3 fail on the IQ4 above 5 V**~~ fixed by the D+/D- idle fix (k2/idle-dpdm): on 1.0.0-594 (PC-powered,
   `runs/2026-11-11-iq4-idle/`) `--units qc2,qc3,fcp` 13 pass / 0 fail, and the full run 27 pass / 4 fail / 26 skip with
   QC2 5/9/12 V, QC3 5→12→5 V, QC3B 5/12 V all pass. History: (2026-11-11 self-powered full run: QC2 9 V `voltage not reached`, QC3
@@ -338,11 +372,7 @@ Open defects, newest first. A row leaves this list when its fix is merged and se
 - **A refused e-marker read kept the last read's mode and acks** (2026-11-11, fixed in 472c40f9, host-tested;
   `tests/test_fusb302_scan.cpp` `test_refused_read_clears_the_last_read`). Validate (hardware): with a sink inline or
   Ra mode on, `k2_remote emarker --json` after a refused read shows `read_mode` none and 0 acks.
-- **Docs: `docs/CHARGER_QUIRKS.md` called the Baseus cable of the FH22 / CUKTECH notes a "plain cable"** (2026-11-11;
-  reworded on `k2/small-fixes`, docs only): that cable later answered as chipped (5 A normal). The FH22 section and the
-  CUKTECH `5a-without-emarker` note now name it as the Baseus 100 W cable whose chip stays silent when read alone
-  (pattern `cable-chip-silent-alone`). The A-to-C "plain cable" of the CUKTECH sag-fix verification (981c831) is another
-  cable and was left. Nothing to validate on hardware.
+- ~~**Docs: `docs/CHARGER_QUIRKS.md` called the Baseus cable of the FH22 / CUKTECH notes a "plain cable"**~~ completed: reworded on `k2/small-fixes` (pattern `cable-chip-silent-alone`); the remaining "plain cable" at CHARGER_QUIRKS.md:509 is the A-to-C cable of 981c831, another cable.
 
 - **Connection page ("Who's attached") flickers on a steady link** (2026-11-10, user report; handoff row 2c): the tab
   refreshed its info without anything new appearing. Fixed in bd9dd91b, hardware check pending.
@@ -960,19 +990,30 @@ and the hardware check). A row leaves this list when its fix is merged and the h
   - Needs first: the PA1 calibration (step 1 below, TOPADRE 65 W at 20 V) so the fast scales read mV.
   - UI: a Tools page (k2-micro-gui: lab first, the user picks the design); the web Ripple card gains time/div and stats.
   - Shell: the capture and stats reachable over `k2_remote --json` (shell-first rule).
-- **Battery efficiency recorder**: done on k2/battery-eff (2026-11-13), built and host-tested, NOT hardware-verified.
+- **Battery efficiency recorder**: merged (k2/battery-eff, 2026-11-13), built and host-tested, NOT hardware-verified.
   Spec and behaviour: `docs/BATTERY_RECORDER.md`. (User decisions 2026-11-11 and 2026-11-12: three modes Charge /
-  Discharge / Round trip, wirings same port or moved, its own Bench place "Battery" running in the background.)
+  Discharge / Round trip, wirings same port or moved, running in the background; since the ring (2026-11-20) its screen is
+  ring page 9 "Battery".)
   - Per phase Wh and mAh in and out plus time; Round trip efficiency = Wh out / Wh in. Its own signed integrator
     (`k2/battery/battery.hpp`), so the same-port discharge counts the reverse flow; `EnergyMeter` is unchanged.
   - Phase end: under 50 mA for 60 s (settable, RAM-only) or by hand; a 60-point downsampled V/I curve; a 246 B record.
   - The newest 3 runs on flash (`/bt<id>.rec`, inline in the root pair, 0 blocks), written only at phase boundaries;
     a warm reset resumes from a `.noinit` checkpoint, a cold boot marks a measuring phase Lost.
   - Shell `k2_remote.py [--json] battery status|start|end|next|finish|config|list|read` (CMD_BATTERY 0x58), QR share
-    `BATT`, remote page 23.
+    `BATT`, `k2_remote.py page battery`.
   - Validate on hardware: a short charge of a power bank from the bench charger (Wh in against the Home Wh counter),
     a same-port round trip into a resistive load, a warm reboot mid-phase (`[BATT] boot resumed`), a power cut
-    mid-phase (`[BATT] boot lost`, `Cut short`), heartbeat `stack_free` with the Battery place open.
+    mid-phase (`[BATT] boot lost`, `Cut short`), heartbeat `stack_free` with the Battery page open.
+  - **Battery efficiency test** (planned 2026-11-18, not run yet; no record exported). A real bank, two runs:
+    1. Discharge, wiring moved: the full bank (10K / 100 W) on the K2 input, the laptop on the output (forward = out).
+       Load: `runs/battery/load-loop.sh` (the sanitizer pass in a loop; `touch runs/battery/STOP` ends it). The phase
+       ends by itself when the bank stops (|I| < 50 mA for 60 s); the K2 writes `/bt<id>.rec`.
+    2. Charge: the bench charger on the input, the emptied bank on the output (forward = in), until the bank stops.
+    - Efficiency = Wh out (run 1) / Wh in (run 2), against the bank's rated Wh. An inline meter (UC96) on the HID cable
+      checks the K2's own draw.
+    - Export each run as soon as it ends: `k2_remote.py --json battery read <id>` into `runs/battery/` (the flash keeps
+      only the newest 3 runs). Pass: both records complete (not `Cut short`), Wh within the meter's tolerance of the Home
+      Wh counter, no reboot, `stack_free` above its floor.
 
 Features the user asked for on 2026-11-09, specified for a later implementer. Partial work of a stopped agent is on
 local branch `k2/power-levels-wip` (f8226a4: clock/systick/crm/fusb302/power_monitor edits, unfinished, not built);
