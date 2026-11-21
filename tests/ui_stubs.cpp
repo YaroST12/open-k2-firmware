@@ -289,6 +289,11 @@ bool read_emarker(bool confirmed, pd::EmarkerMode mode) {
     if (g_stub.on_scan) g_stub.on_scan();
     return g_stub.scan_result;
 }
+bool cable_scan_full(bool confirmed) {
+    g_stub.full_scans++;
+    return read_emarker(confirmed, pd::EmarkerMode::Vconn);
+}
+const cable_full::Full& cable_extra() { return g_stub.cable_full; }
 std::uint32_t cable_seq() { return g_stub.cable_seq; }
 std::uint32_t session() { return g_stub.session; }
 void sink_cc(std::int32_t, std::int32_t) {}

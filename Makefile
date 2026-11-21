@@ -609,6 +609,7 @@ $(OBJ_DIR)/ext/%.o: %.c include/k2/core/lfs_cfg.h
 SCAN_TEST_LIB  = $(SRC_DIR)/drivers/fusb302.cpp $(SRC_DIR)/drivers/fusb302_cold.cpp $(SRC_DIR)/pd/pdtrace.cpp $(SRC_DIR)/pd/pdtrace_link.cpp $(SRC_DIR)/pd/pd.cpp $(SRC_DIR)/pd/pd_engine.cpp $(SRC_DIR)/pd/pd_ext.cpp $(SRC_DIR)/pd/pd_vdm.cpp $(SRC_DIR)/pd/usb_link.cpp $(SRC_DIR)/pd/pd_sink.cpp $(SRC_DIR)/pd/xiaomi_auth.cpp $(SRC_DIR)/pd/pd_identify.cpp $(SRC_DIR)/pd/pd_probe.cpp $(SRC_DIR)/pd/pd_source.cpp $(SRC_DIR)/pd/apple_readout.cpp
 SCAN_TEST_LIB += $(SRC_DIR)/pd/pd_reread.cpp $(SRC_DIR)/pd/diag.cpp
 SCAN_TEST_LIB += $(SRC_DIR)/pd/pd_interrogate.cpp
+SCAN_TEST_LIB += $(SRC_DIR)/pd/cable_full.cpp $(SRC_DIR)/pd/emk_learn.cpp $(SRC_DIR)/pd/emrec.cpp $(SRC_DIR)/core/fmt.cpp
 ifeq ($(HOST_K2_OPPO_PROBE),1)
 SCAN_TEST_LIB += $(SRC_DIR)/pd/oppo_probe.cpp
 endif

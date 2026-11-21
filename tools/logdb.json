@@ -751,6 +751,8 @@
   "754": "[CT] Rp without VBUS %ums into the attach: Rd cycle\n",
   "755": "[CT] unit ms PD %u QC2 %u QC3 %u QC3+ %u AFC %u FCP %u SCP %u VOOC %u SVOOC %u SVOOC65 %u UFCS %u VIVO %u PDlow %u\n",
   "756": "[CT] release left VBUS at %dmV: Rd off\n",
-  "757": "[CT] legacy retry %s after %s\n"
+  "757": "[CT] legacy retry %s after %s\n",
+  "758": "[EMK] cable tx sop%d hdr 0x%04X id %d: %s%s\n",
+  "759": "[EMK] full read: %s svids=%d modes=0x%02X active=%d id2=%d svids2=%d\n"
  }
 }

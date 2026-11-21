@@ -1279,7 +1279,8 @@ bool Ui::run_action(Action a, uint32_t now_ms, bool confirm) {
         ctx_.em_found = false;
         ctx_.em_quiet = false;
         refresh_action_views(now_ms);
-        bool found = fusb302::read_emarker(false, mode);
+        // The VCONN scan also reads the cable's SVIDs and modes (and SOP'' on an active one); a sniff only reports.
+        bool found = mode == pd::EmarkerMode::Vconn ? fusb302::cable_scan_full(false) : fusb302::read_emarker(false, mode);
         // A sniff only reports what the engine still holds. After a cable swap that is the OLD cable's
         // data: it is not a scan, so it must not clear the stale flag (a new cable_seq does, in tick()).
         if (found && mode == pd::EmarkerMode::Sniff && link_.cable_stale() && fusb302::cable_seq() == cable_seq_seen_) {

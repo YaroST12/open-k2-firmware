@@ -9,6 +9,7 @@
 #include "k2/core/bootmode.hpp"
 #include "k2/core/build_config.h"
 #include "k2/loopprobe/loop_cc.hpp"
+#include "k2/pd/cable_full.hpp"
 #include "k2/pd/cc_probe.hpp"
 #include "k2/pd/ra_probe.hpp"
 #include "k2/pd/ra_class.hpp"
@@ -273,6 +274,12 @@ bool cable_session(bool confirmed, CableBody body, void* ctx);
 // acknowledged. False: the chip reported no GoodCRC (RETRYFAIL) or no session is open; true: acknowledged, and
 // `rep.got` tells whether a message other than GoodCRC followed within `timeout_ms`.
 bool cable_exchange(const emk_learn::Request& req, emk_learn::Reply& rep, std::uint32_t timeout_ms);
+
+// The Cable tab's scan: cable_session's VCONN scan (same refusals) and, once the cable answers Discover Identity, the
+// full read of cable_full.hpp (SVIDs, modes, SOP'' on an active cable) in the answered variant. Result: cable_extra().
+bool cable_scan_full(bool confirmed);
+// What the last full read found; empty (valid false) without one or when no cable is held (a plain scan, a detach).
+const cable_full::Full& cable_extra();
 
 // Counts cables decoded since boot (rises each time a SOP' Discover Identity ACK is accepted, from a
 // scan or from the source's own exchange): the UI marks the cable data fresh when it changes.

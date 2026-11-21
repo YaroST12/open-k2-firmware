@@ -130,18 +130,22 @@ bool sniff_emarker() {
 }
 
 bool g_cable_open = false;
-std::uint8_t g_cable_id = 0;
+std::uint8_t g_cable_id = 0, g_cable_id2 = 0;   // MessageID counters, one per cable plug (SOP', SOP'')
+constexpr std::uint32_t kFullReplyMs = 32;
 
 bool cable_exchange_impl(const emk_learn::Request& req, emk_learn::Reply& rep, std::uint32_t timeout_ms) {
     rep = {};
     if (!g_cable_open) return false;
     const unsigned n = req.n > emk_learn::kMaxObjs ? emk_learn::kMaxObjs : req.n;
     constexpr unsigned kMsgVdm = 0x0F;
-    const std::uint16_t header = std::uint16_t(kMsgVdm | (unsigned(req.spec_rev & 3u) << 6) | (unsigned(g_cable_id & 7u) << 9) |
+    const bool pp = req.sop == cable_full::kSopDouble;
+    std::uint8_t& msg_id = pp ? g_cable_id2 : g_cable_id;
+    const std::uint16_t header = std::uint16_t(kMsgVdm | (unsigned(req.spec_rev & 3u) << 6) | (unsigned(msg_id & 7u) << 9) |
                                                (n << 12));
     std::array<std::uint8_t, 4 + 1 + 2 + 4 * emk_learn::kMaxObjs + 3> buf;
     unsigned len = 0;
-    for (std::uint8_t b : {0x12, 0x12, 0x1B, 0x1B}) buf[len++] = b;   // SOP'
+    for (std::uint8_t b : pp ? std::array<std::uint8_t, 4>{0x12, 0x1B, 0x12, 0x1B} : std::array<std::uint8_t, 4>{0x12, 0x12, 0x1B, 0x1B})
+        buf[len++] = b;   // SOP'' or SOP'
     buf[len++] = std::uint8_t(0x80 | (2 + 4 * n));
     buf[len++] = std::uint8_t(header);
     buf[len++] = std::uint8_t(header >> 8);
@@ -175,7 +179,7 @@ bool cable_exchange_impl(const emk_learn::Request& req, emk_learn::Reply& rep, s
             std::array<std::uint8_t, 36> body;
             if (!fifo_read({body.data(), num_do * 4 + 4})) break;
             pdtrace::rx(pre[0], h, {body.data(), num_do * 4 + 4});
-            if (sop_from_token(pre[0]) == pd::Sop::Sop) continue;
+            if (sop_from_token(pre[0]) != (pp ? pd::Sop::SopPP : pd::Sop::SopP)) continue;   // the plug answers on the SOP it was asked on
             if (num_do == 0 && (h & 0x1F) == pd::kCtlGoodCrc) { sent = true; continue; }
             rep.got = true;
             rep.header = h;
@@ -185,8 +189,8 @@ bool cable_exchange_impl(const emk_learn::Request& req, emk_learn::Reply& rep, s
                            (std::uint32_t(body[4 * i + 2]) << 16) | (std::uint32_t(body[4 * i + 3]) << 24);
         }
     }
-    if (!failed) g_cable_id = (g_cable_id + 1) & 7;
-    K2LOG("[EMK] cable tx hdr 0x%04X id %d: %s%s\n", header, int((header >> 9) & 7),
+    if (!failed) msg_id = (msg_id + 1) & 7;
+    K2LOG("[EMK] cable tx sop%d hdr 0x%04X id %d: %s%s\n", pp ? 2 : 1, header, int((header >> 9) & 7),
                 failed ? "RETRYFAIL (no GoodCRC)" : sent || rep.got ? "GoodCRC" : "no GoodCRC seen",
                 rep.got ? ", answered" : "");
     return !failed && (sent || rep.got);
@@ -208,6 +212,7 @@ bool read_emarker_impl(bool confirmed, pd::EmarkerMode mode, CableBody body, voi
     g_tx_allowed = true;
     g_engine.reset_cable();
     g_answered = {};
+    g_cable_full = {};
     g_pull_down = raclass::PullDown::NotProbed;
     g_scanned_valid = false;
     struct Pre { std::uint8_t power = kPwrAll, sw0 = 0, sw1 = 0; } pre;
@@ -255,6 +260,7 @@ bool read_emarker_impl(bool confirmed, pd::EmarkerMode mode, CableBody body, voi
     if (found && body != nullptr) {
         g_cable_open = true;
         g_cable_id = 1;
+        g_cable_id2 = 0;
         K2LOG("[EMK] cable session open\n");
         body(ctx);
         g_cable_open = false;
@@ -561,6 +567,26 @@ bool cable_session(bool confirmed, CableBody body, void* ctx) {
 
 bool cable_exchange(const emk_learn::Request& req, emk_learn::Reply& rep, std::uint32_t timeout_ms) {
     return cable_exchange_impl(req, rep, timeout_ms);
+}
+
+namespace {
+bool full_exchange(void*, const emk_learn::Request& req, emk_learn::Reply& rep) { return cable_exchange_impl(req, rep, kFullReplyMs); }
+
+// The cable session body of cable_scan_full: Discover SVIDs/Modes (and SOP'' on an active cable) in the variant the scan got answered in.
+void full_body(void*) {
+    const emk_variant::Variant var{g_answered.spec_rev, g_answered.svdm};
+    const bool ok = cable_full::read(&full_exchange, nullptr, var, g_engine.cable.is_active, g_cable_full);
+    K2LOG("[EMK] full read: %s svids=%d modes=0x%02X active=%d id2=%d svids2=%d\n", ok ? "done" : "link lost",
+          int(g_cable_full.p1.nsvid), unsigned(g_cable_full.p1.mode_ack), int(g_engine.cable.is_active),
+          int(g_cable_full.id2_ack), int(g_cable_full.p2.nsvid));
+}
+}  // namespace
+
+bool cable_scan_full(bool confirmed) { return read_emarker_impl(confirmed, pd::EmarkerMode::Vconn, &full_body, nullptr); }
+
+const cable_full::Full& cable_extra() {
+    static const cable_full::Full none;
+    return g_engine.cable.valid ? g_cable_full : none;
 }
 
 void debug_cc_matrix(uint8_t v, uint16_t modes) {

@@ -122,6 +122,7 @@ std::uint32_t g_physical_session = 0;
 pd::CableLimits g_scanned_cable;
 bool g_scanned_valid = false;
 emk_variant::Answered g_answered;
+cable_full::Full g_cable_full;
 emk_attached::ReadInfo g_read_info;
 raclass::PullDown g_pull_down{};
 VbusFn g_vbus_source = nullptr;
@@ -1481,6 +1482,7 @@ void detach_reset(std::uint8_t status0) {
     g_msg_id = 0;
     g_engine.reset_cable();  // the next sniff must not report the old cable as heard
     g_answered = {};
+    g_cable_full = {};
     g_read_info = {};
     g_pull_down = raclass::PullDown::NotProbed;
     g_engine.reset_sink();

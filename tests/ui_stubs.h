@@ -66,6 +66,8 @@ struct StubState {
     bool journal_load_in_arena = false;
     k2::pd::SourceCaps caps{};
     k2::pd::Emarker em{};
+    k2::cable_full::Full cable_full{};     // what fusb302::cable_extra() returns (the Cable tab's SVID / mode rows)
+    int full_scans = 0;                    // cable_scan_full() calls (each also counts in `scans`)
     k2::pd::CableLimits cable_limits{};
     k2::pd::Revision source_revision{};
     k2::pd::VdmInfo vdm{};

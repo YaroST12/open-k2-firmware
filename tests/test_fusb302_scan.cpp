@@ -91,6 +91,18 @@ struct Cable {
     bool only_pd3_svdm1 = false;        // a real cable (hardware 2026-11-11): acknowledges only a PD 3.x header with SVDM 1.0 (VDM 0xFF008001)
     std::vector<unsigned> req_hdr;      // PD header (low 16 bits) of every later request of a session
     std::vector<std::uint32_t> req_vdm; // VDM header of every such request
+    // The full read (cable_scan_full): a plug per SOP, answering structured requests after the scan's identity.
+    bool full = false;
+    bool active = false;                // the SOP' identity is an active cable (ID header type 4, VDO 2 follows)
+    std::uint32_t vdo2 = 0x46553000u;   // 70 C max, 85 C shutdown, U3 power code 3
+    struct Plug {
+        bool answers = true;            // GoodCRCs at all; false: RETRYFAIL (a passive cable has no SOP'')
+        int svids = 0;                  // Discover SVIDs: 0 ACK, 1 NAK, 2 GoodCRC and nothing else
+        std::vector<std::uint32_t> svid_vdos;                   // the ACK's objects, two SVIDs each
+        std::vector<std::pair<unsigned, std::uint32_t>> modes;  // svid, first mode VDO; an SVID not listed gets a NAK
+    } plug[2];
+    struct Req { bool pp; unsigned cmd, id, svid; };
+    std::vector<Req> reqs;
 } g_cable;
 
 std::string hex(unsigned v) { char b[16]; std::snprintf(b, sizeof b, "%02X", v); return b; }
@@ -110,6 +122,42 @@ void push_frame(std::uint8_t token, std::uint16_t header, const std::vector<std:
     for (std::uint32_t d : dos)
         for (int i = 0; i < 4; i++) g_rx.push_back(std::uint8_t(d >> (8 * i)));
     for (int i = 0; i < 4; i++) g_rx.push_back(0xC5);   // CRC
+}
+
+// A structured request of the full read, SOP' (12 12 1B 1B) or SOP'' (12 1B 12 1B). The SOP' Discover Identity is the scan's own
+// and stays with the code in tx_start; SOP'' answers identity too (an active cable's second plug).
+bool full_reply() {
+    if (g_txfifo.size() < 11) return false;
+    const bool pp = g_txfifo[1] == 0x1B;
+    const unsigned cmd = g_txfifo[7] & 0x1F;
+    if (!pp && cmd == 1) return false;
+    const unsigned svid = g_txfifo[9] | (unsigned(g_txfifo[10]) << 8);
+    g_cable.reqs.push_back({pp, cmd, unsigned((g_txfifo[6] >> 1) & 7u), svid});
+    const Cable::Plug& p = g_cable.plug[pp ? 1 : 0];
+    if (!p.answers) { g_ia_script.push_back(0x10); return true; }   // RETRYFAIL
+    g_ia_script.push_back(0x04);                                    // TXSENT
+    const std::uint8_t token = pp ? 0xA0 : 0xC0;
+    push_frame(token, 0x0101, {});                                  // GoodCRC
+    const unsigned rev = (g_txfifo[5] >> 6) & 3u;
+    const unsigned svdm = (g_txfifo[8] & 0x20) ? 0xA000u : 0x8000u;
+    auto reply = [&](unsigned vdm_svid, unsigned type, const std::vector<std::uint32_t>& dos) {   // type 1 ACK, 2 NAK
+        std::vector<std::uint32_t> w{(vdm_svid << 16) | svdm | (type << 6) | cmd};
+        w.insert(w.end(), dos.begin(), dos.end());
+        push_frame(token, std::uint16_t(0x0F | 0x100 | (rev << 6) | (unsigned(w.size()) << 12)), w);
+    };
+    if (cmd == 1) {
+        std::vector<std::uint32_t> id{((g_cable.active ? 4u : 3u) << 27) | 0x05ACu, 0, 0x12340005u, (3u << 9) | (2u << 5) | 2u};
+        if (g_cable.active) id.push_back(g_cable.vdo2);
+        reply(0xFF00, 1, id);
+    } else if (cmd == 2) {
+        if (p.svids == 0) reply(0xFF00, 1, p.svid_vdos);
+        else if (p.svids == 1) reply(0xFF00, 2, {});
+    } else if (cmd == 3) {
+        for (const auto& m : p.modes)
+            if (m.first == svid) { reply(svid, 1, {m.second}); return true; }
+        reply(svid, 2, {});
+    }
+    return true;
 }
 
 // What the cable does when TX_START is written.
@@ -133,6 +181,7 @@ void tx_start() {
     const bool powered = g_vconn_since && g_ms - g_vconn_since >= 25;
     const bool routed = (g_reg[0x02] & 0x30) == vconn_line && (g_reg[0x03] & 0x03) == tx_line;
     if (!powered || !routed) return;
+    if (g_cable.full && full_reply()) return;
     if (!pd3 && !pd2 && g_cable.vendor && g_txfifo.size() >= 11) {   // a later request of a cable session
         const std::uint32_t vdm = g_txfifo[7] | (g_txfifo[8] << 8) | (g_txfifo[9] << 16) | (std::uint32_t(g_txfifo[10]) << 24);
         g_cable.vendor_ids.push_back((g_txfifo[6] >> 1) & 7u);
@@ -160,8 +209,10 @@ void tx_start() {
     ++g_cable.answered;
     push_frame(0xC0, 0x0101, {});                                     // GoodCRC from the cable
     const std::uint16_t rev = pd3 ? (2u << 6) : (1u << 6);
-    push_frame(0xC0, std::uint16_t(0x0F | 0x100 | rev | (5u << 12)),        // Discover Identity ACK, the version of the question
-               {svdm1 ? 0xFF008041u : 0xFF00A041u,(3u << 27) | 0x05ACu, 0, 0x12340005u, (3u << 9) | (2u << 5) | 2u});
+    std::vector<std::uint32_t> id{svdm1 ? 0xFF008041u : 0xFF00A041u, ((g_cable.active ? 4u : 3u) << 27) | 0x05ACu, 0, 0x12340005u,
+                                  (3u << 9) | (2u << 5) | 2u};
+    if (g_cable.active) id.push_back(g_cable.vdo2);
+    push_frame(0xC0, std::uint16_t(0x0F | 0x100 | rev | (unsigned(id.size()) << 12)), id);   // Discover Identity ACK, the version of the question
 }
 
 }  // namespace
@@ -1720,6 +1771,145 @@ void test_svdm1_cable_session_follow_ups_carry_their_variant() {
         CHECK_EQ(g_cable.req_vdm[0], 0xFF008002u);           // SVDM 1.0, as given
         CHECK_EQ(g_cable.req_vdm[1], 0xFF00A002u);
     }
+}
+
+// ---- cable_scan_full: Discover SVIDs / Modes per plug after the scan's identity ----
+
+constexpr std::uint32_t kTbtVdo = 0x000B0001u, kDpVdo = 0x00000C0Cu;
+
+void tbt_cable() {
+    g_cable.cc = 1;
+    g_cable.full = true;
+    g_cable.plug[0].svid_vdos = {0x8087FF01u};
+    g_cable.plug[0].modes = {{0x8087u, kTbtVdo}, {0xFF01u, kDpVdo}};
+}
+
+int count_reqs(bool pp) {
+    int n = 0;
+    for (const auto& r : g_cable.reqs) n += r.pp == pp;
+    return n;
+}
+
+void test_full_scan_of_a_passive_cable_keeps_the_identity_only() {
+    reset_world();
+    g_cable.cc = 1;
+    g_cable.full = true;
+    g_cable.plug[0].svids = 1;                               // NAK: no alternate modes
+    CHECK_EQ(fusb302::cable_scan_full(false), true);
+    CHECK_EQ(fusb302::emarker().valid, true);
+    const auto& x = fusb302::cable_extra();
+    CHECK_EQ(x.valid, true);
+    CHECK_EQ(x.p1.svids_ack, false);
+    CHECK_EQ(int(x.p1.nsvid), 0);
+    CHECK_EQ(x.id2_ack, false);
+    CHECK_EQ(count_reqs(true), 0);                           // passive: no SOP'' at all
+    CHECK_EQ(count_reqs(false), 1);                          // Discover SVIDs, nothing to ask modes of
+    CHECK_EQ(g_cable.reqs[0].cmd, 2u);
+    CHECK_EQ(g_cable.reqs[0].id, 1u);                        // the scan's Discover Identity was id 0
+    CHECK_EQ(g_pin[0], false);                               // VCONN back off
+    CHECK_EQ(usb_has("E-Marker detected"), true);
+}
+
+void test_full_scan_of_a_tbt3_cable_asks_each_svid_for_its_modes() {
+    reset_world();
+    tbt_cable();
+    CHECK_EQ(fusb302::cable_scan_full(false), true);
+    const auto& x = fusb302::cable_extra();
+    CHECK_EQ(x.p1.svids_ack, true);
+    CHECK_EQ(int(x.p1.nsvid), 2);
+    CHECK_EQ(int(x.p1.svid[0]), 0x8087);
+    CHECK_EQ(int(x.p1.svid[1]), 0xFF01);
+    CHECK_EQ(int(x.p1.mode_ack), 3);
+    CHECK_EQ(x.p1.mode[0], kTbtVdo);
+    CHECK_EQ(x.p1.mode[1], kDpVdo);
+    CHECK_EQ(count_reqs(true), 0);
+    CHECK_EQ(g_cable.reqs.size(), 3u);
+    if (g_cable.reqs.size() == 3) {
+        CHECK_EQ(g_cable.reqs[0].cmd, 2u);
+        CHECK_EQ(g_cable.reqs[1].cmd, 3u);
+        CHECK_EQ(g_cable.reqs[1].svid, 0x8087u);
+        CHECK_EQ(g_cable.reqs[2].cmd, 3u);
+        CHECK_EQ(g_cable.reqs[2].svid, 0xFF01u);
+        for (unsigned i = 0; i < 3; i++) CHECK_EQ(g_cable.reqs[i].id, i + 1u);   // one counter for SOP'
+    }
+    // The session is closed like any scan: VCONN off, Rd back, and the next exchange is refused.
+    CHECK_EQ(g_pin[0], false);
+    emk_learn::Reply rep;
+    emk_learn::Request r;
+    r.n = 1;
+    CHECK_EQ(fusb302::cable_exchange(r, rep, 50), false);
+}
+
+void test_full_scan_of_an_active_cable_also_asks_sop_double_prime() {
+    reset_world();
+    tbt_cable();
+    g_cable.active = true;
+    g_cable.plug[1].svid_vdos = {0x80870000u};
+    g_cable.plug[1].modes = {{0x8087u, kTbtVdo}};
+    CHECK_EQ(fusb302::cable_scan_full(false), true);
+    CHECK_EQ(fusb302::emarker().is_active, true);
+    const auto& x = fusb302::cable_extra();
+    CHECK_EQ(x.p1.nsvid, 2);
+    CHECK_EQ(x.id2_ack, true);
+    CHECK_EQ(int(x.id2_n), 5);
+    CHECK_EQ(x.id2[0] >> 27, 4u);                            // the second plug's ID header is an active cable too
+    CHECK_EQ(x.id2[4], g_cable.vdo2);
+    CHECK_EQ(int(x.p2.nsvid), 1);
+    CHECK_EQ(int(x.p2.svid[0]), 0x8087);
+    CHECK_EQ(int(x.p2.mode_ack), 1);
+    CHECK_EQ(x.p2.mode[0], kTbtVdo);
+    CHECK_EQ(count_reqs(true), 3);                           // identity, SVIDs, one Discover Modes
+    // Each plug counts its own MessageIDs: SOP'' starts at 0, SOP' continues after the scan's identity.
+    unsigned want_pp = 0, want_p = 1;
+    for (const auto& q : g_cable.reqs) {
+        CHECK_EQ(q.id, q.pp ? want_pp++ : want_p++);
+    }
+    CHECK_EQ(g_cable.reqs.back().pp, true);                  // SOP' first, then SOP''
+}
+
+void test_full_scan_keeps_the_identity_when_svids_are_refused_or_silent() {
+    reset_world();
+    tbt_cable();
+    g_cable.plug[0].svids = 2;                               // GoodCRC and no answer
+    CHECK_EQ(fusb302::cable_scan_full(false), true);
+    CHECK_EQ(fusb302::emarker().valid, true);
+    CHECK_EQ(fusb302::emarker().max_current_a, 5);
+    CHECK_EQ(fusb302::cable_extra().valid, true);
+    CHECK_EQ(fusb302::cable_extra().p1.svids_ack, false);
+    CHECK_EQ(g_cable.reqs.size(), 1u);                       // no modes asked without an SVID list
+    // One SVID answers its modes, the other is refused: only the first is kept.
+    reset_world();
+    tbt_cable();
+    g_cable.plug[0].modes = {{0x8087u, kTbtVdo}};
+    CHECK_EQ(fusb302::cable_scan_full(false), true);
+    CHECK_EQ(int(fusb302::cable_extra().p1.nsvid), 2);
+    CHECK_EQ(int(fusb302::cable_extra().p1.mode_ack), 1);
+    CHECK_EQ(fusb302::cable_extra().p1.mode[1], 0u);
+}
+
+void test_full_scan_of_an_active_cable_keeps_sop_prime_when_sop_double_prime_is_silent() {
+    reset_world();
+    tbt_cable();
+    g_cable.active = true;
+    g_cable.plug[1].answers = false;                         // no GoodCRC on SOP'': RETRYFAIL
+    CHECK_EQ(fusb302::cable_scan_full(false), true);
+    const auto& x = fusb302::cable_extra();
+    CHECK_EQ(int(x.p1.nsvid), 2);
+    CHECK_EQ(int(x.p1.mode_ack), 3);
+    CHECK_EQ(x.id2_ack, false);
+    CHECK_EQ(count_reqs(true), 1);                           // asked once, no retry
+    CHECK_EQ(g_pin[0], false);
+}
+
+void test_the_plain_scan_asks_nothing_more_and_clears_the_full_read() {
+    reset_world();
+    tbt_cable();
+    CHECK_EQ(fusb302::cable_scan_full(false), true);
+    CHECK_EQ(fusb302::cable_extra().valid, true);
+    g_cable.reqs.clear();
+    CHECK_EQ(fusb302::read_emarker(false, pd::EmarkerMode::Vconn), true);
+    CHECK_EQ(fusb302::cable_extra().valid, false);           // a new scan drops the old read
+    CHECK_EQ(g_cable.reqs.size(), 0u);                       // and sends the identity request only
 }
 
 // What the cable answered is kept with the cable: the orientation of the scan and the table row (1-based attempt).
@@ -4283,6 +4473,17 @@ void test_inline_cable_session_refused_even_confirmed() {
     end_inline_case();
 }
 
+void test_inline_full_cable_scan_refused() {
+    attach_inline();
+    g_cable.full = true;
+    CHECK_EQ(fusb302::cable_scan_full(true), false);
+    CHECK_EQ(fusb302::cable_extra().valid, false);
+    CHECK_EQ(g_cable.tx_seen, 0);
+    CHECK_EQ(find_from("PC13=1"), -1);
+    CHECK_EQ(usb_has("Refused"), true);
+    end_inline_case();
+}
+
 void test_inline_vdm_probe_refused() {
     attach_inline();
     CHECK_EQ(fusb302::probe_start(), false);             // the VDM probe sequencer: already refused inline, locked in
@@ -5312,6 +5513,12 @@ int main() {
     test_cable_session_without_a_cable_never_calls_the_body();
     test_cable_session_is_refused_like_the_scan();
     test_svdm1_cable_session_follow_ups_carry_their_variant();
+    test_full_scan_of_a_passive_cable_keeps_the_identity_only();
+    test_full_scan_of_a_tbt3_cable_asks_each_svid_for_its_modes();
+    test_full_scan_of_an_active_cable_also_asks_sop_double_prime();
+    test_full_scan_keeps_the_identity_when_svids_are_refused_or_silent();
+    test_full_scan_of_an_active_cable_keeps_sop_prime_when_sop_double_prime_is_silent();
+    test_the_plain_scan_asks_nothing_more_and_clears_the_full_read();
     test_answered_names_orientation_and_attempt();
     test_hid_cold_boot_is_passive_before_the_main_loop();      // last: they start from self_power_early and end with no pin
     test_hid_warm_reset_inherits_no_rd();
@@ -5407,6 +5614,7 @@ int main() {
     test_inline_get_source_caps_refused_even_confirmed();
     test_inline_vconn_scan_refused_even_confirmed();
     test_inline_cable_session_refused_even_confirmed();
+    test_inline_full_cable_scan_refused();
     test_inline_vdm_probe_refused();
     test_sniffed_caps_while_inline_are_stored_and_a_capless_request_is_never_guessed();   // last: ends with a detach
     test_request_period_is_tracked_and_reset_with_the_attach();                           // last: ends with a detach
