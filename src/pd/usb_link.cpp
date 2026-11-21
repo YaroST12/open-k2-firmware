@@ -153,7 +153,7 @@ std::size_t format_speed(const Link& l, std::span<char> out) {
     const bool hint_only = l.conf <= Confidence::Hint;
     if (l.family == Family::Unknown || (hint_only && l.tbt == Tbt::None)) {
         // A TBT link entered without a USB speed still has a rate; otherwise no guess.
-        o.put(l.tbt != Tbt::None && l.mbps ? (l.mbps >= 40000 ? "40G" : l.mbps >= 20000 ? "20G" : "10G") : "Unkn");
+        o.put(l.tbt != Tbt::None && l.mbps ? (l.mbps >= 40000 ? "40G" : l.mbps >= 20000 ? "20G" : "10G") : "Unknown");
         return o.finish();
     }
     put_speed(o, l);
@@ -183,7 +183,7 @@ std::size_t format_ui(const Link& l, std::span<char> out) {
     // Nothing PD-backed (no identity/mode data, only D+/D- hints): no guess.
     const bool hint_only = l.conf <= Confidence::Hint;
     if (l.tbt == Tbt::None && (l.family == Family::Unknown || hint_only)) {
-        o.put(l.dp ? "DP alt" : "Unkn");
+        o.put(l.dp ? "DP alt" : "Unknown");
         return o.finish();
     }
     put_speed(o, l);

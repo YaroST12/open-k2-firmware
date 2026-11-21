@@ -74,7 +74,7 @@ constexpr std::size_t kUiMaxChars = 24;
 std::size_t format_ui(const Link& l, std::span<char> out);
 
 // Split readout for the Detail page and the PD tabs: "USB" = the data speed alone ("3.2 Gen2 10G", "USB4 40G",
-// "Unkn"), "Alt" = the alternate mode. Alt: modes ENTERED ("DP 2-lane", "DP 4-lane", "DP", "TB3/4") ->
+// "Unknown"), "Alt" = the alternate mode. Alt: modes ENTERED ("DP 2-lane", "DP 4-lane", "DP", "TB3/4") ->
 // Entered; none entered but some advertised ("DP, TB (adv)", the tag only when `tag`) -> Advertised;
 // "-" -> None. Only real alternate modes count (DisplayPort, Thunderbolt): a vendor SVID (a charging protocol such
 // as 0x2717) is not an alt mode and never appears here; it is a protocol of the source or sink (conn::protocol_text).

@@ -99,7 +99,7 @@ K2_HOT constexpr std::size_t power_half(std::span<char> out, PowerKind kind, uin
 // "data / power"; an empty or "--" half is "?" so both halves always show.
 constexpr std::size_t negotiated_row(std::span<char> out, std::string_view data, std::string_view power) {
     detail::Out o{out};
-    o.put(data.empty() || data == "--" || data == "Unkn" ? std::string_view("?") : data);
+    o.put(data.empty() || data == "--" || data == "Unknown" ? std::string_view("?") : data);
     o.put(" / ");
     o.put(power.empty() ? std::string_view("?") : power);
     return o.end();

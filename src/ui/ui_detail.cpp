@@ -293,7 +293,7 @@ void DetailPage::update(uint32_t now_ms) {
         if (!put(SUsb, ub.data(), ul.conf == usblink::Confidence::Negotiated ? kText
                                 : ul.conf == usblink::Confidence::Advertised ? kDim : kFaint)) return;
         const usblink::AltState as = usblink::format_alt(ul, ab, false);
-        if (!put(SAlt, ab.data(), as == usblink::AltState::Entered ? kText : as == usblink::AltState::Advertised ? kDim : kFaint)) return;
+        if (!put(SAlt, as == usblink::AltState::None ? "--" : ab.data(), as == usblink::AltState::Entered ? kText : as == usblink::AltState::Advertised ? kDim : kFaint)) return;
     }
 
     {   // Energy and charge, each with its unit.

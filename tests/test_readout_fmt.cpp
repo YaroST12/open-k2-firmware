@@ -78,7 +78,7 @@ static void test_negotiated_row() {
     CHECK_STR(b, "? / ?");
     negotiated_row(b, "--", "5V 15W");               // usblink "--" = undetermined
     CHECK_STR(b, "? / 5V 15W");
-    negotiated_row(b, "Unkn", "5V 15W");             // Home keeps "?" where Detail and the PD tabs say "Unkn"
+    negotiated_row(b, "Unknown", "5V 15W");          // Home keeps "?" where Detail and the PD tabs say "Unknown"
     CHECK_STR(b, "? / 5V 15W");
 }
 

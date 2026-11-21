@@ -392,7 +392,7 @@ void test_split_usb_alt() {
     CHECK_EQ(int(format_alt(n.link(), b)), int(AltState::None));
     CHECK_STR(b, "-");
     format_speed(n.link(), b);
-    CHECK_STR(b, "Unkn");
+    CHECK_STR(b, "Unknown");
     // DP entered: pin assignment D = two lanes
     vdm(c, Sop::Sop, {kDpEnterReq}); vdm(c, Sop::Sop, {kDpEnterAck});
     vdm(c, Sop::Sop, {kDpConfReq, (1u << 11) | 2}); vdm(c, Sop::Sop, {kDpConfAck});
@@ -473,13 +473,13 @@ void test_format_ui() {
         format_ui(l, b);
         return std::string(b);
     };
-    CHECK_STR(ui(Family::Unknown, 0, Tbt::None, false).c_str(), "Unkn");
+    CHECK_STR(ui(Family::Unknown, 0, Tbt::None, false).c_str(), "Unknown");
     CHECK_STR(ui(Family::Unknown, 0, Tbt::None, true).c_str(), "DP alt");
     CHECK_STR(ui(Family::FullSpeed, 12, Tbt::None, false).c_str(), "FS");
     {   // D+/D- hint only: undetermined, not a guess
         Classifier h; h.on_lines(3000, 0);
         format_ui(h.link(), b);
-        CHECK_STR(b, "Unkn");
+        CHECK_STR(b, "Unknown");
     }
     CHECK_STR(ui(Family::Usb2, 480, Tbt::None, false).c_str(), "2.0 480M");
     CHECK_STR(ui(Family::Usb32, 5000, Tbt::None, false).c_str(), "3.2 Gen1 5G");
