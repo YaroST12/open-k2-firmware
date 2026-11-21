@@ -767,7 +767,7 @@ void fmt_opp_adc_v(StrBuf<12> &out, const std::optional<adc::Reading> &r, int32_
     out.put_fixed(mv, 2).put_char('V');
 }
 
-OppCells build_opp_cells(const UiContext &ctx, const kit::OppRailSpec &spec) {
+OppCells build_opp_cells(const UiContext &ctx, const kit::OppRailSpec &spec, bool active) {
     OppCells oc{};
     if (spec.title.size() > 9) K2_TRUNC_NOTE_HERE(trunc::Kind::Cut, spec.title, 0);   // the masthead cell holds 9 characters
     // Slot 0: uppercase MastheadCell
@@ -783,8 +783,9 @@ OppCells build_opp_cells(const UiContext &ctx, const kit::OppRailSpec &spec) {
                              wide0 ? int16_t(58) : int16_t(62)};
     for (int i = 0; i < 4; i++) oc.c[i].len = lens[i];
     oc.c[0].masthead = true;
+    oc.c[0].active = active;
     oc.c[0].value = oc.txt[0].view();
-    oc.c[0].value_color = kInk;
+    oc.c[0].value_color = active ? kSpotInk : kInk2;
     oc.c[0].dot_count = spec.dot_count;
     oc.c[0].dot_cur = spec.dot_cur;
 
@@ -885,7 +886,8 @@ uint32_t opp_cell_sig(PanelEdge opp_edge, int16_t pos, const kit::OppCell &c) {
     uint32_t h = mix_init();
     h = mix_u32(h, static_cast<uint32_t>(opp_edge) | (static_cast<uint32_t>(pos) << 4) |
                    (static_cast<uint32_t>(c.len) << 14) | (static_cast<uint32_t>(c.masthead) << 24) |
-                   (static_cast<uint32_t>(c.dot_count) << 25) | (static_cast<uint32_t>(c.dot_cur) << 28));
+                   (static_cast<uint32_t>(c.dot_count) << 25) | (static_cast<uint32_t>(c.dot_cur) << 28) |
+                   (static_cast<uint32_t>(c.active) << 31));
     h = mix_u32(h, static_cast<uint32_t>(c.spot) | (static_cast<uint32_t>(c.value_color) << 16));
     h = mix_u32(h, c.tag_color);
     h = mix(h, c.tag);
@@ -898,7 +900,7 @@ void Ui::draw_opp_slot(unsigned slot) {
     if (slot > 3 || !uses_opp_rail()) return;
     ContentViewport::Pause unscaled_rail;
     const PanelEdge opp_edge = opposite_edge(orient_.edge);
-    const OppCells oc = build_opp_cells(ctx_, opp_spec());
+    const OppCells oc = build_opp_cells(ctx_, opp_spec(), !ring_view_);
     int16_t pos = 0;
     for (unsigned i = 0; i < slot; i++) pos = static_cast<int16_t>(pos + oc.c[i].len);
     const Rect &r = layout_.opp_rail;
@@ -918,7 +920,7 @@ void Ui::sync_opp_rail() {
     if (!uses_opp_rail()) return;
     ContentViewport::Pause unscaled_rail;
     const PanelEdge opp_edge = opposite_edge(orient_.edge);
-    const OppCells oc = build_opp_cells(ctx_, opp_spec());
+    const OppCells oc = build_opp_cells(ctx_, opp_spec(), !ring_view_);
     int16_t pos = 0;
     const Rect &r = layout_.opp_rail;
     for (unsigned i = 0; i < 4; i++) {
@@ -1183,10 +1185,14 @@ void Ui::ring_walk(ring::Pos to, int dir, uint32_t now_ms) {
 }
 
 void Ui::ring_enter(uint32_t now_ms) {
-    (void)now_ms;
     ring_view_ = false;
+    ctx_.rows.set_muted(false);
     sync_panel();
-    sync_opp_rail();
+    if (uses_opp_rail()) sync_opp_rail();
+    if (!paint_pending_) {
+        ContentViewport viewport(active_dest(), ctx_.content.w, ctx_.content.h);
+        current().update(now_ms);
+    }
 }
 
 void Ui::ring_leave(uint32_t now_ms) {
@@ -1201,8 +1207,13 @@ void Ui::ring_leave(uint32_t now_ms) {
         }
     }
     ring_view_ = true;
+    ctx_.rows.set_muted(true);
     sync_panel();
-    sync_opp_rail();
+    if (uses_opp_rail()) sync_opp_rail();
+    if (!paint_pending_) {
+        ContentViewport viewport(active_dest(), ctx_.content.w, ctx_.content.h);
+        current().update(now_ms);
+    }
 }
 
 void Ui::ring_key(Event e, uint32_t now_ms) {
@@ -1577,6 +1588,7 @@ void Ui::render_for_capture(uint32_t now_ms) {
     current().draw_static();
     draw_panel();
     draw_opp_rail();
+    ctx_.rows.set_muted(ring_view_);
     current().update(now_ms);
     ctx_.blank = false;
     draw_release_notice();

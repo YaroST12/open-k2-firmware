@@ -93,14 +93,37 @@ K2_HOT void fill_except(const Surface &s, Box r, const Box *holes, int n, uint16
     }
 }
 
-K2_HOT void draw_key_slot(const Surface &s, bool column, TextDir dir, unsigned slot, const SlotLabel &lab, bool is_ok, bool down) {
+K2_HOT void draw_key_slot(const Surface &s, PanelEdge edge, TextDir dir, unsigned slot, const SlotLabel &lab, bool is_ok, bool down,
+                         bool active) {
     if (s.w <= 0 || s.h <= 0) return;
     {
         uint16_t by = static_cast<uint16_t>(s.y), bh = static_cast<uint16_t>(s.h);
         if (!lcd::clip_to_band(by, bh)) return;
     }
+    const bool column = panel_is_column(edge);
+    Box body{0, 0, s.w, s.h};
+    if (active) {
+        switch (edge) {
+        case PanelEdge::Left:
+            gfx_fill(s, static_cast<int16_t>(s.w - 1), 0, 1, s.h, kAccent);
+            body = {0, 0, static_cast<int16_t>(s.w - 1), s.h};
+            break;
+        case PanelEdge::Right:
+            gfx_fill(s, 0, 0, 1, s.h, kAccent);
+            body = {1, 0, static_cast<int16_t>(s.w - 1), s.h};
+            break;
+        case PanelEdge::Top:
+            gfx_fill(s, 0, static_cast<int16_t>(s.h - 1), s.w, 1, kAccent);
+            body = {0, 0, s.w, static_cast<int16_t>(s.h - 1)};
+            break;
+        case PanelEdge::Bottom:
+            gfx_fill(s, 0, 0, s.w, 1, kAccent);
+            body = {0, 1, s.w, static_cast<int16_t>(s.h - 1)};
+            break;
+        }
+    }
     char text[24];
-    const int along = column ? s.h : s.w;
+    const int along = column ? body.h : body.w;
     const LabelZone zone = label_zone(along, slot);
     const std::string_view shrt = lab.shrt;
     const bool armed = is_ok && shrt == "Confirm";
@@ -108,11 +131,12 @@ K2_HOT void draw_key_slot(const Surface &s, bool column, TextDir dir, unsigned s
     const unsigned chars = tri ? 0 : label_text(text, lab, zone.max_chars);
     const std::string_view label(text, chars);
     const bool cap = is_ok && chars > 0 && !down && !lab.dim;   // a dim OK is unavailable: plain dim text, no cap
-    const uint16_t ground = down ? kCap : kBg2;
+    const uint16_t ground = down ? kCap : (active ? kFocusFill : kBg2);
     const uint16_t cap_fill = armed ? kCaution : kCap;
-    const uint16_t bg = cap ? cap_fill : ground;
-    const uint16_t fg = down ? kOnCap : cap ? (armed ? kSpotInk : kOnCap)
-                      : lab.dim ? kInk3 : shrt == "Stop" ? kError : kInk2;
+    const uint16_t bg = cap ? (active ? cap_fill : kBar) : ground;
+    const uint16_t idle_fg = active ? kOnFocusDim : kInk2;
+    const uint16_t fg = down ? kOnCap : cap ? (active ? (armed ? kSpotInk : kOnCap) : kAccent)
+                      : lab.dim ? kInk3 : shrt == "Stop" ? kError : idle_fg;
     Box holes[2];
     int nh = 0;
     int16_t tx = 0, ty = 0;
@@ -120,12 +144,14 @@ K2_HOT void draw_key_slot(const Surface &s, bool column, TextDir dir, unsigned s
     const int16_t tw = static_cast<int16_t>(text_width(kLabelFont, label));
     if (chars > 0) {
         const int16_t a0 = static_cast<int16_t>(label_origin(zone, chars));
-        tx = column ? static_cast<int16_t>((s.w - fh) / 2) : a0;
-        ty = column ? a0 : static_cast<int16_t>((s.h - fh) / 2);
+        tx = column ? static_cast<int16_t>(body.x + (body.w - fh) / 2) : a0;
+        ty = column ? a0 : static_cast<int16_t>(body.y + (body.h - fh) / 2);
         if (cap) {
             const int16_t c0 = static_cast<int16_t>(zone.start - 2), cl = static_cast<int16_t>(zone.len + 4);
-            const int16_t across = column ? s.w : s.h, c1 = static_cast<int16_t>((across - 14) / 2);
-            holes[nh++] = column ? Box{c1, c0, 14, cl} : Box{c0, c1, cl, 14};
+            const int16_t across = column ? body.w : body.h;
+            const int16_t cap_across = active ? 13 : 14;
+            const int16_t c1 = static_cast<int16_t>((column ? body.x : body.y) + (across - cap_across) / 2);
+            holes[nh++] = column ? Box{c1, c0, cap_across, cl} : Box{c0, c1, cl, cap_across};
         } else {
             holes[nh++] = {tx, ty, column ? fh : tw, column ? tw : fh};
         }
@@ -133,14 +159,26 @@ K2_HOT void draw_key_slot(const Surface &s, bool column, TextDir dir, unsigned s
     Box tri_box{};
     if (tri) {
         const int16_t cx = static_cast<int16_t>(zone.start + zone.len / 2);
-        tri_box = column ? Box{static_cast<int16_t>((s.w - 9) / 2), static_cast<int16_t>(cx - 2), 9, 5}
-                         : Box{static_cast<int16_t>(cx - 4), static_cast<int16_t>((s.h - 5) / 2), 9, 5};
+        tri_box = column ? Box{static_cast<int16_t>(body.x + (body.w - 9) / 2), static_cast<int16_t>(cx - 2), 9, 5}
+                         : Box{static_cast<int16_t>(cx - 4), static_cast<int16_t>(body.y + (body.h - 5) / 2), 9, 5};
         holes[nh++] = tri_box;
     }
-    fill_except(s, {0, 0, s.w, s.h}, holes, nh, ground);
+    fill_except(s, body, holes, nh, ground);
     if (cap) {
         const Box t{tx, ty, column ? fh : tw, column ? tw : fh};
-        fill_except(s, holes[0], &t, 1, cap_fill);
+        const Box &cb = holes[0];
+        if (active) {
+            fill_except(s, cb, &t, 1, cap_fill);
+        } else {
+            gfx_fill(s, cb.x, cb.y, cb.w, 1, kAccent);
+            gfx_fill(s, cb.x, static_cast<int16_t>(cb.y + cb.h - 1), cb.w, 1, kAccent);
+            gfx_fill(s, cb.x, static_cast<int16_t>(cb.y + 1), 1, static_cast<int16_t>(cb.h - 2), kAccent);
+            gfx_fill(s, static_cast<int16_t>(cb.x + cb.w - 1), static_cast<int16_t>(cb.y + 1), 1,
+                     static_cast<int16_t>(cb.h - 2), kAccent);
+            const Box inner{static_cast<int16_t>(cb.x + 1), static_cast<int16_t>(cb.y + 1),
+                            static_cast<int16_t>(cb.w - 2), static_cast<int16_t>(cb.h - 2)};
+            fill_except(s, inner, &t, 1, kBar);
+        }
     }
     if (chars > 0) {
         if (column) gfx_text_rot(s, kLabelFont, tx, ty, label, fg, bg, dir);
@@ -148,7 +186,7 @@ K2_HOT void draw_key_slot(const Surface &s, bool column, TextDir dir, unsigned s
     }
     if (!tri) return;
     const bool up = tri > 0;
-    const uint16_t ink = lab.dim ? kInk3 : kInk2;
+    const uint16_t ink = lab.dim ? kInk3 : (active ? kAccent : kInk2);
     for (int i = 0; i < 5; i++) {
         const int k = up ? i : 4 - i;
         const int16_t lo = static_cast<int16_t>(4 - k), span = static_cast<int16_t>(2 * k + 1);
@@ -166,8 +204,9 @@ K2_HOT void draw_opp_slot(const Surface &s, PanelEdge opp_edge, TextDir dir, uns
         if (!lcd::clip_to_band(by, bh)) return;
     }
     const bool vertical = panel_is_column(opp_edge);
-    const uint16_t bg = cell.masthead ? kBar : kBg2;
-    const uint16_t border_col = cell.masthead ? kFocus : kRule;
+    const bool active_mast = cell.masthead && cell.active;
+    const uint16_t bg = active_mast ? kAccent : kBg2;
+    const uint16_t border_col = active_mast ? kAccent : kRule;
     const int16_t along = vertical ? s.h : s.w;
     const int16_t fh = static_cast<int16_t>(kLabelFont.height);
 
@@ -179,7 +218,7 @@ K2_HOT void draw_opp_slot(const Surface &s, PanelEdge opp_edge, TextDir dir, uns
         body.x = opp_edge == PanelEdge::Left ? 0 : 1;
         body.w = static_cast<int16_t>(s.w - 1);
         if (cell.masthead) {
-            gfx_fill(s, body.x, static_cast<int16_t>(s.h - 1), body.w, 1, kFocus);
+            gfx_fill(s, body.x, static_cast<int16_t>(s.h - 1), body.w, 1, active_mast ? kBg : kRule);
             body.h = static_cast<int16_t>(s.h - 1);
         } else if (slot > 1) {
             gfx_fill(s, body.x, 0, 2, 1, bg);
@@ -194,7 +233,7 @@ K2_HOT void draw_opp_slot(const Surface &s, PanelEdge opp_edge, TextDir dir, uns
         body.y = opp_edge == PanelEdge::Top ? 0 : 1;
         body.h = static_cast<int16_t>(s.h - 1);
         if (cell.masthead) {
-            gfx_fill(s, static_cast<int16_t>(s.w - 1), body.y, 1, body.h, kFocus);
+            gfx_fill(s, static_cast<int16_t>(s.w - 1), body.y, 1, body.h, active_mast ? kBg : kRule);
             body.w = static_cast<int16_t>(s.w - 1);
         } else if (slot > 1) {
             gfx_fill(s, 0, body.y, 1, 2, bg);
@@ -312,7 +351,9 @@ K2_HOT void draw_opp_slot(const Surface &s, PanelEdge opp_edge, TextDir dir, uns
     if (dots > 0) {
         // Fill the 2 px gaps between dots inside the single dot-group hole, then paint the 3x3 dots.
         for (uint8_t i = 0; i < dots; i++) {
-            gfx_fill(s, dot_box[i].x, dot_box[i].y, 3, 3, i == cell.dot_cur ? kFocus : kInk3);
+            const uint16_t dot_col = active_mast ? (i == cell.dot_cur ? kSpotInk : kFocusFill)
+                                                 : (i == cell.dot_cur ? kFocus : kInk3);
+            gfx_fill(s, dot_box[i].x, dot_box[i].y, 3, 3, dot_col);
             if (i + 1 < dots) {
                 if (vertical) {
                     const int16_t gy = dir == TextDir::Ccw ? static_cast<int16_t>(dot_box[i].y - 2) : static_cast<int16_t>(dot_box[i].y + 3);
@@ -342,7 +383,7 @@ K2_HOT uint32_t RowList::row_sig_cb(void *ctx, int index) {
     uint32_t h = mix_init();
     h = mix_u32(h, static_cast<uint32_t>(r.marker) | (static_cast<uint32_t>(r.state) << 4) |
                        (static_cast<uint32_t>(r.icon) << 8) | (static_cast<uint32_t>(r.chevron) << 16) |
-                       (static_cast<uint32_t>(focused) << 17));
+                       (static_cast<uint32_t>(focused) << 17) | (static_cast<uint32_t>(self->muted_) << 18));
     h = mix_u32(h, r.marker_color | (static_cast<uint32_t>(r.text_color) << 16));
     h = mix_u32(h, r.tail_color | (static_cast<uint32_t>(r.tail_tint) << 16));
     h = mix(h, r.text);
@@ -358,14 +399,16 @@ K2_HOT void RowList::draw_row_cb(void *ctx, int index, const Rect &r, bool hi, F
     RowSpec sp;
     self->fn_(self->ctx_, index, hi, sp);
     const int16_t y = r.y;
-    const uint16_t bg = hi ? kFocusFill : kBg;
+    const bool muted = hi && self->muted_;
+    const uint16_t bg = muted ? kBg2 : hi ? kFocusFill : kBg;
     const bool bar = hi && kFocusBar != 0;
+    const uint16_t bar_col = muted ? kInk3 : kFocusBar;
     if (hi && !bar) {
         sp.text_color = kOnFocus;
         if (!sp.tail_tint) sp.tail_color = kOnFocusDim;
         if (sp.marker != Marker::Verdict) sp.marker_color = kOnFocus;
     } else if (hi && sp.marker == Marker::Icon && sp.marker_color == 0) {
-        sp.marker_color = kAccent;
+        sp.marker_color = muted ? kInk2 : kAccent;
     }
     if (hi) {   // blocked / placeholder ink3 all but vanishes on the focus fill: the focus-dim ink reads there
         if (sp.text_color == kInk3) sp.text_color = kOnFocusDim;
@@ -419,7 +462,7 @@ K2_HOT void RowList::draw_row_cb(void *ctx, int index, const Rect &r, bool hi, F
     }
 
     const int16_t gx = bar ? 3 : 0;
-    if (bar) gfx_fill(s, 0, static_cast<int16_t>(y + 1), 3, static_cast<int16_t>(r.h - 1), kFocusBar);
+    if (bar) gfx_fill(s, 0, static_cast<int16_t>(y + 1), 3, static_cast<int16_t>(r.h - 1), bar_col);
     fill_except(s, {gx, static_cast<int16_t>(y + 1), static_cast<int16_t>(self->list_.row_width() - gx), static_cast<int16_t>(r.h - 1)},
                 holes, nh, bg);
 

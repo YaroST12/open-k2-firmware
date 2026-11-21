@@ -1734,5 +1734,22 @@ int main() {
     CHECK_EQ(k2::g_missing_glyphs, 0u);
     test_switch_exact();
     test_repaint_opaque();
+    // Entering and leaving the ring updates both rails and muted RowList pixel-accurately against render_for_capture.
+    {
+        Ui ring_ui;
+        ring_ui.init(0);
+        ring_ui.open_place(bench::Place::K2, 100);                   // Settings (RowList) entered
+        while (ring_ui.painting()) ring_ui.tick(110);
+        CHECK_EQ(ring_ui.ring_view(), false);
+        test_screen(ring_ui, "ring_k2_entered", 120);
+        ring_ui.on_button(Button::Back, ButtonEvent::Short, 200);    // Leave back to ring view (muted RowList)
+        while (ring_ui.painting()) ring_ui.tick(210);
+        CHECK_EQ(ring_ui.ring_view(), true);
+        test_screen(ring_ui, "ring_k2_left", 220);
+        ring_ui.on_button(Button::Ok, ButtonEvent::Short, 300);      // Re-enter Settings (active rails + RowList)
+        while (ring_ui.painting()) ring_ui.tick(310);
+        CHECK_EQ(ring_ui.ring_view(), false);
+        test_screen(ring_ui, "ring_k2_reentered", 320);
+    }
     return test_report("test_ui_capture");
 }

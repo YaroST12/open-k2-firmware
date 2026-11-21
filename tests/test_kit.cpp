@@ -1345,45 +1345,138 @@ static void test_col2_and_pill() {
 static void test_draw_key_slot_arrows() {
     // Vertical navigation arrows render as upright triangles (▲ / ▼) in both vertical (column == true) and
     // horizontal (column == false) panels so they match vertical list scrolling rather than pointing sideways.
-    struct Case { Surface s; bool column; TextDir dir; };
+    struct Case { Surface s; PanelEdge edge; TextDir dir; };
     const Case cases[] = {
-        {{224, 70, 16, 58}, true, TextDir::Ccw},
-        {{0, 54, 16, 58}, true, TextDir::Cw},
-        {{70, 0, 58, 16}, false, TextDir::Ccw},
-        {{54, 224, 58, 16}, false, TextDir::Cw},
+        {{224, 70, 16, 58}, PanelEdge::Right, TextDir::Ccw},
+        {{0, 54, 16, 58}, PanelEdge::Left, TextDir::Cw},
+        {{70, 0, 58, 16}, PanelEdge::Top, TextDir::Ccw},
+        {{54, 224, 58, 16}, PanelEdge::Bottom, TextDir::Cw},
     };
     for (const Case &c : cases) {
-        for (const bool is_up : {true, false}) {
-            lcd::fill(kBase);
-            const SlotLabel lab{is_up ? kUp : kDn, "", "", false};
-            kit::draw_key_slot(c.s, c.column, c.dir, 1, lab, false, false);
-            int min_x = 240, max_x = -1, min_y = 240, max_y = -1, total_ink = 0;
-            for (int y = c.s.y; y < c.s.y + c.s.h; ++y) {
-                for (int x = c.s.x; x < c.s.x + c.s.w; ++x) {
-                    const uint16_t p = px(x, y);
-                    CHECK_EQ(p != kBase, true);
-                    if (p == kInk2) {
-                        min_x = std::min(min_x, x); max_x = std::max(max_x, x);
-                        min_y = std::min(min_y, y); max_y = std::max(max_y, y);
-                        ++total_ink;
+        for (const bool active : {true, false}) {
+            const uint16_t want_ink = active ? kAccent : kInk2;
+            for (const bool is_up : {true, false}) {
+                lcd::fill(kBase);
+                const SlotLabel lab{is_up ? kUp : kDn, "", "", false};
+                kit::draw_key_slot(c.s, c.edge, c.dir, 1, lab, false, false, active);
+                int min_x = 240, max_x = -1, min_y = 240, max_y = -1, total_ink = 0;
+                for (int y = c.s.y; y < c.s.y + c.s.h; ++y) {
+                    for (int x = c.s.x; x < c.s.x + c.s.w; ++x) {
+                        const uint16_t p = px(x, y);
+                        CHECK_EQ(p != kBase, true);
+                        if (p == want_ink &&
+                            !(active && ((c.edge == PanelEdge::Right && x == c.s.x) ||
+                                         (c.edge == PanelEdge::Left && x == c.s.x + c.s.w - 1) ||
+                                         (c.edge == PanelEdge::Bottom && y == c.s.y) ||
+                                         (c.edge == PanelEdge::Top && y == c.s.y + c.s.h - 1)))) {
+                            min_x = std::min(min_x, x); max_x = std::max(max_x, x);
+                            min_y = std::min(min_y, y); max_y = std::max(max_y, y);
+                            ++total_ink;
+                        }
                     }
                 }
-            }
-            CHECK_EQ(max_x - min_x + 1, 9);
-            CHECK_EQ(max_y - min_y + 1, 5);
-            CHECK_EQ(total_ink, 25);
-            for (int row = 0; row < 5; ++row) {
-                int row_ink = 0;
-                for (int x = min_x; x <= max_x; ++x) row_ink += px(x, min_y + row) == kInk2;
-                const int want = 2 * (is_up ? row : 4 - row) + 1;
-                CHECK_EQ(row_ink, want);
+                CHECK_EQ(max_x - min_x + 1, 9);
+                CHECK_EQ(max_y - min_y + 1, 5);
+                CHECK_EQ(total_ink, 25);
+                for (int row = 0; row < 5; ++row) {
+                    int row_ink = 0;
+                    for (int x = min_x; x <= max_x; ++x) row_ink += px(x, min_y + row) == want_ink;
+                    const int want = 2 * (is_up ? row : 4 - row) + 1;
+                    CHECK_EQ(row_ink, want);
+                }
             }
         }
     }
 }
 
+static void test_option_c_active_states() {
+    auto count_col = [](int xa, int xb, int ya, int yb, uint16_t col) {
+        int n = 0;
+        for (int y = ya; y < yb; ++y)
+            for (int x = xa; x < xb; ++x) n += px(x, y) == col;
+        return n;
+    };
+    // 1. draw_key_slot active (teal ground + cyan inner edge + solid OK cap) vs inactive (charcoal + outlined navy [Enter]).
+    struct EdgeCase { Surface s; PanelEdge edge; TextDir dir; int edge_x; int edge_y; int body_x; int body_y; };
+    const EdgeCase edges[] = {
+        {{224, 128, 16, 58}, PanelEdge::Right, TextDir::Ccw, 224, 130, 226, 130},
+        {{0, 54, 16, 58}, PanelEdge::Left, TextDir::Cw, 15, 56, 2, 56},
+        {{70, 0, 58, 16}, PanelEdge::Top, TextDir::Ccw, 72, 15, 72, 2},
+        {{54, 224, 58, 16}, PanelEdge::Bottom, TextDir::Cw, 56, 224, 56, 226},
+    };
+    const SlotLabel ok_lab{"Enter", "", "", false};
+    for (const EdgeCase &e : edges) {
+        lcd::fill(kBase);
+        kit::draw_key_slot(e.s, e.edge, e.dir, 2, ok_lab, true, false, true);
+        CHECK_EQ(px(e.edge_x, e.edge_y), kAccent);
+        CHECK_EQ(px(e.body_x, e.body_y), kFocusFill);
+        CHECK_EQ(count_col(e.s.x, e.s.x + e.s.w, e.s.y, e.s.y + e.s.h, kCap) > 0, true);
+
+        lcd::fill(kBase);
+        kit::draw_key_slot(e.s, e.edge, e.dir, 2, ok_lab, true, false, false);
+        CHECK_EQ(px(e.body_x, e.body_y), kBg2);
+        CHECK_EQ(count_col(e.s.x, e.s.x + e.s.w, e.s.y, e.s.y + e.s.h, kBar) > 0, true);
+        CHECK_EQ(count_col(e.s.x, e.s.x + e.s.w, e.s.y, e.s.y + e.s.h, kAccent) > 0, true);
+        CHECK_EQ(count_col(e.s.x, e.s.x + e.s.w, e.s.y, e.s.y + e.s.h, kFocusFill), 0);
+    }
+
+    // 2. draw_opp_slot active masthead (solid cyan + black ink + black separator) vs inactive (charcoal + grey ink + rule).
+    const Surface mast{0, 0, 16, 64};
+    kit::OppCell cell{};
+    cell.len = 64;
+    cell.masthead = true;
+    cell.active = true;
+    cell.value = "CHARGER";
+    cell.value_color = kSpotInk;
+    cell.dot_count = 3;
+    cell.dot_cur = 1;
+    lcd::fill(kBase);
+    kit::draw_opp_slot(mast, PanelEdge::Left, TextDir::Cw, 0, cell);
+    CHECK_EQ(px(1, 1), kAccent);
+    CHECK_EQ(px(15, 1), kAccent);
+    CHECK_EQ(px(1, 63), kBg);
+    CHECK_EQ(count_col(0, 16, 0, 64, kSpotInk) > 0, true);
+    CHECK_EQ(count_col(0, 16, 0, 64, kFocusFill) > 0, true);
+
+    cell.active = false;
+    cell.value_color = kInk2;
+    lcd::fill(kBase);
+    kit::draw_opp_slot(mast, PanelEdge::Left, TextDir::Cw, 0, cell);
+    CHECK_EQ(px(1, 1), kBg2);
+    CHECK_EQ(px(15, 1), kRule);
+    CHECK_EQ(px(1, 63), kRule);
+    CHECK_EQ(count_col(0, 16, 0, 64, kInk2) > 0, true);
+    CHECK_EQ(count_col(0, 16, 0, 64, kAccent), 9);   // only the 3x3 active dot (kFocus == kAccent)
+
+    cell.dot_count = 0;
+    lcd::fill(kBase);
+    kit::draw_opp_slot(mast, PanelEdge::Left, TextDir::Cw, 0, cell);
+    CHECK_EQ(count_col(0, 16, 0, 64, kAccent), 0);
+
+    // 3. RowList::set_muted (charcoal + kInk3 bar when muted vs teal + kFocusBar when active).
+    struct Model { int n = 2; } m;
+    auto fn = [](void *, int i, bool, kit::RowSpec &out) {
+        out.text = i == 0 ? "First" : "Second";
+    };
+    kit::RowList l;
+    lcd::fill(kBg);
+    l.init({16, 0, 208, 240}, kit::kBodyY, fn, &m);
+    l.set_count(2);
+    l.select(0);
+    l.set_muted(false);
+    l.draw(1);
+    CHECK_EQ(px(16, kit::kBodyY + 5), kFocusBar);
+    CHECK_EQ(px(16 + 100, kit::kBodyY + 5), kFocusFill);
+
+    l.set_muted(true);
+    l.draw(2);
+    CHECK_EQ(px(16, kit::kBodyY + 5), kInk3);
+    CHECK_EQ(px(16 + 100, kit::kBodyY + 5), kBg2);
+}
+
 int main() {
     test_draw_key_slot_arrows();
+    test_option_c_active_states();
     test_col2_and_pill();
     test_result_row();
     test_result_rows_stream_each_pixel_once();

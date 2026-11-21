@@ -170,10 +170,11 @@ static void test_captures_and_keys() {
                 ui.set_pressed(static_cast<Button>(key), true, 6300);
                 for (unsigned slot = 0; slot < 4; ++slot) {
                     const auto& box = layout.slot[slot];
-                    const int px = box.x + (panel_is_column(orient.edge) ? 0 : 10);   // the rail edge: outside the OK cap
-                    const int py = box.y + (panel_is_column(orient.edge) ? 10 : 0);
+                    const int px = box.x + (panel_is_column(orient.edge) ? (orient.edge == PanelEdge::Right ? box.w - 1 : 0) : 10);   // the outer rail edge: outside the OK cap and inner accent
+                    const int py = box.y + (panel_is_column(orient.edge) ? 10 : (orient.edge == PanelEdge::Bottom ? box.h - 1 : 0));
+                    const uint16_t idle_bg = ui.ring_view() ? kBg2 : kFocusFill;
                     if (!qrtest)
-                        CHECK_EQ(g_panel[py * 240 + px], slot_button(orient, slot) == static_cast<Button>(key) ? kCap : kBg2);   // a held key flashes in the cap colour
+                        CHECK_EQ(g_panel[py * 240 + px], slot_button(orient, slot) == static_cast<Button>(key) ? kCap : idle_bg);   // a held key flashes in the cap colour
                     // Independently apply the MADCTL coordinate permutation back to physical glass.
                     const int lx = box.x + box.w / 2, ly = box.y + box.h / 2;
                     const int physical_y = r == 0 ? ly : r == 1 ? lx : r == 2 ? 239 - ly : 239 - lx;
@@ -440,7 +441,7 @@ static void check_physical_slot_label(Ui &ui, uint8_t rotation, unsigned slot, B
     Surface s{box.x, box.y, box.w, box.h};
     // The reference: the kit's slot painter fed the label of `action` (the mapping under test is which action's label
     // lands in which physical slot; the painter itself is pinned in test_kit).
-    kit::draw_key_slot(s, panel_is_column(orient.edge), panel_text_dir(orient.edge), slot, lab, action == Button::Ok, false);
+    kit::draw_key_slot(s, orient.edge, panel_text_dir(orient.edge), slot, lab, action == Button::Ok, false, !ui.ring_view());
     for (int y = box.y; y < box.y + box.h; ++y)
         CHECK_EQ(std::equal(g_panel + y * 240 + box.x, g_panel + y * 240 + box.x + box.w,
                             actual.begin() + y * 240 + box.x), true);

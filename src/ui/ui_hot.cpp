@@ -116,6 +116,7 @@ K2_HOT void Ui::pump_paint(uint32_t now_ms) {
     }
     const bool toast_was_drawn = ctx_.toast.drawn;
     const int toast_px0 = bg ? bg->spent : -1;
+    ctx_.rows.set_muted(ring_view_);
     current().update(now_ms);
     const bool body_painted = !bg || bg->spent != toast_px0;
     const bool toast_dirty = !ctx_.toast.drawn || (toast_was_drawn && body_painted);
@@ -158,14 +159,14 @@ K2_HOT void Ui::draw_slot(unsigned slot) {
     const Rect &r = layout_.slot[slot];
     if (r.w <= 0 || r.h <= 0) return;
 
-    kit::draw_key_slot(surface_of(r), panel_is_column(orient_.edge), panel_text_dir(orient_.edge), slot, lab,
-                       action == Button::Ok, down);
+    kit::draw_key_slot(surface_of(r), orient_.edge, panel_text_dir(orient_.edge), slot, lab,
+                       action == Button::Ok, down, !ring_view_);
 }
 
 // What the current page shows in this slot: its pool id (the pool holds each distinct text once), offset so it is never 0.
 K2_HOT uint32_t Ui::slot_sig(unsigned slot) {
     const Button physical = slot_button(orient_, slot);
-    return 0x100u | strip_now()[oriented_button(physical, orient_.rotation, rotate_buttons_)];
+    return 0x100u | (ring_view_ ? 0u : 0x200u) | strip_now()[oriented_button(physical, orient_.rotation, rotate_buttons_)];
 }
 
 K2_HOT void Ui::repaint(uint32_t now_ms) {

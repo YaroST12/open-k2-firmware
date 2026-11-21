@@ -64,7 +64,8 @@ void fill_except(const Surface &s, Box r, const Box *holes, int n, uint16_t colo
 // inverted cap with its verb (orange while a confirm is armed), BACK a dim word (red `Stop` while a run is in flight), on the
 // bg2 rail. `column` = a side rail (the text runs along it in `dir`); `down` = the key is held (the slot flashes in the cap
 // colour). Every pixel of the slot is written once.
-void draw_key_slot(const Surface &s, bool column, TextDir dir, unsigned slot, const SlotLabel &lab, bool is_ok, bool down);
+void draw_key_slot(const Surface &s, PanelEdge edge, TextDir dir, unsigned slot, const SlotLabel &lab, bool is_ok, bool down,
+                   bool active = true);
 
 // ---- Opposite Telemetry Rail (Option B: 16 x 240 opposite edge) --------------------------------------------------------
 enum class OppTelemetry : uint8_t {
@@ -84,6 +85,7 @@ struct OppRailSpec {
 struct OppCell {
     int16_t len = 60;
     bool masthead = false;
+    bool active = true;
     uint16_t spot = 0;
     std::string_view tag;
     uint16_t tag_color = kDim;
@@ -218,6 +220,7 @@ public:
     int visible() const { return list_.state().visible; }
     const ListState &state() const { return list_.state(); }
     void set_budget(PaintBudget *bg) { list_.set_budget(bg); }
+    void set_muted(bool on) { muted_ = on; }
     // Applies count and selection (the window follows the selection), repaints what changed. An idle call writes nothing.
     void draw(uint32_t now_ms, PaintBudget *bg = nullptr);
     void invalidate();   // after an erase, a capture pass or a page repaint
@@ -247,6 +250,7 @@ private:
     void *ctx_ K2_BSS_ZERO;
     int count_ K2_BSS_ZERO, sel_ K2_BSS_ZERO;
     int16_t extra_ = -1;          // the focus expansion last applied (-1 = unknown)
+    bool muted_ = false;
 };
 
 // ---- KvTable -------------------------------------------------------------------------------------------------------------
