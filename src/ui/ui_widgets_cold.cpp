@@ -139,6 +139,14 @@ bool draw_footer_budgeted(const Surface &s, FooterTone tone, std::string_view te
     return e.paint_budgeted(sg, bg, static_cast<int>(s.w) * 18, [&] { draw_footer(s, tone, text K2_TRUNC_ARG); });
 }
 
+bool status_toast(Toast &t, uint32_t now_ms, uint32_t &shown, FooterTone tone, std::string_view text) {
+    const uint32_t sg = mix(mix_u32(mix_init(), static_cast<uint32_t>(tone) * 31u + 1u), text) | 1u;
+    if (sg == shown) return false;
+    shown = sg;
+    t.show(tone, text, now_ms);
+    return true;
+}
+
 void IconCell::draw(Icon icon, uint16_t fg, uint16_t bg) {
     const uint32_t sg = mix_u32(mix_init(), static_cast<uint32_t>(icon) * 31u + fg * 7u + bg * 131u);
     e.paint(sg, [&] { draw_icon(surf, x, y, icon, fg, bg); });

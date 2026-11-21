@@ -120,6 +120,8 @@ void DiagnosisPage::draw_static() {
         foot_.invalidate();
         stamp_.invalidate();
         ctx_.rows.invalidate();
+        toast_sig_ = 0;
+        pill_ = false;
         static_step_ = 1;
     }
     if (static_step_ == 1) {
@@ -202,7 +204,18 @@ void DiagnosisPage::update(uint32_t now_ms) {
     if (bg && bg->more) return;
     char v[screen::kVerdictChars + 8];
     screen::verdict(r, v);
-    draw_footer_budgeted(ctx_.content, tone_of(r), v, foot_, bg);
+    const FooterTone tone = tone_of(r);
+    if (tone == FooterTone::Error || tone == FooterTone::Caution) {
+        pill_ = draw_footer_budgeted(ctx_.content, tone, v, foot_, bg) || pill_;
+        return;
+    }
+    if (pill_) {   // the finding is gone: take its pill off, the rows under it repaint
+        gfx_fill(ctx_.content, 0, static_cast<int16_t>(ctx_.content.h - kToastH - kToastMarginBottom), ctx_.content.w, kToastH, kBg);
+        ctx_.rows.invalidate();
+        foot_.invalidate();
+        pill_ = false;
+    }
+    status_toast(ctx_.toast, now_ms, toast_sig_, tone, v);   // a healthy or neutral verdict is no exception: it times out
 }
 
 FooterTone DiagnosisPage::tone_of(const diag::Report &r) {

@@ -180,6 +180,11 @@ struct Toast {
     std::string_view view() const { return {text, len}; }
 };
 
+// A status that is no exception (Info, Ok) floats for the toast dwell once per change, then the page paints without it.
+// `shown` outlives a page repaint (the repaint after the expiry must not raise the toast again): only the page's draw_static
+// resets it. False = already shown, nothing done.
+bool status_toast(Toast &t, uint32_t now_ms, uint32_t &shown, FooterTone tone, std::string_view text);
+
 // Draws the 16 px floating toast pill centred near the bottom of `s` (s.h - kToastH - kToastMarginBottom).
 // Single-pass fill + 1 px tone border + S12 text; sets footer_error_shown() when tone == FooterTone::Error.
 void draw_toast(const Surface &s, FooterTone tone, std::string_view text K2_TRUNC_DECL);

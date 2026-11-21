@@ -59,7 +59,9 @@ private:
     Elem stamp_;                          // the stamp on screen
     pd::diag::screen::Row row_{};         // the row row_fn is building (the RowSpec views point into it)
     StrBuf<24> bb_note_;                  // the Black Box row's note
-    Elem foot_;                           // footer element cache (draw_footer_cached)
+    Elem foot_;                           // the pill of a finding (Caution, Error): it stays while the finding does
+    uint32_t toast_sig_ = 0;              // the Ok / Info verdict last floated as a toast (status_toast)
+    bool pill_ = false;                   // the finding pill is on screen
     uint8_t static_step_ = 0;
 };
 

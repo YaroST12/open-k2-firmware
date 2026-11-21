@@ -146,11 +146,44 @@ static void test_place_stamp_replaces_top() {
     ui.on_button(Button::Back, ButtonEvent::Short, t + 100);
 }
 
+// A healthy verdict ("Link OK, power OK") is no exception: it floats as a toast, times out, and does not come back on the repaint
+// that clears it. A finding's pill stays for as long as the finding does.
+static void test_verdict_toast_times_out() {
+    diag::Report healthy{};
+    healthy.empty = false; healthy.link = 0; healthy.power = diag::kPowerOk;
+    healthy.quiet_contract = healthy.quiet_link = true;
+    g_stub.diag_report = healthy;
+    g_stub.diag_state = 1;
+    Ui &ui = fresh_ui();
+    ui.tick(1000);
+    std::uint32_t t = 1100;
+    ui.open_place(bench::Place::Log, t);
+    ui.tick(t += 100);
+    while (ui.painting()) ui.tick(t += 20);
+    CHECK(ui.context().toast.active(t));
+    CHECK_EQ(int(ui.context().toast.tone), int(FooterTone::Ok));
+    for (int i = 0; i < 160; i++) ui.tick(t += 20);   // 3.2 s
+    while (ui.painting()) ui.tick(t += 20);
+    CHECK(!ui.context().toast.active(t));
+    CHECK(!ui.context().toast.drawn);
+    for (int i = 0; i < 160; i++) ui.tick(t += 20);
+    CHECK(!ui.context().toast.active(t));             // nothing re-raised it
+
+    g_stub.diag_report = diag_fixture::case1();       // a finding: its pill is persistent, no toast
+    for (int i = 0; i < 400; i++) ui.tick(t += 20);
+    CHECK(!ui.context().toast.active(t));
+    const int err = count_px(kError);
+    for (int i = 0; i < 400; i++) ui.tick(t += 20);
+    CHECK_EQ(count_px(kError), err);
+    CHECK(err > 100);
+}
+
 int main() {
     test_cell_of();
     test_tone_of();
     test_page_case1();
     test_page_empty();
     test_place_stamp_replaces_top();
+    test_verdict_toast_times_out();
     return test_report("test_ui_diagnosis");
 }
