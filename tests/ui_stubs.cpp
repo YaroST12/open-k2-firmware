@@ -189,6 +189,13 @@ void unit_hold(bool legacy) {
 bool rd_for_run_on() { return g_stub.rd_run; }
 bool reread_own_hold() { return g_stub.reread_hold; }
 void reread_take_over() { g_stub.reread_take_overs++; }
+bool reread_start(std::uint8_t) { g_stub.rr_starts++; return g_stub.rr_start_ok; }
+bool reread_attach_held() { return g_stub.rr_held; }
+bool reread_release_now() { g_stub.rr_releases++; return true; }
+void reread_stand_down() { g_stub.rr_stand_downs++; g_stub.rr_held = false; }
+const pd::RereadStatus& reread_status() { return g_stub.rr_status; }
+bool xiaomi_chain_active() { return g_stub.xiaomi_chain; }
+bool sink_downstream() { return g_stub.downstream; }
 std::uint8_t idle_wake_line() { return g_stub.idle_wake_hold; }
 std::int32_t open_cc_mv(std::uint8_t line) { return line >= 1 && line <= 2 ? g_stub.open_cc_mv[line - 1] : -1; }
 bool rp_on_line() { return false; }

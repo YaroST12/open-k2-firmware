@@ -103,6 +103,10 @@ struct StubState {
     bool rd_run = false, vbus_on_rd = false, pm_after_rd = false;
     bool reread_hold = false;                // fusb302::reread_own_hold(): a finished re-read's own leftover PDO 1 hold
     int reread_take_overs = 0;               // fusb302::reread_take_over(): a tool (PD Stress, twin run) took the re-read's attach over
+    // The automatic offers read (core/offers_read.cpp) drives these: how often it asked for the attach / the release / the stand-down
+    int rr_starts = 0, rr_releases = 0, rr_stand_downs = 0, sink_downstream_n = 0;
+    bool rr_start_ok = true, rr_held = false, xiaomi_chain = false, downstream = false;
+    k2::pd::RereadStatus rr_status;
     std::uint8_t idle_wake_hold = 0;         // fusb302::idle_wake_line(): the Wake sleeping port's Rd hold
     std::int32_t open_cc_mv[2] = {-1, -1};   // fusb302::open_cc_mv(): the settled open readings of CC1 / CC2
     int rd_run_changes = 0;

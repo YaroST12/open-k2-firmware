@@ -6,6 +6,7 @@
 #include "k2/core/log.hpp"
 #include "k2/core/loop_guard.hpp"
 #include "k2/core/paint_meter.hpp"
+#include "k2/core/offers_read.hpp"
 #include "k2/core/rescan.hpp"
 #include "k2/core/survey.hpp"
 #include "k2/fastcharge/fctrig.hpp"
@@ -1261,6 +1262,7 @@ bool Ui::run_action(Action a, uint32_t now_ms, bool confirm) {
             const rescan::Result res = reading ? rescan::Result::Busy : rescan::request();
             const bool busy = res == rescan::Result::Busy;
             if (!reading) survey::on_refresh(res, false);   // ports_busy() was refused above: no charger test
+            if (!reading) offers::on_refresh(res);          // Refresh is the read: the automatic one does not follow it
             if (menu() == Menu::Connection) top_as<ConnectionPage>().update(now_ms);
             if (busy) return false;
         }

@@ -217,7 +217,8 @@ static void test_pd_tabs_text() {
         check_text(ui, 8, 2, 204, 30, kMid, "NO CABLE READ", kInk2, kBg);
         parity(ui, 1700);
     }
-    CHECK_EQ(g_stub.requests + g_stub.scans + g_stub.rescans, 0);
+    CHECK_EQ(g_stub.requests + g_stub.rescans, 0);
+    CHECK_EQ(g_stub.scans <= 1, true);   // the Cable tab's own e-marker read, once
 }
 
 // A charger with more fixed voltages than fit one line (22 cells): the line breaks at the 19-cell limit and

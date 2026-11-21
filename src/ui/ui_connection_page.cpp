@@ -8,8 +8,10 @@
 // Passive: it only reads what the PD engine and the ADC already know. The topology word in the status bar
 // and the port-aware empty states come from raguard::classify over the CC levels the ADC already averages;
 // reading them never starts an active CC operation. Active work (Refresh, Read cable, Identify) happens only
-// from the pop-up, through Ui::run_action and its inline confirm.
+// from the pop-up, through Ui::run_action and its inline confirm. The one exception is opening a tab: the Cable
+// tab reads the cable and the Charger tab reads the offers once (auto_reads), never while a device is inline.
 #include "k2/core/log.hpp"
+#include "k2/core/offers_read.hpp"
 #include "k2/core/survey.hpp"
 #include "k2/pd/cable_full.hpp"
 #include "k2/pd/emk_variant.hpp"
@@ -74,7 +76,7 @@ const OfferBook &sync_book(const pd::Link &link) {
     was_fake = pd::is_fake();
     was_session = session;
     if (attached && link.waiting()) g_book.clear();   // the new source has not sent caps yet
-    else g_book.merge(pd::active_caps());
+    else g_book.merge(offers::shown_caps());   // the live caps, else the offers read's snapshot (the port was given back)
     return g_book;
 }
 
@@ -109,6 +111,7 @@ void ConnectionPage::enter() {
     op_ = StrBuf<24>();
     op_until_ = 0;
     em_read_pending_ = false;
+    refusal_ = nullptr;
     id_asked_ = false;
     iq_asked_ = false;
     iq_armed_until_ = 0;
@@ -205,7 +208,7 @@ void ConnectionPage::invalidate() {
 }
 
 Strip ConnectionPage::labels() const {
-    const bool share = (tab_ == conn::Tab::Source && pd::active_caps().valid) || (tab_ == conn::Tab::Cable && fusb302::emarker().valid);
+    const bool share = (tab_ == conn::Tab::Source && offers::shown_caps().valid) || (tab_ == conn::Tab::Cable && fusb302::emarker().valid);
     const sl::Id back = (iq_asked_ && fusb302::interrogate_running()) ? sl::Stop : sl::Back;
     if (has_pages() && !act_page_) {
         return {{back, sl::Up, share ? sl::ActionsShare : sl::Actions, sl::Dn}};
@@ -318,7 +321,7 @@ void ConnectionPage::set_op(const char *text, uint32_t now_ms, uint32_t ms) {
 }
 
 void ConnectionPage::share_caps(uint32_t now_ms) {
-    const pd::SourceCaps &caps = pd::active_caps();
+    const pd::SourceCaps &caps = offers::shown_caps();
     if (!caps.valid) { set_op("No caps yet", now_ms); return; }
     const std::size_t len = qrshare::records::pdcaps(caps, ctx_.ui->share_buffer());
     ctx_.ui->open_share(qrshare::Type::PdCaps, qrshare::kSchemaPdCaps, "Source caps", len, now_ms);
@@ -341,7 +344,7 @@ void ConnectionPage::build_items() {
     // A device alone on the K2 (a dual-role phone): offer the active Identify there too (the driver presents Rd)
     a.alone = pd::identify_alone(a.inline_sink, ctx_.pm_online, ctx_.pm_online ? ctx_.vbus_fast_mv : -1,
                                  fusb302::caps_this_attach(), link.wait_kind());
-    a.caps_valid = pd::active_caps().valid;
+    a.caps_valid = offers::shown_caps().valid;
     a.cable_valid = fusb302::emarker().valid;
     // The no-PD gate (ROADMAP 2026-11-10, Row C): with the settled verdict "no PD" a device on the line
     // cannot be identified. The alone path (a dual-role phone) is PD-capable and stays offered.
@@ -361,6 +364,61 @@ void ConnectionPage::build_items() {
     }
 }
 
+// Inline the Vconn read is refused by the driver (an inline K2 never transmits); the sniff method stays available and
+// touches nothing.
+void ConnectionPage::read_cable(uint32_t now_ms) {
+    em_read_pending_ = false;
+    const bool ran = ctx_.ui->run_action(Action::EmarkerScan, now_ms);
+    if (ran && ctx_.em_found) {
+        if (act_page_ && has_pages()) exit_actions();
+    } else if (ran && ctx_.em_listen_until != 0) {
+        em_read_pending_ = true;
+        set_op("Listening...", now_ms);
+    } else {
+        set_op("Failed to read", now_ms);
+    }
+}
+
+// A refusal is a state, not an event: its reason stays in the status bar (under any action message) while it holds.
+// The status text is what tests read; the user sees the toast, shown once when the refusal begins (the tab body says it too).
+void ConnectionPage::note_refusal(const char *text, uint32_t now_ms) {
+    if (text && (!refusal_ || std::string_view(text) != refusal_)) ctx_.toast.show(FooterTone::Caution, text, now_ms, kToastDefaultMs);
+    refusal_ = text;
+}
+
+// Opening a tab reads what it shows, once: the Cable tab the e-marker, the Charger tab the offers (the main loop runs that read,
+// offers::poll; the page only keeps it wanted). Nothing here ever reaches a live line: with a device inline (the latch) no read
+// of any kind starts and the reason is shown instead. A read already held is not repeated; Read again / Read e-marker force.
+void ConnectionPage::auto_reads(uint32_t now_ms) {
+    const pd::Link &link = ctx_.ui->link();
+    const bool inl = link.inline_mode() || ctx_.inline_mode;
+    if (tab_ == conn::Tab::Source) {
+        offers::want(now_ms);
+        const pd::OrWhy w = offers::why();
+        note_refusal(w == pd::OrWhy::Inline ? conn::kWhyInline : w == pd::OrWhy::Busy ? conn::kWhyBusy : nullptr, now_ms);
+        return;
+    }
+    if (tab_ != conn::Tab::Cable) return;
+    // Nothing on the lines, or a charger straight on the top plug: no cable between to read, and a scan would drive the lines for nothing.
+    if (facts_.topo == raguard::Topology::DirectReceptacle || facts_.topo == raguard::Topology::NoSource) return;
+    const uint32_t key = conn::cable_auto_key(fusb302::cable_seq(), fusb302::session(), link.cable_stale());
+    const bool held = fusb302::emarker().valid && !link.cable_stale();
+    if (held) {
+        ctx_.keep.cable_auto_key = key;
+        ctx_.keep.cable_auto_set = true;
+        note_refusal(nullptr, now_ms);
+        return;
+    }
+    if (ctx_.keep.cable_auto_set && ctx_.keep.cable_auto_key == key) { note_refusal(nullptr, now_ms); return; }
+    if (inl) { note_refusal(conn::kWhyInline, now_ms); return; }
+    if (ctx_.ui->ports_busy()) { note_refusal(conn::kWhyBusy, now_ms); return; }
+    note_refusal(nullptr, now_ms);
+    if (ctx_.em_scanning || ctx_.em_listen_until != 0 || offers::running() || survey::running() || fusb302::interrogate_running()) return;   // later
+    ctx_.keep.cable_auto_key = key;   // before the read: it repaints this page, which must not start it again
+    ctx_.keep.cable_auto_set = true;
+    read_cable(now_ms);
+}
+
 void ConnectionPage::activate(const conn::Item &it, uint32_t now_ms) {
     if (!it.enabled) return;   // the status bar names the reason while the greyed item is selected
     switch (it.act) {
@@ -375,21 +433,9 @@ void ConnectionPage::activate(const conn::Item &it, uint32_t now_ms) {
     case conn::Act::ShareCaps:
         share_caps(now_ms);
         return;
-    case conn::Act::ReadCable: {
-        // Inline the Vconn read is refused by the driver (an inline K2 never transmits); the sniff
-        // method stays available and touches nothing.
-        em_read_pending_ = false;
-        const bool ran = ctx_.ui->run_action(Action::EmarkerScan, now_ms);
-        if (ran && ctx_.em_found) {
-            if (act_page_ && has_pages()) exit_actions();
-        } else if (ran && ctx_.em_listen_until != 0) {
-            em_read_pending_ = true;
-            set_op("Listening...", now_ms);
-        } else {
-            set_op("Failed to read", now_ms);
-        }
+    case conn::Act::ReadCable:
+        read_cable(now_ms);
         break;
-    }
     case conn::Act::SaveCable: {
         const emlib::Result r = storage::lib_save_current();
         set_op(r.err == emlib::Err::Ok ? (r.existed ? "Already saved" : "Cable saved")
@@ -499,6 +545,9 @@ void ConnectionPage::sense(uint32_t now_ms) {
         guard_primed_ = true;
     }
     conn::sense_passive(facts_, ctx_, link, guard_);
+    // The offers read gave the port back (or is still on it): the charger is still there, so the tab shows what was read, not the
+    // empty "Charger waiting" band.
+    if (tab_ == conn::Tab::Source && !facts_.charger && !facts_.inline_sink && (offers::running() || offers::showing_held())) facts_.charger = true;
     // The one "PD present" verdict of this attach, cached for build_items / paint_body / the tests.
     verdict_ = link.pd_verdict();
     none_why_ = link.pd_none_why();
@@ -705,6 +754,17 @@ void range_row(Rows &R, const char *key, const pd::Pdo &p) {
     put_a(v, p.max_ma);
 }
 
+void put_sink_pdos(Rows &R, const char *key, std::span<const uint32_t> sink);
+
+// The EPR row sits with the offers when the source says it has EPR PDOs and the list is read or being read; the Details rows
+// then leave theirs out. The EPR positions (8 on) when the list has them, else what it lists.
+bool epr_in_offers(const pd::SourceCaps &caps) { return caps.epr && (!offers::epr_raw().empty() || offers::running()); }
+void epr_offer_row(Rows &R) {
+    const std::span<const uint32_t> e = offers::epr_raw();
+    if (e.empty()) R.add("EPR", kFaint).put("Reading...");
+    else put_sink_pdos(R, "EPR", e.size() > 7 ? e.subspan(7) : e);
+}
+
 // Only one tab builder runs per paint, but inlined all three their locals add up in paint_body()'s frame,
 // which already holds the Rows (stack budget, tools/stack_depth.py).
 [[gnu::noinline]] void source_rows(Rows &R, const TabData &d) {
@@ -732,15 +792,16 @@ void range_row(Rows &R, const char *key, const pd::Pdo &p) {
             if (p.type != pd::PdoType::Pps && p.type != pd::PdoType::Avs) continue;
             range_row(R, p.type == pd::PdoType::Pps ? "PPS" : "AVS", p);
         }
+        if (epr_in_offers(caps)) epr_offer_row(R);
         if (r.request_seen) put_request(R.add("Used", kOk), r, caps);
     } else if (!traffic && (r.typec_ma || r.typec_rp)) {
         // A Type-C Rp advertisement exists (the source is attached): show it with the measured VBUS
         // and the advertised current, a default-USB Rp included.
-        pdv.put(d.in_use ? "None, in use" : "None");
+        pdv.put(offers::running() ? "Reading..." : d.in_use ? "None, in use" : "None");
         StrBuf<28> &v = R.add("Type-C", kText);
         typec_row_text(d.vbus_mv, r.typec_ma, v);
     } else {
-        pdv.put(traffic ? "Active, no caps" : d.in_use ? "None, in use" : "No caps yet");
+        pdv.put(offers::running() ? "Reading..." : traffic ? "Active, no caps" : d.in_use ? "None, in use" : "No caps yet");
     }
     if (!r.caps_seen && legacy_row_protocol(d.fc)) {   // legacy fast-charge protocols the K2 detected
         StrBuf<6> fcn;
@@ -1228,7 +1289,7 @@ void word_row(Rows &R, const char *key, pd::SvField f) {
 // the survey says (a sniffed one counts); a field without one says its status. Values are built to fit the 19 cells: the
 // external name is copied up to them, lists keep whole entries.
 [[gnu::noinline]] void details_rows(Rows &R) {
-    const pd::SourceCaps &caps = pd::active_caps();
+    const pd::SourceCaps &caps = offers::shown_caps();
     if (caps.valid) {
         StrBuf<28> &v = R.add("Caps", kText);
         v.put_u32(caps.num_pdos).put(caps.num_pdos == 1 ? " PDO" : " PDOs");
@@ -1263,14 +1324,10 @@ void word_row(Rows &R, const char *key, pd::SvField f) {
         v.put_hex(vdm.modes_svid, 4).put(": ").put_u32(vdm.num_modes).put(vdm.num_modes == 1 ? " mode" : " modes");
     } else word_row(R, "Modes", pd::SvField::Modes);
 
-    const pd::SourceCaps &epr = fusb302::epr_info_list();
-    if (epr.valid && epr.num_pdos > 0) {   // the EPR positions (8 on) when the list has them, else what it lists
-        uint32_t raw[pd::kMaxPdos];
-        const std::size_t from = epr.num_pdos > 7 ? 7 : 0;
-        std::size_t n = 0;
-        for (std::size_t i = from; i < epr.num_pdos && i < pd::kMaxPdos; i++) raw[n++] = epr.pdos[i].raw;
-        put_sink_pdos(R, "EPR", std::span<const uint32_t>(raw, n));
-    } else word_row(R, "EPR", pd::SvField::EprList);
+    const std::span<const uint32_t> epr = offers::epr_raw();   // the live list, else the one the offers read kept
+    if (epr_in_offers(caps)) return;   // already shown with the offers
+    if (!epr.empty()) put_sink_pdos(R, "EPR", epr.size() > 7 ? epr.subspan(7) : epr);   // the EPR positions (8 on) when the list has them
+    else word_row(R, "EPR", pd::SvField::EprList);
 }
 
 // What the Details page and the status line read from the survey and the extended answers, hashed for the paint signatures.
@@ -1288,6 +1345,10 @@ uint32_t survey_sig(bool more) {
     const pd::SourceCaps &epr = fusb302::epr_info_list();
     h = mix_u32(h, uint32_t(epr.valid) | uint32_t(epr.num_pdos) << 8);
     for (std::size_t i = 0; i < epr.num_pdos && i < pd::kMaxPdos; i++) h = mix_u32(h, epr.pdos[i].raw);
+    // the automatic offers read: its progress, its held snapshot and the EPR list it kept
+    const pd::SourceCaps &held = offers::shown_caps();
+    h = mix_u32(h, uint32_t(offers::running()) | uint32_t(offers::showing_held()) << 1 | uint32_t(held.valid) << 2 | uint32_t(held.num_pdos) << 8);
+    h = pg::mix_u32s(h, offers::epr_raw().data(), offers::epr_raw().size());
     return h;
 }
 
@@ -1812,6 +1873,8 @@ void ConnectionPage::paint_status(uint32_t now_ms) {
         txt.put(p == pd::IqPhase::Reset1 || p == pd::IqPhase::Sniff1 ? "Resetting link..."
               : p == pd::IqPhase::Reset2 || p == pd::IqPhase::Sniff2 ? "Restoring link..."
                                                                      : "Asking device...");
+    } else if (tab_ == conn::Tab::Source && offers::running()) {
+        txt.put("Reading offers...");
     } else if (ctx_.em_scanning) {
         txt.put("Reading cable...");
     } else if (before(now_ms, ctx_.em_listen_until)) {
@@ -1838,6 +1901,7 @@ void ConnectionPage::paint_status(uint32_t now_ms) {
             s.no_pd = no_pd_body();
             const bool op = before(now_ms, op_until_);
             if (op) s.op = op_.view();
+            else if (refusal_) s.op = refusal_;
             // The PD diagnosis verdict, only while its session is open: a finished one would contradict the tab's live state.
             char dv[pd::diag::screen::kVerdictChars + 8];
             const pd::diag::Report &dr = pd::diag::live::report();
@@ -1915,6 +1979,7 @@ void ConnectionPage::update(uint32_t now_ms) {
                         : iq.ok_mask != 0 ? "Device read" : "No answer";
         set_op(msg, now_ms, 4000);
     }
+    auto_reads(now_ms);
     build_items();   // the action rows and the OK verb follow the live state
     if (em_read_pending_ && ctx_.em_listen_until == 0) {
         em_read_pending_ = false;

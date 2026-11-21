@@ -307,6 +307,15 @@ constexpr sl::Id act_slot(Act a, bool more, bool share) {
 }
 
 inline constexpr const char *kWhyLiveSink = "Live sink: unplug load";
+// An automatic read (opening the Cable or Charger tab) that was not started, in footer words (<= 24 cells).
+inline constexpr const char *kWhyInline = "Inline: listens only";
+inline constexpr const char *kWhyBusy = "Test running";
+
+// One automatic cable read per cable: the decoded data (cable_seq), the attach session and the swap flag name it, so a failed
+// read is not retried every pass and a new cable is.
+constexpr std::uint32_t cable_auto_key(std::uint32_t cable_seq, std::uint32_t session, bool stale) {
+    return cable_seq * 2654435761u ^ session ^ (stale ? 0x80000000u : 0u);
+}
 // The no-PD gate's own refusal word (fits the 24-cell pop-up "why"): the same sentence the tab shows.
 inline constexpr const char *kWhyNoPd = "No PD from this device";
 
