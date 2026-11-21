@@ -191,7 +191,7 @@ There is no permanent horizontal TopBar or Footer. Page names, wizard dots and l
 | 202 | right edge of right-aligned body text and note box | `kNoteMaxPx` = 174 from x28 |
 | 205..207 | scroll lane, 3 px | `ListView::kBarW` |
 
-Gaps: 8 px between a row text and its tail (`kTailGap`). 4 px before the second column.
+Gaps: 8 px between a row text and its tail (`kTailGap`; 6 px before a dim tail, so a 5-char second-column value fits beside a margin tail). 4 px before the second column.
 
 ### 2.4 Row heights
 
