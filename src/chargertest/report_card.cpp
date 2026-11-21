@@ -94,6 +94,7 @@ const char* group_why(unsigned group, const GroupResult& r) {
                 return pd::result_name(pd::SinkResult(r.detail));
         } else if (r.detail <= unsigned(fc::Fail::NoChange)) {
             if (r.detail == unsigned(fc::Fail::NoAnswer) && vooc_group(group)) return "no answer to either wake, unloaded";   // the card has the room
+            if (silent_skip(group, r)) return "no reply";   // skipped: the protocol was never offered, not a failure (a failed group keeps the engine's word)
             return fc::name(fc::Fail(r.detail));
         }
     }

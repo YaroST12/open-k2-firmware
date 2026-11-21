@@ -317,6 +317,22 @@ static void test_qc3plus_skip_reads_no_qc3plus() {
     CHECK_EQ(j.find("\"why\":\"no QC3+\"") != std::string::npos, true);
 }
 
+// A protocol that never answered is its own skipped line with the reason ("- AFC, VIVO: skipped, no reply"); a plain skip stays on the
+// bare "skipped" line, and the JSON group says "no reply".
+static void test_silent_protocols_read_skipped_no_reply() {
+    rc::Card c = sample();
+    c.group[unsigned(ct::Group::Vivo)] = {rc::GV::Skip, 0, uint8_t(k2::fc::Fail::NoResponse), uint8_t(ct::Reason::Request)};
+    c.group[unsigned(ct::Group::Afc)] = {rc::GV::Skip, 0, uint8_t(k2::fc::Fail::Unsupported), uint8_t(ct::Reason::Request)};
+    std::array<char, rc::kSummaryMax> sb;
+    const std::string t(sb.data(), rc::render_summary(c, std::span<char>(sb.data(), sb.size() - 1)));
+    CHECK_EQ(t.find("- AFC, VIVO: skipped, no reply\n") != std::string::npos, true);
+    CHECK_EQ(t.find("- QC2: skipped\n") != std::string::npos, true);
+    std::array<char, rc::kJsonMax> jb;
+    const std::string j(jb.data(), rc::render_json(c, jb));
+    CHECK_EQ(j.find("\"VIVO\":{\"verdict\":\"skip\"") != std::string::npos, true);
+    CHECK_EQ(j.find("\"why\":\"no reply\"") != std::string::npos, true);
+}
+
 // The Deep block rides as "deep": base64url of the blob (u16 bit count + bits), last key; a card without a block renders as before.
 static void test_deep_block_renders() {
     rc::Card c = sample();
@@ -381,6 +397,7 @@ int main() {
     test_level_renders();
     test_repeat_renders();
     test_qc3plus_skip_reads_no_qc3plus();
+    test_silent_protocols_read_skipped_no_reply();
     test_in_contract_handover_renders();
     test_probe_identity_fields_render();
     test_sample_matches_fixture();

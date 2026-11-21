@@ -1688,9 +1688,8 @@ void Runner::track_cut(const Input& in) {
 // progress or has come back since the row's request: the verdict is kept, the row goes back to Pending and waits in Releasing for
 // the output (cut_resolve decides). A Lost always waits: its fall may not have shown in VBUS yet.
 bool Runner::cut_hold(const Input& in, Verdict v, Reason r, uint8_t detail) {
-    // A silent VOOC family is a skip, but a port that cut its output mid-session explains the silence the same way a failure's does.
-    const bool silent_family = v == Verdict::Skip && r == Reason::Request && detail == uint8_t(fc::Fail::NoAnswer) && index_ < count_ &&
-                               steps_[index_].group >= Group::Vooc && steps_[index_].group <= Group::SuperVooc65;
+    // A silent family (VOOC no answer, a unit that never answered) is a skip, but a port that cut its output mid-session explains the silence the same way a failure's does.
+    const bool silent_family = v == Verdict::Skip && r == Reason::Request && index_ < count_ && no_reply(steps_[index_].group, fc::Fail(detail));
     if ((v != Verdict::Fail && !silent_family) || cut_wait_ || index_ >= count_ || mode_ != Mode::Legacy || pd_owned_ || steps_[index_].group == Group::Pd) return false;
     if (r != Reason::Lost && r != Reason::Timeout && r != Reason::Request && r != Reason::Voltage) return false;
     if (std::max(row_hi_, in.vbus_mv) > kCutNoAboveMv) return false;
@@ -3129,8 +3128,12 @@ void Runner::poll_impl(Input& in, const pd::SourceCaps& caps) {
             return;
         }
         const auto group = s.group;
-        // A VOOC family that never clocked after either wake is "no answer": a skip, since an unloaded adapter may stay silent.
-        const bool no_answer = group >= Group::Vooc && group <= Group::SuperVooc65 && in.fc_fail == fc::Fail::NoAnswer;
+        // A VOOC family that never clocked after either wake is "no answer": a skip, since an unloaded adapter may stay silent. So is a
+        // unit that never answered its detection step with nothing before it passed (the first step); a heard charger that fails later is a fail.
+        const bool unanswered = never_answered(group, in.fc_fail);
+        bool heard = false;
+        for (size_t n = 0; n < index_; ++n) heard |= steps_[n].group == group && steps_[n].verdict == Verdict::Pass;
+        const bool no_answer = silent_vooc(group, in.fc_fail) || (unanswered && !heard);
         finish(in, no_answer ? Verdict::Skip : Verdict::Fail, Reason::Request, group == Group::Pd ? static_cast<uint8_t>(in.pd.result) : static_cast<uint8_t>(in.fc_fail));
         if (cut_wait_ || race_wait_) return;   // held as a port cut's casualty or a raced start's first step: its retry decides, so the family is not judged "never answered" yet
         // AFC / FCP / SCP the charger never answered (pattern qc-only-unacked-rise): the protocol is not spoken, so none of its
@@ -3138,12 +3141,10 @@ void Runner::poll_impl(Input& in, const pd::SourceCaps& caps) {
         // A UFCS source that never answered the opening exchange is the same case (no response to its listen window), and so is a
         // VIVO charger that sent no frame in its entry window (the engine's NoResponse; a heard charger ends otherwise).
         // The VOOC family shares its first session's result in finish().
-        const bool never_answered = ((group == Group::Afc || group == Group::Fcp || group == Group::Scp) && in.fc_fail == fc::Fail::Unsupported) ||
-            ((group == Group::Ufcs || group == Group::Vivo) && in.fc_fail == fc::Fail::NoResponse);
         // SCP acked a raise's setpoints and VBUS stayed put (the engine's NoChange): the unit takes writes and ignores them, so its
         // other raise rows would only repeat the 12 s wait and the output reset after it. The 4.5 V and 5 V rows still run.
         const bool scp_ignores_raise = group == Group::Scp && in.fc_fail == fc::Fail::NoChange && s.mv > 5000;
-        if (never_answered || scp_ignores_raise) skip_group_rows(group, !never_answered, static_cast<uint8_t>(in.fc_fail));
+        if (unanswered || scp_ignores_raise) skip_group_rows(group, !unanswered, static_cast<uint8_t>(in.fc_fail));
         return;
     }
     const bool banded = band_ok(eff, in, gap);

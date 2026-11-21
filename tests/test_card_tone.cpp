@@ -194,7 +194,28 @@ static void test_a_silent_vooc_family_is_grey_not_a_fail() {
     CHECK_STR(rc::group_why(unsigned(G::SuperVooc), c.group[unsigned(G::SuperVooc)]), "no answer to either wake, unloaded");
 }
 
+// A protocol that never answered is a grey skip that says "no reply"; a group that failed keeps the engine's word.
+static void test_a_silent_protocol_is_grey_and_says_no_reply() {
+    rc::Card c;
+    using G = charger_test::Group;
+    const struct { G g; fc::Fail why; } silent[] = {{G::Vivo, fc::Fail::NoResponse}, {G::Ufcs, fc::Fail::NoResponse}, {G::Afc, fc::Fail::Unsupported},
+                                                      {G::Fcp, fc::Fail::Unsupported}, {G::Scp, fc::Fail::Unsupported}};
+    for (const auto& s : silent) {
+        c.group[unsigned(s.g)] = {rc::GV::Skip, 0, uint8_t(s.why), uint8_t(charger_test::Reason::Request)};
+        CHECK_EQ(int(tn::group(c, unsigned(s.g))), int(Tone::Skip));
+        CHECK_STR(rc::group_why(unsigned(s.g), c.group[unsigned(s.g)]), "no reply");
+        CHECK_EQ(rc::silent_skip(unsigned(s.g), c.group[unsigned(s.g)]), true);
+    }
+    CHECK_EQ(int(tn::counts(c).fail), 0);
+    rc::GroupResult failed{rc::GV::Fail, 5000, uint8_t(fc::Fail::NoResponse), uint8_t(charger_test::Reason::Request)};   // heard, then failed
+    CHECK_STR(rc::group_why(unsigned(G::Vivo), failed), "no response");
+    CHECK_EQ(rc::silent_skip(unsigned(G::Vivo), failed), false);
+    rc::GroupResult qc{rc::GV::Skip, 0, uint8_t(fc::Fail::NoHandshake), uint8_t(charger_test::Reason::Request)};
+    CHECK_EQ(rc::silent_skip(unsigned(G::Qc2), qc), false);
+}
+
 int main() {
+    test_a_silent_protocol_is_grey_and_says_no_reply();
     test_a_tracking_deviation_is_a_caution();
     test_a_fold_is_a_caution();
     test_fh22();

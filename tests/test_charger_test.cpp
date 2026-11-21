@@ -1929,13 +1929,12 @@ static void test_unsupported_protocol_skips_its_other_rows() {
             CHECK_EQ(s.verdict == ct::Verdict::Pass, false);
             CHECK_EQ(s.reason, ct::Reason::Request);
             CHECK_EQ(s.detail, static_cast<uint8_t>(fc::Fail::Unsupported));
-            CHECK_EQ(s.verdict == ct::Verdict::Fail || s.verdict == ct::Verdict::Skip, true);
+            CHECK_EQ(s.verdict, ct::Verdict::Skip);   // the first row too: a protocol the charger never spoke is not a failed one
+            CHECK_EQ(result_layout::is_no_answer(s), true);
         }
         CHECK_EQ(rows > 1, true);
         CHECK_EQ(f.fc_requests, 1);   // only the first row asked the engine
-        size_t failed = 0;
-        for (const auto& s : r.steps()) failed += s.algorithm == a && s.verdict == ct::Verdict::Fail;
-        CHECK_EQ(failed, 1u);
+        for (const auto& s : r.steps()) CHECK_EQ(s.algorithm == a && s.verdict == ct::Verdict::Fail, false);
         for (const auto& s : r.steps()) CHECK_EQ(s.algorithm == a && s.verdict == ct::Verdict::Pending, false);
     }
     // A charger that speaks the protocol still passes every row.
@@ -2356,7 +2355,8 @@ static void test_ceiling_vbus_that_never_returns_ends_the_run() {
     CHECK_EQ(r.steps()[0].verdict, ct::Verdict::Pass);
 }
 // A VIVO charger that never answered its first row (no frame in the entry window) speaks nothing the other levels could
-// prove: they are skipped with that reason and get no session, as AFC / FCP / SCP / UFCS do.
+// prove: they are skipped with that reason and get no session, as AFC / FCP / SCP / UFCS do. The mode was never offered, so
+// the first row is a skip too, never a fail (a Baseus 140 W has no VIVO and must not count one).
 static void test_vivo_no_response_skips_the_other_vivo_rows() {
     Fake f; f.caps = {};
     ct::Runner r(f);
@@ -2366,11 +2366,26 @@ static void test_vivo_no_response_skips_the_other_vivo_rows() {
     CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 120000), true);
     CHECK_EQ(f.fc_requests, 1);
     CHECK_EQ(r.steps().size(), 4);
-    CHECK_EQ(r.steps()[0].verdict, ct::Verdict::Fail);
-    for (size_t i = 1; i < r.steps().size(); ++i) {
+    for (size_t i = 0; i < r.steps().size(); ++i) {
         CHECK_EQ(r.steps()[i].verdict, ct::Verdict::Skip); CHECK_EQ(r.steps()[i].reason, ct::Reason::Request);
         CHECK_EQ(int(r.steps()[i].detail), int(fc::Fail::NoResponse));
+        CHECK_EQ(result_layout::is_no_answer(r.steps()[i]), true);
     }
+}
+// A VIVO charger that answered its 5 V row and then went silent at the next level did offer the mode: that row stays a real
+// fail (and the levels after it are skipped), only a first row that never heard the charger is "no reply".
+static void test_vivo_that_answered_then_fails_stays_a_fail() {
+    Fake f; f.caps = {};
+    ct::Runner r(f);
+    r.start(f.caps, {.selected = ct::bit(A::Vivo)}, f.in, true);
+    CHECK_EQ(run_until(f, r, [&] { return r.steps()[0].verdict == ct::Verdict::Pass && f.fc_requests >= 2; }, 60000), true);
+    f.in.fc_state = fc::State::Failed; f.in.fc_fail = fc::Fail::NoResponse; f.in.vbus_mv = 5000;
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 120000), true);
+    CHECK_EQ(r.steps()[0].verdict, ct::Verdict::Pass);
+    CHECK_EQ(r.steps()[1].verdict, ct::Verdict::Fail); CHECK_EQ(r.steps()[1].reason, ct::Reason::Request);
+    CHECK_EQ(int(r.steps()[1].detail), int(fc::Fail::NoResponse));
+    CHECK_EQ(result_layout::is_no_answer(r.steps()[1]), false);
+    for (size_t i = 2; i < r.steps().size(); ++i) CHECK_EQ(r.steps()[i].verdict, ct::Verdict::Skip);
 }
 // Baseus 35 W: after a PPS 3.3 V request the unloaded output stops at 3.73 V (13 % over). The step is the source's
 // best, so it passes; a source stuck at 4.5 V does not.
@@ -6109,7 +6124,7 @@ static void test_silent_ufcs_source_reports_no_response_not_pd_active() {
     CHECK_EQ(int(r.steps()[0].verdict), int(ct::Verdict::Running));   // the PD frames alone end nothing
     f.in.fc_state = fc::State::Failed; f.in.fc_fail = fc::Fail::NoResponse; f.in.fc_tries = 5; f.in.vbus_mv = 5000;
     f.tick(r, 1100);
-    CHECK_EQ(int(r.steps()[0].verdict), int(ct::Verdict::Fail));
+    CHECK_EQ(int(r.steps()[0].verdict), int(ct::Verdict::Skip));   // a source that never answered UFCS did not offer it: no fail
     CHECK_EQ(int(r.steps()[0].reason), int(ct::Reason::Request));
     CHECK_EQ(int(r.steps()[0].detail), int(fc::Fail::NoResponse));
     for (const auto& s : r.steps()) CHECK_EQ(int(s.reason), int(s.reason == ct::Reason::PdActive ? ct::Reason::None : s.reason));
@@ -9284,7 +9299,7 @@ int main() {
     test_a_cut_short_list_without_a_xiaomi_chain_is_still_offers_changed();
     test_an_unsolicited_list_change_during_a_normal_row_replans_per_row();
     test_plan_and_run(); test_an_auto_hold_counts_as_released(); test_quiet_is_exactly_the_row_in_flight(); test_paint_blocked_needs_flight_and_an_engine_window(); test_refusals(); test_hold_keeps_the_baseline_until_released(); test_safe5_baseline();test_cancel_and_failed_release(); test_release_waits_for_the_sink_verification_and_its_hard_reset();
-    test_faults(); test_loop_lock_refuses_and_aborts(); test_timeouts_and_skips(); test_one_second_holds(); test_qc2_settles_within_two_percent(); test_qc2_5v_accepts_vsafe5_reading(); test_legacy_5v_accepts_vsafe5_reading(); test_qc3_rows_use_an_asymmetric_band(); test_legacy_rows_use_a_five_percent_band(); test_legacy_5v_row_uses_the_vsafe5_window(); test_scp_4v5_row_judges_the_adapter_readback(); test_qc3plus_without_response_is_a_distinct_skip(); test_unsupported_protocol_skips_its_other_rows(); test_silent_source_fails_every_handshake_row(); test_answered_handshake_passes_the_5v_row(); test_svooc_row_follows_the_adapter_ramp(); test_svooc_detected_is_a_pass(); test_vooc_family_shares_one_session(); test_ceiling_off_runs_no_stage(); test_ceiling_is_deep_only_and_the_ident_is_kept(); test_ceiling_judged_ladder_is_the_result(); test_ceiling_refusal_is_recorded_and_the_run_goes_on(); test_ceiling_no_adapter_and_early_abort(); test_ceiling_cap_stops_a_session_that_is_never_judged(); test_ceiling_cancel_stops_the_trigger(); test_ceiling_needs_a_detected_svooc_family(); test_ceiling_waits_for_the_lines_after_the_family_release(); test_ceiling_lines_never_free_is_a_recorded_refusal(); test_ceiling_usb_a_mode_is_the_plain_on(); test_ceiling_quiet_adapter_is_stopped_at(); test_ceiling_runner_guard_names_its_cause(); test_ceiling_vbus_lost_after_the_stage_is_recovered_by_an_rd_cycle(); test_ceiling_vbus_that_never_returns_ends_the_run(); test_ceiling_adapter_ramp_is_part_of_the_stage(); test_ceiling_vbus_stuck_high_after_the_stage_is_unsafe(); test_vivo_no_response_skips_the_other_vivo_rows(); test_pps_min_step_accepts_unloaded_floor(); test_pps_up_step_uses_the_tight_band();
+    test_faults(); test_loop_lock_refuses_and_aborts(); test_timeouts_and_skips(); test_one_second_holds(); test_qc2_settles_within_two_percent(); test_qc2_5v_accepts_vsafe5_reading(); test_legacy_5v_accepts_vsafe5_reading(); test_qc3_rows_use_an_asymmetric_band(); test_legacy_rows_use_a_five_percent_band(); test_legacy_5v_row_uses_the_vsafe5_window(); test_scp_4v5_row_judges_the_adapter_readback(); test_qc3plus_without_response_is_a_distinct_skip(); test_unsupported_protocol_skips_its_other_rows(); test_silent_source_fails_every_handshake_row(); test_answered_handshake_passes_the_5v_row(); test_svooc_row_follows_the_adapter_ramp(); test_svooc_detected_is_a_pass(); test_vooc_family_shares_one_session(); test_ceiling_off_runs_no_stage(); test_ceiling_is_deep_only_and_the_ident_is_kept(); test_ceiling_judged_ladder_is_the_result(); test_ceiling_refusal_is_recorded_and_the_run_goes_on(); test_ceiling_no_adapter_and_early_abort(); test_ceiling_cap_stops_a_session_that_is_never_judged(); test_ceiling_cancel_stops_the_trigger(); test_ceiling_needs_a_detected_svooc_family(); test_ceiling_waits_for_the_lines_after_the_family_release(); test_ceiling_lines_never_free_is_a_recorded_refusal(); test_ceiling_usb_a_mode_is_the_plain_on(); test_ceiling_quiet_adapter_is_stopped_at(); test_ceiling_runner_guard_names_its_cause(); test_ceiling_vbus_lost_after_the_stage_is_recovered_by_an_rd_cycle(); test_ceiling_vbus_that_never_returns_ends_the_run(); test_ceiling_adapter_ramp_is_part_of_the_stage(); test_ceiling_vbus_stuck_high_after_the_stage_is_unsafe(); test_vivo_no_response_skips_the_other_vivo_rows(); test_vivo_that_answered_then_fails_stays_a_fail(); test_pps_min_step_accepts_unloaded_floor(); test_pps_up_step_uses_the_tight_band();
     test_missing_samples_and_wrap();
     test_fixed_band_judges_a_burst_mode_ripple_on_its_mean(); test_fixed_band_still_fails_a_steady_low_or_high_level(); test_fixed_band_keeps_the_per_sample_overvoltage_guards();
     test_pps_renewal();

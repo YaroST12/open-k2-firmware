@@ -17,10 +17,9 @@ namespace ct = charger_test;
 bool noted(const ct::Step& s) {
     return s.verdict == ct::Verdict::Skip && (s.reason == ct::Reason::Advertised || s.reason == ct::Reason::LightLevel);
 }
-// A VOOC family row skipped because no wake clocked an opener (the row carries fc::Fail::NoAnswer): it reads as "No reply".
+// A row skipped because its unit never answered (VOOC no opener after either wake, a protocol that sent no frame): "No reply".
 bool is_no_answer(const ct::Step& x) {
-    return x.verdict == ct::Verdict::Skip && x.reason == ct::Reason::Request && x.detail == uint8_t(fc::Fail::NoAnswer) &&
-           x.group >= ct::Group::Vooc && x.group <= ct::Group::SuperVooc65;
+    return x.verdict == ct::Verdict::Skip && x.reason == ct::Reason::Request && ct::no_reply(x.group, fc::Fail(x.detail));
 }
 bool advertised(const ct::Step& s) { return s.verdict == ct::Verdict::Skip && s.reason == ct::Reason::Advertised && s.group == ct::Group::Pd; }
 bool caution(const ct::Step& s) {

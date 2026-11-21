@@ -192,12 +192,12 @@ std::size_t render_summary(const Card& c, std::span<char> out) {
         t.put("%u.%u s\n", unsigned(c.handover_ds) / 10, unsigned(c.handover_ds) % 10);
     }
     t.put("\n");
-    bool any_skip = false;
+    bool any_skip = false, any_silent = false;
     for (unsigned g = 0; g < kGroups; ++g) {
         const GroupResult& r = c.group[g];
         if (folded(c, g)) continue;   // the VOOC family is one line, its lead's (group_word)
         if (r.verdict == GV::Skip && r.reason == uint8_t(ct::Reason::NoQc3Plus)) { t.put("- %s: no QC3+\n", group_word(g)); continue; }   // not folded into "skipped"
-        if (r.verdict == GV::Skip) { any_skip = true; continue; }
+        if (r.verdict == GV::Skip) { (silent_skip(g, r) ? any_silent : any_skip) = true; continue; }
         if (r.verdict != GV::Pass && r.verdict != GV::Fail) continue;
         t.put("- %s: ", group_word(g));
         const bool handshake = r.max_mv && r.max_mv <= kHandshakeMv;
@@ -221,15 +221,17 @@ std::size_t render_summary(const Card& c, std::span<char> out) {
         }
         t.put("\n");
     }
-    if (any_skip) {
+    for (const bool silent : {false, true}) {   // two lines: the skipped groups, then the ones that never answered
+        if (!(silent ? any_silent : any_skip)) continue;
         t.put("- ");
         bool first = true;
         for (unsigned g = 0; g < kGroups; ++g) {
-            if (c.group[g].verdict != GV::Skip || c.group[g].reason == uint8_t(ct::Reason::NoQc3Plus) || folded(c, g)) continue;
+            const GroupResult& r = c.group[g];
+            if (r.verdict != GV::Skip || r.reason == uint8_t(ct::Reason::NoQc3Plus) || folded(c, g) || silent_skip(g, r) != silent) continue;
             t.put("%s%s", first ? "" : ", ", group_word(g));
             first = false;
         }
-        t.put(": skipped\n");
+        t.put(silent ? ": skipped, no reply\n" : ": skipped\n");
     }
     for (unsigned i = 0; i < c.n_ranges && i < kMaxRanges; ++i) {
         const Range& r = c.range[i];

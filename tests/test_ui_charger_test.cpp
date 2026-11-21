@@ -5964,6 +5964,45 @@ static void test_vooc_family_silent_reads_no_answer() {
         std::snprintf(name, sizeof name, "vooc_silent_rot%u_detail", unsigned(rot)); dump_panel(name);
     }
 }
+// A charger with no vivo protocol: the 5 V request gets no frame (NoResponse). Every VIVO row is a skip ("no reply"), not a fail; the
+// grid folds it into "No reply" and the Detail footer reads the engine's words. The renders cover all four rotations.
+static void vivo_silent(int proto) { g_stub.fc_status_fail = proto == int(k2::fc::Proto::Vivo) ? int(k2::fc::Fail::NoResponse) : 0; g_stub.fc_status_ident = 0; }
+static void test_silent_vivo_reads_no_reply_not_a_fail() {
+    for (uint8_t rot = 0; rot < 4; ++rot) {
+        Ui ui;
+        six_pdo_fixture();
+        constexpr uint8_t kUnits[] = {uint8_t(ct::Unit::Vivo), uint8_t(ct::Unit::Pd)};
+        open(ui); ui.set_rotation(rot, 1050); settle(ui, 1050);
+        CHECK_EQ(ui.charger_test_set_units(kUnits), true);
+        CHECK_EQ(ui.charger_test_set_level(uint8_t(ct::Level::Medium)), true);
+        review(ui);
+        start_press(ui, 1300); press(ui, Button::Ok, 1400);
+        g_stub.fc_start_hook = vivo_silent;
+        uint32_t t = 1500;
+        for (; t <= 900000 && ui.charger_test_busy(); t += 100) ui.tick(t);
+        g_stub.fc_start_hook = nullptr;
+        g_stub.fc_status_fail = g_stub.fc_status_ident = 0;
+        CHECK_EQ(ui.charger_test_stage(), 6);
+        ui.tick(t); t += 200; ui.tick(t); t += 200;
+        settle(ui, t);
+        unsigned vivo = 0;
+        for (const auto& s : ui.charger_test_results().steps()) {
+            if (s.algorithm != A::Vivo) continue;
+            ++vivo;
+            CHECK_EQ(s.verdict == ct::Verdict::Skip, true);
+            CHECK_EQ(s.detail, uint8_t(k2::fc::Fail::NoResponse));
+            CHECK_EQ(result_layout::is_no_answer(s), true);
+        }
+        CHECK_EQ(vivo >= 2, true);
+        char name[64];
+        std::snprintf(name, sizeof name, "vivo_none_rot%u", unsigned(rot)); dump_panel(name);
+        for (int k = 0; k < 3; ++k) { press(ui, Button::Plus, t); settle(ui, t); t += 200; }
+        std::snprintf(name, sizeof name, "vivo_none_rot%u_row2", unsigned(rot)); dump_panel(name);
+        press(ui, Button::Ok, t); ui.tick(t); settle(ui, t); t += 200;
+        press(ui, Button::Ok, t); ui.tick(t); settle(ui, t); t += 200;
+        std::snprintf(name, sizeof name, "vivo_none_rot%u_detail", unsigned(rot)); dump_panel(name);
+    }
+}
 static void test_vooc_family_results_read_watts_levels() {
     struct Scene { const char* name; ct::Level level; uint16_t ceiling; int32_t vmax_mv; };
     // deep69: the ladder stood at 6.3 A under 11.0 V (69 W): 50 and 65 W claimed, 100 and 120 W not reached
@@ -6272,6 +6311,7 @@ int main() {
     test_remote_start_is_the_devices_start();
     test_vooc_family_results_read_watts_levels();
     test_vooc_family_silent_reads_no_answer();
+    test_silent_vivo_reads_no_reply_not_a_fail();
     test_xiaomi_unit_scenes();
     return test_report("test_ui_charger_test");
 }

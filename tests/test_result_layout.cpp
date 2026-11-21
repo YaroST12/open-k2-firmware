@@ -1880,6 +1880,40 @@ static void test_a_silent_vooc_family_folds_as_one_word() {
         CHECK_STR(rt.toks[0].text, "VOOC");
     }
 }
+// A protocol that never answered its first request (VIVO / UFCS no response, AFC / FCP / SCP unsupported) was not offered: its rows are
+// skipped, not failed, and fold as "No reply". A charger that answered and then failed a later step keeps its red cells.
+static void test_a_silent_protocol_folds_as_no_reply_and_a_heard_one_stays_red() {
+    std::vector<ct::Step> s;
+    auto add = [&](A a, unsigned mv, fc::Fail why) { auto x = step(a, mv, V::Skip, 0, 0, ct::Reason::Request); x.detail = uint8_t(why); s.push_back(x); };
+    for (unsigned mv : {5000u, 9000u, 11000u, 5000u}) add(A::Vivo, mv, fc::Fail::NoResponse);
+    add(A::Ufcs, 5000, fc::Fail::NoResponse);
+    for (A a : {A::Afc, A::Fcp, A::Scp}) add(a, 5000, fc::Fail::Unsupported);
+    for (const auto& x : s) CHECK_EQ(rl::is_no_answer(x), true);
+    rl::Layout l;
+    rl::build(l, s);
+    CHECK_EQ(find(l, "Skipped") == nullptr, true);
+    const std::string nr = chips(l, row_of(l, "No reply"));
+    for (const char* name : {"VIVO", "UFCS", "AFC", "FCP", "SCP"}) CHECK_EQ(nr.find(name) != std::string::npos, true);
+    {   // a plain skip (no engine word) and a fail are not "no reply"; nor is QC2's no handshake (a fail by design)
+        auto plain = s[0]; plain.detail = 0;
+        CHECK_EQ(rl::is_no_answer(plain), false);
+        auto fl = s[0]; fl.verdict = V::Fail;
+        CHECK_EQ(rl::is_no_answer(fl), false);
+        auto qc = step(A::Qc2, 5000, V::Skip, 0, 0, ct::Reason::Request); qc.detail = uint8_t(fc::Fail::NoHandshake);
+        CHECK_EQ(rl::is_no_answer(qc), false);
+    }
+    {   // answered at 5 V, then the 9 V request got no frame: a real fail, shown as the unit's own failed chip, never folded
+        std::vector<ct::Step> h = {step(A::Vivo, 5000, V::Pass), step(A::Vivo, 9000, V::Fail, 0, 0, ct::Reason::Request),
+                                   step(A::Vivo, 11000, V::Skip, 0, 0, ct::Reason::Request)};
+        h[1].detail = uint8_t(fc::Fail::NoResponse);
+        h[2].detail = uint8_t(fc::Fail::NoResponse);
+        CHECK_EQ(rl::is_no_answer(h[1]), false);
+        rl::Layout v;
+        rl::build(v, h);
+        CHECK_EQ(find(v, "No reply") == nullptr, true);
+        CHECK_EQ(find(v, "VIVO") != nullptr, true);
+    }
+}
 // SCP names the limit it writes: its chip reads the level's watts (10 V x 2.25 A = 22.5 W) where it used to read the current; the
 // handshake row names none and keeps its volts. The summary line words the best SCP level the same way.
 static void test_scp_chips_and_summary_read_watts() {
@@ -2013,6 +2047,7 @@ int main() {
     test_light_run_chips_read_noted();
     test_vooc_family_reads_as_watts_levels();
     test_a_silent_vooc_family_folds_as_one_word();
+    test_a_silent_protocol_folds_as_no_reply_and_a_heard_one_stays_red();
     test_scp_chips_and_summary_read_watts();
     test_levels_footer_names_the_top_claim();
     return test_report("test_result_layout");

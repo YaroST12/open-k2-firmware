@@ -257,6 +257,10 @@ constexpr unsigned vooc_lead(const Card& c) {
 }
 // A group the card's views skip: a VOOC-family group other than the lead.
 constexpr bool folded(const Card& c, unsigned g) { return vooc_group(g) && g != vooc_lead(c); }
+// A skipped group whose protocol never answered (VIVO, UFCS, AFC, FCP, SCP: not offered). The VOOC family has its own words.
+constexpr bool silent_skip(unsigned g, const GroupResult& r) {
+    return r.verdict == GV::Skip && !vooc_group(g) && g < kGroups && charger_test::never_answered(charger_test::Group(g), fc::Fail(r.detail));
+}
 // The group's name as a card view shows it: "VOOC" for the whole family, else the group's own name.
 inline const char* group_word(unsigned g) {
     return vooc_group(g) ? oem_watts::family_word(oem_watts::Family::Vooc) : charger_test::name(charger_test::Group(g));

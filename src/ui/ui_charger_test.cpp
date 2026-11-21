@@ -2292,7 +2292,7 @@ static FooterTone range_footer(StrBuf<32> &f, const ct::Runner &runner, A algo, 
                 // a caution says what folded, from the APDO's sweep: "folds to 19.4V above 19.9V"
                 if (put_fold_footer(f, s_.runner_.sweep_view().apdo(uint8_t(st.algorithm), st.pos))) return FooterTone::Caution;
             }
-            if (result_layout::is_no_answer(st)) { f.put(trig::fail_long(fc::Fail::NoAnswer)); return FooterTone::Info; }   // 27 cells: the card carries ", unloaded"
+            if (result_layout::is_no_answer(st)) { f.put(trig::fail_long(fc::Fail(st.detail))); return FooterTone::Info; }   // 27 cells: the card carries ", unloaded"
         }
         f.put("Kept until the next start");
         return FooterTone::Info;

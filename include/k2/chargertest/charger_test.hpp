@@ -22,6 +22,15 @@ enum class Algorithm : uint8_t {
     Pd2Fixed, Pd3Fixed, Epr, SprAvs, Pps, Qc2, Qc3, Qc3Plus, Afc, Fcp, Scp,
     Vooc, SuperVooc, SuperVooc65, Ufcs, Vivo, Pd30Revision, Pd31Revision, Pd32Revision, EprAvs, Qc2ClassB, Qc3ClassB, Count
 };
+// The engine's "protocol not spoken" failure of a unit's detection step: AFC / FCP / SCP Unsupported, UFCS / VIVO NoResponse (no frame in the
+// entry window). A unit that never answered was not offered: it is a skip ("no reply"), not a fail. QC2 / QC3 keep their NoHandshake fail.
+constexpr bool never_answered(Group g, fc::Fail f) {
+    return ((g == Group::Afc || g == Group::Fcp || g == Group::Scp) && f == fc::Fail::Unsupported) ||
+           ((g == Group::Ufcs || g == Group::Vivo) && f == fc::Fail::NoResponse);
+}
+// A VOOC family that clocked no opener after either wake (NoAnswer): a skip too, an unloaded adapter may stay silent.
+constexpr bool silent_vooc(Group g, fc::Fail f) { return g >= Group::Vooc && g <= Group::SuperVooc65 && f == fc::Fail::NoAnswer; }
+constexpr bool no_reply(Group g, fc::Fail f) { return never_answered(g, f) || silent_vooc(g, f); }
 static_assert(unsigned(Algorithm::Count) < 32);
 inline constexpr uint32_t kAllAlgorithms = (1u << unsigned(Algorithm::Count)) - 1;
 inline constexpr size_t kMaxSteps = pd::kMaxPdos * 6 + 46;   // 40 + the six default Class B rows (Qc2ClassB 1, Qc3ClassB 5); the journal's one-block section assert caps this
