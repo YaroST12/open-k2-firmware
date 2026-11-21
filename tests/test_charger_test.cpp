@@ -8884,6 +8884,105 @@ static void test_epr_spoof_identity_at_light_makes_no_requests() {
     CHECK_EQ(f.fc_requests, 0);
     for (const auto& c : f.choices) { CHECK_EQ(c.pos, 1); CHECK_EQ(c.mv, 5000); CHECK_EQ(c.hunt, false); }
 }
+// "Read offers" (Level::Offers): the PD unit only, every offer listed (Advertised), and ONE AVS Request at the APDO's minimum, 1 A at
+// most: the EPR AVS APDO once the run is in EPR, the SPR one when the entry is refused. No sweep, no step walk, no PdLow, no legacy unit.
+static unsigned offers_pass_rows(const ct::Runner& r, const A* alg_out, unsigned* pos_out, unsigned* mv_out, unsigned* ma_out) {
+    unsigned avs = 0;
+    for (const auto& s : r.steps()) {
+        CHECK_EQ(int(s.group), int(ct::Group::Pd));
+        CHECK_EQ(int(ct::unit_of(s)), int(ct::Unit::Pd));
+        CHECK_EQ(s.hunt || ct::is_step_walk(s) || ct::is_sweep(s), false);
+        CHECK_EQ(s.verdict == ct::Verdict::Pending || s.verdict == ct::Verdict::Running, false);
+        if (s.verdict == ct::Verdict::Pass && !s.avs) { CHECK_EQ(s.pos, 1); CHECK_EQ(s.mv, 5000); }
+        else if (s.verdict == ct::Verdict::Pass) { ++avs; *pos_out = s.pos; *mv_out = s.mv; *ma_out = s.ma; (void)alg_out; }
+        else { CHECK_EQ(int(s.verdict), int(ct::Verdict::Skip)); CHECK_EQ(s.pos == 1 && s.mv == 5000, false); }
+    }
+    return avs;
+}
+static unsigned requests_above_5v(const Fake& f, unsigned pos, unsigned mv) {
+    unsigned n = 0;
+    for (const auto& c : f.choices) { if (c.mv == 5000 || c.pos == 0) continue; ++n;   // pos 0 is the EPR entry / exit, not a level
+        CHECK_EQ(c.pos, int(pos)); CHECK_EQ(c.mv, int(mv)); CHECK_EQ(c.ma <= 1000, true); CHECK_EQ(c.hunt, false); }
+    return n;
+}
+static void test_offers_asks_one_epr_avs_level_in_epr() {
+    Fake f = epr_spoof_fake();
+    const auto& apdo = f.epr_caps.pdos[10];   // the EPR AVS APDO (position 11)
+    const unsigned lo = (apdo.min_mv + 99) / 100 * 100;
+    ct::Runner r(f);
+    CHECK_EQ(r.start(f.caps, ct::with_level({}, ct::Level::Offers), f.in, true), ct::Reason::None);
+    f.tick(r, 600000);
+    CHECK_EQ(int(r.state()), int(ct::State::Done));
+    unsigned pos = 0, mv = 0, ma = 0;
+    CHECK_EQ(offers_pass_rows(r, nullptr, &pos, &mv, &ma), 1u);
+    CHECK_EQ(pos, 11u); CHECK_EQ(mv, lo); CHECK_EQ(ma <= 1000 && ma > 0, true);
+    CHECK_EQ(requests_above_5v(f, 11, lo), 1u);
+    for (const auto& s : r.steps()) {   // the rest of the lists is named, never asked
+        if (s.verdict != ct::Verdict::Skip) continue;
+        CHECK_EQ(s.reason == ct::Reason::Advertised || s.reason == ct::Reason::OverCap, true);
+    }
+    CHECK_EQ(f.entry_times.size() >= 1, true);
+    CHECK_EQ(f.in.pd.epr_mode, false);   // left through the usual release
+}
+static void test_offers_asks_the_spr_avs_level_when_epr_is_refused() {
+    Fake f = epr_spoof_fake();
+    f.epr_refuse = true;
+    const auto& apdo = f.caps.pdos[1];
+    const unsigned lo = (apdo.min_mv + 99) / 100 * 100;
+    ct::Runner r(f);
+    CHECK_EQ(r.start(f.caps, ct::with_level({}, ct::Level::Offers), f.in, true), ct::Reason::None);
+    f.tick(r, 600000);
+    CHECK_EQ(int(r.state()), int(ct::State::Done));
+    unsigned pos = 0, mv = 0, ma = 0;
+    CHECK_EQ(offers_pass_rows(r, nullptr, &pos, &mv, &ma), 1u);
+    CHECK_EQ(pos, 2u); CHECK_EQ(mv, lo);
+    CHECK_EQ(requests_above_5v(f, 2, lo), 1u);
+    CHECK_EQ(f.in.pd.epr_mode, false);
+}
+static void test_offers_without_an_avs_offer_asks_nothing_above_5v() {
+    Fake f; f.caps = level_caps(); f.caps.num_pdos = 6; f.caps.pdos[6] = {};
+    ct::Runner r(f);
+    CHECK_EQ(r.start(f.caps, ct::with_level({}, ct::Level::Offers), f.in, true), ct::Reason::None);
+    f.tick(r, 600000);
+    CHECK_EQ(int(r.state()), int(ct::State::Done));
+    unsigned pos = 0, mv = 0, ma = 0, none = 0;
+    CHECK_EQ(offers_pass_rows(r, nullptr, &pos, &mv, &ma), 0u);
+    for (const auto& s : r.steps()) none += s.algorithm == A::SprAvs && s.verdict == ct::Verdict::Skip && s.reason == ct::Reason::NoOffer;
+    CHECK_EQ(none, 1u);   // a dim "not offered", never a fail
+    for (const auto& c : f.choices) CHECK_EQ(c.mv, 5000);
+    CHECK_EQ(f.entry_times.size(), size_t(0));
+}
+static void test_offers_never_asks_above_the_monitor_ceiling() {
+    Fake f = epr_spoof_fake();
+    f.in.cap_mv = 12000;   // the EPR AVS APDO starts at 15 V
+    ct::Runner r(f);
+    CHECK_EQ(r.start(f.caps, ct::with_level({}, ct::Level::Offers), f.in, true), ct::Reason::None);
+    f.tick(r, 600000);
+    CHECK_EQ(int(r.state()), int(ct::State::Done));
+    unsigned pos = 0, mv = 0, ma = 0, over = 0;
+    CHECK_EQ(offers_pass_rows(r, nullptr, &pos, &mv, &ma), 0u);
+    for (const auto& s : r.steps()) over += s.avs && s.reason == ct::Reason::OverCap;
+    CHECK_EQ(over >= 1u, true);
+    for (const auto& c : f.choices) CHECK_EQ(c.mv <= 12000, true);
+    CHECK_EQ(f.in.pd.epr_mode, false);
+}
+// A start that names other algorithms or switches (a remote start, a saved selection) still runs PD only: with_level and start() mask them.
+static void test_offers_masks_the_selection_to_pd() {
+    const auto o = ct::with_level({.selected = ct::kAllAlgorithms, .pps_sweep = true, .avs_sweep = true, .spec = true}, ct::Level::Offers);
+    CHECK_EQ(o.selected & ~ct::kOffersAlgorithms, 0u);
+    CHECK_EQ(o.pps_sweep || o.avs_sweep || o.spec, false);
+    CHECK_EQ(int(ct::with_level({.selected = ct::bit(A::Qc2)}, ct::Level::Offers).selected), int(ct::kOffersAlgorithms));   // nothing PD left: the whole preset
+    Fake f; f.caps = level_caps();
+    ct::Options wide; wide.selected = ct::kAllAlgorithms; wide.level = ct::Level::Offers; wide.pps_sweep = true;   // start() normalises it
+    ct::Runner r(f);
+    CHECK_EQ(r.start(f.caps, wide, f.in, true), ct::Reason::None);
+    f.tick(r, 600000);
+    CHECK_EQ(int(r.state()), int(ct::State::Done));
+    for (const auto& s : r.steps()) { CHECK_EQ(int(ct::unit_of(s)), int(ct::Unit::Pd)); CHECK_EQ(ct::is_sweep(s), false); }
+    { unsigned above = 0; for (const auto& c : f.choices) above += c.mv != 5000; CHECK_EQ(above <= 1u, true); }   // the AVS pick at most
+    CHECK_STR(ct::name(ct::Level::Offers), "Offers");
+    CHECK_EQ(int(ct::next_level(ct::Level::Deep)), int(ct::Level::Light));   // Offers never joins the Depth cycle
+}
 // ---- The PD spec stage (spec_section.hpp) of a Deep run ------------------------------------------------------------------
 // The pdspec engine runs the no-load conformance checks on the Pd unit's link, at the end of the Pd unit, once its contract is back
 // at 5 V and the charger's identity was asked. The Runner starts it through Env::spec_start, waits for Input::spec_running to drop,
@@ -9427,6 +9526,8 @@ int main() {
     test_level_maps_to_the_run_switches(); test_level_plans_per_level(); test_step_walk_is_planned_only_in_deep(); test_prog_check_flags_a_passing_programmable_row(); test_prog_check_clean_capture_changes_nothing();
     test_prog_check_without_a_capture_asks_nothing_more(); test_prog_check_follows_the_sweep_switches(); test_light_run_requests_nothing_but_5v(); test_light_lists_the_epr_levels_as_advertised();
     test_epr_spoof_identity_tests_epr_and_avs(); test_epr_capable_list_never_gives_epr_rows_not_offered(); test_epr_spoof_identity_at_light_makes_no_requests();
+    test_offers_asks_one_epr_avs_level_in_epr(); test_offers_asks_the_spr_avs_level_when_epr_is_refused(); test_offers_without_an_avs_offer_asks_nothing_above_5v();
+    test_offers_never_asks_above_the_monitor_ceiling(); test_offers_masks_the_selection_to_pd();
     test_a_resumed_light_run_stays_light();
     test_the_page_names_the_run_level();
     test_spec_stage_runs_once_in_a_deep_pd_unit(); test_spec_stage_is_deep_only(); test_spec_refusal_is_recorded_and_the_run_goes_on(); test_spec_cancel_ends_in_order();

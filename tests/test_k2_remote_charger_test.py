@@ -275,34 +275,28 @@ class ChargerTest(unittest.TestCase):
 
     def test_schema2_draft_bits_28_29_are_the_level(self):
         # remote_proto.hpp: draft_selected bits 28..29 = the level of the next run (charger_test::Level: 0 Medium, 1 Light,
-        # 2 Deep); 3 is no level and fails like any unknown bit
+        # 2 Deep, 3 Offers): the two bits name every level
         h = bytearray(HEADER2)
         draft = struct.unpack_from("<I", h, 19)[0]
         self.assertEqual(kr.decode_charger_test(HEADER2)["selection"]["level"], "medium")
-        for code, name in ((1, "light"), (2, "deep")):
+        for code, name in ((1, "light"), (2, "deep"), (3, "offers")):
             struct.pack_into("<I", h, 19, draft | (code << 28))
             r = kr.decode_charger_test(bytes(h))
             self.assertEqual(r["selection"]["level"], name)
             self.assertEqual(r["selection"]["configured_mask"], draft)
-        struct.pack_into("<I", h, 19, draft | (3 << 28))
-        with self.assertRaises(kr.FrameError):
-            kr.decode_charger_test(bytes(h))
 
     def test_schema2_run_bits_28_29_are_the_run_level(self):
         # remote_proto.hpp: run_selected bits 28..29 = the level the run in hand ran at (selection.run_level), apart from the
-        # draft's level; 3 is no level and fails
+        # draft's level
         h = bytearray(HEADER2)
         run = struct.unpack_from("<I", h, 15)[0]
         self.assertEqual(kr.decode_charger_test(HEADER2)["selection"]["run_level"], "medium")
-        for code, name in ((1, "light"), (2, "deep")):
+        for code, name in ((1, "light"), (2, "deep"), (3, "offers")):
             struct.pack_into("<I", h, 15, run | (code << 28))
             r = kr.decode_charger_test(bytes(h))
             self.assertEqual(r["selection"]["run_level"], name)
             self.assertEqual(r["selection"]["level"], "medium")
             self.assertEqual(r["selection"]["run_mask"], run)
-        struct.pack_into("<I", h, 15, run | (3 << 28))
-        with self.assertRaises(kr.FrameError):
-            kr.decode_charger_test(bytes(h))
 
     def test_schema2_draft_bit30_is_the_avs_sweep_flag(self):
         # remote_proto.hpp: draft_selected bit 30 = the AVS deep sweep on (an Options flag, like bit 31)
@@ -544,8 +538,8 @@ class ChargerTest(unittest.TestCase):
     def test_schema2_shape_and_origin_races_leave_output_untouched(self):
         row = bytes([6]) + ROW0[1:]
         good = page(HEADER2, 0, [row])
-        for offset, value in ((0, 3), (11, 113), (39, 12), (18, 0x80), (22, 0x30),
-                              (42, 20), (43, 12), (44, 0x80), (51, 5), (52, len(kr.TEST_REASONS))):   # (22, 0x30) = draft bits 28..29 = level 3: no such level
+        for offset, value in ((0, 3), (11, 113), (39, 12), (18, 0x80),
+                              (42, 20), (43, 12), (44, 0x80), (51, 5), (52, len(kr.TEST_REASONS))):
             bad = bytearray(good); bad[offset] = value
             with self.subTest(offset=offset), self.assertRaises(kr.FrameError):
                 kr.decode_charger_test(bad)

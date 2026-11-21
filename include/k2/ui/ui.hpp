@@ -310,7 +310,7 @@ public:
     }
     // The level of the next run (charger_test::Level as a byte; false for an unknown level). Sets the deep sweeps with it.
     bool charger_test_set_level(uint8_t level) {
-        if (level >= charger_test::kLevelCount) return false;
+        if (level >= charger_test::kRunLevelCount) return false;
         charger_test_.set_level(charger_test::Level(level));
         return true;
     }

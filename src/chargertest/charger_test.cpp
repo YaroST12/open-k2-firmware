@@ -42,9 +42,9 @@ const char* name(Verdict v) {
     return names[static_cast<unsigned>(v)];
 }
 const char* name(Level l) {
-    static constexpr const char* names[] = {"Medium", "Light", "Deep"};
-    static_assert(std::size(names) == kLevelCount);
-    return unsigned(l) < kLevelCount ? names[unsigned(l)] : "?";
+    static constexpr const char* names[] = {"Medium", "Light", "Deep", "Offers"};
+    static_assert(std::size(names) == kRunLevelCount);
+    return unsigned(l) < kRunLevelCount ? names[unsigned(l)] : "?";
 }
 const char* name(Reason r) {
     static constexpr const char* names[] = {
@@ -504,8 +504,8 @@ bool unit_selected(Unit u, const Options& o) {
 UnitList resolve(const Options& o) {
     const UnitList& in = o.units;
     UnitList out;
-    // A Light run has no PdLow unit: its rows are the low edge of the APDOs (below 5 V), which Light lists, never asks.
-    auto takes = [&](Unit u) { return unit_selected(u, o) && !(o.level == Level::Light && u == Unit::PdLow); };
+    // A Light or Offers run has no PdLow unit: its rows are the low edge of the APDOs (below 5 V), which they list, never ask.
+    auto takes = [&](Unit u) { return unit_selected(u, o) && !(lists_only(o.level) && u == Unit::PdLow); };
     if (!in.n) { for (const Unit u : kDefaultUnits) if (takes(u)) out.add(u); return out; }
     for (size_t n = 0; n < in.n; ++n) if (!has_unit(out, in.u[n]) && takes(in.u[n])) out.add(in.u[n]);
     size_t pd = SIZE_MAX, low = SIZE_MAX;
@@ -525,6 +525,17 @@ private:
     void* ctx_;
     void (*fn_)(void*, const Step&);
 };
+// The APDO a Read-offers run asks (Level::Offers): the EPR AVS one when the list is the EPR list, else the SPR AVS one; 0 = none offered.
+static uint8_t offers_pick(const pd::SourceCaps& caps) {
+    uint8_t spr = 0, epr = 0;
+    const size_t n = std::min<size_t>(caps.num_pdos, caps.pdos.size());
+    for (size_t i = 0; i < n; ++i) {
+        if (!caps.pdos[i].raw || caps.pdos[i].type != pd::PdoType::Avs) continue;
+        uint8_t& slot = i >= 7 ? epr : spr;
+        if (!slot) slot = static_cast<uint8_t>(i + 1);
+    }
+    return caps.epr && epr ? epr : spr;
+}
 // The rows of one unit, in plan order. Pd and PdLow share the PD plan: the low programmable rows (below 5 V) are the PdLow unit.
 void plan_unit(Unit unit, const pd::SourceCaps& caps, Options o, const Input& in, AddRef out) {
     // Light (Options::level, with_level): VBUS stays at 5 V. The PD 5 V row and each legacy unit's first 5 V row (its handshake)
@@ -532,7 +543,9 @@ void plan_unit(Unit unit, const pd::SourceCaps& caps, Options o, const Input& in
     // its top, an SCP level inside the limits the adapter reported); a legacy level nothing advertises, and a protocol only told
     // apart above 5 V (AFC, QC3+, QC Class B), is a LightLevel skip. No hunts, walks, sweeps or full-current rows (one row per
     // offer). Rows that already carry a reason (not offered, over the monitor, the cable) keep it.
-    const bool light = o.level == Level::Light;
+    // Offers (the Read-offers preset) plans like Light, with one exception: the picked AVS APDO keeps one Pending row at its minimum.
+    const bool light = lists_only(o.level), offers = o.level == Level::Offers;
+    const uint8_t pick = offers ? offers_pick(caps) : 0;
     bool light_open = false;                                  // the unit's 5 V handshake row is planned
     uint8_t light_pos = 0; Algorithm light_alg = Algorithm::Count; uint32_t light_pdo = 0;   // the offer the last row named
     auto add = [&](Step s) {
@@ -542,6 +555,7 @@ void plan_unit(Unit unit, const pd::SourceCaps& caps, Options o, const Input& in
             const bool same = s.pos && s.algorithm == light_alg && s.pos == light_pos;
             light_alg = s.algorithm; light_pos = s.pos;
             if (same) return;
+            if (pick && s.avs && s.pos == pick && s.verdict == Verdict::Pending) { out(s); return; }
             if (s.detail == kDetailEprOffered) { s.reason = Reason::Advertised; s.detail = 0; }   // listed in SPR mode, never entered
             else if (s.verdict == Verdict::Pending && !(s.pos == 1 && s.mv == 5000 && !s.hunt)) {
                 const auto p = pd::decode_pdo(s.pdo);
@@ -796,8 +810,9 @@ void plan_unit(Unit unit, const pd::SourceCaps& caps, Options o, const Input& in
                 emit(w);
             };
             const unsigned targets[] = {mid, hi, mid, low_mid, lo};
-            for (unsigned n = 0; n < 5; ++n) {
-                s.mv = static_cast<uint16_t>(targets[n]); s.ma = current(s.mv); s.continuous = n != 0;
+            const unsigned first = s.avs && s.pos == pick ? 4 : 0;   // the Offers pick: its minimum only
+            for (unsigned n = first; n < 5; ++n) {
+                s.mv = static_cast<uint16_t>(targets[n]); s.ma = current(s.mv); s.continuous = n != first;
                 s.verdict = s.ma ? Verdict::Pending : Verdict::Skip;
                 s.reason = s.ma ? Reason::None : Reason::NoOffer;
                 if (s.ma && low_programmable(s)) {
@@ -892,7 +907,7 @@ void plan_unit(Unit unit, const pd::SourceCaps& caps, Options o, const Input& in
     // The Xiaomi unit's chain row, last of the Pd unit: the modes it finds run in the same attach (the source keeps the unlocked list
     // only until the next detach). Without SVID 0x2717 it reads "no 0x2717 SVID" when its turn comes.
     // It rides the fixed or the PPS selection (the modes it finds are fixed or PPS levels) and carries the first one selected.
-    if (unit == Unit::Pd && (o.contains(Algorithm::Pd3Fixed) || o.contains(Algorithm::Pps))) {
+    if (unit == Unit::Pd && !offers && (o.contains(Algorithm::Pd3Fixed) || o.contains(Algorithm::Pps))) {
         Step m; m.group = Group::Pd; m.algorithm = o.contains(Algorithm::Pd3Fixed) ? Algorithm::Pd3Fixed : Algorithm::Pps; m.hunt = true;
         add(m);
     }
@@ -1286,6 +1301,7 @@ void Runner::follow_list(const pd::SourceCaps& caps, const Input& in) {
 }
 Reason Runner::start(const pd::SourceCaps& caps, Options o, Input in, bool confirmed) {
     o.selected &= kAllAlgorithms;
+    if (o.level == Level::Offers) o = with_level(o, Level::Offers);   // PD only, whatever the caller selected or switched on
     epr_proof_ = in.epr_proof = false;
     const Reason denied = refusal(o, in, busy(), confirmed);
     if (denied != Reason::None) {
@@ -1427,8 +1443,10 @@ void Runner::request(const Input& in) {
     const auto limit = limit_reason(s.mv, in, s.algorithm);
     // A PD row above 5 A (a 6.25 A APDO's full-current row, a Xiaomi 6 A mode) needs a cable vouched for above 5 A.
     const bool over5 = s.group == Group::Pd && s.ma > 5000 && over5_cable_ma(in) <= 5000;
-    // Light: the backstop behind the planner. Whatever a replan left in the plan, nothing but 5 V (PDO 1, a legacy 5 V row) goes out.
-    const bool light = opts_.level == Level::Light && (s.mv != 5000 || (s.group == Group::Pd && (s.pos != 1 || s.hunt)));
+    // Light: the backstop behind the planner. Whatever a replan left in the plan, nothing but 5 V (PDO 1, a legacy 5 V row) goes out
+    // (Offers: and its one AVS row).
+    const bool offer_ask = opts_.level == Level::Offers && s.group == Group::Pd && s.avs && !s.hunt;   // the one AVS Request
+    const bool light = lists_only(opts_.level) && !offer_ask && (s.mv != 5000 || (s.group == Group::Pd && (s.pos != 1 || s.hunt)));
     if (light || limit != Reason::None || over5 || ((s.algorithm == Algorithm::Epr || s.algorithm == Algorithm::EprAvs) && !epr_cable(in))) {
         s.verdict = Verdict::Skip;
         s.reason = light ? (s.group == Group::Pd ? Reason::Advertised : Reason::LightLevel) : limit == Reason::None ? Reason::CableLimit : limit;
@@ -1537,7 +1555,7 @@ void Runner::mi_latch(const Input& in) {
             r.avs = p.type == pd::PdoType::Avs;
             const Reason limit = limit_reason(r.mv, in, r.algorithm);
             const unsigned cable = r.ma > 5000 ? over5_cable_ma(in) : used_cable_ma(in);
-            if (opts_.level == Level::Light) { r.verdict = Verdict::Skip; r.reason = Reason::Advertised; }
+            if (lists_only(opts_.level)) { r.verdict = Verdict::Skip; r.reason = Reason::Advertised; }
             else if (limit != Reason::None) { r.verdict = Verdict::Skip; r.reason = limit; }
             else if (!r.ma || r.ma > cable) { r.verdict = Verdict::Skip; r.reason = Reason::CableLimit; }
             if (!insert_row(at, r)) break;

@@ -193,6 +193,7 @@ def summarize(r):
            + f" · {r['state']}"
            + (f" ({r['reason']})" if r.get("reason") not in (None, "none") else ""),
            "Scope: Light run, nothing asked above 5 V, no load" if _run_level(r) == "light" else
+           "Scope: Offers run, every offer listed, one AVS step asked, no load" if _run_level(r) == "offers" else
            "Scope: negotiation and measured voltage only, no load", ""]
 
     prev_of = {id(s): steps[i - 1] if i else None for i, s in enumerate(steps)}

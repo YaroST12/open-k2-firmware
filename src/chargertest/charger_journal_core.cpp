@@ -173,7 +173,7 @@ void apply(Replay& r, Type t, std::span<const std::uint8_t> p) {
         RunMeta m;
         for (std::size_t n = 0; n < p[0]; ++n) if (!m.units.add(Unit(p[2 + n]))) return;
         m.unattended = p[1] & 1; m.pps_sweep = (p[1] >> 1) & 1; m.avs_sweep = (p[1] >> 2) & 1;
-        if (const unsigned l = (p[1] >> 3) & 3u; l < charger_test::kLevelCount) m.level = charger_test::Level(l);
+        if (const unsigned l = (p[1] >> 3) & 3u; l < charger_test::kRunLevelCount) m.level = charger_test::Level(l);
         m.cable_kind = p[18]; m.guard = p[19]; m.cable_seq = detail::get16(p.data() + 20);
         r.meta = m; r.has_meta = true; r.options.units = m.units; r.options.pps_sweep = m.pps_sweep;
         r.options.avs_sweep = m.avs_sweep; r.options.level = m.level;

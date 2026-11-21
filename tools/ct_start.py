@@ -13,11 +13,11 @@ that did not start. Then polls `charger-test status`
 until the run ends (done, stopped, unsafe...) and prints `charger-test summary`. Run `k2_remote.py action pd-rescan` first:
 a run with 0 PDOs is invalid.
 
-    python3 tools/ct_start.py [--wait 300] [--level light|medium|deep] [--units qc2,qc3,pd] [--cable off|builtin|builtin:N|saved:N]
+    python3 tools/ct_start.py [--wait 300] [--level light|medium|deep|offers] [--units qc2,qc3,pd] [--cable off|builtin|builtin:N|saved:N]
 
 --level sets the run's thoroughness (`charger-level`, sent before every START: the device keeps the last choice): light
 records what the charger advertises and asks for nothing above 5 V, medium (the default) is the full run without deep
-sweeps, deep adds the PPS and AVS deep sweeps, the PD spec section (a build with the PD spec engine; the summary lists its
+sweeps, offers is PD only: every offer is listed and one AVS step is asked at its minimum (no sweeps, no --units), deep adds the PPS and AVS deep sweeps, the PD spec section (a build with the PD spec engine; the summary lists its
 verdicts, nothing is asked above what the charger advertises) and the SuperVOOC ceiling stage (after a detected VOOC family; ct_start
 sends its mode on every deep run: --svooc-cap usb-a, else on; usb-a is a no-op, the ceiling stage runs as on). --avs-sweep or --svooc-cap without --level means deep;
 --sweep / --no-sweep override the level's PPS sweep for this run. The summary ends with the VOOC family's ident and, on a
@@ -235,7 +235,8 @@ def parse_args(argv=None):
     ap.add_argument("--wait", type=float, default=900)
     ap.add_argument("--level", choices=kr.TEST_LEVELS,
                     help="light: what is advertised, nothing above 5 V; medium (default): the full run, no deep sweeps; "
-                         "deep: medium plus the PPS and AVS deep sweeps and the PD spec section")
+                         "deep: medium plus the PPS and AVS deep sweeps and the PD spec section; "
+                         "offers: PD only, every offer listed plus one AVS step at its minimum")
     ap.add_argument("--path")
     sweep = ap.add_mutually_exclusive_group()
     sweep.add_argument("--sweep", action="store_true",
@@ -261,6 +262,8 @@ def parse_args(argv=None):
     a = ap.parse_args(argv)
     if a.level == "light" and (a.sweep or a.avs_sweep):
         ap.error("--level light asks for nothing above 5 V: no deep sweep with it")
+    if a.level == "offers" and (a.sweep or a.avs_sweep or a.svooc_cap or a.units):
+        ap.error("--level offers is PD only with one AVS step: no sweeps, SuperVOOC cap or --units with it")
     if a.level in ("light", "medium") and a.svooc_cap:
         ap.error("the SuperVOOC ceiling stage runs at --level deep only (light and medium stop at the detection)")
     return a
@@ -332,7 +335,8 @@ def main(argv=None):
             print(why, file=sys.stderr)
             return 1
         print("level: " + level + {"light": " (what is advertised, nothing above 5 V)", "medium": " (no deep sweeps)",
-                                   "deep": " (PPS and AVS deep sweeps, PD spec section)"}[level], file=sys.stderr)
+                                   "deep": " (PPS and AVS deep sweeps, PD spec section)",
+                                   "offers": " (PD offers, one AVS step)"}[level], file=sys.stderr)
         if pps_sweep(a) is not None:
             kr.charger_sweep(link, pps_sweep(a))
             print("PPS deep sweep: " + ("on (every 100 mV per PPS APDO, 1 A)" if pps_sweep(a) else "off (--no-sweep)"),

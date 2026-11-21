@@ -198,7 +198,7 @@ def parse_card(rec: bytes) -> dict:
         "ranges": [], "epr": [], "cable": None, "ufcs": [], "times": p[190],
         "last_boots": u16(p, 191), "last_uptime_s": p[193] | (p[194] << 8) | (p[195] << 16),
         "rebalanced": p[196] if len(rec) >= 204 and p[33] >= 8 else 0,
-        "level": p[197] if len(rec) >= 204 and p[33] >= 8 and p[197] < 3 else 0,   # v8 spare byte: 0 Medium, 1 Light, 2 Deep
+        "level": p[197] if len(rec) >= 204 and p[33] >= 8 and p[197] < 4 else 0,   # v8 spare byte: 0 Medium, 1 Light, 2 Deep, 3 Offers
         "crc16": u16(rec, len(rec) - 2),
     }
     for i in range(4):
@@ -317,7 +317,7 @@ def card_payload_from_json(j: dict) -> bytes:
     p[193] = up & 0xFF; p[194] = (up >> 8) & 0xFF; p[195] = (up >> 16) & 0xFF
     p[33] = 10   # v10: the sweep block (captures predate it: all zero); v9 spread block below
     p[196] = j.get("rebalanced", 0) & 0xFF
-    p[197] = {"light": 1, "deep": 2}.get(j.get("level"), 0)   # the run's level (the JSON names Light and Deep only)
+    p[197] = {"light": 1, "deep": 2, "offers": 3}.get(j.get("level"), 0)   # the run's level (Medium has no key)
     for i, rg in enumerate(j.get("ranges", [])[:4]):   # v9: the per-level setpoint errors at 198
         for k, e in enumerate(rg.get("err_mv", [])[:4]):
             p[198 + 4 * i + k] = e & 0xFF

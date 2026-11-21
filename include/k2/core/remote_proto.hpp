@@ -97,7 +97,7 @@
 //                                    rsp the same first 15 bytes, schema=2, then run_selected(4; bits 28..29 = the
 //                                    level the run in hand ran at, as in draft_selected),
 //                                    draft_selected(4; bit 31 = the PPS deep sweep on, bit 30 = the AVS deep sweep
-//                                    on, bits 28..29 = the level, 0 Medium / 1 Light / 2 Deep - Options fields, not
+//                                    on, bits 28..29 = the level, 0 Medium / 1 Light / 2 Deep / 3 Offers - Options fields, not
 //                                    algorithm bits - they were always 0 before),
 //                                    wire_rev[1:0]/draft_stage[5:2](1),
 //                                    RMDO spec nibbles(1), EvidenceFlag(1), monitor_mv(2),
@@ -678,9 +678,9 @@ enum class Cmd : uint8_t {
                          // 0 = none (appended 2026-11-15). The stage runs at Level::Deep only. Set: Busy while a run is active,
                          // BadArg > 2.
     PdSpec = 0x5A,          // PD Spec Check: status / start / result (chunked) / stop, see the layout above
-    ChargerLevel = 0x5B,    // [level(1)] the level of the next charger run (charger_test::Level: 0 Medium, 1 Light, 2 Deep; with_level
+    ChargerLevel = 0x5B,    // [level(1)] the level of the next charger run (charger_test::Level: 0 Medium, 1 Light, 2 Deep, 3 Offers; with_level
                          // also sets both deep-sweep flags: on for Deep, off otherwise). rsp [level]. Read back in CHARGER_TEST schema 2,
-                         // draft selection bits 28..29. Busy while a run is active, BadArg above 2.
+                         // draft selection bits 28..29. Busy while a run is active, BadArg above 3.
     MiCableAuth = 0x5C,     // Xiaomi cable-side auth config (k2/pd/emk_spoof.hpp MiAuthCfg): [0] reads, [1, on, key, trailing u32 LE, half, reply, payload]
                          // sets (on/key/half/reply/payload bounded). rsp [on, key, trailing u32 LE, half, reply, payload]. Lab-only: while a
                          // spoof is armed, an SOP' 0x27170104 is answered (reply 0: cmd 0x...105, reply 1: mirrored 0x...204) with a HMAC-SHA256
@@ -2037,7 +2037,7 @@ template <Backend B>
         return reply_status_or_byte(f, backend.charger_avs_sweep(p[0] != 0), p[0]);
     case Cmd::ChargerLevel:
         if (p.size() != 1) return reply_bad_len(f);
-        if (p[0] >= charger_test::kLevelCount) return reply_bad_arg(f);
+        if (p[0] >= charger_test::kRunLevelCount) return reply_bad_arg(f);
         return reply_status_or_byte(f, backend.charger_level(p[0]), p[0]);
     case Cmd::MiCableAuth:
         if (p.empty()) return reply_bad_len(f);   // p[0] below: nothing may be read before the size is known

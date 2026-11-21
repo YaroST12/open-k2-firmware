@@ -95,9 +95,10 @@ enum class Reason : uint8_t {
 };
 // Step.detail of a PPS step-walk row while it is Pending/Running (finish() overwrites it with the result); sits above every
 // engine code and the EPR skip codes so the card and the tools never mistake it for one.
-// Charger-test thoroughness (Options::level, with_level). The values are the wire values: 0 = Medium.
-enum class Level : uint8_t { Medium = 0, Light = 1, Deep = 2 };
-inline constexpr unsigned kLevelCount = 3;
+// Charger-test thoroughness (Options::level, with_level). The values are the wire values: 0 = Medium. Offers is the "Read offers"
+// preset, not a depth: it never enters the Depth cycle or Settings (kLevelCount counts the depths), only the wires (kRunLevelCount).
+enum class Level : uint8_t { Medium = 0, Light = 1, Deep = 2, Offers = 3 };
+inline constexpr unsigned kLevelCount = 3, kRunLevelCount = 4;
 inline constexpr uint8_t kDetailStepWalk = 160;
 // Step.detail of a deep-sweep row (ROADMAP "PPS deep sweep"; the AVS sweep reuses the marker on its AVS algorithms).
 // Unlike the walk's marker it SURVIVES finish() (finish keeps it), so a finished run's results strip and the card can
@@ -307,17 +308,25 @@ struct Options {
 //   Medium - the fixed levels, the PPS / AVS points, the legacy level steps; no deep sweeps, no SVOOC ceiling.
 //   Deep   - Medium plus the PPS and AVS deep sweeps over every APDO, the SVOOC ceiling stage and the PD spec stage (no-load
 //            conformance of the transitions and the PPS / AVS moves, one more section of the results).
+//   Offers - PD only (kOffersAlgorithms, no PdLow, no sweeps): the source's lists are read (SPR, then EPR after the usual entry) and
+//            every offer is an Advertised row, except ONE AVS Request at the APDO's minimum, 1 A at most (the EPR AVS APDO when
+//            the run is in EPR, else the SPR one). No AVS offered = the AVS row's NoOffer skip.
 // The sweep flags stay their own switches afterwards (the Custom flow's sweep rows and the remote commands toggle them).
 // The SVOOC ceiling stage (the guarded trigger, VBUS up to the adapter's ceiling) is Deep only: Light and Medium stop at the
 // VOOC family's detection and its ident. Deep turns it on, keeping the mode the operator set (UsbA is the retired waiver and
 // runs as On).
+inline constexpr uint32_t kOffersAlgorithms = kPdFixedAlgorithms | kPpsAlgorithms;
+// A level whose rows are the source's own list (Light, Offers): a PD row above 5 V is never asked except Offers' one AVS Request.
+constexpr bool lists_only(Level l) { return l == Level::Light || l == Level::Offers; }
 constexpr Options with_level(Options o, Level l) {
     o.level = l;
     o.pps_sweep = o.avs_sweep = o.spec = l == Level::Deep;
     if (l != Level::Deep) o.svooc_cap = svooc_ceiling::Mode::Off;
     else if (o.svooc_cap == svooc_ceiling::Mode::Off) o.svooc_cap = svooc_ceiling::Mode::On;
+    if (l == Level::Offers) { o.selected &= kOffersAlgorithms; if (!o.selected) o.selected = kOffersAlgorithms; }
     return o;
 }
+// The Depth cycle: Offers is not part of it (a stray Offers value re-enters at Light).
 constexpr Level next_level(Level l) { return l == Level::Light ? Level::Medium : l == Level::Medium ? Level::Deep : Level::Light; }
 const char* name(Level);
 struct Step {

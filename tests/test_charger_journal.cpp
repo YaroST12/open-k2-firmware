@@ -776,7 +776,7 @@ static void test_a_noted_spec_result_is_written_by_a_pump() {
 // The run's level rides in the meta byte p[1] bits 3..4 (user decision 2026-11-15): a resumed Light run is replanned Light, never as
 // Medium; a meta written before the level existed (bits 3..4 zero) reads Medium.
 static void test_meta_keeps_the_level() {
-    for (const auto l : {ct::Level::Light, ct::Level::Medium, ct::Level::Deep}) {
+    for (const auto l : {ct::Level::Light, ct::Level::Medium, ct::Level::Deep, ct::Level::Offers}) {
         Vol v; cj::Replay r;
         cj::RunMeta m = meta3(); m.level = l; m.pps_sweep = l == ct::Level::Deep;
         arm(v, plan(6));

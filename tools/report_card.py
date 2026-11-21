@@ -36,7 +36,7 @@ STATES = ["Setup", "Verify 5V", "Negotiating", "Hold", "Return to 5V", "Complete
           "UNSAFE: unplug source", "Detach charger", "Initializing...", "SVOOC ceiling", "PD spec"]
 HANDOVER = ["not tried", "fell back", "stayed PD", "fault", "reboot", "in PD contract"]
 VERDICT = ["none", "pass", "fail", "skip"]
-LEVELS = ["medium", "light", "deep"]   # charger_test::Level, the wire values (0 = Medium)
+LEVELS = ["medium", "light", "deep", "offers"]   # charger_test::Level, the wire values (0 = Medium)
 MAX_RANGES = 4
 # What a group's detail byte means: pd::Err (stored as 128 + err) and pd::SinkResult for PD, fc::Fail for the rest.
 # Mirrors fc::name(Fail), pd::err_name and pd::result_name; tests/test_report_card_py.py parses those and compares.
@@ -426,7 +426,7 @@ def decode(b):
         card.update({"times": b[REPEAT_AT], "last_boots": _u(b, REPEAT_AT + 1, 2), "last_uptime_s": _u(b, REPEAT_AT + 3, 3)})
     if b[33] >= 8 and len(b) >= PAYLOAD and b[V8_AT]:   # v8: the source re-balanced its budget mid-run this often
         card["rebalanced"] = b[V8_AT]
-    if b[33] >= 8 and len(b) >= PAYLOAD and b[V8_AT + 1] in (1, 2):   # the run's level (v8 spare byte; 0 = Medium, no key)
+    if b[33] >= 8 and len(b) >= PAYLOAD and b[V8_AT + 1] in (1, 2, 3):   # the run's level (v8 spare byte; 0 = Medium, no key)
         card["level"] = LEVELS[b[V8_AT + 1]]
     card.update({"fw": f"{_u(b, 20, 4):08X}",
             "state": STATES[b[29]], "reason": REASONS[b[30]], "pdos": b[27], "spec_rev": b[26],
