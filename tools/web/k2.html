@@ -3536,7 +3536,8 @@ var CtGrid = (function () {
     { word: "SVOOC", mv: 10000, ma: 10000, w: 100, ceiling: true },
     { word: "SVOOC", mv: 11000, ma: 11000, w: 120, ceiling: true }
   ];
-  var SILENT_SKIP = { vivo: "no response", ufcs: "no response", afc: "unsupported", fcp: "unsupported", scp: "unsupported" };   // result_layout.cpp ct::never_answered
+  var SILENT_SKIP = { vivo: ["no response"], ufcs: ["no response", "no handshake"], afc: ["unsupported"], fcp: ["unsupported"], scp: ["unsupported"],
+                      qc2: ["no handshake"], qc3: ["no handshake"], "qc3+": ["no handshake"], qc2b: ["no handshake"], qc3b: ["no handshake"] };   // charger_test.hpp never_answered
   var VOOC_ALGS = ["vooc", "svooc", "svooc65"];   // one shared detection: the finished grid reads them as the levels above
   var RAN_ITS_COURSE = { judged: 1, stopped: 1, cap: 1, "time cap": 1 };   // svooc_ceiling::End names (readout, card)
   // "120W", "22.5W" (0.1 W, the tenth only when not 0; whole watts from 100 W, so at most 5 characters); "" for 0 mW.
@@ -3711,7 +3712,7 @@ var CtGrid = (function () {
     var of = function (a) { return steps.filter(function (s) { return s.alg === a; }); };
     var isPd = function (a) { return has(PD_GROUP, a) || !!REVISIONS[a]; };
     var isRange = function (a) { return has(RANGE_ALGS, a); };
-    function silentSkip(s) { return s.result === "skip" && !!s.raw && !!SILENT_SKIP[s.alg] && SILENT_SKIP[s.alg] === s.raw.detail_reason; }
+    function silentSkip(s) { return s.result === "skip" && !!s.raw && !!SILENT_SKIP[s.alg] && SILENT_SKIP[s.alg].indexOf(s.raw.detail_reason) >= 0; }
     function isAbsent(a) {
       var xs = of(a);
       if (!xs.length || xs.some(function (s) { return s.result === "pass"; })) return false;

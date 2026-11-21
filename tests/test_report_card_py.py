@@ -249,7 +249,11 @@ def test_group_why_prefers_the_engine_code_and_falls_back_to_the_reason():
         assert report_card.FC_FAILS[d] == ("no response" if d == 7 else "unsupported")
         assert f(g, d, "request failed", skipped=True) == "no reply"
         assert f(g, d, "request failed") == report_card.FC_FAILS[d]
-    assert f("QC2", 6, "request failed", skipped=True) == "no handshake"   # QC2 stays a fail, never "no reply"
+    # a QC / UFCS unit whose first handshake got nothing is a silent skip too; a heard one that fails keeps "no handshake"
+    assert report_card.FC_FAILS[6] == "no handshake"
+    for g in ("QC2", "QC3", "QC3+", "UFCS", "QC2 Class B", "QC3 Class B"):
+        assert f(g, 6, "request failed", skipped=True) == "no reply"
+        assert f(g, 6, "request failed") == "no handshake"
 
 
 def test_epr_detail_names_match_the_firmware_and_the_tools():

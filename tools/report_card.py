@@ -257,7 +257,9 @@ def _u(b, at, n):
 
 
 # A skipped unit whose protocol never answered its first request is "not offered", not a failure (report_card.hpp silent_skip).
-SILENT_SKIPS = {("AFC", "unsupported"), ("FCP", "unsupported"), ("SCP", "unsupported"), ("UFCS", "no response"), ("VIVO", "no response")}
+SILENT_SKIPS = {("AFC", "unsupported"), ("FCP", "unsupported"), ("SCP", "unsupported"), ("UFCS", "no response"), ("VIVO", "no response"),
+                ("QC2", "no handshake"), ("QC3", "no handshake"), ("QC3+", "no handshake"), ("UFCS", "no handshake"),
+                ("QC2 Class B", "no handshake"), ("QC3 Class B", "no handshake")}   # report_card.hpp silent_skip / charger_test.hpp never_answered
 
 
 def group_why(group, detail, reason, skipped=False):

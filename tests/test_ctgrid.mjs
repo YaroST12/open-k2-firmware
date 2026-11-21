@@ -482,6 +482,17 @@ test("a silent VIVO / UFCS / AFC unit (skipped, no first answer) folds as No rep
   assert.ok(!heard.some((l) => /^No reply/.test(l)), heard.join(" | "));
 });
 
+test("a silent QC2 / QC3 / QC3+ / UFCS unit (no first handshake) folds as No reply; a heard one stays a fail row", () => {
+  const row = (alg, mv) => ({ ...S(alg, mv, "skip", { reason: "request failed", detail: 6 }), detail_reason: "no handshake" });
+  const got = lines([row("qc2", 5000), row("qc2", 9000), row("qc2b", 5000), row("qc3", 5000), row("qc3+", 5000), row("ufcs", 5000), S("fcp", 5000, "fail")], { fold: true });
+  const nr = got.filter((l) => /^No reply: /.test(l) || !/^[A-Z][a-z]+:/.test(l)).join(" ");   // the chip list wraps
+  for (const w of ["QC2:", "QC2B:", "QC3:", "QC3+:", "UFCS:"]) assert.ok(nr.includes(w), got.join(" | "));
+  assert.ok(got.some((l) => /^No reply: /.test(l)), got.join(" | "));
+  assert.ok(!got.some((l) => /^Skipped/.test(l)), got.join(" | "));
+  const heard = lines([S("qc2", 5000, "pass"), { ...S("qc2", 9000, "fail", { reason: "request failed", detail: 6 }), detail_reason: "no handshake" }], { fold: true });
+  assert.ok(!heard.some((l) => /^No reply/.test(l)), heard.join(" | "));
+});
+
 test("a VOOC family that never answered folds as one word", () => {
   const fam = [S("vooc", 5000, "fail", { detail: 13 }), S("svooc", 5000, "skip", { reason: "request failed" }),
                S("svooc65", 5000, "skip", { reason: "request failed" }), S("fcp", 5000, "fail")];

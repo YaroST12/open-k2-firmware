@@ -523,7 +523,8 @@ var K2Card = (function () {
   // ---- the card --------------------------------------------------------------------------------------------------------
 
   // A skipped unit whose protocol never answered is "not offered", not a failure (report_card.hpp silent_skip).
-  var SILENT_SKIPS = { AFC: "unsupported", FCP: "unsupported", SCP: "unsupported", UFCS: "no response", VIVO: "no response" };
+  var SILENT_SKIPS = { AFC: ["unsupported"], FCP: ["unsupported"], SCP: ["unsupported"], UFCS: ["no response", "no handshake"], VIVO: ["no response"],
+                       QC2: ["no handshake"], QC3: ["no handshake"], "QC3+": ["no handshake"] };
 
   function groupWhy(group, detail, reason, skipped) {
     if (reason === "no QC3+ response") return "no QC3+";
@@ -535,7 +536,7 @@ var K2Card = (function () {
       } else if (detail < FC_FAILS.length) {
         if (FC_FAILS[detail] === "no answer" && (group === "VOOC" || group === "SVOOC" || group === "SVOOC65"))
           return "no answer to either wake, unloaded";   // report_card.cpp group_why
-        if (skipped && SILENT_SKIPS[group] === FC_FAILS[detail]) return "no reply";
+        if (skipped && (SILENT_SKIPS[group] || []).indexOf(FC_FAILS[detail]) >= 0) return "no reply";
         return FC_FAILS[detail];
       }
     }

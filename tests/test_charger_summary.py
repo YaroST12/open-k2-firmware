@@ -371,6 +371,11 @@ def test_a_silent_protocol_reads_skipped_no_reply_on_a_card_and_a_run():
         "VIVO": {"verdict": "skip", "reason": "request failed", "detail": 7, "why": "no reply"}}))
     assert "- AFC, VIVO: skipped, no reply" in text
     assert "request failed" not in text and "no response" not in text
+    # a QC / UFCS unit that never answered its first handshake reads the same; a heard one keeps "no handshake"
+    text = charger_summary.summarize_card(_card({"PD": {"verdict": "pass", "max_mv": 20000},
+        "QC2": {"verdict": "skip", "reason": "request failed", "detail": 6, "why": "no reply"},
+        "UFCS": {"verdict": "skip", "reason": "request failed", "detail": 6, "why": "no reply"}}))
+    assert "QC2" in text and "UFCS" in text and "skipped, no reply" in text and "no handshake" not in text
     # the run's step rows: every VIVO row skipped under the first row's no-response, none passed
     def row(p, res, mv):
         return {"protocol": p, "pos": 0, "result": res, "reason": "request failed", "detail": 7, "detail_reason": "no response",
