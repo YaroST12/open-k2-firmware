@@ -1412,6 +1412,7 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
 | Feature | Status | Hardware | Module | Risk |
 |---|---|---|---|---|
 | E-marker read (VCONN mode, sniff mode) | done | verified | `pd_emarker_plan`, `fusb302` | VCONN 5 V on CC |
+| Full cable identity read (k2/cable-full-id): after SOP' Discover Identity, Discover SVIDs and Discover Modes per SVID, and on an active cable the SOP'' identity, SVIDs and modes (best effort); decoded: active VDO 2 extras (U3 power, optical / retimer, hub hops, asym), TBT3 cable mode, DP cable capabilities, other SVIDs raw hex. RAM only (88 B), cleared on a new scan and on detach; shown as more Cable tab rows (scrolls), `k2_remote emarker` / web (GET_EMARKER parts 3 and 4). Not in the saved record, QR or JSON (a format change, left for a decision) | partial (c443b46f, c3496a89, 4b2fcfb6, b8b9ea95) | not verified on hardware (host tests with a fake FUSB302 only; needs a TBT3 / USB4 cable and an active cable) | `cable_full`, `emk_learn`, `fusb302`, `ui_connection_page`, `remote_proto` | VCONN 5 V on CC, as the e-marker read |
 | Apple cable 6-chunk reader | done | not verified | `pd_engine` | |
 | Record codec (`emrec`), JSON (`emjson`), names (`emname`) | done | verified | `emrec`, `emjson`, `emname` | |
 | Cable library, 140 entries (/emk files) | done | verified | `emlib`, `flash_map.hpp` | **FLASH** |
