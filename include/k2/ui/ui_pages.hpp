@@ -935,7 +935,7 @@ public:
     void set_actions_mode(bool on);
     bool actions_mode() const { return act_page_; }
     // The page is what the ring view shows of it as it stands: Info page, not scrolled, nothing of its own in flight.
-    bool ring_rest() const { return !act_page_ && first_ == 0 && !em_read_pending_ && !id_asked_ && !iq_asked_ && !op_until_; }
+    bool ring_rest() const { return !act_page_ && first_ == 0 && !em_read_pending_ && !id_asked_ && !iq_asked_ && !(op_until_ && int32_t(op_until_ - ctx_.now) > 0); }   // an expired note never clears op_until_
     int action_row() const { return act_sel_; }   // the focused action row on Actions page, -1 = Info page
     static constexpr int kPlaceRows = 9;   // 9 x 21 px fact rows under identity block (y 46..235, no footer)
     kit::OppRailSpec opp_rail() const override {
