@@ -430,10 +430,8 @@ static void test_connection_gallery() {
         open(1); shot("cable_empty_top_plug");
         fresh(); cc(3300, 0);     open(2); shot("sink_empty_via_cable");
         open(1); shot("cable_empty_via_cable");
-        // showing an empty state never drove the lines (the stub was reset by the last fresh()); the one exception is the Cable tab's
-        // own e-marker scan with a cable in the path (via cable), never at the top plug or on an empty port
-        CHECK_EQ(g_stub.ra_ons + g_stub.ra_offs + g_stub.rd_pauses + g_stub.hard_resets + g_stub.getcaps, 0);
-        CHECK_EQ(g_stub.scans, 1);
+        // showing an empty state never drove the lines (the stub was reset by the last fresh())
+        CHECK_EQ(g_stub.ra_ons + g_stub.ra_offs + g_stub.rd_pauses + g_stub.scans + g_stub.hard_resets + g_stub.getcaps, 0);
         // Filled: a 140 W source on the line, a read cable, a device identified inline
         fresh();
         fill_seven();

@@ -1720,16 +1720,6 @@ emkra::Refuse ra_refusal() { return g_ra_refused; }
 void ra_run_own() { if (g_ra) g_ra_run = true; }
 const pd::RereadStatus& reread_status() { return reread().status(); }
 bool reread_own_hold() { return pd::reread_own_hold(sink().status(), g_reread_made_contract); }
-bool reread_attach_held() { return g_reread_owns_rd || g_reread_made_contract; }
-bool reread_release_now() {
-    if (g_reread_log_pending || reread_running()) return false;   // the finished run's own log line re-arms the linger first
-    g_reread_release_at = systick::millis();
-    return true;
-}
-void reread_stand_down() {
-    reread().abort();   // its log line follows and sets the release due; Rd off and the sink detach come from reread_housekeeping
-    if (g_reread_owns_rd || g_reread_made_contract) g_reread_release_at = systick::millis();
-}
 void reread_take_over() {
     if (!g_reread_owns_rd && !g_reread_made_contract) return;
     K2LOG("[REREAD] attach taken over: Rd %d, contract %d stay with the new owner\n", int(g_reread_owns_rd), int(g_reread_made_contract));

@@ -278,8 +278,6 @@ void test_tools_row_opens_the_page() {
     ui.init(g_t);
     ui.goto_page(uint8_t(Page::Home), g_t + 50);
     ui.on_button(Button::Back, ButtonEvent::Short, g_t + 55);   // Home entered -> the ring on Home
-    ui.context().keep.cable_auto_key = conn::cable_auto_key(g_stub.cable_seq, g_stub.session, ui.link().cable_stale());   // the Cable tab's own read is not this test
-    ui.context().keep.cable_auto_set = true;
     for (int i = 0; i < 6; i++) ui.on_button(Button::Plus, ButtonEvent::Short, g_t + 60);   // Cable is six steps on
     ui.on_button(Button::Ok, ButtonEvent::Short, g_t + 70);
     CHECK_EQ(int(ui.menu()), int(Menu::Connection));   // the Cable place page (starts on Info)

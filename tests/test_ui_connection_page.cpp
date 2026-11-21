@@ -17,7 +17,6 @@
 #include "k2/ui/ui_pages.hpp"
 #include "k2/ui/ui_style.hpp"
 #include "ui_nav.h"
-#include "k2/core/offers_read.hpp"
 
 using namespace k2;
 
@@ -36,12 +35,6 @@ static Ui &fresh_ui() {
     for (uint32_t t = 10100; t <= 11500; t += 100) ui->tick(t);   // the link starts attached; VBUS down + no CC detaches it
     g_stub.ms = 12000;
     return *ui;
-}
-
-// The Cable tab reads the cable by itself on opening. Tests of the manual flow arm the key first, as if that read had run.
-static void arm_cable_auto(Ui &ui) {
-    ui.context().keep.cable_auto_key = conn::cable_auto_key(g_stub.cable_seq, g_stub.session, ui.link().cable_stale());
-    ui.context().keep.cable_auto_set = true;
 }
 
 // A load behind the K2: the link goes inline once it sees VBUS and current flowing through.
@@ -167,8 +160,7 @@ static void test_topology_unknown_unless_passive_and_dead() {
     }
 }
 
-// Showing every empty state on every topology only reads: no Rd, Ra, rescan, request or line force. The Cable tab's own read
-// (one e-marker scan, once, never with a charger straight on the top plug) is the only exception.
+// Showing every empty state on every topology only reads: no Rd, Ra, scan, rescan, request or line force.
 static void test_empty_states_are_passive() {
     const int ccs[][2] = {{3300, 3300}, {3300, 0}, {0, 0}};
     for (const auto &cc : ccs) {
@@ -176,7 +168,7 @@ static void test_empty_states_are_passive() {
             Ui &ui = fresh_ui();
             g_stub.pm.vbus_mv = 0;
             set_cc(cc[0], cc[1]);
-            const int base = acts() + (tab == 1 && !(cc[0] == 3300 && cc[1] == 3300) ? 1 : 0);
+            const int base = acts();
             const uint32_t t = open_and_settle(ui, kConnTabAlias + uint8_t(tab), 20000);
             CHECK_EQ(int(cp(ui).tab()), tab);
             ui.tick(t + 100);
@@ -906,8 +898,7 @@ static void test_survey_nothing_active_before_refresh() {
     const int base = acts();
     show(ui, 0, t); show(ui, 1, t); show(ui, 2, t); show(ui, 0, t);
     settle(ui, t);
-    CHECK_EQ(acts(), base + 1);   // the Cable tab's own e-marker scan, once; nothing asks the charger
-    CHECK_EQ(g_stub.scans, 1);
+    CHECK_EQ(acts(), base);
     CHECK_EQ(g_stub.survey_refreshes, 0);
 }
 
@@ -1245,7 +1236,6 @@ static const char *ok_label(Ui &ui) { return ui.labels().b[static_cast<int>(Butt
 
 static void test_single_tools_lock_one_tab() {
     Ui &ui = fresh_ui();
-    arm_cable_auto(ui);
     ui.open_place(bench::Place::Cable, 20000);
     ui.tick(20050);
     CHECK_EQ(int(ui.menu()), int(Menu::Connection));
@@ -1889,7 +1879,6 @@ static void test_cable_read_emarker_ux_paths() {
         g_stub.pm = {};
         g_stub.cc = 0;
         g_stub.scan_result = true;
-        arm_cable_auto(ui);
         ui.goto_page(kConnTabAlias + 1, 20000);   // Cable place (Info)
         ui.tick(20050);
         CHECK_EQ(cp(ui).actions_mode(), false);
@@ -1909,7 +1898,6 @@ static void test_cable_read_emarker_ux_paths() {
         g_stub.pm = {};
         g_stub.cc = 0;
         g_stub.scan_result = false;
-        arm_cable_auto(ui);
         ui.goto_page(kConnTabAlias + 1, 30000);
         ui.tick(30050);
         ui.on_button(Button::Ok, ButtonEvent::Short, 30100);   // Info -> Actions
@@ -1936,7 +1924,6 @@ static void test_cable_read_emarker_ux_paths() {
         uint32_t t = 40000;
         ui.debug_link(true, t);
         ui.tick(t += 50);
-        arm_cable_auto(ui);
         ui.goto_page(kConnTabAlias + 1, t += 50);
         while (ui.painting()) ui.tick(t += 2);
         ui.on_button(Button::Ok, ButtonEvent::Short, t += 50);   // Info -> Actions
@@ -1947,7 +1934,6 @@ static void test_cable_read_emarker_ux_paths() {
         CHECK_EQ(cp(ui).actions_mode(), true);
         CHECK_EQ(ui.context().em_listen_until != 0, true);
         g_stub.cable_seq++;
-        g_stub.em.valid = true;   // the decoded SOP' data: nothing left to read
         ui.tick(t += 500);
         while (ui.painting()) ui.tick(t += 2);
         CHECK_EQ(ui.context().em_listen_until, 0u);
@@ -1967,7 +1953,6 @@ static void test_cable_read_emarker_ux_paths() {
         uint32_t t = 50000;
         ui.debug_link(true, t);
         ui.tick(t += 50);
-        arm_cable_auto(ui);
         ui.goto_page(kConnTabAlias + 1, t += 50);
         while (ui.painting()) ui.tick(t += 2);
         ui.on_button(Button::Ok, ButtonEvent::Short, t += 50);   // Info -> Actions
@@ -2112,310 +2097,6 @@ static void test_device_scroll_toast_stays_on_top() {
     }
 }
 
-// ---- tab-open reads (ROADMAP: Charger offers + Cable e-marker, automatic) ----
-
-// The offers read is a process-wide latch (one read per presence of the charger, two reads a minute apart): a test starts it
-// from a charger that has been gone for good, on a clock far past the last read.
-static uint32_t offers_fresh_presence() {
-    static uint32_t base = 1000000;
-    base += 200000;
-    g_stub.ms = base;
-    offers::poll(false, false);
-    g_stub.ms = base + 3500;
-    offers::poll(false, false);
-    g_stub.ms = base + 4000;
-    return g_stub.ms;
-}
-
-// What the main loop does every pass for the offers read.
-static void main_loop_pass(Ui &ui, uint32_t t) {
-    ui.tick(t);
-    offers::poll(ui.ports_busy(), ui.link().attached() || ui.link().charger_waiting());
-}
-
-// The Cable tab reads the cable when it opens, once; a failed read is not repeated every pass, a new cable or attach is read again.
-static void test_cable_tab_reads_once_on_open() {
-    Ui &ui = fresh_ui();
-    g_stub.em = {};
-    g_stub.scan_result = false;
-    uint32_t t = open_and_settle(ui, kConnTabAlias + 1, 20000);
-    CHECK_EQ(g_stub.scans, 1);
-    CHECK_EQ(g_stub.full_scans, 1);
-    CHECK_EQ(int(g_stub.last_scan_mode), int(k2::pd::EmarkerMode::Vconn));
-    for (int i = 0; i < 40; i++) ui.tick(t += 100);
-    CHECK_EQ(g_stub.scans, 1);                       // a failed read is not retried every pass
-    g_stub.cable_seq++;                              // a new cable decoded while the tab is open
-    for (int i = 0; i < 5; i++) ui.tick(t += 100);
-    CHECK_EQ(g_stub.scans, 2);
-    g_stub.session++;                                // a new attach
-    for (int i = 0; i < 5; i++) ui.tick(t += 100);
-    CHECK_EQ(g_stub.scans, 3);
-    for (int i = 0; i < 40; i++) ui.tick(t += 100);
-    CHECK_EQ(g_stub.scans, 3);
-}
-
-// A bare cable in the bottom port with nothing else (no Rp on either line, VBUS down) is read; a charger straight on the top plug
-// has no cable between, so nothing is scanned there, and the scan follows once the lines change.
-static void test_cable_tab_reads_a_bare_cable_not_a_top_plug() {
-    Ui &ui = fresh_ui();
-    g_stub.em = {};
-    g_stub.pm.vbus_mv = 0;
-    set_cc(3300, 3300);
-    uint32_t t = open_and_settle(ui, kConnTabAlias + 1, 20000);
-    CHECK_EQ(int(cp(ui).facts().topo), int(raguard::Topology::DirectReceptacle));
-    for (int i = 0; i < 20; i++) ui.tick(t += 100);
-    CHECK_EQ(g_stub.scans, 0);
-    set_cc(0, 0);                                    // the charger is unplugged, a bare cable stays
-    for (int i = 0; i < 30; i++) ui.tick(t += 100);
-    CHECK_EQ(int(cp(ui).facts().topo), int(raguard::Topology::NoSource));
-    CHECK_EQ(g_stub.scans, 1);
-    CHECK_EQ(int(g_stub.last_scan_mode), int(k2::pd::EmarkerMode::Vconn));
-    for (int i = 0; i < 40; i++) ui.tick(t += 100);
-    CHECK_EQ(g_stub.scans, 1);
-}
-
-// Coming back with a valid read in hand does not scan again; Read e-marker forces one.
-static void test_cable_tab_held_read_is_not_repeated() {
-    Ui &ui = fresh_ui();
-    g_stub.em = {};
-    g_stub.em.valid = true;
-    uint32_t t = open_and_settle(ui, kConnTabAlias + 1, 20000);
-    CHECK_EQ(g_stub.scans, 0);
-    t = open_and_settle(ui, kConnTabAlias, t);       // away and back
-    t = open_and_settle(ui, kConnTabAlias + 1, t);
-    CHECK_EQ(g_stub.scans, 0);
-    ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);   // Info -> Actions
-    ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);   // Read e-marker
-    ui.tick(t += 100);
-    CHECK_EQ(g_stub.scans, 1);
-}
-
-// Inline nothing new transmits: the Cable tab opens without a scan (no VCONN, Rd, Ra, spoof) and says why.
-static void test_cable_tab_inline_reads_nothing_and_says_why() {
-    Ui &ui = fresh_ui();
-    g_stub.em = {};
-    make_inline(ui, 20000);
-    const int base = acts();
-    uint32_t t = open_and_settle(ui, kConnTabAlias + 1, 20400);
-    CHECK_STR(std::string(ui.context().toast.view()).c_str(), conn::kWhyInline);   // the user is told once, on the toast
-    for (int i = 0; i < 40; i++) ui.tick(t += 100);
-    CHECK_EQ(acts(), base);
-    CHECK_EQ(g_stub.scans, 0);
-    CHECK_EQ(g_stub.full_scans, 0);
-    CHECK_EQ(g_stub.rr_starts, 0);
-    CHECK_STR(std::string(cp(ui).status_line()).c_str(), conn::kWhyInline);   // the reason stays; it is not a timed message
-    // The manual read is the one way in (the driver refuses the VCONN there and falls back to sniffing): it still works.
-    ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);
-    ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);
-    CHECK_EQ(g_stub.scans, 1);
-}
-
-// The latch lifting is a new chance: the read runs once the device is gone.
-static void test_cable_tab_reads_when_the_inline_latch_lifts() {
-    Ui &ui = fresh_ui();
-    g_stub.em = {};
-    make_inline(ui, 20000);
-    uint32_t t = open_and_settle(ui, kConnTabAlias + 1, 20400);
-    CHECK_EQ(g_stub.scans, 0);
-    g_stub.pm.vbus_mv = 0; g_stub.pm.current_ma = 0; g_stub.cc = 0;
-    for (int i = 0; i < 60; i++) ui.tick(t += 100);
-    CHECK_EQ(int(ui.link().inline_mode()), 0);
-    CHECK(g_stub.scans >= 1);
-}
-
-// The Charger tab keeps the offers read wanted; inline it never starts and the reason shows.
-static void test_charger_tab_inline_never_starts_the_offers_read() {
-    Ui &ui = fresh_ui();
-    uint32_t t = offers_fresh_presence();
-    attach_charger(ui, t);
-    make_inline(ui, t += 100);
-    const int base = acts();
-    t = open_and_settle(ui, kConnTabAlias, t += 100);
-    for (int i = 0; i < 60; i++) main_loop_pass(ui, t += 100);
-    CHECK_EQ(g_stub.rr_starts, 0);
-    CHECK_EQ(g_stub.rr_releases, 0);
-    CHECK_EQ(g_stub.epr_info_asks, 0);
-    CHECK_EQ(acts(), base);
-    CHECK_EQ(offers::running(), false);
-    CHECK_STR(std::string(cp(ui).status_line()).c_str(), conn::kWhyInline);
-    CHECK_EQ(ui.context().toast.active(t), false);   // the toast was shown once and ran out
-}
-
-// The K2 lives on this port's VBUS: the list is read on the contract it holds, Rd is left as it is.
-static void test_charger_tab_self_powered_keeps_rd() {
-    Ui &ui = fresh_ui();
-    g_stub.self_powered = true;
-    uint32_t t = offers_fresh_presence();
-    attach_charger(ui, t);
-    t = open_and_settle(ui, kConnTabAlias, t);
-    for (int i = 0; i < 60; i++) main_loop_pass(ui, t += 100);
-    CHECK_EQ(g_stub.rr_starts, 0);
-    CHECK_EQ(g_stub.rr_releases, 0);
-    CHECK_EQ(g_stub.rr_stand_downs, 0);
-    g_stub.self_powered = false;
-}
-
-// The refusal belongs to the presence it was raised for: the latch lifting and the charger leaving leave nothing stale.
-static void test_charger_tab_inline_refusal_does_not_go_stale() {
-    Ui &ui = fresh_ui();
-    uint32_t t = offers_fresh_presence();
-    attach_charger(ui, t);
-    make_inline(ui, t += 100);
-    t = open_and_settle(ui, kConnTabAlias, t += 100);
-    for (int i = 0; i < 5; i++) main_loop_pass(ui, t += 100);
-    CHECK_EQ(int(offers::why()), int(pd::OrWhy::Inline));
-    CHECK_EQ(ui.context().toast.active(t), true);
-    CHECK_STR(ui.context().toast.text, conn::kWhyInline);
-    g_stub.pm.vbus_mv = 0; g_stub.pm.current_ma = 0; g_stub.cc = 0; g_stub.pm_online = false;
-    g_stub.caps = {};
-    for (int i = 0; i < 80; i++) main_loop_pass(ui, t += 100);
-    CHECK_EQ(int(ui.link().inline_mode()), 0);
-    ui.goto_page(0, t += 100);
-    for (int i = 0; i < 10; i++) main_loop_pass(ui, t += 100);
-    t = open_and_settle(ui, kConnTabAlias, t += 100);
-    for (int i = 0; i < 10; i++) main_loop_pass(ui, t += 100);
-    CHECK_EQ(int(offers::why()), int(pd::OrWhy::None));
-    CHECK_EQ(std::string(cp(ui).status_line()).find(conn::kWhyInline) == std::string::npos, true);
-    CHECK_EQ(ui.context().toast.active(t) && std::string_view(ui.context().toast.text) == conn::kWhyInline, false);
-}
-
-// Not inline: the read runs with the indicator, restores the port and shows what it read; the latch mid-read ends it at once.
-static void test_charger_tab_reads_offers_and_yields_to_the_latch() {
-    {
-        Ui &ui = fresh_ui();
-        uint32_t t = offers_fresh_presence();
-        attach_charger(ui, t);
-        const pd::SourceCaps live = g_stub.caps;
-        g_stub.caps = {};                              // the offers are not known: the read gets them
-        t = open_and_settle(ui, kConnTabAlias, t);
-        main_loop_pass(ui, t += 100);
-        g_stub.rr_status.state = pd::RereadState::Running;   // the attach is under way
-        for (int i = 0; i < 10; i++) main_loop_pass(ui, t += 100);
-        CHECK_EQ(g_stub.rr_starts, 1);
-        CHECK_EQ(offers::running(), true);
-        CHECK_STR(std::string(cp(ui).status_line()).c_str(), "Reading offers...");
-        g_stub.caps = live;                            // the attach ended with the list in hand
-        g_stub.rr_status.state = pd::RereadState::Idle;
-        g_stub.rr_held = true;
-        for (int i = 0; i < 10; i++) main_loop_pass(ui, t += 100);
-        CHECK_EQ(g_stub.rr_releases >= 1, true);       // given back, not kept
-        g_stub.rr_held = false;
-        for (int i = 0; i < 10; i++) main_loop_pass(ui, t += 100);
-        CHECK_EQ(offers::running(), false);
-        CHECK_EQ(g_stub.rr_starts, 1);                 // once per presence
-        for (int i = 0; i < 100; i++) main_loop_pass(ui, t += 100);
-        CHECK_EQ(g_stub.rr_starts, 1);
-        CHECK_EQ(g_stub.rr_stand_downs, 0);
-    }
-    {   // a device appears behind the K2 while the read runs: the read ends, the port is handed back, nothing more goes out
-        Ui &ui = fresh_ui();
-        uint32_t t = offers_fresh_presence();
-        attach_charger(ui, t);
-        g_stub.caps = {};
-        t = open_and_settle(ui, kConnTabAlias, t);
-        main_loop_pass(ui, t += 100);
-        g_stub.rr_status.state = pd::RereadState::Running;
-        for (int i = 0; i < 10; i++) main_loop_pass(ui, t += 100);
-        CHECK_EQ(offers::running(), true);
-        CHECK_EQ(g_stub.rr_stand_downs, 0);
-        make_inline(ui, t += 100);
-        main_loop_pass(ui, t += 100);
-        CHECK_EQ(offers::running(), false);
-        CHECK_EQ(g_stub.rr_stand_downs, 1);
-        for (int i = 0; i < 40; i++) main_loop_pass(ui, t += 100);
-        CHECK_EQ(g_stub.rr_starts, 1);
-        CHECK_EQ(g_stub.rr_stand_downs, 1);
-        CHECK_EQ(g_stub.epr_info_asks, 0);
-    }
-}
-
-// A Refresh is the read: the automatic one does not follow it.
-static void test_refresh_counts_as_the_offers_read() {
-    Ui &ui = fresh_ui();
-    uint32_t t = offers_fresh_presence();
-    attach_charger(ui, t);
-    t = open_and_settle(ui, kConnTabAlias, t);
-    CHECK(ui.run_action(Action::PdRescan, t += 100));
-    for (int i = 0; i < 30; i++) main_loop_pass(ui, t += 100);
-    CHECK_EQ(g_stub.rr_starts, 0);
-}
-
-// The new status texts in all four rotations (K2_DUMP renders them; the footer must show each whole).
-static void test_auto_read_states_all_rotations() {
-    for (int r = 0; r < 4; r++) {
-        char name[64];
-        {   // inline: the Cable tab and the Charger tab both say why they read nothing
-            Ui &ui = fresh_ui();
-            g_stub.em = {};
-            make_inline(ui, 20000);
-            ui.set_rotation(r, 20300);
-            uint32_t t = open_and_settle(ui, kConnTabAlias + 1, 20400);
-            for (int i = 0; i < 5; i++) main_loop_pass(ui, t += 100);
-            while (ui.painting()) ui.tick(t += 2);
-            CHECK_STR(std::string(cp(ui).status_line()).c_str(), conn::kWhyInline);
-            CHECK_EQ(ui.context().toast.active(t), true);
-            std::snprintf(name, sizeof name, "k2_auto_inline_cable_rot%d", r);
-            dump_panel(name);
-        }
-        {
-            Ui &ui = fresh_ui();
-            uint32_t t = offers_fresh_presence();
-            attach_charger(ui, t);
-            make_inline(ui, t += 100);
-            ui.set_rotation(r, t += 100);
-            t = open_and_settle(ui, kConnTabAlias, t += 100);
-            for (int i = 0; i < 8; i++) main_loop_pass(ui, t += 100);
-            while (ui.painting()) ui.tick(t += 2);
-            CHECK_STR(std::string(cp(ui).status_line()).c_str(), conn::kWhyInline);
-            CHECK_EQ(ui.context().toast.active(t), true);
-            std::snprintf(name, sizeof name, "k2_auto_inline_charger_rot%d", r);
-            dump_panel(name);
-        }
-        {   // a plain 5 V charger waiting, no caps yet: the rows say so while the read runs
-            Ui &ui = fresh_ui();
-            uint32_t t = offers_fresh_presence();
-            g_stub.cc = 1; g_stub.pm.vbus_mv = 5000; g_stub.pm.current_ma = 0; g_stub.pm_online = true;
-            g_stub.caps = {};
-            for (int i = 0; i < 3; i++) ui.tick(t += 100);
-            ui.set_rotation(r, t += 100);
-            t = open_and_settle(ui, kConnTabAlias, t);
-            main_loop_pass(ui, t += 100);
-            g_stub.rr_status.state = pd::RereadState::Running;
-            for (int i = 0; i < 36; i++) main_loop_pass(ui, t += 100);   // past the toast: the rows alone show the read
-            while (ui.painting()) ui.tick(t += 2);
-            CHECK_EQ(offers::running(), true);
-            CHECK_EQ(ui.context().toast.active(t), false);
-            const auto reading = frame();
-            std::snprintf(name, sizeof name, "k2_auto_offers_nocaps_rot%d", r);
-            dump_panel(name);
-            g_stub.rr_status.state = pd::RereadState::Idle;
-            for (int i = 0; i < 60; i++) main_loop_pass(ui, t += 100);
-            while (ui.painting()) ui.tick(t += 2);
-            CHECK_EQ(offers::running(), false);
-            CHECK_EQ(frame() != reading, true);   // the loading row went away with the read
-        }
-        {   // the offers read under way
-            Ui &ui = fresh_ui();
-            uint32_t t = offers_fresh_presence();
-            attach_charger(ui, t);
-            ui.set_rotation(r, t += 100);
-            g_stub.caps = {};
-            t = open_and_settle(ui, kConnTabAlias, t);
-            main_loop_pass(ui, t += 100);
-            g_stub.rr_status.state = pd::RereadState::Running;
-            for (int i = 0; i < 10; i++) main_loop_pass(ui, t += 100);
-            while (ui.painting()) ui.tick(t += 2);
-            CHECK_STR(std::string(cp(ui).status_line()).c_str(), "Reading offers...");
-            CHECK_EQ(ui.context().toast.active(t), true);   // what the user sees of the read starting
-            CHECK_STR(ui.context().toast.text, "Reading offers...");
-            std::snprintf(name, sizeof name, "k2_auto_offers_reading_rot%d", r);
-            dump_panel(name);
-            g_stub.rr_status.state = pd::RereadState::Idle;
-            for (int i = 0; i < 40; i++) main_loop_pass(ui, t += 100);
-        }
-    }
-}
-
 int main() {
     test_sink_tab_pd_body_shows_the_raw_vooc_note();
     test_sink_tab_no_pd_shows_the_raw_vooc_note();
@@ -2466,16 +2147,5 @@ int main() {
     test_cable_read_emarker_ux_paths();
     test_device_scroll_thumb_reaches_bottom();
     test_device_scroll_toast_stays_on_top();
-    test_cable_tab_reads_once_on_open();
-    test_cable_tab_reads_a_bare_cable_not_a_top_plug();
-    test_cable_tab_held_read_is_not_repeated();
-    test_cable_tab_inline_reads_nothing_and_says_why();
-    test_cable_tab_reads_when_the_inline_latch_lifts();
-    test_charger_tab_inline_never_starts_the_offers_read();
-    test_charger_tab_inline_refusal_does_not_go_stale();
-    test_charger_tab_self_powered_keeps_rd();
-    test_charger_tab_reads_offers_and_yields_to_the_latch();
-    test_refresh_counts_as_the_offers_read();
-    test_auto_read_states_all_rotations();
     return test_report("test_ui_connection_page");
 }

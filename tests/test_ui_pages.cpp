@@ -29,12 +29,6 @@ static void fill_pdos(int n) {
     for (int i = 0; i < n && i < 7; i++) g_stub.caps.pdos[i] = mix[i];
 }
 
-// The Cable tab reads the cable by itself on opening. Tests of the manual flow arm the key first, as if that read had run.
-static void arm_cable_auto(Ui &ui) {
-    ui.context().keep.cable_auto_key = conn::cable_auto_key(g_stub.cable_seq, g_stub.session, ui.link().cable_stale());
-    ui.context().keep.cable_auto_set = true;
-}
-
 static Ui &fresh_ui() {
     static Ui ui;
     // The inline latch survives a VBUS gap (pd::kInlineHoldMs), so a case no longer ends with the Link back at "standalone" by itself:
@@ -936,7 +930,6 @@ static int act_row(bench::Place p, int tool) {
 // Bench -> place -> the action's row -> OK, by key presses from the place's top row.
 static void open_act(Ui &ui, bench::Place p, int tool, uint32_t t) {
     ui.context().keep.place_sel[static_cast<int>(p)] = 0;
-    arm_cable_auto(ui);
     ui.open_place(p, t);
     ui.tick(t + 2);
     const int target = act_row(p, tool);
@@ -1480,7 +1473,6 @@ static void test_emarker_listen_window() {
     g_stub.cc = 1;
     ui.debug_link(true, 79900);
     ui.tick(80000);
-    arm_cable_auto(ui);
     ui.goto_page(kPdPage + 1, 80000);                     // Connection, Cable place (Read e-marker focused)
     CHECK_EQ(on_pd(ui), 1);
     ui.on_button(Button::Ok, ButtonEvent::Short, 80050);  // Info -> Actions
@@ -1491,7 +1483,6 @@ static void test_emarker_listen_window() {
     CHECK_EQ(ui.context().em_listen_until != 0, true);
     CHECK_EQ(ui.connection_page().actions_mode(), true);
     g_stub.cable_seq++;
-    arm_cable_auto(ui);                                   // the data that arrived is the read: no second automatic one
     ui.tick(82200);
     { uint32_t t = 82200; while (ui.painting()) ui.tick(t += 2); }
     CHECK_EQ(ui.context().em_listen_until, 0u);
