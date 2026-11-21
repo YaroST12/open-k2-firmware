@@ -898,6 +898,71 @@ def decode_emarker_detail(p2):
             **decode_answered(p2[10:14]), **decode_read(p2[14:16]), **decode_pull_down(p2[16:17])}
 
 
+U3_POWER_TEXT = [">10mW", "5-10mW", "1-5mW", "0.5-1mW", "0.2-0.5mW", "50-200uW", "<50uW"]
+SVID_NAMES = {0x8087: "tbt3", 0xFF01: "dp"}
+TBT_SPEED_TEXT = {1: "USB3", 2: "10G", 3: "10/20G"}
+DP_CABLE_TEXT = ["passive", "retimer", "redriver", "optical"]
+
+
+def decode_active_extra(vdo2, v13):
+    """Active cable VDO 2 beyond decode_emarker_detail (bit layout of the public Linux typec headers); bits 10:8 are reserved before VDO 1.3."""
+    return {"u3_power_text": U3_POWER_TEXT[(vdo2 >> 12) & 7] if (vdo2 >> 12) & 7 < 7 else "?",
+            "u3_via_u3s": bool(vdo2 >> 11 & 1), "optical": v13 and bool(vdo2 >> 10 & 1),
+            "retimer": v13 and bool(vdo2 >> 9 & 1), "usb2": not vdo2 >> 5 & 1, "usb32": not vdo2 >> 4 & 1,
+            "hub_hops": vdo2 >> 6 & 3, "asym": bool(vdo2 >> 1 & 1)}
+
+
+def decode_tbt_mode(v):
+    """Thunderbolt 3 cable Discover Modes VDO (SVID 0x8087)."""
+    s = v >> 16 & 7
+    return {"tbt_mode": bool(v & 1), "speed": TBT_SPEED_TEXT.get(s, "?"), "rounded": bool(v >> 19 & 1),
+            "optical": bool(v >> 21 & 1), "retimer": bool(v >> 22 & 1), "uni_training": bool(v >> 23 & 1),
+            "active": bool(v >> 25 & 1)}
+
+
+def decode_dp_mode(v):
+    """DisplayPort capabilities VDO of a cable (SVID 0xFF01); rate "" when not stated."""
+    rate = v >> 2 & 15
+    return {"rate": {1: "HBR3", 2: "UHBR13.5" if v >> 26 & 1 else "UHBR10", 3: "UHBR20"}.get(rate, ""),
+            "cable": DP_CABLE_TEXT[v >> 28 & 3], "pins": "".join(chr(65 + i) for i in range(6) if ((v >> 8) | (v >> 16)) >> i & 1)}
+
+
+def _decode_plug(p, o):
+    """svids_ack nsvid mode_ack, nsvid x [svid(2) mode(4)] from offset o: (plug, next offset)."""
+    _need(p, o + 3, "cable plug")
+    n = p[o + 1]
+    _need(p, o + 3 + 6 * n, "cable plug svids")
+    svids = []
+    for i in range(n):
+        b = o + 3 + 6 * i
+        svid, mode = int.from_bytes(p[b:b + 2], "little"), int.from_bytes(p[b + 2:b + 6], "little")
+        e = {"svid": svid, "name": SVID_NAMES.get(svid), "mode_answered": bool(p[o + 2] >> i & 1), "mode_vdo": mode}
+        if e["mode_answered"] and svid == 0x8087:
+            e["tbt"] = decode_tbt_mode(mode)
+        elif e["mode_answered"] and svid == 0xFF01:
+            e["dp"] = decode_dp_mode(mode)
+        svids.append(e)
+    return {"svids_ack": bool(p[o]), "svids": svids}, o + 3 + 6 * n
+
+
+def decode_cable_full(p3, p4=None):
+    """Parts 3 and 4 of GET_EMARKER: the full read (SVIDs and modes on SOP', identity, SVIDs and modes on SOP''). None when no
+    read ran on this cable; parts a firmware does not know are not sent, p4 stays None then."""
+    _need(p3, 4, "cable full")
+    if not p3[0]:
+        return None
+    plug1, _ = _decode_plug(p3, 1)
+    out = {"sop1": plug1}
+    if p4 is not None:
+        _need(p4, 2, "cable full SOP''")
+        n = p4[1]
+        _need(p4, 2 + 4 * n, "cable full SOP'' identity")
+        plug2, _ = _decode_plug(p4, 2 + 4 * n)
+        out["sop2"] = {"id_ack": bool(p4[0]), "id_vdos": [int.from_bytes(p4[2 + 4 * i:6 + 4 * i], "little") for i in range(n)],
+                       **plug2}
+    return out
+
+
 def decode_identity(p):
     _need(p, 10, "identity")
     u16 = lambda o: int.from_bytes(p[o:o + 2], "little")
@@ -1519,7 +1584,7 @@ def _reread_mask(text):
     return v
 
 
-def decode_emarker(p0, p1=b"", p2=None):
+def decode_emarker(p0, p1=b"", p2=None, p3=None, p4=None):
     _need(p0, 17, "emarker")
     u16 = lambda o: int.from_bytes(p0[o:o + 2], "little")
     vendor, _, speed = p0[17:].partition(b"\x00")
@@ -1530,6 +1595,12 @@ def decode_emarker(p0, p1=b"", p2=None):
             "vdos": [int.from_bytes(p1[o:o + 4], "little") for o in range(0, len(p1) - 3, 4)]}
     if p2 is not None:
         out.update(decode_emarker_detail(p2))
+        if out["vdo2_valid"] and len(out["vdos"]) > 5:
+            out["active_extra"] = decode_active_extra(out["vdos"][5], out["vdo_version"] >= 3)
+    if p3 is not None:
+        full = decode_cable_full(p3, p4)
+        if full:
+            out["full"] = full
     return out
 
 
@@ -3121,7 +3192,14 @@ def cmd_emarker_data(link, a):
     p0 = link.call(CMD_GET_EMARKER, bytes([0])).payload
     p1 = link.call(CMD_GET_EMARKER, bytes([1])).payload
     p2 = link.call(CMD_GET_EMARKER, bytes([2])).payload
-    out = decode_emarker(p0, p1, p2)
+    p3 = p4 = None
+    try:   # parts 3 and 4 (the full read) are absent from older firmware
+        p3 = link.call(CMD_GET_EMARKER, bytes([3])).payload
+        p4 = link.call(CMD_GET_EMARKER, bytes([4])).payload
+    except RemoteError as e:
+        if e.status != STATUS_BAD_ARG:
+            raise
+    out = decode_emarker(p0, p1, p2, p3, p4)
     link_f = _link_fields(link, ("cable_scanned", "cable_stale", "cable_age_s"))
     if link_f:
         out.update({"stale": link_f["cable_stale"], "age_s": link_f["cable_age_s"],
@@ -5244,6 +5322,42 @@ def cmd_watch(link, a, out=print):
     return None
 
 
+def _plug_text(p, label):
+    """Lines for one plug of the full read: its SVIDs, and the decoded or raw first mode of each."""
+    if not p["svids_ack"]:
+        return f"\n  {label}: no SVIDs reply"
+    if not p["svids"]:
+        return f"\n  {label}: no SVIDs"
+    s = ""
+    for e in p["svids"]:
+        name = e["name"] or f"0x{e['svid']:04X}"
+        if not e["mode_answered"]:
+            s += f"\n  {label} {name}: no mode reply"
+        elif "tbt" in e:
+            t = e["tbt"]
+            s += (f"\n  {label} {name}: {t['speed']} {'active' if t['active'] else 'passive'}"
+                  f"{' optical' if t['optical'] else ''}{' retimer' if t['retimer'] else ''}{' rounded' if t['rounded'] else ''}")
+        elif "dp" in e:
+            d = e["dp"]
+            s += f"\n  {label} {name}: {d['rate'] or 'rate not stated'} {d['cable']} pins {d['pins'] or '-'}"
+        else:
+            s += f"\n  {label} {name}: mode 0x{e['mode_vdo']:08X}"
+    return s
+
+
+def _emarker_full_text(r):
+    f = r.get("full")
+    if not f:
+        return ""
+    s = _plug_text(f["sop1"], "SOP'")
+    if "sop2" in f:
+        p2 = f["sop2"]
+        s += f"\n  SOP'' identity: {'answered, ' + str(len(p2['id_vdos'])) + ' VDOs' if p2['id_ack'] else 'no reply'}"
+        if p2["id_ack"] or p2["svids_ack"]:
+            s += _plug_text(p2, "SOP''")
+    return s
+
+
 def _emarker_detail_text(r):
     if "sop" not in r:
         return ""
@@ -5261,7 +5375,7 @@ def _emarker_detail_text(r):
         s += "\n  " + read_line(r)
     if pull_down_line(r):
         s += "\n  " + pull_down_line(r)
-    return s
+    return s + _emarker_full_text(r)
 
 
 def _ago(r):

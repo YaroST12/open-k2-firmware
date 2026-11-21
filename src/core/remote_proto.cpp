@@ -608,8 +608,28 @@ size_t encode_screen_info(std::span<uint8_t> out, const ScreenInfo &i) {
     return w.size();
 }
 
+// One plug of the full read: svids_ack nsvid mode_ack, then nsvid x [svid(2) mode(4)] (nsvid is clamped to the array).
+static void put_plug(Writer &w, const cable_full::Plug &p) {
+    const size_t n = std::min<size_t>(p.nsvid, p.svid.size());
+    w.u8(p.svids_ack); w.u8(static_cast<uint8_t>(n)); w.u8(p.mode_ack);
+    for (size_t i = 0; i < n; i++) { w.u16(p.svid[i]); w.u32(p.mode[i]); }
+}
+
 size_t encode_emarker(std::span<uint8_t> out, const EmarkerSnapshot &e, uint8_t part) {
     Writer w(out);
+    if (part == 3) {
+        w.u8(e.full.valid);
+        if (!e.full.valid) { w.u8(0); w.u8(0); w.u8(0); return w.size(); }
+        put_plug(w, e.full.p1);
+        return w.size();
+    }
+    if (part == 4) {
+        const size_t n = e.full.valid ? std::min<size_t>(e.full.id2_n, e.full.id2.size()) : 0;
+        w.u8(e.full.valid && e.full.id2_ack); w.u8(static_cast<uint8_t>(n));
+        for (size_t i = 0; i < n; i++) w.u32(e.full.id2[i]);
+        put_plug(w, e.full.valid ? e.full.p2 : cable_full::Plug{});
+        return w.size();
+    }
     if (part == 1) {
         const size_t n = std::min<size_t>(e.num_vdos, e.vdo.size());
         for (size_t i = 0; i < n; i++) w.u32(e.vdo[i]);

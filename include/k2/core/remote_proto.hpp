@@ -64,7 +64,10 @@
 //                                    max_ma(2) max_mw(4)
 //   0x05 GET_EMARKER req [part(1)]    part 0: valid active vid(2) pid(2) xid(4) hw_rev fw_rev
 //                                    max_a max_v max_w(2) num_vdos, then "vendor\0speed";
-//                                    part 1: num_vdos raw VDOs (4 bytes each)
+//                                    part 1: num_vdos raw VDOs (4 bytes each); part 2: cable detail;
+//                                    part 3: the SOP' full read: valid svids_ack nsvid mode_ack, then nsvid x
+//                                    [svid(2) first mode VDO(4)]; part 4: SOP'': id_ack id_n, id_n VDOs, then the
+//                                    same svids_ack nsvid mode_ack and nsvid x [svid(2) mode(4)] of that plug
 //   0x06 ACTION      req id(1)        rsp id(1)     id: 1 PD rescan 2 e-marker scan 3 energy reset
 //   0x07 SET_PAGE    req page(1)      rsp page(1)
 //   0x08 REBOOT      req -            rsp -         (the reset follows the response)
@@ -572,6 +575,7 @@
 #include "k2/drivers/eeprom_calc.hpp"
 #include "k2/chargertest/charger_test.hpp"
 #include "k2/chargertest/ct_cable.hpp"
+#include "k2/pd/cable_full.hpp"
 #include "k2/pd/emk_learn.hpp"
 #include "k2/pd/emk_quirk.hpp"
 #if K2_OPPO_PROBE
@@ -1342,6 +1346,8 @@ struct EmarkerSnapshot {
     // after a cable-alone read that found nothing (0 not probed, 1 none, 2 on CC1, 3 on CC2, 4 unclear;
     // k2::raclass::PullDown).
     uint8_t pull_down = 0;
+    // Parts 3 and 4: what the full read (Discover SVIDs / Modes on SOP', identity and SVIDs on SOP'') collected.
+    cable_full::Full full{};
 };
 
 constexpr uint8_t kEmFlagTypeC = 1 << 0, kEmFlagVconn = 1 << 1, kEmFlagEpr = 1 << 2,
@@ -1850,7 +1856,7 @@ template <Backend B>
     case Cmd::GetEmarker: {
         if (p.size() > 1) return reply_bad_len(f);
         const uint8_t part = p.empty() ? 0 : p[0];
-        if (part > 2) return reply_bad_arg(f);
+        if (part > 4) return reply_bad_arg(f);
         return reply_ok(f, encode_emarker(f.span(), backend.emarker(), part));
     }
     case Cmd::GetIdentity:
