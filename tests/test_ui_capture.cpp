@@ -359,7 +359,7 @@ static void test_charger_wizard_scenes() {
     shot("ct_tests", kTests);
     const auto top = [&] { for (unsigned i = 0; i < charger_test::kMaxSteps; ++i) press(Button::Minus); };   // rows are 0-based: there is no Next row
     const auto long_ok = [&] { wizard.on_button(Button::Ok, ButtonEvent::Long, now); };
-    move(4); press(Button::Ok); shot("ct_custom", kCustom);          // "Custom..." opens the per-family list
+    move(5); press(Button::Ok); shot("ct_custom", kCustom);          // "Custom..." opens the per-family list
     move(4); long_ok(); shot("ct_pd_algorithms", kGroup);           // the USB PD family row, long OK: PD fixed + PPS
     move(1); shot("ct_pd_pps", kGroup);
     press(Button::Back); top(); move(6); press(Button::Ok); shot("ct_cable", kCable);   // Done (row 6) goes on to the cable
@@ -489,7 +489,7 @@ static void test_wizard_gallery() {
         ui.tick(now += 100);
         shot("1_tests");
         move(2); press(Button::Ok);                                   // PD only: the USE pill moves
-        move(3); press(Button::Ok); shot("1_custom");                 // Custom...
+        move(4); press(Button::Ok); shot("1_custom");                 // Custom...
         press(Button::Back); top(); press(Button::Ok); shot("2_cable");
         move(1); shot("2_cable_cursor");
         move(5); press(Button::Ok); shot("2_cable_clone");            // the saved clone is picked: USE

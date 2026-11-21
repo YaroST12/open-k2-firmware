@@ -40,7 +40,7 @@ static void fixture() {
 static void test_pages() {
     fixture(); Ui ui; ui.init(0); ui.tick(1000); ui.goto_page(static_cast<uint8_t>(Page::ChargerTest), 1100);
     settle(ui); dump("1_tests");
-    top(ui); move(ui, 5); press(ui, Button::Ok); settle(ui);   // "Custom..." opens the per-family list (not a numbered step)
+    top(ui); move(ui, 6); press(ui, Button::Ok); settle(ui);   // "Custom..." opens the per-family list (not a numbered step)
     CHECK_EQ(ui.charger_test_stage(), 14); dump("1b_custom");
     move(ui, 1); ui.on_button(Button::Ok, ButtonEvent::Long, g_t); settle(ui);   // a long OK on a family opens its entries
     CHECK_EQ(ui.charger_test_stage(), 1); dump("2_group");

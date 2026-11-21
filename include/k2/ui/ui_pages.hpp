@@ -360,6 +360,10 @@ public:
     void set_avs_sweep(bool on) { options_.avs_sweep = on; }
     charger_test::Level level() const { return options_.level; }
     void set_level(charger_test::Level l);   // with_level: the level and both deep sweeps; a START armed on the old plan is disarmed
+    // The Depth row's own level: Light / Medium / Deep, kept while the Read-offers preset (Level::Offers) is the pick, and what a
+    // preset or Custom... restores when it is left. set_level of a depth level sets it too.
+    charger_test::Level depth_level() const { return depth_level_; }
+    void set_depth(charger_test::Level l);   // the Depth row: the depth, and the plan's level unless Read offers is the pick
     // The SVOOC ceiling stage (opt-in, Cmd::ChargerSvoocCap): Off, On (the far-sink check stays) or UsbA (waived: a legacy A port).
     svooc_ceiling::Mode svooc_cap() const { return options_.svooc_cap; }
     void set_svooc_cap(svooc_ceiling::Mode m) { options_.svooc_cap = m; }
@@ -528,6 +532,7 @@ private:
     // Review's Level row and the remote (Cmd 0x5B) change it, and Deep turns both deep sweeps on (with_level). The Tests list
     // lines and the remote knob (charger-sweep, Cmd 0x0F) still toggle each sweep on its own after that.
     charger_test::Options options_{};
+    charger_test::Level depth_level_ K2_BSS_INIT(charger_test::Level::Medium);   // the Depth row (options_.level is Offers while Read offers is picked)
     charger_test::Summary summary_;
     uint32_t run_t0_ K2_BSS_INIT(0);                  // when the run entered Running (the m:ss on screen)
     StrBuf<32> message_;
