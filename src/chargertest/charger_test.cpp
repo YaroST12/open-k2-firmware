@@ -257,7 +257,7 @@ constexpr uint32_t kHoldMs = 1000;
 constexpr uint32_t kHoldFloorMs = progcheck::kStableMs + progcheck::kPostMs + 100;   // below it the transition capture would outlive the hold
 constexpr uint32_t kTuneMaxMs = 60000;
 constexpr uint32_t kChainMaxLevel = 1;
-constexpr std::array<uint32_t, size_t(LegacyKnob::Count)> kTuneDefault = {kLegacyQuietMs, kLegacySteadyMs, kLegacyFirstWaitMs, kLegacyGapMs, kHoldMs, 1};
+constexpr std::array<uint32_t, size_t(LegacyKnob::Count)> kTuneDefault = {0, kLegacySteadyMs, kLegacyFirstWaitMs, kLegacyGapMs, kHoldMs, 1};
 std::array<uint32_t, size_t(LegacyKnob::Count)> g_tune = kTuneDefault;
 uint32_t quiet_ms() { return g_tune[size_t(LegacyKnob::QuietMs)]; }
 // The wait `want` ms after the Baseline's own 500 ms settle (stable_ms_ / pre_ms_ count the Baseline); a shorter want pulls the start back.

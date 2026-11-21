@@ -6071,8 +6071,11 @@ static void test_consecutive_legacy_units_share_one_attach() {
 }
 // The shared session is only kept while the line stays PD-quiet at 5 V: PD traffic between two Legacy units ends it with a
 // detach and a fresh attach, so the next unit still runs.
+// The tests of the PD-quiet wait run it at its conservative value; the default (0) starts inside the source's announcement.
+static void wait_quiet() { CHECK_EQ(ct::legacy_tune_set(uint8_t(ct::LegacyKnob::QuietMs), ct::kLegacyQuietMs), true); }
 static void test_legacy_session_that_sees_pd_traffic_is_renewed() {
     Fake f; ct::Runner r(f);
+    wait_quiet();
     const auto o = with_units(ct::bit(A::Qc2) | ct::bit(A::Qc3), {ct::Unit::Qc2, ct::Unit::Qc3});
     CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
     CHECK_EQ(run_until(f, r, [&] { return r.unit() == ct::Unit::Qc2 && f.fc_requests > 0; }, 60000), true);
@@ -6141,15 +6144,17 @@ static void test_legacy_tune_knobs() {
     CHECK_EQ(ct::legacy_tune_set(uint8_t(ct::LegacyKnob::Chain), 0), true);
     CHECK_EQ(ct::legacy_tune(ct::LegacyKnob::Chain), 0u);
     ct::legacy_tune_reset();
-    CHECK_EQ(ct::legacy_guard_override(), false);                                       // the default waits the caps out: no override
-    CHECK_EQ(ct::legacy_tune_set(uint8_t(ct::LegacyKnob::QuietMs), k2::link::kCapsStaleMs - 1), true);
+    CHECK_EQ(ct::legacy_tune(ct::LegacyKnob::QuietMs), 0u);                              // the default starts inside the source's announcement
     CHECK_EQ(ct::legacy_guard_override(), true);
     CHECK_EQ(ct::legacy_tune_set(uint8_t(ct::LegacyKnob::QuietMs), k2::link::kCapsStaleMs), true);
-    CHECK_EQ(ct::legacy_guard_override(), false);
+    CHECK_EQ(ct::legacy_guard_override(), false);                                       // waiting the caps out: no override
+    CHECK_EQ(ct::legacy_tune_set(uint8_t(ct::LegacyKnob::QuietMs), k2::link::kCapsStaleMs - 1), true);
+    CHECK_EQ(ct::legacy_guard_override(), true);
     ct::legacy_tune_reset();
     CHECK_EQ(ct::legacy_tune_set(uint8_t(ct::LegacyKnob::GapMs), 60001), false);
-    {   // defaults: a flood of 4 s after the attach is waited out, plus the quiet time
+    {   // quiet_ms 2500: a flood of 4 s after the attach is waited out, plus the quiet time
         Fake f; ct::Runner r(f);
+        CHECK_EQ(ct::legacy_tune_set(uint8_t(ct::LegacyKnob::QuietMs), ct::kLegacyQuietMs), true);
         f.attach_flood_ms = 4000;
         const auto o = with_units(ct::bit(A::Qc2), {ct::Unit::Qc2});
         CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
@@ -6189,6 +6194,7 @@ static void test_legacy_tune_knobs() {
 // and the next unit still gets its own attach.
 static void test_legacy_attach_that_never_falls_back_is_blocked_by_pd() {
     Fake f; ct::Runner r(f);
+    wait_quiet();
     f.stays_pd = true;
     const auto o = with_units(ct::bit(A::Qc2) | ct::bit(A::Qc3), {ct::Unit::Qc2, ct::Unit::Qc3});
     CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
@@ -6208,6 +6214,7 @@ static void test_legacy_attach_that_never_falls_back_is_blocked_by_pd() {
 // The same charger that lets go of PD during the longer retry: the unit runs normally.
 static void test_legacy_retry_that_falls_back_runs_the_unit() {
     Fake f; ct::Runner r(f);
+    wait_quiet();
     f.stays_pd = true;
     const auto o = with_units(ct::bit(A::Qc2), {ct::Unit::Qc2});
     CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
@@ -6237,6 +6244,7 @@ static void test_legacy_attach_waits_out_hard_reset_cycles() {
 static void test_silent_attach_source_that_revives_pd_does_not_go_unsafe() {
     for (const uint32_t dark_ms : {600u, 1500u}) {   // how long VBUS sags to 3 V and the list stays dark
         Fake f; ct::Runner r(f); f.reset_dark_ms = dark_ms;
+        wait_quiet();
         const auto o = with_units(ct::bit(A::Qc2) | ct::bit(A::Qc3) | ct::bit(A::Pd3Fixed), {ct::Unit::Qc2, ct::Unit::Qc3, ct::Unit::Pd});
         CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
         CHECK_EQ(run_until(f, r, [&] { return f.handed && r.state() == ct::State::Baseline && r.unit() == ct::Unit::Qc2; }, 60000), true);
@@ -6263,6 +6271,7 @@ static void test_silent_sink_output_off_skips_legacy_units_and_runs_pd() {
     const std::array<std::array<ct::Unit, 3>, 2> orders = {{{ct::Unit::Qc2, ct::Unit::Qc3, ct::Unit::Pd}, {ct::Unit::Pd, ct::Unit::Qc2, ct::Unit::Qc3}}};
     for (const auto& order : orders) {
         Fake f; ct::Runner r(f); f.silent_off_ms = 3600;   // the attach is verified quiet at ~3 s: the output goes off in the first Baseline, before its handshake
+        wait_quiet();
         const auto o = with_units(ct::bit(A::Qc2) | ct::bit(A::Qc3) | ct::bit(A::Pd3Fixed), {order[0], order[1], order[2]});
         CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
         bool unsafe = false;
@@ -7154,6 +7163,7 @@ static void test_self_powered_soft_reset_without_caps_fails_the_unit() {
 // A Legacy unit whose charger stays in PD is blocked once and not retried with a CC open: the run goes on, no detach.
 static void test_self_powered_blocked_legacy_unit_never_detaches() {
     Fake f; f.in.self_powered = true; f.stays_pd = true; ct::Runner r(f);
+    wait_quiet();
     CHECK_EQ(r.start(f.caps, with_units(ct::bit(A::Qc2) | ct::bit(A::Pd3Fixed), {ct::Unit::Qc2, ct::Unit::Pd}), f.in, true), ct::Reason::None);
     f.tick(r, 300000);
     CHECK_EQ(r.state(), ct::State::Done);
@@ -8132,6 +8142,7 @@ static void unchained() { CHECK_EQ(ct::legacy_tune_set(uint8_t(ct::LegacyKnob::C
 static void test_legacy_row_waits_through_a_source_restart() {
     for (const uint32_t chatter : {0u, 6100u}) {   // r2: no announcement after the cut; r1a: an announcement as long as the attach's
         Fake f; ct::Runner r(f); unchained();
+        wait_quiet();
         f.link_guard = true; f.restart_on_release = 1; f.restart_chatter_ms = chatter;
         const auto o = with_units(ct::bit(A::Scp), {ct::Unit::Scp});
         CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
@@ -8155,6 +8166,7 @@ static void test_legacy_row_waits_through_a_source_restart() {
 static void test_legacy_restart_wait_is_bounded_and_a_load_still_refuses() {
     {
         Fake f; ct::Runner r(f); unchained();
+        wait_quiet();
         f.link_guard = true; f.restart_on_release = 1; f.restart_chatter_ms = 10000000;
         const auto o = with_units(ct::bit(A::Scp), {ct::Unit::Scp});
         CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
@@ -8165,6 +8177,7 @@ static void test_legacy_restart_wait_is_bounded_and_a_load_still_refuses() {
     }
     {
         Fake f; ct::Runner r(f); unchained();
+        wait_quiet();
         f.link_guard = true; f.restart_on_release = 1; f.restart_chatter_ms = 6100;
         const auto o = with_units(ct::bit(A::Scp), {ct::Unit::Scp});
         CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
@@ -8206,6 +8219,7 @@ static void test_legacy_units_chain_through_the_sources_reannounce_after_a_relea
 // The SCP unit's rows, each its own session with a release between them: none of them is skipped "PD active" by the source's answer.
 static void test_scp_rows_are_not_pd_active_after_our_own_release() {
     Fake f; ct::Runner r(f); unchained();
+    wait_quiet();
     reannounce_setup(f, 100, 3000, 0);
     const auto o = with_units(ct::bit(A::Scp), {ct::Unit::Scp});
     CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
@@ -8236,6 +8250,7 @@ static void test_a_quiet_source_is_watched_once_per_attach() {
 // Real PD traffic is no echo of our release: a source that announces before the release (the unit's own PD-active proof) still skips the unit.
 static void test_pd_traffic_before_the_release_still_skips_the_unit() {
     Fake f; ct::Runner r(f); unchained();
+    wait_quiet();
     reannounce_setup(f, 100, 3000, 0);
     const auto o = with_units(ct::bit(A::Scp), {ct::Unit::Scp});
     CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
@@ -8266,6 +8281,7 @@ static void test_quiet_zero_reaches_the_charger_through_the_attach_announcement(
 // An announcement that never stops is bounded by kRestartSettleMs: then the unit is PD active as before, the guard was never asked.
 static void test_endless_reannounce_after_a_release_is_bounded() {
     Fake f; ct::Runner r(f); unchained();
+    wait_quiet();
     reannounce_setup(f, 100, 10000000, 0);
     const auto o = with_units(ct::bit(A::Scp), {ct::Unit::Scp});
     CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
@@ -8290,6 +8306,7 @@ static void test_a_reannounce_as_long_as_the_attach_flood_is_waited_out() {
 // A sink plugged in while the unit waits for the announcement to stop ends the run at once, as in the restart wait.
 static void test_load_during_the_reannounce_wait_stops_the_run() {
     Fake f; ct::Runner r(f);
+    wait_quiet();
     unchained();
     reannounce_setup(f, 100, 6000, 0);
     const auto o = with_units(ct::bit(A::Scp), {ct::Unit::Scp});
@@ -8309,6 +8326,7 @@ static void test_load_during_the_reannounce_wait_stops_the_run() {
 static void test_reannounce_then_output_restart_on_the_same_unit() {
     for (const int rel : {1, 2}) for (const uint32_t delay : {30u, 1500u}) {   // the cut before the announcement is heard, and after it
         Fake f; ct::Runner r(f);
+        wait_quiet();
         reannounce_setup(f, 100, 3000, 0);
         f.restart_on_release = rel; f.restart_delay_ms = delay; f.restart_chatter_ms = 3000;
         const auto o = with_units(ct::bit(A::Scp) | ct::bit(A::Afc), {ct::Unit::Scp, ct::Unit::Afc});

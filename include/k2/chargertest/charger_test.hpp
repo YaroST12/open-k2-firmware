@@ -172,7 +172,8 @@ struct UnitList {
     uint8_t n = 0;
     bool add(Unit x) { if (n >= u.size() || x >= Unit::Count) return false; u[n++] = x; return true; }
 };
-// Legacy attach: PD quiet for kLegacyQuietMs (longer than the ~1 s a source stays silent around its own hard reset) plus
+// Legacy attach: the quiet_ms knob defaults to 0 (start inside the source's announcement); set to kLegacyQuietMs (longer than the
+// ~1 s a source stays silent around its own hard reset) it waits for that much PD quiet, plus
 // kLegacySteadyMs of vSafe5V means the source gave up PD. kLegacyGiveUpMs without that, the unit detaches and tries once more
 // with kLegacyRetryMs (a source that gets no Request retries Source_Capabilities and hard-resets, 5.07 s cycle on the Baseus
 // CJ21, before it disables PD); still no fallback = Reason::BlockedByPd and the unit's rows are skipped.

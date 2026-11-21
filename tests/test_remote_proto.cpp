@@ -360,13 +360,13 @@ static void test_lab_tune() {
     namespace ct = k2::charger_test;
     Fake f; Frame r;
     ct::legacy_tune_reset();
-    { const auto q = request(0x51, 1, {3, 0}); CHECK_EQ(run(f, q, r), 1); }                       // read quiet_ms: 2500 = 0x09C4
+    { const auto q = request(0x51, 1, {3, 0}); CHECK_EQ(run(f, q, r), 1); }                       // read quiet_ms: the default is 0
     check_header(r, 0x51, 1, Status::Ok, 5);
-    check_bytes(r, kRspHeader, {0, 0xC4, 0x09, 0, 0});
-    { const auto q = request(0x51, 2, {3, 0, 0, 0, 0, 0}); CHECK_EQ(run(f, q, r), 1); }           // quiet_ms = 0
-    check_header(r, 0x51, 2, Status::Ok, 5);
     check_bytes(r, kRspHeader, {0, 0, 0, 0, 0});
-    CHECK_EQ(ct::legacy_tune(ct::LegacyKnob::QuietMs), 0u);
+    { const auto q = request(0x51, 2, {3, 0, 0xC4, 0x09, 0, 0}); CHECK_EQ(run(f, q, r), 1); }     // quiet_ms = 2500 = 0x09C4
+    check_header(r, 0x51, 2, Status::Ok, 5);
+    check_bytes(r, kRspHeader, {0, 0xC4, 0x09, 0, 0});
+    CHECK_EQ(ct::legacy_tune(ct::LegacyKnob::QuietMs), 2500u);
     { const auto q = request(0x51, 3, {3, 3, 0x2C, 0x01, 0, 0}); CHECK_EQ(run(f, q, r), 1); }     // gap_ms = 300
     check_header(r, 0x51, 3, Status::Ok, 5);
     CHECK_EQ(ct::legacy_tune(ct::LegacyKnob::GapMs), 300u);
@@ -387,7 +387,7 @@ static void test_lab_tune() {
     { const auto q = request(0x51, 8, {3, 0, 1}); CHECK_EQ(run(f, q, r), 1); }                    // a value is 4 bytes
     check_header(r, 0x51, 8, Status::BadLength, 0);
     ct::legacy_tune_reset();
-    CHECK_EQ(ct::legacy_tune(ct::LegacyKnob::QuietMs), uint32_t(k2::charger_test::kLegacyQuietMs));
+    CHECK_EQ(ct::legacy_tune(ct::LegacyKnob::QuietMs), 0u);   // the default: start inside the source's announcement
 }
 
 static void test_lab_listen() {

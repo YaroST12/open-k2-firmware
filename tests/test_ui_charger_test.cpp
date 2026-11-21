@@ -1362,6 +1362,7 @@ static void test_results_counters_are_words() {
         g_stub.caps.spec_rev = kind == 0 ? 1 : 2;
         if (kind == 2) g_stub.source_revision = {.valid = true, .rev_major = 3, .rev_minor = 1};
         Ui ui; open(ui); only_vivo_review(ui);   // only VIVO
+        ct::legacy_tune_set(uint8_t(ct::LegacyKnob::QuietMs), ct::kLegacyQuietMs);   // chatter is seen by the PD-quiet wait (default 0 skips it)
         start_press(ui, 1300); press(ui, Button::Ok, 1400);
         g_stub.source_revision = {.valid = true, .rev_major = 3, .rev_minor = 2};
         // The charger keeps talking PD after the Legacy attach: one try, one longer retry, then every row of the unit skips.
@@ -1376,6 +1377,7 @@ static void test_results_counters_are_words() {
             check_text_at(kSmall, 26, w.text, w.color, kBg, w.x);
         }
         no_operations();
+        ct::legacy_tune_reset();
     }
 }
 // A finished run of a six-PDO source (five fixed levels and a PPS range), the Results page on screen, rotation 0.
