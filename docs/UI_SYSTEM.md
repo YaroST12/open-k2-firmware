@@ -610,16 +610,11 @@ them should move them into the kit first.
   settable control (a `kv_row_sel` row, or the charger test's Level SegmentedControl): PLUS and MINUS move between it and
   the ActionCell, which keeps the focus by default; OK on the control changes the value in place.
 - A hazard that does not block rides in the cell as the hint line.
-- **Review warning (charger test, 2026-11-15, the user's decision).** Review step 3/3 always carries a stern warning: an
-  amber AlertBand `OTHER PORT FREE` (word box 184 px = 15 characters of font 24, so "OTHER PORT EMPTY?" does not fit),
-  two font-16 lines at y66 and y82 ("A device on the other port" / "can be damaged. Unplug it.", at most 27 characters),
-  two kv rows at an 18 px pitch from y100 (Tests, Spoof), the Level SegmentedControl at y136 (34 px), the ActionCell at
-  y174, 46 px, hint `other port must be empty`, and the Caution footer `Check the other port`. The Peak and Power rows
-  were dropped and the cell shrank from 64 to 46 px to make room (2026-11-16: the lines went to a 16 px pitch and the kv
-  rows from 22 to 18 px for the Level control). START's arm + CONFIRM is the acknowledgement: no extra step. It replaces the conditional OTHER PORT
-  override of 5f1714a6 (reverted): the K2 no longer guesses about the other port (the inline latch keeps only certain
-  evidence, `docs/CHARGER_TEST_FLOW.md`), it tells the person every time. `test_ui_no_truncation` covers it in four
-  rotations; renders `mock_ct_review*`, `mock_ct_confirm*`.
+- **Review reminder (charger test, 2026-11-21, the user's decision).** Review step 3/3 has no alert band: the ActionCell hint `other port must be empty`
+  under START is the only reminder (the K2 cannot see a device there; START's arm + CONFIRM is the acknowledgement). The five kv rows
+  (Tests, Depth, Spoof, Peak, Power) lay up under the rule at y154 above the 64 px START ticket. A Read-offers run's Spoof row says what
+  it presents (`Cable 50V 5A`, the EPR identity, `Off`). `test_ui_no_truncation` covers it in four rotations; renders
+  `mock_ct_review*`, `mock_ct_confirm*`.
 
 **Alert with choices.** `ra_guard_refuse.png`
 - AlertBand, two body lines saying why, then the choices as a RowList. The first choice is the default.
@@ -709,7 +704,6 @@ them should move them into the kit first.
 |---|---|
 | pick list | `Picked: All tests` |
 | group list | `4 of 6 families on` |
-| review | `Check the other port` (Caution) |
 | armed | `Press again to start` |
 | alert | `Direct plug is the sure way` |
 | running | `FCP: step 1 of 3` |

@@ -531,18 +531,22 @@ the pick that was made.
    footer `<row>: n pass, m caution` (`result_layout::family_footer`). A PPS row is one APDO range; its sweep is a row of its own.
    Back returns to the same Results row. The other units keep the whole-unit step list and the `N steps, M failed` footer.
 2. **Spoof cable** (stage 2). The shared cable-identity list (below); OK on a row picks it and goes to Review.
-3. **Review** (stage 4). The other-port warning (below), the kv rows `Tests`, `Spoof` (the short identity name plus its
-   rating, plain `Off` when the pick is Off — a START with Off disarms whatever is armed) and the settable `Level`, then
-   the START ticket (the `Peak`, `Cap`, `Header` and status rows of earlier builds are gone; self-powered shows on the footer). The first OK on
+3. **Review** (stage 4). The kv rows `Tests`, `Depth`, `Spoof` (the short identity name plus its
+   rating, plain `Off` when the pick is Off — a START with Off disarms whatever is armed; a Read-offers run shows what it will
+   present, see below), `Peak` and `Power`, then the START ticket (the other-port reminder is its hint). The first OK on
    START opens the confirm window, the second starts.
 
-   **Other-port warning (2026-11-15, the user's decision).** Review always carries a stern warning that a device on the
-   other port can be damaged: an amber alert band `OTHER PORT FREE`, two font-16 lines ("A device on the other port" /
-   "can be damaged. Unplug it."), the START ticket's hint `other port must be empty` and a Caution footer `Check the
-   other port` (the refusal, nothing-to-run, Level, confirm-window, PPS 21 V and self-powered footers keep priority).
-   To fit, the page shows three kv rows (`Tests`, `Spoof`, `Level`; `Peak` and `Power` are gone, the PD page and the
-   card carry the best PDO and the self-powered footer stays) and the START ticket is 48 px high (was 64). START's own
-   arm + CONFIRM is the acknowledgement: one confirm per run. The web dashboard's START confirm shows the same text in
+   **Other-port reminder (2026-11-21, the user's decision).** The START ticket's hint `other port must be empty` is the
+   only reminder (the amber band `OTHER PORT FREE`, its two lines and the Caution footer `Check the other port` of 2026-11-15
+   are gone; the K2 cannot detect a device there). START's own arm + CONFIRM is the acknowledgement: one confirm per run.
+
+   **Read offers: the cable rule (2026-11-21).** Whatever the picked identity, a Read-offers run decides by the connection:
+   a cable read this attach with a valid, observed e-marker rated 50 V / 5 A answers the charger itself (no spoof; Spoof line
+   `Cable 50V 5A`); with no cable read and the spoof able to work (the Ra guard's own test: the charger on the top plug)
+   it presents the default EPR identity; otherwise (a weaker cable read, or the spoof impossible) it presents nothing, the
+   EPR rows skip with the cable reason and the AVS step runs on the SPR AVS APDO. The Ra guard is not asked for the last
+   two, so Offers never reaches the Refuse stage; `ct_start.py --level offers` prints the rule and ignores `--cable`.
+   Every other level presents the pick and meets the guard as before. The web dashboard's START confirm shows the same text in
    its own confirm step.
 
    **Inline latch policy (2026-11-15, the user's decision).** The Link's inline latch keeps only 100 %-certain evidence

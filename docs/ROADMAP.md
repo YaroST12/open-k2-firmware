@@ -251,7 +251,7 @@ Open defects, newest first. A row leaves this list when its fix is merged and se
   5.1 V <-> 2 V, cc2 1.76 V / 3.3 V). The user's decision: the latch keeps only 100 %-certain evidence (a load, a sink's
   Request, a foreign contract); FarRd / Vbus / Rise no longer latch or refuse, and the charger test no longer refuses on
   them. Accepted tradeoff (the user, 2026-11-15): a K2 inserted into a live but silent link (no current, no sink message
-  yet) is no longer protected; the Review step carries an always-on "other port" warning instead. Validate: this port, C-to-A
+  yet) is no longer protected; the START ticket's hint "other port must be empty" is the only reminder (the Review band was dropped 2026-11-21). Validate: this port, C-to-A
   cable, nothing behind the K2: `ct_start.py --units qc2,qc3` starts with no "load attached"; a phone behind the K2
   still latches (`load` / `sink request`).
   Open: the phone-behind negative check.
@@ -997,8 +997,12 @@ and the hardware check). A row leaves this list when its fix is merged and the h
   **Partial: built and host-tested (3b66351c engine, wire and tools; dc9a2eda UI), not verified on hardware.**
   A new `ct::Level::Offers` (run level 3; journal, remote status, card byte and `ct_start.py --level offers` carry it, no
   format bump). It is the Tests step's 4th Depth value (Light, Medium, Deep, Offers; not in Settings); the preset pick is
-  kept but the run is PD only. The run presents the default EPR cable itself when no cable is observed, whatever the
-  Settings spoof; Review's Spoof line shows it. Validate: a PD charger with EPR AVS, an SPR-only charger, a fixed-only
+  kept but the run is PD only. The cable rule (k2/offers-cable, 2026-11-21, after a hardware bug: Offers forced the spoof on
+  a real EPR cable and ct_start refused it): a cable read this attach that is e-marked and EPR-rated (50 V, 5 A) answers the
+  charger itself, no spoof; no cable read and the spoof can work (charger on the plug, the Ra guard's own test): the default
+  EPR spoof; otherwise (a weaker cable read, or no spoof possible): no spoof, the EPR rows skip with the cable reason and the
+  AVS step runs on the SPR AVS APDO. The Settings spoof is ignored; Review's Spoof line says what is presented (Cable 50V 5A,
+  the EPR identity, Off); ct_start prints the rule and never refuses Offers. Validate: a PD charger with EPR AVS, an SPR-only charger, a fixed-only
   charger, a Spoof-Off setting (EPR must still be entered); the card names the run kind. Inline rule (every level): with
   the inline latch set START is refused ("load attached"), a latch during START's wait cancels it and puts Rd and identity
   back; nothing transmits, presents Rd/Ra, turns on VCONN or enters EPR.
