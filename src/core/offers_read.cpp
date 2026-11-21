@@ -160,6 +160,7 @@ void poll(bool ports_busy, bool present) {
         if (!g_r.running()) K2LOG("[OFFERS] done: caps %u, EPR %u PDOs\n", unsigned(g_held.valid ? g_held.num_pdos : 0), unsigned(g_epr_n));
         return;
     }
+    if (!present) g_r.clear_refusal();   // a refusal belongs to the charger it was raised for
     if (!g_wanted || std::int32_t(now - g_want_until) >= 0) { g_wanted = false; return; }
     if (!present || !g_r.due(now)) return;
     if (g_r.start(context(present, ports_busy), now)) {

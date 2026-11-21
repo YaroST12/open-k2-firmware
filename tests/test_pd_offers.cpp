@@ -191,7 +191,20 @@ void test_refused_epr_is_kept_apart_from_silence() {
 
 }  // namespace
 
+void test_clearing_a_refusal_leaves_nothing_stale() {
+    OffersRead o; std::uint32_t now = 0;
+    OrCtx c = kCharger; c.inline_sink = true;
+    CHECK_EQ(o.start(c, now), false);
+    o.clear_refusal();
+    CHECK_EQ(int(o.why()), int(OrWhy::None));
+    CHECK_EQ(int(o.step()), int(OrStep::Idle));
+    CHECK_EQ(o.start(kCharger, now), true);
+    o.clear_refusal();                               // a running read is not a refusal
+    CHECK_EQ(o.running(), true);
+}
+
 int main() {
+    test_clearing_a_refusal_leaves_nothing_stale();
     test_no_contract_attaches_reads_epr_and_gives_the_port_back();
     test_a_source_without_the_epr_bit_is_not_asked_for_epr();
     test_a_failed_attach_still_gives_back_what_it_took();

@@ -40,6 +40,7 @@ public:
     OrWhy gate(const OrCtx& c) const;                 // why a read may not start now (None = it may)
     bool due(std::uint32_t now) const;                // not running, not yet tried in this presence, gap kept
     void mark_read(std::uint32_t now);                // a Refresh's survey read the offers: count it as this presence's read
+    void clear_refusal() { if (step_ == OrStep::Refused) { step_ = OrStep::Idle; why_ = OrWhy::None; } }   // no charger: nothing was refused
     void cancel() { if (running()) step_ = OrStep::Done; }   // another owner took the port: end with no action
     bool start(const OrCtx& c, std::uint32_t now);    // false = refused (why() says); the attempt is latched when it starts
     OrAct poll(std::uint32_t now);                    // the next action to perform, once per step
