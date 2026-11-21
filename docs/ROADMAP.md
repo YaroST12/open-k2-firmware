@@ -999,7 +999,9 @@ and the hardware check). A row leaves this list when its fix is merged and the h
   format bump). It is the Tests step's 4th Depth value (Light, Medium, Deep, Offers; not in Settings); the preset pick is
   kept but the run is PD only. The run presents the default EPR cable itself when no cable is observed, whatever the
   Settings spoof; Review's Spoof line shows it. Validate: a PD charger with EPR AVS, an SPR-only charger, a fixed-only
-  charger, a Spoof-Off setting (EPR must still be entered); the card names the run kind.
+  charger, a Spoof-Off setting (EPR must still be entered); the card names the run kind. Inline rule (every level): with
+  the inline latch set START is refused ("load attached"), a latch during START's wait cancels it and puts Rd and identity
+  back; nothing transmits, presents Rd/Ra, turns on VCONN or enters EPR.
 - **HID-cable loop: the loop probe** (user decision 2026-11-11). Topology: the K2 on a charger, a cable from its PD-bus
   port back into its own left (HID) port, so the HID port's VBUS follows the PD bus. The 5 V lock half is built (see
   "Not verified on hardware"); the probe is not started.

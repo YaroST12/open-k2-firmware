@@ -6024,6 +6024,54 @@ static void test_remote_offers_start_presents_the_epr_identity() {
     CHECK_EQ(g_stub.spoof_on, true); CHECK_EQ(g_stub.spoof_arms, 1);
     CHECK_EQ(ui.charger_test_cable_info().run == ctcable::kDefaultChoice, true);
 }
+// "Do not disturb the connection": a load behind the K2 (the inline latch) means nothing new transmits, whatever the level.
+static void inline_now() { g_stub.pm_online = true; g_stub.pm.vbus_mv = 3000; g_stub.pm.current_ma = 500; }   // a live sink on a part-way VBUS: the ticks latch the link
+static void test_inline_at_entry_touches_nothing() {
+    rd_fixture();
+    Ui ui; open(ui);
+    inline_now();
+    CHECK_EQ(ui.charger_test_set_level(uint8_t(ct::Level::Offers)), true);
+    for (uint32_t t = 1200; t < 3000; t += 20) ui.tick(t);
+    nothing_armed_stub(); no_operations();
+    review(ui, 3100);                                                            // the Tests, Cable and Review steps read nothing either
+    for (uint32_t t = 3200; t < 5000; t += 20) ui.tick(t);
+    CHECK_EQ(ui.charger_test_stage(), 4);
+    nothing_armed_stub(); no_operations();   // scans counts the VCONN e-marker read
+}
+// Offers goes through the same START guards as every level: refused with the live-sink reason, nothing presented, asked or armed.
+static void test_offers_start_is_refused_inline() {
+    rd_fixture();
+    Ui ui; open(ui);
+    CHECK_EQ(ui.charger_test_set_cable(ctcable::Choice{}), true);
+    CHECK_EQ(ui.charger_test_set_level(uint8_t(ct::Level::Offers)), true);
+    review(ui);
+    inline_now();
+    for (uint32_t t = 1300; t < 1700; t += 20) ui.tick(t);
+    CHECK_EQ(ui.link().inline_mode(), true);
+    start_run(ui, 1800);
+    CHECK_EQ(ui.charger_test_busy(), false); CHECK_EQ(ui.charger_test_stage(), 4);
+    CHECK_EQ(footer_says("load attached", kCaution), true);
+    nothing_armed_stub(); no_operations(); CHECK_EQ(g_stub.spoof_on, false); CHECK_EQ(g_stub.ra_on, false);
+}
+// A load that latches while START waits for the charger ends the wait: the Rd and the identity go back, nothing is read.
+static void test_inline_latch_during_the_wait_restores_the_port() {
+    rd_fixture(); g_stub.vbus_on_rd = false;                                     // VBUS never comes: the wait stays open
+    Ui ui; open(ui);
+    CHECK_EQ(ui.charger_test_set_cable(ctcable::Choice{}), true);
+    CHECK_EQ(ui.charger_test_set_level(uint8_t(ct::Level::Offers)), true);
+    review(ui);
+    start_press(ui, 1400); confirm_press_nowait(ui, 1500);
+    CHECK_EQ(ui.charger_test_stage(), kWaitStage);
+    CHECK_EQ(g_stub.rd_run, true); CHECK_EQ(g_stub.spoof_on, true);              // the forced identity is on the line
+    const int scans = g_stub.scans;
+    inline_now();
+    for (uint32_t t = 1520; t < 2200; t += 20) { fusb302::service(); ui.tick(t); }
+    CHECK_EQ(ui.link().inline_mode(), true);
+    CHECK_EQ(ui.charger_test_stage(), 4); CHECK_EQ(ui.charger_test_busy(), false);
+    CHECK_EQ(g_stub.rd_run, false); CHECK_EQ(g_stub.spoof_on, false); CHECK_EQ(g_stub.ra_on, false);
+    CHECK_EQ(g_stub.scans, scans);                                               // nothing was read on the way out
+    CHECK_EQ(int(ui.charger_test_results().reason()), int(ct::Reason::Inline));
+}
 
 // OEM levels by their watts (oem_watts.hpp): a VOOC-family charger detected at 5 V (opener 0xA8). Medium: the ident alone, every
 // level not tested. Deep: the ceiling stage stood at 0x06D under 11.02 V (120 W claimed): every SuperVOOC level claimed. The Results
@@ -6546,7 +6594,7 @@ int main() {
     test_skip_results_and_deselection(); test_navigation_and_stop_controls();
     test_start_waits_for_the_caps();
     test_decisions_use_the_unaveraged_vbus();
-    test_remote_start_is_the_devices_start();
+    test_remote_start_is_the_devices_start(); test_inline_at_entry_touches_nothing(); test_offers_start_is_refused_inline(); test_inline_latch_during_the_wait_restores_the_port();
     test_vooc_family_results_read_watts_levels();
     test_vooc_family_silent_reads_no_answer();
     test_silent_vivo_reads_no_reply_not_a_fail();

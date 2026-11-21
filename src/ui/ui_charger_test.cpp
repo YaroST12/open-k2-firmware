@@ -959,6 +959,7 @@ bool ChargerTestSession::start_begin() {
 }
 // The Rd presentation shared by START and a resume on a host-powered K2. False = refused (a sink is inline), nothing changed.
 bool ChargerTestSession::present_rd(uint32_t now) {
+    if (ctx_.inline_mode) return false;   // a load behind the K2: nothing is read, presented or armed (the latch is the one verdict)
     // Nothing supplies VBUS yet, so nobody has asked the cable: read its e-marker now, VCONN from us, before Rd goes on
     // (the C135 cable is 20 V 5 A, VCONN required; "assumed 3 A" cost the run its 5 A rows, hardware 2026-11-03).
     // Not while a source's Rp is on the wire: it hears our SOP' and the cable's replies (C135: Hard Reset right after).
@@ -991,6 +992,13 @@ bool ChargerTestSession::request_pending() const {
 // service() keeps its own pace in the main loop (the source's SenderResponseTimer is ~30 ms: Baseus 140W sent a Hard Reset
 // when the old blocking loop took 56 ms a pass), so only the attach scan is ours, every kStartWaitSlowMs.
 void ChargerTestSession::wait_step(uint32_t now) {
+    if (ctx_.inline_mode) {   // the latch set while START waited: the Rd, the identity and the VCONN read go back, the charge is left alone
+        K2LOG("[TEST] START cancelled in the wait: load attached\n");
+        wait_paused_ = wait_retry_ = false;
+        wait_ = pd::VbusWait();
+        start_failed(ct::Reason::Inline, ctx_.ui->busy_reason(), ctx_.vbus_fast_mv);
+        return;
+    }
     if (wait_tick(now) != pd::VbusWait::State::Waiting) wait_done(now);
 }
 // Waiting while the wait goes on (also during the retry's Rd-off); anything else = the wait is over (Ready or TimedOut).
