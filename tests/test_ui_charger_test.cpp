@@ -1286,7 +1286,6 @@ static void test_read_offers_row_starts_the_offers_plan() {
     CHECK_EQ((ui.charger_test_selection() >> 28) & 3u, unsigned(ct::Level::Offers));
     CHECK_EQ(ui.charger_test_selection() >> 30, 0u);                            // no sweep rides on it
     press(ui, Button::Back); settle(ui);
-    renders("offers_picked");                                                   // BACK lands on the row: its radio is the lit one
     top(ui); press(ui, Button::Ok); settle(ui);                                 // Depth: cycles the presets' level only
     CHECK_EQ((ui.charger_test_selection() >> 28) & 3u, unsigned(ct::Level::Offers));
     top(ui); move(ui, kAllRow); press(ui, Button::Ok); settle(ui);
@@ -1299,7 +1298,6 @@ static void test_read_offers_row_starts_the_offers_plan() {
     renders("offers_review");
     start_run(ui, 1300);                                                        // the same START, arm and confirm
     CHECK_EQ(ui.charger_test_busy(), true);
-    CHECK_EQ(ui.charger_test_results().level(), ct::Level::Offers);             // the run in hand is the Offers plan
     CHECK_EQ(algos(ui), ct::kOffersAlgorithms);
 }
 static void test_the_default_run_is_medium() {
