@@ -23,6 +23,7 @@ bool g_pump_snap_armed;
 SinkWork g_sink_work;
 unsigned g_meter_sent;
 unsigned g_meter_unique;
+std::uint32_t g_lcd_owner[LCD_WIDTH * LCD_HEIGHT];
 
 namespace {
 const k2::lcd::Sink* g_sink;
@@ -43,13 +44,20 @@ bool g_trace_on = std::getenv("K2_OVERDRAW_TRACE") != nullptr;
 
 // Counts `count` pixels written from the write pointer, which wraps inside the window.
 void meter_write(std::uint32_t count) {
-    if (g_clearing) return;
+    if (g_clearing) {   // not metered, but the clear still owns the pixels it wrote
+        for (; count; --count) {
+            if (g_cx < unsigned(LCD_WIDTH) && g_cy < unsigned(LCD_HEIGHT)) g_lcd_owner[g_cy * LCD_WIDTH + g_cx] = g_lcd_windows;
+            if (++g_cx > g_wx1) { g_cx = g_wx0; if (++g_cy > g_wy1) g_cy = g_wy0; }
+        }
+        return;
+    }
     g_meter_sent += count;
     k2::paint::meter.add_px(count);   // the same running total the firmware keeps (Ui reads it to price an erase replay)
     TraceCount *tc = g_trace_on ? &g_trace[g_stack] : nullptr;
     if (tc) tc->sent += count;
     for (; count; --count) {
         if (g_cx < unsigned(LCD_WIDTH) && g_cy < unsigned(LCD_HEIGHT)) {
+            g_lcd_owner[g_cy * LCD_WIDTH + g_cx] = g_lcd_windows;
             std::uint8_t &w = g_writes[g_cy * LCD_WIDTH + g_cx];
             if (w == 0) ++g_meter_unique;
             else if (tc) ++tc->rewritten;

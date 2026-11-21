@@ -16,6 +16,8 @@
 
 namespace k2 {
 
+struct Font;   // font_aa.hpp (the overlap recorder below only keeps the pointer)
+
 // Code points of a UTF-8 string (every font here is monospaced, so width = cells x advance).
 constexpr int text_cells(std::string_view s) {
     int n = 0;
@@ -59,6 +61,7 @@ enum class Kind : uint8_t {
     Cut,    // our copy was shortened (fit_text, a Field, the OVR placeholder): a gate failure, reword it
     Clip,   // our copy ran off its surface and gfx_text clipped it: a gate failure
     Data,   // external or user data (saved names, vendor strings, card titles): shortened by design, only counted
+    Overlap,   // two text draws that both still show ink on the final frame overlap (tests/overlap_log.cpp): a gate failure
 };
 
 #ifdef K2_TRUNC_LOG
@@ -72,7 +75,29 @@ struct Pause {
     Pause(const Pause &) = delete;
     Pause &operator=(const Pause &) = delete;
 };
-int failures();     // distinct Cut / Clip hits so far
+// Overlap guard (opt in: tests/overlap_log.cpp, overlap_enable()). gfx_text / gfx_text_rot report every draw's native box;
+// when the test calls settled() (the screen has stopped changing: the ticks after a press ran) the recorder replays which draw
+// owns each inked pixel on the panel and fails a draw whose ink was partly overpainted by another text draw. A draw fully repainted by a later one is dead and ignored,
+// as is a draw of the same field (same font and origin: a Field redrawing changed cells).
+void note_text(const Font *f, std::string_view text, int key_x, int key_y, int nx, int ny, int w, int h, int dir);
+// field: non-zero inside a Field redraw (FieldScope); draws of one field never damage each other (it pads and diffs its own cells).
+void set_text_hook(void (*hook)(const Font *, std::string_view, int, int, int, int, int, int, int, bool allowed, unsigned field));
+void set_frame_hook(void (*hook)());
+void settled();   // the screen has settled: check the frame (test_report does it for the last one)
+// Deliberate composites (a toast over the page, text over a sweep trend): draws made while one is alive never count.
+struct OverlapOk {
+    OverlapOk();
+    ~OverlapOk();
+    OverlapOk(const OverlapOk &) = delete;
+    OverlapOk &operator=(const OverlapOk &) = delete;
+};
+struct FieldScope {
+    explicit FieldScope(unsigned key);
+    ~FieldScope();
+    FieldScope(const FieldScope &) = delete;
+    FieldScope &operator=(const FieldScope &) = delete;
+};
+int failures();     // distinct Cut / Clip / Overlap hits so far
 int data_hits();    // distinct Data hits so far
 void clear();
 void print_report(bool with_data = false);   // with_data: the Data hits too (a test that wants to see what was cut by design)
@@ -90,6 +115,9 @@ void print_report(bool with_data = false);   // with_data: the Data hits too (a 
 #define K2_TRUNC_NOTE(kind, text, px) ::k2::trunc::note(kind, text, px, site.file_name(), site.line())
 #define K2_TRUNC_NOTE_HERE(kind, text, px) ::k2::trunc::note(kind, text, px)
 #define K2_TRUNC_PAUSE ::k2::trunc::Pause k2_trunc_pause_
+#define K2_OVERLAP_OK ::k2::trunc::OverlapOk k2_overlap_ok_
+#define K2_FIELD_SCOPE(key) ::k2::trunc::FieldScope k2_field_scope_(key)
+#define K2_TEXT_DRAWN(f, text, kx, ky, nx, ny, w, h, dir) ::k2::trunc::note_text(&(f), text, kx, ky, nx, ny, w, h, dir)
 #else
 #define K2_TRUNC_DECL
 #define K2_TRUNC_DEF
@@ -97,4 +125,7 @@ void print_report(bool with_data = false);   // with_data: the Data hits too (a 
 #define K2_TRUNC_NOTE(kind, text, px) ((void)0)
 #define K2_TRUNC_NOTE_HERE(kind, text, px) ((void)0)
 #define K2_TRUNC_PAUSE ((void)0)
+#define K2_OVERLAP_OK ((void)0)
+#define K2_FIELD_SCOPE(key) ((void)0)
+#define K2_TEXT_DRAWN(f, text, kx, ky, nx, ny, w, h, dir) ((void)0)
 #endif

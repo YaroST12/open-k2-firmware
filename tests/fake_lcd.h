@@ -7,6 +7,9 @@ inline constexpr int LCD_WIDTH = k2::lcd::kWidth, LCD_HEIGHT = k2::lcd::kHeight;
 extern uint16_t g_panel[LCD_WIDTH * LCD_HEIGHT];
 extern unsigned g_lcd_windows;   // stream_begin calls: a steady screen must not add to it
 extern unsigned g_lcd_pumps;     // lcd::pump() calls (the QR encoder's poll hook)
+// Per panel pixel (y * 240 + x): the g_lcd_windows value of the stream window that last wrote it (0 = never). The overlap
+// recorder (tests/overlap_log.cpp) reads it to tell which draws still show on the frame.
+extern std::uint32_t g_lcd_owner[LCD_WIDTH * LCD_HEIGHT];
 extern unsigned g_lcd_pixels;    // pixels actually sent to the panel (not screenshot sinks)
 // The panel as it was at the FIRST lcd::pump() after g_pump_snap_armed was set (what the screen shows while a slow encode runs).
 extern uint16_t g_pump_panel[LCD_WIDTH * LCD_HEIGHT];

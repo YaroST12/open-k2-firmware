@@ -224,6 +224,7 @@ void toast_pill(const Surface &s, FooterTone tone, std::string_view text, bool e
     const int16_t tw = static_cast<int16_t>(text_width(kLabelFont, fitted));
     const int16_t pw = static_cast<int16_t>(tw + 16);
     const int16_t px = static_cast<int16_t>((s.w - pw) / 2);
+    K2_OVERLAP_OK;   // a pill floats over the page
     if (erase) {
         if (px > 0) gfx_fill(s, 0, py, px, kToastH, kBg);
         if (s.w - px - pw > 0) gfx_fill(s, static_cast<int16_t>(px + pw), py, static_cast<int16_t>(s.w - px - pw), kToastH, kBg);

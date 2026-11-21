@@ -80,6 +80,7 @@ K2_HOT void gfx_text(const Surface &s, const Font &f, int16_t x, int16_t y, std:
         }
     }
     lcd::stream_end();
+    K2_TEXT_DRAWN(f, text, s.x + x, s.y + y, native.x, native.y, px, rows, -1);
 }
 
 K2_HOT void gfx_text_rot(const Surface &s, const Font &f, int16_t x, int16_t y, std::string_view text,
@@ -108,6 +109,7 @@ K2_HOT void gfx_text_rot(const Surface &s, const Font &f, int16_t x, int16_t y, 
         lcd::stream_pixels({col, static_cast<std::size_t>(f.height)});
     }
     lcd::stream_end();
+    K2_TEXT_DRAWN(f, text, s.x + x, s.y + y, s.x + x, s.y + y, f.height, tw, static_cast<int>(dir));
 }
 
 K2_HOT void field_draw_buf(const Surface &s, const Font &f, int16_t x, int16_t y, uint8_t chars, Align a,
@@ -130,6 +132,7 @@ K2_HOT void field_draw_buf(const Surface &s, const Font &f, int16_t x, int16_t y
     }
     for (int i = 0; i < chars; i++) cur[i] = next[i];
     valid = true;
+    K2_FIELD_SCOPE(static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(&f)) * 31u + static_cast<unsigned>((s.x + x) * 257 + s.y + y));
     gfx_text(s, f, x, y,
              std::string_view(next + first, static_cast<size_t>(last - first + 1)), fg, bg,
              static_cast<int16_t>(first * f.adv) K2_TRUNC_ARG);
