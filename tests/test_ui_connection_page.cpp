@@ -2404,6 +2404,14 @@ static void test_reset_link_actions_standalone_inline_selfpowered() {
     }
 }
 
+static int count_px(int y0, int y1, int x0, int x1, uint16_t col) {
+    int n = 0;
+    for (int y = y0; y < y1; y++)
+        for (int x = x0; x < x1; x++)
+            if (g_panel[y * LCD_WIDTH + x] == col) n++;
+    return n;
+}
+
 // Track 2B: Overview provenance chips (SNIFFED / PROBED / PEAK), bottleneck Cable highlight, and Cable Res. row.
 static void test_overview_provenance_throttled_and_bottleneck() {
     Ui &ui = fresh_ui();
@@ -2452,6 +2460,49 @@ static void test_overview_provenance_throttled_and_bottleneck() {
 #ifdef K2_TRUNC_LOG
     CHECK_EQ(k2::trunc::failures(), 0);
 #endif
+    g_stub.em = {};
+}
+
+// Bring up the sniffed Request scene of the provenance test (20V 3A PD contract, caps, cable e-marker) on 6 LINK.
+static void inline_pd_scene(Ui &ui, uint32_t &t) {
+    make_inline(ui, t);
+    g_stub.pm_online = true;
+    g_stub.pd_seen_attach = true;
+    g_stub.caps.valid = true; g_stub.caps.spec_rev = 2; g_stub.caps.num_pdos = 2;
+    g_stub.caps.pdos[0] = {pd::PdoType::Fixed, 0, 5000, 5000, 3000, 15000};
+    g_stub.caps.pdos[1] = {pd::PdoType::Fixed, 0, 20000, 20000, 3000, 60000};
+    g_stub.caps.raw_header = 0x1181; g_stub.caps.rx_count++;
+    g_stub.contract.valid = true; g_stub.contract.ready = true; g_stub.contract.pos = 2;
+    g_stub.contract.mv = 20000; g_stub.contract.op_ma = g_stub.contract.max_ma = 3000;
+    g_stub.em.valid = true; g_stub.em.vid = 0x0451; g_stub.em.pid = 0x1234; g_stub.em.vendor_str = "TI";
+    g_stub.em.speed_str = "USB4 Gen3"; g_stub.em.latency_str = "<10 ns (~1 m)";
+    g_stub.em.max_current_a = 3; g_stub.em.max_voltage_v = 20; g_stub.em.max_power_w = 60;
+    t += 1000;
+    for (int i = 0; i < 12; i++) ui.tick(t += 100);
+    ui.open_place(bench::Place::Charger, t += 100);
+    settle(ui, t);
+}
+
+// The K2 counts as the sink only when nothing is inline: fusb302::self_powered() is the boot pin latch, which stays set
+// while a phone sits behind the K2 (the driver opens the switches, the latch stays).
+static void test_inline_sink_is_not_the_k2_with_boot_pin_latched() {
+    for (int latched = 0; latched < 2; latched++) {
+        Ui &ui = fresh_ui();
+        uint32_t t = 90000;
+        inline_pd_scene(ui, t);
+        g_stub.self_powered = latched != 0;
+        g_stub.pin = latched ? 2 : 0;
+        for (int i = 0; i < 6; i++) ui.tick(t += 100);
+        settle(ui, t);
+        CHECK_EQ(cp(ui).overview_mode(), true);
+        CHECK_EQ(ui.link().inline_mode(), true);
+        const int x0 = kOppRailThickness, x1 = x0 + 208;
+        // The sniffed Request slice has the green OK chip and no solid SELF chip (kChip fill) in its chip row.
+        CHECK(count_px(160 + 24, 160 + 38, x0, x1, kOkT) > 0);
+        CHECK_EQ(count_px(160 + 24, 160 + 38, x0, x1, kChip), 0);
+    }
+    g_stub.self_powered = false;
+    g_stub.pin = 0;
     g_stub.em = {};
 }
 
@@ -2715,6 +2766,7 @@ int main() {
     test_overview_3slice_focus_and_navigation();
     test_reset_link_actions_standalone_inline_selfpowered();
     test_overview_provenance_throttled_and_bottleneck();
+    test_inline_sink_is_not_the_k2_with_boot_pin_latched();
     test_inline_overview_power_fields_and_w_hero_slices();
     test_link_reset_mid_session_inline_and_k2_contract();
     test_tools_ring_position_and_triggers();

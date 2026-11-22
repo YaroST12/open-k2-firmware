@@ -2422,13 +2422,21 @@ void put_offers_summary(StrBuf<40> &out, const pd::SourceCaps &caps, int rows) {
 
 }  // namespace
 
+namespace {
+// The K2 is the sink only when no device is inline: self_powered() is the boot pin latch, which stays set while the
+// driver has the switches open for a device behind the K2.
+bool k2_is_sink(const pd::Link &link, bool ctx_inline) {
+    return fusb302::self_powered() && !link.inline_mode() && !ctx_inline;
+}
+}  // namespace
+
 bool ConnectionPage::paint_overview(const MatchResult &r, const pd::SourceCaps &caps, std::span<const uint32_t> sink) {
     const pd::Link &link = ctx_.ui->link();
     TabData d;
     d.r = &r; d.caps = &caps; d.sink = sink;
     d.ul = fusb302::usb_link(dp_, dm_);
     d.waiting = link.attached() && link.waiting();
-    d.k2_sink = fusb302::self_powered();
+    d.k2_sink = k2_is_sink(link, ctx_.inline_mode);
     d.k2_sink_ok = fusb302::pin_rd() == 1;
     d.fc = static_cast<fastcharge::Protocol>(fc_);
     d.in_use = ctx_.ui->link_reset_inline();
@@ -2454,7 +2462,7 @@ bool ConnectionPage::paint_overview(const MatchResult &r, const pd::SourceCaps &
 
 bool ConnectionPage::paint_actions_ident(const MatchResult &r, const pd::SourceCaps &caps, std::span<const uint32_t> sink) {
     const bool empty = conn::tab_empty(tab_, facts_) &&
-                       !(tab_ == conn::Tab::Sink && (fusb302::self_powered() || fusb302::identify_current()));
+                       !(tab_ == conn::Tab::Sink && (k2_is_sink(ctx_.ui->link(), ctx_.inline_mode) || fusb302::identify_current()));
     if (empty) {
         const conn::Empty e = conn::empty_state(tab_, facts_);
         return paint_ident_dim(ctx_.content, e.title, e.hint, id_sig_, ctx_.budget);
@@ -2467,7 +2475,7 @@ bool ConnectionPage::paint_actions_ident(const MatchResult &r, const pd::SourceC
     d.r = &r; d.caps = &caps; d.sink = sink;
     d.ul = fusb302::usb_link(dp_, dm_);
     d.waiting = link.attached() && link.waiting();
-    d.k2_sink = fusb302::self_powered();
+    d.k2_sink = k2_is_sink(link, ctx_.inline_mode);
     d.k2_sink_ok = fusb302::pin_rd() == 1;
     d.fc = static_cast<fastcharge::Protocol>(fc_);
     d.in_use = link.inline_mode();
@@ -2509,7 +2517,7 @@ bool ConnectionPage::paint_body(const MatchResult &r, const pd::SourceCaps &caps
     d.r = &r; d.caps = &caps; d.sink = sink;
     d.ul = fusb302::usb_link(dp_, dm_);          // the debounced ADC levels (Row D): a jittering pair repaints nothing
     d.waiting = link.attached() && link.waiting();
-    d.k2_sink = fusb302::self_powered();
+    d.k2_sink = k2_is_sink(link, ctx_.inline_mode);
     d.k2_sink_ok = fusb302::pin_rd() == 1;
     d.fc = static_cast<fastcharge::Protocol>(fc_);
     d.in_use = link.inline_mode();
@@ -2963,7 +2971,7 @@ void ConnectionPage::update(uint32_t now_ms) {
         return;
     }
 
-    const bool empty = conn::tab_empty(tab_, facts_) && !(tab_ == conn::Tab::Sink && (fusb302::self_powered() || fusb302::identify_current()));
+    const bool empty = conn::tab_empty(tab_, facts_) && !(tab_ == conn::Tab::Sink && (k2_is_sink(ctx_.ui->link(), ctx_.inline_mode) || fusb302::identify_current()));
     if (empty) {
         match_valid_ = false;
         uint32_t h_base = mix_u32(2166136261u, uint32_t(tab_) | uint32_t(facts_.topo) << 4 | 1u << 8 | uint32_t(facts_.inline_sink) << 9
