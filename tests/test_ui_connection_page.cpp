@@ -2886,6 +2886,28 @@ static void test_sink_slice_goes_stale_when_the_sink_leaves() {
     g_stub.em = {}; g_stub.caps = {}; g_stub.contract = {};
 }
 
+// The Charger slice's revision chip is the wire revision the other views name (PD3.x for a rev 2 source), not a guessed PD3.0.
+static void test_charger_slice_revision_chip_names_the_wire_revision() {
+    Ui &ui = fresh_ui();
+    uint32_t t = 90000;
+    attach_charger(ui, t);                               // spec_rev 2 caps, no EPR
+    ui.open_place(bench::Place::Charger, t += 100);
+    settle(ui, t);
+    CHECK_EQ(cp(ui).overview_mode(), true);
+    const int x0 = kOppRailThickness, x1 = x0 + 208;
+    const int ink = count_px(2 + 24, 2 + 38, x0 + 4, x1, kChip);   // fill minus glyph ink tells "x" from "0"; x0+4 clears the focus bar
+    CHECK(ink > 0);
+    const Surface s{0, 0, LCD_WIDTH, LCD_HEIGHT};
+    auto ref_ink = [&](const char *txt) {
+        gfx_fill(s, 0, 100, LCD_WIDTH, 20, kBg);
+        kit::draw_chip(s, 60, 102, txt, kChip, kOnChip);
+        return count_px(100, 120, 0, LCD_WIDTH, kChip);
+    };
+    CHECK_EQ(ink, ref_ink(pd::wire_revision_name(2)));
+    CHECK(ink != ref_ink("PD3.0"));
+    g_stub.caps = {};
+}
+
 int main() {
     test_sink_tab_pd_body_shows_the_raw_vooc_note();
     test_sink_tab_no_pd_shows_the_raw_vooc_note();
@@ -2950,5 +2972,6 @@ int main() {
     test_new_attach_drops_the_last_session();
     test_standalone_cable_read_is_not_stale();
     test_sink_slice_goes_stale_when_the_sink_leaves();
+    test_charger_slice_revision_chip_names_the_wire_revision();
     return test_report("test_ui_connection_page");
 }

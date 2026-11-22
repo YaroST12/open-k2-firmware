@@ -1971,10 +1971,8 @@ void put_offers_summary(StrBuf<40> &out, const pd::SourceCaps &caps, int rows) {
             sl.add_chip("3A?", SliceSpec::Warn);
         } else if (caps.epr) {
             sl.add_chip("PD3.1", SliceSpec::Solid);
-        } else if (caps.spec_rev == 2) {
-            sl.add_chip("PD3.0", SliceSpec::Solid);
-        } else if (caps.spec_rev == 1) {
-            sl.add_chip("PD2.0", SliceSpec::Solid);
+        } else if (caps.spec_rev == 1 || caps.spec_rev == 2) {
+            sl.add_chip(pd::wire_revision_name(caps.spec_rev), SliceSpec::Solid);
         }
         if (best_mv > 0 && best_ma > 0) put_va(sl.l1, best_mv, best_ma);
         const pd::Identity &vid = fusb302::vdm().identity;
