@@ -1852,8 +1852,7 @@ constexpr int16_t kSliceH[3] = {79, 79, 80};
 static_assert(kSliceY[2] + kSliceH[2] == kFooterY, "3-slice Overview tiles y 2..239");
 
 struct SliceSpec {
-    // Tag: the provenance letter (S sniffed, P probed), plain dim text and always the first item after the hero.
-    enum ChipKind : uint8_t { Solid, Ok, Warn, AmberOutline, Neutral, Tag, Last };
+    enum ChipKind : uint8_t { Solid, Ok, Warn, Neutral, Last };
     struct Chip { StrBuf<10> t; ChipKind k = Solid; };
     const char *tag = "";
     StrBuf<16> head;
@@ -1873,10 +1872,7 @@ struct SliceSpec {
     }
     // A past session's data: the words stay, the exception colours and chips go, a LAST pill ends the row.
     void make_stale() {
-        uint8_t n = 0;
-        for (uint8_t i = 0; i < n_chips; i++)
-            if (chip[i].k == Tag) chip[n++] = chip[i];
-        n_chips = n;
+        n_chips = 0;
         add_chip("LAST", Last);
         dim = true;
         warn = false;
@@ -1960,8 +1956,6 @@ void put_offers_summary(StrBuf<40> &out, const pd::SourceCaps &caps, int rows) {
         if (best_mw == 0) best_mw = r.src_max_mw;
         put_w_hero(sl.head, best_mw);
         const pd::OfferSource src = held::offer_source();
-        if (src == pd::OfferSource::Probed) sl.add_chip("P", SliceSpec::Tag);
-        else if (src == pd::OfferSource::Sniffed) sl.add_chip("S", SliceSpec::Tag);
         const bool throttled = held::offer_throttled() && !d.stale_charger;
         if (throttled) sl.add_chip("PEAK", SliceSpec::Ok);
         uint32_t max_ma = 0;
@@ -2007,8 +2001,6 @@ void put_offers_summary(StrBuf<40> &out, const pd::SourceCaps &caps, int rows) {
     if (live_inline) {
         if (d.vbus_mv >= 1000 && d.live_mw >= 500u) {
             put_w_hero(sl.head, d.live_mw);
-            sl.add_chip("LIVE", SliceSpec::AmberOutline);
-            sl.add_chip("INLINE", SliceSpec::Warn);
             put_va(sl.l1, static_cast<uint32_t>(d.vbus_mv), static_cast<uint32_t>(d.ibus_ma));
             put_slice_if_fits(sl.l1, (verdict == pd::PdVerdict::None && d.vbus_mv <= pd::kVSafe5MaxMv)
                                          ? " \xC2\xB7 no PD seen"
@@ -2018,7 +2010,6 @@ void put_offers_summary(StrBuf<40> &out, const pd::SourceCaps &caps, int rows) {
         }
         sl.dim = (d.vbus_mv < 1000);
         sl.head.put("Missed PD");
-        sl.add_chip("INLINE", SliceSpec::Warn);
         if (d.vbus_mv >= 1000 && d.ibus_ma >= 0) {
             put_va(sl.l1, static_cast<uint32_t>(d.vbus_mv), static_cast<uint32_t>(d.ibus_ma));
             put_slice_if_fits(sl.l1, " \xC2\xB7 0W live");
@@ -2118,8 +2109,6 @@ void put_offers_summary(StrBuf<40> &out, const pd::SourceCaps &caps, int rows) {
     if (em.valid) {
         if (cable_w > 0) sl.head.put_u32(cable_w).put_char('W');
         else sl.head.put_u32(em.max_voltage_v).put("V ").put_u32(em.max_current_a).put_char('A');
-        if (held::cable_source() == pd::CableSource::Probed) sl.add_chip("P", SliceSpec::Tag);
-        else if (held::cable_source() == pd::CableSource::Sniffed) sl.add_chip("S", SliceSpec::Tag);
         if (cable_limits) sl.add_chip("LIMIT", SliceSpec::Warn);
         if (d.cable_mohm >= 0) {
             StrBuf<10> rc;
@@ -2210,7 +2199,6 @@ void put_offers_summary(StrBuf<40> &out, const pd::SourceCaps &caps, int rows) {
         else if (mv > 0 || ma > 0) put_va(sl.head, mv, ma);
         else sl.head.put("Request");
         const pd::Contract &ct = fusb302::contract();
-        sl.add_chip("S", SliceSpec::Tag);
         if (ct.ready) sl.add_chip("OK", SliceSpec::Ok);
         if (mv > 0 && ma > 0) {
             put_va(sl.l1, mv, ma);
@@ -2264,7 +2252,6 @@ void put_offers_summary(StrBuf<40> &out, const pd::SourceCaps &caps, int rows) {
         if (smw > 0) put_w_hero(sl.head, smw);
         else if (pid.valid && pid.vendor && pid.vendor[0] && text_width(kMid, pid.vendor) <= 132) sl.head.put(pid.vendor);
         else sl.head.put("Device read");
-        sl.add_chip("P", SliceSpec::Tag);
         const uint32_t irev = fusb302::identify_status().revision;
         if (irev != 0) {
             StrBuf<10> rv;
@@ -2315,8 +2302,6 @@ void put_offers_summary(StrBuf<40> &out, const pd::SourceCaps &caps, int rows) {
     if (live_inline) {
         if (d.vbus_mv >= 1000 && d.ibus_ma >= 0) {
             put_w_hero(sl.head, d.live_mw);
-            sl.add_chip("LIVE", SliceSpec::AmberOutline);
-            sl.add_chip("INLINE", SliceSpec::Warn);
             put_va(sl.l1, static_cast<uint32_t>(d.vbus_mv), static_cast<uint32_t>(d.ibus_ma));
             put_slice_if_fits(sl.l1, (verdict == pd::PdVerdict::None && d.vbus_mv <= pd::kVSafe5MaxMv)
                                          ? " \xC2\xB7 no PD"
@@ -2325,7 +2310,6 @@ void put_offers_summary(StrBuf<40> &out, const pd::SourceCaps &caps, int rows) {
             return;
         }
         sl.head.put("In use");
-        sl.add_chip("INLINE", SliceSpec::Warn);
         if (d.vbus_mv >= 1000) {
             put_v(sl.l1, static_cast<uint32_t>(d.vbus_mv));
             sl.l1.put("V \xC2\xB7 live inline");
@@ -2395,9 +2379,6 @@ void put_offers_summary(StrBuf<40> &out, const pd::SourceCaps &caps, int rows) {
     const int16_t l1w = static_cast<int16_t>(text_width(kLabelFont, l1_v));
     const int16_t l2w = static_cast<int16_t>(text_width(kLabelFont, l2_v));
 
-    // The provenance letter (font 16) sits on the baseline of the chips' font 12 text, whatever the slice.
-    const TextBounds sb = badge_text_bounds(kLabelFont, "S");
-    const int16_t src_y = static_cast<int16_t>(chip_y + (kit::kChipH - sb.h) / 2 - sb.y0 + kLabelFont.ascent - kSmall.ascent);
     kit::Box holes[8];
     int nh = 0;
     if (tw > 0) holes[nh++] = {8, tag_y, tw, static_cast<int16_t>(kLabelFont.height)};
@@ -2405,13 +2386,10 @@ void put_offers_summary(StrBuf<40> &out, const pd::SourceCaps &caps, int rows) {
     int16_t cx[3] = {};
     int shown = 0;
     for (int16_t x = static_cast<int16_t>(8 + hw + 6); shown < sl.n_chips; shown++) {
-        const bool is_tag = sl.chip[shown].k == SliceSpec::Tag;
-        const int16_t w = is_tag ? static_cast<int16_t>(text_width(kSmall, sl.chip[shown].t.view()))
-                                 : static_cast<int16_t>(badge_text_bounds(kLabelFont, sl.chip[shown].t.view()).w + 8);
+        const int16_t w = static_cast<int16_t>(badge_text_bounds(kLabelFont, sl.chip[shown].t.view()).w + 8);
         if (x + w > c.w - 6) break;
         cx[shown] = x;
-        if (nh < 8) holes[nh++] = is_tag ? kit::Box{x, src_y, w, static_cast<int16_t>(kSmall.height)}
-                                         : kit::Box{x, chip_y, w, kit::kChipH};
+        if (nh < 8) holes[nh++] = kit::Box{x, chip_y, w, kit::kChipH};
         x = static_cast<int16_t>(x + w + 4);
     }
     if (l1w > 0 && nh < 8) holes[nh++] = {8, l1_y, l1w, static_cast<int16_t>(kLabelFont.height)};
@@ -2428,9 +2406,7 @@ void put_offers_summary(StrBuf<40> &out, const pd::SourceCaps &caps, int rows) {
         case SliceSpec::Solid: kit::draw_chip(c, cx[i], chip_y, ch.t.view(), kChip, kOnChip); break;
         case SliceSpec::Ok: kit::draw_chip(c, cx[i], chip_y, ch.t.view(), kOkT, kOk); break;
         case SliceSpec::Warn: kit::draw_chip(c, cx[i], chip_y, ch.t.view(), kCautionT, kCaution); break;
-        case SliceSpec::AmberOutline: kit::draw_chip_frame(c, cx[i], chip_y, ch.t.view(), kCaution, kCaution, bg_col); break;
         case SliceSpec::Neutral: kit::draw_chip(c, cx[i], chip_y, ch.t.view(), kBg2, kInk); break;
-        case SliceSpec::Tag: gfx_text(c, kSmall, cx[i], src_y, ch.t.view(), inv ? kOnFocusDim : kDim, bg_col); break;
         case SliceSpec::Last: kit::draw_chip(c, cx[i], chip_y, ch.t.view(), kStale, kBg); break;
         }
     }

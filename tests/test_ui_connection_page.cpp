@@ -2413,8 +2413,8 @@ static int count_px(int y0, int y1, int x0, int x1, uint16_t col) {
     return n;
 }
 
-// The provenance letter of one Overview slice: the kDim ink (only the letter has it in the chip row) as its left x and
-// bottom y relative to the slice top, and the gap to the hero's last kInk column. False when the slice has no letter.
+// The dim ink of one Overview slice's chip row (only a provenance letter ever had it) as its left x and bottom y
+// relative to the slice top, and the gap to the hero's last kInk column. False when the row has none.
 struct TagInk { int left = 0, bottom = 0, gap = 0; };
 static bool tag_ink(int slice_y, TagInk &t) {
     const int x0 = kOppRailThickness, x1 = x0 + 208;
@@ -2430,8 +2430,8 @@ static bool tag_ink(int slice_y, TagInk &t) {
     return true;
 }
 
-// Track 2B: Overview provenance tag (S sniffed / P probed, dim, first after the hero), PEAK chip, bottleneck Cable
-// highlight, and Cable Res. row.
+// Track 2B: Overview shows no provenance letter (data and remote keep it), PEAK chip, bottleneck Cable highlight,
+// and Cable Res. row.
 static void test_overview_provenance_throttled_and_bottleneck() {
     Ui &ui = fresh_ui();
     make_inline(ui, 50000);
@@ -2462,18 +2462,13 @@ static void test_overview_provenance_throttled_and_bottleneck() {
     const int x_bar = kOppRailThickness + 1;
     CHECK_EQ(g_panel[90 * LCD_WIDTH + x_bar], kCaution);
     CHECK_EQ(g_panel[155 * LCD_WIDTH + kOppRailThickness + 10], kCautionT);
-    // All three slices carry the same dim letter: same gap after the hero, same baseline, no frame or fill.
-    TagInk ti[3];
+    // No slice draws the provenance letter (dim ink in the chip row), and a clean link has no amber chip.
+    TagInk ti;
     const int sy[3] = {2, 81, 160};
-    for (int i = 0; i < 3; i++) CHECK(tag_ink(sy[i], ti[i]));
-    CHECK_EQ(ti[1].gap, ti[0].gap);
-    CHECK_EQ(ti[2].gap, ti[0].gap);
-    CHECK_EQ(ti[1].bottom, ti[0].bottom);
-    CHECK_EQ(ti[2].bottom, ti[0].bottom);
-    CHECK_EQ(count_px(sy[0] + 24, sy[0] + 38, kOppRailThickness, kOppRailThickness + 208, kCaution), 0);   // no amber chip
-    // The sink slice puts the letter before the OK chip.
-    CHECK(count_px(sy[2] + 24, sy[2] + 38, kOppRailThickness + ti[2].left + 8, kOppRailThickness + ti[2].left + 40, kOkT) > 0);
-    CHECK_EQ(count_px(sy[2] + 24, sy[2] + 38, kOppRailThickness, kOppRailThickness + ti[2].left, kOkT), 0);
+    for (int i = 0; i < 3; i++) CHECK(!tag_ink(sy[i], ti));
+    CHECK_EQ(count_px(sy[0] + 24, sy[0] + 38, kOppRailThickness, kOppRailThickness + 208, kCaution), 0);
+    // The sink slice keeps its OK chip.
+    CHECK(count_px(sy[2] + 24, sy[2] + 38, kOppRailThickness, kOppRailThickness + 208, kOkT) > 0);
 
     // Throttle charger from 140W down to 60W and settle > 800 ms -> PEAK / offer_throttled().
     g_stub.caps.num_pdos = 2;
@@ -2482,9 +2477,9 @@ static void test_overview_provenance_throttled_and_bottleneck() {
     settle(ui, t);
     CHECK_EQ(held::offer_throttled(), true);
     CHECK_EQ(held::live_offer_mw(), 60000u);
-    // PEAK is its own chip after the letter, not a replacement for it.
-    CHECK(tag_ink(2, ti[0]));
-    CHECK(count_px(2 + 24, 2 + 38, kOppRailThickness + ti[0].left + 8, kOppRailThickness + 208, kOkT) > 0);
+    // PEAK is an exception chip and stays.
+    CHECK(count_px(2 + 24, 2 + 38, kOppRailThickness, kOppRailThickness + 208, kOkT) > 0);
+    CHECK(!tag_ink(2, ti));
 
     // Cable Spec view includes measured Res. row.
     ui.goto_page(kConnTabAlias + 1, t += 100);
@@ -2562,24 +2557,17 @@ static void test_inline_overview_power_fields_and_w_hero_slices() {
         uint32_t t = 60000;
         for (int i = 0; i < 4; i++) ui.tick(t += 100);
         CHECK_EQ(ui.link().inline_mode(), true);
-        // Settle > 1.5 s so pd_verdict becomes None (missed handshake) — Overview must STILL show LIVE + INLINE power!
+        // Settle > 1.5 s so pd_verdict becomes None (missed handshake) — Overview must STILL show the live power.
         for (int i = 0; i < 20; i++) ui.tick(t += 100);
         ui.open_place(bench::Place::Charger, t += 100);
         settle(ui, t);
         CHECK_EQ(cp(ui).overview_mode(), true);
-        // Slice 0 (Charger, y 2..80) and Slice 2 (Sink, y 160..239) both have bright hero + amber LIVE/INLINE chips.
+        // Slice 0 (Charger, y 2..80) and Slice 2 (Sink, y 160..239) both have a bright hero.
         CHECK(count_ink(20, 44) > 50);
         CHECK(count_ink(178, 202) > 50);
-        // Both Charger and Sink slices paint kCaution (INLINE chip) instead of dim "Type-C" / empty.
-        int c0 = 0, c2 = 0;
-        for (int y = 20; y < 44; y++)
-            for (int x = kOppRailThickness; x < LCD_WIDTH; x++)
-                if (g_panel[y * LCD_WIDTH + x] == kCaution) c0++;
-        for (int y = 178; y < 202; y++)
-            for (int x = kOppRailThickness; x < LCD_WIDTH; x++)
-                if (g_panel[y * LCD_WIDTH + x] == kCaution) c2++;
-        CHECK(c0 > 20);
-        CHECK(c2 > 20);
+        // An inline link is a normal state: no amber LIVE / INLINE chip on either slice.
+        CHECK_EQ(count_px(2 + 24, 2 + 38, kOppRailThickness + 4, LCD_WIDTH, kCaution), 0);
+        CHECK_EQ(count_px(160 + 24, 160 + 38, kOppRailThickness + 4, LCD_WIDTH, kCaution), 0);
     }
     // 2. Full PD link (96W dock, 100W cable, 96W laptop Request) + plain 3A cable (60W) + Request without caps across 4 rotations.
     {
