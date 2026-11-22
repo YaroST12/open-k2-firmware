@@ -3,6 +3,7 @@
 // Connection (page level, real Ui): which tab it opens on, the passive port topology it senses from the CC
 // lines, the tab switching and the action pop-up (greyed Spoof while a device is inline), the Tools shortcut
 // to Spoof, and that merely showing an empty state never drives the lines.
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -2412,7 +2413,25 @@ static int count_px(int y0, int y1, int x0, int x1, uint16_t col) {
     return n;
 }
 
-// Track 2B: Overview provenance chips (SNIFFED / PROBED / PEAK), bottleneck Cable highlight, and Cable Res. row.
+// The provenance letter of one Overview slice: the kDim ink (only the letter has it in the chip row) as its left x and
+// bottom y relative to the slice top, and the gap to the hero's last kInk column. False when the slice has no letter.
+struct TagInk { int left = 0, bottom = 0, gap = 0; };
+static bool tag_ink(int slice_y, TagInk &t) {
+    const int x0 = kOppRailThickness, x1 = x0 + 208;
+    int left = 1 << 20, bottom = -1, hero_right = -1;
+    for (int y = slice_y + 22; y < slice_y + 43; y++)
+        for (int x = x0; x < x1; x++)
+            if (g_panel[y * LCD_WIDTH + x] == kDim) { left = std::min(left, x); bottom = std::max(bottom, y); }
+    for (int y = slice_y + 19; y < slice_y + 43; y++)
+        for (int x = x0; x < left && x < x1; x++)
+            if (g_panel[y * LCD_WIDTH + x] == kInk) hero_right = std::max(hero_right, x);
+    if (bottom < 0) return false;
+    t = {left - x0, bottom - slice_y, left - hero_right};
+    return true;
+}
+
+// Track 2B: Overview provenance tag (S sniffed / P probed, dim, first after the hero), PEAK chip, bottleneck Cable
+// highlight, and Cable Res. row.
 static void test_overview_provenance_throttled_and_bottleneck() {
     Ui &ui = fresh_ui();
     make_inline(ui, 50000);
@@ -2443,6 +2462,18 @@ static void test_overview_provenance_throttled_and_bottleneck() {
     const int x_bar = kOppRailThickness + 1;
     CHECK_EQ(g_panel[90 * LCD_WIDTH + x_bar], kCaution);
     CHECK_EQ(g_panel[155 * LCD_WIDTH + kOppRailThickness + 10], kCautionT);
+    // All three slices carry the same dim letter: same gap after the hero, same baseline, no frame or fill.
+    TagInk ti[3];
+    const int sy[3] = {2, 81, 160};
+    for (int i = 0; i < 3; i++) CHECK(tag_ink(sy[i], ti[i]));
+    CHECK_EQ(ti[1].gap, ti[0].gap);
+    CHECK_EQ(ti[2].gap, ti[0].gap);
+    CHECK_EQ(ti[1].bottom, ti[0].bottom);
+    CHECK_EQ(ti[2].bottom, ti[0].bottom);
+    CHECK_EQ(count_px(sy[0] + 24, sy[0] + 38, kOppRailThickness, kOppRailThickness + 208, kCaution), 0);   // no amber chip
+    // The sink slice puts the letter before the OK chip.
+    CHECK(count_px(sy[2] + 24, sy[2] + 38, kOppRailThickness + ti[2].left + 8, kOppRailThickness + ti[2].left + 40, kOkT) > 0);
+    CHECK_EQ(count_px(sy[2] + 24, sy[2] + 38, kOppRailThickness, kOppRailThickness + ti[2].left, kOkT), 0);
 
     // Throttle charger from 140W down to 60W and settle > 800 ms -> PEAK / offer_throttled().
     g_stub.caps.num_pdos = 2;
@@ -2451,6 +2482,9 @@ static void test_overview_provenance_throttled_and_bottleneck() {
     settle(ui, t);
     CHECK_EQ(held::offer_throttled(), true);
     CHECK_EQ(held::live_offer_mw(), 60000u);
+    // PEAK is its own chip after the letter, not a replacement for it.
+    CHECK(tag_ink(2, ti[0]));
+    CHECK(count_px(2 + 24, 2 + 38, kOppRailThickness + ti[0].left + 8, kOppRailThickness + 208, kOkT) > 0);
 
     // Cable Spec view includes measured Res. row.
     ui.goto_page(kConnTabAlias + 1, t += 100);
